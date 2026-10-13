@@ -81,7 +81,7 @@ func (m *Manager) publishSessionLocked(id SessionID) {
 // OpenHeldSession admits a receiver that is not ready to receive yet: it can
 // be subscribed, but no frame is encoded for it until ReadySession. A client
 // that installs its decoder only after the login answer wants this — the
-// first snapshot must not race the decoder (ARCH-10, "session ready").
+// first snapshot must not race the decoder.
 func (m *Manager) OpenHeldSession(id SessionID) error {
 	if err := m.OpenSession(id); err != nil {
 		return err
@@ -183,6 +183,7 @@ func (m *Manager) loseSession(expected *session, cause error) {
 	m.dropSession(expected.id, expected, cause, true)
 }
 
+// dropSession 删除会话及其全部订阅（不欠 remove），通知传输与政策；expected 非 nil 时只删除仍是该状态的会话。
 func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost bool) {
 	if m == nil || id == 0 {
 		return
@@ -198,7 +199,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 		return
 	}
 	delete(m.sessions, id)
-	// 释放戳在删除会话的同一把 m.mu 内取（RR-20260926-85）：这一次打开里的订阅都在 m.mu 内确认生命期并取戳，所以都更小；
+	// 释放戳在删除会话的同一把 m.mu 内取：这一次打开里的订阅都在 m.mu 内确认生命期并取戳，所以都更小；
 	// 同 ID 重开要等 m.mu 放开，新生命期里的订阅戳都更大。政策据此只删除本通知所指那一次打开里的绑定。
 	stamp := m.nextStamp()
 	if removed.held {
@@ -209,7 +210,7 @@ func (m *Manager) dropSession(id SessionID, expected *session, cause error, lost
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		lifecycle.SessionClosed(id)
 	}
-	// 丢掉的来源订阅通知政策（RR-20260926-79）：订阅在这里逐条移除，RR-59 撤销后尚待重新提交的记录没有订阅可遍历，另行查找。
+	// 丢掉的来源订阅通知政策：订阅在这里逐条移除，卸载撤销后尚待重新提交的记录没有订阅可遍历，另行查找。
 	var released []queuedRelease
 	for _, subj := range subjects {
 		subj.mu.Lock()
@@ -272,7 +273,7 @@ type SubscriptionSource struct {
 	manager *Manager
 	// resubmit 非 nil 时，本来源被框架撤销的订阅在同 ID 重新登记后交还给它（NewSubscriptionSourceWithResubmit）。
 	resubmit func([]RetractedSubscription)
-	// released 非 nil 时，框架因会话关闭或业务注销丢掉本来源的订阅后通知它（NewSubscriptionSourceWithHooks，RR-20260926-79）。
+	// released 非 nil 时，框架因会话关闭或业务注销丢掉本来源的订阅后通知它（NewSubscriptionSourceWithHooks）。
 	released func([]ReleasedSubscription)
 }
 
@@ -281,15 +282,16 @@ func (m *Manager) NewSubscriptionSource() *SubscriptionSource {
 	return &SubscriptionSource{manager: m}
 }
 
+// Subscribe 以本来源让 session 订阅 subject 的 profile 视图；见 Manager.Subscribe。
 func (s *SubscriptionSource) Subscribe(session SessionID, subjectID int64, profile entity.SyncProfile) error {
 	_, err := s.SubscribeStamped(session, subjectID, profile)
 	return err
 }
 
-// SubscribeStamped 与 Subscribe 相同，成功时另外返回这次订阅的戳（RR-20260926-85）：戳在确认会话生命期与 subject 登记的
+// SubscribeStamped 与 Subscribe 相同，成功时另外返回这次订阅的戳：戳在确认会话生命期与 subject 登记的
 // 同一临界区内取得，与 ReleasedSubscription.Stamp 同一时钟。政策把它记在自己的簿记上，收到释放通知时只删除戳小于
 // 通知的那些——那是通知所指那一次会话打开 / 那一次登记里做的；更大的是通知途中在重开的会话或重新登记的 subject 上
-// 重新做的，与这次释放无关，即使它此刻已被 RR-59 撤销、正等待重新提交。重复订阅（同视图的空操作）也返回新的戳。
+// 重新做的，与这次释放无关，即使它此刻已被卸载撤销、正等待重新提交。重复订阅（同视图的空操作）也返回新的戳。
 func (s *SubscriptionSource) SubscribeStamped(session SessionID, subjectID int64, profile entity.SyncProfile) (SubscriptionStamp, error) {
 	if s == nil {
 		return 0, ErrManagerClosed
@@ -297,6 +299,7 @@ func (s *SubscriptionSource) SubscribeStamped(session SessionID, subjectID int64
 	return s.manager.subscribe(s, session, subjectID, profile)
 }
 
+// Unsubscribe 释放本来源对 (session, subject) 的订阅；其他来源仍持有时不发 remove。
 func (s *SubscriptionSource) Unsubscribe(session SessionID, subjectID int64) error {
 	if s == nil {
 		return ErrManagerClosed
@@ -305,8 +308,8 @@ func (s *SubscriptionSource) Unsubscribe(session SessionID, subjectID int64) err
 }
 
 // Holds 报告本来源此刻是否让 session（当前这一次打开）订阅着 subject：subject 已登记、未退役，订阅的来源里有本来源。
-// 被框架撤销、尚待重新提交的 pair 不算（RR-20260926-79）。它只是当前值：通知途中重新订阅、随即又被撤销的 pair 此刻为假，
-// 不能据此判断释放通知是否过期——那要比较 SubscribeStamped 的戳与 ReleasedSubscription.Stamp（RR-20260926-85）。
+// 被框架撤销、尚待重新提交的 pair 不算。它只是当前值：通知途中重新订阅、随即又被撤销的 pair 此刻为假，
+// 不能据此判断释放通知是否过期——那要比较 SubscribeStamped 的戳与 ReleasedSubscription.Stamp。
 func (s *SubscriptionSource) Holds(session SessionID, subjectID int64) bool {
 	if s == nil || s.manager == nil {
 		return false
@@ -416,7 +419,7 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 	}
 	subj := m.subject(subjectID)
 	if subj == nil {
-		// 政策释放了缺席实体的 pair：框架撤销时记下的这条不再交还（RR-20260926-70）。
+		// 政策释放了缺席实体的 pair：框架撤销时记下的这条不再交还。
 		m.dropRetracted(source, session, subjectID)
 		return ErrSubjectNotRegistered
 	}

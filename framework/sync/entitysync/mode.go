@@ -25,6 +25,7 @@ func ParseSyncMode(value string) (SyncMode, error) {
 	}
 	return ModePeriodic, fmt.Errorf("entitysync: unsupported sync mode %q", value)
 }
+
 func (mode SyncMode) String() string {
 	switch mode {
 	case ModePeriodic:
@@ -34,6 +35,7 @@ func (mode SyncMode) String() string {
 	}
 	return "invalid"
 }
+
 func (m *Manager) Mode() SyncMode          { return m.config.Mode }
 func (m *Manager) Interval() time.Duration { return m.config.Interval }
 

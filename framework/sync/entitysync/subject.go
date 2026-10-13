@@ -23,8 +23,7 @@ const (
 	kindLeaving
 )
 
-// subscription is one session's standing with one subject. It is the whole
-// of what used to be a coordinator row plus a sink row: the profile the
+// subscription is one session's standing with one subject: the profile the
 // session wants, the kind of frame it is owed, and the version it holds.
 type subscription struct {
 	// revision 标识订阅意图；inFlight 防止首次快照在途时丢掉待删除记录。
@@ -41,7 +40,7 @@ type subscription struct {
 
 // subject is an entity's sync state plus its subscribers. The subscribers
 // live HERE, not in an index somewhere else: the subject is the truth about
-// who receives it (ARCH-10).
+// who receives it.
 type subject struct {
 	mu sync.Mutex
 	id int64
@@ -55,7 +54,7 @@ type subject struct {
 	// forgotten 表示 forget 已经取走 successor，之后不能再排队（调用方改走 Register）。
 	successor *queuedRegistration
 	forgotten bool
-	// unloadRetracted：退役来自 RetractUnloadedSubject（实体被仅内存卸载后重载不了，RR-20260926-59），不是业务
+	// unloadRetracted：退役来自 RetractUnloadedSubject（实体被仅内存卸载后重载不了），不是业务
 	// Unregister。退役完成前该实体又被加载出来时，Rebind / Register 把新状态排在退役完成之后登记
 	// （RegisterAfterRetirement 的同一机制），不返回 ErrSubjectRetiring。业务再 Unregister 时清除。
 	unloadRetracted bool

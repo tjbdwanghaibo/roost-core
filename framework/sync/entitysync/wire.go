@@ -7,11 +7,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
-// WireVersion is the subject-update encoding version. It changed when ARCH-10
-// made frames per session: the outer room header (room frame number, room
-// session sequence) is gone, a frame is a plain frame.Frame whose
-// Epoch/Tick are the session's own clock, and StreamID carries nothing but the
-// stream constant below.
+// WireVersion is the subject-update encoding version. Frames are per session:
+// a frame is a plain frame.Frame whose Epoch/Tick are the session's own clock,
+// with no outer shared header, and StreamID carries nothing but the stream
+// constant below.
 const WireVersion uint16 = 2
 
 // wireStream is what goes into SnapshotMeta.StreamID. frame requires it to
@@ -126,6 +125,7 @@ type capturedUpdate struct {
 	ready   bool
 }
 
+// captureUpdates 把 updates 追加进本轮捕获缓冲并返回新追加的部分。
 // 扩容不会使已分发的指针失效：旧数组由 frameEntry 持有，后续只追加新捕获。
 func captureUpdates(buffer *[]capturedUpdate, updates []entity.SubjectSyncUpdate) []capturedUpdate {
 	start := len(*buffer)

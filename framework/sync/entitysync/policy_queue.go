@@ -8,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// policyHook 是 RegisterPolicy 登记的一组政策处理器：apply 在政策阶段执行，pending 报告是否还有待处理事实。
 type policyHook struct {
 	apply   func() error
 	pending func() bool
@@ -33,6 +34,7 @@ func (m *Manager) RegisterPolicy(apply func() error, pending ...func() bool) fun
 	m.policyMu.Unlock()
 	return func() { m.policyMu.Lock(); delete(m.policies, id); m.policyMu.Unlock() }
 }
+
 func (m *Manager) policyHooks() []policyHook {
 	m.policyMu.Lock()
 	defer m.policyMu.Unlock()
@@ -42,8 +44,10 @@ func (m *Manager) policyHooks() []policyHook {
 	}
 	return hooks
 }
+
+// applyPolicies 是 Flush 的政策阶段：先交付框架的释放通知与重新提交，再按登记顺序执行政策处理器。
 func (m *Manager) applyPolicies() error {
-	// 释放通知先于重新提交（RR-20260926-79）：会话已关闭的 pair 先从政策侧删掉，同一阶段的重新提交就不会把它说回去。
+	// 释放通知先于重新提交：会话已关闭的 pair 先从政策侧删掉，同一阶段的重新提交就不会把它说回去。
 	m.deliverReleases()
 	m.deliverResubmits()
 	var err error
@@ -52,6 +56,7 @@ func (m *Manager) applyPolicies() error {
 	}
 	return err
 }
+
 func (m *Manager) policiesPending() bool {
 	if m.releaseEntries.Load() > 0 || m.resubmitsPending() {
 		return true
@@ -64,9 +69,9 @@ func (m *Manager) policiesPending() bool {
 	return false
 }
 
-// ---- 框架撤销后的政策重新提交（RR-20260926-70） ----
+// ---- 框架撤销后的政策重新提交 ----
 //
-// RR-59 卸载后重载不了时，RetractUnloadedSubject 退回 remove 并在全部 remove 交付后忘掉 subject。订阅是政策
+// 卸载后重载不了时，RetractUnloadedSubject 退回 remove 并在全部 remove 交付后忘掉 subject。订阅是政策
 // 说的，框架替政策撤销了它，政策自己并不知道：Interest 仍记这对 pair 已订阅，实体之后重新登记时谁也不再说一遍。
 // 所以撤销时记下每条订阅属于哪个来源、哪个会话；同 ID 重新登记（新 subject）时把这些记录交还给来源所属的政策，
 // 在下一次 Flush 的政策阶段（捕获前、不持有 Manager 的锁，与 RegisterPolicy 的处理器同一位置）调用来源的
@@ -78,12 +83,12 @@ func (m *Manager) policiesPending() bool {
 //
 // 记录的生命周期：撤销时写入 retracted；同 ID 新 subject 登记时移入 resubmits 并唤醒同步；政策阶段取出交付
 // （回调期间留在 delivering），回调返回后删除。交付之前同 ID 又被撤销时，尚未交付的项回到 retracted，等下一次
-// 登记（RR-20260926-78）。
+// 登记。
 // 来源在此期间自己释放这对 pair（Unsubscribe 得到 ErrSubjectNotRegistered / ErrSubscriptionNotFound）时删除对应
 // 记录；业务 Unregister 该 ID 时删除该 ID 的全部记录（业务的注销意图优先）；Manager.Close 清空。同一来源、同一会话、
 // 同一 subject 只留一条，条数不超过政策持有、尚未释放的 pair，且随政策释放 pair 而减少。resubmitMu 是叶子锁：持有它时不取其他锁、不回调。
 
-// RetractedSubscription 是一条被框架撤销、subject 已重新登记、交还给来源所属政策的订阅：RR-59 卸载后重载
+// RetractedSubscription 是一条被框架撤销、subject 已重新登记、交还给来源所属政策的订阅：卸载后重载
 // 不了，RetractUnloadedSubject 退回 remove 时，该来源曾让 Session 订阅 Subject。
 type RetractedSubscription struct {
 	Session SessionID
@@ -103,13 +108,13 @@ type queuedResubmit struct {
 // SubscriptionSourceHooks 是政策来源向 Manager 登记的回调。两者都在 Flush 的政策阶段（捕获前、持有 flushGate、
 // 不持有 Manager 的锁）按来源分批调用：可以取政策自己的锁并 Subscribe / Unsubscribe，不得调用 Flush，不得阻塞。
 type SubscriptionSourceHooks struct {
-	// Resubmit 见 NewSubscriptionSourceWithResubmit（RR-20260926-70）。
+	// Resubmit 见 NewSubscriptionSourceWithResubmit。
 	Resubmit func([]RetractedSubscription)
-	// Released 报告框架替本来源丢掉的订阅（RR-20260926-79）：会话关闭（CloseSession，或传输拒绝帧后 Manager 关闭它）
-	// 时该会话的全部订阅，业务 Unregister 时该 subject 的全部订阅；包括 RR-59 撤销后尚待重新提交的记录。RR-59 的
-	// RetractUnloadedSubject 不算释放（那些订阅走 Resubmit）。通知在下一次政策阶段送达，这之间调用方可能已在重开的
-	// 会话或重新登记的 subject 上重新订阅，新订阅随后还可能被 RR-59 撤销：政策只应删除 SubscribeStamped 戳小于
-	// ReleasedSubscription.Stamp 的簿记（RR-20260926-85）。不要用 Holds 判定：被撤销、等待重新提交的新订阅此刻 Holds 为假。
+	// Released 报告框架替本来源丢掉的订阅：会话关闭（CloseSession，或传输拒绝帧后 Manager 关闭它）
+	// 时该会话的全部订阅，业务 Unregister 时该 subject 的全部订阅；包括卸载撤销后尚待重新提交的记录。
+	// 卸载撤销（RetractUnloadedSubject）本身不算释放（那些订阅走 Resubmit）。通知在下一次政策阶段送达，这之间调用方
+	// 可能已在重开的会话或重新登记的 subject 上重新订阅，新订阅随后还可能被卸载撤销：政策只应删除 SubscribeStamped 戳小于
+	// ReleasedSubscription.Stamp 的簿记。不要用 Holds 判定：被撤销、等待重新提交的新订阅此刻 Holds 为假。
 	Released func([]ReleasedSubscription)
 }
 
@@ -117,12 +122,12 @@ type SubscriptionSourceHooks struct {
 type ReleasedSubscription struct {
 	Session SessionID
 	Subject int64
-	// Stamp 是这次释放（会话关闭 / 业务注销）发生的时刻，与 SubscribeStamped 同一时钟（RR-20260926-85）：本来源对这对
+	// Stamp 是这次释放（会话关闭 / 业务注销）发生的时刻，与 SubscribeStamped 同一时钟：本来源对这对
 	// pair 戳小于它的订阅都已被这次释放丢掉；戳大于它的是之后在新的会话打开或新的登记上做的，不受本通知影响。
 	Stamp SubscriptionStamp
 }
 
-// SubscriptionStamp 是 Manager 的订阅逻辑时钟读数（RR-20260926-85）。SubscribeStamped 在订阅成功的临界区内取一个，
+// SubscriptionStamp 是 Manager 的订阅逻辑时钟读数。SubscribeStamped 在订阅成功的临界区内取一个，
 // 会话关闭在删除会话的临界区内、业务注销在退役 subject 的临界区内各取一个给释放通知；只在同一个 Manager 内可比，
 // 值越大越晚，从不相等。零值表示没有戳。
 type SubscriptionStamp uint64
@@ -140,7 +145,7 @@ func (m *Manager) NewSubscriptionSourceWithHooks(hooks SubscriptionSourceHooks) 
 	return &SubscriptionSource{manager: m, resubmit: hooks.Resubmit, released: hooks.Released}
 }
 
-// NewSubscriptionSourceWithResubmit 与 NewSubscriptionSource 相同，另外登记政策的重新提交入口（RR-20260926-70）：
+// NewSubscriptionSourceWithResubmit 与 NewSubscriptionSource 相同，另外登记政策的重新提交入口：
 // 本来源的订阅被框架撤销（RetractUnloadedSubject）、同 ID 之后重新登记时，Manager 在下一次 Flush 的政策阶段
 // 以这些订阅调用 resubmit，每次调用只含本来源的订阅。resubmit 在 Flush 内执行，不持有 Manager 的锁，可以取
 // 政策自己的锁并 Subscribe；不得调用 Flush，不得阻塞。它应按政策当前的判定决定是否重新订阅——政策已释放的
@@ -152,9 +157,9 @@ func (m *Manager) NewSubscriptionSourceWithResubmit(resubmit func([]RetractedSub
 // recordRetractedLocked 在 RetractUnloadedSubject 退役之前（retireLocked 清空来源之前）记下政策来源的订阅。
 // 调用方持有 subj.mu：记录必须在 forget（可能紧接着登记排队的新状态）能发生之前就位。
 //
-// 再次撤销（RR-20260926-78）：上一次撤销的记录在本 subject 登记时已交还（移入 resubmits），政策还没来得及重新
-// 订阅，本 subject 就又被撤销（仍有非政策来源的订阅者使重载器调度它）。这些记录此时不在 subscribers 里；旧实现
-// 只记当时存在的订阅，排队项留在 resubmits，交付时 subject 已退役或已忘掉，Group / Direct 的 Subscribe 被拒绝后
+// 再次撤销：上一次撤销的记录在本 subject 登记时已交还（移入 resubmits），政策还没来得及重新
+// 订阅，本 subject 就又被撤销（仍有非政策来源的订阅者使重载器调度它）。这些记录此时不在 subscribers 里；若
+// 只记当时存在的订阅，排队项会留在 resubmits，交付时 subject 已退役或已忘掉，Group / Direct 的 Subscribe 被拒绝后
 // 放弃，这对订阅再也不恢复。所以把同 ID 尚未交付的排队项移回撤销表，正在交付的（deliverResubmits 已取出、
 // 回调尚未返回，政策的 Subscribe 可能落在本次退役之后而被拒绝）复制一份回来，等下一次登记再交还。同一来源、
 // 同一会话只留一条（addRetractedLocked），条数仍不超过政策自己持有、尚未释放的 pair。
@@ -219,7 +224,7 @@ func (m *Manager) addRetractedLocked(subjectID int64, entries []retractedSubscri
 }
 
 // releaseRetracted 在同 ID 新 subject 登记后调用：把撤销记录移入待交付队列，并唤醒同步让政策阶段尽快运行。
-// 检查与移动在 subj.mu 内完成（RR-20260926-78）：登记与这里之间 subject 可能已被再次撤销（记录已并入撤销表，
+// 检查与移动在 subj.mu 内完成：登记与这里之间 subject 可能已被再次撤销（记录已并入撤销表，
 // 留给下一次登记）或被业务注销（记录已清除），这时不交还——交付时 subject 已不在，政策的重新订阅只会被拒绝。
 // 撤销与注销也在 subj.mu 内处理记录，所以进入 resubmits 的记录在被取出交付之前，subject 一直是活的。
 func (m *Manager) releaseRetracted(subj *subject) {
@@ -246,7 +251,7 @@ func (m *Manager) releaseRetracted(subj *subject) {
 
 // deliverResubmits 在 Flush 的政策阶段（持有 flushGate、不持有其他 Manager 锁）按来源分批交付，批次顺序为
 // 各来源首次出现的顺序。取出的项在回调返回前留在 delivering（仍计入 resubmitEntries）：期间同 ID 被再次撤销时
-// recordRetractedLocked 把它们复制回撤销表（RR-20260926-78），来源释放或业务注销时照常删除。
+// recordRetractedLocked 把它们复制回撤销表，来源释放或业务注销时照常删除。
 func (m *Manager) deliverResubmits() {
 	if m.resubmitEntries.Load() == 0 {
 		return
@@ -273,13 +278,13 @@ func (m *Manager) deliverResubmits() {
 	m.resubmitMu.Unlock()
 }
 
-// ---- 框架丢掉订阅后通知政策（RR-20260926-79） ----
+// ---- 框架丢掉订阅后通知政策 ----
 //
 // CloseSession / 传输失败关闭会话、业务 Unregister 时 Manager 丢掉订阅，但政策自己的簿记（Direct 的绑定表）不知道，
 // 只会随历史绑定数增长。这两个位置（dropSession、Unregister）本来就逐条处理被丢掉的订阅：在同一把 subj.mu 内顺手记下
 // 带 Released 回调的来源，排进 releases，由下一次政策阶段交付——不在调用方路径上回调政策（Unregister 可能在 Nest
-// 快 worker 上、持有实体锁时被调用，也可能在政策持锁时被调用），也不为每次通知起 goroutine。releases 与 RR-70 的
-// 记录共用叶子锁 resubmitMu，releaseEntries 让政策阶段在没有通知时不加锁。
+// 快 worker 上、持有实体锁时被调用，也可能在政策持锁时被调用），也不为每次通知起 goroutine。releases 与撤销记录
+// 共用叶子锁 resubmitMu，releaseEntries 让政策阶段在没有通知时不加锁。
 
 // releasedLocked 追加 sources 里带 Released 回调的来源对 (session, subject) 的释放通知。调用方持有 subj.mu。
 func releasedLocked(out []queuedRelease, sources map[*SubscriptionSource]entity.SyncProfile, session SessionID, subjectID int64, stamp SubscriptionStamp) []queuedRelease {
@@ -291,7 +296,7 @@ func releasedLocked(out []queuedRelease, sources map[*SubscriptionSource]entity.
 	return out
 }
 
-// releasedRecordsLocked 追加 RR-70 记录（撤销表、待交付、交付中）里满足 match 的、带 Released 回调的来源的释放通知：
+// releasedRecordsLocked 追加撤销记录（撤销表、待交付、交付中）里满足 match 的、带 Released 回调的来源的释放通知：
 // 这些 pair 此刻没有订阅可供 dropSession / Unregister 遍历，却仍在政策的簿记里。通知带本次释放的 stamp。调用方持有 resubmitMu。
 func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(ReleasedSubscription) bool, stamp SubscriptionStamp) []queuedRelease {
 	add := func(source *SubscriptionSource, pair ReleasedSubscription) {
@@ -312,7 +317,7 @@ func (m *Manager) releasedRecordsLocked(out []queuedRelease, match func(Released
 	return out
 }
 
-// releasedRecordsOfSession 是 dropSession 的记录部分：会话关闭时 RR-70 记录保持不变（其恢复语义不因本修复改变），
+// releasedRecordsOfSession 是 dropSession 的记录部分：会话关闭时撤销记录保持不变（恢复语义不受会话关闭影响），
 // 只把其中属于该会话的 pair 通知政策，由政策决定是否释放（Direct 会 Unsubscribe，记录随之删除）。
 func (m *Manager) releasedRecordsOfSession(out []queuedRelease, session SessionID, stamp SubscriptionStamp) []queuedRelease {
 	if m.resubmitEntries.Load() == 0 {
@@ -394,7 +399,7 @@ func (m *Manager) dropRetracted(source *SubscriptionSource, session SessionID, s
 }
 
 // dropRetractedSubject：业务 Unregister 该 ID，之前的撤销记录与待交付项都不再交还；其中带 Released 回调的来源的
-// pair 追加到 out 通知政策（RR-20260926-79）。
+// pair 追加到 out 通知政策。
 func (m *Manager) dropRetractedSubject(subjectID int64, out []queuedRelease, stamp SubscriptionStamp) []queuedRelease {
 	if m.resubmitEntries.Load() == 0 {
 		return out

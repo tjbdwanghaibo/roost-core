@@ -11,6 +11,7 @@ func (m *Manager) refreshSnapshotWindow() {
 	m.refreshSnapshotWindowAt(time.Now())
 }
 
+// refreshSnapshotWindowAt 在 on_change 模式下按 Interval 轮转冷创建预算窗口，并把等待快照的 subject 重新排进 pending。
 // 调用者持有 flush 所有权；时间参数便于验证晚醒和长时间空闲，不依赖 sleep。
 func (m *Manager) refreshSnapshotWindowAt(now time.Time) {
 	if m.config.Mode != ModeOnChange {
@@ -73,6 +74,7 @@ func (m *Manager) deferSnapshot(subj *subject) {
 	m.pendingMu.Unlock()
 }
 
+// clearSnapshotWaitLocked 在 subject 已没有可服务的待快照订阅时移除它的等待项。
 // 调用者持有 subject.mu；成功交付/退订后及时清理等待观测，避免 Drain 空转。
 func (m *Manager) clearSnapshotWaitLocked(subj *subject) {
 	m.pendingMu.Lock()
@@ -95,7 +97,7 @@ func (m *Manager) clearSnapshotWaitLocked(subj *subject) {
 	m.pendingMu.Unlock()
 }
 
-// 调用方持有 pendingMu；索引与按首次等待时间排序的链表一起删除。
+// removeSnapshotWaitLocked 删除等待项：索引与按首次等待时间排序的链表一起删除。调用方持有 pendingMu。
 func (m *Manager) removeSnapshotWaitLocked(id int64) {
 	wait, ok := m.waitingSnapshots[id]
 	if !ok {
@@ -159,7 +161,7 @@ type snapshotCharge struct {
 	bytes     int
 }
 
-// 冷创建按业务来源交替，来源内部沿用会话和实体轮转。空闲来源的额度可被另一类使用。
+// planSnapshotCaptures 规划本轮冷创建：按业务来源交替，来源内部沿用会话和实体轮转，空闲来源的额度可被另一类使用。
 // 返回 nil 表示不设预算；非 nil 的空计划表示额度已耗尽。
 //
 // 设了 MaxBytes 时，计划按上次捕获的大小（未知时取最小可能大小）先做一遍与
@@ -370,7 +372,7 @@ func (plan *snapshotPlan) admissionOrder(sessionIDs []SessionID) []SessionID {
 	return ordered
 }
 
-// 一次 Push 尝试消费该会话本批冷创建的额度（包括 RetryLater），防止同窗口空转。
+// commitSnapshotAttempts 结算本轮冷创建额度：一次 Push 尝试消费该会话本批冷创建的额度（包括 RetryLater），防止同窗口空转。
 // 编码失败、会话失效、提前取消和未轮到的会话不消费额度。游标按原计划顺序只推进到
 // 实际尝试的前缀：遇到仍然有效却未被尝试的会话就停下，其后即使有已尝试的会话
 // （同一会话跨两个类别时可能出现）也不越过它；已失效的会话不再参与轮转，可以越过。

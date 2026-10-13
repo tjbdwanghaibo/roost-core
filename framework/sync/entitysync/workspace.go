@@ -9,6 +9,7 @@ type encodeWorkspace struct {
 	components []frame.ComponentDelta
 }
 
+// takeFlushSession 从池中取一个会话工作区并绑定 sess。
 // Flush 工作区由 flushGate 独占。保留容量有界，回收前清空全部业务引用；
 // 不缓存最终帧字节，Transport 可在 Push 返回后继续持有它们。
 func (m *Manager) takeFlushSession(sess *session) *flushSession {

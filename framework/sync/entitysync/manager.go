@@ -61,10 +61,11 @@ type ManagerConfig struct {
 	// SessionLost is told when a session was closed by the manager because
 	// its transport refused a frame (not on CloseSession). The policy that
 	// subscribed the session uses it to forget the session on its side —
-	// the manager's subscription index does not own policy-layer membership (ARCH-10).
+	// the manager's subscription index does not own policy-layer membership.
 	SessionLost func(session SessionID, cause error)
 }
 
+// ManagerConfig 容量字段的默认值。
 const (
 	DefaultMaxSubjects              = 65536
 	DefaultMaxSessions              = 65536
@@ -183,31 +184,30 @@ type Manager struct {
 	snapshotNextClass snapshotClass   // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 
-	// resubmitMu 保护框架撤销的订阅记录（policy_queue.go，RR-20260926-70）；叶子锁。
+	// resubmitMu 保护框架撤销的订阅记录（见 policy_queue.go）；叶子锁。
 	resubmitMu      sync.Mutex
 	retracted       map[int64][]retractedSubscription // 撤销时记下，等同 ID 重新登记
 	resubmits       []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
-	delivering      []queuedResubmit                  // 政策阶段已取出、回调尚未返回（RR-20260926-78）
+	delivering      []queuedResubmit                  // 政策阶段已取出、回调尚未返回
 	resubmitEntries atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
-	releases        []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知（RR-20260926-79）
+	releases        []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知
 	releaseEntries  atomic.Int64                      // releases 的条数；政策阶段据此跳过加锁
-	stampClock      atomic.Uint64                     // 订阅戳与释放戳共用的逻辑时钟（SubscriptionStamp，RR-20260926-85）
+	stampClock      atomic.Uint64                     // 订阅戳与释放戳共用的逻辑时钟（SubscriptionStamp）
 
-	// forgetUnlinked 是测试缝：forget 把 subject 从表里摘下并放开 m.mu 之后调用，用来确定性地进入
-	// “已离表、退役收尾未完成”的窗口（RR-20260926-69 回归）。生产中恒为 nil。
+	// 以下是测试缝，生产中恒为 nil，只用来确定性地进入某个并发窗口：
+	// forgetUnlinked：forget 把 subject 从表里摘下并放开 m.mu 之后（“已离表、退役收尾未完成”）。
 	forgetUnlinked func(subjectID int64)
-	// registeredBeforeHandBack 是测试缝：register 把新 subject 放进表、放开 m.mu 并装好脏通知之后，交还撤销记录
-	// （releaseRetracted）之前调用，用来确定性地在这一窗口再次撤销新 subject（OPEN-ITEMS B21，RR-20260926-78 自报的
-	// 未验证窗口）。生产中恒为 nil。
+	// registeredBeforeHandBack：register 把新 subject 放进表、放开 m.mu 并装好脏通知之后，交还撤销记录
+	// （releaseRetracted）之前；用来在这一窗口再次撤销新 subject。
 	registeredBeforeHandBack func(subjectID int64)
-	// unregisterLookedUp 是测试缝：Unregister 无锁取到 subject 之后、取 subj.mu 之前调用，用来确定性地在这一窗口让旧
-	// subject 被 forget、同 ID 重新登记并订阅（OPEN-ITEMS B39，第五轮审计疑点）。生产中恒为 nil。
+	// unregisterLookedUp：Unregister 无锁取到 subject 之后、取 subj.mu 之前；用来让旧 subject 被 forget、
+	// 同 ID 重新登记并订阅。
 	unregisterLookedUp func(subjectID int64)
-	// retractLookedUp 是测试缝：RetractSyncSubject 取到 subject 之后、比对状态并注销之前调用，用来确定性地在这一窗口让同 ID
-	// 换成另一个状态登记（OPEN-ITEMS B41）。生产中恒为 nil。
+	// retractLookedUp：RetractSyncSubject 取到 subject 之后、比对状态并注销之前；用来让同 ID 换成另一个状态登记。
 	retractLookedUp func(subjectID int64)
 }
 
+// NewManager 校验配置（模式、合批窗口、快照预算、帧上限）并补默认值；传输声明了帧上限时取二者较小值。
 func NewManager(config ManagerConfig) (*Manager, error) {
 	if config.Mode != ModePeriodic && config.Mode != ModeOnChange {
 		return nil, fmt.Errorf("entitysync: invalid sync mode %d", config.Mode)
@@ -302,7 +302,7 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 	if m.registeredBeforeHandBack != nil {
 		m.registeredBeforeHandBack(id)
 	}
-	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交（RR-20260926-70）。
+	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交。
 	m.releaseRetracted(created)
 	return false, nil
 }
@@ -323,15 +323,15 @@ func (m *Manager) installDirtyNotifier(id int64, state *entity.SubjectSyncState)
 
 // Rebind 把已登记的 subject 接到同一实体重新加载出来的新内容状态上。前提是旧状态已关闭——
 // 实体被卸载或驱逐（例如原生 saga 步骤投影时被 lease fence 跳过，DataEngine 驱逐了含其效果的
-// 内存实体，RR-20260926-30）。订阅关系保持；每个仍持有或等待该对象的订阅者下一帧收到全量
+// 内存实体）。订阅关系保持；每个仍持有或等待该对象的订阅者下一帧收到全量
 // （已持有的是整份替换的 ObjectUpdate），不在两份状态之间续发增量。待 remove 的订阅照旧发 remove。
 //
 // 未登记返回 ErrSubjectNotRegistered，退役中返回 ErrSubjectRetiring；已登记的状态仍在使用时返回
 // ErrSubjectRegistered（不抢占活着的状态）；同一状态重复调用是空操作。Register 遇到旧状态已关闭的
 // 同 ID subject 时走同一路径。旧状态关闭到重新绑定之间，该 subject 不捕获、不发送，也不计失败。
 //
-// 例外（RR-20260926-59）：subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时，
-// 实体又被加载出来（业务访问、kit 的 OnEntityLoaded）——Rebind / Register 把新状态排在退役完成之后登记
+// 例外：subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时，
+// 实体又被加载出来（业务访问、wiring 的 OnEntityLoaded）——Rebind / Register 把新状态排在退役完成之后登记
 // （与 RegisterAfterRetirement 同一机制：最后一个 remove 交付的同一步登记，remove-before-create 不变），
 // 返回 nil，调用方不会遇到 ErrSubjectRetiring。业务自己 Unregister 的退役不受影响。
 func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
@@ -349,9 +349,9 @@ func (m *Manager) Rebind(state *entity.SubjectSyncState) error {
 	return err
 }
 
-// rebind 返回 queued=true 表示 state 被排在卸载退役（RR-59）完成之后登记。done 随排队项保存，
-// 由 forget 的登记或取消恰好报告一次；后到的排队替换先到的，被替换者的 done 收到 ErrRegistrationCancelled
-// （RR-20260926-72）。Rebind / Register 传 nil：同一状态已在排队时保留原排队项（不取消业务排队的 done）。
+// rebind 返回 queued=true 表示 state 被排在卸载退役完成之后登记。done 随排队项保存，
+// 由 forget 的登记或取消恰好报告一次；后到的排队替换先到的，被替换者的 done 收到 ErrRegistrationCancelled。
+// Rebind / Register 传 nil：同一状态已在排队时保留原排队项（不取消业务排队的 done）。
 func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
 	subj.mu.Lock()
 	switch {
@@ -408,7 +408,7 @@ func (q *queuedRegistration) finish(err error) {
 }
 
 // RegisterAfterRetirement 与 Register 相同，只是 subject 正在退役（Unregister 之后仍欠订阅者
-// ObjectRemove）时不返回 ErrSubjectRetiring，而是把 state 排在退役完成之后登记（RR-20260926-55）：
+// ObjectRemove）时不返回 ErrSubjectRetiring，而是把 state 排在退役完成之后登记：
 // 最后一个 remove 交付、或最后一个订阅者的会话关闭时，同一步里以 state 重新登记。remove-before-create
 // 不变——退役期间对该 subject 的订阅仍被拒绝（ErrSubjectRetiring），登记完成后的订阅从全量快照开始。
 //
@@ -418,9 +418,9 @@ func (q *queuedRegistration) finish(err error) {
 // CloseSession、Unregister、Close），不持有 Manager 的锁；它不得阻塞，也不得调用 Flush——
 // 需要做事（例如让政策重说被拒绝的订阅）就交给自己的 goroutine。
 //
-// subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时（RR-20260926-59），
-// 同样返回 queued=true 并由 done 报告结果（RR-20260926-72）；这个排队位与 Rebind / Register 的排队
-// （kit 的 OnEntityLoaded）共用，后到的替换先到的。
+// subject 因卸载后重载不了被 RetractUnloadedSubject 退回 remove、退役尚未完成时，
+// 同样返回 queued=true 并由 done 报告结果；这个排队位与 Rebind / Register 的排队
+// （wiring 的 OnEntityLoaded）共用，后到的替换先到的。
 //
 // queued=false 时它就是 Register 的结果，done 不会被调用。本方法不等待，可在快池调用。
 func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
@@ -431,8 +431,8 @@ func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done f
 		return false, ErrSubjectInvalid
 	}
 	id := state.SubjectID()
-	// 一次循环要么返回，要么观察到退役刚好完成（subject 已被 forget），所以两轮足够；
-	// 第三轮只在并发的 Unregister/Register 反复交错时出现，仍然有界。
+	// 一次循环要么返回，要么观察到退役刚好完成（subject 已被 forget），所以两次尝试足够；
+	// 第三次只在并发的 Unregister/Register 反复交错时出现，仍然有界。
 	for range 3 {
 		queued, err := m.register(state, done)
 		if !errors.Is(err, ErrSubjectRetiring) {
@@ -462,13 +462,13 @@ func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done f
 // queued behind an earlier retirement (RegisterAfterRetirement) is cancelled.
 //
 // Unregister 按 ID 注销当前登记：取到 subject 之后、取锁之前，它若已退役完成被 forget、同 ID 已重新登记，
-// 注销作用在重新登记的那一个上（RR-20260927-22）。
+// 注销作用在重新登记的那一个上。
 func (m *Manager) Unregister(subjectID int64) error {
 	return m.unregister(subjectID, nil)
 }
 
 // unregister 是 Unregister 与 RetractSyncSubject 的共同路径。only 非 nil 时只注销以 only 登记的那一次：
-// 取锁并确认表项之后，当前登记的状态不是 only 就什么也不做（RR-20260927-28）。
+// 取锁并确认表项之后，当前登记的状态不是 only 就什么也不做。
 func (m *Manager) unregister(subjectID int64, only *entity.SubjectSyncState) error {
 	for {
 		subj := m.subject(subjectID)
@@ -479,14 +479,14 @@ func (m *Manager) unregister(subjectID int64, only *entity.SubjectSyncState) err
 			m.unregisterLookedUp(subjectID)
 		}
 		subj.mu.Lock()
-		// RR-20260927-22：subject 是无锁取的，取锁前它可能已退役完成、被 forget 摘表，同 ID 随即重新登记，政策也已在新登记上
-		// 订阅。之前不做这一步检查，旧 subject 上取的释放戳比新登记上的订阅戳大，按 ID 删撤销记录又删到新登记名下，
-		// 结果新登记还在，它的订阅和待交还记录却被这次注销清掉——任何串行顺序都得不到这个状态。
-		// 所以取锁后先确认它仍是表里的那一个，不是就重新查表，注销当前登记（业务按 ID 注销，就是要这个 ID 不再同步；
-		// 只把它当作“旧登记已结束”的空操作，会让卸载后重载的新登记在业务注销之后继续存活）。
+		// subject 是无锁取的：取锁前它可能已退役完成、被 forget 摘表，同 ID 随即重新登记，政策也已在新登记上
+		// 订阅。若不确认表项，旧 subject 上取的释放戳会大于新登记上的订阅戳，按 ID 删撤销记录又会删到新登记
+		// 名下——新登记还在，它的订阅和待交还记录却被清掉，任何串行顺序都得不到这个状态。
+		// 所以取锁后先确认它仍是表里的那一个，不是就重新查表，注销当前登记（业务按 ID 注销，就是要这个 ID 不再
+		// 同步；当作“旧登记已结束”的空操作会让卸载后重载的新登记在业务注销之后继续存活）。
 		// 锁序 subj.mu → m.mu 与 subscribe 相同。读锁一直持有到按 ID 删完撤销记录：forget 摘表要取 m.mu 写锁，
 		// 所以这段时间里同 ID 不会出现新登记，按 ID 删掉的都是本次登记名下的记录。释放戳也在这段里取，
-		// 新登记上的订阅戳一定更大（RR-20260926-85）。
+		// 新登记上的订阅戳一定更大。历史：RR-20260927-22。
 		m.mu.RLock()
 		if m.subjects[subjectID] != subj {
 			m.mu.RUnlock()
@@ -494,14 +494,14 @@ func (m *Manager) unregister(subjectID int64, only *entity.SubjectSyncState) err
 			continue
 		}
 		if only != nil && subj.state != only {
-			// RR-20260927-28：同 ID 已换成另一个状态登记（旧状态关闭后 Rebind 到新状态，或旧登记被忘掉后新状态重新登记），
-			// 要撤回的那次登记已经不在了，不能退役别人的登记。比对与退役在同一把 subj.mu 下、确认表项之后，中间不再有窗口。
+			// 同 ID 已换成另一个状态登记（旧状态关闭后 Rebind 到新状态，或旧登记被忘掉后新状态重新登记），
+			// 要撤回的那次登记已经不在了，不能退役别人的登记。比对与退役在同一把 subj.mu 下、确认表项之后，中间没有窗口。
 			m.mu.RUnlock()
 			subj.mu.Unlock()
 			return nil
 		}
 		subj.unloadRetracted = false // 业务的注销意图优先：之后重新加载不再自动排队登记
-		// 退役会清空来源：先记下要通知政策的释放（RR-20260926-79）。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
+		// 退役会清空来源：先记下要通知政策的释放。框架撤销的政策订阅同理不再交还（在 forget 可能发生之前），
 		// 其中的 pair 也一并通知。
 		stamp := m.nextStamp()
 		var released []queuedRelease
@@ -540,6 +540,7 @@ func (m *Manager) retireLocked(subj *subject) (int, *queuedRegistration) {
 	return len(subj.subscribers), cancelled
 }
 
+// finishRetire 在没有欠 remove 的订阅时立即忘掉 subject，否则调度下一次 Flush 去发 remove。
 func (m *Manager) finishRetire(subj *subject, remaining int) {
 	if remaining == 0 {
 		m.forget(subj)
@@ -549,7 +550,7 @@ func (m *Manager) finishRetire(subj *subject, remaining int) {
 	m.WakeSync()
 }
 
-// SubjectAwaitsReload 实现 entity.UnloadedSubjectSync（RR-20260926-59）：subject 已登记、未退役、内容状态已关闭
+// SubjectAwaitsReload 实现 entity.UnloadedSubjectSync：subject 已登记、未退役、内容状态已关闭
 // （实体被卸载或驱逐），且仍有持有或等待该对象的订阅者（离开中的不算）。ManagerAccess.Unload 据此决定是否
 // 主动从权威重载；重载 worker 每轮也先查它，业务已先重载并重新绑定、订阅者都已离开时不再重载。
 func (m *Manager) SubjectAwaitsReload(subjectID int64) bool {
@@ -575,7 +576,7 @@ func (m *Manager) SubjectAwaitsReload(subjectID int64) bool {
 // ObjectRemove，全部发出后 subject 被忘掉——remove-before-create）；已重新绑定到活状态或已退役时不动，返回 false。
 // 检查与退役在同一把 subj.mu 下完成。退役完成前实体又被加载出来时，Rebind / Register 排队到退役完成后登记
 // （见 Rebind）；退役完成后同 ID 的登记是新 subject。被撤销的订阅若来自政策来源（NewSubscriptionSourceWithResubmit），
-// 同 ID 重新登记后交还政策按自己的判定重新提交（RR-20260926-70，见 policy_queue.go）；其他来源的订阅不恢复。
+// 同 ID 重新登记后交还政策按自己的判定重新提交（见 policy_queue.go）；其他来源的订阅不恢复。
 func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 	subj := m.subject(subjectID)
 	if subj == nil {
@@ -586,7 +587,7 @@ func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 		subj.mu.Unlock()
 		return false
 	}
-	// 退役会清空订阅来源：先记下政策来源的订阅，同 ID 重新登记时交还政策重新提交（RR-20260926-70）。
+	// 退役会清空订阅来源：先记下政策来源的订阅，同 ID 重新登记时交还政策重新提交。
 	m.recordRetractedLocked(subj)
 	remaining, cancelled := m.retireLocked(subj)
 	subj.unloadRetracted = true
@@ -599,13 +600,13 @@ func (m *Manager) RetractUnloadedSubject(subjectID int64) bool {
 var _ entity.UnloadedSubjectSync = (*Manager)(nil)
 
 // RetractSyncSubject 实现 entity.SyncSubjectRetractor：事务内新建的实体被回滚或拒绝时，
-// Nest 在仍持有该实体锁时调用它（RR-20260926-35）。只注销以同一个状态对象登记的 subject，
+// Nest 在仍持有该实体锁时调用它。只注销以同一个状态对象登记的 subject，
 // 语义与 Unregister 相同：未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，
 // 之后同 ID 的新实体才能重新登记（remove-before-create）。
 //
-// 按实例撤回（RR-20260927-28，OPEN-ITEMS B41）：状态比对在 unregister 里、取 subj.mu 并确认表项之后进行。
-// 之前在锁外比对 subj.state == state 后按 ID 调 Unregister：两步之间同 ID 换成另一个状态登记时，注销的是新登记；
-// 锁外读 subj.state 本身也与 rebind 的写并发。
+// 按实例撤回：状态比对在 unregister 里、取 subj.mu 并确认表项之后进行。不能在锁外比对 subj.state == state
+// 后再按 ID 注销：两步之间同 ID 换成另一个状态登记时会注销新登记，锁外读 subj.state 也与 rebind 的写并发。
+// 历史：RR-20260927-28。
 func (m *Manager) RetractSyncSubject(state *entity.SubjectSyncState) {
 	if m == nil || state == nil {
 		return
@@ -626,7 +627,7 @@ var _ entity.SyncSubjectRetractor = (*Manager)(nil)
 // the state queued behind the retirement, if any (RegisterAfterRetirement).
 //
 // 只忘掉调用方看到的那个 subject：表里同 ID 已是另一个 subject（上一次 forget 之后重新登记的）时什么都不做。
-// 旧 subject 装在状态上的脏通知器与冻结内容在删表之前、同一把 m.mu 内清除（RR-20260926-69）：删表一放开，
+// 旧 subject 装在状态上的脏通知器与冻结内容在删表之前、同一把 m.mu 内清除：删表一放开，
 // 同一个状态对象就可能被 Register（RegisterAfterRetirement 的直接登记，或下面排队的登记）装上新 subject 的
 // 通知器，之后再清就会清掉新 subject 的，后续 MarkDirty 不再调度。锁序 m.mu → 状态锁：SetDirtyNotifier(nil)
 // 不回调，DiscardFrozenSync 只归还原子计数，状态锁内不取 Manager 的锁。
@@ -931,6 +932,7 @@ func (m *Manager) LastError() error {
 
 // ---- observability ----
 
+// ManagerStats 是 Manager 的计数与容量快照；各计数分别读取，不是全局原子快照。
 type ManagerStats struct {
 	FlushCalls              uint64
 	EmptyFlushes            uint64
@@ -961,6 +963,7 @@ type ManagerStats struct {
 	MaxSessions             int
 }
 
+// Stats 读取增量维护的计数，不遍历订阅；需要逐项核对时用 AuditStats。
 func (m *Manager) Stats() ManagerStats {
 	if m == nil {
 		return ManagerStats{}

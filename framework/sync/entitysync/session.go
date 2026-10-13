@@ -18,6 +18,7 @@ const (
 	entryRemove                      // the subject left the session's view
 )
 
+// frameEntry 是一个 subject 在本轮对一个会话的贡献；update 对 remove 为 nil。
 type frameEntry struct {
 	subjectID int64
 	kind      entryKind
@@ -41,9 +42,8 @@ type wireConfig struct {
 	componentSchema uint16
 }
 
-// session is everything the manager knows about one receiver: its wire clock
-// and the object references it has been given. Nothing here refers to a room
-// or to any other session — a session's frames are its own (ARCH-10).
+// sessionLifetime 是一个会话打开期间共享的身份：编码副本与已发布的 session 指向同一个，
+// 关闭后重开是新的 lifetime。
 type sessionLifetime struct {
 	traceID uint64
 	// subjects 是订阅意图的反向索引，包含待快照与待删除项。
@@ -51,6 +51,9 @@ type sessionLifetime struct {
 	subjects map[int64]*subject
 }
 
+// session is everything the manager knows about one receiver: its wire clock
+// and the object references it has been given. Nothing here refers to any
+// other session — a session's frames are its own.
 type session struct {
 	lifetime *sessionLifetime
 	id       SessionID
@@ -133,17 +136,13 @@ func (s *session) release(subjectID int64) {
 }
 
 // encode 按完整实体包边界组帧；对象数或字节容量不足就开启下一帧，
-// 不切开实体 payload。每帧独立推进会话时钟。 The first frame a session ever gets is a FrameFull (it can
-// only contain creates: nothing is live yet); every later frame is a
-// FrameDelta based on the previous tick.
+// 不切开实体 payload。每帧独立推进会话时钟。会话收到的第一帧是 Full
+// （此时还没有活对象，只能包含 create），之后每帧都是基于上一 tick 的 Delta。
+// work 是 Flush 串行借用的临时切片，返回的帧字节与逐帧会话状态不引用它。
 //
 // 编码失败可能是引用表不一致或单实体包超硬上限；关闭受影响会话，
 // 由业务修正配置/数据并重新订阅，不能截断内容继续发送。
-func (s *session) encode(entries []frameEntry, cfg wireConfig) ([]encodedFrame, error) {
-	return s.encodeWithWorkspace(entries, cfg, &encodeWorkspace{})
-}
-
-func (s *session) encodeWithWorkspace(entries []frameEntry, cfg wireConfig, work *encodeWorkspace) ([]encodedFrame, error) {
+func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorkspace) ([]encodedFrame, error) {
 	// 先释放退出视野的对象，再为新对象分配引用。MaxObjects 限制持有量，
 	// 不能让同一 tick 的合法替换因为新对象 ID 更小而暂时超额。
 	slices.SortFunc(entries, func(a, b frameEntry) int {

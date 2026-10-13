@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
+// markPending 把 subject 排进下一次 Flush；同时在等待快照表里的计入 pendingOverlap，统计不重复计数。
 func (m *Manager) markPending(subjectID int64) {
 	m.pendingMu.Lock()
 	if _, exists := m.pending[subjectID]; !exists {
@@ -22,6 +23,7 @@ func (m *Manager) markPending(subjectID int64) {
 	m.pendingMu.Unlock()
 }
 
+// takePending 取走全部待处理 subject，按 ID 升序返回，保证捕获顺序确定。
 func (m *Manager) takePending() []int64 {
 	m.pendingMu.Lock()
 	ids := make([]int64, 0, len(m.pending))
@@ -59,6 +61,9 @@ type flushSession struct {
 
 // Flush 执行一次同步 tick：捕获 pending subject，按会话组帧并逐帧准入，最后提交内容版本。
 // 同一 subject 的快照和增量在实体锁内捕获；持久化水位不足时整体暂缓该 subject。
+//
+// 步骤：政策阶段（applyPolicies）→ 取 pending → 逐 subject 捕获并分给会话（prepareSubscribersLocked、
+// PrepareViews）→ 逐会话编码交付（pushSessionFrames）→ 提交内容版本、忘掉退役完成的 subject。
 //
 // ErrRetryLater 会中止本轮内容提交并保留脏状态；已准入的会话时钟和引用继续有效，
 // 相关订阅在下次用全量恢复基线。其他交付错误只关闭失败会话。
@@ -132,46 +137,9 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			continue
 		}
 		subj.mu.Lock()
-		// Sessions that closed since are pruned here: their entries owe
-		// nothing. Held sessions are skipped for this tick — ReadySession
-		// schedules the subject again when they can receive.
-		var held map[SessionID]bool
-		hold := func(sid SessionID) {
-			if held == nil {
-				held = make(map[SessionID]bool)
-			}
-			held[sid] = true
-		}
-		for sid, sub := range subj.subscribers {
-			sess := m.session(sid)
-			switch {
-			case sess == nil || sess.lifetime != sub.lifetime:
-				m.removeSubscriptionLocked(subj, sid)
-			case sess.held:
-				hold(sid)
-			default:
-				if captured := work[sid]; captured != nil && captured.session != sess {
-					hold(sid)
-				} else {
-					if work[sid] == nil {
-						work[sid] = m.takeFlushSession(sess)
-					}
-				}
-			}
-		}
+		held := m.prepareSubscribersLocked(subj, work)
 		if selectedSnapshots != nil {
-			for sid, sub := range subj.subscribers {
-				if sub.kind == kindSnapshot && !held[sid] && work[sid] != nil {
-					// 已有引用的视图替换仍是一次对象更新，不能等待冷恢复预算。
-					if _, exists := work[sid].session.objects[id]; exists {
-						selectedSnapshots[sub] = true
-					}
-				}
-				if sub.kind == kindSnapshot && !held[sid] && !selectedSnapshots[sub] {
-					m.deferSnapshot(subj)
-					m.snapshotsDeferred.Add(1)
-				}
-			}
+			m.deferUnselectedSnapshotsLocked(subj, held, work, selectedSnapshots)
 		}
 		deltaProfiles, snapshotProfiles := subj.profilesLocked(selectedSnapshots)
 		state := subj.state
@@ -190,10 +158,10 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			case errors.Is(err, entity.ErrSubjectSyncNotDirty):
 			case errors.Is(err, entity.ErrSubjectSyncClosed):
 				// 实体已卸载或被驱逐，内容状态随之关闭：不捕获、不重试、不算失败。订阅者保留原对象，
-				// 直到 Rebind 接上重新加载的实体（强制全量）或 Unregister 发出 remove（RR-20260926-30）。
-				// 已注销（subj.retiring）的 subject 在捕获期间关闭了状态（实体被销毁或事务内创建被撤销，
-				// RR-20260926-35）也落在这里：没有内容可发，只欠后面的 ObjectRemove。
-				// 接了 ManagerAccess.ConfigureUnloadResync 时，框架在卸载后主动重载或退回 remove（RR-20260926-59）。
+				// 直到 Rebind 接上重新加载的实体（强制全量）或 Unregister 发出 remove。
+				// 已注销（subj.retiring）的 subject 在捕获期间关闭了状态（实体被销毁或事务内创建被撤销）
+				// 也落在这里：没有内容可发，只欠后面的 ObjectRemove。
+				// 接了 ManagerAccess.ConfigureUnloadResync 时，框架在卸载后主动重载或退回 remove。
 			case errors.Is(err, entity.ErrSyncCommitPending):
 				if m.config.Trace != nil {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})
@@ -280,97 +248,22 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	var admittedSessions []SessionID
 	for _, sid := range sessionIDs {
 		batch := work[sid]
-		sess := batch.session
-		if sess == nil || m.session(sid) != sess {
+		if batch.session == nil || m.session(sid) != batch.session {
 			continue
 		}
-		encodeStarted := time.Now()
-		if m.config.Trace != nil {
-			for _, entry := range batch.entries {
-				if entry.update == nil {
-					continue
-				}
-				u := entry.update.update
-				m.config.Trace.Record(SyncTraceEvent{Stage: "selected", SubjectID: entry.subjectID, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Version: u.Version, BaseVersion: u.BaseVersion, Full: u.Full, Reason: uint8(u.Reason), Snapshot: entry.kind == entryCreate})
-			}
+		delivered, retryErr := m.pushSessionFrames(ctx, sid, batch)
+		if delivered {
+			admittedSessions = append(admittedSessions, sid)
 		}
-		// 编码只改副本；每一帧准入后分别采纳其时钟与引用表。
-		// 后一帧或另一会话失败时，已成功交付的前缀不能回滚。
-		next := sess.clone()
-		next.snapshotAfter = batch.snapshotAfter
-		payloads, err := next.encodeWithWorkspace(batch.entries, m.wire, &m.encodeWork)
-		if m.config.Trace != nil {
-			if err != nil {
-				m.config.Trace.Record(SyncTraceEvent{Stage: "encode_failed", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Duration: time.Since(encodeStarted)})
-			}
-			for _, encoded := range payloads {
-				m.config.Trace.Record(SyncTraceEvent{Stage: "encoded", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(encodeStarted)})
-			}
-		}
-		m.encodeNanos.Add(uint64(time.Since(encodeStarted)))
-		if err != nil {
-			m.loseSession(sess, err)
-			continue
-		}
-		var pushErr error
-		stale := false
-		for i, encoded := range payloads {
-			if m.session(sid) != sess {
-				stale = true
-				break
-			}
-			if err := ctx.Err(); err != nil {
-				pushErr = err
-				break
-			}
-			admissionStarted := time.Now()
-			batch.snapshotAttempted = true
-			pushErr = m.config.Transport.Push(ctx, sid, encoded.payload)
-			if m.config.Trace != nil {
-				stage := "admitted"
-				if pushErr != nil {
-					stage = "admission_failed"
-				}
-				m.config.Trace.Record(SyncTraceEvent{Stage: stage, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(admissionStarted)})
-			}
-			m.admissionNanos.Add(uint64(time.Since(admissionStarted)))
-			if pushErr != nil {
-				break
-			}
-			adopted := m.adoptSession(sess, encoded.next)
-			if i == 0 {
-				admittedSessions = append(admittedSessions, sid)
-			}
-			m.framesAdmitted.Add(1)
-			m.createsAdmitted.Add(encoded.creates)
-			m.updatesAdmitted.Add(encoded.updates)
-			m.removesAdmitted.Add(encoded.removes)
-			metrics.IncCounter("entitysync_frames_admitted_total", nil, 1)
-			if !adopted {
-				stale = true
-				break
-			}
-			sess = encoded.next
-		}
-		if ctx.Err() != nil && pushErr != nil {
-			pushErr = ctx.Err()
-		}
-		if errors.Is(pushErr, ErrRetryLater) || (pushErr != nil && ctx.Err() != nil) {
+		if retryErr != nil {
 			// 内容捕获作废并保留脏位，但已交付会话可能已应用未提交版本的增量。
 			// 它们下次必须收全量，不能再把旧 baseVersion 的增量当成连续历史。
-			abortAll(prepared, pushErr)
+			abortAll(prepared, retryErr)
 			m.requireSnapshotsAfterRetry(admittedSessions, work)
 			for _, id := range ids {
 				m.markPending(id)
 			}
-			return fmt.Errorf("sync admission session %d: %w", sid, pushErr)
-		}
-		if pushErr != nil {
-			m.loseSession(sess, pushErr)
-			continue
-		}
-		if !stale {
-			m.settleSubscriptions(sid, batch.settlements)
+			return fmt.Errorf("sync admission session %d: %w", sid, retryErr)
 		}
 	}
 
@@ -401,6 +294,149 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		m.markPending(id)
 	}
 	return errors.Join(failures...)
+}
+
+// prepareSubscribersLocked 为本轮整理 subject 的订阅者，返回本 tick 要跳过的会话（无则 nil）：
+// 会话已关闭或已换 lifetime 的订阅直接移除（不再欠任何内容）；held 会话，以及本轮 work 里已由
+// 同 ID 另一个会话状态占用的会话，本 tick 跳过（ReadySession 会重新调度）；其余会话在 work 中
+// 取得本轮的 flushSession。调用方持有 subj.mu。
+func (m *Manager) prepareSubscribersLocked(subj *subject, work map[SessionID]*flushSession) map[SessionID]bool {
+	var held map[SessionID]bool
+	hold := func(sid SessionID) {
+		if held == nil {
+			held = make(map[SessionID]bool)
+		}
+		held[sid] = true
+	}
+	for sid, sub := range subj.subscribers {
+		sess := m.session(sid)
+		switch {
+		case sess == nil || sess.lifetime != sub.lifetime:
+			m.removeSubscriptionLocked(subj, sid)
+		case sess.held:
+			hold(sid)
+		default:
+			if captured := work[sid]; captured != nil && captured.session != sess {
+				hold(sid)
+			} else {
+				if work[sid] == nil {
+					work[sid] = m.takeFlushSession(sess)
+				}
+			}
+		}
+	}
+	return held
+}
+
+// deferUnselectedSnapshotsLocked 在冷创建预算生效时（selected 非 nil）处理未入选的全量：会话已持有
+// 引用的视图替换仍是一次对象更新，补选进 selected；其余未入选的全量排到下一窗口。调用方持有 subj.mu。
+func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[SessionID]bool, work map[SessionID]*flushSession, selected map[*subscription]bool) {
+	for sid, sub := range subj.subscribers {
+		if sub.kind == kindSnapshot && !held[sid] && work[sid] != nil {
+			// 已有引用的视图替换仍是一次对象更新，不能等待冷恢复预算。
+			if _, exists := work[sid].session.objects[subj.id]; exists {
+				selected[sub] = true
+			}
+		}
+		if sub.kind == kindSnapshot && !held[sid] && !selected[sub] {
+			m.deferSnapshot(subj)
+			m.snapshotsDeferred.Add(1)
+		}
+	}
+}
+
+// pushSessionFrames 编码一个会话本轮的内容并逐帧交付：每帧准入后立即采纳该帧的会话时钟与引用表，
+// 全部帧成功（且会话状态未被替换）后结算订阅。delivered 表示至少一帧已准入。retryErr 非 nil 表示
+// 整轮需要重试（ErrRetryLater 或 ctx 结束），由调用方作废捕获；其他编码或交付错误只关闭本会话。
+func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *flushSession) (delivered bool, retryErr error) {
+	sess := batch.session
+	encodeStarted := time.Now()
+	if m.config.Trace != nil {
+		m.traceSelectedEntries(sid, sess, batch.entries)
+	}
+	// 编码只改副本；每一帧准入后分别采纳其时钟与引用表。
+	// 后一帧或另一会话失败时，已成功交付的前缀不能回滚。
+	next := sess.clone()
+	next.snapshotAfter = batch.snapshotAfter
+	payloads, err := next.encode(batch.entries, m.wire, &m.encodeWork)
+	if m.config.Trace != nil {
+		if err != nil {
+			m.config.Trace.Record(SyncTraceEvent{Stage: "encode_failed", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Duration: time.Since(encodeStarted)})
+		}
+		for _, encoded := range payloads {
+			m.config.Trace.Record(SyncTraceEvent{Stage: "encoded", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(encodeStarted)})
+		}
+	}
+	m.encodeNanos.Add(uint64(time.Since(encodeStarted)))
+	if err != nil {
+		m.loseSession(sess, err)
+		return false, nil
+	}
+	var pushErr error
+	stale := false
+	for i, encoded := range payloads {
+		if m.session(sid) != sess {
+			stale = true
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			pushErr = err
+			break
+		}
+		admissionStarted := time.Now()
+		batch.snapshotAttempted = true
+		pushErr = m.config.Transport.Push(ctx, sid, encoded.payload)
+		if m.config.Trace != nil {
+			stage := "admitted"
+			if pushErr != nil {
+				stage = "admission_failed"
+			}
+			m.config.Trace.Record(SyncTraceEvent{Stage: stage, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: encoded.next.epoch, Tick: encoded.next.tick, Duration: time.Since(admissionStarted)})
+		}
+		m.admissionNanos.Add(uint64(time.Since(admissionStarted)))
+		if pushErr != nil {
+			break
+		}
+		adopted := m.adoptSession(sess, encoded.next)
+		if i == 0 {
+			delivered = true
+		}
+		m.framesAdmitted.Add(1)
+		m.createsAdmitted.Add(encoded.creates)
+		m.updatesAdmitted.Add(encoded.updates)
+		m.removesAdmitted.Add(encoded.removes)
+		metrics.IncCounter("entitysync_frames_admitted_total", nil, 1)
+		if !adopted {
+			stale = true
+			break
+		}
+		sess = encoded.next
+	}
+	if ctx.Err() != nil && pushErr != nil {
+		pushErr = ctx.Err()
+	}
+	if errors.Is(pushErr, ErrRetryLater) || (pushErr != nil && ctx.Err() != nil) {
+		return delivered, pushErr
+	}
+	if pushErr != nil {
+		m.loseSession(sess, pushErr)
+		return delivered, nil
+	}
+	if !stale {
+		m.settleSubscriptions(sid, batch.settlements)
+	}
+	return delivered, nil
+}
+
+// traceSelectedEntries 记录本轮为会话选中的每个内容项；只在启用 Trace 时调用。
+func (m *Manager) traceSelectedEntries(sid SessionID, sess *session, entries []frameEntry) {
+	for _, entry := range entries {
+		if entry.update == nil {
+			continue
+		}
+		u := entry.update.update
+		m.config.Trace.Record(SyncTraceEvent{Stage: "selected", SubjectID: entry.subjectID, Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Version: u.Version, BaseVersion: u.BaseVersion, Full: u.Full, Reason: uint8(u.Reason), Snapshot: entry.kind == entryCreate})
+	}
 }
 
 // captureSettlement 在 subject 锁内记录本轮捕获对应的意图。
@@ -472,7 +508,7 @@ func abortAll(prepared []*entity.PreparedSubjectSync, cause error) {
 	}
 }
 
-// 固定标签集合：不以实体、会话或业务提供的 reason 数值制造无限监控序列。
+// recordFullReasons 按原因计数全量捕获。标签集合固定：不以实体、会话或业务提供的 reason 数值制造无限监控序列。
 func recordFullReasons(updates []entity.SubjectSyncUpdate) {
 	for _, update := range updates {
 		if !update.Full {

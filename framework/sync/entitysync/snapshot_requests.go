@@ -18,6 +18,7 @@ type snapshotRequests struct {
 	// 真正准入仍按本轮最新捕获的实际编码计算。意图结算或撤销时随索引项一起删除。
 	estimates map[*subscription]int
 }
+
 type snapshotRequestGroup struct {
 	entries map[*subscription]snapshotCandidate
 	ordered []snapshotCandidate
@@ -96,6 +97,7 @@ func (r *snapshotRequests) sessionOrder(class snapshotClass) []SessionID {
 	}
 	return r.sessions[class]
 }
+
 func (g *snapshotRequestGroup) order() []snapshotCandidate {
 	if g.ordered == nil {
 		g.ordered = make([]snapshotCandidate, 0, len(g.entries))

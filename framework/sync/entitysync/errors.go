@@ -5,7 +5,7 @@
 // subject and every session, turns dirty subjects into frames on a tick and
 // hands each session ITS frame; the policies that decide who subscribes to
 // whom (a room, an area of interest, a direct binding) live outside and only
-// call Subscribe / Unsubscribe (ARCH-10).
+// call Subscribe / Unsubscribe.
 //
 // 阅读主线：subject.go 保存订阅意图，Manager.Flush 捕获内容并按会话分发，
 // session.go 维护已交付的帧时钟与对象引用。内容版本、订阅意图、客户端实际持有
@@ -59,7 +59,7 @@ var (
 // SessionOpenRetryable 报告 OpenSession / OpenHeldSession 的错误是否只是“这次没有创建会话，
 // 稍后重试即可”：ErrSessionClosing（同 ID 的旧 lifetime 仍在传输层退出）或 ErrSessionOpening
 // （同 ID 的另一次打开尚未确认）。其他错误（会话上限、Manager 关闭、传输拒绝）重试无益。
-// 重试的等待由调用方安排在快池之外（RR-20260926-55）。
+// 重试的等待由调用方安排在快池之外。
 func SessionOpenRetryable(err error) bool {
 	return errors.Is(err, ErrSessionClosing) || errors.Is(err, ErrSessionOpening)
 }
