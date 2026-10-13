@@ -116,6 +116,9 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 
 // beginWrite 为一个实体取得写权限：写门 → 所有权（必要时认领）→ 共享模式取分布式锁与 fence（或独占模式取持久写许可）
 // → 加载与权威版本一致的实例 → 校验所有权状态 → 写入版本向量。任一步失败都释放此前取得的锁与写门。
+//
+// 资源按“写门 → 所有权读锁 → 分布式锁（仅共享模式）”的顺序取得，失败时经 abortBeginWrite 反序归还。
+// 各步骤自己取得的资源在自身失败时自己退还，不把半取得的状态留给调用方。
 func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEntry, error) {
 	if w == nil || w.mgr == nil {
 		return nil, entity.ErrRemoteRejected
@@ -124,22 +127,117 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	// 最后一个等完其余全部，配置的预算形同虚设。ownership.go 的加锁路径遵守同一规则。
 	ctx, cancel := w.mgr.ownershipContext(parent)
 	defer cancel()
+	if err := w.acquireWriteGate(ctx); err != nil {
+		return nil, err
+	}
+	w.ownershipMu.RLock()
+	marked, err := w.confirmWriteOwnership(ctx)
+	if err != nil {
+		w.abortBeginWrite(ctx, false)
+		return nil, err
+	}
+	authority, durable := w.mgr.ownershipStore.(WriteAuthority)
+	lockFence := uint64(0)
+	if marked {
+		if lockFence, err = w.lockSharedWrite(ctx, durable); err != nil {
+			w.abortBeginWrite(ctx, false)
+			return nil, err
+		}
+	}
+	// 共享模式此后持有分布式锁，失败分支要先解锁。
+	distLocked := marked
+
+	marker, err := w.writeMarker()
+	if err != nil {
+		w.abortBeginWrite(ctx, distLocked)
+		return nil, err
+	}
+	expectedVersion := w.rMu.Version()
+	if !marked && durable {
+		grant, err := authority.GrantWrite(ctx, w.id, generateToken(), w.mgr.localSid)
+		if err != nil {
+			w.abortBeginWrite(ctx, distLocked)
+			return nil, err
+		}
+		marker = grant.Ownership
+		w.applyOwnership(marker)
+		lockFence, expectedVersion = grant.Fence, grant.Version
+	}
+	remoteEntity, err := w.loadWriteTarget(ctx, marked || durable, expectedVersion)
+	if err != nil {
+		w.abortBeginWrite(ctx, distLocked)
+		return nil, err
+	}
+	if remote, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok {
+		state, admitted, err := admitWriteOwnershipState(remote, marked)
+		if err != nil {
+			w.abortBeginWrite(ctx, distLocked)
+			return nil, fmt.Errorf("%w: entity=%d state=%s: %v", entity.ErrRemoteOwnerTransition, w.id, state, err)
+		}
+		if !admitted {
+			w.abortBeginWrite(ctx, distLocked)
+			return nil, w.blockedOwnershipError(remote, state)
+		}
+	}
+	w.attachEntity(remoteEntity)
+	stateVersion := remoteEntity.EntityVersion()
+	if stateVersion < 0 {
+		stateVersion = 0
+	}
+	if durable && stateVersion != expectedVersion {
+		// 版本冲突按权威版本解锁，不用本地锁记录的版本。
+		if distLocked {
+			_ = w.unlockObserved(ctx, expectedVersion)
+		}
+		w.releaseWriteGate()
+		return nil, fmt.Errorf("%w: entity %d loaded version %d, authority %d", entity.ErrRemoteVersionConflict, w.id, stateVersion, expectedVersion)
+	}
+	if current, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok && !marked && !durable {
+		lockFence = current.RemoteVersionVector().LockFence
+	}
+	lease := w.newWriteLease(marked, stateVersion, marker, lockFence)
+	if remote, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok {
+		if err := w.applyWriteLease(remote, lease); err != nil {
+			w.abortBeginWrite(ctx, distLocked)
+			return nil, err
+		}
+	}
+	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
+}
+
+// acquireWriteGate 在 ctx 的截止时间内排队取得本实体的写门。
+func (w *remoteEntityWrapper) acquireWriteGate(ctx context.Context) error {
 	gateStarted := time.Now()
 	select {
 	case w.writeGate <- struct{}{}:
 		metrics.ObserveDuration("remote_entity.remote.write_gate_wait", nil, time.Since(gateStarted))
+		return nil
 	case <-ctx.Done():
 		metrics.IncCounter("remote_entity_write_gate_timeout_total", nil, 1)
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
-	w.ownershipMu.RLock()
-	release := func() {
-		w.ownershipMu.RUnlock()
-		<-w.writeGate
+}
+
+// releaseWriteGate 归还所有权读锁与写门（与取得顺序相反）。
+func (w *remoteEntityWrapper) releaseWriteGate() {
+	w.ownershipMu.RUnlock()
+	<-w.writeGate
+}
+
+// abortBeginWrite 是 beginWrite 失败分支的统一收尾：共享模式已持有分布式锁时先按锁记录的版本解锁，
+// 再归还所有权读锁与写门。
+func (w *remoteEntityWrapper) abortBeginWrite(ctx context.Context, distLocked bool) {
+	if distLocked {
+		_ = w.unlockObserved(ctx, w.rMu.Version())
 	}
+	w.releaseWriteGate()
+}
+
+// confirmWriteOwnership 刷新 marker，没有所有权记录时为本节点认领，返回实体是否处于共享模式。
+// 独占模式下只有本节点是所有者才允许写。
+func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context) (marked bool, err error) {
 	if err := w.ensureMarker(ctx); err != nil {
-		release()
-		return nil, fmt.Errorf("remote_entity: refresh marker %d: %w", w.id, err)
+		return false, fmt.Errorf("remote_entity: refresh marker %d: %w", w.id, err)
 	}
 	if _, found := w.cachedOwnership(); !found {
 		lease, err := w.mgr.ownershipStore.ClaimOwnership(ctx, w.id, w.mgr.localSid)
@@ -147,90 +245,73 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			// CAS 失败后刷新，让错误报告真正赢得认领的所有者，而不是把“没有记录”当作本地拥有。
 			_ = w.refreshMarked(ctx)
 			current, _ := w.cachedOwnership()
-			release()
-			return nil, errors.Join(ownershipFenceError(w.id, current), err)
+			return false, errors.Join(ownershipFenceError(w.id, current), err)
 		}
 		if !validOwnershipLease(lease) || lease.OwnerSid != w.mgr.localSid {
-			release()
-			return nil, fmt.Errorf("%w: invalid ownership claim for entity=%d", entity.ErrRemoteFenced, w.id)
+			return false, fmt.Errorf("%w: invalid ownership claim for entity=%d", entity.ErrRemoteFenced, w.id)
 		}
 		w.applyOwnership(lease)
 	}
-	marked := w.isMarked()
+	marked = w.isMarked()
 	if !marked && !w.isLocalOwner() {
-		release()
-		return nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
+		return false, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
-	authority, durable := w.mgr.ownershipStore.(WriteAuthority)
-	distLocked := false
-	lockFence := uint64(0)
-	if marked {
-		if err := w.rMu.Lock(ctx); err != nil {
-			release()
-			return nil, fmt.Errorf("remote_entity: shared lock %d: %w", w.id, err)
-		}
-		distLocked = true
-		// 这是公开契约而非鸭子类型：Manager 构造时拒绝锁不具备该能力的工厂，所以每个 wrapper 上这个断言都成立。
-		// 下面的零值检查是最后一道防线，防备实现了方法却给出错误值的锁。
-		if provider, ok := w.rMu.(redis.IFencedVersionedLock); ok {
-			lockFence = provider.Fence()
-		}
-		if lockFence == 0 {
-			_ = w.unlockObserved(ctx, w.rMu.Version())
-			release()
-			return nil, fmt.Errorf("%w: shared lock did not allocate fence", entity.ErrRemoteFenced)
-		}
-		if durable {
-			// 许可已经原子包含 ownership；重复读取会增加往返并可能混入下一代 ownership。
-			provider, ok := w.rMu.(interface{ writeGrant() (WriteGrant, bool) })
-			var grant WriteGrant
-			if ok {
-				grant, ok = provider.writeGrant()
-			}
-			if !ok || !grant.Ownership.Shared || grant.Fence != lockFence {
-				_ = w.unlockObserved(ctx, w.rMu.Version())
-				release()
-				return nil, entity.ErrRemoteFenced
-			}
-			w.applyOwnership(grant.Ownership)
-		} else if err := w.refreshMarked(ctx); err != nil || !w.isMarked() {
-			_ = w.unlockObserved(ctx, w.rMu.Version())
-			release()
-			return nil, errors.Join(entity.ErrRemoteOwnerTransition, err)
-		}
-	}
+	return marked, nil
+}
 
+// lockSharedWrite 为共享模式取得分布式锁与它分配的 fence，并确认实体仍在共享模式（持久权威从写许可确认，
+// 否则从 marker 重读）。成功时持有分布式锁；失败时已取得的分布式锁在这里解开，调用方只需归还写门。
+func (w *remoteEntityWrapper) lockSharedWrite(ctx context.Context, durable bool) (lockFence uint64, err error) {
+	if err := w.rMu.Lock(ctx); err != nil {
+		return 0, fmt.Errorf("remote_entity: shared lock %d: %w", w.id, err)
+	}
+	// 这是公开契约而非鸭子类型：Manager 构造时拒绝锁不具备该能力的工厂，所以每个 wrapper 上这个断言都成立。
+	// 下面的零值检查是最后一道防线，防备实现了方法却给出错误值的锁。
+	if provider, ok := w.rMu.(redis.IFencedVersionedLock); ok {
+		lockFence = provider.Fence()
+	}
+	if lockFence == 0 {
+		_ = w.unlockObserved(ctx, w.rMu.Version())
+		return 0, fmt.Errorf("%w: shared lock did not allocate fence", entity.ErrRemoteFenced)
+	}
+	if durable {
+		// 许可已经原子包含 ownership；重复读取会增加往返并可能混入下一代 ownership。
+		provider, ok := w.rMu.(interface{ writeGrant() (WriteGrant, bool) })
+		var grant WriteGrant
+		if ok {
+			grant, ok = provider.writeGrant()
+		}
+		if !ok || !grant.Ownership.Shared || grant.Fence != lockFence {
+			_ = w.unlockObserved(ctx, w.rMu.Version())
+			return 0, entity.ErrRemoteFenced
+		}
+		w.applyOwnership(grant.Ownership)
+	} else if err := w.refreshMarked(ctx); err != nil || !w.isMarked() {
+		_ = w.unlockObserved(ctx, w.rMu.Version())
+		return 0, errors.Join(entity.ErrRemoteOwnerTransition, err)
+	}
+	return lockFence, nil
+}
+
+// writeMarker 读取当前缓存的 marker；它必须是一份完整有效的所有权租约。
+func (w *remoteEntityWrapper) writeMarker() (entity.RemoteEntityMarkerLease, error) {
 	w.markerMu.RLock()
 	marker := w.markerLease
 	w.markerMu.RUnlock()
 	if !validOwnershipLease(marker) {
-		if distLocked {
-			_ = w.unlockObserved(ctx, w.rMu.Version())
-		}
-		release()
-		return nil, ownershipFenceError(w.id, marker)
+		return marker, ownershipFenceError(w.id, marker)
 	}
+	return marker, nil
+}
 
-	expectedVersion := w.rMu.Version()
-	if !marked && durable {
-		grant, err := authority.GrantWrite(ctx, w.id, generateToken(), w.mgr.localSid)
-		if err != nil {
-			release()
-			return nil, err
-		}
-		marker = grant.Ownership
-		w.applyOwnership(marker)
-		lockFence, expectedVersion = grant.Fence, grant.Version
-	}
+// loadWriteTarget 返回本次写入的实例：本地已有且（需要对齐权威版本时）版本与 expectedVersion 一致就直接用，
+// 否则从后端加载。实例不存在返回 ErrRemoteRejected；旧实例正在卸载返回可重试的 ErrRemoteEntityReloading。
+func (w *remoteEntityWrapper) loadWriteTarget(ctx context.Context, matchAuthority bool, expectedVersion int64) (entity.IThreadSafeRemoteEntity, error) {
 	remoteEntity := w.lookupLocalEntity()
-	if remoteEntity == nil || ((marked || durable) && (remoteEntity.EntityVersion() != expectedVersion || expectedVersion <= 0)) {
+	if remoteEntity == nil || (matchAuthority && (remoteEntity.EntityVersion() != expectedVersion || expectedVersion <= 0)) {
 		var loadErr error
 		remoteEntity, loadErr = w.loadEntity(ctx)
 		if loadErr != nil {
-			if distLocked {
-				_ = w.unlockObserved(ctx, w.rMu.Version())
-			}
-			release()
 			if errors.Is(loadErr, entity.ErrEntityRemoved) {
 				// 旧实例正被卸载（Destroy 已把它移出索引、生命周期回调未结束），EntityManager 拒绝登记重载的实例：
 				// 这是卸载重载窗口，可重试。
@@ -240,91 +321,73 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		}
 	}
 	if remoteEntity == nil {
-		if distLocked {
-			_ = w.unlockObserved(ctx, w.rMu.Version())
-		}
-		release()
 		return nil, fmt.Errorf("%w: entity %d not found", entity.ErrRemoteRejected, w.id)
 	}
-	if remote, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok {
-		state := remote.RemoteOwnershipState()
-		switch state {
-		case entity.RemoteOwnershipRecovering:
-			// 结果未知的所有权转换把实例冻结了。走到这里说明冻结时作废的 marker 已在上面从权威重读，且仍指向本节点，
-			// 这份副本重新归本节点所有。
-			thaw := entity.RemoteOwnershipLocalOwned
-			if marked {
-				thaw = entity.RemoteOwnershipShared
-			}
-			if err := remote.TransitionRemoteOwnership(thaw); err != nil {
-				if distLocked {
-					_ = w.unlockObserved(ctx, w.rMu.Version())
-				}
-				release()
-				return nil, fmt.Errorf("%w: entity=%d state=%s: %v", entity.ErrRemoteOwnerTransition, w.id, state, err)
-			}
-		case entity.RemoteOwnershipDraining, entity.RemoteOwnershipFenced, entity.RemoteOwnershipQuarantined:
-			if distLocked {
-				_ = w.unlockObserved(ctx, w.rMu.Version())
-			}
-			release()
-			cause := entity.ErrRemoteOwnerTransition
-			switch {
-			case state == entity.RemoteOwnershipQuarantined && w.rejectedReloadPending(remote):
-				// 持久拒绝已收尾、gate 已释放，框架即将卸载这份旧实例并从权威重载：可重试。
-				cause = entity.ErrRemoteEntityReloading
-			case state == entity.RemoteOwnershipFenced || state == entity.RemoteOwnershipQuarantined:
-				cause = entity.ErrRemoteFenced
-			}
-			return nil, fmt.Errorf("%w: entity=%d state=%s", cause, w.id, state)
+	return remoteEntity, nil
+}
+
+// admitWriteOwnershipState 检查实例的所有权状态能否接受写入。Recovering 就地解冻（err 是解冻失败）；
+// Draining / Fenced / Quarantined 不接受（admitted=false），调用方归还资源后由 blockedOwnershipError 生成错误。
+func admitWriteOwnershipState(remote entity.IThreadSafeRemoteEntity, marked bool) (state entity.RemoteOwnershipState, admitted bool, err error) {
+	state = remote.RemoteOwnershipState()
+	switch state {
+	case entity.RemoteOwnershipRecovering:
+		// 结果未知的所有权转换把实例冻结了。走到这里说明冻结时作废的 marker 已在上面从权威重读，且仍指向本节点，
+		// 这份副本重新归本节点所有。
+		thaw := entity.RemoteOwnershipLocalOwned
+		if marked {
+			thaw = entity.RemoteOwnershipShared
 		}
-	}
-	w.attachEntity(remoteEntity)
-	stateVersion := remoteEntity.EntityVersion()
-	if stateVersion < 0 {
-		stateVersion = 0
-	}
-	if durable && stateVersion != expectedVersion {
-		if distLocked {
-			_ = w.unlockObserved(ctx, expectedVersion)
+		if err := remote.TransitionRemoteOwnership(thaw); err != nil {
+			return state, false, err
 		}
-		release()
-		return nil, fmt.Errorf("%w: entity %d loaded version %d, authority %d", entity.ErrRemoteVersionConflict, w.id, stateVersion, expectedVersion)
+	case entity.RemoteOwnershipDraining, entity.RemoteOwnershipFenced, entity.RemoteOwnershipQuarantined:
+		return state, false, nil
 	}
-	if current, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok && !marked && !durable {
-		lockFence = current.RemoteVersionVector().LockFence
+	return state, true, nil
+}
+
+// blockedOwnershipError 为不接受写入的所有权状态选错误：持久拒绝后等待重载的旧实例可重试，Fenced / Quarantined
+// 已被隔离，其余（Draining）是所有权转换中。在写门归还之后调用。
+func (w *remoteEntityWrapper) blockedOwnershipError(remote entity.IThreadSafeRemoteEntity, state entity.RemoteOwnershipState) error {
+	cause := entity.ErrRemoteOwnerTransition
+	switch {
+	case state == entity.RemoteOwnershipQuarantined && w.rejectedReloadPending(remote):
+		// 持久拒绝已收尾、gate 已释放，框架即将卸载这份旧实例并从权威重载：可重试。
+		cause = entity.ErrRemoteEntityReloading
+	case state == entity.RemoteOwnershipFenced || state == entity.RemoteOwnershipQuarantined:
+		cause = entity.ErrRemoteFenced
 	}
+	return fmt.Errorf("%w: entity=%d state=%s", cause, w.id, state)
+}
+
+// newWriteLease 生成本次写入的租约：共享模式走分布式锁，独占模式走所有者路由。
+func (w *remoteEntityWrapper) newWriteLease(marked bool, stateVersion int64, marker entity.RemoteEntityMarkerLease, lockFence uint64) entity.RemoteWriteLease {
 	state := entity.RemoteOwnershipLocalOwned
 	mode := entity.RemoteWriteOwnerRouted
 	if marked {
 		state = entity.RemoteOwnershipShared
 		mode = entity.RemoteWriteSharedLock
 	}
-	lease := entity.RemoteWriteLease{
+	return entity.RemoteWriteLease{
 		EntityID: w.id, OwnerSID: w.mgr.localSid, Mode: mode, State: state,
 		BaseVersion: uint64(stateVersion), MarkerEpoch: marker.MarkerEpoch, LockFence: lockFence,
 		RouteEpoch: marker.RouteEpoch, AcquiredAt: time.Now().UnixNano(),
 	}
-	if remote, ok := remoteEntity.(entity.IThreadSafeRemoteEntity); ok {
-		if err := remote.SetRemoteVersionVector(entity.RemoteVersionVector{
-			StateVersion: lease.BaseVersion, MarkerEpoch: lease.MarkerEpoch,
-			LockFence: lease.LockFence, RouteEpoch: lease.RouteEpoch,
-		}); err != nil {
-			if distLocked {
-				_ = w.unlockObserved(ctx, w.rMu.Version())
-			}
-			release()
-			return nil, fmt.Errorf("remote_entity: update version vector %d: %w", w.id, err)
-		}
-		if err := remote.TransitionRemoteOwnership(state); err != nil {
-			if distLocked {
-				_ = w.unlockObserved(ctx, w.rMu.Version())
-			}
-			release()
-			return nil, fmt.Errorf("remote_entity: update ownership state %d: %w", w.id, err)
-		}
+}
+
+// applyWriteLease 把租约写进实例的版本向量，并把所有权状态切到租约的状态。
+func (w *remoteEntityWrapper) applyWriteLease(remote entity.IThreadSafeRemoteEntity, lease entity.RemoteWriteLease) error {
+	if err := remote.SetRemoteVersionVector(entity.RemoteVersionVector{
+		StateVersion: lease.BaseVersion, MarkerEpoch: lease.MarkerEpoch,
+		LockFence: lease.LockFence, RouteEpoch: lease.RouteEpoch,
+	}); err != nil {
+		return fmt.Errorf("remote_entity: update version vector %d: %w", w.id, err)
 	}
-	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
+	if err := remote.TransitionRemoteOwnership(lease.State); err != nil {
+		return fmt.Errorf("remote_entity: update ownership state %d: %w", w.id, err)
+	}
+	return nil
 }
 
 // EntityIDs 返回批次目标（升序、去重）的副本。
