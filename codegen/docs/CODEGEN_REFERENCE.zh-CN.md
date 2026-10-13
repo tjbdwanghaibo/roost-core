@@ -628,7 +628,6 @@ roost format check
 
 - **entity 生成代码访问 `dao.Tracker` 编译失败**：使用 v1.7.0 重新生成；新模板调用 `DirtyTracker()`。DAO 与 Entity 必须由同一代 codegen 重新生成。
 - **`go mod tidy` 删除 skill**：新项目的 `internal/frameworkdeps/generated.go` 用类型别名固定 skill module。
-- **frameworkdeps 仍导入 `roost-skill/skillv2`**：这是旧模板；执行 `make project-upgrade` 或 `roost project sync`，受控文件会迁移到稳定的 `roost-skill/skill` 包。不要手工保留两套 skill API。
 - **生成后 CI 有 diff**：先运行 `roost generate`，确认没有手改生成文件；CI 用 `--check`。
 - **输出目录无法确定 package**：先放一个非生成 `.go` 文件，或使用 `-pkg`。
 - **标记没有生效**：标记必须紧邻目标声明，孤儿标记会报错；不要放在生成文件中。

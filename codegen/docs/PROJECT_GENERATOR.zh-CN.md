@@ -568,7 +568,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
     github.com/tjbdwanghaibo/roost-kit v1.8.0
     github.com/tjbdwanghaibo/roost-skill v1.9.0
 
-不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 通过稳定路径 `github.com/tjbdwanghaibo/roost-skill/skill` 的类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。旧模板中的 `/skillv2` 会在 `project sync/upgrade` 时迁移，不保留双版本兼容。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
+不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 通过稳定路径 `github.com/tjbdwanghaibo/roost-core/gameplay/skill` 的类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
 
 ## 16. 帧同步 Transport 预设
 

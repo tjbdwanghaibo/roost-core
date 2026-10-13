@@ -467,8 +467,7 @@ Component 中写玩法方法，通过 DAO 的 `SetXxx` 等生成方法更新状�
 `docs/PLAYER_ACCESS_TCP.zh-CN.md` 解释可运行 TCP 接入、帧协议、鉴权和上线验证。
 
 `internal/frameworkdeps/generated.go` 只导入稳定包
-`github.com/tjbdwanghaibo/roost-skill/skill`。旧项目若还保留 `/skillv2`，运行
-`make project-upgrade`（或 `roost project sync`）会迁移受控生成文件。
+`github.com/tjbdwanghaibo/roost-core/gameplay/skill`。
 
 Saga 脚手架：
 
