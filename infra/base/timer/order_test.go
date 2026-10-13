@@ -12,13 +12,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 维护者决定 D-L1（2026-10-06）：同一期限的定时器按 (期限, priority, 登记顺序) 触发，priority 数值小的先触发，
-// 缺省 priority 为 0，登记顺序就是节点 ID（同一个 Scheduler 的 ID 单调递增，改期与按返回值重排都保留 ID）。
-// 旧实现的堆只比较期限，同期限的顺序由堆的形状决定：依次登记 1..5 会按 1、5、4、3、2 触发。
+// 维护者决定 D-L1：同一期限的定时器按 (期限, priority, 登记顺序) 触发，priority 数值小的先触发，缺省 priority 为 0，登记顺序就是
+// 节点 ID（同一个 Scheduler 的 ID 单调递增，改期与按返回值重排都保留 ID）。
 //
-// 维护者决定 D-L2：到期节点的类型没有注册 handler 时，删除节点照旧，但打一条 Warn 并计
-// timer.unhandled_dropped_total{kind=<类型>}；宿主加载时用 ReportUnhandledTypes 对没有 handler 的存量类型
-// 每种告警一次。旧实现静默删除，没有日志也没有计数。
+// 维护者决定 D-L2：到期节点的类型没有注册 handler 时，删除节点照旧，但打一条 Warn 并计 timer.unhandled_dropped_total{kind=<类型>}；
+// 宿主加载时用 ReportUnhandledTypes 对没有 handler 的存量类型每种告警一次。
 
 func fireOrder(t *testing.T, s *Scheduler, types ...int32) *[]int64 {
 	t.Helper()
