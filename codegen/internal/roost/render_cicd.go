@@ -34,7 +34,7 @@ jobs:
           cache: true
       - name: upgrade managed templates and dependencies
         run: |
-          go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest
+          go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest
           make roost-up
           make ci
       - name: create dependency pull request

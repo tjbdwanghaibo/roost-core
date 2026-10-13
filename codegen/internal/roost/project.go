@@ -673,9 +673,6 @@ func mergeVersions(target *VersionSpec, override VersionSpec) {
 	if override.Core != "" {
 		target.Core = override.Core
 	}
-	if override.Kit != "" {
-		target.Kit = override.Kit
-	}
 }
 
 func printSyncResult(w io.Writer, result SyncResult) {

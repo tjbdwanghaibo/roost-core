@@ -203,7 +203,7 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	var preview bytes.Buffer
-	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest"}, &preview, io.Discard); err != nil {
+	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest"}, &preview, io.Discard); err != nil {
 		t.Fatalf("preview legacy upgrade: %v", err)
 	}
 	if !strings.Contains(preview.String(), "roost.yaml") || !strings.Contains(preview.String(), "Makefile") {
@@ -230,7 +230,7 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if manifest.CICD.Provider != "github" || !contains(manifest.CICD.Deploy, "shell") || !contains(manifest.CICD.Deploy, "docker") || !contains(manifest.CICD.Deploy, "k8s") {
 		t.Fatalf("legacy manifest did not receive production CI/CD defaults: %+v", manifest.CICD)
 	}
-	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest"})
+	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest"})
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatalf("save upgraded manifest: %v", err)
 	}
@@ -1127,7 +1127,7 @@ func TestFrameworkMinimumVersionGuard(t *testing.T) {
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Core) {
 		t.Fatalf("expected framework minimum version guard, got %v", err)
 	}
-	m.Versions.Core, m.Versions.Kit = minimumVersions.Core, minimumVersions.Kit
+	m.Versions.Core = minimumVersions.Core
 	if err := m.Validate(); err != nil {
 		t.Fatalf("minimum supported versions rejected: %v", err)
 	}
@@ -1135,7 +1135,6 @@ func TestFrameworkMinimumVersionGuard(t *testing.T) {
 
 func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"nettransport-quic", "nettransport-kcp", "nettransport-udp"})
-	m.Versions.Kit = minimumVersions.Kit
 	plan, err := renderProject(m)
 	if err != nil {
 		t.Fatal(err)
@@ -1143,18 +1142,6 @@ func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
 	file, ok := plan["internal/transport/generated.go"]
 	if !ok || !bytes.Contains(file.Body, []byte("func NewQUIC")) || !bytes.Contains(file.Body, []byte("func NewKCP")) || !bytes.Contains(file.Body, []byte("func NewUDP")) || !bytes.Contains(file.Body, []byte("func NewSyncTransport")) {
 		t.Fatalf("replication preset missing:\n%s", file.Body)
-	}
-}
-
-func TestReplicationRequiresSupportedKitRelease(t *testing.T) {
-	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"nettransport-quic"})
-	m.Versions.Kit = "v1.7.9"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
-		t.Fatalf("expected kit release guard, got %v", err)
-	}
-	m.Versions.Kit = minimumVersions.Kit
-	if err := m.Validate(); err != nil {
-		t.Fatalf("minimum kit release rejected: %v", err)
 	}
 }
 
@@ -1192,7 +1179,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" {
+	if m.Versions.Core != "latest" {
 		t.Fatalf("latest version policy defaults = %+v", m.Versions)
 	}
 }
@@ -1325,7 +1312,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	// And exactly one framework module: kit is a package path inside
 	// roost-core since the consolidation, so a require for it would name a
 	// module that does not exist (三仓合一仓 P3).
-	if strings.Contains(goMod, "roost-core/kit "+minimumVersions.Kit) || strings.Contains(goMod, "roost-kit ") {
+	if strings.Contains(goMod, "roost-core/kit v") || strings.Contains(goMod, "roost-kit ") {
 		t.Errorf("go.mod requires kit as a module of its own:\n%s", goMod)
 	}
 	if strings.Contains(goMod, "replace ") {
@@ -1348,7 +1335,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	}
 	for _, want := range []string{
 		"project-upgrade:",
-		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest",
+		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest",
 		"roost-up:",
 		"GOWORK=off go get -u ./...",
 		"GOWORK=off go mod tidy",
@@ -1494,12 +1481,12 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	}
 	manifestGuide := string(plan["docs/ROOST_YAML.zh-CN.md"].Body)
 	for _, want := range []string{
-		"schema", "project.name", "project.module", "versions.core", "versions.kit",
-		"versions.codegen 已退役", "shared_mods", "services.<name>.mods",
+		"schema", "project.name", "project.module", "versions.core", "versions.kit / skill / service / codegen 已退役",
+		"shared_mods", "services.<name>.mods",
 		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
-		minimumVersions.Core, minimumVersions.Kit,
+		minimumVersions.Core,
 	} {
 		if !strings.Contains(manifestGuide, want) {
 			t.Errorf("manifest guide missing %q:\n%s", want, manifestGuide)
@@ -1578,7 +1565,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Versions.Kit = minimumVersions.Kit
+	manifest.Versions.Core = minimumVersions.Core
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -1587,7 +1574,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"project", "upgrade", "--root", root, "-kit", "latest"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "preflight project upgrade") {
+	if err := Run([]string{"project", "upgrade", "--root", root, "-core", "latest"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "preflight project upgrade") {
 		t.Fatalf("expected upgrade preflight conflict, got %v", err)
 	}
 	manifestAfter, err := os.ReadFile(manifestPath)

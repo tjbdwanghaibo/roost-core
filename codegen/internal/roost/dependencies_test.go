@@ -97,9 +97,6 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 	// Pinned versions at the generator floor: the policy refuses anything
 	// below it, because the code this generator emits does not compile there.
 	manifest.Versions.Core = minimumVersions.Core
-	// Versions.Kit is still a field in roost.yaml and still read by projects
-	// that predate the consolidation; it no longer names a module of its own.
-	manifest.Versions.Kit = minimumVersions.Kit
 	var get []string
 	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
 		if len(args) > 0 && args[0] == "get" {
@@ -202,25 +199,25 @@ func TestManifestVersionPolicies(t *testing.T) {
 	if err := m.Validate(); err != nil {
 		t.Fatalf("latest policy rejected: %v", err)
 	}
-	m.Versions.Kit = "v1.6.9"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
-		t.Fatalf("unsupported kit version accepted: %v", err)
+	m.Versions.Core = "v1.6.9"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Core) {
+		t.Fatalf("unsupported core version accepted: %v", err)
 	}
-	m.Versions.Kit = "main"
+	m.Versions.Core = "main"
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "latest or a semantic release") {
 		t.Fatalf("non-release policy accepted: %v", err)
 	}
-	m.Versions.Kit = "v2.0.0"
+	m.Versions.Core = "v2.0.0"
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "module path") {
 		t.Fatalf("incompatible major accepted: %v", err)
 	}
 	// A pre-release of the floor carries the floor's layout and is accepted.
-	m.Versions.Kit = minimumVersions.Kit + "-alpha.1"
+	m.Versions.Core = minimumVersions.Core + "-alpha.1"
 	if err := m.Validate(); err != nil {
 		t.Fatalf("pre-release pin of the floor rejected: %v", err)
 	}
-	m.Versions.Kit = "v1.0.0-alpha.1"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
+	m.Versions.Core = "v1.0.0-alpha.1"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Core) {
 		t.Fatalf("pre-release pin below the floor accepted: %v", err)
 	}
 }

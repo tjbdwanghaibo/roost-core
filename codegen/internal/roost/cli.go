@@ -117,7 +117,6 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		// be separable (三仓合一仓 P4).
 		newSkipDeps := fs.Bool("skip-deps", false, "write the project but do not resolve framework dependencies")
 		core := fs.String("roost-core-version", "", "roost-core version")
-		kit := fs.String("roost-kit-version", "", "roost-kit version")
 		template := fs.String("template", "", "opt-in starting shape: game (hosts all nine framework services and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -128,7 +127,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit}, Template: *template})
+		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core}, Template: *template})
 		if err != nil {
 			return err
 		}
@@ -154,7 +153,6 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		workflow := fs.String("workflow", "", "validate a complete workflow (first-business or player-tcp)")
 		dryRun := fs.Bool("dry-run", false, "preview an upgrade without writing files or resolving dependencies")
 		core := fs.String("core", "", "new core version")
-		kit := fs.String("kit", "", "new kit version")
 		// Templates can need a core that is not published yet (a release
 		// candidate verified against a checkout through go.work): resolving
 		// dependencies would then fail and take the whole command with it,
@@ -170,7 +168,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		allowed := map[string][]string{
 			"sync": {"root", "skip-deps"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
 			"next": {"root", "workflow"}, "deps": {"root"},
-			"upgrade": {"root", "dry-run", "core", "kit", "skip-deps"},
+			"upgrade": {"root", "dry-run", "core", "skip-deps"},
 		}
 		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
@@ -213,7 +211,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			if err != nil {
 				return err
 			}
-			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit})
+			mergeVersions(&m.Versions, VersionSpec{Core: *core})
 			if err := m.Validate(); err != nil {
 				return fmt.Errorf("validate upgraded manifest: %w", err)
 			}

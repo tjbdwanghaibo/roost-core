@@ -115,12 +115,12 @@ func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`-roost-core-version (\S+) -roost-kit-version (\S+)\)`)
+	re := regexp.MustCompile(`-roost-core-version (\S+)\)`)
 	match := re.FindStringSubmatch(string(raw))
 	if match == nil {
 		t.Fatal("framework-compat.yml has no minimum dependency set")
 	}
-	got := VersionSpec{Core: match[1], Kit: match[2]}
+	got := VersionSpec{Core: match[1]}
 	if got != minimumVersions {
 		t.Fatalf("workflow minimum set %+v != generator floor %+v", got, minimumVersions)
 	}

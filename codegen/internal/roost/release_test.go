@@ -254,7 +254,7 @@ const firstCoreWithGenerator = "v1.16.0"
 // versions 下的退役键（codegen、skill、service）不再解码：roost.yaml 里出现就拒绝，错误说明原因并要求
 // 手工删行；普通加载与 project upgrade 的加载都一样拒绝，upgrade 不再替它删。
 func TestRetiredVersionKeysAreRefused(t *testing.T) {
-	for key, reason := range map[string]string{"codegen": "versions.core", "skill": "package of roost-core", "service": "packages of roost-core"} {
+	for key, reason := range map[string]string{"codegen": "versions.core", "skill": "package of roost-core", "service": "packages of roost-core", "kit": "package of roost-core (wiring/)"} {
 		t.Run(key, func(t *testing.T) {
 			root := t.TempDir()
 			m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
@@ -267,9 +267,9 @@ func TestRetiredVersionKeysAreRefused(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pinned := strings.Replace(string(raw), "\n    kit: ", "\n    "+key+": v1.15.0\n    kit: ", 1)
+			pinned := strings.Replace(string(raw), "\n    core: ", "\n    "+key+": v1.15.0\n    core: ", 1)
 			if pinned == string(raw) {
-				t.Fatalf("no versions.kit line to pin %s next to:\n%s", key, raw)
+				t.Fatalf("no versions.core line to pin %s next to:\n%s", key, raw)
 			}
 			if err := os.WriteFile(path, []byte(pinned), 0o644); err != nil {
 				t.Fatal(err)

@@ -173,13 +173,13 @@ make roost-up     # GOWORK=off go get -u ./...；然后 go mod tidy
 make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
 
-`project-upgrade` 直接通过 `@latest` 运行生成器，更新所有带生成标识的受控工程文件，并把 core、kit、skill、codegen 四个版本策略都设为 `latest`。`roost-up` 会更新项目实际引用的直接和间接依赖，变更 `go.mod/go.sum`；执行后应运行 `make ci` 并提交依赖文件。`codegen-up` 更新的是 Go bin 目录中的 `roost` 可执行文件。
+`project-upgrade` 直接通过 `@latest` 运行生成器，更新所有带生成标识的受控工程文件，并把 `versions.core` 设为 `latest`（框架只有 roost-core 一个模块；`versions.kit / skill / service / codegen` 已退役，写了会被拒绝，需手工删除）。`roost-up` 会更新项目实际引用的直接和间接依赖，变更 `go.mod/go.sum`；执行后应运行 `make ci` 并提交依赖文件。`codegen-up` 更新的是 Go bin 目录中的 `roost` 可执行文件。
 
 旧项目的 Makefile 尚无 `project-upgrade` 时，先预览并执行一次迁移：
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest
 ```
 
 迁移会把 `roost-up`、`codegen-up` 和其他当前工程指令一起写入 codegen 管理的 Makefile。没有生成标识的自定义 Makefile 会被拒绝，不会被静默覆盖。
@@ -431,7 +431,7 @@ type (
 
     roost project new <name> -module <path> # 脚手架新项目；module 必填
     roost project sync|diff|doctor
-    roost project upgrade [--root dir] [-core version] [-kit version] [-skill version]
+    roost project upgrade [--root dir] [--dry-run] [--skip-deps] [-core version]
     roost generate                      # 按序执行 roost.yaml 启用的全部生成器
     roost generate --changed            # 只执行受 git 变更影响的生成器
     roost generate --check              # CI 门禁：临时副本中重新生成并比对

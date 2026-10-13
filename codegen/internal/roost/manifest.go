@@ -22,10 +22,8 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
 // v1.25.0 生成物使用分类后的包路径和 Gate 接入 API，不能接入旧 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
-// Kit 字段仅识别历史清单，不再指代独立模块；其下限保留最后一个有效历史值。
 var minimumVersions = VersionSpec{
 	Core: "v1.25.0",
-	Kit:  "v1.14.8",
 }
 
 type Manifest struct {
@@ -54,7 +52,6 @@ type ProjectSpec struct {
 
 type VersionSpec struct {
 	Core string `yaml:"core"`
-	Kit  string `yaml:"kit"`
 }
 
 // retiredVersionKeys 是 versions 下已退役、不再解码的键及其拒绝说明。严格解码本来就会拒绝未知键，
@@ -65,7 +62,11 @@ type VersionSpec struct {
 //
 // skill / service：合仓前 roost-skill / roost-service 两个模块的版本策略；两者早已是 roost-core 的包，
 // 不再有单独的版本。旧工程的 import 改写工具（upgrade --consolidate）一并删除。
+//
+// kit：合仓后 kit 是 roost-core 的包（wiring/），它的“版本”就是 versions.core；它过去的下限 v1.14.8
+// 与基于它的 feature 检查（nettransport >= v1.1.0、saga >= v1.4.0）都已被 versions.core 的下限覆盖。
 var retiredVersionKeys = map[string]string{
+	"kit":     "kit is a package of roost-core (wiring/) and follows versions.core",
 	"codegen": "the generator ships inside roost-core and the Makefile runs it at versions.core",
 	"skill":   "skill is a package of roost-core and follows versions.core",
 	"service": "the framework services are packages of roost-core and follow versions.core",
@@ -166,7 +167,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "latest", Kit: "latest"},
+		Versions:   VersionSpec{Core: "latest"},
 		CICD:       defaultCICDSpec(),
 		SharedMods: shared,
 		Services:   svc,
@@ -227,8 +228,8 @@ func (m Manifest) Marshal() ([]byte, error) {
 	}
 	header := fmt.Sprintf(`# Roost project manifest. Run make sync after editing.
 # versions.* defaults to latest; go.mod records the concrete release resolved
-# for one build. Minimums: core %s, kit %s. The generator runs at versions.core.
-`, minimumVersions.Core, minimumVersions.Kit)
+# for one build. Minimum: core %s. The generator runs at versions.core.
+`, minimumVersions.Core)
 	return append([]byte(header), raw...), nil
 }
 
@@ -310,17 +311,8 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, fmt.Errorf("unknown feature %q", feature))
 		}
 	}
-	for _, version := range []struct {
-		name    string
-		value   string
-		minimum string
-	}{
-		{name: "core", value: m.Versions.Core, minimum: minimumVersions.Core},
-		{name: "kit", value: m.Versions.Kit, minimum: minimumVersions.Kit},
-	} {
-		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {
-			joined = errors.Join(joined, err)
-		}
+	if err := validateVersionPolicy("core", m.Versions.Core, minimumVersions.Core); err != nil {
+		joined = errors.Join(joined, err)
 	}
 	if m.CICD.Provider != "github" {
 		joined = errors.Join(joined, fmt.Errorf("cicd.provider must be github; got %q", m.CICD.Provider))
@@ -396,12 +388,6 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, errors.New("sagas require the saga mod on at least one service"))
 		}
 	}
-	if hasNetTransportFeature(m) && !versionAtLeast(m.Versions.Kit, 1, 1, 0) {
-		joined = errors.Join(joined, fmt.Errorf("replication features require roost-kit >= v1.1.0; got %q", m.Versions.Kit))
-	}
-	if contains(allProjectMods(m), "saga") && (!versionAtLeast(m.Versions.Core, 1, 4, 0) || !versionAtLeast(m.Versions.Kit, 1, 4, 0)) {
-		joined = errors.Join(joined, fmt.Errorf("saga requires roost-core and roost-kit >= v1.4.0; got core=%q kit=%q", m.Versions.Core, m.Versions.Kit))
-	}
 	for kind, space := range m.IDs {
 		if space.Min != 0 || space.Max != 0 {
 			if space.Min <= 0 || space.Max < space.Min {
@@ -454,10 +440,6 @@ func validModulePath(value string) bool {
 		}
 	}
 	return true
-}
-
-func hasNetTransportFeature(m Manifest) bool {
-	return contains(m.Features, "nettransport-quic") || contains(m.Features, "nettransport-kcp") || contains(m.Features, "nettransport-udp")
 }
 
 func versionAtLeast(version string, major, minor, patch int) bool {

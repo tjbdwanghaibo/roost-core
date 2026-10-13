@@ -272,7 +272,6 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
       module: github.com/acme/planet
     versions:
       core: latest
-      kit: latest
     cicd:
       provider: github
       registry: ghcr
@@ -361,11 +360,11 @@ name 是运行与部署身份；module 是 Go import 前缀。仓库目录名可
 | 字段 | 控制对象 | 当前兼容下限 | 值示例 |
 | --- | --- | --- | --- |
 | versions.core | roost-core 依赖解析 | %s | latest 或 %s |
-| versions.kit | roost-kit 依赖解析 | %s | latest 或 %s |
 
-生成器随 roost-core 发布，Makefile 按 versions.core 运行它；versions.codegen 已退役，写了会被拒绝，需要手工删掉这一行。
+框架只有 roost-core 一个模块：kit（wiring/）、skill、框架服务与生成器都是其中的包，跟随 versions.core；
+Makefile 按 versions.core 运行生成器。versions.kit / skill / service / codegen 已退役，写了会被拒绝，需要手工删掉这一行。
 
-latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目联合解析 core、kit，
+latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目解析 roost-core，
 只把本次选中的具体版本写入 go.mod/go.sum；失败或并发变化不覆盖原文件，这样一次测试和发布仍然
 可复现。明确版本是 Go MVS 下限，不是禁止更高传递版本的上限。
 
@@ -403,7 +402,7 @@ nats 自动补齐；Mod 需要的协作者写在 internal/service/<name>/collabo
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
 访问器。roost project new … -template game 一次生成这四个托管服务并把第一个业务 Service
-接上它们；-template game-demo 在此之上再带一条可运行的写入链路（Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务随 roost-kit 发布，版本由 versions.kit 控制。
+接上它们；-template game-demo 在此之上再带一条可运行的写入链路（Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务是 roost-core 的包，版本跟随 versions.core。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
 feature，并要求目标 Service 有 nest Mod。access.player.transports 是显式启用的客户端传输列表；当前
@@ -532,6 +531,5 @@ make project-upgrade，更新框架依赖使用 make deps-update，更新完整�
 - version below minimum：改用 latest，或升级到不低于错误信息给出的版本。
 - invalid range / duplicate ID：修正 ids 范围或冲突定义后再生成。
 - saga requires saga mod：使用 roost add saga，不要只手改 sagas/features。
-`, minimumVersions.Core, minimumVersions.Core,
-		minimumVersions.Kit, minimumVersions.Kit)
+`, minimumVersions.Core, minimumVersions.Core)
 }

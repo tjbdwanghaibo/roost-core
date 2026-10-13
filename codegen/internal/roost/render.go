@@ -906,7 +906,7 @@ help:
 sync:
 	$(ROOST) project sync
 project-upgrade:
-	go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest
+	go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest
 deps-update:
 	$(ROOST) project deps
 roost-up:
@@ -1371,9 +1371,9 @@ func renderUsage(m Manifest) string {
 
 ## 框架版本策略
 
-versions.core 与 versions.kit 默认都是 latest。框架只有 roost-core 一个模块（kit、skill、生成器都是其中的包），roost project new/sync/deps 只把它作为直接依赖解析，随后执行 go mod tidy；Makefile 按 versions.core 运行生成器。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略，同一次测试和发布使用确定的依赖图。
+versions.core 默认是 latest。框架只有 roost-core 一个模块（kit、skill、生成器都是其中的包，versions.kit 等旧字段写了会被拒绝），roost project new/sync/deps 只把它作为直接依赖解析，随后执行 go mod tidy；Makefile 按 versions.core 运行生成器。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略，同一次测试和发布使用确定的依赖图。
 
-当前兼容下限为 core %s、kit %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
+当前兼容下限为 core %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
 
 ## 安全约定
 
@@ -1397,7 +1397,7 @@ versions.core 与 versions.kit 默认都是 latest。框架只有 roost-core 一
 - roost.yaml 所有字段：ROOST_YAML.zh-CN.md
 - 实现原理：IMPLEMENTATION.zh-CN.md
 - 生产部署：DEPLOYMENT.zh-CN.md
-`, m.Project.Name, services.String(), minimumVersions.Core, minimumVersions.Kit)
+`, m.Project.Name, services.String(), minimumVersions.Core)
 }
 
 // renderGitattributes pins LF for every text file the generators write. A
