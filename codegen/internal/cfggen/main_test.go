@@ -88,13 +88,11 @@ func TestCfggenGeneratesStructsRegistrationAndAccessors(t *testing.T) {
 	}
 }
 
-func TestCfggenAcceptsObjectsAliasForGlobals(t *testing.T) {
-	source, err := runCfggen(t, "objects:\n  - name: world\n    fields:\n      - { name: width, type: int32 }\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(source, "func WorldFrom(snap *configdata.Snapshot) (WorldCfg, bool) {") {
-		t.Fatalf("alias objects not honored:\n%s", source)
+// 全局单例配置只写在 globals 段；退役的 objects 别名是未知键，按 meta 拼写守卫拒绝。
+func TestCfggenRejectsTheRetiredObjectsAlias(t *testing.T) {
+	_, err := runCfggen(t, "objects:\n  - name: world\n    fields:\n      - { name: width, type: int32 }\n")
+	if err == nil || !strings.Contains(err.Error(), "objects") {
+		t.Fatalf("objects alias = %v, want it refused as an unknown key", err)
 	}
 }
 

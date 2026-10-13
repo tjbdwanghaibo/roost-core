@@ -23,7 +23,7 @@
 //	      - { name: drop_id,  type: int32, ref: drop }
 //	      - { name: rewards,  type: "[]DropItem" }
 //	globals:                     # 无主键的全局单例配置（单 JSON 文档）
-//	  - name: world              # "objects" 为兼容别名
+//	  - name: world
 //	    fields:
 //	      - { name: width, type: int32 }
 //
@@ -67,14 +67,8 @@ type Meta struct {
 	Tables []TableMeta `yaml:"tables"`
 	// Globals are keyless singleton configs: the data file is one JSON
 	// document, the snapshot holds exactly one value (world size, global
-	// switches, formula constants). "objects" is the deprecated alias.
+	// switches, formula constants).
 	Globals []TableMeta `yaml:"globals"`
-	Objects []TableMeta `yaml:"objects"`
-}
-
-// globalEntries merges the globals section with its deprecated objects alias.
-func (m *Meta) globalEntries() []TableMeta {
-	return append(append([]TableMeta(nil), m.Globals...), m.Objects...)
 }
 
 // GroupsMeta is the top-level export-group declaration.
@@ -210,7 +204,7 @@ func Run(args []string, stdout io.Writer) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "cfggen: wrote %s (%d tables, %d globals, %d beans)\n",
-		target, len(meta.Tables), len(meta.globalEntries()), len(meta.Beans))
+		target, len(meta.Tables), len(meta.Globals), len(meta.Beans))
 	if omitted.entries+omitted.fields > 0 {
 		_, _ = fmt.Fprintf(stdout, "cfggen: export groups %v: omitted %d entries and %d fields belonging to other groups\n",
 			omitted.target, omitted.entries, omitted.fields)
@@ -335,7 +329,7 @@ func exportForGroups(meta *Meta, target []string) (*Meta, omittedByGroups, error
 			}
 		}
 	}
-	for _, global := range meta.globalEntries() {
+	for _, global := range meta.Globals {
 		if err := check("global "+global.Name, global.Group); err != nil {
 			return nil, omittedByGroups{}, err
 		}
@@ -440,7 +434,7 @@ func validateMeta(meta *Meta) error {
 			}
 		}
 	}
-	for _, global := range meta.globalEntries() {
+	for _, global := range meta.Globals {
 		if err := validateEntry("global", global, beanNames, seen); err != nil {
 			return err
 		}
@@ -717,7 +711,7 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 	for _, table := range meta.Tables {
 		writeStruct(&b, typeName(table.Name), commentOr(table.Comment, "one row of table "+table.Name), table.Fields, table.Key, &table)
 	}
-	for _, global := range meta.globalEntries() {
+	for _, global := range meta.Globals {
 		writeStruct(&b, typeName(global.Name), commentOr(global.Comment, "the "+global.Name+" global singleton config"), global.Fields, "", nil)
 	}
 
@@ -730,7 +724,7 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 		fmt.Fprintf(&b, "\tif err := configdata.RegisterAutoTable[%s, %s](r, configdata.WithAutoName(%q), configdata.WithAutoFile(%q)); err != nil {\n\t\treturn err\n\t}\n",
 			keyField.Type, typeName(table.Name), table.Name, fileName(table))
 	}
-	for _, global := range meta.globalEntries() {
+	for _, global := range meta.Globals {
 		fmt.Fprintf(&b, "\tif err := configdata.RegisterObject(r, configdata.ObjectDef[%s]{Name: %q, File: %q%s}); err != nil {\n\t\treturn err\n\t}\n",
 			typeName(global.Name), global.Name, fileName(global), globalRulesLiteral(global))
 	}
@@ -773,7 +767,7 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 			fmt.Fprintf(&b, "\treturn table.GetByIndex(%q, %s)\n}\n\n", indexName, indexValueExpr(field.Type, param))
 		}
 	}
-	for _, global := range meta.globalEntries() {
+	for _, global := range meta.Globals {
 		fmt.Fprintf(&b, "// %sFrom returns the %s global singleton config from a snapshot.\n", exportName(global.Name), global.Name)
 		fmt.Fprintf(&b, "func %sFrom(snap *configdata.Snapshot) (%s, bool) {\n\treturn configdata.ObjectFrom[%s](snap, %q)\n}\n\n",
 			exportName(global.Name), typeName(global.Name), typeName(global.Name), global.Name)
