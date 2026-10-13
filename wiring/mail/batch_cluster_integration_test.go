@@ -20,8 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// RR-20260929-33: use the capability actually published by Init/Provide,
-// rather than replacing the Mod's private service after registration.
+// 用 Init / Provide 实际发布的能力，而不是注册后替换 Mod 的私有服务。
 func TestIntegrationMailModClusterPagination(t *testing.T) {
 	addresses := os.Getenv("ROOST_REVIEW_CLUSTER")
 	if addresses == "" {
