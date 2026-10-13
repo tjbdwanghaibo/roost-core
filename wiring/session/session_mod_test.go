@@ -1,12 +1,14 @@
 package session
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	domain "github.com/tjbdwanghaibo/roost-core/service/session"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
@@ -71,5 +73,29 @@ func TestModInitAndProvideContract(t *testing.T) {
 	mod.Stop()
 	if err := mod.Start(); err != nil {
 		t.Fatalf("Start returned %v", err)
+	}
+}
+
+// The Admin domain tests moved to roost-core/service/session (M-08). This one
+// stays: it asserts about the generated Capability wrapper, which is transport.
+// Admin is deliberately not on the bus.
+func TestTheOperatorSurfaceIsNotOnTheSessionInterface(t *testing.T) {
+	var asSession any = domain.Capability(&domain.Service{})
+	if _, ok := asSession.(domain.Admin); ok {
+		t.Fatal("the capability published to other processes satisfies Admin; a caller over the " +
+			"bus could declare a resource gone, which is a claim about the outside world that " +
+			"this service cannot verify")
+	}
+}
+
+func TestWithSweepOwnersCarriesDeploymentRoster(t *testing.T) {
+	calls := 0
+	mod := NewMod(nil, nil, WithSweepOwners(domain.OwnerSourceFunc(func(context.Context, int) ([]int64, error) { calls++; return []int64{42}, nil })))
+	if mod.owners == nil {
+		t.Fatal("constructor discarded owner source")
+	}
+	owners, err := mod.owners.SweepOwners(context.Background(), 1)
+	if err != nil || calls != 1 || len(owners) != 1 || owners[0] != 42 {
+		t.Fatal(owners, calls, err)
 	}
 }
