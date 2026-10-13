@@ -5,26 +5,18 @@ import (
 	"math/bits"
 )
 
-// Allocation-free fixed-point arithmetic for the per-tick hot paths. Every
-// function here is deterministic pure integer math and must stay bit-exact
-// with the reference big.Int implementations (see fixed_math_test.go, which
-// fuzzes the equivalence); magnitudes outside the fast paths fall back to the
-// reference implementation so exactness holds over the full int64 domain.
+// 逐 tick 热路径用的无分配定点运算。这里每个函数都是确定性的纯整数运算，必须与 big.Int 参考实现逐位一致
+// （fixed_math_test.go 对等价性做模糊测试）；超出快路径的量级回退到参考实现，在整个 int64 范围上保持精确。
 
 const maxInt64Value = int64(^uint64(0) >> 1)
 const minInt64Value = -maxInt64Value - 1
 
-// mulDivRounded computes value*numerator/denominator with a 128-bit
-// intermediate product — the allocation-free, bit-exact equivalent of the
-// historical big.Int scaleRatioRounded, saturating on int64 overflow.
+// mulDivRounded 用 128 位中间积计算 value*numerator/denominator，是 big.Int 参考实现的无分配、逐位一致版本，
+// int64 溢出时饱和。
 //
-// Rounding faithfully reproduces the reference, including its quirk: the
-// half-bump is applied in the direction of the PRODUCT's sign (not the
-// quotient's), so results for negative denominators mirror the historical
-// behavior (e.g. 1/-2 = 1). Every production call site passes a positive
-// denominator (lengths and distances), where this equals ordinary
-// round-half-away-from-zero; the quirk domain is preserved only because
-// bit-exact determinism outranks arithmetic aesthetics here.
+// 舍入忠实复现参考实现，包括它的特例：半值进位的方向取乘积的符号（而不是商的符号），所以分母为负时的结果与
+// 参考实现一致（例如 1/-2 = 1）。生产调用点传的分母都是正数（长度与距离），这时就是普通的四舍五入（远离零）；
+// 保留这个特例只是因为逐位确定性比算术上的好看更重要。
 func mulDivRounded(value, numerator, denominator int64) int64 {
 	if denominator == 0 {
 		return 0
@@ -34,15 +26,14 @@ func mulDivRounded(value, numerator, denominator int64) int64 {
 	uValue, uNumerator, uDenominator := absUint64(value), absUint64(numerator), absUint64(denominator)
 	hi, lo := bits.Mul64(uValue, uNumerator)
 	if hi >= uDenominator {
-		// The truncated quotient exceeds 64 bits; a ±1 bump cannot bring it
-		// back into range, so saturate like the reference.
+		// 截断后的商超过 64 位，±1 的进位也拉不回范围内，与参考实现一样饱和。
 		if quotientNeg {
 			return minInt64Value
 		}
 		return maxInt64Value
 	}
 	quotient, remainder := bits.Div64(hi, lo, uDenominator)
-	// remainder < uDenominator <= 2^63, so remainder<<1 cannot overflow.
+	// remainder < uDenominator <= 2^63，remainder<<1 不会溢出。
 	bump := int64(0)
 	if remainder<<1 >= uDenominator {
 		if productNeg {
@@ -52,7 +43,7 @@ func mulDivRounded(value, numerator, denominator int64) int64 {
 		}
 	}
 	if quotientNeg {
-		// magnitude <= 2^63 is representable as MinInt64.
+		// 量级 <= 2^63 时可以表示为 MinInt64。
 		if quotient > uint64(maxInt64Value)+1 {
 			return minInt64Value
 		}
@@ -71,19 +62,14 @@ func mulDivRounded(value, numerator, denominator int64) int64 {
 	return int64(quotient) + bump
 }
 
-// integerDistance is the rounded Euclidean distance between two positions:
-// round-to-nearest of sqrt(dx²+dy²), saturating at MaxInt64. Deltas whose
-// squares fit the 64-bit fast path (|delta| <= ~3.03e9, far beyond any world
-// coordinate span) run allocation-free; larger magnitudes take the big.Int
-// reference path.
+// integerDistance 是两点之间取整后的欧氏距离：sqrt(dx²+dy²) 四舍五入到最近整数，在 MaxInt64 处饱和。平方能放进
+// 64 位快路径的差值（|delta| <= 约 3.03e9，远超任何世界坐标范围）不分配内存；更大的量级走 big.Int 参考路径。
 func integerDistance(left, right Position) int64 {
 	distance, _ := integerDistanceSaturated(left, right)
 	return distance
 }
 
-// integerDistanceSaturated additionally reports whether the true distance
-// exceeded int64 and was clamped — comparisons must treat a saturated value
-// as strictly greater than any int64 bound.
+// integerDistanceSaturated 另外报告真实距离是否超过 int64 而被夹取——比较时必须把饱和值当作严格大于任何 int64 上界。
 func integerDistanceSaturated(left, right Position) (int64, bool) {
 	dx := absDeltaUint64(right.X, left.X)
 	dy := absDeltaUint64(right.Y, left.Y)
@@ -91,8 +77,7 @@ func integerDistanceSaturated(left, right Position) (int64, bool) {
 	if dx <= fastLimit && dy <= fastLimit {
 		squared := dx*dx + dy*dy
 		root := isqrt64(squared)
-		// Round to nearest: remainder > root means closer to root+1 (matches
-		// the reference's remainder >= root+1 rule).
+		// 舍入到最近：余数 >= root+1 说明更接近 root+1（与参考实现的规则一致）。
 		if squared-root*root >= root+1 {
 			root++
 		}
@@ -109,9 +94,7 @@ func distanceExceeds(left, right Position, maximum int64) bool {
 	return distance > maximum
 }
 
-// isqrt64 returns floor(sqrt(x)) using integer Newton iteration seeded above
-// the root, which converges monotonically downward — deterministic and
-// float-free.
+// isqrt64 返回 floor(sqrt(x))：从根的上方开始做整数牛顿迭代，单调向下收敛，确定且不用浮点。
 func isqrt64(x uint64) uint64 {
 	if x == 0 {
 		return 0
@@ -126,9 +109,8 @@ func isqrt64(x uint64) uint64 {
 	}
 }
 
-// absDeltaUint64 is the exact |a-b| over the full int64 domain: two's
-// complement subtraction of the larger operand yields the exact magnitude,
-// which always fits uint64 (max 2^64-1).
+// absDeltaUint64 在整个 int64 范围上精确计算 |a-b|：用较大的操作数做补码减法得到精确量级，总能放进 uint64
+// （最大 2^64-1）。
 func absDeltaUint64(a, b int64) uint64 {
 	if a >= b {
 		return uint64(a) - uint64(b)
@@ -143,8 +125,8 @@ func absUint64(value int64) uint64 {
 	return uint64(value)
 }
 
-// bigIntegerDistance is the arbitrary-precision reference used for magnitudes
-// beyond the fast path and by the equivalence tests.
+// bigIntegerDistance 是任意精度的参考实现，只供等价测试使用；生产路径超出快路径时直接调用
+// bigIntegerDistanceSaturated。
 func bigIntegerDistance(left, right Position) int64 {
 	distance, _ := bigIntegerDistanceSaturated(left, right)
 	return distance

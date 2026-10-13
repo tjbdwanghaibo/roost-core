@@ -12,9 +12,8 @@ type ActivationDefinition interface {
 type ActiveActivationDefinition struct {
 	Policy     CastPolicyDefinition
 	CastWindow *CastWindowDefinition
-	// Concurrent opts this skill out of caster cast-window exclusivity: by
-	// default a root activation is rejected with ErrCasterBusy while the
-	// caster has another cast in its windup, commit, or recovery window.
+	// Concurrent 让这个技能不受施法者施法窗口独占的限制：默认情况下，施法者有另一个施法处在前摇、提交或后摇窗口时，
+	// 根施法以 ErrCasterBusy 被拒绝。
 	Concurrent bool
 }
 

@@ -10,8 +10,7 @@ func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *SpawnHostS
 	case FrameMotionStep:
 		state.Position, state.Active = typed.Position, true
 	case SteeringMotionStep:
-		// Direction is spawn-owned; the Host receives the resolved integer
-		// primitive for deterministic tracing but does not retain DSL state.
+		// 方向归衍生物所有；Host 收到已解析的整数原语用于确定性追踪，但不保留 DSL 状态。
 	case TrajectoryMotionStep:
 		state.Position = typed.Position
 	case OffsetsMotionStep:

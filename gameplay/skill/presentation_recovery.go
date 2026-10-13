@@ -2,6 +2,7 @@ package skill
 
 import "sort"
 
+// ActivePresentationKind 是持续表现实例的种类。
 type ActivePresentationKind string
 
 const (
@@ -9,6 +10,7 @@ const (
 	ActivePresentationSpawn ActivePresentationKind = "spawn"
 )
 
+// ActivePresentation 是一个仍在持续的表现实例。
 type ActivePresentation struct {
 	Kind               ActivePresentationKind `json:"kind"`
 	ProgramID          string                 `json:"program_id"`
@@ -28,8 +30,7 @@ type ActivePresentation struct {
 	PrimaryTarget EntityID `json:"-"`
 }
 
-// PresentationRecoverySnapshot is the authoritative set of continuing visual
-// instances. Transient one-shot effects are intentionally not resurrected.
+// PresentationRecoverySnapshot 是仍在持续的表现实例的权威集合；一次性的瞬时效果刻意不恢复。
 type PresentationRecoverySnapshot struct {
 	Tick                       Tick                 `json:"tick"`
 	WorldRevision              WorldRevision        `json:"world_revision"`

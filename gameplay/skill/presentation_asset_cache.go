@@ -20,12 +20,15 @@ var (
 	ErrVisualAssetCollision   = errors.New("skill: visual asset key maps to different preload content")
 )
 
+// VisualCatalogTrust 核对表现 catalog 的修订与 digest 是否可信。
 type VisualCatalogTrust interface {
 	VerifyCatalog(revision, digest string) error
 }
 
+// TrustedVisualCatalogs 是“修订 → 期望 digest”的可信表。
 type TrustedVisualCatalogs map[string]string
 
+// VerifyCatalog 在修订不在表里或 digest 不符时返回 ErrVisualCatalogUntrusted。
 func (catalogs TrustedVisualCatalogs) VerifyCatalog(revision, digest string) error {
 	if expected, ok := catalogs[revision]; !ok || expected != digest {
 		return ErrVisualCatalogUntrusted
@@ -33,11 +36,13 @@ func (catalogs TrustedVisualCatalogs) VerifyCatalog(revision, digest string) err
 	return nil
 }
 
+// VisualAssetLoader 由渲染端实现，负责预加载与卸载表现资源。
 type VisualAssetLoader interface {
 	Preload(context.Context, VisualAsset) error
 	Unload(VisualAsset) error
 }
 
+// VisualPlanCacheOptions 是 VisualPlanCache 的依赖与上限；PreloadConcurrency 非正时取 4，MaxIdlePlans 为负时取 0。
 type VisualPlanCacheOptions struct {
 	Resolver           VisualAssetResolver
 	Trust              VisualCatalogTrust
@@ -57,9 +62,8 @@ type visualCacheEntry struct {
 	catalogRevision string
 	catalogDigest   string
 	assetKeys       []string
-	// abandoned marks a load that failed because its creator's context ended,
-	// not because of the plan's content. Waiters whose own context is still
-	// live load again instead of inheriting that cancellation (NC-153).
+	// abandoned 标记一次因为发起者的 context 结束、而不是因为计划内容而失败的加载。自己的 context 仍有效的等待者
+	// 会重新加载，而不是继承这次取消。
 	abandoned bool
 }
 
@@ -70,9 +74,11 @@ type visualAssetEntry struct {
 	refs        int
 	fingerprint string
 	aliasKey    string
-	abandoned   bool // same meaning as visualCacheEntry.abandoned
+	abandoned   bool // 含义同 visualCacheEntry.abandoned
 }
 
+// VisualPlanCache 按 presentation digest 缓存已解析并预加载的表现计划，同一计划与同一资源在并发调用方之间
+// 只加载一次，按引用计数释放，空闲计划超过 MaxIdlePlans 时淘汰最久未用的。
 type VisualPlanCache struct {
 	mutex        sync.Mutex
 	resolver     VisualAssetResolver
@@ -85,6 +91,7 @@ type VisualPlanCache struct {
 	assets       map[string]*visualAssetEntry
 }
 
+// VisualPlanLease 是对一个已加载计划的引用；用完调用 Release。
 type VisualPlanLease struct {
 	cache    *VisualPlanCache
 	digest   string
@@ -92,6 +99,8 @@ type VisualPlanLease struct {
 	released atomic.Bool
 }
 
+// NewVisualPlanCache 构造缓存。缺少 Resolver 返回 ErrVisualAssetMissing，缺少 Loader 返回 ErrVisualLoaderRequired，
+// 要求可信核对却没有 Trust 时返回 ErrVisualCatalogUntrusted。
 func NewVisualPlanCache(options VisualPlanCacheOptions) (*VisualPlanCache, error) {
 	if options.Resolver == nil {
 		return nil, ErrVisualAssetMissing
@@ -111,12 +120,9 @@ func NewVisualPlanCache(options VisualPlanCacheOptions) (*VisualPlanCache, error
 	return &VisualPlanCache{resolver: options.Resolver, trust: options.Trust, loader: options.Loader, requireTrust: options.RequireTrust, concurrency: options.PreloadConcurrency, maxIdle: options.MaxIdlePlans, entries: make(map[string]*visualCacheEntry), assets: make(map[string]*visualAssetEntry)}, nil
 }
 
-// Acquire returns a lease on plan, loading it once for all concurrent callers.
-// The first caller runs the shared load with its own ctx. If that load ends
-// only because the first caller's ctx ended, the entry is dropped and every
-// waiter whose ctx is still live retries (becoming the next loader), so one
-// caller's cancellation never decides another caller's result
-// (RR-20261005-NC-153). A waiter's own cancellation still returns at once.
+// Acquire 返回计划的租约，所有并发调用方共享一次加载。第一个调用方用自己的 ctx 执行共享加载；若加载只因第一个
+// 调用方的 ctx 结束而结束，条目被丢弃，每个 ctx 仍有效的等待者重试（成为下一个加载者），一个调用方的取消不会
+// 决定别人的结果。等待者自己的 ctx 取消时仍立即返回。
 func (cache *VisualPlanCache) Acquire(ctx context.Context, plan PresentationPlan) (*VisualPlanLease, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -142,8 +148,7 @@ func (cache *VisualPlanCache) Acquire(ctx context.Context, plan PresentationPlan
 				cache.mutex.Unlock()
 				return nil, ErrVisualDigestCollision
 			}
-			// Reserve before dropping the cache lock. A concurrent final Release
-			// cannot evict/unload the plan while this acquire waits on ready.
+			// 在放开缓存锁之前先占引用：这次 acquire 等待 ready 期间，并发的最后一次 Release 不能淘汰 / 卸载这个计划。
 			entry.refs++
 			cache.mutex.Unlock()
 		}
@@ -179,8 +184,7 @@ func (cache *VisualPlanCache) cancelAcquireReservation(digest string, entry *vis
 	if entry != nil && entry.refs > 0 {
 		entry.refs--
 	}
-	// Do not evict here: the entry may still be loading. A completed idle
-	// entry is handled by normal lease release or explicit invalidation.
+	// 这里不淘汰：条目可能仍在加载。加载完成的空闲条目由正常的租约释放或显式失效处理。
 }
 
 func (cache *VisualPlanCache) load(ctx context.Context, entry *visualCacheEntry, plan PresentationPlan) {
@@ -262,9 +266,8 @@ func drainAssetKeys(values <-chan string) []string {
 	return result
 }
 
-// acquireAsset shares one Preload per asset key the same way Acquire shares a
-// plan load: a waiter retries when the creator's load was abandoned by the
-// creator's context (its plan's ctx, or a sibling failure that cancelled it).
+// acquireAsset 按资源键共享一次 Preload，方式与 Acquire 共享计划加载相同：发起者的加载因发起者的 context 被放弃
+// （它所属计划的 ctx 结束，或兄弟资源失败而取消）时，等待者重试。
 func (cache *VisualPlanCache) acquireAsset(ctx context.Context, requested VisualAsset) (VisualAsset, string, error) {
 	fingerprint, err := visualAssetFingerprint(requested)
 	if err != nil {
@@ -337,12 +340,15 @@ func (cache *VisualPlanCache) acquireAssetOnce(ctx context.Context, requested Vi
 	return cloneVisualAsset(entry.asset), key, false, nil
 }
 
+// Plan 返回租约对应的已解析计划副本。
 func (lease *VisualPlanLease) Plan() ResolvedPresentationPlan {
 	if lease == nil {
 		return ResolvedPresentationPlan{}
 	}
 	return cloneResolvedPlan(lease.resolved)
 }
+
+// Release 释放租约，重复调用是空操作。
 func (lease *VisualPlanLease) Release() error {
 	if lease == nil || !lease.released.CompareAndSwap(false, true) {
 		return nil
@@ -374,6 +380,8 @@ func (cache *VisualPlanCache) release(digest string) error {
 	return cache.releasePlanAssets(evicted)
 }
 
+// InvalidateCatalog 淘汰并卸载属于指定 catalog 修订的全部计划。任一相关计划仍在加载或仍被租用时返回
+// ErrVisualAssetInUse，且不做任何修改。
 func (cache *VisualPlanCache) InvalidateCatalog(revision, digest string) error {
 	cache.mutex.Lock()
 	var targets []string
@@ -392,7 +400,7 @@ func (cache *VisualPlanCache) InvalidateCatalog(revision, digest string) error {
 			targets = append(targets, key)
 		}
 	}
-	// Mutation begins only after the complete preflight succeeds.
+	// 完整的预检成功之后才开始修改。
 	evicted := make([]*visualCacheEntry, 0, len(targets))
 	for _, key := range targets {
 		evicted = append(evicted, cache.entries[key])

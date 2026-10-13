@@ -2,12 +2,9 @@ package skill
 
 type CastWindowDefinition struct {
 	WindupTicks Tick `json:"windup_ticks"`
-	// WindupTicksExpression, when set, replaces WindupTicks with a value
-	// evaluated as the cast window is prepared. The result is clamped into
-	// [WindupTicksMin, WindupTicksMax], so the compile-time bounds stay the
-	// worst case no matter what the expression yields; CommitTick must fit
-	// under WindupTicksMin. RecoveryTicksExpression works the same way and is
-	// evaluated when recovery begins.
+	// WindupTicksExpression 设置时取代 WindupTicks，在准备施法窗口时求值。结果夹在 [WindupTicksMin, WindupTicksMax]
+	// 内，无论表达式算出什么，编译期上下界都是最坏情况；CommitTick 不得超过 WindupTicksMin。
+	// RecoveryTicksExpression 同理，在后摇开始时求值。
 	WindupTicksExpression   Value    `json:"-"`
 	WindupTicksMin          Tick     `json:"windup_ticks_min"`
 	WindupTicksMax          Tick     `json:"windup_ticks_max"`

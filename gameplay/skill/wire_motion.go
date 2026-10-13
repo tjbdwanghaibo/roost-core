@@ -5,8 +5,7 @@ import (
 	"fmt"
 )
 
-// SpawnDefinition owns its motion plan. Motion is deliberately not a flow or
-// effect variant, so callers cannot reorder its stages.
+// SpawnDefinition 持有自己的运动计划。运动刻意不是流程或效果的变体，调用方无法重排它的阶段。
 type SpawnDefinition struct {
 	Kind            string
 	DurationTicks   Tick

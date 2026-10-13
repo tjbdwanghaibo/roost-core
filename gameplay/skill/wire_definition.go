@@ -12,10 +12,8 @@ type Definition struct {
 	Activation    ActivationDefinition
 	InputSchema   InputSchemaDefinition
 	CooldownTicks Tick
-	// GlobalCooldownTicks, when positive, puts the caster on a shared global
-	// cooldown at cast commit; root activations of any skill are rejected
-	// with ErrGlobalCooldownActive until it elapses. Synced to clients as a
-	// cooldown entry under the reserved program id "$gcd".
+	// GlobalCooldownTicks 为正时，施法提交时让施法者进入公共冷却；冷却结束前任何技能的根施法都以
+	// ErrGlobalCooldownActive 被拒绝。它作为保留 program id "$gcd" 下的冷却条目同步给客户端。
 	GlobalCooldownTicks Tick
 	Costs               []Cost
 	Memory              map[string]MemoryDeclaration

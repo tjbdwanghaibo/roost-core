@@ -2,9 +2,8 @@ package skill
 
 import "errors"
 
-// stepSpawnMotion is the only Runtime path that turns a lowered motion
-// program into Host work. Stages are deliberately written in canonical order;
-// a Host only receives resolved integer facts for one stage at a time.
+// stepSpawnMotion 是 Runtime 把 lower 后的运动程序变成 Host 工作的唯一路径。各阶段刻意按规范顺序写出；Host 每次
+// 只收到一个阶段已解析的整数事实。
 func (runtime *Runtime) stepSpawnMotion(cast *castInstance, spawn *SpawnInstance) ([]SpawnSignal, error) {
 	if cast == nil || spawn == nil || spawn.Program == nil || int(spawn.TemplateIndex) >= len(spawn.Program.spawnTemplates) {
 		return nil, ErrProgramInvariant
@@ -92,10 +91,8 @@ func (runtime *Runtime) stepSpawnMotion(cast *castInstance, spawn *SpawnInstance
 		if !valid {
 			return nil, ErrRuntimeTypeMismatch
 		}
-		// Euclidean length: the normalized direction's Euclidean norm is the
-		// direction scale, so diagonal tracking moves at the same speed as
-		// axis-aligned tracking (the historical Chebyshev length made
-		// diagonal projectiles up to 41% faster).
+		// 欧氏长度：归一化方向的欧氏范数等于方向刻度，斜向追踪与轴向追踪速度相同（用切比雪夫长度会让斜向投射物
+		// 快到 41%）。
 		length := integerDistance(position, targetPosition)
 		if length > 0 {
 			direction = normalizedDirection(position, targetPosition, length)
@@ -312,9 +309,7 @@ func hasSpawnSignal(signals []SpawnSignal, kind SpawnSignalKind) bool {
 	return false
 }
 
-// motionDistance is the Euclidean distance used by every motion-stage
-// comparison, matching the input-validation metric so one world has one
-// distance semantic.
+// motionDistance 是每个运动阶段比较用的欧氏距离，与输入校验的度量一致，同一个世界只有一种距离语义。
 func motionDistance(left, right Position) int64 {
 	return integerDistance(left, right)
 }
@@ -461,8 +456,7 @@ func motionAngleMDeg(angularSpeed int64, tick Tick) int64 {
 	return (speed * elapsed) % fullTurn
 }
 
-// motionSinCos uses a fixed-point CORDIC rotation. Its inputs and outputs are
-// integers, including the millidegree angle and the one-million-unit vector.
+// motionSinCos 用定点 CORDIC 旋转，输入输出都是整数（毫度角与百万单位向量）。
 func motionSinCos(angle int64) (int64, int64) {
 	const fullTurn int64 = 360_000
 	angle %= fullTurn

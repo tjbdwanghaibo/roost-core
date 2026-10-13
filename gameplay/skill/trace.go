@@ -1,7 +1,6 @@
 package skill
 
-// TraceSink is an optional observation consumer. Runtime execution never
-// calls it; callers drain the bounded buffer through FlushTrace.
+// TraceSink 是可选的观测消费者。Runtime 执行过程中从不调用它；调用方经 FlushTrace 排空有界缓冲。
 type TraceSink interface{ Append(TraceEvent) error }
 
 type TraceLimits struct {
@@ -10,8 +9,7 @@ type TraceLimits struct {
 	MaxBuffer        int
 }
 
-// TraceEvent is a bounded, passive runtime observation. It deliberately
-// excludes random keys, seeds, and mutable host payloads.
+// TraceEvent 是有界、被动的运行期观测记录，刻意不含随机密钥、种子与可变的 Host 载荷。
 type TraceEvent struct {
 	Sequence      uint64
 	Kind          TraceEventKind
@@ -58,9 +56,7 @@ func (runtime *Runtime) InspectTrace() []TraceEvent {
 	return append([]TraceEvent(nil), runtime.trace...)
 }
 
-// FlushTrace delivers buffered observations outside the gameplay execution
-// path. Sink failures are deliberately ignored and leave the event queued for
-// a later retry.
+// FlushTrace 在玩法执行路径之外投递缓冲中的观测记录。Sink 失败时不报错，事件留在队列里等之后重试。
 func (runtime *Runtime) FlushTrace() {
 	runtime.mutex.Lock()
 	sink := runtime.options.TraceSink

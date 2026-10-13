@@ -1,8 +1,7 @@
 package skill
 
-// PresentationEventKind describes a renderer-facing event. Presentation data
-// is deliberately separate from gameplay RuntimeEvent and TraceEvent streams:
-// it may be dropped and replayed without changing authoritative simulation.
+// PresentationEventKind 是面向渲染端的事件种类。表现数据刻意与玩法的 RuntimeEvent、TraceEvent 流分开：
+// 丢弃或重放表现不改变权威模拟。
 type PresentationEventKind string
 
 const (
@@ -14,6 +13,7 @@ const (
 	PresentationSpawnStop   PresentationEventKind = "spawn_stop"
 )
 
+// PresentationAnchor 是表现事件的锚点：来源、目标、位置、方向与路径。
 type PresentationAnchor struct {
 	Source    EntityID
 	Target    EntityID
@@ -22,8 +22,7 @@ type PresentationAnchor struct {
 	Path      []Position
 }
 
-// PresentationMount connects an immutable visual manifest entry to a compiled
-// gameplay mount point.
+// PresentationMount 把不可变表现清单里的一项连接到编译出的玩法挂载点。
 type PresentationMount struct {
 	VisualIndex   VisualIndex
 	EffectIndex   EffectIndex
@@ -32,8 +31,7 @@ type PresentationMount struct {
 	HasSpawn      bool
 }
 
-// PresentationPlan is the stable, cacheable renderer contract for a Program.
-// A client should key it by Identity.PresentationDigest.
+// PresentationPlan 是 Program 稳定、可缓存的渲染契约；客户端按 Identity.PresentationDigest 作键。
 type PresentationPlan struct {
 	Identity ProgramIdentityView
 	Manifest SkillVisualManifest
@@ -42,8 +40,7 @@ type PresentationPlan struct {
 	Spawns   []PresentationMount
 }
 
-// InspectPresentationPlan returns a detached projection of the immutable
-// compiled program. Mutating the returned slices cannot mutate the Program.
+// InspectPresentationPlan 返回不可变 Program 的脱离副本投影；修改返回的切片不会改到 Program。
 func InspectPresentationPlan(program *Program) PresentationPlan {
 	if program == nil {
 		return PresentationPlan{}
@@ -71,9 +68,8 @@ func InspectPresentationPlan(program *Program) PresentationPlan {
 	return plan
 }
 
-// PresentationEvent is an ordered runtime instruction for clients. Sequence is
-// local to one Runtime and WorldRevision identifies the authoritative state the
-// event was committed against.
+// PresentationEvent 是发给客户端的有序运行期指令。Sequence 只在一个 Runtime 内有意义，WorldRevision 标识事件
+// 提交时对应的权威状态。
 type PresentationEvent struct {
 	Sequence           uint64
 	Tick               Tick
@@ -97,6 +93,7 @@ type PresentationEvent struct {
 	StopCause          StopCause
 }
 
+// PresentationBatch 是 PollPresentation 返回的一批表现事件及游标状态。
 type PresentationBatch struct {
 	Events         []PresentationEvent
 	OldestSequence uint64
@@ -105,8 +102,7 @@ type PresentationBatch struct {
 	More           bool
 }
 
-// PresentationEvents returns events with Sequence greater than after. Returned
-// storage is detached from the runtime buffer.
+// PresentationEvents 返回 Sequence 大于 after 的事件；返回的存储与 Runtime 的缓冲脱离。
 func (runtime *Runtime) PresentationEvents(after uint64) []PresentationEvent {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -117,8 +113,7 @@ func (runtime *Runtime) PresentationEvents(after uint64) []PresentationEvent {
 	return append([]PresentationEvent(nil), runtime.presentationEvents[index:]...)
 }
 
-// PollPresentation makes retention loss explicit. When CursorExpired is true,
-// the caller must recover from authoritative state before applying new events.
+// PollPresentation 显式报告保留丢失：CursorExpired 为 true 时，调用方必须先从权威状态恢复，再应用新事件。
 func (runtime *Runtime) PollPresentation(after uint64, limit int) PresentationBatch {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

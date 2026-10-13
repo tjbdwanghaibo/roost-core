@@ -2,14 +2,11 @@ package skill
 
 import "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 
-// MemoryHost delegates all combat arithmetic to the combat package so the
-// reference host and production hosts run the same twelve-stage pipeline.
-// This file keeps only host bookkeeping: entity lookup, status-backed hooks,
-// event emission, and revision commits.
+// MemoryHost 把全部战斗计算委托给 combat 包，参考 Host 与生产 Host 跑同一条十二阶段管线。这个文件只做 Host 的
+// 记账：实体查找、由状态支撑的钩子、事件发出与 revision 提交。
 
-// memoryCombatHooks adapts MemoryHost's status storage to combat.Hooks. Each
-// Peek remembers which entity owns the peeked hook, because ConsumeHook is
-// keyed by hook name only and always follows the matching Peek.
+// memoryCombatHooks 把 MemoryHost 的状态存储适配为 combat.Hooks。每次 Peek 记住被查看的钩子属于哪个实体，因为
+// ConsumeHook 只按钩子名字索引，且总是紧跟在对应的 Peek 之后。
 type memoryCombatHooks struct {
 	host       *MemoryHost
 	source     EntityID
@@ -133,8 +130,7 @@ func (host *MemoryHost) applyDamageLocked(command DamageCommand) (EffectResult, 
 	context.EffectIndex, context.DamageType, context.Element = command.Meta.EffectIndex, command.DamageType, command.Element
 	context.Result = outcome.Result
 
-	// Write source before target so a self-vamp keeps the historical
-	// resolution order (the target write wins on overlap).
+	// 先写 source 再写 target：自身吸血时结算顺序固定，两者重叠时以 target 的写入为准。
 	if command.Source != 0 && outcome.VampHeal > 0 {
 		source.Health = sourceCombatant.Health
 		host.entities[command.Source] = source

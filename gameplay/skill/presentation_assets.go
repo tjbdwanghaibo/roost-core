@@ -11,35 +11,33 @@ var (
 	ErrVisualMountInvalid    = errors.New("skill: presentation mount references an invalid visual")
 )
 
-// VisualAsset is the renderer-owned resolution of one domain visual. Skill
-// definitions deliberately contain no engine paths; those remain in the
-// versioned catalog behind VisualAssetResolver.
+// VisualAsset 是一个领域表现在渲染端的解析结果。技能定义刻意不含引擎路径，路径留在 VisualAssetResolver 背后
+// 带版本的 catalog 里。
 type VisualAsset struct {
 	Key         string
 	FallbackKey string
 	Preload     []string
 }
 
-// VisualAssetResolver binds a manifest to exactly one catalog revision. The
-// digest protects deployments where a revision label was accidentally reused.
+// VisualAssetResolver 把清单绑定到唯一一个 catalog 修订；digest 防止部署时误复用了同一个修订标签。
 type VisualAssetResolver interface {
 	CatalogIdentity() (revision string, digest string)
 	Resolve(VisualView) (VisualAsset, error)
 }
 
+// ResolvedVisualAsset 是清单里一项表现解析后的资源。
 type ResolvedVisualAsset struct {
 	Visual VisualView
 	Asset  VisualAsset
 }
 
+// ResolvedPresentationPlan 是整份表现计划解析后的结果。
 type ResolvedPresentationPlan struct {
 	Plan   PresentationPlan
 	Assets []ResolvedVisualAsset
 }
 
-// ResolvePresentationPlan validates the complete manifest before returning any
-// renderer bindings. This makes catalog rollout failures fail closed rather
-// than producing partially rendered skills.
+// ResolvePresentationPlan 先校验完整清单，再返回任何渲染绑定：catalog 发布出错时整体失败，而不是渲染出半个技能。
 func ResolvePresentationPlan(plan PresentationPlan, resolver VisualAssetResolver) (ResolvedPresentationPlan, error) {
 	if resolver == nil {
 		return ResolvedPresentationPlan{}, ErrVisualAssetMissing
