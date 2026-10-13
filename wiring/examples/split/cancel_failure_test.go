@@ -33,8 +33,7 @@ func (s *stubMail) CommitClaim(context.Context, int64, string, string) (mail.Ent
 	return mail.Entry{}, nil
 }
 
-// U-0152 · C2 · split consumer.go:78（U-0150 留待）：授予失败后取消预留也失败时，两个错误都要报出来；
-// 取消成功时只报授予错误。
+// 授予失败后取消预留也失败时，两个错误都要报出来；取消成功时只报授予错误。
 func TestGrantFailureReportsAFailedClaimReleaseToo(t *testing.T) {
 	ctx := context.Background()
 	original := grantToInventory

@@ -1,7 +1,5 @@
 package split
 
-import maildomain "github.com/tjbdwanghaibo/roost-core/service/mail"
-
 import (
 	"strings"
 	"testing"
@@ -10,9 +8,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
-	kitmods "github.com/tjbdwanghaibo/roost-core/wiring/mods"
-
+	maildomain "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
+	kitmods "github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // The same consumer code resolves in both deployments.
@@ -154,4 +152,11 @@ func callerRegistry(t *testing.T) *app.Registry {
 		t.Fatal(err)
 	}
 	return registry
+}
+
+// mail 能力缺失时消费者不能构造。
+func TestRewardFlowRefusesARegistryWithoutMail(t *testing.T) {
+	if _, err := NewRewardFlow(&app.Registry{}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("NewRewardFlow without mail = %v", err)
+	}
 }
