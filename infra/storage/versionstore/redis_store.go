@@ -63,7 +63,7 @@ type RedisConfig[K comparable, T any] struct {
 	// A caller that keeps such an index outside the store has two writes and
 	// therefore a window: the record lands, the process dies, and the record
 	// is in no index — for a paid order that means a payment no background
-	// loop can ever find (RR-20260919-04). Inside the store it is one script:
+	// loop can ever find. Inside the store it is one script:
 	// the entry moves if and only if the compare-and-set applies.
 	Index *RedisIndex[T]
 }
@@ -79,8 +79,7 @@ type RedisIndex[T any] struct {
 	Key string
 	// KeyOf returns the sorted set ONE value belongs in, for the shape where
 	// the work list is per owner rather than global — "what is owed to game
-	// server 3" is a bounded question, "everything owed, filtered" is not
-	// (RR-20260919-10).
+	// server 3" is a bounded question, "everything owed, filtered" is not.
 	//
 	// It must depend only on parts of the value that never change: a write
 	// touches the key it computes NOW, so a value whose index key moved
@@ -384,7 +383,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		// settle also covers a lost reply: it checks this write's token and
 		// resends only when the key proves the command has not run, so a
 		// reply that went missing is neither applied twice nor mistaken for a
-		// lost race (A2 ③).
+		// lost race.
 		result, err := s.settleWithBudget(ctx, write, false, &remaining)
 		if result == outcomeFailed {
 			return Versioned[T]{}, false, err
@@ -401,7 +400,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		// back is the state from BEFORE that turn. Re-applying mutate to it
 		// loses again whenever anyone wrote during the backoff, so under steady
 		// contention every retry was spent on a compare that could not pass
-		// and the caller got ErrConflict (RR-20261005-NC-52). The extra GET is
+		// and the caller got ErrConflict. The extra GET is
 		// paid only after a lost compare-and-set.
 		s.backoff(attempt)
 		raw, current, found, err = s.readRaw(ctx, redisKey)
@@ -479,7 +478,7 @@ func (s *RedisStore[K, T]) Create(ctx context.Context, key K, value T) (Versione
 		return Versioned[T]{}, false, err
 	}
 	// A lost reply is settled by the token: a Create that landed is reported
-	// created, not "already taken by someone" (A2 ③).
+	// created, not "already taken by someone".
 	switch settled, err := s.settle(ctx, write, resumed); settled {
 	case outcomeApplied:
 		return Versioned[T]{Value: value, Version: 1}, true, nil
@@ -592,8 +591,7 @@ var _ Store[string, int] = (*RedisStore[string, int])(nil)
 // front of every page until something moves it. Removing it would hide a real
 // record that somebody has to look at; rewriting the value is impossible,
 // because the value is what cannot be read. Moving the entry is the only
-// action left that neither loses it nor lets it block the queue
-// (RR-20260920-05).
+// action left that neither loses it nor lets it block the queue.
 //
 // Deferring an entry that is not in the set does NOT create one: the index is
 // a view of records that exist, and a caller that defers something absent is

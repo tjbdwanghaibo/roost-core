@@ -1,12 +1,12 @@
 package versionstore
 
-// 一次性写令牌（A2 ③，方案 docs/feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md）。
+// 一次性写令牌（维护者决定）。
 //
-// 写命令的回复丢失时（读超时、发出后连接断开），脚本可能已经执行。驱动不重放写命令（A2 ②），
-// 之前 store 也把传输错误原样交给调用方；调用方再调一次，Update 会把 mutate 叠在自己那次已生效的
-// 写上，Create 会把自己刚建的键报成“已被占用”。
+// 写命令的回复丢失时（读超时、发出后连接断开），脚本可能已经执行，驱动也不重放写命令。若 store 把
+// 传输错误原样交给调用方，调用方再调一次，Update 会把 mutate 叠在自己那次已生效的写上，Create 会把
+// 自己刚建的键报成“已被占用”。
 //
-// 现在每条写命令带一个由 store 生成的令牌，和值在同一条 SET 里写进信封头：
+// 所以每条写命令带一个由 store 生成的令牌，和值在同一条 SET 里写进信封头：
 //
 //	<version>|<token_v>|<token_v-1>|…\n<payload>
 //
@@ -174,8 +174,8 @@ func parseEnvelope(raw []byte) (envelopeHeader, error) {
 	}
 	tokens := fields[1:]
 	if len(tokens) == 0 {
-		// The format before A2 ③. No compatibility: the store is cleared on
-		// upgrade (CHANGELOG).
+		// An envelope without write tokens. No compatibility: the store is
+		// cleared on upgrade (CHANGELOG).
 		return envelopeHeader{}, fmt.Errorf("%w: no write token (old envelope format; clear the store on upgrade)", ErrMalformedRecord)
 	}
 	if uint64(len(tokens)) > version {
@@ -276,7 +276,7 @@ const (
 // replyNotLost reports an error that is not a lost reply: the server's error
 // reply arrived (the script raised or was refused), or the command never left
 // (a failed dial, an invalid command). There is nothing to settle; the error
-// is returned as-is, as before A2 ③. versionstore cannot import the driver,
+// is returned as-is. versionstore cannot import the driver,
 // so it recognises these by shape; anything else is treated as a lost reply,
 // which costs a read.
 func replyNotLost(err error) bool {

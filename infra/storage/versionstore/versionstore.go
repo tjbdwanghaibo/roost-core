@@ -53,7 +53,7 @@ var (
 	// retrying immediately, while a record whose bytes do not decode will
 	// fail the same way forever. A retry loop that cannot tell them apart
 	// either gives up on transient errors or lets one unreadable record
-	// occupy the head of its queue for good (RR-20260920-05).
+	// occupy the head of its queue for good.
 	ErrMalformedRecord = errors.New("versionstore: record cannot be decoded")
 	ErrKeyEmpty        = errors.New("versionstore: key is empty")
 )
@@ -91,11 +91,11 @@ type Store[K comparable, T any] interface {
 	//
 	// A transport error (connection reset, timeout) leaves the outcome open:
 	// the write may have landed. Every write carries a one-time token stored
-	// with the value (A2 ③), so the Redis store settles a lost reply itself:
+	// with the value, so the Redis store settles a lost reply itself:
 	// it reads the key and returns the write's own result when its token is
 	// there, resends only when the key proves the command has not run, and
 	// treats it as a lost race when someone else's write took that version. It
-	// never blindly replays a write (RR-20261005-NC-100). What it cannot prove
+	// never blindly replays a write. What it cannot prove
 	// comes back as ErrOutcomeUnknown; pass that error to Resume so the next
 	// call checks the token instead of re-applying mutate. Without Resume a
 	// retry re-applies mutate to whatever is stored, so it still needs an
@@ -154,10 +154,10 @@ const (
 	DefaultRetryBackoff = 2 * time.Millisecond
 )
 
-// compare-and-set 的统一计数（维护者第十二轮决定“CAS 冲突率口径”，N06 观察 2）。
+// compare-and-set 的统一计数（维护者决定的“CAS 冲突率口径”）。
 //
 // 冲突率只在这一层数：RedisStore.Update 的每次尝试与预算用尽各计一次，不在 versionstore 里的
-// compare-and-set 循环（例如 kit/service/rank 的有序集合 + 哈希脚本）调用同样的两个函数。服务不再
+// compare-and-set 循环（例如 service/rank 的有序集合 + 哈希脚本）调用同样的两个函数。服务不
 // 各自对 ErrConflict 报 servicemetrics.Conflict——那是同一个事件的第二份口径；servicemetrics 的
 // Conflict 留给业务冲突（insert-only 撞号、已绑定到别处等），它们不是存储竞争。
 const (
