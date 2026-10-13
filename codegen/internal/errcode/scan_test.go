@@ -7,10 +7,28 @@ import (
 	"testing"
 )
 
-// RR-20261005-NC-63：使用说明承诺 errcode 扫描“重复 code/name 或非常量调用失败”。旧实现只查重复
-// code：编号或名字不是字面量的 Define（`errcode.Define(CodeX, ...)`）、以别名导入的 errcode 包，
-// 都被悄悄跳过——既不进导出表，也逃过重复检查（`roost id check` 用同样的字面量正则，也看不见）；
-// 两个不同编号用同一个名字也照常导出。承诺：这些情形生成期失败并指出文件；字面量定义照常导出。
+func TestExtractDefinitionsIgnoresCommentAndStringLiterals(t *testing.T) {
+	root := t.TempDir()
+	source := `package game
+// retired: errcode.Define(500999, "ghost", "removed")
+/* errcode.Define(500998, "block", "removed") */
+const example = "errcode.Define(500997, \"string\", \"removed\")"
+var live = errcode.Define(500101, "live", "active")
+`
+	if err := os.WriteFile(filepath.Join(root, "errors.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defs, err := extractDefinitions(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 || defs[0].Code != 500101 {
+		t.Fatalf("definitions = %#v", defs)
+	}
+}
+
+// errcode 扫描对重复 code / name 或读不了的调用失败：编号或名字不是字面量的 Define、别名导入下的重复、两个编号用同一个名字，
+// 都在生成期失败并指出文件（不能悄悄跳过、逃过重复检查）；字面量定义（含别名与点导入）照常导出。
 func TestExtractDefinitionsRefusesWhatItCannotRead(t *testing.T) {
 	const imp = "import \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\n"
 	cases := []struct {
@@ -39,7 +57,7 @@ func TestExtractDefinitionsRefusesWhatItCannotRead(t *testing.T) {
 				"game/shop/errors.go":  "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrA = ec.Define(500101, \"shop.a\", \"a\")\n",
 				"game/guild/errors.go": "package guild\n\n" + imp + "var ErrB = errcode.Define(500101, \"guild.b\", \"b\")\n",
 			},
-			want: []string{"duplicate errcode 500101"},
+			want: []string{"duplicate errcode 500101", "shop", "guild"},
 		},
 		{
 			label: "one name for two codes",
