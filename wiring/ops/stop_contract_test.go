@@ -37,9 +37,8 @@ func TestOpsStartServesOnTheBoundAddress(t *testing.T) {
 
 }
 
-// A3 停机契约骨架套 OpsMod（RR-20261004-NC-04 的停止入口）：卡住的工作是一个不配合 ctx 的 admin 命令。
-// Ops 不持有 health / admin / metrics 这些依赖，App 在 StopWithContext 返回 nil 之后才停它们
-// （stopcontract.CallerReleases）。
+// 停机契约骨架套 OpsMod（维护者决定 A3）：卡住的工作是一个不配合 ctx 的 admin 命令。Ops 不持有 health / admin / metrics 这些依赖，
+// App 在 StopWithContext 返回 nil 之后才停它们（stopcontract.CallerReleases）。
 func TestOpsStopContract(t *testing.T) {
 	var m *OpsMod
 	gate := make(chan struct{})
