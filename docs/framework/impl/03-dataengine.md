@@ -222,7 +222,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [lease_fence_test.go](../../../framework/dataengine/lease_fence_test.go)：`TestLeaseFenceReceiptRejectsIdentityAndPayloadTampering`
 - [load_test.go](../../../framework/dataengine/load_test.go)：`TestLoaderRespectsDependenciesAndSkipsLoadedOrDeletedDocuments`、`TestLoaderRejectsUnknownCircularAndStrictCallbackFailures`、`TestLoaderNonStrictSkipIsCountedAndStrictStillFails`
 - [model_test.go](../../../framework/dataengine/model_test.go)：`TestCommitRecordEmptyIncludesReceipts`、`TestCloneEffectPreservesAndDetachesHeaders`、`TestResolveDatabaseScopeDefaultsAndUsesTypedScope`、`TestMapPatchPathBuildsOnlySafeNestedPaths`、`TestWaitProjectionHonorsTicketAndContext`；其余 1 项见文件
-- [tracker_test.go](../../../framework/dataengine/tracker_test.go)：`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent`、`TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty`、`TestTrackerRollbackSyncRestoresMask`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState`；其余 2 项见文件
+- [tracker_test.go](../../../framework/dataengine/tracker_test.go)：`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent`、`TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState`；其余 2 项见文件
 - [validate_test.go](../../../framework/dataengine/validate_test.go)：`TestValidateMutationRefusesEachMalformedShape`、`TestValidateMutationCrossChecksRemoteCommitAgainstHeader`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestLeaseFenceValidateRefusesEachIncompleteFence`、`TestLeaseFenceLoaderAndTrackerGuards`
 
 ### dataengine/engine
