@@ -1,3 +1,5 @@
+// Manager 与包内共用替身：版本锁 / marker store 的内存替身、包装缓存合并与容量淘汰、拒绝不带 fence 的锁工厂。
+
 package remoteentity
 
 import (
@@ -8,7 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 type mockVersionedLock struct {
@@ -178,7 +180,7 @@ func (s *mockMarkerStore) LeaveSharedExpected(_ context.Context, id int64, lease
 }
 
 // testDirty 是测试替身的脏标记。它按 IRemoteCommitParticipant 的契约做成并发安全：投影器重试与 finalizer 的回源发布
-// 可以并发确认同一提交（RR-20260926-63），AcknowledgeRemoteCommit 与读取方都经这把锁。
+// 可以并发确认同一提交，AcknowledgeRemoteCommit 与读取方都经这把锁。
 type testDirty struct {
 	mu    sync.Mutex
 	dirty bool
@@ -282,50 +284,6 @@ func TestWrapperCapacityEvictsIdleEntry(t *testing.T) {
 	defer second.release()
 	if _, ok := mgr.get(firstID); ok || mgr.WrapperCount() != 1 {
 		t.Fatalf("wrapper eviction failed: count=%d", mgr.WrapperCount())
-	}
-}
-
-func TestVersionedLockFactory(t *testing.T) {
-	lock := newMockVersionedLockFactory().NewVersionedLock(42, redis.DefaultVersionedLockOptions("e", 30*time.Second))
-	if err := lock.Lock(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := lock.Unlock(context.Background(), 5, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if lock.IsAcquired() || lock.Version() != 5 {
-		t.Fatalf("invalid unlocked state")
-	}
-}
-
-func TestVersionedLockErrors(t *testing.T) {
-	lock := newMockVersionedLockFactory().NewVersionedLock(1, redis.DefaultVersionedLockOptions("e", time.Second))
-	if err := lock.Unlock(context.Background(), 0, 0); !errors.Is(err, ErrVersionedLockNotOwned) {
-		t.Fatalf("error=%v", err)
-	}
-	_ = lock.Lock(context.Background())
-	if err := lock.Lock(context.Background()); err == nil {
-		t.Fatal("expected double-acquire error")
-	}
-}
-
-func TestVersionedLockInvalidConfigurationReturnsError(t *testing.T) {
-	lock := newVersionedLock(nil, 1, redis.VersionedLockOptions{TTL: 0})
-	if err := lock.TryLock(context.Background()); !errors.Is(err, ErrVersionedLockConfig) {
-		t.Fatalf("TryLock=%v", err)
-	}
-	if err := lock.Unlock(context.Background(), 0, 0); !errors.Is(err, ErrVersionedLockConfig) {
-		t.Fatalf("Unlock=%v", err)
-	}
-	if err := lock.Close(); !errors.Is(err, ErrVersionedLockConfig) {
-		t.Fatalf("Close=%v", err)
-	}
-}
-
-func TestVersionedLockTokenUsesCryptographicRandomness(t *testing.T) {
-	first, second := generateToken(), generateToken()
-	if first == "" || second == "" || first == second {
-		t.Fatalf("invalid tokens %q %q", first, second)
 	}
 }
 

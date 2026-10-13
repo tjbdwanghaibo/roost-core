@@ -1,3 +1,5 @@
+// 事务跟踪：容量淘汰按首次完成、只清过期完成项、非法 Apply 不占容量、并发淘汰不丢 Flush 等待、淘汰后等待者仍拿到终态。
+
 package remoteentity
 
 import (
@@ -191,5 +193,104 @@ func TestInvalidRemoteApplyPreservesExistingCompletion(t *testing.T) {
 		if err != nil || status.State != entity.RemoteCommitCommitted {
 			t.Fatalf("status=%+v err=%v", status, err)
 		}
+	}
+}
+
+// selectEntryBarrier pins a select at the moment it is entered.
+//
+// A select evaluates every channel operand before it blocks, so Done() runs
+// once, at entry — after waitRemoteTransaction has already taken the tracker
+// and its done channel, and before it can observe anything that happens next.
+// Returning nil leaves ctx.Done() as a never-ready case, so the select
+// resolves on the transaction's own done channel.
+type selectEntryBarrier struct {
+	context.Context
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (c *selectEntryBarrier) Done() <-chan struct{} {
+	close(c.entered)
+	<-c.resume
+	return nil
+}
+
+// 等待者拿到这笔事务的终态，即使记录已被容量淘汰：等待者从进入 select 之前就持有 tracker 指针，淘汰只把它移出索引；
+// 唤醒后不能重新查 map（条目可能已不在，且在 txMu 临界区里 panic 会锁死后续所有事务跟踪）。
+// 历史：RR-20260910-03。
+func TestTransactionWaitReturnsTheTerminalStatusAfterEviction(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TransactionTrackLimit = 1
+	manager := NewManager(newMockVersionedLockFactory(), cfg, 1000)
+	first, second := remoteTestTxID(201), remoteTestTxID(202)
+
+	barrier := &selectEntryBarrier{
+		Context: context.Background(),
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+	type outcome struct {
+		status   entity.RemoteCommitStatus
+		err      error
+		panicked any
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		var result outcome
+		defer func() {
+			result.panicked = recover()
+			done <- result
+		}()
+		result.status, result.err = manager.waitRemoteTransaction(barrier, first)
+	}()
+
+	select {
+	case <-barrier.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter never reached its select")
+	}
+
+	// The transaction completes, then another admission evicts the record it
+	// just closed. Both go through the real paths.
+	manager.completeRemoteTransaction(first, entity.RemoteCommitStatus{
+		TransactionID: first, State: entity.RemoteCommitCommitted,
+	})
+	if err := manager.trackRemoteTransaction(second); err != nil {
+		t.Fatal(err)
+	}
+	manager.remote.txMu.Lock()
+	_, retained := manager.remote.txs[first]
+	manager.remote.txMu.Unlock()
+	if retained {
+		t.Fatal("control: the completed tracker was not evicted, so this test proves nothing")
+	}
+
+	close(barrier.resume)
+	select {
+	case got := <-done:
+		if got.panicked != nil {
+			t.Fatalf("the waiter panicked instead of answering: %v", got.panicked)
+		}
+		if got.err != nil {
+			t.Fatalf("wait after eviction = %v, want the committed status", got.err)
+		}
+		if got.status.State != entity.RemoteCommitCommitted {
+			t.Fatalf("wait after eviction returned state %v, want committed", got.status.State)
+		}
+		if got.status.TransactionID != first {
+			t.Fatalf("wait returned the status of %v, want %v", got.status.TransactionID, first)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter never returned")
+	}
+
+	// The manager is still usable: a panic inside the txMu critical section
+	// would have left the lock held forever.
+	locked := make(chan error, 1)
+	go func() { locked <- manager.trackRemoteTransaction(remoteTestTxID(203)) }()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("txMu is still held; a panic in the critical section skipped its Unlock")
 	}
 }

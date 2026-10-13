@@ -1,3 +1,5 @@
+// Pipelined 的 Remote 批次：本地记录 fsync 后才可见，结论与 strict 一致。
+
 package remoteentity
 
 import (

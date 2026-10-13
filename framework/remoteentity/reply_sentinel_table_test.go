@@ -1,3 +1,5 @@
+// 回复错误判别表：真实 Nest + 正式 Remote Manager 上各类提交结论的回复按“第一个命中的行”落在判别表对应行。
+
 package remoteentity
 
 import (
@@ -13,18 +15,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// OPEN-ITEMS B23：RR-20260926-77 判别表第 2 行按 RR-37 记录写入、没有核对过真实回复链。这里在真实 Nest + 正式 Remote Manager
-// （MongoCommitter 权威、ManagerAccess loader，RR-39 的 newReloadFixture）上跑 RR-37 的四种“本地已提交、Remote 结果未知”，
-// 打印回复链上的哨兵组合，并断言按判别表“从上到下第一个命中的行”恰是第 2 行（可能已提交、不得重试），
-// 且不带第 1 行的哨兵（第 3～5 行排在它之后，命中第 2 行即可）。
-//
-// 核对结果（2026-09-27）：Durability 0 回复丢失 / 从未到达、strict 等待中投影器报告未知，回复带 ErrRemotePersistenceIndeterminate；
-// strict 等待 Remote 确认到截止时回复是 ErrRemoteCommitTimeout + context.DeadlineExceeded，**不带** ErrRemotePersistenceIndeterminate
-// （transaction_tracking.go waitRemoteTransaction 的截止分支）。判别表第 2 行原先只列前者，已补上后者。
-//
-// RR-20260927-24：RR-37 承诺“Remote 结果未知 → ErrRemotePersistenceIndeterminate”，按这个哨兵判“可能已提交、不得重试”的调用方
-// 在 strict 截止场景漏判。截止分支改为同时带上它（ErrRemoteCommitTimeout 与 ctx 错误保留），这里断言四种场景都满足它，
-// strict 截止另外断言原有的两个哨兵仍在（只增加 errors.Is 命中，不删除）。
+// 判别表第 2 行（可能已提交、不得重试）：在真实 Nest + 正式 Remote Manager（MongoCommitter 权威、ManagerAccess loader）上跑四种
+// “本地已提交、Remote 结果未知”——Durability 0 回复丢失 / 从未到达、strict 等待中投影器报告未知、strict 等待 Remote 确认到截止——
+// 回复都带 ErrRemotePersistenceIndeterminate，按判别表“从上到下第一个命中的行”恰是第 2 行，且不带第 1 行的哨兵；strict 截止另外
+// 保留 ErrRemoteCommitTimeout 与 ctx 错误。
+// 历史：RR-20260927-24。
 func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -100,10 +95,9 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 	}
 }
 
-// RR-20260927-32：Remote 批次在 FinalizeLocked（WAL 准入之前）被明确拒绝——这里用 RR-20260927-09 的 sid 作用域拒绝——时，回复之前原样
-// 返回 ErrRemoteManagedServerScopedDAO，判别表一行都不命中。在真实 Nest + 正式 Remote Manager 上断言回复现在按“第一个命中的行”
-// 落在 ErrCommitRejected 那一行（未提交、已回滚），原因仍可 errors.Is，本地 committer 没收到记录。
-// RR-20260928-03 在判别表第 4 行插入 ErrRemotePartRejected，这一行由第 11 行顺延为第 12 行（原用例名 …Row11）。
+// Remote 批次在 FinalizeLocked（WAL 准入之前）被明确拒绝（这里用 sid 作用域拒绝）：回复按“第一个命中的行”落在 ErrCommitRejected
+// 那一行（第 12 行：未提交、已回滚），原因仍可 errors.Is，本地 committer 没收到记录。
+// 历史：RR-20260927-32。
 func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow12(t *testing.T) {
 	f, live := newReloadFixture(t, 1996)
 	live.mu.Lock()
@@ -138,13 +132,11 @@ func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow12(t *testing.T) {
 	}
 }
 
-// RR-20260928-03：带 Remote 批次的消息，本地事务已提交而 Remote 部分被明确拒绝（RR-20260926-58：只丢弃被拒绝的 Remote 部分，
-// 本地部分照常生效）。之前回复是 “nest: finish remote write batch: …write rejected before commit…”，判别表一行都不命中，
-// 调用方看不出本地已提交，可能整笔重试、重复执行本地部分。承诺：回复满足 errors.Is(nest.ErrRemotePartRejected)，按“第一个命中的行”
-// 落在第 4 行（部分已提交、不得整笔重试），原因（entity.ErrRemoteRejected / ErrRemoteVersionConflict）仍可 errors.Is；不带第 2 行
-// （结果未知）与第 3 行（Remote 也已确认）的哨兵；本地 committer 确实收到了这笔记录。
-// strict：WAL 投影器（这里由 beforeWait 模拟）把 Remote 写交给权威、被版本冲突拒绝，strict 等待得到 Rejected 结论（探针原形）；
-// memory：Durability 0 由 Commit 直接写权威、被版本冲突拒绝。
+// 本地事务已提交而 Remote 部分被明确拒绝（只丢弃被拒绝的 Remote 部分，本地部分照常生效）：回复满足 errors.Is(nest.ErrRemotePartRejected)，
+// 按“第一个命中的行”落在第 4 行（部分已提交、不得整笔重试），原因（entity.ErrRemoteRejected / ErrRemoteVersionConflict）仍可 errors.Is；
+// 不带第 2 行（结果未知）与第 3 行（Remote 也已确认）的哨兵；本地 committer 确实收到了这笔记录。
+// strict：WAL 投影器（这里由 beforeWait 模拟）把 Remote 写交给权威、被版本冲突拒绝；memory：Durability 0 由 Commit 直接写权威、被版本冲突拒绝。
+// 历史：RR-20260928-03。
 func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -212,13 +204,11 @@ func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) 
 	}
 }
 
-// RR-20260928-08（第七轮审计 N1，由审计探针改写）：strict 下本地已提交，WAL 投影器（这里由 beforeWait 模拟）已把 Remote 写进权威、
-// tracker 转 Committed 并关闭；strict 等待开始之前，另一笔 Remote 事务准入时按容量淘汰了这条已关闭的 tracker、占住唯一名额（pending 不淘汰）。
-// 等待重新登记 tracker 得到 entity.ErrRemoteOverloaded。批次对 strict 的任何 Commit 错误都按结果未知交给 finalizer（之后按已提交收尾），
-// 而这个错误不带 entity.ErrRemotePersistenceIndeterminate，nest 按判别表第 4 行的判据把回复标成 ErrRemotePartRejected（Remote 没写入），
-// 调用方照做会把已经提交的 Remote 部分再写一次。承诺：等待投影器结论的 Commit 凡不是明确拒绝（entity.ErrRemoteRejected）的错误都带
-// ErrRemotePersistenceIndeterminate，回复按“第一个命中的行”落在第 2 行、不带 ErrRemotePartRejected，原因 ErrRemoteOverloaded 仍可 errors.Is。
-// pipelined handler 带 Remote 批次时同样走 strict 提交路径、同样等待投影器结论（outcome.Durability=3），一并钉住。
+// strict 下本地已提交、投影器已把 Remote 写进权威并关闭 tracker，strict 等待开始之前这条 tracker 被容量淘汰：等待投影器结论的
+// Commit 凡不是明确拒绝（entity.ErrRemoteRejected）的错误都带 ErrRemotePersistenceIndeterminate，回复按“第一个命中的行”落在第 2 行、
+// 不带 ErrRemotePartRejected（否则调用方会把已提交的 Remote 部分再写一次），原因 ErrRemoteOverloaded 仍可 errors.Is。
+// pipelined handler 带 Remote 批次时同样走 strict 提交路径，一并钉住。
+// 历史：RR-20260928-08。
 func TestRemoteStrictTrackerEvictedAfterCommitReplyHitsDecisionTableRow2(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -306,10 +296,10 @@ func (*pipelinedLocalCommitter) Enqueue(context.Context, coredata.CommitRecord) 
 
 func (*pipelinedLocalCommitter) DurableLSN() uint64 { return 0 }
 
-// RR-20260928-08（第七轮审计 N2）：判别表第 14 行——调用方自己的等待先结束，Nest.Request* 返回 ErrNestCanceled（与 ctx 错误并存）
-// 或 ErrNestTimeout，结果未知。在真实 Nest + 正式 Remote Manager 上构造：strict handler 本地已提交，Remote 确认还在等（没有投影器），
-// 调用方的 ctx 截止 / 引擎同步等待超时先到。断言回复按“第一个命中的行”落在第 14 行（不命中第 1～13 行，也不落到兜底第 15 行），
-// 且本地事务确实已提交——这正是第 14 行“不说明结果、不得据此重试”的原因。
+// 判别表第 14 行：调用方自己的等待先结束，Nest.Request* 返回 ErrNestCanceled（与 ctx 错误并存）或 ErrNestTimeout，结果未知。
+// strict handler 本地已提交，Remote 确认还在等（没有投影器），调用方的 ctx 截止 / 引擎同步等待超时先到：回复按“第一个命中的行”
+// 落在第 14 行（不命中第 1～13 行，也不落到兜底第 15 行），且本地事务确实已提交——这正是第 14 行“不得据此重试”的原因。
+// 历史：RR-20260928-08。
 func TestCallerWaitEndedReplyHitsDecisionTableRow14(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -380,7 +370,6 @@ func (c *countingLocalCommitter) commits() int32 { return c.calls.Load() }
 // firstTableRow 对它返回 15。第 7、8 行共用 ErrCreatedEntityLockConflict，按是否同时带 ErrLockTimeout 区分（without / with）；
 // 第 13 行 entity.ErrEntityRemoved 只对“handler 内新建本 handler 较早撤销的同 ID”成立，errors.Is 看不出来源，用例自己保证来源。
 // row 0 的项不是任何一行的判据，只在命中时打印（context.DeadlineExceeded 与第 2、14 行并存）。
-// RR-20260928-08：之前停在 RR-20260928-03 改号之前（兜底记为第 14 行、ErrNestCanceled / ErrNestTimeout 记为 0、第 8 行被当成第 7 行）。
 var replySentinels = []struct {
 	row     int
 	name    string

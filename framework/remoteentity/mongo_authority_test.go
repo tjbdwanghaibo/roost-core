@@ -1,3 +1,5 @@
+// Mongo 权威：未提交写者被 fence、已提交事务重放、共享模式切换、许可回复丢失不重复分配、批次 CAS 全部回滚、payload 分批与删除。
+
 package remoteentity
 
 import (
@@ -9,6 +11,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -344,5 +347,154 @@ func TestSharedAdmissionUsesOwnershipFromDurableGrant(t *testing.T) {
 		if _, ok := lock.writeGrant(); ok {
 			t.Fatal("closed lock returned a usable grant")
 		}
+	}
+}
+
+func newRemoteMongoFake() *mongotest.Client { return mongotest.NewClient() }
+
+// lookupTxField reads one field of a stored transaction document, so the test
+// asserts what the committer actually persisted rather than a fake's bookkeeping.
+func lookupTxField(t *testing.T, coll *mongotest.Collection, id string, field string) (any, bool) {
+	t.Helper()
+	doc, ok := coll.Lookup(id)
+	if !ok {
+		return nil, false
+	}
+	value, present := doc[field]
+	return value, present
+}
+
+func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
+	const kind entity.EntityKind = 198
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(991, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tx entity.RemoteTransactionID
+	tx[15] = 1
+	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
+	data := []byte("state")
+	commit := entity.RemoteCommit{
+		TransactionID: tx, EntityID: id, Kind: kind, BaseVersion: 0, NextVersion: 1,
+		MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
+		Mutations: []entity.RemoteDataMutation{{Database: "game", Collection: "players", ID: id, Version: 1, Data: data}},
+		Snapshots: []entity.RemoteSnapshotRecord{{Key: key, BaseVersion: 0, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1, Full: true, Data: data, Checksum: entity.RemoteSnapshotChecksum(data)}},
+	}
+	mongo := newRemoteMongoFake()
+	store := NewMongoCommitter(mongo, "control", 7, 0)
+	if err := store.EnsureRemoteStorage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	txCollection := mongo.Collection("control", remoteTxCollection)
+	if len(txCollection.Indexes) != 2 || !txCollection.Indexes[1].Sparse || !txCollection.Indexes[1].RecreateOnConflict || txCollection.Indexes[1].TTL <= 0 {
+		t.Fatalf("unsafe transaction TTL indexes: %+v", txCollection.Indexes)
+	}
+	commit.LockFence = testWriteGrant(t, store, id).Fence
+	first, err := store.CommitRemote(context.Background(), commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := mongo.Sessions()
+	mongo.StartSessionErr = errors.New("replay must not open another transaction")
+	second, err := store.CommitRemote(context.Background(), commit)
+	if err != nil || second != first {
+		t.Fatalf("idempotent receipt=%+v first=%+v err=%v", second, first, err)
+	}
+	altered := commit.Clone()
+	altered.Mutations[0].Data = []byte("different")
+	if _, err := store.CommitRemote(context.Background(), altered); !errors.Is(err, entity.ErrRemoteRejected) {
+		t.Fatalf("transaction id content collision error=%v", err)
+	}
+	if got := mongo.Sessions(); got != sessions {
+		t.Fatalf("replay started another Mongo session: %d -> %d", sessions, got)
+	}
+	mongo.StartSessionErr = nil
+	pending, err := store.PendingRemoteCommits(context.Background(), 10)
+	if err != nil || len(pending) != 1 || len(pending[0].Commits) != 1 {
+		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+	_, expiresBeforePublish := lookupTxField(t, txCollection, tx.String(), "expires_at")
+	if expiresBeforePublish {
+		t.Fatal("unpublished outbox transaction must not expire")
+	}
+	snapshot, ok, err := store.LoadRemoteSnapshot(context.Background(), key, entity.RemoteReadLinearizable, 1)
+	if err != nil || !ok || string(snapshot.Payload.BytesCopy()) != "state" {
+		t.Fatalf("snapshot=%+v ok=%v err=%v", snapshot, ok, err)
+	}
+	if err := store.MarkRemoteCommitPublished(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	_, expires := lookupTxField(t, txCollection, tx.String(), "expires_at")
+	if !expires {
+		t.Fatal("published transaction must receive expires_at")
+	}
+	pending, err = store.PendingRemoteCommits(context.Background(), 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending after ack=%+v err=%v", pending, err)
+	}
+
+	stale := commit.Clone()
+	stale.TransactionID[14] = 2
+	if _, err := store.CommitRemote(context.Background(), stale); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+		t.Fatalf("stale error=%v", err)
+	}
+	duplicate := commit.Clone()
+	duplicate.TransactionID[13] = 3
+	if _, err := store.CommitRemoteBatch(context.Background(), []entity.RemoteCommit{duplicate, duplicate}); !errors.Is(err, entity.ErrRemoteRejected) {
+		t.Fatalf("duplicate entity batch error=%v", err)
+	}
+}
+
+func TestMongoPayloadBatchingPreservesDeletesAndTransactionRollback(t *testing.T) {
+	ctx := context.Background()
+	db := newRemoteMongoFake()
+	store := NewMongoCommitter(db, "control", 7, 0)
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	var commits []entity.RemoteCommit
+	for i := range 2 {
+		id, _ := entity.BuildEntityID(int64(1001+i), 198)
+		c := authorityCommit(t, id, 1, testWriteGrant(t, store, id))
+		c.Mutations = append(c.Mutations, entity.RemoteDataMutation{Database: "game", Collection: "inventory", ID: id, Version: 1, Data: []byte("item")})
+		commits = append(commits, c)
+	}
+	// 后一个集合失败，前一个集合和元数据 CAS 必须一起回滚。
+	failure := errors.New("inventory unavailable")
+	db.Collection("game", "inventory").Errors["BulkWrite"] = failure
+	if _, err := store.CommitRemoteBatch(ctx, commits); !errors.Is(err, failure) {
+		t.Fatalf("failure=%v", err)
+	}
+	for _, c := range commits {
+		var doc bson.M
+		if err := db.Collection("game", "players").FindOne(ctx, bson.M{"_id": c.EntityID}, &doc); !errors.Is(err, fmongo.ErrNotFound) {
+			t.Fatalf("partial payload: %v", err)
+		}
+		if current, err := store.readAuthority(ctx, c.EntityID); err != nil || current.Version != 0 {
+			t.Fatalf("partial CAS: %+v %v", current, err)
+		}
+	}
+	delete(db.Collection("game", "inventory").Errors, "BulkWrite")
+	before := db.Collection("game", "players").Calls["BulkWrite"]
+	if _, err := store.CommitRemoteBatch(ctx, commits); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.Collection("game", "players").Calls["BulkWrite"] - before; got != 1 {
+		t.Fatalf("two entities require one collection write, got %d", got)
+	}
+	// 删除实体仍走同一事务，不能漏掉批量计划中的删除操作。
+	c := commits[0].Clone()
+	c.TransactionID[15] = 2
+	c.BaseVersion = 1
+	c.NextVersion = 2
+	c.LockFence = testWriteGrant(t, store, c.EntityID).Fence
+	c.Delete = true
+	c.Mutations = nil
+	c.Deletes = []entity.RemoteDataDelete{{Database: "game", Collection: "players", ID: c.EntityID}}
+	if _, err := store.CommitRemote(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	var doc bson.M
+	if err := db.Collection("game", "players").FindOne(ctx, bson.M{"_id": c.EntityID}, &doc); !errors.Is(err, fmongo.ErrNotFound) {
+		t.Fatalf("replace/delete order: %v", err)
 	}
 }

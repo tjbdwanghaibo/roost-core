@@ -1,15 +1,19 @@
+// Remote 写批次：事务内变更与删除意图、提交 / 回滚 / 门的持有、步骤顺序与准入上限、未定稿时 Abort 不走快池。
+
 package remoteentity
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type remoteTestLoader struct {
@@ -158,7 +162,7 @@ func (l *remoteTestLoader) CommitRemoteBatch(ctx context.Context, commits []enti
 	return receipts, nil
 }
 
-// AcknowledgeRemoteCommit 按契约幂等且并发安全（RR-20260926-63）：重复确认同一提交只是再次清脏，状态经 testDirty 的锁。
+// AcknowledgeRemoteCommit 按契约幂等且并发安全：重复确认同一提交只是再次清脏，状态经 testDirty 的锁。
 func (e *testRemoteEntity) AcknowledgeRemoteCommit(_ entity.RemoteCommit) error {
 	e.dirty.set(false)
 	return nil
@@ -813,5 +817,235 @@ func TestRemoteRollbackPanicReleasesLocalLock(t *testing.T) {
 	}()
 	if !<-unlocked {
 		t.Fatal("rollback panic leaked Entity local lock")
+	}
+}
+
+const rr44Kind entity.EntityKind = 213
+
+func newRR44Manager(t *testing.T) (*Manager, *remoteTestLoader) {
+	t.Helper()
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: rr44Kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	m := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	loader := newRemoteTestLoader()
+	m.SetBackend(loader)
+	m.SetOwnershipStore(newMockMarkerStore())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = m.StopFinalizer(ctx)
+	})
+	return m, loader
+}
+
+// countingLocalExecutor 模拟慢阶段注入的快池执行器：每次调用就是一次快池续行。
+func countingLocalExecutor(hops *atomic.Int32) context.Context {
+	return entity.WithLocalExecutor(context.Background(), func(fn func()) error { hops.Add(1); fn(); return nil })
+}
+
+// Prepare 在慢阶段失败时没有任何已定稿的本地状态，Abort 不投递快池续行；已经取得的前序实体仍由 Close 释放。
+// 历史：RR-20260926-44。
+func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
+	m, loader := newRR44Manager(t)
+	present := newTestRemoteEntity(9301, 1, rr44Kind)
+	loader.add(present)
+	missing := testRemoteFullIDWithKind(9302, 1, rr44Kind)
+
+	var hops atomic.Int32
+	ctx := countingLocalExecutor(&hops)
+	if _, err := m.PrepareRemoteWriteBatch(ctx, []int64{missing}); err == nil {
+		t.Fatal("prepare of a missing entity must fail")
+	}
+	if n := hops.Load(); n != 0 {
+		t.Fatalf("single-entity Prepare failure made %d fast-pool continuation(s); nothing was finalized", n)
+	}
+
+	// 多实体：前一个实体已取得写权限，后一个失败。
+	if _, err := m.PrepareRemoteWriteBatch(ctx, []int64{present.GUId(), missing}); err == nil {
+		t.Fatal("prepare with a missing entity must fail")
+	}
+	if n := hops.Load(); n != 0 {
+		t.Fatalf("multi-entity Prepare failure made %d fast-pool continuation(s); nothing was finalized", n)
+	}
+	// 失败路径的唯一收尾（Close）必须释放前序实体的写门与写许可。
+	next, err := m.PrepareRemoteWriteBatch(context.Background(), []int64{present.GUId()})
+	if err != nil {
+		t.Fatalf("entity acquired before the failure was not released: %v", err)
+	}
+	_ = next.Abort(context.Background(), errors.New("test cleanup"))
+	_ = next.Close(context.Background())
+	if stats := m.Stats(); stats.WritesInFlight != 0 {
+		t.Fatalf("write slots leaked: %+v", stats)
+	}
+}
+
+// 未定稿的批次（handler 在定稿前失败）Abort 就地置 aborted，不走快池；之后不能再定稿，Close 仍释放。
+func TestRemoteWriteBatchAbortBeforeFinalizeStaysInPlace(t *testing.T) {
+	m, loader := newRR44Manager(t)
+	live := newTestRemoteEntity(9303, 1, rr44Kind)
+	loader.add(live)
+	batch, err := m.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hops atomic.Int32
+	if err := batch.Abort(countingLocalExecutor(&hops), errors.New("handler failed")); err != nil {
+		t.Fatal(err)
+	}
+	if n := hops.Load(); n != 0 {
+		t.Fatalf("Abort of an unfinalized batch made %d fast-pool continuation(s)", n)
+	}
+	live.dirty.set(true)
+	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(44), "probe", "", true, 0)); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("aborted batch must refuse FinalizeLocked, got %v", err)
+	}
+	if err := batch.Abort(countingLocalExecutor(&hops), errors.New("again")); err != nil || hops.Load() != 0 {
+		t.Fatalf("repeated Abort err=%v hops=%d", err, hops.Load())
+	}
+	if err := batch.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stats := m.Stats(); stats.WritesInFlight != 0 {
+		t.Fatalf("write slots leaked: %+v", stats)
+	}
+}
+
+// 负对照：已定稿的批次有本地状态要回滚，Abort 仍经本地执行器（快池）执行回滚。
+func TestRemoteWriteBatchAbortAfterFinalizeRollsBackOnLocalExecutor(t *testing.T) {
+	m, loader := newRR44Manager(t)
+	live := newTestRemoteEntity(9304, 1, rr44Kind)
+	loader.add(live)
+	batch, err := m.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.dirty.set(true)
+	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(45), "probe", "", true, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Commits()) != 1 || live.dirty.Dirty() {
+		t.Fatalf("setup: finalize must freeze one commit, commits=%d dirty=%v", len(batch.Commits()), live.dirty.Dirty())
+	}
+	var hops atomic.Int32
+	var ranOnExecutor atomic.Bool
+	ctx := entity.WithLocalExecutor(context.Background(), func(fn func()) error {
+		hops.Add(1)
+		fn()
+		ranOnExecutor.Store(live.dirty.Dirty())
+		return nil
+	})
+	if err := batch.Abort(ctx, errors.New("rejected")); err != nil {
+		t.Fatal(err)
+	}
+	if hops.Load() != 1 || !ranOnExecutor.Load() {
+		t.Fatalf("finalized rollback must run once on the local executor: hops=%d rolledBackThere=%v", hops.Load(), ranOnExecutor.Load())
+	}
+	if len(batch.Commits()) != 0 {
+		t.Fatalf("aborted batch still exposes commits: %d", len(batch.Commits()))
+	}
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("aborted batch must not commit, got %v", err)
+	}
+	if err := batch.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func batchHarness(t *testing.T, kind entity.EntityKind, ids ...int64) (*Manager, []int64) {
+	t.Helper()
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	loader := newRemoteTestLoader()
+	mgr.SetBackend(loader)
+	mgr.SetOwnershipStore(newMockMarkerStore())
+	guids := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		live := newTestRemoteEntity(id, 1, kind)
+		loader.add(live)
+		guids = append(guids, live.GUId())
+	}
+	return mgr, guids
+}
+
+// A batch has one legal order: prepare → finalize → commit (or abort /
+// indeterminate). Every step out of order must refuse with
+// ErrRemoteCommitNotFinalized, otherwise a second finalize could rewrite the
+// commits after the first was already handed to the WAL.
+func TestRemoteWriteBatchRefusesStepsOutOfOrder(t *testing.T) {
+	mgr, guids := batchHarness(t, 141, 2401)
+	ctx := context.Background()
+	batch, err := mgr.PrepareRemoteWriteBatch(ctx, guids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := batch.Commit(ctx); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("Commit before FinalizeLocked = %v", err)
+	}
+	if err := batch.Indeterminate(ctx, errors.New("x")); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("Indeterminate before FinalizeLocked = %v", err)
+	}
+	if err := batch.FinalizeLocked(entity.RemoteTransactionOutcome{}); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("FinalizeLocked with a failed / zero outcome = %v", err)
+	}
+	outcome := entity.NewRemoteTransactionOutcome(remoteTestTxID(41), "write", "", true, 2)
+	if err := batch.FinalizeLocked(outcome); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.FinalizeLocked(outcome); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("second FinalizeLocked = %v", err)
+	}
+	if err := batch.Abort(ctx, errors.New("test complete")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Indeterminate(ctx, errors.New("late")); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
+		t.Fatalf("Indeterminate after Abort = %v", err)
+	}
+}
+
+// Admission limits: more entities than MaxWriteBatch is refused with both
+// numbers, and a manager that has recorded a fatal release failure is fenced
+// — it must not prepare new remote writes on ownership it can no longer
+// prove it released.
+func TestPrepareRemoteWriteBatchRefusesOversizeAndFencedManagers(t *testing.T) {
+	mgr, guids := batchHarness(t, 142, 2411, 2412, 2413)
+	mgr.cfg.MaxWriteBatch = 2
+	_, err := mgr.PrepareRemoteWriteBatch(context.Background(), guids)
+	if !errors.Is(err, entity.ErrRemoteOverloaded) || !strings.Contains(err.Error(), "batch=3 max=2") {
+		t.Fatalf("oversize batch = %v", err)
+	}
+	mgr.cfg.MaxWriteBatch = 100
+	mgr.recordReleaseFailure(errors.New("redis unreachable during unlock"))
+	_, err = mgr.PrepareRemoteWriteBatch(context.Background(), guids[:1])
+	if !errors.Is(err, entity.ErrRemoteFenced) || !strings.Contains(err.Error(), "redis unreachable") {
+		t.Fatalf("fenced manager = %v", err)
+	}
+}
+
+func TestFastWorkerRejectsRemoteWaitingBeforeMutation(t *testing.T) {
+	// 故意不初始化 Manager：拦截必须早于解引用、准入和任何远端 I/O。
+	var manager *Manager
+	batch := &remoteWriteBatch{}
+	cases := map[string]func(){
+		"PrepareRemoteWriteBatch":      func() { _, _ = manager.PrepareRemoteWriteBatch(context.Background(), []int64{1}) },
+		"Commit":                       func() { _, _ = batch.Commit(context.Background()) },
+		"Close":                        func() { _ = batch.Close(context.Background()) },
+		"waitRemoteTransaction":        func() { _, _ = manager.waitRemoteTransaction(context.Background(), entity.RemoteTransactionID{}) },
+		"waitTrackedRemoteTransaction": func() { _, _ = manager.waitTrackedRemoteTransaction(context.Background(), nil) },
+		"FlushRemoteAll":               func() { _ = manager.FlushRemoteAll(context.Background()) },
+	}
+	for name, call := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("misuse"))
+			defer release()
+			defer func() {
+				err, ok := recover().(error)
+				if !ok || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "misuse") {
+					t.Fatalf("panic=%v", err)
+				}
+				if batch.closed || batch.committed || batch.reserved {
+					t.Fatal("batch mutated before rejection")
+				}
+			}()
+			call()
+		})
 	}
 }
