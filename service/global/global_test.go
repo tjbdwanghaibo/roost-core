@@ -3,13 +3,13 @@ package global
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
-
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 type clock struct {
@@ -277,5 +277,189 @@ func TestANilReporterChangesNothing(t *testing.T) {
 	}
 	if _, err := service.Bind(ctx, 7, "group-a", 300); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a second bind with no reporter = %v, want ErrConflict", err)
+	}
+}
+
+// Bind 结果未知（写已落库、回复丢了）后用同样的参数重试，得到同一个绑定而不是 ErrConflict；只有已存的 group / globalSID 与请求
+// 不一致才是真正的冲突。
+// 历史：RR-20261006-05。
+
+// lostReplyStore 让下一次 Create 照常落库、但把回复换成传输错误，模拟结果未知。
+type lostReplyStore struct {
+	versionstore.Store[int32, RouteBinding]
+	loseNext bool
+}
+
+var errReplyLost = errors.New("connection reset after write")
+
+func (s *lostReplyStore) Create(ctx context.Context, key int32, value RouteBinding) (versionstore.Versioned[RouteBinding], bool, error) {
+	stored, created, err := s.Store.Create(ctx, key, value)
+	if s.loseNext && err == nil {
+		s.loseNext = false
+		return versionstore.Versioned[RouteBinding]{}, false, errReplyLost
+	}
+	return stored, created, err
+}
+
+func TestBindRetriedAfterUnknownOutcomeReturnsTheSameBinding(t *testing.T) {
+	sink := servicemetrics.NewRecorder()
+	store := &lostReplyStore{Store: versionstore.NewMemoryStore[int32, RouteBinding](), loseNext: true}
+	service, _ := newService(t, func(cfg *Config) {
+		cfg.Routes = store
+		cfg.Metrics = sink
+	})
+	ctx := context.Background()
+
+	if _, err := service.Bind(ctx, 7, "group-a", 100); !errors.Is(err, errReplyLost) {
+		t.Fatalf("first bind: err=%v, want the lost reply", err)
+	}
+	again, err := service.Bind(ctx, 7, "group-a", 100)
+	if err != nil {
+		t.Fatalf("retrying the same bind after an unknown outcome: %v, want the stored binding", err)
+	}
+	if again.GameSID != 7 || again.GlobalGroupID != "group-a" || again.GlobalSID != 100 || again.Epoch != 1 || again.State != RouteActive {
+		t.Fatalf("retried bind returned %+v", again)
+	}
+	if got := sink.Count("replayed:bind"); got != 1 {
+		t.Fatalf("a retried bind reported %d replays; %s", got, sink.Events())
+	}
+	if got := sink.Count("conflict:bind"); got != 0 {
+		t.Fatalf("a retried bind reported %d conflicts; %s", got, sink.Events())
+	}
+
+	// 已存的绑定与请求不一致仍是冲突：换 group、换 globalSID 都不算重试。
+	for _, tc := range []struct {
+		group  string
+		global int32
+	}{{"group-b", 100}, {"group-a", 200}} {
+		if _, err := service.Bind(ctx, 7, tc.group, tc.global); !errors.Is(err, ErrConflict) {
+			t.Fatalf("bind %s/%d over group-a/100: err=%v, want ErrConflict", tc.group, tc.global, err)
+		}
+	}
+	if got := sink.Count("conflict:bind"); got != 2 {
+		t.Fatalf("mismatched binds reported %d conflicts; %s", got, sink.Events())
+	}
+	resolved, err := service.Resolve(ctx, 7)
+	if err != nil || resolved.GlobalGroupID != "group-a" || resolved.GlobalSID != 100 || resolved.Epoch != 1 {
+		t.Fatalf("binding after refused binds: %+v err=%v", resolved, err)
+	}
+}
+
+func expectGuard(t *testing.T, err error, sentinel error, text string) {
+	t.Helper()
+	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), text) {
+		t.Fatalf("error = %v, want %v containing %q", err, sentinel, text)
+	}
+}
+
+// Migration requests are checked before the compare-and-set runs;
+// each refusal is pinned by sentinel and message so a dropped one turns one
+// case red. A migration "to where it already is" is the one that would leave
+// a binding permanently in Migrating with no move to complete.
+func TestMigrationRequestsRefuseEachInvalidShape(t *testing.T) {
+	service, _ := newService(t)
+	ctx := context.Background()
+	binding := bind(t, service, 100, 1)
+
+	_, err := service.BeginMigration(ctx, 100, 0, binding.Epoch)
+	expectGuard(t, err, ErrRouteInvalid, "target global sid must be positive")
+	_, err = service.BeginMigration(ctx, 100, 1, binding.Epoch)
+	expectGuard(t, err, ErrRouteInvalid, "game 100 is already served by 1")
+	_, err = service.BeginMigration(ctx, 404, 2, 1)
+	expectGuard(t, err, ErrRouteMissing, "game 404")
+
+	resolved, err := service.Resolve(ctx, 100)
+	if err != nil || resolved.State != RouteActive || resolved.Epoch != binding.Epoch {
+		t.Fatalf("refused migrations must leave the binding untouched: %+v, %v", resolved, err)
+	}
+}
+
+// Redis 存储缺前缀不能构造；完成 / 中止迁移对未知游戏服报 ErrRouteMissing。
+func TestMigrationOperationsRefuseUnknownGames(t *testing.T) {
+	ctx := context.Background()
+	if _, err := NewRedisStores(nil, "  "); err == nil || !strings.Contains(err.Error(), "key prefix is required") {
+		t.Fatalf("NewRedisStores with a blank prefix = %v", err)
+	}
+	service, _ := newService(t)
+	if _, err := service.CompleteMigration(ctx, 999, 1); !errors.Is(err, ErrRouteMissing) {
+		t.Fatalf("CompleteMigration for an unknown game = %v", err)
+	}
+	if _, err := service.AbortMigration(ctx, 999, 1); !errors.Is(err, ErrRouteMissing) {
+		t.Fatalf("AbortMigration for an unknown game = %v", err)
+	}
+}
+
+// A retried CompleteMigration at the same epoch is a replay, and is reported
+// as one. Counting it as an acceptance makes the migration rate read higher
+// than the number of migrations, which is the number operators alarm on.
+func TestARetriedCompletionIsReportedAsAReplay(t *testing.T) {
+	sink := servicemetrics.NewRecorder()
+	service, _ := newService(t, func(cfg *Config) { cfg.Metrics = sink })
+	ctx := context.Background()
+	binding := bind(t, service, 7, 100)
+	moving, err := service.BeginMigration(ctx, 7, 200, binding.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := service.CompleteMigration(ctx, 7, moving.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := service.CompleteMigration(ctx, 7, done.Epoch)
+	if err != nil || again.Epoch != done.Epoch || again.GlobalSID != 200 {
+		t.Fatalf("retried completion: err=%v binding=%+v", err, again)
+	}
+	if got := sink.Count("accepted:complete_migration"); got != 1 {
+		t.Errorf("one migration completed reported %d accepts; %s", got, sink.Events())
+	}
+	if got := sink.Count("replayed:complete_migration"); got != 1 {
+		t.Errorf("a retried completion reported %d replays; %s", got, sink.Events())
+	}
+}
+
+func TestCompleteMigrationReplaysTheOriginalEpoch(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	initial := bind(t, s, 1, 10)
+	moving, err := s.BeginMigration(ctx, 1, 20, initial.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.CompleteMigration(ctx, 1, moving.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := s.CompleteMigration(ctx, 1, moving.Epoch)
+	if err != nil || replay != first {
+		t.Fatalf("original completion retry = %+v %v, first=%+v", replay, err, first)
+	}
+	second, err := s.BeginMigration(ctx, 1, 30, first.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CompleteMigration(ctx, 1, moving.Epoch); !errors.Is(err, ErrRouteStale) {
+		t.Fatalf("old completion crossed new migration: %v", err)
+	}
+	if _, err = s.AbortMigration(ctx, 1, second.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CompleteMigration(ctx, 1, second.Epoch); !errors.Is(err, ErrRouteStale) {
+		t.Fatalf("aborted migration reported completed: %v", err)
+	}
+}
+
+func TestRouteCodecRequiresCompletionReceiptFormat(t *testing.T) {
+	codec := routeCodec{}
+	if _, err := codec.Decode([]byte(`{"GameSID":1,"Epoch":2}`)); err == nil {
+		t.Fatal("legacy route accepted")
+	}
+	want := RouteBinding{Epoch: 3, CompletedFromEpoch: 2}
+	raw, err := codec.Encode(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := codec.Decode(raw)
+	if err != nil || got != want {
+		t.Fatalf("round trip: %+v %v", got, err)
 	}
 }

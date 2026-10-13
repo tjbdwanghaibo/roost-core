@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
-
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 type clock struct {
@@ -469,5 +473,253 @@ func TestANilReporterChangesNothing(t *testing.T) {
 	}
 	if err := dir.Release(ctx, "Alice", "acct-1"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// contendedStore is a versionstore.Store whose Update loses its first
+// compare-and-set: the mutate callback runs once against the current value,
+// that attempt is discarded as if another writer got in between, and the
+// real store then re-reads and re-applies it. That is the retry the
+// versionstore contract permits ("Mutate may be called more than once"), and
+// kit's MemoryStore — which the rest of this package's tests run on — never
+// exercises it.
+type contendedStore struct {
+	versionstore.Store[string, Entry]
+}
+
+func (s contendedStore) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Entry], match func(Entry) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Entry]).DeleteIf(ctx, key, expect, match)
+}
+
+func (c contendedStore) Update(ctx context.Context, key string, mutate versionstore.Mutate[Entry]) (versionstore.Versioned[Entry], bool, error) {
+	current, found, err := c.Store.Get(ctx, key)
+	if err != nil {
+		return versionstore.Versioned[Entry]{}, false, err
+	}
+	if _, _, err := mutate(current.Value, found); err != nil {
+		return versionstore.Versioned[Entry]{}, false, err
+	}
+	return c.Store.Update(ctx, key, mutate)
+}
+
+// An operation is accepted once however many times its compare-and-set has
+// to retry. Reporting from inside the mutate callback counts attempts, not
+// outcomes, so under contention the accept rate reads higher than the number
+// of reservations that exist — the metric operators size the directory by.
+func TestAContendedWriteIsAcceptedOnce(t *testing.T) {
+	sink := servicemetrics.NewRecorder()
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	dir, err := New(contendedStore{versionstore.NewMemoryStore[string, Entry]()}, Config{
+		Normalize: NormalizeLower, DefaultTTL: time.Minute, Now: c.Now, Metrics: sink,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	claim, err := dir.Reserve(ctx, "Alice", "acct-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.Count("accepted:reserve"); got != 1 {
+		t.Errorf("one reservation that retried its compare-and-set reported %d accepts; %s", got, sink.Events())
+	}
+	if _, err := dir.Commit(ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.Count("accepted:commit"); got != 1 {
+		t.Errorf("one commit that retried its compare-and-set reported %d accepts; %s", got, sink.Events())
+	}
+	// Replays and refusals do not write, so they never retry — but they must
+	// still be counted exactly once when the decision is made outside the
+	// callback.
+	if _, err := dir.Reserve(ctx, "Alice", "acct-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.Count("replayed:reserve"); got != 1 {
+		t.Errorf("replayed:reserve = %d, want 1; %s", got, sink.Events())
+	}
+	if _, err := dir.Reserve(ctx, "Alice", "acct-2", 0); err == nil {
+		t.Fatal("second owner reserved a committed key")
+	}
+	if got := sink.Count("refused:reserve:taken"); got != 1 {
+		t.Errorf("refused:reserve:taken = %d, want 1; %s", got, sink.Events())
+	}
+}
+
+// Redis 状态缺前缀 / 带 ttl 不能构造；Commit 拒绝空键、空令牌、从未预留的键；Cancel 拒绝空键；Release 拒绝空所有者。
+func TestDirectoryRefusesBlankIdentifiersAndUnknownClaims(t *testing.T) {
+	ctx := context.Background()
+	if _, err := NewRedisState(nil, "  ", 0); err == nil || !strings.Contains(err.Error(), "key prefix is required") {
+		t.Fatalf("NewRedisState with a blank prefix = %v", err)
+	}
+	if _, err := NewRedisState(nil, "dir", time.Minute); err == nil || !strings.Contains(err.Error(), "ttl is not supported") {
+		t.Fatalf("NewRedisState with a ttl = %v", err)
+	}
+	dir, _ := newDirectory(t)
+	if _, err := dir.Commit(ctx, Claim{Token: "t"}); !errors.Is(err, ErrKeyEmpty) {
+		t.Fatalf("Commit without a key = %v", err)
+	}
+	if _, err := dir.Commit(ctx, Claim{Key: "alice"}); !errors.Is(err, ErrClaimNotFound) {
+		t.Fatalf("Commit without a token = %v", err)
+	}
+	if _, err := dir.Commit(ctx, Claim{Key: "alice", Token: "ghost", Owner: "o"}); !errors.Is(err, ErrClaimNotFound) {
+		t.Fatalf("Commit of a never-reserved key = %v", err)
+	}
+	if err := dir.Cancel(ctx, Claim{Token: "t"}); !errors.Is(err, ErrKeyEmpty) {
+		t.Fatalf("Cancel without a key = %v", err)
+	}
+	if err := dir.Release(ctx, "alice", ""); !errors.Is(err, ErrOwnerEmpty) {
+		t.Fatalf("Release without an owner = %v", err)
+	}
+}
+
+func TestReleaseCannotBypassReservationToken(t *testing.T) {
+	dir, _ := newDirectory(t)
+	ctx := context.Background()
+	claim, err := dir.Reserve(ctx, "name", "owner", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.Release(ctx, "name", "owner"); !errors.Is(err, ErrClaimStale) {
+		t.Fatalf("reserved name released without token: %v", err)
+	}
+	if _, err := dir.Commit(ctx, claim); err != nil {
+		t.Fatalf("reservation lost: %v", err)
+	}
+}
+
+func TestCASConflictHasRetryableDirectoryCode(t *testing.T) {
+	if code, _ := Error(versionstore.ErrConflict); code != 530107 {
+		t.Fatalf("CAS conflict classified as %d, want 530107", code)
+	}
+}
+func TestReleaseExpiredReservationIsNoOp(t *testing.T) {
+	dir, clock := newDirectory(t)
+	ctx := context.Background()
+	if _, err := dir.Reserve(ctx, "name", "old", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(2 * time.Minute)
+	if err := dir.Release(ctx, "name", "new"); err != nil {
+		t.Fatalf("expired reservation conflicts: %v", err)
+	}
+}
+
+type review3DeleteGate struct {
+	versionstore.Store[string, Entry]
+	once             atomic.Bool
+	entered, release chan struct{}
+}
+
+func (s *review3DeleteGate) Delete(ctx context.Context, k string, v versionstore.Versioned[Entry]) error {
+	s.waitDelete()
+	return s.Store.Delete(ctx, k, v)
+}
+
+func (s *review3DeleteGate) DeleteIf(ctx context.Context, k string, v versionstore.Versioned[Entry], match func(Entry) bool) error {
+	s.waitDelete()
+	conditional, ok := s.Store.(versionstore.ConditionalDeleter[string, Entry])
+	if !ok {
+		return fmt.Errorf("fixture requires ConditionalDeleter")
+	}
+	return conditional.DeleteIf(ctx, k, v, match)
+}
+
+func (s *review3DeleteGate) waitDelete() {
+	if s.once.CompareAndSwap(false, true) {
+		close(s.entered)
+		<-s.release
+	}
+}
+func TestDirectoryDeleteCannotRemoveRecreatedOwner(t *testing.T) {
+	for _, backend := range []string{"memory", "redis"} {
+		for _, operation := range []string{"cancel", "release"} {
+			for _, nextOwner := range []Owner{"owner-b", "owner-a"} {
+				t.Run(backend+"/"+operation+"/"+string(nextOwner), func(t *testing.T) {
+					var state versionstore.Store[string, Entry] = versionstore.NewMemoryStore[string, Entry]()
+					if backend == "redis" {
+						addr := os.Getenv("ROOST_REVIEW_REDIS")
+						if addr == "" {
+							t.Skip("set ROOST_REVIEW_REDIS for isolated Redis")
+						}
+						client, e := driver.NewClient(fredis.DefaultConfig(addr))
+						if e != nil {
+							t.Fatal(e)
+						}
+						defer client.Close()
+						state, e = NewRedisState(client, fmt.Sprintf("directory-review3:%d", time.Now().UnixNano()), 0)
+						if e != nil {
+							t.Fatal(e)
+						}
+					}
+					gate := &review3DeleteGate{Store: state, entered: make(chan struct{}), release: make(chan struct{})}
+					dir, e := New(gate, Config{Normalize: NormalizeLower, DefaultTTL: time.Minute})
+					if e != nil {
+						t.Fatal(e)
+					}
+					ctx := context.Background()
+					a, e := dir.Reserve(ctx, "Hero", "owner-a", time.Minute)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if operation == "release" {
+						if _, e = dir.Commit(ctx, a); e != nil {
+							t.Fatal(e)
+						}
+					}
+					done := make(chan error, 1)
+					go func() {
+						if operation == "cancel" {
+							done <- dir.Cancel(ctx, a)
+						} else {
+							done <- dir.Release(ctx, "Hero", "owner-a")
+						}
+					}()
+					<-gate.entered
+					if operation == "cancel" {
+						e = dir.Cancel(ctx, a)
+					} else {
+						e = dir.Release(ctx, "Hero", "owner-a")
+					}
+					if e != nil {
+						close(gate.release)
+						<-done
+						t.Fatal(e)
+					}
+					b, e := dir.Reserve(ctx, "Hero", nextOwner, time.Minute)
+					if e != nil {
+						close(gate.release)
+						<-done
+						t.Fatal(e)
+					}
+					if operation == "release" {
+						if _, e = dir.Commit(ctx, b); e != nil {
+							close(gate.release)
+							<-done
+							t.Fatal(e)
+						}
+					}
+					close(gate.release)
+					oldErr := <-done
+					got, found, e := dir.Lookup(ctx, "Hero")
+					if e != nil {
+						t.Fatal(e)
+					}
+					if !found || got.Owner != nextOwner || got.Token != b.Token {
+						t.Fatalf("old %s deleted new owner on %s: found=%v entry=%+v oldErr=%v", operation, backend, found, got, oldErr)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestDirectoryRequiresConditionalDelete(t *testing.T) {
+	state := struct {
+		versionstore.Store[string, Entry]
+	}{versionstore.NewMemoryStore[string, Entry]()}
+	if _, err := New(state, Config{Normalize: NormalizeLower, DefaultTTL: time.Minute}); err == nil {
+		t.Fatal("constructor accepted a store that loses identity deletion capability")
 	}
 }

@@ -1,6 +1,9 @@
+// 排行成员编码：字节序即排名序、定宽字段、往返与确定性、畸形成员逐项拒绝、请求环的升级与畸形拒绝。
+
 package rank
 
 import (
+	"context"
 	"math"
 	"sort"
 	"strings"
@@ -113,25 +116,6 @@ func TestEntryRoundTripsAndBriefDoesNotAffectOrder(t *testing.T) {
 	}
 }
 
-// A member that cannot be parsed is an error, never a zero score. Decoding
-// garbage to a zero and carrying on is how a corrupt row becomes a wrong
-// write, and it is also what manufactured the orphan members that silently
-// truncated season archives in the implementation this replaces.
-func TestDecodeRejectsMalformedMembers(t *testing.T) {
-	for _, raw := range []string{
-		"",
-		"only:three:fields:here",
-		"zz" + strings.Repeat("0", 14) + ":0000000000000000:0000000000000000:00000000000000000001:",
-		"0000000000000000:0000000000000000:0000000000000000:notanumber:",
-		"0000000000000000:0000000000000000:0000000000000000:00000000000000000001:!!!notbase64",
-		strings.Repeat("a", 200),
-	} {
-		if _, err := decodeEntry(raw); err == nil {
-			t.Fatalf("malformed member %q decoded without error", raw)
-		}
-	}
-}
-
 // Two owners with the same value and the same tie must still order
 // deterministically, and the same input must always encode identically —
 // otherwise a re-submitted identical score would create a second member.
@@ -142,5 +126,77 @@ func TestEncodingIsDeterministic(t *testing.T) {
 		if again := encodeEntry(score); again != first {
 			t.Fatalf("encoding is not deterministic: %q then %q", first, again)
 		}
+	}
+}
+
+// decodeEntry is strict on purpose: a member it cannot parse is an error,
+// never a zero score, because a zero score that is written back would replace
+// a real one. Each way a stored member can be malformed is pinned.
+func TestDecodeEntryRefusesEachMalformedMember(t *testing.T) {
+	good := encodeEntry(Score{OwnerID: 42, Value: 900, Tie: 7, Brief: []byte("brief")})
+	decoded, err := decodeEntry(good)
+	if err != nil || decoded.OwnerID != 42 || decoded.Value != 900 || decoded.Tie != 7 || string(decoded.Brief) != "brief" {
+		t.Fatalf("round trip = %+v, %v", decoded, err)
+	}
+	parts := strings.Split(good, memberFieldSeparator)
+	cases := map[string]string{
+		"too few fields":     strings.Join(parts[:4], memberFieldSeparator),
+		"too many fields":    good + memberFieldSeparator + "extra",
+		"value not hex":      strings.Join(append([]string{"zz"}, parts[1:]...), memberFieldSeparator),
+		"tie not hex":        strings.Join([]string{parts[0], "zz", parts[2], parts[3], parts[4]}, memberFieldSeparator),
+		"brief not base64":   strings.Join([]string{parts[0], parts[1], parts[2], parts[3], "!!!"}, memberFieldSeparator),
+		"empty":              "",
+		"owner not a number": "0000000000000000:0000000000000000:0000000000000000:notanumber:",
+		"one long token":     strings.Repeat("a", 200),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := decodeEntry(raw)
+			if err == nil {
+				t.Fatalf("malformed member %q decoded to %+v", raw, got)
+			}
+			if got.OwnerID != 0 || got.Value != 0 || got.Tie != 0 || len(got.Brief) != 0 {
+				t.Fatalf("a failed decode must not hand back a partial score: %+v", got)
+			}
+		})
+	}
+}
+
+func TestLegacyRequestRingUpgradesWithoutDroppingPriorIDs(t *testing.T) {
+	s, f := newStore(t)
+	ctx := context.Background()
+	submit(t, s, 1, 10, UpdateSet, "")
+	f.mu.Lock()
+	f.hset(s.ownerKey(arena()), "1:applied", "old-a,old-b")
+	f.mu.Unlock()
+	submit(t, s, 1, 1, UpdateAdd, "new,comma")
+	replay := submit(t, s, 1, 100, UpdateAdd, "old-b")
+	if replay.Score.Value != 11 {
+		t.Fatalf("legacy proof lost: %+v", replay)
+	}
+	replay = submit(t, s, 1, 100, UpdateAdd, "new,comma")
+	if replay.Score.Value != 11 {
+		t.Fatal(replay)
+	}
+	if err := s.Remove(ctx, arena(), 1); err != nil {
+		t.Fatal(err)
+	}
+	fresh := submit(t, s, 1, 7, UpdateAdd, "new,comma")
+	if fresh.Score.Value != 7 {
+		t.Fatalf("removed owner retained ledger: %+v", fresh)
+	}
+}
+func TestMalformedRequestRingFailsClosed(t *testing.T) {
+	s, f := newStore(t)
+	submit(t, s, 1, 10, UpdateSet, "")
+	f.mu.Lock()
+	f.hset(s.ownerKey(arena()), "1:applied_v2", "invalid-json")
+	f.mu.Unlock()
+	if _, err := s.Submit(context.Background(), arena(), Score{OwnerID: 1, Value: 5}, UpdateAdd, "retry"); err == nil {
+		t.Fatal("malformed ledger silently discarded")
+	}
+	page, err := s.Page(context.Background(), arena(), 0, 1)
+	if err != nil || len(page.Entries) != 1 || page.Entries[0].Score.Value != 10 {
+		t.Fatal(page, err)
 	}
 }

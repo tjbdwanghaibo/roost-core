@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"testing"
+	"time"
+
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
-	"os"
-	"testing"
-	"time"
 )
 
 func revn06Redis() string {
@@ -360,8 +361,7 @@ func mustSlot(t *testing.T, cfg Config, accountID string) Slot {
 	return slot.Value
 }
 
-// A foreign RESERVATION is not final: it lapses, and the plan can still
-// complete. The slot and its proof stay, exactly as RR-20260929-19 pinned.
+// A foreign RESERVATION is not final: it lapses, and the plan can still complete. The slot and its proof stay.
 func TestNameReservedElsewhereKeepsThePendingSlot(t *testing.T) {
 	s, _, cfg, roles, a := losingPlan(t)
 	ctx := context.Background()
@@ -588,11 +588,8 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere(t *t
 	}
 }
 
-// 维护者第七轮决定（O37，2026-10-06）：同一行的 free 格也释放。计划还没 admitted、它的名字已经
-// 无人持有（预约过期或从未预约成功）时，换名请求释放 slot 并用新名字建角，与 res-else 格一致。
-//
-// 旧行为（free 格 = limit）：答 ErrRoleLimit、slot 保留——玩家只能先用旧名字重试一次才能换名，
-// 而这个计划 admitted 之前什么都没发生，释放不会留下角色。
+// 同一行的 free 格也释放：计划还没 admitted、它的名字已经无人持有（预约过期或从未预约成功）时，换名请求释放 slot 并用新名字建角，
+// 与 res-else 格一致（这个计划 admitted 之前什么都没发生，释放不会留下角色）。
 func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
 	s, clock, cfg := revn06AccountService(t, func(c *Config) {
@@ -628,4 +625,77 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree(t *testing.T) {
 	if got := sink.Count("dropped:create_role.plan_released"); got != 1 {
 		t.Fatalf("plan release counted %d times; %s", got, sink.Events())
 	}
+}
+
+func TestVerifiedIdentityEncodingIsInjective(t *testing.T) {
+	s, _, _ := newService(t, func(c *Config) {
+		c.Verifier = VerifierFunc(func(_ context.Context, i Identity) (Verified, error) {
+			switch i.Credential {
+			case "one":
+				return Verified{Channel: "vendor:a", OpenID: "b"}, nil
+			case "two":
+				return Verified{Channel: "vendor", OpenID: "a:b"}, nil
+			}
+			return Verified{}, fmt.Errorf("invalid credential")
+		})
+	})
+	ctx := context.Background()
+	first, err := s.Login(ctx, Identity{Channel: "submitted", OpenID: "one", Credential: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Login(ctx, Identity{Channel: "submitted", OpenID: "two", Credential: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("distinct verified identities merged: first=%s/%s second returned=%s/%s account=%s", first.Channel, first.OpenID, second.Channel, second.OpenID, first.ID)
+	}
+}
+
+type reviewSlotAppliedError struct {
+	versionstore.Store[string, Slot]
+	failed bool
+}
+
+func (s *reviewSlotAppliedError) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
+	v, saved, err := s.Store.Update(ctx, k, m)
+	if err == nil && saved && v.Value.PlayerID != 0 && !s.failed {
+		s.failed = true
+		return versionstore.Versioned[Slot]{}, false, fmt.Errorf("injected reply lost after slot commit")
+	}
+	return v, saved, err
+}
+func TestLostSlotReplyCannotDeleteCommittedRole(t *testing.T) {
+	s, _, cfg := newService(t, func(c *Config) { c.Slots = &reviewSlotAppliedError{Store: c.Slots} })
+	ctx := context.Background()
+	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "slot", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A repair may reconcile the applied write and return success. Either
+	// outcome must preserve a committed slot's referenced role.
+	created, createErr := s.CreateRole(ctx, a.ID, 1, "hero")
+	if createErr != nil || created.PlayerID == 0 {
+		t.Fatalf("applied slot was not reconciled: %+v %v", created, createErr)
+	}
+	slot, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || slot.Value.PlayerID == 0 {
+		t.Fatal("committed slot is missing")
+	}
+	_, roleFound, err := cfg.Roles.Get(ctx, slot.Value.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, retryErr := s.CreateRole(ctx, a.ID, 1, "hero")
+	if !roleFound || retryErr != nil || retried.PlayerID != created.PlayerID {
+		t.Fatalf("committed slot v%d refers to deleted role %d; retry=%v", slot.Version, slot.Value.PlayerID, retryErr)
+	}
+}
+
+func (s *reviewSlotAppliedError) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }

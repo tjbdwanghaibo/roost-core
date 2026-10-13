@@ -2,10 +2,8 @@
 
 package mail
 
-// N06 S6 复核（2026-10-05）：RR-20260929-16 / RR-20261001-02 的同 RequestID 恢复在
-// 真实 Redis 信封存储上的组合——Create 未落地 / 已落地但回复丢失两种未知结果，
-// 定向与广播两种受众（广播无收件人、无附件，正是 nil 与空切片的形状）。单测里的
-// nilToEmptyEnvelopes 只模拟了一种解码；这里用真实 JSON 往返与 SETNX 回读。
+// 同 RequestID 恢复在真实 Redis 信封存储上的组合：Create 未落地 / 已落地但回复丢失两种未知结果，定向与广播两种受众（广播无收件人、
+// 无附件，正是 nil 与空切片的形状），用真实 JSON 往返与 SETNX 回读。
 //
 //	REDIS_ADDR=<隔离 Redis> go test -tags integration ./service/mail/ -run IntegrationSendRecovery
 

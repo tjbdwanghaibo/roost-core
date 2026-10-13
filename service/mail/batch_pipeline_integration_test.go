@@ -15,8 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
-// RR-20260929-33: real standalone and Cluster reads, including a missing
-// command before WRONGTYPE (the pipeline aggregate may report only Nil).
+// Real standalone and Cluster reads, including a missing command before WRONGTYPE (the pipeline aggregate may report only Nil).
 func TestIntegrationEnvelopeBatchAcrossSlots(t *testing.T) {
 	for _, cluster := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cluster_%v", cluster), func(t *testing.T) {

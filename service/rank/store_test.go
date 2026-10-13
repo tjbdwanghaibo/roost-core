@@ -4,14 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"os"
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -605,5 +611,216 @@ func TestSubmitContentionReportsCodeConflict(t *testing.T) {
 	}
 	if !errors.Is(err, ErrConflictSentinel) {
 		t.Fatal("the exported sentinel no longer matches the conflict error")
+	}
+}
+
+func reviewRankStore(t *testing.T) *RedisStore {
+	t.Helper()
+	if addr := os.Getenv("ROOST_REVIEW_REDIS"); addr != "" {
+		c, err := driver.NewClient(fredis.DefaultConfig(addr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := NewRedisStore(c, RedisConfig{Prefix: fmt.Sprintf("service-review:%d", time.Now().UnixNano())})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Reset(context.Background(), arena()); _ = c.Close() })
+		t.Log("real Redis backend")
+		return s
+	}
+	s, _ := newStore(t)
+	return s
+}
+
+func TestCommaRequestIsIdempotent(t *testing.T) {
+	s := reviewRankStore(t)
+	first := submit(t, s, 1, 10, UpdateAdd, "order,one")
+	second := submit(t, s, 1, 10, UpdateAdd, "order,one")
+	if second.Score.Value != first.Score.Value {
+		t.Fatalf("duplicate request applied twice: %d -> %d", first.Score.Value, second.Score.Value)
+	}
+}
+func TestAroundAcceptedMaximumRadius(t *testing.T) {
+	s := reviewRankStore(t)
+	submit(t, s, 1, 10, UpdateSet, "")
+	if _, err := s.Around(context.Background(), arena(), 1, MaxPageSize/2); err != nil {
+		t.Fatalf("accepted radius rejects delegated Page: %v", err)
+	}
+}
+
+type reviewPausedSwap struct {
+	RedisClient
+	entered, release chan struct{}
+	paused           atomic.Bool
+}
+
+func (c *reviewPausedSwap) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if script == swapScript && fmt.Sprint(args[3]) == "a" && c.paused.CompareAndSwap(false, true) {
+		close(c.entered)
+		<-c.release
+	}
+	return c.RedisClient.Eval(ctx, script, keys, args...)
+}
+func TestUnchangedMemberCASProtectsRequestRing(t *testing.T) {
+	s := reviewRankStore(t)
+	submit(t, s, 1, 100, UpdateSet, "")
+	gate := &reviewPausedSwap{RedisClient: s.client, entered: make(chan struct{}), release: make(chan struct{})}
+	s.client = gate
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Submit(context.Background(), arena(), Score{OwnerID: 1, Value: 90}, UpdateMax, "a")
+		done <- err
+	}()
+	<-gate.entered
+	_, err := s.Submit(context.Background(), arena(), Score{OwnerID: 1, Value: 80}, UpdateMax, "b")
+	close(gate.release)
+	if aerr := <-done; err != nil || aerr != nil {
+		t.Fatal(err, aerr)
+	}
+	submit(t, s, 1, 50, UpdateSet, "")
+	replay := submit(t, s, 1, 80, UpdateMax, "b")
+	if replay.Score.Value != 50 {
+		t.Fatalf("concurrent no-op forgot successful request b: value=%d want=50", replay.Score.Value)
+	}
+}
+
+func TestOverflowDoesNotChangeScoreOrConsumeRequest(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		initial, delta, safe int64
+	}{{"positive", math.MaxInt64, 1, -1}, {"negative", math.MinInt64, -1, 1}} {
+		t.Run(test.name, func(t *testing.T) {
+			s := reviewRankStore(t)
+			ctx := context.Background()
+			if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: test.initial, Tie: 7, Brief: []byte("original")}, UpdateSet, ""); err != nil {
+				t.Fatal(err)
+			}
+			before, _, err := s.Rank(ctx, arena(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: test.delta, Tie: 8, Brief: []byte("rejected")}, UpdateAdd, "same-request"); !errors.Is(err, ErrScoreInvalid) {
+				t.Fatal(err)
+			}
+			after, _, err := s.Rank(ctx, arena(), 1)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal(before, after, err)
+			}
+			got, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: test.safe}, UpdateAdd, "same-request")
+			if err != nil || got.Score.Value != test.initial+test.safe {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}
+
+func TestConcurrentAddsCannotWrapAfterCASRetry(t *testing.T) {
+	s := reviewRankStore(t)
+	ctx := context.Background()
+	if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: math.MaxInt64 - 1}, UpdateSet, ""); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{"a", "b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: 1}, UpdateAdd, id)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	success, rejected := 0, 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if errors.Is(err, ErrScoreInvalid) {
+			rejected++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	got, found, err := s.Rank(ctx, arena(), 1)
+	if err != nil || !found || got.Score.Value != math.MaxInt64 || success != 1 || rejected != 1 {
+		t.Fatal(got, found, err, success, rejected)
+	}
+}
+
+// shapedRedis answers the owner-read or swap script with an arbitrary value
+// so the store's shape checks can be exercised; everything else goes to the
+// real fake.
+type shapedRedis struct {
+	*fakeRedis
+	ownerShape any
+	swapShape  any
+}
+
+func (r *shapedRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if r.swapShape != nil && script == swapScript {
+		return r.swapShape, nil
+	}
+	if r.ownerShape != nil && strings.Contains(script, `ARGV[1] .. ":applied"`) {
+		return r.ownerShape, nil
+	}
+	return r.fakeRedis.Eval(ctx, script, keys, args...)
+}
+
+// Lua 脚本返回的不是两元素数组时，单读与换分都报“unexpected ... result”，而不是对错误形状做索引。
+func TestStoreRefusesLuaResultsOfTheWrongShape(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	build := func(t *testing.T, redis *shapedRedis) *RedisStore {
+		t.Helper()
+		store, err := NewRedisStore(redis, RedisConfig{Prefix: "test:rank", Now: func() time.Time { return now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	ownerStore := build(t, &shapedRedis{fakeRedis: newFakeRedis(), ownerShape: "bogus"})
+	if _, _, err := ownerStore.Rank(ctx, arena(), 7); err == nil || !strings.Contains(err.Error(), "unexpected owner read result string") {
+		t.Fatalf("Rank with a malformed owner read = %v", err)
+	}
+	swapStore := build(t, &shapedRedis{fakeRedis: newFakeRedis(), swapShape: []any{int64(1)}})
+	if _, err := swapStore.Submit(ctx, arena(), Score{OwnerID: 7, Value: 10}, UpdateMax, "r-1"); err == nil || !strings.Contains(err.Error(), "unexpected swap result") {
+		t.Fatalf("Submit with a malformed swap result = %v", err)
+	}
+	healthy := build(t, &shapedRedis{fakeRedis: newFakeRedis()})
+	if _, err := healthy.Submit(ctx, arena(), Score{OwnerID: 7, Value: 10}, UpdateMax, "r-1"); err != nil {
+		t.Fatalf("Submit through the untouched fake = %v", err)
+	}
+}
+
+// Remove / Rank 拒绝 owner 0；无成员记录的条目查询报 ErrNotFound。
+func TestOwnerZeroAndMissingMembersAreRefused(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newStore(t)
+	if err := store.Remove(ctx, arena(), 0); !errors.Is(err, ErrOwnerInvalid) {
+		t.Fatalf("Remove(owner 0) = %v", err)
+	}
+	if _, _, err := store.Rank(ctx, arena(), 0); !errors.Is(err, ErrOwnerInvalid) {
+		t.Fatalf("Rank(owner 0) = %v", err)
+	}
+	if _, err := store.entryFor(ctx, "test:rank:z", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("entryFor without a member = %v", err)
+	}
+}
+
+func TestMissingBusinessClockUsesProcessOffset(t *testing.T) {
+	old := businessclock.Offset()
+	businessclock.SetOffset(24 * time.Hour)
+	t.Cleanup(func() { businessclock.SetOffset(old) })
+	s, err := NewRedisStore(newFakeRedis(), RedisConfig{Prefix: "clock-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta := s.cfg.Now().Sub(time.Now()); delta < 23*time.Hour || delta > 25*time.Hour {
+		t.Fatalf("default business clock ignores process offset: %s", delta)
 	}
 }

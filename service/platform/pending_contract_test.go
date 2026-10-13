@@ -155,12 +155,8 @@ func TestBackoffMovesAnOrderInTheIndexIntegration(t *testing.T) {
 	}
 }
 
-// RR-20260919-07：一条读不出来 / 已经不存在的成员不能永久占住页里的一个槽。
-//
-// 索引进了存储之后，读的时候不再逐条查订单，所以"一条坏记录让整页失败"没有了。
-// 剩下的那一半是：一个**没有订单记录**的成员（删除的两步之间崩过一次）会被每一
-// 页读到、每一次都得到 ErrOrderInvalid，然后继续留在集合里——limit 有多小，
-// 它就占掉多大比例的预算。所以循环遇到"这个 id 根本没有订单"时要把它退休掉。
+// 一个没有订单记录的索引成员（删除的两步之间崩过一次）不能永久占住页里的一个槽：循环遇到“这个 id 根本没有订单”时把它退休。
+// 历史：RR-20260919-07。
 func TestAnIndexEntryWithNoOrderIsRetiredIntegration(t *testing.T) {
 	orders, client, prefix := redisOrdersForTest(t)
 	ctx := context.Background()
