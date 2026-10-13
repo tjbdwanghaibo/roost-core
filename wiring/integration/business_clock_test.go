@@ -16,10 +16,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/match"
 )
 
-// D-L3 第八轮（维护者决定）：match 票据时间、chat 展示给玩家的消息时间、account 的创建与登录时间是
-// 业务时间，跟着 time.logic_offset 走；chat 保留期清理（空间回收）、会话 token 有效期是系统时间，
-// 不受偏移影响。这里按部署的样子走：Mod 从配置 Init、对着真实 Redis Provide，偏移 +24h。
-// 修前三个 Mod 都不给服务注入业务时钟，服务退回 time.Now，配了偏移也照真实时间打戳。
+// 业务时间与系统时间的边界（维护者决定 D-L3）：match 票据时间、chat 展示给玩家的消息时间、account 的创建与登录时间跟着
+// time.logic_offset 走；chat 保留期清理（空间回收）、会话 token 有效期是系统时间，不受偏移影响。按部署的样子走：Mod 从配置 Init、
+// 对着真实 Redis Provide，偏移 +24h。
 func TestOffsetMovesMatchChatAndAccountBusinessTimesButNotRetentionOrSessions(t *testing.T) {
 	const offset = 24 * time.Hour
 	c := client(t)

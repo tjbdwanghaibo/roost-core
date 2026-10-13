@@ -18,13 +18,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 )
 
-// app resolves a Mod's DependsOn by Mod NAME. The generated ClientMods used
-// to depend on kitmods.ModBus — the name of the bus CAPABILITY, which no Mod
-// is called — so a process assembling a client next to the NATS mod failed at
-// startup with `unknown mod dependency "bus"`. Every generated client had this
-// and nothing here ran a real app to notice; a generated game template did
-// (roost-codegen U-0024). The dependency now names the Mod that publishes the
-// bus, and this test pins that for every client this module ships.
+// app 按 Mod 名解析 DependsOn：生成的 ClientMod 依赖发布总线的 NATS Mod，而不是总线的能力名（没有 Mod 叫 "bus"，依赖它启动即报
+// unknown mod dependency）。这里对本模块发出的每个客户端钉住这一点。
 func TestEveryClientModDependsOnTheNATSMod(t *testing.T) {
 	clients := map[string]app.ModDependencyProvider{
 		"account":  account.NewClientMod(),

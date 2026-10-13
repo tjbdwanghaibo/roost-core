@@ -44,12 +44,8 @@ func client(t *testing.T) fredis.IRedis {
 	return c
 }
 
-// prefix is unique per test run, so a failed run leaves nothing that affects
-// the next one and two runs can share a Redis.
-//
-// OPEN-ITEMS B45：唯一前缀只保证互不影响，不保证不留垃圾——之前每跑一次整包在目标 Redis 留下
-// 约 90 个键，大部分没有 TTL。这里给每个前缀注册 Cleanup，用例结束时删掉前缀下的全部键；
-// 它在调用方随后注册的 mod.Stop 之后执行（Cleanup 后进先出），Mod 停下后不会再写。
+// prefix 每次运行唯一，失败的运行不影响下一次，两次运行可以共用一个 Redis。唯一前缀只保证互不影响、不保证不留垃圾，所以给每个前缀
+// 注册 Cleanup，用例结束时删掉前缀下的全部键；它在调用方随后注册的 mod.Stop 之后执行（Cleanup 后进先出），Mod 停下后不会再写。
 func prefix(t *testing.T, name string) string {
 	t.Helper()
 	p := fmt.Sprintf("itest:%s:%d", name, time.Now().UnixNano())
