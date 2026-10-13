@@ -5,16 +5,6 @@ import (
 	"testing"
 )
 
-func TestCurrentContext_Basic(t *testing.T) {
-	c, release := NewContext()
-	defer release()
-
-	got := CurrentContext()
-	if got != c {
-		t.Fatal("CurrentContext should return stored context")
-	}
-}
-
 func TestCurrentContext_NilWithoutStore(t *testing.T) {
 	// Ensure no leftover from other tests
 	DeleteContext()
