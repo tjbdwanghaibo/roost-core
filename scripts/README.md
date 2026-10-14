@@ -9,8 +9,8 @@ Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI
 | 路径 | 做什么 | 谁在用 |
 | --- | --- | --- |
 | `pretag.sh <version>` | 发版前的门禁：tag 与 module 主版本一致、tag 未存在、无 replace、工作树干净、`GOWORK=off` 下 build/vet/tidy/test 全过、发布清单声明的版本等于要打的 tag | 人工在打 tag 之前跑；`.github/workflows/release.yml` 在 tag 之后再校验一次清单 |
-| `gapmap.sh [--max N] [pkg...]` | 覆盖率采样：按包回退断言看测试是否真的会红，产出 `gapmap-report.md` | `.github/workflows/nightly-gapmap.yml` |
-| `gapmap/` | 上面那个脚本的 Python 部件（`classscan.py`、`revertsample.py`） | `gapmap.sh` |
+| `gapmap.sh [--max N] [--group G] [pkg...]` | 覆盖率采样：按包回退断言看测试是否真的会红，产出 `gapmap-report.md`；`--group framework\|infra\|codegen\|rest` 只取样一组（按目录前缀分，其余目录都归 rest） | `.github/workflows/nightly-gapmap.yml`（四组 matrix 并行） |
+| `gapmap/` | 上面那个脚本的 Python 部件（`classscan.py`、`revertsample.py`；`merge.py` 把各组报告合成一份 `gapmap-report.md`，缺组时写明并以 1 退出） | `gapmap.sh`、nightly-gapmap 的 merge job |
 | `perf/` | `nest-msg.sh` 跑 [Nest 消息吞吐](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-MSG-THROUGHPUT-2026-09-24.md)；`nest.sh` 跑 [Nest 调度与诊断微基准](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-COMPLETION-2026-09-24.md)；`sync.sh` 跑微基准；`sync-business.sh` 跑[隔离 demo](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-BUSINESS-LOAD-2026-09-23.md)；`sync-aoi.sh` 跑[1000/10000 AOI 双进程负载](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-AOI-1000-10000-2026-09-23.md) | 人工 |
 | `check-doc-anchors.py [路径...]` | Markdown 相对链接 + `#锚点` 核对（GitHub slug 规则），缺省查 `docs/framework`；根包 `TestTrackedMarkdownRelativeLinksResolve` 只查目标文件存在、不查锚点 | 改 [框架文档](../docs/framework/README.md) 后人工跑，须零断链 |
 

@@ -131,3 +131,56 @@ func readSelfContainedWorkflows(t *testing.T) ([]byte, error) {
 	t.Logf("workflows checked: %s", strings.Join(checked, ", "))
 	return joined, nil
 }
+
+// TestGapmapWorkflowGroupsMatchScript 钉住 nightly-gapmap 的分组三处一致：scripts/gapmap.sh
+// 的 GAPMAP_GROUPS、workflow matrix 的 group 列表、merge 步骤的 --groups。matrix 少一组，
+// 那组的包就没人取样；merge 少一组，那组的结果被静默丢掉——两种都不会让任何 job 变红。
+func TestGapmapWorkflowGroupsMatchScript(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("scripts", "gapmap.sh"))
+	if err != nil {
+		t.Fatalf("read gapmap.sh: %v", err)
+	}
+	workflow, err := os.ReadFile(filepath.Join(".github", "workflows", "nightly-gapmap.yml"))
+	if err != nil {
+		t.Fatalf("read nightly-gapmap.yml: %v", err)
+	}
+	find := func(src []byte, pattern, what string) []string {
+		t.Helper()
+		match := regexp.MustCompile(pattern).FindSubmatch(src)
+		if match == nil {
+			t.Fatalf("%s not found (pattern %s)", what, pattern)
+		}
+		return strings.Fields(strings.ReplaceAll(string(match[1]), ",", " "))
+	}
+	want := find(script, `(?m)^GAPMAP_GROUPS="([^"]+)"`, "GAPMAP_GROUPS in scripts/gapmap.sh")
+	matrix := find(workflow, `(?m)^\s+group: \[([^\]]+)\]`, "matrix group list in nightly-gapmap.yml")
+	merged := find(workflow, `merge\.py --groups "([^"]+)"`, "merge.py --groups in nightly-gapmap.yml")
+	if strings.Join(matrix, " ") != strings.Join(want, " ") {
+		t.Errorf("nightly-gapmap matrix groups %v != scripts/gapmap.sh GAPMAP_GROUPS %v", matrix, want)
+	}
+	if strings.Join(merged, " ") != strings.Join(want, " ") {
+		t.Errorf("nightly-gapmap merge --groups %v != scripts/gapmap.sh GAPMAP_GROUPS %v", merged, want)
+	}
+	// gapmap_group_of 的每个分支都必须是已声明的组，rest 兜底分支必须存在，
+	// 否则新增顶层目录的包不属于任何组。
+	branches := regexp.MustCompile(`(?m)^\s+(\S+)\) echo (\S+) ;;`).FindAllStringSubmatch(string(script), -1)
+	if len(branches) == 0 {
+		t.Fatal("gapmap_group_of branches not found in scripts/gapmap.sh")
+	}
+	declared := map[string]bool{}
+	for _, name := range want {
+		declared[name] = true
+	}
+	hasFallback := false
+	for _, branch := range branches {
+		if !declared[branch[2]] {
+			t.Errorf("gapmap_group_of maps %s to undeclared group %q", branch[1], branch[2])
+		}
+		if branch[1] == "*" {
+			hasFallback = true
+		}
+	}
+	if !hasFallback {
+		t.Error("gapmap_group_of has no `*)` fallback; packages outside the listed prefixes would never be sampled")
+	}
+}

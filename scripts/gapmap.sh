@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Gap map: run the promise-revert sampler over every package with tests and
 # write gapmap-report.md. Never fails on findings — it is a map, not a gate.
-# Usage: scripts/gapmap.sh [--max N] [pkg...]   (default: every package with tests)
+# Usage: scripts/gapmap.sh [--max N] [--group NAME] [pkg...]   (default: every package with tests)
+#
+# --group 只取样某一组的包（组按目录前缀划分，见下方 gapmap_group_of）：全量串行约 120 分钟，
+# 逼近单 job 180 分钟上限，nightly-gapmap 按组拆成 matrix 并行，再用 scripts/gapmap/merge.py
+# 把各组报告合成一份 gapmap-report.md。给了 pkg 列表时 --group 只保留其中属于该组的包；
+# 一个都不剩时照常写出一份 0 / 0 的报告，不退回“全部包”。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # RR-20261005-NC-200：收尾会用 `git checkout -- .` 恢复取样器留下的跟踪文件修改，它分不清
@@ -12,19 +17,49 @@ if [[ -n "$(git status --short --untracked-files=no)" ]]; then
   git status --short --untracked-files=no >&2
   exit 2
 fi
+# 分组只看目录前缀；不属于前三组的包（gameplay、service、wiring、client、cmd 等）全部归 rest，
+# 新增顶层目录自动落进 rest，不会漏取样。组名与 nightly-gapmap.yml 的 matrix 一一对应，
+# 根包 TestGapmapWorkflowGroupsMatchScript 钉住两边一致。
+GAPMAP_GROUPS="framework infra codegen rest"
+gapmap_group_of() {
+  case "$1" in
+    framework/*) echo framework ;;
+    infra/*) echo infra ;;
+    codegen/*) echo codegen ;;
+    *) echo rest ;;
+  esac
+}
 max=20
-if [[ "${1:-}" == "--max" ]]; then max="$2"; shift 2; fi
-pkgs=("$@")
-if [[ ${#pkgs[@]} -eq 0 ]]; then
+group=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --max) max="$2"; shift 2 ;;
+    --group) group="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+if [[ -n "$group" && " $GAPMAP_GROUPS " != *" $group "* ]]; then
+  echo "gapmap: unknown group '$group' (known: $GAPMAP_GROUPS)" >&2
+  exit 2
+fi
+candidates=("$@")
+if [[ ${#candidates[@]} -eq 0 ]]; then
   while IFS= read -r dir; do
-    [[ -n "$(ls "$dir"/*_test.go 2>/dev/null)" ]] && pkgs+=("$dir")
+    [[ -n "$(ls "$dir"/*_test.go 2>/dev/null)" ]] && candidates+=("$dir")
   done < <(go list -f '{{.Dir}}' ./... | sed "s#^$(pwd)/##" | grep -v '^\.$' | sort)
 fi
+pkgs=()
+for dir in ${candidates[@]+"${candidates[@]}"}; do
+  if [[ -z "$group" || "$(gapmap_group_of "${dir%/}/")" == "$group" ]]; then
+    pkgs+=("$dir")
+  fi
+done
+echo "gapmap: sampling ${#pkgs[@]} package(s)${group:+ in group $group}" >&2
 {
   echo "# Gap map — $(git rev-parse --short HEAD) — $(date -u +%Y-%m-%dT%H:%MZ)"
   echo
   echo "Guards whose neutralization leaves the package tests green. Sampled up to ${max} per package."
-  python3 scripts/gapmap/revertsample.py --max "$max" "${pkgs[@]}"
+  python3 scripts/gapmap/revertsample.py --max "$max" ${pkgs[@]+"${pkgs[@]}"}
 } | tee gapmap-report.md
 # Restore only TRACKED files the sampler may have left modified. Never `git
 # clean`: untracked files belong to whoever is working in the tree (a test

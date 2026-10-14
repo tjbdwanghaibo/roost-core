@@ -20,9 +20,17 @@ permissions:
   contents: read
 
 jobs:
+  # 全量串行约 120 分钟（2026-10-14 dispatch 实测 2h0m），逼近 180 分钟上限，而且一次 OOM 就整份
+  # 报告作废。按目录前缀分四组并行（scripts/gapmap.sh 的 GAPMAP_GROUPS，根包
+  # TestGapmapWorkflowGroupsMatchScript 钉住两边一致），每组按那次实测约 25～37 分钟；
+  # merge job 再把四份合成一份 gapmap-report.md，对外仍是同名工件、同一格式。
   gapmap:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [framework, infra, codegen, rest]
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -33,17 +41,50 @@ jobs:
       # TEST_AS_BYTES）：中和资源上限守卫会让测试无界吃内存，2026-10-06 起它每晚把 runner 拖到 OOM，
       # job 以 "runner has received a shutdown signal"、exit 143 结束（不是 180 分钟超时：失败在
       # 第 1～105 分钟不等，正落在 actionflow 包上）。
-      - name: sample every package
+      - name: sample ${{ matrix.group }} packages
         env:
           MAX: ${{ github.event.inputs.max || '20' }}
           PACKAGES: ${{ github.event.inputs.packages || '' }}
+          GROUP: ${{ matrix.group }}
         run: |
           command -v prlimit
+          start=$(date +%s)
+          status=0
           # shellcheck disable=SC2086 # PACKAGES is a space-separated list on purpose
-          scripts/gapmap.sh --max "$MAX" $PACKAGES
+          scripts/gapmap.sh --max "$MAX" --group "$GROUP" $PACKAGES || status=$?
+          echo "$GROUP $(( ($(date +%s) - start) / 60 )) $status" > gapmap-timing.txt
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: gapmap-part-${{ matrix.group }}
+          path: |
+            gapmap-report.md
+            gapmap-timing.txt
+          retention-days: 7
+  merge:
+    needs: gapmap
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: gapmap-part-*
+          path: parts
+      - name: merge group reports
+        run: python3 scripts/gapmap/merge.py --groups "framework infra codegen rest" --out gapmap-report.md parts
       - name: publish summary
         if: always()
-        run: cat gapmap-report.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "| group | minutes | exit |"
+            echo "| --- | --- | --- |"
+            cat parts/gapmap-part-*/gapmap-timing.txt 2>/dev/null | awk '{print "| " $1 " | " $2 " | " $3 " |"}'
+            echo
+            cat gapmap-report.md
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

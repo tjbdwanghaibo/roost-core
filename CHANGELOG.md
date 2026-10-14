@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### CI 与构建
+
+- nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。
+
 ### 测试
 
 - `infra/network/etcd/driver` 的 `TestDiscoveryReregistersAfterUnexpectedLeaseLoss` 偶发 `lease id = 101, want 102`（v1.27.0 main 推送 CI 失败一次）：用例在 `registerOnce` 回调里发出“已重注册”信号，产品代码在回调返回后才写回新租约。改为限时等待新租约生效再断言；只改测试。
