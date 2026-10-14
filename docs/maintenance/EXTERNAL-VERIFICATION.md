@@ -34,6 +34,7 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 | --- | --- | --- |
 | `infra/storage/redis`、`infra/storage/redis/driver`、`infra/storage/versionstore`、`framework/cache` 中以 `ROOST_REDIS_TEST_ADDR` 准入的用例（多数不带标签） | `.github/workflows/ci.yml` 的 `service-redis` job（skip 守卫的变量名改为整词匹配，隔离环境变量 `ROOST_DATAENGINE_IT_REDIS_ADDR` 的跳过不再误报） | `TestCIRedisJobRunsEveryRedisTestAddressPackage` |
 | `wiring/activity`、`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore` 中以 `ROOST_REVIEW_CLUSTER` 准入、不带标签的用例 | `wiring/scripts/integration/redis-cluster-suites.sh` | `TestRedisClusterScriptNamesEveryClusterKeyedSuite`（带不带标签都计入） |
+| 生成工程里需要真实依赖的用例（2026-10-15 起）：`codegen/internal/entity/testdata` 的 `dataengine`（三进程恢复、收尾、嵌套事务等）与 `remoteflow`（持久拒绝、收尾、Mirror 汇总、NestFlow 等），game-demo 模板的 `TestGuildIDsRealMongo*`（`ROOST_GUILD_IT_MONGO_URI`）、`TestPurchaseDeliveryDurableWinner`（`ROOST_REVIEW_REDIS` / `ROOST_REVIEW_CLUSTER`），`codegen/internal/roost` 的 `TestGateGeneratedBusinessConsumer` | `dataengine-env.sh test` 在 integration 套件后调用 `scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`（功能模式）、`scripts/test-demo-generated.sh`（nightly fault-matrix job 调用它）；模板集群子用例由 `mirror-local.sh test-core` 带私有集群调用。此前前两个脚本只被性能脚本与带故障的矩阵调用，其余用例的门变量没人设置 | `TestGeneratedProjectRealDependencyTestsHaveAnEntry`（性能入口与 `mirror-local.sh test` 负责的用例在表里写明） |
 | DataEngine 大积压恢复（`ROOST_DATAENGINE_IT_BACKLOG`，单集合与 `_MULTI`）；`versionstore` 的 Cluster 写入令牌（`ROOST_MIRROR_LOCAL_REDIS_CLUSTER`） | `scripts/mirror-local.sh test-core` 私有环境。不放 `dataengine-env.sh test`：共享隔离环境由多个会话同时使用，10 万条记录的持续写入会干扰别人的用例 | `TestOptInRealDependencySuitesHaveAnEntry` |
 
 挂载后在本机按入口原样实跑一次（私有 redis-server、mirror-local 私有环境与其 3 主 3 从集群，用完关闭 / clean），全部 PASS：CI 等价 Redis 组 43 个包 ok、skip 守卫为空、race 组通过；`test-core` 的 5 个 MirrorLocal、versionstore Cluster、两种大积压恢复通过；`redis-cluster-suites.sh` 10 个包 ok（`-v` 复核集群子用例为 PASS 而非 SKIP）。CI 上的首次运行以 GitHub 结果为准，本地不等待。
@@ -52,7 +53,7 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 
 **仍无结构守卫**：CI 末尾的残留键检查只发现“写了不清理”，发现不了“固定键名但清理了”。新增写 Redis 的用例仍须用 `redistest`；需要复核时重复上面的两轮 `MONITOR` 交集。
 
-**仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程（`codegen/internal/entity/testdata/*`）的真实依赖用例由 `scripts/test-remote-generated.sh` 等入口与故障矩阵负责，不在本次范围。
+**仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程的真实依赖用例 2026-10-15 起挂到 `dataengine-env.sh test`（见上表），在私有根（`ROOST_IT_HOME` 私有目录、偏移 3500，用完 `down` 并删除）上按入口原样实跑：integration 18 个包 ok，`test-dataengine-generated.sh` 三个阶段全部 PASS（压测用例按设计 SKIP）、`test-remote-generated.sh` 14 个 PASS（Mirror 子进程与 MirrorLocal 按设计 SKIP）、`test-demo-generated.sh` 的 guild 两个、purchase（单机子用例）与 `TestGateGeneratedBusinessConsumer` PASS，退出 0。模板的集群子用例经 `mirror-local.sh test-core` 的挂载尚未实跑。
 
 复跑：共享环境组 `source ~/.roost-it/roost-dataengine-it/env.sh` 后先确认并取得 `remote-acceptance.lock`，再按包执行 `GOWORK=off ROOST_IT_TOXIPROXY=1 go test -tags=integration -count=1 -p 1 <包>`（或整套 `bash wiring/scripts/integration/dataengine-env.sh test`，它自己取锁）；Redis 组按 `.github/workflows/ci.yml` 的 `service-redis` 变量对私有 redis-server 执行；私有组 `ROOST_MIRROR_LOCAL_HOME=<目录> ROOST_MIRROR_LOCAL_OFFSET=<未占用偏移> bash scripts/mirror-local.sh up`，source 其 `env.sh` 后运行上表用例，结束 `clean`。
 

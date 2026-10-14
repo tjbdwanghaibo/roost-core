@@ -475,3 +475,231 @@ func TestOptInRealDependencySuitesHaveAnEntry(t *testing.T) {
 		}
 	}
 }
+
+// 生成工程里需要真实依赖的用例：codegen/internal/entity/testdata 下复制进临时生成工程运行的目录、demo/ 下进入
+// game-demo 的 *_test.go.tmpl 模板，以及仓库内不带 integration 标签、把用例写进新生成工程再运行的测试（读
+// ROOST_DATAENGINE_IT_*、又不在 dataengine-env.sh test 的包清单里）。go test ./... 看不到前两类，门变量没人设置时
+// 第三类到处跳过；每条用例都要由 generatedRealDependencyEntries 的某个脚本以 -run 选中，脚本挂在
+// dataengine-env.sh test（nightly fault-matrix job 调用）里，或在 generatedRealDependencyElsewhere 里写明由
+// 哪个专门入口（性能、私有环境）负责。testdata 目录按整目录计（真实依赖的准入常写在共用辅助函数里），模板与仓库内
+// 测试按读到真实依赖变量的 Test 函数计。
+var generatedRealDependencyEntries = []struct {
+	source, script, run string
+}{
+	{"codegen/internal/entity/testdata/dataengine", "scripts/test-dataengine-generated.sh", "^TestGeneratedDataEngine"},
+	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
+	{"demo/game/controllers/player/guild_ids_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestGuildIDsRealMongo"},
+	{"demo/internal/service/platform/purchase_delivery_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseDeliveryDurableWinner$"},
+	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
+}
+
+// 由专门入口负责、不进 dataengine-env.sh test 的用例：mention 必须原样出现在 script 里。
+var generatedRealDependencyElsewhere = []struct {
+	test, script, mention, why string
+}{
+	{"TestGeneratedDataEnginePressure", "scripts/perf/dataengine.sh", "ROOST_DATAENGINE_PERF=1", "性能入口"},
+	{"TestGeneratedRemoteMirrorLocal", "scripts/mirror-local.sh", "^TestGeneratedRemoteMirrorLocal$", "私有环境两进程故障，自起依赖"},
+	{"TestNestGameLoad", "scripts/perf/nest-game.sh", "^TestNestGameLoad$", "性能入口"},
+	{"TestSpatialComponentNestCommitAndRollback", "scripts/perf/nest-game.sh", "^TestSpatialComponentNestCommitAndRollback$", "nest-game.sh --check-spatial，与负载同一份生成流程"},
+	{"TestGeneratedGateNestDAOAndWAL", "codegen/internal/roost/demo_test.go", "^TestGeneratedGateNestDAOAndWAL$", "TestGateGeneratedBusinessConsumer 把它写进新生成的 game-demo 后运行"},
+}
+
+var (
+	realDependencyEnvRead = regexp.MustCompile(`os\.(?:Getenv|LookupEnv)\("((?:ROOST_DATAENGINE_IT_[A-Z0-9_]*)|(?:[A-Z0-9_]*(?:MONGO|REDIS|NATS|ETCD)[A-Z0-9_]*))"\)`)
+	testFuncDecl          = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+)
+
+type generatedRealDependencyTest struct{ source, name string }
+
+// discoverGeneratedRealDependencyTests 按上面的三类规则找出用例，source 是 testdata 目录、模板文件或包目录。
+func discoverGeneratedRealDependencyTests(t *testing.T, envSuites []string) []generatedRealDependencyTest {
+	t.Helper()
+	testdataDirs := map[string]bool{}
+	var found []generatedRealDependencyTest
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "vendor", "artifacts":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		slashed := filepath.ToSlash(path)
+		inTestdata := strings.Contains("/"+slashed, "/testdata/")
+		template := strings.HasSuffix(slashed, "_test.go.tmpl")
+		if !strings.HasSuffix(slashed, "_test.go") && !template {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		switch {
+		case inTestdata:
+			if realDependencyEnvRead.MatchString(text) {
+				testdataDirs[filepath.ToSlash(filepath.Dir(path))] = true
+			}
+		case template:
+			for _, name := range testFuncsReading(text, realDependencyEnvRead) {
+				found = append(found, generatedRealDependencyTest{slashed, name})
+			}
+		case !strings.HasPrefix(strings.TrimLeft(text, "\n"), "//go:build integration"):
+			dir := filepath.ToSlash(filepath.Dir(path))
+			if covers(envSuites, dir) {
+				return nil
+			}
+			for _, name := range testFuncsReading(text, regexp.MustCompile(`os\.(?:Getenv|LookupEnv)\("ROOST_DATAENGINE_IT_[A-Z0-9_]*"\)`)) {
+				found = append(found, generatedRealDependencyTest{dir, name})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir := range testdataDirs {
+		files, err := filepath.Glob(filepath.Join(filepath.FromSlash(dir), "*_test.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, match := range testFuncDecl.FindAllStringSubmatch(string(raw), -1) {
+				found = append(found, generatedRealDependencyTest{dir, match[1]})
+			}
+		}
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].source != found[j].source {
+			return found[i].source < found[j].source
+		}
+		return found[i].name < found[j].name
+	})
+	return found
+}
+
+// testFuncsReading 返回函数体里有 pattern 匹配的 Test 函数（函数体取到下一个顶层 func 为止）。
+func testFuncsReading(text string, pattern *regexp.Regexp) []string {
+	var names []string
+	bounds := testFuncDecl.FindAllStringSubmatchIndex(text, -1)
+	for _, bound := range bounds {
+		end := len(text)
+		if next := strings.Index(text[bound[1]:], "\nfunc "); next >= 0 {
+			end = bound[1] + next
+		}
+		if pattern.MatchString(text[bound[0]:end]) {
+			names = append(names, text[bound[2]:bound[3]])
+		}
+	}
+	return names
+}
+
+// shellFunctionBody 取 `name() {` 到下一个顶格 `}` 之间、去掉整行注释的内容。
+func shellFunctionBody(t *testing.T, script, name string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.FromSlash(script))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != name+"() {" {
+			continue
+		}
+		var body []string
+		for _, inner := range lines[i+1:] {
+			if inner == "}" {
+				return body
+			}
+			if !strings.HasPrefix(strings.TrimSpace(inner), "#") {
+				body = append(body, inner)
+			}
+		}
+	}
+	t.Fatalf("%s has no %s() function", script, name)
+	return nil
+}
+
+func TestGeneratedProjectRealDependencyTestsHaveAnEntry(t *testing.T) {
+	const envScript = "wiring/scripts/integration/dataengine-env.sh"
+	raw, err := os.ReadFile(filepath.FromSlash(envScript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envSuites := goTestPackageArgs(string(raw))
+	discovered := discoverGeneratedRealDependencyTests(t, envSuites)
+	if len(discovered) == 0 {
+		t.Fatal("no generated-project real-dependency test found; the discovery rules or the layout changed")
+	}
+
+	// 每个入口脚本：-run 原样出现，并在 dataengine-env.sh test 里以缺省模式调用（不带改变选用范围的变量）。
+	envTest := shellFunctionBody(t, envScript, "environment_test")
+	modeVariables := regexp.MustCompile(`\b(ROOST_REMOTE_FAULT|ROOST_REMOTE_LOAD|ROOST_REMOTE_RUN|ROOST_DATAENGINE_PERF)=`)
+	for _, entry := range generatedRealDependencyEntries {
+		script, err := os.ReadFile(filepath.FromSlash(entry.script))
+		if err != nil {
+			t.Errorf("%s: %v", entry.source, err)
+			continue
+		}
+		if !strings.Contains(string(script), "'"+entry.run+"'") {
+			t.Errorf("%s no longer selects '%s' (the -run for %s)", entry.script, entry.run, entry.source)
+		}
+		called := false
+		for _, line := range envTest {
+			if strings.Contains(line, "bash "+entry.script) && !modeVariables.MatchString(line) {
+				called = true
+			}
+		}
+		if !called {
+			t.Errorf("%s environment_test does not run `bash %s` in its default mode, so %s is run by nobody (nightly fault-matrix calls dataengine-env.sh test)", envScript, entry.script, entry.source)
+		}
+	}
+	for _, other := range generatedRealDependencyElsewhere {
+		script, err := os.ReadFile(filepath.FromSlash(other.script))
+		if err != nil || !strings.Contains(string(script), other.mention) {
+			t.Errorf("%s is said to be run by %s (%s), but that script does not contain %q (err=%v)", other.test, other.script, other.why, other.mention, err)
+		}
+	}
+
+	// 每条用例都有入口；每个入口与“别处”条目都至少对应一条用例。
+	entryUsed := make([]bool, len(generatedRealDependencyEntries))
+	elsewhereUsed := map[string]bool{}
+	for _, test := range discovered {
+		covered := false
+		for i, entry := range generatedRealDependencyEntries {
+			if entry.source == test.source && regexp.MustCompile(entry.run).MatchString(test.name) {
+				covered, entryUsed[i] = true, true
+			}
+		}
+		for _, other := range generatedRealDependencyElsewhere {
+			if other.test == test.name {
+				covered, elsewhereUsed[other.test] = true, true
+			}
+		}
+		if !covered {
+			t.Errorf("%s (%s) needs real dependencies but no entry runs it: add it to a script's -run in generatedRealDependencyEntries (hooked into dataengine-env.sh test) or name its dedicated entry in generatedRealDependencyElsewhere", test.name, test.source)
+		}
+	}
+	for i, entry := range generatedRealDependencyEntries {
+		if !entryUsed[i] {
+			t.Errorf("entry %s -run '%s' matches no real-dependency test in %s: an empty cell reports green for nothing", entry.script, entry.run, entry.source)
+		}
+	}
+	for _, other := range generatedRealDependencyElsewhere {
+		if !elsewhereUsed[other.test] {
+			t.Errorf("generatedRealDependencyElsewhere names %s, which is not a generated-project real-dependency test any more", other.test)
+		}
+	}
+	if t.Failed() {
+		for _, test := range discovered {
+			t.Logf("discovered: %s %s", test.source, test.name)
+		}
+	}
+}

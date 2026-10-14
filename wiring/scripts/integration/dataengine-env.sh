@@ -26,7 +26,7 @@ Commands:
   down                       Stop isolated nodes and preserve their data
   status                     Show Mongo, NATS, Redis and toxiproxy status
   reset                      Stop nodes and delete only the canonical test root
-  test                       Start nodes and run integration-tagged tests
+  test                       Start nodes, run integration-tagged tests, then the generated-project real-dependency tests
   fault mongo-primary        Stop the current isolated Mongo primary
   fault nats-leader STREAM   Stop the leader for an isolated JetStream stream
   fault nats-all             Stop all isolated NATS nodes
@@ -162,6 +162,17 @@ environment_test() {
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
 			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
+	)
+	# 生成工程里需要真实依赖的功能用例（codegen/internal/entity/testdata 的 dataengine、remoteflow，game-demo 模板与
+	# codegen/internal/roost 写进 game-demo 的用例）：它们只在复制或新生成的工程里运行，go test ./... 看不到；之前只有
+	# 性能脚本（固定跑压测用例）和故障矩阵（固定 ROOST_REMOTE_FAULT、只跑 NestFlow）调用前两个入口，持久拒绝 / 收尾 /
+	# 三进程恢复等功能用例与 game-demo 的真实依赖用例没人跑。三个脚本各用唯一库名 / 键前缀与临时目录、跑完清理；
+	# 是功能验收，不是负载。integration_coverage_test.go 的 TestGeneratedProjectRealDependencyTestsHaveAnEntry 钉住这三行。
+	(
+		cd "$module_root"
+		bash scripts/test-dataengine-generated.sh
+		bash scripts/test-remote-generated.sh
+		bash scripts/test-demo-generated.sh
 	)
 }
 

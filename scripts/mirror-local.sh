@@ -16,7 +16,8 @@
 #   scripts/mirror-local.sh test                  up → 生成工程里的 TestGeneratedRemoteMirrorLocal（两进程故障场景）→ clean
 #   scripts/mirror-local.sh test-core             up → remoteentity 的私有环境集成用例（缺省 ^TestMirrorLocal，
 #                                                 ROOST_MIRROR_LOCAL_CORE_RUN 覆盖；O-M6-3 墓碑 WAIT 的切主红绿、
-#                                                 O-M6-6 同 sid 重启接管旧代锁）、versionstore 的 Cluster 写入令牌，以及 DataEngine 10 万记录大积压恢复
+#                                                 O-M6-6 同 sid 重启接管旧代锁）、versionstore 的 Cluster 写入令牌、game-demo 真实依赖用例
+#                                                 （scripts/test-demo-generated.sh，带私有集群），以及 DataEngine 10 万记录大积压恢复
 #                                                 （ROOST_DATAENGINE_IT_BACKLOG，单集合与 _MULTI 各一次）→ clean
 #   scripts/mirror-local.sh bench <输出目录>       up → remoteentity 的 BenchmarkMirrorLocal*（当前源码）→ clean
 #     基线对照：ROOST_MIRROR_LOCAL_BASELINE=<基线源码目录>（例如 v1.20.2 的 detached worktree）时同一份基准文件
@@ -388,6 +389,8 @@ run_core_tests() {
 		GOWORK=off go test -tags integration -count=1 -run "${ROOST_MIRROR_LOCAL_CORE_RUN:-^TestMirrorLocal}" -v -timeout 10m ./framework/remoteentity
 		# versionstore 的 Cluster 写入令牌用例读 ROOST_MIRROR_LOCAL_REDIS_CLUSTER，只有这里的私有集群提供它。
 		GOWORK=off go test -tags integration -count=1 -run '^TestRealRedisCluster' -v -timeout 5m ./infra/storage/versionstore
+		# game-demo 模板 TestPurchaseDeliveryDurableWinner 的集群子用例读 ROOST_REVIEW_CLUSTER，同样只有这里的私有集群提供。
+		ROOST_REVIEW_CLUSTER="$ROOST_MIRROR_LOCAL_REDIS_CLUSTER" bash "$repo_dir/scripts/test-demo-generated.sh"
 	)
 }
 
@@ -470,5 +473,5 @@ case "${1:-}" in
 		environment_up
 		bench_all "$2"
 		;;
-	*) sed -n '2,24p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+	*) sed -n '2,25p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac

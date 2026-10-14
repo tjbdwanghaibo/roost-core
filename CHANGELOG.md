@@ -12,6 +12,7 @@
 ### 测试
 
 - `framework/cache` 两个真实 Redis 用例改用唯一前缀：`TestRefHMapBoundaryContractsRealRedis`（`roost:boundary:<场景>:{record:1}`，开头还先 DEL 这些固定键）与 `TestRefHMapUnknownWrite`（`roost:unknownwrite:<场景>:{session:1}`）用固定键名，两轮并行会互删数据。照 CI `service-redis` 变量组连跑两轮、`MONITOR` 求键名交集：修前 35 个、修后 0。改用 `redistest.Prefix` 后整组在共享隔离环境的 Redis 上实跑（持锁、只带 CI 的 Redis 变量组）：44 个包与 race 组通过，前后键名清单不变；维护手册 §7 写明允许指向共享 Redis 的条件（EXTERNAL-VERIFICATION 有记录）。
+- 生成工程里需要真实依赖的用例挂到 `dataengine-env.sh test`（nightly fault-matrix job）：`scripts/test-dataengine-generated.sh` 与 `scripts/test-remote-generated.sh` 此前只被性能脚本（固定压测用例）和故障矩阵（固定 `ROOST_REMOTE_FAULT`、只跑 NestFlow）调用，DataEngine 三进程恢复 / 收尾 / 嵌套事务与 Remote 持久拒绝 / 收尾 / Mirror 汇总等功能用例没人跑；game-demo 模板的 `TestGuildIDsRealMongo*`（`ROOST_GUILD_IT_MONGO_URI` 无人设置）、`TestPurchaseDeliveryDurableWinner`（`ROOST_REVIEW_REDIS`）与 `codegen/internal/roost` 的 `TestGateGeneratedBusinessConsumer`（`ROOST_DATAENGINE_IT_NATS_URL`）到处跳过。新增 `scripts/test-demo-generated.sh`（当前生成器 `--skip-deps` 生成 game-demo、replace 指回本仓，门变量对到隔离环境），`mirror-local.sh test-core` 带私有集群再调一次。根包 `TestGeneratedProjectRealDependencyTestsHaveAnEntry` 表驱动钉住：每条这类用例被某个挂在 `environment_test` 里的脚本以 `-run` 选中，或在表里写明专门入口（性能脚本、`mirror-local.sh test`）；去掉挂载行、改窄 `-run` 时实测变红。私有根上按入口实跑全部通过（EXTERNAL-VERIFICATION）。
 - `infra/network/etcd/driver` 的 `TestDiscoveryReregistersAfterUnexpectedLeaseLoss` 偶发 `lease id = 101, want 102`（v1.27.0 main 推送 CI 失败一次）：用例在 `registerOnce` 回调里发出“已重注册”信号，产品代码在回调返回后才写回新租约。改为限时等待新租约生效再断言；只改测试。
 
 ## [v1.27.0] - 2026-10-14

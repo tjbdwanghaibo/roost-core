@@ -9,7 +9,7 @@ NATS 和 Redis 各加一层代理。不用 docker，也不碰开发机自带的 
 bash wiring/scripts/integration/dataengine-env.sh up      # 起并初始化，最后打印 status
 bash wiring/scripts/integration/dataengine-env.sh status
 source "<根目录>/env.sh"                                # 导出 ROOST_DATAENGINE_IT_*，不要打印
-bash wiring/scripts/integration/dataengine-env.sh test    # 起环境并跑全部 integration 套件
+bash wiring/scripts/integration/dataengine-env.sh test    # 起环境并跑全部 integration 套件，再跑生成工程的真实依赖用例
 bash wiring/scripts/integration/dataengine-env.sh fault mongo-primary | nats-leader STREAM | nats-all
 bash wiring/scripts/integration/dataengine-env.sh heal
 bash wiring/scripts/integration/dataengine-env.sh down    # 停进程，保留数据
@@ -130,3 +130,9 @@ ROOST_REVIEW_CLUSTER=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
 只在显式变量下运行的大负载用例由 `TestOptInRealDependencySuitesHaveAnEntry` 对到负责的脚本：DataEngine
 大积压恢复（`ROOST_DATAENGINE_IT_BACKLOG`）在 `scripts/mirror-local.sh test-core` 的私有环境里跑，不进
 `dataengine-env.sh test`——共享环境多个会话同时使用，10 万条记录的持续写入会干扰别人的用例。
+生成工程里需要真实依赖的用例（`codegen/internal/entity/testdata` 的 `dataengine`、`remoteflow`，game-demo 模板
+`demo/**/*_test.go.tmpl` 里读真实依赖变量的用例，以及 `codegen/internal/roost` 写进新生成 game-demo 的
+`TestGateGeneratedBusinessConsumer`）由 `dataengine-env.sh test` 在 integration 套件之后依次调用
+`scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`、`scripts/test-demo-generated.sh` 运行；
+`TestGeneratedProjectRealDependencyTestsHaveAnEntry` 要求每条这类用例都被某个脚本的 `-run` 选中且脚本挂在这里，
+或在表里写明专门入口（性能脚本、`mirror-local.sh`）。
