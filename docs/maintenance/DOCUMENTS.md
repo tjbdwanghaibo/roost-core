@@ -72,6 +72,9 @@
 
 ## docs/maintenance
 
+- [COMMIT-REVIEW.md](COMMIT-REVIEW.md)：新增提交的分批范围、独立验证、问题复现与接续入口
+- [REVIEW-COMMITS-20261014.csv](REVIEW-COMMITS-20261014.csv)：固定范围内 249 个非合并提交的路径与审查状态
+
 - [README.md](README.md)：维护手册（版本与兼容、升级回退、日常验证、故障、发版、文档规则、测试与生成代码、可读性要求）
 - [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
