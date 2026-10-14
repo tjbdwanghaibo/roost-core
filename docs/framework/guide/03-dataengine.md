@@ -1,6 +1,6 @@
 # 核心：DataEngine 持久化：设计与使用
 
-适用版本：v1.26.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/03-dataengine.md) · [模块总目录](../README.md)
+适用版本：v1.27.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/03-dataengine.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 

@@ -2,7 +2,7 @@
 
 这份文档适合第一次接触 Roost 的开发者。你不需要先理解分布式事务、WAL 或所有 Go 类型。先知道一条游戏请求如何完成，再按需要阅读模块文档。
 
-这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。当前发布版本是 **v1.26.0**（[发布说明](release/v1.26.0-NOTES.md)；之后未发版的变化见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]`）。正式支持范围是 macOS 和 Linux。
+这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。当前发布版本是 **v1.27.0**（[发布说明](release/v1.27.0-NOTES.md)；之后未发版的变化见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]`）。正式支持范围是 macOS 和 Linux。
 
 ## 1. Roost 帮你解决什么
 

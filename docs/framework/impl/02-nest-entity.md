@@ -1,6 +1,6 @@
 # 核心：Nest 调度与实体：实现与维护
 
-适用版本：v1.26.0 及当前主线（三池 / Await 随 v1.26.0 发布，之后变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/02-nest-entity.md)
+适用版本：v1.27.0 及当前主线（三池 / Await 随 v1.26.0 发布，之后变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/02-nest-entity.md)
 
 ## 如何阅读
 
