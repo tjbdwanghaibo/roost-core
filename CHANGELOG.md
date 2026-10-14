@@ -12,6 +12,10 @@
 
 - `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。单条 Patch 样例记录的编码分配次数 41 → 6（`testing.AllocsPerRun`，非计时）；耗时收益待同机 benchstat 对照后记录在性能报告。解码侧未改。
 
+### 测试与工具
+
+- nest-game 负载夹具新增可选长尾采集（默认关闭，`ROOST_NEST_GAME_TAIL=metrics|trace`）：每秒记录 runtime/metrics（GC 周期、STW 与调度延迟直方图、互斥等待、CPU 分类）与进程 rusage；`trace` 模式另开 Go flight recorder，业务 / heartbeat / Sync / Gate 完成事件或调度 tick 间隔超过阈值时，以 `trace.Log`（类别 `roost.tail`，带各分段耗时）写入 trace 并延迟保存前后窗口，可按间隔保存对照窗口。新增独立模块 `scripts/perf/tailtrace`（依赖 `golang.org/x/exp/trace`，不进根模块）做事后关联，`scripts/perf/nest-game.sh` 在开启采集时自动运行。只改夹具与脚本，生产代码不变；开启后有观测开销，结果不与无采集样本的延迟数字混用。
+
 ### 测试
 
 - `framework/cache` 两个真实 Redis 用例改用唯一前缀：`TestRefHMapBoundaryContractsRealRedis`（`roost:boundary:<场景>:{record:1}`，开头还先 DEL 这些固定键）与 `TestRefHMapUnknownWrite`（`roost:unknownwrite:<场景>:{session:1}`）用固定键名，两轮并行会互删数据。照 CI `service-redis` 变量组连跑两轮、`MONITOR` 求键名交集：修前 35 个、修后 0。改用 `redistest.Prefix` 后整组在共享隔离环境的 Redis 上实跑（持锁、只带 CI 的 Redis 变量组）：44 个包与 race 组通过，前后键名清单不变；维护手册 §7 写明允许指向共享 Redis 的条件（EXTERNAL-VERIFICATION 有记录）。

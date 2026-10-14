@@ -223,7 +223,11 @@ func newGateFrontend(t *testing.T, engine *nest.NestMgr, name nest.HandlerName, 
 					f.mu.Unlock()
 					continue
 				}
-				f.roundTrip.add(time.Since(began), in.sample)
+				roundTrip := time.Since(began)
+				f.roundTrip.add(roundTrip, in.sample)
+				if c := tail.Load(); c != nil {
+					c.observe("gate", roundTrip)
+				}
 				f.completed.Add(1)
 			}
 		})

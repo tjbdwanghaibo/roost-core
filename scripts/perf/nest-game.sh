@@ -45,6 +45,11 @@ for ((sample=1;sample<=repeats;sample++));do
  if [[ "${ROOST_NEST_GAME_PROFILE:-0}" == 1 ]]; then profile=("-test.cpuprofile=$output/sample-$sample.cpu.pprof" "-test.memprofile=$output/sample-$sample.heap.pprof" "-test.mutexprofile=$output/sample-$sample.mutex.pprof" "-test.mutexprofilefraction=10" "-test.blockprofile=$output/sample-$sample.block.pprof" "-test.blockprofilerate=1000000"); fi
  ROOST_NEST_GAME_OUTPUT="$output/sample-$sample.json" "$output/nest-game.test" -test.run "$test_pattern" -test.v -test.timeout=70m ${profile[@]+"${profile[@]}"} > "$output/sample-$sample.log" 2>&1 || status=1
  cat "$output/sample-$sample.log"
+ # 长尾采集（ROOST_NEST_GAME_TAIL=metrics|trace，见夹具 tailtrace_test.go）：负载结束后离线分析，不占被测区间。
+ if [[ -n "${ROOST_NEST_GAME_TAIL:-}" && -d "$output/sample-$sample.tail" ]]; then
+  (cd "$repo/scripts/perf/tailtrace" && GOWORK=off go run . -dir "$output/sample-$sample.tail" -json "$output/sample-$sample.tail/analysis.json") > "$output/sample-$sample.tail/analysis.txt" 2>&1 || status=1
+  sed -n '1,40p' "$output/sample-$sample.tail/analysis.txt"
+ fi
 done
 printf 'Results: %s\n' "$output"
 exit "$status"

@@ -230,6 +230,13 @@ func TestNestGameLoad(t *testing.T) {
 			counters.queueWait.add(began.Sub(in.admitted), in.sample)
 			counters.handler.add(ended.Sub(began), in.sample)
 			counters.completion.add(completed.Sub(in.planned), in.sample)
+			if c := tail.Load(); c != nil {
+				stream := "business"
+				if in.heartbeat {
+					stream = "heartbeat"
+				}
+				c.observe(stream, completed.Sub(in.planned), tailPart{"admit", in.admitted.Sub(in.planned)}, tailPart{"queue", began.Sub(in.admitted)}, tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
+			}
 			if in.change {
 				counters.changedCompletion.add(completed.Sub(in.planned), true)
 				counters.changed.Add(1)
@@ -255,6 +262,9 @@ func TestNestGameLoad(t *testing.T) {
 			return
 		}
 		now := time.Now()
+		if c := tail.Load(); c != nil {
+			c.observeTick(now)
+		}
 		elapsed := min(now.Sub(start), c.Duration)
 		var due [2]uint64
 		for k, rate := range rates {
@@ -318,6 +328,8 @@ func TestNestGameLoad(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	collector := startTailCollector(t, output)
+	tail.Store(collector)
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -356,6 +368,7 @@ func TestNestGameLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start).Seconds()
+	collector.finish(t)
 	var syncReport *syncLoadReport
 	if stateSync != nil {
 		syncReport = stateSync.finish(t, network)

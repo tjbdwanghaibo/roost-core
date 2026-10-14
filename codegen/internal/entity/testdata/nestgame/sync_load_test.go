@@ -190,6 +190,10 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 					load.planned.add(now.Sub(loadTime(previous.value.Planned)), true)
 					load.changedTime.add(now.Sub(loadTime(previous.value.Changed)), true)
 					load.committed.add(now.Sub(loadTime(previous.value.Committed)), true)
+					if c := tail.Load(); c != nil {
+						planned, changed, committed := loadTime(previous.value.Planned), loadTime(previous.value.Changed), loadTime(previous.value.Committed)
+						c.observe("sync", now.Sub(planned), tailPart{"business", changed.Sub(planned)}, tailPart{"commit", committed.Sub(changed)}, tailPart{"deliver", now.Sub(committed)})
+					}
 				}
 			}
 		}
