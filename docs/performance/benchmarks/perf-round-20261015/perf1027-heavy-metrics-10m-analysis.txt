@@ -1,0 +1,31 @@
+dir=/Users/whb/roost/roost-core-perf/artifacts/perf/nest/perf1027-heavy-metrics-10m/sample-1.tail GOMAXPROCS=10 threshold=50ms
+  stream business  events=6613 during_capture=0 max=186.250ms
+  stream gate      events=3627 during_capture=0 max=126.638ms
+  stream heartbeat events=20239 during_capture=0 max=110.669ms
+  stream sync      events=39889 during_capture=0 max=190.201ms
+  stream tick      events=9 during_capture=0 max=73.425ms
+runtime metrics: seconds=602 events_used=70368 unmatched=0 gc_stw_max=2.621ms other_stw_max=0.524ms sched_latency_max=50.332ms (tail windows 50.332ms) involuntary_ctxsw/s all=83008 tail=76468
+  gc_cycle                     seconds=100.00% tail_events=100.00% enrichment=1.00
+  gc_stw_over_1ms              seconds=  0.50% tail_events= 54.96% enrichment=110.28
+  other_stw_any                seconds= 99.83% tail_events=100.00% enrichment=1.00
+  sched_latency_over_10ms      seconds=  3.16% tail_events= 92.86% enrichment=29.42
+  sched_latency_over_50ms      seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  cpu_over_90pct               seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  mark_assist_over_50ms_cpu    seconds= 99.50% tail_events=100.00% enrichment=1.01
+  ticker_lag_over_10ms         seconds=  0.00% tail_events=  0.00% enrichment=0.00
+episodes (gap>=1s): 15; minute phase of episode starts (second-of-minute:count): map[2:8 4:1 6:1 9:1 12:1 49:1 52:1 56:1]
+  episode at=14.82s wall=01:53:02.184 span=43.7ms events=2952 max=93.3ms map[business:166 gate:1 sync:2785]
+  episode at=74.80s wall=01:54:02.162 span=39.1ms events=499 max=59.9ms map[business:1 gate:1 sync:497]
+  episode at=134.78s wall=01:55:02.149 span=62.9ms events=3038 max=78.8ms map[business:28 sync:3010]
+  episode at=194.81s wall=01:56:02.174 span=78.0ms events=4301 max=107.2ms map[business:380 gate:262 sync:3659]
+  episode at=301.70s wall=01:57:49.062 span=198.1ms events=1710 max=98.2ms map[business:169 sync:1541]
+  episode at=304.64s wall=01:57:52.002 span=290.8ms events=1530 max=72.3ms map[business:2 sync:1528]
+  episode at=309.29s wall=01:57:56.659 span=259.0ms events=4008 max=106.1ms map[business:40 gate:13 sync:3955]
+  episode at=314.68s wall=01:58:02.043 span=461.2ms events=13117 max=140.8ms map[business:954 gate:64 heartbeat:5665 sync:6434]
+  episode at=317.52s wall=01:58:04.888 span=277.7ms events=8946 max=122.7ms map[business:1476 gate:1433 sync:6037]
+  episode at=319.35s wall=01:58:06.719 span=37.7ms events=352 max=70.3ms map[business:64 gate:81 sync:207]
+  episode at=322.23s wall=01:58:09.601 span=332.6ms events=25718 max=190.2ms map[business:3137 gate:1738 heartbeat:14572 sync:6271]
+  episode at=374.87s wall=01:59:02.232 span=5.1ms events=93 max=55.1ms map[sync:93]
+  episode at=444.65s wall=02:00:12.017 span=28.5ms events=344 max=62.8ms map[business:36 gate:13 sync:295]
+  episode at=494.85s wall=02:01:02.214 span=35.7ms events=610 max=77.4ms map[business:153 gate:20 heartbeat:2 sync:435]
+  episode at=554.79s wall=02:02:02.155 span=63.1ms events=3150 max=74.6ms map[business:7 gate:1 sync:3142]

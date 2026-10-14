@@ -1,0 +1,23 @@
+{
+ "duration_seconds": 1800.193588375,
+ "Entities": 10000,
+ "Sessions": 1000,
+ "TargetRate": 80,
+ "Completed": 144000,
+ "Errors": 0,
+ "Dropped": 0,
+ "ErrorsNotApplied": 0,
+ "ErrorsUncertain": 0,
+ "ErrorClasses": {},
+ "ErrorClassFirst": {},
+ "CompletionTPS": 79.99139699746738,
+ "LatencyP50MS": 133,
+ "LatencyP95MS": 195,
+ "LatencyP99MS": 278,
+ "LatencyMaxMS": 1602,
+ "FirstError": "",
+ "ErrorDetails": null,
+ "Metrics_omitted_len": 67,
+ "Samples_omitted_len": 182,
+ "_note": "trimmed: large arrays/maps omitted; full file in artifacts/perf/remote/perf1027-remote-80-30m/result.json"
+}

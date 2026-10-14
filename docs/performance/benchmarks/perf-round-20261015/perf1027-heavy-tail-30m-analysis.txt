@@ -1,0 +1,51 @@
+dir=/Users/whb/roost/roost-core-perf/artifacts/perf/nest/perf1027-heavy-tail-30m/sample-1.tail GOMAXPROCS=10 threshold=50ms
+  stream business  events=4582 during_capture=0 max=132.082ms
+  stream gate      events=2125 during_capture=0 max=133.320ms
+  stream heartbeat events=5640 during_capture=0 max=72.923ms
+  stream sync      events=56792 during_capture=0 max=135.920ms
+  stream tick      events=16 during_capture=0 max=51.637ms
+runtime metrics: seconds=1802 events_used=69139 unmatched=0 gc_stw_max=1.311ms other_stw_max=3.670ms sched_latency_max=50.332ms (tail windows 50.332ms) involuntary_ctxsw/s all=88593 tail=97568
+  gc_cycle                     seconds=100.00% tail_events=100.00% enrichment=1.00
+  gc_stw_over_1ms              seconds=  0.06% tail_events=  0.00% enrichment=0.00
+  other_stw_any                seconds= 99.94% tail_events=100.00% enrichment=1.00
+  sched_latency_over_10ms      seconds=  1.22% tail_events= 74.82% enrichment=61.28
+  sched_latency_over_50ms      seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  cpu_over_90pct               seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  mark_assist_over_50ms_cpu    seconds= 98.95% tail_events=100.00% enrichment=1.01
+  ticker_lag_over_10ms         seconds=  0.06% tail_events=  0.49% enrichment=8.89
+trace tail-00.trace span=5132ms events=5 stw>1ms=0
+  sync      total=  51.04ms g=5079   label=sync:business                        stw=0.00 gcmark=0.0 assist(g/all)=0.00/0.0 runnable(mean/max)=49.9/361 runningP=8.0 idle+queued=37.88ms parts=map[business:34892 commit:0 deliver:16143]
+      business   34.89ms run=0.01 runnable=0.18 syscall=0.01 wait=map[network:34.70]
+      commit      0.00ms run=0.00 runnable=0.00 syscall=0.00 wait=map[]
+      deliver    16.14ms run=0.53 runnable=0.59 syscall=0.03 wait=map[network:14.99]
+trace tail-00.trace span=5132ms events=5 stw>1ms=0
+trace tail-01.trace span=5405ms events=1761 stw>1ms=0
+trace tail-02.trace span=5542ms events=1793 stw>1ms=0
+trace tail-03.trace span=5119ms events=14 stw>1ms=0
+trace tail-04.trace span=5678ms events=1629 stw>1ms=0
+trace tail-05.trace span=5287ms events=1823 stw>1ms=0
+trace tail-06.trace span=5815ms events=3266 stw>1ms=0
+trace tail-07.trace span=5556ms events=67 stw>1ms=0
+trace tail-08.trace span=5979ms events=880 stw>1ms=0
+trace tail-09.trace span=5532ms events=1982 stw>1ms=0
+trace tail-10.trace span=5099ms events=2260 stw>1ms=0
+trace tail-11.trace span=5682ms events=3359 stw>1ms=0
+baseline base-00.trace span=5909ms windows(50ms)=118 stw=40.68% stw>5ms=0.00% gcmark=59.32% runnable_mean p50/p99=9.2/20.2 idle+queued p99=9.28ms stw>1ms=0
+baseline base-01.trace span=5814ms windows(50ms)=116 stw=34.48% stw>5ms=0.00% gcmark=34.48% runnable_mean p50/p99=9.3/20.6 idle+queued p99=8.61ms stw>1ms=0
+baseline base-02.trace span=5685ms windows(50ms)=113 stw=38.05% stw>5ms=0.00% gcmark=32.74% runnable_mean p50/p99=9.7/19.6 idle+queued p99=9.44ms stw>1ms=0
+baseline base-03.trace span=5612ms windows(50ms)=112 stw=39.29% stw>5ms=0.00% gcmark=83.04% runnable_mean p50/p99=9.9/20.7 idle+queued p99=8.15ms stw>1ms=0
+baseline base-04.trace span=5586ms windows(50ms)=111 stw=45.05% stw>5ms=0.00% gcmark=39.64% runnable_mean p50/p99=9.7/19.3 idle+queued p99=10.43ms stw>1ms=0
+baseline base-05.trace span=5481ms windows(50ms)=109 stw=39.45% stw>5ms=0.00% gcmark=83.49% runnable_mean p50/p99=9.8/21.8 idle+queued p99=18.96ms stw>1ms=0
+trace labels:
+trace labels:
+  sync:business                            9364
+  sync:deliver                             6839
+  admit-late(ticker)                       1215
+  queue:mixed                              694
+  gate:waiting(select)                     381
+  queue:worker-runnable(sched-delay)       244
+  queue:worker-busy(head-of-line)          78
+  queue:worker-waiting(sync)               19
+  tick:runnable(sched-delay)               3
+  tick:running                             1
+  gc-mark-assist-pressure                  1

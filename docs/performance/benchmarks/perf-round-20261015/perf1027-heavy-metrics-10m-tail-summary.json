@@ -1,0 +1,15 @@
+{
+  "baseline_every_s": 0,
+  "dropped_events": 6281,
+  "go": "go1.27.0",
+  "gomaxprocs": 10,
+  "max_captures": 12,
+  "mode": "metrics",
+  "origin_unix_nano": 1792000367367255000,
+  "post_ms": 1000,
+  "save_failures": null,
+  "save_intervals_s": null,
+  "tail_captures": 0,
+  "tail_events": 76658,
+  "threshold_ms": 50
+}

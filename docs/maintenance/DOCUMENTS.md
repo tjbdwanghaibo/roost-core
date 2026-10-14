@@ -65,6 +65,7 @@
 - [STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准（池名为当时的 fast/slow）
+- [PERF-ROUND-20261015.md](../performance/PERF-ROUND-20261015.md)：2026-10-15 性能四项（长尾归因、nestwal 编码去反射 benchstat、Remote / Saga 复测、AOI 4 并行度重档）
 - [V1270-HEAVY-30M-20261014.md](../performance/V1270-HEAVY-30M-20261014.md)：v1.27.0 发布后同参数 30 分钟重档复测（通过）与 15 分钟样本对照
 - [V1260-HEAVY-20261013.md](../performance/V1260-HEAVY-20261013.md)：v1.26.0 发布后同参数 15 分钟重档复测（通过）与上一样本对照
 - [REVIEW-20261012.md](../performance/REVIEW-20261012.md)：2026-10-12 新增提交的修复与性能验证、合批测试修复证据

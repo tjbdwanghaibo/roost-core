@@ -1,0 +1,26 @@
+go version go1.27.2 darwin/arm64
+1bc6dd462046a3c4b42d2bca822b2a1b2b234c29
+?? docs/performance/benchmarks/nestwal-codec-20261015/
+d7b4e203da3cb2ede881b5e72ce526a8678b4955646b22b9e5220e9117300c13  codegen/internal/entity/testdata/nestgame/gate_load_test.go
+c1652b41598c7e0283873ecf40b7dcf33f09706f120c2d712ebc66e3db2b1b35  codegen/internal/entity/testdata/nestgame/load_test.go
+61234ccee6144b3e511225327ba70d0dec6d46bda4187da4fce70f57b82e89fe  codegen/internal/entity/testdata/nestgame/spatial_component_test.go
+4144f04b0263119f39bb4378ff9a761edb0a647ae699108c406f108617f8bd0b  codegen/internal/entity/testdata/nestgame/sync_load_test.go
+da36de4ea4c078e6c848a2006f43606957657a5341b7d168f8393246faddb359  codegen/internal/entity/testdata/nestgame/tailtrace_test.go
+3444270a6e8f7bcb707f775ea986340d10a42ef6a6b93ad01caa3e813b2169cc  codegen/internal/entity/testdata/nestgame/unit.go
+2266609228bf8c271509103b687ea2cdf04ff23eaa48140de20d79cb90f1f691  codegen/internal/entity/testdata/nestgame/def/state.go
+ROOST_NEST_GAME_DIRTY=5
+ROOST_NEST_GAME_DURATION=30m
+ROOST_NEST_GAME_ENTITIES=10000
+ROOST_NEST_GAME_GATE=1
+ROOST_NEST_GAME_HZ=10
+ROOST_NEST_GAME_IO_WORKERS=8
+ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10
+ROOST_NEST_GAME_PLAYERS=1000
+ROOST_NEST_GAME_PROFILE=0
+ROOST_NEST_GAME_RACE=0
+ROOST_NEST_GAME_SHORT_QUEUE=65536
+ROOST_NEST_GAME_SHORT_WORKERS=8
+ROOST_NEST_GAME_SYNC=1
+ROOST_NEST_GAME_TAIL=trace
+ROOST_NEST_GAME_TAIL_BASELINE_EVERY=5m
+GOMAXPROCS=0

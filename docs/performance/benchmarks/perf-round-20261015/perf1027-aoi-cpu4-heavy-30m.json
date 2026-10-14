@@ -1,0 +1,267 @@
+{
+ "SyncReport": {
+  "Mode": "on_change",
+  "Frames": 22455606,
+  "Updates": 88034429,
+  "VisibleMin": 28,
+  "VisibleMax": 50,
+  "ValuesVerified": true,
+  "LatencyPassed": true,
+  "PlannedToClient": {
+   "Samples": 83660097,
+   "Over50MS": 170895,
+   "NegativeDurations": 0,
+   "P50MS": 12.46,
+   "P95MS": 23.07,
+   "P99MS": 30.8,
+   "MaxMS": 286.22475,
+   "SamplesAtCeiling": 57561
+  },
+  "ChangedToClient": {
+   "Samples": 83660097,
+   "Over50MS": 19225,
+   "NegativeDurations": 0,
+   "P50MS": 4.5,
+   "P95MS": 12.89,
+   "P99MS": 20.58,
+   "MaxMS": 105.571834,
+   "SamplesAtCeiling": 314
+  },
+  "CommittedToClient": {
+   "Samples": 83660097,
+   "Over50MS": 19197,
+   "NegativeDurations": 0,
+   "P50MS": 4.49,
+   "P95MS": 12.88,
+   "P99MS": 20.56,
+   "MaxMS": 105.571042,
+   "SamplesAtCeiling": 314
+  }
+ },
+ "GateEnabled": true,
+ "GateCompleted": 18000000,
+ "GateRoundTrip": {
+  "Samples": 1125000,
+  "Over50MS": 32594,
+  "NegativeDurations": 0,
+  "P50MS": 2.14,
+  "P95MS": 7.08,
+  "P99MS": 12.91,
+  "MaxMS": 235.375583,
+  "SamplesAtCeiling": 446
+ },
+ "Config": {
+  "Entities": 10000,
+  "Players": 1000,
+  "MessageTargets": 1000,
+  "MessagesPerPlayer": 10,
+  "HeartbeatHz": 10,
+  "DirtyPercent": 5,
+  "Workers": 4,
+  "IOWorkers": 32,
+  "Queue": 65536,
+  "Duration": 1800000000000
+ },
+ "ClockWallDriftNS": 118028500,
+ "GoVersion": "go1.27.0",
+ "Platform": "darwin/arm64",
+ "GOMAXPROCS": 4,
+ "ElapsedSeconds": 1800.004225834,
+ "Messages": {
+  "Planned": 18000000,
+  "Accepted": 18000000,
+  "Rejected": 0,
+  "Completed": 18000000,
+  "EntityChanges": 900000,
+  "CompletedPerSecond": 9999.97652319956,
+  "FirstError": "",
+  "QueueWait": {
+   "Samples": 1125000,
+   "Over50MS": 32876,
+   "NegativeDurations": 0,
+   "P50MS": 1.55,
+   "P95MS": 5.82,
+   "P99MS": 10.41,
+   "MaxMS": 266.078125,
+   "SamplesAtCeiling": 1063
+  },
+  "Handler": {
+   "Samples": 1125000,
+   "Over50MS": 0,
+   "NegativeDurations": 0,
+   "P50MS": 0.01,
+   "P95MS": 0.01,
+   "P99MS": 0.01,
+   "MaxMS": 11.776834,
+   "SamplesAtCeiling": 0
+  },
+  "Completion": {
+   "Samples": 1125000,
+   "Over50MS": 42480,
+   "NegativeDurations": 0,
+   "P50MS": 8.02,
+   "P95MS": 13.24,
+   "P99MS": 18.64,
+   "MaxMS": 285.979292,
+   "SamplesAtCeiling": 1304
+  },
+  "ChangedEntityCompletion": {
+   "Samples": 900000,
+   "Over50MS": 2138,
+   "NegativeDurations": 0,
+   "P50MS": 7.88,
+   "P95MS": 13.31,
+   "P99MS": 18.81,
+   "MaxMS": 279.765125,
+   "SamplesAtCeiling": 1059
+  }
+ },
+ "Heartbeats": {
+  "Planned": 180000000,
+  "Accepted": 180000000,
+  "Rejected": 0,
+  "Completed": 180000000,
+  "EntityChanges": 9000000,
+  "CompletedPerSecond": 99999.76523199561,
+  "FirstError": "",
+  "QueueWait": {
+   "Samples": 11250000,
+   "Over50MS": 4908,
+   "NegativeDurations": 0,
+   "P50MS": 0.78,
+   "P95MS": 3.27,
+   "P99MS": 5.65,
+   "MaxMS": 84.181417,
+   "SamplesAtCeiling": 0
+  },
+  "Handler": {
+   "Samples": 11250000,
+   "Over50MS": 0,
+   "NegativeDurations": 0,
+   "P50MS": 0.01,
+   "P95MS": 0.01,
+   "P99MS": 0.01,
+   "MaxMS": 30.286042,
+   "SamplesAtCeiling": 0
+  },
+  "Completion": {
+   "Samples": 11250000,
+   "Over50MS": 60706,
+   "NegativeDurations": 0,
+   "P50MS": 7.16,
+   "P95MS": 10.41,
+   "P99MS": 13.48,
+   "MaxMS": 133.702167,
+   "SamplesAtCeiling": 718
+  },
+  "ChangedEntityCompletion": {
+   "Samples": 9000000,
+   "Over50MS": 3042,
+   "NegativeDurations": 0,
+   "P50MS": 7.16,
+   "P95MS": 10.42,
+   "P99MS": 13.5,
+   "MaxMS": 130.50675,
+   "SamplesAtCeiling": 575
+  }
+ },
+ "EntityChangesPerSecond": 5499.987087759759,
+ "AllocBytes": 1385787422208,
+ "Allocs": 19919899137,
+ "GCs": 15712,
+ "GCPauseMS": 1579.626485,
+ "EntityValuesVerified": true,
+ "CountsVerified": true,
+ "LatencyPassed": true,
+ "FinalNest": {
+  "Queue": {
+   "Short": {
+    "Running": 0,
+    "Ready": 0,
+    "BlockedOnPredecessor": 0,
+    "WaitingForWorker": 0,
+    "PeakWaiting": 6557,
+    "Started": 198000000,
+    "Rejected": 0,
+    "DependencyWait": 137590413359,
+    "WorkerWait": 209327651202492,
+    "MaxDependencyWait": 20978708,
+    "MaxWorkerWait": 81325333,
+    "OldestWaiting": 0
+   },
+   "IO": {
+    "Running": 0,
+    "Ready": 0,
+    "BlockedOnPredecessor": 0,
+    "WaitingForWorker": 0,
+    "PeakWaiting": 0,
+    "Started": 0,
+    "Rejected": 0,
+    "DependencyWait": 0,
+    "WorkerWait": 0,
+    "MaxDependencyWait": 0,
+    "MaxWorkerWait": 0,
+    "OldestWaiting": 0
+   },
+   "Long": {
+    "Running": 0,
+    "Ready": 0,
+    "BlockedOnPredecessor": 0,
+    "WaitingForWorker": 0,
+    "PeakWaiting": 0,
+    "Started": 0,
+    "Rejected": 0,
+    "DependencyWait": 0,
+    "WorkerWait": 0,
+    "MaxDependencyWait": 0,
+    "MaxWorkerWait": 0,
+    "OldestWaiting": 0
+   },
+   "LongPool": {
+    "Name": "nest_long",
+    "WorkerNum": 4,
+    "QueueCap": 4096,
+    "QueueLen": 0,
+    "Started": true,
+    "Stopped": true
+   },
+   "LongContinuations": 0,
+   "ContinuationRunning": 0
+  },
+  "Short": {
+   "Name": "nest_short",
+   "WorkerNum": 4,
+   "QueueCap": 65536,
+   "QueueLen": 0,
+   "Started": true,
+   "Stopped": true
+  },
+  "IO": {
+   "Name": "nest_io",
+   "WorkerNum": 32,
+   "QueueCap": 64,
+   "QueueLen": 0,
+   "Started": true,
+   "Stopped": true
+  },
+  "Long": {
+   "Name": "nest_long",
+   "WorkerNum": 4,
+   "QueueCap": 4096,
+   "QueueLen": 0,
+   "Started": true,
+   "Stopped": true
+  },
+  "ShortContinuations": 0,
+  "Delayed": 0,
+  "Stopped": true,
+  "Work": {
+   "ProcessedMessages": 198000000,
+   "Slow200msMessages": 0
+  }
+ },
+ "SamplesSummary": {
+  "count": 1801,
+  "heap_max": 203526232
+ }
+}

@@ -1,0 +1,59 @@
+# tail-11.trace（01:25:02 一簇）：go run ./scripts/perf/tailtrace/burst 的三种模式输出（在 scripts/perf/tailtrace 目录下运行）
+burst window: 150.0ms before first tail log .. last tail log (+82.4ms); comparison window same length 2s earlier
+== goroutine creations by start
+  burst=    380 before=    520  sync.(*WaitGroup).Go.func1
+== unblocks by unblocker stack
+  burst=   8938 before=  10149  
+  burst=   7988 before=   7899  infra/network/nats/driver.(*inboxClient).receive < infra/network/nats/driver.invokeNatsHandler < infra/network/nats/driver.(*Client).SubscribeBounded.func1 < github.com/nats-io/nats%2ego.(*Conn).waitForMsgs
+  burst=   5016 before=   5549  framework/sync/nettransport.signal < framework/sync/nettransport.(*AsyncTransport).SendReliable < wiring/gate.asyncQueue.Enqueue < infra/network/gateway.(*Gate).receiveOutbound
+  burst=   4606 before=   5495  framework/sync/nettransport.signal < framework/sync/nettransport.(*AsyncTransport).SendReliable < wiring/gate.asyncQueue.Enqueue < infra/network/gateway.(*GameIngress).enqueueOutbound
+  burst=   3402 before=   3095  sync.(*Mutex).Unlock < sync.(*RWMutex).Unlock < github.com/nats-io/nats%2ego.(*Conn).publish < github.com/nats-io/nats%2ego.(*Conn).PublishRequest
+  burst=   2520 before=   3657  github.com/nats-io/nats%2ego.(*Conn).kickFlusher < github.com/nats-io/nats%2ego.(*Conn).publish < github.com/nats-io/nats%2ego.(*Conn).PublishRequest < infra/network/nats/driver.(*inboxClient).RequestContext
+  burst=   2393 before=   2310  nestgame.(*gateFrontend).dispatch < nestgame.TestNestGameLoad.func2 < framework/nest.(*Ticker).doTick.func1 < infra/base/goroutine.SafeFunc
+  burst=   2393 before=   2319  infra/network/gateway.(*GameIngress).receiveForward < infra/network/nats/driver.invokeNatsHandler < infra/network/nats/driver.(*Client).SubscribeBounded.func1 < github.com/nats-io/nats%2ego.(*Conn).waitForMsgs
+  burst=   2295 before=   2313  framework/nest.replyDispatch < framework/nest.dispatchNest.func2 < framework/nest.dispatchNest < framework/nest.NestDispatch
+  burst=   2292 before=   2307  nestgame.newGateFrontend.func9 < sync.(*WaitGroup).Go.func1
+  burst=   1751 before=   2596  github.com/nats-io/nats%2ego.(*Conn).kickFlusher < github.com/nats-io/nats%2ego.(*Conn).publish < github.com/nats-io/nats%2ego.(*Conn).Publish < infra/network/nats/driver.(*Client).PublishOnce
+  burst=   1374 before=   1432  infra/network/gateway.(*Gate).receiveOutbound < infra/network/nats/driver.invokeNatsHandler < infra/network/nats/driver.(*Client).SubscribeBounded.func1 < github.com/nats-io/nats%2ego.(*Conn).waitForMsgs
+  burst=   1301 before=   1131  sync.(*Mutex).Unlock < sync.(*RWMutex).Unlock < github.com/nats-io/nats%2ego.(*Conn).publish < github.com/nats-io/nats%2ego.(*Conn).Publish
+  burst=   1269 before=   2053  sync.(*Mutex).Unlock < sync.(*RWMutex).Unlock < github.com/nats-io/nats%2ego.(*Conn).flusher
+  burst=   1263 before=   1964  sync.(*RWMutex).Unlock < github.com/nats-io/nats%2ego.(*Conn).flusher
+== runnable time (ms) by goroutine start function
+  burst=  14027 before=   2661  
+  burst=    244 before=    132  sync.(*WaitGroup).Go.func1
+  burst=      4 before=      0  nestgame.(*tailCollector).collect
+
+total running: burst=925.0ms normal=537.0ms (windows 125ms)
+  burst= 177.38ms normal=  98.67ms  sync.(*Mutex).Unlock > framework/nest.(*dispatchQueue).work
+  burst=  79.87ms normal=  22.82ms  client/wire.Read > nestgame.newGateFrontend.func9 > sync.(*WaitGroup).Go.func1
+  burst=  49.73ms normal=   0.00ms  runtime.systemstack_switch > runtime.gcBgMarkWorker
+  burst=  85.69ms normal=  39.75ms  framework/nest.(*dispatchQueue).work.func1 > infra/base/goroutine.SafeFunc > framework/nest.(*dispatchQueue).work
+  burst=  67.04ms normal=  23.10ms  infra/network/gateway.(*TCPServer).readFrame > infra/network/gateway.(*TCPServer).readRequests > infra/network/gateway.(*TCPServer).serveConnection
+  burst= 107.53ms normal=  66.82ms  framework/sync/nettransport.TransportFunc.SendReliable > framework/sync/nettransport.(*sessionQueue).send > framework/sync/nettransport.(*sessionQueue).run
+  burst=  46.61ms normal=  18.92ms  sync.(*Cond).Wait > framework/nest.(*dispatchQueue).work
+  burst=  43.04ms normal=  20.45ms  infra/network/gateway.(*GameIngress).dispatch > infra/network/gateway.(*GameIngress).forwardWorker > sync.(*WaitGroup).Go.func1
+  burst=  52.53ms normal=  32.95ms  runtime.selectgo > framework/sync/entitysync.(*Manager).run
+  burst=  56.44ms normal=  39.74ms  infra/network/nats/driver.invokeNatsHandler > infra/network/nats/driver.(*Client).SubscribeBounded.func1 > github.com/nats-io/nats%2ego.(*Conn).waitForMsgs
+  burst=  12.24ms normal=   0.00ms  infra/network/gateway.(*Gate).control > infra/network/gateway.(*Gate).controlWorker > sync.(*WaitGroup).Go.func1
+  burst=   9.05ms normal=   0.00ms  os.(*File).Write > encoding/json.(*Encoder).Encode > nestgame.(*tailCollector).collect
+  burst=   8.91ms normal=   0.00ms  framework/sync/entitysync/policy.(*AOI).evaluateObserver > framework/sync/entitysync/policy.(*AOI).endBatch.func2 > sync.(*WaitGroup).Go.func1
+  burst=   8.52ms normal=   1.79ms  sync.(*Mutex).Lock > infra/network/gateway.(*GameIngress).forwardWorker > sync.(*WaitGroup).Go.func1
+  burst=  23.33ms normal=  16.88ms  infra/base/goroutine.SafeFunc > framework/nest.(*Ticker).doTick > framework/nest.(*Ticker).run
+  burst=   9.40ms normal=   3.40ms  client/wire.Write > nestgame.newGateFrontend.func10 > sync.(*WaitGroup).Go.func1
+  burst=   5.79ms normal=   0.00ms  runtime.goschedIfBusy > runtime.bgsweep
+  burst=  13.45ms normal=   8.68ms  net.(*conn).Read > github.com/nats-io/nats%2ego.(*natsReader).Read > github.com/nats-io/nats%2ego.(*Conn).readLoop
+  burst=   2.29ms normal=   0.00ms  runtime.chanrecv2 > infra/network/gateway.(*GameIngress).controlWorker > sync.(*WaitGroup).Go.func1
+  burst=   1.62ms normal=   0.00ms  sync.(*Mutex).Lock > infra/network/gateway.(*GameIngress).controlWorker > sync.(*WaitGroup).Go.func1
+
+tail-00.trace first tail log wall=01:15:02.416
+tail-01.trace first tail log wall=01:15:22.834
+tail-02.trace first tail log wall=01:16:02.245
+tail-03.trace first tail log wall=01:17:02.285
+tail-04.trace first tail log wall=01:18:02.268
+tail-05.trace first tail log wall=01:19:02.317
+tail-06.trace first tail log wall=01:20:02.234
+tail-07.trace first tail log wall=01:21:02.380
+tail-08.trace first tail log wall=01:22:02.221
+tail-09.trace first tail log wall=01:23:02.219
+tail-10.trace first tail log wall=01:24:02.239
+tail-11.trace first tail log wall=01:25:02.217

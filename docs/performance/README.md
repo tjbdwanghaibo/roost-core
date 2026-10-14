@@ -4,12 +4,13 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [性能四项（2026-10-15）](PERF-ROUND-20261015.md) | 长尾约 60% 集中在每分钟第 2 秒，与宿主 MDM / CorpLink 周期任务同秒，未归因到代码；nestwal 编码去反射保留（编码 −9%～−63%）；Remote 80 TPS×30m、Saga 正向 20/s 与全补偿 10/s 各 10m 通过；AOI 4 并行度（GOMAXPROCS=4、short 4）重档 30 分钟通过（旧样本约 803 秒失败，不做单变量归因） |
 | [Nest 消息热路径优化](NEST-HOT-PATH-20261013.md) | 六项局部优化、96 组同机矩阵及异常交替复核；微基准不等于游戏混合负载容量 |
 | [v1.27.0 重档 30 分钟复测](V1270-HEAVY-30M-20261014.md) | 2026-10-14 同参数延长到 30 分钟通过：业务 P99 12.49ms、Sync 提交→客户端 P99 14.71ms、Gate 往返 P99 6.15ms，>50ms delta 0.0038%；堆与 goroutine 不随时间增长 |
 | [v1.26.0 重档 15 分钟复测](V1260-HEAVY-20261013.md) | 2026-10-13 发布后同参数重档通过：业务 P99 12.24ms、Sync 提交→客户端 P99 14.24ms、Gate 往返 P99 6.04ms，>50ms delta 0.0098% |
 | [2026-10-12 新增提交复验](REVIEW-20261012.md) | 配置快照/基准夹具修复与局部性能；15分钟重档目标在约6分钟出现Gate通道超时，未通过 |
 | [v1.24.0 稳定基线](STABLE-v1.24.0.md) | Nest、Sync、DataEngine、Remote/Saga 的历史验收；不代替新增 Gate 验收 |
-| [Gate / AOI 混合负载](GATE-AOI.md) | 1000玩家、10000实体、10000消息/s；2026-10-09常规通过、4并行度重档失败；2026-10-10快8/慢8/默认并行度重档15分钟通过 |
+| [Gate / AOI 混合负载](GATE-AOI.md) | 1000玩家、10000实体、10000消息/s；2026-10-09常规通过、4并行度重档失败；2026-10-10快8/慢8/默认并行度重档15分钟通过；2026-10-15 4并行度重档30分钟通过 |
 | [Nest 调度对照](NEST-DISPATCH-BENCHMARK.md) | ID hash / ID tail、10～500μs handler 与 job 布局；微基准不能直接换算真实服务器容量 |
 
 ## 证据存放
@@ -37,4 +38,4 @@ bash scripts/perf/nest-game.sh
 
 运行前另设唯一 `ROOST_PERF_LABEL` 和私有 `ROOST_DATAENGINE_IT_NATS_URL`。`ROOST_PERF_CPU=0`保留Go自动选择，不代表运行时只有零个逻辑处理器；记录实际GOMAXPROCS。race、profile与索引刷新不要并跑正式延迟测量。其他模块命令及微基准见各报告，本文档整理未重新执行压测。
 
-长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比，以及 trace 中各分段的 goroutine 状态。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。
+长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比、长尾簇的墙钟分钟相位，以及 trace 中各分段的 goroutine 状态；单个 trace 的簇内对照用 [burst](../../scripts/perf/tailtrace/burst/main.go)。宿主噪声在本机很明显，见 [2026-10-15 报告 §1](PERF-ROUND-20261015.md#1-长尾延迟定位)。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。

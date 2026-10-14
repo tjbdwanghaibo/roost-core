@@ -1,0 +1,158 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+                                                         │  before.txt   │              after.txt               │
+                                                         │    sec/op     │    sec/op     vs base                │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10     398.0n ±  9%   181.6n ±  2%  -54.37% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10     441.1n ±  3%   199.9n ±  3%  -54.68% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10    1007.5n ±  6%   482.0n ±  2%  -52.16% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10    1068.0n ±  4%   497.9n ±  3%  -53.38% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10    1.781µ ±  6%   1.517µ ±  3%  -14.85% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10    1.761µ ±  4%   1.528µ ±  6%  -13.21% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10    6.301µ ±  3%   5.590µ ±  2%  -11.28% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10    6.359µ ±  3%   5.648µ ±  1%  -11.19% (p=0.001 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10    5.971µ ±  3%   5.073µ ±  4%  -15.03% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10    5.963µ ±  3%   4.613µ ±  4%  -22.65% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10    19.01µ ± 18%   13.41µ ±  5%  -29.49% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10    15.55µ ±  3%   13.56µ ±  5%  -12.79% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10       346.4n ±  2%   135.1n ±  4%  -61.02% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10       438.4n ±  2%   162.4n ±  5%  -62.95% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10      1009.5n ±  1%   427.6n ±  3%  -57.64% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10      1087.0n ±  2%   454.1n ±  2%  -58.22% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10       767.8n ±  1%   546.9n ±  3%  -28.78% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10       850.4n ±  1%   575.7n ±  1%  -32.30% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10       2.712µ ±  2%   2.056µ ±  1%  -24.19% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10       2.731µ ±  2%   2.081µ ±  6%  -23.81% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10      2.228µ ±  4%   1.963µ ±  2%  -11.87% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10      2.269µ ±  1%   1.997µ ±  2%  -11.99% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10      8.428µ ±  3%   7.661µ ±  2%   -9.11% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10      8.390µ ±  2%   7.654µ ±  2%   -8.77% (p=0.000 n=10)
+WALAppendAsyncParallel-10                                   109.8µ ±  2%   109.6µ ±  1%        ~ (p=0.481 n=10)
+WALAppendV2AsyncParallel-10                                 116.2µ ±  4%   115.2µ ±  3%        ~ (p=0.631 n=10)
+WALAppendStrict-10                                          4.060m ±  2%   4.081m ±  2%        ~ (p=0.631 n=10)
+WALAppendStrictParallel-10                                  420.0µ ±  1%   422.3µ ±  2%        ~ (p=0.075 n=10)
+BroadcastPipelinedCommit/broadcast_strict-10                980.1µ ±  1%   986.2µ ±  2%        ~ (p=0.481 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10             985.6µ ±  3%   993.7µ ± 10%        ~ (p=0.796 n=10)
+BroadcastPipelinedCommit/request_pipelined-10               988.5µ ±  2%   950.3µ ±  7%   -3.86% (p=0.009 n=10)
+geomean                                                     7.526µ         5.463µ        -27.42%
+
+                                                         │  before.txt  │               after.txt               │
+                                                         │ record_bytes │ record_bytes  vs base                 │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10     1.152k ± 0%    1.152k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10     1.207k ± 0%    1.207k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10     4.467k ± 0%    4.467k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10     4.522k ± 0%    4.522k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10    16.51k ± 0%    16.51k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10    16.57k ± 0%    16.57k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10    65.91k ± 0%    65.91k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10    65.96k ± 0%    65.96k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10    65.66k ± 0%    65.66k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10    65.72k ± 0%    65.72k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10    262.5k ± 0%    262.5k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10    262.6k ± 0%    262.6k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10        147.0 ± 0%     147.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10        202.0 ± 0%     202.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10        447.0 ± 0%     447.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10        502.0 ± 0%     502.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10        245.0 ± 0%     245.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10        300.0 ± 0%     300.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10        839.0 ± 0%     839.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10        894.0 ± 0%     894.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10       581.0 ± 0%     581.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10       636.0 ± 0%     636.0 ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10      2.183k ± 0%    2.183k ± 0%       ~ (p=1.000 n=10) ¹
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10      2.238k ± 0%    2.238k ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                     3.421k         3.421k       +0.00%
+¹ all samples are equal
+
+                                                         │  before.txt   │               after.txt               │
+                                                         │     B/op      │     B/op       vs base                │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10    1.391Ki ±  0%   1.250Ki ±  0%  -10.11% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10    1.422Ki ±  0%   1.250Ki ±  0%  -12.09% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10    5.078Ki ±  0%   4.750Ki ±  0%   -6.46% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10    5.109Ki ±  0%   4.750Ki ±  0%   -7.03% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10   18.14Ki ±  0%   18.00Ki ±  0%   -0.78% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10   18.17Ki ±  0%   18.00Ki ±  0%   -0.95% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10   72.33Ki ±  0%   72.00Ki ±  0%   -0.46% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10   72.36Ki ±  0%   72.00Ki ±  0%   -0.50% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10   72.14Ki ±  0%   72.00Ki ±  0%   -0.20% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10   72.17Ki ±  0%   72.00Ki ±  0%   -0.24% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10   264.3Ki ±  0%   264.0Ki ±  0%   -0.13% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10   264.4Ki ±  0%   264.0Ki ±  0%   -0.14% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10        400.0 ±  0%     248.0 ±  0%  -38.00% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10        488.0 ±  0%     312.0 ±  0%  -36.07% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10       1144.0 ±  0%     800.0 ±  0%  -30.07% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10       1232.0 ±  0%     864.0 ±  0%  -29.87% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10      1.156Ki ±  0%   1.008Ki ±  0%  -12.84% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10      1.242Ki ±  0%   1.070Ki ±  0%  -13.84% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10      4.117Ki ±  0%   3.781Ki ±  0%   -8.16% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10      4.266Ki ±  0%   3.906Ki ±  0%   -8.42% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10     4.000Ki ±  0%   3.852Ki ±  0%   -3.71% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10     4.086Ki ±  0%   3.914Ki ±  0%   -4.21% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10     15.49Ki ±  0%   15.16Ki ±  0%   -2.17% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10     15.52Ki ±  0%   15.16Ki ±  0%   -2.32% (p=0.000 n=10)
+WALAppendAsyncParallel-10                                  17.59Ki ± 37%   16.02Ki ± 19%        ~ (p=0.470 n=10)
+WALAppendV2AsyncParallel-10                                15.03Ki ± 32%   17.34Ki ± 45%        ~ (p=0.393 n=10)
+WALAppendStrict-10                                         140.0Ki ± 35%   153.5Ki ± 50%        ~ (p=0.853 n=10)
+WALAppendStrictParallel-10                                 29.68Ki ± 31%   24.54Ki ± 42%        ~ (p=0.190 n=10)
+BroadcastPipelinedCommit/broadcast_strict-10               99.13Ki ± 21%   90.57Ki ± 33%        ~ (p=0.796 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10            97.55Ki ± 28%   92.96Ki ± 26%        ~ (p=0.631 n=10)
+BroadcastPipelinedCommit/request_pipelined-10              98.47Ki ± 35%   97.26Ki ± 30%        ~ (p=0.796 n=10)
+geomean                                                    11.53Ki         10.53Ki         -8.73%
+
+                                                         │ before.txt  │             after.txt              │
+                                                         │  allocs/op  │ allocs/op   vs base                │
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_0-10    20.000 ± 0%   1.000 ± 0%  -95.00% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_1/effects_1-10    26.000 ± 0%   1.000 ± 0%  -96.15% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_0-10    53.000 ± 0%   1.000 ± 0%  -98.11% (p=0.000 n=10)
+RecordEncodingMatrix/full_1KiB/mutations_4/effects_1-10    59.000 ± 0%   1.000 ± 0%  -98.31% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_0-10   20.000 ± 0%   1.000 ± 0%  -95.00% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_1/effects_1-10   26.000 ± 0%   1.000 ± 0%  -96.15% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_0-10   53.000 ± 0%   1.000 ± 0%  -98.11% (p=0.000 n=10)
+RecordEncodingMatrix/full_16KiB/mutations_4/effects_1-10   59.000 ± 0%   1.000 ± 0%  -98.31% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_0-10   20.000 ± 0%   1.000 ± 0%  -95.00% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_1/effects_1-10   26.000 ± 0%   1.000 ± 0%  -96.15% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_0-10   53.000 ± 0%   1.000 ± 0%  -98.11% (p=0.000 n=10)
+RecordEncodingMatrix/full_64KiB/mutations_4/effects_1-10   59.000 ± 0%   1.000 ± 0%  -98.31% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_0-10      24.000 ± 0%   5.000 ± 0%  -79.17% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_1/effects_1-10      30.000 ± 0%   5.000 ± 0%  -83.33% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_0-10       69.00 ± 0%   17.00 ± 0%  -75.36% (p=0.000 n=10)
+RecordEncodingMatrix/patch_1/mutations_4/effects_1-10       75.00 ± 0%   17.00 ± 0%  -77.33% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_0-10       41.00 ± 0%   22.00 ± 0%  -46.34% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_1/effects_1-10       47.00 ± 0%   22.00 ± 0%  -53.19% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_0-10      137.00 ± 0%   85.00 ± 0%  -37.96% (p=0.000 n=10)
+RecordEncodingMatrix/patch_8/mutations_4/effects_1-10      143.00 ± 0%   85.00 ± 0%  -40.56% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_0-10      91.00 ± 0%   72.00 ± 0%  -20.88% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_1/effects_1-10      97.00 ± 0%   72.00 ± 0%  -25.77% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_0-10      337.0 ± 0%   285.0 ± 0%  -15.43% (p=0.000 n=10)
+RecordEncodingMatrix/patch_32/mutations_4/effects_1-10      343.0 ± 0%   285.0 ± 0%  -16.91% (p=0.000 n=10)
+WALAppendAsyncParallel-10                                  25.000 ± 0%   6.000 ± 0%  -76.00% (p=0.000 n=10)
+WALAppendV2AsyncParallel-10                                25.000 ± 0%   6.000 ± 0%  -76.00% (p=0.000 n=10)
+WALAppendStrict-10                                         37.000 ± 0%   8.000 ± 0%  -78.38% (p=0.000 n=10)
+WALAppendStrictParallel-10                                 25.000 ± 0%   6.000 ± 0%  -76.00% (p=0.000 n=10)
+BroadcastPipelinedCommit/broadcast_strict-10                125.0 ± 2%   106.0 ± 1%  -15.20% (p=0.000 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10             125.0 ± 2%   106.0 ± 1%  -15.20% (p=0.000 n=10)
+BroadcastPipelinedCommit/request_pipelined-10               126.0 ± 0%   107.0 ± 0%  -15.08% (p=0.000 n=10)
+geomean                                                     54.57        8.210       -84.96%
+
+                                                │ before.txt  │              after.txt              │
+                                                │    ops/s    │    ops/s      vs base               │
+BroadcastPipelinedCommit/broadcast_strict-10      1.020k ± 1%   1.014k ±  2%       ~ (p=0.481 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10   1.014k ± 3%   1.006k ± 11%       ~ (p=0.781 n=10)
+BroadcastPipelinedCommit/request_pipelined-10     1.012k ± 2%   1.052k ±  7%  +4.05% (p=0.010 n=10)
+geomean                                           1.015k        1.024k        +0.85%
+
+                                                │ before.txt  │              after.txt              │
+                                                │   p50-sec   │   p50-sec     vs base               │
+BroadcastPipelinedCommit/broadcast_strict-10      31.93m ± 0%   31.95m ±  5%       ~ (p=1.000 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10   31.90m ± 2%   31.97m ± 12%       ~ (p=0.631 n=10)
+BroadcastPipelinedCommit/request_pipelined-10     31.86m ± 2%   30.45m ±  8%  -4.43% (p=0.023 n=10)
+geomean                                           31.90m        31.45m        -1.41%
+
+                                                │  before.txt  │              after.txt              │
+                                                │   p99-sec    │   p99-sec     vs base               │
+BroadcastPipelinedCommit/broadcast_strict-10      37.93m ±  9%   38.45m ±  9%       ~ (p=0.631 n=10)
+BroadcastPipelinedCommit/broadcast_pipelined-10   37.46m ± 23%   39.83m ± 10%       ~ (p=0.853 n=10)
+BroadcastPipelinedCommit/request_pipelined-10     37.01m ±  8%   35.51m ± 10%       ~ (p=0.529 n=10)
+geomean                                           37.47m         37.89m        +1.12%

@@ -1,0 +1,144 @@
+# top -l 12 -s 1 -o cpu, 01:48:55-01:49:07 (load stopped)
+Processes: 716 total, 5 running, 711 sleeping, 5690 threads 
+2026/10/15 01:48:55
+Processes: 717 total, 5 running, 712 sleeping, 5702 threads 
+2026/10/15 01:48:56
+    405    WindowServer     86.8 18/1  
+    1120   sysmond          44.3 3/1   
+    0      kernel_task      13.6 668/10
+    5465   WallpaperAerials 7.1  14/1  
+    75432  top              6.1  1/1   
+Processes: 717 total, 5 running, 712 sleeping, 5700 threads 
+2026/10/15 01:48:58
+    1120   sysmond          97.8 3/1   
+    405    WindowServer     87.6 18/2  
+    0      kernel_task      17.2 668/10
+    75432  top              7.3  1/1   
+    5465   WallpaperAerials 7.2  13    
+    565    mds_stores       7.0  6     
+    592    corplink-service 6.5  30    
+    49496  iTerm2           4.3  12/3  
+Processes: 717 total, 4 running, 713 sleeping, 5698 threads 
+2026/10/15 01:48:59
+    1120   sysmond          99.0 3/1   
+    405    WindowServer     87.4 18/1  
+    0      kernel_task      14.9 668/11
+    1      launchd          11.7 4     
+    75432  top              7.3  1/1   
+    5465   WallpaperAerials 7.2  13    
+    49496  iTerm2           5.5  12    
+    29729  codebase-memory- 3.3  4     
+Processes: 717 total, 5 running, 712 sleeping, 5694 threads 
+2026/10/15 01:49:00
+    405    WindowServer     85.4 19/1  
+    0      kernel_task      13.5 668/10
+    75432  top              7.4  1/1   
+    5465   WallpaperAerials 7.2  13/1  
+    49496  iTerm2           3.9  12    
+    408    loginwindow      3.1  9     
+    29729  codebase-memory- 3.0  4     
+Processes: 717 total, 4 running, 713 sleeping, 5694 threads 
+2026/10/15 01:49:01
+    405    WindowServer     84.1 19/1  
+    408    loginwindow      17.8 9     
+    0      kernel_task      8.7  668/10
+    5465   WallpaperAerials 7.0  14    
+    75432  top              6.9  1/1   
+    331    logd             6.2  4     
+    18332  codebase-memory- 3.2  4     
+Processes: 720 total, 6 running, 714 sleeping, 5722 threads 
+2026/10/15 01:49:02
+    405    WindowServer     88.8 19/1  
+    1120   sysmond          76.9 3/1   
+    0      kernel_task      9.1  668/10
+    408    loginwindow      8.3  9     
+    75432  top              7.3  1/1   
+    5465   WallpaperAerials 6.5  14/1  
+    331    logd             5.9  4     
+Processes: 720 total, 4 running, 716 sleeping, 5726 threads 
+2026/10/15 01:49:03
+    1120   sysmond          99.4 3/1   
+    405    WindowServer     69.3 19    
+    0      kernel_task      8.5  668/10
+    75432  top              7.8  1/1   
+    5465   WallpaperAerials 6.7  14    
+    49496  iTerm2           5.4  12    
+    331    logd             4.4  4     
+    18332  codebase-memory- 3.1  4     
+Processes: 720 total, 3 running, 717 sleeping, 5727 threads 
+2026/10/15 01:49:04
+    405    WindowServer     85.5 19/1  
+    1120   sysmond          54.8 3     
+    0      kernel_task      14.9 668/10
+    5465   WallpaperAerials 7.5  14    
+    75432  top              7.3  1/1   
+    49496  iTerm2           6.2  12    
+    29729  codebase-memory- 3.2  4     
+    18332  codebase-memory- 3.2  4     
+Processes: 718 total, 3 running, 715 sleeping, 5727 threads 
+2026/10/15 01:49:05
+    405    WindowServer     87.0 19/1  
+    0      kernel_task      13.6 668/10
+    5465   WallpaperAerials 7.5  14    
+    75432  top              7.1  1/1   
+    49496  iTerm2           4.5  12    
+    29729  codebase-memory- 3.2  4     
+    18332  codebase-memory- 3.1  4     
+Processes: 718 total, 4 running, 714 sleeping, 5727 threads 
+2026/10/15 01:49:06
+    405    WindowServer     87.1 19/1  
+    0      kernel_task      14.1 668/10
+    5465   WallpaperAerials 7.5  14/2  
+    75432  top              7.2  1/1   
+    49496  iTerm2           5.7  12    
+    29729  codebase-memory- 3.1  4     
+    18332  codebase-memory- 3.1  4     
+Processes: 718 total, 3 running, 715 sleeping, 5710 threads 
+2026/10/15 01:49:07
+    1120   sysmond          92.1 3/1   
+    405    WindowServer     87.8 18    
+    0      kernel_task      14.2 668/10
+    75432  top              9.0  1/1   
+    5465   WallpaperAerials 7.4  14    
+    18332  codebase-memory- 3.3  4     
+    29729  codebase-memory- 3.2  4     
+    3290   codebase-memory- 3.0  4     
+
+# new processes (etime<2s), 01:49:17-01:51:27
+01:49:25 75577 1 trustevaluationagent 
+01:49:43 75772 1 /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent 
+01:49:46 75805 631 /Applications/CorpLink.app/Contents/Frameworks/CorpLink Network
+01:49:52 75869 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:50:02 75977 1 /System/Library/CoreServices/ManagedClient.app/Contents/MacOS/ManagedClient 
+01:50:02 75978 1 /usr/libexec/mdmclient 
+01:50:07 76041 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:50:07 76042 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:50:12 76087 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:50:23 76218 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76219 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76220 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76221 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76222 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76223 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76224 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76225 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76226 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:23 76227 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:37 76370 592 (route) 
+01:50:40 76400 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76401 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76402 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76403 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76404 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76405 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76406 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76407 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76408 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:40 76409 1 /System/Library/Frameworks/Contacts.framework/Support/contactsd 
+01:50:43 76446 1 /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent 
+01:50:51 76526 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:51:02 76641 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:51:02 76648 1 /System/Library/CoreServices/ManagedClient.app/Contents/MacOS/ManagedClient 
+01:51:02 76649 1 /usr/libexec/mdmclient 
+01:51:13 76761 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 
+01:51:13 76762 1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared 

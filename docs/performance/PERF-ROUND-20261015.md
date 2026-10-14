@@ -1,0 +1,174 @@
+# 性能工作四项（2026-10-15）
+
+维护者 2026-10-15 批准“全部处理”，要求单次负载测试最长 30 分钟。分支 `round/perf-1027`，基于 main `a91f5f72`（运行时代码与 tag `v1.27.0` 相同；之后 main 前进到 `47997b3a` 只多 CI / 测试入口 / 文档）。四项依次串行、独占本机执行，未与 race、全仓测试或索引重建并跑。
+
+环境：Apple M5、macOS 26.5.2 / arm64，go1.27.2，`GOMAXPROCS` 未设时为 10。宿主常驻后台负载（测量期间平均负载约 3.2～4.9），交换区已用约 5.7～5.8GB / 7GB。结论只对本机这些样本成立。
+
+| 项 | 结论 |
+| --- | --- |
+| 1. 长尾定位 | 未能归因到 roost 代码：约 60% 的长尾集中在每分钟第 2 秒，与宿主 MDM / CorpLink 周期任务同秒；GC STW、标记辅助、锁、进程内定时器已排除；另有两段数秒的簇“尚未确认”。无代码修复 |
+| 2. nestwal 编码去反射 | **保留**：编码耗时 −9%～−63%、分配 −15%～−98%；WAL 端到端由 fsync 主导，无可测差异，无退化 |
+| 3. Remote / Saga 复测 | Remote 80 TPS × 30m 通过（零错误、核验通过、资源有界）；Saga 正向 20/s、全补偿 10/s 各 10m 通过，全补偿 P99 1.47s 高于历史 1m 样本，原因尚未确认 |
+| 4. AOI 4 并行度重档 | 30 分钟**通过**（2026-10-09 同配置约 803 秒失败）；业务 P99 18.64ms、>50ms 0.236%，拒绝 0；多项改动叠加、单样本，不做单变量归因 |
+
+## 1. 长尾延迟定位
+
+**结论：未能归因到 roost 代码；证据指向宿主侧干扰。** 约六成长尾事件集中在每个墙钟分钟第 2 秒（hh:mm:02.1～02.3）的一簇里，同一秒宿主有 MDM / CorpLink 周期任务。其余主要来自两次持续数秒、不在整分钟的簇，未能唯一归因，有宿主干扰的同类特征（见下文）。没有找到可以用小而明确的代码改动消除的成因，所以本项没有修复提交。
+
+### 样本
+
+| 标签 | 采集 | 时长 | 结果 |
+| --- | --- | --- | --- |
+| `perf1027-heavy-tail-30m` | `ROOST_NEST_GAME_TAIL=trace`，`BASELINE_EVERY=5m`（12 个长尾窗口 + 6 个对照窗口，每个约 5.1～6.0s） | 1800.005s | 通过：业务 18000000 / HB 180000000，拒绝 0，计数 / DAO / AOI / P99 门槛全部通过 |
+| `perf1027-heavy-metrics-10m` | `ROOST_NEST_GAME_TAIL=metrics`（无 runtime trace） | 600.005s | 通过，同上 |
+
+负载参数与 [v1.27.0 30 分钟重档](V1270-HEAVY-30M-20261014.md) 相同：1000 玩家、10000 Entity、10 条/s、10Hz HB、5% 修改、short 8 / 65536、io 8、Gate + Sync on_change，`ROOST_PERF_CPU=0`（实际 10）。每次用独立私有 NATS 2.14.5（JetStream，随机端口），结束即停，日志无 slow consumer。**两次都开了采集，延迟数字不能与正式样本比较**，只用于归因：
+
+| 指标 | 正式 v1.27.0 30m（无采集） | trace 30m | metrics 10m |
+| --- | ---: | ---: | ---: |
+| 业务 P99 / max | 12.49 / 107.307ms | 12.07 / 132.082ms | 12.95 / 186.250ms |
+| 业务 >50ms | 0.0118% | 0.0255%（4582） | 0.1150%（6898） |
+| Sync 提交→客户端 P99 / max | 14.71 / 93.126ms | 14.47 / 116.120ms | 14.97 / 117.554ms |
+| Sync 提交→客户端 >50ms | 0.0038% | 0.0170% | 0.0455% |
+| Gate 往返 P99 / max | 6.15 / 87.835ms | 5.73 / 133.320ms | 6.69 / 126.638ms |
+
+开销更小的 metrics 样本，长尾比例反而高于 trace 样本：它碰上了一个持续 20 秒的簇（见下）。这说明长尾比例主要取决于宿主扰动，而不是采集开销或代码版本。
+
+### 证据
+
+1. **长尾成簇，并与墙钟分钟对齐。** trace 30m 的 69139 个超阈值事件（业务 / HB / Sync / Gate）分成 33 簇（簇内相邻间隔 <1s），其中 28 簇起点在某分钟的第 2 秒，共 41667 个事件（60.3%）。簇起点间隔几乎正好 60.0s（[episodes](benchmarks/perf-round-20261015/perf1027-heavy-tail-30m-episodes.txt)）。12 个 trace 窗口用时钟快照换算成墙钟后，第一条长尾都在 01:15:02.4～01:25:02.2 各分钟的 02.2～02.4 秒（01:15:22 那条是启动后 30 秒内）。metrics 10m 里 10 分钟中有 9 分钟在 :02 出现簇（[分析](benchmarks/perf-round-20261015/perf1027-heavy-metrics-10m-analysis.txt)），说明这与 trace 开销无关。
+2. **同一秒宿主有周期任务。** 负载停止后在 01:48:55～01:51:27 观察宿主（[记录](benchmarks/perf-round-20261015/host-minute-02.txt)）：01:49:02 进程数 717→720，`loginwindow` 17.8%，01:49:03 `CorpLink Helper` 33.4%；01:50:02 与 01:51:02 准时新起 `ManagedClient` 与 `mdmclient`（MDM 签到），其余时刻没有同类进程。这是时间上的对应，没有在负载期间同时采到宿主进程 CPU，所以是强相关而非直接因果。
+3. **进程内没有额外工作，是线程拿不到 CPU。** 以 tail-11（01:25:02 一簇）为例（[输出](benchmarks/perf-round-20261015/tail11-burst.txt)）：
+   - 首条长尾前后约 110ms 内，10 个 P 全程处于运行态（平时每 10ms 桶 50～65%）；goroutine 运行时间约为平时 2 倍（125ms 窗口 925ms 对 537ms），但唤醒次数与平时持平甚至略少，即没有多出业务工作。
+   - 该秒进程 rusage 的 user CPU 只从约 3.5s 到 3.6s，没有同比上升。“trace 里 Running 变长而实际 CPU 不增”，符合线程被宿主 OS 调走后 goroutine 仍记为 Running 的表现。
+   - 长尾窗口内可运行 goroutine 数的时间加权均值中位数为 91.7、峰值中位数 368；对照窗口（50ms 滑窗）均值的 P99 只有 19～22。
+   - 每秒指标里，长尾事件所在秒的“调度延迟 >10ms”比例为 74.8%，而全部秒只有 1.22%（富集 61 倍）。CPU 秒均占用从未超过 90%；进程 involuntary 上下文切换在长尾秒约高 10%（97568 对 88593 次/s）。
+4. **已排除的进程内因素：**
+   - GC STW：30 分钟内单次 GC 停顿最大 1.311ms，trace 窗口内没有 >1ms 的 STW。18839 个带 trace 的长尾事件窗口内，STW 合计最大 0.71ms、平均 0.22ms，相对 50ms 以上的延迟可以忽略。
+   - 其他 STW：每秒 1 次、≤3.67ms，来自夹具每秒的 `ReadMemStats`。
+   - GC 标记辅助：每秒都有，不富集（1.01 倍）。
+   - ticker 投递晚：只占 0.49% 的长尾事件。
+   - 互斥等待：簇内每秒总等待从约 2s 升到 3～13s，这是 goroutine 积压后的结果，没有单把锁长时间持有的迹象。
+   - 进程内周期任务：Gate / GameIngress 的续租（每 5s，1000 连接同步）在簇内可见，但周期是 5s 而不是 60s，簇外同样发生而不产生长尾。代码中没有按墙钟分钟对齐的定时器（检索 `time.Minute` 定时器与 `Truncate` 对齐；statslog 默认 1 分钟周期，但本夹具未启动它）。
+   - 同 worker 队头阻塞：标签计数 78 / 69139，次要。
+5. **未归因的部分。**
+   - 01:25:19～01:25:26（trace 30m，最大 135.9ms，约 27000 个事件；12 个 trace 名额此时已用完）与 01:57:49～01:58:10（metrics 10m，最大 190.2ms）是两段持续数秒、不在整分钟的簇。指标特征相同：调度延迟 >10ms 出现，最大 50.3ms，互斥等待上升，user CPU 不升，goroutine 数短暂 +10。
+   - 观察期间宿主还有 `contactsd` 一次起 10 个进程、`mdworker_shared` 成组启动等突发，但没有与这两段对上的直接证据。这一部分标记为“尚未确认”。
+   - 历史 250.699ms 样本没有可对的墙钟与 trace 数据，无法判断是否同类。
+
+### 建议与边界
+
+- 不改代码。若要把长尾压到宿主噪声以下，可选方向：
+  - 在独占服务器 / Linux 实机复测；
+  - 给宿主留 CPU 余量（例如 `GOMAXPROCS` 小于核心数），做同参数对照；这会改变并行度，属于部署配置选择，需维护者决定；
+  - 采集 `trace` 时把 `MAX_CAPTURES` 调大或按需加 `BASELINE_EVERY`，以覆盖整分钟之外的簇。
+- 本结论只覆盖本机 macOS 这两次样本；“调度延迟富集 + rusage 不增 + 墙钟分钟对齐 + 同秒宿主任务”构成强相关证据链，但没有在负载期间直接测宿主进程，不写成唯一根因。
+- 工具：采集与分析见 `ROOST_NEST_GAME_TAIL`（[README 复跑入口](README.md#复跑入口)）、`scripts/perf/tailtrace`（本轮增加 episode 墙钟相位输出）与 `scripts/perf/tailtrace/burst`（单 trace 簇内对照）。原始 trace（每个约 36～43MB，共约 1.4GB）在忽略目录 `artifacts/perf/nest/perf1027-heavy-tail-30m/sample-1.tail/`。
+
+## 2. nestwal 编码去反射
+
+改动 `ca0cbddf`：`framework/nestwal/codec.go` 的 `encodeRecord` 各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配切片；codec7 落盘格式逐字节不变，由 `codec_reference_test.go`（改造前实现作参照，2004 条记录逐字节对照与解码往返）保证。解码侧未改。
+
+方法：前 `a91f5f72`、后 `ca0cbddf` 各编译一份 `framework/nestwal` 测试二进制，同机交替 10 轮（每轮先前后后，`-count=1 -benchmem`，`GOMAXPROCS=10`），01:00～01:14 完成；benchstat 原样见 [benchmarks/nestwal-codec-20261015/benchstat.txt](benchmarks/nestwal-codec-20261015/benchstat.txt)。
+
+| benchmark | 前 | 后 | 变化 |
+| --- | ---: | ---: | --- |
+| 编码 full_1KiB，1 mutation | 398.0ns / 20 allocs | 181.6ns / 1 alloc | −54.4%（p=0.000） |
+| 编码 patch_1，1 mutation | 346.4ns / 24 allocs | 135.1ns / 5 allocs | −61.0% |
+| 编码 patch_8，4 mutations | 2.712µs / 137 allocs | 2.056µs / 85 allocs | −24.2% |
+| 编码 full_64KiB，4 mutations | 15.55～19.01µs | 13.41～13.56µs | −12.8%～−29.5% |
+| 编码 patch_32，4 mutations | 8.43µs / 337 allocs | 7.66µs / 285 allocs | −9.1% |
+| 编码矩阵 24 组几何均值 | | | 全部显著变快（−8.8%～−63.0%） |
+| WALAppendAsyncParallel / V2 | 109.8 / 116.2µs | 109.6 / 115.2µs | ~（p=0.48 / 0.63）；allocs 25→6 |
+| WALAppendStrict / StrictParallel | 4.060ms / 420.0µs | 4.081ms / 422.3µs | ~（p=0.63 / 0.08）；allocs 37→8、25→6 |
+| BroadcastPipelinedCommit strict / pipelined | 980 / 986µs | 986 / 994µs | ~；allocs 125→106 |
+| BroadcastPipelinedCommit request_pipelined | 988.5µs | 950.3µs | −3.9%（p=0.009，±7%，按无实质差异看待） |
+
+解读与边界：
+
+- 编码本身的收益明确，小记录最大（定长字段占比高），大 payload 记录收益被 payload 拷贝稀释。编码在 `Enqueue` 同步完成、调用方此时持实体锁，所以省下的是持锁时间和 GC 分配压力。
+- WAL 追加与 Nest→WAL 端到端（`BroadcastPipelinedCommit` 经正式 Nest 与 Projector）每次提交约 0.1～4ms，由 fsync / 组提交主导；编码节省的几百纳秒在这些用例里测不出，吞吐与 p50 / p99 无显著变化，也没有退化。
+- 未做 Nest 内存热路径（`BenchmarkNestHotPath`）对照：它的 Getter 是内存夹具、Durability 为 memory，不经过 nestwal，代码在两个版本间相同；Nest 经 WAL 的端到端用 `BroadcastPipelinedCommit` 代表。
+- 候选（维护者未批准，未做）：直接编码进帧缓冲（预留 20 字节帧头），可再省 `encodeFrame` 的一次分配和 payload 拷贝。
+
+## 3. Remote 与 Saga 容量复测（v1.27 代码）
+
+均在共享隔离环境 `~/.roost-it/roost-dataengine-it` 上运行（Mongo 三节点副本集、NATS 三节点 JetStream、Redis、toxiproxy；只 source env，不打印），脚本自带 `remote-acceptance.lock`，开始前锁空闲，无需等待。被测代码为本分支 `1bc6dd46`（运行时与 v1.27.0 相同，另含 §2 的 nestwal 编码改动；Remote strict 路径经 nestwal，所以本样本已包含该改动）。历史样本在私有 `mirror-local` 环境上跑，环境不同，以下对照只看量级与是否达标。
+
+### Remote 80 TPS × 30 分钟
+
+参数与 [v1.24.0 稳定验收](STABLE-v1.24.0.md#环境与复跑) 相同，只把时长由 1h 改为 30m、heap 采样点改为 10 / 30 分钟：`ROOST_REMOTE_CPU=4 RATE=80 POLICY=strict SESSIONS=1000 ENTITIES=10000 WORKERS=8 FAST_QUEUE=4096 IO_WORKERS=1024 SLOW_QUEUE=16 WRITE_LIMIT=256 WAL_LIMIT=512 PROJECTION_WORKERS=8 STAGE_METRICS=1`，`GOFLAGS=-p=1`，标签 `perf1027-remote-80-30m`，02:03～02:34。
+
+| 指标 | v1.24.0 1h（2026-10-08） | v1.27 代码 30m（本次） |
+| --- | ---: | ---: |
+| 成功 / 实际 TPS | 288000 / 79.995 | 144000 / 79.991 |
+| Errors / Dropped / 未应用 / 不确定 | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| 延迟 p50 / p95 / p99 / max | 117 / 181 / 716 / 1643ms | 133 / 195 / 278 / 1602ms |
+| 全量数据核验（`.verified`） | 通过 | 通过 |
+| heap 进度采样 min～max / 末尾 | 82.09～218.72 / 122.89MiB | 65.88～238.78 / 115.09MiB |
+| goroutine min～max / 末尾 | 1104～2298 / 1104 | 1112～2191 / 1112 |
+| WAL 未确认峰值 / 结束 | 62 / 0 | 39 / 0 |
+| Remote 同时事务峰值 / 写入峰值 / 写拒绝 | 62 / 94 / 0 | 39 / 40 / 0 |
+| 事务记录峰值 | 65485 | 65277 |
+| GC 后 heap（pprof）10m / 30m / 结束 | 117.54 / 116.04 / 101.74MB | 123.94 / 115.55 / 113.02MB |
+
+结论：**通过**。80 TPS 输入全部按时完成，零错误零丢弃，最终数据核验通过，资源与积压有界、结束归零。p50 / p95 比历史高约 10%，p99 低于历史；环境不同（共享隔离环境对历史私有环境）、时长不同，不据此判定变快或变慢。随仓摘要：[result](benchmarks/perf-round-20261015/perf1027-remote-80-30m-result.json)、[env](benchmarks/perf-round-20261015/perf1027-remote-80-30m-env.txt)；进度 JSONL、heap profile、日志在忽略目录 `artifacts/perf/remote/perf1027-remote-80-30m/`。
+
+### Saga 正向 20/s 与全补偿 10/s，各 10 分钟
+
+按 [v1.24.0 报告](STABLE-v1.24.0.md#saga-复跑与判据) 的参数（正向 20/s、全补偿 10/s，`GOFLAGS=-p=1`，默认 Engine 配置，三副本 JetStream），时长由历史的 1 分钟延长到夹具允许的上限 10 分钟（`TestRealSagaPerformance` 限制 `ROOST_SAGA_PERF_DURATION ≤ 10m`，脚本超时 15m），02:35～02:55。
+
+| 路径 | 样本 | 完成 / 计划 | 实际 TPS | P50 / P95 / P99 / max（ms） |
+| --- | --- | ---: | ---: | --- |
+| 正向 20/s | v1.24.0 三轮 × 1m | 各 1200 / 1200 | 19.927～19.932 | 330～350 / 406～471 / 430～542 / 480～588 |
+| 正向 20/s | 本次 10m | 12000 / 12000 | 19.992 | 376.7 / 479.8 / 538.9 / 632.2 |
+| 全补偿 10/s | v1.24.0 两轮 × 1m | 各 600 / 600 | 9.954 | — / — / 601～619 / 660～780 |
+| 全补偿 10/s | 本次 10m | 6000 / 6000 | 9.995 | 514.7 / 694.9 / 1471.8 / 2013.2 |
+
+两次都通过夹具的全部断言：
+- StartErrors / WrongTerminal / PublishFailures / StoreFailures / WorkerFailures / Conflicts / Duplicates 均为 0，outbox 与 lease 排空。
+- 逐文档核验通过：正向业务值为 2、每步效果恰好 1 次（24000 条）；补偿业务值为 0（效果 12000 条，补偿 6000 个）。
+
+结论：
+- **正向 20/s 通过**，与历史同量级，10 分钟内没有积压（完成率等于输入率）。
+- **全补偿 10/s 通过**，完成率等于输入率、没有持续积压。但 P99 / max（1.47 / 2.01s）明显高于历史 1 分钟样本（0.6s），P95 0.69s 与历史 P99 接近。夹具只输出整体分位，没有时间序列，无法判断这部分长尾是偶发尖峰（共享环境、10 倍样本时长）还是缓慢增长，记为“尚未确认”。若要判断，需要给夹具加按时间分段的分位输出后复测。
+- 不宣称 Saga 精确极限；20/s 全补偿仍按历史结论视为饱和档，本次未复测。
+
+## 4. AOI 4 并行度重档复测
+
+复跑 [GATE-AOI](GATE-AOI.md) 2026-10-09 失败的那组配置。参数：
+- `ROOST_PERF_CPU=4`（GOMAXPROCS=4）、`ROOST_NEST_GAME_SHORT_WORKERS=4`、`SHORT_QUEUE=65536`；
+- 1000 玩家、10000 Entity、10 条/s、`HZ=10`、`DIRTY=5`、Gate + Sync on_change；
+- `IO_WORKERS` 用夹具默认 32，与当时的慢池默认一致。本场景不使用 io 池。
+
+时长由 15 分钟改为 30 分钟，私有 NATS 2.14.5（JetStream，随机端口，02:56～03:26，结束即停，日志无 slow consumer），无采集、race 或 profile。标签 `perf1027-aoi-cpu4-heavy-30m`，代码为本分支 `1bc6dd46`（运行时与 v1.27.0 相同；本场景 Durability 为 memory，不经 nestwal）。
+
+| 指标 | 2026-10-09 同配置 15 分钟目标 | v1.27 代码 30 分钟（本次） |
+| --- | --- | --- |
+| 结果 | **失败**：802.919s Gate 准入耗尽，805.465s Nest 队列满，结束 EOF 与最终值不一致，无最终 JSON | **通过**：1800.004s 跑满，计数 / DAO / AOI 可见集合 / P99 门槛全部通过 |
+| 业务完成 | 首错时 8020156 | 18000000，9999.98/s，拒绝 0 |
+| HB 完成 | 首错时 80284275 | 180000000，99999.77/s，拒绝 0 |
+| 业务 计划→完成 P99 / max / >50ms | — | 18.64 / 285.979ms / 42480（0.2360%） |
+| HB 计划→完成 P99 / max / >50ms | — | 13.48 / 133.702ms / 60706（0.0337%） |
+| Gate 往返 P99 / max / >50ms | — | 12.91 / 235.376ms / 32594 |
+| Sync 提交→客户端 P99 / max / >50ms | — | 20.56 / 105.571ms / 0.0229% |
+| Sync 计划→客户端 P99 / max | — | 30.80 / 286.225ms |
+| short 等待峰值 / 最大 worker 等待 | 首错前历史峰值 12665；首错时 WaitingForWorker 6920 | 6557 / 81.3ms，拒绝 0 |
+| AOI 可见集合 | 约 26～50 | 28～50 |
+| 堆采样峰值（前 1/4 → 后 1/4）/ goroutine | — | 203.5MB（199.6 → 203.5）/ 5458～5462 |
+
+结论：
+- **本次 30 分钟通过**，2026-10-09 的首错（约 803 秒 Gate 准入耗尽）没有在 1800 秒内出现。
+- 两次之间有多项改动（至少包括 2026-10-13 Nest 热路径六项优化、v1.26.0 去掉慢诊断全进程抓栈、三池改名等），又只有单次样本，**不能把通过归因于某一项**，也不能宣称旧首错的根因已关闭。
+- 与默认并行度（10）重档相比，4 并行度下业务 P99（18.6ms）和长尾（>50ms 0.236%，max 286ms）明显更高，但在 P99≤50ms 门槛内。4 个 P 留给宿主的核心更多，本机宿主噪声对它的影响与 §1 不同，两者不直接比较。
+- 范围：Gate / Game / 客户端仍在同一 Go 进程，只有 broker 是独立进程；不是跨机或独占服务器的容量证明。
+
+## 产物与进程清理
+
+- 随仓：[benchmarks/nestwal-codec-20261015/](benchmarks/nestwal-codec-20261015/)（benchstat、env）、[benchmarks/perf-round-20261015/](benchmarks/perf-round-20261015/)（各负载去掉逐秒 Samples 的结果 JSON、env、长尾分析摘要、episode 列表、burst 输出、宿主观察）。
+- 忽略目录：`artifacts/perf/nestwal-codec-20261015/`（测试二进制、原始 bench 输出）、`artifacts/perf/nest/perf1027-*`（完整 JSON、日志、二进制、trace）、`artifacts/perf/remote/perf1027-remote-80-30m/`、`artifacts/perf/saga/perf1027-saga-*`、`artifacts/perf/round-perf-1027/`（启动脚本、私有 NATS 日志、宿主 top / 新进程记录）。
+- 私有 NATS 每次负载结束立即停止：
+  - `perf1027-heavy-tail-30m`：pid 71018，01:45:24 停止；
+  - `perf1027-heavy-metrics-10m`：pid 77113，02:02:51 停止；
+  - `perf1027-aoi-cpu4-heavy-30m`：pid 86360，03:26:13 停止。
+- Remote / Saga 使用共享隔离环境，未启动或停止其中服务，锁由脚本自行获取与释放。结束时没有残留的负载进程或本轮私有 NATS。
