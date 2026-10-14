@@ -130,9 +130,10 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 	m.remote.txMu.Unlock()
 }
 
-// remoteCommitFinal 报告 tracker 的终态：Committed（已持久并发布）与 Rejected（持久拒绝或
-// 确定未提交）。Admitted/Applied/Indeterminate/Unknown 都只是过程或未知结论，可以被后续的
-// 持久结论覆盖；终态一旦写入就不再改变。
+// remoteCommitFinal 报告 tracker 的终态：Committed（已持久并发布）与 Rejected（确定未提交）。
+// Admitted/Applied/Indeterminate/Unknown 都只是过程或未知结论，可以被后续的持久结论覆盖；终态一旦写入就不再改变。
+// Rejected 只来自 Durability 0（ApplyRemoteCommits 被权威明确拒绝、finalizer 为未知结果写下的持久拒绝）
+// 和 WAL 准入前的 Abort；Durability 1/2/3 的 WAL 投影不产生 Rejected（写权威冲突是投影器 fatal）。
 func remoteCommitFinal(state entity.RemoteCommitState) bool {
 	return state == entity.RemoteCommitCommitted || state == entity.RemoteCommitRejected
 }
@@ -263,11 +264,4 @@ func (m *Manager) FlushRemoteAll(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// RejectRemoteTransaction 在持久拒绝写下之后把结论交给 tracker；finalizer 仍可回源恢复此结论。
-// 生产路径不再产生（原唯一调用方——投影器对“Remote + lease fence”历史 WAL 记录的拒绝——已随旧格式
-// 兼容移除，维护者 2026-10-13），仅供测试注入 durable rejection；去留见 KNOWN-LIMITS“Remote WAL级Rejected处理”。
-func (m *Manager) RejectRemoteTransaction(id entity.RemoteTransactionID, cause string) {
-	m.completeRemoteTransaction(id, entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitRejected, Cause: cause})
 }

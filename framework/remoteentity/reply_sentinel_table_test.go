@@ -135,7 +135,8 @@ func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow12(t *testing.T) {
 // 本地事务已提交而 Remote 部分被明确拒绝（只丢弃被拒绝的 Remote 部分，本地部分照常生效）：回复满足 errors.Is(nest.ErrRemotePartRejected)，
 // 按“第一个命中的行”落在第 4 行（部分已提交、不得整笔重试），原因（entity.ErrRemoteRejected / ErrRemoteVersionConflict）仍可 errors.Is；
 // 不带第 2 行（结果未知）与第 3 行（Remote 也已确认）的哨兵；本地 committer 确实收到了这笔记录。
-// strict：WAL 投影器（这里由 beforeWait 模拟）把 Remote 写交给权威、被版本冲突拒绝；memory：Durability 0 由 Commit 直接写权威、被版本冲突拒绝。
+// memory：Durability 0 由 Commit 直接写权威、被版本冲突拒绝——框架自带 remoteentity 唯一会落在第 4 行的来源；
+// strict / pipelined 见 TestRemoteWALCommitFailureNeverRepliesRemotePartRejected。
 // 历史：RR-20260928-03。
 func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) {
 	for _, tc := range []struct {
@@ -146,11 +147,6 @@ func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) 
 		beforeWait func(f reloadFixture, commits []entity.RemoteCommit)
 		cause      error
 	}{
-		{name: "strict_projector_rejected", rawID: 1997, durability: nest.DurabilityStrict, rollback: nest.RollbackUndo,
-			beforeWait: func(f reloadFixture, commits []entity.RemoteCommit) {
-				f.storage.reject.Store(true)
-				go func() { _, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits) }()
-			}, cause: entity.ErrRemoteRejected},
 		{name: "memory_rejected", rawID: 1998, durability: nest.DurabilityMemory, rollback: nest.RollbackNone,
 			beforeWait: func(f reloadFixture, _ []entity.RemoteCommit) { f.storage.reject.Store(true) },
 			cause:      entity.ErrRemoteVersionConflict},
@@ -199,6 +195,90 @@ func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) 
 			}
 			if row != 4 {
 				t.Fatalf("reply err=%v hits decision-table row %d (sentinels [%s]), want row 4", err, row, hits)
+			}
+		})
+	}
+}
+
+// 等待 WAL 投影器结论的 Commit（strict，以及带 Remote 批次、随 strict 路径提交的 pipelined）失败一律带
+// ErrRemotePersistenceIndeterminate，回复落在第 2 行、不带 ErrRemotePartRejected：WAL 级 Remote 没有明确拒绝
+// （投影器写权威冲突是 fatal），本地记录已进 WAL 时“Remote 没写入”无从断定。这里在等待开始前让 tracker 变成 Rejected
+// （storage 拒绝后经 ApplyRemoteCommits 记下——正式投影器不会这样调用，只用来构造等待者能看到的最坏情形），原因仍可
+// errors.Is；批次照常交给 finalizer，按 tracker 结论回滚（业务池上一次）、隔离、卸载并交付 false，AfterCommit 不执行。
+// 维护者 2026-10-14 精简 WAL 级 Rejected 之前，这里回复第 4 行（ErrRemotePartRejected）；原 TestPipelinedRemoteOutcomeMatchesStrict
+// 与 TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible 的 rejected 行并入本用例。
+func TestRemoteWALCommitFailureNeverRepliesRemotePartRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rawID      int64
+		durability nest.DurabilityPolicy
+		committer  interface {
+			nest.TransactionCommitter
+			commits() int32
+		}
+	}{
+		{name: "strict", rawID: 1997, durability: nest.DurabilityStrict, committer: &countingLocalCommitter{}},
+		{name: "pipelined", rawID: 1987, durability: nest.DurabilityPipelined, committer: &pipelinedLocalCommitter{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, live := newReloadFixture(t, tc.rawID)
+			beforeWait := func(f reloadFixture, commits []entity.RemoteCommit) {
+				f.storage.reject.Store(true)
+				if _, err := f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+					t.Errorf("premise: constructed rejection err=%v", err)
+				}
+			}
+			rec := &remoteOutcomeTap{}
+			manager := outcomeTapManager{boundedConfirmManager: boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}, rec: rec}
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+				nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(tc.committer))
+			name := nest.NewHandlerName("reply_sentinels_wal_commit_failure_" + tc.name)
+			afterCommit := make(chan struct{}, 2)
+			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+				live.set("rejected", "")
+				nest.AfterCommit(func() { afterCommit <- struct{}{} })
+				return "ok", nil
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: tc.durability})
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reply, err := engine.Request(ctx, name, live.ID(), nil)
+			cancel()
+			row, hits := firstTableRow(err)
+			t.Logf("reply=%v err=%v first-row=%d sentinels=[%s] deferred=%d", reply, err, row, hits, rec.took.Load())
+			if !errors.Is(err, entity.ErrRemoteRejected) {
+				t.Fatalf("fixture: reply err=%v, want the tracker's rejection cause on the chain", err)
+			}
+			if errors.Is(err, nest.ErrNestCanceled) || errors.Is(err, nest.ErrNestTimeout) {
+				t.Fatalf("premise: the caller's own wait ended before the reply: %v", err)
+			}
+			if n := tc.committer.commits(); n != 1 {
+				t.Fatalf("premise: local committer received %d record(s), want 1 (the local transaction commits first)", n)
+			}
+			if errors.Is(err, nest.ErrRemotePartRejected) {
+				t.Fatalf("reply err=%v (sentinels [%s]) claims the Remote part was explicitly rejected (row 4); a WAL-backed Commit failure must stay an unknown outcome", err, hits)
+			}
+			if !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+				t.Fatalf("reply err=%v (sentinels [%s]): a WAL-backed Commit failure must carry ErrRemotePersistenceIndeterminate", err, hits)
+			}
+			if row != 2 {
+				t.Fatalf("reply err=%v hits decision-table row %d (sentinels [%s]), want row 2", err, row, hits)
+			}
+			if rec.took.Load() != 1 {
+				t.Fatalf("%s batch did not hand its post-commit work to the finalizer (deferred=%d)", tc.name, rec.took.Load())
+			}
+			f.assertReloadedFromAuthority(t, live) // 回滚、隔离、释放 gate、仅内存卸载，从权威重载，被拒修改没有写出
+			if n, off := live.rollbacks.Load(), live.rollbacksOffFast.Load(); n != 1 || off != 0 {
+				t.Fatalf("RollbackRemoteCommit ran %d time(s), %d off the Nest business pool; want once on a business worker", n, off)
+			}
+			rec.waitDelivered(t, false)
+			select {
+			case <-afterCommit:
+				t.Fatal("AfterCommit ran although the tracker concluded Rejected")
+			default:
 			}
 		})
 	}

@@ -20,7 +20,9 @@ import (
 
 func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 	policies := []nest.DurabilityPolicy{nest.DurabilityStrict, nest.DurabilityPipelined}
-	outcomes := []string{"committed", "rejected"}
+	// 只剩 committed：WAL 级 Remote 不再有明确拒绝（2026-10-14），原 rejected 行（回复第 4 行）的场景并入
+	// TestRemoteWALCommitFailureNeverRepliesRemotePartRejected（回复第 2 行）。
+	outcomes := []string{"committed"}
 	for pi, durability := range policies {
 		for oi, outcome := range outcomes {
 			t.Run(durability.String()+"/"+outcome, func(t *testing.T) {
@@ -57,9 +59,6 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 						mu.Unlock()
 					}
 					started <- confirmStart{syncs: syncs(), lockFree: free}
-					if outcome == "rejected" {
-						f.storage.reject.Store(true)
-					}
 					_, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits)
 				}
 				manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}
@@ -98,27 +97,18 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 					if err != nil || reply != "ok" {
 						t.Fatalf("reply=%v err=%v, want success", reply, err)
 					}
-				case "rejected":
-					if row != 4 || !errors.Is(err, entity.ErrRemoteRejected) {
-						t.Fatalf("reply err=%v hits row %d (sentinels [%s]), want row 4 (local committed, Remote rejected)", err, row, hits)
-					}
 				}
 				if start.syncs < 1 || replySyncs < 1 {
 					t.Fatalf("%s handler with a Remote batch: the local WAL record was not fsynced before it became visible: lock released and Remote confirmation started at syncs=+%d, reply (%s) at syncs=+%d",
 						durability, start.syncs, outcome, replySyncs)
 				}
-				if outcome == "committed" {
-					select {
-					case n := <-afterCommit:
-						if n < 1 {
-							t.Fatalf("AfterCommit ran at syncs=+%d, before the local record was fsynced", n)
-						}
-					case <-time.After(3 * time.Second):
-						t.Fatal("AfterCommit never ran")
+				select {
+				case n := <-afterCommit:
+					if n < 1 {
+						t.Fatalf("AfterCommit ran at syncs=+%d, before the local record was fsynced", n)
 					}
-				} else {
-					// 拒绝后按 RR-20260928-09 回滚、隔离、仅内存卸载；等收尾完成再结束，避免 finalizer 与关闭交错。
-					f.assertReloadedFromAuthority(t, live)
+				case <-time.After(3 * time.Second):
+					t.Fatal("AfterCommit never ran")
 				}
 			})
 		}
@@ -152,7 +142,9 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 			return &pipelinedLocalCommitter{}
 		}},
 	}
-	outcomes := []string{"rejected", "indeterminate", "committed"}
+	// rejected 行已并入 TestRemoteWALCommitFailureNeverRepliesRemotePartRejected：WAL 级 Remote 不再有明确拒绝（2026-10-14），
+	// strict 与 pipelined 在那里按同一断言（第 2 行、finalizer 收尾、交付 false）比较。
+	outcomes := []string{"indeterminate", "committed"}
 	for pi, p := range policies {
 		for oi, outcome := range outcomes {
 			t.Run(p.name+"/"+outcome, func(t *testing.T) {
@@ -180,10 +172,6 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 					waited = commits
 					commitsMu.Unlock()
 					switch outcome {
-					case "rejected":
-						// WAL 投影器（这里同步模拟）把 Remote 写交给权威、被版本冲突拒绝：tracker 终态 Rejected。
-						f.storage.reject.Store(true)
-						_, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits)
 					case "committed":
 						if _, err := f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits); err != nil {
 							t.Errorf("projector apply: %v", err)
@@ -226,25 +214,6 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 				}
 
 				switch outcome {
-				case "rejected":
-					if row != 4 || !errors.Is(err, entity.ErrRemoteRejected) {
-						t.Fatalf("reply err=%v hits row %d (sentinels [%s]), want row 4 with the ErrRemoteRejected cause", err, row, hits)
-					}
-					if rec.took.Load() != 1 {
-						// Errorf：继续断言隔离 / 卸载，修前红里一并看到实例没有被卸载。
-						t.Errorf("explicitly rejected %s Remote batch did not take the post-commit work (deferred=%d): no finalizer settles it, the instance holding the rejected write is never rolled back or unloaded (stays quarantined until restart)",
-							p.name, rec.took.Load())
-					}
-					f.assertReloadedFromAuthority(t, live) // 回滚、隔离、释放 gate、仅内存卸载，从权威重载，被拒修改没有写出
-					if n, off := live.rollbacks.Load(), live.rollbacksOffFast.Load(); n != 1 || off != 0 {
-						t.Fatalf("RollbackRemoteCommit ran %d time(s), %d off the Nest business pool; want once on a business worker", n, off)
-					}
-					rec.waitDelivered(t, false)
-					select {
-					case <-afterCommit:
-						t.Fatal("AfterCommit ran although the Remote part was rejected")
-					default:
-					}
 				case "indeterminate":
 					if row != 2 || !errors.Is(err, entity.ErrRemoteCommitTimeout) {
 						t.Fatalf("reply err=%v hits row %d (sentinels [%s]), want row 2 (Remote confirmation deadline)", err, row, hits)

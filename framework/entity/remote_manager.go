@@ -8,8 +8,9 @@ import (
 var (
 	// ErrRemotePersistenceIndeterminate 表示 Remote 保存 / 删除在后端可能已接受之后返回了错误，调用方不能盲目重放业务命令。
 	// RemoteWriteBatch.Commit 在本地事务已提交之后返回的错误，只有“Remote 确定没有写入”的明确拒绝可以不带它；Nest 按
-	// “不带它 = 明确拒绝”给回复加 nest.ErrRemotePartRejected。等待 WAL 投影器结论的 Commit（strict）没等到
-	// 结论就失败（等待截止、tracker 重新登记失败等）不说明 Remote 没写入，必须带它。
+	// “不带它 = 明确拒绝”给回复加 nest.ErrRemotePartRejected。等待 WAL 投影器结论的 Commit（strict / pipelined）失败
+	// （等待截止、tracker 重新登记失败等）不说明 Remote 没写入，必须带它；框架自带的 remoteentity 在 WAL 级没有明确拒绝，
+	// 这类 Commit 的失败一律带它。
 	ErrRemotePersistenceIndeterminate = errors.New("remote entity persistence outcome is indeterminate")
 	// ErrRemotePublicationPending 与 ErrRemotePersistenceIndeterminate 一起返回：Remote 提交已在权威存储里
 	// 持久（Applied），只是提交后的发布（缓存、同步总线、标记已发布）失败了。发布由 owner 的补发循环与

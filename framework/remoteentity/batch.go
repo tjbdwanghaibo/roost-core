@@ -515,7 +515,7 @@ func (b *remoteWriteBatch) Commits() []entity.RemoteCommit {
 }
 
 // Commit 在实体锁释放后按持久级别收尾：Durability 0 直接写权威并等待发布确认；1 返回推测回执，由 finalizer 等投影；
-// 2/3 等投影器的结论。失败时等待结论的批次标为结果未知（交 finalizer），Durability 0 的明确拒绝在业务池回滚并隔离。
+// 2/3 等投影器的结论。只有 Durability 0 的提交可能被权威明确拒绝（在业务池回滚并隔离）；其余失败都是结果未知，交 finalizer。
 func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitReceipt, error) {
 	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Commit")
 	if b == nil || b.mgr == nil {
@@ -568,22 +568,20 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 		err = waitedCommitError(err)
 	}
 	if err != nil {
-		rejected := false
-		// 等待投影器结论的批次（strict = 2，以及带 Remote 批次、随 strict 路径提交的 pipelined = 3）：本地记录已进 WAL，
-		// 即使等到的是明确拒绝，也由 finalizer 按持久结论收尾（Rejected：回滚、隔离、释放、仅内存卸载后交付 false）。
-		// 必须用 >= 2 覆盖 pipelined：否则它被拒时既不交给 finalizer、也不走 Durability 0 的同步回滚，实例隔离后永不
-		// 卸载、提交后工作没有结论、Sync 门永久冻结。
-		if outcome.Durability >= 2 || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
-			b.mu.Lock()
-			b.indeterminate = true
-			b.mu.Unlock()
-		} else if outcome.Durability == 0 {
+		// 明确拒绝只有一种来源：Durability 0 的 ApplyRemoteCommits 返回不带未知哨兵的错误，权威确定没有写入，在业务池回滚。
+		// 其余失败一律按结果未知交给 finalizer，由它按持久结论收尾：Durability 0 的未知结果、以及等待投影器结论的
+		// strict / pipelined（waitedCommitError 保证带未知哨兵；WAL 级 Remote 不产生明确拒绝）。
+		rejected := outcome.Durability == 0 && !errors.Is(err, entity.ErrRemotePersistenceIndeterminate)
+		if rejected {
 			err = errors.Join(err, entity.RunLocal(ctx, func() { b.mgr.rollbackRemoteEntries(b.entries) }))
-			rejected = true
-			b.mu.Lock()
-			b.rejected = true
-			b.mu.Unlock()
 		}
+		b.mu.Lock()
+		if rejected {
+			b.rejected = true
+		} else {
+			b.indeterminate = true
+		}
+		b.mu.Unlock()
 		quarantineErr := b.mgr.quarantineEntries(b.entries, err)
 		if rejected && quarantineErr == nil {
 			// 明确拒绝：Close 释放后卸载这些实例，其间下一写者得到可重试的重载哨兵。
@@ -597,15 +595,16 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	return receipts, nil
 }
 
-// waitedCommitError 给等待投影器结论的 Commit（strict，以及随 strict 路径提交的 pipelined）的错误归类。
-// 本地记录已经进 WAL，Remote 部分由投影器按 WAL 写权威；这里的错误只说明本批次没有等到结论，不说明 Remote 没写入。
-// 只有 entity.ErrRemoteRejected 是明确拒绝：tracker 终态 Rejected（投影器写权威被 fenced / 版本冲突 / 持久拒绝，
-// 过期租约跳过），或 finalizer 回源得到 Rejected，原样返回。其余——tracker 被容量淘汰后重新登记报
-// ErrRemoteOverloaded、状态查询失败、未定终态——一律加上 entity.ErrRemotePersistenceIndeterminate；
-// 已带它的（Indeterminate 终态、等待截止）不重复加。这些情形 Commit 已按结果未知交给 finalizer，错误若不带哨兵，
-// nest 会按“不带哨兵 = 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。
+// waitedCommitError 给等待结论的 Commit 错误归类：一律带 entity.ErrRemotePersistenceIndeterminate（已带的不重复加）。
+//
+// strict 与随 strict 路径提交的 pipelined：本地记录已经进 WAL，Remote 部分由投影器按 WAL 写权威。WAL 级 Remote 没有明确
+// 拒绝——投影器写权威遇到 fence / 版本冲突是 fatal（ErrProjectionConflict，进程级 fail-stop），不把事务记为 Rejected；
+// “Remote 写 + lease fence”记录在 WAL 准入处已被拒绝（维护者 2026-10-13 / 2026-10-14）。所以这里的错误——等待截止、
+// tracker 被容量淘汰后重新登记报 ErrRemoteOverloaded、状态查询失败、未定终态——都只说明本批次没有等到结论。
+// Durability 0 在 ApplyRemoteCommits 已持久（Applied）之后才等待发布，同样不会再被拒绝。
+// 错误若不带哨兵，nest 会按“不带哨兵 = 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。
 func waitedCommitError(err error) error {
-	if err == nil || errors.Is(err, entity.ErrRemoteRejected) || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+	if err == nil || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 		return err
 	}
 	return errors.Join(entity.ErrRemotePersistenceIndeterminate, err)

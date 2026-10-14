@@ -68,7 +68,7 @@ func (state *remoteState) traceFinalize(id entity.RemoteTransactionID, step stri
 
 type deferredRemoteClose struct {
 	txID entity.RemoteTransactionID
-	// durability 决定 Unknown 由谁收敛：1/2 有 WAL，投影会写出 Applied 或持久拒绝；
+	// durability 决定 Unknown 由谁收敛：1/2/3 有 WAL，投影会写出 Applied（写权威冲突是投影器 fatal，不产生拒绝）；
 	// 0 没有 WAL，只能由 finalizer 自己写下持久拒绝（rejectUnresolvedMemoryTransaction）。
 	durability uint8
 	entries    []*remoteWriteEntry
@@ -246,9 +246,10 @@ func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRe
 // fence、写额度并隔离实体，按退避重试。
 //
 // Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交，outbox 发布并确认后写进 tracker
-// （Committed / Rejected，失败时 Indeterminate）。投影期间 finalizer 不回源、不隔离、不发布，
-// 只等 tracker 结束或 FinalizeProjectionTimeout 到期；投影器报告未知
-// （Indeterminate）或超期后才回源权威取得持久结论。Durability 0 没有 WAL，一律回源。
+// （Committed，失败时 Indeterminate）。WAL 级不产生 Rejected：写权威冲突是投影器 fatal，结论留给重启后的恢复。
+// 投影期间 finalizer 不回源、不隔离、不发布，只等 tracker 结束或 FinalizeProjectionTimeout 到期；投影器报告未知
+// （Indeterminate）或超期后才回源权威取得持久结论，读不到时保持隔离重试，不写拒绝（WAL 里的记录仍可能投影）。
+// Durability 0 没有 WAL，一律回源；读不到结论时由 rejectUnresolvedMemoryTransaction 写持久拒绝——Rejected 分支的生产来源。
 func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
 	if item.settled {
 		m.finishRejectedRemoteClose(state, item)
@@ -415,8 +416,8 @@ func (m *Manager) requeueDeferredRemoteClose(state *remoteState, item deferredRe
 	}
 }
 
-// projectorReported 表示 WAL 投影器已给出本进程可见的结论：Committed / Rejected 是持久结论，
-// Indeterminate 是投影器报告的“结果未知”，此时 finalizer 才需要回源。
+// projectorReported 表示 WAL 投影器已给出本进程可见的结论：Committed 是持久结论（终态判定沿用 remoteCommitFinal，
+// WAL 级不会出现 Rejected），Indeterminate 是投影器报告的“结果未知”，此时 finalizer 才需要回源。
 func projectorReported(state entity.RemoteCommitState) bool {
 	return remoteCommitFinal(state) || state == entity.RemoteCommitIndeterminate
 }

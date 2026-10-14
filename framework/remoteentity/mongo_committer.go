@@ -447,38 +447,10 @@ func remoteCommitReceipt(commit entity.RemoteCommit) entity.RemoteCommitReceipt 
 // 相同 Entity 仍必须按版本顺序提交，事务身份与最新许可校验保持不变。
 func (*MongoCommitter) SupportsConcurrentRemoteCommits() bool { return true }
 
-// RejectRemoteCommitsInTransaction 在调用方的 Mongo 事务里写下 Remote Rejected 记录。
-// 重放只能复用相同内容的拒绝，不能覆盖已经提交的事务。生产路径不再产生（“Remote + lease fence”历史 WAL
-// 记录改为投影器 fatal，维护者 2026-10-13），仅供测试注入 durable rejection；去留见 KNOWN-LIMITS
-// “Remote WAL级Rejected处理”。
-func (s *MongoCommitter) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
-	if s == nil || s.mongo == nil || s.database == "" {
-		return entity.ErrRemoteWriteCapabilityDisabled
-	}
-	id, digest, err := validateRemoteCommitBatch(commits)
-	if err != nil {
-		return err
-	}
-	collection := s.controlDB().Collection(remoteTxCollection)
-	var existing mongoRemoteTransaction
-	err = collection.FindOne(ctx, bson.M{"_id": id.String()}, &existing)
-	if err == nil {
-		if bytes.Equal(existing.Digest, digest) && existing.State == uint8(entity.RemoteCommitRejected) {
-			return nil
-		}
-		return fmt.Errorf("%w: rejection conflicts with existing remote transaction", entity.ErrRemoteRejected)
-	}
-	if !errors.Is(err, fmongo.ErrNotFound) {
-		return err
-	}
-	_, err = collection.InsertOne(ctx, mongoRemoteTransaction{ID: id.String(), State: uint8(entity.RemoteCommitRejected), Digest: digest, Cause: cause, CreatedAt: time.Now().UTC()})
-	return err
-}
-
 // RejectUnresolvedRemoteCommits 为结果未知、且没有 WAL 会重放的事务（Durability 0）
-// 写下持久结论。与 RejectRemoteCommitsInTransaction 相同，拒绝记录占用同一事务 _id：
-// 插入成功后，任何迟到的提交都会在自己的 Mongo 事务里撞上这条记录而失败，
-// CommitRemoteBatch 读到它也只会返回 ErrRemoteRejected。
+// 写下持久结论。拒绝记录占用同一事务 _id：插入成功后，任何迟到的提交都会在自己的 Mongo 事务里撞上这条记录而失败，
+// CommitRemoteBatch 读到它也只会返回 ErrRemoteRejected。这是正式链路上唯一写 Remote Rejected 记录的入口；
+// WAL 级（Durability 1/2/3）投影不写拒绝记录（维护者 2026-10-14 精简）。
 //
 // 插入撞键说明事务已经存在（提交先落库，或更早的拒绝），按读回的真实状态返回，
 // 由调用方发布或回滚；绝不覆盖已有记录。其他错误表示仍无结论，调用方必须保持隔离并重试。

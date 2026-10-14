@@ -54,8 +54,8 @@ var (
 	// 同一事务里的本地部分照常生效；提交后回调（AfterCommit）不执行。
 	// 原因错误（如 entity.ErrRemoteRejected、entity.ErrRemoteVersionConflict）保留在链上。按 entity 契约，Remote 结果未知时 Commit
 	// 返回 entity.ErrRemotePersistenceIndeterminate，不带它的 Commit 失败就是 Remote 没有写入（框架自带的 remoteentity
-	// 在 strict 下只有 entity.ErrRemoteRejected 不带它，其余等待失败都带）；两者互斥，与 ErrAfterCommitFailed（Remote 也已确认）
-	// 同样互斥。
+	// 只有 memory 的明确拒绝不带它；strict / pipelined 等 WAL 投影器结论，WAL 级 Remote 不产生明确拒绝，Commit 失败一律带它）；
+	// 两者互斥，与 ErrAfterCommitFailed（Remote 也已确认）同样互斥。
 	//   - 是否可能已提交：部分已提交（本地部分已提交，Remote 部分未提交）。能否重试：不得整笔重试（本地部分会重复执行）；
 	//     按业务只补做 Remote 部分，或读回状态后再决定。
 	ErrRemotePartRejected = errors.New("nest: local transaction committed but its remote part was rejected")

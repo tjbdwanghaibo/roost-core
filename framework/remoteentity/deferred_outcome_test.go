@@ -135,21 +135,21 @@ func TestStrictTimeoutOutcomeCommittedRunsPostCommitOnce(t *testing.T) {
 	}
 }
 
-// strict 确认超时 → 投影器持久拒绝 → finalizer 回滚、隔离、释放、卸载后调用一次 false。
-func TestStrictTimeoutOutcomeRejectedDiscardsAfterUnload(t *testing.T) {
+// Durability 0 结果未知 → finalizer 写持久拒绝、回滚、隔离、释放、卸载后，经本地执行入口调用一次 false。
+// （原为 strict 确认超时后被投影器拒绝；WAL 级拒绝已移除（2026-10-14），finalizer 交付 false 只剩这条生产来源。）
+func TestUnresolvedMemoryOutcomeRejectedDiscardsAfterUnload(t *testing.T) {
 	f, live := newReloadFixture(t, 1962)
 	recorder := newOutcomeRecorder()
 	recorder.bind(f.mgr)
-	tx := remoteTestTxID(0xD2)
-	batch := f.prepareRejected(t, live, tx, 2)
-	if _, err := batch.Commit(expiredContext()); err == nil {
-		t.Fatal("strict commit with an expired wait returned no error")
+	f.storage.unreachable.Store(true)
+	batch := f.prepareRejected(t, live, remoteTestTxID(0xD2), 0)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want indeterminate (the finalizer rejects it)", err)
 	}
 	deferOutcome(t, batch, recorder.callback(f.mgr, live))
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
 	committed, slots, removed, viaRun := recorder.awaitOne(t)
 	if committed || slots != 0 || !removed || !viaRun {
 		t.Fatalf("outcome committed=%v slots=%d staleRemoved=%v via-local-runtime=%v, want false after release and unload", committed, slots, removed, viaRun)

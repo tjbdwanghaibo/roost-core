@@ -30,49 +30,32 @@ func (e *reloadableFullDocEntity) RollbackRemoteCommit(entity.RemoteCommit) {
 	}
 }
 
+// Durability 0 结果未知 → finalizer 写持久拒绝后回滚：Nest 已绑定时回滚经 NestMgr.RunLocal 在业务 worker 上执行，恰好一次。
+// （原表里的 strict_rejected 行以 WAL 级拒绝驱动同一路径；WAL 级拒绝已移除（2026-10-14），finalizer 的 Rejected 收尾只剩这条生产来源。）
 func TestFinalizerRejectionRollbackRunsOnNestShortWorker(t *testing.T) {
-	for i, tc := range []struct {
-		name       string
-		durability uint8
-	}{
-		{"memory_unreachable", 0},
-		{"strict_rejected", 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, live := newReloadFixture(t, 1961+int64(i))
-			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(entity.IRemoteEntityManager(f.mgr)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-			if err := engine.Start(); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
-			if f.mgr.localExecutor.Load() == nil {
-				t.Fatal("premise: NewEngine did not bind NestMgr.RunLocal to the Remote Manager")
-			}
-			tx := remoteTestTxID(0xD0 + byte(i))
-			f.storage.unreachable.Store(tc.durability == 0)
-			batch := f.prepareRejected(t, live, tx, tc.durability)
-			switch tc.durability {
-			case 0:
-				if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
-					t.Fatalf("commit err=%v, want indeterminate (finalizer resolves it)", err)
-				}
-			case 2:
-				f.mgr.RejectRemoteTransaction(tx, "lease expired")
-				if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteRejected) {
-					t.Fatalf("strict commit err=%v, want rejected (finalizer settles it)", err)
-				}
-			}
-			if err := batch.Close(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			f.assertReloadedFromAuthority(t, live) // finalizer 已收尾：回滚、隔离、释放 gate、卸载
-			if n := live.rollbacks.Load(); n != 1 {
-				t.Fatalf("RollbackRemoteCommit ran %d time(s), want once", n)
-			}
-			if off := live.rollbacksOffFast.Load(); off != 0 {
-				t.Fatalf("finalizer rejection rollback ran off the Nest business pool (%d call(s)); with Nest bound it must go through NestMgr.RunLocal", off)
-			}
-		})
+	f, live := newReloadFixture(t, 1961)
+	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(entity.IRemoteEntityManager(f.mgr)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	if f.mgr.localExecutor.Load() == nil {
+		t.Fatal("premise: NewEngine did not bind NestMgr.RunLocal to the Remote Manager")
+	}
+	f.storage.unreachable.Store(true)
+	batch := f.prepareRejected(t, live, remoteTestTxID(0xD0), 0)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want indeterminate (finalizer resolves it)", err)
+	}
+	if err := batch.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.assertReloadedFromAuthority(t, live) // finalizer 已收尾：回滚、隔离、释放 gate、卸载
+	if n := live.rollbacks.Load(); n != 1 {
+		t.Fatalf("RollbackRemoteCommit ran %d time(s), want once", n)
+	}
+	if off := live.rollbacksOffFast.Load(); off != 0 {
+		t.Fatalf("finalizer rejection rollback ran off the Nest business pool (%d call(s)); with Nest bound it must go through NestMgr.RunLocal", off)
 	}
 }
 

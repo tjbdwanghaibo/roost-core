@@ -1,4 +1,4 @@
-// 结果未知的持久收敛：Durability 0 由 finalizer 写持久拒绝，WAL 级别交给投影，迟到的提交按读回的真实状态确认。
+// 结果未知的持久收敛：Durability 0 由 finalizer 写持久拒绝，WAL 级别交给投影（不产生拒绝），迟到的提交按读回的真实状态确认。
 
 package remoteentity
 
@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // neverReachedStorage 模拟事务根本没有到达 Mongo 的瞬时失败：发出前 ctx 已过期、
@@ -162,8 +163,8 @@ func TestMemoryNeverCommittedTransientErrorGetsDurableRejection(t *testing.T) {
 	if err = f.mgr.StopFinalizer(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.mgr.remote.writeSlots) != 0 {
-		t.Fatalf("write slots leaked: %d", len(f.mgr.remote.writeSlots))
+	if len(f.mgr.remote.writeSlots) != 0 || f.mgr.Stats().ActiveTransactions != 0 {
+		t.Fatalf("rejection leaked capacity: write slots=%d active transactions=%d", len(f.mgr.remote.writeSlots), f.mgr.Stats().ActiveTransactions)
 	}
 }
 
@@ -226,7 +227,7 @@ func (s *walBackedStorage) RejectUnresolvedRemoteCommits(ctx context.Context, co
 	return s.MongoCommitter.RejectUnresolvedRemoteCommits(ctx, commits, cause)
 }
 
-// Durability 1/2 的 Unknown 由 WAL 投影收敛（Applied 或投影器的持久拒绝），
+// Durability 1/2/3 的 Unknown 由 WAL 投影收敛（Applied；写权威冲突是投影器 fatal，不产生拒绝），
 // finalizer 不能抢先写拒绝，否则会挡住 WAL 里已经 durable 的事务。
 func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	storage := &walBackedStorage{statusCalls: make(chan struct{}, 1)}
@@ -243,6 +244,7 @@ func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "async", "", true, 1)); err != nil {
 		t.Fatal(err)
 	}
+	commits := batch.Commits()
 	if _, err = batch.Commit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -267,10 +269,24 @@ func TestWALDurabilityUnknownIsNotRejectedByFinalizer(t *testing.T) {
 	if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitUnknown {
 		t.Fatalf("durable status=%+v err=%v, want no record", status, err)
 	}
-	// 投影器的持久拒绝仍是它的收尾路径：gate 释放，实体保持隔离。
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	if _, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()}); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("after projector rejection err=%v, want gate released and ErrRemoteFenced", err)
+	// WAL 级只会收敛到已提交：投影器把记录写进权威并发布后，finalizer 拿到 Committed、确认并释放 gate，下一写者进入。
+	if _, err := f.store.CommitRemoteBatch(ctx, commits); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.mgr.ApplyRemoteCommits(ctx, tx, commits); err != nil {
+		t.Fatal(err)
+	}
+	next, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()})
+	if err != nil {
+		t.Fatalf("after the projector committed the WAL record, next writer err=%v, want admitted", err)
+	}
+	_ = next.Abort(ctx, errors.New("test cleanup"))
+	_ = next.Close(ctx)
+	if got := storage.rejects.Load(); got != 0 {
+		t.Fatalf("finalizer wrote %d rejection(s) for a WAL-backed transaction", got)
+	}
+	if status, err := f.mgr.RemoteCommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitCommitted {
+		t.Fatalf("tracker status=%+v err=%v, want Committed", status, err)
 	}
 }
 
@@ -297,6 +313,15 @@ func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
 		if err != nil || status.State != entity.RemoteCommitRejected {
 			t.Fatalf("status=%+v err=%v", status, err)
 		}
+	}
+	// 拒绝记录是持久结论：同一事务的迟到提交读到它只返回 ErrRemoteRejected，内容不同的同 _id 拒绝按 digest 冲突拒绝。
+	if _, err = f.store.CommitRemoteBatch(ctx, []entity.RemoteCommit{unresolved}); !errors.Is(err, entity.ErrRemoteRejected) {
+		t.Fatalf("late commit of a rejected transaction err=%v, want ErrRemoteRejected", err)
+	}
+	reused := unresolved.Clone()
+	reused.Mutations[0].Data = []byte("changed")
+	if _, err = f.store.RejectUnresolvedRemoteCommits(ctx, []entity.RemoteCommit{reused}, "unresolved"); !errors.Is(err, entity.ErrRemoteRejected) {
+		t.Fatalf("rejection with a different digest on a rejected _id err=%v, want ErrRemoteRejected", err)
 	}
 	// 提交先落库：撞键后返回真实的 Applied 与回执，记录保持不变。
 	receipts, err := f.store.CommitRemoteBatch(ctx, commits)
@@ -422,5 +447,118 @@ func TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting(t *tes
 	}
 	if len(replayed) != 1 || replayed[0] != nest.TransactionID(tx) {
 		t.Fatalf("WAL replay after the fatal = %v, want the retired record still unacknowledged", replayed)
+	}
+}
+
+// 守卫：WAL 级（Durability 1/2/3）正式链路不产生 Remote Rejected。投影时权威已被接管（_grant_fence 前进，CAS 不命中），
+// 真实 nestwal WAL + engine.Projector + engine.MongoStore + 正式 MongoCommitter 上：投影器以 ErrProjectionConflict fatal
+// （进程级 fail-stop），不写 Remote 事务记录；tracker 不变成 Rejected；strict / pipelined 的 Commit 只得到结果未知；
+// finalizer 投影期限到后回源读到 Unknown，只隔离重试，不为 WAL 事务写持久拒绝。
+// 保证范围：正式 MongoStore / MongoCommitter 投影链路上的写权威冲突；自定义投影存储不在此列。
+// 历史：维护者 2026-10-14 精简 WAL 级 Rejected 处理（删除 RejectRemoteTransaction / RejectRemoteCommitsInTransaction 注入点）。
+func TestWALRemoteAuthorityConflictNeverProducesRejected(t *testing.T) {
+	for i, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
+		t.Run(policy.String(), func(t *testing.T) {
+			storage := &walBackedStorage{statusCalls: make(chan struct{}, 1)}
+			f := newMemoryUnresolvedFixture(t, 1790+int64(i), func(store *MongoCommitter) StorageBackend {
+				storage.MongoCommitter = store
+				return storage
+			})
+			f.mgr.cfg.FinalizeProjectionTimeout = 50 * time.Millisecond
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = store.SetRemoteProjection(f.store, f.mgr); err != nil {
+				t.Fatal(err)
+			}
+			walOptions := nestwal.DefaultOptions(t.TempDir())
+			walOptions.GroupCommitInterval = time.Millisecond
+			wal, err := nestwal.Open(walOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{
+				CloseWAL: true, IdlePoll: 20 * time.Millisecond, RetryMin: 5 * time.Millisecond, RetryMax: 50 * time.Millisecond,
+			})
+			if err != nil {
+				_ = wal.Close(context.Background())
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				closing, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = projector.Close(closing)
+			})
+
+			tx := remoteTestTxID(0xE0 + byte(i))
+			durability := policy.Record()
+			batch, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.live.dirty.set(true)
+			if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "wal-conflict", "", true, uint8(durability))); err != nil {
+				t.Fatal(err)
+			}
+			commits := batch.Commits()
+			// 另一进程接管了写权威：最新 grant 的 fence 前进，本批次携带的旧 fence 在投影时 CAS 不命中。
+			takeover := int64(commits[0].LockFence + 1)
+			if _, err = f.store.mongo.(*mongotest.Client).Collection("control", remoteMetaCollection).UpdateOne(ctx, bson.M{"_id": f.live.GUId()}, bson.M{"$set": bson.M{"_grant_fence": takeover}}); err != nil {
+				t.Fatal(err)
+			}
+			if err = projector.Commit(ctx, remoteCommitRecord(durability, commits)); err != nil {
+				t.Fatal(err)
+			}
+			projector.TransactionReleased(coredata.TransactionID(tx))
+			if err = projector.Flush(ctx); !errors.Is(err, engine.ErrProjectionConflict) {
+				t.Fatalf("projector flush = %v, want the fatal ErrProjectionConflict", err)
+			}
+			if stats := projector.Stats(); stats.FatalProjectionConflicts != 1 || stats.Projected != 0 {
+				t.Fatalf("projector stats=%+v, want one fatal conflict and nothing projected", stats)
+			}
+
+			commitCtx, commitCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			_, commitErr := batch.Commit(commitCtx)
+			commitCancel()
+			switch policy {
+			case nest.DurabilityAsync:
+				if commitErr != nil {
+					t.Fatalf("async commit err=%v, want the speculative success", commitErr)
+				}
+			default:
+				if !errors.Is(commitErr, entity.ErrRemotePersistenceIndeterminate) {
+					t.Fatalf("%s commit err=%v, want an unknown outcome (ErrRemotePersistenceIndeterminate)", policy, commitErr)
+				}
+			}
+			if err = batch.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for range 3 { // 投影期限过后 finalizer 至少两轮回源都读到 Unknown
+				select {
+				case <-storage.statusCalls:
+				case <-ctx.Done():
+					t.Fatal("finalizer did not poll the durable status after the projection deadline")
+				}
+			}
+			if state := f.mgr.localRemoteCommitState(tx); state == entity.RemoteCommitRejected {
+				t.Fatalf("tracker state=%v: the WAL chain produced a Remote Rejected", state)
+			}
+			if got := storage.rejects.Load(); got != 0 {
+				t.Fatalf("finalizer wrote %d rejection(s) for a WAL-backed transaction", got)
+			}
+			if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitUnknown {
+				t.Fatalf("durable status=%+v err=%v, want no Remote transaction record", status, err)
+			}
+			if authority, err := f.store.readAuthority(ctx, f.live.GUId()); err != nil || authority.Version != 0 {
+				t.Fatalf("authority=%+v err=%v, want the conflicting write not applied (version 0)", authority, err)
+			}
+			if got := f.live.RemoteOwnershipState(); got != entity.RemoteOwnershipQuarantined {
+				t.Fatalf("entity state=%v, want quarantined while the outcome stays unknown", got)
+			}
+		})
 	}
 }

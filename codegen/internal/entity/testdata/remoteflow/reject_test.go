@@ -7,18 +7,16 @@ package remoteflow
 // 冷加载从真实 Mongo 读 Remote 信封文档），entitysync.Manager 接进 Nest，ConfigureUnloadResync 与 OnEntityLoaded → Rebind
 // 按 kit nest Mod 的顺序接线。实体是生成的 SyncedVault（Remote 托管、sync=true）。
 //
-// 拒绝由两个写失败注入点给出，其余全部是正式链路与真实 Mongo / Redis / NATS：
-//   - memory（Durability 0）：Remote 存储适配器替身 unreachableCommitter 让提交“没到达 Mongo”（直接返回 context.DeadlineExceeded，
-//     不发任何写），与 RR-28 单测的 switchableStorage 同一形状。之后 finalizer 回源真实 Mongo 得 Unknown，写真实 Rejected 记录
-//     （RejectUnresolvedRemoteCommits），这是当前正式链路上新写入唯一能到达的持久拒绝（RR-59 更正节）。
-//   - async / strict / pipelined（Durability 1/2/3）：新写入在正式投影器上得不到持久拒绝（CAS 不命中走 ErrProjectionConflict fatal；
-//     Remote + lease fence 混合记录在准入处被拒）。投影存储适配器替身 rejectingProjection 对选中的记录做 lease fence 跳过时
-//     MongoStore 做的两件事——在 Mongo 事务里经 Backend.RejectRemoteCommitsInTransaction 写 Rejected 记录（不写数据），提交后
-//     Manager.RejectRemoteTransaction——然后按已投影返回（不报 skipped，不触发 RR-30 驱逐，卸载只可能来自 Remote finalizer）。
-//     它不写 DataEngine 事务标记，不模拟重启重放。
+// 拒绝只有一个写失败注入点，其余全部是正式链路与真实 Mongo / Redis / NATS：Remote 存储适配器替身 unreachableCommitter 让
+// Durability 0 的提交“没到达 Mongo”（直接返回 context.DeadlineExceeded，不发任何写），与 RR-28 单测的 switchableStorage
+// 同一形状。之后 finalizer 回源真实 Mongo 得 Unknown，写真实 Rejected 记录（RejectUnresolvedRemoteCommits），这是正式链路上
+// 新写入唯一能到达的持久拒绝（RR-59 更正节）。async / strict / pipelined（Durability 1/2/3）在正式投影器上得不到持久拒绝：
+// 写权威冲突是 ErrProjectionConflict fatal，“Remote + lease fence”混合记录在准入处被拒。原先用投影存储替身经
+// Backend.RejectRemoteCommitsInTransaction / Manager.RejectRemoteTransaction 注入的 WAL 级拒绝用例已随这两个注入点删除
+// （维护者 2026-10-14 精简 WAL 级 Rejected 处理）；投影存储替身 holdingProjection 只保留“拖住一条记录”。
 //
-// 断言：实例被仅内存卸载；订阅者收到重载后的全量（Durability 1 先收到推测性的被拒绝内容，其余级别什么都没收到），
-// 权威里没有该实体时收到 remove；重载后实体可写，被拒绝的修改没有写出（Mongo 与内存都等于“拒绝前 + 下一笔”）。
+// 断言：实例被仅内存卸载；订阅者收到重载后的全量（拒绝前什么都没收到），权威里没有该实体时收到 remove；重载后实体可写，
+// 被拒绝的修改没有写出（Mongo 与内存都等于“拒绝前 + 下一笔”）。
 
 import (
 	"context"
@@ -55,11 +53,11 @@ import (
 type faultMode int
 
 const (
-	// faultReject：Remote 存储适配器上是“没到达 Mongo”；投影适配器上是持久拒绝。
+	// faultReject：Remote 存储适配器上是“没到达 Mongo”（finalizer 随后写持久拒绝）。
 	faultReject faultMode = iota
 	// faultLoseReply：Remote 存储适配器上提交真实落库，但回复丢失（调用方看到截止，结果未知）。
 	faultLoseReply
-	// faultHold：投影适配器上只拖住这条记录，放行后照常投影（strict 确认等到截止用）。
+	// faultHold：投影适配器上只拖住这条记录，放行后照常投影（strict 确认等到截止、pipelined fsync 顺序用）。
 	faultHold
 )
 
@@ -160,55 +158,33 @@ func (c *unreachableCommitter) CommitStatus(ctx context.Context, id entity.Remot
 	return c.MongoCommitter.CommitStatus(ctx, id)
 }
 
-// rejectingProjection 是投影存储适配器替身：选中实体的记录停在 release 之前；faultReject 按 lease fence 跳过的形状给出
-// Remote 持久拒绝（真实 Mongo 事务里写 Rejected 记录，提交后通知 Manager），不写数据，按已投影返回；faultHold 放行后照常投影。
-type rejectingProjection struct {
+// holdingProjection 是投影存储适配器替身：选中实体的记录停在 release 之前，放行后照常交给正式 MongoStore 投影。
+type holdingProjection struct {
 	*engine.MongoStore
-	client  fmongo.IMongo
-	backend *remoteentity.Backend
-	manager *remoteentity.Manager
-	gate    faultGate
+	gate faultGate
 }
 
-const injectedRejectCause = "remoteflow: injected durable rejection"
-
-func (p *rejectingProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
+func (p *holdingProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
 	_, err := p.ProjectFenced(ctx, record)
 	return err
 }
 
-func (p *rejectingProjection) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
+func (p *holdingProjection) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	var remote []entity.RemoteCommit
 	for _, mutation := range record.Mutations {
 		if mutation.Remote != nil {
 			remote = append(remote, mutation.Remote.Clone())
 		}
 	}
-	held, release, mode, ok := p.gate.take(remote)
-	if !ok {
-		return p.MongoStore.ProjectFenced(ctx, record)
+	if held, release, _, ok := p.gate.take(remote); ok {
+		close(held)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
-	close(held)
-	select {
-	case <-release:
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-	if mode == faultHold {
-		return p.MongoStore.ProjectFenced(ctx, record)
-	}
-	session, err := p.client.StartSession(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer session.EndSession(ctx)
-	if err := session.WithTransaction(ctx, func(txCtx context.Context) error {
-		return p.backend.RejectRemoteCommitsInTransaction(txCtx, remote, injectedRejectCause)
-	}); err != nil {
-		return false, err
-	}
-	p.manager.RejectRemoteTransaction(entity.RemoteTransactionID(record.ID), injectedRejectCause)
-	return false, nil
+	return p.MongoStore.ProjectFenced(ctx, record)
 }
 
 // vaultFrames 记录 entitysync 推给会话 1 的帧。
@@ -244,7 +220,7 @@ type rejectRig struct {
 	access    *entity.ManagerAccess
 	redis     *scopedRedis
 	committer *unreachableCommitter
-	projector *rejectingProjection
+	projector *holdingProjection
 	manager   *remoteentity.Manager
 	runtime   *engine.Runtime
 	wal       *nestwal.WAL
@@ -316,7 +292,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	if err := store.SetRemoteProjection(backend, assembly.Manager); err != nil {
 		t.Fatal(err)
 	}
-	rig.projector = &rejectingProjection{MongoStore: store, client: mongo, backend: backend, manager: assembly.Manager}
+	rig.projector = &holdingProjection{MongoStore: store}
 	opts := nestwal.DefaultOptions(t.TempDir())
 	if walOptions != nil {
 		walOptions(&opts)
@@ -666,136 +642,129 @@ func rejectTestEnv(t *testing.T) (context.Context, fmongo.IMongo, fredis.IRedis,
 }
 
 // C34：持久拒绝后实例被仅内存卸载，订阅者收到重载后的权威全量，重载后可写且被拒绝的修改没有写出。
-// memory 是正式链路上新写入唯一能到达的持久拒绝（Durability 0 结果未知 → finalizer 写 Rejected，RR-28 / 39 / 59）；
-// async / strict / pipelined 由投影注入点给出拒绝（pipelined 即 RR-20260928-09：带 Remote 批次回退 strict 路径）。
+// memory 是正式链路上新写入唯一能到达的持久拒绝（Durability 0 结果未知 → finalizer 写 Rejected，RR-28 / 39 / 59）。
 func TestGeneratedRemoteDurableRejectionReloadsSubscribers(t *testing.T) {
 	ctx, mongo, redis, database := rejectTestEnv(t)
-	for index, policy := range []nest.DurabilityPolicy{nest.DurabilityMemory, nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
-		if selected := os.Getenv("ROOST_REMOTE_POLICY"); selected != "" && selected != policy.String() {
-			continue
+	rig := newRejectRig(t, ctx, mongo, redis, database, nest.DurabilityMemory, nil, nil)
+	id := rig.seed(t, 9100)
+
+	// 第一笔正常提交：权威 version 1 / value 1，订阅者收到 1。
+	if err := rig.request(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	rig.assertNoPending(t)
+	if version, balance, items, found := rig.stored(t, id); !found || version != 1 || balance != 1 || items != 1 {
+		t.Fatalf("after the first write Mongo version=%d balance=%d items=%d found=%v", version, balance, items, found)
+	}
+	if got := rig.flushUntil(t, id, "the first committed write"); got[len(got)-1].balance != 1 {
+		t.Fatalf("frames after the first write=%v", got)
+	}
+	old := rig.vault(t, id)
+
+	// 第二笔从未到达 Mongo，finalizer 写下持久拒绝。
+	gate := &rig.committer.gate
+	fenceBefore := rig.lockFence(t, id)
+	afterCommitBefore := rig.afterCommit.Load()
+	gate.arm(id, faultReject)
+	t.Cleanup(gate.open)
+	replied := make(chan error, 1)
+	go func() { replied <- rig.request(ctx, id) }()
+	select {
+	case <-gate.held:
+	case <-ctx.Done():
+		t.Fatal("the rejected write never reached the injection point")
+	}
+	// 从未到达 Mongo：回复“结果未知”，Sync 门冻结到持久结论，订阅者什么都没收到。
+	if err := <-replied; !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("never-reached Durability 0 write replied %v, want ErrRemotePersistenceIndeterminate", err)
+	}
+	rig.flushNone(t, id, "before the durable conclusion")
+	gate.open()
+
+	// finalizer 收尾：旧实例被仅内存卸载，订阅者仍在所以框架从权威重载并 Rebind。
+	eventually(t, "the rejected instance is unloaded", old.IsRemoved)
+	eventually(t, "the framework reloads the subscribed entity from Mongo", func() bool {
+		fresh := rig.vault(t, id)
+		return fresh != nil && fresh != old && rig.access.UnloadResyncStats().Reloaded >= 1
+	})
+	if stats := rig.access.UnloadResyncStats(); stats.Retracted != 0 || stats.Overflow != 0 {
+		t.Fatalf("resync stats=%+v, want a reload without remove", stats)
+	}
+	got := rig.flushUntil(t, id, "the authoritative full after the reload")
+	last := got[len(got)-1]
+	if last.operation != frame.ObjectUpdate || !last.full || last.ref != rig.ref || last.balance != 1 || last.items != 1 {
+		t.Fatalf("subscriber frames after the reload=%v, want a full ObjectUpdate of the held object with the authority value 1", got)
+	}
+	for _, f := range got {
+		if f.balance == 2 || f.operation == frame.ObjectRemove {
+			t.Fatalf("subscriber received %v after the rejection, want only the authority full", got)
 		}
-		t.Run(policy.String(), func(t *testing.T) {
-			var walOptions func(*nestwal.Options)
-			if policy == nest.DurabilityPipelined {
-				// RR-20260928-11：回退 strict 路径的 pipelined 记录经 WAL.Append 提交时要在返回前 fsync。组提交间隔拉到 1 小时，
-				// 让“投影器看到这条记录时 WAL 已 fsync”只可能来自 Append 自己的 requireSync，而不是周期 ticker。
-				walOptions = func(opts *nestwal.Options) { opts.GroupCommitInterval = time.Hour }
-			}
-			rig := newRejectRig(t, ctx, mongo, redis, database, policy, walOptions, nil)
-			id := rig.seed(t, int64(9100+index))
+	}
+	rig.assertRejectedRecord(t, gate.transaction())
+	if version, balance, items, _ := rig.stored(t, id); version != 1 || balance != 1 || items != 1 {
+		t.Fatalf("rejected write reached Mongo: version=%d balance=%d items=%d", version, balance, items)
+	}
+	if balance, items := rig.memory(t, id); balance != 1 || items != 1 {
+		t.Fatalf("reloaded memory balance=%d items=%d, want the authority value 1", balance, items)
+	}
+	// RR-37：结论为拒绝时 AfterCommit 不执行。
+	if ran := rig.afterCommit.Load() - afterCommitBefore; ran != 0 {
+		t.Fatalf("AfterCommit ran %d time(s) for the rejected write", ran)
+	}
 
-			// 第一笔正常提交：权威 version 1 / value 1，订阅者收到 1。
-			if err := rig.request(ctx, id); err != nil {
-				t.Fatal(err)
-			}
-			rig.assertNoPending(t)
-			if version, balance, items, found := rig.stored(t, id); !found || version != 1 || balance != 1 || items != 1 {
-				t.Fatalf("after the first write Mongo version=%d balance=%d items=%d found=%v", version, balance, items, found)
-			}
-			if got := rig.flushUntil(t, id, "the first committed write"); got[len(got)-1].balance != 1 {
-				t.Fatalf("frames after the first write=%v", got)
-			}
-			old := rig.vault(t, id)
+	// 重载后可写；被拒绝的 +1 没有随下一笔写出（否则是 3）。
+	gate.disarm()
+	rig.writeAfterReload(t, id)
+	rig.assertNoPending(t)
+	if version, balance, items, _ := rig.stored(t, id); version != 2 || balance != 2 || items != 2 {
+		t.Fatalf("after the retried write Mongo version=%d balance=%d items=%d, want 2/2/2", version, balance, items)
+	}
+	if balance, items := rig.memory(t, id); balance != 2 || items != 2 {
+		t.Fatalf("after the retried write memory balance=%d items=%d, want 2", balance, items)
+	}
+	if got := rig.flushUntil(t, id, "the write after the reload"); got[len(got)-1].balance != 2 {
+		t.Fatalf("frames after the retried write=%v", got)
+	}
+	// RR-20260927-15 的前提：正式 authority 装配每次写都换新 fence，同一 fence 下的版本回退分支在这里不可达。
+	if fence := rig.lockFence(t, id); fence <= fenceBefore {
+		t.Fatalf("formal assembly reused lock fence %d -> %d across writes", fenceBefore, fence)
+	}
+	t.Logf("rejected tx %v unloaded, reloaded from Mongo (resync %+v), subscriber got the authority full, next write 2/2", gate.transaction(), rig.access.UnloadResyncStats())
+}
 
-			// 第二笔被持久拒绝。
-			gate := &rig.projector.gate
-			if policy == nest.DurabilityMemory {
-				gate = &rig.committer.gate
-			}
-			fenceBefore := rig.lockFence(t, id)
-			afterCommitBefore := rig.afterCommit.Load()
-			gate.arm(id, faultReject)
-			t.Cleanup(gate.open)
-			syncsBefore := rig.wal.Stats().Syncs
-			replied := make(chan error, 1)
-			go func() { replied <- rig.request(ctx, id) }()
-			select {
-			case <-gate.held:
-			case <-ctx.Done():
-				t.Fatal("the rejected write never reached the injection point")
-			}
-			switch policy {
-			case nest.DurabilityMemory:
-				// 从未到达 Mongo：回复“结果未知”，Sync 门冻结到持久结论，订阅者什么都没收到。
-				if err := <-replied; !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
-					t.Fatalf("never-reached Durability 0 write replied %v, want ErrRemotePersistenceIndeterminate", err)
-				}
-				rig.flushNone(t, id, "before the durable conclusion")
-			case nest.DurabilityAsync:
-				// Durability 1 在 Commit 返回时推测性确认 Sync：订阅者已收到之后会被拒绝的内容（RR-59 的前提）。
-				if err := <-replied; err != nil {
-					t.Fatalf("async write replied %v, want the speculative success", err)
-				}
-				if got := rig.flushUntil(t, id, "the speculative Durability 1 frame"); got[len(got)-1].balance != 2 {
-					t.Fatalf("premise: speculative frames=%v, want balance=2", got)
-				}
-			default:
-				// strict / pipelined 等投影器结论，锁外等待期间 Sync 没有确认，订阅者什么都没收到。
-				rig.flushNone(t, id, "while the write waits for the projector")
-				if policy == nest.DurabilityPipelined {
-					if syncs := rig.wal.Stats().Syncs; syncs <= syncsBefore {
-						t.Fatalf("RR-20260928-11: the pipelined Remote record reached the projector before its WAL fsync (syncs %d -> %d, group commit 1h)", syncsBefore, syncs)
-					}
-				}
-			}
-			gate.open()
-			if policy == nest.DurabilityStrict || policy == nest.DurabilityPipelined {
-				// RR-20260928-09：明确拒绝与 strict 同一回复（第 4 行，原因 ErrRemoteRejected）。
-				if err := <-replied; !errors.Is(err, entity.ErrRemoteRejected) || !errors.Is(err, nest.ErrRemotePartRejected) {
-					t.Fatalf("%s write rejected by the projector replied %v, want ErrRemotePartRejected + ErrRemoteRejected", policy, err)
-				}
-			}
-
-			// finalizer 收尾：旧实例被仅内存卸载，订阅者仍在所以框架从权威重载并 Rebind。
-			eventually(t, "the rejected instance is unloaded", old.IsRemoved)
-			eventually(t, "the framework reloads the subscribed entity from Mongo", func() bool {
-				fresh := rig.vault(t, id)
-				return fresh != nil && fresh != old && rig.access.UnloadResyncStats().Reloaded >= 1
-			})
-			if stats := rig.access.UnloadResyncStats(); stats.Retracted != 0 || stats.Overflow != 0 {
-				t.Fatalf("resync stats=%+v, want a reload without remove", stats)
-			}
-			got := rig.flushUntil(t, id, "the authoritative full after the reload")
-			last := got[len(got)-1]
-			if last.operation != frame.ObjectUpdate || !last.full || last.ref != rig.ref || last.balance != 1 || last.items != 1 {
-				t.Fatalf("subscriber frames after the reload=%v, want a full ObjectUpdate of the held object with the authority value 1", got)
-			}
-			for _, f := range got {
-				if f.balance == 2 || f.operation == frame.ObjectRemove {
-					t.Fatalf("subscriber received %v after the rejection, want only the authority full", got)
-				}
-			}
-			rig.assertRejectedRecord(t, gate.transaction())
-			if version, balance, items, _ := rig.stored(t, id); version != 1 || balance != 1 || items != 1 {
-				t.Fatalf("rejected write reached Mongo: version=%d balance=%d items=%d", version, balance, items)
-			}
-			if balance, items := rig.memory(t, id); balance != 1 || items != 1 {
-				t.Fatalf("reloaded memory balance=%d items=%d, want the authority value 1", balance, items)
-			}
-			// RR-37：结论为拒绝时 AfterCommit 不执行。Durability 1 在 Commit 返回时已推测性确认（它的 AfterCommit 那时已执行），不在此列。
-			if ran := rig.afterCommit.Load() - afterCommitBefore; policy != nest.DurabilityAsync && ran != 0 {
-				t.Fatalf("AfterCommit ran %d time(s) for the rejected %s write", ran, policy)
-			}
-
-			// 重载后可写；被拒绝的 +1 没有随下一笔写出（否则是 3）。
-			gate.disarm()
-			rig.writeAfterReload(t, id)
-			rig.assertNoPending(t)
-			if version, balance, items, _ := rig.stored(t, id); version != 2 || balance != 2 || items != 2 {
-				t.Fatalf("after the retried write Mongo version=%d balance=%d items=%d, want 2/2/2", version, balance, items)
-			}
-			if balance, items := rig.memory(t, id); balance != 2 || items != 2 {
-				t.Fatalf("after the retried write memory balance=%d items=%d, want 2", balance, items)
-			}
-			if got := rig.flushUntil(t, id, "the write after the reload"); got[len(got)-1].balance != 2 {
-				t.Fatalf("frames after the retried write=%v", got)
-			}
-			// RR-20260927-15 的前提：正式 authority 装配每次写都换新 fence，同一 fence 下的版本回退分支在这里不可达。
-			if fence := rig.lockFence(t, id); fence <= fenceBefore {
-				t.Fatalf("formal assembly reused lock fence %d -> %d across writes", fenceBefore, fence)
-			}
-			t.Logf("%s: rejected tx %v unloaded, reloaded from Mongo (resync %+v), subscriber got the authority full, next write 2/2", policy, gate.transaction(), rig.access.UnloadResyncStats())
-		})
+// RR-20260928-11：带 Remote 批次的 pipelined 消息回退 strict 路径，本地记录经 WAL.Append 提交时要在返回前 fsync。组提交间隔
+// 拉到 1 小时，投影器拿到这条记录（停在 holdingProjection）时 WAL 已多 fsync 一次，只可能来自 Append 自己的 requireSync，
+// 而不是周期 ticker；等投影器结论期间 Sync 没有确认，放行后照常提交。
+// （原是 TestGeneratedRemoteDurableRejectionReloadsSubscribers/pipelined 的一部分；WAL 级拒绝注入删除后单独保留这条顺序断言。）
+func TestGeneratedRemotePipelinedRemoteRecordIsFsyncedBeforeProjection(t *testing.T) {
+	ctx, mongo, redis, database := rejectTestEnv(t)
+	rig := newRejectRig(t, ctx, mongo, redis, database, nest.DurabilityPipelined, func(opts *nestwal.Options) { opts.GroupCommitInterval = time.Hour }, nil)
+	id := rig.seed(t, 9103)
+	gate := &rig.projector.gate
+	gate.arm(id, faultHold)
+	t.Cleanup(gate.open)
+	syncsBefore := rig.wal.Stats().Syncs
+	replied := make(chan error, 1)
+	go func() { replied <- rig.request(ctx, id) }()
+	select {
+	case <-gate.held:
+	case <-ctx.Done():
+		t.Fatal("the pipelined Remote record never reached the projector")
+	}
+	if syncs := rig.wal.Stats().Syncs; syncs <= syncsBefore {
+		t.Fatalf("RR-20260928-11: the pipelined Remote record reached the projector before its WAL fsync (syncs %d -> %d, group commit 1h)", syncsBefore, syncs)
+	}
+	rig.flushNone(t, id, "while the write waits for the projector")
+	gate.open()
+	if err := <-replied; err != nil {
+		t.Fatalf("pipelined write replied %v after the projector committed it", err)
+	}
+	rig.assertNoPending(t)
+	if version, balance, items, _ := rig.stored(t, id); version != 1 || balance != 1 || items != 1 {
+		t.Fatalf("Mongo version=%d balance=%d items=%d, want 1/1/1", version, balance, items)
+	}
+	if got := rig.flushUntil(t, id, "the Sync release after the projector committed"); got[len(got)-1].balance != 1 {
+		t.Fatalf("frames after the commit=%v", got)
 	}
 }
 

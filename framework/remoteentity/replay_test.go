@@ -107,31 +107,6 @@ func TestMemoryLostCommitReplyKeepsFinalizerOwnership(t *testing.T) {
 	}
 }
 
-func TestMongoRejectedTransactionIsDurableAndDigestChecked(t *testing.T) {
-	mgr, _, batch := prepareReplayBatch(t, nil)
-	_ = mgr
-	defer batch.Close(context.Background())
-	defer batch.Abort(context.Background(), errors.New("test cleanup"))
-	commits := batch.Commits()
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
-	for range 2 {
-		if err := store.RejectRemoteCommitsInTransaction(context.Background(), commits, "lease expired"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	status, err := store.CommitStatus(context.Background(), commits[0].TransactionID)
-	if err != nil || status.State != entity.RemoteCommitRejected {
-		t.Fatalf("status=%+v err=%v", status, err)
-	}
-	if _, err = store.CommitRemoteBatch(context.Background(), commits); !errors.Is(err, entity.ErrRemoteRejected) {
-		t.Fatalf("rejected transaction committed: %v", err)
-	}
-	altered := commits[0].Clone()
-	altered.Mutations[0].Data = []byte("changed")
-	if err = store.RejectRemoteCommitsInTransaction(context.Background(), []entity.RemoteCommit{altered}, "lease expired"); !errors.Is(err, entity.ErrRemoteRejected) {
-		t.Fatalf("digest collision=%v", err)
-	}
-}
 func TestBackendForwardsConcurrentCommitCapability(t *testing.T) {
 	for _, tc := range []struct {
 		storage StorageBackend
@@ -152,31 +127,6 @@ func (b *lostCommitReplyBackend) CommitRemote(ctx context.Context, commit entity
 		return entity.RemoteCommitReceipt{}, err
 	}
 	return entity.RemoteCommitReceipt{}, context.DeadlineExceeded
-}
-func TestDurableLeaseRejectionReleasesDeferredWriteGate(t *testing.T) {
-	mgr, live, batch := prepareReplayBatch(t, nil)
-	concrete := batch.(*remoteWriteBatch)
-	concrete.outcome.Durability = 1
-	if _, err := batch.Commit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	mgr.RejectRemoteTransaction(concrete.outcome.TransactionID, "lease expired")
-	if err := batch.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	// gate 已释放：下一写者立即得到结果。被拒绝的内存修改仍在实例里，实体隔离到重新加载
-	// （RR-20260926-28 复核），所以结果是 ErrRemoteFenced 而不是 gate 超时。
-	if _, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()}); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("next writer after rejection err=%v, want ErrRemoteFenced", err)
-	}
-	if err := mgr.StopFinalizer(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if len(mgr.remote.writeSlots) != 0 || mgr.Stats().ActiveTransactions != 0 {
-		t.Fatal("rejection leaked transaction/gate capacity")
-	}
 }
 func TestAdmittedTransactionStatusRefreshesDurableRejection(t *testing.T) {
 	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)

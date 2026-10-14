@@ -101,19 +101,6 @@ func (b *Backend) WriteAuthority() WriteAuthority {
 	return nil
 }
 
-// RejectRemoteCommitsInTransaction 转发到存储适配器，在调用方的 Mongo 事务里写 Remote Rejected 记录。
-// 生产路径不再产生（维护者 2026-10-13），仅供测试注入 durable rejection；去留见 KNOWN-LIMITS
-// “Remote WAL级Rejected处理”。
-func (b *Backend) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
-	store, ok := b.storage.(interface {
-		RejectRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit, string) error
-	})
-	if !ok {
-		return entity.ErrRemoteAtomicBatchUnsupported
-	}
-	return store.RejectRemoteCommitsInTransaction(ctx, commits, cause)
-}
-
 // RejectUnresolvedRemoteCommits 转发 Durability 0 未知结果的持久拒绝；存储不支持时
 // 返回 ErrRemoteAtomicBatchUnsupported，finalizer 保持隔离并继续回源。
 func (b *Backend) RejectUnresolvedRemoteCommits(ctx context.Context, commits []entity.RemoteCommit, cause string) (entity.RemoteCommitStatus, error) {

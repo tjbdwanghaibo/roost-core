@@ -76,7 +76,18 @@ func (l localLookupLoader) LookupLocalRemoteEntity(id int64, _ entity.EntityKind
 type switchableStorage struct {
 	*MongoCommitter
 	unreachable atomic.Bool
-	statusCalls chan struct{}
+	// reject：权威明确拒绝（版本冲突），Durability 0 的 Commit 同步回滚。
+	reject atomic.Bool
+	// rejectWriteFailures > 0 时 finalizer 写持久拒绝（RejectUnresolvedRemoteCommits）失败并减一，模拟拒绝写入的瞬时故障。
+	rejectWriteFailures atomic.Int32
+	statusCalls         chan struct{}
+}
+
+func (s *switchableStorage) RejectUnresolvedRemoteCommits(ctx context.Context, commits []entity.RemoteCommit, cause string) (entity.RemoteCommitStatus, error) {
+	if n := s.rejectWriteFailures.Load(); n > 0 && s.rejectWriteFailures.CompareAndSwap(n, n-1) {
+		return entity.RemoteCommitStatus{}, errors.New("test: rejection write failed")
+	}
+	return s.MongoCommitter.RejectUnresolvedRemoteCommits(ctx, commits, cause)
 }
 
 func (s *switchableStorage) CommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
@@ -88,6 +99,9 @@ func (s *switchableStorage) CommitStatus(ctx context.Context, id entity.RemoteTr
 }
 
 func (s *switchableStorage) CommitRemoteBatch(ctx context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	if s.reject.Load() {
+		return nil, entity.ErrRemoteVersionConflict
+	}
 	if s.unreachable.Load() {
 		return nil, context.DeadlineExceeded
 	}
@@ -95,6 +109,9 @@ func (s *switchableStorage) CommitRemoteBatch(ctx context.Context, commits []ent
 }
 
 func (s *switchableStorage) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
+	if s.reject.Load() {
+		return entity.RemoteCommitReceipt{}, entity.ErrRemoteVersionConflict
+	}
 	if s.unreachable.Load() {
 		return entity.RemoteCommitReceipt{}, context.DeadlineExceeded
 	}
@@ -247,38 +264,23 @@ func TestRejectedMemoryWriteIsNotCarriedByNextWrite(t *testing.T) {
 	}
 }
 
-// 既有 Rejected 分支（Durability 1，投影器持久拒绝）：finalizer 第一次回源就读到 Rejected，
-// 实体此前没有被隔离——修复前这里会带着被拒绝修改继续写。
-func TestRejectedAsyncWriteIsNotCarriedByNextWrite(t *testing.T) {
-	f, live := newRejectedMemoryFixture(t, 1902)
-	tx := remoteTestTxID(0xA2)
-	batch := f.prepareRejectedWrite(t, live, tx, 1)
-	if _, err := batch.Commit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	if err := batch.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	f.assertRejectedWriteNotCarried(t, live)
-}
-
-// Durability 1：finalizer 先看到 Unknown（实体被隔离），之后投影器持久拒绝。
-func TestRejectedAsyncWriteAfterQuarantineIsNotCarriedByNextWrite(t *testing.T) {
+// Durability 0 结果未知，finalizer 第一次写持久拒绝失败：先回源得 Unknown 并隔离实体、按退避重试，
+// 之后写下拒绝。隔离期间与拒绝之后，带着被拒绝修改的旧实例都不能写出。
+func TestRejectedMemoryWriteAfterQuarantineIsNotCarriedByNextWrite(t *testing.T) {
 	f, live := newRejectedMemoryFixture(t, 1903)
+	f.storage.unreachable.Store(true)
+	f.storage.rejectWriteFailures.Store(1)
 	tx := remoteTestTxID(0xA3)
-	batch := f.prepareRejectedWrite(t, live, tx, 1)
-	if _, err := batch.Commit(context.Background()); err != nil {
-		t.Fatal(err)
+	batch := f.prepareRejectedWrite(t, live, tx, 0)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want indeterminate", err)
 	}
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// RR-20260926-38 起，投影期间 finalizer 不回源；投影器报告结果未知后才回源并隔离。
-	f.mgr.completeRemoteTransaction(tx, entity.RemoteCommitStatus{TransactionID: tx, State: entity.RemoteCommitIndeterminate, Cause: "projector publication failed"})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	for range 2 { // 第二次回源开始时，第一轮已看到 Unknown 并完成隔离
+	for range 2 { // 第二次回源开始时，第一轮已看到 Unknown、写拒绝失败并保持隔离
 		select {
 		case <-f.storage.statusCalls:
 		case <-ctx.Done():
@@ -288,22 +290,24 @@ func TestRejectedAsyncWriteAfterQuarantineIsNotCarriedByNextWrite(t *testing.T) 
 	if got := live.RemoteOwnershipState(); got != entity.RemoteOwnershipQuarantined {
 		t.Fatalf("unresolved entity state=%v, want quarantined", got)
 	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
 	f.assertRejectedWriteNotCarried(t, live)
+	if status, err := f.store.CommitStatus(context.Background(), tx); err != nil || status.State != entity.RemoteCommitRejected {
+		t.Fatalf("durable status=%+v err=%v, want Rejected after the retried rejection write", status, err)
+	}
 }
 
-// Durability 2：提交等待拿到拒绝，转交 finalizer 收尾。
-func TestRejectedStrictWriteIsNotCarriedByNextWrite(t *testing.T) {
+// Durability 0 被权威明确拒绝：Commit 同步回滚并隔离；loader 不能卸载时实例保持隔离到业务重新加载。
+func TestDefinitelyRejectedMemoryWriteIsNotCarriedByNextWrite(t *testing.T) {
 	f, live := newRejectedMemoryFixture(t, 1904)
-	tx := remoteTestTxID(0xA4)
-	batch := f.prepareRejectedWrite(t, live, tx, 2)
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteRejected) {
-		t.Fatalf("strict commit err=%v, want rejected", err)
+	f.storage.reject.Store(true)
+	batch := f.prepareRejectedWrite(t, live, remoteTestTxID(0xA4), 0)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteVersionConflict) || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want the explicit version conflict without the unknown-outcome sentinel", err)
 	}
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	f.storage.reject.Store(false)
 	f.assertRejectedWriteNotCarried(t, live)
 }
 
@@ -379,7 +383,6 @@ func (l *authorityLoader) LoadEntity(ctx context.Context, fullID int64, _ entity
 
 type rejectingStorage struct {
 	*switchableStorage
-	reject atomic.Bool
 	// loseReply：事务真实写进 Mongo，但回复丢失（调用方看到超时，结果未知）。
 	loseReply atomic.Bool
 	// statusHold 非 nil 时，回源读取在返回前等它关闭（进入时先通知 statusHeld），供回归按事件控制 finalizer 拿到结论的时刻。
@@ -554,36 +557,6 @@ func TestDefinitelyRejectedMemoryWriteReloadsFromAuthority(t *testing.T) {
 	batch := f.prepareRejected(t, live, remoteTestTxID(0xC2), 0)
 	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteVersionConflict) {
 		t.Fatalf("commit err=%v, want version conflict", err)
-	}
-	if err := batch.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	f.assertReloadedFromAuthority(t, live)
-}
-
-// Durability 1：投影器持久拒绝（finalizer 首轮即拿到 Rejected）。
-func TestRejectedAsyncWriteReloadsFromAuthority(t *testing.T) {
-	f, live := newReloadFixture(t, 1953)
-	tx := remoteTestTxID(0xC3)
-	batch := f.prepareRejected(t, live, tx, 1)
-	if _, err := batch.Commit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	if err := batch.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	f.assertReloadedFromAuthority(t, live)
-}
-
-// Durability 2：提交等待拿到拒绝，转交 finalizer 收尾。
-func TestRejectedStrictWriteReloadsFromAuthority(t *testing.T) {
-	f, live := newReloadFixture(t, 1954)
-	tx := remoteTestTxID(0xC4)
-	batch := f.prepareRejected(t, live, tx, 2)
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
-	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemoteRejected) {
-		t.Fatalf("strict commit err=%v, want rejected", err)
 	}
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
@@ -804,9 +777,10 @@ func TestReloadDuringUnloadReturnsReloadingSentinel(t *testing.T) {
 	f.assertReloadedFromAuthority(t, live)
 }
 
-// Durability 1 在 Commit 返回时推测性确认 Sync，投影器拒绝前订阅者可能已收到被拒绝的内容：卸载时 subject 仍有订阅者，框架在
-// 业务池之外从权威重载实例并 Rebind，订阅者下一帧收到同一对象的权威全量（ObjectUpdate + Full）；无订阅者时不主动重载。
-// 历史：RR-20260926-59。
+// 持久拒绝后仅内存卸载时 subject 仍有订阅者：框架在业务池之外从权威重载实例并 Rebind，订阅者下一帧收到同一对象的
+// 权威全量（ObjectUpdate + Full）；无订阅者时不主动重载。
+// 历史：RR-20260926-59（原以 Durability 1 推测性确认后被投影器拒绝为场景；WAL 级拒绝已移除（2026-10-14），
+// 改由 Durability 0 的 finalizer 持久拒绝驱动同一卸载 / 重载路径）。
 
 type resyncSubscriber struct {
 	sync   *entitysync.Manager
@@ -920,19 +894,20 @@ func fullPayload(t *testing.T, object frame.ObjectDelta) (string, bool) {
 	return string(update.Payload.BytesCopy()), update.Full
 }
 
-func TestRejectedAsyncWriteResyncsSubscribersFromAuthority(t *testing.T) {
+func TestRejectedWriteResyncsSubscribersFromAuthority(t *testing.T) {
 	f, live, sub := newResyncFixture(t, 1961, true)
 	tx := remoteTestTxID(0xD1)
-	batch := f.prepareRejected(t, live, tx, 1) // 内存 a=rejected
+	f.storage.unreachable.Store(true)
+	batch := f.prepareRejected(t, live, tx, 0) // 内存 a=rejected
 	live.MarkSyncDirty(1)
-	if _, err := batch.Commit(context.Background()); err != nil { // Durability 1：推测性成功
-		t.Fatal(err)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want indeterminate (the finalizer rejects it)", err)
 	}
-	speculative := sub.next(t, time.Second, "the speculative Durability 1 frame")
-	if payload, _ := fullPayload(t, speculative.Objects[0]); payload != "a=rejected" {
-		t.Fatalf("premise: speculative frame=%q, want a=rejected", payload)
+	// 本 fixture 没有 Nest 的 Sync 门：订阅者先收到被拒绝的内容，用来证明卸载后的全量确实把它纠正回权威状态。
+	held := sub.next(t, time.Second, "the frame carrying the rejected content")
+	if payload, _ := fullPayload(t, held.Objects[0]); payload != "a=rejected" {
+		t.Fatalf("premise: subscriber frame=%q, want a=rejected", payload)
 	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -963,11 +938,11 @@ func TestRejectedAsyncWriteResyncsSubscribersFromAuthority(t *testing.T) {
 func TestRejectedWriteWithoutSubscribersIsNotReloaded(t *testing.T) {
 	f, live, sub := newResyncFixture(t, 1962, false)
 	tx := remoteTestTxID(0xD2)
-	batch := f.prepareRejected(t, live, tx, 1)
-	if _, err := batch.Commit(context.Background()); err != nil {
-		t.Fatal(err)
+	f.storage.unreachable.Store(true)
+	batch := f.prepareRejected(t, live, tx, 0)
+	if _, err := batch.Commit(context.Background()); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want indeterminate (the finalizer rejects it)", err)
 	}
-	f.mgr.RejectRemoteTransaction(tx, "lease expired")
 	if err := batch.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
