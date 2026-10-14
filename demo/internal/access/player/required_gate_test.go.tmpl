@@ -5,7 +5,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"testing"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 )
 
 func TestRequiredWriteGateRefusesBeforeServiceInit(t *testing.T) {
@@ -17,15 +17,15 @@ func TestRequiredWriteGateRefusesBeforeServiceInit(t *testing.T) {
 	}
 	registry := app.NewRegistry(cfg)
 	called := false
-	handler := writeGateMiddleware(registry, mod.requireWriteGate)(func(*player_agent.Context, any) (any, error) { called = true; return nil, nil })
-	_, err := handler(&player_agent.Context{BaseCtx: context.Background(), PlayerID: 1}, nil)
+	handler := writeGateMiddleware(registry, mod.requireWriteGate)(func(*playeraccess.Context, any) (any, error) { called = true; return nil, nil })
+	_, err := handler(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 1}, nil)
 	if err == nil || called {
 		t.Fatalf("request entered business before required gate registered: called=%v err=%v", called, err)
 	}
 	if err := registry.Register(WriteGateCapability, readyGate{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := handler(&player_agent.Context{BaseCtx: context.Background(), PlayerID: 1}, nil); err != nil || !called {
+	if _, err := handler(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 1}, nil); err != nil || !called {
 		t.Fatalf("registered gate not picked up: called=%v err=%v", called, err)
 	}
 }

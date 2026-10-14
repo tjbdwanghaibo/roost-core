@@ -7,7 +7,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/gift"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -21,7 +21,7 @@ import (
 // client retrying the frame does not start a second saga, and the gift
 // carries this process's sid as the sender's bound sid. What happens next is
 // asynchronous; the client polls GiftStatus.
-func (controller *Controller) HandleSendGift(context *player_agent.Context, request *pb.SendGiftRequest) (*pb.SendGiftResponse, error) {
+func (controller *Controller) HandleSendGift(context *playeraccess.Context, request *pb.SendGiftRequest) (*pb.SendGiftResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("send_gift endpoint: context and request are required")
 	}

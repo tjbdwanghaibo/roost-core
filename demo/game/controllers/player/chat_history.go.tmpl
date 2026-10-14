@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/chatroom"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -14,7 +14,7 @@ import (
 // HandleChatHistory pages a channel forwards from a cursor. It is the
 // reconnect path: a client that missed pushes asks for everything after the
 // last Seq it saw. The chat service checks the viewer's read permission.
-func (controller *Controller) HandleChatHistory(context *player_agent.Context, request *pb.ChatHistoryRequest) (*pb.ChatHistoryResponse, error) {
+func (controller *Controller) HandleChatHistory(context *playeraccess.Context, request *pb.ChatHistoryRequest) (*pb.ChatHistoryResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("chat_history endpoint: context and request are required")
 	}

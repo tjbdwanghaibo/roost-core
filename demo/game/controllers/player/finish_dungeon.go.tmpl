@@ -9,7 +9,7 @@ import (
 	"{{MODULE}}/game/ranking"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
@@ -50,7 +50,7 @@ const DungeonClearExp = dungeon.ClearExp
 // still unmade, so the client (or an operator) gets the reward on the next
 // attempt. This is the shape a production game wants; what it must add is a
 // retry that is not a client's goodwill.
-func (controller *Controller) HandleFinishDungeon(context *player_agent.Context, request *pb.FinishDungeonRequest) (*pb.FinishDungeonResponse, error) {
+func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context, request *pb.FinishDungeonRequest) (*pb.FinishDungeonResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("finish_dungeon endpoint: context and request are required")
 	}

@@ -90,7 +90,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		return nil, err
 	}
 	if _, enabled := m.Access["player"]; enabled {
-		if err := addGo("game/player_agent/runtime_gen.go", renderPlayerAccessRuntime(), true); err != nil {
+		if err := addGo("game/playeraccess/runtime_gen.go", renderPlayerAccessRuntime(), true); err != nil {
 			return nil, err
 		}
 		if err := addGo("internal/access/player/mod_gen.go", renderPlayerAccessMod(m), true); err != nil {

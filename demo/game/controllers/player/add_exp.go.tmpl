@@ -6,7 +6,7 @@ import (
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -16,7 +16,7 @@ import (
 // response, everything else collapses to CodeInternal and is logged here.
 // It is hand-written rather than scaffolded: `roost add endpoint` wires a
 // single-entity handler, and AddExp addresses two.
-func (controller *Controller) HandleAddExp(context *player_agent.Context, request *pb.AddExpRequest) (*pb.AddExpResponse, error) {
+func (controller *Controller) HandleAddExp(context *playeraccess.Context, request *pb.AddExpRequest) (*pb.AddExpResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("add_exp endpoint: context and request are required")
 	}

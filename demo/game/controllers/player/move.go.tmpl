@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -24,7 +24,7 @@ import (
 // The response carries the position the server settled on, read back after
 // the transaction. A refused move answers with a code and the position the
 // player still has, so a client can snap back instead of drifting.
-func (controller *Controller) HandleMove(context *player_agent.Context, request *pb.MoveRequest) (*pb.MoveResponse, error) {
+func (controller *Controller) HandleMove(context *playeraccess.Context, request *pb.MoveRequest) (*pb.MoveResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("move endpoint: context and request are required")
 	}

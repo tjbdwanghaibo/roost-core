@@ -11,7 +11,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
@@ -24,7 +24,7 @@ import (
 // this endpoint goes through the lifecycle instead of a Sender. GetOrCreate is
 // safe to race: two logins of the same new player both end holding the one
 // Entity, and only one of them sees Created.
-func (controller *Controller) HandleEnterGame(context *player_agent.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+func (controller *Controller) HandleEnterGame(context *playeraccess.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}

@@ -122,26 +122,26 @@ func generateBindGo(defs *Definitions) ([]byte, error) {
 		return formatGo(b.Bytes())
 	}
 	fmt.Fprintf(&b, "import (\n")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAgentImportSuffix)
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAccessImportSuffix)
 	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/protocol/msgid")
 	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PBImportSuffix)
 	fmt.Fprintf(&b, ")\n\n")
 	for _, msg := range defs.Messages {
 		name := msgName(msg)
 		if msg.Resp != "" {
-			fmt.Fprintf(&b, "func Register%s(reg *player_agent.ProtocolRegistry, handler func(*player_agent.Context, *pb.%s) (*pb.%s, error)) error {\n", name, msg.Req, msg.Resp)
-			fmt.Fprintf(&b, "\treturn player_agent.RegisterProtocol[*pb.%s, *pb.%s](reg, msgid.Msg%s, msgid.Msg%s, pb.Unmarshal%s, pb.Marshal%s, handler)\n", msg.Req, msg.Resp, name, name, msg.Req, msg.Resp)
+			fmt.Fprintf(&b, "func Register%s(reg *playeraccess.ProtocolRegistry, handler func(*playeraccess.Context, *pb.%s) (*pb.%s, error)) error {\n", name, msg.Req, msg.Resp)
+			fmt.Fprintf(&b, "\treturn playeraccess.RegisterProtocol[*pb.%s, *pb.%s](reg, msgid.Msg%s, msgid.Msg%s, pb.Unmarshal%s, pb.Marshal%s, handler)\n", msg.Req, msg.Resp, name, name, msg.Req, msg.Resp)
 			fmt.Fprintf(&b, "}\n\n")
 		} else {
-			fmt.Fprintf(&b, "func Register%s(reg *player_agent.ProtocolRegistry, handler func(*player_agent.Context, *pb.%s) error) error {\n", name, msg.Req)
-			fmt.Fprintf(&b, "\treturn player_agent.RegisterNotify[*pb.%s](reg, msgid.Msg%s, pb.Unmarshal%s, handler)\n", msg.Req, name, msg.Req)
+			fmt.Fprintf(&b, "func Register%s(reg *playeraccess.ProtocolRegistry, handler func(*playeraccess.Context, *pb.%s) error) error {\n", name, msg.Req)
+			fmt.Fprintf(&b, "\treturn playeraccess.RegisterNotify[*pb.%s](reg, msgid.Msg%s, pb.Unmarshal%s, handler)\n", msg.Req, name, msg.Req)
 			fmt.Fprintf(&b, "}\n\n")
 		}
 	}
 	for _, push := range defs.Pushes {
 		name := pushName(push)
-		fmt.Fprintf(&b, "func Register%sEncoder(reg *player_agent.ProtocolRegistry) error {\n", name)
-		fmt.Fprintf(&b, "\treturn player_agent.RegisterTypedEncoder[*pb.%s](reg, msgid.Msg%s, pb.Marshal%s)\n", push.Msg, name, push.Msg)
+		fmt.Fprintf(&b, "func Register%sEncoder(reg *playeraccess.ProtocolRegistry) error {\n", name)
+		fmt.Fprintf(&b, "\treturn playeraccess.RegisterTypedEncoder[*pb.%s](reg, msgid.Msg%s, pb.Marshal%s)\n", push.Msg, name, push.Msg)
 		fmt.Fprintf(&b, "}\n\n")
 	}
 	return formatGo(b.Bytes())
@@ -224,7 +224,7 @@ func generateProtocolHandlerGo(modulePath string, domain string, messages []MsgD
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n")
 	fmt.Fprintf(&b, "\t%s %q\n", controllerAlias, modulePath+"/game/controllers/"+domain)
-	fmt.Fprintf(&b, "\t%q\n", modulePath+PlayerAgentImportSuffix)
+	fmt.Fprintf(&b, "\t%q\n", modulePath+PlayerAccessImportSuffix)
 	fmt.Fprintf(&b, "\t%q\n", modulePath+PBImportSuffix)
 	fmt.Fprintf(&b, "\tplayerbind %q\n", modulePath+"/protocol/player_bind")
 	fmt.Fprintf(&b, ")\n\n")
@@ -233,14 +233,14 @@ func generateProtocolHandlerGo(modulePath string, domain string, messages []MsgD
 	for _, msg := range messages {
 		name := msgName(msg)
 		if msg.Resp != "" {
-			fmt.Fprintf(&b, "\tHandle%s(ctx *player_agent.Context, req *pb.%s) (*pb.%s, error)\n", name, msg.Req, msg.Resp)
+			fmt.Fprintf(&b, "\tHandle%s(ctx *playeraccess.Context, req *pb.%s) (*pb.%s, error)\n", name, msg.Req, msg.Resp)
 			continue
 		}
-		fmt.Fprintf(&b, "\tHandle%s(ctx *player_agent.Context, req *pb.%s) error\n", name, msg.Req)
+		fmt.Fprintf(&b, "\tHandle%s(ctx *playeraccess.Context, req *pb.%s) error\n", name, msg.Req)
 	}
 	fmt.Fprintf(&b, "}\n\n")
 
-	fmt.Fprintf(&b, "func %s(reg *player_agent.ProtocolRegistry, r *app.Registry) error {\n", registerName)
+	fmt.Fprintf(&b, "func %s(reg *playeraccess.ProtocolRegistry, r *app.Registry) error {\n", registerName)
 	fmt.Fprintf(&b, "\tctl, err := %s.FromRegistry(r)\n", controllerAlias)
 	fmt.Fprintf(&b, "\tif err != nil {\n")
 	fmt.Fprintf(&b, "\t\treturn err\n")
@@ -248,7 +248,7 @@ func generateProtocolHandlerGo(modulePath string, domain string, messages []MsgD
 	fmt.Fprintf(&b, "\treturn %sWith(reg, ctl)\n", registerName)
 	fmt.Fprintf(&b, "}\n\n")
 
-	fmt.Fprintf(&b, "func %sWith(reg *player_agent.ProtocolRegistry, ctl %s) error {\n", registerName, controllerType)
+	fmt.Fprintf(&b, "func %sWith(reg *playeraccess.ProtocolRegistry, ctl %s) error {\n", registerName, controllerType)
 	for i, msg := range messages {
 		name := msgName(msg)
 		if i == len(messages)-1 {
@@ -287,7 +287,7 @@ func generateProtocolBootstrap(defs *Definitions, handlerImportBase string) ([]b
 	fmt.Fprintln(&b, "import (")
 	fmt.Fprintln(&b, "\t\"fmt\"")
 	fmt.Fprintln(&b, "\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAgentImportSuffix)
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAccessImportSuffix)
 	if len(defs.Pushes) > 0 {
 		fmt.Fprintf(&b, "\tplayerbind %q\n", defs.ModulePath+"/protocol/player_bind")
 	}
@@ -297,7 +297,7 @@ func generateProtocolBootstrap(defs *Definitions, handlerImportBase string) ([]b
 	}
 	fmt.Fprintln(&b, ")")
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "func RegisterPlayerProtocols(protocols *player_agent.ProtocolRegistry, registry *app.Registry) error {")
+	fmt.Fprintln(&b, "func RegisterPlayerProtocols(protocols *playeraccess.ProtocolRegistry, registry *app.Registry) error {")
 	fmt.Fprintln(&b, "\tif protocols == nil || registry == nil {")
 	fmt.Fprintln(&b, "\t\treturn fmt.Errorf(\"player protocol bootstrap: protocols and registry are required\")")
 	fmt.Fprintln(&b, "\t}")

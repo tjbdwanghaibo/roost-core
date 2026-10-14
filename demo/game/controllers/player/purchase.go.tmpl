@@ -8,7 +8,7 @@ import (
 
 	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/purchase"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
@@ -33,7 +33,7 @@ import (
 //     endpoint sees an answer;
 //   - the goods reach the bag through the drain, which is the same path a
 //     purchase made while offline takes.
-func (controller *Controller) HandlePurchase(context *player_agent.Context, request *pb.PurchaseRequest) (*pb.PurchaseResponse, error) {
+func (controller *Controller) HandlePurchase(context *playeraccess.Context, request *pb.PurchaseRequest) (*pb.PurchaseResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("purchase endpoint: context and request are required")
 	}

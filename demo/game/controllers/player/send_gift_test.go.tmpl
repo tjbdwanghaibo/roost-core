@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	playerentity "{{MODULE}}/game/entities/player"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	"github.com/spf13/viper"
@@ -40,7 +40,7 @@ func TestSendGiftWritesThisProcessSidAsTheSendersSid(t *testing.T) {
 	controller := &Controller{registry: app.NewRegistry(viper.New()), nestClient: nest}
 	var published playerOwners = &sidOwners{}
 	controller.owners.Store(&published)
-	response, err := controller.HandleSendGift(&player_agent.Context{BaseCtx: context.Background(), Session: boundTo(1300), PlayerID: stuckPlayerID, MsgID: msgid.MsgSendGift, Seq: 7}, &pb.SendGiftRequest{ToPlayerID: 43, ItemID: 1001, Count: 2})
+	response, err := controller.HandleSendGift(&playeraccess.Context{BaseCtx: context.Background(), Session: boundTo(1300), PlayerID: stuckPlayerID, MsgID: msgid.MsgSendGift, Seq: 7}, &pb.SendGiftRequest{ToPlayerID: 43, ItemID: 1001, Count: 2})
 	if err != nil || response.Code != 0 {
 		t.Fatalf("send_gift = %+v, %v", response, err)
 	}

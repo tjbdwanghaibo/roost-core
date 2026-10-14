@@ -477,7 +477,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	checks := map[string][]string{
 		"roost.yaml":                               {"access:", "player:", "service: game", "- nest"},
-		"game/player_agent/runtime_gen.go":         {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
+		"game/playeraccess/runtime_gen.go":         {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
 		"internal/access/player/mod_gen.go":        {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
 		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
 		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},

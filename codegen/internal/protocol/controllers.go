@@ -126,10 +126,10 @@ import (
 )
 // %s 由业务实现；需要修改 Entity 时请通过 Nest handler 执行。
 // 返回响应后由接入层编码回包；异步或手动回包时不要再返回同一响应。
-func (controller *Controller) %s(ctx *player_agent.Context, req *pb.%s) %s {
+func (controller *Controller) %s(ctx *playeraccess.Context, req *pb.%s) %s {
  return %sfmt.Errorf(%q)
 }
-`, packageName, defs.ModulePath+PlayerAgentImportSuffix, defs.ModulePath+PBImportSuffix, name, name, msg.Req, result, ret, name+": not implemented")
+`, packageName, defs.ModulePath+PlayerAccessImportSuffix, defs.ModulePath+PBImportSuffix, name, name, msg.Req, result, ret, name+": not implemented")
 		}
 		var names []string
 		for name := range files {

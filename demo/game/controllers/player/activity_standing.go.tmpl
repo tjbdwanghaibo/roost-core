@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	gameactivity "{{MODULE}}/game/activity"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -19,7 +19,7 @@ import (
 // has paid — the coordinator is still waiting on the others — so a client
 // that read "complete" from the coordinator and drew "your reward is in your
 // mailbox" would be wrong for as long as the grace window lasts.
-func (controller *Controller) HandleActivityStanding(context *player_agent.Context, request *pb.ActivityStandingRequest) (*pb.ActivityStandingResponse, error) {
+func (controller *Controller) HandleActivityStanding(context *playeraccess.Context, request *pb.ActivityStandingRequest) (*pb.ActivityStandingResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("activity_standing endpoint: context and request are required")
 	}

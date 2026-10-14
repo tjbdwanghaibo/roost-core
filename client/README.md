@@ -99,10 +99,10 @@ if (session.TryDequeuePush(out var push))
 生成access/player.NewMod可接收ProtocolRegistrar；在已有PB注册之后、Seal之前执行，注册冲突或失败会中止启动。业务在自己的app装配中使用player.NewMod(registerMatch)，原无参调用保持PB行为。注册函数通过RegisterPayloadNotify(...wire.PayloadLockstep, lockstep.DecodeCommand, handler)接线，handler只将认证PlayerID/Session.Principal().SessionID和Command交给业务Nest Sender，不能从网络handler并发操作Match。示意：
 
 ```go
-func registerMatch(protocols *player_agent.ProtocolRegistry, registry *app.Registry) error {
-    return player_agent.RegisterPayloadNotify(protocols, commandMessageID,
+func registerMatch(protocols *playeraccess.ProtocolRegistry, registry *app.Registry) error {
+    return playeraccess.RegisterPayloadNotify(protocols, commandMessageID,
         wire.PayloadLockstep, lockstep.DecodeCommand,
-        func(ctx *player_agent.Context, command lockstep.Command) error {
+        func(ctx *playeraccess.Context, command lockstep.Command) error {
             // matchSender使用既有Nest handler；按会话当前match归属找到比赛。
             return matchSender.Submit(ctx.Context(), ctx.PlayerID, ctx.Session.Principal().SessionID, command)
         })

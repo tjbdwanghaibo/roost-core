@@ -277,7 +277,7 @@ func (mod *Mod) StopWithContext(ctx context.Context) error {
 // Runtime 是业务接线 capability：把 ProtocolRegistry 的编码器接到唯一 TCP runtime。
 // 连接表、通知、监听和收发都由 gateway 持有，生成物不复制运行状态机。
 type Runtime struct { gateway.PlayerRuntime; TCPRuntime *gateway.TCPRuntime }
-func NewRuntime(protocols *player_agent.ProtocolRegistry, loginTimeout time.Duration) *Runtime {
+func NewRuntime(protocols *playeraccess.ProtocolRegistry, loginTimeout time.Duration) *Runtime {
  var encode gateway.TCPEncoder
  if protocols != nil { encode = protocols.Encode }
  native := gateway.NewTCPRuntime(encode,loginTimeout)
@@ -332,7 +332,7 @@ var _ app.Mod = (*IngressMod)(nil)
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
 var _ app.ModStopBudgetProvider = (*Mod)(nil)
-`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAgentImportSuffix)
+`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAccessImportSuffix)
 }
 
 func renderPlayerTCPServerTests(manifest Manifest) string {
@@ -355,8 +355,8 @@ import (
 )
 func TestHandlerPanicHasErrorLevelStack(t *testing.T){
  var logs bytes.Buffer;old:=slog.Default();slog.SetDefault(slog.New(slog.NewTextHandler(&logs,&slog.HandlerOptions{Level:slog.LevelInfo})));defer slog.SetDefault(old)
- wrapped:=player_agent.RecoverMiddleware(func(*player_agent.Context,any)(any,error){panic("b6 handler failure")})
- _,err:=wrapped(&player_agent.Context{PlayerID:7,MsgID:11,Seq:12},nil);if err==nil{t.Fatal("panic not recovered")}
+ wrapped:=playeraccess.RecoverMiddleware(func(*playeraccess.Context,any)(any,error){panic("b6 handler failure")})
+ _,err:=wrapped(&playeraccess.Context{PlayerID:7,MsgID:11,Seq:12},nil);if err==nil{t.Fatal("panic not recovered")}
  got:=logs.String();if !strings.Contains(got,"level=ERROR") || !strings.Contains(got,"stack=") || !strings.Contains(got,"TestHandlerPanicHasErrorLevelStack") {t.Fatalf("panic lacks visible stack: %%s",got)}
 }
 
@@ -520,7 +520,7 @@ func TestAModStopRetryKeepsTheServerUntilItDrains(t *testing.T) {
 func stalledAuthServer(t *testing.T)(*gateway.TCPServer,chan struct{},<-chan struct{},<-chan struct{}){
  t.Helper();config:=defaultConfig();config.Addr="127.0.0.1:0";config.HandshakeTimeout=5*time.Second
  release,entered,returned:=make(chan struct{}),make(chan struct{},1),make(chan struct{})
- server,err:=NewServer(config,&accessplayer.Runtime{Protocols:player_agent.NewProtocolRegistry()},AuthenticatorFunc(func(context.Context,string,net.Addr)(gateway.Principal,error){
+ server,err:=NewServer(config,&accessplayer.Runtime{Protocols:playeraccess.NewProtocolRegistry()},AuthenticatorFunc(func(context.Context,string,net.Addr)(gateway.Principal,error){
   entered<-struct{}{};<-release;time.Sleep(100*time.Millisecond);close(returned);return gateway.Principal{},gateway.ErrUnauthenticated
  }));if err!=nil{t.Fatal(err)}
  if err:=server.Start();err!=nil{t.Fatal(err)}
@@ -541,5 +541,5 @@ func dialAuthenticated(t *testing.T,server *gateway.TCPServer,token string)net.C
  if ack.MsgID!=0 || ack.Seq!=1 || len(ack.Payload)!=0{t.Fatalf("unexpected auth ACK: %%+v",ack)}
  return conn
 }
-`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAgentImportSuffix)
+`, manifest.Project.Module+"/internal/access/player", manifest.Project.Module+protocol.PlayerAccessImportSuffix)
 }

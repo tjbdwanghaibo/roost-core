@@ -118,7 +118,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		return []string{
 			"roost.yaml",
-			"game/player_agent/runtime_gen.go",
+			"game/playeraccess/runtime_gen.go",
 			"internal/access/player/mod_gen.go",
 		}, nil
 	}

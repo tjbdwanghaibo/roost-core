@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/chatroom"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -15,7 +15,7 @@ import (
 // into another process, no Entity lock involved — then fans the stored
 // message out to the connected players. The sender is the authenticated
 // player, never a request field; the frame sequence is the idempotency key.
-func (controller *Controller) HandleSendChat(context *player_agent.Context, request *pb.SendChatRequest) (*pb.SendChatResponse, error) {
+func (controller *Controller) HandleSendChat(context *playeraccess.Context, request *pb.SendChatRequest) (*pb.SendChatResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("send_chat endpoint: context and request are required")
 	}

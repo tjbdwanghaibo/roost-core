@@ -62,7 +62,7 @@ Lockstep 的 1800 帧只是 30Hz 下保留一分钟的示例，不是适合所�
 3. Relation：同一锁下维护 subject 到 observers 的反向索引，Forget 只遍历真正持有关系的观察者；Set/Clear 同步维护正反索引。代价是每条关系额外的索引内存。
 4. Lockstep：成员变化时作废广播名单缓存，Tick 复用确定顺序；退出、重绑、旁观者与 Close 都要处理。保持单所有者模型和逐接收者准入错误，不改帧序列。
 
-Controller 已按用户确认接入 player access 的协议生成流程：骨架参数为 player_agent.Context 和对应 PB 请求，业务代码自行维护，重复生成不覆盖业务。手动响应继续走当前连接的 Session.Reply，不能把发往 PlayerID 所有连接的 Push 当请求响应。实际用法见[玩家协议教程](PLAYER-ACCESS.md)。
+Controller 已按用户确认接入 player access 的协议生成流程：骨架参数为 playeraccess.Context 和对应 PB 请求，业务代码自行维护，重复生成不覆盖业务。手动响应继续走当前连接的 Session.Reply，不能把发往 PlayerID 所有连接的 Push 当请求响应。实际用法见[玩家协议教程](PLAYER-ACCESS.md)。
 
 ## Controller 如何生成和维护
 

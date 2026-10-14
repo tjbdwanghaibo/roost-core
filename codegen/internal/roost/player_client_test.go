@@ -260,11 +260,11 @@ import (
  "github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
  "sync/atomic"
  accessplayer "example.com/planet/internal/access/player"
- "example.com/planet/game/player_agent"
+ "example.com/planet/game/playeraccess"
  "example.com/planet/protocol/pb"
 )
 func TestClientSDKRealGeneratedTCP(t *testing.T) {
- registry:=player_agent.NewProtocolRegistry()
+ registry:=playeraccess.NewProtocolRegistry()
  transport:=NewRuntime(registry,defaultLoginTimeout)
  sender,err:=lockstep.NewTCPSender(50002,wire.DefaultMaxPayload,func(id nettransport.SessionID)(string,bool){return "sdk",id==7},func(ctx context.Context,id string,msg uint32,data []byte)error{
   frames,err:=lockstep.DecodeBroadcast(data);if err!=nil{return err}
@@ -285,7 +285,7 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  defer func(){close(actions);<-ownerDone}()
  run:=func(ctx context.Context,c *lockstep.Command,ticks int)error{a:=action{ctx:ctx,command:c,ticks:ticks,done:make(chan error,1)};select{case actions<-a:case <-ctx.Done():return ctx.Err()};return <-a.done}
  var lockstepDecoded atomic.Int32
- if err:=player_agent.RegisterPayloadNotify(registry,50001,wire.PayloadLockstep,func(data []byte)(lockstep.Command,error){lockstepDecoded.Add(1);return lockstep.DecodeCommand(data)},func(ctx *player_agent.Context,c lockstep.Command)error{
+ if err:=playeraccess.RegisterPayloadNotify(registry,50001,wire.PayloadLockstep,func(data []byte)(lockstep.Command,error){lockstepDecoded.Add(1);return lockstep.DecodeCommand(data)},func(ctx *playeraccess.Context,c lockstep.Command)error{
   if ctx.PlayerID!=7 {t.Error("unauthenticated seat")}
   ticks:=0;if c.Operation==lockstep.OpInput || c.Operation==lockstep.OpCatchup {ticks=1}
   return run(ctx.Context(),&c,ticks)
@@ -296,8 +296,8 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  for _,entry:=range fixtures {if entry.Name=="sync"{data,err:=hex.DecodeString(entry.Hex);if err!=nil{t.Fatal(err)};packets,err:=wire.Decode(data,0);if err!=nil{t.Fatal(err)};syncPayload=packets[0].Payload}}
  if len(syncPayload)==0{t.Fatal("missing Go Sync fixture")}
  var pbDecoded atomic.Int32
- err=player_agent.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,func(data []byte)(*pb.AddExpRequest,error){pbDecoded.Add(1);return pb.UnmarshalAddExpRequest(data)},pb.MarshalAddExpResponse,
- func(ctx *player_agent.Context,req *pb.AddExpRequest)(*pb.AddExpResponse,error){
+ err=playeraccess.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,func(data []byte)(*pb.AddExpRequest,error){pbDecoded.Add(1);return pb.UnmarshalAddExpRequest(data)},pb.MarshalAddExpResponse,
+ func(ctx *playeraccess.Context,req *pb.AddExpRequest)(*pb.AddExpResponse,error){
   if req.Amount==43{if err:=run(ctx.Context(),nil,9);err!=nil{return nil,err}}
   if req.Amount==42{if err:=transport.PushSyncPlayer(ctx.Context(),7,10103,syncPayload);err!=nil{return nil,err}}
   return &pb.AddExpResponse{LevelsGained:int32(req.Amount)},nil
@@ -452,7 +452,7 @@ import (
  "github.com/tjbdwanghaibo/roost-core/client/wire"
  "github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
  "github.com/spf13/viper"
- "example.com/planet/game/player_agent"
+ "example.com/planet/game/playeraccess"
  accessplayer "example.com/planet/internal/access/player"
 )
 // 仅Provide测试的依赖：不模拟Nest执行，任何实际调用应失败。
@@ -460,16 +460,16 @@ type unusedNest struct{nest.Client}
 func TestClientSDKRegistrationHook(t *testing.T) {
  registry:=app.NewRegistry(viper.New());if err:=registry.Register("nest",unusedNest{});err!=nil{t.Fatal(err)}
  called:=false
- mod:=accessplayer.NewMod(func(protocols *player_agent.ProtocolRegistry,r *app.Registry)error{
+ mod:=accessplayer.NewMod(func(protocols *playeraccess.ProtocolRegistry,r *app.Registry)error{
   called=r==registry
-  return player_agent.RegisterPayloadNotify(protocols,50001,wire.PayloadLockstep,lockstep.DecodeCommand,func(*player_agent.Context,lockstep.Command)error{return nil})
+  return playeraccess.RegisterPayloadNotify(protocols,50001,wire.PayloadLockstep,lockstep.DecodeCommand,func(*playeraccess.Context,lockstep.Command)error{return nil})
  })
  if err:=mod.Provide(registry);err!=nil{t.Fatal(err)}
  runtime,ok:=app.Lookup[*accessplayer.Runtime](registry,accessplayer.Name);if !ok || !called{t.Fatal("registrar not used")}
- if err:=player_agent.RegisterNotify(runtime.Protocols,50009,lockstep.DecodeCommand,func(*player_agent.Context,lockstep.Command)error{return nil});!errors.Is(err,player_agent.ErrRegistrySealed){t.Fatalf("custom registry not sealed %v",err)}
+ if err:=playeraccess.RegisterNotify(runtime.Protocols,50009,lockstep.DecodeCommand,func(*playeraccess.Context,lockstep.Command)error{return nil});!errors.Is(err,playeraccess.ErrRegistrySealed){t.Fatalf("custom registry not sealed %v",err)}
  refused:=errors.New("registration failed")
  registry2:=app.NewRegistry(viper.New());if err:=registry2.Register("nest",unusedNest{});err!=nil{t.Fatal(err)}
- mod2:=accessplayer.NewMod(func(*player_agent.ProtocolRegistry,*app.Registry)error{return refused})
+ mod2:=accessplayer.NewMod(func(*playeraccess.ProtocolRegistry,*app.Registry)error{return refused})
  if err:=mod2.Provide(registry2);!errors.Is(err,refused){t.Fatal(err)}
  if _,ok:=app.Lookup[*accessplayer.Runtime](registry2,accessplayer.Name);ok{t.Fatal("failed registration published runtime")}
 }

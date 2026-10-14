@@ -272,7 +272,7 @@ import (
 	"fmt"
 
 	%s %q
-	player_agent %q
+	playeraccess %q
 	%ssyncsender %q
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	%q
@@ -280,7 +280,7 @@ import (
 
 // Handle%s is the protocol boundary. Authentication is already represented by
 // context.PlayerID; all Entity access continues through the generated Sender.
-func (controller *Controller) Handle%s(context *player_agent.Context, request *pb.%sRequest) (*pb.%sResponse, error) {
+func (controller *Controller) Handle%s(context *playeraccess.Context, request *pb.%sRequest) (*pb.%sResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("%s endpoint: context and request are required")
 	}
@@ -298,7 +298,7 @@ func (controller *Controller) Handle%s(context *player_agent.Context, request *p
 }
 `, domain,
 		target.alias, target.importPath,
-		manifest.Project.Module+protocol.PlayerAgentImportSuffix,
+		manifest.Project.Module+protocol.PlayerAccessImportSuffix,
 		nestSnake, manifest.Project.Module+"/game/handler/syncsender",
 		manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, protocolType, protocolType, protocolType, protocolSnake,

@@ -300,7 +300,7 @@ tcp.Runtime，调用 PushPlayer/PushSession；它会复用生成 encoder 并维�
 | 路径 | 所有者 | 修改方式 |
 | --- | --- | --- |
 | protocol/def、db/def、Component、handler、endpoint | 业务 | 直接编辑后 roost generate |
-| game/player_agent、protocol/pb、player_bind、syncsender | codegen | 不手改；改声明重新生成 |
+| game/playeraccess、protocol/pb、player_bind、syncsender | codegen | 不手改；改声明重新生成 |
 | internal/access/player、internal/bootstrap | codegen | 修改 roost.yaml 后 roost project sync |
 | game/lifecycle | 业务 | 可添加登录、创角与销毁策略，不绕过 ManagerAccess |
 
@@ -354,7 +354,7 @@ func renderProtocolNestGuide() string {
 
     listener/framing
         → authenticate gateway.Session
-        → player_agent.ProtocolRegistry.Dispatch
+        → playeraccess.ProtocolRegistry.Dispatch
         → generated typed decoder + controller binding
         → application endpoint
         → generated Nest Sender

@@ -5,14 +5,14 @@ import (
 	"log/slog"
 
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // HandleWorldStats reads the World's counters through a Nest read handler:
 // the World is locked for the read, and only the value comes out.
-func (controller *Controller) HandleWorldStats(context *player_agent.Context, request *pb.WorldStatsRequest) (*pb.WorldStatsResponse, error) {
+func (controller *Controller) HandleWorldStats(context *playeraccess.Context, request *pb.WorldStatsRequest) (*pb.WorldStatsResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("world_stats endpoint: context and request are required")
 	}

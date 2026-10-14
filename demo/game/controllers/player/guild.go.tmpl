@@ -8,7 +8,7 @@ import (
 	guildentity "{{MODULE}}/game/entities/guild"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -29,7 +29,7 @@ import (
 // comes from: a persistent counter shared by all game processes. Guilds
 // survive restarts, so the spawner's process-local runtime IDs cannot be used.
 
-func (controller *Controller) HandleFoundGuild(context *player_agent.Context, request *pb.FoundGuildRequest) (*pb.GuildResponse, error) {
+func (controller *Controller) HandleFoundGuild(context *playeraccess.Context, request *pb.FoundGuildRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("found_guild endpoint: context and request are required")
 	}
@@ -107,7 +107,7 @@ func (controller *Controller) HandleFoundGuild(context *player_agent.Context, re
 	return controller.guildResponse(info), nil
 }
 
-func (controller *Controller) HandleJoinGuild(context *player_agent.Context, request *pb.JoinGuildRequest) (*pb.GuildResponse, error) {
+func (controller *Controller) HandleJoinGuild(context *playeraccess.Context, request *pb.JoinGuildRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("join_guild endpoint: context and request are required")
 	}
@@ -136,7 +136,7 @@ func (controller *Controller) HandleJoinGuild(context *player_agent.Context, req
 	return controller.guildResponse(info), nil
 }
 
-func (controller *Controller) HandleGuildInfo(context *player_agent.Context, request *pb.GuildInfoRequest) (*pb.GuildResponse, error) {
+func (controller *Controller) HandleGuildInfo(context *playeraccess.Context, request *pb.GuildInfoRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("guild_info endpoint: context and request are required")
 	}

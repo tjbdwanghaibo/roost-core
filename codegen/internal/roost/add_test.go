@@ -319,7 +319,7 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "HandleHello(ctx *player_agent.Context, req *pb.HelloRequest)") {
+	if !strings.Contains(string(raw), "HandleHello(ctx *playeraccess.Context, req *pb.HelloRequest)") {
 		t.Fatalf("missing typed controller: %s", raw)
 	}
 	// 模拟实际业务响应，真实编译生成的注册链与 Controller 类型。
@@ -334,10 +334,10 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 		t.Fatal("business overwritten")
 	}
 	run("build", "./...")
-	if err := os.WriteFile(filepath.Join(root, "game/player_agent/manual_reply_test.go"), []byte(manualReplyTest), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "game/playeraccess/manual_reply_test.go"), []byte(manualReplyTest), 0600); err != nil {
 		t.Fatal(err)
 	}
-	run("test", "./game/player_agent", "-run", "^TestManualReplyDoesNotEncodeAgain$", "-count=1")
+	run("test", "./game/playeraccess", "-run", "^TestManualReplyDoesNotEncodeAgain$", "-count=1")
 	if err := Generate(root, GenerateOptions{Check: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 	}
 }
 
-const manualReplyTest = `package player_agent
+const manualReplyTest = `package playeraccess
 import (
  "context"
  "testing"

@@ -7,14 +7,14 @@
 ```text
 客户端 PB 请求
   → Gate / Game TCP（连接与认证）
-  → player_agent.ProtocolRegistry（协议校验、解码、请求上下文）
+  → playeraccess.ProtocolRegistry（协议校验、解码、请求上下文）
   → player.Controller.HandleEquip（业务入口）
   → syncsender.EquipItemSender（生成的 Nest 调用）
   → handlerEquipItem（Entity 保护下的业务和事务）
   → Controller 返回 PB 响应 → 接入层编码、回包
 ```
 
-独立 Gate 部署在 Gate 与协议派发之间还有 NATS 和 GameIngress；嵌入式部署直接使用本地 TCP 接入。业务 Controller 的写法相同。这里的 `player_agent.Context.Session` 是 `gateway.Session`，不是管理副本运行的 `service/session`。
+独立 Gate 部署在 Gate 与协议派发之间还有 NATS 和 GameIngress；嵌入式部署直接使用本地 TCP 接入。业务 Controller 的写法相同。这里的 `playeraccess.Context.Session` 是 `gateway.Session`，不是管理副本运行的 `service/session`。
 
 ## 2. 定义协议
 
@@ -45,7 +45,7 @@ type EquipProtocol interface {
 
 在生成工程执行 `go generate ./...`，生成 PB 类型、编解码、消息号和注册代码。启动接线通过 `RegisterPlayerProtocols` 注册 Controller，再封存注册表。框架负责解码和回包，Controller 不要再手动写 socket，否则可能重复响应。
 
-启用 player access 后，生成器还会按 `handler=player` 在 `game/controllers/player` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*player_agent.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
+启用 player access 后，生成器还会按 `handler=player` 在 `game/controllers/player` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*playeraccess.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
 
 这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明查重。已有类型与 `FromRegistry` 必须配套；同名文件占用但缺少对应方法时会明确报冲突。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
 
@@ -53,11 +53,11 @@ type EquipProtocol interface {
 
 ## 3. Controller：把协议转换成业务调用
 
-以下方法与 demo 的真实接口一致，放在业务工程 `game/controllers/player` 包中。依赖已有 Controller 的 `NestClient()`；`player` 指业务工程的 `game/entities/player`，`syncsender` 指 `game/handler/syncsender`，`player_agent` 指 `game/player_agent`，`pb` 指 `protocol/pb`。完整 imports 见 [Controller 源码](../../demo/game/controllers/player/equip.go.tmpl)。
+以下方法与 demo 的真实接口一致，放在业务工程 `game/controllers/player` 包中。依赖已有 Controller 的 `NestClient()`；`player` 指业务工程的 `game/entities/player`，`syncsender` 指 `game/handler/syncsender`，`playeraccess` 指 `game/playeraccess`，`pb` 指 `protocol/pb`。完整 imports 见 [Controller 源码](../../demo/game/controllers/player/equip.go.tmpl)。
 
 ```go
 func (controller *Controller) HandleEquip(
-    ctx *player_agent.Context, req *pb.EquipRequest,
+    ctx *playeraccess.Context, req *pb.EquipRequest,
 ) (*pb.EquipResponse, error) {
     if ctx == nil || req == nil {
         return nil, fmt.Errorf("equip: context and request are required")
@@ -119,16 +119,16 @@ func handlerEquipItem(
 
 ## 5. Agent 能否发送响应
 
-能。常规写法就是在 Controller 中返回 `&pb.EquipResponse{...}, nil`，生成的注册链负责编码，并带原请求序号回给当前连接。`player_agent.Context` 本身没有接收任意 PB 对象的 `SendResponse` 方法。
+能。常规写法就是在 Controller 中返回 `&pb.EquipResponse{...}, nil`，生成的注册链负责编码，并带原请求序号回给当前连接。`playeraccess.Context` 本身没有接收任意 PB 对象的 `SendResponse` 方法。
 
-需要手动回包时，现有 `ctx.Session.Reply` 接收 `player_agent.Response`，不是原始 PB 对象。例如在 `HandleEquip` 内：
+需要手动回包时，现有 `ctx.Session.Reply` 接收 `playeraccess.Response`，不是原始 PB 对象。例如在 `HandleEquip` 内：
 
 ```go
 payload, err := pb.MarshalEquipResponse(&pb.EquipResponse{Slot: 1})
 if err != nil {
     return nil, err
 }
-err = ctx.Session.Reply(ctx.Context(), &player_agent.Response{
+err = ctx.Session.Reply(ctx.Context(), &playeraccess.Response{
     MessageID: msgid.MsgEquip,
     Sequence:  ctx.Seq,
     Payload:   payload,
@@ -142,4 +142,4 @@ return nil, err // 已手动回包，不能再返回一个响应对象。
 
 Controller 可能并发执行，不是每个玩家一个 Actor，不要在 Controller 字段里无保护地存可变玩家状态。Nest handler 则按声明的目标实体保护业务执行；长短业务池都不能同步等待另一条业务消息，也不能等待 I/O。适用的无回滚 memory handler 可用 [Await](NEST-AWAIT.md) 拆分锁外查询与恢复；本篇的 undo 事务 handler 不能直接套用 Await。
 
-接入层名称目前仍为 `player_agent`，本次没有实施 `playeraccess` 改名。后续维护应以生成器和 demo 模板为源，避免直接修改随后会被覆盖的生成文件。
+接入层生成目录是 `game/playeraccess`（包名 `playeraccess`，2026-10-14 起；此前叫 `game/playeraccess`，只改名、行为不变，升级步骤见 CHANGELOG）。维护应以生成器和 demo 模板为源，避免直接修改随后会被覆盖的生成文件。

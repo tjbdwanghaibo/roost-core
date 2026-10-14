@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -12,7 +12,7 @@ import (
 // HandleListMail pages the player's mailbox through the mail service — a
 // typed call into another process; the mail service scopes the read to the
 // authenticated player, so there is nothing for the endpoint to check.
-func (controller *Controller) HandleListMail(context *player_agent.Context, request *pb.ListMailRequest) (*pb.ListMailResponse, error) {
+func (controller *Controller) HandleListMail(context *playeraccess.Context, request *pb.ListMailRequest) (*pb.ListMailResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("list_mail endpoint: context and request are required")
 	}

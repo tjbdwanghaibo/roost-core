@@ -986,7 +986,7 @@ import (
  gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
  "example.com/planet/game/handler"
  syncsender "example.com/planet/game/handler/syncsender"
- "example.com/planet/game/player_agent"
+ "example.com/planet/game/playeraccess"
  "example.com/planet/protocol/pb"
 )
 type gateChecker struct{matches func(context.Context,string,gateway.ProcessIdentity)(bool,error)}
@@ -1007,8 +1007,8 @@ func TestGeneratedGateNestDAOAndWAL(t *testing.T){
  t.Cleanup(func(){_ = syncManager.Close(context.Background())})
  business:=nest.NewEngine(nest.NestOptionWithEntitySync(syncManager),nest.NestOptionWithGetter(sceneGetter{player.ID():player,world.ID():world}),nest.NestOptionWithTransactionCommitter(projector),nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers:4,QueueCap:32}, nest.WorkerPoolConfig{},nest.WorkerPoolConfig{}))
  if err:=business.Start();err!=nil{t.Fatal(err)};t.Cleanup(func(){_ = business.Shutdown(context.Background())})
- registry:=player_agent.NewProtocolRegistry()
- if err:=player_agent.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,pb.UnmarshalAddExpRequest,pb.MarshalAddExpResponse,func(ctx *player_agent.Context,request *pb.AddExpRequest)(*pb.AddExpResponse,error){
+ registry:=playeraccess.NewProtocolRegistry()
+ if err:=playeraccess.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,pb.UnmarshalAddExpRequest,pb.MarshalAddExpResponse,func(ctx *playeraccess.Context,request *pb.AddExpRequest)(*pb.AddExpResponse,error){
   if ctx.PlayerID!=7001{return nil,gateway.ErrUnauthenticated}
   gained,err:=syncsender.NewAddExpSender(business).MultiSync_AddExp(ctx.Context(),player.ID(),world.ID(),request.Amount)
   return &pb.AddExpResponse{LevelsGained:gained},err

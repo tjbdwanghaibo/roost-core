@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/gift"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -25,7 +25,7 @@ const giftStatusUnknown = "unknown"
 // unknown. A record that is not there yet is not an error — the start
 // intent travels through the outbox and the coordinator's consumer, so the
 // first poll after SendGift usually finds nothing.
-func (controller *Controller) HandleGiftStatus(context *player_agent.Context, request *pb.GiftStatusRequest) (*pb.GiftStatusResponse, error) {
+func (controller *Controller) HandleGiftStatus(context *playeraccess.Context, request *pb.GiftStatusRequest) (*pb.GiftStatusResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("gift_status endpoint: context and request are required")
 	}

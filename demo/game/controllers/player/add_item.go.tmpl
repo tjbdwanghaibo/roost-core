@@ -6,7 +6,7 @@ import (
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -23,7 +23,7 @@ import (
 // message, and anything without a code — an infrastructure failure, a bug —
 // collapses to errcode.CodeInternal with a fixed reason, so internals never
 // leak to a client. The cause is logged here, where the operator can see it.
-func (controller *Controller) HandleAddItem(context *player_agent.Context, request *pb.AddItemRequest) (*pb.AddItemResponse, error) {
+func (controller *Controller) HandleAddItem(context *playeraccess.Context, request *pb.AddItemRequest) (*pb.AddItemResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("add_item endpoint: context and request are required")
 	}

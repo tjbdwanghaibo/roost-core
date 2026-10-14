@@ -11,7 +11,7 @@ import (
 
 	playerentity "{{MODULE}}/game/entities/player"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
@@ -159,7 +159,7 @@ func (login *stuckLogin) enter(t *testing.T) {
 	dispatchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	began := time.Now()
-	response, err := login.controller.HandleEnterGame(&player_agent.Context{BaseCtx: dispatchCtx, Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+	response, err := login.controller.HandleEnterGame(&playeraccess.Context{BaseCtx: dispatchCtx, Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
 	elapsed := time.Since(began)
 	if err != nil {
 		t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
@@ -256,7 +256,7 @@ func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 		controller := &Controller{registry: app.NewRegistry(viper.New())}
 		var published playerOwners = owners
 		controller.owners.Store(&published)
-		response, err := controller.HandleEnterGame(&player_agent.Context{BaseCtx: context.Background(), Session: session, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+		response, err := controller.HandleEnterGame(&playeraccess.Context{BaseCtx: context.Background(), Session: session, PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
 		if err != nil {
 			t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
 		}
@@ -316,7 +316,7 @@ func TestEnterGameAnswersLoginTimeoutWhenTheUnloadOutlivesTheWait(t *testing.T) 
 	controller := &Controller{registry: app.NewRegistry(viper.New())}
 	var published playerOwners = owners
 	controller.owners.Store(&published)
-	response, err := controller.HandleEnterGame(&player_agent.Context{BaseCtx: context.Background(), Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
+	response, err := controller.HandleEnterGame(&playeraccess.Context{BaseCtx: context.Background(), Session: boundTo(1000), PlayerID: stuckPlayerID, MsgID: msgid.MsgEnterGame, Seq: 1}, &pb.EnterGameRequest{})
 	if err != nil {
 		t.Fatalf("enter game returned a transport error instead of an answer: %v", err)
 	}

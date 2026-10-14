@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -14,7 +14,7 @@ import (
 // because the client installs its state decoder only after the login answer;
 // this is the client saying the decoder is in place, and the next tick sends
 // its first snapshot.
-func (controller *Controller) HandleSceneReady(context *player_agent.Context, request *pb.SceneReadyRequest) (*pb.SceneReadyResponse, error) {
+func (controller *Controller) HandleSceneReady(context *playeraccess.Context, request *pb.SceneReadyRequest) (*pb.SceneReadyResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("scene_ready endpoint: context and request are required")
 	}

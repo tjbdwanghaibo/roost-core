@@ -16,11 +16,11 @@ import (
 // import-path suffixes its generated code refers to. `roost generate` and the
 // project templates refer to these instead of repeating the literals.
 const (
-	DefaultDefDir           = "./protocol/def"
-	DefaultBindDir          = "./protocol/player_bind"
-	DefaultHandlerDir       = "./game/protocol_handlers"
-	PlayerAgentImportSuffix = "/game/player_agent"
-	PBImportSuffix          = "/protocol/pb"
+	DefaultDefDir            = "./protocol/def"
+	DefaultBindDir           = "./protocol/player_bind"
+	DefaultHandlerDir        = "./game/protocol_handlers"
+	PlayerAccessImportSuffix = "/game/playeraccess"
+	PBImportSuffix           = "/protocol/pb"
 )
 
 func Run(args []string, stdout io.Writer) error {
@@ -30,7 +30,7 @@ func Run(args []string, stdout io.Writer) error {
 	protoDir := flags.String("proto", "./protocol/proto", "generated proto directory")
 	pbDir := flags.String("pb", "./protocol/pb", "generated pb go directory")
 	msgIDDir := flags.String("msgid", "./protocol/msgid", "generated msg id directory")
-	bindDir := flags.String("bind", DefaultBindDir, "generated player_agent binding directory")
+	bindDir := flags.String("bind", DefaultBindDir, "generated playeraccess binding directory")
 	handlerDir := flags.String("handlers", DefaultHandlerDir, "generated player protocol handler directory")
 	controllerDir := flags.String("controllers", "", "create missing application-owned controller scaffolds")
 	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")

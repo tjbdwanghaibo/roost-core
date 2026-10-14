@@ -16,19 +16,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 )
 
-// 编排器不重复各生成器的默认路径字面量（"./db/def"、"./protocol/player_bind"、"/game/player_agent" ……），
+// 编排器不重复各生成器的默认路径字面量（"./db/def"、"./protocol/player_bind"、"/game/playeraccess" ……），
 // 只引用生成器导出的常量：否则生成器改了默认值，它自己照常工作，却与 `roost generate` 静默不一致。
 func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 	shared := map[string]string{
-		dao.DefaultDefDir:                "dao.DefaultDefDir",
-		dao.DefaultOutDir:                "dao.DefaultOutDir",
-		codeerr.DefaultOutFile:           "codeerr.DefaultOutFile",
-		protocol.DefaultDefDir:           "protocol.DefaultDefDir",
-		protocol.DefaultBindDir:          "protocol.DefaultBindDir",
-		protocol.DefaultHandlerDir:       "protocol.DefaultHandlerDir",
-		protocol.PlayerAgentImportSuffix: "protocol.PlayerAgentImportSuffix",
-		protocol.PBImportSuffix:          "protocol.PBImportSuffix",
-		tablegen.DefaultMetaDir:          "tablegen.DefaultMetaDir",
+		dao.DefaultDefDir:                 "dao.DefaultDefDir",
+		dao.DefaultOutDir:                 "dao.DefaultOutDir",
+		codeerr.DefaultOutFile:            "codeerr.DefaultOutFile",
+		protocol.DefaultDefDir:            "protocol.DefaultDefDir",
+		protocol.DefaultBindDir:           "protocol.DefaultBindDir",
+		protocol.DefaultHandlerDir:        "protocol.DefaultHandlerDir",
+		protocol.PlayerAccessImportSuffix: "protocol.PlayerAccessImportSuffix",
+		protocol.PBImportSuffix:           "protocol.PBImportSuffix",
+		tablegen.DefaultMetaDir:           "tablegen.DefaultMetaDir",
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {

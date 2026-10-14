@@ -19,7 +19,7 @@ func TestControllerScaffoldsPreserveBusinessAndFollowMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "HandleEquip(ctx *player_agent.Context, req *pb.EquipRequest) (*pb.EquipResponse, error)") {
+	if !strings.Contains(string(raw), "HandleEquip(ctx *playeraccess.Context, req *pb.EquipRequest) (*pb.EquipResponse, error)") {
 		t.Fatalf("wrong signature: %s", raw)
 	}
 	business := strings.ReplaceAll(string(raw), `fmt.Errorf("HandleEquip: not implemented")`, `fmt.Errorf("business implementation")`)
@@ -44,7 +44,7 @@ func TestControllerScaffoldsPreserveBusinessAndFollowMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "HandleMove(ctx *player_agent.Context, req *pb.MoveRequest) error") {
+	if !strings.Contains(string(raw), "HandleMove(ctx *playeraccess.Context, req *pb.MoveRequest) error") {
 		t.Fatalf("wrong one-way signature: %s", raw)
 	}
 	if err := generateControllers(root, defs, io.Discard); err != nil {

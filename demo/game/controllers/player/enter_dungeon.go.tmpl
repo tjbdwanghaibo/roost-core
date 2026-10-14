@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
@@ -19,7 +19,7 @@ const DungeonKind = "dungeon"
 // run per owner" and the idempotency of the request id, so a retried frame
 // returns the same run and a second dungeon while one is open is a coded
 // refusal (ErrAlreadyRunning).
-func (controller *Controller) HandleEnterDungeon(context *player_agent.Context, request *pb.EnterDungeonRequest) (*pb.EnterDungeonResponse, error) {
+func (controller *Controller) HandleEnterDungeon(context *playeraccess.Context, request *pb.EnterDungeonRequest) (*pb.EnterDungeonResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_dungeon endpoint: context and request are required")
 	}

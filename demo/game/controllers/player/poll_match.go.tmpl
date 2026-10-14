@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/matchmaking"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
@@ -14,7 +14,7 @@ import (
 // HandlePollMatch reads the player's ticket and, once it is matched, the
 // match it joined. Polling is the demo's choice; a real game would push the
 // match to the session through the transport's Runtime instead.
-func (controller *Controller) HandlePollMatch(context *player_agent.Context, request *pb.PollMatchRequest) (*pb.PollMatchResponse, error) {
+func (controller *Controller) HandlePollMatch(context *playeraccess.Context, request *pb.PollMatchRequest) (*pb.PollMatchResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("poll_match endpoint: context and request are required")
 	}

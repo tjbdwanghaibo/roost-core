@@ -8,7 +8,7 @@ import (
 
 func renderPlayerAccessRuntime() string {
 	return generatedHeader + `
-package player_agent
+package playeraccess
 
 import (
 	"context"
@@ -421,12 +421,12 @@ type WriteGate interface {
 }
 
 type Runtime struct {
-	Protocols *player_agent.ProtocolRegistry
+	Protocols *playeraccess.ProtocolRegistry
 	Nest      corenest.Client
 }
 
 // ProtocolRegistrar在PB bootstrap之后、Seal之前接入原始Notify；错误中止启动。
-type ProtocolRegistrar func(*player_agent.ProtocolRegistry,*app.Registry) error
+type ProtocolRegistrar func(*playeraccess.ProtocolRegistry,*app.Registry) error
 
 type Mod struct {
  registrars []ProtocolRegistrar
@@ -455,7 +455,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	if !ok || nestClient == nil {
 		return fmt.Errorf("player access: nest client is unavailable")
 	}
-	protocols := player_agent.NewProtocolRegistry()
+	protocols := playeraccess.NewProtocolRegistry()
 	// The gate goes on before the protocols, so it wraps every one of them.
 	// It is resolved lazily: this Mod provides before the services that
 	// publish a gate have started, and a gate that appears later must still
@@ -481,10 +481,10 @@ func (mod *Mod) Stop() { mod.runtime = nil }
 // handler. The resolved gate is cached once found; until then each request
 // costs one capability lookup, which lasts only until the owning service has
 // started.
-func writeGateMiddleware(registry *app.Registry, required bool) player_agent.Middleware {
+func writeGateMiddleware(registry *app.Registry, required bool) playeraccess.Middleware {
 	var cached atomic.Pointer[WriteGate]
-	return func(next player_agent.HandlerFunc) player_agent.HandlerFunc {
-		return func(ctx *player_agent.Context, request any) (any, error) {
+	return func(next playeraccess.HandlerFunc) playeraccess.HandlerFunc {
+		return func(ctx *playeraccess.Context, request any) (any, error) {
 			gate := cached.Load()
 			if gate == nil {
 				if found, ok := app.Lookup[WriteGate](registry, WriteGateCapability); ok && found != nil {
@@ -505,5 +505,5 @@ func writeGateMiddleware(registry *app.Registry, required bool) player_agent.Mid
 }
 
 var _ app.Mod = (*Mod)(nil)
-`, generatedHeader, manifest.Project.Module+protocol.PlayerAgentImportSuffix, manifest.Project.Module+"/game/protocol_bootstrap", renderPlayerAccessDeclaration())
+`, generatedHeader, manifest.Project.Module+protocol.PlayerAccessImportSuffix, manifest.Project.Module+"/game/protocol_bootstrap", renderPlayerAccessDeclaration())
 }

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/ranking"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
@@ -17,7 +17,7 @@ import (
 // asks. They are separate calls on purpose — the service returns Rank and
 // Score from the same read, so each answer is self-consistent even though the
 // two can be a moment apart.
-func (controller *Controller) HandleRankTop(context *player_agent.Context, request *pb.RankTopRequest) (*pb.RankTopResponse, error) {
+func (controller *Controller) HandleRankTop(context *playeraccess.Context, request *pb.RankTopRequest) (*pb.RankTopResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("rank_top endpoint: context and request are required")
 	}

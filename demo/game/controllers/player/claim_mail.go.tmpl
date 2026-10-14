@@ -6,7 +6,7 @@ import (
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/game/rewards"
 	"{{MODULE}}/protocol/pb"
 
@@ -41,7 +41,7 @@ import (
 // lost), and a lost CommitClaim leaves the mail unclaimed in the mail service
 // until the next claim commits it (the ledger stops the double grant, not the
 // duplicate attempt).
-func (controller *Controller) HandleClaimMail(context *player_agent.Context, request *pb.ClaimMailRequest) (*pb.ClaimMailResponse, error) {
+func (controller *Controller) HandleClaimMail(context *playeraccess.Context, request *pb.ClaimMailRequest) (*pb.ClaimMailResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("claim_mail endpoint: context and request are required")
 	}

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"{{MODULE}}/game/player_agent"
+	"{{MODULE}}/game/playeraccess"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	gamescene "{{MODULE}}/game/scene"
 	accessplayer "{{MODULE}}/internal/access/player"
@@ -56,7 +56,7 @@ func startScenePlayerTransport(t *testing.T) (*accessplayertcp.Runtime, string) 
 	}
 	addr := probe.Addr().String()
 	_ = probe.Close()
-	protocols := player_agent.NewProtocolRegistry()
+	protocols := playeraccess.NewProtocolRegistry()
 	if err := playerbind.RegisterEntitySyncEncoder(protocols); err != nil {
 		t.Fatal(err)
 	}

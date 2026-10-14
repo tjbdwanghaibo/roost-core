@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"sort"
 
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/game/skills"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -18,7 +18,7 @@ import (
 // and the same CompileEnvironment). Skill EXECUTION — a Host over a locked
 // Entity, deterministic ticks, checkpoints — is deliberately not here: see
 // roost help skill.
-func (controller *Controller) HandleSkillCatalog(context *player_agent.Context, request *pb.SkillCatalogRequest) (*pb.SkillCatalogResponse, error) {
+func (controller *Controller) HandleSkillCatalog(context *playeraccess.Context, request *pb.SkillCatalogRequest) (*pb.SkillCatalogResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("skill_catalog endpoint: context and request are required")
 	}

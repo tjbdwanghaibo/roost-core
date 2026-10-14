@@ -7,7 +7,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/matchmaking"
-	player_agent "{{MODULE}}/game/player_agent"
+	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
@@ -20,7 +20,7 @@ import (
 // the same frame gets the same ticket, a new frame after a match gets a new
 // one. The match service's own coded errors (already queued, queue invalid)
 // pass through ClientError like any other.
-func (controller *Controller) HandleJoinQueue(context *player_agent.Context, request *pb.JoinQueueRequest) (*pb.JoinQueueResponse, error) {
+func (controller *Controller) HandleJoinQueue(context *playeraccess.Context, request *pb.JoinQueueRequest) (*pb.JoinQueueResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("join_queue endpoint: context and request are required")
 	}
