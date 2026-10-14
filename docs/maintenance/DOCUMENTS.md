@@ -77,6 +77,7 @@
 - [REVIEW-COMMITS-20261014.csv](REVIEW-COMMITS-20261014.csv)：固定范围内 249 个非合并提交的路径与审查状态
 
 - [README.md](README.md)：维护手册（版本与兼容、升级回退、日常验证、故障、发版、文档规则、测试与生成代码、可读性要求）
+- [DESIGN-TODO.md](DESIGN-TODO.md)：待维护者决定的设计事项（Lockstep 历史保留、SyncBus 兜底、Drain 放弃出口、schema 迁移流程、Player 跨机迁移）
 - [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
