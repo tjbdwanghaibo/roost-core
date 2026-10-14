@@ -50,14 +50,11 @@ fi
 echo "source-head-check: compiling planet against the working tree $repo_root"
 (cd "$work" && go work init ./planet "$repo_root" && go work edit -go=1.27.0)
 export GOWORK="$work/go.work"
-# --skip-deps skipped `go mod tidy`, and tidy is what upgrades the pre-split
-# google.golang.org/genproto that etcd's old requirement drags in; left alone,
-# it and the split googleapis/{api,rpc} modules provide the same package and
-# every build fails with "ambiguous import". tidy cannot run (it ignores the
-# workspace and the framework version may be unpublished), so do that one piece
-# of its work explicitly.
-(cd "$work/planet" && go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core \
-  && GOFLAGS=-mod=mod go get google.golang.org/genproto@latest >/dev/null)
+# The generated go.mod names the generator's floor, which may be unpublished;
+# the workspace supplies the framework, so that requirement goes first. The
+# pre-split google.golang.org/genproto is kept out of the workspace by
+# roost-core's own go.mod (TestModuleLoadsInsideAWorkspace), not patched here.
+(cd "$work/planet" && go mod edit -droprequire=github.com/tjbdwanghaibo/roost-core)
 (cd "$work/planet" && go build ./... && go vet ./... && go test -count=1 ./... 2>&1 | { grep -v "no test files" || true; })
 (cd "$work/planet" && go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...)
 echo "source-head-check: $scenario OK"
