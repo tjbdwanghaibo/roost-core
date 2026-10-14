@@ -181,16 +181,35 @@ jobs:
       - name: race on the Redis-backed service suites
         run: go test -tags integration -count=1 -p 1 -race ./wiring/integration/ ./wiring/mail/ ./wiring/rank/ ./service/mail/
 
+  # Windows 只保证编译与 CLI 兼容（维护者 2026-10-08 / 2026-10-14：支持保证范围是
+  # macOS / Linux，见 docs/maintenance/KNOWN-LIMITS.md“Windows”行）。完整 go test 在
+  # Windows 上的失败来自平台差异而不是框架缺陷：打开中的文件不能改名或删除（nestwal
+  # 损坏记录检查、日志轮转、statslog 文件句柄），checkout 的 CRLF 让 gofmt 门禁与
+  # kitconfig schema 比对把行尾当成差异。所以这里只编译（含测试文件，-run '^$' 不执行
+  # 任何用例）、vet，并在 Windows 上实际跑一次 roost CLI 生成工程。
   windows-compatibility:
     runs-on: windows-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
+      - run: go build ./...
+      - run: go vet ./...
+      - name: compile every test binary without running it
+        run: go test -run '^$' ./...
+      - name: roost CLI smoke
+        run: |
+          go build -o "$RUNNER_TEMP/roost.exe" ./codegen/cmd/roost
+          "$RUNNER_TEMP/roost.exe" --help >/dev/null
+          "$RUNNER_TEMP/roost.exe" project new planet -skip-deps -module example.com/planet -out "$RUNNER_TEMP/planet" -mods configdata -services game
+          test -f "$RUNNER_TEMP/planet/roost.yaml"
+          test -f "$RUNNER_TEMP/planet/go.mod"
 
   release-hygiene:
     runs-on: ubuntu-latest

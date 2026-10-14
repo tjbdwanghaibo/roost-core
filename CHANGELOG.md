@@ -16,6 +16,7 @@
 ### CI 与构建
 
 - 安全：`go.mod` 增加 `toolchain go1.27.2`（go 指令仍为 1.27.0），`golang.org/x/net` 升到 v0.60.0。go1.27.0 标准库的 GO-2026-6599…6617 与 x/net v0.58.0 的 GO-2026-6617 等使 CI `govulncheck` 失败；`GOTOOLCHAIN=auto`（Go 与 setup-go 的默认）时自动使用 go1.27.2。生成工程的 go.mod 同样带 `toolchain go1.27.2`（生成工程自己的 CI 也跑 govulncheck），`TestGeneratedGoVersionMatchesTheGeneratorsOwn` 钉住两处一致。已有工程可手工加这一行。
+- CI `windows-compatibility` 只验证编译与 CLI 兼容（维护者 2026-10-14）：`go build`、`go vet`、`go test -run '^$'`（编译全部测试不执行）与 roost CLI 生成工程冒烟，不再跑完整 `go test`；原因（文件锁、日志轮转、CRLF 使 gofmt / kitconfig 门禁失真）记入 KNOWN-LIMITS“Windows”行。支持保证范围仍是 macOS / Linux。
 
 ## [v1.26.0] - 2026-10-13
 
