@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -144,7 +145,7 @@ func newRR05Fixture(t *testing.T) *rr05Fixture {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = client.Close() })
-			stores, err := NewRedisStores(client, fmt.Sprintf("rr05:activity:%d", time.Now().UnixNano()), redisTTL)
+			stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "rr05:activity"), redisTTL)
 			if err != nil {
 				t.Fatal(err)
 			}

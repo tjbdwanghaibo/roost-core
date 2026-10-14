@@ -13,6 +13,7 @@ import (
 
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -329,7 +330,7 @@ func TestTerminalFinishCannotDeleteReacquiredClaim(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = client.Close() })
-			stores, err := NewRedisStores(client, RedisConfig{Prefix: fmt.Sprintf("service-review-b:%d", time.Now().UnixNano()), RequestTTL: time.Hour})
+			stores, err := NewRedisStores(client, RedisConfig{Prefix: redistest.Prefix(t, addr, "service-review-b"), RequestTTL: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}

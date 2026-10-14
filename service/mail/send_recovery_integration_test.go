@@ -10,9 +10,12 @@ package mail
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 // landedButLostEnvelopes writes the first envelope and then loses the reply.
@@ -49,7 +52,7 @@ func TestIntegrationSendRecoveryOnRealEnvelopes(t *testing.T) {
 			t.Run(reqName+"/"+failName, func(t *testing.T) {
 				client := integrationClient(t)
 				prefix := fmt.Sprintf("revn06:mail:%d", time.Now().UnixNano())
-				t.Cleanup(func() { deleteKeysUnder(t, prefix) })
+				redistest.Cleanup(t, os.Getenv("REDIS_ADDR"), prefix)
 				stores, err := NewRedisStores(client, RedisConfig{Prefix: prefix, SendTTL: time.Hour})
 				if err != nil {
 					t.Fatal(err)

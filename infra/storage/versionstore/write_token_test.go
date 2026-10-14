@@ -12,6 +12,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 // 写命令的回复丢失时（脚本已在服务端执行、调用方只拿到传输错误），调用方的重试不能把自己那次已生效的写再生效一次，也不能把它判成
@@ -470,7 +471,8 @@ func TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration(t *testing.T
 	unique := strconv.FormatInt(time.Now().UnixNano(), 36)
 	prefix := "roost:test:vs:" + unique
 	indexKey := prefix + ":index"
-	t.Cleanup(func() { client.Del(ctx, indexKey, prefix+":a") })
+	// 记录键是 prefix+"a"（KeyOf 不加分隔符），按前缀清理，不逐个列键名。
+	redistest.Cleanup(t, os.Getenv("ROOST_REDIS_TEST_ADDR"), prefix)
 
 	store, err := NewRedisStore(evalRedis{client: client}, RedisConfig[string, map[string]any]{
 		Prefix: prefix,

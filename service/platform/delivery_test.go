@@ -15,6 +15,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -33,7 +34,7 @@ func deliveryHarness(t *testing.T, attempts int, deliver Deliverer) *harness {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = client.Close() })
-			store, err := NewRedisOrders(client, fmt.Sprintf("review4:platform:%d", time.Now().UnixNano()))
+			store, err := NewRedisOrders(client, redistest.Prefix(t, addr, "review4:platform"))
 			if err != nil {
 				t.Fatal(err)
 			}

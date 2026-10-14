@@ -20,4 +20,4 @@ export GOWORK=off
 # 隔离环境 env.sh 的 shell 里运行，./infra/storage/redis/driver 的 toxic 用例与 ./framework/remoteentity 的进程杀死 /
 # 分区用例会整包跑到共享隔离环境上（没有 -run 限制），还会 /reset 共享 toxiproxy。
 unset ROOST_DATAENGINE_IT REDIS_ADDR
-go test -tags=integration -count=1 -p 1 ./wiring/redis ./wiring/mail ./infra/storage/redis/driver ./framework/remoteentity ./service/mail ./wiring/activity ./wiring/platform ./wiring/rank ./service/activity ./infra/storage/versionstore
+go test -tags=integration -count=1 -p 1 ./infra/storage/redis/redistest ./wiring/redis ./wiring/mail ./infra/storage/redis/driver ./framework/remoteentity ./service/mail ./wiring/activity ./wiring/platform ./wiring/rank ./service/activity ./infra/storage/versionstore

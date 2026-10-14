@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
@@ -496,7 +497,7 @@ func createRoleService(t *testing.T, mutate ...func(*Config)) (*Service, *clock,
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	stores, err := NewRedisStores(client, fmt.Sprintf("account-review3:%d", time.Now().UnixNano()), time.Minute)
+	stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "account-review3"), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

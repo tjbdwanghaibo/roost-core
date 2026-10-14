@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -34,7 +34,7 @@ func retentionHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	state, err := NewRedisStateStore(client, fmt.Sprintf("bugfix5:chat:%d", time.Now().UnixNano()))
+	state, err := NewRedisStateStore(client, redistest.Prefix(t, addr, "bugfix5:chat"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func rr08Chat(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	state, err := NewRedisStateStore(client, fmt.Sprintf("rr08:chat:%d", time.Now().UnixNano()))
+	state, err := NewRedisStateStore(client, redistest.Prefix(t, addr, "rr08:chat"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,23 +313,8 @@ func retentionStateStore(t *testing.T) StateStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := fmt.Sprintf("revn06:chat:%d:", time.Now().UnixNano())
-	t.Cleanup(func() {
-		_ = client.Close()
-		c := goredis.NewClient(&goredis.Options{Addr: addr})
-		defer c.Close()
-		ctx := context.Background()
-		keys, err := c.Keys(ctx, prefix+"*").Result()
-		if err != nil {
-			t.Errorf("cleanup scan: %v", err)
-			return
-		}
-		if len(keys) > 0 {
-			if err := c.Del(ctx, keys...).Err(); err != nil {
-				t.Errorf("cleanup delete: %v", err)
-			}
-		}
-	})
+	t.Cleanup(func() { _ = client.Close() })
+	prefix := redistest.Prefix(t, addr, "revn06:chat") + ":"
 	state, err := NewRedisStateStore(client, prefix)
 	if err != nil {
 		t.Fatal(err)

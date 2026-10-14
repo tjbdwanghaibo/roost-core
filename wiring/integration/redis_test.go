@@ -9,15 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 
 	"github.com/tjbdwanghaibo/roost-core/service/account"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
@@ -49,39 +48,8 @@ func client(t *testing.T) fredis.IRedis {
 func prefix(t *testing.T, name string) string {
 	t.Helper()
 	p := fmt.Sprintf("itest:%s:%d", name, time.Now().UnixNano())
-	t.Cleanup(func() { deleteKeysUnder(t, p) })
+	redistest.Cleanup(t, os.Getenv("REDIS_ADDR"), p)
 	return p
-}
-
-// deleteKeysUnder removes every key this run wrote under prefix (the stores
-// put all their keys at "<prefix>:..."). IRedis has no SCAN, so it uses its
-// own go-redis client on REDIS_ADDR.
-func deleteKeysUnder(t *testing.T, prefix string) {
-	t.Helper()
-	addr := os.Getenv("REDIS_ADDR")
-	if addr == "" {
-		return
-	}
-	c := goredis.NewClient(&goredis.Options{Addr: addr})
-	defer c.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	escaped := strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`, "]", `\]`).Replace(prefix)
-	iter := c.Scan(ctx, 0, escaped+":*", 256).Iterator()
-	var keys []string
-	for iter.Next(ctx) {
-		keys = append(keys, iter.Val())
-	}
-	if err := iter.Err(); err != nil {
-		t.Errorf("cleanup: scan %s:*: %v", prefix, err)
-		return
-	}
-	for chunk := range slices.Chunk(keys, 256) {
-		if err := c.Del(ctx, chunk...).Err(); err != nil {
-			t.Errorf("cleanup: delete %d keys under %s: %v", len(chunk), prefix, err)
-			return
-		}
-	}
 }
 
 // --- directory ---

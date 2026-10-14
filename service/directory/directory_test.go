@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -648,7 +649,7 @@ func TestDirectoryDeleteCannotRemoveRecreatedOwner(t *testing.T) {
 							t.Fatal(e)
 						}
 						defer client.Close()
-						state, e = NewRedisState(client, fmt.Sprintf("directory-review3:%d", time.Now().UnixNano()), 0)
+						state, e = NewRedisState(client, redistest.Prefix(t, addr, "directory-review3"), 0)
 						if e != nil {
 							t.Fatal(e)
 						}

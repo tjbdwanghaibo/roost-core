@@ -18,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -34,7 +35,7 @@ func openingService(t *testing.T, mutate func(*Config)) (*Service, *activityCloc
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = client.Close() })
-			stores, err := NewRedisStores(client, fmt.Sprintf("bugfix5:activity:%d", time.Now().UnixNano()), time.Hour)
+			stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "bugfix5:activity"), time.Hour)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -311,7 +312,7 @@ func newRR09Service(t *testing.T, mutate ...func(*Config)) (*Service, *activityC
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = client.Close() })
-		stores, err := NewRedisStores(client, fmt.Sprintf("rr09:activity:%d", time.Now().UnixNano()), time.Hour)
+		stores, err := NewRedisStores(client, redistest.Prefix(t, addr, "rr09:activity"), time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}

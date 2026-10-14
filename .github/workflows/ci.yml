@@ -180,6 +180,17 @@ jobs:
           fi
       - name: race on the Redis-backed service suites
         run: go test -tags integration -count=1 -p 1 -race ./wiring/integration/ ./wiring/mail/ ./wiring/rank/ ./service/mail/
+      # 2026-10-14 前跑完这个 job 会在 Redis 上留下一千多个键，这组用例因此只能指向私有 Redis。现在用例按自己的唯一前缀
+      # 清理（infra/storage/redis/redistest），这一步排在两个 go test 步骤之后、要求 Redis 为空，有用例写了键不清理就变红。
+      # ci_service_redis_test.go 钉住这一步。
+      - name: no Redis keys left behind
+        run: |
+          left=$(docker exec ${{ job.services.redis.id }} redis-cli info keyspace | awk -F'[=,]' '/^db/{s+=$2} END{print s+0}')
+          if [ "$left" != 0 ]; then
+            echo "$left keys left on Redis after the suites; tests must delete what they write (redistest.Prefix / redistest.Cleanup). Key shapes:"
+            docker exec ${{ job.services.redis.id }} redis-cli --scan | sed -E 's/[0-9]{6,}/N/g' | sort | uniq -c | sort -rn | head -50
+            exit 1
+          fi
 
   # Windows 只保证编译与 CLI 兼容（维护者 2026-10-08 / 2026-10-14：支持保证范围是
   # macOS / Linux，见 docs/maintenance/KNOWN-LIMITS.md“Windows”行）。完整 go test 在

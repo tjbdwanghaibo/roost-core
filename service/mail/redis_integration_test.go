@@ -6,15 +6,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 // These tests run bounded pipeline reads and key TTL against a real Redis.
@@ -43,7 +41,7 @@ func integrationStores(t *testing.T) (RedisStores, string) {
 	client := integrationClient(t)
 	prefix := fmt.Sprintf("mailtest:%d", time.Now().UnixNano())
 	// OPEN-ITEMS B45：之前每跑一次在目标 Redis 留下约 30 个键（信封、收件箱、发送记录）。
-	t.Cleanup(func() { deleteKeysUnder(t, prefix) })
+	redistest.Cleanup(t, os.Getenv("REDIS_ADDR"), prefix)
 	stores, err := NewRedisStores(client, RedisConfig{Prefix: prefix, SendTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
@@ -52,37 +50,6 @@ func integrationStores(t *testing.T) (RedisStores, string) {
 	// Redis 回收（EnvelopeStorageGrace 固定 24h，只有测试改它）。
 	stores.Envelopes.(*redisEnvelopes).grace = time.Millisecond
 	return stores, prefix
-}
-
-// deleteKeysUnder removes every key this run wrote under prefix (the stores
-// put all their keys at "<prefix>:..."). IRedis has no SCAN, so it uses its
-// own go-redis client on REDIS_ADDR.
-func deleteKeysUnder(t *testing.T, prefix string) {
-	t.Helper()
-	addr := os.Getenv("REDIS_ADDR")
-	if addr == "" {
-		return
-	}
-	c := goredis.NewClient(&goredis.Options{Addr: addr})
-	defer c.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	escaped := strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`, "]", `\]`).Replace(prefix)
-	iter := c.Scan(ctx, 0, escaped+":*", 256).Iterator()
-	var keys []string
-	for iter.Next(ctx) {
-		keys = append(keys, iter.Val())
-	}
-	if err := iter.Err(); err != nil {
-		t.Errorf("cleanup: scan %s:*: %v", prefix, err)
-		return
-	}
-	for chunk := range slices.Chunk(keys, 256) {
-		if err := c.Del(ctx, chunk...).Err(); err != nil {
-			t.Errorf("cleanup: delete %d keys under %s: %v", len(chunk), prefix, err)
-			return
-		}
-	}
 }
 
 func integrationService(t *testing.T) *Service {

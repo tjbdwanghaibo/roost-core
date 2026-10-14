@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
@@ -34,19 +34,8 @@ func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *c
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := fmt.Sprintf("revn06:account:%d", time.Now().UnixNano())
-	t.Cleanup(func() {
-		client.Close()
-		c := goredis.NewClient(&goredis.Options{Addr: addr})
-		defer c.Close()
-		keys, err := c.Keys(context.Background(), prefix+":*").Result()
-		if err == nil && len(keys) > 0 {
-			err = c.Del(context.Background(), keys...).Err()
-		}
-		if err != nil {
-			t.Errorf("cleanup %s: %v", prefix, err)
-		}
-	})
+	t.Cleanup(func() { client.Close() })
+	prefix := redistest.Prefix(t, addr, "revn06:account")
 	stores, err := NewRedisStores(client, prefix, time.Second)
 	if err != nil {
 		t.Fatal(err)

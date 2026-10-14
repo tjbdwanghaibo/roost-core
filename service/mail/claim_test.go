@@ -13,6 +13,7 @@ import (
 
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 func TestReserveClaimReportsWhenTheMailStopsBeingClaimable(t *testing.T) {
@@ -220,7 +221,7 @@ func claimHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { client.Close() })
 	return newHarness(t, func(c *Config) {
-		stores, e := NewRedisStores(client, RedisConfig{Prefix: fmt.Sprintf("mail-review3:%d", time.Now().UnixNano()), SendTTL: time.Hour, Now: c.Now})
+		stores, e := NewRedisStores(client, RedisConfig{Prefix: redistest.Prefix(t, addr, "mail-review3"), SendTTL: time.Hour, Now: c.Now})
 		if e != nil {
 			t.Fatal(e)
 		}
