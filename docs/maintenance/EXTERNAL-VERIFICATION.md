@@ -38,7 +38,7 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 
 挂载后在本机按入口原样实跑一次（私有 redis-server、mirror-local 私有环境与其 3 主 3 从集群，用完关闭 / clean），全部 PASS：CI 等价 Redis 组 43 个包 ok、skip 守卫为空、race 组通过；`test-core` 的 5 个 MirrorLocal、versionstore Cluster、两种大积压恢复通过；`redis-cluster-suites.sh` 10 个包 ok（`-v` 复核集群子用例为 PASS 而非 SKIP）。CI 上的首次运行以 GitHub 结果为准，本地不等待。
 
-**观察**：服务层 Redis 用例不清理自己的键（私有 Redis 跑完 CI 等价组后剩约 2000 个键）；这一组应接私有 Redis，不要指向共享隔离环境的 Redis。共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。
+**观察**：共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。服务层 Redis 用例原先不清理自己的键：按 CI `service-redis` job 原样跑一轮，私有 Redis 上剩 2046 个键（整组 1237 + race 组 809），全部来自 `service/{mail,activity,account,platform,session,directory,chat}` 与 `infra/storage/versionstore` 测试辅助里只生成唯一前缀、不注册清理（或只删了列举的键名）的 11 处。2026-10-14 起这些辅助改用 `infra/storage/redis/redistest`（按本测试唯一前缀 SCAN + DEL，Cluster 逐主节点，不 FLUSH），同一组跑完残留为 0；`redis-cluster-suites.sh` 在私有 3 主 3 从集群上修前修后残留都为 0。CI `service-redis` job 末尾新增“no Redis keys left behind”一步要求 Redis 为空，由根包 `TestCIRedisJobRefusesKeysLeftBehind` 钉住。清理只删自己前缀下的键；本轮仍只在私有 Redis 上运行，没有核对整组是否另有固定键名、也没有在共享隔离环境的 Redis 上实跑，改接共享环境前需先做这两项。
 
 **仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程（`codegen/internal/entity/testdata/*`）的真实依赖用例由 `scripts/test-remote-generated.sh` 等入口与故障矩阵负责，不在本次范围。
 

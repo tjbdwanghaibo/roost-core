@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开168个包目录的职责映射</summary>
+<summary>展开169个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -123,6 +123,7 @@
 | [infra/storage/mongo/mongotest](../../infra/storage/mongo/mongotest) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 2 | 14 |
 | [infra/storage/redis](../../infra/storage/redis) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 9 | 4 |
 | [infra/storage/redis/driver](../../infra/storage/redis/driver) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 8 | 19 |
+| [infra/storage/redis/redistest](../../infra/storage/redis/redistest) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 1 | 1 |
 | [infra/storage/versionstore](../../infra/storage/versionstore) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 5 | 14 |
 | [internal/configschema](../../internal/configschema) | [配置、数据表与热更](impl/07-config.md) | 5 | 2 |
 | [internal/operation](../../internal/operation) | [其他包与公共基础设施](impl/14-foundation.md) | 2 | 2 |

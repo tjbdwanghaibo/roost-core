@@ -185,6 +185,14 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 | [replay.go](../../../infra/storage/redis/driver/replay.go) | 函数/方法或内部实现；见源码 |
 | [replicated.go](../../../infra/storage/redis/driver/replicated.go) | 函数/方法或内部实现；见源码 |
 
+### redis/redistest
+
+1 个实现文件、1 个测试文件。测试辅助，不进运行时：写真实 Redis 的用例用它按本测试唯一前缀注册清理，单机与 Cluster（逐主节点 SCAN）都只删键名含该前缀的键，不 FLUSH。CI `service-redis` job 末尾要求 Redis 为空。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [redistest.go](../../../infra/storage/redis/redistest/redistest.go) | `Prefix`、`Cleanup`、`DeleteKeys` |
+
 ### versionstore
 
 5 个实现文件、6 个测试文件。
@@ -289,6 +297,10 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [no_replay_test.go](../../../infra/storage/redis/driver/no_replay_test.go)：`TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestResendsStopAtTheConfiguredBudget`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`；其余 6 项见文件
 - [pipeline_errors_integration_test.go](../../../infra/storage/redis/driver/pipeline_errors_integration_test.go)：`TestIntegrationPipelineDoesNotHideWriteErrors`、`TestIntegrationPipelineFuturesAndLifecycle`、`TestIntegrationPipelinePreservesPostWriteUnknownError`
 - [write_lost_reply_integration_test.go](../../../infra/storage/redis/driver/write_lost_reply_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostRunsOnce`
+
+### redis/redistest
+
+- [redistest_test.go](../../../infra/storage/redis/redistest/redistest_test.go)：`TestEscapeGlobMatchesPrefixLiterally`、`TestDeleteKeysRefusesAnEmptyPrefix`、`TestDeleteKeysRemovesOnlyKeysContainingThePrefix`、`TestDeleteKeysRemovesOnlyKeysContainingThePrefixOnCluster`
 
 ### versionstore
 
