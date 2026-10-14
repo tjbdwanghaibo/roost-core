@@ -84,6 +84,9 @@
 
 ## docs/release
 
+- [v1.27.0-NOTES.md](../release/v1.27.0-NOTES.md)：v1.27.0 发布说明（playeraccess 改名与升级步骤、Remote WAL 级 Rejected 精简）
+- [v1.27.0-IMPLEMENTATION.md](../release/v1.27.0-IMPLEMENTATION.md)：v1.27.0 提交、位置、可达性梳理与红绿证据
+- [v1.27.0-VALIDATION.md](../release/v1.27.0-VALIDATION.md)：v1.27.0 发布验收
 - [v1.26.1-NOTES.md](../release/v1.26.1-NOTES.md)：v1.26.1 补丁说明（安全、go.work、demo 模板、CI 修复）
 - [v1.26.1-IMPLEMENTATION.md](../release/v1.26.1-IMPLEMENTATION.md)：v1.26.1 各项提交、位置与红绿证据
 - [v1.26.1-VALIDATION.md](../release/v1.26.1-VALIDATION.md)：v1.26.1 发布验收

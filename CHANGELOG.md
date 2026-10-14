@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.27.0] - 2026-10-14
+
+次版本：生成工程玩家接入目录改名（破坏性，需手工迁移）与 Remote WAL 级 Rejected 处理精简（删除三个仅供测试注入的导出 API）。运行时正式链路行为、wire / 存储格式不变；生成物最低 core 仍为 v1.26.0。发布说明见 docs/release/v1.27.0-NOTES.md。
+
 ### 破坏性变化与升级要求
 
 - 生成工程的玩家接入目录 `game/player_agent` 改名为 `game/playeraccess`，包名随之由 `player_agent` 改为 `playeraccess`（维护者 2026-10-14 批准，见 docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md §2）：生成器常量 `protocol.PlayerAgentImportSuffix` → `PlayerAccessImportSuffix`，协议绑定、Controller 骨架、`internal/access/player`、demo 模板与文档里的 `player_agent.Context` / `ProtocolRegistry` / `Response` / `Middleware` 等随包名变为 `playeraccess.*`。只改名，类型、方法与派发行为不变；同一份声明改名前后生成的 game-demo 与 game 模板工程，除目录 / 包名 / import / 注释与文档文字外逐字节一致。**升级（未上线，不做兼容）**：`roost project sync` 只生成新目录、不删除旧目录，业务代码（`game/controllers/player` 等）也不会被改写，所以先手工执行 `git mv game/player_agent game/playeraccess`（连同其中业务自己加的文件），把业务代码里的 import `<module>/game/player_agent` 改为 `<module>/game/playeraccess`、标识符 `player_agent.` 改为 `playeraccess.`，再 `roost project sync` 并重新生成。漏改时编译报 `wrong type for method HandleXxx ... have (*player_agent.Context ...) want (*playeraccess.Context ...)`。未启用 player access 的工程只有生成文档的文字变化。
