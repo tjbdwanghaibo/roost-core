@@ -378,7 +378,9 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
   计数器跟账号、角色、服务器登记在同一个前缀下：同一个 Redis db 上前缀不同的两份部署各数各的，按前缀清理一份部署会连它一起清掉。
   改 `account.key_prefix` 而保留数据时，要把旧前缀下的全部键（计数器在内）一起迁过去。
   旧版本写死的计数键 `roost:demo:player_id` 已退役、不再读取：它仍存在时每次分配都明确拒绝（`retired counter key roost:demo:player_id is still present`），
-  不会从它接着数，也不会从 0 重新数而重发旧 id。处置：若 `<account.key_prefix>:player_id` 还不存在，先把它设为旧键的值，再删除旧键；或清掉这份部署的 account 数据。
+  不会从它接着数，也不会从 0 重新数而重发旧 id。这个键是保留键：`account.key_prefix=roost:demo` 会让计数键恰好等于它，启动绑定时直接按配置错误拒绝、不碰 Redis，要求换前缀
+  （已经用这个前缀跑着的部署先停写，把该前缀下的全部键连同计数器迁到新前缀）。处置分配时的拒绝前先确认这个键不是同一 Redis 上另一份仍用 `roost:demo` 前缀的部署的当前计数器；
+  确认是旧计数器后停止分配，若 `<account.key_prefix>:player_id` 还不存在就把旧键的值迁过去，再移除旧键；否则给这份部署换一个没有该键的 Redis。
 - 加道具受 Player 的背包规则约束（每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_full`），不是 GM 越过规则。
 - 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走同一个 mail 客户端、附件用同一份 `rewards` 编码，玩家经 `ClaimMail` 领。
 - `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。

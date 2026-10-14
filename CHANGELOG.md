@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- game-demo 账号 allocator（RV-20261014-01，`1ffb644f` 引入）：`account.key_prefix=roost:demo` 时计数键 `roost:demo:player_id` 恰好是退役键，第一次分配创建它后，重启或新副本把这份部署自己的计数器当旧数据拒绝，报错还建议删除它（照做会重发已有玩家 ID）。现在 BindRegistry 在任何 Redis 调用前把这个前缀作为配置错误拒绝、要求换前缀；分配时遇到退役键的报错改为先确认它不是另一份部署的当前计数器、再迁移，不再引导删除。拒绝旧计数键兼容的决定不变。**升级**：已经用 `roost:demo` 前缀运行的部署先停写，把该前缀下全部键（计数器在内）迁到新前缀；重新生成 game-demo 的 `internal/service/account/collaborators.go`。默认生成前缀 `roost:<项目名>:account` 不受影响。
+
 ### 测试整理与门禁
 
 - integration 标签用例在本机真实依赖上补跑（v1.26.0 发布后，2026-10-14）：21 个包 186 个用例中 158 个 PASS、24 个由 2026-10-13 故障矩阵覆盖、4 个子进程入口按设计跳过，共享隔离环境组另跑 `-race` 无 data race；结果与仍未覆盖项见 docs/maintenance/EXTERNAL-VERIFICATION.md。`wiring/dataengine` 的 `TestRealDataEngineLargeBacklogRecovery`（只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行）沿用“先 Close 再 Flush”的旧夹具，在现行契约下失败；改用 `ManualReplay`，产品行为不变。

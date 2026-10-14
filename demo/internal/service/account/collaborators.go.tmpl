@@ -64,12 +64,23 @@ func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
 // allocation is refused (refuseRetiredCounter), because counting from 0 under the
 // prefix would hand out ids that key already handed out, and silently continuing
 // from it is the compatibility path the project dropped (not deployed yet).
-// The operator migrates by hand: set <prefix>:player_id to its value if that key
-// does not exist yet, then delete it — or clear this deployment's account data.
+//
+// The key is reserved: a prefix whose counter key would be this key
+// (account.key_prefix=roost:demo) is refused in BindRegistry, before any Redis
+// call. Otherwise that deployment's first allocation would create the key and
+// every restart or new replica would refuse its own live counter as old data.
+// Because of that, a retired key seen at allocation time is never this
+// deployment's counter — but it may be the live counter of another deployment
+// on the same Redis that still runs with the reserved prefix, so the refusal
+// never tells the operator to delete it.
 const retiredPlayerIDCounterKey = "roost:demo:player_id"
 
 // errRetiredPlayerIDCounter is the refusal while retiredPlayerIDCounterKey exists.
 var errRetiredPlayerIDCounter = errors.New("demo player id allocator: retired counter key " + retiredPlayerIDCounterKey + " is still present and no longer read")
+
+// errReservedCounterPrefix is the configuration error for an account.key_prefix
+// whose counter key would be retiredPlayerIDCounterKey.
+var errReservedCounterPrefix = errors.New("demo player id allocator: account.key_prefix puts the player id counter at the retired key " + retiredPlayerIDCounterKey)
 
 // firstPlayerID keeps demo ids clear of the small numbers hand-written test
 // data tends to use.
@@ -105,8 +116,10 @@ func (handle *redisHandle) refuseRetiredCounter(ctx context.Context) error {
 	case err != nil:
 		return fmt.Errorf("demo player id allocator: check retired counter %s: %w", retiredPlayerIDCounterKey, err)
 	default:
-		return fmt.Errorf("%w: set %s to its value if that key does not exist yet, then delete %s (or clear this deployment's account data)",
-			errRetiredPlayerIDCounter, handle.counterKey, retiredPlayerIDCounterKey)
+		return fmt.Errorf("%w: first confirm it is not the live counter of a deployment on this Redis still configured with account.key_prefix=roost:demo; "+
+			"if it is the old counter, stop allocation and move its value to %s (only if that key does not exist yet) before removing it, "+
+			"otherwise give this deployment a Redis without that key",
+			errRetiredPlayerIDCounter, handle.counterKey)
 	}
 }
 
@@ -131,6 +144,12 @@ func (allocator *redisAllocator) BindRegistry(registry *app.Registry) error {
 	prefix, err := account.KeyPrefix(registry.Config())
 	if err != nil {
 		return fmt.Errorf("demo player id allocator: %w", err)
+	}
+	// 在任何 Redis 调用之前拒绝保留前缀：计数键等于退役键时，第一次分配会创建它，之后的重启 / 新副本把这份部署自己的计数器当旧数据拒绝。
+	if playerIDCounterKey(prefix) == retiredPlayerIDCounterKey {
+		return fmt.Errorf("%w: account.key_prefix=%q is reserved; choose another prefix "+
+			"(a deployment already running on it must stop writes and move every key under the prefix, the counter included, to the new prefix)",
+			errReservedCounterPrefix, prefix)
 	}
 	allocator.handle.Store(&redisHandle{client: client, counterKey: playerIDCounterKey(prefix)})
 	return nil

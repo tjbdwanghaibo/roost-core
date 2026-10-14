@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,6 +29,7 @@ type counterRedis struct {
 
 	mu     sync.Mutex
 	values map[string]int64
+	calls  int // GET 与 INCR 的总次数：断言某一步完全没碰 Redis
 }
 
 func newCounterRedis(values map[string]int64) *counterRedis {
@@ -40,6 +42,7 @@ func newCounterRedis(values map[string]int64) *counterRedis {
 func (r *counterRedis) Get(_ context.Context, key string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.calls++
 	value, ok := r.values[key]
 	if !ok {
 		return nil, fredis.ErrNil
@@ -50,6 +53,7 @@ func (r *counterRedis) Get(_ context.Context, key string) ([]byte, error) {
 func (r *counterRedis) Incr(_ context.Context, key string) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.calls++
 	r.values[key]++
 	return r.values[key], nil
 }
@@ -61,11 +65,17 @@ func (r *counterRedis) value(key string) (int64, bool) {
 	return value, ok
 }
 
+func (r *counterRedis) touched() (calls, keys int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, len(r.values)
+}
+
 func formatInt(value int64) string { return strconv.FormatInt(value, 10) }
 
-// boundAllocator is the demo allocator bound the way the account Mod binds it:
+// bindAllocator binds the demo allocator the way the account Mod binds it:
 // a registry carrying the config (account.key_prefix) and the Redis client.
-func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) accountdomain.PlayerIDAllocator {
+func bindAllocator(t *testing.T, client fredis.IRedis, prefix string) (accountdomain.PlayerIDAllocator, error) {
 	t.Helper()
 	cfg := viper.New()
 	cfg.Set("account.key_prefix", prefix)
@@ -78,7 +88,14 @@ func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) accountdo
 	if !ok {
 		t.Fatal("the demo allocator does not bind to the registry")
 	}
-	if err := bound.BindRegistry(registry); err != nil {
+	return allocator, bound.BindRegistry(registry)
+}
+
+// boundAllocator is bindAllocator for a prefix that must bind.
+func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) accountdomain.PlayerIDAllocator {
+	t.Helper()
+	allocator, err := bindAllocator(t, client, prefix)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return allocator
@@ -146,5 +163,61 @@ func TestPlayerIDAllocatorRefusesTheRetiredCounterKey(t *testing.T) {
 	allocator := boundAllocator(t, client, "roost:planet:account")
 	if got := allocate(t, allocator); got != firstPlayerID+866 {
 		t.Errorf("id after the retired key was migrated by hand = %d, want %d", got, firstPlayerID+866)
+	}
+}
+
+// 一份部署第一次分配成功后，重启或第二个副本重新绑定同一前缀，必须接着同一个计数器分配（递增、不重发、不被拒）。
+// 计数键与退役键重合的前缀（account.key_prefix=roost:demo）必须在绑定时就被拒，走不到第一次分配；
+// 否则第一次分配会创建退役键，之后每次重新绑定都把这份部署自己的计数器当旧数据拒绝。
+func TestPlayerIDCounterContinuesAcrossRestartAndASecondReplica(t *testing.T) {
+	for _, prefix := range []string{"roost:planet:account", "roost:demo"} {
+		t.Run(prefix, func(t *testing.T) {
+			client := newCounterRedis(nil)
+			first, err := bindAllocator(t, client, prefix)
+			if err != nil {
+				if playerIDCounterKey(prefix) != retiredPlayerIDCounterKey {
+					t.Fatalf("BindRegistry(%q) = %v; only a prefix whose counter is the retired key may be refused", prefix, err)
+				}
+				return
+			}
+			if got := allocate(t, first); got != firstPlayerID+1 {
+				t.Fatalf("first id = %d, want %d", got, firstPlayerID+1)
+			}
+			restarted := boundAllocator(t, client, prefix)
+			got, err := restarted.Allocate(context.Background(), 1000)
+			if err != nil {
+				t.Fatalf("fresh deployment restart cannot allocate: %v", err)
+			}
+			if got != firstPlayerID+2 {
+				t.Fatalf("id after restart = %d, want %d", got, firstPlayerID+2)
+			}
+			replica := boundAllocator(t, client, prefix)
+			if got := allocate(t, replica); got != firstPlayerID+3 {
+				t.Fatalf("id from a second replica = %d, want %d", got, firstPlayerID+3)
+			}
+		})
+	}
+}
+
+// 计数键等于退役键的前缀是配置错误：BindRegistry 直接拒绝并说明要换前缀，拒绝前不读不写 Redis。
+func TestPlayerIDAllocatorRefusesAPrefixWhoseCounterIsTheRetiredKey(t *testing.T) {
+	client := newCounterRedis(nil)
+	allocator, err := bindAllocator(t, client, "roost:demo")
+	if err == nil {
+		t.Fatal("BindRegistry accepted account.key_prefix=roost:demo, whose counter key is the retired roost:demo:player_id")
+	}
+	for _, want := range []string{"account.key_prefix", "roost:demo:player_id"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("BindRegistry error %q does not name %s", err, want)
+		}
+	}
+	if calls, keys := client.touched(); calls != 0 || keys != 0 {
+		t.Errorf("a refused bind touched Redis: %d calls, %d keys", calls, keys)
+	}
+	if id, err := allocator.Allocate(context.Background(), 1000); err == nil {
+		t.Errorf("an allocator whose bind was refused allocated %d", id)
+	}
+	if calls, keys := client.touched(); calls != 0 || keys != 0 {
+		t.Errorf("an allocator whose bind was refused touched Redis: %d calls, %d keys", calls, keys)
 	}
 }
