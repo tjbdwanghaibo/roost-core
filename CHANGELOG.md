@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 测试
+
+- `infra/network/etcd/driver` 的 `TestDiscoveryReregistersAfterUnexpectedLeaseLoss` 偶发 `lease id = 101, want 102`（v1.27.0 main 推送 CI 失败一次）：用例在 `registerOnce` 回调里发出“已重注册”信号，产品代码在回调返回后才写回新租约。改为限时等待新租约生效再断言；只改测试。
+
 ## [v1.27.0] - 2026-10-14
 
 次版本：生成工程玩家接入目录改名（破坏性，需手工迁移）与 Remote WAL 级 Rejected 处理精简（删除三个仅供测试注入的导出 API）。运行时正式链路行为、wire / 存储格式不变；生成物最低 core 仍为 v1.26.0。发布说明见 docs/release/v1.27.0-NOTES.md。
