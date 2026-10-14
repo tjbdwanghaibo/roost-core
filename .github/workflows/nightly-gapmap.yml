@@ -12,6 +12,9 @@ on:
       max:
         description: guards sampled per package
         default: "20"
+      packages:
+        description: space-separated package dirs to sample (empty = every package with tests)
+        default: ""
 
 permissions:
   contents: read
@@ -26,8 +29,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # 取样器把每个测试二进制放在 6 GiB 地址空间上限下跑（scripts/gapmap/revertsample.py 的
+      # TEST_AS_BYTES）：中和资源上限守卫会让测试无界吃内存，2026-10-06 起它每晚把 runner 拖到 OOM，
+      # job 以 "runner has received a shutdown signal"、exit 143 结束（不是 180 分钟超时：失败在
+      # 第 1～105 分钟不等，正落在 actionflow 包上）。
       - name: sample every package
-        run: scripts/gapmap.sh --max "${{ github.event.inputs.max || '20' }}"
+        env:
+          MAX: ${{ github.event.inputs.max || '20' }}
+          PACKAGES: ${{ github.event.inputs.packages || '' }}
+        run: |
+          command -v prlimit
+          # shellcheck disable=SC2086 # PACKAGES is a space-separated list on purpose
+          scripts/gapmap.sh --max "$MAX" $PACKAGES
       - name: publish summary
         if: always()
         run: cat gapmap-report.md >> "$GITHUB_STEP_SUMMARY"

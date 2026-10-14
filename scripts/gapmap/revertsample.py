@@ -21,7 +21,7 @@ created a stray directory).
 The canonical copy lives in roost-core/scripts/gapmap; the other repositories
 carry byte-identical copies.
 """
-import os, re, subprocess, sys
+import os, re, shutil, subprocess, sys
 
 GUARD = re.compile(r'^(\s*)if (.+) \{\s*$')
 ERRORISH = re.compile(r'fmt\.Errorf|errors\.New|\bErr[A-Z]\w*|errors\.Join|, err$|\berr\b')
@@ -65,9 +65,31 @@ def neutralize(indent, cond):
         return f"{indent}if {init}; ({rest}) && false {{"
     return f"{indent}if ({cond}) && false {{"
 
+# 中和一条资源上限守卫（例如 actionflow 延后队列的 runaway / 步数上限）会让被测代码无界增长：
+# 测试进程每秒涨数百 MB，几十秒吃满 CI runner 的内存，内核 OOM 连带 runner 进程，job 以
+# “The runner has received a shutdown signal”、exit 143 结束，报告也没上传（2026-10-06 起每晚如此）。
+# 所以测试二进制在地址空间上限下运行（go test -exec prlimit --as=…）：失控的那一次以
+# “out of memory” 失败、按 red 记（中和后测试变红，说明这条守卫有测试），其余取样照常继续。
+# 上限只套在测试二进制上，不限制编译与链接；GAPMAP_TEST_AS_BYTES 可覆盖，0 表示不设。
+# 没有 prlimit 的机器（macOS）不设上限并在 stderr 提示一次——那里 RLIMIT_AS 本来也不生效。
+TEST_AS_BYTES = int(os.environ.get('GAPMAP_TEST_AS_BYTES', str(6 << 30)))
+_warned_no_limit = False
+
+def exec_wrapper():
+    global _warned_no_limit
+    if TEST_AS_BYTES <= 0:
+        return []
+    prlimit = shutil.which('prlimit')
+    if prlimit is None:
+        if not _warned_no_limit:
+            print('revertsample: prlimit not found; test binaries run without an address-space limit', file=sys.stderr)
+            _warned_no_limit = True
+        return []
+    return ['-exec', f'{prlimit} --as={TEST_AS_BYTES} --']
+
 def run_tests(pkgdir, timeout):
     try:
-        r = subprocess.run(['go', 'test', '-count=1', './' + os.path.relpath(pkgdir)],
+        r = subprocess.run(['go', 'test', '-count=1', *exec_wrapper(), './' + os.path.relpath(pkgdir)],
                            capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return 'HANG'
