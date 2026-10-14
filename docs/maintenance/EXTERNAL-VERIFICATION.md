@@ -6,6 +6,36 @@
 
 来源为清理前固定提交的外部验证清单；下文历史来源链接用于追溯，执行前按当前 API/环境确认，不依赖他人临时目录或凭据。故障注入只在独立隔离资源执行。
 
+## integration 标签用例的真实依赖运行（2026-10-14）
+
+v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译与 vet）。代码为 main `4370e6b3`（v1.26.0 之后只多文档）加测试修正 `35ef33f9`；macOS arm64、Go 1.27.0，依赖全部是本机 brew 二进制。这是本机单机结论，不扩大为跨机或生产保证。
+
+**范围**：21 个包、78 个 `//go:build integration` 文件，共 186 个 `Test` 与 11 个 `Benchmark`。
+
+| 结果 | 数量 | 说明 |
+| --- | --- | --- |
+| 本次在真实依赖上 PASS | 158 | 含修正后的大积压恢复用例（见下文“发现”） |
+| 由故障矩阵覆盖、本次未重复 | 24 | 2026-10-13 矩阵 21/21（`8731576b`，到 `4370e6b3` 的 Go 改动只有注释与 help 文本）：`TestRealRemote{ProcessKillRecoversLease,ProcessPartitionFencesOldOwner,ColdAdmissionDeadlineUnderLatency,RedisClusterFailover,RedisClusterUnreplicatedFence,DurableAuthorityProcessPartition,OwnershipClaimAndTransfer}`、`TestRealVersionedLock*`（10 个）、`wiring/dataengine` 的 `TestReal{MongoPrimaryFailover,NATSOutage,JetStreamLeaderFailover}*`、`TestRealDataEngineRemotePublicationAndWALRecovery`、`TestToxicNATS*`（3 个） |
+| 子进程入口，直接运行时按设计跳过 | 4 | `TestRemoteOutboxCrashHelper`、`TestRemoteLeaseProcessHelper`、`TestRealSagaCrossProcessChild`、`TestStepProcessRole`；它们由各自父用例以子进程运行，父用例均 PASS |
+| FAIL（修正后） | 0 | |
+| Benchmark | 11 | 各跑一次（`-benchtime 1x`）只证明能在真实依赖上执行，**不是性能结论** |
+
+| 入口 | 依赖 | 包 | 结果 |
+| --- | --- | --- | --- |
+| 共享隔离环境，整段持有 `remote-acceptance.lock`，`ROOST_IT_TOXIPROXY=1`，按包 `-p 1 -v`，`-skip` 矩阵用例 | Mongo 三副本、NATS JetStream 三节点、Redis、toxiproxy；etcd / 单机 mongod / nats-server 由用例从 PATH 自起 | `dataengine-env.sh test` 清单的 16 个包 | 全部 PASS；同一组再跑 `-race` 全部 PASS、无 data race（约 6 / 7 分钟） |
+| 私有 Redis 单机（照 CI `service-redis` job 设 `REDIS_ADDR`、`ROOST_REDIS_TEST_ADDR`、`ROOST_REVIEW_REDIS`、`ROOST_REVIEW{3,4}_BACKEND`、`ROOST_BUGFIX5_BACKEND`） | redis-server | `./wiring/... ./service/...`；`-race` 的 `wiring/integration`、`wiring/mail`、`wiring/rank`、`service/mail`；`infra/storage/redis/driver` 的单机 pipeline 子用例 | 全部 PASS；没有因 Redis 门变量缺失的跳过 |
+| `scripts/mirror-local.sh` 私有环境（偏移 8000，用完 clean） | 私有 Mongo / NATS / Redis 单机 + 副本 + 3 主 3 从 Cluster / toxiproxy | `^TestMirrorLocal`（5 个）、`versionstore` 的 Cluster 用例、`redis-cluster-suites.sh`（`ROOST_REVIEW_CLUSTER`，5 个包）、`ROOST_REMOTE_CLUSTER_IT=1` 自起集群的 `TestRealB2WatermarkMatrixCluster`、`ROOST_DATAENGINE_IT_BACKLOG`（单集合与 `_MULTI`）、`TestRealSagaPerformance`（forward / compensate 各 15s 冒烟）、全部 integration Benchmark | 全部 PASS（大积压用例修正后） |
+
+**发现**：`TestRealDataEngineLargeBacklogRecovery` 只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行，此前没有入口设置它。它沿用“先 Close 停后台循环再 Flush”的旧夹具，而 Close 之后 Flush 按现行契约返回 `ErrRuntimeStopped`（`40804f27` 改其他六个夹具时漏了它），修前失败 `backlog_integration_test.go:129: dataengine runtime: shutdown has started`。属测试过时，产品行为不变；`35ef33f9` 改用 `ManualReplay`，两种形态 PASS（10 万记录、1 万实体、20 / 32 段，最终重启 pending=0）。
+
+**附带运行（不带 integration 标签、同样需要真实依赖、没有常设入口）**：`infra/storage/redis`、`infra/storage/redis/driver`、`infra/storage/versionstore`、`framework/cache` 中以 `ROOST_REDIS_TEST_ADDR` 准入的用例（CI Redis job 只跑 `wiring`、`service`），以及 `wiring/activity`、`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore` 中以 `ROOST_REVIEW_CLUSTER` 准入的用例（`redis-cluster-suites.sh` 只列 integration 包）。本次分别对私有 Redis 单机与私有 Cluster 跑过，全部 PASS；之后仍无脚本或 CI 自动覆盖。
+
+**观察**：服务层 Redis 用例不清理自己的键（私有 Redis 跑完 CI 等价组后剩约 2000 个键）；这一组应接私有 Redis，不要指向共享隔离环境的 Redis。共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。
+
+**仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程（`codegen/internal/entity/testdata/*`）的真实依赖用例由 `scripts/test-remote-generated.sh` 等入口与故障矩阵负责，不在本次范围。
+
+复跑：共享环境组 `source ~/.roost-it/roost-dataengine-it/env.sh` 后先确认并取得 `remote-acceptance.lock`，再按包执行 `GOWORK=off ROOST_IT_TOXIPROXY=1 go test -tags=integration -count=1 -p 1 <包>`（或整套 `bash wiring/scripts/integration/dataengine-env.sh test`，它自己取锁）；Redis 组按 `.github/workflows/ci.yml` 的 `service-redis` 变量对私有 redis-server 执行；私有组 `ROOST_MIRROR_LOCAL_HOME=<目录> ROOST_MIRROR_LOCAL_OFFSET=<未占用偏移> bash scripts/mirror-local.sh up`，source 其 `env.sh` 后运行上表用例，结束 `clean`。
+
 ## 总表
 
 | # | 类别 | 项 | 环境 | 状态 |

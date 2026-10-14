@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 测试整理与门禁
+
+- integration 标签用例在本机真实依赖上补跑（v1.26.0 发布后，2026-10-14）：21 个包 186 个用例中 158 个 PASS、24 个由 2026-10-13 故障矩阵覆盖、4 个子进程入口按设计跳过，共享隔离环境组另跑 `-race` 无 data race；结果与仍未覆盖项见 docs/maintenance/EXTERNAL-VERIFICATION.md。`wiring/dataengine` 的 `TestRealDataEngineLargeBacklogRecovery`（只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行）沿用“先 Close 再 Flush”的旧夹具，在现行契约下失败；改用 `ManualReplay`，产品行为不变。
+
 ## [v1.26.0] - 2026-10-13
 
 ### 升级要求速查
