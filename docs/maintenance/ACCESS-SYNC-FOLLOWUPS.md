@@ -48,7 +48,7 @@
 
 后续建议：继续复用现有层，无需为处理玩家连接再建立一个名叫 session 的独立服务。
 
-状态：**已实施（dd362116，维护者 2026-10-14 批准，8b）。** 生成目录由 `game/player_agent` 改为 `game/playeraccess`，包名、生成器常量 `protocol.PlayerAccessImportSuffix`、协议绑定、Controller 骨架、access 模板、demo 模板与文档同步；只改名，类型、方法与派发行为不变。已有工程按 CHANGELOG `[Unreleased]` 手工 `git mv game/player_agent game/playeraccess` 并改业务 import 后 `roost project sync`：sync 只写新目录、不删除旧目录，也不改写业务文件。
+状态：**已实施（dd362116，维护者 2026-10-14 批准，8b）。** 生成目录由 `game/player_agent` 改为 `game/playeraccess`，包名、生成器常量 `protocol.PlayerAccessImportSuffix`、协议绑定、Controller 骨架、access 模板、demo 模板与文档同步；只改名，类型、方法与派发行为不变。已有工程按 [v1.27.0 发布说明 B1](../release/v1.27.0-NOTES.md#b1) 手工 `git mv game/player_agent game/playeraccess`、把 `.go` 文件里的 `player_agent`（含 import 别名与目录内业务文件的 package 子句）整词改为 `playeraccess` 后 `roost project sync`：sync 只写新目录、不删除旧目录，也不改写业务文件。
 
 ## 3. Sync 命名：已实施，随 v1.26.0 发布
 

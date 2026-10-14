@@ -7,6 +7,7 @@
 ### CI 与构建
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。
+- upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
 
 ### 测试
 
@@ -18,7 +19,7 @@
 
 ### 破坏性变化与升级要求
 
-- 生成工程的玩家接入目录 `game/player_agent` 改名为 `game/playeraccess`，包名随之由 `player_agent` 改为 `playeraccess`（维护者 2026-10-14 批准，见 docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md §2）：生成器常量 `protocol.PlayerAgentImportSuffix` → `PlayerAccessImportSuffix`，协议绑定、Controller 骨架、`internal/access/player`、demo 模板与文档里的 `player_agent.Context` / `ProtocolRegistry` / `Response` / `Middleware` 等随包名变为 `playeraccess.*`。只改名，类型、方法与派发行为不变；同一份声明改名前后生成的 game-demo 与 game 模板工程，除目录 / 包名 / import / 注释与文档文字外逐字节一致。**升级（未上线，不做兼容）**：`roost project sync` 只生成新目录、不删除旧目录，业务代码（`game/controllers/player` 等）也不会被改写，所以先手工执行 `git mv game/player_agent game/playeraccess`（连同其中业务自己加的文件），把业务代码里的 import `<module>/game/player_agent` 改为 `<module>/game/playeraccess`、标识符 `player_agent.` 改为 `playeraccess.`，再 `roost project sync` 并重新生成。漏改时编译报 `wrong type for method HandleXxx ... have (*player_agent.Context ...) want (*playeraccess.Context ...)`。未启用 player access 的工程只有生成文档的文字变化。
+- 生成工程的玩家接入目录 `game/player_agent` 改名为 `game/playeraccess`，包名随之由 `player_agent` 改为 `playeraccess`（维护者 2026-10-14 批准，见 docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md §2）：生成器常量 `protocol.PlayerAgentImportSuffix` → `PlayerAccessImportSuffix`，协议绑定、Controller 骨架、`internal/access/player`、demo 模板与文档里的 `player_agent.Context` / `ProtocolRegistry` / `Response` / `Middleware` 等随包名变为 `playeraccess.*`。只改名，类型、方法与派发行为不变；同一份声明改名前后生成的 game-demo 与 game 模板工程，除目录 / 包名 / import / 注释与文档文字外逐字节一致。**升级（未上线，不做兼容）**：`roost project sync` 只生成新目录、不删除旧目录，业务代码（`game/controllers/player` 等）也不会被改写，所以先手工执行 `git mv game/player_agent game/playeraccess`（连同其中业务自己加的文件），把 `.go` 文件里作为完整单词出现的 `player_agent` 一律改为 `playeraccess`（`grep -rlw --include='*.go' player_agent . | xargs perl -pi -e 's/\bplayer_agent\b/playeraccess/g'`：import 路径、import 别名、`player_agent.` 标识符，以及随目录挪走的业务文件的 `package player_agent` 子句；v1.26.x 生成的 game-demo 写的是带别名的 `player_agent "<module>/game/player_agent"`，只改路径和标识符会报 `undefined: playeraccess`），再 `roost project sync` 并重新生成。漏改时编译报 `wrong type for method HandleXxx ... have (*player_agent.Context ...) want (*playeraccess.Context ...)`。未启用 player access 的工程只有生成文档的文字变化。
 
 ### 精简
 

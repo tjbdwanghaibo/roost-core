@@ -75,3 +75,66 @@ jobs:
           cp roost.yaml "${RUNNER_TEMP}/roost.before"
           "${RUNNER_TEMP}/roost-current" project upgrade --root . --skip-deps -core "$core"
           cmp roost.yaml "${RUNNER_TEMP}/roost.before"
+
+  # v1.26.x 生成的 game-demo（启用了玩家接入）→ 当前生成器。v1.27.0 把 game/player_agent 改名为
+  # game/playeraccess，sync / upgrade 不删旧目录、不改业务文件，必须先按 v1.27.0-NOTES B1 手工迁移。
+  # 这条 lane 严格照发布说明的步骤做，再 upgrade、编译、测试，并核对 B1 的承诺：迁移后的工程与
+  # 当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。
+  player-access-project:
+    strategy:
+      fail-fast: false
+      matrix:
+        core: [v1.26.1]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o "${RUNNER_TEMP}/roost-current" ./codegen/cmd/roost
+      - name: create historical game-demo project
+        run: GOWORK=off go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@${{ matrix.core }} project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -template game-demo
+      - name: migrate per v1.27.0 B1, then upgrade
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          git init -q
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.invalid commit -qm "game-demo from ${{ matrix.core }}"
+          # B1 "连同其中业务自己加的文件"：业务放进接入目录的文件随目录迁走，package 子句一起改名。
+          cat > game/player_agent/business_note.go <<'EOF'
+          package player_agent
+
+          // BusinessContextNote 代表业务自己加进接入目录的文件。
+          func BusinessContextNote(ctx *Context) bool { return ctx != nil }
+          EOF
+          # The three steps of v1.27.0-NOTES B1 (and CHANGELOG [v1.27.0]), verbatim.
+          git mv game/player_agent game/playeraccess
+          grep -rlw --include='*.go' player_agent . | xargs perl -pi -e 's/\bplayer_agent\b/playeraccess/g'
+          if grep -rnw --include='*.go' player_agent .; then
+            echo "::error::Go files still name player_agent after the documented B1 rewrite"
+            exit 1
+          fi
+          sha256sum game/controllers/player/*.go game/playeraccess/business_note.go internal/service/game/service.go > "${RUNNER_TEMP}/business.before"
+          core=latest
+          "${RUNNER_TEMP}/roost-current" project sync --root .
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --dry-run -core "$core"
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --skip-deps -core "$core"
+          sha256sum -c "${RUNNER_TEMP}/business.before"
+          test ! -e game/player_agent
+          # Compile against this checkout (see previous-project above for why GOWORK stays on).
+          go work init . "$GITHUB_WORKSPACE"
+          go work edit -go=1.27.0
+          "${RUNNER_TEMP}/roost-current" project diff
+          go build ./...
+          go vet ./...
+          go test ./...
+          go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
+          cp roost.yaml "${RUNNER_TEMP}/roost.before"
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --skip-deps -core "$core"
+          cmp roost.yaml "${RUNNER_TEMP}/roost.before"
+      - name: migrated project equals a fresh game-demo (B1 promise)
+        run: |
+          GOWORK=off "${RUNNER_TEMP}/roost-current" project new planet -module example.com/planet -out "${RUNNER_TEMP}/fresh/planet" -template game-demo
+          diff -r -x .git -x go.mod -x go.sum -x go.work -x go.work.sum -x business_note.go "${RUNNER_TEMP}/fresh/planet" "${RUNNER_TEMP}/planet"
