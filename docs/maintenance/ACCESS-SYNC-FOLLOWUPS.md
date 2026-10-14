@@ -1,6 +1,6 @@
 # 玩家接入、运行服务与同步命名后续事项
 
-记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施，player_agent 改名仍为建议；Sync 命名已按下文实施，随 v1.26.0 发布。玩家协议业务示例见 [接入教程](../framework/PLAYER-ACCESS.md)。
+记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施（维护者 2026-10-14 决定继续暂缓）；玩家接入目录已于 2026-10-14 由 `game/player_agent` 改名为 `game/playeraccess`（c163e977）；Sync 命名已按下文实施，随 v1.26.0 发布。玩家协议业务示例见 [接入教程](../framework/PLAYER-ACCESS.md)。
 
 ## 1. Session 运行服务：保留能力，后续评估可选化
 
@@ -18,9 +18,9 @@
 4. 检查结算链路：demo 目前先 Finish Run，再通过 Nest 提交奖励，两者不是同一事务。改变部署位置不会自动解决恢复与防重复。
 5. 验证重复进入、重复结算、期限到达、异常退出、释放失败重试和重启后的遗留资源处理。
 
-状态：**已登记，按维护者要求后续处理。** 不把建议记录当作已完成重构。
+状态：**已登记，维护者 2026-10-14 决定继续暂缓（8a）。** 不把建议记录当作已完成重构。
 
-## 2. Game 已有玩家接入层
+## 2. Game 已有玩家接入层（目录改名已实施）
 
 独立 Gate 的主要请求路径是：
 
@@ -28,7 +28,7 @@
 客户端 RS 协议包
   → Gate（连接、认证、拆包）
   → NATS → GameIngress（绑定、准入、回包通道）
-  → player_agent.ProtocolRegistry（类型校验、解码、中间件、请求上下文）
+  → playeraccess.ProtocolRegistry（类型校验、解码、中间件、请求上下文）
   → Controller.HandleXxx（接入业务编排）
   → 生成的 Nest Sender → Nest handler → Player/其他 Entity
 ```
@@ -40,13 +40,15 @@
 | 层 | 当前实现 | 负责什么 |
 | --- | --- | --- |
 | 会话与传输接入 | `gateway.GameIngress`、`gateway.Session` | 玩家身份与连接绑定、准入、发送、激活与关闭通知 |
-| 协议与应用接入 | 生成的 `game/player_agent`、业务 Controller | 解码和编码、请求上下文、中间件、把协议请求转换成业务调用 |
+| 协议与应用接入 | 生成的 `game/playeraccess`、业务 Controller | 解码和编码、请求上下文、中间件、把协议请求转换成业务调用 |
 
-生成的 `player_agent.Context` 包含 BaseCtx、Session、PlayerID、MsgID、Seq。这里的 Session 是 `gateway.Session`，与上一节的运行服务无关。ProtocolRegistry 根据 Session 的可信 Principal 提取 PlayerID，检查 PayloadKind，再调用 Controller 并编码结果。
+生成的 `playeraccess.Context` 包含 BaseCtx、Session、PlayerID、MsgID、Seq。这里的 Session 是 `gateway.Session`，与上一节的运行服务无关。ProtocolRegistry 根据 Session 的可信 Principal 提取 PlayerID，检查 PayloadKind，再调用 Controller 并编码结果。
 
-`player_agent` 是生成工程的目录，不是 core 中现成同名目录；模板源在 [render_access.go](../../codegen/internal/roost/render_access.go)，协议绑定生成器在 [gen.go](../../codegen/internal/protocol/gen.go)，Game 接入实现在 [ingress.go](../../infra/network/gateway/ingress.go)。它也不意味着每个玩家都有一个 actor、一个 goroutine 或另一套实体执行锁。
+`playeraccess` 是生成工程的目录，不是 core 中现成同名目录；模板源在 [render_access.go](../../codegen/internal/roost/render_access.go)，协议绑定生成器在 [gen.go](../../codegen/internal/protocol/gen.go)，Game 接入实现在 [ingress.go](../../infra/network/gateway/ingress.go)。它也不意味着每个玩家都有一个 actor、一个 goroutine 或另一套实体执行锁。
 
-后续建议：继续复用现有层。如果需要更直观的命名，可将生成目录改为 `game/playeraccess`，表达“玩家接入”；这是可选命名提案，届时同步修改生成器导入、绑定、模板和消费工程。无需为处理玩家连接再建立一个名叫 session 的独立服务。
+后续建议：继续复用现有层，无需为处理玩家连接再建立一个名叫 session 的独立服务。
+
+状态：**已实施（c163e977，维护者 2026-10-14 批准，8b）。** 生成目录由 `game/player_agent` 改为 `game/playeraccess`，包名、生成器常量 `protocol.PlayerAccessImportSuffix`、协议绑定、Controller 骨架、access 模板、demo 模板与文档同步；只改名，类型、方法与派发行为不变。已有工程按 CHANGELOG `[Unreleased]` 手工 `git mv game/player_agent game/playeraccess` 并改业务 import 后 `roost project sync`：sync 只写新目录、不删除旧目录，也不改写业务文件。
 
 ## 3. Sync 命名：已实施，随 v1.26.0 发布
 

@@ -16,7 +16,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 ## 能力与验证边界
 
-架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 可选化和 playeraccess 改名暂缓；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
+架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 可选化继续暂缓（维护者 2026-10-14）；玩家接入目录已改名为 `game/playeraccess`（c163e977）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
 
 当前版本v1.26.0。v1.25.0 时维护者接受重档失败先发布；本版已修复确认的放大因素（慢诊断全进程抓栈），v1.26.0 发布后同参数 15 分钟重档复测通过（业务 P99 12.24ms、Sync 提交→客户端 P99 14.24ms、>50ms 0.0098%、最大 86.341ms），长尾收窄但未唯一归因，见[发布验收](../release/v1.26.0-VALIDATION.md#perf15)与[复测报告](../performance/V1260-HEAVY-20261013.md)。文档没有重新证明全部历史缺陷已关闭。已合入修复的旧日期状态不再当当前待办；不确定的能力不写成已经支持。
 
