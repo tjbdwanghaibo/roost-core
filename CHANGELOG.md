@@ -11,6 +11,7 @@
 
 ### 测试
 
+- `framework/cache` 两个真实 Redis 用例改用唯一前缀：`TestRefHMapBoundaryContractsRealRedis`（`roost:boundary:<场景>:{record:1}`，开头还先 DEL 这些固定键）与 `TestRefHMapUnknownWrite`（`roost:unknownwrite:<场景>:{session:1}`）用固定键名，两轮并行会互删数据。照 CI `service-redis` 变量组连跑两轮、`MONITOR` 求键名交集：修前 35 个、修后 0。改用 `redistest.Prefix` 后整组在共享隔离环境的 Redis 上实跑（持锁、只带 CI 的 Redis 变量组）：44 个包与 race 组通过，前后键名清单不变；维护手册 §7 写明允许指向共享 Redis 的条件（EXTERNAL-VERIFICATION 有记录）。
 - `infra/network/etcd/driver` 的 `TestDiscoveryReregistersAfterUnexpectedLeaseLoss` 偶发 `lease id = 101, want 102`（v1.27.0 main 推送 CI 失败一次）：用例在 `registerOnce` 回调里发出“已重注册”信号，产品代码在回调返回后才写回新租约。改为限时等待新租约生效再断言；只改测试。
 
 ## [v1.27.0] - 2026-10-14

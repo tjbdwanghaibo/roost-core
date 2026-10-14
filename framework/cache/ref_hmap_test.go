@@ -15,6 +15,7 @@ import (
 
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 type refHMapSession struct {
@@ -842,10 +843,10 @@ func TestRefHMapUnknownWrite(t *testing.T) {
 			name = "applied_reply_lost_newer_write"
 		}
 		t.Run(name, func(t *testing.T) {
-			prefix := "roost:unknownwrite:" + name
+			// 每次运行唯一的前缀，结束时按前缀删键（含故障注入写下的快照键）：不碰同一 Redis 上别人的数据。
+			prefix := redistest.Prefix(t, addr, "roost:unknownwrite:"+name)
 			cfg := RefHMapConfig[int64, refHMapSession]{Prefix: prefix, Name: "session", StoreConfig: refHMapSessionConfig()}
 			authority := NewRedisRefHMapStore(client, cfg)
-			t.Cleanup(func() { _ = authority.Delete(context.Background(), 1) })
 			if err := authority.Set(ctx, refHMapSession{ID: 1, Version: 1}); err != nil {
 				t.Fatal(err)
 			}

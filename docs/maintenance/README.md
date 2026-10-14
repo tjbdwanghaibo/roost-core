@@ -101,7 +101,8 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 
 - on_change 等交付测试必须走正式提交边界：经 Guard 取得实体锁、`BeginSyncMutation` 建提交门、锁内修改并 Admit 冻结、确认后解锁、最后 Release 开放交付。裸 `MarkDirty` 加 `CaptureSync` 不等于 Nest handler 提交，会让 Manager 抢先 Flush 而偶发失败；冻包失败要检查 `LastError`，不能忽略错误或靠重试掩盖。用 `synctest` 时，同一虚拟时刻的先后顺序用 `synctest.Wait` 明确写出，不改生产调度顺序。
 - 需要区分“未配置”和“显式零值”的 Mod 用 `app.LoadConfigWithPresence`：它复用声明解码器、在读取声明键时返回来源存在性，失败时不返回部分结果。不由 Mod 再读 Viper，不复制单键直读或增加守卫白名单。
-- 写真实 Redis 的用例用 `infra/storage/redis/redistest` 取唯一前缀（`redistest.Prefix`）或为自己生成的唯一前缀注册清理（`redistest.Cleanup`），在建存储 / Mod 之前调用，用例结束时删掉键名含该前缀的键（单机与 Cluster 都按主节点 SCAN，不 FLUSH）；不要只删自己列举的几个键名。CI `service-redis` job 末尾要求 Redis 为空，漏清理会在那里变红。
+- 写真实 Redis 的用例用 `infra/storage/redis/redistest` 取唯一前缀（`redistest.Prefix`）或为自己生成的唯一前缀注册清理（`redistest.Cleanup`），在建存储 / Mod 之前调用，用例结束时删掉键名含该前缀的键（单机与 Cluster 都按主节点 SCAN，不 FLUSH）；不要只删自己列举的几个键名。CI `service-redis` 末尾要求 Redis 为空，漏清理会在那里变红；固定键名（前缀不含本次运行唯一的部分）即使清理了也不允许，那一步发现不了，复核方法见[外部验证](EXTERNAL-VERIFICATION.md#服务层-redis-组指向共享隔离环境的-redis2026-10-15)。
+- 服务层 Redis 组（CI `service-redis` job 的包与变量组）**允许**指向共享隔离环境的 Redis（2026-10-15 核对：无固定键名，跑完键名清单不变）。条件：只设 CI 的五个 Redis 门变量，unset 其余 `ROOST_DATAENGINE_IT_*` / `ROOST_IT_*`（否则 `wiring/dataengine` 的真实依赖与故障用例会跟着在共享环境上跑）；确认 `remote-acceptance.lock` 不存在；前后只读核对 `DBSIZE` / `--scan` 键名清单，不 FLUSH。共享 Redis 不为空时，判据是“本次运行前后键名清单不变”，不是“跑完为空”。
 - 先红后绿：每个修复先有一条在修前代码上确实变红、且红在承诺本身上的回归，修前失败文本原样记录；不在“恰好能过的规模”上宣布验收。
 
 ### 生成代码

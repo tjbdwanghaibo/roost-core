@@ -38,7 +38,19 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 
 挂载后在本机按入口原样实跑一次（私有 redis-server、mirror-local 私有环境与其 3 主 3 从集群，用完关闭 / clean），全部 PASS：CI 等价 Redis 组 43 个包 ok、skip 守卫为空、race 组通过；`test-core` 的 5 个 MirrorLocal、versionstore Cluster、两种大积压恢复通过；`redis-cluster-suites.sh` 10 个包 ok（`-v` 复核集群子用例为 PASS 而非 SKIP）。CI 上的首次运行以 GitHub 结果为准，本地不等待。
 
-**观察**：共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。服务层 Redis 用例原先不清理自己的键：按 CI `service-redis` job 原样跑一轮，私有 Redis 上剩 2046 个键（整组 1237 + race 组 809），全部来自 `service/{mail,activity,account,platform,session,directory,chat}` 与 `infra/storage/versionstore` 测试辅助里只生成唯一前缀、不注册清理（或只删了列举的键名）的 11 处。2026-10-14 起这些辅助改用 `infra/storage/redis/redistest`（按本测试唯一前缀 SCAN + DEL，Cluster 逐主节点，不 FLUSH），同一组跑完残留为 0；`redis-cluster-suites.sh` 在私有 3 主 3 从集群上修前修后残留都为 0。CI `service-redis` job 末尾新增“no Redis keys left behind”一步要求 Redis 为空，由根包 `TestCIRedisJobRefusesKeysLeftBehind` 钉住。清理只删自己前缀下的键；本轮仍只在私有 Redis 上运行，没有核对整组是否另有固定键名、也没有在共享隔离环境的 Redis 上实跑，改接共享环境前需先做这两项。
+**观察**：共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。服务层 Redis 用例原先不清理自己的键：按 CI `service-redis` job 原样跑一轮，私有 Redis 上剩 2046 个键（整组 1237 + race 组 809），全部来自 `service/{mail,activity,account,platform,session,directory,chat}` 与 `infra/storage/versionstore` 测试辅助里只生成唯一前缀、不注册清理（或只删了列举的键名）的 11 处。2026-10-14 起这些辅助改用 `infra/storage/redis/redistest`（按本测试唯一前缀 SCAN + DEL，Cluster 逐主节点，不 FLUSH），同一组跑完残留为 0；`redis-cluster-suites.sh` 在私有 3 主 3 从集群上修前修后残留都为 0。CI `service-redis` job 末尾新增“no Redis keys left behind”一步要求 Redis 为空，由根包 `TestCIRedisJobRefusesKeysLeftBehind` 钉住。清理只删自己前缀下的键；固定键名核对与共享隔离环境实跑见下一节（2026-10-15）。
+
+## 服务层 Redis 组指向共享隔离环境的 Redis（2026-10-15）
+
+**结论**：CI `service-redis` job 覆盖的整组（`./wiring/... ./service/... ./infra/storage/redis/... ./infra/storage/versionstore/ ./framework/cache/` 与 race 组）**可以**指向共享隔离环境的 Redis，条件见 [维护手册 §7](README.md#编写行为测试的边界)。这是本机单机结论（macOS arm64，分支 `round/infra-gaps`），不扩大为 Cluster 或多机结论。
+
+**固定键名核对**：用唯一前缀的键每次运行名字都不同，固定键名两次运行相同。在私有 redis-server 上照 CI 变量组连跑两轮、每轮全程 `MONITOR`，按命令取出键参数（`EVAL` 按 numkeys、`DEL` / `MGET` 等取全部参数）后求两轮交集。修前交集 35 个键，全部来自 `framework/cache`：`TestRefHMapBoundaryContractsRealRedis` 的 `roost:boundary:<场景>:{record:1}:…`（27 个）与 `TestRefHMapUnknownWrite` 的 `roost:unknownwrite:<场景>:{session:1}:…`（8 个）；前者开头还先 `DEL` 这些固定键，两轮并行（例如 CI 与本机、或两个会话）会互相删数据。两处改用 `redistest.Prefix`（去掉按列举键名的预删与清理，统一按前缀清理）后，与修前一轮的交集为 0，与共享环境那一轮的交集也为 0。两轮都没有 `FLUSHALL` / `FLUSHDB` / `CONFIG` / `CLIENT KILL|PAUSE` 等实例级命令；`service/platform` 的测试辅助对自己的唯一前缀用 `KEYS`（只读，但会扫描整库，库大时阻塞其他客户端，共享 Redis 目前很小）。
+
+**共享环境实跑**：source `~/.roost-it/roost-dataengine-it/env.sh`（不打印），确认 `remote-acceptance.lock` 不存在后整段持锁，把 CI 的五个 Redis 门变量都设为 `ROOST_DATAENGINE_IT_REDIS_ADDR`，并 **unset 其余 `ROOST_DATAENGINE_IT_*` / `ROOST_IT_*`**，按 job 的两条命令原样执行：主组 44 个包 ok、Redis 门变量跳过为空，race 组 ok，约 64 秒。前后只读快照（`DBSIZE` 与 `--scan` 键名清单）：前 0 个键、后 0 个键，键名清单不变；`MONITOR` 中没有写入快照里已有的键。toxiproxy 只有常驻的 `nats-1..3`、`redis` 代理且无 toxic，Mongo 只有 `admin` / `config` / `game` / `local`。
+
+**踩到的坑**：第一次直接在 source 过 env.sh 的 shell 里跑，`ROOST_DATAENGINE_IT_*` 漏进了这组命令，`wiring/dataengine` 的真实依赖用例随之在共享环境上运行：`TestToxicNATS*` 建了自己的 toxiproxy 代理并清理，`TestReal{MongoPrimaryFailover,NATSOutage,JetStreamLeaderFailover}*` 因锁被本次运行持有而在注入故障前拒绝（`refuse: …remote-acceptance.lock is held by another run`），包因此 FAIL。事后核对 toxiproxy 无残留 toxic、Mongo 无遗留测试库。所以指向共享 Redis 时只带 CI 的 Redis 变量组，不要整份 source 后直接运行。
+
+**仍无结构守卫**：CI 末尾的残留键检查只发现“写了不清理”，发现不了“固定键名但清理了”。新增写 Redis 的用例仍须用 `redistest`；需要复核时重复上面的两轮 `MONITOR` 交集。
 
 **仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程（`codegen/internal/entity/testdata/*`）的真实依赖用例由 `scripts/test-remote-generated.sh` 等入口与故障矩阵负责，不在本次范围。
 

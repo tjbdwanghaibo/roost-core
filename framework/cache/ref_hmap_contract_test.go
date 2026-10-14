@@ -15,6 +15,7 @@ import (
 
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 )
 
 func newSessionRefHMapStore(t *testing.T, maxDepth int) *RedisRefHMapStore[int64, refHMapSession] {
@@ -849,15 +850,14 @@ func TestRefHMapBoundaryContractsRealRedis(t *testing.T) {
 	}
 	for _, scenario := range []string{"nil_root", "named_pointer", "patch_codec", "marshal_failure", "deep_nil_patch", "missing_root", "wrongtype_no_prefix_write", "registry_delete", "ancestor_ttl"} {
 		t.Run(scenario, func(t *testing.T) {
-			prefix := "roost:boundary:" + scenario
+			// 每次运行唯一的前缀，结束时按前缀删键：同一个 Redis 上并行的另一轮运行不会被这里的写入或清理碰到。
+			prefix := redistest.Prefix(t, addr, "roost:boundary:"+scenario)
 			cfg := RefHMapConfig[int64, refBoundaryRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refBoundaryRecord]{KeyOf: func(v refBoundaryRecord) int64 { return v.ID }}}
 			store := NewRedisRefHMapStore(client, cfg)
 			plan, err := store.plan(1)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _ = client.Del(ctx, plan.keys()...)
-			t.Cleanup(func() { _, _ = client.Del(context.Background(), plan.keys()...) })
 			if scenario == "nil_root" {
 				keyCalls := 0
 				ptrStore := NewRedisRefHMapStore(client, RefHMapConfig[int64, *refBoundaryRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, *refBoundaryRecord]{KeyOf: func(v *refBoundaryRecord) int64 { keyCalls++; return v.ID }}})
