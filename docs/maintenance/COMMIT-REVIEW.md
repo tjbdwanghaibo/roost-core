@@ -1,54 +1,60 @@
-# 新增提交的分批审查
+# 新增提交审查
 
-范围按维护者要求扩为全部新增提交，不限 Nest。固定清单使用 Git 范围 `cc635481..4370e6b3`，共 249 个非合并提交；它是提交图的差集，包含并入主线的平行开发提交，不是按日期统计。完整 SHA、标题、变更路径、候选批次及状态见 [提交清单 CSV](REVIEW-COMMITS-20261014.csv)。合并提交还需单独检查冲突解决，不能因清单不列 merge 而忽略。
+审查日期：2026-10-14。范围为上次本 agent 提交 `a9fa95d9` 之后到 `9a2d3a8f`：**266 个非合并提交、2 个合并提交**。同步时 main 与 origin/main 一致；审查与文档修改在独立 worktree 完成。完整 SHA 与路径见[提交清单](REVIEW-COMMITS-20261014.csv)。此范围替代此前 `cc635481..4370e6b3` 的阶段清单及最近 28 个提交的局部结论。
 
-清单按路径分批，一个提交可以归属多批。`pending` 表示尚未逐项独立审查；`bounded-review-done` 只表示下文列出的有界改动已复核，不等于整个模块验收。没有以文件数或提交数计算行为覆盖率。基线之后的新提交下一轮增补，已经记录的问题不自动视为修复。
+本轮按最终合并代码的净变化分组审查，未确认新增运行时缺陷。没有逐个检出、运行 266 个历史中间版本，也不声称全部测试断言和外部依赖组合穷尽覆盖。CSV 的 `net-state-reviewed` 表示纳入最终状态审查，不表示该提交单独通过验收。
 
-## 批次与当前进度
+## 结论与范围
 
-| 批次 | 范围和重点 | 当前状态 |
-| --- | --- | --- |
-| B1 Nest | 六项热路径优化、派发收尾、错误归一化、completionPump；其余 API 删除、命名迁移与接线 | 核心优化及三项后续改动已复核，见 [独立记录](../framework/NEST-OPTIMIZATION.md#9-nest-优化提交的独立复核)；其余待查 |
-| B2 Entity / Remote / DataEngine | 快照格式拒绝、TTL、beginWrite 资源归还、Remote+lease WAL、投影与回放、实体拓扑及 API 删除 | 本批完成三项 Remote 兼容移除核对；beginWrite 仅初读，其他待查 |
-| B3 Service / Demo | Account/Activity/Rank/Mail 旧数据拒绝、业务流程、计数器、生成后的使用路径 | 计数器发现 RV-20261014-01，已修复（`23c7a997`，未发版）；其他待查 |
-| B4 Codegen / Wiring | 导出 API 删除对生成器、模板、装配、现有工程升级的影响；声明快照一致性 | 待查，不能用仓内无引用证明对外 API 无使用方 |
-| B5 Sync / App / Saga / Infra | Flush、网络、RPC、锁、选主、关闭重试及分步重构的等价性 | 待查 |
-| B6 Gameplay | Skill 启动、执行、运动步骤，删除符号与状态恢复契约 | 待查 |
-| B7 文档 / 测试 / 脚本 / 发布 | 被合并测试的独有断言、旧路径清理、部署脚本、v1.26.0 声明及 merge 解决 | 待查；本轮只核对相关升级说明，不重做发布 |
-
-下一批优先 B2 的 `d688d38b`（Remote+lease WAL 拒绝）、`632c8b4d`（beginWrite 拆分），随后 B3 的 `66b73fab`、`067be870`、`c7bf6af3`、`95d22603` 等服务旧格式移除（以清单 SHA 为准）。每批同时核对相应 B4 接线与 B7 回归，不把功能与使用方拆开验收。
-
-## 本批结论（2026-10-14）
-
-同步前后均为 `4370e6b3`，主工作树干净；文档与临时探针放隔离 worktree。使用当前源码审查，未修改运行行为，未发版。
-
-| 提交 | 结论与依据 |
+| 范围 | 核对内容与结论 |
 | --- | --- |
-| `1ffb644f` Demo 旧计数键拒绝 | 确认 P2 缺陷 RV-20261014-01，已修复（`23c7a997`：BindRegistry 拒绝保留前缀，退役键报错不再引导删除；未发版），见 [已知问题](KNOWN-LIMITS.md#rv-20261014-01demo-计数器前缀与退役键冲突)。不是要求恢复旧兼容，而是新配置与保留键冲突未被启动校验拦截 |
-| `eeb5062f` 缺发布时刻更新拒绝 | 拒绝发生在缓存写入前；现行发布器带时刻；历史消息与有效新消息对照仍保留。本范围未发现新增缺陷 |
-| `7afc4c63` 无版本删除拒绝 | 删除必须携带正版本，未清掉已缓存的新版本；乱序删除与更新回归通过。本范围未发现新增缺陷 |
-| `d71aa7ac` TTL 索引变更 | 新建索引使用 expires_at，已确认记录与未发布 outbox 的过期边界未由该 diff 改变。旧库迁移被明确移交维护者，不把移除兼容本身报 bug；本机只核对 fake 索引形态，未在真实旧 Mongo 上验收迁移 |
+| Nest / Entity | ID tail 前驱、完成收尾、延时循环、组锁、资源归还、错误归一化与 short/long/io 接线；未发现拆函数改变完成顺序。Entity 批量加载、Destroy 锁和引用收尾、组件拓扑顺序保持契约 |
+| DataEngine / WAL | schema 先校验后水合、投影分段、连续成功前缀、回放退出、WAL 预算/批写/fsync/关闭；Remote+lease 历史组合仍明确拒绝并保留 WAL，未跳过失败记录推进 checkpoint |
+| Remote | beginWrite 的 ownership/gate/grant/共享锁及失败出口；WAL 级 Rejected 精简保留内存确定拒绝与回滚，等待失败仍结果不确定，自定义 Store 后续拒绝仍由 finalizer 收尾；发布时刻/删除版本/TTL 的旧形态拒绝与当前发布端一致 |
+| Sync / Lockstep | Flush 准备、会话帧前缀结算、失败后重同步、生命周期检查与编码工作区；setter 标脏与提交边界未改变；Lockstep 命名迁移及消费者编译通过 |
+| App / Gate / Bus / etcd | 启停依赖与 singleton 释放边界、TCP 握手和消息预算、Forward 的 admission 归还、广播结算、RPC 上下文和选主会话收尾；未发现提取 helper 改变所有权或退出顺序 |
+| Service | Account/Activity/Rank/Mail 的旧数据拒绝；对照现行写入端与正常数据路径。移除已明确放弃的兼容本身不算缺陷。计数器前缀冲突 RV-20261014-01 已由 `23c7a997` 修复并随 v1.26.1 发布 |
+| Gameplay | Skill 启动、operation 执行、运动阶段、checkpoint 恢复及 effect 解码；20 个新提取解码 helper 的函数体与原 switch 分支去空白后相同，其他阶段对照错误与状态更新顺序；attribute selector 包装保持相同返回值 |
+| Codegen / Wiring / Demo | manifest 严格解码、旧 feature/mod/tag 拒绝、API 删除与使用方、playeraccess 改名、配置声明快照、部署回退脚本。实际生成 game-demo 并 build/vet/test；既有业务代码仍需遵循升级说明手工迁移 |
+| 脚本 / CI / 文档 | 旧目录路径、生成器版本、私有环境入口、Redis 清理与跳过守卫、Windows 编译边界。修正维护文档中仍称 v1.26.0 为当前版本、已发布修复仍称未发版的状态；不改业务行为 |
+| 合并 | `8da1e771`、`eade0fb3` 的 `git show --remerge-diff` 均无冲突解决差异 |
 
-Remote 发布 → 信封身份校验 → 有版本删除 / 过旧更新过滤 → 缓存 ApplyReplica 的步骤仍保留。删除不过时刻过滤，更新需要发布时刻用于判断是否超出 L2 记忆窗口。接收端拒绝旧格式不等于能自动升级旧发布器，仍须遵守发布说明的停旧起新边界。
+## 测试整理核对
+
+使用 Go AST 的非 import 声明与去注释 token 摘要区分搬文件、改名和行为变化，再针对运行时变化及关键测试删改读源码。摘要只是定位手段，不作为语义等价证明；模板和被索引排除的脚本直接检查。未重新做全仓逐函数覆盖率前后对照，不将本轮描述为每个被删断言的穷尽审计。
+
+已核对的易误判删除包括：
+
+| 原测试 | 当前保留的行为覆盖 |
+| --- | --- |
+| `TestFirstLoadFailureLeavesNoTypedNilInRuntimeConfig` | `framework/configdata/reload_commit_test.go` 的 `TestFirstLoadFailureSkipsRollbackCallbacks` 保留 typed-nil、Current 与 rollback 断言 |
+| `TestRuntimeFailureFirstReportWakesShutdown` | `framework/app/singleton_test.go` 保留首错、Done 唤醒、hook 顺序及后注册 hook；App 退出测试另外覆盖错误仅返回一次 |
+| `TestEtcdLifetimeWatcherReadinessAndTerminalCauses` | `infra/network/etcd/driver/watcher_test.go` 分别验证 Ready、compacted 与 closed |
+| `TestMalformedEnvelopeIsAnError` | `infra/storage/versionstore/write_token_test.go` 的 `TestAnUnreadableRecordIsReportedAsMalformed` 含分隔符缺失、零版本及旧无 token 记录，并区分传输故障 |
+| `TestTemporalRestoreRejectedEmitsTemporalEvent` | `gameplay/skill/temporal_test.go` 的 `TestTemporalEventsNormalizeSnapshotTarget` 覆盖 capture/restore/rejected 三种事件及 target |
+| `TestCancelRefusesBlankAndUnknownTickets` | `service/match/guards_test.go` 保留空 ticket、未知 ticket 与错误内容断言 |
 
 ## 实际验证
 
-```text
-GOWORK=off go test ./framework/remoteentity -count=1 -timeout=180s
-PASS，10.758s
+以下均在 macOS、`9a2d3a8f` 的隔离检出上运行，`GOWORK=off`，退出码 0；不使用缓存测试结果。
 
-GOWORK=off go test -race ./framework/remoteentity -run 'TestApplyReplica|TestB2HistoricReplicaPastL2MemoryIsNotAdmitted|TestMongoCommitterCASIdempotencySnapshotAndOutbox' -count=3 -timeout=120s
-PASS，2.303s
+```sh
+go test ./... -count=1 -timeout=8m
 
-当前原样 Demo 模板的既有计数器测试（隔离探针）
-PASS，0.643s
+go test -race ./framework/nest ./framework/entity ./framework/nestwal ./framework/dataengine/... ./framework/sync/... ./framework/app ./infra/network/gateway ./infra/network/bus ./infra/network/etcd/driver ./gameplay/skill -count=1 -timeout=6m
 
-新增 fresh-prefix/restart 探针：当前模板 FAIL；1ffb644f 父提交模板 PASS（0.662s）
+go test -race ./framework/remoteentity -run 'Test.*(WAL|Rejected|Reject|Finaliz|Pipelined|WriteGate|Shared|Reload|Reply)' -count=2 -timeout=180s
 ```
 
-探针原样复制 `collaborators.go.tmpl` 与同版本 `collaborators_test.go.tmpl` 为 Go 文件（这两份没有待替换模板变量），使用项目已有内存 Redis 替身；没有运行 Redis 服务，也没有将此结果称为完整生成工程验收。首次旧版对照误用了新版测试夹具，因旧版没有 errRetiredPlayerIDCounter 编译失败；换为父提交对应夹具后，相同新增行为探针通过。编译失败不计为修前红例。
+生成工程验证：正式生成 game-demo，将 core replace 到审查检出后，执行 `go build ./...`、`go vet ./...`，另运行 `go test -count=1 -timeout=180s ./...`；全量生成工程测试探针通过（37.31s），临时探针已删除。此前单独跑过 Remote、DataEngine、Nest、protocol、redistest、根包与 etcd，以及生成工程 SceneWatcher / PlayerID 行为测试，均通过。
 
-MCP 项目 roost-core 仍为 `2026-10-10T16:08:17Z`，相关路径 metadata_changed，合并后的测试文件部分 not_tracked，已读当前 diff、实现与相关回归补证。Windows 本地验证不扩大支持平台，未执行真实资源、跨机、长期压力、全仓测试或全部生成工程验证。
+原始输出保留在本地 `artifacts/review/20261014-full/`，不当作性能报告。真实资源测试的 opt-in 环境未开启；包通过不表示 Redis/Mongo/NATS/etcd 集成用例执行。未重跑真实资源故障矩阵、跨机、Linux、长期压力或性能对照；发布文档中的 30 分钟数据是已有记录，不是本轮测量。
+
+CBM 项目 `Users-whb-roost-roost-core`，代际 `2026-10-14T14:59:51Z`，24,550 节点、245,349 边。已对范围内 1,914 个变更 Go/模板路径及项目范围检查 coverage；图谱有 6 个模板局部解析缺口、无 skipped，相关缺口读源码并用实际生成工程补证。docs/scripts/testdata 等按配置排除，直接读文件。无记录缺口不等于图谱完整。
+
+## 已修复问题的历史证据
+
+RV-20261014-01：`1ffb644f` 引入的 allocator 保留键冲突，首次探针在该版本失败、父提交通过。修复 `23c7a997` 在任何 Redis 写入前拒绝冲突前缀，保留正常前缀重启和第二副本递增测试。本轮已复核，详见[已知限制](KNOWN-LIMITS.md#rv-20261014-01demo-计数器前缀与退役键冲突)。以下仅保留历史复现入口，不是当前版本应当通过的测试。
 
 ## 复现入口
 

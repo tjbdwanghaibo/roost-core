@@ -1,6 +1,6 @@
 # Roost 框架模块目录
 
-当前版本v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)），在 v1.25.0 目录分类、Gate与Block AOI 之上交付 Nest 三池与 Await、Sync 优化与旧兼容移除；重档限制与复测见发布说明；之后未发版变化见 [CHANGELOG](../../CHANGELOG.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
+当前版本v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)）：生成工程 playeraccess 改名、Remote WAL 级 Rejected 精简；此前 Nest 三池与 Await、Sync 优化和旧兼容移除见 [v1.26.0](../release/v1.26.0-NOTES.md)。重档限制与复测见发布说明；之后未发版变化见 [CHANGELOG](../../CHANGELOG.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
 第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
 
