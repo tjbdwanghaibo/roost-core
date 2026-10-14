@@ -41,7 +41,7 @@ func TestCommandCodecAndOwnership(t *testing.T) {
 	}
 }
 
-func TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket(t *testing.T) {
+func TestTCPSenderRejectsShortWorkerBeforeResolverOrSocket(t *testing.T) {
 	calls := 0
 	sender, err := NewTCPSender(50002, 0, func(nettransport.SessionID) (string, bool) { calls++; return "s", true }, func(context.Context, string, uint32, []byte) error { calls++; return nil })
 	if err != nil {

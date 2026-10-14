@@ -401,7 +401,7 @@ func TestEntityRepositoryPublishesThroughLocalExecutor(t *testing.T) {
 	}
 }
 
-func TestRepositoryRejectsFastColdLoadBeforeJoiningFlight(t *testing.T) {
+func TestRepositoryRejectsShortWorkerColdLoadBeforeJoiningFlight(t *testing.T) {
 	ensureDataEngineRepositoryEntity()
 	id, err := entity.BuildEntityID(9876, dataEngineRepositoryKind)
 	if err != nil {

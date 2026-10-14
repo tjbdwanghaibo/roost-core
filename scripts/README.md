@@ -51,7 +51,7 @@ Remote 容量阶梯入口：`ROOST_REMOTE_CAPACITY_LABEL=<唯一标签> ROOST_RE
 启动 option：`NestOptionWithWorkerPools(short, long, io)`；每池 QueueCap 为整池等待容量（池命名与迁移见 [Nest 三池](../docs/framework/NEST-AWAIT.md)）。
 Remote 负载里 `ROOST_REMOTE_WORKERS` 与 `ROOST_REMOTE_FAST_QUEUE`（默认 4096）配 short 池，`ROOST_REMOTE_IO_WORKERS` 与 `ROOST_REMOTE_SLOW_QUEUE`（默认 64）配 io 池，long 池不配置（变量名沿用旧池名，保持复跑命令不变）。Remote 模式仍走正式业务/存储链路。
 
-调度混合基准：`ROOST_PERF_BENCH=BenchmarkMixedFastSlow bash scripts/perf/nest.sh`（基准名沿用旧名，测的是 short 池加 io 池混合）。1%/5% 是走 I/O 准备的请求比例，模拟等待 500μs，不能当作 Entity 变化频率或真实数据库 TPS。
+调度混合基准：`ROOST_PERF_BENCH=BenchmarkMixedShortIO bash scripts/perf/nest.sh`（short 池加 io 池混合；2026-10-14 前名为 BenchmarkMixedFastSlow）。1%/5% 是走 I/O 准备的请求比例，模拟等待 500μs，不能当作 Entity 变化频率或真实数据库 TPS。
 
 io 池并发/队列对比：加载隔离环境后运行 `ROOST_REMOTE_WORKER_LABEL=<唯一标签> bash scripts/perf/remote-workers.sh`。默认固定 short 池 8、投影 8、每档 120 秒，比较 io 池 64/128/256/1024 与等待位 16/64；`ROOST_REMOTE_WORKER_CASES='64:64:120 1024:16:120'` 可指定 io worker:等待位:输入TPS。过载结果保留并继续下一档，环境/预热无结果则停止；以零错误、零丢弃和全量校验通过判定通过，不能只看成功TPS或队列长度。
 

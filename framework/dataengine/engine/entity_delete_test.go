@@ -137,7 +137,7 @@ func TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity(t *testing.T)
 	}
 }
 
-func TestFastWorkerRemoteDeleteIsDefiniteRejection(t *testing.T) {
+func TestShortWorkerRemoteDeleteIsDefiniteRejection(t *testing.T) {
 	ensureDeleteGuardKinds()
 	manager := entity.NewEntityManager()
 	var fatal []error

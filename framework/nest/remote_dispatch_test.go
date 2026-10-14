@@ -223,7 +223,7 @@ func TestRemoteStagesCancelAndFenceAfterPrepareCloseBatch(t *testing.T) {
 	}
 }
 
-func TestRemoteStagesFullFastQueueReservesContinuation(t *testing.T) {
+func TestRemoteStagesFullShortQueueReservesContinuation(t *testing.T) {
 	batch := &stagedRemoteBatch{}
 	prepared := make(chan struct{})
 	mgr, remoteID, localID := stagedEngine(t, stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { close(prepared); return batch, nil }})

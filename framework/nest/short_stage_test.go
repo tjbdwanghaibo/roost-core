@@ -40,7 +40,7 @@ func (l *stageLoader) LoadEntity(ctx context.Context, id int64, kind entity.Enti
 	return value, errors.Join(err, createErr)
 }
 
-func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
+func TestShortStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)
 	loader := &stageLoader{manager: manager}
@@ -113,7 +113,7 @@ func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 	}
 }
 
-func TestFastContinuationRejectsSelfDispatchAndSavedSlowExecutorRunsInline(t *testing.T) {
+func TestShortContinuationRejectsSelfDispatchAndSavedIOExecutorRunsInline(t *testing.T) {
 	var manager *NestMgr
 	executorCalls, localCalls := 0, 0
 	saved := entity.WithLocalExecutor(context.Background(), func(fn func()) error { executorCalls++; fn(); return nil })
@@ -134,7 +134,7 @@ func TestFastContinuationRejectsSelfDispatchAndSavedSlowExecutorRunsInline(t *te
 	_, _ = manager.dispatchBusinessContinuation(nil, nil)
 }
 
-func TestFastBroadcastReportsColdTargetAndContinues(t *testing.T) {
+func TestShortBroadcastReportsColdTargetAndContinues(t *testing.T) {
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)
 	loader := &stageLoader{manager: manager}
@@ -170,7 +170,7 @@ func TestFastBroadcastReportsColdTargetAndContinues(t *testing.T) {
 	}
 }
 
-func TestSlowHandlerRunLocalDoesNotWaitForOwnPool(t *testing.T) {
+func TestIOHandlerRunLocalDoesNotWaitForOwnPool(t *testing.T) {
 	for _, workers := range []int{1, 2} {
 		t.Run(fmt.Sprint(workers), func(t *testing.T) {
 			getter := newMockGetter()
@@ -271,7 +271,7 @@ func TestRunLocalExecutesOnTheShortPoolAndIsBoundToTheCommitter(t *testing.T) {
 	}
 }
 
-func TestRunLocalFromAFastWorkerFailsFast(t *testing.T) {
+func TestRunLocalFromAShortWorkerFailsFast(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 9920, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
@@ -288,7 +288,7 @@ func TestRunLocalFromAFastWorkerFailsFast(t *testing.T) {
 	}
 }
 
-func TestRunLocalIsNotOrderedBehindTheEntitysSlowPreparation(t *testing.T) {
+func TestRunLocalIsNotOrderedBehindTheEntitysIOPreparation(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 9921, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))

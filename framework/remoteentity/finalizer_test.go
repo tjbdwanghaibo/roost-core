@@ -30,7 +30,7 @@ func (e *reloadableFullDocEntity) RollbackRemoteCommit(entity.RemoteCommit) {
 	}
 }
 
-func TestFinalizerRejectionRollbackRunsOnNestFastWorker(t *testing.T) {
+func TestFinalizerRejectionRollbackRunsOnNestShortWorker(t *testing.T) {
 	for i, tc := range []struct {
 		name       string
 		durability uint8

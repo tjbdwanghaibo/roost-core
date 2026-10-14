@@ -128,7 +128,7 @@ var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; mov
 // 只用 Getter 可选实现的 entity.LoadedChecker（ManagerAccess 实现为一次内存查找），不调用 Get：
 // 准入在发送方 goroutine 上执行——包括在 handler 里发送的业务 worker 和唯一的延迟派发 goroutine——
 // 不能依赖自定义 Getter 遵守 LoadedEntitiesOnly。Getter 未实现时 NewEngine 不安装本判定。
-// 广播是尽力扇出，冷目标逐个报告（TestFastBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
+// 广播是尽力扇出，冷目标逐个报告（TestShortBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
 // 组迁移等内部消息没有业务目标。ID 格式错误留给派发阶段按原语义报告。
 func (mgr *NestMgr) declaredTargetsNeedIOPreparation(msg *Msg) bool {
 	checker := mgr.loadedChecker

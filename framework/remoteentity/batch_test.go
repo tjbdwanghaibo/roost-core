@@ -1020,7 +1020,7 @@ func TestPrepareRemoteWriteBatchRefusesOversizeAndFencedManagers(t *testing.T) {
 	}
 }
 
-func TestFastWorkerRejectsRemoteWaitingBeforeMutation(t *testing.T) {
+func TestShortWorkerRejectsRemoteWaitingBeforeMutation(t *testing.T) {
 	// 故意不初始化 Manager：拦截必须早于解引用、准入和任何远端 I/O。
 	var manager *Manager
 	batch := &remoteWriteBatch{}
