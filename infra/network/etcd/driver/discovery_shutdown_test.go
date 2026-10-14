@@ -68,6 +68,12 @@ func TestDiscoveryReregistersAfterUnexpectedLeaseLoss(t *testing.T) {
 		t.Fatal("expected Discovery to register again after lease loss")
 	}
 
+	// registeredAgain 在 registerOnce 回调里关闭，此时注册结果还没写回 Discovery
+	// （registrationLoop 在回调返回后才 setCurrentRegistration），所以等新租约生效再断言。
+	deadline := time.Now().Add(5 * time.Second)
+	for d.currentLeaseID() != clientv3.LeaseID(102) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if got := d.currentLeaseID(); got != clientv3.LeaseID(102) {
 		t.Fatalf("lease id = %d, want 102", got)
 	}
