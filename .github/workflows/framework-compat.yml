@@ -247,13 +247,22 @@ jobs:
           fi
           go run ./cmd/loadtest -count 6
           sh deploy/dev/run.sh stop
+      # 失败诊断：机器人报的是它看到的症状（例如 scene_expect 超时“0 frames”），根因通常在服务
+      # 日志里更早的位置，只看每个日志最后 80 行会错过。所以先按服务列出全部 WARN/ERROR（各取
+      # 最后 100 条），再给每个日志的尾部和 compose 依赖的日志；进程是否还活着也一并打印。
       - name: dev stack state (on failure)
         if: failure() && (matrix.scenario == 'full' || matrix.scenario == 'demo')
         working-directory: ${{ runner.temp }}/planet
         run: |
           docker compose -f deploy/dev/docker-compose.yaml ps || true
-          docker compose -f deploy/dev/docker-compose.yaml logs --tail=60 || true
-          for log in *.boot.log .dev/*.log; do [ -f "$log" ] || continue; echo "== $log"; tail -n 80 "$log"; done 2>/dev/null || true
+          sh deploy/dev/run.sh status 2>/dev/null || true
+          for log in *.boot.log .dev/*.log; do
+            [ -f "$log" ] || continue
+            echo "== $log: WARN/ERROR"
+            grep -E '"level":"(WARN|ERROR)"' "$log" | tail -n 100 || true
+          done
+          for log in *.boot.log .dev/*.log; do [ -f "$log" ] || continue; echo "== $log: tail"; tail -n 80 "$log"; done 2>/dev/null || true
+          docker compose -f deploy/dev/docker-compose.yaml logs --tail=100 || true
           sh deploy/dev/run.sh stop 2>/dev/null || true
       - name: tear down the dev stack
         if: always() && (matrix.scenario == 'full' || matrix.scenario == 'demo')
