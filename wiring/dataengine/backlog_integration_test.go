@@ -111,12 +111,10 @@ func TestRealDataEngineLargeBacklogRecovery(t *testing.T) {
 	}
 	assertWALReplayCount(t, wal, recordCount)
 	acks := 0
-	// 先停止后台循环，再计时手动 Flush，ack 数不与后台 goroutine 竞争。
-	projector, err = engine.NewProjector(wal, fx.runtime.Store, engine.ProjectorOptions{CloseWAL: false, IdlePoll: time.Hour})
+	// 手动回放：不启动后台循环，计时的 Flush 是唯一的回放驱动，ack 数不与后台 goroutine 竞争。
+	// Close 之后 Flush 返回 ErrRuntimeStopped，所以不能用“先 Close 停循环再 Flush”。
+	projector, err = engine.NewProjector(wal, fx.runtime.Store, engine.ProjectorOptions{CloseWAL: false, ManualReplay: true})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := projector.Close(fx.context()); err != nil {
 		t.Fatal(err)
 	}
 	before := projector.Stats().Projected
