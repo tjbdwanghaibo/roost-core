@@ -10,11 +10,11 @@
 - upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
 ### 性能
 
-- `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。单条 Patch 样例记录的编码分配次数 41 → 6（`testing.AllocsPerRun`，非计时）；耗时收益待同机 benchstat 对照后记录在性能报告。解码侧未改。
+- `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。同机交替 10 轮 benchstat：编码矩阵 24 组全部显著变快（−8.8%～−63.0%），分配次数 −15%～−98%；WAL 追加与 Nest→WAL 端到端由 fsync 主导，耗时无显著变化、无退化（docs/performance/PERF-ROUND-20261015.md §2）。解码侧未改。
 
 ### 测试与工具
 
-- nest-game 负载夹具新增可选长尾采集（默认关闭，`ROOST_NEST_GAME_TAIL=metrics|trace`）：每秒记录 runtime/metrics（GC 周期、STW 与调度延迟直方图、互斥等待、CPU 分类）与进程 rusage；`trace` 模式另开 Go flight recorder，业务 / heartbeat / Sync / Gate 完成事件或调度 tick 间隔超过阈值时，以 `trace.Log`（类别 `roost.tail`，带各分段耗时）写入 trace 并延迟保存前后窗口，可按间隔保存对照窗口。新增独立模块 `scripts/perf/tailtrace`（依赖 `golang.org/x/exp/trace`，不进根模块）做事后关联，`scripts/perf/nest-game.sh` 在开启采集时自动运行。只改夹具与脚本，生产代码不变；开启后有观测开销，结果不与无采集样本的延迟数字混用。
+- nest-game 负载夹具新增可选长尾采集（默认关闭，`ROOST_NEST_GAME_TAIL=metrics|trace`）：每秒记录 runtime/metrics（GC 周期、STW 与调度延迟直方图、互斥等待、CPU 分类）与进程 rusage；`trace` 模式另开 Go flight recorder，业务 / heartbeat / Sync / Gate 完成事件或调度 tick 间隔超过阈值时，以 `trace.Log`（类别 `roost.tail`，带各分段耗时）写入 trace 并延迟保存前后窗口，可按间隔保存对照窗口。新增独立模块 `scripts/perf/tailtrace`（依赖 `golang.org/x/exp/trace`，不进根模块）做事后关联：给出富集比、长尾簇及其墙钟分钟相位；`scripts/perf/tailtrace/burst` 对单个 trace 做簇内与簇前对照。`scripts/perf/nest-game.sh` 在开启采集时自动运行分析。只改夹具与脚本，生产代码不变；开启后有观测开销，结果不与无采集样本的延迟数字混用。
 
 ### 测试
 

@@ -421,6 +421,8 @@ func (c *tailCollector) finish(t *testing.T) {
 		"baseline_every_s": c.baseline.Seconds(), "tail_events": c.seen.Load(), "dropped_events": c.dropped.Load(),
 		"tail_captures": c.captures, "save_intervals_s": c.saving, "save_failures": c.saveFailures,
 		"gomaxprocs": runtime.GOMAXPROCS(0), "go": runtime.Version(),
+		// at_s 的零点（loadClockOrigin）对应的墙钟时间，用于把长尾对到宿主侧按墙钟触发的周期任务。
+		"origin_unix_nano": loadClockOrigin.UnixNano(),
 	}
 	raw, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(filepath.Join(c.dir, "summary.json"), append(raw, '\n'), 0o644); err != nil {

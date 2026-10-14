@@ -60,8 +60,9 @@ type runtimeSample struct {
 }
 
 type summaryFile struct {
-	GOMAXPROCS  int     `json:"gomaxprocs"`
-	ThresholdMS float64 `json:"threshold_ms"`
+	GOMAXPROCS     int     `json:"gomaxprocs"`
+	ThresholdMS    float64 `json:"threshold_ms"`
+	OriginUnixNano int64   `json:"origin_unix_nano"`
 }
 
 func main() {
@@ -97,6 +98,50 @@ type report struct {
 	Traces      []traceReport           `json:"traces"`
 	Baselines   []traceReport           `json:"baselines"`
 	Labels      map[string]int          `json:"trace_labels"`
+	Episodes    []episode               `json:"episodes"`
+	// MinutePhase 是各 episode 起点落在墙钟分钟内第几秒的计数；集中在同一秒说明与宿主按墙钟触发的周期任务同步。
+	MinutePhase map[int]int `json:"episode_minute_phase_s,omitempty"`
+}
+
+// episode 是相邻长尾事件间隔小于 1s 的一簇（不含 tick 流）。
+type episode struct {
+	StartS  float64        `json:"start_s"`
+	Wall    string         `json:"wall,omitempty"`
+	SpanMS  float64        `json:"span_ms"`
+	Events  int            `json:"events"`
+	MaxMS   float64        `json:"max_ms"`
+	Streams map[string]int `json:"streams"`
+}
+
+func groupEpisodes(events []tailEvent, originUnixNano int64) ([]episode, map[int]int) {
+	sorted := slices.Clone(events)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].AtS < sorted[j].AtS })
+	var out []episode
+	var last float64
+	for _, ev := range sorted {
+		if ev.Stream == "tick" {
+			continue
+		}
+		if len(out) == 0 || ev.AtS-last >= 1 {
+			out = append(out, episode{StartS: ev.AtS, Streams: map[string]int{}})
+		}
+		ep := &out[len(out)-1]
+		ep.SpanMS = (ev.AtS - ep.StartS) * 1000
+		ep.Events++
+		ep.MaxMS = max(ep.MaxMS, ev.TotalMS)
+		ep.Streams[ev.Stream]++
+		last = ev.AtS
+	}
+	var phase map[int]int
+	if originUnixNano > 0 {
+		phase = map[int]int{}
+		for i := range out {
+			wall := time.Unix(0, originUnixNano+int64(out[i].StartS*1e9))
+			out[i].Wall = wall.Format("15:04:05.000")
+			phase[wall.Second()]++
+		}
+	}
+	return out, phase
 }
 
 type streamCounts struct {
@@ -130,6 +175,7 @@ func analyze(dir string) (*report, error) {
 		r.Streams[ev.Stream] = c
 	}
 	r.Metrics = correlateMetrics(events, samples, r.GOMAXPROCS)
+	r.Episodes, r.MinutePhase = groupEpisodes(events, summary.OriginUnixNano)
 	traces, _ := filepath.Glob(filepath.Join(dir, "tail-*.trace"))
 	baselines, _ := filepath.Glob(filepath.Join(dir, "base-*.trace"))
 	sort.Strings(traces)
@@ -851,6 +897,10 @@ func printReport(w io.Writer, r *report) {
 		m.Seconds, m.EventsUsed, m.UnmatchedEvents, m.GCStopMaxMS, m.StopOtherMaxMS, m.SchedMaxMSAll, m.SchedMaxMSTail, m.InvoluntaryCtx[0], m.InvoluntaryCtx[1])
 	for _, c := range m.Conditions {
 		fmt.Fprintf(w, "  %-28s seconds=%6.2f%% tail_events=%6.2f%% enrichment=%.2f\n", c.Name, 100*c.SecondsShare, 100*c.EventsShare, c.Enrichment)
+	}
+	fmt.Fprintf(w, "episodes (gap>=1s): %d; minute phase of episode starts (second-of-minute:count): %v\n", len(r.Episodes), r.MinutePhase)
+	for _, ep := range r.Episodes {
+		fmt.Fprintf(w, "  episode at=%.2fs wall=%s span=%.1fms events=%d max=%.1fms %v\n", ep.StartS, ep.Wall, ep.SpanMS, ep.Events, ep.MaxMS, ep.Streams)
 	}
 	for _, tr := range r.Traces {
 		fmt.Fprintf(w, "trace %s span=%.0fms events=%d stw>1ms=%d\n", tr.File, tr.Span, len(tr.Events), len(tr.STW))
