@@ -2,7 +2,7 @@ package fctx
 
 import "testing"
 
-func TestFastWorkerIsLocalExecutionState(t *testing.T) {
+func TestShortWorkerIsLocalExecutionState(t *testing.T) {
 	var snapshot ContextSnapshot
 	func() {
 		_, release := NewContext(WithShortWorker())

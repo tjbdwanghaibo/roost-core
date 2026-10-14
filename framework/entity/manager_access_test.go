@@ -271,7 +271,7 @@ func TestManagerAccessIsLoadedNeverLoads(t *testing.T) {
 // 快阶段的冷缺失本身不阻塞：访问未加载且配置了 loader 的目标时不做 I/O、不等待 singleflight，返回可 errors.Is 的
 // ErrColdLoadInLogic，业务可以据此降级。只有真正会等待的入口（I/O、等待 flight / 投影）才 fail-fast。
 // 历史：RR-20260926-26。
-func TestFastWorkerColdMissReturnsErrorInsteadOfPanicking(t *testing.T) {
+func TestShortWorkerColdMissReturnsErrorInsteadOfPanicking(t *testing.T) {
 	manager := NewEntityManager()
 	access := NewManagerAccess(manager)
 	loader := &countingAggregateLoader{manager: manager}

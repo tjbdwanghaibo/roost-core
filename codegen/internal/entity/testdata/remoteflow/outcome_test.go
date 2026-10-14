@@ -246,7 +246,7 @@ func TestGeneratedRemoteNestedIsolatedTransactionIsRefused(t *testing.T) {
 //     错误可 errors.Is(fctx.ErrBlockingInBusinessWorker)（RR-27 修复的那条路径）；
 //   - remote_message：目标是另一个 Remote 实体的消息（Remote 消息总有 RollbackTx），删除随事务走 deferEntityDelete，
 //     未声明的 Remote 删除目标以 nest.ErrDurableRemoteWriteUnsupported 拒绝。
-func TestGeneratedRemoteFastWorkerDeleteIsDefiniteRejection(t *testing.T) {
+func TestGeneratedRemoteShortWorkerDeleteIsDefiniteRejection(t *testing.T) {
 	ctx, mongo, redis, database := rejectTestEnv(t)
 	deleteOther := nest.NewHandlerName("remote_reject_delete_other")
 	var (

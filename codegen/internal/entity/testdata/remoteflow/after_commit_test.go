@@ -266,7 +266,7 @@ func logicQueueObservations(handler string) int64 {
 	return total
 }
 
-func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T) {
+func TestGeneratedRemotePrepareFailureAbortsWithoutShortContinuation(t *testing.T) {
 	rig, name := newAfterCommitRig(t, nest.NestOptionWithStageMetrics(true))
 	id := rig.seed(t, 9720)
 	handler := name.String()

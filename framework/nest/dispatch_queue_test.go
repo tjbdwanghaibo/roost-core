@@ -35,7 +35,7 @@ func admitQueue(t *testing.T, q *dispatchQueue, slow bool, ids ...int64) {
 		t.Fatal(err)
 	}
 }
-func TestTwoPoolsOrderAllTargetsWithoutOccupyingFastWorker(t *testing.T) {
+func TestTwoPoolsOrderAllTargetsWithoutOccupyingShortWorker(t *testing.T) {
 	for _, multi := range []bool{false, true} {
 		t.Run(map[bool]string{false: "single", true: "multi"}[multi], func(t *testing.T) {
 			entered, release, independent := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -164,7 +164,7 @@ func (g *slowTestGetter) Get(ctx context.Context, id int64, category entity.Enti
 	g.once.Do(func() { close(g.entered); <-g.release })
 	return g.Getter.Get(ctx, id, category)
 }
-func TestSlowLoadAndHandlerUseDifferentWorkers(t *testing.T) {
+func TestIOLoadAndHandlerUseDifferentWorkers(t *testing.T) {
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 9910, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
@@ -231,11 +231,11 @@ func TestSlowLoadAndHandlerUseDifferentWorkers(t *testing.T) {
 	}
 }
 
-// BenchmarkMixedFastSlow 仅测调度：1%/5% 前置 I/O 用 500µs 等待模拟，
+// BenchmarkMixedShortIO 仅测调度：1%/5% 前置 I/O 用 500µs 等待模拟，
 // I/O 阶段交回同一业务池执行。它不代表 Mongo/NATS 的端到端 TPS。
-func BenchmarkMixedFastSlow(b *testing.B) {
+func BenchmarkMixedShortIO(b *testing.B) {
 	for _, percent := range []uint64{1, 5} {
-		b.Run(fmt.Sprintf("slow_%d_percent", percent), func(b *testing.B) {
+		b.Run(fmt.Sprintf("io_%d_percent", percent), func(b *testing.B) {
 			var q *dispatchQueue
 			q = newDispatchQueue("mixed", WorkerPoolConfig{4, 4096}, WorkerPoolConfig{32, 4096}, func(m *Msg) {
 				if m.remoteLogic != nil {
@@ -327,7 +327,7 @@ func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
 	}
 }
 
-func TestFastLogicMarksGetterContextAndSlowPreparationCanLoad(t *testing.T) {
+func TestShortLogicMarksGetterContextAndIOPreparationCanLoad(t *testing.T) {
 	base := newMockGetter()
 	id := mustBuildCastID(t, 9950, entity.EntityCategory(1), nestLocalKind)
 	base.Add(newMockEntity(id, entity.EntityCategory(1)))

@@ -678,7 +678,7 @@ func (o *isolatedInPrepare) run(iso TransactionCommitter, target int64) {
 	})
 }
 
-func TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
+func TestIsolatedInIOPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
 	id := mustBuildCastID(t, 48600, entity.EntityCategory(1), nestLocalKind)
 	obs := &isolatedInPrepare{}
 	iso := &recordsCommitter{}
@@ -717,7 +717,7 @@ func TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
 	}
 }
 
-func TestIsolatedInSlowPrepareOfRemoteMessageIsRefused(t *testing.T) {
+func TestIsolatedInIOPrepareOfRemoteMessageIsRefused(t *testing.T) {
 	localID, local := newAsyncPilotEntity(t, 48610, 1)
 	remoteID := mustBuildCastID(t, 48611, entity.EntityCategoryRemote, nestRemoteManagedKind)
 	obs := &isolatedInPrepare{}

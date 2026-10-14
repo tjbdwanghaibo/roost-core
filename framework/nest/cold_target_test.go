@@ -46,7 +46,7 @@ func startColdTargetEngine(t *testing.T, mgr *NestMgr) {
 	})
 }
 
-func TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker(t *testing.T) {
+func TestDefaultSenderPreparesColdDeclaredTargetsOnIOWorker(t *testing.T) {
 	mgr, manager, loader := newColdTargetEngine(t, WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8})
 	hot := mustBuildCastID(t, 8401, entity.EntityCategory(1), nestLocalKind)
 	coldSingle := mustBuildCastID(t, 8402, entity.EntityCategory(1), nestLocalKind)
@@ -114,7 +114,7 @@ func (e *evictingEntity) Touch() bool {
 	return ok
 }
 
-func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T) {
+func TestDeclaredTargetEvictedAfterAdmissionMovesToIOKeepingOrder(t *testing.T) {
 	for _, window := range []string{"before lookup", "between lookup and touch", "between touch and lock"} {
 		t.Run(window, func(t *testing.T) {
 			// 1 个业务 worker：先用 blocker 占住，保证两条请求都在目标仍加载时准入并走业务池，
@@ -367,7 +367,7 @@ func TestAdmissionColdProbeRequiresLoadedChecker(t *testing.T) {
 
 // handler 在业务阶段用动态 Cast 访问未加载目标：业务拿到可 errors.Is 的 ErrColdLoadInLogic 并可降级，不做 I/O。
 // 历史：RR-20260926-26。
-func TestFastCastColdTargetLetsBusinessFallBack(t *testing.T) {
+func TestShortCastColdTargetLetsBusinessFallBack(t *testing.T) {
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)
 	loader := &stageLoader{manager: manager}
@@ -446,7 +446,7 @@ func (l *gatedStageLoader) LoadEntity(ctx context.Context, id int64, kind entity
 	return value, errors.Join(err, createErr)
 }
 
-func TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
+func TestIOPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)
 	loader := &gatedStageLoader{manager: manager, entered: make(chan struct{}, 4), release: make(chan struct{})}

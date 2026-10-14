@@ -154,9 +154,9 @@ func ioRerouteSeries(name string) (int64, bool) {
 // finds its declared target cold before taking the Guard, not by the periodic
 // observeStats, so the tests above never create it. This one makes a real
 // reroute through a NestMgr (the same eviction window as
-// TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder), sees the
+// TestDeclaredTargetEvictedAfterAdmissionMovesToIOKeepingOrder), sees the
 // series appear, shuts the engine down and requires the series gone.
-func TestTheSlowRerouteSeriesGoesWithItsDispatcher(t *testing.T) {
+func TestTheIORerouteSeriesGoesWithItsDispatcher(t *testing.T) {
 	metrics.DefaultRegistry().Reset()
 	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 
