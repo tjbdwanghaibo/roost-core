@@ -1,6 +1,6 @@
 # Roost 文档入口
 
-当前版本：**v1.26.0**（[发布说明](release/v1.26.0-NOTES.md) · [实现与证据](release/v1.26.0-IMPLEMENTATION.md) · [发布验收](release/v1.26.0-VALIDATION.md)）。升级要求见发布说明 §2；之后未发版的变化见 [CHANGELOG `[Unreleased]`](../CHANGELOG.md)。
+当前版本：**v1.26.1**（补丁：[发布说明](release/v1.26.1-NOTES.md) · [实现](release/v1.26.1-IMPLEMENTATION.md) · [验收](release/v1.26.1-VALIDATION.md)）；功能版本 v1.26.0（[发布说明](release/v1.26.0-NOTES.md) · [实现与证据](release/v1.26.0-IMPLEMENTATION.md) · [发布验收](release/v1.26.0-VALIDATION.md)）。升级要求见发布说明 §2；之后未发版的变化见 [CHANGELOG `[Unreleased]`](../CHANGELOG.md)。
 
 第一次接触先读 [第一次认识和使用 Roost](GETTING-STARTED.md)：用一次购买道具解释三大核心，并运行一个不需要数据库的示例。
 

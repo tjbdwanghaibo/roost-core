@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.26.1] - 2026-10-14
+
+补丁版：安全修复（toolchain go1.27.2、x/net v0.60.0）、go.work 加载冲突、两个 game-demo 模板缺陷与 CI 修复；运行时契约与生成物最低 core（v1.26.0）不变。发布说明见 docs/release/v1.26.1-NOTES.md。
+
 ### 修复
 
 - game-demo 账号 allocator（RV-20261014-01，`1ffb644f` 引入）：`account.key_prefix=roost:demo` 时计数键 `roost:demo:player_id` 恰好是退役键，第一次分配创建它后，重启或新副本把这份部署自己的计数器当旧数据拒绝，报错还建议删除它（照做会重发已有玩家 ID）。现在 BindRegistry 在任何 Redis 调用前把这个前缀作为配置错误拒绝、要求换前缀；分配时遇到退役键的报错改为先确认它不是另一份部署的当前计数器、再迁移，不再引导删除。拒绝旧计数键兼容的决定不变。**升级**：已经用 `roost:demo` 前缀运行的部署先停写，把该前缀下全部键（计数器在内）迁到新前缀；重新生成 game-demo 的 `internal/service/account/collaborators.go`。默认生成前缀 `roost:<项目名>:account` 不受影响。

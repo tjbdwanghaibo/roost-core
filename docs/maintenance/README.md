@@ -2,7 +2,7 @@
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-当前版本v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
