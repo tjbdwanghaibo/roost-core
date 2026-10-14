@@ -37,19 +37,22 @@ func validateRecord(record corenest.CommitRecord) error {
 	return dataengine.ValidateCommitRecord(record)
 }
 
-// encodeRecordHeader 写入编码版本与记录头（ID、创建时间、持久级别、handler、请求 ID）。
-func encodeRecordHeader(b *bytes.Buffer, record corenest.CommitRecord) error {
-	_ = binary.Write(b, binary.BigEndian, codecVersion)
-	_, _ = b.Write(record.ID[:])
-	_ = binary.Write(b, binary.BigEndian, record.CreatedAt)
-	_ = b.WriteByte(byte(record.Durability))
-	if err := writeString(b, record.Handler); err != nil {
-		return err
+// appendRecordHeader 追加编码版本与记录头（ID、创建时间、持久级别、handler、请求 ID）。
+//
+// 编码侧全部用 binary.BigEndian.AppendUintXX 手写定长字段：编码在 Enqueue 同步完成，
+// 调用方此时持有实体锁，binary.Write 的反射与接口装箱会让每个定长字段多一次分配。字节序与字段宽度必须与
+// decodeRecord 侧的 binary.Read 逐字节一致（有符号整数按补码写入同宽无符号数）；
+// codec_reference_test.go 用改造前的 binary.Write 实现做逐字节对照。
+func appendRecordHeader(b []byte, record corenest.CommitRecord) ([]byte, error) {
+	b = binary.BigEndian.AppendUint16(b, codecVersion)
+	b = append(b, record.ID[:]...)
+	b = binary.BigEndian.AppendUint64(b, uint64(record.CreatedAt))
+	b = append(b, byte(record.Durability))
+	var err error
+	if b, err = appendString(b, record.Handler); err != nil {
+		return nil, err
 	}
-	if err := writeString(b, record.RequestID); err != nil {
-		return err
-	}
-	return nil
+	return appendString(b, record.RequestID)
 }
 
 // encodeRecord 把提交记录编码为 WAL payload，顺序为：记录头、mutations、effects、receipts。
@@ -58,120 +61,111 @@ func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
 	if err := validateRecord(record); err != nil {
 		return nil, err
 	}
-	b := bytes.NewBuffer(make([]byte, 0, recordSizeHint(record)))
-	if err := encodeRecordHeader(b, record); err != nil {
+	b, err := appendRecordHeader(make([]byte, 0, recordSizeHint(record)), record)
+	if err != nil {
 		return nil, err
 	}
-	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Mutations)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(record.Mutations)))
 	for i := range record.Mutations {
-		if err := writeMutation(b, &record.Mutations[i]); err != nil {
+		if b, err = appendMutation(b, &record.Mutations[i]); err != nil {
 			return nil, err
 		}
 	}
-	if err := writeEffects(b, record.Effects); err != nil {
+	if b, err = appendEffects(b, record.Effects); err != nil {
 		return nil, err
 	}
-	if err := writeReceipts(b, record.Receipts); err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
+	return appendReceipts(b, record.Receipts)
 }
 
-// writeMutation 编码一条实体变更，含可选的 Remote 提交。
-func writeMutation(b *bytes.Buffer, m *corenest.EntityMutation) error {
-	_ = binary.Write(b, binary.BigEndian, m.Key.ID)
-	_ = binary.Write(b, binary.BigEndian, m.ExpectedVersion)
-	_ = binary.Write(b, binary.BigEndian, m.NextVersion)
-	_ = binary.Write(b, binary.BigEndian, m.Mask)
-	_ = binary.Write(b, binary.BigEndian, m.Schema)
-	_ = b.WriteByte(byte(m.Kind))
-	_ = b.WriteByte(byte(m.Key.Scope))
-	if err := writeString(b, m.Key.Database); err != nil {
-		return err
+// appendMutation 编码一条实体变更，含可选的 Remote 提交。
+func appendMutation(b []byte, m *corenest.EntityMutation) ([]byte, error) {
+	b = binary.BigEndian.AppendUint64(b, uint64(m.Key.ID))
+	b = binary.BigEndian.AppendUint64(b, m.ExpectedVersion)
+	b = binary.BigEndian.AppendUint64(b, m.NextVersion)
+	b = binary.BigEndian.AppendUint64(b, m.Mask)
+	b = binary.BigEndian.AppendUint32(b, m.Schema)
+	b = append(b, byte(m.Kind), byte(m.Key.Scope))
+	var err error
+	for _, s := range [...]string{m.Key.Database, m.Key.Resource, m.Codec} {
+		if b, err = appendString(b, s); err != nil {
+			return nil, err
+		}
 	}
-	if err := writeString(b, m.Key.Resource); err != nil {
-		return err
+	if b, err = appendBytes(b, m.Data); err != nil {
+		return nil, err
 	}
-	if err := writeString(b, m.Codec); err != nil {
-		return err
-	}
-	if err := writeBytes(b, m.Data); err != nil {
-		return err
-	}
-	if err := writeBytes(b, m.Patch.SetBSON); err != nil {
-		return err
+	if b, err = appendBytes(b, m.Patch.SetBSON); err != nil {
+		return nil, err
 	}
 	if len(m.Patch.Unset) > maxEntryCount {
-		return errors.New("nestwal: too many unset paths")
+		return nil, errors.New("nestwal: too many unset paths")
 	}
-	_ = binary.Write(b, binary.BigEndian, uint32(len(m.Patch.Unset)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(m.Patch.Unset)))
 	for _, path := range m.Patch.Unset {
-		if err := writeString(b, path); err != nil {
-			return err
+		if b, err = appendString(b, path); err != nil {
+			return nil, err
 		}
 	}
-	return writeRemoteCommit(b, m.Remote)
+	return appendRemoteCommit(b, m.Remote)
 }
 
-// writeReceipts 编码幂等回执列表。
-func writeReceipts(b *bytes.Buffer, receipts []dataengine.Receipt) error {
-	_ = binary.Write(b, binary.BigEndian, uint32(len(receipts)))
+// appendReceipts 编码幂等回执列表。
+func appendReceipts(b []byte, receipts []dataengine.Receipt) ([]byte, error) {
+	b = binary.BigEndian.AppendUint32(b, uint32(len(receipts)))
+	var err error
 	for i := range receipts {
 		receipt := &receipts[i]
-		if err := writeString(b, receipt.Namespace); err != nil {
-			return err
+		if b, err = appendString(b, receipt.Namespace); err != nil {
+			return nil, err
 		}
-		if err := writeString(b, receipt.ID); err != nil {
-			return err
+		if b, err = appendString(b, receipt.ID); err != nil {
+			return nil, err
 		}
-		if err := writeBytes(b, receipt.Digest); err != nil {
-			return err
+		if b, err = appendBytes(b, receipt.Digest); err != nil {
+			return nil, err
 		}
-		if err := writeBytes(b, receipt.Payload); err != nil {
-			return err
+		if b, err = appendBytes(b, receipt.Payload); err != nil {
+			return nil, err
 		}
-		_ = binary.Write(b, binary.BigEndian, receipt.ExpiresAt)
+		b = binary.BigEndian.AppendUint64(b, uint64(receipt.ExpiresAt))
 	}
-	return nil
+	return b, nil
 }
 
-// writeEffects 编码外部效果列表；Headers 按键排序，保证同一记录编码结果确定。
-func writeEffects(b *bytes.Buffer, effects []corenest.Effect) error {
-	_ = binary.Write(b, binary.BigEndian, uint32(len(effects)))
+// appendEffects 编码外部效果列表；Headers 按键排序，保证同一记录编码结果确定。
+func appendEffects(b []byte, effects []corenest.Effect) ([]byte, error) {
+	b = binary.BigEndian.AppendUint32(b, uint32(len(effects)))
+	var err error
 	for i := range effects {
 		e := &effects[i]
-		if err := writeString(b, e.ID); err != nil {
-			return err
+		for _, s := range [...]string{e.ID, e.Topic, e.Key} {
+			if b, err = appendString(b, s); err != nil {
+				return nil, err
+			}
 		}
-		if err := writeString(b, e.Topic); err != nil {
-			return err
+		if b, err = appendBytes(b, e.Payload); err != nil {
+			return nil, err
 		}
-		if err := writeString(b, e.Key); err != nil {
-			return err
-		}
-		if err := writeBytes(b, e.Payload); err != nil {
-			return err
-		}
-		_ = binary.Write(b, binary.BigEndian, e.AvailableAt)
+		b = binary.BigEndian.AppendUint64(b, uint64(e.AvailableAt))
 		if len(e.Headers) > maxEntryCount {
-			return errors.New("nestwal: too many effect headers")
+			return nil, errors.New("nestwal: too many effect headers")
 		}
 		keys := make([]string, 0, len(e.Headers))
 		for key := range e.Headers {
 			keys = append(keys, key)
 		}
 		slices.Sort(keys)
-		_ = binary.Write(b, binary.BigEndian, uint32(len(keys)))
+		b = binary.BigEndian.AppendUint32(b, uint32(len(keys)))
 		for _, key := range keys {
-			if err := writeString(b, key); err != nil {
-				return err
+			if b, err = appendString(b, key); err != nil {
+				return nil, err
 			}
-			if err := writeString(b, e.Headers[key]); err != nil {
-				return err
+			if b, err = appendString(b, e.Headers[key]); err != nil {
+				return nil, err
 			}
 		}
 	}
-	return nil
+	return b, nil
 }
 
 // decodeRecord 解码一条 WAL payload；版本不符返回 ErrUnsupportedRecordVersion，有尾随字节或
@@ -240,7 +234,7 @@ func decodeRecordBody(r *bytes.Reader) (corenest.CommitRecord, error) {
 	return record, nil
 }
 
-// readMutation 解码一条实体变更，与 writeMutation 对称。
+// readMutation 解码一条实体变更，与 appendMutation 对称。
 func readMutation(r *bytes.Reader, m *corenest.EntityMutation) error {
 	var err error
 	if err := binary.Read(r, binary.BigEndian, &m.Key.ID); err != nil {
@@ -290,7 +284,7 @@ func readMutation(r *bytes.Reader, m *corenest.EntityMutation) error {
 	return err
 }
 
-// readReceipts 解码幂等回执列表，与 writeReceipts 对称。
+// readReceipts 解码幂等回执列表，与 appendReceipts 对称。
 func readReceipts(r *bytes.Reader) ([]dataengine.Receipt, error) {
 	receiptCount, err := readCount(r)
 	if err != nil {
@@ -387,20 +381,20 @@ func recordSizeHint(record corenest.CommitRecord) int {
 	return n
 }
 
-func writeString(w *bytes.Buffer, value string) error {
+func appendString(b []byte, value string) ([]byte, error) {
 	if len(value) > maxStringBytes {
-		return errors.New("nestwal: string exceeds limit")
+		return nil, errors.New("nestwal: string exceeds limit")
 	}
-	return writeBytes(w, []byte(value))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(value)))
+	return append(b, value...), nil
 }
 
-func writeBytes(w *bytes.Buffer, value []byte) error {
+func appendBytes(b []byte, value []byte) ([]byte, error) {
 	if uint64(len(value)) > uint64(^uint32(0)) {
-		return errors.New("nestwal: byte field exceeds uint32")
+		return nil, errors.New("nestwal: byte field exceeds uint32")
 	}
-	_ = binary.Write(w, binary.BigEndian, uint32(len(value)))
-	_, _ = w.Write(value)
-	return nil
+	b = binary.BigEndian.AppendUint32(b, uint32(len(value)))
+	return append(b, value...), nil
 }
 
 func readString(r *bytes.Reader) (string, error) {
@@ -438,111 +432,112 @@ func readCount(r *bytes.Reader) (int, error) {
 	return int(count), nil
 }
 
-// writeRemoteCommit 编码可选的 Remote 提交：先写 0/1 存在标记，存在时写入校验后的完整提交。
-func writeRemoteCommit(w *bytes.Buffer, commit *entity.RemoteCommit) error {
+// appendRemoteCommit 编码可选的 Remote 提交：先写 0/1 存在标记，存在时写入校验后的完整提交。
+func appendRemoteCommit(b []byte, commit *entity.RemoteCommit) ([]byte, error) {
 	if commit == nil {
-		return w.WriteByte(0)
+		return append(b, 0), nil
 	}
 	if err := commit.Validate(); err != nil {
-		return err
+		return nil, err
 	}
-	_ = w.WriteByte(1)
-	_, _ = w.Write(commit.TransactionID[:])
-	_ = binary.Write(w, binary.BigEndian, commit.EntityID)
-	_ = binary.Write(w, binary.BigEndian, uint16(commit.Kind))
-	if commit.Delete {
-		_ = w.WriteByte(1)
-	} else {
-		_ = w.WriteByte(0)
-	}
-	_ = binary.Write(w, binary.BigEndian, commit.BaseVersion)
-	_ = binary.Write(w, binary.BigEndian, commit.NextVersion)
-	_ = binary.Write(w, binary.BigEndian, commit.MarkerEpoch)
-	_ = binary.Write(w, binary.BigEndian, commit.LockFence)
-	_ = binary.Write(w, binary.BigEndian, commit.RouteEpoch)
-	_ = binary.Write(w, binary.BigEndian, commit.Schema)
-	_ = binary.Write(w, binary.BigEndian, commit.Codec)
-	_ = binary.Write(w, binary.BigEndian, commit.Checksum)
+	b = append(b, 1)
+	b = append(b, commit.TransactionID[:]...)
+	b = binary.BigEndian.AppendUint64(b, uint64(commit.EntityID))
+	b = binary.BigEndian.AppendUint16(b, uint16(commit.Kind))
+	b = append(b, boolByte(commit.Delete))
+	b = binary.BigEndian.AppendUint64(b, commit.BaseVersion)
+	b = binary.BigEndian.AppendUint64(b, commit.NextVersion)
+	b = binary.BigEndian.AppendUint64(b, commit.MarkerEpoch)
+	b = binary.BigEndian.AppendUint64(b, commit.LockFence)
+	b = binary.BigEndian.AppendUint64(b, commit.RouteEpoch)
+	b = binary.BigEndian.AppendUint32(b, commit.Schema)
+	b = binary.BigEndian.AppendUint16(b, commit.Codec)
+	b = binary.BigEndian.AppendUint64(b, uint64(commit.Checksum))
 	if len(commit.Mutations) > maxEntryCount {
-		return errors.New("nestwal: remote mutation count exceeds limit")
+		return nil, errors.New("nestwal: remote mutation count exceeds limit")
 	}
-	_ = binary.Write(w, binary.BigEndian, uint32(len(commit.Mutations)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(commit.Mutations)))
+	var err error
 	for i := range commit.Mutations {
 		mutation := &commit.Mutations[i]
 		if err := mutation.Validate(); err != nil {
-			return err
+			return nil, err
 		}
-		if err := writeString(w, mutation.Database); err != nil {
-			return err
+		if b, err = appendString(b, mutation.Database); err != nil {
+			return nil, err
 		}
-		_ = w.WriteByte(mutation.DatabaseScope)
-		if err := writeString(w, mutation.Collection); err != nil {
-			return err
+		b = append(b, mutation.DatabaseScope)
+		if b, err = appendString(b, mutation.Collection); err != nil {
+			return nil, err
 		}
-		_ = binary.Write(w, binary.BigEndian, mutation.ID)
-		_ = binary.Write(w, binary.BigEndian, mutation.Version)
-		_ = binary.Write(w, binary.BigEndian, mutation.Mask)
-		if err := writeBytes(w, mutation.Data); err != nil {
-			return err
+		b = binary.BigEndian.AppendUint64(b, uint64(mutation.ID))
+		b = binary.BigEndian.AppendUint64(b, mutation.Version)
+		b = binary.BigEndian.AppendUint64(b, mutation.Mask)
+		if b, err = appendBytes(b, mutation.Data); err != nil {
+			return nil, err
 		}
 	}
 	if len(commit.Deletes) > maxEntryCount {
-		return errors.New("nestwal: remote delete count exceeds limit")
+		return nil, errors.New("nestwal: remote delete count exceeds limit")
 	}
-	_ = binary.Write(w, binary.BigEndian, uint32(len(commit.Deletes)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(commit.Deletes)))
 	for i := range commit.Deletes {
 		item := &commit.Deletes[i]
 		if err := item.Validate(); err != nil {
-			return err
+			return nil, err
 		}
-		if err := writeString(w, item.Database); err != nil {
-			return err
+		if b, err = appendString(b, item.Database); err != nil {
+			return nil, err
 		}
-		_ = w.WriteByte(item.DatabaseScope)
-		if err := writeString(w, item.Collection); err != nil {
-			return err
+		b = append(b, item.DatabaseScope)
+		if b, err = appendString(b, item.Collection); err != nil {
+			return nil, err
 		}
-		_ = binary.Write(w, binary.BigEndian, item.ID)
+		b = binary.BigEndian.AppendUint64(b, uint64(item.ID))
 	}
 	if len(commit.Snapshots) > maxEntryCount {
-		return errors.New("nestwal: remote snapshot count exceeds limit")
+		return nil, errors.New("nestwal: remote snapshot count exceeds limit")
 	}
-	_ = binary.Write(w, binary.BigEndian, uint32(len(commit.Snapshots)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(commit.Snapshots)))
 	for i := range commit.Snapshots {
 		s := &commit.Snapshots[i]
-		_ = binary.Write(w, binary.BigEndian, s.Key.Tenant)
-		_ = binary.Write(w, binary.BigEndian, s.Key.EntityID)
-		_ = binary.Write(w, binary.BigEndian, uint16(s.Key.Kind))
-		_ = binary.Write(w, binary.BigEndian, s.Key.Scope)
-		_ = binary.Write(w, binary.BigEndian, s.Key.Policy)
-		_ = binary.Write(w, binary.BigEndian, s.BaseVersion)
-		_ = binary.Write(w, binary.BigEndian, s.StateVersion)
-		_ = binary.Write(w, binary.BigEndian, s.MarkerEpoch)
-		_ = binary.Write(w, binary.BigEndian, s.RouteEpoch)
-		_ = binary.Write(w, binary.BigEndian, s.Schema)
-		_ = binary.Write(w, binary.BigEndian, s.Codec)
-		if s.Full {
-			_ = w.WriteByte(1)
-		} else {
-			_ = w.WriteByte(0)
-		}
-		_ = binary.Write(w, binary.BigEndian, s.Checksum)
-		if err := writeBytes(w, s.Data); err != nil {
-			return err
+		b = appendRemoteSnapshotKey(b, s.Key)
+		b = binary.BigEndian.AppendUint64(b, s.BaseVersion)
+		b = binary.BigEndian.AppendUint64(b, s.StateVersion)
+		b = binary.BigEndian.AppendUint64(b, s.MarkerEpoch)
+		b = binary.BigEndian.AppendUint64(b, s.RouteEpoch)
+		b = binary.BigEndian.AppendUint32(b, s.Schema)
+		b = binary.BigEndian.AppendUint16(b, s.Codec)
+		b = append(b, boolByte(s.Full))
+		b = binary.BigEndian.AppendUint64(b, uint64(s.Checksum))
+		if b, err = appendBytes(b, s.Data); err != nil {
+			return nil, err
 		}
 	}
 	if len(commit.Invalidations) > maxEntryCount {
-		return errors.New("nestwal: remote invalidation count exceeds limit")
+		return nil, errors.New("nestwal: remote invalidation count exceeds limit")
 	}
-	_ = binary.Write(w, binary.BigEndian, uint32(len(commit.Invalidations)))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(commit.Invalidations)))
 	for _, key := range commit.Invalidations {
-		_ = binary.Write(w, binary.BigEndian, key.Tenant)
-		_ = binary.Write(w, binary.BigEndian, key.EntityID)
-		_ = binary.Write(w, binary.BigEndian, uint16(key.Kind))
-		_ = binary.Write(w, binary.BigEndian, key.Scope)
-		_ = binary.Write(w, binary.BigEndian, key.Policy)
+		b = appendRemoteSnapshotKey(b, key)
 	}
-	return nil
+	return b, nil
+}
+
+// appendRemoteSnapshotKey 编码快照键：Tenant u32、EntityID i64、Kind u16、Scope u32、Policy u32。
+func appendRemoteSnapshotKey(b []byte, key entity.RemoteSnapshotKey) []byte {
+	b = binary.BigEndian.AppendUint32(b, key.Tenant)
+	b = binary.BigEndian.AppendUint64(b, uint64(key.EntityID))
+	b = binary.BigEndian.AppendUint16(b, uint16(key.Kind))
+	b = binary.BigEndian.AppendUint32(b, key.Scope)
+	return binary.BigEndian.AppendUint32(b, key.Policy)
+}
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func readRemoteCommit(r *bytes.Reader) (*entity.RemoteCommit, error) {

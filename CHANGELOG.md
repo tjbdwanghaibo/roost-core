@@ -8,6 +8,9 @@
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。
 - upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
+### 性能
+
+- `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。单条 Patch 样例记录的编码分配次数 41 → 6（`testing.AllocsPerRun`，非计时）；耗时收益待同机 benchstat 对照后记录在性能报告。解码侧未改。
 
 ### 测试
 

@@ -271,6 +271,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 ### nestwal
 
 - [codec_test.go](../../../framework/nestwal/codec_test.go)：`TestEncodeRejectsUnboundedUnsetPathsAndHeaders`、`TestDecodeRejectsEveryTruncationPoint`、`TestCodecPatchRoundTrip`、`TestCodecDeleteCarriesNoPayload`、`TestCodecRejectsUnknownRecordVersion`；其余 5 项见文件
+- [codec_reference_test.go](../../../framework/nestwal/codec_reference_test.go)：`TestEncodeMatchesBinaryWriteReference`、`TestEncodeRejectsSameInputsAsBinaryWriteReference`（手写定长编码与改造前 `binary.Write` 参照实现逐字节对照）
 - [corruption_test.go](../../../framework/nestwal/corruption_test.go)：`TestOpenRefusesSegmentGapsAndUnacknowledgedTruncation`、`TestOpenRefusesEachCorruptFrameHeaderField`、`TestOpenTruncatesZeroFilledTailOfLastSegment`、`TestOpenTruncatesZeroFilledTailStartingAtCheckpointFence`、`TestOpenRefusesTailThatIsNotAllZero`；其余 4 项见文件
 - [crash_test.go](../../../framework/nestwal/crash_test.go)：`TestNestWALCrashChildProcess`、`TestNestWALCrashKeepsDurablePrefix`
 - [effect_inbox_test.go](../../../framework/nestwal/effect_inbox_test.go)：`TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict`、`TestMongoEffectInboxHandlerFailureLeavesNoReceipt`、`TestMongoEffectInboxSurvivesTransactionRetry`
