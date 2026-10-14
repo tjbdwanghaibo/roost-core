@@ -238,6 +238,10 @@ func TestGeneratedGoVersionMatchesTheGeneratorsOwn(t *testing.T) {
 	if match[1] != generatedGoVersion {
 		t.Fatalf("generatedGoVersion = %s but the generator itself requires go %s", generatedGoVersion, match[1])
 	}
+	toolchain := regexp.MustCompile(`(?m)^toolchain (\S+)`).FindStringSubmatch(string(raw))
+	if toolchain == nil || toolchain[1] != generatedToolchain {
+		t.Fatalf("generatedToolchain = %s but the generator's own go.mod toolchain line is %v", generatedToolchain, toolchain)
+	}
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, nil, nil)
 	plan, err := renderProject(m)
 	if err != nil {
@@ -248,6 +252,9 @@ func TestGeneratedGoVersionMatchesTheGeneratorsOwn(t *testing.T) {
 	}
 	if body := string(plan["go.mod"].Body); !strings.Contains(body, "\ngo "+generatedGoVersion+".0\n") {
 		t.Errorf("go.mod directive is not go %s.0:\n%s", generatedGoVersion, body)
+	}
+	if body := string(plan["go.mod"].Body); !strings.Contains(body, "\ntoolchain "+generatedToolchain+"\n") {
+		t.Errorf("go.mod toolchain is not %s:\n%s", generatedToolchain, body)
 	}
 }
 

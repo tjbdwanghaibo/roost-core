@@ -239,10 +239,19 @@ func renderSyncTransport(m Manifest) string {
 // TestGeneratedGoVersionMatchesTheGeneratorsOwn pins it to this module's go.mod.
 const generatedGoVersion = "1.27"
 
+// generatedToolchain 是生成工程 go.mod 的 toolchain 行，与本模块 go.mod 的
+// toolchain 行一致（TestGeneratedGoVersionMatchesTheGeneratorsOwn 钉住）。
+// go 指令仍是 1.27.0，只表示最低语言版本；toolchain 让 GOTOOLCHAIN=auto 时
+// 构建、测试与生成工程 CI 里的 govulncheck 用带安全修复的补丁版标准库
+// （go1.27.0 有 GO-2026-6599…6617，修复于 go1.27.2）。
+const generatedToolchain = "go1.27.2"
+
 func renderGoMod(m Manifest) string {
 	return fmt.Sprintf(`module %s
 
 go `+generatedGoVersion+`.0
+
+toolchain `+generatedToolchain+`
 
 // roost.yaml owns the framework update policy. When it is "latest", this
 // bootstrap file starts at the supported minimum and roost project deps

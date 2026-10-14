@@ -40,7 +40,7 @@ WAL durable、业务事务完成与数据库投影完成是不同结果。结果
 
 ## 开发与验证
 
-当前工具链为 Go 1.27.0，支持保证范围是 macOS/Linux。
+当前 go 指令为 1.27.0，toolchain 为 go1.27.2（标准库安全修复，`GOTOOLCHAIN=auto` 时自动下载），支持保证范围是 macOS/Linux。
 
 ```sh
 GOWORK=off go generate ./...
