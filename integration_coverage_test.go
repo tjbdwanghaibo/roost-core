@@ -260,7 +260,9 @@ func TestFaultMatrixScriptNamesEveryFullEnvironmentSuite(t *testing.T) {
 // run by nobody, and a package it names without one is a `[no test files]`
 // or all-skip cell that reports green for nothing.
 func TestRedisClusterScriptNamesEveryClusterKeyedSuite(t *testing.T) {
-	_, _, cluster := integrationTestPackages(t)
+	_, _, tagged := integrationTestPackages(t)
+	// 不带 integration 标签、直接读 ROOST_REVIEW_CLUSTER 的用例同样只有这个入口（CI 与隔离环境都没有集群）。
+	cluster := mergeSorted(tagged, packagesReadingEnv(t, "ROOST_REVIEW_CLUSTER", false, false)["ROOST_REVIEW_CLUSTER"])
 	script := filepath.Join("wiring", "scripts", "integration", "redis-cluster-suites.sh")
 	raw, err := os.ReadFile(script)
 	if err != nil {
@@ -272,7 +274,7 @@ func TestRedisClusterScriptNamesEveryClusterKeyedSuite(t *testing.T) {
 	}
 	for _, dir := range cluster {
 		if !covers(args, dir) {
-			t.Errorf("%s: %s has ROOST_REVIEW_CLUSTER integration tests that no runner names (they skip without a cluster, and CI has none); args: %v", script, dir, args)
+			t.Errorf("%s: %s has ROOST_REVIEW_CLUSTER-gated tests that no runner names (they skip without a cluster, and CI has none); args: %v", script, dir, args)
 		}
 	}
 	for _, arg := range args {
@@ -305,5 +307,171 @@ func TestSomeWorkflowRunsTheFaultMatrix(t *testing.T) {
 	}
 	if !found {
 		t.Error("no workflow runs `wiring/scripts/integration/dataengine-env.sh test`; the fault matrix (Mongo primary failover, NATS outage, JetStream leader failover, toxiproxy half-open) has no CI home since the consolidation")
+	}
+}
+
+// envReadPattern 匹配测试文件里对环境变量名字面量的读取。
+var envReadPattern = regexp.MustCompile(`os\.(?:Getenv|LookupEnv)\("([A-Z0-9_]+)"\)`)
+
+// packagesReadingEnv 返回按变量名分组的包目录：哪些包的 _test.go 直接读取名字等于 name
+// 的环境变量（byPrefix 为 true 时以 name 开头即算）。integrationOnly 为 true 时只看 `//go:build integration` 文件；false 时带不带标签都算——
+// 不带标签、却要真实依赖才不跳过的用例，同样需要一个设置该变量的入口。
+func packagesReadingEnv(t *testing.T, name string, integrationOnly, byPrefix bool) map[string][]string {
+	t.Helper()
+	found := map[string]map[string]bool{}
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "testdata", "vendor", "artifacts":
+				return filepath.SkipDir
+			}
+			if path != "." {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		if integrationOnly && !strings.HasPrefix(strings.TrimLeft(text, "\n"), "//go:build integration") {
+			return nil
+		}
+		for _, match := range envReadPattern.FindAllStringSubmatch(text, -1) {
+			variable := match[1]
+			if variable != name && !(byPrefix && strings.HasPrefix(variable, name)) {
+				continue
+			}
+			if found[variable] == nil {
+				found[variable] = map[string]bool{}
+			}
+			found[variable][filepath.ToSlash(filepath.Dir(path))] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for variable, dirs := range found {
+		for dir := range dirs {
+			out[variable] = append(out[variable], dir)
+		}
+		sort.Strings(out[variable])
+	}
+	return out
+}
+
+func mergeSorted(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, dir := range append(append([]string{}, a...), b...) {
+		if !seen[dir] {
+			seen[dir] = true
+			out = append(out, dir)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ROOST_REDIS_TEST_ADDR 准入的真实 Redis 用例（infra/storage/redis、versionstore、framework/cache 等，多数不带
+// integration 标签）只有 ci.yml 的 Redis job 设置这个变量：每个读它的包都必须在该 job 的 go test 参数里，
+// 包里测试文件读到的其他单机 Redis 门变量也必须由 job 设置；否则这些用例到处跳过，没人跑。
+func TestCIRedisJobRunsEveryRedisTestAddressPackage(t *testing.T) {
+	gated := packagesReadingEnv(t, "ROOST_REDIS_TEST_ADDR", false, false)["ROOST_REDIS_TEST_ADDR"]
+	if len(gated) == 0 {
+		t.Fatal("no test reads ROOST_REDIS_TEST_ADDR; the pattern or the layout changed")
+	}
+	raw, err := os.ReadFile(filepath.Join(".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := string(raw)
+	args := goTestPackageArgs(ci)
+	for _, dir := range gated {
+		if !covers(args, dir) {
+			t.Errorf("%s gates real-Redis tests on ROOST_REDIS_TEST_ADDR but no ci.yml `go test -tags integration` step runs it (they skip everywhere); go test args: %v", dir, args)
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if !strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			text, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range redisGateVariable.FindAllStringSubmatch(string(text), -1) {
+				name := m[1]
+				// 集群、隔离环境、mirror-local 私有环境的变量各有入口，不属于这个单机 Redis job。
+				if name == "ROOST_REVIEW_CLUSTER" || strings.HasPrefix(name, "ROOST_DATAENGINE_IT_") || strings.HasPrefix(name, "ROOST_MIRROR_LOCAL_") {
+					continue
+				}
+				if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(name) + `:\s*\S`).MatchString(ci) {
+					t.Errorf("ci.yml never sets %s, but %s/%s gates its Redis variant on it", name, dir, entry.Name())
+				}
+			}
+		}
+	}
+}
+
+// 只在显式变量下运行的真实依赖用例要有固定入口：optInEntries 把变量（前缀）对到负责的脚本，每个读取这些变量的
+// integration 包，脚本里都要有一条带 integration 标签、点名该包的 go test；setOnLine 为 true 时这一行还必须把
+// 该变量设为 1（开关型变量），为 false 时变量由脚本 source 的 env.sh 提供（地址型变量）。
+// 大积压恢复放在 mirror-local.sh 的私有环境（test-core），不放 dataengine-env.sh test：共享隔离环境由多个会话
+// 同时使用，10 万条记录的持续写入会干扰别人的用例。
+var optInEntries = []struct {
+	variablePrefix, script string
+	setOnLine              bool
+}{
+	{"ROOST_DATAENGINE_IT_BACKLOG", filepath.Join("scripts", "mirror-local.sh"), true},
+	{"ROOST_MIRROR_LOCAL", filepath.Join("scripts", "mirror-local.sh"), false},
+}
+
+func TestOptInRealDependencySuitesHaveAnEntry(t *testing.T) {
+	for _, entry := range optInEntries {
+		gated := packagesReadingEnv(t, entry.variablePrefix, true, true)
+		if len(gated) == 0 {
+			t.Errorf("no integration test reads %s*; update optInEntries", entry.variablePrefix)
+			continue
+		}
+		raw, err := os.ReadFile(entry.script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(raw), "\n")
+		for variable, dirs := range gated {
+			for _, dir := range dirs {
+				found := false
+				for _, line := range lines {
+					trimmed := strings.TrimSpace(line)
+					if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "go test") || !strings.Contains(line, "integration") {
+						continue
+					}
+					setsVariable := !entry.setOnLine || regexp.MustCompile(`(^|\s)`+regexp.QuoteMeta(variable)+`=1(\s|$)`).MatchString(line)
+					if setsVariable && covers(strings.Fields(line), dir) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("%s: no `go test -tags integration` line names ./%s with %s available (setOnLine=%v), so the opt-in suite there is run by nobody", entry.script, dir, variable, entry.setOnLine)
+				}
+			}
+		}
 	}
 }

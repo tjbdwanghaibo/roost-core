@@ -128,6 +128,9 @@ jobs:
   # the M-11 split and was run by nobody for two weeks — the skip guard below
   # can only see packages this job actually ran; RR-20260922-03).
   # kit/redis carries the App singleton lock's Redis store suite (same REDIS_ADDR gate).
+  # infra/storage/redis/...、infra/storage/versionstore、framework/cache 的真实 Redis
+  # 用例不带 integration 标签、以 ROOST_REDIS_TEST_ADDR 准入，也在这里跑（2026-10-14
+  # 之前没有任何入口设置它）。
   # integration_coverage_test.go pins the list to the files on disk.
   service-redis:
     runs-on: ubuntu-latest
@@ -161,14 +164,15 @@ jobs:
       - name: integration-tagged service tests on Redis
         run: |
           set -o pipefail
-          go test -tags integration -count=1 -p 1 -json ./wiring/redis/ ./wiring/... ./service/... | tee test.json \
+          go test -tags integration -count=1 -p 1 -json ./wiring/redis/ ./wiring/... ./service/... ./infra/storage/redis/... ./infra/storage/versionstore/ ./framework/cache/ | tee test.json \
             | jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Action + "\t" + .Package'
       - name: failing test output (on failure)
         if: failure()
         run: jq -r 'select(.Action=="output") | .Output' test.json | grep -vE '^(=== RUN|--- PASS|PASS|ok )' | tail -200
       - name: no Redis test was skipped
         run: |
-          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("REDIS_ADDR|ROOST_REVIEW_REDIS|ROOST_REDIS_TEST_ADDR|ROOST_[A-Z0-9]*_BACKEND"))) | .Package + " " + .Test' test.json | sort -u)
+          # \b：只认独立的变量名；隔离环境的 ROOST_DATAENGINE_IT_REDIS_ADDR 跳过不属于本 job。
+          skipped=$(jq -r 'select(.Action=="output" and (.Output|test("\\b(REDIS_ADDR|ROOST_REVIEW_REDIS|ROOST_REDIS_TEST_ADDR|ROOST_[A-Z0-9]*_BACKEND)\\b"))) | .Package + " " + .Test' test.json | sort -u)
           if [ -n "$skipped" ]; then
             echo "these tests skipped because a Redis gate variable was unset — the job must run them:"
             echo "$skipped"

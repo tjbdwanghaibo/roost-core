@@ -109,8 +109,9 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 
 ## 需要 Redis Cluster 的套件：`redis-cluster-suites.sh`
 
-以 `ROOST_REVIEW_CLUSTER` 为准入的 integration 用例（`wiring/mail`、`redis/driver`、
-`service/mail` 各一个文件）需要真实的 Redis Cluster。脚本会清掉 `ROOST_DATAENGINE_IT` /
+以 `ROOST_REVIEW_CLUSTER` 为准入的用例需要真实的 Redis Cluster：integration 标签的在 `wiring/redis`、
+`wiring/mail`、`redis/driver`、`framework/remoteentity`、`service/mail`，不带标签的在 `wiring/activity`、
+`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore`，脚本对两类一并运行。脚本会清掉 `ROOST_DATAENGINE_IT` /
 `REDIS_ADDR`，在 source 过 env.sh 的 shell 里运行也不会把全环境故障套件跑到隔离环境上
 （RR-20261005-NC-201）。CI 的 Redis job 只有单实例，
 `dataengine-env.sh` 也不起集群，所以它们在 CI 里一律 skip；本机对着 3 主 3 从集群跑：
@@ -120,8 +121,12 @@ ROOST_REVIEW_CLUSTER=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
   bash wiring/scripts/integration/redis-cluster-suites.sh
 ```
 
-包清单由 `integration_coverage_test.go` 钉在磁盘上的文件：新增一个含
-`ROOST_REVIEW_CLUSTER` 的 integration 测试文件，它所在的包必须加进脚本，否则根包测试
+包清单由 `integration_coverage_test.go` 钉在磁盘上的文件：新增一个读 `ROOST_REVIEW_CLUSTER`
+的测试文件（带不带 integration 标签），它所在的包必须加进脚本，否则根包测试
 `TestRedisClusterScriptNamesEveryClusterKeyedSuite` 变红；同理，`ROOST_DATAENGINE_IT`
-准入的包必须在 `dataengine-env.sh test` 的清单里，`REDIS_ADDR` 准入的包必须在 ci.yml 的
-Redis job 里。
+准入的包必须在 `dataengine-env.sh test` 的清单里，`REDIS_ADDR` 准入的 integration 包与读
+`ROOST_REDIS_TEST_ADDR` 的包（`infra/storage/redis/...`、`infra/storage/versionstore`、`framework/cache` 等，
+多数不带标签）必须在 ci.yml 的 Redis job 里（`TestCIRedisJobRunsEveryRedisTestAddressPackage`）。
+只在显式变量下运行的大负载用例由 `TestOptInRealDependencySuitesHaveAnEntry` 对到负责的脚本：DataEngine
+大积压恢复（`ROOST_DATAENGINE_IT_BACKLOG`）在 `scripts/mirror-local.sh test-core` 的私有环境里跑，不进
+`dataengine-env.sh test`——共享环境多个会话同时使用，10 万条记录的持续写入会干扰别人的用例。

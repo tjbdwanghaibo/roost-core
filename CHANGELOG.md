@@ -10,6 +10,7 @@
 
 ### 测试整理与门禁
 
+- 需要真实依赖、却没有任何入口设置门变量的用例挂到既有入口并在根包 `integration_coverage_test.go` 钉住：`ROOST_REDIS_TEST_ADDR` 准入的 `infra/storage/redis/...`、`infra/storage/versionstore`、`framework/cache` 进 CI `service-redis` job（skip 守卫改为整词匹配变量名，避免隔离环境变量 `ROOST_DATAENGINE_IT_REDIS_ADDR` 的跳过误报）；不带标签、`ROOST_REVIEW_CLUSTER` 准入的 `wiring/activity`、`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore` 进 `redis-cluster-suites.sh`；DataEngine 大积压恢复（`ROOST_DATAENGINE_IT_BACKLOG`）与 versionstore 的 Cluster 写入令牌用例进 `scripts/mirror-local.sh test-core` 私有环境（不进共享隔离环境，避免大写入负载干扰其他会话）。新增门禁 `TestCIRedisJobRunsEveryRedisTestAddressPackage`、`TestOptInRealDependencySuitesHaveAnEntry`，`TestRedisClusterScriptNamesEveryClusterKeyedSuite` 计入不带标签的包。
 - integration 标签用例在本机真实依赖上补跑（v1.26.0 发布后，2026-10-14）：21 个包 186 个用例中 158 个 PASS、24 个由 2026-10-13 故障矩阵覆盖、4 个子进程入口按设计跳过，共享隔离环境组另跑 `-race` 无 data race；结果与仍未覆盖项见 docs/maintenance/EXTERNAL-VERIFICATION.md。`wiring/dataengine` 的 `TestRealDataEngineLargeBacklogRecovery`（只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行）沿用“先 Close 再 Flush”的旧夹具，在现行契约下失败；改用 `ManualReplay`，产品行为不变。
 
 ## [v1.26.0] - 2026-10-13

@@ -28,7 +28,15 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 
 **发现**：`TestRealDataEngineLargeBacklogRecovery` 只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行，此前没有入口设置它。它沿用“先 Close 停后台循环再 Flush”的旧夹具，而 Close 之后 Flush 按现行契约返回 `ErrRuntimeStopped`（`40804f27` 改其他六个夹具时漏了它），修前失败 `backlog_integration_test.go:129: dataengine runtime: shutdown has started`。属测试过时，产品行为不变；`35ef33f9` 改用 `ManualReplay`，两种形态 PASS（10 万记录、1 万实体、20 / 32 段，最终重启 pending=0）。
 
-**附带运行（不带 integration 标签、同样需要真实依赖、没有常设入口）**：`infra/storage/redis`、`infra/storage/redis/driver`、`infra/storage/versionstore`、`framework/cache` 中以 `ROOST_REDIS_TEST_ADDR` 准入的用例（CI Redis job 只跑 `wiring`、`service`），以及 `wiring/activity`、`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore` 中以 `ROOST_REVIEW_CLUSTER` 准入的用例（`redis-cluster-suites.sh` 只列 integration 包）。本次分别对私有 Redis 单机与私有 Cluster 跑过，全部 PASS；之后仍无脚本或 CI 自动覆盖。
+**不带 integration 标签的真实依赖用例与显式开关用例的入口（2026-10-14 起）**：补跑时发现它们没有任何入口设置所需变量，现已挂到既有入口，并由根包 `integration_coverage_test.go` 钉住（入口漏挂时对应门禁变红）：
+
+| 用例 | 入口 | 门禁 |
+| --- | --- | --- |
+| `infra/storage/redis`、`infra/storage/redis/driver`、`infra/storage/versionstore`、`framework/cache` 中以 `ROOST_REDIS_TEST_ADDR` 准入的用例（多数不带标签） | `.github/workflows/ci.yml` 的 `service-redis` job（skip 守卫的变量名改为整词匹配，隔离环境变量 `ROOST_DATAENGINE_IT_REDIS_ADDR` 的跳过不再误报） | `TestCIRedisJobRunsEveryRedisTestAddressPackage` |
+| `wiring/activity`、`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore` 中以 `ROOST_REVIEW_CLUSTER` 准入、不带标签的用例 | `wiring/scripts/integration/redis-cluster-suites.sh` | `TestRedisClusterScriptNamesEveryClusterKeyedSuite`（带不带标签都计入） |
+| DataEngine 大积压恢复（`ROOST_DATAENGINE_IT_BACKLOG`，单集合与 `_MULTI`）；`versionstore` 的 Cluster 写入令牌（`ROOST_MIRROR_LOCAL_REDIS_CLUSTER`） | `scripts/mirror-local.sh test-core` 私有环境。不放 `dataengine-env.sh test`：共享隔离环境由多个会话同时使用，10 万条记录的持续写入会干扰别人的用例 | `TestOptInRealDependencySuitesHaveAnEntry` |
+
+挂载后在本机按入口原样实跑一次（私有 redis-server、mirror-local 私有环境与其 3 主 3 从集群，用完关闭 / clean），全部 PASS：CI 等价 Redis 组 43 个包 ok、skip 守卫为空、race 组通过；`test-core` 的 5 个 MirrorLocal、versionstore Cluster、两种大积压恢复通过；`redis-cluster-suites.sh` 10 个包 ok（`-v` 复核集群子用例为 PASS 而非 SKIP）。CI 上的首次运行以 GitHub 结果为准，本地不等待。
 
 **观察**：服务层 Redis 用例不清理自己的键（私有 Redis 跑完 CI 等价组后剩约 2000 个键）；这一组应接私有 Redis，不要指向共享隔离环境的 Redis。共享隔离环境在两轮运行后没有遗留测试库、JetStream 流或 Redis 键。
 

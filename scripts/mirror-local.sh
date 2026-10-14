@@ -16,7 +16,8 @@
 #   scripts/mirror-local.sh test                  up → 生成工程里的 TestGeneratedRemoteMirrorLocal（两进程故障场景）→ clean
 #   scripts/mirror-local.sh test-core             up → remoteentity 的私有环境集成用例（缺省 ^TestMirrorLocal，
 #                                                 ROOST_MIRROR_LOCAL_CORE_RUN 覆盖；O-M6-3 墓碑 WAIT 的切主红绿、
-#                                                 O-M6-6 同 sid 重启接管旧代锁）→ clean
+#                                                 O-M6-6 同 sid 重启接管旧代锁）、versionstore 的 Cluster 写入令牌，以及 DataEngine 10 万记录大积压恢复
+#                                                 （ROOST_DATAENGINE_IT_BACKLOG，单集合与 _MULTI 各一次）→ clean
 #   scripts/mirror-local.sh bench <输出目录>       up → remoteentity 的 BenchmarkMirrorLocal*（当前源码）→ clean
 #     基线对照：ROOST_MIRROR_LOCAL_BASELINE=<基线源码目录>（例如 v1.20.2 的 detached worktree）时同一份基准文件
 #     复制到基线上，与当前源码交替各跑 ROOST_MIRROR_LOCAL_COUNT（缺省 6）次，benchstat 出对照（见文档 §4）。
@@ -385,6 +386,20 @@ run_core_tests() {
 		export ROOST_MIRROR_LOCAL=1
 		cd "$repo_dir"
 		GOWORK=off go test -tags integration -count=1 -run "${ROOST_MIRROR_LOCAL_CORE_RUN:-^TestMirrorLocal}" -v -timeout 10m ./framework/remoteentity
+		# versionstore 的 Cluster 写入令牌用例读 ROOST_MIRROR_LOCAL_REDIS_CLUSTER，只有这里的私有集群提供它。
+		GOWORK=off go test -tags integration -count=1 -run '^TestRealRedisCluster' -v -timeout 5m ./infra/storage/versionstore
+	)
+}
+
+# run_backlog_tests：DataEngine 大积压恢复（10 万条 WAL 记录投影到 Mongo，约 15s 的持续写入）。放在私有环境而不是
+# dataengine-env.sh test：那套环境多个会话共享，这样的写入负载会干扰别人的用例，也没有必要占用共享锁。
+run_backlog_tests() {
+	(
+		# shellcheck disable=SC1091
+		source "$ROOST_IT_ROOT/env.sh"
+		cd "$repo_dir"
+		ROOST_DATAENGINE_IT_BACKLOG=1 GOWORK=off go test -tags integration -count=1 -run '^TestRealDataEngineLargeBacklogRecovery$' -v -timeout 15m ./wiring/dataengine
+		ROOST_DATAENGINE_IT_BACKLOG=1 ROOST_DATAENGINE_IT_BACKLOG_MULTI=1 GOWORK=off go test -tags integration -count=1 -run '^TestRealDataEngineLargeBacklogRecovery$' -v -timeout 15m ./wiring/dataengine
 	)
 }
 
@@ -447,6 +462,7 @@ case "${1:-}" in
 		trap finish EXIT
 		environment_up
 		run_core_tests
+		run_backlog_tests
 		;;
 	bench)
 		[[ -n "${2:-}" ]] || { echo "bench needs an output directory" >&2; exit 2; }
@@ -454,5 +470,5 @@ case "${1:-}" in
 		environment_up
 		bench_all "$2"
 		;;
-	*) sed -n '2,23p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+	*) sed -n '2,24p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac
