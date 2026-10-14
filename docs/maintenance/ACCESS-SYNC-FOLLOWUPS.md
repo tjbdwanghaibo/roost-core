@@ -1,6 +1,6 @@
 # 玩家接入、运行服务与同步命名后续事项
 
-记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施（维护者 2026-10-14 决定继续暂缓）；玩家接入目录已于 2026-10-14 由 `game/player_agent` 改名为 `game/playeraccess`（c163e977）；Sync 命名已按下文实施，随 v1.26.0 发布。玩家协议业务示例见 [接入教程](../framework/PLAYER-ACCESS.md)。
+记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施（维护者 2026-10-14 决定继续暂缓）；玩家接入目录已于 2026-10-14 由 `game/player_agent` 改名为 `game/playeraccess`（dd362116）；Sync 命名已按下文实施，随 v1.26.0 发布。玩家协议业务示例见 [接入教程](../framework/PLAYER-ACCESS.md)。
 
 ## 1. Session 运行服务：保留能力，后续评估可选化
 
@@ -48,7 +48,7 @@
 
 后续建议：继续复用现有层，无需为处理玩家连接再建立一个名叫 session 的独立服务。
 
-状态：**已实施（c163e977，维护者 2026-10-14 批准，8b）。** 生成目录由 `game/player_agent` 改为 `game/playeraccess`，包名、生成器常量 `protocol.PlayerAccessImportSuffix`、协议绑定、Controller 骨架、access 模板、demo 模板与文档同步；只改名，类型、方法与派发行为不变。已有工程按 CHANGELOG `[Unreleased]` 手工 `git mv game/player_agent game/playeraccess` 并改业务 import 后 `roost project sync`：sync 只写新目录、不删除旧目录，也不改写业务文件。
+状态：**已实施（dd362116，维护者 2026-10-14 批准，8b）。** 生成目录由 `game/player_agent` 改为 `game/playeraccess`，包名、生成器常量 `protocol.PlayerAccessImportSuffix`、协议绑定、Controller 骨架、access 模板、demo 模板与文档同步；只改名，类型、方法与派发行为不变。已有工程按 CHANGELOG `[Unreleased]` 手工 `git mv game/player_agent game/playeraccess` 并改业务 import 后 `roost project sync`：sync 只写新目录、不删除旧目录，也不改写业务文件。
 
 ## 3. Sync 命名：已实施，随 v1.26.0 发布
 
