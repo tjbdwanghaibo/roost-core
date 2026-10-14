@@ -1,0 +1,70 @@
+package main
+
+import (
+	"testing"
+
+	"{{MODULE}}/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// 场景帧在线上的形状由服务端 scene.go 的 PushSyncPlayer 决定：RS v2 Sync 标志、原始帧字节，不包
+// EntitySyncPush PB；robot session 对 Sync 包不做 PB 解码（Message.Value 为 nil）。scene_watch 必须按
+// 这个形状读帧——只认 PB 值时它把每一帧都静默跳过，scene_expect 在 10 秒后以 "0 frames" 失败。
+func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
+	document, err := bson.Marshal(bson.M{"level": int32(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const subjectID int64 = 42
+	component, err := entitysync.EncodeSubjectUpdate(entity.SubjectSyncUpdate{
+		SubjectID: subjectID,
+		Namespace: "player",
+		Full:      true,
+		Payload:   entity.CopyFrozenSyncPayload(0, document),
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := frame.Encode(frame.Frame{
+		SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1},
+		Kind:         frame.Full,
+		Objects: []frame.ObjectDelta{{
+			Operation:  frame.ObjectCreate,
+			Ref:        frame.ObjectRef{ID: 1, Generation: 1},
+			Archetype:  1,
+			Components: []frame.ComponentDelta{{Operation: frame.ComponentSet, TypeID: 1, SchemaVersion: 1, Data: component}},
+		}},
+	}, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
+	watcher.capture(&session.Message{Packet: &transport.Packet{
+		Flags:   wire.FlagPush | wire.FlagSync,
+		MsgID:   msgid.MsgEntitySync,
+		Payload: payload,
+	}})
+	if watcher.failure != nil {
+		t.Fatalf("Sync 帧解码失败：%v", watcher.failure)
+	}
+	if watcher.frames != 1 {
+		t.Fatalf("Sync 标志的场景帧没有被读到：frames = %d，want 1", watcher.frames)
+	}
+	if level, ok := watcher.subjects[subjectID]["level"]; !ok || level != int32(3) {
+		t.Fatalf("subject %d 的字段没有合并进客户端视图：%v", subjectID, watcher.subjects)
+	}
+
+	// 同一个消息号却没有 Sync 标志：这个客户端读不了，必须让 watch 失败而不是静默跳过。
+	stray := &sceneWatcher{subjects: make(map[int64]bson.M)}
+	stray.capture(&session.Message{Packet: &transport.Packet{Flags: wire.FlagPush, MsgID: msgid.MsgEntitySync, Payload: payload}})
+	if stray.failure == nil {
+		t.Fatal("没有 Sync 标志的场景帧被静默接受或跳过，scene_expect 只会在超时后报 0 frames")
+	}
+}

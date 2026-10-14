@@ -651,6 +651,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
 		{write: "cmd/loadtest/main.go", why: "robots + thresholds: the load test that is also the regression test"},
+		{write: "cmd/loadtest/scene_watch_test.go", why: "scene_watch reads state frames the way the server sends them: raw frame bytes under the RS v2 Sync flag, not a PB message"},
 		{write: "deploy/dev/observability/docker-compose.yaml", why: "Prometheus + Grafana for a developer machine, apart from the regenerated infrastructure compose"},
 		{write: "deploy/dev/observability/prometheus.yml", why: "scrape the three ops endpoints and the load test"},
 		{write: "deploy/dev/observability/grafana/provisioning/datasources/prometheus.yaml", why: "the provisioned datasource"},

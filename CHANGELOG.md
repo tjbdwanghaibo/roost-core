@@ -7,6 +7,7 @@
 ### 修复
 
 - game-demo 账号 allocator（RV-20261014-01，`1ffb644f` 引入）：`account.key_prefix=roost:demo` 时计数键 `roost:demo:player_id` 恰好是退役键，第一次分配创建它后，重启或新副本把这份部署自己的计数器当旧数据拒绝，报错还建议删除它（照做会重发已有玩家 ID）。现在 BindRegistry 在任何 Redis 调用前把这个前缀作为配置错误拒绝、要求换前缀；分配时遇到退役键的报错改为先确认它不是另一份部署的当前计数器、再迁移，不再引导删除。拒绝旧计数键兼容的决定不变。**升级**：已经用 `roost:demo` 前缀运行的部署先停写，把该前缀下全部键（计数器在内）迁到新前缀；重新生成 game-demo 的 `internal/service/account/collaborators.go`。默认生成前缀 `roost:<项目名>:account` 不受影响。
+- game-demo 机器人 `scene_watch` 读不到场景帧（`ba0dd7c2` 引入，2026-10-07 起 framework-compat 三个 demo 格全部 `error_rate = 1`）：RS v2 改造后场景经 `PushSyncPlayer` 以 Sync 标志发送原始帧字节、不再包 `EntitySyncPush` PB，robot session 对 Sync 包不做 PB 解码，而 loadtest 的捕获只认 PB 值，每一帧都被静默跳过，`scene_expect` 10 秒后报 “0 frames”。现在 `scene_watch` 按 Sync 标志直接读包体，同消息号却无 Sync 标志的推送让 watch 失败而不是跳过；新增生成工程回归 `cmd/loadtest/scene_watch_test.go`（真实编码的 Full 帧），本地按 brew 依赖起全套服务跑 6 个机器人通过。**升级**：重新生成 game-demo 的 `cmd/loadtest/main.go` 并加入 `cmd/loadtest/scene_watch_test.go`。
 
 ### 测试整理与门禁
 

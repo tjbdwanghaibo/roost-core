@@ -33,6 +33,7 @@ import (
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
@@ -1143,12 +1144,12 @@ type sceneWatcher struct {
 	failure  error
 }
 
-func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
+func (watcher *sceneWatcher) consume(payload []byte) {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()
 	// One push is one complete frame for this session: its Epoch/Tick are
 	// the session's own clock, and each object is one subject.
-	decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+	decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
 	if err != nil {
 		watcher.failure = fmt.Errorf("decode state frame: %w", err)
 		return
@@ -1189,16 +1190,32 @@ func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
 func watchScene(_ context.Context, rb *robot.Context, _ any) error {
 	watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
 	rb.Blackboard.Set("scene_watcher", watcher)
-	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, func(message *session.Message) {
-		push, ok := message.Value.(*pb.EntitySyncPush)
-		if !ok {
-			return
-		}
-		watcher.consume(push)
-	}); err != nil {
+	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, watcher.capture); err != nil {
 		return fmt.Errorf("scene_watch: capture state frames: %w", err)
 	}
 	return nil
+}
+
+// capture is the push handler for MsgEntitySync. The scene sends each state
+// frame as raw frame bytes under the RS v2 Sync flag (PushSyncPlayer), not
+// wrapped in the EntitySyncPush PB message, and the robot session leaves a
+// Sync packet undecoded (Message.Value is nil): the frame is the packet
+// payload. A MsgEntitySync push without the Sync flag is not a frame this
+// client can read, so it fails the watch instead of being skipped — skipping
+// it is how scene_expect timed out with "0 frames" while frames were arriving.
+func (watcher *sceneWatcher) capture(message *session.Message) {
+	if message == nil || message.Packet == nil {
+		return
+	}
+	if message.Packet.Flags&wire.FlagSync == 0 {
+		watcher.mu.Lock()
+		if watcher.failure == nil {
+			watcher.failure = fmt.Errorf("state frame push (msg %d) arrived without the RS v2 Sync flag (flags %#x)", message.Packet.MsgID, message.Packet.Flags)
+		}
+		watcher.mu.Unlock()
+		return
+	}
+	watcher.consume(message.Packet.Payload)
 }
 
 // expectScene judges what arrived. Params: "fields" (comma separated, each

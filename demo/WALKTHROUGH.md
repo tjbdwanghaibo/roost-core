@@ -246,8 +246,9 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   `Scene.Close` 先停重载再关 Manager（服务先于 Nest Mod 停止）。一个实体运行时只能接一处，工程若另用 `NewModWithEntitySync`，scene 启动会明确失败。
   卸载时没人看着（自己的复制会话已丢、附近没人）框架不重载；之后业务再访问它、DataEngine 从 Mongo 加载出来时，`Scene.Start` 挂在 DataEngine
   `OnEntityLoaded` 上的钩子把场景的 subject `Rebind` 到新实例，稍后进入视野的观察者照常收到它；`Scene.Close` 停重载后解钩。
-- 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
-  否则推送到了也解不出来、静默丢弃。
+- 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。场景帧走 `PushSyncPlayer`：RS v2 Sync 标志、原始帧字节、
+  不包 `EntitySyncPush` PB，robot session 对 Sync 包不做 PB 解码，`scene_watch` 直接读包体（没有 Sync 标志的 `MsgEntitySync` 推送
+  让 watch 失败）；回归见生成的 `cmd/loadtest/scene_watch_test.go`。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
 
 ## 刷新：场景该有多少东西活着
 
