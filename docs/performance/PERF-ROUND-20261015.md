@@ -223,10 +223,23 @@
 - 端到端超过 50ms 的事件里，heartbeat 几乎全部来自 ticker 投递迟到（服务端只有 1 条）；业务约 2731 条在服务端（Gate / NATS / 排队），其余由压测端迟到或两段叠加构成。ticker 迟到与服务端排队的尖峰都可能来自同一次宿主调度延迟（§1），拆分只说明延迟发生在哪一段，不改变 §1 的归因。
 - Gate 往返 P99 13.01ms / max 146.7ms；Sync 提交→客户端 P99 18.27ms（服务端口径），计划→客户端 P99 31.89ms（含压测端）。
 
+### 30 分钟正式样本（13:29～13:59）：宿主受干扰，不作基线
+
+维护者要求所有负载压测完成拆分（`ddaab974`）后跑一次 30 分钟。参数同 v1.27.0 重档（`ROOST_PERF_CPU=0`，实际 10），标签 `perf1030-split-heavy-30m`，[JSON](benchmarks/perf-round-20261015/perf1030-split-heavy-30m.json)。计数、取值核验通过，拒绝 0，P99 门槛勉强通过（业务端到端 P99 48.02ms）。
+
+| 分段（ms） | 业务 P50 / P99 / max，>50ms | Heartbeat P50 / P99 / max，>50ms |
+| --- | --- | --- |
+| 端到端 `Completion` | 7.56 / 48.02 / 568.5，171443 | 6.91 / 18.44 / 272.0，478247 |
+| 压测端 `AdmitLag` | 6.50 / 13.96 / 240.7，38020 | 6.54 / 14.00 / 240.8，380221 |
+| 压测端 `ClientQueue` | 0.06 / 2.04 / 468.0，28710 | 0 |
+| **服务端 `Completion`** | **0.64 / 27.00 / 268.4，78210** | **0.16 / 4.08 / 154.1，26217** |
+
+各项比 v1.27.0 30 分钟样本差一个数量级（那次业务端到端 P99 12.49ms、>50ms 2117），且退化分布在整个 30 分钟：Nest short 池每分钟平均 worker 等待在 250～700µs 间跳动，基线样本稳定在约 300µs。同一时段宿主另有负载：ChatGPT / Codex 应用在开跑前 1 分钟（13:28:50）启动，Go 构建缓存在 13:36、13:46～13:47、13:53～13:55 有不属于本次运行的写入（本次编译在 13:29 完成），codebase-memory 进程 13:31 重启；结束时平均负载约 11。样本被并发宿主负载污染，**不作为服务端口径基线**，也不据此判定退化；需要在宿主空闲时重跑。
+
 ## 产物与进程清理
 
 - 随仓：[benchmarks/nestwal-codec-20261015/](benchmarks/nestwal-codec-20261015/)（benchstat、env）、[benchmarks/perf-round-20261015/](benchmarks/perf-round-20261015/)（各负载去掉逐秒 Samples 的结果 JSON、env、长尾分析摘要、episode 列表、burst 输出、宿主观察）。
-- 忽略目录（§5、§6）：`artifacts/perf/nest/perf1029-split-heavy-5m/`、`artifacts/perf/round-perf-1029/`（NATS pid 67580，11:01:46 停止）、`artifacts/perf/nest/perf1028-heavy-cpu8-30m/`、`artifacts/perf/saga/perf1028-saga-compensate-10-10m/`、`artifacts/perf/round-perf-1028/`（启动脚本、私有 NATS 日志；NATS pid 59272，10:46:41 停止）。
+- 忽略目录（§5、§6）：`artifacts/perf/nest/perf1030-split-heavy-30m/`、`artifacts/perf/round-perf-1030/`（NATS pid 97686，13:59:51 停止）、`artifacts/perf/nest/perf1029-split-heavy-5m/`、`artifacts/perf/round-perf-1029/`（NATS pid 67580，11:01:46 停止）、`artifacts/perf/nest/perf1028-heavy-cpu8-30m/`、`artifacts/perf/saga/perf1028-saga-compensate-10-10m/`、`artifacts/perf/round-perf-1028/`（启动脚本、私有 NATS 日志；NATS pid 59272，10:46:41 停止）。
 - 忽略目录：`artifacts/perf/nestwal-codec-20261015/`（测试二进制、原始 bench 输出）、`artifacts/perf/nest/perf1027-*`（完整 JSON、日志、二进制、trace）、`artifacts/perf/remote/perf1027-remote-80-30m/`、`artifacts/perf/saga/perf1027-saga-*`、`artifacts/perf/round-perf-1027/`（启动脚本、私有 NATS 日志、宿主 top / 新进程记录）。
 - 私有 NATS 每次负载结束立即停止：
   - `perf1027-heavy-tail-30m`：pid 71018，01:45:24 停止；
