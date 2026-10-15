@@ -1,0 +1,287 @@
+package migrations
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// v1Player 是旧程序（schema 1）写下的文档形状：元数据与 DataEngine 投影写的一致。
+func v1Player(id int64, version int64, extra bson.M) bson.M {
+	doc := bson.M{"_id": id, "_version": version, "_schema": int64(1), "_last_tx": fmt.Sprintf("tx-%d", id),
+		"name": fmt.Sprintf("p%d", id), "level": int32(7), "items": bson.M{"1001": int32(3)}}
+	for key, value := range extra {
+		doc[key] = value
+	}
+	return doc
+}
+
+func newJob(t *testing.T, collection, backup fmongo.ICollection) Job {
+	t.Helper()
+	steps, err := PlayerSteps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := PlayerJob(steps)
+	job.Collection, job.Backup, job.BatchSize = collection, backup, 2
+	return job
+}
+
+// 步骤只看旧版本真的有的字段：有武器落进武器槽，没武器不造空子文档，数字的各种拼写都接受。
+func TestPlayerStepMovesTheWeaponIntoItsSlot(t *testing.T) {
+	steps, err := PlayerSteps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, weapon := range []any{int64(2001), int32(2001), float64(2001)} {
+		document := &Document{Fields: v1Player(42, 5, bson.M{"weapon_id": weapon}), version: 1}
+		if err := steps.RunFrom(context.Background(), document, 1, 2); err != nil {
+			t.Fatalf("weapon %T: %v", weapon, err)
+		}
+		if _, left := document.Fields["weapon_id"]; left || document.DataVersion() != 2 {
+			t.Fatalf("weapon %T: weapon_id left or version %d", weapon, document.DataVersion())
+		}
+		slot := document.Fields["equipment"].(bson.M)["slots"].(bson.M)["1"].(bson.M)
+		if slot["item_id"] != int64(2001) || document.Fields["name"] != "p42" {
+			t.Fatalf("weapon %T: slot=%v name=%v", weapon, slot, document.Fields["name"])
+		}
+	}
+	bare := &Document{Fields: v1Player(43, 5, nil), version: 1}
+	if err := steps.RunFrom(context.Background(), bare, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := bare.Fields["equipment"]; present {
+		t.Fatal("a player who wore nothing was given an equipment sub-document")
+	}
+	broken := &Document{Fields: v1Player(44, 5, bson.M{"weapon_id": "sword"}), version: 1}
+	if err := steps.RunFrom(context.Background(), broken, 1, 2); err == nil {
+		t.Fatal("a weapon_id that is not a number was accepted")
+	}
+}
+
+// plan 不写；apply 备份原样、条件改写并推进 _version；结果能被生成 DAO 按当前 schema 加载；
+// 再跑一次 apply 不再改写；墓碑不动。
+func TestPlayerMigrationPlanApplyVerify(t *testing.T) {
+	ctx := context.Background()
+	client := mongotest.NewClient()
+	players, backup := client.Collection("game", "player"), client.Collection("game", "player_backup")
+	for _, doc := range []bson.M{
+		v1Player(1, 4, bson.M{"weapon_id": int64(2001)}),
+		v1Player(2, 9, nil),
+		v1Player(3, 2, bson.M{"weapon_id": int32(2002)}),
+		{"_id": int64(4), "_version": int64(3), "_schema": int64(1), "_deleted": true},
+	} {
+		if err := players.Seed(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	job := newJob(t, players, backup)
+
+	plan, err := job.Plan(ctx)
+	if err != nil || plan.Pending != 3 || plan.Converted != 3 || plan.Tombstones != 1 {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	if doc, _ := players.Lookup(int64(1)); doc["weapon_id"] == nil || backup.Len() != 0 {
+		t.Fatal("plan wrote something")
+	}
+	if _, err := job.Verify(ctx); err == nil {
+		t.Fatal("verify passed before apply")
+	}
+
+	applied, err := job.Apply(ctx)
+	if err != nil || applied.Written != 3 || applied.Pending != 0 || applied.AtTarget != 3 {
+		t.Fatalf("apply = %+v, %v", applied, err)
+	}
+	if backup.Len() != 3 {
+		t.Fatalf("backup holds %d documents, want 3", backup.Len())
+	}
+	original, _ := backup.Lookup(int64(1))
+	if original["weapon_id"] != int64(2001) || original["_schema"] != int64(1) {
+		t.Fatalf("backup is not the original: %v", original)
+	}
+	migrated, _ := players.Lookup(int64(1))
+	raw, err := bson.Marshal(migrated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := db.NewPlayerDao()
+	version, _ := toInt64(migrated["_version"])
+	schema, _ := toInt64(migrated["_schema"])
+	if err := dao.RestorePersisted(raw, uint32(schema), uint64(version)); err != nil {
+		t.Fatalf("the migrated document does not load: %v", err)
+	}
+	if piece, ok := dao.GetEquipment().GetSlots(1); !ok || piece.GetItemID() != 2001 || version != 5 || migrated["_last_tx"] != "schema-migration:"+PlayerWeaponToEquipment {
+		t.Fatalf("migrated player: slot=%v version=%d last_tx=%v", piece, version, migrated["_last_tx"])
+	}
+	if tomb, _ := players.Lookup(int64(4)); tomb["_schema"] != int64(1) {
+		t.Fatal("the tombstone was rewritten")
+	}
+	if report, err := job.Verify(ctx); err != nil || report.AtTarget != 3 {
+		t.Fatalf("verify = %+v, %v", report, err)
+	}
+	again, err := job.Apply(ctx)
+	if err != nil || again.Written != 0 || again.AtTarget != 3 {
+		t.Fatalf("second apply = %+v, %v", again, err)
+	}
+}
+
+// 任何一份转换或校验失败，apply 一份都不写；未知 schema 与 Remote 信封在写之前拒绝。
+func TestPlayerMigrationRefusesBeforeWriting(t *testing.T) {
+	ctx := context.Background()
+	for name, bad := range map[string]bson.M{
+		"bad weapon":      v1Player(9, 1, bson.M{"weapon_id": "sword"}),
+		"future schema":   {"_id": int64(9), "_version": int64(1), "_schema": int64(3)},
+		"remote envelope": {"_id": int64(9), "_ver": int64(1), "_schema": int64(1), "_version": int64(1)},
+		"no version":      {"_id": int64(9), "_schema": int64(1)},
+	} {
+		client := mongotest.NewClient()
+		players, backup := client.Collection("game", "player"), client.Collection("game", "player_backup")
+		if err := players.Seed(v1Player(1, 4, bson.M{"weapon_id": int64(2001)})); err != nil {
+			t.Fatal(err)
+		}
+		if err := players.Seed(bad); err != nil {
+			t.Fatal(err)
+		}
+		report, err := newJob(t, players, backup).Apply(ctx)
+		if err == nil || report.Written != 0 || backup.Len() != 0 {
+			t.Fatalf("%s: apply = %+v, %v; want a refusal with nothing written", name, report, err)
+		}
+		if doc, _ := players.Lookup(int64(1)); doc["_schema"] != int64(1) {
+			t.Fatalf("%s: a document was rewritten before the refusal", name)
+		}
+	}
+}
+
+// writerStillRunning 模拟没停干净的写入者：第一次改写之前把文档推进一版。
+type writerStillRunning struct {
+	fmongo.ICollection
+	once bool
+}
+
+func (c *writerStillRunning) ReplaceOne(ctx context.Context, filter any, replacement any) (*fmongo.UpdateResult, error) {
+	if !c.once {
+		c.once = true
+		id := filter.(bson.M)["_id"]
+		if _, err := c.ICollection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": bson.M{"_version": int64(1)}, "$set": bson.M{"_last_tx": "late-writer"}}); err != nil {
+			return nil, err
+		}
+	}
+	return c.ICollection.ReplaceOne(ctx, filter, replacement)
+}
+
+// 停写没做完时，条件改写不成立，整次中止，不覆盖别人的写入。
+func TestPlayerMigrationStopsWhenSomeoneIsStillWriting(t *testing.T) {
+	client := mongotest.NewClient()
+	players, backup := client.Collection("game", "player"), client.Collection("game", "player_backup")
+	if err := players.Seed(v1Player(1, 4, bson.M{"weapon_id": int64(2001)})); err != nil {
+		t.Fatal(err)
+	}
+	_, err := newJob(t, &writerStillRunning{ICollection: players}, backup).Apply(context.Background())
+	if !errors.Is(err, ErrNotStopped) {
+		t.Fatalf("apply with a live writer = %v, want ErrNotStopped", err)
+	}
+	if doc, _ := players.Lookup(int64(1)); doc["_last_tx"] != "late-writer" || doc["_schema"] != int64(1) {
+		t.Fatalf("the late write was overwritten: %v", doc)
+	}
+}
+
+// 回退只恢复“仍是迁移写的那一版”；之后被业务写过的列为 Refused，不覆盖。
+func TestPlayerMigrationRollback(t *testing.T) {
+	ctx := context.Background()
+	client := mongotest.NewClient()
+	players, backup := client.Collection("game", "player"), client.Collection("game", "player_backup")
+	for _, doc := range []bson.M{v1Player(1, 4, bson.M{"weapon_id": int64(2001)}), v1Player(2, 9, nil)} {
+		if err := players.Seed(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	job := newJob(t, players, backup)
+	if _, err := job.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 新程序已经写了玩家 2。
+	if _, err := players.UpdateOne(ctx, bson.M{"_id": int64(2)}, bson.M{"$set": bson.M{"_version": int64(11), "_last_tx": "new-build", "level": int32(8)}}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := job.Rollback(ctx)
+	if err == nil || report.RolledBack != 1 || len(report.Refused) != 1 || !strings.Contains(report.Refused[0], "_id=2") {
+		t.Fatalf("rollback = %+v, %v", report, err)
+	}
+	restored, _ := players.Lookup(int64(1))
+	if restored["_schema"] != int64(1) || restored["weapon_id"] != int64(2001) || restored["_version"] != int64(4) {
+		t.Fatalf("player 1 was not restored as it was: %v", restored)
+	}
+	if kept, _ := players.Lookup(int64(2)); kept["level"] != int32(8) {
+		t.Fatalf("rollback overwrote a write made after the migration: %v", kept)
+	}
+	// 再跑一次：已恢复的按幂等计数，被拒绝的仍拒绝。
+	again, err := job.Rollback(ctx)
+	if err == nil || again.Resumed != 1 || len(again.Refused) != 1 {
+		t.Fatalf("second rollback = %+v, %v", again, err)
+	}
+}
+
+// 真实 Mongo 上的同一条流程：plan → apply → verify → 重复 apply → rollback。
+// 门变量 ROOST_MIGRATION_IT_MONGO_URI 指向副本集（scripts/test-demo-generated.sh 设置）；
+// 用唯一库名，结束时删除。
+func TestPlayerMigrationRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_MIGRATION_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_MIGRATION_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close(context.Background()) }()
+	database := client.Database(fmt.Sprintf("schemamigrate_it_%d", time.Now().UnixNano()))
+	defer func() { _ = database.Drop(context.Background()) }()
+	players, backup := database.Collection("player"), database.Collection("player_backup")
+	for id := int64(1); id <= 5; id++ {
+		extra := bson.M{}
+		if id%2 == 1 {
+			extra["weapon_id"] = 2000 + id
+		}
+		if _, err := players.InsertOne(ctx, v1Player(id, id+1, extra)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	job := newJob(t, players, backup)
+	if plan, err := job.Plan(ctx); err != nil || plan.Converted != 5 {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	if applied, err := job.Apply(ctx); err != nil || applied.Written != 5 || applied.Pending != 0 {
+		t.Fatalf("apply = %+v, %v", applied, err)
+	}
+	if verified, err := job.Verify(ctx); err != nil || verified.AtTarget != 5 {
+		t.Fatalf("verify = %+v, %v", verified, err)
+	}
+	if again, err := job.Apply(ctx); err != nil || again.Written != 0 {
+		t.Fatalf("second apply = %+v, %v", again, err)
+	}
+	if rolled, err := job.Rollback(ctx); err != nil || rolled.RolledBack != 5 {
+		t.Fatalf("rollback = %+v, %v", rolled, err)
+	}
+	var restored bson.M
+	if err := players.FindOne(ctx, bson.M{"_id": int64(3)}, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if weapon, _ := toInt64(restored["weapon_id"]); weapon != 2003 {
+		t.Fatalf("player 3 after rollback: %v", restored)
+	}
+	if schema, _ := toInt64(restored["_schema"]); schema != 1 {
+		t.Fatalf("player 3 after rollback is at schema %d", schema)
+	}
+}

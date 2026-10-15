@@ -5,6 +5,8 @@
 # 再运行；门变量没人设置时它们到处跳过，go test ./... 与 framework-compat / demo-publish 的生成工程测试都看不到：
 #   - game/controllers/player 的 TestGuildIDsRealMongo*（ROOST_GUILD_IT_MONGO_URI：三次进程共享 Mongo 与 WAL 的
 #     发号恢复、首次发号并发 upsert）；
+#   - db/migrations 的 TestPlayerMigrationRealMongo（ROOST_MIGRATION_IT_MONGO_URI：Player schema 离线迁移的
+#     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
 #   - internal/service/platform 的 TestPurchaseDeliveryDurableWinner（ROOST_REVIEW_REDIS；ROOST_REVIEW_CLUSTER
 #     由调用方给，mirror-local.sh test-core 传入私有 3 主 3 从，没给时集群子用例跳过）；
 #   - codegen/internal/roost 的 TestGateGeneratedBusinessConsumer（ROOST_DATAENGINE_IT_NATS_URL）。
@@ -27,5 +29,6 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	cd "$work_dir/planet"
 	ROOST_GUILD_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestGuildIDsRealMongo' ./game/controllers/player
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseDeliveryDurableWinner$' ./internal/service/platform
+	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations
 )
 go test -count=1 -timeout 10m -v -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost

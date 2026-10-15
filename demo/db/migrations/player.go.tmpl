@@ -1,0 +1,118 @@
+// Package migrations 是本工程的离线 schema 迁移：业务改了持久结构时，停写后用它把库里的旧文档
+// 一次性转换成当前 schema，再启动只认当前 schema 的新程序。
+//
+// 运行时不做转换：生成 DAO 的 RestorePersisted 与 DataEngine 的 EntityRepository 只接受
+// `//roost:dao ... schema=N` 声明的当前版本，旧版本和未来版本都在水合前以
+// dataengine.ErrSchemaMismatch 拒绝。所以迁移是一次运维操作，不是加载路径上的一步；
+// 完整流程（停写 → 备份 → 转换 → 校验 → 切换版本 → 回退）见 docs/framework/SCHEMA-MIGRATION.md
+// 与本目录的 offline.go。
+package migrations
+
+import (
+	"context"
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/migration"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// PlayerWeaponToEquipment 是 Player 从 schema 1 到 2 的变化：v1 把武器存成 Player 上扁平的
+// weapon_id，v2 存成按槽位键的 equipment 子文档（db/def/player.go 的 Equipment）。
+//
+// 加字段不需要迁移（BSON 解码给零值）；需要迁移的是改形状——新定义无论如何都找不到旧的那个数字。
+const PlayerWeaponToEquipment = "player_weapon_to_equipment"
+
+// weaponSlot 是武器所在的槽位；game/equipment 给槽位命名，这里只需要它的编号。
+const weaponSlot = "1"
+
+// PlayerSteps 登记 Player 的全部离线步骤。登记是显式调用而不是 init()：一个因为包恰好被链接进来
+// 而运行的迁移，是没人决定要运行的迁移。
+func PlayerSteps() (*migration.Registry, error) {
+	steps := migration.NewRegistry()
+	if err := steps.Register(migration.Step{Name: PlayerWeaponToEquipment, From: 1, To: 2, Apply: playerWeaponToEquipment}); err != nil {
+		return nil, err
+	}
+	return steps, nil
+}
+
+// PlayerJob 描述 Player 集合的这次迁移：目标版本就是生成 DAO 的当前 schema，校验走生成 DAO 自己的
+// RestorePersisted——新程序加载时用的就是它。
+func PlayerJob(steps *migration.Registry) Job {
+	return Job{
+		Name:  PlayerWeaponToEquipment,
+		Steps: steps,
+		From:  1,
+		To:    int32(db.PlayerDaoSchemaVersion),
+		Check: checkPlayer,
+	}
+}
+
+// playerWeaponToEquipment 只读旧版本真的有的字段，并接受旧文档里数字的各种 Go 类型：
+// 存下来的数字是什么类型取决于写它的驱动和程序版本。
+func playerWeaponToEquipment(_ context.Context, data any) error {
+	document, ok := data.(*Document)
+	if !ok {
+		return fmt.Errorf("player 1->2: want *migrations.Document, got %T", data)
+	}
+	weapon, worn := document.Fields["weapon_id"]
+	delete(document.Fields, "weapon_id")
+	if !worn {
+		return nil
+	}
+	itemID, ok := toInt64(weapon)
+	if !ok {
+		return fmt.Errorf("player 1->2: _id=%v weapon_id has type %T", document.Fields["_id"], weapon)
+	}
+	if itemID > 0 {
+		document.Fields["equipment"] = bson.M{"slots": bson.M{weaponSlot: bson.M{"item_id": itemID, "level": int32(1)}}}
+	}
+	return nil
+}
+
+// checkPlayer 是写入前对每份转换结果的校验：
+//  1. 用生成 DAO 按目标 schema 解码（RestorePersisted 与运行时冷加载是同一个入口），并核对身份；
+//  2. 业务不变量：旧武器落在武器槽里，旧字段不再存在。
+func checkPlayer(before, after bson.M) error {
+	raw, err := bson.Marshal(after)
+	if err != nil {
+		return err
+	}
+	dao := db.NewPlayerDao()
+	version, _ := toInt64(after["_version"])
+	if err := dao.RestorePersisted(raw, db.PlayerDaoSchemaVersion, uint64(version)); err != nil {
+		return fmt.Errorf("restore as schema %d: %w", db.PlayerDaoSchemaVersion, err)
+	}
+	id, _ := toInt64(after["_id"])
+	if dao.Id() != id {
+		return fmt.Errorf("decoded id %d, document _id %d", dao.Id(), id)
+	}
+	if _, left := after["weapon_id"]; left {
+		return fmt.Errorf("weapon_id is still present")
+	}
+	if weapon, worn := before["weapon_id"]; worn {
+		want, _ := toInt64(weapon)
+		if want > 0 {
+			piece, ok := dao.GetEquipment().GetSlots(1)
+			if !ok || piece == nil || piece.GetItemID() != want {
+				return fmt.Errorf("weapon %d did not land in slot %s", want, weaponSlot)
+			}
+		}
+	}
+	return nil
+}
+
+// toInt64 接受旧文档可能用到的数字类型；不是数字时报告 false，交给调用方决定是否拒绝。
+func toInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, true
+	case int32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case float64:
+		return int64(typed), typed == float64(int64(typed))
+	}
+	return 0, false
+}

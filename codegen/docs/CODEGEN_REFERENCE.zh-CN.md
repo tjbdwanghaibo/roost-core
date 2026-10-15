@@ -240,11 +240,11 @@ dao.DelItems(10001)
 
 标量与嵌套对象用 `Get<Field>()`；slice 用 `Get<Field>(idx)` / `Add<Field>` / `Set<Field>All` / `Range<Field>` / `<Field>Len`；map 用 `Get<Field>(key)` / `Set<Field>(key, val)` / `Del<Field>(key)` / `Range<Field>` / `<Field>Len`。
 
-生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、schema migration、`MutationParticipant`、`RestorePersisted` 和 `DirtyTracker()`。三件要点：
+生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、`MutationParticipant`、`RestorePersisted`（只接受 `schema=` 声明的当前版本，不做迁移；改形状按[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md)离线转换）和 `DirtyTracker()`。三件要点：
 
 - **dirty**：每个字段一个掩码位。setter 先比较再标记；持久化变化经 `nest.MarkPersist*` 进入当前 Nest 事务，同步变化留在 DAO tracker（`DirtyTracker()` 返回 `*dataengine.Tracker`，只保存已接受的持久化版本和 sync dirty）。
 - **undo**：`rollback=undo` 的事务里 mutator 先登记逆操作再改值，回滚时逐字段撤销；`rollback=state` 用快照。登记失败直接 panic——逃出回滚覆盖范围的修改会静默破坏事务保证。
-- **patch**：map 的键级修改记录为 MongoDB 路径级 `$set` / `$unset`（键不能安全编码为路径时退回整字段）。`PrepareMutation(change)` 把新建 / migration / replace / 全字段修改编码为 Put，普通修改编码为字段级 Patch，删除编码为带版本的 tombstone；Patch 不携带整文档 fallback。嵌套 struct 生成到 `gen_<name>_nested.go`，内嵌 `dataengine.DirtyHook`，深层修改照样进入事务 patch。
+- **patch**：map 的键级修改记录为 MongoDB 路径级 `$set` / `$unset`（键不能安全编码为路径时退回整字段）。`PrepareMutation(change)` 把新建 / replace / 全字段修改编码为 Put，普通修改编码为字段级 Patch，删除编码为带版本的 tombstone；Patch 不携带整文档 fallback。嵌套 struct 生成到 `gen_<name>_nested.go`，内嵌 `dataengine.DirtyHook`，深层修改照样进入事务 patch。
 
 持久化 setter / map mutator 不能在事务外调用；`durability=memory` handler 也不能修改 persistent 字段——`rollback=none` 时 setter panic，`rollback=state|undo` 时事务在提交点以 `nest.ErrMemoryTransactionPersistentWrite` 整笔失败回滚并点名实体与字段（生成 DAO 为此带 `PersistFieldNames(mask)`）。`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败同样 panic：接口没有错误位，返回 nil 等于静默丢数据。
 
@@ -284,7 +284,7 @@ type MonsterDao struct {
 - `nocoll` 是裸标志：不能写成 `nocoll=true`，也不能与 `coll=`、`db=`、`dbscope=`、`schema=` 同时出现（生成期报错并点名冲突的键）。
 - **全部字段**（`dao:"-"` 除外）必须 `nopersist`；没写 dao tag 的字段默认 `persist,sync`，同样算持久字段。违反时报错并点名每个持久字段。
 - 生成物保留字段 mask、getter/mutator、undo、`CaptureRollbackState`/`RestoreRollbackState`、`<Dao>SyncFields`、`MarshalSync`/`ApplySync`；
-  **不生成** `<Dao>DBName`/`<Dao>Collection`/`<Dao>SchemaVersion`、`DbScope`、`Migrate`、`PrepareMutation`/`AcceptMutation`、`Marshal*`、`Unmarshal`、`RestorePersisted`。
+  **不生成** `<Dao>DBName`/`<Dao>Collection`/`<Dao>SchemaVersion`、`DbScope`、`PrepareMutation`/`AcceptMutation`、`Marshal*`、`Unmarshal`、`RestorePersisted`。
   `entity.DaoInterface` 仍满足：`DbName()` 返回 `""`，`CollName()` 返回 `<Dao>RegistryKey`（值为类型名，只是实体 DaoManager 的登记键，不是集合名）。
 - Entity 生成器读 DAO 包的生成源码认出它（`<Dao>RegistryKey` 常量），接线改用该常量；持久实体或 `remote=managed` 实体使用它时生成期报错。
   DAO 在实体所在模块之外时无法在生成期判定，接线仍引用 `<Dao>Collection`，编译期失败。
