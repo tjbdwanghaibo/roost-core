@@ -4,9 +4,9 @@
 
 | # | 事项 | 状态 |
 | --- | --- | --- |
-| D1 | Lockstep 历史的保留与过期策略 | 待决定 |
+| D1 | Lockstep 历史的保留与过期策略 | 已决定 C，已实施 |
 | D2 | SyncBus 有限投递的兜底 | 待决定 |
-| D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 待决定 |
+| D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 已决定 A，已实施 |
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 待决定 |
 | D5 | 静态 Player 跨机迁移的参考流程 | 待决定 |
 
@@ -14,7 +14,7 @@
 
 ## D1 Lockstep 历史的保留与过期策略
 
-**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`0347c520`）。** 方案 B（全量快照恢复）不做，等有具体游戏需求再定。
+**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）不做，等有具体游戏需求再定。
 
 **实施结果**：
 - `MatchConfig.HistoryRetainFrames` 默认 `DefaultHistoryRetainFrames` = **3600 帧**（60Hz 下 60 秒、30Hz 下 120 秒；依据：重连窗口按 60 秒、常见逻辑帧率上限 60Hz 换算，10 席 × 8 字节输入约 1.5MB / 局）。`RetainFullHistory`（-1）显式关闭，退回宿主手动 `TrimHistory` / `TrimHashReports`；正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64（Sequencer 视为仍在线的落后量，同时覆盖一整页追帧与最大冗余深度），不满足时 `NewMatch` 返回 `ErrMatchConfigInvalid`。
@@ -44,7 +44,7 @@
 
 ## D3 Entity Sync `Drain` 遇到永久拒绝的出口
 
-**状态：维护者 2026-10-15 决定 A（按推荐），已实施（`0eed706e`）。** Drain 行为不变、不放弃任何条目；方案 B（明确放弃出口）需先梳理 policy 侧哪些拒绝是永久的，未做。
+**状态：维护者 2026-10-15 决定 A（按推荐），已实施（`b86a1286`）。** Drain 行为不变、不放弃任何条目；方案 B（明确放弃出口）需先梳理 policy 侧哪些拒绝是永久的，未做。
 
 **实施结果**：
 - ctx 超时 / 取消时 `Manager.Drain` 返回 `*entitysync.DrainStalledError`：`errors.Is(err, context.DeadlineExceeded / Canceled)` 不变；`Stalls` 列前 `DrainStallLimit` = 8 项，`Total` 为全部条目数。每项有来源（subject / snapshot / policy / interest）、subject 与会话、最后一次暂缓或拒绝的原因（`commit_pending`、`durability_wait`、`prepare_failed`、`snapshot_budget`、`subscribe_refused`、`policy_pending` 等）与说明、连续等待时长、最后错误。

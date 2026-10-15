@@ -329,7 +329,7 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 ## Lockstep 自动保留与追帧失败通知（2026-10-15）
 
-基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `0347c520`。
+基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `a6376934`。
 
 **做了什么**：`MatchConfig.HistoryRetainFrames` 默认 3600 帧自动保留（`RetainFullHistory` 关闭，正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64）；`Tick` 在发出本次追帧页之后裁历史，hash 报告按 64 帧步长跟随窗口。越界追帧在 `StartCatchup` 时即返回 `*CatchupUnservableError`，下一次 `Tick` 经可靠通道发 C9 v1 追帧失败通知；Go `FrameAssembler` / `robot.LockstepBot` 与 C# `LockstepAssembler` / `LockstepClient` 收到后终止本场，不再请求追帧。使用说明见[使用指南](guide/04-sync.md#追帧越界明确失败不自动重同步)。
 
