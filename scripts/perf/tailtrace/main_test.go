@@ -4,8 +4,8 @@ import "testing"
 
 // 夹具 tailtrace_test.go 的 trace.Log 消息格式与这里的解析、分段顺序是一份约定，两边一起改。
 func TestParseTailLogAndSegmentsFollowFixtureOrder(t *testing.T) {
-	ev := parseTailLog("stream=business total_us=80000 admit_us=5000 queue_us=60000 handler_us=10000 release_us=5000")
-	if ev.Stream != "business" || ev.TotalMS != 80 || ev.Parts["queue"] != 60000 {
+	ev := parseTailLog("stream=business total_us=80000 admit_us=5000 client_us=2000 queue_us=58000 handler_us=10000 release_us=5000")
+	if ev.Stream != "business" || ev.TotalMS != 80 || ev.Parts["queue"] != 58000 || ev.Parts["client"] != 2000 {
 		t.Fatalf("parsed=%+v", ev)
 	}
 	ev.end = 1_000_000_000
@@ -14,7 +14,7 @@ func TestParseTailLogAndSegmentsFollowFixtureOrder(t *testing.T) {
 	want := []struct {
 		name       string
 		start, end int64
-	}{{"window", 920_000_000, 1_000_000_000}, {"admit", 920_000_000, 925_000_000}, {"queue", 925_000_000, 985_000_000}, {"handler", 985_000_000, 995_000_000}, {"release", 995_000_000, 1_000_000_000}}
+	}{{"window", 920_000_000, 1_000_000_000}, {"admit", 920_000_000, 925_000_000}, {"client", 925_000_000, 927_000_000}, {"queue", 927_000_000, 985_000_000}, {"handler", 985_000_000, 995_000_000}, {"release", 995_000_000, 1_000_000_000}}
 	if len(segs) != len(want) {
 		t.Fatalf("segments=%+v", segs)
 	}
@@ -23,9 +23,15 @@ func TestParseTailLogAndSegmentsFollowFixtureOrder(t *testing.T) {
 			t.Fatalf("segment %d=%+v want %+v", i, segs[i], w)
 		}
 	}
-	segs[2].Running = 50
+	segs[3].Running = 50
 	ev.Segments = segs
 	if got := classify(ev); got != "queue:worker-busy(head-of-line)" {
 		t.Fatalf("label=%q", got)
+	}
+	client := parseTailLog("stream=business total_us=80000 admit_us=5000 client_us=60000 queue_us=5000 handler_us=5000 release_us=5000")
+	client.end, client.start = ev.end, ev.start
+	client.Segments = buildSegments(client)
+	if got := classify(client); got != "client-queue(harness)" {
+		t.Fatalf("client label=%q", got)
 	}
 }

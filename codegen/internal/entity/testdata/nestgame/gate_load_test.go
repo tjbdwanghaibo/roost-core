@@ -74,11 +74,12 @@ func newGateFrontend(t *testing.T, engine *nest.NestMgr, name nest.HandlerName, 
 	}
 	var err error
 	deps := gateway.GameDependencies{Client: gameRaw, Authenticator: auth, QueueFactory: gatewiring.AsyncQueueFactory, Ready: func() bool { return true }, Matches: matches, Dispatch: func(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
-		if id != 1 || kind != wire.PayloadProtobuf || len(payload) != 18 {
+		if id != 1 || kind != wire.PayloadProtobuf || len(payload) != 26 {
 			return nil, gateway.ErrInvalidRequest
 		}
 		index := int(session.Principal().PlayerID) - 1
-		in := invocation{planned: loadTime(int64(binary.LittleEndian.Uint64(payload))), admitted: loadTime(int64(binary.LittleEndian.Uint64(payload[8:]))), change: payload[16] == 1, sample: payload[17] == 1}
+		in := invocation{planned: loadTime(int64(binary.LittleEndian.Uint64(payload))), admitted: loadTime(int64(binary.LittleEndian.Uint64(payload[8:]))),
+			sent: loadTime(int64(binary.LittleEndian.Uint64(payload[16:]))), change: payload[24] == 1, sample: payload[25] == 1}
 		_, err := engine.Request(ctx, name, units[index].ID(), nest.NewParams(in))
 		if err != nil {
 			return nil, err
@@ -190,16 +191,18 @@ func newGateFrontend(t *testing.T, engine *nest.NestMgr, name nest.HandlerName, 
 			sequence := uint32(1)
 			for in := range jobs {
 				sequence++
-				var payload [18]byte
+				// sent 是请求离开模拟客户端的时刻，服务端分段从这里起算（见 streamResult）。
+				began := time.Now()
+				var payload [26]byte
 				binary.LittleEndian.PutUint64(payload[:8], uint64(loadTimestamp(in.planned)))
 				binary.LittleEndian.PutUint64(payload[8:16], uint64(loadTimestamp(in.admitted)))
+				binary.LittleEndian.PutUint64(payload[16:24], uint64(loadTimestamp(began)))
 				if in.change {
-					payload[16] = 1
+					payload[24] = 1
 				}
 				if in.sample {
-					payload[17] = 1
+					payload[25] = 1
 				}
-				began := time.Now()
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 				err := wire.Write(conn, []*wire.Packet{{MsgID: 1, Seq: sequence, Payload: payload[:]}}, config.MaxPayloadBytes)
 				if err == nil {

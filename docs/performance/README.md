@@ -38,4 +38,16 @@ bash scripts/perf/nest-game.sh
 
 运行前另设唯一 `ROOST_PERF_LABEL` 和私有 `ROOST_DATAENGINE_IT_NATS_URL`。`ROOST_PERF_CPU=0`保留Go自动选择，不代表运行时只有零个逻辑处理器；记录实际GOMAXPROCS。race、profile与索引刷新不要并跑正式延迟测量。其他模块命令及微基准见各报告，本文档整理未重新执行压测。
 
+**读结果时分清压测端与服务端。** `Messages` / `Heartbeats` 的 `Completion` 从“计划时刻”起算、`QueueWait` 从“投递时刻”起算，两者都混有压测框架自己的等待，保留它们只为与历史样本同口径比较（P99≤50ms 门槛仍按 `Completion`，偏保守）。同一段时间按下面拆开：
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `Harness.AdmitLag` | 计划时刻 → ticker 投递 | 压测端：发生器只在 Nest 10ms tick 里批量投递，天然 0～10ms；ticker 迟到也记在这里 |
+| `Harness.ClientQueue` | 投递 → 模拟客户端写出请求 | 压测端：每个玩家连接一次只有一条在途请求，含等前一条回包；直接投递（heartbeat、无 Gate）恒为 0 |
+| `Server.QueueWait` | 请求写出 → handler 开始 | 服务端：Gate、NATS、Game 接入、Nest 排队 |
+| `Handler` | handler 本身 | 服务端 |
+| `Server.Completion` | 请求写出 → Entity 释放 | 服务端合计，评估框架延迟看这一项 |
+
+`GateRoundTrip` 是客户端写出到收到回包（服务端为主）。Sync 的 `PlannedToClient` 从计划时刻起算、含压测端等待；`ChangedToClient` / `CommittedToClient` 从 handler 改值 / 提交起算，是服务端到客户端的同步延迟。2026-10-15 之前的样本没有这几项拆分。
+
 长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比、长尾簇的墙钟分钟相位，以及 trace 中各分段的 goroutine 状态；单个 trace 的簇内对照用 [burst](../../scripts/perf/tailtrace/burst/main.go)。宿主噪声在本机很明显，见 [2026-10-15 报告 §1](PERF-ROUND-20261015.md#1-长尾延迟定位)。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。

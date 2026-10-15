@@ -549,8 +549,8 @@ func parseTailLog(msg string) *traceEvent {
 
 // partOrder 是各流分段的时间顺序（与夹具里 observe 的参数顺序一致）。
 var partOrder = map[string][]string{
-	"business":  {"admit", "queue", "handler", "release"},
-	"heartbeat": {"admit", "queue", "handler", "release"},
+	"business":  {"admit", "client", "queue", "handler", "release"},
+	"heartbeat": {"admit", "client", "queue", "handler", "release"},
 	"sync":      {"business", "commit", "deliver"},
 }
 
@@ -762,6 +762,10 @@ func classify(ev *traceEvent) string {
 		// planned→admitted 天然最多一个 ticker 周期（10ms）：投递按 10ms tick 批量进行。
 		if big(part("admit") - 10) {
 			return "admit-late(ticker)"
+		}
+		// admitted→sent 是模拟客户端单连接串行发送的排队（直接投递恒为 0），属于压测端。
+		if big(part("client")) {
+			return "client-queue(harness)"
 		}
 		if q := segs["queue"]; big(part("queue")) {
 			// 排队期间记录事件的 worker 若一直在运行，说明它在处理排在前面的任务（同 worker 队头阻塞）；

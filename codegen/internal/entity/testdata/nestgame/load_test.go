@@ -98,12 +98,38 @@ type loadCounters struct {
 	completed, changed                                atomic.Uint64
 	firstError                                        string
 	queueWait, handler, completion, changedCompletion timings
+	admitLag, clientQueue, serverQueue, serverDone    timings
 }
+
+// streamResult 的 Completion / QueueWait 从计划时刻 / 投递时刻起算，混有压测端自身的等待，
+// 保留它们是为了和历史样本同口径比较。Harness 与 Server 把同一段时间拆开：
+//
+//	planned ─Harness.AdmitLag─▶ admitted ─Harness.ClientQueue─▶ sent ─Server.QueueWait─▶ began ─handler─▶ released
+//	                                                              └──────────── Server.Completion ────────────┘
+//
+// sent 是模拟客户端把请求写进 TCP 之前的时刻；不经 Gate 的直接投递没有客户端，sent 等于 admitted。
 type streamResult struct {
 	Planned, Accepted, Rejected, Completed, EntityChanges   uint64
 	CompletedPerSecond                                      float64
 	FirstError                                              string
 	QueueWait, Handler, Completion, ChangedEntityCompletion latencyResult
+	Harness                                                 harnessResult
+	Server                                                  serverResult
+}
+
+// harnessResult 是压测框架自己引入的等待，不计入服务器延迟。
+type harnessResult struct {
+	// AdmitLag：计划时刻到 ticker 投递。发生器只在 Nest 10ms tick 里批量投递，天然 0～10ms，
+	// 再加上同一 tick 内排在前面的投递耗时。
+	AdmitLag latencyResult
+	// ClientQueue：投递到模拟客户端写出请求。每个玩家连接一次只有一条在途请求，
+	// 这段包含等前一条回包的时间，所以会间接受到前一条请求服务端耗时的影响。
+	ClientQueue latencyResult
+}
+
+// serverResult 是请求离开模拟客户端之后的耗时：Gate、NATS、Game 接入、Nest 排队、handler 与释放。
+type serverResult struct {
+	QueueWait, Completion latencyResult
 }
 
 func (c *loadCounters) result(elapsed float64) streamResult {
@@ -111,13 +137,15 @@ func (c *loadCounters) result(elapsed float64) streamResult {
 		Planned: c.planned, Accepted: c.accepted, Rejected: c.rejected, Completed: c.completed.Load(),
 		EntityChanges: c.changed.Load(), CompletedPerSecond: float64(c.completed.Load()) / elapsed, FirstError: c.firstError,
 		QueueWait: c.queueWait.result(), Handler: c.handler.result(), Completion: c.completion.result(), ChangedEntityCompletion: c.changedCompletion.result(),
+		Harness: harnessResult{AdmitLag: c.admitLag.result(), ClientQueue: c.clientQueue.result()},
+		Server:  serverResult{QueueWait: c.serverQueue.result(), Completion: c.serverDone.result()},
 	}
 }
 
 type invocation struct {
-	planned, admitted time.Time
-	change, sample    bool
-	heartbeat         bool
+	planned, admitted, sent time.Time
+	change, sample          bool
+	heartbeat               bool
 }
 type gameSample struct {
 	Seconds              float64
@@ -230,12 +258,16 @@ func TestNestGameLoad(t *testing.T) {
 			counters.queueWait.add(began.Sub(in.admitted), in.sample)
 			counters.handler.add(ended.Sub(began), in.sample)
 			counters.completion.add(completed.Sub(in.planned), in.sample)
+			counters.admitLag.add(in.admitted.Sub(in.planned), in.sample)
+			counters.clientQueue.add(in.sent.Sub(in.admitted), in.sample)
+			counters.serverQueue.add(began.Sub(in.sent), in.sample)
+			counters.serverDone.add(completed.Sub(in.sent), in.sample)
 			if c := tail.Load(); c != nil {
 				stream := "business"
 				if in.heartbeat {
 					stream = "heartbeat"
 				}
-				c.observe(stream, completed.Sub(in.planned), tailPart{"admit", in.admitted.Sub(in.planned)}, tailPart{"queue", began.Sub(in.admitted)}, tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
+				c.observe(stream, completed.Sub(in.planned), tailPart{"admit", in.admitted.Sub(in.planned)}, tailPart{"client", in.sent.Sub(in.admitted)}, tailPart{"queue", began.Sub(in.sent)}, tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
 			}
 			if in.change {
 				counters.changedCompletion.add(completed.Sub(in.planned), true)
@@ -288,7 +320,8 @@ func TestNestGameLoad(t *testing.T) {
 			round := sequence / uint64(targets)
 			change := (uint64(index)+round)%100 < uint64(c.DirtyPercent)
 			planned := start.Add(eventOffset(sequence+1, rates[k]))
-			in := invocation{planned: planned, admitted: time.Now(), change: change, sample: sequence%16 == 0, heartbeat: k == 1}
+			admitted := time.Now()
+			in := invocation{planned: planned, admitted: admitted, sent: admitted, change: change, sample: sequence%16 == 0, heartbeat: k == 1}
 			var dispatchErr error
 			if k == 0 && network != nil {
 				dispatchErr = network.dispatch(index, in)
@@ -409,7 +442,8 @@ func TestNestGameLoad(t *testing.T) {
 		if stream.Planned != want || stream.Accepted != want || stream.Completed != want || stream.Rejected != 0 {
 			r.CountsVerified = false
 		}
-		if stream.Completed > 0 && (stream.Completion.P99MS > 50 || stream.ChangedEntityCompletion.P99MS > 50 || stream.Completion.NegativeDurations > 0 || stream.ChangedEntityCompletion.NegativeDurations > 0 || stream.QueueWait.NegativeDurations > 0) {
+		if stream.Completed > 0 && (stream.Completion.P99MS > 50 || stream.ChangedEntityCompletion.P99MS > 50 || stream.Completion.NegativeDurations > 0 || stream.ChangedEntityCompletion.NegativeDurations > 0 || stream.QueueWait.NegativeDurations > 0 ||
+			stream.Harness.AdmitLag.NegativeDurations > 0 || stream.Harness.ClientQueue.NegativeDurations > 0 || stream.Server.QueueWait.NegativeDurations > 0 || stream.Server.Completion.NegativeDurations > 0) {
 			r.LatencyPassed = false
 		}
 	}
@@ -424,7 +458,7 @@ func TestNestGameLoad(t *testing.T) {
 	if err = os.WriteFile(output, append(raw, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("messages=%.1f/s heartbeat=%.1f/s changes=%.1f/s p99=%.3f/%.3fms counts=%v values=%v latency=%v\n", r.Messages.CompletedPerSecond, r.Heartbeats.CompletedPerSecond, r.EntityChangesPerSecond, r.Messages.Completion.P99MS, r.Heartbeats.Completion.P99MS, r.CountsVerified, r.EntityValuesVerified, r.LatencyPassed)
+	fmt.Printf("messages=%.1f/s heartbeat=%.1f/s changes=%.1f/s p99=%.3f/%.3fms server_p99=%.3f/%.3fms counts=%v values=%v latency=%v\n", r.Messages.CompletedPerSecond, r.Heartbeats.CompletedPerSecond, r.EntityChangesPerSecond, r.Messages.Completion.P99MS, r.Heartbeats.Completion.P99MS, r.Messages.Server.Completion.P99MS, r.Heartbeats.Server.Completion.P99MS, r.CountsVerified, r.EntityValuesVerified, r.LatencyPassed)
 	if !r.CountsVerified || !r.EntityValuesVerified || !r.LatencyPassed {
 		t.Fatal("business load gate failed; full result retained")
 	}
