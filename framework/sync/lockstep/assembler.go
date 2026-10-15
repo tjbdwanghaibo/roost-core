@@ -33,7 +33,20 @@ func NewFrameAssembler(maxBuffer int) *FrameAssembler {
 // Ingest decodes one broadcast packet (or catch-up page) and returns the
 // frames that became releasable in order. Duplicate frames (redundancy,
 // catch-up overlap) are dropped; frames beyond the buffer bound fail.
+//
+// A catch-up-failed notice from the server returns *CatchupUnservableError
+// (errors.Is ErrCatchupUnservable): the frames this client is missing are
+// gone from the server's history, so the match cannot continue on this
+// client — stop simulating and let the game decide (kick, rejoin a new
+// match). Requesting another catch-up cannot help.
 func (a *FrameAssembler) Ingest(packet []byte) ([]Frame, error) {
+	if IsCatchupNotice(packet) {
+		notice, err := DecodeCatchupUnservable(packet)
+		if err != nil {
+			return nil, err
+		}
+		return nil, notice
+	}
 	frames, err := DecodeBroadcast(packet)
 	if err != nil {
 		return nil, err

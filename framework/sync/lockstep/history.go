@@ -1,7 +1,8 @@
 package lockstep
 
 // History 保存一场对局的连续帧，供重连追帧、旁观和回放读取。
-// 宿主通过 TrimBefore 控制保留窗口；裁掉的帧不能再用于追帧。
+// Match 按 MatchConfig.HistoryRetainFrames 自动滚动裁剪，宿主也可再调用 TrimBefore / Match.TrimHistory；
+// 裁掉的帧不能再用于追帧。
 //
 // 由对局的串行 handler 独占。Replay 和 ReadRange 返回共享只读视图，
 // 只在下一次 Append/TrimBefore 之前有效；跨调用保留时必须复制，不能并发读写。
@@ -49,6 +50,10 @@ func (h *History) FirstID() FrameID {
 	}
 	return h.first
 }
+
+// start 是仍可服务的最早帧号：更早的帧已被裁掉。空历史时为下一帧应在的位置
+// （从未追加为 1，全部裁掉后为最新帧之后），因此“裁空”不会被误判为“全部可服务”。
+func (h *History) start() FrameID { return max(h.first, 1) }
 
 // TrimBefore drops all frames with id < keep, bounding memory for hosts
 // that do not need the full replay. Catch-up requests older than keep

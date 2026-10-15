@@ -18,8 +18,12 @@ var (
 	ErrSessionInUse       = errors.New("lockstep match: session already bound to another receiver")
 	ErrCatchupUnavailable = errors.New("lockstep match: no reliable sender for catch-up")
 	ErrCatchupFuture      = errors.New("lockstep match: catch-up start beyond the next frame")
-	ErrCatchupUnservable  = errors.New("lockstep match: catch-up range trimmed from history")
-	ErrHashFrameInvalid   = errors.New("lockstep match: hash report for an uncut or invalid frame")
+	// ErrCatchupUnservable 表示请求的追帧起点已被裁出历史，这次追帧不可能补齐。
+	// 服务端在 StartCatchup / Tick 的错误里返回它，并经可靠通道给该会话发追帧失败通知；
+	// 客户端（FrameAssembler、robot、C# LockstepClient）收到通知后终止本场模拟，交由业务决定踢出或重开，
+	// 框架不自动重同步。具体起点见 *CatchupUnservableError。
+	ErrCatchupUnservable = errors.New("lockstep match: catch-up range trimmed from history")
+	ErrHashFrameInvalid  = errors.New("lockstep match: hash report for an uncut or invalid frame")
 )
 
 // 指标名属于包契约：OBSERVABILITY.md 的告警规则以它们为键，守卫测试固定这组名字，
@@ -29,7 +33,9 @@ const (
 	MetricInputLate     = "lockstep.input.late.total"
 	MetricInputRejected = "lockstep.input.rejected.total"
 	MetricCatchupFrames = "lockstep.catchup.frames.total"
-	MetricDesync        = "lockstep.desync.total"
+	// MetricCatchupUnservable 计数因起点已被裁出历史而失败的追帧（含请求时即拒绝与追帧途中被裁过）。
+	MetricCatchupUnservable = "lockstep.catchup.unservable.total"
+	MetricDesync            = "lockstep.desync.total"
 )
 
 // DefaultMaxDatagramBytes is the datagram PAYLOAD bound used when neither
@@ -43,6 +49,28 @@ const (
 	DefaultCatchupSendTimeout = 2 * time.Second
 	DefaultCatchupSendWait    = 5 * time.Millisecond
 )
+
+// 历史保留（MatchConfig.HistoryRetainFrames）。
+//
+// DefaultHistoryRetainFrames 取 3600 帧：60Hz 下 60 秒、30Hz 下 120 秒。依据是断线重连窗口按
+// 60 秒计（移动网络切换、短暂掉线的常见上限），并按常见逻辑帧率上限 60Hz 换算；30Hz 的游戏因此有
+// 两分钟余量。以 10 席、每帧每席 8 字节输入估算，保留 3600 帧约 1.5MB / 局，与对局长度无关。
+// 帧率或允许的断线时长不同的游戏按“允许断线秒数 × 逻辑帧率”自行配置。
+//
+// MinHistoryRetainFrames 是自动保留的下限：Sequencer 把 ReplayHorizon 之内的迟到输入仍当作在线流量，
+// 落后这么多帧的客户端仍属于“在局内”，它的追帧必须可服务；它同时等于 MaxBroadcastFrames，
+// 覆盖一整页追帧与最大冗余深度。
+const (
+	DefaultHistoryRetainFrames = 3600
+	MinHistoryRetainFrames     = int(ReplayHorizon)
+	// RetainFullHistory 关闭自动裁剪：历史与 hash 报告随对局长度增长，由宿主自行调用
+	// TrimHistory / TrimHashReports（关闭前的行为）。
+	RetainFullHistory = -1
+)
+
+// hashTrimStride 是自动裁剪 hash 报告的步长：裁剪要遍历报告表，不必每帧做；
+// 报告保留量因此不超过保留窗口再多一个步长。
+const hashTrimStride = FrameID(MaxBroadcastFrames)
 
 // MatchConfig 配置一场对局的输入序列、发送通道、追帧预算与分歧回调。
 type MatchConfig struct {
@@ -81,6 +109,12 @@ type MatchConfig struct {
 	// fast as the head moves and the backlog never closes.
 	// The net catch-up rate is batch-1 frames per tick; it must be positive.
 	CatchupBatchFrames int
+	// HistoryRetainFrames 是自动保留的历史帧数（含最新帧）：每次 Tick 切帧后裁掉更早的帧，
+	// 并按 hashTrimStride 步长裁掉同一窗口之外的 hash 报告。0 取 DefaultHistoryRetainFrames；
+	// RetainFullHistory（-1）关闭自动裁剪；其他值必须不小于 MinHistoryRetainFrames。
+	// 起点早于窗口的追帧以 ErrCatchupUnservable 失败，不做全量重同步。宿主仍可调用
+	// TrimHistory / TrimHashReports 裁得更多，但不能把已裁掉的帧找回来。
+	HistoryRetainFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
 	// reliable-lane send failures (<= 0 selects 8) instead of pinning the
 	// session forever in a state where it receives neither live frames nor
@@ -117,6 +151,9 @@ type MatchConfig struct {
 type catchupState struct {
 	next     FrameID
 	failures int
+	// unservable 非 nil 表示游标已落到保留窗口之前：这次追帧已失败，inflight 是发往客户端的
+	// 失败通知，结算后删除该会话的追帧状态。期间会话仍不收实时广播（客户端已终止本场）。
+	unservable *CatchupUnservableError
 	// inflight is the page currently being sent, or nil. At most one page
 	// per session is in flight; the cursor moves only when it succeeds.
 	inflight *catchupSend
@@ -169,7 +206,10 @@ type Match struct {
 	catchupMax   int
 	sendTimeout  time.Duration
 	sendWait     time.Duration
-	closed       bool
+	// retain 是自动保留的帧数，0 表示关闭（RetainFullHistory）；hashTrimmed 是上次自动裁剪 hash 报告的起点。
+	retain      int
+	hashTrimmed FrameID
+	closed      bool
 	// 广播名单由串行 owner 管理，只在连接成员变化后重新排序。
 	broadcastReceivers []broadcastReceiver
 	// sessions binds attached seats to their transport session.
@@ -227,6 +267,10 @@ func NewMatch(config MatchConfig) (*Match, error) {
 	if batch > MaxBroadcastFrames {
 		batch = MaxBroadcastFrames
 	}
+	retain, err := historyRetention(config.HistoryRetainFrames)
+	if err != nil {
+		return nil, err
+	}
 	maxFailures := config.CatchupMaxFailures
 	if maxFailures <= 0 {
 		maxFailures = 8
@@ -258,12 +302,27 @@ func NewMatch(config MatchConfig) (*Match, error) {
 		catchupMax:    maxFailures,
 		sendTimeout:   sendTimeout,
 		sendWait:      sendWait,
+		retain:        retain,
 		sessions:      make(map[PlayerID]nettransport.SessionID),
 		spectators:    make(map[nettransport.SessionID]struct{}),
 		sessionOwners: make(map[nettransport.SessionID]PlayerID),
 		catchups:      make(map[nettransport.SessionID]*catchupState),
 		ruled:         make(map[FrameID]map[PlayerID]struct{}),
 	}, nil
+}
+
+// historyRetention 把配置的保留帧数解析为生效值，0 表示关闭自动裁剪。
+func historyRetention(configured int) (int, error) {
+	switch {
+	case configured == 0:
+		return DefaultHistoryRetainFrames, nil
+	case configured == RetainFullHistory:
+		return 0, nil
+	case configured < MinHistoryRetainFrames:
+		return 0, fmt.Errorf("%w: HistoryRetainFrames %d must be RetainFullHistory (-1) or at least %d (ReplayHorizon: a client that far behind is still in the match and must be able to catch up)", ErrMatchConfigInvalid, configured, MinHistoryRetainFrames)
+	default:
+		return configured, nil
+	}
 }
 
 // datagramBudget resolves the payload bound the match's worst-case broadcast
@@ -448,7 +507,24 @@ func (m *Match) Tick(ctx context.Context) (Frame, error) {
 	if err := m.pumpCatchup(ctx); err != nil {
 		errs = append(errs, err)
 	}
+	// 裁剪放在追帧之后：页面在发出前已编码成独立字节，裁剪不影响在途页；
+	// 从当前最早帧开始的追帧因此还能先发出第一页，不会被本次 Tick 刚裁掉。
+	m.retainWindow(frame.ID)
 	return frame, errors.Join(errs...)
+}
+
+// retainWindow 是自动保留：切出 latest 后只留最近 retain 帧，hash 报告按步长跟随同一窗口。
+// 游标落到窗口之前的追帧，在下一次 Tick 的 pumpCatchup 里以 ErrCatchupUnservable 结束并通知客户端。
+func (m *Match) retainWindow(latest FrameID) {
+	if m.retain == 0 || latest <= FrameID(m.retain) {
+		return
+	}
+	keep := latest - FrameID(m.retain) + 1
+	m.history.TrimBefore(keep)
+	if keep-m.hashTrimmed >= hashTrimStride {
+		m.TrimHashReports(keep)
+		m.hashTrimmed = keep
+	}
 }
 
 type broadcastReceiver struct {
@@ -485,8 +561,11 @@ func (m *Match) broadcastOrder() []broadcastReceiver {
 }
 
 // StartCatchup begins paging history to the player's attached session,
-// starting at from (0 = from the beginning; values beyond the next uncut
-// frame are refused). Pages of CatchupBatchFrames go out over the reliable
+// starting at from (0 = frame 1; values beyond the next uncut
+// frame are refused). A start already trimmed from history fails at once with
+// ErrCatchupUnservable (*CatchupUnservableError); the session still gets the
+// catch-up-failed notice over the reliable lane on the next Tick, so a client
+// whose request arrived as a fire-and-forget command learns it too. Pages of CatchupBatchFrames go out over the reliable
 // lane once per Tick until the cursor reaches the head, then the session
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
@@ -517,13 +596,24 @@ func (m *Match) startCatchup(session nettransport.SessionID, from FrameID) error
 	if from > m.sequencer.NextFrame() {
 		return fmt.Errorf("%w: from %d, next %d", ErrCatchupFuture, from, m.sequencer.NextFrame())
 	}
-	if existing, catching := m.catchups[session]; catching {
-		if from < existing.next {
-			existing.next = from
-		}
-		return nil
+	// 帧号从 1 开始；0 表示从头追，必须和其他起点一样核对是否已被裁掉，
+	// 否则 ReadRange 会从保留的第一帧开始，客户端拿到一段有洞的帧流。
+	from = max(from, 1)
+	existing, catching := m.catchups[session]
+	if catching && existing.unservable != nil {
+		return existing.unservable // 失败通知还在途：这次追帧已经结束
 	}
-	m.catchups[session] = &catchupState{next: from}
+	start := m.history.start()
+	if catching {
+		if from < existing.next {
+			existing.next = from // 游标落到窗口之前时由 pumpCatchup 统一结束并通知
+		}
+	} else {
+		m.catchups[session] = &catchupState{next: from}
+	}
+	if from < start {
+		return &CatchupUnservableError{From: from, Start: start}
+	}
 	return nil
 }
 
@@ -581,6 +671,13 @@ func (m *Match) settleCatchup(session nettransport.SessionID, state *catchupStat
 	send := state.inflight
 	state.inflight = nil
 	send.cancel()
+	if state.unservable != nil {
+		delete(m.catchups, session)
+		if send.err != nil {
+			return fmt.Errorf("catchup session %d: catch-up-failed notice not delivered (%w): %w", session, ErrCatchupUnservable, send.err)
+		}
+		return nil
+	}
 	if send.err != nil {
 		state.failures++
 		if state.failures >= m.catchupMax {
@@ -616,10 +713,15 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 			continue // still sending: only this session waits
 		}
 		// History trimmed past the cursor: the gap can never be served —
-		// abandon loudly instead of paging a stream with a hole in it.
-		if first := m.history.FirstID(); state.next != 0 && state.next < first {
-			delete(m.catchups, session)
-			errs = append(errs, fmt.Errorf("catchup session %d: %w: from %d, history starts at %d", session, ErrCatchupUnservable, state.next, first))
+		// abandon loudly instead of paging a stream with a hole in it, and
+		// tell the client over the reliable lane (the notice is the session's
+		// last catch-up send; settleCatchup removes the state once it is done).
+		if start := m.history.start(); state.next < start {
+			state.unservable = &CatchupUnservableError{From: state.next, Start: start}
+			metrics.IncCounter(MetricCatchupUnservable, nil, 1)
+			errs = append(errs, fmt.Errorf("catchup session %d: %w", session, state.unservable))
+			state.inflight = m.launchSend(ctx, session, EncodeCatchupUnservable(state.unservable.From, state.unservable.Start), catchupSend{start: state.next, end: state.next})
+			launched = append(launched, session)
 			continue
 		}
 		page := m.history.ReadRange(state.next, m.catchupBatch)
@@ -627,7 +729,7 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 			delete(m.catchups, session) // caught up: live broadcasts take over
 			continue
 		}
-		state.inflight = m.launchPage(ctx, session, state.next, page)
+		state.inflight = m.launchSend(ctx, session, EncodeBroadcast(page), catchupSend{start: state.next, end: page[len(page)-1].ID + 1, frames: len(page)})
 		launched = append(launched, session)
 	}
 	if len(launched) == 0 {
@@ -658,20 +760,19 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// launchPage sends one page on its own goroutine. The send keeps the
-// caller's context values but not its cancellation (it may outlive the
-// Tick), and is bounded by CatchupSendTimeout; dropping the catch-up
-// cancels it.
-func (m *Match) launchPage(ctx context.Context, session nettransport.SessionID, start FrameID, page []Frame) *catchupSend {
+// launchSend sends one catch-up payload (a page, or the catch-up-failed
+// notice) on its own goroutine. The send keeps the caller's context values
+// but not its cancellation (it may outlive the Tick), and is bounded by
+// CatchupSendTimeout; dropping the catch-up cancels it.
+func (m *Match) launchSend(ctx context.Context, session nettransport.SessionID, payload []byte, cursor catchupSend) *catchupSend {
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.sendTimeout)
 	send := &catchupSend{
-		start:  start,
-		end:    page[len(page)-1].ID + 1,
-		frames: len(page),
+		start:  cursor.start,
+		end:    cursor.end,
+		frames: cursor.frames,
 		done:   make(chan error, 1),
 		cancel: cancel,
 	}
-	payload := EncodeBroadcast(page)
 	reliable := m.reliable
 	go func() {
 		send.done <- reliable.SendReliable(sendCtx, session, payload)
@@ -739,9 +840,11 @@ func (m *Match) TrimHashReports(before FrameID) {
 	}
 }
 
-// TrimHistory drops stored frames before keep, bounding memory for long
-// matches that do not need the full replay. Catch-ups older than keep are
-// abandoned on their next pump with ErrCatchupUnservable.
+// TrimHistory drops stored frames before keep. With automatic retention
+// (MatchConfig.HistoryRetainFrames) the match already trims every Tick; this
+// is for hosts that trim further, or that disabled automatic retention.
+// Catch-ups older than keep are abandoned on their next pump with
+// ErrCatchupUnservable and the catch-up-failed notice.
 func (m *Match) TrimHistory(keep FrameID) {
 	m.history.TrimBefore(keep)
 }

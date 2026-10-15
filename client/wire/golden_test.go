@@ -50,13 +50,15 @@ func TestClientProtocolGolden(t *testing.T) {
 		}
 		packets = append(packets, &wire.Packet{Flags: wire.FlagLockstep, MsgID: 50001, Seq: 11, Payload: data})
 	}
+	// 追帧失败通知与广播 / 追帧页同一路由下发。
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 12, Payload: lockstep.EncodeCatchupUnservable(300, 70000)})
 	type golden struct {
 		Name string `json:"name"`
 		Hex  string `json:"hex"`
 		Hash string `json:"hash,omitempty"`
 	}
 	want := []golden{}
-	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup"} {
+	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable"} {
 		raw, err := wire.Encode([]*wire.Packet{packets[i]}, 0)
 		if err != nil {
 			t.Fatal(err)

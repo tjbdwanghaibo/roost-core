@@ -35,6 +35,12 @@ internal static partial class Program
                 Check(hash.Value == ulong.Parse(item.GetProperty("hash").GetString()!), "Go/C# input chain hash");
                 Check(frames.Count == 2 && frames[0].Inputs[1].Player == -1, "Go/C# signed seat");
             }
+            if (item.GetProperty("name").GetString() == "catchup_unservable")
+            {
+                Check(packet.Kind == PayloadKind.Lockstep && packet.IsPush && LockstepCodec.IsCatchupNotice(packet.Payload.Span), "notice routing");
+                var notice = LockstepCodec.DecodeCatchupUnservable(packet.Payload.Span);
+                Check(notice.RequestedFrom == 300 && notice.HistoryStart == 70000, "Go/C# catch-up notice");
+            }
             if (item.GetProperty("name").GetString()!.StartsWith("lockstep_"))
             {
                 var command = LockstepCommand.Decode(packet.Payload.Span);

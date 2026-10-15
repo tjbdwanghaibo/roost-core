@@ -41,6 +41,13 @@ internal static partial class Program
             Refuses(() => LockstepCommand.Decode(bad), "corrupt Lockstep command");
         Refuses(() => new LockstepCommand(LockstepOperation.Input, 1, new byte[1025]).Encode(), "oversized input");
         Refuses(() => new LockstepCommand(LockstepOperation.Catchup, 1, hash: 1).Encode(), "ambiguous command");
+        var unservable = new LockstepAssembler();
+        Check(unservable.Ingest(EmptyFrames(3)).Count == 0 && unservable.Gap, "gap before notice");
+        try { unservable.Ingest(new byte[] { 0xC9, 1, 1, 20 }); throw new Exception("notice accepted as frames"); }
+        catch (LockstepCatchupUnservableException error) { Check(error.RequestedFrom == 1 && error.HistoryStart == 20, "notice fields"); }
+        Check(unservable.Next == 1 && unservable.Buffered == 1, "notice leaves assembler unchanged");
+        foreach (var bad in new byte[][] { new byte[]{0xc9,2,1,20}, new byte[]{0xc9,1,0,20}, new byte[]{0xc9,1,20,20}, new byte[]{0xc9,1,1,20,0}, new byte[]{0xc9,1,1} })
+            Refuses(() => unservable.Ingest(bad), "corrupt catch-up notice");
         Console.WriteLine("PASS Lockstep limits/overflow/ordering/duplicates/atomic gap healing");
     }
 
@@ -126,6 +133,14 @@ internal static partial class Program
             await client.HandlePushAsync(new Packet(50002, 3, EmptyFrames(2), PayloadKind.Lockstep, true), simulate);
             await session.RequestAsync(42, 43, Array.Empty<byte>(), TimeSpan.FromSeconds(5));
             Check(applied.Count == 3 && applied[0] == 1 && applied[1] == 2 && applied[2] == 3, "retry applied once/in order");
+            // 追帧失败通知：终止实例、保留原因，之后不再消费也不再请求追帧（peer会把多余请求判为失败）。
+            var rejected = new LockstepClient(session, 50001, 50002, TimeSpan.FromSeconds(5));
+            try { await rejected.HandlePushAsync(new Packet(50002, 4, new byte[] { 0xC9, 1, 1, 20 }, PayloadKind.Lockstep, true), simulate); throw new Exception("notice accepted"); }
+            catch (LockstepCatchupUnservableException error) { Check(error.RequestedFrom == 1 && error.HistoryStart == 20, "client notice fields"); }
+            Check(rejected.Failure is LockstepCatchupUnservableException, "notice is the terminal cause");
+            try { await rejected.HandlePushAsync(Future(), simulate); throw new Exception("terminal client resumed"); }
+            catch (InvalidOperationException) { }
+            Check(applied.Count == 3, "no simulation after catch-up failure");
             session.Dispose(); await peer;
             Console.WriteLine("PASS Lockstep catchup dedupe/stagnant retry/progress/healing");
         }

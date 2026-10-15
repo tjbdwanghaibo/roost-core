@@ -101,6 +101,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `lockstep.input.late.total` | Counter | 迟到输入折入后续帧的次数（客户端上行 RTT 健康度；占比高应上调 `SubmitWindow` 或降逻辑帧率） |
 | `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
+| `lockstep.catchup.unservable.total` | Counter | 起点已被裁出保留窗口而失败的追帧（请求即拒绝或追帧途中被窗口越过；客户端收到失败通知后终止本场）。持续增长说明 `HistoryRetainFrames` 短于实际断线时长 |
 | `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
 
 ### Saga（core/saga）
@@ -238,6 +239,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `failurelog_purge_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_trim_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.catchup.unservable.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.frame.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.input.late.total` | Counter | `sync/lockstep/match.go:IncCounter` |

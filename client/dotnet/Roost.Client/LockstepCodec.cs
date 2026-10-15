@@ -57,9 +57,33 @@ namespace Roost.Client
         internal LockstepFrame(uint id, List<LockstepInput> inputs) { Id = id; Inputs = inputs.AsReadOnly(); }
     }
 
+    // 服务端追帧失败通知（C9 v1）：客户端缺的帧已被裁出服务端历史，本场无法继续。
+    // 收到后LockstepClient终止；由业务决定踢出或开新局，SDK不自动重同步、不跳过缺帧。
+    public sealed class LockstepCatchupUnservableException : Exception
+    {
+        public uint RequestedFrom { get; }
+        public uint HistoryStart { get; }
+        public LockstepCatchupUnservableException(uint requestedFrom, uint historyStart)
+            : base($"Lockstep catch-up from frame {requestedFrom} cannot be served: server history starts at {historyStart}.")
+        { RequestedFrom = requestedFrom; HistoryStart = historyStart; }
+    }
+
     // 直接消费sync/lockstep的C7 v1广播和追帧页，不另定义客户端帧格式。
     public static class LockstepCodec
     {
+        public static bool IsCatchupNotice(ReadOnlySpan<byte> data) => data.Length > 0 && data[0] == 0xC9;
+
+        // 严格解码C9 01 from(uvarint) start(uvarint)，要求from<start；坏包抛InvalidDataException。
+        public static LockstepCatchupUnservableException DecodeCatchupUnservable(ReadOnlySpan<byte> data)
+        {
+            if (data.Length < 4 || data[0] != 0xC9 || data[1] != 1) throw new InvalidDataException("Invalid catch-up notice header.");
+            int offset = 2;
+            uint from = ReadFrame(data, ref offset);
+            ulong start = ReadVarint(data, ref offset);
+            if (offset != data.Length || start > uint.MaxValue || from >= start) throw new InvalidDataException("Invalid catch-up notice.");
+            return new LockstepCatchupUnservableException(from, (uint)start);
+        }
+
         public static IReadOnlyList<LockstepFrame> DecodeBroadcast(ReadOnlySpan<byte> data)
         {
             if (data.Length < 3 || data[0] != 0xC7 || data[1] != 1) throw new InvalidDataException("Invalid broadcast header.");

@@ -249,3 +249,47 @@ func TestLockstepBotReRequestsAnAbandonedCatchup(t *testing.T) {
 		}
 	}
 }
+
+// 服务端的追帧失败通知让 bot 终止：缺的帧已不在历史里，不能再请求追帧、也不能跳过缺口继续模拟。
+func TestLockstepBotCatchupUnservableNoticeIsTerminal(t *testing.T) {
+	sink := &gapSink{}
+	bot, err := NewLockstepBot(LockstepBotConfig{Player: 1, Sink: sink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bot.HandleBroadcast(lockstep.EncodeBroadcast([]lockstep.Frame{{ID: 5}})); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.catchups) != 1 || sink.catchups[0] != 1 {
+		t.Fatalf("gap did not request a catch-up: %v", sink.catchups)
+	}
+	err = bot.HandleBroadcast(lockstep.EncodeCatchupUnservable(1, 4))
+	var unservable *lockstep.CatchupUnservableError
+	if !errors.Is(err, ErrLockstepBotTerminal) || !errors.As(err, &unservable) || unservable.From != 1 || unservable.Start != 4 {
+		t.Fatalf("catch-up-failed notice: %v", err)
+	}
+	if err := bot.HandleBroadcast(lockstep.EncodeBroadcast([]lockstep.Frame{{ID: 6}})); !errors.Is(err, lockstep.ErrCatchupUnservable) {
+		t.Fatalf("terminal bot kept consuming: %v", err)
+	}
+	if len(sink.catchups) != 1 || bot.Stats().FramesApplied != 0 {
+		t.Fatalf("terminal bot asked again or simulated: catchups=%v stats=%+v", sink.catchups, bot.Stats())
+	}
+}
+
+// 进程内 sink 直接把 Match.StartCatchup 的错误交回来时同样终止。
+type unservableSink struct{ gapSink }
+
+func (s *unservableSink) RequestCatchup(from lockstep.FrameID) error {
+	return &lockstep.CatchupUnservableError{From: from, Start: from + 10}
+}
+
+func TestLockstepBotUnservableCatchupRequestIsTerminal(t *testing.T) {
+	bot, err := NewLockstepBot(LockstepBotConfig{Player: 1, Sink: &unservableSink{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = bot.HandleBroadcast(lockstep.EncodeBroadcast([]lockstep.Frame{{ID: 5}}))
+	if !errors.Is(err, ErrLockstepBotTerminal) || !errors.Is(err, lockstep.ErrCatchupUnservable) || bot.Terminal() == nil {
+		t.Fatalf("unservable catch-up request: %v", err)
+	}
+}

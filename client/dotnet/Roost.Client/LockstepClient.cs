@@ -16,8 +16,10 @@ namespace Roost.Client
         public int Buffered => buffered.Count;
         public LockstepAssembler(int maxBuffered = 256)
         { if (maxBuffered <= 0) throw new ArgumentOutOfRangeException(nameof(maxBuffered)); this.maxBuffered = maxBuffered; }
+        // 追帧失败通知抛LockstepCatchupUnservableException，不改变已组装状态。
         public IReadOnlyList<LockstepFrame> Ingest(ReadOnlySpan<byte> packet)
         {
+            if (LockstepCodec.IsCatchupNotice(packet)) throw LockstepCodec.DecodeCatchupUnservable(packet);
             var frames = LockstepCodec.DecodeBroadcast(packet);
             var pending = new Dictionary<uint, LockstepFrame>(buffered);
             ulong next = Next; var ready = new List<LockstepFrame>();
@@ -115,6 +117,8 @@ namespace Roost.Client
             }
             // 解码/容量失败不能继续假装基线可用；应用重新建立比赛状态。
             catch (InvalidDataException error) { Failure = error; throw; }
+            // 服务端已裁掉缺的帧：追帧失败，终止本实例，由业务踢出或开新局；不再请求追帧。
+            catch (LockstepCatchupUnservableException error) { Failure = error; throw; }
             finally { consuming = false; }
         }
     }

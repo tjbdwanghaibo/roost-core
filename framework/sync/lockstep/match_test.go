@@ -445,8 +445,10 @@ func TestMatchCatchupAbandonedWhenHistoryTrimmed(t *testing.T) {
 		}
 	}
 	match.TrimHistory(20)
-	if err := match.StartCatchup(1, 5); err != nil { // asks for trimmed range
-		t.Fatal(err)
+	// 请求时即明确失败，具体起点可用 errors.As 取出。
+	var unservable *CatchupUnservableError
+	if err := match.StartCatchup(1, 5); !errors.As(err, &unservable) || !errors.Is(err, ErrCatchupUnservable) || unservable.From != 5 || unservable.Start != 20 {
+		t.Fatalf("trimmed catch-up start: %v", err)
 	}
 	_, err := match.Tick(ctx)
 	if err == nil || !errors.Is(err, ErrCatchupUnservable) {
@@ -454,6 +456,26 @@ func TestMatchCatchupAbandonedWhenHistoryTrimmed(t *testing.T) {
 	}
 	if match.CatchingUp(1) {
 		t.Fatal("unservable catch-up left pending")
+	}
+	// 客户端经可靠通道只收到一条失败通知，没有任何有洞的历史页。
+	if got := transport.reliable[101]; len(got) != 1 || !IsCatchupNotice(got[0]) {
+		t.Fatalf("reliable lane = %d packet(s), want exactly the catch-up-failed notice", len(got))
+	}
+	_, err = NewFrameAssembler(0).Ingest(transport.reliable[101][0])
+	if !errors.As(err, &unservable) || unservable.From != 5 || unservable.Start != 20 {
+		t.Fatalf("client did not decode the notice: %v", err)
+	}
+	// 0 表示从帧 1 起，不能借 ReadRange 的钳位从保留的第一帧开始、给客户端一段有洞的帧流。
+	if err := match.StartCatchup(1, 0); !errors.As(err, &unservable) || unservable.From != 1 || unservable.Start != 20 {
+		t.Fatalf("catch-up from 0 after trim: %v", err)
+	}
+	if _, err := match.Tick(ctx); !errors.Is(err, ErrCatchupUnservable) {
+		t.Fatalf("catch-up from 0 after trim not abandoned: %v", err)
+	}
+	for _, packet := range transport.reliable[101][1:] {
+		if !IsCatchupNotice(packet) {
+			t.Fatal("catch-up from 0 paged a history with a hole in it")
+		}
 	}
 }
 
@@ -593,6 +615,7 @@ func TestMatchPromiseCatchupBatchMustOutpaceFrameProduction(t *testing.T) {
 // alert rules in OBSERVABILITY.md are keyed on these exact names (历史：RR-20261006-61).
 var lockstepMetricNames = []string{
 	"lockstep.catchup.frames.total",
+	"lockstep.catchup.unservable.total",
 	"lockstep.desync.total",
 	"lockstep.frame.total",
 	"lockstep.input.late.total",
@@ -645,6 +668,13 @@ func TestMatchPromiseMetricNamesArePinned(t *testing.T) {
 	_ = match.ReportHash(1, 2, 7)
 	_ = match.ReportHash(2, 2, 7)
 	_ = match.ReportHash(3, 2, 8) // desync: seat 3 is the outlier
+	match.TrimHistory(3)
+	if err := match.StartCatchup(3, 1); !errors.Is(err, ErrCatchupUnservable) { // unservable
+		t.Fatalf("trimmed catch-up: %v", err)
+	}
+	if _, err := match.Tick(ctx); !errors.Is(err, ErrCatchupUnservable) {
+		t.Fatalf("trimmed catch-up tick: %v", err)
+	}
 
 	var emitted []string
 	for _, metric := range metrics.Snapshot() {
@@ -658,7 +688,7 @@ func TestMatchPromiseMetricNamesArePinned(t *testing.T) {
 	}
 	// Source guard: every metrics call in the package names a Metric*
 	// constant, never an inline literal that could drift from the pinned set.
-	if pinned := []string{MetricCatchupFrames, MetricDesync, MetricFrames, MetricInputLate, MetricInputRejected}; !slices.Equal(pinned, lockstepMetricNames) {
+	if pinned := []string{MetricCatchupFrames, MetricCatchupUnservable, MetricDesync, MetricFrames, MetricInputLate, MetricInputRejected}; !slices.Equal(pinned, lockstepMetricNames) {
 		t.Fatalf("Metric* constants = %v, want %v", pinned, lockstepMetricNames)
 	}
 	inline := regexp.MustCompile(`metrics\.\w+\(\s*"`)

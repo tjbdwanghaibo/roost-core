@@ -27,5 +27,9 @@
   {
     "name": "lockstep_catchup",
     "hex": "525302040000c3510000000b00000004c8010301"
+  },
+  {
+    "name": "catchup_unservable",
+    "hex": "525302050000c3520000000c00000007c901ac02f0a204"
   }
 ]

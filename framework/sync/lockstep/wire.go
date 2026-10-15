@@ -161,6 +161,59 @@ func DecodeBroadcast(packet []byte) ([]Frame, error) {
 	return frames, nil
 }
 
+// 追帧失败通知：服务端经可靠通道、与追帧页同一路由发给追帧起点已被裁掉的会话。
+//
+//	notice = magic(0xC9) version(1) from(uvarint) start(uvarint)
+//
+// from 是追帧游标（客户端缺的第一帧），start 是服务端仍保留的最早帧，from < start。
+// 客户端收到后终止本场模拟、交由业务决定踢出或重开；框架不提供全量重同步。
+const (
+	noticeMagic   = 0xC9
+	noticeVersion = 1
+)
+
+// CatchupUnservableError 是追帧起点已被裁出历史的具体信息；errors.Is(err, ErrCatchupUnservable) 成立。
+// 服务端 StartCatchup / Tick 返回它，客户端 FrameAssembler.Ingest 解出失败通知时也返回它。
+type CatchupUnservableError struct {
+	From  FrameID // 追帧游标：客户端缺的第一帧
+	Start FrameID // 服务端仍保留的最早帧
+}
+
+func (e *CatchupUnservableError) Error() string {
+	return fmt.Sprintf("%v: from %d, history starts at %d", ErrCatchupUnservable, e.From, e.Start)
+}
+
+func (e *CatchupUnservableError) Unwrap() error { return ErrCatchupUnservable }
+
+// EncodeCatchupUnservable 编码追帧失败通知。
+func EncodeCatchupUnservable(from, start FrameID) []byte {
+	out := []byte{noticeMagic, noticeVersion}
+	out = binary.AppendUvarint(out, uint64(from))
+	return binary.AppendUvarint(out, uint64(start))
+}
+
+// IsCatchupNotice 只看包头判断是否为追帧失败通知（广播与追帧页以 0xC7 开头）。
+func IsCatchupNotice(packet []byte) bool { return len(packet) > 0 && packet[0] == noticeMagic }
+
+// DecodeCatchupUnservable 严格解码追帧失败通知；坏包返回 ErrFrameCorrupt。
+func DecodeCatchupUnservable(packet []byte) (*CatchupUnservableError, error) {
+	if len(packet) < 4 || packet[0] != noticeMagic || packet[1] != noticeVersion {
+		return nil, fmt.Errorf("%w: bad catch-up notice header", ErrFrameCorrupt)
+	}
+	from, rest, err := readUvarint(packet[2:])
+	if err != nil {
+		return nil, err
+	}
+	start, rest, err := readUvarint(rest)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 || from == 0 || from > uint64(^FrameID(0)) || start > uint64(^FrameID(0)) || from >= start {
+		return nil, fmt.Errorf("%w: catch-up notice from %d start %d", ErrFrameCorrupt, from, start)
+	}
+	return &CatchupUnservableError{From: FrameID(from), Start: FrameID(start)}, nil
+}
+
 func readUvarint(data []byte) (uint64, []byte, error) {
 	value, read := binary.Uvarint(data)
 	if read <= 0 {

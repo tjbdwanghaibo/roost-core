@@ -100,8 +100,8 @@ func TestMatchLongRunCatchupAfterRollingTrim(t *testing.T) {
 			}
 		}
 	}
-	if err = m.StartCatchup(1, first-1); err != nil {
-		t.Fatal(err)
+	if err = m.StartCatchup(1, first-1); !errors.Is(err, ErrCatchupUnservable) {
+		t.Fatalf("expired history must fail at the request: %v", err)
 	}
 	if _, err = m.Tick(context.Background()); !errors.Is(err, ErrCatchupUnservable) {
 		t.Fatalf("expired history must fail explicitly: %v", err)
@@ -209,5 +209,154 @@ func TestHistoryGradualShrinkReleasesBackingArray(t *testing.T) {
 	h.TrimBefore(10001)
 	if h.retainedCapacity != 0 {
 		t.Fatal("empty history retained backing allocation")
+	}
+}
+
+// 默认自动保留：长局里历史与 hash 报告都停在保留窗口，不随对局长度增长；宿主不调用任何裁剪。
+func TestMatchDefaultRetentionBoundsLongMatch(t *testing.T) {
+	m, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 8}, Datagrams: nullTransport{}, Reliable: nullTransport{}, CatchupSendWait: testSendWait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	const ticks = 3*DefaultHistoryRetainFrames + 100
+	peak := 0
+	for range ticks {
+		f, err := m.Tick(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.ID%30 == 0 {
+			for player := PlayerID(1); player <= 2; player++ {
+				if err := m.ReportHash(player, f.ID, uint64(f.ID)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		peak = max(peak, m.history.retainedCapacity)
+	}
+	if m.History().Len() != DefaultHistoryRetainFrames || m.History().FirstID() != ticks-DefaultHistoryRetainFrames+1 {
+		t.Fatalf("history len %d first %d after %d ticks, want the last %d frames", m.History().Len(), m.History().FirstID(), ticks, DefaultHistoryRetainFrames)
+	}
+	if peak > 4*DefaultHistoryRetainFrames {
+		t.Fatalf("history backing array peaked at %d slots", peak)
+	}
+	limit := (DefaultHistoryRetainFrames+int(hashTrimStride))/30 + 1
+	if len(m.detector.reports) > limit || len(m.ruled) > limit {
+		t.Fatalf("hash reports %d (ruled %d) beyond the retention window bound %d", len(m.detector.reports), len(m.ruled), limit)
+	}
+}
+
+// 追帧途中游标被自动裁剪越过（页面一直发不出去）：本次 Tick 结束追帧、返回 ErrCatchupUnservable，
+// 客户端只收到失败通知；会话随后回到实时广播。
+func TestMatchAutoRetentionOvertakesStalledCatchup(t *testing.T) {
+	transport := newRecordingTransport()
+	m, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8}, Datagrams: transport, Reliable: transport,
+		HistoryRetainFrames: MinHistoryRetainFrames, CatchupBatchFrames: 8, CatchupMaxFailures: 1000, CatchupSendWait: testSendWait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err := m.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for range 2 * MinHistoryRetainFrames {
+		if _, err := m.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	from := m.History().FirstID()
+	if err := m.StartCatchup(1, from); err != nil {
+		t.Fatal(err)
+	}
+	transport.failing[101] = errors.New("link down")
+	if _, err := m.Tick(ctx); errors.Is(err, ErrCatchupUnservable) {
+		t.Fatalf("catch-up abandoned before the window passed its cursor: %v", err)
+	}
+	delete(transport.failing, 101)
+	start := m.History().FirstID() // 失败那次 Tick 末尾已把窗口推过游标
+	if start <= from {
+		t.Fatalf("window start %d did not pass cursor %d", start, from)
+	}
+	_, err = m.Tick(ctx)
+	var unservable *CatchupUnservableError
+	if !errors.As(err, &unservable) || unservable.From != from || unservable.Start != start {
+		t.Fatalf("overtaken catch-up: %v", err)
+	}
+	if m.CatchingUp(1) || len(transport.reliable[101]) != 1 || !IsCatchupNotice(transport.reliable[101][0]) {
+		t.Fatalf("catching up %v, reliable packets %d", m.CatchingUp(1), len(transport.reliable[101]))
+	}
+	before := len(transport.datagrams[101])
+	if _, err := m.Tick(ctx); err != nil || len(transport.datagrams[101]) != before+1 {
+		t.Fatalf("session did not return to live broadcasts: %v", err)
+	}
+}
+
+// 显式关闭自动裁剪：历史与 hash 报告保留整局，从帧 1 追帧仍能补齐（关闭前的行为）。
+func TestMatchRetainFullHistoryKeepsEveryFrame(t *testing.T) {
+	transport := newRecordingTransport()
+	m, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8}, Datagrams: transport, Reliable: transport,
+		HistoryRetainFrames: RetainFullHistory, CatchupBatchFrames: 64, CatchupSendWait: testSendWait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ctx := context.Background()
+	const ticks = DefaultHistoryRetainFrames + 500
+	for range ticks {
+		f, err := m.Tick(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.ReportHash(1, f.ID, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m.History().Len() != ticks || m.History().FirstID() != 1 || len(m.detector.reports) != ticks {
+		t.Fatalf("history %d first %d reports %d, want the whole match", m.History().Len(), m.History().FirstID(), len(m.detector.reports))
+	}
+	if err := m.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StartCatchup(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && m.CatchingUp(1); i++ {
+		if _, err := m.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	received := decodeAll(t, transport.reliable[101])
+	for id, f := range decodeAll(t, transport.datagrams[101]) {
+		received[id] = f
+	}
+	for id := FrameID(1); id <= m.History().Latest(); id++ {
+		if _, ok := received[id]; !ok {
+			t.Fatalf("full-history catch-up gap at %d", id)
+		}
+	}
+}
+
+func TestMatchHistoryRetainFramesValidation(t *testing.T) {
+	for _, tc := range []struct {
+		configured int
+		valid      bool
+		want       int
+	}{
+		{0, true, DefaultHistoryRetainFrames},
+		{RetainFullHistory, true, 0},
+		{MinHistoryRetainFrames, true, MinHistoryRetainFrames},
+		{MinHistoryRetainFrames - 1, false, 0},
+		{1, false, 0},
+		{-2, false, 0},
+	} {
+		m, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8}, Datagrams: nullTransport{}, HistoryRetainFrames: tc.configured})
+		if tc.valid != (err == nil) || err != nil && !errors.Is(err, ErrMatchConfigInvalid) {
+			t.Fatalf("HistoryRetainFrames %d: %v", tc.configured, err)
+		}
+		if err == nil && m.retain != tc.want {
+			t.Fatalf("HistoryRetainFrames %d resolved to %d, want %d", tc.configured, m.retain, tc.want)
+		}
 	}
 }

@@ -57,8 +57,10 @@ type LockstepBotConfig struct {
 }
 
 // ErrLockstepBotTerminal marks a bot that must not be used again: its
-// simulation and the authoritative frame stream have diverged, or the sink
-// has failed for longer than the bot is willing to buffer. Rebuild the bot
+// simulation and the authoritative frame stream have diverged, the sink
+// has failed for longer than the bot is willing to buffer, or the server
+// reported that the frames it is missing were trimmed from history
+// (lockstep.ErrCatchupUnservable is in the chain). Rebuild the bot
 // (or restore it from a snapshot) instead of retrying.
 var ErrLockstepBotTerminal = errors.New("robot lockstep: bot is terminal")
 
@@ -165,10 +167,19 @@ func (b *LockstepBot) HandleBroadcast(packet []byte) error {
 		return b.terminal
 	}
 	frames, err := b.assembler.Ingest(packet)
+	if errors.Is(err, lockstep.ErrCatchupUnservable) {
+		return b.catchupUnservable(err)
+	}
 	if applyErr := b.apply(frames); applyErr != nil {
 		return applyErr
 	}
 	return b.checkGap(err)
+}
+
+// catchupUnservable 处理服务端的追帧失败（失败通知，或进程内 sink 直接返回的错误）：缺的帧已不在
+// 服务端历史里，再追帧也补不上，bot 终止，交由调用方决定踢出或开新局。
+func (b *LockstepBot) catchupUnservable(cause error) error {
+	return b.fail(fmt.Errorf("%w: catch-up from frame %d cannot be served: %w", ErrLockstepBotTerminal, b.assembler.Next(), cause))
 }
 
 // HandleFrames is HandleBroadcast for already-decoded frames.
@@ -321,6 +332,9 @@ func (b *LockstepBot) requestCatchup(cause error) error {
 		}
 	}
 	if err := b.cfg.Sink.RequestCatchup(from); err != nil {
+		if errors.Is(err, lockstep.ErrCatchupUnservable) {
+			return b.catchupUnservable(err)
+		}
 		return fmt.Errorf("robot lockstep: request catch-up from frame %d: %w (cause: %v)", from, err, cause)
 	}
 	b.catchupFrom, b.catchupWait = from, 0
