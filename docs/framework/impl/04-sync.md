@@ -149,7 +149,7 @@
 
 ### sync/syncbus
 
-4 个实现文件、2 个测试文件。
+4 个实现文件、3 个测试文件（含示例 `example_test.go`）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -257,6 +257,7 @@
 
 ### sync/syncbus
 
+- [example_test.go](../../../framework/sync/syncbus/example_test.go)：`Example_reconcileAfterLoss`（有限投递兜底模板：序号缺口与周期对账触发快照替换，核对输出）
 - [patch_syncer_test.go](../../../framework/sync/syncbus/patch_syncer_test.go)：`TestPatchSyncerPublishesAndAppliesRemotePatch`、`TestPatchSyncerRejectsMismatchedKey`、`TestPatchSyncerSkipsEmptyPatch`、`TestPatchSyncerRefusesIncompleteConfigurationAndZeroKeys`、`TestPatchSyncerStopWaitsForInFlightApply`
 - [subscription_test.go](../../../framework/sync/syncbus/subscription_test.go)：`TestSubscriptionUnsubscribeStopContract`、`TestSubscriptionRefusesDeliveriesAfterUnsubscribe`、`TestSubscriptionSelfUnsubscribeWaitsOnlyForOthers`、`TestSubscriptionSelfUnsubscribeInReentrantDelivery`、`TestSubscriptionSelfUnsubscribeWithForeignContextTimesOut`；其余 3 项见文件
 

@@ -87,6 +87,33 @@ SyncBusMod 的主题前缀缺省 `roost.sync`，与驱动缺省、生成配置�
 
 JetStream SyncBus 默认有限投递次数 5，不能宣称无限重试或绝不丢。topic 创建/退役期间拒绝冲突订阅，旧 consumer 和在途回调排空后才能重订。无 handler 准入不 ACK；业务错误与坏信封按各自规则结算。流容量、保留期限与次数上限均可能终止投递，恢复由快照或业务对账承担。
 
+### SyncBus 的定位与丢失兜底
+
+**定位（维护者 2026-10-15 决定）**：SyncBus 默认当作**可丢广播**。普通 NATS 驱动最多一次；JetStream 驱动在 MaxDeliver、MaxAge、MaxBytes 之内补投，超出就终止，终止只计数（`nats.jetstream.terminal.total{reason="max_deliver"}`，见[指标清单](../OBSERVABILITY.md#syncbus-有限重投与恢复rr-25)）并记日志，框架不自动修复订阅方。只用于“丢了也无妨或下一条会覆盖”的数据（在线提示、可重算的缓存失效通知）可以直接用；**需要最终一致的状态必须由业务做“丢失检测 → 拉快照对账”闭环**，不能只测重试成功。框架内的用法也遵守这一点：Remote 快照推送在拿不到可确认订阅时退化为按需读取，`PatchSyncer` 只承载瞬时补丁、不保存状态。
+
+推荐写法（可编译、可运行的完整示例见 [syncbus/example_test.go](../../../framework/sync/syncbus/example_test.go) 的 `Example_reconcileAfterLoss`，随 `go test ./framework/sync/syncbus` 执行并核对输出）：
+
+1. **版本是每个 key 的连续序号**：权威方每改一次该 key，`SyncMsg.Version` 加 1，增量与快照共用这一序列。`MessageID` 是投递身份，不能拿来判断丢失。
+2. **序号缺口**：订阅方记录每个 key 已整体正确的版本 `applied`。`Version <= applied` 是旧消息或重投，丢弃；`Version == applied+1` 才应用增量；`Version > applied+1` 是缺口，停止应用这个 key 的增量，转去拉快照。
+3. **版本落后 / 投递耗尽**：缺口只在后面还有消息时才看得见。末尾一条丢失（或订阅方停机期间超出保留期）必须靠**周期对账**发现：定时、启动或重订之后、收到投递终止告警之后，向权威方取各 key 的版本摘要，本地落后的逐个拉快照。
+4. **拉快照对账**：快照来自权威方（RPC、权威存储、Remote 快照读等，由业务决定），按快照整体替换该 key 并把 `applied` 设为快照版本；快照版本可能已超过触发它的消息，之后到达的旧增量自然按第 2 步丢弃。拉取失败保持旧版本、等下一次触发，不能把“没拉到”当成已一致。
+
+```go
+// 订阅回调的核心判断（完整代码见 example_test.go）。
+switch current := r.applied[msg.Key]; {
+case msg.Version <= current:
+    return nil // 旧消息或重投
+case msg.Version > current+1:
+    return r.resync(ctx, msg.Key) // 序号缺口：拉快照整体替换
+}
+r.values[msg.Key] += delta.Add
+r.applied[msg.Key] = msg.Version
+```
+
+消息本身携带整体状态（而不是增量）时，缺口不会算错，只需“版本更大才覆盖”加第 3 步的周期对账。对账周期、摘要的分页与限流、权威方的快照负载都由业务按数据量决定。
+
+框架级对账（订阅端检测到缺口或投递耗尽时自动向发布端请求快照，复用 Remote 快照 / Entity Sync 全量机制，并提供指标与告警）是**下一阶段候选**，尚未实施；需要先确认哪些业务在 SyncBus 上承载需要最终一致的状态，再定义快照请求协议、限流与发布端负载上限（[DESIGN-TODO D2](../../maintenance/DESIGN-TODO.md#d2-syncbus-有限投递的兜底)）。
+
 syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。FileJournal 直接并发 Append 可合批，但单一 History.Record 的写锁串行化不能据此承诺每业务记录减少 fsync。订阅停止、回调排空、journal 生命周期须一起关闭。
 
 ## 6. Lockstep
