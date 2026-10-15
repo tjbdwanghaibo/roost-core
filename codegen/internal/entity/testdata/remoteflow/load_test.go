@@ -186,13 +186,69 @@ type remoteLoadReport struct {
 	ErrorsNotApplied, ErrorsUncertain uint64
 	ErrorClasses                      map[string]uint64
 	// ErrorClassFirst 记每个类别第一次出现的错误文本，用于核对分类（ErrorDetails 只留前 32 条，可能全是同一类）。
-	ErrorClassFirst                                        map[string]string
-	CompletionTPS                                          float64
+	ErrorClassFirst map[string]string
+	CompletionTPS   float64
+	// LatencyXxMS 从计划时刻 due 算到 RequestMulti 返回，混有压测端等待，保留与历史样本同口径比较。
+	// Harness 与 Server 把同一段时间拆开（同一进程单调时钟，1ms 桶向下取整，只计成功回复）：
+	//
+	//	due ─Harness.AdmitLag─▶ emitted ─Harness.ClientQueue─▶ requestStarted ─Server.Completion─▶ 返回
 	LatencyP50MS, LatencyP95MS, LatencyP99MS, LatencyMaxMS int64
+	Harness                                                remoteHarnessLatency
+	Server                                                 remoteServerLatency
 	FirstError                                             string
 	ErrorDetails                                           []remoteLoadError
 	Metrics                                                []metrics.Metric
 	Samples                                                []remoteLoadSample
+}
+
+// remoteLatencyMS 是一段时间的分位（毫秒，1ms 桶向下取整）；NegativeDurations 非零说明时刻先后假设不成立。
+type remoteLatencyMS struct{ P50MS, P95MS, P99MS, MaxMS, NegativeDurations int64 }
+
+// remoteHarnessLatency 是压测端自己引入的等待，不计入服务端延迟。
+type remoteHarnessLatency struct {
+	// AdmitLag：计划时刻 → 发生器把任务放进通道。发生器只在 1/rate 间隔的 ticker 上批量补发，ticker 迟到也记在这里。
+	AdmitLag remoteLatencyMS
+	// ClientQueue：放进通道 → 某个会话 worker 取到并调用 RequestMulti。会话 worker 都在等上一笔回复时在这里排队。
+	ClientQueue remoteLatencyMS
+}
+
+// remoteServerLatency 是请求交给 Nest 之后的耗时：排队、加载、handler、WAL / Remote 写入与提交回复。
+type remoteServerLatency struct {
+	Completion remoteLatencyMS
+}
+
+// remoteHistogram 是 1ms 桶的计数直方图，上限 60 秒；与原 LatencyXxMS 同一种取整。
+type remoteHistogram struct {
+	buckets  [60001]atomic.Uint64
+	count    atomic.Uint64
+	max      atomic.Int64
+	negative atomic.Int64
+}
+
+func (h *remoteHistogram) add(d time.Duration) {
+	ms := d.Milliseconds()
+	if d < 0 {
+		h.negative.Add(1)
+	}
+	h.buckets[min(max(ms, 0), 60000)].Add(1)
+	h.count.Add(1)
+	for old := h.max.Load(); ms > old && !h.max.CompareAndSwap(old, ms); old = h.max.Load() {
+	}
+}
+
+func (h *remoteHistogram) result() remoteLatencyMS {
+	percentile := func(p uint64) int64 {
+		target := (h.count.Load()*p + 99) / 100
+		var n uint64
+		for i := range h.buckets {
+			n += h.buckets[i].Load()
+			if n >= target {
+				return int64(i)
+			}
+		}
+		return 60000
+	}
+	return remoteLatencyMS{P50MS: percentile(50), P95MS: percentile(95), P99MS: percentile(99), MaxMS: h.max.Load(), NegativeDurations: h.negative.Load()}
 }
 
 type remoteLoadError struct {
@@ -269,14 +325,15 @@ func runRemoteLoad(t *testing.T, ctx context.Context, scheduler *nest.NestMgr, n
 	// 输入结束不等于投影排空；继续续订到最终快照校验结束，不能在 async 积压期间退订。
 	t.Cleanup(func() { cancelRenew(); <-renewDone })
 	type job struct {
-		pair     int
-		due      time.Time
-		measured bool
+		pair         int
+		due, emitted time.Time
+		measured     bool
 	}
 	jobs := make(chan job, sessions)
 	var workers sync.WaitGroup
 	var histogram [60001]atomic.Uint64
 	var maxLatency atomic.Int64
+	var admitLag, clientQueue, serverDone remoteHistogram
 	warmSlots := make(chan struct{}, remoteInt("ROOST_REMOTE_WARM_CONCURRENCY", 16))
 	// ROOST_REMOTE_REQUEST_TIMEOUT 只用于区间核验的负对照：调小后计时请求以调用方截止（判别表第 14 行）结束、事务仍可能提交。
 	// 预热不受它影响，始终 30 秒。
@@ -326,7 +383,11 @@ func runRemoteLoad(t *testing.T, ctx context.Context, scheduler *nest.NestMgr, n
 		counts[j.pair*2+1].Add(1)
 		if j.measured {
 			completed.Add(1)
-			ms := time.Since(j.due).Milliseconds()
+			replied := time.Now()
+			admitLag.add(j.emitted.Sub(j.due))
+			clientQueue.add(requestStarted.Sub(j.emitted))
+			serverDone.add(replied.Sub(requestStarted))
+			ms := replied.Sub(j.due).Milliseconds()
 			histogram[min(ms, 60000)].Add(1)
 			for old := maxLatency.Load(); ms > old && !maxLatency.CompareAndSwap(old, ms); old = maxLatency.Load() {
 			}
@@ -408,7 +469,7 @@ func runRemoteLoad(t *testing.T, ctx context.Context, scheduler *nest.NestMgr, n
 			if os.Getenv("ROOST_REMOTE_SHAPE") == "hot" {
 				pairs = min(pairs, 100)
 			}
-			j := job{pair: sequence % pairs, due: started.Add(time.Duration(sequence+1) * interval), measured: true}
+			j := job{pair: sequence % pairs, due: started.Add(time.Duration(sequence+1) * interval), emitted: time.Now(), measured: true}
 			sequence++
 			select {
 			case jobs <- j:
@@ -466,6 +527,8 @@ loop:
 	report.LatencyP50MS = percentile(50)
 	report.LatencyP95MS = percentile(95)
 	report.LatencyP99MS = percentile(99)
+	report.Harness = remoteHarnessLatency{AdmitLag: admitLag.result(), ClientQueue: clientQueue.result()}
+	report.Server = remoteServerLatency{Completion: serverDone.result()}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		t.Fatal(err)

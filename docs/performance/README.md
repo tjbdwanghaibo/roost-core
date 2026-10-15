@@ -38,7 +38,17 @@ bash scripts/perf/nest-game.sh
 
 运行前另设唯一 `ROOST_PERF_LABEL` 和私有 `ROOST_DATAENGINE_IT_NATS_URL`。`ROOST_PERF_CPU=0`保留Go自动选择，不代表运行时只有零个逻辑处理器；记录实际GOMAXPROCS。race、profile与索引刷新不要并跑正式延迟测量。其他模块命令及微基准见各报告，本文档整理未重新执行压测。
 
-**读结果时分清压测端与服务端。** `Messages` / `Heartbeats` 的 `Completion` 从“计划时刻”起算、`QueueWait` 从“投递时刻”起算，两者都混有压测框架自己的等待，保留它们只为与历史样本同口径比较（P99≤50ms 门槛仍按 `Completion`，偏保守）。同一段时间按下面拆开：
+长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比、长尾簇的墙钟分钟相位，以及 trace 中各分段的 goroutine 状态；单个 trace 的簇内对照用 [burst](../../scripts/perf/tailtrace/burst/main.go)。宿主噪声在本机很明显，见 [2026-10-15 报告 §1](PERF-ROUND-20261015.md#1-长尾延迟定位)。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。
+
+## 读结果：压测端与服务端
+
+维护者 2026-10-15 要求所有负载型压测把延迟拆成“压测端”（发生器节拍、模拟客户端排队与解码、观测轮询）和“服务端”（框架实际处理）两部分。各入口原有的端到端字段与通过门槛**不变**，保留它们只为与历史样本同口径比较；新增的 `Harness.*` / `Server.*`（JSON 小写为 `harness.*` / `server.*`）是同一段时间的拆分。评估框架延迟看 `Server.*`，`Harness.*` 偏大说明发生器或观测本身成了瓶颈。2026-10-15 之前的样本没有这些拆分；同一入口的分段除特别说明外在同一进程的单调时钟上取，各分段的分位分别统计，不能把分位相加。
+
+“已分清”指原字段的区间本来就不含压测端等待；“新拆分”指原字段混有压测端等待、本次新增了分段；微基准（`nest.sh`、`sync.sh`、`nest-dispatch.sh` 等 `go test -bench` 的 ns/op）没有压测端等待的概念，不在此列。
+
+### nest-game.sh（新拆分，2026-10-15 `44896aa4`）
+
+`Messages` / `Heartbeats` 的 `Completion` 从计划时刻、`QueueWait` 从投递时刻起算，混有压测端等待（P99≤50ms 门槛仍按 `Completion`，偏保守）：
 
 | 字段 | 区间 | 归属 |
 | --- | --- | --- |
@@ -46,8 +56,90 @@ bash scripts/perf/nest-game.sh
 | `Harness.ClientQueue` | 投递 → 模拟客户端写出请求 | 压测端：每个玩家连接一次只有一条在途请求，含等前一条回包；直接投递（heartbeat、无 Gate）恒为 0 |
 | `Server.QueueWait` | 请求写出 → handler 开始 | 服务端：Gate、NATS、Game 接入、Nest 排队 |
 | `Handler` | handler 本身 | 服务端 |
-| `Server.Completion` | 请求写出 → Entity 释放 | 服务端合计，评估框架延迟看这一项 |
+| `Server.Completion` | 请求写出 → Entity 释放 | 服务端合计 |
+| `Completion` / `QueueWait` | 计划 / 投递 → 释放 / 开始 | 混合（历史口径） |
 
-`GateRoundTrip` 是客户端写出到收到回包（服务端为主）。Sync 的 `PlannedToClient` 从计划时刻起算、含压测端等待；`ChangedToClient` / `CommittedToClient` 从 handler 改值 / 提交起算，是服务端到客户端的同步延迟。2026-10-15 之前的样本没有这几项拆分。
+`GateRoundTrip` 是客户端写出到收到回包（服务端为主）。Sync 的 `PlannedToClient` 从计划时刻起算、含压测端等待（混合）；`ChangedToClient` / `CommittedToClient` 从 handler 改值 / 提交起算，是服务端到客户端的同步延迟。
 
-长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比、长尾簇的墙钟分钟相位，以及 trace 中各分段的 goroutine 状态；单个 trace 的簇内对照用 [burst](../../scripts/perf/tailtrace/burst/main.go)。宿主噪声在本机很明显，见 [2026-10-15 报告 §1](PERF-ROUND-20261015.md#1-长尾延迟定位)。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。
+### nest-msg.sh（已分清，不改）
+
+`p50_us` / `p95_us` / `p99_us`：dispatch 模式从取得 producer 信用之后、调用 `Dispatch` 之前，到 handler 释放后的 post-release 回调；request 模式从调用 `Request` 到返回。producer 等信用（闭环窗口）发生在计时起点之前，不计入，所以全部是服务端（Nest 排队 + handler + 释放）。闭环负载下这段排队由窗口大小决定，读数时与 `window_per_producer`、`producers` 一起看。
+
+### dataengine.sh（新拆分）
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `harness.admit_lag_p95/p99/max_ms` | 计划时刻 → writer 调用 `Request` / `RequestMulti` | 压测端：计时器迟到，以及 32 个 writer 都在等上一条回复时的排队；只在 `ROOST_PERF_RATE>0` 时有值（`admit_lag_samples` = 请求数），闭环（默认 rate=0）为 0 |
+| `request_p95_ms` / `request_p99_ms` | 调用 → 回复 | 服务端：Nest 排队、handler、按持久级别等 WAL / 提交 |
+| `record_to_mongo_p95/p99_ms` | 提交记录生成（`CreatedAt`，墙钟）→ Mongo 投影返回 | 服务端（投影链路） |
+| `scheduled_to_reply_p99_ms` | 计划时刻 → 回复 | 混合（历史口径），= admit_lag + request 按样本相加 |
+| `mixed.StateAgeAtDecodeP99MS` / `ExistingObjectChangeToDecodeP99MS`（`ROOST_PERF_MIXED=1`） | handler 改值 → 进程内 Transport 解码 | 服务端（Transport 同步回调，无客户端排队） |
+
+同一修改顺带修正了投影计时：Projector 对单条段优先走 `ProjectFenced`，夹具只包 `Project` / `ProjectBatch` 时这条路径绕过计时，`ROOST_PERF_RATE>0` 时稳定报 `projection samples=n-1 want=n` 失败（默认闭环全是批量段，所以没暴露）。
+
+### remote.sh / remote-capacity.sh / remote-workers.sh（新拆分）
+
+后两个入口逐档调用 `remote.sh`，字段相同。`result.json` 新增（1ms 桶向下取整，只计成功回复）：
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `Harness.AdmitLag` | 计划时刻 `due` → 发生器把任务放进通道 | 压测端：发生器在 1/rate 间隔的 ticker 上补发，ticker 迟到记在这里 |
+| `Harness.ClientQueue` | 放进通道 → 会话 worker 调用 `RequestMulti` | 压测端：会话 worker 都在等上一笔回复时在通道里排队 |
+| `Server.Completion` | 调用 `RequestMulti` → 返回 | 服务端：Nest 排队、加载、handler、WAL / Remote 写入与回复 |
+| `LatencyP50MS`～`LatencyMaxMS` | `due` → 返回 | 混合（历史口径） |
+
+`ErrorDetails[].ElapsedMS` 从调用起算，属服务端。三份直方图常驻约 1.4MB 堆，长稳 `heap_bytes` 的基线相应抬高，增长趋势不受影响。
+
+### saga.sh（新拆分）
+
+原 `P50MS`～`MaxMS` 从计划启动时刻算到 50ms 轮询读到持久终态，混有发生器排队与轮询间隔。服务端终态时刻改从引擎写出口取：测试把协调器的 Store 包一层 `terminalClock`，记下终态那次 `Store.Apply` 提交成功返回的时刻（`Store.Apply` 是协调器唯一的状态写出口，见 `stepTransition`），不改请求与结果。
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `Harness.AdmitLag` | 计划启动时刻 → 提交协程调用 `StartSaga` | 压测端：计时器迟到、64 格任务通道与 8 个提交协程 |
+| `Server.Start` | `StartSaga` 调用本身 | 服务端（建记录并提交） |
+| `Server.Completion` | 调用 `StartSaga` → 终态 `Apply` 返回 | 服务端：两步经 JetStream 派发、Mongo 步骤执行、完成回传与终态提交 |
+| `Harness.ObserveLag` | 终态 `Apply` 返回 → 轮询读到终态 | 压测端：上界约一个 50ms 轮询间隔加一次 `Find` |
+| `Minutes[].ServerP99MS` | 同一分钟分段的 `Server.Completion` P99 | 服务端 |
+| `P50MS`～`MaxMS`、`Minutes[].P50MS/P99MS/MaxMS` | 计划 → 轮询读到 | 混合（历史口径） |
+
+`Server.TerminalMissing` 非零说明终态有别的写出口、拆分不完整；各段带 `NegativeDurations`，非零说明时刻先后假设不成立（例如 `Find` 先于 `Apply` 返回读到提交）。
+
+### sync-aoi.sh / sync-recovery.sh（新拆分）
+
+服务端与模拟客户端是两个进程；`planned_event_to_client` / `state_change_to_client` / `commit_to_client` 的终点是客户端解码校验完该对象。`server.json`（服务端进程，只计正式测量 tick，样本是每次状态变化）：
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `harness.admit_lag_ms` | 批次计划时刻 → 批次醒来开始发送 | 压测端：`time.Sleep` 迟到 |
+| `harness.client_queue_ms` | 批次开始 → 本次状态变化调用 `Request` | 压测端：一个发生器串行发出整批，后面的等前面的 `Request` 返回 |
+| `server.request_to_change_ms` | 调用 `Request` → handler 改值 | 服务端（`-nest=false` 时是直接改值，近似 0） |
+
+`client.json`（样本是每个观察者收到的每次变化；`Changed` / `Committed` 是服务端进程墙钟，同机两进程比较）：
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `server.change_to_receive_ms` | handler 改值 → 客户端读完整帧负载、解码之前 | 服务端：Sync 间隔与 flush、传输（含 async 队列）、回环 TCP；客户端读协程被调度的时间无法分开，按服务端上界计 |
+| `server.commit_to_receive_ms` | Nest 提交 → 同上 | 服务端 |
+| `harness.client_decode_ms` | 读完整帧 → 解码校验完该对象 | 压测端：含同一帧里排在前面的对象 |
+| `planned_event_to_client_ms` | 计划 → 解码完 | 混合（50ms 门槛之一，历史口径） |
+| `state_change_to_client_ms` / `commit_to_client_ms` / `delta_*` / `full_*` | 改值 / 提交 → 解码完 | 服务端为主，含 `client_decode`（门槛之一，历史口径） |
+| `transport_admission_to_client_ms` | Transport 写出 → 整帧解码完 | 服务端为主，含整帧解码 |
+
+`flush_start_lag_ms` 是驱动循环 `time.Sleep` 迟到（压测端）；`server_active_work_ms` 是驱动线程一个 tick 内的忙碌时间，包括串行发出的请求（服务端为主）。恢复项：`recovery_admission_caught_up_ms` 在每个 tick 末检查一次，含最多一个 tick（50ms）的观察间隔，是服务端值的上界；`recovery_client_verified_ms` 只在诊断模式（`-trace-capacity>0`）有值，且服务端为核验暂停了输入，不作延迟比较。
+
+### sync-business.sh（新拆分）
+
+单进程；样本是每个客户端收到的每一帧，按 tick 对齐：
+
+| 字段 | 区间 | 归属 |
+| --- | --- | --- |
+| `harness.admit_lag_ms` | tick 计划时刻 → 开始发送（与 `start_lag_ms` 同一段，按帧加权） | 压测端 |
+| `harness.capture_ms` | 夹具记下本 tick 期望值 | 压测端 |
+| `harness.client_decode_ms` | 读完整帧 → 解码并核对期望值 | 压测端 |
+| `server.requests_ms` | 本 tick 的业务请求（AddExp + Moved，发生器串行发出，每条等回复）减去 capture | 服务端 |
+| `server.flush_to_receive_ms` | Sync flush 开始 → 客户端读协程读完负载 | 服务端：flush、推送与回环 TCP |
+| `server.completion_ms` | `requests` + `flush_to_receive` | 服务端合计 |
+| `scheduled_to_client_ms` | tick 计划时刻 → 解码完（墙钟） | 混合（历史口径）≈ 上面五段按帧相加 |
+
+`tick_work_ms` / `flush_ms` / `deadline_misses` 是驱动线程按 tick 的服务端工作量。game-demo 场景接口改为 `PushSyncPlayer(ctx, id, messageID, payload []byte)` 之后（`ba0dd7c2` / `634ae6ce` 一带，未逐提交确认）该夹具无法编译（`*businessTCP does not implement scenePusher`），本次一并改为新接口；之前的 sync-business 历史样本早于该变更。

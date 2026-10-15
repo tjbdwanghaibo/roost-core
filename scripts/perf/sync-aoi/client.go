@@ -55,6 +55,7 @@ type clientResult struct {
 	live, full                               []float64
 	frames, bytes, updates, creates, removes int64
 	planned, changed, committed, dispatch    []float64
+	changeToReceive, commitToReceive, decode []float64
 	peak, final                              int
 	err                                      error
 }
@@ -84,6 +85,25 @@ type clientReport struct {
 	GCPauseMS        float64            `json:"client_gc_pause_ms"`
 	GOMAXPROCS       int                `json:"client_gomaxprocs"`
 	Errors           []string           `json:"errors,omitempty"`
+	// planned_event_to_client / state_change_to_client / commit_to_client 都算到客户端解码校验完该对象，
+	// 含模拟客户端解码同一帧里排在前面的对象的时间。下面把它拆开（received 是读完整帧负载、解码之前的时刻；
+	// Changed / Committed 是服务端进程的墙钟，同机两个进程比较）：
+	//
+	//	Changed ─server.change_to_receive─▶ received ─harness.client_decode─▶ 解码校验完该对象
+	Harness clientHarness `json:"harness"`
+	Server  clientServer  `json:"server"`
+}
+
+// clientHarness 是模拟客户端自己引入的耗时。
+type clientHarness struct {
+	ClientDecode map[string]float64 `json:"client_decode_ms"`
+}
+
+// clientServer 是服务端改值 / 提交到客户端读完整帧的耗时：Sync 间隔与 flush、传输（含 async 队列）、回环 TCP，
+// 以及客户端进程的读协程被调度到的时间（这一小段无法与内核投递分开，按服务端上界计）。
+type clientServer struct {
+	ChangeToReceive map[string]float64 `json:"change_to_receive_ms"`
+	CommitToReceive map[string]float64 `json:"commit_to_receive_ms"`
 }
 
 func runClient(c config) error {
@@ -120,6 +140,7 @@ func runClient(c config) error {
 	runtime.ReadMemStats(&after)
 	report := clientReport{GOMAXPROCS: runtime.GOMAXPROCS(0), AllocBytes: after.TotalAlloc - before.TotalAlloc, GCCycles: after.NumGC - before.NumGC, GCPauseMS: float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6}
 	var planned, changed, committed, dispatch, visible, peak, live, full []float64
+	var changeToReceive, commitToReceive, decode []float64
 	var baselines baselineReceipts
 	var recovered []float64
 	for r := range results {
@@ -156,6 +177,9 @@ func runClient(c config) error {
 		changed = append(changed, r.changed...)
 		committed = append(committed, r.committed...)
 		dispatch = append(dispatch, r.dispatch...)
+		changeToReceive = append(changeToReceive, r.changeToReceive...)
+		commitToReceive = append(commitToReceive, r.commitToReceive...)
+		decode = append(decode, r.decode...)
 		visible = append(visible, float64(r.final))
 		peak = append(peak, float64(r.peak))
 	}
@@ -174,6 +198,8 @@ func runClient(c config) error {
 	}
 	report.Planned, report.Changed, report.Dispatch = quantiles(planned), quantiles(changed), quantiles(dispatch)
 	report.Committed = quantiles(committed)
+	report.Harness = clientHarness{ClientDecode: quantiles(decode)}
+	report.Server = clientServer{ChangeToReceive: quantiles(changeToReceive), CommitToReceive: quantiles(commitToReceive)}
 	report.VisibleFinal, report.VisiblePeak = quantiles(visible), quantiles(peak)
 	if c.TraceCapacity > 0 {
 		if err := writeJSON(filepath.Join(c.Output, "baseline-receipts.json"), baselines); err != nil {
@@ -214,6 +240,7 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 			r.err = err
 			return
 		}
+		received := time.Now().UnixNano()
 		switch kind {
 		case packetBarrier:
 			r = clientResult{peak: len(refs)}
@@ -366,8 +393,11 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 					}
 					r.planned = append(r.planned, float64(now-value.Planned)/1e6)
 					r.changed = append(r.changed, float64(now-value.Changed)/1e6)
+					r.changeToReceive = append(r.changeToReceive, float64(received-value.Changed)/1e6)
+					r.decode = append(r.decode, float64(now-received)/1e6)
 					if value.Committed > 0 {
 						r.committed = append(r.committed, float64(now-value.Committed)/1e6)
+						r.commitToReceive = append(r.commitToReceive, float64(received-value.Committed)/1e6)
 					}
 				}
 			}

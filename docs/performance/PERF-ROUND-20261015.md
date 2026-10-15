@@ -207,7 +207,7 @@
 
 ## 6. 压测端 / 服务端延迟拆分的验证样本（同日 10:56～11:01）
 
-维护者要求区分“服务器的延迟”和“压测框架引入的延迟”。夹具新增 `Harness.*` / `Server.*` 分段（定义见 [README](README.md#复跑入口)），用 v1.27.0 重档参数（`ROOST_PERF_CPU=0`，实际 10）跑 5 分钟验证，标签 `perf1029-split-heavy-5m`，[JSON](benchmarks/perf-round-20261015/perf1029-split-heavy-5m.json)。启动时平均负载约 5.8，高于 30 分钟样本，本次端到端数字偏高（业务 P99 17.74ms），只用来说明拆分，不与 30 分钟样本比较。计数、取值核验与 P99 门槛通过，各分段无负时长。
+维护者要求区分“服务器的延迟”和“压测框架引入的延迟”。夹具新增 `Harness.*` / `Server.*` 分段（定义见 [README](README.md#读结果压测端与服务端)），用 v1.27.0 重档参数（`ROOST_PERF_CPU=0`，实际 10）跑 5 分钟验证，标签 `perf1029-split-heavy-5m`，[JSON](benchmarks/perf-round-20261015/perf1029-split-heavy-5m.json)。启动时平均负载约 5.8，高于 30 分钟样本，本次端到端数字偏高（业务 P99 17.74ms），只用来说明拆分，不与 30 分钟样本比较。计数、取值核验与 P99 门槛通过，各分段无负时长。
 
 | 分段（ms） | 业务 P50 / P99 / max，>50ms | Heartbeat P50 / P99 / max，>50ms |
 | --- | --- | --- |

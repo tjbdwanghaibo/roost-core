@@ -81,6 +81,9 @@ func TestRealSagaPerformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 只包一层观察，不换 Assemble 的正式 Store；必须在 Start 之前替换，此后引擎只经 e.store 写记录。
+	terminals := &terminalClock{Store: asm.Engine.store, at: make(map[string]time.Time)}
+	asm.Engine.store = terminals
 	ctx, cancel := context.WithTimeout(context.Background(), duration+2*time.Minute)
 	defer cancel()
 	if err = asm.Start(ctx); err != nil {
@@ -138,10 +141,20 @@ func TestRealSagaPerformance(t *testing.T) {
 		index   int
 		planned time.Time
 	}
-	// 按计划启动时刻所在的分钟分段统计，区分偶发尖峰与随运行时间逐渐变慢。
+	// started 是一个已成功启动、尚未观察到终态的 saga 的压测端时刻。
+	type startedSaga struct {
+		planned, called time.Time
+	}
+	// observation 留到最后再与 terminals 对照：轮询读到终态时，同一次 Apply 可能还没返回到包装层。
+	type observation struct {
+		id                        string
+		planned, called, observed time.Time
+	}
+	// 按计划启动时刻所在的分钟分段统计，区分偶发尖峰与随运行时间逐渐变慢。ServerP99MS 是同一分段的服务端口径。
 	type minuteSlice struct {
 		Minute, Count       int
 		P50MS, P99MS, MaxMS float64
+		ServerP99MS         float64
 	}
 	type result struct {
 		Mode                                                      string
@@ -154,11 +167,22 @@ func TestRealSagaPerformance(t *testing.T) {
 		OutboxPending, Leases, BusinessDocuments, EffectDocuments int64
 		BusinessVerified                                          bool
 		Minutes                                                   []minuteSlice
+		// P50MS～MaxMS 从计划启动时刻算到轮询观察到持久终态，混有压测端等待，保留它们与历史样本同口径比较。
+		// Harness 与 Server 把同一段时间拆开（同一进程单调时钟）：
+		//
+		//	planned ─Harness.AdmitLag─▶ called ─Server.Start─▶ StartSaga 返回
+		//	called ──────────── Server.Completion ────────────▶ terminal ─Harness.ObserveLag─▶ observed
+		//
+		// terminal 是终态那次 Store.Apply 提交成功返回的时刻（terminalClock），评估框架延迟看 Server.Completion。
+		Harness sagaHarness
+		Server  sagaServer
 	}
 	total := int(duration/time.Second) * rate
 	r := result{Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
 	var mu sync.Mutex
-	pending := make(map[string]time.Time)
+	pending := make(map[string]startedSaga)
+	var observations []observation
+	var startDurations []time.Duration
 	var started atomic.Int64
 	var failures atomic.Uint64
 	var finished atomic.Bool
@@ -171,7 +195,9 @@ func TestRealSagaPerformance(t *testing.T) {
 		workers.Go(func() {
 			for j := range jobs {
 				id := fmt.Sprintf("perf-%d", j.index)
+				called := time.Now()
 				_, err := asm.Engine.StartSaga(ctx, StartRequest{ID: id, Type: def.Type, DefinitionVersion: 1, BusinessKey: id, DeadlineAt: j.planned.Add(30 * time.Second)})
+				returned := time.Now()
 				mu.Lock()
 				if err != nil {
 					failures.Add(1)
@@ -179,7 +205,8 @@ func TestRealSagaPerformance(t *testing.T) {
 						r.FirstError = err.Error()
 					}
 				} else {
-					pending[id] = j.planned
+					pending[id] = startedSaga{planned: j.planned, called: called}
+					startDurations = append(startDurations, returned.Sub(called))
 					started.Add(1)
 				}
 				mu.Unlock()
@@ -230,10 +257,12 @@ func TestRealSagaPerformance(t *testing.T) {
 			observed := time.Now() // 完成计时等到可读取持久终态；包含最多约50ms的观察间隔。
 			mu.Lock()
 			for _, doc := range docs {
-				latency := observed.Sub(pending[doc.ID])
+				s := pending[doc.ID]
+				latency := observed.Sub(s.planned)
 				latencies = append(latencies, latency)
-				minute := int(pending[doc.ID].Sub(begin) / time.Minute)
+				minute := int(s.planned.Sub(begin) / time.Minute)
 				byMinute[minute] = append(byMinute[minute], latency)
+				observations = append(observations, observation{id: doc.ID, planned: s.planned, called: s.called, observed: observed})
 				delete(pending, doc.ID)
 				r.Completed++
 				if doc.Status != terminal {
@@ -266,10 +295,56 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	slices.Sort(latencies)
 	r.P50MS, r.P95MS, r.P99MS, r.MaxMS = quantile(latencies, .5), quantile(latencies, .95), quantile(latencies, .99), quantile(latencies, 1)
+	summarize := func(values []time.Duration) sagaLatency {
+		out := sagaLatency{Samples: len(values)}
+		for _, v := range values {
+			if v < 0 {
+				out.NegativeDurations++
+			}
+		}
+		slices.Sort(values)
+		out.P50MS, out.P95MS, out.P99MS, out.MaxMS = quantile(values, .5), quantile(values, .95), quantile(values, .99), quantile(values, 1)
+		return out
+	}
+	// 轮询读到的是已提交的终态，但同一次 Apply 可能还没返回到 terminalClock；限时等它们全部记下再对照，
+	// 超时仍缺的计入 TerminalMissing，不拿观察时刻代替。
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		terminals.mu.Lock()
+		recorded := 0
+		for _, o := range observations {
+			if _, ok := terminals.at[o.id]; ok {
+				recorded++
+			}
+		}
+		terminals.mu.Unlock()
+		if recorded == len(observations) {
+			break
+		}
+	}
+	var admitLag, observeLag, serverDone []time.Duration
+	serverByMinute := make([][]time.Duration, len(byMinute))
+	terminals.mu.Lock()
+	for _, o := range observations {
+		admitLag = append(admitLag, o.called.Sub(o.planned))
+		at, ok := terminals.at[o.id]
+		if !ok {
+			r.Server.TerminalMissing++
+			continue
+		}
+		observeLag = append(observeLag, o.observed.Sub(at))
+		serverDone = append(serverDone, at.Sub(o.called))
+		minute := int(o.planned.Sub(begin) / time.Minute)
+		serverByMinute[minute] = append(serverByMinute[minute], at.Sub(o.called))
+	}
+	terminals.mu.Unlock()
+	r.Harness = sagaHarness{AdmitLag: summarize(admitLag), ObserveLag: summarize(observeLag)}
+	r.Server.Start, r.Server.Completion = summarize(startDurations), summarize(serverDone)
 	for minute, slice := range byMinute {
 		slices.Sort(slice)
-		r.Minutes = append(r.Minutes, minuteSlice{Minute: minute, Count: len(slice), P50MS: quantile(slice, .5), P99MS: quantile(slice, .99), MaxMS: quantile(slice, 1)})
-		t.Logf("minute=%d count=%d p50=%.1fms p99=%.1fms max=%.1fms", minute, len(slice), quantile(slice, .5), quantile(slice, .99), quantile(slice, 1))
+		server := serverByMinute[minute]
+		slices.Sort(server)
+		r.Minutes = append(r.Minutes, minuteSlice{Minute: minute, Count: len(slice), P50MS: quantile(slice, .5), P99MS: quantile(slice, .99), MaxMS: quantile(slice, 1), ServerP99MS: quantile(server, .99)})
+		t.Logf("minute=%d count=%d p50=%.1fms p99=%.1fms max=%.1fms server_p99=%.1fms", minute, len(slice), quantile(slice, .5), quantile(slice, .99), quantile(slice, 1), quantile(server, .99))
 	}
 	// 不在完成后补发/篡改业务数据；等待框架自然排空，再逐文档核对一次且仅一次生效。
 	for deadline := time.Now().Add(10 * time.Second); ; {
@@ -322,8 +397,53 @@ func TestRealSagaPerformance(t *testing.T) {
 	if err = os.WriteFile(output, append(raw, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.StartErrors, r.BusinessVerified)
+	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms server_p99=%.1fms admit_p99=%.1fms observe_p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.Server.Completion.P99MS, r.Harness.AdmitLag.P99MS, r.Harness.ObserveLag.P99MS, r.StartErrors, r.BusinessVerified)
 	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
 		t.Fatal("Saga load verification failed; result retained")
 	}
+}
+
+// sagaLatency 是一段时间的分位（毫秒）；NegativeDurations 非零说明两个时刻的先后假设不成立，该段不可信。
+type sagaLatency struct {
+	Samples, NegativeDurations int
+	P50MS, P95MS, P99MS, MaxMS float64
+}
+
+// sagaHarness 是压测端自己引入的等待，不计入服务端延迟。
+type sagaHarness struct {
+	// AdmitLag：计划启动时刻 → 提交协程调用 StartSaga。含计时器迟到、64 格任务通道与 8 个提交协程都在等上一笔 StartSaga。
+	AdmitLag sagaLatency
+	// ObserveLag：终态 Apply 返回 → 轮询读到终态。上界约为一个 50ms 轮询间隔加一次 Find 与本轮其余记录的处理。
+	ObserveLag sagaLatency
+}
+
+// sagaServer 是请求交给协调器之后的耗时。
+type sagaServer struct {
+	// Start：StartSaga 调用本身（建记录并提交）。
+	Start sagaLatency
+	// Completion：调用 StartSaga → 终态那次 Store.Apply 提交返回，含两个步骤经 JetStream 派发、Mongo 步骤执行与完成回传。
+	Completion sagaLatency
+	// TerminalMissing：轮询读到终态、却没有经过 terminalClock 的 saga 数；非零说明终态有别的写出口，拆分不完整。
+	TerminalMissing int
+}
+
+// terminalClock 包住协调器的 Store，记下每个 saga 第一次终态写入提交成功返回的时刻（同一进程单调时钟）。
+// Store.Apply 是协调器唯一的状态写出口（stepTransition），终态都经过这里；请求与结果原样透传，不改变持久语义。
+type terminalClock struct {
+	Store
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+func (s *terminalClock) Apply(ctx context.Context, request ApplyRequest) (ApplyOutcome, error) {
+	outcome, err := s.Store.Apply(ctx, request)
+	if err == nil && outcome == ApplyApplied && request.After.Status.Terminal() {
+		now := time.Now()
+		s.mu.Lock()
+		if _, ok := s.at[request.After.ID]; !ok {
+			s.at[request.After.ID] = now
+		}
+		s.mu.Unlock()
+	}
+	return outcome, err
 }

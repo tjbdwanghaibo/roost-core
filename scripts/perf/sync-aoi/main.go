@@ -366,8 +366,9 @@ func runServer(c config) error {
 	}
 	ctx := context.Background()
 	var engine *nest.NestMgr
+	split := &splitTimings{}
 	if c.Nest {
-		engine, err = newLoadNest(states, c, manager, interest)
+		engine, err = newLoadNest(states, c, manager, interest, split)
 		if err != nil {
 			return err
 		}
@@ -404,13 +405,18 @@ func runServer(c config) error {
 	for gcd(stride, c.Entities) != 1 {
 		stride += 2
 	}
-	mutate := func(step, start, end int, planned time.Time) error {
+	// begin 是本批次醒来开始发送的时刻；同一批里的状态变化由一个发生器串行发出，后面的要等前面的 Request 返回。
+	mutate := func(step, start, end int, planned, begin time.Time) error {
 		for j := start; j < end; j++ {
 			index := ((step+10)*count + j) * stride % c.Entities
 			s := states[index]
 			id := s.data.ID
+			sent := time.Now()
+			if step > 0 {
+				split.sent(planned, begin, sent)
+			}
 			if engine != nil {
-				_, err := engine.Request(ctx, loadHandler, id, []any{loadMutation{step: step, planned: planned, observer: expectedIDs[id]}})
+				_, err := engine.Request(ctx, loadHandler, id, []any{loadMutation{step: step, planned: planned, sent: sent, observer: expectedIDs[id]}})
 				if err != nil {
 					return err
 				}
@@ -422,6 +428,9 @@ func runServer(c config) error {
 			s.data.HP = 100 - int64((step+10000)%97)
 			s.data.Planned = planned.UnixNano()
 			s.data.Changed = time.Now().UnixNano()
+			if step > 0 {
+				split.changed(sent)
+			}
 			s.state.MarkDirty(1)
 			if expectedIDs[id] {
 				err = interest.Move(id, at)
@@ -435,7 +444,8 @@ func runServer(c config) error {
 		return nil
 	}
 	for step := -9; step <= 0; step++ {
-		if err := mutate(step, 0, count, time.Now()); err != nil {
+		now := time.Now()
+		if err := mutate(step, 0, count, now, now); err != nil {
 			return err
 		}
 		if r := interest.Apply(); len(r) > 0 {
@@ -537,7 +547,7 @@ func runServer(c config) error {
 				time.Sleep(wait)
 			}
 			begin := time.Now()
-			if err := mutate(tick, batch*count/c.Batches, (batch+1)*count/c.Batches, planned); err != nil {
+			if err := mutate(tick, batch*count/c.Batches, (batch+1)*count/c.Batches, planned, begin); err != nil {
 				return err
 			}
 			active += time.Since(begin)
@@ -663,6 +673,7 @@ func runServer(c config) error {
 	}
 	report := map[string]any{"recovery_admission_caught_up_ms": milliseconds(recoveryCaughtUp), "recovery_samples": recoverySamples, "startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
 	report["flush_failures_before_stop"] = failuresBeforeStop
+	report["harness"], report["server"] = split.report()
 	if last := manager.LastError(); last != nil {
 		report["manager_last_error"] = last.Error()
 	}

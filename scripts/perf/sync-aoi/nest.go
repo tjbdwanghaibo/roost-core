@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -62,12 +63,42 @@ func (g loadGetter) GetMany(ctx context.Context, ids []int64, cats []entity.Enti
 type loadMutation struct {
 	step     int
 	planned  time.Time
+	sent     time.Time // 发生器调用 Request 之前的时刻（服务端进程单调时钟）。
 	observer bool
+}
+
+// splitTimings 记录服务端进程里能看到的分段（只计正式测量 tick），写进 server.json 的 harness / server：
+//
+//	planned ─harness.admit_lag─▶ 批次开始 ─harness.client_queue─▶ sent ─server.request_to_change─▶ handler 改值（Changed）
+//
+// Changed 之后到客户端的分段在 client.json（server.change_to_receive_ms / harness.client_decode_ms）。
+type splitTimings struct {
+	mu                                     sync.Mutex
+	admitLag, clientQueue, requestToChange []float64
+}
+
+func (s *splitTimings) sent(planned, begin, sent time.Time) {
+	s.mu.Lock()
+	s.admitLag = append(s.admitLag, milliseconds(begin.Sub(planned)))
+	s.clientQueue = append(s.clientQueue, milliseconds(sent.Sub(begin)))
+	s.mu.Unlock()
+}
+func (s *splitTimings) changed(sent time.Time) {
+	d := milliseconds(time.Since(sent))
+	s.mu.Lock()
+	s.requestToChange = append(s.requestToChange, d)
+	s.mu.Unlock()
+}
+func (s *splitTimings) report() (harness, server map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]any{"admit_lag_ms": quantiles(s.admitLag), "client_queue_ms": quantiles(s.clientQueue)},
+		map[string]any{"request_to_change_ms": quantiles(s.requestToChange)}
 }
 
 var loadHandler = nest.NewHandlerName("sync_aoi_state_change")
 
-func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.Interest) (*nest.NestMgr, error) {
+func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.Interest, split *splitTimings) (*nest.NestMgr, error) {
 	getter := make(loadGetter, len(states))
 	for _, s := range states {
 		getter[s.ID()] = s
@@ -81,6 +112,9 @@ func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.
 		s.data.HP = 100 - int64((change.step+10000)%97)
 		s.data.Planned = change.planned.UnixNano()
 		s.data.Changed = time.Now().UnixNano()
+		if change.step > 0 {
+			split.changed(change.sent)
+		}
 		s.tracker.MarkSync(1)
 		return nil, in.QueueMove(s, at, change.observer)
 	})

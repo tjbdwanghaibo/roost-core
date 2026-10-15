@@ -22,8 +22,6 @@ import (
 	player "example.com/syncperf/game/entities/player"
 	syncsender "example.com/syncperf/game/handler/syncsender"
 	gamescene "example.com/syncperf/game/scene"
-	access "example.com/syncperf/internal/access/player/tcp"
-	"example.com/syncperf/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -48,15 +46,44 @@ type businessTCP struct {
 	expected  map[int]map[int64]businessState
 	tick      int
 	scheduled time.Time
+	// timing 与 split 拆开 scheduled_to_client（同一进程单调时钟，每个测量 tick 一份，按帧采样）：
+	//
+	//	scheduled ─harness.admit_lag─▶ begin ─server.requests（不含 harness.capture）─▶ flushStart
+	//	          ─server.flush_to_receive─▶ received ─harness.client_decode─▶ 解码校验完整帧
+	//
+	// server.completion = requests + flush_to_receive，是这一帧里框架实际处理的时间。requests 是发生器串行
+	// 发出的本 tick 业务请求（AddExp + Moved，每条等回复再发下一条），flush_to_receive 是 Sync flush、
+	// 推送与回环 TCP 到读协程读完负载。capture 是夹具记下期望值的耗时。
+	// timing 按 tick 下标预分配，单独用原子指针：写在 flushStart 之后、不取 lane.mu，不改变 flush_ms 的口径。
+	timing []atomic.Pointer[businessTickTiming]
+	split  businessSplit
+}
+
+type businessTickTiming struct {
+	scheduled, begin, flushStart time.Time
+	capture                      time.Duration
+}
+
+type businessSplit struct {
+	admitLag, capture, clientDecode, requests, flushToReceive, completion []float64
+}
+
+func businessMS(d time.Duration) float64 { return float64(d) / 1e6 }
+
+func (lane *businessTCP) tickTiming(tick int) *businessTickTiming {
+	if tick < 1 || tick >= len(lane.timing) {
+		return nil
+	}
+	return lane.timing[tick].Load()
 }
 type businessState struct {
 	Exp   int64
 	Level int32
 }
 
-func newBusinessTCP(t *testing.T, count int) *businessTCP {
+func newBusinessTCP(t *testing.T, count, ticks int) *businessTCP {
 	t.Helper()
-	lane := &businessTCP{conns: make(map[int64]net.Conn), expected: make(map[int]map[int64]businessState)}
+	lane := &businessTCP{conns: make(map[int64]net.Conn), expected: make(map[int]map[int64]businessState), timing: make([]atomic.Pointer[businessTickTiming], ticks+1)}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -94,12 +121,8 @@ func (lane *businessTCP) ActiveSessions(id int64) int {
 	}
 	return 0
 }
-func (*businessTCP) OnSessionClosed(func(access.SessionClosed)) func() { return func() {} }
-func (lane *businessTCP) PushPlayer(ctx context.Context, id int64, _ uint32, value any) error {
-	push, ok := value.(*pb.EntitySyncPush)
-	if !ok {
-		return fmt.Errorf("unexpected push %T", value)
-	}
+// PushSyncPlayer 是 game-demo 场景需要的 scenePusher：payload 就是 entitysync 帧。
+func (lane *businessTCP) PushSyncPlayer(ctx context.Context, id int64, _ uint32, payload []byte) error {
 	conn := lane.conns[id]
 	if conn == nil {
 		return fmt.Errorf("unknown player %d", id)
@@ -112,15 +135,15 @@ func (lane *businessTCP) PushPlayer(ctx context.Context, id int64, _ uint32, val
 		return err
 	}
 	var header [20]byte
-	binary.LittleEndian.PutUint32(header[:4], uint32(len(push.Payload)))
+	binary.LittleEndian.PutUint32(header[:4], uint32(len(payload)))
 	binary.LittleEndian.PutUint64(header[4:12], uint64(lane.scheduled.UnixNano()))
 	binary.LittleEndian.PutUint64(header[12:], uint64(lane.tick))
-	buffers := net.Buffers{header[:], push.Payload}
+	buffers := net.Buffers{header[:], payload}
 	if _, err := buffers.WriteTo(conn); err != nil {
 		return err
 	}
 	lane.sent.Add(1)
-	lane.bytes.Add(int64(len(push.Payload)))
+	lane.bytes.Add(int64(len(payload)))
 	return nil
 }
 func (lane *businessTCP) fail(err error) {
@@ -150,6 +173,7 @@ func (lane *businessTCP) consume(conn net.Conn) {
 			lane.fail(err)
 			return
 		}
+		received := time.Now()
 		tick := int(binary.LittleEndian.Uint64(header[12:]))
 		decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
 		if err != nil {
@@ -203,10 +227,22 @@ func (lane *businessTCP) consume(conn net.Conn) {
 			}
 		}
 		latency := float64(time.Now().UnixNano()-int64(binary.LittleEndian.Uint64(header[4:12]))) / 1e6
+		checked := time.Now()
 		lane.mu.Lock()
 		if tick > 0 {
 			lane.latencies = append(lane.latencies, latency)
 			lane.updates += updates
+			if at := lane.tickTiming(tick); at != nil {
+				requests := at.flushStart.Sub(at.begin) - at.capture
+				flushToReceive := received.Sub(at.flushStart)
+				split := &lane.split
+				split.admitLag = append(split.admitLag, businessMS(at.begin.Sub(at.scheduled)))
+				split.capture = append(split.capture, businessMS(at.capture))
+				split.clientDecode = append(split.clientDecode, businessMS(checked.Sub(received)))
+				split.requests = append(split.requests, businessMS(requests))
+				split.flushToReceive = append(split.flushToReceive, businessMS(flushToReceive))
+				split.completion = append(split.completion, businessMS(requests+flushToReceive))
+			}
 		}
 		lane.mu.Unlock()
 		lane.received.Add(1)
@@ -305,7 +341,7 @@ func TestSyncBusinessLoad(t *testing.T) {
 			if only := os.Getenv("ROOST_SYNC_CASE"); only != "" && only != c.Name {
 				t.Skip("case filter")
 			}
-			lane := newBusinessTCP(t, c.Players)
+			lane := newBusinessTCP(t, c.Players, ticks)
 			scene, err := newScene(lane, nil, gamescene.DefaultConfig())
 			if err != nil {
 				t.Fatal(err)
@@ -401,10 +437,13 @@ func TestSyncBusinessLoad(t *testing.T) {
 					at.X += int64(tick%5) * 3
 					scene.Moved(ctx, players[i].ID(), at)
 				}
+				captureStart := time.Now()
 				capture(tick)
+				captured := time.Since(captureStart)
 				lane.tick = tick
 				lane.scheduled = scheduled
 				flushStart := time.Now()
+				lane.timing[tick].Store(&businessTickTiming{scheduled: scheduled, begin: begin, flushStart: flushStart, capture: captured})
 				if err := scene.Flush(ctx); err != nil {
 					t.Fatal(err)
 				}
@@ -425,6 +464,9 @@ func TestSyncBusinessLoad(t *testing.T) {
 			lane.mu.Lock()
 			latency := businessQuantiles(lane.latencies)
 			samples, updates := len(lane.latencies), lane.updates
+			split := lane.split
+			harness := map[string]any{"admit_lag_ms": businessQuantiles(split.admitLag), "capture_ms": businessQuantiles(split.capture), "client_decode_ms": businessQuantiles(split.clientDecode)}
+			server := map[string]any{"requests_ms": businessQuantiles(split.requests), "flush_to_receive_ms": businessQuantiles(split.flushToReceive), "completion_ms": businessQuantiles(split.completion)}
 			lane.mu.Unlock()
 			if samples == 0 || updates == 0 {
 				t.Fatal("no measured client updates")
@@ -436,6 +478,7 @@ func TestSyncBusinessLoad(t *testing.T) {
 				"case":                c.Name, "players": c.Players, "dirty_percent": c.Dirty, "dirty_per_tick": dirty, "ticks": ticks, "hz": float64(time.Second) / float64(interval),
 				"elapsed_seconds": elapsed.Seconds(), "tick_work_ms": businessQuantiles(workMS), "flush_ms": businessQuantiles(flushMS),
 				"scheduled_to_client_ms": latency, "client_frame_samples": samples, "decoded_updates": updates,
+				"harness": harness, "server": server,
 				"deadline_misses": misses, "sent_frames": lane.sent.Load() - sentBefore, "sync_bytes": lane.bytes.Load() - bytesBefore,
 				"process_alloc_bytes": memAfter.TotalAlloc - memBefore.TotalAlloc, "process_gc_cycles": memAfter.NumGC - memBefore.NumGC,
 				"gomaxprocs": runtime.GOMAXPROCS(0), "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH,

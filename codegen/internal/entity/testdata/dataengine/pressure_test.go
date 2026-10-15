@@ -58,6 +58,15 @@ func (s *pressureStore) Project(ctx context.Context, r coredata.CommitRecord) er
 	s.observe([]coredata.CommitRecord{r}, started, err, false)
 	return err
 }
+
+// ProjectFenced 必须一并包住：Projector 对单条段优先走 FenceOutcomeProjectionStore，只包 Project 时
+// 这条路径会经嵌入的 MongoStore 绕过计时（ROOST_PERF_RATE>0 时请求分散，单条段必然出现，样本数少于请求数）。
+func (s *pressureStore) ProjectFenced(ctx context.Context, r coredata.CommitRecord) (bool, error) {
+	started := time.Now()
+	skipped, err := s.MongoStore.ProjectFenced(ctx, r)
+	s.observe([]coredata.CommitRecord{r}, started, err, false)
+	return skipped, err
+}
 func (s *pressureStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	started := time.Now()
 	err := s.MongoStore.ProjectBatch(ctx, records)
@@ -97,6 +106,22 @@ type pressureResult struct {
 	AckCalls                 uint64                `json:"ack_calls"`
 	AllocatedBytesPerRequest uint64                `json:"allocated_bytes_per_request"`
 	GCs                      uint32                `json:"gc_cycles"`
+	// scheduled_to_reply 从计划时刻算到回复，混有压测端等待（只在 ROOST_PERF_RATE>0 时有值）。同一段拆开：
+	//
+	//	scheduled ─harness.admit_lag─▶ callStarted ─request_p95/p99_ms（服务端）─▶ 回复
+	//
+	// request_* 与 record_to_mongo_* 本来就只含框架处理，归服务端；闭环（rate=0）时 writer 等回复再发下一条，
+	// 那段等待不在任何计时区间内。
+	Harness pressureHarness `json:"harness"`
+}
+
+// pressureHarness 是压测端自己引入的等待（同一进程单调时钟），不计入服务端延迟。
+type pressureHarness struct {
+	// AdmitLag：计划时刻 → writer 调用 Request。含计时器迟到与 writer 都在等上一条回复时的排队；rate=0 时不采样。
+	AdmitLagSamples int     `json:"admit_lag_samples"`
+	AdmitLagP95MS   float64 `json:"admit_lag_p95_ms"`
+	AdmitLagP99MS   float64 `json:"admit_lag_p99_ms"`
+	AdmitLagMaxMS   float64 `json:"admit_lag_max_ms"`
 }
 
 func pressureInt(t *testing.T, key string, fallback, limit int) int {
@@ -282,6 +307,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	beforeStats := projector.Stats()
 	latencies := make([]time.Duration, n)
 	scheduledLatencies := make([]time.Duration, n)
+	admitLags := make([]time.Duration, n)
 	counts := make([]atomic.Int64, count)
 	var next atomic.Uint64
 	var peak atomic.Uint64
@@ -331,6 +357,9 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 					entityIDs = []int64{ids[first], ids[first+1]}
 				}
 				callStarted := time.Now()
+				if rate > 0 {
+					admitLags[index] = callStarted.Sub(scheduled)
+				}
 				var err error
 				if daos == 4 {
 					var opts []nest.SendOpt
@@ -441,6 +470,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	}
 	slices.Sort(latencies)
 	slices.Sort(scheduledLatencies)
+	slices.Sort(admitLags)
 	observed.mu.Lock()
 	defer observed.mu.Unlock()
 	if len(observed.ages) != n {
@@ -455,6 +485,9 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 		RequestP95MS: ms(latencies[(n-1)*95/100]), RequestP99MS: ms(latencies[(n-1)*99/100]), ProjectionP95MS: ms(observed.ages[(n-1)*95/100]), ProjectionP99MS: ms(observed.ages[(n-1)*99/100]),
 		UnackedAtRequestsDone: unacked, UnackedPeakSample: peak.Load(), FinalStats: stats, MongoSeconds: observed.service.Seconds(), MongoCalls: observed.calls, MongoBatchCalls: observed.batchCalls,
 		AckSeconds: time.Duration(ackNS.Load()).Seconds(), AckCalls: ackN.Load(), AllocatedBytesPerRequest: (afterMem.TotalAlloc - beforeMem.TotalAlloc) / uint64(n), GCs: afterMem.NumGC - beforeMem.NumGC}
+	if rate > 0 {
+		result.Harness = pressureHarness{AdmitLagSamples: n, AdmitLagP95MS: ms(admitLags[(n-1)*95/100]), AdmitLagP99MS: ms(admitLags[(n-1)*99/100]), AdmitLagMaxMS: ms(admitLags[n-1])}
+	}
 	h.close(t, nil)
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
