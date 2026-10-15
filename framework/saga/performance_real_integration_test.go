@@ -138,6 +138,11 @@ func TestRealSagaPerformance(t *testing.T) {
 		index   int
 		planned time.Time
 	}
+	// 按计划启动时刻所在的分钟分段统计，区分偶发尖峰与随运行时间逐渐变慢。
+	type minuteSlice struct {
+		Minute, Count       int
+		P50MS, P99MS, MaxMS float64
+	}
 	type result struct {
 		Mode                                                      string
 		Rate, Planned, Started, Completed, WrongTerminal          int
@@ -148,6 +153,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		FinalStats                                                Stats
 		OutboxPending, Leases, BusinessDocuments, EffectDocuments int64
 		BusinessVerified                                          bool
+		Minutes                                                   []minuteSlice
 	}
 	total := int(duration/time.Second) * rate
 	r := result{Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
@@ -200,6 +206,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 	}()
 	var latencies []time.Duration
+	byMinute := make([][]time.Duration, (total+rate*60-1)/(rate*60))
 	terminal := StatusCompleted
 	if mode == "compensate" {
 		terminal = StatusCompensated
@@ -223,7 +230,10 @@ func TestRealSagaPerformance(t *testing.T) {
 			observed := time.Now() // 完成计时等到可读取持久终态；包含最多约50ms的观察间隔。
 			mu.Lock()
 			for _, doc := range docs {
-				latencies = append(latencies, observed.Sub(pending[doc.ID]))
+				latency := observed.Sub(pending[doc.ID])
+				latencies = append(latencies, latency)
+				minute := int(pending[doc.ID].Sub(begin) / time.Minute)
+				byMinute[minute] = append(byMinute[minute], latency)
 				delete(pending, doc.ID)
 				r.Completed++
 				if doc.Status != terminal {
@@ -248,14 +258,19 @@ func TestRealSagaPerformance(t *testing.T) {
 	r.Started = int(started.Load())
 	r.StartErrors = failures.Load()
 	r.CompletionTPS = float64(r.Completed) / r.ElapsedSeconds
-	slices.Sort(latencies)
-	q := func(p float64) float64 {
-		if len(latencies) == 0 {
+	quantile := func(sorted []time.Duration, p float64) float64 {
+		if len(sorted) == 0 {
 			return 0
 		}
-		return float64(latencies[int(math.Ceil(float64(len(latencies))*p))-1]) / float64(time.Millisecond)
+		return float64(sorted[int(math.Ceil(float64(len(sorted))*p))-1]) / float64(time.Millisecond)
 	}
-	r.P50MS, r.P95MS, r.P99MS, r.MaxMS = q(.5), q(.95), q(.99), q(1)
+	slices.Sort(latencies)
+	r.P50MS, r.P95MS, r.P99MS, r.MaxMS = quantile(latencies, .5), quantile(latencies, .95), quantile(latencies, .99), quantile(latencies, 1)
+	for minute, slice := range byMinute {
+		slices.Sort(slice)
+		r.Minutes = append(r.Minutes, minuteSlice{Minute: minute, Count: len(slice), P50MS: quantile(slice, .5), P99MS: quantile(slice, .99), MaxMS: quantile(slice, 1)})
+		t.Logf("minute=%d count=%d p50=%.1fms p99=%.1fms max=%.1fms", minute, len(slice), quantile(slice, .5), quantile(slice, .99), quantile(slice, 1))
+	}
 	// 不在完成后补发/篡改业务数据；等待框架自然排空，再逐文档核对一次且仅一次生效。
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		r.OutboxPending, err = client.Database(database).Collection(defaultOutboxCollection).CountDocuments(ctx, bson.M{})
