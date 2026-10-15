@@ -108,9 +108,10 @@ type Interest struct {
 	// retry holds the pairs whose subscribe the manager refused, waiting
 	// for the next Apply to say them again.
 	retry []pair
-	// refused counts consecutive refusals per held pair; a pair at
+	// refused counts consecutive refusals per held pair (with the first
+	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
-	refused map[pair]int
+	refused map[pair]refusal
 	closed  bool
 }
 
@@ -200,7 +201,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		in.batchSize = 1024
 	}
 	in.wake = config.Manager.WakeSync
-	in.cancelQueue = config.Manager.RegisterPolicy(in.applyQueued, in.queuedPending)
+	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.applyQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
 	return in, nil
 }
 

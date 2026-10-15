@@ -65,6 +65,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_durability_gate_deferred_total` | Counter | 被 durable watermark 推迟的 subject 捕获次数（整个 subject 本 tick 不发） |
 | `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
 | `entitysync_sessions_lost_total` | Counter | 因推送失败被 Manager 关闭的会话数（`SessionLost` 回调政策） |
+| `entitysync_drain_timeout_total` | Counter | `Manager.Drain` 因 ctx 超时 / 取消而未排空的次数（停机预算不够或有条目卡住；卡住条目见返回的 `*DrainStalledError`） |
+| `entitysync_drain_remaining_entries` | Gauge | 最近一次 Drain 结束时仍未排空的条目数（成功排空为 0） |
 
 ### 缓存与总线（core）
 
@@ -227,6 +229,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entity.count_by_category` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.count_by_kind` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.unload_resync.backlog` | Gauge | `entity/unload_resync.go:SetGauge` |
+| `entitysync_drain_remaining_entries` | Gauge | `sync/entitysync/drain.go:SetGauge` |
+| `entitysync_drain_timeout_total` | Counter | `sync/entitysync/drain.go:IncCounter` |
 | `entitysync_durability_gate_deferred_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_flush_duration` | Histogram | `sync/entitysync/flush.go:ObserveHistogram` |
 | `entitysync_frames_admitted_total` | Counter | `sync/entitysync/flush.go:IncCounter` |

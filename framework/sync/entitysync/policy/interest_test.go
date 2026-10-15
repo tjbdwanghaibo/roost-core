@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -995,5 +996,69 @@ func TestPureRemoteRejectDiscardsItsInterestFacts(t *testing.T) {
 	}
 	if visible := in.Visible(1); !slices.Contains(visible, int64(3)) {
 		t.Fatalf("rejected Remote move was applied: observer 1 sees %v", visible)
+	}
+}
+
+// D3：Drain 超时时，Interest 报出仍让它等待的条目——未确认提交的排队事实、尚未判定停滞的被拒订阅（带最后一次错误）。
+func TestDrainTimeoutListsInterestStalls(t *testing.T) {
+	// 周期远长于 ctx：每个被拒 pair 只被重说一次，仍计入 queuedPending。
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &sink{}, Interval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	in := newInterest(t, m, "team")
+	player(t, m, 1)
+	player(t, m, 2)
+	player(t, m, 3)
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
+	mustEnter(t, in, 3, spatial.Point{X: 500, Y: 500})
+	mustApply(t, in)
+	m.CloseSession(2)
+
+	// 观察者 2 的会话已关闭：关系事实应用后订阅被拒。
+	refusedEntity := &queuedEntity{entity.NewEntityBase(2, entity.EntityCategory(4), true)}
+	refusedEntity.SetSyncState(subjectState(t, 2))
+	confirmed := entity.BeginSyncMutation([]entity.IThreadSafeEntity{refusedEntity}, m)
+	if err := in.QueueRelation(refusedEntity, "team", []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	confirmed.Admit()
+	confirmed.Confirm()
+	confirmed.Release()
+
+	// 实体 3 的提交一直没确认：事实留在队列里。
+	pendingEntity := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
+	pendingEntity.SetSyncState(subjectState(t, 3))
+	unconfirmed := entity.BeginSyncMutation([]entity.IThreadSafeEntity{pendingEntity}, m)
+	if err := in.QueueRelation(pendingEntity, "team", []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	unconfirmed.Admit()
+	t.Cleanup(unconfirmed.Release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = m.Drain(ctx)
+	var stalled *entitysync.DrainStalledError
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &stalled) {
+		t.Fatalf("drain: %v", err)
+	}
+	var queued, refused *entitysync.DrainStall
+	for i := range stalled.Stalls {
+		stall := &stalled.Stalls[i]
+		switch {
+		case stall.Source == "interest" && stall.Reason == "commit_pending" && stall.Subject == 3:
+			queued = stall
+		case stall.Source == "interest" && stall.Reason == "subscribe_refused" && stall.Subject == 1 && stall.Session == 2:
+			refused = stall
+		}
+	}
+	if queued == nil || refused == nil {
+		t.Fatalf("interest stalls missing: %v", err)
+	}
+	if refused.Err == nil || refused.Waited <= 0 || !strings.Contains(refused.Detail, "observer 2, refused 1 time") {
+		t.Fatalf("refused stall = %+v", *refused)
 	}
 }

@@ -559,7 +559,7 @@ func TestHoldingALiveSessionStartsItOverInANewEpoch(t *testing.T) {
 func TestPolicyFailureRetainsCauseAndCountsOnce(t *testing.T) {
 	m := newTestManager(t, newRecordingTransport(), ManagerConfig{})
 	cause := errors.New("policy admission rejected")
-	cancel := m.RegisterPolicy(func() error { return cause })
+	cancel := m.RegisterPolicy(PolicyHooks{Apply: func() error { return cause }})
 	if err := m.Flush(context.Background()); !errors.Is(err, cause) {
 		t.Fatalf("lost returned cause: %v", err)
 	}

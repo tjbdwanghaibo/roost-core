@@ -14,13 +14,17 @@ import (
 // markPending 把 subject 排进下一次 Flush；同时在等待快照表里的计入 pendingOverlap，统计不重复计数。
 func (m *Manager) markPending(subjectID int64) {
 	m.pendingMu.Lock()
+	m.markPendingLocked(subjectID)
+	m.pendingMu.Unlock()
+}
+
+func (m *Manager) markPendingLocked(subjectID int64) {
 	if _, exists := m.pending[subjectID]; !exists {
 		if _, waiting := m.waitingSnapshots[subjectID]; waiting {
 			m.pendingOverlap++
 		}
 		m.pending[subjectID] = struct{}{}
 	}
-	m.pendingMu.Unlock()
 }
 
 // takePending 取走全部待处理 subject，按 ID 升序返回，保证捕获顺序确定。
@@ -119,7 +123,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 	defer m.recycleFlush(work)
 	defer releaseInFlight(work)
-	var retry []int64
+	var retry []deferredSubject
 	var failures []error
 
 	captureStarted := time.Now()
@@ -166,10 +170,10 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 				if m.config.Trace != nil {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "commit_pending", SubjectID: id})
 				}
-				retry = append(retry, id)
+				retry = append(retry, deferredSubject{id: id, reason: "commit_pending", detail: "sync commit not confirmed yet"})
 			case err != nil:
 				failures = append(failures, fmt.Errorf("sync prepare subject %d: %w", id, err))
-				retry = append(retry, id)
+				retry = append(retry, deferredSubject{id: id, reason: "prepare_failed", err: err})
 			case gated && capturedAbove(item, watermark):
 				if m.config.Trace != nil {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "durability_wait", SubjectID: id, Version: item.Version(), CommitLSN: item.CommitLSN()})
@@ -177,7 +181,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 				_ = item.AbortWithError(ErrDurabilityDeferred)
 				m.deferred.Add(1)
 				metrics.IncCounter("entitysync_durability_gate_deferred_total", nil, 1)
-				retry = append(retry, id)
+				retry = append(retry, deferredSubject{id: id, reason: "durability_wait", detail: fmt.Sprintf("commit lsn %d above durable watermark %d", item.CommitLSN(), watermark)})
 			default:
 				dirty = item.Version() != item.BaseVersion()
 				if m.config.Trace != nil {
@@ -290,9 +294,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			m.forget(subj)
 		}
 	}
-	for _, id := range retry {
-		m.markPending(id)
-	}
+	m.settleDeferrals(ids, retry)
 	return errors.Join(failures...)
 }
 

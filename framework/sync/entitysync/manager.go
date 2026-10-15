@@ -151,6 +151,7 @@ type Manager struct {
 	waitingOrder     list.List
 	pendingOverlap   int                    // 同时在 pending 与 waitingSnapshots 中的 subject 数，pendingMu
 	waitingSnapshots map[int64]snapshotWait // pendingMu；仅保存重查请求，不保存旧订阅意图
+	deferrals        map[int64]deferral     // pendingMu；被 Flush 暂缓的原因与起点，只供 Drain 诊断
 
 	// flushGate 串行化捕获与关闭，等待者可随 context 取消退出。
 	flushGate chan struct{}
@@ -650,6 +651,7 @@ func (m *Manager) forget(subj *subject) {
 	if wait := m.waitingSnapshots[subj.id]; wait.subject == subj {
 		m.removeSnapshotWaitLocked(subj.id)
 	}
+	delete(m.deferrals, subj.id)
 	m.pendingMu.Unlock()
 	subj.mu.Lock()
 	subj.forgotten = true
@@ -879,6 +881,7 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.pendingMu.Lock()
 	clear(m.pending)
 	clear(m.waitingSnapshots)
+	clear(m.deferrals)
 	m.waitingOrder.Init()
 	m.pendingOverlap = 0
 	m.pendingMu.Unlock()

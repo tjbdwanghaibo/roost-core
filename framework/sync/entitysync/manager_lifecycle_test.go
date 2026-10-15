@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // Push 中同步改变控制面，固定“已捕获、尚未采纳”的交错，无需靠 sleep 碰运气。
@@ -386,13 +388,92 @@ func TestDrainWaitsForBudgetAndHonorsCancellation(t *testing.T) {
 
 func TestDrainIncludesPolicyFactsWithoutDirtySubjects(t *testing.T) {
 	m := newTestManager(t, newRecordingTransport(), ManagerConfig{Interval: time.Millisecond})
-	cancelPolicy := m.RegisterPolicy(func() error { return nil }, func() bool { return true })
+	cancelPolicy := m.RegisterPolicy(PolicyHooks{Apply: func() error { return nil }, Pending: func() bool { return true }})
 	defer cancelPolicy()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if err := m.Drain(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	// 政策没有 Stalls 回调时也要在超时错误里报出“该政策仍有待处理事实”。
+	if err := m.Drain(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "with 1 entry: policy: policy_pending") {
 		t.Fatalf("unconfirmed policy drained: %v", err)
 	}
+}
+
+// D3：Drain 在 ctx 超时时仍保留 errors.Is 语义，同时列出卡住的条目与原因。持久水位永远不到的 subject
+// 就是“永久暂缓”：Drain 不放弃它，只把它和等待时长报出来，并计数。
+func TestDrainTimeoutNamesStuckEntries(t *testing.T) {
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(metrics.NewRegistry())
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+	m := newTestManager(t, newRecordingTransport(), ManagerConfig{Interval: time.Millisecond, DurableWatermark: func() uint64 { return 9 }})
+	open(t, m, 1)
+	const stuck = DrainStallLimit + 3
+	for id := int64(1001); id < 1001+stuck; id++ {
+		packs := 0
+		state := testSubject(t, id, &packs)
+		state.SetLastCommitLSN(10)
+		if err := m.Register(state); err != nil {
+			t.Fatal(err)
+		}
+		mustSubscribe(t, m, 1, id, entity.SyncProfile{})
+		state.MarkDirty(1)
+	}
+	cancelPolicy := m.RegisterPolicy(PolicyHooks{Apply: func() error { return nil }, Pending: func() bool { return true }})
+	defer cancelPolicy()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := m.Drain(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("drain: %v", err)
+	}
+	var stalled *DrainStalledError
+	if !errors.As(err, &stalled) {
+		t.Fatalf("drain timeout without stalled entries: %v", err)
+	}
+	if stalled.Total != stuck+1 || len(stalled.Stalls) != DrainStallLimit {
+		t.Fatalf("stalls listed %d of %d, want %d of %d", len(stalled.Stalls), stalled.Total, DrainStallLimit, stuck+1)
+	}
+	first := stalled.Stalls[0]
+	if first.Source != "subject" || first.Subject != 1001 || first.Reason != "durability_wait" || first.Waited <= 0 ||
+		!strings.Contains(first.Detail, "watermark 9") {
+		t.Fatalf("first stall = %+v", first)
+	}
+	text := err.Error()
+	for _, want := range []string{"subject 1001: durability_wait", "commit lsn 10 above durable watermark 9", "and 4 more", "context deadline exceeded"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("drain error %q does not mention %q", text, want)
+		}
+	}
+	if got := gaugeValue(metricDrainRemaining); got != stuck+1 {
+		t.Fatalf("remaining gauge = %d", got)
+	}
+	if got := counterTotal(metricDrainTimeout); got != 1 {
+		t.Fatalf("drain timeout counter = %d", got)
+	}
+	// 取消同样带条目，errors.Is(context.Canceled) 不变。
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	if err := m.Drain(cancelled); !errors.Is(err, context.Canceled) || !errors.As(err, &stalled) || stalled.Total != stuck+1 {
+		t.Fatalf("cancelled drain: %v", err)
+	}
+}
+
+func gaugeValue(name string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name {
+			return int64(metric.Value)
+		}
+	}
+	return -1
+}
+
+func counterTotal(name string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name {
+			total += int64(metric.Value)
+		}
+	}
+	return total
 }
 
 type drainingSender struct{ entered, release chan struct{} }

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
@@ -298,7 +300,7 @@ func (in *Interest) queuedPending() bool {
 		return true
 	}
 	for _, key := range in.retry {
-		if in.refused[key] < retryStallAfter {
+		if in.refused[key].count < retryStallAfter {
 			return true
 		}
 	}
@@ -317,17 +319,80 @@ func (in *Interest) queuedPending() bool {
 // 上界按 Flush 轮次计，默认周期 50ms 下约 500ms：足够覆盖“本轮 remove 释放容量、下一轮接受”这类暂时拒绝。
 const retryStallAfter = 10
 
+// refusal 是一个 pair 的连续拒绝记录：次数、第一次拒绝的时间与最后一次的错误（Drain 诊断用）。
+type refusal struct {
+	count int
+	since time.Time
+	err   error
+}
+
 // noteRefusedLocked 记一次拒绝，到达上界时告警。调用方持有 in.mu。
 func (in *Interest) noteRefusedLocked(key pair, err error) {
 	if in.refused == nil {
-		in.refused = make(map[pair]int)
+		in.refused = make(map[pair]refusal)
 	}
-	in.refused[key]++
-	if in.refused[key] != retryStallAfter {
+	record := in.refused[key]
+	if record.count == 0 {
+		record.since = time.Now()
+	}
+	record.count++
+	record.err = err
+	in.refused[key] = record
+	if record.count != retryStallAfter {
 		return
 	}
 	metrics.IncCounter("entitysync_interest_retry_stalled_total", nil, 1)
 	slog.Warn("entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain",
 		"observer", key.observer, "subject", key.subject, "session", in.session(key.observer),
 		"attempts", retryStallAfter, "err", err)
+}
+
+// drainStalls 是 Drain 超时诊断（entitysync.PolicyHooks.Stalls）：列出仍让 queuedPending 为真的条目——
+// 未确认提交的排队事实（按入队顺序，同一 ID 只列一次），以及拒绝次数未到 retryStallAfter 的重试 pair。
+// 排队事实不记录入队时间（入队在 Entity 锁内，不为诊断多读一次时钟），Waited 为 0。
+func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed {
+		return nil, 0
+	}
+	var stalls []entitysync.DrainStall
+	total := 0
+	add := func(stall entitysync.DrainStall) {
+		total++
+		if len(stalls) < limit {
+			stalls = append(stalls, stall)
+		}
+	}
+	in.queueMu.Lock()
+	seen := make(map[int64]bool)
+	for _, fact := range in.facts {
+		if seen[fact.id] {
+			continue
+		}
+		seen[fact.id] = true
+		reason := "queued_fact"
+		if ready, discarded := fact.condition(); !ready && !discarded {
+			reason = "commit_pending"
+		}
+		add(entitysync.DrainStall{Source: "interest", Subject: fact.id, Reason: reason})
+	}
+	if in.inflight > 0 && len(in.facts) == 0 {
+		add(entitysync.DrainStall{Source: "interest", Reason: "facts_in_flight", Detail: fmt.Sprintf("%d fact(s) being applied", in.inflight)})
+	}
+	in.queueMu.Unlock()
+	now := time.Now()
+	for _, key := range in.retry {
+		record := in.refused[key]
+		if record.count >= retryStallAfter {
+			continue
+		}
+		stall := entitysync.DrainStall{Source: "interest", Subject: key.subject, Session: in.session(key.observer), Reason: "subscribe_refused",
+			Detail: fmt.Sprintf("observer %d, refused %d time(s)", key.observer, record.count), Err: record.err}
+		if !record.since.IsZero() {
+			stall.Waited = now.Sub(record.since)
+		}
+		add(stall)
+	}
+	return stalls, total
 }

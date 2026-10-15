@@ -8,16 +8,27 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// policyHook 是 RegisterPolicy 登记的一组政策处理器：apply 在政策阶段执行，pending 报告是否还有待处理事实。
+// policyHook 是 RegisterPolicy 登记的一组政策处理器（见 PolicyHooks）。
 type policyHook struct {
 	apply   func() error
 	pending func() bool
+	stalls  func(limit int) ([]DrainStall, int)
 }
 
-// RegisterPolicy 安装锁外、捕获前的兴趣事实处理器。处理器不得调用 Flush，
-// 不得读取未冻结的业务字段；可更新订阅。返回取消函数供政策关闭时释放。
-func (m *Manager) RegisterPolicy(apply func() error, pending ...func() bool) func() {
-	if apply == nil {
+// PolicyHooks 是政策向 Manager 登记的处理器。
+type PolicyHooks struct {
+	// Apply 在 Flush 的政策阶段执行（锁外、捕获前）：不得调用 Flush，不得读取未冻结的业务字段，可更新订阅。必填。
+	Apply func() error
+	// Pending 报告政策是否还有没做完的事；为真时 Drain 继续等待。可为 nil（从不阻挡 Drain）。
+	Pending func() bool
+	// Stalls 在 Drain 因 ctx 结束而未排空、且 Pending 为真时调用，列出最多 limit 项卡住的条目并返回总数，
+	// 供 *DrainStalledError 诊断。只读、不得阻塞。可为 nil：此时只报告“该政策仍有待处理事实”。
+	Stalls func(limit int) ([]DrainStall, int)
+}
+
+// RegisterPolicy 安装锁外、捕获前的兴趣事实处理器（见 PolicyHooks）。返回取消函数供政策关闭时释放。
+func (m *Manager) RegisterPolicy(hooks PolicyHooks) func() {
+	if hooks.Apply == nil {
 		return func() {}
 	}
 	m.policyMu.Lock()
@@ -26,11 +37,7 @@ func (m *Manager) RegisterPolicy(apply func() error, pending ...func() bool) fun
 	}
 	m.nextPolicy++
 	id := m.nextPolicy
-	hook := policyHook{apply: apply}
-	if len(pending) > 0 {
-		hook.pending = pending[0]
-	}
-	m.policies[id] = hook
+	m.policies[id] = policyHook{apply: hooks.Apply, pending: hooks.Pending, stalls: hooks.Stalls}
 	m.policyMu.Unlock()
 	return func() { m.policyMu.Lock(); delete(m.policies, id); m.policyMu.Unlock() }
 }
