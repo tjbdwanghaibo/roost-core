@@ -14,18 +14,18 @@
 
 ## D1 Lockstep 历史的保留与过期策略
 
-**现状**：`Match` 提供滚动裁剪 `TrimHistory(keep)` 与 `TrimHashReports(before)`（[match.go](../../framework/sync/lockstep/match.go)），底层 `History.TrimBefore` / `DesyncDetector.Trim`；本地 108000 帧逻辑长局验证已完成（[SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md)）。**何时裁剪由宿主决定**，框架不自动裁剪；追帧（catch-up）只能从未裁剪的历史补帧。
+**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`0347c520`）。** 方案 B（全量快照恢复）不做，等有具体游戏需求再定。
 
-**问题**：宿主不裁剪则内存随对局长度线性增长；裁得太激进则断线较久的玩家无法追帧。“追不上时怎么办”（重新全量、踢出、观战态）目前没有框架级约定。
+**实施结果**：
+- `MatchConfig.HistoryRetainFrames` 默认 `DefaultHistoryRetainFrames` = **3600 帧**（60Hz 下 60 秒、30Hz 下 120 秒；依据：重连窗口按 60 秒、常见逻辑帧率上限 60Hz 换算，10 席 × 8 字节输入约 1.5MB / 局）。`RetainFullHistory`（-1）显式关闭，退回宿主手动 `TrimHistory` / `TrimHashReports`；正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64（Sequencer 视为仍在线的落后量，同时覆盖一整页追帧与最大冗余深度），不满足时 `NewMatch` 返回 `ErrMatchConfigInvalid`。
+- `Tick` 在发出本次追帧页之后裁历史；hash 报告按 64 帧步长跟随同一窗口。宿主手动裁剪 API 保留。
+- 追帧越界：`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 立即返回 `*CatchupUnservableError`（`errors.Is` `ErrCatchupUnservable`，带 `From` / `Start`）；追帧途中被窗口越过时下一次 `Tick` 返回同一错误。两种情况都经可靠通道给该会话发 C9 v1 追帧失败通知，计 `lockstep.catchup.unservable.total`。
+- 客户端表现统一为“追帧失败、交由业务决定踢出或重开”，不自动重同步：Go `FrameAssembler.Ingest` 返回 `*CatchupUnservableError`、`robot.LockstepBot` 终止；C# `LockstepClient` 抛 `LockstepCatchupUnservableException` 并终止实例。
+- 一并修复：起点 0 原先绕过越界检查，裁剪后从 0 追帧会得到一段有洞的帧流且无错误。
 
-**可选方向**：
-- A 维持现状：文档写清宿主职责与推荐值（例如按最大重连窗口 × 帧率保留）。代价：每个业务各写一遍，容易漏。
-- B 框架提供默认保留策略：`MatchConfig` 增加按帧数 / 时长自动裁剪（默认开启，可关），并定义“请求的帧已被裁剪”的明确错误与客户端处理（触发全量重同步或退回观战）。代价：要设计全量快照来源（Lockstep 本身没有状态快照，需要宿主提供或定义 checkpoint 帧）。
-- C 只加自动裁剪、不做全量恢复：超过窗口的追帧明确失败，由业务决定踢出或重开。代价小，语义清楚。
+说明与证据见 [Sync 使用指南](../framework/guide/04-sync.md#追帧越界明确失败不自动重同步)、[SYNC-OPTIMIZATION 末节](../framework/SYNC-OPTIMIZATION.md#lockstep-自动保留与追帧失败通知2026-10-15)。仍待：真实网络下断线超过窗口的端到端演练（见 [KNOWN-LIMITS](KNOWN-LIMITS.md)“Lockstep历史”）。
 
-**建议**：C 起步（自动裁剪 + 明确错误码 + 文档），B 的全量恢复等有具体游戏需求再定。
-
-**需要拍板**：默认保留窗口（帧数或时长）；追帧越界时框架给什么错误、客户端 SDK 怎么表现；是否需要状态快照（B）。
+**原登记（2026-10-15）**：宿主不裁剪则内存随对局长度线性增长，裁得太激进则断线较久的玩家无法追帧，且“追不上时怎么办”没有框架级约定；可选 A 维持现状 + 文档、B 自动裁剪 + 全量重同步（需状态快照来源）、C 只加自动裁剪 + 明确错误。
 
 ## D2 SyncBus 有限投递的兜底
 
@@ -44,18 +44,16 @@
 
 ## D3 Entity Sync `Drain` 遇到永久拒绝的出口
 
-**现状**：`Manager.Drain(ctx)`（[drain.go](../../framework/sync/entitysync/drain.go)）循环 Flush，直到没有待处理条目；预算 / 水位暂缓时等到下个周期，传输失败或 ctx 取消返回错误。KNOWN-LIMITS“policy Drain”：等待 retry 与已承担事实，**遇到永久拒绝时只能靠修复关系或 ctx 超时结束**。
+**状态：维护者 2026-10-15 决定 A（按推荐），已实施（`0eed706e`）。** Drain 行为不变、不放弃任何条目；方案 B（明确放弃出口）需先梳理 policy 侧哪些拒绝是永久的，未做。
 
-**问题**：停机时若某个订阅 / 关系被永久拒绝（例如目标已不存在、权限变化），Drain 会一直等到 ctx 超时；调用方只拿到 `context.DeadlineExceeded`，看不出是哪个条目卡住、是否可以安全放弃。
+**实施结果**：
+- ctx 超时 / 取消时 `Manager.Drain` 返回 `*entitysync.DrainStalledError`：`errors.Is(err, context.DeadlineExceeded / Canceled)` 不变；`Stalls` 列前 `DrainStallLimit` = 8 项，`Total` 为全部条目数。每项有来源（subject / snapshot / policy / interest）、subject 与会话、最后一次暂缓或拒绝的原因（`commit_pending`、`durability_wait`、`prepare_failed`、`snapshot_budget`、`subscribe_refused`、`policy_pending` 等）与说明、连续等待时长、最后错误。
+- 原因来源：Flush 在暂缓 subject 时记下原因与首次时间（只在暂缓期间存在，随下一次处理更新或删除）；快照预算等待沿用已有起点；政策通过 `RegisterPolicy(PolicyHooks{Apply, Pending, Stalls})` 报告，Interest 报告未确认提交的排队事实与上界内被拒的订阅（首次拒绝时间、最后错误）。
+- 指标：`entitysync_drain_timeout_total`（Counter）、`entitysync_drain_remaining_entries`（Gauge，成功排空为 0），均无标签。
 
-**可选方向**：
-- A 诊断增强：超时时返回带卡住条目摘要的错误（subject、原因、等待时长），并加指标；行为不变。
-- B 明确放弃出口：对“已判定永久拒绝”的条目，Drain 记账后放弃并返回聚合错误（`errors.Is(err, ErrDrainAbandoned)`），其余继续排空；需要定义“永久拒绝”的判定来源（policy 返回的错误分类）。
-- C 维持现状，仅文档说明停机预算要覆盖这种情况。
+说明见 [Sync 使用指南 §4](../framework/guide/04-sync.md#停机排空drain卡住时看什么)。
 
-**建议**：先 A（低风险、立刻提升可运维性），B 需要先梳理 policy 侧哪些拒绝是永久的，再决定。
-
-**需要拍板**：是否允许 Drain 在停机阶段“放弃”部分条目（B 的语义）；若允许，放弃后客户端状态由谁修复（下次登录全量？）。
+**原登记（2026-10-15）**：停机时若某个订阅 / 关系被永久拒绝，Drain 一直等到 ctx 超时，调用方只拿到 `context.DeadlineExceeded`，看不出是哪个条目卡住、是否可以安全放弃；可选 A 诊断增强、B 明确放弃出口、C 只写文档。
 
 ## D4 业务 schema 离线迁移的模板 / 流程
 

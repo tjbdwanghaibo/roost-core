@@ -19,6 +19,11 @@
 - `infra/network/etcd/driver` 的 `TestDiscoveryReregistersAfterUnexpectedLeaseLoss` 偶发 `lease id = 101, want 102`（v1.27.0 main 推送 CI 失败一次）：用例在 `registerOnce` 回调里发出“已重注册”信号，产品代码在回调返回后才写回新租约。改为限时等待新租约生效再断言；只改测试。
 - nest-game 负载夹具新增可选长尾采集（默认关闭，`ROOST_NEST_GAME_TAIL=metrics|trace`）：每秒记录 runtime/metrics（GC 周期、STW 与调度延迟直方图、互斥等待、CPU 分类）与进程 rusage；`trace` 模式另开 Go flight recorder，业务 / heartbeat / Sync / Gate 完成事件或调度 tick 间隔超过阈值时，以 `trace.Log`（类别 `roost.tail`，带各分段耗时）写入 trace 并延迟保存前后窗口，可按间隔保存对照窗口。新增独立模块 `scripts/perf/tailtrace`（依赖 `golang.org/x/exp/trace`，不进根模块）做事后关联：给出富集比、长尾簇及其墙钟分钟相位；`scripts/perf/tailtrace/burst` 对单个 trace 做簇内与簇前对照。`scripts/perf/nest-game.sh` 在开启采集时自动运行分析。只改夹具与脚本，生产代码不变；开启后有观测开销，结果不与无采集样本的延迟数字混用。
 
+### Sync：Lockstep 历史保留（D1）与 Drain 诊断（D3）
+
+- `framework/sync/lockstep`（DESIGN-TODO D1，维护者 2026-10-15 决定方案 C，`0347c520`）：`MatchConfig.HistoryRetainFrames` 默认按 `DefaultHistoryRetainFrames` = 3600 帧自动保留（60Hz 60 秒 / 30Hz 120 秒），`Tick` 在发出本次追帧页后裁历史，hash 报告按 64 帧步长跟随；`RetainFullHistory`（-1）关闭，正值须 ≥ `MinHistoryRetainFrames`（= `ReplayHorizon` = 64）。越界追帧：`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 立即返回 `*CatchupUnservableError`（`errors.Is ErrCatchupUnservable`，带 `From` / `Start`；原先接受请求、下一 Tick 才放弃），追帧途中被窗口越过时 `Tick` 返回同一错误；两种情况都经可靠通道发 C9 v1 追帧失败通知并计 `lockstep.catchup.unservable.total`。客户端：`FrameAssembler.Ingest` 返回 `*CatchupUnservableError`，`robot.LockstepBot` 终止；C# `LockstepAssembler` / `LockstepClient` 抛 `LockstepCatchupUnservableException` 并终止实例；不自动重同步，由业务踢出或开新局。修复：起点 0 原先绕过越界检查，裁剪后从 0 追帧得到一段有洞的帧流而无错误。`client/spec/packets.json` 新增 `catchup_unservable` 金样。**升级（未上线，不做兼容）**：长局默认只保留最近 3600 帧，需要整局回放的宿主自行复制持久化或配置 `RetainFullHistory`；下行新增 C9 通知，旧客户端会把它当坏包终止，客户端与服务端须同版本。
+- `framework/sync/entitysync`（DESIGN-TODO D3，维护者 2026-10-15 决定方案 A，`0eed706e`）：`Manager.Drain` 在 ctx 超时 / 取消时返回 `*DrainStalledError`（`errors.Is` ctx 错误不变），列出前 8 项卡住条目（来源、subject、会话、最后一次暂缓或拒绝的原因、连续等待时长、最后错误）与总数；新增 `entitysync_drain_timeout_total`、`entitysync_drain_remaining_entries`。Drain 行为不变、不放弃条目。API 变化：`Manager.RegisterPolicy(apply, pending...)` 改为 `RegisterPolicy(entitysync.PolicyHooks{Apply, Pending, Stalls})`，`Stalls` 可选；Interest 报告未确认提交的排队事实与上界内被拒的订阅。
+
 ## [v1.27.0] - 2026-10-14
 
 次版本：生成工程玩家接入目录改名（破坏性，需手工迁移）与 Remote WAL 级 Rejected 处理精简（删除三个仅供测试注入的导出 API）。运行时正式链路行为、wire / 存储格式不变；生成物最低 core 仍为 v1.26.0。发布说明见 docs/release/v1.27.0-NOTES.md。

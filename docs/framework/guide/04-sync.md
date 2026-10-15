@@ -71,6 +71,16 @@ sync:
 
 状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
 
+### 停机排空（Drain）卡住时看什么
+
+`Manager.Drain(ctx)` 循环 Flush 直到没有待处理条目：预算 / 水位暂缓等下个周期，传输失败直接返回错误。被永久暂缓或拒绝的条目（持久水位不再前进、提交确认一直不到、政策事实一直不能应用）会让 Drain 等到 ctx 结束；Drain 不会放弃它们（DESIGN-TODO D3，维护者 2026-10-15 决定只做诊断增强，行为不变）。ctx 结束时返回 `*entitysync.DrainStalledError`：
+
+- `errors.Is(err, context.DeadlineExceeded / context.Canceled)` 照常成立；
+- `Stalls` 最多列 `DrainStallLimit`（8）项、`Total` 是全部条目数。每项有来源（`subject` 待捕获、`snapshot` 等冷创建预算、`policy` / `interest` 政策阶段）、subject 与会话、最后一次暂缓或拒绝的原因（`commit_pending`、`durability_wait`、`prepare_failed`、`snapshot_budget`、`subscribe_refused`、`policy_pending` 等）、补充说明、已连续等待的时长和最后一次错误；
+- 同时计 `entitysync_drain_timeout_total`，并把剩余条目数写入 `entitysync_drain_remaining_entries`（成功排空写 0）。
+
+自定义政策用 `Manager.RegisterPolicy(entitysync.PolicyHooks{Apply, Pending, Stalls})` 登记；`Stalls` 可选，不提供时超时错误只报告“该政策仍有待处理事实”。Interest 的被拒订阅连续 10 次后不再阻挡 Drain（`entitysync_interest_retry_stalled_total`），所以出现在列表里的 `subscribe_refused` 都还在这个上界之内。
+
 ## 5. 服务间总线与流
 
 SyncBusMod 的主题前缀缺省 `roost.sync`，与驱动缺省、生成配置一致；JetStream 流名显式 `syncbus.stream` 优先，否则由前缀推出（`roost.sync` → `ROOST_SYNC`，`zz.sync` → `ZZ_SYNC`），共用一个 NATS 的不同前缀各有各的流。没有按旧前缀的特例映射：要沿用已有的流与 durable 游标只能显式写 `syncbus.stream`；新流与已有流的 subjects 重叠时启动明确失败，不静默换流。
@@ -81,25 +91,30 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 ## 6. Lockstep
 
-客户端 Command 提供 Input/Hash/Catchup；Match 根据当前 session 映射席位，不信任客户端自报 seat。Match 汇集输入、广播 C7 帧和历史追帧；历史需宿主主动 TrimBefore/TrimHistory，不能假定自动无限期有界。输入校验、hash 判定、重连追帧与游戏模拟分开。两人不形成多数时 NoMajority 不等于已经识别作弊者。
+客户端 Command 提供 Input/Hash/Catchup；Match 根据当前 session 映射席位，不信任客户端自报 seat。Match 汇集输入、广播 C7 帧和历史追帧；历史与 hash 报告默认按保留窗口自动滚动裁剪（下节）。输入校验、hash 判定、重连追帧与游戏模拟分开。两人不形成多数时 NoMajority 不等于已经识别作弊者。
 
-### 长局如何控制内存
+### 长局如何控制内存：历史保留窗口
 
-先按允许的断线时长确定保留帧数。例如 30Hz 保留最近一分钟，就是 1800 帧。宿主在驱动 Match 的同一串行 handler 内按以下方式裁剪；不需要另起 goroutine：
+`MatchConfig.HistoryRetainFrames` 决定保留多少帧（含最新帧），维护者 2026-10-15 决定默认开启自动裁剪（DESIGN-TODO D1 方案 C）：
 
-```go
-// frame 是本次 match.Tick 返回的帧；需要更长重连窗口时提高 keepFrames。
-const keepFrames lockstep.FrameID = 1800
-if frame.ID >= keepFrames {
-    match.TrimHistory(frame.ID - keepFrames + 1)
-}
-// 如果业务上报了模拟状态 hash，也应定期在同一串行 handler 中调用
-// match.TrimHashReports(保留起点)，避免只裁历史而遗留 hash 报告。
-```
+| 配置 | 行为 |
+| --- | --- |
+| 0（默认） | `DefaultHistoryRetainFrames` = 3600 帧：60Hz 下 60 秒、30Hz 下 120 秒。以 10 席、每帧每席 8 字节估算约 1.5MB / 局，与对局长度无关 |
+| 正数 | 自定义窗口，按“允许断线秒数 × 逻辑帧率”换算；必须不小于 `MinHistoryRetainFrames`（= `ReplayHorizon` = 64，落后这么多帧的客户端在 Sequencer 看来仍在局内，它的追帧必须可服务；也覆盖一整页追帧与最大冗余深度），否则 `NewMatch` 返回 `ErrMatchConfigInvalid` |
+| `lockstep.RetainFullHistory`（-1） | 关闭自动裁剪：历史与 hash 报告随对局长度增长，宿主自己调用 `TrimHistory` / `TrimHashReports`（需要整局回放且不另行持久化时才这样配） |
 
-当前主线裁剪会立即清除丢弃帧的引用，通常只推进切片；大幅裁剪才收缩数组。这样频繁裁掉一帧不再复制整个保留窗口。`History.ReadRange` 和 `Replay` 返回只读视图，仅在下一次 Append/TrimBefore 前有效；需要长期保存回放时自行复制并持久化，不能留着内部切片当独立回放文件。异步追帧已在启动发送前编码成独立字节，不依赖后续可变历史。
+裁剪在每次 `Tick` 末尾执行：先发本次追帧页（页面在发出前已编码成独立字节），再裁掉窗口之前的帧；hash 报告按 64 帧步长跟随同一窗口裁剪，所以报告表最多比窗口多一个步长。宿主仍可调用 `TrimHistory` / `TrimHashReports` 裁得更多（例如 hash 判定窗口比断线窗口短），但裁掉的帧找不回来。`History.ReadRange` 和 `Replay` 返回只读视图，仅在下一次 Append/裁剪前有效；需要长期保存回放时自行复制并持久化。
 
-早于保留起点的追帧会以 `ErrCatchupUnservable` 明确失败，业务应选择完整状态恢复、重新入场或其他产品策略。保留窗口越短越省内存，也越容易使慢追帧失效。框架不会静默补齐被裁掉的历史。本机已验证一小时逻辑帧和滚动追帧；这不是一小时真实网络运行或跨引擎确定性的证明，测量见[优化说明](../SYNC-OPTIMIZATION.md)。
+### 追帧越界：明确失败，不自动重同步
+
+起点早于保留窗口的追帧不可能补齐，框架给出可判别的失败，客户端表现是“追帧失败、交由业务决定踢出或重开”，**不做全量重同步**（Lockstep 本身没有状态快照，方案 B 留待有具体游戏需求再定）：
+
+- 服务端：`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 立即返回 `*CatchupUnservableError`（`errors.Is(err, lockstep.ErrCatchupUnservable)`，字段 `From` 是客户端缺的第一帧、`Start` 是仍保留的最早帧）；起点 0 按帧 1 处理，同样核对。已在追帧的会话若页面一直发不出去、游标被窗口越过，下一次 `Tick` 的错误里带同一错误。两种情况都计 `lockstep.catchup.unservable.total`。
+- 通知：下一次 `Tick` 经可靠通道、与追帧页同一路由给该会话发一条追帧失败通知（`C9 01 from start`，`EncodeCatchupUnservable`）。经 TCP Notify 发出的 Catchup 命令没有应答，客户端靠这条通知得知结果；通知发送失败只记进 `Tick` 的错误。
+- Go 客户端：`FrameAssembler.Ingest` 收到通知返回 `*CatchupUnservableError`；`robot.LockstepBot` 随即终止（`ErrLockstepBotTerminal`，链上带 `ErrCatchupUnservable`），不再请求追帧。sink 直接把服务端的该错误交回时同样终止。
+- C# SDK：`LockstepAssembler.Ingest` 抛 `LockstepCatchupUnservableException`（`RequestedFrom` / `HistoryStart`），`LockstepClient.HandlePushAsync` 把它记为 `Failure` 后重新抛出，之后的推送一律拒绝。业务据此踢出、回大厅或开新局；不能跳过缺帧继续模拟。
+
+保留窗口越短越省内存，也越容易让慢追帧失效：断线时长的分布与 `lockstep.catchup.unservable.total` 一起决定是否要调大窗口。本机已验证一小时逻辑帧、默认窗口下的长局有界和滚动追帧；这不是一小时真实网络运行或跨引擎确定性的证明，测量见[优化说明](../SYNC-OPTIMIZATION.md)。
 
 ## 7. 公共客户端协议
 

@@ -1,6 +1,6 @@
 # Sync 优化现状与接入安排
 
-更新日期：2026-10-12；代码核对基线：`9d97a211`。此前确定的 Sync 局部优化已完成代码实施和本地验证，新增能力随 v1.26.0 发布（[发布说明](../release/v1.26.0-NOTES.md#n7)）。业务接入、目标环境验收和可选的新优化分别列在下面。
+更新日期：2026-10-15（Lockstep 自动保留见[末节](#lockstep-自动保留与追帧失败通知2026-10-15)）；此前代码核对基线：`9d97a211`。此前确定的 Sync 局部优化已完成代码实施和本地验证，新增能力随 v1.26.0 发布（[发布说明](../release/v1.26.0-NOTES.md#n7)）。业务接入、目标环境验收和可选的新优化分别列在下面。
 
 ## 当前完成范围
 
@@ -10,7 +10,7 @@
 | AOI | 事件归集、分类重算、有界工作区、候选过滤与提前结束 | 小批量不保证并行更快，集中热点仍需目标环境验证 |
 | Relation | 反向索引、重复 Set 工作区、QueueRelationDelta 增量入口 | 业务需显式使用增量入口；退出重加存在已记录的耗时代价 |
 | OnChange | 可配置固定合批窗口 | 默认 0；开启后增加等待，周期检查可提前触发 |
-| Lockstep | 广播名单缓存、滚动历史裁剪与容量回收 | 宿主仍负责历史和 hash 的保留策略 |
+| Lockstep | 广播名单缓存、滚动历史裁剪与容量回收；默认自动保留窗口（3600 帧）与追帧失败通知（2026-10-15） | 窗口按允许断线时长 × 帧率核对；越界追帧明确失败、不自动重同步 |
 | 玩家 Controller | 自动补齐缺少的方法、保留已有业务、修复 typed nil 响应 | 业务编写方法内容，生成器不会代办 Entity 操作 |
 
 这里的完成范围不等于全框架零缺陷，也不等于生产验收完成。配置和代码示例见 [Sync 使用指南](guide/04-sync.md)，玩家协议接入见 [Controller 教程](PLAYER-ACCESS.md)。后文保留各次改动的基线、测量和失败样本，数字只适用于对应场景，不作为当前待办列表。
@@ -21,10 +21,10 @@
 | --- | --- | --- |
 | OnChange 合批 | 根据延迟要求决定是否设置 on_change_batch_window；0 保持即时唤醒 | 部署配置与预期一致，功能验证中最终状态和版本连续正确 |
 | Relation 增量 | 已知新增/移除成员时使用 QueueRelationDelta；完整列表仍可使用 QueueRelation | 通过正式提交入口，回滚不发布，退出重建不被旧事实影响 |
-| Lockstep 保留 | 明确允许断线多久、是否需要整局回放，按帧率换算历史窗口；在所属串行 handler 内调用 TrimHistory 和 TrimHashReports | 正常追帧范围仍可服务；过期请求有业务处理；需要保留的回放独立复制并持久化 |
+| Lockstep 保留 | 核对默认 3600 帧（60Hz 60 秒 / 30Hz 120 秒）是否覆盖允许的断线时长，不够就按“秒 × 帧率”配置 HistoryRetainFrames；需要整局回放时独立复制并持久化，或配置 RetainFullHistory 自行裁剪 | 正常追帧范围仍可服务；客户端收到追帧失败后有业务处理（踢出、回大厅或开新局）；`lockstep.catchup.unservable.total` 符合预期 |
 | 版本升级 | 发布时按维护流程执行；业务固定新版本并编译消费者 | 新配置/API 随正式版本交付，不能只升级文档而仍使用旧 tag |
 
-Lockstep 的 1800 帧只是 30Hz 下保留一分钟的示例，不是适合所有游戏的默认值。过期追帧返回 ErrCatchupUnservable 后，业务必须明确选择恢复方案，例如有完整状态恢复能力时重新同步，否则退出对局并给出原因；框架不会凭输入历史自动生成权威快照。hash 保留期应覆盖业务允许的报告延迟与判定需求，不必机械等于输入历史窗口。
+Lockstep 默认保留 3600 帧，依据见[使用指南](guide/04-sync.md#长局如何控制内存历史保留窗口)；它不是适合所有游戏的唯一值。过期追帧返回 ErrCatchupUnservable 并给客户端发追帧失败通知后，业务必须明确选择恢复方案，例如有完整状态恢复能力时重新入场，否则退出对局并给出原因；框架不会凭输入历史自动生成权威快照（D1 方案 B 留待具体游戏需求）。hash 报告默认跟随同一窗口；判定窗口更短时宿主可再调用 TrimHashReports。
 
 ## 尚待目标环境验收
 
@@ -45,11 +45,10 @@ Lockstep 的 1800 帧只是 30Hz 下保留一分钟的示例，不是适合所�
 
 | 方向 | 解决什么问题 | 开始前需要的依据 |
 | --- | --- | --- |
-| Lockstep 可配置保留策略 | 减少业务遗漏裁剪和配置不一致 | 先确定断线恢复、回放、hash 判定窗口及关闭责任，再设计统一入口 |
 | AOI 候选选择算法 | 进一步减少密集场景的排序与扫描 | 当前负载 profile 仍显示这些步骤是主要开销，并能保持距离/同距顺序语义 |
 | AOI 小批量串并行选择 | 避免小任务的并行调度成本高于计算收益 | 同环境不同批量对照，明确切换规则；不能硬编码某次微基准的阈值 |
 
-建议顺序：先确定 Lockstep 保留与过期恢复的业务策略，完成真实故障恢复验证，再根据实际负载选择算法优化。实现新的自动保留策略时，应同时验收正常追帧、慢追帧、过期失败、回放所有权和关闭排空。
+建议顺序：先完成 Lockstep 保留窗口与过期恢复的真实故障验证（正常追帧、慢追帧、过期失败与客户端终止、回放所有权），再根据实际负载选择算法优化。
 
 ## 已实施优化的设计与证据
 
@@ -295,7 +294,7 @@ Windows/amd64、Go 1.27.0、Ryzen 7 5800H，GOWORK=off、GOMAXPROCS=4，500ms ×
 
 基线 b1ec31a3。OnChange 新增 OnChangeBatchWindow，零值保持立即处理唤醒；正值从首次唤醒起计时，后续唤醒不续期，周期 tick 可提前触发。显式 Flush、Drain 与 Stop 的最终 Flush 不等待窗口。只延迟同步循环的唤醒处理，不改变冻结、提交水位、可靠增量或快照预算。接入 sync.entity.on_change_batch_window，拒绝负值及 periodic 模式下非零配置。
 
-Lockstep History.TrimBefore 原来每次分配并复制剩余帧；现已改为清除已丢弃引用、推进连续视图，大幅缩容时才复制。空历史释放数组，持续裁剪保持容量与保留窗口同阶。ReadRange 仍返回连续只读页，跨 Append/Trim 不允许继续持有旧视图；发送追帧继续使用编码后的独立载荷。默认不自动丢弃历史，宿主按重连需求选择保留窗口。长局测试覆盖持续推进、裁剪、页读取、序号和慢追帧隔离；模拟长局不冒充真实多小时网络验收。
+Lockstep History.TrimBefore 原来每次分配并复制剩余帧；现已改为清除已丢弃引用、推进连续视图，大幅缩容时才复制。空历史释放数组，持续裁剪保持容量与保留窗口同阶。ReadRange 仍返回连续只读页，跨 Append/Trim 不允许继续持有旧视图；发送追帧继续使用编码后的独立载荷。（当时默认不自动丢弃历史；2026-10-15 起默认按保留窗口自动裁剪，见末节。）长局测试覆盖持续推进、裁剪、页读取、序号和慢追帧隔离；模拟长局不冒充真实多小时网络验收。
 
 ### 使用方式与实现取舍
 
@@ -326,4 +325,32 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 复跑入口：`go test ./framework/sync/... ./wiring/nest -count=1`；`go test -race ./framework/sync/entitysync ./framework/sync/lockstep ./wiring/nest -count=2`；`go test ./framework/sync/lockstep -run '^$' -bench '^BenchmarkHistoryRollingWindow$' -benchmem -benchtime=300ms -count=3`。基准对照需要把当前 history_long_test.go 放回基线 worktree，仅运行 benchmark，不能用不同测试负载比较。
 
-尚未验收真实一小时网络运行、跨机丢包/断线、生产负载与进程长期内存曲线。宿主仍须根据重连窗口主动调用 TrimHistory 和 TrimHashReports；不裁剪仍会按对局长度增长。Windows 本地结果不扩大仓库正式平台支持范围，也不替代上线前在目标环境的容量验收。图谱仍是旧代际，当前修改和新增测试均已读取源码补证。
+尚未验收真实一小时网络运行、跨机丢包/断线、生产负载与进程长期内存曲线。（当时宿主须主动调用 TrimHistory 和 TrimHashReports；2026-10-15 起默认自动保留，见末节。）Windows 本地结果不扩大仓库正式平台支持范围，也不替代上线前在目标环境的容量验收。图谱仍是旧代际，当前修改和新增测试均已读取源码补证。
+
+## Lockstep 自动保留与追帧失败通知（2026-10-15）
+
+基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `0347c520`。
+
+**做了什么**：`MatchConfig.HistoryRetainFrames` 默认 3600 帧自动保留（`RetainFullHistory` 关闭，正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64）；`Tick` 在发出本次追帧页之后裁历史，hash 报告按 64 帧步长跟随窗口。越界追帧在 `StartCatchup` 时即返回 `*CatchupUnservableError`，下一次 `Tick` 经可靠通道发 C9 v1 追帧失败通知；Go `FrameAssembler` / `robot.LockstepBot` 与 C# `LockstepAssembler` / `LockstepClient` 收到后终止本场，不再请求追帧。使用说明见[使用指南](guide/04-sync.md#追帧越界明确失败不自动重同步)。
+
+**裁剪放在追帧之后的原因**：若在切帧后立即裁剪，从当前最早帧开始的追帧会在本次 `Tick` 的追帧阶段就被判定越界，窗口实际比配置少一帧且“从最早帧追”永远失败（实现时 `TestMatchAutoRetentionOvertakesStalledCatchup` 首版即因此失败）。页面在发出前已编码成独立字节，之后裁剪不影响在途页。
+
+**一并修复**：起点 0 原先跳过越界检查，`History.ReadRange` 把 0 钳到保留的第一帧，裁剪后从 0 追帧会得到一段有洞的帧流而没有任何错误；现在 0 按帧 1 核对。`History` 裁空后用内部起点判定，不再把“裁空”当成“全部可服务”。
+
+**修前失败**（`45897a0c`，同一断言的临时红测试，Go 1.27 / darwin）：
+
+```text
+--- FAIL: TestRedDefaultRetentionBoundsLongMatch
+    history len 10900 after 10900 ticks, want 3600
+--- FAIL: TestRedCatchupBeyondRetentionFailsAtRequest
+    StartCatchup from trimmed frame = <nil>, want ErrCatchupUnservable
+--- FAIL: TestRedCatchupFromZeroAfterTrim
+    catch-up from 0 after trim: tick err <nil>, paged 10 frames, first paged frame 20 (frames before it silently skipped)
+```
+
+**回归**：`history_long_test.go` 的 `TestMatchDefaultRetentionBoundsLongMatch`（10900 帧后历史恰为 3600 帧、底层数组 ≤ 4 倍窗口、hash 报告 ≤ (窗口 + 步长)/30 + 1）、`TestMatchAutoRetentionOvertakesStalledCatchup`（发送失败使游标被窗口越过 → 下一次 Tick 明确失败、只收到通知、随后回到实时广播）、`TestMatchRetainFullHistoryKeepsEveryFrame`（关闭后历史与报告保留整局、从帧 1 追帧无缺口）、`TestMatchHistoryRetainFramesValidation`；`match_test.go` 的 `TestMatchCatchupAbandonedWhenHistoryTrimmed`（请求即失败、可靠通道只有一条通知、客户端解出 From/Start、起点 0）与指标钉住；`robot` 的 `TestLockstepBotCatchupUnservableNoticeIsTerminal` / `TestLockstepBotUnservableCatchupRequestIsTerminal`；C# `TestLockstep`（通知字段、坏通知拒绝、组装器不变）与 `LockstepGapRetry`（客户端终止、不再模拟）；`client/spec/packets.json` 新增 `catchup_unservable` 金样。
+
+**行为变化**：`StartCatchup` 对已裁起点由“接受、下一 Tick 放弃”改为立即返回错误（关闭自动裁剪、宿主手动裁剪时同样如此）；`CatchingUp` 在通知发出前仍为真。线协议新增 C9 v1 下行通知，旧客户端会把它当坏包终止（未上线，不做兼容）。
+
+**未验证**：真实网络下断线超过窗口的端到端演练、Unity/IL2CPP 上的 C# 行为、生成工程（demo 战斗只有 45 帧，不会触发裁剪）。
+
