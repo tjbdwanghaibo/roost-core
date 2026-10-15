@@ -10,6 +10,7 @@
 - upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
 ### 性能
 
+- 2026-10-15 追加复测（[性能四项 §5](docs/performance/PERF-ROUND-20261015.md)）：长尾方案 B（`GOMAXPROCS=8`，其余同 v1.27.0 30 分钟重档）无效——P99 不变、各路径 >50ms 条数为基线 3～10 倍，不改默认与部署建议，剩余方向是独占机器 / Linux 复测。Saga 容量夹具按计划启动分钟输出分段分位，全补偿 10/s × 10m 复测 P99 0.64s、十段无增长趋势，首测 1.47s 未复现。
 - `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。同机交替 10 轮 benchstat：编码矩阵 24 组全部显著变快（−8.8%～−63.0%），分配次数 −15%～−98%；WAL 追加与 Nest→WAL 端到端由 fsync 主导，耗时无显著变化、无退化（docs/performance/PERF-ROUND-20261015.md §2）。解码侧未改。
 
 ### 测试与工具

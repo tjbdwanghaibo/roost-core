@@ -1,0 +1,111 @@
+{
+  "Mode": "compensate",
+  "Rate": 10,
+  "Planned": 6000,
+  "Started": 6000,
+  "Completed": 6000,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 600,
+  "ElapsedSeconds": 600.301765708,
+  "CompletionTPS": 9.994973099776843,
+  "P50MS": 500.692333,
+  "P95MS": 584.815458,
+  "P99MS": 644.066,
+  "MaxMS": 820.902333,
+  "FinalStats": {
+    "Started": 6000,
+    "Dispatched": 18000,
+    "Completed": 0,
+    "Compensated": 6000,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 1,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 6000,
+  "EffectDocuments": 12000,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 600,
+      "P50MS": 507.616667,
+      "P99MS": 649.027042,
+      "MaxMS": 698.762167
+    },
+    {
+      "Minute": 1,
+      "Count": 600,
+      "P50MS": 508.3055,
+      "P99MS": 691.329917,
+      "MaxMS": 820.902333
+    },
+    {
+      "Minute": 2,
+      "Count": 600,
+      "P50MS": 510.345167,
+      "P99MS": 617.150042,
+      "MaxMS": 663.164333
+    },
+    {
+      "Minute": 3,
+      "Count": 600,
+      "P50MS": 495.321,
+      "P99MS": 619.059958,
+      "MaxMS": 670.96275
+    },
+    {
+      "Minute": 4,
+      "Count": 600,
+      "P50MS": 498.102417,
+      "P99MS": 615.859167,
+      "MaxMS": 651.940708
+    },
+    {
+      "Minute": 5,
+      "Count": 600,
+      "P50MS": 495.269792,
+      "P99MS": 652.603083,
+      "MaxMS": 752.83275
+    },
+    {
+      "Minute": 6,
+      "Count": 600,
+      "P50MS": 495.832708,
+      "P99MS": 632.945,
+      "MaxMS": 725.197375
+    },
+    {
+      "Minute": 7,
+      "Count": 600,
+      "P50MS": 486.941125,
+      "P99MS": 586.8435,
+      "MaxMS": 609.699875
+    },
+    {
+      "Minute": 8,
+      "Count": 600,
+      "P50MS": 493.3865,
+      "P99MS": 611.4175,
+      "MaxMS": 650.791208
+    },
+    {
+      "Minute": 9,
+      "Count": 600,
+      "P50MS": 510.729375,
+      "P99MS": 661.547583,
+      "MaxMS": 755.52
+    }
+  ]
+}
