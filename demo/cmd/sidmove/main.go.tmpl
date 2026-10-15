@@ -1,0 +1,368 @@
+// Command sidmove 是把一个 game sid（连同绑定在它上面的全部静态 Player）从一台机器搬到另一台时
+// 用的检查工具。它不搬数据、不切路由、不起停进程——这些由运维流程按
+// roost-core 的 docs/framework/PLAYER-MIGRATION.md 一步步做；它只回答每一步之后
+// “能不能进入下一步”：
+//
+//	go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000
+//	    旧进程停机之后：WAL 里每条记录都已投影进 Mongo 并确认（checkpoint 停在最后一条记录）。
+//	    进程还在跑（writer.lock 被持有）、有未确认的尾部、WAL 损坏都以非零码退出。
+//	go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:{{PROJECT}}:singleton:{{GAME_SERVICE}}:1000
+//	    单实例锁是否仍被持有、被谁持有（hostname|pid|启动时间）；旧进程停完之后应为空。
+//	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -out before.json
+//	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -compare before.json
+//	    记录 / 比较玩家文档的 _version、_schema、_last_tx 与内容摘要：旧进程停完后记一份，
+//	    新进程接管、业务写入之前再比一次，证明空窗期没有第三个写者。
+//
+// 每个子命令打印一份 JSON；检查不通过时以非零码退出。
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	db "{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fail("usage: sidmove wal-drained|singleton|players [flags]")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var (
+		result any
+		err    error
+	)
+	switch os.Args[1] {
+	case "wal-drained":
+		fs := flag.NewFlagSet("wal-drained", flag.ExitOnError)
+		dir := fs.String("dir", "", "the stopped game process's WAL directory (dataengine.wal.dir/<sid>)")
+		_ = fs.Parse(os.Args[2:])
+		result, err = walDrained(ctx, *dir)
+	case "singleton":
+		fs := flag.NewFlagSet("singleton", flag.ExitOnError)
+		addr := fs.String("redis", "127.0.0.1:6379", "the Redis the singleton lock lives in (redis.* in config.game.yaml)")
+		password := fs.String("redis-password", "", "Redis password, if any")
+		database := fs.Int("redis-db", 0, "Redis database index")
+		key := fs.String("key", "", "<singleton.key_prefix>:<service>:<sid>")
+		_ = fs.Parse(os.Args[2:])
+		result, err = singletonHolder(ctx, *addr, *password, *database, *key)
+	case "players":
+		fs := flag.NewFlagSet("players", flag.ExitOnError)
+		uri := fs.String("mongo", "mongodb://127.0.0.1:27017/?replicaSet=rs0", "mongo.uri in config.game.yaml")
+		database := fs.String("db", db.PlayerDaoDBName, "database of the Player collection")
+		collection := fs.String("coll", db.PlayerDaoCollection, "the Player collection")
+		ids := fs.String("ids", "", "comma-separated player ids (the unique id the client sees, or the document _id)")
+		out := fs.String("out", "", "write the snapshot to this file")
+		compare := fs.String("compare", "", "compare with a snapshot written earlier by -out")
+		_ = fs.Parse(os.Args[2:])
+		result, err = players(ctx, *uri, *database, *collection, *ids, *out, *compare)
+	default:
+		fail("unknown command %q (commands: wal-drained, singleton, players)", os.Args[1])
+	}
+	encoded, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(encoded))
+	if err != nil {
+		fail("%s: %v", os.Args[1], err)
+	}
+}
+
+// WALReport 是 wal-drained 的结论。Drained 只在 WAL 完整、没有被进程持有、且 checkpoint 等于最后一条记录
+// （或根本没有记录）时为 true。
+type WALReport struct {
+	Dir        string `json:"dir"`
+	Drained    bool   `json:"drained"`
+	Records    uint64 `json:"records_retained"`
+	Checkpoint string `json:"checkpoint,omitempty"`
+	LastRecord string `json:"last_record,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// ErrNotDrained 表示旧 WAL 里还有没投影确认的记录：新机器用空 WAL 目录启动会丢掉它们。
+var ErrNotDrained = errors.New("the WAL still holds records that are not acknowledged as projected")
+
+// walDrained 只读检查一个已停止的 WAL 目录（nestwal.Inspect 先拿 writer.lock，进程还在跑就拒绝）。
+func walDrained(ctx context.Context, dir string) (WALReport, error) {
+	report := WALReport{Dir: dir}
+	if dir == "" {
+		return report, errors.New("-dir is required")
+	}
+	inspection, err := nestwal.Inspect(ctx, nestwal.InspectOptions{Dir: dir})
+	if err != nil {
+		report.Reason = err.Error()
+		if errors.Is(err, nestwal.ErrLocked) {
+			report.Reason = "a process still holds this WAL; stop it first"
+		}
+		return report, err
+	}
+	var checkpoint *nestwal.CheckpointInspection
+	for i := range inspection.Checkpoints {
+		entry := &inspection.Checkpoints[i]
+		if entry.Error == "" && (checkpoint == nil || entry.Generation > checkpoint.Generation) {
+			checkpoint = entry
+		}
+	}
+	var last *nestwal.SegmentInspection
+	for i := range inspection.Segments {
+		segment := &inspection.Segments[i]
+		report.Records += segment.Records
+		if segment.Records > 0 {
+			last = segment
+		}
+	}
+	if checkpoint != nil {
+		report.Checkpoint = fmt.Sprintf("segment %d offset %d", checkpoint.Fence.Segment, checkpoint.Fence.Offset)
+	}
+	if last == nil {
+		report.Drained = true
+		report.Reason = "no records retained"
+		return report, nil
+	}
+	lastSegment, err := segmentNumber(last.Name)
+	if err != nil {
+		return report, err
+	}
+	report.LastRecord = fmt.Sprintf("segment %d offset %d (%s)", lastSegment, last.LastGoodOffset, last.LastTransactionID)
+	if checkpoint != nil && checkpoint.Fence.Segment == lastSegment && checkpoint.Fence.Offset == last.LastGoodOffset {
+		report.Drained = true
+		return report, nil
+	}
+	report.Reason = "the checkpoint is behind the last record"
+	return report, ErrNotDrained
+}
+
+// segmentNumber 读出段文件名 segment-<20 位序号>.wal 里的序号（nestwal 的段命名）。
+func segmentNumber(name string) (uint64, error) {
+	digits, ok := strings.CutPrefix(strings.TrimSuffix(name, ".wal"), "segment-")
+	if !ok {
+		return 0, fmt.Errorf("unexpected segment name %q", name)
+	}
+	return strconv.ParseUint(digits, 10, 64)
+}
+
+// SingletonReport 是 singleton 的结论；不打印锁值里的随机令牌。
+type SingletonReport struct {
+	Key      string `json:"key"`
+	Held     bool   `json:"held"`
+	Hostname string `json:"hostname,omitempty"`
+	PID      string `json:"pid,omitempty"`
+	Started  string `json:"started,omitempty"`
+}
+
+func singletonHolder(ctx context.Context, addr, password string, database int, key string) (SingletonReport, error) {
+	report := SingletonReport{Key: key}
+	if key == "" {
+		return report, errors.New("-key is required")
+	}
+	cfg := fredis.DefaultConfig(addr)
+	cfg.Password, cfg.DB = password, database
+	assembly, err := redisdriver.Assemble(cfg)
+	if err != nil {
+		return report, err
+	}
+	defer func() { _ = assembly.Close() }()
+	value, err := assembly.Client.Get(ctx, key)
+	if errors.Is(err, fredis.ErrNil) {
+		return report, nil
+	}
+	if err != nil {
+		return report, err
+	}
+	report.Held = true
+	report.Hostname, report.PID, report.Started = parseHolder(string(value))
+	return report, nil
+}
+
+// parseHolder 拆开锁值 token|hostname|pid|started_unix_ms（framework/app/singleton.go），丢掉令牌。
+func parseHolder(value string) (hostname, pid, started string) {
+	parts := strings.Split(value, "|")
+	if len(parts) != 4 {
+		return "", "", ""
+	}
+	started = parts[3]
+	if ms, err := strconv.ParseInt(parts[3], 10, 64); err == nil {
+		started = time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
+	}
+	return parts[1], parts[2], started
+}
+
+// PlayerState 是一份玩家文档的指纹：版本元数据加整份文档的摘要。
+type PlayerState struct {
+	ID      int64  `json:"_id"`
+	Found   bool   `json:"found"`
+	Version int64  `json:"_version,omitempty"`
+	Schema  int64  `json:"_schema,omitempty"`
+	LastTx  string `json:"_last_tx,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+}
+
+// ErrChanged 表示两次快照之间玩家文档变了：空窗期有别的写者，或者比较的时机不对。
+var ErrChanged = errors.New("player documents changed since the snapshot")
+
+func players(ctx context.Context, uri, database, collection, rawIDs, out, compare string) ([]PlayerState, error) {
+	ids, err := playerDocumentIDs(rawIDs)
+	if err != nil {
+		return nil, err
+	}
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close(context.Background()) }()
+	states, err := snapshotPlayers(ctx, client.Database(database).Collection(collection), ids)
+	if err != nil {
+		return states, err
+	}
+	if out != "" {
+		encoded, _ := json.MarshalIndent(states, "", "  ")
+		if err := os.WriteFile(out, encoded, 0o644); err != nil {
+			return states, err
+		}
+	}
+	if compare != "" {
+		raw, err := os.ReadFile(compare)
+		if err != nil {
+			return states, err
+		}
+		var before []PlayerState
+		if err := json.Unmarshal(raw, &before); err != nil {
+			return states, err
+		}
+		return states, compareSnapshots(before, states)
+	}
+	return states, nil
+}
+
+// playerDocumentIDs 接受客户端看到的唯一 id 或文档 _id，统一成文档 _id（与 GM 命令的规则相同）。
+// 实体种类在 RegisterEntity 里登记（与 game 进程启动时相同），之后才能拼出 _id。
+func playerDocumentIDs(raw string) ([]int64, error) {
+	player.RegisterEntity()
+	var ids []int64
+	for _, field := range strings.Split(raw, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(field, 10, 64)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("player id %q is not a positive integer", field)
+		}
+		if !entity.MatchEntityID(value, player.EntityKindPlayer) {
+			if value, err = entity.BuildEntityID(value, player.EntityKindPlayer); err != nil {
+				return nil, fmt.Errorf("player id %s: %w", field, err)
+			}
+		}
+		ids = append(ids, value)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("-ids is required")
+	}
+	return ids, nil
+}
+
+func snapshotPlayers(ctx context.Context, collection fmongo.ICollection, ids []int64) ([]PlayerState, error) {
+	states := make([]PlayerState, 0, len(ids))
+	for _, id := range ids {
+		var doc bson.M
+		err := collection.FindOne(ctx, bson.M{"_id": id}, &doc)
+		if errors.Is(err, fmongo.ErrNotFound) {
+			states = append(states, PlayerState{ID: id})
+			continue
+		}
+		if err != nil {
+			return states, err
+		}
+		raw, err := bson.Marshal(canonical(doc))
+		if err != nil {
+			return states, err
+		}
+		sum := sha256.Sum256(raw)
+		state := PlayerState{ID: id, Found: true, Digest: hex.EncodeToString(sum[:8])}
+		state.Version, _ = number(doc["_version"])
+		state.Schema, _ = number(doc["_schema"])
+		state.LastTx, _ = doc["_last_tx"].(string)
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+// canonical 把文档递归转成按键排序的 bson.D：map 的编码顺序每次不同，摘要必须与顺序无关。
+func canonical(value any) any {
+	switch typed := value.(type) {
+	case bson.M:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		ordered := make(bson.D, 0, len(keys))
+		for _, key := range keys {
+			ordered = append(ordered, bson.E{Key: key, Value: canonical(typed[key])})
+		}
+		return ordered
+	case bson.D:
+		fields := bson.M{}
+		for _, element := range typed {
+			fields[element.Key] = element.Value
+		}
+		return canonical(fields)
+	case bson.A:
+		out := make(bson.A, len(typed))
+		for i, item := range typed {
+			out[i] = canonical(item)
+		}
+		return out
+	}
+	return value
+}
+
+func compareSnapshots(before, after []PlayerState) error {
+	var changed []string
+	for _, now := range after {
+		index := slices.IndexFunc(before, func(state PlayerState) bool { return state.ID == now.ID })
+		if index < 0 {
+			changed = append(changed, fmt.Sprintf("_id=%d is not in the earlier snapshot", now.ID))
+			continue
+		}
+		if before[index] != now {
+			changed = append(changed, fmt.Sprintf("_id=%d: _version %d -> %d, _last_tx %q -> %q", now.ID, before[index].Version, now.Version, before[index].LastTx, now.LastTx))
+		}
+	}
+	if len(changed) != 0 {
+		return fmt.Errorf("%w: %s", ErrChanged, strings.Join(changed, "; "))
+	}
+	return nil
+}
+
+func number(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, true
+	case int32:
+		return int64(typed), true
+	}
+	return 0, false
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sidmove: "+format+"\n", args...)
+	os.Exit(1)
+}

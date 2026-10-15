@@ -680,6 +680,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
 		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
+		{write: "cmd/sidmove/main.go", why: "the checks between the steps of moving a game sid to another machine: the old WAL is fully projected, the singleton lock is free, nobody wrote the players in between"},
+		{write: "cmd/sidmove/main_test.go", why: "a held or unacknowledged WAL fails the drain check, the lock holder is reported without its token, a write between two player snapshots is caught"},
 		{write: "internal/service/game/flags_test.go", why: "启动即表里的值、reload 跟着变、表里删掉的开关消失、缺表时拒绝发布"},
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
 		{write: "internal/service/game/playerowner.go", why: "static binding: serve only the players bound to this sid (server_id from account), a local resident table behind the write gate, and idle unload as plain memory management"},
