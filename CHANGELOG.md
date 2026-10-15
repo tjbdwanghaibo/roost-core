@@ -24,6 +24,13 @@
 - `framework/sync/lockstep`（DESIGN-TODO D1，维护者 2026-10-15 决定方案 C，`a6376934`）：`MatchConfig.HistoryRetainFrames` 默认按 `DefaultHistoryRetainFrames` = 3600 帧自动保留（60Hz 60 秒 / 30Hz 120 秒），`Tick` 在发出本次追帧页后裁历史，hash 报告按 64 帧步长跟随；`RetainFullHistory`（-1）关闭，正值须 ≥ `MinHistoryRetainFrames`（= `ReplayHorizon` = 64）。越界追帧：`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 立即返回 `*CatchupUnservableError`（`errors.Is ErrCatchupUnservable`，带 `From` / `Start`；原先接受请求、下一 Tick 才放弃），追帧途中被窗口越过时 `Tick` 返回同一错误；两种情况都经可靠通道发 C9 v1 追帧失败通知并计 `lockstep.catchup.unservable.total`。客户端：`FrameAssembler.Ingest` 返回 `*CatchupUnservableError`，`robot.LockstepBot` 终止；C# `LockstepAssembler` / `LockstepClient` 抛 `LockstepCatchupUnservableException` 并终止实例；不自动重同步，由业务踢出或开新局。修复：起点 0 原先绕过越界检查，裁剪后从 0 追帧得到一段有洞的帧流而无错误。`client/spec/packets.json` 新增 `catchup_unservable` 金样。**升级（未上线，不做兼容）**：长局默认只保留最近 3600 帧，需要整局回放的宿主自行复制持久化或配置 `RetainFullHistory`；下行新增 C9 通知，旧客户端会把它当坏包终止，客户端与服务端须同版本。
 - `framework/sync/entitysync`（DESIGN-TODO D3，维护者 2026-10-15 决定方案 A，`b86a1286`）：`Manager.Drain` 在 ctx 超时 / 取消时返回 `*DrainStalledError`（`errors.Is` ctx 错误不变），列出前 8 项卡住条目（来源、subject、会话、最后一次暂缓或拒绝的原因、连续等待时长、最后错误）与总数；新增 `entitysync_drain_timeout_total`、`entitysync_drain_remaining_entries`。Drain 行为不变、不放弃条目。API 变化：`Manager.RegisterPolicy(apply, pending...)` 改为 `RegisterPolicy(entitysync.PolicyHooks{Apply, Pending, Stalls})`，`Stalls` 可选；Interest 报告未确认提交的排队事实与上界内被拒的订阅。
 
+### 设计事项落实（DESIGN-TODO D2 / D4 / D5，维护者 2026-10-15 决定按推荐 A）
+
+- D2 SyncBus 兜底：定位为默认可丢广播；需要最终一致的状态由业务做“序号缺口 / 版本落后 / 投递耗尽 → 拉快照整体替换”闭环。guide/04-sync §5 写明推荐写法，`framework/sync/syncbus/example_test.go` 的 `Example_reconcileAfterLoss` 是随包测试运行、核对输出的模板。框架级对账为下一阶段候选。只改文档与示例，行为不变。
+- D4 schema 离线迁移：新增 [业务 schema 变更操作手册](docs/framework/SCHEMA-MIGRATION.md)。game-demo 模板新增 `db/migrations`（Player schema 1→2）、离线执行器（plan 不写；apply 先完整 dry-run 再逐份写备份并按 `_id`+`_version`+`_schema` 条件改写，`_version` 加 1、`_last_tx` 记 `schema-migration:<步骤>`；verify；rollback 只恢复仍是迁移写的版本）与 `cmd/schemamigrate`。`TestPlayerMigrationRealMongo` 挂进 `scripts/test-demo-generated.sh`，根包覆盖表同步。CODEGEN_REFERENCE 删去已不存在的生成 `Migrate` 说法。生成器支持（`roost add migration`）为候选。
+- D5 静态 Player 跨机迁移：新增 [参考流程](docs/framework/PLAYER-MIGRATION.md)（搬的是 sid：拒绝新准入 → 正常停机 → WAL 排空 → 单实例锁释放 → 路由切换 → 新进程空 WAL 接管 → 失败回退，每步指到现有 API 与检查点）。game-demo 模板新增检查工具 `cmd/sidmove`（`wal-drained` / `singleton` / `players`）。本机同 sid 两个 game 进程演练（含崩溃与投影未排空场景）记录在该篇 §4。框架级迁移命令上线后评估。
+- 生成工程变化：game-demo 多出 `db/migrations`、`cmd/schemamigrate`、`cmd/sidmove` 三处文件；不改框架 API、不改生成器最低 core 版本。
+
 ## [v1.27.0] - 2026-10-14
 
 次版本：生成工程玩家接入目录改名（破坏性，需手工迁移）与 Remote WAL 级 Rejected 处理精简（删除三个仅供测试注入的导出 API）。运行时正式链路行为、wire / 存储格式不变；生成物最低 core 仍为 v1.26.0。发布说明见 docs/release/v1.27.0-NOTES.md。

@@ -37,6 +37,8 @@
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
 - [SAGA.md](../framework/SAGA.md)：Saga 契约
+- [SCHEMA-MIGRATION.md](../framework/SCHEMA-MIGRATION.md)：业务 schema 离线迁移操作手册（D4）
+- [PLAYER-MIGRATION.md](../framework/PLAYER-MIGRATION.md)：静态 Player 跨机（按 sid 搬机）参考流程（D5）
 - [OBSERVABILITY.md](../framework/OBSERVABILITY.md)：可观测性规范与指标清单（根包门禁核对指标名）
 - `guide/00`～`guide/14`：各模块“设计与使用”，其中 [guide/02](../framework/guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试) 含回复错误判别表
 - `impl/00`～`impl/14`：各模块“实现与维护”（必须保持的契约、源码与回归入口）

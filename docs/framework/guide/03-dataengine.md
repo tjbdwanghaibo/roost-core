@@ -30,7 +30,7 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 ## 4. 冷加载与 schema
 
-EntityRepository 读取聚合一致性视图，先验证所有持久 DAO 的完整性与当前 schema，再水合并发布 Entity。旧/未来 schema 都拒绝；生成 RestorePersisted 在解码前校验。自动 schema 迁移已撤销，不能把仍存在的通用 migration 包解释成 Repository 自动转换旧 DAO 的能力。
+EntityRepository 读取聚合一致性视图，先验证所有持久 DAO 的完整性与当前 schema，再水合并发布 Entity。旧/未来 schema 都拒绝；生成 RestorePersisted 在解码前校验。自动 schema 迁移已撤销，不能把仍存在的通用 migration 包解释成 Repository 自动转换旧 DAO 的能力。改了持久结构时按[业务 schema 变更操作手册](../SCHEMA-MIGRATION.md)停写后离线转换。
 
 恢复 gate 未就绪时不能对外发布“空的已恢复实体”。并发加载合并 flight；发布后回调重新连接 Sync 等协作者。缓存只是加速，缺失/过期不得被解释成权威不存在。
 
@@ -40,7 +40,7 @@ Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未�
 
 ## 6. 维护与升级
 
-要等 Mongo 落库，用明确 Flush/投影等待契约，不能只等 strict handler 成功。静态 Player 跨机迁移只以已落库数据为准，WAL 负责本机恢复与落库，不提供跨机本地 WAL 热迁移。旧版本升级先停写、排空、用旧程序完成需保留数据落库，保留备份；新程序用新 WAL 目录。框架不自动清库或迁移 schema。
+要等 Mongo 落库，用明确 Flush/投影等待契约，不能只等 strict handler 成功。静态 Player 跨机迁移只以已落库数据为准，WAL 负责本机恢复与落库，不提供跨机本地 WAL 热迁移；按 sid 搬机的步骤与检查点见[参考流程](../PLAYER-MIGRATION.md)。旧版本升级先停写、排空、用旧程序完成需保留数据落库，保留备份；新程序用新 WAL 目录。框架不自动清库或迁移 schema。
 
 只读故障分析使用 cmd/walinspect 与 nestwal 的检查/完整副本入口；不要用正在运行的权威 WAL 目录做破坏性实验。
 

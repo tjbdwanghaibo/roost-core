@@ -40,6 +40,8 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
+| `db/migrations/`、`cmd/schemamigrate` | Player schema 1 → 2 的离线迁移示例（plan / apply / verify / rollback），见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md) |
+| `cmd/sidmove` | 把一个 game sid 搬到另一台机器时的检查工具（WAL 已排空、单实例锁、玩家文档未变），见[参考流程](../docs/framework/PLAYER-MIGRATION.md) |
 | `deploy/dev/` | 本机 compose、`run.sh` 与可选的 Prometheus + Grafana |
 
 ## 本地实跑

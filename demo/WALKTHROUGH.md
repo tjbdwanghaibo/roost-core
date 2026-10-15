@@ -283,6 +283,12 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 `//roost:dao coll=player db=game schema=2` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
 
+改形状时靠离线迁移：`db/migrations` 登记 Player 从 1 到 2 的步骤（v1 的扁平 `weapon_id` 变成 v2 的 `equipment.slots`）和写入前的校验（用生成 DAO 的 `RestorePersisted` 按当前 schema 解码），`offline.go` 是执行器，`cmd/schemamigrate plan|apply|verify|rollback` 是运维入口。只能在停写之后运行；apply 先完整 dry-run、全部通过才“写备份 → 带 `_version` 与 `_schema` 条件改写”，改写时 `_version` 加 1，没停干净的旧进程因此冲突而不是把旧 schema 写回去；rollback 只恢复仍是迁移写的那一版。流程与边界见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md)。
+
+## 把一个 sid 搬到另一台机器
+
+玩家静态绑定在 sid 上，搬机搬的是 sid：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
+
 ## 兴趣：距离是一种来源，关系是另一种
 
 "谁该收到谁的状态"由 `framework/sync/entitysync/policy.Interest` 回答，scene（`internal/service/game/scene.go`）只给配置：
