@@ -2,6 +2,7 @@ package player
 
 import (
 	"fmt"
+	"math"
 
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/rewards"
@@ -68,12 +69,14 @@ func (component *BagComponent) AddItem(itemID int64, count int32) (int32, error)
 	}
 	dao := component.Owner().Dao()
 	current, _ := dao.GetItems(itemID)
-	if item.MaxStack > 0 && current+count > item.MaxStack {
+	// 先用更宽的整数计算，再检查存储范围与业务上限，避免正数加法溢出后绕过校验。
+	next := int64(current) + int64(count)
+	if next > math.MaxInt32 || (item.MaxStack > 0 && next > int64(item.MaxStack)) {
 		return 0, errcode.Wrap(apperrors.ErrBagFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", item.MaxStack)
 	}
-	dao.SetItems(itemID, current+count)
+	dao.SetItems(itemID, int32(next))
 	component.Owner().PublishSyncDirty()
-	return current + count, nil
+	return int32(next), nil
 }
 
 // RemoveItem takes count of itemID out of the bag and returns what is left.

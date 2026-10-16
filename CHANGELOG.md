@@ -14,6 +14,11 @@
 - **handler 签名引用 handler 包自身的类型时，nest 生成器直接报错并要求移走类型。** 原先 sender / syncsender 子包原样写出 `(BuyItemResult, error)`，编译报 `undefined: BuyItemResult`；子包又不能反向导入 handler 包（handler 调用 sender，导入成环），所以不做限定导入，而是点名类型、提示移到实体包等 handler 已导入的包（demo 一直这么放）。见 [生成器参考 · Nest](codegen/docs/CODEGEN_REFERENCE.zh-CN.md)。
 - **`roost add endpoint` 生成 demo 的边界写法。** handler 返回 `(T, error)` 时骨架原先只接 err，编译失败；业务错误原先 `return nil, err`，TCP 接入层（`gateway.TCPServer.dispatchRequest`）把 Dispatch 错误当坏帧断开连接。现在接住全部返回值（`result, err :=`，留 `_ = result` 提示填响应），handler 错误经 `errcode.ClientError` 变成 `(Code, Reason)` 响应、只给 `CodeInternal` 记日志；Response 缺 `Code` / `Reason` 字段时 add 阶段报错（`roost add protocol` 默认带上）。已生成的 endpoint 是业务文件，不会被改写，需要的话照 [PLAYER-ACCESS §3](docs/framework/PLAYER-ACCESS.md#3-controller把协议转换成业务调用) 手改。
 
+### game-demo 背包数量与学习文档
+
+- `BagComponent.AddItem` 在 int64 中计算新数量，检查 int32 存储范围和 `MaxStack` 后才写 DAO，防止正数请求溢出后写入负数道具。生成工程新增真实 Nest/Sender 回归，覆盖溢出拒绝、拒绝后状态与提交记录不变、恰好达到堆叠上限和超限拒绝。
+- 修正邮件领奖说明中仍声称“未实现去重”的旧段落，以及固定账本保留期的过期描述，与事务内邮件 id 账本和按邮件自身过期时间清理的实现保持一致。
+
 ### CI 与构建
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。

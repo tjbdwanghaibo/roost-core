@@ -26,6 +26,7 @@ TCP (player access)
 
 - **业务代码只碰生成的 mutator**（`dao.SetItems(...)`），不直接写私有字段——dirty 追踪、Nest undo 和持久化
   patch 全靠它。
+- **道具数量先校验再窄化**：`AddItem` 用 int64 计算新数量，同时检查 int32 存储范围和物品的 `MaxStack`，通过后才调用 mutator；即使配置不限制堆叠，也不能超过存储范围。拒绝请求返回 `bag_full`，不修改背包。
 - **handler 参数与协议字段必须对上**：`add endpoint` 会解析两边并拒绝对不上的组合，所以
   `game/handler/add_item.go` 的 `(itemID int64, count int32)` 与 `protocol/def/add_item.go` 的
   `ItemID` / `Count` 是同一份契约。handler 的第一个返回值（新数量）经 Sender 原样带回端点。
@@ -74,13 +75,10 @@ ClaimMail 端点 ─ ReserveClaim(mailID, "")      ─▶ mail 服务：交出�
   三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
   没有账本时这里就是第二叠道具——`game/handler/claim_mail_reward_test.go` 把这条钉住了（去掉账本判断即红）。
-- **账本的界是时间**：保留期必须长于游戏能发出的最长邮件（生成配置 `mail.send_ttl` 720h），论证写在 `game/rewards`；
-  清理在写入口做，不需要清扫器。发的邮件很多的游戏应该改成"commit 成功后就忘掉"或把账本放到邮件那侧。
+- **账本按邮件自身的到期时间清理**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，账本在超过该时间后才可遗忘；没有到期时间的记录保留。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/rewards`。清理在写入口做，不需要清扫器；不能仅凭一次 `CommitClaim` 成功就删除去重记录，除非另有权威保证所有在途重放也已结束。
 - **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
 - `Claimable` 是 mail 服务对"现在领会成功吗"的回答，客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
 - 附件解不出奖励、或 AddItem 被拒（背包满）时 `CancelClaim` 归还预留，邮件不会卡在"held"直到租约到期。
-- **demo 明确没做的一步**：把 claim token 带进 Nest 事务当幂等键。进程在 AddItem 之后、CommitClaim 之前死掉，租约到期后重试会再发一次
-  （mail 侧记成重复 *尝试*，背包却多一叠）。生产做法是在同一事务里把 token 记到 Player 上，第二次拒发。
 - 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; list_mail }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
   拿到第一封可领邮件的 id 再 `claim_mail`，断言背包计数 ≥ 领到的数量。
 
