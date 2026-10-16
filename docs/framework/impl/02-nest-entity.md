@@ -19,6 +19,7 @@
 3. pipelined 不可回滚边界早于持久确认，外化必须等确认。
 4. 长短业务池不能阻塞等待池任务或 I/O；同一 GuardScope 持有并释放锁。I/O 池禁止取得 Guard。
 5. Await 先预留 I/O 容量，段结束释放 Guard 和 tail 后执行查询；恢复段按完整目标重新准入。首版只支持无回滚的 memory handler。
+6. 声明目标在权威里不存在（loader 报告 `entity.ErrAuthorityEntityNotFound`，DataEngine 的 `ErrEntityAggregateNotFound` 满足它）时，回复包装成 `errcode.ErrEntityNotFound`（稳定码 `errcode.CodeEntityNotFound = 2`）：客户端得到该码而不是 `CodeInternal`，生成 endpoint 因此不按 ERROR 记录；原错误仍在链上，`errors.Is` 照旧判别。强制点是 [io_load.go](../../../framework/nest/io_load.go) 的 `targetLoadError`，在 `singleDispatch` / `dispatchMany` 取目标与 I/O 准备的多目标 `GetMany` 三处调用；链上已有业务码不改写，handler 内业务自己返回的错误不经过它。“已删档（只剩墓碑）”与“从未创建”对调用方是同一个哨兵和码，只在错误文本 `state=deleted|absent` 区分（[entity_repository.go](../../../framework/dataengine/engine/entity_repository.go)）。2026-10-16 维护者决定（DESIGN-TODO D7 方案 C）。
 
 ## 2A. 事务实现走读
 
@@ -225,7 +226,7 @@
 - [cast_test.go](../../../framework/nest/cast_test.go)：`TestCastPlayerCanCastAllianceAndOtherByCategoryOrder`、`TestCastAllianceCanCastOtherByCategoryOrder`、`TestCastRejectsReverseCategoryOrder`、`TestCastRejectsRemoteAfterLocalBeforePreparingDistributedLock`、`TestCastRejectsInvalidTargetID`；其余 7 项见文件
 - [cast_transaction_test.go](../../../framework/nest/cast_transaction_test.go)：`TestCastTransactionRollbackWithoutSync`、`TestCastPipelinedReleasesAndStampsWithoutSync`、`TestCastCaptureFailureFailsTheTransactionEvenIfSwallowed`、`TestCastTargetRemovedWhileWaitingNamesTheTarget`、`TestReleaseCastOfDestroyedInstanceKeepsRecreatedLock`；其余 2 项见文件
 - [client_test.go](../../../framework/nest/client_test.go)：`TestClientRequestCarriesContextAndReturnsResult`、`TestClientDispatchCarriesOnlyFrameworkEnvelope`、`TestClientAdmissionReportsQueueFull`、`TestClientRejectsCanceledContextBeforeAdmission`、`TestClientFenceRejectsAdmissionWithCause`；其余 10 项见文件
-- [cold_target_test.go](../../../framework/nest/cold_target_test.go)：`TestDefaultSenderPreparesColdDeclaredTargetsOnIOWorker`、`TestDeclaredTargetEvictedAfterAdmissionMovesToIOKeepingOrder`、`TestAdmissionNeverRunsCustomGetterOnSender`、`TestDelayedAdmissionIsNotSerializedByCustomGetter`、`TestAdmissionColdProbeRequiresLoadedChecker`；其余 2 项见文件
+- [cold_target_test.go](../../../framework/nest/cold_target_test.go)：`TestColdTargetMissingInAuthorityAnswersEntityNotFoundCode`（单 / 多 / 分组三种形态回 `CodeEntityNotFound`、保留原错误）、`TestDefaultSenderPreparesColdDeclaredTargetsOnIOWorker`、`TestDeclaredTargetEvictedAfterAdmissionMovesToIOKeepingOrder`、`TestAdmissionNeverRunsCustomGetterOnSender`、`TestDelayedAdmissionIsNotSerializedByCustomGetter`、`TestAdmissionColdProbeRequiresLoadedChecker`；其余 2 项见文件
 - [commit_reply_test.go](../../../framework/nest/commit_reply_test.go)：`TestCommittedRemoteReplyIsNotRequeued`、`TestCommittedLocalReplyIsNotRequeued`、`TestAfterCommitPanicKeepsCauseChain`、`TestMemoryHandlerReleaseHookPanicCarriesSentinel`、`TestUncommittedLocalReleaseHookPanicHasNoSentinel`；其余 1 项见文件
 - [create_in_handler_test.go](../../../framework/nest/create_in_handler_test.go)：`TestCreateInScopePipelinedWithoutWatermarkWaitsForDurable`、`TestCreateInScopeRevokedWhenHandlerFails`、`TestCreateInScopeRevokedWhenStrictCommitRejected`、`TestCreateInScopeCommittedEntitySyncsAfterCommit`、`TestCreateOutsideTransactionUnchanged`；其余 5 项见文件
 - [create_lock_bench_test.go](../../../framework/nest/create_lock_bench_test.go)

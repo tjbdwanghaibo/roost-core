@@ -284,6 +284,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	handlerDomain := fs.String("handler", "", "protocol controller domain")
 	protocolName := fs.String("protocol", "", "protocol name for an endpoint")
 	nestHandler := fs.String("nest-handler", "", "Nest handler name for an endpoint")
+	lifecycleEntity := fs.String("lifecycle", "", "Entity whose lifecycle GetOrCreate a login endpoint calls")
 	id := fs.Int64("id", 0, "explicit numeric ID")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
@@ -296,7 +297,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"transport": {"root", "service"}, "module": {"root"},
 		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
-		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler"},
+		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
 		"rpc": {"root", "service"},
@@ -308,7 +309,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

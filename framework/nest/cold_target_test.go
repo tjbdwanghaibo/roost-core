@@ -5,6 +5,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -522,5 +524,67 @@ func TestIOPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 	defer cancel()
 	if ret, err := mgr.Request(ctx, NewHandlerName("touch"), cold, nil); err != nil || ret != 1 {
 		t.Fatalf("request after the shared load: ret=%v err=%v", ret, err)
+	}
+}
+
+// absentLoader 按 AggregateLoader 契约报告“权威里没有这个实体”（DataEngine 的 ErrEntityAggregateNotFound
+// 也是这样满足 entity.ErrAuthorityEntityNotFound 的）。
+type absentLoader struct{ calls atomic.Int32 }
+
+func (l *absentLoader) LoadEntity(_ context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	l.calls.Add(1)
+	return nil, fmt.Errorf("%w: entity=%d", entity.ErrAuthorityEntityNotFound, id)
+}
+
+// 首登前就发业务请求：声明目标在权威里不存在。回复必须带稳定码 errcode.CodeEntityNotFound（客户端据此
+// 先登录 / 创角），不能坍缩成 CodeInternal；原错误仍可 errors.Is 判别（生成 lifecycle 的 GetOrCreate 依赖它）。
+// 单目标、多目标、分组多目标三种准入形态都经 I/O 准备冷加载，各自覆盖。DESIGN-TODO D7。
+func TestColdTargetMissingInAuthorityAnswersEntityNotFoundCode(t *testing.T) {
+	manager := entity.NewEntityManager()
+	access := entity.NewManagerAccess(manager)
+	loader := &absentLoader{}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 8}))
+	ran := atomic.Int32{}
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("buy"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		ran.Add(1)
+		return nil, nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	startColdTargetEngine(t, mgr)
+
+	absent := mustBuildCastID(t, 8701, entity.EntityCategory(1), nestLocalKind)
+	other := mustBuildCastID(t, 8702, entity.EntityCategory(1), nestLocalKind)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	cases := map[string]func() error{
+		"single": func() error { _, err := mgr.Request(ctx, NewHandlerName("buy"), absent, nil); return err },
+		"multi": func() error {
+			_, err := mgr.RequestMulti(ctx, NewHandlerName("buy"), []int64{absent, other}, nil)
+			return err
+		},
+		"group": func() error {
+			_, err := mgr.RequestMultiGroup(ctx, NewHandlerName("buy"), [][]int64{{absent}, {other}}, nil)
+			return err
+		},
+	}
+	for name, request := range cases {
+		err := request()
+		if err == nil {
+			t.Fatalf("%s: request to an absent entity succeeded", name)
+		}
+		if code, reason := errcode.ClientError(err); code != errcode.CodeEntityNotFound {
+			t.Errorf("%s: ClientError = (%d, %q), want CodeEntityNotFound=%d; err=%v", name, code, reason, errcode.CodeEntityNotFound, err)
+		}
+		if !errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+			t.Errorf("%s: the loader's not-found is no longer errors.Is-visible: %v", name, err)
+		}
+	}
+	if ran.Load() != 0 {
+		t.Fatalf("handler ran %d time(s) for an absent target", ran.Load())
+	}
+	if loader.calls.Load() == 0 {
+		t.Fatal("the absent target was never cold-loaded; the test did not reach the path it guards")
 	}
 }

@@ -333,7 +333,7 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 		return nil, declaredTargetCold(err)
 	}
 	if err != nil {
-		return nil, err
+		return nil, targetLoadError(err)
 	}
 	// 生产 Getter 以 (nil, nil) 表示“实体不存在”（未命中且没有 loader，或 loader 确认不存在），必须回复
 	// ErrEntityNotFound，不能解引用 nil 让顶层恢复把“不存在”和“框架出错”变成同一个回答。
@@ -395,7 +395,7 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 		return nil, declaredTargetCold(err)
 	}
 	if err != nil {
-		return nil, err
+		return nil, targetLoadError(err)
 	}
 	// 锁集合会排序，Touch 集合保留归还次数；共用一次分配，但容量边界互不重叠。
 	storage := make([]entity.IThreadSafeEntity, 2*len(es))

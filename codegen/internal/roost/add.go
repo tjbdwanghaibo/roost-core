@@ -15,8 +15,12 @@ import (
 type AddOptions struct {
 	Kind, Name, Service, Group, Entity, Component, Handler string
 	Protocol, NestHandler                                  string
-	Mods, Steps                                            []string
-	ID                                                     int64
+	// Lifecycle names the Entity whose lifecycle a login endpoint calls
+	// (GetOrCreate) instead of a Nest Sender: roost add endpoint EnterGame
+	// --lifecycle Player.
+	Lifecycle   string
+	Mods, Steps []string
+	ID          int64
 	// Warnings receives what the command could not do but did not fail for,
 	// such as a k8s Secret example it cannot recognise.
 	// nil means os.Stderr, so nothing is skipped silently.

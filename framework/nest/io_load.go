@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // preparedEntity 是 I/O 阶段对一个声明目标的读取结果（实体或错误）。
@@ -80,7 +81,7 @@ func prepareIOEntities(msg *Msg) error {
 		}
 		values, err := p.base.GetMany(nestBaseContext(), full, categories)
 		if err != nil {
-			return err
+			return targetLoadError(err)
 		}
 		if len(values) != len(full) {
 			return fmt.Errorf("nest: getter returned %d entities for %d targets", len(values), len(full))
@@ -180,4 +181,20 @@ func (mgr *NestMgr) beforeIOPreparation() bool {
 // declaredTargetCold 保留原错误，errors.Is 仍可判断 ErrColdLoadInLogic / ErrEntityNotFound / ErrLockTimeout。
 func declaredTargetCold(cause error) error {
 	return fmt.Errorf("%w: %w", errDeclaredTargetCold, cause)
+}
+
+// targetLoadError 把“权威确认声明目标不存在”（AggregateLoader 报告的 entity.ErrAuthorityEntityNotFound，
+// DataEngine 的 ErrEntityAggregateNotFound 满足它）包装成稳定的客户端码 errcode.CodeEntityNotFound：首登前的
+// 业务请求是可预期的客户端状态，生成 endpoint 经 errcode.ClientError 给客户端该码、不按 CodeInternal 记 ERROR。
+// 原错误保留在链上，errors.Is 照旧判别；链上已有业务码时不改写。只在声明目标的加载结果上调用：
+// handler 内业务自己返回的错误由业务决定码。
+func targetLoadError(err error) error {
+	if err == nil || !errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+		return err
+	}
+	var coded *errcode.IntError
+	if errors.As(err, &coded) {
+		return err
+	}
+	return errcode.Wrap(errcode.ErrEntityNotFound, err)
 }

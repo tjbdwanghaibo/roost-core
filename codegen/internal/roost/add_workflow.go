@@ -216,6 +216,12 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	if !validName(domain) {
 		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-domain>")
 	}
+	if strings.TrimSpace(options.Lifecycle) != "" {
+		if strings.TrimSpace(options.NestHandler) != "" {
+			return nil, fmt.Errorf("endpoint --lifecycle calls the Entity lifecycle, not a Nest handler; drop --nest-handler")
+		}
+		return addLifecycleEndpoint(root, manifest, options, domain)
+	}
 	protocolName := firstNonEmpty(options.Protocol, options.Name)
 	nestHandler := firstNonEmpty(options.NestHandler, options.Name)
 	protocolSnake, protocolType := toSnake(protocolName), toPascal(protocolName)
@@ -362,6 +368,130 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	return paths, nil
 }
 
+// addLifecycleEndpoint 生成登录边界：endpoint 经 <Entity>FromRegistry 取得实例级 lifecycle，对
+// context.PlayerID 调 GetOrCreate，保证之后的玩法请求打到的 Entity 已存在。它不走 Nest Sender：
+// 首登时 Entity 还不存在，Nest 冷加载只会回 errcode.CodeEntityNotFound（DESIGN-TODO D7）。
+// 业务失败与 Sender 型 endpoint 一样变成 (Code, Reason) 响应，只给 CodeInternal 记日志。
+func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, domain string) ([]string, error) {
+	protocolName := firstNonEmpty(options.Protocol, options.Name)
+	protocolSnake, protocolType := toSnake(protocolName), toPascal(protocolName)
+	if !validName(protocolSnake) {
+		return nil, fmt.Errorf("invalid endpoint protocol name %q", protocolName)
+	}
+	entitySnake := toSnake(options.Lifecycle)
+	if !validName(entitySnake) {
+		return nil, fmt.Errorf("invalid endpoint --lifecycle Entity %q", options.Lifecycle)
+	}
+	protocolPath := filepath.Join(root, "protocol", "def", protocolSnake+".go")
+	if _, err := os.Stat(protocolPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("protocol %q does not exist; run: roost add protocol %s --group game --handler %s", protocolSnake, protocolType, domain)
+		}
+		return nil, err
+	}
+	lifecyclePath := filepath.Join(root, "game", "lifecycle", entitySnake+".go")
+	if _, err := os.Stat(lifecyclePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("lifecycle %q does not exist; run: roost add lifecycle %s", entitySnake, toPascal(entitySnake))
+		}
+		return nil, err
+	}
+	responseFields, err := protocolFieldNames(protocolPath, protocolType+"Response")
+	if err != nil {
+		return nil, err
+	}
+	if responseFields["code"] != "Code" || responseFields["reason"] != "Reason" {
+		return nil, fmt.Errorf("protocol %sResponse needs Code int32 and Reason string fields to answer business errors (roost add protocol creates them)", protocolType)
+	}
+	controllerDir := filepath.Join(root, "game", "controllers", domain)
+	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
+	if _, err := os.Stat(endpointPath); err == nil {
+		return nil, fmt.Errorf("%s already exists", relativeSlash(root, endpointPath))
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	controllerPath := filepath.Join(controllerDir, "controller.go")
+	var controllerChange *syncChange
+	if raw, err := os.ReadFile(controllerPath); os.IsNotExist(err) {
+		body, formatErr := format.Source([]byte(renderNestController(domain)))
+		if formatErr != nil {
+			return nil, formatErr
+		}
+		change := syncChange{rel: relativeSlash(root, controllerPath), path: controllerPath, body: body}
+		controllerChange = &change
+	} else if err != nil {
+		return nil, err
+	} else if !bytes.Contains(raw, []byte("Registry() *app.Registry")) {
+		// controller.go 归业务，生成一次后不改写；早于本选项生成的 controller 没有 Registry()。
+		return nil, fmt.Errorf("%s has no Registry() accessor; keep the registry passed to FromRegistry and add `func (controller *Controller) Registry() *app.Registry`, then run this command again", relativeSlash(root, controllerPath))
+	}
+	entityType := toPascal(entitySnake)
+	body := fmt.Sprintf(`package %s
+
+import (
+	"fmt"
+	"log/slog"
+
+	lifecycle %q
+	playeraccess %q
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	%q
+)
+
+// Handle%s is the login boundary. It makes sure the authenticated player has
+// a %s Entity before any gameplay request reaches Nest: a Nest handler
+// addresses an Entity that exists, and a first login has none, so a request
+// sent before this one answers errcode.CodeEntityNotFound. GetOrCreate only
+// creates when persistence confirms the Entity is absent; a database, decode
+// or timeout error is returned, never mistaken for "absent". A deleted Entity
+// (only tombstones left) also reads as absent.
+//
+// GetOrCreate is safe to race and to retry: two logins of the same new player
+// both end holding the one Entity. A failure becomes a response; only
+// errcode.CodeInternal (no business code) is logged.
+func (controller *Controller) Handle%s(context *playeraccess.Context, request *pb.%sRequest) (*pb.%sResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("%s endpoint: context and request are required")
+	}
+	entities, err := lifecycle.%sFromRegistry(controller.Registry())
+	if err == nil {
+		_, _, err = entities.GetOrCreate(context.Context(), context.PlayerID)
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("%s failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.%sResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.%sResponse{}, nil
+}
+`, domain,
+		manifest.Project.Module+"/game/lifecycle",
+		manifest.Project.Module+protocol.PlayerAccessImportSuffix,
+		manifest.Project.Module+protocol.PBImportSuffix,
+		protocolType, entityType,
+		protocolType, protocolType, protocolType, protocolSnake,
+		entityType, protocolSnake, protocolType, protocolType)
+	formatted, err := format.Source([]byte(body))
+	if err != nil {
+		return nil, fmt.Errorf("format login endpoint scaffold: %w\n%s", err, body)
+	}
+	changes := make([]syncChange, 0, 2)
+	if controllerChange != nil {
+		changes = append(changes, *controllerChange)
+	}
+	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted})
+	if err := commitSyncChanges(changes); err != nil {
+		return nil, err
+	}
+	paths := []string{relativeSlash(root, endpointPath)}
+	if controllerChange != nil {
+		paths = append(paths, relativeSlash(root, controllerPath))
+	}
+	return paths, nil
+}
+
 func renderNestController(domain string) string {
 	return fmt.Sprintf(`package %s
 
@@ -373,6 +503,7 @@ import (
 )
 
 type Controller struct {
+	registry   *app.Registry
 	nestClient corenest.Client
 }
 
@@ -384,7 +515,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || client == nil {
 		return nil, fmt.Errorf("%s controller: nest client is unavailable")
 	}
-	return &Controller{nestClient: client}, nil
+	return &Controller{registry: registry, nestClient: client}, nil
 }
 
 func (controller *Controller) NestClient() corenest.Client {
@@ -392,6 +523,15 @@ func (controller *Controller) NestClient() corenest.Client {
 		return nil
 	}
 	return controller.nestClient
+}
+
+// Registry is the application registry, for boundaries that are not a Nest
+// call: a login endpoint resolves the Entity lifecycle from it.
+func (controller *Controller) Registry() *app.Registry {
+	if controller == nil {
+		return nil
+	}
+	return controller.registry
 }
 `, domain, domain, domain)
 }

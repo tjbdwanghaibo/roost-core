@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -430,6 +431,13 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 			add("protocol-request", implemented, "a player Request declares typed input fields", "add Request fields matching the Nest handler parameters; see docs/BEGINNER_WORKBOOK.zh-CN.md section 3.5")
 		}
 	}
+	// 首登时 Entity 还不存在：没有登录边界先 GetOrCreate，第一条玩法请求就会收到 entity_not_found。
+	loginOK, err := anyLoginEndpoint(root, manifest)
+	if err != nil {
+		return nil, err
+	}
+	add("login", loginOK, "a login endpoint creates or loads the player's Entity (lifecycle GetOrCreate)",
+		"roost add protocol EnterGame --group game --handler player, then roost add endpoint EnterGame --handler player --lifecycle Player")
 	bootstrapOK, err := anyFileContains(root, "game/protocol_bootstrap/*.go", "RegisterPlayerProtocols")
 	if err != nil {
 		return nil, err
@@ -635,6 +643,45 @@ func workflowHandlerProtocolMatch(root, name string) (bool, error) {
 			}
 		}
 		return true, nil
+	}
+	return false, nil
+}
+
+// anyLoginEndpoint 报告是否有 controller 文件导入工程的 game/lifecycle 并调用某个 GetOrCreate：
+// 这就是“登录时保证 Entity 存在”的那一步（roost add endpoint --lifecycle 生成的，或业务手写的）。
+func anyLoginEndpoint(root string, manifest Manifest) (bool, error) {
+	paths, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*", "*.go"))
+	if err != nil {
+		return false, err
+	}
+	lifecycleImport := strconv.Quote(manifest.Project.Module + "/game/lifecycle")
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		imported := false
+		for _, spec := range file.Imports {
+			imported = imported || spec.Path.Value == lifecycleImport
+		}
+		if !imported {
+			continue
+		}
+		found := false
+		ast.Inspect(file, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "GetOrCreate" {
+					found = true
+				}
+			}
+			return !found
+		})
+		if found {
+			return true, nil
+		}
 	}
 	return false, nil
 }

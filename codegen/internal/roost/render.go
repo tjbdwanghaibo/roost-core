@@ -1001,7 +1001,7 @@ new-handler:
 new-lifecycle:
 	$(ROOST) add lifecycle $(NAME) $(if $(ENTITY),--entity $(ENTITY),) -service $(SERVICE)
 new-endpoint:
-	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),)
+	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),) $(if $(LIFECYCLE),--lifecycle $(LIFECYCLE),)
 new-skill:
 	$(ROOST) add skill $(NAME)
 new-table:

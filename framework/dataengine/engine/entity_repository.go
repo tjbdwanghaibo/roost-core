@@ -344,8 +344,12 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 		}
 		total := len(builder.DaoBuilders)
 		switch {
-		case missing == total || tombstones == total:
-			return fmt.Errorf("%w: entity=%d", ErrEntityAggregateNotFound, fullID)
+		// 两种“不存在”对调用方是同一个哨兵（客户端同一个码 errcode.CodeEntityNotFound）；
+		// 只在错误文本里区分，便于运维判断是从未创建还是已删档。
+		case missing == total:
+			return fmt.Errorf("%w: entity=%d state=absent", ErrEntityAggregateNotFound, fullID)
+		case tombstones == total:
+			return fmt.Errorf("%w: entity=%d state=deleted", ErrEntityAggregateNotFound, fullID)
 		case len(loaded) != total:
 			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, len(loaded), missing, tombstones)
 		}

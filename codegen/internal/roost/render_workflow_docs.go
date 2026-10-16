@@ -272,6 +272,8 @@ request 字段名要能对应 Nest handler 除第一个 Entity 参数之外的�
 
     roost add endpoint RenamePlayer --handler player
     roost add lifecycle Player --service {{SERVICE}}
+    roost add protocol EnterGame --group game --handler player
+    roost add endpoint EnterGame --handler player --lifecycle Player
     roost generate
     roost project doctor --workflow first-business
     go test ./...
@@ -284,6 +286,12 @@ PB、消息 ID、typed binding、controller 注册和聚合 bootstrap。
 game/lifecycle/player.go 提供 Get、Create、GetOrCreate、Destroy 和 PlayerFromRegistry。登录/创角边界通过
 PlayerFromRegistry 获取实例级 Entity runtime；普通玩法请求只走 Sender。不要在 endpoint 中每次 GetOrCreate，
 也不要使用包级全局 EntityManager。
+
+登录边界就是上面的 EnterGame：roost add endpoint EnterGame --handler player --lifecycle Player 生成的
+game/controllers/player/enter_game.go 对 context.PlayerID 调 GetOrCreate。客户端第一条请求先发 EnterGame；
+从未登录的玩家直接发 RenamePlayer 会收到稳定码 entity_not_found（errcode.CodeEntityNotFound = 2，Nest
+冷加载在 Data Engine 里找不到该 Entity），服务端不按 ERROR 记录，客户端重新 EnterGame 即可。已删档（DAO
+文档只剩墓碑）与从未创建在客户端看来是同一个码。doctor 的 workflow:login 检查这一步。
 
 ## 5. 接入真实网络
 
@@ -572,7 +580,7 @@ func renderTroubleshootingGuide() string {
 | add handler 提示缺 Nest | 只有 feature，没有运行时 Mod | roost add mod nest --service <service> |
 | endpoint 找不到 request 字段 | Nest 参数名与 Request 字段名不同 | 统一名字，或调整协议/handler 后重新 add endpoint |
 | protocol handler 包编译失败 | endpoint/controller 尚未创建 | 先 add endpoint，再 roost generate |
-| Entity not found | 未持久化、kind/category 不匹配或 loader 未装配 | 用 lifecycle GetOrCreate 处理创角；检查 Data Engine/Mongo，不吞掉加载错误 |
+| Entity not found / 客户端 code 2 entity_not_found | 玩家还没登录创角（Data Engine 里没有该 Entity）；或 kind/category 不匹配、loader 未装配 | 先调 EnterGame（roost add endpoint EnterGame --handler player --lifecycle Player）；仍出现时检查 Data Engine/Mongo，不吞掉加载错误 |
 | DAO 字段不可访问 | 存储字段已私有化 | 使用生成的 Xxx()/SetXxx()/UpdateXxx()/RemoveXxx() |
 | generated stale | 定义已改但生成物未更新 | roost generate；提交声明与生成物 |
 | project sync 拒绝覆盖 | 同路径是业务文件或生成标识丢失 | 备份、比较所有权；不要伪造 DO NOT EDIT 标识 |

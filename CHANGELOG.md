@@ -33,6 +33,11 @@
 - **带 Remote 请求 struct（`remote:"..."` 字段）的 handler 遇到 sender 时给出专门报错。** 上一条的检查对它也会建议“把类型移到别的包”，但这种 struct 必须留在 handler 包里才能生成访问器，照做反而更坏；现在直接说明这个组合还不支持并指向 KNOWN-LIMITS。修前修后这个组合都不能生成，本条只改报错与文档。
 - **`roost add endpoint` 生成 demo 的边界写法。** handler 返回 `(T, error)` 时骨架原先只接 err，编译失败；业务错误原先 `return nil, err`，TCP 接入层（`gateway.TCPServer.dispatchRequest`）把 Dispatch 错误当坏帧断开连接。现在接住全部返回值（`result, err :=`，留 `_ = result` 提示填响应），handler 错误经 `errcode.ClientError` 变成 `(Code, Reason)` 响应、只给 `CodeInternal` 记日志；Response 缺 `Code` / `Reason` 字段时 add 阶段报错（`roost add protocol` 默认带上）。已生成的 endpoint 是业务文件，不会被改写，需要的话照 [PLAYER-ACCESS §3](docs/framework/PLAYER-ACCESS.md#3-controller把协议转换成业务调用) 手改。
 
+### 新用户试用：维护者决定 D7 / D8 / D9（2026-10-16）
+
+- **实体不存在给客户端稳定码 `entity_not_found`（D7 方案 C）。** 从未登录的玩家直接发业务请求时，Nest 冷加载得到 `dataengine repository: entity aggregate not found`，修前 `errcode.ClientError` 归为 `CodeInternal`（客户端 `code=1 server error`）、生成 endpoint 记 ERROR。现在 `infra/base/errcode` 有框架段 `1–999` 与 `CodeEntityNotFound = 2`（`ErrEntityNotFound`），Nest 在声明目标的加载结果确认“权威里不存在”时包装成它（`errors.Is` 原错误不变），客户端收到 `code=2 entity not found`，endpoint 不再记 ERROR。已删档与从未创建同码，错误文本以 `state=deleted|absent` 区分。`roost.yaml ids.errcode` 下界 ≤ 999 时 manifest 校验失败。回归 `TestColdTargetMissingInAuthorityAnswersEntityNotFoundCode`、`TestFrameworkCodesAreExactlyAsAllocated`、`TestManifestRejectsIDsOutsideFrameworkEncoding`。
+- **first-business 增加登录步骤。** `roost add endpoint EnterGame --handler player --lifecycle Player` 生成登录 endpoint（对 `context.PlayerID` 调 lifecycle `GetOrCreate`，不走 Nest），`make new-endpoint ... LIFECYCLE=Player` 同义；新生成的 controller 带 `Registry()`（早先生成的 controller 归业务、不改写，缺少时 add 报错说明要补的方法）。`roost project doctor --workflow first-business` 新增 `workflow:login`，`roost project next` 在其余步骤完成后给出这两条命令。回归 `TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint`。
+
 ### 新用户试用（第二轮）
 
 - **服务进程运行期失败不再打印 CLI Usage。** 命令行解析成功后，配置、Mod 启动或 Serve 的错误只返回给调用方（生成的 main 用结构化日志记录一次）；修前 cobra 在 JSON 日志后面再追加一份 `Error:` 和整段 `Usage:` 帮助，像是命令写错了。未知 flag 等命令行错误照常打印 Usage。回归 `TestAppRuntimeFailurePrintsNoUsage`。

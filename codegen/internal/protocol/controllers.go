@@ -90,15 +90,22 @@ import (
 )
 
 // Controller 持有业务依赖；协议分发不会自动取得 Entity 的执行权。
-type Controller struct { nestClient corenest.Client }
+type Controller struct {
+ registry *app.Registry
+ nestClient corenest.Client
+}
 func FromRegistry(registry *app.Registry) (*Controller, error) {
  if registry == nil { return nil, fmt.Errorf("controller: app registry is required") }
  client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
  if !ok || client == nil { return nil, fmt.Errorf("controller: nest client is unavailable") }
- return &Controller{nestClient: client}, nil
+ return &Controller{registry: registry, nestClient: client}, nil
 }
 func (controller *Controller) NestClient() corenest.Client {
  if controller == nil { return nil }; return controller.nestClient
+}
+// Registry 供不走 Nest 的边界使用：登录 endpoint 从这里取 Entity lifecycle（roost add endpoint --lifecycle）。
+func (controller *Controller) Registry() *app.Registry {
+ if controller == nil { return nil }; return controller.registry
 }
 `, packageName)
 		}

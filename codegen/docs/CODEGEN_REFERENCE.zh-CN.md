@@ -140,6 +140,7 @@ roost add mod nest -service game
 roost add handler use_item --entity player --component inventory
 roost add endpoint use_item --handler inventory
 roost add lifecycle player --service game
+roost add endpoint enter_game --handler player --lifecycle player
 roost add skill fireball
 roost add table monster
 roost add dao player --entity player
@@ -159,6 +160,7 @@ roost add rpc guild -service game
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
 | `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
+| `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog | 配置 CompileEnvironment 与 Host |
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
@@ -169,7 +171,15 @@ endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使
 经 `errcode.ClientError` 变成 `&pb.XxxResponse{Code: code, Reason: reason}, nil`，只有
 `errcode.CodeInternal`（没有业务码的错误）记 `slog.Error`；只有缺 context / request 或构造 Entity ID
 失败才返回 error。因此 Response 必须有 `Code int32` 与 `Reason string`（`roost add protocol` 默认带上），
-缺少时 add 阶段报错。完整顺序与编辑点见生成项目的
+缺少时 add 阶段报错。
+
+`--lifecycle <entity>` 生成登录边界：endpoint 经 `lifecycle.<Entity>FromRegistry(controller.Registry())`
+对 `context.PlayerID` 调 `GetOrCreate`，保证之后的玩法请求打到的 Entity 已存在。从未登录的玩家直接发玩法请求时，
+Nest 冷加载在 Data Engine 里找不到 Entity，回复带稳定码 `errcode.CodeEntityNotFound = 2`（`entity_not_found`），
+客户端据此先 EnterGame 再重试，服务端不按 ERROR 记录。controller 需要 `Registry()`：新生成的 controller（`add endpoint`
+与 protocol 生成器两处骨架）都带；早先生成的 controller 归业务、不改写，缺少时 add 报错并说明要补的方法。
+`roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入 `game/lifecycle`
+并调用 `GetOrCreate`。完整顺序与编辑点见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
 `docs/PLAYER_ACCESS_TCP.zh-CN.md`。
 
@@ -622,7 +632,12 @@ var ErrItemNotFound = errcode.Define(100001, "item_not_found", "item not found")
 go run .../cmd/errcode@latest -root . -out docs/generated/errcode.csv
 ```
 
-扫描整个仓库并导出编号、名称和消息；重复 code/name 或非常量调用失败。ID 分配配合：
+扫描整个仓库并导出编号、名称和消息；重复 code/name 或非常量调用失败。
+
+码段归属（登记在 `infra/base/errcode/errcode.go` 包注释）：`0` OK；`1–999` 框架段，只由 errcode 包分配（`1` CodeInternal，
+`2` CodeEntityNotFound——目标实体在权威里不存在，客户端先登录 / 创角）；`100000–199999` 是 `roost.yaml ids.errcode`
+的默认业务段，可改但下界必须大于 999（manifest 校验拒绝重叠）；内置 service 各占 `5x0101–5x0199`（directory 53、
+rank 54、match 55、account 56、global 57、chat 58、mail 59、platform 60、session 61、activity 62）。ID 分配配合：
 
 ```bash
 roost id next errcode

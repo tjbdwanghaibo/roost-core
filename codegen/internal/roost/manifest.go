@@ -15,6 +15,10 @@ import (
 
 const ManifestName = "roost.yaml"
 
+// frameworkErrcodeLast 是 infra/base/errcode.FrameworkCodeLast 的副本：生成器不 import 运行时
+// （根包 TestCoreDependencyBoundary），两处须同时修改。框架段 1–999 只由 errcode 包分配。
+const frameworkErrcodeLast = 999
+
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
@@ -413,6 +417,10 @@ func (m Manifest) Validate() error {
 			}
 			if maximum, bounded := map[string]int64{"entity": 255, "component": 65535, "protocol": 4294967295}[kind]; bounded && space.Max > maximum {
 				joined = errors.Join(joined, fmt.Errorf("ids.%s max %d exceeds framework encoding limit %d", kind, space.Max, maximum))
+			}
+			// 业务错误码不得落进框架段（errcode 包登记的码段归属）。
+			if kind == "errcode" && space.Min <= frameworkErrcodeLast {
+				joined = errors.Join(joined, fmt.Errorf("ids.errcode min %d overlaps the framework segment 1-%d; business codes start above it", space.Min, frameworkErrcodeLast))
 			}
 		}
 		for group, r := range space.Groups {

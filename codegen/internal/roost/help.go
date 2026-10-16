@@ -170,10 +170,11 @@ roost project doctor --workflow player-tcp
 	{
 		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},
 		Summary:       "把 typed 玩家协议映射到生成的 Nest Sender",
-		Usage:         `roost add endpoint <name> --handler <controller-domain> [--protocol <name>] [--nest-handler <name>]`,
-		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。`,
+		Usage:         `roost add endpoint <name> --handler <controller-domain> [--protocol <name>] [--nest-handler <name> | --lifecycle <entity>]`,
+		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。--lifecycle <entity> 生成登录边界：不走 Nest，改为对 context.PlayerID 调 lifecycle <Entity>FromRegistry(...).GetOrCreate，要求已有 roost add lifecycle 与 controller 的 Registry()；首登前的玩法请求会收到 errcode.CodeEntityNotFound（entity_not_found）。`,
 		Example: `roost add endpoint RenamePlayer --handler player
-roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip`,
+roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip
+roost add endpoint EnterGame --handler player --lifecycle Player`,
 	},
 	{
 		Name: "skill", Aliases: []string{"skills", "ability"},

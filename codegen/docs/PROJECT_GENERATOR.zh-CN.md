@@ -328,6 +328,7 @@ Makefile 也提供了对应入口，例如：
     make new-handler NAME=RenamePlayer ENTITY=Player COMPONENT=Profile
     make new-lifecycle NAME=Player ENTITY=Player SERVICE=game
     make new-endpoint NAME=RenamePlayer HANDLER=player
+    make new-endpoint NAME=EnterGame HANDLER=player LIFECYCLE=Player   # 登录边界：GetOrCreate
     make new-skill NAME=Fireball
     make new-dao NAME=Player ENTITY=Player
     make new-table NAME=Item

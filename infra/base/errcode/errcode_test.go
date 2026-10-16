@@ -44,3 +44,41 @@ func TestRemoteErrorPreservesClientCode(t *testing.T) {
 		t.Fatalf("ClientError remote = (%d,%q), want remote code/reason", code, reason)
 	}
 }
+
+// 框架段（1 – FrameworkCodeLast）只在本包分配，且每个框架码都带自己的码与可读原因。
+// 新增框架码时同时改这张表：段内码是公开协议，增删都是有意的动作。
+func TestFrameworkCodesAreExactlyAsAllocated(t *testing.T) {
+	frameworkDefinitions := map[int32]*IntError{
+		CodeEntityNotFound: ErrEntityNotFound,
+	}
+	const frameworkAllocated = 1 // CodeInternal 不是 Define 出来的，只作回退码，不计入
+	if len(frameworkDefinitions) != frameworkAllocated {
+		t.Fatalf("%d framework codes paired, want %d", len(frameworkDefinitions), frameworkAllocated)
+	}
+	for code, def := range frameworkDefinitions {
+		if code <= CodeInternal || code > FrameworkCodeLast {
+			t.Fatalf("framework code %d is outside the framework segment 2-%d", code, FrameworkCodeLast)
+		}
+		got, reason := ClientError(Wrap(def, errors.New("cause")))
+		if got != code || reason == internalReason {
+			t.Fatalf("framework definition %v reports (%d, %q), want its own code %d and reason", def, got, reason, code)
+		}
+	}
+	for _, def := range Definitions() {
+		if def.Code > CodeInternal && def.Code <= FrameworkCodeLast && frameworkDefinitions[def.Code] == nil {
+			t.Fatalf("code %d (%s) is in the framework segment but not allocated here", def.Code, def.Name)
+		}
+	}
+}
+
+// 包装后仍能按码判别、也能判别原错误：Nest 冷加载不存在时就是这样包装的。
+func TestEntityNotFoundWrapKeepsCauseAndCode(t *testing.T) {
+	cause := errors.New("dataengine repository: entity aggregate not found")
+	err := Wrap(ErrEntityNotFound, cause)
+	if !errors.Is(err, cause) || !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("wrapped entity-not-found lost errors.Is identity: %v", err)
+	}
+	if code, reason := ClientError(err); code != CodeEntityNotFound || reason != "entity not found" {
+		t.Fatalf("ClientError = (%d, %q), want (%d, entity not found)", code, reason, CodeEntityNotFound)
+	}
+}

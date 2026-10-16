@@ -7,10 +7,34 @@ import (
 	"sync"
 )
 
+// 码段归属（2026-10-16 登记，D7）：
+//
+//	0              CodeOK
+//	1 – 999        框架段：本包定义的、跨模块通用的框架码（CodeInternal、CodeEntityNotFound …）
+//	100000 – 199999 生成工程业务码的默认段（roost.yaml ids.errcode，可改，但不得与框架段重叠）
+//	5x0101 – 5x0199 内置 service 包各自的段（directory 53、rank 54、match 55、account 56、
+//	               global 57、chat 58、mail 59、platform 60、session 61、activity 62），
+//	               每个包的 errcode_test.go 用 segmentFirst / segmentAllocated 钉住
+//
+// 框架段只在本包里分配：新增框架码时在下面的常量与 frameworkDefinitions 测试里同时登记。
 const (
 	CodeOK       int32 = 0
 	CodeInternal int32 = 1
+	// CodeEntityNotFound：请求的目标实体在权威存储里不存在（从未创建，或已删档只剩墓碑）。
+	// 这是可预期的客户端状态而不是服务端故障：典型场景是首登前就发业务请求，
+	// 客户端应先走登录 / 创角（生成工程的 EnterGame → lifecycle.GetOrCreate）再重试。
+	CodeEntityNotFound int32 = 2
+
+	// FrameworkCodeLast 是框架段的上界（含）；业务码段的下界必须大于它。生成器的 manifest 校验
+	// 持有同值副本（codegen/internal/roost/manifest.go 的 frameworkErrcodeLast），改动须同步。
+	FrameworkCodeLast int32 = 999
 )
+
+// ErrEntityNotFound 是 CodeEntityNotFound 的定义。框架在确认“权威里没有这个实体”时用
+// Wrap(ErrEntityNotFound, cause) 包装原错误：errcode.ClientError 给客户端稳定码，
+// errors.Is 仍能判别原哨兵（entity.ErrAuthorityEntityNotFound、DataEngine 的
+// ErrEntityAggregateNotFound）。本包不依赖 framework，判定与包装由调用方（Nest）完成。
+var ErrEntityNotFound = Define(CodeEntityNotFound, "entity_not_found", "entity not found")
 
 const internalReason = "server error"
 

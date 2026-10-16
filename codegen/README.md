@@ -77,6 +77,8 @@ roost-core 的项目脚手架与代码生成工具链（模块路径 `github.com
     # 编辑 Request 字段和 handler 参数后
     roost add endpoint RenamePlayer --handler player
     roost add lifecycle Player --service game
+    roost add protocol EnterGame --group game --handler player
+    roost add endpoint EnterGame --handler player --lifecycle Player   # 登录时 GetOrCreate
     roost generate
     roost project doctor --workflow first-business
 

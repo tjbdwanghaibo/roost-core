@@ -567,6 +567,39 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			}
 		}
 	}
+	// 首次真实请求前玩家必须先有 Entity：没有“登录时 lifecycle.GetOrCreate”这一步，Nest 冷加载会回
+	// entity_not_found。first-business 必须把这一步列为未完成，并给出可执行的命令（DESIGN-TODO D7）。
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginItem := func() (CheckItem, bool) {
+		t.Helper()
+		items, err := checkFirstBusinessWorkflow(root, manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Name == "workflow:login" {
+				return item, true
+			}
+		}
+		return CheckItem{}, false
+	}
+	if item, found := loginItem(); !found || item.Status != StatusFail || !strings.Contains(item.Detail, "roost add endpoint EnterGame --handler player --lifecycle Player") {
+		t.Fatalf("first-business without a login endpoint: workflow:login = %+v (found=%v), want FAIL with the add command", item, found)
+	}
+	for _, step := range []AddOptions{
+		{Kind: "protocol", Name: "EnterGame", Group: "game", Handler: "player"},
+		{Kind: "endpoint", Name: "EnterGame", Handler: "player", Lifecycle: "Player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	if item, found := loginItem(); !found || item.Status != StatusOK {
+		t.Fatalf("first-business with the login endpoint: workflow:login = %+v (found=%v), want OK", item, found)
+	}
 	if networkTestsEnabled() {
 		if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
 			t.Fatalf("generate first business workflow: %v", err)
@@ -583,7 +616,8 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"game/playeraccess/runtime_gen.go":         {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
 		"internal/access/player/mod_gen.go":        {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
 		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
-		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},
+		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
+		"game/controllers/player/enter_game.go":    {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
 		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
 		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3"},
 		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
@@ -1221,6 +1255,13 @@ func TestManifestRejectsIDsOutsideFrameworkEncoding(t *testing.T) {
 	manifest.IDs["protocol"] = protocol
 	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "encoding limit 4294967295") {
 		t.Fatalf("invalid protocol range error = %v", err)
+	}
+	protocol.Groups["game"] = IDRange{Min: 10000, Max: 19999}
+	manifest.IDs["protocol"] = protocol
+	// 1-999 是框架段（errcode.CodeInternal、errcode.CodeEntityNotFound …）：业务码落进去会与框架码撞号。
+	manifest.IDs["errcode"] = IDSpace{Min: 1, Max: 99999}
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "framework segment 1-999") {
+		t.Fatalf("errcode range overlapping the framework segment: error = %v", err)
 	}
 }
 

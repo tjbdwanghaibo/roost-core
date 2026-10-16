@@ -10,7 +10,7 @@
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D5 | 静态 Player 跨机迁移的参考流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 维护者 2026-10-16 决定折中方案，已实施（提交见本节） |
-| D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 待决定（2026-10-16 新用户试用登记） |
+| D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施 |
 | D8 | 生成的服务包名大写（`package Game`） | 待决定（2026-10-16 新用户试用登记） |
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 待决定（2026-10-16 新用户试用登记） |
 
@@ -116,7 +116,12 @@
 
 ## D7 实体不存在时给客户端的稳定错误码与首登步骤
 
-**状态：待决定。** 登记：2026-10-16 新用户试用实测。
+**状态：维护者 2026-10-16 决定 C（两者都做），已实施（提交见下）。** 登记：2026-10-16 新用户试用实测。
+
+**实施结果**：
+- 框架码：`infra/base/errcode` 新增框架段 `1–999`（只由 errcode 包分配，包注释登记全部码段归属）与 `CodeEntityNotFound = 2` / `ErrEntityNotFound`（`entity_not_found`）。依赖方向：errcode 在 infra、不认识 framework；判定在 Nest：`framework/nest/io_load.go` 的 `targetLoadError` 遇到 `entity.ErrAuthorityEntityNotFound`（DataEngine `ErrEntityAggregateNotFound` 满足它）时 `errcode.Wrap(errcode.ErrEntityNotFound, err)`，原错误保留。生成 endpoint 只给 `CodeInternal` 记 ERROR，因此这种预期情况不再记 ERROR。`roost.yaml ids.errcode` 下界落进框架段时 manifest 校验拒绝。
+- 已删档：数据层能区分“全部 DAO 都没有文档”与“全部只剩墓碑”，但两者对调用方是同一个哨兵、同一个客户端码（产品上都表示“先登录 / 创角”），只在错误文本 `state=absent|deleted` 区分。删档后同 ID 重建能否越过墓碑版本落库尚未确认，登记在 KNOWN-LIMITS。
+- 首登步骤：`roost add endpoint EnterGame --handler player --lifecycle Player` 生成登录 endpoint（`<Entity>FromRegistry(controller.Registry()).GetOrCreate(ctx, context.PlayerID)`）；两处 controller 骨架都带 `Registry()`；first-business 新增 `workflow:login` 检查，`roost project next` 给出上面的命令；workbook、CODEGEN_REFERENCE、README 同步。
 
 **现状**：一个从未登录（Entity 不存在）的玩家直接发业务请求时，Nest 冷加载返回 `dataengine repository: entity aggregate not found`，`errcode.ClientError` 把它归为 `CodeInternal`（客户端收到 `code=1 server error`），服务端记 ERROR。beginner 的 first-business 流程（`roost project next` / `doctor --workflow first-business`）全绿后不包含“登录时 `lifecycle.GetOrCreate`”这一步，新手第一次真实请求就会碰到。
 
