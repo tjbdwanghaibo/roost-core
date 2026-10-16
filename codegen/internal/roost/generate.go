@@ -189,6 +189,9 @@ func generate(ctx context.Context, root string, options GenerateOptions) error {
 	if options.Check {
 		return checkGenerated(ctx, root, manifest, options.Stdout)
 	}
+	if err := checkSelfSync(root, manifest); err != nil {
+		return err
+	}
 	selected := generatorsFor(manifest, options.Force)
 	if options.Changed {
 		changed, err := gitChanged(root)
@@ -221,6 +224,9 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 	}
 	manifest, err := LoadManifest(absRoot)
 	if err != nil {
+		return err
+	}
+	if err := checkSelfSync(absRoot, manifest); err != nil {
 		return err
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(absRoot), ".roost-generate-*")

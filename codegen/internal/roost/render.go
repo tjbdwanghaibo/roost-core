@@ -96,6 +96,12 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if err := addGo("internal/access/player/mod_gen.go", renderPlayerAccessMod(m), true); err != nil {
 			return nil, err
 		}
+		if selfSyncEnabled(m) {
+			// 推送编号归项目：只在缺失时创建，之后由项目维护（冲突时改 id）。
+			if err := addGo(selfSyncProtocolPath, renderSelfSyncProtocolDef(m), false); err != nil {
+				return nil, err
+			}
+		}
 		if contains(m.Access["player"].Transports, "tcp") {
 			if err := addGo("internal/access/player/tcp/server_gen.go", renderPlayerTCPServer(m), true); err != nil {
 				return nil, err
@@ -361,6 +367,11 @@ func renderBootstrap(m Manifest) string {
 		}
 	}
 	imports[m.Project.Module+"/internal/registry"] = "registry"
+	if selfSyncEnabled(m) {
+		imports[selfSyncImport] = "selfsync"
+		imports[m.Project.Module+"/game/entities/"+selfSyncEntity] = selfSyncEntity
+		imports[m.Project.Module+"/protocol/msgid"] = ""
+	}
 	for _, name := range services {
 		for _, rpc := range m.Services[name].Rpcs {
 			imports[m.Project.Module+"/"+rpcDir(rpc)] = rpcAlias(rpc)
@@ -390,6 +401,13 @@ func renderBootstrap(m Manifest) string {
 	if instanceRuntime {
 		b.WriteString("\nvar EntityManager = entity.NewEntityManager()\n")
 		b.WriteString("var EntityAccess = entity.NewManagerAccess(EntityManager)\n")
+	}
+	if selfSyncEnabled(m) {
+		// access.player.self_sync：Nest Mod 装它的 Manager，player TCP Mod 接上连接生命周期。
+		b.WriteString("\n// " + selfSyncVar + " 是 access.player.self_sync 的接线（wiring/selfsync）：每个在线玩家只收到自己的\n")
+		b.WriteString("// Player（视图 \"self\"），经 PushSyncPlayer 以 msgid.MsgSelfSync 推送。Nest Mod 用它装 Entity Sync，\n")
+		b.WriteString("// player TCP Mod 用它接上连接的激活与关闭。关掉开关后 roost project sync 删除这段接线。\n")
+		fmt.Fprintf(&b, "var %s = selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: %s.EntityKind%s, MessageID: msgid.MsgSelfSync})\n", selfSyncVar, selfSyncEntity, toPascal(selfSyncEntity))
 	}
 	b.WriteString("\nfunc New() (*app.App, error) {\n")
 	// Static registration first, before app.New: an entity builder registered
@@ -467,7 +485,11 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	if access, enabled := m.Access["player"]; enabled && access.Service == name {
 		out = append(out, "accessplayer.NewMod()")
 		if contains(access.Transports, "tcp") {
-			out = append(out, "accessplayertcp.NewMod()")
+			if access.SelfSync {
+				out = append(out, "accessplayertcp.NewMod().WithSelfSync("+selfSyncVar+")")
+			} else {
+				out = append(out, "accessplayertcp.NewMod()")
+			}
 		}
 	}
 	return out
@@ -494,6 +516,9 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 	case "remote_entity":
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
 	case "nest":
+		if selfSyncNest(m, service) {
+			return "kitnest.NewModWithEntitySync(EntityAccess, " + selfSyncVar + ".EntitySyncSetup())"
+		}
 		return "kitnest.NewMod(EntityAccess)"
 	case "saga":
 		if len(m.Sagas) == 0 {

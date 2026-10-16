@@ -112,7 +112,74 @@ func fail(format string, args ...any) {
 }
 
 func renderPlayerTCPServer(manifest Manifest) string {
-	return strings.Replace(renderPlayerTCPServerSource(manifest), "@@TCP_CONFIG_DECLARATION@@", renderPlayerTCPDeclaration(), 1)
+	source := strings.Replace(renderPlayerTCPServerSource(manifest), "@@TCP_CONFIG_DECLARATION@@", renderPlayerTCPDeclaration(), 1)
+	if selfSyncEnabled(manifest) {
+		source = withPlayerTCPSelfSync(source)
+	}
+	return source
+}
+
+// playerTCPSelfSyncEdits 是 access.player.self_sync 打开时对 server_gen.go 的增量：每项把恰好出现一次的
+// anchor 换成 replace（replace 以 anchor 开头或保留其语义）。开关关闭时文件与开启前逐字节相同。anchor 找不到
+// 是生成器自身的错误（模板改了而这里没跟上），生成 self_sync 工程的测试会直接 panic 变红。
+var playerTCPSelfSyncEdits = []struct{ anchor, replace string }{
+	{
+		anchor:  " gatewiring \"github.com/tjbdwanghaibo/roost-core/wiring/gate\"\n",
+		replace: " gatewiring \"github.com/tjbdwanghaibo/roost-core/wiring/gate\"\n selfsync \"" + selfSyncImport + "\"\n",
+	},
+	{
+		anchor:  "\ttransportRuntime *Runtime\n}",
+		replace: "\ttransportRuntime *Runtime\n\t// selfSync 是 access.player.self_sync 的接线（WithSelfSync）；nil 表示没开。\n\tselfSync *selfsync.SelfSync\n}",
+	},
+	{
+		anchor: "func NewMod() *Mod { return &Mod{} }\n",
+		replace: "func NewMod() *Mod { return &Mod{} }\n\n" +
+			"// WithSelfSync 接上玩家看自己状态（access.player.self_sync）：Provide 时把推送能力交给它，Start 时\n" +
+			"// 装握手钩子——鉴权 ACK 写出之后登记连接、连接关闭时撤销，所以首个全量总排在 ACK 之后。\n" +
+			"func (mod *Mod) WithSelfSync(self *selfsync.SelfSync) *Mod { mod.selfSync = self; return mod }\n",
+	},
+	{
+		anchor:  "\tmod.transportRuntime = NewRuntime(runtime.Protocols, mod.config.LoginTimeout)\n",
+		replace: "\tmod.transportRuntime = NewRuntime(runtime.Protocols, mod.config.LoginTimeout)\n\tif mod.selfSync != nil { mod.selfSync.BindPlayers(mod.transportRuntime) }\n",
+	},
+	{
+		anchor:  "\tif err := server.ConnectRuntime(mod.transportRuntime.TCPRuntime); err != nil { return err }\n",
+		replace: "\tif err := server.ConnectRuntime(mod.transportRuntime.TCPRuntime); err != nil { return err }\n\tif mod.selfSync != nil {\n\t\tif err := server.ConnectHandshake(mod.selfSync.Handshake()); err != nil { return err }\n\t}\n",
+	},
+	{
+		anchor: "type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod }\n",
+		replace: "type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod; selfSync *selfsync.SelfSync }\n\n" +
+			"// WithSelfSync 是独立 Gate 部署下的自身视图接线：Game Ingress 的 OnActive / OnClosed 登记与撤销连接\n" +
+			"// （在 options 里原有的回调之后），推送经 Game Ingress。\n" +
+			"func (mod *IngressMod) WithSelfSync(self *selfsync.SelfSync) *IngressMod { mod.selfSync = self; return mod }\n",
+	},
+	{
+		anchor: " mod.inner=gatewiring.NewGameIngressMod(dispatch,runtime.Protocols.Encode,mod.options)\n",
+		replace: " options:=mod.options\n" +
+			" if self:=mod.selfSync;self!=nil {\n" +
+			"  active,closed:=options.OnActive,options.OnClosed\n" +
+			"  options.OnActive=func(binding gateway.Binding,receiver uint64)error{\n" +
+			"   if active!=nil { if err:=active(binding,receiver);err!=nil{return err} }\n" +
+			"   return self.OnActive(binding,receiver)\n" +
+			"  }\n" +
+			"  options.OnClosed=func(binding gateway.Binding,receiver uint64){ if closed!=nil{closed(binding,receiver)}; self.OnClosed(binding,receiver) }\n" +
+			" }\n" +
+			" mod.inner=gatewiring.NewGameIngressMod(dispatch,runtime.Protocols.Encode,options)\n",
+	},
+	{
+		anchor:  " return registry.Register(Name,&Runtime{PlayerRuntime:ingress})\n",
+		replace: " if mod.selfSync!=nil { mod.selfSync.BindPlayers(ingress) }\n return registry.Register(Name,&Runtime{PlayerRuntime:ingress})\n",
+	},
+}
+
+func withPlayerTCPSelfSync(source string) string {
+	for _, edit := range playerTCPSelfSyncEdits {
+		if strings.Count(source, edit.anchor) != 1 {
+			panic(fmt.Sprintf("roost: self_sync edit anchor not found exactly once in server_gen.go: %q", edit.anchor))
+		}
+		source = strings.Replace(source, edit.anchor, edit.replace, 1)
+	}
+	return source
 }
 
 func renderPlayerTCPServerSource(manifest Manifest) string {
