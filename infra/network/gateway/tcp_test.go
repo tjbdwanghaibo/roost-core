@@ -101,7 +101,7 @@ func (b *lockedBuffer) String() string {
 }
 
 // 超过每连接令牌桶即断开连接（心跳也计入）；断开前留一条 Debug 日志点名玩家与限额，
-// 客户端只看到 EOF 时运维能从日志找到原因。与坏帧、认证失败一样不升到 Warn：客户端造成的断开不能刷日志。
+// 客户端只看到 EOF 时运维能从日志找到原因。每条连接最多一行、只记 Debug：客户端造成的断开不能刷日志。
 func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T) {
 	logs := &lockedBuffer{}
 	previous := slog.Default()
@@ -110,6 +110,8 @@ func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous); log.SetOutput(previousOutput) })
 	for _, enabled := range []bool{true, false} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			// 日志缓冲在子测试之间共用：只数本子测试新增的部分，单独 -run 某个子测试时判定不变。
+			before := len(logs.String())
 			server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) { return "ok", nil }, func(c *TCPConfig) {
 				c.RequestRate = 0
 				if enabled {
@@ -136,12 +138,13 @@ func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T) {
 				}
 				_ = conn.Close()
 			}
-			limited := strings.Count(logs.String(), "player tcp rate limit exceeded")
-			if enabled && (limited != 2 || !strings.Contains(logs.String(), "player_id=7") || !strings.Contains(logs.String(), "request_burst=2")) {
-				t.Fatalf("rate-limited close logged %d times, want 2 naming player_id and request_burst:\n%s", limited, logs.String())
+			written := logs.String()[before:]
+			limited := strings.Count(written, "player tcp rate limit exceeded")
+			if enabled && (limited != 2 || !strings.Contains(written, "player_id=7") || !strings.Contains(written, "request_burst=2")) {
+				t.Fatalf("rate-limited close logged %d times, want 2 naming player_id and request_burst:\n%s", limited, written)
 			}
-			if !enabled && limited != 2 {
-				t.Fatalf("disabled limiter added rate-limit logs: %d", limited)
+			if !enabled && limited != 0 {
+				t.Fatalf("disabled limiter logged %d rate-limit closes, want 0:\n%s", limited, written)
 			}
 		})
 	}
