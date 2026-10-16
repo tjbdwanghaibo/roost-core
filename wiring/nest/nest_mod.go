@@ -25,6 +25,8 @@ import (
 type Mod struct {
 	syncSetup  *EntitySyncSetup
 	entitySync *entitysync.Manager
+	// syncDetach 是 EntitySyncSetup.Attach 返回的释放函数；Manager 关闭之后调用一次。
+	syncDetach func()
 	// autoWatermark 表示 EntitySync 的外发水位由 wiring 接线，来源在 Provide 构造引擎后写入 watermark；
 	// Sync 的 Flush 可能在其他 goroutine 读取，所以用原子指针。
 	autoWatermark bool
@@ -302,6 +304,9 @@ func (m *Mod) rebindEntitySync(loaded entity.IThreadSafeEntity) {
 	if err := m.entitySync.Rebind(state); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		slog.Warn("entity sync: reloaded entity was not rebound", "entity", loaded.ID(), "err", err)
 	}
+	if m.syncSetup != nil && m.syncSetup.EntityLoaded != nil {
+		m.syncSetup.EntityLoaded(loaded)
+	}
 }
 
 func (m *Mod) Stop() {
@@ -334,6 +339,10 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 		}
 		if err := m.entitySync.Close(ctx); err != nil {
 			return err
+		}
+		if m.syncDetach != nil {
+			m.syncDetach()
+			m.syncDetach = nil
 		}
 	}
 	m.stopped = true

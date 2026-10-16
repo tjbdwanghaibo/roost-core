@@ -25,6 +25,10 @@ type Direct struct {
 
 	mu    sync.Mutex // 串行化 Bind / Unbind / resubmit / released，本来源的订阅与绑定表只在它下面变化
 	bound map[directBinding]directBound
+
+	// forgotten 非 nil 时，released 删掉的每条绑定在放开 mu 之后逐条告诉它（同包的 SelfView 用它得知
+	// “框架丢掉了绑定、需要重新 Bind”）。在政策阶段（Flush 的 deliverReleases）调用，不得阻塞、不得调用 Flush。
+	forgotten func(session entitysync.SessionID, subject int64)
 }
 
 type directBinding struct {
@@ -38,13 +42,18 @@ type directBound struct {
 }
 
 func NewDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID) (*Direct, error) {
+	return newDirect(manager, session, nil)
+}
+
+// newDirect 是 NewDirect 加上 forgotten 观察者（见 Direct.forgotten）。
+func newDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID, forgotten func(entitysync.SessionID, int64)) (*Direct, error) {
 	if manager == nil {
 		return nil, entitysync.ErrManagerClosed
 	}
 	if session == nil {
 		session = func(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) }
 	}
-	d := &Direct{session: session, bound: make(map[directBinding]directBound)}
+	d := &Direct{session: session, bound: make(map[directBinding]directBound), forgotten: forgotten}
 	d.subscriptions = manager.NewSubscriptionSourceWithHooks(entitysync.SubscriptionSourceHooks{Resubmit: d.resubmit, Released: d.released})
 	return d, nil
 }
@@ -102,8 +111,8 @@ func (d *Direct) resubmit(retracted []entitysync.RetractedSubscription) {
 // 新绑定并 Unsubscribe，连它的撤销记录一起删掉，实体重新登记后不再恢复。戳早于通知的绑定一定属于通知所指的那次
 // 打开 / 登记（或更早、同样已死的），本来源不会有更新的订阅或撤销记录，Unsubscribe 只清掉这次释放留下的记录。
 func (d *Direct) released(pairs []entitysync.ReleasedSubscription) {
+	var dropped []directBinding
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	for _, pair := range pairs {
 		key := directBinding{session: pair.Session, subject: pair.Subject}
 		if binding, bound := d.bound[key]; !bound || binding.stamp > pair.Stamp {
@@ -111,5 +120,12 @@ func (d *Direct) released(pairs []entitysync.ReleasedSubscription) {
 		}
 		delete(d.bound, key)
 		_ = d.subscriptions.Unsubscribe(pair.Session, pair.Subject)
+		if d.forgotten != nil {
+			dropped = append(dropped, key)
+		}
+	}
+	d.mu.Unlock()
+	for _, key := range dropped {
+		d.forgotten(key.session, key.subject)
 	}
 }

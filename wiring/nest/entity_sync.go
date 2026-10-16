@@ -1,6 +1,7 @@
 package nest
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -14,6 +15,13 @@ import (
 type EntitySyncSetup struct {
 	Config    entitysync.ManagerConfig
 	Configure func(*entitysync.ManagerConfig)
+	// Attach 可选：Manager 创建之后（Mod Init 内、Start 之前）调用一次，用来把政策装到这个 Manager 上
+	// （例如 wiring/selfsync 的自身视图）。返回的 detach 在 Mod 停止、Manager 关闭之后调用，可为 nil；
+	// 返回错误时 Init 失败，Manager 被关闭。
+	Attach func(*entitysync.Manager) (detach func(), err error)
+	// EntityLoaded 可选：DataEngine 发布一个从权威加载的实体之后调用，与 Mod 自己的 Rebind 同一回调、在它之后
+	// （Nest 业务池上，不得阻塞、不得做 I/O）。
+	EntityLoaded func(entity.IThreadSafeEntity)
 }
 
 func NewModWithEntitySync(getter entity.Getter, setup EntitySyncSetup, opts ...corenest.NestOption) *Mod {
@@ -57,6 +65,14 @@ func (m *Mod) initEntitySync(settings config, batchWindowSet bool) error {
 	manager, err := entitysync.NewManager(config)
 	if err != nil {
 		return fmt.Errorf("nest mod entity sync: %w", err)
+	}
+	if m.syncSetup.Attach != nil {
+		detach, err := m.syncSetup.Attach(manager)
+		if err != nil {
+			_ = manager.Close(context.Background())
+			return fmt.Errorf("nest mod entity sync: attach: %w", err)
+		}
+		m.syncDetach = detach
 	}
 	m.entitySync = manager
 	return nil
