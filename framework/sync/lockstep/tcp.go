@@ -10,7 +10,8 @@ import (
 )
 
 // TCPSender将Match两条发送通道接到生成Runtime.PushLockstepSession。
-// TCP有队头阻塞；同步发送，不使用会合并/丢帧的异步Sync队列。
+// TCP有队头阻塞；push 进入该连接不合并、不丢帧的有界有序出站队列，返回 nil 只表示已准入，
+// 停读连接队满即被关闭，不会拖住同一 Tick 里其他接收者的发送。
 // Resolve必须并发安全：可靠追帧页由Match后台发送；会话ID不得跨连接生命周期复用。
 // 比赛Tick驱动须在业务 worker/Entity锁之外；业务 worker发送会在副作用前明确拒绝。
 type TCPSender struct {

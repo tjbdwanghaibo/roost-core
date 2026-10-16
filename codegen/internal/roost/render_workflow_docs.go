@@ -490,7 +490,7 @@ Lockstep使用PushLockstepPlayer/PushLockstepSession传既有广播或追帧字�
 - max_connections 是进程硬上限，满载新连接立即拒绝，防止 goroutine/FD 无界增长。
 - max_connections_per_ip 限制单一来源占满连接；max_handshakes 限制昂贵鉴权的并发量。
 - max_handshake_bytes 单独限制登录票据，不能为了业务大包把鉴权帧也扩大。
-- handshake_timeout 限制慢速鉴权；idle_timeout 限制慢读；write_timeout 给慢客户端施加背压。
+- handshake_timeout 限制慢速鉴权；idle_timeout 限制慢读；write_timeout 是每帧写出期限，写不出或出站队列满的慢客户端被断开，不拖住其他连接。
 - max_payload_bytes 在分配内存前检查；小 payload 使用有上限的复用池。
 - shutdown_timeout 是 TCP 的 StopBudget，计入 App 总 shutdown.total_timeout，必须为正；显式0会被拒绝。
 - Linux 同时配置合理的 nofile、listen backlog、conntrack 与 LB idle timeout；LB idle 应略大于应用 idle。

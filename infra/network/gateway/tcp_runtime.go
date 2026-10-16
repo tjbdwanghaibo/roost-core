@@ -23,6 +23,10 @@ func NewTCPRuntime(encode TCPEncoder, loginTimeout time.Duration) *TCPRuntime {
 // TCPRuntime is the application-facing active publish boundary. It encodes one
 // typed protocol value once, then sends it to one session or every currently
 // authenticated session of a player. It never exposes socket or Entity state.
+//
+// Push* 只把帧放进每连接的有界出站队列：返回 nil 表示已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁，
+// 不等 socket，所以 Push* 不需要 fctx.BlockingError 守卫，业务 worker 与场景 / 帧同步循环都可以直接调用。
+// 收不下的连接（停读导致队列满、已关闭）当场关闭，写出失败由该连接的写协程关闭连接。
 type TCPRuntime struct {
 	owner        atomic.Pointer[TCPServer]
 	encode       TCPEncoder

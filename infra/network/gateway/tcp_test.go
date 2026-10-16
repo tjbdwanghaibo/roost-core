@@ -217,7 +217,9 @@ func TestRuntimePushPlayerEncodesOnceAndMarksServerPush(t *testing.T) {
 	client, remote := net.Pipe()
 	defer client.Close()
 	defer remote.Close()
-	current := &tcpSession{connection: client, principal: Principal{PlayerID: 1, SessionID: "tcpSession"}, writeTimeout: time.Second}
+	connectionCtx, cancel := context.WithCancelCause(context.Background())
+	current := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 1, SessionID: "tcpSession"}, server.config)
+	defer server.closeConnectionSession(current)
 	server.registerSession(current)
 	defer server.unregisterSession(current)
 	runtime := &TCPRuntime{encode: encode}
@@ -572,11 +574,14 @@ func TestADispatchTimeoutBoundsTheWaitNotAnUncooperativeHandler(t *testing.T) {
 
 const pushTestMessageID uint32 = 20002
 
-func pushServer(t *testing.T) (*TCPServer, *TCPRuntime, <-chan TCPSessionClosed) {
+func pushServer(t *testing.T, configure ...func(*TCPConfig)) (*TCPServer, *TCPRuntime, <-chan TCPSessionClosed) {
 	t.Helper()
 	config := DefaultTCPConfig()
 	config.Addr = "127.0.0.1:0"
 	config.WriteTimeout = 100 * time.Millisecond
+	for _, option := range configure {
+		option(&config)
+	}
 	encode := func(_ uint32, value any) ([]byte, error) { return value.([]byte), nil }
 	runtime := NewTCPRuntime(encode, config.LoginTimeout)
 	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
@@ -614,7 +619,7 @@ func readPushes(t *testing.T, server *TCPServer, connection net.Conn) <-chan int
 				return
 			}
 			release()
-			if got.flags == flagServerPush {
+			if got.flags&flagServerPush != 0 {
 				counts <- len(got.payload)
 			}
 		}
@@ -708,6 +713,125 @@ func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) 
 		case <-received:
 		case <-deadline:
 			t.Fatalf("the live connection received %d of %d pushes", got, pushes+1)
+		}
+	}
+}
+
+// 一条停止读取的连接只能拖住它自己。场景 Sync Flush、Lockstep Tick 都是按会话串行推送、ctx 不带截止的循环：
+// 对停读连接的推送若要等满 write_timeout，排在它后面的每个正常连接每轮都晚到 write_timeout。推送只能进入该连接的
+// 有界出站队列，收不下就关闭那一条，正常连接的帧照常按轮到达。
+func TestAStalledConnectionDoesNotHoldPushesToOtherConnections(t *testing.T) {
+	const writeTimeout = 30 * time.Second
+	server, runtime, closed := pushServer(t, func(c *TCPConfig) { c.WriteTimeout = writeTimeout })
+	live := dialAuthenticated(t, server, "live")
+	received := readPushes(t, server, live)
+	stalled(t, server, "stalled")
+	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
+
+	// 128 × 512KiB 远超停读连接的 socket 缓冲；每轮像 Flush 一样先推停读连接，再推正常连接。
+	const rounds = 128
+	filler := bytes.Repeat([]byte{1}, 512<<10)
+	flushed := make(chan struct{})
+	go func() {
+		defer close(flushed)
+		for range rounds {
+			_ = runtime.PushSyncSession(context.Background(), "stalled", pushTestMessageID, filler)
+			_ = runtime.PushSyncSession(context.Background(), "live", pushTestMessageID, []byte("frame"))
+		}
+	}()
+	deadline := time.After(3 * time.Second)
+	for got := 0; got < rounds; got++ {
+		select {
+		case <-received:
+		case <-deadline:
+			t.Fatalf("the live connection received %d of %d sync frames in 3s: its pushes waited behind the stalled connection's write_timeout (%v)", got, rounds, writeTimeout)
+		}
+	}
+	select {
+	case <-flushed:
+	case <-time.After(time.Second):
+		t.Fatal("the flush loop is still blocked after the live connection got every frame")
+	}
+	waitClosed(t, closed, "stalled")
+	if got := runtime.ActiveSessions(7); got != 1 {
+		t.Fatalf("active sessions = %d, want 1 (the stalled connection is closed)", got)
+	}
+}
+
+// orderedPushServer 的 handler 收到请求时先从 pushers 个 goroutine 并发推送给请求所在会话，等它们都准入后再回包。
+func orderedPushServer(t *testing.T, pushers int) (*TCPServer, *TCPRuntime) {
+	t.Helper()
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	runtime := NewTCPRuntime(func(_ uint32, value any) ([]byte, error) { return value.([]byte), nil }, config.LoginTimeout)
+	dispatch := func(ctx context.Context, session Session, _, seq uint32, _ wire.PayloadKind, _ []byte) (any, error) {
+		sessionID := session.Principal().SessionID
+		var producers sync.WaitGroup
+		for range pushers {
+			producers.Go(func() {
+				if err := runtime.PushSession(ctx, sessionID, pushTestMessageID, []byte("push")); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		producers.Wait()
+		return &TCPResponse{MessageID: stuckResponseID, Sequence: seq, Payload: []byte("reply")}, nil
+	}
+	server, err := NewTCPServer(config, dispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		return Principal{PlayerID: 7, SessionID: token}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ConnectRuntime(runtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+	return server, runtime
+}
+
+// 出站队列不改变同一连接上的顺序契约：handler 里先发的推送先于它的回包写出；多个生产者并发推送时，
+// 客户端看到的推送序号就是写出顺序（1、2、3…连续）；回包写出后才读下一个请求，客户端半关闭写端后仍能收到最后一个回包。
+func TestOutboundQueueKeepsPushReplyOrderAndPushSequences(t *testing.T) {
+	const pushers = 8
+	server, runtime := orderedPushServer(t, pushers)
+	connection := dialAuthenticated(t, server, "ordered")
+	waitRegistered(t, runtime, 7, 1)
+	client := &tcpSession{connection: connection, writeTimeout: time.Second}
+	nextPush := uint32(1)
+	const requests = 4
+	for request := uint32(2); request < 2+requests; request++ {
+		if err := client.writeFrame(context.Background(), 0, stuckRequestID, request, []byte("req")); err != nil {
+			t.Fatal(err)
+		}
+		if request == 1+requests {
+			_ = connection.(*net.TCPConn).CloseWrite()
+		}
+		for pushes := 0; pushes <= pushers; pushes++ {
+			_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+			got, release, err := server.readFrame(connection)
+			if err != nil {
+				t.Fatalf("request %d: frame %d: %v", request, pushes, err)
+			}
+			release()
+			if pushes < pushers {
+				if got.flags != flagServerPush || got.sequence != nextPush {
+					t.Fatalf("request %d: frame %d = flags %d seq %d, want push seq %d before the reply", request, pushes, got.flags, got.sequence, nextPush)
+				}
+				nextPush++
+				continue
+			}
+			if got.flags != 0 || got.messageID != stuckResponseID || got.sequence != request {
+				t.Fatalf("request %d: after its pushes got flags %d id %d seq %d, want the reply", request, got.flags, got.messageID, got.sequence)
+			}
 		}
 	}
 }

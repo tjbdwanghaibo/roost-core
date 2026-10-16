@@ -147,13 +147,14 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
 }
 ```
 
-- `PushPlayer`：协议只编码一次，发布到玩家全部已认证会话。某条连接写失败（写超时、连接重置、已关闭）时，
-  这条连接立即注销并关闭（客户端看到断线、需重连；连接槽、按 IP 计数与会话关闭事件照常各释放一次），
-  其余连接收到则返回 nil；没有任何连接收到时返回错误（此时这些连接都已关闭）。写之前就被拒绝的推送
-  （ctx 已结束、payload 超限）不关闭连接并返回错误（RR-20260926-52）；调用方 ctx 的截止早于 `write_timeout`
-  且在第一个字节写出前到期的推送同样是写前拒绝，返回 `context.DeadlineExceeded`、不关闭连接；写出部分字节，
-  或 `write_timeout` 本身到期（即便一个字节都没写进），仍视为连接损坏并关闭（RR-20260926-68）；
-- `PushSession`：只投递指定 SessionID，写失败同样关闭该会话；
+- `PushPlayer`：协议只编码一次，放进玩家全部已认证会话的出站队列，不等 socket 写出；返回 nil 表示已准入。
+  每连接一条有界队列和唯一写协程按入队顺序写出（推送、回包、心跳 ACK 共用），因此不需要 `fctx.BlockingError`
+  守卫，场景 / 帧同步循环逐会话推送不会被一个停读客户端拖住。某条连接收不下（队列超过 1024 帧或
+  `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节、已关闭）时这条连接立即注销并关闭（客户端看到断线、需重连；
+  连接槽、按 IP 计数与会话关闭事件照常各释放一次），其余连接收下则返回 nil；没有任何连接收下时返回错误。
+  入队前就被拒绝的推送（ctx 已结束、payload 超限）不关闭连接并返回错误；入队后调用方 ctx 不再影响写出。
+  写协程一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败时关闭该连接；
+- `PushSession`：只投递指定 SessionID，收不下同样关闭该会话；
 - `PushSyncPlayer/PushSyncSession`：发送已经编码的原始 Sync 帧，flags=3，不经过 PB encoder；
 - `PushLockstepPlayer/PushLockstepSession`：发送既有 Lockstep 广播或追帧字节，flags=5；
 - `ActiveSessions`：返回当前玩家在线会话数；
@@ -171,7 +172,7 @@ Sync/Lockstep 调用方负责提供对应格式的合法字节，传输层继续
 - `ProtocolRegistry` Seal 后通过 atomic immutable snapshot 无锁分发；
 - 每连接一个顺序读循环；同玩家多连接之间仍可能并发，由 Nest 和业务契约协调，不能把连接顺序当作全局玩家顺序；
 - payload 在读取长度后才分配，小于 64 KiB 的 buffer 有界复用；
-- 写操作受 Session mutex 和 deadline 保护，慢客户端产生同步背压，不创建无界写队列；写满 `write_timeout` 仍写不进的连接被关闭，不再拖住后续推送；
+- 每连接有界出站队列 + 唯一写协程，推送方只入队；队列满或写满 `write_timeout` 仍写不进的连接被关闭，慢客户端只影响自己；服务推送序号在写出时分配，回包写出后才读下一个请求；
 - accept 错误指数退避，满连接立即拒绝；TCP 开启 keepalive 与 no-delay；
 - 登录票据使用独立 8 KiB 上限，鉴权并发和单 IP 连接都有硬上限；
 - Response 和主动 Push 同样执行 payload 上限，不能绕过入站限包；

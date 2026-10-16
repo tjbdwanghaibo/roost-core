@@ -45,6 +45,14 @@ Room 的 Attach/Detach/Input/Hash/Tick/Catchup 仍走业务的单一 Room owner�
 
 PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续序号并复用唯一 socket writer。按完整协议包发送，不按字节截断 Sync 帧。重复只确认已准入前缀；缺口或持续发送失败关闭连接，重连后恢复全量/追帧。
 
+### 嵌入 TCP 的出站
+
+嵌入 Game 的 TCP 没有 Gate 那一跳，出站同样有界、异步：每个连接一条出站队列和唯一写协程（[tcp_session.go](../../infra/network/gateway/tcp_session.go) 的 `enqueue` / `writeLoop`），PB 推送、Sync、Lockstep、读循环的回包与心跳 ACK 按入队顺序写出。`TCPRuntime.Push*` 只入队：返回 nil 表示该连接已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁、不等 socket，所以 `Push*` 不需要 `fctx.BlockingError` 守卫，业务 worker、场景 Sync Flush、Lockstep Tick 都可以直接调用。payload 入队时复制，调用返回后可复用。
+
+慢连接策略与独立 Gate 一致：队列超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节时当场关闭该连接（`player_tcp_outbound_overflow_total`），推送方得到 `errConnectionBroken` 并注销它；一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败，由写协程关闭连接（`player_tcp_write_error_total`）。队列里剩下的帧随连接丢弃，客户端重连后恢复全量/追帧。因此逐会话串行推送的调用方不会被一个停读客户端每轮拖住 `write_timeout`（修复前默认每次 Flush / Tick 卡 5s）。上限目前不开放配置键；最坏驻留是 `max_connections × 字节上限`，没有 Gate 那样的全进程驻留预算，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)。
+
+顺序契约不变：服务推送的 RS 序号由写协程在写出时分配，等于实际 socket 写顺序；读循环的回包入队后等它写出才读下一个请求，handler 里先发的推送先于它的回包（队列空闲且没人在写时回包直写，省掉一次协程切换）；不同生产者之间以入队先后为序。业务可见的 `Session.Reply` 与推送一样只入队。独立 Gate 不走这条队列：它的 AsyncTransport 已按绑定排队，`WritePacket` 同步直写并把结果交回那条队列。回归：`TestAStalledConnectionDoesNotHoldPushesToOtherConnections`、`TestOutboundQueueKeepsPushReplyOrderAndPushSequences`（[tcp_test.go](../../infra/network/gateway/tcp_test.go)）。
+
 ## 5. 停机、指标与验证
 
 停止先关闭准入，再等已接纳 dispatcher、回调与出站真实排空，随后注销发现和关闭 TCP。超时保留实例及依赖，新 context 可继续等待；不把取消等待当事务已经停止。

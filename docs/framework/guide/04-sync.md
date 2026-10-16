@@ -69,7 +69,7 @@ sync:
 
 ## 4. 背压与恢复
 
-状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
+状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。两种玩家接入都是有界异步出站：嵌入 TCP 的 `PushSync*` / `PushLockstep*` 只进入该连接的出站队列，独立 Gate 走 Game 有序出站口；读得太慢的客户端被关闭，不会拖住同一次 Flush / Tick 里排在它后面的会话（[GATEWAY §4 嵌入 TCP 的出站](../GATEWAY.md#嵌入-tcp-的出站)）。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
 
 ### 停机排空（Drain）卡住时看什么
 

@@ -298,6 +298,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `player_tcp_dispatch_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
 | `player_tcp_dispatch_timeout_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
 | `player_tcp_frame_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_outbound_overflow_total` | Counter | `infra/network/gateway/tcp_session.go` |
 | `player_tcp_push_closed_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
 | `player_tcp_push_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
 | `player_tcp_push_no_session_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |

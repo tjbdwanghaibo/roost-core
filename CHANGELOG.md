@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 玩家接入
+
+- **嵌入 TCP 推送改为每连接有界出站队列，停读客户端不再拖住整个场景同步。** 修前 `TCPRuntime.Push*` 持写锁同步写 socket，调用方 ctx 无截止时等满 `write_timeout`（默认 5s）；场景 Sync Flush、Lockstep Tick 都逐会话串行推送，一个停读的客户端让每次 Flush / Tick 卡 5s。现在每连接一条队列和唯一写协程按入队顺序写出推送、回包与心跳 ACK，`Push*` 只入队（返回 nil 表示已准入，不需要 `fctx.BlockingError` 守卫）；队列超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节、或一帧在 `write_timeout` 内写不出，就关闭该连接（新指标 `player_tcp_outbound_overflow_total`），与独立 Gate 的慢连接策略一致。服务推送序号仍在写出时分配；读循环的回包写出后才读下一个请求，handler 里先发的推送先于回包；业务可见的 `Session.Reply` 改为只入队。独立 Gate 路径不变。见 [GATEWAY §4](docs/framework/GATEWAY.md#嵌入-tcp-的出站)，回归 `TestAStalledConnectionDoesNotHoldPushesToOtherConnections`、`TestOutboundQueueKeepsPushReplyOrderAndPushSequences`。
+
 ### CI 与构建
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。

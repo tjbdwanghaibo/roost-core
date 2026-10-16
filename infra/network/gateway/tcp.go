@@ -326,7 +326,7 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 	if !ok {
 		return
 	}
-	session := &tcpSession{connection: connection, principal: clonePrincipal(principal), nonce: newBindingToken(), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes, cancel: cancel}
+	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config)
 	defer server.closeConnectionSession(session)
 	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
 		return
@@ -409,9 +409,13 @@ func (server *TCPServer) authenticateConnection(handshakeCtx context.Context, co
 	return authFrame, release, principal, true
 }
 
-// closeConnectionSession 在连接返回时关闭会话并通知 handshake.Closed。
+// closeConnectionSession 在连接返回时关闭会话、等它的 writeLoop 退出（关闭 socket 会打断正在进行的写），
+// 再通知 handshake.Closed；连接槽与 Stop 的排空因此也覆盖出站写协程。
 func (server *TCPServer) closeConnectionSession(session *tcpSession) {
 	_ = session.Close(ErrSessionClosed)
+	if session.writerDone != nil {
+		<-session.writerDone
+	}
 	if server.handshake != nil {
 		server.handshake.Closed(session)
 	}
@@ -481,7 +485,7 @@ func (server *TCPServer) answerHeartbeat(connectionCtx context.Context, session 
 		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
 		return false
 	}
-	return session.writeFrame(connectionCtx, 0, 0, request.sequence, nil) == nil
+	return session.writeQueued(connectionCtx, 0, 0, request.sequence, nil) == nil
 }
 
 // dispatchRequest 在分发预算内处理一个请求并写回应答。返回 false 时调用方结束连接。
@@ -514,7 +518,7 @@ func (server *TCPServer) dispatchRequest(connectionCtx context.Context, session 
 	// a handler that finished at its deadline is reporting what happened,
 	// and dropping that report would leave the client guessing.
 	if response != nil {
-		if err := session.Reply(connectionCtx, response); err != nil {
+		if err := session.replyWritten(connectionCtx, response); err != nil {
 			return false
 		}
 	}
@@ -580,18 +584,18 @@ func (server *TCPServer) dropBrokenSession(current *tcpSession, cause error) {
 	_ = current.Close(fmt.Errorf("%w: push not written: %w", ErrSessionClosed, cause))
 }
 
-// pushPlayer sends one frame to every connection of the player.
+// pushPlayer queues one frame on every connection of the player; it never waits
+// for a socket (each connection's writeLoop writes it, see tcpSession.enqueue).
 //
-// A connection the frame could not be written to is closed (dropBrokenSession):
-// a partly written frame has put its stream out of step, and a connection that
-// cannot take frames — typically the old socket of a player who has logged in
-// again — would otherwise stay registered until its read loop notices, failing
-// every push meanwhile. The push is then a success if another connection took
+// A connection that cannot take the frame — already closed, or its outbound
+// queue full because the client stopped reading — is closed and forgotten
+// (dropBrokenSession), so it does not stay registered failing every push until
+// its read loop notices. A frame the writeLoop later fails to write closes that
+// connection the same way. The push is a success if another connection took
 // it: the player is reachable, and the closed connection's client has to
 // reconnect anyway. It fails when no connection took it (all of them are closed
-// by then), and when a connection refused it before writing anything (context
-// done or its deadline hit before the first byte, payload too large) — that is
-// not the connection's fault, so nothing is
+// by then), and when a connection refused it before queueing (context already
+// done, payload too large) — that is not the connection's fault, so nothing is
 // closed and the caller learns the frame did not go out everywhere.
 func (server *TCPServer) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
 	return server.pushPlayerKind(ctx, playerID, messageID, payload, 0)

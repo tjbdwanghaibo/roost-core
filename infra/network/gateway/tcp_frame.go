@@ -26,7 +26,9 @@ var (
 	ErrTransportUnavailable = errors.New("player tcp: transport unavailable")
 	ErrSessionNotFound      = errors.New("player tcp: session not found")
 	// errConnectionBroken marks a write that reached the connection and
-	// failed there (a deadline, a reset, a closed socket). Whatever part of
+	// failed there (a deadline, a reset, a closed socket), or a frame the
+	// connection's outbound queue could not take because the client stopped
+	// reading. Whatever part of
 	// the frame went out, the stream is no longer in step with the client, so
 	// the connection is closed. A frame refused before any
 	// byte was written — the caller's context already done, the caller's own

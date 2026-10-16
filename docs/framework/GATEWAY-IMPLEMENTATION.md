@@ -239,7 +239,7 @@ Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，
 | --- | --- |
 | [gateway.go](../../infra/network/gateway/gateway.go) | 可信 principal 与 transport-neutral Session；Endpoint 后必须接 Sender |
 | [render_access.go](../../codegen/internal/roost/render_access.go) | DispatchPayload 接受 gateway.Session；类型检查先于解码；输出已编码 Response |
-| [TCP](../../infra/network/gateway/tcp.go)、[会话](../../infra/network/gateway/tcp_session.go)、[Runtime](../../infra/network/gateway/tcp_runtime.go)、[生成接线](../../codegen/internal/roost/render_player_tcp.go) | 共用运行实现；读取/dispatch 每连接串行；同步写锁与期限；生成物仅配置、协议和 Mod 接线 |
+| [TCP](../../infra/network/gateway/tcp.go)、[会话](../../infra/network/gateway/tcp_session.go)、[Runtime](../../infra/network/gateway/tcp_runtime.go)、[生成接线](../../codegen/internal/roost/render_player_tcp.go) | 共用运行实现；读取/dispatch 每连接串行；嵌入模式每连接有界出站队列与唯一写协程，Gate 的 `WritePacket` 同步直写；生成物仅配置、协议和 Mod 接线 |
 | [Bus](../../infra/network/bus/bus.go)、[servicerpc](../../infra/network/servicerpc/client.go) | 方法名散列、同步 handler、接收 context、定向与轻量/JetStream 选择 |
 | [MessagePack Codec](../../infra/network/bus/msgpack_codec.go)、[RPC 信封](../../infra/network/bus/rpc_error.go)、[NATS Mod](../../wiring/nats/nats_mod.go) | 当前默认 MessagePack，RM v1 / RPC v2；拒绝旧 JSON 及未知格式；PubAck 的 JSON 是 NATS 官方控制协议 |
 | [NATS RPC](../../infra/network/nats/driver/rpc.go)、[重试策略](../../infra/network/nats/rpc.go)、[Assembly](../../infra/network/nats/driver/assembly.go) | 默认单次尝试、复用连接、关闭所有权；不是自动提供 Gate 身份校验 |
