@@ -467,3 +467,89 @@ func TestGeneratedServicesReportIntoTheMetricsRegistryByDefault(t *testing.T) {
 		t.Fatalf("the generated rank collaborators return %v, want the default reporter", match)
 	}
 }
+
+// servicePackages 读出 internal/service/<name>/ 下每个非测试 .go 文件的 package 子句。
+func servicePackages(t *testing.T, root, service string) map[string]string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(root, "internal", "service", service, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.PackageClauseOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[filepath.Base(path)] = file.Name.Name
+	}
+	if len(out) == 0 {
+		t.Fatalf("internal/service/%s has no Go files", service)
+	}
+	return out
+}
+
+// D8（维护者 2026-10-16 决定 C）：新工程的服务包名按 Go 惯例小写；已有工程按目录里现有的包名生成，
+// 不改写业务文件（service.go、managers.go、collaborators.go 归业务），也不能让生成器持有的文件
+// （framework_clients_gen.go）换成另一个包名——同一目录两个包名，project sync 之后编译失败。
+func TestServicePackageNamesAreLowercaseAndFollowAnExistingProject(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"}, Template: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	for service, want := range map[string]string{"game": "game", "account": "account", "mail": "mail"} {
+		for file, got := range servicePackages(t, target, service) {
+			if got != want {
+				t.Errorf("new project: internal/service/%s/%s is package %s, want %s", service, file, got, want)
+			}
+		}
+	}
+
+	// 模拟本次改动之前生成的工程：目录里全是大写包名。
+	upper := map[string]string{"game": "Game", "account": "Account"}
+	business := map[string][]byte{}
+	for service, pkg := range upper {
+		paths, _ := filepath.Glob(filepath.Join(target, "internal", "service", service, "*.go"))
+		for _, path := range paths {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = []byte(strings.Replace(string(raw), "package "+service+"\n", "package "+pkg+"\n", 1))
+			if err := os.WriteFile(path, raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(string(raw), generatedHeader) {
+				business[path] = raw
+			}
+		}
+	}
+	// 生成器持有的文件丢了也要按目录现有包名重建。
+	if err := os.Remove(filepath.Join(target, "internal", "service", "game", "framework_clients_gen.go")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SyncProject(target); err != nil {
+		t.Fatalf("sync an existing upper-case project: %v", err)
+	}
+	for service, want := range upper {
+		for file, got := range servicePackages(t, target, service) {
+			if got != want {
+				t.Errorf("existing project after sync: internal/service/%s/%s is package %s, want the directory's %s", service, file, got, want)
+			}
+		}
+	}
+	for path, before := range business {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Errorf("sync rewrote business file %s", path)
+		}
+	}
+}

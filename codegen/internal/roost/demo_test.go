@@ -620,7 +620,7 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"package " + safeIdent("arena"), `"arena-level-up-mail"`} {
+	for _, want := range []string{"package " + defaultServicePackage("arena"), `"arena-level-up-mail"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("level_up_mail.go lacks %q:\n%s", want, raw)
 		}
@@ -958,7 +958,7 @@ func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
 
 // 实际生成 Entity/DAO/PB/Sender，经过真实 TCP、NATS、Nest 和文件 WAL。
 // 投影记录器是测试存储，不把它记成真实 Mongo 或独立进程集群验收。
-const gateConsumerTest = `package Game
+const gateConsumerTest = `package game
 import (
  "context"
  "fmt"

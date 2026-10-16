@@ -47,6 +47,11 @@ type Manifest struct {
 	// rendering into an existing project. The deployment grace periods never
 	// go below it. Not part of roost.yaml.
 	configuredShutdown map[string]time.Duration
+
+	// servicePackages is the Go package name each internal/service/<name>/
+	// directory already uses, filled by withServicePackages when rendering
+	// into an existing project. Not part of roost.yaml.
+	servicePackages map[string]string
 }
 
 type ProjectSpec struct {

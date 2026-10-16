@@ -364,8 +364,8 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 		imports = append(imports, fmt.Sprintf("%q", frameworkDomainModule+"/"+spec.ImportPath()))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", safeIdent(name), spec.Package)
-	fmt.Fprintf(&b, "package %s\n\nimport (\n", safeIdent(name))
+	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", m.servicePackage(name), spec.Package)
+	fmt.Fprintf(&b, "package %s\n\nimport (\n", m.servicePackage(name))
 	for _, imp := range imports {
 		if imp == "" {
 			b.WriteString("\n")
@@ -418,7 +418,7 @@ func renderFrameworkClients(m Manifest, name string) string {
 	sort.Strings(used)
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\n")
-	fmt.Fprintf(&b, "package %s\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n", safeIdent(name))
+	fmt.Fprintf(&b, "package %s\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n", m.servicePackage(name))
 	for _, target := range used {
 		spec := frameworkCatalog[m.Services[target].Framework]
 		fmt.Fprintf(&b, "\tsvc%s %q\n", spec.Package, frameworkDomainModule+"/"+spec.ImportPath())
@@ -622,7 +622,7 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 func (*Service) Shutdown(context.Context) error  { return nil }
 
 var _ app.Service = (*Service)(nil)
-`, safeIdent(name), m.Project.Module+"/game/entities/world", m.Project.Module+"/game/lifecycle", name, name, name)
+`, m.servicePackage(name), m.Project.Module+"/game/entities/world", m.Project.Module+"/game/lifecycle", name, name, name)
 }
 
 // renderFrameworkServicesGuide documents the hosted framework services of this
@@ -666,7 +666,7 @@ func renderFrameworkServicesGuide(m Manifest) string {
 			spec := frameworkCatalog[m.Services[target].Framework]
 			fmt.Fprintf(&b, "- `%s(registry)` → `%s.%s`（%s.CapabilityName）\n", safeIdent(target), spec.Package, spec.Interface, spec.Package)
 		}
-		fmt.Fprintf(&b, "\n在 Service.Init 里取一次并保存：\n\n    svc, err := %s.Mail(registry)\n\n访问器在 capability 不存在时返回错误：说明对应进程没起、或者总线不通。\n\n", safeIdent(name))
+		fmt.Fprintf(&b, "\n在 Service.Init 里取一次并保存：\n\n    svc, err := %s.Mail(registry)\n\n访问器在 capability 不存在时返回错误：说明对应进程没起、或者总线不通。\n\n", m.servicePackage(name))
 	}
 	b.WriteString("## 本地运行顺序\n\n")
 	b.WriteString("    docker compose -f deploy/dev/docker-compose.yaml up -d\n    go build -o bin/app .\n")

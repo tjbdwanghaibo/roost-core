@@ -299,7 +299,7 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 // that generators may read. Codegen-owned output and dependency metadata are
 // excluded because they are independently guarded by syncChange.before.
 func snapshotProjectInputs(root string, manifest Manifest) (map[string][sha256.Size]byte, error) {
-	plan, err := renderProject(manifest)
+	plan, err := renderProject(manifest.withServicePackages(root))
 	if err != nil {
 		return nil, err
 	}

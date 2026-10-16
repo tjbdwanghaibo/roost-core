@@ -133,7 +133,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       Makefile
       Dockerfile
       internal/bootstrap/generated.go
-      internal/service/game/service.go
+      internal/service/game/service.go      # package game
       configs/service/
       configs/schema/
       configs/generated/
@@ -143,6 +143,11 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       db/def/
       deploy/dev/docker-compose.yaml
       .github/workflows/ci.yml
+
+`internal/service/<name>/` 的 Go 包名按 Go 惯例小写：服务名去掉 `_` / `-` 后全小写（`world_boss` → `worldboss`），
+是 Go 关键字时加后缀 `service`。已有工程沿用目录里现有的包名（以业务文件 service.go / managers.go /
+collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟随它，不改写业务文件；早先生成的
+`package Game` 工程因此保持大写、仍可编译，想改成小写时手工改该目录全部文件的 package 子句即可。
 
 ## 4. roost.yaml
 

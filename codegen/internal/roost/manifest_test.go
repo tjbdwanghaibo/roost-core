@@ -88,8 +88,9 @@ func TestBootstrapWiresManagerModPerService(t *testing.T) {
 // cannot live in the same directory.
 func TestServiceManagersHookMatchesServicePackageClause(t *testing.T) {
 	for _, name := range []string{"game", "world_boss"} {
-		service := renderService(name)
-		managers := renderServiceManagers(name)
+		var m Manifest
+		service := renderService(m.servicePackage(name), name)
+		managers := renderServiceManagers(m.servicePackage(name))
 		clause := func(source string) string {
 			line, _, _ := strings.Cut(source, "\n")
 			return line

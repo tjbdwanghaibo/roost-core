@@ -35,6 +35,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - **`-force`**：单生成器的 `-force` 跳过内容比较、无条件重写；`roost generate --force` 转发给每个支持它的生成器。tablegen 例外：它的输出是"已存在即拒绝覆盖"，编排层对 tablegen 总是传 `-force`；`--check` 内部不传 force。
 - **golden 测试**：`internal/genutil.AssertGolden` 加各生成器的 `testdata/golden/` 把完整生成物锁成字节级基线，片段断言看不见的模板漂移 golden diff 一定看得见；有意修改模板后用 `-update` 刷新（如 `go test ./codegen/internal/dao -run TestGoldenGeneratedOutput -update`）。
 - **配置声明快照**：生成器不导入运行时，Wiring Mod 的配置声明由 `wiring/internal/configschemagen` 快照成 [kitconfig_gen.go](../../../codegen/internal/roost/kitconfig_gen.go)。修改 Wiring 的配置声明后运行 `go generate ./codegen/internal/roost`，再跑 `TestKitConfigSchemasMatchKitDeclarations` 与 `TestDoctorReadsBusinessDeclarationsFromTheProcess`；遗漏快照会让配置检查与运行时声明不一致，doctor 还会把新增框架字段误计为业务字段。不能只测 Wiring 包或改业务字段数量断言来掩盖漂移。
+- **服务包名跟随目录**（D8，维护者 2026-10-16 决定 C）：`internal/service/<name>/` 里业务文件（service.go、managers.go、collaborators.go）与生成文件（framework_clients_gen.go）必须同一个包名。[service_package.go](../../../codegen/internal/roost/service_package.go) 的 `withServicePackages(root)` 在每次 render（sync / diff / generate 的提交计划）前读出目录现有包名，优先取不带生成头的业务文件；目录还不存在时用 `defaultServicePackage`：去掉 `_` / `-`、全小写，Go 关键字加后缀 `service`。新工程因此是 `package game`，老工程的 `package Game` 保持不变、不被改写，也不会出现双包名。回归 `TestServicePackageNamesAreLowercaseAndFollowAnExistingProject`。
 - **旧写法不迁移**：项目未上线，生成器对已退役写法（清单见[项目生成器 §4](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#4-roostyaml)）只点名拒绝并给出手工改法，不读取、不自动迁移、不静默忽略。
 
 ## 3. 并发、失败与恢复的修改检查

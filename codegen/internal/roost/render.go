@@ -132,7 +132,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
 			continue
 		}
-		if err := addGo("internal/service/"+name+"/service.go", renderService(name), false); err != nil {
+		if err := addGo("internal/service/"+name+"/service.go", renderService(m.servicePackage(name), name), false); err != nil {
 			return nil, err
 		}
 		if len(m.Services[name].Uses) > 0 {
@@ -142,7 +142,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 		serviceMods, _ := resolveMods(effectiveServiceMods(m, name))
 		if contains(serviceMods, "manager") {
-			if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(name), false); err != nil {
+			if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(m.servicePackage(name)), false); err != nil {
 				return nil, err
 			}
 		}
@@ -534,7 +534,7 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 	}
 }
 
-func renderService(name string) string {
+func renderService(pkg, name string) string {
 	return fmt.Sprintf(`package %s
 
 import (
@@ -552,7 +552,7 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 func (*Service) Shutdown(context.Context) error { return nil }
 
 var _ app.Service = (*Service)(nil)
-`, safeIdent(name), name)
+`, pkg, name)
 }
 
 // renderServiceManagers emits the business-owned manager list. It is created
@@ -560,7 +560,7 @@ var _ app.Service = (*Service)(nil)
 // service starts is a business decision, and ManagerMod only owns the
 // lifecycle. Ordering comes from each manager's DependsOn, so this list is
 // registration order, not start order.
-func renderServiceManagers(name string) string {
+func renderServiceManagers(pkg string) string {
 	return fmt.Sprintf(`package %s
 
 import "github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -577,7 +577,7 @@ func Managers() []app.IManager {
 		// mymgr.Mgr,
 	}
 }
-`, safeIdent(name))
+`, pkg)
 }
 
 // App 单实例锁（app.Singleton，见 framework/app/singleton.go）的生成规则。

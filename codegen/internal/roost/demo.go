@@ -38,7 +38,8 @@ type demoVars struct {
 func (vars demoVars) apply(body string) string {
 	body = strings.ReplaceAll(body, demoModulePlaceholder, vars.module)
 	body = strings.ReplaceAll(body, demoProjectPlaceholder, vars.project)
-	body = strings.ReplaceAll(body, demoGameServicePackagePlaceholder, safeIdent(vars.gameService))
+	// demo 只在 project new 时写出，目录是新建的：用新工程的小写包名（D8）。
+	body = strings.ReplaceAll(body, demoGameServicePackagePlaceholder, defaultServicePackage(vars.gameService))
 	return strings.ReplaceAll(body, demoGameServicePlaceholder, vars.gameService)
 }
 

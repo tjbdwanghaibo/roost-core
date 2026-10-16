@@ -11,7 +11,7 @@
 | D5 | 静态 Player 跨机迁移的参考流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 维护者 2026-10-16 决定折中方案，已实施（提交见本节） |
 | D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施 |
-| D8 | 生成的服务包名大写（`package Game`） | 待决定（2026-10-16 新用户试用登记） |
+| D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施 |
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 待决定（2026-10-16 新用户试用登记） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
@@ -131,7 +131,9 @@
 
 ## D8 生成的服务包名大写（`package Game`）
 
-**状态：待决定。** 登记：2026-10-16。
+**状态：维护者 2026-10-16 决定 C（新工程小写、已有工程按目录现有包名），已实施（提交见下）。** 登记：2026-10-16。
+
+**实施结果**：`codegen/internal/roost/service_package.go` 的 `withServicePackages(root)` 在 render 前读出每个 `internal/service/<name>/` 现有包名（优先业务文件），`renderService` / `renderServiceManagers` / `renderFrameworkCollaborators` / `renderFrameworkClients` / game 模板 Service 与 demo `{{GAME_SERVICE_PKG}}` 都用它；目录不存在时 `defaultServicePackage`（去 `_` / `-`、小写，关键字加 `service`）。game-demo 模板里的 `package Account` / `Chat` / `Platform` / `Session` 改成小写。业务文件不改写；老工程 sync 后仍是单一大写包名，可编译（用改动前的生成器造工程、再用新生成器 sync + generate + build/vet/test 实测）。
 
 **现状**：`internal/service/<name>/` 下生成的文件用 `safeIdent(name)` 作包名（`render.go` 的 `renderService` / `renderServiceManagers`、`framework_services.go`），game-demo 模板同样是 `package Account`、`{{GAME_SERVICE_PKG}}`。合法但不合 Go 包名惯例（小写），新手读到 `package Game` 会以为写错。
 

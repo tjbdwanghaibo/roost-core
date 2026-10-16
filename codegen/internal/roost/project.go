@@ -276,7 +276,7 @@ var syncProjectBeforeCommit func()
 // outputs, plus newly created Controller scaffolds. Existing application-owned
 // source is copied into staging for parsing and is never copied back implicitly.
 func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChange, error) {
-	plan, err := renderProject(manifest.withConfiguredShutdown(stage))
+	plan, err := renderProject(manifest.withConfiguredShutdown(stage).withServicePackages(stage))
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +537,7 @@ func verifySyncChangeCurrent(change syncChange) error {
 func planManifestSync(root string, manifest Manifest) (SyncResult, []syncChange, error) {
 	// The deployment grace periods follow the totals the project's configs
 	// actually set, so the render reads them from root.
-	plan, err := renderProject(manifest.withConfiguredShutdown(root))
+	plan, err := renderProject(manifest.withConfiguredShutdown(root).withServicePackages(root))
 	if err != nil {
 		return SyncResult{}, nil, err
 	}
