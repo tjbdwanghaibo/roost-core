@@ -88,6 +88,9 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 		Use:   st,
 		Short: fmt.Sprintf("Start %s server", st),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 走到这里说明命令行已解析成功，之后的失败是运行期错误：交给调用方（生成的 main 用结构化日志记录），
+			// 不再由 cobra 追加 Usage 帮助和第二份 "Error:" 文本。命令行写错仍在此之前失败，照常打印 Usage。
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
 			if print, _ := cmd.Flags().GetBool("print-config"); print {
 				return a.printConfig(serverType, cmd.OutOrStdout())
 			}

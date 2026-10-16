@@ -43,6 +43,34 @@ func TestAppReturnsServeError(t *testing.T) {
 	}
 }
 
+// 运行期失败（配置、Mod 启动、Serve）只把错误交给调用方：生成的 main 已经用结构化日志记录它，
+// cobra 不再追加 Usage 帮助和第二份 "Error:" 文本；命令行写错（未知 flag）仍然打印 Usage。
+func TestAppRuntimeFailurePrintsNoUsage(t *testing.T) {
+	a := newTestApp(t, &errService{})
+	var out strings.Builder
+	a.RootCmd().SetOut(&out)
+	a.RootCmd().SetErr(&out)
+	a.RootCmd().SetArgs([]string{"game"})
+	if err := a.Execute(); !errors.Is(err, errServeFailed) {
+		t.Fatalf("Execute err = %v, want %v", err, errServeFailed)
+	}
+	if text := out.String(); strings.Contains(text, "Usage:") || strings.Contains(text, "Error:") {
+		t.Fatalf("runtime failure wrote CLI help/error text:\n%s", text)
+	}
+
+	b := newTestApp(t, &errService{})
+	out.Reset()
+	b.RootCmd().SetOut(&out)
+	b.RootCmd().SetErr(&out)
+	b.RootCmd().SetArgs([]string{"game", "--no-such-flag"})
+	if err := b.Execute(); err == nil {
+		t.Fatal("unknown flag accepted")
+	}
+	if !strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("unknown flag printed no usage:\n%s", out.String())
+	}
+}
+
 func TestAppExplicitConfigPathFailsClosed(t *testing.T) {
 	a := newTestApp(t, &errService{})
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
