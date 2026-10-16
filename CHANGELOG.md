@@ -22,6 +22,7 @@
 - **服务进程运行期失败不再打印 CLI Usage。** 命令行解析成功后，配置、Mod 启动或 Serve 的错误只返回给调用方（生成的 main 用结构化日志记录一次）；修前 cobra 在 JSON 日志后面再追加一份 `Error:` 和整段 `Usage:` 帮助，像是命令写错了。未知 flag 等命令行错误照常打印 Usage。回归 `TestAppRuntimeFailurePrintsNoUsage`。
 - **玩家 TCP 被每连接限流断开时留一条 Debug 日志。** 客户端只看到 EOF，修前服务端只有 `player_tcp_rate_limited_total` 计数，按玩家查不到原因；现在断开前记 `player tcp rate limit exceeded, closing connection`（`player_id`、`sequence`、`request_rate`、`request_burst`）。与坏帧、认证失败一致不升到 Warn，客户端造成的断开不能刷日志。见 [OBSERVABILITY](docs/framework/OBSERVABILITY.md)，回归 `TestPerConnectionTokenBucketIncludesHeartbeats`。
 - **`roost config check` 与 doctor 一样查出拼错的配置键。** 修前它只要求合法 YAML、sid 与生产禁用值，`mongo.urii` 这类拼错报 "config is valid"，进程启动时静默退回默认地址（运行时 `--check-config` 也不查未声明键，那由 doctor 负责）。现在 `--service`、`--file`（按 `config.<service>[.<变体>].yaml` 认出服务）、`--all` 都按该服务全部 Mod 的声明检查值与键；框架段里的可疑键先编译一次进程、按业务服务自己的声明复核，不误报。业务独有段的拼写仍只由 doctor 查。见 [生成器参考 §14](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#14-配置格式和生产门禁)，回归 `TestConfigCheckRejectsMisspelledFrameworkKeys`、`TestConfigFileDeclarationsAcceptBusinessKeysInFrameworkSections`。
+- **auth.go 骨架写明认证器读配置的正式写法。** 骨架把 `*viper.Viper` 交给 `newApplicationAuthenticator`、TODO 让人“从配置读”，照做直接 `cfg.GetBool` 会被 doctor 的 config-reads 拒绝。现在 TODO 与 [Player TCP 接入 §3](codegen/docs/PLAYER_ACCESS_TCP.zh-CN.md#3-鉴权) 说明：键放在带 `config` tag 的结构体上、由接入玩家的服务 `ConfigSchema` 声明、用 `app.LoadConfig` 读。只改新生成的骨架与文档，已生成的 auth.go 归业务、不改写。
 
 ### game-demo 背包数量与学习文档
 

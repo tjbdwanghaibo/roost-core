@@ -36,6 +36,14 @@ type applicationAuthenticator struct{}
 func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
 	// TODO: load a verifier/key reference from config or Secret storage and
 	// return an authenticator with all immutable dependencies initialized.
+	//
+	// Config the authenticator reads is declared, not read ad hoc: put the keys
+	// on a struct with config tags, declare it on the service that owns player
+	// access (internal/service/<service>/service.go:
+	//   func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(tcp.AuthConfig{}) }),
+	// and read it here with app.LoadConfig(cfg, &settings). Reading cfg.GetString
+	// and friends directly fails roost project doctor (config-reads), and an
+	// undeclared key is reported as a misspelling by roost config check.
 	return applicationAuthenticator{}, nil
 }
 

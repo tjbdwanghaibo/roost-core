@@ -67,6 +67,25 @@ roost add transport tcp
 `PlayerID` 与非空 `SessionID`。不要接受客户端自报 PlayerID，不要把长期签名密钥写进仓库、镜像或
 `roost.yaml`。生产环境从 Secret/KMS 注入密钥，并在 LB/sidecar 终止 TLS，或仅在受保护内网开放端口。
 
+认证器要读的配置（密钥引用、开关）按声明读：在 `auth.go` 里定义带 `config:"..."` tag 的结构体，由接入玩家的服务声明
+（`internal/service/<service>/service.go` 加 `func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(tcp.AuthConfig{}) }`），
+`newApplicationAuthenticator` 里用 `app.LoadConfig(cfg, &settings)` 读。直接 `cfg.GetString(...)` 会被 doctor 的 config-reads
+拒绝，没声明的键会被 `roost config check` 当成拼错。
+
+```go
+type AuthConfig struct {
+	KeyRef string `config:"player_access.tcp.auth_key_ref" help:"签名公钥的 Secret 引用"`
+}
+
+func newApplicationAuthenticator(cfg *viper.Viper) (Authenticator, error) {
+	var settings AuthConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return nil, err
+	}
+	// 按 settings.KeyRef 取密钥，构造不可变的校验器
+}
+```
+
 同一 SessionID 再次登录时，新连接替换旧连接；同一玩家可以同时保留多个不同 SessionID。Principal
 的 Claims 在 transport 内复制，业务拿到的 map 不能反向修改会话身份。
 
