@@ -413,18 +413,39 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// 键的声明检查要知道服务；读不到 roost.yaml（单独检查一份文件）时只做基础检查并说明。
+	manifest, manifestErr := LoadManifest(root)
+	// 业务声明按需编译一次进程读回（只在静态检查发现可疑键时），与 doctor 同一入口。
+	process, cleanup := processConfigSchemas(context.Background(), root)
+	defer cleanup()
+	check := func(path, name string) error {
+		if err := CheckConfig(path, *production); err != nil {
+			return err
+		}
+		if manifestErr != nil || name == "" {
+			fmt.Fprintf(stdout, "keys not checked against declarations: %s (pass --service, or run in a project with roost.yaml)\n", filepath.ToSlash(path))
+			return nil
+		}
+		problems, err := checkConfigFileDeclarations(path, *production, manifest, name, process)
+		if err != nil {
+			return err
+		}
+		if len(problems) > 0 {
+			return errors.New(strings.Join(problems, "; "))
+		}
+		return nil
+	}
 	if *all {
 		if *service != "" || *file != "" {
 			return errors.New("--all cannot be combined with --service or --file")
 		}
-		manifest, loadErr := LoadManifest(root)
-		if loadErr != nil {
-			return loadErr
+		if manifestErr != nil {
+			return manifestErr
 		}
 		var joined error
 		for _, name := range sortedServiceNames(manifest) {
 			path := filepath.Join(root, "configs", "service", "config."+name+".yaml")
-			if checkErr := CheckConfig(path, *production); checkErr != nil {
+			if checkErr := check(path, name); checkErr != nil {
 				joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, checkErr))
 				continue
 			}
@@ -432,20 +453,40 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		}
 		return joined
 	}
-	path := *file
+	path, name := *file, *service
 	if path == "" {
-		if *service == "" {
+		if name == "" {
 			return errors.New("--service or --file is required")
 		}
-		path = filepath.Join(root, "configs", "service", "config."+*service+".yaml")
-	} else if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
+		path = filepath.Join(root, "configs", "service", "config."+name+".yaml")
+	} else {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		if name == "" && manifestErr == nil {
+			name = configFileService(manifest, path)
+		}
 	}
-	if err := CheckConfig(path, *production); err != nil {
+	if err := check(path, name); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "config is valid: %s\n", path)
 	return nil
+}
+
+// configFileService 按生成的命名 config.<service>.yaml / config.<service>.<变体>.yaml 认出文件属于哪个服务；
+// 认不出（或不是 roost.yaml 里的服务）返回空，调用方要求 --service。
+func configFileService(m Manifest, path string) string {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	rest, ok := strings.CutPrefix(base, "config.")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, ".")
+	if _, declared := m.Services[name]; !declared {
+		return ""
+	}
+	return name
 }
 
 func runID(args []string, stdout, stderr io.Writer) error {

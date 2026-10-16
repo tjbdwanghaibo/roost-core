@@ -241,6 +241,33 @@ func checkConfigDeclarations(root string, m Manifest, process serviceSchemaSourc
 	return items
 }
 
+// checkConfigFileDeclarations 是 `roost config check` 的声明检查，与 doctor 的 config-schema 用同一份框架声明：
+// 值不合声明、框架段里没有任何声明的键（多半拼错）都是失败。先只按框架声明静态检查，不编译工程；只有发现
+// 框架段里的未声明键时才向 process 要这个服务的进程声明复核——业务服务自己声明、写在框架段里的键不算拼错。
+// process 失败（工程编译不过等）时照样报出静态发现，并写明业务声明没读到。业务独有段（框架没有的顶层段）里的
+// 拼写只有读到进程声明才查得出，那是 doctor 的范围。
+func checkConfigFileDeclarations(path string, production bool, m Manifest, service string, process serviceSchemaSource) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	schema, err := serviceConfigSchema(m, service)
+	if err != nil {
+		return nil, err
+	}
+	all := allFrameworkConfigSchema()
+	bad, _, err := checkServiceConfigText(raw, false, production, schema, configschema.Schema{}, all)
+	if err != nil || len(bad) == 0 || process == nil {
+		return bad, err
+	}
+	declared, err := process(service)
+	if err != nil {
+		return append(bad, "the service's own declarations were not read, so keys it declares may be reported above: "+err.Error()), nil
+	}
+	bad, _, err = checkServiceConfigText(raw, false, production, schema, businessDeclarations(declared, schema), all)
+	return bad, err
+}
+
 // checkServiceConfigText 检查一份配置：bad 是失败项（值不合框架或业务声明、框架段或业务段里没有声明的键），unread 是
 // 有框架声明、但本服务的进程里没有任何声明的键。business 是本服务的业务声明（可以为空）。secret 为 true 时 raw 是
 // k8s Secret 示例，检查它 stringData 里的 config.yaml。

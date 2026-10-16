@@ -664,9 +664,11 @@ roost format check
 ```
 
 `add transport tcp` 会增量补齐开发与生产示例中的 player_access.tcp 默认项，并保持其他 YAML 文本；
-`enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。production 静态
-检查会解析 YAML、要求 sid，并拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施
-拓扑探测和故障演练。
+`enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。`check` 解析 YAML、
+要求 sid，并与 doctor 的 config-schema 用同一份声明检查值与键：框架段里没有任何声明的键（多半拼错，例如
+`mongo.urii`）报错；静态检查发现可疑键时编译一次进程读回业务服务自己的声明复核（`checkConfigFileDeclarations`），
+业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。
+production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
 
 ## 15. 独立生成器参数速查
 

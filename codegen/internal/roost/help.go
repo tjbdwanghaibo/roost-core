@@ -333,7 +333,7 @@ roost project sync`,
 roost config check --all [--production] [--root dir]
 roost config enable player-tcp [--service <name>] [--file path]
 roost config disable player-tcp [--service <name>] [--file path]`,
-		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，--production 还拒绝危险默认值。`,
+		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，并按本服务全部 Mod 的声明检查值与键：框架段里没有声明的键（多半拼错）报错，可疑键先按编译出的进程里业务服务自己的声明复核；--file 按 config.<service>[.<变体>].yaml 认出服务，认不出时加 --service。--production 还拒绝危险默认值。业务独有段的拼写由 roost project doctor 检查。`,
 		Example: `roost config check --all
 roost config check --service game
 roost config enable player-tcp --service game

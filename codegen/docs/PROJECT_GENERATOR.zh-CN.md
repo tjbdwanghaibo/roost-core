@@ -406,7 +406,7 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
     roost config check -service game
     roost config check -file configs/service/config.game.prod.yaml -production
 
-production 检查拒绝 CHANGE_ME、localhost、127.0.0.1 和 dev token。真实密码、证书、UDP/KCP 密钥不得提交到仓库。
+两条都按该服务全部 Mod 的声明检查值与键：框架段（mongo、nats、nest、player_access 等）里没有任何声明的键多半是拼错了，检查失败并点名（例如 `mongo.urii`）；业务服务自己声明、写在框架段里的键会先编译进程读回声明复核，不算拼错。`-file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `-service`。业务独有段的拼写由 `roost project doctor` 检查。production 检查另外拒绝 CHANGE_ME、localhost、127.0.0.1 和 dev token。真实密码、证书、UDP/KCP 密钥不得提交到仓库。
 
 ## 11. 启动和本地依赖
 

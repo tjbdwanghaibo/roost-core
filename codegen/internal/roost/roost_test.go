@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -272,6 +273,77 @@ func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
 	}
 	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") {
 		t.Fatalf("invalid secondary service config was not reported: %v", err)
+	}
+}
+
+// config check 与 doctor 用同一份框架声明查配置键：框架段里没人声明的键（多半拼错）让检查失败，
+// --service、--file（按文件名认出服务）与 --all 三种入口一致；修前 config check 只看 sid 与生产禁用值，
+// 拼错的 mongo.urii 报 "config is valid"，进程启动时静默退回默认地址。
+func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--service", "game"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("generated config rejected: %v", err)
+	}
+	misspelled := strings.Replace(string(raw), "\nmongo:\n", "\nmongo:\n  urii: mongodb://127.0.0.1:27017\n", 1)
+	if misspelled == string(raw) {
+		t.Fatal("generated config has no mongo section")
+	}
+	if err := os.WriteFile(path, []byte(misspelled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"config", "check", "--root", root, "--service", "game"},
+		{"config", "check", "--root", root, "--file", "configs/service/config.game.yaml"},
+		{"config", "check", "--root", root, "--all"},
+	} {
+		err := Run(args, io.Discard, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "mongo.urii") {
+			t.Errorf("%v: err = %v, want the misspelled mongo.urii reported", args[len(args)-2:], err)
+		}
+	}
+}
+
+// 框架段里由业务服务声明的键（例如认证器读的 player_access.tcp.dev_auth）不算拼错：静态检查发现可疑键后
+// 按进程的业务声明复核。
+func TestConfigFileDeclarationsAcceptBusinessKeysInFrameworkSections(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	business := strings.Replace(string(raw), "\nmongo:\n", "\nmongo:\n  shop_region: cn\n", 1)
+	if business == string(raw) {
+		t.Fatal("generated config has no mongo section")
+	}
+	if err := os.WriteFile(path, []byte(business), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	process := func(service string) (configschema.Schema, error) {
+		asked++
+		return configschema.Schema{Keys: []configschema.Key{{Name: "mongo.shop_region", Kind: configschema.KindString}}}, nil
+	}
+	problems, err := checkConfigFileDeclarations(path, false, manifest, "game", process)
+	if err != nil || len(problems) != 0 || asked != 1 {
+		t.Fatalf("business key: problems=%v err=%v process asked %d times, want none / nil / 1", problems, err, asked)
 	}
 }
 
