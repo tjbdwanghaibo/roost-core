@@ -10,8 +10,10 @@ import (
 )
 
 // TCPSender将Match两条发送通道接到生成Runtime.PushLockstepSession。
-// TCP有队头阻塞；push 进入该连接不合并、不丢帧的有界有序出站队列，返回 nil 只表示已准入，
-// 停读连接队满即被关闭，不会拖住同一 Tick 里其他接收者的发送。
+// TCP有队头阻塞；push 进入该连接的有界有序出站队列，连接存活期间不合并、不丢帧（连接关闭时丢弃队列剩余帧），
+// 返回 nil 只表示已准入；停读连接队满即被关闭，不会拖住同一 Tick 里其他接收者的发送。
+// 准入不等 socket，追帧页因此不再随慢链路放慢，CatchupSendTimeout / CatchupMaxFailures 对本发送器基本不生效，
+// 见 docs/maintenance/KNOWN-LIMITS.md（lockstep TCP 追帧失去背压限速，尚未确认）。
 // Resolve必须并发安全：可靠追帧页由Match后台发送；会话ID不得跨连接生命周期复用。
 // 比赛Tick驱动须在业务 worker/Entity锁之外；业务 worker发送会在副作用前明确拒绝。
 type TCPSender struct {

@@ -143,6 +143,12 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 保留窗口越短越省内存，也越容易让慢追帧失效：断线时长的分布与 `lockstep.catchup.unservable.total` 一起决定是否要调大窗口。本机已验证一小时逻辑帧、默认窗口下的长局有界和滚动追帧；这不是一小时真实网络运行或跨引擎确定性的证明，测量见[优化说明](../SYNC-OPTIMIZATION.md)。
 
+### 经嵌入 TCP 追帧：没有链路背压
+
+追帧页由 Match 在后台协程逐页发送，每会话同时最多一页在途；`CatchupSendTimeout`（默认 2s）限制一页的发送时长，超时与其他发送失败一起计入 `CatchupMaxFailures`（默认连续 8 次放弃）。这套限速依赖可靠通道在链路慢时让发送变慢——KCP / QUIC 的窗口满了发送就阻塞。
+
+`lockstep.TCPSender`（嵌入 TCP 的 `PushLockstepSession`）自 2026-10-16 起只做该连接出站队列的准入，几乎立即返回（[GATEWAY §4](../GATEWAY.md#嵌入-tcp-的出站)）。因此对 TCP 发送器：页面不论链路快慢都按每 Tick 一页（`CatchupBatchFrames`，默认 32 帧）进入队列；`CatchupSendTimeout` 实际不会触发；`CatchupMaxFailures` 只数准入失败（连接已关闭、会话已解析不到、页超过包上限），慢链路本身不计入。链路跟不上时积压留在连接出站队列里，超过字节上限（默认约 2 MiB）连接被关闭，客户端重连后重新追帧。这一行为尚未实测、是否需要恢复限速尚未确认，触发条件估算与可能的处理方向见 [KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)（“Lockstep TCP 追帧限速”）。
+
 ## 7. 公共客户端协议
 
 RS v2 的 16 字节头保留 MsgID、Seq、PayloadSize；Flags bit0 是 push，bits1..2 区分 PB=0、Sync=1、Lockstep=2，值3及保留位拒绝。Lockstep 上行 flags=4，push=5。MsgID 0 的心跳不能携带业务类型标记。

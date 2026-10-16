@@ -124,6 +124,8 @@ type MatchConfig struct {
 	// (<= 0 selects DefaultCatchupSendTimeout). A send still blocked past
 	// it — a peer that stopped acknowledging, a full KCP window — fails and
 	// counts toward CatchupMaxFailures.
+	// 对 TCPSender 基本不生效：嵌入 TCP 的发送只做出站队列准入、立即返回，慢链路不会让页面发送超时，
+	// 而是积压到出站上限后连接被关闭（之后的发送失败才计入 CatchupMaxFailures），见 TCPSender 与 KNOWN-LIMITS。
 	CatchupSendTimeout time.Duration
 	// CatchupSendWait is how long Tick waits for the pages it launched in
 	// this tick (<= 0 selects DefaultCatchupSendWait). Pages are sent off
