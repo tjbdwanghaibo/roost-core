@@ -24,6 +24,12 @@ entitysync 维护 subject、session、subscription、profile 与每会话帧；p
 
 PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确定顺序选择视图。视图必须限制字段可见范围，不能因空视图或缓存复用扩大权限。快照预算限制尚未持有对象的冷创建；增量、remove 和已持有对象的全量不能被当成同一种冷创建计费。
 
+### 玩家只看自己：自身视图
+
+最常见的需求是“客户端收到自己的金币、道具变化”。生成工程在 `roost.yaml` 的 `access.player` 上写 `self_sync: true`（默认关），生成器把 Nest Mod 换成 `NewModWithEntitySync` 并装上 `wiring/selfsync`；Player Entity 需要 `sync=true` 与认识视图 `self` 的 packer，没写时 `roost project sync` / `generate` / `doctor` 报出要改的文件与写法。步骤、生成物与客户端解码见 [PLAYER-ACCESS §7](../PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)。
+
+行为：鉴权 ACK 之后登记连接，下一个 tick 开会话、绑定 player→自己（`policy.Direct`，视图 `self`），第一帧全量，之后提交的变化是增量；实体还不在内存时等它出现；断线重连、同一玩家的新连接都从全量开始，全部连接断开后关会话、注销 subject。生命周期全部在 core 的 [`policy.SelfView`](../../../framework/sync/entitysync/policy/self_view.go)：回调只记事实，Flush 的政策阶段一次对齐，所以登录、断线、顶号与 Flush 的交错不需要业务处理。多人视图（附近的人、队友）仍用下面的 Interest。
+
 ### 好友、队伍等关系如何更新
 
 关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用 v1.26.0 新增的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。

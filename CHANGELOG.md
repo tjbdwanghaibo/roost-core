@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Sync：玩家看自己的状态（DESIGN-TODO D6，维护者 2026-10-16 决定折中方案）
+
+- **新增 `framework/sync/entitysync/policy.SelfView`**：每个在线玩家只看到自己的实体（`policy.Direct` 绑定 player→自己，视图固定 `policy.SelfProfile` = `self`）。`Activate` / `Deactivate`（一条连接激活 / 关闭）、`SessionLost`（接 `ManagerConfig.SessionLost`）、`EntityLoaded` 只记事实、不阻塞，可在业务池调用；Flush 的政策阶段按净事实开 / 重置 / 关会话、登记 / 注销玩家实体、绑定。断线重连与同一玩家的新连接从全量开始，旧连接关闭不带走新连接的视图；实体不在内存时等它出现；卸载撤回沿用 Direct 的重新提交，会话丢失在玩家仍在线时重开（每次激活至多 8 次）。`policy.Direct` 增加同包内的绑定删除通知，公开行为不变。回归 `self_view_test.go`，修前用“回调里立即开 / 关会话”的写法跑同一组用例，5 组变红（顶号 `player 7 received nothing, want a full snapshot of itself`、并发登录断线 `sessions=0 subjects=0 subscriptions=0 online=0, want 8 each` 等）。
+- **新增 `wiring/selfsync`**：把 `gateway.PlayerRuntime.PushSyncPlayer` 包成 `entitysync.Transport`（只准入不等写出；接入层未就绪时整轮重试），嵌入 TCP 用 `TCPHandshake.AfterACK` / `Closed`、独立 Gate 用 Game Ingress 的 `OnActive` / `OnClosed` 登记连接，`EntitySyncSetup()` 交给 `wiring/nest.NewModWithEntitySync`。首个全量排在鉴权 ACK 之后（`TestSelfSyncFirstSnapshotFollowsTheLoginACK` 把 Flush 挤进握手回调连跑 20 轮）。Go 客户端解码示例 `example_client_test.go`。
+- **`wiring/nest.EntitySyncSetup` 新增可选 `Attach`、`EntityLoaded`**：Manager 创建后安装政策（detach 在 Manager 关闭后调用）、DataEngine 加载实体后通知；不设置时行为不变。
+- **生成器：`roost.yaml` 的 `access.player.self_sync: true`（默认关）**。开启时 `internal/bootstrap/generated.go` 生成 `PlayerSelfSync` 并改用 `kitnest.NewModWithEntitySync(EntityAccess, PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(PlayerSelfSync)`；`server_gen.go` 生成 `Mod.WithSelfSync` / `IngressMod.WithSelfSync`；缺失时创建业务文件 `protocol/def/self_sync.go`（推送 `SelfSync()`，id 取协议组上限）。需要 tcp 传输与 entity feature；Player 未声明 `sync=true` / `subjectPacker` 时 `project sync`、`generate` 与 doctor 的 `self-sync` 项逐条给出改法（packer 要认识视图 `self`、DAO 字段 `dao:"persist,sync"`、改完 `MarkSyncDirty`）。开关关闭时生成物与之前逐字节相同。用法见 [PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)；C# 解码样例本轮不做。
+- 限制：同一个 Player 不能同时被 self_sync 与自建 Manager（game-demo 场景）登记；self_sync 生成物需要下一个 core 发布；其余见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)“自身视图（self_sync）”。
+
 ### game-demo 领奖账本：清理后晚到的旧请求不再重复发奖
 
 - **邮件附件**：邮件服务只拒绝过期后的新预留，挡不住过期前取得、晚到 Nest 的旧请求；账本按 `ExpiresAtUnix` 清理之后，这种请求（典型是 `CommitClaim` 丢失后的重放）找不到记录，就发第二叠。修前在生成工程上 `TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned` 红为 `expired in-flight replay granted: {Claimed:true BagCount:3}; bag=3`。现在 `handlerClaimMailReward` 在持有 Player 锁后、任何 DAO 写入前按执行时间判过期（`executionNowUnix`：调用方时间与重新读的进程业务时钟取较大值；`rewards.ClaimWindowClosed`，与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`service/mail` 的 `ErrExpired`，590106）。

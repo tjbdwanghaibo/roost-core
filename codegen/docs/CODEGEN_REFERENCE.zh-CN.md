@@ -173,6 +173,19 @@ endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使
 `docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
 `docs/PLAYER_ACCESS_TCP.zh-CN.md`。
 
+**玩家看自己的状态（`access.player.self_sync: true`）**：没有 add 命令，直接在 roost.yaml 的 `access.player`
+下写 `self_sync: true`，再 `roost project sync`、`roost generate`。生成器改写的只有生成器所有的文件——
+`internal/bootstrap/generated.go`（`PlayerSelfSync` 变量、`kitnest.NewModWithEntitySync(EntityAccess,
+PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(PlayerSelfSync)`）与
+`internal/access/player/tcp/server_gen.go`（`Mod.WithSelfSync` / `IngressMod.WithSelfSync`）；推送编号
+`protocol/def/self_sync.go`（`SelfSync()`，取所在协议组上限的 id）是业务文件，只在缺失时创建。前置检查
+（`project sync`、`generate`、`doctor` 的 `self-sync` 项）要求：access.player 有 tcp 传输、features 含 entity、
+`game/entities/player/entity.go` 的 `//roost:entity` 带 `sync=true` 与 `subjectPacker`，并且推送编号文件存在；
+不满足时逐条写出要改的文件与写法（packer 要认识视图 `self`，DAO 字段 `dao:"persist,sync"`，改完调
+`MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`）。关闭开关后再 sync，两份生成文件恢复原样，不引用
+`wiring/selfsync`。运行时契约与客户端解码见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)；
+回归 `codegen/internal/roost/self_sync_test.go`（按新手流程搭工程、打开开关、经生成接线跑真实 TCP）。
+
 ## 4. DAO 生成器
 
 命令（`roost generate` 的 dao 步骤等价于它；`roost add dao <name> --entity <entity>` 生成初始骨架）：

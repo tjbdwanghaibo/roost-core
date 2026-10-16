@@ -40,6 +40,18 @@
 
 `SubjectSyncState.HoldSyncPublication`阻止内容越过尚未应用的政策事实；它只约束PrepareViews，不改变提交确认条件、不阻止锁内冻结。事实应用、丢弃、退出与关闭都必须释放，不能只在成功路径释放。
 
+## 2C. 自身视图（SelfView）的生命周期
+
+[self_view.go](../../../framework/sync/entitysync/policy/self_view.go) 是“玩家看自己状态”的唯一生命周期实现（DESIGN-TODO D6，维护者 2026-10-16 决定折中方案）；传输接线在 [wiring/selfsync](../../../wiring/selfsync/selfsync.go)，生成器只写调用（`access.player.self_sync`）。不变量与强制点：
+
+- **回调只记事实**：`Activate` / `Deactivate` / `SessionLost` / `EntityLoaded` 只在 `SelfView.mu` 下改连接集合与标志、把玩家放进 pending，锁内不调用 Manager / Direct，不等待——可以在连接协程、Gate 控制协程、业务池（`EntityLoaded` 来自 DataEngine 的加载回调）里调用；不开 goroutine，不起定时器。
+- **对齐只在政策阶段**：`apply` 由 `RegisterPolicy` 装在 Flush 开头（flushGate 串行），按玩家此刻的**净事实**对齐：有连接 → 会话已开（新连接到来则 `HoldSession` + `ReadySession`，新 epoch 全量）→ 内存里有实体就 `Register` → `Direct.Bind(player, subject, SelfProfile)`；没有连接 → `CloseSession` 再 `Unregister`。登录 / 断线 / 顶号 / 关闭与 Flush 的任意交错只影响事实的最终值，不会出现旧连接的关闭拆掉新连接的视图（`TestSelfViewReplacedConnectionKeepsTheView`、`TestSelfViewLoginAndDisconnectRace`）。
+- **waiting**：在线但实体不在内存（首登新建、未加载）、或登记 / 绑定被拒的玩家，每个政策阶段复查一次（一次 `EntityManager.Get`，只读内存）。加载有 `EntityLoaded` 加速，新建靠复查（`TestSelfViewWaitsForTheEntityToAppear`）。拒绝原因只在变化时记日志。
+- **框架撤销沿用 Direct**：卸载后重载不了退回 remove 时 Direct 保留绑定，实体再次加载、`Register` 之后由 Direct 重新提交（`TestSelfViewUnloadRetractionIsResubmitted`）；会话被关闭 / 丢掉、subject 被注销（事务内新建回滚）时 Direct 删除绑定并经同包的 `forgotten` 通知 SelfView 重新 Bind（`TestSelfViewRolledBackCreateIsBoundAgain`）。
+- **SessionLost**：Manager 因推送失败丢会话时，玩家仍有连接就在下一个政策阶段重开（新 lifetime，全量）；同一次激活以来最多重开 `selfMaxReopens`=8 次，新激活清零（`TestSelfViewReopensALostSession`）。不在 SessionLost 里唤醒立即重试，给独立 Gate 完成激活、或关闭通知到达留出一个 tick。
+- **首个全量在登录回包之后**：嵌入 TCP 的激活在 `TCPHandshake.AfterACK`（ACK 已同步写出、连接已登记）里，推送进同一条 FIFO 出站队列；独立 Gate 是 Bind → ACK → Activate。`wiring/selfsync` 的 `TestSelfSyncFirstSnapshotFollowsTheLoginACK` 把一次 Flush 挤进握手回调里连跑 20 轮，客户端仍先读到 ACK。
+- **所有权**：SelfView 拥有其 Manager 里玩家实体这类 subject 的登记；同一个 `SubjectSyncState` 只能登记在一个 Manager（脏通知器只有一个），另有 Manager 登记同一 Player 时互相覆盖，当前没有守卫（KNOWN-LIMITS）。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -93,13 +105,14 @@
 
 ### sync/entitysync/policy
 
-8 个实现文件、6 个测试文件。
+12 个实现文件、7 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [aoi.go](../../../framework/sync/entitysync/policy/aoi.go) | `InterestEventKind`、`InterestEvent`、`AOIConfig`、`AOI` |
 | [aoi_cluster.go](../../../framework/sync/entitysync/policy/aoi_cluster.go) | `AreaID`、`AOICluster` |
 | [direct.go](../../../framework/sync/entitysync/policy/direct.go) | `Direct` |
+| [self_view.go](../../../framework/sync/entitysync/policy/self_view.go) | `SelfProfile`、`SelfViewConfig`、`SelfView` |
 | [group.go](../../../framework/sync/entitysync/policy/group.go) | `GroupConfig`、`Group` |
 | [interest.go](../../../framework/sync/entitysync/policy/interest.go) | `InterestConfig`、`Refusal`、`Interest` |
 | [interest_queue.go](../../../framework/sync/entitysync/policy/interest_queue.go) | 函数/方法或内部实现；见源码 |
@@ -232,6 +245,7 @@
 - [interest_test.go](../../../framework/sync/entitysync/policy/interest_test.go)：`TestObservedBlocksKeepOnePositionAndSubscription`、`TestSpatialAndBlockHandoverDoesNotRecreateBaseline`、`TestCoverageCommitRollbackRejectAndLifetime`、`TestCoverageLateObserverBudgetAndVisibilityLimit`、`TestFactAdmissionDoesNotWaitForPolicyLock`；其余 16 项见文件
 - [policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go)：`TestEnteringSubscribesToYourself`、`TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary`、`TestARelationKeepsASubscriptionDistanceDropped`、`TestLeavingReleasesBothDirections`、`TestARefusedSubscribeIsSaidAgainUntilItIsTaken`；其余 13 项见文件
 - [relation_index_test.go](../../../framework/sync/entitysync/policy/relation_index_test.go)：`TestRelationDeltaMatchesFullReplacement`、`TestRelationForgetAfterReplacementClearAndReadd`、`TestRelationSetMatchesMembershipModel`、`TestRelationSetWorkspaceConcurrentLifecycle`
+- [self_view_test.go](../../../framework/sync/entitysync/policy/self_view_test.go)：`TestSelfViewSendsAFullSnapshotThenDeltas`、`TestSelfViewWaitsForTheEntityToAppear`、`TestSelfViewReconnectGetsAFullSnapshot`、`TestSelfViewReplacedConnectionKeepsTheView`、`TestSelfViewReopensALostSession`、`TestSelfViewUnloadRetractionIsResubmitted`、`TestSelfViewRolledBackCreateIsBoundAgain`、`TestSelfViewCloseDuringFlush`、`TestSelfViewLoginAndDisconnectRace`、`TestNewSelfViewRefusesAnIncompleteConfig`
 - [resubmit_test.go](../../../framework/sync/entitysync/policy/resubmit_test.go)：`TestInterestResubmitsASubscriptionTheFrameworkRetracted`、`TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway`、`TestEachPolicyResubmitsItsOwnRetractedSubscription`、`TestGroupAndDirectResubmitAfterRetraction`、`TestGroupResubmitsAfterASecondRetractionBeforeDelivery`；其余 5 项见文件
 
 ### sync/frame

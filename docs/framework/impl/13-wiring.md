@@ -38,6 +38,7 @@ Service 与基础设施 Mod 共用这些生命周期规则。领域 Server/run �
 | --- | --- | --- |
 | [领域服务](../../../wiring/SERVICES.md) | [service](../../../service) | 本地 Mod、远端 ClientMod、进程初始化和启停委托 |
 | [nest](../../../wiring/nest) | [framework/nest](../../../framework/nest) | EntityAccess、执行器、配置与生命周期 |
+| [selfsync](../../../wiring/selfsync) | [framework/sync/entitysync/policy.SelfView](../../../framework/sync/entitysync/policy/self_view.go) | 玩家看自己状态：PushSyncPlayer 包成 Transport、嵌入 TCP 握手钩子 / Game Ingress 回调转成连接激活与关闭、经 `EntitySyncSetup.Attach` 装到 Nest Mod 的 Manager |
 | [dataengine](../../../wiring/dataengine) | [framework/dataengine](../../../framework/dataengine) | WAL、恢复、投影、持久依赖 |
 | [remoteentity](../../../wiring/remoteentity) | [framework/remoteentity](../../../framework/remoteentity) | 权威存储、总线、Mirror |
 | [ops](../../../wiring/ops) | [infra/observe/ops](../../../infra/observe/ops) | 管理命令、探针、统计查找与身份 |
@@ -49,6 +50,9 @@ Ops 的 HTTP handler、监听与 drain 由 runtime Server 持有；Wiring 使用
 ```sh
 GOWORK=off go test ./wiring/... ./service/... ./infra/observe/ops ./framework/statslog
 GOWORK=off go test -race ./wiring/ops ./wiring/statslog ./infra/observe/ops ./framework/statslog
+GOWORK=off go test -race ./wiring/selfsync ./wiring/nest ./framework/sync/entitysync/policy
 ```
+
+`wiring/nest.EntitySyncSetup` 的两个可选钩子：`Attach(manager) (detach, error)` 在 Init 里 Manager 创建之后调用一次（失败则关闭 Manager、Init 失败），detach 在 Mod 停止、Manager 关闭之后调用；`EntityLoaded` 在 DataEngine 发布从权威加载的实体之后、Mod 自己的 Rebind 之后调用（业务池上，不得阻塞）。`wiring/selfsync` 是唯一使用者：Attach 安装 `policy.SelfView`，EntityLoaded 把玩家实体的加载转成 `SelfView.EntityLoaded`。同一个 `SelfSync` 只能装到一个 Mod（第二次 Attach 报错）。回归：`wiring/selfsync/selfsync_test.go`（真实 gateway TCP：全量→增量、重连全量、首个全量排在 ACK 之后、第二条连接与旧连接关闭、Ingress 回调、只能装一次、未接推送能力时整轮重试）与 `example_client_test.go`（Go 客户端解码示例）。
 
 增加或改变配置声明后执行 `go generate ./...`，再验证生成工程的配置检查和编译。全包列表见 [源码索引](../PACKAGES.md)。Gate 的新增接线及验收见 [实施方案](../GATEWAY-IMPLEMENTATION.md)。

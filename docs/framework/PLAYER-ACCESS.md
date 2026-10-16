@@ -143,3 +143,79 @@ return nil, err // 已手动回包，不能再返回一个响应对象。
 Controller 可能并发执行，不是每个玩家一个 Actor，不要在 Controller 字段里无保护地存可变玩家状态。Nest handler 则按声明的目标实体保护业务执行；长短业务池都不能同步等待另一条业务消息，也不能等待 I/O。适用的无回滚 memory handler 可用 [Await](NEST-AWAIT.md) 拆分锁外查询与恢复；本篇的 undo 事务 handler 不能直接套用 Await。
 
 接入层生成目录是 `game/playeraccess`（包名 `playeraccess`，2026-10-14 起；此前叫 `game/playeraccess`，只改名、行为不变，升级步骤见 CHANGELOG）。维护应以生成器和 demo 模板为源，避免直接修改随后会被覆盖的生成文件。
+
+## 7. 玩家看自己的状态（self_sync）
+
+DAO 字段标了 `sync`、想让客户端收到“自己的金币 / 道具变化”时，不需要自建 `entitysync.Manager`：在 `roost.yaml` 打开开关，生成器写出全部接线，生命周期在 core。只看自己；附近的人、队友等多人视图仍用 [Interest / AOI 政策](guide/04-sync.md)（game-demo 的场景）。
+
+```yaml
+access:
+    player:
+        service: game
+        transports:
+            - tcp
+        self_sync: true   # 默认关
+```
+
+打开后 `roost project sync` 与 `roost generate` 先检查 Player Entity，缺什么就按报错补什么（三步，补完重跑）：
+
+1. `game/entities/player/entity.go` 的标记加上 `sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker`。
+2. 写 `NewPlayerSyncPacker`：视图集必须认识自身视图 `self`（`policy.SelfProfile`），通常给它全部同步字段。可以直接照抄：
+
+```go
+var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}},
+)
+
+func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Player)
+	return playerSyncPacker{player: owner}
+}
+
+type playerSyncPacker struct{ player *Player }
+
+func (p playerSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return p.pack(profile, dataengine.AllFields)
+}
+func (p playerSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return p.pack(profile, mask)
+}
+func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	if p.player == nil || playerViewsErr != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("player sync packer: %v", playerViewsErr)
+	}
+	view, ok := playerViews.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	if mask &= view.Fields; mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	raw := p.player.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(1, raw), nil
+}
+```
+
+3. 客户端要看的 DAO 字段写 `dao:"persist,sync"`；组件改完字段后把 DAO 记下的同步变化交给 subject（一次修改一帧增量）：`component.owner.MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`。
+
+生成物（都在 `roost project sync` 会重写的文件里，关掉开关即恢复原样）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `internal/bootstrap/generated.go` | `PlayerSelfSync = selfsync.MustNew(...)`；Nest 改为 `kitnest.NewModWithEntitySync(EntityAccess, PlayerSelfSync.EntitySyncSetup())`；`accessplayertcp.NewMod().WithSelfSync(PlayerSelfSync)` |
+| `internal/access/player/tcp/server_gen.go` | `Mod.WithSelfSync`：Provide 时交出推送能力，Start 时装握手钩子；`IngressMod.WithSelfSync`：独立 Gate 部署下把 OnActive / OnClosed 接到 Game Ingress |
+| `protocol/def/self_sync.go` | 推送编号 `SelfSync()`（业务文件，只在缺失时创建；取所在协议组的上限，冲突时改这里的 id） |
+
+运行时（实现见 [impl/04-sync](impl/04-sync.md) 的 `policy.SelfView` 与 `wiring/selfsync`）：
+
+- 鉴权 ACK 写出之后登记连接，下一个同步 tick 开会话、把玩家绑定到自己的 Player（视图 `self`），第一帧是全量；之后每次提交的变化是增量。首个全量总在 ACK 之后。
+- 实体不在内存（首登还没 `GetOrCreate`、还没被请求加载）时会话照开，实体一出现就送全量；登录 endpoint 里 `lifecycle.GetOrCreate` 是常见写法。
+- 断线重连、同一玩家的新连接（顶号或多端）都从全量开始；旧连接关闭不带走新连接的视图。全部连接断开后关会话、注销 subject。
+- 推送只入出站队列、不等写出；连接收不下由接入层关闭。
+
+客户端：包头载荷类型是 Sync、消息编号是 `msgid.MsgSelfSync` 的推送交给每连接一个的 `frame.Receiver`，组件数据用 `entitysync.DecodeSubjectUpdate` 取出，载荷交给 DAO 的 `ApplySync`。连接上第一份全量之前的增量被拒（`frame.ErrBaselineMismatch`），跳过等全量即可。Go 写法见 `wiring/selfsync/example_client_test.go`（随测试运行）。C# 本轮没有自身视图的解码样例：`Roost.Client.SyncReceiver` 能收帧，subject 载荷的解码需业务自写。
+
+限制：同一个 Player 的同步状态只能登记在一个 Manager；工程里另有自建 Manager 也登记 Player（game-demo 的场景）时不要同时打开 self_sync（见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）。self_sync 生成物需要包含 `wiring/selfsync` 的 core 版本（当前主线之后的下一个发布）。
