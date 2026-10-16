@@ -99,6 +99,46 @@ func handlerBuyItem` + tt.signature + ` {
 	}
 }
 
+// Remote 请求 struct 必须声明在 handler 包里（访问器生成在这里），与 sender 子包看不见本包类型冲突。
+// 报错不能再建议“移走类型”——照做访问器就生成不出来；要直接说明这个组合还不支持。
+func TestSenderRefusesARemoteRequestStructWithoutSuggestingAMove(t *testing.T) {
+	dir := t.TempDir()
+	source := `package handler
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	player "example.com/demo/game/entities/player"
+	view "example.com/demo/game/view"
+)
+
+var _ view.PlayerViewMapSnapshot
+
+type QueryRequest struct {
+	Target entity.RemoteViewRef ` + "`" + `remote:"view.PlayerViewMapSnapshot,consistency=monotonic,required"` + "`" + `
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerQuery(target player.IShopEntity, req QueryRequest) error {
+	panic("unused")
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "query.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Run([]string{"-dir", dir}, io.Discard)
+	if err == nil {
+		t.Fatal("generation accepted a Remote request struct with senders; the sender packages cannot see it")
+	}
+	for _, want := range []string{"handlerQuery", "QueryRequest", "remote", "KNOWN-LIMITS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "move QueryRequest") {
+		t.Errorf("error suggests moving the Remote request struct, which would drop its accessors: %v", err)
+	}
+}
+
 func unusedImports(t *testing.T, path string) []string {
 	t.Helper()
 	fset := token.NewFileSet()

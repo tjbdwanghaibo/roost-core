@@ -742,11 +742,28 @@ func checkSenderVisibleTypes(funcs []*FuncInfo, pkg string) error {
 		}
 		for _, expr := range exprs {
 			if local := packageLocalTypeName(expr); local != "" {
+				// Remote 请求 struct 必须留在 handler 包：remote tag 只扫描 handler 包，访问器方法也生成在这里。
+				// 挪走它访问器就生成不出来，所以不能给“移走类型”的建议，直接说明这个组合还不支持。
+				if carriesRemoteAccess(f, local) {
+					return fmt.Errorf("nest: handler %s: %s carries remote:\"...\" fields, so it must stay in package %s for its generated accessors, but the generated %s/sender and %s/syncsender packages cannot reference a type of package %s; a handler that takes a Remote request struct cannot be generated with senders yet (see docs/maintenance/KNOWN-LIMITS.md)", f.RawName, local, pkg, pkg, pkg, pkg)
+				}
 				return fmt.Errorf("nest: handler %s: type %s is declared in package %s, but the generated %s/sender and %s/syncsender packages cannot import %s (handler code calls the senders, so the import would cycle); move %s to a package the handler imports, such as the entity package", f.RawName, local, pkg, pkg, pkg, pkg, local)
 			}
 		}
 	}
 	return nil
+}
+
+// carriesRemoteAccess 报告 typeName 是否是 f 某个参数的 Remote 请求 struct（带 remote tag 字段）。
+func carriesRemoteAccess(f *FuncInfo, typeName string) bool {
+	for _, access := range f.RemoteAccess {
+		for _, p := range f.Params {
+			if p.Name == access.ParamName && remoteStructLookupType(p.Type) == typeName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // packageLocalTypeName 返回类型表达式里第一个不带包名的非预声明类型名；表达式解析失败时交给编译器报。

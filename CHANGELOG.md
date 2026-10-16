@@ -12,6 +12,7 @@
 
 - **`roost generate` 报出的 `configs/table_template/*.csv` 现在真的写进工程。** 模板由 tablegen 按 schema 每次整份重写、不带生成头，而暂存提交只认领带头文件与 `isGeneratedData` 登记的目录（`configs/data/*.json`、`docs/generated/`），模板在暂存树里写出、路径也打印了，提交时却被丢掉。`isGeneratedData` 补上 `configs/table_template/*.csv`，`generate --check` 同时把它纳入比对。见 [代码生成实现 §2B](docs/framework/impl/12-codegen.md#2b-生成器共同实现)。
 - **handler 签名引用 handler 包自身的类型时，nest 生成器直接报错并要求移走类型。** 原先 sender / syncsender 子包原样写出 `(BuyItemResult, error)`，编译报 `undefined: BuyItemResult`；子包又不能反向导入 handler 包（handler 调用 sender，导入成环），所以不做限定导入，而是点名类型、提示移到实体包等 handler 已导入的包（demo 一直这么放）。见 [生成器参考 · Nest](codegen/docs/CODEGEN_REFERENCE.zh-CN.md)。
+- **带 Remote 请求 struct（`remote:"..."` 字段）的 handler 遇到 sender 时给出专门报错。** 上一条的检查对它也会建议“把类型移到别的包”，但这种 struct 必须留在 handler 包里才能生成访问器，照做反而更坏；现在直接说明这个组合还不支持并指向 KNOWN-LIMITS。修前修后这个组合都不能生成，本条只改报错与文档。
 - **`roost add endpoint` 生成 demo 的边界写法。** handler 返回 `(T, error)` 时骨架原先只接 err，编译失败；业务错误原先 `return nil, err`，TCP 接入层（`gateway.TCPServer.dispatchRequest`）把 Dispatch 错误当坏帧断开连接。现在接住全部返回值（`result, err :=`，留 `_ = result` 提示填响应），handler 错误经 `errcode.ClientError` 变成 `(Code, Reason)` 响应、只给 `CodeInternal` 记日志；Response 缺 `Code` / `Reason` 字段时 add 阶段报错（`roost add protocol` 默认带上）。已生成的 endpoint 是业务文件，不会被改写，需要的话照 [PLAYER-ACCESS §3](docs/framework/PLAYER-ACCESS.md#3-controller把协议转换成业务调用) 手改。
 
 ### game-demo 背包数量与学习文档

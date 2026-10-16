@@ -398,6 +398,8 @@ type QueryRequest struct {
 
 生成 `TargetPlayer()`/`MustTargetPlayer()` 访问器。可选一致性、scope、tenant、policy、allow-stale、min-version 和 cache TTL 均在生成期校验。
 
+**当前限制**：请求 struct 必须声明在 handler 包里（remote tag 只扫描 handler 包，访问器也生成在这里），而 sender / syncsender 子包看不见 handler 包的类型；`roost generate` 总会生成 sender，所以带 Remote 请求 struct 的 handler 目前生成会失败，生成器给出专门报错（不建议移走类型，移走后访问器就生成不出来）。见 [KNOWN-LIMITS](../../docs/maintenance/KNOWN-LIMITS.md)。
+
 ## 7. Protocol 生成器
 
 ```bash

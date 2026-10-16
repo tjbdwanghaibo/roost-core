@@ -506,7 +506,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/nest
 
-- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`、`TestSenderRefusesATypeDeclaredInTheHandlerPackage`、`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
+- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`、`TestSenderRefusesATypeDeclaredInTheHandlerPackage`、`TestSenderRefusesARemoteRequestStructWithoutSuggestingAMove`、`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
 - [handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`、`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`、`TestGeneratePipelinedHandlerMeta`、`TestParseFileRejectsRemainingRemoteTagViolations`；其余 1 项见文件
 - [nest_test.go](../../../codegen/internal/nest/nest_test.go)：`TestParseFile`、`TestValidateTransactionOptionsRejectsLegacyDirty`、`TestParseFileReadsRemoteRequestTagsFromPackageFiles`、`TestGenerate`、`TestGenerateMultipleNonErrorReturns`；其余 7 项见文件
 - [retirement_test.go](../../../codegen/internal/nest/retirement_test.go)：`TestRunRetiresNestOutputsAfterLastMarkerRemoved`、`TestRunWithoutSenderRetiresOnlySenderOutputs`
