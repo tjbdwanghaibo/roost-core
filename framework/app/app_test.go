@@ -55,7 +55,20 @@ func TestAppRuntimeFailurePrintsNoUsage(t *testing.T) {
 		t.Fatalf("Execute err = %v, want %v", err, errServeFailed)
 	}
 	if text := out.String(); strings.Contains(text, "Usage:") || strings.Contains(text, "Error:") {
-		t.Fatalf("runtime failure wrote CLI help/error text:\n%s", text)
+		t.Errorf("runtime failure wrote CLI help/error text:\n%s", text)
+	}
+
+	// 配置检查失败（--check-config 读不到文件）同样是运行期错误。
+	c := newTestApp(t, &errService{})
+	out.Reset()
+	c.RootCmd().SetOut(&out)
+	c.RootCmd().SetErr(&out)
+	c.RootCmd().SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing.yaml"), "game", "--check-config"})
+	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "read config") {
+		t.Fatalf("check-config on a missing file: err = %v, want read config error", err)
+	}
+	if text := out.String(); strings.Contains(text, "Usage:") || strings.Contains(text, "Error:") {
+		t.Errorf("config failure wrote CLI help/error text:\n%s", text)
 	}
 
 	b := newTestApp(t, &errService{})
