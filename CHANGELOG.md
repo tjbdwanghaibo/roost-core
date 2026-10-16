@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### game-demo 背包数量与学习文档
+
+- `BagComponent.AddItem` 在 int64 中计算新数量，检查 int32 存储范围和 `MaxStack` 后才写 DAO，防止正数请求溢出后写入负数道具。生成工程新增真实 Nest/Sender 回归，覆盖溢出拒绝、拒绝后状态与提交记录不变、恰好达到堆叠上限和超限拒绝。
+- 修正邮件领奖说明中仍声称“未实现去重”的旧段落，以及固定账本保留期的过期描述，与事务内邮件 id 账本和按邮件自身过期时间清理的实现保持一致。
+
 ### CI 与构建
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。
