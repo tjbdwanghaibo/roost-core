@@ -17,8 +17,9 @@ import (
 //
 // The ledger's memory is bounded by the MAIL's own expiry, which the mail
 // service hands over with the reservation (`Claim.ExpiresAtUnix`). After that
-// moment the mail cannot be reserved at all, so no replay can reach the grant
-// path and the record is dead weight — and not one moment sooner.
+// moment the mail cannot be reserved again. An earlier reservation can still
+// arrive late, so the grant handler must also reject an expired first grant
+// at execution time; cleanup alone does not stop replay after deletion.
 //
 // The first version of this bounded the ledger by a fixed 31 days and argued
 // that it outlived `mail.send_ttl` (720h in the generated configuration).
@@ -26,8 +27,8 @@ import (
 // to be positive, so a deployment that keeps mail for 40 days is legal and
 // the ledger forgets while the envelope is still claimable. **Asset
 // correctness cannot be bound to another service's configuration** — it has
-// to be bound to that service's authoritative moment, which is exactly what
-// the envelope's expiry is.
+// to be bound to that service's authoritative moment together with the grant
+// handler's execution-time expiry check.
 //
 // A record with no expiry cannot be placed in time, so it is kept rather than
 // forgotten: refusing to forget is the safe direction, and an operator can

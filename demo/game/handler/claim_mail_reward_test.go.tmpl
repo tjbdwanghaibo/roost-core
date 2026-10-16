@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	generated "{{MODULE}}/configs/generated"
-	player "{{MODULE}}/game/entities/player"
-	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
 // The mail attachment ledger is what makes a claim exactly-once across the
@@ -154,15 +154,15 @@ func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	// A mail whose envelope expired an hour ago: nothing can reserve it any
-	// more, so remembering that it was granted buys nothing.
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, now-3600, now); err != nil {
-		t.Fatalf("recording the expired mail's claim: %v", err)
+	// Grant while valid, then trigger cleanup after expiry. A first grant
+	// that already expired is refused by the handler, even with an old reservation.
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, now+1, now); err != nil {
+		t.Fatalf("recording the soon-to-expire mail's claim: %v", err)
 	}
 	// A mail that is still claimable for another forty days — longer than any
 	// retention this game could have invented.
 	stillLive := now + 40*24*60*60
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now); err != nil {
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now+2); err != nil {
 		t.Fatalf("recording the live mail's claim: %v", err)
 	}
 	if subject.BagComp().MailRewardClaimed("expired") {
@@ -194,7 +194,8 @@ func TestAClaimWithNoExpiryIsNeverPruned(t *testing.T) {
 	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "no-expiry", 1002, 1, 0, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, now+60, now+10*365*24*60*60); err != nil {
+	later := now + 10*365*24*60*60
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, later+60, later); err != nil {
 		t.Fatal(err)
 	}
 	if !subject.BagComp().MailRewardClaimed("no-expiry") {
