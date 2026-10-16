@@ -32,7 +32,7 @@ const Channel = "demo"
 // The first version gave a grant thirty days and pruned the ledger on the same
 // number, reasoning — correctly, for mail — that admission and pruning must be
 // one predicate. What it missed is that a mail envelope has an authoritative
-// expiry after which no replay can reach the grant path at all, and a paid
+// expiry after which the grant handler refuses every replay, and a paid
 // order has no such moment: the platform service marked it delivered when the
 // grant became durable, so a player who does not log in for a month had a paid
 // order that was settled on one side and refused on the other. Permanently.

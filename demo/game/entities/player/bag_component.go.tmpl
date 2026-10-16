@@ -105,9 +105,11 @@ func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, err
 //
 // The value stored is the MAIL's expiry, handed over by the mail service with
 // the reservation. After it the mail service refuses new reservations, but
-// an earlier reservation can still arrive late: handlerClaimMailReward must
-// also reject an expired first grant while holding the Player lock. Pruning
-// below is safe only together with that execution-time admission check.
+// an earlier reservation can still arrive late, so handlerClaimMailReward
+// refuses an expired first grant itself (rewards.ClaimWindowClosed, with the
+// time it executes). Pruning below waits a grace past that moment
+// (rewards.LedgerMayForget), so a record is gone only when every grant of its
+// mail is refused, even on a process whose clock is slightly behind.
 //
 // Pruning is on the write path, so the ledger is bounded without a sweeper.
 func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, nowUnix int64) bool {
@@ -117,7 +119,7 @@ func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, now
 	}
 	var stale []string
 	dao.RangeMailClaims(func(key string, recordedExpiry int64) bool {
-		if rewards.ClaimWindowClosed(recordedExpiry, nowUnix) {
+		if rewards.LedgerMayForget(recordedExpiry, nowUnix) {
 			stale = append(stale, key)
 		}
 		return true
@@ -134,8 +136,9 @@ func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, now
 // order returns false and changes nothing.
 //
 // It is the mail ledger's shape, and it is the one ledger here that is NEVER
-// pruned. The mail ledger may forget an entry the moment the
-// envelope expires, because after that no replay can reach the grant path. A
+// pruned. The mail ledger may forget an entry a grace after the envelope
+// expires, because from the expiry on the grant handler refuses every
+// first grant of that mail (rewards.ClaimWindowClosed). A
 // paid order has no such moment: the platform service marked it delivered when
 // the grant became durable, so forgetting the order id does not close the
 // path — it reopens it, and the next drain of a grant that outlived the ledger

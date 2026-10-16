@@ -75,7 +75,7 @@ ClaimMail 端点 ─ ReserveClaim(mailID, "")      ─▶ mail 服务：交出�
   三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。
   邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
   没有账本时这里就是第二叠道具——`game/handler/claim_mail_reward_test.go` 把这条钉住了（去掉账本判断即红）。
-- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到。`ClaimMailReward` handler 在持有 Player 锁后重新读取业务时钟，以它与调用方时间的较大值判定：已有账本的请求只确认、不再发奖；账本不存在且 `now >= ExpiresAtUnix` 时拒绝发奖。这样超过该时间后清理账本，旧请求也不能再次发放。没有到期时间的记录保留。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/rewards`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。
+- **账本清理必须配合执行时准入**：预留结果携带的 `ExpiresAtUnix` 决定何时不再允许新预留，但过期前取得的预留仍可能晚到（Nest 排队、Player 冷加载、重试）。`ClaimMailReward` handler 在持有 Player 锁后重新读业务时钟，与调用方排队前读到的时间取较大值（`executionNowUnix`），再判 `rewards.ClaimWindowClosed`（与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发奖；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`mail: mail has expired`），判断在任何 DAO 写入之前。账本在过期后再等 `rewards.LedgerPruneGraceSeconds`（10 分钟）才清理（`rewards.LedgerMayForget`）：宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着，只能靠账本还记得。没有到期时间的记录保留。不能用固定保留期猜测其他服务的最长邮件寿命，论证写在 `game/rewards`；也不能仅凭一次 `CommitClaim` 成功就删除去重记录。回归在 `game/handler/claim_mail_expiry_test.go`。
 - **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
 - `Claimable` 是 mail 服务对"现在领会成功吗"的回答，客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
 - 附件解不出奖励、或 AddItem 被拒（背包满）时 `CancelClaim` 归还预留，邮件不会卡在"held"直到租约到期。

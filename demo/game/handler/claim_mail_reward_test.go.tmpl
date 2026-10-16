@@ -4,14 +4,17 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	generated "{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/rewards"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	generated "{{MODULE}}/configs/generated"
-	player "{{MODULE}}/game/entities/player"
-	syncsender "{{MODULE}}/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 // The mail attachment ledger is what makes a claim exactly-once across the
@@ -47,6 +50,18 @@ type recordingCommitter struct{ records []dataengine.CommitRecord }
 func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
 	c.records = append(c.records, dataengine.CloneCommitRecord(record))
 	return nil
+}
+
+// pinBusinessClock 把进程级业务时钟对到 unix 秒，测试结束时恢复。
+//
+// 领奖 handler 在 Player 锁内自己读业务时钟（executionNowUnix），所以凡是写了固定 now 的用例都必须
+// 同时把时钟对上：不对的话，真实时间一越过用例里的 now，有效期内的发放就会按“已过期”被拒，生成工程
+// 的 go test 会在某天自己变红。时钟是进程全局的，本包用例不能 t.Parallel。
+func pinBusinessClock(t *testing.T, unix int64) {
+	t.Helper()
+	previous := clock.Offset()
+	t.Cleanup(func() { clock.SetOffset(previous) })
+	clock.Set(time.Unix(unix, 0))
 }
 
 func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
@@ -95,6 +110,7 @@ func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommi
 func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	subject, client, committer := newClaimHarness(t)
 	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
 	const (
 		manaPotion = int64(1002)
 		mailID     = "mail-1"
@@ -151,22 +167,35 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 	subject, client, _ := newClaimHarness(t)
 	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	// Grant while valid, then trigger cleanup after expiry. A first grant
-	// that already expired is refused by the handler, even with an old reservation.
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, now+1, now); err != nil {
+	// Grant while the mail is valid; an already-expired first grant is
+	// refused by the handler, so it cannot be the premise of this test.
+	const expires = now + 60
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, expires, now); err != nil {
 		t.Fatalf("recording the soon-to-expire mail's claim: %v", err)
 	}
 	// A mail that is still claimable for another forty days — longer than any
 	// retention this game could have invented.
 	stillLive := now + 40*24*60*60
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now+2); err != nil {
+	// Past the expiry but one second inside the prune grace: the record
+	// stays, so a process whose clock is a little behind still finds it. The
+	// times are the caller's (the handler takes the later of the caller's and
+	// its own clock), which keeps the boundary exact while the clock ticks.
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, expires+rewards.LedgerPruneGraceSeconds-1); err != nil {
 		t.Fatalf("recording the live mail's claim: %v", err)
 	}
+	if !subject.BagComp().MailRewardClaimed("expired") {
+		t.Error("a claim was pruned inside the grace after its mail's expiry")
+	}
+	// At the end of the grace: the next write prunes it.
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live-2", 1002, 1, stillLive, expires+rewards.LedgerPruneGraceSeconds); err != nil {
+		t.Fatalf("recording the second live mail's claim: %v", err)
+	}
 	if subject.BagComp().MailRewardClaimed("expired") {
-		t.Error("a claim whose mail can no longer be reserved is still held")
+		t.Error("a claim whose mail can no longer be reserved is still held past the grace")
 	}
 	if !subject.BagComp().MailRewardClaimed("live") {
 		t.Error("a claim whose mail is still claimable was pruned; a replay would be paid again")
@@ -188,6 +217,7 @@ func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 func TestAClaimWithNoExpiryIsNeverPruned(t *testing.T) {
 	subject, client, _ := newClaimHarness(t)
 	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 

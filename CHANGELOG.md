@@ -4,10 +4,11 @@
 
 ## [Unreleased]
 
-### game-demo 邮件奖励：拒绝过期的在途请求
+### game-demo 领奖账本：清理后晚到的旧请求不再重复发奖
 
-- 修复领奖账本过期清理后的重复发放窗口：邮件服务拒绝新的过期预留，并不能取消过期前已取得的在途预留。`handlerClaimMailReward` 在 Player 锁内重新读取业务时钟，取执行时间与调用方传入时间的较大值；账本不存在且到期时拒绝新发奖，已有账本的重复确认仍返回未再次发放。无须改变 DAO schema 或 Sender 参数。
-- 新增并登记真实生成工程回归：首次发放、过期后确认、其他领奖触发账本清理、携带旧时间的延迟请求不能再发奖；另覆盖过期前、恰好到期及过期后，拒绝时状态和提交记录不变。原账本清理测试改为先在有效期内发放，再推进时间清理，避免把过期首次发放当作合法前提。
+- **邮件附件**：邮件服务只拒绝过期后的新预留，挡不住过期前取得、晚到 Nest 的旧请求；账本按 `ExpiresAtUnix` 清理之后，这种请求（典型是 `CommitClaim` 丢失后的重放）找不到记录，就发第二叠。修前在生成工程上 `TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned` 红为 `expired in-flight replay granted: {Claimed:true BagCount:3}; bag=3`。现在 `handlerClaimMailReward` 在持有 Player 锁后、任何 DAO 写入前按执行时间判过期（`executionNowUnix`：调用方时间与重新读的进程业务时钟取较大值；`rewards.ClaimWindowClosed`，与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`service/mail` 的 `ErrExpired`，590106）。
+- **清理比准入晚一个宽限**：邮件账本改为过期后再等 `rewards.LedgerPruneGraceSeconds`（10 分钟）才清理（`rewards.LedgerMayForget`，由准入谓词平移得出）。宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着；修前（只加执行时准入时）`TestALedgerPrunedAheadStillStopsAReplayOnAClockBehind` 红为 `a replay on a clock 31s behind was paid again: {Claimed:true BagCount:3} bag=3`。
+- 生成工程的领奖用例改为显式固定业务时钟（`pinBusinessClock`）：handler 自己读时钟后，写死 `now = 1_800_000_000` 而不固定时钟的用例会在真实时间越过 2027-01-15 后自己变红。新回归 `game/handler/claim_mail_expiry_test.go` 已登记进 `demoScaffoldSteps`。DAO schema 与 Sender 参数不变；已生成工程不迁移（`roost project sync` 取新模板）。
 
 ### 玩家接入
 
