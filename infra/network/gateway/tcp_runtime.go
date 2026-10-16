@@ -26,6 +26,8 @@ func NewTCPRuntime(encode TCPEncoder, loginTimeout time.Duration) *TCPRuntime {
 //
 // Push* 只把帧放进每连接的有界出站队列：返回 nil 表示已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁，
 // 不等 socket，所以 Push* 不需要 fctx.BlockingError 守卫，业务 worker 与场景 / 帧同步循环都可以直接调用。
+// （lockstep.TCPSender 在业务 worker 内仍拒绝发送，那是 Match 的约束——比赛 Tick 驱动须在业务 worker /
+// Entity 锁之外——不是 Push* 本身的要求。）
 // 收不下的连接（停读导致队列满、已关闭）当场关闭，写出失败由该连接的写协程关闭连接。
 type TCPRuntime struct {
 	owner        atomic.Pointer[TCPServer]

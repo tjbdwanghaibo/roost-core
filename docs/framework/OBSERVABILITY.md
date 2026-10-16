@@ -291,22 +291,22 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `nestwal.recovery.tail_truncated.total` | Counter | `nestwal/wal.go:IncCounter` |
 | `nestwal.reject.total` | Counter | `nestwal/wal.go:IncCounter` |
 | `obs.series.dropped` | Counter | `metrics/metrics.go: Metric literal` |
-| `player_tcp_auth_failure_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_connection_rejected_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_connections` | Gauge | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_dispatch_duration` | Duration | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_dispatch_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_dispatch_timeout_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_frame_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_outbound_overflow_total` | Counter | `infra/network/gateway/tcp_session.go` |
-| `player_tcp_push_closed_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_push_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_push_no_session_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_push_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_rate_limited_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_session_closed_callback_panics_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_session_closed_dropped_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
-| `player_tcp_write_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_auth_failure_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_connection_rejected_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_connections` | Gauge | `infra/network/gateway/tcp.go:AddGauge` |
+| `player_tcp_dispatch_duration` | Duration | `infra/network/gateway/tcp.go:ObserveDuration` |
+| `player_tcp_dispatch_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_dispatch_timeout_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_frame_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_outbound_overflow_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
+| `player_tcp_push_closed_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_push_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_push_no_session_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_push_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_rate_limited_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_session_closed_callback_panics_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
+| `player_tcp_session_closed_dropped_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
+| `player_tcp_write_error_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `remote_entity.deferred_outcome_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.deferred_outcome_not_run_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
@@ -399,6 +399,16 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 `admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录鉴权拒绝。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。
 
 `bus_rpc_pending_requests{transport}` 是 RPC 全部在途数量 Gauge；原来的 bus_rpc_pending_total 名称已移除，面板迁移到新名。按方法的 bus_rpc_pending 保持原样。
+
+### 嵌入 TCP 出站
+
+| 指标 | 含义与口径 |
+| --- | --- |
+| `player_tcp_outbound_overflow_total` | 一帧入队会让该连接“排队 + 写协程在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节而被拒的次数（拒绝即关闭连接）；计被拒次数，不是关闭的连接数，并发推送方同时撞到上限时各计一次 |
+| `player_tcp_push_closed_total` | 推送路径因 `errConnectionBroken`（溢出、连接已被写协程关闭但尚未注销）注销并关闭连接的次数；同一连接在注销前收到多次推送会多次计入，写协程关闭后没有推送到达的连接不计 |
+| `player_tcp_write_error_total` | 写 socket 失败次数（写协程、读循环直写、Gate `WritePacket`）：写超时、半帧、reset，以及关闭连接时被打断的那次写；连接已关闭后被拒的写不计 |
+
+一个停读连接因溢出被关闭时，上面三项通常各至少加一；写协程因 `write_timeout` 关闭的连接只保证 `write_error_total` 加一。见 [GATEWAY §4](GATEWAY.md#嵌入-tcp-的出站)。
 
 ### 独立 Gate 接入
 

@@ -37,8 +37,12 @@ type tcpSession struct {
 	// 入队只做有界准入，收不下（条数或字节超限）就关闭这一条连接，与独立 Gate 的慢连接策略一致。
 	// 独立 Gate 自己的 AsyncTransport 已经排队并调用 WritePacket 直写，不经过这里。
 	// queueMu 只保护队列本身，从不在持有时写 socket；writeLoop 每次取走整批再逐帧写。
+	// queuedFrames / queuedBytes 记“排队 + 在途”：入队时加，writeLoop 写出一帧后才减，
+	// 被取走、还卡在慢 socket 上的那一批仍占额度，上限因此就是这条连接最多驻留的帧数与字节数。
+	// 读循环直写快路径的那一帧不经过队列，不计入。
 	queueMu        sync.Mutex
 	queue          []outboundFrame
+	queuedFrames   int
 	queuedBytes    int64
 	maxQueuedBytes int64
 	// writing 表示有人正在按队列顺序写 socket：writeLoop 写一批，或读循环走直写快路径。
@@ -61,7 +65,7 @@ type outboundFrame struct {
 	written chan error
 }
 
-// outboundQueueFrames 与 outboundQueueBytes 是每连接出站队列的上限。字节上限是内存界，至少容纳两个最大帧；
+// outboundQueueFrames 与 outboundQueueBytes 是每连接出站队列（排队 + writeLoop 已取走未写完）的上限。字节上限是内存界，至少容纳两个最大帧；
 // 条数上限只防海量小帧，要大于健康连接一次突发的帧数——生产者入队远快于逐帧写 socket，
 // 一个循环连推几十帧给同一连接是正常的。积压超过上限的客户端读得太慢，断开后由重连恢复全量 / 追帧。
 // 空闲连接不预分配队列；最坏驻留为 max_connections × 字节上限，只有全部连接同时停读才会达到。
@@ -184,7 +188,7 @@ func (session *tcpSession) writeQueued(ctx context.Context, flags byte, messageI
 }
 
 // enqueue 对一帧做出站准入：调用方 ctx 已结束或 payload 超限是拒绝，不关闭连接；
-// 会话已关闭返回 errConnectionBroken；队列条数或字节超限说明客户端读得太慢，关闭这条连接并返回 errConnectionBroken。
+// 会话已关闭返回 errConnectionBroken；排队 + 在途的条数或字节超限说明客户端读得太慢，关闭这条连接并返回 errConnectionBroken。
 // 准入不取 writeMu，writeLoop 正卡在慢 socket 上时入队也立即返回。payload 在这里复制，调用返回后调用方可复用。
 func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, wait bool) (<-chan error, error) {
 	if ctx == nil {
@@ -211,11 +215,12 @@ func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, wait
 	}
 	size := int64(len(next.payload)) + headerSize
 	session.queueMu.Lock()
-	if len(session.queue) >= outboundQueueFrames || session.queuedBytes+size > session.maxQueuedBytes {
+	if session.queuedFrames >= outboundQueueFrames || session.queuedBytes+size > session.maxQueuedBytes {
 		session.queueMu.Unlock()
 		return nil, session.overflow()
 	}
 	session.queue = append(session.queue, next)
+	session.queuedFrames++
 	session.queuedBytes += size
 	session.queueMu.Unlock()
 	select {
@@ -254,6 +259,7 @@ func (session *tcpSession) writeLoop() {
 		for index, next := range batch {
 			err := session.writeFrame(context.Background(), next.flags, next.messageID, next.sequence, next.payload)
 			session.queueMu.Lock()
+			session.queuedFrames--
 			session.queuedBytes -= int64(len(next.payload)) + headerSize
 			session.queueMu.Unlock()
 			if next.written != nil {

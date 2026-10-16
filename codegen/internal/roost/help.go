@@ -151,7 +151,7 @@ roost add endpoint RenamePlayer --handler player`,
 		Summary: "为 player access 生成有界 TCP listener、帧协议和 fail-closed 鉴权边界",
 		Usage: `roost add transport tcp [--service <service>]
 roost project doctor --workflow player-tcp`,
-		Configuration: `要求先 add access player。生成代码提供 16 字节有界帧、全局/单 IP 连接上限、独立 handshake 并发与字节上限、handshake/idle/write timeout、sequence 防重放、同步写背压、TCP keepalive、优雅关停，以及 PushPlayer/PushSession 主动发布；auth.go 归应用所有且默认拒绝。完整 disabled 配置会自动写入，完成鉴权后用 config enable player-tcp 开启。ROOST_PLAYER_TOKEN 环境变量可供 cmd/playerprobe 做最小鉴权验收；生产鉴权仍需安全评审。Docker/Kubernetes 模板会发布 7000，Kubernetes 仅允许带 player-access 标签的来源 namespace。`,
+		Configuration: `要求先 add access player。生成代码提供 16 字节有界帧、全局/单 IP 连接上限、独立 handshake 并发与字节上限、handshake/idle/write timeout、sequence 防重放、每连接有界出站队列（停读客户端积压超过上限或写超时即断开，不拖住其他连接）、TCP keepalive、优雅关停，以及 PushPlayer/PushSession 主动发布；auth.go 归应用所有且默认拒绝。完整 disabled 配置会自动写入，完成鉴权后用 config enable player-tcp 开启。ROOST_PLAYER_TOKEN 环境变量可供 cmd/playerprobe 做最小鉴权验收；生产鉴权仍需安全评审。Docker/Kubernetes 模板会发布 7000，Kubernetes 仅允许带 player-access 标签的来源 namespace。`,
 		Example: `roost add access player --service game
 roost add transport tcp
 # 实现 internal/access/player/tcp/auth.go

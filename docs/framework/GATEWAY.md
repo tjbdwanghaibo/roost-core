@@ -49,9 +49,13 @@ PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续�
 
 嵌入 Game 的 TCP 没有 Gate 那一跳，出站同样有界、异步：每个连接一条出站队列和唯一写协程（[tcp_session.go](../../infra/network/gateway/tcp_session.go) 的 `enqueue` / `writeLoop`），PB 推送、Sync、Lockstep、读循环的回包与心跳 ACK 按入队顺序写出。`TCPRuntime.Push*` 只入队：返回 nil 表示该连接已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁、不等 socket，所以 `Push*` 不需要 `fctx.BlockingError` 守卫，业务 worker、场景 Sync Flush、Lockstep Tick 都可以直接调用。payload 入队时复制，调用返回后可复用。
 
-慢连接策略与独立 Gate 一致：队列超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节时当场关闭该连接（`player_tcp_outbound_overflow_total`），推送方得到 `errConnectionBroken` 并注销它；一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败，由写协程关闭连接（`player_tcp_write_error_total`）。队列里剩下的帧随连接丢弃，客户端重连后恢复全量/追帧。因此逐会话串行推送的调用方不会被一个停读客户端每轮拖住 `write_timeout`（修复前默认每次 Flush / Tick 卡 5s）。上限目前不开放配置键；最坏驻留是 `max_connections × 字节上限`，没有 Gate 那样的全进程驻留预算，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)。
+慢连接策略与独立 Gate 一致：一帧入队会让该连接的“排队 + 在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节时，拒绝这一帧并当场关闭该连接（`player_tcp_outbound_overflow_total`），推送方得到 `errConnectionBroken` 并注销它；一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败，由写协程关闭连接（`player_tcp_write_error_total`）。“在途”是写协程已从队列整批取走、还没写完的帧：帧数与字节都在入队时计入、写出一帧后才扣减，所以两个上限就是一条连接最多驻留的量（停读连接最多收下 1024 帧，第 1025 帧被拒）；读循环直写快路径上的那一帧不经队列、不计入。队列里剩下的帧随连接丢弃，客户端重连后恢复全量/追帧。因此逐会话串行推送的调用方不会被一个停读客户端每轮拖住 `write_timeout`（修复前默认每次 Flush / Tick 卡 5s）。上限目前不开放配置键；最坏驻留是 `max_connections × 字节上限`，没有 Gate 那样的全进程驻留预算，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)。
 
-顺序契约不变：服务推送的 RS 序号由写协程在写出时分配，等于实际 socket 写顺序；读循环的回包入队后等它写出才读下一个请求，handler 里先发的推送先于它的回包（队列空闲且没人在写时回包直写，省掉一次协程切换）；不同生产者之间以入队先后为序。业务可见的 `Session.Reply` 与推送一样只入队。独立 Gate 不走这条队列：它的 AsyncTransport 已按绑定排队，`WritePacket` 同步直写并把结果交回那条队列。回归：`TestAStalledConnectionDoesNotHoldPushesToOtherConnections`、`TestOutboundQueueKeepsPushReplyOrderAndPushSequences`（[tcp_test.go](../../infra/network/gateway/tcp_test.go)）。
+顺序契约不变：服务推送的 RS 序号由写协程在写出时分配，等于实际 socket 写顺序；读循环的回包入队后等它写出才读下一个请求，handler 里先发的推送先于它的回包（队列空闲且没人在写时回包直写，省掉一次协程切换）；不同生产者之间以入队先后为序。业务可见的 `Session.Reply` 与推送一样只入队。独立 Gate 不走这条队列：它的 AsyncTransport 已按绑定排队，`WritePacket` 同步直写并把结果交回那条队列。回归：`TestAStalledConnectionDoesNotHoldPushesToOtherConnections`、`TestOutboundQueueKeepsPushReplyOrderAndPushSequences`、`TestOutboundFrameLimitCountsTheBatchBeingWritten`、`TestAWriteTimeoutInTheWriteLoopFailsTheReplyQueuedBehindIt`、`TestClosingASessionDuringConcurrentPushesLeavesNoGoroutine`（[tcp_test.go](../../infra/network/gateway/tcp_test.go)）。
+
+协程与资源：每个已认证连接都有一个写协程，嵌入模式每连接 goroutine 由 1（读循环）变为 2（读循环 + 写协程）。独立 Gate 模式下 TCP 服务端同样为每连接启动写协程，但 Gate 的推送走 `WritePacket` 直写、不入这条队列，写协程通常空闲；Gate 模式的心跳 ACK 与嵌入模式一样走 `writeQueued`（队列空闲时直写，否则排在队列后面等写出）。连接返回时先关闭会话、等写协程退出，再释放连接槽并发布关闭事件，`Stop` 的排空因此也覆盖写协程。
+
+指标口径：`player_tcp_outbound_overflow_total` 计被拒的入队次数，不是被关闭的连接数——队满那一帧关闭连接后，后续推送看到连接已关闭不再计这一项，但并发推送方可能在关闭前同时撞到上限，各计一次。`player_tcp_push_closed_total` 计推送路径（`PushPlayer` / `PushSession` 等）因 `errConnectionBroken` 注销并关闭连接的次数：溢出时计一次；写协程因写超时 / socket 失败自己关闭的连接，在读循环注销它之前若还有推送到达，这些推送同样会各计一次，没有推送到达则不计。`player_tcp_write_error_total` 计一次写 socket 失败（写协程、读循环直写、Gate 的 `WritePacket`）；关闭连接时正在进行的那次写会被打断并计入，所以一个停读连接因溢出被关闭时，三项通常各至少加一；连接已关闭后被拒绝的写不计入。
 
 ## 5. 停机、指标与验证
 

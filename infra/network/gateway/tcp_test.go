@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"syscall"
 	"testing"
@@ -836,6 +837,185 @@ func TestOutboundQueueKeepsPushReplyOrderAndPushSequences(t *testing.T) {
 	}
 }
 
+// pipeSession 在 net.Pipe 上建一个内嵌接入会话：对端不读时每次写都卡住，writeLoop 停在哪一帧由测试决定。
+func pipeSession(t *testing.T, writeTimeout time.Duration) (*tcpSession, net.Conn) {
+	t.Helper()
+	client, peer := net.Pipe()
+	config := DefaultTCPConfig()
+	config.WriteTimeout = writeTimeout
+	connectionCtx, cancel := context.WithCancelCause(context.Background())
+	session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "pipe"}, config)
+	t.Cleanup(func() {
+		_ = session.Close(ErrSessionClosed)
+		<-session.writerDone
+		_ = peer.Close()
+	})
+	return session, peer
+}
+
+// waitOutbound 等到会话的出站状态满足 ready（在 queueMu 下判断）。
+func waitOutbound(t *testing.T, session *tcpSession, what string, ready func(writing bool, queued int) bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		session.queueMu.Lock()
+		ok := ready(session.writing, len(session.queue))
+		session.queueMu.Unlock()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("outbound state never reached: %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitWriterDone(t *testing.T, session *tcpSession) {
+	t.Helper()
+	select {
+	case <-session.writerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writeLoop did not exit after the connection closed")
+	}
+}
+
+// 帧数上限管的是“排队 + 在途”：writeLoop 一次取走整批再逐帧写，取走但还没写出的帧仍占这条连接的出站额度
+// （与字节记账同一口径，写出后才扣减）。对端停读让 writeLoop 卡在一整批 1024 帧的第一帧上，此时再入队的
+// 第一帧（合计第 1025 帧）就要被拒绝并关闭连接；只数 len(queue) 时还能再收 1024 帧，停读连接的驻留翻倍。
+func TestOutboundFrameLimitCountsTheBatchBeingWritten(t *testing.T) {
+	session, peer := pipeSession(t, 30*time.Second)
+	ctx := context.Background()
+	// 读循环正在直写回包（对端还没读），推送只能排队，writeLoop 见有人在写不取。
+	replied := make(chan error, 1)
+	go func() { replied <- session.writeQueued(ctx, 0, stuckResponseID, 1, []byte("reply")) }()
+	waitOutbound(t, session, "the read loop writing its reply directly", func(writing bool, _ int) bool { return writing })
+	for frame := range outboundQueueFrames {
+		if err := session.pushKind(ctx, pushTestMessageID, []byte{byte(frame)}, 0); err != nil {
+			t.Fatalf("frame %d of %d refused while the queue had room: %v", frame+1, outboundQueueFrames, err)
+		}
+	}
+	// 对端读走回包：直写结束，writeLoop 取走全部 1024 帧，卡在第一帧上（对端不再读）。
+	if _, err := io.ReadFull(peer, make([]byte, headerSize+len("reply"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-replied; err != nil {
+		t.Fatal(err)
+	}
+	waitOutbound(t, session, "writeLoop holding the whole batch", func(writing bool, queued int) bool { return writing && queued == 0 })
+
+	accepted := 0
+	var refused error
+	for accepted <= outboundQueueFrames {
+		if refused = session.pushKind(ctx, pushTestMessageID, []byte("more"), 0); refused != nil {
+			break
+		}
+		accepted++
+	}
+	if accepted != 0 {
+		t.Fatalf("with %d frames taken by the blocked writeLoop, %d more were admitted (frame %d in total was the first refused): queued + in flight exceeds the %d-frame limit",
+			outboundQueueFrames, accepted, outboundQueueFrames+accepted+1, outboundQueueFrames)
+	}
+	if !errors.Is(refused, errConnectionBroken) || !errors.Is(refused, errOutboundQueueFull) {
+		t.Fatalf("frame %d = %v, want errConnectionBroken wrapping errOutboundQueueFull", outboundQueueFrames+1, refused)
+	}
+	if !session.closed.Load() {
+		t.Fatal("the connection over its frame limit is still open")
+	}
+	waitWriterDone(t, session)
+}
+
+// writeLoop 因 write_timeout 写不出一帧就关闭连接：排在后面等写出的回包（读循环在等它）得到 errConnectionBroken，
+// writeLoop 退出（writerDone 关闭），之后的推送也被拒绝。
+func TestAWriteTimeoutInTheWriteLoopFailsTheReplyQueuedBehindIt(t *testing.T) {
+	const writeTimeout = 300 * time.Millisecond
+	session, _ := pipeSession(t, writeTimeout)
+	ctx := context.Background()
+	if err := session.pushKind(ctx, pushTestMessageID, []byte("stuck"), 0); err != nil {
+		t.Fatal(err)
+	}
+	waitOutbound(t, session, "writeLoop writing the stuck push", func(writing bool, queued int) bool { return writing && queued == 0 })
+	replied := make(chan error, 1)
+	go func() { replied <- session.writeQueued(ctx, 0, stuckResponseID, 1, []byte("reply")) }()
+	waitOutbound(t, session, "the reply queued behind the stuck push", func(_ bool, queued int) bool { return queued == 1 })
+	if session.closed.Load() {
+		t.Fatalf("write_timeout (%v) ran out before the reply was queued; the test did not reach the waiting path", writeTimeout)
+	}
+	select {
+	case err := <-replied:
+		if !errors.Is(err, errConnectionBroken) {
+			t.Fatalf("reply queued behind a timed-out write = %v, want errConnectionBroken", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reply queued behind a timed-out write is still waiting")
+	}
+	waitWriterDone(t, session)
+	if err := session.Close(nil); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("close reason = %v, want the write timeout", err)
+	}
+	if err := session.pushKind(ctx, pushTestMessageID, []byte("late"), 0); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("push after the write timeout closed the connection = %v, want errConnectionBroken", err)
+	}
+}
+
+// Close 与多个并发 Push、一个等写出的回包竞争：每轮都要在期限内全部返回（无死锁），
+// writeLoop 退出；多轮之后 goroutine 数回到起点（没有写协程或等待方泄漏）。一半轮次对端在读，一半停读。
+func TestClosingASessionDuringConcurrentPushesLeavesNoGoroutine(t *testing.T) {
+	base := runtime.NumGoroutine()
+	const rounds, pushers, pushesEach = 50, 8, 64
+	for round := range rounds {
+		client, peer := net.Pipe()
+		config := DefaultTCPConfig()
+		config.WriteTimeout = time.Second
+		connectionCtx, cancel := context.WithCancelCause(context.Background())
+		session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "close-race"}, config)
+		drained := make(chan struct{})
+		if round%2 == 0 {
+			go func() { defer close(drained); _, _ = io.Copy(io.Discard, peer) }()
+		} else {
+			close(drained)
+		}
+		start := make(chan struct{})
+		var producers sync.WaitGroup
+		for range pushers {
+			producers.Go(func() {
+				<-start
+				for range pushesEach {
+					if session.pushKind(context.Background(), pushTestMessageID, []byte("frame"), 0) != nil {
+						return
+					}
+				}
+			})
+		}
+		producers.Go(func() {
+			<-start
+			_ = session.writeQueued(context.Background(), 0, stuckResponseID, 1, []byte("reply"))
+		})
+		close(start)
+		if round%3 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		_ = session.Close(ErrSessionClosed)
+		returned := make(chan struct{})
+		go func() { producers.Wait(); close(returned) }()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: pushes or the waiting reply did not return after Close", round)
+		}
+		waitWriterDone(t, session)
+		_ = peer.Close()
+		<-drained
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > base {
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutines = %d after %d close rounds, want at most %d", runtime.NumGoroutine(), rounds, base)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // When no connection takes the frame the player is unreachable: the push
 // fails and every connection is closed, so nothing stays registered for a
 // player nobody can reach.
@@ -1051,7 +1231,9 @@ func TestAnExpiringCallerDeadlineClosesNoHealthyConnection(t *testing.T) {
 	waitRegistered(t, runtime, 7, 2)
 	failures := 0
 	var broken error
-	for range 2000 {
+	// 连推的帧数留在每连接出站上限（排队 + 在途 1024 帧）以内：一次突发超过上限、生产快过逐帧写 socket 的连接
+	// 按设计会被当作慢连接关闭，那不是这里要测的“调用方截止导致误关”。
+	for range outboundQueueFrames - 24 {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 		if err := runtime.PushPlayer(ctx, 7, pushTestMessageID, []byte("x")); err != nil {
 			failures++
