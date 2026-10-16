@@ -14,7 +14,7 @@ import (
 
 // deliver 的收件人检查必须读 Player DAO 自己的库和集合。
 //
-// Player 文档落在 DAO 标记 `//roost:dao coll=player db=game` 生成的库里
+// Player 文档落在 DAO 标记 `//roost:dao coll=player db=<工程名>` 生成的库里
 // （db.PlayerDaoDBName / db.PlayerDaoCollection），与 `dataengine.database`
 // 无关——后者是 Data Engine 放 WAL 投影、fence 回执的库。旧代码把
 // `dataengine.database` 当作 Player 文档所在库去 FindOne，于是只要把

@@ -587,10 +587,10 @@ func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.C
 // refusals (mailbox full) do the same.
 //
 // Where the Player document is: the database and collection the Player DAO
-// was generated with (`//roost:dao coll=player db=game` in db/def/player.go
+// was generated with (`//roost:dao coll=player db=<project>` in db/def/player.go
 // → db.PlayerDaoDBName / db.PlayerDaoCollection). NOT `dataengine.database`
 // — that is where the Data Engine keeps its WAL projections and fences, and
-// the two only coincide while both are left at the default `game`. The first
+// by default the two differ (the project name vs `game`). The first
 // version read `dataengine.database` here, so the README's own advice to
 // isolate a run by renaming it made every gift compensate as "recipient has
 // never entered the game".

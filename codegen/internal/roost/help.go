@@ -202,7 +202,7 @@ services:
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>
 go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
-		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]；只给 noPersist 实体用、全字段 nopersist 的内存 DAO 写 //roost:dao nocoll（不编造集合名，不生成持久化路径）。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
+		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]，add dao 骨架的 db= 默认是工程名（编译期常量，与 dataengine.database 无关；文档 _id 是完整 EntityID，用 roost id entity 换算）；只给 noPersist 实体用、全字段 nopersist 的内存 DAO 写 //roost:dao nocoll（不编造集合名，不生成持久化路径）。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
 		Example: `//roost:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
     Name  string          ` + "`dao:\"persist,sync\"`" + `
@@ -346,11 +346,15 @@ roost config check --service game --production --file configs/service/config.gam
 		Name: "id", Aliases: []string{"ids", "id-next", "id-check"},
 		Summary: "分配并检查协议、Entity、Component 和错误码编号",
 		Usage: `roost id next <kind> [--group group]
-roost id check`,
-		Configuration: `编号范围位于 roost.yaml 的 ids。kind 可使用 protocol、entity、component、errcode；protocol 可按 group 划分范围。`,
+roost id check
+roost id entity <entity-id>
+roost id entity --unique <id> (--entity <Name> | --kind <n> --category <n> [--remote])`,
+		Configuration: `编号范围位于 roost.yaml 的 ids。kind 可使用 protocol、entity、component、errcode；protocol 可按 group 划分范围。entity 子命令在完整 EntityID（DAO 文档的 _id、日志里的 entity=）与唯一号（玩家 ID）、kind、category 之间双向换算：布局 [remote(1)][unique(52)][kind(8)][category 低 2 位]；--entity 从工程的 //roost:entity 标记取 kind、category 与 remote=managed，解码时也据此注明 kind 名。`,
 		Example: `roost id next -group game protocol
 roost id next entity
-roost id check`,
+roost id check
+roost id entity 9217029
+roost id entity --unique 9001 --entity Player`,
 	},
 	{
 		Name: "format", Aliases: []string{"fmt", "format-check"},

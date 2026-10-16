@@ -236,6 +236,20 @@ type EquipInfo struct {
     //roost:dao nocoll                       # 无集合 DAO，见 §4.1
     //roost:redisdao key=<字段路径> prefix=<键前缀> [mode=ref-hmap|raw] [key_type=...] [version=...] [ttl=<Go duration>] [name=...]
 
+**库名与 `_id`**（D9，维护者 2026-10-16 决定 B）：`db=` 是编译期常量（生成 `db.<Type>DBName`），不读运行配置；
+`dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox）。`roost add dao` 骨架按工程名写
+`db=<project>`：取 `roost.yaml project.name`（已满足 `^[a-z][a-z0-9_]*$`），Mongo 系统库名 `admin` / `local` / `config`
+加后缀 `_data`，超过 52 字节截断并去掉末尾 `_`（库名上限 63 字节，`dbscope=sid` 还要追加 `_<sid>`）。同一 Mongo 上的
+两个工程因此默认不写同一个库；已有 DAO 的 `db=` 归业务，不改写。库名改由运行配置决定（方案 A）未实施，见 DESIGN-TODO D9。
+
+文档 `_id` 是完整 EntityID，不是玩家 ID：位布局 `[remote(1)][unique(52)][kind(8)][category 低 2 位]`，例如 kind 1、
+category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 `roost id entity` 换算：
+
+    roost id entity 9217029                          # → unique_id: 9001、kind: 1 (Player)、category_bits: 1、remote
+    roost id entity --unique 9001 --entity Player    # → entity_id: 9217029（kind / category / remote 取自 //roost:entity）
+    roost id entity --unique 9001 --kind 1 --category 5 [--remote]
+
+
 - `coll=`、`db=` 必填；`dbscope` 默认 `global`，`sid` 表示按服分库（`dataengine.DatabaseServer`）。
 - 标记必须**紧邻 struct**（相邻 1–2 行）或位于该 struct 的 doc 注释组内；标记与 struct 之间可以有普通文档注释。
 - Redis DAO 生成类型化 Get/Set/Delete 包装；`key=`、`prefix=` 必填，`mode` 默认 `ref-hmap`，`key_type` 缺省时按字段路径从 struct 定义推断。
@@ -643,6 +657,7 @@ rank 54、match 55、account 56、global 57、chat 58、mail 59、platform 60、
 roost id next errcode
 roost id next -group game protocol
 roost id check
+roost id entity 9217029                          # 完整 EntityID ↔ 唯一号 / kind / category，见 §4
 ```
 
 ## 13. servicerpc：接口先行的跨进程服务

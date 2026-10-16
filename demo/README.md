@@ -76,9 +76,9 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222 -nats-prefix
 
 ### 验证跑通了
 
-- `db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
+- `player` 集合在 DAO 标记写的 `db=<工程名>` 库里（工程 planet 即 `planet.player`，不是 `dataengine.database`）；文档 `_id` 是完整 EntityID，按玩家 ID 查用 `roost id entity --unique <玩家ID> --entity Player` 换算；重启 game 再跑一轮，items 与 level 在原值上累加；
 - mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长；
-- 怪物不落库——`game` 库里没有怪的集合（`MonsterDao` 是 `//roost:dao nocoll`），GM `gm.scene.population` 才是看它们的地方；
+- 怪物不落库——工程库里没有怪的集合（`MonsterDao` 是 `//roost:dao nocoll`），GM `gm.scene.population` 才是看它们的地方；
 - chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello；
 - 机器人进程以非零码退出时打印 JSON 报告，最后一行点名违反的阈值；压测参数与阈值见[功能逐项说明 · 机器人压测](WALKTHROUGH.md#机器人压测--回归测试)。
 

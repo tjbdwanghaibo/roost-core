@@ -492,7 +492,10 @@ func configFileService(m Manifest, path string) string {
 
 func runID(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: roost id <next|check>")
+		return errors.New("usage: roost id <next|check|entity>")
+	}
+	if args[0] == "entity" {
+		return runIDEntity(args[1:], stdout, stderr)
 	}
 	fs := flag.NewFlagSet("id "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)

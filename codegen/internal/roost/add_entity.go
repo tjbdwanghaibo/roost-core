@@ -72,7 +72,7 @@ func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	daoBody, err := format.Source([]byte(renderDAODefinition(daoSnake, daoType)))
+	daoBody, err := format.Source([]byte(renderDAODefinition(daoDatabaseName(manifest.Project.Name), daoSnake, daoType)))
 	if err != nil {
 		return nil, fmt.Errorf("format DAO scaffold: %w", err)
 	}
@@ -360,8 +360,26 @@ func (component *%sComponent) Owner() *%s { return component.owner }
 		componentType, entityType)
 }
 
-func renderDAODefinition(collection, typeName string) string {
-	return fmt.Sprintf("package dbdef\n\n//roost:dao coll=%s db=game\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", collection, typeName)
+// renderDAODefinition 写 DAO 定义骨架。库名按工程名生成（daoDatabaseName），文档 _id 是完整 EntityID
+// （roost id entity 换算），两点都写进骨架注释，免得运维按玩家 ID 去 game 库里找。
+func renderDAODefinition(database, collection, typeName string) string {
+	return fmt.Sprintf("package dbdef\n\n// %s is stored in Mongo database %q, collection %q.\n// db= is a compile-time constant (db.%sDBName); give each project on a\n// shared Mongo its own name.\n// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, database, collection, typeName, collection, database, typeName)
+}
+
+// daoDatabaseName 是 DAO 骨架 db= 的默认值：工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$，
+// 本身就是合法的 Mongo 库名）。两条修正：
+//   - Mongo 保留库 admin / local / config 加后缀 "_data"，业务集合不能写进系统库；
+//   - 截到 52 字节并去掉末尾的 "_"：Mongo 库名上限 63 字节，dbscope=sid 还要追加 "_<sid>"（最长 11 字节）。
+func daoDatabaseName(project string) string {
+	name := strings.ToLower(strings.TrimSpace(project))
+	switch name {
+	case "admin", "local", "config":
+		name += "_data"
+	}
+	if len(name) > 52 {
+		name = strings.TrimRight(name[:52], "_")
+	}
+	return name
 }
 
 func writeRelatedBusinessFiles(entityPath string, entityBefore, entityBody []byte, newPath string, newBody []byte) error {

@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=game schema=2
+//roost:dao coll=player db={{DAO_DB}} schema=2
 type PlayerDao struct {
 	Name  string          `bson:"name" dao:"persist,sync"`
 	Level int32           `bson:"level" dao:"persist,sync"`

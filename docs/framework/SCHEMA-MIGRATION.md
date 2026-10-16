@@ -4,7 +4,7 @@
 
 ## 1. 现行规则：运行时只认当前 schema
 
-- DAO 标记 `//roost:dao coll=player db=game schema=2` 声明当前 schema，生成常量 `PlayerDaoSchemaVersion`；投影器写文档时带 `_schema`（[mongo_projection.go](../../framework/dataengine/engine/mongo_projection.go)）。
+- DAO 标记 `//roost:dao coll=player db=planet schema=2`（`db=` 默认是工程名）声明当前 schema，生成常量 `PlayerDaoSchemaVersion`；投影器写文档时带 `_schema`（[mongo_projection.go](../../framework/dataengine/engine/mongo_projection.go)）。
 - 冷加载先校验聚合里**全部** DAO 的 `_schema` 等于当前版本，再水合与发布实体（[entity_repository.go](../../framework/dataengine/engine/entity_repository.go) 的 `checkAggregateSchemas`）；生成的 `RestorePersisted` 在解码前再校验一次。旧版本、未来版本都以 `dataengine.ErrSchemaMismatch` 拒绝，**不自动转换、不写回**。
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时视为不存在，不检查 schema。

@@ -450,7 +450,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return addEntityDAO(root, m, o)
 		}
 		path = "db/def/" + snake + ".go"
-		body = renderDAODefinition(snake, pascal+"Dao")
+		body = renderDAODefinition(daoDatabaseName(m.Project.Name), snake, pascal+"Dao")
 	case "webroute":
 		path = "service/web/" + snake + ".go"
 		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)

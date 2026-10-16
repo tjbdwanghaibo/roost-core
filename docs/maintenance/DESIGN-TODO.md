@@ -12,7 +12,7 @@
 | D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 维护者 2026-10-16 决定折中方案，已实施（提交见本节） |
 | D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施 |
 | D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施 |
-| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 待决定（2026-10-16 新用户试用登记） |
+| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施；方案 A 保留待评估 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -145,9 +145,13 @@
 
 ## D9 DAO 库名不随配置、`_id` 是编码后的 EntityID
 
-**状态：待决定。** 登记：2026-10-16 新用户试用实测（与 2026-10-05 演练预演的发现相同，第二次出现）。
+**状态：维护者 2026-10-16 决定 B，已实施（提交见下）；方案 A（库名取运行配置）不做，保留为后续评估。**
 
-**现状**：`roost add dao` 骨架写死 `//roost:dao coll=player db=game`，库名是编译期常量 `PlayerDaoDBName`；服务配置的 `dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox）。同一 Mongo 上的两个工程即使改了 `dataengine.database`，业务集合仍都写进 `game.player`。（引擎侧 `DocumentKey.Database` 为空时已回退到 `DefaultDatabase`，见 `framework/dataengine/engine/mongo_store.go` 的 `collection`；但 DAO 解析要求写 `db=`（`codegen/internal/dao/parse.go`），生成的 DAO 走不到这条回退。2026-10-16 审查补注。）另外文档 `_id` 是编码了 kind 的 EntityID（玩家 9001 存成 9217029），运维按玩家 ID 查不到。
+**实施结果**：`roost add dao`（含 `--entity`）骨架写 `db=<project>`：`daoDatabaseName` 取 `project.name`，系统库 `admin` / `local` / `config` 加 `_data`，超过 52 字节截断并去掉末尾 `_`（Mongo 库名 63 字节上限，留出 `dbscope=sid` 的 `_<sid>`），骨架注释写明库名与 `_id` 换算；game-demo 的 Player / Guild / World DAO 改用同一规则（工程 planet → `planet` 库），demo 文档同步。`roost id entity` 双向换算完整 EntityID 与唯一号 / kind / category / remote（`--entity` 读工程 `//roost:entity` 标记）。已有工程 DAO 定义归业务、不改写，旧库数据不迁移（未上线不做兼容，升级说明见 CHANGELOG）。
+
+登记：2026-10-16 新用户试用实测（与 2026-10-05 演练预演的发现相同，第二次出现）。
+
+**登记时现状**：`roost add dao` 骨架写死 `//roost:dao coll=player db=game`，库名是编译期常量 `PlayerDaoDBName`；服务配置的 `dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox）。同一 Mongo 上的两个工程即使改了 `dataengine.database`，业务集合仍都写进 `game.player`。（引擎侧 `DocumentKey.Database` 为空时已回退到 `DefaultDatabase`，见 `framework/dataengine/engine/mongo_store.go` 的 `collection`；但 DAO 解析要求写 `db=`（`codegen/internal/dao/parse.go`），生成的 DAO 走不到这条回退。2026-10-16 审查补注。）另外文档 `_id` 是编码了 kind 的 EntityID（玩家 9001 存成 9217029），运维按玩家 ID 查不到。
 
 **可选方向**：A DAO 库名默认取运行配置（`db=` 省略时用 `dataengine.database` 或新键 `dataengine.business_database`），显式 `db=` 仍是常量；代价是生成 DAO 需要运行期注入库名，迁移已有数据。B 骨架按工程名生成 `db=<project>`，并在文档写明 `_id` 编码与换算命令（`roost id` 加一个换算子命令）；代价小，但多工程仍靠约定隔离。
 
