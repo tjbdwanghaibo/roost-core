@@ -111,7 +111,7 @@ step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写
 
 从历史快照数据迁移时，先升级所有 WAL reader，再启用 writer v2，最后重新生成 DAO 并完成
 一次性数据验证。运行时只有 `persistence.engine=dataengine`，不存在双写或回切旧引擎；完整
-导入步骤见 core `docs/DATA_ENGINE_MIGRATION.md`。
+导入步骤见旧版[迁移说明（固定提交）](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/DATA_ENGINE_MIGRATION.md)；现行 schema 变更按 [schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md)。
 
 ## 升级步骤
 

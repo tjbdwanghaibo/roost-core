@@ -68,7 +68,7 @@ Roost 把这三件事分别交给三个核心模块：
 以下命令用于 macOS/Linux。安装 Git 和 Go 1.27.x，确认 `go version` 的输出符合要求。首次执行可能需要下载 Go 依赖。
 
 ```sh
-git clone --branch v1.26.0 https://github.com/tjbdwanghaibo/roost-core.git
+git clone --branch v1.27.0 https://github.com/tjbdwanghaibo/roost-core.git
 cd roost-core/examples/configgen
 GOWORK=off go run .
 ```
@@ -112,6 +112,6 @@ reloaded: monster#1=dire wolf version=3 ...
 
 先看“必须保持的契约”和流程说明，带着一个具体问题再展开源码或测试目录。例如想知道持久字段写入为什么被拒绝，就查 DataEngine/Nest 对应的实现入口，而不是从所有测试文件的第一行开始读。
 
-源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.26.0-VALIDATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
+源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.27.0-VALIDATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
 
 [返回文档首页](README.md) · [完整模块目录](framework/README.md)

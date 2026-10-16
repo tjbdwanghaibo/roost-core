@@ -2,7 +2,7 @@
 
 Roost 是通用游戏服务器框架。业务采用 ECS：Entity 组合组件与 DAO，Nest 调度业务 handler，DataEngine 持久化变更，Sync 按会话与 Interest 同步 Entity 状态。
 
-当前版本为 [v1.26.0](docs/release/v1.26.0-NOTES.md)：Nest short/long/io 三池与 Await、Sync 合批/Relation 增量/AOI 优化、旧兼容移除与全仓整理。升级不兼容旧数据与旧工程写法，按发布说明的升级要求执行；最终代码上的 15 分钟重档复测见发布验收。
+当前版本为 [v1.27.0](docs/release/v1.27.0-NOTES.md)：玩家接入目录改名与 Remote Rejected 精简（运行时链路、配置、wire 与存储格式不变）。此前的功能版本 [v1.26.0](docs/release/v1.26.0-NOTES.md) 带来 Nest short/long/io 三池与 Await、Sync 合批/Relation 增量/AOI 优化、旧兼容移除与全仓整理；升级按各版发布说明的升级清单执行，验收见对应 VALIDATION。
 
 ## 阅读入口
 

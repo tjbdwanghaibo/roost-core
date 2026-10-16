@@ -100,7 +100,7 @@ make codegen-up`,
 	},
 	{
 		Name: "framework-release", Aliases: []string{"framework", "release-train", "framework-lock"},
-		Summary: "校验 core、kit、skill 精确发布集合并生成不可变框架锁",
+		Summary: "校验 roost-core 发布版本并生成不可变框架锁",
 		Usage: `roost framework verify --manifest codegen/ci/framework-release.yaml --expected-release v1.16.0 --lock framework-lock.json
 roost framework verify --github-output "$GITHUB_OUTPUT"`,
 		Configuration: `codegen/ci/framework-release.yaml 只能使用 vMAJOR.MINOR.PATCH，不能使用 latest 或伪版本。它只有一行 release：一个模块一个版本。verify 从 Go module proxy 获取那一个已发布模块，校验 module path、checksum、replace 和框架内部伪版本依赖，然后生成 framework-lock.json；scripts/pretag.sh 在打 tag 之前先比对清单与要发的版本。release workflow 只有在完整生成项目兼容矩阵通过后才进入受保护 framework-release Environment。`,
@@ -186,7 +186,7 @@ roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-han
 	},
 	{
 		Name: "mods", Aliases: []string{"mod", "kit-mods"},
-		Summary: "配置并自动补齐 Kit Mod 依赖",
+		Summary: "配置并自动补齐 Wiring Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
 roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
 		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、nest、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
