@@ -13,6 +13,7 @@
 | D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施（`e7e59298`） |
 | D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施（`bac32cd2`） |
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
+| D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 已确认缺陷，待维护者决定（2026-10-16 登记） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -120,14 +121,39 @@
 
 **实施结果**：
 - 框架码：`infra/base/errcode` 新增框架段 `1–999`（只由 errcode 包分配，包注释登记全部码段归属）与 `CodeEntityNotFound = 2` / `ErrEntityNotFound`（`entity_not_found`）。依赖方向：errcode 在 infra、不认识 framework；判定在 Nest：`framework/nest/io_load.go` 的 `targetLoadError` 遇到 `entity.ErrAuthorityEntityNotFound`（DataEngine `ErrEntityAggregateNotFound` 满足它）时 `errcode.Wrap(errcode.ErrEntityNotFound, err)`，原错误保留。生成 endpoint 只给 `CodeInternal` 记 ERROR，因此这种预期情况不再记 ERROR。`roost.yaml ids.errcode` 下界落进框架段时 manifest 校验拒绝。
-- 已删档：数据层能区分“全部 DAO 都没有文档”与“全部只剩墓碑”，但两者对调用方是同一个哨兵、同一个客户端码（产品上都表示“先登录 / 创角”），只在错误文本 `state=absent|deleted` 区分。删档后同 ID 重建能否越过墓碑版本落库尚未确认，登记在 KNOWN-LIMITS。
+- 已删档：数据层能区分“全部 DAO 都没有文档”与“全部只剩墓碑”，但两者对调用方是同一个哨兵、同一个客户端码（产品上都表示“先登录 / 创角”），只在错误文本 `state=absent|deleted` 区分。删档后同 ID 重建原登记为“尚未确认”，2026-10-16 实测确认会让投影版本冲突、进程 fail-stop，转为 [D10](#d10-删档后用同一-id-重建)。
 - 首登步骤：`roost add endpoint EnterGame --handler player --lifecycle Player` 生成登录 endpoint（`<Entity>FromRegistry(controller.Registry()).GetOrCreate(ctx, context.PlayerID)`）；两处 controller 骨架都带 `Registry()`；first-business 新增 `workflow:login` 检查，`roost project next` 给出上面的命令；workbook、CODEGEN_REFERENCE、README 同步。
+- 端到端验证（2026-10-16，已验证）：当前主线（`e346fe3f`）生成新手工程走完 first-business（含 `roost add endpoint EnterGame --handler player --lifecycle Player`）与 `roost add transport tcp`，game 服务连本机共享隔离环境的真实 Mongo 副本集 / NATS（DataEngine 真实落库，私有库名与流名），真实 TCP 客户端：从未登录的玩家直接发 RenamePlayer 收到 `code=2 reason="entity not found"`，服务端日志无 ERROR / WARN；同一连接发 EnterGame（`code=0`）后再发 RenamePlayer 成功（`code=0`），Mongo 里 `name` 落库、`_version=1`；重启进程后该玩家直接发 RenamePlayer 冷加载成功、`_version=2`，另一个新玩家仍先得到 `code=2`。已删档的玩家直接发业务请求同样得到 `code=2`。只测了嵌入 TCP：新手工程没有独立 Gate 传输，game-demo 的 Gate 模式要另起 Gate 进程、Redis 单实例身份与账号票据，本轮未起；`code=2` 由 controller 写进 Response，Gate 只转发回包字节，与传输无关。
 
 **现状**：一个从未登录（Entity 不存在）的玩家直接发业务请求时，Nest 冷加载返回 `dataengine repository: entity aggregate not found`，`errcode.ClientError` 把它归为 `CodeInternal`（客户端收到 `code=1 server error`），服务端记 ERROR。beginner 的 first-business 流程（`roost project next` / `doctor --workflow first-business`）全绿后不包含“登录时 `lifecycle.GetOrCreate`”这一步，新手第一次真实请求就会碰到。
 
 **可选方向**：A 框架定义一个稳定错误码（例如 `errcode` 里的 `entity_not_found`），Nest 冷加载不存在时包装它，客户端可提示重新登录；代价是 nest / dataengine 错误与 errcode 产生依赖，要定码段归属。B 不加框架码，在 first-business 流程里加一步 `roost add endpoint EnterGame`（调用 lifecycle.GetOrCreate）并让 doctor 检查；代价是只解决新工程，冷加载不存在仍是 Internal。C 两者都做。
 
 **建议**：C。需要拍板：码值与名字放在框架还是生成工程；“不存在”是否要区分已删档。
+
+## D10 删档后用同一 ID 重建
+
+**状态：已确认缺陷，待维护者决定。** 登记：2026-10-16（D7 实施时登记为 KNOWN-LIMITS“尚未确认”，同日实测确认）。
+
+**现象（实测）**：
+- 框架层：`codegen/internal/entity/testdata/dataengine` 的 `TestGeneratedDataEngineRecreateAfterDeleteSameID`（正式生成 Entity / DAO、Runtime 删档准入、文件 WAL、真实 Mongo；strict 与 async 各一次）。创建并落库（`_version=2`）→ `Destroy(deletePersisted=true)` 落库成墓碑（`_deleted: true`、`_version=3`）→ 冷加载 `ErrEntityAggregateNotFound` → 同 ID `Create` + 写入 → `Flush` 得到 `fatal projection version conflict: Put duplicate key .../trade_inventories/<id> expected=0 next=1`，投影器 fence。用 `ROOST_GENERATED_KNOWN_RED=1` 运行复现（默认跳过）。
+- 冷重启：同一 WAL 目录新起 Runtime，`startup projection recovery` 重放同一条记录再次 `fatal projection version conflict`，Runtime 启动失败。
+- 生成工程真实进程（新手工程 + 嵌入 TCP + 真实 Mongo / NATS，临时加一个调 `lifecycle.Destroy(..., true)` 的删档 endpoint）：删档成功 → 同一玩家 RenamePlayer 得到 `code=2` → EnterGame `code=0`（GetOrCreate 新建）→ RenamePlayer 回复 `code=0`，随后服务端 `dataengine: fatal storage outcome; process is fenced`（`d7verify_nova_e2e/player/<id> expected=0 next=1 stored=2`），进程退出，其他玩家一起断线；再启动时 `mod dataengine start: dataengine runtime: startup projection recovery: ... fatal projection version conflict`，进程起不来。
+
+**根因**：
+1. 冷加载把全部墓碑读作不存在时丢掉了墓碑版本（`framework/dataengine/engine/entity_repository.go` `readAggregate`：`doc.Deleted` 只计数，`state=deleted` 只进错误文本）。
+2. 生成 lifecycle `GetOrCreate`（`codegen/internal/roost/add_workflow.go`）在确切 not found 后 `Create(IsCreate: true)`，新实体各 DAO tracker 版本为 0；生成 DAO 的 `PrepareMutation`（`codegen/internal/dao/template_dao.go`）在版本 0 时生成 `Put expected=0 next=1`。
+3. `MongoStore` 的版本条件对 `expected=0` 要求 `_version` 不存在（`framework/dataengine/engine/mongo_store.go` `mutationFilter`，批量路径 `mongo_projection.go` `batchMutationModel` 相同），墓碑带 `_version`，upsert 撞主键后 `classifyNoMatch` 判为 `ErrProjectionConflict`（fatal）。墓碑本来就只接受 `expected=墓碑版本` 的 Put 复活（`TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion`）。
+WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`），准入时不能做 I/O，所以冲突只能在投影时发现；此时回复已经发出、记录已经持久，按契约只能 fail-stop。
+
+**可选方向**（都不跳过冲突 WAL、不放宽版本比较、不伪造持久确认）：
+- **A 允许重建，版本接续墓碑**：冷加载读到全部墓碑时，错误带每个 DAO 的墓碑版本（仍满足 `errors.Is(err, ErrEntityAggregateNotFound)`，客户端码不变）；生成 lifecycle `GetOrCreate` 把它交给 `Create`（`EntityCreateParam` 新字段），新实体各 DAO tracker 从墓碑版本起步，且首个提交强制整文档 Put（墓碑保留了删除前的旧字段，Patch 会把新旧字段混在一起）；投影走已有的“严格高于墓碑的 Put 复活”路径。代价：`EntityCreateParam`、生成 DAO 模板（tracker 起始版本 + 首次整文档）、生成 lifecycle 各改一处，已生成工程的 lifecycle 归业务、要手改或重新生成；Nest handler 里直接 `Create` 一个删过档的 ID（没有冷读）仍会冲突，需文档约束或在 I/O 阶段先读；复活后墓碑的 `_deleted_at` 不再保留，删档审计要另存。Remote 实体已经是这种语义（删除后当前 fence 写入新版本 = 显式重建，见 wiring CHANGELOG“不变量 ③”）。
+- **B 删档后该 ID 不再可用**：`state=deleted` 改为独立哨兵（例如 `ErrEntityAggregateDeleted`，不满足 not found），`GetOrCreate` 不再创建并返回它，客户端得到新码（例如 `entity_deleted`）或登录失败。代价：PlayerID 来自账号时，删角色等于该账号永远不能再建同 ID 角色，产品要另发 ID；直接 `Create` 删过档的 ID 仍会 fence，需要同样的约束。
+- **C 重建前清墓碑**：`GetOrCreate` 发现 `state=deleted` 时，先在一个 Mongo 事务里按“`_deleted: true` 且版本等于读到的墓碑版本”删除全部 DAO 文档，再按新实体从版本 0 创建。代价：清理是 WAL 之外的直接存储写，偏离 Nest → WAL → 投影的唯一持久链路；版本回到 1，失去单调版本；删档审计同样丢失。
+
+**建议**：A。D7 已定“已删档”与“从未创建”对客户端同义（先登录 / 创角），A 让这句话成立且只用现有的复活规则；B、C 分别改变产品语义与持久链路。
+
+**需要拍板**：删档后是否允许同 ID 重建（A / C 允许，B 不允许）；选 A 时，handler 内直接新建删过档 ID 的处理（只写文档约束，还是 I/O 阶段先读墓碑）；删档审计（删除时间）是否需要另存。
 
 ## D8 生成的服务包名大写（`package Game`）
 
