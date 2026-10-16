@@ -454,7 +454,7 @@ Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observ
 
 `app.business_time.advance_failed.total`（Prometheus `app_business_time_advance_failed_total`）记录推进协调存储高水位失败，排查连接与协调存储；不能把业务时间守卫故障当作普通时间漂移忽略。
 
-玩家 TCP 接入：`player_tcp_rate_limited_total`（无标签 Counter）记录每连接令牌桶拒绝并断开的次数；默认每秒 100 请求、突发 200，心跳也消耗令牌。`request_rate: 0` 显式关闭限流。鉴权后空载荷 MsgID=0 是心跳，仍受序列检查和 idle_timeout 约束。
+玩家 TCP 接入：`player_tcp_rate_limited_total`（无标签 Counter）记录每连接令牌桶拒绝并断开的次数；默认每秒 100 请求、突发 200，心跳也消耗令牌。客户端只看到连接断开（EOF），按玩家查原因看 Debug 日志 `player tcp rate limit exceeded, closing connection`（带 `player_id`、`request_rate`、`request_burst`）；与坏帧、认证失败一样不升到 Warn，避免客户端刷日志。`request_rate: 0` 显式关闭限流。鉴权后空载荷 MsgID=0 是心跳，仍受序列检查和 idle_timeout 约束。
 
 ### SyncBus 有限重投与恢复（RR-25）
 

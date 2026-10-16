@@ -20,6 +20,7 @@
 ### 新用户试用（第二轮）
 
 - **服务进程运行期失败不再打印 CLI Usage。** 命令行解析成功后，配置、Mod 启动或 Serve 的错误只返回给调用方（生成的 main 用结构化日志记录一次）；修前 cobra 在 JSON 日志后面再追加一份 `Error:` 和整段 `Usage:` 帮助，像是命令写错了。未知 flag 等命令行错误照常打印 Usage。回归 `TestAppRuntimeFailurePrintsNoUsage`。
+- **玩家 TCP 被每连接限流断开时留一条 Debug 日志。** 客户端只看到 EOF，修前服务端只有 `player_tcp_rate_limited_total` 计数，按玩家查不到原因；现在断开前记 `player tcp rate limit exceeded, closing connection`（`player_id`、`sequence`、`request_rate`、`request_burst`）。与坏帧、认证失败一致不升到 Warn，客户端造成的断开不能刷日志。见 [OBSERVABILITY](docs/framework/OBSERVABILITY.md)，回归 `TestPerConnectionTokenBucketIncludesHeartbeats`。
 
 ### game-demo 背包数量与学习文档
 

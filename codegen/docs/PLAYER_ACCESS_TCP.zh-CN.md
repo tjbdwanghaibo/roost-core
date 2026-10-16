@@ -96,7 +96,7 @@ player_access:
 ```
 
 - `heartbeat_enabled`：是否接受鉴权后的空心跳，默认 true。关闭后收到消息号 0 的帧会断连。
-- `request_rate/request_burst`：每连接令牌桶的持续速率和突发额度，默认每秒 100、突发 200。
+- `request_rate/request_burst`：每连接令牌桶的持续速率和突发额度，默认每秒 100、突发 200。超出即断开连接，客户端只看到 EOF；服务端计 `player_tcp_rate_limited_total`，并记一条 Debug 日志 `player tcp rate limit exceeded, closing connection`（带 `player_id`）。
   心跳与业务请求共用额度，超额断连；rate=0 显式关闭限流。重连建立新桶，不提供跨连接或集群限流保证。
 - `dispatch_timeout`：单个请求的总预算。应与 `nest.request_timeout` 一致（handler 内一次 Nest 调用已有这个
   预算）；键缺省时取同一配置里的 `nest.request_timeout`，再缺省为 3s。`add transport tcp` 补键时按该服务配置

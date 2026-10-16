@@ -462,6 +462,9 @@ func (server *TCPServer) readRequests(connectionCtx context.Context, connection 
 		// 心跳也消耗令牌，防止保活帧绕过每连接限流；同一读循环内保持顺序。
 		if limiter != nil && !limiter.Allow() {
 			metrics.IncCounter("player_tcp_rate_limited_total", nil, 1)
+			// 客户端只会看到连接断开（EOF），这一行让运维能按玩家查到原因；客户端造成的断开只记 Debug，不能被刷成 Warn。
+			slog.Debug("player tcp rate limit exceeded, closing connection", "player_id", playerID, "sequence", request.sequence,
+				"request_rate", server.config.RequestRate, "request_burst", server.config.RequestBurst)
 			releasePayload()
 			return
 		}

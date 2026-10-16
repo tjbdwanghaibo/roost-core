@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -80,7 +82,32 @@ func TestHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T) {
 	}
 }
 
+// lockedBuffer 收集服务端读循环 goroutine 写的日志。
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// 超过每连接令牌桶即断开连接（心跳也计入）；断开前留一条 Debug 日志点名玩家与限额，
+// 客户端只看到 EOF 时运维能从日志找到原因。与坏帧、认证失败一样不升到 Warn：客户端造成的断开不能刷日志。
 func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T) {
+	logs := &lockedBuffer{}
+	previous := slog.Default()
+	previousOutput := log.Default().Writer()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous); log.SetOutput(previousOutput) })
 	for _, enabled := range []bool{true, false} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) { return "ok", nil }, func(c *TCPConfig) {
@@ -108,6 +135,13 @@ func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T) {
 					}
 				}
 				_ = conn.Close()
+			}
+			limited := strings.Count(logs.String(), "player tcp rate limit exceeded")
+			if enabled && (limited != 2 || !strings.Contains(logs.String(), "player_id=7") || !strings.Contains(logs.String(), "request_burst=2")) {
+				t.Fatalf("rate-limited close logged %d times, want 2 naming player_id and request_burst:\n%s", limited, logs.String())
+			}
+			if !enabled && limited != 2 {
+				t.Fatalf("disabled limiter added rate-limit logs: %d", limited)
 			}
 		})
 	}
