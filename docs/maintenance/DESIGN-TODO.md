@@ -9,6 +9,10 @@
 | D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 维护者 2026-10-15 决定 A，已实施 |
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D5 | 静态 Player 跨机迁移的参考流程 | 维护者 2026-10-15 决定 A，已实施 |
+| D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 待决定（2026-10-16 新用户试用登记） |
+| D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 待决定（2026-10-16 新用户试用登记） |
+| D8 | 生成的服务包名大写（`package Game`） | 待决定（2026-10-16 新用户试用登记） |
+| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 待决定（2026-10-16 新用户试用登记） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -90,3 +94,48 @@
 **建议**：A 先做，并用 demo 在本机演练一次；B 等上线后有真实迁服需求再评估。
 
 **需要拍板**：是否需要框架级迁移命令（B）；上线前是否要求完成一次端到端迁服演练。
+
+## D6 玩家看自己状态（Entity Sync 自身视图）的接入骨架
+
+**状态：待决定。** 登记：2026-10-16 新用户按 beginner 流程写商店（金币 / 道具 DAO 字段已标 `sync`）后，想让客户端收到自己的金币与道具变化，找不到可走的路。
+
+**现状**：生成的 bootstrap 固定写 `kitnest.NewMod(EntityAccess)`（`codegen/internal/roost/render.go` 的 `nest` 分支），roost.yaml 没有开关能改用 `wiring/nest.NewModWithEntitySync`；生成器与 demo 都不调用它。demo 的场景同步自己建 `entitysync.Manager` + Interest 政策（`demo/internal/service/game/scene.go.tmpl` 约 875 行），并手写卸载重同步、加载后重绑、held / ready 会话与客户端 `scene_ready`。最简单的“只看自己”需要业务自己拼：Manager、`policy.Direct`、把 `TCPRuntime.PushSyncPlayer` 包成 Transport、登录时 Register / OpenSession / Bind、断线 CloseSession、卸载与重载、客户端解原始 Sync 帧。
+
+**问题**：DAO 的 `sync` 标记对新工程没有可见效果；文档（guide/04-sync、ENTITY_SYNC）是契约与实现层描述，没有一条“玩家看自己”的可复制链路。
+
+**可选方向**：A 在 `access player` 上加 `self_sync: true`（或 `roost add sync self --entity Player`）：生成 `NewModWithEntitySync` 装配、TCP `PushSyncPlayer` Transport、登录 / 断线的会话与 Direct 绑定、卸载重同步接线，以及 Go 客户端解码示例；代价是生成器新增一条有状态链路，要配真实进程回归。B 只补文档与 demo 中抽出的最小示例，装配仍由业务手写；代价是每个工程重复写易错的生命周期。C 维持现状。
+
+**建议**：A。需要拍板：开关放在 access 还是 entity；自身视图用哪个 profile；是否同时生成 C# 解码样例。
+
+## D7 实体不存在时给客户端的稳定错误码与首登步骤
+
+**状态：待决定。** 登记：2026-10-16 新用户试用实测。
+
+**现状**：一个从未登录（Entity 不存在）的玩家直接发业务请求时，Nest 冷加载返回 `dataengine repository: entity aggregate not found`，`errcode.ClientError` 把它归为 `CodeInternal`（客户端收到 `code=1 server error`），服务端记 ERROR。beginner 的 first-business 流程（`roost project next` / `doctor --workflow first-business`）全绿后不包含“登录时 `lifecycle.GetOrCreate`”这一步，新手第一次真实请求就会碰到。
+
+**可选方向**：A 框架定义一个稳定错误码（例如 `errcode` 里的 `entity_not_found`），Nest 冷加载不存在时包装它，客户端可提示重新登录；代价是 nest / dataengine 错误与 errcode 产生依赖，要定码段归属。B 不加框架码，在 first-business 流程里加一步 `roost add endpoint EnterGame`（调用 lifecycle.GetOrCreate）并让 doctor 检查；代价是只解决新工程，冷加载不存在仍是 Internal。C 两者都做。
+
+**建议**：C。需要拍板：码值与名字放在框架还是生成工程；“不存在”是否要区分已删档。
+
+## D8 生成的服务包名大写（`package Game`）
+
+**状态：待决定。** 登记：2026-10-16。
+
+**现状**：`internal/service/<name>/` 下生成的文件用 `safeIdent(name)` 作包名（`render.go` 的 `renderService` / `renderServiceManagers`、`framework_services.go`），game-demo 模板同样是 `package Account`、`{{GAME_SERVICE_PKG}}`。合法但不合 Go 包名惯例（小写），新手读到 `package Game` 会以为写错。
+
+**问题**：不能只改生成器：`service.go`、`managers.go` 归业务、生成一次后不再改写，已有工程里它们仍是大写包名，而生成器持有的 `framework_clients_gen.go` 等重写成小写后，同一目录出现两个包名，`roost project sync` 之后编译失败。
+
+**可选方向**：A 改成小写，并让 `roost project sync` 对这几个已知业务文件只改 package 子句（或 doctor 给出一条命令）；B 维持大写，在 CODEGEN_REFERENCE 写明是约定；C 新工程小写、已有工程保持（按目录现有包名生成）。
+
+**建议**：C（不改写业务文件，也不制造双包名）。需要拍板：是否值得为风格做这次迁移。
+
+## D9 DAO 库名不随配置、`_id` 是编码后的 EntityID
+
+**状态：待决定。** 登记：2026-10-16 新用户试用实测（与 2026-10-05 演练预演的发现相同，第二次出现）。
+
+**现状**：`roost add dao` 骨架写死 `//roost:dao coll=player db=game`，库名是编译期常量 `PlayerDaoDBName`；服务配置的 `dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox）。同一 Mongo 上的两个工程即使改了 `dataengine.database`，业务集合仍都写进 `game.player`。另外文档 `_id` 是编码了 kind 的 EntityID（玩家 9001 存成 9217029），运维按玩家 ID 查不到。
+
+**可选方向**：A DAO 库名默认取运行配置（`db=` 省略时用 `dataengine.database` 或新键 `dataengine.business_database`），显式 `db=` 仍是常量；代价是生成 DAO 需要运行期注入库名，迁移已有数据。B 骨架按工程名生成 `db=<project>`，并在文档写明 `_id` 编码与换算命令（`roost id` 加一个换算子命令）；代价小，但多工程仍靠约定隔离。
+
+**建议**：先做 B（低成本、立即消除误用），A 另行评估。需要拍板：库名是否应当是部署配置而不是代码常量。
+
