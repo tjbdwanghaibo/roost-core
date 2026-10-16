@@ -111,6 +111,9 @@ func run(args []string, stdout io.Writer) error {
 
 		// Generate sender package
 		if *sender {
+			if err := checkSenderVisibleTypes(funcs, pkg); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
 			senderDir := filepath.Join(outDir, "sender")
 			if err := os.MkdirAll(senderDir, 0755); err != nil {
 				return fmt.Errorf("mkdir sender: %w", err)

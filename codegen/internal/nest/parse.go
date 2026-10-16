@@ -723,3 +723,62 @@ func usableParamName(name string, index int) string {
 	}
 	return name
 }
+
+// checkSenderVisibleTypes 拒绝签名里引用 handler 包自身类型的 handler。sender / syncsender 是 handler 包的子包，
+// 参数与结果类型原样搬进去：handler 包里声明的类型在子包里是 undefined；让子包导入 handler 包也不行，
+// handler 会注入并调用 sender，导入成环。所以只能要求把类型移到 handler 已导入的包（实体包、protocol/def 等）。
+// 签名里不带包名、又不是预声明类型（int、error、any……）的标识符，只能是本包（或点导入）的类型。
+func checkSenderVisibleTypes(funcs []*FuncInfo, pkg string) error {
+	for _, f := range funcs {
+		var exprs []string
+		for _, p := range f.Params {
+			exprs = append(exprs, p.Type)
+		}
+		for _, r := range f.Returns {
+			exprs = append(exprs, r.Type)
+		}
+		if f.Ret.Have {
+			exprs = append(exprs, f.Ret.Type)
+		}
+		for _, expr := range exprs {
+			if local := packageLocalTypeName(expr); local != "" {
+				return fmt.Errorf("nest: handler %s: type %s is declared in package %s, but the generated %s/sender and %s/syncsender packages cannot import %s (handler code calls the senders, so the import would cycle); move %s to a package the handler imports, such as the entity package", f.RawName, local, pkg, pkg, pkg, pkg, local)
+			}
+		}
+	}
+	return nil
+}
+
+// packageLocalTypeName 返回类型表达式里第一个不带包名的非预声明类型名；表达式解析失败时交给编译器报。
+func packageLocalTypeName(typeExpr string) string {
+	expr, err := parser.ParseExpr(typeExpr)
+	if err != nil {
+		return ""
+	}
+	var local string
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if local != "" {
+			return false
+		}
+		switch n := node.(type) {
+		case *ast.SelectorExpr:
+			// pkg.Type：包名与类型名都不是本包标识符。
+			return false
+		case *ast.Field:
+			// 内联 struct / func 类型里的字段名、参数名不是类型，只看字段类型。
+			local = packageLocalTypeName(types.ExprString(n.Type))
+			return false
+		case *ast.Ident:
+			if !predeclaredType(n.Name) {
+				local = n.Name
+			}
+		}
+		return true
+	})
+	return local
+}
+
+func predeclaredType(name string) bool {
+	_, ok := types.Universe.Lookup(name).(*types.TypeName)
+	return ok
+}

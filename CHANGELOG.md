@@ -8,6 +8,12 @@
 
 - **嵌入 TCP 推送改为每连接有界出站队列，停读客户端不再拖住整个场景同步。** 修前 `TCPRuntime.Push*` 持写锁同步写 socket，调用方 ctx 无截止时等满 `write_timeout`（默认 5s）；场景 Sync Flush、Lockstep Tick 都逐会话串行推送，一个停读的客户端让每次 Flush / Tick 卡 5s。现在每连接一条队列和唯一写协程按入队顺序写出推送、回包与心跳 ACK，`Push*` 只入队（返回 nil 表示已准入，不需要 `fctx.BlockingError` 守卫）；队列超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节、或一帧在 `write_timeout` 内写不出，就关闭该连接（新指标 `player_tcp_outbound_overflow_total`），与独立 Gate 的慢连接策略一致。服务推送序号仍在写出时分配；读循环的回包写出后才读下一个请求，handler 里先发的推送先于回包；业务可见的 `Session.Reply` 改为只入队。独立 Gate 路径不变。见 [GATEWAY §4](docs/framework/GATEWAY.md#嵌入-tcp-的出站)，回归 `TestAStalledConnectionDoesNotHoldPushesToOtherConnections`、`TestOutboundQueueKeepsPushReplyOrderAndPushSequences`。
 
+### 生成器：新用户试用发现的三处阻断
+
+- **`roost generate` 报出的 `configs/table_template/*.csv` 现在真的写进工程。** 模板由 tablegen 按 schema 每次整份重写、不带生成头，而暂存提交只认领带头文件与 `isGeneratedData` 登记的目录（`configs/data/*.json`、`docs/generated/`），模板在暂存树里写出、路径也打印了，提交时却被丢掉。`isGeneratedData` 补上 `configs/table_template/*.csv`，`generate --check` 同时把它纳入比对。见 [代码生成实现 §2B](docs/framework/impl/12-codegen.md#2b-生成器共同实现)。
+- **handler 签名引用 handler 包自身的类型时，nest 生成器直接报错并要求移走类型。** 原先 sender / syncsender 子包原样写出 `(BuyItemResult, error)`，编译报 `undefined: BuyItemResult`；子包又不能反向导入 handler 包（handler 调用 sender，导入成环），所以不做限定导入，而是点名类型、提示移到实体包等 handler 已导入的包（demo 一直这么放）。见 [生成器参考 · Nest](codegen/docs/CODEGEN_REFERENCE.zh-CN.md)。
+- **`roost add endpoint` 生成 demo 的边界写法。** handler 返回 `(T, error)` 时骨架原先只接 err，编译失败；业务错误原先 `return nil, err`，TCP 接入层（`gateway.TCPServer.dispatchRequest`）把 Dispatch 错误当坏帧断开连接。现在接住全部返回值（`result, err :=`，留 `_ = result` 提示填响应），handler 错误经 `errcode.ClientError` 变成 `(Code, Reason)` 响应、只给 `CodeInternal` 记日志；Response 缺 `Code` / `Reason` 字段时 add 阶段报错（`roost add protocol` 默认带上）。已生成的 endpoint 是业务文件，不会被改写，需要的话照 [PLAYER-ACCESS §3](docs/framework/PLAYER-ACCESS.md#3-controller把协议转换成业务调用) 手改。
+
 ### CI 与构建
 
 - nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。

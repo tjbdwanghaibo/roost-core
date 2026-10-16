@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,6 +54,48 @@ func handlerGrant(target player.IBagEntity, orderID string, _ int64) (bool, erro
 	}
 	if !found {
 		t.Fatal("nothing was generated")
+	}
+}
+
+// sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬过去；类型声明在 handler 包里时子包看不见它，
+// 生成物编不过（undefined: BuyItemResult）。子包又不能反向导入 handler 包（handler 会用 sender，成环），
+// 所以生成器必须当场拒绝，点名类型并要求移到 handler 导入的包里，而不是写出编不过的代码。
+func TestSenderRefusesATypeDeclaredInTheHandlerPackage(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		signature string
+		local     string
+	}{
+		{name: "result", signature: "(target player.IShopEntity, itemID int32) (BuyItemResult, error)", local: "BuyItemResult"},
+		{name: "parameter", signature: "(target player.IShopEntity, order []*BuyOrder) error", local: "BuyOrder"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			source := `package handler
+
+import player "example.com/demo/game/entities/player"
+
+type ` + tt.local + ` struct{ Gold int64 }
+
+//roost:nest rollback=undo durability=strict
+func handlerBuyItem` + tt.signature + ` {
+	panic("unused")
+}
+`
+			if err := os.WriteFile(filepath.Join(dir, "buy_item.go"), []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := Run([]string{"-dir", dir}, io.Discard)
+			if err == nil {
+				generated, _ := os.ReadFile(filepath.Join(dir, "syncsender", "buy_item_nest_gen.go"))
+				t.Fatalf("generation accepted %s declared in the handler package; the sender packages cannot see it:\n%s", tt.local, generated)
+			}
+			for _, want := range []string{"handlerBuyItem", tt.local, "move"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error does not name %q: %v", want, err)
+				}
+			}
+		})
 	}
 }
 

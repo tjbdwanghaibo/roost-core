@@ -163,7 +163,13 @@ roost add rpc guild -service game
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
-字段；找不到字段会在 add 阶段报错，不生成半成品。完整顺序与编辑点见生成项目的
+字段；找不到字段会在 add 阶段报错，不生成半成品。handler 返回值时（如 `(player.BuyResult, error)`），
+骨架用 `result, err := sender.Sync_Xxx(...)` 接住全部返回值，并留一行 `_ = result` 提示把结果填进响应。
+骨架按 demo 的边界写法处理错误：接入层把 Controller 返回的 error 当坏帧断开连接，所以 handler 错误
+经 `errcode.ClientError` 变成 `&pb.XxxResponse{Code: code, Reason: reason}, nil`，只有
+`errcode.CodeInternal`（没有业务码的错误）记 `slog.Error`；只有缺 context / request 或构造 Entity ID
+失败才返回 error。因此 Response 必须有 `Code int32` 与 `Reason string`（`roost add protocol` 默认带上），
+缺少时 add 阶段报错。完整顺序与编辑点见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
 `docs/PLAYER_ACCESS_TCP.zh-CN.md`。
 
@@ -380,7 +386,7 @@ func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{
 
 未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；需要请求返回前确认 durable admission 时声明 `durability=strict`，只有明确不持久化的 handler 才显式写 `durability=memory`。
 
-第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
+第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬进去，所以这些类型不能声明在 handler 包本身（子包看不见它，又不能反向导入 handler 包——handler 会调用 sender，导入成环）：生成器遇到这种类型直接报错 `type X is declared in package handler ... move X to a package the handler imports`，把它移到实体包或其他 handler 已导入的包即可（demo 的结果类型都在实体包里）。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
 
 Remote read 可放在请求 struct：
 
@@ -444,7 +450,7 @@ go run .../cmd/protocol@latest \
 | | tablegen | cfggen |
 | --- | --- | --- |
 | 手写什么 | `configs/schema` 下的 Go 结构体，`//roost:table` / `//roost:object` 标记，字段带 `csv` / `json` / `title` 与规则标签 | 一个 YAML 描述 `configs/schema/cfg.yaml`（tables / globals / beans，写法类似简化版 Luban），不写 Go 结构体 |
-| 数据 | 策划编辑的 CSV（`configs/table`），转换成 `configs/data/*.json`；同时生成 CSV 模板 | 直接维护 JSON |
+| 数据 | 策划编辑的 CSV（`configs/table`），转换成 `configs/data/*.json`；同时按 schema 生成表头 CSV 模板 `configs/table_template/*.csv`（每次整份重写，归生成器所有，复制到 `configs/table` 再填数据） | 直接维护 JSON |
 | 单例配置 | `//roost:object` | `globals` |
 | 怎么跑 | `roost generate` 默认执行（Config 步骤，Go 访问代码写到 `configs/generated`） | 不在 `roost generate` 里，单独执行 `cmd/cfggen`；输出不能和 tablegen 共用 `configs/generated` |
 | 适合 | 策划用表格填数、以 CSV 为交付物的流程 | 程序维护的配置、需要 bean（嵌套结构）或二级索引、不想手写 Go 结构体 |

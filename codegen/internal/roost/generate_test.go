@@ -341,6 +341,44 @@ func TestGenerateSkipsConfigDataWhenSchemaHasNoCSVYet(t *testing.T) {
 	}
 }
 
+// `roost generate` 打印的 "table template: <路径>" 是给策划的入口：经暂存树生成再提交后，报出的文件必须真的落进工程
+// （模板由生成器整份重写，不带生成头，提交阶段要按目录认领），且随后 generate --check 认为它是最新的。
+
+func TestGenerateWritesTheTableTemplateItReports(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := filepath.Join(root, "configs", "schema", "monster.go")
+	source := "package schema\n//roost:table name=monster file=monster.csv json=monster.json key=ID\ntype Monster struct { ID int32 `csv:\"id\" json:\"id\" title:\"编号\"` }\n"
+	if err := os.WriteFile(schema, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := GenerateTransactional(context.Background(), root, GenerateOptions{Stdout: &out}, io.Discard); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	want := filepath.Join(root, "configs", "table_template", "monster.csv")
+	if !strings.Contains(out.String(), "table template: "+want) {
+		t.Fatalf("generate did not report the template at %s:\n%s", want, out.String())
+	}
+	raw, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("reported table template was not written: %v", err)
+	}
+	if !strings.HasPrefix(string(raw), "id\n编号\n") {
+		t.Errorf("table template does not carry the schema header rows:\n%s", raw)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGenerated(context.Background(), root, manifest, io.Discard); err != nil {
+		t.Fatalf("generate --check right after generate: %v", err)
+	}
+}
+
 // `roost project diff` 与 `roost project upgrade --dry-run` 是 sync / upgrade 的预览：SyncProject 渲染模板前会把应用自有配置里
 // 未手改的生成 shutdown: 块刷新到当前 Mod 的计划（config.<svc>.yaml、config.<svc>.prod.example.yaml、
 // deploy/k8s/base/secret.<svc>.example.yaml），预览也必须列出它们。承诺：预览列出的文件集合等于随后 sync 实际改写的

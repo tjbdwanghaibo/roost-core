@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -508,6 +511,91 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	if _, err := os.Stat(controllerPath); !os.IsNotExist(err) {
 		t.Fatalf("duplicate endpoint recreated controller: %v", err)
+	}
+}
+
+// `roost add endpoint` 写的是协议边界：handler 返回值时 Sync_ 返回 (result, err)，骨架要接住全部返回值才能编译；
+// 接入层把 Dispatch 返回的 error 当坏帧断开连接（infra/network/gateway/tcp.go dispatchRequest），所以业务失败必须
+// 经 errcode.ClientError 变成 (Code, Reason) 响应、只给 CodeInternal 记日志，不能 return nil, err。
+// 响应没有 Code / Reason 字段时边界无处表达失败，生成前就拒绝。
+func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(rel, old, replacement string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(old)) {
+			t.Fatalf("fixture drift: %s no longer contains %q", rel, old)
+		}
+		if err := os.WriteFile(path, bytes.Replace(raw, []byte(old), []byte(replacement), 1), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
+		{Kind: "protocol", Name: "Ping", Group: "game", Handler: "player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	edit("game/handler/rename_player.go",
+		"func handlerRenamePlayer(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
+		"func handlerRenamePlayer(target player.IProfileEntity, name string) (string, error) {\n\treturn name, nil\n}")
+	edit("protocol/def/rename_player.go", "type RenamePlayerRequest struct{}", "type RenamePlayerRequest struct { Name string `pb:\"1\"` }")
+
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
+		t.Fatalf("add endpoint: %v", err)
+	}
+	path := filepath.Join(root, "game", "controllers", "player", "rename_player.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), path, raw, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := -1
+	ast.Inspect(file, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 {
+			return true
+		}
+		if call, ok := assign.Rhs[0].(*ast.CallExpr); ok {
+			if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Sync_RenamePlayer" {
+				received = len(assign.Lhs)
+			}
+		}
+		return true
+	})
+	if received != 2 {
+		t.Errorf("endpoint receives %d values from Sync_RenamePlayer, which returns (string, error):\n%s", received, raw)
+	}
+	for _, want := range []string{"errcode.ClientError(err)", "code == errcode.CodeInternal", "&pb.RenamePlayerResponse{Code: code, Reason: reason}, nil"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("endpoint does not answer a business error with a coded response (missing %q):\n%s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), "return nil, err\n") {
+		t.Errorf("endpoint returns the handler error to the access layer, which closes the connection:\n%s", raw)
+	}
+
+	edit("protocol/def/ping.go", "\tReason string `pb:\"2\"`\n", "")
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "Ping", Handler: "player", NestHandler: "RenamePlayer"}); err == nil || !strings.Contains(err.Error(), "PingResponse") || !strings.Contains(err.Error(), "Code") {
+		t.Fatalf("endpoint for a response without Code / Reason: %v", err)
 	}
 }
 
@@ -1046,10 +1134,11 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\nfunc handlerRenamePlayer(target player.IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	arguments, target, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
+	signature, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
 	if err != nil {
 		t.Fatal(err)
 	}
+	arguments, target := signature.arguments, signature.entity
 	if got, want := strings.Join(arguments, ","), "request.Name,request.Locale"; got != want {
 		t.Fatalf("endpoint arguments = %q, want %q", got, want)
 	}
@@ -1064,7 +1153,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
+	if _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
 		t.Fatalf("unqualified Entity target accepted: %v", err)
 	}
 }

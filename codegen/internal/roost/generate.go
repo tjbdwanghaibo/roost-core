@@ -553,9 +553,13 @@ func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
 	return out, err
 }
 
+// isGeneratedData 认领不带生成头、按目录归生成器所有的输出。configs/table_template 的 CSV 表头由
+// tablegen 按 schema 每次 -force 整份重写，策划的数据行写在 configs/table，所以模板目录归生成器；
+// 不认领它，暂存提交就会丢掉模板，generate 却已打印了路径。
 func isGeneratedData(path string) bool {
 	p := filepath.ToSlash(path)
 	return strings.Contains(p, "/configs/data/") && strings.HasSuffix(p, ".json") ||
+		strings.Contains(p, "/configs/table_template/") && strings.HasSuffix(p, ".csv") ||
 		strings.Contains(p, "/docs/generated/")
 }
 

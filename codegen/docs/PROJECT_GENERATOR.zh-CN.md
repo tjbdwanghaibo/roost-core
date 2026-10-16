@@ -233,7 +233,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | feature | 脚手架目录 | 驱动的生成器 / bootstrap 接线 |
 | --- | --- | --- |
 | `protocol` ✦ | `protocol/def/` | protocol 生成器（消息注册、bind、handlers、robot-protocol） |
-| `config` ✦ | `configs/schema/`、`configs/generated/`、`configs/data/`（含 `_manifest.json`） | tablegen 三连：`config-template`（meta → CSV 模板）、`config-data`（CSV → JSON）、`config-go`（meta → struct + 注册 + 类型化访问器）；与 `configdata` mod 同时存在时 bootstrap 自动调 `RegisterGeneratedConfigData` |
+| `config` ✦ | `configs/schema/`、`configs/table_template/`、`configs/generated/`、`configs/data/`（含 `_manifest.json`） | tablegen 三连：`config-template`（meta → CSV 模板）、`config-data`（CSV → JSON）、`config-go`（meta → struct + 注册 + 类型化访问器）；与 `configdata` mod 同时存在时 bootstrap 自动调 `RegisterGeneratedConfigData` |
 | `entity` ✦ | `game/entities/` | entity 生成器（`-dir ./game`） |
 | `nest` ✦ | `game/handler/`、`game/bootstrap/register.go` | nest 生成器；bootstrap 里插入 `gamebootstrap.RegisterNestHandlers()` |
 | `dao` ✦ | `db/def/`、`db/` | dao 生成器 |
@@ -394,7 +394,7 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 流水线会：
 
 1. 扫描 configs/schema。
-2. 生成 configs/table_template CSV。
+2. 生成 configs/table_template CSV（只含表头，每次整份重写，归生成器所有；复制到 configs/table 后再填数据）。
 3. 将 configs/table CSV 转换为 configs/data JSON。
 4. 生成 configs/generated/gen_table_config.go。
 5. 将生成的 registry 在 App 创建前注册到 Core DefaultRegistry。

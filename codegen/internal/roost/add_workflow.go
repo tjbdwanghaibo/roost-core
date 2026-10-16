@@ -236,10 +236,19 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 			return nil, err
 		}
 	}
-	arguments, target, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType)
+	// 边界把业务失败写成 (Code, Reason) 响应；响应缺这两个字段时失败无处表达，只能断连接，所以生成前拒绝。
+	responseFields, err := protocolFieldNames(protocolPath, protocolType+"Response")
 	if err != nil {
 		return nil, err
 	}
+	if responseFields["code"] != "Code" || responseFields["reason"] != "Reason" {
+		return nil, fmt.Errorf("protocol %sResponse needs Code int32 and Reason string fields to answer business errors (roost add protocol creates them)", protocolType)
+	}
+	signature, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType)
+	if err != nil {
+		return nil, err
+	}
+	arguments, target := signature.arguments, signature.entity
 	controllerDir := filepath.Join(root, "game", "controllers", domain)
 	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
 	if _, err := os.Stat(endpointPath); err == nil {
@@ -266,20 +275,43 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	if len(arguments) > 0 {
 		callArgs += ", " + strings.Join(arguments, ", ")
 	}
+	// Sync_ 返回 handler 的全部非 error 结果再加 err；骨架必须全部接住才能编译，结果留给业务填进响应。
+	call := fmt.Sprintf("err = sender.Sync_%s(context.Context(), %s)", nestType, callArgs)
+	useResults := ""
+	if signature.results > 0 {
+		results := []string{"result"}
+		if signature.results > 1 {
+			results = results[:0]
+			for index := range signature.results {
+				results = append(results, fmt.Sprintf("result%d", index))
+			}
+		}
+		call = fmt.Sprintf("%s, err := sender.Sync_%s(context.Context(), %s)", strings.Join(results, ", "), nestType, callArgs)
+		useResults = fmt.Sprintf("\t// Copy what the client needs from the handler result into the response.\n\t%s = %s\n",
+			strings.TrimSuffix(strings.Repeat("_, ", len(results)), ", "), strings.Join(results, ", "))
+	}
 	body := fmt.Sprintf(`package %s
 
 import (
 	"fmt"
+	"log/slog"
 
 	%s %q
 	playeraccess %q
 	%ssyncsender %q
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	%q
 )
 
 // Handle%s is the protocol boundary. Authentication is already represented by
 // context.PlayerID; all Entity access continues through the generated Sender.
+//
+// An error returned from here makes the access layer close the connection,
+// which is right for a malformed request and wrong for a business failure. So
+// a handler error becomes a response: errcode.ClientError maps a coded error
+// to its code and client-facing reason, and anything without a code collapses
+// to errcode.CodeInternal with a fixed reason; only that case is logged.
 func (controller *Controller) Handle%s(context *playeraccess.Context, request *pb.%sRequest) (*pb.%sResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("%s endpoint: context and request are required")
@@ -291,10 +323,15 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		return nil, fmt.Errorf("%s endpoint: %%w", err)
 	}
 	sender := %ssyncsender.New%sSender(controller.NestClient())
-	if err := sender.Sync_%s(context.Context(), %s); err != nil {
-		return nil, err
+	%s
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("%s failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.%sResponse{Code: code, Reason: reason}, nil
 	}
-	return &pb.%sResponse{}, nil
+%s	return &pb.%sResponse{}, nil
 }
 `, domain,
 		target.alias, target.importPath,
@@ -303,7 +340,9 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, protocolType, protocolType, protocolType, protocolSnake,
 		target.alias, target.kind, protocolSnake,
-		nestSnake, nestType, nestType, callArgs, protocolType)
+		nestSnake, nestType, call,
+		protocolSnake, protocolType,
+		useResults, protocolType)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
 		return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, body)
@@ -370,16 +409,23 @@ type endpointEntity struct {
 	kind       string
 }
 
-func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) ([]string, endpointEntity, error) {
-	var target endpointEntity
-	requestFields, err := requestFieldNames(protocolPath, protocolType+"Request")
+// endpointSignature 是骨架调用 Sync_ 需要的 handler 签名：按请求字段映射的实参、非 error 返回值个数与目标 Entity。
+type endpointSignature struct {
+	arguments []string
+	results   int
+	entity    endpointEntity
+}
+
+func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) (endpointSignature, error) {
+	var signature endpointSignature
+	requestFields, err := protocolFieldNames(protocolPath, protocolType+"Request")
 	if err != nil {
-		return nil, target, err
+		return signature, err
 	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, handlerPath, nil, parser.ParseComments)
 	if err != nil {
-		return nil, target, err
+		return signature, err
 	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
@@ -387,35 +433,43 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 			continue
 		}
 		if len(function.Type.Params.List) == 0 {
-			return nil, target, fmt.Errorf("Nest handler %s has no Entity target", handlerType)
+			return signature, fmt.Errorf("Nest handler %s has no Entity target", handlerType)
 		}
 		if len(function.Type.Params.List[0].Names) != 1 {
-			return nil, target, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
+			return signature, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
 		}
-		target, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType)
+		signature.entity, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType)
 		if err != nil {
-			return nil, target, err
+			return signature, err
 		}
-		var arguments []string
 		for index, field := range function.Type.Params.List {
 			if index == 0 {
 				continue
 			}
 			if len(field.Names) == 0 {
-				return nil, target, fmt.Errorf("Nest handler %s parameter %d must be named", handlerType, index+1)
+				return signature, fmt.Errorf("Nest handler %s parameter %d must be named", handlerType, index+1)
 			}
 			for _, name := range field.Names {
 				parameter := name.Name
 				requestField, exists := requestFields[toSnake(parameter)]
 				if !exists {
-					return nil, target, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q", protocolType, parameter)
+					return signature, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q", protocolType, parameter)
 				}
-				arguments = append(arguments, "request."+requestField)
+				signature.arguments = append(signature.arguments, "request."+requestField)
 			}
 		}
-		return arguments, target, nil
+		// 末尾的 error 不算结果（nest 生成器拒绝非末尾的 error），其余每个返回值都是 Sync_ 的一个结果。
+		if results := function.Type.Results; results != nil {
+			for _, field := range results.List {
+				signature.results += max(1, len(field.Names))
+			}
+			if last, ok := results.List[len(results.List)-1].Type.(*ast.Ident); ok && last.Name == "error" {
+				signature.results--
+			}
+		}
+		return signature, nil
 	}
-	return nil, target, fmt.Errorf("Nest handler function handler%s not found in %s", handlerType, handlerPath)
+	return signature, fmt.Errorf("Nest handler function handler%s not found in %s", handlerType, handlerPath)
 }
 
 // endpointEntityOf resolves the handler's first parameter type, written as
@@ -447,7 +501,7 @@ func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType string) (
 	return endpointEntity{}, fmt.Errorf("Nest handler %s: no import provides package %q for the Entity target", handlerType, alias.Name)
 }
 
-func requestFieldNames(path, typeName string) (map[string]string, error) {
+func protocolFieldNames(path, typeName string) (map[string]string, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -465,7 +519,7 @@ func requestFieldNames(path, typeName string) (map[string]string, error) {
 			}
 			structure, ok := spec.Type.(*ast.StructType)
 			if !ok {
-				return nil, fmt.Errorf("protocol request %s is not a struct", typeName)
+				return nil, fmt.Errorf("protocol message %s is not a struct", typeName)
 			}
 			fields := make(map[string]string)
 			for _, field := range structure.Fields.List {
@@ -476,7 +530,7 @@ func requestFieldNames(path, typeName string) (map[string]string, error) {
 			return fields, nil
 		}
 	}
-	return nil, fmt.Errorf("protocol request %s not found in %s", typeName, path)
+	return nil, fmt.Errorf("protocol message %s not found in %s", typeName, path)
 }
 
 func firstNonEmpty(values ...string) string {

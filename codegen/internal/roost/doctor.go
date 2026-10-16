@@ -615,7 +615,7 @@ func workflowHandlerProtocolMatch(root, name string) (bool, error) {
 		if len(parameters) == 0 {
 			return false, nil
 		}
-		fields, fieldErr := requestFieldNames(filepath.Join(root, "protocol", "def", name+".go"), toPascal(name)+"Request")
+		fields, fieldErr := protocolFieldNames(filepath.Join(root, "protocol", "def", name+".go"), toPascal(name)+"Request")
 		if fieldErr != nil {
 			if os.IsNotExist(fieldErr) {
 				return false, nil
