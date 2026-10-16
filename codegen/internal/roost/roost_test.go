@@ -312,6 +312,34 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 	}
 }
 
+// roost.yaml 读不出来时 config check 不能把文件报成通过：声明检查需要它，静默跳过就是放过拼错的键。
+// 修前 --service / --file 打印一行 "keys not checked" 后报 "config is valid"，还提示“到有 roost.yaml 的工程里跑”。
+func TestConfigCheckFailsWhenManifestDoesNotLoad(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, ManifestName)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, append(raw, []byte("\nno_such_manifest_field: true\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"config", "check", "--root", root, "--service", "game"},
+		{"config", "check", "--root", root, "--file", "configs/service/config.game.yaml"},
+	} {
+		var stdout bytes.Buffer
+		err := Run(args, &stdout, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), ManifestName) {
+			t.Errorf("%v: err = %v (stdout %q), want the roost.yaml load error", args[len(args)-2:], err, stdout.String())
+		}
+	}
+}
+
 // 框架段里由业务服务声明的键（例如认证器读的 player_access.tcp.dev_auth）不算拼错：静态检查发现可疑键后
 // 按进程的业务声明复核。
 func TestConfigFileDeclarationsAcceptBusinessKeysInFrameworkSections(t *testing.T) {

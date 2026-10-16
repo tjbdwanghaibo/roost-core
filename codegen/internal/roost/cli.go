@@ -413,8 +413,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// 键的声明检查要知道服务；读不到 roost.yaml（单独检查一份文件）时只做基础检查并说明。
-	manifest, manifestErr := LoadManifest(root)
+	// 键的声明检查要按 roost.yaml 知道每个服务装配了哪些 Mod；读不出来就失败，不能跳过声明检查后报通过。
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return fmt.Errorf("config check reads %s for each service's declarations: %w", ManifestName, err)
+	}
 	// 业务声明按需编译一次进程读回（只在静态检查发现可疑键时），与 doctor 同一入口。
 	process, cleanup := processConfigSchemas(context.Background(), root)
 	defer cleanup()
@@ -422,8 +425,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if err := CheckConfig(path, *production); err != nil {
 			return err
 		}
-		if manifestErr != nil || name == "" {
-			fmt.Fprintf(stdout, "keys not checked against declarations: %s (pass --service, or run in a project with roost.yaml)\n", filepath.ToSlash(path))
+		if name == "" {
+			fmt.Fprintf(stdout, "keys not checked against declarations: %s is not named config.<service>[.<variant>].yaml for a service in %s; pass --service\n", filepath.ToSlash(path), ManifestName)
 			return nil
 		}
 		problems, err := checkConfigFileDeclarations(path, *production, manifest, name, process)
@@ -438,9 +441,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if *all {
 		if *service != "" || *file != "" {
 			return errors.New("--all cannot be combined with --service or --file")
-		}
-		if manifestErr != nil {
-			return manifestErr
 		}
 		var joined error
 		for _, name := range sortedServiceNames(manifest) {
@@ -463,7 +463,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(root, path)
 		}
-		if name == "" && manifestErr == nil {
+		if name == "" {
 			name = configFileService(manifest, path)
 		}
 	}
