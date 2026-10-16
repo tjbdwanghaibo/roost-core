@@ -70,12 +70,18 @@ roost add transport tcp
 认证器要读的配置（密钥引用、开关）按声明读：在 `auth.go` 里定义带 `config:"..."` tag 的结构体，由接入玩家的服务声明
 （`internal/service/<service>/service.go` 加 `func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(tcp.AuthConfig{}) }`），
 `newApplicationAuthenticator` 里用 `app.LoadConfig(cfg, &settings)` 读。直接 `cfg.GetString(...)` 会被 doctor 的 config-reads
-拒绝，没声明的键会被 `roost config check` 当成拼错。
+拒绝，没声明的键会被 `roost config check` 当成拼错。服务已经有 `ConfigSchema`（例如 game-demo 的 game 服务返回
+`settings.Schema()`）时不要再写第二个方法，在 `service.go` 里用一个声明结构体把两者匿名嵌在一起：
+`type serviceConfig struct { settings.Config; tcp.AuthConfig }`，`ConfigSchema` 返回 `app.SchemaOf(serviceConfig{})`。
+不要把 `tcp.AuthConfig` 嵌进 `game/settings`：controller 引用 settings，`tcp` 包经接入层间接引用 controller，会形成 import 环。
 
 ```go
+// internal/access/player/tcp/auth.go（另 import "github.com/tjbdwanghaibo/roost-core/framework/app"）
 type AuthConfig struct {
 	KeyRef string `config:"player_access.tcp.auth_key_ref" help:"签名公钥的 Secret 引用"`
 }
+
+type applicationAuthenticator struct{ keyRef string }
 
 func newApplicationAuthenticator(cfg *viper.Viper) (Authenticator, error) {
 	var settings AuthConfig
@@ -83,6 +89,7 @@ func newApplicationAuthenticator(cfg *viper.Viper) (Authenticator, error) {
 		return nil, err
 	}
 	// 按 settings.KeyRef 取密钥，构造不可变的校验器
+	return applicationAuthenticator{keyRef: settings.KeyRef}, nil
 }
 ```
 
