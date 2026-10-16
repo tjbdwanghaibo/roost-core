@@ -10,9 +10,9 @@
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D5 | 静态 Player 跨机迁移的参考流程 | 维护者 2026-10-15 决定 A，已实施 |
 | D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 维护者 2026-10-16 决定折中方案，已实施（提交见本节） |
-| D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施 |
-| D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施 |
-| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施；方案 A 保留待评估 |
+| D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施（`e7e59298`） |
+| D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施（`bac32cd2`） |
+| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -116,7 +116,7 @@
 
 ## D7 实体不存在时给客户端的稳定错误码与首登步骤
 
-**状态：维护者 2026-10-16 决定 C（两者都做），已实施（提交见下）。** 登记：2026-10-16 新用户试用实测。
+**状态：维护者 2026-10-16 决定 C（两者都做），已实施（`e7e59298`）。** 登记：2026-10-16 新用户试用实测。
 
 **实施结果**：
 - 框架码：`infra/base/errcode` 新增框架段 `1–999`（只由 errcode 包分配，包注释登记全部码段归属）与 `CodeEntityNotFound = 2` / `ErrEntityNotFound`（`entity_not_found`）。依赖方向：errcode 在 infra、不认识 framework；判定在 Nest：`framework/nest/io_load.go` 的 `targetLoadError` 遇到 `entity.ErrAuthorityEntityNotFound`（DataEngine `ErrEntityAggregateNotFound` 满足它）时 `errcode.Wrap(errcode.ErrEntityNotFound, err)`，原错误保留。生成 endpoint 只给 `CodeInternal` 记 ERROR，因此这种预期情况不再记 ERROR。`roost.yaml ids.errcode` 下界落进框架段时 manifest 校验拒绝。
@@ -131,7 +131,7 @@
 
 ## D8 生成的服务包名大写（`package Game`）
 
-**状态：维护者 2026-10-16 决定 C（新工程小写、已有工程按目录现有包名），已实施（提交见下）。** 登记：2026-10-16。
+**状态：维护者 2026-10-16 决定 C（新工程小写、已有工程按目录现有包名），已实施（`bac32cd2`）。** 登记：2026-10-16。
 
 **实施结果**：`codegen/internal/roost/service_package.go` 的 `withServicePackages(root)` 在 render 前读出每个 `internal/service/<name>/` 现有包名（优先业务文件），`renderService` / `renderServiceManagers` / `renderFrameworkCollaborators` / `renderFrameworkClients` / game 模板 Service 与 demo `{{GAME_SERVICE_PKG}}` 都用它；目录不存在时 `defaultServicePackage`（去 `_` / `-`、小写，关键字加 `service`）。game-demo 模板里的 `package Account` / `Chat` / `Platform` / `Session` 改成小写。业务文件不改写；老工程 sync 后仍是单一大写包名，可编译（用改动前的生成器造工程、再用新生成器 sync + generate + build/vet/test 实测）。
 
@@ -145,7 +145,7 @@
 
 ## D9 DAO 库名不随配置、`_id` 是编码后的 EntityID
 
-**状态：维护者 2026-10-16 决定 B，已实施（提交见下）；方案 A（库名取运行配置）不做，保留为后续评估。**
+**状态：维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A（库名取运行配置）不做，保留为后续评估。**
 
 **实施结果**：`roost add dao`（含 `--entity`）骨架写 `db=<project>`：`daoDatabaseName` 取 `project.name`，系统库 `admin` / `local` / `config` 加 `_data`，超过 52 字节截断并去掉末尾 `_`（Mongo 库名 63 字节上限，留出 `dbscope=sid` 的 `_<sid>`），骨架注释写明库名与 `_id` 换算；game-demo 的 Player / Guild / World DAO 改用同一规则（工程 planet → `planet` 库），demo 文档同步。`roost id entity` 双向换算完整 EntityID 与唯一号 / kind / category / remote（`--entity` 读工程 `//roost:entity` 标记）。已有工程 DAO 定义归业务、不改写，旧库数据不迁移（未上线不做兼容，升级说明见 CHANGELOG）。
 

@@ -339,7 +339,11 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 
 ## 3. 正确调用位置
 
-登录 controller、创角流程或后台管理可以在初始化时调用 lifecycle.PlayerFromRegistry(registry)。普通协议
+登录 controller、创角流程或后台管理可以在初始化时调用 lifecycle.PlayerFromRegistry(registry)。生成的 controller
+（roost add endpoint 与 protocol 生成器两处骨架）保存 FromRegistry 收到的 registry，经 Registry() 取得；
+roost add endpoint EnterGame --handler player --lifecycle Player 生成的登录 endpoint 就是
+lifecycle.PlayerFromRegistry(controller.Registry()).GetOrCreate(ctx, context.PlayerID)。更早生成、没有 Registry()
+的 controller 归业务、不改写，按 add 的报错补上该方法即可。普通协议
 handler 应调用生成 Sender，让 Nest 统一锁、事务、WAL、回滚和同步。不要缓存裸 Entity 指针跨请求，
 不要在 Entity 锁外调用 Component/DAO mutator。
 
