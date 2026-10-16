@@ -14,8 +14,9 @@ import (
 // paid order — with one difference: this one never expires.
 //
 // The dungeon clear and the mail attachment each have an authoritative moment
-// after which no replay can reach the grant path (the run's retention, the
-// envelope's expiry), so their ledgers may be pruned on exactly that moment. A
+// after which their grant handler refuses every replay (the run's claim
+// window, the envelope's expiry), so their ledgers may be pruned a grace
+// after that moment. A
 // paid order has no such moment. The platform service marked it delivered when
 // the grant became durable, so refusing the grant later does not send the
 // player back to the payment — it means a paid order that is settled on one

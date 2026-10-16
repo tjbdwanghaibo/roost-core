@@ -43,11 +43,15 @@ const ClearExp int64 = 100
 // service. A claim is refused once the run is older than this window, and
 // the ledger stores that same resolution time, so:
 //
-//	a record is pruned  ⟺  now - resolvedAt > ClaimWindowSeconds
-//	                    ⟺  a claim for that run is refused
+//	a claim for that run is refused  ⟺  now - resolvedAt > ClaimWindowSeconds
+//	a record is pruned               ⟺  now - LedgerPruneGraceSeconds - resolvedAt > ClaimWindowSeconds
 //
 // Pruned therefore implies refused, whatever order the calls arrive in, with
-// no assumption about any other service's storage. Raising or lowering this
+// no assumption about any other service's storage — provided "now" is the
+// time the claim EXECUTES (handlerClaimDungeon reads the clock itself under
+// the lock, so a claim that read its time before a long queue cannot reopen
+// the window), and provided the process executing it is no more than the
+// grace behind the one that pruned (LedgerPruneGraceSeconds). Raising or lowering this
 // value keeps the property; it only moves how long a client (or an operator
 // replaying by hand) has to collect.
 //
@@ -58,8 +62,8 @@ const ClaimWindowSeconds int64 = 4 * 60 * 60
 
 // ClaimWindowClosed reports whether a run resolved at resolvedAtUnix is past
 // the point where its clear reward may still be paid at nowUnix. It is the
-// admission check on the reward path and the pruning predicate for the
-// ledger — deliberately the same function, because two predicates that drift
+// admission check on the reward path, and the pruning predicate for the
+// ledger is defined through it (LedgerMayForget) — two predicates that drift
 // apart would let a forgotten run still be paid.
 //
 // A non-positive timestamp is a run whose resolution time cannot be proven
@@ -72,6 +76,25 @@ func ClaimWindowClosed(resolvedAtUnix, nowUnix int64) bool {
 		return true
 	}
 	return nowUnix-resolvedAtUnix > ClaimWindowSeconds
+}
+
+// LedgerPruneGraceSeconds is how long after a run's claim window closes the
+// ledger still remembers that the run was paid. After a crash-restart the
+// Player can be served by a process whose business clock is a little behind
+// the one that pruned, and there a delayed replay still sees an open window;
+// the App lets a process start up to a minute behind the deployment's
+// business-time high-water mark (framework/app business_time.go), so the
+// ledger keeps a record a comfortable multiple of that longer. It only costs
+// records kept ten minutes longer; game/rewards uses the same margin for the
+// mail ledger.
+const LedgerPruneGraceSeconds int64 = 10 * 60
+
+// LedgerMayForget reports whether a paid run resolved at resolvedAtUnix may
+// be dropped from the ledger at nowUnix: ClaimWindowClosed, shifted later by
+// LedgerPruneGraceSeconds. Defining the one through the other is what keeps
+// the two from drifting apart.
+func LedgerMayForget(resolvedAtUnix, nowUnix int64) bool {
+	return ClaimWindowClosed(resolvedAtUnix, nowUnix-LedgerPruneGraceSeconds)
 }
 
 // ClaimResult is what the reward transaction reports back. Claimed is false

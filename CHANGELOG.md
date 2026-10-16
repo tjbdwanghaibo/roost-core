@@ -7,7 +7,8 @@
 ### game-demo 领奖账本：清理后晚到的旧请求不再重复发奖
 
 - **邮件附件**：邮件服务只拒绝过期后的新预留，挡不住过期前取得、晚到 Nest 的旧请求；账本按 `ExpiresAtUnix` 清理之后，这种请求（典型是 `CommitClaim` 丢失后的重放）找不到记录，就发第二叠。修前在生成工程上 `TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned` 红为 `expired in-flight replay granted: {Claimed:true BagCount:3}; bag=3`。现在 `handlerClaimMailReward` 在持有 Player 锁后、任何 DAO 写入前按执行时间判过期（`executionNowUnix`：调用方时间与重新读的进程业务时钟取较大值；`rewards.ClaimWindowClosed`，与邮件服务同一边界 `now >= ExpiresAtUnix`）：已在账本里的只确认、不再发；不在账本里且已过期的拒绝，错误码与 `ReserveClaim` 拒绝过期邮件相同（`service/mail` 的 `ErrExpired`，590106）。
-- **清理比准入晚一个宽限**：邮件账本改为过期后再等 `rewards.LedgerPruneGraceSeconds`（10 分钟）才清理（`rewards.LedgerMayForget`，由准入谓词平移得出）。宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着；修前（只加执行时准入时）`TestALedgerPrunedAheadStillStopsAReplayOnAClockBehind` 红为 `a replay on a clock 31s behind was paid again: {Claimed:true BagCount:3} bag=3`。
+- **副本清关奖励同一缺陷**：`handlerClaimDungeon` 只信端点排队前读到的 `nowUnix`，记录被另一局清掉后，带旧时间的重放再付一次（修前生成工程上两局清关付出 300 exp）。现在同样按 `executionNowUnix` 判窗口。
+- **清理比准入晚一个宽限**：两本账都改为过期 / 关窗后再等 `LedgerPruneGraceSeconds`（10 分钟）才清理（`rewards.LedgerMayForget`、`dungeon.LedgerMayForget`，由准入谓词平移得出）。宕机重启后 Player 可能换到业务时钟稍慢的进程（App 允许启动时比高水位慢 1 分钟），那里在途的旧请求还看得到窗口开着；修前（只加执行时准入时）`TestALedgerPrunedAheadStillStopsAReplayOnAClockBehind` 红为 `a replay on a clock 31s behind was paid again: {Claimed:true BagCount:3} bag=3`。
 - 生成工程的领奖用例改为显式固定业务时钟（`pinBusinessClock`）：handler 自己读时钟后，写死 `now = 1_800_000_000` 而不固定时钟的用例会在真实时间越过 2027-01-15 后自己变红。新回归 `game/handler/claim_mail_expiry_test.go` 已登记进 `demoScaffoldSteps`。DAO schema 与 Sender 参数不变；已生成工程不迁移（`roost project sync` 取新模板）。
 
 ### 玩家接入

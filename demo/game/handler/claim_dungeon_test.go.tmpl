@@ -90,6 +90,7 @@ func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Cl
 func TestDungeonClearIsPaidOnce(t *testing.T) {
 	subject, counters, client := newDungeonClaimHarness(t)
 	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
 	ctx := context.Background()
 	sender := syncsender.NewClaimDungeonSender(client)
 
@@ -115,9 +116,11 @@ func TestDungeonClearIsPaidOnce(t *testing.T) {
 func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
 	subject, counters, client := newDungeonClaimHarness(t)
 	const first int64 = 1_800_000_000
+	pinBusinessClock(t, first)
 	// Far enough past the first run's resolution that its record may be
-	// dropped — which is exactly when it must also stop being payable.
-	later := first + dungeon.ClaimWindowSeconds + 1
+	// dropped — the window plus the prune grace. It stopped being payable a
+	// grace earlier.
+	later := first + dungeon.ClaimWindowSeconds + dungeon.LedgerPruneGraceSeconds + 1
 	ctx := context.Background()
 	sender := syncsender.NewClaimDungeonSender(client)
 
@@ -136,8 +139,46 @@ func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
 	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, later); err == nil {
 		t.Fatal("replaying a run whose record was pruned was accepted; it pays a third time")
 	}
+	// The same replay carrying the time its endpoint read before it queued:
+	// the handler reads the clock itself under the lock, so an old "now"
+	// cannot reopen the window.
+	pinBusinessClock(t, later)
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first); err == nil {
+		t.Fatal("a delayed replay carrying a stale now was accepted after its record was pruned; it pays a third time")
+	}
 	// The World's counter is the total actually paid out; the Player's own
 	// exp is consumed by level-ups and cannot be summed.
+	if got, want := counters.StatsComp().Snapshot().ExpGranted, 2*dungeon.ClearExp; got != want {
+		t.Fatalf("%d exp was paid out for two clears and replays, want %d", got, want)
+	}
+}
+
+// 清理发生在时钟靠前的进程，延迟的旧请求落到时钟稍慢的进程：那里窗口还开着，只能靠账本还记得这一局。
+// 账本比窗口晚一个宽限才清理，就是为了这一步（同 claim_mail_expiry_test.go 的邮件账本）。
+func TestAPrunedRunOnAClockAheadIsNotPaidOnAClockBehind(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const first int64 = 1_800_000_000
+	pinBusinessClock(t, first)
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first); err != nil {
+		t.Fatalf("the first run's claim: %v", err)
+	}
+	// 时钟靠前的进程：窗口关上 1 秒后有别的一局写账本。
+	closed := first + dungeon.ClaimWindowSeconds + 1
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "new-run", dungeon.ClearExp, closed, closed); err != nil {
+		t.Fatalf("the second run's claim: %v", err)
+	}
+	// 时钟慢 31 秒的进程执行在途的旧请求。
+	pinBusinessClock(t, closed-31)
+	replay, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first)
+	if err != nil {
+		t.Fatalf("replay on the slower clock: %v", err)
+	}
+	if replay.Claimed {
+		t.Fatalf("a replay on a clock 31s behind was paid again: %+v", replay)
+	}
 	if got, want := counters.StatsComp().Snapshot().ExpGranted, 2*dungeon.ClearExp; got != want {
 		t.Fatalf("%d exp was paid out for two clears and one replay, want %d", got, want)
 	}

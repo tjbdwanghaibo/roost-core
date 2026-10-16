@@ -140,7 +140,9 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   重放找到账本里已有的 run id 就什么也不做。判发奖的依据是 `session.Finish` 返回的 `run.State`，不是请求里的 `Success`——
   Finish 对终态 run 幂等返回，"调用成功"不等于"这次调用结算了它"。
 - **账本有期限，期限与"还能不能领"是同一条规则**：账本记的是 run 的**结算时刻**（`run.FinishedAtUnix`，session 服务盖的章，
-  不是 `time.Now()`），清理与准入共用 `dungeon.ClaimWindowClosed`。于是"记录被清掉"恒等于"这个 run 已过窗口、会被拒"，
+  不是 `time.Now()`），准入用 `dungeon.ClaimWindowClosed`，清理用由它推出的 `dungeon.LedgerMayForget`（晚一个宽限
+  `LedgerPruneGraceSeconds`，理由同邮件账本），准入时间是事务执行时重新读的业务时钟（与调用方时间取较大值），不是端点排队前
+  读到的那个。于是"记录被清掉"蕴含"这个 run 已过窗口、会被拒"，
   不依赖 session 服务保留多久——**succeeded 的 run 在 session 服务里没有存储 TTL，可以被 Finish 到天荒地老**
   （`run_ttl` 管的是 run 能开多久）。账本保留期不能按"反正重放不了"定短：另一笔领取顺手清掉旧记录之后，
   重放旧 run 就会再拿一份。

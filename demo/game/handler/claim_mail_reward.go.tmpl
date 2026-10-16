@@ -55,7 +55,8 @@ func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int6
 // 调用方的 nowUnix 是端点在排队之前读的，请求可能在 Nest 队列、Player 冷加载或重试里耽搁很久；
 // 只信它，一个过期前读到时间的请求在清理之后晚到，就会把已被遗忘的奖励再发一次。取较大者而不是只读
 // 时钟，是因为调用方的时钟可能略快（另一个进程），不能因此把已经关上的窗口重新打开。
-// 进程业务时钟与端点的 BusinessNow 读的是同一个 time.logic_offset。
+// 进程业务时钟与端点的 BusinessNow 读的是同一个 time.logic_offset。handlerClaimMailReward 与
+// handlerClaimDungeon 都用它。
 func executionNowUnix(callerNowUnix int64) int64 {
 	return max(callerNowUnix, clock.Now().Unix())
 }

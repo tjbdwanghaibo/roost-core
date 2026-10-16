@@ -132,9 +132,10 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 // why one number for both is the whole argument).
 //
 // Pruning happens here, on the write path, so the ledger is bounded without
-// a sweeper. It is safe because a record can only be dropped once the run it
-// names is past its claim window, and a run past its claim window is refused
-// before it ever reaches this function. Everything moves through generated
+// a sweeper. It is safe because a record can only be dropped a grace after
+// the run it names is past its claim window (dungeon.LedgerMayForget), and a
+// run past its claim window is refused before it ever reaches this function
+// — with the time the claim executes, not the time its caller read. Everything moves through generated
 // mutators, so a handler that fails later takes the whole ledger change back
 // with the reward.
 //
@@ -148,7 +149,7 @@ func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix,
 	}
 	var stale []string
 	dao.RangeDungeonClaims(func(key string, resolvedAt int64) bool {
-		if dungeon.ClaimWindowClosed(resolvedAt, nowUnix) {
+		if dungeon.LedgerMayForget(resolvedAt, nowUnix) {
 			stale = append(stale, key)
 		}
 		return true
