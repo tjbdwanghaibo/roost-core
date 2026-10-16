@@ -104,11 +104,10 @@ func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, err
 // record lands in the same Nest transaction as the items.
 //
 // The value stored is the MAIL's expiry, handed over by the mail service with
-// the reservation. That is the moment after which no replay can reach this
-// path at all, so it is exactly when the record may be forgotten — and the
-// pruning below uses the same number, so "the record is gone" and "a replay
-// is impossible" are one fact rather than two that can drift
-// (game/rewards explains why the previous fixed retention could not hold).
+// the reservation. After it the mail service refuses new reservations, but
+// an earlier reservation can still arrive late: handlerClaimMailReward must
+// also reject an expired first grant while holding the Player lock. Pruning
+// below is safe only together with that execution-time admission check.
 //
 // Pruning is on the write path, so the ledger is bounded without a sweeper.
 func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, nowUnix int64) bool {

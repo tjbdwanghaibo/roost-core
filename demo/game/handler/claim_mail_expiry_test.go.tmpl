@@ -1,0 +1,85 @@
+package handler
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+// 预留早于过期、执行晚于账本清理的请求，不能把同一封邮件再次发奖。
+func TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned(t *testing.T) {
+	previous := clock.Offset()
+	t.Cleanup(func() { clock.SetOffset(previous) })
+	const start int64 = 1_800_000_000
+	clock.Set(time.Unix(start, 0))
+	subject, client, committer := newClaimHarness(t)
+	sender := syncsender.NewClaimMailRewardSender(client)
+	ctx := context.Background()
+	expires := start + 60
+	if result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start); err != nil || !result.Claimed {
+		t.Fatalf("first grant: %+v %v", result, err)
+	}
+	clock.Set(time.Unix(expires+1, 0))
+	// 已记录的成功可以在过期后确认，不能为了拒绝新发奖而破坏该重放结果。
+	if result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start); err != nil || result.Claimed || result.BagCount != 1 {
+		t.Fatalf("known grant after expiry: %+v %v", result, err)
+	}
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "other", 1002, 1, start+3600, expires+1); err != nil {
+		t.Fatal(err)
+	}
+	if subject.BagComp().MailRewardClaimed("old") {
+		t.Fatal("premise: the expired ledger entry was not pruned")
+	}
+	before := len(committer.records)
+	// 调用方在邮件过期前取得预留并读取了业务时间，随后延迟进入 Nest。
+	result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start)
+	if err == nil {
+		t.Fatalf("expired in-flight replay granted: %+v; bag=%d", result, subject.BagComp().ItemCount(1002))
+	}
+	if code, _ := errcode.ClientError(err); code != 100011 {
+		t.Fatalf("expired grant code=%d, want mail_claim (100011): %v", code, err)
+	}
+	if got := subject.BagComp().ItemCount(1002); got != 2 {
+		t.Fatalf("replay changed the bag: %d, want 2", got)
+	}
+	if len(committer.records) != before || subject.BagComp().MailRewardClaimed("old") {
+		t.Fatal("rejected replay committed a record or recreated the ledger")
+	}
+}
+
+// 邮件服务在 now >= expires 时拒绝预留，发奖入口使用相同的边界。
+func TestMailGrantChecksExpiryAtExecutionTime(t *testing.T) {
+	const start int64 = 1_800_000_000
+	const expires = start + 60
+	for _, test := range []struct {
+		name    string
+		now     int64
+		allowed bool
+	}{
+		{"before", expires - 1, true},
+		{"at", expires, false},
+		{"after", expires + 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previous := clock.Offset()
+			t.Cleanup(func() { clock.SetOffset(previous) })
+			clock.Set(time.Unix(test.now, 0))
+			subject, client, committer := newClaimHarness(t)
+			sender := syncsender.NewClaimMailRewardSender(client)
+			result, err := sender.Sync_ClaimMailReward(context.Background(), subject.ID(), "edge", 1002, 1, expires, start)
+			if test.allowed {
+				if err != nil || !result.Claimed || subject.BagComp().ItemCount(1002) != 1 {
+					t.Fatalf("valid grant: %+v %v", result, err)
+				}
+				return
+			}
+			if err == nil || subject.BagComp().ItemCount(1002) != 0 || subject.BagComp().MailRewardClaimed("edge") || len(committer.records) != 0 {
+				t.Fatalf("expired first grant changed state: %+v err=%v records=%d", result, err, len(committer.records))
+			}
+		})
+	}
+}

@@ -1,10 +1,11 @@
 package handler
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/rewards"
 	apperrors "{{MODULE}}/internal/errors"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // handlerClaimMailReward grants a mail attachment into the Bag, at most once
@@ -28,6 +29,12 @@ func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int6
 		return rewards.ClaimResult{}, errcode.Wrap(apperrors.ErrMailClaim, nil, "mail_id", mailID)
 	}
 	bag := target.BagComp()
+	// 预留只限制新请求进入邮件服务，不能阻止已在途的旧请求晚到。持有 Player 锁后重新取业务时间，
+	// 不让调用方在排队前读到的旧时间绕过过期检查；账本已清理时也不得重新发放。
+	nowUnix = max(nowUnix, clock.Now().Unix())
+	if !bag.MailRewardClaimed(mailID) && expiresAtUnix > 0 && nowUnix >= expiresAtUnix {
+		return rewards.ClaimResult{}, errcode.Wrap(apperrors.ErrMailClaim, nil, "mail_id", mailID, "expires_at", expiresAtUnix, "now", nowUnix)
+	}
 	if !bag.ClaimMailReward(mailID, expiresAtUnix, nowUnix) {
 		// Already paid. Not an error: report what the player holds so the
 		// client's answer is the same either way.
