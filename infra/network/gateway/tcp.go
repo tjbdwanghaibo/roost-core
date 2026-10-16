@@ -654,6 +654,16 @@ func (server *TCPServer) pushSession(ctx context.Context, sessionID string, mess
 }
 
 func (server *TCPServer) pushSessionKind(ctx context.Context, sessionID string, messageID uint32, payload []byte, kind byte) error {
+	return server.pushOneSession(ctx, sessionID, messageID, payload, kind, false)
+}
+
+// pushSessionWritten 与 pushSessionKind 相同，但入队后等这一帧写出（tcpSession.pushWritten）；
+// 只给 Lockstep 追帧页这类可以阻塞的调用方。连接坏了照样注销；ctx 结束只是不再等，不关闭连接。
+func (server *TCPServer) pushSessionWritten(ctx context.Context, sessionID string, messageID uint32, payload []byte, kind byte) error {
+	return server.pushOneSession(ctx, sessionID, messageID, payload, kind, true)
+}
+
+func (server *TCPServer) pushOneSession(ctx context.Context, sessionID string, messageID uint32, payload []byte, kind byte, written bool) error {
 	if messageID == 0 {
 		return fmt.Errorf("%w: push message id is zero", errInvalidFrame)
 	}
@@ -664,7 +674,12 @@ func (server *TCPServer) pushSessionKind(ctx context.Context, sessionID string, 
 		metrics.IncCounter("player_tcp_push_no_session_total", nil, 1)
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
-	err := current.pushKind(ctx, messageID, payload, kind)
+	var err error
+	if written {
+		err = current.pushWritten(ctx, messageID, payload, kind)
+	} else {
+		err = current.pushKind(ctx, messageID, payload, kind)
+	}
 	if err == nil {
 		metrics.IncCounter("player_tcp_push_total", nil, 1)
 		return nil

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,6 +155,60 @@ func tcpResponse(value any) (*TCPResponse, error) {
 func (session *tcpSession) pushKind(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
 	_, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, false)
 	return err
+}
+
+// pushWritten 把一帧服务推送放进出站队列并等它写出，给能阻塞、需要随链路放慢的调用方
+// （Lockstep 追帧页：Match 在自己的后台协程里每会话一页在途地发送）。实时推送不得用它，用 pushKind 只准入：
+// 场景 Sync Flush、Lockstep Tick 逐会话串行推送，等写出会让一个停读连接拖住其后所有连接。
+// 返回 nil 表示已写进 socket；写出失败或连接关闭立即返回 errConnectionBroken（写协程同时关闭连接）；
+// ctx 结束时这一帧若还在排队就撤回、不再写出，已被写协程取走的照常写完，调用方都得到 ctx 的错误。
+// 不走 writeQueued 的直写快路径：调用方的 ctx 截止若早于 write_timeout，直写写出半帧会关闭连接，
+// 经写协程写出则只受 write_timeout 约束，超时只是调用方不再等。
+func (session *tcpSession) pushWritten(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	written, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, true)
+	if err != nil {
+		return err
+	}
+	select {
+	case err := <-written:
+		return err
+	case <-session.done:
+		select {
+		case err := <-written:
+			return err
+		default:
+		}
+		return fmt.Errorf("%w: %w", errConnectionBroken, ErrSessionClosed)
+	case <-ctx.Done():
+		if !session.withdraw(written) {
+			// 已被写协程取走：可能恰好写完，有结果就如实返回。
+			select {
+			case err := <-written:
+				return err
+			default:
+			}
+		}
+		return ctx.Err()
+	}
+}
+
+// withdraw 撤回还在排队、尚未被写协程取走的那一帧（按它的 written 通道认），归还它占的出站额度。
+// 帧的推送序号在写出时才分配，撤回不会在客户端看到的序号里留下空洞。
+func (session *tcpSession) withdraw(written <-chan error) bool {
+	session.queueMu.Lock()
+	defer session.queueMu.Unlock()
+	for index, next := range session.queue {
+		if next.written == written {
+			session.queue = slices.Delete(session.queue, index, index+1)
+			session.queuedFrames--
+			session.queuedBytes -= int64(len(next.payload)) + headerSize
+			return true
+		}
+	}
+	return false
 }
 
 // writeQueued 让读循环的回包与心跳 ACK 按出站队列顺序写出并等它写完。等待发生在该连接自己的读循环上，

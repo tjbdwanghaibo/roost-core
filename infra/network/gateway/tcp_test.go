@@ -995,6 +995,91 @@ func TestAWriteTimeoutInTheWriteLoopFailsTheReplyQueuedBehindIt(t *testing.T) {
 	}
 }
 
+// 等写出的推送（Lockstep 追帧页）在 ctx 结束时还在排队就撤回：不再写出、归还出站额度、不关闭连接，
+// 之后的推送序号不留空洞；对端恢复读取后，下一次等写出的推送在真正写出时才返回 nil。
+func TestAPushWaitingForItsWriteIsWithdrawnWhenItsContextEnds(t *testing.T) {
+	session, peer := pipeSession(t, 30*time.Second)
+	if err := session.pushKind(context.Background(), pushTestMessageID, []byte("stuck"), flagLockstep); err != nil {
+		t.Fatal(err)
+	}
+	waitOutbound(t, session, "writeLoop writing the stuck push", func(writing bool, queued int) bool { return writing && queued == 0 })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if err := session.pushWritten(ctx, pushTestMessageID, []byte("page"), flagLockstep); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a page that could not be written before its deadline = %v, want context.DeadlineExceeded", err)
+	}
+	if waited := time.Since(began); waited > 2*time.Second {
+		t.Fatalf("the page waited %v past its 100ms deadline", waited)
+	}
+	session.queueMu.Lock()
+	queued, frames, queuedBytes := len(session.queue), session.queuedFrames, session.queuedBytes
+	session.queueMu.Unlock()
+	if queued != 0 || frames != 1 || queuedBytes != int64(len("stuck"))+headerSize {
+		t.Fatalf("after withdrawing the page: queue %d, frames %d, bytes %d; want only the in-flight push counted", queued, frames, queuedBytes)
+	}
+	if session.closed.Load() {
+		t.Fatal("a page whose wait ended closed the connection")
+	}
+
+	written := make(chan error, 1)
+	go func() {
+		written <- session.pushWritten(context.Background(), pushTestMessageID, []byte("next"), flagLockstep)
+	}()
+	waitOutbound(t, session, "the next page queued", func(_ bool, queued int) bool { return queued == 1 })
+	select {
+	case err := <-written:
+		t.Fatalf("a page still queued behind a stuck write returned %v before it was written", err)
+	default:
+	}
+	for _, want := range []struct {
+		payload  string
+		sequence uint32
+	}{{"stuck", 1}, {"next", 2}} {
+		got, err := wire.Read(peer, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got.Payload) != want.payload || got.Seq != want.sequence || got.Flags != flagServerPush|flagLockstep {
+			t.Fatalf("peer read %q seq %d flags %d, want %q seq %d (the withdrawn page is never written)", got.Payload, got.Seq, got.Flags, want.payload, want.sequence)
+		}
+	}
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("written page = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the page the peer read never reported written")
+	}
+}
+
+// 等写出的推送在连接关闭时立即返回 errConnectionBroken，不等 write_timeout 或自己的 ctx。
+func TestAPushWaitingForItsWriteFailsAtOnceWhenTheConnectionCloses(t *testing.T) {
+	session, _ := pipeSession(t, 30*time.Second)
+	if err := session.pushKind(context.Background(), pushTestMessageID, []byte("stuck"), flagLockstep); err != nil {
+		t.Fatal(err)
+	}
+	waitOutbound(t, session, "writeLoop writing the stuck push", func(writing bool, queued int) bool { return writing && queued == 0 })
+	written := make(chan error, 1)
+	go func() {
+		written <- session.pushWritten(context.Background(), pushTestMessageID, []byte("page"), flagLockstep)
+	}()
+	waitOutbound(t, session, "the page queued behind the stuck push", func(_ bool, queued int) bool { return queued == 1 })
+	_ = session.Close(ErrSessionClosed)
+	select {
+	case err := <-written:
+		if !errors.Is(err, errConnectionBroken) {
+			t.Fatalf("page on a closed connection = %v, want errConnectionBroken", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a page waiting for its write is still waiting after the connection closed")
+	}
+	if err := session.pushWritten(context.Background(), pushTestMessageID, []byte("late"), flagLockstep); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("page after close = %v, want errConnectionBroken", err)
+	}
+}
+
 // Close 与多个并发 Push、一个等写出的回包竞争：每轮都要在期限内全部返回（无死锁），
 // writeLoop 退出；多轮之后 goroutine 数回到起点（没有写协程或等待方泄漏）。一半轮次对端在读，一半停读。
 func TestClosingASessionDuringConcurrentPushesLeavesNoGoroutine(t *testing.T) {

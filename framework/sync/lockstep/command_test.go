@@ -43,7 +43,8 @@ func TestCommandCodecAndOwnership(t *testing.T) {
 
 func TestTCPSenderRejectsShortWorkerBeforeResolverOrSocket(t *testing.T) {
 	calls := 0
-	sender, err := NewTCPSender(50002, 0, func(nettransport.SessionID) (string, bool) { calls++; return "s", true }, func(context.Context, string, uint32, []byte) error { calls++; return nil })
+	push := func(context.Context, string, uint32, []byte) error { calls++; return nil }
+	sender, err := NewTCPSender(50002, 0, func(nettransport.SessionID) (string, bool) { calls++; return "s", true }, push, push)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,16 +116,21 @@ func TestMatchCommandUsesCurrentAuthenticatedBinding(t *testing.T) {
 	}
 }
 
+// 两条通道共用路由、包上限与拒绝规则，区别只在走哪个 push：实时帧（SendDatagram）只准入，
+// 追帧页（SendReliable）入队并等写出。接反了，实时广播就会被停读连接拖住，或追帧又失去链路背压。
 func TestTCPSenderBothLanesUseSameRouteAndBudget(t *testing.T) {
-	calls := 0
+	var admitted, written int
 	fail := errors.New("write failed")
-	s, err := NewTCPSender(50002, 8, func(id nettransport.SessionID) (string, bool) { return "s", id == 7 }, func(ctx context.Context, id string, msg uint32, p []byte) error {
-		if id != "s" || msg != 50002 || !bytes.Equal(p, []byte{0xc7, 1, 0}) {
-			t.Fatal("wrong route")
+	route := func(lane *int) func(context.Context, string, uint32, []byte) error {
+		return func(ctx context.Context, id string, msg uint32, p []byte) error {
+			if id != "s" || msg != 50002 || !bytes.Equal(p, []byte{0xc7, 1, 0}) {
+				t.Fatal("wrong route")
+			}
+			*lane++
+			return fail
 		}
-		calls++
-		return fail
-	})
+	}
+	s, err := NewTCPSender(50002, 8, func(id nettransport.SessionID) (string, bool) { return "s", id == 7 }, route(&admitted), route(&written))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +150,14 @@ func TestTCPSenderBothLanesUseSameRouteAndBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if calls != 2 || s.MaxDatagramPayload() != 8 {
-		t.Fatal(calls)
+	if admitted != 1 || written != 1 || s.MaxDatagramPayload() != 8 {
+		t.Fatalf("live lane pushes %d, catch-up lane pushes %d, want one each", admitted, written)
+	}
+	push := func(context.Context, string, uint32, []byte) error { return nil }
+	resolve := func(nettransport.SessionID) (string, bool) { return "s", true }
+	for _, pushes := range [][2]func(context.Context, string, uint32, []byte) error{{nil, push}, {push, nil}} {
+		if _, err := NewTCPSender(50002, 0, resolve, pushes[0], pushes[1]); !errors.Is(err, ErrMatchConfigInvalid) {
+			t.Fatalf("a TCP sender missing one of its pushes was built: %v", err)
+		}
 	}
 }

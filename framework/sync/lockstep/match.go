@@ -124,8 +124,9 @@ type MatchConfig struct {
 	// (<= 0 selects DefaultCatchupSendTimeout). A send still blocked past
 	// it — a peer that stopped acknowledging, a full KCP window — fails and
 	// counts toward CatchupMaxFailures.
-	// 对 TCPSender 基本不生效：嵌入 TCP 的发送只做出站队列准入、立即返回，慢链路不会让页面发送超时，
-	// 而是积压到出站上限后连接被关闭（之后的发送失败才计入 CatchupMaxFailures），见 TCPSender 与 KNOWN-LIMITS。
+	// 对 TCPSender 同样生效：它的可靠通道入队并等写出（TCPRuntime.PushLockstepSessionWritten），
+	// 慢链路让页面发送变慢，超过本时限的页还在排队就撤回、计一次失败；实时通道不受本时限约束，只做准入。
+	// 自定义 ReliableSender 若只做准入、不随链路放慢，本时限与 CatchupMaxFailures 只能挡住准入失败。
 	CatchupSendTimeout time.Duration
 	// CatchupSendWait is how long Tick waits for the pages it launched in
 	// this tick (<= 0 selects DefaultCatchupSendWait). Pages are sent off
@@ -142,6 +143,8 @@ type MatchConfig struct {
 	// StartCatchup fails without it). KCP or QUIC transports fit here: the
 	// Match bounds every page send with CatchupSendTimeout and never blocks
 	// Tick on it, so the caller's context needs no deadline.
+	// 页面在 Match 自己起的 goroutine 上发送，可以阻塞到链路收下为止，追帧的限速正靠这一点；
+	// 嵌入 TCP 用 TCPSender（可靠通道等写出），见 docs/framework/guide/04-sync.md §6。
 	Reliable nettransport.ReliableSender
 	// OnDesync is invoked whenever a keyframe ruling gains outliers that
 	// were not surfaced before (set difference, not cardinality — an
@@ -766,6 +769,8 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 // notice) on its own goroutine. The send keeps the caller's context values
 // but not its cancellation (it may outlive the Tick), and is bounded by
 // CatchupSendTimeout; dropping the catch-up cancels it.
+// 这个 goroutine 不是 Nest / 业务 worker，也不是调用 Tick 的协程：可靠通道可以在这里阻塞等链路收下
+// （TCPSender 等写出），一个慢会话的等待只占它自己这一页。
 func (m *Match) launchSend(ctx context.Context, session nettransport.SessionID, payload []byte, cursor catchupSend) *catchupSend {
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.sendTimeout)
 	send := &catchupSend{

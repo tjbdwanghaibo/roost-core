@@ -143,11 +143,28 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 保留窗口越短越省内存，也越容易让慢追帧失效：断线时长的分布与 `lockstep.catchup.unservable.total` 一起决定是否要调大窗口。本机已验证一小时逻辑帧、默认窗口下的长局有界和滚动追帧；这不是一小时真实网络运行或跨引擎确定性的证明，测量见[优化说明](../SYNC-OPTIMIZATION.md)。
 
-### 经嵌入 TCP 追帧：没有链路背压
+### 经嵌入 TCP 追帧：随链路放慢
 
-追帧页由 Match 在后台协程逐页发送，每会话同时最多一页在途；`CatchupSendTimeout`（默认 2s）限制一页的发送时长，超时与其他发送失败一起计入 `CatchupMaxFailures`（默认连续 8 次放弃）。这套限速依赖可靠通道在链路慢时让发送变慢——KCP / QUIC 的窗口满了发送就阻塞。
+追帧页由 Match 在后台协程逐页发送（`launchSend` 每页起一个 goroutine），每会话同时最多一页在途；`CatchupSendTimeout`（默认 2s）经 ctx 限制一页的发送时长，超时与其他发送失败一起计入 `CatchupMaxFailures`（默认连续 8 次放弃）。这套限速依赖可靠通道在链路慢时让发送变慢——KCP / QUIC 的窗口满了发送就阻塞。
 
-`lockstep.TCPSender`（嵌入 TCP 的 `PushLockstepSession`）自 2026-10-16 起只做该连接出站队列的准入，几乎立即返回（[GATEWAY §4](../GATEWAY.md#嵌入-tcp-的出站)）。因此对 TCP 发送器：页面不论链路快慢都按每 Tick 一页（`CatchupBatchFrames`，默认 32 帧）进入队列；`CatchupSendTimeout` 实际不会触发；`CatchupMaxFailures` 只数准入失败（连接已关闭、会话已解析不到、页超过包上限），慢链路本身不计入。链路跟不上时积压留在连接出站队列里，超过字节上限（默认约 2 MiB）连接被关闭，客户端重连后重新追帧。这一行为尚未实测、是否需要恢复限速尚未确认，触发条件估算与可能的处理方向见 [KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)（“Lockstep TCP 追帧限速”）。
+`lockstep.TCPSender` 的两条通道走同一条连接的出站队列，2026-10-16 起按是否等写出分开（维护者决定方向 A；此前 `1251e7f3` 把嵌入 TCP 推送改为只准入后，两条通道都不等写出，追帧失去链路背压）：
+
+- 实时通道 `SendDatagram`（Tick 给每个接收者的当前帧）接 `TCPRuntime.PushLockstepSession`，只做出站准入、几乎立即返回。Tick 逐接收者串行发送，等写出会让一个停读连接拖住同一 Tick 的所有人；停读连接只会因为自己的出站上限被关闭（[GATEWAY §4](../GATEWAY.md#嵌入-tcp-的出站)）。
+- 可靠通道 `SendReliable`（追帧页与追帧失败通知）接 `TCPRuntime.PushLockstepSessionWritten`，入队并等写出。慢链路上一页要等写协程把它写进 socket 才返回，下一页随后才发，追帧速度降到链路速度；该连接里属于追帧的积压只有在途那一页（加上至多一页已被写协程取走、等待超时后仍在写的页），不会因追帧超过出站上限被断开。
+- 一页在 `CatchupSendTimeout` 内没写出：还在排队就撤回、不再写出，已在写的照常写完；计一次失败，下一 Tick 从同一游标重发（客户端按帧 ID 去重）。连续 `CatchupMaxFailures` 次后放弃这次追帧，`Tick` 返回 “abandoned after N failures”（链上带 `context.DeadlineExceeded`），会话恢复实时广播；之后它的实时帧仍只入队，链路依旧跟不上时由出站上限或 `write_timeout` 关闭连接，客户端重连后再追帧。
+
+阻塞边界：
+
+- 等写出只发生在 `launchSend` 起的 goroutine 上，不在调用 `Tick` 的协程，也不在 Nest 快池 / 业务 worker 上；`TCPSender` 发送前的 `fctx.BlockingError` 守卫保留，比赛驱动放进业务 worker 会在任何副作用前被拒绝。
+- 每页各自一个 goroutine、各自一条连接的写协程，一个慢连接的等待不占其他会话的追帧。`Tick` 对本次发起的所有页最多共等 `CatchupSendWait`（默认 5ms，共用一个计时器），没写完的页交给后续 `Tick` 收取、不再等；所以一个停读的追帧会话最多让发起它那一页的 `Tick` 晚 `CatchupSendWait`。实时广播在 `Tick` 里先于追帧发出，不受影响。
+- 回归（[tcp_test.go](../../../framework/sync/lockstep/tcp_test.go)，真实回环 TCP）：`TestACatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt`（约 8 MiB 历史，客户端先停读再慢读，追帧完成且连接不断）、`TestACatchUpPageTheLinkCannotTakeTimesOutWithoutHoldingOtherSessions`（停读连接的页按 `CatchupSendTimeout` 超时并放弃，同时另一连接的追帧与实时帧照常，`Tick` 不被拖住）、`TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection`（停读连接上实时广播只入队）。
+
+接线：`lockstep.NewTCPSender(messageID, maxPayload, resolve, push, pushWritten)` 的最后两个参数分别是实时与追帧的发送函数，生产接 `runtime.PushLockstepSession` 与 `runtime.PushLockstepSessionWritten`（生成工程用 `Runtime.TCPRuntime`）；接反了，要么实时广播被停读连接拖住，要么追帧又失去链路背压。
+
+不在本次范围的同类路径（[KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)“Lockstep 追帧链路背压（独立 Gate / demo）”）：
+
+- 独立 Gate（`wiring/gate.Transport`）：两条通道都经 `GameIngress.PushBound` 进 Game 侧有界队列，再经 NATS 交给 Gate 侧队列与 `WritePacket`；`SendReliable` 返回 nil 只表示 Game 本地准入，追帧同样不随链路放慢。慢链路上 Game 侧队列满时准入返回 `ErrReliableBackpressure`（计一次追帧失败，每 Tick 一次），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时 Gate 关闭连接。要等写出需要 Gate 在 socket 写出后再回执，是协议改动。
+- 生成 demo 的 `battleSender`（`demo/internal/service/game/battle.go.tmpl`）两条通道都走 `PushPlayer`（PB 封装、只准入），不经 `TCPSender`，追帧也没有链路背压。
 
 ## 7. 公共客户端协议
 

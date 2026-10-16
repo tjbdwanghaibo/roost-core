@@ -94,7 +94,7 @@ if (session.TryDequeuePush(out var push))
 
 ## Lockstep接入
 
-服务端保留原Sequencer/Match/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞，Tick的同步广播可能等待socket写预算；没有将TCP包装成UDP性能保证。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
+服务端保留原Sequencer/Match/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞；没有将TCP包装成UDP性能保证。TCPSender的实时帧只进连接出站队列、不等socket写出（停读连接队满即被关闭，不拖住同一Tick的其他接收者），追帧页入队并等写出，追帧随链路速度放慢、CatchupSendTimeout生效。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
 
 生成access/player.NewMod可接收ProtocolRegistrar；在已有PB注册之后、Seal之前执行，注册冲突或失败会中止启动。业务在自己的app装配中使用player.NewMod(registerMatch)，原无参调用保持PB行为。注册函数通过RegisterPayloadNotify(...wire.PayloadLockstep, lockstep.DecodeCommand, handler)接线，handler只将认证PlayerID/Session.Principal().SessionID和Command交给业务Nest Sender，不能从网络handler并发操作Match。示意：
 
@@ -109,8 +109,9 @@ func registerMatch(protocols *playeraccess.ProtocolRegistry, registry *app.Regis
 }
 // 初始化时：player.NewMod(registerMatch)。matchSender由业务启动装配注入。
 // 比赛单所有者中：match.HandleCommand(authenticatedNumericSessionID, command)。
-// MatchConfig.Datagrams和Reliable均可使用：
-// lockstep.NewTCPSender(frameMessageID,maxPayload,concurrentSafeResolve,tcpRuntime.PushLockstepSession)
+// MatchConfig.Datagrams和Reliable均可使用（实时只准入、追帧等写出，两个push不能接反）：
+// lockstep.NewTCPSender(frameMessageID,maxPayload,concurrentSafeResolve,
+//     tcpRuntime.PushLockstepSession,tcpRuntime.PushLockstepSessionWritten)
 ```
 
 座位由服务器Attach赋予，Command不传player。会话映射须使用唯一连接生命周期ID，旧连接重绑后从Match移除；旧close事件不得Detach新连接，业务应核对绑定。旁观者只允许Catchup；Hash必须对应已切帧。Match所有Attach/Detach/HandleCommand/Tick/ReportHash/Close在比赛单所有者内串行执行；可靠页的resolver须并发安全，不能访问无锁Match map。每Tick应检查返回错误，发送错误不会撤回已经切出的权威帧。

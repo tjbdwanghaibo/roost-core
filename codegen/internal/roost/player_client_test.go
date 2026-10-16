@@ -266,12 +266,16 @@ import (
 func TestClientSDKRealGeneratedTCP(t *testing.T) {
  registry:=playeraccess.NewProtocolRegistry()
  transport:=NewRuntime(registry,defaultLoginTimeout)
- sender,err:=lockstep.NewTCPSender(50002,wire.DefaultMaxPayload,func(id nettransport.SessionID)(string,bool){return "sdk",id==7},func(ctx context.Context,id string,msg uint32,data []byte)error{
-  frames,err:=lockstep.DecodeBroadcast(data);if err!=nil{return err}
-  // 仅测试夹具隐藏live帧；生产TCPSender不会丢帧。
-  if last:=frames[len(frames)-1].ID;last>1 && last<10 {return nil}
-  return transport.PushLockstepSession(ctx,id,msg,data)
- });if err!=nil{t.Fatal(err)}
+ // 仅测试夹具隐藏live帧；生产TCPSender不会丢帧。实时通道只准入，追帧通道入队并等写出。
+ hideLive:=func(push func(context.Context,string,uint32,[]byte)error)func(context.Context,string,uint32,[]byte)error{
+  return func(ctx context.Context,id string,msg uint32,data []byte)error{
+   frames,err:=lockstep.DecodeBroadcast(data);if err!=nil{return err}
+   if last:=frames[len(frames)-1].ID;last>1 && last<10 {return nil}
+   return push(ctx,id,msg,data)
+  }
+ }
+ sender,err:=lockstep.NewTCPSender(50002,wire.DefaultMaxPayload,func(id nettransport.SessionID)(string,bool){return "sdk",id==7},hideLive(transport.PushLockstepSession),hideLive(transport.TCPRuntime.PushLockstepSessionWritten))
+ if err!=nil{t.Fatal(err)}
  room,err:=lockstep.NewMatch(lockstep.MatchConfig{Sequencer:lockstep.SequencerConfig{Players:[]lockstep.PlayerID{7},MaxInputBytes:16},Datagrams:sender,Reliable:sender,RedundancyDepth:1,CatchupBatchFrames:16,CatchupSendWait:time.Second})
  if err!=nil{t.Fatal(err)};if err:=room.Attach(7,7);err!=nil{t.Fatal(err)}
  type action struct {ctx context.Context; command *lockstep.Command;ticks int; done chan error}

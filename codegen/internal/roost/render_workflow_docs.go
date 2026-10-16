@@ -479,7 +479,7 @@ PB推送帧 flags=1，并使用每个 Session 独立的服务端递增 sequence�
 
 Sync使用PushSyncPlayer/PushSyncSession传已有frame字节，flags=3，不额外套PB bytes。
 PB继续使用PushPlayer/PushSession，flags=1。未知类型和保留位一律拒绝。
-Lockstep使用PushLockstepPlayer/PushLockstepSession传既有广播或追帧字节，flags=5。
+Lockstep使用PushLockstepPlayer/PushLockstepSession传既有广播字节（只准入），追帧页用TCPRuntime.PushLockstepSessionWritten（入队并等写出，经lockstep.TCPSender的可靠通道），flags=5。
 这些接口只查本进程的连接；没有自动提供跨Gate推送或全局在线目录。
 
 离线玩家返回 ErrSessionNotFound，listener 未启动/正在关闭返回 ErrTransportUnavailable，业务据此选择

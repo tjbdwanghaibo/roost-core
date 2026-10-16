@@ -182,7 +182,9 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
   写协程一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败时关闭该连接；
 - `PushSession`：只投递指定 SessionID，收不下同样关闭该会话；
 - `PushSyncPlayer/PushSyncSession`：发送已经编码的原始 Sync 帧，flags=3，不经过 PB encoder；
-- `PushLockstepPlayer/PushLockstepSession`：发送既有 Lockstep 广播或追帧字节，flags=5；
+- `PushLockstepPlayer/PushLockstepSession`：发送既有 Lockstep 广播或追帧字节，flags=5，只准入；
+- `TCPRuntime.PushLockstepSessionWritten`：同上但入队后等写出，只给 Lockstep 追帧页（`lockstep.TCPSender` 的可靠通道）；
+  写出失败或连接关闭立即返回错误，ctx 结束时撤回还没开始写的这一帧，连接不因此关闭；会等 socket，不得在业务 worker 上调用；
 - `ActiveSessions`：返回当前玩家在线会话数；
 - `ErrSessionNotFound`：玩家/会话离线；
 - `ErrTransportUnavailable`：listener 未启动或正在关闭。

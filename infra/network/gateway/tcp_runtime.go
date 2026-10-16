@@ -26,6 +26,7 @@ func NewTCPRuntime(encode TCPEncoder, loginTimeout time.Duration) *TCPRuntime {
 //
 // Push* 只把帧放进每连接的有界出站队列：返回 nil 表示已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁，
 // 不等 socket，所以 Push* 不需要 fctx.BlockingError 守卫，业务 worker 与场景 / 帧同步循环都可以直接调用。
+// 唯一例外是 PushLockstepSessionWritten：入队并等写出，只给 Lockstep 追帧页这种在后台协程发送、需要随链路放慢的调用方。
 // （lockstep.TCPSender 在业务 worker 内仍拒绝发送，那是 Match 的约束——比赛 Tick 驱动须在业务 worker /
 // Entity 锁之外——不是 Push* 本身的要求。）
 // 收不下的连接（停读导致队列满、已关闭）当场关闭，写出失败由该连接的写协程关闭连接。
@@ -248,6 +249,23 @@ func (runtime *TCPRuntime) PushLockstepSession(ctx context.Context, sessionID st
 		return ErrTransportUnavailable
 	}
 	return server.pushSessionKind(ctx, sessionID, messageID, payload, flagLockstep)
+}
+
+// PushLockstepSessionWritten 是 PushLockstepSession 的“入队并等写出”版本，只给 Lockstep 追帧页用
+// （lockstep.TCPSender 的可靠通道）：追帧页在 Match 的后台协程里每会话一页在途地发送，等写出让追帧随链路速度
+// 放慢，Match 的 CatchupSendTimeout 经 ctx 限住一页的等待。返回 nil 表示已写进该连接的 socket；
+// 连接关闭或写出失败立即返回错误；ctx 结束时撤回还没开始写的这一帧并返回 ctx 的错误，连接不因此关闭。
+// 实时帧（Tick 的当前帧广播）必须用 PushLockstepSession 只准入，否则一个停读连接会拖住同一 Tick 的其他接收者。
+// 会等 socket，业务 worker / Nest 快池上不得调用（lockstep.TCPSender 用 fctx.BlockingError 在发送前拒绝）。
+func (runtime *TCPRuntime) PushLockstepSessionWritten(ctx context.Context, sessionID string, messageID uint32, payload []byte) error {
+	if runtime == nil {
+		return ErrTransportUnavailable
+	}
+	server := runtime.server.Load()
+	if server == nil {
+		return ErrTransportUnavailable
+	}
+	return server.pushSessionWritten(ctx, sessionID, messageID, payload, flagLockstep)
 }
 
 func (runtime *TCPRuntime) PushLockstepPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
