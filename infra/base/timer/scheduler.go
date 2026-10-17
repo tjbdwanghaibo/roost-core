@@ -78,6 +78,14 @@ type Scheduler struct {
 	running  bool
 	deferred []func()
 	clock    func() time.Time
+	// firing 是重入回调栈；只有回调被显式改期/取消时才建立独立控制状态。
+	firing        []*Node
+	firingChanges map[int64]*firingChange
+}
+
+type firingChange struct {
+	node      *Node
+	cancelled bool
 }
 
 func NewScheduler(ownerID int64, seed int64, saved []Node, onChange ChangeFunc) *Scheduler {
@@ -211,11 +219,18 @@ func (s *Scheduler) ReportUnhandledTypes() []int32 {
 // RemoveTimer 取消一个定时器；返回 true 之后它不再触发。
 //
 // Tick 期间（handler 里）调用时：目标仍在堆里（包括本次 Tick 也已到期、还没轮到的）就立即出堆，
-// 不能推迟到 Tick 结束——那样它会先按旧期限触发。目标不在堆里时——正在触发的
-// 定时器自己，或本次 Tick 里刚新建、尚未入堆的——推迟到最外层 Tick 结束执行，此时返回 true 只表示“已接受”。
+// 不能推迟到 Tick 结束——那样它会先按旧期限触发。正在触发或已显式改期的回调节点记为取消，
+// 不再按返回间隔或显式改期放回；本次 Tick 里刚新建、尚未入堆的节点推迟到最外层 Tick 结束取消。
+// Tick 内返回 true 只表示“已接受”，未知 ID 的推迟取消最终可能查不到节点。
 func (s *Scheduler) RemoveTimer(id int64) bool {
 	if s == nil || id <= 0 {
 		return false
+	}
+	if s.running {
+		if change := s.firingChange(id); change != nil {
+			change.cancelled = true
+			return true
+		}
 	}
 	node := s.byID[id]
 	if node == nil {
@@ -238,13 +253,34 @@ func (s *Scheduler) RemoveTimer(id int64) bool {
 // Tick 期间调用、目标仍在堆里时，立即把它移出堆，推迟到最外层 Tick 结束再按新期限放回：既不会在本次
 // Tick 按旧期限触发，也不会在本次 Tick 按新期限触发——两个 handler 互相改期
 // 不会在一次 Tick 里循环。移出期间不发持久化变化，放回时发一次 upsert。目标不在堆里（正在触发的自己、
-// 本次 Tick 新建的）时整个操作推迟。
+// 本次 Tick 新建的）时整个操作推迟。回调内显式改期覆盖返回间隔（包括 <=0），节点保持移出直到最外层
+// Tick 结束，不能被重入 Tick 再次触发；显式取消后再改期不会复活该节点。
 func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bool {
 	if s == nil || id <= 0 || delay <= 0 {
 		return false
 	}
 	if now.IsZero() {
 		now = s.now()
+	}
+	if s.running {
+		if change := s.firingChange(id); change != nil {
+			s.deferred = append(s.deferred, func() {
+				if change.cancelled {
+					return
+				}
+				if s.byID[id] != nil {
+					s.ChangeTimer(id, now, delay)
+					return
+				}
+				node := change.node
+				node.Delay, node.End = delay, now.Add(delay)
+				s.push(node)
+				if node.Type != TypeClosure {
+					s.emit(ChangeUpsert, *node)
+				}
+			})
+			return true
+		}
 	}
 	node := s.byID[id]
 	if node == nil {
@@ -276,6 +312,25 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 	return true
 }
 
+// firingChange 只为正在执行（含外层重入）或本轮已受控的回调节点保留身份。
+// 普通到期回调复用栈空间，不为每次触发分配控制对象。
+func (s *Scheduler) firingChange(id int64) *firingChange {
+	if change := s.firingChanges[id]; change != nil {
+		return change
+	}
+	for i := len(s.firing) - 1; i >= 0; i-- {
+		if node := s.firing[i]; node.ID == id {
+			if s.firingChanges == nil {
+				s.firingChanges = make(map[int64]*firingChange)
+			}
+			change := &firingChange{node: node}
+			s.firingChanges[id] = change
+			return change
+		}
+	}
+	return nil
+}
+
 func (s *Scheduler) Tick(now time.Time) {
 	if s == nil {
 		return
@@ -290,7 +345,7 @@ func (s *Scheduler) Tick(now time.Time) {
 		now = s.now()
 	}
 	// handler 里可以再调 Tick（重入）：内层照常触发到期节点，但只有最外层负责清 running 并执行推迟操作。
-	// 内层若也清掉 running，回到外层 handler 后“取消正在触发的自己”就不再推迟、查不到节点而失效，
+	// 内层若也清掉 running，回到外层 handler 后“取消正在触发的自己”就不再识别回调身份、查不到节点而失效，
 	// 外层随后又按返回值把它重新排上。
 	if !s.running {
 		s.running = true
@@ -302,6 +357,7 @@ func (s *Scheduler) Tick(now time.Time) {
 			}
 			clear(s.deferred)
 			s.deferred = s.deferred[:0]
+			clear(s.firingChanges)
 		}()
 	}
 
@@ -316,21 +372,8 @@ func (s *Scheduler) Tick(now time.Time) {
 			s.emit(ChangeDelete, *node)
 		}
 
-		next := time.Duration(0)
-		if node.Type == TypeClosure {
-			if node.handler != nil {
-				next = node.handler(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
-			}
-		} else if h := s.handlers[node.Type]; h != nil {
-			next = h(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
-		} else {
-			// 没有 handler：节点已经删除（上面的 ChangeDelete），这里只让它被看见。
-			// 不保留节点：留在堆顶会挡住之后的所有节点，Tick 就要多一种“越过”状态。
-			slog.Warn("timer: dropped a due timer with no handler registered for its type",
-				"owner_id", s.ownerID, "timer_id", node.ID, "type", node.Type, "end", node.End)
-			metrics.IncCounter(UnhandledDroppedMetric, metrics.Labels{"kind": strconv.FormatInt(int64(node.Type), 10)}, 1)
-		}
-		if next <= 0 {
+		next := s.fire(node, now)
+		if next <= 0 || s.firingChanges[node.ID] != nil {
 			continue
 		}
 		node.Delay = next
@@ -340,6 +383,28 @@ func (s *Scheduler) Tick(now time.Time) {
 			s.emit(ChangeUpsert, *node)
 		}
 	}
+}
+
+func (s *Scheduler) fire(node *Node, now time.Time) time.Duration {
+	s.firing = append(s.firing, node)
+	defer func() {
+		last := len(s.firing) - 1
+		s.firing[last] = nil
+		s.firing = s.firing[:last]
+	}()
+	if node.Type == TypeClosure {
+		if node.handler != nil {
+			return node.handler(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
+		}
+	} else if h := s.handlers[node.Type]; h != nil {
+		return h(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
+	} else {
+		// 没有 handler：节点已经删除，只报告，不让未知类型挡住后续定时器。
+		slog.Warn("timer: dropped a due timer with no handler registered for its type",
+			"owner_id", s.ownerID, "timer_id", node.ID, "type", node.Type, "end", node.End)
+		metrics.IncCounter(UnhandledDroppedMetric, metrics.Labels{"kind": strconv.FormatInt(int64(node.Type), 10)}, 1)
+	}
+	return 0
 }
 
 func (s *Scheduler) NextTime() time.Time {

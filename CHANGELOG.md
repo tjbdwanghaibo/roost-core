@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Scheduler：回调内显式改期不会被返回值丢掉或被重入 Tick 提前触发
+
+- 基线 `00d35150` 下，到期节点先出堆并删除索引，回调内 `ChangeTimer` 虽返回 true，却只推迟一次按 ID 查找；回调返回 0 / 负值时再也找不到节点，SLG 行军或建造回调中确认的改期会丢失。返回正间隔时又会先按返回值入堆，后续重入 Tick 可在显式期限前再次触发。新增 `TestFiringTimerExplicitRescheduleOverridesReturn` 和 `TestFiringTimerOperationsComposeAcrossReentrantTicks` 修前共 9 个业务子用例失败。
+- 用重入回调栈保留正在执行的身份，仅对显式操作建立临时控制状态；显式改期覆盖所有返回间隔，收尾前不重新入堆；取消后不被返回值或后续改期复活。typed 节点的 ID、优先级、参数、载荷与新期限完整写回，闭包仍不持久化。已有待触发节点的改期规则不变，接口和存储格式不变。
+- 回归覆盖 typed / 闭包、返回正/零/负间隔、同轮连续改期、先取消/后取消、其他回调操作外层节点、重入未来 Tick、panic 收尾和持久节点重建。复现：`go test ./infra/base/timer -run '^TestFiringTimer' -count=1`。旧版本临时接入方式是回调返回所需间隔、避免依赖回调内显式改期；规则见[时间与定时器](docs/framework/guide/10-time.md#3-scheduler)。
+
 ### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数
 
 - **Manager 的线协议 epoch 改为本 Manager 内单调递增。** 修前每个新 lifetime 从 epoch 1 开始：SelfView 在推送被拒（如独立 Gate 的可靠队列背压，连接还在）后于同一条连接上重开会话，客户端接收端已停在 1/N，新全量 `Full@1/1` 与之后的增量被当成旧包丢弃，新 lifetime 的 `Delta@1/N+1` 恰好以 N 为基线被接受并叠到旧状态上，被拒那一帧的变化永远到不了客户端、也没有错误。现在 `OpenSession` 与 `HoldSession` 都取 Manager 的下一个 epoch，重开后的全量一定更大、被接受；客户端不能再假设首帧 epoch 为 1（[ENTITY_SYNC 线格式](docs/framework/ENTITY_SYNC.md#线格式v2)）。回归 `TestSelfViewReopenedSessionIsAcceptedByTheSameReceiver`。
