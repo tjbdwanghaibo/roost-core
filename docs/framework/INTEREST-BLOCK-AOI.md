@@ -67,6 +67,8 @@ Interest继续归并 `spatial/block/self/team/...` 来源，不新增入口服�
 
 AOICluster继续复用相同AOI块基础，跨区域成员和边界镜像仍由Cluster协调锁串行；本轮没有把它扩成并行区域写入系统，正式Interest入队不经过该锁。
 
+AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，同距按实体 ID 升序。目标或观察者移动时，即使仍在同一距离档、区域没有产生 Enter/Leave/BandChanged，也必须重新选择。目标移动复用旧、新位置块的观察者反向索引（包括边界镜像），不扫描所有观察者；观察者移动只重排自身。`AddSubject` / `AddObserver` 对已存在 ID 的移动同样遵守此规则；未设容量时不增加这项重排工作。这是 Cluster 的容量规则，不能据此假定单区域 AOI 对被淘汰目标的重新准入时机完全相同。
+
 ## 5. BeObservedEntity：唯一位置，多块可见
 
 | 数据 | 含义 |
