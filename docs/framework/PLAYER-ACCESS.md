@@ -199,7 +199,7 @@ func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.
 }
 ```
 
-3. 客户端要看的 DAO 字段写 `dao:"persist,sync"`；组件改完字段后把 DAO 记下的同步变化交给 subject（一次修改一帧增量）：`component.owner.MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`。
+3. 客户端要看的 DAO 字段写 `dao:"persist,sync"`，只经生成的 setter 在 Nest handler 里改。不需要手动标脏：handler 提交时 Nest 自动取走生成实体记下的客户端同步变化（`TakeEntitySyncChanges`），一次提交一帧增量。不要照 game-demo 场景的写法调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`：那是自建 Manager 才需要的，`TakeSyncDirty` 取走的是服务间同步的独立掩码，会偷走那一侧的读者；对客户端只会多标一次、帧数不变。
 
 生成物（都在 `roost project sync` 会重写的文件里，关掉开关即恢复原样）：
 

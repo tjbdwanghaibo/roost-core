@@ -32,6 +32,9 @@
 
 - 修复重连后相同帧号的新赠礼与旧赠礼复用 Saga ID：原实现只保留会话前 16 个字符，demo 的 `demo-玩家ID-时间戳` 会话格式在玩家 ID 较长时丢失时间戳。不同赠礼因此可能被协调器视为重复或身份冲突。现在对完整会话取 SHA-256 摘要，与发送方和帧号组合，保持同一请求稳定且满足 subject token 与长度限制。
 - 新增并登记生成工程回归，覆盖真实 demo 会话格式、不同后缀/符号/Unicode 会话、重放稳定性和玩家/帧号隔离。已持久化的旧 Saga 记录继续按旧 ID 查询和执行，不改其内容；新连接发起的赠礼使用新格式。
+### 新用户试用（第三轮）
+
+- **self_sync 的就绪检查与文档不再让业务手动标脏。** 修前报错与 [PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 第 3 步要求每次修改后调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`；实测这一步多余（Nest 提交时已自动收集 `TakeEntitySyncChanges`，加不加帧数一样），而 `TakeSyncDirty` 取走的是服务间同步的独立掩码。生成工程的真实 TCP 用例去掉手动标脏后仍收到每次修改的增量，钉住这条契约。回归 `TestSelfSyncCheckNamesTheFix`、`TestSelfSyncGeneratedProjectOverRealTCP`。
 
 ### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
 

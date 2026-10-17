@@ -129,10 +129,15 @@ func TestSelfSyncCheckNamesTheFix(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = checkSelfSync(root, m)
-	for _, want := range []string{"sync=true", "subjectPacker=NewPlayerSyncPacker", `Key: "self"`, "MarkSyncDirty", `dao:"persist,sync"`} {
+	for _, want := range []string{"sync=true", "subjectPacker=NewPlayerSyncPacker", `Key: "self"`, `dao:"persist,sync"`} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("marker without sync: %v, want it to name %q", err, want)
 		}
+	}
+	// Nest 在 handler 提交时自动收集客户端同步变化（TakeEntitySyncChanges）；修复说明不能再让业务手动标脏：
+	// TakeSyncDirty 取走的是服务间同步的独立掩码，照做会偷走别的读者的变化。
+	if strings.Contains(err.Error(), "TakeSyncDirty") || strings.Contains(err.Error(), "MarkSyncDirty") {
+		t.Fatalf("the fix tells the business to mark sync dirty by hand: %v", err)
 	}
 	write(`//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker`)
 	if err := checkSelfSync(root, m); err != nil {
@@ -222,14 +227,14 @@ func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
 	}
 	// 业务字段与方法（新手手册的编辑点）。
 	write("db/def/player.go", "package dbdef\n\n//roost:dao coll=player db=game\ntype PlayerDao struct {\n\tGold int64 `bson:\"gold\" dao:\"persist,sync\"`\n}\n")
-	edit("game/entities/player/wallet_component.go", "// Add business methods below.", `// AddGold 加金币；之后把 DAO 记下的同步变化交给 subject（一次修改一帧增量）。
+	// 组件只经生成的 setter 改 DAO，不手动标脏：客户端收到增量靠 Nest 提交时自动收集，本用例钉住这一点。
+	edit("game/entities/player/wallet_component.go", "// Add business methods below.", `// AddGold 加金币；同步变化由 Nest 在提交时收集，不用手动标脏。
 func (component *WalletComponent) AddGold(amount int64) error {
 	if amount <= 0 {
 		return fmt.Errorf("wallet: amount %d must be positive", amount)
 	}
 	dao := component.owner.Dao()
 	dao.SetGold(dao.GetGold() + amount)
-	component.owner.MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())
 	return nil
 }
 
