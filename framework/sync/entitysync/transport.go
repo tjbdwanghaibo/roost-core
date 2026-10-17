@@ -49,8 +49,13 @@ type SessionLifecycle interface {
 
 // AsyncTransport puts frames on nettransport.AsyncTransport's reliable lane.
 // Backpressure there means the receiver is not keeping up; that is the
-// session's failure and it is closed — the slow-consumer policy, in one place.
-// A closed async transport is nobody's failure and asks for a retry.
+// session's failure and it is closed. The shared resident byte budget being
+// used up (nettransport.ErrResidentBudgetExhausted) and a closed async
+// transport are nobody's failure and ask for a retry of the tick.
+//
+// 这就是慢消费者规则：“这个接收者跟不上”关会话；“整个进程待发的字节到了上限”整轮重试、保留脏状态
+// （由 MaxFrozenBytes 与发送侧的 MaxReliableAge 兜底）。玩家接入层（wiring/selfsync.PushPlayerFrame）
+// 用同一规则，并在关会话时同时关闭玩家的连接。
 type AsyncTransport struct {
 	async *nettransport.AsyncTransport
 }
@@ -67,7 +72,7 @@ func (t *AsyncTransport) Push(ctx context.Context, session SessionID, frame []by
 		return fmt.Errorf("%w: no async transport", ErrRetryLater)
 	}
 	err := t.async.SendReliable(ctx, session, frame)
-	if errors.Is(err, nettransport.ErrTransportClosed) {
+	if errors.Is(err, nettransport.ErrTransportClosed) || errors.Is(err, nettransport.ErrResidentBudgetExhausted) {
 		return fmt.Errorf("%w: %w", ErrRetryLater, err)
 	}
 	return err

@@ -818,6 +818,139 @@ func TestAsyncLoadSlowConsumerDoesNotDelayHealthyBaseline(t *testing.T) {
 	}
 }
 
+// 同一会话 ID 关闭后再打开（新 lifetime）时，它的全量 epoch 大于同一接收端此前收过的任何帧：Manager 的 epoch
+// 在本 Manager 内单调递增，所以即使新 lifetime 的帧落到旧接收端（政策在同一连接上重开、或传输复用接收端），
+// 全量也会被接受，之后的增量接在它上面，而不是被当成旧包丢掉、再让新 lifetime 的增量叠到旧基线上。
+// 自身视图与场景都不在原连接上重开（推送被拒即断开），这里作为 Manager 自身的防御保留。
+// 历史：见 00d35150。
+func TestAReopenedSessionStartsAboveEveryEpochItsReceiverHasSeen(t *testing.T) {
+	transport := newRecordingTransport()
+	m := newTestManager(t, transport, ManagerConfig{})
+	packs := 0
+	s := testSubject(t, 1, &packs)
+	if err := m.Register(s); err != nil {
+		t.Fatal(err)
+	}
+	receiver := frame.NewReceiver(frame.DefaultLimits())
+	// receive 把会话收到的原始帧按顺序交给同一个接收端，返回被应用的全量个数；丢包或拒收即失败。
+	receive := func(stage string) (fulls int) {
+		t.Helper()
+		for index, raw := range transport.take(1) {
+			var kind frame.Kind
+			applied, err := receiver.Receive(raw, func(received frame.Frame) error {
+				kind = received.Kind
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("%s: frame %d refused by the receiver: %v", stage, index, err)
+			}
+			if !applied {
+				decoded, _ := frame.Decode(raw, frame.DefaultLimits())
+				t.Fatalf("%s: frame %d (%v epoch=%d tick=%d) dropped by the receiver as an old packet", stage, index, decoded.Kind, decoded.Epoch, decoded.Tick)
+			}
+			if kind == frame.Full {
+				fulls++
+			}
+		}
+		return fulls
+	}
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 1, entity.SyncProfile{})
+	for i := range 4 {
+		if i > 0 {
+			s.MarkDirty(1)
+		}
+		mustFlush(t, m)
+	}
+	if fulls := receive("first lifetime"); fulls != 1 {
+		t.Fatalf("first lifetime: %d full snapshots applied, want 1", fulls)
+	}
+	m.CloseSession(1)
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 1, entity.SyncProfile{})
+	for i := range 6 {
+		if i > 0 {
+			s.MarkDirty(1)
+		}
+		mustFlush(t, m)
+	}
+	if fulls := receive("reopened lifetime"); fulls != 1 {
+		t.Fatalf("reopened lifetime: %d full snapshots applied, want the new lifetime's full snapshot", fulls)
+	}
+}
+
+// 整个进程的驻留字节预算耗尽不是这个会话跟不上：AsyncTransport 交还 ErrRetryLater，Manager 整轮重试、保留脏状态，
+// 会话不丢；预算释放后同一会话照常收到这一轮的内容。单个会话自己的队列满仍然关会话
+// （TestAsyncLoadSlowConsumerDoesNotDelayHealthyBaseline）。
+func TestAsyncTransportRetriesTheTickWhenTheResidentBudgetIsExhausted(t *testing.T) {
+	started, release := make(chan SessionID, 4), make(chan struct{})
+	downstream := nettransport.TransportFunc{Reliable: func(ctx context.Context, id SessionID, _ []byte) error {
+		started <- id
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	const budget = 4096
+	queue, err := nettransport.NewAsyncTransport(downstream, nettransport.AsyncTransportConfig{MaxResidentReliableBytes: budget, SendTimeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = queue.Close(ctx)
+	}()
+	transport, err := NewAsyncTransport(queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(t, transport, ManagerConfig{})
+	packs := 0
+	if err := m.Register(testSubject(t, 1, &packs)); err != nil {
+		t.Fatal(err)
+	}
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 1, entity.SyncProfile{})
+	// 另一个接收者占住几乎全部预算：它的帧已被发送协程取走、停在下游，仍算驻留字节。
+	const filler SessionID = 99
+	if err := queue.RegisterSession(nettransport.SessionInfo{ID: filler}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.SendReliable(context.Background(), filler, make([]byte, budget-1)); err != nil {
+		t.Fatal(err)
+	}
+	if id := <-started; id != filler {
+		t.Fatalf("first send went to session %d", id)
+	}
+	err = m.Flush(context.Background())
+	if !errors.Is(err, ErrRetryLater) || !errors.Is(err, nettransport.ErrResidentBudgetExhausted) {
+		t.Fatalf("flush with the resident budget exhausted = %v, want ErrRetryLater wrapping ErrResidentBudgetExhausted", err)
+	}
+	if stats := m.Stats(); stats.Sessions != 1 || stats.SessionsLost != 0 {
+		t.Fatalf("after the refusal: sessions=%d lost=%d, want the session kept (1/0)", stats.Sessions, stats.SessionsLost)
+	}
+	close(release)
+	// 占位帧发完之后预算才归还（发送协程在下游返回后结算）。
+	for deadline := time.Now().Add(2 * time.Second); queue.Counters().ResidentReliableBytes != 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("filler never released the budget: %+v", queue.Counters())
+		}
+		runtime.Gosched()
+	}
+	mustFlush(t, m)
+	select {
+	case id := <-started:
+		if id != 1 {
+			t.Fatalf("after the budget recovered the frame went to session %d, want 1", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the retried tick never reached the session")
+	}
+}
+
 // 同一 tick 用一个新对象替换一个旧对象，最终容量未增长；准入结果不应由 ID 大小决定。
 func TestFullSessionCanReplaceAnObjectRegardlessOfSubjectID(t *testing.T) {
 	for _, ids := range [][2]int64{{100, 1}, {1, 100}} {

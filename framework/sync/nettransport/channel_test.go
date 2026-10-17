@@ -55,7 +55,8 @@ func TestAsyncTransportReliableBackpressureKeepsAdmittedOrder(t *testing.T) {
 	if err := transport.SendReliable(context.Background(), 8, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.SendReliable(context.Background(), 8, []byte("three")); !errors.Is(err, ErrReliableBackpressure) {
+	// 这个会话自己的队列满了：是背压，但不是整个进程的驻留预算耗尽（调用方据此关这个接收者，而不是整轮重试）。
+	if err := transport.SendReliable(context.Background(), 8, []byte("three")); !errors.Is(err, ErrReliableBackpressure) || errors.Is(err, ErrResidentBudgetExhausted) {
 		t.Fatalf("expected backpressure, got %v", err)
 	}
 	downstream.reliableRelease <- struct{}{}

@@ -57,7 +57,10 @@ func DefaultAsyncTransportConfig() AsyncTransportConfig {
 // SendReliable returns as soon as the message is queued, a worker per
 // session drains in order, and a full queue is refused with
 // ErrReliableBackpressure — which entitysync treats as that session's
-// failure. A downstream send error is terminal for the session.
+// failure. The one budget all sessions share (MaxResidentReliableBytes)
+// refuses with ErrResidentBudgetExhausted, which is also
+// ErrReliableBackpressure but is nobody's slowness: entitysync retries the
+// tick. A downstream send error is terminal for the session.
 //
 // It has exactly one lane, and it is reliable: a frame that carries only what
 // changed cannot survive being replaced by the next one, so there is no
@@ -213,7 +216,9 @@ func (transport *AsyncTransport) RemoveSession(id SessionID) bool {
 // SendReliable queues one message for one session. It copies the payload,
 // so callers may reuse their buffer. Refusals: ErrTransportClosed,
 // ErrSessionNotRegistered (unknown or draining), ErrSessionFailed (wrapping
-// the downstream cause), ErrReliableMessageTooBig, ErrReliableBackpressure.
+// the downstream cause), ErrReliableMessageTooBig, ErrReliableBackpressure
+// (this session's queue is full), ErrResidentBudgetExhausted (the shared
+// resident budget is used up; it also matches ErrReliableBackpressure).
 func (transport *AsyncTransport) SendReliable(ctx context.Context, id SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
@@ -258,7 +263,7 @@ func (transport *AsyncTransport) SendReliable(ctx context.Context, id SessionID,
 	if !transport.reserveReliableBytes(int64(len(payload))) {
 		transport.stats.reliableBackpressure.Add(1)
 		transport.stats.globalBackpressure.Add(1)
-		return fmt.Errorf("%w: global resident byte budget", ErrReliableBackpressure)
+		return ErrResidentBudgetExhausted
 	}
 	// 先准入检查，再复制调用方字节；拒绝路径不为 payload 分配。
 	if len(queue.reliable) == cap(queue.reliable) && queue.head > 0 {

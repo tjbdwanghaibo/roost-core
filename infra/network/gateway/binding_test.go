@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 )
 
 func bindRequest(binding Binding) ControlRequest {
@@ -165,5 +167,75 @@ func TestSessionReplacementDoesNotCrossPlayerIdentity(t *testing.T) {
 	previous, result := table.finish(second, true)
 	if previous != nil || result.Outcome != NotAdmitted || table.bySession[identity.SessionID] != first {
 		t.Fatal("another player replaced existing session")
+	}
+}
+
+// Game Ingress 的激活回调（OnActive）执行期间，这个玩家已经可以推送：Gate 写出鉴权 ACK、准备好接收出站之后
+// 才发 Activate。回调里登记连接的推送方（自身视图会立刻唤醒同步）若在回调返回前推送，不能得到
+// “玩家没有连接”，否则同步会话被丢、连接却还在，没有任何东西再打开它。激活失败的绑定随即不再可推送。
+func TestAnIngressBindingIsPushableWhileItsActivationCallbackRuns(t *testing.T) {
+	identity := packetTestBinding()
+	var game *GameIngress
+	var duringActivation error
+	connectionsDuringActivation := -1
+	refuse := false
+	newGame := func() {
+		var err error
+		game, err = NewGameIngress(DefaultConfig(), identity.Game, GameDependencies{
+			Client: payloadClient{limit: 1 << 20}, Authenticator: AuthenticatorFunc(nil), Ready: func() bool { return true },
+			Dispatch: func(context.Context, Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) { return nil, nil },
+			QueueFactory: func(OutboundLimits, func(context.Context, uint64, []byte) error, func(uint64, error)) (ReliableQueue, error) {
+				return benchGateQueue{}, nil
+			},
+			Matches: func(context.Context, string, ProcessIdentity) (bool, error) { return true, nil },
+			OnActive: func(binding Binding, _ uint64) error {
+				duringActivation = game.PushSyncPlayer(context.Background(), binding.PlayerID, 9, []byte("first full"))
+				connectionsDuringActivation = game.ActiveSessions(binding.PlayerID)
+				if refuse {
+					return errors.New("activation refused")
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	activate := func() *bindingRecord {
+		t.Helper()
+		request := bindRequest(identity)
+		request.Binding.ConnectionNonce = newBindingToken()
+		record, _, err := game.bindings.reserve(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, result := game.bindings.finish(record, true)
+		if err := game.register(record, Principal{PlayerID: identity.PlayerID, SessionID: identity.SessionID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := game.bindings.control(ControlRequest{Version: InternalVersion, Operation: Activate, Binding: result.Binding}); err != nil {
+			t.Fatal(err)
+		}
+		_ = game.activate(context.Background(), record)
+		return record
+	}
+
+	newGame()
+	activate()
+	if duringActivation != nil || connectionsDuringActivation != 1 {
+		t.Fatalf("inside OnActive: push = %v, connections = %d; want the push admitted and 1 connection", duringActivation, connectionsDuringActivation)
+	}
+	if got := game.ActiveSessions(identity.PlayerID); got != 1 {
+		t.Fatalf("after activation: connections = %d, want 1", got)
+	}
+
+	refuse = true
+	newGame()
+	activate()
+	if got := game.ActiveSessions(identity.PlayerID); got != 0 {
+		t.Fatalf("after a refused activation: connections = %d, want 0", got)
+	}
+	if err := game.PushSyncPlayer(context.Background(), identity.PlayerID, 9, []byte("late")); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("push after a refused activation = %v, want ErrSessionNotFound", err)
 	}
 }

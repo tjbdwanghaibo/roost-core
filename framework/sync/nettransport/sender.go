@@ -9,6 +9,7 @@ package nettransport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 )
@@ -28,6 +29,12 @@ var (
 	ErrPayloadTooLarge       = errors.New("nettransport: protocol payload is too large")
 	ErrAuthentication        = errors.New("nettransport: packet authentication failed")
 )
+
+// ErrResidentBudgetExhausted 是 AsyncTransport 因“全部会话共用的驻留字节预算”（MaxResidentReliableBytes）
+// 用尽而拒收：不是这个会话收得慢，而是整个进程待发的可靠字节到了上限。它同时满足
+// errors.Is(err, ErrReliableBackpressure)，只看背压的调用方语义不变；需要区分的调用方（例如把它当作
+// “整轮重试”而不是“这个接收者跟不上”）用 errors.Is(err, ErrResidentBudgetExhausted)。
+var ErrResidentBudgetExhausted = fmt.Errorf("%w: global resident byte budget", ErrReliableBackpressure)
 
 // DefaultMaxDatagram is the payload bound a conservative path MTU leaves for
 // one unreliable datagram; the protocol transports default to it.

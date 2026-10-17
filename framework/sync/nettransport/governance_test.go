@@ -65,7 +65,8 @@ func TestGlobalResidentBudgetIncludesInFlightAndReleasesOnCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	await(t, d.reliableStarted)
-	if err := tr.SendReliable(context.Background(), 2, []byte("12345")); !errors.Is(err, ErrReliableBackpressure) {
+	// 全局驻留预算拒收：仍满足 ErrReliableBackpressure，另可按 ErrResidentBudgetExhausted 与单会话队列满区分。
+	if err := tr.SendReliable(context.Background(), 2, []byte("12345")); !errors.Is(err, ErrReliableBackpressure) || !errors.Is(err, ErrResidentBudgetExhausted) {
 		t.Fatal(err)
 	}
 	if err := tr.SendReliable(context.Background(), 1, []byte("1234")); err != nil {

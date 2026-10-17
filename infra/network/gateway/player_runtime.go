@@ -24,12 +24,17 @@ type PlayerRuntime interface {
 	StopNotifications(context.Context) error
 }
 
+// playerResources 是玩家当前可推送的绑定：已激活的，以及激活回调（OnActive）正在执行的。
+// 后者的 Gate 侧已写出鉴权 ACK、准备好接收出站之后才发 Activate（Gate.AfterACK），所以激活回调里登记的
+// 推送方（自身视图、场景）在回调返回前就能推送，不会把“回调还没返回”当成“玩家没有连接”；
+// 激活失败的绑定（activationErr 非 nil）随即被关闭，不再算在内。与 PushSession 的按会话推送口径一致。
 func (game *GameIngress) playerResources(playerID int64) []*ingressBinding {
 	game.mu.Lock()
 	defer game.mu.Unlock()
 	var result []*ingressBinding
 	for _, resource := range game.resources {
-		if resource.principal.PlayerID == playerID && resource.activated && !resource.closed {
+		activating := resource.activationDone != nil && !resource.activated && resource.activationErr == nil
+		if resource.principal.PlayerID == playerID && (resource.activated || activating) && !resource.closed {
 			result = append(result, resource)
 		}
 	}

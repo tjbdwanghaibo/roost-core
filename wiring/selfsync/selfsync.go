@@ -3,7 +3,8 @@
 // 生命周期本身在 framework/sync/entitysync/policy.SelfView（传输无关、可单独测试）；这里只做三件接线：
 //
 //   - Transport：把 gateway.PlayerRuntime.PushSyncPlayer（嵌入 TCPRuntime 与独立 Gate 的 GameIngress 共用）
-//     包成 entitysync.Transport。推送只准入、不等写出（出站队列契约），接入层还没就绪时整轮重试。
+//     包成 entitysync.Transport。推送只准入、不等写出（出站队列契约）；结果按 PushPlayerFrame 的慢消费者规则
+//     分类：接入层未就绪或进程驻留预算耗尽时整轮重试，活着的连接拒收时关闭该玩家的连接。
 //   - 连接生命周期：嵌入 TCP 用 gateway.TCPHandshake 的 AfterACK / Closed，独立 Gate 用 GameIngress 的
 //     OnActive / OnClosed，都转成 SelfView.Activate / Deactivate。
 //   - Nest Mod 装配：EntitySyncSetup 把 Transport、SessionLost、SelfView 的安装与实体加载通知交给
@@ -22,7 +23,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	wiringnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
 )
 
@@ -96,6 +99,10 @@ func (s *SelfSync) EntitySyncSetup() wiringnest.EntitySyncSetup {
 	}
 }
 
+// StrandedPlayersMetric 是自身视图“在线却没有打开的同步会话”的玩家数（Gauge，无标签，见 SelfView.Stranded）。
+// 正常为 0；持续不为 0 说明有连接活着却收不到自己的状态。
+const StrandedPlayersMetric = "entitysync.self_view.stranded_players"
+
 func (s *SelfSync) attach(manager *entitysync.Manager) (func(), error) {
 	view, err := policy.NewSelfView(policy.SelfViewConfig{Manager: manager, Subject: s.subject, Lookup: s.lookup})
 	if err != nil {
@@ -105,8 +112,15 @@ func (s *SelfSync) attach(manager *entitysync.Manager) (func(), error) {
 		view.Close()
 		return nil, errors.New("selfsync: already attached to an entity sync manager")
 	}
+	// 登记在 SelfView 之后：同一个政策阶段里先由 SelfView 算出滞留人数，再写指标。
+	unhookGauge := manager.RegisterPolicy(entitysync.PolicyHooks{Apply: func() error {
+		metrics.SetGauge(StrandedPlayersMetric, nil, int64(view.Stranded()))
+		return nil
+	}})
 	return func() {
+		unhookGauge()
 		view.Close()
+		metrics.SetGauge(StrandedPlayersMetric, nil, 0)
 		s.view.CompareAndSwap(view, nil)
 	}, nil
 }
@@ -144,23 +158,88 @@ func (s *SelfSync) BindPlayers(players gateway.PlayerRuntime) {
 // Online 报告自身视图里当前有连接的玩家数；未装配时为 0。
 func (s *SelfSync) Online() int { return s.view.Load().Online() }
 
-// transport 是 Manager 的 Transport：一帧就是一次 PushSyncPlayer。
+// Stranded 报告在线却没有打开的同步会话超过几个同步周期的玩家数（SelfView.Stranded）；未装配时为 0。
+func (s *SelfSync) Stranded() int { return s.view.Load().Stranded() }
+
+// transport 是 Manager 的 Transport：一帧就是一次 PushPlayerFrame。
 type transport struct{ owner *SelfSync }
 
 // Push 只准入不等写出：嵌入 TCP 放进每连接的出站队列，独立 Gate 放进 Game Ingress 的可靠队列。
-// 接入层还没接上或正在启停（ErrTransportUnavailable）不是谁的错，整轮重试；其他错误（玩家没有连接、
-// 连接收不下）只关这个会话，由 SelfView 判断是否重开。嵌入 TCP 的出站队列满时接入层同时关闭连接；
-// 独立 Gate 的可靠队列背压只拒收这一帧、连接还在，SelfView 会在同一条连接上重开（epoch 更大的新全量）。
+// 结果按 PushPlayerFrame 的慢消费者规则分类：接入层还没接上也是整轮重试。
 func (t transport) Push(ctx context.Context, session entitysync.SessionID, frame []byte) error {
 	players := t.owner.players.Load()
 	if players == nil {
 		return fmt.Errorf("%w: player runtime is not bound yet", entitysync.ErrRetryLater)
 	}
-	err := players.PushSyncPlayer(ctx, int64(session), t.owner.config.MessageID, frame)
-	if errors.Is(err, gateway.ErrTransportUnavailable) {
-		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
+	return PushPlayerFrame(ctx, players, int64(session), t.owner.config.MessageID, frame)
+}
+
+// PlayerConnections 是 PushPlayerFrame 需要的那部分玩家接入层（gateway.PlayerRuntime 满足它）。
+type PlayerConnections interface {
+	PushSyncPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error
+	ActiveSessions(playerID int64) int
+	CloseSessions(playerID int64, reason error) int
+}
+
+// ErrSyncPushRefused 是 PushPlayerFrame 关闭玩家连接时给出的关闭原因（包着接入层的原错误）。
+var ErrSyncPushRefused = errors.New("selfsync: a live connection refused a sync frame")
+
+// PushPlayerFrame 把一帧 Entity Sync 推给玩家的全部连接，并按慢消费者规则（与 entitysync.AsyncTransport 同一条）
+// 交给 Manager。会话 ID 就是玩家 ID 的 Manager（自身视图、game-demo 的场景）都用它做 Transport.Push：
+//
+//   - ctx 已结束：原样交还，Manager 自己整轮重试；不关任何连接（停机不能把在线玩家踢掉）。
+//   - 接入层还没就绪 / 正在启停（gateway.ErrTransportUnavailable、nettransport.ErrTransportClosed），
+//     或整个进程的驻留字节预算耗尽（nettransport.ErrResidentBudgetExhausted，且这名玩家的每条连接都因此拒收）：
+//     不是谁的错，交还 entitysync.ErrRetryLater，整轮重试、保留脏状态；连接与会话都不动。
+//   - 玩家没有连接（每条拒收都是 gateway.ErrSessionNotFound）：原样交还，Manager 关会话；之后来的连接是一次
+//     新激活，自己会打开会话。
+//   - 其余拒收——活着的连接收不下（可靠队列满、绑定失效、帧超限等），或只有部分连接因预算拒收：先关闭这名玩家
+//     的全部连接（CloseSessions，原因是 ErrSyncPushRefused 包着原错误），再交还原错误让 Manager 关同步会话。
+//     同步会话按玩家开，会话关掉之后留下的连接都会处在“连接活着、同步会话已死”的状态，没有东西再打开它，
+//     所以一条也不留：客户端照常重连，新连接从全量开始。只有部分连接因预算拒收时也关：收下这一帧的连接
+//     已应用了它，整轮重试会让同一 tick 的重发被它当旧包丢掉、之后的增量基线对不上。
+//
+// 关连接不阻塞：嵌入 TCP 关 socket（打断正在进行的写）、Game Ingress 退役绑定都只取短锁、不等 I/O；关闭通知
+// 经各自的通知队列异步送达（自身视图的 Deactivate 随后到）。PushPlayerFrame 在 Manager 的 Flush 里调用
+// （同步循环协程或 Drain / Stop 的调用方），不在 Nest 快池上。
+func PushPlayerFrame(ctx context.Context, players PlayerConnections, playerID int64, messageID uint32, frame []byte) error {
+	err := players.PushSyncPlayer(ctx, playerID, messageID, frame)
+	if err == nil || (ctx != nil && ctx.Err() != nil) {
+		return err
 	}
+	switch refusals := refusalsOf(err); {
+	case errors.Is(err, gateway.ErrTransportUnavailable), errors.Is(err, nettransport.ErrTransportClosed):
+		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
+	case every(refusals, nettransport.ErrResidentBudgetExhausted) && len(refusals) >= players.ActiveSessions(playerID):
+		metrics.IncCounter(SyncPushRefusedMetric, metrics.Labels{"outcome": "retried"}, 1)
+		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
+	case every(refusals, gateway.ErrSessionNotFound):
+		return err
+	}
+	players.CloseSessions(playerID, fmt.Errorf("%w: %w", ErrSyncPushRefused, err))
+	metrics.IncCounter(SyncPushRefusedMetric, metrics.Labels{"outcome": "closed"}, 1)
 	return err
+}
+
+// SyncPushRefusedMetric 计 PushPlayerFrame 处理的拒收（Counter）。标签 outcome：closed（活着的连接拒收，
+// 关闭了该玩家的连接）、retried（整个进程的驻留预算耗尽，整轮重试）。接入层未就绪与玩家没有连接不计。
+const SyncPushRefusedMetric = "player.sync.push_refused.total"
+
+// refusalsOf 拆开接入层按连接汇总的错误（errors.Join，每条连接一个）；单个错误就是一条。
+func refusalsOf(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+	return []error{err}
+}
+
+func every(errs []error, target error) bool {
+	for _, err := range errs {
+		if !errors.Is(err, target) {
+			return false
+		}
+	}
+	return len(errs) > 0
 }
 
 // MaxFrameBytes 实现 entitysync.FrameSizeLimiter：Manager 构造时取它与帧默认上限的较小值。

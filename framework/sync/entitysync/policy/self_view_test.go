@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -23,7 +24,6 @@ import (
 type selfLane struct {
 	mu        sync.Mutex
 	frames    map[entitysync.SessionID][]selfFrame
-	raws      map[entitysync.SessionID][][]byte // 送达的原始帧，喂给客户端的 frame.Receiver
 	offline   map[entitysync.SessionID]bool
 	block     chan struct{}
 	entered   chan struct{}
@@ -76,10 +76,6 @@ func (lane *selfLane) Push(_ context.Context, session entitysync.SessionID, raw 
 		lane.frames = make(map[entitysync.SessionID][]selfFrame)
 	}
 	lane.frames[session] = append(lane.frames[session], record)
-	if lane.raws == nil {
-		lane.raws = make(map[entitysync.SessionID][][]byte)
-	}
-	lane.raws[session] = append(lane.raws[session], append([]byte(nil), raw...))
 	return nil
 }
 
@@ -99,15 +95,6 @@ func (lane *selfLane) take(player int64) []selfFrame {
 	frames := lane.frames[entitysync.SessionID(player)]
 	delete(lane.frames, entitysync.SessionID(player))
 	return frames
-}
-
-// takeRaw 返回并清空玩家收到的原始帧（送达顺序）。
-func (lane *selfLane) takeRaw(player int64) [][]byte {
-	lane.mu.Lock()
-	defer lane.mu.Unlock()
-	raws := lane.raws[entitysync.SessionID(player)]
-	delete(lane.raws, entitysync.SessionID(player))
-	return raws
 }
 
 // memory 是测试里的“内存中已发布的实体”：Lookup 只读它，不加载。
@@ -145,25 +132,6 @@ type selfFixture struct {
 	lane    *selfLane
 	memory  *memory
 	view    *SelfView
-	clock   *selfClock
-}
-
-// selfClock 是 SelfView 读的时钟，只由测试推进：重开丢失会话的时机按它判断。
-type selfClock struct {
-	mu sync.Mutex
-	at time.Time
-}
-
-func (c *selfClock) now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.at
-}
-
-func (c *selfClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.at = c.at.Add(d)
 }
 
 func newSelfFixture(t *testing.T) *selfFixture {
@@ -173,7 +141,7 @@ func newSelfFixture(t *testing.T) *selfFixture {
 
 func newSelfFixtureOn(t *testing.T, lane *selfLane) *selfFixture {
 	t.Helper()
-	fixture := &selfFixture{lane: lane, memory: &memory{}, clock: &selfClock{at: time.Unix(1_000_000, 0)}}
+	fixture := &selfFixture{lane: lane, memory: &memory{}}
 	var view atomic.Pointer[SelfView]
 	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
 		Transport: lane,
@@ -192,7 +160,6 @@ func newSelfFixtureOn(t *testing.T, lane *selfLane) *selfFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created.now = fixture.clock.now
 	view.Store(created)
 	fixture.view = created
 	t.Cleanup(func() {
@@ -216,13 +183,6 @@ func (f *selfFixture) flush(t *testing.T) {
 	if err := f.manager.Flush(context.Background()); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-}
-
-// reopenLost 推进一个同步周期再跑政策阶段：丢失的会话在这次阶段重开。
-func (f *selfFixture) reopenLost(t *testing.T) {
-	t.Helper()
-	f.clock.advance(f.manager.Interval())
-	f.flush(t)
 }
 
 // requireFull 断言玩家收到的帧里第一帧是全量、只含它自己（profile self），之后没有别的 subject。
@@ -349,135 +309,157 @@ func TestSelfViewReplacedConnectionKeepsTheView(t *testing.T) {
 	}
 }
 
-// Manager 因推送失败丢掉会话（独立 Gate 激活回调返回前连接还不可推送、所有连接都已断开），玩家仍在线时
-// 过了重开间隔（半个同步周期）的政策阶段重开会话、重新绑定，以全量恢复；连续失败有上限，新的激活清零。
-func TestSelfViewReopensALostSession(t *testing.T) {
+// Manager 因推送被拒丢掉会话之后，SelfView 不在原连接上重开：传输拒收时会关闭这名玩家的连接
+// （wiring/selfsync.PushPlayerFrame），这里等关闭通知（Deactivate）收尾。不论之后跑多少个政策阶段、传输是否
+// 恢复，原连接都不再收到帧；连接关闭后 subject 注销，客户端重连（新激活）从新 epoch 的全量开始。
+func TestSelfViewWaitsForTheConnectionToCloseAfterALoss(t *testing.T) {
 	f := newSelfFixture(t)
-	f.loaded(t, 7)
-	f.lane.setOffline(7, true)
+	state := f.loaded(t, 7)
 	f.view.Activate(7, "c1")
-	f.flush(t) // 第一次推送失败：会话被 Manager 关闭，报告 SessionLost
-	if lost := f.manager.Stats().SessionsLost; lost != 1 {
-		t.Fatalf("sessions lost = %d, want 1", lost)
-	}
-	f.lane.setOffline(7, false)
-	f.reopenLost(t) // 过了重开间隔的政策阶段重开并重新绑定
 	f.flush(t)
 	requireFull(t, f.lane.take(7), 7)
 
-	// 一直推不出去：重开次数用尽后不再重开，直到下一次激活。
 	f.lane.setOffline(7, true)
-	for range 2 * selfMaxReopens {
-		f.manager.WakeSync()
-		subject, _ := selfSubject(7)
-		f.memory.lookup(subject).MarkDirty(1)
-		f.reopenLost(t)
-	}
-	lost := f.manager.Stats().SessionsLost
-	if lost > 1+selfMaxReopens+1 {
-		t.Fatalf("sessions lost = %d: reopening did not stop after %d attempts", lost, selfMaxReopens)
-	}
+	state.MarkDirty(1)
+	f.flush(t) // 推送被拒：会话被 Manager 丢掉，报告 SessionLost
 	f.lane.setOffline(7, false)
-	f.flush(t)
+	for range 20 {
+		state.MarkDirty(1)
+		f.flush(t)
+	}
 	if frames := f.lane.take(7); len(frames) != 0 {
-		t.Fatalf("frames after giving up: %+v", frames)
+		t.Fatalf("frames after the loss on the connection that refused: %+v; the session must not be reopened on it", frames)
 	}
-	f.view.Activate(7, "c2")
+	if stats := f.manager.Stats(); stats.Sessions != 0 || stats.SessionsLost != 1 {
+		t.Fatalf("after the loss: sessions=%d lost=%d, want 0/1", stats.Sessions, stats.SessionsLost)
+	}
+
+	f.view.Deactivate(7, "c1") // 传输关闭了这条连接
 	f.flush(t)
+	if stats := f.manager.Stats(); stats.Sessions != 0 || stats.Subjects != 0 || f.view.Online() != 0 {
+		t.Fatalf("after the close: sessions=%d subjects=%d online=%d, want all 0", stats.Sessions, stats.Subjects, f.view.Online())
+	}
+	f.view.Activate(7, "c2") // 客户端重连
 	f.flush(t)
 	requireFull(t, f.lane.take(7), 7)
 }
 
-// 连接还在、一次推送被拒让 Manager 丢掉会话后，SelfView 在同一条连接上重开：客户端的接收端已经收过旧
-// lifetime 的帧，重开后的全量必须被它接受并从那里继续，不能被当成旧包丢掉——丢掉之后新 lifetime 的
-// 增量编号追上旧编号时会被叠到旧基线上，被拒那一帧的变化永远到不了客户端，也没有任何错误。
-func TestSelfViewReopenedSessionIsAcceptedByTheSameReceiver(t *testing.T) {
+// 连着多次偶发的拒收，每次都由“连接被关闭 → 客户端重连”恢复：每一次都是新激活，没有跨激活累积的次数，
+// 不会在某一次之后永久失去视图。lane 在拒收时像 PushPlayerFrame 一样关闭玩家的连接（关闭通知 Deactivate）。
+func TestSelfViewEveryIsolatedLossIsRecoveredByTheReconnect(t *testing.T) {
 	f := newSelfFixture(t)
 	state := f.loaded(t, 7)
-	receiver := frame.NewReceiver(frame.DefaultLimits())
-	// receive 把玩家收到的原始帧按顺序交给同一个接收端，返回其中被应用的全量个数；丢包或拒收即失败。
-	receive := func(stage string) (fulls int) {
-		t.Helper()
-		for index, raw := range f.lane.takeRaw(7) {
-			var kind frame.Kind
-			applied, err := receiver.Receive(raw, func(received frame.Frame) error {
-				kind = received.Kind
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("%s: frame %d refused by the client's receiver: %v", stage, index, err)
-			}
-			if !applied {
-				decoded, _ := frame.Decode(raw, frame.DefaultLimits())
-				t.Fatalf("%s: frame %d (%v epoch=%d tick=%d) dropped by the client's receiver as an old packet", stage, index, decoded.Kind, decoded.Epoch, decoded.Tick)
-			}
-			if kind == frame.Full {
-				fulls++
-			}
+	f.view.Activate(7, "c0")
+	f.flush(t)
+	requireFull(t, f.lane.take(7), 7)
+	for round := 1; round <= 20; round++ {
+		connection := fmt.Sprintf("c%d", round-1)
+		f.lane.setOffline(7, true)
+		state.MarkDirty(1)
+		f.flush(t)
+		f.view.Deactivate(7, connection) // 拒收的连接被关闭
+		f.lane.setOffline(7, false)
+		f.view.Activate(7, fmt.Sprintf("c%d", round))
+		f.flush(t)
+		frames := f.lane.take(7)
+		if len(frames) == 0 {
+			t.Fatalf("isolated loss #%d: the reconnected client received nothing; its view is gone", round)
 		}
-		return fulls
+		requireFull(t, frames, 7)
 	}
-
-	f.view.Activate(7, "c1")
-	f.flush(t)
-	for range 3 {
-		state.MarkDirty(1)
-		f.flush(t)
-	}
-	if fulls := receive("first lifetime"); fulls != 1 {
-		t.Fatalf("first lifetime: %d full snapshots applied, want 1", fulls)
-	}
-
-	// 一次推送被拒（如独立 Gate 的可靠队列背压）：连接还在，Manager 丢掉会话并报告 SessionLost。
-	f.lane.setOffline(7, true)
-	state.MarkDirty(1)
-	f.flush(t)
-	if lost := f.manager.Stats().SessionsLost; lost != 1 {
-		t.Fatalf("sessions lost = %d, want 1", lost)
-	}
-	f.lane.setOffline(7, false)
-	f.reopenLost(t)
-	for range 6 {
-		state.MarkDirty(1)
-		f.flush(t)
-	}
-	if fulls := receive("reopened lifetime"); fulls != 1 {
-		t.Fatalf("reopened lifetime: %d full snapshots applied, want the reopened session's full snapshot", fulls)
+	if lost := f.manager.Stats().SessionsLost; lost != 20 {
+		t.Fatalf("sessions lost = %d, want 20 (one per refused push)", lost)
 	}
 }
 
-// on_change 模式下，丢会话会立刻唤醒下一次 Flush（Manager 有释放通知要交付）。SelfView 不能在这些紧跟着的
-// 政策阶段里重开：否则“重开 → 推送被拒 → 丢会话 → 唤醒”在毫秒内转满重开次数，传输稍后恢复也收不到任何帧，
-// 要等下一次登录。重开要等到丢会话之后至少半个同步周期的政策阶段：周期模式下就是下一个 tick，
-// on_change 模式下排除了丢会话引起的立即唤醒，最迟在下一个兜底 tick。
-func TestSelfViewDoesNotReopenInTheStagesWokenByTheLoss(t *testing.T) {
-	f := newSelfFixture(t)
-	state := f.loaded(t, 7)
-	f.view.Activate(7, "c1")
-	f.flush(t)
-	requireFull(t, f.lane.take(7), 7)
+// 丢会话与新连接激活竞态（顶号、快速重连）：新连接在丢会话的通知处理之前或之后激活，旧连接的关闭在其前或其后
+// 到达，新连接都按正常激活拿到新会话的全量，之后照常收增量；旧连接的关闭不带走它。
+func TestSelfViewLossRacingANewConnection(t *testing.T) {
+	for _, order := range []string{"activate-then-close-old", "close-old-then-activate"} {
+		for _, stageBetween := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/stage_between=%v", order, stageBetween), func(t *testing.T) {
+				f := newSelfFixture(t)
+				state := f.loaded(t, 7)
+				f.view.Activate(7, "old")
+				f.flush(t)
+				requireFull(t, f.lane.take(7), 7)
 
-	f.lane.setOffline(7, true)
-	state.MarkDirty(1)
-	f.flush(t)
-	if lost := f.manager.Stats().SessionsLost; lost != 1 {
-		t.Fatalf("sessions lost = %d, want 1", lost)
+				f.lane.setOffline(7, true)
+				state.MarkDirty(1)
+				f.flush(t) // 推送被拒：SessionLost 已记下，下个政策阶段处理
+				f.lane.setOffline(7, false)
+				first, second := func() { f.view.Activate(7, "new") }, func() { f.view.Deactivate(7, "old") }
+				if order == "close-old-then-activate" {
+					first, second = second, first
+				}
+				first()
+				if stageBetween {
+					f.flush(t)
+				}
+				second()
+				f.flush(t)
+				requireFull(t, f.lane.take(7), 7)
+				state.MarkDirty(1)
+				f.flush(t)
+				if frames := f.lane.take(7); len(frames) != 1 || frames[0].kind != frame.Delta {
+					t.Fatalf("change on the new connection: %+v, want one Delta", frames)
+				}
+				if stats := f.manager.Stats(); stats.Sessions != 1 || f.view.Online() != 1 {
+					t.Fatalf("sessions=%d online=%d, want 1/1", stats.Sessions, f.view.Online())
+				}
+			})
+		}
 	}
-	// 时钟不动：这些 Flush 就是丢会话的释放通知唤醒的那几次（OnChangeBatchWindow 默认 0，立即执行）。
-	for range 2 * selfMaxReopens {
+}
+
+// Stranded 数“在线却超过 selfStrandedPeriods 个同步周期没有打开的会话”的玩家：传输违反约定、丢会话后没有
+// 关闭连接时它上升，连接关闭（或新激活打开了会话）后归零。登录后等实体出现（会话已开）不算。
+func TestSelfViewCountsPlayersOnlineWithoutASession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newSelfFixture(t)
+		state := f.loaded(t, 7)
+		f.view.Activate(7, "c1")
+		f.view.Activate(8, "c1") // 实体不在内存：会话开着、等实体出现，不算滞留
 		f.flush(t)
-	}
-	if lost := f.manager.Stats().SessionsLost; lost != 1 {
-		t.Fatalf("sessions lost = %d after %d stages woken right after the loss: the lost session was reopened in them, "+
-			"so a transport that rejects for a moment uses up all %d reopens", lost, 2*selfMaxReopens, selfMaxReopens)
-	}
+		f.lane.take(7)
+		f.lane.setOffline(7, true)
+		state.MarkDirty(1)
+		f.flush(t) // 玩家 7 的会话丢了，而连接一直没有关闭
+		f.flush(t)
+		if got := f.view.Stranded(); got != 0 {
+			t.Fatalf("stranded right after the loss = %d, want 0 (the close notification may still be on its way)", got)
+		}
+		time.Sleep(time.Duration(selfStrandedPeriods+1) * f.manager.Interval())
+		f.flush(t)
+		if got := f.view.Stranded(); got != 1 {
+			t.Fatalf("stranded %d periods after the loss = %d, want 1", selfStrandedPeriods+1, got)
+		}
+		f.view.Deactivate(7, "c1")
+		f.flush(t)
+		if got := f.view.Stranded(); got != 0 {
+			t.Fatalf("stranded after the connection closed = %d, want 0", got)
+		}
 
-	// 传输恢复，过了半个周期之后的政策阶段重开，玩家重新收到全量。
-	f.lane.setOffline(7, false)
-	f.clock.advance(f.manager.Interval() / 2)
-	f.flush(t)
-	f.flush(t)
-	requireFull(t, f.lane.take(7), 7)
+		// 新激活打开了会话也归零。
+		f.lane.setOffline(7, false)
+		f.view.Activate(7, "c2")
+		f.flush(t)
+		f.lane.setOffline(7, true)
+		state.MarkDirty(1)
+		f.flush(t) // 丢会话
+		f.flush(t) // 下一个政策阶段处理它：从这里开始算没有会话的时长
+		time.Sleep(time.Duration(selfStrandedPeriods+1) * f.manager.Interval())
+		f.flush(t)
+		if got := f.view.Stranded(); got != 1 {
+			t.Fatalf("stranded after the second loss = %d, want 1", got)
+		}
+		f.lane.setOffline(7, false)
+		f.view.Activate(7, "c3")
+		f.flush(t)
+		if got := f.view.Stranded(); got != 0 {
+			t.Fatalf("stranded after a new connection opened a session = %d, want 0", got)
+		}
+	})
 }
 
 // 卸载后重载不了退回 remove（RetractUnloadedSubject），实体之后又被加载：Direct 的重新提交恢复绑定，
