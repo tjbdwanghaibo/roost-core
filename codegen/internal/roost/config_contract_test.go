@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -605,4 +606,121 @@ func mustManifest(t *testing.T, root string) Manifest {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// 手改 roost.yaml 给服务加 Mod（project sync 不补配置段）之后，doctor 只读报出每份配置缺的段，给出可追加的文本；
+// 业务有意删掉的段同样报出（WARN，不让 doctor 失败），留空段即可消掉。维护者 2026-10-17 决定 B。
+func TestDoctorNamesTheConfigSectionsAManifestAddedModLacks(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	before := mustManifest(t, root)
+	raw, err := os.ReadFile(filepath.Join(root, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const listed = "            - configdata\n"
+	if strings.Count(string(raw), listed) != 1 {
+		t.Fatalf("precondition: %s does not list game's configdata mod once:\n%s", ManifestName, raw)
+	}
+	writeProjectFile(t, root, ManifestName, strings.Replace(string(raw), listed, listed+"            - nest\n", 1))
+	syncProject(t, root)
+	dev := "configs/service/config.game.yaml"
+	if cfg := readProjectFile(t, root, dev); strings.Contains(cfg, "\nnest:\n") || strings.Contains(cfg, "\nmongo:\n") {
+		t.Fatalf("project sync now writes config sections (its behaviour is meant to stay as it was):\n%s", cfg)
+	}
+
+	items := mustDoctorItems(t, root)
+	var reported []CheckItem
+	for _, item := range items {
+		if item.Status != StatusOK && strings.Contains(item.Detail, dev) && strings.Contains(item.Detail, "nest:") {
+			reported = append(reported, item)
+		}
+	}
+	if len(reported) == 0 {
+		var lines []string
+		for _, item := range items {
+			lines = append(lines, fmt.Sprintf("%s %s %s", item.Status, item.Name, item.Detail))
+		}
+		t.Fatalf("roost.yaml gives game the nest mod but %s has no nest: / mongo: / nats: / dataengine: block; doctor does not say so:\n%s", dev, strings.Join(lines, "\n"))
+	}
+	item := items["config-sections:game"]
+	if item.Status != StatusWarn {
+		t.Fatalf("config-sections:game is %s %s, want WARN", item.Status, item.Detail)
+	}
+	for _, rel := range gameConfigs {
+		if !strings.Contains(item.Detail, rel+" lacks ") {
+			t.Errorf("the WARN does not name %s:\n%s", rel, item.Detail)
+		}
+	}
+	for _, want := range []string{"nest:", "dataengine:", "mongo:", "nats:", "redis:", "\nmongo:\n  uri: mongodb://127.0.0.1", "\n    mongo:\n", "CHANGE_ME", "singleton.enabled is not true"} {
+		if !strings.Contains(item.Detail, want) {
+			t.Errorf("the WARN lacks %q:\n%s", want, item.Detail)
+		}
+	}
+	for _, other := range []string{"config-schema:game", "config:game"} {
+		if items[other].Status == StatusFail {
+			t.Errorf("%s fails on the hand-edited project: %s", other, items[other].Detail)
+		}
+	}
+	after := mustManifest(t, root)
+
+	// doctor 读而不写；add 追加的就是它报的段：追加之后 config-sections 为 OK。
+	if cfg := readProjectFile(t, root, dev); strings.Contains(cfg, "\nnest:\n") {
+		t.Fatalf("doctor wrote %s", dev)
+	}
+	if _, err := appendModConfigSections(root, before, after, "game", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkConfigSections(root, after) {
+		if item.Status != StatusOK {
+			t.Fatalf("after appending what add writes, %s is %s:\n%s", item.Name, item.Status, item.Detail)
+		}
+	}
+
+	// 业务删掉一段：照样报出；留空段（按代码默认值）不再报。
+	cfg := readProjectFile(t, root, dev)
+	var kept strings.Builder
+	for _, block := range topLevelConfigBlocks(cfg) {
+		if block.key != "nats" {
+			kept.WriteString(block.text)
+		}
+	}
+	writeProjectFile(t, root, dev, kept.String())
+	items2 := checkConfigSections(root, after)
+	if len(items2) != 1 || items2[0].Status != StatusWarn || !strings.Contains(items2[0].Detail, dev+" lacks nats:") || strings.Contains(items2[0].Detail, "prod.example.yaml lacks") {
+		t.Fatalf("a deleted nats: block in %s only: doctor says %+v", dev, items2)
+	}
+	writeProjectFile(t, root, dev, kept.String()+"nats: {}\n")
+	if items2 := checkConfigSections(root, after); items2[0].Status != StatusOK {
+		t.Fatalf("an empty nats: {} block should silence the check: %+v", items2)
+	}
+}
+
+// 不误报：每种登记的新生成工程（含 game-demo）与覆盖全部带配置 Mod 的渲染结果，config-sections 都是 OK。
+func TestFreshlyGeneratedConfigsHaveEveryModSection(t *testing.T) {
+	t.Parallel()
+	for fixture := range projectFixtureOptions {
+		root := copyOfNewProject(t, fixture)
+		for _, item := range checkConfigSections(root, mustManifest(t, root)) {
+			if item.Status != StatusOK {
+				t.Errorf("%s: %s is %s:\n%s", fixture, item.Name, item.Status, item.Detail)
+			}
+		}
+	}
+	m := fullConfigManifest(t)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := t.TempDir()
+	for rel, file := range plan {
+		if strings.HasPrefix(rel, "configs/service/") || strings.HasPrefix(rel, "deploy/k8s/base/secret.") {
+			writeProjectFile(t, full, rel, string(file.Body))
+		}
+	}
+	for _, item := range checkConfigSections(full, m) {
+		if item.Status != StatusOK || item.Detail == "no config file" {
+			t.Errorf("full-config render: %s is %s: %s", item.Name, item.Status, item.Detail)
+		}
+	}
 }

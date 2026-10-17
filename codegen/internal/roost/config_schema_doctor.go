@@ -241,6 +241,80 @@ func checkConfigDeclarations(root string, m Manifest, process serviceSchemaSourc
 	return items
 }
 
+// checkConfigSections 是 doctor 的 config-sections:<service> 检查（维护者 2026-10-17 决定 B）：只读，按服务当前
+// 实际注册的 Mod（serviceConfigMods，与生成器同一份计算）找三份配置（开发配置、生产示例、k8s Secret 示例的
+// config.yaml，缺的文件跳过）里缺的配置段，给出可直接追加的文本。
+//
+// 为什么需要：服务配置在建工程时生成一次，之后归应用所有；只有 add mod / add saga / add access / add rpc 在
+// “这条命令让服务多出 Mod”的那一刻追加配置段（appendModConfigSections）。手改 roost.yaml 加 Mod、或修复前
+// 走过 add 的工程，project sync 不补段，Mod 就按代码默认值运行（默认地址、默认流大小），config-schema 检查
+// 只查写了的键与必填键，看不出整段没写。
+//
+//   - 缺段是 WARN，不让 doctor 失败：业务可能有意删掉一段、按代码默认值运行。要消掉提示，留下空段（例如
+//     `saga: {}`），Mod 照样用代码默认值。没有另外的豁免机制。
+//   - 段“有没有”只看行首的 `<key>:`，与 add 追加时的判断相同（missingConfigBlocks）；段里的内容不比较。
+//   - 带 DataEngine 的服务的 singleton.enabled 不是 true 也是 WARN：add 让服务带上 DataEngine 时会打开它，
+//     手改 roost.yaml 时没人打开，单实例锁静默不生效。
+//
+// 不改写任何文件；project sync 的行为不变。
+func checkConfigSections(root string, m Manifest) []CheckItem {
+	var items []CheckItem
+	for _, service := range sortedServiceNames(m) {
+		item := CheckItem{Name: "config-sections:" + service, Status: StatusOK}
+		sections := serviceConfigSections(m, service)
+		singleton := serviceSingletonEnabled(m, service)
+		var problems []string
+		checked := 0
+		for _, file := range serviceConfigFiles(service) {
+			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.rel)))
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				problems = append(problems, file.rel+": "+err.Error())
+				continue
+			}
+			body, _ := lfText(raw)
+			where := file.rel
+			if file.secret {
+				config, _, _, ok := kubernetesSecretEmbeddedConfig(body)
+				if !ok {
+					problems = append(problems, fmt.Sprintf("%s: no single `config.yaml: |` block under stringData, not checked (it mirrors configs/service/config.%s.prod.example.yaml)", file.rel, service))
+					continue
+				}
+				body, where = config, file.rel+" (stringData config.yaml)"
+			}
+			checked++
+			if body != "" && !strings.HasSuffix(body, "\n") {
+				body += "\n"
+			}
+			keys, text := missingConfigBlocks(body, sections, file.production)
+			if len(keys) > 0 {
+				if file.secret {
+					text = indentText(text, "    ")
+				}
+				problems = append(problems, fmt.Sprintf("%s lacks %s, generated for the mods of %s (without it they run on their code defaults). Unless removed on purpose, append this to the end of %s; to stay on the defaults and silence this, keep an empty block such as `%s: {}`:\n%s",
+					file.rel, strings.Join(keys, ":, ")+":", service, where, keys[0], strings.TrimSuffix(text, "\n")))
+			}
+			if singleton && !slices.Contains(keys, "singleton") {
+				if _, generatedOff, edited := turnGeneratedSingletonOn(body, m.Project.Name, file.production); generatedOff || edited {
+					problems = append(problems, fmt.Sprintf("%s: service %s runs the Data Engine (one WAL writer per sid) but singleton.enabled is not true; set it to true in %s", file.rel, service, where))
+				}
+			}
+		}
+		switch {
+		case len(problems) > 0:
+			item.Status, item.Detail = StatusWarn, strings.Join(problems, "\n")
+		case checked == 0:
+			item.Detail = "no config file"
+		default:
+			item.Detail = fmt.Sprintf("%d file(s) have a block for every mod of %s", checked, service)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 // checkConfigFileDeclarations 是 `roost config check` 的声明检查，与 doctor 的 config-schema 用同一份框架声明：
 // 值不合声明、框架段里没有任何声明的键（多半拼错）都是失败。先只按框架声明静态检查，不编译工程；只有发现
 // 框架段里的未声明键时才向 process 要这个服务的进程声明复核——业务服务自己声明、写在框架段里的键不算拼错。

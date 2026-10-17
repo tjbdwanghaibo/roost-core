@@ -601,8 +601,50 @@ const (
 // dataengine。带 DataEngine 的服务按 sid 划分 WAL 目录，设计上就是每个 sid 一个写者，
 // 打开不改变部署形态；其他服务是否按 sid 多副本部署生成器不知道，写 enabled: false，由应用自己打开。
 func serviceSingletonEnabled(m Manifest, service string) bool {
+	return contains(serviceConfigMods(m, service), "dataengine")
+}
+
+// serviceConfigMods 是一个服务的进程实际注册的 Mod（共享 Mod 加 effectiveServiceMods，按依赖解析）：
+// 生成服务配置（renderServiceConfig）、给后加的 Mod 追加配置段（appendModConfigSections）与 doctor 的
+// config-sections 检查都按这一份算。
+func serviceConfigMods(m Manifest, service string) []string {
 	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
-	return contains(mods, "dataengine")
+	return mods
+}
+
+// serviceConfigSections 是生成器为一个服务的当前 Mod 写进服务配置的配置段，按写入顺序：每个 Mod 的起始段
+// （modConfigSection）、托管框架服务的段、带 DataEngine 的服务的单实例锁连接用 redis: 段与打开的 singleton: 段。
+// 同一个顶层键只出现一次。renderServiceConfig 按它写新工程的配置，doctor 的 config-sections 检查按它找
+// 已有配置里缺的段（只读，见 checkConfigSections）。不带 DataEngine 的服务的 singleton: 段（enabled: false）
+// 不在其中：缺这一段与写 false 效果相同。
+func serviceConfigSections(m Manifest, service string) []string {
+	var sections []string
+	seen := map[string]bool{}
+	add := func(section string) {
+		var kept strings.Builder
+		for _, block := range topLevelConfigBlocks(section) {
+			if block.key != "" && seen[block.key] {
+				continue
+			}
+			seen[block.key] = block.key != ""
+			kept.WriteString(block.text)
+		}
+		if kept.Len() > 0 {
+			sections = append(sections, kept.String())
+		}
+	}
+	for _, name := range serviceConfigMods(m, service) {
+		add(modConfigSection(name))
+	}
+	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
+		add(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
+	}
+	if serviceSingletonEnabled(m, service) {
+		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
+		add(modConfigSection("redis"))
+		add(renderSingletonConfig(m.Project.Name, true))
+	}
+	return sections
 }
 
 // projectInstallsSingleton 报告 bootstrap 是否安装 kitredis.SingletonStore：项目里有 redis Mod（任何服务
@@ -639,28 +681,17 @@ func renderSingletonConfig(project string, enabled bool) string {
 }
 
 func renderServiceConfig(m Manifest, service string, production bool) string {
-	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
 	var b strings.Builder
 	b.WriteString("# Generated starter configuration; application-owned after project creation.\n")
 	b.WriteString("sid: 1000\n")
 	b.WriteString("log:\n  level: info\n  json: true\n  stdout: true\n  file: true\n  dir: log\n")
 	b.WriteString(renderShutdownConfig(serviceShutdownPlan(m, service)))
-	seen := map[string]bool{}
-	for _, name := range mods {
-		if section := modConfigSection(name); !seen[name] && section != "" {
-			b.WriteString(section)
-			seen[name] = true
-		}
+	for _, section := range serviceConfigSections(m, service) {
+		b.WriteString(section)
 	}
-	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
-		b.WriteString(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
+	if !serviceSingletonEnabled(m, service) {
+		b.WriteString(renderSingletonConfig(m.Project.Name, false))
 	}
-	singleton := serviceSingletonEnabled(m, service)
-	if singleton && !seen["redis"] {
-		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
-		b.WriteString(modConfigSection("redis"))
-	}
-	b.WriteString(renderSingletonConfig(m.Project.Name, singleton))
 	if !production {
 		// One machine, every service at once: each gets its own ops port
 		// (see opsPort). Production keeps 9100 — one process per container.
@@ -710,8 +741,7 @@ func productionizeConfig(value string) string {
 // creation would leave, e.g., the game-demo's Secret without its saga: block). A Secret example it cannot recognise is a WARN on warn.
 // It returns the files it changed.
 func appendModConfigSections(root string, before, after Manifest, service string, warn io.Writer) ([]string, error) {
-	previous, _ := resolveMods(append(append([]string{}, before.SharedMods...), effectiveServiceMods(before, service)...))
-	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
+	previous, current := serviceConfigMods(before, service), serviceConfigMods(after, service)
 	var sections []string
 	for _, name := range current {
 		if section := modConfigSection(name); !contains(previous, name) && section != "" {
@@ -814,21 +844,33 @@ func appendMissingConfigBlocks(body string, sections []string, production bool) 
 	if body != "" && !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
-	appended := false
+	_, text := missingConfigBlocks(body, sections, production)
+	return body + text, text != ""
+}
+
+// missingConfigBlocks 是 sections 里 body 还没有的顶层段：键（按出现顺序）与追加到 body 末尾的文本
+// （生产配置按 productionizeConfig 改写）。“有没有”只看行首的 `<key>:`，段里的内容不比较——业务改过的段
+// 照样算有。appendMissingConfigBlocks 按它追加，doctor 的 config-sections 检查按它只读报告。
+func missingConfigBlocks(body string, sections []string, production bool) (keys []string, text string) {
+	var appended strings.Builder
+	has := func(key string) bool {
+		all := body + appended.String()
+		return strings.HasPrefix(all, key+":") || strings.Contains(all, "\n"+key+":")
+	}
 	for _, section := range sections {
 		for _, block := range topLevelConfigBlocks(section) {
-			if strings.HasPrefix(body, block.key+":") || strings.Contains(body, "\n"+block.key+":") {
+			if has(block.key) {
 				continue
 			}
-			text := block.text
+			value := block.text
 			if production {
-				text = productionizeConfig(text)
+				value = productionizeConfig(value)
 			}
-			body += text
-			appended = true
+			appended.WriteString(value)
+			keys = append(keys, block.key)
 		}
 	}
-	return body, appended
+	return keys, appended.String()
 }
 
 type configBlock struct {

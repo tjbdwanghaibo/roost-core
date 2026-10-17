@@ -55,6 +55,7 @@ go test ./...
 ```
 
 `add access player` 会给 game 的 `configs/service/config.game.yaml` 与 prod 示例补上 Nest 带进来的 `nest`、`dataengine`、`mongo`、`nats` 配置段，并打开单实例锁（`singleton.enabled: true`，补 `redis:` 段）：启动 game 之前把这些地址改成自己的 Mongo 副本集、NATS 与 Redis（`deploy/dev/docker-compose.yaml` 带齐三者）。
+只在 add 命令那一刻追加：手改 `roost.yaml` 加 Mod 后 `roost project sync` 不补配置段，这时 `roost project doctor` 的 `config-sections:game` 以 WARN 列出缺的段和可直接追加到文件末尾的文本；有意删掉的段同样会报，不需要就忽略，或留一个空段（如 `saga: {}`）表示用代码默认值。
 
 为什么要 EnterGame：Nest handler 只处理已存在的 Entity。从未登录过的玩家直接发 RenamePlayer，Nest 冷加载在
 Data Engine 里找不到他，客户端收到稳定码 `entity_not_found`（`errcode.CodeEntityNotFound = 2`），服务端不记

@@ -85,6 +85,8 @@ roost project next --workflow player-tcp
 roost project deps
 ```
 
+配置段：服务配置建工程时生成一次、之后归应用；`add mod` / `add saga` / `add access` / `add rpc` 让服务多出 Mod 时追加缺的顶层段，手改 `roost.yaml` 后 `project sync` 不追加。doctor 的 `config-sections:<service>` 只读检查三份配置（dev、prod 示例、k8s Secret 示例）是否缺服务实际注册的 Mod 的段（带 DataEngine 的服务另查 `redis:` / `singleton:` 与 `singleton.enabled: true`），缺了报 WARN 并给出可直接追加的文本；有意删掉的段同样会报，可以忽略，或留空段（如 `saga: {}`）消掉提示。检查项清单见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
+
 sync / deps 的暂存与提交语义（同级临时目录、逐文件原子替换与回滚、并发修改拒绝覆盖、只解析 roost-core 一个模块）见 [项目生成器 §13](PROJECT_GENERATOR.zh-CN.md#13-doctordiff-和升级)。
 
 ### 1.3 升级项目模板

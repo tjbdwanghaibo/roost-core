@@ -1079,6 +1079,36 @@ func kubernetesSecretExampleRel(service string) string {
 // indented by four spaces (renderKubernetesSecretExample).
 const kubernetesSecretConfigHeader = "\n  config.yaml: |\n"
 
+// kubernetesSecretEmbeddedConfig 取出 Secret 示例（LF 文本）stringData 里 config.yaml 的内容（去掉四格缩进），
+// 以及它在 body 里占的 [start, end)。没有恰好一个 `config.yaml: |` 块时 ok 为 false。内嵌块从块头到第一行
+// 缩进不足四格的非空行为止。editKubernetesSecretExampleConfig 与 doctor 的 config-sections 检查共用。
+func kubernetesSecretEmbeddedConfig(body string) (config string, start, end int, ok bool) {
+	if strings.Count(body, kubernetesSecretConfigHeader) != 1 {
+		return "", 0, 0, false
+	}
+	start = strings.Index(body, kubernetesSecretConfigHeader) + len(kubernetesSecretConfigHeader)
+	rest := body[start:]
+	var text strings.Builder
+	offset := 0
+	for offset < len(rest) {
+		line := rest[offset:]
+		if newline := strings.IndexByte(line, '\n'); newline >= 0 {
+			line = line[:newline+1]
+		}
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "    ") {
+			break
+		}
+		if strings.TrimSpace(line) == "" {
+			// indentText writes blank lines as four spaces.
+			text.WriteString(strings.TrimLeft(line, " \t"))
+		} else {
+			text.WriteString(strings.TrimPrefix(line, "    "))
+		}
+		offset += len(line)
+	}
+	return text.String(), start, start + offset, true
+}
+
 // editKubernetesSecretExampleConfig applies edit to the config.yaml a
 // service's k8s Secret example embeds: the caller passes the same edit it just
 // made to the production example, so the Secret gets the same text.
@@ -1116,37 +1146,18 @@ func editKubernetesSecretExampleConfig(root, service string, warn io.Writer, edi
 		return "", nil
 	}
 	body, crlf := lfText(raw)
-	if strings.Count(body, kubernetesSecretConfigHeader) != 1 {
+	config, start, end, ok := kubernetesSecretEmbeddedConfig(body)
+	if !ok {
 		return skip("no single `config.yaml: |` block under stringData")
 	}
-	start := strings.Index(body, kubernetesSecretConfigHeader) + len(kubernetesSecretConfigHeader)
-	rest := body[start:]
-	var config strings.Builder
-	end := 0
-	for end < len(rest) {
-		line := rest[end:]
-		if newline := strings.IndexByte(line, '\n'); newline >= 0 {
-			line = line[:newline+1]
-		}
-		if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "    ") {
-			break
-		}
-		if strings.TrimSpace(line) == "" {
-			// indentText writes blank lines as four spaces.
-			config.WriteString(strings.TrimLeft(line, " \t"))
-		} else {
-			config.WriteString(strings.TrimPrefix(line, "    "))
-		}
-		end += len(line)
-	}
-	edited, err := edit(config.String())
+	edited, err := edit(config)
 	if err != nil {
 		return skip(err.Error())
 	}
-	if edited == config.String() {
+	if edited == config {
 		return "", nil
 	}
-	updated := body[:start] + indentText(edited, "    ") + rest[end:]
+	updated := body[:start] + indentText(edited, "    ") + body[end:]
 	if err := writeAtomic(path, restoreLineEndings(updated, crlf), 0o644); err != nil {
 		return "", err
 	}
