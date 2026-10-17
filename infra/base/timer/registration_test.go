@@ -88,3 +88,51 @@ func TestTimerCreatedDuringTickOwnsItsPayloadImmediately(t *testing.T) {
 		t.Fatalf("restored task fired %d times, want 1", fired)
 	}
 }
+
+// 两条规则叠加：同一个回调里新建子定时器并显式改期自己，二者都按调用那一刻的注入时钟定期限，
+// 后续回调推进时钟不改变它们；持久化钩子最后看到的也是这两个期限。
+func TestHandlerThatArmsAChildAndReschedulesItselfUsesCallTime(t *testing.T) {
+	base := time.Unix(100, 0)
+	now := base
+	stored := make(map[int64]Node)
+	s := NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
+		if change == ChangeDelete {
+			delete(stored, node.ID)
+		} else {
+			stored[node.ID] = node
+		}
+	})
+	s.SetClock(func() time.Time { return now })
+	var self, child int64
+	s.RegisterHandler(3, func(Context) time.Duration { return 0 })
+	s.RegisterHandler(1, func(ctx Context) time.Duration {
+		if ctx.Node.ID != self {
+			return 0
+		}
+		child = s.NewTimer(time.Minute, 3, 0, 0, []byte("child"))
+		if !s.ChangeTimer(self, time.Time{}, 2*time.Minute) {
+			t.Fatal("explicit reschedule refused")
+		}
+		return 0
+	})
+	s.RegisterHandler(2, func(Context) time.Duration {
+		now = now.Add(30 * time.Second) // 后续回调耗时
+		return 0
+	})
+	self = s.NewTimer(time.Second, 1, 0, 0, nil)
+	s.NewTimer(2*time.Second, 2, 0, 0, nil)
+	s.Tick(base.Add(3 * time.Second))
+	want := map[int64]time.Time{child: base.Add(time.Minute), self: base.Add(2 * time.Minute)}
+	if len(stored) != len(want) {
+		t.Fatalf("stored = %+v, want child and rescheduled self", stored)
+	}
+	for id, end := range want {
+		node, ok := stored[id]
+		if !ok || !node.End.Equal(end) {
+			t.Fatalf("timer %d stored %+v (present=%v), want end %v", id, node, ok, end)
+		}
+		if live := s.byID[id]; live == nil || !live.End.Equal(end) {
+			t.Fatalf("timer %d scheduled %+v, want end %v", id, live, end)
+		}
+	}
+}
