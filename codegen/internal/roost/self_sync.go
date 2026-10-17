@@ -30,7 +30,9 @@ const (
 	selfSyncEntity       = "player"
 	selfSyncProtocolPath = "protocol/def/self_sync.go"
 	selfSyncDocument     = "docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync"
-	selfSyncImport       = "github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
+	// selfSyncDocumentURL 是给生成工程里的人看的地址：core 文档不在生成工程里，相对路径打不开。
+	selfSyncDocumentURL = "https://github.com/tjbdwanghaibo/roost-core/blob/main/" + selfSyncDocument
+	selfSyncImport      = "github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 )
 
 // selfSyncEnabled 报告 access.player.self_sync 是否打开。
@@ -115,8 +117,8 @@ func checkSelfSync(root string, m Manifest) error {
 	default:
 		if params["sync"] != "true" || params["subjectPacker"] == "" {
 			problems = append(problems, fmt.Sprintf(`game/entities/player/entity.go: the //roost:entity marker must declare Entity Sync; append to it: sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker
-    then write NewPlayerSyncPacker (copy the packer from %s): its view set must accept the profile Key "self" (policy.SelfProfile), e.g. entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}}
-    tag the DAO fields the client should see as dao:"persist,sync"; change them only through the generated setters inside a Nest handler, and Nest hands the change to the client when the handler commits (no manual marking)`, selfSyncDocument))
+    then write NewPlayerSyncPacker (copy the packer from roost-core %s): its view set must accept the profile Key "self" (policy.SelfProfile), e.g. entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}}
+    tag the DAO fields the client should see as dao:"persist,sync"; change them only through the generated setters inside a Nest handler, and Nest hands the change to the client when the handler commits (no manual marking)`, selfSyncDocumentURL))
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath))); os.IsNotExist(err) {

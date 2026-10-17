@@ -129,7 +129,7 @@ func TestSelfSyncCheckNamesTheFix(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = checkSelfSync(root, m)
-	for _, want := range []string{"sync=true", "subjectPacker=NewPlayerSyncPacker", `Key: "self"`, `dao:"persist,sync"`} {
+	for _, want := range []string{"sync=true", "subjectPacker=NewPlayerSyncPacker", `Key: "self"`, `dao:"persist,sync"`, selfSyncDocumentURL} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("marker without sync: %v, want it to name %q", err, want)
 		}

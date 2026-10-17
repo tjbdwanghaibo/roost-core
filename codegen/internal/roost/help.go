@@ -141,7 +141,7 @@ roost add saga cross_server_trade -service game -steps reserve,deduct,deliver`,
 		Summary: "生成已认证玩家协议边界并装配到指定 Service",
 		Usage: `roost add access player --service <service>
 roost generate`,
-		Configuration: `当前 access 名仅支持 player。它写入 roost.yaml access.player.service，启用 protocol/nest，并给目标 Service 补 Nest 运行依赖；生成并发安全的 ProtocolRegistry、typed binding 聚合和 access.player Mod。用 add transport tcp 生成生产约束的应用接入适配器。`,
+		Configuration: `当前 access 名仅支持 player。它写入 roost.yaml access.player.service，启用 protocol/nest，并给目标 Service 补 Nest 运行依赖；生成并发安全的 ProtocolRegistry、typed binding 聚合和 access.player Mod。用 add transport tcp 生成生产约束的应用接入适配器。玩家要收到自己 Player 的状态变化（金币、道具等 sync 字段）时，在 roost.yaml 打开 access.player.self_sync: true（需要 tcp 传输），再 roost project sync，按报错给 Player 标记 Entity Sync 并写 packer；用法与 packer 样例见 ` + selfSyncDocumentURL + `。`,
 		Example: `roost add access player --service game
 roost add protocol RenamePlayer --group game --handler player
 roost add endpoint RenamePlayer --handler player`,
