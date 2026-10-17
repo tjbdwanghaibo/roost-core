@@ -283,6 +283,17 @@ func checkSettled(t *testing.T, s *Scheduler) {
 	}
 }
 
+// checkEveryIDAnnounced：调度器分配过的每个 typed ID 都至少经过一次 upsert。宿主（World）按 upsert 推进
+// 持久 seed，漏掉的 ID 在重建后会再次分配，与已经交给调用方的 ID 重复。只用于全部是 typed 节点的场景。
+func checkEveryIDAnnounced(t *testing.T, s *Scheduler, upserted map[int64]bool) {
+	t.Helper()
+	for id := int64(1); id <= s.Seed(); id++ {
+		if !upserted[id] {
+			t.Errorf("allocated ID %d never reached the hook as an upsert (seed %d); a rebuilt scheduler would reuse it", id, s.Seed())
+		}
+	}
+}
+
 func newPinnedScheduler(now time.Time) *Scheduler {
 	s := NewScheduler(1, 0, nil, nil)
 	s.SetClock(func() time.Time { return now })
@@ -600,99 +611,6 @@ func TestOnChangePanicDuringSettlementDoesNotReplay(t *testing.T) {
 	}
 }
 
-// 收尾钩子允许重入 Tick：尚未通知的 typed 子节点也要先 upsert 再删除，宿主才能保存其 ID 种子。
-func TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring(t *testing.T) {
-	base := time.Unix(100, 0)
-	for _, test := range []struct {
-		name      string
-		returned  time.Duration
-		hook      string
-		wantFired int
-	}{
-		{"one_shot", 0, "", 1},
-		{"rearm", time.Second, "", 1},
-		{"cancel_on_announce", 0, "cancel", 0},
-		{"reschedule_on_announce", 0, "change", 0},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stored := make(map[int64]Node)
-			storedSeed := int64(0)
-			var scheduler *Scheduler
-			reentered := false
-			hookApplied := false
-			var deletedBeforeUpsert []int64
-			scheduler = NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
-				if change == ChangeDelete {
-					if _, ok := stored[node.ID]; !ok {
-						deletedBeforeUpsert = append(deletedBeforeUpsert, node.ID)
-					}
-					delete(stored, node.ID)
-					return
-				}
-				stored[node.ID] = node
-				if node.ID > storedSeed {
-					storedSeed = node.ID
-				}
-				if node.Type == 3 && test.hook != "" && !hookApplied {
-					hookApplied = true
-					if test.hook == "cancel" {
-						if !scheduler.RemoveTimer(node.ID) {
-							t.Fatal("hook cancellation refused")
-						}
-					} else if !scheduler.ChangeTimer(node.ID, base, time.Hour) {
-						t.Fatal("hook reschedule refused")
-					}
-				}
-				if node.Type == 2 && !reentered {
-					reentered = true
-					scheduler.Tick(base.Add(3 * time.Second))
-				}
-			})
-			scheduler.SetClock(func() time.Time { return base })
-			var fresh int64
-			fired := 0
-			scheduler.RegisterHandler(1, func(Context) time.Duration {
-				// 第一个子节点的 upsert 触发重入；第二个期限已经过去，但还未收到 upsert。
-				scheduler.NewTimer(time.Minute, 2, 0, 0, nil)
-				fresh = scheduler.NewTimer(time.Millisecond, 3, 0, 0, []byte("march"))
-				return 0
-			})
-			scheduler.RegisterHandler(3, func(Context) time.Duration { fired++; return test.returned })
-			scheduler.NewTimer(time.Second, 1, 0, 0, nil)
-			scheduler.Tick(base.Add(time.Second))
-			if !reentered || fired != test.wantFired {
-				t.Fatalf("reentered=%v fired=%d, want %d nested firings", reentered, fired, test.wantFired)
-			}
-			if len(deletedBeforeUpsert) != 0 {
-				t.Errorf("delete arrived before initial upsert for IDs %v", deletedBeforeUpsert)
-			}
-			if storedSeed != scheduler.Seed() {
-				t.Errorf("stored seed=%d, allocated seed=%d (fresh ID %d can be reused after restart)", storedSeed, scheduler.Seed(), fresh)
-			}
-			if len(stored) != len(scheduler.Nodes()) {
-				t.Fatalf("storage has %d nodes, scheduler has %d", len(stored), len(scheduler.Nodes()))
-			}
-			for _, node := range scheduler.Nodes() {
-				if persisted, ok := stored[node.ID]; !ok || !persisted.End.Equal(node.End) {
-					t.Fatalf("stored node does not match final deadline: %+v", node)
-				}
-			}
-			if test.hook == "change" && !stored[fresh].End.Equal(base.Add(time.Hour)) {
-				t.Fatalf("rescheduled child end=%v", stored[fresh].End)
-			}
-			saved := make([]Node, 0, len(stored))
-			for _, node := range stored {
-				saved = append(saved, node)
-			}
-			restored := NewScheduler(1, storedSeed, saved, nil)
-			if id := restored.NewTimer(time.Minute, 2, 0, 0, nil); id <= fresh {
-				t.Errorf("after restart ID=%d, want greater than previously returned ID %d", id, fresh)
-			}
-			checkSettled(t, scheduler)
-		})
-	}
-}
-
 // 操作 × 节点状态组合：Tick 期间对处在每种状态的目标做改期 / 取消 / 不操作，触发中的回调返回 0 / 负 / 正，
 // 操作分别在外层回调里直接做和在重入 Tick 触发的回调里做。断言本次 Tick 后目标的期限（或不存在）、
 // 本次 Tick 里目标触发的次数、操作返回值、持久化钩子视图与调度器一致、收尾不变量；再在期望期限前后各
@@ -732,6 +650,7 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 		for _, r := range rows {
 			t.Run(fmt.Sprintf("%s/%s/%s/return_%v", via, r.state, r.op, r.ret), func(t *testing.T) {
 				mirror := make(map[int64]time.Time)
+				upserted := make(map[int64]bool)
 				s := NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
 					if change == ChangeDelete {
 						if _, ok := mirror[node.ID]; !ok {
@@ -741,6 +660,7 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 						return
 					}
 					mirror[node.ID] = node.End
+					upserted[node.ID] = true
 				})
 				s.SetClock(func() time.Time { return base })
 				fires := make(map[int64]int)
@@ -810,6 +730,7 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 
 				s.Tick(tickAt)
 				checkSettled(t, s)
+				checkEveryIDAnnounced(t, s, upserted)
 				// 目标已不在 byID（已取消、本轮已触发结束、从未登记）时返回 false，与 Tick 外一致。
 				wantOK := r.op == "none" || (r.state != "cancelled" && r.state != "done" && r.state != "unknown")
 				if opOK != wantOK {
@@ -852,5 +773,164 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 				checkSettled(t, s)
 			})
 		}
+	}
+}
+
+// 钩子可见状态 × 操作：持久化钩子里可以调用调度器（包括 Tick），钩子能看到回调里看不到的节点状态。
+// TestOperationsOnEveryNodeStateDuringTick 只覆盖回调里（直接 / 重入 Tick）的调用位置；这里覆盖钩子：
+//   - popping：到期出堆、回调执行之前（在出堆的删除通知里）；
+//   - pending_fresh / pending_moved / pending_fired：最外层收尾已把节点入堆、还没轮到它的 upsert（先落定再回调），
+//     分别来自 Tick 内新建、Tick 内对堆中节点改期、触发中节点显式改期自己；由排在它前面的节点 K 的收尾 upsert 触发；
+//   - popping_fresh：pending_fresh 被 K 的钩子里重入的 Tick 触发，在补发的首次 upsert 里操作。
+//
+// 操作：改期 (+1m) / 取消 / Tick 到 +10m / 不操作。断言与回调位置的矩阵相同：本次 Tick 后目标的期限（或不存在）
+// 与触发次数、操作返回值、钩子视图与调度器一致且不收到不持有的删除、每个分配过的 ID 都经过 upsert、收尾不变量，
+// 再在期望期限前后各 Tick 一次。行为表见 docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md §2.2、§9。
+func TestHookOperationsOnEveryNodeStateItCanSee(t *testing.T) {
+	const absent = time.Duration(-1)
+	base := time.Unix(100, 0)
+	type row struct {
+		state string
+		op    string        // change / remove / tick / none
+		ret   time.Duration // 外层回调 F 第一次触发的返回值（pending_fired 用，显式改期优先）
+		want  time.Duration // 操作所在的 Tick 结束后目标期限相对 base 的偏移；absent 表示不存在
+		fired int           // 到那时目标触发的次数（pending_fired 的目标是 F 自己，含第一次）
+	}
+	// 每行依次是改期 / 取消 / Tick / 不操作的期望：{操作所在 Tick 结束后的期限, 目标触发次数}。
+	type outcome struct {
+		want  time.Duration
+		fired int
+	}
+	var rows []row
+	add := func(state string, ret time.Duration, outcomes [4]outcome) {
+		for i, op := range []string{"change", "remove", "tick", "none"} {
+			rows = append(rows, row{state, op, ret, outcomes[i].want, outcomes[i].fired})
+		}
+	}
+	m := time.Minute
+	add("popping", 0, [4]outcome{{m, 0}, {absent, 0}, {absent, 1}, {absent, 1}})
+	add("pending_fresh", 0, [4]outcome{{m, 0}, {absent, 0}, {absent, 1}, {10 * m, 0}})
+	add("pending_moved", 0, [4]outcome{{m, 0}, {absent, 0}, {absent, 1}, {10 * m, 0}})
+	for _, ret := range []time.Duration{0, -time.Second, time.Second} {
+		add("pending_fired", ret, [4]outcome{{m, 1}, {absent, 1}, {absent, 2}, {10 * m, 1}})
+	}
+	add("popping_fresh", 0, [4]outcome{{m, 0}, {absent, 0}, {absent, 1}, {absent, 1}})
+
+	for _, r := range rows {
+		t.Run(fmt.Sprintf("%s/%s/return_%v", r.state, r.op, r.ret), func(t *testing.T) {
+			var s *Scheduler
+			var outer, target, k int64
+			mirror := make(map[int64]time.Time)
+			upserted := make(map[int64]bool)
+			fires := make(map[int64]int)
+			opOK, opDone, kSeen := true, false, false
+			operate := func() {
+				opDone = true
+				switch r.op {
+				case "change":
+					opOK = s.ChangeTimer(target, time.Time{}, time.Minute)
+				case "remove":
+					opOK = s.RemoveTimer(target)
+				case "tick":
+					s.Tick(base.Add(10 * time.Minute))
+				}
+			}
+			s = NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
+				if change == ChangeDelete {
+					if _, ok := mirror[node.ID]; !ok {
+						t.Errorf("hook got a delete for %d it does not hold", node.ID)
+					}
+					delete(mirror, node.ID)
+				} else {
+					mirror[node.ID] = node.End
+					upserted[node.ID] = true
+				}
+				switch {
+				case change == ChangeUpsert && node.ID == k && !kSeen:
+					kSeen = true
+					if r.state == "popping_fresh" {
+						s.Tick(base.Add(10 * time.Minute)) // 触发还没轮到 upsert 的目标；操作在它的首次 upsert 里
+					} else if r.state != "popping" {
+						operate()
+					}
+					s.RemoveTimer(k) // K 只用来触发，不留在结果里
+				case opDone:
+				case r.state == "popping" && change == ChangeDelete && node.ID == target,
+					r.state == "popping_fresh" && change == ChangeUpsert && node.ID == target:
+					operate()
+				}
+			})
+			s.SetClock(func() time.Time { return base })
+			s.RegisterHandler(1, func(ctx Context) time.Duration { // F
+				fires[ctx.Node.ID]++
+				if fires[ctx.Node.ID] > 1 {
+					return 0
+				}
+				k = s.NewTimer(time.Hour, 5, 0, 0, nil) // 先进收尾队列，它的 upsert 排在目标前面
+				switch r.state {
+				case "pending_fresh", "popping_fresh":
+					target = s.NewTimer(10*time.Minute, 3, 0, 0, nil)
+				case "pending_moved":
+					s.ChangeTimer(target, time.Time{}, 10*time.Minute)
+				case "pending_fired":
+					s.ChangeTimer(outer, time.Time{}, 10*time.Minute)
+				}
+				return r.ret
+			})
+			s.RegisterHandler(3, func(ctx Context) time.Duration { fires[ctx.Node.ID]++; return 0 })
+			s.RegisterHandler(5, func(Context) time.Duration { t.Error("trigger K fired"); return 0 })
+			switch r.state {
+			case "popping":
+				target = s.NewTimer(2*time.Second, 3, 0, 0, nil)
+			case "pending_moved":
+				target = s.NewTimer(time.Hour, 3, 0, 0, nil)
+			}
+			outer = s.NewTimer(time.Second, 1, 0, 0, nil)
+			if r.state == "pending_fired" {
+				target = outer
+			}
+
+			s.Tick(base.Add(3 * time.Second))
+			checkSettled(t, s)
+			checkEveryIDAnnounced(t, s, upserted)
+			if !opDone && r.op != "none" {
+				t.Fatalf("the hook never saw the target in state %s", r.state)
+			}
+			if !opOK {
+				t.Fatalf("%s from the hook returned false, want true", r.op)
+			}
+			if got := fires[target]; got != r.fired {
+				t.Fatalf("target fired %d times, want %d", got, r.fired)
+			}
+			nodes := s.Nodes()
+			if len(nodes) != len(mirror) {
+				t.Fatalf("hook holds %v, scheduler holds %+v", mirror, nodes)
+			}
+			for _, node := range nodes {
+				if end, ok := mirror[node.ID]; !ok || !end.Equal(node.End) {
+					t.Fatalf("hook holds %v for %d, scheduler has end %v", end, node.ID, node.End)
+				}
+			}
+			if r.want == absent {
+				if len(nodes) != 0 {
+					t.Fatalf("nodes after the tick = %+v, want none", nodes)
+				}
+				return
+			}
+			due := base.Add(r.want)
+			if len(nodes) != 1 || nodes[0].ID != target || !nodes[0].End.Equal(due) {
+				t.Fatalf("nodes after the tick = %+v, want only %d due at +%v", nodes, target, r.want)
+			}
+			before := fires[target]
+			s.Tick(due.Add(-time.Nanosecond))
+			if fires[target] != before {
+				t.Fatal("target fired before its deadline")
+			}
+			s.Tick(due)
+			if fires[target] != before+1 || len(s.Nodes()) != 0 || len(mirror) != 0 {
+				t.Fatalf("at its deadline target fired %d more times, nodes=%+v hook=%v; want once and nothing left", fires[target]-before, s.Nodes(), mirror)
+			}
+			checkSettled(t, s)
+		})
 	}
 }

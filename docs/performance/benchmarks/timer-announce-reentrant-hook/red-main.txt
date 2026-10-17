@@ -1,14 +1,35 @@
---- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring (0.00s)
-    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/one_shot (0.00s)
-        scheduler_test.go:667: delete arrived before initial upsert for IDs [3]
-        scheduler_test.go:670: stored seed=2, allocated seed=3 (fresh ID 3 can be reused after restart)
-        scheduler_test.go:689: after restart ID=3, want greater than previously returned ID 3
-    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/rearm (0.00s)
-        scheduler_test.go:667: delete arrived before initial upsert for IDs [3]
-    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/cancel_on_announce (0.00s)
-        scheduler_test.go:664: reentered=true fired=1, want 0 nested firings
-    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/reschedule_on_announce (0.00s)
-        scheduler_test.go:664: reentered=true fired=1, want 0 nested firings
+# 命令：在本轮最终测试源码上用 go test -overlay 只把 infra/base/timer/scheduler.go 换成 origin/main 300d728a 的版本
+#   GOWORK=off go test -count=1 -overlay=<overlay.json> -run 'TestHookOperationsOnEveryNodeStateItCanSee|TestOperationsOnEveryNodeStateDuringTick' ./infra/base/timer
+# 结果：钩子组合表 28 组中 10 组红；回调位置的 82 组（加上 checkEveryIDAnnounced）全绿。时间戳为本机时区。
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee (0.00s)
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping/change/return_0s (0.00s)
+        scheduler_test.go:903: target fired 1 times, want 0
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping/remove/return_0s (0.00s)
+        scheduler_test.go:903: target fired 1 times, want 0
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fresh/tick/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_-1s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_1s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping_fresh/change/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+        scheduler_test.go:897: the hook never saw the target in state popping_fresh
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping_fresh/remove/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+        scheduler_test.go:897: the hook never saw the target in state popping_fresh
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping_fresh/tick/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+        scheduler_test.go:897: the hook never saw the target in state popping_fresh
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping_fresh/none/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
 FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/timer	0.008s
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/timer	0.952s
 FAIL

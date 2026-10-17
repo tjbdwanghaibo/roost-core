@@ -38,8 +38,8 @@
 
 钩子视图两个标志（只对 typed 有意义，回调前先改标志）：
 
-- `persisted`：钩子当前持有这个节点（最近一次是 upsert）。堆中节点为真；出堆触发时发删除后为假；Tick 内从堆移出等待放回的节点仍为真（移出不发变化）。
-- `announced`：钩子至少收到过一次这个 ID 的 upsert。只有 Tick 内新建、尚未收尾的节点为假。
+- `persisted`：钩子当前持有这个节点（最近一次是 upsert）。堆中节点为真（例外：收尾“已入堆、还没轮到它的 upsert”期间，触发中显式改期的节点为假，见 §9）；出堆触发时发删除后为假；Tick 内从堆移出等待放回的节点仍为真（移出不发变化）。
+- `announced`：钩子至少收到过一次这个 ID 的 upsert。只有 Tick 内新建、还没收到收尾 upsert 的节点为假（收尾入堆后、轮到它之前仍为假，见 §9）。
 
 不变量（实现注释与测试 `checkSettled` 都按这几条）：
 
@@ -159,3 +159,47 @@
 
   Tick 外“登记 + 取消”一对多约 3ns：来自状态记账（`detach` 写状态与下标、取消时检查 `announced` / `persisted`）。第一版实现（`Node` 多 8 字节、`emit` 按值复制）是 +11%，已把 `index` 收窄、`emit` / `clone` 改为指针接收降到 +3%；剩余部分换来 Tick 路径 15～20% 的提升与 Tick 内操作零闭包分配，接受。World 只在活动排期时武装定时器，这条路径不是热点。
 
+## 9. 实施后发现
+
+### 9.1 收尾钩子重入 Tick：已入堆、尚未通知的节点到期（重构后第一处缺陷）
+
+**缺陷**（`origin/fix/timer-announce-before-firing` 的 `f8851f4a` 报告，本轮复核确认）：§2.2 收尾第 2、3 步“先落定再回调”，把等待节点全部入堆之后才依次 upsert。前一个节点的 upsert 钩子若重入 Tick（§2.2 允许“钩子里调用调度器按 Tick 外规则立即生效”），排在后面、已入堆但还没轮到 upsert 的节点可能到期：
+
+- Tick 内新建的节点（`announced` 为假）：`fire` 无条件只发删除，一次性节点随即 detach，收尾跳过它——钩子从未见到这个 ID 的 upsert。World 按 upsert 推进持久 `TimerSeed`，重建后会再次分配这个已经交给调用方的 ID。
+- 触发中显式改期自己的节点（`persisted` 为假，出堆时已发删除）：再次到期时钩子收到一次它不持有的删除。
+- 同类（钩子在出堆通知里操作节点）：在到期出堆的删除通知里 `RemoveTimer` 返回 true、`ChangeTimer` 改到新期限，回调仍然执行一次，违反 `RemoveTimer` 的“返回 true 之后它不再触发”与 Tick 内改期“本次既不按旧期限也不按新期限触发”。
+
+World 的钩子只写 DAO、不调用调度器，生成工程不可达；这是 `infra/base/timer` 对允许在钩子里调用调度器的宿主的契约缺陷。
+
+**为什么 82 组矩阵没抓到**：`TestOperationsOnEveryNodeStateDuringTick` 的调用位置只有“回调里直接调用”和“回调里重入 Tick”，没有“持久化钩子里调用”；状态维也只列了回调能看到的状态。钩子能看到另外两类过渡状态——“出堆通知中”（`stateFiring` 但回调还没开始）与“收尾已入堆、未轮到 upsert”（`stateHeap` 但 `announced` / `persisted` 可能为假）——§2.1 的“堆中节点 `persisted` 为真”在后者不成立。缺口在矩阵的调用位置维，不是单点。
+
+**修法**：节点离开堆的两条路径（`RemoveTimer` 与 `fire`）共用 `emitLeave`：`announced` 为假先补 upsert，`persisted` 为真再发删除，每步后重读标志；`fire` 在出堆通知之后若节点已不是 `stateFiring`（钩子取消或改期了它）就不执行回调。原提交的做法是在 Tick 循环里对 `announced` 为假的节点先 upsert 再 `continue` 重新取堆顶，只覆盖第一种；本轮改为上面的统一规则，覆盖三种，状态、收尾顺序与“先落定再回调”不变，没有引入按 ID 推迟。
+
+**矩阵补全**：新增 `TestHookOperationsOnEveryNodeStateItCanSee`（钩子调用位置，28 组）：状态 `popping`（出堆通知中）、`pending_fresh` / `pending_moved` / `pending_fired`（收尾已入堆未通知，分别来自 Tick 内新建、Tick 内改期堆中节点、触发中自改期，后者 × 返回值 0 / 负 / 正）、`popping_fresh`（未通知的新节点被钩子里的重入 Tick 触发、在补发的首次 upsert 里操作）× 改期 / 取消 / 重入 Tick / 不操作；两张表都加了 `checkEveryIDAnnounced`（每个分配过的 ID 都经过 upsert）。
+
+| 状态 \ 操作（在钩子里） | 改期 +1m | 取消 | Tick 到 +10m | 不操作 |
+| --- | --- | --- | --- | --- |
+| `popping` | +1m，回调不执行 | 不存在，回调不执行 | 不存在，执行 1 次 | 不存在，执行 1 次 |
+| `pending_fresh` / `pending_moved` | +1m | 不存在（新建的先补 upsert 再删除） | 不存在，执行 1 次（新建的先补 upsert） | +10m |
+| `pending_fired`（返回值任意） | +1m | 不存在，不发删除 | 不存在，第二次执行，不发删除 | +10m |
+| `popping_fresh` | +1m，回调不执行 | 不存在，回调不执行 | 不存在，执行 1 次 | 不存在，执行 1 次 |
+
+**修前证据**（当前 `origin/main` `300d728a` 的 `scheduler.go` 用 `-overlay` 替换，测试为本轮最终版本；原文见 [red-main.txt](../performance/benchmarks/timer-announce-reentrant-hook/red-main.txt)）：新表 28 组中 10 组红，旧表 82 组加上 ID 检查后仍全绿（证明 ID 检查本身不改变已有结论）：
+
+```
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping/change/return_0s
+        scheduler_test.go:903: target fired 1 times, want 0
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fresh/tick/return_0s
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_0s
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping_fresh/remove/return_0s
+        scheduler_test.go:841: hook got a delete for 3 it does not hold
+        scheduler_test.go:895: allocated ID 3 never reached the hook as an upsert (seed 3); a rebuilt scheduler would reuse it
+        scheduler_test.go:897: the hook never saw the target in state popping_fresh
+```
+
+原提交 `f8851f4a` 的 `scheduler.go` 在新表上仍有 5 组红（`popping` × 改期 / 取消，`pending_fired` × Tick × 三种返回值），见 [red-f8851f4a.txt](../performance/benchmarks/timer-announce-reentrant-hook/red-f8851f4a.txt)。
+
+**基准**：热路径 `fire` 多两次标志判断与一次状态判断。同机交替 10 轮（[样本与环境](../performance/benchmarks/timer-announce-reentrant-hook/)），六个基准时间、B/op、allocs/op 与基线均无显著差异（例：TickRearmByReturn 21.30µs → 21.11µs，p=0.280；NewAndRemoveOutsideTick 95.83ns → 96.10ns，p=0.698；RebuildAndTick 54.58µs → 55.03µs，p=0.684）。代码量：`scheduler.go` 净增一个 `emitLeave`（`RemoveTimer` 原有的两段判断移入其中复用），`fire` 加一个状态判断；原提交的单点测试由组合表取代。

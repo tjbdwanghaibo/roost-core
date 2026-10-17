@@ -4,11 +4,11 @@
 
 ## [Unreleased]
 
-### Timer：收尾钩子重入时，子任务在执行前完成首次持久化通知
+### Timer：持久化钩子里重入 Tick 或操作出堆中的节点时，钩子视图与 ID 种子保持正确
 
-- 基线 `300d728a` 的收尾先把新节点全部入堆，再依次 upsert。前一个节点的钩子重入 Tick，可执行尚未通知的到期子节点；一次性子任务只收到删除，按 upsert 推进种子的宿主会漏存它的 ID。SLG 定时任务 ID 被用作后续操作身份时，恢复后复用会混淆新旧任务。回归 `TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring` 修前红：`delete arrived before initial upsert for IDs [3]`、`stored seed=2, allocated seed=3`、`after restart ID=3, want greater than previously returned ID 3`。
-- 现在对尚未通知的 typed 到期节点先补 upsert，再重新检查堆顶；通知钩子随即取消或改期时，原期限不会继续触发。覆盖一次性、自动重排、首次通知内取消/改期和种子恢复；闭包仍不持久化。公开接口与存储格式不变。旧版本的临时接入方式是让持久化钩子只写宿主状态，把后续 Tick 排在该 Tick 返回之后；规则见[时间与定时器](docs/framework/guide/10-time.md#3-scheduler)。
-- 热路径基准：同机、同配置、新旧二进制交替各 10 轮，原始样本及 benchstat 见[性能证据](docs/performance/benchmarks/timer-announce-reentrant-hook/benchstat.txt)。仅验证调度器微基准，不扩大整服容量承诺。
+- **缺陷**（`300d728a` 起，即 Scheduler 重构后）：最外层收尾先把等待节点全部入堆再依次 upsert。前一个 upsert 的钩子重入 Tick 时，排在后面、还没收到 upsert 的节点可能到期：Tick 内新建的一次性节点只收到删除，按 upsert 推进 ID 种子的宿主漏存它的 ID，重建后复用；触发中显式改期自己的节点收到一次钩子不持有的删除。另外，在到期出堆的删除通知里取消（`RemoveTimer` 返回 true）或改期该节点，回调仍会执行一次。生成工程的 World 钩子只写 DAO、不调用调度器，不受影响；钩子里调用调度器的宿主受影响。
+- **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `f8851f4a` 报告并只修了第一种情况，本轮复核扩展为统一规则。
+- **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](docs/performance/benchmarks/timer-announce-reentrant-hook/)，分析见[重构方案 §9](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
 
 ### 生成器：`access.player.self_sync` 的默认 packer 由生成器生成（维护者 2026-10-17 决定，第三轮新用户试用登记项 3）
 

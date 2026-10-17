@@ -1,0 +1,15 @@
+# 同上，scheduler.go 换成原提交 f8851f4a 的版本（只在 Tick 循环里对 announced 为假的节点先 upsert）：5 组红
+--- FAIL: TestHookOperationsOnEveryNodeStateItCanSee (0.00s)
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping/change/return_0s (0.00s)
+        scheduler_test.go:903: target fired 1 times, want 0
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/popping/remove/return_0s (0.00s)
+        scheduler_test.go:903: target fired 1 times, want 0
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_0s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_-1s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+    --- FAIL: TestHookOperationsOnEveryNodeStateItCanSee/pending_fired/tick/return_1s (0.00s)
+        scheduler_test.go:841: hook got a delete for 1 it does not hold
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/timer	0.660s
+FAIL

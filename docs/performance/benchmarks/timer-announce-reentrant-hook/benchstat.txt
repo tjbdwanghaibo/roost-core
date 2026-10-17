@@ -1,35 +1,35 @@
-goos: linux
-goarch: amd64
+goos: darwin
+goarch: arm64
 pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
-cpu: INTEL(R) XEON(R) PLATINUM 8573C
-                             │ docs/performance/benchmarks/timer-announce-reentrant-hook/baseline.txt │ docs/performance/benchmarks/timer-announce-reentrant-hook/fixed.txt │
-                             │                                 sec/op                                 │                    sec/op                     vs base               │
-TickRearmByReturn-4                                                                       46.95µ ± 2%                                    45.42µ ± 1%  -3.27% (p=0.000 n=10)
-TickExplicitRescheduleSelf-4                                                              50.96µ ± 1%                                    51.19µ ± 2%       ~ (p=0.796 n=10)
-TickRescheduleOther-4                                                                     72.38µ ± 3%                                    69.56µ ± 2%  -3.89% (p=0.002 n=10)
-TickCreateInHandler-4                                                                     75.06µ ± 4%                                    73.62µ ± 2%       ~ (p=0.105 n=10)
-NewAndRemoveOutsideTick-4                                                                 225.5n ± 3%                                    224.9n ± 3%       ~ (p=0.684 n=10)
-RebuildAndTick-4                                                                          140.3µ ± 4%                                    134.9µ ± 2%  -3.85% (p=0.019 n=10)
-geomean                                                                                   27.27µ                                         26.69µ       -2.14%
+cpu: Apple M5
+                              │ base-300d728a.txt │             fixed.txt              │
+                              │      sec/op       │   sec/op     vs base               │
+TickRearmByReturn-10                 21.30µ ±  5%   21.11µ ± 4%       ~ (p=0.280 n=10)
+TickExplicitRescheduleSelf-10        23.03µ ±  1%   23.11µ ± 4%       ~ (p=0.739 n=10)
+TickRescheduleOther-10               33.64µ ± 17%   33.37µ ± 2%       ~ (p=0.218 n=10)
+TickCreateInHandler-10               30.81µ ±  3%   30.88µ ± 3%       ~ (p=0.912 n=10)
+NewAndRemoveOutsideTick-10           95.83n ±  2%   96.10n ± 3%       ~ (p=0.698 n=10)
+RebuildAndTick-10                    54.58µ ±  3%   55.03µ ± 4%       ~ (p=0.684 n=10)
+geomean                              11.77µ         11.77µ       -0.00%
 
-                             │ docs/performance/benchmarks/timer-announce-reentrant-hook/baseline.txt │ docs/performance/benchmarks/timer-announce-reentrant-hook/fixed.txt │
-                             │                                  B/op                                  │                    B/op                     vs base                 │
-TickRearmByReturn-4                                                                      2.344Ki ± 0%                                 2.344Ki ± 0%       ~ (p=1.000 n=10)
-TickExplicitRescheduleSelf-4                                                             2.344Ki ± 0%                                 2.344Ki ± 0%       ~ (p=1.000 n=10)
-TickRescheduleOther-4                                                                    2.344Ki ± 0%                                 2.344Ki ± 0%       ~ (p=1.000 n=10)
-TickCreateInHandler-4                                                                    14.07Ki ± 0%                                 14.07Ki ± 0%       ~ (p=0.802 n=10)
-NewAndRemoveOutsideTick-4                                                                  112.0 ± 0%                                   112.0 ± 0%       ~ (p=1.000 n=10) ¹
-RebuildAndTick-4                                                                         163.0Ki ± 0%                                 163.0Ki ± 0%       ~ (p=1.000 n=10)
-geomean                                                                                  3.844Ki                                      3.844Ki       +0.00%
+                              │ base-300d728a.txt │               fixed.txt               │
+                              │       B/op        │     B/op      vs base                 │
+TickRearmByReturn-10                 2.344Ki ± 0%   2.344Ki ± 0%       ~ (p=1.000 n=10) ¹
+TickExplicitRescheduleSelf-10        2.344Ki ± 0%   2.344Ki ± 0%       ~ (p=1.000 n=10) ¹
+TickRescheduleOther-10               2.344Ki ± 0%   2.344Ki ± 0%       ~ (p=1.000 n=10) ¹
+TickCreateInHandler-10               14.06Ki ± 0%   14.06Ki ± 0%       ~ (p=1.000 n=10) ¹
+NewAndRemoveOutsideTick-10             112.0 ± 0%     112.0 ± 0%       ~ (p=1.000 n=10) ¹
+RebuildAndTick-10                    163.0Ki ± 0%   163.0Ki ± 0%       ~ (p=1.000 n=10)
+geomean                              3.844Ki        3.844Ki       +0.00%
 ¹ all samples are equal
 
-                             │ docs/performance/benchmarks/timer-announce-reentrant-hook/baseline.txt │ docs/performance/benchmarks/timer-announce-reentrant-hook/fixed.txt │
-                             │                               allocs/op                                │                 allocs/op                   vs base                 │
-TickRearmByReturn-4                                                                        300.0 ± 0%                                   300.0 ± 0%       ~ (p=1.000 n=10) ¹
-TickExplicitRescheduleSelf-4                                                               300.0 ± 0%                                   300.0 ± 0%       ~ (p=1.000 n=10) ¹
-TickRescheduleOther-4                                                                      300.0 ± 0%                                   300.0 ± 0%       ~ (p=1.000 n=10) ¹
-TickCreateInHandler-4                                                                      500.0 ± 0%                                   500.0 ± 0%       ~ (p=1.000 n=10) ¹
-NewAndRemoveOutsideTick-4                                                                  1.000 ± 0%                                   1.000 ± 0%       ~ (p=1.000 n=10) ¹
-RebuildAndTick-4                                                                          1.021k ± 0%                                  1.021k ± 0%       ~ (p=1.000 n=10) ¹
-geomean                                                                                    154.8                                        154.8       +0.00%
+                              │ base-300d728a.txt │              fixed.txt               │
+                              │     allocs/op     │  allocs/op   vs base                 │
+TickRearmByReturn-10                   300.0 ± 0%    300.0 ± 0%       ~ (p=1.000 n=10) ¹
+TickExplicitRescheduleSelf-10          300.0 ± 0%    300.0 ± 0%       ~ (p=1.000 n=10) ¹
+TickRescheduleOther-10                 300.0 ± 0%    300.0 ± 0%       ~ (p=1.000 n=10) ¹
+TickCreateInHandler-10                 500.0 ± 0%    500.0 ± 0%       ~ (p=1.000 n=10) ¹
+NewAndRemoveOutsideTick-10             1.000 ± 0%    1.000 ± 0%       ~ (p=1.000 n=10) ¹
+RebuildAndTick-10                     1.021k ± 0%   1.021k ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                154.8         154.8       +0.00%
 ¹ all samples are equal

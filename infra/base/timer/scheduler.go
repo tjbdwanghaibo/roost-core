@@ -58,8 +58,9 @@ type Node struct {
 	index int32
 	state nodeState
 	// persisted：持久化钩子当前持有这个节点（最近一次回调是 upsert）。只对 typed 节点有意义。
+	// 堆中节点只在最外层收尾“已入堆、还没轮到它的 upsert”期间可能为假（见 emitLeave）。
 	persisted bool
-	// announced：钩子至少收到过一次这个 ID 的 upsert。只有 Tick 内新建、尚未收尾的节点为假。
+	// announced：钩子至少收到过一次这个 ID 的 upsert。只有 Tick 内新建、还没收到收尾 upsert 的节点为假。
 	announced bool
 }
 
@@ -78,7 +79,7 @@ const (
 	stateDetached nodeState = iota
 	// stateHeap：在堆中等待到期。
 	stateHeap
-	// stateFiring：已出堆、回调正在执行（含外层重入帧）；出堆时已向钩子发过删除。
+	// stateFiring：已出堆、出堆通知或回调正在执行（含外层重入帧）；出堆时已让钩子视图跟上（见 emitLeave）。
 	stateFiring
 	// stateQueued：等最外层 Tick 收尾入堆。来源：Tick 内新建、Tick 内对堆中节点显式改期、触发中节点显式改期。
 	stateQueued
@@ -260,14 +261,7 @@ func (s *Scheduler) RemoveTimer(id int64) bool {
 		heap.Remove(&s.nodes, int(node.index))
 	}
 	s.detach(node)
-	if !node.announced {
-		// Tick 内新建即取消：仍让钩子见到这个 ID 一次。宿主（World）按 upsert 推进持久 seed，
-		// 否则重建后会再次分配这个已经交给调用方的 ID。
-		s.emitUpsert(node)
-	}
-	if node.persisted {
-		s.emitDelete(node)
-	}
+	s.emitLeave(node)
 	return true
 }
 
@@ -333,16 +327,10 @@ func (s *Scheduler) Tick(now time.Time) {
 		if node == nil || now.Before(node.End) {
 			return
 		}
-		if node.Type != TypeClosure && !node.announced {
-			// 收尾钩子可重入 Tick，遇到已入堆但尚未通知的子节点。
-			// 先通知 ID，让宿主推进持久种子；钩子可能取消或改期，所以重新取堆顶。
-			s.emitUpsert(node)
-			continue
-		}
 		heap.Pop(&s.nodes)
 		next := s.fire(node, now)
 		if node.state != stateFiring {
-			continue // 回调里被显式改期（已进收尾队列）或取消（已 detach）：返回值不再生效
+			continue // 出堆通知或回调里被显式改期（已进收尾队列）或取消（已 detach）：返回值不再生效
 		}
 		if next <= 0 {
 			s.detach(node)
@@ -381,8 +369,8 @@ func (s *Scheduler) settle() {
 	}
 }
 
-// fire 执行一个已出堆节点的回调。节点在回调期间是 stateFiring、仍在 byID 里，回调（及其中的重入 Tick）
-// 对它的取消 / 改期直接改它的状态。
+// fire 执行一个已出堆节点的回调。节点从出堆通知开始就是 stateFiring、仍在 byID 里，钩子、回调（及其中的
+// 重入 Tick）对它的取消 / 改期直接改它的状态；出堆通知里被取消或改期的，回调不执行。
 func (s *Scheduler) fire(node *Node, now time.Time) time.Duration {
 	node.state = stateFiring
 	returned := false
@@ -392,7 +380,11 @@ func (s *Scheduler) fire(node *Node, now time.Time) time.Duration {
 			s.detach(node)
 		}
 	}()
-	s.emitDelete(node)
+	s.emitLeave(node)
+	if node.state != stateFiring {
+		// 出堆通知的钩子取消或改期了它：与回调执行前取消 / 改期一样，本次不执行（Tick 随后看到状态已变）。
+		return 0
+	}
 	next := s.call(node, now)
 	returned = true
 	return next
@@ -486,6 +478,22 @@ func (s *Scheduler) min() *Node {
 		return nil
 	}
 	return s.nodes[0]
+}
+
+// emitLeave 让钩子视图跟上节点离开堆（取消与到期出堆共用）：钩子从未见过的 ID 先补一次 upsert——宿主
+// （World）按 upsert 推进持久 seed，漏掉就会在重建后复用这个已经交给调用方的 ID；钩子仍持有的再发删除。
+//
+// 堆里的节点不一定已经通知：最外层收尾先把等待节点全部入堆、再依次 upsert（先落定再回调），某个 upsert 的
+// 钩子重入 Tick 或取消时，排在后面的节点还没收到 upsert——Tick 内新建的 announced 为假；触发中显式改期的
+// 出堆时已发过删除，persisted 为假。所以只按标志发，不按“在堆里”推断。每步之后重读标志：钩子里可以操作
+// 调度器（例如在补发的 upsert 里取消它，删除已由 RemoveTimer 发出）。
+func (s *Scheduler) emitLeave(node *Node) {
+	if !node.announced {
+		s.emitUpsert(node)
+	}
+	if node.persisted {
+		s.emitDelete(node)
+	}
 }
 
 // emitUpsert / emitDelete 先改钩子视图标志再回调：钩子 panic 时标志与已经发出的变化一致。闭包节点不持久化。
