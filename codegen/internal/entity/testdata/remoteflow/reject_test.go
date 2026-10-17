@@ -232,7 +232,8 @@ type rejectRig struct {
 	write          nest.HandlerName
 	// fatal 收 Runtime 的 onFatal（kit 里就是 Nest.Fence + RuntimeFailure）。
 	fatal chan error
-	// afterCommit / afterCommitOnFast 记 write handler 登记的 AfterCommit 执行次数与其中在业务 worker 上的次数。
+	// afterCommit / afterCommitOnFast 记 write handler 登记的 AfterCommit 执行次数与其中在业务 worker（short 池）上的次数；
+	// 每次回调先加 afterCommitOnFast、再加 afterCommit，读到 afterCommit==N 时前 N 次的执行位置都已记下。
 	afterCommit, afterCommitOnFast atomic.Int32
 	// ref 是订阅者持有的对象，remove 帧只有 ref 没有内容。
 	ref frame.ObjectRef
@@ -365,10 +366,12 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 			vault.items.SetValue(vault.items.GetValue() + 1)
 		}
 		nest.AfterCommit(func() {
-			rig.afterCommit.Add(1)
+			// 先记执行位置、最后记总次数：用例以 afterCommit 达到 N 作为“N 次回调都已执行完”的信号，随即读
+			// afterCommitOnFast。若总次数先加，读方可能落在两次 Add 之间，把仍在业务 worker 上执行的那次算成不在（偶发 1/2）。
 			if fctx.InShortWorker() {
 				rig.afterCommitOnFast.Add(1)
 			}
+			rig.afterCommit.Add(1)
 		})
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy})

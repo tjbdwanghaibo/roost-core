@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
+
+- **是测试计数的读写竞争，不是生产违约。** `TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit` 以 `afterCommit` 达到 2 作为“两次 AfterCommit 都已执行完”，随即读 `afterCommitOnFast`；而回调先加总次数、再查执行位置并加 `afterCommitOnFast`，读方落在两次 `Add` 之间就看到 1/2。CPU 压力下 `-race` 连跑该用例：修前 main 10 个忙循环 4/1150、40 个忙循环 1/300（失败后 100ms 再读为 2/2，回调确实在业务 worker 上执行过）；D10 之前的基线 bdc9003a 10 个忙循环 0/550，但回调代码相同，两次 `Add` 之间插 20ms 时基线与 main 都 5/5 变红，与 D10 无关。现在回调先记执行位置、最后加总次数，读到 `afterCommit==N` 时前 N 次的位置都已记下；同样插 20ms 时 5/5 通过，压力下 0/400（10 个忙循环）、0/300（40 个）。断言不放宽：把延迟结论改成在 finalizer goroutine 上就地执行（不经 `NestMgr.RunLocal`）时修后用例仍稳定报 1/2。
+- 只改 `codegen/internal/entity/testdata/remoteflow/reject_test.go` 的计数顺序与注释，生产代码不变。
+
 ### DataEngine / Nest / 生成器：删档后该 ID 不能经 GetOrCreate 重建，明确失败而不是停服（DESIGN-TODO D10，维护者 2026-10-17 决定 B，范围只守 GetOrCreate）
 
 - **删过档是独立哨兵**：冷加载读到全部 DAO 都是墓碑时返回 `entity.ErrAuthorityEntityDeleted`（DataEngine `engine.ErrEntityAggregateDeleted`），**不再满足** `ErrAuthorityEntityNotFound` / `ErrEntityAggregateNotFound`，“不存在就创建”的代码（生成 GetOrCreate）因此不会去重建。修正：真实 Mongo 上 `MongoStore.Load` 一直过滤墓碑，删过档原先读作 `state=absent`；新增 `dataengine.LoadSpec.IncludeDeleted`，聚合仓库的单实体读据此看到墓碑。卸载后重载对两种状态都退回 remove。
