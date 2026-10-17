@@ -183,18 +183,37 @@ func declaredTargetCold(cause error) error {
 	return fmt.Errorf("%w: %w", errDeclaredTargetCold, cause)
 }
 
-// targetLoadError 把“权威确认声明目标不存在”（AggregateLoader 报告的 entity.ErrAuthorityEntityNotFound，
-// DataEngine 的 ErrEntityAggregateNotFound 满足它）包装成稳定的客户端码 errcode.CodeEntityNotFound：首登前的
-// 业务请求是可预期的客户端状态，生成 endpoint 经 errcode.ClientError 给客户端该码、不按 CodeInternal 记 ERROR。
-// 原错误保留在链上，errors.Is 照旧判别；链上已有业务码时不改写。只在声明目标的加载结果上调用：
-// handler 内业务自己返回的错误由业务决定码。
+// targetLoadError 把声明目标加载结果里“权威确认的实体状态”包装成稳定的客户端码（见 entityStateError）。
+// 只在声明目标的加载结果上调用：handler 内业务自己返回的错误由业务决定码。
 func targetLoadError(err error) error {
-	if err == nil || !errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+	return entityStateError(err)
+}
+
+// entityStateError 把权威给出的实体状态包装成稳定的客户端码，原错误保留在链上（errors.Is 照旧判别），
+// 链上已有业务码时不改写：
+//   - “不存在”（AggregateLoader 报告的 entity.ErrAuthorityEntityNotFound，DataEngine 的 ErrEntityAggregateNotFound
+//     满足它）→ errcode.CodeEntityNotFound：首登前的业务请求是可预期的客户端状态（D7）。
+//   - “删过档”（entity.ErrAuthorityEntityDeleted，DataEngine 的 ErrEntityAggregateDeleted 满足它）→
+//     errcode.CodeEntityDeleted：这个 ID 不可再用，重新登录也不会恢复（D10 方案 B）。
+//
+// 生成 endpoint 经 errcode.ClientError 给客户端该码、不按 CodeInternal 记 ERROR。调用位置：声明目标的加载
+// （singleDispatch / dispatchMany / I/O 准备的 GetMany）。
+func entityStateError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var def *errcode.IntError
+	switch {
+	case errors.Is(err, entity.ErrAuthorityEntityDeleted):
+		def = errcode.ErrEntityDeleted
+	case errors.Is(err, entity.ErrAuthorityEntityNotFound):
+		def = errcode.ErrEntityNotFound
+	default:
 		return err
 	}
 	var coded *errcode.IntError
 	if errors.As(err, &coded) {
 		return err
 	}
-	return errcode.Wrap(errcode.ErrEntityNotFound, err)
+	return errcode.Wrap(def, err)
 }

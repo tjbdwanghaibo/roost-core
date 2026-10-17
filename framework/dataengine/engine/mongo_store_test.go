@@ -873,6 +873,16 @@ func TestMongoStoreLoadExcludesTombstonesAndHonoursCallerFilter(t *testing.T) {
 			t.Fatalf("tombstone leaked into load: %+v", doc)
 		}
 	}
+	// 聚合仓库的单实体读显式要墓碑（IncludeDeleted）：删过档与从未创建由此区分（D10）。
+	docs, err = store.Load(context.Background(), coredata.LoadSpec{
+		Database: testDatabase, Resource: "heroes", Filter: map[string]any{"_id": int64(2)}, IncludeDeleted: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].Key.ID != 2 || !docs[0].Deleted || docs[0].Version != 2 {
+		t.Fatalf("loaded=%+v, want the tombstone with its version", docs)
+	}
 }
 
 func TestMongoStoreStreamLoadUsesCursorAndStopsOnConsumerError(t *testing.T) {

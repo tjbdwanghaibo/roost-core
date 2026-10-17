@@ -10,7 +10,7 @@ import (
 // 码段归属（2026-10-16 登记，D7）：
 //
 //	0              CodeOK
-//	1 – 999        框架段：本包定义的、跨模块通用的框架码（CodeInternal、CodeEntityNotFound …）
+//	1 – 999        框架段：本包定义的、跨模块通用的框架码（CodeInternal、CodeEntityNotFound、CodeEntityDeleted …）
 //	100000 – 199999 生成工程业务码的默认段（roost.yaml ids.errcode，可改，但不得与框架段重叠）
 //	5x0101 – 5x0199 内置 service 包各自的段（directory 53、rank 54、match 55、account 56、
 //	               global 57、chat 58、mail 59、platform 60、session 61、activity 62），
@@ -20,10 +20,14 @@ import (
 const (
 	CodeOK       int32 = 0
 	CodeInternal int32 = 1
-	// CodeEntityNotFound：请求的目标实体在权威存储里不存在（从未创建，或已删档只剩墓碑）。
+	// CodeEntityNotFound：请求的目标实体在权威存储里从未创建过。
 	// 这是可预期的客户端状态而不是服务端故障：典型场景是首登前就发业务请求，
 	// 客户端应先走登录 / 创角（生成工程的 EnterGame → lifecycle.GetOrCreate）再重试。
 	CodeEntityNotFound int32 = 2
+	// CodeEntityDeleted：请求的实体删过档（权威里只剩墓碑），这个 ID 不可再用（维护者 2026-10-17 决定 D10 方案 B）。
+	// 与 CodeEntityNotFound 分开：重新登录不会让它恢复（登录边界的 GetOrCreate 同样返回本码），
+	// 客户端不应重试或自动重新登录，而应提示角色已删除，由产品流程换用新的 ID（新建角色）。
+	CodeEntityDeleted int32 = 3
 
 	// FrameworkCodeLast 是框架段的上界（含）；业务码段的下界必须大于它。生成器的 manifest 校验
 	// 持有同值副本（codegen/internal/roost/manifest.go 的 frameworkErrcodeLast），改动须同步。
@@ -35,6 +39,11 @@ const (
 // errors.Is 仍能判别原哨兵（entity.ErrAuthorityEntityNotFound、DataEngine 的
 // ErrEntityAggregateNotFound）。本包不依赖 framework，判定与包装由调用方（Nest）完成。
 var ErrEntityNotFound = Define(CodeEntityNotFound, "entity_not_found", "entity not found")
+
+// ErrEntityDeleted 是 CodeEntityDeleted 的定义。框架在确认“这个 ID 删过档”时用 Wrap(ErrEntityDeleted, cause)
+// 包装原错误（entity.ErrAuthorityEntityDeleted、DataEngine 的 ErrEntityAggregateDeleted 仍可 errors.Is 判别）：
+// Nest 在声明目标的加载结果处包装，生成 lifecycle 在 Get / GetOrCreate（登录边界）处包装。
+var ErrEntityDeleted = Define(CodeEntityDeleted, "entity_deleted", "entity deleted")
 
 const internalReason = "server error"
 

@@ -37,6 +37,9 @@ type LoadSpec struct {
 	Resource  string
 	Filter    map[string]any
 	BatchSize int
+	// IncludeDeleted 为 true 时墓碑（Deleted）也交给调用方；默认只读活文档。只有聚合仓库的单实体一致性读需要它：
+	// 区分“从未创建”与“删过档”，以及新建前确认这个 ID 没有任何文档（D10）。
+	IncludeDeleted bool
 }
 
 // Store is the single read/projection abstraction owned by Data Engine.

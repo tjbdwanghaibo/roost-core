@@ -324,3 +324,43 @@ func TestGeneratedRemoteShortWorkerDeleteIsDefiniteRejection(t *testing.T) {
 		}
 	}
 }
+
+// D10（维护者 2026-10-17 决定方案 B，范围只守 GetOrCreate）：Remote 托管实体删档后该 ID 同样不能经 GetOrCreate 重建。
+// Remote 删档物理删除数据文档，墓碑只在 Remote 元数据里；修前冷加载把它读作“从未创建”（state=absent），GetOrCreate
+// 于是在内存里重建，之后每次写都以 state version conflict（loaded 0, authority 2）失败——实体看似建成却永远写不进去。
+// 现在冷加载查 Remote 元数据墓碑，得到删过档（不满足 not found），GetOrCreate 不重建，引擎不 fatal，其他 Remote 实体照常写。
+func TestGeneratedRemoteRecreateAfterDeleteIsRefused(t *testing.T) {
+	ctx, mongo, redis, database := rejectTestEnv(t)
+	rig := newRejectRig(t, ctx, mongo, redis, database, nest.DurabilityStrict, nil, nil)
+	id, other := rig.seed(t, 9700), rig.seed(t, 9701)
+	if err := rig.request(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.access.Destroy(context.Background(), rig.access.Manager().Get(id), entity.DestroyReasonCommon, true); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, _, _, found := rig.stored(t, id); found {
+		t.Fatal("the deleted Remote entity still has data documents")
+	}
+	_, err := rig.runtime.Repository.LoadEntity(ctx, id, EntityKindSyncedVault)
+	if !errors.Is(err, entity.ErrAuthorityEntityDeleted) || errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+		t.Fatalf("load deleted Remote entity: %v, want ErrAuthorityEntityDeleted only", err)
+	}
+	// 生成 lifecycle GetOrCreate 的判断：先经 ManagerAccess 冷加载，只有确切的 not found 才 Create。
+	value, err := rig.access.Get(ctx, id, entity.MustEntityCategoryOfKind(EntityKindSyncedVault))
+	if value != nil || !errors.Is(err, entity.ErrAuthorityEntityDeleted) || errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+		t.Fatalf("GetOrCreate lookup of a deleted Remote entity: value=%v err=%v, want deleted (not not-found)", value != nil, err)
+	}
+	if rig.access.Manager().Get(id) != nil {
+		t.Fatal("a deleted Remote id was published again")
+	}
+	if err := rig.request(ctx, other); err != nil {
+		t.Fatalf("other Remote entity after the refused recreate: %v", err)
+	}
+	select {
+	case err := <-rig.fatal:
+		t.Fatalf("runtime fatal: %v", err)
+	default:
+	}
+	rig.assertNoPending(t)
+}

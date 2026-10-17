@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -118,7 +119,7 @@ func TestGeneratedDataEngineReloadWaitsForProjection(t *testing.T) {
 }
 
 // RR-20260926-10：本地删档（deletePersisted=true）只把 tombstone 写进 WAL。它投影之前重新加载
-// 不能从旧库“复活”实体；投影之后加载得到 not found。走正式生成 Entity、Runtime 删档准入与真实 Mongo。
+// 不能从旧库“复活”实体；投影之后加载得到“删过档”（ErrEntityAggregateDeleted，D10）。走正式生成 Entity、Runtime 删档准入与真实 Mongo。
 func TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone(t *testing.T) {
 	ctx, client := reloadTestClient(t)
 	const base = 32000
@@ -142,8 +143,8 @@ func TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone(t *testing.T)
 		t.Fatalf("reload before tombstone projection resurrected entity: value=%v err=%v", value, err)
 	}
 	pause.resume()
-	if _, err := h.runtime.Repository.LoadEntity(ctx, ids[0], EntityKindTrader); !errors.Is(err, engine.ErrEntityAggregateNotFound) {
-		t.Fatalf("reload after tombstone projection=%v, want ErrEntityAggregateNotFound", err)
+	if _, err := h.runtime.Repository.LoadEntity(ctx, ids[0], EntityKindTrader); !errors.Is(err, engine.ErrEntityAggregateDeleted) {
+		t.Fatalf("reload after tombstone projection=%v, want ErrEntityAggregateDeleted", err)
 	}
 	if h.access.Manager().Get(ids[0]) != nil {
 		t.Fatal("deleted entity published after reload")
@@ -159,87 +160,151 @@ func TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone(t *testing.T)
 	h.close(t, nil)
 }
 
-// 删档后同 ID 重建：Destroy(deletePersisted=true) 留下墓碑后，冷加载报 not found，
-// 生成 lifecycle 的 GetOrCreate 因此对同一 ID 再 Create。重建实体的写入必须越过墓碑落库
-// （不得 ErrProjectionConflict / fence），冷重启后加载出重建后的数据与版本。
-// 走正式生成 Entity、Runtime 删档准入、文件 WAL 与真实 Mongo；strict 与 async 各跑一次。
+// 删档后同 ID 重建（D10，维护者 2026-10-17 决定方案 B，范围只守 GetOrCreate）。
+// Destroy(deletePersisted=true) 留下墓碑后，冷加载得到“删过档”（不是 not found）：生成 lifecycle 的 GetOrCreate
+// 不再去创建，发往这个 ID 的 Nest 请求回复 entity_deleted（码 3）；什么也不进 WAL，墓碑不变，投影器不 fence，
+// 进程继续服务其他实体；冷重启照常起来，删过档的 ID 仍然不可用。
+// 直接 Create（handler 内或 lifecycle Create）不读存储，不在本用例的保护范围内：它必须用 id-gen 发的新 ID，
+// 复用删过档的 ID 仍会在投影时版本冲突、fence（KNOWN-LIMITS“删档后同 ID 重建”的约束与人工处置）。
+// 走正式生成 Entity、Runtime 删档准入、文件 WAL 与真实 Mongo；strict / async / pipelined 各跑一次。
 //
-// 2026-10-16 实测为已确认缺陷（KNOWN-LIMITS“删档后同 ID 重建”，DESIGN-TODO D10）：重建后的首个 Put 是
-// expected=0 next=1，投影撞上墓碑得到 ErrProjectionConflict，进程 fence，冷重启的启动投影恢复再次失败。
-// 修法待维护者决定，默认跳过；ROOST_GENERATED_KNOWN_RED=1 时运行以复现。
+// 修前（bdc9003a）同一流程：重建后的首个 Put expected=0 next=1 撞上墓碑，ErrProjectionConflict、投影器 fence，
+// 冷重启的启动投影恢复再次失败（KNOWN-LIMITS 原登记、DESIGN-TODO D10）。
 func TestGeneratedDataEngineRecreateAfterDeleteSameID(t *testing.T) {
 	ctx, client := reloadTestClient(t)
-	if os.Getenv("ROOST_GENERATED_KNOWN_RED") != "1" {
-		t.Skip("known defect awaiting maintainer decision (DESIGN-TODO D10); set ROOST_GENERATED_KNOWN_RED=1 to reproduce")
-	}
-	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityStrict, nest.DurabilityAsync} {
+	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityStrict, nest.DurabilityAsync, nest.DurabilityPipelined} {
 		t.Run(policy.String(), func(t *testing.T) {
 			base := 33000 + int(policy)*10
-			clearTraderDocuments(t, ctx, client, base, 1)
+			clearTraderDocuments(t, ctx, client, base, 3)
 			root := t.TempDir()
 			h := newTradeFixture(t, ctx, client, root, "recreate", policy, false)
-			id := h.seed(t, base, 1)[0]
+			ids := h.seed(t, base, 2)
+			id, other := ids[0], ids[1]
 			if err := h.request("trade_buy", id); err != nil {
 				t.Fatal(err)
 			}
 			h.noFatal(t, h.runtime.Flush(ctx), "first life")
 			first := h.mongoState(t, id)
-			t.Logf("first life persisted: %+v", first)
 
 			if err := h.access.Destroy(ctx, h.access.Manager().Get(id), entity.DestroyReasonCommon, true); err != nil {
 				t.Fatalf("delete %d: %v", id, err)
 			}
 			h.noFatal(t, h.runtime.Flush(ctx), "delete")
-			var tombstone struct {
-				Deleted bool   `bson:"_deleted"`
-				Version uint64 `bson:"_version"`
-			}
-			if err := client.Database(h.database).Collection("trade_wallets").FindOne(ctx, bson.M{"_id": id}, &tombstone); err != nil {
-				t.Fatal(err)
-			}
-			if !tombstone.Deleted || tombstone.Version <= first.Version {
+			tombstone := readTombstone(t, ctx, h, id)
+			if !tombstone.Deleted || tombstone.Version <= first.Version || tombstone.DeletedAt.IsZero() || tombstone.LastTx == "" {
 				t.Fatalf("tombstone=%+v first=%+v", tombstone, first)
 			}
 			t.Logf("tombstone: %+v", tombstone)
-			if _, err := h.runtime.Repository.LoadEntity(ctx, id, EntityKindTrader); !errors.Is(err, engine.ErrEntityAggregateNotFound) {
-				t.Fatalf("load deleted=%v, want ErrEntityAggregateNotFound", err)
+
+			// 冷加载：删过档是独立哨兵，不满足 not found（“不存在就创建”的代码不能把它当成可创建）。
+			_, err := h.runtime.Repository.LoadEntity(ctx, id, EntityKindTrader)
+			if !errors.Is(err, engine.ErrEntityAggregateDeleted) || !errors.Is(err, entity.ErrAuthorityEntityDeleted) || errors.Is(err, engine.ErrEntityAggregateNotFound) {
+				t.Fatalf("load deleted=%v, want ErrEntityAggregateDeleted only", err)
+			}
+			admitted := h.wal.Stats().Admitted
+
+			// 生成 lifecycle 的 GetOrCreate（同一判断：只有确切的 not found 才创建）不重建。
+			if _, created, err := lifecycleGetOrCreate(ctx, h.access, id); created || !errors.Is(err, entity.ErrAuthorityEntityDeleted) {
+				t.Fatalf("GetOrCreate deleted: created=%v err=%v, want ErrAuthorityEntityDeleted", created, err)
+			}
+			// 发往删过档 ID 的 Nest 请求：冷加载得到删过档，客户端码 entity_deleted。
+			err = h.request("trade_buy", id)
+			if !errors.Is(err, entity.ErrAuthorityEntityDeleted) {
+				t.Fatalf("request to a deleted id: %v, want ErrAuthorityEntityDeleted", err)
+			}
+			if code, _ := errcode.ClientError(err); code != errcode.CodeEntityDeleted {
+				t.Fatalf("client code=%d, want CodeEntityDeleted=%d (err=%v)", code, errcode.CodeEntityDeleted, err)
+			}
+			if h.access.Manager().Get(id) != nil {
+				t.Fatal("a deleted id was published again")
+			}
+			if delta := h.wal.Stats().Admitted - admitted; delta != 0 {
+				t.Fatalf("refused recreate handed %d record(s) to the WAL", delta)
 			}
 
-			// 与生成 lifecycle.GetOrCreate 相同：确切的 not found 之后 Create 同一 ID。
-			if _, err := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindTrader, Id: id}); err != nil {
-				t.Fatalf("recreate %d: %v", id, err)
+			// 进程继续服务其他实体：已有实体照常写、新 ID 照常创建，没有 fence。
+			if err := h.request("trade_buy", other); err != nil {
+				t.Fatalf("other entity after the failed recreate: %v", err)
 			}
-			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_seed"), id, nil); err != nil {
-				t.Fatalf("recreate seed: %v", err)
+			fresh, err := entity.BuildEntityID(int64(base+2), EntityKindTrader)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if err := h.request("trade_buy", id); err != nil {
-				t.Fatalf("recreate buy: %v", err)
+			if _, created, err := lifecycleGetOrCreate(ctx, h.access, fresh); err != nil || !created {
+				t.Fatalf("GetOrCreate of a never-used id: created=%v err=%v", created, err)
 			}
-			h.noFatal(t, h.runtime.Flush(ctx), "recreate")
-			memory, stored := h.memoryState(t, id), h.mongoState(t, id)
-			want := tradeState{Coins: 10000 - 5, Items: 1000 + 1}
-			if memory.Coins != want.Coins || memory.Items != want.Items || stored.Coins != want.Coins || stored.Items != want.Items ||
-				stored.Version != memory.Version || stored.Version <= tombstone.Version {
-				t.Fatalf("recreated memory=%+v mongo=%+v tombstone=%+v", memory, stored, tombstone)
+			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_seed"), fresh, nil); err != nil {
+				t.Fatal(err)
 			}
+			h.noFatal(t, h.runtime.Flush(ctx), "after the failed recreate")
+			if h.scheduler.FenceError() != nil {
+				t.Fatalf("engine fenced: %v", h.scheduler.FenceError())
+			}
+			if got := readTombstone(t, ctx, h, id); got != tombstone {
+				t.Fatalf("the tombstone changed: %+v, was %+v", got, tombstone)
+			}
+			otherState, freshState := h.mongoState(t, other), h.mongoState(t, fresh)
 			h.close(t, nil)
 
-			// 冷重启：新 Runtime 打开同一 WAL 目录与库，冷加载重建后的聚合。
+			// 冷重启：新 Runtime 打开同一 WAL 目录与库，启动投影恢复不遇到冲突记录。删过档的 ID 仍然不可用，其他实体照常加载与写。
 			restarted := newTradeFixture(t, ctx, client, root, "recreate", policy, false)
-			if _, err := restarted.runtime.Repository.LoadEntity(ctx, id, EntityKindTrader); err != nil {
-				t.Fatalf("reload recreated: %v", err)
+			if _, err := restarted.runtime.Repository.LoadEntity(ctx, id, EntityKindTrader); !errors.Is(err, engine.ErrEntityAggregateDeleted) {
+				t.Fatalf("reload deleted after restart: %v", err)
 			}
-			if got := restarted.memoryState(t, id); got != stored {
-				t.Fatalf("reloaded=%+v want=%+v", got, stored)
+			if _, _, err := lifecycleGetOrCreate(ctx, restarted.access, id); !errors.Is(err, entity.ErrAuthorityEntityDeleted) {
+				t.Fatalf("GetOrCreate deleted after restart: %v", err)
 			}
-			if err := restarted.request("trade_buy", id); err != nil {
+			for _, live := range []struct {
+				id   int64
+				want tradeState
+			}{{other, otherState}, {fresh, freshState}} {
+				if _, err := restarted.runtime.Repository.LoadEntity(ctx, live.id, EntityKindTrader); err != nil {
+					t.Fatalf("reload %d after restart: %v", live.id, err)
+				}
+				if got := restarted.memoryState(t, live.id); got != live.want {
+					t.Fatalf("reloaded %d=%+v want=%+v", live.id, got, live.want)
+				}
+			}
+			if err := restarted.request("trade_buy", other); err != nil {
 				t.Fatal(err)
 			}
 			restarted.noFatal(t, restarted.runtime.Flush(ctx), "after restart")
-			if got := restarted.mongoState(t, id); got.Coins != want.Coins-5 || got.Version != stored.Version+1 {
-				t.Fatalf("after restart mongo=%+v stored=%+v", got, stored)
+			if got := restarted.mongoState(t, other); got.Coins != otherState.Coins-5 || got.Version != otherState.Version+1 {
+				t.Fatalf("after restart mongo=%+v before=%+v", got, otherState)
 			}
 			restarted.close(t, nil)
 		})
 	}
+}
+
+// storedTombstone 是墓碑保留的元数据（D10 审计结论见 DESIGN-TODO）。
+type storedTombstone struct {
+	Deleted   bool      `bson:"_deleted"`
+	DeletedAt time.Time `bson:"_deleted_at"`
+	Version   uint64    `bson:"_version"`
+	LastTx    string    `bson:"_last_tx"`
+	Coins     int64     `bson:"coins"`
+}
+
+func readTombstone(t *testing.T, ctx context.Context, h *tradeFixture, id int64) storedTombstone {
+	t.Helper()
+	var tombstone storedTombstone
+	if err := h.client.Database(h.database).Collection("trade_wallets").FindOne(ctx, bson.M{"_id": id}, &tombstone); err != nil {
+		t.Fatal(err)
+	}
+	return tombstone
+}
+
+// lifecycleGetOrCreate 与生成 lifecycle 的 GetOrCreate 同一判断（codegen/internal/roost/add_workflow.go）：
+// 只有确切的 not found 才创建；删过档、读失败原样返回。
+func lifecycleGetOrCreate(ctx context.Context, access *entity.ManagerAccess, id int64) (entity.IThreadSafeEntity, bool, error) {
+	value, err := access.Get(ctx, id, entity.MustEntityCategoryOfKind(EntityKindTrader))
+	if err == nil && value != nil {
+		return value, false, nil
+	}
+	if err != nil && !errors.Is(err, engine.ErrEntityAggregateNotFound) {
+		return nil, false, err
+	}
+	value, err = access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindTrader, Id: id})
+	return value, err == nil, err
 }

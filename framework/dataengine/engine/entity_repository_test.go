@@ -145,10 +145,19 @@ func (store *repositoryStore) ReadConsistent(ctx context.Context, read func(cont
 	}
 	return err
 }
+
+// Load 与 MongoStore 同一约定：默认不交出墓碑，spec.IncludeDeleted 时交出。
 func (store *repositoryStore) Load(_ context.Context, spec coredata.LoadSpec) ([]coredata.RawDocument, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return append([]coredata.RawDocument(nil), store.docs[spec.Resource]...), nil
+	var docs []coredata.RawDocument
+	for _, doc := range store.docs[spec.Resource] {
+		if doc.Deleted && !spec.IncludeDeleted {
+			continue
+		}
+		docs = append(docs, doc)
+	}
+	return docs, nil
 }
 func (store *repositoryStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec, consume func(coredata.RawDocument) error) error {
 	docs, _ := store.Load(ctx, spec)
@@ -247,25 +256,31 @@ func TestEntityRepositoryRejectsTombstone(t *testing.T) {
 	}
 }
 
-func TestEntityRepositoryTreatsUniformAbsenceAsNotFound(t *testing.T) {
+// 全部缺失与全部墓碑是两个哨兵（D10 方案 B）：从未创建可以创建（not found），删过档这个 ID 不可再用（deleted）。
+// 删过档刻意不满足 not found：“不存在就创建”的代码（生成 GetOrCreate）不能把它当成可创建。
+func TestEntityRepositorySeparatesAbsentFromDeleted(t *testing.T) {
 	ensureDataEngineRepositoryEntity()
 	id, _ := entity.BuildEntityID(995, dataEngineRepositoryKind)
+	profile := repositoryRaw(t, "repository_profile", id, 2)
+	inventory := repositoryRaw(t, "repository_inventory", id, 2)
+	profile.Deleted, inventory.Deleted = true, true
 	for _, test := range []struct {
 		name string
 		docs map[string][]coredata.RawDocument
+		want func(error) bool
 	}{
-		{name: "all missing", docs: map[string][]coredata.RawDocument{}},
-		{name: "all tombstones", docs: func() map[string][]coredata.RawDocument {
-			profile := repositoryRaw(t, "repository_profile", id, 2)
-			inventory := repositoryRaw(t, "repository_inventory", id, 2)
-			profile.Deleted, inventory.Deleted = true, true
-			return map[string][]coredata.RawDocument{"repository_profile": {profile}, "repository_inventory": {inventory}}
-		}()},
+		{name: "all missing", docs: map[string][]coredata.RawDocument{}, want: func(err error) bool {
+			return errors.Is(err, ErrEntityAggregateNotFound) && errors.Is(err, entity.ErrAuthorityEntityNotFound) && !errors.Is(err, entity.ErrAuthorityEntityDeleted)
+		}},
+		{name: "all tombstones", docs: map[string][]coredata.RawDocument{"repository_profile": {profile}, "repository_inventory": {inventory}}, want: func(err error) bool {
+			return errors.Is(err, ErrEntityAggregateDeleted) && errors.Is(err, entity.ErrAuthorityEntityDeleted) &&
+				!errors.Is(err, ErrEntityAggregateNotFound) && !errors.Is(err, entity.ErrAuthorityEntityNotFound)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository, _ := NewEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, repositoryGate(true))
-			if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
-				t.Fatalf("err=%v, want not found", err)
+			if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !test.want(err) {
+				t.Fatalf("LoadEntity err=%v", err)
 			}
 		})
 	}
@@ -923,4 +938,35 @@ func TestEntityRepositoryRefusesEachCorruptAggregateShape(t *testing.T) {
 		_, err := repository.LoadEntity(ctx, id, dataEngineRemoteRepositoryKind)
 		expectCorrupt(t, err, "has no version envelope")
 	})
+}
+
+// remoteTombstoneStore 在 repositoryStore 之上报告 Remote 元数据墓碑（MongoStore → Remote 原子存储的替身）。
+type remoteTombstoneStore struct {
+	*repositoryStore
+	deleted map[int64]bool
+}
+
+func (store *remoteTombstoneStore) RemoteEntityDeleted(_ context.Context, id int64) (bool, error) {
+	return store.deleted[id], nil
+}
+
+// Remote 托管实体删档时数据文档被物理删除，墓碑只在 Remote 元数据里：全部缺失时还要查它，才能区分删过档与从未创建（D10）。
+// 本地实体不查（它的墓碑就在 DAO 文档里）。
+func TestEntityRepositoryReadsRemoteTombstoneForAbsentRemoteAggregate(t *testing.T) {
+	ensureDataEngineRemoteRepositoryEntity()
+	ensureDataEngineRepositoryEntity()
+	remote, _ := entity.BuildEntityID(996, dataEngineRemoteRepositoryKind)
+	never, _ := entity.BuildEntityID(997, dataEngineRemoteRepositoryKind)
+	local, _ := entity.BuildEntityID(998, dataEngineRepositoryKind)
+	store := &remoteTombstoneStore{repositoryStore: &repositoryStore{docs: map[string][]coredata.RawDocument{}}, deleted: map[int64]bool{remote: true, local: true}}
+	repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	if _, err := repository.LoadEntity(context.Background(), remote, dataEngineRemoteRepositoryKind); !errors.Is(err, ErrEntityAggregateDeleted) {
+		t.Fatalf("load remote tombstone err=%v, want deleted", err)
+	}
+	if _, err := repository.LoadEntity(context.Background(), never, dataEngineRemoteRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
+		t.Fatalf("load never-created remote id err=%v, want not found", err)
+	}
+	if _, err := repository.LoadEntity(context.Background(), local, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
+		t.Fatalf("local aggregate consulted the remote tombstone: %v", err)
+	}
 }

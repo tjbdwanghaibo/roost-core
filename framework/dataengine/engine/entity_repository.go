@@ -16,7 +16,11 @@ var (
 	// ErrEntityAggregateNotFound 同时满足 errors.Is(err, entity.ErrAuthorityEntityNotFound)：卸载后重载据此
 	// 立即向订阅者退回 remove，而不是当作可重试的读取失败。
 	ErrEntityAggregateNotFound error = aggregateNotFoundError{}
-	ErrEntityAggregateCorrupt        = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
+	// ErrEntityAggregateDeleted：聚合的全部 DAO 都只剩墓碑（删过档）。满足 errors.Is(err, entity.ErrAuthorityEntityDeleted)，
+	// 不满足 ErrEntityAggregateNotFound / entity.ErrAuthorityEntityNotFound：维护者 2026-10-17 决定 D10 方案 B，
+	// 删档后该 ID 不可再用，“不存在就创建”的代码遇到它不会去创建（理由见 entity.ErrAuthorityEntityDeleted）。
+	ErrEntityAggregateDeleted error = aggregateDeletedError{}
+	ErrEntityAggregateCorrupt       = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
 )
 
 type aggregateNotFoundError struct{}
@@ -27,6 +31,16 @@ func (aggregateNotFoundError) Error() string {
 
 func (aggregateNotFoundError) Is(target error) bool {
 	return target == entity.ErrAuthorityEntityNotFound
+}
+
+type aggregateDeletedError struct{}
+
+func (aggregateDeletedError) Error() string {
+	return "dataengine repository: entity aggregate was deleted (tombstones only); its id cannot be used again"
+}
+
+func (aggregateDeletedError) Is(target error) bool {
+	return target == entity.ErrAuthorityEntityDeleted
 }
 
 // RecoveryGate 报告启动恢复是否完成；未完成时仓库拒绝冷加载。实现若还提供
@@ -183,6 +197,11 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 	return flight.value, flight.err
 }
 
+// remoteTombstoneReader 由 Store 可选实现（MongoStore 转给 Remote 原子存储）：报告 Remote 托管实体是否删过档。
+type remoteTombstoneReader interface {
+	RemoteEntityDeleted(ctx context.Context, id int64) (bool, error)
+}
+
 // loadedDAO 是一致性读取得到的一个 DAO 文档及其已解出的持久化 payload。
 type loadedDAO struct {
 	dao     entity.DaoInterface
@@ -284,8 +303,8 @@ func hydrateAggregate(loaded []loadedDAO, fullID int64) (map[string]entity.DaoIn
 	return daos, nil
 }
 
-// readAggregate 在一次一致性读里读取聚合的全部 DAO 文档：全部缺失或全部墓碑视为不存在，
-// 部分存在视为损坏；同时取版本最高的 Remote 版本信封。
+// readAggregate 在一次一致性读里读取聚合的全部 DAO 文档：全部缺失为 ErrEntityAggregateNotFound，全部墓碑为
+// ErrEntityAggregateDeleted，部分存在视为损坏；同时取版本最高的 Remote 版本信封。
 func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
 	var loaded []loadedDAO
 	var remoteVector entity.RemoteVersionVector
@@ -312,8 +331,10 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 				}
 			}
 			scope := coredata.ResolveDatabaseScope(dao)
+			// 墓碑也要读到：全部墓碑是“删过档”而不是“不存在”（D10），活文档与墓碑混在一起是损坏。
 			docs, err := repository.store.Load(readCtx, coredata.LoadSpec{
 				Database: dao.DbName(), Scope: scope, Resource: dao.CollName(), Filter: map[string]any{"_id": fullID}, BatchSize: 1,
+				IncludeDeleted: true,
 			})
 			if err != nil {
 				return fmt.Errorf("dataengine repository: load %s/%d: %w", dao.CollName(), fullID, err)
@@ -343,13 +364,26 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			}
 		}
 		total := len(builder.DaoBuilders)
+		if missing == total && entity.GetEntityKindRemotePolicy(builder.Kind).RemoteManaged() {
+			// Remote 托管实体删档时数据文档被物理删除，墓碑只在 Remote 元数据里（_remote_entity_meta._deleted）；
+			// 同一次一致性读里查它，删过档与从未创建才能区分（D10）。
+			if reader, ok := repository.store.(remoteTombstoneReader); ok {
+				deleted, err := reader.RemoteEntityDeleted(readCtx, fullID)
+				if err != nil {
+					return fmt.Errorf("dataengine repository: remote tombstone of %d: %w", fullID, err)
+				}
+				if deleted {
+					return fmt.Errorf("%w: entity=%d state=deleted remote=true", ErrEntityAggregateDeleted, fullID)
+				}
+			}
+		}
 		switch {
-		// 两种“不存在”对调用方是同一个哨兵（客户端同一个码 errcode.CodeEntityNotFound）；
-		// 只在错误文本里区分，便于运维判断是从未创建还是已删档。
+		// 从未创建与删过档是两个哨兵（D10 方案 B）：前者可以创建（客户端码 entity_not_found），
+		// 后者这个 ID 不可再用（entity_deleted）。错误文本仍带 state，便于运维直接看出是哪一种。
 		case missing == total:
 			return fmt.Errorf("%w: entity=%d state=absent", ErrEntityAggregateNotFound, fullID)
 		case tombstones == total:
-			return fmt.Errorf("%w: entity=%d state=deleted", ErrEntityAggregateNotFound, fullID)
+			return fmt.Errorf("%w: entity=%d state=deleted", ErrEntityAggregateDeleted, fullID)
 		case len(loaded) != total:
 			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, len(loaded), missing, tombstones)
 		}

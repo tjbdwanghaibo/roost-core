@@ -588,3 +588,53 @@ func TestColdTargetMissingInAuthorityAnswersEntityNotFoundCode(t *testing.T) {
 		t.Fatal("the absent target was never cold-loaded; the test did not reach the path it guards")
 	}
 }
+
+// deletedLoader 按 AggregateLoader 契约报告“这个 ID 删过档”（DataEngine 的 ErrEntityAggregateDeleted 也是这样满足
+// entity.ErrAuthorityEntityDeleted 的）。
+type deletedLoader struct{ calls atomic.Int32 }
+
+func (l *deletedLoader) LoadEntity(_ context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	l.calls.Add(1)
+	return nil, fmt.Errorf("%w: entity=%d", entity.ErrAuthorityEntityDeleted, id)
+}
+
+// 删过档的声明目标（D10 方案 B）：回复带稳定码 errcode.CodeEntityDeleted（不是 entity_not_found：重新 EnterGame 不会恢复），
+// 原错误仍可 errors.Is 判别、且不满足 not found；handler 不执行。
+func TestColdTargetDeletedInAuthorityAnswersEntityDeletedCode(t *testing.T) {
+	manager := entity.NewEntityManager()
+	access := entity.NewManagerAccess(manager)
+	loader := &deletedLoader{}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 8}))
+	ran := atomic.Int32{}
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("buy_deleted"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		ran.Add(1)
+		return nil, nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	startColdTargetEngine(t, mgr)
+
+	deleted := mustBuildCastID(t, 8711, entity.EntityCategory(1), nestLocalKind)
+	other := mustBuildCastID(t, 8712, entity.EntityCategory(1), nestLocalKind)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	for name, request := range map[string]func() error{
+		"single": func() error { _, err := mgr.Request(ctx, NewHandlerName("buy_deleted"), deleted, nil); return err },
+		"multi": func() error {
+			_, err := mgr.RequestMulti(ctx, NewHandlerName("buy_deleted"), []int64{deleted, other}, nil)
+			return err
+		},
+	} {
+		err := request()
+		if code, reason := errcode.ClientError(err); code != errcode.CodeEntityDeleted {
+			t.Errorf("%s: ClientError = (%d, %q), want CodeEntityDeleted=%d; err=%v", name, code, reason, errcode.CodeEntityDeleted, err)
+		}
+		if !errors.Is(err, entity.ErrAuthorityEntityDeleted) || errors.Is(err, entity.ErrAuthorityEntityNotFound) {
+			t.Errorf("%s: want ErrAuthorityEntityDeleted and not not-found: %v", name, err)
+		}
+	}
+	if ran.Load() != 0 || loader.calls.Load() == 0 {
+		t.Fatalf("handler ran %d time(s), loader calls %d", ran.Load(), loader.calls.Load())
+	}
+}

@@ -63,6 +63,22 @@ func (s *MongoCommitter) readAuthority(ctx context.Context, id int64) (mongoAuth
 	return d, err
 }
 
+// RemoteEntityDeleted 报告实体在 Remote 元数据里是否为墓碑（最近一次提交是删除）。删档物理删除数据文档，
+// 这是“删过档”唯一留下的记录；DataEngine 聚合仓库据此区分删过档与从未创建（D10）。没有元数据返回 false。
+func (s *MongoCommitter) RemoteEntityDeleted(ctx context.Context, id int64) (bool, error) {
+	if s == nil || s.mongo == nil || s.database == "" {
+		return false, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	var d struct {
+		Deleted bool `bson:"_deleted"`
+	}
+	err := s.controlDB().Collection(remoteMetaCollection).FindOne(ctx, bson.M{"_id": id}, &d)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		return false, nil
+	}
+	return d.Deleted, err
+}
+
 func (s *MongoCommitter) GetOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
 	d, err := s.readAuthority(ctx, id)
 	if errors.Is(err, fmongo.ErrNotFound) {

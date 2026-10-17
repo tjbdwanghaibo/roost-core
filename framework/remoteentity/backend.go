@@ -84,6 +84,18 @@ func (b *Backend) ApplyRemoteCommitsInTransaction(ctx context.Context, commits [
 	return store.ApplyRemoteCommitsInTransaction(ctx, commits)
 }
 
+// RemoteEntityDeleted 转发存储的删档墓碑查询（MongoCommitter 读 Remote 元数据）；存储不提供时返回 false。
+// DataEngine 聚合仓库经 MongoStore 用它区分 Remote 实体删过档与从未创建（D10）。
+func (b *Backend) RemoteEntityDeleted(ctx context.Context, id int64) (bool, error) {
+	reader, ok := b.storage.(interface {
+		RemoteEntityDeleted(context.Context, int64) (bool, error)
+	})
+	if !ok {
+		return false, nil
+	}
+	return reader.RemoteEntityDeleted(ctx, id)
+}
+
 var _ entity.IRemoteEntityBackend = (*Backend)(nil)
 var _ AtomicCommitStore = (*Backend)(nil)
 

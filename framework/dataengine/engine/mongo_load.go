@@ -35,7 +35,8 @@ func (store *MongoStore) Load(ctx context.Context, spec coredata.LoadSpec) ([]co
 	return docs, err
 }
 
-// StreamLoad 流式读取未删除的文档；集合支持流式游标时逐条交给 consume，否则整批读出后逐条交付。
+// StreamLoad 流式读取未删除的文档（spec.IncludeDeleted 时连墓碑一起）；集合支持流式游标时逐条交给 consume，
+// 否则整批读出后逐条交付。
 func (store *MongoStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec, consume func(coredata.RawDocument) error) error {
 	if store == nil || store.client == nil {
 		return coredata.ErrStoreRequired
@@ -49,6 +50,12 @@ func (store *MongoStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec,
 	key := coredata.DocumentKey{Database: spec.Database, Scope: spec.Scope, Resource: spec.Resource}
 	collection := store.collection(key)
 	filter := activeLoadFilter(spec.Filter)
+	if spec.IncludeDeleted {
+		filter = bson.M(spec.Filter)
+		if filter == nil {
+			filter = bson.M{}
+		}
+	}
 	consumeRaw := func(raw []byte) error {
 		doc, err := decodeRawDocument(key, bson.Raw(raw))
 		if err != nil {
@@ -132,6 +139,22 @@ func persistedPayload(doc coredata.RawDocument) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 	return append([]byte(nil), envelope.Data...), metadata.Schema, nil
+}
+
+// RemoteEntityDeleted 报告 Remote 托管实体是否删过档：Remote 删档物理删除数据文档，墓碑只在 Remote 元数据里，
+// 由绑定的 Remote 原子存储回答（D10）。没有绑定 Remote 投影、或存储不提供该查询时返回 false。
+// 可在 ReadConsistent 的回调里用同一个会话 ctx 调用（Remote 投影同样在本 Store 的事务里写元数据）。
+func (store *MongoStore) RemoteEntityDeleted(ctx context.Context, id int64) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	reader, ok := store.remoteStore.(interface {
+		RemoteEntityDeleted(context.Context, int64) (bool, error)
+	})
+	if !ok {
+		return false, nil
+	}
+	return reader.RemoteEntityDeleted(ctx, id)
 }
 
 var _ coredata.Store = (*MongoStore)(nil)

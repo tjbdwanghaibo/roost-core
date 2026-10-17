@@ -53,6 +53,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	{{PERSISTENCE_IMPORT}}
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	%s %q
 )
@@ -94,7 +95,7 @@ func (lifecycle *%s) Get(ctx context.Context, uniqueID int64) (*%s.%s, error) {
 	}
 	value, err := lifecycle.access.Get(ctx, fullID, entity.MustEntityCategoryOfKind(%s.EntityKind%s))
 	if err != nil {
-		return nil, err
+		return nil, deletedError(err)
 	}
 	if value == nil {
 		return nil, Err%sNotFound
@@ -113,6 +114,10 @@ func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Create does not read the store: uniqueID must be a fresh id from the id
+	// generator, never the id of a deleted Entity (its tombstone makes the
+	// first write a projection conflict that fences the process). Use
+	// GetOrCreate when the id may already have a record.
 	value, err := lifecycle.access.Create(&entity.EntityCreateParam{
 		IsCreate: true,
 		UniqueID: uniqueID,
@@ -130,7 +135,10 @@ func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error)
 }
 
 // GetOrCreate returns the existing Entity or creates it when persistence has
-// no record. entity.ErrEntityRemoved means the previous instance with this ID
+// no record. An Entity that was deleted (only tombstones left) is NOT
+// created again: its id cannot be used again, and GetOrCreate returns an
+// error carrying errcode.ErrEntityDeleted (client code entity_deleted).
+// entity.ErrEntityRemoved means the previous instance with this ID
 // is still finishing its removal (a revoked in-transaction create or a
 // Destroy); it is transient, so the lookup is retried a bounded number of
 // times before the error is returned. Inside a Nest handler the framework
@@ -163,6 +171,18 @@ func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.En
 	}
 	return lifecycle.access.Destroy(ctx, value, reason, deletePersisted)
 }
+
+// deletedError gives a deleted Entity its stable client code
+// (errcode.ErrEntityDeleted); the cause stays on the chain for errors.Is.
+func deletedError(err error) error {
+	if errors.Is(err, entity.ErrAuthorityEntityDeleted) {
+		var coded *errcode.IntError
+		if !errors.As(err, &coded) {
+			return errcode.Wrap(errcode.ErrEntityDeleted, err)
+		}
+	}
+	return err
+}
 `, entityName, manifest.Project.Module+"/game/entities/"+entityName,
 		toPascal(entityName), entityName, toPascal(entityName)+"Lifecycle", toPascal(entityName), toPascal(entityName)+"Lifecycle",
 		toPascal(entityName)+"Lifecycle", toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName)+"Lifecycle",
@@ -179,6 +199,8 @@ func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.En
 	// game template added World next to Player).
 	body = strings.Replace(body, "// FromRegistry is the normal application entry point.", "// "+toPascal(entityName)+"FromRegistry is the normal application entry point.", 1)
 	body = strings.Replace(body, "func FromRegistry(registry *app.Registry)", "func "+toPascal(entityName)+"FromRegistry(registry *app.Registry)", 1)
+	// 同理，删档错误的辅助函数也带 Entity 名（deletedPlayerError），同包多个 lifecycle 文件不重名。
+	body = strings.ReplaceAll(body, "deletedError", "deleted"+toPascal(entityName)+"Error")
 	body = strings.ReplaceAll(body, "{{PERSISTENCE_NOT_FOUND}}", persistenceAlias+".ErrEntityAggregateNotFound")
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
@@ -444,7 +466,9 @@ import (
 // sent before this one answers errcode.CodeEntityNotFound. GetOrCreate only
 // creates when persistence confirms the Entity is absent; a database, decode
 // or timeout error is returned, never mistaken for "absent". A deleted Entity
-// (only tombstones left) also reads as absent.
+// (only tombstones left) is not created again: its id cannot be used again,
+// and the client gets errcode.CodeEntityDeleted (entity_deleted), which a
+// retry or a new login will not change.
 //
 // GetOrCreate is safe to race and to retry: two logins of the same new player
 // both end holding the one Entity. A failure becomes a response; only

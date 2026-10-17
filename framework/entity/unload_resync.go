@@ -36,6 +36,14 @@ import (
 // DataEngine 的 ErrEntityAggregateNotFound 满足它）。卸载后重载据此立即退回 remove，不做重试。
 var ErrAuthorityEntityNotFound = errors.New("entity: entity does not exist in its authority")
 
+// ErrAuthorityEntityDeleted 由 AggregateLoader 报告“这个 ID 在权威里删过档（全部只剩墓碑）”
+// （DataEngine 的 ErrEntityAggregateDeleted 满足它）。维护者 2026-10-17 决定 D10 方案 B（范围只守 GetOrCreate）：
+// 删档后该 ID 不可再用，冷加载明确失败、生成 GetOrCreate 不重建。直接 Create 不读存储，不受这里保护：
+// 它必须使用 id-gen 发的新 ID。它刻意不满足 errors.Is(err, ErrAuthorityEntityNotFound)：“不存在就创建”的代码
+// （生成 lifecycle 的 GetOrCreate、业务自写的同类逻辑）遇到删过档的 ID 不会去创建，而是把错误交给调用方。
+// 对订阅者它与“不存在”相同：卸载后重载据此立即退回 remove。
+var ErrAuthorityEntityDeleted = errors.New("entity: entity was deleted in its authority; its id cannot be used again")
+
 // UnloadedSubjectSync 是卸载后重载需要的 Sync 能力，entitysync.Manager 实现它。
 type UnloadedSubjectSync interface {
 	// SubjectAwaitsReload：subject 已登记、未退役、内容状态已关闭（实体被卸载），且仍有持有或等待该对象的订阅者。
@@ -311,7 +319,7 @@ func (r *unloadResync) reloadOnce(id int64) (resyncOutcome, error) {
 	}
 	value, err := r.access.Get(ctx, id, EntityCategoryNone)
 	switch {
-	case errors.Is(err, ErrAuthorityEntityNotFound):
+	case errors.Is(err, ErrAuthorityEntityNotFound), errors.Is(err, ErrAuthorityEntityDeleted):
 		return resyncAbsent, err
 	case err != nil:
 		return resyncRetry, err

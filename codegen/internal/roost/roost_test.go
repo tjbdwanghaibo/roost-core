@@ -619,8 +619,10 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
 		"game/controllers/player/enter_game.go":    {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
 		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
-		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3"},
-		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
+		"game/lifecycle/player.go": {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3",
+			// D10 方案 B（只守 GetOrCreate）：删过档的 ID 不再创建，Get 给稳定码 entity_deleted。
+			"func deletedPlayerError(err error) error", "errcode.Wrap(errcode.ErrEntityDeleted, err)", "return nil, deletedPlayerError(err)"},
+		"protocol/player_bind/bind_gen.go": {"RegisterRenamePlayer"},
 	}
 	for path, fragments := range checks {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))

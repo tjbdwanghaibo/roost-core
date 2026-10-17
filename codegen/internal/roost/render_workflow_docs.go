@@ -291,7 +291,8 @@ PlayerFromRegistry 获取实例级 Entity runtime；普通玩法请求只走 Sen
 game/controllers/player/enter_game.go 对 context.PlayerID 调 GetOrCreate。客户端第一条请求先发 EnterGame；
 从未登录的玩家直接发 RenamePlayer 会收到稳定码 entity_not_found（errcode.CodeEntityNotFound = 2，Nest
 冷加载在 Data Engine 里找不到该 Entity），服务端不按 ERROR 记录，客户端重新 EnterGame 即可。已删档（DAO
-文档只剩墓碑）与从未创建在客户端看来是同一个码。doctor 的 workflow:login 检查这一步。
+文档只剩墓碑）的玩家这个 ID 不可再用：玩法请求与 EnterGame 都回复 entity_deleted（errcode.CodeEntityDeleted
+= 3），GetOrCreate 不会重建，客户端不要重试或自动重新登录。doctor 的 workflow:login 检查这一步。
 
 ## 5. 接入真实网络
 
@@ -333,7 +334,9 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 
 - <Entity>FromRegistry（如 PlayerFromRegistry）：从当前 App 实例的 entity.runtime 获取 ManagerAccess，避免跨实例全局状态；每个 Entity 一个，同包不重名。
 - Get：构造完整 EntityID，并通过 Data Engine loader 做 singleflight 冷加载。
-- Create：仅创建不存在的聚合；并发创建由 EntityManager 的 ErrEntityExists 收敛。
+- Create：仅创建不存在的聚合；并发创建由 EntityManager 的 ErrEntityExists 收敛。Create 不读存储：uniqueID 必须是
+  id-gen 发的新 ID，不能复用删过档（或存了但没加载）的 ID——那样首个写入在投影时版本冲突、进程 fail-stop。ID 可能
+  已有记录时用 GetOrCreate。
 - GetOrCreate：只在“持久化记录不存在”时创建；数据库、解码、超时错误不会误判成不存在。同 ID 的上一个实例正在撤销 / 销毁收尾（entity.ErrEntityRemoved）时最多再试两次（再 Get、再 Create）；在 Nest handler 内调用时，这个窗口按新建锁冲突返回 nest.ErrCreatedEntityLockConflict，由框架决定整条回滚后重排（可回滚事务）或不重排（memory），不在此重试。
 - Destroy：先执行 Entity 销毁生命周期；deletePersisted=true 是不可恢复业务动作，只用于明确删档。
 
@@ -350,7 +353,8 @@ handler 应调用生成 Sender，让 Nest 统一锁、事务、WAL、回滚和�
 ## 4. 故障语义
 
 GetOrCreate 不是数据库故障时的兜底创建；只有 dataengine.ErrEntityAggregateNotFound 或显式未找到才
-进入 Create。Create 与并发加载冲突时重新 Get。请求 context 取消必须向 load/destroy 传播。
+进入 Create。删过档（entity.ErrAuthorityEntityDeleted）不是“未找到”：删档后该 ID 不可再用，GetOrCreate 返回
+errcode.ErrEntityDeleted，不重建。Create 与并发加载冲突时重新 Get。请求 context 取消必须向 load/destroy 传播。
 
 上线前至少覆盖：首次创角、已有角色冷加载、并发登录同一角色、损坏快照、Mongo 超时、进程重启恢复、
 Destroy 保留存档和删档两种路径。
@@ -585,6 +589,7 @@ func renderTroubleshootingGuide() string {
 | endpoint 找不到 request 字段 | Nest 参数名与 Request 字段名不同 | 统一名字，或调整协议/handler 后重新 add endpoint |
 | protocol handler 包编译失败 | endpoint/controller 尚未创建 | 先 add endpoint，再 roost generate |
 | Entity not found / 客户端 code 2 entity_not_found | 玩家还没登录创角（Data Engine 里没有该 Entity）；或 kind/category 不匹配、loader 未装配 | 先调 EnterGame（roost add endpoint EnterGame --handler player --lifecycle Player）；仍出现时检查 Data Engine/Mongo，不吞掉加载错误 |
+| 客户端 code 3 entity_deleted | 这个玩家删过档（DAO 文档只剩墓碑），该 ID 不可再用 | 预期行为，不要重试或重新 EnterGame；产品需要时为该账号发新的玩家 ID |
 | DAO 字段不可访问 | 存储字段已私有化 | 使用生成的 Xxx()/SetXxx()/UpdateXxx()/RemoveXxx() |
 | generated stale | 定义已改但生成物未更新 | roost generate；提交声明与生成物 |
 | project sync 拒绝覆盖 | 同路径是业务文件或生成标识丢失 | 备份、比较所有权；不要伪造 DO NOT EDIT 标识 |

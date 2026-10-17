@@ -527,7 +527,7 @@ type projectorRecoveryGate struct{ *Projector }
 
 func (projectorRecoveryGate) Ready() bool { return true }
 
-// 本地删档只把 tombstone 写进 WAL：投影前重新加载必须等待，不能从旧库读出活实体；投影后加载得到 not found，且不发布到 Manager。
+// 本地删档只把 tombstone 写进 WAL：投影前重新加载必须等待，不能从旧库读出活实体；投影后加载得到 deleted（D10），且不发布到 Manager。
 func TestRepositoryReloadDoesNotResurrectPendingTombstone(t *testing.T) {
 	ensureDataEngineRepositoryEntity()
 	id, _ := entity.BuildEntityID(994, dataEngineRepositoryKind)
@@ -571,8 +571,8 @@ func TestRepositoryReloadDoesNotResurrectPendingTombstone(t *testing.T) {
 	if _, err := p.ReplayPass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := awaitChan(t, loaded, "the reload after tombstone projection"); !errors.Is(err, ErrEntityAggregateNotFound) {
-		t.Fatalf("reload after tombstone projection=%v, want ErrEntityAggregateNotFound", err)
+	if err := awaitChan(t, loaded, "the reload after tombstone projection"); !errors.Is(err, ErrEntityAggregateDeleted) {
+		t.Fatalf("reload after tombstone projection=%v, want ErrEntityAggregateDeleted", err)
 	}
 	if manager.Get(id) != nil {
 		t.Fatal("deleted entity published after reload")
