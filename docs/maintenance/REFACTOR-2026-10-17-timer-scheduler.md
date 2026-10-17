@@ -175,6 +175,8 @@ World 的钩子只写 DAO、不调用调度器，生成工程不可达；这是 
 
 **修法**：节点离开堆的两条路径（`RemoveTimer` 与 `fire`）共用 `emitLeave`：`announced` 为假先补 upsert，`persisted` 为真再发删除，每步后重读标志；`fire` 在出堆通知之后若节点已不是 `stateFiring`（钩子取消或改期了它）就不执行回调。原提交的做法是在 Tick 循环里对 `announced` 为假的节点先 upsert 再 `continue` 重新取堆顶，只覆盖第一种；本轮改为上面的统一规则，覆盖三种，状态、收尾顺序与“先落定再回调”不变，没有引入按 ID 推迟。
 
+**行为变化（维护者 2026-10-17 确认 A）**：出堆通知里被取消或改期的节点，本次回调不再执行——与 `RemoveTimer`“返回 true 之后不再触发”和 Tick 内改期“本次既不按旧期限也不按新期限触发”一致；未采用“回调照常执行一次、改注释”的方案 B。
+
 **矩阵补全**：新增 `TestHookOperationsOnEveryNodeStateItCanSee`（钩子调用位置，28 组）：状态 `popping`（出堆通知中）、`pending_fresh` / `pending_moved` / `pending_fired`（收尾已入堆未通知，分别来自 Tick 内新建、Tick 内改期堆中节点、触发中自改期，后者 × 返回值 0 / 负 / 正）、`popping_fresh`（未通知的新节点被钩子里的重入 Tick 触发、在补发的首次 upsert 里操作）× 改期 / 取消 / 重入 Tick / 不操作；两张表都加了 `checkEveryIDAnnounced`（每个分配过的 ID 都经过 upsert）。
 
 | 状态 \ 操作（在钩子里） | 改期 +1m | 取消 | Tick 到 +10m | 不操作 |
