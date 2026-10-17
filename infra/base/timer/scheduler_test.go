@@ -108,7 +108,10 @@ func TestFiringTimerOperationsComposeAcrossReentrantTicks(t *testing.T) {
 					change(time.Minute)
 				case "cancel_then_change":
 					cancel()
-					change(time.Minute)
+					// 取消即移出 byID：之后的改期找不到节点，返回 false 且不复活。
+					if s.ChangeTimer(self, time.Time{}, time.Minute) {
+						t.Fatal("reschedule after cancellation was accepted")
+					}
 				case "change_then_cancel":
 					change(time.Minute)
 					cancel()
@@ -714,8 +717,10 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 
 				s.Tick(tickAt)
 				checkSettled(t, s)
-				if !opOK {
-					t.Fatalf("%s during the tick returned false, want true (accepted)", r.op)
+				// 目标已不在 byID（已取消、本轮已触发结束、从未登记）时返回 false，与 Tick 外一致。
+				wantOK := r.op == "none" || (r.state != "cancelled" && r.state != "done" && r.state != "unknown")
+				if opOK != wantOK {
+					t.Fatalf("%s during the tick returned %v, want %v", r.op, opOK, wantOK)
 				}
 				if got := fires[target]; target != outer && got != r.fired {
 					t.Fatalf("target fired %d times in the tick, want %d", got, r.fired)

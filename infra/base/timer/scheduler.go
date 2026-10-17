@@ -246,15 +246,15 @@ func (s *Scheduler) ReportUnhandledTypes() []int32 {
 //
 // 取消在调用当下生效：仍在堆里的（包括本次 Tick 也已到期、还没轮到的）立即出堆并发删除；
 // 正在触发的回调节点不再按返回间隔或显式改期放回（出堆时已发过删除）；本次 Tick 里新建或改期、
-// 等待收尾放回的节点直接移除，不再放回。Tick 期间对已经不存在的 ID（本轮已触发结束、已取消）
-// 仍返回 true，表示“已接受”，结果同样是它不再触发；Tick 外返回 false。
+// 等待收尾放回的节点直接移除，不再放回。对已经不存在的 ID（本轮已触发结束、已取消、从未登记）
+// 返回 false，Tick 内外一致：byID 持有全部活节点，“不存在”可以当下准确判断。
 func (s *Scheduler) RemoveTimer(id int64) bool {
 	if s == nil || id <= 0 {
 		return false
 	}
 	node := s.byID[id]
 	if node == nil {
-		return s.running
+		return false
 	}
 	if node.state == stateHeap {
 		heap.Remove(&s.nodes, int(node.index))
@@ -277,7 +277,7 @@ func (s *Scheduler) RemoveTimer(id int64) bool {
 // 新期限放回——既不会在本次 Tick 按旧期限触发，也不会按新期限触发，两个 handler 互相改期不会在一次
 // Tick 里循环；移出期间不发持久化变化，放回时发一次 upsert（多次改期只发最后一次）。正在触发的回调
 // 节点被显式改期时覆盖回调返回值（包括 <=0），同样等收尾放回，重入 Tick 不会提前触发它。Tick 内新建
-// 尚未放回的节点只改期限。已取消或已结束的节点不会被改期复活：Tick 期间返回 true、无效果，Tick 外返回 false。
+// 尚未放回的节点只改期限。已取消或已结束的节点不会被改期复活：返回 false，Tick 内外一致。
 func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bool {
 	if s == nil || id <= 0 || delay <= 0 {
 		return false
@@ -287,7 +287,7 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 	}
 	node := s.byID[id]
 	if node == nil {
-		return s.running
+		return false
 	}
 	node.Delay = delay
 	node.End = now.Add(delay)

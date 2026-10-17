@@ -28,7 +28,7 @@ App 管理业务时间与持久高水位，运行中不允许时间倒退。初�
 
 回调返回正间隔表示按本次 `Tick(now)` 的时间自动重排，返回非正间隔默认结束任务。回调内显式 `ChangeTimer(ctx.Node.ID, base, delay)` 覆盖这个返回值，包括返回 0；`base` 为零时读取注入业务钟，指定 `ctx.Now` 时从本次触发时刻计算。只需从触发时刻延后自身时，直接返回间隔即可。
 
-被显式改期的回调节点保持移出，最外层 Tick 收尾时才按最后一次改期放回，重入 Tick 也不会提前触发。`RemoveTimer` 取消正在执行或等待放回的回调节点后，返回间隔和后续改期都不会复活它；需要新任务应重新 `NewTimer`。这些规则对 typed 和闭包节点相同，但只有 typed 节点通过 `ChangeFunc` 持久化。Tick 内对已经不存在的 ID（本轮已触发结束、已取消）调用 `ChangeTimer` / `RemoveTimer` 返回 true、无效果；Tick 外返回 false。
+被显式改期的回调节点保持移出，最外层 Tick 收尾时才按最后一次改期放回，重入 Tick 也不会提前触发。`RemoveTimer` 取消正在执行或等待放回的回调节点后，返回间隔和后续改期都不会复活它；需要新任务应重新 `NewTimer`。这些规则对 typed 和闭包节点相同，但只有 typed 节点通过 `ChangeFunc` 持久化。对已经不存在的 ID（本轮已触发结束、已取消、从未登记）调用 `ChangeTimer` / `RemoveTimer` 返回 false、无效果，Tick 内外一致（2026-10-17 起；此前 Tick 内返回 true）。
 
 持久化钩子在 Tick 期间就会收到变化：到期出堆时的删除、按返回值重排的 upsert、取消堆中节点的删除立即回调；等待放回的节点在最外层 Tick 收尾时各回调一次 upsert（多次改期只发最后一次）。钩子 panic 时调度器内存状态已经一致、不会在下次 Tick 重放，但剩余变化不再回调，宿主应把这次 Tick 当作失败：回滚事务并重建 Scheduler。
 

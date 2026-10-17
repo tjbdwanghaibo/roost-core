@@ -28,6 +28,10 @@
 - **game-demo 场景（`demo/internal/service/game/scene.go.tmpl`）同一规则**：`sceneLane.Push` 改为调用 `selfsync.PushPlayerFrame`，`scenePusher` 增加 `CloseSessions`；`settle` 删除“丢会话后玩家仍连着就重开”的分支（`sessionDropped` 参数一并删除），还连着的只可能是之后的新登录，由它的 `Join` 打开会话。**保留** `Join` 打开会话时上一个会话还在关闭（`SessionOpenRetryable`）的有界退避重试，改名 `openLater` / `openLocked` / `sessionOpen*`；**指标改名** `scene_session_reopen_failed_total` → `scene_session_open_failed_total`（只计 Join 打开会话的放弃，标签不变），仪表盘面板、可观测性 README、WALKTHROUGH 同步。已生成工程不迁移（`roost project sync` 取新模板），按旧名查询的面板 / 告警请改名。修前红（旧 scene.go + 新用例）：`the player's connections were closed 0 times after a live connection refused a frame, want once`。
 - 文档：[impl/04-sync §2C](docs/framework/impl/04-sync.md#2c-自身视图selfview的生命周期)、[guide/04-sync](docs/framework/guide/04-sync.md)、[PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)、[GATEWAY §4](docs/framework/GATEWAY.md#慢消费者跟不上就断开)（三种接入统一为“跟不上就断开”，Game 进程驻留预算例外）、KNOWN-LIMITS“自身视图（self_sync）与 Sync 慢消费者规则”。
 
+### Timer：Tick 期间对不存在的定时器改期 / 取消返回 false（维护者 2026-10-17 决定）
+
+- **API 语义变化**：`Scheduler.ChangeTimer` / `RemoveTimer` 在 Tick 期间（含回调与重入 Tick）对已经不存在的 ID（本轮已触发结束、已取消、从未登记）原先返回 true（“已接受”），现在返回 false，与 Tick 外一致；操作本身仍无效果、不复活节点。重构后 `byID` 持有全部活节点，能当下准确判断不存在。仓内唯一调用方 game-demo World `TimerComponent` 不依赖返回值；依赖 Tick 内恒为 true 的业务代码需要改判断。
+
 ### Scheduler 重构：活节点始终可按 ID 找到，Tick 期间的操作直接改节点状态（维护者 2026-10-17 批准）
 
 **这是针对一个反复出缺陷的机制的重构。** “Tick 期间的推迟操作”已三轮出缺陷：`23a10f42`（NC-140～147：Tick 期间的取消 / 改期 / 重入）、`50526a2c`（非法存量节点改由事务内 Tick 清理）、`a975c070`（触发中节点的显式改期丢失，加 `firing` 重入栈与 `firingChanges`）与 `1fa5ef08`（Tick 内新建的期限 / payload 被推迟捕获）。共同根因是节点在“触发中 / 新建未入堆 / 改期移出”时不在 `byID` 里，操作只能变成按 ID 推迟的闭包、收尾再查，每次修复都在加状态。

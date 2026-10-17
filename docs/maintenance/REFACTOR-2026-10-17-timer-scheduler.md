@@ -34,7 +34,7 @@
 | `stateQueued` | 等最外层 Tick 收尾入堆：Tick 内新建、Tick 内对堆中节点显式改期、触发中节点显式改期 | 是 | 否 | 是（恰一次） |
 | `stateDetached` | 不属于调度器：已取消、到期结束、回调 panic 后丢弃，或调用方 / 克隆出的值（零值） | 否 | 否 | 可能残留（收尾跳过） |
 
-“已取消”不单设状态：取消就是立即 `detach`，从 `byID` 删除。之后按 ID 的操作找不到节点，Tick 期间返回 true、无效果——正是原有“取消后的改期不复活”。
+“已取消”不单设状态：取消就是立即 `detach`，从 `byID` 删除。之后按 ID 的操作找不到节点，返回 false、无效果——正是原有“取消后的改期不复活”（返回值见 §实施后决定）。
 
 钩子视图两个标志（只对 typed 有意义，回调前先改标志）：
 
@@ -54,9 +54,9 @@
 | 操作 \ 目标状态 | `stateHeap` | `stateFiring` | `stateQueued` | 不在 `byID`（已取消 / 已结束 / 未知） |
 | --- | --- | --- | --- | --- |
 | `ChangeTimer` Tick 外 | 改期限、`heap.Fix`、立即 upsert；true | — | — | false |
-| `ChangeTimer` Tick 内 | 改期限、立即出堆、入 queued；不发变化；true | 改期限、入 queued（覆盖返回值）；true | 只改期限（最后一次生效）；true | 无效果；true（沿用“已接受”） |
+| `ChangeTimer` Tick 内 | 改期限、立即出堆、入 queued；不发变化；true | 改期限、入 queued（覆盖返回值）；true | 只改期限（最后一次生效）；true | 无效果；false（2026-10-17 维护者决定，原为 true） |
 | `RemoveTimer` Tick 外 | 出堆、detach、立即删除；true | — | — | false |
-| `RemoveTimer` Tick 内 | 出堆、detach、立即删除；true | detach（出堆时已删除，不再发）；回调返回值不再生效；true | detach；`announced` 为假先补一次 upsert，`persisted` 为真发删除；收尾跳过；true | 无效果；true |
+| `RemoveTimer` Tick 内 | 出堆、detach、立即删除；true | detach（出堆时已删除，不再发）；回调返回值不再生效；true | detach；`announced` 为假先补一次 upsert，`persisted` 为真发删除；收尾跳过；true | 无效果；false（同上） |
 | 回调返回正间隔 | — | 期限 = 本次 Tick 的 now + 间隔，立即入堆并 upsert | 忽略（显式改期优先） | 忽略（已取消） |
 | 回调返回 0 / 负 | — | detach（出堆时已删除） | 忽略（显式改期优先） | 忽略 |
 | 回调 panic | — | detach（与原先一样不放回，宿主事务回滚） | 保留显式改期，收尾入堆 | 无 |
@@ -106,7 +106,7 @@
 | D5 | 收尾回调里钩子操作调度器 | 只看到已执行到的闭包，未放回的节点查不到 | 所有节点已入堆，按 Tick 外规则生效 |
 | D6 | Tick 内对“尚未分配、本轮稍后才分配”的 ID 操作 | 收尾时可能命中稍后新建的节点 | 无效果（只能靠猜 ID 触发，不视为承诺） |
 
-公开返回值不变：Tick 内对不在 `byID` 的 ID 调 `ChangeTimer` / `RemoveTimer` 仍返回 true（原文档“Tick 内 true 只表示已接受”）。新结构已经能准确知道节点不存在，可以改为返回 false，与 Tick 外一致——这是 API 语义变化，留给维护者决定，本次不做。
+**实施后决定**：重构时公开返回值保持不变（Tick 内对不在 `byID` 的 ID 返回 true，“已接受”）。维护者 2026-10-17 决定改为返回 false、与 Tick 外一致：新结构能准确判断节点不存在，true 会让调用方误以为改期 / 取消生效。这是 API 语义变化，已写入 CHANGELOG；仓内唯一调用方 World `TimerComponent` 不依赖该返回值。
 
 ## 4. 调用方
 
