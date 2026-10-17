@@ -49,10 +49,10 @@ func (controller *Controller) HandleFoundGuild(context *playeraccess.Context, re
 		}
 		return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
 	}
-	// 明确无效的名称在查玩家、保留 ID 和创建持久实体之前拒绝，避免失败请求留下空壳公会。
-	// handler 的同一校验仍保留，保护其他调用入口。
-	if request.Name == "" {
-		return refuse(errcode.Wrap(apperrors.ErrGuildName, nil, "name", request.Name), "validate")
+	// 不看状态就能判定无效的名字，在查玩家、持久保留 ID、创建 Guild 实体之前拒绝：之后的 Found 事务回滚不了
+	// 已消耗的 ID。规则只有 guildentity.ValidateName 一处，Found 内部同样调用它。
+	if err := guildentity.ValidateName(request.Name); err != nil {
+		return refuse(err, "validate")
 	}
 	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err != nil {

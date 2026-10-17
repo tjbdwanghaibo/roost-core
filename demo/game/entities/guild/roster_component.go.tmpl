@@ -2,6 +2,9 @@ package guild
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -47,11 +50,25 @@ func (component *RosterComponent) Name() string { return "roster" }
 
 func (component *RosterComponent) Owner() *Guild { return component.owner }
 
+// ValidateName is the one rule for a guild name, and it reads no state, so the
+// found_guild endpoint calls it before it reserves an id or creates the
+// entity: a request that can be refused from its bytes alone must not reach
+// anything durable. Found calls it too, for any other caller.
+//
+// 名字必须有可见内容：全空白、含控制字符或不是合法 UTF-8 的名字与空名同样是 guild_name。名字原样保存，不裁剪，
+// 同一请求的重试按原名比对。长度上限与全服重名不在这里（未决定）。
+func ValidateName(name string) error {
+	if strings.TrimSpace(name) == "" || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+		return errcode.Wrap(apperrors.ErrGuildName, nil, "name", name)
+	}
+	return nil
+}
+
 // Found writes the guild's identity. It is separate from Join because a guild
 // that exists with no name is a row nobody can explain.
 func (component *RosterComponent) Found(name string, founderID, nowUnix int64) error {
-	if name == "" {
-		return errcode.Wrap(apperrors.ErrGuildName, nil, "name", name)
+	if err := ValidateName(name); err != nil {
+		return err
 	}
 	dao := component.Owner().Dao()
 	if dao.GetName() != "" {

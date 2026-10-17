@@ -455,7 +455,7 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 `ExpGranted`，两处变更进同一条 WAL 记录，要么都落库要么都不。Nest 按档位锁：World 先、Player 后。生成的 Sender 变成
 `MultiSync_AddExp(ctx, target, stats, amount)`，一个实体一个 id；`roost add endpoint` 只接单实体 handler，所以这个端点手写。
 
-公会创建还有一个事务外的边界：端点先在持久计数器保留 ID、通过 lifecycle 创建实体，之后才进入 `FoundGuild` 的两实体事务。空名称这种不依赖状态就能确定无效的输入必须在这些步骤之前返回 `guild_name`（100016），否则 handler 虽然拒绝了业务写入，前面已消耗的 ID 和创建的空实体并不会随之回滚。handler 内仍保留名称校验，保护其他调用入口；创建失败留下的历史空号不能回收重用。
+公会创建还有一个事务外的边界：端点先在持久计数器保留 ID、通过 lifecycle 在本进程创建实体，之后才进入 `FoundGuild` 的两实体事务。只看字节就能判定无效的名字（空、全空白、含控制字符、非法 UTF-8）必须在这些步骤之前返回 `guild_name`（100016），否则事务虽然拒绝了业务写入，前面已消耗的 ID 并不会随之回滚、内存里还留一个空 Guild 实例。规则只写在 `guild.ValidateName` 一处：端点第一步调用它，`RosterComponent.Found` 也调用它，保护其他调用入口。名字原样保存不裁剪，同一请求的重试按原名比对；长度上限与全服重名不在 demo 里。因别的原因失败（例如同一玩家的两个并发创建只有一个通过）留下的空号不回收重用。
 
 **档位编进实体 id**：改一个 kind 的 category 会改它所有实体的 id，已落库的文档全部失配。所以这是在第一条文档落库之前
 决定一次的事；之后再改等于一次数据迁移。
