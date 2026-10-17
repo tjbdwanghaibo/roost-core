@@ -14,37 +14,35 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 审查建议（已按此修复）：在 BindRegistry、任何写入前校验新计数键不能等于退役键，冲突时报告配置错误；保留拒绝旧兼容的既定决定。已有冲突部署先停写并迁移完整前缀与计数器，不能直接删除当前计数器。修复应同时更新模板、示例说明和重启/多副本回归。
 
-## 新用户试用第三轮：待修问题（2026-10-17 登记，尚未修复）
+## 新用户试用第三轮（2026-10-17 登记）：两项已修复，一项与 demo 公会名两点待维护者决定
 
-基线 `e85addd9`（origin/main）。用 main 构建的 CLI 从空目录按 beginner 流程（`roost project next` 逐步）建工程、打开 `self_sync`、在共享隔离环境起真实进程并用 TCP 客户端联调时确认。修复由维护者在 main 上进行。
+基线 `e85addd9`（origin/main）。用 main 构建的 CLI 从空目录按 beginner 流程（`roost project next` 逐步）建工程、打开 `self_sync`、在共享隔离环境起真实进程并用 TCP 客户端联调时确认。修复与回归见 CHANGELOG `[Unreleased]`“生成器 / game-demo：新用户试用第三轮与 demo 两处缺陷”。
 
-### 1. 自动补齐的 mongo / nats / dataengine 在服务配置里没有配置段
+### 1. 依赖带入的 Mod 在服务配置里没有配置段：已修复
 
-**现象**：`roost add access player --service game` 给 game 补齐 Nest 及其持久化依赖，进程实际启动 `mongo`、`nats`、`dataengine` 三个 Mod（启动日志 `"mod":"mongo"` 等），但 `roost.yaml` 的 `services.game.mods` 只列 `configdata`、`nest`，`configs/service/config.game.yaml` 里三段一段都没有；进程按声明默认值连接（`--print-config` 显示 `mongo.uri: mongodb://127.0.0.1:27017/?replicaSet=rs0`）。
+**原现象**：`roost add access player --service game` 给 game 补上 nest，进程实际启动 `mongo`、`nats`、`dataengine`，但 `configs/service/config.game.yaml` 与 prod 示例里三段（连同 `nest:`）一段都没有，进程按声明默认值连本机 27017；`singleton.enabled` 停在 `false`。`roost add rpc` 让拥有者挂上总线，同样不写 `nats:` 段。
 
-**复现**：`roost project new r3 -module example.com/r3 -mods configdata` → `roost add access player --service game` → `grep -c '^mongo:\|^nats:\|^dataengine:' configs/service/config.game.yaml` 得 0；`<bin> game --print-config | grep -A1 '^mongo:'`。
+**修复**：两条路径与 `add mod` / `add saga` 走同一个 `appendModConfigSections`（只追加缺失的顶层段，dev / prod 示例 / k8s Secret 示例；带 DataEngine 的服务打开单实例锁、补 `redis:` 段）。回归 `TestModsBroughtInByAddAccessAndAddRPCGetTheirConfigSections`。
 
-**影响**：新手不知道要配这三段，第一次启动在开发机上连到任意一个 27017 上的 Mongo（第一轮试用时连到本机非副本集 mongod，报 `production mode requires a replica set`）；要隔离环境时只能靠 `--print-config` 自己摸出键名。与 `framework/app/config_schema.go` 注释所说的“生成器按同一份声明写配置段”不一致：Mod 由依赖补齐时，配置段没有跟着补。
+**剩余（待维护者决定）**：配置文件生成后归应用所有，追加只发生在“这条 add 命令让服务多出 Mod”的那一刻。① 修复前已经走过 `add access` / `add rpc` 的工程不会自动补；② 在 add 命令之外手改 `roost.yaml` 增加 Mod 后 `project sync` 也不补。可选：A `project sync` 每次对每个服务补齐全部已解析 Mod 缺失的顶层段——自动收敛，但业务有意删掉的段（想用默认值）每次 sync 又回来；B（推荐）`roost project doctor` 增加只读检查，列出“已解析 Mod 有起始键、配置里缺这一段”的服务与文件，修复提示给出要追加的段（声明的起始键，可直接复制），不自动改文件；C 维持现状，文档写明手工从 `--print-config` 抄键。线上未部署，A/B/C 都不涉及兼容。
 
-**建议修法**：依赖补齐的 Mod 与显式列出的 Mod 同样写入服务配置段（`StarterYAML`），并在 `roost.yaml` 或注释里写明它们是被 nest 带入的；已有工程由 `project sync` 只补缺失的段、不改已有值。
+### 2. `roost project next` 的修复提示是固定示例名：已修复
 
-### 2. `roost project next` 的修复提示是固定示例名
+**原现象**：first-business 的 `nest-handler` / `protocol` / `endpoint` / `login` 修复命令写死 `RenamePlayer` 与 `--handler player`；工程已有 `BuyItem`、`GrantGold` 时仍提示 `roost add protocol RenamePlayer --group game --handler player`，已有 `shop` 域时登录步骤仍提示 `--handler player`。
 
-**现象**：`doctor.go` 的 first-business 检查表（`checks` 里 `nest-handler` / `protocol` / `endpoint` 三行）把修复命令写死为 `RenamePlayer` 与 `--handler player`。工程里已经有 `BuyItem`、`GrantGold` 两个 handler 时，`project next` 仍提示 `next: roost add protocol RenamePlayer --group game --handler player`；登录步骤同样固定提示 `--handler player`，业务已有 `shop` controller 域时照做会多出一个 `player` 域。
+**修复**：`doctor.go` 的 `firstBusinessNames` 按工程现状填名字（已有 Entity / Component、第一个缺协议的 handler、第一个缺 endpoint 的协议及其域、已有 controller 域与 lifecycle、`ids.protocol.groups`）；只有工程里没有可用名字时给示例名并加 `# example name, use your own`。回归 `TestFirstBusinessFixesNameWhatTheProjectAlreadyHas`。限制：判断“缺协议 / 缺 endpoint”沿用 doctor 现有的文件名约定（`game/handler/<snake>.go` ↔ `protocol/def/<snake>.go` ↔ `game/controllers/<域>/<snake>.go`），协议名与 handler 名不同的工程仍会落到第一个可用名字或示例名。
 
-**复现**：上面的工程里 `roost add handler BuyItem --entity Player --component Shop` 后运行 `roost project next`（progress 10/15）。
+### 3. self_sync 的 packer 要业务整段照抄：待维护者决定（属于 D6 范围的设计选择）
 
-**影响**：新手照抄会生成一个与自己业务无关的 RenamePlayer 协议，或在两个 controller 域之间困惑。
+**现象（已核实）**：打开 `self_sync` 后就绪检查要求写 `NewPlayerSyncPacker`，[PLAYER-ACCESS §7](../framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 给出整段代码（视图集、构造、Snapshot / Delta / pack，约 40 行），只依赖生成 DAO 的 `PlayerDaoSyncFields` / `MarshalSync`、`dataengine.AllFields` 与固定的 `self` 视图。抄错（视图漏 `self`、mask 处理）只在运行期 `ErrSyncViewUnknown` 暴露。
 
-**建议修法**：提示按工程现状填名字——已有 handler 而缺协议时用第一个缺协议的 handler 名，已有 controller 域时沿用它；工程里什么都没有时再给示例名，并标明“示例”。
+**为什么不直接改**：D6 的决定是“容易写错的生命周期放 core、生成器只在 `*_gen.go` 写可见接线”，packer 当时留给业务；生成一个默认 packer 等于决定“标了 `sync` 的字段全部给玩家自己看”，并改变 marker `subjectPacker=` 的缺省含义，是产品与设计选择。
 
-### 3. self_sync 的 packer 要业务整段照抄
+**可选方向**：A（推荐）生成器在 `self_sync` 打开且 marker 没写 `subjectPacker=`（或写的正是生成名）时生成 `game/entities/player/player_sync_packer_gen.go`（全部 sync 字段进 `self` 视图），就绪检查只要求 `sync=true`；要裁剪字段或多视图的业务写自己的 packer 并在 marker 上指定，生成文件随之删除。代价：生成器多一份模板与回归；“sync 字段全部对自己可见”成为默认。B core 提供 `dataengine.NewSelfSyncPacker(fields, marshal)` 一类的小 API，业务只写 3～5 行接线；代价：core 多一个公开 API，业务仍要写文件。C 维持现状（文档照抄）。
 
-**现象**：打开 `self_sync` 后就绪检查要求写 `NewPlayerSyncPacker`，[PLAYER-ACCESS §7](../framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 给出“可以直接照抄”的整段代码；照抄后的文件 45 行（视图集、构造、Snapshot / Delta / pack 三个方法），内容只依赖生成 DAO 的 `PlayerDaoSyncFields` / `MarshalSync` 与固定的 `self` 视图。
+### game-demo 公会名：长度上限与全服重名（待维护者决定）
 
-**影响**：每个打开 self_sync 的工程都手抄同一段样板，抄错（视图漏 `self`、mask 处理）只在运行期 `ErrSyncViewUnknown` 才暴露；与 D6 决定的“容易写错的放 core、生成器只写可见接线”方向相反的一小块。
-
-**建议修法**：生成器在 `self_sync` 打开且 Entity 没有自定义 packer 时生成 `player_sync_packer_gen.go`（全部同步字段给 `self` 视图），marker 的 `subjectPacker=` 缺省指向它；需要裁剪字段或多视图的业务再写自己的 packer 覆盖。
+`guild.ValidateName`（[模板](../../demo/game/entities/guild/roster_component.go.tmpl)）现在拒绝空、全空白、含控制字符与非法 UTF-8 的名字，端点在保留 ID 之前调用。**没有长度上限**：名字只受协议帧上限约束，原样进 WAL、Mongo 文档与每次 `guild_info` 回包；**不查全服重名**：两个公会可以同名。可选：长度上限 A 按字符数（rune）定一个上限（例如 16 或 32，属产品取值），在 `ValidateName` 同一处拒绝；B 不设。重名 A 名字唯一：需要一个名字索引（例如 Mongo 唯一索引集合）在保留 ID 之前占名、创建失败时释放，涉及占名与 Guild 创建之间的结果未知处理；B（推荐，demo 范围）允许重名，靠 `guild_id` 区分。
 
 ## 能力与验证边界
 
@@ -78,7 +76,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 | 观测接线 | ExportMetrics/admin元数据不是自动外部监控或审批系统 | 部署实际接线与鉴权审计 |
 | Remote WAL级Rejected处理 | 已处理（`38b710a2`，随 v1.27.0 发布，维护者 2026-10-14 选“直接精简”）：Durability 1/2/3 的正式链路不产生 Remote Rejected（投影器写权威冲突是 `ErrProjectionConflict` fatal）；三个测试注入函数 `MongoCommitter`/`Backend.RejectRemoteCommitsInTransaction` 与 `Manager.RejectRemoteTransaction` 已删除，strict/pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`。tracker 的 Rejected 收尾（回滚、隔离、仅内存卸载、重载、交付 false）只剩 Durability 0 来源，保留 | 守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore/MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict/pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`） |
 | Remote请求struct与Sender | handler 参数用带 `remote:"..."` 字段的请求 struct 时，struct 必须留在 handler 包（访问器生成在这里），sender / syncsender 子包又看不见 handler 包类型；`roost generate` 总生成 sender，所以这种 handler 生成失败（修前修后都不可用，2026-10-16 起改为专门报错、不再建议移走类型）。维护者 2026-10-16 决定先写清限制，不改生成结构 | 需要时再设计：让 sender 携带这种 struct（改生成结构），或允许单个 handler 不生成 sender |
-| 新用户接入缺口 | 2026-10-16 新用户按 beginner 流程实测的四项均已由维护者同日决定并实施：玩家看自己状态（D6 折中方案：`access.player.self_sync`，剩余限制见下文“自身视图（self_sync）”）；未登录玩家得到 `CodeInternal`、first-business 不含首登 GetOrCreate（D7 方案 C：`errcode.CodeEntityNotFound` 与 `roost add endpoint --lifecycle`）；生成的服务包名大写（D8 方案 C：新工程小写、已有工程跟随目录）；DAO 库名是代码常量（D9 方案 B：骨架 `db=<project>` 与 `roost id entity`）。库名取运行配置（D9 方案 A）保留待评估。2026-10-17 第三轮试用新登记三项待修：见上文“新用户试用第三轮：待修问题” | [DESIGN-TODO D6～D9](DESIGN-TODO.md#d6-玩家看自己状态entity-sync-自身视图的接入骨架) |
+| 新用户接入缺口 | 2026-10-16 新用户按 beginner 流程实测的四项均已由维护者同日决定并实施：玩家看自己状态（D6 折中方案：`access.player.self_sync`，剩余限制见下文“自身视图（self_sync）”）；未登录玩家得到 `CodeInternal`、first-business 不含首登 GetOrCreate（D7 方案 C：`errcode.CodeEntityNotFound` 与 `roost add endpoint --lifecycle`）；生成的服务包名大写（D8 方案 C：新工程小写、已有工程跟随目录）；DAO 库名是代码常量（D9 方案 B：骨架 `db=<project>` 与 `roost id entity`）。库名取运行配置（D9 方案 A）保留待评估。2026-10-17 第三轮试用登记三项：配置段与 next 提示两项已修复，packer 待维护者决定，见上文“新用户试用第三轮” | [DESIGN-TODO D6～D9](DESIGN-TODO.md#d6-玩家看自己状态entity-sync-自身视图的接入骨架) |
 | 删档后同 ID 重建 | GetOrCreate 路径已修复（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d10-删档后用同一-id-重建) 方案 B，范围只守 GetOrCreate，`572d87c2`）：冷加载对删过档返回独立哨兵 `entity.ErrAuthorityEntityDeleted`（不满足 not found，Remote 托管实体查元数据墓碑），生成 GetOrCreate 不重建、发往该 ID 的 Nest 请求回复 `entity_deleted = 3`，不进 WAL、不 fence。**剩余限制（约束）**：直接 Create（handler 内或 lifecycle `Create`）不读存储，必须使用 id-gen 发的新 ID，不要复用删过档的确定性 ID（也不要对存了但没加载的 ID 直接 Create）；违反时首个提交 `Put expected=0` 撞上墓碑 / 已有文档，投影 `ErrProjectionConflict` fatal、进程 fence、冷重启起不来，处置见下一行。`EntityManager` 的 ID 生成器同样必须永不重复。“谁、为什么删档”与 Remote 实体的删前数据不在墓碑里，需要时由删档入口自己记业务审计（D10 审计结论） | 回归 `TestGeneratedDataEngineRecreateAfterDeleteSameID`（真实 Mongo，已去掉 KNOWN_RED 跳过）、`TestGeneratedRemoteRecreateAfterDeleteIsRefused`、`TestColdTargetDeletedInAuthorityAnswersEntityDeletedCode`；直接 Create 的保护按维护者决定不做（范围收窄前的实现已撤回，见 D10）|
 | 删档后同 ID 重建：违反约束或修复前写下的冲突记录 | 修复前已进入 WAL 的“删档后重建”记录，以及违反上一行约束（直接 Create 复用删过档 / 已存储的 ID）写下的记录（首个 `Put expected=0` 撞墓碑或已有文档），不会被跳过或放宽：启动投影恢复仍报 `startup projection recovery: ... fatal projection version conflict: Put duplicate key <db>/<coll>/<id> expected=0 next=1`，进程起不来。框架不自动删记录、不跳过 | 人工处置（只在确认是这类记录时）：①停进程，保留 WAL 目录与 Mongo 备份；②启动错误已给出事务 ID 与 `<库>/<集合>/<_id> expected=0 next=1`：在 Mongo 确认该 `_id` 是墓碑（`_deleted: true`），`roost id entity <_id>` 换算出玩家 ID，`cmd/walinspect -dir <WAL目录> -snapshot <新目录>` 做一份完整只读副本留证（它不推进 checkpoint、不跳过记录）；③线上尚未部署（维护者 2026-10-06）：直接停旧版本、清空该 sid 的 WAL 目录与测试库后起新版本；上线后若遇到，由维护者决定是否接受丢弃该事务（被丢弃的是删档后被错误重建的那条写入，客户端当时收到过成功），并修正复用 ID 的业务代码，框架不提供“跳过一条记录”的入口。见[维护手册 §4](README.md#4-故障处理) |
 | Windows | 非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'`（编译全部测试不执行）和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异：打开中的文件不能改名/删除（nestwal 损坏记录检查、日志轮转、statslog），checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真（run 38500440362 的 6 个失败） | 本机测试结果不改变macOS/Linux支持范围；跨平台也成立的缺陷不归入此行 |
