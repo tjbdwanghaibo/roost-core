@@ -629,6 +629,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	{{- /* Single entity: Broadcast, Delay, Send, Sync */}}
 	{{- if eq (len .Entities) 1}}{{if not (index .Entities 0).IsGroup}}
 	{{if $.AsyncSenderOnly}}
+	// Delay_{{trimHandler .Name}} runs the handler after delay. The delayed message lives only in this
+	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
+	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
+	// handler; see the game-demo World TimerComponent.
 	func (s *{{$.SenderType}}) Delay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
@@ -677,6 +681,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	{{- /* Multi entity (no group): MultiDelay, MultiSend, MultiSync */}}
 	{{- if and (gt (len .Entities) 1) (not (hasGroup .Entities))}}
 	{{if $.AsyncSenderOnly}}
+	// MultiDelay_{{trimHandler .Name}} runs the handler after delay. The delayed message lives only in this
+	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
+	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
+	// handler; see the game-demo World TimerComponent.
 	func (s *{{$.SenderType}}) MultiDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
@@ -722,6 +730,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	{{- /* Group entity: MultiGroupDelay, MultiGroupSend, MultiGroupSync */}}
 	{{- if hasGroup .Entities}}
 	{{if $.AsyncSenderOnly}}
+	// MultiGroupDelay_{{trimHandler .Name}} runs the handler after delay. The delayed message lives only in this
+	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
+	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
+	// handler; see the game-demo World TimerComponent.
 	func (s *{{$.SenderType}}) MultiGroupDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }

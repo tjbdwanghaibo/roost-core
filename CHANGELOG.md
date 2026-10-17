@@ -35,6 +35,7 @@
 ### 新用户试用（第三轮）
 
 - **self_sync 的就绪检查与文档不再让业务手动标脏。** 修前报错与 [PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 第 3 步要求每次修改后调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`；实测这一步多余（Nest 提交时已自动收集 `TakeEntitySyncChanges`，加不加帧数一样），而 `TakeSyncDirty` 取走的是服务间同步的独立掩码。生成工程的真实 TCP 用例去掉手动标脏后仍收到每次修改的增量，钉住这条契约。回归 `TestSelfSyncCheckNamesTheFix`、`TestSelfSyncGeneratedProjectOverRealTCP`。
+- **生成的 `Delay_` Sender 写明延时消息不持久。** 延时消息只在本进程内存里，停机丢弃（`TestShutdownDropsDelayedFireAndForgetQuietly`）、崩溃丢失、不写 WAL；修前生成的方法与文档都没有说明，新手容易拿它做“30 分钟后发奖”。现在 `Delay_` / `MultiDelay_` / `MultiGroupDelay_` 的生成注释与 [NEST_RUNTIME](codegen/docs/NEST_RUNTIME.zh-CN.md#延时-sender-不持久) 写明语义，必须发生的定时指向 DAO 期限 + handler 的写法（game-demo World `TimerComponent`）。只改注释与文档，行为不变。
 
 ### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
 

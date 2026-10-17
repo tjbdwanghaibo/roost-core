@@ -65,6 +65,15 @@ result, err := syncSender.Sync_UseItem(ctx, playerID, cmd)
 Sender 只依赖 `nest.Client`，不会读取全局 `nest.Nest`。因此单元测试可以注入
 fake Client，生产环境从 `app.Registry` 取得 `wiring/nest` 的 Nest Mod 提供的 Client。
 
+### 延时 Sender 不持久
+
+`Delay_X` / `MultiDelay_X` / `MultiGroupDelay_X` 把消息放进本进程内存里的延时队列，到期再走正常准入：
+不写 WAL，停机时没到期的消息被丢弃（异步消息没有等待者，每条记一条 Warn `async dispatch failed`，
+`err=ErrNestStopped`；同步 Request 回 `ErrNestStopped`），进程崩溃时直接丢失。延时上限与容量见 `nest.max_delay`、`nest.delayed_capacity`。
+必须发生的定时（发奖、活动结束、冷却到期）把期限存进 DAO，由 handler 在事务里触发并删除，重启后按存储的
+期限重建；参照 game-demo 的 World `TimerComponent`（[模板](../../demo/game/entities/world/timer_component.go.tmpl)）。
+`Delay_` 适合丢了也无妨或另有兜底的事，例如短时提示、可重算的刷新。
+
 ## 锁与跨 Entity 规则
 
 - Handler 中所有会被修改的 Entity 必须全部出现在 Entity 参数列表。
