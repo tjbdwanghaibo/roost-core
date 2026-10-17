@@ -57,6 +57,13 @@ account 的身份验证、玩家号分配、名字校验由接入方提供，不
 
 Player 静态绑定 sid，不自动做动态玩家租约迁移。directory 名字域是全局域；activity groups_file 明确组与 game 列表；每个开窗条目都带持久计划，没有计划的条目与超过 `MaxPendingActivities` 的窗口按畸形数据拒绝（报告并保留名额 / sweep 返回 `ErrConflict`），由运维 `RemoveMalformedWindowEntry` 或线下修复，不自动回收、不轮转扫描。activity 的观察重试不自动耗尽失联投递，无法恢复的目标按人工 ExhaustDispatch 等管理流程收口。
 
+**名字规则属于业务**（维护者 2026-10-17 决定）：角色名、公会名等的长度上限、敏感词、全服唯一都是业务规则，框架层不处理，生成的工程与 game-demo 也不内置（game-demo 的 `guild.ValidateName` 只拒绝空、全空白、控制字符与非法 UTF-8）。需要全服唯一时用 `service/directory` 的两阶段占名，不要用“先查有没有、再写”的两步做法（并发下两个请求都看到“没有”）：
+
+- 装配：`wiring/directory.NewMod(normalize, reporter)`，依赖 redis Mod；`directory.key_prefix` 与 `directory.reservation_ttl` 必填、没有缺省。`normalize` 决定哪些写法算同一个名字（`directory.NormalizeLower` 去首尾空白并折叠大小写），是产品决定、不是配置项。业务从 registry 用 `app.Lookup[directory.Directory](r, mods.ModDirectory)` 取能力。
+- 顺序：先 `Reserve(ctx, name, owner, ttl)` 占名（别人持有时 `ErrKeyTaken`，可回给客户端“名字已被占用”）→ 再做创建（保留 ID、建实体、事务）→ 成功后 `Commit(claim)` 转为永久；创建失败 `Cancel(claim)` 释放（重复 Cancel 成功，回滚可以重试）。改名、解散走 `Release(name, owner)`，只有持有者能释放。
+- 预约带过期：`ttl`（缺省 `reservation_ttl`）内没有 Commit 的预约自动失效，调用方在 Reserve 与 Commit 之间崩溃时名字到期释放，不会被永久占死。`ttl` 要长于从 Reserve 到 Commit 的最长路径；创建已生效而 Commit 没做成（结果未知、进程崩溃）时，预约过期后名字可能被别人拿走，业务按自己的对账决定怎样处理。
+- 同一 owner 重复 Reserve 拿到同一个 claim（重试不多占），所以 directory 不是互斥锁：“只允许一次尝试”要用 insert-only 的版本化状态（见 [包注释](../../../service/directory/directory.go)）。
+
 ## 5. 接入检查
 
 分别验证 owner、本地调用、跨进程调用、重复请求、回复丢失、恢复与停止。业务期限使用业务时钟，系统令牌/裁剪/网络超时使用系统时钟。亚秒期限不能通过整数秒截断后改变行为。默认服务指标可统一关闭，但不能把关闭指标当成关闭周期清扫。

@@ -14,7 +14,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 审查建议（已按此修复）：在 BindRegistry、任何写入前校验新计数键不能等于退役键，冲突时报告配置错误；保留拒绝旧兼容的既定决定。已有冲突部署先停写并迁移完整前缀与计数器，不能直接删除当前计数器。修复应同时更新模板、示例说明和重启/多副本回归。
 
-## 新用户试用第三轮（2026-10-17 登记）：三项已修复 / 实施，demo 公会名两点待维护者决定
+## 新用户试用第三轮（2026-10-17 登记）：三项已修复 / 实施（配置段剩余部分按维护者决定 B 由 doctor 只读检查），demo 公会名两点已决定
 
 基线 `e85addd9`（origin/main）。用 main 构建的 CLI 从空目录按 beginner 流程（`roost project next` 逐步）建工程、打开 `self_sync`、在共享隔离环境起真实进程并用 TCP 客户端联调时确认。修复与回归见 CHANGELOG `[Unreleased]`“生成器 / game-demo：新用户试用第三轮与 demo 两处缺陷”。
 
@@ -40,9 +40,9 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **代价 / 剩余**：标了 sync 的字段默认全部对玩家本人可见，需要裁剪的业务写自己的 packer。与登记时的方向 A 不同处：marker 写的正是生成名（`subjectPacker=NewPlayerSyncPacker`）时按“业务自己的 packer”处理、不生成——旧工程照抄的 packer 不会与生成物重名冲突；想改回默认就删掉 `subjectPacker=` 与自己的 packer。默认 packer 只发一个 DAO，多 DAO 的 Player 仍要自己写。
 
-### game-demo 公会名：长度上限与全服重名（待维护者决定）
+### game-demo 公会名：长度上限与全服重名（维护者 2026-10-17 决定：业务逻辑，框架不处理，参考 service/directory）
 
-`guild.ValidateName`（[模板](../../demo/game/entities/guild/roster_component.go.tmpl)）现在拒绝空、全空白、含控制字符与非法 UTF-8 的名字，端点在保留 ID 之前调用。**没有长度上限**：名字只受协议帧上限约束，原样进 WAL、Mongo 文档与每次 `guild_info` 回包；**不查全服重名**：两个公会可以同名。可选：长度上限 A 按字符数（rune）定一个上限（例如 16 或 32，属产品取值），在 `ValidateName` 同一处拒绝；B 不设。重名 A 名字唯一：需要一个名字索引（例如 Mongo 唯一索引集合）在保留 ID 之前占名、创建失败时释放，涉及占名与 Guild 创建之间的结果未知处理；B（推荐，demo 范围）允许重名，靠 `guild_id` 区分。
+`guild.ValidateName`（[模板](../../demo/game/entities/guild/roster_component.go.tmpl)）拒绝空、全空白、含控制字符与非法 UTF-8 的名字，端点在保留 ID 之前调用。**长度上限**与**全服重名**：维护者 2026-10-17 决定是业务逻辑，框架不处理，demo 也不实现——名字只受协议帧上限约束，两个公会可以同名、靠 `guild_id` 区分。业务需要长度上限 / 敏感词时加在 `ValidateName` 同一处；需要全服唯一时参考框架已有的 `service/directory`（`wiring/directory` 装配；先 Reserve 再创建、成功 Commit、失败 Cancel，预约带过期），用法写在 [Service 篇 §4](../framework/guide/09-services.md#4-关键业务边界)、[WALKTHROUGH](../../demo/WALKTHROUGH.md) 公会创建一段与模板注释。
 
 ## 能力与验证边界
 
