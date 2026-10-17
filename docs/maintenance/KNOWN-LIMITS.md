@@ -80,6 +80,26 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **需要维护者决定**：是否提供通用的 DAO 期限组件（例如 `roost add timer --entity Player` 生成节点 DAO 与组件，框架负责重建与持久化钩子），以及按实体的 Tick 由谁驱动（进程 ticker 按最早期限只给到期实体发消息，而不是每秒给所有在线实体发）。
 
+## game-demo 副本排行：超过去重环后重放会重复计分（已确认，未修复）
+
+**类别与基线**：demo 接入问题，非 rank 公开契约的实现缺陷；在 `91606e48` 主线生成的正式 game-demo 上确认。rank 的 `UpdateAdd` 只记同一玩家最近 8 个请求 ID（[types.go](../../service/rank/types.go) 的 `maxAppliedRequests`），不是永久的通关账本。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 每次成功领取或重放都提交 `+1`，而 [ranking](../../demo/game/ranking/ranking.go.tmpl) 的注释承诺同一局只计一次，超出了下层契约。
+
+**触发与结果**：同一玩家在奖励领取窗口内连续成功通关 9 局，再重放第一局。期望经验不重复、排行仍为 9；实际经验账本仍有 9 条、World 发放经验仍为 900，排行却为 10。第一局的 `clear:<runID>` 已被后来的 8 个请求挤出去，奖励事务返回 `Claimed=false` 后端点仍然调用 rank `UpdateAdd`。SLG 中若照此接活动积分或赛季榜，会破坏排名公平；本复现没有证明重复经验或榜单奖励资产已被发放。
+
+**可执行复现**（仓库根目录，使用 go.mod 指定的 Go 工具链）：
+
+```bash
+bash scripts/review-dungeon-ranking.sh
+```
+
+[脚本](../../scripts/review-dungeon-ranking.sh) 用正式生成器创建隔离消费者，注入[端点行为用例](../../scripts/testdata/dungeon-ranking/replay_test.go.txt)，调用真实 Controller、生成 Sender、Nest、Player/World handler 和 rank RedisStore；复用 rank 自身的 Redis 替身，session 返回固定的成功终态，提交器只返回成功。**当前预期退出 1**，失败断言为 `nine clears then replaying the first gives 10 leaderboard points; want 9 (reward claims remain 9)`；它是显式运行的已知缺陷回归，不纳入普通 `go test ./...`。脚本打印临时工程与日志目录，不改当前 checkout、不连接外部服务；这不是实际 Redis Lua、WAL fsync、Mongo 或服务间网络验收。rank 的现行去重环、UpdateAdd 去重及榜/赛季隔离的 3 条定向 race 回归通过。
+
+**规避与建议**：不要用这条 demo 接法承诺长期累计积分；仅把 `+1` 放进 `Claimed=true` 分支会丢掉“奖励已提交、排行未提交就崩溃”的补记能力，也不是完整修复。单纯加大 8 个槽位仍没有对齐允许重放的整个窗口。
+
+建议在奖励同一事务内维护独立于可裁剪领取账本的持久累计通关数，首次领取与重放均返回当前累计值，rank 用不带请求去重键的 `UpdateMax` 写累计快照：重复与乱序快照不多加、不降分，下次请求可补齐漏报。**不能把同一 runID 同时用作不同累计快照的去重键**，否则旧收据会提前返回，较新的累计值仍不能补报。另一方案是保存覆盖整个允许重放窗口的持久计分收据，并明确定义保留期限与容量。
+
+**待定方向与验收**：累计值按终身还是赛季划分、现有分数的初始化来源、增加 DAO 字段后的 schema 处理需要先确定，不在这份证据提交中改变数据模型。修复至少验证超过 8 个后续请求的重放、并发重复、累计快照乱序、领取后排行失败的补报、实体卸载重载和赛季切换。领取账本长度会裁剪，不能作为累计值；旧账本也不能可靠重建历史累计值。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
