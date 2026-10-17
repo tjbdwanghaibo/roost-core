@@ -45,7 +45,11 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("docs/FIRST_BUSINESS.zh-CN.md", renderFirstBusinessGuide(m), true)
 	add("docs/ENTITY_LIFECYCLE.zh-CN.md", renderEntityLifecycleGuide(m), true)
 	add("docs/PROTOCOL_TO_NEST.zh-CN.md", renderProtocolNestGuide(), true)
-	add("docs/PLAYER_ACCESS_TCP.zh-CN.md", renderPlayerTCPGuide(), true)
+	playerTCPGuide := renderPlayerTCPGuide()
+	if selfSyncEnabled(m) {
+		playerTCPGuide += renderSelfSyncGuide()
+	}
+	add("docs/PLAYER_ACCESS_TCP.zh-CN.md", playerTCPGuide, true)
 	add("docs/SKILL.zh-CN.md", renderSkillGuide(), true)
 	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)

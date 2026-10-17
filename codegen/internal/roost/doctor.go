@@ -105,10 +105,12 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkCICDTemplates(root)...)
 	report.Items = append(report.Items, checkFrameworkCollaborators(root, m)...)
 	if selfSyncEnabled(m) {
-		if err := checkSelfSync(root, m); err != nil {
+		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})
+		} else if status.warning != "" {
+			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusWarn, Detail: status.warning})
 		} else {
-			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusOK, Detail: "player Entity declares Entity Sync; push id in " + selfSyncProtocolPath})
+			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusOK, Detail: "player Entity syncs through " + status.packer + "; push id in " + selfSyncProtocolPath})
 		}
 	}
 	if workflow := strings.TrimSpace(options.Workflow); workflow != "" {

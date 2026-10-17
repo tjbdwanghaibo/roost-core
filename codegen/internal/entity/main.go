@@ -39,6 +39,7 @@ func run(args []string, stdout io.Writer) error {
 	dir := flags.String("dir", "", "directory to scan (default: GOFILE dir or cwd)")
 	output := flags.String("output", "", "output file (default: <entity>_gen_wire.go)")
 	force := flags.Bool("force", false, "force regeneration even if unchanged")
+	selfSync := flags.String("self-sync", "", "access.player.self_sync: the entity (struct name) that syncs to its own player; defaults its marker to sync=true and generates its packer when subjectPacker= is absent")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -74,6 +75,7 @@ func run(args []string, stdout io.Writer) error {
 		return nil
 	}
 
+	selfSyncFound := false
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
 		defs, pkg, err := parsePackage(dir)
@@ -123,9 +125,22 @@ func run(args []string, stdout io.Writer) error {
 		// the first entity's file (by name) and calls every sibling's own
 		// registration, so several entities in one package compile together.
 		siblings := make([]string, 0, len(entities))
+		// selfSyncPlan 是本包里 -self-sync 实体的结论（access.player.self_sync，见 self_sync_packer.go）。
+		var selfSyncEntity *EntityDef
+		var selfSyncPlan SelfSyncPlan
 		for i := range entities {
 			ent := &entities[i]
 			// 先校验整包，拒绝时本包不落任何文件。
+			if *selfSync != "" && ent.Name == *selfSync {
+				plan, err := applySelfSyncDefaults(ent, dir)
+				if err != nil {
+					return err
+				}
+				selfSyncFound, selfSyncEntity, selfSyncPlan = true, ent, plan
+			}
+			if err := validateEntitySync(*ent); err != nil {
+				return err
+			}
 			if err := validateRemoteDaoScopes(*ent, dir); err != nil {
 				return err
 			}
@@ -171,11 +186,37 @@ func run(args []string, stdout io.Writer) error {
 				return err
 			}
 		}
+		// 默认 packer：要的写出，不要的（开关关闭、业务写了 subjectPacker=、实体改名或删除）删掉。
+		keepPacker := ""
+		if selfSyncEntity != nil && selfSyncPlan.DefaultPacker {
+			keepPacker = selfSyncPlan.PackerFile
+			changed, err := generateSelfSyncPacker(*selfSyncEntity, selfSyncPlan, pkg, dir, *force)
+			if err != nil {
+				return err
+			}
+			path := filepath.Join(dir, keepPacker)
+			if changed {
+				fmt.Fprintf(stdout, "generated: %s\n", path)
+			} else {
+				fmt.Fprintf(stdout, "unchanged: %s\n", path)
+			}
+			if selfSyncPlan.NoSyncFields {
+				fmt.Fprintf(stdout, "warning: %s\n", selfSyncPlan.NoSyncFieldsWarning(selfSyncEntity.Name))
+			}
+		}
+		if *output == "" || keepPacker != "" {
+			if err := retireSelfSyncPackers(dir, keepPacker, stdout); err != nil {
+				return err
+			}
+		}
 		if *output == "" {
 			if err := retireEntityOrphans(dir, siblings, mirrorNames(mirrors), stdout); err != nil {
 				return err
 			}
 		}
+	}
+	if *selfSync != "" && !selfSyncFound {
+		return fmt.Errorf("-self-sync %s: no //roost:entity struct named %s under %s", *selfSync, *selfSync, scanDir)
 	}
 	return nil
 }
@@ -211,7 +252,7 @@ func findEntityDirs(root string) ([]string, error) {
 			}
 			return nil
 		}
-		if entry.Type().IsRegular() && (strings.HasSuffix(entry.Name(), "_gen_wire.go") || strings.HasSuffix(entry.Name(), "_gen_wire_test.go")) {
+		if entry.Type().IsRegular() && (strings.HasSuffix(entry.Name(), "_gen_wire.go") || strings.HasSuffix(entry.Name(), "_gen_wire_test.go") || strings.HasSuffix(entry.Name(), selfSyncPackerSuffix)) {
 			owned, err := ownsEntityFile(path)
 			if err != nil {
 				return err

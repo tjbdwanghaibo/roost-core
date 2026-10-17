@@ -27,6 +27,7 @@ type EntityDef struct {
 	Lifetime        string // entity.EntityLifetime constant expression
 	NoPersist       bool   // EntityBase AutoPersist returns false
 	Sync            bool   // enable entity base sync by default
+	SyncSet         bool   // the marker wrote sync= (false is then explicit, not a default)
 	SyncNamespace   string // optional sync namespace (the wire routing key) for the generated builder
 	SubjectPacker   string // optional observer-free SubjectSyncPacker factory expression
 	Components      []ComponentField
@@ -244,14 +245,14 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent.NoPersist = parseBoolParam(m.params["noPersist"])
 					ent.Lifetime = parseLifetimeParam(m.params["lifetime"], ent.NoPersist, ent.RemotePolicy)
 					ent.Sync = parseBoolParam(m.params["sync"])
+					_, ent.SyncSet = m.params["sync"]
 					ent.SyncNamespace = m.params["syncNamespace"]
 					ent.SubjectPacker = m.params["subjectPacker"]
 					if _, retired := m.params["syncPacker"]; retired {
 						return nil, fmt.Errorf("%s:%d: //roost:entity syncPacker is unsupported; use subjectPacker", filePath, m.line)
 					}
-					if ent.SubjectPacker != "" && !ent.Sync {
-						return nil, fmt.Errorf("%s:%d: //roost:entity has subjectPacker=%s but sync is not true", filePath, m.line, ent.SubjectPacker)
-					}
+					// subjectPacker 与 sync 的一致性在 run 里、access.player.self_sync 的缺省之后检查
+					// （validateEntitySync）：开关打开时 Player 只写 subjectPacker= 也是完整的声明。
 
 					ent.Components, ent.Daos = extractFields(structType, content, fset)
 					ent.RemoteBase = hasRemoteEntityBase(structType)

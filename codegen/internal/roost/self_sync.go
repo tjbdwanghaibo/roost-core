@@ -1,16 +1,14 @@
 package roost
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entity"
 )
 
 // access.player.self_sync：玩家看自己状态（Entity Sync 自身视图）的生成接线。
@@ -22,12 +20,15 @@ import (
 //	internal/access/player/tcp/server_gen.go  WithSelfSync：Provide 时 BindPlayers，Start 时 ConnectHandshake；
 //	                                 IngressMod 同名方法把 OnActive / OnClosed 接到 Game Ingress
 //	protocol/def/self_sync.go        推送编号（业务文件，只在缺失时创建一次）
+//	game/entities/player/player_sync_packer_gen.go  Player 标记没写 subjectPacker= 时的默认 packer（entity 生成器
+//	                                 带 -self-sync Player 写出；"self" 视图含 DAO 全部 sync 字段）
 //
 // 开关关闭时以上文件与开启前逐字节相同，不引用 wiring/selfsync。
 
 const (
 	selfSyncVar          = "PlayerSelfSync"
 	selfSyncEntity       = "player"
+	selfSyncEntityName   = "Player"
 	selfSyncProtocolPath = "protocol/def/self_sync.go"
 	selfSyncDocument     = "docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync"
 	// selfSyncDocumentURL 是给生成工程里的人看的地址：core 文档不在生成工程里，相对路径打不开。
@@ -97,67 +98,66 @@ type SelfSyncProtocol interface {
 `, group, span.Max)
 }
 
+// renderSelfSyncGuide 是 self_sync 打开时接在生成工程 docs/PLAYER_ACCESS_TCP.zh-CN.md 末尾的一节；
+// 开关关闭时不出现，文档与开启前逐字节相同。
+func renderSelfSyncGuide() string {
+	return `
+## 8. 玩家看自己的状态（self_sync）
+
+roost.yaml 的 access.player.self_sync: true 已打开：每个在线玩家经 Entity Sync 收到自己的 Player
+（视图 self），登录后第一帧是全量，之后每次 handler 提交的变化是增量，断线重连从全量开始。
+
+要做的只有一件事：给客户端要看的 DAO 字段写 dao:"persist,sync"，只经生成的 setter 在 Nest handler
+里修改（不需要手动标脏）。Player 的 //roost:entity 标记不用改：开关打开时按 sync=true 生成，没写
+subjectPacker= 时生成器写 game/entities/player/player_sync_packer_gen.go（self 视图包含 DAO 全部
+sync 字段，roost generate / project sync 会重写）。代价：标了 sync 的字段默认全部对玩家本人可见。
+
+需要裁剪字段或别的视图（AOI 里别人看到的视图、按字段权限）时自己写 packer，视图集要认识
+policy.SelfProfile，然后在标记上写 subjectPacker=<你的工厂>；生成的那份随之删除。去掉
+subjectPacker= 后它会回来。DAO 没有 sync 字段时 roost project doctor 给警告：客户端收不到任何东西。
+
+运行时规则（跟不上就断开、监控指标、客户端解码）见 ` + selfSyncDocumentURL + `。
+`
+}
+
 // errSelfSyncNotReady 包住 checkSelfSync 的全部拒绝，doctor 据此归类。
 var errSelfSyncNotReady = errors.New("access.player.self_sync is on but the project is not ready for it")
 
-// checkSelfSync 是 generate 与 doctor 共用的前置检查：开关打开时 Player Entity 必须声明 Entity Sync
-// （sync=true 与 subjectPacker），推送编号的协议声明必须在。每条拒绝都写明要改的文件与写法。
-func checkSelfSync(root string, m Manifest) error {
+// selfSyncStatus 是 checkSelfSync 通过时的结论：Player 用哪个 packer，以及给 doctor 的警告（没有就空）。
+type selfSyncStatus struct {
+	packer  string
+	warning string
+}
+
+// checkSelfSync 是 generate 与 doctor 共用的前置检查。开关打开时：Player Entity 必须存在；标记缺省按
+// sync=true，没写 subjectPacker= 时生成器写默认 packer（game/entities/player/player_sync_packer_gen.go），
+// 这要求 Player 恰好一个 DAO；推送编号的协议声明必须在。每条拒绝都写明要改的文件与写法。
+// 默认 packer 的 DAO 没有标 sync 的字段时只给警告：工程照常生成、编译，客户端收不到任何字段。
+func checkSelfSync(root string, m Manifest) (selfSyncStatus, error) {
 	if !selfSyncEnabled(m) {
-		return nil
+		return selfSyncStatus{}, nil
 	}
 	var problems []string
-	entityPath := filepath.Join(root, "game", "entities", selfSyncEntity, "entity.go")
-	params, err := entityMarkerParams(entityPath)
-	switch {
-	case os.IsNotExist(err):
-		problems = append(problems, "the player Entity does not exist; run: roost add entity Player")
-	case err != nil:
-		problems = append(problems, err.Error())
-	default:
-		if params["sync"] != "true" || params["subjectPacker"] == "" {
-			problems = append(problems, fmt.Sprintf(`game/entities/player/entity.go: the //roost:entity marker must declare Entity Sync; append to it: sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker
-    then write NewPlayerSyncPacker (copy the packer from roost-core %s): its view set must accept the profile Key "self" (policy.SelfProfile), e.g. entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}}
-    tag the DAO fields the client should see as dao:"persist,sync"; change them only through the generated setters inside a Nest handler, and Nest hands the change to the client when the handler commits (no manual marking)`, selfSyncDocumentURL))
+	var status selfSyncStatus
+	entityDir := filepath.Join(root, "game", "entities", selfSyncEntity)
+	if _, err := os.Stat(filepath.Join(entityDir, "entity.go")); os.IsNotExist(err) {
+		problems = append(problems, "the player Entity does not exist; run: roost add entity "+selfSyncEntityName)
+	} else if plan, err := entity.InspectSelfSync(entityDir, selfSyncEntityName); err != nil {
+		problems = append(problems, fmt.Sprintf("%v\n    (see %s)", err, selfSyncDocumentURL))
+	} else {
+		status.packer = plan.Packer
+		if plan.DefaultPacker {
+			status.packer += " (generated in game/entities/" + selfSyncEntity + "/" + plan.PackerFile + ")"
+		}
+		if plan.NoSyncFields {
+			status.warning = plan.NoSyncFieldsWarning(selfSyncEntityName)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath))); os.IsNotExist(err) {
 		problems = append(problems, selfSyncProtocolPath+" is missing; run: roost project sync (it creates the push id once)")
 	}
 	if len(problems) == 0 {
-		return nil
+		return status, nil
 	}
-	return fmt.Errorf("%w:\n  - %s", errSelfSyncNotReady, strings.Join(problems, "\n  - "))
-}
-
-// entityMarkerParams 读 entity.go 里第一个 //roost:entity 标记的 key=value 参数（值可带引号）。
-func entityMarkerParams(path string) (map[string]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		rest, ok := marker.Cut(strings.TrimSpace(scanner.Text()), "entity")
-		if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
-			continue
-		}
-		params := map[string]string{}
-		for _, field := range strings.Fields(rest) {
-			key, value, found := strings.Cut(field, "=")
-			if !found {
-				continue
-			}
-			if unquoted, err := strconv.Unquote(value); err == nil {
-				value = unquoted
-			}
-			params[key] = value
-		}
-		return params, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("%s: no //roost:entity marker", filepath.ToSlash(path))
+	return selfSyncStatus{}, fmt.Errorf("%w:\n  - %s", errSelfSyncNotReady, strings.Join(problems, "\n  - "))
 }

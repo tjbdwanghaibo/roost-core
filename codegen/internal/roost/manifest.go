@@ -144,8 +144,9 @@ type AccessSpec struct {
 	Transports []string `yaml:"transports,omitempty"`
 	// SelfSync（只用于 player）让每个在线玩家经 Entity Sync 收到自己的 Player 状态：生成的 bootstrap 改用
 	// wiring/nest.NewModWithEntitySync 并装上 wiring/selfsync，player TCP Mod 接上连接生命周期，
-	// protocol/def/self_sync.go 声明推送编号。Player Entity 需要 sync=true 与认识 "self" 视图的 packer
-	// （generate / doctor 检查）。默认关。
+	// protocol/def/self_sync.go 声明推送编号。Player 的标记缺省按 sync=true；没写 subjectPacker= 时 entity
+	// 生成器写默认 packer（player_sync_packer_gen.go，"self" 视图含 DAO 全部 sync 字段），generate / doctor
+	// 检查就绪情况。默认关。
 	SelfSync bool `yaml:"self_sync,omitempty"`
 }
 

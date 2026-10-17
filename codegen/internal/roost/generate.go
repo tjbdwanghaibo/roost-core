@@ -111,7 +111,12 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return protocol.Run(forceArg(args, force), w)
 		}},
 		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(root string, w io.Writer) error {
-			return entity.Run(forceArg([]string{"-dir", under(root, "game")}, force), w)
+			args := []string{"-dir", under(root, "game")}
+			if selfSyncEnabled(m) {
+				// access.player.self_sync：Player 缺省 sync=true，没写 subjectPacker= 时生成默认 packer。
+				args = append(args, "-self-sync", selfSyncEntityName)
+			}
+			return entity.Run(forceArg(args, force), w)
 		}},
 		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(root string, w io.Writer) error {
 			return nest.Run(forceArg([]string{"-dir", under(root, "game")}, force), w)
@@ -189,7 +194,7 @@ func generate(ctx context.Context, root string, options GenerateOptions) error {
 	if options.Check {
 		return checkGenerated(ctx, root, manifest, options.Stdout)
 	}
-	if err := checkSelfSync(root, manifest); err != nil {
+	if _, err := checkSelfSync(root, manifest); err != nil {
 		return err
 	}
 	selected := generatorsFor(manifest, options.Force)
@@ -226,7 +231,7 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 	if err != nil {
 		return err
 	}
-	if err := checkSelfSync(absRoot, manifest); err != nil {
+	if _, err := checkSelfSync(absRoot, manifest); err != nil {
 		return err
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(absRoot), ".roost-generate-*")

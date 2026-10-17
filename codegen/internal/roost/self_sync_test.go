@@ -61,6 +61,9 @@ func TestSelfSyncOffKeepsTheFormerWiring(t *testing.T) {
 	if _, exists := files[selfSyncProtocolPath]; exists {
 		t.Errorf("%s planned with self_sync off", selfSyncProtocolPath)
 	}
+	if guide := string(files["docs/PLAYER_ACCESS_TCP.zh-CN.md"].Body); guide != renderPlayerTCPGuide() {
+		t.Errorf("the player TCP guide changed with self_sync off")
+	}
 }
 
 // 开关打开：接线全部在生成器所有的文件里，推送编号的协议声明归项目（只创建一次）。
@@ -96,64 +99,107 @@ func TestSelfSyncRendersVisibleWiring(t *testing.T) {
 			t.Errorf("server_gen.go lacks %q", want)
 		}
 	}
+	if guide := string(files["docs/PLAYER_ACCESS_TCP.zh-CN.md"].Body); !strings.Contains(guide, "## 8. 玩家看自己的状态（self_sync）") || !strings.Contains(guide, "player_sync_packer_gen.go") || !strings.Contains(guide, "subjectPacker=") {
+		t.Errorf("the player TCP guide does not explain self_sync and its default packer")
+	}
 	def, exists := files[selfSyncProtocolPath]
 	if !exists || def.Owned || !strings.Contains(string(def.Body), "SelfSync() SelfSyncPush") || !strings.Contains(string(def.Body), "//roost:msg id=19999") {
 		t.Fatalf("%s = %+v, want a business-owned push declaration at the top of the game group", selfSyncProtocolPath, def)
 	}
 }
 
-// generate / doctor 的前置检查：Player 没声明 Entity Sync 时说出要改的文件与写法。
+// generate / doctor 的前置检查：开关就是“Player 要 Entity Sync”，标记缺省按 sync=true，没写 subjectPacker= 时
+// 用生成的默认 packer；拒绝（没有实体、没有 DAO、显式 sync=false、缺推送编号）说出要改的文件与写法，
+// DAO 没有 sync 字段只给警告（doctor 的 warn）。
 func TestSelfSyncCheckNamesTheFix(t *testing.T) {
 	root := t.TempDir()
 	m := selfSyncManifest(t, "tcp")
-	err := checkSelfSync(root, m)
+	_, err := checkSelfSync(root, m)
 	if err == nil || !strings.Contains(err.Error(), "roost add entity Player") || !strings.Contains(err.Error(), "roost project sync") {
 		t.Fatalf("missing entity and def: %v", err)
 	}
-	entityDir := filepath.Join(root, "game", "entities", "player")
-	if err := os.MkdirAll(entityDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	write := func(marker string) {
+	write := func(rel, body string) {
 		t.Helper()
-		body := "package player\n\n" + marker + "\ntype Player struct{}\n"
-		if err := os.WriteFile(filepath.Join(entityDir, "entity.go"), []byte(body), 0o644); err != nil {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther")
-	if err := os.MkdirAll(filepath.Join(root, "protocol", "def"), 0o755); err != nil {
-		t.Fatal(err)
+	entity := func(marker, fields string) {
+		t.Helper()
+		write("game/entities/player/entity.go", "package player\n\nimport db \"example.com/planet/db\"\n\nvar _ db.PlayerDao\n\n"+marker+"\ntype Player struct {\n"+fields+"}\n")
 	}
-	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath)), []byte(renderSelfSyncProtocolDef(m)), 0o644); err != nil {
-		t.Fatal(err)
+	const oneDao = "\tdao *db.PlayerDao `dao:\"player\"`\n"
+	write("go.mod", "module example.com/planet\n\ngo 1.24\n")
+	write("db/player_dao_gen.go", "package db\n\ntype PlayerDao struct{}\n")
+	write(selfSyncProtocolPath, renderSelfSyncProtocolDef(m))
+
+	// 只建了实体、还没有 DAO：默认 packer 没东西可发。
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther", "")
+	if _, err := checkSelfSync(root, m); err == nil || !strings.Contains(err.Error(), "roost add dao Player --entity Player") || !strings.Contains(err.Error(), selfSyncDocumentURL) {
+		t.Fatalf("Player without a DAO: %v", err)
 	}
-	err = checkSelfSync(root, m)
-	for _, want := range []string{"sync=true", "subjectPacker=NewPlayerSyncPacker", `Key: "self"`, `dao:"persist,sync"`, selfSyncDocumentURL} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("marker without sync: %v, want it to name %q", err, want)
+	// 显式 sync=false 与开关矛盾。
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer sync=false", oneDao)
+	if _, err := checkSelfSync(root, m); err == nil || !strings.Contains(err.Error(), "drop sync=false") {
+		t.Fatalf("sync=false: %v", err)
+	}
+	// 标记不写 sync / subjectPacker、DAO 没有 sync 字段：就绪，默认 packer，带警告。
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther", oneDao)
+	status, err := checkSelfSync(root, m)
+	if err != nil {
+		t.Fatalf("a bare marker with one DAO refused: %v", err)
+	}
+	if !strings.Contains(status.packer, "NewPlayerSyncPacker (generated in game/entities/player/player_sync_packer_gen.go)") {
+		t.Errorf("packer = %q, want the generated default", status.packer)
+	}
+	for _, want := range []string{"db.PlayerDao has no field tagged sync", "receives nothing", `dao:"persist,sync"`, "roost generate"} {
+		if !strings.Contains(status.warning, want) {
+			t.Errorf("warning %q lacks %q", status.warning, want)
 		}
 	}
-	// Nest 在 handler 提交时自动收集客户端同步变化（TakeEntitySyncChanges）；修复说明不能再让业务手动标脏：
-	// TakeSyncDirty 取走的是服务间同步的独立掩码，照做会偷走别的读者的变化。
-	if strings.Contains(err.Error(), "TakeSyncDirty") || strings.Contains(err.Error(), "MarkSyncDirty") {
-		t.Fatalf("the fix tells the business to mark sync dirty by hand: %v", err)
+	// Nest 在 handler 提交时自动收集客户端同步变化；提示不能让业务手动标脏。
+	if strings.Contains(status.warning, "TakeSyncDirty") || strings.Contains(status.warning, "MarkSyncDirty") {
+		t.Fatalf("the hint tells the business to mark sync dirty by hand: %s", status.warning)
 	}
-	write(`//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker`)
-	if err := checkSelfSync(root, m); err != nil {
-		t.Fatalf("a ready project refused: %v", err)
+	// DAO 有 sync 字段（生成的 DAO 带 SyncFields）：没有警告。
+	write("db/player_dao_sync_gen.go", "package db\n\nfunc PlayerDaoSyncFields() []int { return nil }\n")
+	if status, err := checkSelfSync(root, m); err != nil || status.warning != "" {
+		t.Fatalf("with sync fields: status=%+v err=%v", status, err)
+	}
+	// 业务自己的 packer。
+	entity(`//roost:entity id=1 entityKind=EntityKindPlayer sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker`, oneDao+"\tbag *db.PlayerDao `dao:\"bag\"`\n")
+	if status, err := checkSelfSync(root, m); err != nil || status.packer != "NewPlayerSyncPacker" || status.warning != "" {
+		t.Fatalf("custom packer: status=%+v err=%v", status, err)
+	}
+	// 多个 DAO 而没写 packer：默认 packer 只发一个 DAO，说出怎么写自己的。
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer", oneDao+"\tbag *db.PlayerDao `dao:\"bag\"`\n")
+	if _, err := checkSelfSync(root, m); err == nil || !strings.Contains(err.Error(), "subjectPacker=NewPlayerSyncPacker") {
+		t.Fatalf("two DAOs without a packer: %v", err)
+	}
+	// 推送编号缺失。
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer", oneDao)
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkSelfSync(root, m); err == nil || !strings.Contains(err.Error(), "roost project sync") {
+		t.Fatalf("missing push id: %v", err)
 	}
 	access := m.Access["player"]
 	access.SelfSync = false
 	m.Access["player"] = access
-	write("//roost:entity id=1 entityKind=EntityKindPlayer")
-	if err := checkSelfSync(root, m); err != nil {
+	entity("//roost:entity id=1 entityKind=EntityKindPlayer sync=false", "")
+	if _, err := checkSelfSync(root, m); err != nil {
 		t.Fatalf("self_sync off still checked: %v", err)
 	}
 }
 
 // 按新手流程（project new → add access / entity / component / dao / handler / protocol / endpoint / lifecycle /
-// transport）搭一个工程，打开 self_sync 并照报错补上 Entity Sync，然后在工程里跑一条经生成接线的真实 TCP 用例：
+// transport）搭一个工程，只打开 self_sync、给 DAO 字段标 sync（不改标记、不写 packer），然后在工程里跑一条
+// 经生成接线的真实 TCP 用例；再换成业务自己的 packer 跑一遍，最后切回默认 packer。用例走的是：
 // 生成的 bootstrap 变量、生成的 Nest Mod（NewModWithEntitySync）、生成的 player 接入与 TCP Mod（WithSelfSync），
 // Nest 执行生成的 handler；只把 DataEngine 换成不落库的 committer 与“权威里没有”的 loader。
 func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
@@ -298,38 +344,75 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 `)
 	write("internal/access/player/tcp/auth.go", selfSyncTestAuthenticator)
 
-	// 打开开关：Player 还没声明 Entity Sync，sync 拒绝并说出改法。
+	// 打开开关：标记一个字都不改、不写 packer，project sync 直接通过，生成默认 packer。
 	edit("roost.yaml", "        transports:\n            - tcp\n", "        transports:\n            - tcp\n        self_sync: true\n")
-	var refused bytes.Buffer
-	if err := Run([]string{"project", "sync", "--skip-deps", "--root", root}, &refused, &refused); err == nil || !strings.Contains(err.Error()+refused.String(), "subjectPacker=NewPlayerSyncPacker") {
-		t.Fatalf("project sync with an unprepared Player: err=%v\n%s", err, refused.String())
+	entityBefore, err := os.ReadFile(filepath.Join(root, "game", "entities", "player", "entity.go"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// 照报错做：标记、packer（认识 "self" 视图）。
-	edit("game/entities/player/entity.go", "category=entity.EntityCategoryOther\n", "category=entity.EntityCategoryOther sync=true syncNamespace=\"player\" subjectPacker=NewPlayerSyncPacker\n")
-	write("game/entities/player/sync_packer.go", selfSyncTestPacker)
 	roost("project", "sync", "--skip-deps", "--root", root)
 	roost("generate", "--root", root)
+	generatedPacker := filepath.Join(root, "game", "entities", "player", "player_sync_packer_gen.go")
+	exists := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	if raw, err := os.ReadFile(generatedPacker); err != nil || !bytes.HasPrefix(raw, []byte("// Code generated by tool/entity. DO NOT EDIT.")) || !bytes.Contains(raw, []byte("func NewPlayerSyncPacker(")) {
+		t.Fatalf("default packer = %q, %v", raw, err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(root, "game", "entities", "player", "entity.go")); !bytes.Equal(after, entityBefore) {
+		t.Fatalf("project sync rewrote the business entity.go")
+	}
 	for _, rel := range []string{"internal/bootstrap/generated.go", selfSyncProtocolPath} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatal(err)
 		}
 	}
 	write("internal/bootstrap/self_sync_e2e_test.go", selfSyncGeneratedE2E)
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
-	for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "TestSelfSyncEndToEnd", "-v", "./internal/bootstrap"}} {
-		command := exec.CommandContext(ctx, "go", args...)
-		command.Dir = root
-		out, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-		if args[0] == "test" {
-			if !strings.Contains(string(out), "--- PASS: TestSelfSyncEndToEnd") {
-				t.Fatalf("the generated end-to-end test did not run:\n%s", out)
+	runGenerated := func(label string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+		defer cancel()
+		for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "TestSelfSyncEndToEnd", "-v", "./internal/bootstrap"}} {
+			command := exec.CommandContext(ctx, "go", args...)
+			command.Dir = root
+			out, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: go %s: %v\n%s", label, strings.Join(args, " "), err, out)
 			}
-			t.Logf("%s", out)
+			if args[0] == "test" {
+				if !strings.Contains(string(out), "--- PASS: TestSelfSyncEndToEnd") {
+					t.Fatalf("%s: the generated end-to-end test did not run:\n%s", label, out)
+				}
+				t.Logf("%s:\n%s", label, out)
+			}
 		}
+	}
+	runGenerated("default packer")
+
+	// 业务改用自己的 packer：标记写 subjectPacker=，生成的那份被删掉（还在的话 NewPlayerSyncPacker 重复声明，
+	// 编译不过），行为与以前照抄文档的工程相同。
+	edit("game/entities/player/entity.go", "category=entity.EntityCategoryOther\n", "category=entity.EntityCategoryOther sync=true syncNamespace=\"player\" subjectPacker=NewPlayerSyncPacker\n")
+	write("game/entities/player/sync_packer.go", selfSyncTestPacker)
+	roost("project", "sync", "--skip-deps", "--root", root)
+	if exists(generatedPacker) {
+		t.Fatalf("the default packer survived subjectPacker=NewPlayerSyncPacker")
+	}
+	runGenerated("custom packer")
+
+	// 再切回来：删掉标记里的 subjectPacker= 与业务 packer，生成的那份回来。
+	edit("game/entities/player/entity.go", " sync=true syncNamespace=\"player\" subjectPacker=NewPlayerSyncPacker\n", "\n")
+	if err := os.Remove(filepath.Join(root, "game", "entities", "player", "sync_packer.go")); err != nil {
+		t.Fatal(err)
+	}
+	roost("project", "sync", "--skip-deps", "--root", root)
+	if !exists(generatedPacker) {
+		t.Fatalf("the default packer did not come back after subjectPacker= was removed")
+	}
+	command := exec.Command("go", "build", "./...")
+	command.Dir = root
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("back to the default packer: go build: %v\n%s", err, out)
 	}
 }
 
