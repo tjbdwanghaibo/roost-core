@@ -1,0 +1,14 @@
+--- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring (0.00s)
+    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/one_shot (0.00s)
+        scheduler_test.go:667: delete arrived before initial upsert for IDs [3]
+        scheduler_test.go:670: stored seed=2, allocated seed=3 (fresh ID 3 can be reused after restart)
+        scheduler_test.go:689: after restart ID=3, want greater than previously returned ID 3
+    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/rearm (0.00s)
+        scheduler_test.go:667: delete arrived before initial upsert for IDs [3]
+    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/cancel_on_announce (0.00s)
+        scheduler_test.go:664: reentered=true fired=1, want 0 nested firings
+    --- FAIL: TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring/reschedule_on_announce (0.00s)
+        scheduler_test.go:664: reentered=true fired=1, want 0 nested firings
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/timer	0.008s
+FAIL
