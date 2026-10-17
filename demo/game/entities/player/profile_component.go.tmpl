@@ -2,13 +2,14 @@ package player
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"{{MODULE}}/game/dungeon"
 	"{{MODULE}}/game/effects"
 	apperrors "{{MODULE}}/internal/errors"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //roost:component type=2000
@@ -93,12 +94,17 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount)
 	}
 	dao := component.Owner().Dao()
-	exp := dao.GetExp() + amount
-	gained := int32(0)
-	for exp >= ExpPerLevel {
-		exp -= ExpPerLevel
-		gained++
+	currentExp, currentLevel := dao.GetExp(), dao.GetLevel()
+	// 先守住经验与等级的存储范围，再做除余；不能让正数溢出，或按奖励大小逐级占用业务 worker。
+	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
+		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
 	}
+	total := currentExp + amount
+	levels := total / ExpPerLevel
+	if levels > int64(math.MaxInt32)-int64(currentLevel) {
+		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "level", currentLevel)
+	}
+	exp, gained := total%ExpPerLevel, int32(levels)
 	dao.SetExp(exp)
 	if gained == 0 {
 		// One call per mutation, at every exit that changed something: the
@@ -107,7 +113,7 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 		component.Owner().PublishSyncDirty()
 		return 0, nil
 	}
-	level := dao.GetLevel() + gained
+	level := currentLevel + gained
 	dao.SetLevel(level)
 	// The level is a DAO field; what a level is WORTH is the attribute
 	// system's. LevelUp raises the base layer, recomposes Final over it and

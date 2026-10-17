@@ -52,6 +52,8 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if err != nil {
 		return dungeon.ClaimResult{}, err
 	}
-	stats.StatsComp().RecordExp(amount)
+	if err := stats.StatsComp().RecordExp(amount); err != nil {
+		return dungeon.ClaimResult{}, err
+	}
 	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained}, nil
 }

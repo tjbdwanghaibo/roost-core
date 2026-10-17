@@ -10,6 +10,11 @@
 - **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `f8851f4a` 报告并只修了第一种情况，本轮复核扩展为统一规则。
 - **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](docs/performance/benchmarks/timer-announce-reentrant-hook/)，分析见[重构方案 §9](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
 
+### game-demo 经验发放：范围校验与有界计算
+
+- 修复大额正数奖励把 Player 剩余经验、World 累计或 int32 等级写成负数的问题。`ProfileComponent.AddExp` 在写 DAO 前检查经验加法和等级范围，平坦等级曲线改为除余计算，避免按升级数量逐级占用业务 worker；拒绝仍使用 `exp_amount`（100004），文案改为 `invalid exp amount`。
+- `StatsComponent.RecordExp` 返回 error 并检查累计范围；`AddExp` 和 `ClaimDungeon` 传播错误，回滚 Player、属性、领奖账本与升级效果。DAO schema、协议字段与 Sender 参数不变；自定义调用 `RecordExp` 的业务需要检查其返回值。
+- 新增并登记生成工程的真实 Sender/Nest 回归：经验和等级溢出拒绝、恰好达到存储上限的大额合法奖励、World 累计超限后的两实体/属性/账本回滚及无新提交记录。
 ### 生成器：`access.player.self_sync` 的默认 packer 由生成器生成（维护者 2026-10-17 决定，第三轮新用户试用登记项 3）
 
 - **只开开关 + 标 sync 字段即可**：`roost.yaml` 打开 `access.player.self_sync: true` 后，Player 的 `//roost:entity` 标记不用改、不用写 packer。entity 生成器带 `-self-sync Player` 运行：标记缺省按 `sync=true`（`syncNamespace` 缺省 `"player"`）；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（生成器所有、带生成头，`roost generate` / `roost project sync` 会重写）——`NewPlayerSyncPacker`，视图集只有 `policy.SelfProfile`，包含 Player DAO 的全部 sync 字段（字段表运行期从 DAO 取，DAO 增删 sync 字段自动跟随），未知视图返回 `entity.ErrSyncViewUnknown`；wire 的 `PackerFactory` 指向它。

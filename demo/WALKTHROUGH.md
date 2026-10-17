@@ -43,6 +43,8 @@ TCP (player access)
 
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
+经验发放先校验 int64 经验与 int32 等级范围，再按平坦曲线用除余计算升级和剩余经验，不按奖励数量逐级循环。World 的 `RecordExp` 同样检查 int64 累计范围并返回 error；`AddExp` 与 `ClaimDungeon` 必须传播它，让 Player、属性、领奖账本与升级效果在同一事务里一起回滚。超出范围沿用 `exp_amount`（100004），拒绝时没有新的提交记录。生成工程回归在 `game/handler/add_exp_test.go`，包含存储边界与两实体回滚。
+
 ```
 AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
   ├─ dao.SetExp / SetLevel                 状态变更

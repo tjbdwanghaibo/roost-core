@@ -521,6 +521,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/equip_item.go", why: "one transaction over three components: bag, equipment and the attribute layer that follows them"},
 		{write: "game/handler/claim_mail_reward.go", why: "the same ledger shape for the claim the mail service cannot make atomic"},
 		{write: "game/handler/add_item_test.go", why: "a grant that would overflow the stored count is refused before the bag is written, through the real handler and Sender"},
+		{write: "game/handler/add_exp_test.go", why: "experience and level overflow is refused atomically across Player, World and reward ledger"},
 		{write: "game/handler/claim_mail_reward_test.go", why: "the mail ledger asserted through the real handler in a real Nest transaction: the crash window a client cannot open"},
 		{write: "game/handler/claim_mail_expiry_test.go", why: "delayed reservations cannot regrant expired mail after ledger cleanup, including stale caller time"},
 		{write: "game/handler/claim_dungeon_test.go", why: "the clear reward's ledger and its window asserted together: a pruned run is refused, not paid again"},

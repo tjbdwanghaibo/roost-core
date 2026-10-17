@@ -2,8 +2,11 @@ package world
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 //roost:component type=2002
@@ -92,9 +95,15 @@ func (component *StatsComponent) RecordMatch() {
 // RecordExp adds to the server-wide experience total. It is called from
 // AddExp, which holds the Player and the World at once — the reason the two
 // kinds have distinct lock ranks.
-func (component *StatsComponent) RecordExp(amount int64) {
+func (component *StatsComponent) RecordExp(amount int64) error {
 	dao := component.Owner().Dao()
-	dao.SetExpGranted(dao.GetExpGranted() + amount)
+	current := dao.GetExpGranted()
+	// 全服累计也必须检查范围；由调用方返回错误，让 Player、账本与 World 在同一事务里回滚。
+	if amount <= 0 || current < 0 || amount > math.MaxInt64-current {
+		return errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "world_exp", current)
+	}
+	dao.SetExpGranted(current + amount)
+	return nil
 }
 
 // Snapshot reads the counters under the lock.
