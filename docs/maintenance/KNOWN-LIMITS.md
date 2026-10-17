@@ -115,6 +115,25 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **边界**：只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
 
+## SLG 接入实践的验证范围
+
+2026-10-17 在 Linux/amd64、Go 1.27.2，以主线 `91606e48` 为基线复核，随后验证本分支的活动榜修复。代码索引工具本会话不可用，调用链通过当前源码与 rg 补证。业务 / demo / 框架的归属示例见 [WALKTHROUGH](../../demo/WALKTHROUGH.md#用于-slg-等游戏时哪些规则归业务)；这里记录实际证据深度，不把覆盖目录当成所有功能已验收。
+
+| 能力 | 实际执行与结果 | 边界 |
+| --- | --- | --- |
+| 工程生成、配置、DAO / Entity / Sender 生成 | 正式 CLI 生成 game-demo；消费者 build、vet、291 条测试事件通过；`roost id check`、`roost generate --check` 通过；core `go generate ./...` 无额外生成漂移 | 未发布标签的最低依赖兼容未重新验收，消费者 replace 当前 checkout；无依赖门变量时用例明确 skip |
+| 登录建角、背包 / 经验、邮件、聊天、session、Saga、付费、排行、联盟、地图与匹配 | Mongo 8.0 单节点副本集、Redis 7.4、NATS 2.11 JetStream、etcd 3.5.21；启动十个服务，全部 ready；正式 demo 场景 2 名机器人全部成功，game 停启后再跑 2 名也全部成功 | 是本机功能检查；每次新建账号，未测跨机或目标玩家容量。排行场景只重放近期请求，不能推翻上面的“9 局变 10 分”复现 |
+| Nest / DataEngine / 文件 WAL / Mongo | `scripts/test-dataengine-generated.sh` 三个进程阶段通过，包含多实体事务、丢回执后重启、回滚、确认 / 投影 / 重载等正式生成路径 | 压力用例跳过；各阶段专属用例在其他阶段会 skip，不能累计成全部逐阶段通过 |
+| Remote 与 Mirror | `scripts/test-remote-generated.sh` race 功能路径通过，包含 async / strict / pipelined、Guild Mirror 的 JetStream / NATS 两种接法、提交后错误与卸载重载 | 本机多组件 / 部分子进程；本地 Mirror 专门进程场景跳过，未开 fault / load，没有验收跨机、Redis Cluster 或主从切换 |
+| Sync / AOI / 客户端 / Lockstep | 机器人观察自身属性、装备、位置与怪物，实际执行匹配后的 Lockstep；生成 demo 真实依赖脚本还通过 Gate → Nest → DAO / WAL 正式消费者 | 未把 self_sync 与 demo 自建 Manager 混装；Block AOI 等其他模式以已有包回归为证据，不声称在同一 demo 中跑过全部装配 |
+| 时间、活动与排行 | main 的 Timer 组合钩子和业务钟定向 race 复核通过；活动榜旧回复乱序在真实 Redis 上先红后绿，生成 game 服务 118 条 race 测试事件通过 | 副本长期重放计分仍未修复；按实体持久 Timer 接入仍属 D11，未擅自选方案 |
+| 恢复、schema 与运维 | 停 game 后 WAL 42 条保留记录的 checkpoint 等于尾记录；重启前后两份 Player 的版本、schema、last_tx 与摘要完全一致；真实 Mongo schema 离线迁移回归通过；十个 readyz 均成功 | 这是干净停启 / 状态比较，非断电恢复或实际跨机搬服；WAL 检查读取配置的显式目录 `data/wal/dataengine`，显式配置不会自动追加 sid |
+| 技能、热更与其他扩展 | demo 启动编译技能目录；全仓包测试实际覆盖其他框架模块，core build / vet 通过 | demo 不执行游戏技能 Host；没有把包测试等同真实插件替换、外部认证、监控告警接收或完整 SLG 玩法 |
+
+真实生成工程入口：`scripts/test-demo-generated.sh` 通过（含新增活动榜回归、Mongo Guild 发号恢复、付费交付、schema 迁移与 Gate 消费者）；Redis Cluster 子用例明确跳过。上述脚本的用法和隔离约束见[集成说明](../../wiring/scripts/integration/README.md)。云环境的可复用启动说明另存环境设置，不把机器本地日志路径当成跨环境保证。
+
+**全仓验证仍有失败**：`go test -p 2 -count=1 ./...` 在修前、修后均复现 `framework/sync/lockstep.TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection` 的慢连接关闭断言失败：`closed sessions map[], want only the stalled one (its outbound queue overflowed)`。登记为环境 / 测试稳定性待定位，未据此认定广播实现违约，也未修改断言或反复重跑刷绿。新增真实依赖回归已登记覆盖表和固定脚本；最终根包 42 条测试事件通过。整体不能记作全仓测试通过。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
