@@ -44,6 +44,36 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 `guild.ValidateName`（[模板](../../demo/game/entities/guild/roster_component.go.tmpl)）拒绝空、全空白、含控制字符与非法 UTF-8 的名字，端点在保留 ID 之前调用。**长度上限**与**全服重名**：维护者 2026-10-17 决定是业务逻辑，框架不处理，demo 也不实现——名字只受协议帧上限约束，两个公会可以同名、靠 `guild_id` 区分。业务需要长度上限 / 敏感词时加在 `ValidateName` 同一处；需要全服唯一时参考框架已有的 `service/directory`（`wiring/directory` 装配；先 Reserve 再创建、成功 Commit、失败 Cancel，预约带过期），用法写在 [Service 篇 §4](../framework/guide/09-services.md#4-关键业务边界)、[WALKTHROUGH](../../demo/WALKTHROUGH.md) 公会创建一段与模板注释。
 
+## 新用户试用第四轮：待修问题（2026-10-17 登记，尚未修复）
+
+基线 `300d728a`（origin/main）。先复核第三轮三项：依赖带入的 Mod 配置段、`project next` 按工程现状填名字、self_sync 默认 packer，用 main 构建的 CLI 新建工程实测均已解决（零手写 packer 时客户端照样收到全量 + 每次修改的增量）。随后按新手流程做“双倍金币卡”（限时 Buff，按业务时间到期），在共享隔离环境起真实进程联调时确认下面三项。修复由维护者在 main 上进行。
+
+### 1. 生成配置里的总线 / Data Engine 命名是所有工程共用的固定值
+
+**现象**：新工程的 `configs/service/config.game.yaml` 写 `nats.prefix: roost`（66 行）、`dataengine.database: game`（103 行）、`dataengine.effects.subject_prefix: roost.effect` 与 `stream: ROOST_EFFECTS`（134、135 行）；同一工程的 DAO 已按工程名生成 `//roost:dao coll=player db=r4`（D9 方案 B）。
+
+**复现**：`roost project new r4 -module example.com/r4 -mods configdata` → `roost add access player --service game` → 看上面四行。
+
+**影响**：两个工程共用一套开发用 Mongo / NATS 时，Data Engine 的 outbox / receipts / transactions 落进同一个 `game` 库、effects 走同一条流；[demo README 常见问题](../../demo/README.md#常见问题)记录了后果：上一个工程留下的 outbox 行没人 ack，30 分钟后新工程 `dataengine outbox: hard backlog limit exceeded` fail-stop；共用 `nats.prefix` 时 RPC 被别的流抢答（`unsupported rpc response version 0`）。新手只能在出事后从 FAQ 里找到这几个键。saga 的 `subject_prefix` / `stream` 同样不随工程（README 同一节）。
+
+**建议修法**：与 D9 方案 B 一致，生成时按工程名填这几项（`nats.prefix: <project>`、`dataengine.database: <project>_engine` 一类、effects / saga 的 subject 与 stream 带工程名）；已有工程不改写已有值，doctor 可以对仍是框架缺省值的给警告。
+
+### 2. `roost add endpoint` 只能从请求字段取参数，服务器决定的值（业务时间）无处可放
+
+**现象**：handler 需要业务时间时（`handlerUseDoubleCard(target, nowUnixMilli int64)`，与 game-demo 的 `nowUnix` 参数同一写法），`roost add endpoint UseDoubleCard --handler shop` 拒绝：`protocol UseDoubleCardRequest has no field matching Nest parameter "nowUnixMilli"`（`codegen/internal/roost/add_workflow.go:620`）。
+
+**影响**：报错只告诉新手“请求里缺这个字段”，最省事的改法是在请求里加 `NowUnixMilli`，于是业务时间由客户端决定，客户端可以随意延长限时效果、提前领取冷却奖励。正确写法（endpoint 里取 `app.BusinessClock(controller.Registry()).Now()` 传给 Sender）只能整段手写，game-demo 的 controller 都是手写的。
+
+**建议修法**：endpoint 生成器认识“服务器提供”的参数，例如约定名 `now` / `nowUnix` / `nowUnixMilli`（`time.Time` / `int64`）由业务钟填入，或 `--server-param nowUnixMilli=business-clock`；其他请求里没有的参数，报错写明“业务时间等服务器决定的值不要放进请求，写在 endpoint 里”，并给出手写示例。
+
+### 3. 没有可复用的持久定时器接入（按实体的到期动作）
+
+**现象**：`infra/base/timer.Scheduler` 是宿主驱动的通用堆：期限持久化、加载后重建、谁来 Tick 都由业务决定（[guide/10-time §3](../framework/guide/10-time.md#3-scheduler)）。现成的接入只有 game-demo World 的 `TimerComponent`（模板 263 行，期限存 `WorldDao.Timers`），由服务进程的 ticker 定期发 `Sync_TickWorldTimers` 驱动；它与 World 的活动阶段写在一起，生成器没有对应命令。
+
+**影响**：按玩家的到期动作（Buff 到期推送、建造完成、行军到达）要把 TimerComponent、TimerNode DAO 与 ticker 整套复制到 Player，并自己决定怎么驱动每个玩家的 Tick；`Delay_` 又不持久（NEST_RUNTIME“延时 Sender 不持久”）。新手大多退回“存到期时刻、读取时按业务时间判断”（本轮双倍金币卡就是这样写的），到期那一刻服务器不会做任何事。
+
+**需要维护者决定**：是否提供通用的 DAO 期限组件（例如 `roost add timer --entity Player` 生成节点 DAO 与组件，框架负责重建与持久化钩子），以及按实体的 Tick 由谁驱动（进程 ticker 按最早期限只给到期实体发消息，而不是每秒给所有在线实体发）。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
