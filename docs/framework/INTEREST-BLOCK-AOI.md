@@ -67,7 +67,13 @@ Interest继续归并 `spatial/block/self/team/...` 来源，不新增入口服�
 
 AOICluster继续复用相同AOI块基础，跨区域成员和边界镜像仍由Cluster协调锁串行；本轮没有把它扩成并行区域写入系统，正式Interest入队不经过该锁。
 
-AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，同距按实体 ID 升序。目标或观察者移动时，即使仍在同一距离档、区域没有产生 Enter/Leave/BandChanged，也必须重新选择。目标移动复用旧、新位置块的观察者反向索引（包括边界镜像），不扫描所有观察者；观察者移动只重排自身。`AddSubject` / `AddObserver` 对已存在 ID 的移动同样遵守此规则；未设容量时不增加这项重排工作。这是 Cluster 的容量规则，不能据此假定单区域 AOI 对被淘汰目标的重新准入时机完全相同。
+AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，同距按实体 ID 升序；每次操作之后，每个观察者的入选集合都等于这个排序的前 N 个（不变量）。目标或观察者移动时，即使仍在同一距离档、区域没有产生 Enter/Leave/BandChanged，也必须重新选择（[aoi_cluster.go](../../framework/sync/entitysync/policy/aoi_cluster.go) `collectAfterMove`）：
+
+- 目标移动：看得见它的观察者都登记在旧、新位置块的反向索引里（包括边界镜像），区域 AOI 判定可见性用的也是这份索引，不扫描全部观察者。其中没收到区域事件的观察者先做 O(候选数) 的边界检查 `crossesCapacityLocked`——入选的目标排到某个被抑制候选之后、或被抑制的目标排到某个入选目标之前——跨过边界才完整排序重排；收到区域事件的照常重排。检查的前提就是上面的不变量：上次重排后只有这一个目标的位置变了。
+- 观察者移动：到所有目标的距离都变了，只完整重排它自己。
+- `AddSubject` / `AddObserver` 对已存在 ID 的移动同样遵守此规则；未设容量时不做这项工作。
+
+代价（2026-10-17，`BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、每观察者约 45 个候选、上限 16、每步全部目标移动）：每步 5.8ms → 10.7ms，分配 13.1k → 14.5k；对每个看得见目标的观察者都完整重排的做法为 62ms；不设容量的 `BenchmarkClusterFlushRandomWalk` 无差异（[样本](../performance/benchmarks/aoi-cluster-reselect-20261017/)）。修前的数字低，是因为同档移动根本不重选。容量层没有滞回：两个目标在第 N 名附近来回交换时每次移动都会产生 Leave/Enter，同一负载 97 步的 Enter 数 25012 → 28918（+15.6%）；是否给容量加滞回见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)。这是 Cluster 的容量规则，单区域 AOI 的 `MaxVisible` 只在未入选目标进入或移动时淘汰严格更远的成员（`evictFarther`，同距保留在位者），入选目标远离不会让其他目标补位，二者不能互相推断。
 
 ## 5. BeObservedEntity：唯一位置，多块可见
 

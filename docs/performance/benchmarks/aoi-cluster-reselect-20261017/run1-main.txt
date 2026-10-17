@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	   12558	    191694 ns/op	   49483 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10          	   12542	    193928 ns/op	   49485 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     403	   5720733 ns/op	 3028329 B/op	   13085 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     420	   5704552 ns/op	 3022379 B/op	   13064 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	   12524	    197637 ns/op	   49487 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10          	   12138	    191774 ns/op	   49488 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     416	   5833072 ns/op	 3024802 B/op	   13071 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     417	   5768106 ns/op	 3023839 B/op	   13068 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	   12487	    192448 ns/op	   49481 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10          	   12538	    195657 ns/op	   49485 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     416	   5799886 ns/op	 3024835 B/op	   13071 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     416	   5891547 ns/op	 3024791 B/op	   13071 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	   12291	    196551 ns/op	   49483 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalk-10          	   12313	    194526 ns/op	   49486 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     416	   5774421 ns/op	 3024812 B/op	   13071 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     423	   5795522 ns/op	 3021222 B/op	   13060 allocs/op
+PASS

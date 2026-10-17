@@ -319,6 +319,35 @@ func BenchmarkClusterFlushRandomWalk(b *testing.B) {
 	}
 }
 
+// 容量生效的密集随机行走：每个观察者约 40 个候选、上限 16，衡量移动重选的成本。
+func BenchmarkClusterFlushRandomWalkCapped(b *testing.B) {
+	cluster, err := NewAOICluster(AOIConfig{BlockSize: 500, EnterRadius: 600, LeaveRadius: 800, Bands: []int64{300}, MaxVisible: 16})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for area := int64(0); area < 4; area++ {
+		if err := cluster.AddArea(AreaID(area+1), spatial.Rect{Min: spatial.Point{X: area * 2500, Y: 0}, Max: spatial.Point{X: (area + 1) * 2500, Y: 2500}}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for id := int64(1); id <= 1000; id++ {
+		cluster.AddSubject(id, spatial.Point{X: (id * 397) % 10000, Y: (id * 269) % 2500})
+	}
+	for id := int64(2001); id <= 2100; id++ {
+		cluster.AddObserver(id, spatial.Point{X: (id * 397) % 10000, Y: (id * 269) % 2500})
+	}
+	cluster.Flush()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for step := 0; step < b.N; step++ {
+		offset := int64(step%97) * 41
+		for id := int64(1); id <= 1000; id++ {
+			_ = cluster.MoveSubject(id, spatial.Point{X: (id*397 + offset) % 10000, Y: (id*269 + offset) % 2500})
+		}
+		cluster.Flush()
+	}
+}
+
 // Regression (review): per-area MaxVisible multiplied a border observer's
 // budget by the number of touched areas; the cap is now enforced globally at
 // the cluster level.

@@ -420,6 +420,21 @@ func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
 	}
 }
 
+// appendObserverIDsAt 把这些位置所在块登记的观察者 ID 追加到 dst 并返回，可能重复、不排序；
+// 不建中间集合，供 AOICluster 在自己的协调锁内复用暂存切片做容量重选。
+func (m *AOI) appendObserverIDsAt(dst []int64, points ...spatial.Point) []int64 {
+	for _, p := range points {
+		if b := m.blocks[m.index.BlockIndex(p)]; b != nil {
+			b.mu.RLock()
+			for id := range b.observers {
+				dst = append(dst, id)
+			}
+			b.mu.RUnlock()
+		}
+	}
+	return dst
+}
+
 // observersAt 合并旧、新格子的观察者，只排序一次。同格移动仍需评估距离变化。
 func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestObserver {
 	seen := make(map[int64]*interestObserver)

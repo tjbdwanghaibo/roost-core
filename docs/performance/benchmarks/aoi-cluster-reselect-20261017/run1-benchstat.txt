@@ -1,0 +1,22 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                │    main     │              crossing               │              corrected              │
+                                │   sec/op    │    sec/op     vs base               │    sec/op     vs base               │
+ClusterFlushRandomWalk-10         194.2µ ± 1%    194.4µ ± 6%        ~ (p=0.574 n=8)    197.0µ ± 2%        ~ (p=0.105 n=8)
+ClusterFlushRandomWalkCapped-10   5.785m ± 1%   11.271m ± 8%  +94.84% (p=0.000 n=8)   10.681m ± 1%  +84.63% (p=0.000 n=8)
+geomean                           1.060m         1.480m       +39.64%                  1.450m       +36.84%
+
+                                │     main     │              crossing               │              corrected              │
+                                │     B/op     │     B/op      vs base               │     B/op      vs base               │
+ClusterFlushRandomWalk-10         48.33Ki ± 0%   48.33Ki ± 0%        ~ (p=0.516 n=8)   48.32Ki ± 0%        ~ (p=0.585 n=8)
+ClusterFlushRandomWalkCapped-10   2.885Mi ± 0%   4.388Mi ± 0%  +52.11% (p=0.000 n=8)   3.417Mi ± 0%  +18.46% (p=0.000 n=8)
+geomean                           377.8Ki        466.0Ki       +23.33%                 411.2Ki        +8.84%
+
+                                │    main     │               crossing               │              corrected               │
+                                │  allocs/op  │  allocs/op   vs base                 │  allocs/op   vs base                 │
+ClusterFlushRandomWalk-10         1.400k ± 0%   1.400k ± 0%        ~ (p=1.000 n=8) ¹   1.400k ± 0%        ~ (p=1.000 n=8) ¹
+ClusterFlushRandomWalkCapped-10   13.07k ± 0%   22.69k ± 0%  +73.60% (p=0.000 n=8)     14.47k ± 0%  +10.70% (p=0.000 n=8)
+geomean                           4.278k        5.636k       +31.76%                   4.501k        +5.21%
+¹ all samples are equal

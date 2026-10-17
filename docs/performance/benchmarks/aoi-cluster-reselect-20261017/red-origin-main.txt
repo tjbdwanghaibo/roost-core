@@ -1,0 +1,31 @@
+--- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement (0.00s)
+    --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area (0.00s)
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area/suppressed_approaches (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area/selected_recedes (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area/observer_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area/add_subject_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/one_area/add_observer_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+    --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer (0.00s)
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer/suppressed_approaches (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer/selected_recedes (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer/observer_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer/add_subject_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+        --- FAIL: TestClusterMaxVisibleReselectsOnSameBandMovement/mirrored_observer/add_observer_moves (0.00s)
+            aoi_cluster_movement_test.go:70: after same-band movement visible = [2], want [3]
+--- FAIL: TestClusterMovementCapacityMatchesDistanceOrder (0.01s)
+    --- FAIL: TestClusterMovementCapacityMatchesDistanceOrder/limit_1 (0.00s)
+        aoi_cluster_movement_test.go:171: step 1 observer 100: visible=[4] want=[2]
+    --- FAIL: TestClusterMovementCapacityMatchesDistanceOrder/limit_3 (0.00s)
+        aoi_cluster_movement_test.go:171: step 1 observer 100: visible=[2 4 8] want=[2 8 9]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	1.068s
+FAIL

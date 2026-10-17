@@ -1,0 +1,16 @@
+AOICluster 同档移动重选（e13050d7 复核修正）基准对照，2026-10-17
+机器：Apple M5，darwin/arm64，Go 1.27.2，GOWORK=off，默认 GOMAXPROCS=10；本机有常驻后台负载（run2 噪声较大）。
+同一份基准源码（BenchmarkClusterFlushRandomWalk 不设容量；BenchmarkClusterFlushRandomWalkCapped：
+1000 目标、100 观察者、4 区 2500x2500、BlockSize 500、Enter 600 / Leave 800、Bands {300}、MaxVisible 16，
+每个 op = 全部 1000 目标移动一次 + Flush），各版本编译成独立测试二进制，交替运行：
+  -test.bench ClusterFlushRandomWalk -test.benchmem -test.count 2 -test.benchtime 2s，交替 4 轮，每版本 n=8。
+版本：
+  main            origin/main 8783ff5c + 基准文件（修前：同档移动不重选，结果不正确）
+  e13050d7        原修法：旧、新位置块上每个观察者都完整排序重排
+  crossing-scan   复核修正第一步：没收到区域事件的观察者先做 O(候选数) 容量边界检查（observersAt 仍分配）
+  corrected       最终：边界检查 + 观察者 ID 直接追加到复用暂存切片
+run1-benchstat.txt：main / crossing-scan / corrected；run2-benchstat.txt：main / e13050d7 / corrected。
+抖动（同一负载 97 步，按 Flush 事件计数，临时测试，不入库）：
+  main      enter=25012 leave=25012 band=23293
+  corrected enter=28918 leave=28918 band=23440
+red-origin-main.txt：e13050d7 的两条新回归在 origin/main 8783ff5c 上的失败原文。

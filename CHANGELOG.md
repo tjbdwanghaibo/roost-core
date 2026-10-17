@@ -35,6 +35,7 @@
 
 - 基线 `00d35150` 下，区域 AOI 不限容量，目标在同一距离档内移动没有事件；Cluster 只随区域事件重算 `MaxVisible`，因此更近的目标仍被抑制、远离的旧目标继续占位，观察者移动也有同样问题。SLG 行军视图设置可见上限时会漏掉已靠近的部队。`TestClusterMaxVisibleReselectsOnSameBandMovement` 修前 10 个业务子用例失败（实际仍为 `[2]`，应换为 `[3]`），单区域和边界镜像均可复现。
 - 现在目标移动通过旧、新位置的块反向索引标记观察者，观察者移动标记自身；先归并区域事件，再统一重排，保留跨区净变化与同距 ID 规则。覆盖重复 Add 的移动语义；不限容量时不增加距离重排。未改正式 Interest 的政策批次路径。
+- **复核修正（2026-10-17）**：原修法对旧、新位置块上每个观察者都完整排序重排，容量生效的密集负载（新增 `BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、上限 16）每步 5.8ms → 62ms、分配 ×7.8。现在没收到区域事件的观察者先做 O(候选数) 的容量边界检查（`crossesCapacityLocked`），只在移动的目标跨过第 N 名时才重排，观察者 ID 直接从块索引追加到复用的暂存切片：同一基准 10.7ms、分配 13.1k → 14.5k；不设容量的基准无差异（修前低是因为同档移动不重选）。新增 `TestClusterCapacityStaysNearestAmongCandidates`（越过进入 / 离开半径、跨接缝的随机行走，对照候选内最近 N），逐一去掉边界检查的两个分支都会变红。容量层没有滞回，同负载 Enter 数 +15.6%，见 KNOWN-LIMITS“AOICluster 容量抖动”。[样本](docs/performance/benchmarks/aoi-cluster-reselect-20261017/)
 - 回归：`go test ./framework/sync/entitysync/policy -run '^TestCluster' -count=1`；连续移动对照独立最近 N 排序，同时核对增量事件还原的可见集。接口与存储格式不变，临时规避是不用 Cluster 容量限制、在业务层自行选取目标；具体规则见 [Block AOI](docs/framework/INTEREST-BLOCK-AOI.md#4-block-与-observer)。
 
 ### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数

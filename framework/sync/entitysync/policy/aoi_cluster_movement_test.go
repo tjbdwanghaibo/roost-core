@@ -183,3 +183,82 @@ func TestClusterMovementCapacityMatchesDistanceOrder(t *testing.T) {
 		})
 	}
 }
+
+// 移动范围超过进入 / 离开半径并跨接缝，候选集由区域滞回决定；容量层必须始终等于
+// 候选里按 (距离, ID) 最近的 MaxVisible 个。用于核对“只在跨过容量边界时重排”的捷径。
+func TestClusterCapacityStaysNearestAmongCandidates(t *testing.T) {
+	for seed := uint64(1); seed <= 40; seed++ {
+		c, err := NewAOICluster(AOIConfig{BlockSize: 200, EnterRadius: 500, LeaveRadius: 700, Bands: []int64{250}, MaxVisible: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id := AreaID(1); id <= 2; id++ {
+			if err := c.AddArea(id, spatial.Rect{Min: spatial.Point{X: int64(id-1) * 2000}, Max: spatial.Point{X: int64(id) * 2000, Y: 2000}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rng := rand.New(rand.NewPCG(seed, 7))
+		point := func() spatial.Point { return spatial.Point{X: 1000 + rng.Int64N(2000), Y: 500 + rng.Int64N(1000)} }
+		step := func(at spatial.Point) spatial.Point {
+			at.X = min(max(at.X+rng.Int64N(301)-150, 0), 3999)
+			at.Y = min(max(at.Y+rng.Int64N(301)-150, 0), 1999)
+			return at
+		}
+		observers := []int64{100, 101, 102}
+		at := make(map[int64]spatial.Point)
+		for _, id := range observers {
+			at[id] = point()
+			if err := c.AddObserver(id, at[id]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for id := int64(1); id <= 12; id++ {
+			at[id] = point()
+			if err := c.AddSubject(id, at[id]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for round := 0; round < 200; round++ {
+			if rng.IntN(4) == 0 {
+				id := observers[rng.IntN(len(observers))]
+				at[id] = step(at[id])
+				err = c.MoveObserver(id, at[id])
+			} else {
+				id := 1 + rng.Int64N(12)
+				at[id] = step(at[id])
+				err = c.MoveSubject(id, at[id])
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Flush()
+			for _, observer := range observers {
+				var candidates []int64
+				for subject, state := range c.observerPairs[observer] {
+					if len(state.bands) > 0 {
+						candidates = append(candidates, subject)
+					}
+				}
+				distance := func(id int64) int64 { return spatial.DistanceSquared(at[observer], at[id]) }
+				slices.SortFunc(candidates, func(a, b int64) int {
+					if order := cmp.Compare(distance(a), distance(b)); order != 0 {
+						return order
+					}
+					return cmp.Compare(a, b)
+				})
+				want := candidates[:min(len(candidates), 3)]
+				slices.Sort(want)
+				if want == nil {
+					want = []int64{}
+				}
+				got := c.Visible(observer)
+				if got == nil {
+					got = []int64{}
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("seed %d round %d observer %d: visible=%v want nearest %v of candidates", seed, round, observer, got, want)
+				}
+			}
+		}
+	}
+}

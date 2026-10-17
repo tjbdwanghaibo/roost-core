@@ -58,6 +58,8 @@ type AOICluster struct {
 	// observerPairs indexes visible by observer for capacity settlement.
 	observerPairs map[int64]map[int64]*clusterVisibility
 	pending       []InterestEvent
+	// watchers 是目标移动时容量重选的暂存（看得见旧、新位置的观察者），只在 mu 内使用。
+	watchers []int64
 }
 
 type clusterArea struct {
@@ -212,25 +214,19 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 		}
 	}
 	c.subjects[id] = clusterPlacement{at: to, home: destination.id}
-	// 区域不设容量，同档移动可能没有区域事件，但距离排序已经改变。
-	// 复用旧、新位置的块反向索引，只重排受影响的观察者（含边界镜像）。
-	var touched []int64
-	if c.config.MaxVisible > 0 {
-		source := c.areas[placement.home].manager
-		if destination.id == placement.home {
-			for _, observer := range source.observersAt(placement.at, to) {
-				touched = append(touched, observer.id)
-			}
-		} else {
-			for _, observer := range source.observersAt(placement.at) {
-				touched = append(touched, observer.id)
-			}
-			for _, observer := range destination.manager.observersAt(to) {
-				touched = append(touched, observer.id)
-			}
-		}
+	if c.config.MaxVisible <= 0 {
+		c.collect()
+		return nil
 	}
-	c.collect(touched...)
+	// 区域不设容量，同档移动可能没有区域事件，但距离排序已经改变。能看见该目标的观察者
+	// 都登记在旧、新位置块的反向索引里（含边界镜像），区域 AOI 自己判定可见性用的也是这份索引，
+	// 不扫描全部观察者。
+	watchers := c.areas[placement.home].manager.appendObserverIDsAt(c.watchers[:0], placement.at)
+	watchers = destination.manager.appendObserverIDsAt(watchers, to)
+	slices.Sort(watchers)
+	watchers = slices.Compact(watchers)
+	c.watchers = watchers
+	c.collectAfterMove(watchers, id, false)
 	return nil
 }
 
@@ -301,7 +297,8 @@ func (c *AOICluster) placeObserverLocked(id int64, at spatial.Point) error {
 	}
 	c.observers[id] = clusterPlacement{at: at, home: home.id}
 	if c.config.MaxVisible > 0 {
-		c.collect(id)
+		// 观察者自己移动，到所有目标的距离都变了，即使没有区域事件也要重排。
+		c.collectAfterMove([]int64{id}, 0, true)
 	} else {
 		c.collect()
 	}
@@ -368,12 +365,15 @@ func (c *AOICluster) Flush() []InterestEvent {
 // ALL areas — per-area caps would multiply a border observer's budget) picks
 // the surfaced set, and only net changes against the previously emitted
 // state are appended to pending.
-// movedObservers 包含因移动需要重排、但区域未必产生事件的观察者。
-func (c *AOICluster) collect(movedObservers ...int64) {
+func (c *AOICluster) collect() { c.collectAfterMove(nil, 0, false) }
+
+// collectAfterMove 与 collect 相同，另外处理设了 MaxVisible 时同档移动带来的重选：
+// 区域不设容量，同档移动没有区域事件，但最近 N 个的排序可能已经变了。observers 是可能
+// 受影响、却未必收到区域事件的观察者。observersMoved 表示它们自己移动了，一律完整重排；
+// 否则只有 subject 的距离变了，它跨过容量边界（入选的被挤出、被抑制的挤进来）时才重排，
+// 每次移动不必为每个看得见它的观察者都排序一遍。
+func (c *AOICluster) collectAfterMove(observers []int64, subject int64, observersMoved bool) {
 	touchedObservers := make(map[int64]struct{})
-	for _, observer := range movedObservers {
-		touchedObservers[observer] = struct{}{}
-	}
 	for _, areaID := range c.order {
 		area := c.areas[areaID]
 		for _, event := range area.manager.Flush() {
@@ -398,14 +398,55 @@ func (c *AOICluster) collect(movedObservers ...int64) {
 			touchedObservers[pair.observer] = struct{}{}
 		}
 	}
-	observers := make([]int64, 0, len(touchedObservers))
-	for observer := range touchedObservers {
-		observers = append(observers, observer)
-	}
-	slices.Sort(observers)
+	// 收到区域事件的观察者已经要完整重排；其余的按移动判断。必须在归并完区域事件之后：
+	// 跨区迁移、档位变化都会先改 bands，此时剩下的观察者里目标的 bands 没有变。
 	for _, observer := range observers {
+		if _, touched := touchedObservers[observer]; touched {
+			continue
+		}
+		if observersMoved || c.crossesCapacityLocked(observer, subject) {
+			touchedObservers[observer] = struct{}{}
+		}
+	}
+	settle := make([]int64, 0, len(touchedObservers))
+	for observer := range touchedObservers {
+		settle = append(settle, observer)
+	}
+	slices.Sort(settle)
+	for _, observer := range settle {
 		c.settleObserverLocked(observer)
 	}
+}
+
+// crossesCapacityLocked 判断 subject 移动后，observer 的最近 MaxVisible 个是否要换人。
+// 前提：observer 上次重排后只有 subject 的位置变了（没有区域事件），所以其余目标的入选 /
+// 抑制状态仍是按 (距离, ID) 排好的结果。入选的 subject 排到任一被抑制候选之后、或被抑制的
+// subject 排到任一入选目标之前，才需要完整重排；O(候选数)，不分配、不排序。
+func (c *AOICluster) crossesCapacityLocked(observer, subject int64) bool {
+	pairs := c.observerPairs[observer]
+	moved := pairs[subject]
+	if moved == nil || len(moved.bands) == 0 {
+		// 不是候选：没有 Enter 事件就仍不是，不影响这个观察者的选择。
+		return false
+	}
+	at := c.observers[observer].at
+	movedDistance := spatial.DistanceSquared(at, c.subjects[subject].at)
+	before := func(aDistance int64, a int64, bDistance int64, b int64) bool {
+		return aDistance < bDistance || aDistance == bDistance && a < b
+	}
+	for other, state := range pairs {
+		if other == subject || len(state.bands) == 0 || state.suppressed == moved.suppressed {
+			continue
+		}
+		distance := spatial.DistanceSquared(at, c.subjects[other].at)
+		if moved.suppressed && before(movedDistance, subject, distance, other) {
+			return true
+		}
+		if !moved.suppressed && before(distance, other, movedDistance, subject) {
+			return true
+		}
+	}
+	return false
 }
 
 // settleObserverLocked reconciles one observer's emitted set with its
