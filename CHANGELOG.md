@@ -12,6 +12,13 @@
 
 ### game-demo 经验发放：范围校验与有界计算
 
+### 生成器：`roost add endpoint` 从服务器业务钟填业务时间参数（新用户试用第四轮登记项 2）
+
+- **问题**：endpoint 骨架只能从请求字段取 handler 参数；handler 需要业务时间（`handlerUseDoubleCard(target, nowUnixMilli int64)`）时报 `protocol UseDoubleCardRequest has no field matching Nest parameter "nowUnixMilli"`，最省事的改法是往请求里加时间字段，于是客户端决定业务时间（可延长限时效果、提前领冷却奖励）。
+- **修法（约定名，最小改动）**：handler 参数名 `nowUnix` / `nowUnixMilli`（必须 `int64`）不对应请求字段，骨架先取 `businessNow := app.BusinessClock(controller.Registry()).Now()`（真实时间 + `time.logic_offset`，与 game-demo `BusinessNow()` 同一来源）再传 `businessNow.Unix()` / `.UnixMilli()`；请求里有同名字段也不读；类型不是 `int64` 时 add 报错。其他请求里没有的参数照旧拒绝，报错改为写明“只有客户端决定的值才加进请求，服务器决定的值不放进请求；业务时间用 nowUnix / nowUnixMilli”。已有、没有 `Registry()` 的 controller 遇到业务时间参数时 add 报错并说明要补的方法（controller 归业务，不改写）。
+- 修前红：`TestEndpointFillsBusinessTimeFromTheServer` 报 `add endpoint with a business-time parameter: protocol UseDoubleCardRequest has no field matching Nest parameter "nowUnixMilli"`。修后骨架含 `businessNow.UnixMilli()`、不含 `request.NowUnixMilli`，非时间参数的报错含 nowUnix / business clock / not from the request。
+- 文档：CODEGEN_REFERENCE（endpoint 段）、BEGINNER_WORKBOOK §6、`roost help add endpoint`、生成工程的排错手册与首条业务文档。已生成的 endpoint 是业务文件，不改写。
+
 ### 生成器：共享资源的名字按工程名派生（新用户试用第四轮登记项 1）
 
 - **问题**：生成配置里 `nats.prefix: roost`、`dataengine.database: game`、`dataengine.effects.subject_prefix: roost.effect` / `stream: ROOST_EFFECTS`，以及 `syncbus.prefix`、saga 的库 / 主题 / 流、`remote_entity.mongo.database`、`etcd.service_prefix` 是所有工程共用的固定值（DAO 库名已按 D9 用工程名）；两个工程共用开发用 Mongo / NATS 时，上一个工程没人 ack 的 outbox 让新工程 30 分钟后 `hard backlog limit exceeded` fail-stop，共用前缀时 RPC 被抢答。

@@ -735,6 +735,80 @@ func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testin
 	}
 }
 
+// 业务时间是服务器决定的值，不能来自请求（客户端可以借此延长限时效果、提前领奖励）。handler 参数按约定名
+// nowUnix / nowUnixMilli（int64）声明业务时间时，endpoint 骨架从 app 的业务钟（app.BusinessClock，含
+// time.logic_offset）取值传给 Sender，不要求、也不读请求里的同名字段；其余请求里没有的参数照旧拒绝，报错不再只说
+// “请求缺字段”，而是写明服务器决定的值不放进请求（新用户试用第四轮登记项 2）。
+func TestEndpointFillsBusinessTimeFromTheServer(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(rel, old, replacement string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(old)) {
+			t.Fatalf("fixture drift: %s no longer contains %q", rel, old)
+		}
+		if err := os.WriteFile(path, bytes.Replace(raw, []byte(old), []byte(replacement), 1), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "handler", Name: "UseDoubleCard", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "UseDoubleCard", Group: "game", Handler: "player"},
+		{Kind: "handler", Name: "Claim", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "Claim", Group: "game", Handler: "player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	edit("game/handler/use_double_card.go",
+		"func handlerUseDoubleCard(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
+		"func handlerUseDoubleCard(target player.IProfileEntity, cardID int64, nowUnixMilli int64) error {\n\t_, _ = cardID, nowUnixMilli\n\treturn nil\n}")
+	edit("protocol/def/use_double_card.go", "type UseDoubleCardRequest struct{}", "type UseDoubleCardRequest struct { CardID int64 `pb:\"1\"` }")
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "UseDoubleCard", Handler: "player"}); err != nil {
+		t.Fatalf("add endpoint with a business-time parameter: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "game", "controllers", "player", "use_double_card.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, want := range []string{"app.BusinessClock(controller.Registry()).Now()", "request.CardID, businessNow.UnixMilli())"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("endpoint does not fill the business time from the server clock (missing %q):\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "request.NowUnixMilli") {
+		t.Errorf("endpoint reads the business time from the request:\n%s", body)
+	}
+
+	// 请求里没有、也不是业务时间的参数：照旧拒绝，但报错写明服务器决定的值不放进请求、业务时间用约定名。
+	edit("game/handler/claim.go",
+		"func handlerClaim(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}",
+		"func handlerClaim(target player.IProfileEntity, claimedAt int64) error {\n\t_ = claimedAt\n\treturn nil\n}")
+	_, err = Add(root, AddOptions{Kind: "endpoint", Name: "Claim", Handler: "player"})
+	if err == nil {
+		t.Fatal("endpoint accepted a parameter that is neither a request field nor server-supplied")
+	}
+	for _, want := range []string{`"claimedAt"`, "nowUnix", "nowUnixMilli", "business clock", "not from the request"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not steer away from client-supplied time (missing %q): %v", want, err)
+		}
+	}
+}
+
 func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
 	t.Parallel()
 	root := copyOfNewProject(t, "configdata")

@@ -154,7 +154,7 @@ go vet ./...
 
 - generated stale：运行 `roost generate`，不要手改生成物；
 - Nest 缺失：按错误给出的 `roost add mod nest --service ...`；
-- endpoint 参数找不到：让 Request 字段名与 handler 除 Entity 外的参数名一致；
+- endpoint 参数找不到：客户端决定的值，让 Request 字段名与 handler 除 Entity 外的参数名一致；业务时间（限时 Buff 到期、冷却）**不要**加进请求，handler 参数写 `nowUnix` 或 `nowUnixMilli`（int64），endpoint 自动从服务器业务钟填；
 - 客户端收到 `entity_not_found`（code 2）：玩家还没有 Entity，先调 EnterGame（`roost add endpoint EnterGame --handler player --lifecycle Player`）；
 - 客户端收到 `entity_deleted`（code 3）：这个玩家删过档，ID 不可再用，EnterGame 也不会重建；
 - DAO 字段不可读：使用生成的 getter；

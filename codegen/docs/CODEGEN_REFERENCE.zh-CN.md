@@ -167,7 +167,13 @@ roost add rpc guild -service game
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
-字段；找不到字段会在 add 阶段报错，不生成半成品。handler 返回值时（如 `(player.BuyResult, error)`），
+字段；找不到字段会在 add 阶段报错，不生成半成品。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
+`nowUnix` / `nowUnixMilli`（`int64`）不对应 Request 字段，骨架先取 `businessNow := app.BusinessClock(controller.Registry()).Now()`
+（真实时间 + `time.logic_offset`，与 game-demo 的 `BusinessNow()` 同一来源）再传 `businessNow.Unix()` / `.UnixMilli()`；
+请求里有同名字段也不读。报错文案写明服务器决定的值不放进请求——放进去等于让客户端延长限时效果、提前领冷却奖励。
+其他服务器决定的值（玩家自己的状态、配置）在 handler 里读，不做参数。用到业务时间时 controller 需要 `Registry()`
+（新生成的都带；早先的缺少时 add 报错说明要补的方法）。handler 在事务里仍应按执行时刻复核期限
+（排队等锁期间时间在走，见 game-demo `executionNowUnix`）。handler 返回值时（如 `(player.BuyResult, error)`），
 骨架用 `result, err := sender.Sync_Xxx(...)` 接住全部返回值，并留一行 `_ = result` 提示把结果填进响应。
 骨架按 demo 的边界写法处理错误：接入层把 Controller 返回的 error 当坏帧断开连接，所以 handler 错误
 经 `errcode.ClientError` 变成 `&pb.XxxResponse{Code: code, Reason: reason}, nil`，只有

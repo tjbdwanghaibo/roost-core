@@ -101,7 +101,8 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
         return target.ProfileComp().Rename(name)
     }
 
-第一个参数是锁目标；其余参数名必须能与协议 Request 字段对应。关键写使用 strict；普通可恢复玩法可在
+第一个参数是锁目标；其余参数名必须能与协议 Request 字段对应。业务时间例外：参数名 nowUnix / nowUnixMilli（int64）
+由 endpoint 从服务器业务钟填，不放进 Request（放进去就是让客户端决定时间）。关键写使用 strict；普通可恢复玩法可在
 理解 WAL 语义后选择 async。不要为了快把交易改成 memory。
 
 ### 3.5 协议和 endpoint
@@ -268,7 +269,8 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
         Name string ` + "`pb:\"1\"`" + `
     }
 
-request 字段名要能对应 Nest handler 除第一个 Entity 参数之外的参数名。然后执行：
+request 字段名要能对应 Nest handler 除第一个 Entity 参数之外的参数名（nowUnix / nowUnixMilli 业务时间参数除外，
+endpoint 从服务器业务钟填）。然后执行：
 
     roost add endpoint RenamePlayer --handler player
     roost add lifecycle Player --service {{SERVICE}}
@@ -586,7 +588,7 @@ func renderTroubleshootingGuide() string {
 | --- | --- | --- |
 | PowerShell 找不到 roost | GOPATH/bin 或 GOBIN 未进当前用户 PATH | 查看 go env GOPATH/GOBIN，把实际 bin 目录加入用户 PATH，重开 PowerShell |
 | add handler 提示缺 Nest | 只有 feature，没有运行时 Mod | roost add mod nest --service <service> |
-| endpoint 找不到 request 字段 | Nest 参数名与 Request 字段名不同 | 统一名字，或调整协议/handler 后重新 add endpoint |
+| endpoint 找不到 request 字段 | Nest 参数名与 Request 字段名不同；或这个值本该由服务器决定 | 客户端决定的值：统一名字后重新 add endpoint。业务时间不要加进请求：handler 参数写 nowUnix / nowUnixMilli（int64），endpoint 从业务钟填；其他服务器决定的值在 handler 里算 |
 | protocol handler 包编译失败 | endpoint/controller 尚未创建 | 先 add endpoint，再 roost generate |
 | Entity not found / 客户端 code 2 entity_not_found | 玩家还没登录创角（Data Engine 里没有该 Entity）；或 kind/category 不匹配、loader 未装配 | 先调 EnterGame（roost add endpoint EnterGame --handler player --lifecycle Player）；仍出现时检查 Data Engine/Mongo，不吞掉加载错误 |
 | 客户端 code 3 entity_deleted | 这个玩家删过档（DAO 文档只剩墓碑），该 ID 不可再用 | 预期行为，不要重试或重新 EnterGame；产品需要时为该账号发新的玩家 ID |
