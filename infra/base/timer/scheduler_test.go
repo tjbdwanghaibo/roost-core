@@ -1,9 +1,169 @@
 package timer
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
+
+// 回调内显式改期覆盖返回间隔（包括零和负值），并保留可恢复的完整 typed 节点。
+func TestFiringTimerExplicitRescheduleOverridesReturn(t *testing.T) {
+	base := time.Unix(100, 0)
+	for _, closure := range []bool{false, true} {
+		for _, returned := range []time.Duration{0, -time.Second, time.Second} {
+			t.Run(fmt.Sprintf("closure_%v/return_%v", closure, returned), func(t *testing.T) {
+				stored := make(map[int64]Node)
+				s := NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
+					if change == ChangeDelete {
+						delete(stored, node.ID)
+					} else {
+						stored[node.ID] = node
+					}
+				})
+				s.SetClock(func() time.Time { return base })
+				fired := 0
+				h := func(ctx Context) time.Duration {
+					fired++
+					if fired == 1 {
+						if !s.ChangeTimer(ctx.Node.ID, time.Time{}, time.Minute) {
+							t.Fatal("explicit reschedule refused")
+						}
+						return returned
+					}
+					return 0
+				}
+				var id int64
+				if closure {
+					id = s.NewClosureTimer(time.Second, h)
+				} else {
+					s.RegisterHandler(1, h)
+					id = s.NewTimerWithPriority(time.Second, 1, 7, 2, 3, []byte("march"))
+				}
+				s.Tick(base.Add(time.Second))
+				deadline := base.Add(time.Minute)
+				if got := s.NextTime(); !got.Equal(deadline) {
+					t.Fatalf("next = %v, want explicit deadline %v", got, deadline)
+				}
+				if closure {
+					if len(stored) != 0 || len(s.Nodes()) != 0 {
+						t.Fatal("closure timer became persistent")
+					}
+				} else {
+					node, ok := stored[id]
+					if !ok || len(stored) != 1 || !node.End.Equal(deadline) || node.Delay != time.Minute || node.Priority != 7 || node.Param1 != 2 || node.Param2 != 3 || string(node.Payload) != "march" {
+						t.Fatalf("stored rescheduled timer = %+v, present=%v", node, ok)
+					}
+					restored := NewScheduler(1, s.Seed(), []Node{node}, nil)
+					restoredFired := 0
+					restored.RegisterHandler(1, func(Context) time.Duration { restoredFired++; return 0 })
+					restored.Tick(deadline.Add(-time.Nanosecond))
+					if restoredFired != 0 {
+						t.Fatal("restored timer fired before explicit deadline")
+					}
+					restored.Tick(deadline)
+					if restoredFired != 1 {
+						t.Fatalf("restored fired=%d, want 1", restoredFired)
+					}
+				}
+				s.Tick(deadline.Add(-time.Nanosecond))
+				if fired != 1 {
+					t.Fatalf("fired %d times before explicit deadline", fired)
+				}
+				s.Tick(deadline)
+				if fired != 2 || !s.NextTime().IsZero() || len(stored) != 0 {
+					t.Fatalf("after deadline fired=%d next=%v stored=%v", fired, s.NextTime(), stored)
+				}
+			})
+		}
+	}
+}
+
+// 正在触发的节点在最外层 Tick 收尾前保持移出；取消后不能被返回间隔或后续显式改期复活。
+func TestFiringTimerOperationsComposeAcrossReentrantTicks(t *testing.T) {
+	base := time.Unix(100, 0)
+	for _, operation := range []string{"changed_twice", "cancel_then_change", "change_then_cancel", "nested_change", "later_change", "later_cancel", "nested_future_tick", "panic_after_change"} {
+		t.Run(operation, func(t *testing.T) {
+			s := newPinnedScheduler(base)
+			fired := 0
+			var self int64
+			change := func(delay time.Duration) {
+				if !s.ChangeTimer(self, time.Time{}, delay) {
+					t.Fatal("reschedule refused")
+				}
+			}
+			cancel := func() {
+				if !s.RemoveTimer(self) {
+					t.Fatal("cancellation refused")
+				}
+			}
+			s.RegisterHandler(1, func(ctx Context) time.Duration {
+				fired++
+				if fired > 1 {
+					return 0
+				}
+				switch operation {
+				case "changed_twice":
+					change(time.Hour)
+					change(time.Minute)
+				case "cancel_then_change":
+					cancel()
+					change(time.Minute)
+				case "change_then_cancel":
+					change(time.Minute)
+					cancel()
+				case "nested_change":
+					s.Tick(ctx.Now)
+					change(time.Minute)
+				case "later_change", "later_cancel":
+					change(time.Hour)
+				case "nested_future_tick":
+					change(time.Minute)
+					return time.Second
+				case "panic_after_change":
+					change(time.Minute)
+					panic("business handler failed")
+				}
+				return 0
+			})
+			s.RegisterHandler(2, func(Context) time.Duration {
+				switch operation {
+				case "nested_change":
+					change(time.Hour)
+				case "later_change":
+					change(time.Minute)
+				case "later_cancel":
+					cancel()
+				case "nested_future_tick":
+					s.Tick(base.Add(time.Hour))
+				}
+				return 0
+			})
+			self = s.NewTimer(time.Second, 1, 0, 0, nil)
+			if operation != "panic_after_change" {
+				s.NewTimer(2*time.Second, 2, 0, 0, nil)
+			}
+			var panicValue any
+			func() { defer func() { panicValue = recover() }(); s.Tick(base.Add(3 * time.Second)) }()
+			if (panicValue != nil) != (operation == "panic_after_change") {
+				t.Fatalf("unexpected panic: %v", panicValue)
+			}
+			if fired != 1 {
+				t.Fatalf("fired=%d, explicit change must wait for the next outer Tick", fired)
+			}
+			cancelled := operation == "cancel_then_change" || operation == "change_then_cancel" || operation == "later_cancel"
+			if cancelled {
+				if !s.NextTime().IsZero() {
+					t.Fatalf("cancelled timer reappeared: %+v", s.Nodes())
+				}
+			} else if !s.NextTime().Equal(base.Add(time.Minute)) {
+				t.Fatalf("next=%v, want last explicit change +1m", s.NextTime())
+			}
+			if s.running || len(s.deferred) != 0 || len(s.firing) != 0 || len(s.firingChanges) != 0 {
+				t.Fatalf("Tick retained running=%v deferred=%d firing=%d controls=%d", s.running, len(s.deferred), len(s.firing), len(s.firingChanges))
+			}
+		})
+	}
+}
 
 func TestSchedulerFiresAndPersistsChanges(t *testing.T) {
 	var changes []ChangeType

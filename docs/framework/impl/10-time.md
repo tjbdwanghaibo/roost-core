@@ -17,6 +17,7 @@
 1. 业务时间与系统期限分开注入和使用。
 2. 运行业务时间不倒退；恢复受高水位约束。
 3. 宿主持久精度决定入队对齐，不隐式改变 Scheduler 纳秒契约。
+4. 正在执行的节点暂不在堆和 `byID` 中；重入回调栈保留身份。显式改期或取消时才建立本轮控制状态，禁止再按返回间隔自动入堆；最外层 Tick 收尾按登记顺序执行改期、清理控制状态。取消优先于该回调节点的后续改期，避免复活已经取消的任务。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -61,7 +62,7 @@
 ### timer
 
 - [order_test.go](../../../infra/base/timer/order_test.go)：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`
-- [scheduler_test.go](../../../infra/base/timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`、`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`；其余 5 项见文件
+- [scheduler_test.go](../../../infra/base/timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`、`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`、`TestFiringTimerExplicitRescheduleOverridesReturn`（含 typed 持久节点恢复）、`TestFiringTimerOperationsComposeAcrossReentrantTicks`（改期、取消、重入和 panic 收尾）；其余入口见文件
 
 </details>
 
