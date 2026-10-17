@@ -490,6 +490,7 @@ var generatedRealDependencyEntries = []struct {
 	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
 	{"demo/game/controllers/player/guild_ids_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestGuildIDsRealMongo"},
 	{"demo/internal/service/platform/purchase_delivery_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseDeliveryDurableWinner$"},
+	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
 }

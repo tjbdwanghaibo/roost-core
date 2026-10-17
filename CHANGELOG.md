@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### game-demo 活动结算榜：乱序回复不回退累计分
+
+- 两次合法贡献的协调器回复乱序时，旧回复的 `Score=1` 会在新回复的 `Score=2` 之后经无条件 ZADD 把结算榜覆盖成 1；协调器仍为 2。真实 Redis + 正式协调器（内存版本存储）的回归修前失败：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`。
+- demo 的 Contribute 只增加正积分，现用 Redis 原子 `ZADD GT` 写累计快照，较旧或重复快照不降分，首次贡献仍插入。不改变 activity 框架接口、存储格式或业务奖励规则；网络写失败仍是日志告警的尽力索引，未增加对账保证。回归挂入 `scripts/test-demo-generated.sh`，用唯一前缀、结束清理。
+
 ### Timer：持久化钩子里重入 Tick 或操作出堆中的节点时，钩子视图与 ID 种子保持正确
 
 - **缺陷**（`300d728a` 起，即 Scheduler 重构后）：最外层收尾先把等待节点全部入堆再依次 upsert。前一个 upsert 的钩子重入 Tick 时，排在后面、还没收到 upsert 的节点可能到期：Tick 内新建的一次性节点只收到删除，按 upsert 推进 ID 种子的宿主漏存它的 ID，重建后复用；触发中显式改期自己的节点收到一次钩子不持有的删除。另外，在到期出堆的删除通知里取消（`RemoveTimer` 返回 true）或改期该节点，回调仍会执行一次。生成工程的 World 钩子只写 DAO、不调用调度器，不受影响；钩子里调用调度器的宿主受影响。
