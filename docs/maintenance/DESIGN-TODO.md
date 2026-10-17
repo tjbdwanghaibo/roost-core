@@ -14,6 +14,7 @@
 | D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施（`bac32cd2`） |
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
+| D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 待维护者决定（2026-10-17 登记） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -213,3 +214,23 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 **建议**：先做 B（低成本、立即消除误用），A 另行评估。需要拍板：库名是否应当是部署配置而不是代码常量。
 
+## D11 按实体的持久定时器接入
+
+**状态：待维护者决定（2026-10-17 登记，新用户试用第四轮登记项 3，见 [KNOWN-LIMITS](KNOWN-LIMITS.md)）。**
+
+**现状（基线 `300d728a`，已核对源码）**：
+
+- `infra/base/timer.Scheduler`（`scheduler.go`）只是一个不加锁的最小堆：按期限、优先级、登记顺序三键排序，typed 节点的增删改经 `ChangeFunc` 交给宿主写存储，闭包节点纯内存；重建（`NewScheduler(owner, seed, saved, onChange)`）、谁来调 `Tick`、在什么锁 / 事务里调，全部由宿主决定（[guide/10-time §3](../framework/guide/10-time.md#3-scheduler)）。进行中的 Scheduler 重构（[REFACTOR-2026-10-17](REFACTOR-2026-10-17-timer-scheduler.md)）不改变“宿主驱动”这个前提。
+- 唯一的现成接入是 game-demo World 的 `TimerComponent`（`demo/game/entities/world/timer_component.go.tmpl`）：期限存 `WorldDao.Timers`（`TimerNode`）与 `TimerSeed`，最早期限存 nopersist 字段 `timer_next_due`；每次调用从 DAO 现建一个 Scheduler、钩子写回 DAO、用完丢弃，回滚就是 DAO 的回滚；handler 只记 effect、不做 I/O。驱动是服务进程里的 ticker 每秒发一次 `Sync_TickWorldTimers`（`demo/internal/service/game/activity.go.tmpl` 的 `tickWorld`）——只有一个 World，所以“每秒给它发一条”就够。它与活动阶段 handler 写在一起，生成器没有对应命令。
+- `Delay_X` 不持久（[NEST_RUNTIME “延时 Sender 不持久”](../../codegen/docs/NEST_RUNTIME.zh-CN.md)）：停机丢弃、崩溃丢失，不能承载“必须发生”的到期动作。
+- 结果：按玩家的到期动作（Buff 到期推送、建造完成、行军到达）要把组件、节点 DAO、tick handler、驱动整套复制到 Player，并自己解决“上万在线玩家怎么驱动”；新手多半退回“存到期时刻、读取时判断”，到点服务器什么也不做。
+
+**可选方向**：
+
+- **A 文档化参考实现**：把 World `TimerComponent` 明确标为参考实现，在 NEST_RUNTIME / guide/10-time 写“给 Player 加持久定时器”的步骤（节点 DAO 字段、组件的重建 / 持久化 / settle、tick handler、驱动），以及“到期时实体不在内存怎么办”（加载时在 `OnInitFinish` 之后补触发已过期节点）。代价：最小，只写文档；但每个工程仍复制约 250 行，Player 的驱动（按最早期限投递还是每秒全量）仍要自己写，容易写成每秒给每个在线玩家发一条消息。
+- **B 生成器 `roost add timer --entity <Entity>`**：生成节点 DAO 字段（`Timers` / `TimerSeed` / nopersist `TimerNextDue`）、`TimerComponent` 骨架（重建、持久化钩子、`settle`、`RegisterHandler` 的位置、加载后补触发）、`Tick<Entity>Timers` handler，以及服务里的驱动：进程内按 entityID 记最早期限的小堆（组件每次 settle 后更新，实体卸载时移除），到期才给那一个实体发 Tick 消息，不按在线人数轮询。生成物归业务（与 add component 同一所有权规则），game-demo World 迁到同一骨架。代价：一条新生成命令、模板与回归测试；“最早期限索引”是进程内派生状态，离线（未加载）实体到期不会被唤醒，只在下次加载时补触发——需要“离线也准点”的事仍要别的机制。
+- **C 框架提供可复用组件与驱动**：把 TimerComponent 提成框架包（经一个存储适配接口接 DAO），由 Nest 为声明了定时器的已加载实体维护最早期限、到期投递 Tick（引擎内置的到期轮）。代价最大：动到 Nest 调度（三大块之一，review 最高优先级）、Entity 生命周期与 Remote 托管实体（跨服迁移时定时器随实体走）的语义；好处是一次做好、所有业务继承，符合“统一保证放在框架一处”的原则。
+
+**建议**：先做 B——到期规则与持久化留在业务自己的 DAO 与事务里（与 World 参考实现同一形状，不扩大 Nest 契约），生成器消除复制和驱动写错的风险；B 在 game-demo 与新手工程里稳定、确认“已加载实体按最早期限投递”的驱动形状之后，再评估是否把驱动下沉到 Nest（C）。A 可作为 B 落地前的过渡立刻写。须等进行中的 Scheduler 重构合入后再动。
+
+**需要拍板**：1）选 A / B / C；2）离线实体的到期语义——下次加载时补触发是否可接受，还是需要“离线也准点”（那要一个按期限扫描存储的全局驱动，超出本条范围）；3）第一版驱动是否允许每秒轮询全部在线实体（实现最简单，代价是每秒 N 条 Nest 消息）。
