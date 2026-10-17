@@ -12,6 +12,13 @@
 
 ### game-demo 经验发放：范围校验与有界计算
 
+### 生成器：共享资源的名字按工程名派生（新用户试用第四轮登记项 1）
+
+- **问题**：生成配置里 `nats.prefix: roost`、`dataengine.database: game`、`dataengine.effects.subject_prefix: roost.effect` / `stream: ROOST_EFFECTS`，以及 `syncbus.prefix`、saga 的库 / 主题 / 流、`remote_entity.mongo.database`、`etcd.service_prefix` 是所有工程共用的固定值（DAO 库名已按 D9 用工程名）；两个工程共用开发用 Mongo / NATS 时，上一个工程没人 ack 的 outbox 让新工程 30 分钟后 `hard backlog limit exceeded` fail-stop，共用前缀时 RPC 被抢答。
+- **修法**：这些键在各 Wiring Mod 配置声明里的 `example` 改为工程名占位符（`{project}`、`{PROJECT}`、`{project_db}`），生成器写配置时按工程名展开（`codegen/internal/roost/catalog.go` 的 `projectNameVars`），新建与之后 `add mod` / `add saga` / `add access` 追加的段同一规则。工程 planet 得到 `nats.prefix: planet`、`syncbus.prefix: planet.sync`、`dataengine.database: planet`（与 DAO 骨架 `db=` 同一规则）、`planet.effect` / `PLANET_EFFECTS`、`saga.database: planet_saga`、`planet.saga` / `PLANET_SAGA`、`remote_entity.mongo.database: planet_remote`、`etcd.service_prefix: /planet/services/`；saga 读的 effects 流与 Data Engine 写的一致。Mod 的运行期缺省值（不写键时）不变。game-demo 的 `cmd/loadtest -nats-prefix` 缺省改为工程名，demo README 的隔离环境步骤不再改前缀。
+- 修前红：`TestGeneratedSharedResourceNamesFollowTheProject` 报 `alpha configs/service/config.game.yaml: nats.prefix = "roost", want "alpha"`、`dataengine.database = "game", want "alpha"`、`dataengine.effects.stream = "ROOST_EFFECTS", want "ALPHA_EFFECTS"` 等 12 个键 × 2 份配置 × 两种建法（新建带齐 / 后加 Mod）。
+- **升级**：已有工程的配置归业务、不改写；旧工程仍是 `roost` / `game` / `ROOST_*`。之后再 `add mod` 追加的段会写按工程名的新值，与已有段不一致——同一工程的所有服务必须一致，要么把新段改回旧值，要么（线上尚未部署）把所有服务改成新值并清空旧库、删旧流（`ROOST_EFFECTS`、`ROOST_SAGA`、`ROOST_SYNC` 等）后重启。
+
 ### game-demo 经验发放：写前校验范围、有界计算
 
 - **修复**：大额正数经验把 Player 剩余经验、World 累计或 int32 等级写成负数（修前在当前 main 生成的 game-demo 上：exp=1 再加 `MaxInt64` 返回成功、`player exp=-9223372036854775808 world exp=-9223372036854775808`；等级 `MaxInt32` 再升一级成功、`level=-2147483648`）；新玩家一次 `MaxInt64` 经验卡在逐级循环里（`profile_component.go:99`，Sender 5 秒超时、引擎关不掉）。

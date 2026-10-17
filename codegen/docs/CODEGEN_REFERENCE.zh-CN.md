@@ -249,7 +249,7 @@ type EquipInfo struct {
     //roost:redisdao key=<字段路径> prefix=<键前缀> [mode=ref-hmap|raw] [key_type=...] [version=...] [ttl=<Go duration>] [name=...]
 
 **库名与 `_id`**（D9，维护者 2026-10-16 决定 B）：`db=` 是编译期常量（生成 `db.<Type>DBName`），不读运行配置；
-`dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox）。`roost add dao` 骨架按工程名写
+`dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox），生成配置里它也按同一规则取工程名（与 effects / saga 的主题与流等一起按工程名派生，见 PROJECT_GENERATOR §5）。`roost add dao` 骨架按工程名写
 `db=<project>`：取 `roost.yaml project.name`（已满足 `^[a-z][a-z0-9_]*$`），Mongo 系统库名 `admin` / `local` / `config`
 加后缀 `_data`，超过 52 字节截断并去掉末尾 `_`（库名上限 63 字节，`dbscope=sid` 还要追加 `_<sid>`）。同一 Mongo 上的
 两个工程因此默认不写同一个库；已有 DAO 的 `db=` 归业务，不改写。库名改由运行配置决定（方案 A）未实施，见 DESIGN-TODO D9。

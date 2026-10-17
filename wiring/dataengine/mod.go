@@ -96,8 +96,8 @@ func (mod *Mod) OptionalDependsOn() []app.ModName {
 // EffectsConfig 是 dataengine.effects.* 的声明：效果流（ROOST_EFFECTS）的主题前缀、名字与保留期。
 // saga Mod 经 EffectStreamRetention 读同一份，两边对流的理解不会分叉。
 type EffectsConfig struct {
-	SubjectPrefix   string        `config:"subject_prefix" default:"roost.effect" example:"roost.effect"`
-	Stream          string        `config:"stream" default:"ROOST_EFFECTS" example:"ROOST_EFFECTS"`
+	SubjectPrefix   string        `config:"subject_prefix" default:"roost.effect" example:"{project}.effect"`
+	Stream          string        `config:"stream" default:"ROOST_EFFECTS" example:"{PROJECT}_EFFECTS"`
 	MaxAge          time.Duration `config:"max_age" default:"168h" min:"1ns" example:"168h"`
 	MaxBytes        int64         `config:"max_bytes" default:"8589934592" min:"1" example:"8589934592"`
 	DuplicateWindow time.Duration `config:"duplicate_window" default:"10m" min:"1ns" example:"10m"`
@@ -109,7 +109,7 @@ type EffectsConfig struct {
 type config struct {
 	app.ServiceIdentity
 	mods.PersistenceConfig
-	Database              string        `config:"dataengine.database" default:"game" example:"game"`
+	Database              string        `config:"dataengine.database" default:"game" example:"{project_db}" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写，与 DAO 骨架的 db= 同一规则；共用一个 Mongo 的不同工程必须不同"`
 	StartupTimeout        time.Duration `config:"dataengine.startup_timeout" default:"30s" min:"1ns" example:"30s"`
 	ShutdownTimeout       time.Duration `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
 	TransactionReceiptTTL time.Duration `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`

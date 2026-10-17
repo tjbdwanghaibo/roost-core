@@ -43,7 +43,7 @@ type NatsMod struct {
 type config struct {
 	app.ServiceIdentity
 	URL                     string `config:"nats.url" default:"nats://localhost:4222" example:"nats://127.0.0.1:4222"`
-	Prefix                  string `config:"nats.prefix" default:"roost" example:"roost" help:"bus 主题前缀"`
+	Prefix                  string `config:"nats.prefix" default:"roost" example:"{project}" help:"bus 主题前缀。生成配置按工程名填写：同一工程的所有服务必须一致，共用一套 NATS 的不同工程必须不同"`
 	WorkerNum               int    `config:"nats.worker_num" default:"8" min:"1" example:"8"`
 	IgnoreDiscoveredServers bool   `config:"nats.ignore_discovered_servers" help:"只连配置的地址，不跟随集群 gossip 发现的节点（代理、NAT、故障注入时用）"`
 	InboxPrefix             string `config:"nats.inbox_prefix" help:"请求回信的服务命名空间；需配套 NATS ACL"`

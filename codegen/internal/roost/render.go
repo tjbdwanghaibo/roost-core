@@ -634,14 +634,14 @@ func serviceConfigSections(m Manifest, service string) []string {
 		}
 	}
 	for _, name := range serviceConfigMods(m, service) {
-		add(modConfigSection(name))
+		add(modConfigSection(name, m.Project.Name))
 	}
 	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
 		add(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
 	}
 	if serviceSingletonEnabled(m, service) {
 		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
-		add(modConfigSection("redis"))
+		add(modConfigSection("redis", m.Project.Name))
 		add(renderSingletonConfig(m.Project.Name, true))
 	}
 	return sections
@@ -744,7 +744,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 	previous, current := serviceConfigMods(before, service), serviceConfigMods(after, service)
 	var sections []string
 	for _, name := range current {
-		if section := modConfigSection(name); !contains(previous, name) && section != "" {
+		if section := modConfigSection(name, after.Project.Name); !contains(previous, name) && section != "" {
 			sections = append(sections, section)
 		}
 	}
@@ -753,7 +753,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 	// 否则这个服务会带着 enabled: false 静默不启用。
 	turnOn := !serviceSingletonEnabled(before, service) && serviceSingletonEnabled(after, service)
 	if turnOn {
-		sections = append(sections, modConfigSection("redis"), renderSingletonConfig(after.Project.Name, true))
+		sections = append(sections, modConfigSection("redis", after.Project.Name), renderSingletonConfig(after.Project.Name, true))
 	}
 	if len(sections) == 0 {
 		return nil, nil

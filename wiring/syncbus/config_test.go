@@ -58,7 +58,8 @@ func TestSyncBusRefusesAnUnknownTransport(t *testing.T) {
 
 // 装配的 JetStream 流名随 prefix 隔离，默认配置流名不变，显式 syncbus.stream 优先，启动日志说出实际流名。
 //
-// 默认边界：生成配置写 prefix: roost.sync，未写 prefix 时缺省也是 roost.sync，流名都是 ROOST_SYNC；
+// 默认边界：显式写 prefix: roost.sync（旧生成配置的值）与未写 prefix（缺省 roost.sync）流名都是 ROOST_SYNC；
+// 新生成配置按工程名写 <project>.sync，流名 <PROJECT>_SYNC，由下面的隔离前缀用例覆盖。
 // room 时代的 roost.room 不再特例映射到 ROOST_SYNC，按规则推出自己的流。
 func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 	for _, tc := range []struct {
@@ -66,7 +67,7 @@ func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 		config map[string]any
 		want   string
 	}{
-		{name: "generated default prefix", config: map[string]any{"syncbus.prefix": "roost.sync"}, want: "ROOST_SYNC"},
+		{name: "explicit default prefix", config: map[string]any{"syncbus.prefix": "roost.sync"}, want: "ROOST_SYNC"},
 		{name: "no prefix configured", config: map[string]any{}, want: "ROOST_SYNC"},
 		{name: "room-era prefix is not mapped", config: map[string]any{"syncbus.prefix": "roost.room"}, want: "ROOST_ROOM"},
 		{name: "isolated prefix", config: map[string]any{"syncbus.prefix": "zz3640.sync"}, want: "ZZ3640_SYNC"},

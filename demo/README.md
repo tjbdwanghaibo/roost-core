@@ -67,10 +67,14 @@ make dev-stop
 for f in configs/service/config.*.yaml; do sed -i '' \
   -e 's#mongodb://127.0.0.1:27017/?replicaSet=rs0#mongodb://127.0.0.1:27117,127.0.0.1:27118,127.0.0.1:27119/?replicaSet=roost-it#' \
   -e 's#nats://127.0.0.1:4222#nats://127.0.0.1:14222#' -e 's#^  addr: 127.0.0.1:6379#  addr: 127.0.0.1:16379#' \
-  -e 's#^  prefix: roost$#  prefix: mysmoke#' -e 's#max_bytes: 8589934592#max_bytes: 67108864#' "$f"; done
+  -e 's#max_bytes: 8589934592#max_bytes: 67108864#' "$f"; done
 make dev-run
-go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222 -nats-prefix mysmoke
+go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 ```
+
+总线前缀、Data Engine / saga 的库、effects / saga 的主题与流在生成配置里都按工程名派生（工程 planet：`nats.prefix: planet`、`dataengine.database: planet`、
+`dataengine.effects.stream: PLANET_EFFECTS`、`saga.database: planet_saga`……），与 DAO 库名同一规则，所以不同名字的工程共用这套环境不撞库撞流，不用再改前缀；
+`cmd/loadtest` 的 `-nats-prefix` 缺省也是工程名。
 
 `dataengine.effects.max_bytes` 要调小是因为隔离集群只预留了 1GB 存储，默认 8GB 会报 `insufficient storage`。
 
@@ -90,13 +94,13 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222 -nats-prefix
 - **共享 NATS 上 RPC 大面积报 `bus: unsupported rpc response version 0`**：给每次实跑一个独立的 `nats.prefix`（五个进程一致）。共享的 JetStream 集群里若残留了
   别的测试建的流、且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求、与真正的服务端抢先，于是读调用大面积失败、写调用偶尔成功
   （Wiring 集成测试留下的 `ROOST_IT_RPC_REQ_*` 流就是一例）。换前缀即可，无需删流。
-- **同一个 Mongo 上换工程名 / 换 `nats.prefix` 重跑，game 就绪后几秒 fail-stop：`dataengine outbox: hard backlog limit exceeded`**：所有生成工程的
-  `dataengine.database` 默认都是 `game`，上一轮工程留下的 effect outbox 行没有消费者会 ack，超过 30 分钟触发 Data Engine 的硬积压熔断——这是它该有的行为。
-  处置：`mongosh --eval 'db.getSiblingDB("game").dropDatabase()'`，或给每个工程改 `dataengine.database`。
-- **换工程重跑后日志里有 `saga: consumer processing failed … kind=completion … err="saga: not found"`**：`saga.subject_prefix`（`roost.saga`）与 `saga.stream`
-  （`ROOST_SAGA`）不跟着 `nats.prefix` 走，`dataengine.effects` 的 `roost.effect` / `ROOST_EFFECTS` 也一样，同一个 NATS 上两个工程共用这两条流。上一轮的完成消息
-  对应的 saga 记录已随库删除，协调器答 not found、重投几次后丢弃，不影响本轮。要干净就把这两组也改掉：
-  `-e 's#subject_prefix: roost.saga#subject_prefix: roost-mysmoke.saga#' -e 's#stream: ROOST_SAGA#stream: ROOST_SAGA_MYSMOKE#'`，effects 同形；或删库之外再删流。
+- **同一个 Mongo 上用同一个工程名重新生成后重跑，game 就绪后几秒 fail-stop：`dataengine outbox: hard backlog limit exceeded`**：库名与流名按工程名派生，
+  同名的新工程会接着用上一轮的库（planet 工程是 `planet`）；上一轮留下的 effect outbox 行没有消费者会 ack，超过 30 分钟触发 Data Engine 的硬积压熔断——这是它该有的行为。
+  处置：`mongosh --eval 'db.getSiblingDB("planet").dropDatabase()'`（saga 库是 `planet_saga`），或换一个工程名。
+- **同名工程重跑后日志里有 `saga: consumer processing failed … kind=completion … err="saga: not found"`**：同名工程共用 `saga.stream` 与 effects 流，
+  上一轮的完成消息对应的 saga 记录已随库删除，协调器答 not found、重投几次后丢弃，不影响本轮。要干净就在删库之外再删这两条流
+  （`nats stream rm PLANET_SAGA`、`PLANET_EFFECTS`）。这次改动（CHANGELOG [Unreleased]）之前建的工程，配置里仍是所有工程共用的
+  `roost` / `game` / `ROOST_*`，照 CHANGELOG 的升级说明改成按工程名的值。
 - **连续两次压测间隔不到 60s 时某个机器人 `poll_match: ticket still waiting`**：上一轮失败机器人的 duel 票还在队列里（TicketTTL 60s），被这一轮配走，剩下奇数个。
   等 sweep 清掉过期票再跑，或起偶数个再加一个。
 - **`connect: auth send: robot session: closed`**：`-count` 超过了 `player_access.tcp.max_connections_per_ip`（默认 128）。机器人全从一个 IP 来，超出的连接在握手前被关掉，

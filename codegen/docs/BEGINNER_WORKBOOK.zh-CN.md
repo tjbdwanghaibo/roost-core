@@ -55,6 +55,7 @@ go test ./...
 ```
 
 `add access player` 会给 game 的 `configs/service/config.game.yaml` 与 prod 示例补上 Nest 带进来的 `nest`、`dataengine`、`mongo`、`nats` 配置段，并打开单实例锁（`singleton.enabled: true`，补 `redis:` 段）：启动 game 之前把这些地址改成自己的 Mongo 副本集、NATS 与 Redis（`deploy/dev/docker-compose.yaml` 带齐三者）。
+这些段里决定“与谁共享”的名字按工程名生成（工程 r4：`nats.prefix: r4`、`dataengine.database: r4`、effects 流 `R4_EFFECTS`，与 DAO 的 `db=r4` 同一规则），两个工程共用一套开发用 Mongo / NATS 时不用改名也不会撞库撞流；同一工程的所有服务必须保持一致（规则见 PROJECT_GENERATOR §5）。
 只在 add 命令那一刻追加：手改 `roost.yaml` 加 Mod 后 `roost project sync` 不补配置段，这时 `roost project doctor` 的 `config-sections:game` 以 WARN 列出缺的段和可直接追加到文件末尾的文本；有意删掉的段同样会报，不需要就忽略，或留一个空段（如 `saga: {}`）表示用代码默认值。
 
 为什么要 EnterGame：Nest handler 只处理已存在的 Entity。从未登录过的玩家直接发 RenamePlayer，Nest 冷加载在

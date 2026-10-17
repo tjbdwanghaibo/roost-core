@@ -3,6 +3,7 @@ package roost
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 type modSpec struct {
@@ -19,15 +20,33 @@ type modSpec struct {
 // service config: the keys its declaration marks with an example (the starter
 // keys), with the declaration's help as comments (maintainer decision).
 // The declarations are the wiring Mods' own, snapshotted into kitconfig_gen.go;
-// a Mod with no declared starter keys writes nothing.
-func modConfigSection(name string) string {
-	return kitConfigSchemas[name].StarterYAML(nil)
+// a Mod with no declared starter keys writes nothing. Examples that name a
+// shared resource carry the project's name placeholders (projectNameVars).
+func modConfigSection(name, project string) string {
+	return kitConfigSchemas[name].StarterYAML(projectNameVars(project))
 }
 
 // frameworkConfigSection is the same for a hosted framework service; its key
 // prefix example names the project.
 func frameworkConfigSection(name, project string) string {
-	return kitConfigSchemas[name].StarterYAML(map[string]string{"project": project})
+	return kitConfigSchemas[name].StarterYAML(projectNameVars(project))
+}
+
+// projectNameVars 是声明 example 里的工程名占位符。决定“与谁共享”的名字（总线主题前缀、Data Engine / saga /
+// Remote 的库、effects / saga 的主题与流、etcd 注册前缀、Redis 键前缀）在生成配置里按工程名派生，两个工程共用
+// 一套开发用 Mongo / NATS / etcd 时不撞库撞流：
+//   - {project}：工程名本身（已满足 ^[a-z][a-z0-9_]*$，是合法的 NATS 主题 token），用于主题前缀与键前缀；
+//   - {PROJECT}：工程名大写，用于 JetStream 流名（沿用 ROOST_EFFECTS 一类的大写写法）；
+//   - {project_db}：Mongo 库名，与 DAO 骨架的 db= 同一规则（daoDatabaseName：系统库加 _data、截到 52 字节），
+//     saga / Remote 的库在它后面加 _saga / _remote（仍不超过 Mongo 63 字节上限）。
+//
+// 只影响生成器写出的配置；Mod 的运行期缺省值（default）不变。已有工程的配置归业务，生成器不改写已有的值。
+func projectNameVars(project string) map[string]string {
+	return map[string]string{
+		"project":    project,
+		"PROJECT":    strings.ToUpper(project),
+		"project_db": daoDatabaseName(project),
+	}
 }
 
 // defaultConfigDataDir is the generated config_data.dir: relative, resolved

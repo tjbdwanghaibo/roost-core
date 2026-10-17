@@ -724,3 +724,61 @@ func TestFreshlyGeneratedConfigsHaveEveryModSection(t *testing.T) {
 		}
 	}
 }
+
+// 生成配置里决定“与谁共享”的名字（总线主题前缀、Data Engine 库、effects / saga / sync 的主题与流、saga 与 Remote 的库、
+// etcd 服务注册前缀）按工程名派生：两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。库名与 DAO 骨架同一规则
+// （daoDatabaseName）。新建时写进的段与之后 roost add mod 追加的段派生规则相同，saga 读的 effects 流与 Data Engine
+// 写的那条一致。
+func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
+	t.Parallel()
+	want := func(project string) map[string]string {
+		upper, db := strings.ToUpper(project), daoDatabaseName(project)
+		return map[string]string{
+			"nats.prefix":                       project,
+			"syncbus.prefix":                    project + ".sync",
+			"dataengine.database":               db,
+			"dataengine.effects.subject_prefix": project + ".effect",
+			"dataengine.effects.stream":         upper + "_EFFECTS",
+			"saga.database":                     db + "_saga",
+			"saga.subject_prefix":               project + ".saga",
+			"saga.stream":                       upper + "_SAGA",
+			"saga.start_effect_prefix":          project + ".effect",
+			"saga.start_effect_stream":          upper + "_EFFECTS",
+			"remote_entity.mongo.database":      db + "_remote",
+			"etcd.service_prefix":               "/" + project + "/services/",
+		}
+	}
+	mods := []string{"configdata", "etcd", "syncbus", "nest", "saga", "remote_entity"}
+	for _, tc := range []struct {
+		project string
+		later   bool // 先建只有 configdata 的工程，再逐个 roost add mod
+	}{{"alpha", false}, {"beta", true}} {
+		root := filepath.Join(t.TempDir(), tc.project)
+		initial := mods
+		if tc.later {
+			initial = []string{"configdata"}
+		}
+		if _, _, err := NewProject(NewOptions{Name: tc.project, Module: "example.com/" + tc.project, Out: root, Mods: initial}); err != nil {
+			t.Fatal(err)
+		}
+		if tc.later {
+			for _, mod := range mods[1:] {
+				if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: "game", Warnings: io.Discard}); err != nil {
+					t.Fatalf("add mod %s: %v", mod, err)
+				}
+			}
+		}
+		for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
+			body := readProjectFile(t, root, rel)
+			leaves := configLeaves(t, rel, body)
+			for key, value := range want(tc.project) {
+				if leaves[key] != value {
+					t.Errorf("%s %s: %s = %q, want %q (derived from the project name)", tc.project, rel, key, leaves[key], value)
+				}
+			}
+			if strings.Contains(body, "{project") || strings.Contains(body, "{PROJECT") {
+				t.Errorf("%s %s: an unreplaced name placeholder is left:\n%s", tc.project, rel, body)
+			}
+		}
+	}
+}

@@ -268,7 +268,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
-| `syncbus` | `nats` | NATS 或 JetStream 同步 Bus（缺省前缀 `roost.sync`） |
+| `syncbus` | `nats` | NATS 或 JetStream 同步 Bus（运行期缺省前缀 `roost.sync`；生成配置写 `<project>.sync`） |
 | `remote_entity` | `redis`、`mongo`、`syncbus` | 跨服实体所有权、原子事务、快照分发与版本锁 |
 | `dataengine` | `mongo`、`nats` | Nest transaction WAL、Mongo projection、聚合加载/migration、effect outbox |
 | `manager` | — | 本服务的内存单例 manager 生命周期 |
@@ -276,6 +276,22 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `saga` | `mongo`、`nats`，并自动补齐 `dataengine` | saga 引擎与 Data Engine start effect |
 
 默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, syncbus, remote_entity, dataengine, nest, manager`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环，未知 Mod 报 `unknown wiring mod`。
+
+**共享资源的名字按工程名派生**（新用户试用第四轮登记项 1，沿用 D9 的 DAO 库名规则）：生成配置里决定“与谁共享”的键不再是所有工程共用的固定值，两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。以工程 `planet` 为例：
+
+| 键 | 生成值 | 运行期缺省（不写这个键时） |
+| --- | --- | --- |
+| `nats.prefix` | `planet` | `roost` |
+| `syncbus.prefix`（流名由它推出） | `planet.sync`（流 `PLANET_SYNC`） | `roost.sync` |
+| `dataengine.database` | `planet`（与 DAO 骨架 `db=` 同一规则） | `game` |
+| `dataengine.effects.subject_prefix` / `stream` | `planet.effect` / `PLANET_EFFECTS` | `roost.effect` / `ROOST_EFFECTS` |
+| `saga.database` | `planet_saga` | `saga` |
+| `saga.subject_prefix` / `stream` | `planet.saga` / `PLANET_SAGA` | `roost.saga` / `ROOST_SAGA` |
+| `saga.start_effect_prefix` / `start_effect_stream` | `planet.effect` / `PLANET_EFFECTS`（与 Data Engine 写的那条一致） | `roost.effect` / `ROOST_EFFECTS` |
+| `remote_entity.mongo.database` | `planet_remote` | `remote_entity` |
+| `etcd.service_prefix` | `/planet/services/` | etcd 包的缺省 |
+
+规则写在各 Wiring Mod 配置声明的 `example` 里（`{project}` 工程名、`{PROJECT}` 大写、`{project_db}` 库名：系统库 `admin` / `local` / `config` 加 `_data`、截到 52 字节），新建与之后 `roost add mod` / `add saga` / `add access` 追加的段同一规则（`codegen/internal/roost/catalog.go` 的 `projectNameVars`）。只影响生成器写出的配置，Mod 的运行期缺省值不变；同一工程的所有服务按同一工程名得到同一组值。已有工程的配置归业务、不改写：旧工程仍是 `roost` / `game` / `ROOST_*`，而此后追加的段会写新名字，与已有段不一致时手工统一（升级说明见 CHANGELOG）。
 
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Wiring 内部的连接、重试、health 或 shutdown 逻辑。
 

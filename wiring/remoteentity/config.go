@@ -39,7 +39,7 @@ type snapshotConfig struct {
 
 // mongoConfig 是 remote_entity.mongo.*：权威存储的库名与事务记录的保留期。
 type mongoConfig struct {
-	Database       string        `config:"database" default:"remote_entity" example:"remote_entity"`
+	Database       string        `config:"database" default:"remote_entity" example:"{project_db}_remote"`
 	TransactionTTL time.Duration `config:"transaction_ttl" min:"0" example:"168h"`
 }
 
