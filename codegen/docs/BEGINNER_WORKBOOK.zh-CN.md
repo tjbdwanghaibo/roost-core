@@ -29,7 +29,7 @@ roost project next
 `project new` 需要访问 Go Proxy/GitHub，以正式发布模块解析 roost-core 最新版本（wiring、skill 与生成器都是其中的包）。网络错误先解决
 GOPROXY/DNS，不要提交本地绝对路径 `replace`。
 
-`project next` 输出六行左右：当前 workflow、进度、唯一的 next 命令、原因、复查命令、详细文档。
+`project next` 输出六行左右：当前 workflow、进度、唯一的 next 命令、原因、复查命令、详细文档。next 命令里的名字按工程现状填（已有的 Entity、Component、handler、controller 域）；工程里还没有时给示例名，命令后带 `# example name, use your own`，换成自己业务的名字再执行。
 执行 next 后再次运行它。它在阶段未完成时也返回成功，适合新手反复调用。
 
 ## 3. 第一条业务链
@@ -53,6 +53,8 @@ roost generate
 roost project doctor --workflow first-business
 go test ./...
 ```
+
+`add access player` 会给 game 的 `configs/service/config.game.yaml` 与 prod 示例补上 Nest 带进来的 `nest`、`dataengine`、`mongo`、`nats` 配置段，并打开单实例锁（`singleton.enabled: true`，补 `redis:` 段）：启动 game 之前把这些地址改成自己的 Mongo 副本集、NATS 与 Redis（`deploy/dev/docker-compose.yaml` 带齐三者）。
 
 为什么要 EnterGame：Nest handler 只处理已存在的 Entity。从未登录过的玩家直接发 RenamePlayer，Nest 冷加载在
 Data Engine 里找不到他，客户端收到稳定码 `entity_not_found`（`errcode.CodeEntityNotFound = 2`），服务端不记

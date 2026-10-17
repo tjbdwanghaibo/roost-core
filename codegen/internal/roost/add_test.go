@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,64 @@ func TestAddModAppendsItsConfigSectionToExistingServiceConfigs(t *testing.T) {
 	}
 	if after := read("configs/service/config.game.yaml"); after != before {
 		t.Errorf("re-adding a mod rewrote the config:\n%s", after)
+	}
+}
+
+// add access 给服务补上 nest，nest 又带入 dataengine / mongo / nats；add rpc 让服务挂上总线（nats）。
+// 这些依赖带进来的 Mod 与 add mod 显式加的一样要在服务配置里有配置段，否则进程按看不见的默认地址连接
+// （新用户试用第三轮：连到本机任意一个 27017）。
+func TestModsBroughtInByAddAccessAndAddRPCGetTheirConfigSections(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	read := func(rel string) string {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if cfg := read("configs/service/config.game.yaml"); strings.Contains(cfg, "\nmongo:\n") || strings.Contains(cfg, "\nnest:\n") {
+		t.Fatalf("precondition: a configdata-only project already has mongo/nest config:\n%s", cfg)
+	}
+	paths, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
+		cfg := read(rel)
+		// 带 DataEngine 的服务每个 sid 一个写者：与 project new 直接选 nest 一样打开单实例锁，并补锁用的 redis: 段。
+		for _, want := range []string{"\nnest:\n", "\ndataengine:\n", "\nmongo:\n", "\nnats:\n", "\nredis:\n"} {
+			if strings.Count(cfg, want) != 1 {
+				t.Errorf("%s has %d %q blocks after add access, want 1:\n%s", rel, strings.Count(cfg, want), want, cfg)
+			}
+		}
+		singletonOn := false
+		for _, block := range topLevelConfigBlocks(cfg) {
+			if block.key == "singleton" {
+				singletonOn = strings.Contains(block.text, "\n  enabled: true\n")
+			}
+		}
+		if !singletonOn {
+			t.Errorf("%s: the Data Engine service's singleton lock was not turned on:\n%s", rel, cfg)
+		}
+		if !slices.Contains(paths, rel) {
+			t.Errorf("add access did not report %s among the files it changed: %v", rel, paths)
+		}
+	}
+	if prod := read("configs/service/config.game.prod.example.yaml"); strings.Contains(prod, "127.0.0.1") {
+		t.Errorf("production example appended sections keep loopback addresses:\n%s", prod)
+	}
+
+	rpcRoot := copyOfNewProject(t, "configdata")
+	if _, err := Add(rpcRoot, AddOptions{Kind: "rpc", Name: "Guild", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(rpcRoot, "configs", "service", "config.game.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), "\nnats:\n") != 1 {
+		t.Errorf("the rpc owner runs on the bus but its config has no nats: block:\n%s", raw)
 	}
 }
 

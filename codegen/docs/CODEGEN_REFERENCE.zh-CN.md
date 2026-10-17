@@ -156,7 +156,7 @@ roost add rpc guild -service game
 
 | 命令 | 必需参数 | 生成/修改 | 下一步 |
 | --- | --- | --- | --- |
-| `add access player` | 多 Service 时 `--service` | roost.yaml、playeraccess、access Mod、bootstrap | 添加协议；需要真实 TCP 时 add transport |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、playeraccess、access Mod、bootstrap；给 Service 的两份配置（及 k8s Secret 示例）补上 nest 带入的 nest / dataengine / mongo / nats 段，打开单实例锁并补 redis 段（与 add mod 同一规则，只加缺失的顶层段） | 添加协议；需要真实 TCP 时 add transport；启动前把这些段里的地址改成自己的环境 |
 | `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
 | `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |

@@ -106,13 +106,20 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 	if captureErr != nil {
 		return created, restoreFiles(root, backups, captureErr)
 	}
-	spec.Rpcs = uniqueSorted(append(spec.Rpcs, snake))
+	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: spec.Mods, Uses: spec.Uses, Rpcs: append([]string(nil), spec.Rpcs...), UsesRpcs: spec.UsesRpcs})
+	spec.Rpcs = uniqueSorted(append(append([]string(nil), spec.Rpcs...), snake))
 	m.Services[service] = spec
 	m.Features = uniqueSorted(append(m.Features, "rpc"))
 	if err := commitManifestSync(root, manifestBefore, m); err != nil {
 		return created, restoreFilesIfCurrent(root, backups, after, err)
 	}
-	return append(created, "roost.yaml", "internal/bootstrap/generated.go"), nil
+	created = append(created, "roost.yaml", "internal/bootstrap/generated.go")
+	// 拥有 rpc 的服务挂上总线（effectiveServiceMods 带入 nats）：同 add mod，给它的配置补上 nats 段。
+	configs, err := appendModConfigSections(root, previous, m, service, options.Warnings)
+	if err != nil {
+		return created, err
+	}
+	return append(created, configs...), nil
 }
 
 func renderRPCInterface(snake, pascal string, code int64) string {

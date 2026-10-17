@@ -113,18 +113,26 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if m.Access == nil {
 			m.Access = make(map[string]AccessSpec)
 		}
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 		m.Access[accessName] = AccessSpec{Service: service}
 		m.Features = uniqueSorted(append(m.Features, "protocol", "nest"))
-		spec.Mods = uniqueSorted(append(spec.Mods, "nest"))
+		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "nest"))
 		m.Services[service] = spec
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
 			return nil, err
 		}
-		return []string{
+		paths := []string{
 			"roost.yaml",
 			"game/playeraccess/runtime_gen.go",
 			"internal/access/player/mod_gen.go",
-		}, nil
+		}
+		// nest 带入 dataengine / mongo / nats：与 add mod 一样给服务配置补上这些 Mod 的配置段（以及带 DataEngine
+		// 服务的单实例锁），否则进程按看不见的默认地址连接。
+		configs, err := appendModConfigSections(root, previous, m, service, options.Warnings)
+		if err != nil {
+			return paths, err
+		}
+		return append(paths, configs...), nil
 	}
 	if options.Kind == "transport" {
 		transport := toSnake(name)
