@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### game-demo 经验发放：范围校验与有界计算
+
+- 修复大额正数奖励把 Player 剩余经验、World 累计或 int32 等级写成负数的问题。`ProfileComponent.AddExp` 在写 DAO 前检查经验加法和等级范围，平坦等级曲线改为除余计算，避免按升级数量逐级占用业务 worker；拒绝仍使用 `exp_amount`（100004），文案改为 `invalid exp amount`。
+- `StatsComponent.RecordExp` 返回 error 并检查累计范围；`AddExp` 和 `ClaimDungeon` 传播错误，回滚 Player、属性、领奖账本与升级效果。DAO schema、协议字段与 Sender 参数不变；自定义调用 `RecordExp` 的业务需要检查其返回值。
+- 新增并登记生成工程的真实 Sender/Nest 回归：经验和等级溢出拒绝、恰好达到存储上限的大额合法奖励、World 累计超限后的两实体/属性/账本回滚及无新提交记录。
+
 ### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
 
 - **是测试计数的读写竞争，不是生产违约。** `TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit` 以 `afterCommit` 达到 2 作为“两次 AfterCommit 都已执行完”，随即读 `afterCommitOnFast`；而回调先加总次数、再查执行位置并加 `afterCommitOnFast`，读方落在两次 `Add` 之间就看到 1/2。CPU 压力下 `-race` 连跑该用例：修前 main 10 个忙循环 4/1150、40 个忙循环 1/300（失败后 100ms 再读为 2/2，回调确实在业务 worker 上执行过）；D10 之前的基线 bdc9003a 10 个忙循环 0/550，但回调代码相同，两次 `Add` 之间插 20ms 时基线与 main 都 5/5 变红，与 D10 无关。现在回调先记执行位置、最后加总次数，读到 `afterCommit==N` 时前 N 次的位置都已记下；同样插 20ms 时 5/5 通过，压力下 0/400（10 个忙循环）、0/300（40 个）。断言不放宽：把延迟结论改成在 finalizer goroutine 上就地执行（不经 `NestMgr.RunLocal`）时修后用例仍稳定报 1/2。

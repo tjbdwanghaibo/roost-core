@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"testing"
 
-	"{{MODULE}}/game/dungeon"
-	player "{{MODULE}}/game/entities/player"
-	syncsender "{{MODULE}}/game/handler/syncsender"
-	world "{{MODULE}}/game/entities/world"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"{{MODULE}}/game/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	world "{{MODULE}}/game/entities/world"
+	syncsender "{{MODULE}}/game/handler/syncsender"
 )
 
 // The clear reward is paid at most once per run, and the ledger that promises
@@ -47,6 +47,12 @@ func (g multiEntityGetter) GetMany(ctx context.Context, ids []int64, categories 
 
 func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Client) {
 	t.Helper()
+	subject, counters, client, _ := newDungeonClaimHarnessWithCommitter(t)
+	return subject, counters, client
+}
+
+func newDungeonClaimHarnessWithCommitter(t *testing.T) (*player.Player, *world.World, nest.Client, *recordingCommitter) {
+	t.Helper()
 	player.RegisterEntity()
 	world.RegisterEntity()
 	RegisterClaimDungeonNestHandlers()
@@ -75,16 +81,17 @@ func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Cl
 	if !ok {
 		t.Fatalf("the generated factory produced %T", builtWorld)
 	}
+	committer := &recordingCommitter{}
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(multiEntityGetter{playerID: builtPlayer, worldID: builtWorld}),
-		nest.NestOptionWithTransactionCommitter(&recordingCommitter{}),
+		nest.NestOptionWithTransactionCommitter(committer),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)
 	}
 	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
-	return subject, counters, engine
+	return subject, counters, engine, committer
 }
 
 func TestDungeonClearIsPaidOnce(t *testing.T) {

@@ -20,6 +20,8 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 	if err != nil {
 		return 0, err
 	}
-	stats.StatsComp().RecordExp(amount)
+	if err := stats.StatsComp().RecordExp(amount); err != nil {
+		return 0, err
+	}
 	return gained, nil
 }
