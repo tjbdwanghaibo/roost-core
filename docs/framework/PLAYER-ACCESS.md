@@ -157,14 +157,21 @@ access:
         self_sync: true   # 默认关
 ```
 
-打开后 `roost project sync` 与 `roost generate` 先检查 Player Entity，缺什么就按报错补什么（三步，补完重跑）：
+打开后只需要一步：**客户端要看的 DAO 字段写 `dao:"persist,sync"`**，只经生成的 setter 在 Nest handler 里改，然后 `roost project sync`（或 `roost generate`）。不需要手动标脏：handler 提交时 Nest 自动取走生成实体记下的客户端同步变化（`TakeEntitySyncChanges`），一次提交一帧增量。不要照 game-demo 场景的写法调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`：那是自建 Manager 才需要的，`TakeSyncDirty` 取走的是服务间同步的独立掩码，会偷走那一侧的读者；对客户端只会多标一次、帧数不变。
 
-1. `game/entities/player/entity.go` 的标记加上 `sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker`。
-2. 写 `NewPlayerSyncPacker`：视图集必须认识自身视图 `self`（`policy.SelfProfile`），通常给它全部同步字段。可以直接照抄：
+Player 的 `//roost:entity` 标记不用改，也不用写 packer（维护者 2026-10-17 决定）：
+
+- 开关打开时生成器把 Player 当作 `sync=true`（没写 `syncNamespace=` 时取 `"player"`）；标记里显式写 `sync=false` 与开关矛盾，拒绝。
+- 标记没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（生成器所有，`roost generate` / `roost project sync` 会重写）：`NewPlayerSyncPacker`，视图集只有自身视图 `self`（`policy.SelfProfile`），包含 Player DAO 的**全部** sync 字段；字段表运行期从 DAO 取，DAO 增删 sync 字段自动跟随；未知视图返回 `entity.ErrSyncViewUnknown`。wire 文件的 `PackerFactory` 指向它。
+- **代价：标了 sync 的字段默认全部对玩家本人可见。** 字段要标 `sync`（例如别的同步链路要用）却不想给玩家本人看时，写自己的 packer 把它裁掉。
+
+就绪检查（`project sync`、`generate`、`doctor` 的 `self-sync` 项）的拒绝都写明改法：Player 不存在（`roost add entity Player`）、Player 没有 DAO（`roost add dao Player --entity Player`）、Player 有多个 DAO 而没写 `subjectPacker=`（默认 packer 只发一个 DAO）、显式 `sync=false`、缺推送编号文件。Player DAO 没有任何 sync 字段时不拒绝，doctor 给 warn、`roost generate` 打印 `warning:`：工程照常编译，客户端收不到任何东西。
+
+需要自定义视图（AOI 里别人看到的视图、按字段权限、多个 DAO）时自己写 packer，视图集必须认识 `self`，然后在标记上写 `subjectPacker=NewPlayerSyncPacker`（开关打开时不必再写 `sync=true`；写上也行）。生成器随之不再生成、并删掉以前生成的那份；去掉 `subjectPacker=` 后它回来。业务自己的文件即使叫 `player_sync_packer_gen.go`（没有生成头）也不会被删除或覆盖，需要生成时生成器拒绝并提示改名。示例：玩家本人只看金币和等级（其余 sync 字段不给本人）：
 
 ```go
 var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}},
+	entity.NamedSyncView{Profile: policy.SelfProfile, Fields: []string{"gold", "level"}},
 )
 
 func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
@@ -199,15 +206,16 @@ func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.
 }
 ```
 
-3. 客户端要看的 DAO 字段写 `dao:"persist,sync"`，只经生成的 setter 在 Nest handler 里改。不需要手动标脏：handler 提交时 Nest 自动取走生成实体记下的客户端同步变化（`TakeEntitySyncChanges`），一次提交一帧增量。不要照 game-demo 场景的写法调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`：那是自建 Manager 才需要的，`TakeSyncDirty` 取走的是服务间同步的独立掩码，会偷走那一侧的读者；对客户端只会多标一次、帧数不变。
+`db.PlayerDaoSyncFields` 只在 DAO 有 sync 字段时生成；视图里的字段名取 DAO 的字段名或 bson 名，写了不存在的名字时 `NewSyncViewSet` 报错，packer 每次打包都返回这个错误。AOI 里别人看到的视图属于 Interest / AOI 政策的 Manager；同一个 Player 只能登记在一个 Manager，见文末限制。
 
-生成物（都在 `roost project sync` 会重写的文件里，关掉开关即恢复原样）：
+生成物（除推送编号外都在 `roost project sync` 会重写的文件里，关掉开关即恢复原样）：
 
 | 文件 | 内容 |
 | --- | --- |
 | `internal/bootstrap/generated.go` | `PlayerSelfSync = selfsync.MustNew(...)`；Nest 改为 `kitnest.NewModWithEntitySync(EntityAccess, PlayerSelfSync.EntitySyncSetup())`；`accessplayertcp.NewMod().WithSelfSync(PlayerSelfSync)` |
 | `internal/access/player/tcp/server_gen.go` | `Mod.WithSelfSync`：Provide 时交出推送能力，Start 时装握手钩子；`IngressMod.WithSelfSync`：独立 Gate 部署下把 OnActive / OnClosed 接到 Game Ingress |
 | `protocol/def/self_sync.go` | 推送编号 `SelfSync()`（业务文件，只在缺失时创建；取所在协议组的上限，冲突时改这里的 id） |
+| `game/entities/player/player_sync_packer_gen.go` | 标记没写 `subjectPacker=` 时的默认 packer（entity 生成器写出；写了 `subjectPacker=` 或关掉开关时删除） |
 
 运行时（实现见 [impl/04-sync](impl/04-sync.md) 的 `policy.SelfView` 与 `wiring/selfsync`）：
 

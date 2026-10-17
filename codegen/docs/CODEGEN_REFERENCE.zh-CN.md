@@ -192,11 +192,19 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 `internal/access/player/tcp/server_gen.go`（`Mod.WithSelfSync` / `IngressMod.WithSelfSync`）；推送编号
 `protocol/def/self_sync.go`（`SelfSync()`，取所在协议组上限的 id）是业务文件，只在缺失时创建。前置检查
 （`project sync`、`generate`、`doctor` 的 `self-sync` 项）要求：access.player 有 tcp 传输、features 含 entity、
-`game/entities/player/entity.go` 的 `//roost:entity` 带 `sync=true` 与 `subjectPacker`，并且推送编号文件存在；
-不满足时逐条写出要改的文件与写法（packer 要认识视图 `self`，DAO 字段 `dao:"persist,sync"`；字段只经生成
-setter 在 Nest handler 里改，提交时由 Nest 自动收集，不手动标脏）。关闭开关后再 sync，两份生成文件恢复原样，不引用
-`wiring/selfsync`。运行时契约与客户端解码见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)；
-回归 `codegen/internal/roost/self_sync_test.go`（按新手流程搭工程、打开开关、经生成接线跑真实 TCP）。
+`game/entities/player/entity.go` 存在、推送编号文件存在。Player 的 `//roost:entity` 标记不用改：开关打开时 entity
+生成器（`-self-sync Player`）按 `sync=true`、`syncNamespace="player"` 生成；没写 `subjectPacker=` 时写默认 packer
+`game/entities/player/player_sync_packer_gen.go`（生成器所有，`New<Name>SyncPacker`，视图集只有 `policy.SelfProfile`，
+包含 Player 唯一 DAO 的全部 sync 字段，字段表运行期从 DAO 取；未知视图返回 `entity.ErrSyncViewUnknown`），wire 的
+`PackerFactory` 指向它。代价：标了 sync 的字段默认全部对玩家本人可见。要裁剪字段或别的视图（AOI 他人视图、按字段
+权限）时自己写 packer 并在标记写 `subjectPacker=`：生成器不再生成、删掉以前生成的那份（同名业务文件没有生成头，
+不动、也不覆盖）；去掉 `subjectPacker=` 后它回来。拒绝并写出改法：没有 DAO（`roost add dao Player --entity Player`）、
+多个 DAO 且没写 `subjectPacker=`、显式 `sync=false`；DAO 没有 sync 字段时 doctor 给 warn、`roost generate` 打印
+`warning:`（工程照常编译，客户端收不到任何字段）。字段只经生成 setter 在 Nest handler 里改，提交时由 Nest 自动
+收集，不手动标脏。关闭开关后再 sync，生成文件恢复原样、默认 packer 被删除，不引用 `wiring/selfsync`。运行时契约与客户端解码见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)；
+回归 `codegen/internal/roost/self_sync_test.go`（按新手流程搭工程、只打开开关并标 sync 字段、经生成接线跑真实 TCP；
+再换业务 packer 跑一遍、切回默认）与 `codegen/internal/entity/sync_contract_test.go`
+（`TestSelfSyncDefaultPackerFollowsTheMarker`）。
 
 ## 4. DAO 生成器
 

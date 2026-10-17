@@ -26,7 +26,7 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 ### 玩家只看自己：自身视图
 
-最常见的需求是“客户端收到自己的金币、道具变化”。生成工程在 `roost.yaml` 的 `access.player` 上写 `self_sync: true`（默认关），生成器把 Nest Mod 换成 `NewModWithEntitySync` 并装上 `wiring/selfsync`；Player Entity 需要 `sync=true` 与认识视图 `self` 的 packer，没写时 `roost project sync` / `generate` / `doctor` 报出要改的文件与写法。步骤、生成物与客户端解码见 [PLAYER-ACCESS §7](../PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)。
+最常见的需求是“客户端收到自己的金币、道具变化”。生成工程在 `roost.yaml` 的 `access.player` 上写 `self_sync: true`（默认关），生成器把 Nest Mod 换成 `NewModWithEntitySync` 并装上 `wiring/selfsync`；Player 的标记缺省按 `sync=true`，没写 `subjectPacker=` 时生成器写默认 packer（视图 `self` 包含 DAO 全部 sync 字段），业务只给要看的字段标 `sync`；要裁剪字段或别的视图时自己写 packer 并在标记写 `subjectPacker=`。步骤、生成物与客户端解码见 [PLAYER-ACCESS §7](../PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)。
 
 行为：鉴权 ACK 之后登记连接，下一个 tick 开会话、绑定 player→自己（`policy.Direct`，视图 `self`），第一帧全量，之后提交的变化是增量；实体还不在内存时等它出现；断线重连、同一玩家的新连接都从全量开始，全部连接断开后关会话、注销 subject。生命周期全部在 core 的 [`policy.SelfView`](../../../framework/sync/entitysync/policy/self_view.go)：回调只记事实，Flush 的政策阶段一次对齐，所以登录、断线、顶号与 Flush 的交错不需要业务处理。多人视图（附近的人、队友）仍用下面的 Interest。
 

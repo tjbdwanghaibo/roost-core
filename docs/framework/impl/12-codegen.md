@@ -205,6 +205,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 | [parse.go](../../../codegen/internal/entity/parse.go) | `EntityDef`、`ImportDef`、`ComponentField`、`DaoField` |
 | [remote_dao_scope.go](../../../codegen/internal/entity/remote_dao_scope.go) | 函数/方法或内部实现；见源码 |
 | [run.go](../../../codegen/internal/entity/run.go) | 函数/方法或内部实现；见源码 |
+| [self_sync_packer.go](../../../codegen/internal/entity/self_sync_packer.go) | `SelfSyncPlan`、`InspectSelfSync`（`-self-sync`：access.player.self_sync 的标记缺省与默认 packer `<snake>_sync_packer_gen.go` 的生成 / 删除） |
 | [util.go](../../../codegen/internal/entity/util.go) | 函数/方法或内部实现；见源码 |
 
 ### codegen/internal/errcode
@@ -324,7 +325,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 | [render_docs.go](../../../codegen/internal/roost/render_docs.go) | 函数/方法或内部实现；见源码 |
 | [render_player_tcp.go](../../../codegen/internal/roost/render_player_tcp.go) | `Config`、`Authenticator`、`RegistryBound`、`AuthenticatorFunc`、`Mod`、`Runtime`、`SessionClosed`、`Server` |
 | [render_workflow_docs.go](../../../codegen/internal/roost/render_workflow_docs.go) | 函数/方法或内部实现；见源码 |
-| [self_sync.go](../../../codegen/internal/roost/self_sync.go) | 函数/方法或内部实现；见源码（`access.player.self_sync` 的接线渲染与 generate / doctor 前置检查） |
+| [self_sync.go](../../../codegen/internal/roost/self_sync.go) | 函数/方法或内部实现；见源码（`access.player.self_sync` 的接线渲染与 generate / doctor 前置检查；默认 packer 由 entity 生成器 `-self-sync Player` 写出） |
 | [shutdown_budget.go](../../../codegen/internal/roost/shutdown_budget.go) | 函数/方法或内部实现；见源码 |
 
 ### codegen/internal/roost/cmd/attributeruntime
@@ -495,7 +496,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go)：`TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement`、`TestRemoteManagedEntityRejectsServerScopedDao`、`TestGenerateEmitsAndReconcilesRemoteGuardTests`
 - [retirement_test.go](../../../codegen/internal/entity/retirement_test.go)：`TestRunRetiresEntityWireAfterLastMarkerRemoved`、`TestRunMovesRegistrationWhenFirstSiblingIsRetired`
 - [run_test.go](../../../codegen/internal/entity/run_test.go)：`TestRunReturnsFlagErrors`
-- [sync_contract_test.go](../../../codegen/internal/entity/sync_contract_test.go)：`TestSyncNamespaceRejectsABareIdentifier`、`TestSyncNamespaceAcceptsLiteralsAndQualifiedConstants`、`TestGeneratedSyncBlockOnlyNamesFieldsCoreHas`、`TestRetiredPackerMarkerIsRefused`、`TestPackerWithoutSyncIsRefused`
+- [sync_contract_test.go](../../../codegen/internal/entity/sync_contract_test.go)：`TestSyncNamespaceRejectsABareIdentifier`、`TestSyncNamespaceAcceptsLiteralsAndQualifiedConstants`、`TestGeneratedSyncBlockOnlyNamesFieldsCoreHas`、`TestRetiredPackerMarkerIsRefused`、`TestPackerWithoutSyncIsRefused`、`TestSelfSyncDefaultPackerFollowsTheMarker`（开关开 / 关、写 / 不写 subjectPacker、业务同名文件、拒绝项）
 
 ### codegen/internal/errcode
 
@@ -559,7 +560,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [retirement_test.go](../../../codegen/internal/roost/retirement_test.go)：`TestStagedProjectCommitSeesEntityRetirement`、`TestStagedProjectCommitAndCheckSeeTableJSONRetirement`、`TestSyncCommitsProtocolRetirement`、`TestGenerateCheckDetectsMarkerlessProtocolDrift`
 - [roost_test.go](../../../codegen/internal/roost/roost_test.go)：`TestResolveModsAddsRequiredDependencies`、`TestResolveModsDefaultsNestAndSagaToDataEngine`、`TestResolveModsRejectsRemovedPersistenceMods`、`TestDefaultManifestUsesOnlyDataEnginePersistence`、`TestNewProjectSyncPreservesBusinessFiles`、`TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors`；其余 48 项见文件
 - [shell_contract_test.go](../../../codegen/internal/roost/shell_contract_test.go)：`TestShellInstallPutsConfigDataWhereConfigDataDirResolves`、`TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit`、`TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled`、`TestShellRollbackRejectsDotVersions`、`TestShellScriptsRefuseAReleaseWithoutARecordedUnit`
-- [self_sync_test.go](../../../codegen/internal/roost/self_sync_test.go)：`TestSelfSyncManifestValidation`、`TestSelfSyncOffKeepsTheFormerWiring`、`TestSelfSyncRendersVisibleWiring`、`TestSelfSyncCheckNamesTheFix`、`TestSelfSyncGeneratedProjectOverRealTCP`（按新手流程搭工程、打开开关、在工程里经生成接线跑真实 TCP：全量→增量、重连全量）
+- [self_sync_test.go](../../../codegen/internal/roost/self_sync_test.go)：`TestSelfSyncManifestValidation`、`TestSelfSyncOffKeepsTheFormerWiring`、`TestSelfSyncRendersVisibleWiring`、`TestSelfSyncCheckNamesTheFix`、`TestSelfSyncGeneratedProjectOverRealTCP`（按新手流程搭工程、只打开开关并标 sync 字段、不写 packer，在工程里经生成接线跑真实 TCP：全量→增量、重连全量；再换业务 packer 跑一遍、切回默认 packer）
 - [shutdown_test.go](../../../codegen/internal/roost/shutdown_test.go)：`TestGeneratedShutdownTimeoutFollowsEachServicesMods`、`TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods`、`TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods`、`TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal`、`TestDoctorChecksEachServicesShutdownWindow`；其余 20 项见文件
 - [singleton_test.go](../../../codegen/internal/roost/singleton_test.go)：`TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn`、`TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices`、`TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn`、`TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock`、`TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn`；其余 1 项见文件
 - [staging_unix_test.go](../../../codegen/internal/roost/staging_unix_test.go)：`TestInterruptedCommandRemovesItsStagingTree`、`TestInterruptInEveryStagePhaseRemovesTheStageAndDiesOfTheSignal`、`TestStagedGeneratorErrorsNameTheProjectPath`、`TestDependencyFailureAfterUpgradeOrSyncPointsAtProjectDeps`

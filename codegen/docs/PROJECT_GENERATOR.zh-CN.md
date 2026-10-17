@@ -201,7 +201,7 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `services.<name>.mods` | 否 | 该 Service 装配的 Wiring Mod，依赖会自动展开 |
 | `access.player.service` | 否 | 玩家协议接入层所属 Service；用 add access 创建 |
 | `access.player.transports` | 否 | 显式启用的客户端传输；当前支持 tcp，用 add transport 创建 |
-| `access.player.self_sync` | 否 | 默认 false。true 时每个在线玩家经 Entity Sync 收到自己的 Player 状态（视图 `self`）：bootstrap 改用 `NewModWithEntitySync` 并装 `wiring/selfsync`，TCP Mod 加 `WithSelfSync`，缺失时创建一次 `protocol/def/self_sync.go`。需要 tcp 传输与 entity feature；Player Entity 须 `sync=true` + 认识 `self` 的 packer，`project sync` / `generate` / `doctor` 检查并给出改法。见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) |
+| `access.player.self_sync` | 否 | 默认 false。true 时每个在线玩家经 Entity Sync 收到自己的 Player 状态（视图 `self`）：bootstrap 改用 `NewModWithEntitySync` 并装 `wiring/selfsync`，TCP Mod 加 `WithSelfSync`，缺失时创建一次 `protocol/def/self_sync.go`。需要 tcp 传输与 entity feature；Player 标记缺省按 `sync=true`；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（视图 `self` 包含 DAO 全部 sync 字段，标了 sync 的字段默认全部对玩家本人可见；写了 `subjectPacker=` 时用业务的 packer、删掉生成的那份），`project sync` / `generate` / `doctor` 检查并给出改法，DAO 没有 sync 字段时 doctor 警告。见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) |
 | `services.<name>.rpcs` / `uses_rpcs` | 否 | 本工程跨进程服务的拥有者 / 调用方；用 `roost add rpc` 创建，见 §6 |
 | `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
 | `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |

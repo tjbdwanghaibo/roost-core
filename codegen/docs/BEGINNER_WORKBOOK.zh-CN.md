@@ -111,6 +111,13 @@ roost config disable player-tcp
 帧格式、超时/连接硬上限、主动 `PushPlayer/PushSession`、监控和压测项见
 [Player TCP 接入](PLAYER_ACCESS_TCP.zh-CN.md)。
 
+让玩家收到自己的金币、道具变化：在 `roost.yaml` 的 `access.player` 下写 `self_sync: true`，给客户端要看的
+DAO 字段写 `dao:"persist,sync"`，然后 `roost project sync`。Player 的 `//roost:entity` 标记不用改、不用写
+packer：生成器写 `game/entities/player/player_sync_packer_gen.go`，视图 `self` 包含 DAO 全部 sync 字段（标了
+sync 的字段默认全部对玩家本人可见）。要裁剪字段或别的视图时自己写 packer，在标记写 `subjectPacker=`。
+`roost project doctor` 的 `self-sync` 项检查就绪情况，DAO 没有 sync 字段时给 warn。用法与客户端解码见
+[PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)。
+
 ## 5. 日常操作不用背
 
 生成 Makefile 提供：

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 生成器：`access.player.self_sync` 的默认 packer 由生成器生成（维护者 2026-10-17 决定，第三轮新用户试用登记项 3）
+
+- **只开开关 + 标 sync 字段即可**：`roost.yaml` 打开 `access.player.self_sync: true` 后，Player 的 `//roost:entity` 标记不用改、不用写 packer。entity 生成器带 `-self-sync Player` 运行：标记缺省按 `sync=true`（`syncNamespace` 缺省 `"player"`）；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（生成器所有、带生成头，`roost generate` / `roost project sync` 会重写）——`NewPlayerSyncPacker`，视图集只有 `policy.SelfProfile`，包含 Player DAO 的全部 sync 字段（字段表运行期从 DAO 取，DAO 增删 sync 字段自动跟随），未知视图返回 `entity.ErrSyncViewUnknown`；wire 的 `PackerFactory` 指向它。
+- **代价**：标了 sync 的字段默认全部对玩家本人可见。要裁剪字段或别的视图时自己写 packer 并在标记写 `subjectPacker=`（开关打开时不必再写 `sync=true`）：生成器不再生成、并删掉生成的那份；去掉 `subjectPacker=` 后它回来。业务自己的同名文件（没有生成头）不删、不覆盖，需要生成时拒绝并提示改名。
+- **就绪检查（`project sync` / `generate` / `doctor` 的 `self-sync` 项）**：拒绝并给改法——Player 没有 DAO（`roost add dao Player --entity Player`）、多个 DAO 且没写 `subjectPacker=`、标记显式 `sync=false`；DAO 没有任何 sync 字段时不拒绝，doctor 给 warn、`roost generate` 打印 `warning:`（客户端收不到任何东西）。`subjectPacker` 与 `sync` 的一致性检查从解析阶段移到 self_sync 缺省之后，其余实体规则不变（仍拒绝写了 `subjectPacker=` 却没开 sync 的标记）。
+- **兼容**：开关关闭的工程（新手工程、game-demo）生成物逐字节不变；已按旧文档写了 `sync=true … subjectPacker=NewPlayerSyncPacker` 与自己 packer 的工程行为不变（按业务 packer 处理，不生成）。打开开关的工程，生成的 `docs/PLAYER_ACCESS_TCP.zh-CN.md` 多一节 self_sync 说明。
+- 修前红（`9e490150`）：`TestSelfSyncGeneratedProjectOverRealTCP` 只开开关、不写 packer 时 `roost project sync` 拒绝：`access.player.self_sync is on but the project is not ready for it: game/entities/player/entity.go: the //roost:entity marker must declare Entity Sync; append to it: sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker then write NewPlayerSyncPacker (copy the packer from roost-core …)`；`TestSelfSyncDefaultPackerFollowsTheMarker`：`flag provided but not defined: -self-sync`。修后：生成工程不写 packer 跑真实 TCP `full gold=0 → delta gold=5`、重连 `full gold=5 → delta gold=7`，换业务 packer 结果相同。
+- 文档：[PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)（默认自动生成，保留自定义示例）、CODEGEN_REFERENCE、PROJECT_GENERATOR、BEGINNER_WORKBOOK、`roost help access`、[KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md) 第三轮登记项 3。
+
 ### Sync 慢消费者：推送在活着的连接上被拒即断开连接，进程驻留预算耗尽整轮重试；删除自身视图在原连接上重开（维护者 2026-10-17 批准“A + A'”）
 
 **这是对一条反复出缺陷的路径的方向调整。** “推送被拒 → Manager 关同步会话 → 网络连接还活着 → 政策层自己重开”已出 5 次缺陷：demo 场景快速重连打不开（RR-20260926-55，`12d4f7ca`，补有界退避）、放弃重开无痕迹（RR-20260927-19，`879b9094`，补指标）、D6 SelfView 初版朴素写法 5 组竞态（`fc0a8315`）、重开 epoch 不变被客户端静默丢弃与 on_change 紧循环耗尽 8 次（`00d35150`），以及同一次激活里偶发丢会话第 9 次后自身视图永久消失（重开计数只在新激活清零）。根因是慢消费者策略在两层不一致：Manager 推送被拒只关同步会话、不关连接；嵌入 TCP 出站队列满、独立 Gate 的 Gate 侧队列满 / 超 `max_age` 都关连接，唯独 Game Ingress 可靠队列背压只拒这一帧、绑定保留，制造了“连接活、同步会话死”。现在规则只在传输一处，这个状态不再存在。
