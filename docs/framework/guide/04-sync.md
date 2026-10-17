@@ -30,6 +30,8 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 行为：鉴权 ACK 之后登记连接，下一个 tick 开会话、绑定 player→自己（`policy.Direct`，视图 `self`），第一帧全量，之后提交的变化是增量；实体还不在内存时等它出现；断线重连、同一玩家的新连接都从全量开始，全部连接断开后关会话、注销 subject。生命周期全部在 core 的 [`policy.SelfView`](../../../framework/sync/entitysync/policy/self_view.go)：回调只记事实，Flush 的政策阶段一次对齐，所以登录、断线、顶号与 Flush 的交错不需要业务处理。多人视图（附近的人、队友）仍用下面的 Interest。
 
+慢消费者：**跟不上就断开**。一帧被活着的连接拒收时，传输（`wiring/selfsync.PushPlayerFrame`）关闭这名玩家的全部连接、Manager 关会话，客户端重连从全量开始；SelfView 不在原连接上重开。整个进程的出站驻留预算耗尽是例外：不是谁慢，整轮重试、保留脏状态，连接与会话都不动。自建 Manager、会话 ID 就是玩家 ID 的场景（如 game-demo 的场景）用同一个函数做 Transport。规则与理由见 [impl/04-sync §2C](../impl/04-sync.md#2c-自身视图selfview的生命周期)、[GATEWAY §4](../GATEWAY.md#慢消费者跟不上就断开)。
+
 ### 好友、队伍等关系如何更新
 
 关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用 v1.26.0 新增的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。

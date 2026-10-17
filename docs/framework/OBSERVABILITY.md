@@ -65,6 +65,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_durability_gate_deferred_total` | Counter | 被 durable watermark 推迟的 subject 捕获次数（整个 subject 本 tick 不发） |
 | `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
 | `entitysync_sessions_lost_total` | Counter | 因推送失败被 Manager 关闭的会话数（`SessionLost` 回调政策） |
+| `entitysync.self_view.stranded_players` | Gauge | 自身视图里在线（至少一条连接）却超过 3 个同步周期没有打开的同步会话的玩家数，每个政策阶段由 `wiring/selfsync` 写入（`SelfView.Stranded`）。**正常为 0**；持续不为 0 = 有连接活着却收不到自己的状态：传输没有关闭拒收的连接、会话打开被持续拒绝（会话数上限），或玩家实体的帧编码失败 |
+| `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、整轮重试。接入层未就绪与玩家没有连接不计 |
 | `entitysync_drain_timeout_total` | Counter | `Manager.Drain` 因 ctx 超时 / 取消而未排空的次数（停机预算不够或有条目卡住；卡住条目见返回的 `*DrainStalledError`） |
 | `entitysync_drain_remaining_entries` | Gauge | 最近一次 Drain 结束时仍未排空的条目数（成功排空为 0） |
 
@@ -229,6 +231,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entity.count_by_category` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.count_by_kind` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.unload_resync.backlog` | Gauge | `entity/unload_resync.go:SetGauge` |
+| `entitysync.self_view.stranded_players` | Gauge | `wiring/selfsync/selfsync.go:SetGauge` |
 | `entitysync_drain_remaining_entries` | Gauge | `sync/entitysync/drain.go:SetGauge` |
 | `entitysync_drain_timeout_total` | Counter | `sync/entitysync/drain.go:IncCounter` |
 | `entitysync_durability_gate_deferred_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
@@ -291,6 +294,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `nestwal.recovery.tail_truncated.total` | Counter | `nestwal/wal.go:IncCounter` |
 | `nestwal.reject.total` | Counter | `nestwal/wal.go:IncCounter` |
 | `obs.series.dropped` | Counter | `metrics/metrics.go: Metric literal` |
+| `player.sync.push_refused.total` | Counter | `wiring/selfsync/selfsync.go:IncCounter` |
 | `player_tcp_auth_failure_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_connection_rejected_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_connections` | Gauge | `infra/network/gateway/tcp.go:AddGauge` |
@@ -446,7 +450,8 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
 8. `dataengine_fence_skipped_total` 速率阶跃到与被 fence 事务量同阶 —— 立即告警（claim schema 漂移：事务正在静默变成 no-op，既无错误也无失败测试）。
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
-10. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
+10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接、会话打开被持续拒绝，或玩家实体的帧编码失败（日志 `self view:` / `entitysync`）。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`。
+11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

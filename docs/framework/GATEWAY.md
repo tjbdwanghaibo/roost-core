@@ -45,6 +45,20 @@ Room 的 Attach/Detach/Input/Hash/Tick/Catchup 仍走业务的单一 Room owner�
 
 PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续序号并复用唯一 socket writer。按完整协议包发送，不按字节截断 Sync 帧。重复只确认已准入前缀；缺口或持续发送失败关闭连接，重连后恢复全量/追帧。
 
+### 慢消费者：跟不上就断开
+
+三种接入对“这条连接收不下”的处理统一为断开连接，客户端重连后恢复全量 / 追帧（维护者 2026-10-17 批准）：
+
+| 接入 | 收不下时 |
+| --- | --- |
+| 嵌入 TCP | 出站队列满或 `write_timeout` 内写不出：接入层当场关闭该连接（下一节） |
+| 独立 Gate 的 Gate 侧 | 任何入队失败（每连接出站队列满，也包括 Gate 自己的 `outbound.resident_bytes` 耗尽）、帧超过 `outbound.max_age`、序号不连续：关闭该连接 |
+| Game Ingress（Game 侧可靠队列） | 异步发送失败、帧超过 `outbound.max_age`：退役绑定并通知 Gate 关闭连接。入队背压（这条绑定的队列满）只把错误交还推送方：**Entity Sync 推送**由推送方关闭该玩家的全部连接（`wiring/selfsync.PushPlayerFrame`，自身视图与 game-demo 场景共用）；PB 推送仍由业务按返回的错误处理 |
+
+**例外：Game 进程的驻留预算耗尽**（Game Ingress 的 `outbound.resident_bytes`，对应 `nettransport.ErrResidentBudgetExhausted`，它同时满足 `ErrReliableBackpressure`）不是哪个连接慢：Entity Sync 推送交还 `entitysync.ErrRetryLater`，Manager 整轮重试、保留脏状态，不断开任何人。预算不会被停滞的绑定长期占住——每帧从入队起最多驻留 `outbound.max_age`，到期发不出去的绑定被关闭、释放预算；持续耗尽只在健康流量持续超过发送能力时出现，代价是同步延迟上升（细节与放大见 [impl/04-sync §2C](impl/04-sync.md#2c-自身视图selfview的生命周期)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）。只有同一玩家的部分连接因预算拒收时仍按“收不下”断开：收下这一帧的连接会把重试的同一 tick 当旧包丢掉。Gate 侧自己的驻留预算耗尽目前仍关闭连接，没有这个例外（KNOWN-LIMITS）。
+
+Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家推送（`PushPlayer` / `PushSyncPlayer` / `ActiveSessions` / `CloseSessions` 都算上它）：Gate 先物理写出 AuthACK、准备好接收出站才发 Activate，激活回调里登记的同步若在回调返回前推送，不会得到“玩家没有连接”。激活失败的绑定随即关闭、不再算在内。
+
 ### 嵌入 TCP 的出站
 
 嵌入 Game 的 TCP 没有 Gate 那一跳，出站同样有界、异步：每个连接一条出站队列和唯一写协程（[tcp_session.go](../../infra/network/gateway/tcp_session.go) 的 `enqueue` / `writeLoop`），PB 推送、Sync、Lockstep、读循环的回包与心跳 ACK 按入队顺序写出。`TCPRuntime.Push*` 只入队：返回 nil 表示该连接已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁、不等 socket，所以 `Push*` 不需要 `fctx.BlockingError` 守卫，业务 worker、场景 Sync Flush、Lockstep Tick 都可以直接调用。payload 入队时复制，调用返回后可复用。

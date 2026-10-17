@@ -214,7 +214,8 @@ func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.
 - 鉴权 ACK 写出之后登记连接，下一个同步 tick 开会话、把玩家绑定到自己的 Player（视图 `self`），第一帧是全量；之后每次提交的变化是增量。首个全量总在 ACK 之后。
 - 实体不在内存（首登还没 `GetOrCreate`、还没被请求加载）时会话照开，实体一出现就送全量；登录 endpoint 里 `lifecycle.GetOrCreate` 是常见写法。
 - 断线重连、同一玩家的新连接（顶号或多端）都从全量开始；旧连接关闭不带走新连接的视图。全部连接断开后关会话、注销 subject。
-- 推送只入出站队列、不等写出。嵌入 TCP 的出站队列满时接入层关闭这条连接；独立 Gate 下 Game Ingress 的可靠队列背压只拒收这一帧、连接还在：Manager 丢掉会话，至少半个同步周期后在同一连接上重开，客户端收到一份 epoch 更大的全量（照常接受）。同一次登录内最多重开 8 次，之后停到下一次登录。
+- 推送只入出站队列、不等写出。**跟不上就断开**：一帧被活着的连接拒收（嵌入 TCP 的出站队列满、独立 Gate 下 Game Ingress 的可靠队列满或绑定失效等）时，关闭这名玩家的全部连接，Manager 关掉同步会话；客户端照常重连，新连接从全量开始。不会出现“连接还在、却再也收不到自己的状态”。例外是整个进程的出站驻留预算（独立 Gate 的 `outbound.resident_bytes`）用尽：那不是哪个玩家慢，这一轮整体重试，连接和会话都不动，预算恢复后照常收增量。规则在 `wiring/selfsync.PushPlayerFrame`，与 game-demo 场景共用。
+- 客户端要把“连接被服务端关闭”当成普通断线处理：重连、重新登录，等第一份全量。监控看 `player.sync.push_refused.total{outcome}`（`closed` 是因拒收断开的次数，`retried` 是预算耗尽的整轮重试次数）与 `entitysync.self_view.stranded_players`（在线却超过 3 个同步周期没有会话的玩家数，正常为 0）。
 
 客户端：包头载荷类型是 Sync、消息编号是 `msgid.MsgSelfSync` 的推送交给每连接一个的 `frame.Receiver`，组件数据用 `entitysync.DecodeSubjectUpdate` 取出，载荷交给 DAO 的 `ApplySync`。连接上第一份全量之前的增量被拒（`frame.ErrBaselineMismatch`），跳过等全量即可。Go 写法见 `wiring/selfsync/example_client_test.go`（随测试运行）。C# 本轮没有自身视图的解码样例：`Roost.Client.SyncReceiver` 能收帧，subject 载荷的解码需业务自写。
 
