@@ -1,0 +1,12 @@
+bin/
+dist/
+log/
+.dev/
+/data/wal/
+.roost-deploy/
+.env
+deploy/docker/.env.*
+*.local.yaml
+deploy/k8s/base/secret.*.local.yaml
+.idea/
+.vscode/

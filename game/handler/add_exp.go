@@ -1,0 +1,43 @@
+package handler
+
+import (
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+)
+
+// handlerAddExp is a two-entity transaction: the Player gains experience and
+// levels up, the World counts the experience granted, and both changes land
+// in one WAL record — either both are durable or neither is. Nest locks the
+// two by rank, World (2) before Player (4), which is why the demo moved the
+// kinds off the scaffold's EntityCategoryOther (see the entity files). The
+// level-up effect rides on the same transaction. The return value is the
+// number of levels gained, carried back through the generated Sender
+// (MultiSync_AddExp, one id per entity parameter).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+	// 两个实体的范围先只读校验：超出 int64 经验 / int32 等级 / World 累计时在任何 DAO 写入前拒绝，
+	// 不靠写完再由 rollback=undo 撤回。AddExp / RecordExp 自己也检查，只是兜底。
+	if err := checkExpGrant(target, stats, amount); err != nil {
+		return 0, err
+	}
+	gained, err := target.ProfileComp().AddExp(amount)
+	if err != nil {
+		return 0, err
+	}
+	if err := stats.StatsComp().RecordExp(amount); err != nil {
+		return 0, err
+	}
+	return gained, nil
+}
+
+// checkExpGrant is the read-only admission every experience grant shares
+// (AddExp, ClaimDungeon, and through them the GM command and the dungeon
+// finish endpoint): the Player's experience and level and the World's total
+// must all stay in range, or nothing is written.
+func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amount int64) error {
+	if err := target.ProfileComp().CheckAddExp(amount); err != nil {
+		return err
+	}
+	return stats.StatsComp().CheckRecordExp(amount)
+}

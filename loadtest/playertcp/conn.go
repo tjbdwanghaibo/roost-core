@@ -1,0 +1,135 @@
+// Package playertcp is the client half of this project's player TCP framing,
+// shaped as a roost-core/robot transport so the robot runner can drive the
+// real listener.
+//
+// 公共RS v2包头与robot/client SDK一致；这里仅负责鉴权和wire序列映射。
+package playertcp
+
+import (
+	"context"
+	"net"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+// TransportType is the value for transport.Config.Type.
+const TransportType = "player-tcp"
+
+// AuthMessageID is the message id the server reserves for the handshake
+// frame and its acknowledgement.
+const AuthMessageID uint32 = 0
+
+// Register installs the dialer. Call it once before building a runner.
+func Register() error { return transport.RegisterDialer(TransportType, dial) }
+
+// MustRegister is Register panicking on error.
+func MustRegister() {
+	if err := Register(); err != nil {
+		panic(err)
+	}
+}
+
+// AuthPacket is what an AuthProvider returns: the token the server hands to
+// the application authenticator. Its sequence is assigned on the wire.
+func AuthPacket(token string) *transport.Packet {
+	return &transport.Packet{MsgID: AuthMessageID, Payload: []byte(token)}
+}
+
+func dial(ctx context.Context, cfg transport.Config) (transport.Conn, error) {
+	dialer := net.Dialer{Timeout: cfg.DialTimeout}
+	raw, err := dialer.DialContext(ctx, "tcp", cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if tcp, ok := raw.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+	return &Conn{conn: raw, maxPayload: cfg.MaxPayloadSize, sequences: make(map[uint32]uint32)}, nil
+}
+
+// Conn adapts one socket. The server demands a strictly increasing, non-zero
+// sequence on every client frame — including the handshake and fire-and-forget
+// notifies, which the robot sends with Seq 0 — so the wire sequence is this
+// Conn's own counter, and a map remembers which robot sequence each wire
+// sequence carried so the response can be handed back under the sequence the
+// robot session is waiting on. A server push is told apart by the flags byte,
+// not by its sequence: the server numbers pushes from its own per-session
+// counter, which starts at 1 like this Conn's, so a world-chat push arriving
+// while a call is in flight can carry exactly the number that call is waiting
+// on. Pushes surface to the robot with Seq 0, which is what its session
+// routes to wait_push.
+type Conn struct {
+	conn       net.Conn
+	maxPayload int
+
+	writeMu sync.Mutex
+	next    uint32
+
+	mu        sync.Mutex
+	sequences map[uint32]uint32
+}
+
+func (c *Conn) WritePackets(packets []*transport.Packet) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	// 整批先校验再登记序列，坏输入不能留下永远没有应答的映射。
+	next := c.next
+	framed := make([]*wire.Packet, 0, len(packets))
+	mappings := make(map[uint32]uint32)
+	for _, packet := range packets {
+		if packet == nil {
+			continue
+		}
+		next++
+		if next == 0 {
+			next = 1
+		}
+		framed = append(framed, &wire.Packet{Flags: packet.Flags, MsgID: packet.MsgID, Seq: next, Payload: packet.Payload})
+		if packet.Seq != 0 {
+			mappings[next] = packet.Seq
+		}
+	}
+	data, err := wire.Encode(framed, c.maxPayload)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	c.next = next
+	c.mu.Lock()
+	for sequence, original := range mappings {
+		c.sequences[sequence] = original
+	}
+	c.mu.Unlock()
+	buffers := net.Buffers{data}
+	_, err = buffers.WriteTo(c.conn)
+	if err != nil {
+		_ = c.conn.Close()
+	} // 半包后不能继续复用流。
+	return err
+}
+
+func (c *Conn) ReadPacket() (*transport.Packet, error) {
+	packet, err := wire.Read(c.conn, c.maxPayload)
+	if err != nil {
+		return nil, err
+	}
+	sequence := uint32(0)
+	if packet.Flags&wire.FlagPush == 0 && packet.Seq != 0 {
+		c.mu.Lock()
+		sequence = c.sequences[packet.Seq]
+		delete(c.sequences, packet.Seq)
+		c.mu.Unlock()
+	}
+	packet.Seq = sequence
+	return packet, nil
+}
+
+func (c *Conn) Close() error { return c.conn.Close() }
+
+func (c *Conn) RemoteAddr() string { return c.conn.RemoteAddr().String() }
+
+var _ transport.Conn = (*Conn)(nil)

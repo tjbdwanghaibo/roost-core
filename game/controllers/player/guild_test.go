@@ -1,0 +1,63 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	playerentity "example.com/planet/game/entities/player"
+	playeraccess "example.com/planet/game/playeraccess"
+	"example.com/planet/protocol/pb"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// guildLookupStub 记下端点经 Nest 读了几次玩家状态；其余 Client 方法不应被调用。
+type guildLookupStub struct {
+	corenest.Client
+	reads int
+	err   error
+}
+
+func (client *guildLookupStub) Request(context.Context, corenest.HandlerName, int64, corenest.Params, ...corenest.SendOpt) (any, error) {
+	client.reads++
+	return int64(0), client.err
+}
+
+// 只看字节就能判定无效的公会名，在读玩家状态、持久保留 ID、创建 Guild 实体之前回 guild_name（100016）：
+// 之后的 FoundGuild 事务回滚不了已经消耗的 ID。
+func TestFoundGuildRefusesAnInvalidNameBeforeReadingOrReserving(t *testing.T) {
+	playerentity.RegisterEntity()
+	for _, name := range []string{"", "   ", "\t\n", "guild\x00name", "guild\u0085name", "bad\xffbytes"} {
+		coll := mongotest.NewClient().Collection("test", "guild_ids")
+		if err := coll.Seed(bson.M{"_id": "guild", "next": int64(7)}); err != nil {
+			t.Fatal(err)
+		}
+		client := &guildLookupStub{}
+		controller := &Controller{nestClient: client, guildIDs: coll}
+		response, err := controller.HandleFoundGuild(&playeraccess.Context{PlayerID: 42}, &pb.FoundGuildRequest{Name: name})
+		var counter struct {
+			Next int64 `bson:"next"`
+		}
+		if readErr := coll.FindOne(context.Background(), bson.M{"_id": "guild"}, &counter); readErr != nil {
+			t.Fatal(readErr)
+		}
+		if err != nil || response == nil || response.Code != 100016 || counter.Next != 7 || client.reads != 0 {
+			t.Fatalf("name %q reached dependencies: response=%+v err=%v next=%d reads=%d", name, response, err, counter.Next, client.reads)
+		}
+	}
+}
+
+// 有可见内容的名字（含前后空格、非 ASCII）照常进入“玩家是否已有公会”的检查，名字不被裁剪或改写。
+func TestFoundGuildWithAValidNameReachesTheExistingGuildCheck(t *testing.T) {
+	playerentity.RegisterEntity()
+	for _, name := range []string{"valid", " 星辰 公会 "} {
+		client := &guildLookupStub{err: errors.New("existing-guild lookup unavailable")}
+		controller := &Controller{nestClient: client}
+		response, err := controller.HandleFoundGuild(&playeraccess.Context{PlayerID: 42}, &pb.FoundGuildRequest{Name: name})
+		if err != nil || response == nil || response.Code == 0 || response.Code == 100016 || client.reads != 1 {
+			t.Fatalf("name %q did not reach the existing-guild check: response=%+v err=%v reads=%d", name, response, err, client.reads)
+		}
+	}
+}

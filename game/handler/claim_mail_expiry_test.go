@@ -1,0 +1,117 @@
+package handler
+
+import (
+	"context"
+	"testing"
+
+	syncsender "example.com/planet/game/handler/syncsender"
+	"example.com/planet/game/rewards"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// 邮件过期后，账本迟早会忘掉这封邮件；忘掉之后还能不能再发奖，只取决于发奖入口自己拒不拒绝过期的首次发放。
+// 下面三条分别钉住：在途的旧请求（预留早于过期、执行晚于清理、带着排队前读到的旧时间）、到期边界，
+// 以及清理与准入之间的宽限（清理发生在时钟靠前的进程，旧请求落到时钟稍慢的进程）。
+
+// 预留早于过期、执行晚于账本清理的请求，不能把同一封邮件再次发奖。
+func TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned(t *testing.T) {
+	const start int64 = 1_800_000_000
+	pinBusinessClock(t, start)
+	subject, client, committer := newClaimHarness(t)
+	sender := syncsender.NewClaimMailRewardSender(client)
+	ctx := context.Background()
+	expires := start + 60
+	if result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start); err != nil || !result.Claimed {
+		t.Fatalf("first grant: %+v %v", result, err)
+	}
+	pinBusinessClock(t, expires+1)
+	// 已记录的成功可以在过期后确认，不能为了拒绝新发奖而破坏该重放结果。
+	if result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start); err != nil || result.Claimed || result.BagCount != 1 {
+		t.Fatalf("known grant after expiry: %+v %v", result, err)
+	}
+	// 另一封邮件的发放在宽限之后触发清理。
+	pinBusinessClock(t, expires+rewards.LedgerPruneGraceSeconds+1)
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "other", 1002, 1, start+7*24*3600, start); err != nil {
+		t.Fatal(err)
+	}
+	if subject.BagComp().MailRewardClaimed("old") {
+		t.Fatal("premise: the expired ledger entry was not pruned")
+	}
+	before := len(committer.records)
+	// 调用方在邮件过期前取得预留并读取了业务时间，随后延迟进入 Nest。
+	result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start)
+	if err == nil {
+		t.Fatalf("expired in-flight replay granted: %+v; bag=%d", result, subject.BagComp().ItemCount(1002))
+	}
+	// 与邮件服务拒绝过期预留是同一个事实，客户端拿到同一个码。
+	if code, _ := errcode.ClientError(err); code != svcmail.CodeExpired {
+		t.Fatalf("expired grant code=%d, want mail expired (%d): %v", code, svcmail.CodeExpired, err)
+	}
+	if got := subject.BagComp().ItemCount(1002); got != 2 {
+		t.Fatalf("replay changed the bag: %d, want 2", got)
+	}
+	if len(committer.records) != before || subject.BagComp().MailRewardClaimed("old") {
+		t.Fatal("rejected replay committed a record or recreated the ledger")
+	}
+}
+
+// 邮件服务在 now >= expires 时拒绝预留，发奖入口使用相同的边界。时钟固定在更早的时刻，边界由调用方时间给出，
+// 这样秒针跳动不会把“恰好到期”变成“过期一秒”。
+func TestMailGrantChecksExpiryAtExecutionTime(t *testing.T) {
+	const start int64 = 1_800_000_000
+	const expires = start + 60
+	for _, test := range []struct {
+		name    string
+		now     int64
+		allowed bool
+	}{
+		{"before", expires - 1, true},
+		{"at", expires, false},
+		{"after", expires + 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pinBusinessClock(t, start)
+			subject, client, committer := newClaimHarness(t)
+			sender := syncsender.NewClaimMailRewardSender(client)
+			result, err := sender.Sync_ClaimMailReward(context.Background(), subject.ID(), "edge", 1002, 1, expires, test.now)
+			if test.allowed {
+				if err != nil || !result.Claimed || subject.BagComp().ItemCount(1002) != 1 {
+					t.Fatalf("valid grant: %+v %v", result, err)
+				}
+				return
+			}
+			if err == nil || subject.BagComp().ItemCount(1002) != 0 || subject.BagComp().MailRewardClaimed("edge") || len(committer.records) != 0 {
+				t.Fatalf("expired first grant changed state: %+v err=%v records=%d", result, err, len(committer.records))
+			}
+		})
+	}
+}
+
+// 清理发生在时钟靠前的进程（宕机重启后 Player 换了进程，App 允许进程之间有分钟级的业务时间差），
+// 延迟的旧请求落到时钟稍慢的进程：此时它看到的 now 还没到期，准入放行，只能靠账本还记得这封邮件。
+// 账本比准入晚一个宽限才清理，就是为了这一步。
+func TestALedgerPrunedAheadStillStopsAReplayOnAClockBehind(t *testing.T) {
+	const start int64 = 1_800_000_000
+	pinBusinessClock(t, start)
+	subject, client, _ := newClaimHarness(t)
+	sender := syncsender.NewClaimMailRewardSender(client)
+	ctx := context.Background()
+	expires := start + 60
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start); err != nil {
+		t.Fatal(err)
+	}
+	// 时钟靠前的进程：过期 1 秒后有别的发放写账本。
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "other", 1002, 1, start+7*24*3600, expires+1); err != nil {
+		t.Fatal(err)
+	}
+	// 时钟慢 31 秒的进程执行在途的旧请求。
+	pinBusinessClock(t, expires-30)
+	result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires, start)
+	if err != nil {
+		t.Fatalf("replay on the slower clock: %v", err)
+	}
+	if result.Claimed || subject.BagComp().ItemCount(1002) != 2 {
+		t.Fatalf("a replay on a clock 31s behind was paid again: %+v bag=%d", result, subject.BagComp().ItemCount(1002))
+	}
+}
