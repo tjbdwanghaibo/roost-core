@@ -28,10 +28,20 @@
 - **game-demo 场景（`demo/internal/service/game/scene.go.tmpl`）同一规则**：`sceneLane.Push` 改为调用 `selfsync.PushPlayerFrame`，`scenePusher` 增加 `CloseSessions`；`settle` 删除“丢会话后玩家仍连着就重开”的分支（`sessionDropped` 参数一并删除），还连着的只可能是之后的新登录，由它的 `Join` 打开会话。**保留** `Join` 打开会话时上一个会话还在关闭（`SessionOpenRetryable`）的有界退避重试，改名 `openLater` / `openLocked` / `sessionOpen*`；**指标改名** `scene_session_reopen_failed_total` → `scene_session_open_failed_total`（只计 Join 打开会话的放弃，标签不变），仪表盘面板、可观测性 README、WALKTHROUGH 同步。已生成工程不迁移（`roost project sync` 取新模板），按旧名查询的面板 / 告警请改名。修前红（旧 scene.go + 新用例）：`the player's connections were closed 0 times after a live connection refused a frame, want once`。
 - 文档：[impl/04-sync §2C](docs/framework/impl/04-sync.md#2c-自身视图selfview的生命周期)、[guide/04-sync](docs/framework/guide/04-sync.md)、[PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)、[GATEWAY §4](docs/framework/GATEWAY.md#慢消费者跟不上就断开)（三种接入统一为“跟不上就断开”，Game 进程驻留预算例外）、KNOWN-LIMITS“自身视图（self_sync）与 Sync 慢消费者规则”。
 
+### Scheduler 重构：活节点始终可按 ID 找到，Tick 期间的操作直接改节点状态（维护者 2026-10-17 批准）
+
+**这是针对一个反复出缺陷的机制的重构。** “Tick 期间的推迟操作”已三轮出缺陷：`23a10f42`（NC-140～147：Tick 期间的取消 / 改期 / 重入）、`50526a2c`（非法存量节点改由事务内 Tick 清理）、`a975c070`（触发中节点的显式改期丢失，加 `firing` 重入栈与 `firingChanges`）与 `1fa5ef08`（Tick 内新建的期限 / payload 被推迟捕获）。共同根因是节点在“触发中 / 新建未入堆 / 改期移出”时不在 `byID` 里，操作只能变成按 ID 推迟的闭包、收尾再查，每次修复都在加状态。
+
+- **结构**：`byID` 持有全部活节点；节点带显式状态 `stateHeap` / `stateFiring` / `stateQueued` / `stateDetached`（取消即 detach）。`NewTimer*` / `ChangeTimer` / `RemoveTimer` / 回调返回值在调用当下改节点状态与期限（当时取 now、复制 payload）；最外层 Tick 收尾只把 `stateQueued` 节点入堆，再按入队顺序各发一次 upsert。删除 `deferred []func()`、`firing` 栈、`firingChanges` / `firingChange`、`addNode`。`scheduler.go` 非注释代码 424 → 417 行。
+- **修复**：收尾时 `onChange` 钩子 panic，旧实现的推迟闭包与控制表不清空，同一 Scheduler 再 Tick 会重放——新建的子定时器被第二次压入堆、显式改期被重放一次 upsert、残留控制表让节点在显式期限触发后不按返回值重排。现在先落定状态（入堆、清 `running`、取走队列）再回调，钩子 panic 后没有可重放的残留；剩余变化不再回调，宿主应把这次 Tick 当失败（World 每次重建 Scheduler，不受影响；长期复用同一个 Scheduler 的宿主受影响）。修前红（基线 `1d55586f`，`TestOnChangePanicDuringSettlementDoesNotReplay` 三个子用例）：`an idle Tick replayed the failed settlement: events=[1:2@1h0m0s] nodes 1 -> 2`、`events=[1:1@1m0s] nodes 1 -> 1`、`after firing at the explicit deadline fired=2 next=1m0s nodes=1, want fired 2 and one node due 1m1s`。
+- **语义不变**：公开 API、`Node` 持久字段、钩子最终状态、Tick 内操作返回值都不变。新增 `TestOperationsOnEveryNodeStateDuringTick`（改期 / 取消 / 不操作 × 在堆中 / 本轮到期 / 触发中 / 触发中已改期 / 新建待入堆 / 改期移出 / 已取消 / 本轮已结束 / 已按返回值重排 / 未知 ID × 返回 0 / 负 / 正 × 直接 / 经重入 Tick，82 组）在重构前的基线上同样全部通过。只有钩子的**中间序列**变化：同一 Tick 内多次改期只在收尾发一次 upsert；收尾按节点首次入队顺序回调；取消等待放回的节点时在取消调用里立即发删除（基线在收尾时先 upsert 再删除）；Tick 内新建即取消仍先 upsert 再删除（宿主据此推进持久 seed）。逐项对照见[方案](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md)。
+- **性能**（同机交替 10 轮，1 万常驻定时器、每 Tick 触发 100 个，[样本](docs/performance/benchmarks/timer-scheduler-refactor-20261017/)）：按返回值重排 −14.5%；回调显式改期自己 −20%、改期其他节点 −18%（分配 500 / 400 → 300 次/Tick）；回调内新建持平（分配 600 → 500）；World 式重建 + Tick 持平；Tick 外登记 + 取消一对 +3.1%（约 3ns，状态记账）。`Node` 大小不变（私有 `index` 改为 int32 与状态字段共占 8 字节）。
+- 文档：[impl/10-time §2](docs/framework/impl/10-time.md#2-必须保持的契约)、[guide/10-time §3](docs/framework/guide/10-time.md#3-scheduler)。
+
 ### Scheduler：回调内显式改期不会被返回值丢掉或被重入 Tick 提前触发
 
 - 基线 `00d35150` 下，到期节点先出堆并删除索引，回调内 `ChangeTimer` 虽返回 true，却只推迟一次按 ID 查找；回调返回 0 / 负值时再也找不到节点，SLG 行军或建造回调中确认的改期会丢失。返回正间隔时又会先按返回值入堆，后续重入 Tick 可在显式期限前再次触发。新增 `TestFiringTimerExplicitRescheduleOverridesReturn` 和 `TestFiringTimerOperationsComposeAcrossReentrantTicks` 修前共 9 个业务子用例失败。
-- 用重入回调栈保留正在执行的身份，仅对显式操作建立临时控制状态；显式改期覆盖所有返回间隔，收尾前不重新入堆；取消后不被返回值或后续改期复活。typed 节点的 ID、优先级、参数、载荷与新期限完整写回，闭包仍不持久化。已有待触发节点的改期规则不变，接口和存储格式不变。
+- 显式改期覆盖所有返回间隔，收尾前不重新入堆；取消后不被返回值或后续改期复活。typed 节点的 ID、优先级、参数、载荷与新期限完整写回，闭包仍不持久化。已有待触发节点的改期规则不变，接口和存储格式不变。
 - 回归覆盖 typed / 闭包、返回正/零/负间隔、同轮连续改期、先取消/后取消、其他回调操作外层节点、重入未来 Tick、panic 收尾和持久节点重建。复现：`go test ./infra/base/timer -run '^TestFiringTimer' -count=1`。旧版本临时接入方式是回调返回所需间隔、避免依赖回调内显式改期；规则见[时间与定时器](docs/framework/guide/10-time.md#3-scheduler)。
 
 ### Timer：回调内创建时固定登记快照

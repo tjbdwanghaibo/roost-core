@@ -1,0 +1,110 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   48954	     24902 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41644	     28910 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30134	     41494 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   36818	     33289 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	13382004	        92.72 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21639	     55177 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   49116	     24819 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41498	     28977 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30218	     41162 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   37447	     32227 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12969356	        93.02 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21571	     55960 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   48675	     25003 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41168	     29695 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   29876	     41692 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   36811	     32862 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12835453	        94.07 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21574	     55617 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   47923	     24899 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41756	     28950 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30150	     41378 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   37279	     33106 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12626223	        94.52 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   20854	     57721 ns/op	  166913 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   48433	     25478 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   39982	     29114 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30722	     41467 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   35324	     32372 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12956030	        93.30 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21604	     55764 ns/op	  166913 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   46586	     25076 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   40948	     30729 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   29677	     42030 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   35590	     33685 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12473623	        96.97 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21484	     55735 ns/op	  166913 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   47089	     25885 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   40623	     29601 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   29934	     41557 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   36654	     32743 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12758972	        93.22 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21541	     55765 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   47778	     25156 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41646	     28895 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30432	     40696 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   37957	     31665 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12961779	        92.80 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21748	     55045 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   48741	     25217 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41073	     29023 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   30226	     41578 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   36770	     31775 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	13554720	        92.45 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21795	     55033 ns/op	  166912 B/op	    1022 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: Apple M5
+BenchmarkTickRearmByReturn-10             	   47247	     25250 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-10    	   41328	     29156 ns/op	   10400 B/op	     500 allocs/op
+BenchmarkTickRescheduleOther-10           	   29947	     41291 ns/op	    8800 B/op	     400 allocs/op
+BenchmarkTickCreateInHandler-10           	   37814	     32672 ns/op	   16800 B/op	     600 allocs/op
+BenchmarkNewAndRemoveOutsideTick-10       	12148612	        93.42 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-10                	   21606	     55343 ns/op	  166912 B/op	    1022 allocs/op
+PASS

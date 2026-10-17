@@ -1,0 +1,6 @@
+# 组合表在基线上的运行（证明可观察语义不变）
+# 做法：在 1d55586f 的独立检出里放入重构分支的 scheduler_test.go，只把 checkSettled 换成基线字段的同等检查
+# （running / deferred / firing / firingChanges 为空、len(byID)==len(heap)），然后：
+#   GOWORK=off go test -count=1 -v -run TestOperationsOnEveryNodeStateDuringTick ./infra/base/timer
+# 结果：82 个子用例 + 父用例共 83 行 "--- PASS"，包结论 PASS。
+# 同一份测试文件整包运行时，只有 TestOnChangePanicDuringSettlementDoesNotReplay 的三个子用例失败（见 red-panic-replay.txt）。

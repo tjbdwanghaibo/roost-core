@@ -23,7 +23,7 @@
 
 **唯一的规则**：`byID` 持有调度器的全部活节点；每个节点带显式状态；`NewTimer*` / `ChangeTimer` / `RemoveTimer` / 回调返回值都在调用的那一刻直接改节点状态与期限（当时取 now、复制 payload）。最外层 Tick 收尾只把等待入堆的节点放回堆，再按入队顺序调用 `onChange`。
 
-删除：`Scheduler.deferred []func()`、`Scheduler.firing []*Node`、`Scheduler.firingChanges`、`type firingChange`、`firingChange()`、`addNode()`。新增：`Node` 的私有字段 `state` / `persisted` / `announced`，`Scheduler.queued []*Node`。
+删除：`Scheduler.deferred []func()`、`Scheduler.firing []*Node`、`Scheduler.firingChanges`、`type firingChange`、`firingChange()`、`addNode()`。新增：`Node` 的私有字段 `state` / `persisted` / `announced`（私有 `index` 由 `int` 改为 `int32`，`Node` 大小不变），`Scheduler.queued []*Node`。
 
 ### 2.1 节点状态
 
@@ -115,7 +115,7 @@
 ## 5. 性能预期
 
 - 去掉每次推迟操作一个闭包分配、触发中显式操作的 map 分配与线性查找 `firing` 栈；`ExplicitRescheduleSelf` / `RescheduleOther` / `CreateInHandler` 应减少分配、略快。
-- 主路径（回调按返回值重排）多一次状态赋值；`fire` 仍有一个 defer（基线也有）；`Node` 多 8 字节。预期持平。
+- 主路径（回调按返回值重排）多一次状态赋值，但触发中的节点留在 `byID`，省掉每次触发的 map 删除与重新插入、`firingChanges` 查找和 `firing` 栈；`fire` 仍有一个 defer（基线也有）。`index` 改为 `int32`，与三个状态字段共占 8 字节，`Node` 大小不变（104 字节）。预期持平或略快。
 - 用 `bench_test.go` 的六个基准（1 万常驻定时器、每 Tick 触发 100 个；World 式重建 + Tick），新旧二进制同机交替各 10 轮，benchstat 对照，样本存 `docs/performance/benchmarks/timer-scheduler-refactor-20261017/`。
 
 ## 6. 步骤、验证与回退
@@ -141,3 +141,21 @@
 ```
 
 含义：新建的子定时器在下一次空闲 Tick 被第二次压入堆（堆里同一节点两份）；显式改期在空闲 Tick 被重放一次 upsert；残留的控制表让节点在显式期限触发后不按返回值重排，又被重放的闭包按旧期限放回。完整输出见 [red-panic-replay.txt](../performance/benchmarks/timer-scheduler-refactor-20261017/red-panic-replay.txt)。
+
+## 8. 实施结果
+
+- 测试：现有用例全部不改语义通过（两处内部字段断言改为 `checkSettled`）；新增 `TestOperationsOnEveryNodeStateDuringTick`（82 组）在**基线上同样全部通过**（把 `checkSettled` 换成基线字段的同等检查后运行），说明可观察语义一致；`TestOnChangePanicDuringSettlementDoesNotReplay` 基线三红、重构后全绿。
+- 代码量：`scheduler.go` 非注释非空行 424 → 417；删除 `deferred` / `firing` / `firingChanges` / `firingChange` / `addNode`。
+- 基准（同机交替 10 轮，[样本与环境](../performance/benchmarks/timer-scheduler-refactor-20261017/)）：
+
+| 基准 | 基线 | 重构 | 变化 | 分配 |
+| --- | ---: | ---: | ---: | --- |
+| TickRearmByReturn | 25.18µs | 21.51µs | −14.5% | 300 → 300 |
+| TickExplicitRescheduleSelf | 29.35µs | 23.49µs | −20.0% | 500 → 300（10.2KiB → 2.3KiB） |
+| TickRescheduleOther | 40.90µs | 33.61µs | −17.8% | 400 → 300（8.6KiB → 2.3KiB） |
+| TickCreateInHandler | 32.03µs | 31.10µs | ~（p=0.075） | 600 → 500 |
+| NewAndRemoveOutsideTick | 93.28ns | 96.18ns | +3.1%（p=0.023） | 1 → 1 |
+| RebuildAndTick（World 用法） | 55.07µs | 54.54µs | ~ | 1022 → 1021 |
+
+  Tick 外“登记 + 取消”一对多约 3ns：来自状态记账（`detach` 写状态与下标、取消时检查 `announced` / `persisted`）。第一版实现（`Node` 多 8 字节、`emit` 按值复制）是 +11%，已把 `index` 收窄、`emit` / `clone` 改为指针接收降到 +3%；剩余部分换来 Tick 路径 15～20% 的提升与 Tick 内操作零闭包分配，接受。World 只在活动排期时武装定时器，这条路径不是热点。
+

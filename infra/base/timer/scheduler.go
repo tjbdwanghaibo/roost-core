@@ -52,9 +52,37 @@ type Node struct {
 	End      time.Time
 	Delay    time.Duration
 
-	index   int
 	handler Handler
+	// index 是堆下标（不在堆中为 -1）。用 int32 与下面三个字段共占 8 字节，Node 不因状态字段变大
+	// （回调与钩子按值复制 Node，基准见 bench_test.go）。
+	index int32
+	state nodeState
+	// persisted：持久化钩子当前持有这个节点（最近一次回调是 upsert）。只对 typed 节点有意义。
+	persisted bool
+	// announced：钩子至少收到过一次这个 ID 的 upsert。只有 Tick 内新建、尚未收尾的节点为假。
+	announced bool
 }
+
+// nodeState 是节点相对调度器的位置。不变量：
+//   - byID[id] == n 当且仅当 n.state 是 stateHeap / stateFiring / stateQueued；
+//   - n.state == stateHeap 当且仅当 n 在堆的 n.index 位置；
+//   - stateFiring / stateQueued 只在 running 期间存在，Tick 外 byID 里全是 stateHeap、queued 为空；
+//   - 一次最外层 Tick 内一个节点至多进 queued 一次（queued 只会入堆或 detach，不会回到堆 / 触发中）。
+//
+// 因为活节点总能按 ID 找到，取消、改期、新建都在调用当下改节点本身，不需要按 ID 推迟到收尾再查。
+type nodeState uint8
+
+const (
+	// stateDetached：不属于调度器——已取消、到期结束、回调 panic 后丢弃，或调用方 / 克隆出来的值（零值）。
+	// 取消不单设状态：detach 之后按 ID 找不到，Tick 期间的操作无效果，所以取消后的改期不会复活节点。
+	stateDetached nodeState = iota
+	// stateHeap：在堆中等待到期。
+	stateHeap
+	// stateFiring：已出堆、回调正在执行（含外层重入帧）；出堆时已向钩子发过删除。
+	stateFiring
+	// stateQueued：等最外层 Tick 收尾入堆。来源：Tick 内新建、Tick 内对堆中节点显式改期、触发中节点显式改期。
+	stateQueued
+)
 
 type Context struct {
 	OwnerID int64
@@ -75,17 +103,11 @@ type Scheduler struct {
 	handlers map[int32]Handler
 	onChange ChangeFunc
 
-	running  bool
-	deferred []func()
-	clock    func() time.Time
-	// firing 是重入回调栈；只有回调被显式改期/取消时才建立独立控制状态。
-	firing        []*Node
-	firingChanges map[int64]*firingChange
-}
-
-type firingChange struct {
-	node      *Node
-	cancelled bool
+	// running 只由最外层 Tick 置位和清除；重入的内层 Tick 不收尾。
+	running bool
+	// queued 是本次最外层 Tick 里进入 stateQueued 的节点，按进入顺序；其中之后被取消的已 detach，收尾跳过。
+	queued []*Node
+	clock  func() time.Time
 }
 
 func NewScheduler(ownerID int64, seed int64, saved []Node, onChange ChangeFunc) *Scheduler {
@@ -116,7 +138,10 @@ func NewScheduler(ownerID int64, seed int64, saved []Node, onChange ChangeFunc) 
 			slog.Warn("timer: invalid stored timer pending cleanup", "owner_id", ownerID, "timer_id", node.ID, "reason", reason)
 			continue
 		}
-		s.push(&node)
+		stored := &node
+		stored.persisted, stored.announced = true, true // 从存储加载：钩子已经持有它
+		s.byID[stored.ID] = stored
+		s.pushHeap(stored)
 	}
 	return s
 }
@@ -219,43 +244,40 @@ func (s *Scheduler) ReportUnhandledTypes() []int32 {
 
 // RemoveTimer 取消一个定时器；返回 true 之后它不再触发。
 //
-// Tick 期间（handler 里）调用时：目标仍在堆里（包括本次 Tick 也已到期、还没轮到的）就立即出堆，
-// 不能推迟到 Tick 结束——那样它会先按旧期限触发。正在触发或已显式改期的回调节点记为取消，
-// 不再按返回间隔或显式改期放回；本次 Tick 里刚新建、尚未入堆的节点推迟到最外层 Tick 结束取消。
-// Tick 内返回 true 只表示“已接受”，未知 ID 的推迟取消最终可能查不到节点。
+// 取消在调用当下生效：仍在堆里的（包括本次 Tick 也已到期、还没轮到的）立即出堆并发删除；
+// 正在触发的回调节点不再按返回间隔或显式改期放回（出堆时已发过删除）；本次 Tick 里新建或改期、
+// 等待收尾放回的节点直接移除，不再放回。Tick 期间对已经不存在的 ID（本轮已触发结束、已取消）
+// 仍返回 true，表示“已接受”，结果同样是它不再触发；Tick 外返回 false。
 func (s *Scheduler) RemoveTimer(id int64) bool {
 	if s == nil || id <= 0 {
 		return false
 	}
-	if s.running {
-		if change := s.firingChange(id); change != nil {
-			change.cancelled = true
-			return true
-		}
-	}
 	node := s.byID[id]
 	if node == nil {
-		if s.running {
-			s.deferred = append(s.deferred, func() { s.RemoveTimer(id) })
-			return true
-		}
-		return false
+		return s.running
 	}
-	heap.Remove(&s.nodes, node.index)
-	delete(s.byID, id)
-	if node.Type != TypeClosure {
-		s.emit(ChangeDelete, *node)
+	if node.state == stateHeap {
+		heap.Remove(&s.nodes, int(node.index))
+	}
+	s.detach(node)
+	if !node.announced {
+		// Tick 内新建即取消：仍让钩子见到这个 ID 一次。宿主（World）按 upsert 推进持久 seed，
+		// 否则重建后会再次分配这个已经交给调用方的 ID。
+		s.emitUpsert(node)
+	}
+	if node.persisted {
+		s.emitDelete(node)
 	}
 	return true
 }
 
-// ChangeTimer 把定时器改到 now+delay（now 为零值时取注入时钟）。
+// ChangeTimer 把定时器改到 now+delay（now 为零值时取注入时钟）。期限在调用当下计算。
 //
-// Tick 期间调用、目标仍在堆里时，立即把它移出堆，推迟到最外层 Tick 结束再按新期限放回：既不会在本次
-// Tick 按旧期限触发，也不会在本次 Tick 按新期限触发——两个 handler 互相改期
-// 不会在一次 Tick 里循环。移出期间不发持久化变化，放回时发一次 upsert。目标不在堆里（正在触发的自己、
-// 本次 Tick 新建的）时整个操作推迟。回调内显式改期覆盖返回间隔（包括 <=0），节点保持移出直到最外层
-// Tick 结束，不能被重入 Tick 再次触发；显式取消后再改期不会复活该节点。
+// Tick 外：直接调整堆并发一次 upsert。Tick 期间：目标仍在堆里时立即移出堆，等最外层 Tick 收尾再按
+// 新期限放回——既不会在本次 Tick 按旧期限触发，也不会按新期限触发，两个 handler 互相改期不会在一次
+// Tick 里循环；移出期间不发持久化变化，放回时发一次 upsert（多次改期只发最后一次）。正在触发的回调
+// 节点被显式改期时覆盖回调返回值（包括 <=0），同样等收尾放回，重入 Tick 不会提前触发它。Tick 内新建
+// 尚未放回的节点只改期限。已取消或已结束的节点不会被改期复活：Tick 期间返回 true、无效果，Tick 外返回 false。
 func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bool {
 	if s == nil || id <= 0 || delay <= 0 {
 		return false
@@ -263,73 +285,27 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 	if now.IsZero() {
 		now = s.now()
 	}
-	if s.running {
-		if change := s.firingChange(id); change != nil {
-			s.deferred = append(s.deferred, func() {
-				if change.cancelled {
-					return
-				}
-				if s.byID[id] != nil {
-					s.ChangeTimer(id, now, delay)
-					return
-				}
-				node := change.node
-				node.Delay, node.End = delay, now.Add(delay)
-				s.push(node)
-				if node.Type != TypeClosure {
-					s.emit(ChangeUpsert, *node)
-				}
-			})
-			return true
-		}
-	}
 	node := s.byID[id]
 	if node == nil {
-		if s.running {
-			s.deferred = append(s.deferred, func() { s.ChangeTimer(id, now, delay) })
-			return true
-		}
-		return false
-	}
-	if s.running {
-		heap.Remove(&s.nodes, node.index)
-		delete(s.byID, id)
-		s.deferred = append(s.deferred, func() {
-			node.Delay = delay
-			node.End = now.Add(delay)
-			s.push(node)
-			if node.Type != TypeClosure {
-				s.emit(ChangeUpsert, *node)
-			}
-		})
-		return true
+		return s.running
 	}
 	node.Delay = delay
 	node.End = now.Add(delay)
-	heap.Fix(&s.nodes, node.index)
-	if node.Type != TypeClosure {
-		s.emit(ChangeUpsert, *node)
+	switch node.state {
+	case stateHeap:
+		if !s.running {
+			heap.Fix(&s.nodes, int(node.index))
+			s.emitUpsert(node)
+			return true
+		}
+		heap.Remove(&s.nodes, int(node.index))
+		s.enqueue(node)
+	case stateFiring:
+		s.enqueue(node) // 回调返回后看到 state != stateFiring，不再按返回值处理
+	case stateQueued:
+		// 已在收尾队列：最后一次改期生效。
 	}
 	return true
-}
-
-// firingChange 只为正在执行（含外层重入）或本轮已受控的回调节点保留身份。
-// 普通到期回调复用栈空间，不为每次触发分配控制对象。
-func (s *Scheduler) firingChange(id int64) *firingChange {
-	if change := s.firingChanges[id]; change != nil {
-		return change
-	}
-	for i := len(s.firing) - 1; i >= 0; i-- {
-		if node := s.firing[i]; node.ID == id {
-			if s.firingChanges == nil {
-				s.firingChanges = make(map[int64]*firingChange)
-			}
-			change := &firingChange{node: node}
-			s.firingChanges[id] = change
-			return change
-		}
-	}
-	return nil
 }
 
 func (s *Scheduler) Tick(now time.Time) {
@@ -339,27 +315,17 @@ func (s *Scheduler) Tick(now time.Time) {
 	invalid := s.invalid
 	s.invalid = nil
 	for _, node := range invalid {
-		s.emit(ChangeDelete, node)
+		s.emit(ChangeDelete, &node)
 		metrics.IncCounter(InvalidDroppedMetric, nil, 1)
 	}
 	if now.IsZero() {
 		now = s.now()
 	}
-	// handler 里可以再调 Tick（重入）：内层照常触发到期节点，但只有最外层负责清 running 并执行推迟操作。
-	// 内层若也清掉 running，回到外层 handler 后“取消正在触发的自己”就不再识别回调身份、查不到节点而失效，
-	// 外层随后又按返回值把它重新排上。
+	// handler 里可以再调 Tick（重入）：内层照常触发到期节点，只有最外层负责清 running 并收尾。
+	// 内层若也收尾，外层回调里显式改期的自己会被提前放回堆、被后续重入 Tick 提前触发。
 	if !s.running {
 		s.running = true
-		defer func() {
-			s.running = false
-			// 推迟操作按登记顺序执行（推迟的改期之后再取消，结果是取消）；此时 running 已清，它们直接生效。
-			for i := 0; i < len(s.deferred); i++ {
-				s.deferred[i]()
-			}
-			clear(s.deferred)
-			s.deferred = s.deferred[:0]
-			clear(s.firingChanges)
-		}()
+		defer s.settle()
 	}
 
 	for {
@@ -368,31 +334,65 @@ func (s *Scheduler) Tick(now time.Time) {
 			return
 		}
 		heap.Pop(&s.nodes)
-		delete(s.byID, node.ID)
-		if node.Type != TypeClosure {
-			s.emit(ChangeDelete, *node)
-		}
-
 		next := s.fire(node, now)
-		if next <= 0 || s.firingChanges[node.ID] != nil {
+		if node.state != stateFiring {
+			continue // 回调里被显式改期（已进收尾队列）或取消（已 detach）：返回值不再生效
+		}
+		if next <= 0 {
+			s.detach(node)
 			continue
 		}
 		node.Delay = next
 		node.End = now.Add(next)
-		s.push(node)
-		if node.Type != TypeClosure {
-			s.emit(ChangeUpsert, *node)
-		}
+		s.pushHeap(node)
+		s.emitUpsert(node)
 	}
 }
 
+// settle 是最外层 Tick 的收尾（defer 执行，回调 panic 时同样执行）。
+//
+// 先落定再回调：running 清除、queued 取走、待放回的节点全部入堆之后，才按进入队列的顺序对仍在堆里的
+// typed 节点各发一次 upsert（携带最终期限）。钩子 panic 只让剩余 upsert 不再回调，调度器状态已经一致，
+// 没有可以重放的残留；宿主应把这次 Tick 当作失败（回滚事务并重建 Scheduler）。钩子里调用调度器按
+// Tick 外规则立即生效，它移除的节点在这里被跳过。
+func (s *Scheduler) settle() {
+	s.running = false
+	queued := s.queued
+	s.queued = nil
+	for _, node := range queued {
+		if node.state == stateQueued {
+			s.pushHeap(node)
+		}
+	}
+	for _, node := range queued {
+		if node.state == stateHeap {
+			s.emitUpsert(node)
+		}
+	}
+	if s.queued == nil { // 钩子里没有再跑一次最外层 Tick：复用底层数组
+		clear(queued)
+		s.queued = queued[:0]
+	}
+}
+
+// fire 执行一个已出堆节点的回调。节点在回调期间是 stateFiring、仍在 byID 里，回调（及其中的重入 Tick）
+// 对它的取消 / 改期直接改它的状态。
 func (s *Scheduler) fire(node *Node, now time.Time) time.Duration {
-	s.firing = append(s.firing, node)
+	node.state = stateFiring
+	returned := false
 	defer func() {
-		last := len(s.firing) - 1
-		s.firing[last] = nil
-		s.firing = s.firing[:last]
+		// 删除通知或回调 panic：与正常结束一样不放回（宿主事务负责回滚）；已经发生的显式改期 / 取消保留。
+		if !returned && node.state == stateFiring {
+			s.detach(node)
+		}
 	}()
+	s.emitDelete(node)
+	next := s.call(node, now)
+	returned = true
+	return next
+}
+
+func (s *Scheduler) call(node *Node, now time.Time) time.Duration {
 	if node.Type == TypeClosure {
 		if node.handler != nil {
 			return node.handler(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
@@ -435,7 +435,7 @@ func (s *Scheduler) Nodes() []Node {
 func (s *Scheduler) add(delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte, h Handler) int64 {
 	s.seed++
 	id := s.seed
-	// 登记即取得参数快照；推迟的只有堆变更。否则后续回调耗时会推迟期限，调用方复用缓冲也会污染持久化。
+	// 登记即取得参数快照：否则后续回调耗时会推迟期限，调用方复用缓冲也会污染持久化。
 	node := &Node{
 		ID:       id,
 		Type:     timerType,
@@ -445,29 +445,34 @@ func (s *Scheduler) add(delay time.Duration, timerType int32, priority int32, pa
 		Payload:  append([]byte(nil), payload...),
 		End:      s.now().Add(delay),
 		Delay:    delay,
+		index:    -1,
 		handler:  h,
 	}
+	s.byID[id] = node
 	if s.running {
-		s.deferred = append(s.deferred, func() { s.addNode(node) })
+		s.enqueue(node) // 本次 Tick 不触发；收尾入堆并发 upsert
 		return id
 	}
-	s.addNode(node)
+	s.pushHeap(node)
+	s.emitUpsert(node)
 	return id
 }
 
-func (s *Scheduler) addNode(node *Node) {
-	s.push(node)
-	if node.Type != TypeClosure {
-		s.emit(ChangeUpsert, *node)
-	}
+func (s *Scheduler) pushHeap(node *Node) {
+	node.state = stateHeap
+	heap.Push(&s.nodes, node)
 }
 
-func (s *Scheduler) push(node *Node) {
-	if node == nil {
-		return
-	}
-	heap.Push(&s.nodes, node)
-	s.byID[node.ID] = node
+func (s *Scheduler) enqueue(node *Node) {
+	node.state = stateQueued
+	s.queued = append(s.queued, node)
+}
+
+// detach 把节点移出 byID；调用方已经把它移出堆（或它本来不在堆里）。
+func (s *Scheduler) detach(node *Node) {
+	delete(s.byID, node.ID)
+	node.state = stateDetached
+	node.index = -1
 }
 
 func (s *Scheduler) min() *Node {
@@ -477,16 +482,37 @@ func (s *Scheduler) min() *Node {
 	return s.nodes[0]
 }
 
-func (s *Scheduler) emit(change ChangeType, node Node) {
+// emitUpsert / emitDelete 先改钩子视图标志再回调：钩子 panic 时标志与已经发出的变化一致。闭包节点不持久化。
+func (s *Scheduler) emitUpsert(node *Node) {
+	if node.Type == TypeClosure {
+		return
+	}
+	node.persisted, node.announced = true, true
+	s.emit(ChangeUpsert, node)
+}
+
+func (s *Scheduler) emitDelete(node *Node) {
+	if node.Type == TypeClosure {
+		return
+	}
+	node.persisted = false
+	s.emit(ChangeDelete, node)
+}
+
+func (s *Scheduler) emit(change ChangeType, node *Node) {
 	if s != nil && s.onChange != nil {
 		s.onChange(change, node.clone())
 	}
 }
 
-func (n Node) clone() Node {
-	n.Payload = append([]byte(nil), n.Payload...)
-	n.index = -1
-	return n
+// clone 复制交给回调和钩子的值：payload 独立，私有的调度位置清零（克隆出的值不属于调度器）。
+func (n *Node) clone() Node {
+	c := *n
+	c.Payload = append([]byte(nil), n.Payload...)
+	c.index = -1
+	c.state = stateDetached
+	c.persisted, c.announced = false, false
+	return c
 }
 
 // timerHeap 按 (End, Priority, ID) 排序，见包注释。ID 唯一，所以顺序是全序，不取决于堆的形状或入堆顺序。
@@ -505,12 +531,12 @@ func (h timerHeap) Less(i, j int) bool {
 }
 func (h timerHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
+	h[i].index = int32(i)
+	h[j].index = int32(j)
 }
 func (h *timerHeap) Push(x any) {
 	node := x.(*Node)
-	node.index = len(*h)
+	node.index = int32(len(*h))
 	*h = append(*h, node)
 }
 func (h *timerHeap) Pop() any {
