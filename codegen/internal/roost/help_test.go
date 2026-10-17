@@ -115,6 +115,20 @@ func TestNormalizeNextIDArgsAcceptsFlagsBeforeOrAfterKind(t *testing.T) {
 	}
 }
 
+// self_sync 只在 roost.yaml 里打开，没有 add 命令；内置帮助是新手唯一不用翻仓库就能找到它的地方，
+// 并且要给出生成工程里打得开的文档地址（core 文档不在生成工程里）。
+func TestHelpAccessExplainsSelfSync(t *testing.T) {
+	var output bytes.Buffer
+	if err := Run([]string{"help", "access"}, &output, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"access.player.self_sync", selfSyncDocumentURL} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("help access does not mention %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestHelpAllPrintsEveryTopic(t *testing.T) {
 	var output bytes.Buffer
 	if err := Run([]string{"help", "all"}, &output, &output); err != nil {
