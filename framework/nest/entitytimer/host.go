@@ -174,12 +174,20 @@ func (host *Host) NewTimerWithPriority(delay time.Duration, timerType int32, pri
 }
 
 // NewTimerAt 登记一个在 at 到期的定时器（按毫秒）；at 已经过去时登记为 1 毫秒之后，由下一次 Tick 触发。
+// 间隔与登记用同一个 now 计算，期限正好是 at。
 func (host *Host) NewTimerAt(at time.Time, timerType int32, param1, param2 int64, payload []byte) int64 {
-	delay := time.UnixMilli(at.UnixMilli()).Sub(host.driver.Now())
+	if host.err != nil {
+		return 0
+	}
+	now := host.driver.Now()
+	delay := time.UnixMilli(at.UnixMilli()).Sub(now)
 	if delay <= 0 {
 		delay = overdueDelay
 	}
-	return host.NewTimer(delay, timerType, param1, param2, payload)
+	scheduler := host.scheduler(now)
+	id := scheduler.NewTimer(delay, timerType, param1, param2, payload)
+	host.settle(scheduler, now)
+	return id
 }
 
 // ChangeTimer 把节点改到现在起 delay 之后到期；节点不存在时返回 false。
