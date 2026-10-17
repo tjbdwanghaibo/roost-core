@@ -119,7 +119,11 @@ func (c ManagerConfig) normalized() ManagerConfig {
 // 本文件负责配置、实体注册和生命周期；subscriptions.go 管理会话与订阅，
 // flush.go 负责捕获、准入与提交。订阅意图归 subject，已交付的时钟与引用归 session。
 type Manager struct {
-	nextLifetime      atomic.Uint64
+	nextLifetime atomic.Uint64
+	// lastEpoch 是本 Manager 发出的最大线协议 epoch（mu）。新 lifetime 与 HoldSession 都取它的下一个值：
+	// 同一会话 ID 在连接仍活着时被关掉又重开（推送被拒后政策重开），客户端接收端仍停在旧 epoch 上，
+	// 新 lifetime 必须从更大的 epoch 开始，它的全量才不会被当成旧包丢掉。
+	lastEpoch         uint32
 	subscriptionCount atomic.Int64
 	snapshotRequests  snapshotRequests
 	heldSessions      int // mu

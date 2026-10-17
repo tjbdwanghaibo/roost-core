@@ -75,7 +75,19 @@ func (m *Manager) OpenSession(id SessionID) error {
 func (m *Manager) publishSessionLocked(id SessionID) {
 	opened := newSession(id)
 	opened.lifetime.traceID = m.nextLifetime.Add(1)
+	opened.epoch = m.nextEpochLocked()
 	m.sessions[id] = opened
+}
+
+// nextEpochLocked 发出下一个线协议 epoch；调用方持有 m.mu。epoch 在本 Manager 内单调递增、跨会话 ID 共享，
+// 而不是每个 lifetime 从 1 开始：接收端丢弃 epoch 更小、或 epoch 相同且 tick 不更大的帧，同一会话 ID 在
+// 同一条连接上重开时只有更大的 epoch 能让新全量被接受。uint32 回绕要发出 2^32 个 epoch，跳过 0。
+func (m *Manager) nextEpochLocked() uint32 {
+	m.lastEpoch++
+	if m.lastEpoch == 0 {
+		m.lastEpoch = 1
+	}
+	return m.lastEpoch
 }
 
 // OpenHeldSession admits a receiver that is not ready to receive yet: it can
@@ -105,7 +117,7 @@ func (m *Manager) HoldSession(id SessionID) error {
 	}
 	fresh := newSession(id)
 	fresh.lifetime = sess.lifetime
-	fresh.epoch = sess.epoch + 1
+	fresh.epoch = m.nextEpochLocked()
 	fresh.framesSent = sess.framesSent
 	fresh.held = true
 	m.sessions[id] = fresh

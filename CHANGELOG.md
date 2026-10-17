@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数
+
+- **Manager 的线协议 epoch 改为本 Manager 内单调递增。** 修前每个新 lifetime 从 epoch 1 开始：SelfView 在推送被拒（如独立 Gate 的可靠队列背压，连接还在）后于同一条连接上重开会话，客户端接收端已停在 1/N，新全量 `Full@1/1` 与之后的增量被当成旧包丢弃，新 lifetime 的 `Delta@1/N+1` 恰好以 N 为基线被接受并叠到旧状态上，被拒那一帧的变化永远到不了客户端、也没有错误。现在 `OpenSession` 与 `HoldSession` 都取 Manager 的下一个 epoch，重开后的全量一定更大、被接受；客户端不能再假设首帧 epoch 为 1（[ENTITY_SYNC 线格式](docs/framework/ENTITY_SYNC.md#线格式v2)）。回归 `TestSelfViewReopenedSessionIsAcceptedByTheSameReceiver`。
+- **SelfView 丢会话后至少隔半个同步周期才重开。** 修前注释与文档写“下一个周期 tick 再开”，实际丢会话交付订阅释放通知会 `WakeSync`，on_change 模式（`OnChangeBatchWindow` 默认 0）下“重开 → 推送被拒 → 丢会话 → 唤醒”在毫秒内转满 8 次重开，传输恢复后也要等下一次登录。现在按丢会话时刻 + `Manager.Interval()/2` 判断：周期模式仍是下一个 tick，on_change 模式跳过丢会话引起的立即唤醒、最迟由兜底 tick 重开；新激活清零并立即打开（[impl/04-sync §2C](docs/framework/impl/04-sync.md#2c-自身视图selfview的生命周期)）。回归 `TestSelfViewDoesNotReopenInTheStagesWokenByTheLoss`。
+- KNOWN-LIMITS“自身视图（self_sync）”去掉原第③项；PLAYER-ACCESS §7 写明嵌入 TCP 与独立 Gate 在“收不下”时的不同表现。
+
 ### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
 
 - **是测试计数的读写竞争，不是生产违约。** `TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit` 以 `afterCommit` 达到 2 作为“两次 AfterCommit 都已执行完”，随即读 `afterCommitOnFast`；而回调先加总次数、再查执行位置并加 `afterCommitOnFast`，读方落在两次 `Add` 之间就看到 1/2。CPU 压力下 `-race` 连跑该用例：修前 main 10 个忙循环 4/1150、40 个忙循环 1/300（失败后 100ms 再读为 2/2，回调确实在业务 worker 上执行过）；D10 之前的基线 bdc9003a 10 个忙循环 0/550，但回调代码相同，两次 `Add` 之间插 20ms 时基线与 main 都 5/5 变红，与 D10 无关。现在回调先记执行位置、最后加总次数，读到 `afterCommit==N` 时前 N 次的位置都已记下；同样插 20ms 时 5/5 通过，压力下 0/400（10 个忙循环）、0/300（40 个）。断言不放宽：把延迟结论改成在 finalizer goroutine 上就地执行（不经 `NestMgr.RunLocal`）时修后用例仍稳定报 1/2。

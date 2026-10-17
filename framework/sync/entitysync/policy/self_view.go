@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -18,6 +19,7 @@ var SelfProfile = entity.SyncProfile{Key: "self"}
 
 // selfMaxReopens 是同一次激活之后，Manager 连续丢掉会话（推送失败）时最多重开的次数；新的激活清零。
 // 正常情况下丢会话意味着玩家所有连接都已断开，关闭通知随后就到；只有“连接还在却持续拒收”才会用尽。
+// 两次重开之间至少隔半个同步周期（见 SessionLost），所以用尽至少要持续拒收约 selfMaxReopens/2 个周期。
 const selfMaxReopens = 8
 
 // SelfViewConfig 是 NewSelfView 的输入，三项都必填。
@@ -61,6 +63,7 @@ type SelfView struct {
 	subject func(int64) (int64, error)
 	lookup  func(int64) *entity.SubjectSyncState
 	unhook  func()
+	now     func() time.Time // 判断丢失会话何时可以重开；测试替换
 
 	mu        sync.Mutex // 只保护下面的事实；锁内不调用 Manager / Direct
 	players   map[int64]*selfFacts
@@ -79,9 +82,10 @@ type SelfView struct {
 type selfFacts struct {
 	subjectID   int64
 	connections map[string]struct{}
-	reset       bool // 有连接新激活：它的客户端需要从全量开始
-	lost        bool // Manager 丢掉了会话（推送失败）
-	loaded      bool // 实体刚从权威加载发布
+	reset       bool      // 有连接新激活：它的客户端需要从全量开始
+	lost        bool      // Manager 丢掉了会话（推送失败）
+	lostAt      time.Time // 最近一次丢会话的时刻
+	loaded      bool      // 实体刚从权威加载发布
 }
 
 // selfBinding 是政策阶段维护的、一个玩家在 Manager 里的实际状态。
@@ -91,6 +95,7 @@ type selfBinding struct {
 	state     *entity.SubjectSyncState // 最近一次登记的状态；nil 表示还没登记过
 	bound     bool                     // Direct 绑定在位（被框架删除时 forgotten 置回 false）
 	reopens   int                      // 本次激活以来因 SessionLost 重开的次数
+	reopenAt  time.Time                // 丢会话后最早可以重开的时刻；新激活清零
 	failure   error                    // 上一次拒绝的原因，只在原因变化时记日志
 }
 
@@ -103,7 +108,7 @@ func NewSelfView(config SelfViewConfig) (*SelfView, error) {
 		return nil, errors.New("policy: self view needs Subject and Lookup")
 	}
 	view := &SelfView{
-		manager: config.Manager, subject: config.Subject, lookup: config.Lookup,
+		manager: config.Manager, subject: config.Subject, lookup: config.Lookup, now: time.Now,
 		players: make(map[int64]*selfFacts), bySubject: make(map[int64]int64), pending: make(map[int64]struct{}),
 		bindings: make(map[int64]*selfBinding), waiting: make(map[int64]struct{}),
 	}
@@ -163,18 +168,24 @@ func (v *SelfView) Deactivate(playerID int64, connection string) {
 	v.pending[playerID] = struct{}{}
 }
 
-// SessionLost 接 ManagerConfig.SessionLost：Manager 因推送失败丢掉了玩家会话。玩家仍在线时下一个政策阶段重开。
-// 它在 Flush 的推送阶段被调用，这里只记事实，不唤醒立即重试（下一个周期 tick 再开，给传输留出完成激活或
-// 送达关闭通知的时间）。
+// SessionLost 接 ManagerConfig.SessionLost：Manager 因推送失败丢掉了玩家会话。玩家仍在线时，丢会话之后
+// 至少半个同步周期（Manager.Interval/2）的政策阶段才重开，给传输留出完成激活或送达关闭通知的时间。
+//
+// 不能按“下一个政策阶段”重开：Manager 丢会话时要交付订阅释放通知，on_change 模式下这会立刻唤醒下一次
+// Flush（OnChangeBatchWindow 默认 0），“重开 → 推送被拒 → 丢会话 → 唤醒”会在毫秒内转满 selfMaxReopens，
+// 传输稍后恢复也不再重开。半个周期的间隔在周期模式下就是下一个 tick（tick 相隔一个周期，丢会话发生在
+// 推送阶段、晚于 tick 起点），在 on_change 模式下跳过丢会话引起的立即唤醒，最迟由下一个兜底 tick 重开。
+// 它在 Flush 的推送阶段被调用，这里只记事实。
 func (v *SelfView) SessionLost(session entitysync.SessionID, _ error) {
 	if v == nil {
 		return
 	}
 	playerID := int64(session)
+	now := v.now()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if facts := v.players[playerID]; facts != nil && !v.closed {
-		facts.lost = true
+		facts.lost, facts.lostAt = true, now
 		v.pending[playerID] = struct{}{}
 	}
 }
@@ -261,6 +272,7 @@ func (v *SelfView) forgotten(session entitysync.SessionID, _ int64) {
 type selfStep struct {
 	player                      int64
 	online, reset, lost, loaded bool
+	lostAt                      time.Time
 }
 
 // apply 是政策阶段：取走待处理玩家（加上仍在 waiting 的）的事实，逐个对齐 Manager 里的状态。
@@ -281,6 +293,7 @@ func (v *SelfView) apply() error {
 		step := selfStep{player: playerID}
 		if facts := v.players[playerID]; facts != nil {
 			step.online, step.reset, step.lost, step.loaded = len(facts.connections) > 0, facts.reset, facts.lost, facts.loaded
+			step.lostAt = facts.lostAt
 			facts.reset, facts.lost, facts.loaded = false, false, false
 			if !step.online {
 				delete(v.players, playerID)
@@ -328,13 +341,15 @@ func (v *SelfView) align(step selfStep) {
 		binding = &selfBinding{subjectID: subjectID}
 		v.bindings[step.player] = binding
 	}
-	if step.reset {
-		binding.reopens = 0
-	}
 	if step.lost {
 		// Manager 已删掉会话与订阅；Direct 的绑定在本阶段之前的释放交付里已删（forgotten）。
 		binding.open, binding.bound = false, false
 		binding.reopens++
+		binding.reopenAt = step.lostAt.Add(v.manager.Interval() / 2)
+	}
+	if step.reset {
+		// 新连接激活：它的客户端从全量开始，立即打开，重开次数与间隔都重新计。
+		binding.reopens, binding.reopenAt = 0, time.Time{}
 	}
 	if !v.ensureSession(step, binding, session) || !v.ensureSubject(step, binding) {
 		v.waiting[step.player] = struct{}{}
@@ -374,6 +389,10 @@ func (v *SelfView) ensureSession(step selfStep, binding *selfBinding, session en
 	}
 	if binding.reopens > selfMaxReopens {
 		v.refused(step.player, binding, "reopen", errSelfReopensExhausted)
+		return false
+	}
+	if v.now().Before(binding.reopenAt) {
+		// 丢会话后还不到半个周期（见 SessionLost）：留在 waiting，之后的政策阶段再看。
 		return false
 	}
 	err := v.manager.OpenSession(session)

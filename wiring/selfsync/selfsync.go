@@ -149,7 +149,8 @@ type transport struct{ owner *SelfSync }
 
 // Push 只准入不等写出：嵌入 TCP 放进每连接的出站队列，独立 Gate 放进 Game Ingress 的可靠队列。
 // 接入层还没接上或正在启停（ErrTransportUnavailable）不是谁的错，整轮重试；其他错误（玩家没有连接、
-// 连接收不下）只关这个会话，由 SelfView 判断是否重开。
+// 连接收不下）只关这个会话，由 SelfView 判断是否重开。嵌入 TCP 的出站队列满时接入层同时关闭连接；
+// 独立 Gate 的可靠队列背压只拒收这一帧、连接还在，SelfView 会在同一条连接上重开（epoch 更大的新全量）。
 func (t transport) Push(ctx context.Context, session entitysync.SessionID, frame []byte) error {
 	players := t.owner.players.Load()
 	if players == nil {
