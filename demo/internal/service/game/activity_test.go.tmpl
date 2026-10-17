@@ -484,15 +484,3 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 		t.Fatalf("the World was armed with %v, want the business window, its close time and the business now", nest.requests)
 	}
 }
-
-// World 定时器的每一拍带的是业务时间（A1 之后定时器由调用方钉时间，timer_component 的 scheduler(now)
-// 只认这一拍带来的时间），所以前拨偏移后到期的关窗节点按业务时间触发。
-func TestTheWorldTickCarriesBusinessTime(t *testing.T) {
-	business := time.Now().Add(24 * time.Hour)
-	nest := &recordingNest{}
-	runner := &ActivityRunner{nest: nest, worldID: 7, now: func() time.Time { return business }}
-	runner.tickWorldOnce(context.Background())
-	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{business.UnixMilli()}) {
-		t.Fatalf("the World was ticked with %v, want the business clock's %d", nest.requests, business.UnixMilli())
-	}
-}

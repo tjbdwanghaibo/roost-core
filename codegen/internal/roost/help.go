@@ -122,7 +122,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc|timer> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -134,6 +134,7 @@ roost add protocol rename_player -group game --handler player
 roost add endpoint rename_player --handler player
 roost add lifecycle player
 roost add skill fireball
+roost add timer --entity player
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver`,
 	},
 	{
@@ -175,6 +176,16 @@ roost project doctor --workflow player-tcp
 		Example: `roost add endpoint RenamePlayer --handler player
 roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip
 roost add endpoint EnterGame --handler player --lifecycle Player`,
+	},
+	{
+		Name: "timer", Aliases: []string{"timers", "entity-timer"},
+		Summary:       "给实体加持久定时器：到点由驱动投递 Tick，在实体的 Nest 锁内触发",
+		Usage:         `roost add timer --entity <Entity> [--component Timer] [--service <service>] [--id <component-id>]`,
+		Configuration: `要求实体已有 DAO（roost add dao <Entity> --entity <Entity>）、工程有 nest 运行时；Remote 托管（remote=managed）与 noPersist 的实体拒绝。写入 roost.yaml timers.<entity>，在实体 DAO 定义里加节点 map 与种子两个字段、实体加组件字段（这两处之后归业务）；生成部分 <component>_component_gen.go、db/def/<entity>_<component>_node_gen.go、game/handler/tick_<entity>_<component>_gen.go 与 bootstrap 里的 wiring/entitytimer 驱动由 project sync 重写；定时器类型与回调写在 game/entities/<entity>/<component>_handlers.go（业务文件，只建一次）。驱动按已加载实体的最早期限只给到期的那一个实体投递 Tick，不按在线人数轮询，时间取 App 业务时钟。离线语义：框架不追帧，实体不在内存期间到期的节点加载后只触发一次，回调参数 entitytimer.Fire 带原定期限 Deadline、触发时刻 Now、加载时刻 LoadedAt、补触发标志 Overdue 与间隔 Interval，补算错过的周期由业务做；回调返回正值为下次间隔（从 Now 起算）。说明见 ` + entityTimerDocURL + `。`,
+		Example: `roost add timer --entity Player
+# game/entities/player/timer_handlers.go：定义 TimerTypeBuffExpire 与回调
+# Nest handler 里：target.TimerComp().NewTimerAt(expireAt, player.TimerTypeBuffExpire, 0, 0, nil)
+roost generate`,
 	},
 	{
 		Name: "skill", Aliases: []string{"skills", "ability"},

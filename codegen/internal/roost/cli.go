@@ -269,8 +269,12 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 }
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
+	if len(args) >= 1 && args[0] == "timer" && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
+		// roost add timer --entity Player：实体用 --entity 给出时不需要名字。
+		args = append([]string{args[0], ""}, args[1:]...)
+	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc|timer> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -300,7 +304,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
-		"rpc": {"root", "service"},
+		"rpc": {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
@@ -321,6 +325,10 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "access" || args[0] == "transport" || args[0] == "protocol" {
 		fmt.Fprintln(stdout, "next: roost project next")
+	}
+	if args[0] == "timer" {
+		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")
+		fmt.Fprintln(stdout, "guide: "+entityTimerDocURL)
 	}
 	if args[0] == "skill" {
 		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then compile it through game/skills.CompileAll")

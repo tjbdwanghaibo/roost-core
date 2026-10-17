@@ -341,6 +341,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | access | 否 | 已认证请求边界、所属 Service 与显式 transport | 生成 player runtime、binding、listener 与装配 |
 | features | 否 | 项目级代码生成能力开关 | 决定目录、生成器和 bootstrap 接线 |
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
+| timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
@@ -487,6 +488,20 @@ sagas 是 roost add saga 生成过的定义名称列表：
 
 不要只手工添加名字；使用 roost add saga，让定义文件、Service 的 saga mod、依赖和 bootstrap
 一起更新。删除前确认没有运行中的旧 definition version。
+
+## 8.1 timers
+
+timers 是 roost add timer --entity <Entity> 写下的按实体持久定时器，键为实体名：
+
+    timers:
+      player:
+        component: timer   # 组件名：game/entities/player/timer_component_gen.go
+        id: 2000           # 组件类型号（ids.component 段内）
+        service: game      # 运行该实体 Nest 的服务，bootstrap 在这里装驱动
+        dao: PlayerDao     # 节点所在 DAO（add 时在它的定义里加了 Timers / TimerSeed）
+
+不要只手工添加条目；使用 roost add timer，让 DAO 字段、实体组件字段与生成部分一起更新。定时器类型与
+回调写在 game/entities/<entity>/<component>_handlers.go（业务文件）。去掉条目后生成部分不会自动删除。
 
 ## 9. ids
 

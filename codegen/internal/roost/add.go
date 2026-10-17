@@ -35,6 +35,10 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if options.Kind == "timer" {
+		// roost add timer --entity <Entity>：名字就是实体，可以只写 --entity。
+		return addTimer(root, m, options)
+	}
 	name := strings.TrimSpace(options.Name)
 	if !validName(toSnake(name)) {
 		return nil, fmt.Errorf("invalid %s name %q", options.Kind, name)
@@ -438,6 +442,10 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return nil, errors.New("handler requires --component <name>")
 		}
 		componentPath := filepath.Join(root, "game", "entities", entityName, componentName+"_component.go")
+		if _, err := os.Stat(componentPath); os.IsNotExist(err) {
+			// roost add timer 的组件是生成的（<name>_component_gen.go），handler 同样可以锁它。
+			componentPath = filepath.Join(root, "game", "entities", entityName, componentName+"_component_gen.go")
+		}
 		if _, err := os.Stat(componentPath); err != nil {
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
