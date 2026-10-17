@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### game-demo 活动结算榜：乱序回复不回退累计分
+
+- 两次合法贡献的协调器回复乱序时，旧回复的 `Score=1` 会在新回复的 `Score=2` 之后经无条件 ZADD 把结算榜覆盖成 1；协调器仍为 2。真实 Redis + 正式协调器（内存版本存储）的回归修前失败：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`。
+- demo 的 Contribute 只增加正积分，现用 Redis 原子 `ZADD GT` 写累计快照，较旧或重复快照不降分，首次贡献仍插入。不改变 activity 框架接口、存储格式或业务奖励规则；网络写失败仍是日志告警的尽力索引，未增加对账保证。回归挂入 `scripts/test-demo-generated.sh`，用唯一前缀、结束清理。
+
 ### 按实体的持久定时器：`roost add timer --entity <Entity>`（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B，新用户试用第四轮登记项 3）
 
 - **问题**：到点要做的事（Buff 到期、建造完成、行军到达）没有可复用的接入：`Delay_` 不持久，唯一的现成实现是 game-demo World 手写的 `TimerComponent` 加服务里每秒一次的 `Sync_TickWorldTimers`；按玩家做要整套复制，并自己解决上万在线玩家怎么驱动，新手多半退回“存到期时刻、读时判断”，到点服务器什么也不做。

@@ -9,6 +9,8 @@
 #     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
 #   - internal/service/platform 的 TestPurchaseDeliveryDurableWinner（ROOST_REVIEW_REDIS；ROOST_REVIEW_CLUSTER
 #     由调用方给，mirror-local.sh test-core 传入私有 3 主 3 从，没给时集群子用例跳过）；
+#   - internal/service/game 的 TestActivityBoardKeepsTheLatestCumulativeScore（ROOST_REVIEW_REDIS：真实 Redis 上
+#     延后旧贡献回复，验证结算榜不被较低的累计分快照覆盖；协调器使用内存版本存储）；
 #   - codegen/internal/roost 的 TestGateGeneratedBusinessConsumer（ROOST_DATAENGINE_IT_NATS_URL）。
 # 门变量全部对到隔离环境地址。用例各用唯一库名 / 键前缀并在结束时删除；本脚本只删自己的临时工程。是功能验收，不是负载。
 # 调用方：wiring/scripts/integration/dataengine-env.sh test、scripts/mirror-local.sh test-core；
@@ -29,6 +31,7 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	cd "$work_dir/planet"
 	ROOST_GUILD_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestGuildIDsRealMongo' ./game/controllers/player
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPurchaseDeliveryDurableWinner$' ./internal/service/platform
+	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations
 )
 go test -count=1 -timeout 10m -v -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost

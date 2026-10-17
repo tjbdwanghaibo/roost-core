@@ -381,10 +381,13 @@ func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, ru
 	}
 	// The board is this server's own index of its contributors, kept because
 	// the coordinator has no enumeration and settlement needs one. The score
-	// written is the coordinator's, not a local count, so a replay that
-	// changed nothing there changes nothing here.
-	if _, err := runner.redis.ZAdd(ctx, gameactivity.BoardKey(runner.prefix, runner.groupID, activityID),
-		fredis.Z{Score: float64(participant.Score), Member: strconv.FormatInt(playerID, 10)}); err != nil {
+	// written is the coordinator's, not a local count. Contribute only adds
+	// positive progress; its cumulative score must never move backwards when
+	// concurrent RPC replies arrive out of order. GT compares and writes in
+	// Redis atomically, and also inserts a participant's first score.
+	if _, err := runner.redis.Eval(ctx, `return redis.call('ZADD', KEYS[1], 'GT', ARGV[1], ARGV[2])`,
+		[]string{gameactivity.BoardKey(runner.prefix, runner.groupID, activityID)},
+		participant.Score, strconv.FormatInt(playerID, 10)); err != nil {
 		slog.Warn("activity: contributor not recorded on the board",
 			"activity_id", activityID, "player_id", playerID, "err", err)
 	}
