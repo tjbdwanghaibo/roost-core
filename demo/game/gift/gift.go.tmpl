@@ -1,9 +1,9 @@
 package gift
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
@@ -28,9 +28,6 @@ const (
 	Deadline = 2 * time.Minute
 	// MailExpiresIn is how long the gift mail stays claimable, in seconds.
 	MailExpiresIn = 7 * 24 * 60 * 60
-	// sagaIDSessionChars is how much of the session id goes into the saga
-	// id; enough to tell two sessions of one player apart.
-	sagaIDSessionChars = 16
 )
 
 // NativeStep is what a saga step needs in order to commit its identity and
@@ -137,22 +134,13 @@ func Decode(raw []byte) (State, error) {
 // client retrying the same frame therefore starts the same saga (StartSaga
 // is idempotent for one id with the same data), and a new frame after a
 // gift starts a new one. It doubles as the business key. The saga runtime
-// wants a subject token — no '.', '*', '>' or whitespace — so the session
-// id is reduced to its token-safe prefix.
+// wants a subject token — no '.', '*', '>' or whitespace — so the complete
+// session is hashed rather than shortened or normalized. The demo session
+// begins with the player id: its prefix alone cannot distinguish logins.
 func SagaID(from int64, sessionID string, seq uint32) string {
-	var token strings.Builder
-	for _, r := range sessionID {
-		if token.Len() >= sagaIDSessionChars {
-			break
-		}
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			token.WriteRune(r)
-		default:
-			token.WriteByte('-')
-		}
-	}
-	return fmt.Sprintf("gift-%d-%s-%d", from, token.String(), seq)
+	// 完整会话摘要保留连接身份；相同请求稳定重放，重连后相同帧号不会复用旧赠礼。
+	session := sha256.Sum256([]byte(sessionID))
+	return fmt.Sprintf("gift-%d-%x-%d", from, session, seq)
 }
 
 // Subject and Body are the gift mail's text.
