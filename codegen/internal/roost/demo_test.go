@@ -542,20 +542,21 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if dashboard.UID != "roost-demo" || queries < 20 {
 		t.Errorf("dashboard uid=%q queries=%d", dashboard.UID, queries)
 	}
-	// A17: the scene's reopen-failure counter (RR-20260927-19) is listed in the
-	// observability README and had no panel; the name must be the one
-	// scene.go counts on, which /metrics exports as is (already _total).
-	reopenPanel := false
+	// A17: the scene's session-open-failure counter (历史：RR-20260927-19 的重开失败计数，
+	// 0a5c9f53 起只计 Join 打开会话的失败) is listed in the observability README
+	// and must have a panel; the name must be the one scene.go counts on, which
+	// /metrics exports as is (already _total).
+	openPanel := false
 	for _, panel := range dashboard.Panels {
 		for _, target := range panel.Targets {
-			reopenPanel = reopenPanel || strings.Contains(target.Expr, "scene_session_reopen_failed_total{")
+			openPanel = openPanel || strings.Contains(target.Expr, "scene_session_open_failed_total{")
 		}
 	}
-	if !reopenPanel {
-		t.Errorf("the dashboard has no panel querying scene_session_reopen_failed_total")
+	if !openPanel {
+		t.Errorf("the dashboard has no panel querying scene_session_open_failed_total")
 	}
-	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, `sceneReopenFailedMetric = "scene_session_reopen_failed_total"`) {
-		t.Errorf("scene.go no longer counts on scene_session_reopen_failed_total; update the dashboard panel with it")
+	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, `sceneOpenFailedMetric = "scene_session_open_failed_total"`) {
+		t.Errorf("scene.go no longer counts on scene_session_open_failed_total; update the dashboard panel with it")
 	}
 	// Round 12 (A17 follow-up): the observability README lists
 	// configdata_rollback_total{trigger}; the dashboard must chart it by

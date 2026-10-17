@@ -234,12 +234,13 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；Manager 会压住整个主体直到水位追上。
 - **谁订阅谁不在这里决定**：`policy.Interest` 决定（距离 + 关系源），并直接说给 Manager；scene 只在 `NewInterest` 里给出地图尺寸、半径和关系名。
   加一种关系（好友、同盟）= `Relations` 里多一个名字加一处 `Relation(name).Set`。
-- **推送失败只关那个会话**：Manager 把推不到的会话关掉并回调 `SessionLost`；接入层整体不可用是 `ErrRetryLater`，tick 重来、不踢人。
+- **跟不上就断开**：lane 用框架的 `selfsync.PushPlayerFrame`（自身视图同一条规则）。活着的连接收不下一帧时先关闭该玩家的全部连接，Manager 再关会话并回调 `SessionLost`；
+  接入层整体不可用或进程出站驻留预算耗尽是 `ErrRetryLater`，tick 重来、不踢人；玩家没有连接时只关会话。
   会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
 - **断线按 Join 代际判定**：每次 Join（首次登录或重连）有新代际；`SessionLost` 与会话关闭事件只登记“当时的代际”，
-  在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接还在时
-  玩家留在场景（其他人不会看到它消失），scene 重开它的复制会话并 `Interest.Resubscribe`，活着的客户端收到一次全量快照。
-  重开的“稍后重试”用尽或被拒绝时玩家留在场景、自己的视图等下次登录，除 Warn 外计 `scene_session_reopen_failed_total{reason=exhausted|refused}`。
+  在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。嵌入 TCP 推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接收下时
+  接入层只关旧连接、推送算成功，玩家留在场景、会话不动；复制会话被丢之后 scene 不在原连接上重开，还连着的只会是之后的新登录，由它的 Join 重新打开。
+  Join 打开会话时上一次的会话还在关闭（`SessionOpenRetryable`）会有界退避重试；用尽或被拒绝时玩家留在场景、自己的视图等下次登录，除 Warn 外计 `scene_session_open_failed_total{reason=exhausted|refused}`。
 - **仅内存卸载后重载**：礼物扣除等原生步骤投影时被 lease fence 跳过，DataEngine 会把含其效果的 Player 从内存卸载
   （`ManagerAccess.Unload`）。scene 的 Manager 是自建的，wiring 的 Nest Mod 不替它接线，所以 `Scene.Start` 自己调
   `ConfigureUnloadResync`：仍有人看着这个玩家时框架在 Nest 业务池（short / long）之外从 Mongo 重载并 `Rebind`，观察者收到权威全量、之后照常收增量；重载不了收到 remove。

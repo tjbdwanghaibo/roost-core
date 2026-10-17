@@ -191,8 +191,8 @@ var ErrSyncPushRefused = errors.New("selfsync: a live connection refused a sync 
 //   - 接入层还没就绪 / 正在启停（gateway.ErrTransportUnavailable、nettransport.ErrTransportClosed），
 //     或整个进程的驻留字节预算耗尽（nettransport.ErrResidentBudgetExhausted，且这名玩家的每条连接都因此拒收）：
 //     不是谁的错，交还 entitysync.ErrRetryLater，整轮重试、保留脏状态；连接与会话都不动。
-//   - 玩家没有连接（每条拒收都是 gateway.ErrSessionNotFound）：原样交还，Manager 关会话；之后来的连接是一次
-//     新激活，自己会打开会话。
+//   - 玩家没有连接（每条拒收都是 gateway.ErrSessionNotFound，且此刻也数不到连接）：原样交还，Manager 关会话；
+//     之后来的连接是一次新激活 / 新登录，自己会打开会话。报“没有连接”时却数得到连接，按下一条处理。
 //   - 其余拒收——活着的连接收不下（可靠队列满、绑定失效、帧超限等），或只有部分连接因预算拒收：先关闭这名玩家
 //     的全部连接（CloseSessions，原因是 ErrSyncPushRefused 包着原错误），再交还原错误让 Manager 关同步会话。
 //     同步会话按玩家开，会话关掉之后留下的连接都会处在“连接活着、同步会话已死”的状态，没有东西再打开它，
@@ -213,7 +213,7 @@ func PushPlayerFrame(ctx context.Context, players PlayerConnections, playerID in
 	case every(refusals, nettransport.ErrResidentBudgetExhausted) && len(refusals) >= players.ActiveSessions(playerID):
 		metrics.IncCounter(SyncPushRefusedMetric, metrics.Labels{"outcome": "retried"}, 1)
 		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
-	case every(refusals, gateway.ErrSessionNotFound):
+	case every(refusals, gateway.ErrSessionNotFound) && players.ActiveSessions(playerID) == 0:
 		return err
 	}
 	players.CloseSessions(playerID, fmt.Errorf("%w: %w", ErrSyncPushRefused, err))

@@ -235,15 +235,14 @@ func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int6
 
 // a player who
 // logged in again keeps their old, stalled connection registered until its
-// read loop notices. Every push to the player went to both connections and
-// failed as a whole, so the manager dropped the replication session, the
-// settle saw a live connection and reopened it — and the live client got a
-// full snapshot for every update, forever.
+// read loop notices. Every push to the player goes to both connections; if it
+// failed as a whole the manager would drop the replication session for a
+// player whose live connection took every frame.
 //
-// The transport now closes the connection that failed and keeps the push a
-// success for the ones that took it, so the live client keeps receiving
-// deltas on its session, the player stays in the scene and nobody is told
-// anything.
+// The embedded transport closes the connection that failed and keeps the
+// push a success for the ones that took it, so the live client keeps
+// receiving deltas on its session, the player stays in the scene and nobody
+// is told anything.
 func TestAStalledOldConnectionDoesNotResetTheLiveClient(t *testing.T) {
 	transport, addr := startScenePlayerTransport(t)
 	scene, err := newScene(transport, nil, gamescene.DefaultConfig())

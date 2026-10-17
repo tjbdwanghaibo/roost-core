@@ -494,9 +494,11 @@ func TestTransportClassifiesRefusedPushes(t *testing.T) {
 			refuse: errors.Join(budget, fmt.Errorf("receiver 2: %w", budget)), connections: 2, retry: true},
 		// 另一条连接收下了这一帧：整轮重试会让它把同一 tick 的重发当旧包丢掉，所以按拒收处理。
 		"resident budget on one of two connections": {refuse: errors.Join(budget), connections: 2, close: true},
-		"no connection":                      {refuse: fmt.Errorf("%w: player 7", gateway.ErrSessionNotFound), connections: 0},
-		"queue full on a live connection":    {refuse: errors.Join(backpressure), connections: 1, close: true},
-		"stale binding on a live connection": {refuse: errors.Join(gateway.ErrBindingStale), connections: 1, close: true},
+		"no connection": {refuse: fmt.Errorf("%w: player 7", gateway.ErrSessionNotFound), connections: 0},
+		// 报“没有连接”时却数得到一条：不能留下它没有同步会话地活着。
+		"no connection reported, one counted": {refuse: fmt.Errorf("%w: player 7", gateway.ErrSessionNotFound), connections: 1, close: true},
+		"queue full on a live connection":     {refuse: errors.Join(backpressure), connections: 1, close: true},
+		"stale binding on a live connection":  {refuse: errors.Join(gateway.ErrBindingStale), connections: 1, close: true},
 		"one connection gone, one refusing": {
 			refuse: errors.Join(gateway.ErrSessionNotFound, backpressure), connections: 1, close: true},
 	} {

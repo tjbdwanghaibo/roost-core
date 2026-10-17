@@ -68,7 +68,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 ## 线格式（v2）
 
 一帧就是一个 `framework/sync/frame.Frame`：`Epoch/Tick` 是该会话的时钟，`StreamID` 恒为流常量 1，`SchemaVersion` 来自 `ManagerConfig.FrameSchemaVersion`；
-Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSession` 与 `HoldSession` 都取下一个值，客户端不能假设首帧 epoch 为 1。同一会话 ID 在连接仍活着时被关掉又重开（推送被拒后政策重开），新 lifetime 的全量因此总是比接收端已收过的帧 epoch 更大，会被接受而不是当旧包丢掉。
+Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSession` 与 `HoldSession` 都取下一个值，客户端不能假设首帧 epoch 为 1。同一会话 ID 关掉又打开、新 lifetime 的帧落到同一个接收端时，新全量因此总是比接收端已收过的帧 epoch 更大，会被接受而不是当旧包丢掉。框架自带的政策（自身视图、game-demo 场景）不在原连接上重开：推送在活着的连接上被拒时传输关闭该玩家的连接（[impl/04-sync §2C](impl/04-sync.md#2c-自身视图selfview的生命周期)），这一条是 Manager 自身的防御。
 每个对象一个组件，数据是 `EncodeSubjectUpdate`（subject id、namespace、profile、version/base、mask、payload）。
 客户端 `entitysync.DecodeFrame` → 每组件 `DecodeSubjectUpdate`。全部走可靠通道；datagram 分片不再用于实体同步。
 

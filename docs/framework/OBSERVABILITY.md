@@ -377,7 +377,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |
-| `scene_session_reopen_failed_total` | Counter | `demo/internal/service/game/scene.go.tmpl (template)` |
+| `scene_session_open_failed_total` | Counter | `demo/internal/service/game/scene.go.tmpl (template)` |
 | `service.accepted.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
 | `service.conflict.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
 | `service.depth` | Gauge | `servicemetrics/metrics_reporter.go:SetGauge` |
