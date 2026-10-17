@@ -193,8 +193,8 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 `protocol/def/self_sync.go`（`SelfSync()`，取所在协议组上限的 id）是业务文件，只在缺失时创建。前置检查
 （`project sync`、`generate`、`doctor` 的 `self-sync` 项）要求：access.player 有 tcp 传输、features 含 entity、
 `game/entities/player/entity.go` 的 `//roost:entity` 带 `sync=true` 与 `subjectPacker`，并且推送编号文件存在；
-不满足时逐条写出要改的文件与写法（packer 要认识视图 `self`，DAO 字段 `dao:"persist,sync"`，改完调
-`MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`）。关闭开关后再 sync，两份生成文件恢复原样，不引用
+不满足时逐条写出要改的文件与写法（packer 要认识视图 `self`，DAO 字段 `dao:"persist,sync"`；字段只经生成
+setter 在 Nest handler 里改，提交时由 Nest 自动收集，不手动标脏）。关闭开关后再 sync，两份生成文件恢复原样，不引用
 `wiring/selfsync`。运行时契约与客户端解码见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)；
 回归 `codegen/internal/roost/self_sync_test.go`（按新手流程搭工程、打开开关、经生成接线跑真实 TCP）。
 

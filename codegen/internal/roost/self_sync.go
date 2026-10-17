@@ -116,7 +116,7 @@ func checkSelfSync(root string, m Manifest) error {
 		if params["sync"] != "true" || params["subjectPacker"] == "" {
 			problems = append(problems, fmt.Sprintf(`game/entities/player/entity.go: the //roost:entity marker must declare Entity Sync; append to it: sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker
     then write NewPlayerSyncPacker (copy the packer from %s): its view set must accept the profile Key "self" (policy.SelfProfile), e.g. entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"*"}}
-    tag the DAO fields the client should see as dao:"persist,sync", and after each change call player.MarkSyncDirty(player.Dao().DirtyTracker().TakeSyncDirty())`, selfSyncDocument))
+    tag the DAO fields the client should see as dao:"persist,sync"; change them only through the generated setters inside a Nest handler, and Nest hands the change to the client when the handler commits (no manual marking)`, selfSyncDocument))
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath))); os.IsNotExist(err) {
