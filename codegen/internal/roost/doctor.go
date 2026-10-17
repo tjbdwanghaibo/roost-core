@@ -11,9 +11,11 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -383,16 +385,20 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 	}
 	add("nest-runtime", nestOK, "the player access service owns Nest", "roost add mod nest --service "+service)
 
+	names, err := firstBusinessNames(root, manifest)
+	if err != nil {
+		return nil, err
+	}
 	checks := []struct {
 		name, pattern, needle, detail, fix string
 	}{
-		{"entity", "game/entities/*/entity.go", "//roost:entity", "an Entity aggregate exists", "roost add entity Player"},
-		{"component", "game/entities/*/*_component.go", "//roost:component", "an Entity Component exists", "roost add component Profile --entity Player"},
-		{"dao", "db/def/*.go", "//roost:dao", "a DAO definition exists", "roost add dao Player --entity Player"},
-		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity Player --component Profile"},
-		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol RenamePlayer --group game --handler player"},
-		{"endpoint", "game/controllers/*/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint RenamePlayer --handler player"},
-		{"lifecycle", "game/lifecycle/*.go", "FromRegistry", "an explicit Entity lifecycle boundary exists", "roost add lifecycle Player"},
+		{"entity", "game/entities/*/entity.go", "//roost:entity", "an Entity aggregate exists", "roost add entity " + names.entity},
+		{"component", "game/entities/*/*_component.go", "//roost:component", "an Entity Component exists", "roost add component Profile --entity " + names.entity + exampleNameNote},
+		{"dao", "db/def/*.go", "//roost:dao", "a DAO definition exists", "roost add dao " + names.entity + " --entity " + names.entity},
+		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity " + names.entity + " --component " + names.component + exampleNameNote},
+		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol " + names.protocol + " --group " + names.group + " --handler " + names.domain + names.protocolNote},
+		{"endpoint", "game/controllers/*/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint " + names.endpoint + " --handler " + names.endpointDomain + names.endpointNote},
+		{"lifecycle", "game/lifecycle/*.go", "FromRegistry", "an explicit Entity lifecycle boundary exists", "roost add lifecycle " + names.entity},
 	}
 	for _, check := range checks {
 		found, err := anyFileContains(root, check.pattern, check.needle)
@@ -437,7 +443,7 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 		return nil, err
 	}
 	add("login", loginOK, "a login endpoint creates or loads the player's Entity (lifecycle GetOrCreate)",
-		"roost add protocol EnterGame --group game --handler player, then roost add endpoint EnterGame --handler player --lifecycle Player")
+		"roost add protocol EnterGame --group "+names.group+" --handler "+names.domain+", then roost add endpoint EnterGame --handler "+names.domain+" --lifecycle "+names.lifecycle)
 	bootstrapOK, err := anyFileContains(root, "game/protocol_bootstrap/*.go", "RegisterPlayerProtocols")
 	if err != nil {
 		return nil, err
@@ -445,6 +451,139 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 	add("protocol-bootstrap", bootstrapOK, "protocol registration is generated", "roost generate")
 	return items, nil
 }
+
+// exampleNameNote 标出修复命令里只是示例的名字：照抄能用，但新手应换成自己业务的名字。
+const exampleNameNote = "  # example name, use your own"
+
+// workflowNames 是 first-business 修复命令里的名字。按工程现状取：已有的 Entity、Component、controller 域、
+// 缺协议的 Nest handler、缺 endpoint 的协议；工程里还没有时才用示例名（Player / Profile / RenamePlayer / player），
+// 示例名后面带 exampleNameNote。照抄示例会多出与业务无关的协议或 controller 域（新用户试用第三轮）。
+type workflowNames struct {
+	entity, component, group, domain, lifecycle string
+	protocol, protocolNote                      string
+	endpoint, endpointDomain, endpointNote      string
+}
+
+func firstBusinessNames(root string, manifest Manifest) (workflowNames, error) {
+	names := workflowNames{entity: "Player", component: "Profile", group: "game", domain: "player",
+		protocol: "RenamePlayer", protocolNote: exampleNameNote, endpoint: "RenamePlayer", endpointNote: exampleNameNote}
+	if groups := manifest.IDs["protocol"].Groups; len(groups) > 0 {
+		if _, ok := groups["game"]; !ok {
+			names.group = slices.Sorted(maps.Keys(groups))[0]
+		}
+	}
+	// Entity 与它的第一个 Component：优先 player（玩家接入与 self_sync 认它），否则按目录名第一个。
+	entityDirs, err := filepath.Glob(filepath.Join(root, "game", "entities", "*", "entity.go"))
+	if err != nil {
+		return names, err
+	}
+	entityDir := ""
+	for _, path := range entityDirs {
+		dir := filepath.Base(filepath.Dir(path))
+		if entityDir == "" || dir == "player" {
+			entityDir = dir
+		}
+	}
+	if entityDir != "" {
+		names.entity = toPascal(entityDir)
+		components, err := filepath.Glob(filepath.Join(root, "game", "entities", entityDir, "*_component.go"))
+		if err != nil {
+			return names, err
+		}
+		if len(components) > 0 {
+			names.component = toPascal(strings.TrimSuffix(filepath.Base(components[0]), "_component.go"))
+		}
+	}
+	// 登录用的 lifecycle：有这个 Entity 的就用它，否则用已有的第一个，都没有时与 Entity 同名（还要先 add lifecycle）。
+	names.lifecycle = names.entity
+	lifecycles, err := filepath.Glob(filepath.Join(root, "game", "lifecycle", "*.go"))
+	if err != nil {
+		return names, err
+	}
+	var existing []string
+	for _, path := range lifecycles {
+		base := strings.TrimSuffix(filepath.Base(path), ".go")
+		if !strings.HasSuffix(base, "_gen") && !strings.HasSuffix(base, "_test") && !strings.HasSuffix(base, "_singleton") {
+			existing = append(existing, base)
+		}
+	}
+	if len(existing) > 0 && !slices.Contains(existing, toSnake(names.entity)) {
+		names.lifecycle = toPascal(existing[0])
+	}
+	// 协议文件（protocol/def/<snake>.go）与它声明的 controller 域。
+	protocolPaths, err := filepath.Glob(filepath.Join(root, "protocol", "def", "*.go"))
+	if err != nil {
+		return names, err
+	}
+	protocolDomain := map[string]string{}
+	var protocols []string
+	for _, path := range protocolPaths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return names, err
+		}
+		match := protocolHandlerMarker.FindSubmatch(raw)
+		if match == nil {
+			continue
+		}
+		snake := strings.TrimSuffix(filepath.Base(path), ".go")
+		protocolDomain[snake] = string(match[1])
+		protocols = append(protocols, snake)
+	}
+	if len(protocols) > 0 {
+		names.domain = protocolDomain[protocols[0]]
+	} else if controllers, err := filepath.Glob(filepath.Join(root, "game", "controllers", "*")); err != nil {
+		return names, err
+	} else {
+		for _, path := range controllers {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				names.domain = filepath.Base(path)
+				break
+			}
+		}
+	}
+	names.endpointDomain = names.domain
+	// Nest handler（game/handler/<snake>.go 带 //roost:nest）：协议提示用第一个还没有同名协议的 handler。
+	handlerPaths, err := filepath.Glob(filepath.Join(root, "game", "handler", "*.go"))
+	if err != nil {
+		return names, err
+	}
+	handlers := map[string]bool{}
+	for _, path := range handlerPaths {
+		base := strings.TrimSuffix(filepath.Base(path), ".go")
+		if strings.HasSuffix(base, "_gen") || strings.HasSuffix(base, "_test") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return names, err
+		}
+		if !bytes.Contains(raw, []byte("//roost:nest")) {
+			continue
+		}
+		handlers[base] = true
+		if _, hasProtocol := protocolDomain[base]; !hasProtocol && names.protocolNote != "" {
+			names.protocol, names.protocolNote = toPascal(base), ""
+		}
+	}
+	// endpoint 提示：第一个与 Nest handler 同名、还没有 controller 文件的协议，沿用它声明的域。
+	for _, snake := range protocols {
+		if !handlers[snake] {
+			continue
+		}
+		domain := protocolDomain[snake]
+		if _, err := os.Stat(filepath.Join(root, "game", "controllers", domain, snake+".go")); os.IsNotExist(err) {
+			names.endpoint, names.endpointDomain, names.endpointNote = toPascal(snake), domain, ""
+			break
+		} else if err != nil {
+			return names, err
+		}
+	}
+	return names, nil
+}
+
+// protocolHandlerMarker 取 //roost:protocol 标记的 handler=（controller 域）。
+var protocolHandlerMarker = regexp.MustCompile(`//roost:protocol\b[^\n]*\bhandler=([A-Za-z0-9_]+)`)
 
 func anyComponentBusinessMethod(root string) (bool, error) {
 	paths, err := filepath.Glob(filepath.Join(root, "game", "entities", "*", "*_component.go"))

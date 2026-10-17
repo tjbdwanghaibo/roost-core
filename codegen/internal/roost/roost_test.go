@@ -750,6 +750,65 @@ func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
 	}
 }
 
+// first-business 的修复命令按工程现状填名字：已有 Nest handler 而缺协议时用那个 handler，已有 controller 域时沿用它；
+// 什么都没有时才给示例名并标明是示例。修前固定提示 RenamePlayer 与 --handler player，照抄会生成与业务无关的协议、
+// 多出一个 player 域（新用户试用第三轮）。
+func TestFirstBusinessFixesNameWhatTheProjectAlreadyHas(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	fixOf := func(name string) string {
+		t.Helper()
+		manifest, err := LoadManifest(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, err := checkFirstBusinessWorkflow(root, manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Name == "workflow:"+name {
+				_, fix := splitWorkflowFix(item.Detail)
+				return fix
+			}
+		}
+		t.Fatalf("no workflow:%s item", name)
+		return ""
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Shop", Entity: "Player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	if fix := fixOf("nest-handler"); fix != "roost add handler RenamePlayer --entity Player --component Shop"+exampleNameNote {
+		t.Errorf("nest-handler fix = %q, want the existing component and the handler name marked as an example", fix)
+	}
+	for _, step := range []AddOptions{
+		{Kind: "handler", Name: "BuyItem", Entity: "Player", Component: "Shop"},
+		{Kind: "handler", Name: "GrantGold", Entity: "Player", Component: "Shop"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	if fix := fixOf("protocol"); fix != "roost add protocol BuyItem --group game --handler player" {
+		t.Errorf("protocol fix = %q, want the first handler that has no protocol", fix)
+	}
+	if _, err := Add(root, AddOptions{Kind: "protocol", Name: "BuyItem", Group: "game", Handler: "shop"}); err != nil {
+		t.Fatal(err)
+	}
+	if fix := fixOf("endpoint"); fix != "roost add endpoint BuyItem --handler shop" {
+		t.Errorf("endpoint fix = %q, want the protocol without an endpoint, in its own controller domain", fix)
+	}
+	if fix := fixOf("login"); !strings.Contains(fix, "roost add protocol EnterGame --group game --handler shop") || !strings.Contains(fix, "roost add endpoint EnterGame --handler shop --lifecycle Player") {
+		t.Errorf("login fix = %q, want the existing controller domain shop", fix)
+	}
+}
+
 func TestDoctorFailsWhenGeneratedProjectDoesNotCompile(t *testing.T) {
 	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
