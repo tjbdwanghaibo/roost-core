@@ -92,17 +92,28 @@ func (component *StatsComponent) RecordMatch() {
 	dao.SetMatchesFormed(dao.GetMatchesFormed() + 1)
 }
 
-// RecordExp adds to the server-wide experience total. It is called from
-// AddExp, which holds the Player and the World at once — the reason the two
-// kinds have distinct lock ranks.
-func (component *StatsComponent) RecordExp(amount int64) error {
-	dao := component.Owner().Dao()
-	current := dao.GetExpGranted()
-	// 全服累计也必须检查范围；由调用方返回错误，让 Player、账本与 World 在同一事务里回滚。
+// CheckRecordExp reports, without writing, whether RecordExp(amount) would be
+// accepted: the server-wide total is an int64 and must not wrap. Handlers
+// call it before their first DAO write, next to ProfileComponent.CheckAddExp.
+func (component *StatsComponent) CheckRecordExp(amount int64) error {
+	current := component.Owner().Dao().GetExpGranted()
 	if amount <= 0 || current < 0 || amount > math.MaxInt64-current {
 		return errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "world_exp", current)
 	}
-	dao.SetExpGranted(current + amount)
+	return nil
+}
+
+// RecordExp adds to the server-wide experience total. It is called from
+// AddExp, which holds the Player and the World at once — the reason the two
+// kinds have distinct lock ranks. It checks the range again and writes
+// nothing on refusal; the handlers have already called CheckRecordExp before
+// touching the Player, so this check is only the last line, not the plan.
+func (component *StatsComponent) RecordExp(amount int64) error {
+	if err := component.CheckRecordExp(amount); err != nil {
+		return err
+	}
+	dao := component.Owner().Dao()
+	dao.SetExpGranted(dao.GetExpGranted() + amount)
 	return nil
 }
 

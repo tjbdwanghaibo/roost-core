@@ -51,8 +51,8 @@ func TestExperienceGrantAtStorageLimit(t *testing.T) {
 	}
 }
 
-// World 累计超限发生在 Player 更新之后；错误必须连同升级效果一起回滚。
-func TestWorldExperienceOverflowRollsBackThePlayer(t *testing.T) {
+// World 累计超限时 Player 的经验、等级、属性与升级效果都不变，也没有新的提交记录。
+func TestWorldExperienceOverflowLeavesThePlayerUnchanged(t *testing.T) {
 	subject, counters, client, committer := newDungeonClaimHarnessWithCommitter(t)
 	RegisterAddExpNestHandlers()
 	if _, err := nest.RunIsolatedTransaction(context.Background(), &recordingCommitter{}, "seed-world-exp", func() (any, error) {
@@ -70,12 +70,12 @@ func TestWorldExperienceOverflowRollsBackThePlayer(t *testing.T) {
 	_, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), player.ExpPerLevel)
 	afterAttrs, ok := subject.AttributeComp().Final()
 	if err == nil || !ok || subject.ProfileComp().Level() != level || subject.Dao().GetExp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 || afterAttrs.HP != hp || afterAttrs.Attack != attack {
-		t.Fatalf("world overflow did not roll back player, attributes and effect: err=%v", err)
+		t.Fatalf("world overflow changed player, attributes or effect: err=%v", err)
 	}
 }
 
-// 副本领奖也使用同一累计入口，失败时不得留下“已领取”账本或奖励效果。
-func TestWorldExperienceOverflowRollsBackTheDungeonClaim(t *testing.T) {
+// 副本领奖走同一道校验，超限时不得留下“已领取”账本或奖励效果。
+func TestWorldExperienceOverflowLeavesTheDungeonClaimUnpaid(t *testing.T) {
 	const now int64 = 1_800_000_000
 	pinBusinessClock(t, now)
 	subject, counters, client, committer := newDungeonClaimHarnessWithCommitter(t)
@@ -106,5 +106,48 @@ func TestExperienceLevelRejectsOverflow(t *testing.T) {
 	_, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(context.Background(), subject.ID(), counters.ID(), 100)
 	if err == nil || subject.ProfileComp().Level() != math.MaxInt32 || subject.Dao().GetExp() != 0 || counters.StatsComp().Snapshot().ExpGranted != 0 || len(committer.records) != 0 {
 		t.Fatalf("level overflow was not rejected atomically: err=%v level=%d", err, subject.ProfileComp().Level())
+	}
+}
+
+// 超限的发放必须在任何 DAO 写入之前被拒绝，而不是写完再靠 rollback=undo 撤回：这里在一笔照常提交的事务里
+// 直接调用 handler 并吞掉它的错误，提交下来的 Player 经验、等级、副本账本与 World 累计必须与调用前相同。
+// （只靠回滚兜底的写法在这里会把已写的 Player 与“已领取”账本提交出去。）
+func TestExperienceOverflowIsRefusedBeforeAnyWrite(t *testing.T) {
+	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
+	subject, counters, _, _ := newDungeonClaimHarnessWithCommitter(t)
+	ctx := context.Background()
+	committer := &recordingCommitter{}
+	if _, err := nest.RunIsolatedTransaction(ctx, committer, "seed-world-exp", func() (any, error) {
+		counters.Dao().SetExpGranted(math.MaxInt64)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	level := subject.ProfileComp().Level()
+	calls := map[string]func() error{
+		"add_exp": func() error {
+			_, err := handlerAddExp(subject, counters, player.ExpPerLevel)
+			return err
+		},
+		"claim_dungeon": func() error {
+			_, err := handlerClaimDungeon(subject, counters, "refused-run", player.ExpPerLevel, now, now)
+			return err
+		},
+	}
+	for name, call := range calls {
+		var handlerErr error
+		if _, err := nest.RunIsolatedTransaction(ctx, committer, "swallow-"+name, func() (any, error) {
+			handlerErr = call()
+			return nil, nil
+		}); err != nil {
+			t.Fatalf("%s: commit the swallowed call: %v", name, err)
+		}
+		if code, _ := errcode.ClientError(handlerErr); code != 100004 {
+			t.Fatalf("%s: code=%d, want exp_amount (100004): %v", name, code, handlerErr)
+		}
+		if subject.Dao().GetExp() != 0 || subject.ProfileComp().Level() != level || subject.ProfileComp().DungeonRunClaimed("refused-run") || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 {
+			t.Fatalf("%s wrote before refusing: want level %d, exp=%d level=%d claimed=%v world=%d", name, level, subject.Dao().GetExp(), subject.ProfileComp().Level(), subject.ProfileComp().DungeonRunClaimed("refused-run"), counters.StatsComp().Snapshot().ExpGranted)
+		}
 	}
 }

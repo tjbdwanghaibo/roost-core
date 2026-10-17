@@ -12,9 +12,13 @@
 
 ### game-demo 经验发放：范围校验与有界计算
 
-- 修复大额正数奖励把 Player 剩余经验、World 累计或 int32 等级写成负数的问题。`ProfileComponent.AddExp` 在写 DAO 前检查经验加法和等级范围，平坦等级曲线改为除余计算，避免按升级数量逐级占用业务 worker；拒绝仍使用 `exp_amount`（100004），文案改为 `invalid exp amount`。
-- `StatsComponent.RecordExp` 返回 error 并检查累计范围；`AddExp` 和 `ClaimDungeon` 传播错误，回滚 Player、属性、领奖账本与升级效果。DAO schema、协议字段与 Sender 参数不变；自定义调用 `RecordExp` 的业务需要检查其返回值。
-- 新增并登记生成工程的真实 Sender/Nest 回归：经验和等级溢出拒绝、恰好达到存储上限的大额合法奖励、World 累计超限后的两实体/属性/账本回滚及无新提交记录。
+### game-demo 经验发放：写前校验范围、有界计算
+
+- **修复**：大额正数经验把 Player 剩余经验、World 累计或 int32 等级写成负数（修前在当前 main 生成的 game-demo 上：exp=1 再加 `MaxInt64` 返回成功、`player exp=-9223372036854775808 world exp=-9223372036854775808`；等级 `MaxInt32` 再升一级成功、`level=-2147483648`）；新玩家一次 `MaxInt64` 经验卡在逐级循环里（`profile_component.go:99`，Sender 5 秒超时、引擎关不掉）。
+- **修法**：所有发经验的入口（`AddExp` 端点、GM `gm.player.add_exp`、副本结算 `FinishDungeon` → `ClaimDungeon`）都经 `handlerAddExp` / `handlerClaimDungeon`，两者在第一次 DAO 写入前调用只读校验 `checkExpGrant`（`ProfileComponent.CheckAddExp` + `StatsComponent.CheckRecordExp`）；超限沿用 `exp_amount`（100004），日志文案改为 `invalid exp amount`。`ClaimDungeon` 先判已领取、再校验、最后写账本，超限不留“已领取”记录。`AddExp` / `RecordExp`（现在返回 error）自身仍检查，只作兜底，不靠 `rollback=undo` 撤回已写字段。平坦曲线改为除余，属性随 int32 等级线性增长不会溢出 int64。
+- **测试**：生成工程新增 `game/handler/add_exp_test.go`（已登记进 game-demo 生成步骤与 `TestDemoTemplateGeneratesABuildableWritePath`）：溢出拒绝、恰好到存储上限的大额奖励、等级溢出、World 超限时 Player / 属性 / 账本 / 提交记录不变；`TestExperienceOverflowIsRefusedBeforeAnyWrite` 在照常提交的事务里吞掉 handler 错误，钉住“写前拒绝”——只靠回滚兜底的写法会把升级提交出去（`want level 0, exp=0 level=1`）。
+- **兼容**：DAO schema、协议字段与 Sender 参数不变；自己调用 `RecordExp` 的业务代码要接住返回的 error。
+
 ### 生成器：`access.player.self_sync` 的默认 packer 由生成器生成（维护者 2026-10-17 决定，第三轮新用户试用登记项 3）
 
 - **只开开关 + 标 sync 字段即可**：`roost.yaml` 打开 `access.player.self_sync: true` 后，Player 的 `//roost:entity` 标记不用改、不用写 packer。entity 生成器带 `-self-sync Player` 运行：标记缺省按 `sync=true`（`syncNamespace` 缺省 `"player"`）；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（生成器所有、带生成头，`roost generate` / `roost project sync` 会重写）——`NewPlayerSyncPacker`，视图集只有 `policy.SelfProfile`，包含 Player DAO 的全部 sync 字段（字段表运行期从 DAO 取，DAO 增删 sync 字段自动跟随），未知视图返回 `entity.ErrSyncViewUnknown`；wire 的 `PackerFactory` 指向它。

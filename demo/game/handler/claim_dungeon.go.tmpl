@@ -43,9 +43,16 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonClaimWindow, nil, "run_id", runID, "resolved_at", resolvedAtUnix, "now", nowUnix)
 	}
-	if !target.ProfileComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
+	if target.ProfileComp().DungeonRunClaimed(runID) {
 		// Already paid. Not an error: the client asked again for something it
 		// already has, and the honest answer is "nothing happened".
+		return dungeon.ClaimResult{}, nil
+	}
+	// 经验范围在写账本之前校验：超限的奖励不留下“已领取”记录，也不靠 undo 撤回账本。
+	if err := checkExpGrant(target, stats, amount); err != nil {
+		return dungeon.ClaimResult{}, err
+	}
+	if !target.ProfileComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{}, nil
 	}
 	gained, err := target.ProfileComp().AddExp(amount)

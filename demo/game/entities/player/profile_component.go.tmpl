@@ -5,11 +5,11 @@ import (
 	"math"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"{{MODULE}}/game/dungeon"
 	"{{MODULE}}/game/effects"
 	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //roost:component type=2000
@@ -80,8 +80,37 @@ func (component *ProfileComponent) Rename(name string) error {
 	return nil
 }
 
+// CheckAddExp reports, without writing anything, whether AddExp(amount)
+// would be accepted. Handlers that write other fields or other entities in
+// the same transaction call it first, so an out-of-range grant is refused
+// before any DAO write instead of being written and then undone.
+func (component *ProfileComponent) CheckAddExp(amount int64) error {
+	_, _, err := component.planExp(amount)
+	return err
+}
+
+// planExp 只读地算出发放后的剩余经验与升级数，不写任何字段。
+// 经验是 int64、等级是 int32：先检查加法不溢出、升级后等级仍在 int32 内，再按平坦曲线除余；
+// 不按升级数逐级循环——大额奖励若逐级减，会按奖励大小占住业务 worker（修前 MaxInt64 一直卡在循环里）。
+// 等级受 int32 约束后，属性按等级线性增长（每级 HP+10、Attack+2，int64）也不会溢出。
+// 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
+func (component *ProfileComponent) planExp(amount int64) (exp int64, gained int32, err error) {
+	dao := component.Owner().Dao()
+	currentExp, currentLevel := dao.GetExp(), dao.GetLevel()
+	if amount <= 0 || currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
+		return 0, 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
+	}
+	total := currentExp + amount
+	levels := total / ExpPerLevel
+	if levels > int64(math.MaxInt32)-int64(currentLevel) {
+		return 0, 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
+	}
+	return total % ExpPerLevel, int32(levels), nil
+}
+
 // AddExp grants experience, levels the player up while the curve allows it,
-// and returns the number of levels gained.
+// and returns the number of levels gained. A grant outside the storage range
+// is refused with exp_amount before either field is written.
 //
 // Both fields move through generated mutators, so a handler that fails later
 // has both rolled back together — and so does the effect: EmitPlayerLevelUp
@@ -90,21 +119,12 @@ func (component *ProfileComponent) Rename(name string) error {
 // back. The fact "a level-up happened" is emitted here, next to the state
 // change that is that fact; who reacts to it lives elsewhere.
 func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
-	if amount <= 0 {
-		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount)
+	exp, gained, err := component.planExp(amount)
+	if err != nil {
+		return 0, err
 	}
 	dao := component.Owner().Dao()
-	currentExp, currentLevel := dao.GetExp(), dao.GetLevel()
-	// 先守住经验与等级的存储范围，再做除余；不能让正数溢出，或按奖励大小逐级占用业务 worker。
-	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
-		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "exp", currentExp, "level", currentLevel)
-	}
-	total := currentExp + amount
-	levels := total / ExpPerLevel
-	if levels > int64(math.MaxInt32)-int64(currentLevel) {
-		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount, "level", currentLevel)
-	}
-	exp, gained := total%ExpPerLevel, int32(levels)
+	currentLevel := dao.GetLevel()
 	dao.SetExp(exp)
 	if gained == 0 {
 		// One call per mutation, at every exit that changed something: the

@@ -16,6 +16,11 @@ import (
 //
 //roost:nest rollback=undo durability=strict
 func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+	// 两个实体的范围先只读校验：超出 int64 经验 / int32 等级 / World 累计时在任何 DAO 写入前拒绝，
+	// 不靠写完再由 rollback=undo 撤回。AddExp / RecordExp 自己也检查，只是兜底。
+	if err := checkExpGrant(target, stats, amount); err != nil {
+		return 0, err
+	}
 	gained, err := target.ProfileComp().AddExp(amount)
 	if err != nil {
 		return 0, err
@@ -24,4 +29,15 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 		return 0, err
 	}
 	return gained, nil
+}
+
+// checkExpGrant is the read-only admission every experience grant shares
+// (AddExp, ClaimDungeon, and through them the GM command and the dungeon
+// finish endpoint): the Player's experience and level and the World's total
+// must all stay in range, or nothing is written.
+func checkExpGrant(target player.IProfileEntity, stats world.IStatsEntity, amount int64) error {
+	if err := target.ProfileComp().CheckAddExp(amount); err != nil {
+		return err
+	}
+	return stats.StatsComp().CheckRecordExp(amount)
 }

@@ -43,7 +43,7 @@ TCP (player access)
 
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
-经验发放先校验 int64 经验与 int32 等级范围，再按平坦曲线用除余计算升级和剩余经验，不按奖励数量逐级循环。World 的 `RecordExp` 同样检查 int64 累计范围并返回 error；`AddExp` 与 `ClaimDungeon` 必须传播它，让 Player、属性、领奖账本与升级效果在同一事务里一起回滚。超出范围沿用 `exp_amount`（100004），拒绝时没有新的提交记录。生成工程回归在 `game/handler/add_exp_test.go`，包含存储边界与两实体回滚。
+经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`：`ProfileComponent.CheckAddExp` 查 int64 经验加法与 int32 等级范围，`StatsComponent.CheckRecordExp` 查 World 的 int64 累计），超出范围沿用 `exp_amount`（100004）拒绝，Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。
 
 ```
 AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
