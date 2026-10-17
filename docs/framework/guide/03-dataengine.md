@@ -34,6 +34,8 @@ EntityRepository 读取聚合一致性视图，先验证所有持久 DAO 的完�
 
 恢复 gate 未就绪时不能对外发布“空的已恢复实体”。并发加载合并 flight；发布后回调重新连接 Sync 等协作者。缓存只是加速，缺失/过期不得被解释成权威不存在。
 
+**删档后该 ID 不可再用**（维护者 2026-10-17 决定，[DESIGN-TODO D10](../../maintenance/DESIGN-TODO.md#d10-删档后用同一-id-重建)）。`Destroy(deletePersisted=true)` 留下墓碑后，冷加载得到“删过档”（`entity.ErrAuthorityEntityDeleted` / `ErrEntityAggregateDeleted`，客户端码 `entity_deleted = 3`），它与“从未创建”（`ErrAuthorityEntityNotFound`，码 2）是两个哨兵，**不满足** not found：“不存在就创建”的代码不会去重建。范围只守 GetOrCreate（维护者同日决定）：生成 lifecycle 的 GetOrCreate 不重建、发往该 ID 的 Nest 请求回复码 3。**直接 Create（handler 内或 lifecycle `Create`）不读存储，必须使用 id-gen 发的新 ID**，不要复用删过档的确定性 ID：新建实体的首个提交是“版本 0 的整文档 Put”，WAL 准入只看内存版本链、不能 I/O，撞上墓碑或已有文档的冲突要到投影才发现，那时记录已持久、回复已发出，只能 fail-stop（处置见 [KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)“删档后同 ID 重建：违反约束或修复前写下的冲突记录”）。Remote 托管实体删档物理删除数据文档，冷加载查 Remote 元数据墓碑区分删过档。删档审计：墓碑保留删除前字段、`_version`、`_deleted_at`（投影时间）与 `_last_tx`，“谁、为什么删”由删档入口自己记。
+
 ## 5. 外部驱动与结果未知
 
 Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未执行时重发，结果未知交给调用方。versionstore 用版本、写令牌、墓碑等表达 CAS 和重复；调用方仍须使用业务幂等键并保留未知结论。不要对未知写无限自动重放。

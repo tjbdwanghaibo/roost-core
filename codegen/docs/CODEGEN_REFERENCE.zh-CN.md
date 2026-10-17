@@ -176,7 +176,9 @@ endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使
 `--lifecycle <entity>` 生成登录边界：endpoint 经 `lifecycle.<Entity>FromRegistry(controller.Registry())`
 对 `context.PlayerID` 调 `GetOrCreate`，保证之后的玩法请求打到的 Entity 已存在。从未登录的玩家直接发玩法请求时，
 Nest 冷加载在 Data Engine 里找不到 Entity，回复带稳定码 `errcode.CodeEntityNotFound = 2`（`entity_not_found`），
-客户端据此先 EnterGame 再重试，服务端不按 ERROR 记录。controller 需要 `Registry()`：新生成的 controller（`add endpoint`
+客户端据此先 EnterGame 再重试，服务端不按 ERROR 记录。删过档的玩家（DAO 只剩墓碑）该 ID 不可再用：玩法请求与
+EnterGame 都回复 `errcode.CodeEntityDeleted = 3`（`entity_deleted`），`GetOrCreate` 不重建（DESIGN-TODO D10）。
+生成 lifecycle 的 `Create` 不读存储：只给 id-gen 发的新 ID 用，复用删过档的 ID 会在投影时版本冲突、进程 fail-stop。controller 需要 `Registry()`：新生成的 controller（`add endpoint`
 与 protocol 生成器两处骨架）都带；早先生成的 controller 归业务、不改写，缺少时 add 报错并说明要补的方法。
 `roost project doctor --workflow first-business` 的 `workflow:login` 检查是否有 controller 导入 `game/lifecycle`
 并调用 `GetOrCreate`。完整顺序与编辑点见生成项目的

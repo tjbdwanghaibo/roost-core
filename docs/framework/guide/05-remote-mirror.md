@@ -20,6 +20,8 @@ Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 
 
 持久拒绝（Rejected）只来自 memory（Durability 0）：直写权威被明确拒绝，或结果未知后由 finalizer 以同一事务 `_id` 写下持久拒绝。拒绝后实例回滚、隔离、释放写许可并仅内存卸载，下一次访问从权威重载，提交后工作得到 false。async / strict / pipelined 有 WAL，投影器写权威冲突是 fatal（fail-stop），不产生拒绝，所以它们的失败只会是“结果未知”，调用方不得把它当成 Remote 没写入。详见 [Remote Entity 契约](../REMOTE_ENTITY.md#持久拒绝rejected的来源与收尾)。
 
+删档（`Destroy(deletePersisted=true)`）物理删除 Remote 数据文档、在 Remote 元数据留墓碑（`_remote_entity_meta._deleted`）；之后该 ID 不能经 GetOrCreate 重建：DataEngine 冷加载据元数据墓碑返回删过档（`entity.ErrAuthorityEntityDeleted`）。直接 `Create` 不读存储，必须用 id-gen 新 ID（D10，见 [guide/03 §4](03-dataengine.md#4-冷加载与-schema)）。
+
 Mongo 的持久条件和 incarnation 区分拥有者，旧进程、旧回调或重试不得在新拥有者下继续生效。批次成功、数据投影、快照发布是不同状态，不得以一次发送成功提前释放写额度或宣告提交。
 
 ## 3. 单一 outbox 发布者

@@ -49,7 +49,7 @@ type EquipProtocol interface {
 
 这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明查重。已有类型与 `FromRegistry` 必须配套；同名文件占用但缺少对应方法时会明确报冲突。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
 
-此过程不要求先写 Nest handler，也不会自动替你调用 Nest。首次生成的 Controller 提供 `NestClient()`，你可按下一节调用 Sender。已有 `roost add endpoint` 仍适合显式生成连接到 Nest handler 的方法：它生成的方法就是下一节的写法（接住 handler 的返回值，业务错误经 `errcode.ClientError` 变成带 `Code` / `Reason` 的响应、只给 `CodeInternal` 记日志），要求 Response 带 `Code` / `Reason` 字段；已自动生成骨架后，直接编辑该方法即可。首次生成的 Controller 同时提供 `Registry()`；登录边界用 `roost add endpoint EnterGame --handler player --lifecycle Player` 生成，它对 `context.PlayerID` 调 lifecycle `GetOrCreate`，保证之后的 Nest 请求打到的 Entity 已存在——没有这一步时，Nest 冷加载不存在的玩家回复稳定码 `errcode.CodeEntityNotFound`（`entity_not_found`），不是 `CodeInternal`。
+此过程不要求先写 Nest handler，也不会自动替你调用 Nest。首次生成的 Controller 提供 `NestClient()`，你可按下一节调用 Sender。已有 `roost add endpoint` 仍适合显式生成连接到 Nest handler 的方法：它生成的方法就是下一节的写法（接住 handler 的返回值，业务错误经 `errcode.ClientError` 变成带 `Code` / `Reason` 的响应、只给 `CodeInternal` 记日志），要求 Response 带 `Code` / `Reason` 字段；已自动生成骨架后，直接编辑该方法即可。首次生成的 Controller 同时提供 `Registry()`；登录边界用 `roost add endpoint EnterGame --handler player --lifecycle Player` 生成，它对 `context.PlayerID` 调 lifecycle `GetOrCreate`，保证之后的 Nest 请求打到的 Entity 已存在——没有这一步时，Nest 冷加载不存在的玩家回复稳定码 `errcode.CodeEntityNotFound`（`entity_not_found`），不是 `CodeInternal`。删过档的玩家（D10：该 ID 不可再用）业务请求与 EnterGame 都回复 `errcode.CodeEntityDeleted`（`entity_deleted`），客户端不要重试或自动重新登录。
 
 ## 3. Controller：把协议转换成业务调用
 

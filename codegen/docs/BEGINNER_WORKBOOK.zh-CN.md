@@ -57,9 +57,10 @@ go test ./...
 为什么要 EnterGame：Nest handler 只处理已存在的 Entity。从未登录过的玩家直接发 RenamePlayer，Nest 冷加载在
 Data Engine 里找不到他，客户端收到稳定码 `entity_not_found`（`errcode.CodeEntityNotFound = 2`），服务端不记
 ERROR。`--lifecycle Player` 生成的 endpoint 对 `context.PlayerID` 调 `lifecycle.PlayerFromRegistry(...).GetOrCreate`：
-权威里确认不存在才创建，数据库 / 解码 / 超时错误照常返回，不当成“不存在”。已删档（DAO 文档只剩墓碑）冷加载时同样读作
-不存在、客户端同样收到 `entity_not_found`；但删档后用同一 ID 重建目前会让投影版本冲突、进程 fail-stop（2026-10-16 已确认，待维护者决定修法，见 KNOWN-LIMITS“删档后同 ID 重建”），删档功能上线前先确认。客户端收到
-`entity_not_found` 时重新走 EnterGame 再重试即可。`roost project doctor --workflow first-business` 的
+权威里确认不存在才创建，数据库 / 解码 / 超时错误照常返回，不当成“不存在”。已删档（DAO 文档只剩墓碑）的玩家
+这个 ID 不可再用：玩法请求与 EnterGame 都收到 `entity_deleted`（`errcode.CodeEntityDeleted = 3`），GetOrCreate 不会重建
+（维护者 2026-10-17 决定，DESIGN-TODO D10）。客户端收到 `entity_not_found` 时重新走 EnterGame 再重试即可；收到
+`entity_deleted` 时不要重试，提示角色已删除。`roost project doctor --workflow first-business` 的
 `workflow:login` 检查这一步。
 
 业务职责：
@@ -144,6 +145,7 @@ go vet ./...
 - Nest 缺失：按错误给出的 `roost add mod nest --service ...`；
 - endpoint 参数找不到：让 Request 字段名与 handler 除 Entity 外的参数名一致；
 - 客户端收到 `entity_not_found`（code 2）：玩家还没有 Entity，先调 EnterGame（`roost add endpoint EnterGame --handler player --lifecycle Player`）；
+- 客户端收到 `entity_deleted`（code 3）：这个玩家删过档，ID 不可再用，EnterGame 也不会重建；
 - DAO 字段不可读：使用生成的 getter；
 - player TCP 无法 enable：先完成 auth.go，不要绕过检查；
 - 生产配置检查失败：替换 CHANGE_ME/localhost/dev 默认值，Secret 不进 Git。

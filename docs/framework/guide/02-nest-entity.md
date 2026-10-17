@@ -24,6 +24,8 @@ Nest 接收带目标实体声明的消息，负责队列准入、同 ID 顺序�
 
 实体加载完成不等于可以绕过 Nest 修改它。卸载/重载会改变对象实例，依附旧对象的 Sync 等协作者须重新绑定并恢复全量基线。删除一旦准入便承担收尾责任；取消等待不会撤销已接受删除。
 
+handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-gen 发的新 ID（或由 `EntityManager` 的 ID 生成器分配），不要复用删过档或存了但没加载的 ID，否则首个提交在投影时版本冲突、进程 fail-stop（D10 约束）。ID 可能已有记录的场景（登录 / 创角）用生成 lifecycle 的 `GetOrCreate`：删过档时它返回 `entity.ErrAuthorityEntityDeleted`（客户端码 `entity_deleted`），不重建。
+
 ## 3. 事务与回滚
 
 事务会修改且失败应恢复的状态放在 DAO。生成 setter 登记事务本地 PersistChange，回滚由 DAO 快照/undo 统一完成；组件不维护独立 undo 体系。rollback=none 不承诺失败恢复。事务外写持久 setter 被拒绝；只读和临时状态应明确声明 nopersist/nocoll。

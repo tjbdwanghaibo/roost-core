@@ -18,12 +18,15 @@
 2. 所有 DAO schema 校验早于水合发布。
 3. 投影依赖、held 与版本 CAS 保持；高版本不是幂等证明。
 4. 提交结果未知 fence；成功 WAL 回复不等于 Mongo 已落库。
+5. 删过档（全部 DAO 只剩墓碑；Remote 托管 kind 看元数据墓碑）是 `ErrEntityAggregateDeleted`，不满足 not found（D10，只守 GetOrCreate）。直接 Create 不读存储，靠“必须用 id-gen 新 ID”的约束；不能为让重建成功而放宽版本条件、在投影时跳过冲突或覆盖墓碑。
 
 ## 2A. 聚合恢复与投影实现走读
 
 [EntityRepository](../../../framework/dataengine/engine/entity_repository.go)的Load合并同ID并发flight，等待该实体必要投影后进入loadAggregate。loadAggregate读取builder与完整一致性视图，先遍历全部DAO的Descriptor/SchemaVersion，再进行RestorePersisted与身份校验；只有所有DAO成功后，才RunLocal创建并发布实体及loaded hooks。前一DAO已解码、后一DAO失败时不能提前发布半实体。
 
 readAggregate的读取回调可能因数据库事务重试再次执行，累积结果必须每次重置；flight遇panic也必须结束并唤醒等待者。这些恢复责任不应由调用方临时补sleep实现。
+
+readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_deleted: true`，其他读取路径不变），按“全部缺失→ErrEntityAggregateNotFound、全部墓碑→ErrEntityAggregateDeleted、混合→ErrEntityAggregateCorrupt”分类。Remote托管kind删档时数据文档被物理删除、墓碑只在Remote元数据里，全部缺失时在同一次一致性读里经Store可选的`RemoteEntityDeleted`（MongoStore→remoteentity.Backend→MongoCommitter读`_remote_entity_meta._deleted`）区分删过档。D10。
 
 [codec.go](../../../framework/nestwal/codec.go)的encodeRecord与decodeRecord固定codecVersion=7；unsupported version在解释record body前拒绝。格式校验不等于尾部截断安全，WAL的文件恢复、fsync与checkpoint分别有守卫。
 
@@ -239,7 +242,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [assembly_test.go](../../../framework/dataengine/engine/assembly_test.go)：`TestAssembleRefusesEachMissingDependency`、`TestJetStreamOutboxPublisherRefusesIncompleteEffects`、`TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression`、`TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`、`TestRuntimeRepeatedStartPreservesReadyAndOutbox`；其余 6 项见文件
 - [batch_limits_test.go](../../../framework/dataengine/engine/batch_limits_test.go)：`TestMultiBatchCapabilityAndSpecialBoundaries`、`TestMultiCheckpointThresholdsAndFailurePrefix`、`TestMultiCheckpointLossKeepsEntireSuccessfulPrefix`、`TestMultiCheckpointFlushesBeforeHeldAndOnCancel`、`TestMarkerlessSingleRecordStillCheckpointsImmediately`；其余 4 项见文件
 - [entity_delete_test.go](../../../framework/dataengine/engine/entity_delete_test.go)：`TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity`、`TestShortWorkerRemoteDeleteIsDefiniteRejection`、`TestDeleteAdmissionOtherPanicStaysIndeterminate`；其余 4 项见文件
-- [entity_repository_test.go](../../../framework/dataengine/engine/entity_repository_test.go)：`TestEntityRepositorySingleFlightsCompleteAggregate`、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate`、`TestEntityRepositoryRejectsTombstone`、`TestEntityRepositoryTreatsUniformAbsenceAsNotFound`、`TestEntityRepositoryPreservesRemoteVersionVector`；其余 11 项见文件
+- [entity_repository_test.go](../../../framework/dataengine/engine/entity_repository_test.go)：`TestEntityRepositorySingleFlightsCompleteAggregate`、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate`、`TestEntityRepositoryRejectsTombstone`、`TestEntityRepositorySeparatesAbsentFromDeleted`、`TestEntityRepositoryReadsRemoteTombstoneForAbsentRemoteAggregate`（全部缺失 / 全部墓碑 / Remote 元数据墓碑，D10）、`TestEntityRepositoryPreservesRemoteVersionVector`；其余 11 项见文件
 - [failure_integration_test.go](../../../framework/dataengine/engine/failure_integration_test.go)：`TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID`
 - [fenced_eviction_once_test.go](../../../framework/dataengine/engine/fenced_eviction_once_test.go)：`TestSkippedFencedStepIsQueuedForEvictionOnce`、`TestTerminalAckWakesWaitersOfAPendingEviction`
 - [fenced_step_resync_test.go](../../../framework/dataengine/engine/fenced_step_resync_test.go)：`TestSkippedFencedStepResyncsSubscribersFromMongo`、`TestSkippedFencedStepWithoutAuthorityRetractsSubscribers`
