@@ -158,7 +158,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 所以是 saga（`roost add saga GiftItem -service game -steps debit,deliver` 的产物，`saga/gift_item/definition.go`）。
 
 - **开始**：`SendGift`（10013）→ `StartGift` Nest 事务：在 A 的锁内检查背包够不够，然后 `saga.EmitStart`——start 意图和这次事务同一条 WAL 记录，
-  Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 会话 + 帧序号，同一帧重发不会开第二个 saga。
+  Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 完整会话的 SHA-256 摘要 + 帧序号；同一请求得到稳定 ID，重连后的同一帧号属于新请求。不能截断会话前缀：demo 会话以 `demo-玩家ID-时间戳` 命名，前缀可能完全不包含时间戳。
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
 - **步骤**（`internal/service/game/gift_saga.go`，四个消费者，**两种形状**）：
   - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**

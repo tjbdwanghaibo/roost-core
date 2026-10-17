@@ -24,6 +24,10 @@
 - **Manager 的线协议 epoch 改为本 Manager 内单调递增。** 修前每个新 lifetime 从 epoch 1 开始：SelfView 在推送被拒（如独立 Gate 的可靠队列背压，连接还在）后于同一条连接上重开会话，客户端接收端已停在 1/N，新全量 `Full@1/1` 与之后的增量被当成旧包丢弃，新 lifetime 的 `Delta@1/N+1` 恰好以 N 为基线被接受并叠到旧状态上，被拒那一帧的变化永远到不了客户端、也没有错误。现在 `OpenSession` 与 `HoldSession` 都取 Manager 的下一个 epoch，重开后的全量一定更大、被接受；客户端不能再假设首帧 epoch 为 1（[ENTITY_SYNC 线格式](docs/framework/ENTITY_SYNC.md#线格式v2)）。回归 `TestSelfViewReopenedSessionIsAcceptedByTheSameReceiver`。
 - **（已被上一节取代，SelfView 不再重开）SelfView 丢会话后至少隔半个同步周期才重开。** 修前注释与文档写“下一个周期 tick 再开”，实际丢会话交付订阅释放通知会 `WakeSync`，on_change 模式（`OnChangeBatchWindow` 默认 0）下“重开 → 推送被拒 → 丢会话 → 唤醒”在毫秒内转满 8 次重开，传输恢复后也要等下一次登录。现在按丢会话时刻 + `Manager.Interval()/2` 判断：周期模式仍是下一个 tick，on_change 模式跳过丢会话引起的立即唤醒、最迟由兜底 tick 重开；新激活清零并立即打开（[impl/04-sync §2C](docs/framework/impl/04-sync.md#2c-自身视图selfview的生命周期)）。回归 `TestSelfViewDoesNotReopenInTheStagesWokenByTheLoss`。
 - KNOWN-LIMITS“自身视图（self_sync）”去掉原第③项。（PLAYER-ACCESS §7 里两种接入“收不下”的不同表现已由上一节统一为断开。）
+### game-demo 赠礼：完整会话身份
+
+- 修复重连后相同帧号的新赠礼与旧赠礼复用 Saga ID：原实现只保留会话前 16 个字符，demo 的 `demo-玩家ID-时间戳` 会话格式在玩家 ID 较长时丢失时间戳。不同赠礼因此可能被协调器视为重复或身份冲突。现在对完整会话取 SHA-256 摘要，与发送方和帧号组合，保持同一请求稳定且满足 subject token 与长度限制。
+- 新增并登记生成工程回归，覆盖真实 demo 会话格式、不同后缀/符号/Unicode 会话、重放稳定性和玩家/帧号隔离。已持久化的旧 Saga 记录继续按旧 ID 查询和执行，不改其内容；新连接发起的赠礼使用新格式。
 
 ### 测试：Remote 生成验收里 strict 确认截止用例的偶发 `AfterCommit on a business worker 1/2 times`
 
