@@ -165,6 +165,7 @@ func (s *Scheduler) NewTimer(delay time.Duration, timerType int32, param1 int64,
 
 // NewTimerWithPriority 与 NewTimer 相同，另外指定同一期限内的触发优先级：数值小的先触发，
 // priority 相同按登记顺序。priority 随节点持久化，改期与重排都保留。
+// 期限与 payload 在本次调用中固定；Tick 回调内创建时只推迟入堆，不推迟取时钟和复制输入。
 func (s *Scheduler) NewTimerWithPriority(delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte) int64 {
 	if s == nil || delay <= 0 || timerType == TypeClosure {
 		return 0
@@ -369,17 +370,7 @@ func (s *Scheduler) Nodes() []Node {
 func (s *Scheduler) add(delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte, h Handler) int64 {
 	s.seed++
 	id := s.seed
-	if s.running {
-		s.deferred = append(s.deferred, func() {
-			s.addNode(id, delay, timerType, priority, param1, param2, payload, h)
-		})
-		return id
-	}
-	s.addNode(id, delay, timerType, priority, param1, param2, payload, h)
-	return id
-}
-
-func (s *Scheduler) addNode(id int64, delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte, h Handler) {
+	// 登记即取得参数快照；推迟的只有堆变更。否则后续回调耗时会推迟期限，调用方复用缓冲也会污染持久化。
 	node := &Node{
 		ID:       id,
 		Type:     timerType,
@@ -391,8 +382,17 @@ func (s *Scheduler) addNode(id int64, delay time.Duration, timerType int32, prio
 		Delay:    delay,
 		handler:  h,
 	}
+	if s.running {
+		s.deferred = append(s.deferred, func() { s.addNode(node) })
+		return id
+	}
+	s.addNode(node)
+	return id
+}
+
+func (s *Scheduler) addNode(node *Node) {
 	s.push(node)
-	if timerType != TypeClosure {
+	if node.Type != TypeClosure {
 		s.emit(ChangeUpsert, *node)
 	}
 }
