@@ -18,6 +18,10 @@
 - **`PushPlayerFrame` 的“没有连接”只在此刻也数不到连接时成立**：拒收全是 `ErrSessionNotFound` 却仍数得到连接时，按活着的连接拒收处理、关闭连接，不留下没有同步会话的连接。
 - **game-demo 场景（`demo/internal/service/game/scene.go.tmpl`）同一规则**：`sceneLane.Push` 改为调用 `selfsync.PushPlayerFrame`，`scenePusher` 增加 `CloseSessions`；`settle` 删除“丢会话后玩家仍连着就重开”的分支（`sessionDropped` 参数一并删除），还连着的只可能是之后的新登录，由它的 `Join` 打开会话。**保留** `Join` 打开会话时上一个会话还在关闭（`SessionOpenRetryable`）的有界退避重试，改名 `openLater` / `openLocked` / `sessionOpen*`；**指标改名** `scene_session_reopen_failed_total` → `scene_session_open_failed_total`（只计 Join 打开会话的放弃，标签不变），仪表盘面板、可观测性 README、WALKTHROUGH 同步。已生成工程不迁移（`roost project sync` 取新模板），按旧名查询的面板 / 告警请改名。修前红（旧 scene.go + 新用例）：`the player's connections were closed 0 times after a live connection refused a frame, want once`。
 - 文档：[impl/04-sync §2C](docs/framework/impl/04-sync.md#2c-自身视图selfview的生命周期)、[guide/04-sync](docs/framework/guide/04-sync.md)、[PLAYER-ACCESS §7](docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)、[GATEWAY §4](docs/framework/GATEWAY.md#慢消费者跟不上就断开)（三种接入统一为“跟不上就断开”，Game 进程驻留预算例外）、KNOWN-LIMITS“自身视图（self_sync）与 Sync 慢消费者规则”。
+### game-demo 公会创建：先拒绝空名称
+
+- `HandleFoundGuild` 在读取玩家状态、持久保留 ID 与创建 Guild 实体之前拒绝空名称，返回现有 `guild_name`（100016）。原流程先创建空 Guild，再由 Found handler 拒绝名称，会让无效请求消耗 ID 并留下空壳；handler 的防御检查保留，有效名称及其他命名规则不变。
+- 新增并登记生成工程端点回归：无效请求不触碰 Nest 读取，持久计数维持原值；有效名称仍进入原有公会归属检查。不回收历史空号或擅自删除已存在的 Guild。
 
 ### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数
 
