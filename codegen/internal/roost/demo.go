@@ -630,6 +630,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/guild.go", why: "read against the dungeon endpoints: the remote entity changes nothing at this layer"},
 		{write: "game/controllers/player/guild_ids.go", why: "persistent guild IDs must survive process restarts"},
 		{write: "game/controllers/player/guild_ids_test.go", why: "same-sid restarts and concurrent creators must not reuse guild IDs"},
+		{write: "game/controllers/player/found_guild_validation_test.go", why: "invalid guild names must be refused before state reads and durable id reservation"},
 		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},

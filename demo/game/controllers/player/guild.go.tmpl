@@ -49,6 +49,11 @@ func (controller *Controller) HandleFoundGuild(context *playeraccess.Context, re
 		}
 		return &pb.GuildResponse{Code: code, Reason: reason, ServedBySID: controller.ServerSID()}, nil
 	}
+	// 明确无效的名称在查玩家、保留 ID 和创建持久实体之前拒绝，避免失败请求留下空壳公会。
+	// handler 的同一校验仍保留，保护其他调用入口。
+	if request.Name == "" {
+		return refuse(errcode.Wrap(apperrors.ErrGuildName, nil, "name", request.Name), "validate")
+	}
 	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err != nil {
 		return nil, fmt.Errorf("found_guild endpoint: %w", err)
