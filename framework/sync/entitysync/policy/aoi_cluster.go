@@ -212,7 +212,25 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 		}
 	}
 	c.subjects[id] = clusterPlacement{at: to, home: destination.id}
-	c.collect()
+	// 区域不设容量，同档移动可能没有区域事件，但距离排序已经改变。
+	// 复用旧、新位置的块反向索引，只重排受影响的观察者（含边界镜像）。
+	var touched []int64
+	if c.config.MaxVisible > 0 {
+		source := c.areas[placement.home].manager
+		if destination.id == placement.home {
+			for _, observer := range source.observersAt(placement.at, to) {
+				touched = append(touched, observer.id)
+			}
+		} else {
+			for _, observer := range source.observersAt(placement.at) {
+				touched = append(touched, observer.id)
+			}
+			for _, observer := range destination.manager.observersAt(to) {
+				touched = append(touched, observer.id)
+			}
+		}
+	}
+	c.collect(touched...)
 	return nil
 }
 
@@ -282,7 +300,11 @@ func (c *AOICluster) placeObserverLocked(id int64, at spatial.Point) error {
 		}
 	}
 	c.observers[id] = clusterPlacement{at: at, home: home.id}
-	c.collect()
+	if c.config.MaxVisible > 0 {
+		c.collect(id)
+	} else {
+		c.collect()
+	}
 	return nil
 }
 
@@ -346,8 +368,12 @@ func (c *AOICluster) Flush() []InterestEvent {
 // ALL areas — per-area caps would multiply a border observer's budget) picks
 // the surfaced set, and only net changes against the previously emitted
 // state are appended to pending.
-func (c *AOICluster) collect() {
+// movedObservers 包含因移动需要重排、但区域未必产生事件的观察者。
+func (c *AOICluster) collect(movedObservers ...int64) {
 	touchedObservers := make(map[int64]struct{})
+	for _, observer := range movedObservers {
+		touchedObservers[observer] = struct{}{}
+	}
 	for _, areaID := range c.order {
 		area := c.areas[areaID]
 		for _, event := range area.manager.Flush() {

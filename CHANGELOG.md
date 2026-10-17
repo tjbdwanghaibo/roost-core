@@ -30,6 +30,12 @@
 - 修复 Tick 回调内创建定时器时把取时钟和复制 payload 一并推迟的问题：后续回调耗时会把期限向后移动，调用方复用缓冲会改变持久化内容。现在 `NewTimer` / `NewClosureTimer` 在调用中构造节点快照，只延后入堆及通知；已有新建后取消/改期、重入 Tick 和本轮不触发新节点的规则保持不变。
 - 新增可控时钟回归，覆盖 typed/closure timer 的原始期限与实际触发，以及 payload 在登记、持久化钩子和存量节点之间的一致性；不依赖 sleep。持久 Node 结构与公开 API 不变。
 
+### AOICluster：同档移动也重新选择最近的容量内目标
+
+- 基线 `00d35150` 下，区域 AOI 不限容量，目标在同一距离档内移动没有事件；Cluster 只随区域事件重算 `MaxVisible`，因此更近的目标仍被抑制、远离的旧目标继续占位，观察者移动也有同样问题。SLG 行军视图设置可见上限时会漏掉已靠近的部队。`TestClusterMaxVisibleReselectsOnSameBandMovement` 修前 10 个业务子用例失败（实际仍为 `[2]`，应换为 `[3]`），单区域和边界镜像均可复现。
+- 现在目标移动通过旧、新位置的块反向索引标记观察者，观察者移动标记自身；先归并区域事件，再统一重排，保留跨区净变化与同距 ID 规则。覆盖重复 Add 的移动语义；不限容量时不增加距离重排。未改正式 Interest 的政策批次路径。
+- 回归：`go test ./framework/sync/entitysync/policy -run '^TestCluster' -count=1`；连续移动对照独立最近 N 排序，同时核对增量事件还原的可见集。接口与存储格式不变，临时规避是不用 Cluster 容量限制、在业务层自行选取目标；具体规则见 [Block AOI](docs/framework/INTEREST-BLOCK-AOI.md#4-block-与-observer)。
+
 ### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数
 
 - **Manager 的线协议 epoch 改为本 Manager 内单调递增。** 修前每个新 lifetime 从 epoch 1 开始：SelfView 在推送被拒（如独立 Gate 的可靠队列背压，连接还在）后于同一条连接上重开会话，客户端接收端已停在 1/N，新全量 `Full@1/1` 与之后的增量被当成旧包丢弃，新 lifetime 的 `Delta@1/N+1` 恰好以 N 为基线被接受并叠到旧状态上，被拒那一帧的变化永远到不了客户端、也没有错误。现在 `OpenSession` 与 `HoldSession` 都取 Manager 的下一个 epoch，重开后的全量一定更大、被接受；客户端不能再假设首帧 epoch 为 1（[ENTITY_SYNC 线格式](docs/framework/ENTITY_SYNC.md#线格式v2)）。回归 `TestSelfViewReopenedSessionIsAcceptedByTheSameReceiver`。
