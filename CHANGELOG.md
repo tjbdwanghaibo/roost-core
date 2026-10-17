@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Timer：收尾钩子重入时，子任务在执行前完成首次持久化通知
+
+- 基线 `300d728a` 的收尾先把新节点全部入堆，再依次 upsert。前一个节点的钩子重入 Tick，可执行尚未通知的到期子节点；一次性子任务只收到删除，按 upsert 推进种子的宿主会漏存它的 ID。SLG 定时任务 ID 被用作后续操作身份时，恢复后复用会混淆新旧任务。回归 `TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring` 修前红：`delete arrived before initial upsert for IDs [3]`、`stored seed=2, allocated seed=3`、`after restart ID=3, want greater than previously returned ID 3`。
+- 现在对尚未通知的 typed 到期节点先补 upsert，再重新检查堆顶；通知钩子随即取消或改期时，原期限不会继续触发。覆盖一次性、自动重排、首次通知内取消/改期和种子恢复；闭包仍不持久化。公开接口与存储格式不变。旧版本的临时接入方式是让持久化钩子只写宿主状态，把后续 Tick 排在该 Tick 返回之后；规则见[时间与定时器](docs/framework/guide/10-time.md#3-scheduler)。
+- 热路径基准：同机、同配置、新旧二进制交替各 10 轮，原始样本及 benchstat 见[性能证据](docs/performance/benchmarks/timer-announce-reentrant-hook/benchstat.txt)。仅验证调度器微基准，不扩大整服容量承诺。
+
 ### 生成器：`access.player.self_sync` 的默认 packer 由生成器生成（维护者 2026-10-17 决定，第三轮新用户试用登记项 3）
 
 - **只开开关 + 标 sync 字段即可**：`roost.yaml` 打开 `access.player.self_sync: true` 后，Player 的 `//roost:entity` 标记不用改、不用写 packer。entity 生成器带 `-self-sync Player` 运行：标记缺省按 `sync=true`（`syncNamespace` 缺省 `"player"`）；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（生成器所有、带生成头，`roost generate` / `roost project sync` 会重写）——`NewPlayerSyncPacker`，视图集只有 `policy.SelfProfile`，包含 Player DAO 的全部 sync 字段（字段表运行期从 DAO 取，DAO 增删 sync 字段自动跟随），未知视图返回 `entity.ErrSyncViewUnknown`；wire 的 `PackerFactory` 指向它。

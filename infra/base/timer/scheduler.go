@@ -333,6 +333,12 @@ func (s *Scheduler) Tick(now time.Time) {
 		if node == nil || now.Before(node.End) {
 			return
 		}
+		if node.Type != TypeClosure && !node.announced {
+			// 收尾钩子可重入 Tick，遇到已入堆但尚未通知的子节点。
+			// 先通知 ID，让宿主推进持久种子；钩子可能取消或改期，所以重新取堆顶。
+			s.emitUpsert(node)
+			continue
+		}
 		heap.Pop(&s.nodes)
 		next := s.fire(node, now)
 		if node.state != stateFiring {

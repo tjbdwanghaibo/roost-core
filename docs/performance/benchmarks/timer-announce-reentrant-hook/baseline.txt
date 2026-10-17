@@ -1,0 +1,110 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5265	     46980 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4882	     50705 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3711	     73021 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    2816	     78960 ns/op	   14400 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       221.5 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1778	    139806 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5048	     46442 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4718	     52322 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3718	     73332 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3346	     75502 ns/op	   14411 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       224.1 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1942	    135101 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5175	     46795 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4923	     51084 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3831	     71108 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3278	     75769 ns/op	   14400 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       227.0 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1778	    132822 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5614	     46754 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4863	     50759 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3511	     71702 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3400	     77587 ns/op	   14422 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       230.3 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1845	    140765 ns/op	  166873 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5215	     47173 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    5100	     50822 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3633	     72853 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3274	     73730 ns/op	   14423 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       222.9 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1731	    138872 ns/op	  166873 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5312	     46925 ns/op	    2401 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    5041	     50834 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3724	     74340 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3326	     74973 ns/op	   14400 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       232.5 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1802	    136403 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5378	     46519 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4546	     50773 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3609	     71624 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3334	     75153 ns/op	   14422 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       223.4 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1914	    141849 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    4927	     47118 ns/op	    2401 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    4548	     51439 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3571	     77493 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3380	     72367 ns/op	   14413 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       220.4 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1623	    141628 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5322	     47839 ns/op	    2401 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    5011	     51104 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3880	     71071 ns/op	    2401 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3039	     71898 ns/op	   14400 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       306.1 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1705	    145600 ns/op	  166872 B/op	    1021 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/base/timer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkTickRearmByReturn-4            	    5629	     50552 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickExplicitRescheduleSelf-4   	    5131	     51620 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickRescheduleOther-4          	    3850	     71904 ns/op	    2400 B/op	     300 allocs/op
+BenchmarkTickCreateInHandler-4          	    3344	     74346 ns/op	   14400 B/op	     500 allocs/op
+BenchmarkNewAndRemoveOutsideTick-4      	 1000000	       227.4 ns/op	     112 B/op	       1 allocs/op
+BenchmarkRebuildAndTick-4               	    1762	    144399 ns/op	  166872 B/op	    1021 allocs/op
+PASS

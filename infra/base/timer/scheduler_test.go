@@ -600,6 +600,99 @@ func TestOnChangePanicDuringSettlementDoesNotReplay(t *testing.T) {
 	}
 }
 
+// 收尾钩子允许重入 Tick：尚未通知的 typed 子节点也要先 upsert 再删除，宿主才能保存其 ID 种子。
+func TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring(t *testing.T) {
+	base := time.Unix(100, 0)
+	for _, test := range []struct {
+		name      string
+		returned  time.Duration
+		hook      string
+		wantFired int
+	}{
+		{"one_shot", 0, "", 1},
+		{"rearm", time.Second, "", 1},
+		{"cancel_on_announce", 0, "cancel", 0},
+		{"reschedule_on_announce", 0, "change", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stored := make(map[int64]Node)
+			storedSeed := int64(0)
+			var scheduler *Scheduler
+			reentered := false
+			hookApplied := false
+			var deletedBeforeUpsert []int64
+			scheduler = NewScheduler(1, 0, nil, func(change ChangeType, node Node) {
+				if change == ChangeDelete {
+					if _, ok := stored[node.ID]; !ok {
+						deletedBeforeUpsert = append(deletedBeforeUpsert, node.ID)
+					}
+					delete(stored, node.ID)
+					return
+				}
+				stored[node.ID] = node
+				if node.ID > storedSeed {
+					storedSeed = node.ID
+				}
+				if node.Type == 3 && test.hook != "" && !hookApplied {
+					hookApplied = true
+					if test.hook == "cancel" {
+						if !scheduler.RemoveTimer(node.ID) {
+							t.Fatal("hook cancellation refused")
+						}
+					} else if !scheduler.ChangeTimer(node.ID, base, time.Hour) {
+						t.Fatal("hook reschedule refused")
+					}
+				}
+				if node.Type == 2 && !reentered {
+					reentered = true
+					scheduler.Tick(base.Add(3 * time.Second))
+				}
+			})
+			scheduler.SetClock(func() time.Time { return base })
+			var fresh int64
+			fired := 0
+			scheduler.RegisterHandler(1, func(Context) time.Duration {
+				// 第一个子节点的 upsert 触发重入；第二个期限已经过去，但还未收到 upsert。
+				scheduler.NewTimer(time.Minute, 2, 0, 0, nil)
+				fresh = scheduler.NewTimer(time.Millisecond, 3, 0, 0, []byte("march"))
+				return 0
+			})
+			scheduler.RegisterHandler(3, func(Context) time.Duration { fired++; return test.returned })
+			scheduler.NewTimer(time.Second, 1, 0, 0, nil)
+			scheduler.Tick(base.Add(time.Second))
+			if !reentered || fired != test.wantFired {
+				t.Fatalf("reentered=%v fired=%d, want %d nested firings", reentered, fired, test.wantFired)
+			}
+			if len(deletedBeforeUpsert) != 0 {
+				t.Errorf("delete arrived before initial upsert for IDs %v", deletedBeforeUpsert)
+			}
+			if storedSeed != scheduler.Seed() {
+				t.Errorf("stored seed=%d, allocated seed=%d (fresh ID %d can be reused after restart)", storedSeed, scheduler.Seed(), fresh)
+			}
+			if len(stored) != len(scheduler.Nodes()) {
+				t.Fatalf("storage has %d nodes, scheduler has %d", len(stored), len(scheduler.Nodes()))
+			}
+			for _, node := range scheduler.Nodes() {
+				if persisted, ok := stored[node.ID]; !ok || !persisted.End.Equal(node.End) {
+					t.Fatalf("stored node does not match final deadline: %+v", node)
+				}
+			}
+			if test.hook == "change" && !stored[fresh].End.Equal(base.Add(time.Hour)) {
+				t.Fatalf("rescheduled child end=%v", stored[fresh].End)
+			}
+			saved := make([]Node, 0, len(stored))
+			for _, node := range stored {
+				saved = append(saved, node)
+			}
+			restored := NewScheduler(1, storedSeed, saved, nil)
+			if id := restored.NewTimer(time.Minute, 2, 0, 0, nil); id <= fresh {
+				t.Errorf("after restart ID=%d, want greater than previously returned ID %d", id, fresh)
+			}
+			checkSettled(t, scheduler)
+		})
+	}
+}
+
 // 操作 × 节点状态组合：Tick 期间对处在每种状态的目标做改期 / 取消 / 不操作，触发中的回调返回 0 / 负 / 正，
 // 操作分别在外层回调里直接做和在重入 Tick 触发的回调里做。断言本次 Tick 后目标的期限（或不存在）、
 // 本次 Tick 里目标触发的次数、操作返回值、持久化钩子视图与调度器一致、收尾不变量；再在期望期限前后各

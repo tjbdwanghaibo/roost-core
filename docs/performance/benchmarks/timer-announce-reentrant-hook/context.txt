@@ -1,0 +1,13 @@
+Baseline: 300d728ade75e368f49ddf99239873aaacb302c7
+UTC: 2026-10-17 13:50:45.835054+00:00
+OS: Linux-6.18.55-x86_64-with-glibc2.41
+go version go1.27.2 linux/amd64
+GOMAXPROCS=4; -test.run=^$ -test.bench=. -test.benchmem -test.benchtime=200ms -test.count=1
+Ten rounds alternating baseline/fixed execution order; same working directory and binaries built from this checkout.
+No database, network service, or end-to-end capacity benchmark.
+Benchstat: golang.org/x/perf v0.0.0-20261009192801-be2c69fb417e (Go 1.27.2).
+Regression baseline check: final test source with go test -overlay replacing only scheduler.go with git show 300d728ade75e368f49ddf99239873aaacb302c7:infra/base/timer/scheduler.go.
+Red command: go test -p 4 -overlay=<overlay.json> ./infra/base/timer -run '^TestSettlementReentrantTickAnnouncesFreshTimersBeforeFiring$' -count=1
+Overlay Replace maps the absolute checkout scheduler.go path to a temporary file containing that exact baseline source. It leaves the checkout unchanged.
+Four final scenarios fail on the baseline; see red-main.txt.
+Observed microbenchmarks: no statistically significant slowdown; B/op and allocs/op unchanged. Small measured improvements are not attributed to this guard or treated as server capacity gains.
