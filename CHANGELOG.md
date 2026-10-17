@@ -10,8 +10,6 @@
 - **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `f8851f4a` 报告并只修了第一种情况，本轮复核扩展为统一规则。
 - **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](docs/performance/benchmarks/timer-announce-reentrant-hook/)，分析见[重构方案 §9](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
 
-### game-demo 经验发放：范围校验与有界计算
-
 ### 生成器：`roost add endpoint` 从服务器业务钟填业务时间参数（新用户试用第四轮登记项 2）
 
 - **问题**：endpoint 骨架只能从请求字段取 handler 参数；handler 需要业务时间（`handlerUseDoubleCard(target, nowUnixMilli int64)`）时报 `protocol UseDoubleCardRequest has no field matching Nest parameter "nowUnixMilli"`，最省事的改法是往请求里加时间字段，于是客户端决定业务时间（可延长限时效果、提前领冷却奖励）。
