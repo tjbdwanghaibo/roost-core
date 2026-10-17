@@ -1,0 +1,11 @@
+# 基线 1d55586f，GOWORK=off go test -count=1 -run TestOnChangePanicDuringSettlementDoesNotReplay ./infra/base/timer（go1.27.2 darwin/arm64, Apple M5）
+--- FAIL: TestOnChangePanicDuringSettlementDoesNotReplay (0.00s)
+    --- FAIL: TestOnChangePanicDuringSettlementDoesNotReplay/child_then_idle_tick (0.00s)
+        scheduler_test.go:566: an idle Tick replayed the failed settlement: events=[1:2@1h0m0s] nodes 1 -> 2 ([{ID:2 Type:2 Priority:0 Param1:0 Param2:0 Payload:[] End:1970-01-01 09:01:40 +0800 CST Delay:1h0m0s index:-1 handler:<nil>} {ID:2 Type:2 Priority:0 Param1:0 Param2:0 Payload:[] End:1970-01-01 09:01:40 +0800 CST Delay:1h0m0s index:-1 handler:<nil>}])
+    --- FAIL: TestOnChangePanicDuringSettlementDoesNotReplay/self_reschedule_then_idle_tick (0.00s)
+        scheduler_test.go:566: an idle Tick replayed the failed settlement: events=[1:1@1m0s] nodes 1 -> 1 ([{ID:1 Type:1 Priority:0 Param1:0 Param2:0 Payload:[] End:1970-01-01 08:02:40 +0800 CST Delay:1m0s index:-1 handler:<nil>}])
+    --- FAIL: TestOnChangePanicDuringSettlementDoesNotReplay/self_reschedule_then_due_tick (0.00s)
+        scheduler_test.go:573: after firing at the explicit deadline fired=2 next=1m0s nodes=1, want fired 2 and one node due 1m1s
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/timer	0.502s
+FAIL
