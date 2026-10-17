@@ -164,12 +164,17 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
 | `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
 
-### 实体定时器（core/timer）
+### 实体定时器（core/timer、framework/nest/entitytimer）
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `timer.invalid_dropped_total` | Counter | 正常 Tick 因 id/type/deadline 非法而删除的存量节点；加载时 Warn 并标记待清理，Tick 才发宿主 ChangeDelete。事务回滚后再次重建可能再计，不是全局唯一记录数 |
 | `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
+| `entitytimer.delivered_total{driver}` | Counter | 按实体持久定时器的驱动（`framework/nest/entitytimer`，D11）投递出去的 Tick 消息；`driver` 是生成组件的驱动名（如 `player.timer`）。只有已加载实例的最早期限到了才投，不随在线人数增长 |
+| `entitytimer.redelivered_total{driver}` | Counter | 其中因上一次投递之后没有收到实例的提交报告而重投的（缺省 10s）。**基线应接近零**；持续增长说明 Tick handler 在报错 / 回滚或提交被拒 |
+| `entitytimer.deliver_failed_total{driver}` | Counter | Tick 准入失败（队列满、引擎停止中），1s 后重试 |
+| `entitytimer.dropped_total{driver}` | Counter | 到期时发现实例已卸载 / 删档或已被同 ID 的新实例取代而丢弃、不投递的条目（驱动不唤醒不在内存的实体） |
+| `entitytimer.pending{driver}` | Gauge | 索引里等待到期（含已投递待报告）的实例数 |
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 
@@ -240,6 +245,11 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
+| `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.dropped_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.pending` | Gauge | `nest/entitytimer/driver.go:SetGauge` |
+| `entitytimer.redelivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `failurelog_append_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_degraded_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |

@@ -45,4 +45,6 @@ const (
 	ModSaga          app.ModName = "saga"
 	ModEntityRuntime app.ModName = "entity.runtime"
 	ModManager       app.ModName = "manager"
+	// ModEntityTimer 是按实体持久定时器的驱动装配（wiring/entitytimer）。
+	ModEntityTimer app.ModName = "entity_timer"
 )
