@@ -80,6 +80,56 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **需要维护者决定**：是否提供通用的 DAO 期限组件（例如 `roost add timer --entity Player` 生成节点 DAO 与组件，框架负责重建与持久化钩子），以及按实体的 Tick 由谁驱动（进程 ticker 按最早期限只给到期实体发消息，而不是每秒给所有在线实体发）。
 
+## 新用户试用第六轮：待修问题（2026-10-18 登记，尚未修复）
+
+基线 `91606e48`（origin/main）。本轮按 guide 目录一次学剩下的模块：Saga（06）、框架服务（09）、Remote（05）、Skill（08）、Lockstep（04 后半）、自建 RPC 与可观测性（11 / 13），在 r6 工程里逐块用 CLI 生成、写最小业务、编译与 doctor，必要处在共享隔离环境起真实进程或进程内 Nest harness 探针。正面结论：托管框架服务用 `services.<name>.framework` / `uses` 接入后生成类型化访问器、`rank.Submit` 带 requestID 幂等；自建 RPC 把拥有者从 game 挪到独立进程只改 roost.yaml、业务代码不变（只验证到编译与 doctor，未起两个进程实测跨进程调用）；`roost id next errcode` 同时看手写与生成的码；Remote 托管实体在没有 Remote 运行时的 Nest 里写入被拒、不会当本地写。修复由维护者在 main 上进行。
+
+### 1. `roost add saga -steps` 按字母重排并去重步骤（会改变执行与补偿顺序）
+
+**现象**：`roost add saga gift_gold -service game -steps debit,credit` 生成的 `Definition()` 是 `{credit, debit}`。Saga 按 `Definition.Steps` 的下标推进（`framework/saga/engine.go` 里 `CompletedSteps = record.Step + 1`，补偿按下标倒序），所以顺序就是业务语义：生成物变成先给收礼方加钱、再扣送礼方，补偿顺序也随之反过来。
+
+**根因**：`codegen/internal/roost/cli.go:312` 用 `splitList(*steps)` 解析步骤；`splitList`（`manifest.go:546`）返回 `uniqueSorted(out)`，为 Mod 列表这类无序集合设计。同名步骤也被静默去掉。
+
+**影响**：`roost help saga` 的示例 `-steps reserve,deduct,deliver` 会生成 `deduct, deliver, reserve`。生成后编译、doctor 都通过，只有读生成代码才发现；照示例写的跨服交易会先扣款再预留。
+
+**建议修法**：步骤用保序解析（拒绝重复名并报错），不经 `uniqueSorted`；回归覆盖 help 里的示例顺序。
+
+### 2. Saga 原生实体步骤与 effect 消费者没有生成支持
+
+**现象**：`roost add saga` 只为每一步生成 Mongo 步骤的 `Subscribe*` 函数（`saga.SubscribeMongoStep`）；改实体 DAO 的步骤（扣 / 加金币这类最常见的步骤）应走 `saga.SubscribeDataEngineStep` 与 DataEngine step inbox，骨架注释点名了它但不生成，业务要自己取 JetStream 客户端、`JetStreamPublisher`、`DataEngineStepInbox`、stream / durable，再写派发 Nest handler 并在事务里绑定 receipt 的 StepHandler。game-demo 的送礼 saga 接线 `internal/service/game/gift_saga.go` 有 661 行。事务性 outbox（`nest.Emit` effect + Mongo inbox 消费者，demo 的升级发邮件）同样只有 demo 手写，生成器没有对应命令。
+
+**影响**：跨服务副作用的两条正路都要照 demo 大段手写；新手更可能退回“事务后尽力调用 + 幂等 ID”，接受崩溃时少一笔（demo 的排行提交就这样写并在注释里说明了代价）。
+
+**需要维护者决定**：是否为原生实体步骤生成 `SubscribeXxxNative` 与 StepHandler 骨架（Nest handler 签名带 step receipt），以及是否提供 `roost add effect <topic> --consumer <service>`。
+
+### 3. `saga.start_effect_stream` / `start_effect_prefix` 与 `dataengine.effects` 必须一致，却没有校验
+
+**现象**：Saga 经 DataEngine 的 effects 流接收 Nest 发起的 start（`saga.start_effect_stream` 默认 `ROOST_EFFECTS`，`dataengine.effects.stream` 默认也是 `ROOST_EFFECTS`），两组键分别填写。两者不一致时进程启动失败：`mod saga start: saga: subscribe Nest starts: nats: API error: code=404 err_code=10059 description=stream not found`，不点名是哪两个键不一致。
+
+**复现**：工程已有 dataengine 配置段后 `roost add mod saga`，再把 `dataengine.effects.stream` / `subject_prefix` 改成别的值（demo README 常见问题正是建议这样隔离环境）；`roost config check`、进程 `--check-config`、doctor 都通过（2026-10-18 在 r6 上把 effects 改成 `OTHER_EFFECTS` 实测），启动时报上面的错。
+
+**建议修法**：同进程有 DataEngine 时 saga 的 start / result effect 流与前缀默认取 `dataengine.effects` 的值（显式写了才覆盖）；两者都显式写且不一致时 `--check-config` / doctor 报错并点名两个键。
+
+### 4. 声明 `remote=managed` 的实体缺 Remote 运行时，生成与 doctor 都不提示
+
+**现象**：`roost add entity Guild` 后把标记改成 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，不加 `remote_entity` Mod：`roost generate`、`go build`、`roost project doctor` 全部通过；写这个实体的 handler 在运行时返回 `remote entity: write capability disabled`（进程内 harness 实测，写入被拒、无提交），报错不说缺的是 `remote_entity` Mod。另两点：`add entity` 骨架注释只说“改成 remote=managed 时移到 EntityCategoryRemote”，没提要换嵌入 `*entity.RemoteEntityBase`；漏换时 `roost generate` 在这一个实体上中止整次生成，其他实体的 DAO 也没生成，随后的编译报错（`undefined: db.GuildDao`）把人引向无关的地方。
+
+**建议修法**：工程里有 `remote=managed` 实体而所属服务没有 `remote_entity` Mod 时，generate / doctor 报错并给出 `roost add mod remote_entity -service <svc>`；写入拒绝的错误带上这条修法；骨架注释写明三件事（类别、remote=managed、嵌入 RemoteEntityBase）。
+
+### 5. 技能目录在生成工程里没有任何地方编译，写坏的 JSON 通过 build / test / doctor
+
+**现象**：`roost add skill Fireball` 生成 `game/skills/fireball.json` 与 `catalog.go`（`CompileAll`），但工程里没有调用 `CompileAll` 的地方，也没有测试。把 JSON 里的 `"flow": "finish"` 改成不存在的流程后，`go build`、`go test ./game/skills/`（无测试文件）、`roost project doctor` 全部通过；只有手动调用 `CompileAll` 才报 `parse Skill fireball.json: phases: [0].on: unsupported flow "explode_everything"`。`roost help skill` 只写“启动时：skills.CompileAll(...)”。
+
+**影响**：坏技能要到业务自己接上编译（或上线后第一次施放）才暴露；与 tablegen 数据“生成 / 加载时一次检查”的做法不一致。
+
+**建议修法**：首次生成 `catalog.go` 时同时生成 `catalog_test.go`（`CompileAll(skill.DefaultCompileEnvironment())` 必须成功），并在服务 Init 里调用一次、失败拒绝启动；doctor 加一项检查。
+
+### 6. 文档小问题
+
+- 生成工程的 `docs/ROOST_YAML.zh-CN.md`（`codegen/internal/roost/render_docs.go:398`）说托管框架服务是“account、mail、match、chat 之一”，生成器实际支持九个（另有 platform、global、activity、rank、session，见 `framework_services.go`）。`services.<name>.framework` / `uses` 的用法只在这份生成文档里，`roost help` 各主题里没有，新手查内置帮助找不到“怎样把排行接进已有工程”。
+- GETTING-STARTED 把[技能火球](../../gameplay/skill/examples/fireball/main.go)列为不依赖外部服务器的示例，但它在独立模块 `gameplay/skill/examples` 里，在仓库根 `go run ./gameplay/skill/examples/fireball` 报 `main module does not contain package`，文档没写要先 `cd gameplay/skill/examples`。
+- guide/11 只提醒“业务新增指标应控制标签基数”，没有一处示例说明业务代码用哪个 API 加计数器 / 时延（`OBSERVABILITY.md` 只列框架自己的指标）。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
