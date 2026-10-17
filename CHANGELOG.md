@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 按实体的持久定时器：`roost add timer --entity <Entity>`（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B，新用户试用第四轮登记项 3）
+
+- **问题**：到点要做的事（Buff 到期、建造完成、行军到达）没有可复用的接入：`Delay_` 不持久，唯一的现成实现是 game-demo World 手写的 `TimerComponent` 加服务里每秒一次的 `Sync_TickWorldTimers`；按玩家做要整套复制，并自己解决上万在线玩家怎么驱动，新手多半退回“存到期时刻、读时判断”，到点服务器什么也不做。
+- **生成器**：`roost add timer --entity Player [--component Timer] [--service game] [--id N]`（Makefile `make new-timer ENTITY=Player`）。`roost.yaml` 新增 `timers.<entity>`（component、id、service、dao）。add 时在实体 DAO 定义加 `Timers map[int64]*<Entity>TimerNode` 与 `TimerSeed` 两个持久字段、实体加组件字段（之后归业务）；`project sync` 重写 `<component>_component_gen.go`（组件：`NewTimer` / `NewTimerWithPriority` / `NewTimerAt` / `ChangeTimer` / `RemoveTimer` / `Timer` / `Timers` / `Tick`，驱动变量 `TimerDriver`）、`db/def/<entity>_<component>_node_gen.go`、`game/handler/tick_<entity>_<component>_gen.go`（Tick handler 与名字对齐测试）与 bootstrap 里的 `kitentitytimer.NewMod`；业务回调 `game/entities/<entity>/<component>_handlers.go` 只在缺失时创建。Remote 托管（`remote=managed`）与 `noPersist` 实体、没有 DAO、组件重名、重复 add 在改文件前拒绝。`roost add handler --component <定时器组件>` 认生成的组件文件。
+- **驱动（core）**：新包 `framework/nest/entitytimer`（`Driver`、`Host`、`Fire`、`Store`、`Handlers`）与 `wiring/entitytimer`（Mod，依赖 Nest，绑定 Nest 客户端、只读实体查找与 `app.BusinessClock`）。按“已加载实例的最早期限”维护进程内小堆，事务提交后（`nest.AfterCommit`）更新、回滚不改，报告带序号丢弃晚到的旧报告，实例卸载 / 删档 / 撤销新建时离开索引；只有最早期限到了才经 `nest.Client.Dispatch` 给那一个实体投递一次 Tick，不按在线人数轮询；投递前核对实例，不唤醒不在内存的实体；投递后无报告 10s 重投。新指标 `entitytimer.delivered_total` / `redelivered_total` / `deliver_failed_total` / `dropped_total` / `pending`（标签 `driver`）。
+- **离线语义（维护者原话：框架不做追帧；离线期间到期的定时器在实体 load 起来后只触发一次，追帧由业务在回调里根据传入的参数自己处理）**：回调参数 `entitytimer.Fire` 带 `Deadline`（原定期限）、`Now`（实际触发时刻）、`LoadedAt`、`Overdue`（加载后补触发）与 `Interval`；返回正值为下次间隔（从 `Now` 起算），与 `timer.Scheduler` 一致。框架不计算错过次数、不循环补触发。离线实体到期不准点，只在下次加载时处理。
+- **game-demo**：World 的定时器改用同一生成器（`timers.world`，组件类型号 2006 不变），删除手写 `timer_component.go`、`tick_world_timers.go`（`handlerTickWorldTimers` 及其 Sender）与 `ActivityRunner` 每秒 `Sync_TickWorldTimers` 的循环；`WorldDao.TimerNextDue`（nopersist）删除，节点类型改名 `WorldTimerNode`（bson 键不变）。World 定时器用例断言不变。game 服务多一个 Mod，生成的 `shutdown.total_timeout` 由 114s 变为 117s。
+- **测试**：`framework/nest/entitytimer`（驱动 / 宿主 / 真实 Nest 引擎，`-race`）、`wiring/entitytimer`、`codegen/internal/roost/add_timer_test.go`（含生成工程端到端 `TestEntityTimerGeneratedProjectEndToEnd`）。修前：`roost add timer --entity Player` 报 `invalid timer name ""`。
+- **升级**：线上尚未部署。已有工程给已存数据的实体加定时器时，新字段在旧文档里缺省为空，不需要迁移；game-demo 工程是生成时写出的业务文件，不改写——要换用生成器就按新 demo 重新生成，或手工执行 `roost add timer --entity World --id 2006` 后删掉旧 `timer_component.go` / `tick_world_timers.go` 与服务里的 `tickWorld` 循环，并把 `TimerNode` 改为 `WorldTimerNode`、删掉 `TimerNextDue`。
+- 文档：[guide/10-time §4](docs/framework/guide/10-time.md#4-按实体的持久定时器)、[impl/10-time §2A](docs/framework/impl/10-time.md#2a-按实体的持久定时器驱动)、[impl/12-codegen §2C](docs/framework/impl/12-codegen.md#2c-roost-add-timer)、CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK / NEST_RUNTIME、OBSERVABILITY、KNOWN-LIMITS（剩余限制）。
+
 ### Timer：持久化钩子里重入 Tick 或操作出堆中的节点时，钩子视图与 ID 种子保持正确
 
 - **缺陷**（`300d728a` 起，即 Scheduler 重构后）：最外层收尾先把等待节点全部入堆再依次 upsert。前一个 upsert 的钩子重入 Tick 时，排在后面、还没收到 upsert 的节点可能到期：Tick 内新建的一次性节点只收到删除，按 upsert 推进 ID 种子的宿主漏存它的 ID，重建后复用；触发中显式改期自己的节点收到一次钩子不持有的删除。另外，在到期出堆的删除通知里取消（`RemoveTimer` 返回 true）或改期该节点，回调仍会执行一次。生成工程的 World 钩子只写 DAO、不调用调度器，不受影响；钩子里调用调度器的宿主受影响。

@@ -164,6 +164,7 @@ roost add rpc guild -service game
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
 | `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog | 配置 CompileEnvironment 与 Host |
+| `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
@@ -213,6 +214,48 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 回归 `codegen/internal/roost/self_sync_test.go`（按新手流程搭工程、只打开开关并标 sync 字段、经生成接线跑真实 TCP；
 再换业务 packer 跑一遍、切回默认）与 `codegen/internal/entity/sync_contract_test.go`
 （`TestSelfSyncDefaultPackerFollowsTheMarker`）。
+
+### roost add timer（按实体的持久定时器）
+
+DESIGN-TODO D11，维护者 2026-10-17 决定方案 B。`roost add timer --entity <Entity> [--component Timer] [--service <service>] [--id <component-id>]`
+（也可写 `roost add timer <Entity>`）给一个本地持久实体加持久定时器：到点要做的事（Buff 到期、建造完成、行军到达）的期限存在实体自己的
+DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内触发。运行期在 core：`framework/nest/entitytimer`（索引、投递、离线语义）与
+`wiring/entitytimer`（App 装配）。
+
+| 文件 | 归属 | 内容 |
+| --- | --- | --- |
+| `roost.yaml` `timers.<entity>` | 声明 | `component`（缺省 timer）、`id`（组件类型号，ids.component 段内分配）、`service`（运行该实体 Nest 的服务）、`dao`（节点所在 DAO） |
+| `db/def/<entity>.go`（实体 DAO 定义） | 业务（add 时加字段） | `<Component>s map[int64]*<Entity><Component>Node`（persist,map=fast）与 `<Component>Seed int64`（persist）；同名同类型已存在时不改 |
+| `game/entities/<entity>/entity.go` | 业务（add 时加字段） | 组件字段 `<component> *<Component>Component`（tag `comp:"CompType<Component>"`）；已有时不改 |
+| `db/def/<entity>_<component>_node_gen.go` | 生成（sync 重写） | 节点类型（期限按毫秒） |
+| `game/entities/<entity>/<component>_component_gen.go` | 生成（sync 重写） | `//roost:component`、`<Component>Component`（`New<Component>` / `New<Component>WithPriority` / `New<Component>At` / `Change<Component>` / `Remove<Component>` / `<Component>(id)` / `<Component>s()` / `Tick`）、`I<Component>Entity`、DAO 适配、`<Component>Driver` 与 `<Component>TickHandler` |
+| `game/handler/tick_<entity>_<component>_gen.go`（+`_test.go`） | 生成（sync 重写） | `//roost:nest rollback=undo durability=strict` 的 `handlerTick<Entity><Component>(target, nowUnixMilli int64) (int32, error)`；测试钉住驱动投递的名字就是 Nest 生成器得出的名字 |
+| `internal/bootstrap/generated.go` | 生成（sync 重写） | 该服务追加 `kitentitytimer.NewMod(EntityAccess, <entity>.<Component>Driver, ...)` |
+| `game/entities/<entity>/<component>_handlers.go` | 业务（只在缺失时创建） | 定时器类型号常量与 `register<Component>Handlers`（`handlers.Register(type, callback)`），回调签名 `func(entitytimer.Fire) time.Duration` |
+
+**驱动**：进程内按“已加载实例的最早期限”排的小堆。实例加载（组件 `OnInitFinish`）时报告存量里的最早期限，事务里的增删改在提交后
+（`nest.AfterCommit`）报告新的最早期限，回滚的事务不改索引；同一实例的报告带单调序号，晚到的旧报告丢弃；卸载 / 删档 / 撤销新建
+（`OnDestroy`）后实例永久离开索引。只有最早期限到了才经 `nest.Client.Dispatch` 给那一个实体投递 Tick（正式准入，不按在线人数轮询），
+投递前核对实例：已移除或已被同 ID 的新实例取代就丢弃，不唤醒不在内存的实体。投递后没有收到报告（handler 报错 / 回滚 / 提交被拒）
+按 `entitytimer.DefaultRedeliver`（10s）重投；准入失败 1s 后重试。时间取 App 业务时钟（`app.BusinessClock`，含 `time.logic_offset`），
+按毫秒。指标 `entitytimer.*`（OBSERVABILITY“实体定时器”）。
+
+**离线语义（维护者 2026-10-17 决定）**：框架不追帧。实体不在内存期间到期的节点，实体加载后只触发一次，不论错过多少个周期；
+`entitytimer.Fire` 带 `Deadline`（原定期限）、`Now`（实际触发时刻）、`LoadedAt`（本实例加载时刻）、`Overdue`（原定期限不晚于加载时刻，
+即加载后补触发）与 `Interval`（最近一次登记 / 续期的间隔）。补算错过的周期由业务在回调里做（例如
+`(fire.Now - fire.Deadline) / fire.Interval`）。回调返回正值是下次间隔（从 `Now` 起算），0 或负值结束；与 `timer.Scheduler` 一致。
+
+**持久与恢复**：节点只在 DAO 里，走 DataEngine 正式链路，不另建存储；种子随 upsert 推进并持久，重建时不复用 ID（Scheduler 保证
+每个分配过的 ID 至少经过一次 upsert）。
+
+**拒绝**：没有 DAO（`roost add dao <Entity> --entity <Entity>`）、多个 DAO 且没有主 DAO（字段 `dao`）、`remote=managed`（所有权在进程间迁移，
+驱动索引只覆盖本进程加载的实例，迁移中的到期语义未定义）、`noPersist=true`（不落库就没有可补触发的期限）、实体已有定时器组件（一个组件
+承载全部类型）、组件名已被别的组件占用、服务没有 nest。拒绝在改任何文件之前报出。
+
+回归：`codegen/internal/roost/add_timer_test.go`（生成物形状与归属、改名与显式 ID、拒绝的输入、清单校验；`TestEntityTimerGeneratedProjectEndToEnd`
+按新手流程生成工程，经正式 Nest 与 wiring/entitytimer 跑在线到期、周期续期、离线错过多个周期后加载只触发一次、卸载后不投递、重载后 ID 不复用、
+多定时器最早期限、删档不触发，`-race`）；core 见 `framework/nest/entitytimer` 的测试。game-demo 的 World 用的就是这个生成器
+（`timers.world`，回调在 `game/entities/world/timer_handlers.go`）。
 
 ## 4. DAO 生成器
 

@@ -83,6 +83,29 @@ dirty、undo、patch 和 sync；字段已私有化，使用 `GetXxx` 读取。
 
 生成项目内的 workbook 会给出可复制的 RenamePlayer 字段、Component 方法、handler 和 Request 示例。
 
+### 3.1 到点要做的事（限时 Buff、建造完成）
+
+到点必须发生的事（双倍金币卡 30 分钟后失效、建造完成、行军到达）用持久定时器，不要只存到期时刻、读时再判断
+（到点服务器什么也不做），也不要用 `Delay_` Sender（不持久，重启就丢）：
+
+```bash
+roost add timer --entity Player
+roost generate
+```
+
+它在 `PlayerDao` 里加 `Timers` / `TimerSeed` 两个字段，生成 `TimerComponent`（`timer_component_gen.go`）、到期 Tick 的
+Nest handler（`game/handler/tick_player_timer_gen.go`）和 bootstrap 里的驱动接线；你只写
+`game/entities/player/timer_handlers.go`：定时器类型号与回调（`registerTimerHandlers`）。在 handler 里用
+`target.TimerComp().NewTimer(30*time.Minute, player.TimerTypeBuffExpire, 0, 0, nil)` 登记。
+
+- 驱动按已加载玩家的最早期限只给到期的那一个投递 Tick，不按在线人数轮询；时间取 App 业务时钟（含 `time.logic_offset`）。
+- 回调在玩家的 Nest 锁与事务内执行：只改 DAO、记 effect，不做 I/O。返回正值是下次间隔（从 `fire.Now` 起算），0 结束。
+- 离线：玩家不在内存期间到期的，下次加载后只触发一次（`fire.Overdue` 为 true，`fire.Deadline` 是原定期限，`fire.Now`
+  是实际触发时刻）；错过的周期框架不补，业务用 `(fire.Now - fire.Deadline) / fire.Interval` 自己算（维护者 2026-10-17 决定）。
+- Remote 托管（`remote=managed`）与 `noPersist` 的实体不支持，add 时拒绝。
+
+生成项目内的 workbook 第 3.6 节有可复制的完整示例；规则见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)。
+
 ## 4. 接入 TCP
 
 第一条业务完成后，如果不使用独立网关：

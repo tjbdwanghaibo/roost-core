@@ -352,6 +352,7 @@ Makefile 也提供了对应入口，例如：
     make new-endpoint NAME=EnterGame HANDLER=player LIFECYCLE=Player   # 登录边界：GetOrCreate
     make new-skill NAME=Fireball
     make new-dao NAME=Player ENTITY=Player
+    make new-timer ENTITY=Player
     make new-table NAME=Item
     make new-service NAME=chat MODS=etcd,redis,nats
     make new-saga NAME=AllianceRally SERVICE=game STEPS=ReserveTroops,CreateMarch,CreateRally
@@ -378,6 +379,19 @@ Entity wire 会生成 Component/DAO getter，
 bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
+
+### 6.y 按实体的持久定时器：`roost add timer`
+
+    roost add timer --entity Player          # 组件名缺省 timer；--component BuffClock 改名
+
+到点要做的事（Buff 到期、建造完成）用它，不用 `Delay_` Sender（不持久）也不只存到期时刻。清单写 `timers.player`
+（组件名、组件类型号、服务、节点所在 DAO）；add 时在 `db/def/player.go` 的 `PlayerDao` 加 `Timers` / `TimerSeed` 两个字段、
+在 `entity.go` 加组件字段——这两处之后归业务。`make sync` 重写的生成部分：`game/entities/player/timer_component_gen.go`
+（组件与驱动变量）、`db/def/player_timer_node_gen.go`（节点类型）、`game/handler/tick_player_timer_gen.go`（到期 Tick 的
+Nest handler）与 bootstrap 里该服务的 `kitentitytimer.NewMod(EntityAccess, player.TimerDriver)`（依赖 Nest，先于它停止，
+停机预算多一个 Mod 的 3s 保底）。业务只写 `game/entities/player/timer_handlers.go`（只在缺失时创建）：类型号与回调。驱动只给
+最早期限到了的那一个已加载实体投递 Tick，离线期间到期的在加载后只触发一次（框架不追帧，回调参数带原定期限、触发时刻与补触发
+标志）。Remote 托管与 noPersist 实体拒绝。细则见[参考“roost add timer”](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)。
 
 ## 7. ID 管理
 

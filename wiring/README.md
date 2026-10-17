@@ -6,6 +6,7 @@ Wiring 让 Game 或其他服务通过 Mod、配置和少量 option 使用框架�
 - 外部资源接线：[Mongo](mongo)、[Redis](redis)、[NATS](nats)、[etcd](etcd)。
 - [领域服务接入](SERVICES.md)：领域接口和运行实现位于 `service/<领域>`，Wiring 提供本地 Mod、远端 ClientMod 和进程接线。
 - [Ops](ops) 接入 `infra/observe/ops`；[StatsLog](statslog) 接入 `framework/statslog`。
+- [EntityTimer](entitytimer) 把按实体的持久定时器驱动（`framework/nest/entitytimer`，`roost add timer`）接到 Nest 与 App 业务时钟。
 
 App 排序依赖并管理启停。创建资源的一方负责关闭，借用接口不重复关闭；StopWithContext 超时不表示任务已退出，不释放仍在使用的依赖。配置只经 ConfigSchema/LoadConfig 声明读取。
 

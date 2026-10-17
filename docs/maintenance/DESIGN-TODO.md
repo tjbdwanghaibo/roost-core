@@ -14,7 +14,7 @@
 | D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施（`bac32cd2`） |
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
-| D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 待维护者决定（2026-10-17 登记） |
+| D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a04d8c5c`、`c5ae630a`） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -216,7 +216,18 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D11 按实体的持久定时器接入
 
-**状态：待维护者决定（2026-10-17 登记，新用户试用第四轮登记项 3，见 [KNOWN-LIMITS](KNOWN-LIMITS.md)）。**
+**状态：维护者 2026-10-17 决定方案 B（`roost add timer --entity X` 生成器），并定了离线语义：框架不做追帧；离线期间到期的定时器在实体 load 起来后只触发一次，追帧（补算错过的周期等）由业务在回调里根据传入的参数自己处理。已实施（`a04d8c5c` core 驱动与宿主、`c5ae630a` 生成器与 game-demo World 迁入）。** 新用户试用第四轮登记项 3，剩余限制见 [KNOWN-LIMITS](KNOWN-LIMITS.md#3-按实体的持久定时器接入已实施d11)。
+
+**实施结果**：
+
+- **生成器**（[CODEGEN_REFERENCE“roost add timer”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)、[impl/12-codegen §2C](../framework/impl/12-codegen.md#2c-roost-add-timer)）：`roost.yaml timers.<entity>` 声明组件名、组件类型号、服务、节点所在 DAO。add 时在实体 DAO 定义里加节点 map 与种子两个持久字段、实体加组件字段（Go 结构体不能跨文件，这两处之后归业务）；project sync 重写生成部分：`<component>_component_gen.go`（组件、DAO 适配、驱动变量 `<Component>Driver`）、`db/def/<entity>_<component>_node_gen.go`（节点类型）、`game/handler/tick_<entity>_<component>_gen.go`（`rollback=undo durability=strict` 的 Tick handler，另有名字对齐测试）与 bootstrap 里的 `kitentitytimer.NewMod`；业务回调 `<component>_handlers.go` 只在缺失时创建。Remote 托管（`remote=managed`）与 `noPersist` 实体拒绝并说明原因；无 DAO、组件重名、重复 add 同样在改文件前拒绝。
+- **驱动放在 core**（[impl/10-time §2A](../framework/impl/10-time.md#2a-按实体的持久定时器驱动)）：`framework/nest/entitytimer`（`Driver` 每种实体一个、`Host` 每个实例一个），`wiring/entitytimer` 只做 App 装配（依赖 Nest，Provide 绑 Nest 客户端、只读实体查找与 `app.BusinessClock`）。取舍：放 Nest 块下，因为它只用 Nest 的公开 API（`Client.Dispatch`、`AfterCommit`）投递和排定索引，不改 Nest 调度契约；放 core 而不是生成物，是为了索引、投递、重投、离线语义只有一份实现，各工程只生成 DAO 与 handler 的适配。索引是“已加载实例的最早期限”小堆：加载时报告存量最早期限，事务提交后（`AfterCommit`）报告新的，回滚不改；报告带单调序号，丢弃晚到的旧报告；`OnDestroy`（卸载 / 删档 / 撤销新建）后永久离开索引。只有最早期限到了才给那一个实体投递一次 Tick，投递前核对实例（已移除或被取代则丢弃，不唤醒不在内存的实体），没有报告按 10s 重投。快池上的更新只持一把短锁、不做 I/O。
+- **离线语义**：加载时记下 `loadedAt`；期限早于它的节点在加载后由驱动投递一次 Tick，只触发一次（Scheduler 对过期节点本就只触发一次、按返回值从 now 续期，框架不计算错过次数、不循环补触发）。回调参数 `entitytimer.Fire`：`Deadline`（原定期限）、`Now`（实际触发时刻）、`LoadedAt`、`Overdue`（加载后补触发）、`Interval`（周期）；返回正值为下次间隔（从 `Now` 起算），与 Scheduler 一致。写进了生成物注释、[guide/10-time §4](../framework/guide/10-time.md#4-按实体的持久定时器) 与新手手册。
+- **持久与恢复**：节点只在 DAO 里，走 DataEngine 正式链路；种子随 upsert 推进并持久，重建不复用 ID（依赖 `4e0d257c` 的“每个分配过的 ID 至少一次 upsert”）。
+- **game-demo**：World 迁到同一生成器（`timers.world`，id 2006 保持），删除手写 `TimerComponent`、`TickWorldTimers` handler 与服务里每秒 `Sync_TickWorldTimers` 的循环；World 的 10 个定时器用例断言不变（三处内部字段改为公开 API / 驱动索引），作为生成器的回归。新手工程场景（第四轮“限时 Buff 到期”）由生成工程端到端用例覆盖，并写进生成工程新手手册 §3.6。game 服务多一个 Mod，生成的 `shutdown.total_timeout` 由 114s 变为 117s。
+- **测试**：core（`driver_test.go` / `host_test.go` / `nest_test.go`，`-race`）与生成器（`add_timer_test.go`，含 `TestEntityTimerGeneratedProjectEndToEnd`：生成工程经真实 Nest 引擎、wiring/entitytimer 与生成的 Tick handler，可控业务时钟、显式 `DeliverDue`，覆盖在线到期一次、周期续期、离线错过十个周期加载后只触发一次且参数正确、卸载后不投递不加载、重载后 ID 不复用、多定时器最早期限、删档不触发）。修前红：`a56d5965` 上 `roost add timer --entity Player` 报 `invalid timer name ""`（`TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks` 同样失败）。变异核对（各自让对应用例变红）：提交前立即报告 → `TestHostReportsThroughNestTransactions`（`after a rolled-back arm: nodes 0, pending 1`）；接受旧报告 → `TestDriverDropsStaleReports`；不核对实例 → `TestDriverValidatesTheOwnerBeforeDelivering`（`delivered 3, want only the owner that is still loading`）；关闭后仍接受报告 → `TestDriverNeverDeliversToAClosedOwner`；`Overdue` 恒为假 → `TestHostFiresAnOverdueTimerOnceAfterLoad`；加载时不报告 → 生成工程端到端（`after load the index holds 0001-01-01 00:00:00 +0000 UTC false, want the missed deadline`）。
+
+以下为决定前的原始登记。
 
 **现状（基线 `300d728a`，已核对源码）**：
 
