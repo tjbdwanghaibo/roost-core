@@ -1,0 +1,110 @@
+{
+  "Variant": "steps",
+  "Mode": "forward",
+  "Rate": 5,
+  "Planned": 900,
+  "Started": 900,
+  "Completed": 900,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 180,
+  "ElapsedSeconds": 180.210546791,
+  "CompletionTPS": 4.994158311076982,
+  "P50MS": 497.72925,
+  "P95MS": 632.959916,
+  "P99MS": 667.492791,
+  "MaxMS": 789.168541,
+  "Server": {
+    "Samples": 900,
+    "P50MS": 440,
+    "P95MS": 593,
+    "P99MS": 628,
+    "MaxMS": 754
+  },
+  "StartCall": {
+    "Samples": 900,
+    "P50MS": 14.767709,
+    "P95MS": 21.145791,
+    "P99MS": 24.347458,
+    "MaxMS": 42.531833
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 300,
+      "P50MS": 514.236458,
+      "P99MS": 703.63425,
+      "MaxMS": 789.168541,
+      "ServerP99MS": 645
+    },
+    {
+      "Minute": 1,
+      "Count": 300,
+      "P50MS": 472.968708,
+      "P99MS": 664.174666,
+      "MaxMS": 668.869166,
+      "ServerP99MS": 612
+    },
+    {
+      "Minute": 2,
+      "Count": 300,
+      "P50MS": 477.384875,
+      "P99MS": 658.059625,
+      "MaxMS": 776.848541,
+      "ServerP99MS": 610
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 900,
+      "P50MS": 15.826291,
+      "P95MS": 32.001584,
+      "P99MS": 51.986708,
+      "MaxMS": 94.736875
+    },
+    "debit": {
+      "Samples": 900,
+      "P50MS": 14.920084,
+      "P95MS": 31.040583,
+      "P99MS": 41.903667,
+      "MaxMS": 89.064459
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 899,
+      "P50MS": 196.235291,
+      "P95MS": 303.4775,
+      "P99MS": 340.59525,
+      "MaxMS": 422.128459
+    },
+    "debit": {
+      "Samples": 899,
+      "P50MS": 202.020917,
+      "P95MS": 264.130167,
+      "P99MS": 285.060791,
+      "MaxMS": 332.494416
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 2,
+  "FinalProjector": {
+    "Committed": 1800,
+    "Projected": 1800,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0
+  },
+  "Statuses": {
+    "4": 900
+  },
+  "Mismatches": null
+}

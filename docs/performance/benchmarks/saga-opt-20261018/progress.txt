@@ -1,0 +1,84 @@
+16:48:12 start base-forward5-r1
+16:51:16 end base-forward5-r1 rc=0
+16:51:16 start s1-forward5-r1
+16:54:26 end s1-forward5-r1 rc=0
+16:54:26 start s2-forward5-r1
+16:57:36 end s2-forward5-r1 rc=0
+16:57:36 start s3-forward5-r1
+17:00:46 end s3-forward5-r1 rc=0
+17:00:46 start base-compensate3-r1
+17:03:49 end base-compensate3-r1 rc=0
+17:03:49 start s1-compensate3-r1
+17:06:58 end s1-compensate3-r1 rc=0
+17:06:58 start s2-compensate3-r1
+17:10:06 end s2-compensate3-r1 rc=0
+17:10:06 start s3-compensate3-r1
+17:13:15 end s3-compensate3-r1 rc=0
+17:13:15 start s3-forward5-r2
+17:16:24 end s3-forward5-r2 rc=0
+17:16:24 start s2-forward5-r2
+17:19:32 end s2-forward5-r2 rc=0
+17:19:32 start s1-forward5-r2
+17:22:41 end s1-forward5-r2 rc=0
+17:22:41 start base-forward5-r2
+17:25:45 end base-forward5-r2 rc=0
+17:25:45 start s3-compensate3-r2
+17:28:54 end s3-compensate3-r2 rc=0
+17:28:54 start s2-compensate3-r2
+17:32:02 end s2-compensate3-r2 rc=0
+17:32:02 start s1-compensate3-r2
+17:35:11 end s1-compensate3-r2 rc=0
+17:35:11 start base-compensate3-r2
+17:38:15 end base-compensate3-r2 rc=0
+17:38:15 start s1-forward5-nohops
+17:41:18 end s1-forward5-nohops rc=0
+17:41:18 start base-forward10-sat
+17:44:19 end base-forward10-sat rc=1
+17:44:19 start s2-forward10-sat
+17:47:37 end s2-forward10-sat rc=1
+17:47:37 start s3-forward10-sat
+17:50:17 end s3-forward10-sat rc=1
+17:50:17 start s3-compensate5-sat
+17:52:33 end s3-compensate5-sat rc=0
+17:52:33 start s2-compensate5-sat
+17:54:54 end s2-compensate5-sat rc=1
+17:54:54 start base-compensate5-sat
+17:57:30 end base-compensate5-sat rc=1
+17:57:30 start base-forward20-sat
+18:00:28 end base-forward20-sat rc=1
+18:00:28 start s1-forward20-sat
+18:05:09 end s1-forward20-sat rc=1
+18:05:09 start s2-forward20-sat
+18:07:53 end s2-forward20-sat rc=1
+18:07:53 start s3-forward20-sat
+18:10:35 end s3-forward20-sat rc=1
+18:10:35 start s3-compensate10-sat
+18:13:31 end s3-compensate10-sat rc=1
+18:13:31 start s2-compensate10-sat
+18:17:07 end s2-compensate10-sat rc=1
+18:17:07 start s1-compensate10-sat
+18:20:09 end s1-compensate10-sat rc=1
+18:20:09 start base-compensate10-sat
+18:23:08 end base-compensate10-sat rc=1
+18:23:08 start s2-forward5-hot
+18:24:16 end s2-forward5-hot rc=0
+18:24:16 start s3-forward5-hot
+18:25:23 end s3-forward5-hot rc=0
+18:25:23 ALL DONE
+18:53:49 start base-forward7-ceil
+18:56:35 end base-forward7-ceil rc=1
+18:56:35 start s3-forward7-ceil
+18:58:46 end s3-forward7-ceil rc=0
+18:58:46 start s3-forward8-ceil
+19:00:59 end s3-forward8-ceil rc=0
+19:00:59 start s2-forward8-ceil
+19:04:08 end s2-forward8-ceil rc=1
+19:04:08 start s1-forward8-ceil
+19:07:08 end s1-forward8-ceil rc=1
+19:07:08 start base-forward8-ceil
+19:10:38 end base-forward8-ceil rc=1
+19:10:38 start base-compensate4-ceil
+19:12:42 end base-compensate4-ceil rc=0
+19:12:42 start s3-compensate4-ceil
+19:14:51 end s3-compensate4-ceil rc=0
+19:14:51 ALL DONE 2

@@ -20,6 +20,8 @@
 4. 提交结果未知 fence；成功 WAL 回复不等于 Mongo 已落库。
 5. 删过档（全部 DAO 只剩墓碑；Remote 托管 kind 看元数据墓碑）是 `ErrEntityAggregateDeleted`，不满足 not found（D10，只守 GetOrCreate）。直接 Create 不读存储，靠“必须用 id-gen 新 ID”的约束；不能为让重建成功而放宽版本条件、在投影时跳过冲突或覆盖墓碑。
 
+6. outbox 由两样东西驱动：投影器在一个单元把 effect 暂存进 outbox（事务已提交、未被 fence 跳过）后同步调用 `ProjectorOptions.OnEffectsStaged`，`Assembly.Start` 把它接到 `OutboxWorker.Kick`（容量 1 的唤醒通道：多次合并、空闲循环先醒、`RunOnce` 期间到达的唤醒留到下一轮，不丢）；`PollInterval` 轮询保留为兜底（重试退避到期、别的进程的 effect）。唤醒只是提示，不改投影 / checkpoint 的顺序与持久语义；outbox 先于 Projector 构造，唤醒在回放开始前接好。回归：`TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll`（正式装配、轮询 1 小时）、`TestOutboxKickWakesALoopCoalescesAndStopsCleanly`。
+
 ## 2A. 聚合恢复与投影实现走读
 
 [EntityRepository](../../../framework/dataengine/engine/entity_repository.go)的Load合并同ID并发flight，等待该实体必要投影后进入loadAggregate。loadAggregate读取builder与完整一致性视图，先遍历全部DAO的Descriptor/SchemaVersion，再进行RestorePersisted与身份校验；只有所有DAO成功后，才RunLocal创建并发布实体及loaded hooks。前一DAO已解码、后一DAO失败时不能提前发布半实体。
@@ -250,7 +252,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [lease_fence_skip_promises_test.go](../../../framework/dataengine/engine/lease_fence_skip_promises_test.go)：`TestFencedLocalStepSkippedAfterLeaseExpiryDoesNotFenceNextTransaction`、`TestFencedLocalStepAppliedReleasesBarrierWithoutEviction`、`TestFencedStepRedeliveryWaitsOnlyUntilThePreviousRecordSettles`、`TestFencedStepBarrierIsReleasedOnEveryExit`、`TestFencedStepSkippedDuringStartupRecoveryNeedsNoEviction`；其余 1 项见文件
 - [mongo_benchmark_test.go](../../../framework/dataengine/engine/mongo_benchmark_test.go)
 - [mongo_store_test.go](../../../framework/dataengine/engine/mongo_store_test.go)：`TestMongoStoreUsesAbsoluteExpiryForReceipts`、`TestMongoStoreLeaseFenceSkipsStaleSagaTransaction`、`TestMongoStoreLeaseFenceRejectsExpiredLease`、`TestMongoStoreRefusesARetiredRemoteLeaseFenceRecordWithoutWriting`、`TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken`；其余 27 项见文件
-- [outbox_test.go](../../../framework/dataengine/engine/outbox_test.go)：`TestOutboxCloseBeforeStartIsTerminal`、`TestOutboxConcurrentStartClose`、`TestOutboxRetryDelayStartsAfterFailedPublish`、`TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreSkipsEffectsNotYetAvailable`；其余 12 项见文件
+- [outbox_test.go](../../../framework/dataengine/engine/outbox_test.go)：`TestOutboxCloseBeforeStartIsTerminal`、`TestOutboxConcurrentStartClose`、`TestOutboxRetryDelayStartsAfterFailedPublish`、`TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreSkipsEffectsNotYetAvailable`；其余 14 项见文件（含投影后唤醒的两项）
 - [projection_test.go](../../../framework/dataengine/engine/projection_test.go)：`TestPlanProjectionSegmentsPreservesMixedOrder`、`TestBatchProjectionEligibilityMatchesMongoContract`、`TestPlanProjectionSegmentsBoundsOrdinaryBatches`、`TestPlanProjectionSegmentsHonorsMaxRecords`、`TestPlanProjectionSegmentsPreservesEveryRecordAndFence`；其余 17 项见文件
 - [projector_benchmark_test.go](../../../framework/dataengine/engine/projector_benchmark_test.go)
 - [projector_remote_test.go](../../../framework/dataengine/engine/projector_remote_test.go)：`TestRemoteProjectionIndependentEntityCompletesWhileFirstBlocked`、`TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix`、`TestRemoteProjectionWindowBoundaries`、`TestRemoteProjectionCheckpointFailureKeepsWindow`、`TestRemoteProjectionRefillsWhileFirstRecordIsBlocked`；其余 4 项见文件

@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Saga 原生步骤性能优化：逐跳打点、投影后唤醒 outbox、去冗余读、等回执移出 durable 回调（2026-10-18）
+
+- **决定**：维护者 2026-10-18 批准“按推荐处理”——先逐跳打点，再做第一档两项，然后做第二档第 3 项；第二档第 4 项（同 durable 按实体并发）与第三、四档本轮不做。
+- **逐跳打点**：新增 `internal/hoptrace`（只给性能夹具用：未安装 Recorder 时每个计时点一次原子读、不读时钟、不分配）。协调器、saga outbox、步骤消费者、DataEngine（WAL 追加、投影、checkpoint、outbox）、结果消费者各跳加计时点；夹具在建连接前安装时 Mongo 连接带命令监视器（按命令名计往返）。夹具 B 以 `ROOST_STEPS_PERF_HOPS=1` 输出每跳分位与每笔次数 / 耗时，`ROOST_STEPS_PERF_PAIRS=1` 是热点实体档。
+- **DataEngine：投影暂存 effect 后唤醒 outbox**。`ProjectorOptions.OnEffectsStaged`（一个单元的 effect 已随投影事务暂存、未被 fence 跳过时同步调用）由 `Assembly.Start` 接到新增的 `OutboxWorker.Kick`（容量 1 的唤醒，多次合并、空闲循环先醒、不丢）；`dataengine.outbox.poll_interval` 轮询保留为兜底。投影 / checkpoint 顺序与持久语义不变。实测 outbox“暂存 → 发布”P50 71 → 13 ms。
+- **saga：`MongoStore.Apply` 关闭操作只读一次 tombstone**（同一事务里原来读两次）。`Engine.Complete` 事务外的 `store.Get` 是乐观并发的唯一读，保留并补注释。
+- **nats：`JetStreamMsg.DeferSettle`**（显式选项，不调用时行为不变）：handler 推迟结算后返回 nil，回调立即处理下一条；`settle(nil)` ack、`settle(err)` 与返回 err 同规则 nak / term，幂等；推迟后 handler 仍返回错误或 panic 时按错误立即结算；订阅 `Closed` 在推迟的结算全部完成后才关闭（Drain 等后台 ack，Stop 取消 handler ctx）。
+- **saga：原生步骤消费者把“等回执可见 → 结算状态文档 → ack”移出 durable 的串行回调**。回调只做 Reserve + 步骤体，等待在后台，同时等待数受新增的 `StepConsumerConfig.ReceiptWaiters`（缺省 min(32, MaxAckPending)，不得超过 MaxAckPending）约束、满了回压。恰好一次、租约 / fence、截止过期分支、毒消息、Drain 语义不变；投影停顿不再挡住同 durable 后续命令。**行为变化**：同 durable 上同一实体的前后命令、前一条还没投影时，后一条撞实体屏障（`ErrFencedEntityPending`，交还租约、退避 nak 重投），不再在 durable 上排队。
+- **性能**（[报告](docs/performance/SAGA-OPT-20261018.md)，同机四阶段交替）：持续档 Server P50 正向 440 / 399 → 278 / 314 ms、全补偿 597 / 610 → 352 / 424 ms；吞吐上限未到正向 10/s（四阶段在正向 10/s、全补偿 10/s 都崩溃），正向 7～8/s、全补偿 5/s 从有终态不对变为全部正确、延迟秒级；新的第一瓶颈是投影器逐条处理带回执 / effect 的记录（checkpoint 负载下 50～55 ms）。生成器骨架（`steps.go` 注释、`roost help saga`、`add saga` next 提示、effect 消费者注释）与 codegen 文档的容量数字按新实测更新。
+- **测试（先红后绿）**：`TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll`、`TestOutboxKickWakesALoopCoalescesAndStopsCleanly`、`TestMongoApplyClosingAnOperationReadsItsTombstoneOnce`、`TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback`、`TestNativeStepReceiptWaitersAreBounded`、driver 推迟结算三项与 `TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain`、`TestUninstalledTracePointsDoNotAllocate`；`TestRealStepsRunNativeStepsUnderTheRealNestScheduler` 改按“未被实体屏障挡回的执行”计次数。
+- **升级**：不改存储格式与线格式；`StepConsumerConfig` / `JetStreamMsg` / `ProjectorOptions` 只增字段，自定义 `IJetStream` 实现不设 `DeferSettle` 时原生步骤消费者退回在回调里等。先停旧再起新即可。
+- 文档：性能报告、KNOWN-LIMITS“Saga 原生步骤容量”、guide / impl 06-saga、guide / impl 03-dataengine、guide / impl 14-foundation、performance/README、DESIGN-TODO D12 注记、codegen 文档。
+
 ### `roost add saga -native` 与 `roost add effect`（DESIGN-TODO D12 方向 B）；原生步骤容量按 A 文档化
 
 - **决定**：维护者 2026-10-18 批准 D12 方向 B（生成器）开工；“原生步骤单进程容量”按推荐的 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批。

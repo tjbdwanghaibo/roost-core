@@ -1,0 +1,124 @@
+{
+  "Variant": "steps",
+  "Mode": "compensate",
+  "Rate": 3,
+  "Planned": 540,
+  "Started": 540,
+  "Completed": 540,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 180,
+  "ElapsedSeconds": 180.406053375,
+  "CompletionTPS": 2.993247675994176,
+  "P50MS": 643.268084,
+  "P95MS": 715.118251,
+  "P99MS": 853.940334,
+  "MaxMS": 1167.961834,
+  "Server": {
+    "Samples": 540,
+    "P50MS": 597,
+    "P95MS": 664,
+    "P99MS": 796,
+    "MaxMS": 1128
+  },
+  "StartCall": {
+    "Samples": 540,
+    "P50MS": 12.1285,
+    "P95MS": 18.5015,
+    "P99MS": 21.658584,
+    "MaxMS": 27.303125
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 180,
+      "P50MS": 646.933584,
+      "P99MS": 788.638292,
+      "MaxMS": 798.69975,
+      "ServerP99MS": 745
+    },
+    {
+      "Minute": 1,
+      "Count": 180,
+      "P50MS": 641.379626,
+      "P99MS": 938.995333,
+      "MaxMS": 1167.961834,
+      "ServerP99MS": 887
+    },
+    {
+      "Minute": 2,
+      "Count": 180,
+      "P50MS": 640.290376,
+      "P99MS": 753.837792,
+      "MaxMS": 756.522042,
+      "ServerP99MS": 706
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 540,
+      "P50MS": 9.764541,
+      "P95MS": 28.868208,
+      "P99MS": 42.336125,
+      "MaxMS": 47.932417
+    },
+    "debit": {
+      "Samples": 540,
+      "P50MS": 15.529375,
+      "P95MS": 30.070417,
+      "P99MS": 39.15575,
+      "MaxMS": 49.012417
+    },
+    "refund": {
+      "Samples": 540,
+      "P50MS": 12.736875,
+      "P95MS": 23.715458,
+      "P99MS": 26.871625,
+      "MaxMS": 34.017459
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 539,
+      "P50MS": 320.003583,
+      "P95MS": 408.212541,
+      "P99MS": 425.683708,
+      "MaxMS": 511.028167
+    },
+    "debit": {
+      "Samples": 539,
+      "P50MS": 334.473042,
+      "P95MS": 366.486166,
+      "P99MS": 377.061375,
+      "MaxMS": 401.39625
+    },
+    "refund": {
+      "Samples": 539,
+      "P50MS": 323.983666,
+      "P95MS": 402.924833,
+      "P99MS": 429.317417,
+      "MaxMS": 539.888958
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 2,
+  "FinalProjector": {
+    "Committed": 1620,
+    "Projected": 1620,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0
+  },
+  "Statuses": {
+    "5": 540
+  },
+  "Mismatches": null
+}

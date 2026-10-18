@@ -25,7 +25,7 @@
 | misc | 整数约束、hash 等叶子工具 | 输入范围和溢出按具体类型约束 |
 | migration | 显式版本步骤 Registry | 调用方管理步骤和落库；不再由 EntityRepository 自动迁移 DAO schema |
 | etcd、etcd/driver | 发现、选举、watch 与具体驱动 | 服务发现不等于实体写权限；连接、重订与关闭由 Mod 管理 |
-| nats、nats/driver | 消息/JetStream 契约和驱动 | ACK/NAK/Term、最大投递、关闭状态；不同业务定义不同错误结算 |
+| nats、nats/driver | 消息/JetStream 契约和驱动 | ACK/NAK/Term、最大投递、关闭状态；不同业务定义不同错误结算；`JetStreamMsg.DeferSettle` 显式把结算推迟到后台（不调用时按 handler 返回值自动结算），订阅 `Closed` 等推迟的结算完成 |
 | mongo、redis 及 driver | 数据库契约和具体客户端 | 写结果未知保留；驱动与接口分包，core 契约不反向链接具体驱动 |
 | bus、servicerpc | 服务间调用和 RPC 运行能力 | 传输成功、业务成功、幂等与 affinity 分开 |
 | ownerroute | 所有者路由 | 路由提示不能替代持久 fence 校验 |

@@ -1,0 +1,130 @@
+{
+  "Variant": "steps",
+  "Mode": "forward",
+  "Rate": 10,
+  "Planned": 1200,
+  "Started": 1200,
+  "Completed": 1200,
+  "WrongTerminal": 963,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 120,
+  "ElapsedSeconds": 176.997430583,
+  "CompletionTPS": 6.77975943519293,
+  "P50MS": 35012.977208,
+  "P95MS": 38190.423542,
+  "P99MS": 38731.381917,
+  "MaxMS": 58623.164958,
+  "Server": {
+    "Samples": 1200,
+    "P50MS": 34944,
+    "P95MS": 38134,
+    "P99MS": 38681,
+    "MaxMS": 58603
+  },
+  "StartCall": {
+    "Samples": 1200,
+    "P50MS": 17.096417,
+    "P95MS": 25.902333,
+    "P99MS": 36.593,
+    "MaxMS": 809.514083
+  },
+  "BusinessVerified": false,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 600,
+      "P50MS": 33121.362208,
+      "P99MS": 38203.537583,
+      "MaxMS": 38585.081417,
+      "ServerP99MS": 38171
+    },
+    {
+      "Minute": 1,
+      "Count": 600,
+      "P50MS": 36667.961708,
+      "P99MS": 38820.503417,
+      "MaxMS": 58623.164958,
+      "ServerP99MS": 38778
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 238,
+      "P50MS": 23.456167,
+      "P95MS": 71.717792,
+      "P99MS": 96.302584,
+      "MaxMS": 107.850583
+    },
+    "credit-undo": {
+      "Samples": 1,
+      "P50MS": 13.762333,
+      "P95MS": 13.762333,
+      "P99MS": 13.762333,
+      "MaxMS": 13.762333
+    },
+    "debit": {
+      "Samples": 2049,
+      "P50MS": 17.677625,
+      "P95MS": 45.830792,
+      "P99MS": 63.91875,
+      "MaxMS": 114.960708
+    },
+    "refund": {
+      "Samples": 99,
+      "P50MS": 20.667583,
+      "P95MS": 103.419416,
+      "P99MS": 123.852959,
+      "MaxMS": 123.852959
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 237,
+      "P50MS": 236.014791,
+      "P95MS": 2934.766583,
+      "P99MS": 4189.566125,
+      "MaxMS": 6747.019458
+    },
+    "debit": {
+      "Samples": 2048,
+      "P50MS": 62.028375,
+      "P95MS": 161.808083,
+      "P99MS": 216.891,
+      "MaxMS": 1191.575916
+    },
+    "refund": {
+      "Samples": 98,
+      "P50MS": 203.542834,
+      "P95MS": 5226.030916,
+      "P99MS": 7704.039125,
+      "MaxMS": 7704.039125
+    }
+  },
+  "BodyErrors": {
+    "debit: fenced_entity_pending": 37,
+    "debit: nest: sync canceled\ncontext deadline exceeded": 1226,
+    "refund: fenced_entity_pending": 1
+  },
+  "ProjectionBacklogMax": 7,
+  "FinalProjector": {
+    "Committed": 1741,
+    "Projected": 1741,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 38,
+    "StaleEvictions": 1059
+  },
+  "Statuses": {
+    "4": 237,
+    "5": 98,
+    "6": 862,
+    "7": 3
+  },
+  "Mismatches": null
+}

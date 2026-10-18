@@ -1,0 +1,10 @@
+import json,sys
+r=json.load(open(sys.argv[1])); h=r['Hops']; idle=r.get('IdlePerSecond',{}); rate=r['Rate']
+e2e=r['Server']['P50MS']
+print(f"# {sys.argv[1]} server_p50={e2e} p50={r['P50MS']}")
+print("| 跳 | 次/笔 | P50 | P95 | P99 | ms/笔 |")
+print("| --- | --- | --- | --- | --- | --- |")
+for k in sorted(h):
+    v=h[k]
+    print(f"| {k} | {v['PerSaga']:.2f} | {v['P50MS']:.1f} | {v['P95MS']:.1f} | {v['P99MS']:.1f} | {v['PerSagaMS']:.1f} |")
+print("idle/s:", {k:v for k,v in idle.items()})

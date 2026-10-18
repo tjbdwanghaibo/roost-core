@@ -1,0 +1,4 @@
+--- FAIL: TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback (5.02s)
+    consumer_nak_maxdeliver_real_integration_test.go:310: step body for defer-b did not run within 5s while defer-a waited for its receipt (deadline 30s): the receipt wait still holds the durable callback
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	5.720s

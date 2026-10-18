@@ -1,0 +1,116 @@
+{
+  "Variant": "steps",
+  "Mode": "compensate",
+  "Rate": 4,
+  "Planned": 480,
+  "Started": 480,
+  "Completed": 480,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 120,
+  "ElapsedSeconds": 120.449134084,
+  "CompletionTPS": 3.985084688655818,
+  "P50MS": 904.492084,
+  "P95MS": 1733.613834,
+  "P99MS": 2056.894334,
+  "MaxMS": 2088.39,
+  "Server": {
+    "Samples": 480,
+    "P50MS": 858,
+    "P95MS": 1707,
+    "P99MS": 2012,
+    "MaxMS": 2063
+  },
+  "StartCall": {
+    "Samples": 480,
+    "P50MS": 15.389125,
+    "P95MS": 22.577583,
+    "P99MS": 26.244167,
+    "MaxMS": 57.657959
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 240,
+      "P50MS": 865.834,
+      "P99MS": 1218.327125,
+      "MaxMS": 1234.972417,
+      "ServerP99MS": 1168
+    },
+    {
+      "Minute": 1,
+      "Count": 240,
+      "P50MS": 935.511209,
+      "P99MS": 2078.048042,
+      "MaxMS": 2088.39,
+      "ServerP99MS": 2032
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 480,
+      "P50MS": 18.684958,
+      "P95MS": 40.755375,
+      "P99MS": 55.717458,
+      "MaxMS": 90.897333
+    },
+    "debit": {
+      "Samples": 480,
+      "P50MS": 19.542,
+      "P95MS": 41.881417,
+      "P99MS": 66.015292,
+      "MaxMS": 74.160875
+    },
+    "refund": {
+      "Samples": 480,
+      "P50MS": 17.83525,
+      "P95MS": 32.705459,
+      "P99MS": 41.929709,
+      "MaxMS": 54.026125
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 479,
+      "P50MS": 252.927666,
+      "P95MS": 373.882208,
+      "P99MS": 426.237167,
+      "MaxMS": 566.05825
+    },
+    "debit": {
+      "Samples": 479,
+      "P50MS": 249.776625,
+      "P95MS": 302.90075,
+      "P99MS": 338.915208,
+      "MaxMS": 417.334
+    },
+    "refund": {
+      "Samples": 479,
+      "P50MS": 250.948667,
+      "P95MS": 424.510333,
+      "P99MS": 470.751042,
+      "MaxMS": 657.814458
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 3,
+  "FinalProjector": {
+    "Committed": 1440,
+    "Projected": 1440,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0
+  },
+  "Statuses": {
+    "5": 480
+  },
+  "Mismatches": null
+}
