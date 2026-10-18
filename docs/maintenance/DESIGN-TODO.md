@@ -15,6 +15,7 @@
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
+| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 待维护者决定（2026-10-18 登记） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -247,3 +248,25 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 **建议**：先做 B——到期规则与持久化留在业务自己的 DAO 与事务里（与 World 参考实现同一形状，不扩大 Nest 契约），生成器消除复制和驱动写错的风险；B 在 game-demo 与新手工程里稳定、确认“已加载实体按最早期限投递”的驱动形状之后，再评估是否把驱动下沉到 Nest（C）。A 可作为 B 落地前的过渡立刻写。须等进行中的 Scheduler 重构合入后再动。
 
 **需要拍板**：1）选 A / B / C；2）离线实体的到期语义——下次加载时补触发是否可接受，还是需要“离线也准点”（那要一个按期限扫描存储的全局驱动，超出本条范围）；3）第一版驱动是否允许每秒轮询全部在线实体（实现最简单，代价是每秒 N 条 Nest 消息）。
+
+## D12 Saga 原生实体步骤与事务性 effect 消费者的生成支持
+
+**状态：待维护者决定**（2026-10-18 登记，来源：新用户试用第六轮登记项 2，见 [KNOWN-LIMITS](KNOWN-LIMITS.md)）。
+
+**现状（已核对当前源码）**：
+
+- `roost add saga` 生成 `saga/<name>/definition.go`：定义、`Register`、`EmitStart`、步骤 topic 常量，以及每一步的 `Subscribe<Step>` / `Subscribe<Step>Compensation`，**只走 Mongo 步骤**（`saga.SubscribeMongoStep`）。注释点名“业务是 Nest 事务的步骤用 `saga.SubscribeDataEngineStep`”，但不生成。
+- 原生步骤要业务自己拼的东西（框架 API 都在，缺的是组装）：从 Registry 取 JetStream / Mongo / Nest 客户端；按 saga Mod 的声明取流与前缀（`kitsaga.StreamSettings`）和 DataEngine 库名（`kitdataengine.EffectSettings`）；建 `saga.NewJetStreamPublisher`、`saga.NewDataEngineStepInbox`（Owner、LeaseDuration 要长过 AckWait）；每个 topic 一个 durable 调 `SubscribeDataEngineStep`；StepHandler 从 ctx 取 `saga.ReservationFromContext`，把 Command + Reservation 带进 Nest handler，在事务里 `inbox.Bind` 再 `saga.EmitCompletion`（demo 的 `gift.NativeStep.Complete`，约 50 行，内容与业务无关）。
+- game-demo 的送礼接线 `internal/service/game/gift_saga.go` 共 661 行（其中注释约 280 行）：组装与订阅循环约 125 行，**按 sid 静态绑定玩家带来的准入与转交**（`admitOwned`、`ownerroute` 转交、`runHandoff`）约 300 行，四个步骤体约 140 行。转交那部分是 demo 的玩家分片拓扑决定的，生成器不该替业务猜；组装、`NativeStep` 与订阅循环是每个工程都一样的胶水。
+- 事务性 outbox（`nest.Emit` 的 effect + `nestwal.NewMongoEffectInbox` + `nestwal.SubscribeJetStreamEffects`）只有 demo 的升级发邮件（`level_up_mail.go`，107 行）一个样例，生成器没有对应命令；effect 的类型与 topic 常量在 `game/effects` 里手写。
+- 结果：跨服务副作用的两条正路都要照 demo 大段手写；更省事的写法是“事务后尽力调用 + 幂等 ID”，崩溃时少一笔（demo 的排行提交就这样写，并在注释里说明了代价）。
+
+**可选方向**：
+
+- **A 框架补齐胶水（不改生成器）**：把 `NativeStep`（Bind + EmitCompletion）提到 `framework/saga`（例如 `saga.NativeStep` 由 StepHandler 从 ctx 构造、Nest handler 里 `step.Complete(ok, reason)`）；`wiring/saga` 提供按 Mod 声明组装的步骤运行时（例如 `kitsaga.Steps(registry, owner)` 返回已建好的 publisher / 两种 inbox / 流设置，`SubscribeNative(topic, handler, admit)`、`SubscribeMongo(...)`，`Drain` 统一停止）；`wiring/dataengine` 提供 `SubscribeEffects(registry, topic, durable, handler)`（内含 Mongo effect inbox 与流设置）。demo 改用它们作为验收。代价：几个公开 API 与对应测试；业务仍手写 Nest handler、订阅调用与（如有）准入 / 转交；生成物不变。预计 demo 组装部分从约 125 行降到约 20 行，`gift.NativeStep` 删除。
+- **B 在 A 之上加生成器**：`roost add saga ... -native debit,refund`（或按步骤标注）为原生步骤生成 `Subscribe<Step>Native` 与带 `saga.NativeStep` 参数的 Nest handler 骨架（业务文件，只建一次）及服务 Init 里的订阅接线；`roost add effect <topic> --consumer <service>` 生成 effect 载荷类型与 topic 常量、`Emit` 辅助与消费者骨架。代价：新的 CLI 形状、模板、fixture 与生成工程端到端测试要长期维护；多进程分片时的准入（`Admit`）仍要业务补，骨架只能留明确的 TODO 与说明；依赖 A 的 API，A 不先稳定就会生成一批随后要迁移的代码。
+- **C 只写文档**：在 guide/06-saga 与生成工程文档里加“跨服务副作用的两条正路”手册，逐段对照 demo 文件。代价最低，不减少手写量，demo 改动时文档容易过时。
+
+**建议**：先做 **A**（胶水进框架、demo 作为第一个调用方验证），A 落地后再决定是否做 B。理由：缺的主要是与业务无关的组装和 `NativeStep`，放进框架后手写量降到“handler + 一次订阅调用”，生成器即使以后要做也只是薄薄一层；直接做 B 会把今天 demo 的胶水形状固化进模板。准入 / 转交属于玩家分片拓扑，A、B 都不替业务决定。
+
+**需要拍板**：1）选 A / B / C（或 A 后接 B）；2）若做 A，`NativeStep` 放 `framework/saga` 还是生成到业务包（影响 Nest handler 签名能否引用框架类型）；3）若做 B，effect 命令是否与 saga 命令同批交付。
