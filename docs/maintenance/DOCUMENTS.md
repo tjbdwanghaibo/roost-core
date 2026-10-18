@@ -87,6 +87,7 @@
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
 - [REFACTOR-2026-10-17-timer-scheduler.md](REFACTOR-2026-10-17-timer-scheduler.md)：timer.Scheduler 用节点状态替代 Tick 期间推迟闭包的重构方案（状态表、操作 × 状态矩阵、语义对照、panic 语义、性能预期）
+- [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
 - [DOCUMENTS.md](DOCUMENTS.md)：本清单
 
