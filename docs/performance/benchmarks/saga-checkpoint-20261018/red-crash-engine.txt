@@ -1,0 +1,5 @@
+--- FAIL: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (0.57s)
+    lease_fence_integration_test.go:259: first pass n=1 acks=1 err=process exited before the checkpoint reached the disk; want all 3 special records projected before one merged checkpoint
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.148s
+FAIL

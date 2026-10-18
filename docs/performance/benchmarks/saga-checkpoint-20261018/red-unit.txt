@@ -1,0 +1,16 @@
+--- FAIL: TestMultiBatchCapabilityAndSpecialBoundaries (0.10s)
+    batch_limits_test.go:49: capable=true events=[batch:2 ack project:00000000000000000000000000000003 ack project:00000000000000000000000000000004 ack] want=[batch:2 project:00000000000000000000000000000003 project:00000000000000000000000000000004 ack]
+--- FAIL: TestSpecialRecordsShareCheckpointThresholds (0.52s)
+    --- FAIL: TestSpecialRecordsShareCheckpointThresholds/end (0.10s)
+        batch_limits_test.go:129: checkpoint acks=8 want=1
+    --- FAIL: TestSpecialRecordsShareCheckpointThresholds/count (0.10s)
+        batch_limits_test.go:129: checkpoint acks=8 want=3
+    --- FAIL: TestSpecialRecordsShareCheckpointThresholds/time (0.11s)
+        batch_limits_test.go:129: checkpoint acks=8 want=4
+--- FAIL: TestFastPathRecordStillConfirmsPrecedingSpecialRecords (0.06s)
+    batch_limits_test.go:153: events=[project:00000000000000000000000000000001 ack project:00000000000000000000000000000002 ack project:00000000000000000000000000000003 ack project:00000000000000000000000000000004 ack] want=[project:00000000000000000000000000000001 project:00000000000000000000000000000002 ack project:00000000000000000000000000000003 project:00000000000000000000000000000004 ack]
+--- FAIL: TestSpecialRecordCheckpointLossReplaysTheWholeUnconfirmedPrefix (0.02s)
+    batch_limits_test.go:169: n=1 acks=1 err=process exited before the checkpoint
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.317s
+FAIL

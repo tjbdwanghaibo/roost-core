@@ -1,0 +1,47 @@
+22:17:58 1792333078 idle-start
+22:18:28 1792333108 idle-end
+22:18:29 1792333109 start before-forward5-r1 load={ 4.30 3.97 3.76 }
+22:21:39 1792333299 end before-forward5-r1 rc=0
+22:21:39 1792333299 start after-forward5-r1 load={ 4.58 4.15 3.87 }
+22:24:48 1792333488 end after-forward5-r1 rc=0
+22:24:48 1792333488 start before-compensate3-r1 load={ 4.57 4.38 4.03 }
+22:27:57 1792333677 end before-compensate3-r1 rc=0
+22:27:57 1792333677 start after-compensate3-r1 load={ 5.24 4.43 4.08 }
+22:31:06 1792333866 end after-compensate3-r1 rc=0
+22:31:06 1792333866 start after-compensate3-r2 load={ 5.23 4.51 4.16 }
+22:34:15 1792334055 end after-compensate3-r2 rc=0
+22:34:15 1792334055 start before-compensate3-r2 load={ 4.05 4.23 4.10 }
+22:37:23 1792334243 end before-compensate3-r2 rc=0
+22:37:23 1792334243 start after-forward5-r2 load={ 3.36 3.94 4.01 }
+22:40:32 1792334432 end after-forward5-r2 rc=0
+22:40:32 1792334432 start before-forward5-r2 load={ 3.68 3.73 3.89 }
+22:43:40 1792334620 end before-forward5-r2 rc=0
+22:43:40 1792334620 start before-forward7-ceil load={ 4.19 3.70 3.83 }
+22:45:49 1792334749 end before-forward7-ceil rc=0
+22:45:49 1792334749 start after-forward7-ceil load={ 3.48 3.68 3.81 }
+22:47:58 1792334878 end after-forward7-ceil rc=0
+22:47:58 1792334878 start before-compensate4-ceil load={ 3.54 3.69 3.79 }
+22:50:06 1792335006 end before-compensate4-ceil rc=0
+22:50:06 1792335006 start after-compensate4-ceil load={ 4.22 3.95 3.89 }
+22:52:15 1792335135 end after-compensate4-ceil rc=0
+22:52:15 1792335135 start before-forward8-ceil load={ 5.04 4.28 4.02 }
+22:56:54 1792335414 end before-forward8-ceil rc=1
+22:56:54 1792335414 start after-forward8-ceil load={ 2.89 3.58 3.78 }
+22:59:03 1792335543 end after-forward8-ceil rc=0
+22:59:03 1792335543 start before-compensate5-ceil load={ 4.49 3.96 3.90 }
+23:01:13 1792335673 end before-compensate5-ceil rc=0
+23:01:13 1792335673 start after-compensate5-ceil load={ 3.83 4.07 3.96 }
+23:03:22 1792335802 end after-compensate5-ceil rc=0
+23:03:22 1792335802 start before-forward10-ceil load={ 4.03 4.11 3.99 }
+23:06:20 1792335980 end before-forward10-ceil rc=1
+23:06:20 1792335980 start after-forward10-ceil load={ 4.29 4.43 4.16 }
+23:08:30 1792336110 end after-forward10-ceil rc=0
+23:08:30 1792336110 start before-compensate10-ceil load={ 6.33 5.01 4.42 }
+23:11:13 1792336273 end before-compensate10-ceil rc=1
+23:11:13 1792336273 start after-compensate10-ceil load={ 4.20 4.63 4.37 }
+23:14:45 1792336485 end after-compensate10-ceil rc=1
+23:14:45 1792336485 start after-forward12-ceil load={ 4.52 4.67 4.42 }
+23:19:23 1792336763 end after-forward12-ceil rc=1
+23:19:24 1792336764 start after-compensate7-ceil load={ 4.10 4.37 4.37 }
+23:21:59 1792336919 end after-compensate7-ceil rc=1
+23:21:59 1792336919 ALL DONE

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# 投影器合并 checkpoint 前后对照（2026-10-18）：只执行事先编好的测试二进制，测量期间不跑其他测试或构建。
+# before = origin/main e90dd4ad；after = perf/projector-checkpoint（特殊记录合并 checkpoint）。夹具 B，ROOST_STEPS_PERF_HOPS=1。
+# 调用方已持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock（本脚本不取不放）。
+set -uo pipefail
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+K=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/ckpt
+B=$K/bin
+OUT=$K/results
+WT=/Users/whb/roost/roost-core-wt-ckpt
+[[ -d "$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock" ]] || { echo "lock not held" >> "$OUT/progress.txt"; exit 2; }
+IOPID=
+cleanup() { [[ -n $IOPID ]] && kill $IOPID 2>/dev/null; pkill -f "iostat -d -w 1 disk0" 2>/dev/null; }
+trap cleanup EXIT
+export GOMAXPROCS=4 ROOST_DATAENGINE_IT=1
+{ go version; echo "before=origin/main e90dd4ad; after=perf/projector-checkpoint"; date; sysctl vm.swapusage; uptime; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu hw.memsize; shasum -a 256 $B/*.test; df -h "$TMPDIR" "$ROOST_DATAENGINE_IT_ROOT"; } > "$OUT/env.txt" 2>&1
+( iostat -d -w 1 disk0 | while IFS= read -r line; do echo "$(date +%s) $line"; done ) > "$OUT/iostat.txt" 2>&1 &
+IOPID=$!
+others() { ps -axo pid,command | grep -E 'go (test|build|run|vet|generate)|/compile |\.test( |$)' | grep -v grep | grep -v "$K/bin"; }
+waitquiet() {
+  local n=0
+  while others >/dev/null; do
+    if (( n == 0 )); then echo "$(date +%T) waiting for other go processes:" >> "$OUT/progress.txt"; others >> "$OUT/progress.txt"; fi
+    n=$((n+1)); sleep 30
+  done
+}
+stamp() { echo "$(date +%T) $(date +%s) $*" >> "$OUT/progress.txt"; }
+run() { local bin=$1 mode=$2 rate=$3 dur=$4 tag=$5
+  local name="$bin-$mode$rate-$tag"
+  waitquiet
+  stamp "start $name load=$(sysctl -n vm.loadavg)"
+  (cd $WT/wiring/saga && ROOST_STEPS_PERF_HOPS=1 ROOST_STEPS_PERF_OUTPUT="$OUT/$name.json" ROOST_STEPS_PERF_VARIANT=steps ROOST_STEPS_PERF_MODE=$mode ROOST_STEPS_PERF_RATE=$rate ROOST_STEPS_PERF_DURATION=$dur \
+    "$B/$bin.test" -test.run '^TestRealNativeStepsPerformance$' -test.count=1 -test.timeout 30m -test.v > "$OUT/$name.log" 2>&1)
+  stamp "end $name rc=$?"
+}
+stamp "idle-start"; sleep 30; stamp "idle-end"
+# 1. 持续档，各 3 分钟，前后交替。
+run before forward 5 3m r1
+run after forward 5 3m r1
+run before compensate 3 3m r1
+run after compensate 3 3m r1
+run after compensate 3 3m r2
+run before compensate 3 3m r2
+run after forward 5 3m r2
+run before forward 5 3m r2
+# 2. 上限档，各 2 分钟，前后相邻。
+for spec in "forward 7" "compensate 4" "forward 8" "compensate 5" "forward 10" "compensate 10"; do
+  set -- $spec
+  run before $1 $2 2m ceil
+  run after $1 $2 2m ceil
+done
+# 3. 修后再往上探。
+run after forward 12 2m ceil
+run after compensate 7 2m ceil
+{ date; uptime; sysctl vm.swapusage; } >> "$OUT/env.txt" 2>&1
+stamp "ALL DONE"

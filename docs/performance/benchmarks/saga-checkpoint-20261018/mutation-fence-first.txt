@@ -1,0 +1,6 @@
+--- FAIL: TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint (0.69s)
+    lease_fence_integration_test.go:355: _dataengine_step_operations changed by the replay:
+    lease_fence_integration_test.go:368: replayed verdict for 32349d991aa0bd880000000000000001: skipped=true err=<nil>, want skipped=false
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.251s
+FAIL

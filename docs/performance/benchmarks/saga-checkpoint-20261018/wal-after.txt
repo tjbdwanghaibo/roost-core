@@ -1,0 +1,54 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	   7700167 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	  10587333 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	   9669986 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	  10653111 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	  10396486 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	  10415042 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	   9996750 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	   9723264 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	  10447500 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	  10398819 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	  10077653 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	   9641514 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	  10364208 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	  10408639 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	  10682653 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	  10646680 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	  10926056 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	  10678819 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	  10396834 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	  11045514 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+BenchmarkProjectorWALReplayAckMatrix/ordinary_only-10         	       3	  10025056 ns/op	         1.000 acks/op	         1.000 batch_calls/op	         0 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_1_percent-10     	       3	   9301278 ns/op	         1.000 acks/op	         3.000 batch_calls/op	         2.000 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/special_10_percent-10    	       3	   9809111 ns/op	         1.000 acks/op	        26.00 batch_calls/op	        25.00 project_calls/op
+BenchmarkProjectorWALReplayAckMatrix/all_special-10           	       3	   9048597 ns/op	         1.000 acks/op	         0 batch_calls/op	       256.0 project_calls/op
+PASS

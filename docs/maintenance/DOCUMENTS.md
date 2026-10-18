@@ -66,6 +66,7 @@
 ## docs/performance
 
 - [README.md](../performance/README.md)：性能验证与复跑入口
+- [SAGA-CHECKPOINT-20261018.md](../performance/SAGA-CHECKPOINT-20261018.md)：投影器对特殊记录合并 checkpoint 的前后对照（真实 WAL 微基准、夹具 B 持续档与上限档、真实 Mongo 崩溃注入回归）
 - [STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准（池名为当时的 fast/slow）
