@@ -87,4 +87,6 @@ Sync 首次可见与客户端恢复：诊断运行加 `-trace-capacity=262144`�
 支持本工具的单次 Hold/Ready，不将多次重置或同 session ID 重开混作一个恢复样本。
 最终固定预算对比、未采纳的短窗口实验和验收结果以实施报告末节为准。
 
-MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生成 Player / Scene DAO 与多实体 Sender，执行组队重放、并发转账去重、拒绝回滚及带版本的切图 4 条 race 场景；不连接外部存储。成功删除临时工程，失败或 `ROOST_MMORPG_KEEP=1` 保留。[接法与边界](../docs/framework/MMORPG-INTEGRATION.md)。
+MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生成 DAO / Entity / Sender 与持久定时器，执行队伍、托管交易、战斗掉落任务、Buff、死亡复活和持久切图的 race 场景；缺省提交器替身。`ROOST_MMORPG_REAL=1` 并提供隔离 `ROOST_DATAENGINE_IT_MONGO_URI` 时增加真实 WAL / Mongo 的两独立进程恢复；固定入口登记在 `integration_coverage_test.go`。成功删除临时工程，失败或 `ROOST_MMORPG_KEEP=1` 保留。
+
+MMORPG 多地图网络接入：`bash scripts/test-mmorpg-scenes.sh`，生成 game-demo 后填业务接法，一个 Manager 配多个 Interest，在真实 TCP 和 Receiver 上校验切图删除 / 全量、held 重试、旧 epoch、重连与字段隐私。`scripts/test-mmorpg-cross-sid.sh` 对已启动的隔离双 sid game-demo 运行真实账号错服拒绝、双向赠礼、邮件重放与失败补偿；资源、端口和命名空间从显式环境变量取得，不启动 / 停止服务、不改 Player sid。[MMORPG 学习与使用手册](../docs/framework/MMORPG-INTEGRATION.md)列出全部参数、业务映射和边界；[SLG 学习与使用手册](../docs/framework/SLG-INTEGRATION.md)独立维护。

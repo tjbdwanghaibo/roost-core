@@ -319,6 +319,14 @@ Sender 后缀仍有一处二次碰撞，已在固定分支修复：`handlerTrade
 - 当前模板新生成 game-demo build / vet 通过，`internal/service/game`、`game/scene/runtime` 与 `cmd/loadtest` race 包回归通过，包含已有真实 loopback TCP 的慢连接、重连和旧 session 隔离；鉴权仍有替身，不扩大为真实客户端认证验收。
 - 首次真实依赖运行因恢复环境中容器已停止，连接 Mongo / NATS 被拒绝，失败保留为环境结果。重新启动原隔离容器后，`scripts/test-demo-generated.sh` 通过，包括新 `add saga -native` / `add effect` 正式生成消费者；Redis Cluster 子用例仍跳过。integration / race 的 `TestRealStepsRunNativeAndMongoStepsThroughTheMods`、`TestRealStepsRunNativeStepsUnderTheRealNestScheduler`、`TestRealSubscribeEffectsDeliversEachEffectOnce` 均实际通过，无 skip；依赖是本机 Mongo 单节点副本集与三节点 NATS。
 
-MMORPG 尚未完成双场景网络切换全链路、动态玩家跨 sid 权威交接、真实客户端及目标密度长稳；Player 当前静态绑定 sid 的设计不因本轮切图纵切改变。后续优先双场景提交后订阅失败重试与重连恢复，不能用 DAO 人数守恒代替 AOI 客户端视图验收。
+## MMORPG 关键场景实施与教学文档
 
-本轮最终 core 全仓 build / vet / test 均退出 0，根包门禁通过；生成无额外跟踪文件漂移。全仓测试中的依赖跳过不算真实服务验收，真实资源结论以上面单独执行的入口为准。
+在 main `36cf8755` 合并基线上继续实践，Player 归属路线由用户明确选为“保持静态 sid，Remote / Saga 协作跨服玩法”。不引入动态迁移 Player 的新协议。main 的有界 receipt waiter / JetStream 延迟结算、投影 effect 唤醒 outbox、World 手写接入实体定时器已核对调用边界；相关 Saga / DataEngine / NATS / EntitySync / Interest 五包 race 通过，五条真实 Mongo / 三节点 NATS 的 Saga、effect 和延迟 ack 回归实际通过，无 skip。没有据此重新声明性能报告中的容量数字。
+
+- `test-mmorpg-generated.sh`：13 条顶层 race 场景实际通过，包括两人队伍解散的旧请求拒绝、托管交易双方确认 / 取消 / 到期 / 竞争、战斗冷却与输入重放、掉落 / 任务幂等、副本死亡 Boss 判定、Buff 刷新 / 回滚 / 离线到期、死亡与延迟复活，以及原有转账和切图回归。规则属于业务夹具，未放入公共生成器。
+- `ROOST_MMORPG_REAL=1`：真实文件 WAL / Mongo，两独立进程；第一阶段停在单方确认，第二阶段冷加载后完成交易，重放击杀 / 领奖并处理离线 Buff。两阶段实际通过、均无 skip，唯一 DAO 库成功后清理。新增入口已登记根包覆盖表。这是干净停启恢复，不是断电注入。
+- `test-mmorpg-scenes.sh`：真实 TCP + 正式 Receiver 检查同坐标跨地图隔离、旧图删除、新图 Full、held 重试、旧 epoch 拒绝、重连按权威归属恢复，以及空间 near 视图不泄露金币 / 经验 / 背包；通过后消费者 build / vet。多个 Interest 共享同一 Manager 保持连接流代际，不拼接独立 Manager 的默认流。
+- 当前模板新生成 game-demo 的 Player / handler / controller / game scene / runtime / loadtest race 包回归通过；十个真实服务 ready，4 名正式账号机器人全部成功、失败 0，覆盖装备、聊天、邮件、活动、排行、支付、匹配和 Lockstep 等 demo 服务链。这是本机功能，非容量 SLO。
+- 两个 game 进程的真实静态 sid 跨服赠礼：正反方向共 4 笔 Saga completed，重复邮件领奖后资产不增加；无效收件人 1 笔 Saga compensated，Mongo 背包为 8 / 2 / 8 / 2。可重复脚本为 `test-mmorpg-cross-sid.sh`，还检查真实会话连错 sid 被拒绝；只对独立开发项目运行，不改 Player sid。当前基线另外复跑 `scripts/test-remote-generated.sh`，正式 Remote / Mirror 功能通过，独立 Mirror 进程入口和压力场景按脚本门变量跳过；不把这些跳过记成已验收，也不拿 Saga 成功代替 Remote fencing 检查。
+
+[SLG](../framework/SLG-INTEGRATION.md)与[MMORPG](../framework/MMORPG-INTEGRATION.md)两份现行文档已整理为业务 / 框架映射、源码阅读顺序、调用方法和运行入口，作为他人学习的长期入口。当前可执行最小接法不代表完整商业游戏：队伍规模、交易物品实例、战斗射程 / 预测、持久技能 Host、真实客户端引擎、目标密度、跨机器故障和长稳需要按游戏规则另行实施 / 验收。按已确认的静态归属路线，动态 Player 跨 sid 迁移不作为本轮缺陷或待补默认能力。
