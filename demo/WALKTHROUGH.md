@@ -50,7 +50,7 @@ AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
   ├─ dao.SetExp / SetLevel                 状态变更
   └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
         ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
-internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每个 EffectID 只处理一次）
+internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
   └─ mail.Send(RequestID = EffectID)       mail 服务按 RequestID 去重：第二层幂等
 ```
 
@@ -61,6 +61,8 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
 - **生产者与消费者读同一组配置键**（`dataengine.database` / `dataengine.effects.*`）、用同一组默认值，两边不会对"effect 在哪"
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
+- 订阅只写处理函数：流、主题前缀、回执库与重投退避由框架的 `kitdataengine.SubscribeEffects` 按 DataEngine Mod 的声明组装。
+  载荷解不开的 effect 标记为毒消息（`kitdataengine.PoisonEffect`）直接丢弃并记 ERROR，不会一直重投；`mail.Send` 失败按退避重投。
 
 ## 邮件：列表与领附件（客户端这一半）
 
@@ -162,15 +164,16 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **开始**：`SendGift`（10013）→ `StartGift` Nest 事务：在 A 的锁内检查背包够不够，然后 `saga.EmitStart`——start 意图和这次事务同一条 WAL 记录，
   Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 完整会话的 SHA-256 摘要 + 帧序号；同一请求得到稳定 ID，重连后的同一帧号属于新请求。不能截断会话前缀：demo 会话以 `demo-玩家ID-时间戳` 命名，前缀可能完全不包含时间戳。
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
-- **步骤**（`internal/service/game/gift_saga.go`，四个消费者，**两种形状**）：
+- **步骤**（`internal/service/game/gift_saga.go`，四个步骤，**两种形状**，登记在框架的步骤运行时 `kitsaga.Steps` 上：
+  收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与准入 / 转交）：
   - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**
-    `saga.SubscribeDataEngineStep`：handler 在自己的 Nest 事务里 `inbox.Bind(command, reservation)` + `saga.EmitCompletion(...)`，
+    `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
     收件人查的是 Player DAO 自己的库和集合（`db.PlayerDaoDBName` / `db.PlayerDaoCollection`，即 DAO 标记的 `db=<工程名>`，例如 `db=planet`），不是 `dataengine.database`——
     后者只给原生步骤的 inbox 用。
-    所以留在 `saga.SubscribeMongoStep`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
+    所以登记为 `Steps.Mongo`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
     见 [Saga 契约](../docs/framework/SAGA.md)），但它只管写进 handler 那笔 Mongo 事务的东西；邮件是 bus 调用，不在事务里，
     被 fence 中止的尝试可能已经发出邮件，所以 mail 服务自己的幂等仍是**必需**的（Send 按 RequestID 去重，RequestID 就是命令的
     IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
@@ -180,13 +183,14 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     只有基础设施错误才返回 error（回滚，让投递退避重试）。
 - **在哪个进程执行**：debit / refund 改的是发送方的 Player，只在发送方绑定的 sid 上执行。`StartGift` 把发起进程的 sid
   写进 saga 状态（`from_sid`；能发起赠礼的玩家一定在本服服务，也就一定绑定在这个 sid 上）。步骤消费者共用一个 durable，
-  落到别的 sid 的进程上时，准入拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它自己认领执行；
+  落到别的 sid 的进程上时，准入（`kitsaga.WithAdmit`）拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它
+  经 `Steps.RunHandedOver` 自己认领执行（框架先核对步骤名与命令主题，再由 demo 复核归属）；
   发送方离线、内存里没有副本也照常执行。没有 `from_sid` 的载荷不能路由，一律拒绝并记 Error。
 - **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
   终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
 - **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →
   `expect_gift compensated`。两条路都在 `loadtest -count 6` 里跑。
-- **边界**：`LeaseDuration` 必须长于消费者的 `AckWait`（demo 取 2 分钟 vs 30 秒），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
+- **边界**：原生收件箱的租约必须长于消费者的 `AckWait`（框架取 2 分钟 vs 30 秒，`kitsaga.NativeLeaseDuration`），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
   消费者会当场拒绝这种配置。载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场。
   deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
 

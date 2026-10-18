@@ -2,7 +2,7 @@ package handler
 
 import (
 	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/gift"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
@@ -20,7 +20,7 @@ import (
 // manual_required — an operator decides, because the framework cannot.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step gift.NativeStep) (int32, error) {
+func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
 	held, err := target.BagComp().AddItem(itemID, count)
 	if err != nil {
 		code, reason := errcode.ClientError(err)

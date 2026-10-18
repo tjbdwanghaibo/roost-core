@@ -18,6 +18,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 )
 
 // Service is the game server. It owns this process's World, the consumers
@@ -28,7 +29,7 @@ type Service struct {
 	world          *world.World
 	levelUpMail    fnats.IJetStreamSubscription
 	stopMatchmaker func()
-	stopGiftSaga   func()
+	giftSteps      *kitsaga.Steps
 	battles        *battleManager
 	scene          *Scene
 	stopSpawner    func()
@@ -155,11 +156,11 @@ func (s *Service) Init(registry *app.Registry) error {
 	s.stopMatchmaker = stop
 	// The gift saga's step consumers (gift_saga.go): the saga Mod has
 	// started, so the stream exists and the coordinator is running.
-	stopGift, err := startGiftSaga(context.Background(), registry)
+	giftSteps, err := startGiftSaga(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	s.stopGiftSaga = stopGift
+	s.giftSteps = giftSteps
 	// The paid-order drain: the game side of the platform service's handover
 	// (purchase_drain.go). Published rather than started — it runs when a
 	// player is in hand, not on a timer.
@@ -246,9 +247,14 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
 	}
-	if s.stopGiftSaga != nil {
-		s.stopGiftSaga()
-		s.stopGiftSaga = nil
+	// The gift steps finish what they are running within the stop budget;
+	// past it they are stopped and JetStream redelivers what was not acked.
+	if s.giftSteps != nil {
+		if err := s.giftSteps.Drain(ctx); err != nil {
+			slog.Warn("gift saga steps did not drain in time; stopping them", "err", err)
+			s.giftSteps.Stop()
+		}
+		s.giftSteps = nil
 	}
 	// After the matchmaker, so no new battle is opened while rooms close.
 	if s.battles != nil {

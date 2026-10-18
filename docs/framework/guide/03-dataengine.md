@@ -28,6 +28,8 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 投影器可重放同一已提交记录，外部副作用必须通过稳定身份去重。WAL backlog、磁盘/年龄健康阈值、outbox 硬容量分别处理，不能统称任一超限都直接 fail-stop。启用前核对容量与保留期，receipt/事务标记不能在仍有重放可能时提前过期。
 
+**消费 effect（事务性 outbox 的消费端）**：业务用 `wiring/dataengine` 的 `SubscribeEffects(ctx, registry, EffectConsumer{Durable, Topic}, handler)`（D12 方向 A，维护者 2026-10-18 决定）。效果流、主题前缀与回执库按 DataEngine Mod 的声明（`dataengine.effects.*`、`dataengine.database`）取，回执集合缺省每个 durable 一个（`_effect_inbox_<durable>`）。语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经传入 ctx 的 Mongo 写与回执原子提交，再到达读到回执就跳过；Mongo 驱动可能重跑事务回调，事务外的副作用（调用别的服务）按 EffectID 幂等（demo 升级邮件把它当 mail 的 RequestID）。handler 返回普通错误 → 不写回执、按退避 nak 重投（缺省 250ms..30s，MaxDeliver 25000）；返回 `PoisonEffect(err)`、信封解不开或同一 EffectID 内容不同 → 直接 Term 不重投、ERROR 日志并计 `dataengine.effect_consumer.handled_total{result="poison"}`（非零要人核对）；handler 的 ctx 以 AckWait（缺省 30s）为截止。回执 TTL（缺省 30 天）不长于 `dataengine.effects.max_age` 时拒绝订阅。
+
 ## 4. 冷加载与 schema
 
 EntityRepository 读取聚合一致性视图，先验证所有持久 DAO 的完整性与当前 schema，再水合并发布 Entity。旧/未来 schema 都拒绝；生成 RestorePersisted 在解码前校验。自动 schema 迁移已撤销，不能把仍存在的通用 migration 包解释成 Repository 自动转换旧 DAO 的能力。改了持久结构时按[业务 schema 变更操作手册](../SCHEMA-MIGRATION.md)停写后离线转换。

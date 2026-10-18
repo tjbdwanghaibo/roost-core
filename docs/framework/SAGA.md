@@ -76,24 +76,25 @@ WAL record，再由 Wiring 装配的 durable consumer 幂等创建 Saga。`EmitS
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
 
-Native Entity step 使用 Data Engine inbox。Wiring 装配的 consumer 在同步调用 handler 前分配
-`Reservation`；业务从当前调用 context 读取一次，并把它作为**显式业务参数**传进 Nest
-handler，不能把 handler context 交给异步 goroutine：
+Native Entity step 使用 Data Engine inbox。consumer 在同步调用步骤体前分配 `Reservation`；业务侧的正式形状是
+`saga.NativeStep`（D12 方向 A，`native_step.go`）：步骤运行时（`wiring/saga` 的 `Steps.Native`，或底层
+`inbox.StepHandler(body)`）从当前调用 context 取出本次投递的执行权构造它，步骤体把它作为**显式业务参数**传进 Nest
+handler，handler 在事务里调用 `step.Complete(success, reason)`（= `inbox.Bind(command, reservation)` +
+`saga.EmitCompletion(completion)`）。不能把 handler context 或 `NativeStep` 交给异步 goroutine：
 
 ```go
-reservation, ok := saga.ReservationFromContext(ctx)
-if !ok {
-    return saga.Completion{}, errors.New("missing saga reservation")
+// 步骤体（Steps.Native 登记）：
+func debit(ctx context.Context, step saga.NativeStep) error {
+    _, err := syncsender.NewGiftDebitSender(nest).Sync_GiftDebit(ctx, entityID, itemID, count, step)
+    return err
 }
-// 将 command 与 reservation 作为 Nest Params 发送。
-// Nest handler 内：
-if err := inbox.Bind(command, reservation); err != nil {
-    return nil, err
-}
-// 业务修改产生 Put/Patch，最后 saga.EmitCompletion(completion)。
+// Nest handler 内：业务修改产生 Put/Patch，最后
+return left, step.Complete(true, "")
 ```
 
-handler 的返回值不使用：原生步骤的结果是它在事务里 `EmitCompletion` 的那一份（生成模板返回零值 `Completion`）。
+原生步骤的结果是它在事务里 `Complete` / `EmitCompletion` 的那一份，步骤体的返回值只表示 Nest 调用是否成功；
+返回错误按“结果未知”处理（见下）。转交路径（另一个进程判定命令不归它后送来）用 `RunHandedOver` 自己取执行权，
+与 consumer 取同一份操作状态文档，二者互斥。
 
 Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，以及 ID 为
 `saga-completion:{CommandID}` 的 completion effect 会形成同一个 CommitRecord。Mongo

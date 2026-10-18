@@ -39,7 +39,8 @@ Service 与基础设施 Mod 共用这些生命周期规则。领域 Server/run �
 | [领域服务](../../../wiring/SERVICES.md) | [service](../../../service) | 本地 Mod、远端 ClientMod、进程初始化和启停委托 |
 | [nest](../../../wiring/nest) | [framework/nest](../../../framework/nest) | EntityAccess、执行器、配置与生命周期 |
 | [selfsync](../../../wiring/selfsync) | [framework/sync/entitysync/policy.SelfView](../../../framework/sync/entitysync/policy/self_view.go) | 玩家看自己状态：PushSyncPlayer 包成 Transport、嵌入 TCP 握手钩子 / Game Ingress 回调转成连接激活与关闭、经 `EntitySyncSetup.Attach` 装到 Nest Mod 的 Manager |
-| [dataengine](../../../wiring/dataengine) | [framework/dataengine](../../../framework/dataengine) | WAL、恢复、投影、持久依赖 |
+| [dataengine](../../../wiring/dataengine) | [framework/dataengine](../../../framework/dataengine) | WAL、恢复、投影、持久依赖；业务 effect 消费者 `SubscribeEffects`（[effects.go](../../../wiring/dataengine/effects.go)，按 `dataengine.effects.*` / `dataengine.database` 组装 Mongo effect inbox 与 durable，毒消息 Term） |
+| [saga](../../../wiring/saga) | [framework/saga](../../../framework/saga) | 协调器装配与跨 Mod 配置规则；业务步骤运行时 `Steps`（[steps.go](../../../wiring/saga/steps.go)，按名字登记原生 / Mongo 步骤体，组装收件箱、发布器、durable，Drain / Stop 与指标） |
 | [remoteentity](../../../wiring/remoteentity) | [framework/remoteentity](../../../framework/remoteentity) | 权威存储、总线、Mirror |
 | [ops](../../../wiring/ops) | [infra/observe/ops](../../../infra/observe/ops) | 管理命令、探针、统计查找与身份 |
 | [statslog](../../../wiring/statslog) | [framework/statslog](../../../framework/statslog) | 配置、指标、Nest/Entity 的采样依赖 |
@@ -52,6 +53,8 @@ GOWORK=off go test ./wiring/... ./service/... ./infra/observe/ops ./framework/st
 GOWORK=off go test -race ./wiring/ops ./wiring/statslog ./infra/observe/ops ./framework/statslog
 GOWORK=off go test -race ./wiring/selfsync ./wiring/nest ./framework/sync/entitysync/policy
 ```
+
+`wiring/saga.Steps` 与 `wiring/dataengine.SubscribeEffects`（D12 方向 A）不是 App Mod：步骤体与 effect handler 常要用服务 Init 里才发布的能力（玩家驻留表、mail 客户端），而 Mod 在服务 Init 之前启动；服务在 Init 里 Start / 订阅、在 Shutdown 里 Drain。两者都不增加配置键，只经各自 Mod 的声明读配置。回归：`wiring/saga/steps_test.go`、`wiring/dataengine/effects_test.go`，真实依赖 `TestRealStepsRunNativeAndMongoStepsThroughTheMods`（`wiring/saga`）与 `TestRealSubscribeEffectsDeliversEachEffectOnce`（`wiring/dataengine`），`-tags integration` 且 `ROOST_DATAENGINE_IT=1`。
 
 `wiring/nest.EntitySyncSetup` 的两个可选钩子：`Attach(manager) (detach, error)` 在 Init 里 Manager 创建之后调用一次（失败则关闭 Manager、Init 失败），detach 在 Mod 停止、Manager 关闭之后调用；`EntityLoaded` 在 DataEngine 发布从权威加载的实体之后、Mod 自己的 Rebind 之后调用（业务池上，不得阻塞）。`wiring/selfsync` 是唯一使用者：Attach 安装 `policy.SelfView`，EntityLoaded 把玩家实体的加载转成 `SelfView.EntityLoaded`。同一个 `SelfSync` 只能装到一个 Mod（第二次 Attach 报错）。回归：`wiring/selfsync/selfsync_test.go`（真实 gateway TCP：全量→增量、重连全量、首个全量排在 ACK 之后、第二条连接与旧连接关闭、Ingress 回调、只能装一次、未接推送能力时整轮重试）与 `example_client_test.go`（Go 客户端解码示例）。
 

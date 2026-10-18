@@ -197,7 +197,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **需要维护者决定**：是否为原生实体步骤生成 `SubscribeXxxNative` 与 StepHandler 骨架（Nest handler 签名带 step receipt），以及是否提供 `roost add effect <topic> --consumer <service>`。
 
-**状态**：未实施，已整理为 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)（现状、A 框架补齐胶水 / B 在 A 之上加生成器 / C 只写文档三个方向与代价，推荐先 A），等维护者决定。
+**状态**：方向 A 已实施（维护者 2026-10-18 决定，见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持) 与 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）：原生步骤体 `saga.NativeStep`、步骤运行时 `kitsaga.Steps`、effect 消费者 `kitdataengine.SubscribeEffects` 进框架，手写量降到“步骤体 / handler + 一次登记”，game-demo 改用它们。**仍未做**：生成器层面（`roost add saga` 生成原生步骤骨架、`roost add effect`）——方向 B 待 A 落地后再评估；多进程分片时的准入 / 转交仍由业务写（框架提供 `WithAdmit` 与 `RunHandedOver` 扩展点）。
 
 ### 3. `saga.start_effect_stream` / `start_effect_prefix` 与 `dataengine.effects` 必须一致，却没有校验
 

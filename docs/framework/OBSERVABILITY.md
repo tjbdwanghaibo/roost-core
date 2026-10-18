@@ -125,6 +125,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有结果，这次尝试不执行、重发那次的 completion（U-0280） |
 | `saga.step_inbox.superseded_total` | Counter | 步骤收件箱里被较新尝试接管的预留 |
 | `saga.step_inbox.mark_completed_error_total` | Counter | 回执已写、状态文档结算失败（回执是权威，结论不变）；持续增长说明有确定性失败在重跑（RR-20260927-16） |
+| `saga.step.run_total{consumer,result}` | Counter | 业务步骤运行时（`wiring/saga` 的 `Steps`，D12）执行步骤体的次数，consumer 是 durable 名（`<group>-<step>`）。原生步骤 `ok` = Nest 调用成功（业务拒绝也算 ok，结论在 completion 里）、`error` = 结果未知；Mongo 步骤 `ok` / `refused`（completion 失败）/ `error`，Mongo 事务重试会重复调用、按调用计。回放与重复投递不计 |
+| `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交，不含等待投影） |
+| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
 | `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
 
 ### 技能运行时（core/skill）
@@ -197,6 +200,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
+| `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
 ### 全部源码指标索引
@@ -225,6 +229,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `configdata.reload.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.rollback.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
+| `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
@@ -383,8 +388,11 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
+| `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step.attempt_replayed_total` | Counter | `saga/command_consumer.go:IncCounter` |
 | `saga.step.expired_unexecuted_total` | Counter | `saga/command_consumer.go:IncCounter` |
+| `saga.step.run_duration` | Histogram | `wiring/saga/steps.go:ObserveHistogram` |
+| `saga.step.run_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |

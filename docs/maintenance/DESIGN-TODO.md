@@ -15,7 +15,7 @@
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
-| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 待维护者决定（2026-10-18 登记） |
+| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施（B 待 A 落地后再评估） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -251,7 +251,18 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D12 Saga 原生实体步骤与事务性 effect 消费者的生成支持
 
-**状态：待维护者决定**（2026-10-18 登记，来源：新用户试用第六轮登记项 2，见 [KNOWN-LIMITS](KNOWN-LIMITS.md)）。
+**状态：维护者 2026-10-18 决定方向 A（框架补齐胶水，demo 作为验收），已实施**（见 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）。B（生成器）待 A 落地后再评估，本轮不做；C 不采用。拍板项 2：`NativeStep` 放 `framework/saga`（Nest handler 签名直接引用 `saga.NativeStep`，生成器已支持外部包参数类型）。拍板项 3 随 B 再定。
+
+**实施结果**：
+
+- `framework/saga`：`NativeStep`（只由框架构造；`Command()`、`Complete(success, reason)` = 回执与 lease fence 绑定 + completion，都在调用方的 Nest 事务里）、`NativeStepBody`、`ErrNoNativeStep`；`DataEngineStepInbox.StepHandler(body)` 把步骤体接到 `SubscribeDataEngineStep`；`DataEngineStepInbox.RunHandedOver(ctx, command, body)` 是转交接收方（自己 Reserve，与消费者互斥，不等投影）。契约（幂等键、结果未知、补偿语义）写在 `native_step.go` 文件注释与 [guide/06-saga §2.1](../framework/guide/06-saga.md#21-业务怎样写步骤步骤运行时design-todo-d12-方向-a)。
+- `wiring/saga`：`Steps`（`NewSteps(registry, group)`、`Native` / `Mongo(name, topic, …, WithAdmit)`、`Start`、`Drain(ctx)` / `Stop`、`RunHandedOver(ctx, name, command, accept)`）：按 saga Mod 与 DataEngine Mod 的声明组装发布器、两种收件箱（原生租约 2 分钟）、每步一个 durable（`<group>-<name>`），指标 `saga.step.run_total` / `run_duration` / `admit_refused_total`。没有新配置键。不是 App Mod：步骤体要用服务 Init 里才发布的能力。
+- `wiring/dataengine`：`SubscribeEffects(ctx, registry, EffectConsumer{Durable, Topic}, handler)` 与 `PoisonEffect`：按 `dataengine.effects.*` / `dataengine.database` 组装 Mongo effect inbox 与 durable；至少一次投递、按 EffectID 至多一次生效，普通错误退避重投，毒消息 Term（`dataengine.effect_consumer.handled_total{result="poison"}`），回执 TTL 不长于效果流保留期时拒绝订阅。
+- 按 sid 准入与转交（约 300 行）留在 demo：框架提供 `WithAdmit`（取执行权之前问归属）与 `RunHandedOver`（接收方先核对步骤名与命令主题，再由 `accept` 复核归属，然后取执行权）两个扩展点。
+- demo：`gift_saga.go` 660 → 526 行（`startGiftSaga` 123 → 49 行，其中框架组装约 12 行：`NewSteps`、四行登记、`Start`；其余是业务依赖查询与转交接线），`gift.NativeStep` 删除（`gift.go` 151 → 100 行），handler 参数改为 `saga.NativeStep`；`level_up_mail.go` 107 → 87 行，改用 `SubscribeEffects`。活动阶段消费者（`activity.go`）本轮未改（与并行的活动改动避免冲突），仍用 `effectSettings` + `nestwal.SubscribeJetStreamEffects`。
+- 顺带：saga 的完成回执保留期检查（`checkEffectRetention`）从 Init 搬进 `CheckConfigAcrossMods`，`--check-config` 与 doctor `config-check` 也报。
+
+**原登记（2026-10-18，决定前）**：
 
 **现状（已核对当前源码）**：
 

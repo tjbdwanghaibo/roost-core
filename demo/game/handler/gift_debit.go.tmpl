@@ -2,7 +2,7 @@ package handler
 
 import (
 	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/game/gift"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
@@ -18,7 +18,7 @@ import (
 // later attempt of the same step finds this receipt and replays it, and an
 // attempt not projected before its deadline is skipped (roost-core SAGA.md,
 // 原生步骤执行契约). With the Mongo step inbox these were two commits with a
-// window between them (see gift.NativeStep).
+// window between them (see saga.NativeStep).
 //
 // A business refusal (the sender no longer has the items) also commits: no
 // mutation, just the receipt and a failed completion, because a refusal the
@@ -32,7 +32,7 @@ import (
 // redelivery (roost-core SAGA.md, 原生步骤执行契约).
 //
 //roost:nest rollback=undo durability=strict
-func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step gift.NativeStep) (int32, error) {
+func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
 	left, err := target.BagComp().RemoveItem(itemID, count)
 	if err != nil {
 		code, reason := errcode.ClientError(err)

@@ -504,8 +504,8 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			// The topics as constants, so a project can address them without
 			// repeating the strings: the Subscribe* helpers below take a
 			// Mongo inbox, and a step whose business is a Nest transaction
-			// subscribes with saga.SubscribeDataEngineStep and these topics
-			// instead (roost-core/saga's native path).
+			// is registered with roost-core wiring/saga Steps.Native and
+			// these topics instead (the native path).
 			fmt.Fprintf(&topics, "\t// Topic%s is the forward topic of step %s.\n", stepPascal, stepSnake)
 			fmt.Fprintf(&topics, "\tTopic%s = %q\n", stepPascal, snake+"."+stepSnake)
 			fmt.Fprintf(&topics, "\t// Topic%sCompensation is its compensation topic.\n", stepPascal)
@@ -527,9 +527,10 @@ const (
 	Version uint32 = 1
 )
 
-// The step topics. A step whose business is a Nest transaction subscribes
-// with saga.SubscribeDataEngineStep and binds its receipt inside that
-// transaction; any other step uses the Mongo inbox helpers below. Both
+// The step topics. A step whose business is a Nest transaction is registered
+// with roost-core wiring/saga Steps.Native (its Nest handler takes a
+// saga.NativeStep and calls step.Complete inside the transaction); any other
+// step uses Steps.Mongo or the Mongo inbox helpers below. Both
 // address the same topics, and both inboxes let at most one attempt of an
 // operation take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤).
 // For a Mongo step that covers what its handler writes through the Mongo

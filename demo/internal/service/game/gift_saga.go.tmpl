@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"time"
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
@@ -20,7 +18,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -39,8 +36,9 @@ import (
 // two shapes and this saga uses both, because its steps are two kinds of work:
 //
 //   - **debit and its compensation are Nest transactions**, so they take the
-//     native path: `SubscribeDataEngineStep` + `inbox.Bind` + `EmitCompletion`
-//     INSIDE the handler's transaction (see gift.NativeStep). The Bag change,
+//     native path: registered with `Steps.Native`, they pass the framework's
+//     `saga.NativeStep` into their Nest handler, which calls `step.Complete`
+//     INSIDE its transaction (game/handler/gift_debit.go). The Bag change,
 //     the command's receipt and the completion the coordinator waits for are
 //     one WAL record: a redelivery finds the receipt and replays the stored
 //     completion instead of debiting again, and a crash before the commit
@@ -53,7 +51,7 @@ import (
 //     publishes nothing of its own — it waits for the receipt to be
 //     projected, then acknowledges.
 //   - **deliver is a mail call**, not a Nest transaction, so there is nothing
-//     to bind it to. It stays on `SubscribeMongoStep`, whose Mongo inbox runs
+//     to bind it to. It is registered with `Steps.Mongo`, whose Mongo inbox runs
 //     the same per-operation contract as the native one (an attempt finds an
 //     earlier attempt's result and replays it, waits while another attempt
 //     holds a live lease, takes over an expired one; roost-core SAGA.md,
@@ -83,8 +81,10 @@ import (
 // coordinator after the step timeout. Only dataengine.ErrFencedEntityPending
 // hands a native lease back for an immediate redelivery.
 const (
-	giftSagaInbox   = "_{{GAME_SERVICE}}_gift_step_inbox"
-	giftSagaDurable = "{{GAME_SERVICE}}-gift"
+	// giftSagaSteps names this service's gift step consumers: every durable
+	// is `<name>-<step>` (shared by all replicas of the service), the Mongo
+	// step inbox is `_<name>_step_inbox` in the saga database.
+	giftSagaSteps = "{{GAME_SERVICE}}-gift"
 	// giftRecipientNotFound is deliver's refusal for a recipient with no
 	// Player document. The check reads the Player DAO's collection directly
 	// rather than loading a foreign Player into this process; see deliver
@@ -92,61 +92,21 @@ const (
 	giftRecipientNotFound = "recipient has never entered the game"
 )
 
-// startGiftSaga subscribes the four step consumers and returns what drains
-// them. It runs in Init, after the saga Mod has started (the stream exists).
-func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) {
-	jetstream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
-	if !ok || jetstream == nil {
-		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModNatsJetStream)
+// startGiftSaga registers the four steps and starts their consumers. It runs
+// in Init, after the saga Mod has started (the stream exists); the returned
+// Steps is drained in Shutdown. Which stream, prefix and databases the
+// consumers use, their inboxes, leases and metrics are the framework's
+// (roost-core wiring/saga Steps); what is left here is the business.
+func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps, error) {
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, fmt.Errorf("gift saga: nest client is unavailable")
 	}
 	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
 	if !ok || mongoClient == nil {
 		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModMongo)
 	}
-	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
-	if !ok || nestClient == nil {
-		return nil, fmt.Errorf("gift saga: nest client is unavailable")
-	}
 	mailer, err := Mail(registry)
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
-	}
-	// What the saga Mod was configured with, read through its own
-	// declaration (kitsaga.StreamSettings), so the step consumers meet the
-	// coordinator on the same stream and subject prefix.
-	prefix, stream, sagaDatabase, err := kitsaga.StreamSettings(registry.Config())
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
-	}
-	dataEngineDatabase, _, _, err := effectSettings(registry)
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
-	}
-	// The same prefix the coordinator publishes commands under; the
-	// publisher here carries the completions back on it.
-	transport, err := saga.NewJetStreamPublisher(jetstream, prefix)
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
-	}
-	inbox, err := saga.NewMongoCommandInbox(mongoClient, sagaDatabase, giftSagaInbox)
-	if err != nil {
-		return nil, fmt.Errorf("gift saga: %w", err)
-	}
-	// The native inbox lives in the Data Engine's database
-	// (`dataengine.database`), not the saga's: the receipt it binds is a
-	// lease fence on that database, and it is projected by the same commit
-	// that carries the Bag change. That is the ONLY thing this database name
-	// is for here — the Player documents are not in it.
-	//
-	// Owner names this process — two replicas must not claim one command —
-	// and LeaseDuration has to outlast the consumer's AckWait, or a lease
-	// could expire while the message is still un-acked and let a second
-	// process start the same command. The consumer refuses a configuration
-	// where it does not.
-	nativeInbox, err := saga.NewDataEngineStepInbox(mongoClient, dataEngineDatabase, saga.DataEngineStepInboxOptions{
-		Owner:         giftSagaDurable + "-" + processOwnerSuffix(),
-		LeaseDuration: 2 * time.Minute,
-	})
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
@@ -157,7 +117,15 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	if !ok || owners == nil {
 		return nil, fmt.Errorf("gift saga: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
 	}
-	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, inbox: nativeInbox, owners: owners}
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModBus)
+	}
+	runtime, err := kitsaga.NewSteps(registry, giftSagaSteps)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, owners: owners, runtime: runtime}
 	// The handoff path: a step that lands on the wrong process is sent to the
 	// one the sender is bound to instead of only being refused.
 	//
@@ -165,10 +133,6 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	// (gift.State.FromSID, written by the process that started the gift), a
 	// player stays bound to one sid, and one process runs per sid (the App
 	// singleton lock). The router sends to `<prefix>.svc.{{GAME_SERVICE}}.<sid>`.
-	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
-	if !ok || busClient == nil {
-		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModBus)
-	}
 	steps.handoff = giftHandoffRouter(owners.SID(), ownerroute.NewBusTransport[giftStepHandoff](busClient, "{{GAME_SERVICE}}", giftHandoffModule), steps.runHandoff)
 	// The receiving half. It is registered before the consumers subscribe, so
 	// a process cannot forward to a peer that is not listening yet — the peer
@@ -176,57 +140,26 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	if err := ownerroute.RegisterBusHandler(busClient, giftHandoffModule, giftHandoffMsgName, steps.runHandoff); err != nil {
 		return nil, fmt.Errorf("gift saga: register handoff handler: %w", err)
 	}
-	subscriptions := make([]fnats.IJetStreamSubscription, 0, 4)
-	stop := func() {
-		for _, subscription := range subscriptions {
-			subscription.Drain()
-		}
+	steps.register(runtime)
+	if err := runtime.Start(ctx); err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	// One consumer per topic, each with the shape its business needs. The
-	// topic constants come from the generated definition, so the durable and
-	// the filter can never drift apart.
-	//
-	// Admit is set on the two steps that write the sender's Player and left
-	// nil on the two that do not: deliver is a mail call, which any process
-	// may make, and pinning it to the owner would only make it wait.
-	for _, consumer := range []struct {
-		name    string
-		topic   string
-		handler saga.StepHandler
-		native  bool
-		admit   func(context.Context, saga.Command) error
-	}{
-		{"debit", giftitem.TopicDebit, steps.debit, true, steps.admitOwned(giftHandoffPhaseDebit)},
-		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true, steps.admitOwned(giftHandoffPhaseRefund)},
-		{"deliver", giftitem.TopicDeliver, steps.deliver, false, nil},
-		{"deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo, false, nil},
-	} {
-		config := saga.StepConsumerConfig{Stream: stream, Durable: giftSagaDurable + "-" + consumer.name, Topic: consumer.topic, Admit: consumer.admit}
-		var subscription fnats.IJetStreamSubscription
-		var err error
-		if consumer.native {
-			subscription, err = saga.SubscribeDataEngineStep(ctx, jetstream, transport, nativeInbox, config, consumer.handler)
-		} else {
-			subscription, err = saga.SubscribeMongoStep(ctx, jetstream, transport, inbox, config, consumer.handler)
-		}
-		if err != nil {
-			stop()
-			return nil, fmt.Errorf("gift saga: subscribe %s: %w", consumer.name, err)
-		}
-		subscriptions = append(subscriptions, subscription)
-	}
-	return stop, nil
+	return runtime, nil
 }
 
-// processOwnerSuffix distinguishes this process's claims from another
-// replica's. A stable per-process value is enough: a claim is released when
-// the step finishes or its lease expires.
-func processOwnerSuffix() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
-	}
-	return fmt.Sprintf("%s-%d", host, os.Getpid())
+// register names the four steps. The topic constants come from the generated
+// definition, so a durable and its filter can never drift apart, and the step
+// names are what a handoff names (giftHandoffPhase*), so the receiver runs the
+// same body the consumer would have.
+//
+// Admission is set on the two steps that write the sender's Player and left
+// out on the two that do not: deliver is a mail call, which any process may
+// make, and pinning it to the owner would only make it wait.
+func (steps giftSteps) register(runtime *kitsaga.Steps) {
+	runtime.Native(giftHandoffPhaseDebit, giftitem.TopicDebit, steps.debit, kitsaga.WithAdmit(steps.admitOwned(giftHandoffPhaseDebit)))
+	runtime.Native(giftHandoffPhaseRefund, giftitem.TopicDebitCompensation, steps.refund, kitsaga.WithAdmit(steps.admitOwned(giftHandoffPhaseRefund)))
+	runtime.Mongo("deliver", giftitem.TopicDeliver, steps.deliver)
+	runtime.Mongo("deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo)
 }
 
 // playerOwnership is the part of PlayerOwners these steps ask about. Declared
@@ -267,15 +200,19 @@ const (
 	// on; it is a routing address, not a capability name.
 	giftHandoffModule  = "{{GAME_SERVICE}}.gift.handoff"
 	giftHandoffMsgName = "gift.step.handoff"
+	// The phases a handoff can carry are the names the two native steps are
+	// registered under (register), so the receiver runs that step's body.
 	giftHandoffPhaseDebit  = "debit"
-	giftHandoffPhaseRefund = "refund"
+	giftHandoffPhaseRefund = "debit-undo"
 )
 
 type giftSteps struct {
 	nest   corenest.Client
 	mailer svcmail.Mail
 	mongo  fmongo.IMongo
-	inbox  *saga.DataEngineStepInbox
+	// runtime is the framework's step consumers; a handed-over step runs
+	// through it under its own claim (runHandoff).
+	runtime *kitsaga.Steps
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
 	owners playerOwnership
@@ -320,10 +257,11 @@ func giftHandoffRouter(localSID int32, transport ownerroute.Transport[giftStepHa
 // runHandoff executes a step this process was handed by another one.
 //
 // The difference from the consumer path is where the claim comes from: there
-// is no JetStream delivery here, so this takes its own reservation from the
-// inbox. That is the same claim the consumer would have taken, on the same
-// command id, so the two paths exclude each other — whichever gets there
-// first runs the business and the other finds a receipt.
+// is no JetStream delivery here, so the framework takes its own reservation
+// from the native inbox (kitsaga.Steps.RunHandedOver). That is the same claim
+// the consumer would have taken, on the same command id, so the two paths
+// exclude each other — whichever gets there first runs the business and the
+// other finds a receipt.
 //
 // Nothing is acknowledged here. The process that forwarded the step still
 // holds the message and still naks it; it is released only when the receipt
@@ -345,89 +283,28 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	}
 	// The phase is envelope too, and it picks the transaction: a debit
 	// envelope around the refund's command would take the items a second
-	// time under the refund's receipt. The command's topic — what the
-	// coordinator published it on, and what the consumer that handed it over
-	// was subscribed to — names the step and its direction, so the two must
-	// agree. An unknown phase ends here as well: a claim taken for work that
-	// cannot be done is a command nobody can run until the lease expires.
-	topic, known := giftHandoffTopic(cmd.Phase)
-	if !known {
-		return fmt.Errorf("gift saga: handoff phase %q is not a step this process runs", cmd.Phase)
-	}
-	if cmd.Command.Topic != topic {
-		return fmt.Errorf("gift saga: handoff phase %q carries a command published on %q, want %q", cmd.Phase, cmd.Command.Topic, topic)
-	}
-	// Check again rather than trusting the address: running a step for a
-	// player bound to another sid is the corruption all of this exists to
-	// prevent. A sid of 0 is never this process's, so a payload with no
-	// sender sid ends here too.
-	if steps.owners != nil {
-		local, err := steps.owners.AdmitBound(state.From, state.FromSID)
-		if !local || err != nil {
-			// Not served here, or its copy is being unloaded. Do nothing: the
-			// holder of the message keeps redelivering.
-			return nil
+	// time under the refund's receipt. The framework refuses, before anything
+	// is recorded or claimed, a phase that is not a registered native step and
+	// a command not published on that step's topic. The accept callback then
+	// checks ownership again rather than trusting the address: running a step
+	// for a player bound to another sid is the corruption all of this exists
+	// to prevent. Not served here, or its copy is being unloaded: do nothing,
+	// the holder of the message keeps redelivering. A sid of 0 is never this
+	// process's, so a payload with no sender sid ends here too.
+	err = steps.runtime.RunHandedOver(ctx, cmd.Phase, cmd.Command, func(context.Context, saga.Command) bool {
+		if steps.owners == nil {
+			return true
 		}
-	}
-	command := cmd.Command
-	if err := command.Validate(); err != nil {
-		return fmt.Errorf("gift saga: handoff command: %w", err)
-	}
-	if !time.Now().Before(command.DeadlineAt) { //glsvet:system-clock a saga deadline is the coordinator's system time
-		// Past its deadline the coordinator owns the outcome; starting the
-		// business now would race its timeout.
-		return nil
-	}
-	reservation, err := steps.inbox.Reserve(ctx, command)
-	if err != nil {
-		return fmt.Errorf("gift saga: handoff reserve: %w", err)
-	}
-	if reservation.Duplicate {
-		// Somebody is already running it, or it is already done. Either way
-		// this process has nothing to add.
-		return nil
-	}
-	step := gift.NativeStep{Inbox: steps.inbox, Command: command, Reservation: reservation}
-	entityID, err := entity.BuildEntityID(state.From, player.EntityKindPlayer)
-	if err != nil {
-		return fmt.Errorf("gift saga: handoff payload: %w", err)
-	}
-	if cmd.Phase == giftHandoffPhaseDebit {
-		_, err = syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step)
-	} else {
-		_, err = syncsender.NewGiftRefundSender(steps.nest).Sync_GiftRefund(ctx, entityID, state.ItemID, state.Count, step)
-	}
+		local, err := steps.owners.AdmitBound(state.From, state.FromSID)
+		return local && err == nil
+	})
 	if err != nil {
 		return fmt.Errorf("gift saga: handoff %s: %w", cmd.Phase, err)
 	}
-	slog.Info("gift saga: ran a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", command.ID)
+	// nil also covers a handoff that was dropped (not ours, expired, already
+	// done, held by another delivery); saga.step.run_total counts the runs.
+	slog.Debug("gift saga: handled a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", cmd.Command.ID)
 	return nil
-}
-
-// giftHandoffTopic is the saga topic a handoff phase runs: the one its
-// consumer is subscribed to (startGiftSaga). false for a phase this process
-// does not hand over.
-func giftHandoffTopic(phase string) (string, bool) {
-	switch phase {
-	case giftHandoffPhaseDebit:
-		return giftitem.TopicDebit, true
-	case giftHandoffPhaseRefund:
-		return giftitem.TopicDebitCompensation, true
-	default:
-		return "", false
-	}
-}
-
-// nativeStep gathers what a Nest-transaction step carries into its handler.
-// The reservation comes from the consumer, on the context, and is
-// deliberately not ambient: it names this delivery's claim, and copying it
-// into a detached goroutine would let two deliveries share one claim.
-func (steps giftSteps) nativeStep(ctx context.Context, command saga.Command) (gift.NativeStep, error) {
-	reservation, ok := saga.ReservationFromContext(ctx)
-	if !ok {
-		return gift.NativeStep{}, fmt.Errorf("gift saga: no reservation on the context; this step must run under SubscribeDataEngineStep")
-	}
-	return gift.NativeStep{Inbox: steps.inbox, Command: command, Reservation: reservation}, nil
 }
 
 // admitOwned is the consumers' admission predicate: may THIS process run this
@@ -525,28 +402,23 @@ func (steps giftSteps) handOver(ctx context.Context, phase string, state gift.St
 // debit takes the items out of the sender's Bag. The sender may have spent
 // them since SendGift checked: that is the coded refusal item_short, and a
 // failed first step has nothing to compensate.
-func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Completion, error) {
-	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+//
+// A payload that is not a gift has no transaction to carry a refusal: the
+// error makes this delivery fail and retry, and the saga's deadline is what
+// ends it. A payload this broken is a bug, not a business outcome.
+//
+// The completion is emitted inside the transaction (step.Complete), so the
+// consumer waits for its receipt. The sender may be offline and cold
+// (restart, idle hand-back): Nest sees the declared target is not loaded at
+// admission and prepares it on the io pool before the handler runs, so no
+// SendOptionIO is needed here.
+func (steps giftSteps) debit(ctx context.Context, step saga.NativeStep) error {
+	state, entityID, err := giftTarget(step.Command(), func(state gift.State) int64 { return state.From })
 	if err != nil {
-		// The payload is not a gift, so there is no transaction to carry a
-		// refusal. This delivery fails and is retried; the saga's deadline is
-		// what ends it. A payload this broken is a bug, not a business
-		// outcome.
-		return saga.Completion{}, err
+		return err
 	}
-	step, err := steps.nativeStep(ctx, command)
-	if err != nil {
-		return saga.Completion{}, err
-	}
-	// The completion is emitted inside the transaction, so nothing is
-	// returned for the consumer to publish: it waits for the receipt.
-	// The sender may be offline and cold (restart, idle hand-back): Nest sees
-	// the declared target is not loaded at admission and prepares it on the
-	// io pool before the handler runs, so no SendOptionIO is needed here.
-	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step); err != nil {
-		return saga.Completion{}, err
-	}
-	return saga.Completion{}, nil
+	_, err = syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step)
+	return err
 }
 
 // refund is debit's compensation: the same AddItem transaction the endpoint
@@ -566,19 +438,13 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 // ——同一次扣款最多生效一次（框架按操作实例去重，见 roost-core SAGA.md「原生步骤执行契约」），一直失败时
 // 什么都没扣，只是更晚才判赠礼失败（仍受 gift.Deadline 约束）。gift_saga_budget_test.go 用 saga Mod 读
 // 配置的同一个函数钉住这个关系；改 ttl / startup_wait 或步骤预算时一起改这里。
-func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.Completion, error) {
-	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+func (steps giftSteps) refund(ctx context.Context, step saga.NativeStep) error {
+	state, entityID, err := giftTarget(step.Command(), func(state gift.State) int64 { return state.From })
 	if err != nil {
-		return saga.Completion{}, err
+		return err
 	}
-	step, err := steps.nativeStep(ctx, command)
-	if err != nil {
-		return saga.Completion{}, err
-	}
-	if _, err := syncsender.NewGiftRefundSender(steps.nest).Sync_GiftRefund(ctx, entityID, state.ItemID, state.Count, step); err != nil {
-		return saga.Completion{}, err
-	}
-	return saga.Completion{}, nil
+	_, err = syncsender.NewGiftRefundSender(steps.nest).Sync_GiftRefund(ctx, entityID, state.ItemID, state.Count, step)
+	return err
 }
 
 // deliver mails the item to the recipient. A recipient who has never
