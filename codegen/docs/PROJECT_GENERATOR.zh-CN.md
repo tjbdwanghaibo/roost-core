@@ -311,18 +311,26 @@ TCP 生成层的帧格式、鉴权、主动推送、配置硬上限和上线门�
 [Player TCP 接入](PLAYER_ACCESS_TCP.zh-CN.md)。
 
 Saga 命令会自动给目标 Service 添加 `saga`、`dataengine` 及其传递依赖，并生成
-`saga/alliance_rally/definition.go`，其中包含类型、步骤、重试、
-补偿 topic、`Register`、`EmitStart` 和幂等 `Start` 入口。业务 Nest handler 必须调用
+`saga/alliance_rally/definition.go`（类型、步骤、补偿 topic 常量、`Register`、`EmitStart` 和幂等
+`Start` 入口）与 `saga/alliance_rally/steps.go`（步骤运行时）。业务 Nest handler 必须调用
 `EmitStart`，使 Entity mutation 与 Saga 启动意图进入同一个 WAL record；`Start` 仅用于
 durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest 中的
-定义传给 Saga Mod；自定义装配时才需要调用 `Register`。步骤消费者使用
-`framework/saga.SubscribeMongoStep`（原生步骤用 `SubscribeDataEngineStep`），并把
-每个 command 的 `IdempotencyKey` 作为本地预留/确认/释放操作的唯一键；不要以
-投递次数或 `CommandID` 作为业务幂等键。
+定义传给 Saga Mod；自定义装配时才需要调用 `Register`。
 
-每个步骤还会生成 `Subscribe<Step>` 和 `Subscribe<Step>Compensation`，不同服务
-只订阅自己拥有的步骤。调用者显式传入 stream 和 durable；同一逻辑服务的多个
-副本应共享 durable，不同处理器不得复用 durable。
+步骤消费者只有一种写法：`steps.go` 的 `RegisterSteps` 按主题常量把每一步登记到
+`wiring/saga` 的 `Steps`（`-native` 列出的步骤用 `Steps.Native`，其余 `Steps.Mongo`），
+`StartSteps(ctx, registry, deps)` 建 `Steps`（group 即 durable 前缀 `<service>-<saga>`，同一逻辑服务的
+多个副本共享，不同 saga 不复用）并启动；服务 Init 里调用它、Shutdown 里 `Drain(ctx)`，生成器不改写
+服务（doctor 的 `saga-steps:<saga>` 在没人启动时 WARN）。`-native` 的步骤各生成正向与补偿两个
+Nest handler（参数 `saga.NativeStep`，事务内 `step.Complete`）；幂等键是 command 的
+`IdempotencyKey`：原生步骤由收件箱保证至多一次生效，Mongo 步骤里事务外的调用要用它做幂等，不要以
+投递次数或 `CommandID` 作为业务幂等键。`Subscribe<Step>` 辅助函数已不再生成（2026-10-18，D12 方向 B）；
+按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 10/s、
+全补偿约 5/s 开始饱和，见 `roost help saga`）。
+
+`roost add effect <topic> -consumer <service>` 生成 effect 的载荷、`Emit<Topic>` 辅助
+（`game/effects`）与消费服务里的 `kitdataengine.SubscribeEffects` 骨架，不改 roost.yaml；
+消费服务要有 dataengine Mod。
 
 每个骨架还会生成 `Definitions()`。修改步骤顺序或补偿语义时递增 `Version`，把旧定义
 保留在 `Definitions()` 中；bootstrap 会注册全部仍在运行的版本。通过
@@ -356,6 +364,8 @@ Makefile 也提供了对应入口，例如：
     make new-table NAME=Item
     make new-service NAME=chat MODS=etcd,redis,nats
     make new-saga NAME=AllianceRally SERVICE=game STEPS=ReserveTroops,CreateMarch,CreateRally
+    make new-saga NAME=Gift SERVICE=game STEPS=debit,credit NATIVE=debit,credit ENTITY=Player COMPONENT=Wallet
+    make new-effect NAME=player.level_up CONSUMER=game
 
 生成业务骨架后运行：
 
@@ -505,6 +515,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
 - `remote-runtime`：工程里有 `remote=managed` 实体时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
+- `saga-steps:<saga>` / `effect-consumer:<service>/<func>`（只读，WARN 不让 doctor 失败）：`roost add saga` 生成的 `steps.go` 有 `StartSteps` / `RegisterSteps`，工程里却没有非测试文件导入该 saga 包并调用它（或调用处所在包没有 `Steps.Drain(ctx)`）时 WARN；`roost add effect` 生成的 `start<Topic>EffectConsumer` 在服务包里没有被调用时 WARN。生成器不改写服务的 Init / Shutdown，这两项提醒“生成了但没启动”——没启动时进程照常起来，步骤命令却等到超时、effect 堆在流里。文本判据（注释不算调用），只说明写了，不证明运行时一定走到；`steps.go` 里没有这两个函数（如 game-demo 手写接线）时不报。
 - `skills:catalog`：工程有 `game/skills/catalog.go` 时运行 `go test ./game/skills/`（生成的 `catalog_test.go` 用 `CompileAll` 编译全部技能 JSON），写坏的定义为 FAIL 并带编译器原话；没有 `catalog_test.go` 为 WARN（下一次 `roost add skill` 补上）。工程编译不过时不报这一项。
 - `config-reads`：扫工程源码，直接调 viper 读方法 / `app.Config*` 单键读取、或声明了却没有任何代码读的字段为 FAIL（与 app / wiring 的守卫同一份实现 `internal/configschema/guard.go`）。
 - `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。

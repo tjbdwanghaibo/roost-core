@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### `roost add saga -native` 与 `roost add effect`（DESIGN-TODO D12 方向 B）；原生步骤容量按 A 文档化
+
+- **决定**：维护者 2026-10-18 批准 D12 方向 B（生成器）开工；“原生步骤单进程容量”按推荐的 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批。
+- **`roost add saga <name> -steps a,b,c -native a,b [-entity E] -component C`**：`-native` 保序解析，必须是 `-steps` 的子集、不能重复；原生步骤的锁目标与 `add handler` 同一套解析，跑步骤的服务要有 nest Mod；目标文件已存在、与已有 Nest handler 同名、`-entity` / `-component` 没配 `-native` 等错误都在写盘前拒绝，工程不变。生成（业务文件，只建一次）：`saga/<name>/steps.go`（`StepsGroup = "<service>-<name>"`、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿步骤体、按主题常量与 `-steps` 顺序登记的 `RegisterSteps(steps, deps)`、`StartSteps(ctx, registry, deps)`）与每个原生步骤两个 Nest handler `game/handler/<name>_<step>.go` / `_compensation.go`（参数 `saga.NativeStep`，事务内 `step.Complete`）；同步里的 generate 生成它们的 Sender。骨架默认拒绝（`… is not implemented`），写完业务前 saga 不报告成功。不给 `-native` 时全部登记为 Mongo 步骤。
+- **去掉 `definition.go` 的 `Subscribe<Step>` / `Subscribe<Step>Compensation`**：有了 `Steps` 之后是第二套写法。**不兼容**：线上尚未部署，不做兼容；已有工程里旧生成的辅助函数是业务文件、不会被改写，继续能编译，新 add 的 saga 不再有。
+- **`roost add effect <topic> -consumer <svc>`**：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`，在 Nest 事务内发出 effect 的正式写法）与 `internal/service/<svc>/<topic>_consumer.go`（`start<Topic>EffectConsumer`：`kitdataengine.SubscribeEffects`，解不开 `PoisonEffect`，durable `<svc>-<topic>`；骨架默认返回错误，重投不丢）。主题点分、`saga.*` 保留；消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。
+- **归属**：服务 Init / Shutdown 归业务、不改写；next 提示与 `roost help saga` / 新的 `roost help effect` 给出要加的两行。**doctor**（只读 WARN）：`saga-steps:<name>`（steps.go 有 `StartSteps` / `RegisterSteps`，却没有服务导入并调用，或调用了但所在包没有 `Steps.Drain(ctx)`）、`effect-consumer:<service>/<func>`（消费者没有被调用）；文本判据、注释不算调用。
+- **容量**：`steps.go` 注释、next 提示、`roost help saga` 与 guide/06 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接 [Saga D12 前后对照](docs/performance/SAGA-D12-20261018.md)；KNOWN-LIMITS“Saga 原生步骤容量（单进程）”改为已决定。
+- **game-demo**：赠礼 saga 保留手写接线（按 sid 准入与转交），生成的 `saga/gift_item/steps.go` 由 demo 模板换成指向 `gift_saga.go` 的说明；升级邮件已是 `SubscribeEffects` 写法，未改。
+- **测试**：修前（`5afd19fc`）红：`add saga -native` 报 `flag provided but not defined: -native`，`add effect` 报 `flag provided but not defined: -consumer`，`definition.go` 仍有 `Subscribe*`，`roost help effect` 报 unknown capability。新增 `codegen/internal/roost/add_saga_test.go`（生成物与登记顺序、错误输入不改工程、重复 add、服务无 nest、无 `-native` 的 Mongo 登记、doctor 两项、生成工程 build / vet / doctor）、`add_effect_test.go`（生成物、第二消费者、错误输入），真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`（新手工程 add saga -native + add effect → 填最小业务〔`testdata/saga_native`〕→ 真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿、一条 effect 消费恰好一次；挂在 `scripts/test-demo-generated.sh`）。
+- **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
+- 文档：DESIGN-TODO D12（B 实施结果、容量决定）、KNOWN-LIMITS（第六轮登记项 2、容量条目）、guide/06-saga §2.1 / §5、impl/12-codegen、codegen 的 BEGINNER_WORKBOOK / CODEGEN_REFERENCE / PROJECT_GENERATOR、`roost help saga` / `effect` / `add`。
+
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
 - **决定**：维护者 2026-10-18 选方向 A——把 Saga 原生步骤与 effect 消费者里与业务无关的组装收进框架，game-demo 作为验收；B（生成器）待 A 落地后再评估，本轮不做。

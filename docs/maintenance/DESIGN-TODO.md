@@ -15,7 +15,7 @@
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
-| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；2026-10-18 四个未验证项已验证（修两处缺陷），B 已评估、建议再等等（等原生步骤容量的决定） |
+| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -251,7 +251,17 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D12 Saga 原生实体步骤与事务性 effect 消费者的生成支持
 
-**状态：维护者 2026-10-18 决定方向 A（框架补齐胶水，demo 作为验收），已实施**（见 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）。B（生成器）待 A 落地后再评估，本轮不做（2026-10-18 已按验证结果评估，建议再等等，见下文“B 评估”）；C 不采用。拍板项 2：`NativeStep` 放 `framework/saga`（Nest handler 签名直接引用 `saga.NativeStep`，生成器已支持外部包参数类型）。拍板项 3 随 B 再定。
+**状态：维护者 2026-10-18 决定方向 A（框架补齐胶水，demo 作为验收），已实施**（见 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）。**B（生成器）维护者 2026-10-18 批准开工，已实施**（见下文“B 实施结果”与 CHANGELOG `[Unreleased]`“roost add saga -native 与 roost add effect”）；C 不采用。拍板项 2：`NativeStep` 放 `framework/saga`（Nest handler 签名直接引用 `saga.NativeStep`，生成器已支持外部包参数类型）。拍板项 3（`roost add effect`）随 B 同批交付。**原生步骤单进程容量：维护者 2026-10-18 决定按 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批**（KNOWN-LIMITS“Saga 原生步骤容量（单进程）”）。
+
+**B 实施结果（2026-10-18）**：
+
+- **`roost add saga <name> -steps a,b,c -native a,b [-entity E] -component C`**（`codegen/internal/roost/add_saga.go`）：`-native` 与 `-steps` 一样保序解析，必须是 `-steps` 的子集、不能重复（`-native step "x" is not in -steps (…)`）；只给 `-entity` / `-component` 不给 `-native` 报错；原生步骤的锁目标复用 `add handler` 的解析（抽成 `resolveNestHandlerTarget`），跑步骤的服务要有 nest Mod；与已有 Nest handler 同名（按函数名扫描 `game/handler`）或任何目标文件已存在都在写盘前拒绝，错误输入不改工程。生成物（业务文件，只建一次）：`definition.go`（去掉 `Subscribe<Step>` / `Subscribe<Step>Compensation`，未上线不做兼容）、`steps.go`（`StepsGroup = "<service>-<name>"`、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿步骤体、`RegisterSteps(steps, deps)`、`StartSteps(ctx, registry, deps)`）、每个原生步骤 `game/handler/<name>_<step>.go` 与 `_compensation.go`（参数 `saga.NativeStep`，事务内 `step.Complete`）。`add saga` 的同步跑 generate，新 handler 的 Sender 随之生成，生成工程直接能编译。与评估稿的差异：`Register(steps, deps)` 改名 `RegisterSteps`（`definition.go` 已有 `Register(engine)`，同包不能重名），另加 `StartSteps` 让服务 Init 只需一行；骨架默认拒绝（`… is not implemented`），写完业务前 saga 不报告成功。
+- **`roost add effect <topic> -consumer <svc>`**（`add_effect.go`）：点分主题（`saga.*` 保留），`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`）与 `internal/service/<svc>/<topic>_consumer.go`（`start<Topic>EffectConsumer`：`kitdataengine.SubscribeEffects`，解不开 `PoisonEffect`，durable `<svc>-<topic>`，骨架默认返回错误、重投不丢）；消费服务要有 dataengine Mod；effect 文件已存在时只建新消费者（同一 effect 多个消费服务）。
+- **归属与提示**：服务 Init / Shutdown 不改写；`add saga` / `add effect` 的 next 提示与 `roost help saga` / `roost help effect` 给出要加的两行（`StartSteps` / `Drain`；`start<Topic>EffectConsumer` / `Drain`）。doctor 新增只读检查（低成本、文本判据，`saga_effect_doctor.go`）：`saga-steps:<name>`（steps.go 有 `StartSteps` / `RegisterSteps` 却没有服务导入并调用 → WARN；调用了但所在包没有 `Steps.Drain(ctx)` → WARN）与 `effect-consumer:<service>/<func>`（消费者函数在服务包里没有调用 → WARN）。只证明“写了”，不证明运行时一定走到；注释里的用法不算调用。
+- **容量写进骨架**：`steps.go` 注释、`add saga` next 提示与 `roost help saga` 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接性能报告；effect 消费者骨架写明逐条处理、未单独测量。
+- **game-demo**：保留手写接线（`gift_saga.go` 的按 sid 准入与转交依赖服务 Init 里才有的玩家驻留表与总线，迁移改动不可控），生成的 `saga/gift_item/steps.go` 由 demo 模板换成指向 `gift_saga.go` 的说明（doctor 不对它报 WARN）；升级邮件 `level_up_mail.go` 已是 `SubscribeEffects` 写法，未改名为生成器的函数名。
+- **验证**：codegen 单测（生成物形状与登记顺序、`-native` 子集 / 重复 / 缺组件 / 服务无 nest、同名 handler、重复 add、错误输入工程逐字节不变、无 `-native` 等价 Mongo 登记、effect 生成与第二消费者、doctor 两项）、生成工程编译（骨架未填业务与接线后 build / vet / doctor OK），以及真实依赖端到端 `TestGeneratedSagaNativeStepsAndEffectConsumer`（新手工程 add saga -native + add effect → 填最小业务 → 真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿与一条 effect 消费恰好一次，挂在 `scripts/test-demo-generated.sh`）。
+
 
 **实施结果**：
 
@@ -272,7 +282,7 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 3. **saga 性能同机前后对照**：见 [性能报告](../performance/SAGA-D12-20261018.md)。`scripts/perf/saga.sh` / `TestRealSagaPerformance` 只走 framework/saga 的 Mongo 步骤入口，D12 没改它（代码相同），对照只能证明旧路径不受影响：正向 20/s、全补偿 10/s 两版本都通过（新版本一个样本因 Mongo 主节点超时失败，补跑通过，原因尚未确认）。另做经过新 API 的负载（`TestRealNativeStepsPerformance`，真实 Nest + DataEngine，基线用 D12 之前的手写组装）：正向 5/s、全补偿 3/s 各两轮，手写与 `Steps` 无可测差异；**正向 20/s 与全补偿 10/s 在原生路径上两种写法都饱和崩溃**，正向 10/s、全补偿 5/s 已崩——单进程原生步骤容量是新发现（不是 D12 引入），登记 KNOWN-LIMITS。
 4. **已存在 durable 的参数变更**：已验证（nats-server 2.14.5）。`Subscribe` 用 `CreateOrUpdateConsumer`，D12 改的 `game-level-up-mail` MaxDeliver 20 → 25000、MaxAckPending（服务器缺省 1000）→ 256 原地生效、投递进度保留，不会静默沿用旧参数；DeliverPolicy 等不可变字段不同则服务器拒绝（10012 `deliver policy can not be updated`），原报错不说是哪个流 / durable。已修：建立失败都带上流与 durable，不可变冲突时点名“停掉使用它的进程、`nats consumer rm <流> <durable>` 后再启动，投递进度丢失”（`infra/network/nats/driver/real_nats_integration_test.go` 的 `TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace`）。收件箱集合改名的升级说明维持 CHANGELOG 原文。
 
-**B 评估（2026-10-18，基于上面的验证；不实施）**：
+**B 评估（2026-10-18，基于上面的验证；当时建议再等等，同日维护者批准开工并已实施，见上文“B 实施结果”）**：
 
 - **A 的 API 是否稳定到可以写生成器**：验证没有发现需要改形状的 API。真实 Nest、两进程转交、正常停机与 kill -9 下 `NativeStep.Complete`、`Steps.Native` / `Mongo` / `WithAdmit` / `Start` / `Drain` / `RunHandedOver`、`SubscribeEffects` / `PoisonEffect` 的契约都按文档成立；发现的缺陷（命令摘要的时区）修在 framework 内部，不改签名。可能**新增**而不改已有签名的地方：原生步骤容量若要提高，最可能的落点是步骤消费者的并发度（一个 durable 在一个进程内并行处理多条，`Steps` 多一个步骤选项）或投影器对带回执 / effect 记录的合批；二者都不要求迁移生成物，但会改变生成骨架里该写的容量说明。
 - **生成物与归属**（沿用 `add rpc` / `add timer` 的“业务文件只建一次”，这里没有需要重生成的 `*_gen.go`）：

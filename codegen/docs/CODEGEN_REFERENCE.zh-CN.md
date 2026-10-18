@@ -22,7 +22,7 @@ roost help all              # 全部专题
 roost <command> --help      # 上下文帮助
 ```
 
-可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`services`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
+可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`services`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`effect`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
 
 框架发布维护者使用 `roost framework verify` 校验 `ci/framework-release.yaml` 的精确版本集合并生成 `framework-lock.json`。该命令拒绝 `latest`、replace 和框架内部伪版本依赖；具体发布顺序与 GitHub Environment 配置见 `docs/CI_CD_IMPLEMENTATION.zh-CN.md`。
 
@@ -127,7 +127,7 @@ go test ./...
 
 ## 3. 业务骨架：roost add
 
-支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc`。
+支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer`。
 
 ```bash
 roost add service world -mods etcd,redis,mongo,nats,dataengine,nest
@@ -149,12 +149,28 @@ roost add dao player --entity player
 roost add webroute gm_query
 roost add errcode item_not_found
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
+roost add saga gift -service game -steps debit,credit,audit -native debit,credit -entity player -component wallet
+roost add effect player.level_up -consumer game
 roost add rpc guild -service game
 ```
 
 `add entity` 的骨架默认是本地实体；改成 Remote 托管要一起改三处（骨架注释写明）：`category=entity.EntityCategoryRemote`、标记加 `remote=managed`、嵌入改为 `*entity.RemoteEntityBase`，并给写它的 Nest 服务加 `remote_entity` Mod（`roost add mod remote_entity -service <service>`；`generate` / doctor 缺时拒绝并给出这条命令）。
 
-`add saga` 的 `-steps` 按执行顺序书写：生成的 `Definition()` 原样保留这个顺序（Saga 按下标推进、按下标倒序补偿），重复的步骤名（含只差大小写、蛇形化后相同的名字）直接报错；`-mods`、`-features` 这类集合参数才会去重排序。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
+`add saga` 的 `-steps` 按执行顺序书写：生成的 `Definition()` 原样保留这个顺序（Saga 按下标推进、按下标倒序补偿），重复的步骤名（含只差大小写、蛇形化后相同的名字）直接报错；`-mods`、`-features` 这类集合参数才会去重排序。
+
+`add saga` 的生成物都是业务文件、只建一次（再次 add 同名 saga 报 already exists，任何校验失败都不写文件）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
+| `saga/<name>/steps.go` | `StepsGroup = "<service>-<name>"`（durable 前缀，上线后不要改名）、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿的步骤体、`RegisterSteps(steps, deps)`（按 `-steps` 顺序与主题常量登记：`-native` 的 `Steps.Native`，其余 `Steps.Mongo`；`WithAdmit` 留空并注释多进程分片要补）、`StartSteps(ctx, registry, deps)`；注释写明单进程容量 |
+| `game/handler/<name>_<step>.go`、`<name>_<step>_compensation.go` | 每个 `-native` 步骤两个 Nest handler：`func handler<Name><Step>(target <entity>.I<Component>Entity, step saga.NativeStep) error`，事务里 `step.Complete`，业务拒绝也提交 |
+
+`-native` 保序解析，必须是 `-steps` 的子集、不能重复；锁目标 `-entity` / `-component` 与 `add handler` 相同（工程只有一个 Entity 时 `-entity` 可省），跑步骤的服务要有 nest Mod，与已有 Nest handler 同名时拒绝。骨架默认拒绝（`... is not implemented`），写完业务前 saga 不报告成功。服务的 `Init` / `Shutdown` 不改写：next 提示给出 `steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})` 与 `steps.Drain(ctx)` 两行，doctor 的 `saga-steps:<name>` 在没有服务调用 `StartSteps` / `RegisterSteps`（或所在包没有 `Steps.Drain(ctx)`）时 WARN。
+
+容量（维护者 2026-10-18 决定按 A：接受并文档化）：一个进程在每个步骤 durable 上逐条处理，原生步骤约 14～18 条/s；原生步骤组成的 saga 正向约 10/s、全补偿约 5/s 开始饱和，超过后重试放大；量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [Saga D12 前后对照](../../docs/performance/SAGA-D12-20261018.md)。
+
+`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 
 需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
 
