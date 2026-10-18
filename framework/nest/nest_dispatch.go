@@ -687,7 +687,7 @@ func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) erro
 		prepareCtx = current.Base
 	}
 	if manager == nil {
-		return entity.ErrRemoteWriteCapabilityDisabled
+		return fmt.Errorf("remote=managed entity %d: %w", ids[0], entity.ErrNoRemoteRuntime)
 	}
 	batch, err := manager.PrepareRemoteWriteBatch(prepareCtx, ids)
 	if err != nil {

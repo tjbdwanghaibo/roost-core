@@ -206,6 +206,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **建议修法**：工程里有 `remote=managed` 实体而所属服务没有 `remote_entity` Mod 时，generate / doctor 报错并给出 `roost add mod remote_entity -service <svc>`；写入拒绝的错误带上这条修法；骨架注释写明三件事（类别、remote=managed、嵌入 RemoteEntityBase）。
 
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 4）：generate / doctor `remote-runtime` 在带 Nest 的服务全都缺 `remote_entity` 时拒绝并给出命令（部分缺为 WARN：实体由哪个服务写静态上看不出）；运行时错误 `entity.ErrNoRemoteRuntime` 点名修法；骨架注释写明三处；漏换嵌入的报错点名字段；无 DAO 的 Remote 实体 wire 能编译。
+
 ### 5. 技能目录在生成工程里没有任何地方编译，写坏的 JSON 通过 build / test / doctor
 
 **现象**：`roost add skill Fireball` 生成 `game/skills/fireball.json` 与 `catalog.go`（`CompileAll`），但工程里没有调用 `CompileAll` 的地方，也没有测试。把 JSON 里的 `"flow": "finish"` 改成不存在的流程后，`go build`、`go test ./game/skills/`（无测试文件）、`roost project doctor` 全部通过；只有手动调用 `CompileAll` 才报 `parse Skill fireball.json: phases: [0].on: unsupported flow "explode_everything"`。`roost help skill` 只写“启动时：skills.CompileAll(...)”。

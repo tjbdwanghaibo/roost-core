@@ -544,3 +544,48 @@ func TestGenerateRefusesTheRetiredCubeMarkerPrefix(t *testing.T) {
 		t.Fatalf("generate over a //cube: marker = %v, want a refusal naming the file", err)
 	}
 }
+
+// 声明 remote=managed 的实体由 Remote 运行时（remote_entity Mod）负责写权限；带 Nest 的服务都没有这个 Mod 时，
+// 每次写都在运行时被拒（remote entity: write capability disabled）。generate 在跑生成器之前就拒绝并给出加 Mod 的命令，
+// 不让编译、doctor 都通过之后才在运行时发现。
+func TestGenerateRefusesRemoteManagedEntityWithoutRemoteRuntime(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "game", "entities", "guild", "entity.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed", 1)
+	text = strings.Replace(text, "*entity.EntityBase", "*entity.RemoteEntityBase", 1)
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runGenerators(context.Background(), root, m, nil, GenerateOptions{Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "Guild") || !strings.Contains(err.Error(), "roost add mod remote_entity -service game") {
+		t.Fatalf("generate with a remote=managed entity and no remote_entity Mod = %v; want a refusal naming the entity and the command", err)
+	}
+	if item, ok := checkRemoteRuntime(root, m); !ok || item.Status != StatusFail || !strings.Contains(item.Detail, "roost add mod remote_entity -service game") {
+		t.Fatalf("doctor remote-runtime = %+v (reported %v); want a FAIL with the command", item, ok)
+	}
+	spec := m.Services["game"]
+	spec.Mods = append(spec.Mods, "remote_entity")
+	m.Services["game"] = spec
+	if err := runGenerators(context.Background(), root, m, nil, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("with remote_entity on the Nest service: %v", err)
+	}
+	if item, ok := checkRemoteRuntime(root, m); !ok || item.Status != StatusOK {
+		t.Fatalf("doctor remote-runtime with the Mod = %+v (reported %v); want OK", item, ok)
+	}
+}

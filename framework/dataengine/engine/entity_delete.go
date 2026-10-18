@@ -118,7 +118,7 @@ func (runtime *Runtime) admitLocalEntityDelete(ctx context.Context, value entity
 // 交给批次的 Indeterminate 收尾并 fatal。
 func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entity.IThreadSafeEntity) (entity.DeleteAdmission, error) {
 	if runtime.remoteManager == nil {
-		return entity.DeleteAdmissionImmediate, entity.ErrRemoteWriteCapabilityDisabled
+		return entity.DeleteAdmissionImmediate, fmt.Errorf("delete remote=managed entity %d: %w", value.ID(), entity.ErrNoRemoteRuntime)
 	}
 	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，业务 worker 上不允许等待。
 	// 在任何远端/WAL 副作用之前明确拒绝：实体保留在内存、不 fence，调用方可按

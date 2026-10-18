@@ -260,6 +260,8 @@ func TestRemoteDeleteAdmissionRequiresRemoteWriteCapability(t *testing.T) {
 	noManager := newDeleteRuntime(entity.NewEntityManager(), nil)
 	if admission, err := noManager.admitEntityDelete(ctx, remote, 1); !errors.Is(err, entity.ErrRemoteWriteCapabilityDisabled) || admission != entity.DeleteAdmissionImmediate {
 		t.Fatalf("without remote manager: admission=%v err=%v", admission, err)
+	} else if !strings.Contains(err.Error(), "remote_entity") {
+		t.Fatalf("without remote manager: error %q does not name the missing remote_entity Mod", err)
 	}
 
 	nilBatch := newDeleteRuntime(entity.NewEntityManager(), batchManager{})

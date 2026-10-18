@@ -259,6 +259,26 @@ func TestRemoteManagedDispatchRejectsBroadcast(t *testing.T) {
 	}
 }
 
+// 进程没有 Remote 运行时（生成工程里就是服务没有 remote_entity Mod）时，写 Remote 托管实体被拒；错误保持
+// ErrRemoteWriteCapabilityDisabled，并点名缺的是什么、怎么补，不只是一句 "write capability disabled"。
+func TestRemoteManagedDispatchWithoutRemoteRuntimeNamesTheFix(t *testing.T) {
+	const kind entity.EntityKind = 196
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(9203, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = prepareRemoteWriteBatch(nil, &Msg{Type: MsgTypeSingle, Tid: id, HasRemote: true})
+	if !errors.Is(err, entity.ErrRemoteWriteCapabilityDisabled) {
+		t.Fatalf("err=%v, want ErrRemoteWriteCapabilityDisabled", err)
+	}
+	for _, want := range []string{"no Remote runtime", "remote_entity"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
 type remoteBatchIntegrationFake struct {
 	commit        entity.RemoteCommit
 	aborted       bool

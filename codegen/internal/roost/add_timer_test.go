@@ -149,6 +149,8 @@ func TestAddTimerRefusesWhatItCannotSupport(t *testing.T) {
 	t.Parallel()
 	root := newTimerProject(t)
 	for _, options := range []AddOptions{
+		// Guild 改成 remote=managed：写它的 Nest 服务要有 Remote 运行时，否则 generate 拒绝（remoteRuntimeHosts）。
+		{Kind: "mod", Name: "remote_entity", Service: "game", Warnings: io.Discard},
 		{Kind: "entity", Name: "Npc"},
 		{Kind: "entity", Name: "Guild"},
 		{Kind: "dao", Name: "Guild", Entity: "Guild"},

@@ -107,6 +107,9 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	}
 	report.Items = append(report.Items, checkCICDTemplates(root)...)
 	report.Items = append(report.Items, checkFrameworkCollaborators(root, m)...)
+	if item, ok := checkRemoteRuntime(root, m); ok {
+		report.Items = append(report.Items, item)
+	}
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})
@@ -226,6 +229,30 @@ func checkCICDTemplates(root string) []CheckItem {
 		items = append(items, CheckItem{Name: "cicd:reproducible", Status: StatusOK, Detail: "ordinary CI uses committed go.mod/go.sum"})
 	}
 	return items
+}
+
+// checkRemoteRuntime 是 doctor 的 remote-runtime 项：工程里有 remote=managed 实体时，带 Nest 的服务要有
+// remote_entity Mod 才写得了它（规则与 generate 相同，见 remoteRuntimeHosts）。没有这类实体时不报这一项。
+func checkRemoteRuntime(root string, m Manifest) (CheckItem, bool) {
+	missing, partial, err := remoteRuntimeHosts(root, m)
+	switch {
+	case err != nil:
+		return CheckItem{Name: "remote-runtime", Status: StatusFail, Detail: "scan entity markers: " + err.Error()}, true
+	case missing != "":
+		return CheckItem{Name: "remote-runtime", Status: StatusFail, Detail: missing}, true
+	case partial != "":
+		return CheckItem{Name: "remote-runtime", Status: StatusWarn, Detail: partial}, true
+	}
+	kinds, err := projectEntityKinds(root)
+	if err != nil {
+		return CheckItem{}, false
+	}
+	for _, kind := range kinds {
+		if kind.managed {
+			return CheckItem{Name: "remote-runtime", Status: StatusOK, Detail: "every service running Nest has the remote_entity Mod for the remote=managed entities"}, true
+		}
+	}
+	return CheckItem{}, false
 }
 
 // collaboratorUnconfiguredMarker is the phrase every generated fail-closed
