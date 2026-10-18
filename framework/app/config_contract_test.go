@@ -456,11 +456,52 @@ func TestProductionServiceConfigBaselineIsValid(t *testing.T) {
 	}
 }
 
+// crossCheckedMod 记录 App 调用跨 Mod 检查时看到的已注册 Mod。
+type crossCheckedMod struct {
+	declaredMod
+	calls *int
+	saw   func(func(ModName) bool) error
+}
+
+func (m crossCheckedMod) CheckConfigAcrossMods(_ *viper.Viper, registered func(ModName) bool) error {
+	*m.calls++
+	return m.saw(registered)
+}
+
+// 跨 Mod 一致性规则在本服务全部声明检查通过之后调用一次（启动前与 --check-config 同一处），错误点名 Mod；
+// 声明检查已经失败时不再调用，免得同一个错误经另一个 Mod 再报一遍。
+func TestCrossModConfigCheckRunsAfterDeclarationsPass(t *testing.T) {
+	calls := 0
+	checker := crossCheckedMod{
+		declaredMod: declaredMod{name: "checker", schema: SchemaOf(bankConfigForTest{})},
+		calls:       &calls,
+		saw: func(registered func(ModName) bool) error {
+			if !registered("other") || registered("absent") {
+				return errors.New("registered set is wrong")
+			}
+			return errors.New("values disagree")
+		},
+	}
+	other := declaredMod{name: "other", schema: SchemaOf(ServiceIdentity{})}
+	cfg := viper.New()
+	cfg.Set("sid", 1)
+	cfg.Set("server_type", "game")
+	err := CheckConfig(cfg, checker, other)
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), "mod checker: values disagree") {
+		t.Fatalf("calls=%d err=%v; want one cross-Mod check naming the Mod", calls, err)
+	}
+	cfg.Set("bank.retries", -1)
+	calls = 0
+	if err := CheckConfig(cfg, checker, other); err == nil || calls != 0 {
+		t.Fatalf("calls=%d err=%v; want the declaration error alone", calls, err)
+	}
+}
+
 func TestSharedKeyErrorIsReportedOnceAcrossOwners(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("sid", "abc")
 	schema := SchemaOf(ServiceIdentity{})
-	_, err := checkConfig(cfg, []configDeclaration{{owner: "mod a", schema: schema}, {owner: "mod b", schema: schema}})
+	_, err := checkConfig(cfg, []configDeclaration{{owner: "mod a", schema: schema}, {owner: "mod b", schema: schema}}, nil)
 	if err == nil || strings.Count(err.Error(), "sid must be a whole number") != 1 {
 		t.Fatalf("one invalid key produced repeated owner errors: %v", err)
 	}

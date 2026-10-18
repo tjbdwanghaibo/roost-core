@@ -2,6 +2,7 @@ package saga
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -69,8 +70,14 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if owner == "" {
 		owner = fmt.Sprintf("saga-%d-%s", settings.Sid, coresaga.NewID())
 	}
-	resultStream := stringDefault(c.ResultEffectStream, c.StartEffectStream)
-	resultPrefix := stringDefault(c.ResultEffectPrefix, c.StartEffectPrefix)
+	effects, err := kitdataengine.LoadEffectsConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("saga: %w", err)
+	}
+	startStream := stringDefault(c.StartEffectStream, effects.Stream)
+	startPrefix := stringDefault(c.StartEffectPrefix, effects.Prefix())
+	resultStream := stringDefault(c.ResultEffectStream, startStream)
+	resultPrefix := stringDefault(c.ResultEffectPrefix, startPrefix)
 	m.config = coresaga.AssemblyConfig{
 		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
 			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
@@ -97,7 +104,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			MaxAckPending: c.ResultEffect.MaxAckPending, NakBackoffMin: c.ResultEffect.NakBackoffMin, NakBackoffMax: c.ResultEffect.NakBackoffMax,
 		},
 		Starts: coresaga.NestStartConsumerConfig{
-			Stream: c.StartEffectStream, Durable: c.StartEffectDurable, EffectPrefix: c.StartEffectPrefix,
+			Stream: startStream, Durable: c.StartEffectDurable, EffectPrefix: startPrefix,
 			AckWait: c.StartEffect.AckWait, ProcessTimeout: c.StartEffect.ProcessTimeout, MaxDeliver: c.StartEffect.MaxDeliver,
 			MaxAckPending: c.StartEffect.MaxAckPending, NakBackoffMin: c.StartEffect.NakBackoffMin, NakBackoffMax: c.StartEffect.NakBackoffMax,
 		},
@@ -114,6 +121,38 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
 	}
 	return m.checkEffectRetention(cfg)
+}
+
+// CheckConfigAcrossMods 是 saga 效果流与 DataEngine 效果流的一致性规则（App 在配置检查时调用，启动前与
+// --check-config 相同）。同一进程注册了 DataEngine 时，Nest 的 saga start 由它发布到 dataengine.effects 那条流，
+// 本 Mod 的 start 消费者订阅 saga.start_effect_*：两边写得不同，启动时只会得到 JetStream 的 "stream not found"
+// 或永远收不到 start。这里点名两个键并给出改法。没有 DataEngine 的进程不比较（显式值就是它要订阅的流）。
+func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModName) bool) error {
+	if !registered(mods.ModDataEngine) {
+		return nil
+	}
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return err
+	}
+	effects, err := kitdataengine.LoadEffectsConfig(cfg)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if stream := strings.TrimSpace(settings.Saga.StartEffectStream); stream != "" && stream != effects.Stream {
+		errs = append(errs, effectKeyMismatch("saga.start_effect_stream", stream, "dataengine.effects.stream", effects.Stream))
+	}
+	if prefix := strings.Trim(strings.TrimSpace(settings.Saga.StartEffectPrefix), "."); prefix != "" && prefix != effects.Prefix() {
+		errs = append(errs, effectKeyMismatch("saga.start_effect_prefix", settings.Saga.StartEffectPrefix, "dataengine.effects.subject_prefix", effects.Prefix()))
+	}
+	return errors.Join(errs...)
+}
+
+func effectKeyMismatch(sagaKey, sagaValue, effectKey, effectValue string) error {
+	return fmt.Errorf("%s (%q) differs from %s (%q): this process's Data Engine publishes Nest saga starts on the effect stream, "+
+		"and the saga start consumer would subscribe elsewhere (startup fails with \"stream not found\" or never sees a start); "+
+		"delete %s so it follows %s, or set both to the same value", sagaKey, sagaValue, effectKey, effectValue, sagaKey, effectKey)
 }
 
 // checkEffectRetention 是跨 Mod 校验（维护者决定）：原生 Nest 步骤的完成结果在

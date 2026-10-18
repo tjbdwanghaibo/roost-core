@@ -198,6 +198,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **建议修法**：同进程有 DataEngine 时 saga 的 start / result effect 流与前缀默认取 `dataengine.effects` 的值（显式写了才覆盖）；两者都显式写且不一致时 `--check-config` / doctor 报错并点名两个键。
 
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 3）：saga 两个键不写时取 `dataengine.effects`、生成配置不再写；同进程有 DataEngine 时显式写了不同值，启动前 / `--check-config` / doctor `config-check:<service>` 拒绝并点名两个键。
+
 ### 4. 声明 `remote=managed` 的实体缺 Remote 运行时，生成与 doctor 都不提示
 
 **现象**：`roost add entity Guild` 后把标记改成 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，不加 `remote_entity` Mod：`roost generate`、`go build`、`roost project doctor` 全部通过；写这个实体的 handler 在运行时返回 `remote entity: write capability disabled`（进程内 harness 实测，写入被拒、无提交），报错不说缺的是 `remote_entity` Mod。另两点：`add entity` 骨架注释只说“改成 remote=managed 时移到 EntityCategoryRemote”，没提要换嵌入 `*entity.RemoteEntityBase`；漏换时 `roost generate` 在这一个实体上中止整次生成，其他实体的 DAO 也没生成，随后的编译报错（`undefined: db.GuildDao`）把人引向无关的地方。

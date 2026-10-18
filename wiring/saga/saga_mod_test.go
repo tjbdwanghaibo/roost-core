@@ -12,6 +12,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
@@ -51,6 +52,56 @@ func TestModChecksEffectRetentionOnlyAgainstTheStreamItReadsResultsFrom(t *testi
 	renamed := "dataengine:\n  effects:\n    stream: GAME_EFFECTS\n    max_age: 800h\nsaga:\n  completion_receipt_ttl: 720h\n  start_effect_stream: GAME_EFFECTS\n"
 	if err := NewMod().Init(yamlConfig(t, renamed)); err == nil || !strings.Contains(err.Error(), "dataengine.effects.max_age") {
 		t.Fatalf("renamed shared stream with 800h retention: %v; want the cross-Mod check to refuse", err)
+	}
+}
+
+// Nest 发起的 start 与原生步骤的结果都由 DataEngine 发布到 dataengine.effects 那条流上，saga 的消费者必须订阅同一条流、
+// 同一个主题前缀。没写 saga.start_effect_stream / start_effect_prefix 时直接取 dataengine.effects 的值（效果流只写一处）。
+func TestSagaFollowsTheDataEngineEffectStreamByDefault(t *testing.T) {
+	mod := NewMod()
+	if err := mod.Init(yamlConfig(t, "dataengine:\n  effects:\n    stream: OTHER_EFFECTS\n    subject_prefix: other.effect.\n")); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]string{
+		"start stream": mod.config.Starts.Stream, "start prefix": mod.config.Starts.EffectPrefix,
+		"result stream": mod.config.NestResults.Stream, "result prefix": mod.config.NestResults.EffectPrefix,
+	} {
+		want := "OTHER_EFFECTS"
+		if strings.HasSuffix(name, "prefix") {
+			want = "other.effect"
+		}
+		if got != want {
+			t.Errorf("saga %s = %q, want dataengine.effects value %q", name, got, want)
+		}
+	}
+}
+
+// 同一进程里有 DataEngine 时，显式写了且与 dataengine.effects 不同的 saga 效果流键在配置检查（启动前、--check-config）
+// 就拒绝并点名两个键与改法；修前要到启动订阅时才报 "stream not found"，不说是哪两个键。
+func TestConfigCheckRefusesSagaEffectKeysThatDisagreeWithDataEngine(t *testing.T) {
+	base := "sid: 1\nserver_type: game\ndataengine:\n  effects:\n    stream: OTHER_EFFECTS\n    subject_prefix: other.effect\n"
+	for name, tc := range map[string]struct{ saga, keys string }{
+		"stream": {"saga:\n  start_effect_stream: ROOST_EFFECTS\n", "saga.start_effect_stream dataengine.effects.stream"},
+		"prefix": {"saga:\n  start_effect_prefix: roost.effect\n", "saga.start_effect_prefix dataengine.effects.subject_prefix"},
+	} {
+		err := app.CheckConfig(yamlConfig(t, base+tc.saga), NewMod(), kitdataengine.NewMod())
+		if err == nil {
+			t.Errorf("%s: config check passed although saga and dataengine.effects name different effect streams", name)
+			continue
+		}
+		for _, want := range append(strings.Fields(tc.keys), "delete") {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not mention %s", name, err, want)
+			}
+		}
+	}
+	// 写成相同的值（含首尾点的差别）不报错；没有 DataEngine 的进程（只跑协调器）可以显式指向别的流。
+	same := base + "saga:\n  start_effect_stream: OTHER_EFFECTS\n  start_effect_prefix: .other.effect\n"
+	if err := app.CheckConfig(yamlConfig(t, same), NewMod(), kitdataengine.NewMod()); err != nil {
+		t.Errorf("equal values refused: %v", err)
+	}
+	if err := app.CheckConfig(yamlConfig(t, base+"saga:\n  start_effect_stream: ROOST_EFFECTS\n"), NewMod()); err != nil {
+		t.Errorf("a saga-only process pointing at another effect stream refused: %v", err)
 	}
 }
 

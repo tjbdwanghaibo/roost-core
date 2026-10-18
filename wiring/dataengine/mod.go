@@ -526,14 +526,27 @@ const (
 // EffectStreamRetention 按 DataEngine Mod 的声明返回效果流的名字与保留期
 // （dataengine.effects.stream / dataengine.effects.max_age，未配置取缺省）。
 func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duration, err error) {
+	effects, err := LoadEffectsConfig(cfg)
+	if err != nil {
+		return "", 0, err
+	}
+	return effects.Stream, effects.MaxAge, nil
+}
+
+// LoadEffectsConfig 按 DataEngine Mod 的声明读 dataengine.effects.*（未配置取缺省）。saga Mod 用它取
+// 效果流的名字与主题前缀：Nest 发起的 saga start 与原生步骤的结果都发布在这条流上，效果流只在这里写一次。
+func LoadEffectsConfig(cfg *viper.Viper) (EffectsConfig, error) {
 	var settings struct {
 		Effects EffectsConfig `config:"dataengine.effects"`
 	}
 	if err := app.LoadConfig(cfg, &settings); err != nil {
-		return "", 0, err
+		return EffectsConfig{}, err
 	}
-	return settings.Effects.Stream, settings.Effects.MaxAge, nil
+	return settings.Effects, nil
 }
+
+// Prefix 是效果主题前缀去掉首尾点之后的值，与 Mod 发布效果时用的相同。
+func (c EffectsConfig) Prefix() string { return c.subjectPrefix() }
 
 // EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流
 // 要用的三样：效果收件箱所在的库（dataengine.database）、主题前缀（去掉首尾点，与 Mod 发布时相同）与流名。

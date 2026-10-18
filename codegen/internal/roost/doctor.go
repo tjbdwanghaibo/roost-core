@@ -72,14 +72,15 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	// 业务声明只有编译后的进程知道：工程能编译时，config-schema 检查编译一次进程、读回每个服务的
 	// 全部声明；编译不过（compile:go-list 已 FAIL）时只按框架声明检查。
 	var processSchemas serviceSchemaSource
+	var process *projectProcess
 	if goAvailable {
 		report.Items = append(report.Items, runDoctorGoCommand(ctx, root, "dependencies:go-mod-verify", 2*time.Minute, "go mod verify passed", "run GOWORK=off go mod download, then retry", "mod", "verify"))
 		list := runDoctorGoCommand(ctx, root, "compile:go-list", 2*time.Minute, "all packages loaded with -mod=readonly", "fix package/import errors without changing go.mod, then retry; after a failed or interrupted project upgrade run roost project deps first", "list", "-buildvcs=false", "-mod=readonly", "./...")
 		report.Items = append(report.Items, list)
 		if list.Status == StatusOK {
-			source, cleanup := processConfigSchemas(ctx, root)
+			built, cleanup := newProjectProcess(ctx, root)
 			defer cleanup()
-			processSchemas = source
+			process, processSchemas = built, built.schema
 		}
 		if options.Strict {
 			report.Items = append(report.Items, runDoctorGoCommand(ctx, root, "compile:go-test", 5*time.Minute, "all packages and tests compiled", "run GOWORK=off go test -buildvcs=false -mod=readonly -run=^$ ./... and fix the reported compiler error", "test", "-buildvcs=false", "-mod=readonly", "-run=^$", "./..."))
@@ -94,6 +95,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 		}
 	}
 	report.Items = append(report.Items, checkConfigDeclarations(root, m, processSchemas)...)
+	report.Items = append(report.Items, checkConfigRules(root, m, process)...)
 	report.Items = append(report.Items, checkConfigSections(root, m)...)
 	report.Items = append(report.Items, checkConfigReads(root))
 	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)

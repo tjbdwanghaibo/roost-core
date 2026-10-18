@@ -40,51 +40,104 @@ type serviceSchemaSource func(service string) (configschema.Schema, error)
 // processConfigSchemas 在 root 里编译一次工程的进程（go build，与 compile:go-list 同样 -mod=readonly），之后每次
 // 调用对一个服务运行 `--print-config-schema` 并解析它打印的 JSON 键表。返回的 cleanup 删掉临时二进制。
 func processConfigSchemas(ctx context.Context, root string) (serviceSchemaSource, func()) {
-	var (
-		once     sync.Once
-		dir      string
-		binary   string
-		buildErr error
-	)
-	build := func() {
-		dir, buildErr = os.MkdirTemp("", "roost-doctor-config-")
-		if buildErr != nil {
+	process, cleanup := newProjectProcess(ctx, root)
+	return process.schema, cleanup
+}
+
+// projectProcess 是 doctor 在工程里编译的进程：第一次使用时编译一次，之后读声明（--print-config-schema）与
+// 按全部 Mod 的声明和跨 Mod 规则检查配置（--check-config）共用这一个二进制。
+type projectProcess struct {
+	ctx      context.Context
+	root     string
+	once     sync.Once
+	dir      string
+	binary   string
+	buildErr error
+}
+
+func newProjectProcess(ctx context.Context, root string) (*projectProcess, func()) {
+	process := &projectProcess{ctx: ctx, root: root}
+	cleanup := func() {
+		if process.dir != "" {
+			_ = os.RemoveAll(process.dir)
+		}
+	}
+	return process, cleanup
+}
+
+func (p *projectProcess) build() error {
+	p.once.Do(func() {
+		p.dir, p.buildErr = os.MkdirTemp("", "roost-doctor-config-")
+		if p.buildErr != nil {
 			return
 		}
-		binary = filepath.Join(dir, "service")
+		p.binary = filepath.Join(p.dir, "service")
 		if runtime.GOOS == "windows" {
-			binary += ".exe"
+			p.binary += ".exe"
 		}
-		buildCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		buildCtx, cancel := context.WithTimeout(p.ctx, 5*time.Minute)
 		defer cancel()
 		var output bytes.Buffer
-		if err := runCommandTree(buildCtx, root, append(os.Environ(), "GOWORK=off"), &output, &output, "go", "build", "-buildvcs=false", "-mod=readonly", "-o", binary, "."); err != nil {
-			buildErr = fmt.Errorf("go build: %v: %s", err, lastBytes(output.String(), 1024))
+		if err := runCommandTree(buildCtx, p.root, append(os.Environ(), "GOWORK=off"), &output, &output, "go", "build", "-buildvcs=false", "-mod=readonly", "-o", p.binary, "."); err != nil {
+			p.buildErr = fmt.Errorf("go build: %v: %s", err, lastBytes(output.String(), 1024))
 		}
+	})
+	return p.buildErr
+}
+
+func (p *projectProcess) schema(service string) (configschema.Schema, error) {
+	if err := p.build(); err != nil {
+		return configschema.Schema{}, err
 	}
-	source := func(service string) (configschema.Schema, error) {
-		once.Do(build)
-		if buildErr != nil {
-			return configschema.Schema{}, buildErr
-		}
-		runCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		var stdout, stderr bytes.Buffer
-		if err := runCommandTree(runCtx, root, append(os.Environ(), "GOWORK=off"), &stdout, &stderr, binary, service, "--print-config-schema"); err != nil {
-			return configschema.Schema{}, fmt.Errorf("%s --print-config-schema: %v: %s", service, err, lastBytes(stderr.String(), 1024))
-		}
-		var keys []configschema.Key
-		if err := json.Unmarshal(stdout.Bytes(), &keys); err != nil {
-			return configschema.Schema{}, fmt.Errorf("%s --print-config-schema: not a key list: %w", service, err)
-		}
-		return configschema.Schema{Keys: keys}, nil
+	runCtx, cancel := context.WithTimeout(p.ctx, time.Minute)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if err := runCommandTree(runCtx, p.root, append(os.Environ(), "GOWORK=off"), &stdout, &stderr, p.binary, service, "--print-config-schema"); err != nil {
+		return configschema.Schema{}, fmt.Errorf("%s --print-config-schema: %v: %s", service, err, lastBytes(stderr.String(), 1024))
 	}
-	cleanup := func() {
-		if dir != "" {
-			_ = os.RemoveAll(dir)
-		}
+	var keys []configschema.Key
+	if err := json.Unmarshal(stdout.Bytes(), &keys); err != nil {
+		return configschema.Schema{}, fmt.Errorf("%s --print-config-schema: not a key list: %w", service, err)
 	}
-	return source, cleanup
+	return configschema.Schema{Keys: keys}, nil
+}
+
+// checkConfig 运行 `<bin> <service> --check-config --config <rel>`：与进程启动前同一处检查，除了键的声明，还有
+// 各 Mod 配置结构体的跨键规则（ValidateConfig）与跨 Mod 的一致性规则（app.ModConfigCrossChecker，例如 saga 的效果流
+// 必须就是同进程 DataEngine 的那条）。这些规则只在编译后的进程里，快照查不到。
+func (p *projectProcess) checkConfig(service, rel string) error {
+	if err := p.build(); err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithTimeout(p.ctx, time.Minute)
+	defer cancel()
+	var output bytes.Buffer
+	if err := runCommandTree(runCtx, p.root, append(os.Environ(), "GOWORK=off"), &output, &output, p.binary, service, "--check-config", "--config", rel); err != nil {
+		return fmt.Errorf("%s", lastBytes(output.String(), 2048))
+	}
+	return nil
+}
+
+// checkConfigRules 是 doctor 的 config-check 项：每个服务的开发配置交给编译后的进程 --check-config。生产示例与
+// Secret 示例带占位值，按生产规则检查必然失败，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项
+// （compile:go-list 已 FAIL）。
+func checkConfigRules(root string, m Manifest, process *projectProcess) []CheckItem {
+	if process == nil {
+		return nil
+	}
+	var items []CheckItem
+	for _, service := range sortedServiceNames(m) {
+		rel := filepath.ToSlash(filepath.Join("configs", "service", "config."+service+".yaml"))
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			continue
+		}
+		item := CheckItem{Name: "config-check:" + service, Status: StatusOK, Detail: rel + " passes the process's --check-config (declarations, cross-key and cross-mod rules)"}
+		if err := process.checkConfig(service, rel); err != nil {
+			item.Status, item.Detail = StatusFail, fmt.Sprintf("%s: %v; fix: the process refuses to start with this config; change the keys named above (same check as: go run . %s --check-config --config %s)", rel, err, service, rel)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func lastBytes(text string, limit int) string {

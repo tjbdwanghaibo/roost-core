@@ -152,7 +152,7 @@ func (a *App) loadServiceConfig(serverType ServiceName, requireFile bool) (strin
 	if a.rootCmd.Flags().Changed("sid") {
 		a.cfg.Set("sid", sid)
 	}
-	settings, err := checkConfig(a.cfg, a.serviceDeclarations(serverType))
+	settings, err := checkConfig(a.cfg, a.serviceDeclarations(serverType), a.serviceMods(serverType))
 	if err != nil {
 		return "", err
 	}

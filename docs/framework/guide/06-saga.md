@@ -20,6 +20,8 @@ Saga 是持久步骤状态机，不提供跨服务 ACID。协调器记录计划�
 
 原生实体步骤使用 Nest 事务和 DataEngine native inbox，把 DAO 修改与步骤 receipt 放在同一次持久提交内。外部 Mongo 步骤使用 Mongo step inbox，把业务写与 inbox 结论放在一个 Mongo 事务。两者不是可随意互换的幂等层。
 
+Nest 发起的 start（`EmitStart`）与原生步骤的结果都由 DataEngine 发布到效果流（`dataengine.effects.stream` / `subject_prefix`），saga 的 start / 结果消费者订阅同一条：`saga.start_effect_stream` / `start_effect_prefix` 不写时取 `dataengine.effects` 的值，效果流只在一处配置。同一进程注册了 DataEngine 时显式写了不同的值，配置检查（启动前、`--check-config`、doctor 的 `config-check:<service>`）就拒绝并点名两个键（`wiring/saga` 的 `CheckConfigAcrossMods`，经 `app.ModConfigCrossChecker`）；只跑协调器、没有 DataEngine 的进程可以用这两个键指向别的流。
+
 ## 3. 幂等与结果未知
 
 传输可能重复或回复丢失。请求身份、步骤身份、摘要、attempt 和 incarnation 要一起核对；相同请求身份不同内容应冲突。步骤结果未知不能当“没有生效”开始无条件补偿；先按持久收件箱和状态核实。至多一次生效依赖事务性 inbox，外部非事务系统需业务自行提供幂等。
