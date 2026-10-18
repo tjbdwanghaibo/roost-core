@@ -1,0 +1,136 @@
+{
+  "Variant": "glue",
+  "Mode": "compensate",
+  "Rate": 3,
+  "Planned": 900,
+  "Started": 900,
+  "Completed": 900,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 300,
+  "ElapsedSeconds": 300.290773375,
+  "CompletionTPS": 2.9970950818262048,
+  "P50MS": 655.776416,
+  "P95MS": 946.040167,
+  "P99MS": 1685.079833,
+  "MaxMS": 1872.275875,
+  "Server": {
+    "Samples": 900,
+    "P50MS": 611,
+    "P95MS": 899,
+    "P99MS": 1625,
+    "MaxMS": 1816
+  },
+  "StartCall": {
+    "Samples": 900,
+    "P50MS": 10.431959,
+    "P95MS": 21.127875,
+    "P99MS": 56.740375,
+    "MaxMS": 584.229792
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 180,
+      "P50MS": 644.474833,
+      "P99MS": 846.019167,
+      "MaxMS": 856.421375,
+      "ServerP99MS": 792
+    },
+    {
+      "Minute": 1,
+      "Count": 180,
+      "P50MS": 659.005042,
+      "P99MS": 1776.653416,
+      "MaxMS": 1807.098042,
+      "ServerP99MS": 1721
+    },
+    {
+      "Minute": 2,
+      "Count": 180,
+      "P50MS": 646.096708,
+      "P99MS": 1521.304916,
+      "MaxMS": 1650.213959,
+      "ServerP99MS": 1491
+    },
+    {
+      "Minute": 3,
+      "Count": 180,
+      "P50MS": 672.608584,
+      "P99MS": 1824.994333,
+      "MaxMS": 1854.9805,
+      "ServerP99MS": 1776
+    },
+    {
+      "Minute": 4,
+      "Count": 180,
+      "P50MS": 658.457375,
+      "P99MS": 1866.226625,
+      "MaxMS": 1872.275875,
+      "ServerP99MS": 1805
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 900,
+      "P50MS": 11.702292,
+      "P95MS": 27.104833,
+      "P99MS": 39.639875,
+      "MaxMS": 107.676875
+    },
+    "debit": {
+      "Samples": 900,
+      "P50MS": 15.541459,
+      "P95MS": 28.602667,
+      "P99MS": 41.183,
+      "MaxMS": 205.810167
+    },
+    "refund": {
+      "Samples": 900,
+      "P50MS": 13.7785,
+      "P95MS": 23.753667,
+      "P99MS": 27.844,
+      "MaxMS": 48.040208
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 899,
+      "P50MS": 321.985167,
+      "P95MS": 409.9265,
+      "P99MS": 455.963666,
+      "MaxMS": 1309.340625
+    },
+    "debit": {
+      "Samples": 899,
+      "P50MS": 331.946708,
+      "P95MS": 375.201166,
+      "P99MS": 392.857166,
+      "MaxMS": 1152.791792
+    },
+    "refund": {
+      "Samples": 899,
+      "P50MS": 323.123709,
+      "P95MS": 422.360125,
+      "P99MS": 494.963667,
+      "MaxMS": 1235.942208
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 3,
+  "FinalProjector": {
+    "Committed": 2700,
+    "Projected": 2700,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0
+  }
+}
