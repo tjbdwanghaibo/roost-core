@@ -47,6 +47,18 @@ func addSkillDefinition(root string, manifest Manifest, options AddOptions) ([]s
 	} else if err != nil {
 		return nil, err
 	}
+	// 目录的测试与 catalog.go 一样归业务、只建一次：已有 catalog.go 而还没有测试的工程（此前生成的）在这里补上。
+	testPath := filepath.Join(directory, "catalog_test.go")
+	if _, err := os.Stat(testPath); os.IsNotExist(err) {
+		test, formatErr := format.Source([]byte(renderSkillCatalogTest()))
+		if formatErr != nil {
+			return nil, fmt.Errorf("format Skill catalog test: %w", formatErr)
+		}
+		changes = append(changes, syncChange{rel: relativeSlash(root, testPath), path: testPath, body: test})
+		paths = append(paths, relativeSlash(root, testPath))
+	} else if err != nil {
+		return nil, err
+	}
 	if err := commitSyncChanges(changes); err != nil {
 		return nil, err
 	}
@@ -113,6 +125,33 @@ func CompileAll(environment skill.CompileEnvironment) (*Catalog, error) {
 		result.Programs[id] = program
 	}
 	return result, nil
+}
+`
+}
+
+// renderSkillCatalogTest 是技能目录的测试：用框架的正式加载路径（CompileAll → skill.Parse / skill.Compile）编译
+// game/skills 下的全部 JSON，写坏的定义在 go test 与 doctor 的 skills:catalog 项就失败。工程用自己的编译环境
+// （自定义 Host 能力表、catalog）时，把这里的环境换成启动时用的那一个。
+func renderSkillCatalogTest() string {
+	return `package skills
+
+import (
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+)
+
+// TestSkillCatalogCompiles compiles every game/skills/*.json the way startup
+// does. Use the same CompileEnvironment as the service when it is not the
+// default one (custom Host capabilities or catalog).
+func TestSkillCatalogCompiles(t *testing.T) {
+	catalog, err := CompileAll(skill.DefaultCompileEnvironment())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Programs) == 0 {
+		t.Fatal("game/skills has no Skill definitions")
+	}
 }
 `
 }

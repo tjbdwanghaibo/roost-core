@@ -588,7 +588,7 @@ func renderSkillGuide() string {
 
     roost add skill Fireball
 
-命令创建 game/skills/fireball.json 和首次使用时的 catalog.go。初始定义只立即 finish，是一个可编译的
+命令创建 game/skills/fireball.json 和首次使用时的 catalog.go、catalog_test.go。初始定义只立即 finish，是一个可编译的
 空骨架，不偷偷选择伤害、目标、资源或战斗规则。按 roost-core/docs/skill 文档显式添加 input_schema、costs、
 cast_window、phase flow、effect、selection 和 presentation。
 
@@ -601,6 +601,10 @@ cast_window、phase flow、effect、selection 和 presentation。
 
 CompileAll 对嵌入的每个 JSON 做严格 Parse 和 Compile，重复 ID 或 error diagnostic 会阻止启动；warning
 保存在 Catalog.Diagnostics，发布流程应审阅并按项目策略决定是否升级成失败。
+
+启动前就要拦住写坏的定义：catalog_test.go 的 TestSkillCatalogCompiles 走同一条 CompileAll，
+go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项都会失败并给出编译器的原话。
+用自定义 environment 时，把测试里的 skill.DefaultCompileEnvironment() 换成同一个。
 
 ## 3. 运行时边界
 

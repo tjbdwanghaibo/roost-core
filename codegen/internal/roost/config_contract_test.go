@@ -394,11 +394,18 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 
 func buildableGameDemo(t *testing.T) string {
 	t.Helper()
+	root := copyOfNewProject(t, "game-demo")
+	useLocalRoostCore(t, root)
+	return root
+}
+
+// useLocalRoostCore 让生成工程编译当前工作树的 roost-core（replace 到仓库根）并 go mod tidy。
+func useLocalRoostCore(t *testing.T, root string) {
+	t.Helper()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := copyOfNewProject(t, "game-demo")
 	goModPath := filepath.Join(root, "go.mod")
 	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
@@ -420,9 +427,8 @@ func buildableGameDemo(t *testing.T) string {
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go mod tidy in the game-demo copy: %v\n%s", err, out)
+		t.Fatalf("go mod tidy in the generated project copy: %v\n%s", err, out)
 	}
-	return root
 }
 
 var modConfigTargets = []string{

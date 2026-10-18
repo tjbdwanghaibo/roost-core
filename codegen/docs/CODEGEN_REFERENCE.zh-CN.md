@@ -167,7 +167,7 @@ roost add rpc guild -service game
 | `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
 | `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
 | `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
-| `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog | 配置 CompileEnvironment 与 Host |
+| `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与

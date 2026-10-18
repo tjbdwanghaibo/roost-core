@@ -191,10 +191,11 @@ roost generate`,
 		Name: "skill", Aliases: []string{"skills", "ability"},
 		Summary:       "生成稳定 roost-core/skill JSON 骨架和启动期编译目录",
 		Usage:         `roost add skill <name>`,
-		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 启动失败。`,
+		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go 与 catalog_test.go（已有目录缺测试时补上，两者都归业务、只建一次）。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 返回错误。catalog_test.go 的 TestSkillCatalogCompiles 用同一路径编译全部 JSON，go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项拦住写坏的定义；服务启动时也调用一次 CompileAll，失败拒绝启动（Init 归业务，需自己接上）。工程用自定义 CompileEnvironment 时把测试里的环境换成同一个。`,
 		Example: `roost add skill Fireball
 # 编辑 game/skills/fireball.json
-# 启动时：skills.CompileAll(skill.DefaultCompileEnvironment())`,
+go test ./game/skills/          # TestSkillCatalogCompiles 编译全部定义
+# 服务 Init：skills.CompileAll(skill.DefaultCompileEnvironment())，失败返回错误`,
 	},
 	{
 		Name: "mods", Aliases: []string{"mod", "kit-mods"},

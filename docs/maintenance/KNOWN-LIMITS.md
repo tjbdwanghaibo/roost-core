@@ -216,6 +216,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **建议修法**：首次生成 `catalog.go` 时同时生成 `catalog_test.go`（`CompileAll(skill.DefaultCompileEnvironment())` 必须成功），并在服务 Init 里调用一次、失败拒绝启动；doctor 加一项检查。
 
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 5）：生成 `catalog_test.go`（缺时下一次 add skill 补上），doctor `skills:catalog` 运行它；服务 Init 归业务，没有改写，help 与 add 提示写明在 Init 调 `CompileAll`。
+
 ### 6. 文档小问题
 
 - 生成工程的 `docs/ROOST_YAML.zh-CN.md`（`codegen/internal/roost/render_docs.go:398`）说托管框架服务是“account、mail、match、chat 之一”，生成器实际支持九个（另有 platform、global、activity、rank、session，见 `framework_services.go`）。`services.<name>.framework` / `uses` 的用法只在这份生成文档里，`roost help` 各主题里没有，新手查内置帮助找不到“怎样把排行接进已有工程”。

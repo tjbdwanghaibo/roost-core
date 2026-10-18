@@ -331,7 +331,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, "guide: "+entityTimerDocURL)
 	}
 	if args[0] == "skill" {
-		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then compile it through game/skills.CompileAll")
+		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then go test ./game/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")
 		fmt.Fprintln(stdout, "guide: docs/SKILL.zh-CN.md")
 	}
 	return nil
