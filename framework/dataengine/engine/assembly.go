@@ -154,14 +154,7 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
 			err = errors.Join(err, fmt.Errorf("dataengine: startup cleanup incomplete: %w", cleanupErr))
 		}
 	}()
-	projector, err := NewProjector(wal, a.Store, a.cfg.Projector)
-	if err != nil {
-		return err
-	}
-	owned.Projector = projector
-	if a.deps.LocalExecutor != nil {
-		projector.BindLocalExecutor(a.deps.LocalExecutor)
-	}
+	// outbox 先于 Projector 构造（构造不启动循环）：Projector 一构造就开始回放，暂存 effect 后的唤醒要在那之前接好。
 	outboxStore, err := NewMongoOutboxStore(a.Store)
 	if err != nil {
 		return err
@@ -170,6 +163,16 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
 	outbox, err := NewOutboxWorker(outboxStore, publisher, a.cfg.Outbox)
 	if err != nil {
 		return err
+	}
+	projectorOptions := a.cfg.Projector
+	projectorOptions.OnEffectsStaged = outbox.Kick
+	projector, err := NewProjector(wal, a.Store, projectorOptions)
+	if err != nil {
+		return err
+	}
+	owned.Projector = projector
+	if a.deps.LocalExecutor != nil {
+		projector.BindLocalExecutor(a.deps.LocalExecutor)
 	}
 	owned.Outbox = outbox
 	runtime, err := NewRuntime(a.Store, wal, projector, outbox, a.deps.Access, a.deps.RemoteManager, a.deps.OnFatal, a.cfg.Pipelined)

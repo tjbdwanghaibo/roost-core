@@ -121,6 +121,10 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			if !projectStart.IsZero() && err == nil {
 				traceProjectedUnit(unit.records, outcome, projectStart)
 			}
+			if err == nil && outcome != projectionSkipped && projector.opts.OnEffectsStaged != nil && hasEffects(unit.records) {
+				// effect 已随投影事务暂存：唤醒 outbox，不等它的轮询（不改投影 / checkpoint 的顺序与结果）。
+				projector.opts.OnEffectsStaged()
+			}
 			if err != nil {
 				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
 					perRecord = true
@@ -321,4 +325,13 @@ func traceProjectedUnit(records []coredata.CommitRecord, outcome projectionOutco
 			hoptrace.Mark("effect-staged/", records[i].Effects[j].ID)
 		}
 	}
+}
+
+func hasEffects(records []coredata.CommitRecord) bool {
+	for i := range records {
+		if len(records[i].Effects) > 0 {
+			return true
+		}
+	}
+	return false
 }

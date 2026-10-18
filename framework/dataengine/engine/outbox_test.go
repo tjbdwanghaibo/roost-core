@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -13,7 +14,9 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -591,4 +594,141 @@ func TestOutboxSamplingPublishesBacklogAndAge(t *testing.T) {
 	}
 	requireBacklogGauge(t, "dataengine.outbox.pending", 0)
 	requireBacklogGauge(t, "dataengine.outbox.oldest_age_ms", 0)
+}
+
+// signallingJetStream 记下发布的主题并逐条通知，供测“effect 何时被发布”。
+type signallingJetStream struct {
+	recordingJetStream
+	published chan string
+}
+
+func (s *signallingJetStream) Publish(_ context.Context, subject string, _ []byte, _ fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
+	s.published <- subject
+	return fnats.JetStreamPublishAck{}, nil
+}
+
+// 投影暂存 effect 之后 outbox 立刻被唤醒去发布，不等下一次轮询（2026-10-18 saga 性能优化第一档 1）。
+// 正式装配（Assemble → Start）、真实 Projector 与 OutboxWorker、内存 Mongo：轮询间隔设成 1 小时，先等 worker 做完启动
+// 时的第一次认领（此时还没有 effect），再提交一条带 effect 的记录；承诺是它在远小于轮询间隔的时间内被发布。
+// 修前 worker 只按 ticker 轮询，这条 effect 要等一小时。
+func TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll(t *testing.T) {
+	js := &signallingJetStream{published: make(chan string, 16)}
+	cfg := AssemblyConfig{
+		Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1},
+		WAL:   nestwal.DefaultOptions(t.TempDir()), Projector: DefaultProjectorOptions(),
+		Outbox: OutboxWorkerOptions{Owner: "wake", PollInterval: time.Hour, Workers: 2},
+	}
+	assembly, err := Assemble(AssemblyDeps{Mongo: mongotest.NewClient(), JetStream: js, Access: entity.NewManagerAccess(entity.NewEntityManager())}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := assembly.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := assembly.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime := assembly.Runtime()
+	// 启动时每个认领循环先跑一次 RunOnce（积压采样随之写下时刻）；等它做完，effect 只能靠唤醒或下一次轮询发布。
+	for deadline := time.Now().Add(5 * time.Second); runtime.Outbox.backlogSampledAt.Load() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("outbox never completed its first claim")
+		}
+	}
+	for sequence := byte(1); sequence <= 3; sequence++ {
+		record := projectorRecord(sequence, true)
+		record.Effects[0].ID = "wake-" + record.ID.String()
+		if err := runtime.Projector.Commit(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+		runtime.Projector.TransactionReleased(record.ID)
+		select {
+		case subject := <-js.published:
+			if !strings.HasSuffix(subject, ".hero.changed") {
+				t.Fatalf("published %q", subject)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("effect %d not published within 2s of its commit (poll interval 1h): the projector did not wake the outbox", sequence)
+		}
+	}
+}
+
+// countingClaimStore 计认领次数并逐次通知；gate 非 nil 时每次认领先等它放行。
+type countingClaimStore struct {
+	*projectorOutboxFake
+	claims atomic.Int64
+	seen   chan struct{}
+	gate   atomic.Pointer[chan struct{}]
+}
+
+func (s *countingClaimStore) Claim(ctx context.Context, _ string, _ time.Time, _ int, _ time.Duration) ([]OutboxItem, error) {
+	s.claims.Add(1)
+	select {
+	case s.seen <- struct{}{}:
+	default:
+	}
+	if gate := s.gate.Load(); gate != nil {
+		select {
+		case <-*gate:
+		case <-ctx.Done():
+		}
+	}
+	return nil, ctx.Err()
+}
+
+// Kick 在多个认领循环下：每次唤醒都引出一次认领，不等轮询；循环都在认领时到来的一串 Kick 合并成一次；
+// Kick 不起 goroutine，Close 照常在 ctx 内等全部循环退出，关闭之后的 Kick 不阻塞。
+func TestOutboxKickWakesALoopCoalescesAndStopsCleanly(t *testing.T) {
+	store := &countingClaimStore{projectorOutboxFake: newProjectorOutboxFake(), seen: make(chan struct{}, 64)}
+	worker, err := NewOutboxWorker(store, failingOutboxPublisher{}, OutboxWorkerOptions{Owner: "kick", Workers: 3, PollInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitClaims := func(n int, what string) {
+		t.Helper()
+		for range n {
+			select {
+			case <-store.seen:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s: no claim within 5s (poll interval 1h)", what)
+			}
+		}
+	}
+	worker.Start(context.Background())
+	waitClaims(3, "first claim of each loop")
+	for round := range 5 {
+		worker.Kick()
+		waitClaims(1, fmt.Sprintf("kick round %d", round))
+	}
+	// 三个循环都卡在认领里时连发 1000 次 Kick：通道只留一个唤醒。放行后三次在途认领返回，只多出一次认领。
+	gate := make(chan struct{})
+	store.gate.Store(&gate)
+	idle := store.claims.Load()
+	for store.claims.Load() < idle+3 { // 每次 Kick 至多叫醒一个空闲循环，直到三个都卡住
+		worker.Kick()
+		time.Sleep(time.Millisecond)
+	}
+	for range 1000 {
+		worker.Kick()
+	}
+	blocked := store.claims.Load()
+	store.gate.Store(nil)
+	close(gate)
+	for deadline := time.Now().Add(5 * time.Second); store.claims.Load() < blocked+1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the buffered kick was lost")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := store.claims.Load() - blocked; got != 1 {
+		t.Fatalf("1000 kicks during blocked claims caused %d claims after release, want 1 (kicks coalesce)", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := worker.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	worker.Kick() // 关闭之后不阻塞、无效果
 }

@@ -51,6 +51,10 @@ type OutboxWorkerStats struct {
 
 // OutboxWorker 以租约认领 outbox 中到期的 effect 并投递：成功 Ack 删除，失败 Nack 退避重试。
 // 投递失败不影响实体写入；积压超过硬上限只报告健康错误并回调一次 OnHardLimit。
+//
+// 认领循环由两样东西驱动：投影器暂存 effect 后的 Kick（装配把它接到 ProjectorOptions.OnEffectsStaged），以及
+// PollInterval 的轮询兜底（重试退避到期、别的进程的 effect、错过的唤醒都靠它）。Kick 只是提示，不承载任何持久语义：
+// 丢了也只是退回轮询的延迟。
 type OutboxWorker struct {
 	store     OutboxStore
 	publisher OutboxPublisher
@@ -68,6 +72,9 @@ type OutboxWorker struct {
 	hardMu           sync.RWMutex
 	hardErr          error
 	hardOnce         sync.Once
+	// kick 是容量 1 的唤醒信号：连续多次 Kick 合并成一次，Workers 个循环里空闲的那个先醒；循环在 RunOnce 期间
+	// 收到的 Kick 留在通道里，下一轮立即再认领一次，不会丢唤醒。
+	kick chan struct{}
 
 	// 启动和关闭共享同一把锁，避免 Close 尚未看到 cancel 时提前关闭 done。
 	// closed 是终态；done 只能由未启动的 Close 或已启动的 run 之一关闭。
@@ -108,7 +115,7 @@ func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options Outbo
 	if options.BacklogInterval <= 0 {
 		options.BacklogInterval = time.Second
 	}
-	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{})}, nil
+	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{}), kick: make(chan struct{}, 1)}, nil
 }
 
 // RunOnce 认领并投递一批 effect。投递失败经 Nack 持久化退避时间，不让本次调用失败，
@@ -232,6 +239,18 @@ func (worker *OutboxWorker) retryDelay(attempt uint32) time.Duration {
 	return delay
 }
 
+// Kick 提示有新暂存的 effect，让一个认领循环立即认领，不等下一次轮询。不阻塞、可在任何 goroutine 调用（投影器在
+// 一个单元投影成功后调用）；未启动或已关闭时没有效果。
+func (worker *OutboxWorker) Kick() {
+	if worker == nil {
+		return
+	}
+	select {
+	case worker.kick <- struct{}{}:
+	default:
+	}
+}
+
 // Start 启动 Workers 个认领循环；已启动或已关闭时不做任何事。
 func (worker *OutboxWorker) Start(parent context.Context) {
 	worker.lifecycleMu.Lock()
@@ -264,6 +283,7 @@ func (worker *OutboxWorker) run(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+				case <-worker.kick:
 				}
 			}
 		})
