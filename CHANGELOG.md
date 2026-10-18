@@ -34,6 +34,12 @@
 - 保留慢连接被关闭、健康连接完整接收、Tick 不等待写出（最慢 Tick < 100ms）的原断言，不修改生产队列、超时或发送行为。
 - 证据（macOS，`-race`）：修前在 `-cpu 1` 下两条各 20/20 失败（`live session has frames up to 89 of 600 (err <nil>)`；`a push the live connection took was reported as failed: … outbound queue full`），缺省 GOMAXPROCS 下 10/10 通过——失败取决于健康读协程能否及时被调度与内核缓冲大小；修后 `-count=20 -cpu 1,2,4` 两条各 60/60 通过。
 
+### SLG 接入验收：公共 CLI 生成的业务消费者（scripts/test-slg-generated.sh）
+
+- 新增 `scripts/test-slg-generated.sh`：用当前 CLI 从 `game` 模板生成隔离工程，`add dao` / `add timer` / `add entity` 后只改 DAO 定义与业务文件（[`scripts/testdata/slg/`](scripts/testdata/slg/)），跑 6 条 race 场景：建造 → 行军链、重放与取消退款、建造失败回滚、离线收益补算、两玩家抢同一地块、研究与建造队列并行；最后 `roost id check` 与 `roost generate --check`。资源与数值规则只在业务夹具里，框架与生成器不变。不连外部存储（提交器替身 + DAO 序列化），真实存储仍走 `test-demo-generated.sh` / `test-dataengine-generated.sh` / `test-remote-generated.sh`。
+- 手册 [docs/framework/SLG-INTEGRATION.md](docs/framework/SLG-INTEGRATION.md)：SLG 路径到框架接口的对照与业务 / 框架边界。
+
+
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
 - **决定**：维护者 2026-10-18 选方向 A——把 Saga 原生步骤与 effect 消费者里与业务无关的组装收进框架，game-demo 作为验收；B（生成器）待 A 落地后再评估，本轮不做。

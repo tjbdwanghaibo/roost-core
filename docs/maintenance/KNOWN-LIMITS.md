@@ -249,6 +249,10 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 修复：只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有的 `idArg` 等名字；handler 元数据、参数顺序、类型与线协议不变。回归 `TestSenderNamesDoNotCollideWithBusinessArguments`（对生成的 sender / syncsender 做类型检查），修前原文 `sender has colliding generated declarations: … id redeclared in this block (and 12 more errors)`。旧版本可在业务 handler 里把参数改名（如 `taskID`）暂避，不需要改协议。
 
+## SLG 接入验收的范围（2026-10-18）
+
+入口与业务清单见 [SLG-INTEGRATION](../framework/SLG-INTEGRATION.md)，脚本 `scripts/test-slg-generated.sh`。它证明的是：公共 CLI 生成的 DAO / 组件 / Sender / Nest / 实体定时器在 6 个业务组合（建造 → 行军、重放与取消退款、失败回滚、离线收益、地块竞争、研究与建造并行）下的事务与期限行为；上面两条已修复问题就是它发现的。它不证明：提交器是替身（不含 WAL fsync / Mongo）、离线恢复用 DAO 序列化而非真实重载、单进程、无 Redis / NATS；真实存储与恢复仍以 `test-demo-generated.sh`、`test-dataengine-generated.sh`、`test-remote-generated.sh` 各自的实际执行为准。脚本不挂在 `dataengine-env.sh test`，也不在根包门禁里，改相关生成器时需手动跑。夹具里的金币、时长、上限等数值是业务样例，不是框架规则；SLG 战斗、数值、赛季政策没有默认实现，不因此算框架缺陷。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
