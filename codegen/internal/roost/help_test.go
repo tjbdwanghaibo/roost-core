@@ -19,10 +19,34 @@ func TestHelpCatalogIsCompleteAndUnique(t *testing.T) {
 	for _, required := range []string{
 		"environment", "beginner", "project", "versions", "framework-release", "generate", "add", "mods", "dao", "entity", "nest",
 		"access", "transport", "lifecycle", "endpoint", "skill", "protocol", "cfggen", "tablegen", "attribute", "webroute",
-		"errcode", "saga", "replication", "config", "id", "format", "deploy",
+		"errcode", "saga", "replication", "config", "id", "format", "deploy", "services",
 	} {
 		if !contains(names, required) {
 			t.Errorf("help catalog missing %q: %v", required, names)
+		}
+	}
+}
+
+// 托管框架服务（services.<name>.framework / uses）的接入写法在内置帮助里查得到：列出九个服务、怎样把一个接进
+// 已有工程（例如排行），以及生成的类型化访问器。
+func TestHelpExplainsHostedFrameworkServices(t *testing.T) {
+	for _, query := range []string{"services", "uses", "framework-services"} {
+		var output bytes.Buffer
+		if err := Run([]string{"help", query}, &output, &output); err != nil {
+			t.Fatalf("roost help %s: %v", query, err)
+		}
+		text := output.String()
+		for _, want := range []string{"services.<name>.framework", "uses", "account、chat、mail、match、session、activity、global、platform、rank", "framework: rank", "roost project sync", "framework_clients_gen.go"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("roost help %s does not mention %q:\n%s", query, want, text)
+			}
+		}
+	}
+	for name := range frameworkCatalog {
+		var output bytes.Buffer
+		_ = Run([]string{"help", "services"}, &output, &output)
+		if !strings.Contains(output.String(), name) {
+			t.Errorf("roost help services does not list the hosted service %q", name)
 		}
 	}
 }

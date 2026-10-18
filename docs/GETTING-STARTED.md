@@ -84,7 +84,14 @@ reloaded: monster#1=dire wolf version=3 ...
 
 如果出现找不到 Go 命令，先检查 Go 安装；如果是下载失败，检查网络和模块源；如果找不到配置文件，检查当前目录是否为 `examples/configgen`。不要为了让示例运行而删除数据库或修改框架业务逻辑。
 
-源码入口：[configgen 示例](../examples/configgen/main.go)。另一个不依赖外部服务器的游戏示例是 [技能火球](../gameplay/skill/examples/fireball/main.go)。
+源码入口：[configgen 示例](../examples/configgen/main.go)。另一个不依赖外部服务器的游戏示例是 [技能火球](../gameplay/skill/examples/fireball/main.go)。它在独立模块 `gameplay/skill/examples` 里（自己的 go.mod，replace 到仓库根），要先进入该目录再运行：
+
+```sh
+cd ../../gameplay/skill/examples   # 接上面的 examples/configgen；从克隆根目录则 cd gameplay/skill/examples
+GOWORK=off go run ./fireball
+```
+
+在仓库根执行 `go run ./gameplay/skill/examples/fireball` 会报 `main module ... does not contain package`。正常输出以 `cast status: finished`、`target hp: 75` 开头，随后是逐 tick 的事件。
 
 ## 5. 准备建立自己的游戏工程
 

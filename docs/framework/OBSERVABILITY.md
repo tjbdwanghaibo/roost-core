@@ -16,6 +16,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 - Duration 一律用 `metrics.ObserveDuration`，不要把毫秒塞进 Counter。
 - **需要分位数的时长用 `metrics.ObserveHistogram`**：17 个固定指数桶（1ms 起逐桶翻倍到 ~65s，`metrics.HistogramBounds()` 可查），`metrics.HistogramQuantile(name, labels, q)` 桶内线性插值取分位数；Prometheus 导出为标准累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。桶固定意味着无采样窗口——它是进程生命期累积分布，压测类"单场分布"要在场景开始前 `metrics.Reset()` 或用 label 区分场次。
 - `skill` 直接记录衍生物和被动派发指标；`skill/combat` 的业务观测由宿主提供。`syncstream` / `skillsync` 的 ExportMetrics 是宿主显式调用的接口，不会随 App 自动注册。
+- **业务指标**：业务代码同样用包级 `metrics.IncCounter` / `SetGauge` / `ObserveDuration` / `ObserveHistogram`，App 的注册表就是包级默认注册表，ops `/metrics` 一并导出；名字用业务自己的前缀（例如 `game.shop.buy_total`），规则同上，不进下面的框架清单。示例见 [guide/11 §3](guide/11-observability.md#3-指标)。
 
 ## 指标清单（按面板分组）
 

@@ -162,6 +162,13 @@ make ci
 
 记不住命令时：`roost help` 看能力目录，`roost help <能力>` 看参数和例子，`make help` 看项目快捷入口。
 
+学完第一条业务链后常接的几块（各自 `roost help <能力>` 有完整参数）：
+
+- **Saga**（`roost help saga`）：`roost add saga gift_gold -service game -steps debit,credit`，`-steps` 按执行顺序写，生成的定义原样保留（补偿按倒序），步骤名不能重复。Saga 订阅的效果流取 `dataengine.effects`，不用在 saga 段再写一遍。
+- **技能**（`roost help skill`）：`roost add skill Fireball` 同时生成 `game/skills/catalog_test.go`，`go test ./game/skills/` 与 `make doctor` 的 `skills:catalog` 会拦住写坏的 JSON。
+- **托管框架服务**（`roost help services`）：排行、邮件、聊天等九个现成服务，在 `roost.yaml` 加 `services.<name>.framework` 并在业务服务 `uses` 里列出，然后 `make sync`。
+- **Remote 托管实体**（跨进程写的公会一类）：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，并 `roost add mod remote_entity -service game`；缺 Mod 时 `roost generate` 与 doctor 的 `remote-runtime` 会给出这条命令。
+
 ## 6. 报错排查
 
 按固定顺序：

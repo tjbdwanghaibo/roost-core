@@ -210,6 +210,24 @@ services:
     mods: [configdata, etcd, redis, mongo, nats, dataengine, nest, saga]`,
 	},
 	{
+		Name: "services", Aliases: []string{"framework-services", "hosted-services", "uses"},
+		Summary: "把托管框架服务（排行、邮件、聊天……）接进工程：services.<name>.framework 与 uses",
+		Usage: `# roost.yaml 里加一个托管服务进程，并让业务服务 uses 它，然后
+roost project sync`,
+		Configuration: `托管框架服务是 roost-core service/ 里现成的服务，共九个：account、chat、mail、match、session、activity、global、platform、rank。services.<name>.framework: <服务> 把一个进程声明为该托管服务（没有业务 Service，redis、nats 自动补齐，match、activity 另补 etcd）；它的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go，只生成一次、默认全部拒绝，doctor 的 collaborators:<name> 提示还没实现的。业务服务的 services.<svc>.uses: [<name>] 装配对应 ClientMod，并在 internal/service/<svc>/framework_clients_gen.go 生成类型化访问器（例如 Rank(registry) 返回 rank.Rank），在 Init 里取一次保存。已有工程接入一个：按下面改 roost.yaml 后 roost project sync（新服务的配置、部署与协作者文件随之生成），再 roost project doctor。roost project new -template game 一次生成全部九个并接到第一个业务服务。说明见生成工程的 docs/ROOST_YAML.zh-CN.md 与 docs/SERVICES.zh-CN.md。`,
+		Example: `# roost.yaml：把排行接进已有的 game 服务
+services:
+  game:
+    mods: [configdata, nest]
+    uses: [rank]
+  rank:
+    framework: rank
+# 然后
+roost project sync
+# game 的 Init 里
+ranks, err := Rank(registry) // internal/service/game/framework_clients_gen.go`,
+	},
+	{
 		Name: "dao", Aliases: []string{"database"},
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>

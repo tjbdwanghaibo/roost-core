@@ -22,7 +22,7 @@ roost help all              # 全部专题
 roost <command> --help      # 上下文帮助
 ```
 
-可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
+可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`services`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
 
 框架发布维护者使用 `roost framework verify` 校验 `ci/framework-release.yaml` 的精确版本集合并生成 `framework-lock.json`。该命令拒绝 `latest`、replace 和框架内部伪版本依赖；具体发布顺序与 GitHub Environment 配置见 `docs/CI_CD_IMPLEMENTATION.zh-CN.md`。
 

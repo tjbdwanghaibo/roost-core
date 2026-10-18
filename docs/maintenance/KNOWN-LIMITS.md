@@ -224,6 +224,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 - GETTING-STARTED 把[技能火球](../../gameplay/skill/examples/fireball/main.go)列为不依赖外部服务器的示例，但它在独立模块 `gameplay/skill/examples` 里，在仓库根 `go run ./gameplay/skill/examples/fireball` 报 `main module does not contain package`，文档没写要先 `cd gameplay/skill/examples`。
 - guide/11 只提醒“业务新增指标应控制标签基数”，没有一处示例说明业务代码用哪个 API 加计数器 / 时延（`OBSERVABILITY.md` 只列框架自己的指标）。
 
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 6）：托管服务清单改为九个、新增 `roost help services`、火球运行方式写明先进入独立模块目录、guide/11 与 OBSERVABILITY 补业务指标写法。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
