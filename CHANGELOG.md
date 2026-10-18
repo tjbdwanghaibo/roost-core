@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Sender 参数后缀仍需避让 handler 名称
+
+- 补齐参数改名后的二次碰撞：`handlerTradeArg(target, handlerNameTrade string)` 的参数被改为 `handlerNameTradeArg` 后再次遮蔽当前 handler 的生成常量，Sender 编译失败。候选名称现在也避让该文件所有实际生成的 handler 名称；参数顺序、类型和协议不变。
+- 回归在 `TestSenderNamesDoNotCollideWithBusinessArguments`，修前类型检查原文：`cannot use handlerNameTradeArg (variable of type string) as nest.HandlerName value in argument to client.Dispatch`。
+
 ### `roost add saga -native` 与 `roost add effect`（DESIGN-TODO D12 方向 B）；原生步骤容量按 A 文档化
 
 - **决定**：维护者 2026-10-18 批准 D12 方向 B（生成器）开工；“原生步骤单进程容量”按推荐的 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批。

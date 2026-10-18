@@ -144,6 +144,10 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 				reserved[alias] = true
 			}
 		}
+		// 后缀候选也必须避开实际生成的 handlerName；仅检查原参数前缀会把 Trade 改成 TradeArg 后再次遮蔽。
+		for _, handler := range funcs {
+			reserved["handlerName"+trimHandlerPrefix(handler.Name)] = true
+		}
 		used := map[string]bool{}
 		for name := range reserved {
 			used[name] = true
