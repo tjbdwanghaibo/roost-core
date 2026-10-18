@@ -494,6 +494,7 @@ var generatedRealDependencyEntries = []struct {
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
+	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGeneratedSagaNativeStepsAndEffectConsumer$"},
 }
 
 // 由专门入口负责、不进 dataengine-env.sh test 的用例：mention 必须原样出现在 script 里。
@@ -505,6 +506,7 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestNestGameLoad", "scripts/perf/nest-game.sh", "^TestNestGameLoad$", "性能入口"},
 	{"TestSpatialComponentNestCommitAndRollback", "scripts/perf/nest-game.sh", "^TestSpatialComponentNestCommitAndRollback$", "nest-game.sh --check-spatial，与负载同一份生成流程"},
 	{"TestGeneratedGateNestDAOAndWAL", "codegen/internal/roost/demo_test.go", "^TestGeneratedGateNestDAOAndWAL$", "TestGateGeneratedBusinessConsumer 把它写进新生成的 game-demo 后运行"},
+	{"TestSagaNativeStepsAndEffectRealDependencies", "codegen/internal/roost/add_saga_test.go", "^TestSagaNativeStepsAndEffectRealDependencies$", "TestGeneratedSagaNativeStepsAndEffectConsumer 把 testdata/saga_native 复制进新生成的工程后运行"},
 }
 
 var (

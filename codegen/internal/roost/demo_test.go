@@ -374,8 +374,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "send_gift_self") || !strings.Contains(scenario, "status: compensated") || !strings.Contains(scenario, "to_player_id: 1") {
 		t.Errorf("the robot scenario does not exercise both gift saga paths")
 	}
-	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "saga.SubscribeMongoStep(") || strings.Contains(definition, "saga.SubscribeStep(") {
-		t.Errorf("generated saga definition must subscribe through SubscribeMongoStep, not the removed SubscribeStep")
+	// 步骤消费者只有 wiring/saga Steps 一种写法（D12 方向 B 去掉了 definition.go 的 Subscribe* 辅助）；demo 的登记
+	// 在 gift_saga.go，生成的单进程 steps.go 被换成指向它的说明（送礼的扣款 / 退款要按 sid 准入与转交）。
+	if definition := read("saga/gift_item/definition.go"); strings.Contains(definition, "func Subscribe") || !strings.Contains(definition, "TopicDebitCompensation") {
+		t.Errorf("generated saga definition must carry the step topics and no Subscribe* helpers:\n%s", definition)
+	}
+	if steps := read("saga/gift_item/steps.go"); strings.Contains(steps, "func StartSteps(") || !strings.Contains(steps, "gift_saga.go") {
+		t.Errorf("the demo's saga/gift_item/steps.go must point at gift_saga.go instead of a second registration:\n%s", steps)
 	}
 	// Two step shapes, one per kind of work: the Nest-transaction steps bind
 	// their receipt and emit their completion inside the transaction (the
@@ -832,15 +837,6 @@ func secretExampleConfig(t *testing.T, name, body string) string {
 		t.Fatalf("%s has no stringData.config.yaml", name)
 	}
 	return config
-}
-
-func sortedKeys(set map[string]string) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // checkDemoGameInitConfig applies the checks the demo's game code makes on its

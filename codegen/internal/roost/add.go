@@ -20,7 +20,14 @@ type AddOptions struct {
 	// --lifecycle Player.
 	Lifecycle   string
 	Mods, Steps []string
-	ID          int64
+	// Native names which of Steps are native steps (Nest transactions):
+	// roost add saga Gift -steps debit,deliver -native debit. A subset of
+	// Steps; Entity / Component choose what their handlers lock.
+	Native []string
+	// Consumer is the service that consumes an effect: roost add effect
+	// player.level_up -consumer game.
+	Consumer string
+	ID       int64
 	// Warnings receives what the command could not do but did not fail for,
 	// such as a k8s Secret example it cannot recognise.
 	// nil means os.Stderr, so nothing is skipped silently.
@@ -38,6 +45,10 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if options.Kind == "timer" {
 		// roost add timer --entity <Entity>：名字就是实体，可以只写 --entity。
 		return addTimer(root, m, options)
+	}
+	if options.Kind == "effect" {
+		// roost add effect player.level_up：名字是点分的 effect 主题，按自己的规则校验。
+		return addEffect(root, m, options)
 	}
 	name := strings.TrimSpace(options.Name)
 	if !validName(toSnake(name)) {
@@ -215,51 +226,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		return changed, nil
 	}
 	if options.Kind == "saga" {
-		rollbackPaths := []string{"saga/" + toSnake(options.Name) + "/definition.go"}
-		backups, backupErr := captureFiles(root, rollbackPaths)
-		if backupErr != nil {
-			return nil, backupErr
-		}
-		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
-		if err != nil {
-			return nil, err
-		}
-		service := toSnake(options.Service)
-		if service == "" {
-			services := sortedServiceNames(m)
-			if len(services) != 1 {
-				return nil, fmt.Errorf("saga requires -service when the project has multiple services")
-			}
-			service = services[0]
-		}
-		spec, ok := m.Services[service]
-		if !ok {
-			return nil, fmt.Errorf("unknown service %q", service)
-		}
-		paths, addErr := addArtifact(root, m, options)
-		if addErr != nil {
-			return nil, addErr
-		}
-		created, captureErr := captureFiles(root, rollbackPaths)
-		if captureErr != nil {
-			return paths, restoreFiles(root, backups, captureErr)
-		}
-		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
-		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "saga"))
-		m.Services[service] = spec
-		m.Features = uniqueSorted(append(m.Features, "saga"))
-		m.Sagas = uniqueSorted(append(m.Sagas, toSnake(options.Name)))
-		if err := commitManifestSync(root, manifestBefore, m); err != nil {
-			return paths, restoreFilesIfCurrent(root, backups, created, err)
-		}
-		paths = append(paths, "roost.yaml", "internal/bootstrap/generated.go")
-		// The saga Mod (and whatever it pulled in) gets its config section in
-		// the service's configs, like a Mod chosen at project creation.
-		configs, err := appendModConfigSections(root, previous, m, service, options.Warnings)
-		if err != nil {
-			return paths, err
-		}
-		return append(paths, configs...), nil
+		return addSaga(root, m, options)
 	}
 	if options.Kind == "skill" {
 		return addSkillDefinition(root, m, options)
@@ -423,33 +390,8 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":
-		if !hasFeature(m, "nest") {
-			return nil, errors.New("handler requires the nest feature in roost.yaml")
-		}
-		if !contains(allProjectMods(m), "nest") {
-			services := sortedServiceNames(m)
-			if len(services) == 1 {
-				return nil, fmt.Errorf("handler requires the nest runtime mod; run: roost add mod nest -service %s", services[0])
-			}
-			return nil, errors.New("handler requires the nest runtime mod; choose its owning service and run: roost add mod nest -service <service>")
-		}
-		entityName, _, err := resolveEntitySource(root, o.Entity)
+		entityName, componentName, err := resolveNestHandlerTarget(root, m, o.Entity, o.Component)
 		if err != nil {
-			return nil, err
-		}
-		componentName := toSnake(o.Component)
-		if componentName == "" {
-			return nil, errors.New("handler requires --component <name>")
-		}
-		componentPath := filepath.Join(root, "game", "entities", entityName, componentName+"_component.go")
-		if _, err := os.Stat(componentPath); os.IsNotExist(err) {
-			// roost add timer 的组件是生成的（<name>_component_gen.go），handler 同样可以锁它。
-			componentPath = filepath.Join(root, "game", "entities", entityName, componentName+"_component_gen.go")
-		}
-		if _, err := os.Stat(componentPath); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
-			}
 			return nil, err
 		}
 		path = "game/handler/" + snake + ".go"
@@ -476,106 +418,6 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 	case "module":
 		path = "game/controllers/" + snake + "/controller.go"
 		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
-	case "saga":
-		if len(o.Steps) == 0 {
-			return nil, fmt.Errorf("saga %s requires -steps", o.Name)
-		}
-		path = "saga/" + snake + "/definition.go"
-		var steps strings.Builder
-		var topics strings.Builder
-		var subscribers strings.Builder
-		// Steps 的顺序就是 Definition.Steps 的下标顺序：Saga 按下标推进、按下标
-		// 倒序补偿，所以原样保留。两个名字蛇形化后相同会生成同名步骤与同一组
-		// topic，报错而不是合并。
-		seenSteps := make(map[string]bool, len(o.Steps))
-		for _, stepName := range o.Steps {
-			stepSnake, stepPascal := toSnake(stepName), toPascal(stepName)
-			if !validName(stepSnake) {
-				return nil, fmt.Errorf("invalid saga step %q", stepName)
-			}
-			if seenSteps[stepSnake] {
-				return nil, fmt.Errorf("duplicate saga step %q in -steps: each step needs its own name, listed in execution order", stepSnake)
-			}
-			seenSteps[stepSnake] = true
-			// No budget here: Timeout / MaxAttempts / Backoff come from the saga
-			// Mod's config (saga.step_defaults, overridden per step under
-			// saga.steps.<type>.<step>), filled in by Engine.Register.
-			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation},\n", stepSnake, stepPascal, stepPascal)
-			// The topics as constants, so a project can address them without
-			// repeating the strings: the Subscribe* helpers below take a
-			// Mongo inbox, and a step whose business is a Nest transaction
-			// is registered with roost-core wiring/saga Steps.Native and
-			// these topics instead (the native path).
-			fmt.Fprintf(&topics, "\t// Topic%s is the forward topic of step %s.\n", stepPascal, stepSnake)
-			fmt.Fprintf(&topics, "\tTopic%s = %q\n", stepPascal, snake+"."+stepSnake)
-			fmt.Fprintf(&topics, "\t// Topic%sCompensation is its compensation topic.\n", stepPascal)
-			fmt.Fprintf(&topics, "\tTopic%sCompensation = %q\n", stepPascal, snake+"."+stepSnake+".compensate")
-			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
-		}
-		body = fmt.Sprintf(`package %s
-
-import (
-	"context"
-	"time"
-
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
-)
-
-const (
-	Type = %q
-	Version uint32 = 1
-)
-
-// The step topics. A step whose business is a Nest transaction is registered
-// with roost-core wiring/saga Steps.Native (its Nest handler takes a
-// saga.NativeStep and calls step.Complete inside the transaction); any other
-// step uses Steps.Mongo or the Mongo inbox helpers below. Both
-// address the same topics, and both inboxes let at most one attempt of an
-// operation take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤).
-// For a Mongo step that covers what its handler writes through the Mongo
-// transaction it is given; a call into another service is outside that
-// transaction and still has to be idempotent by Command.IdempotencyKey.
-const (
-%s)
-
-// Definition lists the steps. Their timeout and retry budget is configuration,
-// not code: saga.step_defaults gives every step its Timeout, MaxAttempts and
-// backoff, and saga.steps.%s.<step>.<field> overrides one step (see the
-// roost-core docs/framework/SAGA.md, step budgets). One operation of a step may take up
-// to MaxAttempts attempts; the framework makes sure at most one of them takes
-// effect (roost-core SAGA.md, 原生步骤执行契约; Mongo steps since 2026-10-06).
-func Definition() saga.Definition {
-	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
-%s	}}
-}
-
-// Definitions must retain every version which still has non-terminal records.
-// When changing step order or compensation semantics, keep the old definition
-// here and make Definition return the new version.
-func Definitions() []saga.Definition { return []saga.Definition{Definition()} }
-
-func Register(engine *saga.Engine) error {
-	for _, definition := range Definitions() {
-		if err := engine.Register(definition); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// EmitStart is the production entry point from a Nest handler: the Saga start
-// intent and current Entity mutations are committed in the same Nest WAL record.
-func EmitStart(businessKey string, state []byte, deadline time.Time) error {
-	return saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
-}
-
-// Start is for durable consumers, administration and recovery paths which are
-// already outside a Nest transaction. Calls are idempotent for one intent.
-func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {
-	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
-}
-%s`, snake, snake, topics.String(), snake, steps.String(), subscribers.String())
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}
@@ -591,6 +433,41 @@ func Start(ctx context.Context, engine *saga.Engine, businessKey string, state [
 		return nil, err
 	}
 	return []string{path}, nil
+}
+
+// resolveNestHandlerTarget 是 Nest handler 骨架的锁目标：handler 所属的 Entity（工程只有一个时可省略）与它挂的组件。
+// add handler 与 add saga -native 共用：要求工程启用 nest 特性并有 nest 运行时 Mod、组件已挂在该 Entity 上。
+func resolveNestHandlerTarget(root string, m Manifest, entityFlag, componentFlag string) (string, string, error) {
+	if !hasFeature(m, "nest") {
+		return "", "", errors.New("handler requires the nest feature in roost.yaml")
+	}
+	if !contains(allProjectMods(m), "nest") {
+		services := sortedServiceNames(m)
+		if len(services) == 1 {
+			return "", "", fmt.Errorf("handler requires the nest runtime mod; run: roost add mod nest -service %s", services[0])
+		}
+		return "", "", errors.New("handler requires the nest runtime mod; choose its owning service and run: roost add mod nest -service <service>")
+	}
+	entityName, _, err := resolveEntitySource(root, entityFlag)
+	if err != nil {
+		return "", "", err
+	}
+	componentName := toSnake(componentFlag)
+	if componentName == "" {
+		return "", "", errors.New("handler requires --component <name>")
+	}
+	componentPath := filepath.Join(root, "game", "entities", entityName, componentName+"_component.go")
+	if _, err := os.Stat(componentPath); os.IsNotExist(err) {
+		// roost add timer 的组件是生成的（<name>_component_gen.go），handler 同样可以锁它。
+		componentPath = filepath.Join(root, "game", "entities", entityName, componentName+"_component_gen.go")
+	}
+	if _, err := os.Stat(componentPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", "", fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
+		}
+		return "", "", err
+	}
+	return entityName, componentName, nil
 }
 
 func validateExplicitID(manifest Manifest, kind, group string, id int64) error {

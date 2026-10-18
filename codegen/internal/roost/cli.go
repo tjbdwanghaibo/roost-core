@@ -274,14 +274,16 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc|timer> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rootFlag := fs.String("root", ".", "project directory")
 	service := fs.String("service", "", "target service")
 	mods := fs.String("mods", "", "comma-separated Kit mods")
-	steps := fs.String("steps", "", "comma-separated Saga steps")
+	steps := fs.String("steps", "", "comma-separated Saga steps, in execution order")
+	native := fs.String("native", "", "comma-separated Saga steps (a subset of -steps) whose business is a Nest transaction")
+	consumer := fs.String("consumer", "", "service consuming an effect")
 	group := fs.String("group", "", "ID allocation group")
 	entityName := fs.String("entity", "", "owning Entity for component/DAO wiring")
 	componentName := fs.String("component", "", "Component capability for a Nest handler")
@@ -303,8 +305,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
-		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
-		"rpc": {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
+		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
+		"effect": {"root", "consumer"},
+		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
@@ -313,7 +316,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}
@@ -329,6 +332,12 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if args[0] == "timer" {
 		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")
 		fmt.Fprintln(stdout, "guide: "+entityTimerDocURL)
+	}
+	if args[0] == "saga" {
+		printSagaNext(stdout, args[1], *native != "")
+	}
+	if args[0] == "effect" {
+		printEffectNext(stdout, args[1])
 	}
 	if args[0] == "skill" {
 		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then go test ./game/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")

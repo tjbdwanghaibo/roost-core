@@ -992,7 +992,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-rpc
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-effect new-rpc
 
 help:
 	$(ROOST) help-make
@@ -1081,7 +1081,9 @@ new-webroute:
 new-errcode:
 	$(ROOST) add errcode $(NAME)
 new-saga:
-	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS)
+	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS) $(if $(NATIVE),-native $(NATIVE) $(if $(ENTITY),-entity $(ENTITY),) -component $(COMPONENT),)
+new-effect:
+	$(ROOST) add effect $(NAME) $(if $(CONSUMER),-consumer $(CONSUMER),)
 new-rpc:
 	$(ROOST) add rpc $(NAME) -service $(SERVICE)
 ci: fmt-check vet glsvet test test-race check-generated config-check-all id-check
@@ -1452,6 +1454,8 @@ func renderUsage(m Manifest) string {
 - make roost-up：执行 go get -u ./... 和 go mod tidy，更新整个项目依赖图。
 - make codegen-up：安装最新 roost-codegen CLI。
 - make deps-update：只按 roost.yaml 更新框架模块 roost-core。
+- make new-saga NAME=<name> SERVICE=<service> STEPS=a,b,c [NATIVE=a,b ENTITY=<Entity> COMPONENT=<Component>]：Saga 定义与步骤运行时（saga/<name>/steps.go 的 StartSteps），NATIVE 里的步骤是 Nest 事务（原生步骤，各生成正向与补偿两个 Nest handler）；服务 Init 里 StartSteps、Shutdown 里 Drain（roost help saga，含单进程容量）。
+- make new-effect NAME=<topic> CONSUMER=<service>：事务性 effect 的载荷、Emit 辅助与消费服务里的 SubscribeEffects 骨架；服务 Init 里启动、Shutdown 里 Drain（roost help effect）。
 - make new-rpc NAME=<name> SERVICE=<owner>：脚手架一个本工程自己的跨进程服务（internal/rpc/<name>：//roost:rpc 接口、实现、owner Mod、生成的传输与装配两半），调用方在 roost.yaml 的 services.<caller>.uses_rpcs 列出它。
 - make dev-up/dev-down：启动或停止所需基础设施。
 - make dev-run/dev-stop/dev-status：在本机一次起 / 停 / 查看工程声明的全部服务进程（每个服务自己的 ops 端口，日志在 .dev/）；game-demo 工程随后可用 make dev-smoke 跑两个机器人走完整条链。

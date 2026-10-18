@@ -122,8 +122,8 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc|timer> <name> [flags]`,
-		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]`,
+		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
 roost add dao player --entity player
@@ -135,7 +135,8 @@ roost add endpoint rename_player --handler player
 roost add lifecycle player
 roost add skill fireball
 roost add timer --entity player
-roost add saga cross_server_trade -service game -steps reserve,deduct,deliver`,
+roost add saga gift -service game -steps debit,credit -native debit,credit -entity player -component wallet
+roost add effect player.level_up -consumer game`,
 	},
 	{
 		Name: "access", Aliases: []string{"player-access", "gateway-access"},
@@ -339,11 +340,24 @@ roost generate`,
 	},
 	{
 		Name: "saga", Aliases: []string{"transaction", "cross-service"},
-		Summary:       "生成跨服务 Saga 定义、步骤、补偿和注册骨架",
-		Usage:         `roost add saga <name> -service <service> -steps <step1,step2,...>`,
-		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
-		Example: `roost add mod saga -service game
+		Summary: "生成跨服务 Saga 定义、步骤运行时（原生步骤 / Mongo 步骤）与原生步骤的 Nest handler 骨架",
+		Usage:   `roost add saga <name> -service <service> -steps <step1,step2,...> [-native <step,...> -entity <Entity> -component <Component>]`,
+		Configuration: `目标 Service 自动加上 saga Mod（补齐 dataengine、nats、mongo）。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。-native 列出哪些步骤的业务是一笔 Nest 事务（必须是 -steps 的子集，不能重复），这些步骤走原生路径：改实体、回执与 completion 同一条 WAL 记录，至多生效一次，不需要自己的幂等；-entity / -component 与 add handler 相同（工程只有一个 Entity 时 -entity 可省），服务要有 nest Mod。其余步骤是 Mongo 步骤：在 Mongo 事务里运行，调用别的服务要按 Command.IdempotencyKey 幂等。
+生成物都是业务文件、只建一次：saga/<name>/definition.go（定义、步骤主题常量、EmitStart / Start）；saga/<name>/steps.go（State 与 EncodeState / DecodeState、每步正向与补偿的步骤体、按主题常量登记的 RegisterSteps、StartSteps；durable 为 <service>-<name>-<步骤>）；每个原生步骤两个 Nest handler：game/handler/<name>_<step>.go 与 <name>_<step>_compensation.go（参数带 saga.NativeStep，事务里调用 step.Complete，业务拒绝也提交）。骨架默认拒绝（"... is not implemented"），写完业务前 saga 不会报告成功。
+服务的 Init / Shutdown 归业务、不改写：Init 里 steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})，Shutdown 里 if err := steps.Drain(ctx); err != nil { steps.Stop() }；roost project doctor 的 saga-steps:<name> 在没人调用 StartSteps 时 WARN。Nest handler 里启动一笔 saga：state, _ := <name>.EncodeState(<name>.State{...})；<name>.EmitStart(businessKey, state, deadline)。超时、重试与回执参数在 saga 配置段（saga.step_defaults、saga.steps.<type>.<step>）。
+容量（维护者 2026-10-18 决定：接受并文档化）：一个进程在每个步骤 durable 上逐条处理，原生步骤约 14～18 条/s；原生步骤组成的 saga 正向约 10/s、全补偿约 5/s 开始饱和，超过后步骤超时、重试放大（仍恰好一次，但多数 saga 以 failed / compensated 结束）；Mongo 步骤正向 20/s 实测未饱和。量大时按 sid 分片多进程，并给原生步骤加 kitsaga.WithAdmit 准入（命令只在拥有该实体的进程执行，见 game-demo 送礼 saga）。实测：` + sagaCapacityDocURL + `；指南：` + sagaGuideURL + `。`,
+		Example: `roost add saga gift -service game -steps debit,credit -native debit,credit -entity Player -component Wallet
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
+roost generate`,
+	},
+	{
+		Name: "effect", Aliases: []string{"outbox", "effects"},
+		Summary: "生成事务性 effect（outbox）：载荷类型、topic 常量、Emit 辅助与消费服务的 SubscribeEffects 骨架",
+		Usage:   `roost add effect <topic> -consumer <service>`,
+		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/effects/<topic>.go（载荷 struct、Topic<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，effect 与实体修改进同一条 WAL 记录，事务回滚则不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
+语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经它的 ctx 写的 Mongo 与回执一起提交；调用别的服务在事务外，要按 envelope.EffectID 幂等。普通错误退避重投，PoisonEffect 丢弃并计 dataengine.effect_consumer.handled_total{result="poison"}。骨架默认返回错误（重投、不丢），写完业务前不会把 effect 当作已处理。
+服务的 Init / Shutdown 归业务、不改写：Init 里 subscription, err := start<Topic>EffectConsumer(context.Background(), registry)，Shutdown 里 subscription.Drain()；roost project doctor 的 effect-consumer:<service>/<func> 在没人调用时 WARN。容量：一个副本在 durable 上逐条处理（约 1/handler 延迟），未单独测量；量大时加副本共享 durable。`,
+		Example: `roost add effect player.level_up -consumer game
 roost generate`,
 	},
 	{
