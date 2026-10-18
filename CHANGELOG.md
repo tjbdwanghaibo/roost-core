@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 投影 checkpoint 缺省间隔保持 20 ms；原生步骤容量数字在生成器与文档里更新（2026-10-19）
+
+- **决定**：维护者 2026-10-19 按推荐选 A——`dataengine.projection.checkpoint_interval` 缺省保持 20 ms。20 ms 下特殊记录（投影事务约 16 ms）积压时合并系数约 2；需要更高吞吐的部署可调大，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。代码与配置缺省都不变。
+- **生成器文案**（只改注释与提示字符串，不改行为）：生成的 `saga/<name>/steps.go` 容量注释、`roost add saga` 的 capacity 提示与 `roost help saga` 改为合并 checkpoint 后的实测——投影器约 20 条/s；单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s），正向 10/s 0 笔终态不对但积压、P50 2.2 s，正向 12/s、全补偿 7/s 起崩溃（上限档各单样本）；保留“量大时按 sid 分片多进程、原生步骤加 `WithAdmit`”。报告链接由 SAGA-OPT 换成 [SAGA-CHECKPOINT](docs/performance/SAGA-CHECKPOINT-20261018.md)。
+- **升级**：已生成工程里的 `steps.go` 是业务文件，不改写；只有新 add 的 saga 带新注释。
+- 文档：CONTRACT-2026-10-18-projector-checkpoint-merge、SAGA-CHECKPOINT §5、guide / impl 03-dataengine、guide/06 §5、MMORPG-INTEGRATION、KNOWN-LIMITS“Saga 原生步骤容量（单进程）”（缺省间隔已决定、生成器数字已更新）、codegen 的 CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK。
+
 ### DataEngine：带回执 / effect 的特殊记录与普通记录合并 checkpoint（2026-10-18）
 
 - **决定**：维护者 2026-10-18 在 saga 原生步骤性能的第三档里选 A——特殊记录投影后不再每条立即 checkpoint，按 `CheckpointInterval` / `CheckpointRecords` 与普通记录合并；B（合批带回执 / effect 的记录）与 C（WAL 与 Mongo 分盘）不做。

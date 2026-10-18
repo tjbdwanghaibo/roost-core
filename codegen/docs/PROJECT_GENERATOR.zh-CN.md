@@ -325,8 +325,9 @@ durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest �
 Nest handler（参数 `saga.NativeStep`，事务内 `step.Complete`）；幂等键是 command 的
 `IdempotencyKey`：原生步骤由收件箱保证至多一次生效，Mongo 步骤里事务外的调用要用它做幂等，不要以
 投递次数或 `CommandID` 作为业务幂等键。`Subscribe<Step>` 辅助函数已不再生成（2026-10-18，D12 方向 B）；
-按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 5/s、
-全补偿约 4/s 以内延迟在 1 秒内，正向 7～8/s 起延迟升到秒级、约 10/s 起重试放大，见 `roost help saga`）。
+按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 8/s、
+全补偿约 5/s 以内延迟在 1 秒内，正向 10/s 仍全部正确但延迟升到秒级，正向 12/s、全补偿 7/s 起
+重试放大而崩溃，见 `roost help saga`）。
 
 `roost add effect <topic> -consumer <service>` 生成 effect 的载荷、`Emit<Topic>` 辅助
 （`game/effects`）与消费服务里的 `kitdataengine.SubscribeEffects` 骨架，不改 roost.yaml；
