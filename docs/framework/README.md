@@ -62,8 +62,8 @@
 - [客户端接入](../../client/README.md)
 - [Codegen 入口与快速上手](../../codegen/README.md) · [命令与标记参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
 - [game-demo 模板](../../demo/README.md) · [功能逐项说明](../../demo/WALKTHROUGH.md)
-- [SLG 接入与验收](SLG-INTEGRATION.md)：建造、行军、离线收益、地块竞争的正式生成消费者，以及其他 SLG 路径的框架 / 业务边界。
-- [MMORPG 接入与验收](MMORPG-INTEGRATION.md)：组队、交易与切图的正式生成消费者，AOI、重连和玩家归属的验证边界。
+- [SLG 接入与验收](SLG-INTEGRATION.md)：面向学习的业务 / 框架对照与生成工程读法；建造、行军、离线收益、地块竞争的正式生成消费者，以及其他 SLG 路径的框架 / 业务边界。
+- [MMORPG 接入与验收](MMORPG-INTEGRATION.md)：面向学习的业务 / 框架对照；组队、托管交易、战斗与定时器的生成消费者，真实 WAL / Mongo 两进程恢复、多地图 TCP 切换与重连、静态 sid 跨服赠礼的验收入口与边界。
 
 ## 专项契约参考
 

@@ -256,7 +256,14 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ## MMORPG 接入验收的范围（2026-10-18）
 
-入口与业务清单见 [MMORPG-INTEGRATION](../framework/MMORPG-INTEGRATION.md)，脚本 `scripts/test-mmorpg-generated.sh`。它证明的是：公共 CLI 生成的 Player / Scene DAO、多实体 Sender 与 Nest 在 4 个业务组合（两人组队重放、8 个并发同身份交易只转一次、交易拒绝回滚后同序号重试、带版本的切图拒绝 / 重放 / 返回 / 旧请求）下的多实体锁定、undo 回滚与业务幂等。它没有发现框架缺陷。它不证明：提交器是替身（不含 WAL fsync / Mongo）、单进程、无 Redis / NATS；切图只覆盖持久归属与场景人数同事务这一阶段，双 Scene 网络切换（提交后新场景全量、旧场景删除、订阅失败重试、重连按权威归属恢复、旧代际消息隔离）、动态玩家跨 sid 权威交接、真实客户端与目标密度长稳都没有实现或验收；Player 静态绑定 sid 的设计不变，不能用 DAO 人数守恒代替 AOI 客户端视图验收。脚本不挂在 `dataengine-env.sh test`，也不在根包门禁里。夹具里的队伍、交易序号、场景容量是业务样例，不是框架规则；交易确认 / 取消、队伍解散等没有默认实现，不因此算框架缺陷。
+入口与业务清单见 [MMORPG-INTEGRATION](../framework/MMORPG-INTEGRATION.md)，脚本均不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑。这些实践没有发现框架缺陷。
+
+- `scripts/test-mmorpg-generated.sh`（缺省提交器替身）：公共 CLI 生成的 Player / Scene / Trade / Monster DAO、Player 实体定时器、多实体 Sender 与 Nest 在 13 个业务组合（组队与解散、并发转账去重与拒绝回滚、托管交易确认 / 取消 / 到期 / 确认与取消竞争、战斗冷却与输入重放、掉落 / 任务领奖幂等、副本完成判定、Buff 刷新 / 回滚 / DAO 序列化重建后到期、死亡与延迟复活、带版本的切图）下的多实体锁定、undo 回滚、定时器期限与业务幂等。
+- 同一脚本加 `ROOST_MMORPG_REAL=1`：`TestMMORPGRealPersistenceAcrossProcesses` 两个独立进程共用文件 WAL 与真实 Mongo，第一阶段停在交易单方确认后正常停机，第二阶段冷加载续完交易、重放战斗领奖、补触发离线 Buff。只证明正常停机后的持久与冷加载，不是崩溃 / 断电注入。
+- `scripts/test-mmorpg-scenes.sh`：在生成的 game-demo 里，一个 Manager 配两张地图的 Interest，经 demo 玩家 TCP 与框架 `frame.Receiver` 验证提交后新场景全量、旧场景删除、业务准入失败后 held 重试、旧 epoch 帧不被应用、断线后按权威归属重连恢复、空间视图不泄露私有字段（`TestMMORPGTwoScenesTCPTransferRetryAndReconnect`）。鉴权是测试替身，单进程、无外部依赖。
+- `scripts/test-mmorpg-cross-sid.sh`：对已启动的双 sid game-demo（十个服务进程 + 第二个 game 进程，真实 account / NATS / Mongo / Redis / etcd），验证真实会话错服在 EnterGame 被拒、两个方向的赠礼 Saga 全部完成、已领邮件逐封重领不加物品、无效收件人的 Saga 补偿、最终背包守恒。起栈不由脚本完成（步骤见手册第 5 节），同机两进程，不含跨机网络与故障注入。
+
+不证明：玩家动态跨 sid 权威交接（Player 静态绑定 sid 的设计不变，赠礼协作不迁移 Player）、真实客户端引擎与渠道认证、目标玩家密度与长稳、跨机器故障；不能用 DAO 人数守恒代替 AOI 客户端视图验收。夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则；队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现，不因此算框架缺陷。
 
 ## 能力与验证边界
 

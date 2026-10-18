@@ -73,6 +73,10 @@
 
 - 新增 `scripts/test-mmorpg-generated.sh`：与 SLG 脚本同一结构，从 `game` 模板生成隔离工程，`add dao Player` / `add entity Scene` / `add dao Scene` 后只改 DAO 定义与业务文件（[`scripts/testdata/mmorpg/`](scripts/testdata/mmorpg/)），跑 4 条 race 场景：两人组队重放、8 个并发同身份交易只转一次（同序号改金额拒绝）、交易拒绝后两玩家资产与序号一起回滚再重试、带版本的切图（失败无半次切图、重放不重复计人数、返回后拒绝旧请求）；4 条必须实际通过、无 skip，最后 `roost id check` 与 `roost generate --check`；成功删除临时工程。队伍、交易、场景容量规则只在业务夹具里，框架与生成器不变；没有发现框架缺陷。
 - 手册 [docs/framework/MMORPG-INTEGRATION.md](docs/framework/MMORPG-INTEGRATION.md)：组队、交易、切图的接法，AOI / 重连 / 玩家归属的验证边界与后续验收顺序；范围与不证明的部分见 KNOWN-LIMITS“MMORPG 接入验收的范围”。
+- 扩充到 13 条场景：脚本另 `add entity` / `add dao` Trade、Monster 与 `add timer --entity Player`，夹具增加两人队伍解散（旧队伍迟到请求被拒）、Trade 实体托管交易（双方确认、取消、到期、确认与取消竞争）、战斗冷却与输入重放、掉落 / 任务领奖幂等、副本完成判定、Buff 刷新 / 回滚 / 离线到期、死亡与延迟复活；DAO 库名改为本次唯一。`ROOST_MMORPG_REAL=1` 时追加 `TestMMORPGRealPersistenceAcrossProcesses`：两个独立进程共用文件 WAL 与真实 Mongo，正常停机后冷加载续完交易、重放领奖、补触发离线 Buff（登记在根包 `integration_coverage_test.go`）。
+- 新增 `scripts/test-mmorpg-scenes.sh`：生成 game-demo 后放入多地图接法（一个 Manager、每张地图一个 Interest），在 demo 玩家 TCP 与框架 `frame.Receiver` 上验证切图后新场景全量、旧场景删除、准入失败 held 重试、旧 epoch 隔离、重连恢复与空间视图字段隐私。
+- 新增 `scripts/test-mmorpg-cross-sid.sh`：对已启动的双 sid game-demo 跑真实账号错服拒绝、双向赠礼 Saga、已领邮件逐封重领不加物品、无效收件人补偿与背包守恒；不起停服务、不改 Player sid（Player 仍静态绑定 sid）。
+- SLG / MMORPG 两篇手册补学习路线：状态归属与框架模块对照、生成工程的阅读顺序、可编译的 Sender 调用示例、常见误解；框架、生成器与 demo 不变，没有发现框架缺陷。
 
 
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
