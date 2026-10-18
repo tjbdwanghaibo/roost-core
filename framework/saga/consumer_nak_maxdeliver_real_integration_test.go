@@ -27,9 +27,13 @@ import (
 
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	deengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 // recordingCompleter 记下每次投递的时间与结果；afterFirst 在第一次投递返回之后执行一次（模拟定义上线）。
@@ -215,4 +219,154 @@ func TestRealNatsCompletionNakBackoffAndMaxDeliver(t *testing.T) {
 			t.Fatalf("record after the accepted redelivery = %+v, %v; want step 0 completed", current, err)
 		}
 	})
+}
+
+// 原生步骤消费者在真实 JetStream 上：步骤体返回后，等回执可见再 ack 的那一段不占住 durable 的串行回调
+// （2026-10-18 saga 性能优化第二档 3）。命令 A 的记录提交后不投影（投影停顿），命令 B 的照常投影：
+//
+//  1. B 的步骤体在 A 的回执可见之前就运行，B 随即 ack（修前 B 排在 A 的“等回执”后面，要等到 A 的截止）；
+//  2. A 没有被 ack（仍是未确认的投递），Drain 不结束；
+//  3. A 投影后后台结算 ack，Drain 结束，durable 上没有未确认或待投递的消息，状态文档按回执结算；每条命令步骤体恰好一次。
+//
+// 资源：流 SAGADEFER_<pid>_<ns>，用后删除；收件箱与投影用 mongotest。
+func TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback(t *testing.T) {
+	natsURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if natsURL == "" {
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; source ~/.roost-it/roost-dataengine-it/env.sh")
+	}
+	natsClient, err := ndriver.NewClient(fnats.DefaultConfig(natsURL), ndriver.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(natsClient.Close)
+	jetStream, err := ndriver.NewJetStreamClient(natsClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
+	stream, prefix, durable := "SAGADEFER_"+suffix, fmt.Sprintf("sagadefer%dx%d", os.Getpid(), time.Now().UnixNano()), "native-defer"
+	ctx := context.Background()
+	if err := jetStream.EnsureStream(ctx, fnats.JetStreamConfig{Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile, MaxAge: 10 * time.Minute, Duplicates: time.Minute, Replicas: 1, MaxBytes: 8 << 20}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { deleteRevn06s5Stream(t, natsURL, stream) })
+	mongo := mongotest.NewClient()
+	inbox, err := NewDataEngineStepInbox(mongo, "game", DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: 2 * time.Minute, PollInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := NewJetStreamPublisher(jetStream, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	commandA := dataEngineCommand("defer-a", "defer-op-a", "a")
+	commandB := dataEngineCommand("defer-b", "defer-op-b", "b")
+	commandA.DeadlineAt, commandB.DeadlineAt = now.Add(30*time.Second), now.Add(30*time.Second)
+	var mu sync.Mutex
+	runs := map[string]int{}
+	stalled := make(chan coredata.CommitRecord, 1)
+	ran := make(chan string, 4)
+	body := func(ctx context.Context, step NativeStep) error {
+		committer := &stepFenceCommitter{}
+		if _, err := corenest.RunIsolatedTransaction(ctx, committer, "defer", func() (any, error) {
+			return nil, step.Complete(true, "")
+		}); err != nil {
+			return err
+		}
+		id := step.Command().ID
+		mu.Lock()
+		runs[id]++
+		mu.Unlock()
+		if id == commandA.ID {
+			stalled <- committer.record // 投影停顿：A 的回执暂不可见
+		} else if err := projector.Project(context.Background(), committer.record); err != nil {
+			return err
+		}
+		ran <- id
+		return nil
+	}
+	sub, err := SubscribeDataEngineStep(ctx, jetStream, transport, inbox, StepConsumerConfig{Stream: stream, Durable: durable, Topic: "rally.reserve", AckWait: 30 * time.Second}, inbox.StepHandler(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sub.Stop)
+	for _, command := range []Command{commandA, commandB} {
+		if err := transport.PublishSagaCommand(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{commandA.ID, commandB.ID} {
+		select {
+		case got := <-ran:
+			if got != want {
+				t.Fatalf("step body ran for %s, want %s", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("step body for %s did not run within 5s while %s waited for its receipt (deadline 30s): the receipt wait still holds the durable callback", want, commandA.ID)
+		}
+	}
+	ackPending := func() (int, int) {
+		t.Helper()
+		nc, err := gonats.Connect(natsURL, gonats.Timeout(2*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer nc.Close()
+		js, err := gojs.New(nc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumer, err := js.Consumer(ctx, stream, durable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := consumer.Info(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.NumAckPending, int(info.NumPending)
+	}
+	// B 已 ack，A 仍未确认。
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if pending, _ := ackPending(); pending == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			pending, unseen := ackPending()
+			t.Fatalf("ack pending %d, pending %d while A waits for its receipt; want exactly A unacknowledged", pending, unseen)
+		}
+	}
+	sub.Drain()
+	select {
+	case <-sub.Closed():
+		t.Fatal("Drain finished while A's receipt wait was still pending")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := projector.Project(context.Background(), <-stalled); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sub.Closed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("Drain did not finish after A's receipt became visible")
+	}
+	if pending, unseen := ackPending(); pending != 0 || unseen != 0 {
+		t.Fatalf("after Drain: ack pending %d, pending %d; want 0 / 0", pending, unseen)
+	}
+	for _, command := range []Command{commandA, commandB} {
+		if completion, found, err := inbox.Replay(ctx, command); err != nil || !found || !completion.Success {
+			t.Fatalf("receipt of %s: %+v found=%t err=%v", command.ID, completion, found, err)
+		}
+		mu.Lock()
+		count := runs[command.ID]
+		mu.Unlock()
+		if count != 1 {
+			t.Fatalf("step body for %s ran %d times, want 1", command.ID, count)
+		}
+	}
 }

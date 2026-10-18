@@ -243,7 +243,17 @@ type StepConsumerConfig struct {
 	//
 	// nil 表示全部准入，单进程部署正需要这样。
 	Admit func(context.Context, Command) error
+
+	// ReceiptWaiters 只用于原生步骤消费者（SubscribeDataEngineStep）：同时在后台“等回执可见、结算状态文档、再 ack”的
+	// 投递数上限（每个订阅一份）。步骤体返回后回调不在这里等回执投影，而是推迟这条消息的结算、立刻处理 durable 上的
+	// 下一条命令；后台满了回调就等一个空位，与逐条等待同样回压。不写取 min(32, MaxAckPending)，不能超过 MaxAckPending。
+	// 传输不支持推迟结算（JetStreamMsg.DeferSettle 为 nil，例如测试替身）时退回在回调里等。
+	ReceiptWaiters int
 }
+
+// defaultReceiptWaiters 是 StepConsumerConfig.ReceiptWaiters 的缺省上限：正常负载下同时在等回执的投递只有几条
+// （单条等待约等于一次投影，几十毫秒），32 已远超；它限制的是投影停顿时后台 goroutine 与轮询的规模。
+const defaultReceiptWaiters = 32
 
 // SubscribeMongoStep 订阅 Mongo 步骤命令：解码与校验信封（坏信封 Term + 告警），过了截止时间只回放已有结果，否则经
 // 收件箱执行 handler 并发布 completion。
@@ -368,9 +378,14 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 	if config.NakBackoffMax < config.NakBackoffMin {
 		config.NakBackoffMax = 30 * time.Second
 	}
-	if !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) || inbox.options.LeaseDuration <= config.AckWait {
+	if config.ReceiptWaiters <= 0 {
+		config.ReceiptWaiters = min(defaultReceiptWaiters, config.MaxAckPending)
+	}
+	if !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) || inbox.options.LeaseDuration <= config.AckWait || config.ReceiptWaiters > config.MaxAckPending {
 		return nil, fmt.Errorf("saga: unsafe dataengine step consumer limits")
 	}
+	// 后台等回执的空位：一个订阅一份，容量即同时等待的上限。
+	receiptWaiters := make(chan struct{}, config.ReceiptWaiters)
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, err
 	}
@@ -481,11 +496,51 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 				return err
 			}
 		}
-		waitStart := hoptrace.Now()
-		_, err = inbox.waitReplay(processCtx, command)
-		hoptrace.Since("h12.step.wait_receipt", waitStart)
-		return err
+		return awaitReceiptAndSettle(messageCtx, processCtx, message, inbox, command, receiptWaiters)
 	})
+}
+
+// awaitReceiptAndSettle 是原生步骤消费者的最后一段：等本命令的回执投影可见、结算状态文档（Replay 里的 markCompleted），
+// 然后 ack。回执只经 WAL → 投影产生，这段等待不影响结果本身，只决定何时 ack。
+//
+// 在回调里等会占住 durable 的串行回调（nats.go 逐条调用），一条命令的投影停顿就挡住同一 durable 后面的全部命令；
+// 所以这里推迟这条消息的结算（JetStreamMsg.DeferSettle），把等待交给后台、回调立即返回：
+//   - 有界：同时等待的数目不超过 waiters 的容量（ReceiptWaiters ≤ MaxAckPending）；满了在回调里等空位，截止前没等到
+//     与修前一样返回截止错误（nak）。推迟中的消息仍未确认，broker 侧还受 MaxAckPending 约束。
+//   - 结算与修前相同：回执可见 → ack；等到截止（命令截止，步骤超时短于 AckWait）或订阅 Stop（handler ctx 取消）→
+//     返回的错误按退避 nak，重投走过期分支回放回执。租约、fence、恰好一次都不依赖 ack 的时机。
+//   - Drain：订阅的 Closed 等全部推迟的结算完成，Steps.Drain / 调用方等到的就是后台 ack 完成。
+//   - 传输不支持推迟（DeferSettle 为 nil，或订阅正在结束返回 nil）时在回调里等，行为与修前相同。
+func awaitReceiptAndSettle(messageCtx, processCtx context.Context, message *fnats.JetStreamMsg, inbox *DataEngineStepInbox, command Command, waiters chan struct{}) error {
+	if message.DeferSettle == nil {
+		return waitReceipt(processCtx, inbox, command)
+	}
+	select {
+	case waiters <- struct{}{}:
+	case <-processCtx.Done():
+		return processCtx.Err()
+	}
+	settle := message.DeferSettle()
+	if settle == nil {
+		<-waiters
+		return waitReceipt(processCtx, inbox, command)
+	}
+	go func() {
+		defer func() { <-waiters }()
+		// processCtx 随回调返回被取消；后台按同一个截止重新派生，父 ctx 仍是 handler 的（Stop 时取消）。
+		waitCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
+		defer cancel()
+		settle(waitReceipt(waitCtx, inbox, command))
+	}()
+	return nil
+}
+
+// waitReceipt 等本命令的回执可见并结算状态文档。
+func waitReceipt(ctx context.Context, inbox *DataEngineStepInbox, command Command) error {
+	waitStart := hoptrace.Now()
+	_, err := inbox.waitReplay(ctx, command)
+	hoptrace.Since("h12.step.wait_receipt", waitStart)
+	return err
 }
 
 // replayOperationSuccess 把同一操作实例另一次尝试已生效的成功经 saga 结果流重发给协调器，供不会执行的

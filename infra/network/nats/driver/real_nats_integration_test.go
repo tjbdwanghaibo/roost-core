@@ -515,3 +515,101 @@ func TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace(t *testing.T) {
 		t.Fatalf("a refused update changed the consumer: %+v", got)
 	}
 }
+
+// 推迟结算在真实 JetStream 上：前几条投递推迟着不结算时，同一 durable 的后续消息照常进回调（回调不再被等待占住）；
+// Drain 之后 ConsumeContext 已关闭，后台的 settle(nil) 仍能 ack（ack 走连接，不走订阅），Closed 等到这些结算之后
+// 才关闭；ack 过的消息不重投（AckWait 设短，等过它再用同一 durable 订阅一次，收不到任何消息）。
+func TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain(t *testing.T) {
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run against a private environment (scripts/mirror-local.sh)")
+	}
+	client, err := NewClient(fnats.DefaultConfig(url), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	js, err := NewJetStreamClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	token := time.Now().UnixNano()
+	stream, subject, durable := fmt.Sprintf("SAGAOPT_DEFER_%d", token), fmt.Sprintf("sagaopt%d.cmd", token), "sagaopt-defer"
+	if err := js.EnsureStream(ctx, fnats.JetStreamConfig{Name: stream, Subjects: []string{fmt.Sprintf("sagaopt%d.>", token)}, Replicas: 1}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := js.js.DeleteStream(context.Background(), stream); err != nil {
+			t.Errorf("cleanup: delete stream %s: %v", stream, err)
+		}
+	})
+	const deferred, total = 3, 6
+	config := fnats.JetStreamConsumerConfig{Stream: stream, Name: durable, Durable: durable, FilterSubject: subject,
+		DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: 2 * time.Second, MaxDeliver: 5, MaxAckPending: 16}
+	var mu sync.Mutex
+	var settles []func(error)
+	seen := make(chan string, total)
+	sub, err := js.Subscribe(ctx, config, func(_ context.Context, msg *fnats.JetStreamMsg) error {
+		mu.Lock()
+		if len(settles) < deferred {
+			settle := msg.DeferSettle()
+			if settle == nil {
+				mu.Unlock()
+				return errors.New("DeferSettle refused on a live subscription")
+			}
+			settles = append(settles, settle)
+		}
+		mu.Unlock()
+		seen <- string(msg.Data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range total {
+		if _, err := js.Publish(ctx, subject, []byte(fmt.Sprintf("m%d", i)), fnats.JetStreamPublishOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range total {
+		select {
+		case <-seen:
+		case <-ctx.Done():
+			t.Fatal("later messages did not reach the callback while earlier deliveries were deferred")
+		}
+	}
+	sub.Drain()
+	select {
+	case <-sub.Closed():
+		t.Fatal("Closed fired while deferred settles were pending")
+	case <-time.After(300 * time.Millisecond):
+	}
+	mu.Lock()
+	for _, settle := range settles {
+		settle(nil)
+	}
+	mu.Unlock()
+	select {
+	case <-sub.Closed():
+	case <-ctx.Done():
+		t.Fatal("Closed did not fire after the deferred settles")
+	}
+	// 等过 AckWait：没被 ack 的会被重投，ack 过的不会。
+	time.Sleep(3 * time.Second)
+	redelivered := make(chan string, total)
+	again, err := js.Subscribe(ctx, config, func(_ context.Context, msg *fnats.JetStreamMsg) error {
+		redelivered <- string(msg.Data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Stop()
+	select {
+	case data := <-redelivered:
+		t.Fatalf("message %s was redelivered: a deferred settle after Drain did not ack it", data)
+	case <-time.After(2 * time.Second):
+	}
+}

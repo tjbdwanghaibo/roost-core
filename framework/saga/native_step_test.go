@@ -13,6 +13,7 @@ import (
 	deengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
@@ -278,4 +279,124 @@ func TestRunHandedOverSharesTheClaimWithTheConsumer(t *testing.T) {
 			t.Fatalf("nil inbox = %v, want ErrInvalidRecord", err)
 		}
 	})
+}
+
+// deferringJetStream 是支持推迟结算的单 durable 替身：deliver 像真实传输一样给消息挂上 DeferSettle，结算结果（含
+// handler 同步返回的）送进 settled。
+type deferringJetStream struct {
+	*recordingJetStream
+	settled chan error
+}
+
+func (j *deferringJetStream) deliverDeferrable(subject string, data []byte) {
+	j.mu.Lock()
+	handler := j.handlers[subject]
+	j.mu.Unlock()
+	var deferred atomic.Bool
+	message := &fnats.JetStreamMsg{Subject: subject, Data: data}
+	message.DeferSettle = func() func(error) {
+		if !deferred.CompareAndSwap(false, true) {
+			return nil
+		}
+		var once atomic.Bool
+		return func(err error) {
+			if once.CompareAndSwap(false, true) {
+				j.settled <- err
+			}
+		}
+	}
+	if err := handler(context.Background(), message); err != nil || !deferred.Load() {
+		j.settled <- err
+	}
+}
+
+// 后台等回执有上限（StepConsumerConfig.ReceiptWaiters）：投影停顿时，前两条命令推迟结算后回调立即返回，第三条的回调
+// 在空位上等（回压，不起第三个后台等待）；第一条的回执可见并 ack 之后第三条才进入后台。每条最终 ack（nil）一次。
+func TestNativeStepReceiptWaitersAreBounded(t *testing.T) {
+	mongo := mongotest.NewClient()
+	inbox, err := NewDataEngineStepInbox(mongo, "game", DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: 2 * time.Minute, PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := &deferringJetStream{recordingJetStream: newRecordingJetStream(), settled: make(chan error, 8)}
+	transport, err := NewJetStreamPublisher(js, "roost.saga")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := make(chan coredata.CommitRecord, 4)
+	body := func(ctx context.Context, step NativeStep) error {
+		committer := &stepFenceCommitter{}
+		if _, err := corenest.RunIsolatedTransaction(ctx, committer, "bounded", func() (any, error) {
+			return nil, step.Complete(true, "")
+		}); err != nil {
+			return err
+		}
+		records <- committer.record // 投影停顿：由用例决定何时投影
+		return nil
+	}
+	config := StepConsumerConfig{Stream: "ROOST_SAGA", Durable: "bounded", Topic: "rally.reserve", ReceiptWaiters: 2}
+	if _, err := SubscribeDataEngineStep(context.Background(), js, transport, inbox, config, inbox.StepHandler(body)); err != nil {
+		t.Fatal(err)
+	}
+	deliver := func(id string) <-chan struct{} {
+		returned := make(chan struct{})
+		raw, err := json.Marshal(commandEnvelope{Version: WireVersion, Command: dataEngineCommand(id, "op-"+id, id)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			defer close(returned)
+			js.deliverDeferrable("roost.saga.command.rally.reserve", raw)
+		}()
+		return returned
+	}
+	project := func() {
+		t.Helper()
+		if err := projector.Project(context.Background(), <-records); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"bounded-1", "bounded-2"} {
+		select {
+		case <-deliver(id):
+		case <-time.After(5 * time.Second):
+			t.Fatalf("callback for %s did not return while a waiter slot was free", id)
+		}
+	}
+	third := deliver("bounded-3")
+	select {
+	case <-third:
+		t.Fatal("third callback returned with both receipt waiters busy: the background wait is not bounded")
+	case <-time.After(100 * time.Millisecond):
+	}
+	project() // bounded-1 的回执可见 → 它的后台等待 ack、让出空位
+	select {
+	case err := <-js.settled:
+		if err != nil {
+			t.Fatalf("first settle = %v, want ack", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first command was not acked after its receipt became visible")
+	}
+	select {
+	case <-third:
+	case <-time.After(5 * time.Second):
+		t.Fatal("third callback still blocked after a waiter slot was freed")
+	}
+	project()
+	project()
+	for range 2 {
+		select {
+		case err := <-js.settled:
+			if err != nil {
+				t.Fatalf("settle = %v, want ack", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a command was not acked after its receipt became visible")
+		}
+	}
 }

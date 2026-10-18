@@ -319,7 +319,8 @@ func TestRealStepsRunNativeStepsUnderTheRealNestScheduler(t *testing.T) {
 		}
 	}
 
-	// 1. 正向与业务拒绝 → 补偿。
+	// 1. 正向与业务拒绝 → 补偿。两笔的 debit 都扣 a、在同一个 durable 上：回调不再等前一条的回执投影，后一条可能在
+	// 前一条投影之前进入 Nest、撞上 a 的实体屏障（交还租约、nak 后重投），所以下面按“未被屏障挡回的执行”计次数。
 	okID, refuseID := start("ok", "", "a", "b", 10), start("refuse", "", "a", "c", 20)
 	finish(okID, coresaga.StatusCompleted, time.Minute)
 	finish(refuseID, coresaga.StatusCompensated, time.Minute)
@@ -349,8 +350,8 @@ func TestRealStepsRunNativeStepsUnderTheRealNestScheduler(t *testing.T) {
 	finish(failID, coresaga.StatusCompleted, time.Minute)
 
 	// 4. 实体屏障：挡住 checkpoint，先提交一笔普通事务让投影器停在 ack 上，再让 X 的 debit 准入（投影不了，D 上有屏障），
-	// 然后 Y（另一个 saga 类型的 bonus 步骤，另一个 durable）给 D 加钱，撞上屏障。Y 必须在另一个 durable 上：一个进程里
-	// 同一 durable 的投递逐条处理，X 的消费者在等自己的投影，同一 durable 上的下一条要等它返回。
+	// 然后 Y（另一个 saga 类型的 bonus 步骤，另一个 durable）给 D 加钱，撞上屏障。（X 等回执在后台，不占 durable 的
+	// 回调；Y 放在另一个 durable 上只是让场景与步骤类型无关。）
 	closeGate := func() {
 		gate := make(chan struct{})
 		ackGate.Store(&gate)
@@ -415,15 +416,21 @@ func TestRealStepsRunNativeStepsUnderTheRealNestScheduler(t *testing.T) {
 		t.Errorf("refused credit changed account c: version %d err=%v, want 1 (receipt and failed completion only)", refused.Version, err)
 	}
 
-	// 核对执行次数与生效尝试。
+	// 核对执行次数与生效尝试。被实体屏障挡回的执行（key/fenced）不改实体、交还租约，不计入。
 	for key, wantRuns := range map[string]int{
 		"ok/debit": 1, "ok/credit": 1, "refuse/debit": 1, "refuse/credit": 1, "refuse/refund": 1,
 		"dup/debit": 1, "lostreply/debit": 1, "failfirst/debit": 2,
 	} {
-		if got := probe.counted(key); got != wantRuns {
-			t.Errorf("%s: step body ran %d times, want %d", key, got, wantRuns)
+		if got := probe.counted(key) - probe.counted(key+"/fenced"); got != wantRuns {
+			t.Errorf("%s: step body ran %d times not refused by the entity barrier, want %d", key, got, wantRuns)
 		}
 	}
+	for _, key := range []string{"ok/debit", "refuse/debit"} {
+		if attempts := probe.attempts(key); len(attempts) != 1 || attempts[0] != 1 {
+			t.Errorf("%s: effective attempts %v, want [1] (a barrier refusal hands the lease back and runs again on the same attempt)", key, attempts)
+		}
+	}
+	t.Logf("same-durable, same-entity debits refused by the barrier: ok %d, refuse %d", probe.counted("ok/debit/fenced"), probe.counted("refuse/debit/fenced"))
 	for key, wantHandler := range map[string]int{"dup/debit": 1, "lostreply/debit": 1, "failfirst/debit": 1, "refuse/credit": 1} {
 		if got := probe.handlerRuns(key); got != wantHandler {
 			t.Errorf("%s: Nest handler ran %d times, want %d", key, got, wantHandler)
