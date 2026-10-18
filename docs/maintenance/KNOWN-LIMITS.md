@@ -265,6 +265,16 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 不证明：玩家动态跨 sid 权威交接（Player 静态绑定 sid 的设计不变，赠礼协作不迁移 Player）、真实客户端引擎与渠道认证、目标玩家密度与长稳、跨机器故障；不能用 DAO 人数守恒代替 AOI 客户端视图验收。夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则；队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现，不因此算框架缺陷。
 
+## MOBA 接入验收的范围（2026-10-18）
+
+入口与业务清单见 [MOBA-INTEGRATION](../framework/MOBA-INTEGRATION.md)，脚本 `scripts/test-moba-generated.sh` 不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity`、多实体 Sender 生成或 Lockstep 时手动跑。业务规则（单路、每队一名英雄的参考模拟与结算 handler）只在 `scripts/testdata/moba`，框架、生成器与 demo 未改；夹具没有触发框架缺陷。
+
+- 缺省模式（提交器替身）：12 条顶层场景证明生成的 Player / MatchResult DAO、多实体 Sender 与 Nest 的结算并发重放、身份冲突、拒绝回滚与无胜者终态（`TestMOBASettlementConcurrentReplayAndIdentity`、`TestMOBASettlementRollbackAndRetry`、`TestMOBANoWinnerSettlementNeverPays`、`TestMOBAServerReferenceSettlesTheFinishedRound`）；框架 `Match` / `Sequencer` / `FrameAssembler` 的会话身份、输入重放与窗口、冗余去重、断线追帧、旁观者、历史过期与 `NoMajority`（`TestMOBAInputIdentityReplayAndWindow`、`TestMOBADeterministicDuelHealsLostBroadcasts`、`TestMOBACatchupAndSpectatorCannotControlHeroes`、`TestMOBAHistoryExpiryAndDesyncAreExplicit`）；`service/match` 内存存储的排队、取消、过期与并发 Commit 幂等（`TestMOBAMatchmakingAdmissionCancellationAndCommit`）；一条真实 loopback KCP 上超过冗余深度的丢包经可靠追帧后，两个客户端与服务器参考摘要收敛（`TestMOBAKCPClientsAndReferenceConvergeAfterCatchup`）。不证明：文件 WAL 与 Mongo；除 KCP 一条外的真实网络；匹配服务 RPC、Redis 存储与认证；真实账号鉴权（KCP 会话是固定测试绑定）；跨机网络与目标负载。
+- `ROOST_MOBA_REAL=1`：`TestMOBARealSettlementAcrossProcesses` 两个独立进程共用文件 WAL 与真实 Mongo，第一阶段结算后正常停机，第二阶段冷加载后先核对结算身份 / 奖励 / 战绩已恢复，再重放同一结算不重复发放、换胜者被拒。只证明正常停机后的结算持久与冷加载；不是崩溃 / 断电 / 结果未知注入，也不恢复进行中的对局。
+- 排除的疑点：两个并发 Commit 对同一票集合都返回成功不是重复开局。同一完整票集合幂等返回原 Match（`TestCommitReplayReturnsOriginalMatchForSameTicketSet`、`TestConcurrentCommitsProduceExactlyOneMatch`），应按 Match ID 计开局数；`service/match/store.go` 的 `Commit` 注释已写明，运行时逻辑未改。
+
+不证明：ban/pick、队伍与 MMR、技能 Host、战争迷雾、独立 battle host 跨 sid 路由、活动对局的输入日志 / 检查点恢复（均无默认实现，不因此算框架缺陷）；真实客户端引擎、5v5 目标负载与跨机长稳。Lockstep 历史窗口、嵌入 TCP 追帧限速与独立 Gate / demo 追帧背压按下表现行条目处理，不凭这个小型消费者推断已消失。夹具里的伤害、冷却、迟到上限、帧数上限与奖励都是业务样例，不是框架规则。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
