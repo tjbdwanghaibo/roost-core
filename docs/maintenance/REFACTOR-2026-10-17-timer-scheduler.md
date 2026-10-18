@@ -205,3 +205,13 @@ World 的钩子只写 DAO、不调用调度器，生成工程不可达；这是 
 原提交 `09846b5f` 的 `scheduler.go` 在新表上仍有 5 组红（`popping` × 改期 / 取消，`pending_fired` × Tick × 三种返回值），见 [red-f8851f4a.txt](../performance/benchmarks/timer-announce-reentrant-hook/red-f8851f4a.txt)。
 
 **基准**：热路径 `fire` 多两次标志判断与一次状态判断。同机交替 10 轮（[样本与环境](../performance/benchmarks/timer-announce-reentrant-hook/)），六个基准时间、B/op、allocs/op 与基线均无显著差异（例：TickRearmByReturn 21.30µs → 21.11µs，p=0.280；NewAndRemoveOutsideTick 95.83ns → 96.10ns，p=0.698；RebuildAndTick 54.58µs → 55.03µs，p=0.684）。代码量：`scheduler.go` 净增一个 `emitLeave`（`RemoveTimer` 原有的两段判断移入其中复用），`fire` 加一个状态判断；原提交的单点测试由组合表取代。
+
+### 9.2 读视图（Lookup / LiveNodes，2026-10-18）
+
+**起因**：`framework/nest/entitytimer.Host` 让 Tick 回调里的组件操作共享当前调度器之后，回调里新建、改期的节点要到最外层收尾才写回 DAO，`Host.Timer` / `Timers` 仍读 DAO，回调读不到自己刚写的（CHANGELOG `[Unreleased]`“实体定时器：回调里读得到自己刚写的节点”）。
+
+**做法**：`Scheduler` 新增只读 `Lookup(id)` / `LiveNodes()`，读 `byID`（§2.1 的 `stateHeap` / `stateFiring` / `stateQueued`），返回副本；`LiveNodes` 按 `(End, Priority, ID)`，比较复用 `timerHeap.Less`（`firesBefore`），堆的比较路径与重构后相同。读视图不改状态、标志与 `queued`，§2.1 三条不变量、§2.2 行为表、收尾顺序都不变。
+
+**与行为表的关系**：`Lookup` 为 true ⇔ 节点在 `byID` ⇔ 此刻 `ChangeTimer` / `RemoveTimer` 返回 true（§2.2 最后一列）。正在触发的节点（含出堆通知期间）可读，期限是原定期限，显式改期后是新期限；它已向钩子发过删除，所以钩子视图（`Nodes()` 与持久存储）里没有它——读视图与钩子视图在 Tick 内本来就不同，`Nodes()` 不能用来回答“回调刚写的在不在”。
+
+**组合表**：两张表都在每次操作前后调用 `checkLiveView`：操作前读得到 ⇔ 操作返回 true，改期后立即读到新期限，取消后立即读不到，`LiveNodes` 有序且与 `Lookup` 一致。钩子位置表里目标在全部五种可见状态下都读得到。变异核对：读视图隐去 `stateQueued` 节点，回调位置表 42 组、钩子位置表 2 组变红；隐去 `stateFiring` 节点，分别 12 组、8 组变红。

@@ -572,8 +572,13 @@ func (n *Node) clone() Node {
 	return c
 }
 
-// firesBefore 是触发顺序 (End, Priority, ID)，见包注释；堆与 LiveNodes 共用。ID 唯一，所以顺序是全序。
-func firesBefore(a, b *Node) bool {
+// timerHeap 按 (End, Priority, ID) 排序，见包注释。ID 唯一，所以顺序是全序，不取决于堆的形状或入堆顺序。
+// 触发顺序只在 Less 定义一次；LiveNodes 经 firesBefore 复用它，堆的比较路径不多一层调用。
+type timerHeap []*Node
+
+func (h timerHeap) Len() int { return len(h) }
+func (h timerHeap) Less(i, j int) bool {
+	a, b := h[i], h[j]
 	if !a.End.Equal(b.End) {
 		return a.End.Before(b.End)
 	}
@@ -583,11 +588,9 @@ func firesBefore(a, b *Node) bool {
 	return a.ID < b.ID
 }
 
-// timerHeap 按 firesBefore 排序，不取决于堆的形状或入堆顺序。
-type timerHeap []*Node
+// firesBefore 报告 a 是否先于 b 触发（timerHeap.Less 的顺序），给不在堆里的节点列表排序用（LiveNodes、测试）。
+func firesBefore(a, b *Node) bool { return timerHeap{a, b}.Less(0, 1) }
 
-func (h timerHeap) Len() int           { return len(h) }
-func (h timerHeap) Less(i, j int) bool { return firesBefore(h[i], h[j]) }
 func (h timerHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 	h[i].index = int32(i)

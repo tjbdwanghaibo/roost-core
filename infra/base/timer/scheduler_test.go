@@ -294,6 +294,28 @@ func checkEveryIDAnnounced(t *testing.T, s *Scheduler, upserted map[int64]bool) 
 	}
 }
 
+// checkLiveView 核对读视图（Lookup / LiveNodes）对 id 的回答：want 为 true 时读到且期限为 end，为 false 时读不到；
+// LiveNodes 是否列出 id 与 Lookup 一致，并按触发顺序 (End, Priority, ID) 排列。两张“操作 × 状态”组合表在
+// 每次操作前后调用它，保证读视图与 ChangeTimer / RemoveTimer 判断“存在”用的是同一个活节点集合。
+func checkLiveView(t *testing.T, s *Scheduler, id int64, want bool, end time.Time) {
+	t.Helper()
+	node, ok := s.Lookup(id)
+	if ok != want || (ok && (node.ID != id || !node.End.Equal(end))) {
+		t.Errorf("Lookup(%d) = %+v present=%v, want present=%v end=%v", id, node, ok, want, end)
+	}
+	live := s.LiveNodes()
+	listed := slices.ContainsFunc(live, func(node Node) bool { return node.ID == id })
+	sorted := slices.IsSortedFunc(live, func(a, b Node) int {
+		if firesBefore(&a, &b) {
+			return -1
+		}
+		return 1
+	})
+	if listed != want || !sorted {
+		t.Errorf("LiveNodes() = %+v, want %d listed=%v in firing order", live, id, want)
+	}
+}
+
 func newPinnedScheduler(now time.Time) *Scheduler {
 	s := NewScheduler(1, 0, nil, nil)
 	s.SetClock(func() time.Time { return now })
@@ -668,23 +690,7 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 				opOK := true
 				// 读视图（Lookup / LiveNodes）与操作看到的是同一个活节点集合：操作前可读当且仅当改期 / 取消会成功，
 				// 操作后立即读到新期限或读不到。
-				checkLive := func(want bool, end time.Time) {
-					t.Helper()
-					node, ok := s.Lookup(target)
-					if ok != want || (ok && (node.ID != target || !node.End.Equal(end))) {
-						t.Errorf("Lookup(%d) = %+v present=%v, want present=%v end=%v", target, node, ok, want, end)
-					}
-					live := s.LiveNodes()
-					listed := slices.ContainsFunc(live, func(node Node) bool { return node.ID == target })
-					if listed != want || !slices.IsSortedFunc(live, func(a, b Node) int {
-						if firesBefore(&a, &b) {
-							return -1
-						}
-						return 1
-					}) {
-						t.Errorf("LiveNodes() = %+v, want target listed=%v in firing order", live, want)
-					}
-				}
+				checkLive := func(want bool, end time.Time) { t.Helper(); checkLiveView(t, s, target, want, end) }
 				operate := func() {
 					current, present := s.Lookup(target)
 					switch r.op {
@@ -854,13 +860,25 @@ func TestHookOperationsOnEveryNodeStateItCanSee(t *testing.T) {
 			upserted := make(map[int64]bool)
 			fires := make(map[int64]int)
 			opOK, opDone, kSeen := true, false, false
+			// 钩子能看到的这几种状态里目标都在 byID：读视图读得到（与随后改期 / 取消返回 true 一致），
+			// 操作后立即读到新期限或读不到。
 			operate := func() {
 				opDone = true
+				current, present := s.Lookup(target)
+				checkLiveView(t, s, target, true, current.End)
 				switch r.op {
 				case "change":
 					opOK = s.ChangeTimer(target, time.Time{}, time.Minute)
+					if opOK != present {
+						t.Errorf("Lookup said present=%v but change returned %v", present, opOK)
+					}
+					checkLiveView(t, s, target, opOK, base.Add(time.Minute))
 				case "remove":
 					opOK = s.RemoveTimer(target)
+					if opOK != present {
+						t.Errorf("Lookup said present=%v but remove returned %v", present, opOK)
+					}
+					checkLiveView(t, s, target, false, time.Time{})
 				case "tick":
 					s.Tick(base.Add(10 * time.Minute))
 				}
