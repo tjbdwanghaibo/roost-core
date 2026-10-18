@@ -15,6 +15,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -385,6 +386,11 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			logConsumerError("native step decode", message, err)
 			return rejectEnvelope("native_step", err)
 		}
+		// 逐跳计时：命令 PubAck → 本回调开始（JetStream 投递 + 在本 durable 的串行回调后排队），以及整个回调占住
+		// durable 的时间。
+		hoptrace.SinceMark("h04.step.deliver", "published/", command.ID)
+		callbackStart := hoptrace.Now()
+		defer hoptrace.Since("h04.step.callback", callbackStart)
 		if !time.Now().Before(command.DeadlineAt) {
 			// 过了截止时间：协调器已按超时自行进入下一次尝试或补偿，不再等这次尝试的回答，
 			// 这里也不再开始业务。有回执就结算状态文档后 ack（completion 本身随投影的
@@ -420,7 +426,9 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		}
 		processCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
 		defer cancel()
+		reserveStart := hoptrace.Now()
 		reservation, err := inbox.Reserve(processCtx, command)
+		hoptrace.Since("h05.step.reserve", reserveStart)
 		switch {
 		case errors.Is(err, ErrCommandExpired):
 			// 认领前过了截止时间：不执行，ack；与上面的过期分支一样先重发同一操作实例已生效的成功。
@@ -459,7 +467,10 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			processCtx = withReservation(processCtx, reservation)
 			// 原生 handler 的结果是它在 Nest 事务里 EmitCompletion 的那一份，随回执与 effect 一起提交；
 			// 返回值不使用，也不校验（生成模板返回零值 Completion；校验它会让每次成功执行后多一次 nak 与重投）。
-			if _, err := handler(processCtx, command); err != nil {
+			handlerStart := hoptrace.Now()
+			_, err := handler(processCtx, command)
+			hoptrace.Since("h06.step.handler", handlerStart)
+			if err != nil {
 				if errors.Is(err, coredata.ErrFencedEntityPending) {
 					// 实体上还有一笔未确定结果的原生步骤（常见是本命令上一次投递的记录）：本次事务已整体
 					// 回滚，交还租约，让屏障解除后的重投能立刻重新 Reserve。
@@ -470,7 +481,9 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 				return err
 			}
 		}
+		waitStart := hoptrace.Now()
 		_, err = inbox.waitReplay(processCtx, command)
+		hoptrace.Since("h12.step.wait_receipt", waitStart)
 		return err
 	})
 }

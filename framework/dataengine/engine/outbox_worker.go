@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 // ErrOutboxHardLimit 表示 outbox 积压条数或最老年龄超过硬上限；首次触发时调用 OnHardLimit。
@@ -125,7 +126,12 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 	worker.claimed.Add(uint64(len(items)))
 	for i := range items {
 		item := items[i]
-		if err := worker.publisher.Publish(ctx, item); err != nil {
+		// 逐跳计时：投影暂存 effect → 本次发布开始（轮询 / 唤醒与认领），发布本身（同步等 PubAck），Ack 删除。
+		hoptrace.SinceMark("h10.de.outbox_wait", "effect-staged/", item.Effect.ID)
+		publishStart := hoptrace.Now()
+		err := worker.publisher.Publish(ctx, item)
+		hoptrace.Since("h10.de.outbox_publish", publishStart)
+		if err != nil {
 			worker.publishFailures.Add(1)
 			// 退避从本次失败返回时开始；整批开始时间可能已被慢发布耗尽。
 			next := worker.now().UTC().Add(worker.retryDelay(item.Attempt))
@@ -135,10 +141,13 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 			}
 			continue
 		}
+		hoptrace.Mark("effect-published/", item.Effect.ID)
+		ackStart := hoptrace.Now()
 		if err := worker.store.Ack(ctx, item.Effect.ID, item.Lease); err != nil {
 			worker.storeFailures.Add(1)
 			return i, err
 		}
+		hoptrace.Since("h10.de.outbox_ack", ackStart)
 		worker.published.Add(1)
 	}
 	if err := worker.maybeRefreshBacklog(ctx, worker.now().UTC()); err != nil {

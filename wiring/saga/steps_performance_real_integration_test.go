@@ -23,6 +23,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -155,6 +156,13 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		{Name: "credit", ForwardTopic: "d12perf.credit", CompensateTopic: "d12perf.credit.compensate"},
 	}}
 	ensureStepAccountKind()
+	// 逐跳计时（ROOST_STEPS_PERF_HOPS=1）：在建 Mongo 连接之前安装，连接才带命令监视器。
+	var hops *hopRecorder
+	if os.Getenv("ROOST_STEPS_PERF_HOPS") == "1" {
+		hops = newHopRecorder()
+		hoptrace.Install(hops)
+		t.Cleanup(func() { hoptrace.Install(nil) })
+	}
 	env := startRealStepsEnv(t, []coresaga.Definition{definition}, true, map[string]any{
 		"saga.poll_interval": 100 * time.Millisecond, "dataengine.outbox.poll_interval": 100 * time.Millisecond,
 		"dataengine.outbox.retry_min": time.Second, "dataengine.outbox.retry_max": time.Minute,
@@ -304,9 +312,22 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		// Statuses 是轮询第一次读到的终态计数；Mismatches 是核对失败时余额不符的账户（最多 10 个，want / got）。
 		Statuses   map[string]int
 		Mismatches []string
+		// Hops 是逐跳计时（ROOST_STEPS_PERF_HOPS=1），PerSagaMS = 该跳总耗时 / 完成数，PerSaga = 次数 / 完成数；
+		// IdlePerSecond 是开测前 5 秒空载时各跳每秒次数（轮询带来的往返，按需从 PerSaga 中扣除）。
+		Hops          map[string]hopSummary `json:",omitempty"`
+		IdlePerSecond map[string]float64    `json:",omitempty"`
 	}
 	total := int(duration/time.Second) * rate
 	r := result{Variant: variantName, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
+	if hops != nil {
+		// 空载 5 秒：只有轮询（协调器 / 发布器 / outbox 认领、积压采样），作为每秒往返的底数。
+		hops.reset()
+		time.Sleep(5 * time.Second)
+		r.IdlePerSecond = map[string]float64{}
+		for hop, values := range hops.reset() {
+			r.IdlePerSecond[hop] = float64(len(values)) / 5
+		}
+	}
 	var mu sync.Mutex
 	pending := make(map[string]startedSaga)
 	var startDurations []time.Duration
@@ -438,6 +459,22 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	r.BodyErrors = bodyErrors
 	r.FinalProjector = projector.Stats()
 	timingMu.Unlock()
+	if hops != nil {
+		r.Hops = map[string]hopSummary{}
+		for hop, values := range hops.reset() {
+			summary := hopSummary{sagaLatencyMS: summarizeMS(values)}
+			var sum time.Duration
+			for _, value := range values {
+				sum += value
+			}
+			summary.TotalMS = float64(sum) / float64(time.Millisecond)
+			if r.Completed > 0 {
+				summary.PerSaga = float64(len(values)) / float64(r.Completed)
+				summary.PerSagaMS = summary.TotalMS / float64(r.Completed)
+			}
+			r.Hops[hop] = summary
+		}
+	}
 	for minute, slice := range byMinute {
 		slices.Sort(slice)
 		serverSlice := serverByMinute[minute]
@@ -523,4 +560,51 @@ func quantileMS(sorted []time.Duration, p float64) float64 {
 		return 0
 	}
 	return float64(sorted[int(math.Ceil(float64(len(sorted))*p))-1]) / float64(time.Millisecond)
+}
+
+// hopSummary 是一跳的分位与按完成数摊到每笔 saga 的次数、耗时。
+type hopSummary struct {
+	sagaLatencyMS
+	TotalMS, PerSaga, PerSagaMS float64
+}
+
+// hopRecorder 是夹具的 hoptrace.Recorder：按跳名收集耗时，Mark / Take 按对象关联跨组件的两端。键取走即删；
+// 没被取走的（例如投影了但没有消费者等它的 effect）留到夹具结束，规模是一次压测的对象数。
+type hopRecorder struct {
+	mu     sync.Mutex
+	values map[string][]time.Duration
+	marks  map[string]time.Time
+}
+
+func newHopRecorder() *hopRecorder {
+	return &hopRecorder{values: map[string][]time.Duration{}, marks: map[string]time.Time{}}
+}
+
+func (h *hopRecorder) Observe(hop string, d time.Duration) {
+	h.mu.Lock()
+	h.values[hop] = append(h.values[hop], d)
+	h.mu.Unlock()
+}
+
+func (h *hopRecorder) Mark(key string, at time.Time) {
+	h.mu.Lock()
+	h.marks[key] = at
+	h.mu.Unlock()
+}
+
+func (h *hopRecorder) Take(key string) (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.marks[key]
+	delete(h.marks, key)
+	return at, ok
+}
+
+// reset 取走已收集的耗时并清空（Mark 保留：跨越边界的对象仍能配对）。
+func (h *hopRecorder) reset() map[string][]time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	values := h.values
+	h.values = map[string][]time.Duration{}
+	return values
 }

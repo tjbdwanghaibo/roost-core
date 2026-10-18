@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 // Options 配置协调器：租约身份、协调 / 发布 worker 数与批量、租约与存储超时、轮询间隔、发布退避、载荷上限与步骤预算。
@@ -251,7 +252,10 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	if err := record.Validate(); err != nil {
 		return Record{}, err
 	}
-	if err := e.store.Create(ctx, record); err != nil {
+	createStart := hoptrace.Now()
+	err = e.store.Create(ctx, record)
+	hoptrace.Since("h00.start.create", createStart)
+	if err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
 			existing, getErr := e.store.GetByBusinessKey(ctx, request.Type, request.BusinessKey)
 			// 只有尚未推进的旧记录能用初始状态判断；已推进记录无法恢复原始意图，明确拒绝。
@@ -433,7 +437,9 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	completion.CompletedAt = time.Now().UTC()
 	incarnation := commandIDIncarnation(completion.IdempotencyKey, completion.CommandID)
 	for attempts := 0; attempts < 8; attempts++ {
+		getStart := hoptrace.Now()
 		record, err := e.store.Get(ctx, completion.SagaID)
+		hoptrace.Since("h11.complete.get", getStart)
 		if err != nil {
 			return Record{}, err
 		}
@@ -457,7 +463,9 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			return Record{}, fmt.Errorf("%w: %s", ErrDefinitionMissing, record.Type)
 		}
 		after := e.applyCompletion(record, definition, completion)
+		applyStart := hoptrace.Now()
 		_, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeResult, receipt: &completion})
+		hoptrace.Since("h11.complete.apply", applyStart)
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -806,8 +814,12 @@ func (e *Engine) coordinatorLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		now := time.Now().UTC()
 		storeCtx, cancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
+		claimStart := hoptrace.Now()
 		records, err := e.store.ClaimDue(storeCtx, ClaimRequest{Owner: e.opts.Owner, Now: now, LeaseDuration: e.opts.LeaseDuration, Limit: e.opts.CoordinatorBatch})
 		cancel()
+		if len(records) > 0 {
+			hoptrace.Since("h01.coord.claim", claimStart)
+		}
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				e.storeFailures.Add(1)
@@ -858,9 +870,13 @@ func (e *Engine) publisherLoop(ctx context.Context) {
 			continue
 		}
 		for i := range items {
+			// 逐跳计时：派发事务提交 → 发布器开始发布（outbox 排队与领取），发布本身（同步等 PubAck）。
+			hoptrace.SinceMark("h03.outbox.wait", "dispatched/", items[i].Command.ID)
+			publishStart := hoptrace.Now()
 			publishCtx, cancel := context.WithTimeout(ctx, e.opts.PublishTimeout)
 			err := e.publisher.PublishSagaCommand(publishCtx, items[i].Command.Clone())
 			cancel()
+			hoptrace.Since("h03.outbox.publish", publishStart)
 			if err != nil {
 				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 					continue
@@ -878,9 +894,12 @@ func (e *Engine) publisherLoop(ctx context.Context) {
 				}
 				continue
 			}
+			hoptrace.Mark("published/", items[i].Command.ID)
+			ackStart := hoptrace.Now()
 			storeCtx, storeCancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
 			ackErr := e.store.AckOutbox(storeCtx, items[i].Command.ID, items[i].Lease)
 			storeCancel()
+			hoptrace.Since("h03.outbox.ack", ackStart)
 			if errors.Is(ackErr, ErrConflict) {
 				e.conflicts.Add(1)
 			} else if ackErr != nil && !errors.Is(ackErr, context.Canceled) {
@@ -966,8 +985,15 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), payload...), DeadlineAt: after.NextRunAt, CreatedAt: now}
 	outbox := &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
+	if !record.NextRunAt.IsZero() && hoptrace.Enabled() {
+		// 逐跳计时：记录到期（启动、上一步结果接收、重试退避结束）→ 协调器领取并开始派发。
+		hoptrace.Observe("h01.coord.wake", time.Since(record.NextRunAt))
+	}
+	dispatchStart := hoptrace.Now()
 	_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox})
+	hoptrace.Since("h02.dispatch.apply", dispatchStart)
 	if err == nil {
+		hoptrace.Mark("dispatched/", command.ID)
 		e.dispatched.Add(1)
 		e.signal(e.outboxKick)
 	}

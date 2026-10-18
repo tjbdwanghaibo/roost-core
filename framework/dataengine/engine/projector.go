@@ -12,6 +12,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
@@ -282,9 +283,15 @@ func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRe
 	if err := projector.reserve(record, true); err != nil {
 		return err
 	}
+	appendStart := hoptrace.Now()
 	if _, err := projector.wal.Append(ctx, record); err != nil {
 		projector.discard(record.ID)
 		return err
+	}
+	if !appendStart.IsZero() {
+		// 逐跳计时：WAL 追加（strict 等所在批 fsync）；投影等待从这里开始算。
+		hoptrace.Since("h07.de.wal_append", appendStart)
+		hoptrace.Mark("tx-committed/", record.ID.String())
 	}
 	projector.committed.Add(1)
 	projector.signal()
