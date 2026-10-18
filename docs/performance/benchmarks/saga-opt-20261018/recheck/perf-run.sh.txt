@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# saga 性能复测（main 合入后，2026-10-18）：只执行事先编好的测试二进制，测量期间不跑其他测试或构建。
+# main = origin/main 36cf8755；wakeoff = 同一提交只回退 de8b6e97（投影后唤醒 outbox），仅作 checkpoint 观测，不提交；
+# sagaA = framework/saga TestRealSagaPerformance（旧 Mongo 步骤路径）。
+set -uo pipefail
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+S=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/sagarecheck
+B=$S/bin
+OUT=$S/results
+WT=/Users/whb/roost/roost-core-wt-sagarecheck
+mkdir -p "$OUT"
+LOCK="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
+mkdir "$LOCK" || { echo "$(date +%T) lock busy, abort" >> "$OUT/progress.txt"; exit 2; }
+IOPID=
+cleanup() { [[ -n $IOPID ]] && kill $IOPID 2>/dev/null; pkill -f "iostat -d -w 1 disk0" 2>/dev/null; rmdir "$LOCK"; }
+trap cleanup EXIT
+export GOMAXPROCS=4 ROOST_DATAENGINE_IT=1
+{ go version; echo "main=origin/main 36cf8755; wakeoff=36cf8755 + git revert --no-commit de8b6e97（不提交，仅观测）"; date; sysctl vm.swapusage; uptime; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu hw.memsize; shasum -a 256 $B/*.test; df -h "$TMPDIR" "$ROOST_DATAENGINE_IT_ROOT"; } > "$OUT/env.txt" 2>&1
+# 每秒一行磁盘统计（epoch 前缀），事后按 progress 的时间切片。
+( iostat -d -w 1 disk0 | while IFS= read -r line; do echo "$(date +%s) $line"; done ) > "$OUT/iostat.txt" 2>&1 &
+IOPID=$!
+others() { ps -axo pid,command | grep -E 'go (test|build|run|vet|generate)|/compile |\.test( |$)' | grep -v grep | grep -v sagarecheck; }
+waitquiet() {
+  local n=0
+  while others >/dev/null; do
+    if (( n == 0 )); then echo "$(date +%T) waiting for other go processes:" >> "$OUT/progress.txt"; others >> "$OUT/progress.txt"; fi
+    n=$((n+1)); sleep 30
+  done
+}
+stamp() { echo "$(date +%T) $(date +%s) $*" >> "$OUT/progress.txt"; }
+# run <bin> <mode> <rate> <dur> <tag> [pairs] [extra test flags...]
+run() { local bin=$1 mode=$2 rate=$3 dur=$4 tag=$5 pairs=${6:-64}; shift 6 2>/dev/null || shift $#
+  local name="$bin-$mode$rate-$tag"
+  waitquiet
+  stamp "start $name load=$(sysctl -n vm.loadavg)"
+  (cd $WT/wiring/saga && ROOST_STEPS_PERF_HOPS=1 ROOST_STEPS_PERF_PAIRS=$pairs ROOST_STEPS_PERF_OUTPUT="$OUT/$name.json" ROOST_STEPS_PERF_VARIANT=steps ROOST_STEPS_PERF_MODE=$mode ROOST_STEPS_PERF_RATE=$rate ROOST_STEPS_PERF_DURATION=$dur \
+    "$B/$bin.test" -test.run '^TestRealNativeStepsPerformance$' -test.count=1 -test.timeout 30m -test.v "$@" > "$OUT/$name.log" 2>&1)
+  local rc=$?
+  stamp "end $name rc=$rc"
+}
+runA() { local mode=$1 rate=$2 dur=$3
+  local name="sagaA-$mode$rate"
+  waitquiet
+  stamp "start $name load=$(sysctl -n vm.loadavg)"
+  (cd $WT/framework/saga && ROOST_SAGA_PERF_OUTPUT="$OUT/$name.json" ROOST_SAGA_PERF_MODE=$mode ROOST_SAGA_PERF_RATE=$rate ROOST_SAGA_PERF_DURATION=$dur \
+    "$B/sagaA.test" -test.run '^TestRealSagaPerformance$' -test.count=1 -test.timeout 30m -test.v > "$OUT/$name.log" 2>&1)
+  local rc=$?
+  stamp "end $name rc=$rc"
+}
+idle() { stamp "idle-start"; sleep 30; stamp "idle-end"; }
+idle
+# 1. 持续档（与 s3 同参数），正向 5/s 与 wakeoff 交替（checkpoint 观测）。
+run main forward 5 3m r1 64
+run wakeoff forward 5 3m r1 64
+run main compensate 3 3m r1 64
+run main compensate 3 3m r2 64
+run wakeoff forward 5 3m r2 64
+run main forward 5 3m r2 64
+# 2. 上限档，各 2 分钟。
+run main forward 7 2m ceil 64
+run main compensate 4 2m ceil 64
+run main forward 8 2m ceil 64
+run main compensate 5 2m sat 64
+run main forward 10 2m sat 64
+run main compensate 10 2m sat 64
+run main forward 8 2m ceil2 64
+run main compensate 5 2m sat2 64
+# 3. 热点档：1 对账户，正向 5/s，1 分钟（与 s3-forward5-hot 同）。
+run main forward 5 1m hot 1
+idle
+# 4. 锁竞争观测（不进延迟对照）：正向 5/s 各 2 分钟，带 mutex profile。
+run main forward 5 2m mutex 64 -test.mutexprofile "$OUT/main-forward5-mutex.pprof"
+run wakeoff forward 5 2m mutex 64 -test.mutexprofile "$OUT/wakeoff-forward5-mutex.pprof"
+# 5. 旧路径（Mongo 步骤），各 5 分钟。
+runA forward 20 5m
+runA compensate 10 5m
+idle
+{ date; uptime; sysctl vm.swapusage; } >> "$OUT/env.txt" 2>&1
+stamp "ALL DONE"

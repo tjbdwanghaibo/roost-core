@@ -45,16 +45,23 @@
 - **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
 - 文档：DESIGN-TODO D12（B 实施结果、容量决定）、KNOWN-LIMITS（第六轮登记项 2、容量条目）、guide/06-saga §2.1 / §5、impl/12-codegen、codegen 的 BEGINNER_WORKBOOK / CODEGEN_REFERENCE / PROJECT_GENERATOR、`roost help saga` / `effect` / `add`。
 
+### 实体定时器：回调里读得到自己刚写的节点
+
+- 修复 13b9d9e0 引入的回归：Tick 回调里的 `NewTimer` / `ChangeTimer` 共享当前调度器，新建与改期的节点要到最外层 Tick 收尾才写回 DAO，而 `Host.Timer` / `Timers`（生成组件的 `<C>(id)` / `<C>s()`）仍读 DAO。同一回调里先建再查返回 false、改期后读到旧期限、`Timers()` 少了新节点，“没有就建一个”会在一次 Tick 内重复登记。
+- `timer.Scheduler` 新增只读 `Lookup(id)` 与 `LiveNodes()`（全部活节点，含触发中与等收尾入堆的，按 `(End, Priority, ID)`）；`Host` 在 Tick 调用栈内用它们读，回调之外仍读 DAO。正在触发的节点在自己回调里可读（原定期限，显式改期后为新期限），与 `ChangeTimer` / `RemoveTimer` 能操作它一致。不回到“每次操作从 DAO 重建调度器”。
+- 测试：`TestHostCallbackOperationsShareTheCurrentTick/callback_reads_its_own_writes`；修前红：`firing timer read as {ID:0 …} present=false`、`created timer read as {ID:0 …} present=false`、`rescheduled timer read as {ID:2 … End:…16:00:01…} present=true, want deadline …17:00:01`、`Timers() = [2], want [1 4 2]`。两张组合表 `TestOperationsOnEveryNodeStateDuringTick` 与 `TestHookOperationsOnEveryNodeStateItCanSee` 都在每次操作前后核对读视图与返回值（`checkLiveView`；变异：读视图隐去等收尾节点，两表分别 42 / 2 组变红，隐去触发中节点分别 12 / 8 组变红）。堆的比较仍在 `timerHeap.Less`，`LiveNodes` 经 `firesBefore` 复用，堆路径不变。game-demo 手写的 World `TimerComponent` 不经 `Timer` / `Timers`（`PendingActivityPhase` 直接读 DAO，只在回调之外的活动排期里调用），不受影响。文档：[guide/10-time §4](docs/framework/guide/10-time.md)、[impl/10-time §2 第 7 条与 §2A 第 1 条](docs/framework/impl/10-time.md#2a-按实体的持久定时器驱动)、[重构方案 §9.2](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#92-读视图lookup--livenodes2026-10-18)。
+
 ### 实体定时器：回调内的组件操作共享当前 Tick
 
 - 修复 `framework/nest/entitytimer.Host` 在 Tick 回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调登记的下一阶段节点已写入 DAO，最外层 Tick 却按旧堆报告期限（并以更大的序号覆盖内层报告），驱动索引丢掉它；回调取消 / 改期同轮已到期的另一节点返回成功，该节点仍按旧期限执行；回调显式改期自己返回 false。SLG 建造完成接行军、抵达后取消超时等合法组合受影响。
-- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内新建的节点在 Tick 收尾前 `Timer` / `Timers` 读不到。
+- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内的 `Timer` / `Timers` 读同一视图（见上一条）。
 - 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
 
 ### Nest 生成器：Sender 的局部名称避让业务参数
 
 - 修复合法的 `handlerCancel(target, id int64)` 生成 `Sync_Cancel(ctx, id int64, id int64)` 而无法编译（`id redeclared in this block`），以及参数名 ctx / client / err / ret / ok / ids / groupIDs、包名（nest / context / time / 类型包别名）、预声明标识符（int64 / any / error / bool / nil / len）或 `handlerName…` 遮住生成代码引用的名字而编不过的问题。只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有同名参数；handler 元数据、参数顺序、类型与线协议不变。
 - 测试：`codegen/internal/nest` 的 `TestSenderNamesDoNotCollideWithBusinessArguments` 对生成的 sender / syncsender 做 go/types 类型检查（单实体、多实体、多返回值、导入别名）。文档：`codegen/docs/NEST_RUNTIME.zh-CN.md`。
+- 补两处遗漏（2026-10-18 审查）：① 加后缀的结果本身可能正好是本文件另一个 handler 的常量——`handlerTradeArg(target, handlerNameTrade string)` 的参数改成 `handlerNameTradeArg` 后遮住 TradeArg 自己的常量，修前类型检查原文 `cannot use handlerNameTradeArg (variable of type string) as nest.HandlerName value in argument to client.Dispatch`；后缀候选现在避让本文件全部生成的 `handlerName<X>`。② 预声明标识符只列了方法体固定用到的六个，`Sync_` 还按返回类型做类型断言，`handlerLabel(target, string, float64 int64, …) (string, float64, error)` 修前原文 `string (parameter) is not a type`、`float64 (parameter) is not a type`；现在避让全部预声明标识符（`go/types` 的 `Universe`）。回归仍在同一测试。
 
 ### 慢连接测试：按实际消费和关闭状态制造背压
 
@@ -66,6 +73,15 @@
 
 - 新增 `scripts/test-slg-generated.sh`：用当前 CLI 从 `game` 模板生成隔离工程，`add dao` / `add timer` / `add entity` 后只改 DAO 定义与业务文件（[`scripts/testdata/slg/`](scripts/testdata/slg/)），跑 6 条 race 场景：建造 → 行军链、重放与取消退款、建造失败回滚、离线收益补算、两玩家抢同一地块、研究与建造队列并行；最后 `roost id check` 与 `roost generate --check`。资源与数值规则只在业务夹具里，框架与生成器不变。不连外部存储（提交器替身 + DAO 序列化），真实存储仍走 `test-demo-generated.sh` / `test-dataengine-generated.sh` / `test-remote-generated.sh`。
 - 手册 [docs/framework/SLG-INTEGRATION.md](docs/framework/SLG-INTEGRATION.md)：SLG 路径到框架接口的对照与业务 / 框架边界。
+
+### MMORPG 接入验收：公共 CLI 生成的业务消费者（scripts/test-mmorpg-generated.sh）
+
+- 新增 `scripts/test-mmorpg-generated.sh`：与 SLG 脚本同一结构，从 `game` 模板生成隔离工程，`add dao Player` / `add entity Scene` / `add dao Scene` 后只改 DAO 定义与业务文件（[`scripts/testdata/mmorpg/`](scripts/testdata/mmorpg/)），跑 4 条 race 场景：两人组队重放、8 个并发同身份交易只转一次（同序号改金额拒绝）、交易拒绝后两玩家资产与序号一起回滚再重试、带版本的切图（失败无半次切图、重放不重复计人数、返回后拒绝旧请求）；4 条必须实际通过、无 skip，最后 `roost id check` 与 `roost generate --check`；成功删除临时工程。队伍、交易、场景容量规则只在业务夹具里，框架与生成器不变；没有发现框架缺陷。
+- 手册 [docs/framework/MMORPG-INTEGRATION.md](docs/framework/MMORPG-INTEGRATION.md)：组队、交易、切图的接法，AOI / 重连 / 玩家归属的验证边界与后续验收顺序；范围与不证明的部分见 KNOWN-LIMITS“MMORPG 接入验收的范围”。
+- 扩充到 13 条场景：脚本另 `add entity` / `add dao` Trade、Monster 与 `add timer --entity Player`，夹具增加两人队伍解散（旧队伍迟到请求被拒）、Trade 实体托管交易（双方确认、取消、到期、确认与取消竞争）、战斗冷却与输入重放、掉落 / 任务领奖幂等、副本完成判定、Buff 刷新 / 回滚 / 离线到期、死亡与延迟复活；DAO 库名改为本次唯一。`ROOST_MMORPG_REAL=1` 时追加 `TestMMORPGRealPersistenceAcrossProcesses`：两个独立进程共用文件 WAL 与真实 Mongo，正常停机后冷加载续完交易、重放领奖、补触发离线 Buff（登记在根包 `integration_coverage_test.go`）。
+- 新增 `scripts/test-mmorpg-scenes.sh`：生成 game-demo 后放入多地图接法（一个 Manager、每张地图一个 Interest），在 demo 玩家 TCP 与框架 `frame.Receiver` 上验证切图后新场景全量、旧场景删除、准入失败 held 重试、旧 epoch 隔离、重连恢复与空间视图字段隐私。
+- 新增 `scripts/test-mmorpg-cross-sid.sh`：对已启动的双 sid game-demo 跑真实账号错服拒绝、双向赠礼 Saga、已领邮件逐封重领不加物品、无效收件人补偿与背包守恒；不起停服务、不改 Player sid（Player 仍静态绑定 sid）。
+- SLG / MMORPG 两篇手册补学习路线：状态归属与框架模块对照、生成工程的阅读顺序、可编译的 Sender 调用示例、常见误解；框架、生成器与 demo 不变，没有发现框架缺陷。
 
 
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）

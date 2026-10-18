@@ -1,0 +1,21 @@
+File: wakeoff.test
+Type: delay
+Time: 2026-10-18 20:36:37 CST
+Showing nodes accounting for 923.64ms, 99.07% of 932.27ms total
+Dropped 430 nodes (cum <= 4.66ms)
+      flat  flat%   sum%        cum   cum%
+  900.42ms 96.58% 96.58%   903.15ms 96.88%  sync.(*RWMutex).Unlock
+   23.22ms  2.49% 99.07%    23.22ms  2.49%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.07%    15.47ms  1.66%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).ReplayPass
+         0     0% 99.07%    14.34ms  1.54%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).ReplayPass.func1
+         0     0% 99.07%    15.47ms  1.66%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).run
+         0     0% 99.07%    15.47ms  1.66%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.NewProjector.gowrap2
+         0     0% 99.07%    14.34ms  1.54%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Ack
+         0     0% 99.07%    14.34ms  1.54%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Ack-fm
+         0     0% 99.07%   899.69ms 96.51%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).processBatch
+         0     0% 99.07%   899.69ms 96.51%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).processRecords
+         0     0% 99.07%   899.69ms 96.51%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).writeBatch
+         0     0% 99.07%   900.06ms 96.55%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).writerLoop
+         0     0% 99.07%   900.06ms 96.55%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.Open.gowrap1
+         0     0% 99.07%     5.01ms  0.54%  go.mongodb.org/mongo-driver/v2/x/mongo/driver.Operation.Execute
+         0     0% 99.07%    11.96ms  1.28%  runtime.deferreturn

@@ -1,0 +1,30 @@
+File: main.test
+Type: delay
+Time: 2026-10-18 20:34:28 CST
+Showing nodes accounting for 1650.69ms, 99.50% of 1659.07ms total
+Dropped 442 nodes (cum <= 8.30ms)
+      flat  flat%   sum%        cum   cum%
+ 1171.33ms 70.60% 70.60%  1173.91ms 70.76%  sync.(*RWMutex).Unlock
+  479.37ms 28.89% 99.50%   479.37ms 28.89%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*EntityRepository).LoadEntity
+         0     0% 99.50%   436.67ms 26.32%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).ReplayPass
+         0     0% 99.50%   434.01ms 26.16%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).ReplayPass.func1
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).WaitEntityProjection
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).projectionUsable
+         0     0% 99.50%   436.67ms 26.32%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Projector).run
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.(*Runtime).WaitEntityProjection
+         0     0% 99.50%   436.67ms 26.32%  github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine.NewProjector.gowrap2
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*ManagerAccess).loadEntityShared.gowrap1
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*ManagerAccess).runEntityLoad
+         0     0% 99.50%   434.01ms 26.16%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Ack
+         0     0% 99.50%   434.01ms 26.16%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Ack-fm
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Healthy
+         0     0% 99.50%    35.75ms  2.15%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Replay
+         0     0% 99.50%    33.64ms  2.03%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).Stats
+         0     0% 99.50%    33.21ms  2.00%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).oldestUnackedAge
+         0     0% 99.50%  1170.70ms 70.56%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).processBatch
+         0     0% 99.50%  1170.70ms 70.56%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).processRecords
+         0     0% 99.50%  1170.70ms 70.56%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).writeBatch
+         0     0% 99.50%  1170.90ms 70.58%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.(*WAL).writerLoop
+         0     0% 99.50%  1170.86ms 70.57%  github.com/tjbdwanghaibo/roost-core/framework/nestwal.Open.gowrap1
+         0     0% 99.50%   433.86ms 26.15%  runtime.deferreturn

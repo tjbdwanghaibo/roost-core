@@ -1,0 +1,306 @@
+diff --git a/framework/dataengine/engine/assembly.go b/framework/dataengine/engine/assembly.go
+index 94d27506..38a0b7fe 100644
+--- a/framework/dataengine/engine/assembly.go
++++ b/framework/dataengine/engine/assembly.go
+@@ -154,26 +154,23 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
+ 			err = errors.Join(err, fmt.Errorf("dataengine: startup cleanup incomplete: %w", cleanupErr))
+ 		}
+ 	}()
+-	// outbox 先于 Projector 构造（构造不启动循环）：Projector 一构造就开始回放，暂存 effect 后的唤醒要在那之前接好。
+-	outboxStore, err := NewMongoOutboxStore(a.Store)
++	projector, err := NewProjector(wal, a.Store, a.cfg.Projector)
+ 	if err != nil {
+ 		return err
+ 	}
+-	publisher := &jetStreamOutboxPublisher{client: a.deps.JetStream, prefix: a.cfg.EffectPrefix}
+-	outbox, err := NewOutboxWorker(outboxStore, publisher, a.cfg.Outbox)
++	owned.Projector = projector
++	if a.deps.LocalExecutor != nil {
++		projector.BindLocalExecutor(a.deps.LocalExecutor)
++	}
++	outboxStore, err := NewMongoOutboxStore(a.Store)
+ 	if err != nil {
+ 		return err
+ 	}
+-	projectorOptions := a.cfg.Projector
+-	projectorOptions.OnEffectsStaged = outbox.Kick
+-	projector, err := NewProjector(wal, a.Store, projectorOptions)
++	publisher := &jetStreamOutboxPublisher{client: a.deps.JetStream, prefix: a.cfg.EffectPrefix}
++	outbox, err := NewOutboxWorker(outboxStore, publisher, a.cfg.Outbox)
+ 	if err != nil {
+ 		return err
+ 	}
+-	owned.Projector = projector
+-	if a.deps.LocalExecutor != nil {
+-		projector.BindLocalExecutor(a.deps.LocalExecutor)
+-	}
+ 	owned.Outbox = outbox
+ 	runtime, err := NewRuntime(a.Store, wal, projector, outbox, a.deps.Access, a.deps.RemoteManager, a.deps.OnFatal, a.cfg.Pipelined)
+ 	if err != nil {
+diff --git a/framework/dataengine/engine/outbox_test.go b/framework/dataengine/engine/outbox_test.go
+index 3dba0f3e..60aa52f7 100644
+--- a/framework/dataengine/engine/outbox_test.go
++++ b/framework/dataengine/engine/outbox_test.go
+@@ -5,7 +5,6 @@ package engine
+ import (
+ 	"context"
+ 	"errors"
+-	"fmt"
+ 	"log/slog"
+ 	"strings"
+ 	"sync"
+@@ -14,9 +13,7 @@ import (
+ 	"time"
+ 
+ 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+ 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+ 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+ 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+ 	"go.mongodb.org/mongo-driver/v2/bson"
+@@ -595,140 +592,3 @@ func TestOutboxSamplingPublishesBacklogAndAge(t *testing.T) {
+ 	requireBacklogGauge(t, "dataengine.outbox.pending", 0)
+ 	requireBacklogGauge(t, "dataengine.outbox.oldest_age_ms", 0)
+ }
+-
+-// signallingJetStream 记下发布的主题并逐条通知，供测“effect 何时被发布”。
+-type signallingJetStream struct {
+-	recordingJetStream
+-	published chan string
+-}
+-
+-func (s *signallingJetStream) Publish(_ context.Context, subject string, _ []byte, _ fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
+-	s.published <- subject
+-	return fnats.JetStreamPublishAck{}, nil
+-}
+-
+-// 投影暂存 effect 之后 outbox 立刻被唤醒去发布，不等下一次轮询（2026-10-18 saga 性能优化第一档 1）。
+-// 正式装配（Assemble → Start）、真实 Projector 与 OutboxWorker、内存 Mongo：轮询间隔设成 1 小时，先等 worker 做完启动
+-// 时的第一次认领（此时还没有 effect），再提交一条带 effect 的记录；承诺是它在远小于轮询间隔的时间内被发布。
+-// 修前 worker 只按 ticker 轮询，这条 effect 要等一小时。
+-func TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll(t *testing.T) {
+-	js := &signallingJetStream{published: make(chan string, 16)}
+-	cfg := AssemblyConfig{
+-		Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1},
+-		WAL:   nestwal.DefaultOptions(t.TempDir()), Projector: DefaultProjectorOptions(),
+-		Outbox: OutboxWorkerOptions{Owner: "wake", PollInterval: time.Hour, Workers: 2},
+-	}
+-	assembly, err := Assemble(AssemblyDeps{Mongo: mongotest.NewClient(), JetStream: js, Access: entity.NewManagerAccess(entity.NewEntityManager())}, cfg)
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	t.Cleanup(func() {
+-		if err := assembly.Shutdown(context.Background()); err != nil {
+-			t.Error(err)
+-		}
+-	})
+-	if err := assembly.Start(context.Background()); err != nil {
+-		t.Fatal(err)
+-	}
+-	runtime := assembly.Runtime()
+-	// 启动时每个认领循环先跑一次 RunOnce（积压采样随之写下时刻）；等它做完，effect 只能靠唤醒或下一次轮询发布。
+-	for deadline := time.Now().Add(5 * time.Second); runtime.Outbox.backlogSampledAt.Load() == 0; time.Sleep(time.Millisecond) {
+-		if time.Now().After(deadline) {
+-			t.Fatal("outbox never completed its first claim")
+-		}
+-	}
+-	for sequence := byte(1); sequence <= 3; sequence++ {
+-		record := projectorRecord(sequence, true)
+-		record.Effects[0].ID = "wake-" + record.ID.String()
+-		if err := runtime.Projector.Commit(context.Background(), record); err != nil {
+-			t.Fatal(err)
+-		}
+-		runtime.Projector.TransactionReleased(record.ID)
+-		select {
+-		case subject := <-js.published:
+-			if !strings.HasSuffix(subject, ".hero.changed") {
+-				t.Fatalf("published %q", subject)
+-			}
+-		case <-time.After(2 * time.Second):
+-			t.Fatalf("effect %d not published within 2s of its commit (poll interval 1h): the projector did not wake the outbox", sequence)
+-		}
+-	}
+-}
+-
+-// countingClaimStore 计认领次数并逐次通知；gate 非 nil 时每次认领先等它放行。
+-type countingClaimStore struct {
+-	*projectorOutboxFake
+-	claims atomic.Int64
+-	seen   chan struct{}
+-	gate   atomic.Pointer[chan struct{}]
+-}
+-
+-func (s *countingClaimStore) Claim(ctx context.Context, _ string, _ time.Time, _ int, _ time.Duration) ([]OutboxItem, error) {
+-	s.claims.Add(1)
+-	select {
+-	case s.seen <- struct{}{}:
+-	default:
+-	}
+-	if gate := s.gate.Load(); gate != nil {
+-		select {
+-		case <-*gate:
+-		case <-ctx.Done():
+-		}
+-	}
+-	return nil, ctx.Err()
+-}
+-
+-// Kick 在多个认领循环下：每次唤醒都引出一次认领，不等轮询；循环都在认领时到来的一串 Kick 合并成一次；
+-// Kick 不起 goroutine，Close 照常在 ctx 内等全部循环退出，关闭之后的 Kick 不阻塞。
+-func TestOutboxKickWakesALoopCoalescesAndStopsCleanly(t *testing.T) {
+-	store := &countingClaimStore{projectorOutboxFake: newProjectorOutboxFake(), seen: make(chan struct{}, 64)}
+-	worker, err := NewOutboxWorker(store, failingOutboxPublisher{}, OutboxWorkerOptions{Owner: "kick", Workers: 3, PollInterval: time.Hour})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	waitClaims := func(n int, what string) {
+-		t.Helper()
+-		for range n {
+-			select {
+-			case <-store.seen:
+-			case <-time.After(5 * time.Second):
+-				t.Fatalf("%s: no claim within 5s (poll interval 1h)", what)
+-			}
+-		}
+-	}
+-	worker.Start(context.Background())
+-	waitClaims(3, "first claim of each loop")
+-	for round := range 5 {
+-		worker.Kick()
+-		waitClaims(1, fmt.Sprintf("kick round %d", round))
+-	}
+-	// 三个循环都卡在认领里时连发 1000 次 Kick：通道只留一个唤醒。放行后三次在途认领返回，只多出一次认领。
+-	gate := make(chan struct{})
+-	store.gate.Store(&gate)
+-	idle := store.claims.Load()
+-	for store.claims.Load() < idle+3 { // 每次 Kick 至多叫醒一个空闲循环，直到三个都卡住
+-		worker.Kick()
+-		time.Sleep(time.Millisecond)
+-	}
+-	for range 1000 {
+-		worker.Kick()
+-	}
+-	blocked := store.claims.Load()
+-	store.gate.Store(nil)
+-	close(gate)
+-	for deadline := time.Now().Add(5 * time.Second); store.claims.Load() < blocked+1; time.Sleep(time.Millisecond) {
+-		if time.Now().After(deadline) {
+-			t.Fatal("the buffered kick was lost")
+-		}
+-	}
+-	time.Sleep(50 * time.Millisecond)
+-	if got := store.claims.Load() - blocked; got != 1 {
+-		t.Fatalf("1000 kicks during blocked claims caused %d claims after release, want 1 (kicks coalesce)", got)
+-	}
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+-	defer cancel()
+-	if err := worker.Close(ctx); err != nil {
+-		t.Fatalf("Close = %v", err)
+-	}
+-	worker.Kick() // 关闭之后不阻塞、无效果
+-}
+diff --git a/framework/dataengine/engine/outbox_worker.go b/framework/dataengine/engine/outbox_worker.go
+index c1f5b4ff..aeec416b 100644
+--- a/framework/dataengine/engine/outbox_worker.go
++++ b/framework/dataengine/engine/outbox_worker.go
+@@ -51,10 +51,6 @@ type OutboxWorkerStats struct {
+ 
+ // OutboxWorker 以租约认领 outbox 中到期的 effect 并投递：成功 Ack 删除，失败 Nack 退避重试。
+ // 投递失败不影响实体写入；积压超过硬上限只报告健康错误并回调一次 OnHardLimit。
+-//
+-// 认领循环由两样东西驱动：投影器暂存 effect 后的 Kick（装配把它接到 ProjectorOptions.OnEffectsStaged），以及
+-// PollInterval 的轮询兜底（重试退避到期、别的进程的 effect、错过的唤醒都靠它）。Kick 只是提示，不承载任何持久语义：
+-// 丢了也只是退回轮询的延迟。
+ type OutboxWorker struct {
+ 	store     OutboxStore
+ 	publisher OutboxPublisher
+@@ -72,9 +68,6 @@ type OutboxWorker struct {
+ 	hardMu           sync.RWMutex
+ 	hardErr          error
+ 	hardOnce         sync.Once
+-	// kick 是容量 1 的唤醒信号：连续多次 Kick 合并成一次，Workers 个循环里空闲的那个先醒；循环在 RunOnce 期间
+-	// 收到的 Kick 留在通道里，下一轮立即再认领一次，不会丢唤醒。
+-	kick chan struct{}
+ 
+ 	// 启动和关闭共享同一把锁，避免 Close 尚未看到 cancel 时提前关闭 done。
+ 	// closed 是终态；done 只能由未启动的 Close 或已启动的 run 之一关闭。
+@@ -115,7 +108,7 @@ func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options Outbo
+ 	if options.BacklogInterval <= 0 {
+ 		options.BacklogInterval = time.Second
+ 	}
+-	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{}), kick: make(chan struct{}, 1)}, nil
++	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{})}, nil
+ }
+ 
+ // RunOnce 认领并投递一批 effect。投递失败经 Nack 持久化退避时间，不让本次调用失败，
+@@ -239,18 +232,6 @@ func (worker *OutboxWorker) retryDelay(attempt uint32) time.Duration {
+ 	return delay
+ }
+ 
+-// Kick 提示有新暂存的 effect，让一个认领循环立即认领，不等下一次轮询。不阻塞、可在任何 goroutine 调用（投影器在
+-// 一个单元投影成功后调用）；未启动或已关闭时没有效果。
+-func (worker *OutboxWorker) Kick() {
+-	if worker == nil {
+-		return
+-	}
+-	select {
+-	case worker.kick <- struct{}{}:
+-	default:
+-	}
+-}
+-
+ // Start 启动 Workers 个认领循环；已启动或已关闭时不做任何事。
+ func (worker *OutboxWorker) Start(parent context.Context) {
+ 	worker.lifecycleMu.Lock()
+@@ -283,7 +264,6 @@ func (worker *OutboxWorker) run(ctx context.Context) {
+ 				case <-ctx.Done():
+ 					return
+ 				case <-ticker.C:
+-				case <-worker.kick:
+ 				}
+ 			}
+ 		})
+diff --git a/framework/dataengine/engine/projector.go b/framework/dataengine/engine/projector.go
+index 2cbc4191..3e59393b 100644
+--- a/framework/dataengine/engine/projector.go
++++ b/framework/dataengine/engine/projector.go
+@@ -63,10 +63,6 @@ type ProjectorOptions struct {
+ 	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
+ 	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
+ 	OnFatal func(error)
+-	// OnEffectsStaged 在一个投影单元把 effect 暂存进 outbox（Mongo 事务已提交、记录没有被 fence 跳过）之后同步调用，
+-	// 必须不阻塞；装配接到 OutboxWorker.Kick，让 effect 不必等 outbox 的下一次轮询。只是提示：不调用、晚调用都不影响
+-	// 投影与持久语义（outbox 仍按轮询兜底）。nil 不通知。
+-	OnEffectsStaged func()
+ 	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
+ 	// 供需要逐步控制回放与 ack 的外部夹具使用（例如注入“投影成功、checkpoint 丢失”后
+ 	// 检查中间状态）；Close 后这些入口同样返回 ErrRuntimeStopped。生产装配不设置。
+diff --git a/framework/dataengine/engine/projector_replay.go b/framework/dataengine/engine/projector_replay.go
+index f7ef8d23..5270d266 100644
+--- a/framework/dataengine/engine/projector_replay.go
++++ b/framework/dataengine/engine/projector_replay.go
+@@ -121,10 +121,6 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
+ 			if !projectStart.IsZero() && err == nil {
+ 				traceProjectedUnit(unit.records, outcome, projectStart)
+ 			}
+-			if err == nil && outcome != projectionSkipped && projector.opts.OnEffectsStaged != nil && hasEffects(unit.records) {
+-				// effect 已随投影事务暂存：唤醒 outbox，不等它的轮询（不改投影 / checkpoint 的顺序与结果）。
+-				projector.opts.OnEffectsStaged()
+-			}
+ 			if err != nil {
+ 				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
+ 					perRecord = true
+@@ -326,12 +322,3 @@ func traceProjectedUnit(records []coredata.CommitRecord, outcome projectionOutco
+ 		}
+ 	}
+ }
+-
+-func hasEffects(records []coredata.CommitRecord) bool {
+-	for i := range records {
+-		if len(records[i].Effects) > 0 {
+-			return true
+-		}
+-	}
+-	return false
+-}

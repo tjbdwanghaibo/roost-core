@@ -1,0 +1,46 @@
+import json, sys
+# 用法：hops2.py "标签A=f1,f2" "标签B=f3,f4" ...（每组两轮取平均，与 SAGA-OPT §3 同口径）
+CRIT = [("0 Create", "h00.start.create"), ("1 到期→领取", "h01.coord.wake"), ("2 派发 Apply", "h02.dispatch.apply"),
+        ("3a saga outbox 排队认领", "h03.outbox.wait"), ("3b saga outbox PubAck", "h03.outbox.publish"),
+        ("4 投递+durable 排队", "h04.step.deliver"), ("5 Reserve", "h05.step.reserve"), ("6～8 步骤体 Nest 请求", "h06.step.handler"),
+        ("9a WAL 准入→开始投影", "h09.de.project_wait"), ("9b 投影事务", "h09.de.project_txn"),
+        ("10a DE outbox 暂存→发布", "h10.de.outbox_wait"), ("10b DE outbox PubAck", "h10.de.outbox_publish"),
+        ("11a completion 投递+排队", "h11.completion.deliver"), ("11b Complete", "h11.completion.handle")]
+SIDE = [("WAL 追加+strict fsync", "h07.de.wal_append"), ("投影 checkpoint", "h09.de.checkpoint"),
+        ("saga outbox Ack", "h03.outbox.ack"), ("DE outbox Ack", "h10.de.outbox_ack"),
+        ("12 等回执+markCompleted", "h12.step.wait_receipt"), ("回调占用 durable", "h04.step.callback")]
+MONGO = ["mongo.commitTransaction", "mongo.findAndModify", "mongo.delete", "mongo.update", "mongo.insert", "mongo.find", "mongo.getMore"]
+groups = []
+for arg in sys.argv[1:]:
+    label, files = arg.split("=", 1)
+    groups.append((label, [json.load(open(f)) for f in files.split(",")]))
+def avg(rs, key, field):
+    vals = [r["Hops"][key][field] for r in rs if key in r.get("Hops", {})]
+    return sum(vals) / len(vals) if vals else float("nan")
+hdr = "| 跳 | " + " | ".join(f"{g} P50 / P95 / P99 | {g} ms/笔" for g, _ in groups) + " |"
+print(hdr); print("|" + " --- |" * (1 + 2 * len(groups)))
+tot = [0.0] * len(groups)
+for name, key in CRIT + [("—", None)] + SIDE:
+    if key is None:
+        print("| **关键路径合计** | " + " | ".join(f" | **{t:.0f}**" for t in tot) + " |"); continue
+    cells = []
+    for i, (g, rs) in enumerate(groups):
+        ms = avg(rs, key, "PerSagaMS")
+        if (name, key) in CRIT: tot[i] += ms
+        cells.append(f"{avg(rs,key,'P50MS'):.1f} / {avg(rs,key,'P95MS'):.1f} / {avg(rs,key,'P99MS'):.1f} | {ms:.1f}")
+    print(f"| {name} | " + " | ".join(cells) + " |")
+print()
+print("| Mongo 命令 | " + " | ".join(f"{g} 次/笔（扣空载） | {g} P50 / P95" for g, _ in groups) + " |")
+print("|" + " --- |" * (1 + 2 * len(groups)))
+for key in MONGO:
+    cells = []
+    for g, rs in groups:
+        per = []
+        for r in rs:
+            h = r["Hops"].get(key)
+            if not h: continue
+            idle = (r.get("IdlePerSecond") or {}).get(key, 0)
+            per.append((h["Samples"] - idle * r["ElapsedSeconds"]) / r["Completed"])
+        p = sum(per) / len(per) if per else float("nan")
+        cells.append(f"{p:.1f} | {avg(rs,key,'P50MS'):.1f} / {avg(rs,key,'P95MS'):.1f}")
+    print(f"| {key[6:]} | " + " | ".join(cells) + " |")

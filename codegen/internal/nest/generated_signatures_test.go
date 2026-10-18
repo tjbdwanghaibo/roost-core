@@ -37,6 +37,9 @@ func handlerTrade(from player.IBagEntity, to player.IBagEntity, nil, int64, len,
 
 //roost:nest rollback=undo durability=strict
 func handlerTradeArg(target player.IBagEntity, handlerNameTrade string) error { return nil }
+
+//roost:nest rollback=undo durability=strict
+func handlerLabel(target player.IBagEntity, string, float64 int64, uint8 []byte) (string, float64, error) { return "", 0, nil }
 `
 	if err := os.WriteFile(filepath.Join(dir, "cancel.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# MMORPG 业务接入纵切：正式生成器、Player / Scene DAO、多实体 Sender 与 Nest。
-# 不连接外部存储：提交器是替身，验证内存事务组合；真实存储走标准 integration 脚本。
+# MMORPG 业务接入纵切：正式生成器、Player / Scene / Trade / Monster DAO、Player 持久定时器、多实体 Sender 与 Nest。
+# 缺省不连接外部存储：提交器是替身，验证内存事务组合。ROOST_MMORPG_REAL=1（并提供隔离 Mongo 副本集
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加两个独立进程的真实文件 WAL / Mongo 停机后冷加载恢复，用后删除本次唯一库。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-mmorpg.XXXXXX")"
@@ -13,6 +14,10 @@ cleanup() {
     rm -rf "$review_root"
   else
     echo "MMORPG generated consumer kept: $review_root" >&2
+    # 真实依赖模式失败时 DAO 库留作证据，查完手动删除。
+    if [[ "${ROOST_MMORPG_REAL:-0}" == 1 && "$succeeded" != 1 ]]; then
+      echo "MMORPG real-persistence database left for inspection: ${ROOST_MMORPG_DB:-unset}" >&2
+    fi
   fi
 }
 trap cleanup EXIT

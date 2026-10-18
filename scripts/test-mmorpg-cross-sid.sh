@@ -26,9 +26,11 @@ echo "MMORPG: a real account session was refused by the wrong sid"
 "$review_root/giftdrill" wait -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -saga-db "${ROOST_MMORPG_DATABASE}_saga" -gifts "$review_root/forward.json,$review_root/back.json" -timeout 1m | tee "$review_root/wait.log"
 grep -q 'statuses=map\[completed:4\]' "$review_root/wait.log"
 for who in p2 p4; do
-  "$review_root/giftdrill" claim "${common[@]}" -who "$who" > "$review_root/claim-$who.log" 2>&1
-  # 再次登录 / 再次查领奖，不能重复增加背包。
-  "$review_root/giftdrill" claim "${common[@]}" -who "$who" > "$review_root/replay-$who.log" 2>&1
+  "$review_root/giftdrill" claim "${common[@]}" -who "$who" -out "$review_root/claimed-$who.json" > "$review_root/claim-$who.log" 2>&1
+  grep -q "^$who claimed=2 " "$review_root/claim-$who.log"
+  # 对已领的两封邮件逐封再发 ClaimMail（回复丢失后的重试），不能再增加背包；最后的 Mongo 背包核对兜底。
+  "$review_root/giftdrill" claim "${common[@]}" -who "$who" -replay "$review_root/claimed-$who.json" > "$review_root/replay-$who.log" 2>&1
+  grep -q "^$who replayed=2 " "$review_root/replay-$who.log"
 done
 "$review_root/giftdrill" send "${common[@]}" -from p1 -to p2 -to-id 1 -n 1 -out "$review_root/refund.json" > "$review_root/refund.log" 2>&1
 "$review_root/giftdrill" wait -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -saga-db "${ROOST_MMORPG_DATABASE}_saga" -gifts "$review_root/refund.json" -timeout 1m | tee "$review_root/wait-refund.log"

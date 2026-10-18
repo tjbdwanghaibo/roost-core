@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"go/format"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,9 +128,13 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 		copy.Entities = append([]EntityParam(nil), source.Entities...)
 		copy.Params = append([]NonEntityParam(nil), source.Params...)
 		reserved := map[string]bool{}
-		// Sender 方法体引用的名字：接收者与路由参数、局部变量、导入的包，以及预声明标识符 int64 / any / error /
-		// bool / nil / len（参数作用域是函数体，遮住它们同样编不过）。
-		for _, name := range strings.Fields("s ctx delay id ids client err clientErr ret retXXX errXXX retValues ok groupIDs context time nest entity int64 any error bool nil len") {
+		// Sender 方法体引用的名字：接收者与路由参数、局部变量、导入的包，以及全部预声明标识符（参数作用域是
+		// 函数体，遮住它们同样编不过）。预声明标识符不只是方法体固定用到的 int64 / any / error / bool / nil / len：
+		// Sync_ 按返回类型做类型断言（retXXX.(string)），返回类型里出现的 string / float64 等同样会被同名参数遮住。
+		for _, name := range strings.Fields("s ctx delay id ids client err clientErr ret retXXX errXXX retValues ok groupIDs context time nest entity") {
+			reserved[name] = true
+		}
+		for _, name := range types.Universe.Names() {
 			reserved[name] = true
 		}
 		for index := range source.Returns {
@@ -152,6 +157,11 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 		for name := range reserved {
 			used[name] = true
 		}
+		// 本文件生成的包级 handlerName<X> 常量也不能被改名结果占用：handlerTradeArg 的参数 handlerNameTrade
+		// 加后缀后正好是 handlerNameTradeArg，会遮住 TradeArg 自己的常量。
+		for _, handler := range funcs {
+			used["handlerName"+trimHandlerPrefix(handler.Name)] = true
+		}
 		for _, param := range copy.Entities {
 			used[param.Name] = true
 		}
@@ -159,7 +169,7 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 			used[param.Name] = true
 		}
 		rename := func(name string) string {
-			// 包级 handlerName<X> 变量：同文件任何 handler 的都可能被方法体引用，按前缀一律避让。
+			// 方法体引用自己的包级 handlerName<X> 常量；以 handlerName 开头的参数按前缀一律改名，不逐个判断是哪一个。
 			if !reserved[name] && !strings.HasPrefix(name, "handlerName") {
 				return name
 			}
