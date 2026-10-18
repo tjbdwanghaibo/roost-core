@@ -32,6 +32,7 @@
 
 - Lockstep `TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection` 不再假定 600 帧（约 4.8 MiB）一定超过停读连接的内核缓冲 + 出站队列（Linux 的 TCP 缓冲自动调优下装得下，原失败文本 `closed sessions map[], want only the stalled one (its outbound queue overflowed)`），改为最多 8192 帧、每 32 帧确认健康客户端读到、停读连接实际关闭即停；等待在 Tick 计时之外。Gateway `TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt` 每次推送后确认健康连接已收到，避免读协程还没被调度时把健康连接也塞满。
 - 保留慢连接被关闭、健康连接完整接收、Tick 不等待写出（最慢 Tick < 100ms）的原断言，不修改生产队列、超时或发送行为。
+- 证据（macOS，`-race`）：修前在 `-cpu 1` 下两条各 20/20 失败（`live session has frames up to 89 of 600 (err <nil>)`；`a push the live connection took was reported as failed: … outbound queue full`），缺省 GOMAXPROCS 下 10/10 通过——失败取决于健康读协程能否及时被调度与内核缓冲大小；修后 `-count=20 -cpu 1,2,4` 两条各 60/60 通过。
 
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
