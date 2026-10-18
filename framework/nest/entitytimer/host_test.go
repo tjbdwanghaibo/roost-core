@@ -279,6 +279,68 @@ func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
 			t.Fatalf("fired=%d nodes=%d after the new deadline", fired, len(store.nodes))
 		}
 	})
+	// 回调里经组件读（Timer / Timers）看到的是当前调度视图：刚登记的、刚改期的、刚取消的当下可见，
+	// 与 NewTimer / ChangeTimer / RemoveTimer 的返回值一致；“没有就建一个”不会在一次 Tick 内重复登记。
+	// 正在触发的节点自己可见（期限是原定期限，显式改期后是新期限），与 ChangeTimer / RemoveTimer 能操作它一致。
+	t.Run("callback reads its own writes", func(t *testing.T) {
+		d, clk, client, live := newTestDriver(t)
+		owner := newOwner(207)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		var changedID, removedID, createdID, selfID int64
+		ids := func(nodes []timer.Node) []int64 {
+			out := make([]int64, 0, len(nodes))
+			for _, node := range nodes {
+				out = append(out, node.ID)
+			}
+			return out
+		}
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(fire Fire) time.Duration {
+				now := fire.Now
+				if self, ok := host.Timer(fire.ID); !ok || !self.End.Equal(fire.Deadline) {
+					t.Errorf("firing timer read as %+v present=%v, want its own deadline %v", self, ok, fire.Deadline)
+				}
+				createdID = host.NewTimer(time.Minute, typeIncome, 0, 0, nil)
+				if created, ok := host.Timer(createdID); !ok || !created.End.Equal(now.Add(time.Minute)) {
+					t.Errorf("created timer read as %+v present=%v", created, ok)
+				}
+				host.ChangeTimer(changedID, time.Hour)
+				if changed, ok := host.Timer(changedID); !ok || !changed.End.Equal(now.Add(time.Hour)) {
+					t.Errorf("rescheduled timer read as %+v present=%v, want deadline %v", changed, ok, now.Add(time.Hour))
+				}
+				host.RemoveTimer(removedID)
+				if removed, ok := host.Timer(removedID); ok {
+					t.Errorf("canceled timer still readable: %+v", removed)
+				}
+				if got, want := ids(host.Timers()), []int64{fire.ID, createdID, changedID}; !slices.Equal(got, want) {
+					t.Errorf("Timers() = %v, want %v (deadline order)", got, want)
+				}
+				host.ChangeTimer(fire.ID, 2*time.Minute)
+				if self, ok := host.Timer(fire.ID); !ok || !self.End.Equal(now.Add(2*time.Minute)) {
+					t.Errorf("rescheduled firing timer read as %+v present=%v", self, ok)
+				}
+				if got, want := ids(host.Timers()), []int64{createdID, fire.ID, changedID}; !slices.Equal(got, want) {
+					t.Errorf("Timers() after rescheduling itself = %v, want %v", got, want)
+				}
+				return 0
+			})
+			h.Register(typeIncome, func(Fire) time.Duration { t.Error("income fired in this tick"); return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		selfID = host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		changedID = host.NewTimer(time.Second, typeIncome, 0, 0, nil)
+		removedID = host.NewTimer(10*time.Second, typeIncome, 0, 0, nil)
+		clk.Advance(time.Second)
+		tickDelivered(t, d, client, host)
+		// 收尾后读 DAO，与回调里最后看到的视图一致。
+		if got, want := ids(host.Timers()), []int64{createdID, selfID, changedID}; !slices.Equal(got, want) {
+			t.Fatalf("Timers() after the tick = %v, want %v", got, want)
+		}
+	})
 	t.Run("panic releases transient view", func(t *testing.T) {
 		d, clk, _, live := newTestDriver(t)
 		owner := newOwner(204)

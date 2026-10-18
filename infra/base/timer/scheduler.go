@@ -416,6 +416,8 @@ func (s *Scheduler) NextTime() time.Time {
 	return time.Time{}
 }
 
+// Nodes 返回堆中 typed 节点的副本（持久化视图，顺序不限）。Tick 内触发中与等收尾入堆的节点不在其中，
+// 要读回调刚写入的状态用 Lookup / LiveNodes。
 func (s *Scheduler) Nodes() []Node {
 	if s == nil {
 		return nil
@@ -426,6 +428,47 @@ func (s *Scheduler) Nodes() []Node {
 			continue
 		}
 		out = append(out, node.clone())
+	}
+	return out
+}
+
+// Lookup 返回 id 对应活节点的副本。活节点与 ChangeTimer / RemoveTimer 判断“存在”用同一个集合（byID）：
+// 堆中、正在触发（出堆通知、回调及其中的重入 Tick 期间）、Tick 内等收尾入堆的都算，期限是当前值——Tick 内
+// 新建的立即可见，改期的立即是新期限，取消或已结束的立即不可见。正在触发的节点期限是原定期限（≤ 本次 Tick 的
+// 时刻），回调按返回值续期之前不变；显式改期后是新期限。所以 Lookup 为 true 当且仅当此刻改期 / 取消它会成功。
+func (s *Scheduler) Lookup(id int64) (Node, bool) {
+	if s == nil {
+		return Node{}, false
+	}
+	node := s.byID[id]
+	if node == nil {
+		return Node{}, false
+	}
+	return node.clone(), true
+}
+
+// LiveNodes 返回全部活节点的副本（范围同 Lookup，含闭包节点），按触发顺序 (End, Priority, ID) 排列。
+// 与 Nodes 不同，它在 Tick 内也包括正在触发与等收尾入堆的节点，是回调读自己写入时用的视图。
+func (s *Scheduler) LiveNodes() []Node {
+	if s == nil {
+		return nil
+	}
+	live := make([]*Node, 0, len(s.byID))
+	for _, node := range s.byID {
+		live = append(live, node)
+	}
+	slices.SortFunc(live, func(a, b *Node) int {
+		switch {
+		case firesBefore(a, b):
+			return -1
+		case firesBefore(b, a):
+			return 1
+		}
+		return 0
+	})
+	out := make([]Node, len(live))
+	for i, node := range live {
+		out[i] = node.clone()
 	}
 	return out
 }
@@ -529,12 +572,8 @@ func (n *Node) clone() Node {
 	return c
 }
 
-// timerHeap 按 (End, Priority, ID) 排序，见包注释。ID 唯一，所以顺序是全序，不取决于堆的形状或入堆顺序。
-type timerHeap []*Node
-
-func (h timerHeap) Len() int { return len(h) }
-func (h timerHeap) Less(i, j int) bool {
-	a, b := h[i], h[j]
+// firesBefore 是触发顺序 (End, Priority, ID)，见包注释；堆与 LiveNodes 共用。ID 唯一，所以顺序是全序。
+func firesBefore(a, b *Node) bool {
 	if !a.End.Equal(b.End) {
 		return a.End.Before(b.End)
 	}
@@ -543,6 +582,12 @@ func (h timerHeap) Less(i, j int) bool {
 	}
 	return a.ID < b.ID
 }
+
+// timerHeap 按 firesBefore 排序，不取决于堆的形状或入堆顺序。
+type timerHeap []*Node
+
+func (h timerHeap) Len() int           { return len(h) }
+func (h timerHeap) Less(i, j int) bool { return firesBefore(h[i], h[j]) }
 func (h timerHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 	h[i].index = int32(i)

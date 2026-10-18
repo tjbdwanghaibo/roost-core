@@ -242,7 +242,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 修前 `TestHostCallbackOperationsShareTheCurrentTick` 原文：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。
 
-修复：`Host` 在当前 Tick 调用栈内共享调度器，内层操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告，最外层落定后报告一次；返回 / panic 都清掉，不在事务间缓存。契约见 [impl/10-time §2A](../framework/impl/10-time.md#2a-按实体的持久定时器驱动) 第 1、2 条。**剩余**：回调内新建的节点在 Tick 收尾 upsert 之前 `Timer` / `Timers` 读不到（DAO 视图），回调需要它的 ID 时用 `NewTimer` 的返回值。
+修复：`Host` 在当前 Tick 调用栈内共享调度器，内层操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告，最外层落定后报告一次；返回 / panic 都清掉，不在事务间缓存。契约见 [impl/10-time §2A](../framework/impl/10-time.md#2a-按实体的持久定时器驱动) 第 1、2 条。回调内 `Timer` / `Timers` 读不到自己刚写入的节点（这次修复留下的剩余项，2026-10-18 审查确认为回归）已修复：Tick 调用栈内改读当前调度视图，见 CHANGELOG `[Unreleased]`“实体定时器：回调里读得到自己刚写的节点”。
 
 ## 合法业务参数名导致 Sender 无法编译（P2，已修复）
 

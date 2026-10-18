@@ -40,10 +40,16 @@
 - **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
 - 文档：DESIGN-TODO D12（B 实施结果、容量决定）、KNOWN-LIMITS（第六轮登记项 2、容量条目）、guide/06-saga §2.1 / §5、impl/12-codegen、codegen 的 BEGINNER_WORKBOOK / CODEGEN_REFERENCE / PROJECT_GENERATOR、`roost help saga` / `effect` / `add`。
 
+### 实体定时器：回调里读得到自己刚写的节点
+
+- 修复 13b9d9e0 引入的回归：Tick 回调里的 `NewTimer` / `ChangeTimer` 共享当前调度器，新建与改期的节点要到最外层 Tick 收尾才写回 DAO，而 `Host.Timer` / `Timers`（生成组件的 `<C>(id)` / `<C>s()`）仍读 DAO。同一回调里先建再查返回 false、改期后读到旧期限、`Timers()` 少了新节点，“没有就建一个”会在一次 Tick 内重复登记。
+- `timer.Scheduler` 新增只读 `Lookup(id)` 与 `LiveNodes()`（全部活节点，含触发中与等收尾入堆的，按 `(End, Priority, ID)`）；`Host` 在 Tick 调用栈内用它们读，回调之外仍读 DAO。正在触发的节点在自己回调里可读（原定期限，显式改期后为新期限），与 `ChangeTimer` / `RemoveTimer` 能操作它一致。不回到“每次操作从 DAO 重建调度器”。
+- 测试：`TestHostCallbackOperationsShareTheCurrentTick/callback_reads_its_own_writes`；修前红：`firing timer read as {ID:0 …} present=false`、`created timer read as {ID:0 …} present=false`、`rescheduled timer read as {ID:2 … End:…16:00:01…} present=true, want deadline …17:00:01`、`Timers() = [2], want [1 4 2]`。`TestOperationsOnEveryNodeStateDuringTick` 在每次操作前后核对读视图与返回值（变异：读视图隐去等收尾节点，39 组变红）。文档：[guide/10-time §4](docs/framework/guide/10-time.md)、[impl/10-time §2 第 7 条与 §2A 第 1 条](docs/framework/impl/10-time.md#2a-按实体的持久定时器驱动)。
+
 ### 实体定时器：回调内的组件操作共享当前 Tick
 
 - 修复 `framework/nest/entitytimer.Host` 在 Tick 回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调登记的下一阶段节点已写入 DAO，最外层 Tick 却按旧堆报告期限（并以更大的序号覆盖内层报告），驱动索引丢掉它；回调取消 / 改期同轮已到期的另一节点返回成功，该节点仍按旧期限执行；回调显式改期自己返回 false。SLG 建造完成接行军、抵达后取消超时等合法组合受影响。
-- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内新建的节点在 Tick 收尾前 `Timer` / `Timers` 读不到。
+- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内的 `Timer` / `Timers` 读同一视图（见上一条）。
 - 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
 
 ### Nest 生成器：Sender 的局部名称避让业务参数
