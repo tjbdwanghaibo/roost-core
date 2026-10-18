@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -645,7 +646,7 @@ func pushServer(t *testing.T, configure ...func(*TCPConfig)) (*TCPServer, *TCPRu
 }
 
 // readPushes drains a client connection and counts the pushes it got.
-func readPushes(t *testing.T, server *TCPServer, connection net.Conn) <-chan int {
+func readPushes(t *testing.T, server *TCPServer, connection net.Conn, progress ...*atomic.Int64) <-chan int {
 	t.Helper()
 	counts := make(chan int, 1024)
 	go func() {
@@ -659,6 +660,9 @@ func readPushes(t *testing.T, server *TCPServer, connection net.Conn) <-chan int
 			release()
 			if got.flags&flagServerPush != 0 {
 				counts <- len(got.payload)
+				if len(progress) != 0 {
+					progress[0].Add(1)
+				}
 			}
 		}
 	}()
@@ -676,7 +680,7 @@ func stalled(t *testing.T, server *TCPServer, token string) net.Conn {
 
 // fillUntilOneFails pushes filler to player 7 until a push to one of its
 // connections has failed: the push reports it, or a connection is gone.
-func fillUntilOneFails(t *testing.T, runtime *TCPRuntime) (pushes int, err error) {
+func fillUntilOneFails(t *testing.T, runtime *TCPRuntime, liveProgress *atomic.Int64) (pushes int, err error) {
 	t.Helper()
 	before := runtime.ActiveSessions(7)
 	filler := bytes.Repeat([]byte{1}, 512<<10)
@@ -688,6 +692,14 @@ func fillUntilOneFails(t *testing.T, runtime *TCPRuntime) (pushes int, err error
 		pushes++
 		if runtime.ActiveSessions(7) < before {
 			return pushes, nil
+		}
+		// 本用例的健康连接持续消费；不要用调度器尚未运行读协程的突发把它也塞满。
+		deadline := time.Now().Add(2 * time.Second)
+		for liveProgress.Load() < int64(pushes) {
+			if time.Now().After(deadline) {
+				t.Fatal("the live connection did not consume its accepted push")
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 	t.Fatal("64MiB of pushes never failed a write to the stalled connection")
@@ -727,12 +739,13 @@ func waitClosed(t *testing.T, closed <-chan TCPSessionClosed, want ...string) {
 func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) {
 	server, runtime, closed := pushServer(t)
 	live := dialAuthenticated(t, server, "live")
-	received := readPushes(t, server, live)
+	var progress atomic.Int64
+	received := readPushes(t, server, live, &progress)
 	stalled(t, server, "stalled")
 	waitReleased(t, server, 2)
 	waitRegistered(t, runtime, 7, 2)
 
-	pushes, err := fillUntilOneFails(t, runtime)
+	pushes, err := fillUntilOneFails(t, runtime, &progress)
 	if err != nil {
 		t.Errorf("a push the live connection took was reported as failed: %v", err)
 	}

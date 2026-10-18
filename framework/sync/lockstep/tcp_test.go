@@ -321,7 +321,7 @@ func TestACatchUpPageTheLinkCannotTakeTimesOutWithoutHoldingOtherSessions(t *tes
 // 实时广播绝不等写出：一条停读连接的实时帧只进它自己的出站队列，满了就关闭它；同一 Tick 里其他接收者的帧照常到达，
 // Tick 本身不随停读连接的 write_timeout 变慢。（追帧页可以等写出，实时帧不可以：两条通道在 TCPSender 里分开。）
 func TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection(t *testing.T) {
-	const ticks = 600 // 每帧 ≈ 8 KiB，合计 ≈ 4.8 MiB：停读连接必然超过出站上限
+	const maxTicks = 8192 // 最多约 64 MiB；按实际关闭结束，不假定 4.8 MiB 一定装不进内核 + 应用缓冲。
 	tcp := newTCPLockstepServer(t, 30*time.Second, map[string]int64{"stalled": 1, "live": 2})
 	_ = tcp.dial(t, "stalled", 1, 4<<10)
 	live := tcp.dial(t, "live", 2, 64<<10)
@@ -346,7 +346,9 @@ func TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection(t *testing
 	reader := readLockstep(live, started, 0)
 	input := bytes.Repeat([]byte{0x5a}, lockstep.MaxInputPayloadBytes)
 	var slowestTick time.Duration
-	for range ticks {
+	closed := map[string]bool{}
+	ticks := 0
+	for ticks < maxTicks {
 		for _, seat := range tcpLockstepSeats {
 			if _, err := match.SubmitInput(seat, match.NextFrame(), input); err != nil {
 				t.Fatal(err)
@@ -355,17 +357,30 @@ func TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection(t *testing
 		tickStart := time.Now()
 		_, _ = match.Tick(context.Background()) // 停读连接被关闭后对它的发送失败，属预期
 		slowestTick = max(slowestTick, time.Since(tickStart))
+		ticks++
+		// 每批只准入约 256 KiB，让健康连接的客户端确实保持读取；等待在 Tick 测量之外。
+		if ticks%32 == 0 {
+			deadline := time.Now().Add(5 * time.Second)
+			for reader.next.Load() <= uint64(ticks) && reader.err() == nil && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if err := reader.err(); err != nil || reader.next.Load() <= uint64(ticks) {
+				t.Fatalf("live reader stopped at %d of %d: %v", reader.next.Load()-1, ticks, err)
+			}
+			if tcp.sessionClosed("stalled", closed) {
+				break
+			}
+		}
 	}
 	if slowestTick > 100*time.Millisecond {
 		t.Fatalf("slowest live Tick took %v: a broadcast waited on the stalled connection", slowestTick)
 	}
-	for wait := time.Now().Add(5 * time.Second); reader.next.Load() <= ticks && reader.err() == nil && time.Now().Before(wait); {
+	for wait := time.Now().Add(5 * time.Second); reader.next.Load() <= uint64(ticks) && reader.err() == nil && time.Now().Before(wait); {
 		time.Sleep(time.Millisecond)
 	}
-	if err := reader.err(); err != nil || reader.next.Load() <= ticks {
+	if err := reader.err(); err != nil || reader.next.Load() <= uint64(ticks) {
 		t.Fatalf("live session has frames up to %d of %d (err %v)", reader.next.Load()-1, ticks, err)
 	}
-	closed := map[string]bool{}
 	for wait := time.Now().Add(2 * time.Second); !tcp.sessionClosed("stalled", closed) && time.Now().Before(wait); {
 		time.Sleep(time.Millisecond)
 	}
