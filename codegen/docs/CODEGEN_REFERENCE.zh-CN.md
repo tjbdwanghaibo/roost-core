@@ -168,7 +168,7 @@ roost add rpc guild -service game
 
 `-native` 保序解析，必须是 `-steps` 的子集、不能重复；锁目标 `-entity` / `-component` 与 `add handler` 相同（工程只有一个 Entity 时 `-entity` 可省），跑步骤的服务要有 nest Mod，与已有 Nest handler 同名时拒绝。骨架默认拒绝（`... is not implemented`），写完业务前 saga 不报告成功。服务的 `Init` / `Shutdown` 不改写：next 提示给出 `steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})` 与 `steps.Drain(ctx)` 两行，doctor 的 `saga-steps:<name>` 在没有服务调用 `StartSteps` / `RegisterSteps`（或所在包没有 `Steps.Drain(ctx)`）时 WARN。
 
-容量（维护者 2026-10-18 决定按 A：接受并文档化）：一个进程在每个步骤 durable 上逐条处理，原生步骤约 14～18 条/s；原生步骤组成的 saga 正向约 10/s、全补偿约 5/s 开始饱和，超过后重试放大；量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [Saga D12 前后对照](../../docs/performance/SAGA-D12-20261018.md)。
+容量（2026-10-18 实测）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；单进程两步原生步骤 saga 正向约 5/s、全补偿约 4/s 以内延迟在 1 秒内，正向 7～8/s、全补偿 5/s 时 DataEngine 投影器跟不上、延迟升到秒级，约 10/s 起重试放大；量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)。
 
 `add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 

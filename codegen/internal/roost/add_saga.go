@@ -13,8 +13,8 @@ import (
 // Saga 步骤运行时与性能报告的链接：生成的骨架注释与 roost help 引用同一份。
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
-	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-D12-20261018.md"
-	sagaCapacitySummary = "one process runs about 14-18 native step commands per second on each durable; native-step sagas start to saturate at about 10/s forward and 5/s fully compensated, and past that step timeouts retry and amplify the load"
+	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-OPT-20261018.md"
+	sagaCapacitySummary = "in one process, two-step native sagas stay under a second up to about 5/s forward and 4/s fully compensated; at 7-8/s forward and 5/s fully compensated the DataEngine projector (one record with a receipt or effect at a time) falls behind and latency grows to seconds, and at about 10/s step timeouts retry and amplify the load"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -379,17 +379,19 @@ import (
 //
 // roost project doctor warns (saga-steps:%[1]s) while nothing calls StartSteps.
 //
-// Capacity (maintainer decision 2026-10-18: accepted and documented, not
-// optimised): a step's durable is shared by every replica of the service and
-// each replica takes one command at a time from it. One process runs about
-// 14-18 native step commands per second on a durable; sagas made of native
-// steps start to saturate at about 10/s forward and 5/s fully compensated, and
-// past that step timeouts retry and amplify the load (each operation still
-// takes effect exactly once, but most sagas end failed / compensated). Mongo
-// steps measured 20/s forward without saturating. More load needs more
-// processes: shard by sid (each process owns its sids' entities) and add an
-// admission check on the native steps (kitsaga.WithAdmit, below) so a command
-// runs on the process that owns its entity. Measurements:
+// Capacity (measured 2026-10-18): a step's durable is shared by every replica
+// of the service; a replica's callback runs one command's reservation and Nest
+// call at a time and waits for the projected receipt in the background. In one
+// process, two-step native sagas stay under a second up to about 5/s forward
+// and 4/s fully compensated; at 7-8/s forward and 5/s fully compensated the
+// DataEngine projector, which handles each record carrying a receipt or effect
+// on its own, falls behind and latency grows to seconds; at about 10/s step
+// timeouts retry and amplify the load (each operation still takes effect
+// exactly once, but most sagas end failed / compensated). Mongo steps measured
+// 20/s forward without saturating. More load needs more processes: shard by sid
+// (each process owns its sids' entities) and add an admission check on the
+// native steps (kitsaga.WithAdmit, below) so a command runs on the process that
+// owns its entity. Measurements:
 // %[5]s
 // Guide: %[6]s §2.1
 
