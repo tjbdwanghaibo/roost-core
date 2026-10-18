@@ -1,0 +1,89 @@
+package handler
+
+import (
+	"errors"
+	db "example.com/mmorpg-practice/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IMMOEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+type IMMOSceneEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.SceneDao
+}
+
+var errMMORule = errors.New("mmorpg practice: stale request or business rejection")
+
+// 两人队伍的业务样例；权限、队长和人数上限由正式游戏定义。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGParty(target IMMOEntity, peer IMMOEntity, partyID int64) error {
+	if target.ID() == peer.ID() || partyID <= 0 {
+		return errMMORule
+	}
+	if target.Dao().GetPartyID() != 0 && target.Dao().GetPartyID() != partyID {
+		return errMMORule
+	}
+	if peer.Dao().GetPartyID() != 0 && peer.Dao().GetPartyID() != partyID {
+		return errMMORule
+	}
+	target.Dao().SetPartyID(partyID)
+	peer.Dao().SetPartyID(partyID)
+	return nil
+}
+
+// 同进程切图：持久归属与场景人数一起提交。版本拒绝旧请求；AOI 订阅在提交后另行切换。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGTransfer(target IMMOEntity, from IMMOSceneEntity, to IMMOSceneEntity, version int64, reject bool) error {
+	d := target.Dao()
+	if from.ID() == to.ID() || version <= 0 {
+		return errMMORule
+	}
+	if d.GetSceneVersion() == version && d.GetSceneID() == to.ID() {
+		return nil
+	}
+	if d.GetSceneVersion() != version-1 || d.GetSceneID() != from.ID() || from.Dao().GetOccupants() <= 0 || to.Dao().GetOccupants() >= 100 {
+		return errMMORule
+	}
+	from.Dao().SetOccupants(from.Dao().GetOccupants() - 1)
+	to.Dao().SetOccupants(to.Dao().GetOccupants() + 1)
+	d.SetSceneID(to.ID())
+	d.SetSceneVersion(version)
+	if reject {
+		return errMMORule
+	}
+	return nil
+}
+
+// 串行单笔转账演示：单调序号与对手、金额绑定。旧交易拒绝，最新交易同身份重放成功。
+// 不是通用交易账本；确认窗口、物品交换和长期查询由业务建模。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGTrade(target IMMOEntity, peer IMMOEntity, seq int64, amount int64, reject bool) error {
+	d, p := target.Dao(), peer.Dao()
+	if target.ID() == peer.ID() || seq <= 0 || amount <= 0 {
+		return errMMORule
+	}
+	if seq == d.GetTradeSeq() {
+		if d.GetTradeBuyer() == peer.ID() && d.GetTradeAmount() == amount {
+			return nil
+		}
+		return errMMORule
+	}
+	if seq-1 != d.GetTradeSeq() || d.GetGold() < amount || p.GetGold() > 1000000-amount {
+		return errMMORule
+	}
+	d.SetGold(d.GetGold() - amount)
+	p.SetGold(p.GetGold() + amount)
+	d.SetTradeSeq(seq)
+	d.SetTradeBuyer(peer.ID())
+	d.SetTradeAmount(amount)
+	if reject {
+		return errMMORule
+	}
+	return nil
+}

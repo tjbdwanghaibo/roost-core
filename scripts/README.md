@@ -86,3 +86,5 @@ Sync 首次可见与客户端恢复：诊断运行加 `-trace-capacity=262144`�
 达到一致的精确时刻；检查点暂停输入及诊断开销只存在于诊断运行。
 支持本工具的单次 Hold/Ready，不将多次重置或同 session ID 重开混作一个恢复样本。
 最终固定预算对比、未采纳的短窗口实验和验收结果以实施报告末节为准。
+
+MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生成 Player / Scene DAO 与多实体 Sender，执行组队重放、并发转账去重、拒绝回滚及带版本的切图 4 条 race 场景；不连接外部存储。成功删除临时工程，失败或 `ROOST_MMORPG_KEEP=1` 保留。[接法与边界](../docs/framework/MMORPG-INTEGRATION.md)。
