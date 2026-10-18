@@ -1,0 +1,56 @@
+package handler
+
+import (
+	"encoding/hex"
+	"errors"
+	db "example.com/moba-practice/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IMobaPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+type IMobaResultEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.MatchResultDao
+}
+
+var ErrMOBASettlement = errors.New("moba settlement: invalid result, conflicting identity or economy limit")
+
+// 仅由对局服务器的参考模拟调用，不把客户端自报胜负 / hash 直接转成奖励。
+// result 的完整 EntityID 是开局时分配并保留的本场结算身份；同一场重试、恢复必须路由到同一个 ID。
+// 成功 / 无胜者终态都保留，双方战绩、奖励与结算身份在同一事务，不用短期请求环充当永久账本。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMOBASettle(result IMobaResultEntity, winner IMobaPlayerEntity, loser IMobaPlayerEntity, matchKey string, digest string, aborted bool) error {
+	raw, err := hex.DecodeString(digest)
+	if err != nil || len(raw) != 32 || len(matchKey) == 0 || len(matchKey) > 128 || winner.ID() == loser.ID() {
+		return ErrMOBASettlement
+	}
+	d, w, l := result.Dao(), winner.Dao(), loser.Dao()
+	status := int64(1)
+	if aborted {
+		status = 2
+	}
+	if d.GetStatus() != 0 {
+		if d.GetMatchKey() == matchKey && d.GetDigest() == digest && d.GetWinnerID() == winner.ID() && d.GetLoserID() == loser.ID() && d.GetStatus() == status {
+			return nil
+		}
+		return ErrMOBASettlement
+	}
+	if !aborted {
+		if w.GetGold() > 1000000-10 || w.GetWins() >= 1000000 || l.GetLosses() >= 1000000 {
+			return ErrMOBASettlement
+		}
+		w.SetGold(w.GetGold() + 10)
+		w.SetWins(w.GetWins() + 1)
+		l.SetLosses(l.GetLosses() + 1)
+	}
+	d.SetMatchKey(matchKey)
+	d.SetDigest(digest)
+	d.SetWinnerID(winner.ID())
+	d.SetLoserID(loser.ID())
+	d.SetStatus(status)
+	return nil
+}

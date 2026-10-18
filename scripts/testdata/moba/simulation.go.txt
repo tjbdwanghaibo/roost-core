@@ -1,0 +1,344 @@
+// Package moba 是单路、每队一名英雄的 MOBA 教学纵切。规则仅属于业务，不是框架默认玩法。
+package moba
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+)
+
+const (
+	Idle byte = iota
+	Move
+	Attack
+	Cast
+	Buy
+)
+const (
+	HeroTarget byte = iota
+	CreepTarget
+	TowerTarget
+	BaseTarget
+)
+const MaxFrames lockstep.FrameID = 600
+
+var ErrRule = errors.New("moba: invalid command, checkpoint or frame")
+
+// Command 不含客户端可自报的玩家 ID、伤害、金币或胜负，身份由已鉴权会话绑定 seat。
+type Command struct {
+	Action, Target byte
+	Step           int8
+}
+
+func Decode(raw []byte) (Command, error) {
+	if len(raw) != 3 {
+		return Command{}, ErrRule
+	}
+	c := Command{raw[0], raw[1], int8(raw[2])}
+	switch c.Action {
+	case Idle:
+		if c.Target != 0 || c.Step != 0 {
+			return c, ErrRule
+		}
+	case Move:
+		if c.Target != 0 || c.Step < -1 || c.Step > 1 {
+			return c, ErrRule
+		}
+	case Attack, Cast:
+		if c.Target > BaseTarget || c.Step != 0 {
+			return c, ErrRule
+		}
+	case Buy:
+		if c.Target != 0 || c.Step != 0 {
+			return c, ErrRule
+		}
+	default:
+		return c, ErrRule
+	}
+	return c, nil
+}
+func Encode(c Command) []byte { return []byte{c.Action, c.Target, byte(c.Step)} }
+
+type Hero struct {
+	X          int64
+	HP         int64
+	Mana       int64
+	Gold       int64
+	Kills      int64
+	RespawnAt  lockstep.FrameID
+	SkillReady lockstep.FrameID
+}
+type Creep struct{ X, HP int64 }
+type State struct {
+	Tick   lockstep.FrameID
+	Heroes [2]Hero
+	Creeps [2]Creep
+	Towers [2]int64
+	Bases  [2]int64
+	Ended  bool
+	Winner int64 // 0 表示无胜者，1 / 2 对应 seat，终态只由服务器参考模拟产生。
+}
+
+func NewState() *State {
+	return &State{Heroes: [2]Hero{{X: 0, HP: 100, Mana: 20}, {X: 10, HP: 100, Mana: 20}}, Towers: [2]int64{40, 40}, Bases: [2]int64{60, 60}}
+}
+func home(team int) int64 {
+	if team == 0 {
+		return 0
+	}
+	return 10
+}
+func tower(team int) int64 {
+	if team == 0 {
+		return 2
+	}
+	return 8
+}
+func distance(a, b int64) int64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
+// Apply 只接受正式排序器产生的连续帧；先校验全部语法与 seat，再修改状态。
+// 固定座位顺序解决交互顺序，所有数值为整数，不读墙上时间、不使用 map 遍历或外部随机源。
+func (s *State) Apply(frame lockstep.Frame) error {
+	if s.Ended || frame.ID != s.Tick+1 || frame.ID > MaxFrames {
+		return ErrRule
+	}
+	commands := make([]Command, len(frame.Inputs))
+	last := lockstep.PlayerID(0)
+	for i, input := range frame.Inputs {
+		if input.Player < 1 || input.Player > 2 || input.Player <= last {
+			return ErrRule
+		}
+		last = input.Player
+		c, err := Decode(input.Payload)
+		if err != nil {
+			return err
+		}
+		commands[i] = c
+	}
+	s.Tick = frame.ID
+	for team := range 2 {
+		h := &s.Heroes[team]
+		if h.HP == 0 && s.Tick >= h.RespawnAt {
+			h.HP = 100
+			h.Mana = 20
+			h.X = home(team)
+			h.RespawnAt = 0
+		}
+	}
+	for i, input := range frame.Inputs {
+		if s.Ended {
+			break
+		}
+		s.command(int(input.Player)-1, commands[i])
+	}
+	if !s.Ended {
+		s.creeps()
+		s.turrets()
+	}
+	if s.Tick == MaxFrames && !s.Ended {
+		s.Ended = true
+	} // 样例到时无结果，交业务按无奖励终态收口。
+	return nil
+}
+func (s *State) command(team int, c Command) {
+	hero := &s.Heroes[team]
+	enemy := 1 - team
+	if hero.HP == 0 {
+		return
+	}
+	switch c.Action {
+	case Idle:
+		return
+	case Move:
+		hero.X = max(int64(0), min(int64(10), hero.X+int64(c.Step)))
+		return
+	case Buy:
+		if hero.Gold >= 5 && hero.HP < 100 {
+			hero.Gold -= 5
+			hero.HP = min(int64(100), hero.HP+20)
+		}
+		return
+	}
+	reach, damage := int64(1), int64(10)
+	if c.Action == Cast {
+		if hero.Mana < 5 || s.Tick < hero.SkillReady {
+			return
+		}
+		reach = 3
+		damage = 25
+	}
+	targetX := s.Heroes[enemy].X
+	switch c.Target {
+	case CreepTarget:
+		targetX = s.Creeps[enemy].X
+	case TowerTarget:
+		targetX = tower(enemy)
+	case BaseTarget:
+		targetX = home(enemy)
+	}
+	if distance(hero.X, targetX) > reach {
+		return
+	}
+	if c.Target == HeroTarget && s.Heroes[enemy].HP == 0 || c.Target == CreepTarget && s.Creeps[enemy].HP == 0 || c.Target == TowerTarget && s.Towers[enemy] == 0 || c.Target == BaseTarget && (s.Towers[enemy] != 0 || s.Bases[enemy] == 0) {
+		return
+	}
+	if c.Action == Cast {
+		hero.Mana -= 5
+		hero.SkillReady = s.Tick + 3
+	}
+	switch c.Target {
+	case HeroTarget:
+		s.damageHero(enemy, damage)
+		if s.Heroes[enemy].HP == 0 {
+			hero.Gold += 10
+			hero.Kills++
+		}
+	case CreepTarget:
+		s.Creeps[enemy].HP = max(int64(0), s.Creeps[enemy].HP-damage)
+		if s.Creeps[enemy].HP == 0 {
+			hero.Gold += 5
+		}
+	case TowerTarget:
+		s.Towers[enemy] = max(int64(0), s.Towers[enemy]-damage)
+		if s.Towers[enemy] == 0 {
+			hero.Gold += 20
+		}
+	case BaseTarget:
+		s.Bases[enemy] = max(int64(0), s.Bases[enemy]-damage)
+		if s.Bases[enemy] == 0 {
+			s.Ended = true
+			s.Winner = int64(team + 1)
+		}
+	}
+}
+func (s *State) damageHero(team int, damage int64) {
+	h := &s.Heroes[team]
+	if h.HP == 0 {
+		return
+	}
+	h.HP = max(int64(0), h.HP-damage)
+	if h.HP == 0 {
+		h.RespawnAt = s.Tick + 5
+	}
+}
+func (s *State) creeps() {
+	for team := range 2 {
+		c := &s.Creeps[team]
+		enemy := 1 - team
+		if c.HP == 0 {
+			if s.Tick%6 == 0 {
+				c.HP = 20
+				c.X = home(team)
+			}
+			continue
+		}
+		if distance(c.X, s.Heroes[enemy].X) <= 1 && s.Heroes[enemy].HP > 0 {
+			s.damageHero(enemy, 4)
+			continue
+		}
+		if s.Towers[enemy] > 0 && distance(c.X, tower(enemy)) <= 1 {
+			s.Towers[enemy] = max(int64(0), s.Towers[enemy]-5)
+			continue
+		}
+		direction := int64(1)
+		if team == 1 {
+			direction = -1
+		}
+		c.X = max(int64(0), min(int64(10), c.X+direction))
+	}
+}
+func (s *State) turrets() {
+	for team := range 2 {
+		if s.Towers[team] == 0 {
+			continue
+		}
+		enemy := 1 - team
+		if s.Creeps[enemy].HP > 0 && distance(s.Creeps[enemy].X, tower(team)) <= 1 {
+			s.Creeps[enemy].HP = max(int64(0), s.Creeps[enemy].HP-5)
+		} else if distance(s.Heroes[enemy].X, tower(team)) <= 1 {
+			s.damageHero(enemy, 5)
+		}
+	}
+}
+
+// Snapshot 是业务检查点。客户端从帧 1 追帧可重算状态；已裁历史不会自动从该检查点恢复。
+// 存盘和同步这个检查点的身份 / 输入位置必须由宿主另行设计，本例只演示成对恢复模拟状态。
+func (s *State) Snapshot() []byte {
+	raw, err := json.Marshal(struct {
+		Version int
+		State   State
+	}{1, *s})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+func Restore(raw []byte) (*State, error) {
+	if len(raw) > 8192 {
+		return nil, ErrRule
+	}
+	var saved struct {
+		Version int
+		State   State
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&saved); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, ErrRule
+	}
+	s := saved.State
+	if saved.Version != 1 || s.Tick > MaxFrames || s.Winner < 0 || s.Winner > 2 || !s.Ended && s.Winner != 0 {
+		return nil, ErrRule
+	}
+	for i, h := range s.Heroes {
+		if h.HP < 0 || h.HP > 100 || h.Mana < 0 || h.Mana > 20 || h.X < 0 || h.X > 10 || h.Gold < 0 || h.Gold > 100000 || h.Kills < 0 || s.Towers[i] < 0 || s.Towers[i] > 40 || s.Bases[i] < 0 || s.Bases[i] > 60 || s.Creeps[i].HP < 0 || s.Creeps[i].HP > 20 || s.Creeps[i].X < 0 || s.Creeps[i].X > 10 {
+			return nil, ErrRule
+		}
+	}
+	return &s, nil
+}
+func (s *State) Digest() string {
+	sum := sha256.Sum256(s.Snapshot())
+	return hex.EncodeToString(sum[:])
+}
+func (s *State) Hash() uint64 {
+	sum := sha256.Sum256(s.Snapshot())
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+// Submit 在已经鉴权并绑定 seat 的串行 Match 所有者上调用。字节长度准入不等于业务语法验证。
+func Submit(match *lockstep.Match, session uint64, frameID lockstep.FrameID, raw []byte) error {
+	if _, err := Decode(raw); err != nil {
+		return err
+	}
+	// 超过业务允许的 2 帧迟到便拒绝，不把有限 ReplayHorizon 当作无限期输入幂等。
+	next := match.NextFrame()
+	if frameID < next && next-frameID > 2 {
+		return ErrRule
+	}
+	return match.HandleCommand(nettransport.SessionID(session), lockstep.Command{Operation: lockstep.OpInput, Frame: frameID, Payload: raw})
+}
+
+// 只在 Result 能由服务器参考模拟确认时进入资产结算；客户端 hash 相同并不证明没有作弊。
+func (s *State) Result() (int64, string, error) {
+	if !s.Ended {
+		return 0, "", fmt.Errorf("%w: match still running", ErrRule)
+	}
+	return s.Winner, s.Digest(), nil
+}
