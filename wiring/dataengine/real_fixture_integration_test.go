@@ -41,6 +41,7 @@ type realFixture struct {
 	effectSub string
 	mongo     fmongo.IMongo
 	jetStream fnats.IJetStream
+	registry  *app.Registry
 	runtime   *engine.Runtime
 	mongoMod  *kitmongo.MongoMod
 	natsMod   *kitnats.NatsMod
@@ -106,6 +107,7 @@ func newRealFixtureWithNATS(t *testing.T, natsURL string) *realFixture {
 	cfg.Set("dataengine.shutdown_timeout", realIntegrationTimeout)
 
 	registry := app.NewRegistry(cfg)
+	fx.registry = registry
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	fx.dataMod = NewMod(WithEntityAccess(access))
 

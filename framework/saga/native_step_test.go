@@ -1,0 +1,238 @@
+package saga
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	deengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+)
+
+// NativeStep 是业务写原生步骤体用的形状（D12 方向 A）：框架做预留、回执、completion 与等待投影，业务的 Nest handler
+// 只调用 step.Complete。这些用例走真实的 SubscribeDataEngineStep 消费者、mongotest 上真实的原生收件箱与真实的
+// DataEngine 投影器（deengine.MongoStore.Project，lease fence 的接受 / 跳过是生产判定）；“Nest 提交”用
+// corenest.RunIsolatedTransaction 截下 CommitRecord，投影即生效。body 的调用次数就是业务执行次数。
+
+type nativeStepHarness struct {
+	t         *testing.T
+	mongo     *mongotest.Client
+	inbox     *DataEngineStepInbox
+	jetstream *recordingJetStream
+	project   func(coredata.CommitRecord)
+	runs      atomic.Int32
+	// outcome 决定 body 在事务里怎样结束：nil 表示 Complete(success, reason)，否则 body 不提交、返回这个错误。
+	success bool
+	reason  string
+	fail    error
+}
+
+func newNativeStepHarness(t *testing.T) *nativeStepHarness {
+	t.Helper()
+	h := &nativeStepHarness{t: t, mongo: mongotest.NewClient(), jetstream: newRecordingJetStream(), success: true}
+	inbox, err := NewDataEngineStepInbox(h.mongo, "game", DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: 2 * time.Minute, PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.inbox = inbox
+	projector, err := deengine.NewMongoStore(h.mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.project = func(record coredata.CommitRecord) {
+		t.Helper()
+		if err := projector.Project(context.Background(), record); err != nil {
+			t.Fatalf("project %s: %v", record.ID, err)
+		}
+	}
+	transport, err := NewJetStreamPublisher(h.jetstream, "roost.saga")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := StepConsumerConfig{Stream: "ROOST_SAGA", Durable: "game-rally-reserve", Topic: "rally.reserve"}
+	if _, err := SubscribeDataEngineStep(context.Background(), h.jetstream, transport, inbox, config, inbox.StepHandler(h.body)); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// body 是业务的原生步骤体：在“Nest 事务”里调用 step.Complete，提交后立即投影。
+func (h *nativeStepHarness) body(ctx context.Context, step NativeStep) error {
+	h.runs.Add(1)
+	if h.fail != nil {
+		return h.fail
+	}
+	committer := &stepFenceCommitter{}
+	if _, err := corenest.RunIsolatedTransaction(ctx, committer, "rally-reserve", func() (any, error) {
+		return nil, step.Complete(h.success, h.reason)
+	}); err != nil {
+		return err
+	}
+	h.project(committer.record)
+	return nil
+}
+
+func (h *nativeStepHarness) deliver(command Command) error {
+	h.t.Helper()
+	raw, err := json.Marshal(commandEnvelope{Version: WireVersion, Command: command})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return h.jetstream.deliver(h.t, "roost.saga.command.rally.reserve", raw)
+}
+
+func (h *nativeStepHarness) receipt(command Command) Completion {
+	h.t.Helper()
+	completion, found, err := h.inbox.Replay(context.Background(), command)
+	if err != nil || !found {
+		h.t.Fatalf("receipt of %s: found=%t err=%v", command.ID, found, err)
+	}
+	return completion
+}
+
+// 同一条命令投递两次（JetStream 至少一次）：步骤体只执行一次，第二次读到回执直接 ack。正向与补偿方向同一条路径。
+func TestNativeStepRunsOnceAndAcknowledgesARedelivery(t *testing.T) {
+	for _, phase := range []Phase{PhaseForward, PhaseCompensate} {
+		t.Run(string(phase), func(t *testing.T) {
+			h := newNativeStepHarness(t)
+			command := dataEngineCommand("command-"+string(phase), "operation-"+string(phase), "payload")
+			command.Phase = phase
+			for delivery := 1; delivery <= 2; delivery++ {
+				if err := h.deliver(command); err != nil {
+					t.Fatalf("delivery %d: %v", delivery, err)
+				}
+			}
+			if got := h.runs.Load(); got != 1 {
+				t.Fatalf("the step body ran %d times for one command delivered twice, want 1", got)
+			}
+			if completion := h.receipt(command); !completion.Success || completion.CommandID != command.ID || completion.IdempotencyKey != command.IdempotencyKey {
+				t.Fatalf("receipt completion = %+v", completion)
+			}
+		})
+	}
+}
+
+// 业务拒绝也提交：回执与一份不可重试的失败 completion，协调器据此补偿；reason 为空时填一条点名步骤的说明。
+func TestNativeStepRefusalCommitsAFailedCompletion(t *testing.T) {
+	for reason, want := range map[string]string{"item_short": "item_short", "": "native step reserve refused"} {
+		h := newNativeStepHarness(t)
+		h.success, h.reason = false, reason
+		command := dataEngineCommand("command-refused-"+want, "operation-refused-"+want, "payload")
+		if err := h.deliver(command); err != nil {
+			t.Fatal(err)
+		}
+		completion := h.receipt(command)
+		if completion.Success || completion.Retryable || !strings.Contains(completion.Error, want) {
+			t.Fatalf("refusal with reason %q committed %+v, want a non-retryable failure mentioning %q", reason, completion, want)
+		}
+	}
+}
+
+// 结果未知：步骤体返回错误（Nest 提交可能已经发生），消费者保留这次尝试的租约。同一命令的重投不再执行步骤体，
+// 等回执到命令截止后返回（nak）；下一次尝试由协调器按步骤超时发出。
+func TestNativeStepUnknownOutcomeIsNotRunAgainByARedelivery(t *testing.T) {
+	h := newNativeStepHarness(t)
+	h.fail = errors.New("nest: commit outcome unknown")
+	command := dataEngineCommand("command-unknown", "operation-unknown", "payload")
+	command.DeadlineAt = time.Now().Add(300 * time.Millisecond)
+	if err := h.deliver(command); !errors.Is(err, h.fail) {
+		t.Fatalf("first delivery = %v, want the body's error (nak)", err)
+	}
+	if err := h.deliver(command); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("redelivery while the first attempt holds its lease = %v, want it to wait for the receipt until the command deadline", err)
+	}
+	if got := h.runs.Load(); got != 1 {
+		t.Fatalf("the step body ran %d times; an attempt whose outcome is unknown must not be run again by a redelivery", got)
+	}
+}
+
+// 唯一例外：ErrFencedEntityPending（实体上还有一笔结果未定的原生步骤，本次事务整体回滚）交还租约，重投立刻重试。
+func TestNativeStepFencedEntityPendingHandsTheLeaseBack(t *testing.T) {
+	h := newNativeStepHarness(t)
+	h.fail = coredata.ErrFencedEntityPending
+	command := dataEngineCommand("command-fenced-pending", "operation-fenced-pending", "payload")
+	if err := h.deliver(command); !errors.Is(err, coredata.ErrFencedEntityPending) {
+		t.Fatalf("first delivery = %v", err)
+	}
+	h.fail = nil
+	if err := h.deliver(command); err != nil {
+		t.Fatalf("redelivery after the barrier cleared: %v", err)
+	}
+	if got := h.runs.Load(); got != 2 || !h.receipt(command).Success {
+		t.Fatalf("runs=%d; the redelivery should have taken the handed-back lease and committed", got)
+	}
+}
+
+// NativeStep 只由框架构造：零值不能提交，步骤体不在原生消费者里（ctx 上没有执行权）时不调用。
+func TestNativeStepCannotCompleteWithoutAReservation(t *testing.T) {
+	committer := &stepFenceCommitter{}
+	_, err := corenest.RunIsolatedTransaction(context.Background(), committer, "zero-step", func() (any, error) {
+		return nil, NativeStep{}.Complete(true, "")
+	})
+	if !errors.Is(err, ErrNoNativeStep) {
+		t.Fatalf("zero NativeStep.Complete = %v, want ErrNoNativeStep", err)
+	}
+	h := newNativeStepHarness(t)
+	if _, err := h.inbox.StepHandler(h.body)(context.Background(), dataEngineCommand("command-bare", "operation-bare", "payload")); !errors.Is(err, ErrNoNativeStep) {
+		t.Fatalf("StepHandler without a reservation on the context = %v, want ErrNoNativeStep", err)
+	}
+	if got := h.runs.Load(); got != 0 {
+		t.Fatalf("the body ran %d times without a reservation", got)
+	}
+}
+
+// RunHandedOver 是转交接收方：自己取执行权运行步骤体，与消费者互斥（同一操作实例的状态文档）。
+func TestRunHandedOverSharesTheClaimWithTheConsumer(t *testing.T) {
+	t.Run("runs, then the consumer finds the receipt", func(t *testing.T) {
+		h := newNativeStepHarness(t)
+		command := dataEngineCommand("command-handoff", "operation-handoff", "payload")
+		if err := h.inbox.RunHandedOver(context.Background(), command, h.body); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.deliver(command); err != nil {
+			t.Fatalf("the consumer's delivery after the handed-over run: %v", err)
+		}
+		if got := h.runs.Load(); got != 1 || !h.receipt(command).Success {
+			t.Fatalf("runs=%d, want the handed-over run only", got)
+		}
+		// 再转交一次同一条命令：已有结果，不执行。
+		if err := h.inbox.RunHandedOver(context.Background(), command, h.body); err != nil || h.runs.Load() != 1 {
+			t.Fatalf("second handoff of a finished command: err=%v runs=%d", err, h.runs.Load())
+		}
+	})
+	t.Run("the consumer holds the claim", func(t *testing.T) {
+		h := newNativeStepHarness(t)
+		h.fail = errors.New("nest: commit outcome unknown")
+		command := dataEngineCommand("command-handoff-busy", "operation-handoff-busy", "payload")
+		if err := h.deliver(command); err == nil {
+			t.Fatal("first delivery should fail with the body's error")
+		}
+		if err := h.inbox.RunHandedOver(context.Background(), command, h.body); err != nil {
+			t.Fatalf("handoff while the consumer holds the lease = %v, want nil (the holder finishes it)", err)
+		}
+		if got := h.runs.Load(); got != 1 {
+			t.Fatalf("runs=%d; the handoff ran a command another delivery holds", got)
+		}
+	})
+	t.Run("past its deadline", func(t *testing.T) {
+		h := newNativeStepHarness(t)
+		command := dataEngineCommand("command-handoff-late", "operation-handoff-late", "payload")
+		command.DeadlineAt = time.Now().Add(-time.Second)
+		if err := h.inbox.RunHandedOver(context.Background(), command, h.body); err != nil || h.runs.Load() != 0 {
+			t.Fatalf("expired handoff: err=%v runs=%d, want nil and nothing run", err, h.runs.Load())
+		}
+	})
+	t.Run("no inbox", func(t *testing.T) {
+		var inbox *DataEngineStepInbox
+		command := dataEngineCommand("command-handoff-nil", "operation-handoff-nil", "payload")
+		if err := inbox.RunHandedOver(context.Background(), command, func(context.Context, NativeStep) error { return nil }); !errors.Is(err, ErrInvalidRecord) {
+			t.Fatalf("nil inbox = %v, want ErrInvalidRecord", err)
+		}
+	})
+}
