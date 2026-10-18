@@ -406,7 +406,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 		}
 		s.expireLocked(&current, now)
 		// 票集合就是提交身份。整组已匹配到同一局时返回原结果，不能再生成第二局，
-		// 也不能把部分重叠的集合当作重放。票/比赛被正常清理后则按缺失拒绝。
+		// 也不能把部分重叠的集合当作重放。已匹配的票与比赛不会被清理，所以重放没有时间窗口。
 		first := current.Tickets[ticketIDs[0]]
 		if first.State == TicketMatched && first.Queue == queue {
 			previous, ok := current.Matches[first.MatchID]

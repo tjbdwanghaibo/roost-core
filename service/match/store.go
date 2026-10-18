@@ -33,9 +33,12 @@ type Store interface {
 	// read every queued ticket on every enqueue.
 	Candidates(ctx context.Context, queue Queue, limit int) ([]Ticket, error)
 
-	// Commit turns the named tickets into one match, atomically. It fails
-	// without side effects if any ticket is no longer waiting — the check and
-	// the write are one step, so two committers cannot both win.
+	// Commit 原子地把票集合变成一场比赛：检查与写入是同一次比较并设置，失败不留副作用。
+	// 票集合就是提交身份：完整的同一票集合已匹配到同一局时幂等返回原 Match（票序可不同），
+	// 不创建第二局；与已匹配票只部分重叠，或含已取消 / 过期 / 不存在的票时拒绝（ErrConflict /
+	// ErrTicketMissing）。已匹配的票与比赛当前不清理，重放不受时间窗口限制。并发调用可以都成功回复，
+	// 但只指向同一场比赛，不能按成功回复次数计开局数。见 TestCommitReplayReturnsOriginalMatchForSameTicketSet、
+	// TestConcurrentCommitsProduceExactlyOneMatch、TestFailedCommitLeavesTheQueueUntouched。
 	Commit(ctx context.Context, queue Queue, ticketIDs []string) (Match, error)
 
 	// Match reads a committed match.
