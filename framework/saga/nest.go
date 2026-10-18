@@ -123,11 +123,11 @@ func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.Leas
 	if expiresAt.IsZero() || command.Validate() != nil {
 		return ErrInvalidRecord
 	}
-	raw, err := json.Marshal(command)
+	// 与收件箱同一份身份（commandDigest：时间按时刻、统一 UTC），重投读回执时才认得出这是同一条命令。
+	digest, err := commandDigest(command)
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(raw)
 	for _, fence := range fences {
 		receipt, err := dataengine.NewLeaseFenceReceipt(fence)
 		if err != nil {
@@ -138,7 +138,7 @@ func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.Leas
 		}
 	}
 	return tx.AddReceipt(dataengine.Receipt{
-		Namespace: StepReceiptNamespace, ID: command.ID, Digest: digest[:], ExpiresAt: expiresAt.UnixNano(),
+		Namespace: StepReceiptNamespace, ID: command.ID, Digest: digest, ExpiresAt: expiresAt.UnixNano(),
 	})
 }
 
