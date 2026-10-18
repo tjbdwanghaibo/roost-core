@@ -491,6 +491,7 @@ var generatedRealDependencyEntries = []struct {
 	{"demo/game/controllers/player/guild_ids_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestGuildIDsRealMongo"},
 	{"demo/internal/service/platform/purchase_delivery_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseDeliveryDurableWinner$"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
+	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
 }

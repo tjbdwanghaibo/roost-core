@@ -40,6 +40,19 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - **DAO 库名与 EntityID 换算**（D9，维护者 2026-10-16 决定 B）：`roost add dao` 骨架与 game-demo 模板（占位 `{{DAO_DB}}`）的 `db=` 都由 [add_entity.go](../../../codegen/internal/roost/add_entity.go) 的 `daoDatabaseName(project.name)` 给出（系统库加 `_data`，52 字节截断）；`db=` 仍是编译期常量，库名取运行配置（方案 A）未做。`roost id entity`（[id_entity.go](../../../codegen/internal/roost/id_entity.go)）持有 `framework/entity/idgen.go` 位布局的副本，`TestRoostIDEntityLayoutMatchesTheFramework` 读那份源码的常量比对；category 只存低两位，解码给出这两位与工程标记里声明的分类。回归 `TestRoostIDEntityConvertsBothWays`、`TestDAOSkeletonDatabaseFollowsTheProjectName`。
 - **旧写法不迁移**：项目未上线，生成器对已退役写法（清单见[项目生成器 §4](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#4-roostyaml)）只点名拒绝并给出手工改法，不读取、不自动迁移、不静默忽略。
 
+## 2C. roost add timer
+
+DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../../codegen/internal/roost/add_timer.go) 一处实现 add、清单校验与渲染；运行期在 core 的 `framework/nest/entitytimer`（[impl/10-time §2A](10-time.md#2a-按实体的持久定时器驱动)）。
+
+- **清单是唯一声明**：`timers.<entity>`（`TimerSpec`：component、id、service、dao）。`renderProject` 调 `renderTimerFiles` 按它渲染生成部分（节点类型、组件、Tick handler 及其测试；带生成头，sync 重写）与业务回调文件（`<component>_handlers.go`，`Owned=false`，只在缺失时创建）；`serviceModConstructors` 给 `spec.Service` 追加 `kitentitytimer.NewMod(EntityAccess, <entity>.<Component>Driver...)`，实体包 import 与 self_sync 同一别名（实体 snake 名）。所有名字只由 `newTimerNames` 从清单推出，渲染与 add 共用。
+- **两处业务文件只在 add 时改一次**：DAO 定义加节点 map 与种子（文本插在结构体右括号前，保留业务注释；同名同类型已存在时不改、类型不同拒绝）；`entity.go` 加组件字段（已有同一组件字段时不改）。Go 结构体不能跨文件，所以 DAO 字段不能放进 `_gen.go`；节点类型可以，放在 `db/def/<entity>_<component>_node_gen.go`。先改这两处、再写清单并 sync（`commitManifestSync`），sync 失败时两处一并还原（`restoreFilesIfCurrent`）。
+- **拒绝在改文件之前**：实体事实由 `entity.InspectTimerHost`（codegen/internal/entity）读：`remote=managed`、`noPersist=true` 拒绝并说明原因；DAO 只有一个，或几个里取字段 `dao`；组件名被别的组件占用（包里已声明 `CompType<Component>` 常量，或字段类型不是 `*<Component>Component`）拒绝；服务取 `--service` 或唯一装了 nest 的业务服务。重复 add 按清单拒绝。
+- **handler 名对齐**：驱动投递的名字是常量 `<Component>TickHandler = "handlerTick<Entity><Component>"`，Nest 生成器按函数名得出同一个名字；生成的 `tick_<entity>_<component>_gen_test.go` 在生成工程里比较两者（`handlerName…` 由 Nest 生成器写出），任何一边改名都会让工程测试变红。`roost add handler --component <timer 组件>` 认 `<component>_component_gen.go`。
+- **game-demo**：World 的定时器走同一个生成器（demo 步骤 `add timer --entity World --id 2006`，再写 `timer_handlers.go` 模板），原手写 `TimerComponent`、`TickWorldTimers` handler 与服务里每秒 `Sync_TickWorldTimers` 的循环删除；World 的 10 个定时器用例保持原断言（内部字段 `scheduler()/settle()/TimerNextDue` 的三处改为对应的公开 API 与驱动索引）。停机预算按 Mod 数计，game 服务多一个 Mod（25 个，`total_timeout` 117s）。
+- **已知缺口**：去掉清单条目后生成部分不自动删除（与其他按清单渲染的文件相同，见 KNOWN-LIMITS）。
+
+回归：[add_timer_test.go](../../../codegen/internal/roost/add_timer_test.go)（`TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks`、`TestAddTimerComponentNameAndExplicitID`、`TestAddTimerRefusesWhatItCannotSupport`、`TestManifestRejectsAnInconsistentTimerEntry`、`TestEntityTimerGeneratedProjectEndToEnd`）。修前（`a56d5965`）`roost add timer --entity Player` 报 `invalid timer name ""`。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。

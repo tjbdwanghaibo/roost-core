@@ -17,6 +17,8 @@
 1. 配置声明、读取、生成与 doctor 同源。
 2. 异步准入捕获快照；同步链保持代际。
 3. 热更失败恢复此前真实视图；敏感值不泄露。
+4. 重载结果说明逐成员变化：`Snapshot` 在 finalize 时按成员记下与 `Hash` 同源的内容摘要和表行数，`Compare` 比较两代；`ReloadWithChanges` / `RollbackWithChanges` 与 `ReloadOutcome.Changes` 携带它。内容完全没变的重载**仍发布新版本号**（维护者 2026-10-18 决定 B；监听者依赖每次重载都跑，例如 featureflag 用重载恢复 GM 的进程内覆盖），日志以 Warn 写“no table changed”，configdata Mod 计 `configdata.reload.total{result="unchanged"}`。
+5. 运维命令只有一处注册：wiring/configdata 的 Mod 在 Provide 时调用 `RegisterAdminCommands` 挂到 App 的 admin 注册表（缺 admin 能力时 Provide 失败），业务工程不再手写重载命令。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -31,12 +33,14 @@
 
 ### configdata
 
-6 个实现文件、3 个测试文件。
+8 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
+| [admin.go](../../../framework/configdata/admin.go) | `ReloadCommand`；`RegisterAdminCommands`（`configdata.reload` / `rollback` / `status`） |
 | [auto.go](../../../framework/configdata/auto.go) | `AutoOption` |
-| [configdata.go](../../../framework/configdata/configdata.go) | `Name`、`Snapshot`、`Table`、`BuildContext`、`IndexDef`、`TableDef`、`ObjectDef`、`CustomDef`、`Registry`、`ReloadEvent`、`ReloadListener`、`ReloadHook`、`Store`、`ReloadStage`、`ReloadOutcome` |
+| [changes.go](../../../framework/configdata/changes.go) | `MemberChange`、`Changes`；`Compare` |
+| [configdata.go](../../../framework/configdata/configdata.go) | `Name`、`Snapshot`、`Table`、`BuildContext`、`IndexDef`、`TableDef`、`ObjectDef`、`CustomDef`、`Registry`、`ReloadEvent`、`ReloadListener`、`ReloadHook`、`Store`、`ReloadStage`、`ReloadOutcome`、`ReloadResult` |
 | [doc.go](../../../framework/configdata/doc.go) | 函数/方法或内部实现；见源码 |
 | [external.go](../../../framework/configdata/external.go) | `ExternalOption` |
 | [fieldrules.go](../../../framework/configdata/fieldrules.go) | `FieldRule`、`RuleError` |
@@ -93,7 +97,8 @@
 ### configdata
 
 - [auto_test.go](../../../framework/configdata/auto_test.go)：`TestRegisterAutoTableDerivesMappingFromTags`、`TestRegisterAutoTableRefValidation`、`TestRegisterAutoTableUserValidateRunsAfterRefs`、`TestRegisterAutoTableTagMistakesFailAtRegistration`、`TestInferTableName`；其余 19 项见文件
-- [configdata_test.go](../../../framework/configdata/configdata_test.go)：`TestStoreLoadReloadAndActiveSnapshot`、`TestReloadFailureKeepsOldSnapshot`、`TestDryRunBuildsSnapshotWithoutPublishing`、`TestRollbackRestoresPreviousPublishedSnapshot`、`TestReloadListenerRollbackKeepsOldSnapshot`；其余 15 项见文件
+- [admin_test.go](../../../framework/configdata/admin_test.go)：`TestAdminCommandsReloadReportChangesAndStatus`
+- [configdata_test.go](../../../framework/configdata/configdata_test.go)：`TestReloadReportsWhichTablesChanged`、`TestStoreLoadReloadAndActiveSnapshot`、`TestReloadFailureKeepsOldSnapshot`、`TestDryRunBuildsSnapshotWithoutPublishing`、`TestRollbackRestoresPreviousPublishedSnapshot`、`TestReloadListenerRollbackKeepsOldSnapshot`；其余 15 项见文件
 - [reload_commit_test.go](../../../framework/configdata/reload_commit_test.go)：`TestFailedCommitDoesNotRollBackAnotherStorePublication`、`TestListenerPanicFailsReloadAndKeepsStateConsistent`、`TestBeforeApplyFailureRollsBackOnlyPreparedListeners`、`TestAfterApplyFailureRollsBackAllPreparedInReverse`、`TestFirstLoadFailureSkipsRollbackCallbacks`；其余 11 项见文件
 
 ### configdata/rules

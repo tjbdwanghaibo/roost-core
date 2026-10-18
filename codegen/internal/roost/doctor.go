@@ -72,14 +72,18 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	// 业务声明只有编译后的进程知道：工程能编译时，config-schema 检查编译一次进程、读回每个服务的
 	// 全部声明；编译不过（compile:go-list 已 FAIL）时只按框架声明检查。
 	var processSchemas serviceSchemaSource
+	var process *projectProcess
 	if goAvailable {
 		report.Items = append(report.Items, runDoctorGoCommand(ctx, root, "dependencies:go-mod-verify", 2*time.Minute, "go mod verify passed", "run GOWORK=off go mod download, then retry", "mod", "verify"))
 		list := runDoctorGoCommand(ctx, root, "compile:go-list", 2*time.Minute, "all packages loaded with -mod=readonly", "fix package/import errors without changing go.mod, then retry; after a failed or interrupted project upgrade run roost project deps first", "list", "-buildvcs=false", "-mod=readonly", "./...")
 		report.Items = append(report.Items, list)
 		if list.Status == StatusOK {
-			source, cleanup := processConfigSchemas(ctx, root)
+			if item, ok := checkSkillCatalog(ctx, root); ok {
+				report.Items = append(report.Items, item)
+			}
+			built, cleanup := newProjectProcess(ctx, root)
 			defer cleanup()
-			processSchemas = source
+			process, processSchemas = built, built.schema
 		}
 		if options.Strict {
 			report.Items = append(report.Items, runDoctorGoCommand(ctx, root, "compile:go-test", 5*time.Minute, "all packages and tests compiled", "run GOWORK=off go test -buildvcs=false -mod=readonly -run=^$ ./... and fix the reported compiler error", "test", "-buildvcs=false", "-mod=readonly", "-run=^$", "./..."))
@@ -94,6 +98,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 		}
 	}
 	report.Items = append(report.Items, checkConfigDeclarations(root, m, processSchemas)...)
+	report.Items = append(report.Items, checkConfigRules(root, m, process)...)
 	report.Items = append(report.Items, checkConfigSections(root, m)...)
 	report.Items = append(report.Items, checkConfigReads(root))
 	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
@@ -105,6 +110,9 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	}
 	report.Items = append(report.Items, checkCICDTemplates(root)...)
 	report.Items = append(report.Items, checkFrameworkCollaborators(root, m)...)
+	if item, ok := checkRemoteRuntime(root, m); ok {
+		report.Items = append(report.Items, item)
+	}
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})
@@ -224,6 +232,45 @@ func checkCICDTemplates(root string) []CheckItem {
 		items = append(items, CheckItem{Name: "cicd:reproducible", Status: StatusOK, Detail: "ordinary CI uses committed go.mod/go.sum"})
 	}
 	return items
+}
+
+// checkSkillCatalog 是 doctor 的 skills:catalog 项：工程有技能目录（game/skills/catalog.go）时运行它的测试，
+// 测试用框架的正式加载路径编译全部 JSON（renderSkillCatalogTest），写坏的定义在这里 FAIL。没有测试文件时 WARN：
+// 那样没有任何地方在启动前编译这些定义。没有技能目录时不报这一项。
+func checkSkillCatalog(ctx context.Context, root string) (CheckItem, bool) {
+	if _, err := os.Stat(filepath.Join(root, "game", "skills", "catalog.go")); err != nil {
+		return CheckItem{}, false
+	}
+	if _, err := os.Stat(filepath.Join(root, "game", "skills", "catalog_test.go")); err != nil {
+		return CheckItem{Name: "skills:catalog", Status: StatusWarn, Detail: "game/skills has no catalog_test.go, so nothing compiles the Skill definitions before startup; " +
+			"the next roost add skill creates one (TestSkillCatalogCompiles calls CompileAll), or write it by hand"}, true
+	}
+	return runDoctorGoCommand(ctx, root, "skills:catalog", 3*time.Minute, "every game/skills/*.json compiles (go test ./game/skills/)",
+		"fix the Skill definition named above, then run GOWORK=off go test ./game/skills/", "test", "-buildvcs=false", "-mod=readonly", "-count=1", "./game/skills/"), true
+}
+
+// checkRemoteRuntime 是 doctor 的 remote-runtime 项：工程里有 remote=managed 实体时，带 Nest 的服务要有
+// remote_entity Mod 才写得了它（规则与 generate 相同，见 remoteRuntimeHosts）。没有这类实体时不报这一项。
+func checkRemoteRuntime(root string, m Manifest) (CheckItem, bool) {
+	missing, partial, err := remoteRuntimeHosts(root, m)
+	switch {
+	case err != nil:
+		return CheckItem{Name: "remote-runtime", Status: StatusFail, Detail: "scan entity markers: " + err.Error()}, true
+	case missing != "":
+		return CheckItem{Name: "remote-runtime", Status: StatusFail, Detail: missing}, true
+	case partial != "":
+		return CheckItem{Name: "remote-runtime", Status: StatusWarn, Detail: partial}, true
+	}
+	kinds, err := projectEntityKinds(root)
+	if err != nil {
+		return CheckItem{}, false
+	}
+	for _, kind := range kinds {
+		if kind.managed {
+			return CheckItem{Name: "remote-runtime", Status: StatusOK, Detail: "every service running Nest has the remote_entity Mod for the remote=managed entities"}, true
+		}
+	}
+	return CheckItem{}, false
 }
 
 // collaboratorUnconfiguredMarker is the phrase every generated fail-closed

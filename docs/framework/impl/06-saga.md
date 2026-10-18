@@ -17,6 +17,9 @@
 1. 步骤转换集中且持久终态由完整步骤集合决定。
 2. native inbox 与 Mongo step inbox 各自和业务提交原子绑定。
 3. 旧 incarnation 回执不能推进新执行；重试不重置总预算。
+4. 业务侧的原生步骤只经 `NativeStep`（[native_step.go](../../../framework/saga/native_step.go)，D12 方向 A）：它只由框架构造（`DataEngineStepInbox.StepHandler` 从 ctx 取本次投递的执行权、`RunHandedOver` 自己 Reserve），零值 `Complete` 返回 `ErrNoNativeStep`；`Complete` = `Bind`（回执 + lease fence）+ `EmitCompletion`，两者都在调用方的 Nest 事务里。`RunHandedOver` 与消费者取同一份操作状态文档：截止已过 / 被接替 / 他人持有租约 / 已有结果都返回 nil 不执行，`ErrFencedEntityPending` 交还租约（与 `SubscribeDataEngineStep` 同一规则），不等投影、不发布。
+5. 组装在 `wiring/saga` 的 `Steps`（[steps.go](../../../wiring/saga/steps.go)）：流 / 前缀 / saga 库取 `StreamSettings`，原生收件箱库取 `kitdataengine.EffectSettings`（`dataengine.database`），原生租约 `NativeLeaseDuration`（2 分钟，长于 `DefaultStepAckWait`，`SubscribeDataEngineStep` 拒绝不满足的配置），租约持有者 `<group>-<主机名>-<pid>`；`Drain` 按停止入口三步（发起幂等、ctx 内等 `Closed()`、超时保留消费者）。持久与恢复语义（收件箱判定、三副本发布确认、outbox、lease）不在这里改动，Steps 只调用已有的 `SubscribeDataEngineStep` / `SubscribeMongoStep`。
+6. 跨 Mod 配置规则（效果流键一致、完成回执 TTL 长于 `dataengine.effects.max_age`）都在 `wiring/saga` 的 `CheckConfigAcrossMods`（`app.ModConfigCrossChecker`），启动前、`--check-config` 与 doctor 的 `config-check` 同一处；Init 不再重复检查回执保留期，两处共用 `effectStreams` 解析效果流。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -31,7 +34,7 @@
 
 ### saga
 
-14 个实现文件、30 个测试文件。
+15 个实现文件、31 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -42,6 +45,7 @@
 | [errors.go](../../../framework/saga/errors.go) | 函数/方法或内部实现；见源码 |
 | [jetstream.go](../../../framework/saga/jetstream.go) | `JetStreamPublisher`、`CompletionConsumerConfig` |
 | [mongo_store.go](../../../framework/saga/mongo_store.go) | `MongoStoreOptions`、`MongoStore` |
+| [native_step.go](../../../framework/saga/native_step.go) | `NativeStep`、`NativeStepBody` |
 | [nest.go](../../../framework/saga/nest.go) | 函数/方法或内部实现；见源码 |
 | [nest_completion_consumer.go](../../../framework/saga/nest_completion_consumer.go) | `NestCompletionConsumerConfig`、`Completer` |
 | [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter` |
@@ -82,6 +86,7 @@
 - [mongo_step_operation_real_mongo_integration_test.go](../../../framework/saga/mongo_step_operation_real_mongo_integration_test.go)：`TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
 - [mongo_store_test.go](../../../framework/saga/mongo_store_test.go)：`TestMongoResumePersistsGenerationAndAcceptsFreshCompletion`、`TestMongoIncarnationSurvivesEveryRecordReadAndReplace`、`TestMongoStepConsumerFollowsTheOperationInbox`、`TestMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestMongoStoreSkipsACorruptRecordWithoutFailingTheBatch`；其余 5 项见文件
 - [native_step_incarnation_test.go](../../../framework/saga/native_step_incarnation_test.go)：`TestCoordinatorChecksTheIncarnationOfACompletion`、`TestMongoStoreMarksALateSuccessAlarmOncePerLife`、`TestCommandIDIncarnationInvertsCommandID`
+- [native_step_test.go](../../../framework/saga/native_step_test.go)：`TestNativeStepRunsOnceAndAcknowledgesARedelivery`、`TestNativeStepRefusalCommitsAFailedCompletion`、`TestNativeStepUnknownOutcomeIsNotRunAgainByARedelivery`、`TestNativeStepFencedEntityPendingHandsTheLeaseBack`、`TestNativeStepCannotCompleteWithoutAReservation`；其余 1 项见文件
 - [native_step_operation_test.go](../../../framework/saga/native_step_operation_test.go)：`TestNativeStepTakesEffectAtMostOncePerOperation`、`TestNativeStepOperationInterleavingsWithCoordinatorDecisions`、`TestNativeStepLeaseNeverOutlivesTheCommandDeadline`、`TestNativeStepConsumerHandlesOperationOutcomes`、`TestMongoStoreTombstoneTellsAbandonedFromResolved`；其余 2 项见文件
 - [nest_atomic_test.go](../../../framework/saga/nest_atomic_test.go)：`TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically`
 - [nest_effects_test.go](../../../framework/saga/nest_effects_test.go)：`TestNestCompletionRejectsForeignSagaRouteBeforeMutation`、`TestAssemblyConsumesNativeNestCompletionEffects`、`TestAssemblyKeepsItsExistingConsumerSubjects`

@@ -123,6 +123,11 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 	}
 
+	// roost add timer：每个 timers 条目的组件 / 节点类型 / Tick handler（重写）与业务回调文件（只建一次）。
+	if err := renderTimerFiles(m, addGo); err != nil {
+		return nil, err
+	}
+
 	services := sortedServiceNames(m)
 	for _, name := range services {
 		if m.isFrameworkService(name) {
@@ -387,6 +392,13 @@ func renderBootstrap(m Manifest) string {
 	for _, name := range m.Sagas {
 		imports[m.Project.Module+"/saga/"+name] = "saga" + safeIdent(name)
 	}
+	if len(m.Timers) > 0 {
+		imports[entityTimerWiring] = "kitentitytimer"
+		for _, name := range sortedTimerEntities(m) {
+			// 与 self_sync 同一个别名：两者都导入 Player 包时是同一条 import。
+			imports[m.Project.Module+"/game/entities/"+name] = name
+		}
+	}
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\npackage bootstrap\n\nimport (\n")
 	paths := make([]string, 0, len(imports))
@@ -485,6 +497,14 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	}
 	for _, rpc := range uniqueSorted(m.Services[name].UsesRpcs) {
 		out = append(out, fmt.Sprintf("%s.NewClientMod()", rpcAlias(rpc)))
+	}
+	// roost add timer：本服务加载的实体的定时器驱动（wiring/entitytimer，依赖 Nest，先于它停止）。
+	if timers := timerServices(m, name); len(timers) > 0 {
+		args := []string{"EntityAccess"}
+		for _, names := range timers {
+			args = append(args, names.Entity+"."+names.CompType+"Driver")
+		}
+		out = append(out, "kitentitytimer.NewMod("+strings.Join(args, ", ")+")")
 	}
 	if access, enabled := m.Access["player"]; enabled && access.Service == name {
 		out = append(out, "accessplayer.NewMod()")
@@ -972,7 +992,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-webroute new-errcode new-saga new-rpc
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-timer new-webroute new-errcode new-saga new-rpc
 
 help:
 	$(ROOST) help-make
@@ -1054,6 +1074,8 @@ new-table:
 	$(ROOST) add table $(NAME)
 new-dao:
 	$(ROOST) add dao $(NAME) $(if $(ENTITY),--entity $(ENTITY),)
+new-timer:
+	$(ROOST) add timer --entity $(ENTITY) $(if $(COMPONENT),--component $(COMPONENT),) $(if $(SERVICE),--service $(SERVICE),)
 new-webroute:
 	$(ROOST) add webroute $(NAME)
 new-errcode:

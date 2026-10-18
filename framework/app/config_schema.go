@@ -43,6 +43,15 @@ type ModConfigSchema interface {
 	ConfigSchema() ConfigSchema
 }
 
+// ModConfigCrossChecker 由读另一个 Mod 的配置键、并要求两边取值一致的 Mod 实现（例如 saga 订阅的效果流必须就是
+// 同进程 DataEngine 发布的那条）。App 在本服务全部声明检查通过之后调用一次：启动前（任何 Mod Init 之前）、
+// `--check-config` 与 CheckServiceConfig 走同一处，所以这类不一致在配置检查时就报，不等到启动订阅才失败。
+// registered 报告本服务是否注册了某个 Mod（共享 Mod 与服务专属 Mod 都算）。单个 Mod 自己的跨键规则仍写在
+// 配置结构体的 ValidateConfig 里；读别的 Mod 的键只经它的声明（LoadConfig），不直接读 viper。
+type ModConfigCrossChecker interface {
+	CheckConfigAcrossMods(cfg *viper.Viper, registered func(ModName) bool) error
+}
+
 // configDeclaration 是一份声明和它的主人（Mod 或业务服务），检查错误按主人点名。
 type configDeclaration struct {
 	owner  string
@@ -102,11 +111,11 @@ func CheckConfig(cfg *viper.Viper, mods ...Mod) error {
 	if cfg == nil {
 		return errors.New("config: viper is nil")
 	}
-	_, err := checkConfig(cfg, modDeclarations(mods))
+	_, err := checkConfig(cfg, modDeclarations(mods), mods)
 	return err
 }
 
-func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig, error) {
+func checkConfig(cfg *viper.Viper, declarations []configDeclaration, mods []Mod) (appConfig, error) {
 	var settings appConfig
 	errs := unjoinErrors(LoadConfig(cfg, &settings))
 	schemas := []ConfigSchema{AppConfigSchema()}
@@ -133,7 +142,29 @@ func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig,
 	if _, err := configschema.Merge(schemas...); err != nil {
 		errs = append(errs, err)
 	}
+	// 跨 Mod 的一致性只在各自的声明都成立之后判断：否则同一个类型或范围错误会经另一个 Mod 再报一遍。
+	if len(errs) == 0 {
+		errs = append(errs, checkConfigAcrossMods(cfg, mods)...)
+	}
 	return settings, errors.Join(uniqueErrors(errs)...)
+}
+
+func checkConfigAcrossMods(cfg *viper.Viper, mods []Mod) []error {
+	registered := make(map[ModName]bool, len(mods))
+	for _, mod := range mods {
+		registered[mod.Name()] = true
+	}
+	var errs []error
+	for _, mod := range mods {
+		checker, ok := mod.(ModConfigCrossChecker)
+		if !ok {
+			continue
+		}
+		if err := checker.CheckConfigAcrossMods(cfg, func(name ModName) bool { return registered[name] }); err != nil {
+			errs = append(errs, fmt.Errorf("mod %s: %w", mod.Name(), err))
+		}
+	}
+	return errs
 }
 
 // AppConfigSchema 返回 App 自己读的键的声明（日志、业务时钟偏移、停机预算、指标上限、单实例锁、部署环境、
@@ -143,7 +174,7 @@ func AppConfigSchema() ConfigSchema { return SchemaOf(appConfig{}) }
 // CheckServiceConfig 用本 App 给 serverType 注册的全部 Mod（共享 + 服务专属）与服务本身的声明检查 cfg，
 // 与 run 启动前做的一样。
 func (a *App) CheckServiceConfig(serverType ServiceName, cfg *viper.Viper) error {
-	_, err := checkConfig(cfg, a.serviceDeclarations(serverType))
+	_, err := checkConfig(cfg, a.serviceDeclarations(serverType), a.serviceMods(serverType))
 	return err
 }
 

@@ -441,10 +441,12 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}))
 	// activity_standing: the server-wide window this robot is contributing
 	// to. The clear above counted exactly one point — and the REPLAY of that
-	// clear counted none, because the coordinator deduplicates on the run id
-	// — so the assertion is an exact 1, not "at least 1". An off-by-one here
-	// is a contribution being counted twice across a service boundary, which
-	// is precisely what the reservation is for.
+	// clear counted none, because finish_dungeon contributes only from the
+	// call that paid the reward (a replay does not contribute at all; the
+	// coordinator's per-run reservation additionally covers a retried call
+	// within one window) — so the assertion is an exact 1, not "at least 1".
+	// An off-by-one here is a contribution being counted twice across a
+	// service boundary.
 	action.MustRegisterCall[pb.ActivityStandingRequest, pb.ActivityStandingResponse](actions, protocols, "activity_standing", msgid.MsgActivityStanding,
 		action.OnResp(func(rb *robot.Context, resp *pb.ActivityStandingResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {

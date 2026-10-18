@@ -22,10 +22,10 @@ Wiring 只负责配置、依赖查询与注册、实例构造和生命周期委�
 | --- | --- | --- |
 | mongo/redis/nats/etcd | 外部资源驱动 | 配置、连接、健康与有界关闭 |
 | nest/lock/manager | 调度、锁和本地单例管理 | 服务完成后排空工作；不重复拥有 App 单实例锁 |
-| dataengine | WAL、Projector、Repository | 恢复 gate、投影、outbox、持久资源按依赖关闭 |
+| dataengine | WAL、Projector、Repository；业务 effect 消费者 `SubscribeEffects` | 恢复 gate、投影、outbox、持久资源按依赖关闭；effect 订阅由服务 Shutdown 里 Drain |
 | remoteentity | Remote 与 Mirror 运行能力 | 权威存储、缓存、总线与持久 fence |
 | syncbus | 服务间状态总线 | 只读 syncbus 配置，不回退旧 room/sync 配置段；缺省前缀 `roost.sync`，流名由前缀推出 |
-| saga | 协调器/步骤能力 | 存储、消息与系统期限 |
+| saga | 协调器/步骤能力；业务步骤运行时 `Steps`（不是 Mod，服务 Init 里 Start） | 存储、消息与系统期限；Steps 由服务 Shutdown 里 Drain |
 | configdata | 表加载/快照与监听 | 数据完整校验后发布 |
 | ops/statslog | 探针、管理与周期统计 | 生命周期与有界工作排空 |
 

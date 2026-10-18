@@ -2,6 +2,8 @@ package entity
 
 import (
 	"bytes"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,8 +120,48 @@ func TestGenerateRefusesManagedRemoteWithoutRemoteBase(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "remote=managed requires embedding *entity.RemoteEntityBase") {
 		t.Fatalf("generate = %v, %v; want the RemoteEntityBase refusal", written, err)
 	}
+	// 报错点名要改的那一行：把哪个嵌入换成哪个。
+	if !strings.Contains(err.Error(), "replace *entity.EntityBase with *entity.RemoteEntityBase") {
+		t.Fatalf("refusal %q does not say which embedding to replace", err)
+	}
 	if _, statErr := os.Stat(out); statErr == nil {
 		t.Fatal("refused generate still wrote the wire file")
+	}
+}
+
+// 还没有 DAO 的 Remote 托管实体（刚把 add entity 骨架改成 remote=managed）生成的 wire 必须能编译：
+// dataengine 只在逐个 DAO 的远端提交里用到，没有 DAO 时不能 import 它。
+func TestRemoteManagedEntityWithoutDaosGeneratesCompilableWire(t *testing.T) {
+	text := "package guild\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKindGuild entity.EntityKind = 5\n\n//roost:entity entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed\ntype Guild struct {\n\t*entity.RemoteEntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "entity.go"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entities, pkg, err := parseDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "guild_gen_wire.go")
+	if _, err := generate(entities[0], pkg, out, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), out, raw, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range file.Imports {
+		path := strings.Trim(spec.Path.Value, "\"")
+		name := path[strings.LastIndex(path, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if !strings.Contains(string(raw), name+".") {
+			t.Errorf("generated wire imports %s but never uses it (does not compile):\n%s", path, raw)
+		}
 	}
 }
 

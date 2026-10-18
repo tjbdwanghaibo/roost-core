@@ -425,6 +425,15 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	} else if len(retired) > 0 {
 		return fmt.Errorf("%d file(s) use the retired //cube: marker prefix, which is no longer read; rename it to //roost: in: %s", len(retired), strings.Join(retired, ", "))
 	}
+	// remote=managed 实体的写权限由 remote_entity Mod 提供：带 Nest 的服务全都没有它时，生成、编译都能过，
+	// 运行时每次写都被拒。在跑任何生成器之前拒绝并给出命令；只有部分服务缺时提示（见 remoteRuntimeHosts）。
+	if missing, partial, err := remoteRuntimeHosts(root, manifest); err != nil {
+		return fmt.Errorf("scan entity markers: %w", err)
+	} else if missing != "" {
+		return errors.New(missing)
+	} else if partial != "" && !options.DryRun {
+		fmt.Fprintln(options.Stdout, "WARN: "+partial)
+	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue
@@ -678,3 +687,50 @@ func dirHasNoDataFiles(path string) (bool, error) {
 }
 
 var _ = errors.Join
+
+// remoteRuntimeHosts 检查 remote=managed 实体有没有能写它的服务。Remote 托管实体经 Nest 写，写权限、fence 与远端提交
+// 由 remote_entity Mod 提供；没有它的进程把这类写一律拒绝（entity.ErrNoRemoteRuntime）。实体由哪个服务写在静态上看不出
+// （EntityAccess 对所有服务共享），所以：带 Nest 的服务全都没有 remote_entity 时返回 missing（确定写不了，generate 与
+// doctor 拒绝）；只有部分缺时返回 partial（那些服务若也写这些实体会被拒，提示不拒绝）。工程里没有 remote=managed 实体或
+// 没有带 Nest 的服务时都为空。
+func remoteRuntimeHosts(root string, m Manifest) (missing, partial string, err error) {
+	kinds, err := projectEntityKinds(root)
+	if err != nil {
+		return "", "", err
+	}
+	var managed []string
+	for _, kind := range kinds {
+		if kind.managed {
+			managed = append(managed, kind.name)
+		}
+	}
+	if len(managed) == 0 {
+		return "", "", nil
+	}
+	sort.Strings(managed)
+	var withNest, without []string
+	for _, service := range sortedServiceNames(m) {
+		mods := serviceConfigMods(m, service)
+		if !contains(mods, "nest") {
+			continue
+		}
+		withNest = append(withNest, service)
+		if !contains(mods, "remote_entity") {
+			without = append(without, service)
+		}
+	}
+	if len(without) == 0 {
+		return "", "", nil
+	}
+	commands := make([]string, 0, len(without))
+	for _, service := range without {
+		commands = append(commands, "roost add mod remote_entity -service "+service)
+	}
+	entities := strings.Join(managed, ", ")
+	if len(without) == len(withNest) {
+		return fmt.Sprintf("entity %s is remote=managed, but no service running Nest has the remote_entity Mod (%s), so every write to it is refused at runtime "+
+			"(remote entity: write capability disabled); run: %s", entities, strings.Join(without, ", "), strings.Join(commands, "; ")), "", nil
+	}
+	return "", fmt.Sprintf("entity %s is remote=managed; service(s) %s run Nest without the remote_entity Mod and refuse writes to it; "+
+		"if they write these entities, run: %s", entities, strings.Join(without, ", "), strings.Join(commands, "; ")), nil
+}

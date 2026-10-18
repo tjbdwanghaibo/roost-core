@@ -35,6 +35,10 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if options.Kind == "timer" {
+		// roost add timer --entity <Entity>：名字就是实体，可以只写 --entity。
+		return addTimer(root, m, options)
+	}
 	name := strings.TrimSpace(options.Name)
 	if !validName(toSnake(name)) {
 		return nil, fmt.Errorf("invalid %s name %q", options.Kind, name)
@@ -415,7 +419,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		// the implicit "that line must run before any RegisterEntity" ordering.
 		// Other is the safe default; a scaffold must never mint a per-entity
 		// "= 1", which is the rank reserved for remote-managed kinds.
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known, and\n// to EntityCategoryRemote if it becomes remote=managed.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, o.ID, pascal, pascal)
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known.\n//\n// To make the kind Remote-owned (remote=managed, written from several\n// processes) change three things together: category=entity.EntityCategoryRemote,\n// remote=managed on this marker, and the embedded EntityBase field below\n// becomes *entity.RemoteEntityBase. The service running Nest also needs the Remote\n// runtime: roost add mod remote_entity -service <service>.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, o.ID, pascal, pascal)
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":
@@ -438,6 +442,10 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return nil, errors.New("handler requires --component <name>")
 		}
 		componentPath := filepath.Join(root, "game", "entities", entityName, componentName+"_component.go")
+		if _, err := os.Stat(componentPath); os.IsNotExist(err) {
+			// roost add timer 的组件是生成的（<name>_component_gen.go），handler 同样可以锁它。
+			componentPath = filepath.Join(root, "game", "entities", entityName, componentName+"_component_gen.go")
+		}
 		if _, err := os.Stat(componentPath); err != nil {
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf("component %q is not attached to Entity %q; run: roost add component %s --entity %s", componentName, entityName, componentName, entityName)
@@ -476,11 +484,19 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		var steps strings.Builder
 		var topics strings.Builder
 		var subscribers strings.Builder
+		// Steps 的顺序就是 Definition.Steps 的下标顺序：Saga 按下标推进、按下标
+		// 倒序补偿，所以原样保留。两个名字蛇形化后相同会生成同名步骤与同一组
+		// topic，报错而不是合并。
+		seenSteps := make(map[string]bool, len(o.Steps))
 		for _, stepName := range o.Steps {
 			stepSnake, stepPascal := toSnake(stepName), toPascal(stepName)
 			if !validName(stepSnake) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
+			if seenSteps[stepSnake] {
+				return nil, fmt.Errorf("duplicate saga step %q in -steps: each step needs its own name, listed in execution order", stepSnake)
+			}
+			seenSteps[stepSnake] = true
 			// No budget here: Timeout / MaxAttempts / Backoff come from the saga
 			// Mod's config (saga.step_defaults, overridden per step under
 			// saga.steps.<type>.<step>), filled in by Engine.Register.
@@ -488,8 +504,8 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			// The topics as constants, so a project can address them without
 			// repeating the strings: the Subscribe* helpers below take a
 			// Mongo inbox, and a step whose business is a Nest transaction
-			// subscribes with saga.SubscribeDataEngineStep and these topics
-			// instead (roost-core/saga's native path).
+			// is registered with roost-core wiring/saga Steps.Native and
+			// these topics instead (the native path).
 			fmt.Fprintf(&topics, "\t// Topic%s is the forward topic of step %s.\n", stepPascal, stepSnake)
 			fmt.Fprintf(&topics, "\tTopic%s = %q\n", stepPascal, snake+"."+stepSnake)
 			fmt.Fprintf(&topics, "\t// Topic%sCompensation is its compensation topic.\n", stepPascal)
@@ -511,9 +527,10 @@ const (
 	Version uint32 = 1
 )
 
-// The step topics. A step whose business is a Nest transaction subscribes
-// with saga.SubscribeDataEngineStep and binds its receipt inside that
-// transaction; any other step uses the Mongo inbox helpers below. Both
+// The step topics. A step whose business is a Nest transaction is registered
+// with roost-core wiring/saga Steps.Native (its Nest handler takes a
+// saga.NativeStep and calls step.Complete inside the transaction); any other
+// step uses Steps.Mongo or the Mongo inbox helpers below. Both
 // address the same topics, and both inboxes let at most one attempt of an
 // operation take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤).
 // For a Mongo step that covers what its handler writes through the Mongo

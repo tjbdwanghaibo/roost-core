@@ -52,7 +52,7 @@ demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己
 | 已领奖的局能否再次发奖、示例排行榜能否被正常重放多加分 | 规则与实现分开。窗口由业务定义，但既然 demo 声称窗口内只发一次，就必须正确持久记账；示例误用短期去重导致多计分是 demo 问题。 |
 | 玩家身份、Remote 所有权、锁、回滚、WAL 提交门与同步可见性 | 框架已经声明的保证，合法调用下违约要提框架问题；业务仍须选择正确的身份来源、事务边界和结果未知处理。 |
 | 活动累计分被较旧的 RPC 回复覆盖 | demo 并发接法问题；公共协调器的权威值可以正确而本地结算索引错误，需要在示例写索引的位置修复。 |
-| 每个玩家的建造 / 行军到期都能自动执行 | 通用 Scheduler 可用，持久字段、加载重建和 Tick 接入仍由业务负责；按实体接入骨架已登记为 [D11](../docs/maintenance/DESIGN-TODO.md#d11-按实体的持久定时器接入)，是待定能力，不是本轮新发现的运行时 bug。 |
+| 每个玩家的建造 / 行军到期都能自动执行 | 通用 Scheduler 可用，持久字段、加载重建和 Tick 接入仍由业务负责；按实体接入骨架已由 [D11](../docs/maintenance/DESIGN-TODO.md#d11-按实体的持久定时器接入) 实施，离线准点唤醒等维护者明确留给业务的部分仍不归框架负责。 |
 
 本机 demo 跑通说明这些示例路径能组合运行，不证明所有部署模式、远端故障和整套 SLG 玩法都已验收。
 
@@ -65,7 +65,7 @@ AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
   ├─ dao.SetExp / SetLevel                 状态变更
   └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
         ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
-internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每个 EffectID 只处理一次）
+internal/service/game/level_up_mail.go     kitdataengine.SubscribeEffects：durable + Mongo inbox（每个 EffectID 只处理一次）
   └─ mail.Send(RequestID = EffectID)       mail 服务按 RequestID 去重：第二层幂等
 ```
 
@@ -76,6 +76,8 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
 - **生产者与消费者读同一组配置键**（`dataengine.database` / `dataengine.effects.*`）、用同一组默认值，两边不会对"effect 在哪"
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
+- 订阅只写处理函数：流、主题前缀、回执库与重投退避由框架的 `kitdataengine.SubscribeEffects` 按 DataEngine Mod 的声明组装。
+  载荷解不开的 effect 标记为毒消息（`kitdataengine.PoisonEffect`）直接丢弃并记 ERROR，不会一直重投；`mail.Send` 失败按退避重投。
 
 ## 邮件：列表与领附件（客户端这一半）
 
@@ -177,15 +179,16 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **开始**：`SendGift`（10013）→ `StartGift` Nest 事务：在 A 的锁内检查背包够不够，然后 `saga.EmitStart`——start 意图和这次事务同一条 WAL 记录，
   Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 完整会话的 SHA-256 摘要 + 帧序号；同一请求得到稳定 ID，重连后的同一帧号属于新请求。不能截断会话前缀：demo 会话以 `demo-玩家ID-时间戳` 命名，前缀可能完全不包含时间戳。
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
-- **步骤**（`internal/service/game/gift_saga.go`，四个消费者，**两种形状**）：
+- **步骤**（`internal/service/game/gift_saga.go`，四个步骤，**两种形状**，登记在框架的步骤运行时 `kitsaga.Steps` 上：
+  收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与准入 / 转交）：
   - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**
-    `saga.SubscribeDataEngineStep`：handler 在自己的 Nest 事务里 `inbox.Bind(command, reservation)` + `saga.EmitCompletion(...)`，
+    `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
     收件人查的是 Player DAO 自己的库和集合（`db.PlayerDaoDBName` / `db.PlayerDaoCollection`，即 DAO 标记的 `db=<工程名>`，例如 `db=planet`），不是 `dataengine.database`——
     后者只给原生步骤的 inbox 用。
-    所以留在 `saga.SubscribeMongoStep`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
+    所以登记为 `Steps.Mongo`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
     见 [Saga 契约](../docs/framework/SAGA.md)），但它只管写进 handler 那笔 Mongo 事务的东西；邮件是 bus 调用，不在事务里，
     被 fence 中止的尝试可能已经发出邮件，所以 mail 服务自己的幂等仍是**必需**的（Send 按 RequestID 去重，RequestID 就是命令的
     IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
@@ -195,13 +198,14 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     只有基础设施错误才返回 error（回滚，让投递退避重试）。
 - **在哪个进程执行**：debit / refund 改的是发送方的 Player，只在发送方绑定的 sid 上执行。`StartGift` 把发起进程的 sid
   写进 saga 状态（`from_sid`；能发起赠礼的玩家一定在本服服务，也就一定绑定在这个 sid 上）。步骤消费者共用一个 durable，
-  落到别的 sid 的进程上时，准入拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它自己认领执行；
+  落到别的 sid 的进程上时，准入（`kitsaga.WithAdmit`）拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它
+  经 `Steps.RunHandedOver` 自己认领执行（框架先核对步骤名与命令主题，再由 demo 复核归属）；
   发送方离线、内存里没有副本也照常执行。没有 `from_sid` 的载荷不能路由，一律拒绝并记 Error。
 - **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
   终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
 - **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →
   `expect_gift compensated`。两条路都在 `loadtest -count 6` 里跑。
-- **边界**：`LeaseDuration` 必须长于消费者的 `AckWait`（demo 取 2 分钟 vs 30 秒），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
+- **边界**：原生收件箱的租约必须长于消费者的 `AckWait`（框架取 2 分钟 vs 30 秒，`kitsaga.NativeLeaseDuration`），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
   消费者会当场拒绝这种配置。载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场。
   deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
 
@@ -333,22 +337,27 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - 容器在 `OnInitFinish` 填充：生成的 builder 先挂 DAO、再初始化组件，所以那时存储值已经在手上了。
 - **没做**：会过期的层。真正的 buff 层需要一个时钟和一次扫描，而它该待在被 tick 调用的组件方法里，不是某个 getter 里的惰性检查。
 
-## 排行榜：rank 服务，与领奖账本同一个幂等键
+## 排行榜：rank 服务，与领奖账本同一个准入
 
 `game/ranking/ranking.go` 是游戏这侧的决定：哪个榜、一分是什么、什么让提交可重试。
 
-- 清关提交用 `UpdateAdd`（本身**不**可重放）+ requestID = `clear:<run id>`——和奖励账本键的是同一个 run 身份。
-  奖励账本与 rank 的去重范围不同：rank 只保留同一玩家最近 8 个请求 ID，不能据此承诺长期只记一分。
-- 提交**不**以"这次是否真的发了奖"为条件：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况。
-- 提交在事务**外**（榜在另一个服务），两者不原子。崩在中间会留下"已发奖但没记分"；近期重试可补记，超过 8 个后续请求再重放却会多加分。
-  这是[已确认且未修复的 demo 接入问题](../docs/maintenance/KNOWN-LIMITS.md#game-demo-副本排行超过去重环后重放会重复计分已确认未修复)，有正式端点的可执行复现。
-  长期累计榜应从奖励事务里的持久累计事实派生快照，或使用覆盖整个重放期限的计分收据，不能把短期去重环当成奖励账本。
+- 一分不是“+1”，是**通关数快照**：领奖事务（`handlerClaimDungeon`）在记账本、发经验的同一笔事务里给
+  `PlayerDao.DungeonClears[赛季]` 加一，首次领取与重放都返回当前通关数（`ClaimResult.Clears`）；端点用 `UpdateMax`、
+  不带 requestID 把榜抬到这个数。重放、重复、乱序的快照都不多加也不降分。
+- 为什么不再用 `UpdateAdd` + `clear:<run id>`：rank 只记每个玩家最近 8 个请求 ID（去重环，不是账本），而端点在重放时
+  也要提交；一局在领奖窗口内、被后来 8 局挤出去重环后重放，会再加一分（9 局记 10 分）。通关数随奖励一起准入
+  （执行时间判窗口，窗口外的一局在计数前就被拒绝），不需要第三本有期限的账本。
+- 提交**不**以"这次是否真的发了奖"为条件：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况；下一局的快照也会把它带上。
+- 提交在事务**外**（榜在另一个服务），两者不原子。崩在中间会留下"已发奖但没记分"——可恢复的方向，重试这个端点只会把榜抬到同一个数。
+- 通关数按赛季分开存：改 `ranking.CurrentSeason` 后新榜从 0 开始，不把上一季的数带过去（维护者 2026-10-18 决定按赛季，不做终身累计）。
+- **活动贡献与排行相反：只在首次付款时贡献**（`result.Claimed`）。排行提交的是事务里通关数的快照，重放重交无害；活动贡献是往
+  “调用时刻的时钟所在的窗口”（300 秒一个）里加分，协调器只按（窗口, 玩家, `clear:<run id>`）去重。同一局在 4 小时领奖窗口内
+  跨过窗口边界后重放，落进新窗口、键不同，会再记一分（一局最多可进 48 个窗口，影响按名次发的活动邮件）。所以驱动贡献的是
+  “这次真的付了款”这一事实，与通关数同源；重放不贡献，响应里也不带 `ActivityID`。**代价**（维护者 2026-10-18 按推荐决定）：
+  付款之后、贡献之前崩溃或协调器调用失败，这一分永久丢失，重放不补——活动是尽力而为，补报若落到后来的窗口本来也记错了窗口；
+  端点对这种失败打 Warn 日志。回归 `TestAReplayContributesNothingToTheActivity`（`game/controllers/player/finish_dungeon_test.go`，无外部依赖）。
 - `RankTop`（10016）读榜头 + 自己的名次，两次读：一页是榜头，说不了不在榜上的人的事。榜 id 由服务端定，
   从线上收一个 board id 等于让任何人读到任何榜。
-
-全服活动另有一份 Redis 结算索引（`internal/service/game/activity.go`）：协调器决定玩家的累计分，demo 用它排榜并发结算邮件。
-`Contribute` 只加正分，写榜用原子 `ZADD GT`，因此较旧的 RPC 回复不会把 2 分覆盖回 1 分，第一次贡献仍会插入。
-索引写失败仍只记日志，不与协调器提交原子，也没有自动对账；需要完整补记保证的业务应补独立对账，允许扣分的玩法也不能直接沿用单调写法。
 
 ## 技能目录：启动时编译，客户端可查
 
@@ -401,6 +410,9 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
 ```
 
+- 配置表重载不是 GM 命令：configdata Mod 自带 `configdata.reload` / `configdata.rollback` / `configdata.status`（框架注册，与 `hotcode.*` 同一套 token 与审计）。
+  `curl ... -d '{"name":"configdata.reload","payload":{"reason":"改价"}}'` 回答新版本号与哪些表变了；重载只读 `configs/data` 下的 JSON，
+  只改了 `configs/table` 的 CSV 却没 `roost generate` 时回答 `changed=false`、message 写 `no table changed`。开关表（`feature_flag.json`）也经这条生效，并覆盖 `gm.flag.set` 的进程内改动。
 - `gm.saga.list` / `gm.saga.get` 读 saga 协调器的记录（状态、当前步、最后一次错误、状态数据）；`manual_required` 是需要人的那一类。
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。

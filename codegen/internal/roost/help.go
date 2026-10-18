@@ -122,7 +122,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc|timer> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -134,6 +134,7 @@ roost add protocol rename_player -group game --handler player
 roost add endpoint rename_player --handler player
 roost add lifecycle player
 roost add skill fireball
+roost add timer --entity player
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver`,
 	},
 	{
@@ -177,13 +178,24 @@ roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-han
 roost add endpoint EnterGame --handler player --lifecycle Player`,
 	},
 	{
+		Name: "timer", Aliases: []string{"timers", "entity-timer"},
+		Summary:       "给实体加持久定时器：到点由驱动投递 Tick，在实体的 Nest 锁内触发",
+		Usage:         `roost add timer --entity <Entity> [--component Timer] [--service <service>] [--id <component-id>]`,
+		Configuration: `要求实体已有 DAO（roost add dao <Entity> --entity <Entity>）、工程有 nest 运行时；Remote 托管（remote=managed）与 noPersist 的实体拒绝。写入 roost.yaml timers.<entity>，在实体 DAO 定义里加节点 map 与种子两个字段、实体加组件字段（这两处之后归业务）；生成部分 <component>_component_gen.go、db/def/<entity>_<component>_node_gen.go、game/handler/tick_<entity>_<component>_gen.go 与 bootstrap 里的 wiring/entitytimer 驱动由 project sync 重写；定时器类型与回调写在 game/entities/<entity>/<component>_handlers.go（业务文件，只建一次）。驱动按已加载实体的最早期限只给到期的那一个实体投递 Tick，不按在线人数轮询，时间取 App 业务时钟。离线语义：框架不追帧，实体不在内存期间到期的节点加载后只触发一次，回调参数 entitytimer.Fire 带原定期限 Deadline、触发时刻 Now、加载时刻 LoadedAt、补触发标志 Overdue 与间隔 Interval，补算错过的周期由业务做；回调返回正值为下次间隔（从 Now 起算）。说明见 ` + entityTimerDocURL + `。`,
+		Example: `roost add timer --entity Player
+# game/entities/player/timer_handlers.go：定义 TimerTypeBuffExpire 与回调
+# Nest handler 里：target.TimerComp().NewTimerAt(expireAt, player.TimerTypeBuffExpire, 0, 0, nil)
+roost generate`,
+	},
+	{
 		Name: "skill", Aliases: []string{"skills", "ability"},
 		Summary:       "生成稳定 roost-core/skill JSON 骨架和启动期编译目录",
 		Usage:         `roost add skill <name>`,
-		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 启动失败。`,
+		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go 与 catalog_test.go（已有目录缺测试时补上，两者都归业务、只建一次）。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 返回错误。catalog_test.go 的 TestSkillCatalogCompiles 用同一路径编译全部 JSON，go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项拦住写坏的定义；服务启动时也调用一次 CompileAll，失败拒绝启动（Init 归业务，需自己接上）。工程用自定义 CompileEnvironment 时把测试里的环境换成同一个。`,
 		Example: `roost add skill Fireball
 # 编辑 game/skills/fireball.json
-# 启动时：skills.CompileAll(skill.DefaultCompileEnvironment())`,
+go test ./game/skills/          # TestSkillCatalogCompiles 编译全部定义
+# 服务 Init：skills.CompileAll(skill.DefaultCompileEnvironment())，失败返回错误`,
 	},
 	{
 		Name: "mods", Aliases: []string{"mod", "kit-mods"},
@@ -196,6 +208,24 @@ roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
 services:
   game:
     mods: [configdata, etcd, redis, mongo, nats, dataengine, nest, saga]`,
+	},
+	{
+		Name: "services", Aliases: []string{"framework-services", "hosted-services", "uses"},
+		Summary: "把托管框架服务（排行、邮件、聊天……）接进工程：services.<name>.framework 与 uses",
+		Usage: `# roost.yaml 里加一个托管服务进程，并让业务服务 uses 它，然后
+roost project sync`,
+		Configuration: `托管框架服务是 roost-core service/ 里现成的服务，共九个：account、chat、mail、match、session、activity、global、platform、rank。services.<name>.framework: <服务> 把一个进程声明为该托管服务（没有业务 Service，redis、nats 自动补齐，match、activity 另补 etcd）；它的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go，只生成一次、默认全部拒绝，doctor 的 collaborators:<name> 提示还没实现的。业务服务的 services.<svc>.uses: [<name>] 装配对应 ClientMod，并在 internal/service/<svc>/framework_clients_gen.go 生成类型化访问器（例如 Rank(registry) 返回 rank.Rank），在 Init 里取一次保存。已有工程接入一个：按下面改 roost.yaml 后 roost project sync（新服务的配置、部署与协作者文件随之生成），再 roost project doctor。roost project new -template game 一次生成全部九个并接到第一个业务服务。说明见生成工程的 docs/ROOST_YAML.zh-CN.md 与 docs/SERVICES.zh-CN.md。`,
+		Example: `# roost.yaml：把排行接进已有的 game 服务
+services:
+  game:
+    mods: [configdata, nest]
+    uses: [rank]
+  rank:
+    framework: rank
+# 然后
+roost project sync
+# game 的 Init 里
+ranks, err := Rank(registry) // internal/service/game/framework_clients_gen.go`,
 	},
 	{
 		Name: "dao", Aliases: []string{"database"},
@@ -311,7 +341,7 @@ roost generate`,
 		Name: "saga", Aliases: []string{"transaction", "cross-service"},
 		Summary:       "生成跨服务 Saga 定义、步骤、补偿和注册骨架",
 		Usage:         `roost add saga <name> -service <service> -steps <step1,step2,...>`,
-		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
+		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
 		Example: `roost add mod saga -service game
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost generate`,

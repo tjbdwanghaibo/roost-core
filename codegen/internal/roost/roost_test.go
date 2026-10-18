@@ -11,8 +11,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -1353,7 +1355,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 2 {
+	if len(paths) != 3 {
 		t.Fatalf("created paths = %v", paths)
 	}
 	definition, err := os.ReadFile(filepath.Join(root, "game", "skills", "fireball.json"))
@@ -1371,6 +1373,84 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	}
 	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-core/gameplay/skill")) {
 		t.Fatalf("Skill catalog must use the stable package:\n%s", catalog)
+	}
+}
+
+// 技能目录在生成工程里必须有地方编译：add skill 首次生成 catalog.go 时一并生成 catalog_test.go，用框架的正式
+// 加载路径（CompileAll → skill.Parse / skill.Compile）编译全部 JSON，写坏的定义在 go test 就失败，而不是等到业务
+// 自己接上编译或上线后第一次施放。已有 catalog.go、还没有测试的工程，下一次 add skill 补上测试。
+func TestAddSkillGeneratesACatalogTest(t *testing.T) {
+	root := copyOfNewProject(t, "bare")
+	paths, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(paths, "game/skills/catalog_test.go") {
+		t.Fatalf("created paths = %v, want game/skills/catalog_test.go", paths)
+	}
+	test, err := os.ReadFile(filepath.Join(root, "game", "skills", "catalog_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"func TestSkillCatalogCompiles(t *testing.T)", "CompileAll(skill.DefaultCompileEnvironment())"} {
+		if !bytes.Contains(test, []byte(want)) {
+			t.Errorf("catalog_test.go missing %q:\n%s", want, test)
+		}
+	}
+	// 已有目录、没有测试：下一次 add skill 补上；已有测试（业务文件）不改写。
+	if err := os.Remove(filepath.Join(root, "game", "skills", "catalog_test.go")); err != nil {
+		t.Fatal(err)
+	}
+	paths, err = Add(root, AddOptions{Kind: "skill", Name: "IceBolt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(paths, "game/skills/catalog_test.go") || slices.Contains(paths, "game/skills/catalog.go") {
+		t.Fatalf("second add paths = %v, want the missing test added and catalog.go left alone", paths)
+	}
+	custom := []byte("package skills\n\n// business-owned\n")
+	if err := os.WriteFile(filepath.Join(root, "game", "skills", "catalog_test.go"), custom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "skill", Name: "Heal"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "game", "skills", "catalog_test.go")); !bytes.Equal(got, custom) {
+		t.Fatalf("add skill rewrote the business-owned catalog_test.go:\n%s", got)
+	}
+}
+
+// 端到端：生成的目录测试真的编译 JSON。把火球的 flow 改成不存在的流程后，go test ./game/skills/ 与 doctor 的
+// skills:catalog 都失败并带框架编译器的原话（修前 build / test / doctor 全部通过，只有手动调用 CompileAll 才报错）。
+func TestSkillCatalogTestRejectsABrokenDefinition(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a generated project")
+	}
+	root := copyOfNewProject(t, "bare")
+	if _, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"}); err != nil {
+		t.Fatal(err)
+	}
+	useLocalRoostCore(t, root)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if item, ok := checkSkillCatalog(ctx, root); !ok || item.Status != StatusOK {
+		t.Fatalf("fresh Skill catalog: %+v (reported %v)", item, ok)
+	}
+	path := filepath.Join(root, "game", "skills", "fireball.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := bytes.Replace(raw, []byte(`"flow": "finish"`), []byte(`"flow": "explode_everything"`), 1)
+	if bytes.Equal(broken, raw) {
+		t.Fatal("fireball.json changed shape; update this test")
+	}
+	if err := os.WriteFile(path, broken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item, ok := checkSkillCatalog(ctx, root)
+	if !ok || item.Status != StatusFail || !strings.Contains(item.Detail, `unsupported flow "explode_everything"`) {
+		t.Fatalf("broken Skill definition: skills:catalog = %+v (reported %v); want a FAIL quoting the compiler", item, ok)
 	}
 }
 
@@ -1483,6 +1563,84 @@ func TestAddSagaRequiresSteps(t *testing.T) {
 	}
 	if _, err := Add(root, AddOptions{Kind: "saga", Name: "AllianceRally"}); err == nil {
 		t.Fatal("expected missing steps to fail")
+	}
+}
+
+// Saga 按 Definition.Steps 的下标推进、按下标倒序补偿，所以 -steps 的书写顺序
+// 就是业务顺序：生成物必须原样保留，重复的步骤名报错而不是被静默合并。
+func TestAddSagaKeepsDeclaredStepOrder(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		steps string
+		want  []string
+	}{
+		{name: "gift_gold", steps: "debit,credit", want: []string{"debit", "credit"}},
+		// roost help saga 里的示例顺序。
+		{name: "cross_trade", steps: "reserve, deduct ,deliver", want: []string{"reserve", "deduct", "deliver"}},
+	} {
+		var out bytes.Buffer
+		if err := Run([]string{"add", "saga", tc.name, "-steps", tc.steps, "--root", root}, &out, &out); err != nil {
+			t.Fatalf("add saga %s: %v\n%s", tc.name, err, out.String())
+		}
+		raw, err := os.ReadFile(filepath.Join(root, "saga", tc.name, "definition.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "{Name: \"") {
+				got = append(got, strings.SplitN(strings.TrimPrefix(line, "{Name: \""), "\"", 2)[0])
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("saga %s Definition step order = %v, want %v (as given by -steps %q)", tc.name, got, tc.want, tc.steps)
+		}
+	}
+}
+
+func TestAddSagaRejectsDuplicateSteps(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = Run([]string{"add", "saga", "rally", "-steps", "reserve,deduct,reserve", "--root", root}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), `duplicate saga step "reserve"`) {
+		t.Fatalf("duplicate -steps accepted or unclear error: %v", err)
+	}
+	// 只差大小写的两个名字生成同一个蛇形步骤名与同一组 topic，同样是重复。
+	if _, err := Add(root, AddOptions{Kind: "saga", Name: "Rally", Steps: []string{"ReserveTroops", "reserve_troops"}}); err == nil || !strings.Contains(err.Error(), `duplicate saga step "reserve_troops"`) {
+		t.Fatalf("steps that collide after snake_case accepted or unclear error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "saga", "rally")); !os.IsNotExist(err) {
+		t.Fatalf("rejected saga left files behind: %v", err)
+	}
+}
+
+// -template 把“第一个声明的业务服务”接到九个托管框架服务上；-services 的书写
+// 顺序因此有含义，不能先排序再取第一个。
+func TestProjectNewTemplateWiresFirstDeclaredService(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	var out bytes.Buffer
+	if err := Run([]string{"project", "new", "planet", "-module", "example.com/planet", "-out", target, "-services", "world,game", "-template", "game", "--skip-deps"}, &out, &out); err != nil {
+		t.Fatalf("project new: %v\n%s", err, out.String())
+	}
+	manifest, err := LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Services["world"].Uses) == 0 || len(manifest.Services["game"].Uses) != 0 {
+		t.Fatalf("template wired uses world=%v game=%v, want the first declared service (world)", manifest.Services["world"].Uses, manifest.Services["game"].Uses)
 	}
 }
 

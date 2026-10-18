@@ -156,7 +156,8 @@ scenarios:
           param:
             item_id: 2001
         # The server-wide window: the clear above contributed one point to it,
-        # and the replayed clear contributed none. Both halves are asserted in
+        # and the replayed clear contributed none (only the call that paid the
+        # reward contributes). Both halves are asserted in
         # the action, because "the replay was free" is only visible as an
         # exact count.
         - action: activity_standing
@@ -217,9 +218,9 @@ scenarios:
             # actually wired into replication rather than just into Mongo.
             fields: level,exp,attr_base,attr_final,pos_x,equipment
             timeout: 10s
-        # The leaderboard. The clear was counted through the rank service with
-        # the run id as the request id, so the replay above did not count a
-        # second time — the board is where that shows.
+        # The leaderboard. The board holds the player's clear count as kept by
+        # the reward transaction (UpdateMax of a snapshot), so the replay above
+        # did not count a second time — the board is where that shows.
         - action: rank_top
           param:
             limit: 10

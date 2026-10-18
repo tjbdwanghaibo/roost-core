@@ -68,9 +68,11 @@ type config struct {
 		Replicas              int            `config:"replicas" default:"1" min:"1" example:"1"`
 		ResultDurable         string         `config:"result_durable" default:"roost-saga-coordinator"`
 		Result                consumerConfig `config:"result_"`
-		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上。
-		StartEffectStream   string         `config:"start_effect_stream" default:"ROOST_EFFECTS" example:"{PROJECT}_EFFECTS"`
-		StartEffectPrefix   string         `config:"start_effect_prefix" default:"roost.effect" example:"{project}.effect"`
+		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，
+		// 效果流只在一处配置（生成配置不再写这两个键）。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects
+		// 相同（CheckConfigAcrossMods）；只跑协调器、没有 DataEngine 的进程可以用它们指向别的流。
+		StartEffectStream   string         `config:"start_effect_stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`
+		StartEffectPrefix   string         `config:"start_effect_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
 		StartEffectDurable  string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
 		StartEffect         consumerConfig `config:"start_effect_"`
 		ResultEffectStream  string         `config:"result_effect_stream" help:"不写取 start_effect_stream"`

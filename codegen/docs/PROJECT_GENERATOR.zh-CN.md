@@ -263,7 +263,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `lock` | — | 进程内实体锁管理 |
 | `ops` | — | health、ready、metrics 和 admin HTTP |
 | `statslog` | — | 运行时、Entity 和 Nest 周期统计 |
-| `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线） |
+| `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线）；自带运维命令 `configdata.reload` / `configdata.rollback` / `configdata.status`（经 ops `/admin/execute`） |
 | `etcd` | — | 注册发现、watch、选主和本地镜像 |
 | `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
@@ -287,7 +287,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `dataengine.effects.subject_prefix` / `stream` | `planet.effect` / `PLANET_EFFECTS` | `roost.effect` / `ROOST_EFFECTS` |
 | `saga.database` | `planet_saga` | `saga` |
 | `saga.subject_prefix` / `stream` | `planet.saga` / `PLANET_SAGA` | `roost.saga` / `ROOST_SAGA` |
-| `saga.start_effect_prefix` / `start_effect_stream` | `planet.effect` / `PLANET_EFFECTS`（与 Data Engine 写的那条一致） | `roost.effect` / `ROOST_EFFECTS` |
+| `saga.start_effect_prefix` / `start_effect_stream` | 不写：取 `dataengine.effects.subject_prefix` / `stream`（效果流只配一处） | 同左 |
 | `remote_entity.mongo.database` | `planet_remote` | `remote_entity` |
 | `etcd.service_prefix` | `/planet/services/` | etcd 包的缺省 |
 
@@ -352,6 +352,7 @@ Makefile 也提供了对应入口，例如：
     make new-endpoint NAME=EnterGame HANDLER=player LIFECYCLE=Player   # 登录边界：GetOrCreate
     make new-skill NAME=Fireball
     make new-dao NAME=Player ENTITY=Player
+    make new-timer ENTITY=Player
     make new-table NAME=Item
     make new-service NAME=chat MODS=etcd,redis,nats
     make new-saga NAME=AllianceRally SERVICE=game STEPS=ReserveTroops,CreateMarch,CreateRally
@@ -378,6 +379,19 @@ Entity wire 会生成 Component/DAO getter，
 bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
+
+### 6.y 按实体的持久定时器：`roost add timer`
+
+    roost add timer --entity Player          # 组件名缺省 timer；--component BuffClock 改名
+
+到点要做的事（Buff 到期、建造完成）用它，不用 `Delay_` Sender（不持久）也不只存到期时刻。清单写 `timers.player`
+（组件名、组件类型号、服务、节点所在 DAO）；add 时在 `db/def/player.go` 的 `PlayerDao` 加 `Timers` / `TimerSeed` 两个字段、
+在 `entity.go` 加组件字段——这两处之后归业务。`make sync` 重写的生成部分：`game/entities/player/timer_component_gen.go`
+（组件与驱动变量）、`db/def/player_timer_node_gen.go`（节点类型）、`game/handler/tick_player_timer_gen.go`（到期 Tick 的
+Nest handler）与 bootstrap 里该服务的 `kitentitytimer.NewMod(EntityAccess, player.TimerDriver)`（依赖 Nest，先于它停止，
+停机预算多一个 Mod 的 3s 保底）。业务只写 `game/entities/player/timer_handlers.go`（只在缺失时创建）：类型号与回调。驱动只给
+最早期限到了的那一个已加载实体投递 Tick，离线期间到期的在加载后只触发一次（框架不追帧，回调参数带原定期限、触发时刻与补触发
+标志）。Remote 托管与 noPersist 实体拒绝。细则见[参考“roost add timer”](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)。
 
 ## 7. ID 管理
 
@@ -489,11 +503,14 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 - `config-schema:<service>`：工程能编译时 `go build` 一次进程，对每个服务运行 `<bin> <service> --print-config-schema` 读回全部声明（含业务声明），检查开发配置、生产示例与 k8s Secret 示例——值不合声明、框架段里没有任何声明的键为 FAIL，别的服务的键为 WARN，只属于业务的段里拼错的键为 FAIL。
 - `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
+- `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
+- `remote-runtime`：工程里有 `remote=managed` 实体时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
+- `skills:catalog`：工程有 `game/skills/catalog.go` 时运行 `go test ./game/skills/`（生成的 `catalog_test.go` 用 `CompileAll` 编译全部技能 JSON），写坏的定义为 FAIL 并带编译器原话；没有 `catalog_test.go` 为 WARN（下一次 `roost add skill` 补上）。工程编译不过时不报这一项。
 - `config-reads`：扫工程源码，直接调 viper 读方法 / `app.Config*` 单键读取、或声明了却没有任何代码读的字段为 FAIL（与 app / wiring 的守卫同一份实现 `internal/configschema/guard.go`）。
 - `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
 - `shutdown:<service>`：见 [§17](#17-生产部署生成物)。
 
-进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明），不报没有声明的键。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
+进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 只按声明查键，跨键 / 跨 Mod 规则看 doctor 的 `config-check:<service>` 或进程 `--check-config`。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
 
 ## 14. 生产检查清单
 

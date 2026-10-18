@@ -14,6 +14,8 @@
 
 Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 事务与正式 DataEngine 持久链路；只读方通过 SnapshotClient/Mirror 获取快照，不因缓存存在就获得写许可。ownerroute 解决路由/拥有者定位，发现信息不等于持久 fence。
 
+把实体声明成 Remote 托管要同时改三处：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`（生成器漏换时报错并点名要换的字段），以及写它的 Nest 服务装 `remote_entity` Mod（`wiring/remoteentity`）。没有 Remote 运行时的进程不会把这类写当本地写：Nest 派发与 DataEngine 删除一律返回 `entity.ErrNoRemoteRuntime`（包裹 `ErrRemoteWriteCapabilityDisabled`，文本给出加 Mod 的命令）。生成工程里 `roost generate` 与 doctor 的 `remote-runtime` 项在带 Nest 的服务全都没有 `remote_entity` 时拒绝并给出 `roost add mod remote_entity -service <service>`；只有部分服务缺时提示（实体由哪个服务写，静态上看不出）。
+
 ## 2. 写入生命周期
 
 准备参与实体和写许可 → 业务池 handler 修改 DAO → 事务局部变更形成 Remote 批次 → 持久确认 → finalizer 收尾/释放。参与者必须判断本事务变化，不能用对象全局 dirty 推断。取消等待不撤销已经准入的持久写；结果未知保留 fence/恢复责任。

@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开170个包目录的职责映射</summary>
+<summary>展开172个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -59,6 +59,7 @@
 | [framework/hotcode/plugintest](../../framework/hotcode/plugintest) | [公共基础设施](impl/14-foundation.md) | 0 | 3 |
 | [framework/manager](../../framework/manager) | [App 与生命周期](impl/01-app-lifecycle.md) | 2 | 9 |
 | [framework/nest](../../framework/nest) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 22 | 87 |
+| [framework/nest/entitytimer](../../framework/nest/entitytimer) | [时间与定时器](impl/10-time.md) | 2 | 3 |
 | [framework/nestwal](../../framework/nestwal) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 11 | 22 |
 | [framework/remoteentity](../../framework/remoteentity) | [Remote Entity 与 Mirror](impl/05-remote-mirror.md) | 26 | 108 |
 | [framework/saga](../../framework/saga) | [Saga 长事务](impl/06-saga.md) | 14 | 62 |
@@ -156,6 +157,7 @@
 | [wiring/configdata](../../wiring/configdata) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 3 |
 | [wiring/dataengine](../../wiring/dataengine) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 13 |
 | [wiring/directory](../../wiring/directory) | [次核心：Service 领域能力](impl/09-services.md) | 1 | 1 |
+| [wiring/entitytimer](../../wiring/entitytimer) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/etcd](../../wiring/etcd) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/examples/split](../../wiring/examples/split) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |
 | [wiring/global](../../wiring/global) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 1 |

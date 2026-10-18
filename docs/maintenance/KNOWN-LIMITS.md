@@ -44,11 +44,11 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 `guild.ValidateName`（[模板](../../demo/game/entities/guild/roster_component.go.tmpl)）拒绝空、全空白、含控制字符与非法 UTF-8 的名字，端点在保留 ID 之前调用。**长度上限**与**全服重名**：维护者 2026-10-17 决定是业务逻辑，框架不处理，demo 也不实现——名字只受协议帧上限约束，两个公会可以同名、靠 `guild_id` 区分。业务需要长度上限 / 敏感词时加在 `ValidateName` 同一处；需要全服唯一时参考框架已有的 `service/directory`（`wiring/directory` 装配；先 Reserve 再创建、成功 Commit、失败 Cancel，预约带过期），用法写在 [Service 篇 §4](../framework/guide/09-services.md#4-关键业务边界)、[WALKTHROUGH](../../demo/WALKTHROUGH.md) 公会创建一段与模板注释。
 
-## 新用户试用第四轮（2026-10-17 登记；1、2 已修复，3 转 DESIGN-TODO D11）
+## 新用户试用第四轮（2026-10-17 登记；1、2 已修复，3 按 DESIGN-TODO D11 方案 B 实施）
 
-基线 `300d728a`（origin/main）。先复核第三轮三项：依赖带入的 Mod 配置段、`project next` 按工程现状填名字、self_sync 默认 packer，用 main 构建的 CLI 新建工程实测均已解决（零手写 packer 时客户端照样收到全量 + 每次修改的增量）。随后按新手流程做“双倍金币卡”（限时 Buff，按业务时间到期），在共享隔离环境起真实进程联调时确认下面三项。2026-10-17 复核三项均属实：1、2 先红后绿修复（`b717fd14`、`990af957`），3 需要产品方向，登记为 [DESIGN-TODO D11](DESIGN-TODO.md#d11-按实体的持久定时器接入)。
+基线 `300d728a`（origin/main）。先复核第三轮三项：依赖带入的 Mod 配置段、`project next` 按工程现状填名字、self_sync 默认 packer，用 main 构建的 CLI 新建工程实测均已解决（零手写 packer 时客户端照样收到全量 + 每次修改的增量）。随后按新手流程做“双倍金币卡”（限时 Buff，按业务时间到期），在共享隔离环境起真实进程联调时确认下面三项。2026-10-17 复核三项均属实：1、2 先红后绿修复（`c3892c11`、`b3c9159a`），3 需要产品方向，登记为 [DESIGN-TODO D11](DESIGN-TODO.md#d11-按实体的持久定时器接入)。
 
-### 1. 生成配置里的总线 / Data Engine 命名是所有工程共用的固定值（已修复，`b717fd14`）
+### 1. 生成配置里的总线 / Data Engine 命名是所有工程共用的固定值（已修复，`c3892c11`）
 
 **处置**：决定“与谁共享”的键全部按工程名派生——`nats.prefix: <project>`、`syncbus.prefix: <project>.sync`、`dataengine.database` 与 DAO 骨架 `db=` 同一规则（`daoDatabaseName`）、effects / saga 的主题与流 `<project>.effect` / `<PROJECT>_EFFECTS`、`<project>.saga` / `<PROJECT>_SAGA`、`saga.database: <db>_saga`、`remote_entity.mongo.database: <db>_remote`、`etcd.service_prefix: /<project>/services/`。规则写在 Wiring Mod 声明的 `example` 占位符里，新建与后加 Mod 的段同一规则（[PROJECT_GENERATOR §5](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#5-wiring-mod-自动装配)）；回归 `TestGeneratedSharedResourceNamesFollowTheProject`。与登记时建议的差异：Data Engine 库与 DAO 同库（`<project>`，不是 `<project>_engine`），沿用改前“两者同为 game”的布局。**剩余限制**：已有工程配置不改写，旧工程之后追加的段会写新名字、与已有段不一致，需要手工统一（CHANGELOG 升级说明）；doctor 不对“仍是框架固定值”给警告：维护者 2026-10-17 确认目前没有旧工程，不做。
 
@@ -61,7 +61,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **建议修法**：与 D9 方案 B 一致，生成时按工程名填这几项（`nats.prefix: <project>`、`dataengine.database: <project>_engine` 一类、effects / saga 的 subject 与 stream 带工程名）；已有工程不改写已有值，doctor 可以对仍是框架缺省值的给警告。
 
-### 2. `roost add endpoint` 只能从请求字段取参数，服务器决定的值（业务时间）无处可放（已修复，`990af957`）
+### 2. `roost add endpoint` 只能从请求字段取参数，服务器决定的值（业务时间）无处可放（已修复，`b3c9159a`）
 
 **处置**：handler 参数名 `nowUnix` / `nowUnixMilli`（`int64`）由 endpoint 骨架从 `app.BusinessClock(controller.Registry()).Now()` 填入，不读请求；其他请求里没有的参数照旧拒绝，报错写明服务器决定的值不放进请求（[CODEGEN_REFERENCE endpoint 段](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)）；回归 `TestEndpointFillsBusinessTimeFromTheServer`。只识别业务时间这一类约定名；其他服务器决定的值（玩家状态、配置）按约定在 handler 里读，不做参数，没有 `--server-param` 一类的通用标记。
 
@@ -72,7 +72,21 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **建议修法**：endpoint 生成器认识“服务器提供”的参数，例如约定名 `now` / `nowUnix` / `nowUnixMilli`（`time.Time` / `int64`）由业务钟填入，或 `--server-param nowUnixMilli=business-clock`；其他请求里没有的参数，报错写明“业务时间等服务器决定的值不要放进请求，写在 endpoint 里”，并给出手写示例。
 
-### 3. 没有可复用的持久定时器接入（按实体的到期动作）（待维护者决定，[D11](DESIGN-TODO.md#d11-按实体的持久定时器接入)）
+### 3. 按实体的持久定时器接入（已实施，D11）
+
+**处置**：维护者 2026-10-17 决定 [D11](DESIGN-TODO.md#d11-按实体的持久定时器接入) 方案 B 与离线语义（框架不追帧，离线期间到期的在加载后只触发一次，补算由业务按回调参数自己做），已实施（`a2b4f4d8`、`5581deeb`）：`roost add timer --entity <Entity>` 生成组件、节点类型、Tick handler 与驱动接线，驱动在 core（`framework/nest/entitytimer`）按已加载实体的最早期限只给到期实体投递 Tick；game-demo World 迁入同一生成器。用法见 [guide/10-time §4](../framework/guide/10-time.md#4-按实体的持久定时器)。
+
+**剩余限制**：
+
+- **离线实体不准点**：驱动只索引已加载实例，离线（未加载）实体到期不会被唤醒，只在下次加载时补触发一次。维护者 2026-10-18 决定不做“离线也准点”的全局驱动，由业务层处理：必须准点的动作（例如到点给离线玩家发邮件）在业务里发送 Nest 消息（发给目标实体或服务，由它在执行时处理），不要求准点的在加载后的回调里按 `Fire` 参数自己追帧。
+- **卸载与已入队 Tick 的窗口**：驱动在投递前核对实例（已移除或被同 ID 新实例取代就丢弃），但投递准入之后、消息执行之前实例被卸载时，Nest 按“发给未加载实体的消息”冷加载它，于是加载后补触发一次（与发给该实体的任何消息相同；删档实体加载失败、不触发）。驱动自己不会再对已卸载实例发起投递。维护者 2026-10-18 决定接受这个窗口，不给 Nest 加“只投给已加载实体”的发送选项（会扩大 Nest 契约）。
+- **构建了但没发布的实例**：实例在 `OnInitFinish`（发布之前）向驱动报告；发布失败（同 ID 已存在等，框架不调用其 `OnDestroy`）且带有期限的实例留下一个条目，到期时因同 ID 已有别的实例而丢弃；同 ID 没有实例时按“加载中”投递，Nest 照常冷加载该实体并补触发。条目只在到期前占内存，不会重复投递。
+- **Remote 托管与 noPersist 实体不支持**：add 时拒绝。Remote 实体所有权在进程间迁移，迁移中的到期语义未定义；要支持需另行设计（与 DESIGN-TODO D11 方案 C 同一方向）。
+- **去掉 `timers` 条目后生成部分不自动删除**：与其他按清单渲染的文件相同，需要手工删 `*_component_gen.go`、节点类型、Tick handler 及 DAO / 实体里的两处字段；维护者 2026-10-18 决定维持现状、不加回收逻辑。
+- **game 服务多一个 Mod**：生成的停机总预算按 Mod 数计，game-demo 的 `shutdown.total_timeout` 由 114s 变为 117s（实体定时器 Mod 本身停止是即时的，这 3s 是每个 Mod 的保底）；维护者 2026-10-18 决定接受，不改 app 保底规则。
+- **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader（卸载时记下 DAO 持久字节、按 `RestorePersisted` 水合、经 EntityManager 发布）代替 DataEngine + Mongo，删档用测试里的删除准入门；节点是普通 DAO 字段，Mongo 往返由 DataEngine 自身的测试覆盖。真实 Mongo 下的定时器重启演练尚未做。
+
+**原登记（2026-10-17）**：
 
 **现象**：`infra/base/timer.Scheduler` 是宿主驱动的通用堆：期限持久化、加载后重建、谁来 Tick 都由业务决定（[guide/10-time §3](../framework/guide/10-time.md#3-scheduler)）。现成的接入只有 game-demo World 的 `TimerComponent`（模板 263 行，期限存 `WorldDao.Timers`），由服务进程的 ticker 定期发 `Sync_TickWorldTimers` 驱动；它与 World 的活动阶段写在一起，生成器没有对应命令。
 
@@ -80,31 +94,29 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **需要维护者决定**：是否提供通用的 DAO 期限组件（例如 `roost add timer --entity Player` 生成节点 DAO 与组件，框架负责重建与持久化钩子），以及按实体的 Tick 由谁驱动（进程 ticker 按最早期限只给到期实体发消息，而不是每秒给所有在线实体发）。
 
-## game-demo 副本排行：超过去重环后重放会重复计分（已确认，未修复）
+## game-demo 副本排行：超过去重环后重放会重复计分（已修复）
 
-**类别与基线**：demo 接入问题，非 rank 公开契约的实现缺陷；在 `91606e48` 主线生成的正式 game-demo 上确认。rank 的 `UpdateAdd` 只记同一玩家最近 8 个请求 ID（[types.go](../../service/rank/types.go) 的 `maxAppliedRequests`），不是永久的通关账本。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 每次成功领取或重放都提交 `+1`，而 [ranking](../../demo/game/ranking/ranking.go.tmpl) 的注释承诺同一局只计一次，超出了下层契约。
+**类别与基线**：demo 接入问题，非 rank 公开契约的实现缺陷；在 `91606e48` 与 `cac62833` 主线生成的正式 game-demo 上确认。rank 的 `UpdateAdd` 只记同一玩家最近 8 个请求 ID（[types.go](../../service/rank/types.go) 的 `maxAppliedRequests`），是去重环、不是通关账本；[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 原来每次成功领取或重放都提交 `+1`（为了补上“奖励已提交、排行没提交就崩溃”的那一分），而 [ranking](../../demo/game/ranking/ranking.go.tmpl) 承诺同一局只计一次。
 
-**触发与结果**：同一玩家在奖励领取窗口内连续成功通关 9 局，再重放第一局。期望经验不重复、排行仍为 9；实际经验账本仍有 9 条、World 发放经验仍为 900，排行却为 10。第一局的 `clear:<runID>` 已被后来的 8 个请求挤出去，奖励事务返回 `Claimed=false` 后端点仍然调用 rank `UpdateAdd`。SLG 中若照此接活动积分或赛季榜，会破坏排名公平；本复现没有证明重复经验或榜单奖励资产已被发放。
+**触发与结果（修前）**：同一玩家在奖励领取窗口内连续成功通关 9 局，再重放第一局：经验账本仍 9 条、World 发放经验仍 900，排行却为 10（第一局的 `clear:<runID>` 已被后来 8 个请求挤出去重环，奖励事务返回 `Claimed=false` 后端点仍调用 `UpdateAdd`）。审查附的探针（rank 自带 Redis 替身）修前原文：`nine clears then replaying the first gives 10 leaderboard points; want 9 (reward claims remain 9)`；新模板回归（真实 Redis 上的 rank RedisStore，10 局后重放第一局）修前原文：`ten clears then replaying the first gives 11 leaderboard points; want 10 (reward claims remain 10)`。
 
-**可执行复现**（仓库根目录，使用 go.mod 指定的 Go 工具链）：
+**根因**：与 `a2afea41` / `ce0d5fa5` 修过的两本领奖账本同一类——一个会遗忘的去重存储（这里按条数遗忘），遗忘点与重放的准入窗口（领奖窗口 4h + 宽限）没有对齐。
 
-```bash
-bash scripts/review-dungeon-ranking.sh
-```
+**修复**：不新增第三本有期限的账本，而是让排行的准入就是奖励的准入。领奖事务在记账本、发经验的同一笔事务里给 `PlayerDao.DungeonClears[赛季]` 加一（只在真正付款时），首次领取与重放都返回当前通关数 `ClaimResult.Clears`；端点用 `UpdateMax`、不带 requestID 把榜抬到这个数。窗口外的一局在计数之前就被执行时间的窗口判断拒绝；窗口内的重放只重复提交同一个快照；重复、并发、乱序快照不加分也不降分；排行提交失败后，重放或下一局的快照把漏掉的分补上。通关数不裁剪，按赛季分开（改 `ranking.CurrentSeason` 后新榜从 0 开始）。`handlerClaimDungeon` 多一个 `season` 参数（生成 Sender 随之变化）；PlayerDao 新增持久字段 `dungeon_clears`。
 
-[脚本](../../scripts/review-dungeon-ranking.sh) 用正式生成器创建隔离消费者，注入[端点行为用例](../../scripts/testdata/dungeon-ranking/replay_test.go.txt)，调用真实 Controller、生成 Sender、Nest、Player/World handler 和 rank RedisStore；复用 rank 自身的 Redis 替身，session 返回固定的成功终态，提交器只返回成功。**当前预期退出 1**，失败断言为 `nine clears then replaying the first gives 10 leaderboard points; want 9 (reward claims remain 9)`；它是显式运行的已知缺陷回归，不纳入普通 `go test ./...`。脚本打印临时工程与日志目录，不改当前 checkout、不连接外部服务；这不是实际 Redis Lua、WAL fsync、Mongo 或服务间网络验收。rank 的现行去重环、UpdateAdd 去重及榜/赛季隔离的 3 条定向 race 回归通过。
+**回归**：模板 [finish_dungeon_test.go](../../demo/game/controllers/player/finish_dungeon_test.go.tmpl) 的 `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（`ROOST_REVIEW_REDIS`，挂入 `scripts/test-demo-generated.sh`）：10 局后重放第一局、并发重放 4 局旧的、一局提交排行失败后重放补报，榜分别为 10、10、11；[claim_dungeon_test.go](../../demo/game/handler/claim_dungeon_test.go.tmpl) 的 `TestTheClearCountMovesOnlyWhenARunIsPaid`（不需外部依赖）：10 局计数、重放不加、窗口外拒绝不计数、不带赛季拒绝、换赛季从 1 起、持久化字节恢复后计数不变。审查的探针脚本已由这两条取代并删除。
 
-**规避与建议**：不要用这条 demo 接法承诺长期累计积分；仅把 `+1` 放进 `Claimed=true` 分支会丢掉“奖励已提交、排行未提交就崩溃”的补记能力，也不是完整修复。单纯加大 8 个槽位仍没有对齐允许重放的整个窗口。
+**升级**：线上尚未部署，不做兼容：已用旧 demo 跑出的 `clears` 榜是 `UpdateAdd` 累加值，与新的通关数快照不同源，升级时清空该榜（rank 前缀下 `clears` 榜的键），玩家通关数从 0 开始。
 
-建议在奖励同一事务内维护独立于可裁剪领取账本的持久累计通关数，首次领取与重放均返回当前累计值，rank 用不带请求去重键的 `UpdateMax` 写累计快照：重复与乱序快照不多加、不降分，下次请求可补齐漏报。**不能把同一 runID 同时用作不同累计快照的去重键**，否则旧收据会提前返回，较新的累计值仍不能补报。另一方案是保存覆盖整个允许重放窗口的持久计分收据，并明确定义保留期限与容量。
+**边界**：UpdateMax 遇到相同值保留较早的 tie，所以补报的那一分在同分时按补报时间而不是原通关时间排序。累计值按赛季而不是终身划分（见下“维护者决定”）。
 
-**待定方向与验收**：累计值按终身还是赛季划分、现有分数的初始化来源、增加 DAO 字段后的 schema 处理需要先确定，不在这份证据提交中改变数据模型。修复至少验证超过 8 个后续请求的重放、并发重复、累计快照乱序、领取后排行失败的补报、实体卸载重载和赛季切换。领取账本长度会裁剪，不能作为累计值；旧账本也不能可靠重建历史累计值。
+**维护者决定（2026-10-18，按推荐）**：通关数按赛季计（已实施）。理由：与榜的 Season 身份一致，换季不带旧数；终身累计要一个字段并在换季时另做初始化，不采用。
 
 ## game-demo 活动结算榜：旧累计回复覆盖新分数（已修复）
 
 **类别与基线**：demo 并发接入问题，`91606e48` 主线的 `ActivityRunner.Contribute` 用无条件 ZADD 写协调器返回的累计分。协调器允许并发调用，回复没有顺序保证；不是 activity 框架计分丢失，也不是业务奖励额度的选择。
 
-**触发、证据与影响**：同一玩家的两个不同通关请求先后在正式协调器提交，延迟第一条回复；第二条回复先把真实 Redis 结算榜写为 2，再放行第一条，榜降回 1，而协调器 Participant.Score 仍为 2。修前回归原文：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`。结算读取这份 Redis 榜，SLG 竞赛可能因此排错名次、少发或错发活动邮件；没有声称已复现实际邮件赔付。
+**触发、证据与影响**：同一玩家的两个不同通关请求先后在正式协调器提交，延迟第一条回复；第二条回复先把真实 Redis 结算榜写为 2，再放行第一条，榜降回 1，而协调器 Participant.Score 仍为 2。修前回归原文：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`（2026-10-18 在 `cac62833` 主线模板生成的 game-demo 上用同一用例复核，红文相同）。结算读取这份 Redis 榜，SLG 竞赛可能因此排错名次、少发或错发活动邮件；没有声称已复现实际邮件赔付。
 
 **修复与回归**：Contribute 只加正分，因此用单键 Lua 调用 `ZADD GT` 原子保留较大累计值，首次写入仍可插入。[模板回归](../../demo/internal/service/game/activity_test.go.tmpl) `TestActivityBoardKeepsTheLatestCumulativeScore` 经正式 ActivityRunner、正式协调器（内存版本存储）及真实 Redis 固定上述回复顺序，修后应保持 2；无 Redis 时明确 skip。[生成工程脚本](../../scripts/test-demo-generated.sh) 已接入这条用例，可在有隔离 Mongo / Redis / NATS 的环境运行整套脚本；或在新生成并 replace 到当前 core 的 game-demo 里执行：
 
@@ -113,9 +125,117 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
   -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 ```
 
-**边界**：只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
+**边界**：`ZADD GT` 需要 Redis 6.2 及以上（共享隔离环境为 8.x）。只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
 
-## SLG 接入实践的验证范围
+## game-demo 活动贡献：同一局在后来的窗口重放会再计一次（已修复：只在首次付款时贡献）
+
+**类别与基线**：demo 接入问题，与上面副本排行同一类（去重范围没有覆盖重放的准入窗口），在本轮复核副本排行时发现，`cac62833` 主线模板。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 原来在领取与重放时都调用 `ActivityRunner.Contribute`；[Contribute](../../demo/internal/service/game/activity.go.tmpl) 按**调用时的业务时钟**选窗口（300 秒一个），协调器按（窗口, 玩家, `clear:<runID>`）去重。同一局在领奖窗口（4h）内、跨过窗口边界后重放，落进新窗口，键不同，再加一分；理论上一局最多可进 48 个窗口，并影响按名次发的活动邮件。
+
+**证据**：登记时的探针（生成工程里正式协调器 + 正式 ActivityRunner，临时工程，未入库）输出 `first window race-1792288200 score=1; replay of the same run in window race-1792288500 score=1 err=<nil>`。修复时的模板回归（正式端点，见下）修前原文：`first window race-1792292100 score=1; replay of the same run in window race-1792292400 score=1 activity="race-1792292400"; want 0 and no window (a replay contributes nothing)`。
+
+**维护者决定（2026-10-18，按推荐 A）**：只在奖励首次付款时贡献，与副本排行的做法一致——贡献由权威领奖事务里“真正付款”（`ClaimResult.Claimed`）这一事实驱动，重放（`Claimed=false`）不贡献。未采用的 B：按这局的结束时间选窗口、重放落回原窗口由协调器去重，并让 Contribute 只为当前窗口自动开窗、拒绝已关闭窗口的贡献（保留窗口内补报，但改动面更大，要另定协调器对已结束活动的拒绝语义与 30 分钟预留 TTL 的关系）。
+
+**修复**：端点在 `!result.Claimed` 时于排行提交之后直接返回，不调用 Contribute，响应不带 `ActivityID`。排行仍在重放时提交（它提交的是事务内通关数的快照，`UpdateMax` 重交无害）。Contribute 的注释写明协调器去重只在同一窗口内成立、调用方须每局只贡献一次。
+
+**代价（已接受，写在端点注释、WALKTHROUGH 与 CHANGELOG）**：付款之后、贡献之前进程崩溃或协调器调用失败，这一分永久丢失，重放不补；端点打 Warn 日志并写明不会重试。活动是尽力而为，补报若落到后来的窗口本来就记错了窗口。
+
+**回归**：模板 [finish_dungeon_test.go](../../demo/game/controllers/player/finish_dungeon_test.go.tmpl) 的 `TestAReplayContributesNothingToTheActivity`（无外部依赖，生成工程 `go test ./...` 即运行）：正式 Controller、生成 Sender、Nest 与 Player / World handler，正式 `svcactivity.Service`（内存版本存储，时钟可拨）；测试内的贡献方与正式 `Contribute` 走同一条协调器路径（`gameactivity.ID` 选窗口、`gameactivity.Key`、`ProgressRequestID`、窗口不存在时开窗再记），正式 Runner 在导入本包的 internal/service 包里，不能直接构造。断言：边界前一秒首次付款在窗口 W 记 1 分；时钟前进 300 秒重放同一局，新窗口为 0 且不报窗口；新窗口里新一局照常记 1 分；付款时贡献失败后重放不补。
+
+**同类排查（事务外、可能被重放重复提交的累计写入）**：副本排行（`UpdateMax` 通关数快照）与活动结算榜（`ZADD GT` 协调器累计快照）是单调快照，重交不加分；World `ExpGranted`、`DungeonClears` 在领奖事务内只随付款变化；邮件领取、购买发货（platform 回执 + Player 账本）、送礼 saga（回执）、升级邮件与活动结算邮件（请求 ID）都有账本或幂等键。World `PlayersEntered` 由每次成功的 EnterGame 加一（客户端丢回复后的重试也算），语义是登录次数而不是首次付款，不改；`MatchesFormed` 每次组队 Commit 后加一，没有重放路径。没有发现其他需要按“只在首次付款时”处理的写入。
+
+**边界**：只覆盖 demo 端点；协调器本身仍按窗口去重，业务若在别处直接调用 Contribute，须自己保证每局一次。
+
+## 新用户试用第五轮（2026-10-17 登记；三项均已修复）
+
+基线 `91606e48`（origin/main）。先复核第四轮两项已修复：新工程的 `nats.prefix`、`dataengine.database`、effects 主题与流按工程名派生（与 DAO `db=` 一致）；`roost add endpoint` 对 `nowUnixMilli` 参数生成从 `app.BusinessClock(controller.Registry())` 取值的代码，不再要求请求字段。随后按新手流程学配置表热更（策划改价不停服），在共享隔离环境起真实进程、经 ops `/admin/execute` 实测。正面结论：违反表规则的数据被整次拒绝、报错精确到表 / 行 / 字段 / 规则、旧快照继续服务；改价后下一次购买即按新价。
+
+### 1. 文档里“已修复（提交号）”指向 rebase 前的旧提交（已修复）
+
+**现象**：第四轮两项写的已修复提交号（b717fd14、990af957）只存在于 rebase 前的历史，main 上对应 `c3892c11`、`b3c9159a`；CHANGELOG 定时器一条的 f8851f4a 在 main 上是 `09846b5f`。
+
+**修复**：根包门禁 `TestDocumentedCommitsAreReachableFromHEAD`（[doc_commit_refs_gate_test.go](../../doc_commit_refs_gate_test.go)）：跟踪的 `*.md` 里反引号括起来的 7～40 位十六进制串（至少一个数字、一个 a～f）视为提交号，必须是 HEAD 的祖先；自检扫描 `cac62833` 必须报出 KNOWN-LIMITS 里的 b717fd14。修前现状扫描共 10 个解析不了（都是确有其事的提交，只是不在 main 历史里），门禁原样报红；逐个按补丁内容找到 main 上改动相同的提交并改正：KNOWN-LIMITS 的两处、CHANGELOG 的 f8851f4a 与 gapmap 分支实跑、REFACTOR-2026-10-17-timer-scheduler 的三处“原提交”、PERF-ROUND-20261015 的 1bc6dd46 / ca0cbddf、EXTERNAL-VERIFICATION 的 35ef33f9 / 5e60a03c（测时在分支上的，写明“分支上与 main 某提交改动相同的提交”）。豁免清单 `documentedCommitExemptions` 现为空；条目必须写明分支与理由，不再被引用或已可解析时门禁要求删掉。
+
+**限制**：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 main 历史里”，不查是不是文档所说的那个改动。分支上的文档引用本分支提交时，rebase 后同样会红：引用本轮改动时优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。
+
+### 2. 框架没有现成的配置表重载运维命令（已修复）
+
+**现象**：`wiring/configdata` 的 Mod 只注册 `*configdata.Store`；只有 game-demo 在 gm.go 里手写了 `gm.config.reload`，`hotcode` / `bus` 都有 `RegisterAdminCommands`，configdata 没有。
+
+**修复**：新增 `configdata.RegisterAdminCommands(reg, store)`（[admin.go](../../framework/configdata/admin.go)），注册 `configdata.reload {reason?, dry_run?}`、`configdata.rollback {reason?}`、`configdata.status {}`；configdata Mod 在 Provide 时自动挂到 App 的 admin 注册表（缺 admin 能力时 Provide 失败），所以所有带 configdata Mod 的生成工程都自带。game-demo 删除 `gm.config.reload`，改用框架命令。修前回归原文：`admin registry lists [], want configdata.reload registered by the configdata Mod`。
+
+### 3. 重载结果不说明哪些表变了；内容没变也报成功（已修复）
+
+**现象**：只改 `configs/table/shop_item.csv` 忘了 `roost generate` 就重载，结果 `{"ok":true,"data":{"version":4}}`，价格没变。
+
+**修复**：Snapshot 在 finalize 时按成员记下与 `Hash` 同源的内容摘要和表行数，`configdata.Compare` 比较两代；`Store.ReloadWithChanges` / `RollbackWithChanges` 与 `ReloadOutcome.Changes` 带上逐成员变化。`configdata.reload` 回答 `version`、`previous`、`hash`、`changed` 与 `changes`（新增 / 删除 / 变化的表及行数）；内容完全没变时 `changed=false`，message 写明 no table changed 并提示改了 CSV 要先 `roost generate`，日志一条 Warn，指标 `configdata.reload.total{result="unchanged"}`。**版本号仍递增**（选择及理由见下）。guide/07-config §5 写明重载只读 `config_data.dir` 下的 JSON。
+
+**真实进程实测（2026-10-18）**：`-mods configdata` 新工程加 `shop_item` 表（price `min:"1"`），打开 `ops.admin_enabled`，经 `/admin/execute`：`GET /admin/commands` 返回 `["configdata.reload","configdata.rollback","configdata.status"]`；只改 CSV 后 reload 返回 `"changed":false,"changes":{"unchanged":1}`、version 1→2 并带上述 message；`roost generate` 后 dry_run 报 `shop_item` 变化（2 行→2 行）且不发布，reload 发布 version 4；把一行 price 改 0 的 JSON 被整次拒绝（`table shop_item row 2 (key 2) field price: min: value 0 is below min=1`），旧快照继续服务；rollback 回到 version 2 并报 `shop_item` 变化；`/metrics` 为 `configdata_reload_total{result="ok"} 2`、`{result="unchanged"} 1`、`{result="failed"} 1`。
+
+**维护者决定（2026-10-18，按推荐 B）**：内容没变的重载照常递增版本（已实施）：照常发布、递增版本，但回答、日志与指标明确标“没有变化”。理由：监听者依赖每次重载都执行——game-demo 的开关表监听者用重载把 `gm.flag.set` 的进程内改动恢复成表里的值（`gm.flag.set` 的说明就是这么写的），跳过发布会让它静默失效；版本号本来就不是内容版本（失败的构建也会占用一个号），内容是否变化看 `changed` / `hash`。未采用的 A：内容没变时不发布、不递增、监听者不跑，回答“没有变化”；代价是上述“重载恢复表值”的用法失效，需要另给 featureflag 一个“恢复表值”的入口。
+
+## 新用户试用第六轮：待修问题（2026-10-18 登记；1、3～6 已修复，2 转 DESIGN-TODO D12 待决定）
+
+基线 `91606e48`（origin/main）。本轮按 guide 目录一次学剩下的模块：Saga（06）、框架服务（09）、Remote（05）、Skill（08）、Lockstep（04 后半）、自建 RPC 与可观测性（11 / 13），在 r6 工程里逐块用 CLI 生成、写最小业务、编译与 doctor，必要处在共享隔离环境起真实进程或进程内 Nest harness 探针。正面结论：托管框架服务用 `services.<name>.framework` / `uses` 接入后生成类型化访问器、`rank.Submit` 带 requestID 幂等；自建 RPC 把拥有者从 game 挪到独立进程只改 roost.yaml、业务代码不变（只验证到编译与 doctor，未起两个进程实测跨进程调用）；`roost id next errcode` 同时看手写与生成的码；Remote 托管实体在没有 Remote 运行时的 Nest 里写入被拒、不会当本地写。修复由维护者在 main 上进行。
+
+### 1. `roost add saga -steps` 按字母重排并去重步骤（会改变执行与补偿顺序）
+
+**现象**：`roost add saga gift_gold -service game -steps debit,credit` 生成的 `Definition()` 是 `{credit, debit}`。Saga 按 `Definition.Steps` 的下标推进（`framework/saga/engine.go` 里 `CompletedSteps = record.Step + 1`，补偿按下标倒序），所以顺序就是业务语义：生成物变成先给收礼方加钱、再扣送礼方，补偿顺序也随之反过来。
+
+**根因**：`codegen/internal/roost/cli.go:312` 用 `splitList(*steps)` 解析步骤；`splitList`（`manifest.go:546`）返回 `uniqueSorted(out)`，为 Mod 列表这类无序集合设计。同名步骤也被静默去掉。
+
+**影响**：`roost help saga` 的示例 `-steps reserve,deduct,deliver` 会生成 `deduct, deliver, reserve`。生成后编译、doctor 都通过，只有读生成代码才发现；照示例写的跨服交易会先扣款再预留。
+
+**建议修法**：步骤用保序解析（拒绝重复名并报错），不经 `uniqueSorted`；回归覆盖 help 里的示例顺序。
+
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 1）：步骤保序、重复名报错；同类的 `project new -services` 取第一个服务一并改为保序。
+
+### 2. Saga 原生实体步骤与 effect 消费者没有生成支持
+
+**现象**：`roost add saga` 只为每一步生成 Mongo 步骤的 `Subscribe*` 函数（`saga.SubscribeMongoStep`）；改实体 DAO 的步骤（扣 / 加金币这类最常见的步骤）应走 `saga.SubscribeDataEngineStep` 与 DataEngine step inbox，骨架注释点名了它但不生成，业务要自己取 JetStream 客户端、`JetStreamPublisher`、`DataEngineStepInbox`、stream / durable，再写派发 Nest handler 并在事务里绑定 receipt 的 StepHandler。game-demo 的送礼 saga 接线 `internal/service/game/gift_saga.go` 有 661 行。事务性 outbox（`nest.Emit` effect + Mongo inbox 消费者，demo 的升级发邮件）同样只有 demo 手写，生成器没有对应命令。
+
+**影响**：跨服务副作用的两条正路都要照 demo 大段手写；新手更可能退回“事务后尽力调用 + 幂等 ID”，接受崩溃时少一笔（demo 的排行提交就这样写并在注释里说明了代价）。
+
+**需要维护者决定**：是否为原生实体步骤生成 `SubscribeXxxNative` 与 StepHandler 骨架（Nest handler 签名带 step receipt），以及是否提供 `roost add effect <topic> --consumer <service>`。
+
+**状态**：方向 A 已实施（维护者 2026-10-18 决定，见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持) 与 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）：原生步骤体 `saga.NativeStep`、步骤运行时 `kitsaga.Steps`、effect 消费者 `kitdataengine.SubscribeEffects` 进框架，手写量降到“步骤体 / handler + 一次登记”，game-demo 改用它们。**仍未做**：生成器层面（`roost add saga` 生成原生步骤骨架、`roost add effect`）——方向 B 待 A 落地后再评估；多进程分片时的准入 / 转交仍由业务写（框架提供 `WithAdmit` 与 `RunHandedOver` 扩展点）。
+
+### 3. `saga.start_effect_stream` / `start_effect_prefix` 与 `dataengine.effects` 必须一致，却没有校验
+
+**现象**：Saga 经 DataEngine 的 effects 流接收 Nest 发起的 start（`saga.start_effect_stream` 默认 `ROOST_EFFECTS`，`dataengine.effects.stream` 默认也是 `ROOST_EFFECTS`），两组键分别填写。两者不一致时进程启动失败：`mod saga start: saga: subscribe Nest starts: nats: API error: code=404 err_code=10059 description=stream not found`，不点名是哪两个键不一致。
+
+**复现**：工程已有 dataengine 配置段后 `roost add mod saga`，再把 `dataengine.effects.stream` / `subject_prefix` 改成别的值（demo README 常见问题正是建议这样隔离环境）；`roost config check`、进程 `--check-config`、doctor 都通过（2026-10-18 在 r6 上把 effects 改成 `OTHER_EFFECTS` 实测），启动时报上面的错。
+
+**建议修法**：同进程有 DataEngine 时 saga 的 start / result effect 流与前缀默认取 `dataengine.effects` 的值（显式写了才覆盖）；两者都显式写且不一致时 `--check-config` / doctor 报错并点名两个键。
+
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 3）：saga 两个键不写时取 `dataengine.effects`、生成配置不再写；同进程有 DataEngine 时显式写了不同值，启动前 / `--check-config` / doctor `config-check:<service>` 拒绝并点名两个键。
+
+### 4. 声明 `remote=managed` 的实体缺 Remote 运行时，生成与 doctor 都不提示
+
+**现象**：`roost add entity Guild` 后把标记改成 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，不加 `remote_entity` Mod：`roost generate`、`go build`、`roost project doctor` 全部通过；写这个实体的 handler 在运行时返回 `remote entity: write capability disabled`（进程内 harness 实测，写入被拒、无提交），报错不说缺的是 `remote_entity` Mod。另两点：`add entity` 骨架注释只说“改成 remote=managed 时移到 EntityCategoryRemote”，没提要换嵌入 `*entity.RemoteEntityBase`；漏换时 `roost generate` 在这一个实体上中止整次生成，其他实体的 DAO 也没生成，随后的编译报错（`undefined: db.GuildDao`）把人引向无关的地方。
+
+**建议修法**：工程里有 `remote=managed` 实体而所属服务没有 `remote_entity` Mod 时，generate / doctor 报错并给出 `roost add mod remote_entity -service <svc>`；写入拒绝的错误带上这条修法；骨架注释写明三件事（类别、remote=managed、嵌入 RemoteEntityBase）。
+
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 4）：generate / doctor `remote-runtime` 在带 Nest 的服务全都缺 `remote_entity` 时拒绝并给出命令（部分缺为 WARN：实体由哪个服务写静态上看不出）；运行时错误 `entity.ErrNoRemoteRuntime` 点名修法；骨架注释写明三处；漏换嵌入的报错点名字段；无 DAO 的 Remote 实体 wire 能编译。
+
+### 5. 技能目录在生成工程里没有任何地方编译，写坏的 JSON 通过 build / test / doctor
+
+**现象**：`roost add skill Fireball` 生成 `game/skills/fireball.json` 与 `catalog.go`（`CompileAll`），但工程里没有调用 `CompileAll` 的地方，也没有测试。把 JSON 里的 `"flow": "finish"` 改成不存在的流程后，`go build`、`go test ./game/skills/`（无测试文件）、`roost project doctor` 全部通过；只有手动调用 `CompileAll` 才报 `parse Skill fireball.json: phases: [0].on: unsupported flow "explode_everything"`。`roost help skill` 只写“启动时：skills.CompileAll(...)”。
+
+**影响**：坏技能要到业务自己接上编译（或上线后第一次施放）才暴露；与 tablegen 数据“生成 / 加载时一次检查”的做法不一致。
+
+**建议修法**：首次生成 `catalog.go` 时同时生成 `catalog_test.go`（`CompileAll(skill.DefaultCompileEnvironment())` 必须成功），并在服务 Init 里调用一次、失败拒绝启动；doctor 加一项检查。
+
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 5）：生成 `catalog_test.go`（缺时下一次 add skill 补上），doctor `skills:catalog` 运行它；服务 Init 归业务，没有改写，help 与 add 提示写明在 Init 调 `CompileAll`。
+
+### 6. 文档小问题
+
+- 生成工程的 `docs/ROOST_YAML.zh-CN.md`（`codegen/internal/roost/render_docs.go:398`）说托管框架服务是“account、mail、match、chat 之一”，生成器实际支持九个（另有 platform、global、activity、rank、session，见 `framework_services.go`）。`services.<name>.framework` / `uses` 的用法只在这份生成文档里，`roost help` 各主题里没有，新手查内置帮助找不到“怎样把排行接进已有工程”。
+- GETTING-STARTED 把[技能火球](../../gameplay/skill/examples/fireball/main.go)列为不依赖外部服务器的示例，但它在独立模块 `gameplay/skill/examples` 里，在仓库根 `go run ./gameplay/skill/examples/fireball` 报 `main module does not contain package`，文档没写要先 `cd gameplay/skill/examples`。
+- guide/11 只提醒“业务新增指标应控制标签基数”，没有一处示例说明业务代码用哪个 API 加计数器 / 时延（`OBSERVABILITY.md` 只列框架自己的指标）。
+
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 6）：托管服务清单改为九个、新增 `roost help services`、火球运行方式写明先进入独立模块目录、guide/11 与 OBSERVABILITY 补业务指标写法。
+
+## SLG 接入实践的验证范围（2026-10-17 历史基线）
 
 2026-10-17 在 Linux/amd64、Go 1.27.2，以主线 `91606e48` 为基线复核，随后验证本分支的活动榜修复。代码索引工具本会话不可用，调用链通过当前源码与 rg 补证。业务 / demo / 框架的归属示例见 [WALKTHROUGH](../../demo/WALKTHROUGH.md#用于-slg-等游戏时哪些规则归业务)；这里记录实际证据深度，不把覆盖目录当成所有功能已验收。
 
@@ -126,7 +246,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 | Nest / DataEngine / 文件 WAL / Mongo | `scripts/test-dataengine-generated.sh` 三个进程阶段通过，包含多实体事务、丢回执后重启、回滚、确认 / 投影 / 重载等正式生成路径 | 压力用例跳过；各阶段专属用例在其他阶段会 skip，不能累计成全部逐阶段通过 |
 | Remote 与 Mirror | `scripts/test-remote-generated.sh` race 功能路径通过，包含 async / strict / pipelined、Guild Mirror 的 JetStream / NATS 两种接法、提交后错误与卸载重载 | 本机多组件 / 部分子进程；本地 Mirror 专门进程场景跳过，未开 fault / load，没有验收跨机、Redis Cluster 或主从切换 |
 | Sync / AOI / 客户端 / Lockstep | 机器人观察自身属性、装备、位置与怪物，实际执行匹配后的 Lockstep；生成 demo 真实依赖脚本还通过 Gate → Nest → DAO / WAL 正式消费者 | 未把 self_sync 与 demo 自建 Manager 混装；Block AOI 等其他模式以已有包回归为证据，不声称在同一 demo 中跑过全部装配 |
-| 时间、活动与排行 | main 的 Timer 组合钩子和业务钟定向 race 复核通过；活动榜旧回复乱序在真实 Redis 上先红后绿，生成 game 服务 118 条 race 测试事件通过 | 副本长期重放计分仍未修复；按实体持久 Timer 接入仍属 D11，未擅自选方案 |
+| 时间、活动与排行 | main 的 Timer 组合钩子和业务钟定向 race 复核通过；活动榜旧回复乱序在真实 Redis 上先红后绿，生成 game 服务 118 条 race 测试事件通过 | 本表记录的基线尚未修复副本长期重放及 D11；当前 main 已实施，现状以上方对应问题条目为准 |
 | 恢复、schema 与运维 | 停 game 后 WAL 42 条保留记录的 checkpoint 等于尾记录；重启前后两份 Player 的版本、schema、last_tx 与摘要完全一致；真实 Mongo schema 离线迁移回归通过；十个 readyz 均成功 | 这是干净停启 / 状态比较，非断电恢复或实际跨机搬服；WAL 检查读取配置的显式目录 `data/wal/dataengine`，显式配置不会自动追加 sid |
 | 技能、热更与其他扩展 | demo 启动编译技能目录；全仓包测试实际覆盖其他框架模块，core build / vet 通过 | demo 不执行游戏技能 Host；没有把包测试等同真实插件替换、外部认证、监控告警接收或完整 SLG 玩法 |
 
@@ -167,7 +287,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 | 观测接线 | ExportMetrics/admin元数据不是自动外部监控或审批系统 | 部署实际接线与鉴权审计 |
 | Remote WAL级Rejected处理 | 已处理（`38b710a2`，随 v1.27.0 发布，维护者 2026-10-14 选“直接精简”）：Durability 1/2/3 的正式链路不产生 Remote Rejected（投影器写权威冲突是 `ErrProjectionConflict` fatal）；三个测试注入函数 `MongoCommitter`/`Backend.RejectRemoteCommitsInTransaction` 与 `Manager.RejectRemoteTransaction` 已删除，strict/pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`。tracker 的 Rejected 收尾（回滚、隔离、仅内存卸载、重载、交付 false）只剩 Durability 0 来源，保留 | 守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore/MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict/pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`） |
 | Remote请求struct与Sender | handler 参数用带 `remote:"..."` 字段的请求 struct 时，struct 必须留在 handler 包（访问器生成在这里），sender / syncsender 子包又看不见 handler 包类型；`roost generate` 总生成 sender，所以这种 handler 生成失败（修前修后都不可用，2026-10-16 起改为专门报错、不再建议移走类型）。维护者 2026-10-16 决定先写清限制，不改生成结构 | 需要时再设计：让 sender 携带这种 struct（改生成结构），或允许单个 handler 不生成 sender |
-| 新用户接入缺口 | 2026-10-16 新用户按 beginner 流程实测的四项均已由维护者同日决定并实施：玩家看自己状态（D6 折中方案：`access.player.self_sync`，剩余限制见下文“自身视图（self_sync）”）；未登录玩家得到 `CodeInternal`、first-business 不含首登 GetOrCreate（D7 方案 C：`errcode.CodeEntityNotFound` 与 `roost add endpoint --lifecycle`）；生成的服务包名大写（D8 方案 C：新工程小写、已有工程跟随目录）；DAO 库名是代码常量（D9 方案 B：骨架 `db=<project>` 与 `roost id entity`）。库名取运行配置（D9 方案 A）保留待评估。2026-10-17 第三轮试用登记三项：配置段与 next 提示两项已修复（配置段剩余部分按维护者决定 B 由 doctor `config-sections` 只读检查），packer 同日由维护者决定并实施（self_sync 默认 packer 由生成器生成），见上文“新用户试用第三轮”。第四轮登记三项：共享资源名按工程名派生、endpoint 业务时间参数已修复，按实体的持久定时器待维护者决定（D11），见上文“新用户试用第四轮” | [DESIGN-TODO D6～D9](DESIGN-TODO.md#d6-玩家看自己状态entity-sync-自身视图的接入骨架) |
+| 新用户接入缺口 | 2026-10-16 新用户按 beginner 流程实测的四项均已由维护者同日决定并实施：玩家看自己状态（D6 折中方案：`access.player.self_sync`，剩余限制见下文“自身视图（self_sync）”）；未登录玩家得到 `CodeInternal`、first-business 不含首登 GetOrCreate（D7 方案 C：`errcode.CodeEntityNotFound` 与 `roost add endpoint --lifecycle`）；生成的服务包名大写（D8 方案 C：新工程小写、已有工程跟随目录）；DAO 库名是代码常量（D9 方案 B：骨架 `db=<project>` 与 `roost id entity`）。库名取运行配置（D9 方案 A）保留待评估。2026-10-17 第三轮试用登记三项：配置段与 next 提示两项已修复（配置段剩余部分按维护者决定 B 由 doctor `config-sections` 只读检查），packer 同日由维护者决定并实施（self_sync 默认 packer 由生成器生成），见上文“新用户试用第三轮”。第四轮登记三项：共享资源名按工程名派生、endpoint 业务时间参数已修复，按实体的持久定时器由维护者决定 D11 方案 B 并已实施（剩余限制见上文“新用户试用第四轮”第 3 项） | [DESIGN-TODO D6～D9](DESIGN-TODO.md#d6-玩家看自己状态entity-sync-自身视图的接入骨架) |
 | 删档后同 ID 重建 | GetOrCreate 路径已修复（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d10-删档后用同一-id-重建) 方案 B，范围只守 GetOrCreate，`572d87c2`）：冷加载对删过档返回独立哨兵 `entity.ErrAuthorityEntityDeleted`（不满足 not found，Remote 托管实体查元数据墓碑），生成 GetOrCreate 不重建、发往该 ID 的 Nest 请求回复 `entity_deleted = 3`，不进 WAL、不 fence。**剩余限制（约束）**：直接 Create（handler 内或 lifecycle `Create`）不读存储，必须使用 id-gen 发的新 ID，不要复用删过档的确定性 ID（也不要对存了但没加载的 ID 直接 Create）；违反时首个提交 `Put expected=0` 撞上墓碑 / 已有文档，投影 `ErrProjectionConflict` fatal、进程 fence、冷重启起不来，处置见下一行。`EntityManager` 的 ID 生成器同样必须永不重复。“谁、为什么删档”与 Remote 实体的删前数据不在墓碑里，需要时由删档入口自己记业务审计（D10 审计结论） | 回归 `TestGeneratedDataEngineRecreateAfterDeleteSameID`（真实 Mongo，已去掉 KNOWN_RED 跳过）、`TestGeneratedRemoteRecreateAfterDeleteIsRefused`、`TestColdTargetDeletedInAuthorityAnswersEntityDeletedCode`；直接 Create 的保护按维护者决定不做（范围收窄前的实现已撤回，见 D10）|
 | 删档后同 ID 重建：违反约束或修复前写下的冲突记录 | 修复前已进入 WAL 的“删档后重建”记录，以及违反上一行约束（直接 Create 复用删过档 / 已存储的 ID）写下的记录（首个 `Put expected=0` 撞墓碑或已有文档），不会被跳过或放宽：启动投影恢复仍报 `startup projection recovery: ... fatal projection version conflict: Put duplicate key <db>/<coll>/<id> expected=0 next=1`，进程起不来。框架不自动删记录、不跳过 | 人工处置（只在确认是这类记录时）：①停进程，保留 WAL 目录与 Mongo 备份；②启动错误已给出事务 ID 与 `<库>/<集合>/<_id> expected=0 next=1`：在 Mongo 确认该 `_id` 是墓碑（`_deleted: true`），`roost id entity <_id>` 换算出玩家 ID，`cmd/walinspect -dir <WAL目录> -snapshot <新目录>` 做一份完整只读副本留证（它不推进 checkpoint、不跳过记录）；③线上尚未部署（维护者 2026-10-06）：直接停旧版本、清空该 sid 的 WAL 目录与测试库后起新版本；上线后若遇到，由维护者决定是否接受丢弃该事务（被丢弃的是删档后被错误重建的那条写入，客户端当时收到过成功），并修正复用 ID 的业务代码，框架不提供“跳过一条记录”的入口。见[维护手册 §4](README.md#4-故障处理) |
 | Windows | 非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'`（编译全部测试不执行）和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异：打开中的文件不能改名/删除（nestwal 损坏记录检查、日志轮转、statslog），checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真（run 38500440362 的 6 个失败） | 本机测试结果不改变macOS/Linux支持范围；跨平台也成立的缺陷不归入此行 |

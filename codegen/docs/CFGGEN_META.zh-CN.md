@@ -179,7 +179,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 ## 改表流程与 CI 建议
 
-- 只改数据：改 JSON → 热更（GM `config.reload` / `Store.Reload`），不需要重新生成；
+- 只改数据：改 JSON → 热更（运维命令 `configdata.reload`，经 ops `/admin/execute`；或 `Store.Reload`），不需要重新生成；回答里的 `changed` / `changes` 说明哪些表真的变了；
 - 改结构（加字段/加表/改索引）：改 meta → 跑 cfggen → 提交 `cfg_gen.go` → 改数据 → 热更。
 - CI 门禁建议：流水线里重跑 cfggen 后 `git diff --exit-code <out>/cfg_gen.go`，防止 meta 与产物脱节。
 

@@ -344,13 +344,86 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 }
 
 // buildableGameDemo 是 game-demo 夹具的私有副本，roost-core replace 到本仓库并 go mod tidy，可以编译。
+// doctor 的 config-check 项把每个服务的开发配置交给编译后的进程 --check-config：跨键与跨 Mod 规则（例如 saga 的效果流
+// 必须就是同进程 DataEngine 的那条）只在进程里，键快照查不到。新生成的 game-demo 全部通过；把 saga 的效果流写成与
+// dataengine.effects 不同之后，game 一项 FAIL 并点名两个键（修前 doctor 全部通过，启动才报 "stream not found"）；把效果流的
+// 保留期写得比 saga 完成回执长，同样 FAIL（D12 顺带项，修前这条在 saga Init 里，doctor 放过）。
+func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles the generated game-demo")
+	}
+	t.Parallel()
+	root := buildableGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	process, cleanup := newProjectProcess(ctx, root)
+	defer cleanup()
+	items := checkConfigRules(root, m, process)
+	if len(items) < 10 {
+		t.Fatalf("config-check items = %d; the game-demo no longer has its framework services", len(items))
+	}
+	for _, item := range items {
+		if item.Status != StatusOK {
+			t.Errorf("fresh game-demo %s: %s %s", item.Name, item.Status, item.Detail)
+		}
+	}
+	configPath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.Replace(string(raw), "\nsaga:\n", "\nsaga:\n  start_effect_stream: ROOST_EFFECTS\n", 1)
+	if mutated == string(raw) {
+		t.Fatal("config.game.yaml has no saga: section; update this test")
+	}
+	if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkConfigRules(root, m, process) {
+		if item.Name != "config-check:game" {
+			continue
+		}
+		if item.Status != StatusFail || !strings.Contains(item.Detail, "saga.start_effect_stream") || !strings.Contains(item.Detail, "dataengine.effects.stream") {
+			t.Errorf("mismatched saga effect stream: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
+		}
+	}
+	// 效果流比完成回执活得久（D12 顺带项）：saga 的完成回执 TTL 与 dataengine.effects.max_age 的比较是跨 Mod 规则，
+	// 现在由 saga Mod 的 CheckConfigAcrossMods 做，doctor 经进程的 --check-config 报出；修前它在 saga Init 里，doctor 全部通过。
+	retention := strings.Replace(string(raw), "\n    max_age: 168h\n", "\n    max_age: 800h\n", 1)
+	if retention == string(raw) {
+		t.Fatal("config.game.yaml has no dataengine.effects max_age: 168h; update this test")
+	}
+	if err := os.WriteFile(configPath, []byte(retention), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkConfigRules(root, m, process) {
+		if item.Name != "config-check:game" {
+			continue
+		}
+		if item.Status != StatusFail || !strings.Contains(item.Detail, "saga.completion_receipt_ttl") || !strings.Contains(item.Detail, "dataengine.effects.max_age") {
+			t.Errorf("effect stream outliving the completion receipts: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
+		}
+	}
+}
+
 func buildableGameDemo(t *testing.T) string {
+	t.Helper()
+	root := copyOfNewProject(t, "game-demo")
+	useLocalRoostCore(t, root)
+	return root
+}
+
+// useLocalRoostCore 让生成工程编译当前工作树的 roost-core（replace 到仓库根）并 go mod tidy。
+func useLocalRoostCore(t *testing.T, root string) {
 	t.Helper()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := copyOfNewProject(t, "game-demo")
 	goModPath := filepath.Join(root, "go.mod")
 	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
@@ -372,9 +445,8 @@ func buildableGameDemo(t *testing.T) string {
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go mod tidy in the game-demo copy: %v\n%s", err, out)
+		t.Fatalf("go mod tidy in the generated project copy: %v\n%s", err, out)
 	}
-	return root
 }
 
 var modConfigTargets = []string{
@@ -728,7 +800,7 @@ func TestFreshlyGeneratedConfigsHaveEveryModSection(t *testing.T) {
 // 生成配置里决定“与谁共享”的名字（总线主题前缀、Data Engine 库、effects / saga / sync 的主题与流、saga 与 Remote 的库、
 // etcd 服务注册前缀）按工程名派生：两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。库名与 DAO 骨架同一规则
 // （daoDatabaseName）。新建时写进的段与之后 roost add mod 追加的段派生规则相同，saga 读的 effects 流与 Data Engine
-// 写的那条一致。
+// 写的那条一致：saga 不另写效果流，取 dataengine.effects 的值。
 func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 	t.Parallel()
 	want := func(project string) map[string]string {
@@ -742,8 +814,6 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 			"saga.database":                     db + "_saga",
 			"saga.subject_prefix":               project + ".saga",
 			"saga.stream":                       upper + "_SAGA",
-			"saga.start_effect_prefix":          project + ".effect",
-			"saga.start_effect_stream":          upper + "_EFFECTS",
 			"remote_entity.mongo.database":      db + "_remote",
 			"etcd.service_prefix":               "/" + project + "/services/",
 		}
@@ -774,6 +844,12 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 			for key, value := range want(tc.project) {
 				if leaves[key] != value {
 					t.Errorf("%s %s: %s = %q, want %q (derived from the project name)", tc.project, rel, key, leaves[key], value)
+				}
+			}
+			// saga 的效果流不另写：不写时取 dataengine.effects（上面已按工程名派生），只在一处配置。
+			for _, key := range []string{"saga.start_effect_stream", "saga.start_effect_prefix"} {
+				if value, written := leaves[key]; written {
+					t.Errorf("%s %s: %s = %q is written again; the saga follows dataengine.effects when it is unset", tc.project, rel, key, value)
 				}
 			}
 			if strings.Contains(body, "{project") || strings.Contains(body, "{PROJECT") {

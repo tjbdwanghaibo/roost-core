@@ -9,7 +9,10 @@ import (
 
 	"{{MODULE}}/game/gift"
 	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 )
 
 // A step that runs on a process which does not serve its player writes a
@@ -80,13 +83,20 @@ func giftHandoff(t *testing.T, from int64, fromSID int32, phase string) *giftSte
 }
 
 // handoffSteps is one game process with sid local: its real ownership table
-// (empty — nobody has logged in) and the production router over a recording
-// transport.
+// (empty — nobody has logged in), the production router over a recording
+// transport, and the framework's step runtime with the production
+// registration (register) but never started — so nothing is subscribed or
+// claimed.
 func handoffSteps(t *testing.T, local int32) (giftSteps, *PlayerOwners, *recordingTransport) {
 	t.Helper()
 	owners := newPlayerOwners(local, nil, nil)
 	transport := &recordingTransport{}
-	steps := giftSteps{owners: owners}
+	runtime, err := kitsaga.NewSteps(app.NewRegistry(viper.New()), giftSagaSteps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := giftSteps{owners: owners, runtime: runtime}
+	steps.register(runtime)
 	steps.handoff = giftHandoffRouter(local, transport, func(context.Context, *giftStepHandoff) error {
 		t.Error("the router executed a handed-over step locally; admission only hands over a step bound elsewhere")
 		return nil
@@ -95,10 +105,11 @@ func handoffSteps(t *testing.T, local int32) (giftSteps, *PlayerOwners, *recordi
 }
 
 // reachedTheClaim reports whether runHandoff got as far as the inbox. The test
-// steps have no inbox, so reserving fails with saga.ErrInvalidRecord: that
-// error is the proof the step was taken on, and a nil error the proof it was
-// dropped before anything was claimed.
-func reachedTheClaim(err error) bool { return errors.Is(err, saga.ErrInvalidRecord) }
+// runtime is not started, so taking the claim fails with
+// kitsaga.ErrStepsNotStarted: that error is the proof the step passed every
+// check and was taken on, and a nil error the proof it was dropped before
+// anything was claimed.
+func reachedTheClaim(err error) bool { return errors.Is(err, kitsaga.ErrStepsNotStarted) }
 
 // A step for a sender this process serves is admitted, and nothing is sent
 // anywhere: the consumer runs it here.

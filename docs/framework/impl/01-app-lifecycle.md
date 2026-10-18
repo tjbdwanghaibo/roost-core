@@ -38,7 +38,7 @@
 | [app.go](../../../framework/app/app.go) | `App` |
 | [business_clock.go](../../../framework/app/business_clock.go) | 函数/方法或内部实现；见源码 |
 | [business_time.go](../../../framework/app/business_time.go) | 函数/方法或内部实现；见源码 |
-| [config_schema.go](../../../framework/app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ServiceIdentity` |
+| [config_schema.go](../../../framework/app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ModConfigCrossChecker`、`ServiceIdentity` |
 | [config_validation.go](../../../framework/app/config_validation.go) | 函数/方法或内部实现；见源码 |
 | [config_values.go](../../../framework/app/config_values.go) | 函数/方法或内部实现；见源码 |
 | [log_frame.go](../../../framework/app/log_frame.go) | `LogFrame` |

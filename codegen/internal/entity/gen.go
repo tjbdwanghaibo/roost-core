@@ -34,7 +34,7 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 	}
 	remoteV2 := ent.RemotePolicy == "entity.RemotePolicyManaged"
 	if remoteV2 && !ent.RemoteBase {
-		return false, fmt.Errorf("entity %s: remote=managed requires embedding *entity.RemoteEntityBase", ent.Name)
+		return false, fmt.Errorf("entity %s: remote=managed requires embedding *entity.RemoteEntityBase: in type %s replace *entity.EntityBase with *entity.RemoteEntityBase (the marker also needs category=entity.EntityCategoryRemote)", ent.Name, ent.Name)
 	}
 	var buf bytes.Buffer
 
@@ -49,7 +49,8 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 		RemoteV2: remoteV2,
 	}
 	data.NeedsRemove = data.HasDirty && !ent.NoPersist && !data.RemoteV2 && !hasMethod(ent, "PrepareDelete")
-	data.ImportBlock = buildImportBlock(ent, data.RemoteV2 || data.NeedsRemove, data.RemoteV2, data.NeedsRemove)
+	// dataengine 只在 Remote 远端提交的逐个 DAO 分支里用到：还没有 DAO 的 Remote 实体不能 import 它，否则 wire 编译不过。
+	data.ImportBlock = buildImportBlock(ent, data.RemoteV2 || data.NeedsRemove, data.RemoteV2 && data.HasDaos, data.NeedsRemove)
 
 	tmpl, err := template.New("entity_wire").Funcs(template.FuncMap{
 		"deref":              derefType,

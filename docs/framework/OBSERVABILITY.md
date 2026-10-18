@@ -16,6 +16,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 - Duration 一律用 `metrics.ObserveDuration`，不要把毫秒塞进 Counter。
 - **需要分位数的时长用 `metrics.ObserveHistogram`**：17 个固定指数桶（1ms 起逐桶翻倍到 ~65s，`metrics.HistogramBounds()` 可查），`metrics.HistogramQuantile(name, labels, q)` 桶内线性插值取分位数；Prometheus 导出为标准累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。桶固定意味着无采样窗口——它是进程生命期累积分布，压测类"单场分布"要在场景开始前 `metrics.Reset()` 或用 label 区分场次。
 - `skill` 直接记录衍生物和被动派发指标；`skill/combat` 的业务观测由宿主提供。`syncstream` / `skillsync` 的 ExportMetrics 是宿主显式调用的接口，不会随 App 自动注册。
+- **业务指标**：业务代码同样用包级 `metrics.IncCounter` / `SetGauge` / `ObserveDuration` / `ObserveHistogram`，App 的注册表就是包级默认注册表，ops `/metrics` 一并导出；名字用业务自己的前缀（例如 `game.shop.buy_total`），规则同上，不进下面的框架清单。示例见 [guide/11 §3](guide/11-observability.md#3-指标)。
 
 ## 指标清单（按面板分组）
 
@@ -124,6 +125,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有结果，这次尝试不执行、重发那次的 completion（U-0280） |
 | `saga.step_inbox.superseded_total` | Counter | 步骤收件箱里被较新尝试接管的预留 |
 | `saga.step_inbox.mark_completed_error_total` | Counter | 回执已写、状态文档结算失败（回执是权威，结论不变）；持续增长说明有确定性失败在重跑（RR-20260927-16） |
+| `saga.step.run_total{consumer,result}` | Counter | 业务步骤运行时（`wiring/saga` 的 `Steps`，D12）执行步骤体的次数，consumer 是 durable 名（`<group>-<step>`）。原生步骤 `ok` = Nest 调用成功（业务拒绝也算 ok，结论在 completion 里）、`error` = 结果未知；Mongo 步骤 `ok` / `refused`（completion 失败）/ `error`，Mongo 事务重试会重复调用、按调用计。回放与重复投递不计 |
+| `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交，不含等待投影） |
+| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
 | `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
 
 ### 技能运行时（core/skill）
@@ -143,7 +147,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `runtime.goroutines` / `heap_alloc_bytes` / `heap_sys_bytes` / `sys_bytes` / `num_gc` | Gauge | 进程运行时读数；`stats_log.enabled` 时按 `stats_log.interval`（默认 1m）刷新 |
 | `entity.count` / `entity.count_by_kind{kind}` / `entity.count_by_category{category}` | Gauge | 已加载实体数；同上由 stats_log 刷新，消失的 kind / category 置 0 |
 | `configdata.version` | Gauge | 正在服务的配置表版本号（单调计数器分配，失败与撤回的 reload 也占号） |
-| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `failed`（含规则违反） |
+| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `unchanged`（发布成功但内容与上一代相同，例如只改了 CSV 没生成 JSON） / `failed`（含规则违反） |
 | `configdata.rollback.total{trigger}` | Counter | 回到上一代：`apply_failed`（新一代应用失败自动撤回）/ `operator`（运维撤回） |
 
 ### NATS（core/nats）
@@ -164,12 +168,17 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
 | `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
 
-### 实体定时器（core/timer）
+### 实体定时器（core/timer、framework/nest/entitytimer）
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `timer.invalid_dropped_total` | Counter | 正常 Tick 因 id/type/deadline 非法而删除的存量节点；加载时 Warn 并标记待清理，Tick 才发宿主 ChangeDelete。事务回滚后再次重建可能再计，不是全局唯一记录数 |
 | `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
+| `entitytimer.delivered_total{driver}` | Counter | 按实体持久定时器的驱动（`framework/nest/entitytimer`，D11）投递出去的 Tick 消息；`driver` 是生成组件的驱动名（如 `player.timer`）。只有已加载实例的最早期限到了才投，不随在线人数增长 |
+| `entitytimer.redelivered_total{driver}` | Counter | 其中因上一次投递之后没有收到实例的提交报告而重投的（缺省 10s）。**基线应接近零**；持续增长说明 Tick handler 在报错 / 回滚或提交被拒 |
+| `entitytimer.deliver_failed_total{driver}` | Counter | Tick 准入失败（队列满、引擎停止中），1s 后重试 |
+| `entitytimer.dropped_total{driver}` | Counter | 到期时发现实例已卸载 / 删档或已被同 ID 的新实例取代而丢弃、不投递的条目（驱动不唤醒不在内存的实体） |
+| `entitytimer.pending{driver}` | Gauge | 索引里等待到期（含已投递待报告）的实例数 |
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 
@@ -191,6 +200,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
+| `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
 ### 全部源码指标索引
@@ -219,6 +229,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `configdata.reload.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.rollback.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
+| `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
@@ -240,6 +251,11 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
+| `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.dropped_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.pending` | Gauge | `nest/entitytimer/driver.go:SetGauge` |
+| `entitytimer.redelivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `failurelog_append_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_degraded_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
@@ -372,8 +388,11 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
+| `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step.attempt_replayed_total` | Counter | `saga/command_consumer.go:IncCounter` |
 | `saga.step.expired_unexecuted_total` | Counter | `saga/command_consumer.go:IncCounter` |
+| `saga.step.run_duration` | Histogram | `wiring/saga/steps.go:ObserveHistogram` |
+| `saga.step.run_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |

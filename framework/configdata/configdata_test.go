@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -694,5 +695,70 @@ func TestEveryReloadReportsOneOutcome(t *testing.T) {
 	}
 	if !rolled.Rollback || rolled.Err != nil || rolled.Live != load.Version || rolled.Version != load.Version {
 		t.Errorf("rollback = %+v", rolled)
+	}
+}
+
+// 重载要说出哪些表变了：内容摘要与 Snapshot.Hash 同源，按成员给出新增 / 删除 / 变化与表的行数；内容完全
+// 没变时 Changes.None()，但仍发布新版本号（监听者依赖每次重载都跑，见 ReloadWithChanges）。
+func TestReloadReportsWhichTablesChanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"wolf","scene_id":7}]`)
+	writeFile(t, filepath.Join(dir, "world.json"), `{"width":100}`)
+	reg := NewRegistry()
+	MustRegisterTable(reg, TableDef[int32, testMonsterCfg]{Name: "monster", File: "monster.json", Key: func(v testMonsterCfg) int32 { return v.ID }})
+	MustRegisterObject(reg, ObjectDef[testWorldCfg]{Name: "world", File: "world.json"})
+	store := NewStore(reg, dir)
+	var outcomes []ReloadOutcome
+	store.OnReloadOutcome(func(outcome ReloadOutcome) { outcomes = append(outcomes, outcome) })
+	ctx := context.Background()
+
+	first, err := store.ReloadWithChanges(ctx, "load")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Changes.Initial || first.Changes.None() || len(first.Changes.Added) != 2 || first.Previous != 0 {
+		t.Fatalf("first load changes = %+v previous=%d, want both members added and no previous generation", first.Changes, first.Previous)
+	}
+
+	same, err := store.ReloadWithChanges(ctx, "nothing edited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same.Changes.None() || same.Changes.Unchanged != 2 {
+		t.Fatalf("a reload of unchanged files reported %+v, want no change", same.Changes)
+	}
+	if same.Snapshot.Version != 2 || same.Previous != 1 || same.Snapshot.Hash != first.Snapshot.Hash || store.Current() != same.Snapshot {
+		t.Fatalf("an unchanged reload must still publish a new version with the same hash: version=%d previous=%d hash equal=%v", same.Snapshot.Version, same.Previous, same.Snapshot.Hash == first.Snapshot.Hash)
+	}
+
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"wolf","scene_id":7},{"id":2,"name":"bear","scene_id":7}]`)
+	grown, err := store.ReloadWithChanges(ctx, "one row added")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MemberChange{{Kind: "table", Name: "monster", RowsBefore: 1, RowsAfter: 2}}
+	if fmt.Sprint(grown.Changes.Changed) != fmt.Sprint(want) || grown.Changes.Unchanged != 1 || grown.Changes.None() {
+		t.Fatalf("adding a monster row reported %+v, want only monster changed 1 -> 2 rows", grown.Changes)
+	}
+
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"wolf","scene_id":7},{"id":2,"name":"boar","scene_id":7}]`)
+	edited, err := store.ReloadWithChanges(ctx, "one field edited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []MemberChange{{Kind: "table", Name: "monster", RowsBefore: 2, RowsAfter: 2}}; fmt.Sprint(edited.Changes.Changed) != fmt.Sprint(want) {
+		t.Fatalf("editing a field reported %+v, want monster changed with the row count unchanged", edited.Changes)
+	}
+
+	back, err := store.RollbackWithChanges(ctx, "undo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Snapshot != grown.Snapshot || len(back.Changes.Changed) != 1 || back.Changes.Changed[0].Name != "monster" {
+		t.Fatalf("rollback = version %d changes %+v, want the previous generation with monster changed back", back.Snapshot.Version, back.Changes)
+	}
+
+	if len(outcomes) != 5 || !outcomes[1].Changes.None() || outcomes[2].Changes.None() {
+		t.Fatalf("outcome observers saw %d outcomes (unchanged flags wrong?): %+v", len(outcomes), outcomes)
 	}
 }

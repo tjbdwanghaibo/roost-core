@@ -10,8 +10,8 @@
 | --- | --- | --- | --- |
 | 1 | `23a10f42`（NC-140～147） | Tick 期间取消 / 改期仍在堆里的定时器，它照旧按旧期限触发；重入 Tick 清掉 `running` | 堆中节点立即出堆、改期节点“移出堆 + 推迟放回”；只有最外层 Tick 收尾 |
 | 2 | `50526a2c` | 非法存量节点在加载（构造）期就写存储，越过宿主事务 | `invalid` 暂存表 + `NeedsCleanup`，由事务内 Tick 清理 |
-| 3 | `a975c070`（原 `6a90cc23`） | 触发中节点的显式改期在回调返回 0 / 负值时丢失、返回正值时被重入 Tick 提前触发 | `firing` 重入栈 + `firingChanges` 控制表 |
-| 3 | `1fa5ef08`（原 `c958144f`） | Tick 内新建定时器把取时钟、复制 payload 也推迟了 | 新建时先构造节点，只推迟 `addNode` |
+| 3 | `a975c070` | 触发中节点的显式改期在回调返回 0 / 负值时丢失、返回正值时被重入 Tick 提前触发 | `firing` 重入栈 + `firingChanges` 控制表 |
+| 3 | `1fa5ef08` | Tick 内新建定时器把取时钟、复制 payload 也推迟了 | 新建时先构造节点，只推迟 `addNode` |
 
 另有未修的既有问题：收尾执行推迟闭包时 `onChange` panic，`deferred` 与 `firingChanges` 不清空，同一个 Scheduler 再 Tick 会重放（`TestOnChangePanicDuringSettlementDoesNotReplay` 在基线上三个子用例全红，见 §7）。
 
@@ -163,7 +163,7 @@
 
 ### 9.1 收尾钩子重入 Tick：已入堆、尚未通知的节点到期（重构后第一处缺陷）
 
-**缺陷**（`origin/fix/timer-announce-before-firing` 的 `f8851f4a` 报告，本轮复核确认）：§2.2 收尾第 2、3 步“先落定再回调”，把等待节点全部入堆之后才依次 upsert。前一个节点的 upsert 钩子若重入 Tick（§2.2 允许“钩子里调用调度器按 Tick 外规则立即生效”），排在后面、已入堆但还没轮到 upsert 的节点可能到期：
+**缺陷**（`09846b5f` 报告，原在 `origin/fix/timer-announce-before-firing`；本轮复核确认）：§2.2 收尾第 2、3 步“先落定再回调”，把等待节点全部入堆之后才依次 upsert。前一个节点的 upsert 钩子若重入 Tick（§2.2 允许“钩子里调用调度器按 Tick 外规则立即生效”），排在后面、已入堆但还没轮到 upsert 的节点可能到期：
 
 - Tick 内新建的节点（`announced` 为假）：`fire` 无条件只发删除，一次性节点随即 detach，收尾跳过它——钩子从未见到这个 ID 的 upsert。World 按 upsert 推进持久 `TimerSeed`，重建后会再次分配这个已经交给调用方的 ID。
 - 触发中显式改期自己的节点（`persisted` 为假，出堆时已发删除）：再次到期时钩子收到一次它不持有的删除。
@@ -202,6 +202,6 @@ World 的钩子只写 DAO、不调用调度器，生成工程不可达；这是 
         scheduler_test.go:897: the hook never saw the target in state popping_fresh
 ```
 
-原提交 `f8851f4a` 的 `scheduler.go` 在新表上仍有 5 组红（`popping` × 改期 / 取消，`pending_fired` × Tick × 三种返回值），见 [red-f8851f4a.txt](../performance/benchmarks/timer-announce-reentrant-hook/red-f8851f4a.txt)。
+原提交 `09846b5f` 的 `scheduler.go` 在新表上仍有 5 组红（`popping` × 改期 / 取消，`pending_fired` × Tick × 三种返回值），见 [red-f8851f4a.txt](../performance/benchmarks/timer-announce-reentrant-hook/red-f8851f4a.txt)。
 
 **基准**：热路径 `fire` 多两次标志判断与一次状态判断。同机交替 10 轮（[样本与环境](../performance/benchmarks/timer-announce-reentrant-hook/)），六个基准时间、B/op、allocs/op 与基线均无显著差异（例：TickRearmByReturn 21.30µs → 21.11µs，p=0.280；NewAndRemoveOutsideTick 95.83ns → 96.10ns，p=0.698；RebuildAndTick 54.58µs → 55.03µs，p=0.684）。代码量：`scheduler.go` 净增一个 `emitLeave`（`RemoveTimer` 原有的两段判断移入其中复用），`fire` 加一个状态判断；原提交的单点测试由组合表取代。

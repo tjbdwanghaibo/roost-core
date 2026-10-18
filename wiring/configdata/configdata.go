@@ -8,6 +8,7 @@ import (
 	fconfigdata "github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
@@ -77,6 +78,10 @@ func (m *Mod) Provide(r *app.Registry) error {
 			if outcome.Reverted() {
 				m.metrics.IncCounter("configdata.rollback.total", metrics.Labels{"trigger": "apply_failed"}, 1)
 			}
+		case outcome.Err == nil && outcome.Changes.None():
+			// 发布成功但内容与上一代相同（只改了 CSV 没生成、或重复重载）：单独计，
+			// 让面板能区分“真的发布了新数据”和“空重载”。
+			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "unchanged"}, 1)
 		case outcome.Err == nil:
 			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "ok"}, 1)
 		default:
@@ -91,6 +96,15 @@ func (m *Mod) Provide(r *app.Registry) error {
 			m.metrics.SetGauge("configdata.version", nil, int64(outcome.Live))
 		}
 	}))
+	// 重载 / 回滚 / 状态是运维动作，由框架挂到 App 的 admin 注册表（与 nats 挂 bus.dlq.* 一样），
+	// 经 ops 的 /admin/execute 调用；业务工程不再各自手写。
+	commands, ok := app.Lookup[*admin.Registry](r, mods.ModAdmin)
+	if !ok || commands == nil {
+		return fmt.Errorf("configdata mod: capability %q not found", mods.ModAdmin)
+	}
+	if err := fconfigdata.RegisterAdminCommands(commands, m.store); err != nil {
+		return fmt.Errorf("configdata mod: %w", err)
+	}
 	return r.Register(mods.ModConfigData, m.store)
 }
 

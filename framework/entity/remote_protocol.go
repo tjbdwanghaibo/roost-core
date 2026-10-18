@@ -26,6 +26,11 @@ var (
 	// 这是可重试错误：卸载完成后的下一次访问得到从权威重载的新实例。它包裹 ErrRemoteFenced，
 	// 既有 errors.Is(err, ErrRemoteFenced) 判断保持成立；需要区分“可重试的重载窗口”时先判断本哨兵。
 	ErrRemoteEntityReloading = fmt.Errorf("%w: rejected instance is being unloaded and reloaded from the authority (retryable)", ErrRemoteFenced)
+	// ErrNoRemoteRuntime 表示写的是 Remote 托管（remote=managed）实体，而本进程没有装 Remote 运行时：写权限、fence 与
+	// 远端提交都由 remote_entity Mod（wiring/remoteentity）提供，没有它就不会把这类写当本地写，一律拒绝。
+	// 它包裹 ErrRemoteWriteCapabilityDisabled，既有 errors.Is 判断不变；文本点名修法。
+	ErrNoRemoteRuntime = fmt.Errorf("%w: this process has no Remote runtime; register the remote_entity Mod (wiring/remoteentity) "+
+		"in this service (generated projects: roost add mod remote_entity -service <service>)", ErrRemoteWriteCapabilityDisabled)
 )
 
 // RemoteOwnershipState 是实例的 Remote 所有权状态，按 ValidRemoteOwnershipTransition 转换。

@@ -68,9 +68,9 @@
 
 ## 2. nestwal 编码去反射
 
-改动 `ca0cbddf`：`framework/nestwal/codec.go` 的 `encodeRecord` 各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配切片；codec7 落盘格式逐字节不变，由 `codec_reference_test.go`（改造前实现作参照，2004 条记录逐字节对照与解码往返）保证。解码侧未改。
+改动 `8c04ccc4`：`framework/nestwal/codec.go` 的 `encodeRecord` 各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配切片；codec7 落盘格式逐字节不变，由 `codec_reference_test.go`（改造前实现作参照，2004 条记录逐字节对照与解码往返）保证。解码侧未改。
 
-方法：前 `a91f5f72`、后 `ca0cbddf` 各编译一份 `framework/nestwal` 测试二进制，同机交替 10 轮（每轮先前后后，`-count=1 -benchmem`，`GOMAXPROCS=10`），01:00～01:14 完成；benchstat 原样见 [benchmarks/nestwal-codec-20261015/benchstat.txt](benchmarks/nestwal-codec-20261015/benchstat.txt)。
+方法：前 `a91f5f72`、后 `8c04ccc4`（测时为分支上改动相同的提交）各编译一份 `framework/nestwal` 测试二进制，同机交替 10 轮（每轮先前后后，`-count=1 -benchmem`，`GOMAXPROCS=10`），01:00～01:14 完成；benchstat 原样见 [benchmarks/nestwal-codec-20261015/benchstat.txt](benchmarks/nestwal-codec-20261015/benchstat.txt)。
 
 | benchmark | 前 | 后 | 变化 |
 | --- | ---: | ---: | --- |
@@ -94,7 +94,7 @@
 
 ## 3. Remote 与 Saga 容量复测（v1.27 代码）
 
-均在共享隔离环境 `~/.roost-it/roost-dataengine-it` 上运行（Mongo 三节点副本集、NATS 三节点 JetStream、Redis、toxiproxy；只 source env，不打印），脚本自带 `remote-acceptance.lock`，开始前锁空闲，无需等待。被测代码为本分支 `1bc6dd46`（运行时与 v1.27.0 相同，另含 §2 的 nestwal 编码改动；Remote strict 路径经 nestwal，所以本样本已包含该改动）。历史样本在私有 `mirror-local` 环境上跑，环境不同，以下对照只看量级与是否达标。
+均在共享隔离环境 `~/.roost-it/roost-dataengine-it` 上运行（Mongo 三节点副本集、NATS 三节点 JetStream、Redis、toxiproxy；只 source env，不打印），脚本自带 `remote-acceptance.lock`，开始前锁空闲，无需等待。被测代码为当时分支上的提交，改动与 main `64433bf0` 相同（运行时与 v1.27.0 相同，另含 §2 的 nestwal 编码改动；Remote strict 路径经 nestwal，所以本样本已包含该改动）。历史样本在私有 `mirror-local` 环境上跑，环境不同，以下对照只看量级与是否达标。
 
 ### Remote 80 TPS × 30 分钟
 
@@ -142,7 +142,7 @@
 - 1000 玩家、10000 Entity、10 条/s、`HZ=10`、`DIRTY=5`、Gate + Sync on_change；
 - `IO_WORKERS` 用夹具默认 32，与当时的慢池默认一致。本场景不使用 io 池。
 
-时长由 15 分钟改为 30 分钟，私有 NATS 2.14.5（JetStream，随机端口，02:56～03:26，结束即停，日志无 slow consumer），无采集、race 或 profile。标签 `perf1027-aoi-cpu4-heavy-30m`，代码为本分支 `1bc6dd46`（运行时与 v1.27.0 相同；本场景 Durability 为 memory，不经 nestwal）。
+时长由 15 分钟改为 30 分钟，私有 NATS 2.14.5（JetStream，随机端口，02:56～03:26，结束即停，日志无 slow consumer），无采集、race 或 profile。标签 `perf1027-aoi-cpu4-heavy-30m`，代码为当时分支上的提交，改动与 main `64433bf0` 相同（运行时与 v1.27.0 相同；本场景 Durability 为 memory，不经 nestwal）。
 
 | 指标 | 2026-10-09 同配置 15 分钟目标 | v1.27 代码 30 分钟（本次） |
 | --- | --- | --- |

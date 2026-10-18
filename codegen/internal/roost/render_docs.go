@@ -341,6 +341,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | access | 否 | 已认证请求边界、所属 Service 与显式 transport | 生成 player runtime、binding、listener 与装配 |
 | features | 否 | 项目级代码生成能力开关 | 决定目录、生成器和 bootstrap 接线 |
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
+| timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
@@ -395,13 +396,13 @@ services.<name>.mods 表示该 Service 运行时装配的 Kit Mod。生成器会
 DependsOn 拓扑排序。nest 和 saga 会自动补唯一的 dataengine 持久化引擎及 mongo、nats。
 同一个 Mod 不能同时出现在 shared_mods 和某个 Service 中，未知 Mod 和依赖环会失败。
 
-services.<name>.framework 把该进程声明为一个托管的框架服务（roost-core service/：account、mail、
-match、chat 之一）：没有业务 Service，进程就是该服务的 Server 加它的 owner Mod，redis 与
-nats 自动补齐；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
+services.<name>.framework 把该进程声明为一个托管的框架服务（roost-core service/：account、chat、
+mail、match、session、activity、global、platform、rank 九个之一）：没有业务 Service，进程就是该服务的
+Server 加它的 owner Mod，redis 与 nats 自动补齐（match、activity 按 key 路由，另补 etcd）；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
-访问器。roost project new … -template game 一次生成这四个托管服务并把第一个业务 Service
-接上它们；-template game-demo 在此之上再带一条可运行的写入链路（Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务是 roost-core 的包，版本跟随 versions.core。
+访问器。roost project new … -template game 一次生成这九个托管服务并把第一个业务 Service
+接上它们；已有工程按需接入一个（例如排行）见 roost help framework-services；-template game-demo 在此之上再带一条可运行的写入链路（Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务是 roost-core 的包，版本跟随 versions.core。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
 feature，并要求目标 Service 有 nest Mod。access.player.transports 是显式启用的客户端传输列表；当前
@@ -487,6 +488,20 @@ sagas 是 roost add saga 生成过的定义名称列表：
 
 不要只手工添加名字；使用 roost add saga，让定义文件、Service 的 saga mod、依赖和 bootstrap
 一起更新。删除前确认没有运行中的旧 definition version。
+
+## 8.1 timers
+
+timers 是 roost add timer --entity <Entity> 写下的按实体持久定时器，键为实体名：
+
+    timers:
+      player:
+        component: timer   # 组件名：game/entities/player/timer_component_gen.go
+        id: 2000           # 组件类型号（ids.component 段内）
+        service: game      # 运行该实体 Nest 的服务，bootstrap 在这里装驱动
+        dao: PlayerDao     # 节点所在 DAO（add 时在它的定义里加了 Timers / TimerSeed）
+
+不要只手工添加条目；使用 roost add timer，让 DAO 字段、实体组件字段与生成部分一起更新。定时器类型与
+回调写在 game/entities/<entity>/<component>_handlers.go（业务文件）。去掉条目后生成部分不会自动删除。
 
 ## 9. ids
 

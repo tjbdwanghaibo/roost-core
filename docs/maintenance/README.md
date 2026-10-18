@@ -61,6 +61,7 @@ git diff --exit-code
 | 总线停止/重订失败 | consumer关闭、在途回调、ErrSubscriptionBusy | 等真实排空；有限MaxDeliver不保证永不丢 |
 | 停机超时 | Service与各Mod预算、仍在途操作 | 保留依赖并继续等待，禁止先释放连接/锁 |
 | readiness Degraded | 哪个checker降级、是否仍满足准入 | Degraded仍可ready；Fail才阻断 |
+| 启动报 `mod saga start: saga: subscribe Nest starts: ... stream not found` | 运行进程 `--check-config` 或 `roost project doctor` 的 `config-check:<service>`：`saga.start_effect_stream` / `start_effect_prefix` 是否显式写成与 `dataengine.effects` 不同；目标 NATS 上是否真有该流 | 删掉 saga 的这两个键（不写时取 `dataengine.effects`）；不要为让订阅成功而手工建一条没人发布的流 |
 | activity目标长期失联 | 持久投递状态、静态sid及人工管理操作 | 观察重试不自动耗尽，按业务决定收口 |
 
 ## 5. 发版

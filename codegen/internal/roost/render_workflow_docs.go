@@ -126,6 +126,42 @@ mutator 同时维护 dirty、undo、持久化 patch 和客户端同步标记。
 endpoint 自动用已认证的 PlayerID 调生成 Sender。不要在 endpoint 直接拿 EntityManager、手动加锁或直接
 调用 Component。lifecycle 只用于登录加载、首次创建和销毁，普通玩法都走 Sender。
 
+### 3.6 到点要做的事：限时 Buff 到期
+
+“双倍金币卡 30 分钟后失效”这类到点必须发生的事，不要只存到期时刻、读的时候再判断（到点那一刻服务器什么
+也不做，推送、结算都不会发生），也不要用 Delay_ Sender（只在进程内存里，重启就丢）。给 Player 加持久定时器：
+
+    roost add timer --entity Player
+    roost project next
+
+它在 PlayerDao 里加 Timers / TimerSeed 两个字段（期限就存在玩家自己的数据里，随事务提交、回滚），生成
+TimerComponent、到期 Tick 的 Nest handler 与驱动接线；你只写 game/entities/player/timer_handlers.go：
+
+    const TimerTypeBuffExpire int32 = 1
+
+    func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+        handlers.Register(TimerTypeBuffExpire, component.onBuffExpire)
+    }
+
+    func (component *TimerComponent) onBuffExpire(fire entitytimer.Fire) time.Duration {
+        component.Owner().Dao().SetDoubleGold(false)
+        return 0
+    }
+
+在使用双倍金币卡的 handler 里登记到期（DoubleGold 是你在 PlayerDao 里加的 bool 字段）：
+
+    //roost:nest rollback=undo durability=strict
+    func handlerUseDoubleCard(target player.ITimerEntity) error {
+        target.TimerComp().Owner().Dao().SetDoubleGold(true)
+        target.TimerComp().NewTimer(30*time.Minute, player.TimerTypeBuffExpire, 0, 0, nil)
+        return nil
+    }
+
+到点时驱动只给这一个玩家投递 Tick（不是每秒扫一遍在线玩家），回调在玩家的 Nest 锁和事务里执行，只改
+DAO、不做 I/O。玩家离线期间到期的，下次加载时只触发一次：fire.Overdue 为 true，fire.Deadline 是原定期限，
+fire.Now 是实际触发时刻。周期性的（例如每小时收益）错过几个周期框架不补，用
+(fire.Now - fire.Deadline) / fire.Interval 自己算。回调返回正值是下次间隔（从 fire.Now 起算），返回 0 结束。
+
 ## 4. 接真实 TCP 客户端（可选）
 
 如果已有独立网关，可以实现同一个 gateway.Session/Dispatch 边界并跳过本节。使用框架自带 TCP：
@@ -552,7 +588,7 @@ func renderSkillGuide() string {
 
     roost add skill Fireball
 
-命令创建 game/skills/fireball.json 和首次使用时的 catalog.go。初始定义只立即 finish，是一个可编译的
+命令创建 game/skills/fireball.json 和首次使用时的 catalog.go、catalog_test.go。初始定义只立即 finish，是一个可编译的
 空骨架，不偷偷选择伤害、目标、资源或战斗规则。按 roost-core/docs/skill 文档显式添加 input_schema、costs、
 cast_window、phase flow、effect、selection 和 presentation。
 
@@ -565,6 +601,10 @@ cast_window、phase flow、effect、selection 和 presentation。
 
 CompileAll 对嵌入的每个 JSON 做严格 Parse 和 Compile，重复 ID 或 error diagnostic 会阻止启动；warning
 保存在 Catalog.Diagnostics，发布流程应审阅并按项目策略决定是否升级成失败。
+
+启动前就要拦住写坏的定义：catalog_test.go 的 TestSkillCatalogCompiles 走同一条 CompileAll，
+go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项都会失败并给出编译器的原话。
+用自定义 environment 时，把测试里的 skill.DefaultCompileEnvironment() 换成同一个。
 
 ## 3. 运行时边界
 

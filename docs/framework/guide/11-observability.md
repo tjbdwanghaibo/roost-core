@@ -24,6 +24,23 @@ metrics 记录 counter/gauge/duration/histogram；health 评估组件状态，op
 
 ExportMetrics 的存在不代表项目已向指定监控平台接线。业务新增指标应控制标签基数，禁止 playerID/requestID 作为无限标签。
 
+业务代码加指标直接用 `infra/observe/metrics` 的包级函数：App 创建的注册表就是包级默认注册表（`app.NewRegistry` 里 `metrics.SetDefaultRegistry`），ops 的 `/metrics` 导出的正是它，不需要另外注册或接线。
+
+```go
+import "github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+
+// 计数：点号分层、_total 结尾；label 只放有界枚举（结果、原因），不放玩家 ID。
+metrics.IncCounter("game.shop.buy_total", metrics.Labels{"result": "ok"}, 1)
+// 需要 P99 等分位数的时延用 histogram；只要次数与总耗时用 ObserveDuration。
+started := time.Now()
+// ... 业务 ...
+metrics.ObserveHistogram("game.shop.buy_latency", metrics.Labels{"result": "ok"}, time.Since(started))
+// 当前值（在线人数、队列长度）用 gauge。
+metrics.SetGauge("game.room.open", nil, int64(openRooms))
+```
+
+命名规则、四类指标的区别与 series 上限见 [OBSERVABILITY 命名规范](../OBSERVABILITY.md#命名规范)。
+
 ## 4. 日志与失败记录
 
 结构化日志包含请求/实体上下文；跨 goroutine 必须明确传递，不假定本地上下文自动复制。系统时间用于审计排序。failurelog 是有界记录存储，裁剪与写失败要可观测，不能承诺无限保留；外部平台的长期归档由部署负责。

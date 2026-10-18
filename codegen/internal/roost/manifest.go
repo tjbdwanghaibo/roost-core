@@ -40,7 +40,9 @@ type Manifest struct {
 	Access     map[string]AccessSpec  `yaml:"access,omitempty"`
 	Features   []string               `yaml:"features,omitempty"`
 	Sagas      []string               `yaml:"sagas,omitempty"`
-	IDs        map[string]IDSpace     `yaml:"ids,omitempty"`
+	// Timers 是按实体的持久定时器（roost add timer --entity <Entity>，D11），键为实体名（snake）。
+	Timers map[string]TimerSpec `yaml:"timers,omitempty"`
+	IDs    map[string]IDSpace   `yaml:"ids,omitempty"`
 
 	// configuredShutdown is each service's longest shutdown.total_timeout
 	// found in the project's configs, filled by withConfiguredShutdown when
@@ -148,6 +150,19 @@ type AccessSpec struct {
 	// 生成器写默认 packer（player_sync_packer_gen.go，"self" 视图含 DAO 全部 sync 字段），generate / doctor
 	// 检查就绪情况。默认关。
 	SelfSync bool `yaml:"self_sync,omitempty"`
+}
+
+// TimerSpec 是一个实体的持久定时器组件。project sync 按它重写生成部分（组件、节点类型、Tick handler、
+// bootstrap 里的驱动装配）；业务回调文件只在缺失时创建。
+type TimerSpec struct {
+	// Component 是组件名（snake），缺省 timer：game/entities/<entity>/<component>_component_gen.go。
+	Component string `yaml:"component"`
+	// ID 是组件类型号（ids.component 段内），由 roost add timer 分配。
+	ID int64 `yaml:"id"`
+	// Service 是运行该实体 Nest 的服务：它的 bootstrap 装 wiring/entitytimer 驱动。
+	Service string `yaml:"service"`
+	// Dao 是存放节点的 DAO 类型（如 PlayerDao）：roost add timer 在它的定义里加节点 map 与种子两个字段。
+	Dao string `yaml:"dao"`
 }
 
 type IDSpace struct {
@@ -368,6 +383,9 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, fmt.Errorf("unsupported cicd deploy target %q", deploy))
 		}
 	}
+	for _, entityName := range sortedTimerEntities(m) {
+		joined = errors.Join(joined, m.validateTimer(entityName))
+	}
 	for _, sagaName := range m.Sagas {
 		if !validName(sagaName) {
 			joined = errors.Join(joined, fmt.Errorf("invalid saga %q", sagaName))
@@ -543,7 +561,16 @@ func resolvedModuleVersion(policy, minimum string) string {
 	return strings.TrimSpace(policy)
 }
 
+// splitList 解析逗号分隔的无序集合（Mod、feature）：去空、去重并排序，
+// 使同一组值不论书写顺序都生成相同的 roost.yaml。顺序有含义的参数
+// （Saga 步骤、-services 的第一个服务）用 splitOrderedList。
 func splitList(raw string) []string {
+	return uniqueSorted(splitOrderedList(raw))
+}
+
+// splitOrderedList 解析顺序有含义的逗号列表：只去掉空白项，保留书写顺序和
+// 重复项，重复是否合法由使用方判断（Saga 步骤重复要报错，不能静默合并）。
+func splitOrderedList(raw string) []string {
 	var out []string
 	for _, item := range strings.Split(raw, ",") {
 		item = strings.TrimSpace(item)
@@ -551,7 +578,7 @@ func splitList(raw string) []string {
 			out = append(out, item)
 		}
 	}
-	return uniqueSorted(out)
+	return out
 }
 
 func uniqueSorted(values []string) []string {

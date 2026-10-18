@@ -381,17 +381,22 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// their receipt and emit their completion inside the transaction (the
 	// native path), the mail step keeps the Mongo inbox and the mail
 	// service's own RequestID dedupe.
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "saga.SubscribeDataEngineStep(") || !strings.Contains(steps, "saga.SubscribeMongoStep(") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
+	// The glue (inboxes, publisher, durables, drain) is the framework's step
+	// runtime (D12 方向 A); the demo registers step bodies by name.
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "runtime.Native(giftHandoffPhaseDebit, giftitem.TopicDebit") || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
 		t.Errorf("gift saga does not run the Nest steps natively while keeping the mail step on the Mongo inbox")
 	}
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "giftitem.TopicDebit") || !strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
-		t.Errorf("gift saga does not address the generated topics or build the native inbox")
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "steps.runtime.RunHandedOver(") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
+		t.Errorf("gift saga does not assemble its consumers through the framework's step runtime")
 	}
 	if debit := read("game/handler/gift_debit.go"); !strings.Contains(debit, "step.Complete(true, \"\")") || !strings.Contains(debit, "step.Complete(false, reason)") {
 		t.Errorf("the debit handler does not commit its receipt and outcome in the transaction")
 	}
-	if contract := read("game/gift/gift.go"); !strings.Contains(contract, "func (step NativeStep) Complete(") || !strings.Contains(contract, "saga.EmitCompletion(") {
-		t.Errorf("the gift contract has no native step carrier")
+	if debit := read("game/handler/gift_debit.go"); !strings.Contains(debit, "step saga.NativeStep)") {
+		t.Errorf("the debit handler does not take the framework's native step")
+	}
+	if contract := read("game/gift/gift.go"); strings.Contains(contract, "NativeStep struct") {
+		t.Errorf("the gift contract still carries its own native step; it is saga.NativeStep now")
 	}
 	// A step's topics come from the generated definition, so a durable and
 	// its filter cannot drift apart.
@@ -426,7 +431,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
 		t.Errorf("game service does not start the effect consumer:\n%s", service)
 	}
-	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "nestwal.SubscribeJetStreamEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") {
+	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "kitdataengine.SubscribeEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") {
 		t.Errorf("level-up mailer is not the inbox-backed, idempotent consumer:\n%s", mailer)
 	}
 	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
