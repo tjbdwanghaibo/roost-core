@@ -346,7 +346,8 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 // buildableGameDemo 是 game-demo 夹具的私有副本，roost-core replace 到本仓库并 go mod tidy，可以编译。
 // doctor 的 config-check 项把每个服务的开发配置交给编译后的进程 --check-config：跨键与跨 Mod 规则（例如 saga 的效果流
 // 必须就是同进程 DataEngine 的那条）只在进程里，键快照查不到。新生成的 game-demo 全部通过；把 saga 的效果流写成与
-// dataengine.effects 不同之后，game 一项 FAIL 并点名两个键（修前 doctor 全部通过，启动才报 "stream not found"）。
+// dataengine.effects 不同之后，game 一项 FAIL 并点名两个键（修前 doctor 全部通过，启动才报 "stream not found"）；把效果流的
+// 保留期写得比 saga 完成回执长，同样 FAIL（D12 顺带项，修前这条在 saga Init 里，doctor 放过）。
 func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiles the generated game-demo")
@@ -388,6 +389,23 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 		}
 		if item.Status != StatusFail || !strings.Contains(item.Detail, "saga.start_effect_stream") || !strings.Contains(item.Detail, "dataengine.effects.stream") {
 			t.Errorf("mismatched saga effect stream: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
+		}
+	}
+	// 效果流比完成回执活得久（D12 顺带项）：saga 的完成回执 TTL 与 dataengine.effects.max_age 的比较是跨 Mod 规则，
+	// 现在由 saga Mod 的 CheckConfigAcrossMods 做，doctor 经进程的 --check-config 报出；修前它在 saga Init 里，doctor 全部通过。
+	retention := strings.Replace(string(raw), "\n    max_age: 168h\n", "\n    max_age: 800h\n", 1)
+	if retention == string(raw) {
+		t.Fatal("config.game.yaml has no dataengine.effects max_age: 168h; update this test")
+	}
+	if err := os.WriteFile(configPath, []byte(retention), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkConfigRules(root, m, process) {
+		if item.Name != "config-check:game" {
+			continue
+		}
+		if item.Status != StatusFail || !strings.Contains(item.Detail, "saga.completion_receipt_ttl") || !strings.Contains(item.Detail, "dataengine.effects.max_age") {
+			t.Errorf("effect stream outliving the completion receipts: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
 		}
 	}
 }

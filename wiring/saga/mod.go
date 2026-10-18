@@ -74,10 +74,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err != nil {
 		return fmt.Errorf("saga: %w", err)
 	}
-	startStream := stringDefault(c.StartEffectStream, effects.Stream)
-	startPrefix := stringDefault(c.StartEffectPrefix, effects.Prefix())
-	resultStream := stringDefault(c.ResultEffectStream, startStream)
-	resultPrefix := stringDefault(c.ResultEffectPrefix, startPrefix)
+	startStream, startPrefix, resultStream, resultPrefix := effectStreams(&settings, effects)
 	m.config = coresaga.AssemblyConfig{
 		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
 			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
@@ -120,17 +117,30 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if m.config.Store.CompletionReceiptTTL <= m.config.Stream.MaxAge {
 		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
 	}
-	return m.checkEffectRetention(cfg)
+	return nil
 }
 
-// CheckConfigAcrossMods 是 saga 效果流与 DataEngine 效果流的一致性规则（App 在配置检查时调用，启动前与
-// --check-config 相同）。同一进程注册了 DataEngine 时，Nest 的 saga start 由它发布到 dataengine.effects 那条流，
-// 本 Mod 的 start 消费者订阅 saga.start_effect_*：两边写得不同，启动时只会得到 JetStream 的 "stream not found"
-// 或永远收不到 start。这里点名两个键并给出改法。没有 DataEngine 的进程不比较（显式值就是它要订阅的流）。
+// effectStreams 解析 saga 订阅的两条效果流（Nest start、原生步骤结果）：不写取 dataengine.effects 的值，结果流不写取
+// start 流。Init 装配消费者与配置检查（checkEffectRetention）用同一个解析。
+func effectStreams(settings *config, effects kitdataengine.EffectsConfig) (startStream, startPrefix, resultStream, resultPrefix string) {
+	c := &settings.Saga
+	startStream = stringDefault(c.StartEffectStream, effects.Stream)
+	startPrefix = stringDefault(c.StartEffectPrefix, effects.Prefix())
+	resultStream = stringDefault(c.ResultEffectStream, startStream)
+	resultPrefix = stringDefault(c.ResultEffectPrefix, startPrefix)
+	return startStream, startPrefix, resultStream, resultPrefix
+}
+
+// CheckConfigAcrossMods 是 saga 读 DataEngine 配置键的两条规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
+// --check-config 与 doctor 的 config-check 同一处）：
+//
+//   - checkEffectRetention：完成回执要比效果流里的结果活得久。不看本进程是否注册了 DataEngine——只跑协调器的进程
+//     读的仍是按 dataengine.effects 解析的那条流，它的保留期由别的进程的 DataEngine 按同一份配置建。
+//   - 同一进程注册了 DataEngine 时，saga.start_effect_* 写了就必须与 dataengine.effects 相同：Nest 的 saga start 由
+//     DataEngine 发布到 dataengine.effects 那条流，本 Mod 的 start 消费者订阅 saga.start_effect_*，两边写得不同，启动时
+//     只会得到 JetStream 的 "stream not found" 或永远收不到 start。这里点名两个键并给出改法。没有 DataEngine 的进程
+//     不比较（显式值就是它要订阅的流）。
 func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModName) bool) error {
-	if !registered(mods.ModDataEngine) {
-		return nil
-	}
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return err
@@ -139,7 +149,10 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 	if err != nil {
 		return err
 	}
-	var errs []error
+	errs := []error{checkEffectRetention(&settings, effects)}
+	if !registered(mods.ModDataEngine) {
+		return errors.Join(errs...)
+	}
 	if stream := strings.TrimSpace(settings.Saga.StartEffectStream); stream != "" && stream != effects.Stream {
 		errs = append(errs, effectKeyMismatch("saga.start_effect_stream", stream, "dataengine.effects.stream", effects.Stream))
 	}
@@ -155,24 +168,21 @@ func effectKeyMismatch(sagaKey, sagaValue, effectKey, effectValue string) error 
 		"delete %s so it follows %s, or set both to the same value", sagaKey, sagaValue, effectKey, effectValue, sagaKey, effectKey)
 }
 
-// checkEffectRetention 是跨 Mod 校验（维护者决定）：原生 Nest 步骤的完成结果在
-// DataEngine 的效果流上，回执必须比流里的结果活得久，否则回执过期后再投递的结果协调器分不清是
-// 已计入的重复还是放弃后生效的成功，只能 Term。saga 流的同一前提上面已经校验；这里只在结果效果流
-// 就是 DataEngine 效果流（按 DataEngine Mod 的读法解析的流名）时比较，别的流的保留期不归这份配置管。
-func (m *Mod) checkEffectRetention(cfg *viper.Viper) error {
-	effectStream, effectMaxAge, err := kitdataengine.EffectStreamRetention(cfg)
-	if err != nil {
-		return fmt.Errorf("saga: %w", err)
-	}
-	if strings.TrimSpace(m.config.NestResults.Stream) != effectStream {
+// checkEffectRetention 是跨 Mod 校验（维护者决定）：原生 Nest 步骤的完成结果在 DataEngine 的效果流上，回执必须比
+// 流里的结果活得久，否则回执过期后再投递的结果协调器分不清是已计入的重复还是放弃后生效的成功，只能 Term。saga 流的
+// 同一前提由 Init 校验；这里只在结果效果流就是 DataEngine 效果流（与 Init 同一个解析）时比较，别的流的保留期不归这份
+// 配置管。
+func checkEffectRetention(settings *config, effects kitdataengine.EffectsConfig) error {
+	_, _, resultStream, _ := effectStreams(settings, effects)
+	if strings.TrimSpace(resultStream) != effects.Stream {
 		return nil
 	}
-	if ttl := m.config.Store.CompletionReceiptTTL; ttl <= effectMaxAge {
-		return fmt.Errorf("saga: saga.completion_receipt_ttl (%s) must exceed dataengine.effects.max_age (%s): "+
+	if ttl := settings.Saga.CompletionReceiptTTL; ttl <= effects.MaxAge {
+		return fmt.Errorf("saga.completion_receipt_ttl (%s) must exceed dataengine.effects.max_age (%s): "+
 			"native step results are kept on the effect stream %s that long, and a result redelivered after its "+
 			"completion receipt expired can no longer be told from a late success and is terminated; "+
 			"raise saga.completion_receipt_ttl or lower dataengine.effects.max_age",
-			ttl, effectMaxAge, effectStream)
+			ttl, effects.MaxAge, effects.Stream)
 	}
 	return nil
 }
@@ -269,8 +279,8 @@ var _ app.Mod = (*Mod)(nil)
 var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
 
 // StreamSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回步骤消费者与协调器会合要用的
-// 三样：命令主题前缀、saga 流名与 saga 库名。业务的步骤消费者（game-demo 的赠礼 saga）用它，不直接读 viper、
-// 不另抄一份缺省值。
+// 三样：命令主题前缀、saga 流名与 saga 库名。步骤运行时 Steps 用它；业务自己组装步骤消费者时同样经它，不直接读
+// viper、不另抄一份缺省值。
 func StreamSettings(cfg *viper.Viper) (subjectPrefix, stream, database string, err error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {

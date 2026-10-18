@@ -94,7 +94,7 @@ func (mod *Mod) OptionalDependsOn() []app.ModName {
 }
 
 // EffectsConfig 是 dataengine.effects.* 的声明：效果流（ROOST_EFFECTS）的主题前缀、名字与保留期。
-// saga Mod 经 EffectStreamRetention 读同一份，两边对流的理解不会分叉。
+// saga Mod 与 SubscribeEffects 经 LoadEffectsConfig / EffectSettings 读同一份，两边对流的理解不会分叉。
 type EffectsConfig struct {
 	SubjectPrefix   string        `config:"subject_prefix" default:"roost.effect" example:"{project}.effect"`
 	Stream          string        `config:"stream" default:"ROOST_EFFECTS" example:"{PROJECT}_EFFECTS"`
@@ -516,22 +516,12 @@ var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
 var _ corenest.LocalExecutorBinder = (*Mod)(nil)
 
-// 效果流（ROOST_EFFECTS）的缺省名字与保留期。saga Mod 用 EffectStreamRetention 读同一份，
-// 校验完成回执比流里的结果活得久（维护者决定）。
+// 效果流（ROOST_EFFECTS）的缺省名字与保留期，与 EffectsConfig 的声明相同（TestEffectStreamDefaultsMatchTheDeclaration）。
+// saga Mod 的配置检查用 LoadEffectsConfig 读同一份，校验完成回执比流里的结果活得久（维护者决定）。
 const (
 	DefaultEffectStream = "ROOST_EFFECTS"
 	DefaultEffectMaxAge = 7 * 24 * time.Hour
 )
-
-// EffectStreamRetention 按 DataEngine Mod 的声明返回效果流的名字与保留期
-// （dataengine.effects.stream / dataengine.effects.max_age，未配置取缺省）。
-func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duration, err error) {
-	effects, err := LoadEffectsConfig(cfg)
-	if err != nil {
-		return "", 0, err
-	}
-	return effects.Stream, effects.MaxAge, nil
-}
 
 // LoadEffectsConfig 按 DataEngine Mod 的声明读 dataengine.effects.*（未配置取缺省）。saga Mod 用它取
 // 效果流的名字与主题前缀：Nest 发起的 saga start 与原生步骤的结果都发布在这条流上，效果流只在这里写一次。
@@ -550,8 +540,8 @@ func (c EffectsConfig) Prefix() string { return c.subjectPrefix() }
 
 // EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流
 // 要用的三样：效果收件箱所在的库（dataengine.database）、主题前缀（去掉首尾点，与 Mod 发布时相同）与流名。
-// 业务代码（game-demo 的升级邮件、活动阶段消费者、赠礼 saga）用它，不直接读 viper、不另抄一份缺省值
-// （生成工程同样守住“读配置只经声明”）。
+// SubscribeEffects 与 wiring/saga 的 Steps（原生收件箱的库）用它；业务自己组装消费者时（game-demo 的活动阶段消费者）
+// 同样经它，不直接读 viper、不另抄一份缺省值（生成工程同样守住“读配置只经声明”）。
 func EffectSettings(cfg *viper.Viper) (database, subjectPrefix, stream string, err error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {

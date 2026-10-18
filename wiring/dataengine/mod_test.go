@@ -72,9 +72,9 @@ func TestDataEngineModKeepsProjectionBatchByteDefaultForZero(t *testing.T) {
 }
 
 func TestEffectStreamDefaultsMatchTheDeclaration(t *testing.T) {
-	stream, maxAge, err := EffectStreamRetention(nil)
-	if err != nil || stream != DefaultEffectStream || maxAge != DefaultEffectMaxAge {
-		t.Fatalf("EffectStreamRetention(nil) = %q, %v, %v; want the declared defaults %q, %v", stream, maxAge, err, DefaultEffectStream, DefaultEffectMaxAge)
+	effects, err := LoadEffectsConfig(nil)
+	if err != nil || effects.Stream != DefaultEffectStream || effects.MaxAge != DefaultEffectMaxAge {
+		t.Fatalf("LoadEffectsConfig(nil) = %+v, %v; want the declared defaults %q, %v", effects, err, DefaultEffectStream, DefaultEffectMaxAge)
 	}
 }
 
