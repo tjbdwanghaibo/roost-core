@@ -174,7 +174,11 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), duration+3*time.Minute)
 	defer cancel()
 
-	const pairs = 64
+	// 账户对数，缺省 64；ROOST_STEPS_PERF_PAIRS=1 是热点实体档（每笔 saga 都扣同一个账户、加同一个账户）。
+	pairs := 64
+	if value, err := strconv.Atoi(os.Getenv("ROOST_STEPS_PERF_PAIRS")); err == nil && value >= 1 && value <= 64 {
+		pairs = value
+	}
 	const balance, limit = int64(1_000_000), int64(1_000_000)
 	accounts := make(map[string]int64, 2*pairs)
 	initial := make(map[string]int64, 2*pairs)
@@ -292,6 +296,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		ServerP99MS         float64
 	}
 	type result struct {
+		Pairs                                            int
 		Variant, Mode                                    string
 		Rate, Planned, Started, Completed, WrongTerminal int
 		StartErrors                                      uint64
@@ -318,7 +323,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		IdlePerSecond map[string]float64    `json:",omitempty"`
 	}
 	total := int(duration/time.Second) * rate
-	r := result{Variant: variantName, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
+	r := result{Pairs: pairs, Variant: variantName, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
 	if hops != nil {
 		// 空载 5 秒：只有轮询（协调器 / 发布器 / outbox 认领、积压采样），作为每秒往返的底数。
 		hops.reset()
