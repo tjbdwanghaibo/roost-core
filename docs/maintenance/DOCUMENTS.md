@@ -35,6 +35,7 @@
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
 - [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
+- [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议

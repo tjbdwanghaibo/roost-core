@@ -1,0 +1,207 @@
+package moba
+
+import (
+	"bytes"
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"testing"
+	"time"
+)
+
+// 真实 loopback KCP：固定测试凭据建立会话，输入经可靠通道，广播经 datagram，追帧经可靠通道。
+// 这是网络 / 模拟验收，不把固定绑定说成真实账号认证，也不据此声明跨机延迟或容量。
+func TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	key := bytes.Repeat([]byte{7}, 32)
+	crypt, err := nettransport.NewKCPAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := nettransport.ListenKCP("127.0.0.1:0", crypt, 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	server, err := nettransport.NewKCPTransport(nettransport.KCPTransportConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	clients := make([]*nettransport.KCPTransport, ArenaSeats)
+	inboxes := make([]chan []byte, ArenaSeats)
+	for i := range inboxes {
+		inboxes[i] = make(chan []byte, 128)
+	}
+	for i := range ArenaSeats {
+		id := nettransport.SessionID(101 + i)
+		cipher, err := nettransport.NewKCPAESGCM(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		connection, err := nettransport.DialKCP(listener.Addr().String(), cipher, 10, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		if _, err := connection.Write([]byte("moba-test")); err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.SetWriteDeadline(time.Time{})
+		accepted, err := listener.AcceptKCP()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = accepted.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := accepted.Read(make([]byte, 32)); err != nil {
+			t.Fatal(err)
+		}
+		_ = accepted.SetReadDeadline(time.Time{})
+		if err := server.BindSession(id, accepted); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+		client, err := nettransport.NewKCPTransport(nettransport.KCPTransportConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clients[i] = client
+		defer client.Close()
+		if err := client.BindSession(id, connection); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.BindDatagramHandler(id, func(_ nettransport.SessionID, raw []byte) {
+			select {
+			case inboxes[i] <- raw:
+			case <-ctx.Done():
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				page, err := client.ReceiveReliable(ctx, id)
+				if err != nil {
+					return
+				}
+				select {
+				case inboxes[i] <- page:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	seats := make([]lockstep.PlayerID, ArenaSeats)
+	for i := range seats {
+		seats[i] = lockstep.PlayerID(i + 1)
+	}
+	m, err := lockstep.NewMatch(lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: seats, SubmitWindow: 8, MaxInputBytes: 4}, Datagrams: server, Reliable: server, CatchupBatchFrames: 16, CatchupSendWait: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for i := range ArenaSeats {
+		if err := m.Attach(lockstep.PlayerID(i+1), nettransport.SessionID(101+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := func(i int, c lockstep.Command) {
+		t.Helper()
+		id := nettransport.SessionID(101 + i)
+		raw, err := lockstep.EncodeCommand(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := clients[i].SendReliable(ctx, id, raw); err != nil {
+			t.Fatal(err)
+		}
+		received, err := server.ReceiveReliable(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command, err := lockstep.DecodeCommand(received)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Operation == lockstep.OpInput {
+			_, err = DecodeArena(command.Payload)
+			if err == nil {
+				err = m.HandleCommand(id, command)
+			}
+		} else {
+			err = m.HandleCommand(id, command)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	reference := NewArena(42)
+	states := make([]*Arena, ArenaSeats)
+	assemblers := make([]*lockstep.FrameAssembler, ArenaSeats)
+	for i := range states {
+		states[i] = NewArena(42)
+		assemblers[i] = lockstep.NewFrameAssembler(128)
+	}
+	catchups := 0
+	for id := lockstep.FrameID(1); id <= 120; id++ {
+		for i := range ArenaSeats {
+			send(i, lockstep.Command{Operation: lockstep.OpInput, Frame: id, Payload: arenaBot(id, i)})
+		}
+		frame, err := m.Tick(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reference.Apply(frame); err != nil {
+			t.Fatal(err)
+		}
+		for i := range ArenaSeats {
+			for {
+				var packet []byte
+				select {
+				case packet = <-inboxes[i]:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				frames, err := lockstep.DecodeBroadcast(packet)
+				if err != nil || len(frames) == 0 {
+					t.Fatalf("network broadcast: %v", err)
+				}
+				latest := frames[len(frames)-1].ID
+				// 刻意在真实网络接收后丢弃超过冗余深度的连续广播，必须靠可靠追帧恢复。
+				if !(i == 0 && latest >= 3 && latest <= 8) {
+					frames, err := assemblers[i].Ingest(packet)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, f := range frames {
+						if err := states[i].Apply(f); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if latest >= id {
+					break
+				}
+			}
+		}
+		if id == 9 && assemblers[0].Gap() {
+			send(0, lockstep.Command{Operation: lockstep.OpCatchup, Frame: assemblers[0].Next()})
+			catchups++
+		}
+	}
+	if catchups != 1 {
+		t.Fatalf("catchup requests=%d", catchups)
+	}
+	for i, s := range states {
+		if s.Digest() != reference.Digest() {
+			t.Fatalf("KCP player %d diverged tick=%d/%d", i, s.Tick, reference.Tick)
+		}
+	}
+}

@@ -1,0 +1,364 @@
+package moba
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+)
+
+// Arena 是 5v5 三路业务规则。固定配置版本和种子随对局保存；数值只是教学选择。
+const ArenaVersion = "three-lanes-v1"
+const ArenaSeats = 10
+const (
+	ArenaBuff      byte = 5
+	ArenaSurrender byte = 6
+	ArenaCreep     byte = 11
+	ArenaTower     byte = 12
+	ArenaBase      byte = 13
+	ArenaNeutral   byte = 14
+)
+
+type ArenaInput struct {
+	Action, Target byte
+	Step           int8
+	Lane           byte
+}
+
+func (c ArenaInput) Bytes() []byte { return []byte{c.Action, c.Target, byte(c.Step), c.Lane} }
+func DecodeArena(raw []byte) (ArenaInput, error) {
+	if len(raw) != 4 {
+		return ArenaInput{}, ErrRule
+	}
+	c := ArenaInput{raw[0], raw[1], int8(raw[2]), raw[3]}
+	switch c.Action {
+	case Idle, Buy, ArenaBuff, ArenaSurrender:
+		if c.Target != 0 || c.Step != 0 || c.Lane != 0 {
+			return c, ErrRule
+		}
+	case Move:
+		if c.Target != 0 || c.Step < -1 || c.Step > 1 || c.Lane > 2 {
+			return c, ErrRule
+		}
+	case Attack, Cast:
+		if c.Target < 1 || c.Target > ArenaNeutral || c.Step != 0 || c.Lane != 0 {
+			return c, ErrRule
+		}
+	default:
+		return c, ErrRule
+	}
+	return c, nil
+}
+
+type Fighter struct {
+	X, HP, Mana, Gold, XP, Kills, Items int64
+	Lane                                int
+	RespawnAt, Cooldown, BuffUntil      lockstep.FrameID
+}
+type Arena struct {
+	Version   string
+	Seed      uint64
+	Tick      lockstep.FrameID
+	Heroes    [ArenaSeats]Fighter
+	Creeps    [2][3]Creep
+	Towers    [2][3]int64
+	Bases     [2]int64
+	NeutralHP int64
+	Votes     [ArenaSeats]lockstep.FrameID
+	Ended     bool
+	Winner    int // 0 无胜者，1/2 为队伍而非 seat。
+	Reason    string
+}
+
+func NewArena(seed uint64) *Arena {
+	a := &Arena{Version: ArenaVersion, Seed: seed, Bases: [2]int64{100, 100}, NeutralHP: 60}
+	for i := range a.Heroes {
+		a.Heroes[i] = Fighter{X: arenaHome(i / 5), HP: 100, Mana: 20, Lane: (i % 5) % 3}
+	}
+	for team := range 2 {
+		for lane := range 3 {
+			a.Towers[team][lane] = 60
+		}
+	}
+	return a
+}
+func arenaHome(team int) int64 {
+	if team == 0 {
+		return 0
+	}
+	return 20
+}
+func arenaTower(team int) int64 {
+	if team == 0 {
+		return 4
+	}
+	return 16
+}
+func (a *Arena) Snapshot() []byte { raw, _ := json.Marshal(a); return raw }
+func (a *Arena) Digest() string {
+	sum := sha256.Sum256(a.Snapshot())
+	return hex.EncodeToString(sum[:])
+}
+
+// Visible 是客户端展示规则；全输入帧同步仍暴露输入，不构成对修改客户端的信息保密。
+func (a *Arena) Visible(team, target int) bool {
+	h := a.Heroes[target]
+	if target/5 == team {
+		return true
+	}
+	if h.HP == 0 {
+		return false
+	}
+	for i, v := range a.Heroes {
+		if i/5 == team && v.HP > 0 && v.Lane == h.Lane && distance(v.X, h.X) <= 4 {
+			return true
+		}
+	}
+	c := a.Creeps[team][h.Lane]
+	return c.HP > 0 && distance(c.X, h.X) <= 3 || a.Towers[team][h.Lane] > 0 && distance(arenaTower(team), h.X) <= 4
+}
+
+// Apply 先验整帧，禁止半帧修改；固定 seat / lane 次序，所有随机数只来自保存的整数种子。
+func (a *Arena) Apply(f lockstep.Frame) error {
+	if a.Version != ArenaVersion || a.Seed == 0 || a.Ended || f.ID != a.Tick+1 || f.ID > MaxFrames {
+		return ErrRule
+	}
+	commands := make([]ArenaInput, len(f.Inputs))
+	last := lockstep.PlayerID(0)
+	for i, in := range f.Inputs {
+		if in.Player <= last || in.Player > ArenaSeats {
+			return ErrRule
+		}
+		last = in.Player
+		c, err := DecodeArena(in.Payload)
+		if err != nil {
+			return err
+		}
+		commands[i] = c
+	}
+	a.Tick = f.ID
+	for i := range a.Heroes {
+		h := &a.Heroes[i]
+		if h.HP == 0 && a.Tick >= h.RespawnAt {
+			h.HP = 100
+			h.Mana = 20
+			h.X = arenaHome(i / 5)
+			h.RespawnAt = 0
+		}
+	}
+	for i, in := range f.Inputs {
+		if a.Ended {
+			break
+		}
+		a.act(int(in.Player)-1, commands[i])
+	}
+	if !a.Ended {
+		a.npcs()
+	}
+	if a.Tick == MaxFrames && !a.Ended {
+		a.Ended = true
+		a.Reason = "time_limit"
+	}
+	return nil
+}
+func (a *Arena) hurt(i int, damage int64) bool {
+	h := &a.Heroes[i]
+	if h.HP == 0 {
+		return false
+	}
+	h.HP = max(int64(0), h.HP-damage)
+	if h.HP == 0 {
+		h.RespawnAt = a.Tick + 5
+		return true
+	}
+	return false
+}
+func (a *Arena) earn(i int, gold, xp int64) { a.Heroes[i].Gold += gold; a.Heroes[i].XP += xp }
+func (a *Arena) act(i int, c ArenaInput) {
+	h := &a.Heroes[i]
+	team := i / 5
+	enemy := 1 - team
+	// 投降需同队四名不同成员在 30 帧内表态；死亡者也可以投票。
+	if c.Action == ArenaSurrender {
+		a.Votes[i] = a.Tick
+		votes := 0
+		for j, v := range a.Votes {
+			if j/5 == team && v != 0 && a.Tick-v <= 30 {
+				votes++
+			}
+		}
+		if votes >= 4 {
+			a.Ended = true
+			a.Winner = enemy + 1
+			a.Reason = "surrender"
+		}
+		return
+	}
+	if h.HP == 0 {
+		return
+	}
+	switch c.Action {
+	case Idle:
+		return
+	case Move:
+		// 只在己方基地或河道换路，不能隔路瞬移攻击。
+		if int(c.Lane) != h.Lane && h.X != arenaHome(team) && h.X != 10 {
+			return
+		}
+		h.Lane = int(c.Lane)
+		h.X = max(int64(0), min(int64(20), h.X+int64(c.Step)))
+		return
+	case Buy:
+		if h.Gold >= 5 && h.Items < 3 {
+			h.Gold -= 5
+			h.Items++
+			h.HP = min(int64(100), h.HP+20)
+		}
+		return
+	case ArenaBuff:
+		if h.Mana >= 5 && a.Tick >= h.Cooldown {
+			h.Mana -= 5
+			h.Cooldown = a.Tick + 6
+			h.BuffUntil = a.Tick + 4
+		}
+		return
+	}
+	reach, damage := int64(1), int64(10)+h.Items*2+h.XP/20
+	if c.Action == Cast {
+		if h.Mana < 5 || a.Tick < h.Cooldown {
+			return
+		}
+		reach = 3
+		damage += 15
+	}
+	targetX := int64(0)
+	target := int(c.Target) - 1
+	switch {
+	case c.Target <= ArenaSeats:
+		v := a.Heroes[target]
+		if target/5 == team || v.HP == 0 || v.Lane != h.Lane || !a.Visible(team, target) {
+			return
+		}
+		targetX = v.X
+	case c.Target == ArenaCreep:
+		if a.Creeps[enemy][h.Lane].HP == 0 {
+			return
+		}
+		targetX = a.Creeps[enemy][h.Lane].X
+	case c.Target == ArenaTower:
+		if a.Towers[enemy][h.Lane] == 0 {
+			return
+		}
+		targetX = arenaTower(enemy)
+	case c.Target == ArenaBase:
+		if a.Towers[enemy][h.Lane] > 0 || a.Bases[enemy] == 0 {
+			return
+		}
+		targetX = arenaHome(enemy)
+	case c.Target == ArenaNeutral:
+		if h.Lane != 1 || a.NeutralHP == 0 {
+			return
+		}
+		targetX = 10
+	}
+	if distance(h.X, targetX) > reach {
+		return
+	}
+	if c.Action == Cast {
+		h.Mana -= 5
+		h.Cooldown = a.Tick + 3
+	}
+	if h.BuffUntil > a.Tick {
+		damage += 5
+	}
+	a.Seed ^= a.Seed << 13
+	a.Seed ^= a.Seed >> 7
+	a.Seed ^= a.Seed << 17
+	if a.Seed%5 == 0 {
+		damage += 2
+	} // 整数伪随机，seed 随帧持久化并可回放。
+	switch {
+	case c.Target <= ArenaSeats:
+		if a.hurt(target, damage) {
+			h.Kills++
+			a.earn(i, 10, 10)
+		}
+	case c.Target == ArenaCreep:
+		c := &a.Creeps[enemy][h.Lane]
+		c.HP = max(int64(0), c.HP-damage)
+		if c.HP == 0 {
+			a.earn(i, 5, 5)
+		}
+	case c.Target == ArenaTower:
+		p := &a.Towers[enemy][h.Lane]
+		*p = max(int64(0), *p-damage)
+		if *p == 0 {
+			a.earn(i, 20, 10)
+		}
+	case c.Target == ArenaBase:
+		a.Bases[enemy] = max(int64(0), a.Bases[enemy]-damage)
+		if a.Bases[enemy] == 0 {
+			a.Ended = true
+			a.Winner = team + 1
+			a.Reason = "base"
+		}
+	case c.Target == ArenaNeutral:
+		a.NeutralHP = max(int64(0), a.NeutralHP-damage)
+		if a.NeutralHP == 0 {
+			for j := range a.Heroes {
+				if j/5 == team {
+					a.earn(j, 15, 5)
+					a.Heroes[j].BuffUntil = a.Tick + 10
+				}
+			}
+		}
+	}
+}
+func (a *Arena) npcs() {
+	for team := range 2 {
+		enemy := 1 - team
+		for lane := range 3 {
+			c := &a.Creeps[team][lane]
+			if c.HP == 0 {
+				if a.Tick%6 == 0 {
+					c.HP = 20
+					c.X = arenaHome(team)
+				}
+			} else {
+				attacked := false
+				for j, h := range a.Heroes {
+					if j/5 == enemy && h.HP > 0 && h.Lane == lane && distance(c.X, h.X) <= 1 {
+						a.hurt(j, 4)
+						attacked = true
+						break
+					}
+				}
+				if !attacked {
+					if a.Towers[enemy][lane] > 0 && distance(c.X, arenaTower(enemy)) <= 1 {
+						a.Towers[enemy][lane] = max(int64(0), a.Towers[enemy][lane]-5)
+					} else {
+						direction := int64(1)
+						if team == 1 {
+							direction = -1
+						}
+						c.X = max(int64(0), min(int64(20), c.X+direction))
+					}
+				}
+			}
+			if a.Towers[team][lane] == 0 {
+				continue
+			}
+			other := &a.Creeps[enemy][lane]
+			if other.HP > 0 && distance(other.X, arenaTower(team)) <= 2 {
+				other.HP = max(int64(0), other.HP-5)
+				continue
+			}
+			for j, h := range a.Heroes {
+				if j/5 == enemy && h.HP > 0 && h.Lane == lane && distance(h.X, arenaTower(team)) <= 2 {
+					a.hurt(j, 5)
+					break
+				}
+			}
+		}
+	}
+}

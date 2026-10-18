@@ -1,0 +1,247 @@
+package moba
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	"testing"
+)
+
+func draftRound(t *testing.T) Round {
+	t.Helper()
+	members := [ArenaSeats]Member{}
+	for i := range members {
+		members[i] = Member{PlayerID: int64(100 + i), SID: int32(1000 + i%2)}
+	}
+	r, err := NewRound(Change{Op: "init", HostSID: 2000, MatchID: "ranked-5v5", Members: members, Seed: 42, Deadline: 100, Now: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func playingRound(t *testing.T) Round {
+	t.Helper()
+	r := draftRound(t)
+	var err error
+	for i := range ArenaSeats {
+		r, err = r.Update(Change{Op: "pick", HostSID: r.HostSID, Epoch: r.Epoch, Seat: i, Hero: i%5 + 1, Now: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err = r.Update(Change{Op: "ready", HostSID: r.HostSID, Epoch: r.Epoch, Seat: i, Ready: true, Now: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err = r.Update(Change{Op: "start", HostSID: r.HostSID, Epoch: r.Epoch, Now: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func arenaBot(f lockstep.FrameID, seat int) []byte {
+	c := ArenaInput{Action: Attack, Target: byte((seat+5)%10 + 1)}
+	if f <= 8 {
+		c = ArenaInput{Action: Move, Step: 1, Lane: byte((seat % 5) % 3)}
+		if seat >= 5 {
+			c.Step = -1
+		}
+	} else if f%7 == 0 {
+		c.Action = Cast
+	}
+	return c.Bytes()
+}
+func TestMOBAFivePlayerTeamsDraftAndMatchIdentity(t *testing.T) {
+	ctx := context.Background()
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := svcmatch.Queue{Mode: "three-lanes", GroupSize: ArenaSeats, Partition: "cross-sid-business-route"}
+	ids := []string{}
+	for i := range ArenaSeats {
+		ticket, err := store.Enqueue(ctx, q, svcmatch.Subject{Kind: "player", ID: int64(i + 1)}, fmt.Sprint(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, ticket.ID)
+	}
+	committed, err := store.Commit(ctx, q, ids)
+	if err != nil || len(committed.Members) != ArenaSeats {
+		t.Fatal("ten players not matched", err)
+	}
+	replay, err := store.Commit(ctx, q, ids)
+	if err != nil || replay.ID != committed.ID {
+		t.Fatal("match identity changed")
+	}
+	r := draftRound(t)
+	change := func(op string, seat, hero int) error {
+		var err error
+		r, err = r.Update(Change{Op: op, Seat: seat, Hero: hero, HostSID: r.HostSID, Epoch: r.Epoch, Now: 2})
+		return err
+	}
+	if change("start", 0, 0) == nil || change("ban", 1, 12) == nil {
+		t.Fatal("draft started early / noncaptain banned")
+	}
+	if err := change("ban", 0, 12); err != nil {
+		t.Fatal(err)
+	}
+	if change("pick", 0, 12) == nil {
+		t.Fatal("banned hero picked")
+	}
+	if err := change("pick", 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if change("pick", 1, 1) == nil {
+		t.Fatal("duplicate team hero")
+	}
+	if err := change("pick", 5, 1); err != nil {
+		t.Fatal("opponent mirror policy", err)
+	}
+	expired, err := r.Update(Change{Op: "expire", HostSID: r.HostSID, Epoch: r.Epoch, Now: 100})
+	if err != nil || expired.Phase != "aborted" {
+		t.Fatal("draft deadline not closed")
+	}
+	if _, err := expired.Awards(900); err != nil {
+		t.Fatal(err)
+	}
+	started := playingRound(t)
+	if _, err := started.Update(Change{Op: "pick", HostSID: started.HostSID, Epoch: started.Epoch, Seat: 0, Hero: 2}); err == nil {
+		t.Fatal("roster changed after start")
+	}
+}
+func applyArena(t *testing.T, a *Arena, inputs ...lockstep.Input) {
+	t.Helper()
+	if err := a.Apply(lockstep.Frame{ID: a.Tick + 1, Inputs: inputs}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMOBAArenaTargetingThreeLanesEconomyAndRespawn(t *testing.T) {
+	a := NewArena(42)
+	a.Heroes[0].X = 15
+	a.Heroes[0].HP = 100
+	// 基地受塔保护；跨路 / 同队目标不造成伤害、不耗技能资源。
+	hp := a.Bases[1]
+	applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Cast, Target: ArenaBase}.Bytes()})
+	if a.Bases[1] != hp || a.Heroes[0].Mana != 20 {
+		t.Fatal("base shield / invalid cast spent mana")
+	}
+	a.Heroes[5].X = 15
+	a.Heroes[5].Lane = 1
+	applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Cast, Target: 6}.Bytes()})
+	if a.Heroes[5].HP != 100 || a.Heroes[0].Mana != 20 {
+		t.Fatal("cross-lane cast")
+	}
+	a.Heroes[0].X = 10
+	a.Heroes[0].Lane = 1
+	a.Heroes[5].X = 20
+	for a.NeutralHP > 0 {
+		applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Attack, Target: ArenaNeutral}.Bytes()})
+	}
+	for i := range 5 {
+		if a.Heroes[i].Gold != 15 || a.Heroes[i].BuffUntil <= a.Tick {
+			t.Fatal("team objective reward missing")
+		}
+	}
+	applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Buy}.Bytes()})
+	if a.Heroes[0].Items != 1 || a.Heroes[0].Gold != 10 {
+		t.Fatal("shop did not debit")
+	}
+	a.Heroes[0].X = 10
+	a.Heroes[5].X = 10
+	a.Heroes[5].Lane = 1
+	a.Heroes[5].HP = 1
+	applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Attack, Target: 6}.Bytes()})
+	if a.Heroes[0].Kills != 1 || a.Heroes[5].HP != 0 {
+		t.Fatal("kill missing")
+	}
+	reviveAt := a.Heroes[5].RespawnAt
+	for a.Tick < reviveAt {
+		applyArena(t, a)
+	}
+	if a.Heroes[5].HP != 100 || a.Heroes[5].X != 20 {
+		t.Fatal("respawn missing")
+	}
+	// 三条塔各自归属，推中路不应解除边路保护。
+	a.Heroes[0].Lane = 1
+	a.Heroes[0].X = 15
+	a.Heroes[0].HP = 100
+	for a.Towers[1][1] > 0 {
+		applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Attack, Target: ArenaTower}.Bytes()})
+	}
+	if a.Towers[1][0] != 60 || a.Towers[1][2] != 60 {
+		t.Fatal("one lane damaged other towers")
+	}
+	a.Heroes[0].X = 19
+	for !a.Ended {
+		applyArena(t, a, lockstep.Input{Player: 1, Payload: ArenaInput{Action: Attack, Target: ArenaBase}.Bytes()})
+	}
+	if a.Winner != 1 || a.Reason != "base" {
+		t.Fatal("base victory missing")
+	}
+}
+func TestMOBAArenaReplayVersionSeedAndFogBoundary(t *testing.T) {
+	r := playingRound(t)
+	if r.Reference.Visible(0, 5) {
+		t.Fatal("unseen enemy visible")
+	}
+	for id := lockstep.FrameID(1); id <= 80; id++ {
+		f := lockstep.Frame{ID: id}
+		for i := range ArenaSeats {
+			f.Inputs = append(f.Inputs, lockstep.Input{Player: lockstep.PlayerID(i + 1), Payload: arenaBot(id, i)})
+		}
+		var err error
+		r, err = r.Update(Change{Op: "frame", HostSID: r.HostSID, Epoch: r.Epoch, Frame: f})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, err := DecodeRound(r.Encode())
+	if err != nil || restored.Reference.Digest() != r.Reference.Digest() {
+		t.Fatal("checkpoint / journal mismatch", err)
+	}
+	original := r.Reference.Digest()
+	r.Reference.Heroes[0].Gold++
+	if _, err := DecodeRound(r.Encode()); err == nil {
+		t.Fatal("tampered snapshot accepted")
+	}
+	r.Reference.Heroes[0].Gold--
+	r.Version = "other-rules"
+	if _, err := DecodeRound(r.Encode()); err == nil {
+		t.Fatal("unknown configuration accepted")
+	}
+	r.Version = ArenaVersion
+	r.InitialSeed++
+	if _, err := DecodeRound(r.Encode()); err == nil {
+		t.Fatal("changed seed accepted")
+	}
+	if r.Reference.Digest() != original {
+		t.Fatal("replay modified reference")
+	}
+	bad := lockstep.Frame{ID: r.Reference.Tick + 1, Inputs: []lockstep.Input{{Player: 1, Payload: ArenaInput{Action: Move, Step: 1}.Bytes()}, {Player: 2, Payload: []byte{255}}}}
+	if err := r.Reference.Apply(bad); err == nil || r.Reference.Digest() != original {
+		t.Fatal("bad frame partially applied")
+	}
+}
+func TestMOBAArenaSurrenderAndTimeLimit(t *testing.T) {
+	a := NewArena(42)
+	votes := []lockstep.Input{}
+	for i := range 4 {
+		votes = append(votes, lockstep.Input{Player: lockstep.PlayerID(i + 1), Payload: ArenaInput{Action: ArenaSurrender}.Bytes()})
+	}
+	applyArena(t, a, votes...)
+	if !a.Ended || a.Winner != 2 || a.Reason != "surrender" {
+		t.Fatal("four-member surrender missing")
+	}
+	if err := a.Apply(lockstep.Frame{ID: 2}); err == nil {
+		t.Fatal("terminal arena advanced")
+	}
+	a = NewArena(42)
+	for !a.Ended {
+		applyArena(t, a)
+	}
+	if a.Tick != MaxFrames || a.Winner != 0 || a.Reason != "time_limit" {
+		t.Fatal("time-limit result incorrect")
+	}
+}

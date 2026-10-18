@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### MOBA 接入：5v5 三路业务消费者与真实进程演练（2026-10-19）
+
+- `scripts/test-moba-generated.sh` 在双英雄入门之外加 5v5 三路业务夹具（只在 `scripts/testdata/moba`，框架、生成器与 demo 不改）：准备 / ban-pick、三路参考模拟、BattleDirectory 固定 Match ID → Round ID、BattleRound 输入帧日志先 strict 提交再广播、battle host 业务 Epoch 与交接、Player 原服奖励回执。缺省场景由 12 条增至 25 条，全部 race、无 skip。
+- 真实依赖：`ROOST_MOBA_REAL=1` 追加 `TestMOBARealActiveRoundCrashRecovery`（子进程提交到第 20 帧、WAL 未投影时被 SIGKILL，父进程从同一 WAL / Mongo 恢复并续到第 40 帧）；再加 `ROOST_MOBA_ROUTING=1`（需 `ROOST_DATAENGINE_IT_NATS_URL`）追加 `TestMOBARealCrossSIDHostRouting`（同机五进程 NATS：宿主交接、旧宿主 / 旧会话 / 错来源被拒、原服奖励半途 SIGKILL 后重投只计一次）。两条登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，单局日志上限 600 帧、目录与每名玩家回执各 64 局；没有 tick 预算、权威 HA、常驻奖励调度与端到端客户端链路的承诺。证明 / 不证明见 [MOBA-INTEGRATION](docs/framework/MOBA-INTEGRATION.md) 第二部分与 KNOWN-LIMITS“MOBA 接入验收的范围”。
+
 ### match：已结束的票、比赛与排队请求记录只保留固定时长（维护者 2026-10-19 方案 A）
 
 - **问题**（MOBA 接入审查发现）：`service/match` 一个队列的全部状态（`queueState`）是一个版本化值，Redis 存储每次 Enqueue / Commit / Sweep 都整体读写它；其中 `Tickets`、`Matches`、`Requests` 只增不删，状态无界增长、每次操作越来越慢，同一票集合的 Commit 重放也因此“没有时间窗口”。
