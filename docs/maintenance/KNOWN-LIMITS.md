@@ -276,6 +276,56 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 不证明 / 没有默认实现：权威 Round 是单写 WAL，业务 Epoch 只隔离 battle host，不是 Remote lease，也没有权威进程选主 / 自动 HA；每帧重写整段日志并重算，没有 tick 预算保证，正式长局要分段日志 / 检查点 / 归档；跨服奖励逐人提交，不承诺十人瞬时原子，需要业务常驻调度扫描未确认 seat；目录与回执账本各 64 局后拒绝新写，归档 / 分片归业务；全输入帧同步的 `Visible` 只是展示，不对修改客户端隐藏信息；队伍与 MMR、正式英雄 / 装备与技能 Host、真实客户端引擎、公网网关接线、5v5 目标负载与跨机长稳尚未验收（均不因此算框架缺陷）。Lockstep 历史窗口、嵌入 TCP 追帧限速与独立 Gate / demo 追帧背压按下表现行条目处理，夹具的业务持久补帧没有改变这些框架保证。夹具里的伤害、冷却、迟到上限、帧数与账本上限、投降规则与奖励都是业务样例，不是框架规则。
 
+## 新用户试用第七轮：待修问题（2026-10-18 登记，尚未修复）
+
+基线 `b6c12c48`（origin/main）。先复核第五、六轮：重载命令 `configdata.reload / rollback / status` 默认存在、结果带按表变化摘要（未变时提示“改了 CSV 先 roost generate”）；saga 步骤保序、重名报错；effects 键只配一处、不一致时 `--check-config` 与 doctor 拒绝；remote=managed 缺 Mod 时 generate 拒绝并给命令；技能目录生成 `catalog_test.go`；`roost help services` —— 均实测解决。随后学完剩余部分并在共享隔离环境真实进程联调：按实体定时器（D11，双倍卡到期后约 50ms 服务器推送自身视图增量；停服跨过到期、重启登录时补触发一次）、effect（单笔 ≥50 才发，恰好一次被消费）、原生 saga（赠送成功 / 收礼上限拒绝后扣款补偿退回 / 同请求号重发不重复）、单实例锁（同 sid 第二进程等满 startup_wait 后拒绝并点名持有者）、业务时间高水位、加 DAO 字段兼容老文档、属性生成器、webroute、cfggen 示例、C# SDK 测试。修复由维护者在 main 上进行。
+
+### 1. DAO 持久字段名由 Go 字段名决定，`bson` 标签被忽略；改 Go 字段名会静默丢老数据
+
+**现象**：DAO 生成器的存储键是 `toSnake(Go 字段名)`（`codegen/internal/dao/gen.go` 的 `bsonKey`，第 77、300 行），字段上的 `bson:"..."` 不参与。实测（r7，玩家 9201 金币 40）：把 ``Gold int64 `bson:"gold"` `` 的 Go 名改成 `Coins` 而保留 `bson:"gold"` 想让库里键不变，`roost generate`、`go build`、`roost project doctor` 全部通过、启动无告警，登录后金币为 0（Mongo 文档里 `gold: 40` 仍在，新代码按 `coins` 读）；此后任何一次写入都以 `coins: 0` 继续，老值事实上丢失。反过来只改 `bson:"coins"` 则无任何效果。`_schema` 不变。
+
+**误导来源**：`roost add dao` 骨架注释示例写 ``Name string `bson:"name" dao:"persist,sync"` ``，FIRST_BUSINESS 与 CODEGEN_REFERENCE 示例都带 `bson` 标签，`roost add timer` 生成的 DAO 字段也写 `bson:"..."`；SCHEMA-MIGRATION 只说“加字段不需要迁移，改形状必须迁移”，没说“改 Go 字段名就是改存储键”。
+
+**建议修法**：二选一并写进文档：DAO 字段的 `bson` 标签作为存储键生效（缺省才用 snake_case），或者拒绝 DAO 字段上的 `bson` 标签并报错；另外 doctor / generate 对照一份已提交的持久字段清单（类似 protocol manifest），持久键被删除或改名而 `schema=` 未提高时报错并指向迁移手册。
+
+### 2. 用生成入口发起的 saga，发起方查不到结果
+
+**现象**：生成的 `<name>.EmitStart(businessKey, state, deadline)` 不能指定也不返回 saga ID；`saga.Engine` 对外只有 `Get(ctx, id)` 与 `List(query)`（`Query` 没有 BusinessKey），按业务键查找只在存储层（`MongoStore.GetByBusinessKey`，`Store` 接口内部用）。实测赠送 saga 发起后客户端立即拿到 `code=0`（只表示已启动），无法得知最终是成功还是被补偿。game-demo 绕开生成入口，在 controller 生成 sagaID、handler 手写 `saga.StartRequest{ID: sagaID, BusinessKey: sagaID}` 并返回给客户端，再用 `gift_status` 端点查 `engine.Get`。
+
+**建议修法**：生成的 `EmitStart` 接受或返回确定的 saga ID（例如由类型与 businessKey 推出），并生成 `Status(ctx, registry, businessKey)` 查询辅助；或 `Engine` 提供 `GetByBusinessKey`。终态通知（完成 / 补偿完毕时给发起方一个 effect 或推送）可作为可选生成项。
+
+### 3. 属性生成器（attribute）上手的四处断点
+
+- 没有 `roost add attribute`（`unsupported artifact kind "attribute"`），`render.go` 的注释却写“`roost add attribute` produce code …”；开启只能手改 roost.yaml 的 `features` 再 `roost project sync`。
+- `roost help attribute` 的命令是 `-dir ./game/attribute`，`roost generate` 实际读 `game/gameplay/attribute`（`generate.go:124`）；放在 help 写的目录里 generate 不报错也不生成（feature 打开后才报 `no such file or directory`）。
+- help 的示例 struct 没有 `dirtyMask uint64`，照抄被拒：``PlayerProfile must declare an unexported `dirtyMask uint64` field``。
+- feature 打开后只跑 `roost generate` 生成的代码引用 `AttrID` / `AttributeProfile` 等编译失败，要先 `roost project sync` 写出 `runtime.go`；报错不提示这一步。
+
+### 4. webroute 链路不完整：`add webroute` 不开 feature，生成的路由没有地方提供服务
+
+**现象**：`roost add webroute ShopPrice` 只写 `service/web/shop_price.go`，引用的 `*Service` 未定义、包编译失败，roost.yaml 也没加 `webroute` feature（与 `add rpc` 自动开启不同）；手动开 feature 并 `project sync` 后生成 `RegisterRoutes(reg webroute.Registerer, svc *Service)`，但 bootstrap 与任何 Mod 都不调用它，CODEGEN_REFERENCE §11 也只写到“生成 RegisterRoutes”，没有说挂到哪个 HTTP 服务、监听地址与鉴权怎么配。
+
+**建议修法**：`add webroute` 自动开启 feature；提供一个 web Mod（或挂到 ops 的独立前缀）在 bootstrap 里调用 `RegisterRoutes`，配置项声明监听地址与鉴权；文档补一条从生成到 curl 的最小链路。
+
+### 5. `add protocol` 后跑过 `roost generate`，`add endpoint` 报 “already exists” 且不说怎么办
+
+**现象**：协议生成器为没有 endpoint 的协议写一个“未实现”controller 骨架（`HandleXxx` 返回 `not implemented` 错误）；之后 `roost add endpoint GiftGold --handler shop ...` 报 `game/controllers/shop/gift_gold.go already exists`（`add_workflow.go:42/283/442`）。框架自己的测试也要先删这个骨架（`self_sync_test.go:290`）。
+
+**建议修法**：`add endpoint` 识别出目标文件是协议生成的未实现骨架（固定头注释 + 只返回 not implemented）时直接替换；否则报错写明“这是协议生成的占位骨架，删掉后重跑”。
+
+### 6. C# 客户端 SDK 的测试不在任何自动检查里
+
+**现象**：`client/dotnet` 的测试（会话、推送、Sync 恢复、Lockstep 追帧、Unity 适配）按 client/README 的 `dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json` 实测全部 PASS；但 `.github/workflows` 没有一处调用 dotnet，pretag 与维护手册的验证清单也不含它（只在 v1.26.0 实现篇出现过一次）。不带参数运行时直接 `IndexOutOfRangeException` 崩溃，没有用法提示。
+
+**影响**：服务端协议、Sync 帧或 Lockstep 改动后，C# 与 `client/spec` 的一致性只有人想起来才验证。
+
+**建议修法**：CI 加一个 dotnet job（或 nightly）跑这条命令；维护手册 §3 把它列进“改协议 / Sync / Lockstep 时”的验证；测试程序缺参数时打印用法。
+
+### 7. 小问题
+
+- `roost config check` 不做跨 Mod 一致性检查：`saga.start_effect_stream` 与 `dataengine.effects.stream` 不一致时它报 `config is valid`，而进程 `--check-config` 与 doctor 都拒绝（同一份配置三处结论不同，第一轮已提过的同类问题的新例子）。
+- `roost add effect` 生成的载荷 struct 注释举例 `PlayerID int64`，没有提示在组件里取玩家号要用 `Owner().UniqueID()`；实测照直觉写 `Owner().ID()` 发出的是编码后的 EntityID（9423877 而不是 9203）。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。
