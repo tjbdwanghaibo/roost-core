@@ -82,4 +82,4 @@
 - [静态 Player 跨机迁移参考流程](PLAYER-MIGRATION.md)：按 sid 搬机的每一步、所用现有能力与检查点，demo 检查工具与本机演练
 - [指标与告警清单](OBSERVABILITY.md)
 
-- [MOBA 场景到框架的学习与接入](MOBA-INTEGRATION.md)：匹配与会话输入、单路参考模拟、真实 KCP 追帧、分歧和结算恢复，附业务与部署边界。
+- [MOBA 场景到框架的学习与接入](MOBA-INTEGRATION.md)：匹配与准备、5v5 三路、真实 KCP 追帧、活动帧崩溃恢复、静态 Player sid 的宿主交接和原服奖励，分学习接法与验收边界。

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### MOBA 业务接入与故障验收
+
+- `scripts/test-moba-generated.sh` 保留双英雄入门，扩充正式生成的 5v5 三路消费者：准备 / ban-pick、固定配置与种子、目标 / 冷却 / 经济 / 野区 Buff / 复活、服务器胜负、延迟观战及有界房间排空。规则仅在业务夹具，不改公共框架或生成器 API。
+- BattleDirectory 固定比赛到 Round 实体的身份；固定权威 Round 经 Nest / strict WAL 成对保存帧与参考状态，宿主确认后发布、未知结果停房间；业务 Epoch 支持独立 battle host 交接 / 重启，Player 静态 sid 保持不变。原服奖励把回执与资产一起提交，部分投递可重试，不承诺十名跨服玩家瞬时原子。
+- 真实验收增补活动帧未投影时 SIGKILL / WAL 恢复续赛，以及两个原服、两个宿主、固定权威的五进程 NATS 路由 / 部分奖励崩溃恢复；与十名 KCP 客户端追帧回归分别验证。真实入口登记根包覆盖表；学习手册与 `core-game-server` skill 同步维护。
+- 适用范围：功能教学，单场完整日志最多 600 帧、目录 / 奖励回执各 64 局后拒绝新写；无生产容量承诺、无权威自动 HA，不修改既有 Gate / demo 追帧背压与历史裁剪决策。细节见 [MOBA 接入](docs/framework/MOBA-INTEGRATION.md)。
+
 ### game-demo World 定时器恢复手写（维护者 2026-10-18）
 
 - **决定（维护者原话）**：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不能生成 demo。D11（`5581deeb`）把 World 迁到了 `roost add timer` 的生成产物，现撤回；`roost add timer` 生成器本身不变，新手工程照常用。

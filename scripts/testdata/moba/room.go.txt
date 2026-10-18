@@ -1,0 +1,356 @@
+package moba
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"sync"
+	"sync/atomic"
+)
+
+var ErrBusy = errors.New("moba: room queue full or draining")
+
+type PersistRound func(context.Context, Change) (Round, error)
+type stagedPacket struct {
+	session nettransport.SessionID
+	raw     []byte
+}
+
+// Room 由 Actor 的唯一 goroutine 驱动。Match 先切帧到有界暂存区，权威 Sender 确认持久化后才广播。
+// 这里只实现样例宿主；固定权威 Round Entity 是唯一持久事实，不在每个宿主复制另一套存储。
+type Room struct {
+	match   *lockstep.Match
+	record  Round
+	persist PersistRound
+	wire    nettransport.DatagramSender
+	staged  []stagedPacket
+	stopped bool
+}
+
+func RecoverRoom(record Round, persist PersistRound, wire nettransport.DatagramSender) (*Room, error) {
+	checked, err := DecodeRound(record.Encode())
+	if err != nil || checked.Phase != "playing" && checked.Phase != "ended" || persist == nil || wire == nil {
+		return nil, ErrRule
+	}
+	r := &Room{record: checked, persist: persist, wire: wire}
+	sink := nettransport.TransportFunc{Datagram: func(_ context.Context, s nettransport.SessionID, raw []byte) error {
+		if len(r.staged) >= ArenaSeats {
+			return ErrBusy
+		}
+		r.staged = append(r.staged, stagedPacket{s, append([]byte(nil), raw...)})
+		return nil
+	}}
+	seats := make([]lockstep.PlayerID, ArenaSeats)
+	for i := range seats {
+		seats[i] = lockstep.PlayerID(i + 1)
+	}
+	r.match, err = lockstep.NewMatch(lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: seats, MaxInputBytes: 4}, RedundancyDepth: 3, HistoryRetainFrames: lockstep.MinHistoryRetainFrames, Datagrams: sink})
+	if err != nil {
+		return nil, err
+	}
+	// 公开 API 重新喂入已提交帧，重建 Sequencer / History / 冗余编码器；未 Attach，恢复过程不对外广播。
+	for _, saved := range checked.Frames {
+		for _, in := range saved.Inputs {
+			if _, err := r.match.SubmitInput(in.Player, saved.ID, in.Payload); err != nil {
+				r.Close()
+				return nil, err
+			}
+		}
+		if _, err := r.match.Tick(context.Background()); err != nil {
+			r.Close()
+			return nil, err
+		}
+	}
+	return r, nil
+}
+func (r *Room) Close() {
+	if r.stopped {
+		return
+	}
+	r.stopped = true
+	r.staged = nil
+	r.match.Close()
+}
+func (r *Room) bind(playerID int64, sid int32, epoch uint64, session nettransport.SessionID) error {
+	if r.stopped || epoch != r.record.Epoch || session == 0 {
+		return ErrRule
+	}
+	for i, m := range r.record.Members {
+		if m.PlayerID == playerID && m.SID == sid {
+			return r.match.Attach(lockstep.PlayerID(i+1), session)
+		}
+	}
+	return ErrRule
+}
+func (r *Room) input(epoch uint64, session nettransport.SessionID, frame lockstep.FrameID, raw []byte) error {
+	// 本宿主只收当前未切帧：回复仅表示暂存，切帧提交才确认执行。崩溃后未提交输入由客户端重新提交。
+	// 不折叠已提交帧、不持有未来帧，恢复时无需猜测旧输入的迟到折叠身份。
+	if r.stopped || epoch != r.record.Epoch || frame != r.match.NextFrame() || r.record.Phase != "playing" {
+		return ErrRule
+	}
+	if _, err := DecodeArena(raw); err != nil {
+		return err
+	}
+	return r.match.HandleCommand(session, lockstep.Command{Operation: lockstep.OpInput, Frame: frame, Payload: raw})
+}
+func (r *Room) tick(ctx context.Context) (lockstep.Frame, error) {
+	if r.stopped || r.record.Phase != "playing" {
+		return lockstep.Frame{}, ErrRule
+	}
+	r.staged = nil
+	f, err := r.match.Tick(ctx)
+	if err != nil {
+		r.Close()
+		return f, err
+	}
+	saved, err := r.persist(ctx, Change{Op: "frame", HostSID: r.record.HostSID, Epoch: r.record.Epoch, Frame: f})
+	if err != nil {
+		r.Close()
+		return f, err
+	} // 包括结果未知：不发送、不再推进；重启查询原局。
+	if saved.HostSID != r.record.HostSID || saved.Epoch != r.record.Epoch || len(saved.Frames) != int(f.ID) {
+		r.Close()
+		return f, ErrRule
+	}
+	r.record = saved
+	packets := r.staged
+	r.staged = nil
+	var errs []error
+	for _, p := range packets {
+		if err := r.wire.SendDatagram(ctx, p.session, p.raw); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// 发送失败不回滚已经持久的帧；客户端按同一局 / epoch 查询已提交历史补齐。
+	return f, errors.Join(errs...)
+}
+
+type RoomRequest struct {
+	Op        string
+	Epoch     uint64
+	PlayerID  int64
+	PlayerSID int32
+	Session   nettransport.SessionID
+	Frame     lockstep.FrameID
+	Payload   []byte
+}
+type RoomReply struct {
+	Frame  lockstep.Frame
+	Next   lockstep.FrameID
+	Digest string
+	Frames []lockstep.Frame
+}
+type roomCall struct {
+	ctx     context.Context
+	request RoomRequest
+	done    chan roomAnswer
+}
+type roomAnswer struct {
+	reply RoomReply
+	err   error
+}
+
+// Actor 使用固定容量邮箱；排空关闭准入，等待真正结束才释放 Room。排队 / 在途超时都不能解释成未执行。
+type Actor struct {
+	room       *Room
+	queue      chan roomCall
+	stop, done chan struct{}
+	once       sync.Once
+	accepting  atomic.Bool
+}
+
+func NewActor(r *Room) *Actor {
+	a := &Actor{room: r, queue: make(chan roomCall, 32), stop: make(chan struct{}), done: make(chan struct{})}
+	a.accepting.Store(true)
+	go a.run()
+	return a
+}
+func (a *Actor) Call(ctx context.Context, req RoomRequest) (RoomReply, error) {
+	if !a.accepting.Load() {
+		return RoomReply{}, ErrBusy
+	}
+	req.Payload = append([]byte(nil), req.Payload...)
+	c := roomCall{ctx: ctx, request: req, done: make(chan roomAnswer, 1)}
+	select {
+	case <-a.stop:
+		return RoomReply{}, ErrBusy
+	case a.queue <- c:
+	default:
+		return RoomReply{}, ErrBusy
+	}
+	select {
+	case out := <-c.done:
+		return out.reply, out.err
+	case <-a.done:
+		// 准入前观察与 Stop 之间可能交错，已结束 owner 不会再消费晚入队请求。
+		// 已执行请求优先取其结果；其余明确拒绝，不让 Background 调用永久等候。
+		select {
+		case out := <-c.done:
+			return out.reply, out.err
+		default:
+			return RoomReply{}, ErrBusy
+		}
+	case <-ctx.Done():
+		return RoomReply{}, ctx.Err()
+	}
+}
+func (a *Actor) run() {
+	defer close(a.done)
+	defer a.room.Close()
+	for {
+		select {
+		case <-a.stop:
+			for {
+				select {
+				case c := <-a.queue:
+					c.done <- roomAnswer{err: ErrBusy}
+				default:
+					return
+				}
+			}
+		case c := <-a.queue:
+			if !a.accepting.Load() {
+				c.done <- roomAnswer{err: ErrBusy}
+				continue
+			}
+			if err := c.ctx.Err(); err != nil {
+				c.done <- roomAnswer{err: err}
+				continue
+			}
+			out, err := a.execute(c.ctx, c.request)
+			c.done <- roomAnswer{out, err}
+		}
+	}
+}
+func (a *Actor) execute(ctx context.Context, c RoomRequest) (RoomReply, error) {
+	r := a.room
+	out := RoomReply{}
+	if r.stopped || c.Epoch != r.record.Epoch {
+		return out, ErrRule
+	}
+	var err error
+	switch c.Op {
+	case "bind":
+		err = r.bind(c.PlayerID, c.PlayerSID, c.Epoch, c.Session)
+	case "disconnect":
+		found := false
+		for i, m := range r.record.Members {
+			if m.PlayerID == c.PlayerID && m.SID == c.PlayerSID {
+				found = true
+				r.match.DetachSession(lockstep.PlayerID(i+1), c.Session)
+				break
+			}
+		}
+		if !found {
+			err = ErrRule
+		}
+	case "input":
+		err = r.input(c.Epoch, c.Session, c.Frame, c.Payload)
+	case "tick":
+		out.Frame, err = r.tick(ctx)
+	case "state":
+	case "replay":
+		if c.Frame == 0 || int(c.Frame) > len(r.record.Frames)+1 {
+			return out, ErrRule
+		}
+		end := min(len(r.record.Frames), int(c.Frame)-1+lockstep.MaxBroadcastFrames)
+		raw, _ := json.Marshal(r.record.Frames[int(c.Frame)-1 : end])
+		if err := json.Unmarshal(raw, &out.Frames); err != nil {
+			return out, err
+		}
+	default:
+		return out, ErrRule
+	}
+	if r.record.Reference != nil {
+		out.Digest = r.record.Reference.Digest()
+	}
+	out.Next = r.match.NextFrame()
+	return out, err
+}
+func (a *Actor) Stop(ctx context.Context) error {
+	a.once.Do(func() { a.accepting.Store(false); close(a.stop) })
+	select {
+	case <-a.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// HostEndpoint 是原服到 battle host 的私有 RPC 边界：FromSID 来自受信任服务总线，
+// PlayerID / Session 必须来自原服已鉴权的连接上下文，不能把公网请求原样转发到这里。
+// 固定十个绑定槽避免重连使身份表无限增长；客户端和观战者没有 tick / 管理权限。
+type HostEndpoint struct {
+	actor    *Actor
+	record   Round
+	adminSID int32
+	mu       sync.Mutex
+	bindings [ArenaSeats]nettransport.SessionID
+}
+
+func NewHostEndpoint(actor *Actor, r Round, adminSID int32) *HostEndpoint {
+	return &HostEndpoint{actor: actor, record: r, adminSID: adminSID}
+}
+func (e *HostEndpoint) Call(ctx context.Context, fromSID int32, c RoomRequest) (RoomReply, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if c.Op == "tick" || c.Op == "state" {
+		if fromSID != e.adminSID {
+			return RoomReply{}, ErrRule
+		}
+		return e.actor.Call(ctx, c)
+	}
+	index := -1
+	for i, m := range e.record.Members {
+		if m.PlayerID == c.PlayerID && m.SID == fromSID && m.SID == c.PlayerSID {
+			index = i
+			break
+		}
+	}
+	if index < 0 || c.Session == 0 {
+		return RoomReply{}, ErrRule
+	}
+	switch c.Op {
+	case "bind":
+		out, err := e.actor.Call(ctx, c)
+		if err == nil {
+			e.bindings[index] = c.Session
+		}
+		return out, err
+	case "disconnect":
+		if e.bindings[index] != c.Session {
+			return RoomReply{}, nil
+		}
+		out, err := e.actor.Call(ctx, c)
+		if err == nil {
+			e.bindings[index] = 0
+		}
+		return out, err
+	case "input", "replay":
+		if e.bindings[index] != c.Session {
+			return RoomReply{}, ErrRule
+		}
+		return e.actor.Call(ctx, c)
+	default:
+		return RoomReply{}, ErrRule
+	}
+}
+
+// ObserverFrames 由业务观战 API 在完成 ACL 后调用；直播延迟至少一帧，每页至多框架协议上限。
+// 不绑定英雄控制权，不把全输入帧同步伪装成对恶意客户端的战争迷雾保密。
+func (r Round) ObserverFrames(approved bool, from lockstep.FrameID, delay int) ([]lockstep.Frame, error) {
+	if !approved || delay < 1 || delay > int(MaxFrames) || from == 0 || int(from) > len(r.Frames)+1 {
+		return nil, ErrRule
+	}
+	head := max(0, len(r.Frames)-delay)
+	if int(from) > head {
+		return nil, nil
+	}
+	end := min(head, int(from)-1+lockstep.MaxBroadcastFrames)
+	raw, _ := json.Marshal(r.Frames[int(from)-1 : end])
+	var frames []lockstep.Frame
+	err := json.Unmarshal(raw, &frames)
+	return frames, err
+}

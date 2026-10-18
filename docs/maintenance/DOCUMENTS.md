@@ -63,6 +63,8 @@
 | 13 | Wiring 装配 | [guide](../framework/guide/13-wiring.md) | [impl](../framework/impl/13-wiring.md) |
 | 14 | 其他包与公共基础设施 | [guide](../framework/guide/14-foundation.md) | [impl](../framework/impl/14-foundation.md) |
 
+[MOBA-INTEGRATION](../framework/MOBA-INTEGRATION.md)：MOBA 的业务 / 框架学习、5v5 三路消费者、活动帧崩溃与跨 sid 宿主 / 原服奖励验收。
+
 ## docs/performance
 
 - [README.md](../performance/README.md)：性能验证与复跑入口

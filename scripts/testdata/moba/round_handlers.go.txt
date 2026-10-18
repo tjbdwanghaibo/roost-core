@@ -1,0 +1,134 @@
+package handler
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	db "example.com/moba-practice/db"
+	roundentity "example.com/moba-practice/game/entities/battle_round"
+	playerentity "example.com/moba-practice/game/entities/player"
+	"example.com/moba-practice/game/moba"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IMobaRoundEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.BattleRoundDao
+}
+
+// Round 只在固定权威进程加载；宿主经 RPC 调用此 Sender，不在不同宿主各开同 ID 的本地 WAL。
+// Host / Epoch 校验与帧 / 快照在同一事务；未知提交须停房间并查询原身份，禁止继续切帧。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMOBARound(round IMobaRoundEntity, c moba.Change) (moba.Round, error) {
+	if c.Op == "init" {
+		for _, m := range c.Members {
+			if !entity.MatchEntityID(m.PlayerID, playerentity.EntityKindPlayer) {
+				return moba.Round{}, moba.ErrRule
+			}
+		}
+	}
+	var r moba.Round
+	var err error
+	raw := round.Dao().GetPayload()
+	if raw == "" {
+		r, err = moba.NewRound(c)
+	} else {
+		r, err = moba.DecodeRound(raw)
+		if err == nil {
+			r, err = r.Update(c)
+		}
+	}
+	if err != nil {
+		return moba.Round{}, err
+	}
+	encoded := r.Encode()
+	if encoded != raw {
+		round.Dao().SetPayload(encoded)
+	}
+	return r, nil
+}
+
+// MOBA 跨 sid 奖励采用终态驱动的逐玩家投递：各 Player 原服提交自己的永久回执，全部确认后权威局结束投递。
+// 一次返回未知时重用原 Award；不承诺跨十名玩家瞬时原子。样例账本最多 64 局且从不静默淘汰，满则拒绝新奖，需业务归档设计。
+// 仅由受信任服务在回查权威终态后调用，不开放给客户端；SID 在原服入口校验。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMOBAAward(player IMobaPlayerEntity, award moba.Award) error {
+	if award.Member.PlayerID != player.ID() || award.Member.SID <= 0 || !entity.MatchEntityID(award.RoundID, roundentity.EntityKindBattleRound) || award.MatchID == "" || len(award.MatchID) > 128 || len(award.Digest) != 64 || award.Won && award.Draw {
+		return moba.ErrRule
+	}
+	digest, err := hex.DecodeString(award.Digest)
+	if err != nil || len(digest) != 32 {
+		return moba.ErrRule
+	}
+	var receipts []moba.Award
+	raw := player.Dao().GetMobaRewards()
+	if len(raw) > 128*1024 {
+		return moba.ErrRule
+	}
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &receipts); err != nil {
+			return err
+		}
+	}
+	for _, old := range receipts {
+		if old.RoundID == award.RoundID {
+			if old == award {
+				return nil
+			}
+			return moba.ErrRule
+		}
+	}
+	if len(receipts) >= 64 {
+		return moba.ErrRule
+	}
+	d := player.Dao()
+	if !award.Draw {
+		if award.Won {
+			if d.GetGold() > 1000000-10 || d.GetWins() >= 1000000 {
+				return moba.ErrRule
+			}
+			d.SetGold(d.GetGold() + 10)
+			d.SetWins(d.GetWins() + 1)
+		} else {
+			if d.GetLosses() >= 1000000 {
+				return moba.ErrRule
+			}
+			d.SetLosses(d.GetLosses() + 1)
+		}
+	}
+	receipts = append(receipts, award)
+	encoded, _ := json.Marshal(receipts)
+	d.SetMobaRewards(string(encoded))
+	return nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerMOBAPreparePlayer(player IMobaPlayerEntity) error {
+	if player.Dao().GetMobaRewards() == "" {
+		player.Dao().SetMobaRewards("[]")
+	}
+	return nil
+}
+
+type IMobaDirectoryEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.BattleDirectoryDao
+}
+
+// 候选 ID 必须来自 id-gen 且从不重复；若已有映射，丢弃未使用候选号并永远使用返回的旧 Round ID。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMOBAReserveRound(directory IMobaDirectoryEntity, matchID string, candidateID int64, binding string) (int64, error) {
+	if !entity.MatchEntityID(candidateID, roundentity.EntityKindBattleRound) {
+		return 0, moba.ErrRule
+	}
+	raw, id, err := moba.ReserveRound(directory.Dao().GetPayload(), matchID, candidateID, binding)
+	if err != nil {
+		return 0, err
+	}
+	if raw != directory.Dao().GetPayload() {
+		directory.Dao().SetPayload(raw)
+	}
+	return id, nil
+}

@@ -348,13 +348,17 @@ Sender 后缀仍有一处二次碰撞，已在固定分支修复：`handlerTrade
 
 以 main `e90dd4ad` 为基线合并后复核。MMORPG 按用户已明确的“Player 静态 sid，跨服由 Remote / Saga 协作”路线，关键接入纵切可转入下一游戏类型；不把业务练习、客户端引擎、跨机故障或目标规模长稳记成完成。当前重新执行 `test-mmorpg-generated.sh` 的 13 条 race 场景、`test-mmorpg-scenes.sh` 的真实双地图 TCP、真实文件 WAL / Mongo 两进程恢复，均通过。`test-mmorpg-cross-sid.sh` 采用 main 新版逐封 ClaimMail 重发：错服拒绝、4 笔双向 completed、1 笔 compensated 与资产 8 / 2 / 8 / 2 全部通过。main 的回调活调度读视图、排序共用堆比较和 Sender 全部预声明名称避让方向合理；entitytimer / timer / Nest codegen race 回归通过。
 
-MOBA 新增 [学习与接入手册](../framework/MOBA-INTEGRATION.md)与 `scripts/test-moba-generated.sh`，规则只在业务消费者中：单路两名英雄、兵线、塔 / 基地、技能冷却、死亡复活、局内经济和服务器参考结果，不加入公共生成器。
+MOBA 的[学习与接入手册](../framework/MOBA-INTEGRATION.md)与 `scripts/test-moba-generated.sh` 现包含双英雄基础和 5v5 三路业务消费者。main `b6c12c48` 的 SLG / MMORPG 学习与验收文档调整已合并；没有新的 MOBA 运行时修复需搬入，本次业务能力不加入公共生成器或框架。
 
-- 12 条顶层 race 场景实际通过、无 skip：匹配排队 / 取消 / 原子成局、会话身份 / 旧连接 / 过期输入、广播丢包冗余修复、断线可靠追帧、旁观者权限、历史过期与 NoMajority、推塔 / 基地胜负、技能 / 商店 / 检查点，以及结算并发重放 / 身份冲突 / 回滚 / 无胜者 / 完整服务器结果链。消费者 build / vet、ID 和生成状态检查通过。
-- 其中一条使用真实 loopback KCP，输入经可靠通道，广播在真实网络接收后刻意丢弃超过冗余深度的连续包，可靠追帧后两个客户端与服务器参考状态收敛。固定测试会话绑定不等同真实账号鉴权。额外 `framework/sync/lockstep`、`framework/sync/nettransport` race 包回归通过，含已有 KCP / TCP 停读和追帧门禁。
-- `ROOST_MOBA_REAL=1` 真实文件 WAL / Mongo 的两个独立进程结算恢复实际通过，无 skip；新进程对同一结算实体重放不再发奖励 / 累计战绩，换胜者拒绝。固定入口已登记根包覆盖表；成功后只删除本次唯一库。此项是干净停启的结算恢复，不是活动对局崩溃续赛。
-- 匹配学习中最初误把并发 Commit 的成功回复数当成开局次数，新增用例报 `two matchmakers consumed one pair 2 times`。源码与既有 `TestCommitReplayReturnsOriginalMatchForSameTicketSet` 表明同一完整票集合本来就幂等返回同一 Match；改为核对比赛 ID，并补齐 Store 接口注释，未改运行时逻辑，不登记为重复开局缺陷。
+- 25 条顶层 race 场景实际通过、无 skip，消费者 build / vet、ID 和生成状态检查通过：匹配 / 准备 / ban-pick、十名成员三路模拟、目标 / 技能 / 经济 / 野区 Buff / 死亡复活、服务器胜负 / 投降 / 到时、输入身份 / 旧连接、延迟观战、确定性 / 配置版本、持久帧 / 快照 undo、未知提交停房间、宿主代际、奖励 / 身份 / 回执上限和有界邮箱排空。
+- 两条真实 loopback KCP 场景分别使用双英雄与十名客户端；真实接收后刻意丢弃超过冗余深度的广播，经可靠通道追帧后客户端与服务器参考状态摘要相同。固定测试上下文不等同账号鉴权，不等同生产 5v5 负载。
+- `ROOST_MOBA_REAL=1` 的真实文件 WAL / Mongo 结算两进程恢复通过。另将活动对局的 43 条已提交记录保留在未投影 WAL，由父进程 SIGKILL 自己启动的子进程；新进程恢复同一 Directory / Round、重建 Match、提高 Epoch 并从第 20 帧续至第 40 帧，十名 Player 静态 sid 不变。未删除 / 修改 WAL，不拿干净重启冒充崩溃。
+- 叠加 `ROOST_MOBA_ROUTING=1`，真实 NATS / Mongo / WAL 五进程通过：固定权威、两个 Player 原服、两个 battle host；交接 2000→2001，旧宿主 / 旧 session / 错来源拒绝。原服提交两笔奖励未 ack 后 SIGKILL，恢复重投，十份回执各一次、全部确认。多进程用例的广播发送器是替身；KCP 客户端传输另验，未把二者拼称完整公网端到端验收。
+- 正式 Sender 的 Directory 固定 MatchID→RoundEntityID；候选 ID 竞争与恢复重试只返回原局。跨 sid 奖励逐玩家提交回执与资产，再确认 Round，不承诺十名玩家瞬时原子。Directory / 每名 Player 的样例账本上限各 64 局，满后拒绝新写，不静默丢弃重放证据；生产需要业务归档 / 分片方案。
+- 匹配接口注释说明同一完整票集合的 Commit 可以多次成功回复但 Match ID 不变；此处是理解 / 文档澄清，不登记为重复开局缺陷，运行时逻辑不改。
 
-MOBA 仍需按实际游戏定义 ban/pick / 队伍与 MMR、技能 Host、战争迷雾、独立 battle host 跨 sid 路由及活动对局输入日志 / 检查点恢复；真实客户端、5v5 目标负载与跨机长稳尚未验收。既有 demo / Gate 追帧背压与历史裁剪限制继续按上面的现行条目处理，不凭小型消费者推断问题已消失。
+**保留限制**：本消费者的固定权威进程使用单写 WAL；业务 Epoch 隔离 battle host，不实现权威进程的分布式 lease / 自动 HA。每场至多 600 帧，整段日志 / 快照持久化并重算，功能正确不代表生产 tick 预算；正式长局日志、归档、目标吞吐 / 延迟 / 长稳须另设计和测量。原服奖励后台扫描 / 持续投递、真实客户端与公网身份 / ACL、MMR / 英雄配置 / 技能 Host / 反作弊属于产品或部署接入，不因样例未内建而归为框架 bug。全输入帧同步的视野仅用于展示，不承诺对修改客户端隐瞒敌方信息。
 
-本轮 core 全仓 build / vet / test 退出 0：8090 条测试事件通过、90 条跳过，145 个测试包通过、20 个无测试文件包另计。生成无额外跟踪文件漂移，根包门禁通过；真实资源仅计上述独立实际运行，不把 skip 算通过。
+框架历史裁剪后不自动重同步、demo / 独立 Gate 追帧背压仍按上文现行条目；业务持久重放路径未改变这些保证。所有真实入口已登记根包覆盖表；普通全仓的 skip 不记成真实资源通过。
+
+当前 core 全仓 build / vet / test 退出 0：8090 条测试事件通过、90 条跳过，145 个测试包通过、20 个无测试文件包另计。根包门禁通过，go generate 无额外跟踪文件漂移；Lockstep / nettransport race 通过。普通全仓的 skip 与上述显式真实入口分别统计。

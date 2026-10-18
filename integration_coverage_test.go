@@ -502,6 +502,8 @@ var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖、补触发离线 Buff；不是崩溃注入"},
+	{"TestMOBARealCrossSIDHostRouting", "scripts/test-moba-generated.sh", "^TestMOBARealCrossSIDHostRouting$", "ROOST_MOBA_REAL=1 ROOST_MOBA_ROUTING=1，五进程真实 NATS / Mongo / WAL 路由与原服奖励崩溃恢复"},
+	{"TestMOBARealActiveRoundCrashRecovery", "scripts/test-moba-generated.sh", "^TestMOBARealActiveRoundCrashRecovery$", "ROOST_MOBA_REAL=1，活动帧留在真实 WAL 未投影时 SIGKILL，重启恢复并续赛，宿主代际前进且 Player sid 不变"},
 	{"TestMOBARealSettlementAcrossProcesses", "scripts/test-moba-generated.sh", "^TestMOBARealSettlementAcrossProcesses$", "ROOST_MOBA_REAL=1，两独立进程验证结算身份、奖励与战绩的文件 WAL / Mongo 恢复"},
 	{"TestGeneratedDataEnginePressure", "scripts/perf/dataengine.sh", "ROOST_DATAENGINE_PERF=1", "性能入口"},
 	{"TestGeneratedRemoteMirrorLocal", "scripts/mirror-local.sh", "^TestGeneratedRemoteMirrorLocal$", "私有环境两进程故障，自起依赖"},

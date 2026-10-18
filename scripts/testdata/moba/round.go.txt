@@ -1,0 +1,290 @@
+package moba
+
+import (
+	"bytes"
+	"encoding/json"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"io"
+	"reflect"
+)
+
+// Member 的 SID 是 Player 静态归属；HostSID 只指比赛模拟的宿主，不迁移 Player。
+type Member struct {
+	PlayerID int64
+	SID      int32
+}
+type Round struct {
+	Version      string
+	MatchID      string
+	Members      [ArenaSeats]Member
+	InitialSeed  uint64
+	Deadline     int64
+	HostSID      int32
+	Epoch        uint64
+	Phase        string // draft / playing / ended / aborted
+	Picks        [ArenaSeats]int
+	Ready        [ArenaSeats]bool
+	Bans         [2]int
+	Frames       []lockstep.Frame // 样例上限 600，完整保留供恢复，不无限增长。
+	Reference    *Arena
+	Acknowledged [ArenaSeats]bool
+}
+
+// Change 只能来自受信任业务服务。Now 由服务端注入，不能转用客户端时间。
+// 管理交接与玩家操作在 RPC 接入处分别鉴权；Epoch 在权威实体锁内再次检查。
+type Change struct {
+	Op            string
+	HostSID       int32
+	Epoch         uint64
+	NextHost      int32
+	MatchID       string
+	Members       [ArenaSeats]Member
+	Seed          uint64
+	Deadline, Now int64
+	Seat, Hero    int
+	Ready         bool
+	Frame         lockstep.Frame
+	Digest        string
+}
+
+func strictJSON(raw []byte, out any) error {
+	if len(raw) == 0 || len(raw) > 512*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func (r Round) Encode() string { raw, _ := json.Marshal(r); return string(raw) }
+func DecodeRound(raw string) (Round, error) {
+	var r Round
+	if err := strictJSON([]byte(raw), &r); err != nil {
+		return r, err
+	}
+	if r.Version != ArenaVersion || len(r.MatchID) == 0 || len(r.MatchID) > 128 || r.HostSID <= 0 || r.Epoch == 0 || r.InitialSeed == 0 || r.Deadline <= 0 || len(r.Frames) > int(MaxFrames) {
+		return r, ErrRule
+	}
+	for i, m := range r.Members {
+		if m.PlayerID <= 0 || m.SID <= 0 {
+			return r, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if r.Members[j].PlayerID == m.PlayerID {
+				return r, ErrRule
+			}
+		}
+	}
+	if r.Phase != "draft" && r.Phase != "playing" && r.Phase != "ended" && r.Phase != "aborted" {
+		return r, ErrRule
+	}
+	for i, pick := range r.Picks {
+		if pick < 0 || pick > 12 || r.Ready[i] && pick == 0 {
+			return r, ErrRule
+		}
+		if pick > 0 {
+			if pick == r.Bans[0] || pick == r.Bans[1] {
+				return r, ErrRule
+			}
+			for j := 0; j < i; j++ {
+				if i/5 == j/5 && pick == r.Picks[j] {
+					return r, ErrRule
+				}
+			}
+		}
+	}
+	for i, ban := range r.Bans {
+		if ban < 0 || ban > 12 || ban > 0 && ban == r.Bans[1-i] {
+			return r, ErrRule
+		}
+	}
+	if r.Phase == "playing" || r.Phase == "ended" {
+		for i := range ArenaSeats {
+			if !r.Ready[i] || r.Picks[i] == 0 {
+				return r, ErrRule
+			}
+		}
+	}
+	if r.Phase == "draft" || r.Phase == "aborted" {
+		if r.Reference != nil || len(r.Frames) != 0 {
+			return r, ErrRule
+		}
+		return r, nil
+	}
+	a, err := r.Replay()
+	if err != nil || r.Reference == nil || a.Digest() != r.Reference.Digest() || (r.Phase == "ended") != a.Ended {
+		return r, ErrRule
+	}
+	return r, nil
+}
+
+// Replay 校验配置版本与每一连续输入帧，重建参考状态；不信任宿主传入的任意状态快照。
+func (r Round) Replay() (*Arena, error) {
+	a := NewArena(r.InitialSeed)
+	for _, f := range r.Frames {
+		if err := a.Apply(f); err != nil {
+			return nil, err
+		}
+	}
+	return a, nil
+}
+func NewRound(c Change) (Round, error) {
+	if c.Op != "init" || c.Epoch != 0 || c.Now < 0 || c.Deadline <= c.Now {
+		return Round{}, ErrRule
+	}
+	r := Round{Version: ArenaVersion, MatchID: c.MatchID, Members: c.Members, InitialSeed: c.Seed, Deadline: c.Deadline, HostSID: c.HostSID, Epoch: 1, Phase: "draft"}
+	return DecodeRound(r.Encode())
+}
+
+// Update 的接收者是值；所有拒绝都不修改原记录。Nest handler 最后才一次 SetPayload。
+func (r Round) Update(c Change) (Round, error) {
+	if c.Op == "init" {
+		if r.MatchID == c.MatchID && r.Members == c.Members && r.InitialSeed == c.Seed && r.Deadline == c.Deadline && r.HostSID == c.HostSID {
+			return r, nil
+		}
+		return r, ErrRule
+	}
+	if c.Op == "read" {
+		return r, nil
+	}
+	if c.HostSID != r.HostSID || c.Epoch != r.Epoch {
+		return r, ErrRule
+	}
+	if c.Op == "handoff" || c.Op == "resume" {
+		if c.NextHost <= 0 || c.Op == "handoff" && c.NextHost == r.HostSID || c.Op == "resume" && c.NextHost != r.HostSID || r.Epoch == ^uint64(0) {
+			return r, ErrRule
+		}
+		r.HostSID = c.NextHost
+		r.Epoch++
+		return r, nil
+	}
+	if c.Op == "ack" {
+		if (r.Phase != "ended" && r.Phase != "aborted") || c.Seat < 0 || c.Seat >= ArenaSeats || c.Digest != r.ResultDigest() {
+			return r, ErrRule
+		}
+		r.Acknowledged[c.Seat] = true
+		return r, nil
+	}
+	if r.Phase == "draft" {
+		if c.Now < 0 {
+			return r, ErrRule
+		}
+		if c.Now >= r.Deadline {
+			if c.Op != "expire" {
+				return r, ErrRule
+			}
+			r.Phase = "aborted"
+			return r, nil
+		}
+		if c.Op == "start" {
+			for i := range ArenaSeats {
+				if !r.Ready[i] || r.Picks[i] == 0 {
+					return r, ErrRule
+				}
+			}
+			r.Phase = "playing"
+			r.Reference = NewArena(r.InitialSeed)
+			return r, nil
+		}
+		if c.Seat < 0 || c.Seat >= ArenaSeats {
+			return r, ErrRule
+		}
+		switch c.Op {
+		case "ready":
+			if r.Picks[c.Seat] == 0 {
+				return r, ErrRule
+			}
+			r.Ready[c.Seat] = c.Ready
+		case "pick":
+			if c.Hero < 1 || c.Hero > 12 || c.Hero == r.Bans[0] || c.Hero == r.Bans[1] {
+				return r, ErrRule
+			}
+			for i, p := range r.Picks {
+				if i != c.Seat && i/5 == c.Seat/5 && p == c.Hero {
+					return r, ErrRule
+				}
+			}
+			r.Picks[c.Seat] = c.Hero
+			r.Ready[c.Seat] = false
+		case "ban":
+			if c.Seat != 0 && c.Seat != 5 || c.Hero < 1 || c.Hero > 12 || r.Bans[c.Seat/5] != 0 || r.Bans[1-c.Seat/5] == c.Hero {
+				return r, ErrRule
+			}
+			for _, p := range r.Picks {
+				if p == c.Hero {
+					return r, ErrRule
+				}
+			}
+			r.Bans[c.Seat/5] = c.Hero
+		default:
+			return r, ErrRule
+		}
+		return r, nil
+	}
+	if c.Op != "frame" || (r.Phase != "playing" && r.Phase != "ended") {
+		return r, ErrRule
+	}
+	if c.Frame.ID > 0 && int(c.Frame.ID) <= len(r.Frames) {
+		if reflect.DeepEqual(r.Frames[int(c.Frame.ID)-1], c.Frame) {
+			return r, nil
+		}
+		return r, ErrRule
+	}
+	if r.Phase != "playing" {
+		return r, ErrRule
+	}
+	// 不与上一次返回值共享输入/状态；框架 History 只读视图不能跨 Tick 保留为持久事实。
+	var f lockstep.Frame
+	raw, _ := json.Marshal(c.Frame)
+	if err := strictJSON(raw, &f); err != nil {
+		return r, err
+	}
+	a, err := r.Replay()
+	if err != nil {
+		return r, err
+	}
+	if err := a.Apply(f); err != nil {
+		return r, err
+	}
+	r.Frames = append(append([]lockstep.Frame(nil), r.Frames...), f)
+	r.Reference = a
+	if a.Ended {
+		r.Phase = "ended"
+	}
+	return r, nil
+}
+func (r Round) ResultDigest() string {
+	if r.Reference != nil {
+		return r.Reference.Digest()
+	}
+	// 取消局仍有稳定结果身份，但不发奖励。
+	return NewArena(r.InitialSeed).Digest()
+}
+
+// Award 来自权威终态，接入层必须回查终态而不是信任客户端自报证书。
+type Award struct {
+	RoundID         int64
+	MatchID, Digest string
+	Member          Member
+	Won, Draw       bool
+}
+
+func (r Round) Awards(id int64) ([]Award, error) {
+	if id <= 0 || r.Phase != "ended" && r.Phase != "aborted" {
+		return nil, ErrRule
+	}
+	out := make([]Award, ArenaSeats)
+	winner := 0
+	if r.Reference != nil {
+		winner = r.Reference.Winner
+	}
+	for i, m := range r.Members {
+		out[i] = Award{RoundID: id, MatchID: r.MatchID, Digest: r.ResultDigest(), Member: m, Won: winner == i/5+1, Draw: winner == 0}
+	}
+	return out, nil
+}

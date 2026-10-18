@@ -1,0 +1,60 @@
+package moba
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+)
+
+// MatchRoute 固定 MatchID -> RoundEntityID 的唯一入口。业务为一个匹配命名空间配置同一 Directory EntityID。
+// 创建 / 恢复比赛先 Reserve，再初始化返回的 Round ID；不能每次重试重新分配一局来规避幂等。
+type MatchRoute struct {
+	MatchID string
+	RoundID int64
+	Binding string
+}
+
+func RoundBinding(c Change) string {
+	raw, _ := json.Marshal(struct {
+		Version  string
+		Members  [ArenaSeats]Member
+		Seed     uint64
+		Deadline int64
+	}{ArenaVersion, c.Members, c.Seed, c.Deadline})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// Directory 样例最多 64 局，不静默淘汰终态映射；业务需按赛季 / 分片设计可证明的归档边界。
+func ReserveRound(raw, matchID string, candidateID int64, binding string) (string, int64, error) {
+	if len(matchID) == 0 || len(matchID) > 128 || candidateID <= 0 {
+		return raw, 0, ErrRule
+	}
+	digest, err := hex.DecodeString(binding)
+	if err != nil || len(digest) != 32 {
+		return raw, 0, ErrRule
+	}
+	routes := []MatchRoute{}
+	if raw != "" {
+		if err := strictJSON([]byte(raw), &routes); err != nil {
+			return raw, 0, err
+		}
+	}
+	for _, route := range routes {
+		if route.MatchID == matchID {
+			if route.Binding != binding {
+				return raw, 0, ErrRule
+			}
+			return raw, route.RoundID, nil
+		}
+		if route.RoundID == candidateID {
+			return raw, 0, ErrRule
+		}
+	}
+	if len(routes) >= 64 {
+		return raw, 0, ErrRule
+	}
+	routes = append(routes, MatchRoute{matchID, candidateID, binding})
+	encoded, _ := json.Marshal(routes)
+	return string(encoded), candidateID, nil
+}

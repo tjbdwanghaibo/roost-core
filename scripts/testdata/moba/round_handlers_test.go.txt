@@ -1,0 +1,528 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	directoryentity "example.com/moba-practice/game/entities/battle_directory"
+	roundentity "example.com/moba-practice/game/entities/battle_round"
+	player "example.com/moba-practice/game/entities/player"
+	sender "example.com/moba-practice/game/handler/syncsender"
+	"example.com/moba-practice/game/moba"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"sync"
+	"testing"
+	"time"
+)
+
+type roundFixture struct {
+	engine    *nest.NestMgr
+	round     *roundentity.BattleRound
+	players   [moba.ArenaSeats]*player.Player
+	record    moba.Round
+	directory *directoryentity.BattleDirectory
+}
+
+func newRoundFixture(t *testing.T) *roundFixture {
+	t.Helper()
+	player.RegisterEntity()
+	roundentity.RegisterEntity()
+	directoryentity.RegisterEntity()
+	RegisterMobaRoundNestHandlers()
+	f := &roundFixture{}
+	g := mobaGetter{}
+	for i := range f.players {
+		id, _ := entity.BuildEntityID(int64(10000+i), player.EntityKindPlayer)
+		v, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.players[i] = v.(*player.Player)
+		g[id] = v
+	}
+	id, _ := entity.BuildEntityID(20000, roundentity.EntityKindBattleRound)
+	v, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: roundentity.EntityKindBattleRound})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.round = v.(*roundentity.BattleRound)
+	g[id] = v
+	directoryID, err := entity.BuildEntityID(21000, directoryentity.EntityKindBattleDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: directoryID, Kind: directoryentity.EntityKindBattleDirectory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.directory = directory.(*directoryentity.BattleDirectory)
+	g[directoryID] = directory
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mobaCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.engine.Shutdown(context.Background()) })
+	members := [moba.ArenaSeats]moba.Member{}
+	for i, p := range f.players {
+		members[i] = moba.Member{PlayerID: p.ID(), SID: int32(1000 + i%2)}
+	}
+	initial := moba.Change{Op: "init", MatchID: "five-v-five-stable", HostSID: 2000, Seed: 42, Deadline: 100, Now: 1, Members: members}
+	reserved, err := sender.NewMobaRoundSender(f.engine).Sync_MOBAReserveRound(context.Background(), f.directory.ID(), initial.MatchID, f.round.ID(), moba.RoundBinding(initial))
+	if err != nil || reserved != f.round.ID() {
+		t.Fatal("directory reserve", err)
+	}
+	f.record = f.apply(t, initial)
+	for i := range moba.ArenaSeats {
+		f.record = f.apply(t, moba.Change{Op: "pick", HostSID: 2000, Epoch: 1, Seat: i, Hero: i%5 + 1, Now: 2})
+		f.record = f.apply(t, moba.Change{Op: "ready", HostSID: 2000, Epoch: 1, Seat: i, Ready: true, Now: 2})
+	}
+	f.record = f.apply(t, moba.Change{Op: "start", HostSID: 2000, Epoch: 1, Now: 3})
+	return f
+}
+func (f *roundFixture) apply(t *testing.T, c moba.Change) moba.Round {
+	t.Helper()
+	r, err := sender.NewMobaRoundSender(f.engine).Sync_MOBARound(context.Background(), f.round.ID(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func (f *roundFixture) persist(ctx context.Context, c moba.Change) (moba.Round, error) {
+	return sender.NewMobaRoundSender(f.engine).Sync_MOBARound(ctx, f.round.ID(), c)
+}
+func actorCall(t *testing.T, a *moba.Actor, c moba.RoomRequest) moba.RoomReply {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r, err := a.Call(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func bindRoster(t *testing.T, a *moba.Actor, r moba.Round, start int) {
+	t.Helper()
+	for i, m := range r.Members {
+		actorCall(t, a, moba.RoomRequest{Op: "bind", Epoch: r.Epoch, PlayerID: m.PlayerID, PlayerSID: m.SID, Session: nettransport.SessionID(start + i)})
+	}
+}
+func TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom(t *testing.T) {
+	f := newRoundFixture(t)
+	packets := 0
+	unknown := false
+	wire := nettransport.TransportFunc{Datagram: func(_ context.Context, _ nettransport.SessionID, raw []byte) error {
+		frames, err := lockstep.DecodeBroadcast(raw)
+		if err != nil {
+			return err
+		}
+		stored, err := moba.DecodeRound(f.round.Dao().GetPayload())
+		if err != nil || len(stored.Frames) < int(frames[len(frames)-1].ID) {
+			return errors.New("broadcast preceded authority commit")
+		}
+		packets++
+		return nil
+	}}
+	persist := func(ctx context.Context, c moba.Change) (moba.Round, error) {
+		r, err := f.persist(ctx, c)
+		if err == nil && unknown {
+			return r, errors.New("reply lost after durable commit")
+		}
+		return r, err
+	}
+	room, err := moba.RecoverRoom(f.record, persist, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := moba.NewActor(room)
+	defer a.Stop(context.Background())
+	bindRoster(t, a, f.record, 101)
+	actorCall(t, a, moba.RoomRequest{Op: "input", Epoch: 1, Session: 101, Frame: 1, Payload: moba.ArenaInput{Action: moba.Move, Step: 1}.Bytes()})
+	actorCall(t, a, moba.RoomRequest{Op: "tick", Epoch: 1})
+	if packets != 10 {
+		t.Fatalf("broadcasts=%d", packets)
+	}
+	unknown = true
+	if _, err := a.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1}); err == nil {
+		t.Fatal("unknown commit continued")
+	}
+	if packets != 10 {
+		t.Fatal("unknown frame was sent")
+	}
+	if _, err := a.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1}); err == nil {
+		t.Fatal("failed room advanced again")
+	}
+	stored := f.apply(t, moba.Change{Op: "read"})
+	if len(stored.Frames) != 2 {
+		t.Fatal("lost durable frame")
+	}
+	stored = f.apply(t, moba.Change{Op: "resume", HostSID: stored.HostSID, Epoch: stored.Epoch, NextHost: stored.HostSID})
+	recovered, err := moba.RecoverRoom(stored, f.persist, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := moba.NewActor(recovered)
+	defer b.Stop(context.Background())
+	bindRoster(t, b, stored, 201)
+	if _, err := b.Call(context.Background(), moba.RoomRequest{Op: "input", Epoch: 2, Session: 101, Frame: 3, Payload: moba.ArenaInput{}.Bytes()}); err == nil {
+		t.Fatal("old connection controlled recovered room")
+	}
+	if _, err := b.Call(context.Background(), moba.RoomRequest{Op: "input", Epoch: 2, Session: 201, Frame: 2, Payload: moba.ArenaInput{}.Bytes()}); err == nil {
+		t.Fatal("committed input folded after recovery")
+	}
+	replay := actorCall(t, b, moba.RoomRequest{Op: "replay", Epoch: 2, Frame: 1})
+	client := moba.NewArena(42)
+	for _, frame := range replay.Frames {
+		if err := client.Apply(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.Digest() != stored.Reference.Digest() {
+		t.Fatal("recovered replay diverged")
+	}
+	out := actorCall(t, b, moba.RoomRequest{Op: "tick", Epoch: 2})
+	if out.Frame.ID != 3 || out.Next != 4 {
+		t.Fatal("recovery restarted frame numbering")
+	}
+}
+func TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID(t *testing.T) {
+	f := newRoundFixture(t)
+	sent := 0
+	wire := nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { sent++; return nil }}
+	room, err := moba.RecoverRoom(f.record, f.persist, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := moba.NewActor(room)
+	defer old.Stop(context.Background())
+	bindRoster(t, old, f.record, 101)
+	actorCall(t, old, moba.RoomRequest{Op: "tick", Epoch: 1})
+	next := f.apply(t, moba.Change{Op: "handoff", HostSID: 2000, Epoch: 1, NextHost: 2001})
+	if next.Epoch != 2 || next.Members != f.record.Members {
+		t.Fatal("handoff moved player ownership")
+	}
+	if _, err := old.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1}); err == nil {
+		t.Fatal("old host committed after handoff")
+	}
+	if sent != 10 {
+		t.Fatal("old epoch broadcast new frame")
+	}
+	if _, err := f.persist(context.Background(), moba.Change{Op: "handoff", HostSID: 2000, Epoch: 1, NextHost: 2002}); err == nil {
+		t.Fatal("stale transfer accepted")
+	}
+	fresh, err := moba.RecoverRoom(next, f.persist, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := moba.NewActor(fresh)
+	defer host.Stop(context.Background())
+	bindRoster(t, host, next, 201)
+	if _, err := host.Call(context.Background(), moba.RoomRequest{Op: "bind", Epoch: 2, PlayerID: next.Members[0].PlayerID, PlayerSID: 1001, Session: 999}); err == nil {
+		t.Fatal("wrong Player sid accepted")
+	}
+	out := actorCall(t, host, moba.RoomRequest{Op: "tick", Epoch: 2})
+	if out.Frame.ID != 2 {
+		t.Fatal("handoff lost committed head")
+	}
+	replay := f.apply(t, moba.Change{Op: "frame", HostSID: 2001, Epoch: 2, Frame: out.Frame})
+	if len(replay.Frames) != 2 {
+		t.Fatal("duplicate committed frame appended")
+	}
+	out.Frame.Inputs = []lockstep.Input{{Player: 1, Payload: moba.ArenaInput{Action: moba.Move, Step: 1}.Bytes()}}
+	if _, err := f.persist(context.Background(), moba.Change{Op: "frame", HostSID: 2001, Epoch: 2, Frame: out.Frame}); err == nil {
+		t.Fatal("changed committed frame accepted")
+	}
+}
+func finishRound(t *testing.T, f *roundFixture) moba.Round {
+	t.Helper()
+	inputs := []lockstep.Input{}
+	for i := range 4 {
+		inputs = append(inputs, lockstep.Input{Player: lockstep.PlayerID(i + 1), Payload: moba.ArenaInput{Action: moba.ArenaSurrender}.Bytes()})
+	}
+	return f.apply(t, moba.Change{Op: "frame", HostSID: 2000, Epoch: 1, Frame: lockstep.Frame{ID: 1, Inputs: inputs}})
+}
+func TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity(t *testing.T) {
+	f := newRoundFixture(t)
+	r := finishRound(t, f)
+	awards, err := r.Awards(f.round.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sender.NewMobaRoundSender(f.engine)
+	ctx := context.Background()
+	for _, award := range awards[:3] {
+		if err := s.Sync_MOBAAward(ctx, award.Member.PlayerID, award); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		for i, award := range awards {
+			if err := s.Sync_MOBAAward(ctx, award.Member.PlayerID, award); err != nil {
+				t.Fatal(err)
+			}
+			r = f.apply(t, moba.Change{Op: "ack", HostSID: 2000, Epoch: 1, Seat: i, Digest: r.ResultDigest()})
+		}
+	}
+	for i, p := range f.players {
+		d := p.Dao()
+		if !r.Acknowledged[i] {
+			t.Fatal("award missing ack")
+		}
+		if i >= 5 {
+			if d.GetGold() != 10 || d.GetWins() != 1 || d.GetLosses() != 0 {
+				t.Fatal("winner duplicate / missing assets")
+			}
+		} else if d.GetGold() != 0 || d.GetWins() != 0 || d.GetLosses() != 1 {
+			t.Fatal("loser facts incorrect")
+		}
+	}
+	changed := awards[0]
+	changed.Won = true
+	if err := s.Sync_MOBAAward(ctx, changed.Member.PlayerID, changed); err == nil {
+		t.Fatal("changed winner replay accepted")
+	}
+	if err := s.Sync_MOBAAward(ctx, f.players[1].ID(), awards[0]); err == nil {
+		t.Fatal("reward routed to another Player")
+	}
+}
+func TestMOBARoundUndoRollsBackFrameAndCheckpoint(t *testing.T) {
+	f := newRoundFixture(t)
+	before := f.round.Dao().GetPayload()
+	refused := errors.New("refuse after round update")
+	name := nest.NewHandlerName("moba_round_rollback")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, err := handlerMOBARound(es[0].(IMobaRoundEntity), moba.Change{Op: "frame", HostSID: 2000, Epoch: 1, Frame: lockstep.Frame{ID: 1}})
+		if err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.RequestMulti(context.Background(), name, []int64{f.round.ID()}, nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if f.round.Dao().GetPayload() != before {
+		t.Fatal("checkpoint / frame survived failed transaction")
+	}
+	f.apply(t, moba.Change{Op: "frame", HostSID: 2000, Epoch: 1, Frame: lockstep.Frame{ID: 1}})
+}
+func TestMOBARoomMailboxBoundAndDrain(t *testing.T) {
+	f := newRoundFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	persist := func(ctx context.Context, c moba.Change) (moba.Round, error) {
+		close(entered)
+		<-release
+		return f.persist(ctx, c)
+	}
+	room, err := moba.RecoverRoom(f.record, persist, nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := moba.NewActor(room)
+	var releaseOnce sync.Once
+	defer func() { releaseOnce.Do(func() { close(release) }); _ = a.Stop(context.Background()) }()
+	tickDone := make(chan error, 1)
+	go func() {
+		_, err := a.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1})
+		tickDone <- err
+	}()
+	<-entered
+	var wg sync.WaitGroup
+	results := make(chan error, 40)
+	for range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := a.Call(context.Background(), moba.RoomRequest{Op: "state", Epoch: 1})
+			results <- err
+		}()
+	}
+	// 满队列明确拒绝；用真实返回同步，不靠调度 sleep 猜队列是否已满。
+	select {
+	case err := <-results:
+		if !errors.Is(err, moba.ErrBusy) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("unbounded mailbox accepted every call")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.Stop(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("drain released in-flight work", err)
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := <-tickDone; err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if !errors.Is(err, moba.ErrBusy) {
+			t.Fatal(fmt.Errorf("draining call ran: %w", err))
+		}
+	}
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMOBAMatchDirectoryConcurrentReservationKeepsOneRound(t *testing.T) {
+	f := newRoundFixture(t)
+	ctx := context.Background()
+	s := sender.NewMobaRoundSender(f.engine)
+	if _, err := s.Sync_MOBAReserveRound(ctx, f.directory.ID(), "wrong-kind", f.players[0].ID(), moba.RoundBinding(moba.Change{Seed: 42})); err == nil {
+		t.Fatal("Player ID accepted as Round ID")
+	}
+	binding := moba.RoundBinding(moba.Change{Members: f.record.Members, Seed: 42, Deadline: 100})
+	var wg sync.WaitGroup
+	ids := make([]int64, 8)
+	errs := make([]error, 8)
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			candidate, err := entity.BuildEntityID(int64(22000+i), roundentity.EntityKindBattleRound)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			ids[i], errs[i] = s.Sync_MOBAReserveRound(ctx, f.directory.ID(), "new-match", candidate, binding)
+		}(i)
+	}
+	wg.Wait()
+	for i, id := range ids {
+		if errs[i] != nil || id != ids[0] || id == f.round.ID() {
+			t.Fatal("multiple rounds reserved", ids, errs)
+		}
+	}
+	if _, err := s.Sync_MOBAReserveRound(ctx, f.directory.ID(), "new-match", ids[0], moba.RoundBinding(moba.Change{Seed: 43})); err == nil {
+		t.Fatal("same match changed immutable manifest")
+	}
+	if _, err := s.Sync_MOBAReserveRound(ctx, f.directory.ID(), "different-match", ids[0], binding); err == nil {
+		t.Fatal("one round reused for another match")
+	}
+}
+func TestMOBADurableReplayAndDelayedObserverBeyond64Frames(t *testing.T) {
+	f := newRoundFixture(t)
+	room, err := moba.RecoverRoom(f.record, f.persist, nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := moba.NewActor(room)
+	defer a.Stop(context.Background())
+	endpoint := moba.NewHostEndpoint(a, f.record, 9999)
+	ctx := context.Background()
+	m := f.record.Members[0]
+	req := moba.RoomRequest{Op: "bind", Epoch: 1, PlayerID: m.PlayerID, PlayerSID: m.SID, Session: 101}
+	if _, err := endpoint.Call(ctx, m.SID, req); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		actorCall(t, a, moba.RoomRequest{Op: "tick", Epoch: 1})
+	}
+	req.Session = 201
+	if _, err := endpoint.Call(ctx, m.SID, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Op = "disconnect"
+	req.Session = 101
+	if _, err := endpoint.Call(ctx, m.SID, req); err != nil {
+		t.Fatal("late close disconnected new binding", err)
+	}
+	req.Op = "input"
+	req.Frame = 101
+	req.Payload = moba.ArenaInput{}.Bytes()
+	if _, err := endpoint.Call(ctx, m.SID, req); err == nil {
+		t.Fatal("old session accepted")
+	}
+	req.Session = 201
+	if _, err := endpoint.Call(ctx, m.SID, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := endpoint.Call(ctx, 3000, req); err == nil {
+		t.Fatal("spectator / wrong origin controlled hero")
+	}
+	other := f.record.Members[1]
+	attack := req
+	attack.PlayerID = other.PlayerID
+	attack.PlayerSID = other.SID
+	if _, err := endpoint.Call(ctx, other.SID, attack); err == nil {
+		t.Fatal("another member used bound session")
+	}
+	client := moba.NewArena(42)
+	assembler := lockstep.NewFrameAssembler(128)
+	req.Op = "replay"
+	req.Frame = 1
+	for req.Frame <= 100 {
+		out, err := endpoint.Call(ctx, m.SID, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Frames) == 0 || len(out.Frames) > 64 {
+			t.Fatal("unbounded / empty replay")
+		}
+		frames, err := assembler.IngestFrames(out.Frames)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range frames {
+			if err := client.Apply(frame); err != nil {
+				t.Fatal(err)
+			}
+		}
+		req.Frame = assembler.Next()
+	}
+	stored := f.apply(t, moba.Change{Op: "read"})
+	if client.Digest() != stored.Reference.Digest() {
+		t.Fatal("long disconnect replay diverged")
+	}
+	if _, err := stored.ObserverFrames(false, 1, 5); err == nil {
+		t.Fatal("private observer bypassed ACL")
+	}
+	delayed, err := stored.ObserverFrames(true, 65, 5)
+	if err != nil || len(delayed) != 31 || delayed[len(delayed)-1].ID != 95 {
+		t.Fatal("observer leaked undelayed frames", err)
+	}
+	actorCall(t, a, moba.RoomRequest{Op: "tick", Epoch: 1})
+}
+func TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts(t *testing.T) {
+	f := newRoundFixture(t)
+	r := finishRound(t, f)
+	awards, err := r.Awards(f.round.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	award := awards[0]
+	ctx := context.Background()
+	s := sender.NewMobaRoundSender(f.engine)
+	for i := range 64 {
+		next := award
+		next.RoundID, err = entity.BuildEntityID(entity.GetUniqueIDFromEntityID(award.RoundID)+int64(i), roundentity.EntityKindBattleRound)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.MatchID = fmt.Sprint("archived-match-", i)
+		if err := s.Sync_MOBAAward(ctx, next.Member.PlayerID, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := f.players[0].Dao().GetMobaRewards()
+	next := award
+	next.RoundID, err = entity.BuildEntityID(entity.GetUniqueIDFromEntityID(award.RoundID)+64, roundentity.EntityKindBattleRound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Sync_MOBAAward(ctx, next.Member.PlayerID, next); err == nil {
+		t.Fatal("full ledger silently evicted replay evidence")
+	}
+	first := award
+	first.MatchID = "archived-match-0"
+	if err := s.Sync_MOBAAward(ctx, first.Member.PlayerID, first); err != nil {
+		t.Fatal("old receipt unavailable after full ledger", err)
+	}
+	if f.players[0].Dao().GetLosses() != 64 || f.players[0].Dao().GetMobaRewards() != before {
+		t.Fatal("failed overflow changed assets / history")
+	}
+}
