@@ -74,7 +74,7 @@ fake Client，生产环境从 `app.Registry` 取得 `wiring/nest` 的 Nest Mod �
 `err=ErrNestStopped`；同步 Request 回 `ErrNestStopped`），进程崩溃时直接丢失。延时上限与容量见 `nest.max_delay`、`nest.delayed_capacity`。
 必须发生的定时（发奖、活动结束、冷却到期、Buff 到期）把期限存进 DAO，由 handler 在事务里触发并删除，重启后按存储的
 期限重建：用 `roost add timer --entity <Entity>` 生成（[CODEGEN_REFERENCE“roost add timer”](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)；
-game-demo 的 World 用的就是它，回调见 [模板](../../demo/game/entities/world/timer_handlers.go.tmpl)）。到期由驱动按已加载实体的最早期限投递
+game-demo 的 World 不用生成器，手写同一套接入，见 [模板](../../demo/game/entities/world/timer_component.go.tmpl)）。到期由驱动按已加载实体的最早期限投递
 Tick，离线期间到期的在实体加载后只触发一次（框架不追帧，见 [guide/10-time §4](../../docs/framework/guide/10-time.md#4-按实体的持久定时器)）。
 `Delay_` 适合丢了也无妨或另有兜底的事，例如短时提示、可重算的刷新。
 

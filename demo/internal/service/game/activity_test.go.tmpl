@@ -13,9 +13,14 @@ import (
 	"time"
 
 	gameactivity "{{MODULE}}/game/activity"
+	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/flags"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -485,6 +490,96 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 	closeAt, _ := gameactivity.CloseAt(gameactivity.ID(business.Unix()))
 	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix(), business.Unix()}) {
 		t.Fatalf("the World was armed with %v, want the business window, its close time and the business now", nest.requests)
+	}
+}
+
+// dispatchingNest 记下定时器驱动投递的 Tick（驱动在自己的 goroutine 里投递，所以经通道交给测试）。
+type dispatchingNest struct {
+	corenest.Client
+	ticks chan dispatchedTick
+}
+
+type dispatchedTick struct {
+	handler string
+	id      int64
+	params  corenest.Params
+}
+
+func (n *dispatchingNest) Dispatch(_ context.Context, name corenest.HandlerName, id int64, params corenest.Params, _ ...corenest.SendOpt) error {
+	n.ticks <- dispatchedTick{handler: name.String(), id: id, params: append(corenest.Params(nil), params...)}
+	return nil
+}
+
+// tickCommitter 接住 RunIsolatedTransaction 的提交记录；测试只关心提交之后驱动收到的最早期限。
+type tickCommitter struct{}
+
+func (tickCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// World 定时器的驱动是框架的 entitytimer.Driver，由 startWorldTimers 手工接上 Nest 与业务时钟（demo 不用
+// roost add timer）。业务时钟比真实时间快一天时：到期的关窗节点经 Nest 投给 TimerTickHandler（就是
+// handlerTickWorldTimers 的名字），带的“现在”是业务时间，不是墙钟——World 的期限按业务时间登记，墙钟会让
+// 节点晚一天才到期。D11 迁到生成器时删掉的 TestTheWorldTickCarriesBusinessTime 守的是同一件事（那时是每秒循环）。
+func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
+	config := viper.New()
+	config.Set("time.logic_offset", "24h")
+	registry := app.NewRegistry(config)
+	nest := &dispatchingNest{ticks: make(chan dispatchedTick, 4)}
+	if err := registry.Register(mods.ModNest, corenest.Client(nest)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, coreentity.NewManagerAccess(coreentity.NewEntityManager())); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := startWorldTimers(registry)
+	if err != nil {
+		t.Fatalf("startWorldTimers: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stop(context.Background())
+		world.TimerDriver.SetClock(clock.Now)
+	})
+	business := app.BusinessClock(registry).Now()
+	if lag := business.Sub(time.Now()); lag < 23*time.Hour {
+		t.Fatalf("the registry's business clock is %v ahead of the wall clock, want the configured 24h", lag)
+	}
+	if drift := world.TimerDriver.Now().Sub(business); drift < -time.Minute || drift > time.Minute {
+		t.Fatalf("the World's timer driver reads %v, %v away from the business clock %v", world.TimerDriver.Now(), drift, business)
+	}
+
+	world.RegisterEntity()
+	id, err := coreentity.BuildEntityID(9101, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := coreentity.BuildEntity(&coreentity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: id})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	subject := built.(*world.World)
+	t.Cleanup(func() { subject.TimerComp().OnDestroy(coreentity.DestroyReasonMemoryUnload) })
+	// 已经过了的关窗期限：登记为下一拍到期，提交后驱动立刻看到它。
+	if _, err := corenest.RunIsolatedTransaction(context.Background(), tickCommitter{}, "arm", func() (any, error) {
+		if _, armed := subject.TimerComp().ScheduleActivityPhase("race-business", business.Add(-time.Minute), business); !armed {
+			t.Error("the overdue window close was not armed")
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	select {
+	case tick := <-nest.ticks:
+		if tick.handler != world.TimerTickHandler || tick.id != subject.ID() || len(tick.params) != 1 {
+			t.Fatalf("the driver delivered %+v, want one %s tick for World %d", tick, world.TimerTickHandler, subject.ID())
+		}
+		at, ok := tick.params[0].(int64)
+		if !ok {
+			t.Fatalf("the tick carries %T, want the business time in UnixMilli", tick.params[0])
+		}
+		if delivered := time.UnixMilli(at); delivered.Before(business) || delivered.Sub(business) > time.Minute {
+			t.Fatalf("the tick carries %v, want the business time (%v), not the wall clock (%v)", delivered, business, time.Now())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the driver never delivered the due World tick")
 	}
 }
 

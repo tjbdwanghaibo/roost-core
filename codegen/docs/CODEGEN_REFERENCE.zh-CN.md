@@ -274,8 +274,9 @@ DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内�
 
 回归：`codegen/internal/roost/add_timer_test.go`（生成物形状与归属、改名与显式 ID、拒绝的输入、清单校验；`TestEntityTimerGeneratedProjectEndToEnd`
 按新手流程生成工程，经正式 Nest 与 wiring/entitytimer 跑在线到期、周期续期、离线错过多个周期后加载只触发一次、卸载后不投递、重载后 ID 不复用、
-多定时器最早期限、删档不触发，`-race`）；core 见 `framework/nest/entitytimer` 的测试。game-demo 的 World 用的就是这个生成器
-（`timers.world`，回调在 `game/entities/world/timer_handlers.go`）。
+多定时器最早期限、删档不触发，`-race`）；core 见 `framework/nest/entitytimer` 的测试。game-demo 的 World 不用这个生成器（demo 是手写参考实现，
+不依赖生成器产物，维护者 2026-10-18）：它手写同一套接入——`game/entities/world/timer_component.go` 的组件与 Store 适配、
+`game/handler/tick_world_timers.go`、game 服务 `activity.go` 的 `startWorldTimers`（绑业务时钟与 Nest、启动、停机时停止）。
 
 ## 4. DAO 生成器
 

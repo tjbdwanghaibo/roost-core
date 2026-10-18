@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### game-demo World 定时器恢复手写（维护者 2026-10-18）
+
+- **决定（维护者原话）**：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不能生成 demo。D11（`5581deeb`）把 World 迁到了 `roost add timer` 的生成产物，现撤回；`roost add timer` 生成器本身不变，新手工程照常用。
+- **World 现为手写、直接调用框架的 entitytimer 驱动**：`game/entities/world/timer_component.go`（组件类型号 2006 不变；`TimerComponent` 持有 `entitytimer.Host`，手写 `worldTimerStore` 把 `WorldDao.Timers` / `TimerSeed` 适配成 `entitytimer.Store`；`TimerDriver`、`TimerTickHandler`、活动阶段回调；组件只暴露 `ScheduleActivityPhase` / `PendingActivityPhase` / `Tick`）、`game/handler/tick_world_timers.go`（`handlerTickWorldTimers`，名字与驱动的对齐由 `tick_world_timers_test.go` 守）、game 服务 `activity.go` 的 `startWorldTimers`（`Service.Init` 在 `EnsureWorld` 之前手工 `SetClock`（业务时钟）/ `Bind`（Nest 客户端、只读实体查找）/ `Start`，`Shutdown` 停止）。取舍：不恢复 D11 之前的每秒 `Sync_TickWorldTimers` 循环与 nopersist `TimerNextDue`——驱动是框架能力，demo 手写接入框架能力是允许的，也展示了不用生成器时的接法。
+- **清单与装配**：demo 生成步骤不再调用 `add timer`，`roost.yaml` 没有 `timers.world`，bootstrap 不装 `wiring/entitytimer` Mod；game 服务少一个 Mod，生成的 `shutdown.total_timeout` 少 3s：缺省 Mod 集的 game-demo 由 120s（26 个 Mod）回到 117s（25 个，宽限期 122s）；`-mods configdata,mongo,nats,dataengine,nest` 由 117s 回到 114s（`deploy/dev/second-game.sh` 等待 119s）。D11 条目写的“114s 变为 117s”是后一种的数字。
+- **存储**：节点类型由生成的 `WorldTimerNode` 回到手写的 `db.TimerNode`，bson 键与字段完全相同（`type` / `priority` / `param1` / `param2` / `payload` / `end_unix_milli` / `delay_millis`，`timers` / `timer_seed`），已存文档不变；未上线不做兼容，这里无需迁移。
+- **测试**：World 的 10 个定时器用例全部保留（最早期限读驱动的公开 `TimerDriver.DueOf`；优先级用例经组件内的 host，组件不为测试多暴露 API）；新增 `TestTheWorldTimersRunOnTheBusinessClock`（game 服务包：业务时钟快一天时，到期的关窗节点经 `startWorldTimers` 接上的驱动投给 `handlerTickWorldTimers`，带业务时间）与 `TestTheWorldTimerDriverDeliversToTheTickHandler`（handler 包）。`shutdown_test.go` / `singleton_test.go`（夹具 `-mods configdata,mongo,nats,dataengine,nest`）的 game 服务 Mod 数与预算回到 24 / 114s。
+- **升级**：已按 D11 版本生成的 game-demo 工程是生成时写出的业务文件，不改写；要换回手写版本就按新 demo 重新生成，或删掉 `roost.yaml` 的 `timers.world`、生成的 `timer_component_gen.go` / `world_timer_node_gen.go` / `tick_world_timer_gen*.go` 与 `timer_handlers.go`，换上新 demo 的三个文件与 `startWorldTimers` 接线。
+- 文档：DESIGN-TODO D11、KNOWN-LIMITS（D11 剩余限制）、impl/12-codegen §2C、guide/10-time §4、CODEGEN_REFERENCE / NEST_RUNTIME、demo WALKTHROUGH“World 的职责”。
+
 ### Saga 原生步骤性能优化：逐跳打点、投影后唤醒 outbox、去冗余读、等回执移出 durable 回调（2026-10-18）
 
 - **决定**：维护者 2026-10-18 批准“按推荐处理”——先逐跳打点，再做第一档两项，然后做第二档第 3 项；第二档第 4 项（同 durable 按实体并发）与第三、四档本轮不做。
@@ -131,9 +141,9 @@
 - **生成器**：`roost add timer --entity Player [--component Timer] [--service game] [--id N]`（Makefile `make new-timer ENTITY=Player`）。`roost.yaml` 新增 `timers.<entity>`（component、id、service、dao）。add 时在实体 DAO 定义加 `Timers map[int64]*<Entity>TimerNode` 与 `TimerSeed` 两个持久字段、实体加组件字段（之后归业务）；`project sync` 重写 `<component>_component_gen.go`（组件：`NewTimer` / `NewTimerWithPriority` / `NewTimerAt` / `ChangeTimer` / `RemoveTimer` / `Timer` / `Timers` / `Tick`，驱动变量 `TimerDriver`）、`db/def/<entity>_<component>_node_gen.go`、`game/handler/tick_<entity>_<component>_gen.go`（Tick handler 与名字对齐测试）与 bootstrap 里的 `kitentitytimer.NewMod`；业务回调 `game/entities/<entity>/<component>_handlers.go` 只在缺失时创建。Remote 托管（`remote=managed`）与 `noPersist` 实体、没有 DAO、组件重名、重复 add 在改文件前拒绝。`roost add handler --component <定时器组件>` 认生成的组件文件。
 - **驱动（core）**：新包 `framework/nest/entitytimer`（`Driver`、`Host`、`Fire`、`Store`、`Handlers`）与 `wiring/entitytimer`（Mod，依赖 Nest，绑定 Nest 客户端、只读实体查找与 `app.BusinessClock`）。按“已加载实例的最早期限”维护进程内小堆，事务提交后（`nest.AfterCommit`）更新、回滚不改，报告带序号丢弃晚到的旧报告，实例卸载 / 删档 / 撤销新建时离开索引；只有最早期限到了才经 `nest.Client.Dispatch` 给那一个实体投递一次 Tick，不按在线人数轮询；投递前核对实例，不唤醒不在内存的实体；投递后无报告 10s 重投。新指标 `entitytimer.delivered_total` / `redelivered_total` / `deliver_failed_total` / `dropped_total` / `pending`（标签 `driver`）。
 - **离线语义（维护者原话：框架不做追帧；离线期间到期的定时器在实体 load 起来后只触发一次，追帧由业务在回调里根据传入的参数自己处理）**：回调参数 `entitytimer.Fire` 带 `Deadline`（原定期限）、`Now`（实际触发时刻）、`LoadedAt`、`Overdue`（加载后补触发）与 `Interval`；返回正值为下次间隔（从 `Now` 起算），与 `timer.Scheduler` 一致。框架不计算错过次数、不循环补触发。离线实体到期不准点，只在下次加载时处理。
-- **game-demo**：World 的定时器改用同一生成器（`timers.world`，组件类型号 2006 不变），删除手写 `timer_component.go`、`tick_world_timers.go`（`handlerTickWorldTimers` 及其 Sender）与 `ActivityRunner` 每秒 `Sync_TickWorldTimers` 的循环；`WorldDao.TimerNextDue`（nopersist）删除，节点类型改名 `WorldTimerNode`（bson 键不变）。World 定时器用例断言不变。game 服务多一个 Mod，生成的 `shutdown.total_timeout` 由 114s 变为 117s。
+- **game-demo**（已撤回，见上文“game-demo World 定时器恢复手写”）：本条原把 World 的定时器改用同一生成器（`timers.world`）。现在的净变化：World 仍是手写组件，但改为直接调用 core 的 entitytimer 驱动，`ActivityRunner` 每秒 `Sync_TickWorldTimers` 的循环与 `WorldDao.TimerNextDue`（nopersist）删除；节点类型仍是手写 `TimerNode`；game 服务不因定时器多 Mod（不装 `wiring/entitytimer`）。
 - **测试**：`framework/nest/entitytimer`（驱动 / 宿主 / 真实 Nest 引擎，`-race`）、`wiring/entitytimer`、`codegen/internal/roost/add_timer_test.go`（含生成工程端到端 `TestEntityTimerGeneratedProjectEndToEnd`）。修前：`roost add timer --entity Player` 报 `invalid timer name ""`。
-- **升级**：线上尚未部署。已有工程给已存数据的实体加定时器时，新字段在旧文档里缺省为空，不需要迁移；game-demo 工程是生成时写出的业务文件，不改写——要换用生成器就按新 demo 重新生成，或手工执行 `roost add timer --entity World --id 2006` 后删掉旧 `timer_component.go` / `tick_world_timers.go` 与服务里的 `tickWorld` 循环，并把 `TimerNode` 改为 `WorldTimerNode`、删掉 `TimerNextDue`。
+- **升级**：线上尚未部署。已有工程给已存数据的实体加定时器时，新字段在旧文档里缺省为空，不需要迁移；game-demo 工程是生成时写出的业务文件，不改写——要换到新的手写版本就按新 demo 重新生成。
 - 文档：[guide/10-time §4](docs/framework/guide/10-time.md#4-按实体的持久定时器)、[impl/10-time §2A](docs/framework/impl/10-time.md#2a-按实体的持久定时器驱动)、[impl/12-codegen §2C](docs/framework/impl/12-codegen.md#2c-roost-add-timer)、CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK / NEST_RUNTIME、OBSERVABILITY、KNOWN-LIMITS（剩余限制）。
 
 ### Timer：持久化钩子里重入 Tick 或操作出堆中的节点时，钩子视图与 ID 种子保持正确

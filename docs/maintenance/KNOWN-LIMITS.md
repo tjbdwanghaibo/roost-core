@@ -74,7 +74,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 ### 3. 按实体的持久定时器接入（已实施，D11）
 
-**处置**：维护者 2026-10-17 决定 [D11](DESIGN-TODO.md#d11-按实体的持久定时器接入) 方案 B 与离线语义（框架不追帧，离线期间到期的在加载后只触发一次，补算由业务按回调参数自己做），已实施（`a2b4f4d8`、`5581deeb`）：`roost add timer --entity <Entity>` 生成组件、节点类型、Tick handler 与驱动接线，驱动在 core（`framework/nest/entitytimer`）按已加载实体的最早期限只给到期实体投递 Tick；game-demo World 迁入同一生成器。用法见 [guide/10-time §4](../framework/guide/10-time.md#4-按实体的持久定时器)。
+**处置**：维护者 2026-10-17 决定 [D11](DESIGN-TODO.md#d11-按实体的持久定时器接入) 方案 B 与离线语义（框架不追帧，离线期间到期的在加载后只触发一次，补算由业务按回调参数自己做），已实施（`a2b4f4d8`、`5581deeb`）：`roost add timer --entity <Entity>` 生成组件、节点类型、Tick handler 与驱动接线，驱动在 core（`framework/nest/entitytimer`）按已加载实体的最早期限只给到期实体投递 Tick。game-demo World 曾迁入同一生成器，维护者 2026-10-18 决定 demo 保持手写（demo 是手写参考实现，生成器不生成 demo），现为手写组件直接调用 core 的驱动（见 D11“game-demo”一条）。用法见 [guide/10-time §4](../framework/guide/10-time.md#4-按实体的持久定时器)。
 
 **剩余限制**：
 
@@ -83,7 +83,8 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 - **构建了但没发布的实例**：实例在 `OnInitFinish`（发布之前）向驱动报告；发布失败（同 ID 已存在等，框架不调用其 `OnDestroy`）且带有期限的实例留下一个条目，到期时因同 ID 已有别的实例而丢弃；同 ID 没有实例时按“加载中”投递，Nest 照常冷加载该实体并补触发。条目只在到期前占内存，不会重复投递。
 - **Remote 托管与 noPersist 实体不支持**：add 时拒绝。Remote 实体所有权在进程间迁移，迁移中的到期语义未定义；要支持需另行设计（与 DESIGN-TODO D11 方案 C 同一方向）。
 - **去掉 `timers` 条目后生成部分不自动删除**：与其他按清单渲染的文件相同，需要手工删 `*_component_gen.go`、节点类型、Tick handler 及 DAO / 实体里的两处字段；维护者 2026-10-18 决定维持现状、不加回收逻辑。
-- **game 服务多一个 Mod**：生成的停机总预算按 Mod 数计，game-demo 的 `shutdown.total_timeout` 由 114s 变为 117s（实体定时器 Mod 本身停止是即时的，这 3s 是每个 Mod 的保底）；维护者 2026-10-18 决定接受，不改 app 保底规则。
+- **装了定时器的服务多一个 Mod**：生成的停机总预算按 Mod 数计，`roost add timer` 给服务装的 `wiring/entitytimer` Mod 让该服务的 `shutdown.total_timeout` 多 3s（Mod 本身停止是即时的，这 3s 是每个 Mod 的保底）；维护者 2026-10-18 决定接受，不改 app 保底规则。game-demo 手写接线、不装这个 Mod（缺省 Mod 集的 game 服务 25 个 Mod、117s）。
+- **game-demo 的手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段（任何 Mod Start 之前）绑时钟；demo 的 `startWorldTimers` 在 `Service.Init` 里、`EnsureWorld` 之前调用，所以“World 第一次加载在驱动接上之后”靠的是 demo 自己的启动顺序（玩家请求在 `Service.Init` 发布写闸门之前一律拒绝——生成配置 `require_write_gate: true`——而写闸门在 `EnsureWorld` 之后才发布；其余访问 World 的循环都在 Init 里更晚启动），不是框架保证；在那之前加载的 World 会按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
 - **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader（卸载时记下 DAO 持久字节、按 `RestorePersisted` 水合、经 EntityManager 发布）代替 DataEngine + Mongo，删档用测试里的删除准入门；节点是普通 DAO 字段，Mongo 往返由 DataEngine 自身的测试覆盖。真实 Mongo 下的定时器重启演练尚未做。
 
 **原登记（2026-10-17）**：

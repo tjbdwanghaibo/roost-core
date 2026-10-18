@@ -58,7 +58,7 @@ SLG 行军或建造可以用 typed 节点保存任务身份与期限；宿主须
 
 回调内可以通过同一组件登记下一阶段、取消或改期其他节点，以及显式改期自己。它们共享当前 Tick 的调度视图，当前回调结束后按 Scheduler 的组合规则落定，最外层 Tick 才报告新的最早期限；不会从中间 DAO 状态重建另一份堆。这个视图只属于当前调用栈，退出或 panic 即清掉，事务回滚仍只撤销 DAO。`Timer` / `Timers` 读取 DAO 的持久视图，Tick 中新建等待落定的节点在最外层收尾后可见。
 
-不支持 Remote 托管实体（`remote=managed`）与 `noPersist` 实体，`roost add timer` 拒绝并说明原因：前者所有权在进程间迁移，驱动只索引本进程加载的实例；后者没有可补触发的存储。生成物、归属与命令细则见 [CODEGEN_REFERENCE“roost add timer”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)，实现契约见 [impl/10-time §2A](../impl/10-time.md#2a-按实体的持久定时器驱动)。game-demo 的 World 用的就是这个生成器。
+不支持 Remote 托管实体（`remote=managed`）与 `noPersist` 实体，`roost add timer` 拒绝并说明原因：前者所有权在进程间迁移，驱动只索引本进程加载的实例；后者没有可补触发的存储。生成物、归属与命令细则见 [CODEGEN_REFERENCE“roost add timer”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)，实现契约见 [impl/10-time §2A](../impl/10-time.md#2a-按实体的持久定时器驱动)。game-demo 的 World 不用这个生成器：demo 是手写的参考实现，不依赖生成器产物（维护者 2026-10-18），它手写组件、Store 适配、Tick handler 与驱动接线，直接调用 `framework/nest/entitytimer`（`timer_component.go`、`tick_world_timers.go`、game 服务 `activity.go` 的 `startWorldTimers`），是不用生成器时接入同一套驱动的写法。
 
 ## 5. 运维
 

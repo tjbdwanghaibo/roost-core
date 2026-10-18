@@ -39,6 +39,7 @@ type Service struct {
 	stopPresence   func()
 	activity       *ActivityRunner
 	stopActivity   func()
+	stopTimers     func(context.Context) error
 	activityPhase  fnats.IJetStreamSubscription
 }
 
@@ -70,6 +71,16 @@ func (s *Service) Init(registry *app.Registry) error {
 		warnings += len(diagnostics)
 	}
 	slog.Info("skill catalog compiled", "skills", len(catalog.Programs), "warnings", warnings)
+	// The World's timer driver before the World: the driver dates the load
+	// and every deadline by the business clock, so it is bound and started
+	// before the first load (activity.go, startWorldTimers). It is the
+	// framework's driver wired by hand — the demo does not use roost add
+	// timer.
+	stopTimers, err := startWorldTimers(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopTimers = stopTimers
 	value, err := lifecycle.EnsureWorld(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -196,10 +207,10 @@ func (s *Service) Init(registry *app.Registry) error {
 		owners.Fence(runtime)
 	}
 	owners.Start(context.Background())
-	// The timed server-wide event: the World's timer heap and the coordinator
-	// loop (activity.go). After the scene, because
-	// the settlement mails players who are already in the world, and before
-	// the GM commands, which can close a window by hand.
+	// The timed server-wide event: the coordinator loop (activity.go); the
+	// World's timers are already running (startWorldTimers above). After the
+	// scene, because the settlement mails players who are already in the
+	// world, and before the GM commands, which can close a window by hand.
 	runner, stopActivity, err := startActivity(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -282,6 +293,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopActivity != nil {
 		s.stopActivity()
 		s.stopActivity = nil
+	}
+	// The World's timer driver after the loops and before the consumer its
+	// ticks feed: no new phase effect is committed while the subscription
+	// drains. The deadlines stay in the World's DAO.
+	if s.stopTimers != nil {
+		if err := s.stopTimers(ctx); err != nil {
+			slog.Warn("world timer driver did not stop in time", "err", err)
+		}
+		s.stopTimers = nil
 	}
 	if s.activityPhase != nil {
 		s.activityPhase.Drain()
