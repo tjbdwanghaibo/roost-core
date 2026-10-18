@@ -2,8 +2,10 @@ package nest
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,13 +14,26 @@ import (
 	"testing"
 )
 
-// 业务参数名是合法 Go 标识符，不应与 Sender 自己的路由参数、接收者或结果变量冲突。
+// 业务参数名是合法 Go 标识符，不应与 Sender 自己的路由参数、接收者、结果变量、包名、预声明标识符或
+// 包级 handlerName 变量冲突。只做语法解析查不出遮蔽（nest / len / 类型包被参数遮住仍能解析），
+// 所以这里对生成的两个 Sender 包做类型检查。
 func TestSenderNamesDoNotCollideWithBusinessArguments(t *testing.T) {
 	dir := t.TempDir()
 	source := `package handler
-import player "example.com/demo/game/entities/player"
+
+import (
+	player "example.com/demo/game/entities/player"
+	stdjson "encoding/json"
+)
+
 //roost:nest rollback=undo durability=strict
 func handlerCancel(target player.IBagEntity, id, idArg, ctx, delay, ids, client, err, ret, ok, s, nest, ret0, clientErr, retXXX, errXXX, retValues, groupIDs int64) (int64, bool, error) { return 0, true, nil }
+
+//roost:nest rollback=undo durability=strict
+func handlerDecode(target player.IBagEntity, raw stdjson.RawMessage, stdjson, len, any, int64, handlerNameDecode, context, time string) (stdjson.RawMessage, error) { return raw, nil }
+
+//roost:nest rollback=undo durability=strict
+func handlerTrade(from player.IBagEntity, to player.IBagEntity, nil, int64, len, handlerNameTrade, handlerNameCancel string) (int64, bool, error) { return 0, true, nil }
 `
 	if err := os.WriteFile(filepath.Join(dir, "cancel.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
@@ -26,10 +41,20 @@ func handlerCancel(target player.IBagEntity, id, idArg, ctx, delay, ids, client,
 	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
+	imp := importer.ForCompiler(fset, "source", nil)
 	for _, pkg := range []string{"sender", "syncsender"} {
 		path := filepath.Join(dir, pkg, "cancel_nest_gen.go")
-		if _, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.AllErrors|parser.DeclarationErrors); err != nil {
+		file, err := parser.ParseFile(fset, path, nil, parser.AllErrors|parser.DeclarationErrors)
+		if err != nil {
 			t.Fatalf("%s has colliding generated declarations: %v", pkg, err)
+		}
+		var problems []string
+		config := types.Config{Importer: imp, Error: func(err error) { problems = append(problems, err.Error()) }}
+		_, _ = config.Check(pkg, fset, []*ast.File{file}, nil)
+		if len(problems) > 0 {
+			generated, _ := os.ReadFile(path)
+			t.Fatalf("%s does not type-check:\n%s\n%s", pkg, strings.Join(problems, "\n"), generated)
 		}
 	}
 }
