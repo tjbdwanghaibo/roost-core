@@ -10,6 +10,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 // ReplayPass 按 WAL 物理顺序读取，在仍持有 Entity 锁的事务前停下。
@@ -42,10 +43,12 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		if processed == acked {
 			return nil
 		}
+		ackStart := hoptrace.Now()
 		if err := projector.ack(ctx, fences[processed-1]); err != nil {
 			projector.observeAckError(err)
 			return err
 		}
+		hoptrace.Since("h09.de.checkpoint", ackStart)
 		projector.acknowledge(records[acked:processed])
 		acked = processed
 		lastAck = projector.now()
@@ -113,7 +116,15 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				fences:  segment.fences[start:end],
 				batch:   segment.batch,
 			}
+			projectStart := hoptrace.Now()
 			outcome, err := projector.projectSegment(ctx, unit)
+			if !projectStart.IsZero() && err == nil {
+				traceProjectedUnit(unit.records, outcome, projectStart)
+			}
+			if err == nil && outcome != projectionSkipped && projector.opts.OnEffectsStaged != nil && hasEffects(unit.records) {
+				// effect 已随投影事务暂存：唤醒 outbox，不等它的轮询（不改投影 / checkpoint 的顺序与结果）。
+				projector.opts.OnEffectsStaged()
+			}
 			if err != nil {
 				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
 					perRecord = true
@@ -291,4 +302,36 @@ func jitterDuration(duration time.Duration) time.Duration {
 	}
 	half := duration / 2
 	return half + time.Duration(rand.Int64N(int64(duration-half)))
+}
+
+// traceProjectedUnit 是投影的逐跳计时（只在性能夹具安装了 hoptrace 时调用）：WAL 准入 → 本单元开始投影的等待
+// （含等事务释放实体锁与投影器唤醒）、单条带回执 / effect 的投影事务耗时，并给已暂存的 effect 打上时刻，供 outbox
+// 发布时计算排队时间。
+func traceProjectedUnit(records []coredata.CommitRecord, outcome projectionOutcome, start time.Time) {
+	elapsed := time.Since(start)
+	for i := range records {
+		hoptrace.SinceMarkAt("h09.de.project_wait", "tx-committed/", records[i].ID.String(), start)
+	}
+	if len(records) == 1 && (len(records[0].Effects) > 0 || len(records[0].Receipts) > 0) {
+		hoptrace.Observe("h09.de.project_txn", elapsed)
+	} else {
+		hoptrace.Observe("h09.de.project_batch", elapsed)
+	}
+	if outcome == projectionSkipped {
+		return
+	}
+	for i := range records {
+		for j := range records[i].Effects {
+			hoptrace.Mark("effect-staged/", records[i].Effects[j].ID)
+		}
+	}
+}
+
+func hasEffects(records []coredata.CommitRecord) bool {
+	for i := range records {
+		if len(records[i].Effects) > 0 {
+			return true
+		}
+	}
+	return false
 }

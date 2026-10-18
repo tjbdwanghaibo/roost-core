@@ -413,6 +413,7 @@ func TestSubscribeDataEngineStepRefusesEachUnsafeConfig(t *testing.T) {
 		{"topic with wildcard", func(c *StepConsumerConfig) { c.Topic = "reserve.*" }, "invalid dataengine step consumer configuration"},
 		{"max deliver above broker cap", func(c *StepConsumerConfig) { c.MaxDeliver = 1_000_001 }, "unsafe dataengine step consumer limits"},
 		{"lease not longer than ack wait", func(c *StepConsumerConfig) { c.AckWait = 2 * time.Minute }, "unsafe dataengine step consumer limits"},
+		{"receipt waiters above max ack pending", func(c *StepConsumerConfig) { c.MaxAckPending, c.ReceiptWaiters = 8, 9 }, "unsafe dataengine step consumer limits"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

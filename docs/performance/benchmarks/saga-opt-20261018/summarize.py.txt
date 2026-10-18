@@ -1,0 +1,11 @@
+import json,glob,os,sys
+d=sys.argv[1]
+rows=[]
+for f in sorted(glob.glob(d+'/*.json')):
+    r=json.load(open(f)); n=os.path.basename(f)[:-5]
+    st=r.get('Statuses',{})
+    fenced=sum(v for k,v in (r.get('BodyErrors') or {}).items() if 'fenced' in k)
+    rows.append((n, f"{r['Completed']}/{r['Planned']}", r['WrongTerminal'], f"{r['CompletionTPS']:.2f}", r['P50MS'], r['P95MS'], r['P99MS'], r['MaxMS'], r['Server']['P50MS'], r['Server']['P99MS'], r['BusinessVerified'], fenced, r.get('ProjectionBacklogMax')))
+print("| 样本 | 完成 | 终态不对 | 终态/s | P50 | P95 | P99 | Max | Server P50 | Server P99 | 核对 | 屏障挡回 | 投影积压峰值 |")
+print("|"+" --- |"*13)
+for row in rows: print("| "+" | ".join(str(x) for x in row)+" |")

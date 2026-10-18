@@ -86,15 +86,16 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		return nil, consumerConfigError(cfg, c.client.wrapError(err))
 	}
 	handlerCtx, cancel := context.WithCancel(context.Background())
+	sub := &jetStreamSubscription{cancel: cancel, closed: make(chan struct{})}
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
-		wrapped := jetStreamMsg(msg)
-		settleJetStreamDelivery(msg, wrapped, cfg, invokeJetStreamHandler(handlerCtx, handler, wrapped))
+		sub.deliver(handlerCtx, handler, msg, cfg)
 	})
 	if err != nil {
 		cancel()
 		return nil, c.client.wrapError(err)
 	}
-	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
+	sub.watch(cc)
+	return sub, nil
 }
 
 // consumerConfigError 给建立 / 更新持久消费者的失败带上流与消费者名（否则启动失败的报错不说是哪个 durable）。
@@ -259,6 +260,12 @@ func jetStreamMsg(msg gojs.Msg) *fnats.JetStreamMsg {
 	return wrapped
 }
 
+// jetStreamSubscription 是一个 durable 的消费句柄。nats.go 在一个 goroutine 里逐条调用回调；handler 可以用
+// JetStreamMsg.DeferSettle 把结算推迟到后台，这里记着推迟中的投递数（pending）。
+//
+// 结束分两步：nats.go 的 ConsumeContext 关闭（不再有回调）记为 consumeEnded；它关闭且 pending 归零时 finish——
+// 取消 handler 的 ctx、关闭 closed。所以 Closed 表示“没有在途回调，也没有未结算的推迟投递”，Drain 的调用方等它就等到
+// 后台结算完成。
 type jetStreamSubscription struct {
 	cc         gojs.ConsumeContext
 	cancel     context.CancelFunc
@@ -266,6 +273,139 @@ type jetStreamSubscription struct {
 	cancelOnce sync.Once
 	draining   bool
 	stopped    bool
+
+	// 下面三项受 mu 保护。closed 只由 finish 关闭一次（finished 记录）。
+	pending      int
+	consumeEnded bool
+	finished     bool
+	closed       chan struct{}
+}
+
+// newJetStreamSubscription 包装一个已开始消费的 ConsumeContext 并开始等它结束。
+func newJetStreamSubscription(cc gojs.ConsumeContext, cancel context.CancelFunc) *jetStreamSubscription {
+	sub := &jetStreamSubscription{cancel: cancel, closed: make(chan struct{})}
+	sub.watch(cc)
+	return sub
+}
+
+// watch 记下 ConsumeContext，并在它关闭（nats.go 不再调用回调）时记 consumeEnded。
+func (s *jetStreamSubscription) watch(cc gojs.ConsumeContext) {
+	s.mu.Lock()
+	s.cc = cc
+	s.mu.Unlock()
+	closed := cc.Closed()
+	go func() {
+		<-closed
+		s.mu.Lock()
+		s.consumeEnded = true
+		s.mu.Unlock()
+		s.maybeFinish()
+	}()
+}
+
+// deliver 处理一条投递：调用 handler，按返回值结算；handler 推迟了结算时交给 deferredDelivery。
+func (s *jetStreamSubscription) deliver(ctx context.Context, handler fnats.JetStreamHandler, msg gojs.Msg, cfg fnats.JetStreamConsumerConfig) {
+	wrapped := jetStreamMsg(msg)
+	delivery := &deferredDelivery{sub: s, msg: msg, wrapped: wrapped, cfg: cfg}
+	wrapped.DeferSettle = delivery.deferSettle
+	handlerErr := invokeJetStreamHandler(ctx, handler, wrapped)
+	if delivery.handlerReturned(handlerErr) {
+		return
+	}
+	settleJetStreamDelivery(msg, wrapped, cfg, handlerErr)
+}
+
+// beginDeferred 登记一个推迟的结算；订阅已在结束时拒绝（handler 照旧同步处理）。
+func (s *jetStreamSubscription) beginDeferred() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.consumeEnded || s.finished {
+		return false
+	}
+	s.pending++
+	return true
+}
+
+// endDeferred 是一个推迟的结算完成。
+func (s *jetStreamSubscription) endDeferred() {
+	s.mu.Lock()
+	s.pending--
+	s.mu.Unlock()
+	s.maybeFinish()
+}
+
+// maybeFinish 在 ConsumeContext 已关闭、且没有推迟中的结算时结束订阅：取消 handler 的 ctx（Drain 之后它要活到这里），
+// 关闭 closed。只做一次。
+func (s *jetStreamSubscription) maybeFinish() {
+	s.mu.Lock()
+	if !s.consumeEnded || s.pending > 0 || s.finished {
+		s.mu.Unlock()
+		return
+	}
+	s.finished = true
+	s.stopped = true
+	s.mu.Unlock()
+	s.cancelHandler()
+	close(s.closed)
+}
+
+// deferredDelivery 是一条投递的结算权：同步路径（handler 不调用 DeferSettle）在回调返回时结算；推迟路径由 settle 或
+// handler 的错误返回二者先到的那个结算，恰好一次。
+type deferredDelivery struct {
+	sub     *jetStreamSubscription
+	msg     gojs.Msg
+	wrapped *fnats.JetStreamMsg
+	cfg     fnats.JetStreamConsumerConfig
+
+	mu    sync.Mutex
+	state deliveryState
+}
+
+type deliveryState uint8
+
+const (
+	deliveryInline   deliveryState = iota // 没有推迟：回调返回时按返回值结算
+	deliveryDeferred                      // 已推迟，等 settle（或 handler 的错误返回）
+	deliverySettled                       // 已结算
+)
+
+func (d *deferredDelivery) deferSettle() func(error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state != deliveryInline || !d.sub.beginDeferred() {
+		return nil
+	}
+	d.state = deliveryDeferred
+	return d.settle
+}
+
+// handlerReturned 在 handler 返回后调用；true 表示结算已归推迟路径（或已因 handler 的错误立即完成）。
+func (d *deferredDelivery) handlerReturned(handlerErr error) bool {
+	d.mu.Lock()
+	switch {
+	case d.state == deliveryInline:
+		d.mu.Unlock()
+		return false
+	case d.state == deliveryDeferred && handlerErr != nil:
+		d.mu.Unlock()
+		d.settle(handlerErr)
+		return true
+	default:
+		d.mu.Unlock()
+		return true
+	}
+}
+
+func (d *deferredDelivery) settle(err error) {
+	d.mu.Lock()
+	if d.state != deliveryDeferred {
+		d.mu.Unlock()
+		return
+	}
+	d.state = deliverySettled
+	d.mu.Unlock()
+	settleJetStreamDelivery(d.msg, d.wrapped, d.cfg, err)
+	d.sub.endDeferred()
 }
 
 func (s *jetStreamSubscription) Stop() {
@@ -291,14 +431,8 @@ func (s *jetStreamSubscription) Drain() {
 		}
 		s.draining = true
 		s.mu.Unlock()
+		// handler 的 ctx 要活到缓冲里的消息处理完、推迟的结算也完成（maybeFinish 取消它）。
 		s.cc.Drain()
-		go func() {
-			<-s.cc.Closed()
-			s.cancelHandler()
-			s.mu.Lock()
-			s.stopped = true
-			s.mu.Unlock()
-		}()
 	}
 }
 
@@ -308,13 +442,14 @@ func (s *jetStreamSubscription) cancelHandler() {
 	}
 }
 
+// Closed 在 ConsumeContext 关闭且推迟的结算全部完成后关闭。
 func (s *jetStreamSubscription) Closed() <-chan struct{} {
 	if s == nil || s.cc == nil {
 		ch := make(chan struct{})
 		close(ch)
 		return ch
 	}
-	return s.cc.Closed()
+	return s.closed
 }
 
 var _ fnats.IJetStream = (*JetStreamClient)(nil)

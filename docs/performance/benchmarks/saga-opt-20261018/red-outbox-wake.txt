@@ -1,0 +1,4 @@
+--- FAIL: TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll (2.02s)
+    outbox_test.go:652: effect 1 not published within 2s of its commit (poll interval 1h): the projector did not wake the outbox
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	2.676s

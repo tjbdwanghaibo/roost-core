@@ -435,6 +435,29 @@ World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组
 `RecordMatch` 在 Commit 之后各是一次独立的 Nest 调用（Player 与 World 是不同实体、不同锁档）；`WorldStats` 是一个带返回值的
 读 handler，锁内读、值出锁，端点从不碰 World 本身。
 
+World 还有一组持久定时器（`Timer` 组件，类型号 2006），目前只有一种：活动窗口的关窗阶段。它是**手写**的，不用 `roost add timer`
+（维护者 2026-10-18：demo 是手写的参考实现，不迁到生成器产物上，生成器只生成框架内容）；手写的是适配，期限、触发与驱动都用框架的
+`framework/nest/entitytimer`，所以这一节也是“不用生成器时怎么接这套驱动”的写法：
+
+```
+game/entities/world/timer_component.go   TimerComponent（持有 entitytimer.Host）+ worldTimerStore（WorldDao.Timers / TimerSeed ↔ entitytimer.Store）
+                                         + TimerDriver（entitytimer.NewDriver，投给 TimerTickHandler）+ 回调 onActivityPhase
+game/handler/tick_world_timers.go        handlerTickWorldTimers：World 锁内 TimerComp().Tick(业务时间)，rollback=undo durability=strict
+internal/service/game/activity.go        startWorldTimers：SetClock(业务时钟) → Bind(Nest 客户端, 只读实体查找) → Start；Shutdown 里 Stop
+```
+
+- **期限只在 DAO 里**：每次调用从 `WorldDao.Timers` 现建调度器、钩子写回、用完丢弃；武装 / 触发与它所在的事务是同一条 WAL 记录，回滚就是
+  DAO 的回滚。重启后从存储重建，停机期间到期的关窗节点在 World 加载后补触发一次（框架不追帧）。
+- **不轮询**：驱动只记“已加载 World 的最早期限”，到了才经 Nest 正式准入投一次 Tick，索引在事务提交后才更新；D11 之前服务里每秒发一次
+  `Sync_TickWorldTimers` 的循环已经不需要。
+- **回调不做 I/O**：`onActivityPhase` 只记 `activity.phase_due` effect，提交后由服务里的消费者调协调器；记不上就返回 30s 重试，节点留着。
+- **为什么在 `Service.Init` 里接、而且在 `EnsureWorld` 之前**：驱动按业务时钟（`time.logic_offset`）记加载时刻和判断“停机期间是否错过”，
+  必须在 World 第一次加载之前接上。生成工程由 `wiring/entitytimer` Mod 在 Provide 阶段做这件事；demo 手写，放在 Init 开头，靠的是 World
+  只在 `EnsureWorld` 加载、玩家请求在写闸门发布前全被拒绝。停止放在 `Shutdown`：App 先停 Service、再停 Mod，投递中的 Tick 仍有 Nest 可用。
+- **每个进程都武装同一个窗口**：`ScheduleActivityPhase` 按活动 id 幂等，第二次返回已有节点，不会每次重启多一个节点。
+- 测试：`timer_component_test.go`（重启后照样触发、回滚、过期立即补、同期限按优先级再按登记顺序、未知类型告警计数、非法节点只在正常事务里清理）、
+  `tick_world_timers_test.go`（handler 名与驱动一致）、game 服务 `TestTheWorldTimersRunOnTheBusinessClock`（驱动投递带业务时间）。
+
 ## 机器人压测 = 回归测试
 
 ```bash

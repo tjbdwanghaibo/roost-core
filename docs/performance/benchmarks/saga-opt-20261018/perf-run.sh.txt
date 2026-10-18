@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# saga 性能优化（2026-10-18）同机前后对照：base=origin/main，s1=逐跳打点，s2=第一档两项，s3=第二档第 3 项。
+# 测试二进制事先编好，本脚本只执行二进制；测量期间不跑其他测试或构建。交替顺序见下。
+set -uo pipefail
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+S=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/sagaopt
+P=$S/perfbin
+OUT=$S/perf-results
+mkdir -p "$OUT"
+export GOMAXPROCS=4 ROOST_DATAENGINE_IT=1
+{ go version; cat $S/stages.txt; date; sysctl vm.swapusage; uptime; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu hw.memsize; shasum -a 256 $P/*.test; } > "$OUT/env.txt" 2>&1
+run() { local stage=$1 mode=$2 rate=$3 dur=$4 tag=$5 hops=${6:-1} pairs=${7:-64}
+  local name="$stage-$mode$rate-$tag"
+  local h=$hops; [[ $stage == base ]] && h=0
+  echo "$(date +%T) start $name" >> "$OUT/progress.txt"
+  (cd $S/wt-$stage/wiring/saga && ROOST_STEPS_PERF_HOPS=$h ROOST_STEPS_PERF_PAIRS=$pairs ROOST_STEPS_PERF_OUTPUT="$OUT/$name.json" ROOST_STEPS_PERF_VARIANT=steps ROOST_STEPS_PERF_MODE=$mode ROOST_STEPS_PERF_RATE=$rate ROOST_STEPS_PERF_DURATION=$dur \
+    "$P/$stage.test" -test.run '^TestRealNativeStepsPerformance$' -test.count=1 -test.timeout 30m -test.v > "$OUT/$name.log" 2>&1)
+  local rc=$?
+  echo "$(date +%T) end $name rc=$rc" >> "$OUT/progress.txt"
+}
+# 持续档：正向 5/s、全补偿 3/s，各 3 分钟，两轮交替。
+for round in 1 2; do
+  if [[ $round == 1 ]]; then order="base s1 s2 s3"; else order="s3 s2 s1 base"; fi
+  for st in $order; do run $st forward 5 3m r$round; done
+  for st in $order; do run $st compensate 3 3m r$round; done
+done
+# 打点开销：s1 关闭打点的正向 5/s。
+run s1 forward 5 3m nohops 0
+# 中档与饱和档：各 2 分钟，一轮（交替顺序）。
+for st in base s2 s3; do run $st forward 10 2m sat; done
+for st in s3 s2 base; do run $st compensate 5 2m sat; done
+for st in base s1 s2 s3; do run $st forward 20 2m sat; done
+for st in s3 s2 s1 base; do run $st compensate 10 2m sat; done
+# 热点实体：1 对账户，正向 5/s 各 1 分钟（s2 = 第二档前，s3 = 第二档后）。
+run s2 forward 5 1m hot 1 1; run s3 forward 5 1m hot 1 1
+{ date; uptime; sysctl vm.swapusage; } >> "$OUT/env.txt" 2>&1
+echo "$(date +%T) ALL DONE" >> "$OUT/progress.txt"

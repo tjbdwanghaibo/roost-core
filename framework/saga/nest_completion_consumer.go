@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 // NestCompletionConsumerConfig 配置把原生步骤的事务性 completion effect 转成 Engine.Complete 的持久消费者。
@@ -110,12 +111,16 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 	if err != nil {
 		return rejectEnvelope("native_result", err)
 	}
+	// 逐跳计时：completion effect PubAck → 协调器结果消费者开始处理（投递 + 在本 durable 后排队）。
+	hoptrace.SinceMark("h11.completion.deliver", "effect-published/", envelope.EffectID)
 	// 宽 subject 订阅不证明信封内路由正确，必须先核对目标 saga。
 	// 在调用 Complete 前拒绝，避免异键消息推进状态或写入幂等回执。
 	if envelope.Topic != CompletionEffectTopicPrefix+completion.SagaID {
 		return rejectEnvelope("native_result", ErrInvalidRecord)
 	}
+	completeStart := hoptrace.Now()
 	_, err = completer.Complete(ctx, completion)
+	hoptrace.Since("h11.completion.handle", completeStart)
 	if err == nil {
 		return nil
 	}

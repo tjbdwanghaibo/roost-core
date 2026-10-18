@@ -12,6 +12,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
@@ -62,6 +63,10 @@ type ProjectorOptions struct {
 	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
 	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
 	OnFatal func(error)
+	// OnEffectsStaged 在一个投影单元把 effect 暂存进 outbox（Mongo 事务已提交、记录没有被 fence 跳过）之后同步调用，
+	// 必须不阻塞；装配接到 OutboxWorker.Kick，让 effect 不必等 outbox 的下一次轮询。只是提示：不调用、晚调用都不影响
+	// 投影与持久语义（outbox 仍按轮询兜底）。nil 不通知。
+	OnEffectsStaged func()
 	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
 	// 供需要逐步控制回放与 ack 的外部夹具使用（例如注入“投影成功、checkpoint 丢失”后
 	// 检查中间状态）；Close 后这些入口同样返回 ErrRuntimeStopped。生产装配不设置。
@@ -282,9 +287,15 @@ func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRe
 	if err := projector.reserve(record, true); err != nil {
 		return err
 	}
+	appendStart := hoptrace.Now()
 	if _, err := projector.wal.Append(ctx, record); err != nil {
 		projector.discard(record.ID)
 		return err
+	}
+	if !appendStart.IsZero() {
+		// 逐跳计时：WAL 追加（strict 等所在批 fsync）；投影等待从这里开始算。
+		hoptrace.Since("h07.de.wal_append", appendStart)
+		hoptrace.Mark("tx-committed/", record.ID.String())
 	}
 	projector.committed.Add(1)
 	projector.signal()

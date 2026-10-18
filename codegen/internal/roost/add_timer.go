@@ -213,8 +213,8 @@ func addTimer(root string, m Manifest, options AddOptions) ([]string, error) {
 	}
 	spec := TimerSpec{Component: comp, ID: id, Service: service, Dao: dao}
 	names := newTimerNames(m.Project.Module, entityName, spec)
-	// 实体上已经有同名组件字段时，只有它正是这个定时器组件的空位（字段在、类型常量还没人声明，game-demo 的 World
-	// 模板就是这样）才接受；类型常量已由别的文件声明说明那是另一个组件。
+	// 实体上已经有同名组件字段时，只有它正是这个定时器组件的空位（字段在、类型常量还没人声明，例如业务先手写了
+	// 组件字段）才接受；类型常量已由别的文件声明说明那是另一个组件。
 	if declared, err := packageDeclaresConst(filepath.Dir(entityPath), "CompType"+names.CompType); err != nil {
 		return nil, err
 	} else if declared || (contains(host.Components, "CompType"+names.CompType) && !entityHasTimerField(host, names)) {
@@ -395,7 +395,7 @@ func lastSegment(typeName string) string {
 }
 
 // addTimerDaoFields 在 DAO 定义里加节点 map 与种子两个字段（文本插在结构体的右括号前，保留业务注释）。
-// 两个字段已经按同样的类型存在时不改（game-demo 的 World 模板自带它们）；名字被占用、类型不同则拒绝。
+// 两个字段已经按同样的类型存在时不改（业务先手写了它们）；名字被占用、类型不同则拒绝。
 func addTimerDaoFields(root string, names timerNames) (string, []byte, []byte, error) {
 	dir := filepath.Join(root, "db", "def")
 	entries, err := os.ReadDir(dir)
@@ -485,7 +485,7 @@ func exprString(fset *token.FileSet, expr ast.Expr) string {
 	return b.String()
 }
 
-// wireTimerComponent 给实体加组件字段；已经有同一组件字段（game-demo 的 World 模板）时不改。
+// wireTimerComponent 给实体加组件字段；已经有同一组件字段（业务先手写了它）时不改。
 func wireTimerComponent(raw []byte, path string, names timerNames) ([]byte, error) {
 	_, _, _, structure, err := parseEntityAggregate(raw, path, names.EntityType)
 	if err != nil {

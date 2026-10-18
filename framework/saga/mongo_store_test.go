@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1010,5 +1011,127 @@ func TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically(t *testing.T)
 	}
 	if count, err := business.CountDocuments(ctx, bson.M{}); err != nil || count != 1 {
 		t.Fatalf("business retry count=%d err=%v", count, err)
+	}
+}
+
+// readCountingMongo 计每个集合的 FindOne 次数（在内存 Mongo 之上）。
+type readCountingMongo struct {
+	fmongo.IMongo
+	mu    sync.Mutex
+	reads map[string]int
+}
+
+func (m *readCountingMongo) Database(name string) fmongo.IDatabase {
+	return readCountingDatabase{IDatabase: m.IMongo.Database(name), owner: m}
+}
+
+func (m *readCountingMongo) count(collection string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reads[collection]
+}
+
+type readCountingDatabase struct {
+	fmongo.IDatabase
+	owner *readCountingMongo
+}
+
+func (d readCountingDatabase) Collection(name string) fmongo.ICollection {
+	return readCountingCollection{ICollection: d.IDatabase.Collection(name), owner: d.owner, name: name}
+}
+
+type readCountingCollection struct {
+	fmongo.ICollection
+	owner *readCountingMongo
+	name  string
+}
+
+func (c readCountingCollection) FindOne(ctx context.Context, filter any, result any) error {
+	c.owner.mu.Lock()
+	c.owner.reads[c.name]++
+	c.owner.mu.Unlock()
+	return c.ICollection.FindOne(ctx, filter, result)
+}
+
+// Apply 关闭一个操作时只读一次它的 tombstone（2026-10-18 saga 性能优化第一档 2）：身份核对与“插入 / 升级为带结果
+// 关闭”用同一次事务内读取的结果——两次读之间事务只写 sagas / outbox / completions，不碰 operations，第二次读必然
+// 读到同一份文档。行为逐项不变：没有 tombstone 插入、放弃关闭的升级为带结果关闭、已带结果的不降级、别的 saga 的
+// tombstone 报 ErrIdentityConflict 且记录不写入。修前每次关闭读两次。
+func TestMongoApplyClosingAnOperationReadsItsTombstoneOnce(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name     string
+		seed     *operationDoc // 事先存在的 tombstone；SagaID 为空时填本 saga
+		success  bool          // 关闭时带成功回执（带结果关闭），否则放弃关闭
+		want     string        // 关闭后的 closure
+		conflict bool
+	}{
+		{name: "no tombstone, result", success: true, want: operationClosureResult},
+		{name: "no tombstone, abandon", want: operationClosureAbandoned},
+		{name: "abandoned upgraded to result", seed: &operationDoc{Closure: operationClosureAbandoned}, success: true, want: operationClosureResult},
+		{name: "result never downgraded", seed: &operationDoc{Closure: operationClosureResult}, want: operationClosureResult},
+		{name: "another saga's tombstone", seed: &operationDoc{SagaID: "someone-else", Closure: operationClosureAbandoned}, success: true, want: operationClosureAbandoned, conflict: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &readCountingMongo{IMongo: mongotest.NewClient(), reads: map[string]int{}}
+			store, err := NewMongoStore(client, MongoStoreOptions{Database: "close-once"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.EnsureInfrastructure(ctx); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			id := "close-" + NewID()
+			operation := operationKey(id, PhaseForward, 0)
+			command := commandID(operation, 0, 1)
+			before := Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: id, Status: StatusWaiting, Phase: PhaseForward, Attempt: 1, Version: 1,
+				OperationKey: operation, CommandID: command, NextRunAt: now.Add(time.Minute), CreatedAt: now, UpdatedAt: now}
+			if err := store.Create(ctx, before); err != nil {
+				t.Fatal(err)
+			}
+			if tc.seed != nil {
+				seed := *tc.seed
+				seed.ID, seed.CreatedAt = operation, now
+				if seed.SagaID == "" {
+					seed.SagaID = id
+				}
+				if _, err := store.operations().InsertOne(ctx, seed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after := before.Clone()
+			after.Version, after.UpdatedAt = 2, now.Add(time.Second)
+			after.Status, after.Attempt, after.OperationKey, after.CommandID, after.NextRunAt = StatusPending, 0, "", "", now.Add(time.Second)
+			request := ApplyRequest{ExpectedVersion: 1, After: after, CloseOperation: operation}
+			if tc.success {
+				after.Step, after.CompletedSteps = 1, 1
+				request.After = after
+				request.Receipt = &Completion{CommandID: command, IdempotencyKey: operation, SagaID: id, Success: true, CompletedAt: now.Add(time.Second)}
+			}
+			readsBefore := client.count(defaultOperationCollection)
+			_, err = store.Apply(ctx, request)
+			if reads := client.count(defaultOperationCollection) - readsBefore; reads != 1 {
+				t.Fatalf("Apply read the operation tombstone %d times, want 1", reads)
+			}
+			if tc.conflict {
+				if !errors.Is(err, ErrIdentityConflict) {
+					t.Fatalf("Apply = %v, want ErrIdentityConflict", err)
+				}
+				if stored, getErr := store.Get(ctx, id); getErr != nil || stored.Version != 1 {
+					t.Fatalf("record after a refused close: version=%d err=%v, want unchanged", stored.Version, getErr)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			var tombstone operationDoc
+			if err := store.operations().FindOne(ctx, bson.M{"_id": operation}, &tombstone); err != nil {
+				t.Fatal(err)
+			}
+			if tombstone.Closure != tc.want {
+				t.Fatalf("closure = %q, want %q", tombstone.Closure, tc.want)
+			}
+		})
 	}
 }

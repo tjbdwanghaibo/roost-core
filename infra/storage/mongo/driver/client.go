@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
@@ -46,6 +48,18 @@ func NewClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*Client, error)
 		SetReadPreference(readpref.Primary()).
 		SetRetryReads(true).
 		SetRetryWrites(true)
+	if hoptrace.Enabled() {
+		// 性能夹具在建连接之前安装了逐跳计时：按命令名记每次往返（跳名 mongo.<命令>，命令名是固定的十几个）。
+		// 生产不安装，连接上没有监视器。
+		opts.SetMonitor(&event.CommandMonitor{
+			Succeeded: func(_ context.Context, succeeded *event.CommandSucceededEvent) {
+				hoptrace.Observe("mongo."+succeeded.CommandName, succeeded.Duration)
+			},
+			Failed: func(_ context.Context, failed *event.CommandFailedEvent) {
+				hoptrace.Observe("mongo."+failed.CommandName+".failed", failed.Duration)
+			},
+		})
+	}
 
 	cli, err := mongo.Connect(opts)
 	if err != nil {

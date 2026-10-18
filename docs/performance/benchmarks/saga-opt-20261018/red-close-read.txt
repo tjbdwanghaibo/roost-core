@@ -1,0 +1,12 @@
+--- FAIL: TestMongoApplyClosingAnOperationReadsItsTombstoneOnce (0.00s)
+    --- FAIL: TestMongoApplyClosingAnOperationReadsItsTombstoneOnce/no_tombstone,_result (0.00s)
+        mongo_store_test.go:1116: Apply read the operation tombstone 2 times, want 1
+    --- FAIL: TestMongoApplyClosingAnOperationReadsItsTombstoneOnce/no_tombstone,_abandon (0.00s)
+        mongo_store_test.go:1116: Apply read the operation tombstone 2 times, want 1
+    --- FAIL: TestMongoApplyClosingAnOperationReadsItsTombstoneOnce/abandoned_upgraded_to_result (0.00s)
+        mongo_store_test.go:1116: Apply read the operation tombstone 2 times, want 1
+    --- FAIL: TestMongoApplyClosingAnOperationReadsItsTombstoneOnce/result_never_downgraded (0.00s)
+        mongo_store_test.go:1116: Apply read the operation tombstone 2 times, want 1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	0.308s
+FAIL

@@ -206,9 +206,9 @@ const %[3]sEffectDurable = %[5]q
 //
 // Capacity: a replica handles one effect at a time from the durable (the
 // JetStream callback is serial), so its rate is about 1 / the handler's latency;
-// the effect consumer has not been measured on its own (the native saga step
-// durable, which also waits for a Nest commit, does about 14-18/s). More load
-// needs more replicas sharing the durable.
+// the effect consumer has not been measured on its own (a native saga step's
+// callback, a Mongo transaction plus a Nest commit, takes roughly 30-35ms). More
+// load needs more replicas sharing the durable.
 func %[6]s(ctx context.Context, registry *app.Registry) (fnats.IJetStreamSubscription, error) {
 	consumer := kitdataengine.EffectConsumer{Durable: %[3]sEffectDurable, Topic: effects.Topic%[3]s}
 	return kitdataengine.SubscribeEffects(ctx, registry, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
