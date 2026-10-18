@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### DataEngine：带回执 / effect 的特殊记录与普通记录合并 checkpoint（2026-10-18）
+
+- **决定**：维护者 2026-10-18 在 saga 原生步骤性能的第三档里选 A——特殊记录投影后不再每条立即 checkpoint，按 `CheckpointInterval` / `CheckpointRecords` 与普通记录合并；B（合批带回执 / effect 的记录）与 C（WAL 与 Mongo 分盘）不做。
+- **改动**（`framework/dataengine/engine`）：`ReplayPass` 删掉特殊记录投影前的确认，投影后不再因“特殊”强制确认；仍逐单元立即确认的只有单 mutation 快路记录（不写事务标记、只靠 `_last_tx`）与只实现 `ProjectionStore` 的 Store。快路判定收成 `projectsOnFastPath`，投影器与 `MongoStore.ProjectFenced` 共用。`BatchProjectionStore` 文档契约补上“带 effect / 回执 / Remote 写的记录在后续版本写入后仍能重放”（仓内唯一实现 `MongoStore` 本已满足）。并行 Remote 窗口不变。
+- **为什么安全**（[方案](docs/maintenance/CONTRACT-2026-10-18-projector-checkpoint-merge.md)）：checkpoint 只决定崩溃后从哪里重放，没有读者依赖它；特殊记录的投影事务先查事务标记再判 lease fence，标记与业务写、回执、outbox、Remote 提交同事务，重放返回首投结论，不重判 fence、不重复暂存。逐条确认是 `646ce63f` 引入合并时对特殊记录的保守沿用，没有专属理由。崩溃后多重放的已投影记录 ≤ `CheckpointRecords` 条，只来自约一个间隔加一个单元的窗口。
+- **性能**（[报告](docs/performance/SAGA-CHECKPOINT-20261018.md)，夹具 B 同机前后对照）：积压时每条特殊记录 0.56～0.75 次确认（修前 1 次），投影器约 15 → 20 条/s；正向 8/s 由崩溃变为 P50 517 ms / P99 793 ms，正向 10/s 由崩溃变为全部正确（积压、P50 2.2 s），全补偿 5/s P50 3.9 s → 688 ms；正向 12/s、全补偿 7/s 起仍崩溃（上限档各单样本）；持续档（正向 5/s、全补偿 3/s）没有积压，不变。真实 WAL 微基准 256 条全特殊记录 256 → 1 次 checkpoint、2.27 s → 10.2 ms。合并系数受缺省 20 ms 间隔限制，缺省值未改。
+- **测试（先红后绿）**：`TestSpecialRecordsShareCheckpointThresholds`、`TestFastPathRecordStillConfirmsPrecedingSpecialRecords`、`TestSpecialRecordCheckpointLossReplaysTheWholeUnconfirmedPrefix`（修前 acks=8 want=1 等）；真实 Mongo 崩溃注入 `TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint`（修前失败于 n=1；“重放时先判 fence”的变异会被它抓到）与 saga 级重启 `TestRealStepsRestartReplaysUnconfirmedProjectionsExactlyOnce`（守卫）。`TestMultiBatchCapabilityAndSpecialBoundaries` 期望改为合并后的序列，`TestProjectorStopsAfterSegmentAckFailure` 改用条数阈值触发确认失败。
+- **升级**：WAL、checkpoint、Mongo 格式与配置键都不变，新旧进程可互换数据；只想保留逐单元确认可设 `dataengine.projection.checkpoint_records: 1`。
+- 文档：方案（docs/maintenance）、impl/03 §2 第 7 条、guide/03 §3、guide/06 §5、KNOWN-LIMITS“Saga 原生步骤容量”与新拆出的“投影 checkpoint 与 outbox 唤醒同盘”、性能报告与 README。生成器骨架里的容量数字仍是合并前的保守值，未改。
+
 ### game-demo World 定时器恢复手写（维护者 2026-10-18）
 
 - **决定（维护者原话）**：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不能生成 demo。D11（`5581deeb`）把 World 迁到了 `roost add timer` 的生成产物，现撤回；`roost add timer` 生成器本身不变，新手工程照常用。

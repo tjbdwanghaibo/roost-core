@@ -61,7 +61,7 @@
 
 ## 6. 验证
 
-- 先红后绿（单测）：新测试在 `e90dd4ad` 上必须失败，修后通过。
+- 先红后绿（单测）：新测试在 `e90dd4ad` 上必须失败，修后通过。结果、修前失败原文与性能对照见 [前后对照报告](../performance/SAGA-CHECKPOINT-20261018.md)。
 - 真实 WAL 基准 `BenchmarkProjectorWALReplayAckMatrix` 修前 / 修后交替各 6 轮（checkpoint 次数与耗时）。
 - 崩溃注入（真实 Mongo）：引擎级（真实 `DataEngineStepInbox` 构造的原生步骤记录：lease fence + saga 回执 + completion effect；首投后改操作状态文档使 fence 现在会失败 / 会通过、outbox 已发布删除、同文档后续版本已投影；丢 checkpoint 后重开 WAL、新投影器 Flush）与 saga 级（真实 Nest + DataEngine + saga，checkpoint 一律不落盘，跑完正向 / 业务拒绝补偿 / 投影停顿被跳过后停进程，用同一 WAL 目录与库重启）。
 - 夹具 B 同机前后对照：持续档正向 5/s、全补偿 3/s 各 2 轮，上限档正向 7/8/10/s、全补偿 4/5/10/s。
@@ -69,6 +69,6 @@
 
 ## 7. 风险、边界与回退
 
-- **合并系数受 `CheckpointInterval` 限制**：缺省 20 ms 是为批次段定的；特殊记录逐条投影约 16 ms，时间阈值在第二条后就触发。要更高的系数可调 `dataengine.projection.checkpoint_interval`（已有配置键，代价是崩溃后重放窗口与未确认额度占用相应变长）；是否改缺省值属于产品选择，本次不改。
+- **合并系数受 `CheckpointInterval` 限制**：缺省 20 ms 是为批次段定的；特殊记录逐条投影约 16 ms，时间阈值在第二条后就触发。要更高的系数可调 `dataengine.projection.checkpoint_interval`（已有配置键，代价是崩溃后重放窗口与未确认额度占用相应变长）；是否改缺省值属于产品选择，本次不改。实测积压时每条特殊记录 0.56～0.75 次确认（[报告](../performance/SAGA-CHECKPOINT-20261018.md) §3.2）。
 - 积压时一轮读到多条记录才会合并；低负载下一轮常常只有一条记录，轮末照常确认，延迟与修改前相同。
 - 回退：还原实现提交即可；不涉及持久格式，新旧进程可互换 WAL 与 Mongo 数据。
