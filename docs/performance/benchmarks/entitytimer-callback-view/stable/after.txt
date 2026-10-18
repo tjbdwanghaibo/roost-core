@@ -1,0 +1,70 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  180284	      2531 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     141	   3311429 ns/op	 8468402 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  179919	      3019 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     100	   4044669 ns/op	 8468412 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  186915	      2380 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     123	   3854249 ns/op	 8468405 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  185004	      2522 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     135	   3636713 ns/op	 8468456 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  159970	      2864 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     140	   3433394 ns/op	 8468412 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  172622	      2409 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     111	   4441478 ns/op	 8468419 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  171678	      2967 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     133	   3679813 ns/op	 8468414 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  189272	      2672 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     133	   3594271 ns/op	 8468415 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  161961	      3342 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     134	   3586434 ns/op	 8468415 B/op	    1429 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkHostPeriodicTick/1-4 	  178255	      2407 ns/op	    3200 B/op	      19 allocs/op
+BenchmarkHostPeriodicTick/128-4         	     100	   4019067 ns/op	 8468435 B/op	    1429 allocs/op
+PASS

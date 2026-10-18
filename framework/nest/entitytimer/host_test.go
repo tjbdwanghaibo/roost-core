@@ -2,6 +2,7 @@ package entitytimer
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -11,6 +12,32 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/timer"
 )
+
+// 相同宿主、存量节点与周期触发负载，用于比较 Tick 的调度视图管理成本。
+func BenchmarkHostPeriodicTick(b *testing.B) {
+	for _, count := range []int{1, 128} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			now := time.Unix(1_800_000_000, 0)
+			d := NewDriver(Config{Name: "bench.timer", Handler: nest.NewHandlerName("bench_tick")})
+			d.SetClock(func() time.Time { return now })
+			host := d.NewHost(newOwner(301), newMemStore(), func(h *Handlers) {
+				h.Register(typeIncome, func(Fire) time.Duration { return time.Second })
+			})
+			if err := host.OnInitFinish(true); err != nil {
+				b.Fatal(err)
+			}
+			for range count {
+				host.NewTimer(time.Second, typeIncome, 0, 0, nil)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				now = now.Add(time.Second)
+				host.Tick(now)
+			}
+		})
+	}
+}
 
 // memStore 是测试里的“DAO”：节点 map 与种子。OnDestroy 之后它留着，就是实体卸载后存储里的样子。
 // 在 Nest 事务里写入时登记一次整份快照的逆操作，回滚即还原（生成 DAO 的 mutator 也是随事务回滚）。
@@ -122,6 +149,156 @@ func TestHostFiresAnOnlineDeadlineOnce(t *testing.T) {
 	if tickDelivered(t, d, client, host) != 0 || len(f.got) != 1 {
 		t.Fatal("a finished timer was delivered again")
 	}
+}
+
+// 建造完成接着派兵、抵达后取消超时：回调内的组件操作必须与当前 Tick 使用同一调度视图。
+func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
+	t.Run("schedule next stage", func(t *testing.T) {
+		d, clk, client, live := newTestDriver(t)
+		owner := newOwner(201)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		fired := 0
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(Fire) time.Duration {
+				clk.Advance(time.Second) // 后续任务从它实际登记的业务时间起算。
+				host.NewTimer(time.Minute, typeIncome, 0, 0, nil)
+				return 0
+			})
+			h.Register(typeIncome, func(Fire) time.Duration { fired++; return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		clk.Advance(time.Second)
+		tickDelivered(t, d, client, host)
+		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now().Add(time.Minute)) {
+			t.Fatalf("next-stage timer persisted=%d but driver due=%v present=%v", len(store.nodes), due, ok)
+		}
+		clk.Advance(time.Minute)
+		tickDelivered(t, d, client, host)
+		if fired != 1 {
+			t.Fatalf("next stage fired %d times, want 1", fired)
+		}
+	})
+	t.Run("cancel another due stage", func(t *testing.T) {
+		d, clk, client, live := newTestDriver(t)
+		owner := newOwner(202)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		var canceledID int64
+		fired := 0
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(Fire) time.Duration {
+				if !host.RemoveTimer(canceledID) {
+					t.Error("cancel refused a live timer")
+				}
+				return 0
+			})
+			h.Register(typeIncome, func(Fire) time.Duration { fired++; return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		canceledID = host.NewTimer(time.Second, typeIncome, 0, 0, nil)
+		clk.Advance(time.Second)
+		tickDelivered(t, d, client, host)
+		if fired != 0 {
+			t.Fatalf("canceled stage still fired %d times", fired)
+		}
+	})
+	t.Run("reschedule current stage", func(t *testing.T) {
+		d, clk, client, live := newTestDriver(t)
+		owner := newOwner(203)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		calls := 0
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(fire Fire) time.Duration {
+				calls++
+				if calls == 1 && !host.ChangeTimer(fire.ID, time.Minute) {
+					t.Error("current stage was not found")
+				}
+				return 0
+			})
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		clk.Advance(time.Second)
+		tickDelivered(t, d, client, host)
+		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now().Add(time.Minute)) {
+			t.Fatalf("rescheduled due=%v present=%v", due, ok)
+		}
+		clk.Advance(time.Minute)
+		tickDelivered(t, d, client, host)
+		if calls != 2 || len(store.nodes) != 0 {
+			t.Fatalf("calls=%d nodes=%d", calls, len(store.nodes))
+		}
+	})
+	t.Run("panic releases transient view", func(t *testing.T) {
+		d, clk, _, live := newTestDriver(t)
+		owner := newOwner(204)
+		live.set(owner)
+		store := newMemStore()
+		fired := 0
+		host := d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(Fire) time.Duration { panic("business panic") })
+			h.Register(typeIncome, func(Fire) time.Duration { fired++; return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		clk.Advance(time.Second)
+		func() { defer func() { _ = recover() }(); host.Tick(clk.Now()) }()
+		id := host.NewTimer(time.Second, typeIncome, 0, 0, nil)
+		if _, ok := store.nodes[id]; !ok {
+			t.Fatal("new timer remained trapped in the failed tick")
+		}
+		clk.Advance(time.Second)
+		host.Tick(clk.Now())
+		if fired != 1 {
+			t.Fatalf("new callback fired %d times", fired)
+		}
+	})
+	t.Run("rollback restores the previous stage", func(t *testing.T) {
+		d, clk, _, live := newTestDriver(t)
+		owner := newOwner(205)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(Fire) time.Duration { host.NewTimer(time.Minute, typeIncome, 0, 0, nil); return 0 })
+			h.Register(typeIncome, func(Fire) time.Duration { return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		id := host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		clk.Advance(time.Second)
+		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "reject-stage", func() (any, error) { host.Tick(clk.Now()); return nil, errBusiness }); err == nil {
+			t.Fatal("transaction did not reject")
+		}
+		if len(store.nodes) != 1 || store.nodes[id].Type != typeBuff || host.active != nil {
+			t.Fatal("rollback kept the next stage or its transient scheduler")
+		}
+		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now()) {
+			t.Fatalf("rollback changed index: %v %v", due, ok)
+		}
+		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "retry-stage", func() (any, error) { host.Tick(clk.Now()); return nil, nil }); err != nil {
+			t.Fatal(err)
+		}
+		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now().Add(time.Minute)) {
+			t.Fatalf("retry did not publish next stage: %v %v", due, ok)
+		}
+	})
 }
 
 // 周期定时器按回调返回值续期，从触发时刻起算。

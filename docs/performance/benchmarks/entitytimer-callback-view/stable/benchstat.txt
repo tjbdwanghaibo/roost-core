@@ -1,0 +1,23 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+                       │ docs/performance/benchmarks/entitytimer-callback-view/stable/before.txt │ docs/performance/benchmarks/entitytimer-callback-view/stable/after.txt │
+                       │                                 sec/op                                  │                     sec/op                       vs base               │
+HostPeriodicTick/1-4                                                                2.586µ ±  9%                                      2.602µ ± 16%       ~ (p=0.353 n=10)
+HostPeriodicTick/128-4                                                              3.641m ± 24%                                      3.658m ± 11%       ~ (p=0.912 n=10)
+geomean                                                                             97.04µ                                            97.55µ        +0.53%
+
+                       │ docs/performance/benchmarks/entitytimer-callback-view/stable/before.txt │ docs/performance/benchmarks/entitytimer-callback-view/stable/after.txt │
+                       │                                  B/op                                   │                     B/op                       vs base                 │
+HostPeriodicTick/1-4                                                                3.125Ki ± 0%                                    3.125Ki ± 0%       ~ (p=1.000 n=10) ¹
+HostPeriodicTick/128-4                                                              8.076Mi ± 0%                                    8.076Mi ± 0%       ~ (p=0.839 n=10)
+geomean                                                                             160.8Ki                                         160.8Ki       +0.00%
+¹ all samples are equal
+
+                       │ docs/performance/benchmarks/entitytimer-callback-view/stable/before.txt │ docs/performance/benchmarks/entitytimer-callback-view/stable/after.txt │
+                       │                                allocs/op                                │                   allocs/op                    vs base                 │
+HostPeriodicTick/1-4                                                                  19.00 ± 0%                                      19.00 ± 0%       ~ (p=1.000 n=10) ¹
+HostPeriodicTick/128-4                                                               1.429k ± 0%                                     1.429k ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                               164.8                                           164.8       +0.00%
+¹ all samples are equal
