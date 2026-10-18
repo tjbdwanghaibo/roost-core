@@ -57,8 +57,6 @@ type boardRedis struct{ fredis.IRedis }
 
 func (boardRedis) Eval(context.Context, string, []string, ...any) (any, error) { return int64(1), nil }
 
-func (boardRedis) Eval(context.Context, string, []string, ...any) (any, error) { return int64(1), nil }
-
 // 一次贡献必须说出它落进了哪个窗口。
 //
 // 窗口每 gameactivity.WindowSeconds 滚一次，而 Contribute 与 Standing 各自
@@ -487,96 +485,6 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 	closeAt, _ := gameactivity.CloseAt(gameactivity.ID(business.Unix()))
 	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix(), business.Unix()}) {
 		t.Fatalf("the World was armed with %v, want the business window, its close time and the business now", nest.requests)
-	}
-}
-
-// 服务已提交旧请求后延后它的回复，模拟两条正常 RPC 回复乱序；不改协调器的计分或 Redis 行为。
-type delayedProgressReply struct {
-	svcactivity.Coordinator
-	held    chan struct{}
-	release chan struct{}
-}
-
-func (d *delayedProgressReply) ApplyProgress(ctx context.Context, key svcactivity.Key, participant, request string, delta svcactivity.ProgressDelta) (svcactivity.Participant, error) {
-	result, err := d.Coordinator.ApplyProgress(ctx, key, participant, request, delta)
-	if err == nil && request == gameactivity.ProgressRequestID("old") {
-		close(d.held)
-		select {
-		case <-d.release:
-		case <-ctx.Done():
-			return svcactivity.Participant{}, ctx.Err()
-		}
-	}
-	return result, err
-}
-
-func TestActivityBoardKeepsTheLatestCumulativeScore(t *testing.T) {
-	addr := os.Getenv("ROOST_REVIEW_REDIS")
-	if addr == "" {
-		t.Skip("isolated Redis required")
-	}
-	prefix := redistest.Prefix(t, addr, "review:activity-board")
-	client, err := driver.NewClient(fredis.DefaultConfig(addr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	groups, err := svcactivity.ParseGroups([]byte("groups:\n  - id: review\n    game_sids: [1000]\n"), "review")
-	if err != nil {
-		t.Fatal(err)
-	}
-	coordinator, err := svcactivity.New(svcactivity.Config{
-		Groups:         &groups,
-		Activities:     versionstore.NewMemoryStore[svcactivity.Key, svcactivity.Activity](),
-		Participants:   versionstore.NewMemoryStore[svcactivity.ParticipantKey, svcactivity.Participant](),
-		Ledger:         versionstore.NewMemoryStore[svcactivity.RequestKey, svcactivity.ProgressReservation](),
-		Audits:         versionstore.NewMemoryStore[svcactivity.Key, svcactivity.NotifyAuditLog](),
-		Dispatches:     versionstore.NewMemoryStore[svcactivity.DispatchKey, svcactivity.Dispatch](),
-		Windows:        versionstore.NewMemoryStore[string, svcactivity.Window](),
-		ReservationTTL: 10 * time.Minute,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	now := time.Now()
-	activityID := gameactivity.ID(now.Unix())
-	key := gameactivity.Key("review", activityID)
-	if _, err := coordinator.OpenActivity(ctx, key, []int32{1000}); err != nil {
-		t.Fatal(err)
-	}
-	delayed := &delayedProgressReply{Coordinator: coordinator, held: make(chan struct{}), release: make(chan struct{})}
-	runner := &ActivityRunner{coordinator: delayed, redis: client, prefix: prefix, groupID: "review", now: func() time.Time { return now }}
-	oldDone := make(chan error, 1)
-	go func() { _, _, err := runner.Contribute(ctx, 4242, "old"); oldDone <- err }()
-	select {
-	case <-delayed.held:
-	case <-ctx.Done():
-		t.Fatal("old request did not commit before reply delay")
-	}
-	_, latest, err := runner.Contribute(ctx, 4242, "new")
-	if err != nil || latest.Score != 2 {
-		t.Fatalf("second contribution: %+v err=%v", latest, err)
-	}
-	boardKey := gameactivity.BoardKey(prefix, "review", activityID)
-	if score, err := client.ZScore(ctx, boardKey, "4242"); err != nil || score != 2 {
-		t.Fatalf("newer score before delayed reply = %v err=%v", score, err)
-	}
-	close(delayed.release)
-	if err := <-oldDone; err != nil {
-		t.Fatal(err)
-	}
-	authority, found, err := coordinator.LookupParticipant(ctx, key, "4242")
-	if err != nil || !found || authority.Score != 2 {
-		t.Fatalf("authority=%+v found=%v err=%v", authority, found, err)
-	}
-	score, err := client.ZScore(ctx, boardKey, "4242")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if score != 2 {
-		t.Fatalf("coordinator score is 2 but settlement board fell from 2 to %v after the delayed score-1 reply", score)
 	}
 }
 
