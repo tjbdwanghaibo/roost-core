@@ -319,3 +319,5 @@ Sender 后缀仍有一处二次碰撞，已在固定分支修复：`handlerTrade
 - 首次真实依赖运行因恢复环境中容器已停止，连接 Mongo / NATS 被拒绝，失败保留为环境结果。重新启动原隔离容器后，`scripts/test-demo-generated.sh` 通过，包括新 `add saga -native` / `add effect` 正式生成消费者；Redis Cluster 子用例仍跳过。integration / race 的 `TestRealStepsRunNativeAndMongoStepsThroughTheMods`、`TestRealStepsRunNativeStepsUnderTheRealNestScheduler`、`TestRealSubscribeEffectsDeliversEachEffectOnce` 均实际通过，无 skip；依赖是本机 Mongo 单节点副本集与三节点 NATS。
 
 MMORPG 尚未完成双场景网络切换全链路、动态玩家跨 sid 权威交接、真实客户端及目标密度长稳；Player 当前静态绑定 sid 的设计不因本轮切图纵切改变。后续优先双场景提交后订阅失败重试与重连恢复，不能用 DAO 人数守恒代替 AOI 客户端视图验收。
+
+本轮最终 core 全仓 build / vet / test 均退出 0，根包门禁通过；生成无额外跟踪文件漂移。全仓测试中的依赖跳过不算真实服务验收，真实资源结论以上面单独执行的入口为准。
