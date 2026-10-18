@@ -48,6 +48,9 @@ type Snapshot struct {
 	// aggregates with unexported state (external table sets) still make
 	// content drift visible.
 	fingerprints map[Name]string
+	// members 是 finalize 时按成员记下的内容摘要（与 Hash 用同一份字节）和表的行数，
+	// 供 Compare 说明两代之间哪些表变了；发布后与 Hash 一样不再改动。
+	members map[memberKey]memberDigest
 }
 
 func newSnapshot(version uint64) *Snapshot {
@@ -107,12 +110,14 @@ func (s *Snapshot) finalize() error {
 		return nil
 	}
 	hasher := sha256.New()
-	writePart := func(kind, name string, payload []byte) {
+	members := make(map[memberKey]memberDigest)
+	writePart := func(kind, name string, payload []byte, value any) {
 		// Length-prefixed segments: no delimiter collision even when a name
 		// contains the separator characters; the payload is streamed, never
 		// materialized into an intermediate string.
 		_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s%d:", len(kind), kind, len(name), name, len(payload))
 		_, _ = hasher.Write(payload)
+		members[memberKey{kind: kind, name: Name(name)}] = newMemberDigest(kind, payload, value)
 	}
 	consumed := make(map[Name]bool, len(s.fingerprints))
 	appendPart := func(kind string, values map[Name]any) error {
@@ -124,7 +129,7 @@ func (s *Snapshot) finalize() error {
 		for _, name := range names {
 			if digest, ok := s.fingerprints[Name(name)]; ok {
 				consumed[Name(name)] = true
-				writePart(kind, name, []byte(digest))
+				writePart(kind, name, []byte(digest), values[Name(name)])
 				continue
 			}
 			value := values[Name(name)]
@@ -140,7 +145,7 @@ func (s *Snapshot) finalize() error {
 			if string(raw) == "{}" && marshalsOpaquely(value) {
 				return fmt.Errorf("configdata: hash %s %s: value serializes opaquely (no exported fields) — call Snapshot.SetFingerprint in the build callback", kind, name)
 			}
-			writePart(kind, name, raw)
+			writePart(kind, name, raw, value)
 		}
 		return nil
 	}
@@ -158,6 +163,7 @@ func (s *Snapshot) finalize() error {
 			return fmt.Errorf("configdata: fingerprint set for unknown member %s (typo?)", name)
 		}
 	}
+	s.members = members
 	s.Hash = hex.EncodeToString(hasher.Sum(nil))
 	return nil
 }
@@ -849,8 +855,31 @@ func (s *Store) Reload(ctx context.Context) (*Snapshot, error) {
 }
 
 func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot, error) {
+	result, err := s.ReloadWithChanges(ctx, reason)
+	if err != nil {
+		return nil, err
+	}
+	return result.Snapshot, nil
+}
+
+// ReloadResult 是一次成功的 Load / Reload / Rollback：发布的快照、发布前在服务的版本（首次加载为 0）
+// 与两代之间的逐成员变化。
+type ReloadResult struct {
+	Snapshot *Snapshot
+	Previous uint64
+	Changes  Changes
+}
+
+// ReloadWithChanges 与 ReloadWithReason 相同，另外返回新一代相对上一代的逐成员变化，供运维命令和日志
+// 说明“这次重载改了哪些表”。
+//
+// 内容完全没变（Changes.None()）时仍然发布、仍然分配新版本号，不跳过：监听者依赖每次重载都跑一遍——
+// 例如 featureflag 监听者用重载把 GM 在进程内的临时改动恢复成表里的值，跳过发布会让“改了表再重载”
+// 之外的这种用法静默失效。版本号本来就不是内容版本（失败的构建也会烧掉一个号），内容是否变化看
+// Changes 与 Snapshot.Hash；Store 的日志与 configdata Mod 的指标（result="unchanged"）都把它单独标出来。
+func (s *Store) ReloadWithChanges(ctx context.Context, reason string) (ReloadResult, error) {
 	if s == nil {
-		return nil, errors.New("configdata: store is nil")
+		return ReloadResult{}, errors.New("configdata: store is nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -865,6 +894,7 @@ func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot,
 	if err != nil {
 		outcome.Stage = ReloadStageBuild
 	} else {
+		outcome.Changes = Compare(old, snap)
 		outcome.Stage, err = s.commit(ctx, commitRequest{
 			reason: reason, emitName: "configdata",
 			old: old, target: snap, started: started,
@@ -872,9 +902,16 @@ func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot,
 	}
 	s.report(outcome, err, started)
 	if err != nil {
-		return nil, err
+		return ReloadResult{}, err
 	}
-	return snap, nil
+	return ReloadResult{Snapshot: snap, Previous: snapshotVersion(old), Changes: outcome.Changes}, nil
+}
+
+func snapshotVersion(snap *Snapshot) uint64 {
+	if snap == nil {
+		return 0
+	}
+	return snap.Version
 }
 
 // ReloadStage names where a Load / Reload / Rollback stopped.
@@ -920,6 +957,9 @@ type ReloadOutcome struct {
 	Stage ReloadStage
 	// Elapsed is the time from start to settled.
 	Elapsed time.Duration
+	// Changes 是候选代相对发布前那一代的逐成员变化（构建失败时为空）。成功的 Reload 里
+	// Changes.None() 为 true 表示内容与上一代完全相同：仍按协议发布了新版本号（见 ReloadWithChanges）。
+	Changes Changes
 }
 
 // Reverted reports whether the candidate had been published and was then
@@ -969,9 +1009,16 @@ func (s *Store) report(outcome ReloadOutcome, err error, started time.Time) {
 		op = "rollback"
 	}
 	attrs := []any{"op", op, "reason", outcome.Reason, "version", outcome.Version, "live", outcome.Live, "elapsed", outcome.Elapsed}
+	if err == nil {
+		attrs = append(attrs, outcome.Changes.logAttrs()...)
+	}
 	switch {
 	case err == nil && outcome.Rollback:
 		slog.Info("config rolled back", attrs...)
+	case err == nil && outcome.Changes.None():
+		// 运维最容易误读的一种“成功”：只改了 CSV、忘了生成 JSON，重载照样成功并递增版本。
+		slog.Warn("config reload applied but no table changed: the published content equals the previous generation (reload reads the JSON under the data dir; a CSV edit needs `roost generate` first)",
+			append(attrs, "dir", s.Dir())...)
 	case err == nil:
 		slog.Info("config reload applied", attrs...)
 	case outcome.Reverted():
@@ -1115,8 +1162,17 @@ func (s *Store) DryRun(ctx context.Context, reason string) (*Snapshot, error) {
 }
 
 func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) {
+	result, err := s.RollbackWithChanges(ctx, reason)
+	if err != nil {
+		return nil, err
+	}
+	return result.Snapshot, nil
+}
+
+// RollbackWithChanges 与 Rollback 相同，另外返回回到的那一代相对回滚前那一代的逐成员变化。
+func (s *Store) RollbackWithChanges(ctx context.Context, reason string) (ReloadResult, error) {
 	if s == nil {
-		return nil, errors.New("configdata: store is nil")
+		return ReloadResult{}, errors.New("configdata: store is nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1127,10 +1183,11 @@ func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) 
 		err := errors.New("configdata: previous snapshot not found")
 		outcome.Stage = ReloadStageBuild
 		s.report(outcome, err, started)
-		return nil, err
+		return ReloadResult{}, err
 	}
 	outcome.Version = prev.Version
 	old := s.current.Load()
+	outcome.Changes = Compare(old, prev)
 	extra := map[string]any{}
 	if old != nil {
 		extra["from_version"] = old.Version
@@ -1143,9 +1200,9 @@ func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) 
 	outcome.Stage = stage
 	s.report(outcome, err, started)
 	if err != nil {
-		return nil, err
+		return ReloadResult{}, err
 	}
-	return prev, nil
+	return ReloadResult{Snapshot: prev, Previous: snapshotVersion(old), Changes: outcome.Changes}, nil
 }
 
 func (s *Store) emitConfigReload(ctx context.Context, event lifecycle.Event) error {

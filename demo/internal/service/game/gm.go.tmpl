@@ -14,7 +14,6 @@ import (
 	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
@@ -52,7 +51,6 @@ const (
 	gmActClose  = "gm.activity.close"
 	gmFlagList  = "gm.flag.list"
 	gmFlagSet   = "gm.flag.set"
-	gmCfgReload = "gm.config.reload"
 	gmGuildInfo = "gm.guild.info"
 	gmGuildJoin = "gm.guild.join"
 )
@@ -60,10 +58,6 @@ const (
 type gmGuildPayload struct {
 	GuildID  int64 `json:"guild_id"`
 	PlayerID int64 `json:"player_id,omitempty"`
-}
-
-type gmConfigReloadPayload struct {
-	Reason string `json:"reason,omitempty"`
 }
 
 type gmFlagSetPayload struct {
@@ -416,43 +410,6 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 			},
 		},
 		{
-			Name: gmCfgReload,
-			// The reload reads the JSON under configs/data and nothing else: a
-			// CSV under configs/table only reaches it through `roost generate`,
-			// and a release ships configs/data alone. The text used to point at
-			// configs/table/featureflag.csv (a name that does not exist), so an
-			// operator who followed it got an "ok" reload and an unchanged
-			// switch.
-			Description: "reload config data in THIS process: {reason?}. Rebuilds every table from the JSON under configs/data " +
-				"(config_data.dir), which is also how a kill switch takes effect: edit configs/data/feature_flag.json, " +
-				"or in a checkout edit configs/table/feature_flag.csv and run `roost generate` first — the reload never reads the CSV. " +
-				"The schema's rules (required / unique / min / enum / ref) are checked on the JSON as it is: a violation is refused, " +
-				"names table / row / field / rule, and leaves the previous snapshot in place — as does any table that fails to load. " +
-				"Failed and reverted reloads are logged and counted (configdata.reload.total{result=failed}).",
-			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmConfigReloadPayload](command)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				store, ok := app.Lookup[*configdata.Store](registry, mods.ModConfigData)
-				if !ok || store == nil {
-					return admin.Result{}, fmt.Errorf("gm: config data store %q is unavailable", mods.ModConfigData)
-				}
-				reason := payload.Reason
-				if reason == "" {
-					reason = "gm"
-				}
-				snapshot, err := store.ReloadWithReason(ctx, reason)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{
-					"reason": reason, "version": snapshot.Version,
-					"flags": featureflag.DefaultStore().Version(),
-				}}, nil
-			},
-		},
-		{
 			Name:        gmFlagList,
 			Description: "list the kill switches this process is running with: {} — name, enabled, note, and the store's version",
 			Handler: func(context.Context, admin.Command) (admin.Result, error) {
@@ -469,7 +426,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		{
 			Name: gmFlagSet,
 			Description: "flip one kill switch in THIS process now: {name, enabled, note?}. " +
-				"It is not written back to the table, so the next config reload overwrites it — " +
+				"It is not written back to the table, so the next config reload (configdata.reload) overwrites it — " +
 				"to make it stick, edit configs/data/feature_flag.json (or the CSV plus `roost generate`) and reload.",
 			Handler: func(_ context.Context, command admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[gmFlagSetPayload](command)
@@ -498,7 +455,13 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	}
 	// The hot-code patch points get their own commands from the framework:
 	// list / revert / load-plugin, with the same admin token and audit as
-	// everything else here (hotcode.RegisterAdminCommands).
+	// everything else here (hotcode.RegisterAdminCommands). Reloading the
+	// config tables is not here either: the configdata Mod registers
+	// configdata.reload / configdata.rollback / configdata.status itself, and
+	// its reload answers which tables changed — "ok" with nothing changed is
+	// how an edited CSV that was never generated into configs/data shows up.
+	// A kill switch edited in configs/data/feature_flag.json takes effect
+	// through configdata.reload, and that reload also overwrites gm.flag.set.
 	if err := hotcode.RegisterAdminCommands(commands); err != nil {
 		return fmt.Errorf("gm: register hotcode commands: %w", err)
 	}

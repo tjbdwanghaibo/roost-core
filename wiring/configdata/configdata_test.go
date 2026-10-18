@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fconfigdata "github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -100,7 +102,7 @@ func TestConfigDataModRefusesBareRegistriesAndStartWithoutStore(t *testing.T) {
 }
 
 // 新快照在 AfterApply 之前就已发布（维护者决定 C2），但热更失败（整次拒绝）与回滚必须看得见：每次 Load / Reload 恰好计一次
-// `configdata.reload.total{result=ok|failed}`（build / validate 阶段的失败也算），发布后被撤回（AfterApply 失败）与运维 Rollback 计
+// `configdata.reload.total{result=ok|unchanged|failed}`（build / validate 阶段的失败也算；unchanged 是发布成功但内容与上一代相同），发布后被撤回（AfterApply 失败）与运维 Rollback 计
 // `configdata.rollback.total{trigger}`，标签只有这些低基数的取值（不带运维自由填写的 reason）；失败与回滚各留一条 Warn / Info 日志。
 
 // captureLogs routes the default slog logger into a buffer for one test.
@@ -170,8 +172,12 @@ func TestFailedReloadAndRollbackAreCountedAndLogged(t *testing.T) {
 	}
 	unregister()
 
-	if got := counterValue(registryMetrics, "configdata.reload.total", metrics.Labels{"result": "ok"}); got != 2 {
-		t.Errorf("configdata.reload.total{result=ok} = %d, want 2 (Start's load and the first reload)", got)
+	// 数据目录为空，第一次重载与 Start 的加载内容相同：成功但计为 unchanged。
+	if got := counterValue(registryMetrics, "configdata.reload.total", metrics.Labels{"result": "ok"}); got != 1 {
+		t.Errorf("configdata.reload.total{result=ok} = %d, want 1 (Start's load)", got)
+	}
+	if got := counterValue(registryMetrics, "configdata.reload.total", metrics.Labels{"result": "unchanged"}); got != 1 {
+		t.Errorf("configdata.reload.total{result=unchanged} = %d, want 1 (the first reload of the same empty dataset)", got)
 	}
 	if got := counterValue(registryMetrics, "configdata.reload.total", metrics.Labels{"result": "failed"}); got != 2 {
 		t.Errorf("configdata.reload.total{result=failed} = %d, want 2 (missing dir, reverted publish)", got)
@@ -219,5 +225,34 @@ func TestRevertedOperatorRollbackIsCounted(t *testing.T) {
 	}
 	if mod.Store().Current() != live {
 		t.Fatal("refused rollback changed active generation")
+	}
+}
+
+// 配置表重载是运维动作：Mod 在 Provide 时把 configdata 的 admin 命令挂到 App 的 admin 注册表（与 nats 挂
+// bus.dlq.* 一样），业务不必再手写。内容没变的重载要明确说“没有变化”，而不是只报一个递增的版本号。
+func TestConfigDataModServesReloadCommandsOnTheAdminRegistry(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set(cfgKeyDir, t.TempDir())
+	mod, registry := newProvidedConfigDataMod(t, cfg)
+	defer mod.Stop()
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	commands := app.MustLookup[*admin.Registry](registry, app.ModAdmin)
+	for _, name := range []string{fconfigdata.AdminCommandReload, fconfigdata.AdminCommandStatus, fconfigdata.AdminCommandRollback} {
+		if !slices.Contains(commands.Names(), name) {
+			t.Fatalf("admin registry lists %v, want %s registered by the configdata Mod", commands.Names(), name)
+		}
+	}
+	status, err := commands.Execute(context.Background(), admin.Command{Name: fconfigdata.AdminCommandStatus})
+	if err != nil || !status.OK || status.Data["version"] != uint64(1) {
+		t.Fatalf("status = %+v err=%v, want version 1 after Start", status, err)
+	}
+	reload, err := commands.Execute(context.Background(), admin.Command{Name: fconfigdata.AdminCommandReload, Payload: []byte(`{"reason":"ops"}`)})
+	if err != nil || !reload.OK {
+		t.Fatalf("reload = %+v err=%v", reload, err)
+	}
+	if reload.Data["changed"] != false || !strings.Contains(reload.Message, "no table changed") {
+		t.Fatalf("an unchanged reload answered %+v; want changed=false and a message saying no table changed", reload)
 	}
 }

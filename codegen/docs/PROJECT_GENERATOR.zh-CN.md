@@ -263,7 +263,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `lock` | — | 进程内实体锁管理 |
 | `ops` | — | health、ready、metrics 和 admin HTTP |
 | `statslog` | — | 运行时、Entity 和 Nest 周期统计 |
-| `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线） |
+| `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线）；自带运维命令 `configdata.reload` / `configdata.rollback` / `configdata.status`（经 ops `/admin/execute`） |
 | `etcd` | — | 注册发现、watch、选主和本地镜像 |
 | `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |

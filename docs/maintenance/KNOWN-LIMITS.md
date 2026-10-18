@@ -46,9 +46,9 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 ## 新用户试用第四轮（2026-10-17 登记；1、2 已修复，3 按 DESIGN-TODO D11 方案 B 实施）
 
-基线 `300d728a`（origin/main）。先复核第三轮三项：依赖带入的 Mod 配置段、`project next` 按工程现状填名字、self_sync 默认 packer，用 main 构建的 CLI 新建工程实测均已解决（零手写 packer 时客户端照样收到全量 + 每次修改的增量）。随后按新手流程做“双倍金币卡”（限时 Buff，按业务时间到期），在共享隔离环境起真实进程联调时确认下面三项。2026-10-17 复核三项均属实：1、2 先红后绿修复（`b717fd14`、`990af957`），3 需要产品方向，登记为 [DESIGN-TODO D11](DESIGN-TODO.md#d11-按实体的持久定时器接入)。
+基线 `300d728a`（origin/main）。先复核第三轮三项：依赖带入的 Mod 配置段、`project next` 按工程现状填名字、self_sync 默认 packer，用 main 构建的 CLI 新建工程实测均已解决（零手写 packer 时客户端照样收到全量 + 每次修改的增量）。随后按新手流程做“双倍金币卡”（限时 Buff，按业务时间到期），在共享隔离环境起真实进程联调时确认下面三项。2026-10-17 复核三项均属实：1、2 先红后绿修复（`c3892c11`、`b3c9159a`），3 需要产品方向，登记为 [DESIGN-TODO D11](DESIGN-TODO.md#d11-按实体的持久定时器接入)。
 
-### 1. 生成配置里的总线 / Data Engine 命名是所有工程共用的固定值（已修复，`b717fd14`）
+### 1. 生成配置里的总线 / Data Engine 命名是所有工程共用的固定值（已修复，`c3892c11`）
 
 **处置**：决定“与谁共享”的键全部按工程名派生——`nats.prefix: <project>`、`syncbus.prefix: <project>.sync`、`dataengine.database` 与 DAO 骨架 `db=` 同一规则（`daoDatabaseName`）、effects / saga 的主题与流 `<project>.effect` / `<PROJECT>_EFFECTS`、`<project>.saga` / `<PROJECT>_SAGA`、`saga.database: <db>_saga`、`remote_entity.mongo.database: <db>_remote`、`etcd.service_prefix: /<project>/services/`。规则写在 Wiring Mod 声明的 `example` 占位符里，新建与后加 Mod 的段同一规则（[PROJECT_GENERATOR §5](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#5-wiring-mod-自动装配)）；回归 `TestGeneratedSharedResourceNamesFollowTheProject`。与登记时建议的差异：Data Engine 库与 DAO 同库（`<project>`，不是 `<project>_engine`），沿用改前“两者同为 game”的布局。**剩余限制**：已有工程配置不改写，旧工程之后追加的段会写新名字、与已有段不一致，需要手工统一（CHANGELOG 升级说明）；doctor 不对“仍是框架固定值”给警告：维护者 2026-10-17 确认目前没有旧工程，不做。
 
@@ -61,7 +61,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **建议修法**：与 D9 方案 B 一致，生成时按工程名填这几项（`nats.prefix: <project>`、`dataengine.database: <project>_engine` 一类、effects / saga 的 subject 与 stream 带工程名）；已有工程不改写已有值，doctor 可以对仍是框架缺省值的给警告。
 
-### 2. `roost add endpoint` 只能从请求字段取参数，服务器决定的值（业务时间）无处可放（已修复，`990af957`）
+### 2. `roost add endpoint` 只能从请求字段取参数，服务器决定的值（业务时间）无处可放（已修复，`b3c9159a`）
 
 **处置**：handler 参数名 `nowUnix` / `nowUnixMilli`（`int64`）由 endpoint 骨架从 `app.BusinessClock(controller.Registry()).Now()` 填入，不读请求；其他请求里没有的参数照旧拒绝，报错写明服务器决定的值不放进请求（[CODEGEN_REFERENCE endpoint 段](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)）；回归 `TestEndpointFillsBusinessTimeFromTheServer`。只识别业务时间这一类约定名；其他服务器决定的值（玩家状态、配置）按约定在 handler 里读，不做参数，没有 `--server-param` 一类的通用标记。
 
@@ -138,37 +138,33 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 - **A（推荐）**：只在奖励首次付款（`result.Claimed`）时贡献。重放永不贡献；代价是“奖励已提交、贡献没写进去”时这一分不再补（活动本来是尽力而为，且补报若落到后来的窗口，本来就记错了窗口）。
 - **B**：按这局的结束时间（session 的 `FinishedAtUnix`）选窗口，重放落回原窗口由协调器去重；同时 Contribute 只能为当前窗口自动开窗（否则重放会把已结算、已删除的旧窗口重新打开再结算一次），已关闭窗口的贡献被拒绝。保留窗口内补报，改动面更大，需要确认协调器对已结束活动的拒绝语义与 30 分钟预留 TTL 的关系。
 
-## 新用户试用第五轮：待修问题（2026-10-17 登记，尚未修复）
+## 新用户试用第五轮（2026-10-17 登记；三项均已修复）
 
-基线 `91606e48`（origin/main）。先复核第四轮两项已修复：新工程的 `nats.prefix`、`dataengine.database`、effects 主题与流按工程名派生（与 DAO `db=` 一致）；`roost add endpoint` 对 `nowUnixMilli` 参数生成从 `app.BusinessClock(controller.Registry())` 取值的代码，不再要求请求字段。随后按新手流程学配置表热更（策划改价不停服），在共享隔离环境起真实进程、经 ops `/admin/execute` 实测。正面结论：违反表规则的数据被整次拒绝、报错精确到表 / 行 / 字段 / 规则、旧快照继续服务；改价后下一次购买即按新价。修复由维护者在 main 上进行。
+基线 `91606e48`（origin/main）。先复核第四轮两项已修复：新工程的 `nats.prefix`、`dataengine.database`、effects 主题与流按工程名派生（与 DAO `db=` 一致）；`roost add endpoint` 对 `nowUnixMilli` 参数生成从 `app.BusinessClock(controller.Registry())` 取值的代码，不再要求请求字段。随后按新手流程学配置表热更（策划改价不停服），在共享隔离环境起真实进程、经 ops `/admin/execute` 实测。正面结论：违反表规则的数据被整次拒绝、报错精确到表 / 行 / 字段 / 规则、旧快照继续服务；改价后下一次购买即按新价。
 
-### 1. 文档里“已修复（提交号）”指向 rebase 前的旧提交
+### 1. 文档里“已修复（提交号）”指向 rebase 前的旧提交（已修复）
 
-**现象**：本节上方第四轮两项写“已修复，`b717fd14`”“已修复，`990af957`”，这两个提交只存在于 rebase 前的历史，main 上对应的是 `c3892c11`、`b3c9159a`；CHANGELOG `[Unreleased]` 定时器一条写“最初由 `f8851f4a` 报告”，main 上对应的是 `09846b5f`（同一提交说明，`f8851f4a` 只在 `origin/fix/timer-announce-before-firing`）。
+**现象**：第四轮两项写的已修复提交号（b717fd14、990af957）只存在于 rebase 前的历史，main 上对应 `c3892c11`、`b3c9159a`；CHANGELOG 定时器一条的 f8851f4a 在 main 上是 `09846b5f`。
 
-**复现**：在 main 上对现行文档里所有 8 位提交号跑 `git merge-base --is-ancestor <sha> HEAD`；KNOWN-LIMITS、DESIGN-TODO、CHANGELOG 与 docs/framework 范围内只有这三个失败（另一个 `7369109f` 原文写明是“分支 dispatch 实跑”，属有意引用）。
+**修复**：根包门禁 `TestDocumentedCommitsAreReachableFromHEAD`（[doc_commit_refs_gate_test.go](../../doc_commit_refs_gate_test.go)）：跟踪的 `*.md` 里反引号括起来的 7～40 位十六进制串（至少一个数字、一个 a～f）视为提交号，必须是 HEAD 的祖先；自检扫描 `cac62833` 必须报出 KNOWN-LIMITS 里的 b717fd14。修前现状扫描共 10 个解析不了（都是确有其事的提交，只是不在 main 历史里），门禁原样报红；逐个按补丁内容找到 main 上改动相同的提交并改正：KNOWN-LIMITS 的两处、CHANGELOG 的 f8851f4a 与 gapmap 分支实跑、REFACTOR-2026-10-17-timer-scheduler 的三处“原提交”、PERF-ROUND-20261015 的 1bc6dd46 / ca0cbddf、EXTERNAL-VERIFICATION 的 35ef33f9 / 5e60a03c（测时在分支上的，写明“分支上与 main 某提交改动相同的提交”）。豁免清单 `documentedCommitExemptions` 现为空；条目必须写明分支与理由，不再被引用或已可解析时门禁要求删掉。
 
-**影响**：按文档追修复的人找不到提交，或找到一份没进 main 的版本（内容可能与最终提交不同）。分支经 rebase / cherry-pick 合入时这类引用会反复出现。
+**限制**：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 main 历史里”，不查是不是文档所说的那个改动。分支上的文档引用本分支提交时，rebase 后同样会红：引用本轮改动时优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。
 
-**建议修法**：改为 main 上的提交号；根包加一条门禁：现行文档里写成“已修复 / 实施 / 提交”语境的提交号必须是 HEAD 的祖先，明确标“分支”的引用豁免。
+### 2. 框架没有现成的配置表重载运维命令（已修复）
 
-### 2. 框架没有现成的配置表重载运维命令
+**现象**：`wiring/configdata` 的 Mod 只注册 `*configdata.Store`；只有 game-demo 在 gm.go 里手写了 `gm.config.reload`，`hotcode` / `bus` 都有 `RegisterAdminCommands`，configdata 没有。
 
-**现象**：`wiring/configdata` 的 Mod 只把 `*configdata.Store` 注册进 Registry，没有文件监听、信号或 admin 命令；生成器（非 demo）也不生成任何重载入口（`codegen/internal` 里没有 `Reload` 调用）。game-demo 的 `gm.config.reload` 写在 `internal/service/game/gm.go` 里，与公会、邮件等 GM 命令混在一起。同类运维能力里 `hotcode.RegisterAdminCommands`、`bus.RegisterAdminCommands` 由框架提供，configdata 没有对应函数。
+**修复**：新增 `configdata.RegisterAdminCommands(reg, store)`（[admin.go](../../framework/configdata/admin.go)），注册 `configdata.reload {reason?, dry_run?}`、`configdata.rollback {reason?}`、`configdata.status {}`；configdata Mod 在 Provide 时自动挂到 App 的 admin 注册表（缺 admin 能力时 Provide 失败），所以所有带 configdata Mod 的生成工程都自带。game-demo 删除 `gm.config.reload`，改用框架命令。修前回归原文：`admin registry lists [], want configdata.reload registered by the configdata Mod`。
 
-**复现**：`roost project new r5 -module example.com/r5 -mods configdata` 按 first-business 流程建完工程，打开 `ops.admin_enabled`，`GET /admin/commands` 只有 `bus.dlq.*`。
+### 3. 重载结果不说明哪些表变了；内容没变也报成功（已修复）
 
-**影响**：普通工程的策划表默认只能靠重启生效；新手要从 demo 的 gm.go 里找到并照抄这段（本轮照抄约 25 行，含 `mods.ModAdmin` / `mods.ModConfigData` 的查找）。
+**现象**：只改 `configs/table/shop_item.csv` 忘了 `roost generate` 就重载，结果 `{"ok":true,"data":{"version":4}}`，价格没变。
 
-**建议修法**：`framework/configdata`（或 wiring/configdata）提供 `RegisterAdminCommands(reg, store)`，注册 `config.reload`（可选 `config.rollback`），configdata Mod 在 admin 注册表可用时自动挂上，与 hotcode / bus 一致；demo 改为调用它。
+**修复**：Snapshot 在 finalize 时按成员记下与 `Hash` 同源的内容摘要和表行数，`configdata.Compare` 比较两代；`Store.ReloadWithChanges` / `RollbackWithChanges` 与 `ReloadOutcome.Changes` 带上逐成员变化。`configdata.reload` 回答 `version`、`previous`、`hash`、`changed` 与 `changes`（新增 / 删除 / 变化的表及行数）；内容完全没变时 `changed=false`，message 写明 no table changed 并提示改了 CSV 要先 `roost generate`，日志一条 Warn，指标 `configdata.reload.total{result="unchanged"}`。**版本号仍递增**（选择及理由见下）。guide/07-config §5 写明重载只读 `config_data.dir` 下的 JSON。
 
-### 3. 重载结果不说明哪些表变了；内容没变也报成功
+**真实进程实测（2026-10-18）**：`-mods configdata` 新工程加 `shop_item` 表（price `min:"1"`），打开 `ops.admin_enabled`，经 `/admin/execute`：`GET /admin/commands` 返回 `["configdata.reload","configdata.rollback","configdata.status"]`；只改 CSV 后 reload 返回 `"changed":false,"changes":{"unchanged":1}`、version 1→2 并带上述 message；`roost generate` 后 dry_run 报 `shop_item` 变化（2 行→2 行）且不发布，reload 发布 version 4；把一行 price 改 0 的 JSON 被整次拒绝（`table shop_item row 2 (key 2) field price: min: value 0 is below min=1`），旧快照继续服务；rollback 回到 version 2 并报 `shop_item` 变化；`/metrics` 为 `configdata_reload_total{result="ok"} 2`、`{result="unchanged"} 1`、`{result="failed"} 1`。
 
-**现象**：`Store.ReloadWithReason` 返回的结果与 `ReloadOutcome` 只有版本号、成功与否、失败阶段，没有每张表是否变化。实测在开发检出里只改 `configs/table/shop_item.csv`（价格 25 → 99）、忘了 `roost generate` 就重载：结果 `{"ok":true,"data":{"version":4}}`，价格仍是 25。重载只读 `configs/data` 的 JSON（demo 的命令描述里写了这一点，框架文档没有）；`roost generate --check` 能在本地报出 `generated files are stale`，但运维执行的是重载命令，看不到。
-
-**影响**：运维或策划看到 ok，以为改价已生效；内容没变也会递增版本号，`configdata_version` 指标无法区分“真的发布了新数据”和“空重载”。
-
-**建议修法**：重载结果带上按表的变化摘要（内容 hash 与上一代比较：`changed: [shop_item]` / `unchanged`），全部未变时结果与日志明确写“no table changed”；guide/07-config 写明重载只读 `config_data.dir` 下的 JSON，CSV 要先 `roost generate`。
+**需要维护者决定**：内容没变的重载是否递增版本。已实施 B（推荐）：照常发布、递增版本，但回答、日志与指标明确标“没有变化”。理由：监听者依赖每次重载都执行——game-demo 的开关表监听者用重载把 `gm.flag.set` 的进程内改动恢复成表里的值（`gm.flag.set` 的说明就是这么写的），跳过发布会让它静默失效；版本号本来就不是内容版本（失败的构建也会占用一个号），内容是否变化看 `changed` / `hash`。A：内容没变时不发布、不递增、监听者不跑，回答“没有变化”；代价是上述“重载恢复表值”的用法失效，需要另给 featureflag 一个“恢复表值”的入口。
 
 ## 能力与验证边界
 

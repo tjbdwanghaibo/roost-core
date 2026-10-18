@@ -30,7 +30,24 @@ secret:optional 表示敏感值允许为空，非空生产值仍不能使用 dev
 
 异步消息在每次准入时捕获当前 RuntimeConfig，排队后保持一代；同步调用继承当前请求代际。热更之后新消息见新版本，不能要求旧排队消息突然切换。featureflag 回滚恢复发布前实际视图，包括 GM 覆盖，而非从一个过时默认表重建。
 
-## 5. 维护
+## 5. 运维重载
+
+接了 configdata Mod 的进程自带三条运维命令，经 ops 的 `/admin/execute` 调用（`ops.admin_enabled` 与 admin token 照常生效），与 `hotcode.*`、`bus.dlq.*` 同一处注册，业务不用手写：
+
+| 命令 | 参数 | 回答 |
+| --- | --- | --- |
+| `configdata.reload` | `reason?`、`dry_run?` | `version`（新版本）、`previous`（发布前的版本）、`hash`、`changed`、`changes`（`added` / `removed` / `changed` 的表与 `rows_before` / `rows_after`，`unchanged` 个数）；`dry_run` 只构建校验、报告变化、不发布 |
+| `configdata.rollback` | `reason?` | 回到上一代（只保留一级），字段同上 |
+| `configdata.status` | 无 | 当前 `version`、`hash`、`loaded_at`、`dir` 与各表行数 |
+
+重载只读 `config_data.dir` 下的 JSON。改了 `configs/table` 下的 CSV 要先 `roost generate` 生成 JSON，再重载；忘了这一步时重载照样成功，但回答 `changed=false` 并在 `message` 里写明“no table changed”，日志是一条 Warn，指标记 `configdata.reload.total{result="unchanged"}`。内容没变的重载仍然发布新版本号：版本号不是内容版本（失败的构建也会占用一个号），而监听者依赖每次重载都执行——例如 game-demo 的开关表用重载把 `gm.flag.set` 的进程内改动恢复成表里的值。判断数据是否真的变了，看 `changed` / `changes` 或 `hash`。违反表规则（必填、唯一、范围、枚举、引用）的数据整次拒绝，错误写明表 / 行 / 字段 / 规则，旧快照继续服务。
+
+```bash
+curl -s -H 'X-Admin-Token: <token>' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"configdata.reload","payload":{"reason":"shop price 25->99"}}'
+```
+
+## 6. 维护
 
 发布前验证 hash、规则、监听者失败和回滚行为；有副作用的监听者必须定义补偿。table manifest 的 generated_at 未填充不能用于判断更新时间。日志不输出 secret；敏感配置和环境文件不进入 Git。hotcode 真实插件受目标平台/工具链约束，不能把编译通过写成 Linux 插件实机验收。
 

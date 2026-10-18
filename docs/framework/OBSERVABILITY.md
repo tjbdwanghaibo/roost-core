@@ -143,7 +143,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `runtime.goroutines` / `heap_alloc_bytes` / `heap_sys_bytes` / `sys_bytes` / `num_gc` | Gauge | 进程运行时读数；`stats_log.enabled` 时按 `stats_log.interval`（默认 1m）刷新 |
 | `entity.count` / `entity.count_by_kind{kind}` / `entity.count_by_category{category}` | Gauge | 已加载实体数；同上由 stats_log 刷新，消失的 kind / category 置 0 |
 | `configdata.version` | Gauge | 正在服务的配置表版本号（单调计数器分配，失败与撤回的 reload 也占号） |
-| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `failed`（含规则违反） |
+| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `unchanged`（发布成功但内容与上一代相同，例如只改了 CSV 没生成 JSON） / `failed`（含规则违反） |
 | `configdata.rollback.total{trigger}` | Counter | 回到上一代：`apply_failed`（新一代应用失败自动撤回）/ `operator`（运维撤回） |
 
 ### NATS（core/nats）

@@ -24,7 +24,7 @@ import (
 //
 //   - at startup, so a process that comes up during an incident comes up with
 //     the switches as the operator left them, not with everything on;
-//   - on every config reload, so editing the table and reloading is the normal
+//   - on every config reload (configdata.reload), so editing the table and reloading is the normal
 //     way to flip one. "The table" at run time is configs/data/feature_flag.json
 //     (config_data.dir): the reload reads JSON only, so an edit to
 //     configs/table/feature_flag.csv takes effect after `roost generate` has

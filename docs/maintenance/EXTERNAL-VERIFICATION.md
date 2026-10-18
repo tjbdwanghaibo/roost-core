@@ -8,7 +8,7 @@
 
 ## integration 标签用例的真实依赖运行（2026-10-14）
 
-v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译与 vet）。代码为 main `4370e6b3`（v1.26.0 之后只多文档）加测试修正 `35ef33f9`；macOS arm64、Go 1.27.0，依赖全部是本机 brew 二进制。这是本机单机结论，不扩大为跨机或生产保证。
+v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译与 vet）。代码为 main `4370e6b3`（v1.26.0 之后只多文档）加测试修正 `ccbd4af4`（补跑时为分支上改动相同的提交）；macOS arm64、Go 1.27.0，依赖全部是本机 brew 二进制。这是本机单机结论，不扩大为跨机或生产保证。
 
 **范围**：21 个包、78 个 `//go:build integration` 文件，共 186 个 `Test` 与 11 个 `Benchmark`。
 
@@ -26,7 +26,7 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 | 私有 Redis 单机（照 CI `service-redis` job 设 `REDIS_ADDR`、`ROOST_REDIS_TEST_ADDR`、`ROOST_REVIEW_REDIS`、`ROOST_REVIEW{3,4}_BACKEND`、`ROOST_BUGFIX5_BACKEND`） | redis-server | `./wiring/... ./service/...`；`-race` 的 `wiring/integration`、`wiring/mail`、`wiring/rank`、`service/mail`；`infra/storage/redis/driver` 的单机 pipeline 子用例 | 全部 PASS；没有因 Redis 门变量缺失的跳过 |
 | `scripts/mirror-local.sh` 私有环境（偏移 8000，用完 clean） | 私有 Mongo / NATS / Redis 单机 + 副本 + 3 主 3 从 Cluster / toxiproxy | `^TestMirrorLocal`（5 个）、`versionstore` 的 Cluster 用例、`redis-cluster-suites.sh`（`ROOST_REVIEW_CLUSTER`，5 个包）、`ROOST_REMOTE_CLUSTER_IT=1` 自起集群的 `TestRealB2WatermarkMatrixCluster`、`ROOST_DATAENGINE_IT_BACKLOG`（单集合与 `_MULTI`）、`TestRealSagaPerformance`（forward / compensate 各 15s 冒烟）、全部 integration Benchmark | 全部 PASS（大积压用例修正后） |
 
-**发现**：`TestRealDataEngineLargeBacklogRecovery` 只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行，此前没有入口设置它。它沿用“先 Close 停后台循环再 Flush”的旧夹具，而 Close 之后 Flush 按现行契约返回 `ErrRuntimeStopped`（`40804f27` 改其他六个夹具时漏了它），修前失败 `backlog_integration_test.go:129: dataengine runtime: shutdown has started`。属测试过时，产品行为不变；`35ef33f9` 改用 `ManualReplay`，两种形态 PASS（10 万记录、1 万实体、20 / 32 段，最终重启 pending=0）。
+**发现**：`TestRealDataEngineLargeBacklogRecovery` 只在 `ROOST_DATAENGINE_IT_BACKLOG=1` 时运行，此前没有入口设置它。它沿用“先 Close 停后台循环再 Flush”的旧夹具，而 Close 之后 Flush 按现行契约返回 `ErrRuntimeStopped`（`40804f27` 改其他六个夹具时漏了它），修前失败 `backlog_integration_test.go:129: dataengine runtime: shutdown has started`。属测试过时，产品行为不变；`ccbd4af4` 改用 `ManualReplay`，两种形态 PASS（10 万记录、1 万实体、20 / 32 段，最终重启 pending=0）。
 
 **不带 integration 标签的真实依赖用例与显式开关用例的入口（2026-10-14 起）**：补跑时发现它们没有任何入口设置所需变量，现已挂到既有入口，并由根包 `integration_coverage_test.go` 钉住（入口漏挂时对应门禁变红）：
 
@@ -53,7 +53,7 @@ v1.26.0 发布后补跑（发布验收时这些用例除故障矩阵外只编译
 
 **仍无结构守卫**：CI 末尾的残留键检查只发现“写了不清理”，发现不了“固定键名但清理了”。新增写 Redis 的用例仍须用 `redistest`；需要复核时重复上面的两轮 `MONITOR` 交集。
 
-**仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程的真实依赖用例 2026-10-15 起挂到 `dataengine-env.sh test`（见上表），在私有根（`ROOST_IT_HOME` 私有目录、偏移 3500，用完 `down` 并删除）上按入口原样实跑：integration 18 个包 ok，`test-dataengine-generated.sh` 三个阶段全部 PASS（压测用例按设计 SKIP）、`test-remote-generated.sh` 14 个 PASS（Mirror 子进程与 MirrorLocal 按设计 SKIP）、`test-demo-generated.sh` 的 guild 两个、purchase（单机子用例）与 `TestGateGeneratedBusinessConsumer` PASS，退出 0。模板的集群子用例在 `mirror-local.sh` 私有环境（偏移 20500，`up` → source 其 env.sh、`ROOST_REVIEW_CLUSTER=$ROOST_MIRROR_LOCAL_REDIS_CLUSTER bash scripts/test-demo-generated.sh` → `clean`）上单独实跑通过，没有跑整套 `test-core`（其中含 10 万记录大积压恢复）。分支 `round/infra-gaps` 上 dispatch 的 nightly（run 38600646387，`5e60a03c`）fault-matrix job 在 Linux runner 上跑通同一入口，生成工程用例全部 PASS（集群子用例在那里按设计 SKIP）。
+**仍未覆盖**：跨机、Linux 实机与生产形态见下表各项；Saga 性能与各 Benchmark 只做了冒烟，性能结论仍以 `docs/performance/` 的同机对照为准；生成工程的真实依赖用例 2026-10-15 起挂到 `dataengine-env.sh test`（见上表），在私有根（`ROOST_IT_HOME` 私有目录、偏移 3500，用完 `down` 并删除）上按入口原样实跑：integration 18 个包 ok，`test-dataengine-generated.sh` 三个阶段全部 PASS（压测用例按设计 SKIP）、`test-remote-generated.sh` 14 个 PASS（Mirror 子进程与 MirrorLocal 按设计 SKIP）、`test-demo-generated.sh` 的 guild 两个、purchase（单机子用例）与 `TestGateGeneratedBusinessConsumer` PASS，退出 0。模板的集群子用例在 `mirror-local.sh` 私有环境（偏移 20500，`up` → source 其 env.sh、`ROOST_REVIEW_CLUSTER=$ROOST_MIRROR_LOCAL_REDIS_CLUSTER bash scripts/test-demo-generated.sh` → `clean`）上单独实跑通过，没有跑整套 `test-core`（其中含 10 万记录大积压恢复）。分支 `round/infra-gaps` 上 dispatch 的 nightly（run 38600646387，分支上与 main `67e5fbbd` 改动相同的提交）fault-matrix job 在 Linux runner 上跑通同一入口，生成工程用例全部 PASS（集群子用例在那里按设计 SKIP）。
 
 复跑：共享环境组 `source ~/.roost-it/roost-dataengine-it/env.sh` 后先确认并取得 `remote-acceptance.lock`，再按包执行 `GOWORK=off ROOST_IT_TOXIPROXY=1 go test -tags=integration -count=1 -p 1 <包>`（或整套 `bash wiring/scripts/integration/dataengine-env.sh test`，它自己取锁）；Redis 组按 `.github/workflows/ci.yml` 的 `service-redis` 变量对私有 redis-server 执行；私有组 `ROOST_MIRROR_LOCAL_HOME=<目录> ROOST_MIRROR_LOCAL_OFFSET=<未占用偏移> bash scripts/mirror-local.sh up`，source 其 `env.sh` 后运行上表用例，结束 `clean`。
 

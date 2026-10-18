@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### configdata：框架自带重载 / 回滚 / 状态运维命令，重载结果说明哪些表变了（新用户试用第五轮登记项 2、3）
+
+- **问题**：配置表重载没有框架入口，只有 game-demo 在 gm.go 手写 `gm.config.reload`；重载结果只有版本号，只改 CSV 忘了 `roost generate` 时报 ok 并递增版本，数据没变。
+- **运维命令**：新增 `configdata.RegisterAdminCommands(reg, store)`，注册 `configdata.reload {reason?, dry_run?}`、`configdata.rollback {reason?}`、`configdata.status {}`；`wiring/configdata` 的 Mod 在 Provide 时自动挂到 App 的 admin 注册表（与 nats 挂 `bus.dlq.*` 一样，经 ops `/admin/execute`），所有带 configdata Mod 的工程都自带。game-demo 删除 `gm.config.reload`。修前回归：`admin registry lists [], want configdata.reload registered by the configdata Mod`。
+- **变化摘要**：Snapshot 在 finalize 时按成员记下与 Hash 同源的内容摘要与表行数；新增 `configdata.Compare`、`Changes` / `MemberChange`、`Store.ReloadWithChanges` / `RollbackWithChanges`、`ReloadResult` 与 `ReloadOutcome.Changes`。reload 回答 `version`、`previous`、`hash`、`changed`、`changes`（新增 / 删除 / 变化的表及 `rows_before` / `rows_after`）；内容完全没变时 `changed=false`、message 写明 no table changed 并提示 CSV 要先 `roost generate`，日志为 Warn。
+- **行为选择**：内容没变的重载仍发布并递增版本号（监听者依赖每次重载都执行，例如开关表用重载恢复 `gm.flag.set` 的进程内改动），只是明确标出；指标 `configdata.reload.total` 新增 `result="unchanged"`，原 `ok` 只计内容有变化（或首次加载）的成功。看板若用 `result="ok"` 统计成功次数，需要把 `unchanged` 一起算。
+- **测试**：`framework/configdata` 的 `TestReloadReportsWhichTablesChanged`、`TestAdminCommandsReloadReportChangesAndStatus`，`wiring/configdata` 的 `TestConfigDataModServesReloadCommandsOnTheAdminRegistry`；真实进程经 ops `/admin/execute` 实测见 KNOWN-LIMITS 第五轮。
+- 文档：guide/07-config §5（运维重载）、impl/07-config、OBSERVABILITY、CFGGEN_META、PROJECT_GENERATOR、game-demo WALKTHROUGH 与 observability README。
+
+### 根包门禁：文档里的提交号必须在 HEAD 历史里（新用户试用第五轮登记项 1）
+
+- **问题**：分支经 rebase / cherry-pick 合入后，文档里“已修复（提交号）”仍指向 rebase 前的旧提交（main 上不存在）。
+- **门禁**：`TestDocumentedCommitsAreReachableFromHEAD` 扫描跟踪的 `*.md`，反引号括起来、含数字与 a～f 的 7～40 位十六进制串必须是 HEAD 的祖先；自检要求扫描 `cac62833` 时报出当时 KNOWN-LIMITS 里的旧提交号。浅克隆跳过。豁免清单为空，条目须写明分支与理由。
+- **修正**：修前现状 10 个解析不了，均按补丁内容改成 main 上改动相同的提交（KNOWN-LIMITS 第四轮两项、CHANGELOG 定时器与 gapmap 两处、timer 重构记录三处、PERF-ROUND-20261015 两处、EXTERNAL-VERIFICATION 两处）。
+
 ### game-demo 副本排行：通关数快照随奖励一起准入，超过去重环后的重放不再重复计分
 
 - **缺陷**：清关榜用 rank `UpdateAdd` + `clear:<runID>`，而 rank 只记每个玩家最近 8 个请求 ID；端点在奖励重放时也提交（为补崩溃漏掉的一分）。一局在领奖窗口内被后来 8 局挤出去重环后重放，再加一分。修前真实 Redis 回归：`ten clears then replaying the first gives 11 leaderboard points; want 10 (reward claims remain 10)`。
@@ -31,7 +46,7 @@
 ### Timer：持久化钩子里重入 Tick 或操作出堆中的节点时，钩子视图与 ID 种子保持正确
 
 - **缺陷**（`300d728a` 起，即 Scheduler 重构后）：最外层收尾先把等待节点全部入堆再依次 upsert。前一个 upsert 的钩子重入 Tick 时，排在后面、还没收到 upsert 的节点可能到期：Tick 内新建的一次性节点只收到删除，按 upsert 推进 ID 种子的宿主漏存它的 ID，重建后复用；触发中显式改期自己的节点收到一次钩子不持有的删除。另外，在到期出堆的删除通知里取消（`RemoveTimer` 返回 true）或改期该节点，回调仍会执行一次。生成工程的 World 钩子只写 DAO、不调用调度器，不受影响；钩子里调用调度器的宿主受影响。
-- **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `f8851f4a` 报告并只修了第一种情况，本轮复核扩展为统一规则。
+- **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `09846b5f` 报告并只修了第一种情况，本轮复核扩展为统一规则。
 - **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](docs/performance/benchmarks/timer-announce-reentrant-hook/)，分析见[重构方案 §9](docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
 
 ### 生成器：`roost add endpoint` 从服务器业务钟填业务时间参数（新用户试用第四轮登记项 2）
@@ -196,7 +211,7 @@
 
 ### CI 与构建
 
-- nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，`7369109f`）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。
+- nightly-gapmap 按目录前缀分四组（framework / infra / codegen / rest）matrix 并行，每组上限 90 分钟，merge job 用 `scripts/gapmap/merge.py` 把四份报告合成一份 `gapmap-report` 工件与步骤摘要（格式不变；缺组或某组报告不完整时写明并让 merge 变红）。原因：全量串行约 120 分钟（2026-10-14 dispatch 2h0m），离 180 分钟上限只剩三分之一余量。`scripts/gapmap.sh` 新增 `--group`，保留 prlimit 地址空间上限与 `packages` 输入；根包 `TestGapmapWorkflowGroupsMatchScript` 钉住脚本、matrix、merge 三处组名一致。分支 dispatch 实跑（run 38595382160，分支上与 main `822f2f9b` 改动相同的提交）：framework 36 分钟、codegen 29、infra 26、rest 24，墙钟 37 分钟，四组与 merge 全部成功，合并报告 116 个包小节、`Total: 384 / 1376`（串行版 2026-10-14 为 380 / 1374，差异来自其后新增的包与守卫）。main 上 9342d639（prlimit 上限）之后还没有定时运行（最后一次是修复前的 2026-10-13T23:21Z，失败）。
 - upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
 ### 性能
 

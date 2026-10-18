@@ -385,6 +385,9 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
 ```
 
+- 配置表重载不是 GM 命令：configdata Mod 自带 `configdata.reload` / `configdata.rollback` / `configdata.status`（框架注册，与 `hotcode.*` 同一套 token 与审计）。
+  `curl ... -d '{"name":"configdata.reload","payload":{"reason":"改价"}}'` 回答新版本号与哪些表变了；重载只读 `configs/data` 下的 JSON，
+  只改了 `configs/table` 的 CSV 却没 `roost generate` 时回答 `changed=false`、message 写 `no table changed`。开关表（`feature_flag.json`）也经这条生效，并覆盖 `gm.flag.set` 的进程内改动。
 - `gm.saga.list` / `gm.saga.get` 读 saga 协调器的记录（状态、当前步、最后一次错误、状态数据）；`manual_required` 是需要人的那一类。
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
