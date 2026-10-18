@@ -1,0 +1,266 @@
+package game
+
+import (
+	player "MMO_MODULE/game/entities/player"
+	sceneentity "MMO_MODULE/game/entities/scene"
+	"MMO_MODULE/game/handler"
+	syncsender "MMO_MODULE/game/handler/syncsender"
+	"MMO_MODULE/protocol/msgid"
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"net"
+	"sort"
+	"sync"
+	"testing"
+	"time"
+)
+
+// 真 TCP 客户端使用正式 Receiver 检查基线，并按 ObjectRef 应用 create/update/remove。
+// 不能仅统计有几包：旧地图对象必须消失，新地图对象必须出现。
+type mmoWireClient struct {
+	mu         sync.Mutex
+	connection net.Conn
+	receiver   *frame.Receiver
+	objects    map[frame.ObjectRef]int64
+	documents  map[int64]bson.M
+	lastRaw    []byte
+	epoch      uint32
+	err        error
+}
+
+func dialMMOWireClient(t *testing.T, addr string, id int64) *mmoWireClient {
+	t.Helper()
+	connection, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := writeSceneFrame(connection, 0, 1, []byte(fmt.Sprintf("session:%d:ticket", id))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readSceneFrame(connection); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetDeadline(time.Time{})
+	client := &mmoWireClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()), objects: map[frame.ObjectRef]int64{}, documents: map[int64]bson.M{}}
+	go func() {
+		for {
+			msg, raw, err := readSceneFrame(connection)
+			if err != nil {
+				return
+			}
+			if msg != msgid.MsgEntitySync {
+				continue
+			}
+			client.mu.Lock()
+			_, err = client.receiver.Receive(raw, func(f frame.Frame) error {
+				if f.Kind == frame.Full {
+					clear(client.objects)
+					clear(client.documents)
+				}
+				for _, object := range f.Objects {
+					if object.Operation == frame.ObjectRemove {
+						delete(client.documents, client.objects[object.Ref])
+						delete(client.objects, object.Ref)
+						continue
+					}
+					for _, component := range object.Components {
+						update, decodeErr := entitysync.DecodeSubjectUpdate(component.Data, 0)
+						if decodeErr != nil {
+							return decodeErr
+						}
+						client.objects[object.Ref] = update.SubjectID
+						var document bson.M
+						if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+							return err
+						}
+						client.documents[update.SubjectID] = document
+					}
+				}
+				client.epoch = f.Epoch
+				return nil
+			})
+			if err != nil {
+				client.err = err
+			}
+			client.lastRaw = append([]byte(nil), raw...)
+			client.mu.Unlock()
+		}
+	}()
+	return client
+}
+func (client *mmoWireClient) expect(t *testing.T, ids ...int64) {
+	t.Helper()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		client.mu.Lock()
+		got := []int64{}
+		for _, id := range client.objects {
+			got = append(got, id)
+		}
+		err := client.err
+		client.mu.Unlock()
+		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(got) == fmt.Sprint(ids) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("client objects %v, want %v", got, ids)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func TestMMORPGTwoScenesTCPTransferRetryAndReconnect(t *testing.T) {
+	ctx := context.Background()
+	transport, addr := startScenePlayerTransport(t)
+	players := []*player.Player{newScenePlayer(t, 9701), newScenePlayer(t, 9702), newScenePlayer(t, 9703)}
+	scenes := make([]*sceneentity.Scene, 2)
+	entities := map[int64]entity.IThreadSafeEntity{}
+	sceneentity.RegisterEntity()
+	for i := range scenes {
+		id, _ := entity.BuildEntityID(int64(701+i), sceneentity.EntityKindScene)
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: sceneentity.EntityKindScene})
+		if err != nil {
+			t.Fatal(err)
+		}
+		scenes[i] = built.(*sceneentity.Scene)
+		entities[id] = built
+		t.Cleanup(func() { scenes[i].OnDestroy(entity.DestroyReasonMemoryUnload) })
+	}
+	for _, p := range players {
+		entities[p.ID()] = p
+	}
+	handler.RegisterEnterSceneNestHandlers()
+	engine := newSceneNest(t, entities)
+	read := nest.NewHandlerName("mmo_scene_location")
+	type location struct {
+		id int64
+		at spatial.Point
+	}
+	nest.MustRegisterHandlerWithMeta(read, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		p := es[0].(*player.Player)
+		return location{p.MapComp().SceneID(), p.MapComp().Pos()}, nil
+	}, nest.HandlerMeta{})
+	seed := nest.NewHandlerName("mmo_private_fields")
+	nest.MustRegisterHandlerWithMeta(seed, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		p := es[0].(*player.Player)
+		p.Dao().SetGold(123)
+		p.Dao().SetExp(987)
+		p.PublishSyncDirty()
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	for _, p := range players {
+		if _, err := engine.Request(ctx, seed, p.ID(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	world, err := newMMOScenes(transport, func(ctx context.Context, id int64) (int64, spatial.Point, error) {
+		v, err := engine.Request(ctx, read, id, nil)
+		if err != nil {
+			return 0, spatial.Point{}, err
+		}
+		p := v.(location)
+		return p.id, p.at, nil
+	}, scenes[0].ID(), scenes[1].ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = world.manager.Close(ctx) })
+	clients := make([]*mmoWireClient, 3)
+	for i, p := range players {
+		clients[i] = dialMMOWireClient(t, addr, entity.GetUniqueIDFromEntityID(p.ID()))
+		waitActiveSessions(t, transport, entity.GetUniqueIDFromEntityID(p.ID()), 1)
+		if err := world.Register(p); err != nil {
+			t.Fatal(err)
+		}
+		scene := scenes[0]
+		if i == 2 {
+			scene = scenes[1]
+		}
+		if _, err := syncsender.NewEnterSceneSender(engine).MultiSync_EnterScene(ctx, p.ID(), scene.ID(), 500, 500); err != nil {
+			t.Fatal(err)
+		}
+		if err := world.Reconcile(ctx, p.ID(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush := func() {
+		t.Helper()
+		if err := world.manager.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush()
+	clients[0].expect(t, players[0].ID(), players[1].ID())
+	clients[2].expect(t, players[2].ID())
+	clients[0].mu.Lock()
+	own, other := clients[0].documents[players[0].ID()], clients[0].documents[players[1].ID()]
+	clients[0].mu.Unlock()
+	if _, ok := own["gold"]; !ok {
+		t.Fatal("owner did not receive its private gold")
+	}
+	for _, field := range []string{"gold", "exp", "items"} {
+		if _, ok := other[field]; ok {
+			t.Fatalf("spatial view leaked private %s", field)
+		}
+	}
+	if _, ok := other["scene_id"]; !ok {
+		t.Fatal("spatial view lost public position")
+	}
+
+	clients[0].mu.Lock()
+	oldRaw := append([]byte(nil), clients[0].lastRaw...)
+	oldEpoch := clients[0].epoch
+	clients[0].mu.Unlock()
+	// 先完成权威切图，模拟订阅准入失败；客户端保持旧视图，旧图观察者已移除该人。
+	if _, err := syncsender.NewEnterSceneSender(engine).MultiSync_EnterScene(ctx, players[0].ID(), scenes[1].ID(), 500, 500); err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("instance warming up")
+	if err := world.Reconcile(ctx, players[0].ID(), func() error { return refused }); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	flush()
+	clients[1].expect(t, players[1].ID())
+	if err := world.Reconcile(ctx, players[0].ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	clients[0].expect(t, players[0].ID(), players[2].ID())
+	clients[2].expect(t, players[0].ID(), players[2].ID())
+	clients[0].mu.Lock()
+	applied, replayErr := clients[0].receiver.Receive(oldRaw, func(frame.Frame) error { return errors.New("old scene was applied") })
+	newEpoch := clients[0].epoch
+	clients[0].mu.Unlock()
+	if applied || replayErr != nil || newEpoch <= oldEpoch {
+		t.Fatalf("old epoch applied=%v err=%v epochs=%d/%d", applied, replayErr, oldEpoch, newEpoch)
+	}
+	// 同一份持久归属恢复新连接；旧 TCP 连接的帧留在其旧 Receiver 内，不能混入新客户端。
+	_ = clients[0].connection.Close()
+	waitActiveSessions(t, transport, 9701, 0)
+	if err := world.Disconnect(players[0].ID()); err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	clients[2].expect(t, players[2].ID())
+	reconnected := dialMMOWireClient(t, addr, 9701)
+	waitActiveSessions(t, transport, 9701, 1)
+	if err := world.Reconcile(ctx, players[0].ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	reconnected.expect(t, players[0].ID(), players[2].ID())
+	clients[2].expect(t, players[0].ID(), players[2].ID())
+}

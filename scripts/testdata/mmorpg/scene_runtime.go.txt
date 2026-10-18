@@ -1,0 +1,117 @@
+package game
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"sync"
+
+	player "MMO_MODULE/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// mmoScenes 是同进程多场景的业务接法：共享一个 Manager 保持每个连接的流和 epoch 连续，
+// 每张地图有独立 Interest，避免不同地图相同坐标相互可见。权威位置由 Nest 只读接口提供。
+// 调用方先完成持久切图，再 Reconcile；后者失败可按权威归属重试，不回滚已提交的切图。
+// 此夹具由测试显式 Flush；正式服务可用自己的生命周期驱动 Manager.Start / Stop。
+type mmoScenes struct {
+	mu      sync.Mutex
+	manager *entitysync.Manager
+	scenes  map[int64]*policy.Interest
+	indexed map[int64]int64
+	locate  func(context.Context, int64) (int64, spatial.Point, error)
+}
+
+func newMMOScenes(transport scenePusher, locate func(context.Context, int64) (int64, spatial.Point, error), ids ...int64) (*mmoScenes, error) {
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: sceneLane{transport: transport}})
+	if err != nil {
+		return nil, err
+	}
+	result := &mmoScenes{manager: manager, locate: locate, scenes: map[int64]*policy.Interest{}, indexed: map[int64]int64{}}
+	for _, id := range ids {
+		in, err := policy.NewInterest(policy.InterestConfig{
+			Manager: manager,
+			Session: sessionFor,
+			// self 来源仍用完整视图；附近玩家只能看到 near 视图中的公开字段。
+			SourceProfiles: map[string]map[int]entity.SyncProfile{
+				policy.SourceSpatial: {0: {Key: "near"}},
+			},
+			AOI: policy.AOIConfig{
+				Bounds:    spatial.Rect{Max: spatial.Point{X: 2048, Y: 2048}},
+				BlockSize: 128, EnterRadius: 120, LeaveRadius: 150,
+			},
+		})
+		if err != nil {
+			_ = manager.Close(context.Background())
+			return nil, err
+		}
+		result.scenes[id] = in
+	}
+	return result, nil
+}
+func (world *mmoScenes) Register(subject *player.Player) error {
+	return world.manager.Register(subject.Sync())
+}
+
+// gate 为场景业务准入，例如副本服务器暂未就绪；失败时保持 held，不发送半次切图。
+// gate 不持实体锁；map、队伍等业务校验必须在前置 Nest 内完成。
+func (world *mmoScenes) Reconcile(ctx context.Context, subjectID int64, gate func() error) error {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	sceneID, at, err := world.locate(ctx, subjectID)
+	if err != nil {
+		return err
+	}
+	target := world.scenes[sceneID]
+	if target == nil {
+		return fmt.Errorf("mmorpg: unknown scene %d", sceneID)
+	}
+	session := sessionFor(subjectID)
+	if err := world.manager.HoldSession(session); errors.Is(err, entitysync.ErrSessionUnknown) {
+		if err := world.manager.OpenHeldSession(session); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if old := world.indexed[subjectID]; old != 0 {
+		if err := world.scenes[old].Leave(subjectID); err != nil {
+			return err
+		}
+		delete(world.indexed, subjectID)
+		if refused := world.scenes[old].Apply(); len(refused) > 0 {
+			return refused[0].Err
+		}
+	}
+	if gate != nil {
+		if err := gate(); err != nil {
+			return err
+		}
+	}
+	if err := target.Enter(subjectID, at); err != nil {
+		return err
+	}
+	world.indexed[subjectID] = sceneID
+	if refused := target.Apply(); len(refused) > 0 {
+		return refused[0].Err
+	}
+	return world.manager.ReadySession(session)
+}
+
+// Disconnect 只清理连接的同步状态，不改持久归属；重连按 locate 再建全量。
+func (world *mmoScenes) Disconnect(subjectID int64) error {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	if old := world.indexed[subjectID]; old != 0 {
+		if err := world.scenes[old].Leave(subjectID); err != nil {
+			return err
+		}
+		delete(world.indexed, subjectID)
+		world.scenes[old].Apply()
+	}
+	world.manager.CloseSession(sessionFor(subjectID))
+	return nil
+}
