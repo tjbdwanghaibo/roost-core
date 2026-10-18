@@ -76,3 +76,5 @@
 - [业务 schema 变更操作手册](SCHEMA-MIGRATION.md)：停写 → 备份 → 转换 → 校验 → 切换版本 → 回退，demo 离线迁移示例与真实 Mongo 演练
 - [静态 Player 跨机迁移参考流程](PLAYER-MIGRATION.md)：按 sid 搬机的每一步、所用现有能力与检查点，demo 检查工具与本机演练
 - [指标与告警清单](OBSERVABILITY.md)
+
+- [MOBA 场景到框架的学习与接入](MOBA-INTEGRATION.md)：匹配与会话输入、单路参考模拟、真实 KCP 追帧、分歧和结算恢复，附业务与部署边界。

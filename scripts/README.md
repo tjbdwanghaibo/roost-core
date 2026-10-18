@@ -94,3 +94,5 @@ Sync 首次可见与客户端恢复：诊断运行加 `-trace-capacity=262144`�
 MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生成 DAO / Entity / Sender 与持久定时器，执行队伍、托管交易、战斗掉落任务、Buff、死亡复活和持久切图的 race 场景；缺省提交器替身。`ROOST_MMORPG_REAL=1` 并提供隔离 `ROOST_DATAENGINE_IT_MONGO_URI` 时增加真实 WAL / Mongo 的两独立进程恢复；固定入口登记在 `integration_coverage_test.go`。成功删除临时工程，失败或 `ROOST_MMORPG_KEEP=1` 保留。
 
 MMORPG 多地图网络接入：`bash scripts/test-mmorpg-scenes.sh`，生成 game-demo 后填业务接法，一个 Manager 配多个 Interest，在真实 TCP 和 Receiver 上校验切图删除 / 全量、held 重试、旧 epoch、重连与字段隐私。`scripts/test-mmorpg-cross-sid.sh` 对已启动的隔离双 sid game-demo 运行真实账号错服拒绝、双向赠礼、邮件重放与失败补偿；资源、端口和命名空间从显式环境变量取得，不启动 / 停止服务、不改 Player sid。[MMORPG 学习与使用手册](../docs/framework/MMORPG-INTEGRATION.md)列出全部参数、业务映射和边界；[SLG 学习与使用手册](../docs/framework/SLG-INTEGRATION.md)独立维护。
+
+MOBA 正式业务消费者：`bash scripts/test-moba-generated.sh`，CLI 生成 Player / MatchResult DAO 与多实体 Sender，结合正式 Match、FrameAssembler、真实 loopback KCP 跑匹配、会话输入、单路模拟、追帧 / 观战 / 分歧及结算 race 场景。`ROOST_MOBA_REAL=1` 与隔离 Mongo URI 追加两个独立进程的文件 WAL / Mongo 结算恢复；活动对局恢复另有边界。`ROOST_MOBA_KEEP=1` 保留成功消费者，失败保留目录和真实模式的唯一库名。[MOBA 学习手册](../docs/framework/MOBA-INTEGRATION.md)列出业务 / 框架映射与使用方式。

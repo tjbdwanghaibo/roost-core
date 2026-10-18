@@ -22,6 +22,7 @@ description: 接受游戏类型参数，以资深游戏服务器专家和实际�
 ```text
 $core-game-server game_type="SLG"
 $core-game-server game_type="MMORPG" review 玩家跨地图与断线重连
+$core-game-server game_type="MOBA"
 $core-game-server game_type="回合制卡牌" 实践战斗结算与奖励发放
 $core-game-server game_type="开放世界生存 + 即时战斗"
 ```
@@ -72,6 +73,10 @@ SLG 与 MMORPG 的两份手册同时承担教学入口，用户要求给他人�
 MMORPG 的现行入口是 `docs/framework/MMORPG-INTEGRATION.md`。业务、地图网络、静态 sid 跨服协作分别从 `scripts/test-mmorpg-generated.sh`、`scripts/test-mmorpg-scenes.sh`、`scripts/test-mmorpg-cross-sid.sh` 实践；业务脚本的真实 Mongo / WAL 两进程模式由 `ROOST_MMORPG_REAL=1` 显式准入。用户已明确选择 Player 保持静态 sid 归属，跨服玩法使用 Remote / Saga 协作；不再把动态 Player 跨 sid 迁移当成默认待补功能，用户改变方向时才重新设计权威交接协议。
 
 用户要求 MMORPG 关键点完整覆盖时，按手册逐项实践：登录和错服拒绝、持久切图与 AOI 订阅、公开 / 私有同步视图、队伍退出与解散、交易托管 / 双确认 / 取消 / 到期、战斗冷却与重复输入、Buff / 死亡 / 复活、掉落 / 任务 / 副本、装备属性、跨服补偿、冷加载与重连，以及观测和排空。业务数值、射程、队伍规则、技能 Host、生产容量等未知项不得编造；框架接入的最小纵切不等于完整商业游戏。用户要求 SLG 补齐后转 MMORPG 时，先复核 SLG 接入清单与外部验收边界，再切换类型。
+
+MOBA 的现行入口是 `docs/framework/MOBA-INTEGRATION.md`，正式消费者为 `scripts/test-moba-generated.sh`；`ROOST_MOBA_REAL=1` 显式开启隔离 Mongo / 文件 WAL 的两进程结算恢复。按“匹配成员与宿主路由 → 连接绑定 seat → 输入语法 / 时间准入 → 单所有者 Match → 连续帧与参考模拟 → 客户端冗余 / 可靠追帧 → 服务器判定 → 持久结算身份”实践。有限输入重放窗口与持久资产幂等分别验证；不要按成功 Commit 回复次数判断重复开局，不把客户端 hash 共识当作反作弊或结算授权。
+
+用户要求 MMO 完成后转 MOBA 时，先按已确认的 Player 静态 sid 路线复核 MMO 业务、网络和真实恢复 / 跨服协作入口，保留客户端引擎、目标密度长稳等外部边界，再切换类型。MOBA 的活动对局崩溃恢复、跨 sid battle host 路由、5v5 玩法与规模不能拿结算恢复或小型网络纵切替代；既有追帧窗口与 demo / Gate 背压限制按 main 的已知限制保留，不擅自升级保证。
 
 - 优先实际生成消费者、调用正式接口及运行已有场景。维护实际运行、源码核对、仅编译、跳过、未验证和已知失败的区别；全仓测试通过也不等于所有模块已做真实服务验收。可用且适合本任务时启动独立依赖，不能拿替身证明真实网络或存储语义。
 - 对历史问题先按当前 main 和维护者决定重新分类：奖励额度、赛季规则、公会命名与重名、资源产消、行军规则、补偿政策等归业务层。只因某游戏需要而框架没有内建，不登记为框架 bug；用现有能力给出业务接法。

@@ -343,3 +343,18 @@ Sender 后缀仍有一处二次碰撞，已在固定分支修复：`handlerTrade
 [SLG](../framework/SLG-INTEGRATION.md)与[MMORPG](../framework/MMORPG-INTEGRATION.md)两份现行文档已整理为业务 / 框架映射、源码阅读顺序、调用方法和运行入口，作为他人学习的长期入口。当前可执行最小接法不代表完整商业游戏：队伍规模、交易物品实例、战斗射程 / 预测、持久技能 Host、真实客户端引擎、目标密度、跨机器故障和长稳需要按游戏规则另行实施 / 验收。按已确认的静态归属路线，动态 Player 跨 sid 迁移不作为本轮缺陷或待补默认能力。
 
 本轮最终 core 全仓 build / vet / test 退出 0：8089 条测试事件通过、90 条跳过，145 个测试包通过，20 个无测试文件包另计；根包门禁通过，go generate 无额外跟踪文件漂移。真实资源验收只计上面点名实际执行的入口，不把普通全仓中的 skip 算通过。
+
+## MMORPG 复核完成范围与 MOBA 实践
+
+以 main `e90dd4ad` 为基线合并后复核。MMORPG 按用户已明确的“Player 静态 sid，跨服由 Remote / Saga 协作”路线，关键接入纵切可转入下一游戏类型；不把业务练习、客户端引擎、跨机故障或目标规模长稳记成完成。当前重新执行 `test-mmorpg-generated.sh` 的 13 条 race 场景、`test-mmorpg-scenes.sh` 的真实双地图 TCP、真实文件 WAL / Mongo 两进程恢复，均通过。`test-mmorpg-cross-sid.sh` 采用 main 新版逐封 ClaimMail 重发：错服拒绝、4 笔双向 completed、1 笔 compensated 与资产 8 / 2 / 8 / 2 全部通过。main 的回调活调度读视图、排序共用堆比较和 Sender 全部预声明名称避让方向合理；entitytimer / timer / Nest codegen race 回归通过。
+
+MOBA 新增 [学习与接入手册](../framework/MOBA-INTEGRATION.md)与 `scripts/test-moba-generated.sh`，规则只在业务消费者中：单路两名英雄、兵线、塔 / 基地、技能冷却、死亡复活、局内经济和服务器参考结果，不加入公共生成器。
+
+- 12 条顶层 race 场景实际通过、无 skip：匹配排队 / 取消 / 原子成局、会话身份 / 旧连接 / 过期输入、广播丢包冗余修复、断线可靠追帧、旁观者权限、历史过期与 NoMajority、推塔 / 基地胜负、技能 / 商店 / 检查点，以及结算并发重放 / 身份冲突 / 回滚 / 无胜者 / 完整服务器结果链。消费者 build / vet、ID 和生成状态检查通过。
+- 其中一条使用真实 loopback KCP，输入经可靠通道，广播在真实网络接收后刻意丢弃超过冗余深度的连续包，可靠追帧后两个客户端与服务器参考状态收敛。固定测试会话绑定不等同真实账号鉴权。额外 `framework/sync/lockstep`、`framework/sync/nettransport` race 包回归通过，含已有 KCP / TCP 停读和追帧门禁。
+- `ROOST_MOBA_REAL=1` 真实文件 WAL / Mongo 的两个独立进程结算恢复实际通过，无 skip；新进程对同一结算实体重放不再发奖励 / 累计战绩，换胜者拒绝。固定入口已登记根包覆盖表；成功后只删除本次唯一库。此项是干净停启的结算恢复，不是活动对局崩溃续赛。
+- 匹配学习中最初误把并发 Commit 的成功回复数当成开局次数，新增用例报 `two matchmakers consumed one pair 2 times`。源码与既有 `TestCommitReplayReturnsOriginalMatchForSameTicketSet` 表明同一完整票集合本来就幂等返回同一 Match；改为核对比赛 ID，并补齐 Store 接口注释，未改运行时逻辑，不登记为重复开局缺陷。
+
+MOBA 仍需按实际游戏定义 ban/pick / 队伍与 MMR、技能 Host、战争迷雾、独立 battle host 跨 sid 路由及活动对局输入日志 / 检查点恢复；真实客户端、5v5 目标负载与跨机长稳尚未验收。既有 demo / Gate 追帧背压与历史裁剪限制继续按上面的现行条目处理，不凭小型消费者推断问题已消失。
+
+本轮 core 全仓 build / vet / test 退出 0：8090 条测试事件通过、90 条跳过，145 个测试包通过、20 个无测试文件包另计。生成无额外跟踪文件漂移，根包门禁通过；真实资源仅计上述独立实际运行，不把 skip 算通过。
