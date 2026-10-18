@@ -235,6 +235,20 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 6）：托管服务清单改为九个、新增 `roost help services`、火球运行方式写明先进入独立模块目录、guide/11 与 OBSERVABILITY 补业务指标写法。
 
+## 实体定时器回调操作另一份调度视图（P2，已修复）
+
+基线 `63b63fa8`（D11 合入后的 main），框架实现问题，SLG 接入实践发现。合法的实体定时器回调里经同一组件调用 `NewTimer` / `RemoveTimer` / `ChangeTimer` 时，`Host` 从中间 DAO 状态另建一份 Scheduler：回调登记的下一阶段（建造完成接行军）已写进 DAO，最外层 Tick 却按旧堆报告期限并覆盖内层报告，驱动索引丢掉它，直到重载或该实体的下一次定时器操作才恢复；回调成功取消 / 改期同轮已到期的另一节点，它仍按旧期限执行；回调显式改期自己返回 false。
+
+修前 `TestHostCallbackOperationsShareTheCurrentTick` 原文：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。
+
+修复：`Host` 在当前 Tick 调用栈内共享调度器，内层操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告，最外层落定后报告一次；返回 / panic 都清掉，不在事务间缓存。契约见 [impl/10-time §2A](../framework/impl/10-time.md#2a-按实体的持久定时器驱动) 第 1、2 条。**剩余**：回调内新建的节点在 Tick 收尾 upsert 之前 `Timer` / `Timers` 读不到（DAO 视图），回调需要它的 ID 时用 `NewTimer` 的返回值。
+
+## 合法业务参数名导致 Sender 无法编译（P2，已修复）
+
+基线 `63b63fa8`，Nest 生成器问题，SLG 接入实践发现。handler 参数名原样带进 Sender，与 Sender 自己的路由参数、局部变量、导入包、预声明标识符或包级 `handlerName…` 变量同名时生成物编不过：取消建造 `handlerSLGCancel(target, id int64)` 生成 `Sync_SLGCancel(ctx context.Context, id int64, id int64)`，报 `id redeclared in this block`；参数名 `nil` / `int64` / `handlerName<X>` 等遮蔽类冲突能通过语法解析、类型检查才失败。
+
+修复：只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有的 `idArg` 等名字；handler 元数据、参数顺序、类型与线协议不变。回归 `TestSenderNamesDoNotCollideWithBusinessArguments`（对生成的 sender / syncsender 做类型检查），修前原文 `sender has colliding generated declarations: … id redeclared in this block (and 12 more errors)`。旧版本可在业务 handler 里把参数改名（如 `taskID`）暂避，不需要改协议。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。

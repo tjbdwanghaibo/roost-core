@@ -17,6 +17,22 @@
 - **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
 - 文档：DESIGN-TODO D12（B 实施结果、容量决定）、KNOWN-LIMITS（第六轮登记项 2、容量条目）、guide/06-saga §2.1 / §5、impl/12-codegen、codegen 的 BEGINNER_WORKBOOK / CODEGEN_REFERENCE / PROJECT_GENERATOR、`roost help saga` / `effect` / `add`。
 
+### 实体定时器：回调内的组件操作共享当前 Tick
+
+- 修复 `framework/nest/entitytimer.Host` 在 Tick 回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调登记的下一阶段节点已写入 DAO，最外层 Tick 却按旧堆报告期限（并以更大的序号覆盖内层报告），驱动索引丢掉它；回调取消 / 改期同轮已到期的另一节点返回成功，该节点仍按旧期限执行；回调显式改期自己返回 false。SLG 建造完成接行军、抵达后取消超时等合法组合受影响。
+- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内新建的节点在 Tick 收尾前 `Timer` / `Timers` 读不到。
+- 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
+
+### Nest 生成器：Sender 的局部名称避让业务参数
+
+- 修复合法的 `handlerCancel(target, id int64)` 生成 `Sync_Cancel(ctx, id int64, id int64)` 而无法编译（`id redeclared in this block`），以及参数名 ctx / client / err / ret / ok / ids / groupIDs、包名（nest / context / time / 类型包别名）、预声明标识符（int64 / any / error / bool / nil / len）或 `handlerName…` 遮住生成代码引用的名字而编不过的问题。只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有同名参数；handler 元数据、参数顺序、类型与线协议不变。
+- 测试：`codegen/internal/nest` 的 `TestSenderNamesDoNotCollideWithBusinessArguments` 对生成的 sender / syncsender 做 go/types 类型检查（单实体、多实体、多返回值、导入别名）。文档：`codegen/docs/NEST_RUNTIME.zh-CN.md`。
+
+### 慢连接测试：按实际消费和关闭状态制造背压
+
+- Lockstep `TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection` 不再假定 600 帧（约 4.8 MiB）一定超过停读连接的内核缓冲 + 出站队列（Linux 的 TCP 缓冲自动调优下装得下，原失败文本 `closed sessions map[], want only the stalled one (its outbound queue overflowed)`），改为最多 8192 帧、每 32 帧确认健康客户端读到、停读连接实际关闭即停；等待在 Tick 计时之外。Gateway `TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt` 每次推送后确认健康连接已收到，避免读协程还没被调度时把健康连接也塞满。
+- 保留慢连接被关闭、健康连接完整接收、Tick 不等待写出（最慢 Tick < 100ms）的原断言，不修改生产队列、超时或发送行为。
+
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
 - **决定**：维护者 2026-10-18 选方向 A——把 Saga 原生步骤与 effect 消费者里与业务无关的组装收进框架，game-demo 作为验收；B（生成器）待 A 落地后再评估，本轮不做。
