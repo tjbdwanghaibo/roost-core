@@ -127,7 +127,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core}, Template: *template})
+		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitOrderedList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core}, Template: *template})
 		if err != nil {
 			return err
 		}
@@ -313,7 +313,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

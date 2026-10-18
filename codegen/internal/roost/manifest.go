@@ -561,7 +561,16 @@ func resolvedModuleVersion(policy, minimum string) string {
 	return strings.TrimSpace(policy)
 }
 
+// splitList 解析逗号分隔的无序集合（Mod、feature）：去空、去重并排序，
+// 使同一组值不论书写顺序都生成相同的 roost.yaml。顺序有含义的参数
+// （Saga 步骤、-services 的第一个服务）用 splitOrderedList。
 func splitList(raw string) []string {
+	return uniqueSorted(splitOrderedList(raw))
+}
+
+// splitOrderedList 解析顺序有含义的逗号列表：只去掉空白项，保留书写顺序和
+// 重复项，重复是否合法由使用方判断（Saga 步骤重复要报错，不能静默合并）。
+func splitOrderedList(raw string) []string {
 	var out []string
 	for _, item := range strings.Split(raw, ",") {
 		item = strings.TrimSpace(item)
@@ -569,7 +578,7 @@ func splitList(raw string) []string {
 			out = append(out, item)
 		}
 	}
-	return uniqueSorted(out)
+	return out
 }
 
 func uniqueSorted(values []string) []string {

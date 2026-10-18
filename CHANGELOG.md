@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新用户试用第六轮登记项（2026-10-18）
+
+- **生成器：`roost add saga -steps` 保留书写顺序，重复步骤名报错（登记项 1）**。`-steps` 原先与 `-mods` 共用 `splitList`（去重并按字母排序），`-steps debit,credit` 生成 `{credit, debit}`；Saga 按 `Definition.Steps` 下标推进、倒序补偿，顺序被改就是业务语义被改。现在步骤用保序解析（`splitOrderedList`），蛇形化后同名的步骤报 `duplicate saga step "<name>"`，不再静默合并。同类问题：`project new -services world,game -template game` 也先排序再取“第一个服务”，模板接到了 `game` 而不是写在第一位的 `world`，一并改为保序。修前红：`TestAddSagaKeepsDeclaredStepOrder` 报 `saga gift_gold Definition step order = [credit debit], want [debit credit]`；`TestAddSagaRejectsDuplicateSteps` 报 `duplicate -steps accepted or unclear error: <nil>`；`TestProjectNewTemplateWiresFirstDeclaredService` 报 `template wired uses world=[] game=[account activity chat global mail match platform rank session], want the first declared service (world)`。已生成的 Saga 定义是业务文件，不改写：用旧版本生成过多步 Saga 的工程请核对 `saga/<name>/definition.go` 的步骤顺序。文档：`roost help saga`、CODEGEN_REFERENCE（add 段）。
+
 ### configdata：框架自带重载 / 回滚 / 状态运维命令，重载结果说明哪些表变了（新用户试用第五轮登记项 2、3）
 
 - **问题**：配置表重载没有框架入口，只有 game-demo 在 gm.go 手写 `gm.config.reload`；重载结果只有版本号，只改 CSV 忘了 `roost generate` 时报 ok 并递增版本，数据没变。

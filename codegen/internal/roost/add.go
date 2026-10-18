@@ -484,11 +484,19 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		var steps strings.Builder
 		var topics strings.Builder
 		var subscribers strings.Builder
+		// Steps 的顺序就是 Definition.Steps 的下标顺序：Saga 按下标推进、按下标
+		// 倒序补偿，所以原样保留。两个名字蛇形化后相同会生成同名步骤与同一组
+		// topic，报错而不是合并。
+		seenSteps := make(map[string]bool, len(o.Steps))
 		for _, stepName := range o.Steps {
 			stepSnake, stepPascal := toSnake(stepName), toPascal(stepName)
 			if !validName(stepSnake) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
+			if seenSteps[stepSnake] {
+				return nil, fmt.Errorf("duplicate saga step %q in -steps: each step needs its own name, listed in execution order", stepSnake)
+			}
+			seenSteps[stepSnake] = true
 			// No budget here: Timeout / MaxAttempts / Backoff come from the saga
 			// Mod's config (saga.step_defaults, overridden per step under
 			// saga.steps.<type>.<step>), filled in by Engine.Register.

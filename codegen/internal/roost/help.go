@@ -322,7 +322,7 @@ roost generate`,
 		Name: "saga", Aliases: []string{"transaction", "cross-service"},
 		Summary:       "生成跨服务 Saga 定义、步骤、补偿和注册骨架",
 		Usage:         `roost add saga <name> -service <service> -steps <step1,step2,...>`,
-		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
+		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
 		Example: `roost add mod saga -service game
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost generate`,

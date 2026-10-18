@@ -152,6 +152,8 @@ roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost add rpc guild -service game
 ```
 
+`add saga` 的 `-steps` 按执行顺序书写：生成的 `Definition()` 原样保留这个顺序（Saga 按下标推进、按下标倒序补偿），重复的步骤名（含只差大小写、蛇形化后相同的名字）直接报错；`-mods`、`-features` 这类集合参数才会去重排序。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
+
 需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
 
 新增的首层业务命令不是 preset，彼此可独立组合：

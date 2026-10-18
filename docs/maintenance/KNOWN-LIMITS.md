@@ -180,6 +180,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **建议修法**：步骤用保序解析（拒绝重复名并报错），不经 `uniqueSorted`；回归覆盖 help 里的示例顺序。
 
+**状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 1）：步骤保序、重复名报错；同类的 `project new -services` 取第一个服务一并改为保序。
+
 ### 2. Saga 原生实体步骤与 effect 消费者没有生成支持
 
 **现象**：`roost add saga` 只为每一步生成 Mongo 步骤的 `Subscribe*` 函数（`saga.SubscribeMongoStep`）；改实体 DAO 的步骤（扣 / 加金币这类最常见的步骤）应走 `saga.SubscribeDataEngineStep` 与 DataEngine step inbox，骨架注释点名了它但不生成，业务要自己取 JetStream 客户端、`JetStreamPublisher`、`DataEngineStepInbox`、stream / durable，再写派发 Nest handler 并在事务里绑定 receipt 的 StepHandler。game-demo 的送礼 saga 接线 `internal/service/game/gift_saga.go` 有 661 行。事务性 outbox（`nest.Emit` effect + Mongo inbox 消费者，demo 的升级发邮件）同样只有 demo 手写，生成器没有对应命令。
