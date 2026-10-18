@@ -330,3 +330,5 @@ Sender 后缀仍有一处二次碰撞，已在固定分支修复：`handlerTrade
 - 两个 game 进程的真实静态 sid 跨服赠礼：正反方向共 4 笔 Saga completed，重复邮件领奖后资产不增加；无效收件人 1 笔 Saga compensated，Mongo 背包为 8 / 2 / 8 / 2。可重复脚本为 `test-mmorpg-cross-sid.sh`，还检查真实会话连错 sid 被拒绝；只对独立开发项目运行，不改 Player sid。当前基线另外复跑 `scripts/test-remote-generated.sh`，正式 Remote / Mirror 功能通过，独立 Mirror 进程入口和压力场景按脚本门变量跳过；不把这些跳过记成已验收，也不拿 Saga 成功代替 Remote fencing 检查。
 
 [SLG](../framework/SLG-INTEGRATION.md)与[MMORPG](../framework/MMORPG-INTEGRATION.md)两份现行文档已整理为业务 / 框架映射、源码阅读顺序、调用方法和运行入口，作为他人学习的长期入口。当前可执行最小接法不代表完整商业游戏：队伍规模、交易物品实例、战斗射程 / 预测、持久技能 Host、真实客户端引擎、目标密度、跨机器故障和长稳需要按游戏规则另行实施 / 验收。按已确认的静态归属路线，动态 Player 跨 sid 迁移不作为本轮缺陷或待补默认能力。
+
+本轮最终 core 全仓 build / vet / test 退出 0：8089 条测试事件通过、90 条跳过，145 个测试包通过，20 个无测试文件包另计；根包门禁通过，go generate 无额外跟踪文件漂移。真实资源验收只计上面点名实际执行的入口，不把普通全仓中的 skip 算通过。
