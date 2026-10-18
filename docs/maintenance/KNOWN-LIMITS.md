@@ -94,31 +94,29 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **需要维护者决定**：是否提供通用的 DAO 期限组件（例如 `roost add timer --entity Player` 生成节点 DAO 与组件，框架负责重建与持久化钩子），以及按实体的 Tick 由谁驱动（进程 ticker 按最早期限只给到期实体发消息，而不是每秒给所有在线实体发）。
 
-## game-demo 副本排行：超过去重环后重放会重复计分（已确认，未修复）
+## game-demo 副本排行：超过去重环后重放会重复计分（已修复）
 
-**类别与基线**：demo 接入问题，非 rank 公开契约的实现缺陷；在 `91606e48` 主线生成的正式 game-demo 上确认。rank 的 `UpdateAdd` 只记同一玩家最近 8 个请求 ID（[types.go](../../service/rank/types.go) 的 `maxAppliedRequests`），不是永久的通关账本。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 每次成功领取或重放都提交 `+1`，而 [ranking](../../demo/game/ranking/ranking.go.tmpl) 的注释承诺同一局只计一次，超出了下层契约。
+**类别与基线**：demo 接入问题，非 rank 公开契约的实现缺陷；在 `91606e48` 与 `cac62833` 主线生成的正式 game-demo 上确认。rank 的 `UpdateAdd` 只记同一玩家最近 8 个请求 ID（[types.go](../../service/rank/types.go) 的 `maxAppliedRequests`），是去重环、不是通关账本；[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 原来每次成功领取或重放都提交 `+1`（为了补上“奖励已提交、排行没提交就崩溃”的那一分），而 [ranking](../../demo/game/ranking/ranking.go.tmpl) 承诺同一局只计一次。
 
-**触发与结果**：同一玩家在奖励领取窗口内连续成功通关 9 局，再重放第一局。期望经验不重复、排行仍为 9；实际经验账本仍有 9 条、World 发放经验仍为 900，排行却为 10。第一局的 `clear:<runID>` 已被后来的 8 个请求挤出去，奖励事务返回 `Claimed=false` 后端点仍然调用 rank `UpdateAdd`。SLG 中若照此接活动积分或赛季榜，会破坏排名公平；本复现没有证明重复经验或榜单奖励资产已被发放。
+**触发与结果（修前）**：同一玩家在奖励领取窗口内连续成功通关 9 局，再重放第一局：经验账本仍 9 条、World 发放经验仍 900，排行却为 10（第一局的 `clear:<runID>` 已被后来 8 个请求挤出去重环，奖励事务返回 `Claimed=false` 后端点仍调用 `UpdateAdd`）。审查附的探针（rank 自带 Redis 替身）修前原文：`nine clears then replaying the first gives 10 leaderboard points; want 9 (reward claims remain 9)`；新模板回归（真实 Redis 上的 rank RedisStore，10 局后重放第一局）修前原文：`ten clears then replaying the first gives 11 leaderboard points; want 10 (reward claims remain 10)`。
 
-**可执行复现**（仓库根目录，使用 go.mod 指定的 Go 工具链）：
+**根因**：与 `a2afea41` / `ce0d5fa5` 修过的两本领奖账本同一类——一个会遗忘的去重存储（这里按条数遗忘），遗忘点与重放的准入窗口（领奖窗口 4h + 宽限）没有对齐。
 
-```bash
-bash scripts/review-dungeon-ranking.sh
-```
+**修复**：不新增第三本有期限的账本，而是让排行的准入就是奖励的准入。领奖事务在记账本、发经验的同一笔事务里给 `PlayerDao.DungeonClears[赛季]` 加一（只在真正付款时），首次领取与重放都返回当前通关数 `ClaimResult.Clears`；端点用 `UpdateMax`、不带 requestID 把榜抬到这个数。窗口外的一局在计数之前就被执行时间的窗口判断拒绝；窗口内的重放只重复提交同一个快照；重复、并发、乱序快照不加分也不降分；排行提交失败后，重放或下一局的快照把漏掉的分补上。通关数不裁剪，按赛季分开（改 `ranking.CurrentSeason` 后新榜从 0 开始）。`handlerClaimDungeon` 多一个 `season` 参数（生成 Sender 随之变化）；PlayerDao 新增持久字段 `dungeon_clears`。
 
-[脚本](../../scripts/review-dungeon-ranking.sh) 用正式生成器创建隔离消费者，注入[端点行为用例](../../scripts/testdata/dungeon-ranking/replay_test.go.txt)，调用真实 Controller、生成 Sender、Nest、Player/World handler 和 rank RedisStore；复用 rank 自身的 Redis 替身，session 返回固定的成功终态，提交器只返回成功。**当前预期退出 1**，失败断言为 `nine clears then replaying the first gives 10 leaderboard points; want 9 (reward claims remain 9)`；它是显式运行的已知缺陷回归，不纳入普通 `go test ./...`。脚本打印临时工程与日志目录，不改当前 checkout、不连接外部服务；这不是实际 Redis Lua、WAL fsync、Mongo 或服务间网络验收。rank 的现行去重环、UpdateAdd 去重及榜/赛季隔离的 3 条定向 race 回归通过。
+**回归**：模板 [finish_dungeon_test.go](../../demo/game/controllers/player/finish_dungeon_test.go.tmpl) 的 `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（`ROOST_REVIEW_REDIS`，挂入 `scripts/test-demo-generated.sh`）：10 局后重放第一局、并发重放 4 局旧的、一局提交排行失败后重放补报，榜分别为 10、10、11；[claim_dungeon_test.go](../../demo/game/handler/claim_dungeon_test.go.tmpl) 的 `TestTheClearCountMovesOnlyWhenARunIsPaid`（不需外部依赖）：10 局计数、重放不加、窗口外拒绝不计数、不带赛季拒绝、换赛季从 1 起、持久化字节恢复后计数不变。审查的探针脚本已由这两条取代并删除。
 
-**规避与建议**：不要用这条 demo 接法承诺长期累计积分；仅把 `+1` 放进 `Claimed=true` 分支会丢掉“奖励已提交、排行未提交就崩溃”的补记能力，也不是完整修复。单纯加大 8 个槽位仍没有对齐允许重放的整个窗口。
+**升级**：线上尚未部署，不做兼容：已用旧 demo 跑出的 `clears` 榜是 `UpdateAdd` 累加值，与新的通关数快照不同源，升级时清空该榜（rank 前缀下 `clears` 榜的键），玩家通关数从 0 开始。
 
-建议在奖励同一事务内维护独立于可裁剪领取账本的持久累计通关数，首次领取与重放均返回当前累计值，rank 用不带请求去重键的 `UpdateMax` 写累计快照：重复与乱序快照不多加、不降分，下次请求可补齐漏报。**不能把同一 runID 同时用作不同累计快照的去重键**，否则旧收据会提前返回，较新的累计值仍不能补报。另一方案是保存覆盖整个允许重放窗口的持久计分收据，并明确定义保留期限与容量。
+**边界**：UpdateMax 遇到相同值保留较早的 tie，所以补报的那一分在同分时按补报时间而不是原通关时间排序。累计值按赛季而不是终身划分是本次的选择（见下“需要维护者决定”）。
 
-**待定方向与验收**：累计值按终身还是赛季划分、现有分数的初始化来源、增加 DAO 字段后的 schema 处理需要先确定，不在这份证据提交中改变数据模型。修复至少验证超过 8 个后续请求的重放、并发重复、累计快照乱序、领取后排行失败的补报、实体卸载重载和赛季切换。领取账本长度会裁剪，不能作为累计值；旧账本也不能可靠重建历史累计值。
+**需要维护者决定**：通关数按赛季（已实施，推荐：与榜的 Season 身份一致，换季不带旧数）还是终身（一个字段，换季需另做初始化）。
 
 ## game-demo 活动结算榜：旧累计回复覆盖新分数（已修复）
 
 **类别与基线**：demo 并发接入问题，`91606e48` 主线的 `ActivityRunner.Contribute` 用无条件 ZADD 写协调器返回的累计分。协调器允许并发调用，回复没有顺序保证；不是 activity 框架计分丢失，也不是业务奖励额度的选择。
 
-**触发、证据与影响**：同一玩家的两个不同通关请求先后在正式协调器提交，延迟第一条回复；第二条回复先把真实 Redis 结算榜写为 2，再放行第一条，榜降回 1，而协调器 Participant.Score 仍为 2。修前回归原文：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`。结算读取这份 Redis 榜，SLG 竞赛可能因此排错名次、少发或错发活动邮件；没有声称已复现实际邮件赔付。
+**触发、证据与影响**：同一玩家的两个不同通关请求先后在正式协调器提交，延迟第一条回复；第二条回复先把真实 Redis 结算榜写为 2，再放行第一条，榜降回 1，而协调器 Participant.Score 仍为 2。修前回归原文：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`（2026-10-18 在 `cac62833` 主线模板生成的 game-demo 上用同一用例复核，红文相同）。结算读取这份 Redis 榜，SLG 竞赛可能因此排错名次、少发或错发活动邮件；没有声称已复现实际邮件赔付。
 
 **修复与回归**：Contribute 只加正分，因此用单键 Lua 调用 `ZADD GT` 原子保留较大累计值，首次写入仍可插入。[模板回归](../../demo/internal/service/game/activity_test.go.tmpl) `TestActivityBoardKeepsTheLatestCumulativeScore` 经正式 ActivityRunner、正式协调器（内存版本存储）及真实 Redis 固定上述回复顺序，修后应保持 2；无 Redis 时明确 skip。[生成工程脚本](../../scripts/test-demo-generated.sh) 已接入这条用例，可在有隔离 Mongo / Redis / NATS 的环境运行整套脚本；或在新生成并 replace 到当前 core 的 game-demo 里执行：
 
@@ -127,7 +125,18 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
   -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 ```
 
-**边界**：只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
+**边界**：`ZADD GT` 需要 Redis 6.2 及以上（共享隔离环境为 8.x）。只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
+
+## game-demo 活动贡献：同一局在后来的窗口重放会再计一次（已确认，未修复，需要维护者决定）
+
+**类别与基线**：demo 接入问题，与上面副本排行同一类（去重范围没有覆盖重放的准入窗口），在本轮复核副本排行时发现，`cac62833` 主线模板。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 在领取与重放时都调用 `ActivityRunner.Contribute`；[Contribute](../../demo/internal/service/game/activity.go.tmpl) 按**调用时的业务时钟**选窗口（300 秒一个），协调器按（窗口, 玩家, `clear:<runID>`）去重。同一局在领奖窗口（4h）内、跨过窗口边界后重放，落进新窗口，键不同，再加一分；理论上一局最多可进 48 个窗口，并影响按名次发的活动邮件。
+
+**证据**：生成工程里用正式协调器（内存版本存储）与正式 ActivityRunner 的探针：先在窗口 W 贡献 `run-1`，时钟前进 300 秒再贡献 `run-1`，输出 `first window race-1792288200 score=1; replay of the same run in window race-1792288500 score=1 err=<nil>`（第二个窗口也记了 1 分）。探针只在临时工程里跑，未加入仓库。
+
+**可选修法**：
+
+- **A（推荐）**：只在奖励首次付款（`result.Claimed`）时贡献。重放永不贡献；代价是“奖励已提交、贡献没写进去”时这一分不再补（活动本来是尽力而为，且补报若落到后来的窗口，本来就记错了窗口）。
+- **B**：按这局的结束时间（session 的 `FinishedAtUnix`）选窗口，重放落回原窗口由协调器去重；同时 Contribute 只能为当前窗口自动开窗（否则重放会把已结算、已删除的旧窗口重新打开再结算一次），已关闭窗口的贡献被拒绝。保留窗口内补报，改动面更大，需要确认协调器对已结束活动的拒绝语义与 30 分钟预留 TTL 的关系。
 
 ## 新用户试用第五轮：待修问题（2026-10-17 登记，尚未修复）
 

@@ -187,6 +187,29 @@ func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix,
 	return true
 }
 
+// CountDungeonClear adds one paid clear to season's count and returns the new
+// count. It is called only from the claim transaction, right after
+// ClaimDungeonRun recorded the run, so the count moves exactly when a run is
+// paid and rolls back with the payment.
+//
+// The count is the clears board's source (game/ranking): the board is brought
+// up to it with rank UpdateMax rather than incremented, which is what makes a
+// replay of any run — however many clears later — harmless there. Unlike the
+// claim ledger it is never pruned: one entry per season the player cleared in.
+func (component *ProfileComponent) CountDungeonClear(season int64) int64 {
+	dao := component.Owner().Dao()
+	current, _ := dao.GetDungeonClears(season)
+	dao.SetDungeonClears(season, current+1)
+	return current + 1
+}
+
+// DungeonClears is the player's count of paid clears in season. A read for
+// callers holding the lock.
+func (component *ProfileComponent) DungeonClears(season int64) int64 {
+	current, _ := component.Owner().Dao().GetDungeonClears(season)
+	return current
+}
+
 // DungeonRunClaimed reports whether a run has already been paid. It is a
 // read for callers holding the lock; the claim itself must go through
 // ClaimDungeonRun, inside the transaction that pays.

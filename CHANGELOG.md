@@ -4,10 +4,18 @@
 
 ## [Unreleased]
 
+### game-demo 副本排行：通关数快照随奖励一起准入，超过去重环后的重放不再重复计分
+
+- **缺陷**：清关榜用 rank `UpdateAdd` + `clear:<runID>`，而 rank 只记每个玩家最近 8 个请求 ID；端点在奖励重放时也提交（为补崩溃漏掉的一分）。一局在领奖窗口内被后来 8 局挤出去重环后重放，再加一分。修前真实 Redis 回归：`ten clears then replaying the first gives 11 leaderboard points; want 10 (reward claims remain 10)`。
+- **修复**：领奖事务在同一笔事务里给新持久字段 `PlayerDao.DungeonClears[赛季]` 加一（只在付款时），首次领取与重放都返回 `ClaimResult.Clears`；端点改用 `UpdateMax`、不带 requestID 提交通关数快照。排行与奖励同一个准入（执行时间判窗口），不新增第三本有期限的账本；重复、并发、乱序快照与排行失败后的补报都只计一次。`handlerClaimDungeon` 多一个 `season` 参数，`ranking.ClearRequestID` / `ClearScore` 换成 `ClearsScore(playerID, clears)`。
+- **测试**：模板 `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（挂入 `scripts/test-demo-generated.sh`）与 `TestTheClearCountMovesOnlyWhenARunIsPaid`；审查附的探针脚本 `scripts/review-dungeon-ranking.sh` 已由它们取代并删除。
+- **升级**：线上尚未部署。旧 demo 的 `clears` 榜是累加值，升级时清空该榜；玩家通关数从 0 开始。
+- **同类待决定**：活动贡献按调用时钟选窗口，同一局跨窗口重放会再计一次，见 KNOWN-LIMITS“game-demo 活动贡献”。
+
 ### game-demo 活动结算榜：乱序回复不回退累计分
 
 - 两次合法贡献的协调器回复乱序时，旧回复的 `Score=1` 会在新回复的 `Score=2` 之后经无条件 ZADD 把结算榜覆盖成 1；协调器仍为 2。真实 Redis + 正式协调器（内存版本存储）的回归修前失败：`coordinator score is 2 but settlement board fell from 2 to 1 after the delayed score-1 reply`。
-- demo 的 Contribute 只增加正积分，现用 Redis 原子 `ZADD GT` 写累计快照，较旧或重复快照不降分，首次贡献仍插入。不改变 activity 框架接口、存储格式或业务奖励规则；网络写失败仍是日志告警的尽力索引，未增加对账保证。回归挂入 `scripts/test-demo-generated.sh`，用唯一前缀、结束清理。
+- demo 的 Contribute 只增加正积分，现用 Redis 原子 `ZADD GT` 写累计快照，较旧或重复快照不降分，首次贡献仍插入（`ZADD GT` 需要 Redis 6.2 及以上）。不改变 activity 框架接口、存储格式或业务奖励规则；网络写失败仍是日志告警的尽力索引，未增加对账保证。回归挂入 `scripts/test-demo-generated.sh`，用唯一前缀、结束清理。
 
 ### 按实体的持久定时器：`roost add timer --entity <Entity>`（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B，新用户试用第四轮登记项 3）
 

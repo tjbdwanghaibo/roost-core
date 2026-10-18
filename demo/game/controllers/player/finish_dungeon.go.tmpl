@@ -84,7 +84,8 @@ func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context,
 	if resolvedAt <= 0 {
 		resolvedAt = run.StartedAtUnix
 	}
-	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, controller.BusinessNow().Unix())
+	board := ranking.ClearsBoard()
+	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, controller.BusinessNow().Unix(), board.Season)
 	if err != nil {
 		// The run is resolved either way; the reward failing is its own
 		// coded answer so the client can tell the two apart.
@@ -110,13 +111,15 @@ func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context,
 	// The leaderboard point. It is OUTSIDE the transaction — the board lives
 	// in another service — so the two are not atomic: a crash here leaves a
 	// paid clear that was never counted. That direction is the recoverable
-	// one, and the submit is idempotent on the run id, so a retry of this
-	// endpoint counts it once whether or not the first attempt got through.
-	// The submit is deliberately not gated on result.Claimed for that reason:
-	// a replay that finds the reward already paid is exactly the case where
-	// the point may still be missing.
-	if _, err := controller.Ranking().Submit(context.Context(), ranking.ClearsBoard(), ranking.ClearScore(context.PlayerID), svcrank.UpdateAdd, ranking.ClearRequestID(run.ID)); err != nil {
-		slog.Warn("finish_dungeon: clear not counted on the board", "player_id", context.PlayerID, "run_id", run.ID, "err", err)
+	// one: the transaction counted the clear on the Player, and the board is
+	// brought UP TO that count (UpdateMax, no request id) rather than
+	// incremented, so this submit, a retry of it, a replay of any older run
+	// and two of them racing all leave the same number. The submit is
+	// deliberately not gated on result.Claimed for that reason: a replay that
+	// finds the reward already paid is exactly the case where the point may
+	// still be missing — and the next clear's snapshot carries it anyway.
+	if _, err := controller.Ranking().Submit(context.Context(), board, ranking.ClearsScore(context.PlayerID, result.Clears), svcrank.UpdateMax, ""); err != nil {
+		slog.Warn("finish_dungeon: clear not counted on the board", "player_id", context.PlayerID, "run_id", run.ID, "clears", result.Clears, "err", err)
 	}
 	// The same clear also contributes to the current server-wide window, for
 	// the same reason and with the same anchor: the coordinator deduplicates

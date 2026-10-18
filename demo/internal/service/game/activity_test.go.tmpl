@@ -50,11 +50,10 @@ func (c *windowCoordinator) LookupParticipant(_ context.Context, key svcactivity
 	return svcactivity.Participant{Score: score, Progress: score}, score > 0, nil
 }
 
-// boardRedis swallows the board write; this test is about which window the
-// point went into, not about the index beside it.
+// boardRedis swallows the board write (Contribute writes it with one Eval:
+// ZADD GT); this test is about which window the point went into, not about
+// the index beside it.
 type boardRedis struct{ fredis.IRedis }
-
-func (boardRedis) ZAdd(_ context.Context, _ string, _ ...fredis.Z) (int64, error) { return 1, nil }
 
 func (boardRedis) Eval(context.Context, string, []string, ...any) (any, error) { return int64(1), nil }
 

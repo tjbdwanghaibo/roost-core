@@ -102,8 +102,15 @@ func LedgerMayForget(resolvedAtUnix, nowUnix int64) bool {
 // run past its claim window is not reported here at all — it comes back as a
 // coded error, so "you were paid already" and "this is too old to pay" never
 // look the same to the caller.
+//
+// Clears is the player's count of paid clears in the season the claim named,
+// AFTER this call, and it is reported on a replay too: it is the snapshot the
+// clears board is brought up to (game/ranking), so a replay that finds the
+// reward already paid can still fill a board point an earlier attempt failed
+// to submit, without adding one.
 type ClaimResult struct {
 	Claimed      bool
 	ExpGranted   int64
 	LevelsGained int32
+	Clears       int64
 }
