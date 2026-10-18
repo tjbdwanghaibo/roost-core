@@ -437,6 +437,8 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	completion.CompletedAt = time.Now().UTC()
 	incarnation := commandIDIncarnation(completion.IdempotencyKey, completion.CommandID)
 	for attempts := 0; attempts < 8; attempts++ {
+		// 这次读不是可省的预读：判定（judgeCompletion）与目标状态（applyCompletion）都从它算出，写入按它的版本做条件
+		// 替换（乐观并发，冲突即重读重试）。Store.Apply 的事务不再读记录，只核对版本，所以它是唯一的那次读。
 		getStart := hoptrace.Now()
 		record, err := e.store.Get(ctx, completion.SagaID)
 		hoptrace.Since("h11.complete.get", getStart)

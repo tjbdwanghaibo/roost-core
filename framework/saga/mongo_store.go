@@ -310,13 +310,19 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 				return findErr
 			}
 		}
+		// 要关闭的操作的 tombstone 只在这里读一次：身份核对与后面的“插入 / 升级为带结果关闭”都用它。两处之间本事务
+		// 只写 sagas / outbox / completions，不碰 operations，事务快照里再读一次必然是同一份文档。
+		var tombstone operationDoc
+		tombstoneFound := false
 		if request.CloseOperation != "" {
-			var existing operationDoc
-			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &existing)
-			if findErr == nil && existing.SagaID != request.After.ID {
-				return ErrIdentityConflict
-			}
-			if findErr != nil && !errors.Is(findErr, fmongo.ErrNotFound) {
+			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &tombstone)
+			switch {
+			case findErr == nil:
+				if tombstone.SagaID != request.After.ID {
+					return ErrIdentityConflict
+				}
+				tombstoneFound = true
+			case !errors.Is(findErr, fmongo.ErrNotFound):
 				return findErr
 			}
 		}
@@ -341,8 +347,6 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 			}
 		}
 		if request.CloseOperation != "" {
-			var existing operationDoc
-			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &existing)
 			// 只有接收了成功才算“带结果关闭”：协调器只把成功计入 CompletedSteps、纳入补偿。以失败关闭
 			// （可重试失败用尽、拒绝）与超时用尽一样没有记下任何生效的结果，之后到达的成功仍要告警。
 			closure := operationClosureAbandoned
@@ -350,11 +354,11 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 				closure = operationClosureResult
 			}
 			switch {
-			case errors.Is(findErr, fmongo.ErrNotFound):
+			case !tombstoneFound:
 				if _, insertErr := s.operations().InsertOne(txCtx, operationDoc{ID: request.CloseOperation, SagaID: request.After.ID, Closure: closure, CreatedAt: request.After.UpdatedAt}); insertErr != nil {
 					return insertErr
 				}
-			case findErr == nil && closure == operationClosureResult && existing.Closure != operationClosureResult:
+			case closure == operationClosureResult && tombstone.Closure != operationClosureResult:
 				// 放弃过的 operation 在 Resume 后的新一生里带结果关闭：以结果为准，之后到达的旧尝试结果按重复处理。
 				if _, updateErr := s.operations().UpdateOne(txCtx, bson.M{"_id": request.CloseOperation}, bson.M{"$set": bson.M{"closure": closure}}); updateErr != nil {
 					return updateErr
