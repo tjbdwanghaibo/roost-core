@@ -1,0 +1,108 @@
+package handler
+
+import (
+	"errors"
+	db "example.com/slg-practice/db"
+	player "example.com/slg-practice/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type ISLGEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+	TimerComp() *player.TimerComponent
+}
+
+var errSLGRule = errors.New("slg practice: invalid target, insufficient gold or unknown construction")
+
+// 独立研究队列；目标等级是业务的幂等事实，与建造可同时推进。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSLGResearch(target ISLGEntity, level int64) (int64, error) {
+	dao := target.Dao()
+	if level <= 0 {
+		return 0, errSLGRule
+	}
+	if level <= dao.GetResearchLevel() {
+		return 0, nil
+	}
+	if level != dao.GetResearchLevel()+1 {
+		return 0, errSLGRule
+	}
+	if id := dao.GetPendingResearch(); id != 0 {
+		return id, nil
+	}
+	if dao.GetGold() < 5 {
+		return 0, errSLGRule
+	}
+	dao.SetGold(dao.GetGold() - 5)
+	id := target.TimerComp().NewTimer(3*time.Second, player.TimerResearch, 0, 0, nil)
+	if id == 0 {
+		return 0, errSLGRule
+	}
+	dao.SetPendingResearch(id)
+	return id, nil
+}
+
+type ISLGTileEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.TileDao
+}
+
+// 地块归属与玩家支付同一事务提交；已占地块的竞争者不支付，同一拥有者重放不再扣。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSLGClaimTile(target ISLGEntity, tile ISLGTileEntity) (bool, error) {
+	if owner := tile.Dao().GetOwnerID(); owner != 0 {
+		return owner == target.ID(), nil
+	}
+	if target.Dao().GetGold() < 1 {
+		return false, errSLGRule
+	}
+	tile.Dao().SetOwnerID(target.ID())
+	target.Dao().SetGold(target.Dao().GetGold() - 1)
+	return true, nil
+}
+
+// 用目标等级而不是短期请求去重环保证重复建造不重复扣款；本例只有一个建造队列。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSLGStart(target ISLGEntity, level int64, destination int64) (int64, error) {
+	dao := target.Dao()
+	if level <= 0 || destination <= 0 || destination > 1000 {
+		return 0, errSLGRule
+	}
+	if level <= dao.GetBuildingLevel() {
+		return 0, nil
+	}
+	if level != dao.GetBuildingLevel()+1 {
+		return 0, errSLGRule
+	}
+	if pending := dao.GetPendingBuild(); pending != 0 {
+		return pending, nil
+	}
+	if dao.GetGold() < player.BuildCost {
+		return 0, errSLGRule
+	}
+	dao.SetGold(dao.GetGold() - player.BuildCost)
+	id := target.TimerComp().NewTimer(2*time.Second, player.TimerBuild, destination, 0, nil)
+	if id == 0 {
+		return 0, errSLGRule
+	}
+	dao.SetPendingBuild(id)
+	return id, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerSLGCancel(target ISLGEntity, id int64) (bool, error) {
+	if id <= 0 || target.Dao().GetPendingBuild() != id {
+		return false, nil
+	}
+	if !target.TimerComp().RemoveTimer(id) {
+		return false, errSLGRule
+	}
+	target.Dao().SetPendingBuild(0)
+	target.Dao().SetGold(target.Dao().GetGold() + player.BuildCost)
+	return true, nil
+}

@@ -1,0 +1,300 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	db "example.com/slg-practice/db"
+	player "example.com/slg-practice/game/entities/player"
+	tileentity "example.com/slg-practice/game/entities/tile"
+	sender "example.com/slg-practice/game/handler/syncsender"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"sync"
+	"testing"
+	"time"
+)
+
+type slgGetter map[int64]entity.IThreadSafeEntity
+
+func (g slgGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if value := g[id]; value != nil {
+		return value, nil
+	}
+	return nil, fmt.Errorf("unknown entity %d", id)
+}
+func (g slgGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	values := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		values[i] = value
+	}
+	return values, nil
+}
+
+// 正式 Nest 提交路径的替身；本场景不声称 WAL fsync / Mongo 验收，真实存储另跑标准生成工程脚本。
+type slgCommitter struct{}
+
+func (slgCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type slgFixture struct {
+	now     time.Time
+	subject *player.Player
+	getter  slgGetter
+	engine  *nest.NestMgr
+}
+
+func newSLGFixture(t *testing.T) *slgFixture {
+	t.Helper()
+	f := &slgFixture{now: time.Unix(1_800_000_000, 0), getter: slgGetter{}}
+	player.TimerDriver.SetClock(func() time.Time { return f.now })
+	player.RegisterEntity()
+	RegisterSlgTasksNestHandlers()
+	RegisterTickPlayerTimerGenNestHandlers()
+	id, err := entity.BuildEntityID(4242, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.subject = built.(*player.Player)
+	f.getter[id] = f.subject
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(slgCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fund := nest.NewHandlerName("slg_fund_" + t.Name())
+	nest.MustRegisterHandlerWithMeta(fund, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		es[0].(*player.Player).Dao().SetGold(50)
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), fund, f.subject.ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := player.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.getter[id] }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.engine.Shutdown(context.Background())
+		f.subject.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	return f
+}
+
+func (f *slgFixture) tick(t *testing.T, after time.Duration) {
+	t.Helper()
+	f.now = f.now.Add(after)
+	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.subject.ID(), f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSLGConstructionMarchAndReplay(t *testing.T) {
+	f := newSLGFixture(t)
+	ctx := context.Background()
+	s := sender.NewSlgTasksSender(f.engine)
+	id, err := s.Sync_SLGStart(ctx, f.subject.ID(), 1, 501)
+	if err != nil || id == 0 {
+		t.Fatalf("start %d: %v", id, err)
+	}
+	replay, err := s.Sync_SLGStart(ctx, f.subject.ID(), 1, 501)
+	if err != nil || replay != id || f.subject.Dao().GetGold() != 40 {
+		t.Fatalf("replay id=%d gold=%d err=%v", replay, f.subject.Dao().GetGold(), err)
+	}
+	f.tick(t, 2*time.Second)
+	if f.subject.Dao().GetBuildingLevel() != 1 {
+		t.Fatal("construction did not complete")
+	}
+	if _, ok := player.TimerDriver.DueOf(f.subject); !ok {
+		t.Fatal("march persisted but disappeared from driver")
+	}
+	f.tick(t, player.MarchDuration)
+	if f.subject.Dao().GetMarches() != 1 || f.subject.Dao().GetArrivedX() != 501 {
+		t.Fatal("march did not arrive exactly once")
+	}
+	f.tick(t, time.Minute)
+	if f.subject.Dao().GetMarches() != 1 {
+		t.Fatal("march repeated")
+	}
+	if _, err := s.Sync_SLGStart(ctx, f.subject.ID(), 1, 501); err != nil || f.subject.Dao().GetGold() != 40 {
+		t.Fatal("completed construction replay charged again")
+	}
+}
+
+func TestSLGCancelRefundAndRefusal(t *testing.T) {
+	f := newSLGFixture(t)
+	ctx := context.Background()
+	s := sender.NewSlgTasksSender(f.engine)
+	if _, err := s.Sync_SLGStart(ctx, f.subject.ID(), 2, 501); err == nil {
+		t.Fatal("out of order level accepted")
+	}
+	id, err := s.Sync_SLGStart(ctx, f.subject.ID(), 1, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		canceled, err := s.Sync_SLGCancel(ctx, f.subject.ID(), id)
+		if err != nil || canceled != (i == 0) {
+			t.Fatalf("cancel %d: %v %v", i, canceled, err)
+		}
+	}
+	f.tick(t, time.Hour)
+	if f.subject.Dao().GetGold() != 50 || f.subject.Dao().GetBuildingLevel() != 0 {
+		t.Fatal("refund duplicated or canceled construction fired")
+	}
+}
+
+func TestSLGFailureRollsBackResourcesAndDeadline(t *testing.T) {
+	f := newSLGFixture(t)
+	name := nest.NewHandlerName("slg_reject_after_arm")
+	refused := errors.New("injected business rejection")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, err := handlerSLGStart(es[0].(ISLGEntity), 1, 501)
+		if err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), name, f.subject.ID(), nil); !errors.Is(err, refused) {
+		t.Fatalf("rejection=%v", err)
+	}
+	if f.subject.Dao().GetGold() != 50 || f.subject.Dao().TimersLen() != 0 || f.subject.Dao().GetPendingBuild() != 0 {
+		t.Fatal("rollback left a charge or timer")
+	}
+	if _, ok := player.TimerDriver.DueOf(f.subject); ok {
+		t.Fatal("rollback published a deadline")
+	}
+}
+
+func TestSLGOfflineIncomeIsBusinessBounded(t *testing.T) {
+	f := newSLGFixture(t)
+	arm := nest.NewHandlerName("slg_income")
+	nest.MustRegisterHandlerWithMeta(arm, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		es[0].(*player.Player).TimerComp().NewTimer(time.Minute, player.TimerIncome, 0, 0, nil)
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), arm, f.subject.ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	raw := f.subject.Dao().Marshal()
+	f.subject.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	f.subject.SetRemoved()
+	f.now = f.now.Add(10*time.Minute + 30*time.Second)
+	copy := db.NewPlayerDao()
+	if err := copy.Unmarshal(raw); err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: f.subject.ID(), Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{"player": copy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.subject = built.(*player.Player)
+	f.getter[f.subject.ID()] = f.subject
+	f.tick(t, 0)
+	if gold := f.subject.Dao().GetGold(); gold != 60 {
+		t.Fatalf("offline income gold=%d, want 60 (business cap 10)", gold)
+	}
+	f.tick(t, 0)
+	if f.subject.Dao().GetGold() != 60 {
+		t.Fatal("offline income paid twice")
+	}
+	f.tick(t, time.Minute)
+	if f.subject.Dao().GetGold() != 61 {
+		t.Fatal("periodic income did not resume")
+	}
+}
+
+func TestSLGTwoPlayersCompeteForOneTile(t *testing.T) {
+	f := newSLGFixture(t)
+	tileentity.RegisterEntity()
+	playerID, err := entity.BuildEntityID(4243, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: playerID, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := built.(*player.Player)
+	t.Cleanup(func() { other.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload) })
+	tileID, err := entity.BuildEntityID(1, tileentity.EntityKindTile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ground, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: tileID, Kind: tileentity.EntityKindTile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.getter[playerID] = other
+	f.getter[tileID] = ground
+	if _, err := f.engine.Request(context.Background(), nest.NewHandlerName("slg_fund_"+t.Name()), playerID, nil); err != nil {
+		t.Fatal(err)
+	}
+	ids := []int64{f.subject.ID(), playerID}
+	results := make([]bool, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = sender.NewSlgTasksSender(f.engine).MultiSync_SLGClaimTile(context.Background(), ids[i], tileID)
+		}(i)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || results[0] == results[1] {
+		t.Fatalf("competition results=%v errors=%v", results, errs)
+	}
+	winner := 0
+	if results[1] {
+		winner = 1
+	}
+	if ground.(*tileentity.Tile).Dao().GetOwnerID() != ids[winner] {
+		t.Fatal("ownership and transaction winner disagree")
+	}
+	if f.subject.Dao().GetGold()+other.Dao().GetGold() != 99 {
+		t.Fatal("payment was duplicated or lost")
+	}
+	if won, err := sender.NewSlgTasksSender(f.engine).MultiSync_SLGClaimTile(context.Background(), ids[winner], tileID); err != nil || !won {
+		t.Fatalf("winner replay=%v %v", won, err)
+	}
+	if f.subject.Dao().GetGold()+other.Dao().GetGold() != 99 {
+		t.Fatal("ownership replay paid again")
+	}
+}
+
+func TestSLGResearchAndConstructionUseIndependentQueues(t *testing.T) {
+	f := newSLGFixture(t)
+	ctx := context.Background()
+	s := sender.NewSlgTasksSender(f.engine)
+	if _, err := s.Sync_SLGStart(ctx, f.subject.ID(), 1, 501); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Sync_SLGResearch(ctx, f.subject.ID(), 1)
+	if err != nil || id == 0 {
+		t.Fatalf("research id=%d err=%v", id, err)
+	}
+	if replay, err := s.Sync_SLGResearch(ctx, f.subject.ID(), 1); err != nil || replay != id {
+		t.Fatalf("research replay %d %v", replay, err)
+	}
+	if f.subject.Dao().GetGold() != 35 {
+		t.Fatal("parallel queues or replay charged incorrectly")
+	}
+	f.tick(t, 2*time.Second)
+	if f.subject.Dao().GetBuildingLevel() != 1 || f.subject.Dao().GetResearchLevel() != 0 {
+		t.Fatal("research completed at construction deadline")
+	}
+	f.tick(t, time.Second)
+	if f.subject.Dao().GetResearchLevel() != 1 {
+		t.Fatal("research did not complete independently")
+	}
+	if _, err := s.Sync_SLGResearch(ctx, f.subject.ID(), 1); err != nil || f.subject.Dao().GetGold() != 35 {
+		t.Fatal("completed research replay charged again")
+	}
+}

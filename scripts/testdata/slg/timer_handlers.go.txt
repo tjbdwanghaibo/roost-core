@@ -1,0 +1,49 @@
+package player
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"time"
+)
+
+// 业务示例：这些数值属于本验收场景，不是框架的 SLG 规则。
+const (
+	TimerBuild    int32 = 1
+	TimerMarch    int32 = 2
+	TimerIncome   int32 = 3
+	TimerResearch int32 = 4
+	BuildCost     int64 = 10
+	MarchDuration       = 5 * time.Second
+)
+
+func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+	handlers.Register(TimerResearch, func(entitytimer.Fire) time.Duration {
+		dao := component.owner.Dao()
+		dao.SetResearchLevel(dao.GetResearchLevel() + 1)
+		dao.SetPendingResearch(0)
+		return 0
+	})
+	handlers.Register(TimerBuild, func(fire entitytimer.Fire) time.Duration {
+		dao := component.owner.Dao()
+		dao.SetBuildingLevel(dao.GetBuildingLevel() + 1)
+		dao.SetPendingBuild(0)
+		// 建造完成接行军：不能丢掉在当前 Tick 回调中登记的下一阶段。
+		component.NewTimer(MarchDuration, TimerMarch, fire.Param1, 0, nil)
+		return 0
+	})
+	handlers.Register(TimerMarch, func(fire entitytimer.Fire) time.Duration {
+		dao := component.owner.Dao()
+		dao.SetArrivedX(fire.Param1)
+		dao.SetMarches(dao.GetMarches() + 1)
+		return 0
+	})
+	handlers.Register(TimerIncome, func(fire entitytimer.Fire) time.Duration {
+		// 框架只触发一次；业务补算已到期的周期，本例最多补 10 期、库存最多 1000。
+		periods := int64(1 + fire.Late()/fire.Interval)
+		periods = min(periods, 10)
+		dao := component.owner.Dao()
+		if gold := dao.GetGold(); gold >= 0 && gold < 1000 {
+			dao.SetGold(gold + min(periods, 1000-gold))
+		}
+		return time.Minute
+	})
+}

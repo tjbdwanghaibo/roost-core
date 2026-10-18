@@ -235,6 +235,33 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **状态**：已修复（2026-10-18，见 CHANGELOG `[Unreleased]` 第六轮登记项 6）：托管服务清单改为九个、新增 `roost help services`、火球运行方式写明先进入独立模块目录、guide/11 与 OBSERVABILITY 补业务指标写法。
 
+## SLG：实体定时器回调操作另一份调度视图（P2，已修复）
+
+基线 `63b63fa8`，框架实现问题。合法的实体定时器回调中调用组件 NewTimer / RemoveTimer / ChangeTimer 时，Host 从中间 DAO 状态重建了另一份 Scheduler。建造完成登记行军，节点留在 DAO，最外层 Tick 却按旧堆报告空期限，行军从驱动索引丢失，直到重载或后续操作才可能恢复；成功取消同轮到期节点，它仍在旧堆执行。业务无需用这种限制绕过公开组件接口。
+
+修前 `TestHostCallbackOperationsShareTheCurrentTick` 原文：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`。
+
+修复：Host 在当前 Tick 调用栈内共享调度视图，内部操作使用当前调用的业务时间，最外层完成落定后才报告索引；正常退出 / panic 都清掉瞬态指针，不在事务间缓存调度器。回归覆盖新建下一阶段、取消、显式改期、panic 后新调用，以及 DAO 事务回滚 / 重试；公开参数、持久格式不变。复现与验证：`go test -race -count=1 ./framework/nest/entitytimer`。[同机交替 10 轮样本](../performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；夹具不代表生产 DAO 成本或容量。
+
+## SLG：合法业务参数名导致 Sender 无法编译（P2，已修复）
+
+基线 `63b63fa8`，Nest 生成器问题。取消建造的合法 handler 参数名 `id` 被原样带入 Sender，而 Sender 已有路由 `id`，产生 `Sync_SLGCancel(ctx context.Context, id int64, id int64)`；正式消费者编译报 `id redeclared in this block`。ctx / client / err / ret / s 和类型包名称同样可能碰撞或被遮蔽，不是业务一定要避用这些合法名字。
+
+修复仅重命名 Sender 元数据副本内的冲突标识符，添加 Arg 后缀并继续避让已存在的 idArg 等名称；不修改 handler 元数据、参数顺序、类型或线协议。异步 / 同步与多返回值声明回归在 `codegen/internal/nest/generated_signatures_test.go`，正式 SLG 消费者编译并执行取消路径。修前回归报 `sender has colliding generated declarations: ... id redeclared in this block (and 12 more errors)`；验证：`go test -count=1 ./codegen/internal/nest` 和 `bash scripts/test-slg-generated.sh`。旧版本可在业务 handler 将 id 改名为 taskID 暂避，不需要改协议。
+
+## SLG 接入验收（2026-10-18）
+
+现行业务清单和可执行入口见 [SLG-INTEGRATION](../framework/SLG-INTEGRATION.md)。主线 `63b63fa8` 的按赛季累计通关快照、首次付款才贡献活动、D11 持久实体定时器与 D12 Steps / NativeStep / SubscribeEffects 均已读取关键调用链并复核；维护者明确的活动失败不补报、离线实体不准点唤醒等业务取舍保持不变。
+
+- `scripts/test-slg-generated.sh` 的 6 条 race 用例通过：建造 / 行军、重放、取消退款、失败回滚、离线补算、地块竞争及独立研究队列；资源规则留在业务文件，不加入框架默认逻辑。提交器替身与 DAO 序列化恢复的边界在手册中明确。
+- 当前 main 模板的新 game-demo build / vet / 包测试通过，十个真实服务 ready，4 名机器人全场景全部成功。使用新的项目命名空间、独立 ops / TCP 端口，Mongo 单节点副本集、Redis 单实例和三节点 NATS JetStream，均是本机功能结果。
+- `scripts/test-demo-generated.sh` 通过，含真实 Redis 排行重放补报、活动榜、真实 Mongo 发号 / schema 迁移与 Gate 消费者。D12 的 `TestRealStepsRunNativeAndMongoStepsThroughTheMods` 与 `TestRealSubscribeEffectsDeliversEachEffectOnce` 在真实 Mongo + 三节点 NATS 上以 integration / race 执行并通过，两条均未 skip；初次未开准入变量的运行不计入通过。
+- 当前分支重新运行 `scripts/test-dataengine-generated.sh` 三阶段文件 WAL / Mongo 回归与 `scripts/test-remote-generated.sh` 正式 Remote / Mirror 回归，均退出 0。阶段专属用例在其他阶段、压力用例及独立 Mirror 专门入口仍会明确 skip，不把这些跳过累计成通过。
+- 前轮的 Lockstep / Gateway 慢连接失败已定位为夹具问题：固定 4.8 MiB 未必填满内核 + 应用缓冲；无节制广播又可能把尚未获得调度的健康读连接一起塞满。夹具改为有上界地驱动实际关闭，逐批 / 逐次确认健康客户端消费，等待放在 Tick 计时外。关闭、完整接收与 Tick 不阻塞的断言不变，生产代码不改；两条定向 race 用例各连续 3 次通过，随后相关包 race 通过。
+- 本轮最终 core 全仓 build / vet / test 通过：8063 条测试事件通过（含子用例与 fuzz seed），无失败；89 条测试事件跳过，20 个无测试文件的包单独计数。最终根包 43 条测试通过。跳过不算外部依赖验收，前面单独点名的真实资源回归以各自实际执行结果为准。
+
+Redis Cluster、跨机器网络故障、真实客户端引擎和目标规模长稳仍按现有外部验收清单分别跟踪；本轮没有把它们记成完成，也不把业务尚未定义的 SLG 数值或战斗玩法列成框架 bug。
+
 ## SLG 接入实践的验证范围（2026-10-17 历史基线）
 
 2026-10-17 在 Linux/amd64、Go 1.27.2，以主线 `91606e48` 为基线复核，随后验证本分支的活动榜修复。代码索引工具本会话不可用，调用链通过当前源码与 rg 补证。业务 / demo / 框架的归属示例见 [WALKTHROUGH](../../demo/WALKTHROUGH.md#用于-slg-等游戏时哪些规则归业务)；这里记录实际证据深度，不把覆盖目录当成所有功能已验收。
