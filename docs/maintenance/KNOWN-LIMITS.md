@@ -85,7 +85,7 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 - **去掉 `timers` 条目后生成部分不自动删除**：与其他按清单渲染的文件相同，需要手工删 `*_component_gen.go`、节点类型、Tick handler 及 DAO / 实体里的两处字段；维护者 2026-10-18 决定维持现状、不加回收逻辑。
 - **装了定时器的服务多一个 Mod**：生成的停机总预算按 Mod 数计，`roost add timer` 给服务装的 `wiring/entitytimer` Mod 让该服务的 `shutdown.total_timeout` 多 3s（Mod 本身停止是即时的，这 3s 是每个 Mod 的保底）；维护者 2026-10-18 决定接受，不改 app 保底规则。game-demo 手写接线、不装这个 Mod（缺省 Mod 集的 game 服务 25 个 Mod、117s）。
 - **game-demo 的手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段（任何 Mod Start 之前）绑时钟；demo 的 `startWorldTimers` 在 `Service.Init` 里、`EnsureWorld` 之前调用，所以“World 第一次加载在驱动接上之后”靠的是 demo 自己的启动顺序（玩家请求在 `Service.Init` 发布写闸门之前一律拒绝——生成配置 `require_write_gate: true`——而写闸门在 `EnsureWorld` 之后才发布；其余访问 World 的循环都在 Init 里更晚启动），不是框架保证；在那之前加载的 World 会按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
-- **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader（卸载时记下 DAO 持久字节、按 `RestorePersisted` 水合、经 EntityManager 发布）代替 DataEngine + Mongo，删档用测试里的删除准入门；节点是普通 DAO 字段，Mongo 往返由 DataEngine 自身的测试覆盖。真实 Mongo 下的定时器重启演练尚未做。
+- **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader（卸载时记下 DAO 持久字节、按 `RestorePersisted` 水合、经 EntityManager 发布）代替 DataEngine + Mongo，删档用测试里的删除准入门；节点是普通 DAO 字段，Mongo 往返由 DataEngine 自身的测试覆盖。真实 Mongo 下目前只有一处定时器往返：MMORPG 恢复夹具 `TestMMORPGRealPersistenceAcrossProcesses`（`ROOST_MMORPG_REAL=1 bash scripts/test-mmorpg-generated.sh`）里 Buff 节点经文件 WAL / Mongo 两个进程往返后，由用例手动发 `Sync_TickPlayerTimer` 按期到期；它没有经过驱动。加载后由驱动自动投递补触发，在真实 Mongo 下尚未演练（Host 的加载后补触发见 `TestHostFiresAnOverdueTimerOnceAfterLoad`，驱动接线见本条开头的 `TestEntityTimerGeneratedProjectEndToEnd`）；该夹具是正常停机，不是崩溃注入。
 
 **原登记（2026-10-17）**：
 
@@ -256,12 +256,12 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ## MMORPG 接入验收的范围（2026-10-18）
 
-入口与业务清单见 [MMORPG-INTEGRATION](../framework/MMORPG-INTEGRATION.md)，脚本均不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑。这些实践没有发现框架缺陷。
+入口与业务清单见 [MMORPG-INTEGRATION](../framework/MMORPG-INTEGRATION.md)，脚本均不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑。MMORPG 夹具本身（下面四个入口）没有触发框架缺陷；同一轮把 main 的修复合并到实践分支后复核 Sender 参数改名，用构造的 `handlerTradeArg(target, handlerNameTrade string)` 发现后缀二次碰撞，main 上的合入为 `185edf32`（见上文“合法业务参数名导致 Sender 无法编译”），不是 MMORPG 夹具触发。
 
 - `scripts/test-mmorpg-generated.sh`（缺省提交器替身）：公共 CLI 生成的 Player / Scene / Trade / Monster DAO、Player 实体定时器、多实体 Sender 与 Nest 在 13 个业务组合（组队与解散、并发转账去重与拒绝回滚、托管交易确认 / 取消 / 到期 / 确认与取消竞争、战斗冷却与输入重放、掉落 / 任务领奖幂等、副本完成判定、Buff 刷新 / 回滚 / DAO 序列化重建后到期、死亡与延迟复活、带版本的切图）下的多实体锁定、undo 回滚、定时器期限与业务幂等。
-- 同一脚本加 `ROOST_MMORPG_REAL=1`：`TestMMORPGRealPersistenceAcrossProcesses` 两个独立进程共用文件 WAL 与真实 Mongo，第一阶段停在交易单方确认后正常停机，第二阶段冷加载续完交易、重放战斗领奖、补触发离线 Buff。只证明正常停机后的持久与冷加载，不是崩溃 / 断电注入。
+- 同一脚本加 `ROOST_MMORPG_REAL=1`：`TestMMORPGRealPersistenceAcrossProcesses` 两个独立进程共用文件 WAL 与真实 Mongo，第一阶段停在交易单方确认后正常停机，第二阶段冷加载续完交易、重放战斗领奖，再手动发一次 `Sync_TickPlayerTimer`（业务时间 +1 小时）核对 Buff 节点经 WAL / Mongo 往返后按 Tick 到期。只证明正常停机后的持久与冷加载，以及恢复后的定时器节点可正常触发；不证明驱动在加载后自动投递，也不是崩溃 / 断电注入。
 - `scripts/test-mmorpg-scenes.sh`：在生成的 game-demo 里，一个 Manager 配两张地图的 Interest，经 demo 玩家 TCP 与框架 `frame.Receiver` 验证提交后新场景全量、旧场景删除、业务准入失败后 held 重试、旧 epoch 帧不被应用、断线后按权威归属重连恢复、空间视图不泄露私有字段（`TestMMORPGTwoScenesTCPTransferRetryAndReconnect`）。鉴权是测试替身，单进程、无外部依赖。
-- `scripts/test-mmorpg-cross-sid.sh`：对已启动的双 sid game-demo（十个服务进程 + 第二个 game 进程，真实 account / NATS / Mongo / Redis / etcd），验证真实会话错服在 EnterGame 被拒、两个方向的赠礼 Saga 全部完成、已领邮件逐封重领不加物品、无效收件人的 Saga 补偿、最终背包守恒。起栈不由脚本完成（步骤见手册第 5 节），同机两进程，不含跨机网络与故障注入。
+- `scripts/test-mmorpg-cross-sid.sh`：对已启动的双 sid game-demo（十个服务进程 + 第二个 game 进程，真实 account / NATS / Mongo / Redis / etcd），验证真实会话错服在 EnterGame 被拒、两个方向的赠礼 Saga 全部完成、已领邮件逐封重领不加物品、无效收件人的 Saga 补偿、最终背包守恒。起栈不由脚本完成（步骤见手册 §13），同机两进程，不含跨机网络与故障注入。
 
 不证明：玩家动态跨 sid 权威交接（Player 静态绑定 sid 的设计不变，赠礼协作不迁移 Player）、真实客户端引擎与渠道认证、目标玩家密度与长稳、跨机器故障；不能用 DAO 人数守恒代替 AOI 客户端视图验收。夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则；队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现，不因此算框架缺陷。
 

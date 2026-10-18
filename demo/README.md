@@ -50,18 +50,19 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 
 ```bash
 make dev-up      # deploy/dev/docker-compose.yaml：Mongo 副本集 rs0、NATS JetStream、Redis
-make dev-run     # deploy/dev/run.sh start：编译 bin/app，按 account → chat → mail → match → game 起五个进程，等每个 /readyz，
+make dev-run     # deploy/dev/run.sh start：编译 bin/app，先起九个托管服务（account → activity → chat → global → mail → match → platform → rank → session），
+                 # 最后起 game，共十个进程，等每个 /readyz，
                  # 再用 cmd/accountctl 把 sid 1000 注册进 account（否则 CreateRole 拒绝）；日志与 pid 在 .dev/
 make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数）
 make loadtest LOADTEST_COUNT=20   # 更多机器人；偶数，duel 两人一组
 make dev-stop
 ```
 
-每个服务的 `configs/service/config.<服务>.yaml` 有自己的 ops 端口（game 9100、account 9101、chat 9102、mail 9103、match 9104），五个进程可以同机共存；`make dev-status` 看谁在跑。
+每个服务的 `configs/service/config.<服务>.yaml` 有自己的 ops 端口（game 9100，托管服务按名字顺序从 9101 起：account 9101、activity 9102、chat 9103、global 9104、mail 9105、match 9106、platform 9107、rank 9108、session 9109），十个进程可以同机共存；`make dev-status` 看谁在跑。第二个 game 进程（sid 1001）用生成的 `deploy/dev/second-game.sh`，见 [MMORPG 手册 §13](../docs/framework/MMORPG-INTEGRATION.md)。
 
 没有 Docker、或本机 27017 / 4222 / 6379 已被别的东西占着（一个不带 `--replSet` 的 mongod、一个没开 JetStream 的 nats-server 都不行）时，
 用仓库的隔离环境（`wiring/scripts/integration/dataengine-env.sh up`：默认 Mongo 副本集 `roost-it` 27117–27119、NATS JetStream 14222–14224、Redis 16379，
-端口偏移与根目录见[该目录 README](../wiring/scripts/integration/README.md)），然后把五份配置改指向它：
+端口偏移与根目录见[该目录 README](../wiring/scripts/integration/README.md)），然后把十份配置改指向它：
 
 ```bash
 for f in configs/service/config.*.yaml; do sed -i '' \
@@ -86,12 +87,12 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 - chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello；
 - 机器人进程以非零码退出时打印 JSON 报告，最后一行点名违反的阈值；压测参数与阈值见[功能逐项说明 · 机器人压测](WALKTHROUGH.md#机器人压测--回归测试)。
 
-可选的观测：`deploy/dev/observability/` 是一套 Prometheus + Grafana（抓五个进程的 ops 端口与压测的 `-metrics-addr`，仪表盘 "Roost game-demo" 按链路分组），
+可选的观测：`deploy/dev/observability/` 是一套 Prometheus + Grafana（抓十个进程的 ops 端口与压测的 `-metrics-addr`，仪表盘 "Roost game-demo" 按链路分组），
 指标与链路步骤的对应写在同目录 `README.md`。它与会被重生成的 `deploy/dev/docker-compose.yaml` 分开，观测是可选的。
 
 ### 常见问题
 
-- **共享 NATS 上 RPC 大面积报 `bus: unsupported rpc response version 0`**：给每次实跑一个独立的 `nats.prefix`（五个进程一致）。共享的 JetStream 集群里若残留了
+- **共享 NATS 上 RPC 大面积报 `bus: unsupported rpc response version 0`**：给每次实跑一个独立的 `nats.prefix`（十个进程一致）。共享的 JetStream 集群里若残留了
   别的测试建的流、且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求、与真正的服务端抢先，于是读调用大面积失败、写调用偶尔成功
   （Wiring 集成测试留下的 `ROOST_IT_RPC_REQ_*` 流就是一例）。换前缀即可，无需删流。
 - **同一个 Mongo 上用同一个工程名重新生成后重跑，game 就绪后几秒 fail-stop：`dataengine outbox: hard backlog limit exceeded`**：库名与流名按工程名派生，

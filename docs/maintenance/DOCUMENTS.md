@@ -21,7 +21,7 @@
 
 ## docs/framework
 
-- [README.md](../framework/README.md)：模块目录（核心三块、次核心、其他包与专项契约）
+- [README.md](../framework/README.md)：模块目录（学习文档、核心三块、次核心、其他包与专项契约）
 - [PACKAGES.md](../framework/PACKAGES.md)：全包源码索引
 - [PACKAGE-REORGANIZATION.md](../framework/PACKAGE-REORGANIZATION.md)：包目录分类、Wiring 与 Service 收敛方案（随 v1.25.0 交付）
 - [RUNTIME_EXECUTION_MODEL.md](../framework/RUNTIME_EXECUTION_MODEL.md)：业务执行模型
@@ -33,6 +33,8 @@
 - [SYNC-OPTIMIZATION.md](../framework/SYNC-OPTIMIZATION.md)：Controller 生成边界与 Sync（Flush、AOI、Relation、Lockstep）局部优化及同机基准
 - [INTEREST-BLOCK-AOI.md](../framework/INTEREST-BLOCK-AOI.md)：Interest 的 Block AOI 与手写空间组件
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
+- [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
+- [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
