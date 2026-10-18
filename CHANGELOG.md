@@ -21,7 +21,7 @@
 - **问题**：配置表重载没有框架入口，只有 game-demo 在 gm.go 手写 `gm.config.reload`；重载结果只有版本号，只改 CSV 忘了 `roost generate` 时报 ok 并递增版本，数据没变。
 - **运维命令**：新增 `configdata.RegisterAdminCommands(reg, store)`，注册 `configdata.reload {reason?, dry_run?}`、`configdata.rollback {reason?}`、`configdata.status {}`；`wiring/configdata` 的 Mod 在 Provide 时自动挂到 App 的 admin 注册表（与 nats 挂 `bus.dlq.*` 一样，经 ops `/admin/execute`），所有带 configdata Mod 的工程都自带。game-demo 删除 `gm.config.reload`。修前回归：`admin registry lists [], want configdata.reload registered by the configdata Mod`。
 - **变化摘要**：Snapshot 在 finalize 时按成员记下与 Hash 同源的内容摘要与表行数；新增 `configdata.Compare`、`Changes` / `MemberChange`、`Store.ReloadWithChanges` / `RollbackWithChanges`、`ReloadResult` 与 `ReloadOutcome.Changes`。reload 回答 `version`、`previous`、`hash`、`changed`、`changes`（新增 / 删除 / 变化的表及 `rows_before` / `rows_after`）；内容完全没变时 `changed=false`、message 写明 no table changed 并提示 CSV 要先 `roost generate`，日志为 Warn。
-- **行为选择**：内容没变的重载仍发布并递增版本号（监听者依赖每次重载都执行，例如开关表用重载恢复 `gm.flag.set` 的进程内改动），只是明确标出；指标 `configdata.reload.total` 新增 `result="unchanged"`，原 `ok` 只计内容有变化（或首次加载）的成功。看板若用 `result="ok"` 统计成功次数，需要把 `unchanged` 一起算。
+- **行为选择（维护者 2026-10-18 决定 B）**：内容没变的重载仍发布并递增版本号（监听者依赖每次重载都执行，例如开关表用重载恢复 `gm.flag.set` 的进程内改动；版本号不是内容版本，内容是否变化看 `changed` / `hash`），只是明确标出；指标 `configdata.reload.total` 新增 `result="unchanged"`，原 `ok` 只计内容有变化（或首次加载）的成功。看板若用 `result="ok"` 统计成功次数，需要把 `unchanged` 一起算。
 - **测试**：`framework/configdata` 的 `TestReloadReportsWhichTablesChanged`、`TestAdminCommandsReloadReportChangesAndStatus`，`wiring/configdata` 的 `TestConfigDataModServesReloadCommandsOnTheAdminRegistry`；真实进程经 ops `/admin/execute` 实测见 KNOWN-LIMITS 第五轮。
 - 文档：guide/07-config §5（运维重载）、impl/07-config、OBSERVABILITY、CFGGEN_META、PROJECT_GENERATOR、game-demo WALKTHROUGH 与 observability README。
 
@@ -37,7 +37,17 @@
 - **修复**：领奖事务在同一笔事务里给新持久字段 `PlayerDao.DungeonClears[赛季]` 加一（只在付款时），首次领取与重放都返回 `ClaimResult.Clears`；端点改用 `UpdateMax`、不带 requestID 提交通关数快照。排行与奖励同一个准入（执行时间判窗口），不新增第三本有期限的账本；重复、并发、乱序快照与排行失败后的补报都只计一次。`handlerClaimDungeon` 多一个 `season` 参数，`ranking.ClearRequestID` / `ClearScore` 换成 `ClearsScore(playerID, clears)`。
 - **测试**：模板 `TestDungeonClearsBoardCountsEachRunOnceRealRedis`（挂入 `scripts/test-demo-generated.sh`）与 `TestTheClearCountMovesOnlyWhenARunIsPaid`；审查附的探针脚本 `scripts/review-dungeon-ranking.sh` 已由它们取代并删除。
 - **升级**：线上尚未部署。旧 demo 的 `clears` 榜是累加值，升级时清空该榜；玩家通关数从 0 开始。
-- **同类待决定**：活动贡献按调用时钟选窗口，同一局跨窗口重放会再计一次，见 KNOWN-LIMITS“game-demo 活动贡献”。
+- **通关数按赛季计（维护者 2026-10-18 决定）**：与榜的 Season 身份一致，换季不带旧数；不做终身累计。
+- **同类**：活动贡献跨窗口重放会再计一次，已按维护者决定修复，见下一节。
+
+### game-demo 活动贡献：只在奖励首次付款时贡献，跨窗口重放不再重复计分（维护者 2026-10-18 决定方案 A）
+
+- **缺陷**：`FinishDungeon` 在领取与重放时都调用 `ActivityRunner.Contribute`；Contribute 按调用时刻的业务时钟选窗口（300 秒一个），协调器按（窗口, 玩家, `clear:<runID>`）去重。同一局在 4 小时领奖窗口内跨过窗口边界后重放，落进新窗口、键不同，再加一分（一局最多 48 个窗口，影响按名次发的活动邮件）。修前模板回归原文：`first window race-1792292100 score=1; replay of the same run in window race-1792292400 score=1 activity="race-1792292400"; want 0 and no window (a replay contributes nothing)`。
+- **修复**：端点只在 `ClaimResult.Claimed`（权威领奖事务里真正付款）时贡献，与通关数快照同一个事实驱动；重放不贡献，响应不带 `ActivityID`。排行仍在重放时提交（它是单调快照，重交无害）。
+- **代价（已决定接受）**：付款之后、贡献之前崩溃或协调器调用失败，这一分永久丢失，重放不补；端点打 Warn 日志写明不会重试。活动本来是尽力而为，补报若落到后来的窗口也记错了窗口。
+- **测试**：模板 `game/controllers/player/finish_dungeon_test.go` 新增 `TestAReplayContributesNothingToTheActivity`（无外部依赖，正式端点 + 生成 Sender + Nest + 正式 `svcactivity.Service`、内存版本存储与可拨时钟）：边界前一秒首次付款记 1 分、跨边界重放新窗口为 0、新窗口新一局照常记 1 分、付款时贡献失败后重放不补。
+- **同类排查**：demo 里事务外的累计写入逐一核对——排行（`UpdateMax` 通关数快照）、活动结算榜（`ZADD GT` 协调器累计快照）是单调快照；World 经验、通关数在领奖事务内只随付款变化；邮件领取、购买发货、送礼、升级邮件、活动结算邮件都有账本或请求 ID。World 的 `PlayersEntered` 按每次成功的 EnterGame 计（含客户端丢回复后的重试），语义是登录次数，不随付款，不改。
+- 文档：KNOWN-LIMITS“game-demo 活动贡献”、game-demo WALKTHROUGH 排行榜一节、ActivityRunner.Contribute 与端点注释、loadtest 场景注释。
 
 ### game-demo 活动结算榜：乱序回复不回退累计分
 

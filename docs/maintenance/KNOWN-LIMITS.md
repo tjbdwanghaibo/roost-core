@@ -108,9 +108,9 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 **升级**：线上尚未部署，不做兼容：已用旧 demo 跑出的 `clears` 榜是 `UpdateAdd` 累加值，与新的通关数快照不同源，升级时清空该榜（rank 前缀下 `clears` 榜的键），玩家通关数从 0 开始。
 
-**边界**：UpdateMax 遇到相同值保留较早的 tie，所以补报的那一分在同分时按补报时间而不是原通关时间排序。累计值按赛季而不是终身划分是本次的选择（见下“需要维护者决定”）。
+**边界**：UpdateMax 遇到相同值保留较早的 tie，所以补报的那一分在同分时按补报时间而不是原通关时间排序。累计值按赛季而不是终身划分（见下“维护者决定”）。
 
-**需要维护者决定**：通关数按赛季（已实施，推荐：与榜的 Season 身份一致，换季不带旧数）还是终身（一个字段，换季需另做初始化）。
+**维护者决定（2026-10-18，按推荐）**：通关数按赛季计（已实施）。理由：与榜的 Season 身份一致，换季不带旧数；终身累计要一个字段并在换季时另做初始化，不采用。
 
 ## game-demo 活动结算榜：旧累计回复覆盖新分数（已修复）
 
@@ -127,16 +127,23 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **边界**：`ZADD GT` 需要 Redis 6.2 及以上（共享隔离环境为 8.x）。只修复成功回复乱序导致的回退。Redis 写失败仍只记日志，协调器与结算索引不是一个事务，没有新增自动对账；Redis Cluster、跨机延迟与长稳未在这条回归中验证。临时接法也应使用原子单调写，不能在应用层先读再无条件写；业务将来允许扣分时，需要改用版本化快照或其他明确的顺序方案。
 
-## game-demo 活动贡献：同一局在后来的窗口重放会再计一次（已确认，未修复，需要维护者决定）
+## game-demo 活动贡献：同一局在后来的窗口重放会再计一次（已修复：只在首次付款时贡献）
 
-**类别与基线**：demo 接入问题，与上面副本排行同一类（去重范围没有覆盖重放的准入窗口），在本轮复核副本排行时发现，`cac62833` 主线模板。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 在领取与重放时都调用 `ActivityRunner.Contribute`；[Contribute](../../demo/internal/service/game/activity.go.tmpl) 按**调用时的业务时钟**选窗口（300 秒一个），协调器按（窗口, 玩家, `clear:<runID>`）去重。同一局在领奖窗口（4h）内、跨过窗口边界后重放，落进新窗口，键不同，再加一分；理论上一局最多可进 48 个窗口，并影响按名次发的活动邮件。
+**类别与基线**：demo 接入问题，与上面副本排行同一类（去重范围没有覆盖重放的准入窗口），在本轮复核副本排行时发现，`cac62833` 主线模板。[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) 原来在领取与重放时都调用 `ActivityRunner.Contribute`；[Contribute](../../demo/internal/service/game/activity.go.tmpl) 按**调用时的业务时钟**选窗口（300 秒一个），协调器按（窗口, 玩家, `clear:<runID>`）去重。同一局在领奖窗口（4h）内、跨过窗口边界后重放，落进新窗口，键不同，再加一分；理论上一局最多可进 48 个窗口，并影响按名次发的活动邮件。
 
-**证据**：生成工程里用正式协调器（内存版本存储）与正式 ActivityRunner 的探针：先在窗口 W 贡献 `run-1`，时钟前进 300 秒再贡献 `run-1`，输出 `first window race-1792288200 score=1; replay of the same run in window race-1792288500 score=1 err=<nil>`（第二个窗口也记了 1 分）。探针只在临时工程里跑，未加入仓库。
+**证据**：登记时的探针（生成工程里正式协调器 + 正式 ActivityRunner，临时工程，未入库）输出 `first window race-1792288200 score=1; replay of the same run in window race-1792288500 score=1 err=<nil>`。修复时的模板回归（正式端点，见下）修前原文：`first window race-1792292100 score=1; replay of the same run in window race-1792292400 score=1 activity="race-1792292400"; want 0 and no window (a replay contributes nothing)`。
 
-**可选修法**：
+**维护者决定（2026-10-18，按推荐 A）**：只在奖励首次付款时贡献，与副本排行的做法一致——贡献由权威领奖事务里“真正付款”（`ClaimResult.Claimed`）这一事实驱动，重放（`Claimed=false`）不贡献。未采用的 B：按这局的结束时间选窗口、重放落回原窗口由协调器去重，并让 Contribute 只为当前窗口自动开窗、拒绝已关闭窗口的贡献（保留窗口内补报，但改动面更大，要另定协调器对已结束活动的拒绝语义与 30 分钟预留 TTL 的关系）。
 
-- **A（推荐）**：只在奖励首次付款（`result.Claimed`）时贡献。重放永不贡献；代价是“奖励已提交、贡献没写进去”时这一分不再补（活动本来是尽力而为，且补报若落到后来的窗口，本来就记错了窗口）。
-- **B**：按这局的结束时间（session 的 `FinishedAtUnix`）选窗口，重放落回原窗口由协调器去重；同时 Contribute 只能为当前窗口自动开窗（否则重放会把已结算、已删除的旧窗口重新打开再结算一次），已关闭窗口的贡献被拒绝。保留窗口内补报，改动面更大，需要确认协调器对已结束活动的拒绝语义与 30 分钟预留 TTL 的关系。
+**修复**：端点在 `!result.Claimed` 时于排行提交之后直接返回，不调用 Contribute，响应不带 `ActivityID`。排行仍在重放时提交（它提交的是事务内通关数的快照，`UpdateMax` 重交无害）。Contribute 的注释写明协调器去重只在同一窗口内成立、调用方须每局只贡献一次。
+
+**代价（已接受，写在端点注释、WALKTHROUGH 与 CHANGELOG）**：付款之后、贡献之前进程崩溃或协调器调用失败，这一分永久丢失，重放不补；端点打 Warn 日志并写明不会重试。活动是尽力而为，补报若落到后来的窗口本来就记错了窗口。
+
+**回归**：模板 [finish_dungeon_test.go](../../demo/game/controllers/player/finish_dungeon_test.go.tmpl) 的 `TestAReplayContributesNothingToTheActivity`（无外部依赖，生成工程 `go test ./...` 即运行）：正式 Controller、生成 Sender、Nest 与 Player / World handler，正式 `svcactivity.Service`（内存版本存储，时钟可拨）；测试内的贡献方与正式 `Contribute` 走同一条协调器路径（`gameactivity.ID` 选窗口、`gameactivity.Key`、`ProgressRequestID`、窗口不存在时开窗再记），正式 Runner 在导入本包的 internal/service 包里，不能直接构造。断言：边界前一秒首次付款在窗口 W 记 1 分；时钟前进 300 秒重放同一局，新窗口为 0 且不报窗口；新窗口里新一局照常记 1 分；付款时贡献失败后重放不补。
+
+**同类排查（事务外、可能被重放重复提交的累计写入）**：副本排行（`UpdateMax` 通关数快照）与活动结算榜（`ZADD GT` 协调器累计快照）是单调快照，重交不加分；World `ExpGranted`、`DungeonClears` 在领奖事务内只随付款变化；邮件领取、购买发货（platform 回执 + Player 账本）、送礼 saga（回执）、升级邮件与活动结算邮件（请求 ID）都有账本或幂等键。World `PlayersEntered` 由每次成功的 EnterGame 加一（客户端丢回复后的重试也算），语义是登录次数而不是首次付款，不改；`MatchesFormed` 每次组队 Commit 后加一，没有重放路径。没有发现其他需要按“只在首次付款时”处理的写入。
+
+**边界**：只覆盖 demo 端点；协调器本身仍按窗口去重，业务若在别处直接调用 Contribute，须自己保证每局一次。
 
 ## 新用户试用第五轮（2026-10-17 登记；三项均已修复）
 
@@ -164,7 +171,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 **真实进程实测（2026-10-18）**：`-mods configdata` 新工程加 `shop_item` 表（price `min:"1"`），打开 `ops.admin_enabled`，经 `/admin/execute`：`GET /admin/commands` 返回 `["configdata.reload","configdata.rollback","configdata.status"]`；只改 CSV 后 reload 返回 `"changed":false,"changes":{"unchanged":1}`、version 1→2 并带上述 message；`roost generate` 后 dry_run 报 `shop_item` 变化（2 行→2 行）且不发布，reload 发布 version 4；把一行 price 改 0 的 JSON 被整次拒绝（`table shop_item row 2 (key 2) field price: min: value 0 is below min=1`），旧快照继续服务；rollback 回到 version 2 并报 `shop_item` 变化；`/metrics` 为 `configdata_reload_total{result="ok"} 2`、`{result="unchanged"} 1`、`{result="failed"} 1`。
 
-**需要维护者决定**：内容没变的重载是否递增版本。已实施 B（推荐）：照常发布、递增版本，但回答、日志与指标明确标“没有变化”。理由：监听者依赖每次重载都执行——game-demo 的开关表监听者用重载把 `gm.flag.set` 的进程内改动恢复成表里的值（`gm.flag.set` 的说明就是这么写的），跳过发布会让它静默失效；版本号本来就不是内容版本（失败的构建也会占用一个号），内容是否变化看 `changed` / `hash`。A：内容没变时不发布、不递增、监听者不跑，回答“没有变化”；代价是上述“重载恢复表值”的用法失效，需要另给 featureflag 一个“恢复表值”的入口。
+**维护者决定（2026-10-18，按推荐 B）**：内容没变的重载照常递增版本（已实施）：照常发布、递增版本，但回答、日志与指标明确标“没有变化”。理由：监听者依赖每次重载都执行——game-demo 的开关表监听者用重载把 `gm.flag.set` 的进程内改动恢复成表里的值（`gm.flag.set` 的说明就是这么写的），跳过发布会让它静默失效；版本号本来就不是内容版本（失败的构建也会占用一个号），内容是否变化看 `changed` / `hash`。未采用的 A：内容没变时不发布、不递增、监听者不跑，回答“没有变化”；代价是上述“重载恢复表值”的用法失效，需要另给 featureflag 一个“恢复表值”的入口。
 
 ## 新用户试用第六轮：待修问题（2026-10-18 登记；1、3～6 已修复，2 转 DESIGN-TODO D12 待决定）
 

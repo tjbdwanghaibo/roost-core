@@ -40,7 +40,7 @@ secret:optional 表示敏感值允许为空，非空生产值仍不能使用 dev
 | `configdata.rollback` | `reason?` | 回到上一代（只保留一级），字段同上 |
 | `configdata.status` | 无 | 当前 `version`、`hash`、`loaded_at`、`dir` 与各表行数 |
 
-重载只读 `config_data.dir` 下的 JSON。改了 `configs/table` 下的 CSV 要先 `roost generate` 生成 JSON，再重载；忘了这一步时重载照样成功，但回答 `changed=false` 并在 `message` 里写明“no table changed”，日志是一条 Warn，指标记 `configdata.reload.total{result="unchanged"}`。内容没变的重载仍然发布新版本号：版本号不是内容版本（失败的构建也会占用一个号），而监听者依赖每次重载都执行——例如 game-demo 的开关表用重载把 `gm.flag.set` 的进程内改动恢复成表里的值。判断数据是否真的变了，看 `changed` / `changes` 或 `hash`。违反表规则（必填、唯一、范围、枚举、引用）的数据整次拒绝，错误写明表 / 行 / 字段 / 规则，旧快照继续服务。
+重载只读 `config_data.dir` 下的 JSON。改了 `configs/table` 下的 CSV 要先 `roost generate` 生成 JSON，再重载；忘了这一步时重载照样成功，但回答 `changed=false` 并在 `message` 里写明“no table changed”，日志是一条 Warn，指标记 `configdata.reload.total{result="unchanged"}`。内容没变的重载仍然发布新版本号（维护者 2026-10-18 决定，方案 B）：版本号不是内容版本（失败的构建也会占用一个号），而监听者依赖每次重载都执行——例如 game-demo 的开关表用重载把 `gm.flag.set` 的进程内改动恢复成表里的值。判断数据是否真的变了，看 `changed` / `changes` 或 `hash`。违反表规则（必填、唯一、范围、枚举、引用）的数据整次拒绝，错误写明表 / 行 / 字段 / 规则，旧快照继续服务。
 
 ```bash
 curl -s -H 'X-Admin-Token: <token>' -X POST http://127.0.0.1:9100/admin/execute \

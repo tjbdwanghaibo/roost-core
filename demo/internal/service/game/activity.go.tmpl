@@ -339,8 +339,13 @@ func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID str
 // WHICH window it went into.
 //
 // The request id is the dungeon run, so a retried contribution for a run that
-// already counted is refused by the coordinator's reservation rather than
-// counted twice — the same anchor the clear's own reward uses.
+// already counted IN THE SAME WINDOW is refused by the coordinator's
+// reservation rather than counted twice. That deduplication is per window:
+// the window comes from the clock at the moment of the call, so the same run
+// contributed again after a boundary is a new key and counts again. The
+// caller therefore contributes exactly once per run — finish_dungeon calls
+// this only from the claim transaction that paid the reward
+// (ClaimResult.Claimed), never from a replay.
 //
 // The returned window id is not a convenience. A window lasts
 // gameactivity.WindowSeconds and both this call and Standing derive their id

@@ -121,17 +121,28 @@ func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context,
 	if _, err := controller.Ranking().Submit(context.Context(), board, ranking.ClearsScore(context.PlayerID, result.Clears), svcrank.UpdateMax, ""); err != nil {
 		slog.Warn("finish_dungeon: clear not counted on the board", "player_id", context.PlayerID, "run_id", run.ID, "clears", result.Clears, "err", err)
 	}
-	// The same clear also contributes to the current server-wide window, for
-	// the same reason and with the same anchor: the coordinator deduplicates
-	// on the RUN id, so a retried endpoint call contributes once even though
-	// this is a second, separate service call. It is best effort — a window
-	// that missed a point is not a failed dungeon — and it is not gated on
-	// result.Claimed either, because a replay that finds the reward already
-	// paid is exactly when the contribution may still be missing.
+	// The same clear also contributes to the current server-wide window —
+	// but only from the call that PAID it (result.Claimed), unlike the board
+	// above. The board takes a snapshot of a count the transaction keeps, so
+	// resubmitting it is harmless; a contribution is an increment into
+	// whichever window the clock is in when it is made, and the coordinator
+	// deduplicates per (window, player, run). A replay inside the 4-hour claim
+	// window but past a 5-minute activity boundary lands in a new window under
+	// a new key and would count again — one run could score in up to 48
+	// windows. So the fact that drives the contribution is the payment, the
+	// same fact that drives the clear count (maintainer decision 2026-10-18).
+	//
+	// The cost, deliberately accepted: a crash or a failed call between the
+	// payment and this contribution loses the point for good — no replay
+	// brings it back. The activity is best effort, and a point refilled later
+	// would have been booked in the wrong window anyway.
+	if !result.Claimed {
+		return response, nil
+	}
 	if runner, runnerErr := controller.Activities(); runnerErr != nil {
-		slog.Warn("finish_dungeon: activity runner unavailable", "player_id", context.PlayerID, "err", runnerErr)
+		slog.Warn("finish_dungeon: activity runner unavailable; the clear's point is not contributed and will not be retried", "player_id", context.PlayerID, "run_id", run.ID, "err", runnerErr)
 	} else if activityID, _, err := runner.Contribute(context.Context(), context.PlayerID, run.ID); err != nil {
-		slog.Warn("finish_dungeon: clear not contributed to the activity",
+		slog.Warn("finish_dungeon: clear not contributed to the activity; a replay will not retry it",
 			"player_id", context.PlayerID, "run_id", run.ID, "activity_id", activityID, "err", err)
 	} else {
 		// Which window took the point. A caller that reads its standing a

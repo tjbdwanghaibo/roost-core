@@ -639,7 +639,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "RankTop", Group: "game", Handler: "player"}, why: "reading a leaderboard: a bounded page, and the board is the server's choice"},
 		{write: "protocol/def/rank_top.go", why: "the board page on the wire, with this player's own rank alongside it"},
 		{write: "game/controllers/player/rank_top.go", why: "Page + Rank through the typed rank client"},
-		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint and rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit"},
+		{write: "game/controllers/player/finish_dungeon_test.go", why: "a clear counts once on the board, through the real endpoint and rank store on real Redis: a replay after more than the rank ring's 8 later clears, concurrent replays and a refilled failed submit; and a clear contributes to the activity only from the call that paid it: a replay after the 300-second window rolls scores nothing in the new window, and a contribution that failed at payment is not refilled (no external dependency)"},
 		{add: &AddOptions{Kind: "skill", Name: "Fireball"}, why: "one skill definition and the embedded catalog"},
 		{write: "game/skills/fireball.json", why: "the definition with its contract written down; compiled at startup"},
 		{add: &AddOptions{Kind: "protocol", Name: "SkillCatalog", Group: "game", Handler: "player"}, why: "what the server compiled"},
