@@ -97,8 +97,8 @@ const overdueDelay = time.Millisecond
 // Host 是一个实体实例的定时器宿主（生成组件持有一个）。除 OnDestroy 外的方法都只能在实体的 Nest 锁内调用
 // （Nest handler 里，或加载 / 新建的初始化阶段）；它们读写的是 DAO，不是 Host 自己的状态。
 //
-// 每次调用从 DAO 现建一个 timer.Scheduler、钩子写回 DAO、用完丢弃（与 game-demo 原 World TimerComponent
-// 同一形状），所以事务回滚就是 DAO 的回滚，没有要撤销的内存堆。调用结束时把新的最早期限报告给驱动：
+// 最外层调用从 DAO 现建一个 timer.Scheduler、钩子写回 DAO、用完丢弃；Tick 回调中的组件操作复用这次调用的
+// 调度视图，不从中间 DAO 重建。因此事务回滚就是 DAO 的回滚，没有跨事务的内存堆。调用结束时报告最早期限：
 // 在事务里经 nest.AfterCommit（提交后才更新索引，回滚的事务不改索引），不在事务里时立即报告。
 type Host struct {
 	driver   *Driver
@@ -111,6 +111,9 @@ type Host struct {
 	loadedAt time.Time
 	// seq 只在实体锁内递增；它不是事务状态（回滚不退回），只给驱动排定报告的先后。
 	seq uint64
+	// active 只在当前 Tick 的调用栈内存在。回调通过组件操作定时器时共享这个调度视图，
+	// 避免从中间 DAO 状态重建第二个堆；退出或 panic 都清掉，不跨事务保存状态。
+	active *timer.Scheduler
 }
 
 // NewHost 为一个实体实例构造宿主；register 登记业务回调（生成组件传入业务文件里的登记函数）。
@@ -248,13 +251,21 @@ func (host *Host) Tick(now time.Time) int {
 	}
 	now = time.UnixMilli(now.UnixMilli())
 	scheduler := host.scheduler(now)
+	previous := host.active
+	host.active = scheduler
+	defer func() { host.active = previous }()
 	scheduler.Tick(now)
+	host.active = previous
 	host.settle(scheduler, now)
 	return len(host.store.SavedTimers())
 }
 
 // scheduler 从 DAO 建本次调用的调度器，时钟固定为 now：一次调用里的期限都从同一个时刻算起。
 func (host *Host) scheduler(now time.Time) *timer.Scheduler {
+	if host.active != nil {
+		host.active.SetClock(func() time.Time { return now })
+		return host.active
+	}
 	scheduler := timer.NewScheduler(host.owner.ID(), host.store.TimerSeed(), host.store.SavedTimers(), host.persist)
 	for timerType, handler := range host.handlers {
 		scheduler.RegisterHandler(timerType, host.wrap(handler))
@@ -291,6 +302,10 @@ func (host *Host) persist(change timer.ChangeType, node timer.Node) {
 
 // settle 把调度器剩下的最早期限报告给驱动。存量里有非法节点时报告 now：它们只能由事务内的 Tick 清理。
 func (host *Host) settle(scheduler *timer.Scheduler, now time.Time) {
+	// 内层组件操作只改当前调度视图，最外层 Tick 落完所有节点后统一报告。
+	if host.active != nil {
+		return
+	}
 	due := scheduler.NextTime()
 	if scheduler.NeedsCleanup() {
 		due = now
