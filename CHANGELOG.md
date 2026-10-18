@@ -4,11 +4,6 @@
 
 ## [Unreleased]
 
-### Sender 参数后缀仍需避让 handler 名称
-
-- 补齐参数改名后的二次碰撞：`handlerTradeArg(target, handlerNameTrade string)` 的参数被改为 `handlerNameTradeArg` 后再次遮蔽当前 handler 的生成常量，Sender 编译失败。候选名称现在也避让该文件所有实际生成的 handler 名称；参数顺序、类型和协议不变。
-- 回归在 `TestSenderNamesDoNotCollideWithBusinessArguments`，修前类型检查原文：`cannot use handlerNameTradeArg (variable of type string) as nest.HandlerName value in argument to client.Dispatch`。
-
 ### game-demo World 定时器恢复手写（维护者 2026-10-18）
 
 - **决定（维护者原话）**：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不能生成 demo。D11（`5581deeb`）把 World 迁到了 `roost add timer` 的生成产物，现撤回；`roost add timer` 生成器本身不变，新手工程照常用。

@@ -138,5 +138,3 @@ step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写
 8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback，并验证只有 Data Engine 一条写路径。
 
 `durability=pipelined` 自 v1.23.1 起可由标记生成；生成代码不绕过 Nest 的 committer 能力检查和 handler allowlist。
-
-Sender 局部参数改名的后缀候选同样避让实际生成的 `handlerName…` 常量，避免加 `Arg` 后再次遮蔽；handler 的业务签名与参数顺序不变。
