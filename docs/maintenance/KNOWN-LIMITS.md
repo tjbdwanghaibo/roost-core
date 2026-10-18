@@ -248,7 +248,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 基线 `63b63fa8`，Nest 生成器问题，SLG 接入实践发现。handler 参数名原样带进 Sender，与 Sender 自己的路由参数、局部变量、导入包、预声明标识符或包级 `handlerName…` 变量同名时生成物编不过：取消建造 `handlerSLGCancel(target, id int64)` 生成 `Sync_SLGCancel(ctx context.Context, id int64, id int64)`，报 `id redeclared in this block`；参数名 `nil` / `int64` / `handlerName<X>` 等遮蔽类冲突能通过语法解析、类型检查才失败。
 
-修复：只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有的 `idArg` 等名字；handler 元数据、参数顺序、类型与线协议不变。回归 `TestSenderNamesDoNotCollideWithBusinessArguments`（对生成的 sender / syncsender 做类型检查），修前原文 `sender has colliding generated declarations: … id redeclared in this block (and 12 more errors)`。旧版本可在业务 handler 里把参数改名（如 `taskID`）暂避，不需要改协议。
+修复：只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有的 `idArg` 等名字；handler 元数据、参数顺序、类型与线协议不变。回归 `TestSenderNamesDoNotCollideWithBusinessArguments`（对生成的 sender / syncsender 做类型检查），修前原文 `sender has colliding generated declarations: … id redeclared in this block (and 12 more errors)`。旧版本可在业务 handler 里把参数改名（如 `taskID`）暂避，不需要改协议。2026-10-18 审查补两处遗漏：加后缀的结果正好是本文件另一 handler 的 `handlerName<X>` 常量（`handlerNameTrade` → `handlerNameTradeArg`），以及 `Sync_` 返回类型断言用到的预声明类型名（参数名 `string` / `float64`，修前原文 `string (parameter) is not a type`）；现在后缀候选避让本文件全部生成常量，保留名改为全部预声明标识符，见 CHANGELOG 同条。
 
 ## SLG 接入验收的范围（2026-10-18）
 

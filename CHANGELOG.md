@@ -56,6 +56,7 @@
 
 - 修复合法的 `handlerCancel(target, id int64)` 生成 `Sync_Cancel(ctx, id int64, id int64)` 而无法编译（`id redeclared in this block`），以及参数名 ctx / client / err / ret / ok / ids / groupIDs、包名（nest / context / time / 类型包别名）、预声明标识符（int64 / any / error / bool / nil / len）或 `handlerName…` 遮住生成代码引用的名字而编不过的问题。只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有同名参数；handler 元数据、参数顺序、类型与线协议不变。
 - 测试：`codegen/internal/nest` 的 `TestSenderNamesDoNotCollideWithBusinessArguments` 对生成的 sender / syncsender 做 go/types 类型检查（单实体、多实体、多返回值、导入别名）。文档：`codegen/docs/NEST_RUNTIME.zh-CN.md`。
+- 补两处遗漏（2026-10-18 审查）：① 加后缀的结果本身可能正好是本文件另一个 handler 的常量——`handlerTradeArg(target, handlerNameTrade string)` 的参数改成 `handlerNameTradeArg` 后遮住 TradeArg 自己的常量，修前类型检查原文 `cannot use handlerNameTradeArg (variable of type string) as nest.HandlerName value in argument to client.Dispatch`；后缀候选现在避让本文件全部生成的 `handlerName<X>`。② 预声明标识符只列了方法体固定用到的六个，`Sync_` 还按返回类型做类型断言，`handlerLabel(target, string, float64 int64, …) (string, float64, error)` 修前原文 `string (parameter) is not a type`、`float64 (parameter) is not a type`；现在避让全部预声明标识符（`go/types` 的 `Universe`）。回归仍在同一测试。
 
 ### 慢连接测试：按实际消费和关闭状态制造背压
 
