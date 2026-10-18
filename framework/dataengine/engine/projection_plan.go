@@ -31,6 +31,13 @@ func isLocalBatchRecord(record coredata.CommitRecord) bool {
 	return true
 }
 
+// projectsOnFastPath 报告记录是否走 Store 的单文档快路：只有一个本地 mutation、没有 effect / 回执 / Remote 写。
+// 快路不写事务标记，幂等只靠文档上的末次事务 ID；投影器据此决定必须立即 checkpoint（见 ReplayPass），
+// MongoStore.ProjectFenced 用同一判定选择快路，两处不能各写一份条件。
+func projectsOnFastPath(record coredata.CommitRecord) bool {
+	return len(record.Mutations) == 1 && isLocalBatchRecord(record)
+}
+
 func saturatingAdd(a, b int) int {
 	if b > 0 && a > math.MaxInt-b {
 		return math.MaxInt

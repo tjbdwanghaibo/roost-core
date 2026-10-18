@@ -34,7 +34,9 @@ type ProjectionStore interface {
 }
 
 // BatchProjectionStore 支持本地多 DAO 事务批量投影；必须保留每笔事务的持久身份，
-// 保证后续版本写入后仍能重放已成功的批次和多 mutation 事务。
+// 保证后续版本写入后仍能重放已成功的批次、多 mutation 事务与带 effect / 回执 / Remote 写的记录
+// （重放返回首次投影的结论，不重新判定 lease fence、不重复暂存）。Projector 据此对这些记录合并 checkpoint；
+// 只有单 mutation 快路记录（projectsOnFastPath）不在此列，仍逐条确认。
 type BatchProjectionStore interface {
 	ProjectionStore
 	ProjectBatch(context.Context, []coredata.CommitRecord) error

@@ -39,9 +39,11 @@ func TestMultiBatchCapabilityAndSpecialBoundaries(t *testing.T) {
 		if n, err := p.ReplayPass(context.Background()); n != 4 || err != nil {
 			t.Fatalf("n=%d err=%v", n, err)
 		}
+		// 非批量 Store 不承诺重放安全，逐单元确认；批量 Store 下特殊记录（effect）只是分段边界，
+		// checkpoint 与前后的记录一起按阈值合并，这里间隔 1 小时，只在本轮结束时确认一次。
 		want := []string{"project:" + records[0].ID.String(), "ack", "project:" + records[1].ID.String(), "ack", "project:" + records[2].ID.String(), "ack", "project:" + records[3].ID.String(), "ack"}
 		if capable {
-			want = []string{"batch:2", "ack", "project:" + records[2].ID.String(), "ack", "project:" + records[3].ID.String(), "ack"}
+			want = []string{"batch:2", "project:" + records[2].ID.String(), "project:" + records[3].ID.String(), "ack"}
 		}
 		if !slices.Equal(*events, want) {
 			t.Fatalf("capable=%v events=%v want=%v", capable, *events, want)

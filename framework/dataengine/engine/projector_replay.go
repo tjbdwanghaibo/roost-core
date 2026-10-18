@@ -95,13 +95,6 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		}
 		segment := segments[segmentIndex]
 		segmentIndex++
-		special := !isLocalBatchRecord(segment.records[0])
-		if special {
-			if err := checkpoint(); err != nil {
-				ackFailed = true
-				return processed, err
-			}
-		}
 		// 批量写报告无法自行判定结果（ErrProjectionBatchNeedsPerRecord）时锁定 perRecord：
 		// 本段剩余记录改走单条路径，由它比较已存版本与 _last_tx，区分已应用的重放和
 		// 真实冲突。锁定而不是只重试失败单元，避免反复发出注定再次退回的批量写。
@@ -141,10 +134,13 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			}
 			projector.projected.Add(uint64(len(unit.records)))
 			processed += len(unit.records)
-			// 单 mutation 的 Project 快路只保存文档末次事务 ID。若后续版本
-			// 覆盖它，旧记录便无法判定幂等，因此仍立即 ack；非批量 Store 也逐笔确认。
-			replaySafe := batchCapable && (len(unit.records) > 1 || len(unit.records[0].Mutations) > 1)
-			if special || !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
+			// checkpoint 只决定崩溃后从哪里重放，进程外没有读者；已投影未确认的记录靠持久事务标记幂等重放
+			// （批次、多 mutation、effect / 回执 / Remote 记录都先查标记，标记与业务写同一 Mongo 事务提交，
+			// 重放时不重新判定 lease fence、不重复暂存回执与 effect）。所以这些单元按条数 / 间隔合并确认。
+			// 例外：单 mutation 快路只保存文档末次事务 ID，后续版本覆盖它后旧记录无法判定幂等，必须立即确认；
+			// 非批量 Store 没有承诺这种重放安全，也逐单元确认。
+			replaySafe := batchCapable && (len(unit.records) > 1 || !projectsOnFastPath(unit.records[0]))
+			if !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
 				if err := checkpoint(); err != nil {
 					ackFailed = true
 					return processed, err

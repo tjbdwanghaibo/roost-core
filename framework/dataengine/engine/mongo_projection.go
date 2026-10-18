@@ -38,7 +38,8 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	if mixesRemoteWithLeaseFence(record) {
 		return false, ErrRetiredRemoteLeaseFenceRecord
 	}
-	if len(record.Mutations) == 1 && len(record.Effects) == 0 && len(record.Receipts) == 0 && record.Mutations[0].Remote == nil {
+	// 快路不写事务标记，Projector 对它立即 checkpoint；其余记录都在下面的事务里先查标记，重放幂等。
+	if projectsOnFastPath(record) {
 		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
 		return false, err
 	}
