@@ -1,0 +1,184 @@
+package handler
+
+import (
+	"context"
+	player "example.com/mmorpg-practice/game/entities/player"
+	scene "example.com/mmorpg-practice/game/entities/scene"
+	sender "example.com/mmorpg-practice/game/handler/syncsender"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"sync"
+	"testing"
+)
+
+type mmoGetter map[int64]entity.IThreadSafeEntity
+
+func (g mmoGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if value := g[id]; value != nil {
+		return value, nil
+	}
+	return nil, fmt.Errorf("unknown entity %d", id)
+}
+func (g mmoGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	values := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		values[i] = value
+	}
+	return values, nil
+}
+
+// 正式 Nest 提交路径的替身；本场景不声称 WAL fsync / Mongo 验收，真实存储另跑标准生成工程脚本。
+type mmoCommitter struct{}
+
+func (mmoCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type mmoFixture struct {
+	engine  *nest.NestMgr
+	players [2]*player.Player
+	scenes  [2]*scene.Scene
+}
+
+func newMMOFixture(t *testing.T) *mmoFixture {
+	t.Helper()
+	player.RegisterEntity()
+	scene.RegisterEntity()
+	RegisterMmoTasksNestHandlers()
+	f := &mmoFixture{}
+	g := mmoGetter{}
+	for i := range 2 {
+		pid, _ := entity.BuildEntityID(int64(800+i), player.EntityKindPlayer)
+		sid, _ := entity.BuildEntityID(int64(800+i), scene.EntityKindScene)
+		p, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: pid, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: sid, Kind: scene.EntityKindScene})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.players[i] = p.(*player.Player)
+		f.scenes[i] = s.(*scene.Scene)
+		g[pid] = p
+		g[sid] = s
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mmoCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.engine.Shutdown(context.Background()) })
+	init := nest.NewHandlerName("mmo_init_" + t.Name())
+	nest.MustRegisterHandlerWithMeta(init, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		p := es[0].(*player.Player)
+		p.Dao().SetGold(50)
+		p.Dao().SetSceneID(f.scenes[0].ID())
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	for _, p := range f.players {
+		if _, err := f.engine.Request(context.Background(), init, p.ID(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed := nest.NewHandlerName("mmo_scene_" + t.Name())
+	nest.MustRegisterHandlerWithMeta(seed, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		es[0].(*scene.Scene).Dao().SetOccupants(2)
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), seed, f.scenes[0].ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+func TestMMORPGPartyReplay(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoTasksSender(f.engine)
+	ctx := context.Background()
+	for range 2 {
+		if err := s.MultiSync_MMORPGParty(ctx, f.players[0].ID(), f.players[1].ID(), 17); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.MultiSync_MMORPGParty(ctx, f.players[0].ID(), f.players[1].ID(), 18); err == nil {
+		t.Fatal("conflicting party accepted")
+	}
+	for _, p := range f.players {
+		if p.Dao().GetPartyID() != 17 {
+			t.Fatal("party membership split")
+		}
+	}
+}
+func TestMMORPGTradeConcurrentReplay(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoTasksSender(f.engine)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 10, false)
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetGold() != 40 || f.players[1].Dao().GetGold() != 60 {
+		t.Fatal("replay duplicated transfer")
+	}
+	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 11, false); err == nil {
+		t.Fatal("changed identity accepted")
+	}
+}
+func TestMMORPGTradeRollback(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoTasksSender(f.engine)
+	ctx := context.Background()
+	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 10, true); err == nil {
+		t.Fatal("rejection lost")
+	}
+	if f.players[0].Dao().GetGold() != 50 || f.players[1].Dao().GetGold() != 50 || f.players[0].Dao().GetTradeSeq() != 0 {
+		t.Fatal("partial trade survived rollback")
+	}
+	if err := s.MultiSync_MMORPGTrade(ctx, f.players[0].ID(), f.players[1].ID(), 1, 10, false); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMMORPGTransferRollbackReplayAndStaleRequest(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoTasksSender(f.engine)
+	ctx := context.Background()
+	p := f.players[0]
+	a, b := f.scenes[0], f.scenes[1]
+	if err := s.MultiSync_MMORPGTransfer(ctx, p.ID(), a.ID(), b.ID(), 1, true); err == nil {
+		t.Fatal("rejection lost")
+	}
+	if p.Dao().GetSceneID() != a.ID() || p.Dao().GetSceneVersion() != 0 || a.Dao().GetOccupants() != 2 || b.Dao().GetOccupants() != 0 {
+		t.Fatal("partial scene transfer survived")
+	}
+	for range 2 {
+		if err := s.MultiSync_MMORPGTransfer(ctx, p.ID(), a.ID(), b.ID(), 1, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.Dao().GetOccupants() != 1 || b.Dao().GetOccupants() != 1 {
+		t.Fatal("replay changed population")
+	}
+	if err := s.MultiSync_MMORPGTransfer(ctx, p.ID(), b.ID(), a.ID(), 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MultiSync_MMORPGTransfer(ctx, p.ID(), a.ID(), b.ID(), 1, false); err == nil {
+		t.Fatal("stale scene transfer accepted")
+	}
+	if p.Dao().GetSceneID() != a.ID() || a.Dao().GetOccupants() != 2 || b.Dao().GetOccupants() != 0 {
+		t.Fatal("scene membership disagrees")
+	}
+}

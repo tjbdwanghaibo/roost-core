@@ -254,6 +254,10 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 入口与业务清单见 [SLG-INTEGRATION](../framework/SLG-INTEGRATION.md)，脚本 `scripts/test-slg-generated.sh`。它证明的是：公共 CLI 生成的 DAO / 组件 / Sender / Nest / 实体定时器在 6 个业务组合（建造 → 行军、重放与取消退款、失败回滚、离线收益、地块竞争、研究与建造并行）下的事务与期限行为；上面两条已修复问题就是它发现的。它不证明：提交器是替身（不含 WAL fsync / Mongo）、离线恢复用 DAO 序列化而非真实重载、单进程、无 Redis / NATS；真实存储与恢复仍以 `test-demo-generated.sh`、`test-dataengine-generated.sh`、`test-remote-generated.sh` 各自的实际执行为准。脚本不挂在 `dataengine-env.sh test`，也不在根包门禁里，改相关生成器时需手动跑。夹具里的金币、时长、上限等数值是业务样例，不是框架规则；SLG 战斗、数值、赛季政策没有默认实现，不因此算框架缺陷。
 
+## MMORPG 接入验收的范围（2026-10-18）
+
+入口与业务清单见 [MMORPG-INTEGRATION](../framework/MMORPG-INTEGRATION.md)，脚本 `scripts/test-mmorpg-generated.sh`。它证明的是：公共 CLI 生成的 Player / Scene DAO、多实体 Sender 与 Nest 在 4 个业务组合（两人组队重放、8 个并发同身份交易只转一次、交易拒绝回滚后同序号重试、带版本的切图拒绝 / 重放 / 返回 / 旧请求）下的多实体锁定、undo 回滚与业务幂等。它没有发现框架缺陷。它不证明：提交器是替身（不含 WAL fsync / Mongo）、单进程、无 Redis / NATS；切图只覆盖持久归属与场景人数同事务这一阶段，双 Scene 网络切换（提交后新场景全量、旧场景删除、订阅失败重试、重连按权威归属恢复、旧代际消息隔离）、动态玩家跨 sid 权威交接、真实客户端与目标密度长稳都没有实现或验收；Player 静态绑定 sid 的设计不变，不能用 DAO 人数守恒代替 AOI 客户端视图验收。脚本不挂在 `dataengine-env.sh test`，也不在根包门禁里。夹具里的队伍、交易序号、场景容量是业务样例，不是框架规则；交易确认 / 取消、队伍解散等没有默认实现，不因此算框架缺陷。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。

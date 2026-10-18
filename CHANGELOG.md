@@ -69,6 +69,11 @@
 - 新增 `scripts/test-slg-generated.sh`：用当前 CLI 从 `game` 模板生成隔离工程，`add dao` / `add timer` / `add entity` 后只改 DAO 定义与业务文件（[`scripts/testdata/slg/`](scripts/testdata/slg/)），跑 6 条 race 场景：建造 → 行军链、重放与取消退款、建造失败回滚、离线收益补算、两玩家抢同一地块、研究与建造队列并行；最后 `roost id check` 与 `roost generate --check`。资源与数值规则只在业务夹具里，框架与生成器不变。不连外部存储（提交器替身 + DAO 序列化），真实存储仍走 `test-demo-generated.sh` / `test-dataengine-generated.sh` / `test-remote-generated.sh`。
 - 手册 [docs/framework/SLG-INTEGRATION.md](docs/framework/SLG-INTEGRATION.md)：SLG 路径到框架接口的对照与业务 / 框架边界。
 
+### MMORPG 接入验收：公共 CLI 生成的业务消费者（scripts/test-mmorpg-generated.sh）
+
+- 新增 `scripts/test-mmorpg-generated.sh`：与 SLG 脚本同一结构，从 `game` 模板生成隔离工程，`add dao Player` / `add entity Scene` / `add dao Scene` 后只改 DAO 定义与业务文件（[`scripts/testdata/mmorpg/`](scripts/testdata/mmorpg/)），跑 4 条 race 场景：两人组队重放、8 个并发同身份交易只转一次（同序号改金额拒绝）、交易拒绝后两玩家资产与序号一起回滚再重试、带版本的切图（失败无半次切图、重放不重复计人数、返回后拒绝旧请求）；4 条必须实际通过、无 skip，最后 `roost id check` 与 `roost generate --check`；成功删除临时工程。队伍、交易、场景容量规则只在业务夹具里，框架与生成器不变；没有发现框架缺陷。
+- 手册 [docs/framework/MMORPG-INTEGRATION.md](docs/framework/MMORPG-INTEGRATION.md)：组队、交易、切图的接法，AOI / 重连 / 玩家归属的验证边界与后续验收顺序；范围与不证明的部分见 KNOWN-LIMITS“MMORPG 接入验收的范围”。
+
 
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
