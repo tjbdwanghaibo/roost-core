@@ -113,6 +113,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	if item, ok := checkRemoteRuntime(root, m); ok {
 		report.Items = append(report.Items, item)
 	}
+	report.Items = append(report.Items, checkStepAndEffectWiring(root, m)...)
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})

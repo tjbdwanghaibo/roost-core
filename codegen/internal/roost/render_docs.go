@@ -487,7 +487,9 @@ sagas 是 roost add saga 生成过的定义名称列表：
       - cross_server_trade
 
 不要只手工添加名字；使用 roost add saga，让定义文件、Service 的 saga mod、依赖和 bootstrap
-一起更新。删除前确认没有运行中的旧 definition version。
+一起更新。删除前确认没有运行中的旧 definition version。add saga 还生成 saga/<name>/steps.go
+（步骤体与 StartSteps；-native 列出的步骤各有正向与补偿两个 Nest handler），它不在 roost.yaml 里登记，
+由服务 Init 调用 StartSteps 启动、Shutdown 里 Drain（roost help saga）。
 
 ## 8.1 timers
 

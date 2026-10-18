@@ -13,7 +13,10 @@
 #     延后旧贡献回复，验证结算榜不被较低的累计分快照覆盖；协调器使用内存版本存储）；
 #   - game/controllers/player 的 TestDungeonClearsBoardCountsEachRunOnceRealRedis（ROOST_REVIEW_REDIS：正式端点 +
 #     真实 Redis 上的 rank RedisStore，超过去重环 8 个槽位后的重放、并发重放与排行提交失败后的补报都只计一次）；
-#   - codegen/internal/roost 的 TestGateGeneratedBusinessConsumer（ROOST_DATAENGINE_IT_NATS_URL）。
+#   - codegen/internal/roost 的 TestGateGeneratedBusinessConsumer（ROOST_DATAENGINE_IT_NATS_URL）；
+#   - codegen/internal/roost 的 TestGeneratedSagaNativeStepsAndEffectConsumer（ROOST_DATAENGINE_IT_MONGO_URI / NATS_URL：新手工程
+#     add saga -native 与 add effect 填最小业务后，真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿与一条 effect
+#     消费恰好一次；唯一 DAO 库名、库与流用后删除）。
 # 门变量全部对到隔离环境地址。用例各用唯一库名 / 键前缀并在结束时删除；本脚本只删自己的临时工程。是功能验收，不是负载。
 # 调用方：wiring/scripts/integration/dataengine-env.sh test、scripts/mirror-local.sh test-core；
 # 根包 integration_coverage_test.go 的 TestGeneratedProjectRealDependencyTestsHaveAnEntry 钉住挂载与 -run。
@@ -38,3 +41,4 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations
 )
 go test -count=1 -timeout 10m -v -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost
+go test -count=1 -timeout 20m -v -run '^TestGeneratedSagaNativeStepsAndEffectConsumer$' ./codegen/internal/roost

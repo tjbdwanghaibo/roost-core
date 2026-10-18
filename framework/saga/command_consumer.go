@@ -514,7 +514,12 @@ func (i *MongoCommandInbox) collectionRef() fmongo.ICollection {
 
 // commandDigest 是收件箱在重投时比较的身份。无法序列化的命令没有身份：在这里返回错误，才不会让所有这类命令都塌缩到
 // sha256(nil)、被误认作任意另一条命令的重投。
+//
+// 时间字段按时刻比较：摘要前统一换成 UTC。协调器写的就是 UTC（所以已有摘要不变），但命令可能经业务自己的通道转交
+// （RunHandedOver 的调用方，例如 demo 用 bus 的 MessagePack，解出来是本地时区）：同一时刻换个时区，JSON 文本就不同，
+// 修前同一命令 ID 在消费者与转交两条路径上互相 ErrIdentityConflict，消费者那条消息读不到自己的回执、nak 到 MaxDeliver。
 func commandDigest(c Command) ([]byte, error) {
+	c.DeadlineAt, c.CreatedAt = c.DeadlineAt.UTC(), c.CreatedAt.UTC()
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return nil, fmt.Errorf("%w: command digest: %v", ErrInvalidRecord, err)

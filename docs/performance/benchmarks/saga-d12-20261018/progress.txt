@@ -1,0 +1,45 @@
+13:06:53 start A-forward20-base-r1
+13:09:58 end A-forward20-base-r1 rc=0
+13:09:58 start A-forward20-new-r1
+13:13:01 end A-forward20-new-r1 rc=0
+13:13:01 start A-compensate10-new-r1
+13:16:03 end A-compensate10-new-r1 rc=0
+13:16:03 start A-compensate10-base-r1
+13:19:05 end A-compensate10-base-r1 rc=0
+13:19:05 start B-forward5-base-r1
+13:24:09 end B-forward5-base-r1 rc=0
+13:24:09 start B-forward5-new-r1
+13:29:13 end B-forward5-new-r1 rc=0
+13:29:13 start B-compensate3-new-r1
+13:34:17 end B-compensate3-new-r1 rc=0
+13:34:17 start B-compensate3-base-r1
+13:39:21 end B-compensate3-base-r1 rc=0
+13:39:21 start A-forward20-new-r2
+13:44:03 end A-forward20-new-r2 rc=0
+13:44:03 start A-forward20-base-r2
+13:47:06 end A-forward20-base-r2 rc=0
+13:47:06 start A-compensate10-base-r2
+13:50:08 end A-compensate10-base-r2 rc=0
+13:50:08 start A-compensate10-new-r2
+13:53:10 end A-compensate10-new-r2 rc=0
+13:53:10 start B-forward5-new-r2
+13:58:14 end B-forward5-new-r2 rc=0
+13:58:14 start B-forward5-base-r2
+14:03:18 end B-forward5-base-r2 rc=0
+14:03:18 start B-compensate3-base-r2
+14:08:22 end B-compensate3-base-r2 rc=0
+14:08:22 start B-compensate3-new-r2
+14:13:25 end B-compensate3-new-r2 rc=0
+14:13:25 start B-forward20-base-sat
+14:17:04 end B-forward20-base-sat rc=0
+14:17:04 start B-forward20-new-sat
+14:20:01 end B-forward20-new-sat rc=0
+14:20:01 start B-compensate10-new-sat
+14:22:58 end B-compensate10-new-sat rc=0
+14:22:58 start B-compensate10-base-sat
+14:26:06 end B-compensate10-base-sat rc=0
+14:26:06 ALL DONE
+14:26:17 start A-forward20-new-r3
+14:29:20 end A-forward20-new-r3
+14:29:20 start A-forward20-base-r3
+14:32:22 end A-forward20-base-r3

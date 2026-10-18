@@ -127,7 +127,9 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 		copy.Entities = append([]EntityParam(nil), source.Entities...)
 		copy.Params = append([]NonEntityParam(nil), source.Params...)
 		reserved := map[string]bool{}
-		for _, name := range strings.Fields("s ctx delay id ids client err clientErr ret retXXX errXXX retValues ok groupIDs context time nest entity any") {
+		// Sender 方法体引用的名字：接收者与路由参数、局部变量、导入的包，以及预声明标识符 int64 / any / error /
+		// bool / nil / len（参数作用域是函数体，遮住它们同样编不过）。
+		for _, name := range strings.Fields("s ctx delay id ids client err clientErr ret retXXX errXXX retValues ok groupIDs context time nest entity int64 any error bool nil len") {
 			reserved[name] = true
 		}
 		for index := range source.Returns {
@@ -153,7 +155,8 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 			used[param.Name] = true
 		}
 		rename := func(name string) string {
-			if !reserved[name] {
+			// 包级 handlerName<X> 变量：同文件任何 handler 的都可能被方法体引用，按前缀一律避让。
+			if !reserved[name] && !strings.HasPrefix(name, "handlerName") {
 				return name
 			}
 			next := name + "Arg"

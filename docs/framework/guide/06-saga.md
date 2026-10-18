@@ -41,6 +41,20 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
 - **按 sid / 分片的准入与转交是业务的拓扑**，框架不替业务猜：`WithAdmit` 在取得执行权之前问“这条命令归不归本进程”，拒绝时消息 nak 给别的副本；要把命令直接送到归属进程，由业务自己的通道转交，接收方调用 `steps.RunHandedOver(ctx, name, command, accept)`——先核对 name 是登记过的原生步骤、命令主题与它一致（扣款信封包着退款命令会被拒绝），再由 `accept` 复核归属（不信任发送方），最后自己取执行权运行同一个步骤体；与消费者互斥，不等投影，转交丢失只多耗时间。game-demo 的赠礼 saga（`internal/service/game/gift_saga.go`）是完整样例。
 - 底层 API（`SubscribeDataEngineStep` / `SubscribeMongoStep` / `DataEngineStepInbox.StepHandler` / `RunHandedOver`）仍公开，只在需要自定义消费者参数时直接用。
 
+**生成器（DESIGN-TODO D12 方向 B，维护者 2026-10-18 批准）**：上面的写法由 `roost add saga` 与 `roost add effect` 生成骨架，生成物都是业务文件、只建一次，服务的 Init / Shutdown 归业务、生成器不改写（只在 next 提示与 `roost help saga` / `roost help effect` 里给要加的两行）：
+
+```bash
+roost add saga gift -service game -steps debit,credit,audit -native debit,credit -entity Player -component Wallet
+roost add effect player.level_up -consumer game
+```
+
+- `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`（不再生成 `Subscribe<Step>` 辅助：那是 `Steps` 之前的第二套写法）。
+- `saga/<name>/steps.go`：`State` 与 `EncodeState` / `DecodeState`；每步正向与补偿的步骤体（原生步骤解出实体 ID 后调生成的 Sender，Mongo 步骤留 TODO 与“事务外副作用按 `IdempotencyKey` 幂等”的说明）；`RegisterSteps(steps, deps)` 按 `-steps` 顺序、按主题常量登记（`-native` 的用 `Native`，其余 `Mongo`；`WithAdmit` 空着并注释多进程分片要补）；`StartSteps(ctx, registry, deps)` = `NewSteps(registry, "<service>-<name>")` + `RegisterSteps` + `Start`。服务 Init 里一行 `steps, err := gift.StartSteps(context.Background(), registry, gift.StepDeps{})`，Shutdown 里 `steps.Drain(ctx)`（超时 `Stop()`）。
+- 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`，锁目标与 `add handler` 同一套解析（`-entity` / `-component`）。`-native` 必须是 `-steps` 的子集，不能重复；服务要有 nest Mod。
+- `roost add effect`：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`：在 Nest handler 里调用，effect 与实体修改同一条 WAL 记录）与 `internal/service/<consumer>/<topic>_consumer.go`（`kitdataengine.SubscribeEffects` 骨架，载荷解不开返回 `PoisonEffect`）。消费服务要有 dataengine Mod；同一 effect 的第二个消费服务只建自己的消费者。
+- 骨架默认拒绝：原生 handler `step.Complete(false, "… is not implemented")`、Mongo 步骤返回失败的 completion、effect 消费者返回错误（重投、不丢），写完业务之前不会报告成功。`roost project doctor` 的 `saga-steps:<name>` / `effect-consumer:<service>/<func>`（只读 WARN）在生成了却没有服务启动（或启动了步骤却没有 `Drain`）时提示。
+- game-demo 的赠礼 saga 保留手写接线（`gift_saga.go`：按 sid 准入与转交要用服务 Init 里才有的玩家驻留表与总线），它的 `saga/gift_item/steps.go` 被换成指向 `gift_saga.go` 的说明；没有按 sid 绑定实体的工程直接用生成的 `StartSteps`。
+
 ## 3. 幂等与结果未知
 
 传输可能重复或回复丢失。请求身份、步骤身份、摘要、attempt 和 incarnation 要一起核对；相同请求身份不同内容应冲突。步骤结果未知不能当“没有生效”开始无条件补偿；先按持久收件箱和状态核实。至多一次生效依赖事务性 inbox，外部非事务系统需业务自行提供幂等。
@@ -53,7 +67,7 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
 
 业务给稳定 ID、可重复执行的步骤输入、补偿策略、有限超时与人工处理入口。观察运行数、待领取、lease、outbox、步骤时延、失败终态和补偿积压。长任务容量应按全链路存储/发布/回执测，不用 handler 微基准代替。
 
-稳定版实测正向20/s、全补偿10/s为已测档；20/s全补偿出现积压。该测量未包含 Nest 发起意图的完整前段，也不代表与普通业务混跑的容量。生产步骤依赖和故障策略需要业务单独验收。
+稳定版实测正向20/s、全补偿10/s为已测档；20/s全补偿出现积压。这两档是 Mongo 步骤路径；**原生步骤**（经 Nest + DataEngine）单进程容量低得多：2026-10-18 两步原生 saga 正向 5/s、全补偿 3/s 通过，正向 10/s、全补偿 5/s 起饱和（一个 durable 在一个进程里逐条处理，单个 durable 约 14～18 条/s；带回执的记录单条投影；超过后步骤超时、重试放大，仍恰好一次但多数 saga 以 failed / compensated 结束；见 [Saga D12 前后对照](../../performance/SAGA-D12-20261018.md) 与 KNOWN-LIMITS“Saga 原生步骤容量”）。**维护者 2026-10-18 决定按 A 处理：接受现状并写进文档与生成骨架，不做消费者并发或投影合批**；量大时按 sid 分片多进程（每个进程只执行自己 sid 的实体，原生步骤加 `WithAdmit` 准入，见 §2.1 与 game-demo 赠礼 saga）。生成的 `steps.go`、effect 消费者骨架、`roost add saga` 的 next 提示与 `roost help saga` 都写了这几个数字与分片要求。该测量未包含 Nest 发起意图的完整前段，也不代表与普通业务混跑的容量。生产步骤依赖和故障策略需要业务单独验收。
 
 ## 源码与核对范围
 

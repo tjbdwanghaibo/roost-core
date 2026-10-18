@@ -53,6 +53,18 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../
 
 回归：[add_timer_test.go](../../../codegen/internal/roost/add_timer_test.go)（`TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks`、`TestAddTimerComponentNameAndExplicitID`、`TestAddTimerRefusesWhatItCannotSupport`、`TestManifestRejectsAnInconsistentTimerEntry`、`TestEntityTimerGeneratedProjectEndToEnd`）。修前（`a56d5965`）`roost add timer --entity Player` 报 `invalid timer name ""`。
 
+## 2D. roost add saga -native 与 roost add effect
+
+DESIGN-TODO D12 方向 B（维护者 2026-10-18 批准）。运行期是方向 A 的 `wiring/saga.Steps`、`framework/saga.NativeStep` 与 `wiring/dataengine.SubscribeEffects`（[guide/06 §2.1](../guide/06-saga.md#21-业务怎样写步骤步骤运行时design-todo-d12-方向-a)），生成器只写业务文件、不加清单字段。
+
+- **[add_saga.go](../../../codegen/internal/roost/add_saga.go)**：`parseSagaSteps` 保序解析 `-steps` 与 `-native`（重复、`-native` 不在 `-steps` 里都报错）；`planSaga` 在写盘之前算出全部文件内容并校验（原生步骤的锁目标走 `resolveNestHandlerTarget`——与 `add handler` 同一函数；跑步骤的服务按 `resolveMods(effectiveServiceMods)` 要有 nest；`rejectExistingHandlers` 按 `func handler<Name>(` 扫描 `game/handler`；任何目标文件已存在都拒绝），`addSaga` 再 `commitSyncChanges` 写入、把 saga Mod 接到服务并 `commitManifestSync`（同步里的 generate 为新 handler 生成 Sender），同步失败用 `restoreFilesIfCurrent` 撤回。生成物：`definition.go`（不再有 `Subscribe*`）、`steps.go`（`renderSagaSteps`：`StepsGroup`、`StepDeps`、`State` 编解码、步骤体、`RegisterSteps`、`StartSteps`，容量说明写在文件注释）、每个原生步骤两个 handler（`renderSagaNativeHandler`）。骨架默认拒绝。
+- **[add_effect.go](../../../codegen/internal/roost/add_effect.go)**：`parseEffectTopic`（点分、`saga.*` 保留）、消费服务按 `resolveMods` 要有 dataengine；effect 文件已存在且声明了 `Topic<Topic>` 与载荷类型时只建消费者。
+- **归属**：都是业务文件、只建一次；服务 Init / Shutdown 不改写，`printSagaNext` / `printEffectNext` 给两行。
+- **doctor**：[saga_effect_doctor.go](../../../codegen/internal/roost/saga_effect_doctor.go) 的 `checkStepAndEffectWiring`——只读、文本判据（源码先 `stripGoComments`，骨架注释里的用法不算调用）：`saga-steps:<name>`（`steps.go` 有 `StartSteps` / `RegisterSteps` 时，找导入该 saga 包并调用 `.StartSteps(` / `.RegisterSteps(` 的非测试文件，再看它所在包有没有带参数的 `.Drain(`）与 `effect-consumer:<service>/<func>`（`start<Topic>EffectConsumer` 在服务包里的出现次数多于声明）。只说明写了，不证明运行时走到；game-demo 的 `steps.go` 没有这两个函数，不报。
+- **game-demo**：送礼 saga 保留手写接线，demo 模板的 `saga/gift_item/steps.go` 覆盖生成的骨架、只留说明（demo 步骤表里紧跟 `add saga GiftItem` 的 `write`）。
+
+回归：[add_saga_test.go](../../../codegen/internal/roost/add_saga_test.go)（生成物与登记顺序、错误输入工程逐字节不变、服务无 nest、无 `-native` 的 Mongo 登记、doctor 两项、生成工程 build / vet / doctor，以及真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`：`testdata/saga_native` 覆盖最小业务，生成工程里的 `TestSagaNativeStepsAndEffectRealDependencies` 在真实 Mongo / NATS / DataEngine / Nest 上核对一笔正向、一笔补偿、一条 effect 恰好一次，入口 `scripts/test-demo-generated.sh`）、[add_effect_test.go](../../../codegen/internal/roost/add_effect_test.go)。修前（`5afd19fc`）`add saga -native` 报 `flag provided but not defined: -native`，`add effect` 报 `flag provided but not defined: -consumer`。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -296,14 +308,16 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../
 
 ### codegen/internal/roost
 
-42 个实现文件、28 个测试文件。
+47 个实现文件、31 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [activity_groups.go](../../../codegen/internal/roost/activity_groups.go) | 函数/方法或内部实现；见源码 |
 | [add.go](../../../codegen/internal/roost/add.go) | `AddOptions` |
+| [add_effect.go](../../../codegen/internal/roost/add_effect.go) | 函数/方法或内部实现；见源码（`roost add effect`，§2D） |
 | [add_entity.go](../../../codegen/internal/roost/add_entity.go) | `I` |
 | [add_rpc.go](../../../codegen/internal/roost/add_rpc.go) | `Service`、`Mod` |
+| [add_saga.go](../../../codegen/internal/roost/add_saga.go) | 函数/方法或内部实现；见源码（`roost add saga`、`-native`，§2D） |
 | [add_skill.go](../../../codegen/internal/roost/add_skill.go) | `Catalog` |
 | [add_workflow.go](../../../codegen/internal/roost/add_workflow.go) | `Controller` |
 | [attribute_runtime.go](../../../codegen/internal/roost/attribute_runtime.go) | 函数/方法或内部实现；见源码 |
@@ -339,6 +353,7 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../
 | [render_docs.go](../../../codegen/internal/roost/render_docs.go) | 函数/方法或内部实现；见源码 |
 | [render_player_tcp.go](../../../codegen/internal/roost/render_player_tcp.go) | `Config`、`Authenticator`、`RegistryBound`、`AuthenticatorFunc`、`Mod`、`Runtime`、`SessionClosed`、`Server` |
 | [render_workflow_docs.go](../../../codegen/internal/roost/render_workflow_docs.go) | 函数/方法或内部实现；见源码 |
+| [saga_effect_doctor.go](../../../codegen/internal/roost/saga_effect_doctor.go) | 函数/方法或内部实现；见源码（doctor 的 `saga-steps:` / `effect-consumer:`，§2D） |
 | [self_sync.go](../../../codegen/internal/roost/self_sync.go) | 函数/方法或内部实现；见源码（`access.player.self_sync` 的接线渲染与 generate / doctor 前置检查；默认 packer 由 entity 生成器 `-self-sync Player` 写出） |
 | [shutdown_budget.go](../../../codegen/internal/roost/shutdown_budget.go) | 函数/方法或内部实现；见源码 |
 
@@ -550,6 +565,8 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../
 
 ### codegen/internal/roost
 
+- [add_effect_test.go](../../../codegen/internal/roost/add_effect_test.go)：`TestAddEffectGeneratesPayloadEmitAndConsumer`、`TestAddEffectRejectsBadInputWithoutTouchingTheProject`
+- [add_saga_test.go](../../../codegen/internal/roost/add_saga_test.go)：`TestAddSagaNativeGeneratesStepsHandlersAndSenders`、`TestAddSagaWithoutNativeRegistersMongoSteps`、`TestAddSagaNativeRejectsBadInputWithoutTouchingTheProject`、`TestAddSagaNativeNeedsNestInTheStepService`、`TestDoctorWarnsWhileStepsOrEffectConsumersAreNotStarted`；其余 2 项见文件（含真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`）
 - [add_test.go](../../../codegen/internal/roost/add_test.go)：`TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne`、`TestAddModAppendsItsConfigSectionToExistingServiceConfigs`、`TestAddRPCScaffoldsOwnerAndWiresCaller`、`TestAddRefusesEachInvalidKindParameter`、`TestAddHandlerRequiresNestFeature`；其余 2 项见文件
 - [attribute_runtime_test.go](../../../codegen/internal/roost/attribute_runtime_test.go)：`TestAttributeRuntimeFileIsMarkedGenerated`、`TestGeneratedAttributeProjectPassesTheTemplateCheck`
 - [config_contract_test.go](../../../codegen/internal/roost/config_contract_test.go)：`TestKitConfigSchemasMatchKitDeclarations`、`TestGeneratedConfigsMatchDeclarations`、`TestGeneratedConfigCheckCatchesDrift`、`TestGeneratorConstantsMatchTheDeclaredExamples`、`TestPlayerTCPDeclarationAgreesWithKit`；其余 8 项见文件

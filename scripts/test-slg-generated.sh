@@ -6,6 +6,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-slg.XXXXXX")"
 project_root="$review_root/project"
 echo "SLG generated consumer and logs: $review_root"
+# 成功后删除临时工程；失败或 ROOST_SLG_KEEP=1 时保留，便于查看生成日志与工程。
+succeeded=0
+cleanup() {
+  if [[ "$succeeded" == 1 && "${ROOST_SLG_KEEP:-0}" != 1 ]]; then
+    rm -rf "$review_root"
+  else
+    echo "SLG generated consumer kept: $review_root" >&2
+  fi
+}
+trap cleanup EXIT
 export GOWORK=off
 export GOMAXPROCS="${GOMAXPROCS:-4}"
 cd "$repo_root"
@@ -43,6 +53,13 @@ cp "$repo_root/scripts/testdata/slg/tasks_test.go.txt" game/handler/slg_tasks_te
 gofmt -w db/def/player.go game/entities/player/timer_handlers.go game/handler/slg_tasks*.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
+# 6 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+passed="$(grep -c '^--- PASS: TestSLG' "$review_root/test.log" || true)"
+if [[ "$passed" != 6 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 6 passing TestSLG scenarios, got $passed" >&2
+  exit 1
+fi
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+succeeded=1

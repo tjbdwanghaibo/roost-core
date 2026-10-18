@@ -15,7 +15,7 @@
 | D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
-| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施（B 待 A 落地后再评估） |
+| D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -251,7 +251,17 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D12 Saga 原生实体步骤与事务性 effect 消费者的生成支持
 
-**状态：维护者 2026-10-18 决定方向 A（框架补齐胶水，demo 作为验收），已实施**（见 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）。B（生成器）待 A 落地后再评估，本轮不做；C 不采用。拍板项 2：`NativeStep` 放 `framework/saga`（Nest handler 签名直接引用 `saga.NativeStep`，生成器已支持外部包参数类型）。拍板项 3 随 B 再定。
+**状态：维护者 2026-10-18 决定方向 A（框架补齐胶水，demo 作为验收），已实施**（见 CHANGELOG `[Unreleased]`“Saga 原生步骤与 effect 消费者的胶水进框架”）。**B（生成器）维护者 2026-10-18 批准开工，已实施**（见下文“B 实施结果”与 CHANGELOG `[Unreleased]`“roost add saga -native 与 roost add effect”）；C 不采用。拍板项 2：`NativeStep` 放 `framework/saga`（Nest handler 签名直接引用 `saga.NativeStep`，生成器已支持外部包参数类型）。拍板项 3（`roost add effect`）随 B 同批交付。**原生步骤单进程容量：维护者 2026-10-18 决定按 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批**（KNOWN-LIMITS“Saga 原生步骤容量（单进程）”）。
+
+**B 实施结果（2026-10-18）**：
+
+- **`roost add saga <name> -steps a,b,c -native a,b [-entity E] -component C`**（`codegen/internal/roost/add_saga.go`）：`-native` 与 `-steps` 一样保序解析，必须是 `-steps` 的子集、不能重复（`-native step "x" is not in -steps (…)`）；只给 `-entity` / `-component` 不给 `-native` 报错；原生步骤的锁目标复用 `add handler` 的解析（抽成 `resolveNestHandlerTarget`），跑步骤的服务要有 nest Mod；与已有 Nest handler 同名（按函数名扫描 `game/handler`）或任何目标文件已存在都在写盘前拒绝，错误输入不改工程。生成物（业务文件，只建一次）：`definition.go`（去掉 `Subscribe<Step>` / `Subscribe<Step>Compensation`，未上线不做兼容）、`steps.go`（`StepsGroup = "<service>-<name>"`、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿步骤体、`RegisterSteps(steps, deps)`、`StartSteps(ctx, registry, deps)`）、每个原生步骤 `game/handler/<name>_<step>.go` 与 `_compensation.go`（参数 `saga.NativeStep`，事务内 `step.Complete`）。`add saga` 的同步跑 generate，新 handler 的 Sender 随之生成，生成工程直接能编译。与评估稿的差异：`Register(steps, deps)` 改名 `RegisterSteps`（`definition.go` 已有 `Register(engine)`，同包不能重名），另加 `StartSteps` 让服务 Init 只需一行；骨架默认拒绝（`… is not implemented`），写完业务前 saga 不报告成功。
+- **`roost add effect <topic> -consumer <svc>`**（`add_effect.go`）：点分主题（`saga.*` 保留），`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`）与 `internal/service/<svc>/<topic>_consumer.go`（`start<Topic>EffectConsumer`：`kitdataengine.SubscribeEffects`，解不开 `PoisonEffect`，durable `<svc>-<topic>`，骨架默认返回错误、重投不丢）；消费服务要有 dataengine Mod；effect 文件已存在时只建新消费者（同一 effect 多个消费服务）。
+- **归属与提示**：服务 Init / Shutdown 不改写；`add saga` / `add effect` 的 next 提示与 `roost help saga` / `roost help effect` 给出要加的两行（`StartSteps` / `Drain`；`start<Topic>EffectConsumer` / `Drain`）。doctor 新增只读检查（低成本、文本判据，`saga_effect_doctor.go`）：`saga-steps:<name>`（steps.go 有 `StartSteps` / `RegisterSteps` 却没有服务导入并调用 → WARN；调用了但所在包没有 `Steps.Drain(ctx)` → WARN）与 `effect-consumer:<service>/<func>`（消费者函数在服务包里没有调用 → WARN）。只证明“写了”，不证明运行时一定走到；注释里的用法不算调用。
+- **容量写进骨架**：`steps.go` 注释、`add saga` next 提示与 `roost help saga` 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接性能报告；effect 消费者骨架写明逐条处理、未单独测量。
+- **game-demo**：保留手写接线（`gift_saga.go` 的按 sid 准入与转交依赖服务 Init 里才有的玩家驻留表与总线，迁移改动不可控），生成的 `saga/gift_item/steps.go` 由 demo 模板换成指向 `gift_saga.go` 的说明（doctor 不对它报 WARN）；升级邮件 `level_up_mail.go` 已是 `SubscribeEffects` 写法，未改名为生成器的函数名。
+- **验证**：codegen 单测（生成物形状与登记顺序、`-native` 子集 / 重复 / 缺组件 / 服务无 nest、同名 handler、重复 add、错误输入工程逐字节不变、无 `-native` 等价 Mongo 登记、effect 生成与第二消费者、doctor 两项）、生成工程编译（骨架未填业务与接线后 build / vet / doctor OK），以及真实依赖端到端 `TestGeneratedSagaNativeStepsAndEffectConsumer`（新手工程 add saga -native + add effect → 填最小业务 → 真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿与一条 effect 消费恰好一次，挂在 `scripts/test-demo-generated.sh`）。
+
 
 **实施结果**：
 
@@ -261,6 +271,28 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 - 按 sid 准入与转交（约 300 行）留在 demo：框架提供 `WithAdmit`（取执行权之前问归属）与 `RunHandedOver`（接收方先核对步骤名与命令主题，再由 `accept` 复核归属，然后取执行权）两个扩展点。
 - demo：`gift_saga.go` 660 → 526 行（`startGiftSaga` 123 → 49 行，其中框架组装约 12 行：`NewSteps`、四行登记、`Start`；其余是业务依赖查询与转交接线），`gift.NativeStep` 删除（`gift.go` 151 → 100 行），handler 参数改为 `saga.NativeStep`；`level_up_mail.go` 107 → 87 行，改用 `SubscribeEffects`。活动阶段消费者（`activity.go`）本轮未改（与并行的活动改动避免冲突），仍用 `effectSettings` + `nestwal.SubscribeJetStreamEffects`。
 - 顺带：saga 的完成回执保留期检查（`checkEffectRetention`）从 Init 搬进 `CheckConfigAcrossMods`，`--check-config` 与 doctor `config-check` 也报。
+
+**验证结果（2026-10-18，A 的四个未验证项）**：
+
+1. **原生步骤在真实 Nest 调度下**：已验证。`wiring/saga` 的 `TestRealStepsRunNativeStepsUnderTheRealNestScheduler`（`-tags integration`，随 `dataengine-env.sh test` 的 `./wiring/saga` 运行）：正式 Mongo / NATS（三副本流）/ DataEngine / Nest（`wiring/nest` Mod，真实 short / io 池与冷加载）/ saga Mod，手写余额实体经 DataEngine 仓储从 Mongo 冷加载，步骤体经 Nest Client 请求 handler，在事务里 `step.Complete`。场景与结论：正向完成；业务拒绝只提交回执与失败 completion、收款方版本不变、协调器补偿；执行中再投一份同一命令（不带 MsgID 绕过流去重）与完成后再投一份都只回放、handler 只执行一次；Nest 提交后丢回复（结果未知）重投等到回执 ack、不再执行；调用 Nest 前失败的尝试等到截止、协调器第二次尝试执行；投影器挡在 checkpoint 时另一个 durable 撞上实体屏障（`ErrFencedEntityPending`）交还租约、在**第一次尝试**内生效；投影停到命令截止之后整笔跳过、实体驱逐、第二次尝试在重载的实体上生效。余额（Mongo 与内存）恰好一次。断言有效性：去掉消费者在 `ErrFencedEntityPending` 时交还租约，用例报生效尝试 [3]、屏障解除后 10.4s 才完成。验证中看到的性质：一个 durable 在一个进程里逐条处理，屏障场景只能由**另一个 durable**（或另一个进程）触发；投影停顿时在等回执的命令挡住同 durable 后续命令直到截止（见项 3）。
+2. **跨进程赠礼演练**：生成 game-demo（`--skip-deps` + replace 到本分支），account / chat / mail / match 等服务 + 两个 game（sid 1000、1001），真实 Mongo / NATS（共享隔离环境，工程名 `d12vdrill` 派生的库与流，用后删除）、私有 Redis 与 etcd；演练驱动 `cmd/giftdrill`（源码与日志存 [benchmarks/saga-d12-20261018/drill](../performance/benchmarks/saga-d12-20261018/drill/)）建 p1、p4@1000 与 p2、p3@1001，双向赠礼。**第一轮发现缺陷**：转交（`RunHandedOver`）与消费者在同一命令 ID 上互相 `saga: idempotency identity conflict`——命令经 bus（MessagePack）转交回来，时间字段换成本地时区，而命令摘要是 JSON 文本的 sha256；转交方先认领时，持有原消息的消费者读不到自己的回执，nak 到 MaxDeliver（第一轮结束 5 分钟后 `game-gift-debit` 11 条、`debit-undo` 2 条仍在重投，delivered 123 → 200，ack floor 不动）。业务值正确，坏在投递收不了尾，只在主机时区不是 UTC 时出现。已按先红后绿修复（摘要统一 UTC，`BindCommand` 共用同一摘要；见 CHANGELOG）。修后重跑三个阶段：
+   - 正常：p1→p2、p3→p4 各 10 笔 completed，送给从未进游戏的玩家 1 各 2 笔 compensated；debit 落到错的 sid 时准入拒绝并转交（两边各 7 次），转交执行成功 2 / 4 次，其余转交撞上同一发送方的实体屏障（`ErrFencedEntityPending`，交还租约，由重投收尾）；收礼方各领 10 封，背包 p1 89 / p3 89、p2 10 / p4 10，恰好一次；四个步骤 durable 全部 ack 完。
+   - 正常停机：双向各 30 笔连发后 2s 对 game2（sid 1001）SIGTERM，此时 debit durable 有 34 条在途；`Drain` 期间处理掉缓冲里的投递（14 条转交给 sid 1000、执行了 10 条转交过来的），服务停机约 2.1s，进程退出 2.69s。game2 下线期间 p3 的 debit 只能等它（别的进程准入拒绝、转交失败、按退避重投，debit durable 投递数 146 → 475）；重启 1s 就绪后全部完成（最长 28.7s）。60 笔全部 completed，领信 30 / 30，背包 59 / 59 / 40 / 40。
+   - kill -9：双向各 20 笔 + 补偿各 2 笔连发后对 game（sid 1000）kill -9（debit 在途 13～26 条）；重启时等单实例锁过期（kill 后约 16s 取到锁），从 kill 到就绪 18s；44 笔全部到终态（40 completed、4 compensated，最长 20.5s），领信 20 / 20，背包 39 / 39 / 60 / 60，恰好一次，durable 全部 ack 完。
+3. **saga 性能同机前后对照**：见 [性能报告](../performance/SAGA-D12-20261018.md)。`scripts/perf/saga.sh` / `TestRealSagaPerformance` 只走 framework/saga 的 Mongo 步骤入口，D12 没改它（代码相同），对照只能证明旧路径不受影响：正向 20/s、全补偿 10/s 两版本都通过（新版本一个样本因 Mongo 主节点超时失败，补跑通过，原因尚未确认）。另做经过新 API 的负载（`TestRealNativeStepsPerformance`，真实 Nest + DataEngine，基线用 D12 之前的手写组装）：正向 5/s、全补偿 3/s 各两轮，手写与 `Steps` 无可测差异；**正向 20/s 与全补偿 10/s 在原生路径上两种写法都饱和崩溃**，正向 10/s、全补偿 5/s 已崩——单进程原生步骤容量是新发现（不是 D12 引入），登记 KNOWN-LIMITS。
+4. **已存在 durable 的参数变更**：已验证（nats-server 2.14.5）。`Subscribe` 用 `CreateOrUpdateConsumer`，D12 改的 `game-level-up-mail` MaxDeliver 20 → 25000、MaxAckPending（服务器缺省 1000）→ 256 原地生效、投递进度保留，不会静默沿用旧参数；DeliverPolicy 等不可变字段不同则服务器拒绝（10012 `deliver policy can not be updated`），原报错不说是哪个流 / durable。已修：建立失败都带上流与 durable，不可变冲突时点名“停掉使用它的进程、`nats consumer rm <流> <durable>` 后再启动，投递进度丢失”（`infra/network/nats/driver/real_nats_integration_test.go` 的 `TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace`）。收件箱集合改名的升级说明维持 CHANGELOG 原文。
+
+**B 评估（2026-10-18，基于上面的验证；当时建议再等等，同日维护者批准开工并已实施，见上文“B 实施结果”）**：
+
+- **A 的 API 是否稳定到可以写生成器**：验证没有发现需要改形状的 API。真实 Nest、两进程转交、正常停机与 kill -9 下 `NativeStep.Complete`、`Steps.Native` / `Mongo` / `WithAdmit` / `Start` / `Drain` / `RunHandedOver`、`SubscribeEffects` / `PoisonEffect` 的契约都按文档成立；发现的缺陷（命令摘要的时区）修在 framework 内部，不改签名。可能**新增**而不改已有签名的地方：原生步骤容量若要提高，最可能的落点是步骤消费者的并发度（一个 durable 在一个进程内并行处理多条，`Steps` 多一个步骤选项）或投影器对带回执 / effect 记录的合批；二者都不要求迁移生成物，但会改变生成骨架里该写的容量说明。
+- **生成物与归属**（沿用 `add rpc` / `add timer` 的“业务文件只建一次”，这里没有需要重生成的 `*_gen.go`）：
+  - `roost add saga <Name> -service <svc> -steps a,b,c -native a,b`：`saga/<name>/definition.go`（已有，业务文件；删掉现在的 `Subscribe<Step>` Mongo 辅助函数——它们早于 `Steps`，A 之后是第二套写法）；新增 `saga/<name>/steps.go`（业务文件）：每步一个步骤体（原生步骤体解载荷后调生成的 sender，Mongo 步骤体留 TODO 与“事务外副作用按 IdempotencyKey 幂等”的说明）与 `Register(steps *kitsaga.Steps, deps)`（按定义里的主题常量登记，原生 `Native`、其余 `Mongo`，`WithAdmit` 空着并注释多进程分片要补）；原生步骤的 Nest handler 骨架 `game/handler/<name>_<step>.go` 与补偿各一个（业务文件，参数带 `saga.NativeStep`，注释写 `step.Complete` 与业务拒绝也提交），复用 `add handler` 的实体 / 组件解析（`-entity` / `-component`）。
+  - 服务 Init / Shutdown 归业务、不改写：像 `add skill` 一样在 next 提示里给两行（Init：`NewSteps` + `Register` + `Start`；Shutdown：`Drain(ctx)`）。
+  - `roost add effect <topic> -consumer <svc>`：`game/effects/<topic>.go`（载荷类型、topic 常量、`Emit<Topic>` 辅助，业务文件）与 `internal/service/<svc>/<topic>_consumer.go`（`SubscribeEffects` 骨架，载荷解不开返回 `PoisonEffect`，事务外调用按 EffectID 幂等，业务文件）；同样只给 Init / Shutdown 提示。拍板项 3 建议同批交付：形状相同，effect 部分更小。
+- **与现有 `roost add saga` 合并**：保留第六轮修的 `-steps` 保序与重名检查；`-native` 必须是 `-steps` 的子集、同样保序解析；不给 `-native` 时只生成 Mongo 登记，与今天等价（少了 `Subscribe*` 辅助）；`Register` 的登记顺序跟 `-steps`，与 `Definition.Steps` 一致。
+- **工作量**：生成器约 300～400 行（两个命令、`-native` 解析、handler 骨架复用 `add handler`），codegen 单测（文件清单、保序、子集校验、生成后格式化与编译）、生成工程端到端（`project new` → `add saga -native` / `add effect` → build / vet / test / doctor），help / CODEGEN_REFERENCE / guide 06；约 2 天。
+- **风险**：中低，主要不在 API 而在**默认引导**：生成器把“改实体的步骤走原生路径”变成一条命令，而单进程原生步骤持续吞吐只有个位数 saga/s（正向两步 5/s 通过、10/s 崩；全补偿 3/s 通过、5/s 崩），过载时重试放大、终态变 failed / compensated。骨架注释与 help 必须写明容量与分片 / 准入要业务补，否则按生成物上线会在不高的量上踩到。
+- **推荐：再等等**，等维护者对“原生步骤单进程容量”的决定（KNOWN-LIMITS 同名条目）：接受现状并写进文档，则 B 可以立即开工；决定先做消费者并发或投影合批，则 B 放在它之后（`Steps` 可能多一个选项，生成骨架的容量说明随之改，避免生成物与 help 改两轮）。effect 部分与容量无关，维护者愿意的话可以先单独做。
 
 **原登记（2026-10-18，决定前）**：
 

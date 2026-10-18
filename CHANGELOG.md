@@ -4,20 +4,41 @@
 
 ## [Unreleased]
 
+### `roost add saga -native` 与 `roost add effect`（DESIGN-TODO D12 方向 B）；原生步骤容量按 A 文档化
+
+- **决定**：维护者 2026-10-18 批准 D12 方向 B（生成器）开工；“原生步骤单进程容量”按推荐的 A 处理——接受现状、写进文档与生成骨架、量大按 sid 分片多进程，不做消费者并发或投影合批。
+- **`roost add saga <name> -steps a,b,c -native a,b [-entity E] -component C`**：`-native` 保序解析，必须是 `-steps` 的子集、不能重复；原生步骤的锁目标与 `add handler` 同一套解析，跑步骤的服务要有 nest Mod；目标文件已存在、与已有 Nest handler 同名、`-entity` / `-component` 没配 `-native` 等错误都在写盘前拒绝，工程不变。生成（业务文件，只建一次）：`saga/<name>/steps.go`（`StepsGroup = "<service>-<name>"`、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿步骤体、按主题常量与 `-steps` 顺序登记的 `RegisterSteps(steps, deps)`、`StartSteps(ctx, registry, deps)`）与每个原生步骤两个 Nest handler `game/handler/<name>_<step>.go` / `_compensation.go`（参数 `saga.NativeStep`，事务内 `step.Complete`）；同步里的 generate 生成它们的 Sender。骨架默认拒绝（`… is not implemented`），写完业务前 saga 不报告成功。不给 `-native` 时全部登记为 Mongo 步骤。
+- **去掉 `definition.go` 的 `Subscribe<Step>` / `Subscribe<Step>Compensation`**：有了 `Steps` 之后是第二套写法。**不兼容**：线上尚未部署，不做兼容；已有工程里旧生成的辅助函数是业务文件、不会被改写，继续能编译，新 add 的 saga 不再有。
+- **`roost add effect <topic> -consumer <svc>`**：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`，在 Nest 事务内发出 effect 的正式写法）与 `internal/service/<svc>/<topic>_consumer.go`（`start<Topic>EffectConsumer`：`kitdataengine.SubscribeEffects`，解不开 `PoisonEffect`，durable `<svc>-<topic>`；骨架默认返回错误，重投不丢）。主题点分、`saga.*` 保留；消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。
+- **归属**：服务 Init / Shutdown 归业务、不改写；next 提示与 `roost help saga` / 新的 `roost help effect` 给出要加的两行。**doctor**（只读 WARN）：`saga-steps:<name>`（steps.go 有 `StartSteps` / `RegisterSteps`，却没有服务导入并调用，或调用了但所在包没有 `Steps.Drain(ctx)`）、`effect-consumer:<service>/<func>`（消费者没有被调用）；文本判据、注释不算调用。
+- **容量**：`steps.go` 注释、next 提示、`roost help saga` 与 guide/06 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接 [Saga D12 前后对照](docs/performance/SAGA-D12-20261018.md)；KNOWN-LIMITS“Saga 原生步骤容量（单进程）”改为已决定。
+- **game-demo**：赠礼 saga 保留手写接线（按 sid 准入与转交），生成的 `saga/gift_item/steps.go` 由 demo 模板换成指向 `gift_saga.go` 的说明；升级邮件已是 `SubscribeEffects` 写法，未改。
+- **测试**：修前（`5afd19fc`）红：`add saga -native` 报 `flag provided but not defined: -native`，`add effect` 报 `flag provided but not defined: -consumer`，`definition.go` 仍有 `Subscribe*`，`roost help effect` 报 unknown capability。新增 `codegen/internal/roost/add_saga_test.go`（生成物与登记顺序、错误输入不改工程、重复 add、服务无 nest、无 `-native` 的 Mongo 登记、doctor 两项、生成工程 build / vet / doctor）、`add_effect_test.go`（生成物、第二消费者、错误输入），真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`（新手工程 add saga -native + add effect → 填最小业务〔`testdata/saga_native`〕→ 真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿、一条 effect 消费恰好一次；挂在 `scripts/test-demo-generated.sh`）。
+- **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
+- 文档：DESIGN-TODO D12（B 实施结果、容量决定）、KNOWN-LIMITS（第六轮登记项 2、容量条目）、guide/06-saga §2.1 / §5、impl/12-codegen、codegen 的 BEGINNER_WORKBOOK / CODEGEN_REFERENCE / PROJECT_GENERATOR、`roost help saga` / `effect` / `add`。
+
 ### 实体定时器：回调内的组件操作共享当前 Tick
 
-- 修复新 Host 在回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调创建下一阶段节点虽已存入 DAO，最外层 Tick 却用旧堆清空驱动索引；回调取消同轮另一节点返回成功，该节点仍执行。SLG 建造后接行军、抵达后取消超时等合法组合受影响。
-- Host 只在 Tick 调用栈内复用调度视图，内层操作不报告中间索引，最外层落定后统一报告；正常返回、panic 和事务回滚均不跨事务保留调度器。新增行为回归包含下一阶段、取消、显式改期、panic 与回滚重试。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。
+- 修复 `framework/nest/entitytimer.Host` 在 Tick 回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调登记的下一阶段节点已写入 DAO，最外层 Tick 却按旧堆报告期限（并以更大的序号覆盖内层报告），驱动索引丢掉它；回调取消 / 改期同轮已到期的另一节点返回成功，该节点仍按旧期限执行；回调显式改期自己返回 false。SLG 建造完成接行军、抵达后取消超时等合法组合受影响。
+- Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内新建的节点在 Tick 收尾前 `Timer` / `Timers` 读不到。
+- 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
 
 ### Nest 生成器：Sender 的局部名称避让业务参数
 
-- 修复合法的 `handlerCancel(target, id)` 生成 `Sync_Cancel(ctx, id, id)` 而无法编译，以及 ctx / client / err / ret 等名称遮住生成变量或类型包的问题。仅在 Sender 副本中为冲突名添加 Arg 后缀，继续避让已有同名参数；参数顺序、类型、handler 元数据与线协议不变。
-- 回归覆盖异步 / 同步 Sender 的声明冲突和多返回值；SLG 正式生成消费者实际编译运行 `id` 业务参数的取消路径。
+- 修复合法的 `handlerCancel(target, id int64)` 生成 `Sync_Cancel(ctx, id int64, id int64)` 而无法编译（`id redeclared in this block`），以及参数名 ctx / client / err / ret / ok / ids / groupIDs、包名（nest / context / time / 类型包别名）、预声明标识符（int64 / any / error / bool / nil / len）或 `handlerName…` 遮住生成代码引用的名字而编不过的问题。只在 Sender 的元数据副本里给冲突名加 `Arg` 后缀并继续避让已有同名参数；handler 元数据、参数顺序、类型与线协议不变。
+- 测试：`codegen/internal/nest` 的 `TestSenderNamesDoNotCollideWithBusinessArguments` 对生成的 sender / syncsender 做 go/types 类型检查（单实体、多实体、多返回值、导入别名）。文档：`codegen/docs/NEST_RUNTIME.zh-CN.md`。
 
 ### 慢连接测试：按实际消费和关闭状态制造背压
 
-- Lockstep 的广播测试不再假定 4.8 MiB 一定塞满内核发送缓冲与应用队列，而在有上界的发送量内等实际慢连接关闭；每批确认健康客户端确实消费，等待放在 Tick 计时之外。Gateway 的同玩家多连接测试逐次确认健康连接收到数据，避免把健康连接也因突发塞满。
-- 保留慢连接关闭、健康连接完整接收和 Tick 不等待写出的原断言，不修改生产队列、超时或发送行为。
+- Lockstep `TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection` 不再假定 600 帧（约 4.8 MiB）一定超过停读连接的内核缓冲 + 出站队列（Linux 的 TCP 缓冲自动调优下装得下，原失败文本 `closed sessions map[], want only the stalled one (its outbound queue overflowed)`），改为最多 8192 帧、每 32 帧确认健康客户端读到、停读连接实际关闭即停；等待在 Tick 计时之外。Gateway `TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt` 每次推送后确认健康连接已收到，避免读协程还没被调度时把健康连接也塞满。
+- 保留慢连接被关闭、健康连接完整接收、Tick 不等待写出（最慢 Tick < 100ms）的原断言，不修改生产队列、超时或发送行为。
+- 证据（macOS，`-race`）：修前在 `-cpu 1` 下两条各 20/20 失败（`live session has frames up to 89 of 600 (err <nil>)`；`a push the live connection took was reported as failed: … outbound queue full`），缺省 GOMAXPROCS 下 10/10 通过——失败取决于健康读协程能否及时被调度与内核缓冲大小；修后 `-count=20 -cpu 1,2,4` 两条各 60/60 通过。
+
+### SLG 接入验收：公共 CLI 生成的业务消费者（scripts/test-slg-generated.sh）
+
+- 新增 `scripts/test-slg-generated.sh`：用当前 CLI 从 `game` 模板生成隔离工程，`add dao` / `add timer` / `add entity` 后只改 DAO 定义与业务文件（[`scripts/testdata/slg/`](scripts/testdata/slg/)），跑 6 条 race 场景：建造 → 行军链、重放与取消退款、建造失败回滚、离线收益补算、两玩家抢同一地块、研究与建造队列并行；最后 `roost id check` 与 `roost generate --check`。资源与数值规则只在业务夹具里，框架与生成器不变。不连外部存储（提交器替身 + DAO 序列化），真实存储仍走 `test-demo-generated.sh` / `test-dataengine-generated.sh` / `test-remote-generated.sh`。
+- 手册 [docs/framework/SLG-INTEGRATION.md](docs/framework/SLG-INTEGRATION.md)：SLG 路径到框架接口的对照与业务 / 框架边界。
+
 
 ### Saga 原生步骤与 effect 消费者的胶水进框架（DESIGN-TODO D12 方向 A，第六轮登记项 2）
 
@@ -31,6 +52,15 @@
 - **测试**：`framework/saga/native_step_test.go`（重复投递只执行一次、业务拒绝提交失败 completion、结果未知不被重投再执行、`ErrFencedEntityPending` 交还租约、无执行权不能提交、转交与消费者互斥）、`wiring/saga/steps_test.go`、`wiring/dataengine/effects_test.go`；真实依赖 `TestRealStepsRunNativeAndMongoStepsThroughTheMods`（正式 Mongo / NATS / DataEngine / saga Mod，三副本流，completed 与 compensated 两笔 saga，每个操作业务写恰好一份）与 `TestRealSubscribeEffectsDeliversEachEffectOnce`。新 API 的红是“测试先于实现”（修前编译不过：`undefined: NativeStep` 等）与旧胶水对照：demo 修前的升级邮件胶水对毒消息返回普通错误（`handler poison = level-up mail: decode effect effect-bad: invalid character 'o' ..., want a permanent error`）。
 - **升级**：线上尚未部署，不做兼容，先停旧再起新。demo 的收件箱集合改名：赠礼 Mongo 步骤收件箱 `_game_gift_step_inbox` → `_game-gift_step_inbox`，升级邮件回执 `_game_effect_inbox` → `_effect_inbox_game-level-up-mail`（旧集合可删；新集合里没有旧回执，旧 durable 未 ack 的 effect 会再处理一次，mail 按 RequestID 去重不重复发信）；转交信封的退款阶段名 `refund` → `debit-undo`（与步骤名一致）。业务代码里的 `gift.NativeStep` 换成 `saga.NativeStep`。
 - 文档：DESIGN-TODO D12、KNOWN-LIMITS 第六轮登记项 2、guide/06-saga §2 / §2.1、impl/06-saga、guide/03-dataengine §3、guide / impl 13-wiring、wiring/README、OBSERVABILITY。
+
+### D12 方向 A 的验证：两处修复、真实 Nest 与跨进程演练、性能对照（2026-10-18）
+
+- **修复：转交的原生步骤与消费者互相 `ErrIdentityConflict`，消息 nak 到 MaxDeliver**。两个 game 进程的跨 sid 赠礼演练里，命令经 demo 的 bus（MessagePack）转交回来，时间字段是同一时刻、换成本地时区；命令身份摘要是 `sha256(json.Marshal(command))`，协调器写的是 UTC，JSON 文本不同。转交方先认领时，持有原消息的消费者读不到自己的回执，过截止后仍冲突，nak 到 MaxDeliver（缺省 25000，约 8.7 天），占住共享 durable 的 MaxAckPending：第一轮结束 5 分钟后 `game-gift-debit` 11 条、`debit-undo` 2 条仍在重投。业务值正确（重复执行被挡住），坏在投递收不了尾；只在主机时区不是 UTC 时出现。现在 `commandDigest` 摘要前把 `DeadlineAt` / `CreatedAt` 换成 UTC，`BindCommand` 写回执改用同一摘要（原先自己 `json.Marshal` 一份）。协调器产生的命令本来就是 UTC，已有摘要不变。修前红：`TestRunHandedOverSharesTheClaimWithTheConsumer/a_handoff_whose_times_came_back_in_another_zone` 报 `the consumer's delivery after a handoff that crossed the bus: saga: idempotency identity conflict`；修后演练三个阶段结束时四个步骤 durable 的 ack_pending 全为 0。
+- **修复：建立 / 更新 JetStream 持久消费者失败时报错点名流与 durable，不可变字段冲突给处置命令**。nats-server 2.14.5 实测：`Subscribe`（`CreateOrUpdateConsumer`）对已存在 durable 原地更新 MaxDeliver、MaxAckPending、AckWait、FilterSubject，投递进度保留（D12 改的 `game-level-up-mail` 参数升级即生效，不会静默沿用旧值）；DeliverPolicy 等不可变字段不同则服务器拒绝（10012 `deliver policy can not be updated`），原报错不说是哪个流、哪个 durable。现在报 `nats jetstream: consumer "<durable>" on stream "<流>" already exists with a setting that cannot be changed in place; stop every process that uses it, delete it (nats consumer rm <流> <durable>) and start again — ... the old delivery position is lost`。修前红：`TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace` 报 `immutable conflict error "nats: API error: code=500 err_code=10012 description=deliver policy can not be updated" does not name "D12V_CONSUMER_…"`。
+- **验证（无行为变化）**：`TestRealStepsRunNativeStepsUnderTheRealNestScheduler`——正式 Mongo / NATS / DataEngine / Nest / saga Mod 下原生步骤的正向、业务拒绝补偿、执行中与完成后的重复投递、结果未知、调用前失败、实体屏障交还租约、投影停到截止后跳过与驱逐，余额恰好一次；生成 game-demo 两个 game 进程的跨 sid 赠礼（转交、SIGTERM 时 `Drain` 约 2.1s、kill -9 重启）恰好一次。记录见 DESIGN-TODO D12“验证结果”。
+- **性能**：`TestRealNativeStepsPerformance`（原生步骤经真实 Nest + DataEngine；glue 变体是 D12 之前的手写组装）与 framework/saga 旧路径对照，`79d15114` 对 `63b63fa8` 同机交替：旧路径代码相同、两版本都通过；原生步骤手写与 `Steps` 同档位无可测差异；**原生步骤单进程正向 10/s、全补偿 5/s 起饱和**（不是 D12 引入），登记 KNOWN-LIMITS 待维护者决定。报告 [Saga D12 前后对照](docs/performance/SAGA-D12-20261018.md)。
+- **B（生成器）评估**：A 的 API 不需要改形状；建议等原生步骤容量的决定后再做（DESIGN-TODO D12“B 评估”）。
+- **升级**：线上尚未部署；两处修复不改存储格式，先停旧再起新即可。
 
 ### 新用户试用第六轮登记项（2026-10-18）
 

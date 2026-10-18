@@ -242,6 +242,43 @@ func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
 			t.Fatalf("calls=%d nodes=%d", calls, len(store.nodes))
 		}
 	})
+	// 同一次 Tick 都已到期的另一阶段被回调改期：本次不按旧期限触发，索引报告新期限。
+	t.Run("reschedule another due stage", func(t *testing.T) {
+		d, clk, client, live := newTestDriver(t)
+		owner := newOwner(206)
+		live.set(owner)
+		store := newMemStore()
+		var host *Host
+		var delayedID int64
+		fired := 0
+		host = d.NewHost(owner, store, func(h *Handlers) {
+			h.Register(typeBuff, func(Fire) time.Duration {
+				if !host.ChangeTimer(delayedID, time.Minute) {
+					t.Error("reschedule refused a live timer")
+				}
+				return 0
+			})
+			h.Register(typeIncome, func(Fire) time.Duration { fired++; return 0 })
+		})
+		if err := host.OnInitFinish(true); err != nil {
+			t.Fatal(err)
+		}
+		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
+		delayedID = host.NewTimer(time.Second, typeIncome, 0, 0, nil)
+		clk.Advance(time.Second)
+		tickDelivered(t, d, client, host)
+		if fired != 0 {
+			t.Fatalf("rescheduled stage fired %d times at its old deadline", fired)
+		}
+		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now().Add(time.Minute)) {
+			t.Fatalf("rescheduled due=%v present=%v", due, ok)
+		}
+		clk.Advance(time.Minute)
+		tickDelivered(t, d, client, host)
+		if fired != 1 || len(store.nodes) != 0 {
+			t.Fatalf("fired=%d nodes=%d after the new deadline", fired, len(store.nodes))
+		}
+	})
 	t.Run("panic releases transient view", func(t *testing.T) {
 		d, clk, _, live := newTestDriver(t)
 		owner := newOwner(204)

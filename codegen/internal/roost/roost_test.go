@@ -1532,10 +1532,17 @@ func TestAddSagaGeneratesValidatedDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"= \"alliance_rally\"", "Version uint32 = 1", "DefinitionVersion: Version", "func Definitions() []saga.Definition", "reserve_troops.compensate", "func Register(engine *saga.Engine) error", "func EmitStart(", "saga.EmitStart", "engine.StartSaga", "func SubscribeReserveTroops(", "func SubscribeReserveTroopsCompensation("} {
+	for _, want := range []string{"= \"alliance_rally\"", "Version uint32 = 1", "DefinitionVersion: Version", "func Definitions() []saga.Definition", "reserve_troops.compensate", "func Register(engine *saga.Engine) error", "func EmitStart(", "saga.EmitStart", "engine.StartSaga", "TopicReserveTroopsCompensation = \"alliance_rally.reserve_troops.compensate\""} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("generated Saga missing %q:\n%s", want, raw)
 		}
+	}
+	// 步骤消费者只有一种写法：steps.go 经 wiring/saga Steps 登记（D12 方向 B 去掉了 Subscribe* 辅助）。
+	if strings.Contains(string(raw), "func Subscribe") {
+		t.Fatalf("definition.go still generates Subscribe* helpers next to steps.go:\n%s", raw)
+	}
+	if got, want := paths[1], "saga/alliance_rally/steps.go"; got != want {
+		t.Fatalf("second path = %s, want %s", got, want)
 	}
 	bootstrap, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
 	if err != nil {

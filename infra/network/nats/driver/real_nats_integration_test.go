@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
@@ -401,5 +403,115 @@ func TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds(t *testing.T) {
 	_, err = a.RPC.Call(ctx, prefix+".silent", []byte("x"))
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, fnats.ErrCancelled) {
 		t.Fatalf("cancel = %v; want errors.Is to both context.Canceled and fnats.ErrCancelled", err)
+	}
+}
+
+// 已存在的 durable 在新版本启动时怎样变（DESIGN-TODO D12 验证项 4）：D12 把升级邮件消费者 game-level-up-mail 的
+// MaxDeliver 20 → 25000、MaxAckPending 不写（服务器缺省 1000）→ 256。Subscribe 用 CreateOrUpdateConsumer：
+//
+//   - 可变字段（MaxDeliver、MaxAckPending、AckWait）原地改成新值，投递进度保留——旧版本已 ack 的消息不重投；
+//   - 不可变字段（这里用 DeliverPolicy）与已存在的 durable 不同时服务器拒绝，Subscribe 返回的错误点名流、durable
+//     与处置命令，consumer 保持原配置。
+//
+// 资源：流 D12V_CONSUMER_<ns>（单副本），用后删除。
+func TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace(t *testing.T) {
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run against a private environment (scripts/mirror-local.sh)")
+	}
+	client, err := NewClient(fnats.DefaultConfig(url), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	js, err := NewJetStreamClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	token := time.Now().UnixNano()
+	stream, subject, durable := fmt.Sprintf("D12V_CONSUMER_%d", token), fmt.Sprintf("d12v%d.player.level_up", token), "game-level-up-mail"
+	if err := js.EnsureStream(ctx, fnats.JetStreamConfig{Name: stream, Subjects: []string{fmt.Sprintf("d12v%d.>", token)}, Replicas: 1}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := js.js.DeleteStream(context.Background(), stream); err != nil {
+			t.Errorf("cleanup: delete stream %s: %v", stream, err)
+		}
+	})
+	received := make(chan uint64, 16)
+	handler := func(_ context.Context, msg *fnats.JetStreamMsg) error {
+		received <- msg.StreamSeq
+		return nil
+	}
+	// 旧版本：D12 之前 nestwal.SubscribeJetStreamEffects 的参数。消费一条并 ack。
+	old := fnats.JetStreamConsumerConfig{Stream: stream, Name: durable, Durable: durable, FilterSubject: subject,
+		DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: 30 * time.Second, MaxDeliver: 20}
+	sub, err := js.Subscribe(ctx, old, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.Publish(ctx, subject, []byte("first"), fnats.JetStreamPublishOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-received:
+	case <-ctx.Done():
+		t.Fatal("old consumer did not receive the first message")
+	}
+	sub.Drain()
+	<-sub.Closed()
+	info := func() gojs.ConsumerConfig {
+		t.Helper()
+		consumer, err := js.js.Consumer(ctx, stream, durable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return consumer.CachedInfo().Config
+	}
+	if got := info(); got.MaxDeliver != 20 || got.MaxAckPending != 1000 {
+		t.Fatalf("premise: old consumer max_deliver=%d max_ack_pending=%d, want 20 / server default 1000", got.MaxDeliver, got.MaxAckPending)
+	}
+	// 新版本：wiring/dataengine.SubscribeEffects 的缺省。
+	newer := old
+	newer.MaxDeliver, newer.MaxAckPending = 25_000, 256
+	sub, err = js.Subscribe(ctx, newer, handler)
+	if err != nil {
+		t.Fatalf("updating mutable consumer fields: %v", err)
+	}
+	if got := info(); got.MaxDeliver != 25_000 || got.MaxAckPending != 256 || got.AckWait != 30*time.Second || got.FilterSubject != subject {
+		t.Fatalf("after the new version subscribed: max_deliver=%d max_ack_pending=%d ack_wait=%s filter=%s, want the new values applied in place",
+			got.MaxDeliver, got.MaxAckPending, got.AckWait, got.FilterSubject)
+	}
+	ack, err := js.Publish(ctx, subject, []byte("second"), fnats.JetStreamPublishOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case seq := <-received:
+		if seq != ack.Sequence {
+			t.Fatalf("updated consumer delivered stream sequence %d first, want %d: the old delivery position was not kept", seq, ack.Sequence)
+		}
+	case <-ctx.Done():
+		t.Fatal("updated consumer did not receive the second message")
+	}
+	sub.Drain()
+	<-sub.Closed()
+	// 不可变字段：报错，点名流、durable 与处置命令；consumer 不变。
+	immutable := newer
+	immutable.DeliverPolicy = fnats.JetStreamDeliverNew
+	sub, err = js.Subscribe(ctx, immutable, handler)
+	if err == nil {
+		sub.Stop()
+		t.Fatal("changing the deliver policy of an existing durable was accepted")
+	}
+	for _, want := range []string{stream, durable, "nats consumer rm " + stream + " " + durable, "deliver policy can not be updated"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("immutable conflict error %q does not name %q", err, want)
+		}
+	}
+	if got := info(); got.DeliverPolicy != gojs.DeliverAllPolicy || got.MaxDeliver != 25_000 {
+		t.Fatalf("a refused update changed the consumer: %+v", got)
 	}
 }

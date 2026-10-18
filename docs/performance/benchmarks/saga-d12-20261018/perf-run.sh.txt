@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# D12 验证项 3：saga 性能同机前后对照（基线 79d15114 对 63b63fa8），交替运行，测量期间不跑其他测试或构建。
+set -uo pipefail
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+SPD=$SCRATCH
+P=$SPD/perfbin
+OUT=$SPD/perf-results
+mkdir -p "$OUT"
+export GOMAXPROCS=4 ROOST_DATAENGINE_IT=1
+{ go version; echo "base=79d15114 new=63b63fa8"; date; sysctl vm.swapusage; uptime; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu hw.memsize; shasum -a 256 $P/*.test; } > "$OUT/env.txt" 2>&1
+# A：framework/saga TestRealSagaPerformance（Mongo 步骤，D12 未改的旧路径）。
+runA() { local side=$1 mode=$2 rate=$3 dur=$4 tag=$5
+  local name="A-$mode$rate-$side-$tag"
+  echo "$(date +%T) start $name" >> "$OUT/progress.txt"
+  (cd /Users/whb/roost/roost-core-wt-d12v-$side/framework/saga && ROOST_SAGA_PERF_OUTPUT="$OUT/$name.json" ROOST_SAGA_PERF_MODE=$mode ROOST_SAGA_PERF_RATE=$rate ROOST_SAGA_PERF_DURATION=$dur \
+    "$P/$side-framework-saga.test" -test.run '^TestRealSagaPerformance$' -test.count=1 -test.timeout 20m -test.v > "$OUT/$name.log" 2>&1)
+  echo "$(date +%T) end $name rc=$?" >> "$OUT/progress.txt"
+}
+# B：wiring/saga TestRealNativeStepsPerformance（原生步骤经真实 Nest + DataEngine；base=glue 手写组装，new=Steps）。
+runB() { local side=$1 mode=$2 rate=$3 dur=$4 tag=$5
+  local variant=glue; [[ $side == new ]] && variant=steps
+  local name="B-$mode$rate-$side-$tag"
+  echo "$(date +%T) start $name" >> "$OUT/progress.txt"
+  (cd /Users/whb/roost/roost-core-wt-d12v-$side/wiring/saga && ROOST_STEPS_PERF_OUTPUT="$OUT/$name.json" ROOST_STEPS_PERF_VARIANT=$variant ROOST_STEPS_PERF_MODE=$mode ROOST_STEPS_PERF_RATE=$rate ROOST_STEPS_PERF_DURATION=$dur \
+    "$P/$side-wiring-saga.test" -test.run '^TestRealNativeStepsPerformance$' -test.count=1 -test.timeout 40m -test.v > "$OUT/$name.log" 2>&1)
+  echo "$(date +%T) end $name rc=$?" >> "$OUT/progress.txt"
+}
+for round in 1 2; do
+  if [[ $round == 1 ]]; then first=base second=new; else first=new second=base; fi
+  runA $first forward 20 3m r$round; runA $second forward 20 3m r$round
+  runA $second compensate 10 3m r$round; runA $first compensate 10 3m r$round
+  runB $first forward 5 5m r$round; runB $second forward 5 5m r$round
+  runB $second compensate 3 5m r$round; runB $first compensate 3 5m r$round
+done
+# 维护者给的档位在原生路径上：正向 20/s、全补偿 10/s 各 2 分钟（饱和对照）。
+runB base forward 20 2m sat; runB new forward 20 2m sat
+runB new compensate 10 2m sat; runB base compensate 10 2m sat
+{ date; uptime; sysctl vm.swapusage; } >> "$OUT/env.txt" 2>&1
+echo "$(date +%T) ALL DONE" >> "$OUT/progress.txt"

@@ -1,0 +1,102 @@
+{
+  "Mode": "forward",
+  "Rate": 20,
+  "Planned": 3600,
+  "Started": 3600,
+  "Completed": 3600,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 180,
+  "ElapsedSeconds": 180.236835209,
+  "CompletionTPS": 19.973719555303404,
+  "P50MS": 474.962375,
+  "P95MS": 733.892542,
+  "P99MS": 817.112042,
+  "MaxMS": 862.601667,
+  "FinalStats": {
+    "Started": 3600,
+    "Dispatched": 7200,
+    "Completed": 3600,
+    "Compensated": 0,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 0,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 3600,
+  "EffectDocuments": 7200,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 1200,
+      "P50MS": 491.481625,
+      "P99MS": 829.332667,
+      "MaxMS": 862.601667,
+      "ServerP99MS": 806.745833
+    },
+    {
+      "Minute": 1,
+      "Count": 1200,
+      "P50MS": 465.827,
+      "P99MS": 732.172042,
+      "MaxMS": 816.405334,
+      "ServerP99MS": 703.925459
+    },
+    {
+      "Minute": 2,
+      "Count": 1200,
+      "P50MS": 471.814542,
+      "P99MS": 750.455125,
+      "MaxMS": 760.439959,
+      "ServerP99MS": 718.233
+    }
+  ],
+  "Harness": {
+    "AdmitLag": {
+      "Samples": 3600,
+      "NegativeDurations": 0,
+      "P50MS": 0.215334,
+      "P95MS": 0.939792,
+      "P99MS": 1.43525,
+      "MaxMS": 2.098459
+    },
+    "ObserveLag": {
+      "Samples": 3600,
+      "NegativeDurations": 0,
+      "P50MS": 24.8375,
+      "P95MS": 47.833125,
+      "P99MS": 49.97,
+      "MaxMS": 77.985292
+    }
+  },
+  "Server": {
+    "Start": {
+      "Samples": 3600,
+      "NegativeDurations": 0,
+      "P50MS": 15.704459,
+      "P95MS": 21.88575,
+      "P99MS": 27.064792,
+      "MaxMS": 80.303
+    },
+    "Completion": {
+      "Samples": 3600,
+      "NegativeDurations": 0,
+      "P50MS": 450.545167,
+      "P95MS": 705.2235,
+      "P99MS": 784.737333,
+      "MaxMS": 842.02
+    },
+    "TerminalMissing": 0
+  }
+}

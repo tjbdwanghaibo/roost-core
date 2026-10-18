@@ -12,6 +12,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	deengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
@@ -218,6 +219,48 @@ func TestRunHandedOverSharesTheClaimWithTheConsumer(t *testing.T) {
 		}
 		if got := h.runs.Load(); got != 1 {
 			t.Fatalf("runs=%d; the handoff ran a command another delivery holds", got)
+		}
+	})
+	// 转交走业务自己的通道（demo 是 bus，MessagePack 编码）：命令的时间字段回来时是同一时刻、换了时区（MessagePack 解出
+	// 本地时区，协调器写的是 UTC）。命令身份按时刻判定，不能因为时区不同就成了“同一命令 ID、不同内容”：修前两条路径
+	// 互相 ErrIdentityConflict，消费者那条消息读不到自己的回执，nak 到 MaxDeliver。
+	t.Run("a handoff whose times came back in another zone", func(t *testing.T) {
+		zone := time.FixedZone("UTC+8", 8*3600)
+		shifted := func(command Command) Command {
+			command.CreatedAt, command.DeadlineAt = command.CreatedAt.In(zone), command.DeadlineAt.In(zone)
+			return command
+		}
+		h := newNativeStepHarness(t)
+		command := dataEngineCommand("command-handoff-zone", "operation-handoff-zone", "payload")
+		if err := h.inbox.RunHandedOver(context.Background(), shifted(command), h.body); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.deliver(command); err != nil {
+			t.Fatalf("the consumer's delivery after a handoff that crossed the bus: %v", err)
+		}
+		if got := h.runs.Load(); got != 1 || !h.receipt(command).Success {
+			t.Fatalf("runs=%d, want the handed-over run only", got)
+		}
+
+		h = newNativeStepHarness(t)
+		command = dataEngineCommand("command-zone-consumer-first", "operation-zone-consumer-first", "payload")
+		if err := h.deliver(command); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.inbox.RunHandedOver(context.Background(), shifted(command), h.body); err != nil || h.runs.Load() != 1 {
+			t.Fatalf("handoff of a finished command whose times came back in another zone: err=%v runs=%d, want nil and no second run", err, h.runs.Load())
+		}
+
+		// 真实的 bus 编码：同一条命令过一次 MessagePack 后身份不变。
+		var decoded Command
+		raw, err := bus.MessagePackCodec{}.Marshal(command)
+		if err == nil {
+			err = bus.MessagePackCodec{}.Unmarshal(raw, &decoded)
+		}
+		original, _ := commandDigest(command)
+		roundTripped, digestErr := commandDigest(decoded)
+		if err != nil || digestErr != nil || string(original) != string(roundTripped) {
+			t.Fatalf("command identity changed across the bus codec (err=%v %v): created_at %s -> %s", err, digestErr, command.CreatedAt, decoded.CreatedAt)
 		}
 	})
 	t.Run("past its deadline", func(t *testing.T) {

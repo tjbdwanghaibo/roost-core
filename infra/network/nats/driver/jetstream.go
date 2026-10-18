@@ -6,6 +6,7 @@ import (
 	"fmt"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +83,7 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	}
 	consumer, err := c.js.CreateOrUpdateConsumer(ctx, cfg.Stream, toJetStreamConsumerConfig(cfg))
 	if err != nil {
-		return nil, c.client.wrapError(err)
+		return nil, consumerConfigError(cfg, c.client.wrapError(err))
 	}
 	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
@@ -94,6 +95,29 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 		return nil, c.client.wrapError(err)
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
+}
+
+// consumerConfigError 给建立 / 更新持久消费者的失败带上流与消费者名（否则启动失败的报错不说是哪个 durable）。
+//
+// Subscribe 用 CreateOrUpdateConsumer：同名 durable 已存在时原地更新。MaxDeliver、MaxAckPending、AckWait、
+// FilterSubject 这类可变字段直接改成新值、投递进度保留——新版本改了这些参数，启动即生效，不会静默沿用旧值；
+// DeliverPolicy、AckPolicy、ReplayPolicy、起始序号 / 时间等不可变字段与已存在的 durable 不同时，服务器拒绝
+// （API 错误 10012，描述为 “… can not be updated”），进程启动失败。这种冲突这里点名处置：停掉所有使用它的
+// 进程、删除 durable 再启动——新 durable 按 DeliverPolicy 重新开始，旧的投递进度丢失（DeliverAll 会从流里最早
+// 的消息重投，消费者的幂等收件箱负责去重）。2026-10-18 用 nats-server 2.14.5 实测，见 real_nats_integration_test.go。
+func consumerConfigError(cfg fnats.JetStreamConsumerConfig, err error) error {
+	name := cfg.Durable
+	if name == "" {
+		name = cfg.Name
+	}
+	var apiErr *gojs.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode == gojs.JSErrCodeConsumerCreate &&
+		(strings.Contains(apiErr.Description, "can not be updated") || strings.Contains(apiErr.Description, "can not update")) {
+		return fmt.Errorf("nats jetstream: consumer %q on stream %q already exists with a setting that cannot be changed in place; "+
+			"stop every process that uses it, delete it (`nats consumer rm %s %s`) and start again — the new consumer starts over "+
+			"from its deliver policy and the old delivery position is lost: %w", name, cfg.Stream, cfg.Stream, name, err)
+	}
+	return fmt.Errorf("nats jetstream: consumer %q on stream %q: %w", name, cfg.Stream, err)
 }
 
 // settleJetStreamDelivery acknowledges, redelivers, or terminates one delivery

@@ -1,0 +1,496 @@
+// Command giftdrill drives the cross-sid gift drill for DESIGN-TODO D12 verification item 2.
+// It is scratch tooling copied into a generated game-demo project; it is not part of roost-core.
+//
+//	giftdrill setup  -state s.json                      # four players: p1,p4 on sid 1000; p2,p3 on sid 1001; items for senders
+//	giftdrill send   -state s.json -from p1 -to p2 -n 10 -out g.json [-to-id 1]
+//	giftdrill wait   -state s.json -gifts g.json[,g2.json] -timeout 5m
+//	giftdrill claim  -state s.json -who p2              # claim every claimable gift mail
+//	giftdrill bags   -state s.json
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"example.com/d12vdrill/loadtest/playertcp"
+	"example.com/d12vdrill/protocol/msgid"
+	"example.com/d12vdrill/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	player "example.com/d12vdrill/game/entities/player"
+)
+
+const itemID = int64(1001)
+
+type drillPlayer struct {
+	Name     string `json:"name"`
+	OpenID   string `json:"open_id"`
+	SID      int32  `json:"sid"`
+	Account  string `json:"account"`
+	PlayerID int64  `json:"player_id"`
+}
+
+type state struct {
+	Players map[string]*drillPlayer `json:"players"`
+}
+
+type giftRecord struct {
+	SagaID string    `json:"saga_id"`
+	From   string    `json:"from"`
+	ToID   int64     `json:"to_id"`
+	SentAt time.Time `json:"sent_at"`
+}
+
+var (
+	accountNATS = flag.String("account-nats", "", "NATS url")
+	prefix      = flag.String("prefix", "d12vdrill", "bus prefix")
+	endpoints   = flag.String("endpoints", "1000=127.0.0.1:7000,1001=127.0.0.1:7001", "sid=addr list")
+	mongoURI    = flag.String("mongo", "", "Mongo URI")
+	database    = flag.String("db", "d12vdrill", "Player DAO database")
+	sagaDB      = flag.String("saga-db", "d12vdrill_saga", "saga database")
+	statePath   = flag.String("state", "state.json", "drill state file")
+	from        = flag.String("from", "", "sender name")
+	to          = flag.String("to", "", "recipient name")
+	toID        = flag.Int64("to-id", 0, "recipient player id (overrides -to)")
+	count       = flag.Int("n", 1, "gifts to send")
+	out         = flag.String("out", "", "gift record output")
+	gifts       = flag.String("gifts", "", "comma-separated gift record files")
+	who         = flag.String("who", "", "player name")
+	timeout     = flag.Duration("timeout", 5*time.Minute, "wait bound")
+	items       = flag.Int("items", 200, "items given to each sender at setup")
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: giftdrill setup|send|wait|claim|bags [flags]")
+		os.Exit(2)
+	}
+	command := os.Args[1]
+	playertcp.MustRegister()
+	if err := flag.CommandLine.Parse(os.Args[2:]); err != nil {
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout+time.Minute)
+	defer cancel()
+	var err error
+	switch command {
+	case "setup":
+		err = setup(ctx)
+	case "send":
+		err = send(ctx)
+	case "wait":
+		err = wait(ctx)
+	case "claim":
+		err = claim(ctx)
+	case "bags":
+		err = bags(ctx)
+	default:
+		err = fmt.Errorf("unknown command %q", command)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "giftdrill %s: %v\n", command, err)
+		os.Exit(1)
+	}
+}
+
+func accounts() (*svcaccount.BusClient, func(), error) {
+	assembly, err := natsdriver.Assemble(fnats.DefaultConfig(*accountNATS), natsdriver.ClientOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{SvcType: "giftdrill", Prefix: *prefix, WorkerNum: 2, QueueCap: 64})
+	if err := b.Start(); err != nil {
+		return nil, nil, err
+	}
+	client, err := svcaccount.NewBusClient(b, "", 0)
+	if err != nil {
+		b.Stop()
+		return nil, nil, err
+	}
+	return client, b.Stop, nil
+}
+
+func loadState() (*state, error) {
+	raw, err := os.ReadFile(*statePath)
+	if err != nil {
+		return nil, err
+	}
+	var s state
+	return &s, json.Unmarshal(raw, &s)
+}
+
+func saveJSON(path string, value any) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(raw, '\n'), 0o644)
+}
+
+func endpointOf(sid int32) (string, error) {
+	for _, pair := range strings.Split(*endpoints, ",") {
+		key, value, _ := strings.Cut(pair, "=")
+		if key == strconv.Itoa(int(sid)) {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("no endpoint for sid %d", sid)
+}
+
+// conn is one authenticated player connection with sequential request/response.
+type conn struct {
+	raw transport.Conn
+	seq uint32
+	mu  sync.Mutex
+}
+
+func connect(ctx context.Context, client *svcaccount.BusClient, p *drillPlayer) (*conn, error) {
+	account, err := client.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: p.OpenID, Credential: "demo:" + p.OpenID})
+	if err != nil {
+		return nil, fmt.Errorf("login %s: %w", p.Name, err)
+	}
+	p.Account = account.ID
+	if p.PlayerID == 0 {
+		role, err := client.CreateRole(ctx, account.ID, p.SID, "drill_"+p.OpenID)
+		if err != nil {
+			return nil, fmt.Errorf("create role %s: %w", p.Name, err)
+		}
+		p.PlayerID = role.PlayerID
+	}
+	session, err := client.SelectRole(ctx, account.ID, p.PlayerID)
+	if err != nil {
+		return nil, fmt.Errorf("select role %s: %w", p.Name, err)
+	}
+	endpoint, err := endpointOf(p.SID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := transport.Dial(ctx, transport.Config{Type: playertcp.TransportType, Endpoint: endpoint, DialTimeout: 5 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	c := &conn{raw: raw}
+	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", p.PlayerID, session.Token))}); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	resp, err := c.call(msgid.MsgEnterGame, mustMarshal(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{ClientVersion: "drill"})))
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	entered, err := pb.UnmarshalEnterGameResponse(resp)
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	if entered.Code != 0 {
+		raw.Close()
+		return nil, fmt.Errorf("enter game %s: code %d %s (owner sid %d)", p.Name, entered.Code, entered.Reason, entered.OwnerSID)
+	}
+	return c, nil
+}
+
+func mustMarshal(raw []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+// call sends one request and returns the payload of the response with the same sequence; pushes are skipped.
+func (c *conn) call(id uint32, payload []byte) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seq++
+	seq := c.seq
+	if err := c.raw.WritePackets([]*transport.Packet{{MsgID: id, Seq: seq, Payload: payload}}); err != nil {
+		return nil, err
+	}
+	for {
+		packet, err := c.raw.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+		if packet.Seq == seq {
+			return packet.Payload, nil
+		}
+	}
+}
+
+func setup(ctx context.Context) error {
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	nonce := strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)
+	s := &state{Players: map[string]*drillPlayer{
+		"p1": {Name: "p1", SID: 1000}, "p4": {Name: "p4", SID: 1000},
+		"p2": {Name: "p2", SID: 1001}, "p3": {Name: "p3", SID: 1001},
+	}}
+	for _, name := range []string{"p1", "p2", "p3", "p4"} {
+		p := s.Players[name]
+		p.OpenID = "d12v-" + nonce + "-" + name
+		c, err := connect(ctx, client, p)
+		if err != nil {
+			return err
+		}
+		if name == "p1" || name == "p3" {
+			resp, err := c.call(msgid.MsgAddItem, mustMarshal(pb.MarshalAddItemRequest(&pb.AddItemRequest{ItemID: itemID, Count: int32(*items)})))
+			if err != nil {
+				return err
+			}
+			added, err := pb.UnmarshalAddItemResponse(resp)
+			if err != nil || added.Code != 0 {
+				return fmt.Errorf("add item %s: %v %+v", name, err, added)
+			}
+			fmt.Printf("%s player=%d sid=%d bag[%d]=%d\n", name, p.PlayerID, p.SID, itemID, added.Count)
+		} else {
+			fmt.Printf("%s player=%d sid=%d\n", name, p.PlayerID, p.SID)
+		}
+		c.raw.Close()
+	}
+	return saveJSON(*statePath, s)
+}
+
+func send(ctx context.Context) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	sender := s.Players[*from]
+	if sender == nil {
+		return fmt.Errorf("unknown sender %q", *from)
+	}
+	recipient := *toID
+	if recipient == 0 {
+		if s.Players[*to] == nil {
+			return fmt.Errorf("unknown recipient %q", *to)
+		}
+		recipient = s.Players[*to].PlayerID
+	}
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	c, err := connect(ctx, client, sender)
+	if err != nil {
+		return err
+	}
+	defer c.raw.Close()
+	var records []giftRecord
+	for range *count {
+		resp, err := c.call(msgid.MsgSendGift, mustMarshal(pb.MarshalSendGiftRequest(&pb.SendGiftRequest{ToPlayerID: recipient, ItemID: itemID, Count: 1})))
+		if err != nil {
+			return err
+		}
+		sent, err := pb.UnmarshalSendGiftResponse(resp)
+		if err != nil {
+			return err
+		}
+		if sent.Code != 0 || sent.SagaID == "" {
+			return fmt.Errorf("send gift: code %d %s", sent.Code, sent.Reason)
+		}
+		records = append(records, giftRecord{SagaID: sent.SagaID, From: sender.Name, ToID: recipient, SentAt: time.Now()})
+	}
+	fmt.Printf("sent %d gifts %s -> %d\n", len(records), sender.Name, recipient)
+	if *out != "" {
+		return saveJSON(*out, records)
+	}
+	return nil
+}
+
+func mongoClient(ctx context.Context) (*mongo.Client, error) {
+	return mongo.Connect(options.Client().ApplyURI(*mongoURI))
+}
+
+func wait(ctx context.Context) error {
+	var records []giftRecord
+	for _, path := range strings.Split(*gifts, ",") {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var part []giftRecord
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return err
+		}
+		records = append(records, part...)
+	}
+	client, err := mongoClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect(context.Background())
+	sagas := client.Database(*sagaDB).Collection("_sagas")
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.SagaID)
+	}
+	deadline := time.Now().Add(*timeout)
+	type doc struct {
+		ID        string    `bson:"_id"`
+		Status    int       `bson:"status"`
+		Attempt   uint32    `bson:"attempt"`
+		LastError string    `bson:"last_error"`
+		CreatedAt time.Time `bson:"created_at"`
+		UpdatedAt time.Time `bson:"updated_at"`
+	}
+	for {
+		cursor, err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+		if err != nil {
+			return err
+		}
+		var docs []doc
+		if err := cursor.All(ctx, &docs); err != nil {
+			return err
+		}
+		statuses := map[string]int{}
+		terminal := 0
+		var durations []time.Duration
+		for _, d := range docs {
+			name := statusName(d.Status)
+			statuses[name]++
+			if name == "completed" || name == "compensated" || name == "failed" || name == "manual_required" {
+				terminal++
+				durations = append(durations, d.UpdatedAt.Sub(d.CreatedAt))
+			}
+		}
+		if terminal == len(ids) || time.Now().After(deadline) {
+			sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+			q := func(p float64) time.Duration {
+				if len(durations) == 0 {
+					return 0
+				}
+				return durations[int(float64(len(durations)-1)*p)]
+			}
+			fmt.Printf("gifts=%d found=%d terminal=%d statuses=%v duration p50=%s p95=%s max=%s\n", len(ids), len(docs), terminal, statuses, q(.5), q(.95), q(1))
+			for _, d := range docs {
+				if name := statusName(d.Status); name != "completed" && name != "compensated" {
+					fmt.Printf("  %s %s attempt=%d last_error=%q\n", d.ID, name, d.Attempt, d.LastError)
+				}
+			}
+			if terminal != len(ids) {
+				return errors.New("not every gift reached a terminal status")
+			}
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// statusName follows framework/saga Status (record.go).
+func statusName(status int) string {
+	names := map[int]string{1: "pending", 2: "waiting", 3: "compensating", 4: "completed", 5: "compensated", 6: "failed", 7: "manual_required"}
+	if name, ok := names[status]; ok {
+		return name
+	}
+	return "status-" + strconv.Itoa(status)
+}
+
+func claim(ctx context.Context) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	p := s.Players[*who]
+	if p == nil {
+		return fmt.Errorf("unknown player %q", *who)
+	}
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	c, err := connect(ctx, client, p)
+	if err != nil {
+		return err
+	}
+	defer c.raw.Close()
+	claimed, bag := 0, int32(-1)
+	subjects := map[string]int{}
+	for round := 0; round < 100; round++ {
+		resp, err := c.call(msgid.MsgListMail, mustMarshal(pb.MarshalListMailRequest(&pb.ListMailRequest{Limit: 50})))
+		if err != nil {
+			return err
+		}
+		listed, err := pb.UnmarshalListMailResponse(resp)
+		if err != nil || listed.Code != 0 {
+			return fmt.Errorf("list mail: %v %+v", err, listed)
+		}
+		progress := false
+		for _, mail := range listed.Mails {
+			if !mail.Claimable {
+				continue
+			}
+			resp, err := c.call(msgid.MsgClaimMail, mustMarshal(pb.MarshalClaimMailRequest(&pb.ClaimMailRequest{MailID: mail.MailID})))
+			if err != nil {
+				return err
+			}
+			result, err := pb.UnmarshalClaimMailResponse(resp)
+			if err != nil {
+				return err
+			}
+			if result.Code != 0 {
+				return fmt.Errorf("claim %s: code %d %s", mail.MailID, result.Code, result.Reason)
+			}
+			claimed++
+			subjects[mail.Subject]++
+			if result.ItemID == itemID {
+				bag = result.BagCount
+			}
+			progress = true
+		}
+		if !progress {
+			break
+		}
+	}
+	fmt.Printf("%s claimed=%d bag[%d]=%d subjects=%d distinct\n", p.Name, claimed, itemID, bag, len(subjects))
+	return nil
+}
+
+func bags(ctx context.Context) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	client, err := mongoClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect(context.Background())
+	players := client.Database(*database).Collection("player")
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: player.EntityKindPlayer, Category: entity.EntityCategoryPlayer})
+	for _, name := range []string{"p1", "p2", "p3", "p4"} {
+		p := s.Players[name]
+		id, err := entity.BuildEntityID(p.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return err
+		}
+		var doc struct {
+			Items map[string]int32 `bson:"items"`
+		}
+		err = players.FindOne(ctx, bson.M{"_id": id}).Decode(&doc)
+		fmt.Printf("%s player=%d sid=%d bag[%d]=%d err=%v\n", name, p.PlayerID, p.SID, itemID, doc.Items[strconv.FormatInt(itemID, 10)], err)
+	}
+	return nil
+}

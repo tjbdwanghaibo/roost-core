@@ -4,8 +4,8 @@ package saga
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -14,17 +14,14 @@ import (
 
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
-	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
-	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -47,85 +44,13 @@ import (
 //
 //	ROOST_DATAENGINE_IT=1 GOWORK=off go test -tags integration -count=1 -run '^TestRealStepsRun' ./wiring/saga/
 func TestRealStepsRunNativeAndMongoStepsThroughTheMods(t *testing.T) {
-	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
-		t.Skip("set ROOST_DATAENGINE_IT=1 and source the isolated environment")
-	}
-	mongoURI, natsURL := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
-	if mongoURI == "" || natsURL == "" {
-		t.Fatal("isolated integration environment variables are incomplete")
-	}
-	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000)
-	token := strings.ReplaceAll(suffix, "_", "x")
-	sagaDatabase, dataDatabase := "roost_d12_saga_"+suffix, "roost_d12_de_"+suffix
-	sagaStream, effectStream := "ROOST_D12_SAGA_"+suffix, "ROOST_D12_EFFECTS_"+suffix
 	definition := coresaga.Definition{Type: "d12gift", Version: 1, Steps: []coresaga.Step{
 		{Name: "debit", ForwardTopic: "d12gift.debit", CompensateTopic: "d12gift.debit.compensate"},
 		{Name: "deliver", ForwardTopic: "d12gift.deliver", CompensateTopic: "d12gift.deliver.compensate"},
 	}}
-
-	cfg := viper.New()
-	for key, value := range map[string]any{
-		"sid": int32(902), "server_type": "d12-it", "persistence.engine": "dataengine",
-		"mongo.uri": mongoURI, "mongo.require_replica_set": true, "mongo.connect_timeout": 5 * time.Second, "mongo.transaction_timeout": 15 * time.Second,
-		"nats.url":            natsURL,
-		"dataengine.database": dataDatabase, "dataengine.wal.dir": t.TempDir(),
-		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "d12effect" + token,
-		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
-		"dataengine.outbox.poll_interval": 50 * time.Millisecond, "dataengine.outbox.retry_min": 100 * time.Millisecond, "dataengine.outbox.retry_max": time.Second,
-		"saga.database": sagaDatabase, "saga.stream": sagaStream, "saga.subject_prefix": "d12saga" + token, "saga.replicas": 3,
-		"saga.stream_max_bytes": int64(64 << 20), "saga.poll_interval": 50 * time.Millisecond,
-		"saga.step_defaults.timeout": 5 * time.Second, "saga.step_defaults.max_attempts": 5,
-		"saga.step_defaults.backoff_min": 100 * time.Millisecond, "saga.step_defaults.backoff_max": time.Second,
-	} {
-		cfg.Set(key, value)
-	}
-	registry := app.NewRegistry(cfg)
-	mongoMod, natsMod := kitmongo.NewMongoMod(), kitnats.NewNatsMod(nil)
-	dataMod := kitdataengine.NewMod(kitdataengine.WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
-	sagaMod := NewMod(definition)
-	if err := app.CheckConfig(cfg, mongoMod, natsMod, dataMod, sagaMod); err != nil {
-		t.Fatal(err)
-	}
-	type lifecycle interface {
-		Init(*viper.Viper) error
-		Provide(*app.Registry) error
-		Start() error
-		StopWithContext(context.Context) error
-	}
-	started := []lifecycle{}
-	var mongoClient fmongo.IMongo
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		for i := len(started) - 1; i >= 0; i-- {
-			if i == 0 && mongoClient != nil { // Mongo 最后停：先删本次的库
-				for _, database := range []string{sagaDatabase, dataDatabase} {
-					if err := mongoClient.Database(database).Drop(ctx); err != nil {
-						t.Errorf("drop %s: %v", database, err)
-					}
-				}
-			}
-			_ = started[i].StopWithContext(ctx)
-		}
-		deleteD12Streams(t, natsURL, sagaStream, effectStream)
-	})
-	for _, mod := range []lifecycle{mongoMod, natsMod, dataMod, sagaMod} {
-		if err := mod.Init(cfg); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, mod := range []lifecycle{mongoMod, natsMod, dataMod, sagaMod} {
-		if err := mod.Provide(registry); err != nil {
-			t.Fatal(err)
-		}
-		if err := mod.Start(); err != nil {
-			t.Fatal(err)
-		}
-		started = append(started, mod)
-		if mod == lifecycle(mongoMod) {
-			mongoClient = mongoMod.Client()
-		}
-	}
+	env := startRealStepsEnv(t, []coresaga.Definition{definition}, false, nil)
+	registry, token, mongoClient := env.registry, env.token, env.mongo
+	sagaDatabase, dataDatabase, dataMod, sagaMod := env.sagaDatabase, env.dataDatabase, env.dataMod, env.sagaMod
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -227,32 +152,382 @@ func TestRealStepsRunNativeAndMongoStepsThroughTheMods(t *testing.T) {
 	}
 }
 
-// capturingCommitter 截下“Nest 事务”的 CommitRecord，测试再交给 DataEngine。
-type capturingCommitter struct{ record coredata.CommitRecord }
+func TestRealStepsRunNativeStepsUnderTheRealNestScheduler(t *testing.T) {
+	definition := coresaga.Definition{Type: "d12nest", Version: 1, Steps: []coresaga.Step{
+		{Name: "debit", ForwardTopic: "d12nest.debit", CompensateTopic: "d12nest.debit.compensate"},
+		{Name: "credit", ForwardTopic: "d12nest.credit", CompensateTopic: "d12nest.credit.compensate"},
+	}}
+	// bonus 是只有一步的另一个 saga 类型（另一个 durable），fenced 场景用它在 X 的屏障期间写同一实体。
+	bonus := coresaga.Definition{Type: "d12bonus", Version: 1, Steps: []coresaga.Step{
+		{Name: "bonus", ForwardTopic: "d12bonus.bonus", CompensateTopic: "d12bonus.bonus.compensate"},
+	}}
+	ensureStepAccountKind()
+	// 步骤超时 10s：failfirst 的第二次尝试在它之后；fenced 的 Y 若错误地保留租约，也要等到它之后才会生效。
+	env := startRealStepsEnv(t, []coresaga.Definition{definition, bonus}, true, map[string]any{"saga.step_defaults.timeout": 10 * time.Second})
+	stepAccountDatabase.Store(env.dataDatabase)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
 
-func (committer *capturingCommitter) Commit(_ context.Context, record corenest.CommitRecord) error {
-	committer.record = coredata.CloneCommitRecord(record)
-	return nil
+	accounts := map[string]int64{}
+	initial := map[string]int64{"a": 1000, "b": 1000, "c": 990, "d": 1000, "e": 0}
+	for name, balance := range initial {
+		id, err := entity.BuildEntityID(int64(9_100+len(accounts)), stepAccountKind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		accounts[name] = id
+		if _, err := env.mongo.Database(env.dataDatabase).Collection(stepAccountCollection).InsertOne(ctx,
+			bson.M{"_id": id, "_version": uint64(1), "_schema": uint32(1), "balance": balance}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// probe 记下每个场景里步骤体与 handler 的执行，以及生效那一次的尝试号。
+	probe := newStepProbe()
+	// 投影 checkpoint 的闸门（fenced 场景）：关着时投影器停在 ack 上，后面的记录准入了却投影不了。
+	runtime := env.dataMod.Runtime()
+	var ackGate atomic.Pointer[chan struct{}]
+	runtime.Projector.OverrideAck(func(ackCtx context.Context, fence corenest.CommitFence) error {
+		if gate := ackGate.Load(); gate != nil {
+			select {
+			case <-*gate:
+			case <-ackCtx.Done():
+				return ackCtx.Err()
+			}
+		}
+		return runtime.WAL.Ack(ackCtx, fence)
+	})
+	openGate := func() {
+		if gate := ackGate.Swap(nil); gate != nil {
+			close(*gate)
+		}
+	}
+	t.Cleanup(openGate)
+
+	nestClient := env.nest
+	body := func(stepName string, rule func(transfer) (int64, int64)) coresaga.NativeStepBody {
+		return func(ctx context.Context, step coresaga.NativeStep) error {
+			command := step.Command()
+			var payload transfer
+			if err := json.Unmarshal(command.Payload, &payload); err != nil {
+				return err
+			}
+			key := payload.Scenario + "/" + stepName
+			calls := probe.body(key)
+			probe.remember(key, command)
+			if payload.Scenario == "failfirst" && stepName == "debit" && calls == 1 {
+				return errors.New("d12: failed before the Nest call (outcome unknown to the consumer)")
+			}
+			if payload.Scenario == "dup" && stepName == "debit" && calls == 1 {
+				probe.signal("dup-running")
+				<-probe.wait("dup-release")
+			}
+			target, limit := rule(payload)
+			account, amount := accounts[payload.From], -target
+			if stepName == "credit" || stepName == "credit-undo" || stepName == "bonus" {
+				account, amount = accounts[payload.To], target
+			}
+			if stepName == "refund" {
+				amount = target
+			}
+			if stepName == "credit-undo" {
+				amount = -target
+			}
+			_, err := nestClient.Request(ctx, stepAccountApply, account, corenest.NewParams(key, amount, limit, step))
+			switch {
+			case errors.Is(err, coredata.ErrFencedEntityPending):
+				probe.count(key + "/fenced")
+				return err
+			case err != nil:
+				return err
+			}
+			probe.effective(key, int(command.Attempt))
+			if payload.Scenario == "fenced" && payload.SagaTag == "x" && stepName == "debit" {
+				probe.signal("fenced-x-committed")
+			}
+			if payload.Scenario == "stall" && stepName == "debit" {
+				probe.signal("stall-committed")
+			}
+			if payload.Scenario == "lostreply" && stepName == "debit" && calls == 1 {
+				return errors.New("d12: Nest committed but the reply was lost (outcome unknown to the consumer)")
+			}
+			return nil
+		}
+	}
+	amount := func(p transfer) (int64, int64) { return p.Amount, 0 }
+	// 账户 c 有余额上限 1000（refuse 场景）；别的账户不设上限。
+	capped := func(p transfer) (int64, int64) {
+		if p.To == "c" {
+			return p.Amount, 1000
+		}
+		return p.Amount, 0
+	}
+	stepAccountHandlerProbe.Store(probe)
+
+	steps, err := NewSteps(env.registry, "d12n-"+env.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps.Native("debit", "d12nest.debit", body("debit", amount))
+	steps.Native("refund", "d12nest.debit.compensate", body("refund", amount))
+	steps.Native("credit", "d12nest.credit", body("credit", capped))
+	steps.Native("credit-undo", "d12nest.credit.compensate", body("credit-undo", amount))
+	steps.Native("bonus", "d12bonus.bonus", body("bonus", amount))
+	steps.Native("bonus-undo", "d12bonus.bonus.compensate", body("bonus-undo", amount))
+	if err := steps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start := func(scenario, tag, from, to string, value int64) string {
+		t.Helper()
+		id := "d12n-" + scenario + tag + "-" + env.token
+		data, err := json.Marshal(transfer{Scenario: scenario, SagaTag: tag, From: from, To: to, Amount: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.sagaMod.Engine().StartSaga(ctx, coresaga.StartRequest{ID: id, Type: definition.Type, DefinitionVersion: 1, BusinessKey: id, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	startBonus := func(scenario, tag, to string, value int64) string {
+		t.Helper()
+		id := "d12b-" + scenario + tag + "-" + env.token
+		data, err := json.Marshal(transfer{Scenario: scenario, SagaTag: tag, To: to, Amount: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.sagaMod.Engine().StartSaga(ctx, coresaga.StartRequest{ID: id, Type: bonus.Type, DefinitionVersion: 1, BusinessKey: id, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	finish := func(id string, want coresaga.Status, within time.Duration) time.Duration {
+		t.Helper()
+		begin := time.Now()
+		for {
+			record, err := env.sagaMod.Store().Get(ctx, id)
+			if err == nil && record.Status.Terminal() {
+				if record.Status != want {
+					t.Fatalf("saga %s ended %s (last error %q), want %s", id, record.Status, record.LastError, want)
+				}
+				return time.Since(begin)
+			}
+			if time.Since(begin) > within {
+				t.Fatalf("saga %s did not finish within %s: %+v err=%v", id, within, record, err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	// 1. 正向与业务拒绝 → 补偿。
+	okID, refuseID := start("ok", "", "a", "b", 10), start("refuse", "", "a", "c", 20)
+	finish(okID, coresaga.StatusCompleted, time.Minute)
+	finish(refuseID, coresaga.StatusCompensated, time.Minute)
+
+	// 2. 重复投递：第一次投递执行中再投一份同一命令，完成后再投一份。
+	dupID := start("dup", "", "a", "b", 5)
+	select {
+	case <-probe.wait("dup-running"):
+	case <-ctx.Done():
+		t.Fatal("dup: the first delivery never started")
+	}
+	dupCommand := probe.lastCommand("dup/debit")
+	debitDurable := "d12n-" + env.token + "-debit"
+	delivered := consumerDelivered(t, ctx, env, debitDurable)
+	republishCommand(t, ctx, env, dupCommand)
+	waitFor(t, ctx, "dup: the duplicate delivered while the first attempt holds the lease", func() bool {
+		return consumerDelivered(t, ctx, env, debitDurable) > delivered
+	})
+	probe.signal("dup-release")
+	finish(dupID, coresaga.StatusCompleted, time.Minute)
+	republishCommand(t, ctx, env, dupCommand)
+	waitFor(t, ctx, "dup: the debit consumer settles every delivery", func() bool { return consumerIdle(t, ctx, env, debitDurable) })
+
+	// 3. 结果未知：提交后丢回复；调用前失败。
+	lostID, failID := start("lostreply", "", "a", "b", 7), start("failfirst", "", "a", "b", 3)
+	finish(lostID, coresaga.StatusCompleted, time.Minute)
+	finish(failID, coresaga.StatusCompleted, time.Minute)
+
+	// 4. 实体屏障：挡住 checkpoint，先提交一笔普通事务让投影器停在 ack 上，再让 X 的 debit 准入（投影不了，D 上有屏障），
+	// 然后 Y（另一个 saga 类型的 bonus 步骤，另一个 durable）给 D 加钱，撞上屏障。Y 必须在另一个 durable 上：一个进程里
+	// 同一 durable 的投递逐条处理，X 的消费者在等自己的投影，同一 durable 上的下一条要等它返回。
+	closeGate := func() {
+		gate := make(chan struct{})
+		ackGate.Store(&gate)
+		if _, err := nestClient.Request(ctx, stepAccountApply, accounts["e"], corenest.NewParams("touch", int64(1), int64(0), stepCompleter(nil))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closeGate()
+	xID := start("fenced", "x", "d", "b", 11)
+	select {
+	case <-probe.wait("fenced-x-committed"):
+	case <-ctx.Done():
+		t.Fatal("fenced: X's debit never committed")
+	}
+	yID := startBonus("fenced", "y", "d", 13)
+	waitFor(t, ctx, "fenced: Y's bonus is refused by the entity barrier and redelivered", func() bool { return probe.counted("fenced/bonus/fenced") >= 2 })
+	opened := time.Now()
+	openGate()
+	finish(xID, coresaga.StatusCompleted, time.Minute)
+	finish(yID, coresaga.StatusCompleted, time.Minute)
+	yLatency := time.Since(opened)
+
+	// 5. 投影停顿超过命令截止：S 的 debit 准入后投影器停到它的截止之后。投影时租约已过期，整笔记录被跳过、D 被驱逐，
+	// 协调器按超时发第二次尝试，在从 Mongo 重载的 D 上生效——仍然恰好一次。
+	closeGate()
+	stallID := start("stall", "", "d", "b", 17)
+	select {
+	case <-probe.wait("stall-committed"):
+	case <-ctx.Done():
+		t.Fatal("stall: S's debit never committed")
+	}
+	time.Sleep(time.Until(probe.lastCommand("stall/debit").DeadlineAt) + 500*time.Millisecond)
+	openGate()
+	finish(stallID, coresaga.StatusCompleted, time.Minute)
+
+	// 核对余额：Mongo（投影）与内存一致，每个操作实例恰好生效一次。
+	want := map[string]int64{"a": 1000 - 10 - 5 - 7 - 3, "b": 1000 + 10 + 5 + 7 + 3 + 11 + 17, "c": 990, "d": 1000 - 11 + 13 - 17, "e": 2}
+	waitFor(t, ctx, "every projection reaches Mongo", func() bool {
+		for name, id := range accounts {
+			var doc struct {
+				Balance int64 `bson:"balance"`
+			}
+			if err := env.mongo.Database(env.dataDatabase).Collection(stepAccountCollection).FindOne(ctx, bson.M{"_id": id}, &doc); err != nil || doc.Balance != want[name] {
+				return false
+			}
+		}
+		return true
+	})
+	for name, id := range accounts {
+		loaded := env.access.Manager().Get(id)
+		if loaded == nil {
+			continue // 已卸载：Mongo 已核对
+		}
+		if got := loaded.(*stepAccount).dao.balance; got != want[name] {
+			t.Errorf("account %s: resident balance %d, Mongo %d", name, got, want[name])
+		}
+	}
+	var refused struct {
+		Version uint64 `bson:"_version"`
+	}
+	if err := env.mongo.Database(env.dataDatabase).Collection(stepAccountCollection).FindOne(ctx, bson.M{"_id": accounts["c"]}, &refused); err != nil || refused.Version != 1 {
+		t.Errorf("refused credit changed account c: version %d err=%v, want 1 (receipt and failed completion only)", refused.Version, err)
+	}
+
+	// 核对执行次数与生效尝试。
+	for key, wantRuns := range map[string]int{
+		"ok/debit": 1, "ok/credit": 1, "refuse/debit": 1, "refuse/credit": 1, "refuse/refund": 1,
+		"dup/debit": 1, "lostreply/debit": 1, "failfirst/debit": 2,
+	} {
+		if got := probe.counted(key); got != wantRuns {
+			t.Errorf("%s: step body ran %d times, want %d", key, got, wantRuns)
+		}
+	}
+	for key, wantHandler := range map[string]int{"dup/debit": 1, "lostreply/debit": 1, "failfirst/debit": 1, "refuse/credit": 1} {
+		if got := probe.handlerRuns(key); got != wantHandler {
+			t.Errorf("%s: Nest handler ran %d times, want %d", key, got, wantHandler)
+		}
+	}
+	if attempts := probe.attempts("failfirst/debit"); len(attempts) != 1 || attempts[0] != 2 {
+		t.Errorf("failfirst: effective debit attempts %v, want [2] (the first attempt waits out its deadline, the coordinator's second runs)", attempts)
+	}
+	if attempts := probe.attempts("lostreply/debit"); len(attempts) != 1 || attempts[0] != 1 {
+		t.Errorf("lostreply: effective debit attempts %v, want [1]", attempts)
+	}
+	if attempts := probe.attempts("fenced/debit"); len(attempts) != 1 || attempts[0] != 1 {
+		t.Errorf("fenced: X's effective debit attempts %v, want [1]", attempts)
+	}
+	if attempts := probe.attempts("fenced/bonus"); len(attempts) != 1 || attempts[0] != 1 {
+		t.Errorf("fenced: Y's effective bonus attempts %v, want [1]: a delivery refused by the barrier hands its lease back and runs on the same attempt", attempts)
+	}
+	// stall：第一次尝试的 Nest 提交返回了成功（内存里生效过），投影时被 lease fence 跳过；第二次尝试才真正落库。
+	if attempts := probe.attempts("stall/debit"); len(attempts) != 2 || attempts[0] != 1 || attempts[1] != 2 {
+		t.Errorf("stall: debit commits by attempt %v, want [1 2] (the first skipped at projection, the second projected)", attempts)
+	}
+	evictions := int64(0)
+	for _, metric := range app.MustLookup[*metrics.Registry](env.registry, app.ModMetrics).Snapshot() {
+		if metric.Name == "dataengine.fence.evictions.started.total" {
+			evictions += metric.Value
+		}
+	}
+	if evictions != 1 {
+		t.Errorf("dataengine.fence.evictions.started.total = %d, want 1 (the stalled attempt's entity)", evictions)
+	}
+	if yLatency >= 10*time.Second {
+		t.Errorf("fenced: Y completed %s after the barrier lifted, not before the step timeout (10s)", yLatency)
+	}
+	t.Logf("fenced: Y refused by the barrier %d times, completed %s after the barrier lifted", probe.counted("fenced/bonus/fenced"), yLatency)
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer drainCancel()
+	if err := steps.Drain(drainCtx); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
 }
 
-func deleteD12Streams(t *testing.T, url string, streams ...string) {
+// republishCommand 把同一条命令再发一次，不带 MsgID（绕过流的去重窗口）：消费者看到的就是一次重复投递。
+func republishCommand(t *testing.T, ctx context.Context, env *realStepsEnv, command coresaga.Command) {
 	t.Helper()
-	nc, err := gonats.Connect(url, gonats.Timeout(2*time.Second))
+	raw, err := json.Marshal(struct {
+		Version uint16           `json:"version"`
+		Command coresaga.Command `json:"command"`
+	}{coresaga.WireVersion, command})
 	if err != nil {
-		t.Errorf("cleanup: connect: %v", err)
-		return
+		t.Fatal(err)
+	}
+	jetstream := app.MustLookup[fnats.IJetStream](env.registry, mods.ModNatsJetStream)
+	if _, err := jetstream.Publish(ctx, env.sagaPrefix+".command."+command.Topic, raw, fnats.JetStreamPublishOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func consumerInfo(t *testing.T, ctx context.Context, env *realStepsEnv, durable string) *gojs.ConsumerInfo {
+	t.Helper()
+	nc, err := gonats.Connect(os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"), gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer nc.Close()
 	js, err := gojs.New(nc)
 	if err != nil {
-		t.Errorf("cleanup: JetStream: %v", err)
-		return
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, stream := range streams {
-		if err := js.DeleteStream(ctx, stream); err != nil && !errors.Is(err, gojs.ErrStreamNotFound) {
-			t.Errorf("cleanup: delete stream %s: %v", stream, err)
+	consumer, err := js.Consumer(ctx, env.sagaStream, durable)
+	if err != nil {
+		t.Fatalf("consumer %s on %s: %v", durable, env.sagaStream, err)
+	}
+	return consumer.CachedInfo()
+}
+
+func consumerDelivered(t *testing.T, ctx context.Context, env *realStepsEnv, durable string) uint64 {
+	t.Helper()
+	return consumerInfo(t, ctx, env, durable).Delivered.Consumer
+}
+
+func consumerIdle(t *testing.T, ctx context.Context, env *realStepsEnv, durable string) bool {
+	t.Helper()
+	info := consumerInfo(t, ctx, env, durable)
+	return info.NumPending == 0 && info.NumAckPending == 0
+}
+
+// stepsPerfVariant 是 D12 方向 A 的写法：Steps 按 Mod 声明组装，步骤体拿到 coresaga.NativeStep（满足 stepCompleter）。
+// 登记在这里而不是性能用例文件里，是为了让那个文件只用 D12 之前就有的 API、能拷到基线提交上运行 glue 变体。
+func init() {
+	perfVariants["steps"] = func(ctx context.Context, env *realStepsEnv, group string, steps []perfStep) (func(context.Context) error, error) {
+		runtime, err := NewSteps(env.registry, group)
+		if err != nil {
+			return nil, err
 		}
+		for _, step := range steps {
+			body := step.body
+			runtime.Native(step.name, step.topic, func(ctx context.Context, native coresaga.NativeStep) error {
+				return body(ctx, native.Command(), native)
+			})
+		}
+		if err := runtime.Start(ctx); err != nil {
+			return nil, err
+		}
+		return runtime.Drain, nil
 	}
 }
