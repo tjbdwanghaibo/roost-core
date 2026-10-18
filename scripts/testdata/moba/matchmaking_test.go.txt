@@ -1,0 +1,91 @@
+package moba
+
+import (
+	"context"
+	"errors"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	"sync"
+	"testing"
+	"time"
+)
+
+// 匹配队列用 service/match 的正式领域实现与内存存储；服务 RPC、Redis 存储与认证不在本用例内，
+// 接法参考 game-demo 的匹配服务（wiring/match）与机器人。
+func TestMOBAMatchmakingAdmissionCancellationAndCommit(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1800000000, 0)
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{Now: func() time.Time { return now }, TicketTTL: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := svcmatch.Queue{Mode: "moba-practice", GroupSize: 2, Partition: "local-owner"}
+	a, b := svcmatch.Subject{Kind: "player", ID: 9001}, svcmatch.Subject{Kind: "player", ID: 9002}
+	ta, err := store.Enqueue(ctx, queue, a, "join-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.Enqueue(ctx, queue, a, "join-a")
+	if err != nil || again.ID != ta.ID {
+		t.Fatal("replayed queue join duplicated ticket")
+	}
+	tb, err := store.Enqueue(ctx, queue, b, "join-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Cancel(ctx, queue, tb.ID, a); !errors.Is(err, svcmatch.ErrNotPermitted) {
+		t.Fatalf("another player cancelled ticket: %v", err)
+	}
+	if _, err := store.Cancel(ctx, queue, tb.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(ctx, queue, []string{ta.ID, tb.ID}); err == nil {
+		t.Fatal("cancelled participant started a match")
+	}
+	tb, err = store.Enqueue(ctx, queue, b, "join-b-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := store.Candidates(ctx, queue, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, formed, err := (svcmatch.FirstComeGrouping{}).Group(queue, candidates)
+	if err != nil || !formed || len(group) != 2 {
+		t.Fatal("pair was not formed")
+	}
+	var wg sync.WaitGroup
+	results := make([]svcmatch.Match, 2)
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = store.Commit(ctx, queue, []string{group[0].ID, group[1].ID})
+		}(i)
+	}
+	wg.Wait()
+	// 同一票集合的 Commit 是幂等：并发调用都可以成功回复，但必须指向同一 Match，不能按回复数判断开局次数。
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if results[0].ID == "" || results[0].ID != results[1].ID || len(results[0].Members) != 2 {
+		t.Fatal("same ticket set created different matches")
+	}
+	if length, err := store.QueueLength(ctx, queue); err != nil || length != 0 {
+		t.Fatal("matched players stayed queued")
+	}
+	c := svcmatch.Subject{Kind: "player", ID: 9003}
+	tc, err := store.Enqueue(ctx, queue, c, "join-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	if candidates, err := store.Candidates(ctx, queue, 8); err != nil || len(candidates) != 0 {
+		t.Fatal("expired player entered candidate pool")
+	}
+	if _, err := store.Commit(ctx, queue, []string{tc.ID, ta.ID}); err == nil {
+		t.Fatal("expired ticket entered a battle")
+	}
+}

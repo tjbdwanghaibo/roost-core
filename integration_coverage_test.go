@@ -502,6 +502,7 @@ var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖、补触发离线 Buff；不是崩溃注入"},
+	{"TestMOBARealSettlementAcrossProcesses", "scripts/test-moba-generated.sh", "^TestMOBARealSettlementAcrossProcesses$", "ROOST_MOBA_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：第一进程经多实体 Sender 结算一局，正常停机后第二进程冷加载，先核对结算身份 / 奖励 / 战绩已恢复，再重放同一结算不重复发放、换胜者被拒；不是崩溃注入，也不恢复进行中的对局"},
 	{"TestGeneratedDataEnginePressure", "scripts/perf/dataengine.sh", "ROOST_DATAENGINE_PERF=1", "性能入口"},
 	{"TestGeneratedRemoteMirrorLocal", "scripts/mirror-local.sh", "^TestGeneratedRemoteMirrorLocal$", "私有环境两进程故障，自起依赖"},
 	{"TestNestGameLoad", "scripts/perf/nest-game.sh", "^TestNestGameLoad$", "性能入口"},

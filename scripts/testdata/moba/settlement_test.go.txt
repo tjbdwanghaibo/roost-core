@@ -1,0 +1,219 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	resultentity "example.com/moba-practice/game/entities/match_result"
+	player "example.com/moba-practice/game/entities/player"
+	sender "example.com/moba-practice/game/handler/syncsender"
+	moba "example.com/moba-practice/game/moba"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	"strings"
+	"sync"
+	"testing"
+)
+
+type mobaGetter map[int64]entity.IThreadSafeEntity
+
+func (g mobaGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("unknown entity %d", id)
+}
+func (g mobaGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 替身只替换提交器；不宣称这些用例验证 WAL fsync 或 Mongo，真实持久化有独立框架验收入口。
+type mobaCommitter struct{}
+
+func (mobaCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type mobaFixture struct {
+	engine  *nest.NestMgr
+	players [2]*player.Player
+	result  *resultentity.MatchResult
+}
+
+func newMOBAFixture(t *testing.T) *mobaFixture {
+	t.Helper()
+	player.RegisterEntity()
+	resultentity.RegisterEntity()
+	RegisterMobaSettlementNestHandlers()
+	f := &mobaFixture{}
+	g := mobaGetter{}
+	for i := range 2 {
+		id, _ := entity.BuildEntityID(int64(900+i), player.EntityKindPlayer)
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.players[i] = built.(*player.Player)
+		g[id] = built
+	}
+	id, _ := entity.BuildEntityID(1, resultentity.EntityKindMatchResult)
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: resultentity.EntityKindMatchResult})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.result = built.(*resultentity.MatchResult)
+	g[id] = built
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mobaCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.engine.Shutdown(context.Background()) })
+	return f
+}
+func TestMOBASettlementConcurrentReplayAndIdentity(t *testing.T) {
+	f := newMOBAFixture(t)
+	s := sender.NewMobaSettlementSender(f.engine)
+	ctx := context.Background()
+	digest := strings.Repeat("a", 64)
+	r, a, b := f.result.ID(), f.players[0].ID(), f.players[1].ID()
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = s.MultiSync_MOBASettle(ctx, r, a, b, "ranked-match-1", digest, false)
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetGold() != 10 || f.players[0].Dao().GetWins() != 1 || f.players[1].Dao().GetLosses() != 1 {
+		t.Fatal("one result paid / counted more than once")
+	}
+	if err := s.MultiSync_MOBASettle(ctx, r, b, a, "ranked-match-1", digest, false); err == nil {
+		t.Fatal("changed winner accepted")
+	}
+	if err := s.MultiSync_MOBASettle(ctx, r, a, b, "ranked-match-2", digest, false); err == nil {
+		t.Fatal("result identity reused for another match")
+	}
+	if err := s.MultiSync_MOBASettle(ctx, r, a, b, "ranked-match-1", strings.Repeat("b", 64), false); err == nil {
+		t.Fatal("changed reference digest accepted")
+	}
+}
+func TestMOBASettlementRollbackAndRetry(t *testing.T) {
+	f := newMOBAFixture(t)
+	ctx := context.Background()
+	failed := errors.New("injected refusal after settlement")
+	name := nest.NewHandlerName("moba_settlement_refused")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if err := handlerMOBASettle(es[0].(IMobaResultEntity), es[1].(IMobaPlayerEntity), es[2].(IMobaPlayerEntity), "match", strings.Repeat("a", 64), false); err != nil {
+			return nil, err
+		}
+		return nil, failed
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.result.ID(), f.players[0].ID(), f.players[1].ID()}, nil); !errors.Is(err, failed) {
+		t.Fatal(err)
+	}
+	if f.result.Dao().GetStatus() != 0 || f.players[0].Dao().GetGold() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
+		t.Fatal("partial settlement survived rejection")
+	}
+	if err := sender.NewMobaSettlementSender(f.engine).MultiSync_MOBASettle(ctx, f.result.ID(), f.players[0].ID(), f.players[1].ID(), "match", strings.Repeat("a", 64), false); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMOBANoWinnerSettlementNeverPays(t *testing.T) {
+	f := newMOBAFixture(t)
+	s := sender.NewMobaSettlementSender(f.engine)
+	ctx := context.Background()
+	for range 2 {
+		if err := s.MultiSync_MOBASettle(ctx, f.result.ID(), f.players[0].ID(), f.players[1].ID(), "cancelled-match", strings.Repeat("a", 64), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.result.Dao().GetStatus() != 2 || f.players[0].Dao().GetGold() != 0 || f.players[0].Dao().GetWins() != 0 || f.players[1].Dao().GetLosses() != 0 {
+		t.Fatal("cancelled / unresumable match paid win rewards")
+	}
+}
+
+// 一个完整样例回合：会话绑定的输入 → 正式 Match → 服务器参考胜负 → 正式多实体 Sender 结算。
+func TestMOBAServerReferenceSettlesTheFinishedRound(t *testing.T) {
+	f := newMOBAFixture(t)
+	ctx := context.Background()
+	wire := nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { return nil }}
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := svcmatch.Queue{Mode: "moba", GroupSize: 2, Partition: "local-owner"}
+	ticketIDs := []string{}
+	for _, p := range f.players {
+		ticket, err := store.Enqueue(ctx, queue, svcmatch.Subject{Kind: "player", ID: entity.GetUniqueIDFromEntityID(p.ID())}, fmt.Sprint(p.ID()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ticketIDs = append(ticketIDs, ticket.ID)
+	}
+	matched, err := store.Commit(ctx, queue, ticketIDs)
+	if err != nil || len(matched.Members) != 2 {
+		t.Fatal("match was not atomically formed")
+	}
+	room, err := lockstep.NewMatch(lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}, MaxInputBytes: 3}, Datagrams: wire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer room.Close()
+	if err := room.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	reference := moba.NewState()
+	for !reference.Ended && reference.Tick < 100 {
+		c := moba.Command{}
+		h := reference.Heroes[0]
+		if h.X < 7 {
+			c = moba.Command{Action: moba.Move, Step: 1}
+		} else if reference.Towers[1] > 0 {
+			c = moba.Command{Action: moba.Attack, Target: moba.TowerTarget}
+		} else if h.X < 9 {
+			c = moba.Command{Action: moba.Move, Step: 1}
+		} else {
+			c = moba.Command{Action: moba.Attack, Target: moba.BaseTarget}
+		}
+		if err := moba.Submit(room, 101, room.NextFrame(), moba.Encode(c)); err != nil {
+			t.Fatal(err)
+		}
+		frame, err := room.Tick(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reference.Apply(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	winner, digest, err := reference.Result()
+	if err != nil || winner != 1 {
+		t.Fatal("no authoritative win")
+	}
+	s := sender.NewMobaSettlementSender(f.engine)
+	for range 2 {
+		if err := s.MultiSync_MOBASettle(ctx, f.result.ID(), f.players[0].ID(), f.players[1].ID(), matched.ID, digest, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.result.Dao().GetDigest() != digest || f.players[0].Dao().GetWins() != 1 || f.players[0].Dao().GetGold() != 10 {
+		t.Fatal("reference result did not pay exactly once")
+	}
+}

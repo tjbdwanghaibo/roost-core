@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# MOBA 业务接入纵切：正式生成器、Player / MatchResult DAO、多实体 Sender 与 Nest，加框架 Lockstep
+# （Match / Sequencer / FrameAssembler）、真实 loopback KCP 与 service/match 领域存储。业务规则只在
+# scripts/testdata/moba：单路、每队一名英雄的参考模拟与结算 handler，不是框架默认玩法。
+# 缺省不连接外部存储：提交器是替身。ROOST_MOBA_REAL=1（并提供隔离 Mongo 副本集
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加两个独立进程的真实文件 WAL / Mongo 正常停机后冷加载的结算重放，
+# 用后删除本次唯一库。
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-moba.XXXXXX")"
+project_root="$review_root/project"
+echo "MOBA generated consumer and logs: $review_root"
+# 成功后删除临时工程；失败或 ROOST_MOBA_KEEP=1 时保留，便于查看生成日志与工程。
+succeeded=0
+cleanup() {
+  if [[ "$succeeded" == 1 && "${ROOST_MOBA_KEEP:-0}" != 1 ]]; then
+    rm -rf "$review_root"
+  else
+    echo "MOBA generated consumer kept: $review_root" >&2
+    # 真实依赖模式失败时 DAO 库留作证据，查完手动删除。
+    if [[ "${ROOST_MOBA_REAL:-0}" == 1 && "$succeeded" != 1 ]]; then
+      echo "MOBA real-persistence database left for inspection: ${ROOST_MOBA_DB:-unset}" >&2
+    fi
+  fi
+}
+trap cleanup EXIT
+export GOWORK=off
+export GOMAXPROCS="${GOMAXPROCS:-4}"
+cd "$repo_root"
+go build -o "$review_root/roost" ./codegen/cmd/roost
+"$review_root/roost" project new moba-practice -module example.com/moba-practice \
+  -out "$project_root" -template game --skip-deps > "$review_root/generate.log" 2>&1
+cd "$project_root"
+export ROOST_MOBA_DB="roost_moba_it_${PPID}_$$"
+"$review_root/roost" add dao Player --entity Player >> "$review_root/generate.log" 2>&1
+"$review_root/roost" add entity MatchResult >> "$review_root/generate.log" 2>&1
+"$review_root/roost" add dao MatchResult --entity MatchResult >> "$review_root/generate.log" 2>&1
+# DAO 定义与实体注解是业务文件；只修改它们，生成组件、访问器与 Sender 由 CLI 生成。
+python3 - "$project_root" <<'DEFS'
+from pathlib import Path
+import sys, os
+root=Path(sys.argv[1])
+for name, fields in {
+ 'player': [('Gold','int64'),('Wins','int64'),('Losses','int64')],
+ 'match_result': [('MatchKey','string'),('Digest','string'),('WinnerID','int64'),('LoserID','int64'),('Status','int64')],
+}.items():
+ p=root/'db/def'/f'{name}.go'
+ typename=''.join(part.title() for part in name.split('_'))+'Dao'
+ marker='type '+typename+' struct {'
+ text=p.read_text().replace(marker, marker+'\n'+''.join(f'{field} {typ} `bson:"{field.lower()}" dao:"persist"`\n' for field, typ in fields))
+ text=text.replace('db=moba_practice', 'db='+os.environ['ROOST_MOBA_DB'])
+ p.write_text(text)
+# 结算记录被两名玩家共同引用，是世界对象，锁序低于 Player。
+p=root/'game/entities/match_result/entity.go'
+p.write_text(p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryWorld'))
+DEFS
+mkdir -p game/moba
+cp "$repo_root/scripts/testdata/moba/simulation.go.txt" game/moba/simulation.go
+cp "$repo_root/scripts/testdata/moba/simulation_test.go.txt" game/moba/simulation_test.go
+cp "$repo_root/scripts/testdata/moba/network_test.go.txt" game/moba/network_test.go
+cp "$repo_root/scripts/testdata/moba/matchmaking_test.go.txt" game/moba/matchmaking_test.go
+cp "$repo_root/scripts/testdata/moba/settlement.go.txt" game/handler/moba_settlement.go
+cp "$repo_root/scripts/testdata/moba/settlement_test.go.txt" game/handler/moba_settlement_test.go
+gofmt -w db/def/*.go game/moba/*.go game/handler/moba_*.go
+go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
+"$review_root/roost" generate >> "$review_root/generate.log" 2>&1
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/moba ./game/handler | tee "$review_root/test.log"
+# 12 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+passed="$(grep -c '^--- PASS: TestMOBA' "$review_root/test.log" || true)"
+if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 12 passing TestMOBA scenarios, got $passed" >&2
+  exit 1
+fi
+go build -mod=mod -p 2 ./...
+go vet -mod=mod -p 2 ./...
+"$review_root/roost" id check
+"$review_root/roost" generate --check
+if [[ "${ROOST_MOBA_REAL:-0}" == 1 ]]; then
+  : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
+  cp "$repo_root/scripts/testdata/moba/persistence/persistence_test.go" game/handler/moba_persistence_test.go
+  gofmt -w game/handler/moba_persistence_test.go
+  export ROOST_MOBA_WAL="$review_root/persistence"
+  for phase in write recover; do
+    ROOST_MOBA_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBARealSettlementAcrossProcesses$' ./game/handler | tee "$review_root/persistence-$phase.log"
+    if [[ "$(grep -c '^--- PASS: TestMOBARealSettlementAcrossProcesses' "$review_root/persistence-$phase.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/persistence-$phase.log"; then exit 1; fi
+  done
+fi
+succeeded=1
