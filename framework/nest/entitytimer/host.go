@@ -97,8 +97,8 @@ const overdueDelay = time.Millisecond
 // Host 是一个实体实例的定时器宿主（生成组件持有一个）。除 OnDestroy 外的方法都只能在实体的 Nest 锁内调用
 // （Nest handler 里，或加载 / 新建的初始化阶段）；它们读写的是 DAO，不是 Host 自己的状态。
 //
-// 最外层调用从 DAO 现建一个 timer.Scheduler、钩子写回 DAO、用完丢弃；Tick 回调中的组件操作复用这次调用的
-// 调度视图，不从中间 DAO 重建。因此事务回滚就是 DAO 的回滚，没有跨事务的内存堆。调用结束时报告最早期限：
+// 最外层调用从 DAO 现建一个 timer.Scheduler、钩子写回 DAO、用完丢弃；Tick 回调中的组件操作（含 Timer / Timers
+// 读取）复用这次调用的调度视图，不从中间 DAO 重建。因此事务回滚就是 DAO 的回滚，没有跨事务的内存堆。调用结束时报告最早期限：
 // 在事务里经 nest.AfterCommit（提交后才更新索引，回滚的事务不改索引），不在事务里时立即报告。
 type Host struct {
 	driver   *Driver
@@ -217,8 +217,11 @@ func (host *Host) RemoveTimer(id int64) bool {
 	return removed
 }
 
-// Timer 返回一个节点（DAO 里的当前状态）。
+// Timer 返回一个节点。Tick 回调里读当前调度视图（见 Timers），其余时候读 DAO。
 func (host *Host) Timer(id int64) (timer.Node, bool) {
+	if host.active != nil {
+		return host.active.Lookup(id)
+	}
 	for _, node := range host.store.SavedTimers() {
 		if node.ID == id {
 			return node, true
@@ -228,7 +231,15 @@ func (host *Host) Timer(id int64) (timer.Node, bool) {
 }
 
 // Timers 返回全部节点，按触发顺序（期限、优先级、ID）。
+//
+// Tick 回调里读当前调度视图（timer.Scheduler 的 LiveNodes）而不是 DAO：回调里新建、改期的节点要到最外层 Tick
+// 收尾才写回 DAO，读 DAO 会看不到自己刚写的（“没有就建一个”会在一次 Tick 内重复登记）。视图里的节点与
+// ChangeTimer / RemoveTimer 能操作的一致，包括正在触发的节点自己（期限为原定期限，显式改期后为新期限；
+// 它已从 DAO 删除，回调返回正值时收尾再写回）。
 func (host *Host) Timers() []timer.Node {
+	if host.active != nil {
+		return host.active.LiveNodes()
+	}
 	nodes := host.store.SavedTimers()
 	sort.Slice(nodes, func(i, j int) bool {
 		a, b := nodes[i], nodes[j]

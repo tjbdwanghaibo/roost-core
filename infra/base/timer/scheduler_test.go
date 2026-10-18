@@ -666,12 +666,42 @@ func TestOperationsOnEveryNodeStateDuringTick(t *testing.T) {
 				fires := make(map[int64]int)
 				var outer, target int64
 				opOK := true
+				// 读视图（Lookup / LiveNodes）与操作看到的是同一个活节点集合：操作前可读当且仅当改期 / 取消会成功，
+				// 操作后立即读到新期限或读不到。
+				checkLive := func(want bool, end time.Time) {
+					t.Helper()
+					node, ok := s.Lookup(target)
+					if ok != want || (ok && (node.ID != target || !node.End.Equal(end))) {
+						t.Errorf("Lookup(%d) = %+v present=%v, want present=%v end=%v", target, node, ok, want, end)
+					}
+					live := s.LiveNodes()
+					listed := slices.ContainsFunc(live, func(node Node) bool { return node.ID == target })
+					if listed != want || !slices.IsSortedFunc(live, func(a, b Node) int {
+						if firesBefore(&a, &b) {
+							return -1
+						}
+						return 1
+					}) {
+						t.Errorf("LiveNodes() = %+v, want target listed=%v in firing order", live, want)
+					}
+				}
 				operate := func() {
+					current, present := s.Lookup(target)
 					switch r.op {
 					case "change":
 						opOK = s.ChangeTimer(target, time.Time{}, time.Minute)
+						if opOK != present {
+							t.Errorf("Lookup said present=%v but change returned %v", present, opOK)
+						}
+						checkLive(opOK, base.Add(time.Minute))
 					case "remove":
 						opOK = s.RemoveTimer(target)
+						if opOK != present {
+							t.Errorf("Lookup said present=%v but remove returned %v", present, opOK)
+						}
+						checkLive(false, time.Time{})
+					default:
+						checkLive(present, current.End)
 					}
 				}
 				s.RegisterHandler(1, func(ctx Context) time.Duration { // F
