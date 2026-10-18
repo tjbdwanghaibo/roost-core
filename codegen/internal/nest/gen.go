@@ -75,6 +75,9 @@ func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool,
 	if err := validateGeneratedTypeImports(funcs, data.SenderOnly, data.SyncSenderOnly); err != nil {
 		return false, err
 	}
+	if data.SenderOnly {
+		data.Funcs = senderFunctions(funcs)
+	}
 
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return false, fmt.Errorf("template exec: %w", err)
@@ -113,6 +116,62 @@ type templateFile struct {
 	RegisterFunc    string
 	SenderType      string
 	ReceiverType    string
+}
+
+// Sender 与 handler 位于不同作用域：业务的 id / ctx 等合法参数不能遮住路由参数、局部变量或类型包。
+// 只改 Sender 的局部名字，参数顺序、类型、协议与 handler 的原始元数据都保持不变。
+func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
+	out := make([]*FuncInfo, len(funcs))
+	for i, source := range funcs {
+		copy := *source
+		copy.Entities = append([]EntityParam(nil), source.Entities...)
+		copy.Params = append([]NonEntityParam(nil), source.Params...)
+		reserved := map[string]bool{}
+		for _, name := range strings.Fields("s ctx delay id ids client err clientErr ret retXXX errXXX retValues ok groupIDs context time nest entity any") {
+			reserved[name] = true
+		}
+		for index := range source.Returns {
+			reserved[fmt.Sprintf("ret%d", index)] = true
+		}
+		for _, imp := range source.SourceImports {
+			alias := imp.Alias
+			if alias == "" {
+				alias = filepath.Base(imp.Path)
+			}
+			if alias != "_" && alias != "." {
+				reserved[alias] = true
+			}
+		}
+		used := map[string]bool{}
+		for name := range reserved {
+			used[name] = true
+		}
+		for _, param := range copy.Entities {
+			used[param.Name] = true
+		}
+		for _, param := range copy.Params {
+			used[param.Name] = true
+		}
+		rename := func(name string) string {
+			if !reserved[name] {
+				return name
+			}
+			next := name + "Arg"
+			for used[next] {
+				next += "Arg"
+			}
+			used[next] = true
+			return next
+		}
+		for index := range copy.Entities {
+			copy.Entities[index].Name = rename(copy.Entities[index].Name)
+		}
+		for index := range copy.Params {
+			copy.Params[index].Name = rename(copy.Params[index].Name)
+		}
+		out[i] = &copy
+	}
+	return out
 }
 
 func commonReceiverType(funcs []*FuncInfo) (string, error) {

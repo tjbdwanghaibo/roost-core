@@ -12,6 +12,28 @@ import (
 	"testing"
 )
 
+// 业务参数名是合法 Go 标识符，不应与 Sender 自己的路由参数、接收者或结果变量冲突。
+func TestSenderNamesDoNotCollideWithBusinessArguments(t *testing.T) {
+	dir := t.TempDir()
+	source := `package handler
+import player "example.com/demo/game/entities/player"
+//roost:nest rollback=undo durability=strict
+func handlerCancel(target player.IBagEntity, id, idArg, ctx, delay, ids, client, err, ret, ok, s, nest, ret0, clientErr, retXXX, errXXX, retValues, groupIDs int64) (int64, bool, error) { return 0, true, nil }
+`
+	if err := os.WriteFile(filepath.Join(dir, "cancel.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range []string{"sender", "syncsender"} {
+		path := filepath.Join(dir, pkg, "cancel_nest_gen.go")
+		if _, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.AllErrors|parser.DeclarationErrors); err != nil {
+			t.Fatalf("%s has colliding generated declarations: %v", pkg, err)
+		}
+	}
+}
+
 // 生成签名必须使用可引用的参数名，并且只导入实际使用的类型包。
 func TestABlankParameterNameGeneratesUsableCode(t *testing.T) {
 	dir := t.TempDir()

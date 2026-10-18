@@ -65,6 +65,8 @@ result, err := syncSender.Sync_UseItem(ctx, playerID, cmd)
 Sender 只依赖 `nest.Client`，不会读取全局 `nest.Nest`。因此单元测试可以注入
 fake Client，生产环境从 `app.Registry` 取得 `wiring/nest` 的 Nest Mod 提供的 Client。
 
+业务 handler 的 `id`、`ctx`、`client`、`err` 等合法参数名可以正常使用。生成的 Sender 遇到它自己的路由参数、接收者、局部结果变量或类型包名称冲突时，只在 Sender 的局部签名中添加 `Arg` 后缀并继续避让；handler 元数据、参数顺序、类型和线协议不变，调用者仍按原顺序传参。
+
 ### 延时 Sender 不持久
 
 `Delay_X` / `MultiDelay_X` / `MultiGroupDelay_X` 把消息放进本进程内存里的延时队列，到期再走正常准入：
