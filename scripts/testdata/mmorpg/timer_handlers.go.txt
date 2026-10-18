@@ -1,0 +1,29 @@
+package player
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"time"
+)
+
+const TimerBuff int32 = 1
+const TimerRevive int32 = 2
+
+func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+	handlers.Register(TimerRevive, func(f entitytimer.Fire) time.Duration {
+		dao := component.owner.Dao()
+		if dao.GetReviveTimer() == f.ID {
+			dao.SetHP(100)
+			dao.SetReviveTimer(0)
+		}
+		return 0
+	})
+	handlers.Register(TimerBuff, func(f entitytimer.Fire) time.Duration {
+		// ID 防止已被替换的到期事件清除新 Buff；加载后补触发同样只清理自己的状态。
+		dao := component.owner.Dao()
+		if dao.GetBuffTimer() == f.ID {
+			dao.SetBuffValue(0)
+			dao.SetBuffTimer(0)
+		}
+		return 0
+	})
+}

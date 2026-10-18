@@ -1,0 +1,255 @@
+package handler
+
+import (
+	db "example.com/mmorpg-practice/db"
+	player "example.com/mmorpg-practice/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"math"
+	"time"
+)
+
+type IMMOTradeEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.TradeDao
+}
+type IMMONpcEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.MonsterDao
+}
+type IMMOCombatEntity interface {
+	IMMOEntity
+	TimerComp() *player.TimerComponent
+}
+
+const mmoGoldLimit int64 = 1000000
+const mmoItemLimit int64 = 1000
+
+// 两人队伍退出 / 解散；携带预期队伍 ID，旧队伍的延迟请求不能清掉新队伍。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGDisband(target IMMOEntity, peer IMMOEntity, expected int64) error {
+	if target.ID() == peer.ID() || expected <= 0 {
+		return errMMORule
+	}
+	if target.Dao().GetPartyID() == 0 && peer.Dao().GetPartyID() == 0 {
+		return nil
+	}
+	if target.Dao().GetPartyID() != expected || peer.Dao().GetPartyID() != expected {
+		return errMMORule
+	}
+	target.Dao().SetPartyID(0)
+	peer.Dao().SetPartyID(0)
+	return nil
+}
+
+// 交易记录是独立实体，完整 ID 是幂等身份；只为本示例预留双方资产，不调用远端服务。
+// 截止用端点注入的服务器业务时间，不从客户端接受；正式游戏需配置有效期与库存容量。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, price int64, count int64, now int64) error {
+	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
+	if seller.ID() == buyer.ID() || price <= 0 || price > mmoGoldLimit || count <= 0 || count > mmoItemLimit || now <= 0 || now > math.MaxInt64-5000 {
+		return errMMORule
+	}
+	if d.GetStatus() != 0 {
+		if d.GetSellerID() == seller.ID() && d.GetBuyerID() == buyer.ID() && d.GetPrice() == price && d.GetCount() == count {
+			return nil
+		}
+		return errMMORule
+	}
+	if s.GetItems() < count || b.GetGold() < price || s.GetGold() > mmoGoldLimit-price || b.GetItems() > mmoItemLimit-count {
+		return errMMORule
+	}
+	s.SetItems(s.GetItems() - count)
+	b.SetGold(b.GetGold() - price)
+	d.SetSellerID(seller.ID())
+	d.SetBuyerID(buyer.ID())
+	d.SetPrice(price)
+	d.SetCount(count)
+	d.SetDeadline(now + 5000)
+	d.SetStatus(1)
+	return nil
+}
+
+// actorID 由已鉴权端点填入。action 1 确认，2 取消，3 到期清理；到期由服务内部以 actorID=0 调用。
+// 任一取消 / 掉线（本例选择取消）或到期退还托管资产；双方确认才交换，终态保留作重放凭据。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, actorID int64, action int64, now int64) error {
+	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
+	if d.GetStatus() == 0 || d.GetSellerID() != seller.ID() || d.GetBuyerID() != buyer.ID() {
+		return errMMORule
+	}
+	if action == 3 {
+		if actorID != 0 || now < d.GetDeadline() {
+			return errMMORule
+		}
+	} else if (action != 1 && action != 2) || (actorID != seller.ID() && actorID != buyer.ID()) {
+		return errMMORule
+	}
+	if d.GetStatus() == 2 {
+		if action == 1 {
+			return nil
+		}
+		return errMMORule
+	}
+	if d.GetStatus() == 3 {
+		if action == 2 || action == 3 {
+			return nil
+		}
+		return errMMORule
+	}
+	if action == 1 && now < d.GetDeadline() {
+		if actorID == seller.ID() {
+			d.SetSellerConfirmed(1)
+		} else {
+			d.SetBuyerConfirmed(1)
+		}
+		if d.GetSellerConfirmed() == 0 || d.GetBuyerConfirmed() == 0 {
+			return nil
+		}
+		if s.GetGold() > mmoGoldLimit-d.GetPrice() || b.GetItems() > mmoItemLimit-d.GetCount() {
+			return errMMORule
+		}
+		s.SetGold(s.GetGold() + d.GetPrice())
+		b.SetItems(b.GetItems() + d.GetCount())
+		d.SetStatus(2)
+		return nil
+	}
+	if s.GetItems() > mmoItemLimit-d.GetCount() || b.GetGold() > mmoGoldLimit-d.GetPrice() {
+		return errMMORule
+	}
+	s.SetItems(s.GetItems() + d.GetCount())
+	b.SetGold(b.GetGold() + d.GetPrice())
+	d.SetStatus(3)
+	return nil
+}
+
+// 增益刷新先撤销旧节点，再登记新节点；Buff 状态和期限与资源一样随 Nest 提交 / 回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGBuff(target IMMOCombatEntity, value int64) error {
+	if value <= 0 || value > 10 {
+		return errMMORule
+	}
+	d := target.Dao()
+	if id := d.GetBuffTimer(); id != 0 {
+		target.TimerComp().RemoveTimer(id)
+	}
+	id := target.TimerComp().NewTimer(2*time.Second, player.TimerBuff, 0, 0, nil)
+	if id == 0 {
+		return errMMORule
+	}
+	d.SetBuffValue(value)
+	d.SetBuffTimer(id)
+	return nil
+}
+
+// 最小权威战斗：同地图、存活、单调输入序号和服务器冷却；命中 / 掉落归属 / 击杀任务一起提交。
+// 本例未模拟空间距离或客户端预测；正式游戏必须再按权威位置验证射程和技能配置。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, now int64) error {
+	d, m := target.Dao(), mob.Dao()
+	if seq <= 0 || now <= 0 || now > math.MaxInt64-1000 {
+		return errMMORule
+	}
+	if seq == d.GetAttackSeq() {
+		if d.GetLastAttackTarget() == mob.ID() {
+			return nil
+		}
+		return errMMORule
+	}
+	if seq-1 != d.GetAttackSeq() || d.GetHP() <= 0 || d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || now < d.GetCooldownUntil() || d.GetQuestKills() >= 1000000 {
+		return errMMORule
+	}
+	damage := int64(10) + d.GetBuffValue()
+	if damage < 10 || damage > 20 {
+		return errMMORule
+	}
+	hp := max(int64(0), m.GetHP()-damage)
+	m.SetHP(hp)
+	d.SetAttackSeq(seq)
+	d.SetLastAttackTarget(mob.ID())
+	d.SetCooldownUntil(now + 1000)
+	if hp == 0 {
+		m.SetLootOwner(target.ID())
+		d.SetQuestKills(d.GetQuestKills() + 1)
+	}
+	return nil
+}
+
+// 掉落领奖与领取事实同事务；其他人不能拾取，本例没有队伍分配规则。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGLoot(target IMMOEntity, mob IMMONpcEntity) error {
+	d, m := target.Dao(), mob.Dao()
+	if m.GetHP() != 0 || m.GetLootOwner() != target.ID() || d.GetSceneID() != m.GetSceneID() {
+		return errMMORule
+	}
+	if m.GetLootTaken() != 0 {
+		return nil
+	}
+	if d.GetItems() >= mmoItemLimit {
+		return errMMORule
+	}
+	d.SetItems(d.GetItems() + 1)
+	m.SetLootTaken(1)
+	return nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGQuest(target IMMOEntity) error {
+	d := target.Dao()
+	if d.GetQuestClaimed() != 0 {
+		return nil
+	}
+	if d.GetQuestKills() < 1 || d.GetGold() > mmoGoldLimit-5 {
+		return errMMORule
+	}
+	d.SetGold(d.GetGold() + 5)
+	d.SetQuestClaimed(1)
+	return nil
+}
+
+// 副本完成事实由本副本的死亡 Boss 决定，不相信客户端的胜利通知；奖励由独立幂等领奖流程发。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGCompleteInstance(area IMMOSceneEntity, boss IMMONpcEntity) error {
+	if boss.Dao().GetHP() != 0 || boss.Dao().GetSceneID() != area.ID() {
+		return errMMORule
+	}
+	area.Dao().SetInstanceComplete(1)
+	return nil
+}
+
+// 玩家受伤与怪物在同一 Nest 锁内校验；示例固定伤害，正式数值应由技能配置和权威战斗计算。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGHurt(target IMMOEntity, mob IMMONpcEntity) error {
+	d, m := target.Dao(), mob.Dao()
+	if d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || d.GetHP() <= 0 {
+		return errMMORule
+	}
+	d.SetHP(max(int64(0), d.GetHP()-25))
+	return nil
+}
+
+// 重复复活请求复用同一期限，不提前复活也不登记第二个节点。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMMORPGRevive(target IMMOCombatEntity) error {
+	d := target.Dao()
+	if d.GetHP() != 0 {
+		return errMMORule
+	}
+	if d.GetReviveTimer() != 0 {
+		return nil
+	}
+	id := target.TimerComp().NewTimer(3*time.Second, player.TimerRevive, 0, 0, nil)
+	if id == 0 {
+		return errMMORule
+	}
+	d.SetReviveTimer(id)
+	return nil
+}

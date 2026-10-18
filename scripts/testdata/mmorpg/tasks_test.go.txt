@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	monster "example.com/mmorpg-practice/game/entities/monster"
 	player "example.com/mmorpg-practice/game/entities/player"
 	scene "example.com/mmorpg-practice/game/entities/scene"
+	trade "example.com/mmorpg-practice/game/entities/trade"
 	sender "example.com/mmorpg-practice/game/handler/syncsender"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -11,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"sync"
 	"testing"
+	"time"
 )
 
 type mmoGetter map[int64]entity.IThreadSafeEntity
@@ -42,6 +45,9 @@ type mmoFixture struct {
 	engine  *nest.NestMgr
 	players [2]*player.Player
 	scenes  [2]*scene.Scene
+	trade   *trade.Trade
+	monster *monster.Monster
+	now     time.Time
 }
 
 func newMMOFixture(t *testing.T) *mmoFixture {
@@ -49,7 +55,10 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 	player.RegisterEntity()
 	scene.RegisterEntity()
 	RegisterMmoTasksNestHandlers()
-	f := &mmoFixture{}
+	RegisterMmoGameplayNestHandlers()
+	RegisterTickPlayerTimerGenNestHandlers()
+	f := &mmoFixture{now: time.Unix(1800000000, 0)}
+	player.TimerDriver.SetClock(func() time.Time { return f.now })
 	g := mmoGetter{}
 	for i := range 2 {
 		pid, _ := entity.BuildEntityID(int64(800+i), player.EntityKindPlayer)
@@ -67,15 +76,41 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 		g[pid] = p
 		g[sid] = s
 	}
+	trade.RegisterEntity()
+	monster.RegisterEntity()
+	tid, _ := entity.BuildEntityID(1, trade.EntityKindTrade)
+	mid, _ := entity.BuildEntityID(1, monster.EntityKindMonster)
+	tr, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: tid, Kind: trade.EntityKindTrade})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mob, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: mid, Kind: monster.EntityKindMonster})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.trade = tr.(*trade.Trade)
+	f.monster = mob.(*monster.Monster)
+	g[tid] = tr
+	g[mid] = mob
 	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mmoCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = f.engine.Shutdown(context.Background()) })
+	if err := player.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.engine.Shutdown(context.Background())
+		for _, p := range f.players {
+			p.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+		}
+	})
 	init := nest.NewHandlerName("mmo_init_" + t.Name())
 	nest.MustRegisterHandlerWithMeta(init, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		p := es[0].(*player.Player)
 		p.Dao().SetGold(50)
+		p.Dao().SetHP(100)
+		p.Dao().SetItems(3)
 		p.Dao().SetSceneID(f.scenes[0].ID())
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
@@ -90,6 +125,16 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	if _, err := f.engine.Request(context.Background(), seed, f.scenes[0].ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	mobInit := nest.NewHandlerName("mmo_mob_" + t.Name())
+	nest.MustRegisterHandlerWithMeta(mobInit, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		d := es[0].(*monster.Monster).Dao()
+		d.SetHP(20)
+		d.SetSceneID(f.scenes[0].ID())
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), mobInit, f.monster.ID(), nil); err != nil {
 		t.Fatal(err)
 	}
 	return f

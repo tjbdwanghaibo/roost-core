@@ -1,0 +1,326 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	db "example.com/mmorpg-practice/db"
+	player "example.com/mmorpg-practice/game/entities/player"
+	sender "example.com/mmorpg-practice/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"sync"
+	"testing"
+	"time"
+)
+
+func (f *mmoFixture) tick(t *testing.T, after time.Duration) {
+	t.Helper()
+	f.now = f.now.Add(after)
+	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.players[0].ID(), f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMMORPGPartyDisbandRejectsTheOldParty(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoTasksSender(f.engine)
+	g := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, b := f.players[0].ID(), f.players[1].ID()
+	if err := s.MultiSync_MMORPGParty(ctx, a, b, 17); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := g.MultiSync_MMORPGDisband(ctx, a, b, 17); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.MultiSync_MMORPGParty(ctx, a, b, 18); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.MultiSync_MMORPGDisband(ctx, a, b, 17); err == nil {
+		t.Fatal("stale disband accepted")
+	}
+	for _, p := range f.players {
+		if p.Dao().GetPartyID() != 18 {
+			t.Fatal("old disband split current party")
+		}
+	}
+}
+func TestMMORPGTradeBothConfirmAndReplay(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
+	now := f.now.UnixMilli()
+	for range 2 {
+		if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetItems() != 2 || f.players[1].Dao().GetGold() != 40 {
+		t.Fatal("escrow not reserved once")
+	}
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, 999, 1, now); err == nil {
+		t.Fatal("outsider confirmed trade")
+	}
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if f.trade.Dao().GetStatus() != 1 || f.players[0].Dao().GetGold() != 50 {
+		t.Fatal("one confirmation settled trade")
+	}
+	for range 2 {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, 1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.trade.Dao().GetStatus() != 2 || f.players[0].Dao().GetGold() != 60 || f.players[1].Dao().GetItems() != 4 {
+		t.Fatal("trade settlement duplicated or missing")
+	}
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 2, now); err == nil {
+		t.Fatal("settled trade refunded")
+	}
+	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 11, 1, now); err == nil {
+		t.Fatal("trade identity changed")
+	}
+}
+func TestMMORPGTradeCancelAndExpiryRefundEscrow(t *testing.T) {
+	for _, action := range []int64{2, 3} {
+		t.Run(map[int64]string{2: "disconnect_cancel", 3: "deadline"}[action], func(t *testing.T) {
+			f := newMMOFixture(t)
+			s := sender.NewMmoGameplaySender(f.engine)
+			ctx := context.Background()
+			a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
+			now := f.now.UnixMilli()
+			if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+				t.Fatal(err)
+			}
+			actor := b
+			if action == 3 {
+				actor = 0
+				now += 5000
+			}
+			for range 2 {
+				if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, actor, action, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.trade.Dao().GetStatus() != 3 || f.players[0].Dao().GetItems() != 3 || f.players[1].Dao().GetGold() != 50 {
+				t.Fatal("escrow refund duplicated or lost")
+			}
+			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err == nil {
+				t.Fatal("cancelled trade reopened")
+			}
+		})
+	}
+}
+func TestMMORPGTradeConfirmRacesWithCancel(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
+	now := f.now.UnixMilli()
+	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for _, action := range []int64{1, 2} {
+		wg.Add(1)
+		go func(action int64) { defer wg.Done(); _ = s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, action, now) }(action)
+	}
+	wg.Wait()
+	if status := f.trade.Dao().GetStatus(); status != 2 && status != 3 {
+		t.Fatalf("nonterminal trade %d", status)
+	}
+	if f.players[0].Dao().GetGold()+f.players[1].Dao().GetGold() != 100 || f.players[0].Dao().GetItems()+f.players[1].Dao().GetItems() != 6 {
+		t.Fatal("race lost assets")
+	}
+	if f.trade.Dao().GetStatus() == 2 && (f.players[0].Dao().GetGold() != 60 || f.players[1].Dao().GetItems() != 4) {
+		t.Fatal("settled assets disagree")
+	}
+	if f.trade.Dao().GetStatus() == 3 && (f.players[0].Dao().GetGold() != 50 || f.players[0].Dao().GetItems() != 3) {
+		t.Fatal("cancelled assets disagree")
+	}
+}
+func TestMMORPGCombatCooldownReplayLootAndQuest(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, b, id := f.players[0].ID(), f.players[1].ID(), f.monster.ID()
+	now := f.now.UnixMilli()
+	if err := s.Sync_MMORPGQuest(ctx, a); err == nil {
+		t.Fatal("unearned quest reward")
+	}
+	for range 2 {
+		if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.monster.Dao().GetHP() != 10 {
+		t.Fatal("replayed input damaged twice")
+	}
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2, now+999); err == nil {
+		t.Fatal("cooldown bypassed")
+	}
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2, now+1000); err != nil {
+		t.Fatal(err)
+	}
+	if f.monster.Dao().GetHP() != 0 || f.players[0].Dao().GetQuestKills() != 1 {
+		t.Fatal("kill not attributed exactly once")
+	}
+	if err := s.MultiSync_MMORPGLoot(ctx, b, id); err == nil {
+		t.Fatal("another player stole loot")
+	}
+	for range 2 {
+		if err := s.MultiSync_MMORPGLoot(ctx, a, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Sync_MMORPGQuest(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetItems() != 4 || f.players[0].Dao().GetGold() != 55 {
+		t.Fatal("loot or quest reward replay duplicated")
+	}
+	if err := s.MultiSync_MMORPGCompleteInstance(ctx, f.scenes[0].ID(), id); err != nil {
+		t.Fatal(err)
+	}
+	if f.scenes[0].Dao().GetInstanceComplete() != 1 {
+		t.Fatal("instance did not complete")
+	}
+}
+func TestMMORPGCombatRefusesOtherScenesAndLivingBossCompletion(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, id := f.players[0].ID(), f.monster.ID()
+	if err := s.MultiSync_MMORPGCompleteInstance(ctx, f.scenes[0].ID(), id); err == nil {
+		t.Fatal("living boss completed instance")
+	}
+	if err := sender.NewMmoTasksSender(f.engine).MultiSync_MMORPGTransfer(ctx, a, f.scenes[0].ID(), f.scenes[1].ID(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1, f.now.UnixMilli()); err == nil {
+		t.Fatal("cross scene strike accepted")
+	}
+	if f.monster.Dao().GetHP() != 20 || f.players[0].Dao().GetAttackSeq() != 0 {
+		t.Fatal("refused strike changed state")
+	}
+}
+func TestMMORPGBuffRefreshAndDeadline(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	id := f.players[0].ID()
+	if err := s.Sync_MMORPGBuff(ctx, id, 5); err != nil {
+		t.Fatal(err)
+	}
+	first := f.players[0].Dao().GetBuffTimer()
+	f.tick(t, time.Second)
+	if err := s.Sync_MMORPGBuff(ctx, id, 7); err != nil {
+		t.Fatal(err)
+	}
+	if f.players[0].Dao().GetBuffTimer() == first || f.players[0].Dao().TimersLen() != 1 {
+		t.Fatal("refresh left duplicate timer")
+	}
+	f.tick(t, time.Second)
+	if f.players[0].Dao().GetBuffValue() != 7 {
+		t.Fatal("old deadline cleared refreshed buff")
+	}
+	f.tick(t, time.Second)
+	if f.players[0].Dao().GetBuffValue() != 0 || f.players[0].Dao().GetBuffTimer() != 0 {
+		t.Fatal("buff did not expire")
+	}
+}
+func TestMMORPGBuffFailureRollsBackAndOfflineExpiry(t *testing.T) {
+	f := newMMOFixture(t)
+	ctx := context.Background()
+	p := f.players[0]
+	s := sender.NewMmoGameplaySender(f.engine)
+	name := nest.NewHandlerName("mmo_buff_reject")
+	refused := errors.New("injected rejection after buff")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if err := handlerMMORPGBuff(es[0].(IMMOCombatEntity), 5); err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(ctx, name, p.ID(), nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if p.Dao().GetBuffValue() != 0 || p.Dao().TimersLen() != 0 {
+		t.Fatal("rejected buff survived rollback")
+	}
+	if err := s.Sync_MMORPGBuff(ctx, p.ID(), 7); err != nil {
+		t.Fatal(err)
+	}
+	raw := p.Dao().Marshal()
+	p.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	p.SetRemoved()
+	f.now = f.now.Add(time.Hour)
+	dao := db.NewPlayerDao()
+	if err := dao.Unmarshal(raw); err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: p.ID(), Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{"player": dao}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := built.(*player.Player)
+	t.Cleanup(func() { loaded.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload) })
+	// 独立 Nest 在正式水合实体上投一次补触发，不把序列化测试说成文件 WAL / Mongo 恢复。
+	engine := nest.NewEngine(nest.NestOptionWithGetter(mmoGetter{loaded.ID(): loaded}), nest.NestOptionWithTransactionCommitter(mmoCommitter{}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Shutdown(ctx)
+	if _, err := sender.NewTickPlayerTimerGenSender(engine).Sync_TickPlayerTimer(ctx, loaded.ID(), f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Dao().GetBuffValue() != 0 || loaded.Dao().TimersLen() != 0 {
+		t.Fatal("offline buff did not expire after reload")
+	}
+}
+
+func TestMMORPGDeathAndDelayedRevive(t *testing.T) {
+	f := newMMOFixture(t)
+	s := sender.NewMmoGameplaySender(f.engine)
+	ctx := context.Background()
+	a, mob := f.players[0].ID(), f.monster.ID()
+	for range 4 {
+		if err := s.MultiSync_MMORPGHurt(ctx, a, mob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetHP() != 0 {
+		t.Fatal("player did not die")
+	}
+	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1, f.now.UnixMilli()); err == nil {
+		t.Fatal("dead player attacked")
+	}
+	for range 2 {
+		if err := s.Sync_MMORPGRevive(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().TimersLen() != 1 {
+		t.Fatal("replayed resurrection created extra timers")
+	}
+	f.tick(t, 2*time.Second)
+	if f.players[0].Dao().GetHP() != 0 {
+		t.Fatal("revived before deadline")
+	}
+	f.tick(t, time.Second)
+	if f.players[0].Dao().GetHP() != 100 || f.players[0].Dao().GetReviveTimer() != 0 {
+		t.Fatal("resurrection did not settle")
+	}
+	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1, f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+}
