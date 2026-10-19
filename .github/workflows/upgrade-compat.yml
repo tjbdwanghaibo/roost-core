@@ -26,7 +26,9 @@ jobs:
         # Generators that ship inside roost-core with the current package
         # layout (framework/ infra/ wiring/ …). Older releases need the
         # retired import rewrite and cannot be upgraded any more.
-        core: [v1.25.0]
+        # v1.27.0 is the release before v1.28.0 (added with the v1.28.0
+        # release): the hand edits below find nothing to change in it.
+        core: [v1.25.0, v1.27.0]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -78,8 +80,10 @@ jobs:
 
   # v1.26.x 生成的 game-demo（启用了玩家接入）→ 当前生成器。v1.27.0 把 game/player_agent 改名为
   # game/playeraccess，sync / upgrade 不删旧目录、不改业务文件，必须先按 v1.27.0-NOTES B1 手工迁移。
-  # 这条 lane 严格照发布说明的步骤做，再 upgrade、编译、测试，并核对 B1 的承诺：迁移后的工程与
-  # 当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。
+  # 这条 lane 严格照发布说明的步骤做，再 upgrade、编译、测试，并核对 B1 的承诺：迁移后再经 v1.27.0
+  # 生成器 sync 的工程与 v1.27.0 生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。
+  # B1 的承诺是相对 v1.27.0 生成器的：之后的版本改了 demo 模板（业务文件，upgrade 不改写），与当前
+  # 生成器的新工程逐字节比较不再成立（v1.28.0 发版时实测 131 处不同），所以对照钉在 v1.27.0。
   player-access-project:
     strategy:
       fail-fast: false
@@ -116,6 +120,9 @@ jobs:
             echo "::error::Go files still name player_agent after the documented B1 rewrite"
             exit 1
           fi
+          # B1 承诺的对照样本：迁移后的工程复制一份，用 v1.27.0 生成器 sync（只重写生成文档里的旧名）。
+          cp -R . "${RUNNER_TEMP}/b1-migrated"
+          (cd "${RUNNER_TEMP}/b1-migrated" && GOWORK=off go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@v1.27.0 project sync --root .)
           sha256sum game/controllers/player/*.go game/playeraccess/business_note.go internal/service/game/service.go > "${RUNNER_TEMP}/business.before"
           core=latest
           "${RUNNER_TEMP}/roost-current" project sync --root .
@@ -134,7 +141,7 @@ jobs:
           cp roost.yaml "${RUNNER_TEMP}/roost.before"
           "${RUNNER_TEMP}/roost-current" project upgrade --root . --skip-deps -core "$core"
           cmp roost.yaml "${RUNNER_TEMP}/roost.before"
-      - name: migrated project equals a fresh game-demo (B1 promise)
+      - name: migrated project equals a fresh v1.27.0 game-demo (B1 promise)
         run: |
-          GOWORK=off "${RUNNER_TEMP}/roost-current" project new planet -module example.com/planet -out "${RUNNER_TEMP}/fresh/planet" -template game-demo
-          diff -r -x .git -x go.mod -x go.sum -x go.work -x go.work.sum -x business_note.go "${RUNNER_TEMP}/fresh/planet" "${RUNNER_TEMP}/planet"
+          GOWORK=off go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@v1.27.0 project new planet -module example.com/planet -out "${RUNNER_TEMP}/fresh/planet" -template game-demo
+          diff -r -x .git -x go.mod -x go.sum -x go.work -x go.work.sum -x business_note.go "${RUNNER_TEMP}/fresh/planet" "${RUNNER_TEMP}/b1-migrated"

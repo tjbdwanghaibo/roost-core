@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [v1.28.0] - 2026-10-19
+
+次版本：Sync 慢消费者统一为“跟不上就断开”与自身视图（self_sync）、嵌入 TCP 每连接出站队列与 Lockstep 追帧背压、Saga 原生步骤 / effect 消费者进框架与性能优化、按实体的持久定时器（entitytimer）与 Scheduler 重构、DataEngine 删档后拒绝 GetOrCreate 重建与特殊记录合并 checkpoint、DAO 持久文档结构体与持久键告警、match 保留期与跨分区原子成局，以及七轮新用户试用带来的生成器修复。**含破坏性变化**（线上尚未部署，不做旧数据 / 旧进程兼容）；生成物最低 core 由 v1.26.0 升到 **v1.28.0**（生成物用到 `dataengine.NewStoredKeySet`、`saga.Engine.GetByBusinessKey`、`wiring/selfsync`、`framework/nest/entitytimer` 等新 API，钉 v1.27.0 编译失败）。发布说明见 docs/release/v1.28.0-NOTES.md。
+
+**升级必读**（细节在下面各小节，操作顺序见发布说明 §1）：
+
+- match 队列键加 hash tag：先停旧匹配服务、清空 `<key_prefix>:queue:*`（等待中的票作废），再起新版本；`Matchmaker` / `Store` 的业务替身补 `CommitAcross`。
+- Sync 慢消费者：推送在活着的连接上被拒即关闭该玩家全部连接（独立 Gate 下客户端会看到被服务端断开，按普通断线重连）；Manager 的线协议 epoch 改为单调递增，客户端不能假设首帧 epoch 为 1。
+- 嵌入 TCP：`TCPRuntime.Push*` / `Session.Reply` 改为只入队（返回 nil 表示已准入），超过 1024 帧或字节上限、或一帧在 `write_timeout` 内写不出就关连接。
+- API：`lockstep.NewTCPSender` 多一个参数（实时 / 追帧两个 push，都不能为 nil）；`entitysync.Manager.RegisterPolicy(apply, pending...)` 改为 `RegisterPolicy(entitysync.PolicyHooks{...})`；`timer.Scheduler.ChangeTimer` / `RemoveTimer` 在 Tick 期间对不存在的 ID 返回 false；`RecordExp`（demo）返回 error。
+- Lockstep 历史默认只保留 3600 帧，越界追帧下发 C9 失败通知；客户端与服务端须同版本。
+- errcode 新增框架段 1–999：`entity_not_found = 2`、`entity_deleted = 3`；`ids.errcode` 下界须 > 999。
+- DAO 持久键：`bson:"x"` 就是持久键，没写时是字段名 snake_case；重新 `roost generate` 后 `gen_*_dao.go` 多出持久文档结构体；写了与 snake_case 不同 `bson` 名的字段键会变（生成期 WARN，需先迁移）；库里有、DAO 未声明的键加载时 WARN 但**不读入**，下一次整文档写回即删除——改名 / 删字段前保留原 `bson` 名或先离线迁移再提升 schema。
+- 新生成工程的共享资源名（总线前缀、DataEngine / saga / Remote 库、effects / saga / sync 流、etcd 前缀、DAO 库名）按工程名派生；已有工程配置不改写，同一工程所有服务须一致。
+- saga：`start_effect_*` 不写时取 `dataengine.effects`，与它不一致时拒绝启动；`definition.go` 不再生成 `Subscribe<Step>`；demo 收件箱集合改名。
+- 删档后同 ID 经 GetOrCreate 返回 `entity_deleted`；修复前写进 WAL 的“删档后重建”记录仍会让投影 fatal，停旧进程并清空该 sid 的 WAL 目录与测试库。
+- 指标：demo `scene_session_reopen_failed_total` → `scene_session_open_failed_total`；`configdata.reload.total` 新增 `result="unchanged"`。
+- `roost config check` 的结果行改为 `config keys are valid (cross-mod rules not checked)` 等（工程编译不过时），按文本匹配的脚本注意。
+
 ### match：大队列按 Partition 分键；跨分区原子成局 `CommitAcross`；键名加 hash tag（维护者 2026-10-19 批准）
 
 - **背景**：`service/match` 一个分区（`Queue.Partition`）的全部状态是一个整体读写的版本化值。按段位档 / 地区 / sid 组分区已能把大队列拆成多个键，但“放宽匹配”——一局票来自同一逻辑队列的几个分区——没有原子成局的办法，只能对各分区分别 Commit，任何一边失败都留下半局。

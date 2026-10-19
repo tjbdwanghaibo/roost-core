@@ -95,6 +95,9 @@
 
 ## docs/release
 
+- [v1.28.0-NOTES.md](../release/v1.28.0-NOTES.md)：v1.28.0 发布说明（破坏性变化与升级清单、新能力、修复、性能；最低 core v1.28.0）
+- [v1.28.0-IMPLEMENTATION.md](../release/v1.28.0-IMPLEMENTATION.md)：v1.28.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
+- [v1.28.0-VALIDATION.md](../release/v1.28.0-VALIDATION.md)：v1.28.0 发布验收
 - [v1.27.0-NOTES.md](../release/v1.27.0-NOTES.md)：v1.27.0 发布说明（playeraccess 改名与升级步骤、Remote WAL 级 Rejected 精简）
 - [v1.27.0-IMPLEMENTATION.md](../release/v1.27.0-IMPLEMENTATION.md)：v1.27.0 提交、位置、可达性梳理与红绿证据
 - [v1.27.0-VALIDATION.md](../release/v1.27.0-VALIDATION.md)：v1.27.0 发布验收
