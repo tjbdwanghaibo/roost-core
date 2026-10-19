@@ -1,0 +1,121 @@
+package idlesim
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestIdleSimCatalogRejectsBadReloadAndKeepsFrozenRecipe(t *testing.T) {
+	dir := t.TempDir()
+	write := func(r Rules) {
+		t.Helper()
+		raw, _ := json.Marshal(r)
+		if err := os.WriteFile(filepath.Join(dir, "idle.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := DemoRules()
+	write(r)
+	store, err := OpenCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Current()
+	old, err := CaptureRules(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := r
+	bad.Recipes[0].Work = 0
+	write(bad)
+	if _, err := store.Reload(context.Background()); err == nil || store.Current() != snapshot {
+		t.Fatal("bad config replaced snapshot")
+	}
+	r.Version = "new"
+	r.Recipes[0].Raw = 5
+	write(r)
+	if _, err := store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := CaptureRules(store.Current())
+	if err != nil || current.Hash() == old.Hash() || old.Recipes[0].Raw != 2 {
+		t.Fatal("frozen config changed")
+	}
+}
+func TestIdleSimSegmentedTimeMatchesSingleIntegration(t *testing.T) {
+	const now int64 = 1800000000000
+	s, err := NewState(now, DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []Command{{Seq: 1, Kind: "queue", Station: 0, Recipe: 2}, {Seq: 2, Kind: "queue", Station: 1, Recipe: 1}, {Seq: 3, Kind: "boost"}} {
+		if _, err := s.Apply(c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	one, err := Decode(s.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	many, err := Decode(s.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := one.Advance(now + 25000); err != nil {
+		t.Fatal(err)
+	}
+	for delta := int64(1000); delta <= 25000; delta += 1000 {
+		if err := many.Advance(now + delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if one.Digest() != many.Digest() || one.Pending != 3 || one.IncomeRemainder != 5000 || one.Stations[0].Queue[0].Progress != 35000 || len(one.Stations[1].Ready) != 1 {
+		t.Fatal("integration depends on timer frequency")
+	}
+	view := one.View()
+	view.Stations[0].Queue[0].Progress = 0
+	if reflect.DeepEqual(view.Stations, one.Stations) {
+		t.Fatal("view aliases mutable queue")
+	}
+	// 收益封顶丢弃余数；任务满缓冲后丢弃时间，不让领取后恢复旧的溢出。
+	capped, err := NewState(now, DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	capped.Pending = 99
+	capped.IncomeRemainder = 9000
+	if err := capped.Advance(now + 30000); err != nil || capped.Pending != 100 || capped.IncomeRemainder != 0 {
+		t.Fatal("pending income cap wrong", err)
+	}
+}
+func TestIdleSimInvalidSnapshotsIdentitiesAndOverflowFailClosed(t *testing.T) {
+	const now int64 = 1800000000000
+	s, err := NewState(now, DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{s.Encode() + "{}", strings.Replace(s.Encode(), `"Gold":100`, `"Gold":-1`, 1), strings.Replace(s.Encode(), `"Schema":1`, `"Schema":9`, 1), strings.Replace(s.Encode(), `"IncomeLevel":1`, `"IncomeLevel":0`, 1)} {
+		if _, err := Decode(raw); err == nil {
+			t.Fatal("invalid stored state accepted")
+		}
+	}
+	for _, c := range []Command{{Seq: 0, Kind: "queue"}, {Seq: 2, Kind: "queue"}, {Seq: 1, Kind: "queue", Station: -1}, {Seq: 1, Kind: "queue", Recipe: 9}, {Seq: 1, Kind: "upload_balance", Count: 999999}} {
+		local, _ := Decode(s.Encode())
+		if _, err := local.Apply(c, now); err == nil {
+			t.Fatal("invalid command accepted")
+		}
+	}
+	s.Gold = ValueLimit
+	s.Pending = 1
+	if _, err := s.Apply(Command{Seq: 1, Kind: "claim"}, now); err == nil || s.Gold != ValueLimit || s.Pending != 1 {
+		t.Fatal("asset overflow accepted")
+	}
+	if _, err := NewState(MaxTime-1, DemoRules()); err == nil {
+		t.Fatal("horizon overflow accepted")
+	}
+}

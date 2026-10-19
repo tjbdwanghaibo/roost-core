@@ -503,6 +503,7 @@ var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖、补触发离线 Buff；不是崩溃注入"},
+	{"TestIdleSimRealCrashRecovery", "scripts/test-idle-sim-generated.sh", "^TestIdleSimRealCrashRecovery$", "ROOST_IDLE_SIM_REAL=1，五条 strict WAL 未投影时 SIGKILL；两工坊队列 / 倍率 / 收益截止时间 / timer 冷加载，经驱动补算一次，第三进程重放全部命令，投入与产出 / 离线收益 / 每日奖励不重复"},
 	{"TestMergeCasualRealCrashRecovery", "scripts/test-merge-casual-generated.sh", "^TestMergeCasualRealCrashRecovery$", "ROOST_MERGE_CASUAL_REAL=1，strict WAL 未投影时 SIGKILL；新进程冷加载完整棋盘 / 资产 / 回执与持久挑战期限，完成服务器目标，第三进程重试生产、广告与领奖不重复到账"},
 	{"TestCardRPGRealCrashRecovery", "scripts/test-card-rpg-generated.sh", "^TestCardRPGRealCrashRecovery$", "ROOST_CARD_RPG_REAL=1，子进程经 strict 文件 WAL 提交首登、十连、升级、开局与第一回合，关掉后台投影使 WAL 留有 5 条未投影记录后被父进程 SIGKILL；父进程用同一 WAL 与真实 Mongo 冷加载，核对资产 / 战斗摘要 / 定时器 ID，按新配置重放抽卡与升级不重掷不重扣；冷加载报告的回合期限由驱动 DeliverDue 补触发一次（不启动投递循环），续战获胜、三次领奖一份；正常关闭后第三个进程冷加载核对并重试领奖 / 抽卡不变；只覆盖 strict 已确认的提交，不含结果未知或断电"},
 	{"TestMOBARealSettlementAcrossProcesses", "scripts/test-moba-generated.sh", "^TestMOBARealSettlementAcrossProcesses$", "ROOST_MOBA_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：第一进程经多实体 Sender 结算一局，正常停机后第二进程冷加载，先核对结算身份 / 奖励 / 战绩已恢复，再重放同一结算不重复发放、换胜者被拒；不是崩溃注入，也不恢复进行中的对局"},

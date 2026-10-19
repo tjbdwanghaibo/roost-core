@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 放置／模拟经营业务消费者
+
+- 新增 `scripts/test-idle-sim-generated.sh`、业务夹具和[学习手册](docs/framework/IDLE-SIM-INTEGRATION.md)：正式 Player DAO／Sender／timer，三工坊预扣生产、未开工取消、缓冲／仓库容量、升级／双倍的分段积分、固定离线截止、收益／订单／每日奖励与永久回执。业务规则不进入公共框架。
+- 12 条基础 race 场景；五条未投影 strict WAL 后 SIGKILL，恢复半成品／已完成产物／倍率／离线截止与 timer，驱动一次补算，第三进程冷加载并重放所有命令不重复扣料或发奖。消费者 build／vet、ID／生成检查和真实依赖入口覆盖登记。
+- 默认三工坊、每队四任务／四产出、30 秒离线窗口、128 条命令账本；客户端／真实支付／长期归档／配置迁移／生产容量另行验收，不承诺完整商业经营游戏。
+
+
 ### 合成／超休闲业务消费者与教学入口
 
 - 新增 `scripts/test-merge-casual-generated.sh`：正式 game 工程、Player DAO／Sender／持久 timer，业务规则保留在 `scripts/testdata/merge-casual/`。4×4 棋盘／仓库、合成／生产／出售撤销／订单、离线时间恢复、有序批次与跨设备代际、服务器限时挑战、广告签名与到账回执均走 Nest strict 提交。

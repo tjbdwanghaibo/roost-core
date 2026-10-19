@@ -35,6 +35,7 @@
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
 - [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
+- [IDLE-SIM-INTEGRATION.md](../framework/IDLE-SIM-INTEGRATION.md)：学习文档，多生产队列、离线窗口、倍率积分、跨天奖励与经济恢复
 - [MERGE-CASUAL-INTEGRATION.md](../framework/MERGE-CASUAL-INTEGRATION.md)：学习文档，合成棋盘／仓库、离线命令与设备代际、服务器挑战、广告到账身份和 WAL 崩溃恢复
 - [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，角色卡抽取 / 养成、三人编队回合制 PvE、配置固定、持久回合计时与领奖恢复
 - [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
