@@ -524,10 +524,11 @@ func TestGeneratedSagaNativeStepsAndEffectConsumer(t *testing.T) {
 		}
 	}
 	fillSagaNativeBusiness(t, root, fmt.Sprintf("sagagen_%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000))
+	// 先指向本检出再 generate：generate 内的 go mod tidy 要解析 go.mod 里的最低 core，它可能是尚未发布的 tag。
+	useLocalRoostCore(t, root)
 	if err := Run([]string{"generate", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("roost generate after filling the business: %v\n%s", err, out.String())
 	}
-	useLocalRoostCore(t, root)
 	runGeneratedGo(t, root, "build", "./...")
 	runGeneratedGo(t, root, "vet", "./...")
 	items, _ := doctorItems(t, root)

@@ -350,6 +350,8 @@ func TestGenerateWritesTheTableTemplateItReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// generate 内的 go mod tidy 要解析 go.mod 里的最低 core（可能是尚未发布的 tag），先指向本检出。
+	useLocalRoostCore(t, root)
 	schema := filepath.Join(root, "configs", "schema", "monster.go")
 	source := "package schema\n//roost:table name=monster file=monster.csv json=monster.json key=ID\ntype Monster struct { ID int32 `csv:\"id\" json:\"id\" title:\"编号\"` }\n"
 	if err := os.WriteFile(schema, []byte(source), 0o644); err != nil {
