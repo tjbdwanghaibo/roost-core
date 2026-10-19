@@ -16,9 +16,9 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 ## v1.28.0 发版时发现的两处问题（2026-10-19 登记）
 
-### 1. 生成工程用例在 `go mod tidy` 之后才指向本检出：最低 core 未发布时失败（待维护者决定）
+### 1. 生成工程用例在 `go mod tidy` 之后才指向本检出：最低 core 未发布时失败（已修复，维护者 2026-10-19 选 A）
 
-`codegen/internal/roost` 的 `TestGenerateWritesTheTableTemplateItReports`（`678adcd2` 引入）与 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`16ea9142` 引入，经 `scripts/test-demo-generated.sh` 运行）先在生成工程里跑 `roost generate`（其中 `go mod tidy`），之后才（或从不）调用 `useLocalRoostCore` 把 roost-core 替换为本检出。生成工程的 go.mod 要求 `minimumVersions.Core`；最低 core 升到尚未发布的 v1.28.0 后两条都失败：`generate: tidy generated dependencies: go mod tidy: exit status 1`（`reading github.com/tjbdwanghaibo/roost-core/go.mod at revision v1.28.0: unknown revision v1.28.0`），`scripts/pretag.sh v1.28.0` 因此报 `go test ./... failed`。属于测试接线缺陷，不是生成器或框架行为问题：在 `generate` 之前调用 `useLocalRoostCore` 后两条都通过（本地实测，未提交）。tag 发布后它们会因为能下载到 v1.28.0 而重新变绿，但下一次提高最低版本时会再出现。
+`codegen/internal/roost` 的 `TestGenerateWritesTheTableTemplateItReports`（`678adcd2` 引入）与 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`16ea9142` 引入，经 `scripts/test-demo-generated.sh` 运行）先在生成工程里跑 `roost generate`（其中 `go mod tidy`），之后才（或从不）调用 `useLocalRoostCore` 把 roost-core 替换为本检出。生成工程的 go.mod 要求 `minimumVersions.Core`；最低 core 升到尚未发布的 v1.28.0 后两条都失败：`generate: tidy generated dependencies: go mod tidy: exit status 1`（`reading github.com/tjbdwanghaibo/roost-core/go.mod at revision v1.28.0: unknown revision v1.28.0`），`scripts/pretag.sh v1.28.0` 因此报 `go test ./... failed`。属于测试接线缺陷，不是生成器或框架行为问题。已修复（v1.28.0 发布准备分支的测试修正提交）：两处都在 `generate` 之前调用 `useLocalRoostCore`，只动测试、断言不变；之后 pretag 报 ready to tag，saga 用例在共享隔离环境单独重跑通过。
 
 ### 2. `TestRealDataEngineRemotePublicationAndWALRecovery` 偶发失败（尚未确认）
 
