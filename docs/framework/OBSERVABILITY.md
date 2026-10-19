@@ -418,6 +418,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `versionstore.cas.total` | Counter | `versionstore/versionstore.go:IncCounter` |
 | `versionstore.conflict.total` | Counter | `versionstore/versionstore.go:IncCounter` |
 | `versionstore.unknown_outcome.total` | Counter | `versionstore/write_token.go:IncCounter` |
+| `web.request.duration` | Histogram | `wiring/web/metrics.go:ObserveHistogram` |
+| `web.request.total` | Counter | `wiring/web/metrics.go:IncCounter` |
 
 `dataengine.projection.pending` 在准入与确认/撤销时更新；outbox.pending / oldest_age_ms 随既有后台采样和健康采样更新，单位分别是条、毫秒。正式装配每进程一个 Engine；自行创建多个 Engine 必须另行提供实例聚合，不能把进程 gauge 当多实例总和。
 
@@ -443,6 +445,15 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `gate.channel.failure_total` | 按 `role`、`phase` 统计回信发布和异步出站失败；不包含票据、PlayerID、SessionID 或 incarnation 标签 |
 
 Gate/Game `Stats()` 提供当前绑定、驻留请求数和字节；Game 另返回控制通道驻留请求及字节。下游超时/回信丢失归未知，发送失败结束完整旧绑定及对应 Sync lifetime。
+
+### 业务 HTTP 路由（wiring/web）
+
+| 指标 | 含义与标签 |
+| --- | --- |
+| `web.request.total` | 业务 HTTP 路由（`roost add webroute`）每个请求结束时加一。`route` 是 chi 匹配到的路由模板（例如 `/items/{id}`，不是原始路径），没匹配到路由的 404 / 405 记 `_unmatched`；`method` 是标准 HTTP 方法，其余记 `_other`；`class` 是状态码类别 `1xx`～`5xx`。handler panic 按 5xx 计 |
+| `web.request.duration` | 同一请求从进入路由中间件到 handler 返回的时长直方图，标签 `route`、`method`（口径同上） |
+
+标签基数有界：路由模板只来自 Service.Init 里登记的路由，方法与类别是固定枚举。业务错误码不进标签（看日志或业务自己的指标）。状态码是 handler 写出的那个：handler 超过 `web.write_timeout` 才写完时客户端收到空回复（连接被关闭），这次请求仍按 handler 写的状态计，时长直方图会显示它超过了写期限。5xx 另有一条 Warn `web: request failed`（`route`、`method`、`status`、`request_id`、`duration`）；映射成 5xx 的业务错误原文在 Error `webroute: route failed with a server error`（同一 `request_id`），panic 在 Error `http server panic`（带 `route` 与 `path`）。见 [CODEGEN_REFERENCE §11](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute)。
 
 
 ## 健康与就绪（`/healthz`、`/readyz`）

@@ -744,8 +744,31 @@ curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.g
 的服务；否则工程只有一个业务服务时用它；框架托管服务不能挂业务路由。服务 Init 归业务、不改写，doctor 的 `webroute:serve`
 在没有服务调用 `RegisterRoutes`（或调用了但服务没装 `web` Mod）时 WARN。
 
-`web` Mod：`web.enabled`（缺省 true）、`web.addr`（缺省 `127.0.0.1:8080`）、`web.allow_public_addr`（生产环境绑非回环地址必须写 true，
-与 ops 相同）。Start 只 bind（端口被占用时启动失败）；路由只能在 Service.Init 里登记，`service.started` 时冻结路由表并开始 Serve（之后再登记报错），
+`web` Mod 的配置（缺省值即 `httpserver.DefaultConfig`）：
+
+| 键 | 缺省 | 约束 / 说明 |
+| --- | --- | --- |
+| `web.enabled` | `true` | false 时路由照常登记但不监听 |
+| `web.addr` | `127.0.0.1:8080` | 生产环境绑非回环地址必须同时写 `web.allow_public_addr: true`（与 ops 相同） |
+| `web.read_header_timeout` | `5s` | ≥ 100ms，且不得大于 `web.read_timeout`（否则永远不先到期） |
+| `web.read_timeout` | `15s` | ≥ 100ms，读完整个请求 |
+| `web.write_timeout` | `15s` | ≥ 100ms，从读完请求头到写完响应，含业务处理时间 |
+| `web.idle_timeout` | `60s` | ≥ 1s，keep-alive 空闲 |
+| `web.max_body_bytes` | `1048576` | 1～67108864（64 MiB）；请求体整段读进内存，超过回 413 |
+
+写 0 或负数被拒绝（httpserver 把非正值当“取缺省”，不让 0 静默变成缺省值）。
+
+错误响应：路由返回的错误经 `webroute.WriteResult` 的缺省映射按框架错误码（`errcode.ClientError`）回给客户端——带码的错误
+（`errcode.Define` / `Wrap`，或下游服务经 `errcode.Remote` 带回的码）回 **400** 与 `{"ok":false,"code":<码>,"reason":"<定义里的 message>"}`，
+被包装的原因不进响应体；没有码的错误回 **500** 与 `{"ok":false,"code":1,"reason":"server error"}`，原文只进服务端日志
+（`webroute: route failed with a server error`，带 `request_id`）。业务要别的状态码或响应形状时在路由里调用
+`webroute.WriteResultWithMapper`。传输层错误不经映射：JSON 解码失败 400 `{"ok":false,"error":"decode request"}`、请求体超限 413
+`{"ok":false,"error":"request body too large"}`、handler panic 500 `{"ok":false,"error":"internal server error"}`（日志 `http server panic`
+带 `route` 路由模板与原始 `path`，进程不受影响）。路由级指标 `web.request.total{route,method,class}` 与 `web.request.duration{route,method}`
+按路由模板计（见 [OBSERVABILITY](../../docs/framework/OBSERVABILITY.md#业务-http-路由wiringweb)），5xx 另有一条带路由模板的
+`web: request failed` Warn，与上面的错误日志按 `request_id` 对上。
+
+Start 只 bind（端口被占用时启动失败）；路由只能在 Service.Init 里登记，`service.started` 时冻结路由表并开始 Serve（之后再登记报错），
 `service.stopping` 时 `http.Server.Shutdown`，Service.Shutdown 之后不会再有业务请求。**不做鉴权**：JSON 路由拿不到请求头，raw 路由可以自己读
 `RawRequest.Header`；对外暴露时放在鉴权代理之后。也可以不用 `add webroute`、直接 `roost add mod web -service <svc>`。
 

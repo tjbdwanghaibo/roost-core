@@ -1,12 +1,15 @@
 package webroute
 
 import (
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 )
 
@@ -205,5 +208,68 @@ func TestRegisterAcceptsChiPatterns(t *testing.T) {
 				t.Fatalf("status=%d", w.Code)
 			}
 		})
+	}
+}
+
+// 默认错误映射接框架 errcode：带码的错误回 400 与 {ok:false, code, reason}（客户端按 code 分支），没有码的错误回 500，
+// 响应体只有 CodeInternal 与固定原因，内部错误文本只进服务端日志（带请求 ID）。业务仍可用 WriteResultWithMapper 覆盖。
+func TestWriteResultMapsErrcodeAndHidesInternalErrors(t *testing.T) {
+	var logs strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	notEnough := errcode.Define(100701, "gold_not_enough", "gold not enough")
+	engine := httpserver.NewEngine()
+	registrar := NewRegistrar(engine)
+	for path, err := range map[string]error{
+		"/coded":    errcode.Wrap(notEnough, errors.New("balance 3 < price 5")),
+		"/internal": errors.New("mongo: connection refused to 10.0.0.7:27017"),
+	} {
+		if registerErr := registrar.Register(http.MethodGet, path, func(w http.ResponseWriter, r *http.Request) {
+			WriteResult(w, http.StatusOK, nil, err)
+		}); registerErr != nil {
+			t.Fatal(registerErr)
+		}
+	}
+
+	serve := func(path string) (int, map[string]any, string) {
+		rec := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set(httpserver.HeaderRequestID, "req-"+strings.TrimPrefix(path, "/"))
+		engine.ServeHTTP(rec, request)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: body %q is not JSON: %v", path, rec.Body.String(), err)
+		}
+		return rec.Code, body, rec.Body.String()
+	}
+
+	status, body, raw := serve("/coded")
+	if status != http.StatusBadRequest || body["ok"] != false || body["code"] != float64(100701) || body["reason"] != "gold not enough" {
+		t.Fatalf("coded error = %d %s; want 400 {ok:false, code:100701, reason:\"gold not enough\"}", status, raw)
+	}
+	if strings.Contains(raw, "balance") {
+		t.Fatalf("coded error body leaks the wrapped cause: %s", raw)
+	}
+
+	status, body, raw = serve("/internal")
+	if status != http.StatusInternalServerError || body["code"] != float64(errcode.CodeInternal) || body["reason"] != "server error" {
+		t.Fatalf("internal error = %d %s; want 500 {ok:false, code:1, reason:\"server error\"}", status, raw)
+	}
+	if strings.Contains(raw, "mongo") || strings.Contains(raw, "10.0.0.7") {
+		t.Fatalf("internal error body leaks the internal text: %s", raw)
+	}
+	if text := logs.String(); !strings.Contains(text, "10.0.0.7") || !strings.Contains(text, "req-internal") {
+		t.Fatalf("internal error was not logged with its text and request id; log:\n%s", text)
+	}
+
+	// 业务映射照样覆盖默认映射。
+	rec := httptest.NewRecorder()
+	WriteResultWithMapper(rec, http.StatusOK, nil, errors.New("conflict"), func(error) (int, any) {
+		return http.StatusConflict, map[string]any{"ok": false, "error": "taken"}
+	})
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "taken") {
+		t.Fatalf("custom mapper = %d %s", rec.Code, rec.Body.String())
 	}
 }

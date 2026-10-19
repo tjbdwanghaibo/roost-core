@@ -30,7 +30,7 @@
 | bus、servicerpc | 服务间调用和 RPC 运行能力 | 传输成功、业务成功、幂等与 affinity 分开 |
 | ownerroute | 所有者路由 | 路由提示不能替代持久 fence 校验 |
 | security | 令牌、签名和限流原语 | 业务授权、密钥轮换、生产网络由宿主负责 |
-| httpclient、httpserver、webroute | HTTP 出入站及生成路由支撑 | 限长、超时、取消、认证和停机须按应用配置 |
+| httpclient、httpserver、webroute | HTTP 出入站及生成路由支撑 | 限长、超时、取消、认证和停机须按应用配置；业务路由经 wiring/web 的 `web.*` 配置超时与请求体上限，webroute 缺省错误映射按 errcode 回 400 / 500 且不把内部错误文本交给客户端，panic 由 httpserver 恢复为 500 |
 | internal/operation、internal/stopcontract | 操作准入/排空、共用停机协议 | internal 非外部稳定 API；停止返回 nil 必须符合真实完成语义 |
 | internal/rangecontract | 集合回调契约测试辅助 | 测试工具，不是业务存储 API |
 

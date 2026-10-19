@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 )
 
@@ -164,16 +166,33 @@ func DecodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
 	return true
 }
 
+// ErrorMapper 把路由处理返回的错误换成 HTTP 状态与响应体。业务要别的状态码或响应形状时传给 WriteResultWithMapper。
 type ErrorMapper func(error) (status int, response any)
 
+// DefaultErrorMapper 按框架错误码（errcode.ClientError）映射，与 RPC / 玩家协议给客户端的 (code, reason) 同一来源：
+//
+//   - 带客户端码的错误（errcode.Define 定义、Wrap 包装，或下游服务经 errcode.Remote 带回的码）：400 与
+//     {"ok": false, "code": <码>, "reason": <定义里的 message>}。客户端按 code 分支；被包装的原因不进响应体。
+//   - 其余错误（没有码，或码是 errcode.CodeInternal）：500 与 {"ok": false, "code": 1, "reason": "server error"}，
+//     不把内部错误文本（库地址、驱动报错）交给客户端；原文由 WriteResultWithMapper 记进服务端日志。
+//
+// HTTP 状态只分“请求方可处理的业务拒绝（4xx）”与“服务端故障（5xx）”两类，具体原因看 code，所以所有业务码都是 400。
 func DefaultErrorMapper(err error) (int, any) {
-	return http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()}
+	code, reason := errcode.ClientError(err)
+	status := http.StatusBadRequest
+	if code == errcode.CodeInternal {
+		status = http.StatusInternalServerError
+	}
+	return status, map[string]any{"ok": false, "code": code, "reason": reason}
 }
 
 func WriteResult(w http.ResponseWriter, successStatus int, response any, err error) {
 	WriteResultWithMapper(w, successStatus, response, err, DefaultErrorMapper)
 }
 
+// WriteResultWithMapper 写成功响应，或按 mapper 写错误响应（mapper 为 nil 时用 DefaultErrorMapper）。映射成 5xx 的
+// 错误把原文记一条 Error 日志（带请求 ID，web Mod 的 “web: request failed” 日志按同一 request_id 给出路由模板），
+// 响应体里只有 mapper 给的内容。
 func WriteResultWithMapper(w http.ResponseWriter, successStatus int, response any, err error, mapper ErrorMapper) {
 	if err == nil {
 		httpserver.JSON(w, successStatus, response)
@@ -183,6 +202,10 @@ func WriteResultWithMapper(w http.ResponseWriter, successStatus int, response an
 		mapper = DefaultErrorMapper
 	}
 	status, errorResponse := mapper(err)
+	if status >= http.StatusInternalServerError {
+		slog.Error("webroute: route failed with a server error", "status", status,
+			"request_id", w.Header().Get(httpserver.HeaderRequestID), "err", err)
+	}
 	httpserver.JSON(w, status, errorResponse)
 }
 

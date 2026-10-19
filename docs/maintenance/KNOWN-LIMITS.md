@@ -352,6 +352,15 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 - `roost config check` 不做跨 Mod 一致性检查：`saga.start_effect_stream` 与 `dataengine.effects.stream` 不一致时它报 `config is valid`，而进程 `--check-config` 与 doctor 都拒绝（同一份配置三处结论不同，第一轮已提过的同类问题的新例子）。
 - `roost add effect` 生成的载荷 struct 注释举例 `PlayerID int64`，没有提示在组件里取玩家号要用 `Owner().UniqueID()`；实测照直觉写 `Owner().ID()` 发出的是编码后的 EntityID（9423877 而不是 9203）。
 
+## 业务 HTTP 路由与配置检查的范围（2026-10-19，维护者批准的 web P1 四项）
+
+**业务 HTTP 路由（wiring/web）**：超时、请求体上限、errcode 错误映射、panic 恢复与路由级指标已实施（CHANGELOG `[Unreleased]`）。仍有的边界：
+
+- 传输层错误不带 `code`：JSON 解码失败 400 `{"ok":false,"error":"decode request"}`、请求体超限 413、panic 500 `{"ok":false,"error":"internal server error"}` 与业务错误的 `{ok, code, reason}` 形状不同；客户端先看 HTTP 状态，再按有无 `code` 区分。
+- 映射成 5xx 的业务错误原文日志（`webroute: route failed with a server error`）只有 `request_id`，没有路由模板：生成的路由调用 `WriteResult(w, …)` 拿不到请求。路由模板在同一 `request_id` 的 `web: request failed` Warn 里。
+- 指标按 handler 写出的状态码计：handler 超过 `web.write_timeout` 才写完时客户端收到空回复，这次请求仍计为 handler 写的类别（时长直方图能看出超时）。
+- 本 Mod 仍不做鉴权，生成的 JSON 路由拿不到请求头（见 CODEGEN_REFERENCE §11）。
+
 ## 能力与验证边界
 
 架构后续事项：[Session 运行服务可选化、玩家接入层与 Sync 命名](ACCESS-SYNC-FOLLOWUPS.md)。Session 运行服务保持现状、不改为可选（维护者 2026-10-14 决定）；玩家接入目录已改名为 `game/playeraccess`（dd362116）；Sync 命名已随 v1.26.0 发布，源码 API 需要随升级迁移。

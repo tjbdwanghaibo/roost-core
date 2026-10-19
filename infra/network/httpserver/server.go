@@ -65,7 +65,9 @@ func WithTimeouts(readHeader, read, write, idle time.Duration) Option {
 	}
 }
 
-func defaultConfig() Config {
+// DefaultConfig 是 NewEngine / NewServer 不传选项时的取值：请求体上限 1 MiB，读请求头 5s、读整个请求 15s、
+// 写响应 15s、keep-alive 空闲 60s。wiring/web 的 web.* 声明以它为缺省值（测试钉住两边相同）。
+func DefaultConfig() Config {
 	return Config{
 		MaxBodyBytes:      DefaultMaxJSONBody,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -88,7 +90,7 @@ type RouteRegistrar interface {
 }
 
 func NewEngine(opts ...Option) *Engine {
-	cfg := defaultConfig()
+	cfg := DefaultConfig()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -183,7 +185,7 @@ func (g *Group) ensureMounted() {
 }
 
 func NewServer(addr string, handler http.Handler, opts ...Option) *http.Server {
-	cfg := defaultConfig()
+	cfg := DefaultConfig()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -307,7 +309,8 @@ func (e *Engine) requestContextMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// recoverMiddleware 把响应开始之前的 handler panic 转成 500 JSON。
+// recoverMiddleware 把响应开始之前的 handler panic 转成 500 JSON。日志带路由模板（route，例如 /items/{id}；
+// 没匹配到路由时为空）与原始路径（path），按模板聚合告警、按路径查具体请求。
 //
 // 响应已经开始（写过状态码/响应体、Flush 或 Hijack）后状态无法更改，再追加错误体
 // 会让客户端收到一个“完整”的 2xx 拼接体；这时记录日志后以 http.ErrAbortHandler
@@ -326,6 +329,7 @@ func (e *Engine) recoverMiddleware(next http.Handler) http.Handler {
 			}
 			slog.Error("http server panic",
 				"request_id", RequestID(r.Context()),
+				"route", RoutePattern(r),
 				"path", r.URL.Path,
 				"err", recovered,
 				"response_started", state.started,
@@ -399,6 +403,15 @@ func (w hijackableResponseState) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		w.started = true
 	}
 	return conn, buffered, err
+}
+
+// RoutePattern 是 chi 为这个请求匹配到的路由模板。中间件挂在 Engine 的根路由上，chi 在进入中间件链之前把路由上下文
+// 放进请求，匹配完成后填入模板，所以 handler 返回（或 panic）之后在中间件里读得到。
+func RoutePattern(r *http.Request) string {
+	if routing := chi.RouteContext(r.Context()); routing != nil {
+		return routing.RoutePattern()
+	}
+	return ""
 }
 
 func maxBodyBytes(ctx context.Context) int64 {

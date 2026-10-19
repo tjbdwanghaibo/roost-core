@@ -409,5 +409,10 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "web.enabled", Kind: "bool", Default: "true", Help: "监听业务 HTTP 路由（roost add webroute）；false 时路由照常登记但不监听", Starter: true, Example: "true"},
 		{Name: "web.addr", Kind: "string", Default: "127.0.0.1:8080", Help: "业务 HTTP 路由的监听地址；生产环境绑非回环地址要同时写 web.allow_public_addr: true", Starter: true, Example: "127.0.0.1:8080"},
 		{Name: "web.allow_public_addr", Kind: "bool", Help: "生产环境允许 web.addr 不是回环地址（路由放在鉴权代理之后时才写 true；本 Mod 不做鉴权）"},
+		{Name: "web.read_header_timeout", Kind: "duration", Default: "5s", Min: "100ms", Help: "读完请求头的期限（慢速请求头攻击的上限）；不得大于 web.read_timeout", Starter: true, Example: "5s"},
+		{Name: "web.read_timeout", Kind: "duration", Default: "15s", Min: "100ms", Help: "读完整个请求（头 + 体）的期限", Starter: true, Example: "15s"},
+		{Name: "web.write_timeout", Kind: "duration", Default: "15s", Min: "100ms", Help: "从读完请求头到写完响应的期限，包含业务处理时间；路由处理可能更久时调大", Starter: true, Example: "15s"},
+		{Name: "web.idle_timeout", Kind: "duration", Default: "60s", Min: "1s", Help: "keep-alive 连接两次请求之间的最长空闲", Starter: true, Example: "60s"},
+		{Name: "web.max_body_bytes", Kind: "int", Default: "1048576", Min: "1", Max: "67108864", Help: "请求体上限（字节）；超过回 413。请求体整段读进内存，上界 64 MiB", Starter: true, Example: "1048576"},
 	}},
 }

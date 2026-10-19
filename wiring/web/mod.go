@@ -10,6 +10,10 @@
 //
 // 鉴权：生成的 JSON 路由拿不到请求头，本 Mod 也不做鉴权。缺省只绑回环地址；生产环境绑非回环地址必须显式写
 // web.allow_public_addr: true（端点放在鉴权代理之后时），与 ops 的规则相同。
+//
+// 请求处理链（外到内）：httpserver.Engine 的请求 ID 与 panic 恢复（panic 回 500，日志带路由模板）→ 本 Mod 的
+// 路由指标（observeRoutes）→ 生成的路由。超时与请求体上限来自 web.* 声明，缺省值就是 httpserver.DefaultConfig。
+// 业务错误怎样变成 HTTP 状态与响应体由 webroute.WriteResult 决定（errcode → 400 / 500，见 webroute.DefaultErrorMapper）。
 package web
 
 import (
@@ -21,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -35,14 +40,29 @@ type config struct {
 	Enabled         bool   `config:"web.enabled" default:"true" example:"true" help:"监听业务 HTTP 路由（roost add webroute）；false 时路由照常登记但不监听"`
 	Addr            string `config:"web.addr" default:"127.0.0.1:8080" example:"127.0.0.1:8080" help:"业务 HTTP 路由的监听地址；生产环境绑非回环地址要同时写 web.allow_public_addr: true"`
 	AllowPublicAddr bool   `config:"web.allow_public_addr" help:"生产环境允许 web.addr 不是回环地址（路由放在鉴权代理之后时才写 true；本 Mod 不做鉴权）"`
+	// 下面五个键交给 httpserver（WithTimeouts / WithMaxBodyBytes），缺省值与 httpserver.DefaultConfig 相同
+	// （TestWebModAppliesDeclaredTimeoutsAndBodyLimit 钉住）。写 0 或负数拒绝：httpserver 把非正值当“取缺省”，
+	// 不让一个 0 静默变成 5s / 15s。
+	ReadHeaderTimeout time.Duration `config:"web.read_header_timeout" default:"5s" min:"100ms" example:"5s" help:"读完请求头的期限（慢速请求头攻击的上限）；不得大于 web.read_timeout"`
+	ReadTimeout       time.Duration `config:"web.read_timeout" default:"15s" min:"100ms" example:"15s" help:"读完整个请求（头 + 体）的期限"`
+	WriteTimeout      time.Duration `config:"web.write_timeout" default:"15s" min:"100ms" example:"15s" help:"从读完请求头到写完响应的期限，包含业务处理时间；路由处理可能更久时调大"`
+	IdleTimeout       time.Duration `config:"web.idle_timeout" default:"60s" min:"1s" example:"60s" help:"keep-alive 连接两次请求之间的最长空闲"`
+	// 请求体在进入业务前整段读进内存（webroute.DecodeJSON / ReadRaw），所以上限同时是每个在途请求的内存上限；
+	// 声明的上界 64 MiB 防止一个笔误让单个请求吃掉进程内存，更大的上传不走这里。
+	MaxBodyBytes int64 `config:"web.max_body_bytes" default:"1048576" min:"1" max:"67108864" example:"1048576" help:"请求体上限（字节）；超过回 413。请求体整段读进内存，上界 64 MiB"`
 }
 
-// ValidateConfig：生产环境的业务 HTTP 端点不默认暴露到公网（路由本身没有鉴权）。
+// ValidateConfig：生产环境的业务 HTTP 端点不默认暴露到公网（路由本身没有鉴权）；请求头期限不大于整个请求的期限
+// （否则 web.read_header_timeout 不起作用，慢速请求头只受 web.read_timeout 限制）。
 func (c *config) ValidateConfig(production bool) error {
+	var errs []error
 	if production && c.Enabled && !isLoopbackListenAddr(c.Addr) && !c.AllowPublicAddr {
-		return fmt.Errorf("config: production web.addr %q is not loopback; bind 127.0.0.1 or set web.allow_public_addr=true after putting the routes behind an authenticated proxy", c.Addr)
+		errs = append(errs, fmt.Errorf("config: production web.addr %q is not loopback; bind 127.0.0.1 or set web.allow_public_addr=true after putting the routes behind an authenticated proxy", c.Addr))
 	}
-	return nil
+	if c.ReadHeaderTimeout > c.ReadTimeout {
+		errs = append(errs, fmt.Errorf("config: web.read_header_timeout (%s) exceeds web.read_timeout (%s); the header deadline would never fire, lower it or raise web.read_timeout", c.ReadHeaderTimeout, c.ReadTimeout))
+	}
+	return errors.Join(errs...)
 }
 
 // isLoopbackListenAddr 与 ops 的同名规则相同：只写端口、空或通配主机表示所有网卡。
@@ -62,7 +82,8 @@ func isLoopbackListenAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Mod 持有路由表与监听。mu 保护下面的状态；server 只在 Start 之后、listener 非 nil 时有意义。
+// Mod 持有路由表与监听。mu 保护下面的状态；engine / registrar 在 Init 按 web.* 建好（nil 表示还没 Init），
+// server 只在 Start 之后、listener 非 nil 时有意义。
 type Mod struct {
 	mu        sync.Mutex
 	cfg       config
@@ -74,10 +95,7 @@ type Mod struct {
 	boundAddr string
 }
 
-func NewMod() *Mod {
-	engine := httpserver.NewEngine()
-	return &Mod{engine: engine, registrar: webroute.NewRegistrar(engine)}
-}
+func NewMod() *Mod { return &Mod{} }
 
 func (m *Mod) Name() app.ModName              { return mods.ModWeb }
 func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
@@ -87,8 +105,13 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := app.LoadConfig(cfg, &c); err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
+	// 路由指标中间件要在登记任何路由之前装上（chi 不允许路由之后再 Use），所以 Engine 在 Init 建。
+	engine := httpserver.NewEngine(httpserver.WithMaxBodyBytes(c.MaxBodyBytes))
+	engine.Use(observeRoutes)
 	m.mu.Lock()
 	m.cfg = c
+	m.engine = engine
+	m.registrar = webroute.NewRegistrar(engine)
 	m.mu.Unlock()
 	return nil
 }
@@ -119,6 +142,9 @@ func (m *Mod) Register(method, path string, handler http.HandlerFunc) error {
 	if m.serving {
 		return fmt.Errorf("web: route %s %s registered after the service started; register routes in Service.Init", method, path)
 	}
+	if m.registrar == nil {
+		return fmt.Errorf("web: route %s %s registered before the web mod was initialized", method, path)
+	}
 	return m.registrar.Register(method, path, handler)
 }
 
@@ -139,7 +165,8 @@ func (m *Mod) Start() error {
 	}
 	m.listener = listener
 	m.boundAddr = listener.Addr().String()
-	m.server = httpserver.NewServer(m.cfg.Addr, m.engine)
+	m.server = httpserver.NewServer(m.cfg.Addr, m.engine,
+		httpserver.WithTimeouts(m.cfg.ReadHeaderTimeout, m.cfg.ReadTimeout, m.cfg.WriteTimeout, m.cfg.IdleTimeout))
 	return nil
 }
 
