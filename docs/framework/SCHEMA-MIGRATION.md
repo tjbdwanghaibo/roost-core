@@ -9,6 +9,8 @@
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时读作“删过档”（`ErrEntityAggregateDeleted`，D10），不水合、不检查 schema。
 
+- **持久键是 Go 字段名的 snake_case**（生成器 `codegen/internal/dao/gen.go` 的 `bsonKey`），字段上的 `bson:"..."` 标签**不参与**。改持久字段的 Go 名就是改它的存储键：老文档里的旧键在水合时被静默忽略、读成零值，之后的整文档写入会删掉它。`roost generate` 对 `bson` 名与持久键不同的字段打印 WARN；规则是否改为“显式名优先 / 水合时拒绝未知键”待维护者决定（[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。在那之前：改名、删字段、`persist` 改 `nopersist` 都按“改形状”走下面的迁移流程。
+
 所以 schema 变更是一次**运维操作**：停写之后把库里的旧文档一次性转成当前 schema，再启动只认当前 schema 的新程序。加字段不需要迁移（BSON 解码给零值），但仍要按需提高 `schema=`；改形状（例如扁平字段变成子文档）必须迁移。
 
 ## 2. 流程

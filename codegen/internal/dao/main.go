@@ -86,6 +86,10 @@ func Run(args []string, stdout io.Writer) error {
 		return nil
 	}
 
+	for _, warning := range storedKeyWarnings(defs) {
+		_, _ = fmt.Fprintln(stdout, warning)
+	}
+
 	expected := make(map[string]bool, len(defs.Daos)+len(defs.RedisDaos)+len(defs.Nested))
 
 	// Generate DAO files

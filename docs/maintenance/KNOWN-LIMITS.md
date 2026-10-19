@@ -282,6 +282,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 1. DAO 持久字段名由 Go 字段名决定，`bson` 标签被忽略；改 Go 字段名会静默丢老数据
 
+**状态：留待维护者决定（[DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)，2026-10-19）**。已核实属实（`bsonKey = toSnake(Go 名)`；`parseDaoTag` 只读 `dao:`；生成的 `RestorePersisted` 只比 `_schema` 整数后解码进结构体，未知键静默丢弃、缺失键零值；整文档写入 `ReplaceOne` 会删掉旧键）。复现：定义 ``Coins int64 `bson:"gold"` ``，`RestorePersisted({_id:1, gold:40})` 返回 `err=<nil> coins=0`。已做不改语义的部分：DAO 生成器对 `bson` 名与持久键不同的持久字段打印 WARN（`TestRunWarnsWhenABSONTagDiffersFromTheStoredKey`，修前无任何输出），SCHEMA-MIGRATION §1 写明现行规则（改名 / 删字段 / 改 `nopersist` 都按改形状迁移）。**这条告警只覆盖“保留 bson 名改 Go 名”这一种写法**，没写 bson 标签直接改 Go 名仍然静默，彻底解决要等 D13 的 B。下面是登记原文。
+
 **现象**：DAO 生成器的存储键是 `toSnake(Go 字段名)`（`codegen/internal/dao/gen.go` 的 `bsonKey`，第 77、300 行），字段上的 `bson:"..."` 不参与。实测（r7，玩家 9201 金币 40）：把 ``Gold int64 `bson:"gold"` `` 的 Go 名改成 `Coins` 而保留 `bson:"gold"` 想让库里键不变，`roost generate`、`go build`、`roost project doctor` 全部通过、启动无告警，登录后金币为 0（Mongo 文档里 `gold: 40` 仍在，新代码按 `coins` 读）；此后任何一次写入都以 `coins: 0` 继续，老值事实上丢失。反过来只改 `bson:"coins"` 则无任何效果。`_schema` 不变。
 
 **误导来源**：`roost add dao` 骨架注释示例写 ``Name string `bson:"name" dao:"persist,sync"` ``，FIRST_BUSINESS 与 CODEGEN_REFERENCE 示例都带 `bson` 标签，`roost add timer` 生成的 DAO 字段也写 `bson:"..."`；SCHEMA-MIGRATION 只说“加字段不需要迁移，改形状必须迁移”，没说“改 Go 字段名就是改存储键”。

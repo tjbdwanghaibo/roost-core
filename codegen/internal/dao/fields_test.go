@@ -228,3 +228,51 @@ func generatedFunctions(source string) map[string]string {
 	}
 	return out
 }
+
+// DAO 的持久键是 Go 字段名的 snake_case，字段上的 bson 标签不参与（DESIGN-TODO D13 决定前的现行规则）。
+// 新用户第七轮：把 `Gold int64 \`bson:"gold"\“ 的 Go 名改成 Coins、保留 bson:"gold" 想让库里键不变，generate / build /
+// doctor 全部通过、启动无告警，登录后金币 40 → 0。修前生成器对此一声不吭；现在 bson 名与持久键不同的字段打印 WARN，
+// 点名两边的名字与后果。只是提示：生成物不变（持久键仍是 coins），bson 名与持久键相同的字段不提示。
+func TestRunWarnsWhenABSONTagDiffersFromTheStoredKey(t *testing.T) {
+	defDir := t.TempDir()
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(defDir, "def.go"), []byte(`package def
+
+//roost:dao coll=wallets db=game
+type WalletDao struct {
+	Coins int64  `+"`bson:\"gold\" dao:\"persist,sync\"`"+`
+	Name  string `+"`bson:\"name\" dao:\"persist,sync\"`"+`
+	Bag   *Bag   `+"`bson:\"bag\" dao:\"persist,sync\"`"+`
+}
+
+//roost:nested
+type Bag struct {
+	Slots int32 `+"`bson:\"slot_count\"`"+`
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"-def", defDir, "-out", outDir, "-pkg", "out"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`WARN: WalletDao.Coins: bson:"gold" is ignored; the stored key is "coins"`,
+		`WARN: Bag.Slots: bson:"slot_count" is ignored; the stored key is "slots"`,
+		"SCHEMA-MIGRATION", "D13",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("generate output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "WalletDao.Name") || strings.Contains(out.String(), "WalletDao.Bag") {
+		t.Errorf("a bson tag equal to the stored key was reported:\n%s", out.String())
+	}
+	generated, err := os.ReadFile(filepath.Join(outDir, "gen_wallet_dao.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(generated), `"coins"`) || strings.Contains(string(generated), `"gold"`) {
+		t.Errorf("the warning changed the stored key:\n%s", generated)
+	}
+}

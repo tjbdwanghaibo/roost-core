@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -68,6 +69,9 @@ type FieldDef struct {
 	MapVal    string    // for map types: value type
 	SliceElem string    // for slice types: element type
 	IsPtr     bool      // whether the value type is pointer (map val or slice elem)
+	// BSONTag 是字段上写的 bson:"..." 名（逗号前那段，没写为空）。它不参与持久键——持久键是 toSnake(Name)，
+	// 见 DESIGN-TODO D13——只用来在两者不同时告警（storedKeyWarnings）。
+	BSONTag string
 }
 
 type FieldKind int
@@ -420,6 +424,7 @@ func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 			Name:    name,
 			TypeStr: typeStr,
 			Tag:     tag,
+			BSONTag: declaredBSONName(field.Tag),
 		}
 
 		if err := classifyField(&fd, field.Type); err != nil {
@@ -697,4 +702,44 @@ func parseSchemaParam(value string) (uint32, error) {
 		return 0, fmt.Errorf("schema=%q is not a positive version number", value)
 	}
 	return uint32(parsed), nil
+}
+
+// declaredBSONName 读字段 tag 里 bson:"name,opts" 的 name；没有 tag 或没写 bson 返回空。
+func declaredBSONName(tag *ast.BasicLit) string {
+	if tag == nil {
+		return ""
+	}
+	raw, err := strconv.Unquote(tag.Value)
+	if err != nil {
+		return ""
+	}
+	name, _, _ := strings.Cut(reflect.StructTag(raw).Get("bson"), ",")
+	return name
+}
+
+// storedKeyWarnings 列出 bson 名与持久键不同的持久字段（Mongo DAO 与嵌套类型；Redis DAO 不用这套键）。持久键是
+// Go 字段名的 snake_case，bson 标签不参与：照直觉“改 Go 名、留 bson 名保住库里的键”会让老文档的值读成零值，
+// 之后的写入以新键继续（整文档写入时旧键被删）。这里只提示，不改生成物；规则本身待维护者决定（DESIGN-TODO D13）。
+func storedKeyWarnings(defs *Definitions) []string {
+	var warnings []string
+	check := func(owner string, fields []FieldDef) {
+		for _, field := range fields {
+			if field.BSONTag == "" || field.BSONTag == "-" || !field.Tag.Persist {
+				continue
+			}
+			if stored := toSnake(field.Name); field.BSONTag != stored {
+				warnings = append(warnings, fmt.Sprintf("WARN: %s.%s: bson:%q is ignored; the stored key is %q (snake_case of the Go field name). "+
+					"Renaming a persisted Go field renames its stored key: documents written before keep the old key and load as the zero value. "+
+					"Keep the Go name, or migrate the documents (docs/framework/SCHEMA-MIGRATION.md); the rule is DESIGN-TODO D13",
+					owner, field.Name, field.BSONTag, stored))
+			}
+		}
+	}
+	for _, dao := range defs.Daos {
+		check(dao.Name, dao.Fields)
+	}
+	for _, nested := range defs.Nested {
+		check(nested.Name, nested.Fields)
+	}
+	return warnings
 }
