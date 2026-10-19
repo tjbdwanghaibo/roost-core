@@ -328,9 +328,12 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 	},
 	{
 		Name: "webroute", Aliases: []string{"web", "http"},
-		Summary:       "生成类型化 HTTP route 注册、请求解码和响应映射",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute@latest -dir ./service/web [-force]`,
-		Configuration: `handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest。重复 method/path、非法模式和错误签名会失败。`,
+		Summary: "生成类型化 HTTP route 注册、请求解码和响应映射",
+		Usage: `roost add webroute <name> [-service <svc>] [--root dir]
+roost generate
+# 单独运行生成器：
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute@latest -dir ./service/web [-force]`,
+		Configuration: `add webroute 写 service/web/<name>.go 路由骨架、开启 webroute feature（doc.go 定义路由收到的 Service）、给宿主服务装 web Mod（wiring/web，配置 web.enabled / web.addr 缺省 127.0.0.1:8080 / web.allow_public_addr）并立即生成。服务 Init 里加一行 kitweb.RegisterRoutes(registry, &web.Service{}) 后路由可达：web Mod 在 Start 时 bind，service.started 时冻结路由表并开始 Serve，service.stopping 时停止接新请求；doctor 的 webroute:serve 在没人登记时 WARN。web Mod 不做鉴权，生产环境绑非回环地址要显式 web.allow_public_addr: true。handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest（含 Header）。重复 method/path、非法模式和错误签名会失败。`,
 		Example: `//roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
     return QueryResponse{}, nil

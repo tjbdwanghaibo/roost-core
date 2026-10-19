@@ -47,4 +47,6 @@ const (
 	ModManager       app.ModName = "manager"
 	// ModEntityTimer 是按实体持久定时器的驱动装配（wiring/entitytimer）。
 	ModEntityTimer app.ModName = "entity_timer"
+	// ModWeb 是业务 HTTP 路由的监听 Mod（wiring/web），同名登记 webroute.Registerer。
+	ModWeb app.ModName = "web"
 )

@@ -237,6 +237,9 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if options.Kind == "attribute" {
 		return addAttribute(root, m, options)
 	}
+	if options.Kind == "webroute" {
+		return addWebRoute(root, m, options)
+	}
 	return addArtifact(root, m, options)
 }
 
@@ -412,9 +415,6 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		}
 		path = "db/def/" + snake + ".go"
 		body = renderDAODefinition(daoDatabaseName(m.Project.Name), snake, pascal+"Dao")
-	case "webroute":
-		path = "service/web/" + snake + ".go"
-		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
 	case "errcode":
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")

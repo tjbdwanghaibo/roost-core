@@ -305,6 +305,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 4. webroute 链路不完整：`add webroute` 不开 feature，生成的路由没有地方提供服务
 
+**状态：已修（2026-10-19）**。新增 `wiring/web` Mod（`web.enabled` / `web.addr` 缺省 `127.0.0.1:8080` / `web.allow_public_addr`；Start 只 bind，Service.Init 里经 `kitweb.RegisterRoutes` 登记，service.started 冻结路由表并 Serve，service.stopping 时 Shutdown）。`add webroute` 开启 feature、给宿主服务装 web Mod 并补配置段、立即生成，next 提示给出 Init 那一行，doctor `webroute:serve` 在没人登记时 WARN；CODEGEN_REFERENCE §11 写了从生成到 curl 的最小链路。新手工程实走：`add webroute ShopPrice` → Init 加一行 → `go run . game` → `curl /shop_price` 得 `{"price":42}`。**取舍（可由维护者改）**：选“独立 web Mod”而不是挂到 ops 前缀（ops 带不鉴权的 /metrics 与 admin，业务路由与运维端点分开监听、分开开关）；Mod 不做鉴权（JSON 路由拿不到请求头），安全边界沿用 ops 的“缺省回环、生产绑公网要显式允许”。下面是登记原文。
+
 **现象**：`roost add webroute ShopPrice` 只写 `service/web/shop_price.go`，引用的 `*Service` 未定义、包编译失败，roost.yaml 也没加 `webroute` feature（与 `add rpc` 自动开启不同）；手动开 feature 并 `project sync` 后生成 `RegisterRoutes(reg webroute.Registerer, svc *Service)`，但 bootstrap 与任何 Mod 都不调用它，CODEGEN_REFERENCE §11 也只写到“生成 RegisterRoutes”，没有说挂到哪个 HTTP 服务、监听地址与鉴权怎么配。
 
 **建议修法**：`add webroute` 自动开启 feature；提供一个 web Mod（或挂到 ops 的独立前缀）在 bootstrap 里调用 `RegisterRoutes`，配置项声明监听地址与鉴权；文档补一条从生成到 curl 的最小链路。

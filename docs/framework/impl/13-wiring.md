@@ -44,6 +44,7 @@ Service 与基础设施 Mod 共用这些生命周期规则。领域 Server/run �
 | [remoteentity](../../../wiring/remoteentity) | [framework/remoteentity](../../../framework/remoteentity) | 权威存储、总线、Mirror |
 | [ops](../../../wiring/ops) | [infra/observe/ops](../../../infra/observe/ops) | 管理命令、探针、统计查找与身份 |
 | [statslog](../../../wiring/statslog) | [framework/statslog](../../../framework/statslog) | 配置、指标、Nest/Entity 的采样依赖 |
+| [web](../../../wiring/web) | [infra/network/webroute](../../../infra/network/webroute)、[httpserver](../../../infra/network/httpserver) | 业务 HTTP 路由（`roost add webroute`）的监听：`web.*` 声明（生产非回环地址要 `web.allow_public_addr`）；Start 只 bind，路由只在 Service.Init 里经 `RegisterRoutes` 登记，service.started 冻结路由表并开始 Serve，service.stopping 时 `Shutdown`；不做鉴权 |
 | [mods](../../../wiring/mods) | 各具体模块 | Mod/capability 名称与共享配置声明 |
 
 Ops 的 HTTP handler、监听与 drain 由 runtime Server 持有；Wiring 使用同一个 Handler，不复制路由。StatsLog 的 provider、窗口、周期和文件由 runtime Logger 持有；采样时查询已装配的 Nest/Entity，避免 Provide 的先后次序让统计永久漏掉模块。

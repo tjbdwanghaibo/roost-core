@@ -710,6 +710,27 @@ Go 不允许给外包类型定义方法，做成函数别名才成立。
 
 ## 11. webroute
 
+从生成到 curl 的最小链路：
+
+```bash
+roost add webroute ShopPrice          # 多个业务服务时加 -service <svc>
+# 按 next 提示在服务 Init 里加一行：
+#   if err := kitweb.RegisterRoutes(registry, &web.Service{}); err != nil { return err }
+go run . game                          # 或 make run SERVICE=game
+curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.game.yaml
+```
+
+`add webroute <name>` 写 `service/web/<name>.go`（业务文件，只建一次；`GET /<name>`、`body=raw`），开启 `webroute` feature
+（`project sync` 写 `service/web/doc.go`：路由收到的 `type Service struct{}`，依赖放在这里、在服务 Init 里构造），给宿主服务装上
+`web` Mod（`wiring/web`）并补 `web:` 配置段，立即生成 `webroute_gen.go`。宿主服务：`-service` 显式给出；否则沿用已装 `web` Mod
+的服务；否则工程只有一个业务服务时用它；框架托管服务不能挂业务路由。服务 Init 归业务、不改写，doctor 的 `webroute:serve`
+在没有服务调用 `RegisterRoutes`（或调用了但服务没装 `web` Mod）时 WARN。
+
+`web` Mod：`web.enabled`（缺省 true）、`web.addr`（缺省 `127.0.0.1:8080`）、`web.allow_public_addr`（生产环境绑非回环地址必须写 true，
+与 ops 相同）。Start 只 bind（端口被占用时启动失败）；路由只能在 Service.Init 里登记，`service.started` 时冻结路由表并开始 Serve（之后再登记报错），
+`service.stopping` 时 `http.Server.Shutdown`，Service.Shutdown 之后不会再有业务请求。**不做鉴权**：JSON 路由拿不到请求头，raw 路由可以自己读
+`RawRequest.Header`；对外暴露时放在鉴权代理之后。也可以不用 `add webroute`、直接 `roost add mod web -service <svc>`。
+
 ```go
 //roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
@@ -726,7 +747,7 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 go run .../cmd/webroute@latest -dir ./service/web
 ```
 
-生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
+生成 `(*Service).RegisterRoutes` 与包级 `RegisterRoutes(reg, svc)`（`kitweb.RegisterRoutes` 按 `webroute.Module` 调用前者）。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
 
 ## 12. errcode
 

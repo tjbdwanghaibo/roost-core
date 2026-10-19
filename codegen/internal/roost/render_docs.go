@@ -428,6 +428,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | saga | 跨服务 Saga 编排 | dataengine、mongo、nats |
+| web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
 ## 7. features
 
@@ -442,8 +443,8 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 | event | 事件定义、分发和 handler 接线 | 是 |
 | dao | DAO 定义与方法式字段访问代码 | 是 |
 | errcode | 错误码检查与文档导出 | 是 |
-| attribute | 属性定义与访问代码 | 否 |
-| webroute | HTTP route 扫描和注册代码 | 否 |
+| attribute | 属性定义与访问代码（随 roost add attribute 启用） | 否 |
+| webroute | HTTP route 扫描和注册代码（随 roost add webroute 启用，同时给宿主服务装 web Mod） | 否 |
 | rpc | 本工程自己的跨进程服务：internal/rpc/<name> 的 servicerpc 两半（随 roost add rpc 启用） | 否 |
 | saga | Saga definition 的生成与注册 | 否；由 roost add saga 维护 |
 | nettransport-udp | 房间帧同步 UDP 接线 | 否 |

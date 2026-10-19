@@ -192,7 +192,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 		body := "package " + packageName + "\n"
 		if feature == "webroute" {
-			body += "\ntype Service struct{}\n"
+			body += "\n// Service is what the generated routes receive as svc (a business file:\n" +
+				"// generated once). Put the route handlers' dependencies here and build it in\n" +
+				"// the service Init: kitweb.RegisterRoutes(registry, &web.Service{...}).\n" +
+				"type Service struct{}\n"
 		}
 		if err := addGo(path, body, false); err != nil {
 			return nil, err

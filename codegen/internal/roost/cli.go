@@ -306,7 +306,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
-		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
+		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
 		"effect": {"root", "consumer"},
 		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
 		"attribute": {"root"},
@@ -340,6 +340,13 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "effect" {
 		printEffectNext(stdout, args[1])
+	}
+	if args[0] == "webroute" {
+		if manifest, err := LoadManifest(root); err == nil {
+			if service, err := webRouteService(manifest, *service); err == nil {
+				printWebRouteNext(stdout, manifest.Project.Module, service, toSnake(args[1]))
+			}
+		}
 	}
 	if args[0] == "attribute" {
 		fmt.Fprintln(stdout, "next: edit the fields and _<Field> formulas in game/gameplay/attribute/"+toSnake(args[1])+".go, then roost generate")
