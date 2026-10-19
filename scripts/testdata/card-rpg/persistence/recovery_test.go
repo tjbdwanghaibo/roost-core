@@ -192,7 +192,24 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 		h := openCardRuntime(t, true, baseNow)
 		ctx := context.Background()
 		s := sender.NewCardRpgSender(h.scheduler)
-		rules := loadCardRules(t, cardrpg.DemoRules())
+		// 配置目录放在本次 WAL 根下而不是 t.TempDir：子进程被 SIGKILL，不会执行 TempDir 清理，否则每次运行都在
+		// TMPDIR 留下一份残留目录；脚本成功后整体删除 WAL 根。
+		catalogDir := filepath.Join(os.Getenv("ROOST_CARD_RPG_WAL"), "catalog")
+		rawRules, _ := json.Marshal(cardrpg.DemoRules())
+		if err := os.MkdirAll(catalogDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(catalogDir, "cards.json"), rawRules, 0600); err != nil {
+			t.Fatal(err)
+		}
+		store, err := cardrpg.OpenCatalog(catalogDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules, err := cardrpg.CaptureRules(store.Current())
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, id := range []int64{h.playerID, h.runID} {
 			kind := playerentity.EntityKindPlayer
 			if id == h.runID {
@@ -340,8 +357,27 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, patched, h.clock.Load()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sender.NewTickCardRunTimerGenSender(h.scheduler).Sync_TickCardRunTimer(ctx, h.runID, h.clock.Load()); err != nil {
-		t.Fatal(err)
+	// 冷加载时 Host 把存量最早期限报告给驱动索引；这里不启动投递循环，直接调用循环每轮所做的 DeliverDue，
+	// 由驱动（不是测试手动发 Tick）给这个实体投递一次加载后的补触发。离线一小时只补这一次，不追帧。
+	if due, ok := runentity.TimerDriver.DueOf(run); !ok || due.UnixMilli() != b.State.Deadline {
+		t.Fatalf("cold load did not report the stored turn deadline to the driver: due=%v ok=%v want=%d", due, ok, b.State.Deadline)
+	}
+	if delivered := runentity.TimerDriver.DeliverDue(ctx); delivered != 1 {
+		t.Fatalf("driver delivered %d overdue ticks after cold load, want 1", delivered)
+	}
+	waitUntil := time.Now().Add(10 * time.Second)
+	for {
+		view, err := s.Sync_CardBattle(ctx, h.runID, h.playerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.NextSeq >= 3 {
+			break
+		}
+		if time.Now().After(waitUntil) {
+			t.Fatal("driver tick after cold load did not run the overdue turn")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	b, err = cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
 	if err != nil {
@@ -349,6 +385,17 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	}
 	if b.NextSeq() != 3 || b.Log[1].Command.Kind != "timeout" || b.State.Deadline != h.clock.Load()+cardrpg.TurnMillis || b.Rules.Version != "cards-v1" {
 		t.Fatal("cold timer skipped turns / changed frozen rules")
+	}
+	// 新期限在 Tick 提交后（nest.AfterCommit）报告，可能略晚于上面读到的提交结果，所以有界等待。
+	for {
+		due, ok := runentity.TimerDriver.DueOf(run)
+		if ok && due.UnixMilli() == b.State.Deadline {
+			break
+		}
+		if time.Now().After(waitUntil) {
+			t.Fatalf("next turn deadline not reported after the catch-up commit: due=%v ok=%v want=%d", due, ok, b.State.Deadline)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if result := finishCardBattle(t, h.scheduler, h.runID, h.playerID, &h.clock); result.Status != "won" {
 		t.Fatal("recovered battle did not win")
@@ -385,5 +432,5 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected strict records; draw/growth unchanged; turn timer resumed once; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
+	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected strict records; draw/growth unchanged; driver delivered one overdue turn after cold load; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
 }

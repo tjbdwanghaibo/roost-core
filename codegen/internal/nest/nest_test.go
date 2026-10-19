@@ -426,6 +426,25 @@ func handlerBad(owner BagOwner) {}
 	}
 }
 
+// 标了 //roost:nest 却没有可识别的实体参数（没写 target(s)，参数类型名也不含 Entity）时必须报错：
+// 静默跳过会让 generate 成功退出、把此前生成的 Sender 当孤儿删掉，问题只在远处的编译错误里出现。
+func TestRoostMarkerWithoutAnEntityParameterIsRejected(t *testing.T) {
+	path := writeTempGoFile(t, `package capability
+type CardOwner interface { Dao() any }
+//roost:nest rollback=undo durability=strict
+func handlerDraw(owner CardOwner, seq uint64) error { return nil }
+`)
+	_, _, err := parseFile(path)
+	if err == nil {
+		t.Fatal("a //roost:nest handler with no entity parameter was silently skipped")
+	}
+	for _, want := range []string{"handlerDraw", "no entity parameter", "target=", "Entity"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
 func TestRoostMethodHandlerInjectsReceiver(t *testing.T) {
 	path := writeTempGoFile(t, `package capability
 type BagOwner interface { Bag() any }

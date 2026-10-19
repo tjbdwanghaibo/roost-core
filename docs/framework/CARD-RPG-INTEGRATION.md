@@ -1,165 +1,267 @@
-# 卡牌 RPG 场景到 Core 框架的学习与接入
+# 卡牌 RPG 框架学习与验收
 
-本轮按“角色卡收集养成＋三人编队回合制 PvE”实践，主仓库是 core，ssr 仅作参考。业务数值用于教学：六种角色卡、三张上阵卡、三关、每关两波敌人、五抽保底、等级 / 星级 / 装备成长。它们不成为框架默认规则，也不代表正式商业游戏的内容和规模。
+本手册把“角色卡收集养成 + 三人编队回合制 PvE”的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，按配置、抽卡、养成、开局、回合、领奖的顺序给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明脚本证明什么、不证明什么。卡池、概率、英雄数值、经济和关卡内容由游戏定义。下面的业务夹具（六种角色卡、三张上阵卡、三关、每关两波敌人、五抽保底、等级 / 星级 / 装备成长）只是学习和验收样例：框架与生成器不包含任何卡牌 RPG 规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。其他游戏类型的手册见 [SLG](SLG-INTEGRATION.md)、[MMORPG](MMORPG-INTEGRATION.md)、[MOBA](MOBA-INTEGRATION.md)。
 
-建议先读[入门手册](../GETTING-STARTED.md)、[Nest / Entity](guide/02-nest-entity.md)、[DataEngine](guide/03-dataengine.md)，再沿本文运行消费者。本类型选择服务端权威回合推进，客户端展示已提交状态；不需要以 Lockstep 的实时输入广播来驱动回合。
+## 第一部分：学习
 
-## 一、业务场景、拥有者与框架接法
+### 1. 适合谁、先读什么
 
-| 场景 | 状态拥有者 | 框架与调用流程 | 业务边界 |
+适合准备用 core 做抽卡养成、回合制 PvE 一类游戏的后端工程师。先读[入门](../GETTING-STARTED.md)、[Nest / Entity](guide/02-nest-entity.md)、[DataEngine](guide/03-dataengine.md)；第一次学建议先读完 [SLG 手册](SLG-INTEGRATION.md)的第一部分（它把 Entity / DAO / Nest / 实体定时器的基本接法讲得最细），再读本篇。
+
+本类型选择**服务器权威回合**：服务器决定当前行动者、结算伤害、推进回合，客户端只提交本方动作并展示已提交的状态。回合制不需要 Lockstep 的实时输入广播；需要帧同步的玩法看 [MOBA](MOBA-INTEGRATION.md)。
+
+### 2. 模块分工：卡牌 RPG 里的状态归谁
+
+| 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 登录、角色与原服 | account / Player 静态 sid | 复用正式生命周期、登录鉴权与已绑定连接，入口给出完整 Player EntityID | 本消费者直接使用合成的已鉴权身份，未增加公网登录服务；账号链见 [MMORPG](MMORPG-INTEGRATION.md) / demo |
-| 配置与热更 | configdata Store / Snapshot | 注册 Rules 对象 → Load / 校验 → 捕获一份 Snapshot → 内部 Sender | 字段、范围、卡池组成、关卡数值由业务校验；失败不发布，新请求捕获新配置 |
-| 卡牌属性与战力 | 业务 HeroStats 声明 | `roost add attribute HeroStats` → 正式生成访问器和公式 → 更新 / 快照 | 生成 HP / Attack / Armor / Speed / Power；持久养成事实仍由 Player DAO 保存 |
-| 首登资源与抽卡密钥 | Player DAO | 受信任首登初始化；crypto/rand 私有密钥由服务端产生 | 密钥存于服务端持久状态，客户端不能选择或读取；测试使用固定测试密钥 |
-| 单抽 / 十连、保底 | Player DAO | `Sync_CardDraw`：钻石、HMAC 派生结果、保底计数、卡牌 / 碎片及完整回执一次提交 | 相同抽卡序号重放原结果；改变张数或跳序拒绝；测试概率 / 保底不是正式卡池运营规则 |
-| 重复角色卡 | Player DAO | 已拥有模板转成该卡碎片和教学粉尘，不再增加同模板实例 | 当前一模板一张卡；正式唯一实例、多套装备与分解政策另建模 |
-| 升级、升星、装备 | Player DAO | `Sync_CardManage`：校验目标级数 → 扣金币 / 粉尘 / 碎片 → 更新 → 留回执 | 缺卡、越级、材料不足、旧序号改内容均拒绝，重复成功操作不重复支付 |
-| 编队、战斗属性冻结 | Player / CardRun | 上阵三张已拥有且不同的卡；开局经生成属性计算并拷贝为初始战斗属性 | 在局外养成 / 换队不追溯修改当前战斗 |
-| 体力、关卡准入 | 同原服的 Player＋CardRun | `MultiSync_CardStart`：离线补算体力、关卡解锁、唯一开局序号、扣体力、Run / 定时器同事务 | 同一 Player 最多一局未结算；重试返回原 Run ID，不因新候选 ID 再扣一次 |
-| 回合次序与权限 | CardRun DAO | 速度降序、相同速度按固定座位次序；正式 Sender 在锁内执行当前角色动作 | 客户端不指定行动者；只控制自己的当前角色，不能控制敌人或注入服务器超时命令 |
-| 普攻 / 爆发 / 治疗 / 防御 | CardRun 参考模拟 | 业务动作校验 → `combat.ResolveDamage` → 血量 / 护盾 / 资源变化 | 复用框架定点伤害管线；治疗、目标、毒伤、法力和技能规则属于业务 |
-| 敌方 AI、超时托管 | CardRun＋entitytimer | 服务器内部敌方入口；持久 TimerComponent 的当前 ID＋序号＋期限校验后推进 | 旧回调不会推进新回合；离线过期只补一次，从实际触发时间排下一回合 |
-| 战斗重放与配置固定 | CardRun DAO | 保存完整 Rules / hash、初始编队、种子、命令与服务端时间、当前状态；加载时重算核对 | 未提交行为不参与回放；整段日志上限 120 次动作；不是通用 Skill Runtime checkpoint |
-| 双波次、撤退与胜败 | CardRun DAO | 敌方清空进入下一波；全灭、动作上限或撤退形成终态 | 运行中不能领奖；客户端不能上报“我赢了” |
-| 普通奖励 / 首通 / 星级 | Player＋CardRun | `MultiSync_CardClaim`：权威终态、所属 Player、开局身份、奖励、首通 / 星级、任务进度、领取事实同事务 | 同一原服本地多实体原子提交；不是跨 sid 十人即时原子奖励 |
-| 扫荡、任务 | Player DAO | 已通关才可扫荡，顺序回执保证体力与奖励一次生效；获胜任务只领一次 | 当前扫荡复用关卡普通奖励，不再发首通；次数 / 条件 / 任务库为样例规则 |
-| 断线查看与隐私 | 业务 ProfileView / BattleView | 已鉴权入口调用锁内的 `Sync_CardProfile` / `Sync_CardBattle` | 只返回允许字段，不同步原始 DAO State；后者含密钥与内部账本 |
-| 真实崩溃与冷加载 | strict 文件 WAL / Mongo | 恢复原 WAL → 冷加载原 Player / Run / 定时器 → 重试原操作 → 续战 → 领奖后再进程冷加载 | strict 是 WAL durable，Mongo 可异步投影；未知结果查原身份，不能重建账号或清 WAL |
+| 资源、卡牌、编队、抽卡 / 养成 / 开局账本、关卡进度、任务 | Player DAO | 生成的 Player DAO 字段，只在 Nest 事务里经 mutator 修改 | 一模板一张卡；正式卡牌实例、多套装备、分解政策另建模 |
+| 一场战斗：冻结的配置与编队、种子、动作日志、当前状态 | CardRun 实体的 DAO | `roost add entity CardRun` + `add dao`；与 Player 同一原服，开局 / 领奖用多实体 Sender | 战斗日志整段存在 DAO 里，每局至多 120 次动作 |
+| 回合期限（超时托管） | CardRun 的实体定时器 | `roost add timer --entity CardRun`；节点存 DAO，驱动到期投递 Tick | 离线到期只在加载后补一次，框架不追帧 |
+| 配置（英雄、卡池价格、保底、关卡数值） | configdata Store / Snapshot | 注册对象定义 → Load 时校验 → 请求开始时捕获一份快照，按值传给 Sender | 字段范围由业务 `Validate` 定义；失败不发布 |
+| 战斗属性与战力 | 业务声明的 HeroStats | `roost add attribute HeroStats`，生成访问器、脏位、派生 `Power` 与快照 | 持久的养成事实仍在 Player DAO，属性只在开局时计算 |
+| 伤害结算 | 纯函数 | [`combat.ResolveDamage`](../../gameplay/skill/combat/damage.go) 的定点护甲 / 暴击 / 护盾 / 血量管线 | 法力、治疗、毒伤、目标规则属于业务 |
+| 客户端看到的资料与战斗 | 业务视图 `ProfileView` / `BattleView` | 已鉴权入口经 Nest 锁内读取，只返回允许的字段 | 原始 DAO State 含私有密钥与内部账本，不加 Sync 标记 |
+| 登录与账号 | account / Player 静态 sid | 复用正式生命周期与登录鉴权 | 夹具直接用合成的已鉴权身份；账号链见 [玩家接入](PLAYER-ACCESS.md) 与 game-demo |
 
-支付到账、邮件、活动、排行、跨服协作仍可按[服务篇](guide/09-services.md)、[Saga](guide/06-saga.md)与既有 demo 接入；本消费者没有把这些已有示例的历史通过记成卡牌钻石充值、卡牌邮件或正式跨服 PvP 的验收。
+```mermaid
+flowchart LR
+    A[已鉴权请求] --> B[捕获配置快照]
+    B --> C[生成 Sender]
+    C --> D[Nest 锁 Player / CardRun]
+    D --> E[业务规则改 DAO 与回合定时器]
+    E --> F[strict WAL 提交]
+    F --> G[回复业务视图]
+    F --> H[提交后报告新期限给驱动]
+    H --> I[到期投递 Tick：超时托管一回合]
+```
 
-## 二、源码学习顺序与实际调用
+`strict` 保证回复前 WAL fsync，不保证回复时 Mongo 已投影（[DataEngine](guide/03-dataengine.md)）。
 
-| 顺序 | 业务源码 | 先回答的问题 |
+### 3. 抽卡、养成与回合制 PvE：如何使用
+
+#### 3.1 生成工程从哪来
+
+在仓库根目录使用 go.mod 声明的工具链运行：
+
+```bash
+ROOST_CARD_RPG_KEEP=1 bash scripts/test-card-rpg-generated.sh   # 保留生成工程以便阅读；不加 KEEP 时成功即删除
+```
+
+脚本打印临时目录，生成工程在其中的 `project/`。它做的事就是一个新工程的接入步骤：
+
+1. `roost project new card-rpg-practice -module example.com/card-rpg-practice -template game`；
+2. `roost add dao Player --entity Player`、`roost add entity CardRun`、`roost add dao CardRun --entity CardRun`、`roost add timer --entity CardRun`、`roost add attribute HeroStats`；
+3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `bson:"state" dao:"persist"` ``，在 `db/def/card_run.go` 加 `State` 与 ``TurnTimer int64 `bson:"turn_timer" dao:"persist"` ``；把 `game/entities/card_run/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Run 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/cardrpg/`、属性声明 `game/gameplay/attribute/hero_stats.go`、定时回调 `game/entities/card_run/timer_handlers.go` 与 handler `game/handler/card_rpg.go`；
+4. `roost generate` 生成组件、访问器、属性代码和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+
+生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 CardRun 的定时器驱动，`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。
+
+#### 3.2 阅读顺序
+
+进入 `project/` 后按顺序读（括号里是仓库内的源文件）：
+
+| 顺序 | 文件 | 先回答的问题 |
 | --- | --- | --- |
-| 1 | [catalog.go.txt](../../scripts/testdata/card-rpg/catalog.go.txt) | 配置如何经校验发布？一个请求 / 一场战斗怎样固定一代？ |
-| 2 | [attributes.go.txt](../../scripts/testdata/card-rpg/attributes.go.txt) | 哪些属性由业务声明？生成器如何管理脏位、派生 Power 和快照？ |
-| 3 | [profile.go.txt](../../scripts/testdata/card-rpg/profile.go.txt) | 抽卡、成长、体力、准入和奖励身份分别存在哪？旧序号如何重放？ |
-| 4 | [battle.go.txt](../../scripts/testdata/card-rpg/battle.go.txt) | 谁决定当前行动者 / 目标？同一配置、初始状态、种子和日志能否重放同一结果？ |
-| 5 | [handlers.go.txt](../../scripts/testdata/card-rpg/handlers.go.txt) | Player、Run、定时器、扣款和领奖分别在哪个锁与提交边界一起生效？ |
-| 6 | [timer_handlers.go.txt](../../scripts/testdata/card-rpg/timer_handlers.go.txt) | 回合结束怎样替换计时身份？离线很久为什么只补一次？ |
-| 7 | [gameplay_test.go.txt](../../scripts/testdata/card-rpg/gameplay_test.go.txt)、[配置 / 投影测试](../../scripts/testdata/card-rpg/catalog_test.go.txt) | 并发、拒绝、回滚、旧请求与隐私如何实际验证？ |
-| 8 | [真实恢复用例](../../scripts/testdata/card-rpg/persistence/recovery_test.go) | 已确认未投影的记录怎样在 SIGKILL 后恢复？领奖后再次进程重启还会不会发奖？ |
+| 1 | `game/cardrpg/catalog.go`（[catalog.go.txt](../../scripts/testdata/card-rpg/catalog.go.txt)） | 配置怎样经校验发布？一次操作 / 一场战斗怎样固定一代？ |
+| 2 | `game/gameplay/attribute/hero_stats.go`（[attributes.go.txt](../../scripts/testdata/card-rpg/attributes.go.txt)） | 属性声明里写什么？生成器管理哪些东西（访问器、脏位、派生 `Power`、快照）？ |
+| 3 | `game/cardrpg/profile.go`（[profile.go.txt](../../scripts/testdata/card-rpg/profile.go.txt)） | 抽卡、养成、体力、开局准入的幂等身份各存在哪？旧序号怎样重放？ |
+| 4 | `game/cardrpg/battle.go`（[battle.go.txt](../../scripts/testdata/card-rpg/battle.go.txt)） | 谁决定当前行动者和目标？同一配置、初始状态、种子和日志能否重算出同一结果？ |
+| 5 | `game/handler/card_rpg.go`（[handlers.go.txt](../../scripts/testdata/card-rpg/handlers.go.txt)） | Player、Run、定时器、扣款和领奖分别在哪个锁与提交边界里一起生效？ |
+| 6 | `game/entities/card_run/timer_handlers.go`（[timer_handlers.go.txt](../../scripts/testdata/card-rpg/timer_handlers.go.txt)） | 回合结束怎样替换定时器身份？离线很久为什么只补一回合？ |
+| 7 | `game/handler/syncsender/` | 生成的 Sender 怎样把目标 ID 与业务参数交给 Nest；业务调用它，不手改 |
+| 8 | [gameplay_test.go.txt](../../scripts/testdata/card-rpg/gameplay_test.go.txt)、[catalog_test.go.txt](../../scripts/testdata/card-rpg/catalog_test.go.txt) | 并发、拒绝、回滚、旧请求与隐私怎样实际验证 |
+| 9 | [persistence/recovery_test.go](../../scripts/testdata/card-rpg/persistence/recovery_test.go) | 已确认但未投影的记录在 SIGKILL 后怎样恢复？领奖后再重启会不会再发奖？ |
 
-这些 `.go.txt` 是业务源文件夹具，脚本拷进正式 CLI 生成的新工程，再生成访问器、Sender、定时器接线。不是向项目生成器加入卡牌游戏内容，也不手改生成代码。
+身份要分开理解：Player / Run 用框架完整 EntityID；`Card.ID` 是玩家内的模板卡标识，不能当 Nest 目标。抽卡、管理（养成 / 编队 / 扫荡 / 任务）、开局是三个独立的单调序号域；回合序号只属于一个 Run；定时器节点 ID 又是 Run 内的独立身份。配置内容 hash、业务 State 里的 `Schema`、DAO 的 `_schema` 与 core 版本是四个不同的概念。
 
-身份需要分开理解：Player / Run 使用框架完整 EntityID；样例 Card.ID 是玩家内模板卡标识，不能传给 Nest 当实体 ID。抽卡、管理、开局是三个独立单调序号域；回合序号只属于一个 Run，定时器节点 ID 又是该 Run 的独立生命周期身份。配置内容 hash、业务 Schema、DAO `_schema` 和 core 版本也不能混用。
+#### 3.3 用 Sender 调用
 
-### 1. 配置与抽卡
-
-端点先把已鉴权玩家身份、服务器时间和业务配置取好，再调用内部 Sender。以下为消费者中的接入片段，省略账号生命周期和错误处理细节：
-
-```go
-rules, err := cardrpg.CaptureRules(catalog.Current()) // 只捕获一次快照
-s := syncsender.NewCardRpgSender(nestClient)
-receipt, err := s.Sync_CardDraw(ctx, playerEntityID, drawSequence, 10, rules)
-```
-
-公网请求只提供抽卡业务序号与张数，**不携带 Rules、私有密钥或随机结果**。端点也可使用框架绑定的请求配置快照，以保留排队准入代际；本消费者用显式 Snapshot→Rules 的值拷贝避免一次业务操作混读多代。新一代配置只影响新操作，重放已成功抽卡返回旧回执；不能拿新价格再次扣款或重新掷结果。
-
-HMAC 用私有密钥按操作领域、序号和槽位派生可恢复的随机事实。卡池重试不会改变身份；测试密钥固定以便断言，正式服从 `crypto/rand` 初始化且不向客户端投影 / 打日志。开局的战斗种子另用 `battle` 领域派生，不向客户端暴露抽卡密钥。首登结果未知时应查询原 Player 状态，不能给同一个已有角色重发新的初始化密钥 / 初始资产。
-
-本例只有一个卡池，重复模板转换为碎片 / 粉尘，五抽保底计数与扣款、结果、回执一起提交。正式多卡池、限定保底继承、付费货币账本、概率发布与审核等是产品规则，不能默认已由此教学流程实现。
-
-### 2. 开局与养成
-
-开局前用 id-gen 取得候选 Run 完整 ID，按正式生命周期创建新的 Run；不要直接 Create 已存储 / 删除过的 ID。此后调用：
+下面的文件放进保留的生成工程（例如 `internal/cardflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `cardrpg.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），EntityID 都是完整 ID：
 
 ```go
-runID, err := s.MultiSync_CardStart(ctx, playerEntityID, candidateRunID,
-    runSequence, stageID, rules, serverNowMillis)
-// 无论首次或重放，此后查看、操作、领奖都使用返回的 runID。
+package cardflow
+
+import (
+	"context"
+
+	"example.com/card-rpg-practice/game/cardrpg"
+	syncsender "example.com/card-rpg-practice/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// drawTrainAndStart 是已鉴权入口的调用顺序：十连、升级一张卡、开第一关。
+// 序号由客户端按自己的业务域递增并在重试时原样重发；Rules 由服务器捕获，不来自请求。
+func drawTrainAndStart(ctx context.Context, client nest.Client, catalog *configdata.Store,
+	playerEntityID, candidateRunID int64, drawSeq, manageSeq, runSeq uint64, now func() int64) (int64, error) {
+	rules, err := cardrpg.CaptureRules(catalog.Current()) // 一次操作只捕获一份快照
+	if err != nil {
+		return 0, err
+	}
+	s := syncsender.NewCardRpgSender(client)
+	if _, err := s.Sync_CardDraw(ctx, playerEntityID, drawSeq, 10, rules); err != nil {
+		return 0, err
+	}
+	level := cardrpg.Manage{Seq: manageSeq, Kind: "level", CardID: 1, Target: 2}
+	if _, err := s.Sync_CardManage(ctx, playerEntityID, level, rules, now()); err != nil {
+		return 0, err
+	}
+	// 首次与重放都返回原 Run ID；此后查看、出手、领奖一律用返回值。
+	return s.MultiSync_CardStart(ctx, playerEntityID, candidateRunID, runSeq, 1, rules, now())
+}
+
+// playAndClaim 让本方每回合自动出手、敌方回合走服务器内部入口，直到终态后领奖。
+// 公网入口只接收本方的 Seq / Kind / Target；ActorID 由入口填已鉴权的 Player，敌方入口不暴露给客户端。
+func playAndClaim(ctx context.Context, client nest.Client, playerEntityID, runID int64, now func() int64) (cardrpg.ProfileView, error) {
+	s := syncsender.NewCardRpgSender(client)
+	view, err := s.Sync_CardBattle(ctx, runID, playerEntityID)
+	for err == nil && view.Status == "running" {
+		if view.Actor < 3 {
+			command := cardrpg.TurnCommand{Seq: view.NextSeq, ActorID: playerEntityID, Kind: "auto"}
+			view, err = s.Sync_CardTurn(ctx, runID, playerEntityID, command, now())
+		} else {
+			view, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq, now())
+		}
+	}
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	return s.MultiSync_CardClaim(ctx, playerEntityID, runID)
+}
 ```
 
-Player 保存单调的开局序号→Run ID→关卡→配置 hash。同一序号即使传了另一个空候选 Run，也只返回原 Run ID，不再扣体力，不初始化新候选；未使用的候选号丢弃，永不复用。新序号需上一局已领奖 / 收口，且满足关卡解锁和体力条件。
+`candidateRunID` 要用 id-gen 发的新号并先创建实体：直接 `Create` 不读存储，不能复用删过档或存了没加载的 ID（[删档后该 ID 不可再用，D10](guide/03-dataengine.md#4-冷加载与-schema)）。夹具在测试里直接建实体，没有演示 id-gen 接线。未用上的候选号（重放时返回了原 Run）丢弃，不复用。每次调用的错误都要按业务逐次处理，示例只演示调用方式。
 
-开局把三张卡的养成事实映射到生成的 HeroStats，运行派生公式，再复制为 Run 初始属性。局外继续养成或改编队不会改变已开始的战斗。升级 / 升星 / 装备 / 编队 / 扫荡 / 任务共用一个操作序号账本；重复请求应重用序号和原内容，而不是为了“再试一次”分配新序号。
+#### 3.4 十六个场景各学什么
 
-### 3. 权威回合、伤害与定时器
+| 场景（测试名前缀 `TestCardRPG`） | 业务选择 | 学到的框架契约 |
+| --- | --- | --- |
+| `CatalogReloadIsAtomicAndFrozenRulesRemainUsable` | 非法热更被拒，合法热更发布新一代 | configdata 校验失败不替换当前快照；已捕获的值和旧快照不被新发布改写 |
+| `GeneratedAttributesDeriveAndSnapshotIsIndependent` | `Power = HP/10 + Attack*2 + Armor + Speed` | 生成器用业务的派生公式；属性快照与活对象独立 |
+| `PrivateKeysNeverAppearInPublicProjection` | 视图裁掉密钥、账本、种子、RNG、配置与日志 | 客户端视图由业务显式投影，不序列化整个 DAO State |
+| `MalformedStateAndFrozenBattleTamperingFailClosed` | 加载时严格 JSON、重算整段日志 | 状态被改、冻结配置被改时拒绝解码，不带病运行 |
+| `DrawConcurrentReplayPityAndConfigIdentity` | 八个相同抽卡请求并发 | 单实体 Nest 串行 + 业务序号：一次扣款、一份十连结果，保底计数正确，改张数 / 跳序被拒 |
+| `DrawRefusalAndUndoKeepFundsAndRandomStream` | 钻石不足、handler 失败 | undo 回滚后余额与随机流不变，重试得到同一结果，没有半次十连 |
+| `GrowthFormationAndBattleLoadoutAreSeparateSnapshots` | 碎片升星、升级 / 装备扣费、换编队 | 开局把养成事实拷进战斗；局外再成长不改进行中的战斗 |
+| `GrowthRejectsMissingCardsOldRequestsAndInvalidTeams` | 缺卡、越级、旧序号换内容、重复上阵 | 业务拒绝不写任何状态；相同旧请求只重放不再扣费 |
+| `ConcurrentAdmissionHasOneRunAndOneEnergyCharge` | 同一开局序号八个并发、换候选 Run 重试、未领奖再开局、未解锁关卡 | 多实体 Sender：只建一局、只扣一次体力，重试返回原 Run ID、候选 Run 不被初始化 |
+| `TurnAuthoritySequenceAndReplayDoNotRearmDeadline` | 只能控制本方当前角色，序号单调 | 客户端不能代敌方出手或注入超时；重放不重新掷随机、不重排期限 |
+| `CombatUsesShieldsManaPoisonAndHealing` | 防御护盾、爆发耗法力并上毒、毒伤按回合结算、治疗 | 业务动作 + `combat.ResolveDamage` 的护盾 / 血量结算；推进后的日志能重算出同一状态 |
+| `WinClaimSweepQuestAndConcurrentRewardReplay` | 打完两波获胜、八个并发领奖、获胜任务、扫荡 | 多实体领奖事务：一份奖励（含首通），任务只领一次，扫荡只发普通奖励 |
+| `RetreatHasNoRewardAndFirstClearOnlyPaysOnce` | 撤退、其他玩家领奖、同关再通 | 终态由服务器判定；撤退只收口不发胜利奖，非本人领奖被拒，首通奖励只发一次 |
+| `TurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce` | 旧期限的 Tick、迟到很久的 Tick | 定时器 ID + 下一序号 + 原期限三重核对，旧事件不推进新回合；迟到很久的一次 Tick 只推进一回合（实体一直在内存，不是离线重载，离线重载见第二部分） |
+| `UndoRestoresAdmissionTurnAndTimerAsOneFact` | 开局 / 出手后 handler 失败 | 体力、准入账本、战斗状态、定时器节点一起回滚 |
+| `LedgerBoundsAndOfflineEnergyKeepReplayEvidence` | 抽卡、管理账本各满 64 条；体力按时间补 | 满了拒绝新写，旧回执仍能重放；体力保留余数、封顶、拒绝时钟回退（开局账本上限在代码里同样强制，没有单独测满） |
+
+上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
+
+### 4. 配置为什么要按值捕获
+
+`OpenCatalog` 用 `configdata.MustRegisterObject` 登记 `card_rules`（`cards.json`），`Validate` 失败整次加载 / 重载被拒，旧快照继续服务（[业务表发布](guide/07-config.md#3-业务表发布)）。入口捕获 `catalog.Current()` 再 `CaptureRules` 得到 `Rules` 值，交给 Sender：`Rules` 的切片都是定长数组，按值复制，一次操作只看一代；开局时整份 `Rules` 与 hash 写进 Run，之后的出手、超时、领奖都用开局那一代，热更只影响新操作。
+
+框架另有请求级的一致性：异步消息在准入时捕获当前运行期配置、同步调用继承请求代际（[请求内一致性](guide/07-config.md#4-请求内一致性)）。本夹具不依赖它，而是显式传值，并把 hash 记进回执，便于以后核对“这次扣款按哪一代价格”。公网请求**不携带** Rules。
+
+### 5. 抽卡与养成的幂等身份
+
+`Sync_CardDraw(player, seq, count, rules)`：钻石扣款、HMAC 派生的随机结果、保底计数、新卡 / 碎片和完整回执在一个事务里提交。相同 `seq` 与相同张数返回原回执（即使传了新价格的配置，也不重掷、不重扣）；改张数或跳序拒绝。随机数由 Player 的私有密钥按“领域:序号:槽位”派生，所以失败回滚后重试仍是同一结果；密钥由受信任的首登入口写入（`handlerCardInit`，正式服用 `crypto/rand`），不进视图、不打日志。首登结果未知时查原 Player 状态，不要给已有角色换一把新密钥。
+
+`Sync_CardManage` 用一个永久顺序账本承载升级、升星、装备、编队、扫荡和任务：旧序号只能原样重放，换内容拒绝；重复请求应重发同一序号和内容，不要为了“再试一次”分配新序号。重复抽到已有模板转成该卡碎片和粉尘。
+
+账本是 Player 上的持久业务事实，与扣款同事务，所以长期有效；它不是服务的短期去重环。账本各至多 64 条，满了拒绝新写而不淘汰旧回执（淘汰会让旧请求被当成新请求重复扣款）；正式服需要归档 / 分片方案，不能靠清回执或换身份绕过。
+
+### 6. 开局、回合与持久回合定时器
+
+`MultiSync_CardStart(player, run, seq, stage, rules, now)` 同时锁 Player 与 Run：补算体力、检查关卡解锁与“同一 Player 至多一局未领奖”、扣体力、用生成属性算出三张卡的初始战斗属性、建战斗、登记第一回合期限，全部一个事务。Player 上记“开局序号 → Run ID → 关卡 → 配置 hash”，同一序号重放直接返回原 Run ID。
 
 ```mermaid
 sequenceDiagram
     participant C as 已鉴权入口
     participant N as Nest
     participant R as CardRun DAO
-    participant T as 持久实体定时器
-    C->>N: Run ID + Player ID + 当前序号 / 动作
-    N->>R: 校验归属、行动者、资源、目标与期限
-    N->>R: 确定性推进并记命令、服务端时间和状态
-    N->>T: 删除旧节点，保存下一回合 ID / 期限
-    N->>N: strict WAL 确认
+    participant T as 实体定时器
+    C->>N: Run ID + Player ID + 序号 / 动作
+    N->>R: 校验归属、当前行动者、资源、目标与期限
+    N->>R: 确定性推进，记命令、服务器时间和状态
+    N->>T: 删除旧节点，登记下一回合期限
+    N->>N: strict WAL 提交
     N-->>C: 提交后的 BattleView
-    T->>N: 当前 ID / 序号到期
-    N->>R: 自动行动一次并排下一回合
+    T->>N: 到期投递 Tick（当前节点 ID / 序号）
+    N->>R: 托管行动一回合，登记下一回合
 ```
 
-公网回合请求只带序号、动作和目标；内部 `TurnCommand.ActorID` 由端点填已鉴权 PlayerID，`now` 由服务端时钟提供，不应直接从客户端反序列化整个内部命令。客户端的角色动作只对自己的当前队员有效；敌方自动操作和 timer timeout 是服务端内部入口。回合序号从 1 单调递增，相同序号与相同命令重放不再消耗法力、掷随机数、造成伤害或重排期限；旧序号换内容拒绝。服务器时间不属于客户端命令身份，晚到的重试仍能取回已执行事实。
+行动顺序按速度降序、同速按座位。客户端的动作只对本方当前角色有效；敌方回合由服务器内部入口 `Sync_CardEnemy` 推进，超时由定时器推进，二者都不暴露给客户端。回合序号从 1 单调递增，相同序号与相同命令重放不再消耗法力、不再掷随机、不重排期限；服务器时间不属于命令身份，晚到的重试仍能取回已执行的结果。
 
-普通攻击、爆发伤害复用 [combat.ResolveDamage](../../gameplay/skill/combat/damage.go) 的定点护甲 / 暴击 / 护盾 / 血量管线；法力、治疗、毒伤与目标限制留在业务。这里没有把 Skill Runtime 放进 Nest 回滚域：[Skill 的事务边界](guide/08-skill.md#4-事务与战斗边界)明确说明 Runtime 自身的 cooldown / cast 等账本不随 DAO 自动回滚。
+每次实际推进才替换回合定时器（`saveCardBattle`：`RemoveTimer` 旧节点、`NewTimerAt` 新期限、ID 记进 `TurnTimer`）。回调核对节点 ID、下一命令序号与原期限，旧计时事件不会推进新回合。**框架不追帧**：实体不在内存期间到期的节点，加载后只触发一次（[按实体的持久定时器](guide/10-time.md#4-按实体的持久定时器)）；本例据此托管一回合，再从实际触发时间排下一回合，不会因为离线一小时在一次加载里补完所有回合。驱动不唤醒不在内存的实体，离线的战斗直到下次加载才处理。
 
-每次实际推进才替换 TurnTimer。回调核对节点 ID、下一命令序号与原期限，旧计时事件不会推进新回合。框架的离线策略是加载后只补触发一次，本例据此自动行动一次、从实际触发时间安排下一回合；不会因离线一小时在一次加载里补完所有回合。未加载实体不会被 timer 自动唤醒，服务装配需把 Driver 接到 Nest / 业务时钟并启动；测试手动投递正式生成 Tick Sender 以精确验证边界。
+普通攻击、爆发复用 `combat.ResolveDamage`；法力、治疗、毒伤和目标限制留在业务。这里**没有**用 Skill Runtime：它不在 Nest DAO 回滚域内，handler 失败不会回退它的冷却 / 施法账本（[Skill 的事务边界](guide/08-skill.md#4-事务与战斗边界)）。回合状态全部在 DAO 里，所以能随事务回滚和恢复。
 
-### 4. 奖励、重连与存储格式
+### 7. 领奖、重连视图与存储格式
 
-```go
-view, err := s.Sync_CardBattle(ctx, runID, authenticatedPlayerEntityID)
-profile, err := s.MultiSync_CardClaim(ctx, playerEntityID, runID)
-```
+`MultiSync_CardClaim(player, run)` 回查权威终态，客户端不能传胜者、星级或奖励。胜利发普通奖励，首次通关额外发首通奖励并更新最佳星级；撤退或失败只收口。资产、准入记录与 Run 的 `Claimed`、清掉 `ActiveRun` 一起提交；并发重试和冷加载后的重试都只得一份。这是同一原服内的多实体原子提交，不是跨 sid 的多人原子奖励。
 
-战斗和领奖都回查权威状态；客户端不能传胜者、星级或奖励数值。胜利发普通奖励，首次通关额外发首通奖励并更新最佳星级 / 获胜任务；撤退或失败只收口，不发胜利奖励。Claim 同时锁 Player 和 Run，把资产、任务、准入回执的 Claimed、Run 的 Claimed 以及清理 ActiveRun 一起提交。并发重试和冷加载后重试均沿用原 Run ID。
+重连时调用锁内的 `Sync_CardProfile` / `Sync_CardBattle` 取当前视图。`ProfileView` 裁掉私有密钥和内部账本，`BattleView` 裁掉初始种子、内部随机状态、整份配置与操作日志。不要给 `State` 加 Sync 标记或直接下发整个实体；需要推送时按 [self_sync](PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) 写业务视图。夹具只验证了字段裁剪与 handler 的归属校验，没有联调公网 TCP 协议或客户端引擎。
 
-本例 Player.State / CardRun.State 为显式 `bson:"state" dao:"persist"` 字符串，通过生成 DAO 的 SetState 标脏；JSON 内的 Schema=1 是业务格式，和 DAO `_schema`、core 模块版本是不同概念。加载拒绝未知字段、格式版本或不一致的战斗日志 / 快照；改业务格式仍需离线迁移 / 匹配代码，不能只改 DAO 字符串字段的版本来冒充迁移。
+存储格式要分两层看：
 
-ProfileView 裁掉私有密钥和内部账本，BattleView 裁掉初始种子、内部随机状态、整份配置与操作日志。重连走锁内读取当前视图；不要给原始 State 加 Sync 标记或直接序列化整个实体。本轮验证了字段裁剪与 handler 归属校验，未声称正式公网 TCP / 客户端引擎的卡牌协议已经联调。
+- **DAO 持久键**：`State` / `TurnTimer` 的 `bson` 名就是 Mongo 里的键（DESIGN-TODO D13）。以后改 Go 字段名要保留原 `bson` 名；改了 `bson` 名或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
+- **业务 JSON**：`State` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、未知版本以及与日志不一致的战斗快照。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
 
-## 三、可执行验收
+### 8. 更多卡牌 RPG 路线：接法、源码与业务边界
 
-### 基础生成消费者
+| 方向 | 从哪个源码 / 文档学 | 框架接法 | 业务仍需定义 |
+| --- | --- | --- | --- |
+| 充值与钻石到账 | [GrantPurchase](../../demo/game/handler/grant_purchase.go.tmpl)、[platform](../../demo/internal/service/platform/) | 渠道订单身份与到账账本同事务 | 产品、支付签名、退款与审计 |
+| 邮件与补偿 | [ClaimMail](../../demo/game/controllers/player/claim_mail.go.tmpl)、[ClaimMailReward](../../demo/game/handler/claim_mail_reward.go.tmpl) | 服务预留、玩家侧幂等奖励、服务提交多阶段 | 邮件有效期与补发规则 |
+| 活动与排行 | [活动接线](../../demo/internal/service/game/activity.go.tmpl)、[服务篇](guide/09-services.md) | 活动贡献只在首次真实付款时提交；排行写累计快照、只增不减 | 活动窗口、奖励档位；尽力贡献失败不自动补报是已接受取舍 |
+| 跨服协作 | [Saga](guide/06-saga.md)、[gift_item saga](../../demo/saga/gift_item/) | 原生步骤 / effect，失败补偿，结果未知按身份查询 | 原生步骤单进程容量有限（见 Saga 指南 §5），量大按 sid 分片 |
+| 技能与 Buff | [技能 / 战斗](guide/08-skill.md) | 完整 Skill Host 按其独立事务 / 持久化契约接入 | 技能、Buff、英雄内容与平衡 |
+| 推送与客户端 | [Sync](guide/04-sync.md)、[玩家接入](PLAYER-ACCESS.md) | 业务视图经 self_sync 推送 | 客户端协议与表现 |
 
-在 core 根目录使用 go.mod 要求的工具链；当前云环境可先 `source /workspace/.cloud-setup/activate.sh`。
+本夹具没有实现这些路线；它们在 game-demo 里的历史通过不等于卡牌充值、卡牌邮件或跨服 PvP 已验收。
+
+### 9. 接入时容易踩的问题
+
+- **锁目标没被识别**：Nest 生成器在不写 `target` / `targets` 时，把类型名含 `Entity` 的参数推断为锁目标（`codegen/internal/nest/parse.go` 的 `isEntityCategory`）。本夹具起初把锁接口命名为 `ICardPlayer` / `ICardRun`，生成器静默跳过了这 9 个 handler、把此前生成的 Sender 当孤儿删掉，`generate` 仍成功退出，直到编译才报 `undefined: RegisterCardRpgNestHandlers`。这是生成器的诊断缺陷，已修复：现在 generate 直接报 `//roost:nest found no entity parameter` 并点名 handler。写法二选一：接口名含 `Entity`（本夹具用 `ICardPlayerEntity` / `ICardRunEntity`），或写 `targets=player,card_run`（[Nest 生成器](../../codegen/docs/NEST_RUNTIME.zh-CN.md)）。
+- **定时器回调只改本实体**：回调里只经组件 API 操作本 Run 的期限，不另建调度器、不直接改节点 map；需要 Player 一起变化的事交给多实体 handler（[SLG §6](SLG-INTEGRATION.md#6-定时器回调能做什么)）。
+- **handler 里不发同步 Nest 请求**：已知参与者一次传给多实体 Sender；handler 内的同步请求被框架拒绝（`ErrSyncInHandler`）。
+
+### 10. 练习
+
+加“限定卡池保底继承到下一期”或“扫荡券代替体力”。先写清拥有者、幂等身份（哪个序号域）、事务参与者、配置代际和恢复语义，再选 Nest / 定时器 / Saga，不另造一套与框架平行的持久或并发状态机。
+
+## 第二部分：验收
+
+### 11. 业务纵切证明什么
 
 ```bash
 bash scripts/test-card-rpg-generated.sh
-# 保留消费者和日志供教学：
-ROOST_CARD_RPG_KEEP=1 bash scripts/test-card-rpg-generated.sh
 ```
 
-脚本从 `game` 模板生成隔离工程，经 CLI 添加 Player DAO、CardRun Entity / DAO / Timer 和 HeroStats 属性声明；只修改业务源文件，正式 generate 后要求 **16 条顶层场景通过且无 skip**，再跑消费者 build / vet、ID 检查和 generate --check。默认提交器是替身，只证明调度 / 事务组合，不证明 WAL fsync。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_CARD_RPG_KEEP=1` 时保留。
 
-| 实际场景 | 核验重点 |
-| --- | --- |
-| 配置、属性、投影、格式 | 非法热更不发布、旧快照保留；派生公式 / 独立快照；私有字段不进入视图；日志或配置被改动后拒绝恢复 |
-| 抽卡并发与回滚 | 八个相同请求返回同一十连，保底、扣款一次；改张数 / 跳序拒绝；失败回滚恢复同一随机结果；不足资金无半次抽卡 |
-| 养成与编队 | 碎片升星、升级 / 装备支付、重复重放、缺卡 / 重复上阵拒绝；当前战斗不被局外成长改写 |
-| 开局与战斗 | 并发准入扣一次体力、候选 ID 重试仍指向原局；关卡解锁 / 活动局限制；敌我权限 / 序号 / 目标、护盾 / 法力 / 毒伤 / 治疗、两波次胜负 |
-| 奖励与重复挑战 | 并发 Claim 一份奖励；首通一次、扫荡普通奖励、获胜任务一次；撤退无胜利奖、其他玩家不能领奖 |
-| 时间与回滚 | 旧期限不推进新回合、离线只补一次；开局 / 动作 / 定时器 undo 一起回退；体力余数与上限、时钟回退拒绝 |
-| 账本上限 | 抽卡、操作各满 64 条后拒绝新请求，旧回执仍可重放，不能静默淘汰资产幂等证据 |
+- **证明**：公共 CLI 生成的 Player / CardRun DAO、实体定时器、属性代码、多实体 Sender 与 Nest 在 16 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；视图字段裁剪。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份。夹具里的数值是样例。
 
-### 真实 WAL / Mongo 崩溃恢复
+### 12. 真实 WAL / Mongo 崩溃恢复
+
+先按[隔离环境说明](../../wiring/scripts/integration/README.md)准备独立 Mongo 副本集并设置地址变量（不要指向生产库或共享业务库；共享隔离环境下遵守那里的持锁与命名规则），再运行：
 
 ```bash
-# 依赖独立 Mongo 副本集；不能指向生产玩家资源。
-export ROOST_DATAENGINE_IT_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0'
 ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 ```
 
-`TestCardRPGRealCrashRecovery` 已登记根包覆盖表，使用本次唯一 DAO 库、WAL 与子进程，不停止共享 Mongo / NATS：
+它在第 11 节之后追加 `TestCardRPGRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程 strict 提交首登、抽卡、养成、开局和首回合；测试选项停止后台投影，确认 **5 条记录已确认但未投影**，父进程才 SIGKILL 自己启动的子进程。
-2. 新进程重放同一 WAL、冷加载原 Player / Run / 回合定时器，先核对恢复资产 / 状态，再按新配置重放旧抽卡与养成，金额和原结果不变。
-3. 把业务时间推进一小时，经正式生成 Tick Sender 补一次超时，继续用开局时的配置 / 编队完成战斗，重复领奖只得一份。
-4. 干净关闭后再起独立验证进程，先核对领奖终态 / 资产 / 无待执行定时器，再重试抽卡与领奖，仍不重复扣款或发奖。
+1. 子进程经 strict 文件 WAL 提交首登、十连、升级、开局和第一回合；后台投影关闭，断言 WAL 有 5 条已确认未投影的记录后，父进程 SIGKILL 自己启动的子进程。
+2. 父进程用同一 WAL 与 Mongo 冷加载 Player / Run，核对资产、战斗摘要与定时器 ID；再用新价格的配置重放旧抽卡与升级，结果与扣费不变。
+3. 业务时间推进一小时。断言冷加载已把存量回合期限报告给驱动索引（`DueOf`），调用驱动的 `DeliverDue` 投递一次补触发（不启动投递循环、不由用例手发 Tick）；托管一回合后下一回合从实际触发时间起算、新期限再次进入索引。继续用开局那一代配置打完、获胜，领奖三次只得一份。
+4. 正常关闭后再起第三个进程冷加载：核对领奖终态、资产与无待执行定时器，再重试领奖与抽卡，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
-真实场景必须执行通过、无 skip；成功仅清理本次唯一库，失败保留生成工程、WAL、数据库命名空间与子进程日志。这里不模拟磁盘断电、WAL 盘丢失或 strict 回复未知；这些与已确认记录的进程恢复分开验收。
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复；恢复后的定时器节点由驱动在加载后补触发一次，框架不追帧；跨进程重试不重复扣费或发奖。
+- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；驱动投递循环本身（测试直接调用循环每轮所做的 `DeliverDue`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
-## 四、问题归属与当前边界
+### 13. 结论怎样给
 
-main `c939ec84` 合并基线沿用 v1.28 的显式 DAO 持久键、跨分区匹配与服务端口块契约。DAO / attribute 生成器、match、DataEngine，以及 configdata / entitytimer / attribute / combat 的定向 race 回归通过。与本消费者相关的生成、冷加载和持久计时实际运行通过，没有据此新增已确认的框架运行时缺陷。
+卡池、数值和经济缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 发奖、状态越权或生成物编译失败，则应在公共实现中修复（本轮的 handler 被静默跳过即按此修复）。当前存储是教学规模：每局至多 120 次动作、三个账本各 64 条；单场日志与状态整体提交、加载时重算，没有生产吞吐或延迟承诺，正式长局需要分段日志与检查点。
 
-本轮生成接入时曾把锁接口命名为 `ICardPlayer` / `ICardRun`，导致没有识别到实体参数、未生成 Sender，编译报 `undefined: RegisterCardRpgNestHandlers`。源码的现行推断约定是接口类型名含 `Entity`，已改为 `ICardPlayerEntity` / `ICardRunEntity`；这是接入理解问题，不改生成器规则。显式 targets 写法及约定见 [生成器参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)。
-
-当前完成的是可运行的卡牌 RPG 框架接入闭环。存储为教学规模：六模板、一模板一卡、至多 120 次战斗动作，抽卡 / 管理 / 开局账本各最多 64 条且满后拒绝新写。正式服需要长期账本、归档 / 分片、卡牌唯一实例、更多技能 / Buff / 英雄、内容与平衡、正式卡池和经济设计；不能靠清回执或换身份绕过上限。
-
-真实客户端 / 公网协议、支付和卡牌货币到账、邮件 / 活动 / 排行的卡牌业务接线、PvP / 跨服玩法、目标容量和长稳尚未在此消费者实施 / 验收。状态字符串按操作整段提交、恢复重算至多 120 动作，没有生产吞吐或延迟承诺；需要时按实际负载设计分段日志和检查点。Skill Host 的完整施法运行时仍按其独立事务 / 持久化契约接入，不能把本例使用纯 combat 管线写成已经实现全部技能 Host。
+本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“卡牌 RPG 接入验收的范围”维护，不为每一轮另建报告。

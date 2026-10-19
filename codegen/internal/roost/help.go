@@ -265,7 +265,7 @@ type Player struct {
 		Name: "nest", Aliases: []string{"handler", "sender"},
 		Summary:       "生成 Entity 加锁调度、Sender、回滚和 durability 接入",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest@latest -dir ./game [-sender=true] [-force]`,
-		Configuration: `handler 使用 //roost:nest；rollback=state|undo，durability=memory|async|strict，可加 sync。Entity 接口参数是锁目标，多个目标按全局顺序加锁。Remote read 放在带 remote tag 的 RemoteViewRef 字段。`,
+		Configuration: `handler 使用 //roost:nest；rollback=state|undo，durability=memory|async|strict，可加 sync。锁目标是开头的 Entity 参数：类型名含 Entity（如 IPlayerEntity）或用 target= / targets= 指明，两者都没有时 generate 报错；多个目标按全局顺序加锁。Remote read 放在带 remote tag 的 RemoteViewRef 字段。`,
 		Example: `//roost:nest rollback=undo durability=strict
 func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
     return nil

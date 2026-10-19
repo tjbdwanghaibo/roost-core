@@ -518,14 +518,14 @@ func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{
 
 | 选项 | 值 | 含义 |
 | --- | --- | --- |
-| `target` | 实体名 | 锁目标；不写时按参数类型推断 |
+| `target` / `targets` | 实体名 / 逗号分隔的实体名 | 锁目标，按个数取开头的参数；不写时把类型名含 `Entity` 的参数（及其切片）推断为锁目标 |
 | `rollback` | `state`、`undo` | 全状态快照或生成 setter 的逆操作；热路径推荐 `undo` |
 | `durability` | `memory`、`async`、`strict` | 内存、WAL admission、严格提交 |
 | `sync` | flag | 生成同步 Sender |
 
 未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；需要请求返回前确认 durable admission 时声明 `durability=strict`，只有明确不持久化的 handler 才显式写 `durability=memory`。
 
-第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬进去，所以这些类型不能声明在 handler 包本身（子包看不见它，又不能反向导入 handler 包——handler 会调用 sender，导入成环）：生成器遇到这种类型直接报错 `type X is declared in package handler ... move X to a package the handler imports`，把它移到实体包或其他 handler 已导入的包即可（demo 的结果类型都在实体包里）。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
+第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。既没写 `target(s)`、参数类型名也不含 `Entity` 时找不到锁目标，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（以前静默跳过该函数、成功退出，还把此前生成的 Sender 当孤儿删除）。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬进去，所以这些类型不能声明在 handler 包本身（子包看不见它，又不能反向导入 handler 包——handler 会调用 sender，导入成环）：生成器遇到这种类型直接报错 `type X is declared in package handler ... move X to a package the handler imports`，把它移到实体包或其他 handler 已导入的包即可（demo 的结果类型都在实体包里）。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
 
 Remote read 可放在请求 struct：
 

@@ -38,6 +38,7 @@
 - [MERGE-CASUAL-INTEGRATION.md](../framework/MERGE-CASUAL-INTEGRATION.md)：学习文档，合成棋盘／仓库、离线命令与设备代际、服务器挑战、广告到账身份和 WAL 崩溃恢复
 - [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，角色卡抽取 / 养成、三人编队回合制 PvE、配置固定、持久回合计时与领奖恢复
 - [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
+- [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，卡牌 RPG 场景的框架学习（配置快照、抽卡 / 养成幂等账本、开局多实体事务、权威回合与持久回合定时器、领奖与视图裁剪）与验收范围
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
