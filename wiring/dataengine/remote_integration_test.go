@@ -50,12 +50,17 @@ func (*remotePublicationProbe) PublishRemoteInterest(context.Context, entity.Rem
 }
 
 // 所有 L2 操作透传真实 Redis，仅前缀隔离并记录清理范围，不改写脚本或 CAS 结果。
+// next 是一次性的时序钩子：装上后下一次 Eval 交给它决定何时、以什么上下文执行真实脚本，用来把
+// 发布协程钉在确定的事件顺序上（被 StopFinalizer 打断、晚于 WAL 重放才开始）。
 type isolatedSnapshotRedis struct {
 	fredis.IRedis
 	t      *testing.T
 	prefix string
 	keys   sync.Map
+	next   atomic.Pointer[evalHook]
 }
+
+type evalHook func(ctx context.Context, run func(context.Context) (any, error)) (any, error)
 
 func (r *isolatedSnapshotRedis) key(key string) string {
 	key = r.prefix + key
@@ -67,8 +72,18 @@ func (r *isolatedSnapshotRedis) Eval(ctx context.Context, script string, keys []
 	for i, key := range keys {
 		scoped[i] = r.key(key)
 	}
-	result, err := r.IRedis.Eval(ctx, script, scoped, args...)
-	if err != nil {
+	run := func(ctx context.Context) (any, error) { return r.IRedis.Eval(ctx, script, scoped, args...) }
+	var result any
+	var err error
+	if hook := r.next.Swap(nil); hook != nil {
+		result, err = (*hook)(ctx, run)
+	} else {
+		result, err = run(ctx)
+	}
+	// 调用方自己的上下文被取消（StopFinalizer 取消在途发布）是预期的停机路径，不记失败：产品把这次 L2 写当作
+	// 结果未知——不确认 L1、outbox 保持 Applied，由下一次发布以同版本同内容重写（L2 CAS 接受）。
+	// stop-interrupts-publication 子测试断言了这条处理。其余错误（含超时）照旧记失败。
+	if err != nil && !(errors.Is(err, context.Canceled) && ctx.Err() != nil) {
 		r.t.Errorf("real snapshot Redis Eval: %v", err)
 	}
 	return result, err
@@ -90,7 +105,16 @@ var registerRemoteProjectionKind = sync.OnceFunc(func() {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: remoteProjectionKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 })
 
+// 第二笔事务的发布与停机之间有两种合法时序，各跑一遍：
+//   - published：发布在停机前完成，重放读到 Committed，只做本地确认、不再发布；
+//   - stop-interrupts-publication：停机时发布还在途（真实 Eval 已执行但回复被 StopFinalizer 的取消截断，
+//     结果未知），outbox 必须保持 Applied，由新 Manager 的重放补发；补发是异步的，重放返回后要等事务结论。
 func TestRealDataEngineRemotePublicationAndWALRecovery(t *testing.T) {
+	t.Run("published", func(t *testing.T) { runRemotePublicationAndWALRecovery(t, false) })
+	t.Run("stop-interrupts-publication", func(t *testing.T) { runRemotePublicationAndWALRecovery(t, true) })
+}
+
+func runRemotePublicationAndWALRecovery(t *testing.T, interruptSecondPublication bool) {
 	fx := newRealFixture(t)
 	defer fx.close()
 	addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
@@ -259,8 +283,23 @@ func TestRealDataEngineRemotePublicationAndWALRecovery(t *testing.T) {
 	assertWALReplayCount(t, wal, 0)
 	// 第二笔 Mongo 和快照都成功，模拟只丢 checkpoint，再用新 Manager 重放。
 	second := makeRecord(152, 1)
+	secondTx := entity.RemoteTransactionID(second.ID)
 	if _, err = wal.Append(fx.context(), second); err != nil {
 		t.Fatal(err)
+	}
+	interrupted := make(chan struct{})
+	if interruptSecondPublication {
+		// 发布协程的第一次 L2 写真实执行，回复扣到 finalizer 被取消为止：调用方看到的是“结果未知”。
+		hook := evalHook(func(ctx context.Context, run func(context.Context) (any, error)) (any, error) {
+			result, err := run(context.WithoutCancel(ctx))
+			if err != nil {
+				return result, err
+			}
+			close(interrupted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		scoped.next.Store(&hook)
 	}
 	lost := errors.New("injected checkpoint loss")
 	p.OverrideAck(func(context.Context, corenest.CommitFence) error { return lost })
@@ -269,15 +308,47 @@ func TestRealDataEngineRemotePublicationAndWALRecovery(t *testing.T) {
 	}
 	verify(2)
 	assertWALReplayCount(t, wal, 1)
+	// 投影只保证 Remote 提交已持久（Applied），发布由 outbox 协程异步完成。“快照都成功”这一前提要等到
+	// 事务结论才成立，否则停机会截断在途发布，重放就不是“只丢 checkpoint”。
+	if interruptSecondPublication {
+		select {
+		case <-interrupted:
+		case <-fx.context().Done():
+			t.Fatal("second publication never reached L2")
+		}
+	} else if err = manager.FlushRemoteTransaction(fx.context(), secondTx); err != nil {
+		t.Fatalf("second publication: %v", err)
+	}
 	if err = wal.Close(fx.context()); err != nil {
 		t.Fatal(err)
 	}
 	if err = manager.StopFinalizer(fx.context()); err != nil {
 		t.Fatal(err)
 	}
+	publishedBeforeRestart := publisher.published.Load()
+	if interruptSecondPublication {
+		// 被取消的发布结果未知，不能按已发布确认：outbox 仍是 Applied，等下一个 Manager 补发。
+		pending, err = remoteStore.PendingRemoteCommits(fx.context(), 10)
+		if err != nil || len(pending) != 1 || pending[0].TransactionID != secondTx || pending[0].State != entity.RemoteCommitApplied {
+			t.Fatalf("interrupted publication pending=%+v err=%v", pending, err)
+		}
+	}
 	manager = newManager()
 	if err = store.SetRemoteProjection(remoteStore, manager); err != nil {
 		t.Fatal(err)
+	}
+	// 补发晚于重放返回才开始：发布协程的第一次 L2 写等到 replayed 关闭。
+	replayed := make(chan struct{})
+	if interruptSecondPublication {
+		hook := evalHook(func(ctx context.Context, run func(context.Context) (any, error)) (any, error) {
+			select {
+			case <-replayed:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return run(ctx)
+		})
+		scoped.next.Store(&hook)
 	}
 	wal, err = nestwal.Open(opts)
 	if err != nil {
@@ -289,9 +360,22 @@ func TestRealDataEngineRemotePublicationAndWALRecovery(t *testing.T) {
 	}
 	verify(2)
 	assertWALReplayCount(t, wal, 0)
+	// 重放读到 Applied 时只唤醒补发协程，返回不等发布；要看 outbox 排空，先等这笔事务的结论。
+	close(replayed)
+	if err = manager.FlushRemoteTransaction(fx.context(), secondTx); err != nil {
+		t.Fatalf("replayed publication: %v", err)
+	}
 	pending, err = remoteStore.PendingRemoteCommits(fx.context(), 10)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+	// 已发布事务的重放只做本地确认，不再发快照；被打断的那次由重放补发全部四份快照。
+	wantPublished := publishedBeforeRestart
+	if interruptSecondPublication {
+		wantPublished += 4
+	}
+	if got := publisher.published.Load(); got != wantPublished {
+		t.Fatalf("published after replay=%d want %d", got, wantPublished)
 	}
 	// 另一个 Manager 没有参与重放；它必须从共享 L2 读到结果。
 	reader := newManager()
