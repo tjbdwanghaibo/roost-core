@@ -315,6 +315,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 6. C# 客户端 SDK 的测试不在任何自动检查里
 
+**状态：已修（2026-10-19）**。测试程序缺参数时打印用法并以 2 退出；`scripts/test-client-dotnet.sh` 一条命令跑金样、SDK 自测与生成工程真实 TCP（缺 dotnet 打印 SKIP 并以 0 退出，`ROOST_REQUIRE_DOTNET=1` 时失败）；pretag 第 6 步跑金样与自测；CI 新增 `client-dotnet` job（setup-dotnet 10.0.x，缺 dotnet 即失败）；维护手册 §3 列为改协议 / Sync / Lockstep 时的验证。下面是登记原文。
+
 **现象**：`client/dotnet` 的测试（会话、推送、Sync 恢复、Lockstep 追帧、Unity 适配）按 client/README 的 `dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json` 实测全部 PASS；但 `.github/workflows` 没有一处调用 dotnet，pretag 与维护手册的验证清单也不含它（只在 v1.26.0 实现篇出现过一次）。不带参数运行时直接 `IndexOutOfRangeException` 崩溃，没有用法提示。
 
 **影响**：服务端协议、Sync 帧或 Lockstep 改动后，C# 与 `client/spec` 的一致性只有人想起来才验证。

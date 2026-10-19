@@ -118,6 +118,26 @@ jobs:
           # shellcheck disable=SC2086
           go test -race $packages
 
+  # C# 客户端 SDK：金样往返与 SDK 自测，加真实生成工程上的 TCP / Sync / Lockstep 消费
+  # （TestClientSDKAgainstGeneratedPlayerTCP 在 linux-test 里因为没有 .NET 10 而 skip）。
+  # ROOST_REQUIRE_DOTNET=1：缺 dotnet 时失败，不允许静默跳过。
+  client-dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: "10.0.x"
+      - name: C# client SDK
+        env:
+          ROOST_REQUIRE_DOTNET: "1"
+        run: bash scripts/test-client-dotnet.sh
+
   # The game services keep their Redis-backed suites build-tagged; they skip
   # without REDIS_ADDR, so this job sets it, runs them and fails on a skip.
   # -p 1: the suites share one Redis and service/integration measures the

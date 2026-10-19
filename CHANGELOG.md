@@ -21,6 +21,12 @@
 - **升级**：存储格式不变（只是少了到期记录）；新键有缺省值，不改配置即可升级。生成工程的服务配置会多出带注释的 `retention: 10m`（配置快照 `codegen/internal/roost/kitconfig_gen.go` 已重新生成）。
 - 文档：`service/match` 包注释与 `Store` 注释、guide/09-services §4、MOBA-INTEGRATION §5.1 / §7、KNOWN-LIMITS（MOBA 范围小节、“匹配队列状态”行）、wiring/SERVICES.md、demo WALKTHROUGH。
 
+### 新用户试用第七轮的修复（2026-10-19）
+
+登记见 KNOWN-LIMITS“新用户试用第七轮”。
+
+- **C# 客户端 SDK 测试进入自动检查（第 6 项）**：`client/dotnet/Roost.Client.Tests` 不带参数运行时修前直接崩溃（`System.IndexOutOfRangeException: Index was outside the bounds of the array. at Program.Main(String[] args) in .../Program.cs:line 17`），现在只接受 `<packets.json>` 或 `<packets.json> <host> <port>`，其他参数个数打印用法并以 2 退出。新增 `scripts/test-client-dotnet.sh`（金样 + SDK 自测 + `TestClientSDKAgainstGeneratedPlayerTCP`；缺 dotnet 打印 SKIP、以 0 退出，`ROOST_REQUIRE_DOTNET=1` 时失败，`ROOST_DOTNET_GOLDEN_ONLY=1` 只跑金样与自测）；`scripts/pretag.sh` 第 6 步跑金样与自测；CI 新增 `client-dotnet` job（`actions/setup-dotnet` v4.3.1 按 SHA 固定，.NET 10）；维护手册 §3、client/README 写明何时跑。
+
 ### 投影 checkpoint 缺省间隔保持 20 ms；原生步骤容量数字在生成器与文档里更新（2026-10-19）
 
 - **决定**：维护者 2026-10-19 按推荐选 A——`dataengine.projection.checkpoint_interval` 缺省保持 20 ms。20 ms 下特殊记录（投影事务约 16 ms）积压时合并系数约 2；需要更高吞吐的部署可调大，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。代码与配置缺省都不变。

@@ -41,6 +41,14 @@ GOWORK=off go generate ./...
 git diff --exit-code
 ~~~
 
+改协议（`client/wire`、生成 PB）、Sync 帧（`framework/sync/frame`、entitysync）、Lockstep 编码或 `client/dotnet` 时，另跑 C# 客户端 SDK 的验证：
+
+~~~sh
+./scripts/test-client-dotnet.sh   # 金样 + SDK 自测 + 生成工程真实 TCP；缺 dotnet 打印 SKIP 并以 0 退出（不是通过）
+~~~
+
+它需要 .NET 10 SDK；没有时如实记“C# 未验证”。pretag 只跑金样与自测（生成工程那一条随 `go test ./...` 在 dotnet 可用时运行），CI 的 `client-dotnet` job 装 .NET 10 并以 `ROOST_REQUIRE_DOTNET=1` 跑全部。
+
 根包 `go test -count=1 .` 是一组仓库级门禁，其中 `TestTrackedGoFilesAreGofmtClean` 要求所有跟踪（及未忽略的新增）`.go` 文件 gofmt 无差异，失败时列出文件；提交前对改过的文件跑 `gofmt -w`。
 
 真实资源测试需要独立 Mongo/Redis/NATS/etcd 和唯一命名空间。不要打印/提交 env 凭据，不用共享业务库进行故障注入。测试文件数不是测试通过数，跳过、未运行、仅编译均分别记录。
