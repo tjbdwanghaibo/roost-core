@@ -24,7 +24,7 @@ type snapshotConfig struct {
 	SnapshotCacheTTL     time.Duration `config:"snapshot_cache_ttl" min:"0" example:"30s"`
 	CachedMaxStaleness   time.Duration `config:"cached_max_staleness" min:"1ns" example:"30s" help:"Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，\n确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。"`
 	SnapshotL2TTL        time.Duration `config:"snapshot_l2_ttl" min:"0" example:"10m"`
-	SnapshotL2KeyPrefix  string        `config:"snapshot_l2_key_prefix" example:"" help:"Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\nunprefixed keys; deployments sharing one Redis db must set different values, e.g.\nroost:<project>. Every node of a deployment must use the same value; no hash tags."`
+	SnapshotL2KeyPrefix  string        `config:"snapshot_l2_key_prefix" shared:"remote_entity.snapshot_l2_key_prefix" example:"" help:"Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\nunprefixed keys; deployments sharing one Redis db must set different values, e.g.\nroost:<project>. Every node of a deployment must use the same value; no hash tags."`
 	// L2 写墓碑之后等几个副本确认、最多等多久。超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s。
 	SnapshotL2TombstoneWaitReplicas int           `config:"snapshot_l2_tombstone_wait_replicas" default:"1" min:"0" example:"1" help:"L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。\n0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。"`
 	SnapshotL2TombstoneWaitTimeout  time.Duration `config:"snapshot_l2_tombstone_wait_timeout" default:"50ms" min:"1ns" max:"1s" example:"50ms"`
@@ -39,7 +39,7 @@ type snapshotConfig struct {
 
 // mongoConfig 是 remote_entity.mongo.*：权威存储的库名与事务记录的保留期。
 type mongoConfig struct {
-	Database       string        `config:"database" default:"remote_entity" example:"{project_db}_remote"`
+	Database       string        `config:"database" shared:"remote_entity.mongo.database" default:"remote_entity" example:"{project_db}_remote"`
 	TransactionTTL time.Duration `config:"transaction_ttl" min:"0" example:"168h"`
 }
 

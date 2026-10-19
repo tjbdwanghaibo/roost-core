@@ -441,6 +441,29 @@ func TestConfigCheckRunsCrossModRulesThroughTheProcess(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "saga.start_effect_stream") || !strings.Contains(err.Error(), "dataengine.effects.stream") {
 		t.Fatalf("mismatched saga effect stream: config check = %v (stdout %q); want an error naming both keys, like --check-config and doctor", err, out.String())
 	}
+	if code := configCheckExitCode(err); code != configExitCrossModErrors {
+		t.Errorf("cross-mod rule failure: exit %d, want %d", code, configExitCrossModErrors)
+	}
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 新生成的 game-demo（十个服务）整体检查：键、跨 Mod 规则、跨服务一致性全部通过，没有误报，退出码 0。
+	out.Reset()
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--json"}, &out, &errOut); err != nil {
+		t.Fatalf("fresh game-demo config check --all: %v\n%s", err, out.String())
+	}
+	var report configCheckReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "ok" || report.ExitCode != 0 || !report.CrossService.Checked || report.CrossService.Services < 10 {
+		t.Errorf("fresh game-demo --all --json = %+v", report)
+	}
+	for _, f := range report.Files {
+		if f.Keys != checkOK || f.CrossMod != checkOK {
+			t.Errorf("fresh game-demo %s: %+v", f.Path, f)
+		}
+	}
 }
 
 func buildableGameDemo(t *testing.T) string {
@@ -889,5 +912,124 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 				t.Errorf("%s %s: an unreplaced name placeholder is left:\n%s", tc.project, rel, body)
 			}
 		}
+	}
+}
+
+// 同一工程各服务之间的配置一致性（维护者 2026-10-19 批准）：跨进程共享的资源名（声明里带 shared 的键，例如
+// nats.prefix）在各服务必须相同；开发配置集里的服务在同一台机器上一起跑，监听地址（声明里带 listen 的键，例如
+// ops.addr）的端口不得冲突。单个进程看不到别的服务，规则只能在这里查：config check --all 与 doctor 的
+// config-across-services 用同一个实现（checkConfigAcrossServices）。修前两种改法都“通过”。
+func TestConfigCheckAllComparesSharedNamesAndPortsAcrossServices(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "nats"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	pristine, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err != nil && strings.Contains(err.Error(), "cross-service") {
+		t.Fatalf("fresh two-service project: %v", err)
+	}
+	for _, tc := range []struct {
+		name, from, to string
+		want           []string
+	}{
+		{"nats prefix", "\n  prefix: planet\n", "\n  prefix: other\n", []string{"nats.prefix", "game", "gate", `"planet"`, `"other"`}},
+		{"ops port", "\n  addr: 127.0.0.1:9101\n", "\n  addr: 0.0.0.0:9100\n", []string{"ops.addr", "game", "gate", "9100"}},
+	} {
+		mutated := strings.Replace(string(pristine), tc.from, tc.to, 1)
+		if mutated == string(pristine) {
+			t.Fatalf("%s: config.gate.yaml has no %q; update this test", tc.name, tc.from)
+		}
+		if err := os.WriteFile(gatePath, []byte(mutated), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard)
+		for _, want := range tc.want {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: config check --all = %v; want an error naming %s", tc.name, err, want)
+				break
+			}
+		}
+		var report bytes.Buffer
+		_ = DoctorWithOptions(context.Background(), root, DoctorOptions{JSONOutput: true}, &report) // 夹具编译不过，doctor 本身失败
+		var decoded DoctorReport
+		if err := json.Unmarshal(report.Bytes(), &decoded); err != nil {
+			t.Fatalf("%s: doctor JSON: %v\n%s", tc.name, err, report.String())
+		}
+		found := false
+		for _, item := range decoded.Items {
+			if item.Name == "config-across-services" {
+				found = true
+				if item.Status != StatusFail || !strings.Contains(item.Detail, tc.want[0]) {
+					t.Errorf("%s: doctor config-across-services = %s %q; want a FAIL naming %s", tc.name, item.Status, item.Detail, tc.want[0])
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: doctor has no config-across-services item", tc.name)
+		}
+	}
+}
+
+// --keys-only 只做键检查：不编译工程、不跑跨 Mod 规则，并在输出里写明没查；--json 给出每份文件三步的结论与退出码。
+// 编译不过的工程上，完整检查以 5（检查没有跑全）结束，--keys-only 以 0 结束；键错了两种都是 2。
+func TestConfigCheckKeysOnlyAndJSONReport(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "nats"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, &out, io.Discard); err != nil {
+		t.Fatalf("--keys-only on a valid project = %v (exit %d)\n%s", err, configCheckExitCode(err), out.String())
+	}
+	if !strings.Contains(out.String(), "cross-mod rules not checked (--keys-only)") || strings.Contains(out.String(), "does not compile") {
+		t.Errorf("--keys-only output must say the cross-mod rules were not checked and must not compile the project:\n%s", out.String())
+	}
+
+	decode := func(args ...string) (configCheckReport, error) {
+		t.Helper()
+		var buf bytes.Buffer
+		err := Run(append([]string{"config", "check", "--root", root, "--json"}, args...), &buf, io.Discard)
+		var report configCheckReport
+		if decodeErr := json.Unmarshal(buf.Bytes(), &report); decodeErr != nil {
+			t.Fatalf("%v --json: stdout is not one JSON report: %v\n%s", args, decodeErr, buf.String())
+		}
+		return report, err
+	}
+	report, err := decode("--all")
+	if code := configCheckExitCode(err); code != configExitNotFullyChecked || report.ExitCode != code || report.Status != "not_fully_checked" {
+		t.Fatalf("uncompilable project --all --json: exit %d, report %+v; want exit %d not_fully_checked", code, report, configExitNotFullyChecked)
+	}
+	if len(report.Files) != 2 || !report.CrossService.Checked || len(report.CrossService.Errors) != 0 {
+		t.Errorf("report files / cross_service = %+v / %+v", report.Files, report.CrossService)
+	}
+	for _, f := range report.Files {
+		if f.Keys != checkOK || f.CrossMod != checkNotChecked || !strings.HasPrefix(f.CrossModReason, "project_does_not_compile") {
+			t.Errorf("%s: %+v; want keys ok, cross_mod not_checked because the project does not compile", f.Path, f)
+		}
+	}
+	report, err = decode("--service", "game", "--keys-only")
+	if err != nil || report.Status != "ok" || report.Files[0].CrossModReason != "keys_only" || report.CrossService.Checked {
+		t.Errorf("--service game --keys-only --json = %v, %+v; want ok, cross_mod keys_only, cross_service not checked", err, report)
+	}
+
+	gamePath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(gamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gamePath, []byte(strings.Replace(string(raw), "\nnats:\n", "\nnats:\n  urll: nats://x\n", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = decode("--all", "--keys-only")
+	if code := configCheckExitCode(err); code != configExitKeyErrors || report.Status != "key_errors" || report.Files[0].Keys != checkFailed || !strings.Contains(strings.Join(report.Files[0].KeyErrors, " "), "nats.urll") {
+		t.Errorf("misspelled key --keys-only --json: exit %d, %+v; want exit %d with nats.urll in game's key_errors", code, report.Files, configExitKeyErrors)
 	}
 }

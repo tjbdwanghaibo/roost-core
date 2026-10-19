@@ -59,6 +59,16 @@ type Key struct {
 	// Closed 只用于段：段下没有声明的键报错（map 的元素总是 closed）。
 	Closed bool
 	Help   string
+	// Shared（tag `shared:"<资源名>"`）标记同一工程的各服务必须取同一个值的键：总线主题前缀、效果流名、saga 库等
+	// 跨进程共享的资源名。资源名相同的键属于一组（saga.start_effect_stream 与 dataengine.effects.stream 同组）。
+	// 单个进程看不到别的服务，这条规则由生成器的跨服务检查（roost config check --all、doctor config-across-services）执行。
+	Shared string
+	// Follows（tag `follows:"<键>"`）：没写、也没有缺省值时取另一个键的值（例如 saga.start_effect_stream 不写取
+	// dataengine.effects.stream）。只用于跨服务检查算出键的实际取值。
+	Follows string
+	// Listen（tag `listen:"<开关键>"`）标记监听地址：开关键（完整键名，布尔）为 true 时进程监听这个地址；
+	// 写 `listen:"always"` 表示总是监听。同一主机上一起运行的服务（开发配置集）不得监听冲突的端口。
+	Listen string
 }
 
 // Schema 是一组键的声明。由 Of 从结构体得到的 Schema 还记得结构体类型，Check 会解码一份新值，
@@ -180,6 +190,9 @@ func collectField(typ reflect.Type, full string, tag reflect.StructTag, options 
 		Required: tag.Get("required") == "true", Secret: tag.Get("secret") == "true" || tag.Get("secret") == "optional",
 		SecretOptional: tag.Get("secret") == "optional",
 		Help:           tag.Get("help"),
+		Shared:         tag.Get("shared"),
+		Follows:        tag.Get("follows"),
+		Listen:         tag.Get("listen"),
 	}
 	key.Example, key.Starter = tag.Lookup("example")
 	if enum := tag.Get("enum"); enum != "" {
@@ -193,7 +206,29 @@ func collectField(typ reflect.Type, full string, tag reflect.StructTag, options 
 	if err := key.checkDeclaration(typ); err != nil {
 		return err
 	}
+	if err := key.checkResourceTags(); err != nil {
+		return err
+	}
 	*keys = append(*keys, key)
+	return nil
+}
+
+// checkResourceTags 检查 shared / follows / listen：都只用于字符串键，值是完整的点分键名（listen 也可以是 always）。
+func (k Key) checkResourceTags() error {
+	for _, tag := range []struct{ name, value string }{{"shared", k.Shared}, {"follows", k.Follows}, {"listen", k.Listen}} {
+		if tag.value == "" {
+			continue
+		}
+		if k.Kind != KindString {
+			return fmt.Errorf("%s is only for strings", tag.name)
+		}
+		if tag.name == "listen" && tag.value == "always" {
+			continue
+		}
+		if tag.value != strings.ToLower(tag.value) || strings.ContainsAny(tag.value, " *") || !strings.Contains(tag.value, ".") {
+			return fmt.Errorf("%s %q must be a full lowercase dotted key name", tag.name, tag.value)
+		}
+	}
 	return nil
 }
 

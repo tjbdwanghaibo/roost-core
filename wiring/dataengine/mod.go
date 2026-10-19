@@ -96,8 +96,8 @@ func (mod *Mod) OptionalDependsOn() []app.ModName {
 // EffectsConfig 是 dataengine.effects.* 的声明：效果流（ROOST_EFFECTS）的主题前缀、名字与保留期。
 // saga Mod 与 SubscribeEffects 经 LoadEffectsConfig / EffectSettings 读同一份，两边对流的理解不会分叉。
 type EffectsConfig struct {
-	SubjectPrefix   string        `config:"subject_prefix" default:"roost.effect" example:"{project}.effect"`
-	Stream          string        `config:"stream" default:"ROOST_EFFECTS" example:"{PROJECT}_EFFECTS"`
+	SubjectPrefix   string        `config:"subject_prefix" shared:"dataengine.effects.subject_prefix" default:"roost.effect" example:"{project}.effect"`
+	Stream          string        `config:"stream" shared:"dataengine.effects.stream" default:"ROOST_EFFECTS" example:"{PROJECT}_EFFECTS"`
 	MaxAge          time.Duration `config:"max_age" default:"168h" min:"1ns" example:"168h"`
 	MaxBytes        int64         `config:"max_bytes" default:"8589934592" min:"1" example:"8589934592"`
 	DuplicateWindow time.Duration `config:"duplicate_window" default:"10m" min:"1ns" example:"10m"`

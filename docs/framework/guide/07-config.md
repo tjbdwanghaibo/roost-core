@@ -18,6 +18,8 @@
 
 键路径、类型、默认值、必填、敏感值及示例声明一次，运行期读取、启动检查、生成默认配置与 doctor 共用。未声明键、非法值、缺失必填不能静默降级成零值。Validator 表达开启功能后的条件必填或跨字段约束。读另一个 Mod 的键、要求两边一致的规则（例如 saga 的效果流必须就是同进程 DataEngine 的那条）由 Mod 实现 `app.ModConfigCrossChecker`：App 在本服务全部声明检查通过之后调用一次，启动前、`--check-config` 与 doctor 的 `config-check:<service>` 走同一处，读别的 Mod 的键仍只经它的声明。
 
+跨**服务**的规则单个进程查不到，同样写在声明上：`shared:"<资源名>"` 标记同一工程各服务必须取同一个值的共享资源名（总线前缀、效果流、saga 库等），`follows:"<键>"` 说明没写时取哪个键的值，`listen:"<开关键>"` 标记监听地址。`roost config check --all` 与 doctor 的 `config-across-services` 按这些 tag 比较各服务的配置（共享资源名一致、开发配置集里监听端口不冲突），新增共享资源或监听地址时只在声明上加 tag。
+
 secret:optional 表示敏感值允许为空，非空生产值仍不能使用 dev- 凭据；secret:true 的生产非空要求保持。不要把可选敏感声明解释成启用鉴权仍可空密码。
 
 ## 3. 业务表发布

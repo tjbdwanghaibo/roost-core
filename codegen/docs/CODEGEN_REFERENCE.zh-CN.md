@@ -853,6 +853,8 @@ type Mail interface {
 
 ```bash
 roost config check --service game
+roost config check --all                      # 另外比较各服务之间（共享资源名、开发配置的监听端口）
+roost config check --all --keys-only --json   # 只查键、不编译；机器可读输出
 roost config enable player-tcp --service game
 roost config disable player-tcp --service game
 roost config check --service game --production \
@@ -864,8 +866,28 @@ roost format check
 `enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。`check` 解析 YAML、
 要求 sid，并与 doctor 的 config-schema 用同一份声明检查值与键：框架段里没有任何声明的键（多半拼错，例如
 `mongo.urii`）报错；静态检查发现可疑键时编译一次进程读回业务服务自己的声明复核（`checkConfigFileDeclarations`），
-键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)` 结束，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
+键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)`（`--all` 时 `config keys ok (cross-mod rules not checked)`）结束、退出码 5，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
 production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
+
+`--keys-only` 只做键检查：不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束（适合没有 Go 工具链或只改了键的 CI 步骤）；键检查里发现可疑键时也不读业务声明复核，会在问题末尾注明。
+
+`--all` 在逐个文件之后比较**各服务之间**（`checkConfigAcrossServices`，doctor 的 `config-across-services` 是同一个实现）。规则来自配置声明的 tag，不在生成器里另列：
+
+- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`。按写法比较（只去掉首尾空白）。
+- 监听端口（`listen:"<开关键>"`）：开发配置集 `configs/service/config.<service>.yaml` 的服务在同一台机器上运行，开关打开的监听地址（`ops.addr`/`ops.enabled`、`web.addr`/`web.enabled`、`player_access.tcp.addr`/`player_access.tcp.enabled`）端口相同且主机重叠（相同，或任一方是 `0.0.0.0` / `::`）即冲突，同一服务内的两个地址同样比较；端口 0 不比较。生产示例每服务一个容器，doctor 只比较它们的共享资源名。
+
+`--json` 在 stdout 输出一份报告：`files[]`（`path`、`service`、`keys` / `cross_mod` 各为 `ok` / `failed` / `not_checked`，`key_errors`、`cross_mod_errors`、`cross_mod_reason`：`keys_only` / `key_errors` / `not_a_service_config` / `project_does_not_compile: …`）、`cross_service`（`checked`、`services`、`errors`）、`status` 与 `exit_code`。文本输出逐文件一行结论、问题逐条列出；非零退出时 stderr 只多一行摘要。
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 全部检查都跑了并通过（`--keys-only` 时：键与 `--all` 的跨服务检查通过，跨 Mod 规则按要求没查） |
+| 1 | 命令本身没跑成：参数错误、`roost.yaml` 读不出（与其他 roost 命令相同） |
+| 2 | 键错误：YAML / sid / 生产禁用值、值不合声明、没有任何声明的键 |
+| 3 | 跨 Mod 规则错误：编译出的进程 `--check-config` 拒绝 |
+| 4 | 跨服务不一致（只在 `--all` 时比较） |
+| 5 | 检查没有跑全、已跑的都通过：工程编译不过所以跨 Mod 规则没查，或文件名认不出服务、键没按声明查 |
+
+几类问题同时出现时取最小的非零码（键错了，后面的结论没有意义）。脚本按退出码分支，不按文本匹配；`config is valid` / `config ok` 两种结论行保留。
 
 ## 15. 独立生成器参数速查
 

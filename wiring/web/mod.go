@@ -38,7 +38,7 @@ import (
 // config 是 web.* 的声明。
 type config struct {
 	Enabled         bool   `config:"web.enabled" default:"true" example:"true" help:"监听业务 HTTP 路由（roost add webroute）；false 时路由照常登记但不监听"`
-	Addr            string `config:"web.addr" default:"127.0.0.1:8080" example:"127.0.0.1:8080" help:"业务 HTTP 路由的监听地址；生产环境绑非回环地址要同时写 web.allow_public_addr: true"`
+	Addr            string `config:"web.addr" listen:"web.enabled" default:"127.0.0.1:8080" example:"127.0.0.1:8080" help:"业务 HTTP 路由的监听地址；生产环境绑非回环地址要同时写 web.allow_public_addr: true"`
 	AllowPublicAddr bool   `config:"web.allow_public_addr" help:"生产环境允许 web.addr 不是回环地址（路由放在鉴权代理之后时才写 true；本 Mod 不做鉴权）"`
 	// 下面五个键交给 httpserver（WithTimeouts / WithMaxBodyBytes），缺省值与 httpserver.DefaultConfig 相同
 	// （TestWebModAppliesDeclaredTimeoutsAndBodyLimit 钉住）。写 0 或负数拒绝：httpserver 把非正值当“取缺省”，

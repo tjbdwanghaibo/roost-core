@@ -203,7 +203,7 @@ make ci
 roost config check --production --file <实际生产配置>
 ```
 
-`roost config check` 先按声明查键，再交给编译出的进程跑与启动前相同的跨键 / 跨 Mod 检查（和 doctor 的 `config-check` 同一个结论）；工程编译不过时它会明说跨 Mod 规则没查。
+`roost config check` 先按声明查键，再交给编译出的进程跑与启动前相同的跨键 / 跨 Mod 检查（和 doctor 的 `config-check` 同一个结论）；工程编译不过时它会明说跨 Mod 规则没查。`--all` 还比较各服务之间：`nats.prefix` 这类共享资源名必须相同，本机一起跑的服务监听端口（ops / web / 玩家 TCP）不能撞。只想查键、不想编译时加 `--keys-only`；CI 里加 `--json` 并按退出码分支（0 通过、2 键错、3 跨 Mod 规则错、4 跨服务不一致、5 没查全，见 [CODEGEN_REFERENCE §14](CODEGEN_REFERENCE.zh-CN.md#14-配置格式和生产门禁)）。
 
 然后完成真实基础设施、数据库恢复、WAL/PVC、TLS/LB、FD/连接限制、SIGTERM、灰度和回滚演练。
 “能够启动”不是生产验收完成；以生成项目的 `docs/DEPLOYMENT.zh-CN.md` 为准。

@@ -262,8 +262,9 @@ func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := Run([]string{"config", "check", "--root", root, "--all"}, &output, io.Discard); err != nil {
-		t.Fatal(err)
+	// 夹具没有解析依赖、编译不过：键都通过，但跨 Mod 规则没查，退出码 5（检查没有跑全），不是 0。
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, &output, io.Discard); configCheckExitCode(err) != configExitNotFullyChecked {
+		t.Fatalf("uncompilable project: config check --all = %v; want exit %d", err, configExitNotFullyChecked)
 	}
 	for _, service := range []string{"game", "gate"} {
 		if !strings.Contains(output.String(), "config."+service+".yaml") {
@@ -277,9 +278,21 @@ func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "configs", "service", "config.gate.yaml"), []byte("invalid: ["), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") {
-		t.Fatalf("invalid secondary service config was not reported: %v", err)
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") || configCheckExitCode(err) != configExitKeyErrors {
+		t.Fatalf("invalid secondary service config was not reported as a key error (exit %d): %v", configExitKeyErrors, err)
 	}
+}
+
+// configCheckExitCode 是 roost config check 返回的退出码（nil 为 0；没有退出码的错误是 1，与 main 相同）。
+func configCheckExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var coded *ExitError
+	if errors.As(err, &coded) {
+		return coded.Code
+	}
+	return 1
 }
 
 // config check 与 doctor 用同一份框架声明查配置键：框架段里没人声明的键（多半拼错）让检查失败，
@@ -296,7 +309,7 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"config", "check", "--root", root, "--service", "game"}, io.Discard, io.Discard); err != nil {
+	if err := Run([]string{"config", "check", "--root", root, "--service", "game", "--keys-only"}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("generated config rejected: %v", err)
 	}
 	misspelled := strings.Replace(string(raw), "\nmongo:\n", "\nmongo:\n  urii: mongodb://127.0.0.1:27017\n", 1)
@@ -310,9 +323,10 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 		{"config", "check", "--root", root, "--service", "game"},
 		{"config", "check", "--root", root, "--file", "configs/service/config.game.yaml"},
 		{"config", "check", "--root", root, "--all"},
+		{"config", "check", "--root", root, "--all", "--keys-only"},
 	} {
 		err := Run(args, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "mongo.urii") {
+		if err == nil || !strings.Contains(err.Error(), "mongo.urii") || configCheckExitCode(err) != configExitKeyErrors {
 			t.Errorf("%v: err = %v, want the misspelled mongo.urii reported", args[len(args)-2:], err)
 		}
 	}

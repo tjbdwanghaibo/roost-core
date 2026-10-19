@@ -38,7 +38,7 @@ type config struct {
 	// saga.max_payload_bytes 与发起方（wiring/nest）共用一份声明。
 	mods.SagaPayloadConfig
 	Saga struct {
-		Database     string           `config:"database" default:"saga" example:"{project_db}_saga"`
+		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga"`
 		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget. Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
 		// Steps 按 <saga type>.<step name> 覆盖，优先于定义与 step_defaults；类型与步骤名要对应已注册的定义。
 		Steps       map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
@@ -49,8 +49,8 @@ type config struct {
 			Completions string `config:"completions"`
 			Operations  string `config:"operations"`
 		} `config:"collections" help:"Mongo 集合名，不写取 core 的缺省"`
-		SubjectPrefix         string         `config:"subject_prefix" default:"roost.saga" example:"{project}.saga"`
-		Stream                string         `config:"stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA"`
+		SubjectPrefix         string         `config:"subject_prefix" shared:"saga.subject_prefix" default:"roost.saga" example:"{project}.saga"`
+		Stream                string         `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA"`
 		CoordinatorWorkers    int            `config:"coordinator_workers" default:"4" min:"1" example:"4"`
 		PublisherWorkers      int            `config:"publisher_workers" default:"4" min:"1" example:"4"`
 		CoordinatorClaimBatch int            `config:"coordinator_claim_batch" default:"3" min:"1" example:"3"`
@@ -71,8 +71,8 @@ type config struct {
 		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，
 		// 效果流只在一处配置（生成配置不再写这两个键）。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects
 		// 相同（CheckConfigAcrossMods）；只跑协调器、没有 DataEngine 的进程可以用它们指向别的流。
-		StartEffectStream   string         `config:"start_effect_stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`
-		StartEffectPrefix   string         `config:"start_effect_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
+		StartEffectStream   string         `config:"start_effect_stream" shared:"dataengine.effects.stream" follows:"dataengine.effects.stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`
+		StartEffectPrefix   string         `config:"start_effect_prefix" shared:"dataengine.effects.subject_prefix" follows:"dataengine.effects.subject_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
 		StartEffectDurable  string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
 		StartEffect         consumerConfig `config:"start_effect_"`
 		ResultEffectStream  string         `config:"result_effect_stream" help:"不写取 start_effect_stream"`

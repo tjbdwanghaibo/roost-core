@@ -27,7 +27,7 @@ func (m *OpsMod) Name() app.ModName { return mods.ModOps }
 type config struct {
 	app.ServiceIdentity
 	Enabled         bool          `config:"ops.enabled" example:"true" help:"打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）"`
-	Addr            string        `config:"ops.addr" default:"127.0.0.1:9100" example:"127.0.0.1:9100" help:"ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true"`
+	Addr            string        `config:"ops.addr" listen:"ops.enabled" default:"127.0.0.1:9100" example:"127.0.0.1:9100" help:"ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true"`
 	AllowPublicAddr bool          `config:"ops.allow_public_addr" help:"生产环境允许 ops.addr 不是回环地址（端点放在鉴权代理之后时才写 true）"`
 	AdminEnabled    bool          `config:"ops.admin_enabled" example:"false" help:"打开 /admin 命令；打开时必须写 ops.admin_token"`
 	AdminToken      string        `config:"ops.admin_token" secret:"optional" example:"" help:"/admin 的令牌；生产禁止 dev-，开发使用 dev- 时须写 ops.allow_dev_token: true"`
