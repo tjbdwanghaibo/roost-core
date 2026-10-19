@@ -24,6 +24,8 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		"type PlayerLevelUp struct {",
 		"func EmitPlayerLevelUp(key string, event PlayerLevelUp) error",
 		"nest.Emit(nest.Effect{Topic: TopicPlayerLevelUp, Key: key, Payload: payload})",
+		// 组件里取玩家号要用 UniqueID：ID() 是编码后的 EntityID（新用户第七轮照直觉写 Owner().ID() 发出 9423877 而不是 9203）。
+		"Owner().UniqueID()",
 	} {
 		if !strings.Contains(effect, want) {
 			t.Errorf("game/effects/player_level_up.go lacks %q:\n%s", want, effect)

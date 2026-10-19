@@ -25,6 +25,8 @@
 
 登记见 KNOWN-LIMITS“新用户试用第七轮”。
 
+- **`roost config check` 跑跨 Mod 规则（第 7 项）**：修前 `saga.start_effect_stream` 与 `dataengine.effects.stream` 不一致时它报 `config is valid`，而进程 `--check-config` 与 doctor 拒绝。现在键检查通过后，用与 doctor 同一个编译出的进程（`projectProcess.checkConfig`）运行 `--check-config`，跨键（`ValidateConfig`）与跨 Mod（`app.ModConfigCrossChecker`）规则只有进程里那一份；工程编译不过时打印 `cross-mod rules NOT checked ...`，结果行改为 `config keys are valid (cross-mod rules not checked)` / `config keys ok (cross-mod rules not checked)`（按文本匹配 `config is valid` / `config ok` 的脚本注意）。代价：`config check` 现在会编译一次工程。回归 `TestConfigCheckRunsCrossModRulesThroughTheProcess`（修前红：`config check = <nil> (stdout "config is valid: .../config.game.yaml")`）。
+- **`add effect` 载荷骨架提示 `Owner().UniqueID()`（第 7 项）**：组件里 `Owner().ID()` 是编码后的 EntityID（实测 9423877 而不是 9203）；注释写明取玩家号用 `UniqueID()`。生成代码只差注释，已生成的 effect 文件是业务文件、不改写。
 - **C# 客户端 SDK 测试进入自动检查（第 6 项）**：`client/dotnet/Roost.Client.Tests` 不带参数运行时修前直接崩溃（`System.IndexOutOfRangeException: Index was outside the bounds of the array. at Program.Main(String[] args) in .../Program.cs:line 17`），现在只接受 `<packets.json>` 或 `<packets.json> <host> <port>`，其他参数个数打印用法并以 2 退出。新增 `scripts/test-client-dotnet.sh`（金样 + SDK 自测 + `TestClientSDKAgainstGeneratedPlayerTCP`；缺 dotnet 打印 SKIP、以 0 退出，`ROOST_REQUIRE_DOTNET=1` 时失败，`ROOST_DOTNET_GOLDEN_ONLY=1` 只跑金样与自测）；`scripts/pretag.sh` 第 6 步跑金样与自测；CI 新增 `client-dotnet` job（`actions/setup-dotnet` v4.3.1 按 SHA 固定，.NET 10）；维护手册 §3、client/README 写明何时跑。
 
 ### 投影 checkpoint 缺省间隔保持 20 ms；原生步骤容量数字在生成器与文档里更新（2026-10-19）

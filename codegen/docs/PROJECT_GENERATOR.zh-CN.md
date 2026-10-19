@@ -522,7 +522,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
 - `shutdown:<service>`：见 [§17](#17-生产部署生成物)。
 
-进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 只按声明查键，跨键 / 跨 Mod 规则看 doctor 的 `config-check:<service>` 或进程 `--check-config`。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
+进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 先按声明查键，通过后交给编译出的进程跑同一个 `--check-config`（跨键 / 跨 Mod 规则），与 doctor 的 `config-check:<service>` 结论相同；工程编译不过时明确提示跨 Mod 规则没查。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
 
 ## 14. 生产检查清单
 

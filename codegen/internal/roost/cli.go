@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 )
 
@@ -436,9 +437,18 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("config check reads %s for each service's declarations: %w", ManifestName, err)
 	}
-	// 业务声明按需编译一次进程读回（只在静态检查发现可疑键时），与 doctor 同一入口。
-	process, cleanup := processConfigSchemas(context.Background(), root)
+	// 与 doctor 共用一个编译后的进程：静态检查发现可疑键时读回业务声明（--print-config-schema）；静态检查通过后
+	// 再交给进程的 --check-config 跑跨键与跨 Mod 规则（app.ModConfigCrossChecker）。规则只在进程里一份，
+	// config check、--check-config 与 doctor config-check 对同一份配置的结论相同。
+	process, cleanup := newProjectProcess(context.Background(), root)
 	defer cleanup()
+	var crossModUnchecked []string
+	verdict := func(name string) string {
+		if slices.Contains(crossModUnchecked, name) {
+			return "config keys are valid (cross-mod rules not checked)"
+		}
+		return "config is valid"
+	}
 	check := func(path, name string) error {
 		if err := CheckConfig(path, *production); err != nil {
 			return err
@@ -447,12 +457,21 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "keys not checked against declarations: %s is not named config.<service>[.<variant>].yaml for a service in %s; pass --service\n", filepath.ToSlash(path), ManifestName)
 			return nil
 		}
-		problems, err := checkConfigFileDeclarations(path, *production, manifest, name, process)
+		problems, err := checkConfigFileDeclarations(path, *production, manifest, name, process.schema)
 		if err != nil {
 			return err
 		}
 		if len(problems) > 0 {
 			return errors.New(strings.Join(problems, "; "))
+		}
+		// 工程编译不过时与 doctor 一样不判这一半（进程本身也起不来），但明确说没查，不报“valid”。
+		if err := process.build(); err != nil {
+			crossModUnchecked = append(crossModUnchecked, name)
+			fmt.Fprintf(stdout, "cross-key / cross-mod rules NOT checked for %s: the project does not compile (%s); rerun after go build passes\n", name, lastBytes(err.Error(), 300))
+			return nil
+		}
+		if err := process.checkConfig(name, path); err != nil {
+			return fmt.Errorf("the process refuses this config (cross-key / cross-mod rules, same check as: go run . %s --check-config --config <file>): %w", name, err)
 		}
 		return nil
 	}
@@ -465,6 +484,10 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			path := filepath.Join(root, "configs", "service", "config."+name+".yaml")
 			if checkErr := check(path, name); checkErr != nil {
 				joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, checkErr))
+				continue
+			}
+			if slices.Contains(crossModUnchecked, name) {
+				fmt.Fprintf(stdout, "config keys ok (cross-mod rules not checked): %s\n", filepath.ToSlash(path))
 				continue
 			}
 			fmt.Fprintf(stdout, "config ok: %s\n", filepath.ToSlash(path))
@@ -488,7 +511,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err := check(path, name); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "config is valid: %s\n", path)
+	fmt.Fprintf(stdout, "%s: %s\n", verdict(name), path)
 	return nil
 }
 

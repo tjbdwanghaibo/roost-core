@@ -170,7 +170,7 @@ roost add rpc guild -service game
 
 容量（2026-10-18 实测，投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s）；正向 10/s 仍 0 笔终态不对，但积压、延迟升到秒级（P50 2.2 s）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（上限档各单样本）。量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [投影器合并 checkpoint 前后对照](../../docs/performance/SAGA-CHECKPOINT-20261018.md) §3、§5（优化过程见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)）。
 
-`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
+`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。载荷里的玩家号在组件里用 `Owner().UniqueID()` 取；`Owner().ID()` 是编码后的 EntityID（带实体类型位），不是玩家号，骨架注释写明了这一点。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 
 需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
 
@@ -792,7 +792,7 @@ roost format check
 `enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。`check` 解析 YAML、
 要求 sid，并与 doctor 的 config-schema 用同一份声明检查值与键：框架段里没有任何声明的键（多半拼错，例如
 `mongo.urii`）报错；静态检查发现可疑键时编译一次进程读回业务服务自己的声明复核（`checkConfigFileDeclarations`），
-业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
+键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)` 结束，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
 production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
 
 ## 15. 独立生成器参数速查

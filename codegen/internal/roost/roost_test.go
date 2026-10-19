@@ -270,6 +270,10 @@ func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
 			t.Errorf("all-service config output missing %s:\n%s", service, output.String())
 		}
 	}
+	// 夹具没有解析依赖、编译不过：跨 Mod 规则没查时要明说，不能报 "config ok"。
+	if !strings.Contains(output.String(), "cross-mod rules NOT checked") || strings.Contains(output.String(), "config ok:") {
+		t.Errorf("uncompilable project: output must say the cross-mod rules were not checked:\n%s", output.String())
+	}
 	if err := os.WriteFile(filepath.Join(root, "configs", "service", "config.gate.yaml"), []byte("invalid: ["), 0o644); err != nil {
 		t.Fatal(err)
 	}

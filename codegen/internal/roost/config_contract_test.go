@@ -410,6 +410,39 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 	}
 }
 
+// TestConfigCheckRunsCrossModRulesThroughTheProcess：`roost config check` 与进程 --check-config、doctor config-check
+// 对同一份配置给同一个结论。跨键与跨 Mod 规则（app.ModConfigCrossChecker，例如 saga 的效果流必须就是同进程 DataEngine
+// 的那条）只在编译后的进程里，config check 经同一个 projectProcess.checkConfig 运行它，不复制规则。
+func TestConfigCheckRunsCrossModRulesThroughTheProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles the generated game-demo")
+	}
+	t.Parallel()
+	root := buildableGameDemo(t)
+	var out, errOut bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--service", "game"}, &out, &errOut); err != nil {
+		t.Fatalf("fresh game-demo config check: %v\n%s%s", err, out.String(), errOut.String())
+	}
+	configPath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.Replace(string(raw), "\nsaga:\n", "\nsaga:\n  start_effect_stream: ROOST_EFFECTS\n", 1)
+	if mutated == string(raw) {
+		t.Fatal("config.game.yaml has no saga: section; update this test")
+	}
+	if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	err = Run([]string{"config", "check", "--root", root, "--service", "game"}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "saga.start_effect_stream") || !strings.Contains(err.Error(), "dataengine.effects.stream") {
+		t.Fatalf("mismatched saga effect stream: config check = %v (stdout %q); want an error naming both keys, like --check-config and doctor", err, out.String())
+	}
+}
+
 func buildableGameDemo(t *testing.T) string {
 	t.Helper()
 	root := copyOfNewProject(t, "game-demo")

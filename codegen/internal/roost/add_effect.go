@@ -143,6 +143,8 @@ const Topic%[1]s = %[2]q
 // emitted before a field existed sees its zero value.
 type %[1]s struct {
 	// TODO: the effect's fields, e.g. PlayerID int64 `+"`json:\"player_id\"`"+`.
+	// Inside a component the player's id is Owner().UniqueID(); Owner().ID() is
+	// the encoded EntityID (entity type bits included), not the player id.
 }
 
 // Emit%[1]s records the effect on the current Nest transaction, inside a Nest

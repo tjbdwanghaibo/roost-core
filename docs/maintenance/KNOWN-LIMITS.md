@@ -325,6 +325,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 7. 小问题
 
+**状态：两项均已修（2026-10-19）**。`roost config check` 键检查通过后交给编译出的进程跑同一个 `--check-config`（`app.ModConfigCrossChecker` 与 `ValidateConfig`，与 doctor `config-check` 共用 `projectProcess.checkConfig`，规则不复制），三处结论相同；工程编译不过时明确打印“cross-mod rules NOT checked”，不报 valid。`add effect` 载荷骨架注释写明组件里取玩家号用 `Owner().UniqueID()`。下面是登记原文。
+
 - `roost config check` 不做跨 Mod 一致性检查：`saga.start_effect_stream` 与 `dataengine.effects.stream` 不一致时它报 `config is valid`，而进程 `--check-config` 与 doctor 都拒绝（同一份配置三处结论不同，第一轮已提过的同类问题的新例子）。
 - `roost add effect` 生成的载荷 struct 注释举例 `PlayerID int64`，没有提示在组件里取玩家号要用 `Owner().UniqueID()`；实测照直觉写 `Owner().ID()` 发出的是编码后的 EntityID（9423877 而不是 9203）。
 
