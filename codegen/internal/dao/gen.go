@@ -19,7 +19,7 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	if err := validateNoCollectionFields(dao); err != nil {
 		return false, err
 	}
-	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker", "storedUnknown"); err != nil {
+	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker"); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(dao.Fields); err != nil {
@@ -209,7 +209,7 @@ func elemFromWire(typeName string, ptr bool) string {
 }
 
 func generateNested(nested NestedDef, defs *Definitions, pkg string, outFile string, force bool) (bool, error) {
-	if err := validateGeneratedStorageFields(nested.Name, nested.Fields, "dirtyOwner", "storedUnknown"); err != nil {
+	if err := validateGeneratedStorageFields(nested.Name, nested.Fields, "dirtyOwner"); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(nested.Fields); err != nil {
@@ -217,11 +217,6 @@ func generateNested(nested NestedDef, defs *Definitions, pkg string, outFile str
 	}
 	if err := validateFieldKeys(nested.Name, nested.Fields); err != nil {
 		return false, err
-	}
-	for _, field := range nested.Fields {
-		if field.Name == "UnknownStoredKeys" {
-			return false, fmt.Errorf("nested %s field %s: the name is used by the generated wire document (%s); rename the Go field and keep its stored key with bson:%q", nested.Name, field.Name, wireDocName(nested.Name), field.Key)
-		}
 	}
 	tmpl, err := template.New("nested").Funcs(nestedFuncMap(defs)).Parse(nestedTemplate)
 	if err != nil {
@@ -373,11 +368,10 @@ func rollbackOnlyFields(dao DaoDef) []FieldDef {
 }
 
 // persistDocReservedNames are Go field names the generated document structs
-// use themselves: ID and SchemaVersion carry _id and _schema,
-// UnknownStoredKeys carries the stored keys the DAO does not declare, and
-// PersistDoc is the persisted document inside the rollback snapshot. (ID is
-// already refused by validateGeneratedStorageFields: its private name is id.)
-var persistDocReservedNames = []string{"SchemaVersion", "PersistDoc", "UnknownStoredKeys"}
+// use themselves: ID and SchemaVersion carry _id and _schema, and PersistDoc
+// is the persisted document inside the rollback snapshot. (ID is already
+// refused by validateGeneratedStorageFields: its private name is id.)
+var persistDocReservedNames = []string{"SchemaVersion", "PersistDoc"}
 
 func validatePersistDocFieldNames(dao DaoDef) error {
 	for _, field := range dao.Fields {

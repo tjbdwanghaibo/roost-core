@@ -353,21 +353,21 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 
 ### 持久键：`bson:"..."` 与持久文档结构体
 
-字段写了 `bson:"x"` 时 `x` 就是它在文档里的键（持久键、同步 WireName、回滚快照里的键是同一个），没写时是 Go 字段名的 snake_case（DESIGN-TODO D13，维护者 2026-10-19 决定）。生成期强制：显式名字母开头、只含字母数字下划线；任何键不能以 `_` 开头（`_id`、`_schema`、`_version`、`_last_tx`、`_deleted` 等是框架元数据）；同一 DAO / 嵌套类型内所有字段的键不能重复；`bson` 选项只认 `omitempty`（照抄进生成的标签），其余选项与 `bson:"-"` 报错（不存就用 `dao:"nopersist,..."` 或 `dao:"-"`）。DAO 字段不能叫 `SchemaVersion`、`PersistDoc`、`UnknownStoredKeys`（生成的文档结构体自己用），嵌套类型字段不能叫 `UnknownStoredKeys`。
+字段写了 `bson:"x"` 时 `x` 就是它在文档里的键（持久键、同步 WireName、回滚快照里的键是同一个），没写时是 Go 字段名的 snake_case（DESIGN-TODO D13，维护者 2026-10-19 决定）。生成期强制：显式名字母开头、只含字母数字下划线；任何键不能以 `_` 开头（`_id`、`_schema`、`_version`、`_last_tx`、`_deleted` 等是框架元数据）；同一 DAO / 嵌套类型内所有字段的键不能重复；`bson` 选项只认 `omitempty`（照抄进生成的标签），其余选项与 `bson:"-"` 报错（不存就用 `dao:"nopersist,..."` 或 `dao:"-"`）。DAO 字段不能叫 `SchemaVersion`、`PersistDoc`（生成的文档结构体自己用）。
 
 每个 Mongo DAO 的 `gen_<x>_dao.go` 里有：
 
-- `<dao>PersistDoc`：库里的文档形状，`ID` `bson:"_id"`、`SchemaVersion` `bson:"_schema"`、每个持久字段一行显式 `bson` 标签，外加收未知键的 `UnknownStoredKeys` `bson:",inline"`。整文档写入（`marshalCommitState` / `MarshalPersist`）、水合（`Unmarshal` / `RestorePersisted`）都经它；增量补丁、`PersistFieldNames`、`SyncFields`、`MarshalSync` / `ApplySync` 的键与它的标签取自同一个值。**看一个字段存成什么键，就看这个结构体。**
-- `<dao>StoredKeys`：`dataengine.NewStoredKeySet[<dao>PersistDoc]`，加载期未知键检查与清理入口用它。
+- `<dao>PersistDoc`：库里的文档形状，`ID` `bson:"_id"`、`SchemaVersion` `bson:"_schema"`、每个持久字段一行显式 `bson` 标签。整文档写入（`marshalCommitState` / `MarshalPersist`）、水合（`Unmarshal` / `RestorePersisted`）都经它；增量补丁、`PersistFieldNames`、`SyncFields`、`MarshalSync` / `ApplySync` 的键与它的标签取自同一个值。**看一个字段存成什么键，就看这个结构体。**
+- `<dao>StoredKeys`：`dataengine.NewStoredKeySet[<dao>PersistDoc]`，加载期未知键检查用它。
 - `<dao>RollbackDoc`：内存回滚快照（不落库），持久文档作为 `_persisted` 子文档，再加非持久字段。
 
-嵌套类型的 wire 文档 `<type>BSONDoc` 同样带显式标签与 `UnknownStoredKeys`。
+嵌套类型的 wire 文档 `<type>BSONDoc` 同样带显式标签。
 
 **改 Go 字段名又要保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``）——键没变，不需要迁移，也不告警。`roost add dao` 骨架的注释建议每个持久字段写 `bson` 名。改了键（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`、改类型）时：
 
 - `roost generate` 以工作树里上一次的生成物为基线打印 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...` / `new stored key ...` / `stored key "level" changes type int32 -> string ...`，提示 `schema=` 是否提高；不阻断生成，再生成一次不再告警。
-- 生成的 `RestorePersisted` 发现库里有、结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`，每进程每 DAO 每键一次），计 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载。
-- 这些旧键**不会被写删**：DAO 在内存里原样带着它们，整文档写回、回滚、Remote data 信封都带回；迁移把值搬走后用 `engine.CleanupStoredKeys` 显式清理（[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md) 步骤 5b）。
+- 生成的 `RestorePersisted` 发现库里有、结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`，每进程每 DAO 每键一次），计 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载，但**不读入**这个键的值。
+- 这些旧键**不再加载，下一次整文档写回就删掉**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）；单字段补丁不碰它们，但它们也不再被读取。**业务约束**：改名 / 删字段之前，要么保留原 `bson` 名，要么先离线迁移再提升 `schema=`，否则旧数据不再加载、写回即丢失（[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md) §1）。
 
 ### 生成物与读写约定
 

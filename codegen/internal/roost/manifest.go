@@ -24,7 +24,7 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
-// v1.28.0 生成物使用 DAO 持久文档（dataengine.NewStoredKeySet / UnknownStoredKeys）、
+// v1.28.0 生成物使用 DAO 持久文档（dataengine.NewStoredKeySet）、
 // saga Engine.GetByBusinessKey 与原生步骤、wiring/selfsync、entitytimer 等 v1.28.0 才有的 API，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{

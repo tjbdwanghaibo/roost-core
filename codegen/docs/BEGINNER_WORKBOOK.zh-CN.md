@@ -170,7 +170,7 @@ make ci
 - **托管框架服务**（`roost help services`）：排行、邮件、聊天等九个现成服务，在 `roost.yaml` 加 `services.<name>.framework` 并在业务服务 `uses` 里列出，然后 `make sync`。
 - **HTTP 路由**（`roost help webroute`）：`roost add webroute ShopPrice` 生成 `service/web/shop_price.go`（`GET /shop_price`）、开启 webroute feature、给服务装上 `web` Mod（配置 `web.addr`，缺省 `127.0.0.1:8080`）；在服务 `Init` 里加一行 `kitweb.RegisterRoutes(registry, &web.Service{})`（忘了时 `make doctor` 的 `webroute:serve` 会 WARN），`go run . game` 后 `curl http://127.0.0.1:8080/shop_price`。`web` Mod 不做鉴权，只绑回环或放在鉴权代理之后。
 - **属性**（`roost help attribute`）：`roost add attribute PlayerProfile` 开启 attribute feature、生成带 `dirtyMask` 的 profile 骨架并立即生成访问器；改字段与 `_<Field>` 公式后 `roost generate`。
-- **DAO 字段改名：保留原来的 `bson` 名就不用迁移**：字段上的 `bson:"x"` 就是库里的键（没写时是 Go 字段名的 snake_case），所以每个持久字段都写上 `bson` 名，改 Go 名时把它原样留着（``Coins int64 `bson:"gold"` ``）。键真的变了（改名没留 `bson` 名、删字段、改 `nopersist`）时，`roost generate` 与启动加载都会打 WARN，老值不会被删、但业务字段读不到，按 [schema 变更手册](../../docs/framework/SCHEMA-MIGRATION.md) 迁移并清理旧键。生成的 `gen_<x>_dao.go` 里的 `<dao>PersistDoc` 一眼能看到每个字段存成什么键。
+- **DAO 字段改名：保留原来的 `bson` 名就不用迁移**：字段上的 `bson:"x"` 就是库里的键（没写时是 Go 字段名的 snake_case），所以每个持久字段都写上 `bson` 名，改 Go 名时把它原样留着（``Coins int64 `bson:"gold"` ``）。键真的变了（改名没留 `bson` 名、删字段、改 `nopersist`）时，`roost generate` 与启动加载都会打 WARN，老值**不再加载，下一次整文档写回就被删掉**——所以改名 / 删字段之前要么保留原 `bson` 名，要么先按 [schema 变更手册](../../docs/framework/SCHEMA-MIGRATION.md) 离线迁移再提升 `schema=`。生成的 `gen_<x>_dao.go` 里的 `<dao>PersistDoc` 一眼能看到每个字段存成什么键。
 - **Remote 托管实体**（跨进程写的公会一类）：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，并 `roost add mod remote_entity -service game`；缺 Mod 时 `roost generate` 与 doctor 的 `remote-runtime` 会给出这条命令。
 
 ## 6. 报错排查

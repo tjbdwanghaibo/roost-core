@@ -21,11 +21,6 @@ type VarietyDao struct {
 	pending     *fmap.FastMap[int32, int64]
 	fastItems   *fmap.FastMap[int64, int32]
 	shardedTags *fmap.ShardedSafeMap[int32, string]
-	// storedUnknown holds the stored keys this DAO does not declare, exactly
-	// as loaded: written back with every full document so a renamed or
-	// removed field's stored value survives until it is migrated and cleaned
-	// up explicitly (DESIGN-TODO D13). Business code never sees it.
-	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // Ensure interface compliance.
@@ -47,18 +42,16 @@ const (
 //
 // Renaming a key here — a renamed or removed field, persist changed to
 // nopersist — leaves documents already stored with a key nothing reads:
-// RestorePersisted warns once per key, and UnknownStoredKeys carries the
-// stored value back on every full write, so it stays in the document. Keep
-// the old key with bson:"<old>" on the renamed field, or migrate the
-// documents offline and clean the old key up explicitly
-// (docs/framework/SCHEMA-MIGRATION.md).
+// RestorePersisted warns once per key and does not load the value, and the
+// next full write of the document drops it. Keep the old key with
+// bson:"<old>" on the renamed field, or migrate the documents offline before
+// raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type varietyDaoPersistDoc struct {
-	ID                int64                        `bson:"_id"`
-	SchemaVersion     uint32                       `bson:"_schema"`
-	PersistOnly       int64                        `bson:"persist_only"`
-	FastItems         map[int64]int32              `bson:"fast_items"`
-	ShardedTags       map[int32]string             `bson:"sharded_tags"`
-	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
+	ID            int64            `bson:"_id"`
+	SchemaVersion uint32           `bson:"_schema"`
+	PersistOnly   int64            `bson:"persist_only"`
+	FastItems     map[int64]int32  `bson:"fast_items"`
+	ShardedTags   map[int32]string `bson:"sharded_tags"`
 }
 
 // varietyDaoStoredKeys is the key set varietyDaoPersistDoc declares, nested types
@@ -506,8 +499,8 @@ func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 }
 
 // varietyDaoRollbackDoc is the in-memory rollback snapshot, never stored:
-// the persisted document (unknown stored keys included) plus the fields that
-// are not persisted, under their keys.
+// the persisted document plus the fields that are not persisted, under their
+// keys.
 type varietyDaoRollbackDoc struct {
 	PersistDoc varietyDaoPersistDoc `bson:"_persisted"`
 	SyncOnly   int64                `bson:"sync_only"`
@@ -528,18 +521,16 @@ func (d *VarietyDao) rollbackDoc() varietyDaoRollbackDoc {
 // decoded one back (identity and persisted fields; the caller runs Init).
 func (d *VarietyDao) persistDoc() varietyDaoPersistDoc {
 	return varietyDaoPersistDoc{
-		ID:                d.id,
-		SchemaVersion:     VarietyDaoSchemaVersion,
-		UnknownStoredKeys: d.storedUnknown,
-		PersistOnly:       d.persistOnly,
-		FastItems:         d.varietyDaoFastItemsRawMap(),
-		ShardedTags:       d.varietyDaoShardedTagsRawMap(),
+		ID:            d.id,
+		SchemaVersion: VarietyDaoSchemaVersion,
+		PersistOnly:   d.persistOnly,
+		FastItems:     d.varietyDaoFastItemsRawMap(),
+		ShardedTags:   d.varietyDaoShardedTagsRawMap(),
 	}
 }
 
 func (d *VarietyDao) setPersistDoc(doc varietyDaoPersistDoc) {
 	d.id = doc.ID
-	d.storedUnknown = doc.UnknownStoredKeys.Persisted()
 	d.persistOnly = doc.PersistOnly
 	d.setFastItemsRawMap(doc.FastItems)
 	d.setShardedTagsRawMap(doc.ShardedTags)
@@ -800,8 +791,8 @@ func (d *VarietyDao) Unmarshal(raw []byte) error {
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 // A stored key varietyDaoPersistDoc does not declare is reported (once per key per
-// process) and the document still loads: no field reads the value, and it is
-// kept and written back with the document until cleaned up explicitly.
+// process) and the document still loads without it: the value is not read,
+// and the next full write of the document drops the key (DESIGN-TODO D13).
 func (d *VarietyDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != VarietyDaoSchemaVersion {
 		return fmt.Errorf("%w: dao VarietyDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, VarietyDaoSchemaVersion)

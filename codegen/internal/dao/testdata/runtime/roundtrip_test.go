@@ -188,8 +188,9 @@ func TestReplacedChildStopsMarkingTheOldParent(t *testing.T) {
 // 改字段告警（加载期，DESIGN-TODO D13）：库里的文档有、生成的持久文档结构体没有的键——字段改了名、删了、改成
 // nopersist——在 RestorePersisted 时打印一次 WARN（同一进程同一 DAO 同一键只打一次，不按实体刷屏），照常加载、
 // 不拒绝；嵌套子文档按解码层级检查，map 的值、切片的元素用 * / [] 代替真实键，保持低基数。以 _ 开头的顶层键是框架
-// 元数据（_version、_last_tx 等），定义里缺失的键给零值（加字段的正常情况），都不告警。修前这些键被解码器静默丢弃。
-func TestUnknownStoredKeysWarnOncePerKeyAndStillLoad(t *testing.T) {
+// 元数据（_version、_last_tx 等），定义里缺失的键给零值（加字段的正常情况），都不告警。旧键的值不读入（维护者
+// 2026-10-19 调整：撤销方案 A），DAO 交出的整文档里没有它们，下一次整文档写回即去掉。
+func TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded(t *testing.T) {
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
@@ -231,6 +232,13 @@ func TestUnknownStoredKeysWarnOncePerKeyAndStillLoad(t *testing.T) {
 		if d.GetName() != "hero" || d.GetLevel() != 0 || d.GetPos().GetX() != 3 {
 			t.Fatalf("load %d: name=%q level=%d pos.x=%d", i, d.GetName(), d.GetLevel(), d.GetPos().GetX())
 		}
+		full, err := d.marshalCommitState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if left := heroDaoStoredKeys.UnknownKeys(full); len(left) != 0 {
+			t.Fatalf("load %d: the full document written back still has keys the DAO does not declare: %v", i, left)
+		}
 	}
 	text := logs.String()
 	for _, key := range []string{"legacy_gold", "legacy_level", "pos.legacy_z", "equips.*.legacy_color"} {
@@ -242,6 +250,9 @@ func TestUnknownStoredKeysWarnOncePerKeyAndStillLoad(t *testing.T) {
 		if strings.Contains(text, quiet) {
 			t.Errorf("%s should not be reported:\n%s", quiet, text)
 		}
+	}
+	if !strings.Contains(text, "no longer read") {
+		t.Errorf("warning does not say the key is no longer read:\n%s", text)
 	}
 	if !strings.Contains(text, "dao=HeroDao") || !strings.Contains(text, "level=WARN") {
 		t.Errorf("warning does not name the DAO at WARN level:\n%s", text)

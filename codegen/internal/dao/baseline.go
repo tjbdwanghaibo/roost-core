@@ -19,7 +19,7 @@ import (
 // 生成器把输出目录里上一次的生成物当基线：DAO 的 <dao>PersistDoc（更早的生成物里是 Unmarshal 里的局部 rawDoc）、
 // 嵌套类型的 <type>BSONDoc，按 bson 标签读出“键 -> 字段名、类型”，与这次的定义比较。键消失（改名、删字段、
 // persist 改 nopersist）、新增、类型变化各打印一条 WARN，写明对已存数据的后果、迁移手册与 schema= 是否提高。
-// 消失的键对应的旧值不会被写删（生成的 DAO 把未知键原样带回），但业务字段再也读不到它。
+// 消失的键对应的旧值不再读取，下一次整文档写回会把它从文档里删掉（维护者 2026-10-19：旧字段不 load，靠业务约束与通知）。
 // 基线只是工作树里的文件：同一份定义再生成一次不再告警，删掉生成物或换机器重新生成也看不到上一次的形状——
 // 运行期的未知键告警（dataengine.StoredKeySet）是另一道。
 
@@ -119,8 +119,8 @@ func storedKeyChanges(owner, previousFile string, before storedShape, after []st
 		current, kept := now[old.Key]
 		if !kept {
 			warnings = append(warnings, fmt.Sprintf("WARN: %s: stored key %q (%s %s) is no longer generated (it was in the previous %s). "+
-				"Documents already stored keep %q but it will not be read: the value stays in the document (written back unchanged, never deleted automatically), and if this is a rename the new field starts at the zero value. "+
-				"To rename the Go field and keep using the data, give it bson:%q; otherwise migrate the stored value offline and clean the old key up (docs/framework/SCHEMA-MIGRATION.md). %s",
+				"Documents already stored keep %q but it will not be read, and the next full write of each document deletes it; if this is a rename the new field starts at the zero value. "+
+				"To rename the Go field and keep using the data, give it bson:%q; otherwise migrate the stored value offline before raising schema= (docs/framework/SCHEMA-MIGRATION.md). %s",
 				owner, old.Key, old.Field, old.Type, previousFile, old.Key, old.Key, schemaNote))
 			continue
 		}

@@ -1,7 +1,7 @@
 //go:build daoruntime
 
-// 旧持久键的保留与清理（DESIGN-TODO D13 方案 A），在真实 Mongo 副本集上走正式 MongoStore 投影：
-// ROOST_DATAENGINE_IT_MONGO_URI 没设置时跳过（scripts 里 source 隔离环境 env.sh 后运行）。每个用例用一次性库名，
+// 旧持久键不再读取（DESIGN-TODO D13，维护者 2026-10-19 调整：撤销方案 A），在真实 Mongo 副本集上走正式 MongoStore
+// 投影：ROOST_DATAENGINE_IT_MONGO_URI 没设置时跳过（scripts 里 source 隔离环境 env.sh 后运行）。每个用例用一次性库名，
 // 结束时删库，绝不写共享 game 库。
 package testdata
 
@@ -9,12 +9,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -127,17 +125,19 @@ func newTransactionID(t *testing.T) coredata.TransactionID {
 	return id
 }
 
-func requireLegacyKeys(t *testing.T, step string, doc bson.M) {
-	t.Helper()
-	if doc["old_gold"] != int64(40) {
-		t.Errorf("%s: old_gold = %#v, want int64(40) kept", step, doc["old_gold"])
+// legacyKeys 报出 doc 里还在的旧键（insertLegacy 写下的三个）。
+func legacyKeys(doc bson.M) []string {
+	var left []string
+	if _, ok := doc["old_gold"]; ok {
+		left = append(left, "old_gold")
 	}
-	if z := subValue(doc, "pos", "old_z"); z != int32(9) {
-		t.Errorf("%s: pos.old_z = %#v, want int32(9) kept", step, z)
+	if subValue(doc, "pos", "old_z") != nil {
+		left = append(left, "pos.old_z")
 	}
-	if color := subValue(doc, "equips", "1", "old_color"); color != "red" {
-		t.Errorf("%s: equips.1.old_color = %#v, want red kept", step, color)
+	if subValue(doc, "equips", "1", "old_color") != nil {
+		left = append(left, "equips.1.old_color")
 	}
+	return left
 }
 
 func subValue(doc bson.M, path ...string) any {
@@ -164,9 +164,10 @@ func subValue(doc bson.M, path ...string) any {
 	return current
 }
 
-// 改 Go 字段名（没保留 bson 名）之后：加载 WARN、照常加载；业务的整文档写回、单字段补丁、投影重放、回滚
-// 都不删库里的旧键，值不变；迁移把旧值搬到新键，显式清理入口删掉旧键，之后再加载不再告警。
-func TestOldStoredKeysSurviveFullWritesUntilExplicitCleanupRealMongo(t *testing.T) {
+// 改 Go 字段名（没保留 bson 名）、删字段之后：加载 WARN 一次、照常加载但不读入旧键的值，DAO 内存与它交出的任何
+// 文档（整文档写入、回滚快照）里都没有旧键。单字段补丁（$set）不碰别的键，旧键留在库里但不再被读取；下一次整文档
+// 写回把旧键去掉（与 D13 之前的写入语义一致），重放同一条记录幂等。要保留数据，业务给字段写原 bson 名或先离线迁移。
+func TestOldStoredKeysAreNotLoadedAndTheNextFullWriteDropsThemRealMongo(t *testing.T) {
 	env := newStoredKeysEnv(t)
 	var logs bytes.Buffer
 	previous := slog.Default()
@@ -176,131 +177,78 @@ func TestOldStoredKeysSurviveFullWritesUntilExplicitCleanupRealMongo(t *testing.
 	const id = 13001
 	env.insertLegacy(t, id)
 	d := env.load(t, id)
-	if !strings.Contains(logs.String(), "key=old_gold") {
-		t.Errorf("loading the legacy document did not warn:\n%s", logs.String())
+	text := logs.String()
+	if !strings.Contains(text, "key=old_gold") || !strings.Contains(text, "no longer read") {
+		t.Errorf("loading the legacy document did not warn that the key is no longer read:\n%s", text)
 	}
-
-	// 回滚快照带着未知键往返：事务失败恢复后，再写回仍然保留。
+	if d.GetLevel() != 7 || d.GetPos().GetX() != 3 {
+		t.Fatalf("declared fields not loaded: level=%d pos.x=%d", d.GetLevel(), d.GetPos().GetX())
+	}
+	full, err := d.marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := heroDaoStoredKeys.UnknownKeys(full); len(left) != 0 {
+		t.Fatalf("the loaded DAO still carries old keys %v in its full document", left)
+	}
 	snapshot, err := d.CaptureRollbackState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.name = "changed-then-rolled-back"
-	if err := d.RestoreRollbackState(snapshot); err != nil {
-		t.Fatal(err)
+	if bytes.Contains(snapshot, []byte("old_gold")) || bytes.Contains(snapshot, []byte("old_z")) || bytes.Contains(snapshot, []byte("old_color")) {
+		t.Fatalf("the rollback snapshot carries old keys: %s", bson.Raw(snapshot))
 	}
 
+	// 单字段补丁只 $set 自己的键：旧键留在库里，但不再被读取。
+	d.name = "patched"
+	if _, err := env.write(t, d, false); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	afterPatch := env.stored(t, id)
+	if afterPatch["name"] != "patched" {
+		t.Fatalf("patch did not land: %v", afterPatch)
+	}
+	if left := legacyKeys(afterPatch); len(left) != 3 {
+		t.Fatalf("a single-field patch touched other keys: old keys left %v, want all three", left)
+	}
+
+	// 整文档写回：旧键（顶层与嵌套）都被去掉。
 	d.name = "renamed"
 	record, err := env.write(t, d, true)
 	if err != nil {
 		t.Fatalf("full write: %v", err)
 	}
 	afterPut := env.stored(t, id)
-	if afterPut["name"] != "renamed" || afterPut["_version"] != int64(2) {
+	if afterPut["name"] != "renamed" || afterPut["_version"] != int64(3) {
 		t.Fatalf("full write did not land: %v", afterPut)
 	}
-	requireLegacyKeys(t, "after a full write", afterPut)
+	if left := legacyKeys(afterPut); len(left) != 0 {
+		t.Fatalf("after a full write the old keys %v are still stored, want them dropped", left)
+	}
+	if afterPut["level"] != int32(7) || subValue(afterPut, "pos", "x") != int32(3) || subValue(afterPut, "equips", "1", "level") != int32(5) {
+		t.Fatalf("a full write lost declared values: %v", afterPut)
+	}
 
-	// 投影重放（同一条 WAL 记录再投影一次）幂等，旧键仍在。
+	// 投影重放（同一条 WAL 记录再投影一次）幂等：不把旧键带回来，也不改版本。
 	if err := env.store.Project(env.ctx, record); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	requireLegacyKeys(t, "after a replay", env.stored(t, id))
-
-	// 单字段补丁本来就不碰别的键。
-	d.name = "patched"
-	if _, err := env.write(t, d, false); err != nil {
-		t.Fatalf("patch: %v", err)
+	replayed := env.stored(t, id)
+	if left := legacyKeys(replayed); len(left) != 0 || replayed["_version"] != int64(3) {
+		t.Fatalf("after a replay: old keys %v, version %v", left, replayed["_version"])
 	}
-	requireLegacyKeys(t, "after a patch", env.stored(t, id))
-
-	// 第二次整文档写回（从重新加载的实例）同样保留。
-	reloaded := env.load(t, id)
-	reloaded.level = 8
-	if _, err := env.write(t, reloaded, true); err != nil {
-		t.Fatalf("second full write: %v", err)
+	docs, err := env.store.Load(env.ctx, coredata.LoadSpec{Database: env.database, Scope: coredata.DatabaseGlobal, Resource: HeroDaoCollection, Filter: map[string]any{"_id": int64(id)}})
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("reload: %v %v", docs, err)
 	}
-	requireLegacyKeys(t, "after a second full write", env.stored(t, id))
-
-	// 离线迁移：停写后把旧值搬到新键（这里是 exp），版本加 1。
-	current := env.stored(t, id)
-	version := current["_version"].(int64)
-	result, err := env.coll.UpdateOne(env.ctx, bson.M{"_id": id, "_version": version},
-		bson.A{bson.M{"$set": bson.M{"exp": "$old_gold", "_version": version + 1, "_last_tx": "schema-migration:d13"}}})
-	if err != nil || result.MatchedCount != 1 {
-		t.Fatalf("migration: %v %v", result, err)
-	}
-
-	// 清理入口：拒绝仍被声明的键与元数据；删掉指定旧键。
-	for _, bad := range [][]string{{"name"}, {"_version"}, {"equips.*.old_color"}, {"pos.x"}} {
-		if _, err := engine.CleanupStoredKeys(env.ctx, engine.StoredKeyCleanup{Name: "d13", Collection: env.coll, Declared: heroDaoStoredKeys, Keys: bad}); !errors.Is(err, engine.ErrCleanupInvalid) {
-			t.Errorf("cleanup of %v: err = %v, want ErrCleanupInvalid", bad, err)
-		}
-	}
-	dry, err := engine.CleanupStoredKeys(env.ctx, engine.StoredKeyCleanup{Name: "d13", Collection: env.coll, Declared: heroDaoStoredKeys, Keys: []string{"old_gold", "pos.old_z"}, DryRun: true})
-	if err != nil || dry.Matched != 1 || dry.Cleaned != 0 {
-		t.Fatalf("dry run = %+v, %v", dry, err)
-	}
-	requireLegacyKeys(t, "after a dry run", env.stored(t, id))
-	report, err := engine.CleanupStoredKeys(env.ctx, engine.StoredKeyCleanup{Name: "d13", Collection: env.coll, Declared: heroDaoStoredKeys, Keys: []string{"old_gold", "pos.old_z"}})
-	if err != nil || report.Cleaned != 1 {
-		t.Fatalf("cleanup = %+v, %v", report, err)
-	}
-	cleaned := env.stored(t, id)
-	if _, ok := cleaned["old_gold"]; ok || subValue(cleaned, "pos", "old_z") != nil {
-		t.Fatalf("cleanup left the keys: %v", cleaned)
-	}
-	if cleaned["exp"] != int64(40) || cleaned["_version"] != version+2 || cleaned["_last_tx"] != "stored-key-cleanup:d13" {
-		t.Fatalf("cleanup result: exp=%v version=%v last_tx=%v", cleaned["exp"], cleaned["_version"], cleaned["_last_tx"])
-	}
-	if subValue(cleaned, "equips", "1", "old_color") != "red" {
-		t.Fatalf("cleanup removed a key it was not asked to")
-	}
-	after := env.load(t, id)
-	if after.GetExp() != 40 {
-		t.Fatalf("migrated value not loaded: exp=%d", after.GetExp())
+	if left := heroDaoStoredKeys.UnknownKeys(docs[0].Data); len(left) != 0 {
+		t.Fatalf("the stored document still has keys the DAO does not declare: %v", left)
 	}
 }
 
-// 两个进程实例同时加载并整文档写回：版本条件让后到的一方冲突（不放宽），先到的一方写回的文档保留旧键。
-func TestConcurrentFullWritesKeepOldStoredKeysRealMongo(t *testing.T) {
-	env := newStoredKeysEnv(t)
-	const id = 13002
-	env.insertLegacy(t, id)
-	first, second := env.load(t, id), env.load(t, id)
-	first.name, second.name = "first", "second"
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i, d := range []*HeroDao{first, second} {
-		wg.Add(1)
-		go func(i int, d *HeroDao) {
-			defer wg.Done()
-			_, errs[i] = env.write(t, d, true)
-		}(i, d)
-	}
-	wg.Wait()
-	won := 0
-	for _, err := range errs {
-		switch {
-		case err == nil:
-			won++
-		case !errors.Is(err, engine.ErrProjectionConflict):
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if won != 1 {
-		t.Fatalf("winners = %d (errors %v), want exactly one", won, errs)
-	}
-	doc := env.stored(t, id)
-	if doc["_version"] != int64(2) {
-		t.Fatalf("version = %v, want 2", doc["_version"])
-	}
-	requireLegacyKeys(t, "after concurrent full writes", doc)
-}
-
-// Remote 托管实体：DAO 数据放在版本信封的 data 二进制里，写入是 data 原样替换。从信封里水合的 DAO，交给 Remote 提交的
-// 数据（MarshalPersist，生成实体的 RemoteDataMutation.Data）带着旧键，所以信封替换也不丢它们。
-func TestRemoteEnvelopePayloadKeepsOldStoredKeysRealMongo(t *testing.T) {
+// Remote 托管实体：DAO 数据放在版本信封的 data 二进制里，写入是 data 原样替换。从信封里水合的 DAO 交给 Remote 提交的
+// 数据（MarshalPersist，生成实体的 RemoteDataMutation.Data）不含旧键，信封替换后旧键同样被去掉。
+func TestRemoteEnvelopePayloadDropsOldStoredKeysRealMongo(t *testing.T) {
 	env := newStoredKeysEnv(t)
 	const id = 13003
 	legacy, err := bson.Marshal(bson.D{
@@ -334,41 +282,10 @@ func TestRemoteEnvelopePayloadKeepsOldStoredKeysRealMongo(t *testing.T) {
 	if err := bson.Unmarshal(d.MarshalPersist(heroDaoFieldName), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["name"] != "renamed" {
-		t.Fatalf("payload lost the change: %v", payload)
+	if payload["name"] != "renamed" || subValue(payload, "pos", "x") != int32(3) {
+		t.Fatalf("payload lost declared values: %v", payload)
 	}
-	requireLegacyKeys(t, "remote payload", payload)
-	// 清理入口不改写 Remote 信封。
-	if _, err := engine.CleanupStoredKeys(env.ctx, engine.StoredKeyCleanup{Name: "d13", Collection: env.coll, Declared: heroDaoStoredKeys, Keys: []string{"old_gold"}}); !errors.Is(err, engine.ErrCleanupRemoteEnvelope) {
-		t.Fatalf("cleanup over an envelope: err = %v, want ErrCleanupRemoteEnvelope", err)
+	if left := legacyKeys(payload); len(left) != 0 {
+		t.Fatalf("remote payload carries old keys %v, want them dropped", left)
 	}
-}
-
-// 清理期间文档被别的写入者改了：版本条件不成立，整次中止，不覆盖别人的写入。
-func TestCleanupStopsWhenTheCollectionIsStillWrittenRealMongo(t *testing.T) {
-	env := newStoredKeysEnv(t)
-	const id = 13004
-	env.insertLegacy(t, id)
-	racing := &racingCollection{ICollection: env.coll, race: func() {
-		_, _ = env.coll.UpdateOne(env.ctx, bson.M{"_id": int64(id)}, bson.M{"$inc": bson.M{"_version": int64(1)}})
-	}}
-	_, err := engine.CleanupStoredKeys(env.ctx, engine.StoredKeyCleanup{Name: "d13", Collection: racing, Declared: heroDaoStoredKeys, Keys: []string{"old_gold"}})
-	if !errors.Is(err, engine.ErrCleanupNotStopped) {
-		t.Fatalf("err = %v, want ErrCleanupNotStopped", err)
-	}
-	requireLegacyKeys(t, "after an aborted cleanup", env.stored(t, id))
-}
-
-// racingCollection 在清理读完候选文档之后、写回之前插入一次别人的写入。
-type racingCollection struct {
-	fmongo.ICollection
-	race func()
-}
-
-func (c *racingCollection) Find(ctx context.Context, filter any, results any, opts ...fmongo.FindOption) error {
-	if err := c.ICollection.Find(ctx, filter, results, opts...); err != nil {
-		return err
-	}
-	c.race()
-	return nil
 }

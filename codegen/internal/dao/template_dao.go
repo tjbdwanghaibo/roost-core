@@ -31,13 +31,6 @@ type {{.Dao.Name}} struct {
 {{- range .Dao.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
-{{- if not .Dao.NoCollection}}
-	// storedUnknown holds the stored keys this DAO does not declare, exactly
-	// as loaded: written back with every full document so a renamed or
-	// removed field's stored value survives until it is migrated and cleaned
-	// up explicitly (DESIGN-TODO D13). Business code never sees it.
-	storedUnknown dataengine.UnknownStoredKeys
-{{- end}}
 }
 
 // Ensure interface compliance.
@@ -65,18 +58,16 @@ const (
 //
 // Renaming a key here — a renamed or removed field, persist changed to
 // nopersist — leaves documents already stored with a key nothing reads:
-// RestorePersisted warns once per key, and UnknownStoredKeys carries the
-// stored value back on every full write, so it stays in the document. Keep
-// the old key with bson:"<old>" on the renamed field, or migrate the
-// documents offline and clean the old key up explicitly
-// (docs/framework/SCHEMA-MIGRATION.md).
+// RestorePersisted warns once per key and does not load the value, and the
+// next full write of the document drops it. Keep the old key with
+// bson:"<old>" on the renamed field, or migrate the documents offline before
+// raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type {{persistDocName .Dao.Name}} struct {
 	ID            int64  ` + "`" + `bson:"_id"` + "`" + `
 	SchemaVersion uint32 ` + "`" + `bson:"_schema"` + "`" + `
 {{- range persistFields .Dao.Fields}}
 	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonTag .}}"` + "`" + `
 {{- end}}
-	UnknownStoredKeys dataengine.UnknownStoredKeys ` + "`" + `bson:",inline"` + "`" + `
 }
 
 // {{storedKeysName .Dao.Name}} is the key set {{persistDocName .Dao.Name}} declares, nested types
@@ -564,8 +555,8 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 {{- if .Dao.NoCollection}}
 // every field under its key.
 {{- else}}
-// the persisted document (unknown stored keys included) plus the fields that
-// are not persisted, under their keys.
+// the persisted document plus the fields that are not persisted, under their
+// keys.
 {{- end}}
 type {{rollbackDocName .Dao.Name}} struct {
 {{- if .Dao.NoCollection}}
@@ -602,7 +593,6 @@ func (d *{{.Dao.Name}}) persistDoc() {{persistDocName .Dao.Name}} {
 	return {{persistDocName .Dao.Name}}{
 		ID:            d.id,
 		SchemaVersion: {{.Dao.Name}}SchemaVersion,
-		UnknownStoredKeys: d.storedUnknown,
 {{- range persistFields .Dao.Fields}}
 {{- if eq .Kind 2}}
 		{{.Name}}: {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
@@ -615,7 +605,6 @@ func (d *{{.Dao.Name}}) persistDoc() {{persistDocName .Dao.Name}} {
 
 func (d *{{.Dao.Name}}) setPersistDoc(doc {{persistDocName .Dao.Name}}) {
 	d.id = doc.ID
-	d.storedUnknown = doc.UnknownStoredKeys.Persisted()
 {{- range persistFields .Dao.Fields}}
 {{- if eq .Kind 2}}
 	d.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
@@ -838,8 +827,8 @@ func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 // A stored key {{persistDocName .Dao.Name}} does not declare is reported (once per key per
-// process) and the document still loads: no field reads the value, and it is
-// kept and written back with the document until cleaned up explicitly.
+// process) and the document still loads without it: the value is not read,
+// and the next full write of the document drops the key (DESIGN-TODO D13).
 func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != {{.Dao.Name}}SchemaVersion {
 		return fmt.Errorf("%w: dao {{.Dao.Name}} stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, {{.Dao.Name}}SchemaVersion)

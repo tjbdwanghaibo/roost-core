@@ -14,13 +14,15 @@ import (
 
 // StoredKeySet 是一个生成 DAO 的持久文档结构体（<dao>PersistDoc，见 DESIGN-TODO D13）声明的全部键，包括嵌套类型
 // 的 wire 文档里的键。生成的 RestorePersisted 在解码前用它检查库里的文档：文档里有、结构体里没有的键——字段改了名、
-// 删了、改成 nopersist——业务字段读不到它的值，这里把它报出来。值本身不丢：结构体的 UnknownStoredKeys 把它带在
-// 内存里，整文档写回时原样写回，直到经 engine.CleanupStoredKeys 显式清理。
+// 删了、改成 nopersist——业务字段读不到它的值，这里把它报出来。
 //
-// 只告警，不拒绝加载（维护者 2026-10-19 决定）：同一进程里同一 DAO 的同一个键只打一次 WARN，不按实体刷屏；
-// 每次出现都计入 dataengine.dao.unknown_stored_key.total（标签只有 dao）。定义里有、文档里没有的键是“加字段”的
-// 正常情况（解码给零值），不报。顶层以 _ 开头的键是框架元数据（_id、_schema、_version、_last_tx、_deleted、
-// _deleted_at 等），不报；生成器保证 DAO 字段的键不以 _ 开头。
+// 只告警，不拒绝加载，也不读入（维护者 2026-10-19 决定：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）：
+// 解码器忽略结构体之外的键，DAO 内存里没有它们，下一次整文档写回就把它们从库里去掉（单字段补丁只 $set 自己的键，
+// 不碰它们，但它们也不再被读取）。要保留数据，业务给改名的字段写原 bson 名，或在提升 schema 之前离线迁移
+// （docs/framework/SCHEMA-MIGRATION.md §1）。同一进程里同一 DAO 的同一个键只打一次 WARN，不按实体刷屏；每次出现都
+// 计入 dataengine.dao.unknown_stored_key.total（标签只有 dao）。定义里有、文档里没有的键是“加字段”的正常情况
+// （解码给零值），不报。顶层以 _ 开头的键是框架元数据（_id、_schema、_version、_last_tx、_deleted、_deleted_at 等），
+// 不报；生成器保证 DAO 字段的键不以 _ 开头。
 //
 // 嵌套按解码层级检查：结构体字段进入子文档，map 的值、切片的元素逐个检查，路径里用 * 代替真实的 map 键与下标，
 // 保持日志与去重的低基数。自己实现 bson 解码（Unmarshaler / ValueUnmarshaler）的类型、time.Time、没有导出字段的
@@ -29,41 +31,6 @@ type StoredKeySet struct {
 	dao      string
 	plan     *storedKeyPlan
 	reported sync.Map // 路径 -> struct{}：已经告警过的未知键
-}
-
-// UnknownStoredKeys 是一份持久文档里 DAO 不认识的键与原样的值（DESIGN-TODO D13，维护者 2026-10-19 方案 A）。
-// 生成的持久文档结构体以 bson:",inline" 字段携带它：解码时收下结构体之外的键，编码时原样写回。加载后 DAO
-// 把它留在内存里（不暴露给业务字段），整文档写回、回滚快照、Remote 托管实体的 data 信封都带着它，所以字段改名
-// 后没加 bson 名、删字段、改 nopersist 时，库里的旧值不会因为下一次整文档写入而消失，看到 WARN 之后还能迁移补救。
-// 清理只经显式入口（engine.CleanupStoredKeys），框架从不自动删除。
-type UnknownStoredKeys map[string]bson.RawValue
-
-// Persisted 返回加载后要保留的部分：去掉以 _ 开头的顶层键（_version、_last_tx、_deleted 等框架元数据，由存储
-// 层每次写入时重新给出），值复制一份，不引用解码缓冲区。没有剩余时返回 nil。
-func (keys UnknownStoredKeys) Persisted() UnknownStoredKeys {
-	var kept UnknownStoredKeys
-	for key, value := range keys {
-		if strings.HasPrefix(key, "_") {
-			continue
-		}
-		if kept == nil {
-			kept = make(UnknownStoredKeys, len(keys))
-		}
-		kept[key] = bson.RawValue{Type: value.Type, Value: append([]byte(nil), value.Value...)}
-	}
-	return kept
-}
-
-// Clone 复制键与值（嵌套类型的 wire 文档用它：嵌套子文档里没有框架元数据，以 _ 开头的键也照样保留）。
-func (keys UnknownStoredKeys) Clone() UnknownStoredKeys {
-	if len(keys) == 0 {
-		return nil
-	}
-	out := make(UnknownStoredKeys, len(keys))
-	for key, value := range keys {
-		out[key] = bson.RawValue{Type: value.Type, Value: append([]byte(nil), value.Value...)}
-	}
-	return out
 }
 
 type storedKeyPlan struct {
@@ -105,42 +72,10 @@ func (s *StoredKeySet) WarnUnknown(raw []byte) {
 		if id, ok := bson.Raw(raw).Lookup("_id").Int64OK(); ok {
 			attrs = append(attrs, "first_id", id)
 		}
-		attrs = append(attrs, "hint", "the field was renamed, removed or made nopersist: no field reads its stored value (it is kept and written back, not lost); "+
-			"keep the old stored name with bson:\"...\" on the field, or migrate offline and clean the old key up (docs/framework/SCHEMA-MIGRATION.md). Logged once per key per process")
-		slog.Warn("dataengine: stored document has a key the DAO does not declare", attrs...)
+		attrs = append(attrs, "hint", "the field was renamed, removed or made nopersist: this key is no longer read, and the next full write of the document deletes it; "+
+			"to keep the data give the field its old stored name with bson:\"...\", or migrate offline first (docs/framework/SCHEMA-MIGRATION.md). Logged once per key per process")
+		slog.Warn("dataengine: stored document has a key the DAO does not declare; it is no longer read", attrs...)
 	})
-}
-
-// Declares 报告点分路径 path（与 WarnUnknown 报出的路径同形，* 表示 map 的值或切片的元素）是不是文档结构体
-// 声明的键。清理入口用它拒绝删除仍在使用的键。
-func (s *StoredKeySet) Declares(path string) bool {
-	if s == nil || path == "" {
-		return false
-	}
-	plan := s.plan
-	segments := strings.Split(path, ".")
-	for i := 0; i < len(segments); i++ {
-		if plan == nil || plan.anyKey {
-			return false
-		}
-		field, ok := plan.fields[segments[i]]
-		if !ok {
-			return false
-		}
-		if i == len(segments)-1 {
-			return true
-		}
-		switch {
-		case field.doc != nil:
-			plan = field.doc
-		case field.each != nil && segments[i+1] == "*":
-			plan = field.each
-			i++
-		default:
-			return false
-		}
-	}
-	return false
 }
 
 // UnknownKeys 返回 raw 里的未知键路径（按出现顺序，可能重复），不告警、不计数；供测试与诊断工具使用。
@@ -231,7 +166,6 @@ var (
 	bsonUnmarshalerType      = reflect.TypeFor[bson.Unmarshaler]()
 	bsonValueUnmarshalerType = reflect.TypeFor[bson.ValueUnmarshaler]()
 	timeType                 = reflect.TypeFor[time.Time]()
-	unknownStoredKeysType    = reflect.TypeFor[UnknownStoredKeys]()
 )
 
 // doc 返回结构体 t 作为子文档时的键集合；不深入的类型返回 nil。递归类型在构建中途返回同一个（尚未填完的）计划。
@@ -265,8 +199,7 @@ func (b *storedKeyPlanBuilder) addFields(plan *storedKeyPlan, t reflect.Type, ex
 		}
 		*exported = true
 		name, inline, skip := bsonFieldTag(field)
-		if skip || field.Type == unknownStoredKeysType {
-			// UnknownStoredKeys 是收未知键的 inline map，它本身不声明任何键。
+		if skip {
 			continue
 		}
 		if inline || (field.Anonymous && name == "") {

@@ -25,11 +25,6 @@ type HeroDao struct {
 	equips  *fmap.SmallSafeMap[int64, *EquipInfo]
 	squad   []*EquipInfo
 	mount   *EquipInfo
-	// storedUnknown holds the stored keys this DAO does not declare, exactly
-	// as loaded: written back with every full document so a renamed or
-	// removed field's stored value survives until it is migrated and cleaned
-	// up explicitly (DESIGN-TODO D13). Business code never sees it.
-	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // Ensure interface compliance.
@@ -51,25 +46,23 @@ const (
 //
 // Renaming a key here — a renamed or removed field, persist changed to
 // nopersist — leaves documents already stored with a key nothing reads:
-// RestorePersisted warns once per key, and UnknownStoredKeys carries the
-// stored value back on every full write, so it stays in the document. Keep
-// the old key with bson:"<old>" on the renamed field, or migrate the
-// documents offline and clean the old key up explicitly
-// (docs/framework/SCHEMA-MIGRATION.md).
+// RestorePersisted warns once per key and does not load the value, and the
+// next full write of the document drops it. Keep the old key with
+// bson:"<old>" on the renamed field, or migrate the documents offline before
+// raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type heroDaoPersistDoc struct {
-	ID                int64                        `bson:"_id"`
-	SchemaVersion     uint32                       `bson:"_schema"`
-	Name              string                       `bson:"name"`
-	Level             int32                        `bson:"level"`
-	Exp               int64                        `bson:"exp"`
-	LoginAt           int64                        `bson:"login_at"`
-	Items             map[int64]int32              `bson:"items"`
-	Friends           []int64                      `bson:"friends"`
-	Pos               positionBSONDoc              `bson:"pos"`
-	Equips            map[int64]*equipInfoBSONDoc  `bson:"equips"`
-	Squad             []*equipInfoBSONDoc          `bson:"squad"`
-	Mount             *equipInfoBSONDoc            `bson:"mount"`
-	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
+	ID            int64                       `bson:"_id"`
+	SchemaVersion uint32                      `bson:"_schema"`
+	Name          string                      `bson:"name"`
+	Level         int32                       `bson:"level"`
+	Exp           int64                       `bson:"exp"`
+	LoginAt       int64                       `bson:"login_at"`
+	Items         map[int64]int32             `bson:"items"`
+	Friends       []int64                     `bson:"friends"`
+	Pos           positionBSONDoc             `bson:"pos"`
+	Equips        map[int64]*equipInfoBSONDoc `bson:"equips"`
+	Squad         []*equipInfoBSONDoc         `bson:"squad"`
+	Mount         *equipInfoBSONDoc           `bson:"mount"`
 }
 
 // heroDaoStoredKeys is the key set heroDaoPersistDoc declares, nested types
@@ -707,8 +700,8 @@ func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 }
 
 // heroDaoRollbackDoc is the in-memory rollback snapshot, never stored:
-// the persisted document (unknown stored keys included) plus the fields that
-// are not persisted, under their keys.
+// the persisted document plus the fields that are not persisted, under their
+// keys.
 type heroDaoRollbackDoc struct {
 	PersistDoc heroDaoPersistDoc `bson:"_persisted"`
 }
@@ -723,25 +716,23 @@ func (d *HeroDao) rollbackDoc() heroDaoRollbackDoc {
 // decoded one back (identity and persisted fields; the caller runs Init).
 func (d *HeroDao) persistDoc() heroDaoPersistDoc {
 	return heroDaoPersistDoc{
-		ID:                d.id,
-		SchemaVersion:     HeroDaoSchemaVersion,
-		UnknownStoredKeys: d.storedUnknown,
-		Name:              d.name,
-		Level:             d.level,
-		Exp:               d.exp,
-		LoginAt:           d.loginAt,
-		Items:             d.heroDaoItemsRawMap(),
-		Friends:           d.friends,
-		Pos:               d.pos.bsonDoc(),
-		Equips:            daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
-		Squad:             daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
-		Mount:             equipInfoPtrBSONDoc(d.mount),
+		ID:            d.id,
+		SchemaVersion: HeroDaoSchemaVersion,
+		Name:          d.name,
+		Level:         d.level,
+		Exp:           d.exp,
+		LoginAt:       d.loginAt,
+		Items:         d.heroDaoItemsRawMap(),
+		Friends:       d.friends,
+		Pos:           d.pos.bsonDoc(),
+		Equips:        daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
+		Squad:         daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
+		Mount:         equipInfoPtrBSONDoc(d.mount),
 	}
 }
 
 func (d *HeroDao) setPersistDoc(doc heroDaoPersistDoc) {
 	d.id = doc.ID
-	d.storedUnknown = doc.UnknownStoredKeys.Persisted()
 	d.name = doc.Name
 	d.level = doc.Level
 	d.exp = doc.Exp
@@ -1153,8 +1144,8 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 // A stored key heroDaoPersistDoc does not declare is reported (once per key per
-// process) and the document still loads: no field reads the value, and it is
-// kept and written back with the document until cleaned up explicitly.
+// process) and the document still loads without it: the value is not read,
+// and the next full write of the document drops the key (DESIGN-TODO D13).
 func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != HeroDaoSchemaVersion {
 		return fmt.Errorf("%w: dao HeroDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, HeroDaoSchemaVersion)

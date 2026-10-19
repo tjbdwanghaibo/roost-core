@@ -173,7 +173,7 @@ environment_test() {
 		bash scripts/test-dataengine-generated.sh
 		bash scripts/test-remote-generated.sh
 		bash scripts/test-demo-generated.sh
-		# DAO 生成器 golden 的运行时用例（含真实 Mongo 上旧持久键的保留与清理，DESIGN-TODO D13）：对本检出编译。
+		# DAO 生成器 golden 的运行时用例（含真实 Mongo 上旧持久键不再读取、整文档写回去掉，DESIGN-TODO D13）：对本检出编译。
 		ROOST_CORE_REPLACE="$module_root" bash codegen/scripts/dao-golden-runtime.sh
 	)
 }

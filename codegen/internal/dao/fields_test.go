@@ -348,7 +348,9 @@ type Bag struct {
 	for _, want := range []string{
 		`WARN: WalletDao: stored key "gold" (Gold int64) is no longer generated`,
 		`Documents already stored keep "gold" but it will not be read`,
+		`the next full write of each document deletes it`,
 		`if this is a rename the new field starts at the zero value`,
+		"migrate the stored value offline before raising schema=",
 		`bson:"gold"`,
 		"docs/framework/SCHEMA-MIGRATION.md",
 		`WARN: WalletDao: new stored key "coins" (Coins int64)`,

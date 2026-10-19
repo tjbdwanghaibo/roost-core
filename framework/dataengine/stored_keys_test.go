@@ -115,56 +115,12 @@ func TestStoredKeySetWarnsOncePerKey(t *testing.T) {
 	if n := strings.Count(text, "key=coins"); n != 1 {
 		t.Fatalf("coins warned %d times, want once:\n%s", n, text)
 	}
-	for _, want := range []string{"level=WARN", "dao=WalletDao", "first_id=1", "SCHEMA-MIGRATION"} {
+	for _, want := range []string{"level=WARN", "dao=WalletDao", "first_id=1", "no longer read", "next full write", "SCHEMA-MIGRATION"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("warning lacks %q:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "key=gold") {
 		t.Errorf("a declared key was reported:\n%s", text)
-	}
-}
-
-type storedKeysCarrier struct {
-	ID      int64             `bson:"_id"`
-	Gold    int64             `bson:"gold"`
-	Main    storedKeysEquip   `bson:"main"`
-	Unknown UnknownStoredKeys `bson:",inline"`
-}
-
-// 收未知键的 inline UnknownStoredKeys 不声明任何键（否则未知键检查会被它整体关掉）；它让解码收下、编码写回
-// 结构体之外的键，Persisted 去掉顶层框架元数据并复制值。Declares 与报告路径同形，清理入口据此拒绝删除在用的键。
-func TestUnknownStoredKeysAreCarriedButNotDeclared(t *testing.T) {
-	set := NewStoredKeySet[storedKeysCarrier]("CarrierDao")
-	raw := storedKeysRaw(t, bson.D{{Key: "_id", Value: int64(1)}, {Key: "_version", Value: int64(4)}, {Key: "gold", Value: int64(2)}, {Key: "old_gold", Value: int64(40)}})
-	if got := set.UnknownKeys(raw); !reflect.DeepEqual(got, []string{"old_gold"}) {
-		t.Fatalf("unknown keys = %v, want [old_gold]", got)
-	}
-	var doc storedKeysCarrier
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		t.Fatal(err)
-	}
-	kept := doc.Unknown.Persisted()
-	if len(kept) != 1 || kept["old_gold"].Int64() != 40 {
-		t.Fatalf("kept = %v, want only old_gold", kept)
-	}
-	raw[len(raw)-2] ^= 0xff // 改坏解码缓冲区：保留下来的值不能引用它
-	if kept["old_gold"].Int64() != 40 {
-		t.Fatal("Persisted aliases the decode buffer")
-	}
-	out, err := bson.Marshal(storedKeysCarrier{ID: 1, Gold: 3, Unknown: kept})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v, err := bson.Raw(out).LookupErr("old_gold"); err != nil || v.Int64() != 40 {
-		t.Fatalf("encoding dropped the carried key: %s", bson.Raw(out))
-	}
-	for path, want := range map[string]bool{
-		"gold": true, "main": true, "main.level": true, "main.gems.*.id": true, "main.runes.*.level": true,
-		"old_gold": false, "main.color": false, "main.gems.*.shine": false, "main.gems.id": false, "gold.x": false, "": false,
-	} {
-		if got := set.Declares(path); got != want {
-			t.Errorf("Declares(%q) = %v, want %v", path, got, want)
-		}
 	}
 }

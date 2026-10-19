@@ -36,7 +36,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 [projector_remote.go](../../../framework/dataengine/engine/projector_remote.go)按相邻、无共享Entity的纯Remote事务构造有界窗口：特殊effect/receipt、重复事务身份、记录/字节预算构成边界。执行窗口首次失败后停止补位、等待已派发工作，并只确认连续成功前缀。并行不能越过同实体因果依赖。
 
-**持久键与未知键（DESIGN-TODO D13）**：生成 DAO 的持久文档结构体 `<dao>PersistDoc` 是键的唯一声明（定义里的 `bson` 名，缺省 snake_case）。`RestorePersisted` 在 schema 校验之后、解码之前调用 [StoredKeySet.WarnUnknown](../../../framework/dataengine/stored_keys.go)：逐个读文档元素（不解码值），库里有、结构体没有的键按 DAO + 路径每进程一次 `slog.Warn`，计 `dataengine.dao.unknown_stored_key.total{dao}`，不拒绝加载；顶层 `_` 开头的元数据键与缺失键不报。这些键的值由结构体的 inline `UnknownStoredKeys` 收下，DAO 私有字段 `storedUnknown` 持有，整文档写回（`persistDoc()`）原样带回——所以存储层的 Put（`$replaceWith` / ReplaceOne）、Remote data 信封替换、投影重放都不会删掉它们，而版本条件、冲突分类、墓碑语义完全没变。删除只经 [CleanupStoredKeys](../../../framework/dataengine/engine/stored_key_cleanup.go)：停写后执行，逐份 `_version` 条件写并加 1，拒绝仍被声明的键、元数据键、Remote 信封。
+**持久键与未知键（DESIGN-TODO D13）**：生成 DAO 的持久文档结构体 `<dao>PersistDoc` 是键的唯一声明（定义里的 `bson` 名，缺省 snake_case）。`RestorePersisted` 在 schema 校验之后、解码之前调用 [StoredKeySet.WarnUnknown](../../../framework/dataengine/stored_keys.go)：逐个读文档元素（不解码值），库里有、结构体没有的键按 DAO + 路径每进程一次 `slog.Warn`，计 `dataengine.dao.unknown_stored_key.total{dao}`，不拒绝加载；顶层 `_` 开头的元数据键与缺失键不报。这些键**不读入**（维护者 2026-10-19 撤销“整文档写回保留旧键”的方案 A）：持久文档结构体没有收未知键的字段，解码器忽略它们，DAO 内存里没有，整文档写回（存储层的 Put：`$replaceWith` / ReplaceOne，以及 Remote data 信封替换）就把它们从文档里去掉；单字段补丁只 `$set` 自己的键，旧键留在库里但不再被读取。版本条件、冲突分类、墓碑语义不变。框架不提供清理入口：改名 / 删字段前保留原 `bson` 名或先离线迁移（[SCHEMA-MIGRATION](../SCHEMA-MIGRATION.md) §1），这是业务约束，框架只通知。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -81,7 +81,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | [mutation_types.go](../../../framework/dataengine/mutation_types.go) | `TransactionID`、`Durability`、`MutationKind`、`DatabaseScope`、`DocumentKey`、`FieldPatch`、`Mutation`、`Effect`、`Receipt`、`CommitRecord`、`SyncFieldMeta` |
 | [projection.go](../../../framework/dataengine/projection.go) | `Descriptor`、`ProjectionTicket`、`SystemCommitter` |
 | [scope.go](../../../framework/dataengine/scope.go) | 函数/方法或内部实现；见源码 |
-| [stored_keys.go](../../../framework/dataengine/stored_keys.go) | `StoredKeySet`、`UnknownStoredKeys` |
+| [stored_keys.go](../../../framework/dataengine/stored_keys.go) | `StoredKeySet` |
 | [sync_view.go](../../../framework/dataengine/sync_view.go) | 函数/方法或内部实现；见源码 |
 | [tracker.go](../../../framework/dataengine/tracker.go) | `Tracker`、`TrackerSnapshot` |
 | [validate.go](../../../framework/dataengine/validate.go) | 函数/方法或内部实现；见源码 |
@@ -110,7 +110,6 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | [projector_remote.go](../../../framework/dataengine/engine/projector_remote.go) | 函数/方法或内部实现；见源码 |
 | [projector_replay.go](../../../framework/dataengine/engine/projector_replay.go) | 函数/方法或内部实现；见源码 |
 | [runtime.go](../../../framework/dataengine/engine/runtime.go) | `Runtime`、`PipelinedRuntimeConfig` |
-| [stored_key_cleanup.go](../../../framework/dataengine/engine/stored_key_cleanup.go) | `StoredKeyCleanup`、`StoredKeyCleanupReport` |
 
 ### mongo
 
@@ -243,7 +242,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [load_test.go](../../../framework/dataengine/load_test.go)：`TestLoaderRespectsDependenciesAndSkipsLoadedOrDeletedDocuments`、`TestLoaderRejectsUnknownCircularAndStrictCallbackFailures`、`TestLoaderNonStrictSkipIsCountedAndStrictStillFails`
 - [model_test.go](../../../framework/dataengine/model_test.go)：`TestCommitRecordEmptyIncludesReceipts`、`TestCloneEffectPreservesAndDetachesHeaders`、`TestResolveDatabaseScopeDefaultsAndUsesTypedScope`、`TestMapPatchPathBuildsOnlySafeNestedPaths`、`TestWaitProjectionHonorsTicketAndContext`；其余 1 项见文件
 - [tracker_test.go](../../../framework/dataengine/tracker_test.go)：`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent`、`TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState`；其余 2 项见文件
-- [stored_keys_test.go](../../../framework/dataengine/stored_keys_test.go)：`TestStoredKeySetReportsKeysTheDocumentStructDoesNotDeclare`、`TestStoredKeySetWarnsOncePerKey`、`TestUnknownStoredKeysAreCarriedButNotDeclared`；生成 DAO 上的真实 Mongo 往返（整文档写回、重放、并发、Remote 载荷、清理）在 `codegen/internal/dao/testdata/runtime/stored_keys_mongo_test.go`，由 `codegen/scripts/dao-golden-runtime.sh` 运行
+- [stored_keys_test.go](../../../framework/dataengine/stored_keys_test.go)：`TestStoredKeySetReportsKeysTheDocumentStructDoesNotDeclare`、`TestStoredKeySetWarnsOncePerKey`；生成 DAO 上的加载期 WARN 与“不读入”在 `codegen/internal/dao/testdata/runtime/roundtrip_test.go`（`TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded`），真实 Mongo（补丁不碰旧键、整文档写回去掉、重放幂等、Remote 载荷）在 `stored_keys_mongo_test.go`，由 `codegen/scripts/dao-golden-runtime.sh` 运行
 - [validate_test.go](../../../framework/dataengine/validate_test.go)：`TestValidateMutationRefusesEachMalformedShape`、`TestValidateMutationCrossChecksRemoteCommitAgainstHeader`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestLeaseFenceValidateRefusesEachIncompleteFence`、`TestLeaseFenceLoaderAndTrackerGuards`
 
 ### dataengine/engine

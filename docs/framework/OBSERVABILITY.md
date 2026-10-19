@@ -200,7 +200,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
-| `dataengine.dao.unknown_stored_key.total{dao}` | Counter | 生成 DAO 冷加载时，库里文档有、持久文档结构体没有的键每出现一次计一次（标签只有 DAO 类型名；键名只在 WARN 日志里，每进程每 DAO 每键一次）。**基线应为零**；非零说明字段改了名没保留 `bson` 名、删了字段或改成 nopersist：旧值仍在库里、随整文档写回保留，但业务字段读不到，按 SCHEMA-MIGRATION 迁移并清理旧键（DESIGN-TODO D13） |
+| `dataengine.dao.unknown_stored_key.total{dao}` | Counter | 生成 DAO 冷加载时，库里文档有、持久文档结构体没有的键每出现一次计一次（标签只有 DAO 类型名；键名只在 WARN 日志里，每进程每 DAO 每键一次）。**基线应为零**；非零说明字段改了名没保留 `bson` 名、删了字段或改成 nopersist：这个键不再读取，下一次整文档写回会删除它；要保留数据，给字段写原 `bson` 名或先按 SCHEMA-MIGRATION 离线迁移（DESIGN-TODO D13） |
 | `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
