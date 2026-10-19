@@ -69,6 +69,10 @@ type Key struct {
 	// Listen（tag `listen:"<开关键>"`）标记监听地址：开关键（完整键名，布尔）为 true 时进程监听这个地址；
 	// 写 `listen:"always"` 表示总是监听。同一主机上一起运行的服务（开发配置集）不得监听冲突的端口。
 	Listen string
+	// Unique（tag `unique:"<组名>"`）标记同一主机上一起运行的服务（开发配置集）必须各不相同的值，例如
+	// etcd.advertise_addr：它不是本进程的监听地址，而是写进服务注册、别的进程据此连接本服务的地址，两个服务写成同一个
+	// 就会把请求送到同一处。组名相同的键一起比较；没写也没有缺省值的不比较。
+	Unique string
 }
 
 // Schema 是一组键的声明。由 Of 从结构体得到的 Schema 还记得结构体类型，Check 会解码一份新值，
@@ -193,6 +197,7 @@ func collectField(typ reflect.Type, full string, tag reflect.StructTag, options 
 		Shared:         tag.Get("shared"),
 		Follows:        tag.Get("follows"),
 		Listen:         tag.Get("listen"),
+		Unique:         tag.Get("unique"),
 	}
 	key.Example, key.Starter = tag.Lookup("example")
 	if enum := tag.Get("enum"); enum != "" {
@@ -213,9 +218,9 @@ func collectField(typ reflect.Type, full string, tag reflect.StructTag, options 
 	return nil
 }
 
-// checkResourceTags 检查 shared / follows / listen：都只用于字符串键，值是完整的点分键名（listen 也可以是 always）。
+// checkResourceTags 检查 shared / follows / listen / unique：都只用于字符串键，值是完整的点分键名（listen 也可以是 always）。
 func (k Key) checkResourceTags() error {
-	for _, tag := range []struct{ name, value string }{{"shared", k.Shared}, {"follows", k.Follows}, {"listen", k.Listen}} {
+	for _, tag := range []struct{ name, value string }{{"shared", k.Shared}, {"follows", k.Follows}, {"listen", k.Listen}, {"unique", k.Unique}} {
 		if tag.value == "" {
 			continue
 		}

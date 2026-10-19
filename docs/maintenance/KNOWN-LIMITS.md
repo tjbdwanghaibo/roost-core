@@ -361,7 +361,7 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 - 指标按 handler 写出的状态码计：handler 超过 `web.write_timeout` 才写完时客户端收到空回复，这次请求仍计为 handler 写的类别（时长直方图能看出超时）。
 - 本 Mod 仍不做鉴权，生成的 JSON 路由拿不到请求头（见 CODEGEN_REFERENCE §11）。
 
-**roost config check 的跨服务比较**（`--all` 与 doctor `config-across-services`）：只按生成器认识的框架声明（`kitconfig_gen.go` 快照与生成的接入层声明）比较，业务服务自己声明的键即使跨服务共享也不在其中；值按写法比较，`gd.effect` 与 `gd.effect.` 这类运行时等价的写法会报不一致（改成同一写法即可）。端口只比较开发配置集（假定一台机器）；生产示例按每服务一个容器只比较共享资源名，同机多进程的生产部署要自己保证端口。`etcd.advertise_addr` 是注册给别人连的地址、不是监听地址，不比较（game-demo 的 game / activity / match 三个服务写的是同一个 `127.0.0.1:9000`）。shared 只表达“全部服务相同”，有意让不同服务用不同效果流 / saga 库的拆法会被报不一致，没有豁免开关。
+**roost config check 的跨服务比较**（`--all` 与 doctor `config-across-services`）：只按生成器认识的框架声明（`kitconfig_gen.go` 快照与生成的接入层声明）比较，业务服务自己声明的键即使跨服务共享也不在其中；值按写法比较，`gd.effect` 与 `gd.effect.` 这类运行时等价的写法会报不一致（改成同一写法即可）。端口只比较开发配置集（假定一台机器）；生产示例按每服务一个容器只比较共享资源名，同机多进程的生产部署要自己保证端口。`etcd.advertise_addr` 不是监听地址，按 `unique` 要求开发配置集里各服务不同（维护者 2026-10-19 决定；生成器按服务序号分配 `127.0.0.1:9000+i`）；`add service` 让已有服务的序号后移时已有配置不改写，可能与新服务撞端口，由这项检查报出。shared 只表达“全部服务相同”，有意让不同服务用不同效果流 / saga 库的拆法会被报不一致，没有豁免开关。
 
 ## 能力与验证边界
 

@@ -151,7 +151,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "etcd.password", Kind: "string", Starter: true, Example: ""},
 		{Name: "etcd.service_prefix", Kind: "string", Help: "服务注册的键前缀，不写取 etcd 包的缺省", Shared: "etcd.service_prefix", Starter: true, Example: "/{project}/services/"},
 		{Name: "etcd.lease_ttl", Kind: "int", Min: "0", Help: "注册租约秒数，0 取 etcd 包的缺省", Starter: true, Example: "10"},
-		{Name: "etcd.advertise_addr", Kind: "string", Help: "写进服务注册的地址（其他进程据此连接本服务）", Starter: true, Example: "127.0.0.1:9000"},
+		{Name: "etcd.advertise_addr", Kind: "string", Help: "写进服务注册的地址（其他进程据此连接本服务）", Unique: "etcd.advertise_addr", Starter: true, Example: "127.0.0.1:9000"},
 		{Name: "etcd.register_retry_min_interval", Kind: "duration", Min: "0", Help: "注册失败重试的最短间隔，0 取 etcd 包的缺省"},
 		{Name: "etcd.register_retry_max_interval", Kind: "duration", Min: "0", Help: "注册失败重试的最长间隔，0 取 etcd 包的缺省"},
 	}},

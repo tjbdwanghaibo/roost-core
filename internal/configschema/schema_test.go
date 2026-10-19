@@ -226,15 +226,19 @@ func TestMapSourcePreservesUnderscoreYAMLHierarchy(t *testing.T) {
 	}
 }
 
-// shared / follows / listen 是跨服务检查读的声明：随键保留下来；只用于字符串键，值是完整的点分键名（listen 另可写 always）。
+// shared / follows / listen / unique 是跨服务检查读的声明：随键保留下来；只用于字符串键，值是完整的点分键名（listen 另可写 always）。
 func TestResourceTagsAreDeclaredOnStringKeys(t *testing.T) {
 	type resources struct {
 		Stream string `config:"demo.stream" shared:"demo.stream" default:"S"`
 		Start  string `config:"demo.start_stream" shared:"demo.stream" follows:"demo.stream"`
 		Addr   string `config:"demo.addr" listen:"demo.enabled" default:"127.0.0.1:1"`
 		Enable bool   `config:"demo.enabled"`
+		Self   string `config:"demo.advertise" unique:"demo.advertise"`
 	}
 	schema := MustOf(resources{})
+	if self, _ := schema.Lookup("demo.advertise"); self.Unique != "demo.advertise" {
+		t.Fatalf("unique tag lost: %+v", self)
+	}
 	start, _ := schema.Lookup("demo.start_stream")
 	addr, _ := schema.Lookup("demo.addr")
 	if start.Shared != "demo.stream" || start.Follows != "demo.stream" || addr.Listen != "demo.enabled" {

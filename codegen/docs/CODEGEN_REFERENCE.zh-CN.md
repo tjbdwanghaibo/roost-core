@@ -874,6 +874,7 @@ production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它
 `--all` 在逐个文件之后比较**各服务之间**（`checkConfigAcrossServices`，doctor 的 `config-across-services` 是同一个实现）。规则来自配置声明的 tag，不在生成器里另列：
 
 - 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`。按写法比较（只去掉首尾空白）。
+- 同一主机上各不相同（`unique:"<组名>"`）：开发配置集里各服务的取值必须两两不同。当前只有 `etcd.advertise_addr`——它不是监听地址，是写进服务注册、别的进程据此连接本服务的地址，两个服务写同一个会把请求送错地方（生成器按服务序号给 `127.0.0.1:9000+i`，见[项目生成器](PROJECT_GENERATOR.zh-CN.md)“按服务区分的端口”）。没写也没有缺省值的不比较；生产示例不比较。
 - 监听端口（`listen:"<开关键>"`）：开发配置集 `configs/service/config.<service>.yaml` 的服务在同一台机器上运行，开关打开的监听地址（`ops.addr`/`ops.enabled`、`web.addr`/`web.enabled`、`player_access.tcp.addr`/`player_access.tcp.enabled`）端口相同且主机重叠（相同，或任一方是 `0.0.0.0` / `::`）即冲突，同一服务内的两个地址同样比较；端口 0 不比较。生产示例每服务一个容器，doctor 只比较它们的共享资源名。
 
 `--json` 在 stdout 输出一份报告：`files[]`（`path`、`service`、`keys` / `cross_mod` 各为 `ok` / `failed` / `not_checked`，`key_errors`、`cross_mod_errors`、`cross_mod_reason`：`keys_only` / `key_errors` / `not_a_service_config` / `project_does_not_compile: …`）、`cross_service`（`checked`、`services`、`errors`）、`status` 与 `exit_code`。文本输出逐文件一行结论、问题逐条列出；非零退出时 stderr 只多一行摘要。

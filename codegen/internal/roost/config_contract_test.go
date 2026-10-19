@@ -1033,3 +1033,61 @@ func TestConfigCheckKeysOnlyAndJSONReport(t *testing.T) {
 		t.Errorf("misspelled key --keys-only --json: exit %d, %+v; want exit %d with nats.urll in game's key_errors", code, report.Files, configExitKeyErrors)
 	}
 }
+
+// etcd.advertise_addr 是写进服务注册、别的进程据此连接本服务的地址（维护者 2026-10-19 决定）：同一台机器上一起跑的
+// 服务（开发配置集）必须各不相同。生成器按服务序号给每个带 etcd 的服务不同的端口（与 ops 端口同一套序号，9000 + 序号），
+// 新建工程与之后 add mod 追加的段一样；两个服务写成同一个地址时 config check --all（退出码 4）与 doctor
+// config-across-services 报出（声明上的 unique tag，规则只在声明里一处）。修前两个服务都是 127.0.0.1:9000，检查通过。
+func TestEtcdAdvertiseAddrDiffersPerServiceAndIsChecked(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertise := func(service, suffix string) string {
+		leaves := configLeaves(t, service, readProjectFile(t, root, "configs/service/config."+service+suffix+".yaml"))
+		return leaves["etcd.advertise_addr"]
+	}
+	if game, gate := advertise("game", ""), advertise("gate", ""); game == "" || game == gate {
+		t.Errorf("generated etcd.advertise_addr: game %q, gate %q; want two different addresses", game, gate)
+	} else if game != "127.0.0.1:9000" || gate != "127.0.0.1:9001" {
+		t.Errorf("generated etcd.advertise_addr: game %q, gate %q; want 127.0.0.1:9000 / 127.0.0.1:9001 (9000 + the ops port's service index)", game, gate)
+	}
+	if prod := advertise("gate", ".prod.example"); prod != "CHANGE_ME:9000" {
+		t.Errorf("production example etcd.advertise_addr = %q; want the CHANGE_ME:9000 placeholder (one container per service)", prod)
+	}
+	// 之后 add mod etcd 追加的段走同一规则。
+	later := filepath.Join(t.TempDir(), "comet")
+	_, laterRoot, err := NewProject(NewOptions{Name: "comet", Module: "example.com/comet", Out: later, Services: []string{"game", "gate"}, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(laterRoot, AddOptions{Kind: "mod", Name: "etcd", Service: "gate", Warnings: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	if got := configLeaves(t, "gate", readProjectFile(t, laterRoot, "configs/service/config.gate.yaml"))["etcd.advertise_addr"]; got != "127.0.0.1:9001" {
+		t.Errorf("add mod etcd -service gate: etcd.advertise_addr = %q, want 127.0.0.1:9001", got)
+	}
+
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	raw, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := regexp.MustCompile(`(?m)^(  advertise_addr: ).*$`).ReplaceAllString(string(raw), "${1}"+advertise("game", ""))
+	if err := os.WriteFile(gatePath, []byte(same), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, io.Discard, io.Discard)
+	if code := configCheckExitCode(err); code != configExitCrossServiceErrors || !strings.Contains(err.Error(), "etcd.advertise_addr") {
+		t.Errorf("two services advertising one address: config check --all = %v (exit %d); want exit %d naming etcd.advertise_addr", err, code, configExitCrossServiceErrors)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := checkConfigAcrossServicesItem(root, m); item.Status != StatusFail || !strings.Contains(item.Detail, "etcd.advertise_addr") {
+		t.Errorf("doctor config-across-services = %s %q; want a FAIL naming etcd.advertise_addr", item.Status, item.Detail)
+	}
+}

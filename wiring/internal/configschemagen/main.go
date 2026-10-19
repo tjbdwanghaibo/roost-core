@@ -148,7 +148,7 @@ func keyLiteral(key configschema.Key) string {
 	fmt.Fprintf(&b, "{Name: %q, Kind: %q", key.Name, string(key.Kind))
 	for _, field := range []struct{ name, value string }{
 		{"Default", key.Default}, {"Min", key.Min}, {"Max", key.Max}, {"Help", key.Help},
-		{"Shared", key.Shared}, {"Follows", key.Follows}, {"Listen", key.Listen},
+		{"Shared", key.Shared}, {"Follows", key.Follows}, {"Listen", key.Listen}, {"Unique", key.Unique},
 	} {
 		if field.value != "" {
 			fmt.Fprintf(&b, ", %s: %q", field.name, field.value)

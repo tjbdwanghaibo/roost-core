@@ -24,6 +24,8 @@ import (
 //   - 监听地址：listen tag 的开关键为 true 的键是这个服务真正监听的地址。开发配置集（configs/service/config.<service>.yaml）
 //     的服务在同一台机器上一起运行（deploy/dev/run.sh），端口相同且主机重叠（相同，或任一方是 0.0.0.0 / :: / 空）
 //     即冲突；同一服务里的两个监听地址同样不能冲突。端口 0 由系统分配，不比较。生产示例每个服务一个容器，不比较端口。
+//   - 同一主机上各不相同的值：unique tag 组名相同的键，开发配置集里各服务的取值必须两两不同（例如 etcd.advertise_addr，
+//     写进服务注册、别的进程据此连接本服务的地址）。没写也没有缺省值的不比较；生产示例每个服务一个容器，不比较。
 //
 // 只用生成器认识的框架声明（serviceConfigSchema）：不需要编译工程，--keys-only 照样能查；业务自己声明的键不在其中。
 
@@ -134,6 +136,7 @@ func checkConfigAcrossServices(root string, m Manifest, set configFileSet) (prob
 	problems = append(problems, sharedValueProblems(docs, all)...)
 	if set.ports {
 		problems = append(problems, listenAddrProblems(docs, all)...)
+		problems = append(problems, uniqueValueProblems(docs, all)...)
 	}
 	return problems, len(docs)
 }
@@ -169,6 +172,34 @@ func sharedValueProblems(docs []serviceConfigDocument, all configschema.Schema) 
 		}
 		problems = append(problems, fmt.Sprintf("%s differs between services: %s; every service of the project reads one shared %s, so they would not see each other's messages / data: write the same value in each service's config",
 			resource, strings.Join(parts, ", "), resource))
+	}
+	return problems
+}
+
+// uniqueValueProblems 报告 unique 组里取值相同的两个服务（同一主机上的配置集才比较）。
+func uniqueValueProblems(docs []serviceConfigDocument, all configschema.Schema) []string {
+	type owner struct{ service, key, rel string }
+	seen := map[string]map[string]owner{} // 组名 → 取值 → 第一个写它的服务
+	var problems []string
+	for _, doc := range docs {
+		for _, key := range doc.schema.Keys {
+			if key.Unique == "" {
+				continue
+			}
+			value, _ := doc.effectiveValue(key, all)
+			if value == "" {
+				continue
+			}
+			if seen[key.Unique] == nil {
+				seen[key.Unique] = map[string]owner{}
+			}
+			if first, taken := seen[key.Unique][value]; taken {
+				problems = append(problems, fmt.Sprintf("%s %q is used by two services on one host: %s %s (%s) and %s %s (%s); each service must have its own value (other processes would reach the wrong service): give one of them another port",
+					key.Unique, value, first.service, first.key, first.rel, doc.service, key.Name, doc.rel))
+				continue
+			}
+			seen[key.Unique][value] = owner{doc.service, key.Name, doc.rel}
+		}
 	}
 	return problems
 }
@@ -239,6 +270,6 @@ func checkConfigAcrossServicesItem(root string, m Manifest) CheckItem {
 		item.Status, item.Detail = StatusFail, strings.Join(problems, "\n")
 		return item
 	}
-	item.Detail = "shared resource names agree and development listeners do not collide (" + strings.Join(summary, "; ") + ")"
+	item.Detail = "shared resource names agree; development listeners and per-service addresses do not collide (" + strings.Join(summary, "; ") + ")"
 	return item
 }

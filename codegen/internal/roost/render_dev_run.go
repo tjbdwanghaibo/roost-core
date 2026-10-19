@@ -34,6 +34,10 @@ func opsPort(m Manifest, service string) int {
 	return port
 }
 
+// advertisePort 是开发配置里 etcd.advertise_addr 的端口：9000 加 opsPort 的服务序号（ops 9100 的服务是 9000，
+// 9101 的是 9001……），两套端口按同一个序号分配，同一台机器上各服务互不相同。
+func advertisePort(m Manifest, service string) int { return opsPort(m, service) - 100 }
+
 // devRunOrder is the order deploy/dev/run.sh starts processes: the hosted
 // framework services first (the business service looks their capabilities up
 // in Init and would fail without them), then the business services.
@@ -242,6 +246,7 @@ SERVICE="%[1]s"
 SID="${SECOND_SID:-%[2]d}"
 OPS_PORT="${SECOND_OPS_PORT:-%[3]d}"
 CLIENT_PORT="${SECOND_CLIENT_PORT:-%[4]d}"
+ADVERTISE_PORT="${SECOND_ADVERTISE_PORT:-%[9]d}"
 SOURCE="configs/service/config.$SERVICE.yaml"
 TARGET="configs/service/config.${SERVICE}2.yaml"
 DEV_DIR=".dev"
@@ -253,14 +258,17 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 derive_config() {
   [ -f "$TARGET" ] && return 0
   [ -f "$SOURCE" ] || { echo "$SOURCE not found; run from the project root" >&2; exit 1; }
-  # Four overrides, each of which the second process cannot start without.
+  # Four overrides each of which the second process cannot start without, and
+  # its own etcd.advertise_addr (every process on one host advertises its own
+  # address; roost config check / doctor refuse two services sharing one).
   sed \
     -e "s/^\(  *\)sid: .*/\1sid: $SID/" \
     -e "s#^\(  *\)addr: \(.*\):%[5]d\$#\1addr: \2:$OPS_PORT#" \
     -e "s#^\(  *\)addr: \(.*\):%[6]d\$#\1addr: \2:$CLIENT_PORT#" \
+    -e "s#^\(  *\)advertise_addr: \(.*\):%[8]d\$#\1advertise_addr: \2:$ADVERTISE_PORT#" \
     -e "s#^\(  *\)dir: \(.*\)/wal/dataengine\$#\1dir: \2/wal/dataengine-$SID#" \
     "$SOURCE" > "$TARGET"
-  echo "wrote $TARGET (sid $SID, ops $OPS_PORT, client $CLIENT_PORT, its own WAL directory)"
+  echo "wrote $TARGET (sid $SID, ops $OPS_PORT, client $CLIENT_PORT, advertise $ADVERTISE_PORT, its own WAL directory)"
 }
 
 # A game that runs activities reads an activity groups file (activity.groups_file)
@@ -335,7 +343,7 @@ case "${1:-}" in
   *) echo "usage: sh deploy/dev/second-game.sh start|stop|restart|logs" >&2; exit 2 ;;
 esac
 `, gameService, secondGameSID, opsPort(m, gameService)+10, secondGameClientPort, opsPort(m, gameService), firstGameClientPort,
-		int64(serviceShutdownPlan(m, gameService).grace/time.Second))
+		int64(serviceShutdownPlan(m, gameService).grace/time.Second), advertisePort(m, gameService), advertisePort(m, gameService)+10)
 }
 
 const (

@@ -341,7 +341,14 @@ func checkConfigSections(root string, m Manifest) []CheckItem {
 			if body != "" && !strings.HasSuffix(body, "\n") {
 				body += "\n"
 			}
-			keys, text := missingConfigBlocks(body, sections, file.production)
+			wanted := sections
+			if !file.production {
+				wanted = make([]string, len(sections))
+				for i, section := range sections {
+					wanted[i] = localizeDevConfig(m, service, section) // 与 add 追加时同一份本服务端口
+				}
+			}
+			keys, text := missingConfigBlocks(body, wanted, file.production)
 			if len(keys) > 0 {
 				if file.secret {
 					text = indentText(text, "    ")

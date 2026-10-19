@@ -59,7 +59,7 @@ type config struct {
 	ServicePrefix string   `config:"etcd.service_prefix" shared:"etcd.service_prefix" example:"/{project}/services/" help:"服务注册的键前缀，不写取 etcd 包的缺省"`
 	LeaseTTL      int64    `config:"etcd.lease_ttl" min:"0" example:"10" help:"注册租约秒数，0 取 etcd 包的缺省"`
 	// AdvertiseAddr 是写进服务注册的地址；不写则注册不带地址。
-	AdvertiseAddr    string        `config:"etcd.advertise_addr" example:"127.0.0.1:9000" help:"写进服务注册的地址（其他进程据此连接本服务）"`
+	AdvertiseAddr    string        `config:"etcd.advertise_addr" unique:"etcd.advertise_addr" example:"127.0.0.1:9000" help:"写进服务注册的地址（其他进程据此连接本服务）"`
 	RegisterRetryMin time.Duration `config:"etcd.register_retry_min_interval" min:"0" help:"注册失败重试的最短间隔，0 取 etcd 包的缺省"`
 	RegisterRetryMax time.Duration `config:"etcd.register_retry_max_interval" min:"0" help:"注册失败重试的最长间隔，0 取 etcd 包的缺省"`
 }
