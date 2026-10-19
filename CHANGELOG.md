@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 合成／超休闲业务消费者与教学入口
+
+- 新增 `scripts/test-merge-casual-generated.sh`：正式 game 工程、Player DAO／Sender／持久 timer，业务规则保留在 `scripts/testdata/merge-casual/`。4×4 棋盘／仓库、合成／生产／出售撤销／订单、离线时间恢复、有序批次与跨设备代际、服务器限时挑战、广告签名与到账回执均走 Nest strict 提交。
+- 15 条基础 race 场景；真实入口在五条 strict WAL 未投影时 SIGKILL，冷加载完整存档与期限，续完服务器目标／领奖，第三进程重试生产／广告／领奖不重复到账。基础与真实消费者均 build／vet、ID／生成检查；专门入口登记根包覆盖表。
+- 128 条永久命令／广告账本满后拒绝，单批最多 16 步；教学 HMAC 广告回调不等于真实平台接线，登录票分配／客户端／长期归档／容量另行验收。框架运行时与公开协议未改，详见[合成／超休闲接入](docs/framework/MERGE-CASUAL-INTEGRATION.md)。
+
 ### 卡牌 RPG 业务消费者与教学入口
 
 - 新增 `scripts/test-card-rpg-generated.sh`：正式 game 工程、Player / CardRun DAO、实体定时器和 HeroStats 属性生成，业务规则留在 `scripts/testdata/card-rpg/`。配置快照、抽卡保底 / 私有随机身份、碎片与养成 / 编队、体力、双波次权威回合、首通 / 扫荡 / 任务均通过正式 Sender / Nest 提交。

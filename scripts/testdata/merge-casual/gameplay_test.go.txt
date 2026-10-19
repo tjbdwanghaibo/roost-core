@@ -1,0 +1,513 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	playerentity "example.com/merge-casual-practice/game/entities/player"
+	sender "example.com/merge-casual-practice/game/handler/syncsender"
+	casual "example.com/merge-casual-practice/game/mergecasual"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type mergeGetter map[int64]entity.IThreadSafeEntity
+
+func (g mergeGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing entity %d", id)
+}
+func (g mergeGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// 基础用例只替换提交器；真实 WAL 的未投影崩溃恢复另有显式入口。
+type mergeCommitter struct{}
+
+func (mergeCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const mergeNow int64 = 1800000000000
+const mergeKey = "abababababababababababababababababababababababababababababababab"
+const adKey = "private-test-provider-verification-key"
+
+type mergeFixture struct {
+	engine *nest.NestMgr
+	player *playerentity.Player
+	clock  atomic.Int64
+	rules  casual.Rules
+}
+
+func loadMergeRules(t *testing.T, r casual.Rules) casual.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	raw, _ := json.Marshal(r)
+	if err := os.WriteFile(filepath.Join(dir, "merge.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := casual.OpenCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = casual.CaptureRules(store.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func newMergeFixture(t *testing.T) *mergeFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterMergeCasualNestHandlers()
+	RegisterTickPlayerTimerGenNestHandlers()
+	f := &mergeFixture{rules: loadMergeRules(t, casual.DemoRules())}
+	f.clock.Store(mergeNow)
+	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	id, err := entity.BuildEntityID(91001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = e.(*playerentity.Player)
+	g := mergeGetter{id: e}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(mergeCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := playerentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.engine.Shutdown(context.Background())
+		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	if _, err := sender.NewMergeCasualSender(f.engine).Sync_MergeLogin(context.Background(), id, mergeKey, 1, mergeNow, f.rules); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// 测试只在 Sender 已完成、并发 goroutine 全部退出后查看实体快照。
+func (f *mergeFixture) state(t *testing.T) casual.State {
+	t.Helper()
+	s, err := casual.Decode(f.player.Dao().GetState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *mergeFixture) command(t *testing.T, kind string, a, b int, value int64) casual.Command {
+	t.Helper()
+	s := f.state(t)
+	return casual.Command{Epoch: s.Epoch, Seq: uint64(len(s.Receipts)) + 1, Base: s.Revision, Kind: kind, A: a, B: b, Value: value}
+}
+func (f *mergeFixture) batch(commands []casual.Command) ([]casual.Receipt, error) {
+	return sender.NewMergeCasualSender(f.engine).Sync_MergeBatch(context.Background(), f.player.ID(), commands, f.clock.Load())
+}
+func (f *mergeFixture) do(t *testing.T, kind string, a, b int, value int64) casual.Receipt {
+	t.Helper()
+	r, err := f.batch([]casual.Command{f.command(t, kind, a, b, value)})
+	if err != nil {
+		t.Fatal(kind, err)
+	}
+	return r[0]
+}
+func (f *mergeFixture) refuse(t *testing.T, c casual.Command) {
+	t.Helper()
+	before := f.player.Dao().GetState()
+	timer := f.player.Dao().GetWakeTimer()
+	if _, err := f.batch([]casual.Command{c}); err == nil {
+		t.Fatal("invalid command accepted", c)
+	}
+	if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer {
+		t.Fatal("refused operation changed state or timer")
+	}
+}
+func mergeWin(t *testing.T, engine *nest.NestMgr, id int64, now int64) {
+	t.Helper()
+	s := sender.NewMergeCasualSender(engine)
+	for _, pair := range [][2]int{{0, 1}, {2, 3}, {1, 3}, {4, 5}, {6, 7}, {5, 7}, {3, 7}} {
+		view, err := s.Sync_MergeView(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := casual.Command{Epoch: view.Epoch, Seq: view.NextSeq, Base: view.Revision, Kind: "merge", A: pair[0], B: pair[1]}
+		if _, err := s.Sync_MergeBatch(context.Background(), id, []casual.Command{c}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestMergeCasualBoardAuthorityAndMergeRules(t *testing.T) {
+	f := newMergeFixture(t)
+	for _, c := range []casual.Command{f.command(t, "merge", 0, 0, 0), f.command(t, "merge", 0, 8, 0), f.command(t, "move", 0, 12, 0), f.command(t, "move", 10, 11, 0), f.command(t, "merge", 0, 99, 0)} {
+		f.refuse(t, c)
+	}
+	f.do(t, "move", 0, 10, 0)
+	f.do(t, "move", 10, 8, 0)
+	s := f.state(t)
+	if s.Board[10].Item.Family != 2 || s.Board[8].Item.Family != 1 {
+		t.Fatal("swap lost identity")
+	}
+	f.do(t, "merge", 8, 1, 0)
+	s = f.state(t)
+	if s.Board[8].Item != (casual.Item{}) || s.Board[1].Item != (casual.Item{Family: 1, Level: 2}) {
+		t.Fatal("merge did not consume exactly two items")
+	}
+}
+func TestMergeCasualWarehouseAndUnlockHaveAtomicCosts(t *testing.T) {
+	f := newMergeFixture(t)
+	f.do(t, "store", 0, 0, 0)
+	f.refuse(t, f.command(t, "store", 1, 0, 0))
+	f.refuse(t, f.command(t, "restore", 0, 12, 0))
+	f.do(t, "unlock", 12, 0, 0)
+	f.do(t, "restore", 0, 12, 0)
+	f.refuse(t, f.command(t, "unlock", 12, 0, 0))
+	s := f.state(t)
+	if s.Gold != 25 || s.Warehouse[0] != (casual.Item{}) || s.Board[12].Locked || s.Board[12].Item.Level != 1 {
+		t.Fatal("warehouse / unlock duplicated cost or item")
+	}
+}
+func TestMergeCasualProducerReplayDoesNotRerollOrChargeTwice(t *testing.T) {
+	f := newMergeFixture(t)
+	c := f.command(t, "produce", 10, 0, 0)
+	var wg sync.WaitGroup
+	receipts := make([][]casual.Receipt, 8)
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); receipts[i], errs[i] = f.batch([]casual.Command{c}) }(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil || !reflect.DeepEqual(receipts[0], receipts[i]) {
+			t.Fatal("concurrent replay diverged", err)
+		}
+	}
+	s := f.state(t)
+	if s.Energy != 9 || s.Charges != 2 || s.Board[10].Item != receipts[0][0].Drop || len(s.Receipts) != 1 {
+		t.Fatal("producer duplicated")
+	}
+	changed := c
+	changed.A = 11
+	f.refuse(t, changed)
+	f.refuse(t, f.command(t, "produce", 10, 0, 0))
+	f.do(t, "produce", 11, 0, 0)
+	f.do(t, "merge", 0, 1, 0)
+	f.do(t, "produce", 0, 0, 0)
+	f.do(t, "merge", 2, 3, 0)
+	f.refuse(t, f.command(t, "produce", 2, 0, 0))
+	if f.state(t).Energy != 7 {
+		t.Fatal("producer refusal spent energy")
+	}
+}
+func TestMergeCasualSellUndoCannotDuplicateItemsOrGold(t *testing.T) {
+	f := newMergeFixture(t)
+	sale := f.do(t, "sell", 0, 0, 0)
+	undo := f.do(t, "undo", 0, 0, int64(sale.Command.Seq))
+	if s := f.state(t); s.Gold != 30 || s.Board[0].Item.Level != 1 {
+		t.Fatal("undo changed economy")
+	}
+	if _, err := f.batch([]casual.Command{undo.Command}); err != nil {
+		t.Fatal(err)
+	}
+	f.refuse(t, f.command(t, "undo", 0, 0, int64(sale.Command.Seq)))
+	sale = f.do(t, "sell", 0, 0, 0)
+	f.clock.Add(10001)
+	f.refuse(t, f.command(t, "undo", 0, 0, int64(sale.Command.Seq)))
+	f.do(t, "recover", 0, 0, 0)
+	f.refuse(t, f.command(t, "undo", 0, 0, int64(sale.Command.Seq)))
+	if f.state(t).Gold != 31 {
+		t.Fatal("late undo changed proceeds")
+	}
+}
+func TestMergeCasualOrdersConsumeRecipeAndRewardOnce(t *testing.T) {
+	f := newMergeFixture(t)
+	for _, p := range [][2]int{{0, 1}, {2, 3}, {4, 5}, {3, 5}} {
+		f.do(t, "merge", p[0], p[1], 0)
+	}
+	f.refuse(t, f.command(t, "order", 5, 1, 0))
+	r := f.do(t, "order", 1, 5, 0)
+	for range 4 {
+		if _, err := f.batch([]casual.Command{r.Command}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.refuse(t, f.command(t, "order", 1, 5, 0))
+	s := f.state(t)
+	if s.Gold != 50 || s.Orders != 1 || s.Board[1].Item != (casual.Item{}) || s.Board[5].Item != (casual.Item{}) {
+		t.Fatal("order recipe or receipt incorrect")
+	}
+}
+func TestMergeCasualOfflineBatchIsAtomicAndRejectsCloudConflicts(t *testing.T) {
+	f := newMergeFixture(t)
+	a := f.command(t, "merge", 0, 1, 0)
+	b := a
+	b.Seq++
+	b.Base++
+	b.A = 2
+	b.B = 3
+	bad := b
+	bad.B = 12
+	before := f.player.Dao().GetState()
+	if _, err := f.batch([]casual.Command{a, bad}); err == nil || f.player.Dao().GetState() != before {
+		t.Fatal("invalid offline batch partially committed")
+	}
+	r, err := f.batch([]casual.Command{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := f.batch([]casual.Command{a, b})
+	if err != nil || !reflect.DeepEqual(r, retry) {
+		t.Fatal("offline replay changed")
+	}
+	stale := f.command(t, "move", 1, 10, 0)
+	stale.Base--
+	f.refuse(t, stale)
+	gap := stale
+	gap.Base++
+	gap.Seq++
+	f.refuse(t, gap)
+	f.refuse(t, f.command(t, "upload_snapshot", 0, 0, 999999))
+}
+func TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules(t *testing.T) {
+	f := newMergeFixture(t)
+	done := f.do(t, "produce", 10, 0, 0)
+	old := f.command(t, "merge", 0, 1, 0)
+	patched := f.rules
+	patched.Version = "new-content"
+	patched.UnlockGold = 99
+	s := sender.NewMergeCasualSender(f.engine)
+	ctx := context.Background()
+	view, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, f.clock.Load(), patched)
+	if err != nil || view.Epoch != 2 || view.ConfigHash != f.rules.Hash() {
+		t.Fatal("takeover changed frozen board rules", err)
+	}
+	same, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, f.clock.Load(), patched)
+	if err != nil || same != view {
+		t.Fatal("login retry advanced epoch", err)
+	}
+	f.refuse(t, old)
+	if r, err := s.Sync_MergeReceipt(ctx, f.player.ID(), 2, done.Command.Seq); err != nil || r != done {
+		t.Fatal("new device cannot resolve old outcome", err)
+	}
+	if _, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 1, f.clock.Load(), f.rules); err == nil {
+		t.Fatal("old login ticket accepted")
+	}
+	f.do(t, "unlock", 12, 0, 0)
+	if f.state(t).Gold != 25 {
+		t.Fatal("existing board silently repriced")
+	}
+}
+func TestMergeCasualChallengeServerWinAndConcurrentClaim(t *testing.T) {
+	f := newMergeFixture(t)
+	start := f.do(t, "start", 0, 0, 0)
+	f.refuse(t, f.command(t, "claim", 0, 0, int64(start.Command.Seq)))
+	mergeWin(t, f.engine, f.player.ID(), f.clock.Load())
+	if f.state(t).Challenge.Status != "won" || f.player.Dao().GetWakeTimer() != 0 {
+		t.Fatal("server goal / timer not settled")
+	}
+	f.refuse(t, f.command(t, "merge", 7, 7, 0))
+	claim := f.command(t, "claim", 0, 0, int64(start.Command.Seq))
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); _, errs[i] = f.batch([]casual.Command{claim}) }(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.do(t, "claim", 0, 0, int64(start.Command.Seq))
+	if s := f.state(t); s.Gold != 60 || !s.Challenge.Claimed || s.Energy != 8 {
+		t.Fatal("challenge paid twice")
+	}
+}
+func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testing.T) {
+	f := newMergeFixture(t)
+	first := f.do(t, "start", 0, 0, 0)
+	deadline := f.state(t).Challenge.Deadline
+	timer := f.player.Dao().GetWakeTimer()
+	if _, err := f.batch([]casual.Command{first.Command}); err != nil || f.player.Dao().GetWakeTimer() != timer {
+		t.Fatal("retry rearmed timer")
+	}
+	f.clock.Store(deadline + 3600000)
+	tick := sender.NewTickPlayerTimerGenSender(f.engine)
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	s := f.state(t)
+	if s.Challenge.Status != "lost" || s.Energy != 10 || s.Charges != 3 || f.player.Dao().GetWakeTimer() != 0 {
+		t.Fatal("overdue challenge did not settle")
+	}
+	before := s.Digest()
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil || f.state(t).Digest() != before {
+		t.Fatal("deadline fired twice")
+	}
+	f.do(t, "claim", 0, 0, int64(first.Command.Seq))
+	f.do(t, "start", 0, 0, 0)
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.state(t); s.Challenge.Status != "active" || s.Gold != 30 {
+		t.Fatal("old timer or failed goal paid reward")
+	}
+	// 请求先于到期 tick 到达，也必须按服务器期限判负；不能靠延迟调度获得超时奖励。
+	f.clock.Store(f.state(t).Challenge.Deadline)
+	mergeWin(t, f.engine, f.player.ID(), f.clock.Load())
+	f.do(t, "claim", 0, 0, int64(f.state(t).Challenge.ID))
+	if f.state(t).Challenge.Status != "lost" || f.state(t).Gold != 30 || f.player.Dao().GetWakeTimer() != 0 {
+		t.Fatal("late commands bypassed server deadline")
+	}
+}
+
+func TestMergeCasualUndoRestoresStateRandomResultAndTimer(t *testing.T) {
+	f := newMergeFixture(t)
+	refused := errors.New("refuse after business mutation")
+	ctx := context.Background()
+	for _, kind := range []string{"produce", "start"} {
+		c := f.command(t, kind, 10, 0, 0)
+		before := f.player.Dao().GetState()
+		timer := f.player.Dao().GetWakeTimer()
+		name := nest.NewHandlerName("merge_undo_" + kind)
+		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+			if _, err := handlerMergeBatch(es[0].(IMergePlayerEntity), []casual.Command{c}, f.clock.Load()); err != nil {
+				return nil, err
+			}
+			return nil, refused
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		if _, err := f.engine.Request(ctx, name, f.player.ID(), nil); !errors.Is(err, refused) {
+			t.Fatal(err)
+		}
+		if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 0 {
+			t.Fatal("undo left state or timer")
+		}
+		expected, err := casual.Decode(before)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := expected.Apply(c, f.clock.Load())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := f.batch([]casual.Command{c})
+		if err != nil || !reflect.DeepEqual(got[0], want) {
+			t.Fatal("retry rerolled or changed admission", err)
+		}
+	}
+}
+func TestMergeCasualOfflineRecoveryKeepsRemainderCapsAndRejectsBackwardClock(t *testing.T) {
+	f := newMergeFixture(t)
+	f.do(t, "produce", 10, 0, 0)
+	f.do(t, "produce", 11, 0, 0)
+	f.clock.Add(4500)
+	f.do(t, "recover", 0, 0, 0)
+	s := f.state(t)
+	if s.Energy != 9 || s.EnergyAt != mergeNow+3000 || s.Charges != 1 {
+		t.Fatal("offline energy remainder lost")
+	}
+	f.clock.Store(mergeNow + 1000000)
+	r := f.do(t, "recover", 0, 0, 0)
+	s = f.state(t)
+	if s.Energy != 10 || s.Charges != 3 || s.Board[10].Item != s.Receipts[0].Drop {
+		t.Fatal("offline capacity overfilled or auto-produced")
+	}
+	before := s.Digest()
+	if _, err := f.batch([]casual.Command{r.Command}); err != nil || f.state(t).Digest() != before {
+		t.Fatal("offline replay paid again")
+	}
+	f.clock.Add(-1)
+	f.refuse(t, f.command(t, "recover", 0, 0, 0))
+}
+func TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota(t *testing.T) {
+	f := newMergeFixture(t)
+	f.do(t, "produce", 10, 0, 0)
+	f.do(t, "produce", 11, 0, 0)
+	s := sender.NewMergeCasualSender(f.engine)
+	ctx := context.Background()
+	proof := casual.SignReward(casual.SignedReward{ID: "ad-1", PlayerID: f.player.ID(), ExpiresAt: mergeNow + 1000, Kind: "energy"}, adKey)
+	grant := func(p casual.SignedReward) (casual.View, error) {
+		return s.Sync_MergeAd(ctx, f.player.ID(), p, adKey, 1, f.clock.Load())
+	}
+	before := f.player.Dao().GetState()
+	for _, p := range []casual.SignedReward{{ID: "fake", PlayerID: f.player.ID(), ExpiresAt: mergeNow + 1000, Kind: "energy"}, casual.SignReward(casual.SignedReward{ID: "wrong-owner", PlayerID: f.player.ID() + 1, ExpiresAt: mergeNow + 1000, Kind: "energy"}, adKey), casual.SignReward(casual.SignedReward{ID: "expired", PlayerID: f.player.ID(), ExpiresAt: mergeNow, Kind: "energy"}, adKey)} {
+		if _, err := grant(p); err == nil || f.player.Dao().GetState() != before {
+			t.Fatal("invalid advertisement paid")
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); _, errs[i] = grant(proof) }(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal("concurrent ad callback failed", err)
+		}
+	}
+	f.clock.Add(1001)
+	if _, err := grant(proof); err != nil {
+		t.Fatal("valid receipt expired on retry", err)
+	}
+	changed := proof
+	changed.ExpiresAt++
+	changed = casual.SignReward(changed, adKey)
+	if _, err := grant(changed); err == nil {
+		t.Fatal("same provider ID changed identity")
+	}
+	if s := f.state(t); s.Energy != 10 || len(s.Ads) != 1 {
+		t.Fatal("advertisement duplicated energy")
+	}
+	// 持续消耗体力以触达同一 UTC 日的三次上限；不篡改实体资产。
+	for i := 2; i <= 4; i++ {
+		f.do(t, "start", 0, 0, 0)
+		f.clock.Add(f.rules.ChallengeMillis)
+		f.do(t, "recover", 0, 0, 0)
+		active := f.state(t).Challenge.ID
+		f.do(t, "claim", 0, 0, int64(active))
+		f.do(t, "start", 0, 0, 0)
+		p := casual.SignReward(casual.SignedReward{ID: fmt.Sprintf("ad-%d", i), PlayerID: f.player.ID(), ExpiresAt: f.clock.Load() + 1000, Kind: "energy"}, adKey)
+		_, err := grant(p)
+		if (i <= 3) != (err == nil) {
+			t.Fatal("daily quota mismatch", i, err)
+		}
+		// 当前挑战待到期，下一轮只关闭，不重复开第二个。
+		if i < 4 {
+			f.clock.Add(f.rules.ChallengeMillis)
+			f.do(t, "recover", 0, 0, 0)
+			f.do(t, "claim", 0, 0, int64(f.state(t).Challenge.ID))
+		}
+	}
+	if len(f.state(t).Ads) != 3 {
+		t.Fatal("quota lost proof identities")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", f.state(t).View()), adKey) {
+		t.Fatal("provider secret leaked")
+	}
+}
