@@ -13,7 +13,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"os"
@@ -131,6 +133,17 @@ func (h *cardRuntime) close(t *testing.T) {
 	if err := h.runtime.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
+}
+
+// cardTimerCounter 读 CardRun 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+func cardTimerCounter(name string) int64 {
+	var total int64
+	for _, m := range metrics.Snapshot() {
+		if m.Name == name && m.Labels["driver"] == runentity.TimerDriver.Name() {
+			total += m.Value
+		}
+	}
+	return total
 }
 
 type cardBarrier struct {
@@ -357,45 +370,71 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, patched, h.clock.Load()); err != nil {
 		t.Fatal(err)
 	}
-	// 冷加载时 Host 把存量最早期限报告给驱动索引；这里不启动投递循环，直接调用循环每轮所做的 DeliverDue，
-	// 由驱动（不是测试手动发 Tick）给这个实体投递一次加载后的补触发。离线一小时只补这一次，不追帧。
+	// 冷加载时 Host 把存量最早期限报告给驱动索引。到这里投递循环还没启动，上面直接读 DAO 不会与 Tick 并发。
 	if due, ok := runentity.TimerDriver.DueOf(run); !ok || due.UnixMilli() != b.State.Deadline {
 		t.Fatalf("cold load did not report the stored turn deadline to the driver: due=%v ok=%v want=%d", due, ok, b.State.Deadline)
 	}
-	if delivered := runentity.TimerDriver.DeliverDue(ctx); delivered != 1 {
-		t.Fatalf("driver delivered %d overdue ticks after cold load, want 1", delivered)
+	// 启动驱动自己的投递循环（与进程装配同一个入口），用例不调用 DeliverDue、不手发 Tick：循环发现已过期的回合，
+	// 给这个实体投递一次加载后的补触发。离线一小时只补这一次，不追帧。业务时钟在两次推进之间冻结，循环按
+	// MaxWait 重读时钟，所以“何时到期”完全由用例推进时钟决定。
+	deliveredBefore, redeliveredBefore := cardTimerCounter(entitytimer.DeliveredMetric), cardTimerCounter(entitytimer.RedeliveredMetric)
+	if err := runentity.TimerDriver.Start(); err != nil {
+		t.Fatal(err)
 	}
-	waitUntil := time.Now().Add(10 * time.Second)
-	for {
-		view, err := s.Sync_CardBattle(ctx, h.runID, h.playerID)
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := runentity.TimerDriver.Stop(stopCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	// awaitLoopTurn 等循环投递的 Tick 跑完第 seq 条命令（超时），且提交后新期限重新进入索引、投递计数到 delivered。
+	// 新期限在 Tick 提交后（nest.AfterCommit）报告、计数在投递准入之后才加，都可能略晚于读到的提交结果，所以有界轮询。
+	awaitLoopTurn := func(seq uint64, delivered int64, firedAt int64) cardrpg.Battle {
+		t.Helper()
+		waitUntil := time.Now().Add(10 * time.Second)
+		for {
+			view, err := s.Sync_CardBattle(ctx, h.runID, h.playerID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view.NextSeq > seq {
+				break
+			}
+			if time.Now().After(waitUntil) {
+				t.Fatalf("driver loop did not run turn %d (business time %d)", seq, h.clock.Load())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		b, err := cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if view.NextSeq >= 3 {
-			break
+		if b.NextSeq() != seq+1 || b.Log[seq-1].Command.Kind != "timeout" || b.State.Deadline != firedAt+cardrpg.TurnMillis || b.Rules.Version != "cards-v1" {
+			t.Fatalf("turn %d: next=%d deadline=%d want %d: loop skipped / repeated turns or changed frozen rules", seq, b.NextSeq(), b.State.Deadline, firedAt+cardrpg.TurnMillis)
 		}
-		if time.Now().After(waitUntil) {
-			t.Fatal("driver tick after cold load did not run the overdue turn")
+		for {
+			due, ok := runentity.TimerDriver.DueOf(run)
+			got := cardTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore
+			if ok && due.UnixMilli() == b.State.Deadline && got == delivered {
+				break
+			}
+			if got > delivered || time.Now().After(waitUntil) {
+				t.Fatalf("after turn %d: due=%v ok=%v want %d; loop deliveries=%d want %d", seq, due, ok, b.State.Deadline, got, delivered)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		time.Sleep(10 * time.Millisecond)
+		return b
 	}
-	b, err = cardrpg.DecodeBattle(run.(*runentity.CardRun).Dao().GetState())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b.NextSeq() != 3 || b.Log[1].Command.Kind != "timeout" || b.State.Deadline != h.clock.Load()+cardrpg.TurnMillis || b.Rules.Version != "cards-v1" {
-		t.Fatal("cold timer skipped turns / changed frozen rules")
-	}
-	// 新期限在 Tick 提交后（nest.AfterCommit）报告，可能略晚于上面读到的提交结果，所以有界等待。
-	for {
-		due, ok := runentity.TimerDriver.DueOf(run)
-		if ok && due.UnixMilli() == b.State.Deadline {
-			break
-		}
-		if time.Now().After(waitUntil) {
-			t.Fatalf("next turn deadline not reported after the catch-up commit: due=%v ok=%v want=%d", due, ok, b.State.Deadline)
-		}
-		time.Sleep(10 * time.Millisecond)
+	// 加载后补触发：从当前业务时间（离线一小时之后）起算下一回合，循环只投递这一次。
+	b = awaitLoopTurn(2, 1, h.clock.Load())
+	// 下一个期限：业务时间直接推进到期限本身，循环（至多 MaxWait 后重读时钟）按时投递，这一回合从期限时刻起算；
+	// 期限之前业务时间冻结，条目不会到期，计数也就不会多出一次。
+	next := b.State.Deadline
+	h.clock.Store(next)
+	b = awaitLoopTurn(3, 2, next)
+	if got := cardTimerCounter(entitytimer.RedeliveredMetric) - redeliveredBefore; got != 0 {
+		t.Fatalf("driver redelivered %d ticks: a Tick commit did not report its next deadline", got)
 	}
 	if result := finishCardBattle(t, h.scheduler, h.runID, h.playerID, &h.clock); result.Status != "won" {
 		t.Fatal("recovered battle did not win")
@@ -423,6 +462,10 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "claimed.json"), expectedRaw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// 先停投递循环再关 Nest：停机之后循环不能再向已关闭的引擎投递。
+	if err := runentity.TimerDriver.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
 	h.close(t)
 	verify := exec.Command(os.Args[0], "-test.run=^TestCardRPGRealCrashRecovery$", "-test.v", "-test.timeout=60s")
 	verify.Env = append(os.Environ(), "ROOST_CARD_RPG_CHILD=verify")
@@ -432,5 +475,5 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected strict records; draw/growth unchanged; driver delivered one overdue turn after cold load; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
+	t.Log(fmt.Sprintf("SIGKILL recovery: %d unprojected strict records; draw/growth unchanged; driver loop delivered one overdue turn after cold load and the next turn at its deadline; won, claimed and retried after another process restart exactly once", barrier.Unprojected))
 }
