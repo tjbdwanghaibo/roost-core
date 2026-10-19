@@ -410,6 +410,62 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 	}
 }
 
+// TestConfigCheckRunsCrossModRulesThroughTheProcess：`roost config check` 与进程 --check-config、doctor config-check
+// 对同一份配置给同一个结论。跨键与跨 Mod 规则（app.ModConfigCrossChecker，例如 saga 的效果流必须就是同进程 DataEngine
+// 的那条）只在编译后的进程里，config check 经同一个 projectProcess.checkConfig 运行它，不复制规则。
+func TestConfigCheckRunsCrossModRulesThroughTheProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles the generated game-demo")
+	}
+	t.Parallel()
+	root := buildableGameDemo(t)
+	var out, errOut bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--service", "game"}, &out, &errOut); err != nil {
+		t.Fatalf("fresh game-demo config check: %v\n%s%s", err, out.String(), errOut.String())
+	}
+	configPath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.Replace(string(raw), "\nsaga:\n", "\nsaga:\n  start_effect_stream: ROOST_EFFECTS\n", 1)
+	if mutated == string(raw) {
+		t.Fatal("config.game.yaml has no saga: section; update this test")
+	}
+	if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	err = Run([]string{"config", "check", "--root", root, "--service", "game"}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "saga.start_effect_stream") || !strings.Contains(err.Error(), "dataengine.effects.stream") {
+		t.Fatalf("mismatched saga effect stream: config check = %v (stdout %q); want an error naming both keys, like --check-config and doctor", err, out.String())
+	}
+	if code := configCheckExitCode(err); code != configExitCrossModErrors {
+		t.Errorf("cross-mod rule failure: exit %d, want %d", code, configExitCrossModErrors)
+	}
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 新生成的 game-demo（十个服务）整体检查：键、跨 Mod 规则、跨服务一致性全部通过，没有误报，退出码 0。
+	out.Reset()
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--json"}, &out, &errOut); err != nil {
+		t.Fatalf("fresh game-demo config check --all: %v\n%s", err, out.String())
+	}
+	var report configCheckReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "ok" || report.ExitCode != 0 || !report.CrossService.Checked || report.CrossService.Services < 10 {
+		t.Errorf("fresh game-demo --all --json = %+v", report)
+	}
+	for _, f := range report.Files {
+		if f.Keys != checkOK || f.CrossMod != checkOK {
+			t.Errorf("fresh game-demo %s: %+v", f.Path, f)
+		}
+	}
+}
+
 func buildableGameDemo(t *testing.T) string {
 	t.Helper()
 	root := copyOfNewProject(t, "game-demo")
@@ -856,5 +912,315 @@ func TestGeneratedSharedResourceNamesFollowTheProject(t *testing.T) {
 				t.Errorf("%s %s: an unreplaced name placeholder is left:\n%s", tc.project, rel, body)
 			}
 		}
+	}
+}
+
+// 同一工程各服务之间的配置一致性（维护者 2026-10-19 批准）：跨进程共享的资源名（声明里带 shared 的键，例如
+// nats.prefix）在各服务必须相同；开发配置集里的服务在同一台机器上一起跑，监听地址（声明里带 listen 的键，例如
+// ops.addr）的端口不得冲突。单个进程看不到别的服务，规则只能在这里查：config check --all 与 doctor 的
+// config-across-services 用同一个实现（checkConfigAcrossServices）。修前两种改法都“通过”。
+func TestConfigCheckAllComparesSharedNamesAndPortsAcrossServices(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "nats"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	pristine, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err != nil && strings.Contains(err.Error(), "cross-service") {
+		t.Fatalf("fresh two-service project: %v", err)
+	}
+	for _, tc := range []struct {
+		name, from, to string
+		want           []string
+	}{
+		{"nats prefix", "\n  prefix: planet\n", "\n  prefix: other\n", []string{"nats.prefix", "game", "gate", `"planet"`, `"other"`}},
+		{"ops port", "\n  addr: 127.0.0.1:9101\n", "\n  addr: 0.0.0.0:9100\n", []string{"ops.addr", "game", "gate", "9100"}},
+	} {
+		mutated := strings.Replace(string(pristine), tc.from, tc.to, 1)
+		if mutated == string(pristine) {
+			t.Fatalf("%s: config.gate.yaml has no %q; update this test", tc.name, tc.from)
+		}
+		if err := os.WriteFile(gatePath, []byte(mutated), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard)
+		for _, want := range tc.want {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: config check --all = %v; want an error naming %s", tc.name, err, want)
+				break
+			}
+		}
+		var report bytes.Buffer
+		_ = DoctorWithOptions(context.Background(), root, DoctorOptions{JSONOutput: true}, &report) // 夹具编译不过，doctor 本身失败
+		var decoded DoctorReport
+		if err := json.Unmarshal(report.Bytes(), &decoded); err != nil {
+			t.Fatalf("%s: doctor JSON: %v\n%s", tc.name, err, report.String())
+		}
+		found := false
+		for _, item := range decoded.Items {
+			if item.Name == "config-across-services" {
+				found = true
+				if item.Status != StatusFail || !strings.Contains(item.Detail, tc.want[0]) {
+					t.Errorf("%s: doctor config-across-services = %s %q; want a FAIL naming %s", tc.name, item.Status, item.Detail, tc.want[0])
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: doctor has no config-across-services item", tc.name)
+		}
+	}
+}
+
+// --keys-only 只做键检查：不编译工程、不跑跨 Mod 规则，并在输出里写明没查；--json 给出每份文件三步的结论与退出码。
+// 编译不过的工程上，完整检查以 5（检查没有跑全）结束，--keys-only 以 0 结束；键错了两种都是 2。
+func TestConfigCheckKeysOnlyAndJSONReport(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "nats"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, &out, io.Discard); err != nil {
+		t.Fatalf("--keys-only on a valid project = %v (exit %d)\n%s", err, configCheckExitCode(err), out.String())
+	}
+	if !strings.Contains(out.String(), "cross-mod rules not checked (--keys-only)") || strings.Contains(out.String(), "does not compile") {
+		t.Errorf("--keys-only output must say the cross-mod rules were not checked and must not compile the project:\n%s", out.String())
+	}
+
+	decode := func(args ...string) (configCheckReport, error) {
+		t.Helper()
+		var buf bytes.Buffer
+		err := Run(append([]string{"config", "check", "--root", root, "--json"}, args...), &buf, io.Discard)
+		var report configCheckReport
+		if decodeErr := json.Unmarshal(buf.Bytes(), &report); decodeErr != nil {
+			t.Fatalf("%v --json: stdout is not one JSON report: %v\n%s", args, decodeErr, buf.String())
+		}
+		return report, err
+	}
+	report, err := decode("--all")
+	if code := configCheckExitCode(err); code != configExitNotFullyChecked || report.ExitCode != code || report.Status != "not_fully_checked" {
+		t.Fatalf("uncompilable project --all --json: exit %d, report %+v; want exit %d not_fully_checked", code, report, configExitNotFullyChecked)
+	}
+	if len(report.Files) != 2 || !report.CrossService.Checked || len(report.CrossService.Errors) != 0 {
+		t.Errorf("report files / cross_service = %+v / %+v", report.Files, report.CrossService)
+	}
+	for _, f := range report.Files {
+		if f.Keys != checkOK || f.CrossMod != checkNotChecked || !strings.HasPrefix(f.CrossModReason, "project_does_not_compile") {
+			t.Errorf("%s: %+v; want keys ok, cross_mod not_checked because the project does not compile", f.Path, f)
+		}
+	}
+	report, err = decode("--service", "game", "--keys-only")
+	if err != nil || report.Status != "ok" || report.Files[0].CrossModReason != "keys_only" || report.CrossService.Checked {
+		t.Errorf("--service game --keys-only --json = %v, %+v; want ok, cross_mod keys_only, cross_service not checked", err, report)
+	}
+
+	gamePath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	raw, err := os.ReadFile(gamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gamePath, []byte(strings.Replace(string(raw), "\nnats:\n", "\nnats:\n  urll: nats://x\n", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = decode("--all", "--keys-only")
+	if code := configCheckExitCode(err); code != configExitKeyErrors || report.Status != "key_errors" || report.Files[0].Keys != checkFailed || !strings.Contains(strings.Join(report.Files[0].KeyErrors, " "), "nats.urll") {
+		t.Errorf("misspelled key --keys-only --json: exit %d, %+v; want exit %d with nats.urll in game's key_errors", code, report.Files, configExitKeyErrors)
+	}
+}
+
+// etcd.advertise_addr 是写进服务注册、别的进程据此连接本服务的地址（维护者 2026-10-19 决定）：同一台机器上一起跑的
+// 服务（开发配置集）必须各不相同。生成器按服务序号给每个带 etcd 的服务不同的端口（与 ops 端口同一套序号，9000 + 序号），
+// 新建工程与之后 add mod 追加的段一样；两个服务写成同一个地址时 config check --all（退出码 4）与 doctor
+// config-across-services 报出（声明上的 unique tag，规则只在声明里一处）。修前两个服务都是 127.0.0.1:9000，检查通过。
+func TestEtcdAdvertiseAddrDiffersPerServiceAndIsChecked(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertise := func(service, suffix string) string {
+		leaves := configLeaves(t, service, readProjectFile(t, root, "configs/service/config."+service+suffix+".yaml"))
+		return leaves["etcd.advertise_addr"]
+	}
+	if game, gate := advertise("game", ""), advertise("gate", ""); game == "" || game == gate {
+		t.Errorf("generated etcd.advertise_addr: game %q, gate %q; want two different addresses", game, gate)
+	} else if game != "127.0.0.1:9000" || gate != "127.0.0.1:9001" {
+		t.Errorf("generated etcd.advertise_addr: game %q, gate %q; want 127.0.0.1:9000 / 127.0.0.1:9001 (9000 + the ops port's service index)", game, gate)
+	}
+	if prod := advertise("gate", ".prod.example"); prod != "CHANGE_ME:9000" {
+		t.Errorf("production example etcd.advertise_addr = %q; want the CHANGE_ME:9000 placeholder (one container per service)", prod)
+	}
+	// 之后 add mod etcd 追加的段走同一规则。
+	later := filepath.Join(t.TempDir(), "comet")
+	_, laterRoot, err := NewProject(NewOptions{Name: "comet", Module: "example.com/comet", Out: later, Services: []string{"game", "gate"}, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(laterRoot, AddOptions{Kind: "mod", Name: "etcd", Service: "gate", Warnings: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	if got := configLeaves(t, "gate", readProjectFile(t, laterRoot, "configs/service/config.gate.yaml"))["etcd.advertise_addr"]; got != "127.0.0.1:9001" {
+		t.Errorf("add mod etcd -service gate: etcd.advertise_addr = %q, want 127.0.0.1:9001", got)
+	}
+
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	raw, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := regexp.MustCompile(`(?m)^(  advertise_addr: ).*$`).ReplaceAllString(string(raw), "${1}"+advertise("game", ""))
+	if err := os.WriteFile(gatePath, []byte(same), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, io.Discard, io.Discard)
+	if code := configCheckExitCode(err); code != configExitCrossServiceErrors || !strings.Contains(err.Error(), "etcd.advertise_addr") {
+		t.Errorf("two services advertising one address: config check --all = %v (exit %d); want exit %d naming etcd.advertise_addr", err, code, configExitCrossServiceErrors)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := checkConfigAcrossServicesItem(root, m); item.Status != StatusFail || !strings.Contains(item.Detail, "etcd.advertise_addr") {
+		t.Errorf("doctor config-across-services = %s %q; want a FAIL naming etcd.advertise_addr", item.Status, item.Detail)
+	}
+}
+
+// 按服务区分的开发端口来自 roost.yaml 里每个服务一经分配就不变的端口块号（services.<name>.port_block，维护者
+// 2026-10-19 提议）：ops 9100+N、etcd.advertise_addr 9000+N。之后 add 一个名字排在中间的服务，已有服务的块号与
+// deploy/dev/run.sh 里的端口不变，新服务拿“当前最大块号 + 1”。修前端口按服务名排序现算：新服务排到最前，拿走
+// game 的 9100，run.sh 里 game / gate 的端口整体后移，与它们的配置文件不再一致。
+func TestPortBlocksAreStableAcrossAddService(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "service", Name: "field", Mods: []string{"configdata", "etcd"}, Warnings: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	for service, want := range map[string][2]string{
+		"game":  {"127.0.0.1:9100", "127.0.0.1:9000"},
+		"gate":  {"127.0.0.1:9101", "127.0.0.1:9001"},
+		"field": {"127.0.0.1:9102", "127.0.0.1:9002"},
+	} {
+		leaves := configLeaves(t, service, readProjectFile(t, root, "configs/service/config."+service+".yaml"))
+		if leaves["ops.addr"] != want[0] || leaves["etcd.advertise_addr"] != want[1] {
+			t.Errorf("%s: ops.addr %q, etcd.advertise_addr %q; want %s / %s", service, leaves["ops.addr"], leaves["etcd.advertise_addr"], want[0], want[1])
+		}
+		if port := opsPortOf(t, root, service); fmt.Sprintf("127.0.0.1:%d", port) != want[0] {
+			t.Errorf("deploy/dev/run.sh: %s on ops port %d; want %s (the port in its config)", service, port, want[0])
+		}
+	}
+	manifest := readProjectFile(t, root, ManifestName)
+	for _, want := range []string{"port_block: 0", "port_block: 1", "port_block: 2"} {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("roost.yaml does not record %q:\n%s", want, manifest)
+		}
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, io.Discard, io.Discard); err != nil {
+		t.Errorf("after add service: config check --all = %v", err)
+	}
+}
+
+// roost.yaml 的端口块号是生成器管的一等字段：缺了（手改 roost.yaml 加服务）普通命令报错并给出改法，project sync 分配
+// “当前最大块号 + 1”并写回；块号重复或超出 0-99 校验失败；配置里的端口与块号派生值不一致只 WARN（配置归应用）。
+// 不从旧配置推断（项目未上线，维护者 2026-10-19 决定不做旧工程兼容）。
+func TestPortBlockIsARequiredManagedManifestField(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, ManifestName)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 手改 roost.yaml 加一个服务（没有块号）。
+	handAdded := strings.Replace(string(raw), "services:\n", "services:\n    alpha:\n        mods:\n            - configdata\n", 1)
+	if handAdded == string(raw) {
+		t.Fatal("roost.yaml has no services: block; update this test")
+	}
+	if err := os.WriteFile(manifestPath, []byte(handAdded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadManifest(root); err == nil || !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "roost project sync") || !strings.Contains(err.Error(), "services.alpha.port_block: 2") {
+		t.Fatalf("roost.yaml without alpha's port_block: LoadManifest = %v; want an error naming alpha, roost project sync and the next free block 2", err)
+	}
+	if _, err := SyncProject(root); err != nil {
+		t.Fatalf("project sync: %v", err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatalf("after sync: %v", err)
+	}
+	for service, want := range map[string]int{"game": 0, "gate": 1, "alpha": 2} {
+		if got := m.Services[service].PortBlock; got == nil || *got != want {
+			t.Errorf("after sync: services.%s.port_block = %v, want %d (existing blocks unchanged, the new service takes max+1)", service, got, want)
+		}
+	}
+	if got := opsPortOf(t, root, "alpha"); got != 9102 {
+		t.Errorf("deploy/dev/run.sh: alpha on ops port %d, want 9102", got)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		block int
+		want  string
+	}{{"duplicate", 0, "also services.game"}, {"out of range", 100, "outside 0-99"}, {"negative", -1, "outside 0-99"}} {
+		bad := m.withPortBlocks()
+		services := map[string]ServiceSpec{}
+		for name, spec := range bad.Services {
+			services[name] = spec
+		}
+		gate := services["gate"]
+		block := tc.block
+		gate.PortBlock = &block
+		services["gate"] = gate
+		bad.Services = services
+		if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s port_block: Validate = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+
+	// 四段按服务端口互不重叠：块号 0-99 时 ops / advertise / 第二个 game 的两个端口各占一段。
+	seen := map[int]string{}
+	for block := 0; block <= maxPortBlock; block++ {
+		p := portsFor(block)
+		for _, port := range []int{p.Ops, p.Advertise, p.SecondOps, p.SecondAdvertise} {
+			if owner, taken := seen[port]; taken {
+				t.Fatalf("port %d of block %d collides with %s", port, block, owner)
+			}
+			seen[port] = fmt.Sprintf("block %d", block)
+		}
+	}
+
+	// 配置里手改了 ops 端口：与块号不一致只提示，不影响退出码。
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	gateRaw, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(strings.Replace(string(gateRaw), "addr: 127.0.0.1:9101", "addr: 127.0.0.1:9150", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, &out, io.Discard); err != nil {
+		t.Fatalf("hand-edited ops port: config check = %v; a mismatch with the block is a warning, not a failure", err)
+	}
+	if !strings.Contains(out.String(), "cross-service warnings") || !strings.Contains(out.String(), "port_block 1") {
+		t.Errorf("hand-edited ops port: output lacks the port block warning:\n%s", out.String())
+	}
+	if item := checkConfigAcrossServicesItem(root, m); item.Status != StatusWarn || !strings.Contains(item.Detail, "9150") {
+		t.Errorf("doctor config-across-services = %s %q; want a WARN naming 9150", item.Status, item.Detail)
 	}
 }

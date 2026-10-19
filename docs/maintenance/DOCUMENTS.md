@@ -35,6 +35,7 @@
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
 - [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
+- [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
@@ -68,6 +69,7 @@
 ## docs/performance
 
 - [README.md](../performance/README.md)：性能验证与复跑入口
+- [SAGA-CHECKPOINT-20261018.md](../performance/SAGA-CHECKPOINT-20261018.md)：投影器对特殊记录合并 checkpoint 的前后对照（真实 WAL 微基准、夹具 B 持续档与上限档、真实 Mongo 崩溃注入回归）
 - [STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准（池名为当时的 fast/slow）
@@ -89,11 +91,15 @@
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
 - [REFACTOR-2026-10-17-timer-scheduler.md](REFACTOR-2026-10-17-timer-scheduler.md)：timer.Scheduler 用节点状态替代 Tick 期间推迟闭包的重构方案（状态表、操作 × 状态矩阵、语义对照、panic 语义、性能预期）
+- [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
 - [DOCUMENTS.md](DOCUMENTS.md)：本清单
 
 ## docs/release
 
+- [v1.28.0-NOTES.md](../release/v1.28.0-NOTES.md)：v1.28.0 发布说明（破坏性变化与升级清单、新能力、修复、性能；最低 core v1.28.0）
+- [v1.28.0-IMPLEMENTATION.md](../release/v1.28.0-IMPLEMENTATION.md)：v1.28.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
+- [v1.28.0-VALIDATION.md](../release/v1.28.0-VALIDATION.md)：v1.28.0 发布验收
 - [v1.27.0-NOTES.md](../release/v1.27.0-NOTES.md)：v1.27.0 发布说明（playeraccess 改名与升级步骤、Remote WAL 级 Rejected 精简）
 - [v1.27.0-IMPLEMENTATION.md](../release/v1.27.0-IMPLEMENTATION.md)：v1.27.0 提交、位置、可达性梳理与红绿证据
 - [v1.27.0-VALIDATION.md](../release/v1.27.0-VALIDATION.md)：v1.27.0 发布验收

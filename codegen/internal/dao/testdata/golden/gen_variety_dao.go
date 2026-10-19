@@ -34,6 +34,30 @@ const (
 	VarietyDaoSchemaVersion uint32 = 1
 )
 
+// varietyDaoPersistDoc is VarietyDao's document in collection "varieties", and the only
+// place a stored key is spelled: each tag below is the key the field is stored
+// under (the definition's bson:"..." name, or the snake_case of the Go field
+// name when it has none). Full writes, hydration, the rollback snapshot and
+// the incremental patch paths all use these keys (DESIGN-TODO D13).
+//
+// Renaming a key here — a renamed or removed field, persist changed to
+// nopersist — leaves documents already stored with a key nothing reads:
+// RestorePersisted warns once per key and does not load the value, and the
+// next full write of the document drops it. Keep the old key with
+// bson:"<old>" on the renamed field, or migrate the documents offline before
+// raising the schema (docs/framework/SCHEMA-MIGRATION.md).
+type varietyDaoPersistDoc struct {
+	ID            int64            `bson:"_id"`
+	SchemaVersion uint32           `bson:"_schema"`
+	PersistOnly   int64            `bson:"persist_only"`
+	FastItems     map[int64]int32  `bson:"fast_items"`
+	ShardedTags   map[int32]string `bson:"sharded_tags"`
+}
+
+// varietyDaoStoredKeys is the key set varietyDaoPersistDoc declares, nested types
+// included; RestorePersisted reports stored keys outside it.
+var varietyDaoStoredKeys = dataengine.NewStoredKeySet[varietyDaoPersistDoc]("VarietyDao")
+
 // NewVarietyDao creates a new VarietyDao instance with initialized maps/slices.
 func NewVarietyDao() *VarietyDao {
 	d := &VarietyDao{}
@@ -458,61 +482,62 @@ func (d *VarietyDao) setShardedTagsRawMap(src map[int32]string) {
 // CaptureRollbackState is side-effect free and includes transient and
 // sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
-	type rollbackDoc struct {
-		Id          int64            `bson:"_id"`
-		PersistOnly int64            `bson:"persist_only"`
-		SyncOnly    int64            `bson:"sync_only"`
-		Neither     int64            `bson:"neither"`
-		Pending     map[int32]int64  `bson:"pending"`
-		FastItems   map[int64]int32  `bson:"fast_items"`
-		ShardedTags map[int32]string `bson:"sharded_tags"`
-	}
-	doc := rollbackDoc{
-		Id:          d.id,
-		PersistOnly: d.persistOnly,
-		SyncOnly:    d.syncOnly,
-		Neither:     d.neither,
-		Pending:     d.varietyDaoPendingRawMap(),
-		FastItems:   d.varietyDaoFastItemsRawMap(),
-		ShardedTags: d.varietyDaoShardedTagsRawMap(),
-	}
-	return bson.Marshal(doc)
+	return bson.Marshal(d.rollbackDoc())
 }
 
 func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
-	type rollbackDoc struct {
-		Id          int64            `bson:"_id"`
-		PersistOnly int64            `bson:"persist_only"`
-		SyncOnly    int64            `bson:"sync_only"`
-		Neither     int64            `bson:"neither"`
-		Pending     map[int32]int64  `bson:"pending"`
-		FastItems   map[int64]int32  `bson:"fast_items"`
-		ShardedTags map[int32]string `bson:"sharded_tags"`
-	}
-	var doc rollbackDoc
+	var doc varietyDaoRollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = doc.Id
-	d.persistOnly = doc.PersistOnly
+	d.setPersistDoc(doc.PersistDoc)
 	d.syncOnly = doc.SyncOnly
 	d.neither = doc.Neither
 	d.setPendingRawMap(doc.Pending)
-	d.setFastItemsRawMap(doc.FastItems)
-	d.setShardedTagsRawMap(doc.ShardedTags)
 	d.Init()
 	return nil
 }
 
-func (d *VarietyDao) marshalCommitState() ([]byte, error) {
-	doc := bson.M{
-		"_id":          d.id,
-		"_schema":      VarietyDaoSchemaVersion,
-		"persist_only": d.persistOnly,
-		"fast_items":   d.varietyDaoFastItemsRawMap(),
-		"sharded_tags": d.varietyDaoShardedTagsRawMap(),
+// varietyDaoRollbackDoc is the in-memory rollback snapshot, never stored:
+// the persisted document plus the fields that are not persisted, under their
+// keys.
+type varietyDaoRollbackDoc struct {
+	PersistDoc varietyDaoPersistDoc `bson:"_persisted"`
+	SyncOnly   int64                `bson:"sync_only"`
+	Neither    int64                `bson:"neither"`
+	Pending    map[int32]int64      `bson:"pending"`
+}
+
+func (d *VarietyDao) rollbackDoc() varietyDaoRollbackDoc {
+	return varietyDaoRollbackDoc{
+		PersistDoc: d.persistDoc(),
+		SyncOnly:   d.syncOnly,
+		Neither:    d.neither,
+		Pending:    d.varietyDaoPendingRawMap(),
 	}
-	return bson.Marshal(doc)
+}
+
+// persistDoc is the full document of the current state; setPersistDoc puts a
+// decoded one back (identity and persisted fields; the caller runs Init).
+func (d *VarietyDao) persistDoc() varietyDaoPersistDoc {
+	return varietyDaoPersistDoc{
+		ID:            d.id,
+		SchemaVersion: VarietyDaoSchemaVersion,
+		PersistOnly:   d.persistOnly,
+		FastItems:     d.varietyDaoFastItemsRawMap(),
+		ShardedTags:   d.varietyDaoShardedTagsRawMap(),
+	}
+}
+
+func (d *VarietyDao) setPersistDoc(doc varietyDaoPersistDoc) {
+	d.id = doc.ID
+	d.persistOnly = doc.PersistOnly
+	d.setFastItemsRawMap(doc.FastItems)
+	d.setShardedTagsRawMap(doc.ShardedTags)
+}
+
+func (d *VarietyDao) marshalCommitState() ([]byte, error) {
+	return bson.Marshal(d.persistDoc())
 }
 
 func (d *VarietyDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
@@ -560,14 +585,7 @@ func (d *VarietyDao) MarshalPersist(mask uint64) []byte {
 
 func (d *VarietyDao) marshalPersistData(mask uint64) []byte {
 	_ = mask // full payload is used for inserts and safe fallback.
-	doc := bson.M{
-		"_id":          d.id,
-		"_schema":      VarietyDaoSchemaVersion,
-		"persist_only": d.persistOnly,
-		"fast_items":   d.varietyDaoFastItemsRawMap(),
-		"sharded_tags": d.varietyDaoShardedTagsRawMap(),
-	}
-	data, err := bson.Marshal(doc)
+	data, err := d.marshalCommitState()
 	if err != nil {
 		// The interface has no error slot and a nil payload would be
 		// persisted as silent data loss; a marshal failure here is a
@@ -761,30 +779,25 @@ func (d *VarietyDao) ApplySync(raw []byte) error {
 // --- Unmarshal ---
 
 func (d *VarietyDao) Unmarshal(raw []byte) error {
-	type rawDoc struct {
-		Id          int64            `bson:"_id"`
-		PersistOnly int64            `bson:"persist_only"`
-		FastItems   map[int64]int32  `bson:"fast_items"`
-		ShardedTags map[int32]string `bson:"sharded_tags"`
-	}
-	var dd rawDoc
-	if err := bson.Unmarshal(raw, &dd); err != nil {
+	var doc varietyDaoPersistDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = dd.Id
-	d.persistOnly = dd.PersistOnly
-	d.setFastItemsRawMap(dd.FastItems)
-	d.setShardedTagsRawMap(dd.ShardedTags)
+	d.setPersistDoc(doc)
 	d.Init()
 	return nil
 }
 
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
+// A stored key varietyDaoPersistDoc does not declare is reported (once per key per
+// process) and the document still loads without it: the value is not read,
+// and the next full write of the document drops the key (DESIGN-TODO D13).
 func (d *VarietyDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != VarietyDaoSchemaVersion {
 		return fmt.Errorf("%w: dao VarietyDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, VarietyDaoSchemaVersion)
 	}
+	varietyDaoStoredKeys.WarnUnknown(raw)
 	if err := d.Unmarshal(raw); err != nil {
 		return err
 	}

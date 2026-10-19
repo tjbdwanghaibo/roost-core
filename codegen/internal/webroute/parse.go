@@ -12,10 +12,13 @@ import (
 	"strings"
 )
 
+// GeneratedFileName 是每个路由包里生成的注册文件；roost add webroute 回滚时按它找文件。
+const GeneratedFileName = "webroute_gen.go"
+
 const (
 	bodyJSON            = "json"
 	bodyRaw             = "raw"
-	generatedFileName   = "webroute_gen.go"
+	generatedFileName   = GeneratedFileName
 	generatedFileSuffix = "_webroute_gen.go"
 )
 

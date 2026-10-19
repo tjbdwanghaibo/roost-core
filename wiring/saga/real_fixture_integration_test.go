@@ -75,9 +75,35 @@ type realStepsEnv struct {
 	sagaMod                    *Mod
 	// nest 只在 withNest 时装配：真实 Nest 引擎（wiring/nest Mod），事务经 DataEngine 的 WAL → 投影 → outbox 提交。
 	nest corenest.Client
+	// names 是这一套库名、流名与 WAL 目录，重启用例的下一代进程沿用它。stopUpper 停掉 Mongo / NATS 之上的 Mod。
+	names     realStepsNames
+	stopUpper func(context.Context) error
+}
+
+// realStepsNames 标识一套真实依赖资源：库名 / 流名后缀与 DataEngine WAL 目录。重启用例让前后两代进程共用一套。
+type realStepsNames struct{ suffix, walDir string }
+
+func newRealStepsNames(t *testing.T) realStepsNames {
+	return realStepsNames{suffix: fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000), walDir: t.TempDir()}
 }
 
 func startRealStepsEnv(t *testing.T, definitions []coresaga.Definition, withNest bool, overrides map[string]any) *realStepsEnv {
+	t.Helper()
+	return startRealStepsEnvNamed(t, definitions, withNest, overrides, newRealStepsNames(t))
+}
+
+// stopForRestart 停掉这一代进程 Mongo / NATS 之上的全部 Mod（逆序），WAL 目录原样留给下一代；Mongo / NATS 连接
+// 留到用例结束，由本代的清理照常删库删流（下一代的清理也会删，重复删除无害），停机失败时资源也不会遗留。
+func (env *realStepsEnv) stopForRestart(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := env.stopUpper(ctx); err != nil {
+		t.Fatalf("stop for restart: %v", err)
+	}
+}
+
+func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, withNest bool, overrides map[string]any, names realStepsNames) *realStepsEnv {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 and source the isolated environment")
@@ -86,8 +112,8 @@ func startRealStepsEnv(t *testing.T, definitions []coresaga.Definition, withNest
 	if mongoURI == "" || natsURL == "" {
 		t.Fatal("isolated integration environment variables are incomplete")
 	}
-	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000)
-	env := &realStepsEnv{token: strings.ReplaceAll(suffix, "_", "x"), sagaDatabase: "roost_d12_saga_" + suffix, dataDatabase: "roost_d12_de_" + suffix}
+	suffix := names.suffix
+	env := &realStepsEnv{names: names, token: strings.ReplaceAll(suffix, "_", "x"), sagaDatabase: "roost_d12_saga_" + suffix, dataDatabase: "roost_d12_de_" + suffix}
 	env.sagaPrefix = "d12saga" + env.token
 	sagaStream, effectStream := "ROOST_D12_SAGA_"+suffix, "ROOST_D12_EFFECTS_"+suffix
 	env.sagaStream = sagaStream
@@ -96,7 +122,7 @@ func startRealStepsEnv(t *testing.T, definitions []coresaga.Definition, withNest
 		"sid": int32(902), "server_type": "d12-it", "persistence.engine": "dataengine",
 		"mongo.uri": mongoURI, "mongo.require_replica_set": true, "mongo.connect_timeout": 5 * time.Second, "mongo.transaction_timeout": 15 * time.Second,
 		"nats.url":            natsURL,
-		"dataengine.database": env.dataDatabase, "dataengine.wal.dir": t.TempDir(),
+		"dataengine.database": env.dataDatabase, "dataengine.wal.dir": names.walDir,
 		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "d12effect" + env.token,
 		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
 		"dataengine.outbox.poll_interval": 50 * time.Millisecond, "dataengine.outbox.retry_min": 100 * time.Millisecond, "dataengine.outbox.retry_max": time.Second,
@@ -136,6 +162,19 @@ func startRealStepsEnv(t *testing.T, definitions []coresaga.Definition, withNest
 		t.Fatal(err)
 	}
 	started := []lifecycle{}
+	// started[0] / [1] 是 Mongo 与 NATS（见下面 all 的顺序）。
+	env.stopUpper = func(ctx context.Context) error {
+		var joined error
+		for len(started) > 2 {
+			last := started[len(started)-1]
+			began := time.Now()
+			if err := last.StopWithContext(ctx); err != nil {
+				joined = errors.Join(joined, fmt.Errorf("stop %s after %s: %w", last.Name(), time.Since(began).Round(time.Millisecond), err))
+			}
+			started = started[:len(started)-1]
+		}
+		return joined
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()

@@ -203,6 +203,7 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `access.player.transports` | 否 | 显式启用的客户端传输；当前支持 tcp，用 add transport 创建 |
 | `access.player.self_sync` | 否 | 默认 false。true 时每个在线玩家经 Entity Sync 收到自己的 Player 状态（视图 `self`）：bootstrap 改用 `NewModWithEntitySync` 并装 `wiring/selfsync`，TCP Mod 加 `WithSelfSync`，缺失时创建一次 `protocol/def/self_sync.go`。需要 tcp 传输与 entity feature；Player 标记缺省按 `sync=true`；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（视图 `self` 包含 DAO 全部 sync 字段，标了 sync 的字段默认全部对玩家本人可见；写了 `subjectPacker=` 时用业务的 packer、删掉生成的那份），`project sync` / `generate` / `doctor` 检查并给出改法，DAO 没有 sync 字段时 doctor 警告。见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) |
 | `services.<name>.rpcs` / `uses_rpcs` | 否 | 本工程跨进程服务的拥有者 / 调用方；用 `roost add rpc` 创建，见 §6 |
+| `services.<name>.port_block` | 是（生成器写） | 端口块号 0～99、各服务不同，一经分配不再改变；开发配置的按服务端口由它派生（ops `9100+N`、`etcd.advertise_addr` `9000+N`），见 §5“端口块”。手改加服务时不写，`roost project sync` 分配 |
 | `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
 | `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |
 | `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
@@ -293,6 +294,25 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 
 规则写在各 Wiring Mod 配置声明的 `example` 里（`{project}` 工程名、`{PROJECT}` 大写、`{project_db}` 库名：系统库 `admin` / `local` / `config` 加 `_data`、截到 52 字节），新建与之后 `roost add mod` / `add saga` / `add access` 追加的段同一规则（`codegen/internal/roost/catalog.go` 的 `projectNameVars`）。只影响生成器写出的配置，Mod 的运行期缺省值不变；同一工程的所有服务按同一工程名得到同一组值。已有工程的配置归业务、不改写：旧工程仍是 `roost` / `game` / `ROOST_*`，而此后追加的段会写新名字，与已有段不一致时手工统一（升级说明见 CHANGELOG）。
 
+**按服务区分的端口：端口块**（维护者 2026-10-19 决定）。开发配置集的服务在同一台机器上一起运行（`deploy/dev/run.sh`），每个服务要有自己的 ops 端口与 `etcd.advertise_addr`。每个服务在 `roost.yaml` 里有一个端口块号 `services.<name>.port_block`（0～99），由生成器分配并写入，**一经分配不再改变**：
+
+- 新建工程：按“业务服务在前、托管框架服务在后，各自按名字排序”依次分配 0、1、2……（game-demo：game 0，account 1，activity 2 … session 9）；
+- 之后新增的服务（`add service`、命令或模板带进来的托管服务）取“当前最大块号 + 1”，几个同时新增时按上面的顺序；已有服务的块号与端口不受影响；
+- 手改 `roost.yaml` 加服务时不写块号：其他命令报错并给出下一个空闲块号，`roost project sync` 自动分配并写回；
+- 删除服务不回收块号；只有删掉的恰好是最大块号时，下一个新服务会拿到同一个号（删服务时一并删掉它的配置文件）。
+- 块号重复或超出 0～99 时加载失败。
+
+所有按服务区分的端口只从块号 N 派生（`codegen/internal/roost/port_blocks.go` 的 `portsFor`，规则只此一处），四段互不重叠：
+
+| 端口 | 开发配置 | 生产示例 / k8s Secret 示例 |
+| --- | --- | --- |
+| `ops.addr` | `127.0.0.1:9100+N`（9100–9199） | `0.0.0.0:9100` |
+| `etcd.advertise_addr`（写进服务注册、别的进程据此连接本服务；各服务必须不同） | `127.0.0.1:9000+N`（9000–9099；game-demo：game 9000、activity 9002、match 9006） | `CHANGE_ME:9000`（填这个容器自己的可达地址） |
+| `deploy/dev/second-game.sh` 第二个 game 的 ops | `9200+N`（9200–9299） | — |
+| 第二个 game 的 `etcd.advertise_addr` | `8900+N`（8900–8999） | — |
+
+第二个 game 改用独立的两段端口：改用块号之前它用“第一个 + 10”，工程有 11 个以上服务时会撞上别的服务。玩家 TCP（7000，第二个 game 7001）与 web（8080）各只有一个服务持有，不按服务派生。新建工程、之后 `add mod` 追加的段、doctor `config-sections` 的补段提示都经 `localizeDevConfig` 写入本服务的端口。配置归应用、可以手改：`roost config check --all` 与 doctor `config-across-services` 在开发配置的 `ops.addr` / `etcd.advertise_addr` 端口与块号派生值不一致时给 WARN（不影响退出码；`run.sh` 与 `second-game.sh` 按块号走），端口冲突与 advertise 重复才是失败。
+
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Wiring 内部的连接、重试、health 或 shutdown 逻辑。
 
 增加 Service：
@@ -325,8 +345,9 @@ durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest �
 Nest handler（参数 `saga.NativeStep`，事务内 `step.Complete`）；幂等键是 command 的
 `IdempotencyKey`：原生步骤由收件箱保证至多一次生效，Mongo 步骤里事务外的调用要用它做幂等，不要以
 投递次数或 `CommandID` 作为业务幂等键。`Subscribe<Step>` 辅助函数已不再生成（2026-10-18，D12 方向 B）；
-按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 5/s、
-全补偿约 4/s 以内延迟在 1 秒内，正向 7～8/s 起延迟升到秒级、约 10/s 起重试放大，见 `roost help saga`）。
+按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 8/s、
+全补偿约 5/s 以内延迟在 1 秒内，正向 10/s 仍全部正确但延迟升到秒级，正向 12/s、全补偿 7/s 起
+重试放大而崩溃，见 `roost help saga`）。
 
 `roost add effect <topic> -consumer <service>` 生成 effect 的载荷、`Emit<Topic>` 辅助
 （`game/effects`）与消费服务里的 `kitdataengine.SubscribeEffects` 骨架，不改 roost.yaml；
@@ -513,6 +534,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 - `config-schema:<service>`：工程能编译时 `go build` 一次进程，对每个服务运行 `<bin> <service> --print-config-schema` 读回全部声明（含业务声明），检查开发配置、生产示例与 k8s Secret 示例——值不合声明、框架段里没有任何声明的键为 FAIL，别的服务的键为 WARN，只属于业务的段里拼错的键为 FAIL。
 - `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
+- `config-across-services`（维护者 2026-10-19 批准）：同一工程各服务之间——声明里带 `shared` 的共享资源名（`nats.prefix`、效果流名与主题前缀及 saga 的 start 效果流、saga 库 / 流 / 主题、Remote 库与 L2 前缀、`etcd.service_prefix`、`singleton.key_prefix` 等）在开发配置集与生产示例里各自必须一致；开发配置集里带 `listen` 的监听地址（`ops.addr`、`web.addr`、`player_access.tcp.addr`，开关打开时）端口不得冲突，带 `unique` 的 `etcd.advertise_addr` 各服务不同。FAIL 并点名服务、键与取值。与 `roost config check --all` 同一个实现（`checkConfigAcrossServices`），不需要编译工程。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
 - `remote-runtime`：工程里有 `remote=managed` 实体时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
 - `saga-steps:<saga>` / `effect-consumer:<service>/<func>`（只读，WARN 不让 doctor 失败）：`roost add saga` 生成的 `steps.go` 有 `StartSteps` / `RegisterSteps`，工程里却没有非测试文件导入该 saga 包并调用它（或调用处所在包没有 `Steps.Drain(ctx)`）时 WARN；`roost add effect` 生成的 `start<Topic>EffectConsumer` 在服务包里没有被调用时 WARN。生成器不改写服务的 Init / Shutdown，这两项提醒“生成了但没启动”——没启动时进程照常起来，步骤命令却等到超时、effect 堆在流里。文本判据（注释不算调用），只说明写了，不证明运行时一定走到；`steps.go` 里没有这两个函数（如 game-demo 手写接线）时不报。
@@ -521,7 +543,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
 - `shutdown:<service>`：见 [§17](#17-生产部署生成物)。
 
-进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 只按声明查键，跨键 / 跨 Mod 规则看 doctor 的 `config-check:<service>` 或进程 `--check-config`。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
+进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明、跨键与跨 Mod 规则），不报没有声明的键；`roost config check` 先按声明查键，通过后交给编译出的进程跑同一个 `--check-config`（跨键 / 跨 Mod 规则），与 doctor 的 `config-check:<service>` 结论相同；工程编译不过时明确提示跨 Mod 规则没查。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
 
 ## 14. 生产检查清单
 

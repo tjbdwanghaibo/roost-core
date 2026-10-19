@@ -97,3 +97,13 @@ func retireAttributeFile(path string, stdout io.Writer) error {
 	_, _ = fmt.Fprintf(stdout, "retired: %s\n", path)
 	return nil
 }
+
+// Profiles 是 dir 里已有的 profile 声明（与生成同一个解析）：roost add attribute 用它给新 profile 选不重叠的
+// index= 起点，并在已有 profile 时不写示例字段（生成的常量 Attr<Field> 在包内按字段名命名，同名字段会撞）。
+// dir 不存在时返回空。
+func Profiles(dir string) ([]ProfileDef, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	return parseDir(dir)
+}

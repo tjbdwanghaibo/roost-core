@@ -162,15 +162,15 @@ roost add rpc guild -service game
 
 | 文件 | 内容 |
 | --- | --- |
-| `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
+| `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`、`Lookup(ctx, engine, businessKey)`（发起方按自己给 `EmitStart` 的业务键查结果，`saga.ErrNotFound` = 还没开始；业务键取能交还给客户端的值，例如请求号）（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
 | `saga/<name>/steps.go` | `StepsGroup = "<service>-<name>"`（durable 前缀，上线后不要改名）、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿的步骤体、`RegisterSteps(steps, deps)`（按 `-steps` 顺序与主题常量登记：`-native` 的 `Steps.Native`，其余 `Steps.Mongo`；`WithAdmit` 留空并注释多进程分片要补）、`StartSteps(ctx, registry, deps)`；注释写明单进程容量 |
 | `game/handler/<name>_<step>.go`、`<name>_<step>_compensation.go` | 每个 `-native` 步骤两个 Nest handler：`func handler<Name><Step>(target <entity>.I<Component>Entity, step saga.NativeStep) error`，事务里 `step.Complete`，业务拒绝也提交 |
 
 `-native` 保序解析，必须是 `-steps` 的子集、不能重复；锁目标 `-entity` / `-component` 与 `add handler` 相同（工程只有一个 Entity 时 `-entity` 可省），跑步骤的服务要有 nest Mod，与已有 Nest handler 同名时拒绝。骨架默认拒绝（`... is not implemented`），写完业务前 saga 不报告成功。服务的 `Init` / `Shutdown` 不改写：next 提示给出 `steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})` 与 `steps.Drain(ctx)` 两行，doctor 的 `saga-steps:<name>` 在没有服务调用 `StartSteps` / `RegisterSteps`（或所在包没有 `Steps.Drain(ctx)`）时 WARN。
 
-容量（2026-10-18 实测）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；单进程两步原生步骤 saga 正向约 5/s、全补偿约 4/s 以内延迟在 1 秒内，正向 7～8/s、全补偿 5/s 时 DataEngine 投影器跟不上、延迟升到秒级，约 10/s 起重试放大；量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)。
+容量（2026-10-18 实测，投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s）；正向 10/s 仍 0 笔终态不对，但积压、延迟升到秒级（P50 2.2 s）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（上限档各单样本）。量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [投影器合并 checkpoint 前后对照](../../docs/performance/SAGA-CHECKPOINT-20261018.md) §3、§5（优化过程见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)）。
 
-`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
+`add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。载荷里的玩家号在组件里用 `Owner().UniqueID()` 取；`Owner().ID()` 是编码后的 EntityID（带实体类型位），不是玩家号，骨架注释写明了这一点。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 
 需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
 
@@ -187,7 +187,9 @@ roost add rpc guild -service game
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
-`--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
+`--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
+（`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次
+提交里替换它。占位被改过（多了语句、换了返回值、加了别的函数）或是别的文件时不覆盖，报错写明“删掉或改名（保留要留的代码）后重跑”。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
 字段；找不到字段会在 add 阶段报错，不生成半成品。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
 `nowUnix` / `nowUnixMilli`（`int64`）不对应 Request 字段，骨架先取 `businessNow := app.BusinessClock(controller.Registry()).Now()`
 （真实时间 + `time.logic_offset`，与 game-demo 的 `BusinessNow()` 同一来源）再传 `businessNow.Unix()` / `.UnixMilli()`；
@@ -348,6 +350,24 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 | `map=small\|fast\|sharded` | 按其它标记 | 按其它标记 | map 存储实现：`small`（默认，`fmap.SmallSafeMap`）、`fast`（`fmap.FastMap`）、`sharded`（`fmap.ShardedSafeMap`）；`fast` / `sharded` 只支持 string 或整数 key |
 
 **tag 一旦出现就必须表明 persist/sync 意图**：`map=...` 是辅助选项，必须与 persist/sync 意图同写。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
+
+### 持久键：`bson:"..."` 与持久文档结构体
+
+字段写了 `bson:"x"` 时 `x` 就是它在文档里的键（持久键、同步 WireName、回滚快照里的键是同一个），没写时是 Go 字段名的 snake_case（DESIGN-TODO D13，维护者 2026-10-19 决定）。生成期强制：显式名字母开头、只含字母数字下划线；任何键不能以 `_` 开头（`_id`、`_schema`、`_version`、`_last_tx`、`_deleted` 等是框架元数据）；同一 DAO / 嵌套类型内所有字段的键不能重复；`bson` 选项只认 `omitempty`（照抄进生成的标签），其余选项与 `bson:"-"` 报错（不存就用 `dao:"nopersist,..."` 或 `dao:"-"`）。DAO 字段不能叫 `SchemaVersion`、`PersistDoc`（生成的文档结构体自己用）。
+
+每个 Mongo DAO 的 `gen_<x>_dao.go` 里有：
+
+- `<dao>PersistDoc`：库里的文档形状，`ID` `bson:"_id"`、`SchemaVersion` `bson:"_schema"`、每个持久字段一行显式 `bson` 标签。整文档写入（`marshalCommitState` / `MarshalPersist`）、水合（`Unmarshal` / `RestorePersisted`）都经它；增量补丁、`PersistFieldNames`、`SyncFields`、`MarshalSync` / `ApplySync` 的键与它的标签取自同一个值。**看一个字段存成什么键，就看这个结构体。**
+- `<dao>StoredKeys`：`dataengine.NewStoredKeySet[<dao>PersistDoc]`，加载期未知键检查用它。
+- `<dao>RollbackDoc`：内存回滚快照（不落库），持久文档作为 `_persisted` 子文档，再加非持久字段。
+
+嵌套类型的 wire 文档 `<type>BSONDoc` 同样带显式标签。
+
+**改 Go 字段名又要保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``）——键没变，不需要迁移，也不告警。`roost add dao` 骨架的注释建议每个持久字段写 `bson` 名。改了键（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`、改类型）时：
+
+- `roost generate` 以工作树里上一次的生成物为基线打印 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...` / `new stored key ...` / `stored key "level" changes type int32 -> string ...`，提示 `schema=` 是否提高；不阻断生成，再生成一次不再告警。
+- 生成的 `RestorePersisted` 发现库里有、结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`，每进程每 DAO 每键一次），计 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载，但**不读入**这个键的值。
+- 这些旧键**不再加载，下一次整文档写回就删掉**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）；单字段补丁不碰它们，但它们也不再被读取。**业务约束**：改名 / 删字段之前，要么保留原 `bson` 名，要么先离线迁移再提升 `schema=`，否则旧数据不再加载、写回即丢失（[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md) §1）。
 
 ### 生成物与读写约定
 
@@ -663,6 +683,13 @@ JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与
 
 ## 10. attribute
 
+```bash
+roost add attribute Combat     # 开启 feature（project sync 写 doc.go 与 runtime.go）、写 profile 骨架并立即生成
+roost generate                 # 改字段 / 公式之后
+```
+
+`roost add attribute <Profile>` 写 `game/gameplay/attribute/<profile>.go`（业务文件，只建一次）：第一个 profile 带示例字段与 `_Power` 公式，包里已有 profile 时只留 `dirtyMask` 与 TODO，`index=` 取已有 profile 范围之后（生成的 `Attr<Field>` 常量按字段名命名，同包不同 profile 的字段不能同名）。同名 profile 再 add 拒绝。手改 `roost.yaml` 的 `features` 开启时先 `roost project sync`；没有 `runtime.go` 时 `roost generate` 报错指出这一步。
+
 ```go
 //roost:attribute index=1 max=64
 type Combat struct {
@@ -681,7 +708,8 @@ func (p *Combat) _Power(Attack int64, HP int64) int64 {
 ```
 
 ```bash
-go run .../cmd/attribute@latest -dir ./game/attribute
+# 单独运行生成器时，目录与 roost generate 读的一致：
+go run .../cmd/attribute@latest -dir ./game/gameplay/attribute
 ```
 
 生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone 以及包级访问器
@@ -700,6 +728,50 @@ Go 不允许给外包类型定义方法，做成函数别名才成立。
 
 ## 11. webroute
 
+从生成到 curl 的最小链路：
+
+```bash
+roost add webroute ShopPrice          # 多个业务服务时加 -service <svc>
+# 按 next 提示在服务 Init 里加一行：
+#   if err := kitweb.RegisterRoutes(registry, &web.Service{}); err != nil { return err }
+go run . game                          # 或 make run SERVICE=game
+curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.game.yaml
+```
+
+`add webroute <name>` 写 `service/web/<name>.go`（业务文件，只建一次；`GET /<name>`、`body=raw`），开启 `webroute` feature
+（`project sync` 写 `service/web/doc.go`：路由收到的 `type Service struct{}`，依赖放在这里、在服务 Init 里构造），给宿主服务装上
+`web` Mod（`wiring/web`）并补 `web:` 配置段，立即生成 `webroute_gen.go`。宿主服务：`-service` 显式给出；否则沿用已装 `web` Mod
+的服务；否则工程只有一个业务服务时用它；框架托管服务不能挂业务路由。服务 Init 归业务、不改写，doctor 的 `webroute:serve`
+在没有服务调用 `RegisterRoutes`（或调用了但服务没装 `web` Mod）时 WARN。
+
+`web` Mod 的配置（缺省值即 `httpserver.DefaultConfig`）：
+
+| 键 | 缺省 | 约束 / 说明 |
+| --- | --- | --- |
+| `web.enabled` | `true` | false 时路由照常登记但不监听 |
+| `web.addr` | `127.0.0.1:8080` | 生产环境绑非回环地址必须同时写 `web.allow_public_addr: true`（与 ops 相同） |
+| `web.read_header_timeout` | `5s` | ≥ 100ms，且不得大于 `web.read_timeout`（否则永远不先到期） |
+| `web.read_timeout` | `15s` | ≥ 100ms，读完整个请求 |
+| `web.write_timeout` | `15s` | ≥ 100ms，从读完请求头到写完响应，含业务处理时间 |
+| `web.idle_timeout` | `60s` | ≥ 1s，keep-alive 空闲 |
+| `web.max_body_bytes` | `1048576` | 1～67108864（64 MiB）；请求体整段读进内存，超过回 413 |
+
+写 0 或负数被拒绝（httpserver 把非正值当“取缺省”，不让 0 静默变成缺省值）。
+
+错误响应：路由返回的错误经 `webroute.WriteResult` 的缺省映射按框架错误码（`errcode.ClientError`）回给客户端——带码的错误
+（`errcode.Define` / `Wrap`，或下游服务经 `errcode.Remote` 带回的码）回 **400** 与 `{"ok":false,"code":<码>,"reason":"<定义里的 message>"}`，
+被包装的原因不进响应体；没有码的错误回 **500** 与 `{"ok":false,"code":1,"reason":"server error"}`，原文只进服务端日志
+（`webroute: route failed with a server error`，带 `request_id`）。业务要别的状态码或响应形状时在路由里调用
+`webroute.WriteResultWithMapper`。传输层错误不经映射：JSON 解码失败 400 `{"ok":false,"error":"decode request"}`、请求体超限 413
+`{"ok":false,"error":"request body too large"}`、handler panic 500 `{"ok":false,"error":"internal server error"}`（日志 `http server panic`
+带 `route` 路由模板与原始 `path`，进程不受影响）。路由级指标 `web.request.total{route,method,class}` 与 `web.request.duration{route,method}`
+按路由模板计（见 [OBSERVABILITY](../../docs/framework/OBSERVABILITY.md#业务-http-路由wiringweb)），5xx 另有一条带路由模板的
+`web: request failed` Warn，与上面的错误日志按 `request_id` 对上。
+
+Start 只 bind（端口被占用时启动失败）；路由只能在 Service.Init 里登记，`service.started` 时冻结路由表并开始 Serve（之后再登记报错），
+`service.stopping` 时 `http.Server.Shutdown`，Service.Shutdown 之后不会再有业务请求。**不做鉴权**：JSON 路由拿不到请求头，raw 路由可以自己读
+`RawRequest.Header`；对外暴露时放在鉴权代理之后。也可以不用 `add webroute`、直接 `roost add mod web -service <svc>`。
+
 ```go
 //roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
@@ -716,7 +788,7 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 go run .../cmd/webroute@latest -dir ./service/web
 ```
 
-生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
+生成 `(*Service).RegisterRoutes` 与包级 `RegisterRoutes(reg, svc)`（`kitweb.RegisterRoutes` 按 `webroute.Module` 调用前者）。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
 
 ## 12. errcode
 
@@ -781,6 +853,8 @@ type Mail interface {
 
 ```bash
 roost config check --service game
+roost config check --all                      # 另外比较各服务之间（共享资源名、开发配置的监听端口）
+roost config check --all --keys-only --json   # 只查键、不编译；机器可读输出
 roost config enable player-tcp --service game
 roost config disable player-tcp --service game
 roost config check --service game --production \
@@ -792,8 +866,30 @@ roost format check
 `enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。`check` 解析 YAML、
 要求 sid，并与 doctor 的 config-schema 用同一份声明检查值与键：框架段里没有任何声明的键（多半拼错，例如
 `mongo.urii`）报错；静态检查发现可疑键时编译一次进程读回业务服务自己的声明复核（`checkConfigFileDeclarations`），
-业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
+键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)`（`--all` 时 `config keys ok (cross-mod rules not checked)`）结束、退出码 5，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
 production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
+
+`--keys-only` 只做键检查：不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束（适合没有 Go 工具链或只改了键的 CI 步骤）；键检查里发现可疑键时也不读业务声明复核，会在问题末尾注明。
+
+`--all` 在逐个文件之后比较**各服务之间**（`checkConfigAcrossServices`，doctor 的 `config-across-services` 是同一个实现）。规则来自配置声明的 tag，不在生成器里另列：
+
+- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`。按写法比较（只去掉首尾空白）。
+- 同一主机上各不相同（`unique:"<组名>"`）：开发配置集里各服务的取值必须两两不同。当前只有 `etcd.advertise_addr`——它不是监听地址，是写进服务注册、别的进程据此连接本服务的地址，两个服务写同一个会把请求送错地方（生成器按端口块号给 `127.0.0.1:9000+N`，见[项目生成器](PROJECT_GENERATOR.zh-CN.md) §5“端口块”）。没写也没有缺省值的不比较；生产示例不比较。
+- 与端口块对照（WARN，不影响退出码）：开发配置里写的 `ops.addr` / `etcd.advertise_addr` 端口不是 `roost.yaml` 的 `services.<name>.port_block` 派生的 `9100+N` / `9000+N` 时，列在 `cross_service.warnings`（文本输出 `cross-service warnings`）；配置归应用、可以有意换端口，但 `deploy/dev/run.sh` 与 `second-game.sh` 按块号走。
+- 监听端口（`listen:"<开关键>"`）：开发配置集 `configs/service/config.<service>.yaml` 的服务在同一台机器上运行，开关打开的监听地址（`ops.addr`/`ops.enabled`、`web.addr`/`web.enabled`、`player_access.tcp.addr`/`player_access.tcp.enabled`）端口相同且主机重叠（相同，或任一方是 `0.0.0.0` / `::`）即冲突，同一服务内的两个地址同样比较；端口 0 不比较。生产示例每服务一个容器，doctor 只比较它们的共享资源名。
+
+`--json` 在 stdout 输出一份报告：`files[]`（`path`、`service`、`keys` / `cross_mod` 各为 `ok` / `failed` / `not_checked`，`key_errors`、`cross_mod_errors`、`cross_mod_reason`：`keys_only` / `key_errors` / `not_a_service_config` / `project_does_not_compile: …`）、`cross_service`（`checked`、`services`、`errors`）、`status` 与 `exit_code`。文本输出逐文件一行结论、问题逐条列出；非零退出时 stderr 只多一行摘要。
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 全部检查都跑了并通过（`--keys-only` 时：键与 `--all` 的跨服务检查通过，跨 Mod 规则按要求没查） |
+| 1 | 命令本身没跑成：参数错误、`roost.yaml` 读不出（与其他 roost 命令相同） |
+| 2 | 键错误：YAML / sid / 生产禁用值、值不合声明、没有任何声明的键 |
+| 3 | 跨 Mod 规则错误：编译出的进程 `--check-config` 拒绝 |
+| 4 | 跨服务不一致（只在 `--all` 时比较） |
+| 5 | 检查没有跑全、已跑的都通过：工程编译不过所以跨 Mod 规则没查，或文件名认不出服务、键没按声明查 |
+
+几类问题同时出现时取最小的非零码（键错了，后面的结论没有意义）。脚本按退出码分支，不按文本匹配；`config is valid` / `config ok` 两种结论行保留。
 
 ## 15. 独立生成器参数速查
 

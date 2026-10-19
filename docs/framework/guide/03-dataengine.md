@@ -1,6 +1,6 @@
 # 核心：DataEngine 持久化：设计与使用
 
-适用版本：v1.27.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/03-dataengine.md) · [模块总目录](../README.md)
+适用版本：v1.28.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/03-dataengine.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -26,7 +26,7 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 持实体锁时记录处于 held，投影器不得越过这道边界修改权威。解锁后按依赖推进；同实体版本不能倒序。Mongo 通过条件版本、事务身份、receipt/fence 等判定重复与冲突；“数据库版本更高”不是无条件成功。
 
-投影器可重放同一已提交记录，外部副作用必须通过稳定身份去重。effect 暂存进 outbox 后投影器立即唤醒 outbox 发布（2026-10-18 起），`dataengine.outbox.poll_interval`（缺省 100ms）只是兜底轮询，不再决定 effect 的发布延迟。WAL backlog、磁盘/年龄健康阈值、outbox 硬容量分别处理，不能统称任一超限都直接 fail-stop。启用前核对容量与保留期，receipt/事务标记不能在仍有重放可能时提前过期。
+投影器可重放同一已提交记录，外部副作用必须通过稳定身份去重。WAL checkpoint 只决定崩溃后从哪里重放：投影器按条数 / 间隔（`dataengine.projection.checkpoint_records` / `checkpoint_interval`，缺省 256 条 / 20 ms）合并确认，带回执 / effect 的记录（saga 原生步骤）与普通记录一样合并（2026-10-18 起）。这类记录逐条投影约 16 ms，缺省 20 ms 间隔下积压时合并系数约 2；维护者 2026-10-19 决定缺省保持 20 ms，需要更高吞吐的部署可调大 `checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。崩溃后会多重放这段已投影的记录，由事务标记判定为已应用，lease fence、回执与 effect 都保持首投的结果。只有单 mutation 快路记录仍逐条确认。effect 暂存进 outbox 后投影器立即唤醒 outbox 发布（2026-10-18 起），`dataengine.outbox.poll_interval`（缺省 100ms）只是兜底轮询，不再决定 effect 的发布延迟。WAL backlog、磁盘/年龄健康阈值、outbox 硬容量分别处理，不能统称任一超限都直接 fail-stop。启用前核对容量与保留期，receipt/事务标记不能在仍有重放可能时提前过期。
 
 **消费 effect（事务性 outbox 的消费端）**：业务用 `wiring/dataengine` 的 `SubscribeEffects(ctx, registry, EffectConsumer{Durable, Topic}, handler)`（D12 方向 A，维护者 2026-10-18 决定）。效果流、主题前缀与回执库按 DataEngine Mod 的声明（`dataengine.effects.*`、`dataengine.database`）取，回执集合缺省每个 durable 一个（`_effect_inbox_<durable>`）。语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经传入 ctx 的 Mongo 写与回执原子提交，再到达读到回执就跳过；Mongo 驱动可能重跑事务回调，事务外的副作用（调用别的服务）按 EffectID 幂等（demo 升级邮件把它当 mail 的 RequestID）。handler 返回普通错误 → 不写回执、按退避 nak 重投（缺省 250ms..30s，MaxDeliver 25000）；返回 `PoisonEffect(err)`、信封解不开或同一 EffectID 内容不同 → 直接 Term 不重投、ERROR 日志并计 `dataengine.effect_consumer.handled_total{result="poison"}`（非零要人核对）；handler 的 ctx 以 AckWait（缺省 30s）为截止。回执 TTL（缺省 30 天）不长于 `dataengine.effects.max_age` 时拒绝订阅。
 

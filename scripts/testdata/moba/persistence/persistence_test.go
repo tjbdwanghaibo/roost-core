@@ -27,8 +27,11 @@ func (mobaNoEffects) Publish(context.Context, engine.OutboxItem) error {
 	return errors.New("unexpected outbox effect in MOBA local settlement")
 }
 
-// 两个独立进程：第一进程通过正式 Sender 提交胜负，第二进程冷加载后重复结算不能重发奖励。
-// 固定脚本创建唯一 DAO 库与 WAL 目录，成功恢复后只删本次库；不做断电或事务结果未知注入。
+// 两次独立 go test 进程：第一进程通过正式多实体 Sender 提交胜负后正常停机；第二进程冷加载，
+// 先在任何结算请求之前核对结算身份 / 奖励 / 战绩已恢复，让恢复本身成为断言对象（实体随结算事务一起落库，
+// 库里没有时加载直接报 entity aggregate not found），
+// 再重放同一结算不能重发奖励、换胜者被拒。脚本创建唯一 DAO 库与 WAL 目录，成功恢复后只删本次库；
+// 不做断电、崩溃或事务结果未知注入，也不恢复进行中的对局。
 func TestMOBARealSettlementAcrossProcesses(t *testing.T) {
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
@@ -109,6 +112,9 @@ func TestMOBARealSettlementAcrossProcesses(t *testing.T) {
 	}
 	s := sender.NewMobaSettlementSender(scheduler)
 	digest := strings.Repeat("a", 64)
+	if phase == "recover" {
+		assertSettled(ctx, t, access, a, b, r, digest)
+	}
 	for range 2 {
 		if err := s.MultiSync_MOBASettle(ctx, r, a, b, "persisted-moba-match", digest, false); err != nil {
 			t.Fatal(err)
@@ -119,21 +125,7 @@ func TestMOBARealSettlementAcrossProcesses(t *testing.T) {
 			t.Fatal("recovered settlement accepted changed winner")
 		}
 	}
-	winner, err := access.Get(ctx, a, entity.EntityCategoryOther)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loser, err := access.Get(ctx, b, entity.EntityCategoryOther)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := access.Get(ctx, r, entity.EntityCategoryWorld)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if winner.(*player.Player).Dao().GetGold() != 10 || winner.(*player.Player).Dao().GetWins() != 1 || loser.(*player.Player).Dao().GetLosses() != 1 || result.(*resultentity.MatchResult).Dao().GetDigest() != digest {
-		t.Fatal("settlement identity or assets did not survive / replayed twice")
-	}
+	assertSettled(ctx, t, access, a, b, r, digest)
 	if err := runtime.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -147,5 +139,26 @@ func TestMOBARealSettlementAcrossProcesses(t *testing.T) {
 		if err := client.Database(database).Drop(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// assertSettled 核对一局已结算且只结算一次：结算身份、摘要与终态在 MatchResult，奖励与战绩在双方 Player。
+func assertSettled(ctx context.Context, t *testing.T, access *entity.ManagerAccess, a, b, r int64, digest string) {
+	t.Helper()
+	winner, err := access.Get(ctx, a, entity.EntityCategoryOther)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loser, err := access.Get(ctx, b, entity.EntityCategoryOther)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := access.Get(ctx, r, entity.EntityCategoryWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, l, d := winner.(*player.Player).Dao(), loser.(*player.Player).Dao(), result.(*resultentity.MatchResult).Dao()
+	if w.GetGold() != 10 || w.GetWins() != 1 || l.GetLosses() != 1 || d.GetStatus() != 1 || d.GetMatchKey() != "persisted-moba-match" || d.GetDigest() != digest || d.GetWinnerID() != a || d.GetLoserID() != b {
+		t.Fatalf("settlement not recovered exactly once: winner gold=%d wins=%d, loser losses=%d, result status=%d key=%q", w.GetGold(), w.GetWins(), l.GetLosses(), d.GetStatus(), d.GetMatchKey())
 	}
 }

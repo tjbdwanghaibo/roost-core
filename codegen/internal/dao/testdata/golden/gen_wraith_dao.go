@@ -283,39 +283,15 @@ func (d *WraithDao) setBuffsRawMap(src map[int32]int64) {
 // CaptureRollbackState is side-effect free and includes transient and
 // sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *WraithDao) CaptureRollbackState() ([]byte, error) {
-	type rollbackDoc struct {
-		Id      int64           `bson:"_id"`
-		PosX    int64           `bson:"pos_x"`
-		PosY    int64           `bson:"pos_y"`
-		Buffs   map[int32]int64 `bson:"buffs"`
-		Trail   []int64         `bson:"trail"`
-		Scratch int64           `bson:"scratch"`
-	}
-	doc := rollbackDoc{
-		Id:      d.id,
-		PosX:    d.posX,
-		PosY:    d.posY,
-		Buffs:   d.wraithDaoBuffsRawMap(),
-		Trail:   d.trail,
-		Scratch: d.scratch,
-	}
-	return bson.Marshal(doc)
+	return bson.Marshal(d.rollbackDoc())
 }
 
 func (d *WraithDao) RestoreRollbackState(raw []byte) error {
-	type rollbackDoc struct {
-		Id      int64           `bson:"_id"`
-		PosX    int64           `bson:"pos_x"`
-		PosY    int64           `bson:"pos_y"`
-		Buffs   map[int32]int64 `bson:"buffs"`
-		Trail   []int64         `bson:"trail"`
-		Scratch int64           `bson:"scratch"`
-	}
-	var doc rollbackDoc
+	var doc wraithDaoRollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = doc.Id
+	d.id = doc.ID
 	d.posX = doc.PosX
 	d.posY = doc.PosY
 	d.setBuffsRawMap(doc.Buffs)
@@ -323,6 +299,28 @@ func (d *WraithDao) RestoreRollbackState(raw []byte) error {
 	d.scratch = doc.Scratch
 	d.Init()
 	return nil
+}
+
+// wraithDaoRollbackDoc is the in-memory rollback snapshot, never stored:
+// every field under its key.
+type wraithDaoRollbackDoc struct {
+	ID      int64           `bson:"_id"`
+	PosX    int64           `bson:"pos_x"`
+	PosY    int64           `bson:"pos_y"`
+	Buffs   map[int32]int64 `bson:"buffs"`
+	Trail   []int64         `bson:"trail"`
+	Scratch int64           `bson:"scratch"`
+}
+
+func (d *WraithDao) rollbackDoc() wraithDaoRollbackDoc {
+	return wraithDaoRollbackDoc{
+		ID:      d.id,
+		PosX:    d.posX,
+		PosY:    d.posY,
+		Buffs:   d.wraithDaoBuffsRawMap(),
+		Trail:   d.trail,
+		Scratch: d.scratch,
+	}
 }
 
 // WraithDaoSyncFields is the vocabulary for this DAO's dirty masks: which

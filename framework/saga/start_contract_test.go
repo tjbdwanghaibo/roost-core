@@ -304,3 +304,41 @@ func TestEmitStartRefusesDataTheCoordinatorWouldRefuse(t *testing.T) {
 		t.Fatalf("type without a coordinator in this process refused below the wire cap: %v", err)
 	}
 }
+
+// 发起方按业务键查结果：生成的 EmitStart 不带 saga ID（启动消费者用 NewID 分配），发起方手里只有自己给的业务键。
+// (Type, BusinessKey) 本来就唯一（重复启动按摘要判定幂等或冲突），Engine.GetByBusinessKey 按它读记录；
+// 启动前、或换一个类型时是 ErrNotFound（新用户第七轮：修前 Engine 只有 Get(id) 与不含业务键的 List，查不到）。
+func TestEngineFindsTheSagaAnInitiatorStartedByBusinessKey(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "lookup_by_key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Register(testDefinition()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.GetByBusinessKey(ctx, "rally", "gift-req-7"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("before the start: GetByBusinessKey = %v; want ErrNotFound", err)
+	}
+	started, err := e.StartSaga(ctx, StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "gift-req-7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := e.GetByBusinessKey(ctx, "rally", "gift-req-7")
+	if err != nil {
+		t.Fatalf("GetByBusinessKey: %v", err)
+	}
+	if found.ID != started.ID || found.BusinessKey != "gift-req-7" || found.Status != started.Status {
+		t.Fatalf("GetByBusinessKey = %+v; want the started saga %s", found, started.ID)
+	}
+	if _, err := e.GetByBusinessKey(ctx, "other", "gift-req-7"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another type with the same key: GetByBusinessKey = %v; want ErrNotFound", err)
+	}
+}

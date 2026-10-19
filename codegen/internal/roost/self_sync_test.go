@@ -287,10 +287,7 @@ func (component *WalletComponent) AddGold(amount int64) error {
 // Add business methods below.`)
 	write("game/handler/add_gold.go", "package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\n//roost:nest rollback=undo durability=strict\nfunc handlerAddGold(target player.IWalletEntity, amount int64) error {\n\treturn target.WalletComp().AddGold(amount)\n}\n")
 	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n}")
-	// 协议生成先放了“未实现”的 controller 骨架；换成 endpoint 生成的 Sender 映射。
-	if err := os.Remove(filepath.Join(root, "game", "controllers", "player", "add_gold.go")); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
+	// 协议生成先放了“未实现”的 controller 占位；add endpoint 接管它，换成 endpoint 生成的 Sender 映射。
 	roost("add", "endpoint", "AddGold", "--handler", "player", "--root", root)
 	// Controller 归业务：登录 endpoint 要从 Registry 取 lifecycle，这里给它留一份 Registry。
 	write("game/controllers/player/controller.go", `package player

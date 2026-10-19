@@ -12,8 +12,16 @@ internal static partial class Program
 {
     private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     private static byte[] RawSync = Array.Empty<byte>();
-    private static async Task Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
+        // 只接受两种调用：金样路径（本地自测），或金样路径 + 生成工程 TCP 地址（TestClientSDKAgainstGeneratedPlayerTCP）。
+        // 其他参数个数打印用法并以 2 退出，不让缺参数变成 IndexOutOfRangeException。
+        if (args.Length != 1 && args.Length != 3)
+        {
+            Console.Error.WriteLine("usage: dotnet run --project client/dotnet/Roost.Client.Tests -- <packets.json> [<host> <port>]");
+            Console.Error.WriteLine("  e.g. dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json");
+            return 2;
+        }
         string path = args[0];
         foreach (var item in JsonDocument.Parse(File.ReadAllText(path)).RootElement.EnumerateArray())
         {
@@ -65,6 +73,7 @@ internal static partial class Program
             await GeneratedServer(args[1], int.Parse(args[2]));
         else
             { await LocalSession(); await Capacity(); await LockstepGapRetry(); }
+        return 0;
     }
     private static void Refuses(Action run, string why)
     {

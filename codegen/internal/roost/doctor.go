@@ -100,6 +100,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkConfigDeclarations(root, m, processSchemas)...)
 	report.Items = append(report.Items, checkConfigRules(root, m, process)...)
 	report.Items = append(report.Items, checkConfigSections(root, m)...)
+	report.Items = append(report.Items, checkConfigAcrossServicesItem(root, m))
 	report.Items = append(report.Items, checkConfigReads(root))
 	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
 	report.Items = append(report.Items, checkLogicOffsets(root, m))
@@ -114,6 +115,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 		report.Items = append(report.Items, item)
 	}
 	report.Items = append(report.Items, checkStepAndEffectWiring(root, m)...)
+	report.Items = append(report.Items, checkWebRouteServing(root, m)...)
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: "self-sync", Status: StatusFail, Detail: err.Error()})

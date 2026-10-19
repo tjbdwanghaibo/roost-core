@@ -343,6 +343,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
 | timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
+| services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
 ## 3. project
@@ -428,6 +429,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | saga | 跨服务 Saga 编排 | dataengine、mongo、nats |
+| web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
 ## 7. features
 
@@ -442,8 +444,8 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 | event | 事件定义、分发和 handler 接线 | 是 |
 | dao | DAO 定义与方法式字段访问代码 | 是 |
 | errcode | 错误码检查与文档导出 | 是 |
-| attribute | 属性定义与访问代码 | 否 |
-| webroute | HTTP route 扫描和注册代码 | 否 |
+| attribute | 属性定义与访问代码（随 roost add attribute 启用） | 否 |
+| webroute | HTTP route 扫描和注册代码（随 roost add webroute 启用，同时给宿主服务装 web Mod） | 否 |
 | rpc | 本工程自己的跨进程服务：internal/rpc/<name> 的 servicerpc 两半（随 roost add rpc 启用） | 否 |
 | saga | Saga definition 的生成与注册 | 否；由 roost add saga 维护 |
 | nettransport-udp | 房间帧同步 UDP 接线 | 否 |

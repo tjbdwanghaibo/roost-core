@@ -64,7 +64,7 @@ func (s *{{.Nested.Name}}) unbindDirty(owner daoDirtyOwner) {
 // MarshalBSON / UnmarshalBSON are kept for a {{.Nested.Name}} encoded on its own.
 type {{lower1 .Nested.Name}}BSONDoc struct {
 {{- range .Nested.Fields}}
-	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonTag .}}"` + "`" + `
 {{- end}}
 }
 

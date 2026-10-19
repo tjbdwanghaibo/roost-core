@@ -108,6 +108,10 @@ var modCatalog = map[string]modSpec{
 	"saga": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
 	},
+	// web 监听 roost add webroute 生成的业务 HTTP 路由；服务在 Init 里 kitweb.RegisterRoutes(registry, &web.Service{})。
+	"web": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/web", Alias: "kitweb", Constructor: "kitweb.NewMod()",
+	},
 }
 
 var knownFeatures = map[string]bool{

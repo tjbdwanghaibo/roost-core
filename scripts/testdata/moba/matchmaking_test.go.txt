@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// 匹配队列用正式领域实现 / 内存存储；服务 RPC、Redis 与认证在 demo 机器人入口另验。
+// 匹配队列用 service/match 的正式领域实现与内存存储；服务 RPC、Redis 存储与认证不在本用例内，
+// 接法参考 game-demo 的匹配服务（wiring/match）与机器人。
 func TestMOBAMatchmakingAdmissionCancellationAndCommit(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1800000000, 0)

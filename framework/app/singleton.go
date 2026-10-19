@@ -122,7 +122,7 @@ func (a *App) Singleton(open SingletonOpener) *App {
 // 锁静默关闭。
 type singletonConfig struct {
 	Enabled       bool          `config:"enabled" help:"同一服务类型 + sid 只让一个进程运行 Mod（单实例锁）"`
-	KeyPrefix     string        `config:"key_prefix" help:"锁键前缀，同一套部署的全部服务相同；启用时必填"`
+	KeyPrefix     string        `config:"key_prefix" shared:"singleton.key_prefix" help:"锁键前缀，同一套部署的全部服务相同；启用时必填"`
 	TTL           time.Duration `config:"ttl" default:"15s" min:"1ns"`
 	RenewInterval time.Duration `config:"renew_interval" default:"3s" min:"1ns"`
 	Guard         time.Duration `config:"guard" default:"5s" min:"1ns"`

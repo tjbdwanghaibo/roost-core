@@ -39,9 +39,11 @@ func TestMultiBatchCapabilityAndSpecialBoundaries(t *testing.T) {
 		if n, err := p.ReplayPass(context.Background()); n != 4 || err != nil {
 			t.Fatalf("n=%d err=%v", n, err)
 		}
+		// 非批量 Store 不承诺重放安全，逐单元确认；批量 Store 下特殊记录（effect）只是分段边界，
+		// checkpoint 与前后的记录一起按阈值合并，这里间隔 1 小时，只在本轮结束时确认一次。
 		want := []string{"project:" + records[0].ID.String(), "ack", "project:" + records[1].ID.String(), "ack", "project:" + records[2].ID.String(), "ack", "project:" + records[3].ID.String(), "ack"}
 		if capable {
-			want = []string{"batch:2", "ack", "project:" + records[2].ID.String(), "ack", "project:" + records[3].ID.String(), "ack"}
+			want = []string{"batch:2", "project:" + records[2].ID.String(), "project:" + records[3].ID.String(), "ack"}
 		}
 		if !slices.Equal(*events, want) {
 			t.Fatalf("capable=%v events=%v want=%v", capable, *events, want)
@@ -82,6 +84,101 @@ func TestMultiCheckpointThresholdsAndFailurePrefix(t *testing.T) {
 			assertWALReplayCount(t, w, 3-n)
 		})
 	}
+}
+
+// 特殊记录（effect / 回执 / Remote）的投影走带事务标记的 Mongo 事务，重放幂等，checkpoint 与普通记录共用
+// 条数 / 间隔阈值，不再逐条确认；只有单 mutation 快路记录（靠 _last_tx 判定幂等）和非批量 Store 仍逐单元确认。
+func TestSpecialRecordsShareCheckpointThresholds(t *testing.T) {
+	special := func(n int) []coredata.CommitRecord {
+		records := make([]coredata.CommitRecord, n)
+		for i := range records {
+			records[i] = projectorRecord(byte(i+1), true)
+		}
+		return records
+	}
+	for _, tc := range []struct {
+		name     string
+		capable  bool
+		count    int
+		interval time.Duration
+		wantAcks int
+	}{
+		{"end", true, 256, time.Hour, 1},
+		{"count", true, 3, time.Hour, 3},
+		{"time", true, 256, 40 * time.Millisecond, 4},
+		{"per-unit", true, 1, time.Hour, 8},
+		{"not-batch-capable", false, 256, time.Hour, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			records := special(8)
+			var store ProjectionStore = &recordingSegmentStore{}
+			if !tc.capable {
+				store = struct{ ProjectionStore }{store}
+			}
+			p, w := stoppedProjectorWithRecords(t, store, records, 4<<20)
+			p.opts.CheckpointRecords = tc.count
+			p.opts.CheckpointInterval = tc.interval
+			clock := time.Unix(0, 0)
+			p.now = func() time.Time { clock = clock.Add(20 * time.Millisecond); return clock }
+			acks := 0
+			p.ack = func(ctx context.Context, f corenest.CommitFence) error { acks++; return w.Ack(ctx, f) }
+			if n, err := p.ReplayPass(context.Background()); n != len(records) || err != nil {
+				t.Fatalf("n=%d err=%v", n, err)
+			}
+			if acks != tc.wantAcks {
+				t.Fatalf("checkpoint acks=%d want=%d", acks, tc.wantAcks)
+			}
+			assertWALReplayCount(t, w, 0)
+		})
+	}
+}
+
+// 快路记录（单 mutation、无 effect / 回执）仍在投影后立即确认，这次确认也覆盖它前面尚未确认的特殊记录。
+func TestFastPathRecordStillConfirmsPrecedingSpecialRecords(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, true), projectorRecord(2, false), projectorRecord(3, true), projectorRecord(4, true)}
+	s := &recordingSegmentStore{}
+	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
+	p.opts.CheckpointInterval = time.Hour
+	var acked []corenest.CommitFence
+	p.ack = func(ctx context.Context, f corenest.CommitFence) error {
+		s.events = append(s.events, "ack")
+		acked = append(acked, f)
+		return w.Ack(ctx, f)
+	}
+	if n, err := p.ReplayPass(context.Background()); n != 4 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	want := []string{"project:" + records[0].ID.String(), "project:" + records[1].ID.String(), "ack", "project:" + records[2].ID.String(), "project:" + records[3].ID.String(), "ack"}
+	if !slices.Equal(s.events, want) {
+		t.Fatalf("events=%v want=%v", s.events, want)
+	}
+	assertWALReplayCount(t, w, 0)
+}
+
+// checkpoint 丢失（进程在特殊记录已投影、checkpoint 未推进时退出）后，整段已投影的特殊记录从上一个 checkpoint
+// 起重放；投影器不跳过、不重排，第二轮全部交给 Store（由事务标记判定为已应用）后才推进 checkpoint。
+func TestSpecialRecordCheckpointLossReplaysTheWholeUnconfirmedPrefix(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, true), projectorRecord(2, true), projectorRecord(3, true)}
+	s := &recordingSegmentStore{}
+	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
+	p.opts.CheckpointInterval = time.Hour
+	lost := errors.New("process exited before the checkpoint")
+	acks := 0
+	p.ack = func(context.Context, corenest.CommitFence) error { acks++; return lost }
+	if n, err := p.ReplayPass(context.Background()); n != 3 || !errors.Is(err, lost) || acks != 1 {
+		t.Fatalf("n=%d acks=%d err=%v", n, acks, err)
+	}
+	assertWALReplayCount(t, w, 3)
+	s.events = nil
+	p.ack = w.Ack
+	if n, err := p.ReplayPass(context.Background()); n != 3 || err != nil {
+		t.Fatalf("replay n=%d err=%v", n, err)
+	}
+	want := []string{"project:" + records[0].ID.String(), "project:" + records[1].ID.String(), "project:" + records[2].ID.String()}
+	if !slices.Equal(s.events, want) {
+		t.Fatalf("replayed=%v want=%v", s.events, want)
+	}
+	assertWALReplayCount(t, w, 0)
 }
 
 func TestMultiCheckpointLossKeepsEntireSuccessfulPrefix(t *testing.T) {

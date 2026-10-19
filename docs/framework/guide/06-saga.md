@@ -1,6 +1,6 @@
 # Saga 长事务：设计与使用
 
-适用版本：v1.27.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/06-saga.md) · [模块总目录](../README.md)
+适用版本：v1.28.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/06-saga.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -49,7 +49,7 @@ roost add saga gift -service game -steps debit,credit,audit -native debit,credit
 roost add effect player.level_up -consumer game
 ```
 
-- `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`（不再生成 `Subscribe<Step>` 辅助：那是 `Steps` 之前的第二套写法）。
+- `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`、发起方按业务键查结果的 `Lookup(ctx, engine, businessKey)`（`Engine.GetByBusinessKey`，`ErrNotFound` 表示还没开始）（不再生成 `Subscribe<Step>` 辅助：那是 `Steps` 之前的第二套写法）。
 - `saga/<name>/steps.go`：`State` 与 `EncodeState` / `DecodeState`；每步正向与补偿的步骤体（原生步骤解出实体 ID 后调生成的 Sender，Mongo 步骤留 TODO 与“事务外副作用按 `IdempotencyKey` 幂等”的说明）；`RegisterSteps(steps, deps)` 按 `-steps` 顺序、按主题常量登记（`-native` 的用 `Native`，其余 `Mongo`；`WithAdmit` 空着并注释多进程分片要补）；`StartSteps(ctx, registry, deps)` = `NewSteps(registry, "<service>-<name>")` + `RegisterSteps` + `Start`。服务 Init 里一行 `steps, err := gift.StartSteps(context.Background(), registry, gift.StepDeps{})`，Shutdown 里 `steps.Drain(ctx)`（超时 `Stop()`）。
 - 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`，锁目标与 `add handler` 同一套解析（`-entity` / `-component`）。`-native` 必须是 `-steps` 的子集，不能重复；服务要有 nest Mod。
 - `roost add effect`：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`：在 Nest handler 里调用，effect 与实体修改同一条 WAL 记录）与 `internal/service/<consumer>/<topic>_consumer.go`（`kitdataengine.SubscribeEffects` 骨架，载荷解不开返回 `PoisonEffect`）。消费服务要有 dataengine Mod；同一 effect 的第二个消费服务只建自己的消费者。
@@ -68,7 +68,7 @@ roost add effect player.level_up -consumer game
 
 业务给稳定 ID、可重复执行的步骤输入、补偿策略、有限超时与人工处理入口。观察运行数、待领取、lease、outbox、步骤时延、失败终态和补偿积压。长任务容量应按全链路存储/发布/回执测，不用 handler 微基准代替。
 
-稳定版实测正向20/s、全补偿10/s为已测档；20/s全补偿出现积压。这两档是 Mongo 步骤路径；**原生步骤**（经 Nest + DataEngine）单进程容量低得多，2026-10-18 优化（逐跳打点、投影后唤醒 outbox、去冗余读、等回执移出 durable 回调）后实测：两步原生 saga 正向 5/s、全补偿 3/s 的完成耗时 P50 约 280～310 / 350～420 ms，全补偿 4/s 通过；正向 7～8/s、全补偿 5/s 全部正确完成但延迟秒级；正向 10/s、全补偿 10/s 起步骤超时、重试放大（仍恰好一次，但多数 saga 以 failed / compensated 结束）。第一瓶颈是 DataEngine 投影器逐条处理带回执 / effect 的记录（每条一次 checkpoint），见 [Saga 原生步骤性能优化](../../performance/SAGA-OPT-20261018.md) 与 KNOWN-LIMITS“Saga 原生步骤容量”。量大时按 sid 分片多进程（每个进程只执行自己 sid 的实体，原生步骤加 `WithAdmit` 准入，见 §2.1 与 game-demo 赠礼 saga）。生成的 `steps.go`、effect 消费者骨架、`roost add saga` 的 next 提示与 `roost help saga` 都写了这几个数字与分片要求。该测量未包含 Nest 发起意图的完整前段，也不代表与普通业务混跑的容量。生产步骤依赖和故障策略需要业务单独验收。
+稳定版实测正向20/s、全补偿10/s为已测档；20/s全补偿出现积压。这两档是 Mongo 步骤路径；**原生步骤**（经 Nest + DataEngine）单进程容量低得多。当前数字（2026-10-18 两轮优化后实测，投影 checkpoint 缺省间隔 20 ms，[投影器合并 checkpoint 前后对照](../../performance/SAGA-CHECKPOINT-20261018.md) §3、§5）：第一瓶颈是 DataEngine 投影器串行处理带回执 / effect 的记录（每条一次投影事务约 16 ms），约 20 条/s，正向每笔 2 条、全补偿每笔 3 条；两步原生 saga 正向 5/s、全补偿 3/s 持续 3 分钟无积压（Server P50 正向约 280～345 ms、全补偿约 345～425 ms），正向 8/s P50 517 ms / P99 793 ms、全补偿 5/s P50 688 ms / P99 1.2 s；正向 10/s 仍 0 笔终态不对，但积压、P50 2.2 s；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（仍恰好一次）。上限档各单样本。优化过程（逐跳打点、投影后唤醒 outbox、去冗余读、等回执移出 durable 回调）见 [Saga 原生步骤性能优化](../../performance/SAGA-OPT-20261018.md)，限制与后续入口见 KNOWN-LIMITS“Saga 原生步骤容量”。投影 checkpoint 间隔缺省 20 ms（维护者 2026-10-19 决定保持），需要更高吞吐的部署可调 `dataengine.projection.checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。量大时按 sid 分片多进程（每个进程只执行自己 sid 的实体，原生步骤加 `WithAdmit` 准入，见 §2.1 与 game-demo 赠礼 saga）。生成的 `steps.go`、`roost add saga` 的 next 提示与 `roost help saga` 都写了这几个数字与分片要求（effect 消费者骨架写明逐条处理、未单独测量）。该测量未包含 Nest 发起意图的完整前段，也不代表与普通业务混跑的容量。生产步骤依赖和故障策略需要业务单独验收。
 
 ## 源码与核对范围
 

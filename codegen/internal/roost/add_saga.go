@@ -13,8 +13,8 @@ import (
 // Saga 步骤运行时与性能报告的链接：生成的骨架注释与 roost help 引用同一份。
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
-	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-OPT-20261018.md"
-	sagaCapacitySummary = "in one process, two-step native sagas stay under a second up to about 5/s forward and 4/s fully compensated; at 7-8/s forward and 5/s fully compensated the DataEngine projector (one record with a receipt or effect at a time) falls behind and latency grows to seconds, and at about 10/s step timeouts retry and amplify the load"
+	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-CHECKPOINT-20261018.md"
+	sagaCapacitySummary = "in one process, two-step native sagas keep P50 under a second up to about 8/s forward and 5/s fully compensated; at 10/s forward every saga still ends correctly but the DataEngine projector (about 20 records/s, one record with a receipt or effect at a time) falls behind and latency grows to seconds, and from 12/s forward or 7/s fully compensated step timeouts retry and amplify the load"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -261,8 +261,21 @@ func Register(engine *saga.Engine) error {
 
 // EmitStart is the production entry point from a Nest handler: the Saga start
 // intent and current Entity mutations are committed in the same Nest WAL record.
+// A saga is identified by (Type, businessKey) — one saga per key — and its id is
+// assigned when the coordinator picks the intent up, so make businessKey
+// something the initiator can hand back to the client (a request id, say): the
+// client later asks with it and Lookup finds the outcome.
 func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 	return saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
+}
+
+// Lookup finds the saga EmitStart / Start started for businessKey on the
+// process hosting the coordinator (app.Lookup[*saga.Engine](registry, mods.ModSaga)).
+// saga.ErrNotFound means it has not started yet: the intent is still on its way
+// through the outbox, so treat it as pending, not as a failure. A terminal
+// record.Status (Completed / Compensated / Failed) is the outcome.
+func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error) {
+	return engine.GetByBusinessKey(ctx, Type, businessKey)
 }
 
 // Start is for durable consumers, administration and recovery paths which are
@@ -379,19 +392,22 @@ import (
 //
 // roost project doctor warns (saga-steps:%[1]s) while nothing calls StartSteps.
 //
-// Capacity (measured 2026-10-18): a step's durable is shared by every replica
-// of the service; a replica's callback runs one command's reservation and Nest
-// call at a time and waits for the projected receipt in the background. In one
-// process, two-step native sagas stay under a second up to about 5/s forward
-// and 4/s fully compensated; at 7-8/s forward and 5/s fully compensated the
-// DataEngine projector, which handles each record carrying a receipt or effect
-// on its own, falls behind and latency grows to seconds; at about 10/s step
-// timeouts retry and amplify the load (each operation still takes effect
-// exactly once, but most sagas end failed / compensated). Mongo steps measured
-// 20/s forward without saturating. More load needs more processes: shard by sid
-// (each process owns its sids' entities) and add an admission check on the
-// native steps (kitsaga.WithAdmit, below) so a command runs on the process that
-// owns its entity. Measurements:
+// Capacity (measured 2026-10-18, default 20 ms projection checkpoint
+// interval): a step's durable is shared by every replica of the service; a
+// replica's callback runs one command's reservation and Nest call at a time and
+// waits for the projected receipt in the background. The DataEngine projector
+// handles each record carrying a receipt or effect on its own, about 20
+// records/s (2 per forward saga, 3 per fully compensated one). In one process,
+// two-step native sagas keep P50 under a second up to about 8/s forward and
+// 5/s fully compensated (P99 0.8 / 1.2 s); at 10/s forward every saga still
+// ends correctly but the projector falls behind and latency grows to seconds
+// (P50 2.2 s); from 12/s forward or 7/s fully compensated step timeouts retry
+// and amplify the load (each operation still takes effect exactly once, but
+// many sagas end failed / compensated). The top rates are single samples.
+// Mongo steps measured 20/s forward without saturating. More load needs more
+// processes: shard by sid (each process owns its sids' entities) and add an
+// admission check on the native steps (kitsaga.WithAdmit, below) so a command
+// runs on the process that owns its entity. Measurements:
 // %[5]s
 // Guide: %[6]s §2.1
 
@@ -617,7 +633,7 @@ func addSaga(root string, m Manifest, options AddOptions) ([]string, error) {
 	if err != nil {
 		return paths, restoreFiles(root, backups, err)
 	}
-	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 	spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "saga"))
 	m.Services[service] = spec
 	m.Features = uniqueSorted(append(m.Features, "saga"))
@@ -647,6 +663,7 @@ func printSagaNext(stdout io.Writer, name string, native bool) {
 	fmt.Fprintf(stdout, "  Init:     steps, err := %s.StartSteps(context.Background(), registry, %s.StepDeps{})   // import <module>/saga/%s\n", snake, snake, snake)
 	fmt.Fprintf(stdout, "  Shutdown: if err := steps.Drain(ctx); err != nil { steps.Stop() }\n")
 	fmt.Fprintf(stdout, "next: start a saga from a Nest handler: state, _ := %s.EncodeState(%s.State{...}); %s.EmitStart(businessKey, state, deadline)\n", snake, snake, snake)
+	fmt.Fprintf(stdout, "      the outcome: %s.Lookup(ctx, engine, businessKey) on the coordinator's process (saga.ErrNotFound = not started yet)\n", snake)
 	fmt.Fprintf(stdout, "capacity: %s; more load needs more processes sharded by sid (see roost help saga)\n", sagaCapacitySummary)
 	fmt.Fprintln(stdout, "guide: "+sagaGuideURL)
 }

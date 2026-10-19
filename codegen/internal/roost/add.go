@@ -87,7 +87,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		// The spec's Mods slice may share its array with the manifest's;
 		// copy before appending so the "before" view stays what it was.
-		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), toSnake(name)))
 		m.Services[service] = spec
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
@@ -128,7 +128,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if m.Access == nil {
 			m.Access = make(map[string]AccessSpec)
 		}
-		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 		m.Access[accessName] = AccessSpec{Service: service}
 		m.Features = uniqueSorted(append(m.Features, "protocol", "nest"))
 		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "nest"))
@@ -233,6 +233,12 @@ func Add(root string, options AddOptions) ([]string, error) {
 	}
 	if options.Kind == "rpc" {
 		return addRPC(root, m, options)
+	}
+	if options.Kind == "attribute" {
+		return addAttribute(root, m, options)
+	}
+	if options.Kind == "webroute" {
+		return addWebRoute(root, m, options)
 	}
 	return addArtifact(root, m, options)
 }
@@ -409,9 +415,6 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		}
 		path = "db/def/" + snake + ".go"
 		body = renderDAODefinition(daoDatabaseName(m.Project.Name), snake, pascal+"Dao")
-	case "webroute":
-		path = "service/web/" + snake + ".go"
-		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
 	case "errcode":
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")

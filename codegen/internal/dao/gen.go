@@ -25,6 +25,12 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	if err := validateGeneratedMapFields(dao.Fields); err != nil {
 		return false, err
 	}
+	if err := validateFieldKeys(dao.Name, dao.Fields); err != nil {
+		return false, err
+	}
+	if err := validatePersistDocFieldNames(dao); err != nil {
+		return false, err
+	}
 	tmpl, err := template.New("dao").Funcs(funcMap(defs)).Parse(daoTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
@@ -74,7 +80,7 @@ func nestedFuncMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
 		"snakeCase":          toSnake,
 		"lower1":             lower1,
-		"bsonKey":            func(name string) string { return toSnake(name) },
+		"bsonTag":            bsonTag,
 		"fieldType":          fieldType,
 		"fieldVar":           safeFieldVarName,
 		"mapValType":         mapValType,
@@ -203,10 +209,13 @@ func elemFromWire(typeName string, ptr bool) string {
 }
 
 func generateNested(nested NestedDef, defs *Definitions, pkg string, outFile string, force bool) (bool, error) {
-	if err := validateGeneratedStorageFields(nested.Name, nested.Fields); err != nil {
+	if err := validateGeneratedStorageFields(nested.Name, nested.Fields, "dirtyOwner"); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(nested.Fields); err != nil {
+		return false, err
+	}
+	if err := validateFieldKeys(nested.Name, nested.Fields); err != nil {
 		return false, err
 	}
 	tmpl, err := template.New("nested").Funcs(nestedFuncMap(defs)).Parse(nestedTemplate)
@@ -284,28 +293,32 @@ func writeIfChanged(content []byte, outFile string, force bool) (bool, error) {
 
 func funcMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
-		"snakeCase":     toSnake,
-		"lower1":        lower1,
-		"daoDBConst":    daoDBConstName,
-		"daoCollConst":  daoCollectionConstName,
-		"daoKeyConst":   daoRegistryKeyConstName,
-		"dbScope":       databaseScopeExpr,
-		"isNested":      func(typeName string) bool { return isNestedType(defs, typeName) },
-		"wireType":      func(f FieldDef) string { return wireType(defs, f) },
-		"toWire":        func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
-		"fromWire":      func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
-		"persistFields": func(fields []FieldDef) []FieldDef { return filterPersist(fields) },
-		"syncFields":    func(fields []FieldDef) []FieldDef { return filterSync(fields) },
-		"mutableFields": func(fields []FieldDef) []FieldDef { return filterMutable(fields) },
-		"bsonKey":       func(name string) string { return toSnake(name) },
-		"fieldMaskName": fieldMaskName,
-		"fieldType":     fieldType,
-		"fieldVar":      safeFieldVarName,
-		"mapValType":    mapValType,
-		"mapNewExpr":    mapNewExpr,
-		"rawMapType":    rawMapType,
-		"mapHelperName": mapHelperName,
-		"hasMaps":       hasMapFields,
+		"snakeCase":          toSnake,
+		"lower1":             lower1,
+		"daoDBConst":         daoDBConstName,
+		"daoCollConst":       daoCollectionConstName,
+		"daoKeyConst":        daoRegistryKeyConstName,
+		"dbScope":            databaseScopeExpr,
+		"isNested":           func(typeName string) bool { return isNestedType(defs, typeName) },
+		"wireType":           func(f FieldDef) string { return wireType(defs, f) },
+		"toWire":             func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
+		"fromWire":           func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
+		"persistFields":      func(fields []FieldDef) []FieldDef { return filterPersist(fields) },
+		"syncFields":         func(fields []FieldDef) []FieldDef { return filterSync(fields) },
+		"mutableFields":      func(fields []FieldDef) []FieldDef { return filterMutable(fields) },
+		"bsonTag":            bsonTag,
+		"persistDocName":     persistDocName,
+		"storedKeysName":     storedKeysName,
+		"rollbackDocName":    rollbackDocName,
+		"rollbackOnlyFields": rollbackOnlyFields,
+		"fieldMaskName":      fieldMaskName,
+		"fieldType":          fieldType,
+		"fieldVar":           safeFieldVarName,
+		"mapValType":         mapValType,
+		"mapNewExpr":         mapNewExpr,
+		"rawMapType":         rawMapType,
+		"mapHelperName":      mapHelperName,
+		"hasMaps":            hasMapFields,
 		"schemaVersion": func(d DaoDef) uint32 {
 			if d.Schema == 0 {
 				return 1
@@ -313,6 +326,62 @@ func funcMap(defs *Definitions) template.FuncMap {
 			return d.Schema
 		},
 	}
+}
+
+// --- persisted document (DESIGN-TODO D13) ---
+//
+// Every Mongo DAO gets a generated document struct, <dao>PersistDoc, whose
+// explicit bson tags are the stored keys: it is what full writes encode,
+// what hydration decodes, what the rollback snapshot inlines, and what the
+// load-time unknown-key check (dataengine.StoredKeySet) is derived from. The
+// patch paths spell the same keys as literals taken from the same FieldDef.Key,
+// so the template has no other way to arrive at a key.
+
+func persistDocName(daoName string) string { return lower1(daoName) + "PersistDoc" }
+
+func storedKeysName(daoName string) string { return lower1(daoName) + "StoredKeys" }
+
+func rollbackDocName(daoName string) string { return lower1(daoName) + "RollbackDoc" }
+
+// bsonTag is the generated struct tag value for a field: its key, plus
+// omitempty when the definition asked for it.
+func bsonTag(f FieldDef) string {
+	if f.OmitEmpty() {
+		return f.Key + ",omitempty"
+	}
+	return f.Key
+}
+
+// rollbackOnlyFields are the fields the rollback snapshot carries besides the
+// persisted document: the nopersist ones (all of them for a nocoll DAO).
+func rollbackOnlyFields(dao DaoDef) []FieldDef {
+	if dao.NoCollection {
+		return dao.Fields
+	}
+	var out []FieldDef
+	for _, f := range dao.Fields {
+		if !f.Tag.Persist {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// persistDocReservedNames are Go field names the generated document structs
+// use themselves: ID and SchemaVersion carry _id and _schema, and PersistDoc
+// is the persisted document inside the rollback snapshot. (ID is already
+// refused by validateGeneratedStorageFields: its private name is id.)
+var persistDocReservedNames = []string{"SchemaVersion", "PersistDoc"}
+
+func validatePersistDocFieldNames(dao DaoDef) error {
+	for _, field := range dao.Fields {
+		for _, reserved := range persistDocReservedNames {
+			if field.Name == reserved {
+				return fmt.Errorf("dao %s field %s: the name is used by the generated persisted document (%s); rename the Go field and keep its stored key with bson:%q", dao.Name, field.Name, persistDocName(dao.Name), field.Key)
+			}
+		}
+	}
+	return nil
 }
 
 func validateDatabaseScope(dao DaoDef) error {

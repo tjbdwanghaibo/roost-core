@@ -1,4 +1,4 @@
-// CAS 契约：比较后写、比较后删、索引同次维护与分数精度、不完整命令与畸形回复拒绝。
+// CAS 契约：比较后写、比较后删、索引同次维护与分数精度、多键全有或全无、不完整命令与畸形回复拒绝。
 
 package redis
 
@@ -384,5 +384,83 @@ func TestIndexScorePrecisionSurvivesLuaIntegration(t *testing.T) {
 	}
 	if score != due {
 		t.Fatalf("score came back as %f, want %f: a unix second must survive the script", score, due)
+	}
+}
+
+// CompareAndSetAll 的命令不完整时在发出脚本之前拒绝：没有键、空 key、nil Next、重复键、带索引。
+func TestCompareAndSetAllRejectsIncompleteCommandsBeforeIO(t *testing.T) {
+	ctx := context.Background()
+	runner := &recordingScriptRunner{reply: int64(1)}
+	valid := []CompareAndSetCommand{{Key: "a", Expected: []byte("1"), Next: []byte("2")}, {Key: "b", Next: []byte("1")}}
+	if applied, err := CompareAndSetAll(ctx, runner, valid); err != nil || !applied || runner.calls != 1 {
+		t.Fatalf("baseline CompareAndSetAll = applied=%v err=%v calls=%d", applied, err, runner.calls)
+	}
+	for name, cmds := range map[string][]CompareAndSetCommand{
+		"no commands":   nil,
+		"empty key":     {{Next: []byte("1")}},
+		"nil next":      {{Key: "a", Expected: []byte("1")}},
+		"duplicate key": {{Key: "a", Next: []byte("1")}, {Key: "a", Next: []byte("2")}},
+		"index":         {{Key: "a", Next: []byte("1"), Index: &CompareAndSetIndex{Key: "z", Member: "a"}}},
+	} {
+		before := runner.calls
+		if applied, err := CompareAndSetAll(ctx, runner, cmds); !errors.Is(err, ErrCASInvalidCommand) || applied {
+			t.Fatalf("%s: CompareAndSetAll = applied=%v err=%v, want ErrCASInvalidCommand", name, applied, err)
+		}
+		if runner.calls != before {
+			t.Fatalf("%s: a rejected command reached the script runner", name)
+		}
+	}
+	if _, err := CompareAndSetAll(ctx, nil, valid); !errors.Is(err, ErrCASInvalidCommand) {
+		t.Fatalf("nil client = %v", err)
+	}
+}
+
+// 真实 Redis 上的多键脚本：一个键不是期望值时另一个键也不写；全部符合时全部写入并按各自的 TTL；
+// 期望不存在的键已存在时整体不写。Go 替身只能证明我以为脚本做了什么，脚本本身在这里核对（ROOST_REDIS_TEST_ADDR）。
+func TestCompareAndSetAllIsAllOrNothingIntegration(t *testing.T) {
+	client := integrationRedis(t)
+	runner := evalRunner{client: client}
+	ctx := context.Background()
+	prefix := fmt.Sprintf("cas-all:%d:{t}:", time.Now().UnixNano())
+	a, b, c := prefix+"a", prefix+"b", prefix+"c"
+	t.Cleanup(func() { client.Del(context.Background(), a, b, c) })
+	client.Set(ctx, a, "a0", 0)
+	client.Set(ctx, b, "b0", 0)
+
+	applied, err := CompareAndSetAll(ctx, runner, []CompareAndSetCommand{
+		{Key: a, Expected: []byte("a0"), Next: []byte("a1")},
+		{Key: b, Expected: []byte("stale"), Next: []byte("b1")},
+	})
+	if err != nil || applied {
+		t.Fatalf("a set with one stale key = applied=%v err=%v, want not applied", applied, err)
+	}
+	if got := client.Get(ctx, a).Val(); got != "a0" {
+		t.Fatalf("the stale key's partner was written: a = %q", got)
+	}
+	applied, err = CompareAndSetAll(ctx, runner, []CompareAndSetCommand{
+		{Key: a, Expected: []byte("a0"), Next: []byte("a1")},
+		{Key: b, Expected: []byte("b0"), Next: []byte("b1"), TTL: time.Hour},
+		{Key: c, Next: []byte("c1")},
+	})
+	if err != nil || !applied {
+		t.Fatalf("a matching set = applied=%v err=%v", applied, err)
+	}
+	for key, want := range map[string]string{a: "a1", b: "b1", c: "c1"} {
+		if got := client.Get(ctx, key).Val(); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if ttl := client.PTTL(ctx, b).Val(); ttl <= 0 || ttl > time.Hour {
+		t.Fatalf("b's ttl = %v, want (0, 1h]", ttl)
+	}
+	if ttl := client.PTTL(ctx, a).Val(); ttl != -1*time.Millisecond && ttl != -1 {
+		t.Fatalf("a's ttl = %v, want none", ttl)
+	}
+	applied, err = CompareAndSetAll(ctx, runner, []CompareAndSetCommand{
+		{Key: a, Expected: []byte("a1"), Next: []byte("a2")},
+		{Key: c, Next: []byte("c2")},
+	})
+	if err != nil || applied || client.Get(ctx, a).Val() != "a1" {
+		t.Fatalf("expecting an existing key to be absent = applied=%v err=%v a=%q", applied, err, client.Get(ctx, a).Val())
 	}
 }

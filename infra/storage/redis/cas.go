@@ -248,3 +248,77 @@ func CompareAndDelete(ctx context.Context, client ScriptRunner, key string, expe
 	}
 	return parseCompareAndSetResult(ret)
 }
+
+// compareAndSetAllScript 是多键版的 compareAndSetScript：先逐键比较，全部通过才逐键写入，
+// 任何一个键不符就一个都不写。每个键占 ARGV 里连续四格：期望值、新值、TTL 毫秒、"1" 表示期望键不存在。
+//
+// 比较与写入在同一个脚本里，Redis 单线程执行脚本，所以“全有或全无”不靠回滚：写入阶段开始时所有比较
+// 都已通过，SET / PSETEX 对字符串值不会半途失败（内存不足时 Redis 在脚本开始前就拒绝可能写入的脚本）。
+const compareAndSetAllScript = `
+local n = #KEYS
+for i = 1, n do
+  local at = (i - 1) * 4
+  local current = redis.call("GET", KEYS[i])
+  if ARGV[at + 4] == "1" then
+    if current ~= false then
+      return 0
+    end
+  elseif current == false or current ~= ARGV[at + 1] then
+    return 0
+  end
+end
+for i = 1, n do
+  local at = (i - 1) * 4
+  if tonumber(ARGV[at + 3]) > 0 then
+    redis.call("PSETEX", KEYS[i], ARGV[at + 3], ARGV[at + 2])
+  else
+    redis.call("SET", KEYS[i], ARGV[at + 2])
+  end
+end
+return 1
+`
+
+// CompareAndSetAll 对多个键做一次全有或全无的比较并设置：每个键都仍是调用方读到的字节（Expected 为 nil 时
+// 要求键不存在）才把全部键写成各自的 Next，返回 true；任何一个键不符返回 false，一个键也不改。
+//
+// 它服务于“一个事实横跨几个版本化值”的写，例如 service/match 的跨分区成局：几张票分属不同分区的队列状态，
+// 成局要么在所有分区同时生效，要么都不生效。
+//
+// 键不能重复，也不支持 Index（多键写目前没有需要同步维护的索引）。脚本一次带多个键，Redis Cluster 要求它们
+// 落在同一个 hash slot（键名用同一个 hash tag），否则服务端回 CROSSSLOT 错误；键的布局由调用方决定，
+// 这个约束也由调用方负责。
+func CompareAndSetAll(ctx context.Context, client ScriptRunner, cmds []CompareAndSetCommand) (bool, error) {
+	if client == nil || len(cmds) == 0 {
+		return false, ErrCASInvalidCommand
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	keys := make([]string, 0, len(cmds))
+	args := make([]any, 0, 4*len(cmds))
+	seen := make(map[string]bool, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.Key == "" || cmd.Next == nil || cmd.Index != nil || seen[cmd.Key] {
+			return false, ErrCASInvalidCommand
+		}
+		seen[cmd.Key] = true
+		ttlMillis := int64(0)
+		if cmd.TTL > 0 {
+			ttlMillis = int64(cmd.TTL / time.Millisecond)
+			if ttlMillis <= 0 {
+				ttlMillis = 1
+			}
+		}
+		expectMissing := "0"
+		if cmd.Expected == nil {
+			expectMissing = "1"
+		}
+		keys = append(keys, cmd.Key)
+		args = append(args, string(cmd.Expected), string(cmd.Next), ttlMillis, expectMissing)
+	}
+	ret, err := client.Eval(ctx, compareAndSetAllScript, keys, args...)
+	if err != nil {
+		return false, err
+	}
+	return parseCASApplied(ret)
+}

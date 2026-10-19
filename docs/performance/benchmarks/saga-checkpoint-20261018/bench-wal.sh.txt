@@ -1,0 +1,9 @@
+#!/bin/bash
+# 交替运行修前 / 修后二进制，各 6 轮。
+cd "$(dirname "$0")"
+: > wal-before.txt; : > wal-after.txt
+for i in 1 2 3 4 5 6; do
+  ./engine-before.test -test.run '^$' -test.bench 'BenchmarkProjectorWALReplayAckMatrix' -test.benchtime 3x -test.count 1 -test.timeout 0 >> wal-before.txt 2>&1
+  ./engine-after.test -test.run '^$' -test.bench 'BenchmarkProjectorWALReplayAckMatrix' -test.benchtime 3x -test.count 1 -test.timeout 0 >> wal-after.txt 2>&1
+done
+echo done > bench-wal.done

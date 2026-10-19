@@ -2,11 +2,11 @@
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-当前版本v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)：生成工程 `game/playeraccess` 改名、Remote WAL 级 Rejected 精简；生成物最低 core 仍为 v1.26.0）；此前补丁 v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)：Sync 慢消费者与自身视图、嵌入 TCP 出站队列、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局等，含破坏性变化；生成物最低 core 升到 v1.28.0）；上一版 v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)：`game/playeraccess` 改名、Remote WAL 级 Rejected 精简）；此前补丁 v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
-单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.26.0 最低生成物运行依赖是 core v1.26.0（生成物使用 `lockstep.NewMatch` 等新 API）。文档补丁不改变最低版本和业务 API。
+单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。当前生成物最低运行依赖是 core v1.28.0（生成物使用 `framework/nest/entitytimer`、`wiring/selfsync`、`dataengine.NewStoredKeySet`、saga `Engine.GetByBusinessKey` 等 v1.28.0 新 API；钉 v1.27.0 编译失败）。文档补丁不改变最低版本和业务 API。
 
 Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 
@@ -40,6 +40,14 @@ GOWORK=off go test -race ./framework/nest ./framework/sync/entitysync
 GOWORK=off go generate ./...
 git diff --exit-code
 ~~~
+
+改协议（`client/wire`、生成 PB）、Sync 帧（`framework/sync/frame`、entitysync）、Lockstep 编码或 `client/dotnet` 时，另跑 C# 客户端 SDK 的验证：
+
+~~~sh
+./scripts/test-client-dotnet.sh   # 金样 + SDK 自测 + 生成工程真实 TCP；缺 dotnet 打印 SKIP 并以 0 退出（不是通过）
+~~~
+
+它需要 .NET 10 SDK；没有时如实记“C# 未验证”。pretag 只跑金样与自测（生成工程那一条随 `go test ./...` 在 dotnet 可用时运行），CI 的 `client-dotnet` job 装 .NET 10 并以 `ROOST_REQUIRE_DOTNET=1` 跑全部。
 
 根包 `go test -count=1 .` 是一组仓库级门禁，其中 `TestTrackedGoFilesAreGofmtClean` 要求所有跟踪（及未忽略的新增）`.go` 文件 gofmt 无差异，失败时列出文件；提交前对改过的文件跑 `gofmt -w`。
 

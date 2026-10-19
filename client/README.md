@@ -149,7 +149,11 @@ await match.ReportHashAsync(lastAppliedFrame, deterministicGame.StateHash);
 go test -race ./client/wire ./framework/sync/frame ./robot/... ./codegen/internal/protocol -count=1
 dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json
 go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$' -count=1 -v
+# 或者一条命令跑上面两条 C# 验证（缺 dotnet 时打印 SKIP 并以 0 退出）：
+./scripts/test-client-dotnet.sh
 ```
+
+测试程序只接受 `<packets.json>` 或 `<packets.json> <host> <port>` 两种参数，其他个数打印用法并以 2 退出。pretag 跑金样与自测，CI 的 `client-dotnet` job 跑全部（缺 dotnet 即失败）；维护手册 §3 把它列为改协议 / Sync / Lockstep 时的验证。
 
 正式生成工程测试需要.NET 10 SDK（测试程序target net10.0，运行库仍netstandard2.1）；缺SDK时明确skip，不能当C#验收。测试在私有生成工程执行真实TCP鉴权→生成PB编解码→并发请求→raw Sync推送，以及Match→TCPSender→C#输入/Hash/主动制造缺口→可靠追帧，并运行现有TCP/Scene race场景，重生成托管目录必须字节不变。
 

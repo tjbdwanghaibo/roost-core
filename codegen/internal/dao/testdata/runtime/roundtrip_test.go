@@ -11,6 +11,9 @@
 package testdata
 
 import (
+	"bytes"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -180,4 +183,149 @@ func TestReplacedChildStopsMarkingTheOldParent(t *testing.T) {
 	if *marks != after {
 		t.Errorf("a replaced child still marks its old parent")
 	}
+}
+
+// 改字段告警（加载期，DESIGN-TODO D13）：库里的文档有、生成的持久文档结构体没有的键——字段改了名、删了、改成
+// nopersist——在 RestorePersisted 时打印一次 WARN（同一进程同一 DAO 同一键只打一次，不按实体刷屏），照常加载、
+// 不拒绝；嵌套子文档按解码层级检查，map 的值、切片的元素用 * / [] 代替真实键，保持低基数。以 _ 开头的顶层键是框架
+// 元数据（_version、_last_tx 等），定义里缺失的键给零值（加字段的正常情况），都不告警。旧键的值不读入（维护者
+// 2026-10-19 调整：撤销方案 A），DAO 交出的整文档里没有它们，下一次整文档写回即去掉。
+func TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	raw, err := newHero().marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc bson.D
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for i := range doc {
+		switch doc[i].Key {
+		case "pos":
+			doc[i].Value = append(asD(t, doc[i].Value), bson.E{Key: "legacy_z", Value: int32(9)})
+		case "equips":
+			equips := asD(t, doc[i].Value)
+			for j := range equips {
+				equips[j].Value = append(asD(t, equips[j].Value), bson.E{Key: "legacy_color", Value: "red"})
+			}
+			doc[i].Value = equips
+		case "level":
+			// 删掉一个定义里有的键：缺失键给零值，不告警。
+			doc[i].Key = "legacy_level"
+		}
+	}
+	doc = append(doc, bson.E{Key: "legacy_gold", Value: int64(40)}, bson.E{Key: "_last_tx", Value: "tx-1"}, bson.E{Key: "_version", Value: int64(3)})
+	stored, err := bson.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		d := NewHeroDao()
+		if err := d.RestorePersisted(stored, HeroDaoSchemaVersion, 3); err != nil {
+			t.Fatalf("load %d refused a document with unknown keys: %v", i, err)
+		}
+		if d.GetName() != "hero" || d.GetLevel() != 0 || d.GetPos().GetX() != 3 {
+			t.Fatalf("load %d: name=%q level=%d pos.x=%d", i, d.GetName(), d.GetLevel(), d.GetPos().GetX())
+		}
+		full, err := d.marshalCommitState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if left := heroDaoStoredKeys.UnknownKeys(full); len(left) != 0 {
+			t.Fatalf("load %d: the full document written back still has keys the DAO does not declare: %v", i, left)
+		}
+	}
+	text := logs.String()
+	for _, key := range []string{"legacy_gold", "legacy_level", "pos.legacy_z", "equips.*.legacy_color"} {
+		if n := strings.Count(text, "key="+key+" "); n != 1 {
+			t.Errorf("unknown key %s warned %d times, want once:\n%s", key, n, text)
+		}
+	}
+	for _, quiet := range []string{"_last_tx", "_version", "key=level ", "key=exp "} {
+		if strings.Contains(text, quiet) {
+			t.Errorf("%s should not be reported:\n%s", quiet, text)
+		}
+	}
+	if !strings.Contains(text, "no longer read") {
+		t.Errorf("warning does not say the key is no longer read:\n%s", text)
+	}
+	if !strings.Contains(text, "dao=HeroDao") || !strings.Contains(text, "level=WARN") {
+		t.Errorf("warning does not name the DAO at WARN level:\n%s", text)
+	}
+}
+
+func asD(t *testing.T, value any) bson.D {
+	t.Helper()
+	switch v := value.(type) {
+	case bson.D:
+		return v
+	case bson.Raw:
+		var d bson.D
+		if err := bson.Unmarshal(v, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	default:
+		t.Fatalf("not a document: %T", value)
+		return nil
+	}
+}
+
+// 持久文档结构体是整文档写入的唯一形状：顶层键按结构体声明顺序写出（修前整文档写入用 bson.M，键序随 map 遍历变化），
+// Marshal 与提交路径同形，原样经 RestorePersisted 读回再写出仍是同一组键与值。
+func TestThePersistDocumentHasOneShapeAndRoundTrips(t *testing.T) {
+	want := []string{"_id", "_schema", "name", "level", "exp", "login_at", "items", "friends", "pos", "equips", "squad", "mount"}
+	hero := newHero()
+	for i := 0; i < 20; i++ {
+		raw, err := hero.marshalCommitState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := topLevelKeys(t, raw); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("commit document %d keys = %v, want %v", i, got, want)
+		}
+		if got := topLevelKeys(t, hero.Marshal()); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("Marshal %d keys = %v, want %v", i, got, want)
+		}
+	}
+	raw, err := hero.marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := NewHeroDao()
+	if err := restored.RestorePersisted(raw, HeroDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	again, err := restored.marshalCommitState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after heroDaoPersistDoc
+	if err := bson.Unmarshal(raw, &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := bson.Unmarshal(again, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("restore changed the document:\n%s\n%s", bson.Raw(raw), bson.Raw(again))
+	}
+}
+
+func topLevelKeys(t *testing.T, raw []byte) []string {
+	t.Helper()
+	elements, err := bson.Raw(raw).Elements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(elements))
+	for _, element := range elements {
+		keys = append(keys, element.Key())
+	}
+	return keys
 }

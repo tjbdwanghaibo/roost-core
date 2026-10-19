@@ -1,6 +1,6 @@
 # 核心：DataEngine 持久化：实现与维护
 
-适用版本：v1.27.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录最初按 v1.24.0 提取、之后随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/03-dataengine.md)
+适用版本：v1.28.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录最初按 v1.24.0 提取、之后随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/03-dataengine.md)
 
 ## 如何阅读
 
@@ -22,6 +22,8 @@
 
 6. outbox 由两样东西驱动：投影器在一个单元把 effect 暂存进 outbox（事务已提交、未被 fence 跳过）后同步调用 `ProjectorOptions.OnEffectsStaged`，`Assembly.Start` 把它接到 `OutboxWorker.Kick`（容量 1 的唤醒通道：多次合并、空闲循环先醒、`RunOnce` 期间到达的唤醒留到下一轮，不丢）；`PollInterval` 轮询保留为兜底（重试退避到期、别的进程的 effect）。唤醒只是提示，不改投影 / checkpoint 的顺序与持久语义；outbox 先于 Projector 构造，唤醒在回放开始前接好。回归：`TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll`（正式装配、轮询 1 小时）、`TestOutboxKickWakesALoopCoalescesAndStopsCleanly`。
 
+7. checkpoint 只决定崩溃后从哪里重放（`WAL.Ack` 写 checkpoint 槽并清理已确认段），进程内外没有读者依赖它：投影完成通知、票据、实体屏障在投影成功时发出，saga 等回执读 Mongo，`Flush` / `Shutdown` 每轮 `ReplayPass` 退出前确认已成功前缀。所以 `ReplayPass` 对批次、多 mutation 记录和带 effect / 回执 / Remote 写的特殊记录一律按 `CheckpointRecords`（缺省 256）/ `CheckpointInterval`（缺省 20 ms，维护者 2026-10-19 决定保持；特殊记录逐条投影约 16 ms，积压时合并系数约 2，调大可提高系数，代价是重放窗口与未确认额度变长）/ 轮末合并确认（2026-10-18 起特殊记录也合并，[方案](../../maintenance/CONTRACT-2026-10-18-projector-checkpoint-merge.md)）。前提是 Store 实现 `BatchProjectionStore` 并保证这些记录在后续版本写入后仍能重放：`MongoStore.ProjectFenced` 在事务里**先**查事务标记再判 lease fence，标记与业务写、回执、outbox、Remote 提交同事务，重放返回首投结论（applied / skipped），不重判 fence、不重复暂存。例外只有两种，仍逐单元立即确认：单 mutation 快路记录（`projectsOnFastPath`，不写标记，只靠 `_last_tx`，与 `ProjectFenced` 选快路用同一判定）和只实现 `ProjectionStore` 的 Store。崩溃后重放的已投影记录 ≤ `CheckpointRecords` 条且只来自约一个间隔加一个单元的窗口；不得为了少重放而把确认提前到投影成功之前，也不得跳过 ack 失败后的后续段。回归：`TestSpecialRecordsShareCheckpointThresholds`、`TestFastPathRecordStillConfirmsPrecedingSpecialRecords`、`TestSpecialRecordCheckpointLossReplaysTheWholeUnconfirmedPrefix`、真实 Mongo 的 `TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint` 与 saga 级重启 `TestRealStepsRestartReplaysUnconfirmedProjectionsExactlyOnce`。
+
 ## 2A. 聚合恢复与投影实现走读
 
 [EntityRepository](../../../framework/dataengine/engine/entity_repository.go)的Load合并同ID并发flight，等待该实体必要投影后进入loadAggregate。loadAggregate读取builder与完整一致性视图，先遍历全部DAO的Descriptor/SchemaVersion，再进行RestorePersisted与身份校验；只有所有DAO成功后，才RunLocal创建并发布实体及loaded hooks。前一DAO已解码、后一DAO失败时不能提前发布半实体。
@@ -33,6 +35,8 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 [codec.go](../../../framework/nestwal/codec.go)的encodeRecord与decodeRecord固定codecVersion=7；unsupported version在解释record body前拒绝。格式校验不等于尾部截断安全，WAL的文件恢复、fsync与checkpoint分别有守卫。
 
 [projector_remote.go](../../../framework/dataengine/engine/projector_remote.go)按相邻、无共享Entity的纯Remote事务构造有界窗口：特殊effect/receipt、重复事务身份、记录/字节预算构成边界。执行窗口首次失败后停止补位、等待已派发工作，并只确认连续成功前缀。并行不能越过同实体因果依赖。
+
+**持久键与未知键（DESIGN-TODO D13）**：生成 DAO 的持久文档结构体 `<dao>PersistDoc` 是键的唯一声明（定义里的 `bson` 名，缺省 snake_case）。`RestorePersisted` 在 schema 校验之后、解码之前调用 [StoredKeySet.WarnUnknown](../../../framework/dataengine/stored_keys.go)：逐个读文档元素（不解码值），库里有、结构体没有的键按 DAO + 路径每进程一次 `slog.Warn`，计 `dataengine.dao.unknown_stored_key.total{dao}`，不拒绝加载；顶层 `_` 开头的元数据键与缺失键不报。这些键**不读入**（维护者 2026-10-19 撤销“整文档写回保留旧键”的方案 A）：持久文档结构体没有收未知键的字段，解码器忽略它们，DAO 内存里没有，整文档写回（存储层的 Put：`$replaceWith` / ReplaceOne，以及 Remote data 信封替换）就把它们从文档里去掉；单字段补丁只 `$set` 自己的键，旧键留在库里但不再被读取。版本条件、冲突分类、墓碑语义不变。框架不提供清理入口：改名 / 删字段前保留原 `bson` 名或先离线迁移（[SCHEMA-MIGRATION](../SCHEMA-MIGRATION.md) §1），这是业务约束，框架只通知。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -66,7 +70,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### dataengine
 
-10 个实现文件、5 个测试文件。
+11 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -77,13 +81,14 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | [mutation_types.go](../../../framework/dataengine/mutation_types.go) | `TransactionID`、`Durability`、`MutationKind`、`DatabaseScope`、`DocumentKey`、`FieldPatch`、`Mutation`、`Effect`、`Receipt`、`CommitRecord`、`SyncFieldMeta` |
 | [projection.go](../../../framework/dataengine/projection.go) | `Descriptor`、`ProjectionTicket`、`SystemCommitter` |
 | [scope.go](../../../framework/dataengine/scope.go) | 函数/方法或内部实现；见源码 |
+| [stored_keys.go](../../../framework/dataengine/stored_keys.go) | `StoredKeySet` |
 | [sync_view.go](../../../framework/dataengine/sync_view.go) | 函数/方法或内部实现；见源码 |
 | [tracker.go](../../../framework/dataengine/tracker.go) | `Tracker`、`TrackerSnapshot` |
 | [validate.go](../../../framework/dataengine/validate.go) | 函数/方法或内部实现；见源码 |
 
 ### dataengine/engine
 
-18 个实现文件、17 个测试文件。
+19 个实现文件、17 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -200,13 +205,14 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### versionstore
 
-5 个实现文件、6 个测试文件。
+6 个实现文件、7 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [codec.go](../../../infra/storage/versionstore/codec.go) | `JSONCodec` |
 | [memory_store.go](../../../infra/storage/versionstore/memory_store.go) | `MemoryStore` |
 | [redis_store.go](../../../infra/storage/versionstore/redis_store.go) | `RedisClient`、`RedisConfig`、`RedisIndex`、`RedisStore` |
+| [update_all.go](../../../infra/storage/versionstore/update_all.go) | `MutateAll`、`MultiUpdater`（多键原子更新，service/match 跨分区成局用） |
 | [versionstore.go](../../../infra/storage/versionstore/versionstore.go) | `Versioned`、`ConditionalDeleter`、`Mutate`、`Store`、`Codec`、`KeyFunc` |
 | [write_token.go](../../../infra/storage/versionstore/write_token.go) | `UnknownOutcomeError` |
 
@@ -236,6 +242,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [load_test.go](../../../framework/dataengine/load_test.go)：`TestLoaderRespectsDependenciesAndSkipsLoadedOrDeletedDocuments`、`TestLoaderRejectsUnknownCircularAndStrictCallbackFailures`、`TestLoaderNonStrictSkipIsCountedAndStrictStillFails`
 - [model_test.go](../../../framework/dataengine/model_test.go)：`TestCommitRecordEmptyIncludesReceipts`、`TestCloneEffectPreservesAndDetachesHeaders`、`TestResolveDatabaseScopeDefaultsAndUsesTypedScope`、`TestMapPatchPathBuildsOnlySafeNestedPaths`、`TestWaitProjectionHonorsTicketAndContext`；其余 1 项见文件
 - [tracker_test.go](../../../framework/dataengine/tracker_test.go)：`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent`、`TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState`；其余 2 项见文件
+- [stored_keys_test.go](../../../framework/dataengine/stored_keys_test.go)：`TestStoredKeySetReportsKeysTheDocumentStructDoesNotDeclare`、`TestStoredKeySetWarnsOncePerKey`；生成 DAO 上的加载期 WARN 与“不读入”在 `codegen/internal/dao/testdata/runtime/roundtrip_test.go`（`TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded`），真实 Mongo（补丁不碰旧键、整文档写回去掉、重放幂等、Remote 载荷）在 `stored_keys_mongo_test.go`，由 `codegen/scripts/dao-golden-runtime.sh` 运行
 - [validate_test.go](../../../framework/dataengine/validate_test.go)：`TestValidateMutationRefusesEachMalformedShape`、`TestValidateMutationCrossChecksRemoteCommitAgainstHeader`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestLeaseFenceValidateRefusesEachIncompleteFence`、`TestLeaseFenceLoaderAndTrackerGuards`
 
 ### dataengine/engine
@@ -313,6 +320,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [fake_redis_test.go](../../../infra/storage/versionstore/fake_redis_test.go)
 - [index_test.go](../../../infra/storage/versionstore/index_test.go)：`TestAnIndexedCreateEntersTheIndex`、`TestAnIndexedUpdateRetiresTheEntry`、`TestTheIndexIsReadByScoreAndBounded`、`TestAStoreWithoutAnIndexSaysSo`、`TestAPerOwnerIndexKeepsOwnersApart`；其余 4 项见文件
 - [lost_reply_integration_test.go](../../../infra/storage/versionstore/lost_reply_integration_test.go)：`TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice`
+- [update_all_test.go](../../../infra/storage/versionstore/update_all_test.go)：`TestUpdateAllWritesEveryKeyTogether`、`TestUpdateAllRetriesAsAWholeWhenAnyKeyMoved`、`TestUpdateAllRefusesBadArguments`、`TestUpdateAllSettlesALostReplyByItsTokens`、`TestUpdateAllReportsConflictWhenTheBudgetIsExhausted`；其余 1 项见文件
 - [versionstore_test.go](../../../infra/storage/versionstore/versionstore_test.go)：`TestStoredVersionIsNeverZeroAndIncrementsPerWrite`、`TestUpdateDecliningToSaveChangesNothing`、`TestUpdatePropagatesMutateErrorWithoutWriting`、`TestCreateRefusesAnExistingKey`、`TestDeleteRequiresTheCallersVersion`；其余 12 项见文件
 - [write_token_integration_test.go](../../../infra/storage/versionstore/write_token_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing`
 - [write_token_test.go](../../../infra/storage/versionstore/write_token_test.go)：`TestAnUpdateWhoseReplyIsLostIsNotAppliedTwiceWhenTheCallerRetries`、`TestACreateWhoseReplyIsLostIsNotReportedAsTakenWhenTheCallerRetries`、`TestAnUpdateWhoseReplyIsLostStaysAppliedOnceAfterSomeoneElseWritesOnTop`、`TestAnUpdateThatNeverRanIsResentOnce`、`TestResumeReturnsTheEarlierWriteInsteadOfWritingAgain`；其余 8 项见文件

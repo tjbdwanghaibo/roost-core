@@ -1,0 +1,419 @@
+{
+  "Pairs": 64,
+  "Variant": "steps",
+  "Mode": "forward",
+  "Rate": 8,
+  "Planned": 960,
+  "Started": 960,
+  "Completed": 960,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 120,
+  "ElapsedSeconds": 120.221170917,
+  "CompletionTPS": 7.985282398079274,
+  "P50MS": 517.442959,
+  "P95MS": 708.073417,
+  "P99MS": 792.769167,
+  "MaxMS": 903.2255,
+  "Server": {
+    "Samples": 960,
+    "P50MS": 473,
+    "P95MS": 663,
+    "P99MS": 751,
+    "MaxMS": 875
+  },
+  "StartCall": {
+    "Samples": 960,
+    "P50MS": 16.071167,
+    "P95MS": 23.660292,
+    "P99MS": 28.695167,
+    "MaxMS": 42.272542
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 480,
+      "P50MS": 528.732209,
+      "P99MS": 820.077459,
+      "MaxMS": 903.2255,
+      "ServerP99MS": 768
+    },
+    {
+      "Minute": 1,
+      "Count": 480,
+      "P50MS": 506.87375,
+      "P99MS": 739.615417,
+      "MaxMS": 763.929292,
+      "ServerP99MS": 698
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 960,
+      "P50MS": 17.955583,
+      "P95MS": 39.011,
+      "P99MS": 63.577,
+      "MaxMS": 109.831541
+    },
+    "debit": {
+      "Samples": 960,
+      "P50MS": 18.465125,
+      "P95MS": 39.598584,
+      "P99MS": 83.92875,
+      "MaxMS": 132.466833
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 959,
+      "P50MS": 120.817875,
+      "P95MS": 209.385666,
+      "P99MS": 251.974708,
+      "MaxMS": 379.319
+    },
+    "debit": {
+      "Samples": 959,
+      "P50MS": 123.8735,
+      "P95MS": 166.178375,
+      "P99MS": 193.041083,
+      "MaxMS": 227.018291
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 5,
+  "FinalProjector": {
+    "Committed": 1920,
+    "Projected": 1920,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0
+  },
+  "Statuses": {
+    "4": 960
+  },
+  "Mismatches": null,
+  "Hops": {
+    "h00.start.create": {
+      "Samples": 960,
+      "P50MS": 16.065375,
+      "P95MS": 23.607334,
+      "P99MS": 28.680083,
+      "MaxMS": 42.267458,
+      "TotalMS": 15868.793146,
+      "PerSaga": 1,
+      "PerSagaMS": 16.529992860416666
+    },
+    "h01.coord.claim": {
+      "Samples": 1900,
+      "P50MS": 17.959958,
+      "P95MS": 30.195375,
+      "P99MS": 38.203125,
+      "MaxMS": 51.860167,
+      "TotalMS": 36007.567336,
+      "PerSaga": 1.9791666666666667,
+      "PerSagaMS": 37.50788264166667
+    },
+    "h01.coord.wake": {
+      "Samples": 1920,
+      "P50MS": 35.955,
+      "P95MS": 51.456,
+      "P99MS": 67.107,
+      "MaxMS": 97.125,
+      "TotalMS": 71195.208,
+      "PerSaga": 2,
+      "PerSagaMS": 74.161675
+    },
+    "h02.dispatch.apply": {
+      "Samples": 1920,
+      "P50MS": 17.678708,
+      "P95MS": 24.223292,
+      "P99MS": 28.910042,
+      "MaxMS": 62.189917,
+      "TotalMS": 34465.391225,
+      "PerSaga": 2,
+      "PerSagaMS": 35.901449192708334
+    },
+    "h03.outbox.ack": {
+      "Samples": 1920,
+      "P50MS": 16.008333,
+      "P95MS": 22.434916,
+      "P99MS": 27.57375,
+      "MaxMS": 55.057125,
+      "TotalMS": 31735.191401,
+      "PerSaga": 2,
+      "PerSagaMS": 33.057491042708335
+    },
+    "h03.outbox.publish": {
+      "Samples": 1920,
+      "P50MS": 8.816334,
+      "P95MS": 20.413542,
+      "P99MS": 26.693417,
+      "MaxMS": 42.376334,
+      "TotalMS": 19723.878312,
+      "PerSaga": 2,
+      "PerSagaMS": 20.545706575
+    },
+    "h03.outbox.wait": {
+      "Samples": 1920,
+      "P50MS": 17.919792,
+      "P95MS": 39.916291,
+      "P99MS": 56.968,
+      "MaxMS": 68.935375,
+      "TotalMS": 38052.990209,
+      "PerSaga": 2,
+      "PerSagaMS": 39.63853146770834
+    },
+    "h04.step.callback": {
+      "Samples": 1920,
+      "P50MS": 35.693583,
+      "P95MS": 57.263542,
+      "P99MS": 88.833916,
+      "MaxMS": 148.55325,
+      "TotalMS": 74094.268889,
+      "PerSaga": 2,
+      "PerSagaMS": 77.18153009270833
+    },
+    "h04.step.deliver": {
+      "Samples": 1919,
+      "P50MS": 11.947458,
+      "P95MS": 24.290542,
+      "P99MS": 34.340375,
+      "MaxMS": 101.424,
+      "TotalMS": 25073.201468,
+      "PerSaga": 1.9989583333333334,
+      "PerSagaMS": 26.117918195833333
+    },
+    "h05.step.reserve": {
+      "Samples": 1920,
+      "P50MS": 16.735,
+      "P95MS": 23.479333,
+      "P99MS": 27.760583,
+      "MaxMS": 50.627458,
+      "TotalMS": 32907.357746,
+      "PerSaga": 2,
+      "PerSagaMS": 34.27849765208334
+    },
+    "h06.step.handler": {
+      "Samples": 1920,
+      "P50MS": 18.067625,
+      "P95MS": 39.622417,
+      "P99MS": 75.783041,
+      "MaxMS": 132.482708,
+      "TotalMS": 41170.23957,
+      "PerSaga": 2,
+      "PerSagaMS": 42.885666218749996
+    },
+    "h07.de.wal_append": {
+      "Samples": 1920,
+      "P50MS": 17.798542,
+      "P95MS": 30.297667,
+      "P99MS": 39.881625,
+      "MaxMS": 58.149083,
+      "TotalMS": 36996.544757,
+      "PerSaga": 2,
+      "PerSagaMS": 38.538067455208335
+    },
+    "h09.de.checkpoint": {
+      "Samples": 1395,
+      "P50MS": 57.648,
+      "P95MS": 88.116833,
+      "P99MS": 102.855083,
+      "MaxMS": 137.946458,
+      "TotalMS": 81120.346288,
+      "PerSaga": 1.453125,
+      "PerSagaMS": 84.50036071666666
+    },
+    "h09.de.project_txn": {
+      "Samples": 1920,
+      "P50MS": 16.147875,
+      "P95MS": 23.189042,
+      "P99MS": 26.848417,
+      "MaxMS": 72.625833,
+      "TotalMS": 32080.039562,
+      "PerSaga": 2,
+      "PerSagaMS": 33.41670787708333
+    },
+    "h09.de.project_wait": {
+      "Samples": 1920,
+      "P50MS": 41.1695,
+      "P95MS": 138.175333,
+      "P99MS": 185.483084,
+      "MaxMS": 258.45475,
+      "TotalMS": 95792.319036,
+      "PerSaga": 2,
+      "PerSagaMS": 99.7836656625
+    },
+    "h10.de.outbox_ack": {
+      "Samples": 1920,
+      "P50MS": 16.664583,
+      "P95MS": 23.420917,
+      "P99MS": 25.641541,
+      "MaxMS": 35.68375,
+      "TotalMS": 32596.968277,
+      "PerSaga": 2,
+      "PerSagaMS": 33.95517528854167
+    },
+    "h10.de.outbox_publish": {
+      "Samples": 1920,
+      "P50MS": 9.313833,
+      "P95MS": 20.727958,
+      "P99MS": 28.18825,
+      "MaxMS": 47.045417,
+      "TotalMS": 20583.871517,
+      "PerSaga": 2,
+      "PerSagaMS": 21.441532830208335
+    },
+    "h10.de.outbox_wait": {
+      "Samples": 1920,
+      "P50MS": 16.40475,
+      "P95MS": 24.150375,
+      "P99MS": 30.977792,
+      "MaxMS": 48.917375,
+      "TotalMS": 33204.726757,
+      "PerSaga": 2,
+      "PerSagaMS": 34.58825703854166
+    },
+    "h11.complete.apply": {
+      "Samples": 1920,
+      "P50MS": 17.311375,
+      "P95MS": 23.997708,
+      "P99MS": 28.440333,
+      "MaxMS": 31.807167,
+      "TotalMS": 33830.635091,
+      "PerSaga": 2,
+      "PerSagaMS": 35.24024488645833
+    },
+    "h11.complete.get": {
+      "Samples": 1920,
+      "P50MS": 0.151042,
+      "P95MS": 0.35725,
+      "P99MS": 0.622084,
+      "MaxMS": 33.220875,
+      "TotalMS": 384.001575,
+      "PerSaga": 2,
+      "PerSagaMS": 0.400001640625
+    },
+    "h11.completion.deliver": {
+      "Samples": 1919,
+      "P50MS": 13.775459,
+      "P95MS": 28.167375,
+      "P99MS": 41.558583,
+      "MaxMS": 120.969417,
+      "TotalMS": 28846.566304,
+      "PerSaga": 1.9989583333333334,
+      "PerSagaMS": 30.048506566666667
+    },
+    "h11.completion.handle": {
+      "Samples": 1920,
+      "P50MS": 17.494666,
+      "P95MS": 24.195625,
+      "P99MS": 28.944291,
+      "MaxMS": 58.870292,
+      "TotalMS": 34223.295071,
+      "PerSaga": 2,
+      "PerSagaMS": 35.64926569895833
+    },
+    "h12.step.wait_receipt": {
+      "Samples": 1920,
+      "P50MS": 89.25025,
+      "P95MS": 191.046834,
+      "P99MS": 240.975041,
+      "MaxMS": 294.98125,
+      "TotalMS": 183270.011597,
+      "PerSaga": 2,
+      "PerSagaMS": 190.90626208020834
+    },
+    "mongo.aggregate": {
+      "Samples": 117,
+      "P50MS": 0.444709,
+      "P95MS": 0.764375,
+      "P99MS": 1.124708,
+      "MaxMS": 1.296791,
+      "TotalMS": 54.597711,
+      "PerSaga": 0.121875,
+      "PerSagaMS": 0.056872615625
+    },
+    "mongo.commitTransaction": {
+      "Samples": 7808,
+      "P50MS": 15.86875,
+      "P95MS": 22.879,
+      "P99MS": 26.788334,
+      "MaxMS": 35.098625,
+      "TotalMS": 128283.510863,
+      "PerSaga": 8.133333333333333,
+      "PerSagaMS": 133.62865714895833
+    },
+    "mongo.delete": {
+      "Samples": 7680,
+      "P50MS": 6.364166,
+      "P95MS": 21.480042,
+      "P99MS": 25.123708,
+      "MaxMS": 55.009041,
+      "TotalMS": 64713.065049,
+      "PerSaga": 8,
+      "PerSagaMS": 67.409442759375
+    },
+    "mongo.find": {
+      "Samples": 42895,
+      "P50MS": 0.156209,
+      "P95MS": 0.615375,
+      "P99MS": 0.937416,
+      "MaxMS": 57.693667,
+      "TotalMS": 10302.655099,
+      "PerSaga": 44.682291666666664,
+      "PerSagaMS": 10.731932394791666
+    },
+    "mongo.findAndModify": {
+      "Samples": 9963,
+      "P50MS": 14.713583,
+      "P95MS": 21.96225,
+      "P99MS": 25.793875,
+      "MaxMS": 37.829209,
+      "TotalMS": 124931.295283,
+      "PerSaga": 10.378125,
+      "PerSagaMS": 130.13676591979166
+    },
+    "mongo.getMore": {
+      "Samples": 2711,
+      "P50MS": 0.086541,
+      "P95MS": 0.222834,
+      "P99MS": 0.399292,
+      "MaxMS": 0.844542,
+      "TotalMS": 283.69444,
+      "PerSaga": 2.823958333333333,
+      "PerSagaMS": 0.29551504166666664
+    },
+    "mongo.insert": {
+      "Samples": 14400,
+      "P50MS": 0.098958,
+      "P95MS": 13.663625,
+      "P99MS": 20.760583,
+      "MaxMS": 50.973875,
+      "TotalMS": 17511.228827,
+      "PerSaga": 15,
+      "PerSagaMS": 18.24086336145833
+    },
+    "mongo.update": {
+      "Samples": 7680,
+      "P50MS": 0.267916,
+      "P95MS": 19.802833,
+      "P99MS": 23.732459,
+      "MaxMS": 50.538,
+      "TotalMS": 33547.149721,
+      "PerSaga": 8,
+      "PerSagaMS": 34.94494762604167
+    }
+  },
+  "IdlePerSecond": {
+    "mongo.aggregate": 1,
+    "mongo.find": 98.4
+  }
+}

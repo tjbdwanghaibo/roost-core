@@ -200,6 +200,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
+| `dataengine.dao.unknown_stored_key.total{dao}` | Counter | 生成 DAO 冷加载时，库里文档有、持久文档结构体没有的键每出现一次计一次（标签只有 DAO 类型名；键名只在 WARN 日志里，每进程每 DAO 每键一次）。**基线应为零**；非零说明字段改了名没保留 `bson` 名、删了字段或改成 nopersist：这个键不再读取，下一次整文档写回会删除它；要保留数据，给字段写原 `bson` 名或先按 SCHEMA-MIGRATION 离线迁移（DESIGN-TODO D13） |
 | `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
@@ -229,6 +230,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `configdata.reload.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.rollback.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
+| `dataengine.dao.unknown_stored_key.total` | Counter | `dataengine/stored_keys.go:IncCounter` |
 | `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
@@ -416,6 +418,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `versionstore.cas.total` | Counter | `versionstore/versionstore.go:IncCounter` |
 | `versionstore.conflict.total` | Counter | `versionstore/versionstore.go:IncCounter` |
 | `versionstore.unknown_outcome.total` | Counter | `versionstore/write_token.go:IncCounter` |
+| `web.request.duration` | Histogram | `wiring/web/metrics.go:ObserveHistogram` |
+| `web.request.total` | Counter | `wiring/web/metrics.go:IncCounter` |
 
 `dataengine.projection.pending` 在准入与确认/撤销时更新；outbox.pending / oldest_age_ms 随既有后台采样和健康采样更新，单位分别是条、毫秒。正式装配每进程一个 Engine；自行创建多个 Engine 必须另行提供实例聚合，不能把进程 gauge 当多实例总和。
 
@@ -441,6 +445,15 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `gate.channel.failure_total` | 按 `role`、`phase` 统计回信发布和异步出站失败；不包含票据、PlayerID、SessionID 或 incarnation 标签 |
 
 Gate/Game `Stats()` 提供当前绑定、驻留请求数和字节；Game 另返回控制通道驻留请求及字节。下游超时/回信丢失归未知，发送失败结束完整旧绑定及对应 Sync lifetime。
+
+### 业务 HTTP 路由（wiring/web）
+
+| 指标 | 含义与标签 |
+| --- | --- |
+| `web.request.total` | 业务 HTTP 路由（`roost add webroute`）每个请求结束时加一。`route` 是 chi 匹配到的路由模板（例如 `/items/{id}`，不是原始路径），没匹配到路由的 404 / 405 记 `_unmatched`；`method` 是标准 HTTP 方法，其余记 `_other`；`class` 是状态码类别 `1xx`～`5xx`。handler panic 按 5xx 计 |
+| `web.request.duration` | 同一请求从进入路由中间件到 handler 返回的时长直方图，标签 `route`、`method`（口径同上） |
+
+标签基数有界：路由模板只来自 Service.Init 里登记的路由，方法与类别是固定枚举。业务错误码不进标签（看日志或业务自己的指标）。状态码是 handler 写出的那个：handler 超过 `web.write_timeout` 才写完时客户端收到空回复（连接被关闭），这次请求仍按 handler 写的状态计，时长直方图会显示它超过了写期限。5xx 另有一条 Warn `web: request failed`（`route`、`method`、`status`、`request_id`、`duration`）；映射成 5xx 的业务错误原文在 Error `webroute: route failed with a server error`（同一 `request_id`），panic 在 Error `http server panic`（带 `route` 与 `path`）。见 [CODEGEN_REFERENCE §11](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute)。
 
 
 ## 健康与就绪（`/healthz`、`/readyz`）

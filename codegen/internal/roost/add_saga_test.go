@@ -110,6 +110,11 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 	if strings.Contains(definition, "func Subscribe") || strings.Contains(definition, "SubscribeMongoStep") {
 		t.Errorf("definition.go still generates the Subscribe* helpers, a second way next to steps.go:\n%s", definition)
 	}
+	// 发起方按自己给 EmitStart 的业务键查结果（EmitStart 不带 saga ID；新用户第七轮：修前发起方查不到结果）。
+	if !strings.Contains(definition, "func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error)") ||
+		!strings.Contains(definition, "engine.GetByBusinessKey(ctx, Type, businessKey)") {
+		t.Errorf("definition.go has no Lookup by business key for the initiator:\n%s", definition)
+	}
 
 	steps := readProjectFile(t, root, "saga/gift/steps.go")
 	register := regexp.MustCompile(`steps\.(Native|Mongo)\("(\w+)", (Topic\w+),`).FindAllStringSubmatch(steps, -1)
@@ -134,7 +139,7 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 		"entity.BuildEntityID(state.PlayerID, player.EntityKindPlayer)",
 		"kitsaga.WithAdmit",
 		// 容量决定写在骨架里：数字、分片、报告链接。
-		"4/s fully compensated", "DataEngine projector", "shard by sid", sagaCapacityDocURL,
+		"5/s fully compensated", "DataEngine projector", "shard by sid", sagaCapacityDocURL,
 	} {
 		if !strings.Contains(steps, want) {
 			t.Errorf("steps.go lacks %q:\n%s", want, steps)
@@ -519,10 +524,11 @@ func TestGeneratedSagaNativeStepsAndEffectConsumer(t *testing.T) {
 		}
 	}
 	fillSagaNativeBusiness(t, root, fmt.Sprintf("sagagen_%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000))
+	// 先指向本检出再 generate：generate 内的 go mod tidy 要解析 go.mod 里的最低 core，它可能是尚未发布的 tag。
+	useLocalRoostCore(t, root)
 	if err := Run([]string{"generate", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("roost generate after filling the business: %v\n%s", err, out.String())
 	}
-	useLocalRoostCore(t, root)
 	runGeneratedGo(t, root, "build", "./...")
 	runGeneratedGo(t, root, "vet", "./...")
 	items, _ := doctorItems(t, root)

@@ -6,7 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +22,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -537,4 +542,322 @@ func init() {
 		}
 		return runtime.Drain, nil
 	}
+}
+
+// 崩溃注入（saga 级，投影器合并 checkpoint 的回归）：真实 Nest + DataEngine + saga，跑完正向、业务拒绝 → 补偿、投影
+// 停顿超过命令截止被跳过后重试三种 saga，停掉进程，把 WAL 目录的 checkpoint 槽恢复成开跑前的内容——等价于进程在
+// 这之后的每次 checkpoint 落盘前崩溃——再用同一个 WAL 目录、同一套库与流重启。启动恢复从开跑前的 checkpoint 起重放
+// 全部已投影的原生步骤记录：每条之后都已有同账户的更新版本、操作状态文档已结算、effect 已发布并删除。重放必须没有
+// 冲突、不重新判定 lease fence、不重复暂存回执与 effect：账户余额与版本、回执、事务标记（含 skipped）、操作状态
+// 文档、saga 终态都与重启前相同，效果流没有新消息。
+//
+// 运行：source ~/.roost-it/roost-dataengine-it/env.sh，持有 remote-acceptance.lock，
+//
+//	ROOST_DATAENGINE_IT=1 GOWORK=off go test -tags integration -count=1 -run '^TestRealStepsRestartReplaysUnconfirmedProjectionsExactlyOnce$' ./wiring/saga/
+func TestRealStepsRestartReplaysUnconfirmedProjectionsExactlyOnce(t *testing.T) {
+	definition := coresaga.Definition{Type: "ckptsaga", Version: 1, Steps: []coresaga.Step{
+		{Name: "debit", ForwardTopic: "ckptsaga.debit", CompensateTopic: "ckptsaga.debit.compensate"},
+		{Name: "credit", ForwardTopic: "ckptsaga.credit", CompensateTopic: "ckptsaga.credit.compensate"},
+	}}
+	ensureStepAccountKind()
+	names := newRealStepsNames(t)
+	overrides := map[string]any{"saga.step_defaults.timeout": 5 * time.Second}
+	env := startRealStepsEnvNamed(t, []coresaga.Definition{definition}, true, overrides, names)
+	stepAccountDatabase.Store(env.dataDatabase)
+	stepAccountHandlerProbe.Store(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	accounts := map[string]int64{}
+	for i, name := range []string{"a", "b", "c", "d", "e"} {
+		id, err := entity.BuildEntityID(int64(9_300+i), stepAccountKind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		accounts[name] = id
+		balance := map[string]int64{"a": 1000, "b": 1000, "c": 990, "d": 1000, "e": 0}[name]
+		if _, err := env.mongo.Database(env.dataDatabase).Collection(stepAccountCollection).InsertOne(ctx,
+			bson.M{"_id": id, "_version": uint64(1), "_schema": uint32(1), "balance": balance}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 崩溃点：开跑前的 checkpoint 槽（可能还不存在）。重启前把它恢复回去。
+	crashPoint := map[string][]byte{}
+	for _, slot := range []string{"ack-0.chk", "ack-1.chk"} {
+		raw, err := os.ReadFile(filepath.Join(names.walDir, slot))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		crashPoint[slot] = raw
+	}
+	// ackGate 关着时投影器停在 ack 上（stall 场景用）。
+	runtime := env.dataMod.Runtime()
+	var ackGate atomic.Pointer[chan struct{}]
+	runtime.Projector.OverrideAck(func(ackCtx context.Context, fence corenest.CommitFence) error {
+		if gate := ackGate.Load(); gate != nil {
+			select {
+			case <-*gate:
+			case <-ackCtx.Done():
+				return ackCtx.Err()
+			}
+		}
+		return runtime.WAL.Ack(ackCtx, fence)
+	})
+	openGate := func() {
+		if gate := ackGate.Swap(nil); gate != nil {
+			close(*gate)
+		}
+	}
+	t.Cleanup(openGate)
+
+	probe := newStepProbe()
+	nestClient := env.nest
+	body := func(stepName string) coresaga.NativeStepBody {
+		return func(ctx context.Context, step coresaga.NativeStep) error {
+			command := step.Command()
+			var payload transfer
+			if err := json.Unmarshal(command.Payload, &payload); err != nil {
+				return err
+			}
+			account, amount, limit := accounts[payload.From], -payload.Amount, int64(0)
+			switch stepName {
+			case "refund":
+				amount = payload.Amount
+			case "credit":
+				account, amount = accounts[payload.To], payload.Amount
+				if payload.To == "c" {
+					limit = 1000
+				}
+			case "credit-undo":
+				account = accounts[payload.To]
+			}
+			if _, err := nestClient.Request(ctx, stepAccountApply, account, corenest.NewParams(payload.Scenario+"/"+stepName, amount, limit, step)); err != nil {
+				return err
+			}
+			if payload.Scenario == "stall" && stepName == "debit" {
+				probe.remember("stall/debit", command)
+				probe.signal("stall-committed")
+			}
+			return nil
+		}
+	}
+	steps, err := NewSteps(env.registry, "ckpt-"+env.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps.Native("debit", "ckptsaga.debit", body("debit"))
+	steps.Native("refund", "ckptsaga.debit.compensate", body("refund"))
+	steps.Native("credit", "ckptsaga.credit", body("credit"))
+	steps.Native("credit-undo", "ckptsaga.credit.compensate", body("credit-undo"))
+	if err := steps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start := func(scenario string, n int, from, to string, value int64) string {
+		t.Helper()
+		id := fmt.Sprintf("ckpt-%s%d-%s", scenario, n, env.token)
+		data, err := json.Marshal(transfer{Scenario: scenario, From: from, To: to, Amount: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.sagaMod.Engine().StartSaga(ctx, coresaga.StartRequest{ID: id, Type: definition.Type, DefinitionVersion: 1, BusinessKey: id, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	want := map[string]coresaga.Status{}
+	finish := func() {
+		t.Helper()
+		waitFor(t, ctx, "every saga reaches its terminal state", func() bool {
+			for id := range want {
+				record, err := env.sagaMod.Store().Get(ctx, id)
+				if err != nil || !record.Status.Terminal() {
+					return false
+				}
+				if record.Status != want[id] {
+					t.Fatalf("saga %s ended %s (last error %q), want %s", id, record.Status, record.LastError, want[id])
+				}
+			}
+			return true
+		})
+	}
+	// 正向 3 笔（a → b），业务拒绝 2 笔（c 有上限，credit 拒绝 → 补偿 refund）。
+	for i := range 3 {
+		want[start("ok", i, "a", "b", 10)] = coresaga.StatusCompleted
+	}
+	for i := range 2 {
+		want[start("refuse", i, "a", "c", 20)] = coresaga.StatusCompensated
+	}
+	finish()
+	// 投影停顿超过命令截止：先提交一笔普通事务让投影器停在 ack 上，S 的 debit 准入后等过截止再放行——投影时租约已
+	// 过期，整笔记录被跳过（skipped 标记），协调器的第二次尝试生效。
+	gate := make(chan struct{})
+	ackGate.Store(&gate)
+	if _, err := nestClient.Request(ctx, stepAccountApply, accounts["e"], corenest.NewParams("touch", int64(1), int64(0), stepCompleter(nil))); err != nil {
+		t.Fatal(err)
+	}
+	stallID := start("stall", 0, "d", "b", 17)
+	want[stallID] = coresaga.StatusCompleted
+	select {
+	case <-probe.wait("stall-committed"):
+	case <-ctx.Done():
+		t.Fatal("stall: the debit never committed")
+	}
+	time.Sleep(time.Until(probe.lastCommand("stall/debit").DeadlineAt) + 500*time.Millisecond)
+	openGate()
+	finish()
+
+	data := env.mongo.Database(env.dataDatabase)
+	wantBalance := map[string]int64{"a": 1000 - 30, "b": 1000 + 30 + 17, "c": 990, "d": 1000 - 17, "e": 1}
+	waitFor(t, ctx, "every projection reaches Mongo and every effect leaves the outbox", func() bool {
+		for name, id := range accounts {
+			var doc struct {
+				Balance int64 `bson:"balance"`
+			}
+			if err := data.Collection(stepAccountCollection).FindOne(ctx, bson.M{"_id": id}, &doc); err != nil || doc.Balance != wantBalance[name] {
+				return false
+			}
+		}
+		staged, err := data.Collection("_dataengine_outbox").CountDocuments(ctx, bson.M{})
+		return err == nil && staged == 0
+	})
+	var skipped int64
+	if skipped, err = data.Collection("_dataengine_transactions").CountDocuments(ctx, bson.M{"skipped": true}); err != nil || skipped < 1 {
+		t.Fatalf("skipped transaction markers=%d err=%v, want the stalled debit", skipped, err)
+	}
+	snapshot := func(env *realStepsEnv) string {
+		t.Helper()
+		var out strings.Builder
+		for _, collection := range []string{stepAccountCollection, "_dataengine_receipts", "_dataengine_transactions", "_dataengine_step_operations"} {
+			var docs []bson.D
+			if err := env.mongo.Database(env.dataDatabase).Collection(collection).Find(ctx, bson.M{}, &docs); err != nil {
+				t.Fatal(err)
+			}
+			lines := make([]string, len(docs))
+			for i := range docs {
+				lines[i] = fmt.Sprint(canonicalBSON(docs[i]))
+			}
+			slices.Sort(lines)
+			fmt.Fprintf(&out, "%s %d\n%s\n", collection, len(docs), strings.Join(lines, "\n"))
+		}
+		for _, id := range slices.Sorted(maps.Keys(want)) {
+			record, err := env.sagaMod.Store().Get(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Fprintf(&out, "saga %s %s phase=%v completed=%d attempt=%d version=%d\n", id, record.Status, record.Phase, record.CompletedSteps, record.Attempt, record.Version)
+		}
+		return out.String()
+	}
+	effectStream := "ROOST_D12_EFFECTS_" + names.suffix
+	before, effectsBefore := snapshot(env), streamMessages(t, ctx, effectStream)
+
+	drainCtx, drainCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer drainCancel()
+	if err := steps.Drain(drainCtx); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	env.stopForRestart(t)
+	for slot, raw := range crashPoint {
+		path := filepath.Join(names.walDir, slot)
+		var err error
+		if raw == nil {
+			err = os.Remove(path)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+		} else {
+			err = os.WriteFile(path, raw, 0o600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	wal, err := nestwal.Open(nestwal.DefaultOptions(names.walDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := 0
+	if err := wal.Replay(ctx, func(corenest.CommitFence, coredata.CommitRecord) error { pending++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 每笔正向 2 条、拒绝 3 条、stall 3 条（被跳过的第一次 debit + 重试 + credit）、touch 1 条。
+	if pending < 3*2+2*3+3+1 {
+		t.Fatalf("WAL records after the restored checkpoint=%d, want every saga record", pending)
+	}
+	t.Logf("crash state: %d WAL records after the last durable checkpoint, %d skipped markers, %d effect messages", pending, skipped, effectsBefore)
+	restarted := startRealStepsEnvNamed(t, []coresaga.Definition{definition}, true, overrides, names)
+	// 启动恢复（Runtime.Start → Projector.Flush）已在 Start 里排空 WAL。
+	projector := restarted.dataMod.Runtime().Projector
+	if stats := projector.Stats(); stats.FatalProjectionConflicts != 0 || stats.Projected < uint64(pending) || stats.WALUnacked != 0 {
+		t.Fatalf("restart recovery stats=%+v, want %d records replayed without conflicts", stats, pending)
+	}
+	remaining := 0
+	if err := restarted.dataMod.Runtime().WAL.Replay(ctx, func(corenest.CommitFence, coredata.CommitRecord) error { remaining++; return nil }); err != nil || remaining != 0 {
+		t.Fatalf("WAL after restart recovery remaining=%d err=%v", remaining, err)
+	}
+	// 给重启后的 outbox 几个轮询周期：重放若错误地重新暂存了 effect，会在这里被发布。
+	time.Sleep(2 * time.Second)
+	if staged, err := restarted.mongo.Database(restarted.dataDatabase).Collection("_dataengine_outbox").CountDocuments(ctx, bson.M{}); err != nil || staged != 0 {
+		t.Errorf("outbox after restart=%d err=%v, want no re-staged effect", staged, err)
+	}
+	if after := streamMessages(t, ctx, effectStream); after != effectsBefore {
+		t.Errorf("effect stream messages %d → %d across the restart, want no republished effect", effectsBefore, after)
+	}
+	if after := snapshot(restarted); after != before {
+		t.Errorf("state changed across the restart replay:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// canonicalBSON 把文档按字段名递归排序，便于前后快照逐字比较（服务端返回的字段顺序不保证稳定）。
+func canonicalBSON(value any) any {
+	switch typed := value.(type) {
+	case bson.D:
+		sorted := make(bson.D, len(typed))
+		for i, element := range typed {
+			sorted[i] = bson.E{Key: element.Key, Value: canonicalBSON(element.Value)}
+		}
+		slices.SortFunc(sorted, func(left, right bson.E) int { return strings.Compare(left.Key, right.Key) })
+		return sorted
+	case bson.M:
+		sorted := make(bson.D, 0, len(typed))
+		for key, element := range typed {
+			sorted = append(sorted, bson.E{Key: key, Value: canonicalBSON(element)})
+		}
+		slices.SortFunc(sorted, func(left, right bson.E) int { return strings.Compare(left.Key, right.Key) })
+		return sorted
+	case bson.A:
+		out := make(bson.A, len(typed))
+		for i := range typed {
+			out[i] = canonicalBSON(typed[i])
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func streamMessages(t *testing.T, ctx context.Context, stream string) uint64 {
+	t.Helper()
+	nc, err := gonats.Connect(os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"), gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := gojs.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := js.Stream(ctx, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := handle.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.State.Msgs
 }

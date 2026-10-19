@@ -262,20 +262,37 @@ func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := Run([]string{"config", "check", "--root", root, "--all"}, &output, io.Discard); err != nil {
-		t.Fatal(err)
+	// 夹具没有解析依赖、编译不过：键都通过，但跨 Mod 规则没查，退出码 5（检查没有跑全），不是 0。
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, &output, io.Discard); configCheckExitCode(err) != configExitNotFullyChecked {
+		t.Fatalf("uncompilable project: config check --all = %v; want exit %d", err, configExitNotFullyChecked)
 	}
 	for _, service := range []string{"game", "gate"} {
 		if !strings.Contains(output.String(), "config."+service+".yaml") {
 			t.Errorf("all-service config output missing %s:\n%s", service, output.String())
 		}
 	}
+	// 夹具没有解析依赖、编译不过：跨 Mod 规则没查时要明说，不能报 "config ok"。
+	if !strings.Contains(output.String(), "cross-mod rules NOT checked") || strings.Contains(output.String(), "config ok:") {
+		t.Errorf("uncompilable project: output must say the cross-mod rules were not checked:\n%s", output.String())
+	}
 	if err := os.WriteFile(filepath.Join(root, "configs", "service", "config.gate.yaml"), []byte("invalid: ["), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") {
-		t.Fatalf("invalid secondary service config was not reported: %v", err)
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") || configCheckExitCode(err) != configExitKeyErrors {
+		t.Fatalf("invalid secondary service config was not reported as a key error (exit %d): %v", configExitKeyErrors, err)
 	}
+}
+
+// configCheckExitCode 是 roost config check 返回的退出码（nil 为 0；没有退出码的错误是 1，与 main 相同）。
+func configCheckExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var coded *ExitError
+	if errors.As(err, &coded) {
+		return coded.Code
+	}
+	return 1
 }
 
 // config check 与 doctor 用同一份框架声明查配置键：框架段里没人声明的键（多半拼错）让检查失败，
@@ -292,7 +309,7 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"config", "check", "--root", root, "--service", "game"}, io.Discard, io.Discard); err != nil {
+	if err := Run([]string{"config", "check", "--root", root, "--service", "game", "--keys-only"}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("generated config rejected: %v", err)
 	}
 	misspelled := strings.Replace(string(raw), "\nmongo:\n", "\nmongo:\n  urii: mongodb://127.0.0.1:27017\n", 1)
@@ -306,9 +323,10 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 		{"config", "check", "--root", root, "--service", "game"},
 		{"config", "check", "--root", root, "--file", "configs/service/config.game.yaml"},
 		{"config", "check", "--root", root, "--all"},
+		{"config", "check", "--root", root, "--all", "--keys-only"},
 	} {
 		err := Run(args, io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "mongo.urii") {
+		if err == nil || !strings.Contains(err.Error(), "mongo.urii") || configCheckExitCode(err) != configExitKeyErrors {
 			t.Errorf("%v: err = %v, want the misspelled mongo.urii reported", args[len(args)-2:], err)
 		}
 	}
@@ -649,6 +667,66 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 	if _, err := os.Stat(controllerPath); !os.IsNotExist(err) {
 		t.Fatalf("duplicate endpoint recreated controller: %v", err)
+	}
+}
+
+// add protocol 之后跑过 roost generate，协议生成器为 handler 写了“未实现”占位（HandleXxx 返回 not implemented）。
+// add endpoint 接管仍未改动的占位（新用户第七轮：修前报 `game/controllers/player/rename_player.go already exists`，
+// 不说怎么办）；占位被业务改过就不覆盖，报错写明是协议占位、怎么处置，文件不变。
+func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
+		{Kind: "protocol", Name: "Ping", Group: "game", Handler: "player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	if err := Generate(root, GenerateOptions{}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	placeholder := filepath.Join(root, "game", "controllers", "player", "rename_player.go")
+	raw, err := os.ReadFile(placeholder)
+	if err != nil || !strings.Contains(string(raw), "not implemented") {
+		t.Fatalf("generate did not leave the protocol placeholder (err %v):\n%s", err, raw)
+	}
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
+		t.Fatalf("add endpoint over the untouched protocol placeholder: %v", err)
+	}
+	raw, err = os.ReadFile(placeholder)
+	if err != nil || !strings.Contains(string(raw), "Sync_RenamePlayer") || strings.Contains(string(raw), "not implemented") {
+		t.Fatalf("add endpoint did not replace the placeholder (err %v):\n%s", err, raw)
+	}
+
+	// 业务改过的占位：拒绝、给处置、不改文件。
+	ping := filepath.Join(root, "game", "controllers", "player", "ping.go")
+	pingRaw, err := os.ReadFile(ping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(pingRaw, []byte("return nil, fmt.Errorf("), []byte("_ = req\n\treturn nil, fmt.Errorf("), 1)
+	if bytes.Equal(edited, pingRaw) {
+		t.Fatalf("ping placeholder changed shape:\n%s", pingRaw)
+	}
+	if err := os.WriteFile(ping, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Add(root, AddOptions{Kind: "endpoint", Name: "Ping", Handler: "player", NestHandler: "RenamePlayer"})
+	if err == nil || !strings.Contains(err.Error(), "game/controllers/player/ping.go already exists") || !strings.Contains(err.Error(), "delete") {
+		t.Fatalf("add endpoint over an edited file = %v; want already exists with what to do", err)
+	}
+	if after, _ := os.ReadFile(ping); !bytes.Equal(after, edited) {
+		t.Error("a refused add endpoint changed the edited file")
 	}
 }
 

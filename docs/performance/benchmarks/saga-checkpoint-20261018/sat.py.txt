@@ -1,0 +1,13 @@
+import json, os, sys
+# 过载样本的逐跳表（与 SAGA-OPT §5 第二张表同列）
+print("| 样本 | 终态/s | 终态不对 | P50 | P99 | 核对 | 到期→领取 P50/P95 | 投递+排队 P50/P95 | 回调占用 P50/P95 | 投影等待 P50/P95 | 投影事务 P50 | checkpoint P50/P95 | 积压峰值 | 步骤体超截止 | 屏障挡回 |")
+print("|" + " --- |" * 15)
+for f in sys.argv[1:]:
+    r = json.load(open(f)); h = r.get("Hops", {})
+    def pp(k):
+        v = h.get(k)
+        return f"{v['P50MS']:.0f}/{v['P95MS']:.0f}" if v else "—"
+    over = sum(v for k, v in (r.get("BodyErrors") or {}).items() if "deadline" in k)
+    fenced = (r.get("FinalProjector") or {}).get("FencedAdmissionRejected", "—")
+    pt = h.get("h09.de.project_txn", {}).get("P50MS")
+    print(f"| {os.path.basename(f)[:-5]} | {r['CompletionTPS']:.2f} | {r['WrongTerminal']} | {r['P50MS']:.0f} | {r['P99MS']:.0f} | {r['BusinessVerified']} | {pp('h01.coord.wake')} | {pp('h04.step.deliver')} | {pp('h04.step.callback')} | {pp('h09.de.project_wait')} | {pt:.0f} | {pp('h09.de.checkpoint')} | {r.get('ProjectionBacklogMax')} | {over} | {fenced} |")

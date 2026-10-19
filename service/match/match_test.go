@@ -840,3 +840,616 @@ func TestANilReporterChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// --- 已结束记录的保留期 ---
+
+// newStoreWithState 与 newStore 相同，另外交出底层状态，让用例能核对队列状态里实际留了什么。
+func newStoreWithState(t *testing.T, options ...func(*Config)) (Store, *clock, versionstore.Store[string, queueState]) {
+	t.Helper()
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	cfg := Config{Now: c.Now}
+	for _, option := range options {
+		option(&cfg)
+	}
+	state := versionstore.NewMemoryStore[string, queueState]()
+	store, err := NewStore(state, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, c, state
+}
+
+// stateSize 是队列状态编码后的字节数与三张只增表的条目数：Redis 存储每次 Enqueue / Commit / Sweep 都整体读写这一个值。
+func stateSize(t *testing.T, state versionstore.Store[string, queueState], queue Queue) (bytes, tickets, matches, requests int) {
+	t.Helper()
+	current, found, err := state.Get(context.Background(), queue.Key())
+	if err != nil || !found {
+		t.Fatalf("state: found=%v err=%v", found, err)
+	}
+	encoded, err := versionstore.JSONCodec[queueState]{}.Encode(current.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(encoded), len(current.Value.Tickets), len(current.Value.Matches), len(current.Value.Requests)
+}
+
+// 状态有界：已结束的票（成局 / 取消 / 过期）、已完成的比赛与它们的排队请求记录在保留期过后由 Sweep 移除，
+// 整个队列状态回落到只剩进行中的记录。修前三张表只增不删，每次操作整体读写的值随历史线性增长。
+func TestResolvedRecordsArePrunedAfterRetention(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) { cfg.TicketTTL = time.Minute })
+	ctx := context.Background()
+	queue := ranked()
+
+	const players = 400
+	tickets := make([]Ticket, 0, players)
+	for id := int64(1); id <= players; id++ {
+		tickets = append(tickets, enqueue(t, store, queue, player(id, 100), fmt.Sprintf("req-%d", id)))
+	}
+	// 前 300 人两两成局，接下来 50 人取消，最后 50 人等到过期。
+	for i := 0; i < 300; i += 2 {
+		if _, err := store.Commit(ctx, queue, []string{tickets[i].ID, tickets[i+1].ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ticket := range tickets[300:350] {
+		if _, err := store.Cancel(ctx, queue, ticket.ID, ticket.Subject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.advance(61 * time.Second)
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	grown, _, _, _ := stateSize(t, state, queue)
+
+	// 最晚结束的是刚过期的 50 张票；从它们算起满保留期（加秒取整的 1s）后清理。
+	c.advance(DefaultRetention + time.Second)
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	bytes, ticketCount, matchCount, requestCount := stateSize(t, state, queue)
+	if ticketCount != 0 || matchCount != 0 || requestCount != 0 {
+		t.Fatalf("after retention the queue state still holds %d tickets, %d matches, %d requests (%d bytes, was %d); "+
+			"resolved records must be pruned so the state stays bounded", ticketCount, matchCount, requestCount, bytes, grown)
+	}
+	if bytes*20 > grown {
+		t.Fatalf("the queue state is %d bytes after pruning, was %d", bytes, grown)
+	}
+	current, _, _ := state.Get(ctx, queue.Key())
+	if len(current.Value.Waiting) != 0 || len(current.Value.SubjectTickets) != 0 {
+		t.Fatalf("pruning left %d waiting ids and %d subject mappings", len(current.Value.Waiting), len(current.Value.SubjectTickets))
+	}
+}
+
+// 超过保留期的同一票集合重放：比赛与它的票已一起移除，Commit 报 ErrTicketMissing，不创建第二局；
+// 读票、读比赛都报不存在。
+func TestCommitReplayAfterRetentionReportsTheTicketsMissing(t *testing.T) {
+	store, c := newStore(t)
+	ctx := context.Background()
+	a, b := enqueue(t, store, ranked(), player(1, 100), "a"), enqueue(t, store, ranked(), player(2, 100), "b")
+	first, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(DefaultRetention + time.Second)
+	if _, err := store.Sweep(ctx, ranked(), MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := store.Commit(ctx, ranked(), []string{b.ID, a.ID})
+	if !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("replay after retention = (%s, %v), want ErrTicketMissing (original match %s)", replay.ID, err, first.ID)
+	}
+	if _, found, err := store.Ticket(ctx, ranked(), a.ID, player(1, 100)); err != nil || found {
+		t.Fatalf("a pruned ticket reads as found=%v err=%v", found, err)
+	}
+	if _, found, err := store.Match(ctx, ranked(), first.ID); err != nil || found {
+		t.Fatalf("a pruned match reads as found=%v err=%v", found, err)
+	}
+}
+
+// 保留期内（含边界）重放返回原 Match，读票、读比赛照旧；越过边界后同一重放报 ErrTicketMissing。
+// 中间插入的 Sweep 与另一名玩家的 Enqueue 都是会触发清理的写入，用来证明清理不提前。
+func TestCommitReplayInsideRetentionReturnsTheOriginalMatch(t *testing.T) {
+	const retention = 10 * time.Minute
+	store, c := newStore(t, func(cfg *Config) { cfg.Retention = retention; cfg.TicketTTL = time.Hour })
+	ctx := context.Background()
+	a, b := enqueue(t, store, ranked(), player(1, 100), "a"), enqueue(t, store, ranked(), player(2, 100), "b")
+	first, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(retention)
+	if _, err := store.Sweep(ctx, ranked(), MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, store, ranked(), player(3, 100), "c")
+	again, err := store.Commit(ctx, ranked(), []string{b.ID, a.ID})
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("replay at the retention boundary = (%s, %v), want the original %s", again.ID, err, first.ID)
+	}
+	ticket, found, err := store.Ticket(ctx, ranked(), a.ID, player(1, 100))
+	if err != nil || !found || ticket.State != TicketMatched || ticket.MatchID != first.ID {
+		t.Fatalf("ticket inside retention = (%+v, %v, %v)", ticket, found, err)
+	}
+	if _, found, err := store.Match(ctx, ranked(), first.ID); err != nil || !found {
+		t.Fatalf("match inside retention: found=%v err=%v", found, err)
+	}
+
+	c.advance(time.Second)
+	if replay, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID}); !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("replay past retention = (%s, %v), want ErrTicketMissing", replay.ID, err)
+	}
+}
+
+// 清理只碰终态：等得比保留期还久的等待票、保留期内的比赛与票都不动；等待票的请求记录与“一人一张活票”映射也保留。
+func TestPruningNeverTouchesLiveOrRecentRecords(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) {
+		cfg.Retention = time.Minute
+		cfg.TicketTTL = time.Hour
+	})
+	ctx := context.Background()
+	queue := ranked()
+	waiting := enqueue(t, store, queue, player(1, 100), "waiting")
+	b, cc := enqueue(t, store, queue, player(2, 100), "b"), enqueue(t, store, queue, player(3, 100), "c")
+	old, err := store.Commit(ctx, queue, []string{b.ID, cc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := enqueue(t, store, queue, player(4, 100), "d")
+	if _, err := store.Cancel(ctx, queue, cancelled.ID, cancelled.Subject); err != nil {
+		t.Fatal(err)
+	}
+
+	c.advance(30 * time.Minute)
+	e, f := enqueue(t, store, queue, player(5, 100), "e"), enqueue(t, store, queue, player(6, 100), "f")
+	recent, err := store.Commit(ctx, queue, []string{e.ID, f.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+
+	// 等了 30 分钟（保留期 1 分钟）的等待票还在：可读、是候选、占着主体、请求记录可重放。
+	read, found, err := store.Ticket(ctx, queue, waiting.ID, player(1, 100))
+	if err != nil || !found || read.State != TicketWaiting {
+		t.Fatalf("the long-waiting ticket = (%+v, %v, %v)", read, found, err)
+	}
+	candidates, err := store.Candidates(ctx, queue, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].ID != waiting.ID {
+		t.Fatalf("candidates = %+v %v, want only %s", candidates, err, waiting.ID)
+	}
+	if _, err := store.Enqueue(ctx, queue, player(1, 100), "another"); !errors.Is(err, ErrAlreadyQueued) {
+		t.Fatalf("the waiting subject enqueued again: %v", err)
+	}
+	if replay, err := store.Enqueue(ctx, queue, player(1, 100), "waiting"); err != nil || replay.ID != waiting.ID {
+		t.Fatalf("the waiting ticket's request replay = (%s, %v)", replay.ID, err)
+	}
+	// 保留期内的比赛与票都在。
+	if _, found, _ := store.Match(ctx, queue, recent.ID); !found {
+		t.Fatal("a match inside retention was pruned")
+	}
+	if read, found, _ := store.Ticket(ctx, queue, e.ID, player(5, 100)); !found || read.MatchID != recent.ID {
+		t.Fatalf("a matched ticket inside retention = (%+v, %v)", read, found)
+	}
+	// 到期的比赛与它的票一起走，已取消的票也走。
+	if _, found, _ := store.Match(ctx, queue, old.ID); found {
+		t.Fatal("a match past retention survived the sweep")
+	}
+	for _, ticket := range []Ticket{b, cc, cancelled} {
+		if _, found, _ := store.Ticket(ctx, queue, ticket.ID, ticket.Subject); found {
+			t.Fatalf("ticket %s past retention survived the sweep", ticket.ID)
+		}
+	}
+	current, _, _ := state.Get(ctx, queue.Key())
+	for request := range current.Value.Requests {
+		if request != "waiting" && request != "e" && request != "f" {
+			t.Fatalf("request %q outlived its ticket", request)
+		}
+	}
+	// 等待票照常能成局。
+	g := enqueue(t, store, queue, player(7, 100), "g")
+	if _, err := store.Commit(ctx, queue, []string{waiting.ID, g.ID}); err != nil {
+		t.Fatalf("the long-waiting ticket cannot be committed after pruning: %v", err)
+	}
+}
+
+// 排队请求记录与票同寿：保留期内同一 requestID 重试返回原票（即使已取消），超期后是一次新的排队。
+func TestEnqueueRetryAfterRetentionQueuesAgain(t *testing.T) {
+	store, c := newStore(t, func(cfg *Config) { cfg.Retention = time.Minute })
+	ctx := context.Background()
+	first := enqueue(t, store, ranked(), player(1, 100), "req")
+	if _, err := store.Cancel(ctx, ranked(), first.ID, player(1, 100)); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Minute)
+	if replay := enqueue(t, store, ranked(), player(1, 100), "req"); replay.ID != first.ID || replay.State != TicketCancelled {
+		t.Fatalf("retry inside retention = %+v, want the cancelled ticket %s", replay, first.ID)
+	}
+	c.advance(time.Second)
+	fresh := enqueue(t, store, ranked(), player(1, 100), "req")
+	if fresh.ID == first.ID || fresh.State != TicketWaiting {
+		t.Fatalf("retry past retention = %+v, want a new waiting ticket", fresh)
+	}
+}
+
+// 清理与 Commit 共用同一次比较并设置：并发的 Commit 与 Sweep 在保留期内只指向一场比赛，
+// 超期后全部报 ErrTicketMissing、也不生成新比赛。
+func TestConcurrentCommitsAndSweepsAgreeAcrossRetention(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) { cfg.Retention = time.Minute })
+	ctx := context.Background()
+	queue := ranked()
+	a, b := enqueue(t, store, queue, player(1, 100), ""), enqueue(t, store, queue, player(2, 100), "")
+	ids := []string{a.ID, b.ID}
+
+	race := func() (map[string]bool, int) {
+		var wait sync.WaitGroup
+		var mu sync.Mutex
+		matches, missing := map[string]bool{}, 0
+		for i := 0; i < 12; i++ {
+			wait.Add(2)
+			go func() {
+				defer wait.Done()
+				match, err := store.Commit(ctx, queue, ids)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					matches[match.ID] = true
+				case errors.Is(err, ErrTicketMissing):
+					missing++
+				default:
+					t.Errorf("unexpected commit error %v", err)
+				}
+			}()
+			go func() {
+				defer wait.Done()
+				if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+					t.Errorf("sweep: %v", err)
+				}
+			}()
+		}
+		wait.Wait()
+		return matches, missing
+	}
+
+	matches, missing := race()
+	if len(matches) != 1 || missing != 0 {
+		t.Fatalf("inside retention: %d distinct matches, %d missing; want 1 and 0", len(matches), missing)
+	}
+	c.advance(time.Minute + time.Second)
+	matches, missing = race()
+	if len(matches) != 0 || missing != 12 {
+		t.Fatalf("past retention: %d matches, %d missing; want 0 and 12", len(matches), missing)
+	}
+	if _, tickets, matchCount, _ := stateSize(t, state, queue); tickets != 0 || matchCount != 0 {
+		t.Fatalf("past retention the state holds %d tickets and %d matches", tickets, matchCount)
+	}
+}
+
+func TestRetentionConfigIsValidated(t *testing.T) {
+	state := versionstore.NewMemoryStore[string, queueState]()
+	for _, bad := range []time.Duration{-time.Second, 500 * time.Millisecond} {
+		if _, err := NewStore(state, Config{Retention: bad}); err == nil {
+			t.Errorf("retention %v accepted", bad)
+		}
+	}
+	store, err := NewStore(state, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.(*queueStore).cfg.Retention; got != DefaultRetention {
+		t.Fatalf("zero retention selected %v, want DefaultRetention %v", got, DefaultRetention)
+	}
+}
+
+// --- 跨分区成局（CommitAcross）---
+
+// tiered 是同一逻辑队列（ranked / 3 人一局）按段位档拆出的分区。
+func tiered(partition string) Queue { return Queue{Mode: "ranked", GroupSize: 3, Partition: partition} }
+
+func refsOf(tickets ...Ticket) TicketRefs {
+	refs := make(TicketRefs, 0, len(tickets))
+	for _, ticket := range tickets {
+		refs = append(refs, TicketRef{Queue: ticket.Queue, TicketID: ticket.ID})
+	}
+	return refs
+}
+
+// stateVersion 是一个分区状态的当前版本，用来证明失败的跨分区提交一个分区也没写。
+func stateVersion(t *testing.T, state versionstore.Store[string, queueState], queue Queue) uint64 {
+	t.Helper()
+	current, _, err := state.Get(context.Background(), queue.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return current.Version
+}
+
+// 跨分区成局：三张票来自两个分区，一次提交在两个分区同时生效——每张票在自己的分区里已匹配并指向同一场比赛，
+// 比赛在两个分区各有一份（TicketPartitions 记每张票的分区），两个分区的等待队列都清空。
+func TestCommitAcrossFormsOneMatchVisibleFromEveryPartition(t *testing.T) {
+	store, _ := newStore(t)
+	ctx := context.Background()
+	gold, silver := tiered("gold"), tiered("silver")
+	a := enqueue(t, store, gold, player(1, 1500), "a")
+	b := enqueue(t, store, gold, player(2, 1490), "b")
+	c := enqueue(t, store, silver, player(3, 1300), "c")
+
+	match, err := store.CommitAcross(ctx, refsOf(a, c, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match.ID == "" || len(match.Members) != 3 || match.Queue != gold {
+		t.Fatalf("match = %+v", match)
+	}
+	if want := []string{a.ID, c.ID, b.ID}; fmt.Sprint(match.TicketIDs) != fmt.Sprint(want) {
+		t.Fatalf("ticket ids = %v, want member order %v", match.TicketIDs, want)
+	}
+	if want := []string{"gold", "silver", "gold"}; fmt.Sprint(match.TicketPartitions) != fmt.Sprint(want) {
+		t.Fatalf("ticket partitions = %v, want %v", match.TicketPartitions, want)
+	}
+	for _, ticket := range []Ticket{a, b, c} {
+		read, found, err := store.Ticket(ctx, ticket.Queue, ticket.ID, ticket.Subject)
+		if err != nil || !found || read.State != TicketMatched || read.MatchID != match.ID {
+			t.Fatalf("ticket %s in %s = (%+v, %v, %v), want matched into %s", ticket.ID, ticket.Queue.Partition, read, found, err, match.ID)
+		}
+	}
+	for _, queue := range []Queue{gold, silver} {
+		stored, found, err := store.Match(ctx, queue, match.ID)
+		if err != nil || !found || fmt.Sprint(stored.TicketIDs) != fmt.Sprint(match.TicketIDs) {
+			t.Fatalf("match read through %s = (%+v, %v, %v)", queue.Partition, stored, found, err)
+		}
+		if length, _ := store.QueueLength(ctx, queue); length != 0 {
+			t.Fatalf("%s still holds %d waiting tickets", queue.Partition, length)
+		}
+	}
+	// 已匹配的票不能取消，也不能再进别的局。
+	if _, err := store.Cancel(ctx, silver, c.ID, c.Subject); !errors.Is(err, ErrTicketMatched) {
+		t.Fatalf("cancelling a cross-partition matched ticket = %v, want ErrTicketMatched", err)
+	}
+}
+
+// 原子性：任何一张票不再等待（被取消 / 被单分区 Commit 拿走 / 不存在）时整次失败，其他分区一个字节也不改
+// （版本不变、票仍在等待）。
+func TestCommitAcrossIsAllOrNothing(t *testing.T) {
+	store, _, state := newStoreWithState(t)
+	ctx := context.Background()
+	gold, silver := tiered("gold"), tiered("silver")
+	a := enqueue(t, store, gold, player(1, 1500), "a")
+	b := enqueue(t, store, gold, player(2, 1490), "b")
+	c := enqueue(t, store, silver, player(3, 1300), "c")
+	d := enqueue(t, store, silver, player(4, 1310), "d")
+	e := enqueue(t, store, silver, player(5, 1320), "e")
+
+	untouched := func(why string, queue Queue, version uint64, waiting ...Ticket) {
+		t.Helper()
+		if got := stateVersion(t, state, queue); got != version {
+			t.Fatalf("%s: partition %s moved from version %d to %d", why, queue.Partition, version, got)
+		}
+		for _, ticket := range waiting {
+			read, _, _ := store.Ticket(ctx, queue, ticket.ID, ticket.Subject)
+			if read.State != TicketWaiting {
+				t.Fatalf("%s: ticket %s in %s is %s, want waiting", why, ticket.ID, queue.Partition, read.State)
+			}
+		}
+	}
+
+	// 一张票被取消。
+	if _, err := store.Cancel(ctx, silver, c.ID, c.Subject); err != nil {
+		t.Fatal(err)
+	}
+	goldVersion, silverVersion := stateVersion(t, state, gold), stateVersion(t, state, silver)
+	if _, err := store.CommitAcross(ctx, refsOf(a, b, c)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a set with a cancelled ticket = %v, want ErrConflict", err)
+	}
+	untouched("cancelled ticket", gold, goldVersion, a, b)
+	untouched("cancelled ticket", silver, silverVersion, d, e)
+
+	// 一张票被别的单分区 Commit 拿走。
+	if _, err := store.Commit(ctx, silver, []string{d.ID, e.ID, enqueue(t, store, silver, player(6, 1330), "f").ID}); err != nil {
+		t.Fatal(err)
+	}
+	goldVersion, silverVersion = stateVersion(t, state, gold), stateVersion(t, state, silver)
+	if _, err := store.CommitAcross(ctx, refsOf(a, b, d)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a set with a ticket taken by another commit = %v, want ErrConflict", err)
+	}
+	untouched("taken ticket", gold, goldVersion, a, b)
+	untouched("taken ticket", silver, silverVersion)
+
+	// 一张票不存在；一个分区从没写过。
+	missing := TicketRefs{{Queue: gold, TicketID: a.ID}, {Queue: gold, TicketID: b.ID}, {Queue: silver, TicketID: "does-not-exist"}}
+	if _, err := store.CommitAcross(ctx, missing); !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("a set naming a missing ticket = %v, want ErrTicketMissing", err)
+	}
+	empty := TicketRefs{{Queue: gold, TicketID: a.ID}, {Queue: gold, TicketID: b.ID}, {Queue: tiered("bronze"), TicketID: "x"}}
+	if _, err := store.CommitAcross(ctx, empty); !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("a set naming a partition that holds nothing = %v, want ErrTicketMissing", err)
+	}
+	untouched("missing ticket", gold, goldVersion, a, b)
+	if _, found, _ := state.Get(ctx, tiered("bronze").Key()); found {
+		t.Fatal("a failed cross-partition commit created the empty partition")
+	}
+}
+
+// 重放：保留期内同一票集合（顺序可不同）返回原 Match、不成第二局；超期后报 ErrTicketMissing，
+// 两个分区的比赛与票都已移除。
+func TestCommitAcrossReplayFollowsRetention(t *testing.T) {
+	const retention = 10 * time.Minute
+	store, clk, state := newStoreWithState(t, func(cfg *Config) { cfg.Retention = retention; cfg.TicketTTL = time.Hour })
+	ctx := context.Background()
+	gold, silver := tiered("gold"), tiered("silver")
+	a := enqueue(t, store, gold, player(1, 1500), "a")
+	b := enqueue(t, store, silver, player(2, 1300), "b")
+	c := enqueue(t, store, silver, player(3, 1310), "c")
+
+	first, err := store.CommitAcross(ctx, refsOf(a, b, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(retention)
+	for _, queue := range []Queue{gold, silver} {
+		if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again, err := store.CommitAcross(ctx, refsOf(c, a, b))
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("replay at the retention boundary = (%s, %v), want the original %s", again.ID, err, first.ID)
+	}
+	// 部分重叠不是重放。
+	d := enqueue(t, store, gold, player(4, 1500), "d")
+	if _, err := store.CommitAcross(ctx, refsOf(a, b, d)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a set overlapping a cross-partition match = %v, want ErrConflict", err)
+	}
+
+	clk.advance(time.Second)
+	if replay, err := store.CommitAcross(ctx, refsOf(a, b, c)); !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("replay past retention = (%s, %v), want ErrTicketMissing", replay.ID, err)
+	}
+	for _, queue := range []Queue{gold, silver} {
+		if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+			t.Fatal(err)
+		}
+		current, _, _ := state.Get(ctx, queue.Key())
+		if _, kept := current.Value.Matches[first.ID]; kept {
+			t.Fatalf("partition %s kept the match past retention", queue.Partition)
+		}
+		if _, found, _ := store.Match(ctx, queue, first.ID); found {
+			t.Fatalf("the match still reads through %s past retention", queue.Partition)
+		}
+	}
+	for _, ticket := range []Ticket{a, b, c} {
+		if _, found, _ := store.Ticket(ctx, ticket.Queue, ticket.ID, ticket.Subject); found {
+			t.Fatalf("ticket %s still reads past retention", ticket.ID)
+		}
+	}
+}
+
+// 同一逻辑队列：Mode 或 GroupSize 不同的分区拒绝（ErrQueueInvalid）；张数、重复票、同一主体两张票、
+// 票不在所说的分区，都在不改任何分区的前提下拒绝。全部票在一个分区时等同于 Commit。
+func TestCommitAcrossRefusesSetsOutsideOneLogicalQueue(t *testing.T) {
+	store, _ := newStore(t)
+	ctx := context.Background()
+	gold, silver := tiered("gold"), tiered("silver")
+	a := enqueue(t, store, gold, player(1, 1500), "a")
+	b := enqueue(t, store, gold, player(2, 1490), "b")
+	c := enqueue(t, store, silver, player(3, 1300), "c")
+	casual := enqueue(t, store, Queue{Mode: "casual", GroupSize: 3, Partition: "silver"}, player(7, 1), "")
+	four := enqueue(t, store, Queue{Mode: "ranked", GroupSize: 4, Partition: "silver"}, player(8, 1), "")
+	sameSubject := enqueue(t, store, silver, player(1, 1500), "a-again")
+
+	for name, tc := range map[string]struct {
+		refs TicketRefs
+		want error
+	}{
+		"empty":                {nil, ErrTicketInvalid},
+		"another mode":         {refsOf(a, b, casual), ErrQueueInvalid},
+		"another group size":   {refsOf(a, b, four), ErrQueueInvalid},
+		"too few tickets":      {refsOf(a, c), ErrTicketInvalid},
+		"a ticket twice":       {refsOf(a, c, a), ErrTicketInvalid},
+		"an empty ticket id":   {TicketRefs{{Queue: gold, TicketID: a.ID}, {Queue: silver, TicketID: c.ID}, {Queue: gold}}, ErrTicketInvalid},
+		"one subject twice":    {refsOf(a, c, sameSubject), ErrTicketInvalid},
+		"the wrong partition":  {TicketRefs{{Queue: gold, TicketID: a.ID}, {Queue: gold, TicketID: b.ID}, {Queue: gold, TicketID: c.ID}}, ErrTicketMissing},
+		"an invalid partition": {TicketRefs{{Queue: Queue{Mode: "ranked", GroupSize: 1}, TicketID: a.ID}}, ErrQueueInvalid},
+	} {
+		if _, err := store.CommitAcross(ctx, tc.refs); !errors.Is(err, tc.want) {
+			t.Errorf("%s: CommitAcross = %v, want %v", name, err, tc.want)
+		}
+	}
+	for _, ticket := range []Ticket{a, b, c} {
+		if read, _, _ := store.Ticket(ctx, ticket.Queue, ticket.ID, ticket.Subject); read.State != TicketWaiting {
+			t.Fatalf("a refused set resolved ticket %s to %s", ticket.ID, read.State)
+		}
+	}
+
+	// 全部票在一个分区：等同于 Commit，两条路径互认重放。
+	d := enqueue(t, store, gold, player(4, 1480), "d")
+	match, err := store.CommitAcross(ctx, refsOf(a, b, d))
+	if err != nil || len(match.TicketPartitions) != 0 || match.Queue != gold {
+		t.Fatalf("a one-partition CommitAcross = (%+v, %v), want a plain Commit", match, err)
+	}
+	if again, err := store.Commit(ctx, gold, []string{d.ID, a.ID, b.ID}); err != nil || again.ID != match.ID {
+		t.Fatalf("Commit replay of a one-partition CommitAcross = (%s, %v), want %s", again.ID, err, match.ID)
+	}
+}
+
+// 并发：跨分区成局与单分区的 Commit / Cancel 在同一批票上竞争。不变量：每张票至多进一局；
+// 每场比赛在它涉及的每个分区都存在，它的每张票都在自己的分区里指向它（没有只生效了一半的比赛）。
+func TestCommitAcrossRacesSinglePartitionOperations(t *testing.T) {
+	store, _, state := newStoreWithState(t, func(cfg *Config) { cfg.TicketTTL = time.Hour })
+	ctx := context.Background()
+	partitions := []Queue{tiered("gold"), tiered("silver"), tiered("bronze")}
+	var tickets []Ticket
+	for i := 0; i < 18; i++ {
+		queue := partitions[i%len(partitions)]
+		tickets = append(tickets, enqueue(t, store, queue, player(int64(i+1), int64(i)), ""))
+	}
+	byPartition := func(queue Queue) []Ticket {
+		var out []Ticket
+		for _, ticket := range tickets {
+			if ticket.Queue == queue {
+				out = append(out, ticket)
+			}
+		}
+		return out
+	}
+
+	var wait sync.WaitGroup
+	run := func(job func() error) {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if err := job(); err != nil && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrTicketMissing) && !errors.Is(err, ErrTicketMatched) {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	for round := 0; round < 6; round++ {
+		// 跨三个分区的局，彼此重叠。
+		for offset := 0; offset < 3; offset++ {
+			group := refsOf(tickets[(round+offset)%18], tickets[(round+offset+1)%18], tickets[(round+offset+2)%18])
+			run(func() error { _, err := store.CommitAcross(ctx, group); return err })
+		}
+		// 单分区成局与取消。
+		queue := partitions[round%len(partitions)]
+		local := byPartition(queue)
+		ids := []string{local[round%6].ID, local[(round+1)%6].ID, local[(round+2)%6].ID}
+		run(func() error { _, err := store.Commit(ctx, queue, ids); return err })
+		victim := local[(round+3)%6]
+		run(func() error { _, err := store.Cancel(ctx, victim.Queue, victim.ID, victim.Subject); return err })
+	}
+	wait.Wait()
+
+	matched := map[string]string{}
+	for _, queue := range partitions {
+		current, _, err := state.Get(ctx, queue.Key())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, ticket := range current.Value.Tickets {
+			if ticket.State == TicketMatched {
+				matched[id] = ticket.MatchID
+			}
+		}
+		for matchID, match := range current.Value.Matches {
+			for i, ticketID := range match.TicketIDs {
+				home := match.Queue
+				if match.TicketPartitions != nil {
+					home = tiered(match.TicketPartitions[i])
+				}
+				other, _, _ := state.Get(ctx, home.Key())
+				ticket, ok := other.Value.Tickets[ticketID]
+				if !ok || ticket.State != TicketMatched || ticket.MatchID != matchID {
+					t.Fatalf("match %s (seen in %s) lists ticket %s in %s, which is %+v (present=%v)", matchID, queue.Partition, ticketID, home.Partition, ticket, ok)
+				}
+				if _, ok := other.Value.Matches[matchID]; !ok {
+					t.Fatalf("match %s is missing from partition %s, where its ticket %s lives", matchID, home.Partition, ticketID)
+				}
+			}
+		}
+	}
+	if len(matched) == 0 {
+		t.Fatal("no match formed; the race proved nothing")
+	}
+}

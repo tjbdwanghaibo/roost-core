@@ -226,7 +226,7 @@ func TestGenerateDao(t *testing.T) {
 		"nest.MarkPersistUnset(d, heroDaoFieldItems, path)",
 		"*fmap.SmallSafeMap[int64, int32]",
 		"d.items = fmap.NewSmallSafeMap[int64, int32](0)",
-		`"items":    d.heroDaoItemsRawMap()`,
+		"Items: d.heroDaoItemsRawMap(),",
 		"func (d *HeroDao) AddFriends(v int64)",
 		"func (d *HeroDao) SetPos(v Position)",
 		"d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)",
@@ -244,7 +244,7 @@ func TestGenerateDao(t *testing.T) {
 		"d.Init()",
 	}
 	for _, check := range checks {
-		if !strings.Contains(s, check) {
+		if !strings.Contains(squeezeSpaces(s), squeezeSpaces(check)) {
 			t.Errorf("generated DAO code missing: %q", check)
 		}
 	}
@@ -264,7 +264,7 @@ func TestGenerateDao(t *testing.T) {
 
 	// LoginAt should be in Marshal and have a setter because persist-only
 	// fields still need to mark persist dirty.
-	if !strings.Contains(s, `"login_at": d.loginAt`) {
+	if !strings.Contains(squeezeSpaces(s), "LoginAt: d.loginAt,") || !strings.Contains(squeezeSpaces(s), "LoginAt int64 `bson:\"login_at\"`") {
 		t.Error("LoginAt should appear in Marshal (persist field)")
 	}
 	if !strings.Contains(s, "func (d *HeroDao) SetLoginAt") {
@@ -341,7 +341,7 @@ func TestGenerateNested(t *testing.T) {
 		"s.Mark()",
 	}
 	for _, check := range checks {
-		if !strings.Contains(s, check) {
+		if !strings.Contains(squeezeSpaces(s), squeezeSpaces(check)) {
 			t.Errorf("generated nested code missing: %q", check)
 		}
 	}
@@ -449,7 +449,7 @@ func TestGenerateRedisDao(t *testing.T) {
 		"fcache.PatchStructPath(&current, path, value)",
 	}
 	for _, check := range checks {
-		if !strings.Contains(s, check) {
+		if !strings.Contains(squeezeSpaces(s), squeezeSpaces(check)) {
 			t.Errorf("generated Redis DAO code missing: %q", check)
 		}
 	}
@@ -485,7 +485,7 @@ func TestGenerateRawRedisDao(t *testing.T) {
 		"func (s cacheSessionRedisDAOStore) PatchCacheSession(ctx context.Context, key int64, path string, value any) error",
 		"fcache.PatchStructPath(&current, path, value)",
 	} {
-		if !strings.Contains(s, check) {
+		if !strings.Contains(squeezeSpaces(s), squeezeSpaces(check)) {
 			t.Errorf("generated raw Redis DAO code missing: %q", check)
 		}
 	}

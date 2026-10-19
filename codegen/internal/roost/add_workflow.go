@@ -279,9 +279,8 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	arguments, target := signature.arguments, signature.entity
 	controllerDir := filepath.Join(root, "game", "controllers", domain)
 	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
-	if _, err := os.Stat(endpointPath); err == nil {
-		return nil, fmt.Errorf("%s already exists", relativeSlash(root, endpointPath))
-	} else if !os.IsNotExist(err) {
+	placeholder, err := endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
+	if err != nil {
 		return nil, err
 	}
 	controllerPath := filepath.Join(controllerDir, "controller.go")
@@ -390,7 +389,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	if controllerChange != nil {
 		changes = append(changes, *controllerChange)
 	}
-	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted})
+	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
 	if err := commitSyncChanges(changes); err != nil {
 		return nil, err
 	}
@@ -438,9 +437,8 @@ func addLifecycleEndpoint(root string, manifest Manifest, options AddOptions, do
 	}
 	controllerDir := filepath.Join(root, "game", "controllers", domain)
 	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
-	if _, err := os.Stat(endpointPath); err == nil {
-		return nil, fmt.Errorf("%s already exists", relativeSlash(root, endpointPath))
-	} else if !os.IsNotExist(err) {
+	placeholder, err := endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
+	if err != nil {
 		return nil, err
 	}
 	controllerPath := filepath.Join(controllerDir, "controller.go")
@@ -516,7 +514,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 	if controllerChange != nil {
 		changes = append(changes, *controllerChange)
 	}
-	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted})
+	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
 	if err := commitSyncChanges(changes); err != nil {
 		return nil, err
 	}
@@ -736,4 +734,25 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// endpointPlaceholder 决定 add endpoint 能否写 endpointPath。文件不存在返回 nil；是协议生成器留下、仍未改动的
+// “未实现”占位（roost generate 为没有 endpoint 的协议写的 Handle<Protocol>）时返回它的内容，由调用方在同一次
+// 提交里替换（syncChange 的 before 保证提交前没人改过它）；其他内容一律拒绝并写明怎么处置，绝不覆盖业务代码。
+func endpointPlaceholder(root, endpointPath, handlerName string) ([]byte, error) {
+	raw, err := os.ReadFile(endpointPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rel := relativeSlash(root, endpointPath)
+	if protocol.IsUnimplementedControllerScaffold(raw, handlerName) {
+		return raw, nil
+	}
+	if protocol.IsControllerScaffold(rel, raw) {
+		return nil, fmt.Errorf("%s already exists: it is the placeholder roost generate wrote for %s, but it has been edited, so add endpoint will not overwrite it; move any code you want to keep, delete the file and run this command again", rel, handlerName)
+	}
+	return nil, fmt.Errorf("%s already exists and is not the untouched protocol placeholder; delete or rename it (keeping any code you need) and run this command again", rel)
 }

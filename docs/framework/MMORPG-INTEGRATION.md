@@ -153,7 +153,7 @@ sid A 的玩家 → 本地 Nest 扣物品 / 记意图 → Saga / outbox
               → 失败时补偿原玩家；结果未知先查询 / 恢复，不盲目再扣
 ```
 
-生成器入口：`roost add saga <name> -service <service> -steps <s1,s2,...> [-native <step,...> -entity <Entity> -component <Component>]` 与 `roost add effect <topic> -consumer <service>`，细节见 `roost help saga`、`roost help effect` 与 [Saga 指南](guide/06-saga.md)。步骤只执行本步骤声明的实体事务，持锁期间不同步访问另一个服务；原生步骤按 sid 分片时加 `WithAdmit` 准入（命令只在拥有该实体的进程执行，见 demo 赠礼 saga）。单进程容量见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“Saga 原生步骤容量（单进程）”与[性能优化后的实测](../performance/SAGA-OPT-20261018.md)。
+生成器入口：`roost add saga <name> -service <service> -steps <s1,s2,...> [-native <step,...> -entity <Entity> -component <Component>]` 与 `roost add effect <topic> -consumer <service>`，细节见 `roost help saga`、`roost help effect` 与 [Saga 指南](guide/06-saga.md)。步骤只执行本步骤声明的实体事务，持锁期间不同步访问另一个服务；原生步骤按 sid 分片时加 `WithAdmit` 准入（命令只在拥有该实体的进程执行，见 demo 赠礼 saga）。单进程容量见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“Saga 原生步骤容量（单进程）”与[最新实测](../performance/SAGA-CHECKPOINT-20261018.md)（优化过程见 [SAGA-OPT](../performance/SAGA-OPT-20261018.md)）。
 
 Remote / Mirror 用于公会等跨服实体：读镜像不代表拥有写权，写走正式 owner / lease / fence 路径。
 
@@ -243,7 +243,7 @@ go test -race -count=1 ./internal/service/game ./game/scene/... ./cmd/loadtest
 
    然后把 `configs/service/config.*.yaml` 的 Mongo / NATS / Redis / etcd 地址改指隔离环境（见 [demo README](../../demo/README.md)“本地实跑”），按需改 ops 端口避免冲突。
 2. `sh deploy/dev/run.sh start`：起 account 等九个托管服务和 sid 1000 的 game（共十个进程），并把 sid 1000 注册进 account。
-3. 起第二个 game：优先用生成器提供的 `sh deploy/dev/second-game.sh start`。它从 `config.game.yaml` 派生 `config.game2.yaml`，只改四处——sid 1001、ops 端口（第一个 game 的 ops 端口 + 10）、玩家 TCP 端口 7001、独立的 WAL 目录——然后等它的 `/readyz`；端口可用 `SECOND_OPS_PORT`、`SECOND_CLIENT_PORT` 覆盖。`etcd.advertise_addr` 不用改：它只写进服务注册，生成的配置里 game、activity、match 本来就共用同一个值，请求按 NATS 主题 `<prefix>.svc.<type>.<sid>` 寻址。second-game.sh **不会**把 sid 1001 注册进 account，要手动注册，Redis 参数与 run.sh 读 `config.account.yaml` 的方式一致（`redis.addr`、`redis.password`、`redis.db`、`account.key_prefix`；用 Redis Cluster 时改传 `-redis-cluster <cluster_addrs>`）：
+3. 起第二个 game：优先用生成器提供的 `sh deploy/dev/second-game.sh start`。它从 `config.game.yaml` 派生 `config.game2.yaml`，改五处——sid 1001、ops 端口（`9200 + game 的端口块号`，game-demo 是 9200）、玩家 TCP 端口 7001、`etcd.advertise_addr` 的端口（`8900 + 端口块号`，game-demo 是 8900；端口块见[项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)）、独立的 WAL 目录——然后等它的 `/readyz`；端口可用 `SECOND_OPS_PORT`、`SECOND_CLIENT_PORT`、`SECOND_ADVERTISE_PORT` 覆盖。`etcd.advertise_addr` 写进服务注册，同一台机器上的每个进程各用一个（维护者 2026-10-19 决定；生成的配置里 game、activity、match 已各不相同，`roost config check --all` 会拒绝两个服务写同一个）；服务间请求仍按 NATS 主题 `<prefix>.svc.<type>.<sid>` 寻址。second-game.sh **不会**把 sid 1001 注册进 account，要手动注册，Redis 参数与 run.sh 读 `config.account.yaml` 的方式一致（`redis.addr`、`redis.password`、`redis.db`、`account.key_prefix`；用 Redis Cluster 时改传 `-redis-cluster <cluster_addrs>`）：
 
    ```bash
    go run ./cmd/accountctl -redis <redis.addr> -redis-password <redis.password> -redis-db <redis.db> \

@@ -16,7 +16,7 @@
 | --- | --- |
 | `ci.yml` | Linux 质量检查（vet、关键包 race、模块整洁）、已提交生成代码的重生成比对、Linux 测试、Redis 服务套件、Windows 编译兼容、发布卫生检查 |
 | `framework-compat.yml` | 生成物兼容矩阵：依赖集合 minimum / released / source-head × 场景 minimal / full / demo，每个场景生成两次且第二次零差异，再编译测试；另有需要网络的 codegen 测试 |
-| `upgrade-compat.yml` | 用已发布的上一版生成器生成项目，再用当前生成器 `project upgrade`，验证不覆盖业务文件、失败不留半提交、第二次升级为 no-op、升级后能编译测试；`player-access-project` lane 用 v1.26.1 生成 game-demo，按 v1.27.0 发布说明 B1 手工迁移 `game/player_agent` 后升级，并核对与新生成的 game-demo 逐字节一致 |
+| `upgrade-compat.yml` | 用已发布的上一版生成器生成项目，再用当前生成器 `project upgrade`，验证不覆盖业务文件、失败不留半提交、第二次升级为 no-op、升级后能编译测试；`previous-project` 矩阵为 v1.25.0 与 v1.27.0（上一版，v1.28.0 发版时加入）；`player-access-project` lane 用 v1.26.1 生成 game-demo，按 v1.27.0 发布说明 B1 手工迁移 `game/player_agent` 后升级，并核对迁移结果（经 v1.27.0 生成器 sync）与 v1.27.0 生成器新生成的 game-demo 逐字节一致（B1 的承诺相对 v1.27.0；之后 demo 模板变化，业务文件不随 upgrade 改写） |
 | `release.yml`（name `framework-release`） | 手动触发的发布列车：`roost framework verify`、按清单的 `consumer_go` 生成真实消费项目、Linux / Windows / macOS CLI smoke，最后在受保护 Environment 中发布 |
 | `nightly.yml`、`nightly-gapmap.yml` | 深度质量与故障矩阵；每日承诺回退采样（不阻塞） |
 | `security.yml` | Dependency Review 与 CodeQL |

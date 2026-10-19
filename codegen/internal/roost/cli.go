@@ -274,7 +274,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -305,9 +305,10 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
-		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
+		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
 		"effect": {"root", "consumer"},
 		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
+		"attribute": {"root"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
@@ -338,6 +339,16 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "effect" {
 		printEffectNext(stdout, args[1])
+	}
+	if args[0] == "webroute" {
+		if manifest, err := LoadManifest(root); err == nil {
+			if service, err := webRouteService(manifest, *service); err == nil {
+				printWebRouteNext(stdout, manifest.Project.Module, service, toSnake(args[1]))
+			}
+		}
+	}
+	if args[0] == "attribute" {
+		fmt.Fprintln(stdout, "next: edit the fields and _<Field> formulas in game/gameplay/attribute/"+toSnake(args[1])+".go, then roost generate")
 	}
 	if args[0] == "skill" {
 		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then go test ./game/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")
@@ -414,82 +425,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if args[0] != "check" {
 		return errors.New("usage: roost config <check|enable|disable> [player-tcp] [flags]")
 	}
-	fs := flag.NewFlagSet("config check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	rootFlag := fs.String("root", ".", "project directory")
-	service := fs.String("service", "", "service name")
-	all := fs.Bool("all", false, "check every service config declared in roost.yaml")
-	production := fs.Bool("production", false, "enforce production-safe values")
-	file := fs.String("file", "", "explicit config path")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected arguments %q", fs.Args())
-	}
-	root, err := projectRoot(*rootFlag)
-	if err != nil {
-		return err
-	}
-	// 键的声明检查要按 roost.yaml 知道每个服务装配了哪些 Mod；读不出来就失败，不能跳过声明检查后报通过。
-	manifest, err := LoadManifest(root)
-	if err != nil {
-		return fmt.Errorf("config check reads %s for each service's declarations: %w", ManifestName, err)
-	}
-	// 业务声明按需编译一次进程读回（只在静态检查发现可疑键时），与 doctor 同一入口。
-	process, cleanup := processConfigSchemas(context.Background(), root)
-	defer cleanup()
-	check := func(path, name string) error {
-		if err := CheckConfig(path, *production); err != nil {
-			return err
-		}
-		if name == "" {
-			fmt.Fprintf(stdout, "keys not checked against declarations: %s is not named config.<service>[.<variant>].yaml for a service in %s; pass --service\n", filepath.ToSlash(path), ManifestName)
-			return nil
-		}
-		problems, err := checkConfigFileDeclarations(path, *production, manifest, name, process)
-		if err != nil {
-			return err
-		}
-		if len(problems) > 0 {
-			return errors.New(strings.Join(problems, "; "))
-		}
-		return nil
-	}
-	if *all {
-		if *service != "" || *file != "" {
-			return errors.New("--all cannot be combined with --service or --file")
-		}
-		var joined error
-		for _, name := range sortedServiceNames(manifest) {
-			path := filepath.Join(root, "configs", "service", "config."+name+".yaml")
-			if checkErr := check(path, name); checkErr != nil {
-				joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, checkErr))
-				continue
-			}
-			fmt.Fprintf(stdout, "config ok: %s\n", filepath.ToSlash(path))
-		}
-		return joined
-	}
-	path, name := *file, *service
-	if path == "" {
-		if name == "" {
-			return errors.New("--service or --file is required")
-		}
-		path = filepath.Join(root, "configs", "service", "config."+name+".yaml")
-	} else {
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		if name == "" {
-			name = configFileService(manifest, path)
-		}
-	}
-	if err := check(path, name); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "config is valid: %s\n", path)
-	return nil
+	return runConfigCheck(args[1:], stdout, stderr)
 }
 
 // configFileService 按生成的命名 config.<service>.yaml / config.<service>.<变体>.yaml 认出文件属于哪个服务；

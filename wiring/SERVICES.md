@@ -75,7 +75,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | --- | --- |
 | `directory` | 唯一键预留的两阶段提交原语（**注意：同 owner 幂等，因此不是互斥锁**——需要"只准一次尝试"用 `versionstore.Create`） |
 | `rank` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 |
-| `match` | 匹配：队列状态机、原子成组提交、Redis store、Grouping、`Matchmaker` RPC；Wiring 提供 Mod、sweep 循环与装配半 |
+| `match` | 匹配：队列状态机、原子成组提交（分区内 `Commit`、同一逻辑队列跨分区的 `CommitAcross`）、Redis store（每个分区一个键，hash tag 是逻辑队列）、Grouping、`Matchmaker` RPC；Wiring 提供 Mod、sweep 循环与装配半。大队列按 `Partition` 分键，见 [guide/09-services §4](../docs/framework/guide/09-services.md#4-关键业务边界) |
 | `account` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** |
 | `global` | 跨服路由绑定（epoch CAS 迁移）。进程存活统一由 App 单实例锁提供（`app.SingletonLiveness.Live`），不再有游戏服租约 |
 | `activity` | 跨服活动协调（原 `global/activity`）：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 |
@@ -129,7 +129,7 @@ go run ./codegen/cmd/servicerpc -dir ./service/mail -check
 
 | 服务 | `run(ctx)` 做什么 | 为什么 |
 | --- | --- | --- |
-| `match` | 15s 扫过期 ticket | 被替换的实现写了 `ExpiresAt`、转发了它,**全代码库没有一处读它** |
+| `match` | 15s 扫过期 ticket,并移除结束超过 `match.retention` 的票、比赛与排队请求记录 | 被替换的实现写了 `ExpiresAt`、转发了它,**全代码库没有一处读它**;队列状态整体读写,已结束记录不清理时每次操作随历史变慢(维护者 2026-10-19 方案 A) |
 | `session` | 30s 扫过期 run | 同上:截止时间要有人读才算存在 |
 | `platform` | 30s 重试发货失败的订单 | 订单有 `Attempts`/`NextAttemptAtUnix`,但除非有人调 `AttemptDelivery` 否则永不推进——对这个包来说就是"玩家付了钱没拿到货" |
 | `chat` | 5min 按保留期裁剪 | 被替换的实现把时间戳存成毫秒 int64,连 TTL 都不可能;`Prune` 存在但没人调是同一个结果 |

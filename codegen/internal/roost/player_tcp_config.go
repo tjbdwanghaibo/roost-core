@@ -47,7 +47,7 @@ type playerTCPDeclaration struct {
 		RequestRate         float64       `config:"request_rate" default:"100" example:"100" min:"0" max:"100000" help:"每连接每秒令牌数，包含心跳；0 显式关闭限流。"`
 		RequestBurst        int           `config:"request_burst" default:"200" example:"200" min:"1" max:"100000" help:"每连接最大突发请求数，超出后断开。"`
 		Enabled             bool          `config:"enabled" example:"false" help:"The listener stays off until auth.go is implemented and roost config enable player-tcp succeeds."`
-		Addr                string        `config:"addr" default:"0.0.0.0:7000" example:"0.0.0.0:7000"`
+		Addr                string        `config:"addr" listen:"player_access.tcp.enabled" default:"0.0.0.0:7000" example:"0.0.0.0:7000"`
 		MaxConnections      int           `config:"max_connections" default:"10000" example:"10000"`
 		MaxConnectionsPerIP int           `config:"max_connections_per_ip" default:"128" example:"128"`
 		MaxHandshakes       int           `config:"max_handshakes" default:"1024" example:"1024"`

@@ -192,7 +192,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 		body := "package " + packageName + "\n"
 		if feature == "webroute" {
-			body += "\ntype Service struct{}\n"
+			body += "\n// Service is what the generated routes receive as svc (a business file:\n" +
+				"// generated once). Put the route handlers' dependencies here and build it in\n" +
+				"// the service Init: kitweb.RegisterRoutes(registry, &web.Service{...}).\n" +
+				"type Service struct{}\n"
 		}
 		if err := addGo(path, body, false); err != nil {
 			return nil, err
@@ -713,12 +716,22 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 		b.WriteString(renderSingletonConfig(m.Project.Name, false))
 	}
 	if !production {
-		// One machine, every service at once: each gets its own ops port
-		// (see opsPort). Production keeps 9100 — one process per container.
-		return opsAddrLine.ReplaceAllString(b.String(), fmt.Sprintf("${1}127.0.0.1:%d", opsPort(m, service)))
+		return localizeDevConfig(m, service, b.String())
 	}
 	return productionizeConfig(b.String())
 }
+
+// localizeDevConfig 给开发配置里按服务区分的地址换上本服务的端口：开发配置集的服务在同一台机器上一起运行
+// （deploy/dev/run.sh），ops 端口是 opsPort，etcd.advertise_addr 的端口是 advertisePort（同一套服务序号）。
+// 新建工程（renderServiceConfig）与之后 add mod 追加的段（appendModConfigSections）都经这里，规则只有一处。
+// 生产示例每个服务一个容器，保持 9100 / CHANGE_ME:9000。
+func localizeDevConfig(m Manifest, service, text string) string {
+	text = opsAddrLine.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", opsPort(m, service)))
+	return advertiseAddrLine.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", advertisePort(m, service)))
+}
+
+// advertiseAddrLine 匹配生成的 etcd.advertise_addr 行（声明的 example 127.0.0.1:9000）。
+var advertiseAddrLine = regexp.MustCompile(`(?m)^(  advertise_addr: )127\.0\.0\.1:9000$`)
 
 // productionizeConfig turns a starter (loopback, single replica, local WAL)
 // configuration text into the production example: every address becomes a
@@ -789,7 +802,14 @@ func appendModConfigSections(root string, before, after Manifest, service string
 				fmt.Fprintf(warn, "WARN: %s: the singleton: block was edited, left as it is; service %s now runs the Data Engine, set singleton.enabled: true there by hand\n", rel, service)
 			}
 		}
-		body, appended := appendMissingConfigBlocks(body, sections, production)
+		added := sections
+		if !production {
+			added = make([]string, len(sections))
+			for i, section := range sections {
+				added[i] = localizeDevConfig(after, service, section)
+			}
+		}
+		body, appended := appendMissingConfigBlocks(body, added, production)
 		return body, appendedAny || appended
 	}
 	var changed []string

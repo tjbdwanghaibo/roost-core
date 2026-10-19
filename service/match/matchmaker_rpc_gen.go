@@ -37,13 +37,14 @@ const ServiceType = "match"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodEnqueue     = "match.Enqueue"
-	MethodCancel      = "match.Cancel"
-	MethodTicket      = "match.Ticket"
-	MethodCandidates  = "match.Candidates"
-	MethodCommit      = "match.Commit"
-	MethodMatch       = "match.Match"
-	MethodQueueLength = "match.QueueLength"
+	MethodEnqueue      = "match.Enqueue"
+	MethodCancel       = "match.Cancel"
+	MethodTicket       = "match.Ticket"
+	MethodCandidates   = "match.Candidates"
+	MethodCommit       = "match.Commit"
+	MethodCommitAcross = "match.CommitAcross"
+	MethodMatch        = "match.Match"
+	MethodQueueLength  = "match.QueueLength"
 )
 
 // Methods is every method on Matchmaker, in interface order.
@@ -56,6 +57,7 @@ var Methods = []string{
 	MethodTicket,
 	MethodCandidates,
 	MethodCommit,
+	MethodCommitAcross,
 	MethodMatch,
 	MethodQueueLength,
 }
@@ -177,6 +179,22 @@ type rpcCommitResponse struct {
 	Match Match `json:"match"`
 }
 
+// rpcCommitAcrossRequest is the CommitAcross request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcCommitAcrossRequest struct {
+	Tickets TicketRefs `json:"tickets"`
+}
+
+// rpcCommitAcrossResponse is the CommitAcross response on the wire.
+type rpcCommitAcrossResponse struct {
+	rpcStatus
+	Match Match `json:"match"`
+}
+
 // rpcMatchRequest is the Match request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -267,6 +285,14 @@ func RegisterHandlers(b bus.IBus, service Matchmaker) error {
 			match, err := service.Commit(ctx.Context(), wire.Queue, wire.TicketIDs)
 			return rpcCommitResponse{rpcStatus: statusOf(err), Match: match}, nil
 		},
+		MethodCommitAcross: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcCommitAcrossRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcCommitAcrossResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			match, err := service.CommitAcross(ctx.Context(), wire.Tickets)
+			return rpcCommitAcrossResponse{rpcStatus: statusOf(err), Match: match}, nil
+		},
 		MethodMatch: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcMatchRequest
 			if err := ctx.Decode(&wire); err != nil {
@@ -319,7 +345,7 @@ type BusClient struct {
 
 // AffinityMethods are the methods that route by an affinity key: every call
 // carrying the same key reaches the same instance.
-const AffinityMethods = "Enqueue, Cancel, Ticket, Candidates, Commit, Match, QueueLength"
+const AffinityMethods = "Enqueue, Cancel, Ticket, Candidates, Commit, CommitAcross, Match, QueueLength"
 
 // NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
@@ -462,6 +488,24 @@ func (c *BusClient) Commit(ctx context.Context, queue Queue, ticketIDs []string)
 	return resp.Match, err
 }
 
+// CommitAcross forms a match from tickets in several partitions of one
+// logical queue, atomically across those partitions (see Store.CommitAcross).
+// It routes by the logical queue: the partitions involved may be served by
+// different instances, and the multi-key compare-and-set is what keeps them
+// consistent.
+//
+// CommitAcross implements Matchmaker.
+func (c *BusClient) CommitAcross(ctx context.Context, tickets TicketRefs) (Match, error) {
+	// Routed by tickets.LogicalKey(): every call carrying the same key reaches the
+	// same instance, so contention on that key stays in one process.
+	ctx = servicerpc.WithAffinityKey(ctx, tickets.LogicalKey())
+	var resp rpcCommitAcrossResponse
+	err := c.callByAffinity(ctx, MethodCommitAcross, rpcCommitAcrossRequest{
+		Tickets: tickets,
+	}, &resp)
+	return resp.Match, err
+}
+
 // Match reads one match.
 //
 // Match implements Matchmaker.
@@ -531,6 +575,10 @@ func (c capability) Candidates(ctx context.Context, queue Queue, limit int) ([]T
 
 func (c capability) Commit(ctx context.Context, queue Queue, ticketIDs []string) (Match, error) {
 	return c.inner.Commit(ctx, queue, ticketIDs)
+}
+
+func (c capability) CommitAcross(ctx context.Context, tickets TicketRefs) (Match, error) {
+	return c.inner.CommitAcross(ctx, tickets)
 }
 
 func (c capability) Match(ctx context.Context, queue Queue, matchID string) (Match, bool, error) {

@@ -9,7 +9,15 @@
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时读作“删过档”（`ErrEntityAggregateDeleted`，D10），不水合、不检查 schema。
 
-所以 schema 变更是一次**运维操作**：停写之后把库里的旧文档一次性转成当前 schema，再启动只认当前 schema 的新程序。加字段不需要迁移（BSON 解码给零值），但仍要按需提高 `schema=`；改形状（例如扁平字段变成子文档）必须迁移。
+- **持久键**（维护者 2026-10-19 决定，[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）：DAO 定义里字段写了 `bson:"x"` 时 `x` 就是持久键，没写时是 Go 字段名的 snake_case。键要字母开头、只含字母数字下划线，不能以 `_` 开头（留给 `_id`、`_schema`、`_version` 等元数据），同一类型内不能重复；`bson` 选项只认 `omitempty`，`bson:"-"` 报错。违反时 `roost generate` 报错。生成的 `gen_<x>_dao.go` 里有一个持久文档结构体 `<dao>PersistDoc`（嵌套类型是 `<type>BSONDoc`），每个字段的显式 `bson` 标签就是它的存储键；整文档写入、水合、回滚快照、增量补丁都用这些键。
+- **要改 Go 字段名又保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``），键没变，不需要迁移，生成期与加载期都不告警。新字段建议一开始就写 `bson` 名（`roost add dao` 骨架的注释就是这样写的）。
+- **改字段会告警，不拒绝**：
+  - 生成期：`roost generate` 把工作树里上一次的生成物当基线，持久键消失（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`）、新增、类型变化各打印一条 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...`，写明后果并提示 `schema=` 是否提高。基线只是工作树里的文件：再生成一次不再告警。
+  - 加载期：生成的 `RestorePersisted` 发现库里有、持久文档结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`；同一进程同一 DAO 同一键只打一次，嵌套路径里的 map 键与下标写作 `*`），计数 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载但**不读入**这个键的值。缺失的键给零值（加字段的正常情况），不告警。
+- **旧键不再加载，整文档写回即删除**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”；同日撤销先前的“整文档写回保留旧键”方案 A）：库里有、DAO 未声明的键（顶层与嵌套子文档）不读入、不在内存里携带，下一次整文档写回（含 Remote 托管实体的 data 信封替换）就把它从文档里去掉；单字段补丁（`$set`）不碰它，它留在库里但不再被读取，需要清掉时用一次性离线迁移。
+- **业务层约束（改名 / 删字段前必读）**：要么保留原 `bson` 名，要么**先离线迁移再提升 `schema=`**（§2）；否则旧数据不再加载，下一次整文档写回即丢失。框架只负责通知（生成期与加载期的 WARN、计数），不替业务保留旧值。
+
+所以 schema 变更是一次**运维操作**：停写之后把库里的旧文档一次性转成当前 schema，再启动只认当前 schema 的新程序。加字段不需要迁移（BSON 解码给零值），但仍要按需提高 `schema=`；改形状（例如扁平字段变成子文档）、改名没保留 `bson` 名、删字段而旧值仍有用，都要在新程序启动**之前**迁移：把旧键的值搬到新键，迁移步骤里一并 `$unset` 旧键（新程序不读旧键，整文档写回也会删掉它）。
 
 ## 2. 流程
 

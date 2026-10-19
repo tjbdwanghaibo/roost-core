@@ -122,7 +122,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -173,7 +173,7 @@ roost project doctor --workflow player-tcp
 		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},
 		Summary:       "把 typed 玩家协议映射到生成的 Nest Sender",
 		Usage:         `roost add endpoint <name> --handler <controller-domain> [--protocol <name>] [--nest-handler <name> | --lifecycle <entity>]`,
-		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段；业务时间由服务器决定、不从请求取：参数名 nowUnix / nowUnixMilli（int64）由 endpoint 用 app.BusinessClock(controller.Registry()).Now() 填入（含 time.logic_offset）。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。--lifecycle <entity> 生成登录边界：不走 Nest，改为对 context.PlayerID 调 lifecycle <Entity>FromRegistry(...).GetOrCreate，要求已有 roost add lifecycle 与 controller 的 Registry()；首登前的玩法请求会收到 errcode.CodeEntityNotFound（entity_not_found）。`,
+		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段；业务时间由服务器决定、不从请求取：参数名 nowUnix / nowUnixMilli（int64）由 endpoint 用 app.BusinessClock(controller.Registry()).Now() 填入（含 time.logic_offset）。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。--lifecycle <entity> 生成登录边界：不走 Nest，改为对 context.PlayerID 调 lifecycle <Entity>FromRegistry(...).GetOrCreate，要求已有 roost add lifecycle 与 controller 的 Registry()；首登前的玩法请求会收到 errcode.CodeEntityNotFound（entity_not_found）。roost generate 为还没有 endpoint 的协议写的“未实现”占位（Handle<Protocol> 只返回 not implemented）在未改动时由 add endpoint 直接替换；改过的文件不覆盖，报错说明删掉或改名后重跑。`,
 		Example: `roost add endpoint RenamePlayer --handler player
 roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip
 roost add endpoint EnterGame --handler player --lifecycle Player`,
@@ -308,11 +308,19 @@ type Monster struct {
 	},
 	{
 		Name: "attribute", Aliases: []string{"attr", "attributes"},
-		Summary:       "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/attribute [-output file] [-force]`,
-		Configuration: `profile 使用 //roost:attribute index=<start> max=<count>；字段可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
+		Summary: "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
+		Usage: `roost add attribute <Profile> [--root dir]
+roost generate
+# 单独运行生成器（roost generate 读的就是这个目录）：
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/gameplay/attribute [-output file] [-force]`,
+		Configuration: `roost add attribute 开启 attribute feature（project sync 写出 game/gameplay/attribute/doc.go 与受控的 runtime.go，生成代码引用的 AttrID、AttributeProfile 等在那里）、写带 dirtyMask 的 profile 骨架并立即生成。手改 roost.yaml 的 features 开启时要先 roost project sync，否则 roost generate 报错指出缺 runtime.go。profile 使用 //roost:attribute index=<start> max=<count>（写在 type 上一行），必须带未导出的 dirtyMask uint64 字段（生成的 setter 写它）；导出字段都是属性且必须是整数，可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
 		Example: `//roost:attribute index=1 max=64
-type PlayerProfile struct { HP int64; Attack int64; Power int64 }
+type PlayerProfile struct {
+    HP        int64
+    Attack    int64
+    Power     int64
+    dirtyMask uint64
+}
 
 func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
     return Attack*2 + HP/10
@@ -320,9 +328,12 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 	},
 	{
 		Name: "webroute", Aliases: []string{"web", "http"},
-		Summary:       "生成类型化 HTTP route 注册、请求解码和响应映射",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute@latest -dir ./service/web [-force]`,
-		Configuration: `handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest。重复 method/path、非法模式和错误签名会失败。`,
+		Summary: "生成类型化 HTTP route 注册、请求解码和响应映射",
+		Usage: `roost add webroute <name> [-service <svc>] [--root dir]
+roost generate
+# 单独运行生成器：
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute@latest -dir ./service/web [-force]`,
+		Configuration: `add webroute 写 service/web/<name>.go 路由骨架、开启 webroute feature（doc.go 定义路由收到的 Service）、给宿主服务装 web Mod（wiring/web，配置 web.enabled / web.addr 缺省 127.0.0.1:8080 / web.allow_public_addr，以及 web.read_header_timeout 5s / web.read_timeout 15s / web.write_timeout 15s / web.idle_timeout 60s / web.max_body_bytes 1048576，超限回 413）并立即生成。服务 Init 里加一行 kitweb.RegisterRoutes(registry, &web.Service{}) 后路由可达：web Mod 在 Start 时 bind，service.started 时冻结路由表并开始 Serve，service.stopping 时停止接新请求；doctor 的 webroute:serve 在没人登记时 WARN。web Mod 不做鉴权，生产环境绑非回环地址要显式 web.allow_public_addr: true。handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest（含 Header）。返回的错误按框架错误码映射：errcode 定义的错误回 400 {"ok":false,"code":<码>,"reason":<message>}，其余回 500 {"ok":false,"code":1,"reason":"server error"}（原文只进服务端日志）；要别的状态码用 webroute.WriteResultWithMapper。handler panic 回 500 并记带路由模板的日志；指标 web.request.total / web.request.duration 按路由模板计。重复 method/path、非法模式和错误签名会失败。`,
 		Example: `//roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
     return QueryResponse{}, nil
@@ -343,9 +354,9 @@ roost generate`,
 		Summary: "生成跨服务 Saga 定义、步骤运行时（原生步骤 / Mongo 步骤）与原生步骤的 Nest handler 骨架",
 		Usage:   `roost add saga <name> -service <service> -steps <step1,step2,...> [-native <step,...> -entity <Entity> -component <Component>]`,
 		Configuration: `目标 Service 自动加上 saga Mod（补齐 dataengine、nats、mongo）。-steps 按执行顺序书写：生成的 Definition 原样保留这个顺序，Saga 按它推进、按它的倒序补偿；步骤名不能重复。-native 列出哪些步骤的业务是一笔 Nest 事务（必须是 -steps 的子集，不能重复），这些步骤走原生路径：改实体、回执与 completion 同一条 WAL 记录，至多生效一次，不需要自己的幂等；-entity / -component 与 add handler 相同（工程只有一个 Entity 时 -entity 可省），服务要有 nest Mod。其余步骤是 Mongo 步骤：在 Mongo 事务里运行，调用别的服务要按 Command.IdempotencyKey 幂等。
-生成物都是业务文件、只建一次：saga/<name>/definition.go（定义、步骤主题常量、EmitStart / Start）；saga/<name>/steps.go（State 与 EncodeState / DecodeState、每步正向与补偿的步骤体、按主题常量登记的 RegisterSteps、StartSteps；durable 为 <service>-<name>-<步骤>）；每个原生步骤两个 Nest handler：game/handler/<name>_<step>.go 与 <name>_<step>_compensation.go（参数带 saga.NativeStep，事务里调用 step.Complete，业务拒绝也提交）。骨架默认拒绝（"... is not implemented"），写完业务前 saga 不会报告成功。
-服务的 Init / Shutdown 归业务、不改写：Init 里 steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})，Shutdown 里 if err := steps.Drain(ctx); err != nil { steps.Stop() }；roost project doctor 的 saga-steps:<name> 在没人调用 StartSteps 时 WARN。Nest handler 里启动一笔 saga：state, _ := <name>.EncodeState(<name>.State{...})；<name>.EmitStart(businessKey, state, deadline)。超时、重试与回执参数在 saga 配置段（saga.step_defaults、saga.steps.<type>.<step>）。
-容量（2026-10-18 实测）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；单进程两步原生步骤 saga 正向约 5/s、全补偿约 4/s 以内延迟在 1 秒内，正向 7～8/s、全补偿 5/s 时 DataEngine 投影器（带回执 / effect 的记录逐条处理）跟不上、延迟升到秒级，约 10/s 起步骤超时、重试放大（仍恰好一次，但多数 saga 以 failed / compensated 结束）；Mongo 步骤正向 20/s 实测未饱和。量大时按 sid 分片多进程，并给原生步骤加 kitsaga.WithAdmit 准入（命令只在拥有该实体的进程执行，见 game-demo 送礼 saga）。实测：` + sagaCapacityDocURL + `；指南：` + sagaGuideURL + `。`,
+生成物都是业务文件、只建一次：saga/<name>/definition.go（定义、步骤主题常量、EmitStart / Start、按业务键查结果的 Lookup）；saga/<name>/steps.go（State 与 EncodeState / DecodeState、每步正向与补偿的步骤体、按主题常量登记的 RegisterSteps、StartSteps；durable 为 <service>-<name>-<步骤>）；每个原生步骤两个 Nest handler：game/handler/<name>_<step>.go 与 <name>_<step>_compensation.go（参数带 saga.NativeStep，事务里调用 step.Complete，业务拒绝也提交）。骨架默认拒绝（"... is not implemented"），写完业务前 saga 不会报告成功。
+服务的 Init / Shutdown 归业务、不改写：Init 里 steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})，Shutdown 里 if err := steps.Drain(ctx); err != nil { steps.Stop() }；roost project doctor 的 saga-steps:<name> 在没人调用 StartSteps 时 WARN。Nest handler 里启动一笔 saga：state, _ := <name>.EncodeState(<name>.State{...})；<name>.EmitStart(businessKey, state, deadline)。一个 (Type, businessKey) 只有一笔 saga，ID 由协调器分配：业务键取发起方能交还给客户端的值（例如请求号），之后在跑协调器的进程里 <name>.Lookup(ctx, engine, businessKey) 查结果（engine 是 app.Lookup[*saga.Engine](registry, mods.ModSaga)；saga.ErrNotFound 表示还没开始，终态 Completed / Compensated / Failed 即结果）。超时、重试与回执参数在 saga 配置段（saga.step_defaults、saga.steps.<type>.<step>）。
+容量（2026-10-18 实测，投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s）；正向 10/s 仍 0 笔终态不对，但投影器跟不上、积压，延迟升到秒级（P50 2.2 s）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（仍恰好一次，但大量 saga 以 failed / compensated 结束）；上限档各单样本。Mongo 步骤正向 20/s 实测未饱和。量大时按 sid 分片多进程，并给原生步骤加 kitsaga.WithAdmit 准入（命令只在拥有该实体的进程执行，见 game-demo 送礼 saga）。实测：` + sagaCapacityDocURL + `；指南：` + sagaGuideURL + `。`,
 		Example: `roost add saga gift -service game -steps debit,credit -native debit,credit -entity Player -component Wallet
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost generate`,
@@ -374,12 +385,13 @@ roost project sync`,
 	{
 		Name: "config", Aliases: []string{"config-check"},
 		Summary: "检查服务 YAML，并安全启停 player TCP",
-		Usage: `roost config check --service <name> [--production] [--file path] [--root dir]
-roost config check --all [--production] [--root dir]
+		Usage: `roost config check --service <name> [--production] [--file path] [--keys-only] [--json] [--root dir]
+roost config check --all [--production] [--keys-only] [--json] [--root dir]
 roost config enable player-tcp [--service <name>] [--file path]
 roost config disable player-tcp [--service <name>] [--file path]`,
-		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，并按本服务全部 Mod 的声明检查值与键：框架段里没有声明的键（多半拼错）报错，可疑键先按编译出的进程里业务服务自己的声明复核；--file 按 config.<service>[.<变体>].yaml 认出服务，认不出时加 --service。--production 还拒绝危险默认值。业务独有段的拼写由 roost project doctor 检查。`,
+		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，并按本服务全部 Mod 的声明检查值与键：框架段里没有声明的键（多半拼错）报错，可疑键先按编译出的进程里业务服务自己的声明复核；--file 按 config.<service>[.<变体>].yaml 认出服务，认不出时加 --service。--production 还拒绝危险默认值。键检查通过后，再交给编译出的进程跑 --check-config（跨键与跨 Mod 规则，例如 saga.start_effect_stream 必须等于 dataengine.effects.stream），与 doctor 的 config-check 同一处规则、同一个结论；工程编译不过时明确打印“cross-mod rules NOT checked”。--keys-only 只做键检查：不编译、不跑跨 Mod 规则，输出写明“cross-mod rules not checked (--keys-only)”。--all 另外比较各服务之间：声明里带 shared 的共享资源名（nats.prefix、syncbus.prefix、etcd.service_prefix、dataengine.effects.stream / subject_prefix 与 saga.start_effect_*、saga.database / stream / subject_prefix、remote_entity.mongo.database / snapshot_l2_key_prefix、singleton.key_prefix）必须相同，开发配置集里带 listen 的监听地址（ops.addr、web.addr、player_access.tcp.addr，开关打开时）端口不得冲突，带 unique 的 etcd.advertise_addr 各服务不同（生成器按 roost.yaml 的 services.<name>.port_block 给 127.0.0.1:9000+N；开发配置端口与块号派生值不一致时只 WARN）；doctor 的 config-across-services 是同一个检查。--json 在 stdout 输出每份文件的 keys / cross_mod 结论、cross_service 与 exit_code。退出码：0 全部通过（--keys-only 时跨 Mod 按要求不查）；1 命令没跑成（参数、roost.yaml）；2 键错误；3 跨 Mod 规则错误；4 跨服务不一致；5 检查没跑全（工程编译不过、跨 Mod 没查，或文件名认不出服务）；同时出现时取最小的非零码。业务独有段的拼写由 roost project doctor 检查。`,
 		Example: `roost config check --all
+roost config check --all --keys-only --json
 roost config check --service game
 roost config enable player-tcp --service game
 roost project doctor --workflow player-tcp

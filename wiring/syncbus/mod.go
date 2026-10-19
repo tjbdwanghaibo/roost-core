@@ -24,7 +24,7 @@ const defaultPrefix = "roost.sync"
 type config struct {
 	app.ServiceIdentity
 	Transport      string        `config:"syncbus.transport" default:"nats" enum:"nats|jetstream|js" example:"jetstream" help:"服务间同步总线：nats 或 jetstream（持久投递）"`
-	Prefix         string        `config:"syncbus.prefix" default:"roost.sync" example:"{project}.sync" help:"主题前缀"`
+	Prefix         string        `config:"syncbus.prefix" shared:"syncbus.prefix" default:"roost.sync" example:"{project}.sync" help:"主题前缀"`
 	Stream         string        `config:"syncbus.stream" help:"JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"`
 	Storage        string        `config:"syncbus.storage" enum:"file|memory" example:"file"`
 	AckWait        time.Duration `config:"syncbus.ack_wait" min:"0"`

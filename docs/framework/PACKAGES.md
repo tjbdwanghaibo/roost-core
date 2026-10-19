@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开172个包目录的职责映射</summary>
+<summary>展开173个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -181,5 +181,6 @@
 | [wiring/session](../../wiring/session) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |
 | [wiring/statslog](../../wiring/statslog) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/syncbus](../../wiring/syncbus) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 7 |
+| [wiring/web](../../wiring/web) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 
 </details>

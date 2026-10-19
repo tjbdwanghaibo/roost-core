@@ -475,6 +475,8 @@ func TestProjectorStopsAfterSegmentAckFailure(t *testing.T) {
 	}
 	ackErr := errors.New("checkpoint unavailable")
 	projector.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
+	// 特殊记录不再在投影前单独确认，让条数阈值在批次段之后触发 checkpoint：确认失败的那一刻起不再投影后续段。
+	projector.opts.CheckpointRecords = 2
 	processed, err := projector.ReplayPass(context.Background())
 	if !errors.Is(err, ackErr) || processed != 2 {
 		t.Fatalf("processed=%d err=%v", processed, err)

@@ -42,6 +42,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/wiring/statslog"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
+	kitweb "github.com/tjbdwanghaibo/roost-core/wiring/web"
 )
 
 // groups 是生成器认识的单元：App 自己、catalog.go 的 Mod 名（dataengine 段同时写 nest 与持久化的键，
@@ -61,6 +62,7 @@ func groups() map[string][]app.ConfigSchema {
 		"remote_entity": {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
 		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
 		"saga":          {kitsaga.NewMod().ConfigSchema()},
+		"web":           {kitweb.NewMod().ConfigSchema()},
 
 		"account":   {new(account.Mod).ConfigSchema()},
 		"chat":      {new(chat.Mod).ConfigSchema()},
@@ -146,6 +148,7 @@ func keyLiteral(key configschema.Key) string {
 	fmt.Fprintf(&b, "{Name: %q, Kind: %q", key.Name, string(key.Kind))
 	for _, field := range []struct{ name, value string }{
 		{"Default", key.Default}, {"Min", key.Min}, {"Max", key.Max}, {"Help", key.Help},
+		{"Shared", key.Shared}, {"Follows", key.Follows}, {"Listen", key.Listen}, {"Unique", key.Unique},
 	} {
 		if field.value != "" {
 			fmt.Fprintf(&b, ", %s: %q", field.name, field.value)

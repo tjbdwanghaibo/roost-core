@@ -274,8 +274,9 @@ func (s *State) turrets() {
 	}
 }
 
-// Snapshot 是业务检查点。客户端从帧 1 追帧可重算状态；已裁历史不会自动从该检查点恢复。
-// 存盘和同步这个检查点的身份 / 输入位置必须由宿主另行设计，本例只演示成对恢复模拟状态。
+// Snapshot 是业务检查点。本例 MaxFrames（600）小于 Lockstep 默认历史保留窗口（3600 帧），客户端可从帧 1
+// 追帧重算；起点早于保留窗口的追帧由框架以 ErrCatchupUnservable 失败，框架不从这个检查点自动恢复。
+// 存盘和同步这个检查点的身份 / 输入位置必须由宿主另行设计，本例只演示快照与恢复后继续推进得到同一摘要。
 func (s *State) Snapshot() []byte {
 	raw, err := json.Marshal(struct {
 		Version int

@@ -24,10 +24,11 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
-// v1.26.0 生成物使用 lockstep Match（NewMatch / MatchConfig）等 v1.26.0 才有的 API，不能接入更早的 core。
+// v1.28.0 生成物使用 DAO 持久文档（dataengine.NewStoredKeySet）、
+// saga Engine.GetByBusinessKey 与原生步骤、wiring/selfsync、entitytimer 等 v1.28.0 才有的 API，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.26.0",
+	Core: "v1.28.0",
 }
 
 type Manifest struct {
@@ -136,6 +137,9 @@ type ServiceSpec struct {
 	// UsesRpcs lists project rpcs (owned by another service) this business
 	// service calls; each assembles the generated ClientMod here.
 	UsesRpcs []string `yaml:"uses_rpcs,omitempty"`
+	// PortBlock 是本服务的端口块号（port_blocks.go）：开发配置里的 ops 端口 9100+N、etcd.advertise_addr 9000+N 等都由它
+	// 派生。由生成器分配并写进 roost.yaml，一经分配不再改变；nil 只出现在内存里刚加进来、还没写回的服务上。
+	PortBlock *int `yaml:"port_block,omitempty"`
 }
 
 // AccessSpec declares an application-owned request boundary. Access layers
@@ -219,6 +223,9 @@ func LoadManifest(root string) (Manifest, error) {
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err
 	}
+	if err := manifest.requirePortBlocks(); err != nil {
+		return Manifest{}, err
+	}
 	return manifest, nil
 }
 
@@ -249,6 +256,7 @@ func decodeManifest(root string) (Manifest, error) {
 }
 
 func (m Manifest) Marshal() ([]byte, error) {
+	m = m.withPortBlocks() // 新加的服务在写 roost.yaml 时拿到块号，之后不再改变
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -295,6 +303,9 @@ func (m Manifest) Validate() error {
 		}
 	}
 	if err := m.validateFrameworkServices(); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	if err := m.validatePortBlocks(); err != nil {
 		joined = errors.Join(joined, err)
 	}
 	for name, access := range m.Access {

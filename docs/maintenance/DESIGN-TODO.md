@@ -16,6 +16,7 @@
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
+| D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -313,3 +314,44 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 **建议**：先做 **A**（胶水进框架、demo 作为第一个调用方验证），A 落地后再决定是否做 B。理由：缺的主要是与业务无关的组装和 `NativeStep`，放进框架后手写量降到“handler + 一次订阅调用”，生成器即使以后要做也只是薄薄一层；直接做 B 会把今天 demo 的胶水形状固化进模板。准入 / 转交属于玩家分片拓扑，A、B 都不替业务决定。
 
 **需要拍板**：1）选 A / B / C（或 A 后接 B）；2）若做 A，`NativeStep` 放 `framework/saga` 还是生成到业务包（影响 Nest handler 签名能否引用框架类型）；3）若做 B，effect 命令是否与 saga 命令同批交付。
+
+## D13 DAO 持久键的来源与水合时的键集合校验
+
+**状态：维护者 2026-10-19 决定，已实施。** 决定（维护者原话要点，经三次更正）：
+
+1. **DAO 定义里可以写显式持久名**：字段的 `bson:"<键>"` 生效，作为持久键；没写时仍是 snake_case(Go 字段名)。显式名还写在**生成的工具 struct** 上——以前生成器另生成 marshal / unmarshal 用的结构体，现在每个 DAO 生成持久文档结构体，读写、回滚、补丁都以它为键的来源。
+2. **改字段（改名、删字段）打印 WARN，不拒绝加载**：生成期与加载期各一处。
+3. ~~方案 A：整文档写回时保留库里不认识的持久键，不删除；提供显式清理入口~~——**同日撤销**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）：库里有、DAO 未声明的键不读入、不在内存里携带，整文档写回自然去掉它们（与 D13 之前的写入语义一致）；`dataengine.UnknownStoredKeys` 携带机制与 `engine.CleanupStoredKeys` 清理入口删除（322a7c40 实现过、未发版）。业务层约束写进 SCHEMA-MIGRATION §1：改名 / 删字段前要么保留原 `bson` 名，要么先离线迁移再提升 schema。
+
+**实施结果**：
+
+- **键规则**（`codegen/internal/dao/parse.go` 的 `applyBSONTag` / `validateFieldKeys`）：`FieldDef.Key` 是唯一的取键方式（持久键、同步 WireName、回滚快照键是同一个）。显式名须字母开头、只含字母数字下划线；任何键不得以 `_` 开头（留给 `_id`、`_schema`、`_version`、`_last_tx`、`_deleted` 等元数据）；同一 DAO / 嵌套类型内所有字段的键不得重复（持久、只同步、只事务字段共用回滚快照与同步文档）；`bson` 选项只认 `omitempty`（照抄进生成的标签），其余选项与 `bson:"-"` 生成期报错。9baf02a1 的“bson 被忽略”告警已删除。
+- **持久文档结构体**（`template_dao.go`）：`<dao>PersistDoc`（`ID` `bson:"_id"`、`SchemaVersion` `bson:"_schema"`、每个持久字段一行显式 `bson` 标签）。`marshalCommitState` / `MarshalPersist` / `Unmarshal` / `RestorePersisted` 都经 `persistDoc()` / `setPersistDoc()`；回滚快照 `<dao>RollbackDoc` 把它作为 `_persisted` 子文档、再加非持久字段；增量补丁、`PersistFieldNames`、`SyncFields`、`MarshalSync` / `ApplySync` 的键字面量都取同一个 `FieldDef.Key`（`TestEveryKeyTheGeneratedDaoSpellsIsATagOfItsDocumentStructs` 守住：生成物里每个键字面量都是文档结构体的某个标签）。整文档写入从 `bson.M` 改为结构体编码，顶层键按声明顺序写出。嵌套类型沿用 `<type>BSONDoc`。回滚快照保留 `<dao>RollbackDoc` 的形状（持久文档作 `_persisted` 子文档）：它让快照与持久写入共用同一份键来源，撤销方案 A 后仍有价值。
+- **生成期 WARN**（`codegen/internal/dao/baseline.go`）：生成前读输出目录里上一次的生成物（`<dao>PersistDoc`；更早的生成物里是 `Unmarshal` 的局部 `rawDoc`；嵌套类型是 `<type>BSONDoc`）作为基线，持久键消失、新增、类型变化各打一条 WARN，写明后果、迁移手册与 `schema=` 是否提高；不阻断生成。保留原 `bson` 名改 Go 名时键不变，不告警。
+- **加载期 WARN**（`framework/dataengine/stored_keys.go`）：`dataengine.NewStoredKeySet[<dao>PersistDoc]` 从结构体标签推出键集合（嵌套按解码层级，map 值 / 切片元素路径写作 `*`）；生成的 `RestorePersisted` 在 schema 校验之后、解码之前调用 `WarnUnknown`：同一进程同一 DAO 同一键只打一次 `slog.Warn`（带 `dao`、`key`、`first_id`），每次出现计数 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载但不读入该键（WARN 写明“该键不再读取，下一次整文档写回会删除它；要保留数据请给字段写原 bson 名，或先离线迁移”）。顶层 `_` 开头的元数据键与缺失键不报。Remote 托管实体经同一个 `RestorePersisted`（payload 是信封的 data）。
+- **旧键不读入（撤销方案 A 后）**：持久文档结构体与嵌套 wire 文档不再有收未知键的 inline 字段，解码器忽略库里多出的键；整文档写回（`$replaceWith` / ReplaceOne、Remote data 信封替换）就把它们去掉，单字段补丁只 `$set` 自己的键、旧键留在库里但不再被读取（需要清掉时用一次性离线迁移）。存储写法、版本条件、冲突分类、墓碑语义都没有改。回归：生成 DAO 运行时 `TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded`，真实 Mongo `TestOldStoredKeysAreNotLoadedAndTheNextFullWriteDropsThemRealMongo` / `TestRemoteEnvelopePayloadDropsOldStoredKeysRealMongo`（对 322a7c40 的方案 A 实现红：`after a full write the old keys [old_gold pos.old_z equips.1.old_color] are still stored, want them dropped`、`remote payload carries old keys [...]`）。
+- **剩余风险**：WARN 不阻断；忽略告警时旧值不再加载，下一次整文档写回即丢失——这由业务约束（保留原 `bson` 名或先离线迁移）承担，框架只通知。生成期基线只在工作树里，删掉生成物或换机器重新生成看不到上一次的形状，此时只剩加载期 WARN。见 [KNOWN-LIMITS](KNOWN-LIMITS.md)“新用户试用第七轮”第 1 项。
+
+**原登记（2026-10-19）**：
+
+**问题（实测）**：把 ``Gold int64 `bson:"gold" dao:"persist,sync"` `` 的 Go 名改成 `Coins`、保留 `bson:"gold"` 想让库里的键不变，`roost generate`、`go build`、`roost project doctor` 全部通过、启动无告警，登录后金币 40 → 0（Mongo 里 `gold: 40` 还在）；之后的写入以 `coins` 继续。数据安全问题：没有任何一层报错。
+
+**现状（已核对当前源码）**：
+
+- **持久键 = Go 字段名的 snake_case**：`codegen/internal/dao/gen.go` 的 `bsonKey`（模板函数，`toSnake(name)`）是唯一来源，水合（`Unmarshal` 的 `rawDoc` 标签）、整文档写入（`Marshal`）、增量写入（`$set` 路径、`MapPatchPath`）、Sync 名都用它。
+- **`bson` 标签不参与**：`parse.go` 的 `parseDaoTag` 只读 `dao:"..."`；`roost add dao` 骨架注释、FIRST_BUSINESS / CODEGEN_REFERENCE 示例与 `roost add timer` 生成的字段都写了 `bson:"..."`（恰好与 snake_case 相同，所以看起来生效）。
+- **水合不看键集合**：生成的 `RestorePersisted` 先比 `_schema` 整数，再 `bson.Unmarshal` 进 `rawDoc` 结构体——库里有、定义里没有的键被解码器静默丢弃；定义里有、库里没有的键得零值（这正是“加字段不需要迁移”依赖的行为）。
+- **写入**：创建 / `MarkPersistFull` 是 `ReplaceOne` 整文档（旧键随之删除，老值彻底丢失）；增量是 `$set`（旧键残留但再也不读）。
+- **D4 为什么没拦住**：D4 的校验只比业务手写的 `schema=` 整数（`checkAggregateSchemas` 与生成的 `RestorePersisted`），不比字段集合；生成器没有持久字段的基线；未知键被忽略是“加字段兼容”的副作用。同样静默的还有：删字段、`persist` 改 `nopersist`、`dao:"-"`。
+
+**可选方向**（未上线，均不做旧数据兼容：版本号加 1、CHANGELOG 写“升级需清空”）：
+
+- **A 显式持久名**：生成器把字段的显式名当持久键，缺省仍是 snake_case。写法二选一：尊重已有的 `bson:"name"`（用户与文档已经在写，最少意外），或新增 `dao:"persist,key=name"`（与 bson 库的语义分开，`bson` 标签继续告警或拒绝）。效果：改 Go 名、保留显式名 → 键不变，不需要迁移。代价：模板改用 `FieldDef` 的持久键（约 20 处 `bsonKey` 调用）、golden 与 doctor 文本更新；显式名本身成为存储契约（改它 = 改键）；**挡不住**“改 Go 名且没写显式名”。已生成工程：没写或写得与 snake_case 相同的字段生成物不变，写了不同名字的字段键会变。
+- **B 水合时校验键集合**：文档里出现定义没有的持久键（排除 `_id`、`_version`、`_schema`、`_last_tx`、`_deleted`、`_deleted_at` 等元数据）即拒绝加载，错误与 `ErrSchemaMismatch` 同类、点名多出的键并指向迁移手册；缺失的键仍允许（加字段兼容不变）。强制点与现有 schema 校验合流（生成的 `RestorePersisted` 解码前遍历 `bson.Raw` 顶层元素），“规则声明一次、运行期加载时强制一次”。代价：每次冷加载多一次顶层键扫描（不分配，微小）；删字段 / 改 `nopersist` 也要先迁移（`$unset`），把现在的静默残留变成显式运维动作；Remote 托管实体的加载路径要一并接上；嵌套子文档是否递归校验需要定（递归更全、代码与开销更大）。已生成工程：重新 generate 即得；库里已有残留键的数据启动即拒绝（未上线：清库）。
+- **C 两者都做**：B 是保证（无论怎样改名都不会静默丢数据），A 让“只改 Go 名”不需要迁移。
+- **D（可与上面组合）生成期基线**：提交一份持久键清单（类似 `protocol/protocol_manifest.json`），generate / doctor 比对：键消失或改名而 `schema=` 未提高时报错。代价：多一个受控文件要随代码提交；只在生成期，挡不住已部署数据与代码不一致。
+
+**建议：C，显式名用已有的 `bson:"..."`**（B 先做，它单独就消除静默丢失；A 随后）。理由：B 把保证放在唯一的运行期加载点，与 D4 同一处；A 用户已经在写、文档示例已经是这个形状，实现后示例变成真的。D 暂不做。
+
+**需要拍板**：1）是否采用 B，包括“删字段 / 改 `nopersist` 也必须先迁移”；2）A 的显式名用 `bson` 标签还是 `dao:"key=..."`；3）B 是否递归校验嵌套子文档（建议先只校验顶层与嵌套类型的直接字段）。
+

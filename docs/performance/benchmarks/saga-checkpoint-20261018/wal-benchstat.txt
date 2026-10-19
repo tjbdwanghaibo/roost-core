@@ -1,0 +1,40 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+                                                  │ wal-before.txt │            wal-after.txt            │
+                                                  │     sec/op     │    sec/op     vs base               │
+ProjectorWALReplayAckMatrix/ordinary_only-10          10.45m ± 11%   10.38m ± 26%        ~ (p=0.589 n=6)
+ProjectorWALReplayAckMatrix/special_1_percent-10      44.52m ±  7%   10.41m ± 11%  -76.61% (p=0.002 n=6)
+ProjectorWALReplayAckMatrix/special_10_percent-10    460.12m ±  7%   10.04m ±  6%  -97.82% (p=0.002 n=6)
+ProjectorWALReplayAckMatrix/all_special-10          2267.34m ±  5%   10.18m ± 11%  -99.55% (p=0.002 n=6)
+geomean                                               148.4m         10.25m        -93.09%
+
+                                                  │ wal-before.txt │            wal-after.txt            │
+                                                  │    acks/op     │  acks/op    vs base                 │
+ProjectorWALReplayAckMatrix/ordinary_only-10            1.000 ± 0%   1.000 ± 0%        ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10        5.000 ± 0%   1.000 ± 0%  -80.00% (p=0.002 n=6)
+ProjectorWALReplayAckMatrix/special_10_percent-10      51.000 ± 0%   1.000 ± 0%  -98.04% (p=0.002 n=6)
+ProjectorWALReplayAckMatrix/all_special-10            256.000 ± 0%   1.000 ± 0%  -99.61% (p=0.002 n=6)
+geomean                                                 15.98        1.000       -93.74%
+¹ all samples are equal
+
+                                                  │ wal-before.txt │             wal-after.txt              │
+                                                  │ batch_calls/op │ batch_calls/op  vs base                │
+ProjectorWALReplayAckMatrix/ordinary_only-10          1.000 ± 0%         1.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10      3.000 ± 0%         3.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/special_10_percent-10     26.00 ± 0%         26.00 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/all_special-10            0.000 ± 0%         0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                          ²                   +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                  │  wal-before.txt  │              wal-after.txt               │
+                                                  │ project_calls/op │ project_calls/op  vs base                │
+ProjectorWALReplayAckMatrix/ordinary_only-10            0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/special_1_percent-10        2.000 ± 0%           2.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/special_10_percent-10       25.00 ± 0%           25.00 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectorWALReplayAckMatrix/all_special-10              256.0 ± 0%           256.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                            ²                     +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

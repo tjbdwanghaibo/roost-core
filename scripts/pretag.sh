@@ -116,4 +116,9 @@ if ! GOWORK=off go test ./... >"$test_log" 2>&1; then
 fi
 rm -f "$test_log"
 
+# 6. C# 客户端 SDK：go test ./... 只在 dotnet 可用时跑生成工程那一条，金样与 SDK 自测不在 Go 测试里。
+#    缺 dotnet 时脚本打印 SKIP（不是通过），发版说明里要如实记。
+echo "pretag: C# client SDK golden and self tests"
+ROOST_DOTNET_GOLDEN_ONLY=1 ./scripts/test-client-dotnet.sh >/dev/null || fail "C# client SDK tests failed (rerun ./scripts/test-client-dotnet.sh to see the output)"
+
 echo "pretag: $module@$version is ready to tag"

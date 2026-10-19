@@ -29,6 +29,7 @@ type Mod struct {
 
 	prefix    string
 	ticketTTL time.Duration
+	retention time.Duration
 	sweep     []domain.Queue
 	store     domain.Store
 }
@@ -80,6 +81,7 @@ type config struct {
 	Match struct {
 		KeyPrefix   string        `config:"key_prefix" required:"true" example:"roost:{project}:match" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
 		TicketTTL   time.Duration `config:"ticket_ttl" default:"5m" min:"1s" example:"60s"`
+		Retention   time.Duration `config:"retention" default:"10m" min:"1s" example:"10m" help:"已结束的票、比赛与排队请求记录的保留期；超期后读到不存在，同一票集合的 Commit 重放报 ErrTicketMissing"`
 		SweepQueues []string      `config:"sweep_queues" example:"[]"`
 	} `config:"match"`
 }
@@ -92,6 +94,7 @@ func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 //	match:
 //	  key_prefix: roost:match   # required, no default
 //	  ticket_ttl: 2m            # optional, defaults to DefaultTicketTTL
+//	  retention: 10m            # optional, defaults to DefaultRetention
 func (m *Mod) Init(cfg *viper.Viper) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -107,7 +110,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err != nil {
 		return err
 	}
-	m.prefix, m.ticketTTL, m.sweep = c.KeyPrefix, c.TicketTTL, sweep
+	m.prefix, m.ticketTTL, m.retention, m.sweep = c.KeyPrefix, c.TicketTTL, c.Retention, sweep
 	return nil
 }
 
@@ -123,7 +126,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// a test environment that moves time.logic_offset moves them together.
 	// The offset only takes effect at start, so a wait is still real time.
 	store, err := domain.NewRedisStore(client, m.prefix, domain.Config{
-		TicketTTL: m.ticketTTL, Metrics: m.metrics, SweepQueues: m.sweep,
+		TicketTTL: m.ticketTTL, Retention: m.retention, Metrics: m.metrics, SweepQueues: m.sweep,
 		Now: app.BusinessClock(r).Now,
 	})
 	if err != nil {
