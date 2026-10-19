@@ -164,10 +164,13 @@ make ci
 
 学完第一条业务链后常接的几块（各自 `roost help <能力>` 有完整参数）：
 
-- **Saga**（`roost help saga`）：`roost add saga gift -service game -steps debit,credit -native debit,credit -component Profile`，`-steps` 按执行顺序写，生成的定义原样保留（补偿按倒序），步骤名不能重复；`-native` 选出业务是一笔 Nest 事务的步骤（改玩家金币这类），它们各生成正向与补偿两个 Nest handler（`game/handler/gift_debit.go` 等，参数带 `saga.NativeStep`，事务里调用 `step.Complete`），其余步骤是 Mongo 步骤。步骤体与登记在 `saga/gift/steps.go`：填 `State` 字段、把 handler 需要的参数从步骤体传过去，再在服务 `Init` 里加一行 `steps, err := gift.StartSteps(context.Background(), registry, gift.StepDeps{})`、`Shutdown` 里 `steps.Drain(ctx)`（生成器不改写服务；忘了时 `make doctor` 的 `saga-steps:gift` 会 WARN）。发起 saga 在 Nest handler 里 `gift.EncodeState(...)` 后 `gift.EmitStart(...)`。容量：一个进程的原生步骤 saga 正向约 8/s、全补偿约 5/s 以内延迟在 1 秒内，正向 10/s 仍全部正确但延迟升到秒级，正向 12/s、全补偿 7/s 起重试放大而崩溃，量大要按 sid 分片多进程（`roost help saga`）。Saga 订阅的效果流取 `dataengine.effects`，不用在 saga 段再写一遍。
+- **Saga**（`roost help saga`）：`roost add saga gift -service game -steps debit,credit -native debit,credit -component Profile`，`-steps` 按执行顺序写，生成的定义原样保留（补偿按倒序），步骤名不能重复；`-native` 选出业务是一笔 Nest 事务的步骤（改玩家金币这类），它们各生成正向与补偿两个 Nest handler（`game/handler/gift_debit.go` 等，参数带 `saga.NativeStep`，事务里调用 `step.Complete`），其余步骤是 Mongo 步骤。步骤体与登记在 `saga/gift/steps.go`：填 `State` 字段、把 handler 需要的参数从步骤体传过去，再在服务 `Init` 里加一行 `steps, err := gift.StartSteps(context.Background(), registry, gift.StepDeps{})`、`Shutdown` 里 `steps.Drain(ctx)`（生成器不改写服务；忘了时 `make doctor` 的 `saga-steps:gift` 会 WARN）。发起 saga 在 Nest handler 里 `gift.EncodeState(...)` 后 `gift.EmitStart(businessKey, ...)`；业务键取能交还给客户端的值（例如请求号），结果用 `gift.Lookup(ctx, engine, businessKey)` 在跑协调器的进程里查（`saga.ErrNotFound` = 还没开始）。容量：一个进程的原生步骤 saga 正向约 8/s、全补偿约 5/s 以内延迟在 1 秒内，正向 10/s 仍全部正确但延迟升到秒级，正向 12/s、全补偿 7/s 起重试放大而崩溃，量大要按 sid 分片多进程（`roost help saga`）。Saga 订阅的效果流取 `dataengine.effects`，不用在 saga 段再写一遍。
 - **事务性 effect**（`roost help effect`）：`roost add effect player.level_up -consumer game` 生成 `game/effects/player_level_up.go`（载荷字段自己填，在 Nest handler 里 `effects.EmitPlayerLevelUp(key, ...)`，与实体修改同一次提交）和 `internal/service/game/player_level_up_consumer.go`（消费者，经它的 ctx 写 Mongo 与回执一起提交；调用别的服务按 `envelope.EffectID` 幂等）；服务 `Init` 里 `startPlayerLevelUpEffectConsumer(context.Background(), registry)`、`Shutdown` 里 `Drain()`。
 - **技能**（`roost help skill`）：`roost add skill Fireball` 同时生成 `game/skills/catalog_test.go`，`go test ./game/skills/` 与 `make doctor` 的 `skills:catalog` 会拦住写坏的 JSON。
 - **托管框架服务**（`roost help services`）：排行、邮件、聊天等九个现成服务，在 `roost.yaml` 加 `services.<name>.framework` 并在业务服务 `uses` 里列出，然后 `make sync`。
+- **HTTP 路由**（`roost help webroute`）：`roost add webroute ShopPrice` 生成 `service/web/shop_price.go`（`GET /shop_price`）、开启 webroute feature、给服务装上 `web` Mod（配置 `web.addr`，缺省 `127.0.0.1:8080`）；在服务 `Init` 里加一行 `kitweb.RegisterRoutes(registry, &web.Service{})`（忘了时 `make doctor` 的 `webroute:serve` 会 WARN），`go run . game` 后 `curl http://127.0.0.1:8080/shop_price`。`web` Mod 不做鉴权，只绑回环或放在鉴权代理之后。
+- **属性**（`roost help attribute`）：`roost add attribute PlayerProfile` 开启 attribute feature、生成带 `dirtyMask` 的 profile 骨架并立即生成访问器；改字段与 `_<Field>` 公式后 `roost generate`。
+- **DAO 字段改名要迁移**：持久键是 Go 字段名的 snake_case，`bson` 标签不起作用；改持久字段的 Go 名等于改库里的键，老数据会读成零值（`roost generate` 对 `bson` 名与持久键不同的字段打 WARN）。改名、删字段按 [schema 变更手册](../../docs/framework/SCHEMA-MIGRATION.md) 迁移。
 - **Remote 托管实体**（跨进程写的公会一类）：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，并 `roost add mod remote_entity -service game`；缺 Mod 时 `roost generate` 与 doctor 的 `remote-runtime` 会给出这条命令。
 
 ## 6. 报错排查
@@ -199,6 +202,8 @@ make deps-update
 make ci
 roost config check --production --file <实际生产配置>
 ```
+
+`roost config check` 先按声明查键，再交给编译出的进程跑与启动前相同的跨键 / 跨 Mod 检查（和 doctor 的 `config-check` 同一个结论）；工程编译不过时它会明说跨 Mod 规则没查。
 
 然后完成真实基础设施、数据库恢复、WAL/PVC、TLS/LB、FD/连接限制、SIGTERM、灰度和回滚演练。
 “能够启动”不是生产验收完成；以生成项目的 `docs/DEPLOYMENT.zh-CN.md` 为准。
