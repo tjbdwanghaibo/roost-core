@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,69 @@ const controllerScaffoldMarker = "// Roost controller scaffold: application-owne
 func IsControllerScaffold(path string, body []byte) bool {
 	return strings.HasPrefix(filepath.ToSlash(path), "game/controllers/") &&
 		strings.HasSuffix(path, ".go") && strings.HasPrefix(string(body), controllerScaffoldMarker+"\n")
+}
+
+// IsUnimplementedControllerScaffold 认出协议生成器为 handlerName 写的、仍未改动的“未实现”占位：带骨架标记，
+// 唯一的函数是 Controller 上的 handlerName 方法，函数体只有一条 return，最后一个返回值是
+// fmt.Errorf("<handlerName>: not implemented")、其余都是 nil。roost add endpoint 用它决定能否接管这个文件：
+// 业务改过方法体（多了语句、换了返回值、加了别的函数）就不是占位，不能覆盖。只看行为、不看注释与格式。
+func IsUnimplementedControllerScaffold(body []byte, handlerName string) bool {
+	if !strings.HasPrefix(string(body), controllerScaffoldMarker+"\n") {
+		return false
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "", body, 0)
+	if err != nil {
+		return false
+	}
+	var method *ast.FuncDecl
+	for _, decl := range file.Decls {
+		switch decl := decl.(type) {
+		case *ast.GenDecl:
+			if decl.Tok != token.IMPORT {
+				return false
+			}
+		case *ast.FuncDecl:
+			if method != nil {
+				return false
+			}
+			method = decl
+		}
+	}
+	if method == nil || method.Name.Name != handlerName || method.Recv == nil || len(method.Recv.List) != 1 {
+		return false
+	}
+	receiver := method.Recv.List[0].Type
+	if pointer, ok := receiver.(*ast.StarExpr); ok {
+		receiver = pointer.X
+	}
+	if name, ok := receiver.(*ast.Ident); !ok || name.Name != "Controller" {
+		return false
+	}
+	if method.Body == nil || len(method.Body.List) != 1 {
+		return false
+	}
+	ret, ok := method.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) == 0 {
+		return false
+	}
+	for _, result := range ret.Results[:len(ret.Results)-1] {
+		if ident, ok := result.(*ast.Ident); !ok || ident.Name != "nil" {
+			return false
+		}
+	}
+	call, ok := ret.Results[len(ret.Results)-1].(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	fun, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || fun.Sel.Name != "Errorf" {
+		return false
+	}
+	if pkg, ok := fun.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
+		return false
+	}
+	message, ok := call.Args[0].(*ast.BasicLit)
+	return ok && message.Kind == token.STRING && message.Value == strconv.Quote(handlerName+": not implemented")
 }
 
 // generateControllers 只创建缺失文件；扫描整个业务包，允许开发者移动或合并方法。

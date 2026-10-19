@@ -311,6 +311,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 5. `add protocol` 后跑过 `roost generate`，`add endpoint` 报 “already exists” 且不说怎么办
 
+**状态：已修（2026-10-19）**。`add endpoint`（含 `--lifecycle`）认出协议生成器留下、仍未改动的“未实现”占位（`protocol.IsUnimplementedControllerScaffold`：骨架标记 + 唯一函数是 `Controller.Handle<Protocol>` + 只有一条返回 `fmt.Errorf("Handle<Protocol>: not implemented")` 的 return）并在同一次提交里替换（提交前核对文件未被改动）；改过的占位或别的文件不覆盖，报错写明删掉或改名后重跑。与第三轮“提示按工程现状给出可照做的命令”同一原则：`project next` 在只有占位时仍提示 `roost add endpoint`，照做即可成功。`self_sync_test` 不再手工删占位。下面是登记原文。
+
 **现象**：协议生成器为没有 endpoint 的协议写一个“未实现”controller 骨架（`HandleXxx` 返回 `not implemented` 错误）；之后 `roost add endpoint GiftGold --handler shop ...` 报 `game/controllers/shop/gift_gold.go already exists`（`add_workflow.go:42/283/442`）。框架自己的测试也要先删这个骨架（`self_sync_test.go:290`）。
 
 **建议修法**：`add endpoint` 识别出目标文件是协议生成的未实现骨架（固定头注释 + 只返回 not implemented）时直接替换；否则报错写明“这是协议生成的占位骨架，删掉后重跑”。

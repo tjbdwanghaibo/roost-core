@@ -656,6 +656,66 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 	}
 }
 
+// add protocol 之后跑过 roost generate，协议生成器为 handler 写了“未实现”占位（HandleXxx 返回 not implemented）。
+// add endpoint 接管仍未改动的占位（新用户第七轮：修前报 `game/controllers/player/rename_player.go already exists`，
+// 不说怎么办）；占位被业务改过就不覆盖，报错写明是协议占位、怎么处置，文件不变。
+func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
+		{Kind: "protocol", Name: "Ping", Group: "game", Handler: "player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+	}
+	if err := Generate(root, GenerateOptions{}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	placeholder := filepath.Join(root, "game", "controllers", "player", "rename_player.go")
+	raw, err := os.ReadFile(placeholder)
+	if err != nil || !strings.Contains(string(raw), "not implemented") {
+		t.Fatalf("generate did not leave the protocol placeholder (err %v):\n%s", err, raw)
+	}
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err != nil {
+		t.Fatalf("add endpoint over the untouched protocol placeholder: %v", err)
+	}
+	raw, err = os.ReadFile(placeholder)
+	if err != nil || !strings.Contains(string(raw), "Sync_RenamePlayer") || strings.Contains(string(raw), "not implemented") {
+		t.Fatalf("add endpoint did not replace the placeholder (err %v):\n%s", err, raw)
+	}
+
+	// 业务改过的占位：拒绝、给处置、不改文件。
+	ping := filepath.Join(root, "game", "controllers", "player", "ping.go")
+	pingRaw, err := os.ReadFile(ping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(pingRaw, []byte("return nil, fmt.Errorf("), []byte("_ = req\n\treturn nil, fmt.Errorf("), 1)
+	if bytes.Equal(edited, pingRaw) {
+		t.Fatalf("ping placeholder changed shape:\n%s", pingRaw)
+	}
+	if err := os.WriteFile(ping, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Add(root, AddOptions{Kind: "endpoint", Name: "Ping", Handler: "player", NestHandler: "RenamePlayer"})
+	if err == nil || !strings.Contains(err.Error(), "game/controllers/player/ping.go already exists") || !strings.Contains(err.Error(), "delete") {
+		t.Fatalf("add endpoint over an edited file = %v; want already exists with what to do", err)
+	}
+	if after, _ := os.ReadFile(ping); !bytes.Equal(after, edited) {
+		t.Error("a refused add endpoint changed the edited file")
+	}
+}
+
 // `roost add endpoint` 写的是协议边界：handler 返回值时 Sync_ 返回 (result, err)，骨架要接住全部返回值才能编译；
 // 接入层把 Dispatch 返回的 error 当坏帧断开连接（infra/network/gateway/tcp.go dispatchRequest），所以业务失败必须
 // 经 errcode.ClientError 变成 (Code, Reason) 响应、只给 CodeInternal 记日志，不能 return nil, err。

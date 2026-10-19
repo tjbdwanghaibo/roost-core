@@ -187,7 +187,9 @@ roost add rpc guild -service game
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
-`--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
+`--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
+（`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次
+提交里替换它。占位被改过（多了语句、换了返回值、加了别的函数）或是别的文件时不覆盖，报错写明“删掉或改名（保留要留的代码）后重跑”。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
 字段；找不到字段会在 add 阶段报错，不生成半成品。**业务时间是服务器决定的值**（新用户试用第四轮登记项 2）：参数名
 `nowUnix` / `nowUnixMilli`（`int64`）不对应 Request 字段，骨架先取 `businessNow := app.BusinessClock(controller.Registry()).Now()`
 （真实时间 + `time.logic_offset`，与 game-demo 的 `BusinessNow()` 同一来源）再传 `businessNow.Unix()` / `.UnixMilli()`；
