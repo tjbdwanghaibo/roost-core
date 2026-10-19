@@ -59,6 +59,15 @@ type Matchmaker interface {
 	//roost:rpc affinity=queue.Key()
 	Commit(ctx context.Context, queue Queue, ticketIDs []string) (match Match, err error)
 
+	// CommitAcross forms a match from tickets in several partitions of one
+	// logical queue, atomically across those partitions (see Store.CommitAcross).
+	// It routes by the logical queue: the partitions involved may be served by
+	// different instances, and the multi-key compare-and-set is what keeps them
+	// consistent.
+	//
+	//roost:rpc affinity=tickets.LogicalKey()
+	CommitAcross(ctx context.Context, tickets TicketRefs) (match Match, err error)
+
 	// Match reads one match.
 	//
 	//roost:rpc affinity=queue.Key()

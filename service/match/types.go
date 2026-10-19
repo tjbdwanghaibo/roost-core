@@ -29,6 +29,10 @@
 //   - 已结束的票、比赛与排队请求记录保留 Config.Retention 后移除（维护者 2026-10-19 方案 A）。
 //     整个队列状态是一个整体读写的值，只增不删时每次操作随历史越来越慢；
 //     代价是重放与读历史只在保留期内有效。
+//   - 一个分区（Queue.Partition）是一个整体读写的值；大队列按段位档 / 地区 / sid 组拆成多个分区，
+//     每次操作只碰一个分区。一局票来自同一逻辑队列的几个分区（放宽匹配）时用 Store.CommitAcross，
+//     它在一次多键比较并设置里原子地改这几个分区（维护者 2026-10-19 批准）；键名的 hash tag 是逻辑队列，
+//     Redis Cluster 下同一逻辑队列的分区同槽。
 //
 // This is the domain half of the match service: types, error codes, the
 // ticket state machine behind Store, the Redis store and the Grouping
@@ -165,10 +169,15 @@ type Queue struct {
 	// GroupSize is how many subjects a match holds. A queue is defined by it:
 	// a 2-player and a 5-player pool of the same mode are different queues.
 	GroupSize int `json:"group_size"`
-	// Partition scopes a queue, e.g. a region or a server group. Tickets in
-	// different partitions never match together, and — this is the part the
-	// implementation this replaces lacked — it is part of the routing key, so
-	// operations on one queue land on one instance.
+	// Partition scopes a queue, e.g. a region, a rank band or a server group.
+	// It is part of the routing and storage key, so operations on one queue
+	// land on one instance and one stored value — the part the implementation
+	// this replaces lacked.
+	//
+	// 分区是大队列的推荐拆法：一个队列的全部状态是一个整体读写的值，按段位档 / 地区 / sid 组拆成多个分区后，
+	// 每个分区各自一个键，Enqueue / Cancel / Commit / Sweep 只读写自己的分区。Commit 只从一个分区取票；
+	// 需要“放宽匹配”、一局票来自同一逻辑队列（Mode + GroupSize 相同）的几个分区时用 Store.CommitAcross，
+	// 它原子地改这几个分区。不同 Mode / GroupSize 的票永不进同一局。
 	Partition string `json:"partition"`
 }
 
@@ -185,34 +194,71 @@ func (q Queue) Validate() error {
 	return nil
 }
 
-// Key renders the queue identity. It is also the affinity key: passing it to
-// servicerpc.WithAffinityKey routes every operation on one queue to one
-// instance, so the compare-and-set below contends with itself rather than
-// with a different replica reading the same head.
+// Key renders the queue identity: "{<Mode>:<GroupSize>}:<Partition>". It is
+// the queue's storage key (the Redis store prefixes it with "<prefix>:queue:")
+// and also the affinity key: passing it to servicerpc.WithAffinityKey routes
+// every operation on one queue to one instance, so the compare-and-set below
+// contends with itself rather than with a different replica reading the same
+// head.
+//
+// 花括号里是 LogicalKey（Mode + GroupSize，不含 Partition），它是 Redis Cluster 的 hash tag：同一个逻辑队列的
+// 所有分区落在同一个 slot，跨分区成局（Store.CommitAcross）才能用一个多键脚本原子地改几个分区的状态；
+// 不同逻辑队列仍分散到不同 slot。单分区的 Enqueue / Cancel / Commit / Sweep 仍只碰自己这一个键。
+// 键名加 hash tag 是维护者 2026-10-19 批准的改动，旧键不迁移（尚未上线，CHANGELOG 写明）。
 //
 // The rendering is injective: Mode and Partition are opaque strings that may
 // themselves contain ':', and {Mode "a:2", GroupSize 3, Partition "x"} and
 // {Mode "a", GroupSize 2, Partition "3:x"} both used to render as "a:2:3:x" —
 // two valid pools sharing one queueState, so Candidates read across them and
 // Commit took a three-player ticket into a two-player match.
-// The two free fields are escaped so a ':' inside them can no longer be read
-// as the separator. A key without ':' or '%' in either field is byte-for-byte
-// what it was, so no deployed key moves; a queue whose Mode or Partition did
-// contain one of them was colliding before and gets its own key now (tickets
-// under the old shared key are not migrated — they were never unambiguously
-// this queue's).
+// The two free fields are escaped (escapeKeyField) so a ':' inside them can no
+// longer be read as the separator, and a '{' or '}' inside them can neither end
+// the hash tag early nor open a second one.
 func (q Queue) Key() string {
-	return fmt.Sprintf("%s:%d:%s", escapeKeyField(q.Mode), q.GroupSize, escapeKeyField(q.Partition))
+	return "{" + q.LogicalKey() + "}:" + escapeKeyField(q.Partition)
 }
 
-// escapeKeyField makes a free-form field safe to join with ':'. '%' is the
-// escape character and is escaped first, so the mapping is injective.
+// LogicalKey 是逻辑队列的身份 "<Mode>:<GroupSize>"：同一个 Mode 与 GroupSize、只差 Partition 的队列属于同一个
+// 逻辑队列。它是 Key 的 hash tag，也是跨分区成局（CommitAcross）的路由键。
+func (q Queue) LogicalKey() string {
+	return fmt.Sprintf("%s:%d", escapeKeyField(q.Mode), q.GroupSize)
+}
+
+// SameLogicalQueue 报告两个队列是否同属一个逻辑队列（Mode 与 GroupSize 相同，Partition 可以不同）。
+func (q Queue) SameLogicalQueue(other Queue) bool {
+	return q.Mode == other.Mode && q.GroupSize == other.GroupSize
+}
+
+// escapeKeyField makes a free-form field safe to join with ':' and to sit
+// inside or after a Redis hash tag. '%' is the escape character and is escaped
+// first, so the mapping is injective.
 func escapeKeyField(field string) string {
-	if !strings.ContainsAny(field, ":%") {
+	if !strings.ContainsAny(field, ":%{}") {
 		return field
 	}
 	field = strings.ReplaceAll(field, "%", "%25")
-	return strings.ReplaceAll(field, ":", "%3A")
+	field = strings.ReplaceAll(field, ":", "%3A")
+	field = strings.ReplaceAll(field, "{", "%7B")
+	return strings.ReplaceAll(field, "}", "%7D")
+}
+
+// TicketRef 指名跨分区成局里的一张票：它等待所在的分区队列与票 ID。匹配器从各分区的 Candidates 拿到的
+// Ticket 已带 Queue 与 ID，直接组成 TicketRef。
+type TicketRef struct {
+	Queue    Queue  `json:"queue"`
+	TicketID string `json:"ticket_id"`
+}
+
+// TicketRefs 是一次跨分区成局的票集合，按成员顺序排列。
+type TicketRefs []TicketRef
+
+// LogicalKey 是这组票所属逻辑队列的身份（第一张票的 Queue.LogicalKey），用作 CommitAcross 的路由键；
+// 空集合返回空串（CommitAcross 会以 ErrTicketInvalid 拒绝它）。
+func (refs TicketRefs) LogicalKey() string {
+	if len(refs) == 0 {
+		return ""
+	}
+	return refs[0].Queue.LogicalKey()
 }
 
 // TicketState is where a ticket is in its lifecycle.
@@ -272,8 +318,12 @@ type Match struct {
 	Members []Subject `json:"members"`
 	// TicketIDs are the tickets this match consumed, in member order. They
 	// are recorded so a match can be reconciled against its tickets.
-	TicketIDs     []string `json:"ticket_ids"`
-	CreatedAtUnix int64    `json:"created_at_unix"`
+	TicketIDs []string `json:"ticket_ids"`
+	// TicketPartitions 只在跨分区成局（CommitAcross）时填写，与 TicketIDs 一一对应：TicketPartitions[i] 是
+	// TicketIDs[i] 等待所在的分区（Queue.Partition）。此时 Queue 是第一张票的分区队列；比赛在每个涉及的分区里
+	// 各存一份，用其中任何一个分区的 Queue 调 Match 都能读到。单分区成局时为空。
+	TicketPartitions []string `json:"ticket_partitions,omitempty"`
+	CreatedAtUnix    int64    `json:"created_at_unix"`
 }
 
 // Error maps an error to the code and reason a client sees.
@@ -350,6 +400,9 @@ func (m Match) clone() Match {
 	}
 	if m.TicketIDs != nil {
 		m.TicketIDs = append([]string(nil), m.TicketIDs...)
+	}
+	if m.TicketPartitions != nil {
+		m.TicketPartitions = append([]string(nil), m.TicketPartitions...)
 	}
 	return m
 }

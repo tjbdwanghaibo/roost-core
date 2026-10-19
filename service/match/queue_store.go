@@ -26,6 +26,9 @@ import (
 //
 // The cost is that a queue's throughput is bounded by contention on one key,
 // which is why callers route by Queue.Key() — see servicerpc.KeyAffinityPicker.
+//
+// “一个队列”指一个分区（Queue.Partition）：大队列按业务维度拆成多个分区，各分区各自一个值，单分区操作
+// 互不争用。跨分区成局（CommitAcross）是唯一同时读写几个分区的操作，用多键比较并设置保持“要么都改、要么都不改”。
 type queueState struct {
 	// Waiting is the ticket ids in queue order, oldest first.
 	Waiting []string `json:"waiting"`
@@ -397,18 +400,9 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 	if err := queue.Validate(); err != nil {
 		return Match{}, err
 	}
-	if len(ticketIDs) != queue.GroupSize {
-		return Match{}, fmt.Errorf("%w: %d tickets for a group of %d", ErrTicketInvalid, len(ticketIDs), queue.GroupSize)
-	}
-	seen := make(map[string]bool, len(ticketIDs))
-	for _, id := range ticketIDs {
-		if id == "" {
-			return Match{}, fmt.Errorf("%w: empty ticket id", ErrTicketInvalid)
-		}
-		if seen[id] {
-			return Match{}, fmt.Errorf("%w: ticket %s appears twice", ErrTicketInvalid, id)
-		}
-		seen[id] = true
+	seen, err := checkTicketSet(ticketIDs, queue.GroupSize)
+	if err != nil {
+		return Match{}, err
 	}
 	now := s.cfg.Now()
 	matchID, err := s.cfg.NewID()
@@ -615,6 +609,10 @@ func (s *queueStore) expireLockedLimit(state *queueState, now time.Time, limit i
 //   - 排队请求记录随它指向的票移除。
 //   - 等待中的票（不论等了多久）与保留期内的记录不动：这里只看终态，等待中的票只由过期、成局或取消结束。
 //
+// 跨分区成局的比赛在每个涉及的分区各存一份，每个分区按上面同一条规则移除自己那份与本分区的票（别的分区的票
+// 不在本状态里，循环里查不到就跳过），所以“比赛与它的票同进同出”在每个分区内成立；各分区的移除发生在各自
+// 下一次写入或 Sweep 时，截止点相同（成局时刻 + Retention），保留期内所有分区都还在。
+//
 // 被移除的票 ID 不会“复活”：票 ID 由 Enqueue 新铸，Commit 只接受状态里存在且等待中的票，
 // 所以超期后用同一票集合 Commit 得到 ErrTicketMissing，不会再成一局；同一 requestID 的 Enqueue
 // 重试则不再是重放，而是一次新的排队（新票、新 ID）。
@@ -677,6 +675,184 @@ func removeWaiting(state *queueState, ticketID string) {
 			return
 		}
 	}
+}
+
+// checkTicketSet 校验一次成局的票 ID 集合：张数等于 groupSize，没有空 ID 与重复 ID。返回 ID 集合供重放判定用。
+func checkTicketSet(ticketIDs []string, groupSize int) (map[string]bool, error) {
+	if len(ticketIDs) != groupSize {
+		return nil, fmt.Errorf("%w: %d tickets for a group of %d", ErrTicketInvalid, len(ticketIDs), groupSize)
+	}
+	seen := make(map[string]bool, len(ticketIDs))
+	for _, id := range ticketIDs {
+		if id == "" {
+			return nil, fmt.Errorf("%w: empty ticket id", ErrTicketInvalid)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("%w: ticket %s appears twice", ErrTicketInvalid, id)
+		}
+		seen[id] = true
+	}
+	return seen, nil
+}
+
+// CommitAcross 见 Store.CommitAcross。
+//
+// 主流程：校验票集合属于同一逻辑队列 → 按分区归组（只有一个分区时交给 Commit）→ 在一次多键比较并设置里
+// 读全部涉及的分区，先判重放、再逐张校验，全部通过才在每个分区写同一场比赛并标记本分区的票。
+// mutate 只读参数、先复制再改，所以重试时得到同一结果，失败时任何分区都不写。
+func (s *queueStore) CommitAcross(ctx context.Context, tickets TicketRefs) (Match, error) {
+	if len(tickets) == 0 {
+		return Match{}, fmt.Errorf("%w: no tickets", ErrTicketInvalid)
+	}
+	logical := tickets[0].Queue
+	ticketIDs := make([]string, len(tickets))
+	// partitionOf[i] 是第 i 张票所在分区在 partitions / keys 里的下标；分区按首次出现的顺序排列。
+	partitionOf := make([]int, len(tickets))
+	var partitions []Queue
+	index := map[Queue]int{}
+	for i, ref := range tickets {
+		if err := ref.Queue.Validate(); err != nil {
+			return Match{}, err
+		}
+		if !ref.Queue.SameLogicalQueue(logical) {
+			return Match{}, fmt.Errorf("%w: ticket %s is in queue %s, which is not a partition of %s",
+				ErrQueueInvalid, ref.TicketID, ref.Queue.Key(), logical.LogicalKey())
+		}
+		ticketIDs[i] = ref.TicketID
+		at, ok := index[ref.Queue]
+		if !ok {
+			at = len(partitions)
+			index[ref.Queue] = at
+			partitions = append(partitions, ref.Queue)
+		}
+		partitionOf[i] = at
+	}
+	if _, err := checkTicketSet(ticketIDs, logical.GroupSize); err != nil {
+		return Match{}, err
+	}
+	if len(partitions) == 1 {
+		// 全在一个分区就是普通 Commit：同一个键、同一套重放规则，结果里不带 TicketPartitions。
+		return s.Commit(ctx, partitions[0], ticketIDs)
+	}
+	multi, ok := s.state.(versionstore.MultiUpdater[string, queueState])
+	if !ok {
+		return Match{}, fmt.Errorf("match: the queue state store %T cannot update several partitions atomically", s.state)
+	}
+	keys := make([]string, len(partitions))
+	for i, queue := range partitions {
+		keys[i] = queue.Key()
+	}
+	ticketPartitions := make([]string, len(tickets))
+	for i, ref := range tickets {
+		ticketPartitions[i] = ref.Queue.Partition
+	}
+	now := s.cfg.Now()
+	matchID, err := s.cfg.NewID()
+	if err != nil {
+		return Match{}, err
+	}
+
+	var result Match
+	var replayed bool
+	_, _, err = multi.UpdateAll(ctx, keys, func(current []queueState, found []bool) ([]queueState, bool, error) {
+		replayed = false
+		states := make([]queueState, len(current))
+		for i := range current {
+			states[i] = current[i].clone()
+			if !found[i] {
+				return states, false, fmt.Errorf("%w: partition %s holds no tickets", ErrTicketMissing, partitions[i].Key())
+			}
+			s.expireLocked(&states[i], now)
+		}
+		ticketAt := func(i int) (Ticket, bool) {
+			ticket, ok := states[partitionOf[i]].Tickets[ticketIDs[i]]
+			return ticket, ok
+		}
+
+		// 重放：第一张票已匹配，且它那一局的票集合与本次完全相同、每张票都在本次所说的分区里指向那一局。
+		// 超期的重放在上面的 expireLocked 里已随比赛移除，下面的校验报 ErrTicketMissing。
+		if first, ok := ticketAt(0); ok && first.State == TicketMatched && first.Queue == tickets[0].Queue {
+			previous, ok := states[partitionOf[0]].Matches[first.MatchID]
+			if ok && len(previous.TicketIDs) == len(ticketIDs) {
+				where := make(map[string]int, len(ticketIDs))
+				for i, id := range ticketIDs {
+					where[id] = i
+				}
+				same := true
+				for _, id := range previous.TicketIDs {
+					i, named := where[id]
+					if !named {
+						same = false
+						break
+					}
+					ticket, ok := ticketAt(i)
+					if !ok || ticket.State != TicketMatched || ticket.MatchID != previous.ID || ticket.Queue != tickets[i].Queue {
+						same = false
+						break
+					}
+				}
+				if same {
+					result, replayed = previous, true
+					return states, false, nil
+				}
+			}
+		}
+
+		// 全部校验在任何修改之前；任何一张不通过，整次多键写不发生。
+		members := make([]Subject, 0, len(ticketIDs))
+		subjects := make(map[string]bool, len(ticketIDs))
+		for i, id := range ticketIDs {
+			ticket, ok := ticketAt(i)
+			if !ok {
+				return states, false, fmt.Errorf("%w: %s in partition %s", ErrTicketMissing, id, tickets[i].Queue.Key())
+			}
+			if ticket.Queue != tickets[i].Queue {
+				return states, false, fmt.Errorf("%w: %s belongs to queue %s", ErrTicketMissing, id, ticket.Queue.Key())
+			}
+			if ticket.State != TicketWaiting {
+				return states, false, fmt.Errorf("%w: %s is %s", ErrConflict, id, ticket.State)
+			}
+			// 一人一张活票只在分区内成立：同一主体可以同时在两个分区排队，所以跨分区必须再查一次。
+			if subjects[ticket.Subject.Key()] {
+				return states, false, fmt.Errorf("%w: subject %s appears twice", ErrTicketInvalid, ticket.Subject.Key())
+			}
+			subjects[ticket.Subject.Key()] = true
+			members = append(members, ticket.Subject.clone())
+		}
+
+		match := Match{
+			ID: matchID, Queue: tickets[0].Queue, Members: members,
+			TicketIDs:        append([]string(nil), ticketIDs...),
+			TicketPartitions: append([]string(nil), ticketPartitions...),
+			CreatedAtUnix:    now.Unix(),
+		}
+		for i, id := range ticketIDs {
+			state := &states[partitionOf[i]]
+			ticket := state.Tickets[id]
+			ticket.State = TicketMatched
+			ticket.MatchID = matchID
+			ticket.ResolvedAtUnix = now.Unix()
+			state.Tickets[id] = ticket
+			removeWaiting(state, id)
+			delete(state.SubjectTickets, ticket.Subject.Key())
+		}
+		// 每个涉及的分区各存一份完整的比赛：读比赛不需要知道“主分区”，保留期清理也按分区各自完成，
+		// 每个分区里比赛与本分区的票同进同出（pruneResolvedLocked）。
+		for i := range states {
+			states[i].Matches[matchID] = match.clone()
+		}
+		result = match
+		return states, true, nil
+	})
+	if err != nil {
+		return Match{}, err
+	}
+	if replayed {
+		s.report.Replayed("commit_across")
+	} else {
+		s.report.Accepted("commit_across")
+	}
+	return result.clone(), nil
 }
 
 var _ Store = (*queueStore)(nil)

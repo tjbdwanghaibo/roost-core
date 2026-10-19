@@ -49,6 +49,24 @@ type Store interface {
 	// TestConcurrentCommitsProduceExactlyOneMatch、TestFailedCommitLeavesTheQueueUntouched。
 	Commit(ctx context.Context, queue Queue, ticketIDs []string) (Match, error)
 
+	// CommitAcross 是跨分区的 Commit：tickets 来自同一逻辑队列（Mode + GroupSize 相同、只差 Partition）的
+	// 若干分区，张数等于 GroupSize。它在一次多键比较并设置里读全部涉及的分区，校验每张票仍在自己的分区里等待、
+	// 主体不重复，然后在每个涉及的分区写入同一场比赛、把票标为已匹配——要么所有分区同时生效，要么一个分区也
+	// 不改（某张票已被取消 / 过期 / 被别的 Commit 拿走时报 ErrConflict 或 ErrTicketMissing）。
+	//
+	// 语义与 Commit 一致：票集合就是提交身份，保留期内同一票集合（票序可不同）的重放返回原 Match，超期报
+	// ErrTicketMissing，不会成第二局。全部票在同一个分区时等同于 Commit。
+	//
+	// 比赛的存放：每个涉及的分区各存一份完整的 Match（Match.TicketPartitions 记每张票的分区），所以用其中
+	// 任何一个分区调 Match、或用票自己的分区调 Ticket 再按 MatchID 调 Match，都能读到它。每个分区按自己的
+	// 保留期规则把这份比赛与本分区的票一起移除（pruneResolvedLocked）；各分区移除的时点都是“成局时刻 +
+	// Retention”之后的第一次写入或 Sweep，所以保留期内所有分区都还在，超期后不保证各分区同时消失。
+	//
+	// 路由与代价：键名的 hash tag 是逻辑队列（Queue.Key），同一逻辑队列的分区在 Redis Cluster 的同一个 slot，
+	// 多键脚本才能执行；一次 CommitAcross 读写的是涉及的几个分区的整个状态，并与这些分区上的单分区操作竞争。
+	// 跨分区成局应是放宽匹配的补充路径，常规成局仍走单分区 Commit。
+	CommitAcross(ctx context.Context, tickets TicketRefs) (Match, error)
+
 	// Match reads a committed match. 比赛从成局起保留 Config.Retention，移除后读到 found=false。
 	Match(ctx context.Context, queue Queue, matchID string) (Match, bool, error)
 
