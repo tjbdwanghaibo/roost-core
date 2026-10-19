@@ -16,7 +16,7 @@
 
 | 状态 | 拥有者与框架能力 | 怎样使用 |
 | --- | --- | --- |
-| 排队票、成局成员 | `service/match` 的 Store（Enqueue / Cancel / Candidates / Commit） | 已鉴权的主体排队；Commit 原子地把一组票变成一场比赛 |
+| 排队票、成局成员 | `service/match` 的 Store（Enqueue / Cancel / Candidates / Commit / CommitAcross） | 已鉴权的主体排队；Commit 原子地把一个分区里的一组票变成一场比赛，放宽匹配时 CommitAcross 原子地跨同一逻辑队列的几个分区成局（§5.1） |
 | 谁控制哪个 seat | `lockstep.Match` 的 Attach / Detach / AttachSpectator | 鉴权层把连接的 SessionID 绑定到 seat；重新 Attach 后旧 SessionID 失去控制权 |
 | 每帧的权威输入 | `lockstep.Sequencer`（Match 内部） | 按 seat 排序、窗口准入、有界重放去重；Tick 切出一帧 |
 | 局内模拟状态 | 业务参考模拟（本例 `State.Apply`） | 只接受连续帧；整数、固定 seat 顺序、逻辑帧，不读墙上时钟或 map 遍历顺序 |
@@ -32,7 +32,7 @@
 | MOBA 场景 | 对应框架 | 如何接入 | 业务与保证边界 |
 | --- | --- | --- | --- |
 | 登录与选角 | account、玩家接入、静态 Player sid | 已鉴权会话绑定 Player，再由比赛成员表分配 seat | 不能信任客户端自报 seat；账号 ID、裸 PlayerID、完整 EntityID、seat、传输 SessionID 是不同身份 |
-| 排队、取消、成局 | [service/match](../../service/match/store.go) Store + `FirstComeGrouping` | Enqueue → Candidates → Grouping → Commit；票集合就是成局的提交身份（§5.1） | 队伍角色、MMR、公平性与目标 battle host 由业务定义；匹配记录只保留 `match.retention`，长期路由由业务保存 |
+| 排队、取消、成局 | [service/match](../../service/match/store.go) Store + `FirstComeGrouping` | Enqueue → Candidates → Grouping → Commit；大队列按段位档 / 地区分区，放宽匹配用 CommitAcross；票集合就是成局的提交身份（§5.1） | 队伍角色、MMR、公平性、分区维度、何时放宽与目标 battle host 由业务定义；匹配记录只保留 `match.retention`，长期路由由业务保存 |
 | 准备、ban / pick（5v5） | 业务 BattleRound 状态机 | `pick` / `ready` / `ban` / `start` / `expire` 都是 `Sync_MOBARound` 的 Change；`Now` 由服务端注入 | 每队五人、队内英雄不重复、每队一名队长 ban 一个、改选角清 ready、过期取消——都是样例政策 |
 | 开房与输入准入 | `lockstep.NewMatch`、`Match.HandleCommand` | Match 只在一个所有者 goroutine 上串行调用；`HandleCommand` 按 SessionID 找 seat，旁观者只能追帧 | 不在 Nest worker / Entity 锁内驱动 Tick；房间队列、断线与关闭由宿主管理 |
 | 移动、普攻与技能 | 业务输入 codec + 参考模拟 | 命令只带动作、目标类别、移动方向；语法在 `Submit` 校验，射程 / 冷却 / 消耗在 `Apply` 校验 | 框架只看输入字节长度（`MaxInputBytes`），不知道英雄能否攻击；伤害与金币不能由客户端上报 |
@@ -266,6 +266,65 @@ flowchart LR
 
 `Commit` 把一组等待中的票原子地变成一场比赛：检查与写入是同一次比较并设置，失败不留副作用。**票集合就是提交身份**：同一个完整票集合再次 Commit（票序可不同）返回原 Match，不创建第二局；与已匹配的票只部分重叠、或含已取消 / 过期 / 不存在的票时拒绝。所以并发的两个匹配器可以都收到成功回复——**要核对返回的 Match ID，不能按成功回复次数计开局数**。这个重放只在保留期内有效（`match.retention`，缺省 10 分钟，维护者 2026-10-19 方案 A）：比赛与它的票从成局起至少保留这么久，之后一起移除；超期后同一票集合的 Commit 报 `ErrTicketMissing`——仍不会成第二局，只是拿不回原 Match。所以匹配器要在保留期内完成重试，开局后自己保存 Match ID 路由，不要指望事后再从匹配服务读成员表（[store.go](../../service/match/store.go) 的 `Commit` 注释，`TestCommitReplayReturnsOriginalMatchForSameTicketSet`、`TestCommitReplayInsideRetentionReturnsTheOriginalMatch`、`TestCommitReplayAfterRetentionReportsTheTicketsMissing`、`TestConcurrentCommitsProduceExactlyOneMatch`）。
 
+**大队列先分区，放宽匹配用跨分区 Commit**。一个分区（`Queue.Partition`）的全部状态是一个整体读写的值，所以排位这种大队列按段位档（或地区、sid 组）拆成多个分区：每个分区一个 Redis 键，Enqueue / Cancel / Commit / Sweep 只碰自己的分区，常规成局在分区内完成。主分区凑不齐一局、最老的票又等得够久时，业务从相邻段位档补人——这一局的票来自同一逻辑队列（Mode + GroupSize 相同）的两个分区，要用 `CommitAcross` 一次提交：它在一个多键比较并设置里校验所有票仍在各自的分区等待，在每个涉及的分区写入同一场比赛，所有分区同时生效或都不生效；重放规则与 Commit 相同。不要对两个分区各 Commit 一半，那样任何一边失败都会留下半局。比赛在每个涉及的分区各存一份（`Match.TicketPartitions` 记每张票的分区），用任一涉及分区的 Queue 都能 `Match` 读到。何时放宽、补哪个分区是业务政策（[store.go](../../service/match/store.go) 的 `CommitAcross` 注释，`TestCommitAcrossIsAllOrNothing`、`TestCommitAcrossReplayFollowsRetention`）。下面的文件放进生成工程（例如 `internal/mobamatch/relax.go`）可直接编译：
+
+```go
+package mobamatch
+
+import (
+	"context"
+	"errors"
+
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+// Gold 与 Platinum 是同一逻辑队列（5v5 排位，10 人一局）按段位档拆出的两个分区。
+var (
+	Gold     = svcmatch.Queue{Mode: "ranked5v5", GroupSize: 10, Partition: "gold"}
+	Platinum = svcmatch.Queue{Mode: "ranked5v5", GroupSize: 10, Partition: "platinum"}
+)
+
+// FormRelaxed 从主分区取票成局；主分区不够一局且 relax 为真（业务按最老票的等待时间决定）时，
+// 从相邻分区补齐，一次 CommitAcross 原子地跨两个分区成局。formed 为假表示这一轮没有成局：
+// 人不够，或某张票刚被取消 / 被别的匹配器拿走（整组没生效，下一轮重新读候选）。
+func FormRelaxed(ctx context.Context, matcher svcmatch.Matchmaker, home, neighbour svcmatch.Queue, relax bool) (svcmatch.Match, bool, error) {
+	own, err := matcher.Candidates(ctx, home, home.GroupSize)
+	if err != nil {
+		return svcmatch.Match{}, false, err
+	}
+	if len(own) == home.GroupSize {
+		ids := make([]string, 0, len(own))
+		for _, ticket := range own {
+			ids = append(ids, ticket.ID)
+		}
+		return settled(matcher.Commit(ctx, home, ids))
+	}
+	if !relax {
+		return svcmatch.Match{}, false, nil
+	}
+	extra, err := matcher.Candidates(ctx, neighbour, home.GroupSize-len(own))
+	if err != nil {
+		return svcmatch.Match{}, false, err
+	}
+	if len(own)+len(extra) < home.GroupSize {
+		return svcmatch.Match{}, false, nil
+	}
+	refs := make(svcmatch.TicketRefs, 0, home.GroupSize)
+	for _, ticket := range append(own, extra...) {
+		refs = append(refs, svcmatch.TicketRef{Queue: ticket.Queue, TicketID: ticket.ID})
+	}
+	return settled(matcher.CommitAcross(ctx, refs))
+}
+
+// settled 把“这组票已经不能成局”的拒绝变成本轮未成局；其余错误交给调用方记录。
+func settled(formed svcmatch.Match, err error) (svcmatch.Match, bool, error) {
+	if errors.Is(err, svcmatch.ErrConflict) || errors.Is(err, svcmatch.ErrTicketMissing) {
+		return svcmatch.Match{}, false, nil
+	}
+	return formed, err == nil, err
+}
+```
+
 业务还要把成员表映射为稳定 seat，并保存 Match ID → 房间宿主 → 结算 EntityID 的路由。game-demo 的匹配只为本 game 进程实际服务的玩家组局（[matchmaker](../../demo/internal/service/game/matchmaker.go.tmpl) 的 `ownedCandidates`），避免房间在另一个进程而输入一直 `battle_not_found`；全服跨 sid 匹配需要独立 battle host 与跨 sid 输入路由，框架没有默认实现；5v5 夹具给出一种业务做法（§5.5～§5.8），Player 的静态 sid 归属不变。
 
 #### 5.2 输入与帧
@@ -340,6 +399,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 | 常见误解 | 正确接法 |
 | --- | --- |
 | 两个匹配器都收到 Commit 成功，就开了两局 | 同一票集合幂等返回同一 Match；按 Match ID 去重，不按回复次数计数。重放只在 `match.retention` 内返回原 Match，超期报 `ErrTicketMissing`（不会成第二局） |
+| 放宽匹配就是对两个分区各 Commit 一半 | 两次 Commit 之间任何一边失败都会留下半局；一局票来自几个分区时用一次 `CommitAcross`，所有分区同时生效或都不生效（§5.1） |
 | 客户端报的胜负 / hash 一致就能发奖 | 胜负与摘要只取服务器参考模拟；hash 只用于发现分歧 |
 | Lockstep 的输入去重能防长期重放 | 只在 `ReplayHorizon` 内有效；业务自己限制迟到帧数，资产重放靠结算实体上的持久事实 |
 | `Tick` 报错就是这一帧没切出 | 只有 `ErrMatchClosed` 不切帧；其他错误是发送 / 追帧失败，帧已在历史里，参考模拟照样应用 |

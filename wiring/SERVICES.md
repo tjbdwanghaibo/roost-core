@@ -75,7 +75,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | --- | --- |
 | `directory` | 唯一键预留的两阶段提交原语（**注意：同 owner 幂等，因此不是互斥锁**——需要"只准一次尝试"用 `versionstore.Create`） |
 | `rank` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 |
-| `match` | 匹配：队列状态机、原子成组提交、Redis store、Grouping、`Matchmaker` RPC；Wiring 提供 Mod、sweep 循环与装配半 |
+| `match` | 匹配：队列状态机、原子成组提交（分区内 `Commit`、同一逻辑队列跨分区的 `CommitAcross`）、Redis store（每个分区一个键，hash tag 是逻辑队列）、Grouping、`Matchmaker` RPC；Wiring 提供 Mod、sweep 循环与装配半。大队列按 `Partition` 分键，见 [guide/09-services §4](../docs/framework/guide/09-services.md#4-关键业务边界) |
 | `account` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** |
 | `global` | 跨服路由绑定（epoch CAS 迁移）。进程存活统一由 App 单实例锁提供（`app.SingletonLiveness.Live`），不再有游戏服租约 |
 | `activity` | 跨服活动协调（原 `global/activity`）：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 |

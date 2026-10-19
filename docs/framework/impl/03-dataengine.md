@@ -202,13 +202,14 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### versionstore
 
-5 个实现文件、6 个测试文件。
+6 个实现文件、7 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [codec.go](../../../infra/storage/versionstore/codec.go) | `JSONCodec` |
 | [memory_store.go](../../../infra/storage/versionstore/memory_store.go) | `MemoryStore` |
 | [redis_store.go](../../../infra/storage/versionstore/redis_store.go) | `RedisClient`、`RedisConfig`、`RedisIndex`、`RedisStore` |
+| [update_all.go](../../../infra/storage/versionstore/update_all.go) | `MutateAll`、`MultiUpdater`（多键原子更新，service/match 跨分区成局用） |
 | [versionstore.go](../../../infra/storage/versionstore/versionstore.go) | `Versioned`、`ConditionalDeleter`、`Mutate`、`Store`、`Codec`、`KeyFunc` |
 | [write_token.go](../../../infra/storage/versionstore/write_token.go) | `UnknownOutcomeError` |
 
@@ -315,6 +316,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [fake_redis_test.go](../../../infra/storage/versionstore/fake_redis_test.go)
 - [index_test.go](../../../infra/storage/versionstore/index_test.go)：`TestAnIndexedCreateEntersTheIndex`、`TestAnIndexedUpdateRetiresTheEntry`、`TestTheIndexIsReadByScoreAndBounded`、`TestAStoreWithoutAnIndexSaysSo`、`TestAPerOwnerIndexKeepsOwnersApart`；其余 4 项见文件
 - [lost_reply_integration_test.go](../../../infra/storage/versionstore/lost_reply_integration_test.go)：`TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice`
+- [update_all_test.go](../../../infra/storage/versionstore/update_all_test.go)：`TestUpdateAllWritesEveryKeyTogether`、`TestUpdateAllRetriesAsAWholeWhenAnyKeyMoved`、`TestUpdateAllRefusesBadArguments`、`TestUpdateAllSettlesALostReplyByItsTokens`、`TestUpdateAllReportsConflictWhenTheBudgetIsExhausted`；其余 1 项见文件
 - [versionstore_test.go](../../../infra/storage/versionstore/versionstore_test.go)：`TestStoredVersionIsNeverZeroAndIncrementsPerWrite`、`TestUpdateDecliningToSaveChangesNothing`、`TestUpdatePropagatesMutateErrorWithoutWriting`、`TestCreateRefusesAnExistingKey`、`TestDeleteRequiresTheCallersVersion`；其余 12 项见文件
 - [write_token_integration_test.go](../../../infra/storage/versionstore/write_token_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing`
 - [write_token_test.go](../../../infra/storage/versionstore/write_token_test.go)：`TestAnUpdateWhoseReplyIsLostIsNotAppliedTwiceWhenTheCallerRetries`、`TestACreateWhoseReplyIsLostIsNotReportedAsTakenWhenTheCallerRetries`、`TestAnUpdateWhoseReplyIsLostStaysAppliedOnceAfterSomeoneElseWritesOnTop`、`TestAnUpdateThatNeverRanIsResentOnce`、`TestResumeReturnsTheEarlierWriteInsteadOfWritingAgain`；其余 8 项见文件

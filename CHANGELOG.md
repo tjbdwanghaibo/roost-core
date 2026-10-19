@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### match：大队列按 Partition 分键；跨分区原子成局 `CommitAcross`；键名加 hash tag（维护者 2026-10-19 批准）
+
+- **背景**：`service/match` 一个分区（`Queue.Partition`）的全部状态是一个整体读写的版本化值。按段位档 / 地区 / sid 组分区已能把大队列拆成多个键，但“放宽匹配”——一局票来自同一逻辑队列的几个分区——没有原子成局的办法，只能对各分区分别 Commit，任何一边失败都留下半局。
+- **新增 `Store.CommitAcross(ctx, TicketRefs)`**（也在 `Matchmaker` RPC 上，按 `TicketRefs.LogicalKey()` 路由）：票来自 Mode + GroupSize 相同、只差 Partition 的分区（否则 `ErrQueueInvalid`），张数等于 GroupSize。一次多键比较并设置里校验每张票仍在自己的分区等待、主体不重复，在每个涉及的分区写入同一场比赛并标记票已匹配，所有分区同时生效或都不生效；保留期内同一票集合重放返回原 Match，超期报 `ErrTicketMissing`；全部票在一个分区时等同于 `Commit`。比赛在每个涉及的分区各存一份（新字段 `Match.TicketPartitions` 与 `TicketIDs` 一一对应），任一涉及分区都能 `Match` 读到；保留期清理按分区各自进行，每个分区里比赛与本分区的票同进同出。
+- **多键原语**：`fredis.CompareAndSetAll`（一个 Lua 脚本先逐键比较、全部通过才逐键写）与 `versionstore.MultiUpdater.UpdateAll`（MemoryStore 与 RedisStore 都实现；Redis 版每个键带写令牌，回复丢失时按令牌判定，判断不出时返回 `*UnknownOutcomeError` 但不能交给 `Resume`，靠 mutate 自身幂等）。普通 Enqueue / Cancel / Commit / Sweep 仍只碰一个键。
+- **键名改动**：`Queue.Key()` 由 `<Mode>:<GroupSize>:<Partition>` 改为 `{<Mode>:<GroupSize>}:<Partition>`，Redis 键 `<prefix>:queue:{<Mode>:<GroupSize>}:<Partition>`（`match.RedisKey`），花括号里的逻辑队列是 Redis Cluster 的 hash tag，同一逻辑队列的分区同槽，多键脚本才能执行；`escapeKeyField` 另转义 `{` `}`，hash tag 不会被 Mode 里的花括号截断。`key_prefix` 自带 hash tag 仍可用，第一对花括号为空时 `NewRedisStore` 拒绝。代价：一个逻辑队列的全部分区在同一个 Cluster 节点。
+- **测试（先红后绿）**：`TestCommitAcrossFormsOneMatchVisibleFromEveryPartition`、`TestCommitAcrossIsAllOrNothing`、`TestCommitAcrossReplayFollowsRetention`、`TestCommitAcrossRefusesSetsOutsideOneLogicalQueue`、`TestCommitAcrossRacesSinglePartitionOperations`（-race）；按分区逐个 Update 的非原子写法下 `TestCommitAcrossIsAllOrNothing` 报 `cancelled ticket: partition gold moved from version 2 to 3`。`TestPartitionsOfOneLogicalQueueShareAHashTag`（旧键：`the partitions of one logical queue hash on 6 different tags`；不转义花括号：`mode "x}y": group sizes 5 and 10 hash on the same tag`）、`TestNewRedisStoreRefusesAPrefixThatBreaksTheHashTag`。versionstore `TestUpdateAll*`（逐键 CompareAndSet 的写法下 `a = {Value:{Name:a Total:2} Version:3} … want a at v2 total 1 (the lost attempt wrote nothing)`），fredis `TestCompareAndSetAll*`。真实 Redis：单机 `TestMatchCommitAcrossPartitionsOnRedis`、`TestUpdateAllRetriesAsAWholeOnRedisIntegration`、`TestCompareAndSetAllIsAllOrNothingIntegration`；私有 3 主 Redis Cluster `TestCrossPartitionCommitRunsOnRedisCluster`（`ROOST_REVIEW_CLUSTER`，service/match 已加入 `redis-cluster-suites.sh`；旧键：`the partitions of one logical queue are in slots map[5987:true 8295:true 15252:true 15534:true]`，跳过槽检查后 `CROSSSLOT Keys in request don't hash to the same slot`）。
+- **升级**：键名加 hash tag，**旧键不迁移**（尚未上线）：升级前停掉旧的匹配服务并清空 `<key_prefix>:queue:*`，等待中的票随之作废，玩家重新排队；先停旧再起新，新旧进程不能共用一个 Redis 前缀。`match.sweep_queues` 的写法不变（每个分区单独一条 `mode:size:partition`）。实现了 `Matchmaker` / `Store` 的业务替身要补 `CommitAcross`。
+- 文档：`service/match` 包注释、`Queue` / `Store.CommitAcross` / `NewRedisStore` 注释、guide/09-services §4（分区维度、每分区规模建议与实测、代价、跨分区成局何时用）、MOBA-INTEGRATION §2 / §3 表、§5.1（放宽匹配与可编译示例）/ §7、KNOWN-LIMITS“匹配队列状态”行、wiring/SERVICES.md、wiring/scripts/integration/README.md。
+
 ### MOBA 接入：5v5 三路业务消费者与真实进程演练（2026-10-19）
 
 - `scripts/test-moba-generated.sh` 在双英雄入门之外加 5v5 三路业务夹具（只在 `scripts/testdata/moba`，框架、生成器与 demo 不改）：准备 / ban-pick、三路参考模拟、BattleDirectory 固定 Match ID → Round ID、BattleRound 输入帧日志先 strict 提交再广播、battle host 业务 Epoch 与交接、Player 原服奖励回执。缺省场景由 12 条增至 25 条，全部 race、无 skip。
