@@ -20,9 +20,18 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 `codegen/internal/roost` 的 `TestGenerateWritesTheTableTemplateItReports`（`678adcd2` 引入）与 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`16ea9142` 引入，经 `scripts/test-demo-generated.sh` 运行）先在生成工程里跑 `roost generate`（其中 `go mod tidy`），之后才（或从不）调用 `useLocalRoostCore` 把 roost-core 替换为本检出。生成工程的 go.mod 要求 `minimumVersions.Core`；最低 core 升到尚未发布的 v1.28.0 后两条都失败：`generate: tidy generated dependencies: go mod tidy: exit status 1`（`reading github.com/tjbdwanghaibo/roost-core/go.mod at revision v1.28.0: unknown revision v1.28.0`），`scripts/pretag.sh v1.28.0` 因此报 `go test ./... failed`。属于测试接线缺陷，不是生成器或框架行为问题。已修复（v1.28.0 发布准备分支的测试修正提交）：两处都在 `generate` 之前调用 `useLocalRoostCore`，只动测试、断言不变；之后 pretag 报 ready to tag，saga 用例在共享隔离环境单独重跑通过。
 
-### 2. `TestRealDataEngineRemotePublicationAndWALRecovery` 偶发失败（尚未确认）
+### 2. `TestRealDataEngineRemotePublicationAndWALRecovery` 偶发失败：已修复（测试时序，产品行为不变）
 
-故障矩阵 `mongo-wal-recovery` 格（`wiring/dataengine`，`-tags=integration`）在 v1.28.0 发布准备提交上第一次全矩阵运行时失败，原文 `remote_integration_test.go:294: pending=[{TransactionID:...98 State:2 ...}] err=<nil>`（第二次 WAL 重放后仍有待处理的 Remote 提交）；同一提交随后单格重跑 13 次失败 2 次，症状不同：`remote_integration_test.go:72: real snapshot Redis Eval: context canceled`（测试包装把 finalizer 停止时取消的重发 Eval 记成错误）。main 基线 `322a7c40` 交替重跑 14 次失败 1 次（同为 `context canceled`），`v1.27.0` 重跑 6 次 0 次；第二次全矩阵 21/21。`context canceled` 一种在基线上同样出现，判断与本版发版提交无关；“重放后仍有待处理提交”一种只出现一次，是测试时序还是重放收尾的缺陷**尚未确认**，继续定位入口是该用例第二次 `StopFinalizer` 与新 Manager 重放之间的重发协程。
+**原现象**：故障矩阵 `mongo-wal-recovery` 格（`wiring/dataengine`，`-tags=integration`）在 v1.28.0 发布准备提交上第一次全矩阵运行时失败，原文 `remote_integration_test.go:294: pending=[{TransactionID:...98 State:2 ...}] err=<nil>`（症状 A：第二次 WAL 重放后仍有待处理的 Remote 提交）；同一提交单格重跑 13 次失败 2 次，原文 `remote_integration_test.go:72: real snapshot Redis Eval: context canceled`（症状 B）。main 基线 `322a7c40` 14 次失败 1 次（B），`v1.27.0` 6 次 0 次。
+
+**根因（两种症状同一个起点）**：WAL 投影只保证 Remote 提交随 Mongo 事务持久（outbox 状态 `State:2` 即 `RemoteCommitApplied`），快照发布由 Manager 的 outbox 补发协程异步完成：`framework/dataengine/engine/mongo_projection.go:144` 调 `ApplyRemoteCommits`，后者在 `framework/remoteentity/transaction_manager.go:668` 记 Applied 并唤醒补发后就返回（契约见该函数注释“nil 不代表已经发布”）。用例第二段（record `152`，事务 ID 末字节 `0x98`）注释写“Mongo 和快照都成功，模拟只丢 checkpoint”，但投影返回后没有等发布结论就 `StopFinalizer`：
+
+- 停机取消 `finalizeCtx` 时补发若正在写 L2，在途 `Eval` 返回 `context canceled`，测试包装把它记成失败（B）。产品侧处理正确：`framework/entity/remote_snapshot.go:933` 把这次 L2 写当作结果未知（L1 不确认），同一取消让 `transaction_manager.go:825` 的 `MarkRemoteCommitPublished` 失败，outbox 保持 Applied；下一次发布以同版本同内容重写，`framework/remoteentity/snapshot_l2.go:65` 的 CAS 接受（同版本只在内容不同时拒绝）。
+- 补发被截断（或停机时还没开始）时，新 Manager 重放读到 Applied，只唤醒补发协程，`Flush` 返回不等发布；用例紧接着查 outbox，读到仍是 Applied（A）。正常情况下第一次发布在停机前完成，重放读到 Committed、只做本地确认，所以 A 很少出现。
+
+**修法（只改测试）**：`runRemotePublicationAndWALRecovery` 拆成两个子测试。`published` 在停机前用 `FlushRemoteTransaction` 等第二笔事务的结论，让“快照都成功”这一前提真的成立，并断言重放只确认、不再发布；`stop-interrupts-publication` 用一次性 Eval 钩子把停机钉在发布在途：第一次 L2 写真实执行、回复扣到 `StopFinalizer` 取消为止，断言停机后 outbox 仍是这笔 Applied，新 Manager 的补发晚于重放返回才开始，重放后用 `FlushRemoteTransaction` 等结论再查 outbox，并断言补发了全部四份快照、L2 读回版本 2。测试包装不再把“调用方自己的上下文已取消”的 `context.Canceled` 记成失败，其余 Redis 错误（含超时）照旧记失败。
+
+**红绿**：`stop-interrupts-publication` 放在修前的检查顺序上（重放后直接查 outbox）连续 3/3 失败，原文 `remote_integration_test.go:84: real snapshot Redis Eval: context canceled`（4 行）与 `remote_integration_test.go:358: pending=[{TransactionID:00000000000000000000000000000098 State:2 ...}] err=<nil>`，与两种线上症状一致；停机后“outbox 仍是 Applied”的断言在修前即通过。修后两个子测试通过。共享隔离环境单格交替重跑（分批持锁）：修前测试（`6e3a5917`）50 次失败 2 次（均为 B），修后 55 次 0 次；修后完整 21 格矩阵 21/21。
 
 ## 新用户试用第三轮（2026-10-17 登记）：三项已修复 / 实施（配置段剩余部分按维护者决定 B 由 doctor 只读检查），demo 公会名两点已决定
 
