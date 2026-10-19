@@ -1,4 +1,4 @@
-// 队列：键转义单射、分数窗口饱和算术与真实距离、过期 sweep 失败计数与按配置扫描。
+// 队列：键转义单射、同一逻辑队列的分区共用 hash tag（含真实 Redis Cluster 上的跨分区成局）、分数窗口饱和算术与真实距离、过期 sweep 失败计数与按配置扫描。
 
 package match
 
@@ -6,11 +6,16 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
@@ -27,20 +32,23 @@ func TestDistinctQueuesNeverShareAKey(t *testing.T) {
 	if a.Key() == b.Key() {
 		t.Fatalf("two valid queues share key %q", a.Key())
 	}
-	// Keys without the reserved characters are unchanged, so no deployed key
-	// moves (the compatibility promise of this fix).
-	if got := (Queue{Mode: "duel", GroupSize: 2, Partition: "eu"}).Key(); got != "duel:2:eu" {
-		t.Fatalf("plain key changed to %q", got)
+	// 键形状：花括号里是逻辑队列（hash tag），其后是分区（维护者 2026-10-19，旧键不迁移）。
+	if got := (Queue{Mode: "duel", GroupSize: 2, Partition: "eu"}).Key(); got != "{duel:2}:eu" {
+		t.Fatalf("plain key is %q, want {duel:2}:eu", got)
 	}
-	if got := (Queue{Mode: "duel", GroupSize: 2}).Key(); got != "duel:2:" {
-		t.Fatalf("plain key with empty partition changed to %q", got)
+	if got := (Queue{Mode: "duel", GroupSize: 2}).Key(); got != "{duel:2}:" {
+		t.Fatalf("plain key with empty partition is %q, want {duel:2}:", got)
 	}
-	// Injective across the whole reserved set, including the escape character.
+	// Injective across the whole reserved set, including the escape character
+	// and the hash-tag braces.
 	seen := map[string]Queue{}
 	for _, q := range []Queue{
 		{Mode: "a%3A2", GroupSize: 3, Partition: "x"}, {Mode: "a:2", GroupSize: 3, Partition: "x"},
 		{Mode: "a", GroupSize: 3, Partition: "%3Ax"}, {Mode: "a", GroupSize: 3, Partition: ":x"},
 		{Mode: "a%", GroupSize: 3, Partition: "x"}, {Mode: "a%25", GroupSize: 3, Partition: "x"},
+		{Mode: "a}", GroupSize: 3, Partition: "x"}, {Mode: "a%7D", GroupSize: 3, Partition: "x"},
+		{Mode: "a{", GroupSize: 3, Partition: "x"}, {Mode: "a", GroupSize: 3, Partition: "{x}"},
+		{Mode: "a}:3}:x", GroupSize: 3, Partition: ""}, {Mode: "a", GroupSize: 3, Partition: "}:x"},
 	} {
 		if prev, dup := seen[q.Key()]; dup {
 			t.Fatalf("%+v and %+v share key %q", prev, q, q.Key())
@@ -48,6 +56,60 @@ func TestDistinctQueuesNeverShareAKey(t *testing.T) {
 		seen[q.Key()] = q
 	}
 }
+
+// 同一逻辑队列（Mode + GroupSize）的所有分区在 Redis Cluster 的同一个 slot，跨分区成局的多键脚本才能执行；
+// 不同逻辑队列的 hash tag 不同。Mode 里的花括号转义，不能让 hash tag 提前结束而把分区算进去、或只剩 Mode 的一段。
+// 真实 Redis 的 CLUSTER KEYSLOT 核对见 wiring/integration 的 TestMatchCrossPartitionKeysShareOneSlotOnRedis。
+func TestPartitionsOfOneLogicalQueueShareAHashTag(t *testing.T) {
+	const prefix = "roost:game:match"
+	for _, mode := range []string{"ranked", "a:b", "x}y", "{x", "}", "%7D", "50%"} {
+		gold := Queue{Mode: mode, GroupSize: 5, Partition: "gold"}
+		tags := map[string]bool{}
+		for _, partition := range []string{"gold", "silver", "", "{gold}", "}:", "east:1"} {
+			queue := gold
+			queue.Partition = partition
+			tags[clusterHashTag(RedisKey(prefix, queue))] = true
+		}
+		if len(tags) != 1 {
+			t.Fatalf("mode %q: the partitions of one logical queue hash on %d different tags: %v", mode, len(tags), tags)
+		}
+		other := gold
+		other.GroupSize = 10
+		if clusterHashTag(RedisKey(prefix, other)) == clusterHashTag(RedisKey(prefix, gold)) {
+			t.Fatalf("mode %q: group sizes 5 and 10 hash on the same tag", mode)
+		}
+		if want := gold.LogicalKey(); clusterHashTag(RedisKey(prefix, gold)) != want {
+			t.Fatalf("mode %q: hash tag is %q, want the logical key %q", mode, clusterHashTag(RedisKey(prefix, gold)), want)
+		}
+	}
+	if got := RedisKey(prefix, Queue{Mode: "duel", GroupSize: 2, Partition: "eu"}); got != "roost:game:match:queue:{duel:2}:eu" {
+		t.Fatalf("redis key is %q", got)
+	}
+}
+
+// 前缀自带的 hash tag 可以（整个匹配服务落在一个 slot，仍满足同槽）；第一对花括号为空时 Redis 对整个键求槽，
+// 同一逻辑队列的分区会散开，构造时拒绝。
+func TestNewRedisStoreRefusesAPrefixThatBreaksTheHashTag(t *testing.T) {
+	for _, prefix := range []string{"roost:match", "{roost}:match", "roost{:match", "roost}:match"} {
+		if _, err := NewRedisStore(&noRedis{}, prefix, Config{}); err != nil {
+			t.Fatalf("prefix %q was refused: %v", prefix, err)
+		}
+	}
+	for _, prefix := range []string{"roost{}:match", "{}"} {
+		if _, err := NewRedisStore(&noRedis{}, prefix, Config{}); err == nil || !strings.Contains(err.Error(), "first hash tag is empty") {
+			t.Fatalf("prefix %q = %v, want a refusal naming the empty hash tag", prefix, err)
+		}
+	}
+}
+
+// noRedis 只用来构造 store，任何调用都失败。
+type noRedis struct{}
+
+func (*noRedis) Eval(context.Context, string, []string, ...any) (any, error) {
+	return nil, errors.New("no redis")
+}
+func (*noRedis) Get(context.Context, string) ([]byte, error)   { return nil, errors.New("no redis") }
+func (*noRedis) Del(context.Context, ...string) (int64, error) { return 0, errors.New("no redis") }
 
 func TestACommitCannotTakeTicketsFromAnotherQueue(t *testing.T) {
 	a := Queue{Mode: "a:2", GroupSize: 3, Partition: "x"}
@@ -262,5 +324,75 @@ func TestAStoreWithoutAQueueSetSweepsNothing(t *testing.T) {
 	defer cancel()
 	if err := (&Server{service: store}).run(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 真实 Redis Cluster（ROOST_REVIEW_CLUSTER，入口 wiring/scripts/integration/redis-cluster-suites.sh）：
+// 同一逻辑队列的分区键 CLUSTER KEYSLOT 相同，跨分区成局的多键脚本在集群上执行成功；一张票被取消时整体失败。
+// 前缀自带 hash tag 时（整个匹配服务一个 slot）同样成立。
+func TestCrossPartitionCommitRunsOnRedisCluster(t *testing.T) {
+	addrs := os.Getenv("ROOST_REVIEW_CLUSTER")
+	if addrs == "" {
+		t.Skip("ROOST_REVIEW_CLUSTER is not set")
+	}
+	cfg := fredis.DefaultConfig("")
+	cfg.ClusterAddrs = strings.Split(addrs, ",")
+	client, err := redisdriver.NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	raw := client.(*redisdriver.Client).Raw()
+	ctx := context.Background()
+	for _, name := range []string{"match-cluster", "{match-cluster}"} {
+		keyPrefix := redistest.Prefix(t, addrs, name)
+		store, err := NewRedisStore(client, keyPrefix, Config{TicketTTL: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		partitions := []Queue{tiered("gold"), tiered("silver"), tiered("bronze"), tiered("x}y{z")}
+		slots := map[int64]bool{}
+		for _, queue := range partitions {
+			slot, err := raw.ClusterKeySlot(ctx, RedisKey(keyPrefix, queue)).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			slots[slot] = true
+		}
+		if len(slots) != 1 {
+			t.Fatalf("prefix %q: the partitions of one logical queue are in slots %v", keyPrefix, slots)
+		}
+		var tickets []Ticket
+		for i, queue := range partitions[:3] {
+			for j := 0; j < 2; j++ {
+				ticket, err := store.Enqueue(ctx, queue, player(int64(10*i+j+1), 0), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				tickets = append(tickets, ticket)
+			}
+		}
+		formed, err := store.CommitAcross(ctx, refsOf(tickets[0], tickets[2], tickets[4]))
+		if err != nil {
+			t.Fatalf("prefix %q: CommitAcross on Redis Cluster: %v", keyPrefix, err)
+		}
+		for _, queue := range partitions[:3] {
+			if _, found, err := store.Match(ctx, queue, formed.ID); err != nil || !found {
+				t.Fatalf("prefix %q: the match read through %s: found=%v err=%v", keyPrefix, queue.Partition, found, err)
+			}
+		}
+		if _, err := store.Cancel(ctx, tickets[5].Queue, tickets[5].ID, tickets[5].Subject); err != nil {
+			t.Fatal(err)
+		}
+		before, err := raw.Get(ctx, RedisKey(keyPrefix, partitions[0])).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CommitAcross(ctx, refsOf(tickets[1], tickets[3], tickets[5])); !errors.Is(err, ErrConflict) {
+			t.Fatalf("prefix %q: a set with a cancelled ticket on Redis Cluster = %v, want ErrConflict", keyPrefix, err)
+		}
+		if after, _ := raw.Get(ctx, RedisKey(keyPrefix, partitions[0])).Result(); after != before {
+			t.Fatalf("prefix %q: a refused cross-partition commit changed partition gold on Redis Cluster", keyPrefix)
+		}
 	}
 }

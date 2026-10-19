@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 需要真实 Redis Cluster 的套件（文件里以 ROOST_REVIEW_CLUSTER 为准入），带不带 integration 标签都在这里：
-# wiring/activity、wiring/platform、wiring/rank、service/activity、infra/storage/versionstore 的 Cluster
+# wiring/activity、wiring/platform、wiring/rank、service/activity、infra/storage/versionstore、service/match 的 Cluster
 # 用例不带标签，2026-10-14 之前没有任何入口设置 ROOST_REVIEW_CLUSTER 跑它们。
 # CI 的 Redis job 只有单实例、dataengine-env.sh 也不起集群，所以这些用例在 CI 里
 # 一律 skip；这里是它们唯一的执行入口，由审查 / 修复的人在本机对着 3 主 3 从集群跑。
@@ -20,4 +20,4 @@ export GOWORK=off
 # 隔离环境 env.sh 的 shell 里运行，./infra/storage/redis/driver 的 toxic 用例与 ./framework/remoteentity 的进程杀死 /
 # 分区用例会整包跑到共享隔离环境上（没有 -run 限制），还会 /reset 共享 toxiproxy。
 unset ROOST_DATAENGINE_IT REDIS_ADDR
-go test -tags=integration -count=1 -p 1 ./infra/storage/redis/redistest ./wiring/redis ./wiring/mail ./infra/storage/redis/driver ./framework/remoteentity ./service/mail ./wiring/activity ./wiring/platform ./wiring/rank ./service/activity ./infra/storage/versionstore
+go test -tags=integration -count=1 -p 1 ./infra/storage/redis/redistest ./wiring/redis ./wiring/mail ./infra/storage/redis/driver ./framework/remoteentity ./service/mail ./wiring/activity ./wiring/platform ./wiring/rank ./service/activity ./infra/storage/versionstore ./service/match

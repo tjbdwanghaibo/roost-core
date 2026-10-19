@@ -98,7 +98,7 @@ func (f *fakeRedis) Del(_ context.Context, keys ...string) (int64, error) {
 // ARGV[2] next, ARGV[3] ttl millis, ARGV[4] "1" when absence is expected.
 func (f *fakeRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	f.mu.Lock()
-	write := script == deleteIfScript || strings.Contains(script, "expect_missing")
+	write := script == deleteIfScript || strings.Contains(script, "expect_missing") || isCompareAndSetAll(script)
 	dropped := write && f.dropWrites > 0
 	if dropped {
 		f.dropWrites--
@@ -139,6 +139,9 @@ func (f *fakeRedis) evalLocked(_ context.Context, script string, keys []string, 
 	}
 	if strings.Contains(script, "ZRANGEBYSCORE") {
 		return f.indexDue(keys, args)
+	}
+	if isCompareAndSetAll(script) {
+		return f.compareAndSetAll(keys, args)
 	}
 	f.casCalls++
 	if len(keys) == 0 || len(args) < 4 {
@@ -228,4 +231,39 @@ func (f *fakeRedis) indexDue(keys []string, args []any) (any, error) {
 		out = append(out, item.member)
 	}
 	return out, nil
+}
+
+// isCompareAndSetAll recognises fredis.CompareAndSetAll's script: it is the
+// only one that loops over #KEYS.
+func isCompareAndSetAll(script string) bool { return strings.Contains(script, "#KEYS") }
+
+// compareAndSetAll mirrors the multi-key script: every key is compared first
+// (ARGV in groups of four: expected, next, ttl millis, "1" when absence is
+// expected), and only when all pass is any key written. failEveryCAS loses it
+// like the single-key script.
+func (f *fakeRedis) compareAndSetAll(keys []string, args []any) (any, error) {
+	f.casCalls++
+	if len(keys) == 0 || len(args) != 4*len(keys) {
+		return nil, fredis.ErrCASInvalidCommand
+	}
+	if f.failEveryCAS {
+		return int64(0), nil
+	}
+	for i, key := range keys {
+		expected, _ := args[4*i].(string)
+		expectMissing, _ := args[4*i+3].(string)
+		current, exists := f.values[key]
+		if expectMissing == "1" {
+			if exists {
+				return int64(0), nil
+			}
+		} else if !exists || string(current) != expected {
+			return int64(0), nil
+		}
+	}
+	for i, key := range keys {
+		next, _ := args[4*i+1].(string)
+		f.values[key] = []byte(next)
+	}
+	return int64(1), nil
 }

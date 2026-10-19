@@ -401,7 +401,7 @@ func TestMatchRetentionShrinksTheQueueKeyOnRedis(t *testing.T) {
 	queue := match.Queue{Mode: "ranked", GroupSize: 2, Partition: "eu"}
 	keySize := func() int {
 		t.Helper()
-		raw, err := redisClient.Get(ctx, keyPrefix+":queue:"+queue.Key())
+		raw, err := redisClient.Get(ctx, match.RedisKey(keyPrefix, queue))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -451,6 +451,155 @@ func TestMatchRetentionShrinksTheQueueKeyOnRedis(t *testing.T) {
 	}
 	if ticket, found, err := store.Ticket(ctx, queue, waiting.ID, waiting.Subject); err != nil || !found || ticket.State != match.TicketWaiting {
 		t.Fatalf("the waiting ticket after pruning = (%+v, %v, %v)", ticket, found, err)
+	}
+}
+
+// 跨分区成局在真实 Redis 上：三张票来自两个分区，一次多键比较并设置在两个分区同时生效；一张票被取消时整体失败、
+// 另一个分区的键字节不变；保留期内重放返回原 Match、超期报 ErrTicketMissing；跨分区成局与单分区 Commit / Cancel
+// 在同一批票上并发竞争后，每张票至多一局，每场比赛在它涉及的每个分区都在、票都指向它。
+func TestMatchCommitAcrossPartitionsOnRedis(t *testing.T) {
+	redisClient := client(t)
+	keyPrefix := prefix(t, "match")
+	var mu sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	clockNow := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); defer mu.Unlock(); now = now.Add(d) }
+	store, err := match.NewRedisStore(redisClient, keyPrefix, match.Config{Now: clockNow, Retention: time.Minute, TicketTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	gold := match.Queue{Mode: "ranked", GroupSize: 3, Partition: "gold"}
+	silver := match.Queue{Mode: "ranked", GroupSize: 3, Partition: "silver"}
+	enqueue := func(queue match.Queue, id int64) match.Ticket {
+		t.Helper()
+		ticket, err := store.Enqueue(ctx, queue, match.Subject{Kind: "player", ID: id, Score: id}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ticket
+	}
+	refs := func(tickets ...match.Ticket) match.TicketRefs {
+		out := make(match.TicketRefs, 0, len(tickets))
+		for _, ticket := range tickets {
+			out = append(out, match.TicketRef{Queue: ticket.Queue, TicketID: ticket.ID})
+		}
+		return out
+	}
+	raw := func(queue match.Queue) string {
+		t.Helper()
+		value, err := redisClient.Get(ctx, match.RedisKey(keyPrefix, queue))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(value)
+	}
+
+	a, b, c := enqueue(gold, 1), enqueue(gold, 2), enqueue(silver, 3)
+	formed, err := store.CommitAcross(ctx, refs(a, c, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, queue := range []match.Queue{gold, silver} {
+		if stored, found, err := store.Match(ctx, queue, formed.ID); err != nil || !found || len(stored.Members) != 3 {
+			t.Fatalf("the match read through %s on Redis = (%+v, %v, %v)", queue.Partition, stored, found, err)
+		}
+	}
+	for _, ticket := range []match.Ticket{a, b, c} {
+		read, found, err := store.Ticket(ctx, ticket.Queue, ticket.ID, ticket.Subject)
+		if err != nil || !found || read.State != match.TicketMatched || read.MatchID != formed.ID {
+			t.Fatalf("ticket %s on Redis = (%+v, %v, %v)", ticket.ID, read, found, err)
+		}
+	}
+
+	// 一张票被取消：整次失败，另一个分区的键一个字节也不变。
+	d, e, f := enqueue(gold, 4), enqueue(silver, 5), enqueue(silver, 6)
+	if _, err := store.Cancel(ctx, silver, f.ID, f.Subject); err != nil {
+		t.Fatal(err)
+	}
+	goldBefore, silverBefore := raw(gold), raw(silver)
+	if _, err := store.CommitAcross(ctx, refs(d, e, f)); !errors.Is(err, match.ErrConflict) {
+		t.Fatalf("a set with a cancelled ticket on Redis = %v, want ErrConflict", err)
+	}
+	if raw(gold) != goldBefore || raw(silver) != silverBefore {
+		t.Fatal("a refused cross-partition commit changed a partition key on Redis")
+	}
+
+	// 保留期内重放返回原 Match；超期报 ErrTicketMissing。
+	advance(time.Minute)
+	if replay, err := store.CommitAcross(ctx, refs(b, a, c)); err != nil || replay.ID != formed.ID {
+		t.Fatalf("replay inside retention on Redis = (%s, %v), want %s", replay.ID, err, formed.ID)
+	}
+	advance(time.Second)
+	if _, err := store.CommitAcross(ctx, refs(a, b, c)); !errors.Is(err, match.ErrTicketMissing) {
+		t.Fatalf("replay past retention on Redis = %v, want ErrTicketMissing", err)
+	}
+
+	// 并发竞争。
+	var tickets []match.Ticket
+	for id := int64(100); id < 112; id++ {
+		queue := gold
+		if id%2 == 1 {
+			queue = silver
+		}
+		tickets = append(tickets, enqueue(queue, id))
+	}
+	var wait sync.WaitGroup
+	for round := 0; round < 12; round++ {
+		group := refs(tickets[round%12], tickets[(round+1)%12], tickets[(round+3)%12])
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if _, err := store.CommitAcross(ctx, group); err != nil && !errors.Is(err, match.ErrConflict) && !errors.Is(err, match.ErrTicketMissing) {
+				t.Errorf("CommitAcross: %v", err)
+			}
+		}()
+		if round%3 == 0 {
+			local := []string{tickets[(round+4)%12].ID, tickets[(round+6)%12].ID, tickets[(round+8)%12].ID}
+			queue := tickets[(round+4)%12].Queue
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				if _, err := store.Commit(ctx, queue, local); err != nil && !errors.Is(err, match.ErrConflict) && !errors.Is(err, match.ErrTicketMissing) {
+					t.Errorf("Commit: %v", err)
+				}
+			}()
+		}
+	}
+	wait.Wait()
+	formedIDs := map[string]bool{}
+	for _, ticket := range tickets {
+		read, found, err := store.Ticket(ctx, ticket.Queue, ticket.ID, ticket.Subject)
+		if err != nil || !found {
+			t.Fatalf("ticket %s after the race: found=%v err=%v", ticket.ID, found, err)
+		}
+		if read.State != match.TicketMatched {
+			continue
+		}
+		formedIDs[read.MatchID] = true
+		stored, found, err := store.Match(ctx, ticket.Queue, read.MatchID)
+		if err != nil || !found {
+			t.Fatalf("ticket %s points at match %s, which its partition %s does not hold (found=%v err=%v)", ticket.ID, read.MatchID, ticket.Queue.Partition, found, err)
+		}
+		for i, id := range stored.TicketIDs {
+			home := stored.Queue
+			if stored.TicketPartitions != nil {
+				home = match.Queue{Mode: "ranked", GroupSize: 3, Partition: stored.TicketPartitions[i]}
+			}
+			var owner match.Ticket
+			for _, candidate := range tickets {
+				if candidate.ID == id {
+					owner = candidate
+				}
+			}
+			member, found, err := store.Ticket(ctx, home, id, owner.Subject)
+			if err != nil || !found || member.State != match.TicketMatched || member.MatchID != stored.ID {
+				t.Fatalf("match %s lists ticket %s in %s, which is (%+v, %v, %v): a half-applied match", stored.ID, id, home.Partition, member, found, err)
+			}
+		}
+	}
+	if len(formedIDs) == 0 {
+		t.Fatal("no match formed in the race; it proved nothing")
 	}
 }
 

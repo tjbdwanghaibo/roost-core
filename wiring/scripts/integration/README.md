@@ -111,7 +111,7 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 
 以 `ROOST_REVIEW_CLUSTER` 为准入的用例需要真实的 Redis Cluster：integration 标签的在 `wiring/redis`、
 `wiring/mail`、`redis/driver`、`framework/remoteentity`、`service/mail`，不带标签的在 `wiring/activity`、
-`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore`，脚本对两类一并运行。脚本会清掉 `ROOST_DATAENGINE_IT` /
+`wiring/platform`、`wiring/rank`、`service/activity`、`infra/storage/versionstore`、`service/match`，脚本对两类一并运行。脚本会清掉 `ROOST_DATAENGINE_IT` /
 `REDIS_ADDR`，在 source 过 env.sh 的 shell 里运行也不会把全环境故障套件跑到隔离环境上
 （RR-20261005-NC-201）。CI 的 Redis job 只有单实例，
 `dataengine-env.sh` 也不起集群，所以它们在 CI 里一律 skip；本机对着 3 主 3 从集群跑：
