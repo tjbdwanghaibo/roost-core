@@ -9,9 +9,14 @@
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时读作“删过档”（`ErrEntityAggregateDeleted`，D10），不水合、不检查 schema。
 
-- **持久键是 Go 字段名的 snake_case**（生成器 `codegen/internal/dao/gen.go` 的 `bsonKey`），字段上的 `bson:"..."` 标签**不参与**。改持久字段的 Go 名就是改它的存储键：老文档里的旧键在水合时被静默忽略、读成零值，之后的整文档写入会删掉它。`roost generate` 对 `bson` 名与持久键不同的字段打印 WARN；规则是否改为“显式名优先 / 水合时拒绝未知键”待维护者决定（[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。在那之前：改名、删字段、`persist` 改 `nopersist` 都按“改形状”走下面的迁移流程。
+- **持久键**（维护者 2026-10-19 决定，[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）：DAO 定义里字段写了 `bson:"x"` 时 `x` 就是持久键，没写时是 Go 字段名的 snake_case。键要字母开头、只含字母数字下划线，不能以 `_` 开头（留给 `_id`、`_schema`、`_version` 等元数据），同一类型内不能重复；`bson` 选项只认 `omitempty`，`bson:"-"` 报错。违反时 `roost generate` 报错。生成的 `gen_<x>_dao.go` 里有一个持久文档结构体 `<dao>PersistDoc`（嵌套类型是 `<type>BSONDoc`），每个字段的显式 `bson` 标签就是它的存储键；整文档写入、水合、回滚快照、增量补丁都用这些键。
+- **要改 Go 字段名又保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``），键没变，不需要迁移，生成期与加载期都不告警。新字段建议一开始就写 `bson` 名（`roost add dao` 骨架的注释就是这样写的）。
+- **改字段会告警，不拒绝**：
+  - 生成期：`roost generate` 把工作树里上一次的生成物当基线，持久键消失（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`）、新增、类型变化各打印一条 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...`，写明后果并提示 `schema=` 是否提高。基线只是工作树里的文件：再生成一次不再告警。
+  - 加载期：生成的 `RestorePersisted` 发现库里有、持久文档结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`；同一进程同一 DAO 同一键只打一次，嵌套路径里的 map 键与下标写作 `*`），计数 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载。缺失的键给零值（加字段的正常情况），不告警。
+- **旧键不会被写删**（维护者 2026-10-19 方案 A）：加载时读到的未知键（顶层与嵌套子文档）原样留在 DAO 内存里，不暴露给业务字段，整文档写回、回滚快照、投影重放、Remote 托管实体的 data 信封都把它带回去；增量补丁本来就不碰它。所以“改名忘了留 `bson` 名”时库里的旧值还在，看到 WARN 之后可以按下面的流程迁移补救。旧键会一直占空间，直到显式清理（§2 步骤 5b）；框架从不自动删除。
 
-所以 schema 变更是一次**运维操作**：停写之后把库里的旧文档一次性转成当前 schema，再启动只认当前 schema 的新程序。加字段不需要迁移（BSON 解码给零值），但仍要按需提高 `schema=`；改形状（例如扁平字段变成子文档）必须迁移。
+所以 schema 变更是一次**运维操作**：停写之后把库里的旧文档一次性转成当前 schema，再启动只认当前 schema 的新程序。加字段不需要迁移（BSON 解码给零值），但仍要按需提高 `schema=`；改形状（例如扁平字段变成子文档）、改名没保留 `bson` 名、删字段而旧值仍有用，都要迁移：把旧键的值搬到新键（旧键随后经步骤 5b 清理）。
 
 ## 2. 流程
 
@@ -23,6 +28,7 @@
 | 3 dry-run | `schemamigrate plan`：读全部文档、转换并 `Check`，不写 | 执行器 `Job.Plan` | `pending` 为待迁移数、`converted` 等于它；任何一份失败整次拒绝 |
 | 4 转换 | `schemamigrate apply`：先完整 plan，全部通过才逐份“写备份 → 条件改写”。条件是 `_id` + 原 `_version` + 原 `_schema`；改写后 `_schema` 为新版本、`_version` 加 1、`_last_tx` 记为 `schema-migration:<步骤名>` | 执行器 `Job.Apply` | 条件不成立（有人还在写）以 `ErrNotStopped` 中止；中断后重跑从剩余文档继续 |
 | 5 校验 | `schemamigrate verify`：没有旧版本活文档，每份新版本文档都能被 `Check` 接受 | 执行器 `Job.Verify` | `pending` 为 0、退出码 0 |
+| 5b 清理旧键（可选） | 迁移把旧键的值搬走、或确认不要了之后，删除指定 DAO 的指定旧键：`engine.CleanupStoredKeys(ctx, engine.StoredKeyCleanup{Name, Collection, Declared: db.<dao>StoredKeys, Keys: []string{"gold", "pos.z"}, DryRun})`（[stored_key_cleanup.go](../../framework/dataengine/engine/stored_key_cleanup.go)）。只删 DAO 当前不声明的键（`Declared` 判定；元数据键、带 `*` 的路径拒绝），逐份带 `_version` 条件写回、`_version` 加 1、`_last_tx` 记为 `stored-key-cleanup:<Name>`；墓碑不改；Remote 版本信封整次拒绝 | `engine.CleanupStoredKeys`；生成的 `<dao>StoredKeys` | 先 `DryRun` 看 `matched`；条件不成立以 `ErrCleanupNotStopped` 中止（有人还在写）；之后冷加载不再出现这些键的 WARN |
 | 6 切换版本 | 启动新程序（新 WAL 目录或已全部确认的原目录）；抽样读写验证 | 冷加载的 schema 校验 | 无 `ErrSchemaMismatch`；首批写入的 `_version` 从迁移后的版本继续 |
 | 7 回退 | **新程序写入之前**：`schemamigrate rollback` 用备份集合原样恢复（只恢复仍是迁移写的那一版），旧程序可再启动。**新程序写入之后**：迁移后被写过的文档列为 `refused`、不覆盖；此时只能向前修复，或停写后恢复整库备份并接受丢失备份之后的写入，由业务决定 | 执行器 `Job.Rollback`；整库备份 | `rolled_back` 等于迁移数；有 `refused` 时退出码非零 |
 
@@ -30,6 +36,7 @@
 
 ## 3. 执行器的边界
 
+- 旧键清理（步骤 5b）同样只在停写后执行：正在运行的进程内存里仍持有旧键，下一次整文档写回会把它写回去；没停干净的写入者因 `_version` 加 1 而冲突、不会悄悄写回。Remote 托管 DAO 的旧键在 data 二进制信封里，清理入口不改写（同下条），它们会一直保留。map 值 / 切片元素里的旧键（路径含 `*`）不能用一条 `$unset` 表达，清理入口拒绝，需要时在迁移步骤里改写整个子文档。
 - 只处理 `From` 与 `To` 两个版本；集合里出现别的 schema、缺 `_version` / `_schema`、带 `_ver` 的 Remote 版本信封，在**写任何东西之前**整次拒绝。Remote 托管实体的版本、所有权与 fence 由 Remote 链路维护，不能用这个执行器改写；需要时另行设计。
 - 一个聚合有多个持久 DAO 时，每个改了形状的 DAO 各跑一个 Job；它们都在停写期间完成、全部 verify 通过才启动新程序。
 - 不在线双读：迁移期间业务停写。上线后若需要在线迁移（双读期、灰度），需要重新决定（维护者 2026-10-06 起“线上未部署不做兼容”的规则在上线后作废）。

@@ -14,7 +14,12 @@ set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 # The generator's minimum roost-core unless ROOST_CORE_PIN says otherwise;
-# core-pin.sh says why that is the pin (RR-20260921-05).
+# core-pin.sh says why that is the pin (RR-20260921-05). ROOST_CORE_REPLACE=<checkout>
+# compiles against a local roost-core instead (a replace): the way to run the
+# goldens before the release that raises the minimum, when the generated code
+# uses a framework API that is not published yet. (Not ROOST_CORE_DIR like the
+# other guards: dataengine-env.sh calls this script and must not name that
+# variable, see TestFaultMatrixScriptNamesEveryFullEnvironmentSuite.)
 core_pin=$(sh "$here/scripts/core-pin.sh")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/dao-golden-runtime.XXXXXX")
@@ -35,8 +40,16 @@ cp "$here/../internal/rangecontract/rangecontract.go" "$work/rangecontract/"
 
 cd "$work"
 GOWORK=off go mod init daogoldenruntime >/dev/null
-GOWORK=off GOFLAGS=-mod=mod GONOSUMDB=github.com/tjbdwanghaibo go get "github.com/tjbdwanghaibo/roost-core@$core_pin" >/dev/null
+if [ -n "${ROOST_CORE_REPLACE:-}" ]; then
+	core_dir=$(cd "$ROOST_CORE_REPLACE" && pwd)
+	GOWORK=off go mod edit -require "github.com/tjbdwanghaibo/roost-core@v0.0.0" -replace "github.com/tjbdwanghaibo/roost-core=$core_dir"
+	core_pin="local $core_dir"
+else
+	GOWORK=off GOFLAGS=-mod=mod GONOSUMDB=github.com/tjbdwanghaibo go get "github.com/tjbdwanghaibo/roost-core@$core_pin" >/dev/null
+fi
 GOWORK=off GOFLAGS=-mod=mod go mod tidy >/dev/null
 echo "dao golden runtime: roost-core $core_pin"
 GOWORK=off go vet ./...
-GOWORK=off go test -count=1 ./...
+# stored_keys_mongo_test.go runs on the isolated replica set when
+# ROOST_DATAENGINE_IT_MONGO_URI is set and skips otherwise.
+GOWORK=off go test -count=1 -run '^Test' ./...

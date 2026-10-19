@@ -27,6 +27,9 @@ type {{.Nested.Name}} struct {
 {{- range .Nested.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
+	// storedUnknown holds the keys of this value's stored sub-document that the
+	// type does not declare, written back with it (DESIGN-TODO D13).
+	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // bindDirty / unbindDirty are how a parent takes and releases this value.
@@ -64,14 +67,16 @@ func (s *{{.Nested.Name}}) unbindDirty(owner daoDirtyOwner) {
 // MarshalBSON / UnmarshalBSON are kept for a {{.Nested.Name}} encoded on its own.
 type {{lower1 .Nested.Name}}BSONDoc struct {
 {{- range .Nested.Fields}}
-	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonTag .}}"` + "`" + `
 {{- end}}
+	UnknownStoredKeys dataengine.UnknownStoredKeys ` + "`" + `bson:",inline"` + "`" + `
 }
 
 // bsonDoc is the value receiver on purpose: containers hold {{.Nested.Name}} values
 // as well as pointers, and a method expression {{.Nested.Name}}.bsonDoc maps over both.
 func (s {{.Nested.Name}}) bsonDoc() {{lower1 .Nested.Name}}BSONDoc {
 	return {{lower1 .Nested.Name}}BSONDoc{
+		UnknownStoredKeys: s.storedUnknown,
 {{- range .Nested.Fields}}
 {{- if eq .Kind 2}}
 		{{.Name}}: {{toWire . (printf "s.%sRawMap()" (fieldVar .Name))}},
@@ -85,6 +90,7 @@ func (s {{.Nested.Name}}) bsonDoc() {{lower1 .Nested.Name}}BSONDoc {
 // wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *{{.Nested.Name}}) loadBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
+	s.storedUnknown = doc.UnknownStoredKeys.Clone()
 {{- range .Nested.Fields}}
 {{- if eq .Kind 2}}
 	src{{.Name}} := {{fromWire . (printf "doc.%s" .Name)}}

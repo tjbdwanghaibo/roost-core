@@ -26,6 +26,9 @@ type EquipInfo struct {
 	runes      []*GemInfo
 	core       *GemInfo
 	shape      Position
+	// storedUnknown holds the keys of this value's stored sub-document that the
+	// type does not declare, written back with it (DESIGN-TODO D13).
+	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // bindDirty / unbindDirty are how a parent takes and releases this value.
@@ -62,30 +65,33 @@ func (s *EquipInfo) unbindDirty(owner daoDirtyOwner) {
 // costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a EquipInfo encoded on its own.
 type equipInfoBSONDoc struct {
-	Level int32                     `bson:"level"`
-	Star  int32                     `bson:"star"`
-	Gems  map[int32]*gemInfoBSONDoc `bson:"gems"`
-	Runes []*gemInfoBSONDoc         `bson:"runes"`
-	Core  *gemInfoBSONDoc           `bson:"core"`
-	Shape positionBSONDoc           `bson:"shape"`
+	Level             int32                        `bson:"level"`
+	Star              int32                        `bson:"star"`
+	Gems              map[int32]*gemInfoBSONDoc    `bson:"gems"`
+	Runes             []*gemInfoBSONDoc            `bson:"runes"`
+	Core              *gemInfoBSONDoc              `bson:"core"`
+	Shape             positionBSONDoc              `bson:"shape"`
+	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
 }
 
 // bsonDoc is the value receiver on purpose: containers hold EquipInfo values
 // as well as pointers, and a method expression EquipInfo.bsonDoc maps over both.
 func (s EquipInfo) bsonDoc() equipInfoBSONDoc {
 	return equipInfoBSONDoc{
-		Level: s.level,
-		Star:  s.star,
-		Gems:  daoMapDocs(s.gemsRawMap(), gemInfoPtrBSONDoc),
-		Runes: daoSliceDocs(s.runes, gemInfoPtrBSONDoc),
-		Core:  gemInfoPtrBSONDoc(s.core),
-		Shape: s.shape.bsonDoc(),
+		UnknownStoredKeys: s.storedUnknown,
+		Level:             s.level,
+		Star:              s.star,
+		Gems:              daoMapDocs(s.gemsRawMap(), gemInfoPtrBSONDoc),
+		Runes:             daoSliceDocs(s.runes, gemInfoPtrBSONDoc),
+		Core:              gemInfoPtrBSONDoc(s.core),
+		Shape:             s.shape.bsonDoc(),
 	}
 }
 
 // wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *EquipInfo) loadBSONDoc(doc equipInfoBSONDoc) {
+	s.storedUnknown = doc.UnknownStoredKeys.Clone()
 	s.level = doc.Level
 	s.star = doc.Star
 	srcGems := daoMapDocs(doc.Gems, gemInfoPtrFromBSONDoc)

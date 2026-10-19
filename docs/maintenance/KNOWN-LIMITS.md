@@ -278,13 +278,13 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ## 新用户试用第七轮：待修问题（2026-10-18 登记）
 
-**处理状态（2026-10-19）**：第 2～7 项已修（见各项“状态”与 CHANGELOG `[Unreleased]`“新用户试用第七轮的修复”）；第 1 项核实属实，持久键规则登记为 [DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验) 待维护者决定，已加生成期告警。
+**处理状态（2026-10-19）**：第 2～7 项已修（见各项“状态”与 CHANGELOG `[Unreleased]`“新用户试用第七轮的修复”）；第 1 项按维护者 2026-10-19 的 [DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验) 决定实施（显式持久名生效、改字段两处 WARN、整文档写回保留旧键 + 显式清理入口），剩余风险见该项。
 
 基线 `b6c12c48`（origin/main）。先复核第五、六轮：重载命令 `configdata.reload / rollback / status` 默认存在、结果带按表变化摘要（未变时提示“改了 CSV 先 roost generate”）；saga 步骤保序、重名报错；effects 键只配一处、不一致时 `--check-config` 与 doctor 拒绝；remote=managed 缺 Mod 时 generate 拒绝并给命令；技能目录生成 `catalog_test.go`；`roost help services` —— 均实测解决。随后学完剩余部分并在共享隔离环境真实进程联调：按实体定时器（D11，双倍卡到期后约 50ms 服务器推送自身视图增量；停服跨过到期、重启登录时补触发一次）、effect（单笔 ≥50 才发，恰好一次被消费）、原生 saga（赠送成功 / 收礼上限拒绝后扣款补偿退回 / 同请求号重发不重复）、单实例锁（同 sid 第二进程等满 startup_wait 后拒绝并点名持有者）、业务时间高水位、加 DAO 字段兼容老文档、属性生成器、webroute、cfggen 示例、C# SDK 测试。修复由维护者在 main 上进行。
 
 ### 1. DAO 持久字段名由 Go 字段名决定，`bson` 标签被忽略；改 Go 字段名会静默丢老数据
 
-**状态：留待维护者决定（[DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)，2026-10-19）**。已核实属实（`bsonKey = toSnake(Go 名)`；`parseDaoTag` 只读 `dao:`；生成的 `RestorePersisted` 只比 `_schema` 整数后解码进结构体，未知键静默丢弃、缺失键零值；整文档写入 `ReplaceOne` 会删掉旧键）。复现：定义 ``Coins int64 `bson:"gold"` ``，`RestorePersisted({_id:1, gold:40})` 返回 `err=<nil> coins=0`。已做不改语义的部分：DAO 生成器对 `bson` 名与持久键不同的持久字段打印 WARN（`TestRunWarnsWhenABSONTagDiffersFromTheStoredKey`，修前无任何输出），SCHEMA-MIGRATION §1 写明现行规则（改名 / 删字段 / 改 `nopersist` 都按改形状迁移）。**这条告警只覆盖“保留 bson 名改 Go 名”这一种写法**，没写 bson 标签直接改 Go 名仍然静默，彻底解决要等 D13 的 B。下面是登记原文。
+**状态：已按维护者 2026-10-19 决定实施（[DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）**。定义里字段的 `bson:"x"` 就是持久键（缺省 snake_case，键名规则生成期强制）；生成的 `<dao>PersistDoc` 把每个字段的键写成显式 `bson` 标签，读写、回滚、补丁都以它为准。改字段打印 WARN、不拒绝：`roost generate` 对照上一次生成物报持久键消失 / 新增 / 类型变化，`RestorePersisted` 对库里有、结构体没有的键按 DAO + 键每进程打一次 WARN（计数 `dataengine.dao.unknown_stored_key.total`）。整文档写回保留未知键（方案 A：加载时读到的未知键在 DAO 内存里原样带回，存储写法与版本条件不变），清理只经 `engine.CleanupStoredKeys`（停写后执行）。回归：`TestTheDeclaredBSONNameIsTheStoredKey`、`TestGenerateWarnsWhenAStoredKeyChangesAgainstThePreviousOutput`（修前改名生成只有 `generated:` 行）、`TestUnknownStoredKeysWarnOncePerKeyAndStillLoad`（修前日志为空）、真实 Mongo 的 `TestOldStoredKeysSurviveFullWritesUntilExplicitCleanupRealMongo`（修前整文档写回后 `legacy_gold = <nil>`）。**剩余风险**：WARN 不阻断，忽略告警时业务字段读不到旧值、新字段从零值开始（旧值仍在库里，可迁移补救）；旧键一直占空间直到清理；Remote 托管 DAO（data 信封）与 map 值 / 切片元素里的旧键没有清理入口；生成期基线只在工作树里（删掉生成物或换机器重新生成看不到上一次的形状）；嵌套子文档里的旧键也随该嵌套字段进入同步载荷。下面是登记原文。
 
 **现象**：DAO 生成器的存储键是 `toSnake(Go 字段名)`（`codegen/internal/dao/gen.go` 的 `bsonKey`，第 77、300 行），字段上的 `bson:"..."` 不参与。实测（r7，玩家 9201 金币 40）：把 ``Gold int64 `bson:"gold"` `` 的 Go 名改成 `Coins` 而保留 `bson:"gold"` 想让库里键不变，`roost generate`、`go build`、`roost project doctor` 全部通过、启动无告警，登录后金币为 0（Mongo 文档里 `gold: 40` 仍在，新代码按 `coins` 读）；此后任何一次写入都以 `coins: 0` 继续，老值事实上丢失。反过来只改 `bson:"coins"` 则无任何效果。`_schema` 不变。
 

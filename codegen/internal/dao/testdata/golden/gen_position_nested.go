@@ -21,6 +21,9 @@ type Position struct {
 	dirtyOwner daoDirtyOwner
 	x          int32
 	y          int32
+	// storedUnknown holds the keys of this value's stored sub-document that the
+	// type does not declare, written back with it (DESIGN-TODO D13).
+	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // bindDirty / unbindDirty are how a parent takes and releases this value.
@@ -57,22 +60,25 @@ func (s *Position) unbindDirty(owner daoDirtyOwner) {
 // costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a Position encoded on its own.
 type positionBSONDoc struct {
-	X int32 `bson:"x"`
-	Y int32 `bson:"y"`
+	X                 int32                        `bson:"x"`
+	Y                 int32                        `bson:"y"`
+	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
 }
 
 // bsonDoc is the value receiver on purpose: containers hold Position values
 // as well as pointers, and a method expression Position.bsonDoc maps over both.
 func (s Position) bsonDoc() positionBSONDoc {
 	return positionBSONDoc{
-		X: s.x,
-		Y: s.y,
+		UnknownStoredKeys: s.storedUnknown,
+		X:                 s.x,
+		Y:                 s.y,
 	}
 }
 
 // wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *Position) loadBSONDoc(doc positionBSONDoc) {
+	s.storedUnknown = doc.UnknownStoredKeys.Clone()
 	s.x = doc.X
 	s.y = doc.Y
 }

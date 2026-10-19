@@ -31,6 +31,13 @@ type {{.Dao.Name}} struct {
 {{- range .Dao.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
+{{- if not .Dao.NoCollection}}
+	// storedUnknown holds the stored keys this DAO does not declare, exactly
+	// as loaded: written back with every full document so a renamed or
+	// removed field's stored value survives until it is migrated and cleaned
+	// up explicitly (DESIGN-TODO D13). Business code never sees it.
+	storedUnknown dataengine.UnknownStoredKeys
+{{- end}}
 }
 
 // Ensure interface compliance.
@@ -49,6 +56,32 @@ const (
 	{{daoCollConst .Dao.Name}} = "{{.Dao.Coll}}"
 	{{.Dao.Name}}SchemaVersion uint32 = {{schemaVersion .Dao}}
 )
+
+// {{persistDocName .Dao.Name}} is {{.Dao.Name}}'s document in collection "{{.Dao.Coll}}", and the only
+// place a stored key is spelled: each tag below is the key the field is stored
+// under (the definition's bson:"..." name, or the snake_case of the Go field
+// name when it has none). Full writes, hydration, the rollback snapshot and
+// the incremental patch paths all use these keys (DESIGN-TODO D13).
+//
+// Renaming a key here — a renamed or removed field, persist changed to
+// nopersist — leaves documents already stored with a key nothing reads:
+// RestorePersisted warns once per key, and UnknownStoredKeys carries the
+// stored value back on every full write, so it stays in the document. Keep
+// the old key with bson:"<old>" on the renamed field, or migrate the
+// documents offline and clean the old key up explicitly
+// (docs/framework/SCHEMA-MIGRATION.md).
+type {{persistDocName .Dao.Name}} struct {
+	ID            int64  ` + "`" + `bson:"_id"` + "`" + `
+	SchemaVersion uint32 ` + "`" + `bson:"_schema"` + "`" + `
+{{- range persistFields .Dao.Fields}}
+	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonTag .}}"` + "`" + `
+{{- end}}
+	UnknownStoredKeys dataengine.UnknownStoredKeys ` + "`" + `bson:",inline"` + "`" + `
+}
+
+// {{storedKeysName .Dao.Name}} is the key set {{persistDocName .Dao.Name}} declares, nested types
+// included; RestorePersisted reports stored keys outside it.
+var {{storedKeysName .Dao.Name}} = dataengine.NewStoredKeySet[{{persistDocName .Dao.Name}}]("{{.Dao.Name}}")
 {{- end}}
 
 // New{{.Dao.Name}} creates a new {{.Dao.Name}} instance with initialized maps/slices.
@@ -109,12 +142,12 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {
 {{- if eq .Kind 2}}
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {
 	{{- if .Tag.Persist}}
-	if path, ok := dataengine.MapPatchPath("{{bsonKey .Name}}", key); ok {
+	if path, ok := dataengine.MapPatchPath("{{.Key}}", key); ok {
 		if err := nest.MarkPersistSet(d, {{fieldMaskName $.Dao.Name .Name}}, path, val); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} key persistence: %w", err))
 		}
 	} else {
-		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{bsonKey .Name}}"); err != nil {
+		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{.Key}}"); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
 		}
 	}
@@ -126,12 +159,12 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType
 
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDeleted(key {{.MapKey}}) {
 	{{- if .Tag.Persist}}
-	if path, ok := dataengine.MapPatchPath("{{bsonKey .Name}}", key); ok {
+	if path, ok := dataengine.MapPatchPath("{{.Key}}", key); ok {
 		if err := nest.MarkPersistUnset(d, {{fieldMaskName $.Dao.Name .Name}}, path); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} delete persistence: %w", err))
 		}
 	} else {
-		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{bsonKey .Name}}"); err != nil {
+		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{.Key}}"); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
 		}
 	}
@@ -505,36 +538,18 @@ func (d *{{$.Dao.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 // CaptureRollbackState is side-effect free and includes transient and
 // sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *{{.Dao.Name}}) CaptureRollbackState() ([]byte, error) {
-	type rollbackDoc struct {
-		Id int64 ` + "`" + `bson:"_id"` + "`" + `
-{{- range .Dao.Fields}}
-		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
-{{- end}}
-	}
-	doc := rollbackDoc{
-		Id: d.id,
-{{- range .Dao.Fields}}
-{{- if eq .Kind 2}}
-		{{.Name}}: {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
-{{- else}}
-		{{.Name}}: {{toWire . (printf "d.%s" (fieldVar .Name))}},
-{{- end}}
-{{- end}}
-	}
-	return bson.Marshal(doc)
+	return bson.Marshal(d.rollbackDoc())
 }
 
 func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
-	type rollbackDoc struct {
-		Id int64 ` + "`" + `bson:"_id"` + "`" + `
-{{- range .Dao.Fields}}
-		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
-{{- end}}
-	}
-	var doc rollbackDoc
+	var doc {{rollbackDocName .Dao.Name}}
 	if err := bson.Unmarshal(raw, &doc); err != nil { return err }
-	d.id = doc.Id
-{{- range .Dao.Fields}}
+{{- if .Dao.NoCollection}}
+	d.id = doc.ID
+{{- else}}
+	d.setPersistDoc(doc.PersistDoc)
+{{- end}}
+{{- range rollbackOnlyFields .Dao}}
 {{- if eq .Kind 2}}
 	d.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
 {{- else}}
@@ -544,21 +559,74 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	d.Init()
 	return nil
 }
-{{- if not .Dao.NoCollection}}
 
-func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
-	doc := bson.M{
-		"_id": d.id,
-		"_schema": {{.Dao.Name}}SchemaVersion,
-{{- range persistFields .Dao.Fields}}
-{{- if eq .Kind 2}}
-		"{{bsonKey .Name}}": {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
+// {{rollbackDocName .Dao.Name}} is the in-memory rollback snapshot, never stored:
+{{- if .Dao.NoCollection}}
+// every field under its key.
 {{- else}}
-		"{{bsonKey .Name}}": {{toWire . (printf "d.%s" (fieldVar .Name))}},
+// the persisted document (unknown stored keys included) plus the fields that
+// are not persisted, under their keys.
+{{- end}}
+type {{rollbackDocName .Dao.Name}} struct {
+{{- if .Dao.NoCollection}}
+	ID int64 ` + "`" + `bson:"_id"` + "`" + `
+{{- else}}
+	PersistDoc {{persistDocName .Dao.Name}} ` + "`" + `bson:"_persisted"` + "`" + `
+{{- end}}
+{{- range rollbackOnlyFields .Dao}}
+	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonTag .}}"` + "`" + `
+{{- end}}
+}
+
+func (d *{{.Dao.Name}}) rollbackDoc() {{rollbackDocName .Dao.Name}} {
+	return {{rollbackDocName .Dao.Name}}{
+{{- if .Dao.NoCollection}}
+		ID: d.id,
+{{- else}}
+		PersistDoc: d.persistDoc(),
+{{- end}}
+{{- range rollbackOnlyFields .Dao}}
+{{- if eq .Kind 2}}
+		{{.Name}}: {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
+{{- else}}
+		{{.Name}}: {{toWire . (printf "d.%s" (fieldVar .Name))}},
 {{- end}}
 {{- end}}
 	}
-	return bson.Marshal(doc)
+}
+{{- if not .Dao.NoCollection}}
+
+// persistDoc is the full document of the current state; setPersistDoc puts a
+// decoded one back (identity and persisted fields; the caller runs Init).
+func (d *{{.Dao.Name}}) persistDoc() {{persistDocName .Dao.Name}} {
+	return {{persistDocName .Dao.Name}}{
+		ID:            d.id,
+		SchemaVersion: {{.Dao.Name}}SchemaVersion,
+		UnknownStoredKeys: d.storedUnknown,
+{{- range persistFields .Dao.Fields}}
+{{- if eq .Kind 2}}
+		{{.Name}}: {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
+{{- else}}
+		{{.Name}}: {{toWire . (printf "d.%s" (fieldVar .Name))}},
+{{- end}}
+{{- end}}
+	}
+}
+
+func (d *{{.Dao.Name}}) setPersistDoc(doc {{persistDocName .Dao.Name}}) {
+	d.id = doc.ID
+	d.storedUnknown = doc.UnknownStoredKeys.Persisted()
+{{- range persistFields .Dao.Fields}}
+{{- if eq .Kind 2}}
+	d.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
+{{- else}}
+	d.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
+{{- end}}
+{{- end}}
+}
+
+func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
+	return bson.Marshal(d.persistDoc())
 }
 
 func (d *{{.Dao.Name}}) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
@@ -602,18 +670,7 @@ func (d *{{.Dao.Name}}) MarshalPersist(mask uint64) []byte {
 
 func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
 	_ = mask // full payload is used for inserts and safe fallback.
-	doc := bson.M{
-		"_id": d.id,
-		"_schema": {{.Dao.Name}}SchemaVersion,
-{{- range persistFields .Dao.Fields}}
-{{- if eq .Kind 2}}
-		"{{bsonKey .Name}}": {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
-{{- else}}
-		"{{bsonKey .Name}}": {{toWire . (printf "d.%s" (fieldVar .Name))}},
-{{- end}}
-{{- end}}
-	}
-	data, err := bson.Marshal(doc)
+	data, err := d.marshalCommitState()
 	if err != nil {
 		// The interface has no error slot and a nil payload would be
 		// persisted as silent data loss; a marshal failure here is a
@@ -648,12 +705,12 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 {{- range persistFields .Dao.Fields}}
 	if change.Mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
 {{- if eq .Kind 2}}
-		_, full := change.FullFields["{{bsonKey .Name}}"]
-		if full || !d.persistChangeHasPath(change, "{{bsonKey .Name}}") {
-			set["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
+		_, full := change.FullFields["{{.Key}}"]
+		if full || !d.persistChangeHasPath(change, "{{.Key}}") {
+			set["{{.Key}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
 		}
 {{- else}}
-		set["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
+		set["{{.Key}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
 {{- end}}
 	}
 {{- end}}
@@ -680,7 +737,7 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 func (d *{{.Dao.Name}}) PersistFieldNames(mask uint64) []string {
 	var names []string
 {{- range persistFields .Dao.Fields}}
-	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 { names = append(names, "{{bsonKey .Name}}") }
+	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 { names = append(names, "{{.Key}}") }
 {{- end}}
 	return names
 }
@@ -702,7 +759,7 @@ func (d *{{.Dao.Name}}) PersistFieldNames(mask uint64) []string {
 func {{.Dao.Name}}SyncFields() []dataengine.SyncFieldMeta {
 	return []dataengine.SyncFieldMeta{
 {{- range syncFields .Dao.Fields}}
-		{Name: "{{.Name}}", WireName: "{{bsonKey .Name}}", Bit: {{fieldMaskName $.Dao.Name .Name}}},
+		{Name: "{{.Name}}", WireName: "{{.Key}}", Bit: {{fieldMaskName $.Dao.Name .Name}}},
 {{- end}}
 	}
 }
@@ -719,9 +776,9 @@ func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 {{- range syncFields .Dao.Fields}}
 	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
 {{- if eq .Kind 2}}
-		doc["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
+		doc["{{.Key}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
 {{- else}}
-		doc["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
+		doc["{{.Key}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
 {{- end}}
 	}
 {{- end}}
@@ -743,7 +800,7 @@ func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 		return err
 	}
 {{- range syncFields .Dao.Fields}}
-	if v, ok := doc["{{bsonKey .Name}}"]; ok {
+	if v, ok := doc["{{.Key}}"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
 		if err != nil {
 			return err
@@ -769,34 +826,25 @@ func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 // --- Unmarshal ---
 
 func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
-	type rawDoc struct {
-		Id int64 ` + "`" + `bson:"_id"` + "`" + `
-{{- range persistFields .Dao.Fields}}
-		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
-{{- end}}
-	}
-	var dd rawDoc
-	if err := bson.Unmarshal(raw, &dd); err != nil {
+	var doc {{persistDocName .Dao.Name}}
+	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = dd.Id
-{{- range persistFields .Dao.Fields}}
-{{- if eq .Kind 2}}
-	d.set{{.Name}}RawMap({{fromWire . (printf "dd.%s" .Name)}})
-{{- else}}
-	d.{{fieldVar .Name}} = {{fromWire . (printf "dd.%s" .Name)}}
-{{- end}}
-{{- end}}
+	d.setPersistDoc(doc)
 	d.Init()
 	return nil
 }
 
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
+// A stored key {{persistDocName .Dao.Name}} does not declare is reported (once per key per
+// process) and the document still loads: no field reads the value, and it is
+// kept and written back with the document until cleaned up explicitly.
 func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != {{.Dao.Name}}SchemaVersion {
 		return fmt.Errorf("%w: dao {{.Dao.Name}} stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, {{.Dao.Name}}SchemaVersion)
 	}
+	{{storedKeysName .Dao.Name}}.WarnUnknown(raw)
 	if err := d.Unmarshal(raw); err != nil {
 		return err
 	}

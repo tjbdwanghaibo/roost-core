@@ -86,16 +86,16 @@ func Run(args []string, stdout io.Writer) error {
 		return nil
 	}
 
-	for _, warning := range storedKeyWarnings(defs) {
-		_, _ = fmt.Fprintln(stdout, warning)
-	}
-
 	expected := make(map[string]bool, len(defs.Daos)+len(defs.RedisDaos)+len(defs.Nested))
 
 	// Generate DAO files
 	for _, dao := range defs.Daos {
 		outFile := filepath.Join(absOutDir, daoFileName(dao.Name))
 		expected[filepath.Base(outFile)] = true
+		// 先于写入读上一次的生成物：它是改字段告警的基线（DESIGN-TODO D13）。
+		for _, warning := range daoStoredKeyWarnings(dao, defs, outFile) {
+			_, _ = fmt.Fprintln(stdout, warning)
+		}
 		changed, err := generateDao(dao, defs, *pkg, outFile, *force)
 		if err != nil {
 			return fmt.Errorf("generate dao %s: %w", dao.Name, err)
@@ -125,6 +125,9 @@ func Run(args []string, stdout io.Writer) error {
 	for _, nested := range defs.Nested {
 		outFile := filepath.Join(absOutDir, fmt.Sprintf("gen_%s_nested.go", toSnake(nested.Name)))
 		expected[filepath.Base(outFile)] = true
+		for _, warning := range nestedStoredKeyWarnings(nested, defs, outFile) {
+			_, _ = fmt.Fprintln(stdout, warning)
+		}
 		changed, err := generateNested(nested, defs, *pkg, outFile, *force)
 		if err != nil {
 			return fmt.Errorf("generate nested %s: %w", nested.Name, err)

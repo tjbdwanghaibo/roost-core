@@ -25,6 +25,11 @@ type HeroDao struct {
 	equips  *fmap.SmallSafeMap[int64, *EquipInfo]
 	squad   []*EquipInfo
 	mount   *EquipInfo
+	// storedUnknown holds the stored keys this DAO does not declare, exactly
+	// as loaded: written back with every full document so a renamed or
+	// removed field's stored value survives until it is migrated and cleaned
+	// up explicitly (DESIGN-TODO D13). Business code never sees it.
+	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // Ensure interface compliance.
@@ -37,6 +42,39 @@ const (
 	HeroDaoCollection           = "heroes"
 	HeroDaoSchemaVersion uint32 = 1
 )
+
+// heroDaoPersistDoc is HeroDao's document in collection "heroes", and the only
+// place a stored key is spelled: each tag below is the key the field is stored
+// under (the definition's bson:"..." name, or the snake_case of the Go field
+// name when it has none). Full writes, hydration, the rollback snapshot and
+// the incremental patch paths all use these keys (DESIGN-TODO D13).
+//
+// Renaming a key here — a renamed or removed field, persist changed to
+// nopersist — leaves documents already stored with a key nothing reads:
+// RestorePersisted warns once per key, and UnknownStoredKeys carries the
+// stored value back on every full write, so it stays in the document. Keep
+// the old key with bson:"<old>" on the renamed field, or migrate the
+// documents offline and clean the old key up explicitly
+// (docs/framework/SCHEMA-MIGRATION.md).
+type heroDaoPersistDoc struct {
+	ID                int64                        `bson:"_id"`
+	SchemaVersion     uint32                       `bson:"_schema"`
+	Name              string                       `bson:"name"`
+	Level             int32                        `bson:"level"`
+	Exp               int64                        `bson:"exp"`
+	LoginAt           int64                        `bson:"login_at"`
+	Items             map[int64]int32              `bson:"items"`
+	Friends           []int64                      `bson:"friends"`
+	Pos               positionBSONDoc              `bson:"pos"`
+	Equips            map[int64]*equipInfoBSONDoc  `bson:"equips"`
+	Squad             []*equipInfoBSONDoc          `bson:"squad"`
+	Mount             *equipInfoBSONDoc            `bson:"mount"`
+	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
+}
+
+// heroDaoStoredKeys is the key set heroDaoPersistDoc declares, nested types
+// included; RestorePersisted reports stored keys outside it.
+var heroDaoStoredKeys = dataengine.NewStoredKeySet[heroDaoPersistDoc]("HeroDao")
 
 // NewHeroDao creates a new HeroDao instance with initialized maps/slices.
 func NewHeroDao() *HeroDao {
@@ -655,54 +693,55 @@ func (d *HeroDao) setEquipsRawMap(src map[int64]*EquipInfo) {
 // CaptureRollbackState is side-effect free and includes transient and
 // sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
-	type rollbackDoc struct {
-		Id      int64                       `bson:"_id"`
-		Name    string                      `bson:"name"`
-		Level   int32                       `bson:"level"`
-		Exp     int64                       `bson:"exp"`
-		LoginAt int64                       `bson:"login_at"`
-		Items   map[int64]int32             `bson:"items"`
-		Friends []int64                     `bson:"friends"`
-		Pos     positionBSONDoc             `bson:"pos"`
-		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
-		Squad   []*equipInfoBSONDoc         `bson:"squad"`
-		Mount   *equipInfoBSONDoc           `bson:"mount"`
-	}
-	doc := rollbackDoc{
-		Id:      d.id,
-		Name:    d.name,
-		Level:   d.level,
-		Exp:     d.exp,
-		LoginAt: d.loginAt,
-		Items:   d.heroDaoItemsRawMap(),
-		Friends: d.friends,
-		Pos:     d.pos.bsonDoc(),
-		Equips:  daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
-		Squad:   daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
-		Mount:   equipInfoPtrBSONDoc(d.mount),
-	}
-	return bson.Marshal(doc)
+	return bson.Marshal(d.rollbackDoc())
 }
 
 func (d *HeroDao) RestoreRollbackState(raw []byte) error {
-	type rollbackDoc struct {
-		Id      int64                       `bson:"_id"`
-		Name    string                      `bson:"name"`
-		Level   int32                       `bson:"level"`
-		Exp     int64                       `bson:"exp"`
-		LoginAt int64                       `bson:"login_at"`
-		Items   map[int64]int32             `bson:"items"`
-		Friends []int64                     `bson:"friends"`
-		Pos     positionBSONDoc             `bson:"pos"`
-		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
-		Squad   []*equipInfoBSONDoc         `bson:"squad"`
-		Mount   *equipInfoBSONDoc           `bson:"mount"`
-	}
-	var doc rollbackDoc
+	var doc heroDaoRollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = doc.Id
+	d.setPersistDoc(doc.PersistDoc)
+	d.Init()
+	return nil
+}
+
+// heroDaoRollbackDoc is the in-memory rollback snapshot, never stored:
+// the persisted document (unknown stored keys included) plus the fields that
+// are not persisted, under their keys.
+type heroDaoRollbackDoc struct {
+	PersistDoc heroDaoPersistDoc `bson:"_persisted"`
+}
+
+func (d *HeroDao) rollbackDoc() heroDaoRollbackDoc {
+	return heroDaoRollbackDoc{
+		PersistDoc: d.persistDoc(),
+	}
+}
+
+// persistDoc is the full document of the current state; setPersistDoc puts a
+// decoded one back (identity and persisted fields; the caller runs Init).
+func (d *HeroDao) persistDoc() heroDaoPersistDoc {
+	return heroDaoPersistDoc{
+		ID:                d.id,
+		SchemaVersion:     HeroDaoSchemaVersion,
+		UnknownStoredKeys: d.storedUnknown,
+		Name:              d.name,
+		Level:             d.level,
+		Exp:               d.exp,
+		LoginAt:           d.loginAt,
+		Items:             d.heroDaoItemsRawMap(),
+		Friends:           d.friends,
+		Pos:               d.pos.bsonDoc(),
+		Equips:            daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
+		Squad:             daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
+		Mount:             equipInfoPtrBSONDoc(d.mount),
+	}
+}
+
+func (d *HeroDao) setPersistDoc(doc heroDaoPersistDoc) {
+	d.id = doc.ID
+	d.storedUnknown = doc.UnknownStoredKeys.Persisted()
 	d.name = doc.Name
 	d.level = doc.Level
 	d.exp = doc.Exp
@@ -713,26 +752,10 @@ func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 	d.setEquipsRawMap(daoMapDocs(doc.Equips, equipInfoPtrFromBSONDoc))
 	d.squad = daoSliceDocs(doc.Squad, equipInfoPtrFromBSONDoc)
 	d.mount = equipInfoPtrFromBSONDoc(doc.Mount)
-	d.Init()
-	return nil
 }
 
 func (d *HeroDao) marshalCommitState() ([]byte, error) {
-	doc := bson.M{
-		"_id":      d.id,
-		"_schema":  HeroDaoSchemaVersion,
-		"name":     d.name,
-		"level":    d.level,
-		"exp":      d.exp,
-		"login_at": d.loginAt,
-		"items":    d.heroDaoItemsRawMap(),
-		"friends":  d.friends,
-		"pos":      d.pos.bsonDoc(),
-		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
-		"squad":    daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
-		"mount":    equipInfoPtrBSONDoc(d.mount),
-	}
-	return bson.Marshal(doc)
+	return bson.Marshal(d.persistDoc())
 }
 
 func (d *HeroDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
@@ -780,21 +803,7 @@ func (d *HeroDao) MarshalPersist(mask uint64) []byte {
 
 func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 	_ = mask // full payload is used for inserts and safe fallback.
-	doc := bson.M{
-		"_id":      d.id,
-		"_schema":  HeroDaoSchemaVersion,
-		"name":     d.name,
-		"level":    d.level,
-		"exp":      d.exp,
-		"login_at": d.loginAt,
-		"items":    d.heroDaoItemsRawMap(),
-		"friends":  d.friends,
-		"pos":      d.pos.bsonDoc(),
-		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
-		"squad":    daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
-		"mount":    equipInfoPtrBSONDoc(d.mount),
-	}
-	data, err := bson.Marshal(doc)
+	data, err := d.marshalCommitState()
 	if err != nil {
 		// The interface has no error slot and a nil payload would be
 		// persisted as silent data loss; a marshal failure here is a
@@ -1132,44 +1141,25 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 // --- Unmarshal ---
 
 func (d *HeroDao) Unmarshal(raw []byte) error {
-	type rawDoc struct {
-		Id      int64                       `bson:"_id"`
-		Name    string                      `bson:"name"`
-		Level   int32                       `bson:"level"`
-		Exp     int64                       `bson:"exp"`
-		LoginAt int64                       `bson:"login_at"`
-		Items   map[int64]int32             `bson:"items"`
-		Friends []int64                     `bson:"friends"`
-		Pos     positionBSONDoc             `bson:"pos"`
-		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
-		Squad   []*equipInfoBSONDoc         `bson:"squad"`
-		Mount   *equipInfoBSONDoc           `bson:"mount"`
-	}
-	var dd rawDoc
-	if err := bson.Unmarshal(raw, &dd); err != nil {
+	var doc heroDaoPersistDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	d.id = dd.Id
-	d.name = dd.Name
-	d.level = dd.Level
-	d.exp = dd.Exp
-	d.loginAt = dd.LoginAt
-	d.setItemsRawMap(dd.Items)
-	d.friends = dd.Friends
-	d.pos = positionFromBSONDoc(dd.Pos)
-	d.setEquipsRawMap(daoMapDocs(dd.Equips, equipInfoPtrFromBSONDoc))
-	d.squad = daoSliceDocs(dd.Squad, equipInfoPtrFromBSONDoc)
-	d.mount = equipInfoPtrFromBSONDoc(dd.Mount)
+	d.setPersistDoc(doc)
 	d.Init()
 	return nil
 }
 
 // RestorePersisted is the single production hydration path used by the
 // Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
+// A stored key heroDaoPersistDoc does not declare is reported (once per key per
+// process) and the document still loads: no field reads the value, and it is
+// kept and written back with the document until cleaned up explicitly.
 func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion != HeroDaoSchemaVersion {
 		return fmt.Errorf("%w: dao HeroDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, HeroDaoSchemaVersion)
 	}
+	heroDaoStoredKeys.WarnUnknown(raw)
 	if err := d.Unmarshal(raw); err != nil {
 		return err
 	}

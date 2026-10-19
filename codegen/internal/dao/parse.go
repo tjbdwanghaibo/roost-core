@@ -69,9 +69,25 @@ type FieldDef struct {
 	MapVal    string    // for map types: value type
 	SliceElem string    // for slice types: element type
 	IsPtr     bool      // whether the value type is pointer (map val or slice elem)
-	// BSONTag 是字段上写的 bson:"..." 名（逗号前那段，没写为空）。它不参与持久键——持久键是 toSnake(Name)，
-	// 见 DESIGN-TODO D13——只用来在两者不同时告警（storedKeyWarnings）。
-	BSONTag string
+	// Key 是字段在文档里的键：持久字段的持久键、同步字段的 WireName、回滚快照里的键，三者是同一个。DAO 定义里
+	// 写了 bson:"x" 时是 x，否则是 Go 字段名的 snake_case（DESIGN-TODO D13）。生成的持久文档结构体把它写成显式
+	// bson 标签，模板里所有用到键的地方都取这个值，不再另行推导。
+	Key string
+	// KeyDeclared 表示 Key 来自 bson 标签；BSONOptions 是标签逗号后的选项（只允许 omitempty），BSONSkip 是
+	// bson:"-"。后两者由 validateFieldKeys 检查，生成期报错而不是悄悄忽略。
+	KeyDeclared bool
+	BSONOptions []string
+	BSONSkip    bool
+}
+
+// OmitEmpty 报告字段的 bson 标签带 omitempty：生成的文档结构体照样带上，整文档写入时零值不写出。
+func (f FieldDef) OmitEmpty() bool {
+	for _, option := range f.BSONOptions {
+		if option == "omitempty" {
+			return true
+		}
+	}
+	return false
 }
 
 type FieldKind int
@@ -424,8 +440,8 @@ func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 			Name:    name,
 			TypeStr: typeStr,
 			Tag:     tag,
-			BSONTag: declaredBSONName(field.Tag),
 		}
+		applyBSONTag(&fd, field.Tag)
 
 		if err := classifyField(&fd, field.Type); err != nil {
 			return nil, fmt.Errorf("field %s: %w", name, err)
@@ -704,42 +720,62 @@ func parseSchemaParam(value string) (uint32, error) {
 	return uint32(parsed), nil
 }
 
-// declaredBSONName 读字段 tag 里 bson:"name,opts" 的 name；没有 tag 或没写 bson 返回空。
-func declaredBSONName(tag *ast.BasicLit) string {
+// applyBSONTag 读字段 tag 里的 bson:"name,opts"，定下字段的文档键（DESIGN-TODO D13）：写了名字用它，否则是 Go 字段名的
+// snake_case。选项与 "-" 只记录下来，由 validateFieldKeys 在生成 Mongo DAO / 嵌套类型时检查。
+func applyBSONTag(fd *FieldDef, tag *ast.BasicLit) {
+	fd.Key = toSnake(fd.Name)
 	if tag == nil {
-		return ""
+		return
 	}
 	raw, err := strconv.Unquote(tag.Value)
 	if err != nil {
-		return ""
+		return
 	}
-	name, _, _ := strings.Cut(reflect.StructTag(raw).Get("bson"), ",")
-	return name
+	value, ok := reflect.StructTag(raw).Lookup("bson")
+	if !ok {
+		return
+	}
+	if value == "-" {
+		fd.BSONSkip = true
+		return
+	}
+	name, options, hasOptions := strings.Cut(value, ",")
+	if name != "" {
+		fd.Key, fd.KeyDeclared = name, true
+	}
+	if hasOptions {
+		fd.BSONOptions = strings.Split(options, ",")
+	}
 }
 
-// storedKeyWarnings 列出 bson 名与持久键不同的持久字段（Mongo DAO 与嵌套类型；Redis DAO 不用这套键）。持久键是
-// Go 字段名的 snake_case，bson 标签不参与：照直觉“改 Go 名、留 bson 名保住库里的键”会让老文档的值读成零值，
-// 之后的写入以新键继续（整文档写入时旧键被删）。这里只提示，不改生成物；规则本身待维护者决定（DESIGN-TODO D13）。
-func storedKeyWarnings(defs *Definitions) []string {
-	var warnings []string
-	check := func(owner string, fields []FieldDef) {
-		for _, field := range fields {
-			if field.BSONTag == "" || field.BSONTag == "-" || !field.Tag.Persist {
-				continue
-			}
-			if stored := toSnake(field.Name); field.BSONTag != stored {
-				warnings = append(warnings, fmt.Sprintf("WARN: %s.%s: bson:%q is ignored; the stored key is %q (snake_case of the Go field name). "+
-					"Renaming a persisted Go field renames its stored key: documents written before keep the old key and load as the zero value. "+
-					"Keep the Go name, or migrate the documents (docs/framework/SCHEMA-MIGRATION.md); the rule is DESIGN-TODO D13",
-					owner, field.Name, field.BSONTag, stored))
+// storedKeyPattern 是显式持久名允许的形状：能直接当 Mongo 字段路径的一段（不含 . 和 $），字母开头。以 _ 开头的键
+// 留给框架元数据（_id、_schema、_version、_last_tx、_deleted、_deleted_at 等），加载期的未知键检查也据此跳过它们。
+var storedKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+
+// validateFieldKeys 在生成期强制显式持久名的规则，违反即报错：bson:"-" 与 omitempty 以外的选项没有含义（不能悄悄
+// 忽略）；显式名必须合法、不能占用框架元数据的 _ 前缀；同一类型里所有字段的键不能重复——持久字段、只同步字段和只
+// 在事务里的字段共用一个回滚快照与同步文档，所以一起检查。
+func validateFieldKeys(owner string, fields []FieldDef) error {
+	owners := make(map[string]string, len(fields))
+	for _, field := range fields {
+		if field.BSONSkip {
+			return fmt.Errorf("%s.%s: bson:\"-\" has no meaning on a DAO field; keep it out of storage with dao:\"nopersist,sync\" (or nopersist,nosync), or drop it from generation with dao:\"-\"", owner, field.Name)
+		}
+		for _, option := range field.BSONOptions {
+			if option != "omitempty" {
+				return fmt.Errorf("%s.%s: bson tag option %q is not supported on a DAO field (the tag only names the stored key; omitempty is the one option kept)", owner, field.Name, option)
 			}
 		}
+		if strings.HasPrefix(field.Key, "_") {
+			return fmt.Errorf("%s.%s: stored key %q is reserved: keys starting with _ belong to framework metadata (_id, _schema, _version, _last_tx, _deleted, ...)", owner, field.Name, field.Key)
+		}
+		if field.KeyDeclared && !storedKeyPattern.MatchString(field.Key) {
+			return fmt.Errorf("%s.%s: bson:%q is not a valid stored key (start with a letter; letters, digits and _ only, no . or $)", owner, field.Name, field.Key)
+		}
+		if other, exists := owners[field.Key]; exists {
+			return fmt.Errorf("%s: fields %s and %s both store as %q; give one of them another bson:\"...\" name", owner, other, field.Name, field.Key)
+		}
+		owners[field.Key] = field.Name
 	}
-	for _, dao := range defs.Daos {
-		check(dao.Name, dao.Fields)
-	}
-	for _, nested := range defs.Nested {
-		check(nested.Name, nested.Fields)
-	}
-	return warnings
+	return nil
 }

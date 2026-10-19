@@ -21,6 +21,9 @@ type GemInfo struct {
 	dirtyOwner daoDirtyOwner
 	id         int32
 	level      int32
+	// storedUnknown holds the keys of this value's stored sub-document that the
+	// type does not declare, written back with it (DESIGN-TODO D13).
+	storedUnknown dataengine.UnknownStoredKeys
 }
 
 // bindDirty / unbindDirty are how a parent takes and releases this value.
@@ -57,22 +60,25 @@ func (s *GemInfo) unbindDirty(owner daoDirtyOwner) {
 // costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a GemInfo encoded on its own.
 type gemInfoBSONDoc struct {
-	ID    int32 `bson:"id"`
-	Level int32 `bson:"level"`
+	ID                int32                        `bson:"id"`
+	Level             int32                        `bson:"level"`
+	UnknownStoredKeys dataengine.UnknownStoredKeys `bson:",inline"`
 }
 
 // bsonDoc is the value receiver on purpose: containers hold GemInfo values
 // as well as pointers, and a method expression GemInfo.bsonDoc maps over both.
 func (s GemInfo) bsonDoc() gemInfoBSONDoc {
 	return gemInfoBSONDoc{
-		ID:    s.id,
-		Level: s.level,
+		UnknownStoredKeys: s.storedUnknown,
+		ID:                s.id,
+		Level:             s.level,
 	}
 }
 
 // wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *GemInfo) loadBSONDoc(doc gemInfoBSONDoc) {
+	s.storedUnknown = doc.UnknownStoredKeys.Clone()
 	s.id = doc.ID
 	s.level = doc.Level
 }
