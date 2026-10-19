@@ -14,6 +14,16 @@ fresh deployment restart cannot allocate: demo player id allocator: retired coun
 
 审查建议（已按此修复）：在 BindRegistry、任何写入前校验新计数键不能等于退役键，冲突时报告配置错误；保留拒绝旧兼容的既定决定。已有冲突部署先停写并迁移完整前缀与计数器，不能直接删除当前计数器。修复应同时更新模板、示例说明和重启/多副本回归。
 
+## v1.28.0 发版时发现的两处问题（2026-10-19 登记）
+
+### 1. 生成工程用例在 `go mod tidy` 之后才指向本检出：最低 core 未发布时失败（待维护者决定）
+
+`codegen/internal/roost` 的 `TestGenerateWritesTheTableTemplateItReports`（`678adcd2` 引入）与 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`16ea9142` 引入，经 `scripts/test-demo-generated.sh` 运行）先在生成工程里跑 `roost generate`（其中 `go mod tidy`），之后才（或从不）调用 `useLocalRoostCore` 把 roost-core 替换为本检出。生成工程的 go.mod 要求 `minimumVersions.Core`；最低 core 升到尚未发布的 v1.28.0 后两条都失败：`generate: tidy generated dependencies: go mod tidy: exit status 1`（`reading github.com/tjbdwanghaibo/roost-core/go.mod at revision v1.28.0: unknown revision v1.28.0`），`scripts/pretag.sh v1.28.0` 因此报 `go test ./... failed`。属于测试接线缺陷，不是生成器或框架行为问题：在 `generate` 之前调用 `useLocalRoostCore` 后两条都通过（本地实测，未提交）。tag 发布后它们会因为能下载到 v1.28.0 而重新变绿，但下一次提高最低版本时会再出现。
+
+### 2. `TestRealDataEngineRemotePublicationAndWALRecovery` 偶发失败（尚未确认）
+
+故障矩阵 `mongo-wal-recovery` 格（`wiring/dataengine`，`-tags=integration`）在 v1.28.0 发布准备提交上第一次全矩阵运行时失败，原文 `remote_integration_test.go:294: pending=[{TransactionID:...98 State:2 ...}] err=<nil>`（第二次 WAL 重放后仍有待处理的 Remote 提交）；同一提交随后单格重跑 13 次失败 2 次，症状不同：`remote_integration_test.go:72: real snapshot Redis Eval: context canceled`（测试包装把 finalizer 停止时取消的重发 Eval 记成错误）。main 基线 `322a7c40` 交替重跑 14 次失败 1 次（同为 `context canceled`），`v1.27.0` 重跑 6 次 0 次；第二次全矩阵 21/21。`context canceled` 一种在基线上同样出现，判断与本版发版提交无关；“重放后仍有待处理提交”一种只出现一次，是测试时序还是重放收尾的缺陷**尚未确认**，继续定位入口是该用例第二次 `StopFinalizer` 与新 Manager 重放之间的重发协程。
+
 ## 新用户试用第三轮（2026-10-17 登记）：三项已修复 / 实施（配置段剩余部分按维护者决定 B 由 doctor 只读检查），demo 公会名两点已决定
 
 基线 `e85addd9`（origin/main）。用 main 构建的 CLI 从空目录按 beginner 流程（`roost project next` 逐步）建工程、打开 `self_sync`、在共享隔离环境起真实进程并用 TCP 客户端联调时确认。修复与回归见 CHANGELOG `[Unreleased]`“生成器 / game-demo：新用户试用第三轮与 demo 两处缺陷”。
