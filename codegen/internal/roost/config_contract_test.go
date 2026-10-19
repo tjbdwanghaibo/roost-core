@@ -1091,3 +1091,136 @@ func TestEtcdAdvertiseAddrDiffersPerServiceAndIsChecked(t *testing.T) {
 		t.Errorf("doctor config-across-services = %s %q; want a FAIL naming etcd.advertise_addr", item.Status, item.Detail)
 	}
 }
+
+// 按服务区分的开发端口来自 roost.yaml 里每个服务一经分配就不变的端口块号（services.<name>.port_block，维护者
+// 2026-10-19 提议）：ops 9100+N、etcd.advertise_addr 9000+N。之后 add 一个名字排在中间的服务，已有服务的块号与
+// deploy/dev/run.sh 里的端口不变，新服务拿“当前最大块号 + 1”。修前端口按服务名排序现算：新服务排到最前，拿走
+// game 的 9100，run.sh 里 game / gate 的端口整体后移，与它们的配置文件不再一致。
+func TestPortBlocksAreStableAcrossAddService(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "service", Name: "field", Mods: []string{"configdata", "etcd"}, Warnings: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	for service, want := range map[string][2]string{
+		"game":  {"127.0.0.1:9100", "127.0.0.1:9000"},
+		"gate":  {"127.0.0.1:9101", "127.0.0.1:9001"},
+		"field": {"127.0.0.1:9102", "127.0.0.1:9002"},
+	} {
+		leaves := configLeaves(t, service, readProjectFile(t, root, "configs/service/config."+service+".yaml"))
+		if leaves["ops.addr"] != want[0] || leaves["etcd.advertise_addr"] != want[1] {
+			t.Errorf("%s: ops.addr %q, etcd.advertise_addr %q; want %s / %s", service, leaves["ops.addr"], leaves["etcd.advertise_addr"], want[0], want[1])
+		}
+		if port := opsPortOf(t, root, service); fmt.Sprintf("127.0.0.1:%d", port) != want[0] {
+			t.Errorf("deploy/dev/run.sh: %s on ops port %d; want %s (the port in its config)", service, port, want[0])
+		}
+	}
+	manifest := readProjectFile(t, root, ManifestName)
+	for _, want := range []string{"port_block: 0", "port_block: 1", "port_block: 2"} {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("roost.yaml does not record %q:\n%s", want, manifest)
+		}
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, io.Discard, io.Discard); err != nil {
+		t.Errorf("after add service: config check --all = %v", err)
+	}
+}
+
+// roost.yaml 的端口块号是生成器管的一等字段：缺了（手改 roost.yaml 加服务）普通命令报错并给出改法，project sync 分配
+// “当前最大块号 + 1”并写回；块号重复或超出 0-99 校验失败；配置里的端口与块号派生值不一致只 WARN（配置归应用）。
+// 不从旧配置推断（项目未上线，维护者 2026-10-19 决定不做旧工程兼容）。
+func TestPortBlockIsARequiredManagedManifestField(t *testing.T) {
+	t.Parallel()
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata", "etcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, ManifestName)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 手改 roost.yaml 加一个服务（没有块号）。
+	handAdded := strings.Replace(string(raw), "services:\n", "services:\n    alpha:\n        mods:\n            - configdata\n", 1)
+	if handAdded == string(raw) {
+		t.Fatal("roost.yaml has no services: block; update this test")
+	}
+	if err := os.WriteFile(manifestPath, []byte(handAdded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadManifest(root); err == nil || !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "roost project sync") || !strings.Contains(err.Error(), "services.alpha.port_block: 2") {
+		t.Fatalf("roost.yaml without alpha's port_block: LoadManifest = %v; want an error naming alpha, roost project sync and the next free block 2", err)
+	}
+	if _, err := SyncProject(root); err != nil {
+		t.Fatalf("project sync: %v", err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatalf("after sync: %v", err)
+	}
+	for service, want := range map[string]int{"game": 0, "gate": 1, "alpha": 2} {
+		if got := m.Services[service].PortBlock; got == nil || *got != want {
+			t.Errorf("after sync: services.%s.port_block = %v, want %d (existing blocks unchanged, the new service takes max+1)", service, got, want)
+		}
+	}
+	if got := opsPortOf(t, root, "alpha"); got != 9102 {
+		t.Errorf("deploy/dev/run.sh: alpha on ops port %d, want 9102", got)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		block int
+		want  string
+	}{{"duplicate", 0, "also services.game"}, {"out of range", 100, "outside 0-99"}, {"negative", -1, "outside 0-99"}} {
+		bad := m.withPortBlocks()
+		services := map[string]ServiceSpec{}
+		for name, spec := range bad.Services {
+			services[name] = spec
+		}
+		gate := services["gate"]
+		block := tc.block
+		gate.PortBlock = &block
+		services["gate"] = gate
+		bad.Services = services
+		if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s port_block: Validate = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+
+	// 四段按服务端口互不重叠：块号 0-99 时 ops / advertise / 第二个 game 的两个端口各占一段。
+	seen := map[int]string{}
+	for block := 0; block <= maxPortBlock; block++ {
+		p := portsFor(block)
+		for _, port := range []int{p.Ops, p.Advertise, p.SecondOps, p.SecondAdvertise} {
+			if owner, taken := seen[port]; taken {
+				t.Fatalf("port %d of block %d collides with %s", port, block, owner)
+			}
+			seen[port] = fmt.Sprintf("block %d", block)
+		}
+	}
+
+	// 配置里手改了 ops 端口：与块号不一致只提示，不影响退出码。
+	gatePath := filepath.Join(root, "configs", "service", "config.gate.yaml")
+	gateRaw, err := os.ReadFile(gatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gatePath, []byte(strings.Replace(string(gateRaw), "addr: 127.0.0.1:9101", "addr: 127.0.0.1:9150", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--all", "--keys-only"}, &out, io.Discard); err != nil {
+		t.Fatalf("hand-edited ops port: config check = %v; a mismatch with the block is a warning, not a failure", err)
+	}
+	if !strings.Contains(out.String(), "cross-service warnings") || !strings.Contains(out.String(), "port_block 1") {
+		t.Errorf("hand-edited ops port: output lacks the port block warning:\n%s", out.String())
+	}
+	if item := checkConfigAcrossServicesItem(root, m); item.Status != StatusWarn || !strings.Contains(item.Detail, "9150") {
+		t.Errorf("doctor config-across-services = %s %q; want a WARN naming 9150", item.Status, item.Detail)
+	}
+}

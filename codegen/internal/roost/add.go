@@ -87,7 +87,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		// The spec's Mods slice may share its array with the manifest's;
 		// copy before appending so the "before" view stays what it was.
-		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), toSnake(name)))
 		m.Services[service] = spec
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
@@ -128,7 +128,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if m.Access == nil {
 			m.Access = make(map[string]AccessSpec)
 		}
-		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 		m.Access[accessName] = AccessSpec{Service: service}
 		m.Features = uniqueSorted(append(m.Features, "protocol", "nest"))
 		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "nest"))

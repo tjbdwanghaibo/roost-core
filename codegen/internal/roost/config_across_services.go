@@ -130,15 +130,43 @@ func loadConfigSet(root string, m Manifest, set configFileSet) []serviceConfigDo
 }
 
 // checkConfigAcrossServices 返回一组配置里跨服务的不一致（每条一句，点名服务、键、取值与改法）与参与比较的服务数。
-func checkConfigAcrossServices(root string, m Manifest, set configFileSet) (problems []string, compared int) {
+// warnings 是开发配置里写的按服务端口与 roost.yaml 端口块号派生的值不一致（配置归应用、可以手改，所以只提示）。
+func checkConfigAcrossServices(root string, m Manifest, set configFileSet) (problems, warnings []string, compared int) {
 	docs := loadConfigSet(root, m, set)
 	all := allFrameworkConfigSchema()
 	problems = append(problems, sharedValueProblems(docs, all)...)
 	if set.ports {
 		problems = append(problems, listenAddrProblems(docs, all)...)
 		problems = append(problems, uniqueValueProblems(docs, all)...)
+		warnings = portBlockWarnings(m, docs)
 	}
-	return problems, len(docs)
+	return problems, warnings, len(docs)
+}
+
+// portBlockWarnings 对照开发配置里写了的 ops.addr / etcd.advertise_addr 端口与端口块号派生的值（port_blocks.go）。
+// 不一致不一定是错（应用可以有意换端口），但 deploy/dev/run.sh 按块号探测 ops 端口，second-game.sh 按块号改写，
+// 所以提示改回或知情保留。
+func portBlockWarnings(m Manifest, docs []serviceConfigDocument) []string {
+	var warnings []string
+	for _, doc := range docs {
+		ports := portsOf(m, doc.service)
+		for _, check := range []struct {
+			key  string
+			want int
+		}{{"ops.addr", ports.Ops}, {"etcd.advertise_addr", ports.Advertise}} {
+			raw, written := doc.source.Get(check.key)
+			if !written {
+				continue
+			}
+			_, port, err := net.SplitHostPort(strings.TrimSpace(fmt.Sprint(raw)))
+			if err != nil || port == fmt.Sprint(check.want) {
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf("%s: %s port %s is not %d, the port services.%s.port_block %d gives it (deploy/dev/run.sh and second-game.sh follow the block)",
+				doc.rel, check.key, port, check.want, doc.service, ports.Block))
+		}
+	}
+	return warnings
 }
 
 type sharedValue struct {
@@ -257,19 +285,25 @@ func listenHostsOverlap(a, b string) bool { return a == "" || b == "" || a == b 
 // checkConfigAcrossServicesItem 是 doctor 的 config-across-services 项：开发配置集查共享资源名与端口，生产示例只查共享资源名。
 func checkConfigAcrossServicesItem(root string, m Manifest) CheckItem {
 	item := CheckItem{Name: "config-across-services", Status: StatusOK}
-	var problems []string
+	var problems, warnings []string
 	var summary []string
 	for _, set := range []configFileSet{devConfigSet(m), prodExampleConfigSet(m)} {
-		found, compared := checkConfigAcrossServices(root, m, set)
+		found, warned, compared := checkConfigAcrossServices(root, m, set)
 		for _, problem := range found {
 			problems = append(problems, set.label+": "+problem)
 		}
+		warnings = append(warnings, warned...)
 		summary = append(summary, fmt.Sprintf("%s: %d service(s)", set.label, compared))
 	}
-	if len(problems) > 0 {
-		item.Status, item.Detail = StatusFail, strings.Join(problems, "\n")
+	switch {
+	case len(problems) > 0:
+		item.Status, item.Detail = StatusFail, strings.Join(append(problems, warnings...), "\n")
+		return item
+	case len(warnings) > 0:
+		item.Status, item.Detail = StatusWarn, strings.Join(warnings, "\n")
 		return item
 	}
-	item.Detail = "shared resource names agree; development listeners and per-service addresses do not collide (" + strings.Join(summary, "; ") + ")"
+	item.Detail = "shared resource names agree; development listeners and per-service addresses do not collide (" + strings.Join(summary, "; ") +
+		"); port blocks: " + strings.Join(sortedPortBlocks(m), ", ")
 	return item
 }

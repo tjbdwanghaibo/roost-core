@@ -203,6 +203,7 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 | `access.player.transports` | 否 | 显式启用的客户端传输；当前支持 tcp，用 add transport 创建 |
 | `access.player.self_sync` | 否 | 默认 false。true 时每个在线玩家经 Entity Sync 收到自己的 Player 状态（视图 `self`）：bootstrap 改用 `NewModWithEntitySync` 并装 `wiring/selfsync`，TCP Mod 加 `WithSelfSync`，缺失时创建一次 `protocol/def/self_sync.go`。需要 tcp 传输与 entity feature；Player 标记缺省按 `sync=true`；没写 `subjectPacker=` 时生成 `game/entities/player/player_sync_packer_gen.go`（视图 `self` 包含 DAO 全部 sync 字段，标了 sync 的字段默认全部对玩家本人可见；写了 `subjectPacker=` 时用业务的 packer、删掉生成的那份），`project sync` / `generate` / `doctor` 检查并给出改法，DAO 没有 sync 字段时 doctor 警告。见 [PLAYER-ACCESS §7](../../docs/framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync) |
 | `services.<name>.rpcs` / `uses_rpcs` | 否 | 本工程跨进程服务的拥有者 / 调用方；用 `roost add rpc` 创建，见 §6 |
+| `services.<name>.port_block` | 是（生成器写） | 端口块号 0～99、各服务不同，一经分配不再改变；开发配置的按服务端口由它派生（ops `9100+N`、`etcd.advertise_addr` `9000+N`），见 §5“端口块”。手改加服务时不写，`roost project sync` 分配 |
 | `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
 | `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |
 | `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
@@ -291,16 +292,26 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `remote_entity.mongo.database` | `planet_remote` | `remote_entity` |
 | `etcd.service_prefix` | `/planet/services/` | etcd 包的缺省 |
 
-**按服务区分的端口**（开发配置集的服务在同一台机器上一起运行，`deploy/dev/run.sh`）：服务按“业务服务在前、托管框架服务在后，各自按名字排序”编号（`opsPort`，序号从 0 起），开发配置里两个地址按同一个序号分配，生产示例每个服务一个容器、各服务相同。新建工程与之后 `add mod` 追加的段同一规则（`localizeDevConfig`）；`deploy/dev/second-game.sh` 派生的第二个 game 在第一个的基础上各加 10。
-
-| 键 | 开发配置（序号 i） | 生产示例 / k8s Secret 示例 |
-| --- | --- | --- |
-| `ops.addr` | `127.0.0.1:9100+i` | `0.0.0.0:9100` |
-| `etcd.advertise_addr`（写进服务注册、别的进程据此连接本服务；维护者 2026-10-19 决定各服务不同） | `127.0.0.1:9000+i`（game-demo：game 9000、activity 9002、match 9006） | `CHANGE_ME:9000`（填这个容器自己的可达地址） |
-
-之后 `add service` 让排序靠后的服务序号变化时，已有配置归应用、不改写，新服务可能拿到别的服务已用的端口；`roost config check --all` / doctor 的 `config-across-services` 会报出。
-
 规则写在各 Wiring Mod 配置声明的 `example` 里（`{project}` 工程名、`{PROJECT}` 大写、`{project_db}` 库名：系统库 `admin` / `local` / `config` 加 `_data`、截到 52 字节），新建与之后 `roost add mod` / `add saga` / `add access` 追加的段同一规则（`codegen/internal/roost/catalog.go` 的 `projectNameVars`）。只影响生成器写出的配置，Mod 的运行期缺省值不变；同一工程的所有服务按同一工程名得到同一组值。已有工程的配置归业务、不改写：旧工程仍是 `roost` / `game` / `ROOST_*`，而此后追加的段会写新名字，与已有段不一致时手工统一（升级说明见 CHANGELOG）。
+
+**按服务区分的端口：端口块**（维护者 2026-10-19 决定）。开发配置集的服务在同一台机器上一起运行（`deploy/dev/run.sh`），每个服务要有自己的 ops 端口与 `etcd.advertise_addr`。每个服务在 `roost.yaml` 里有一个端口块号 `services.<name>.port_block`（0～99），由生成器分配并写入，**一经分配不再改变**：
+
+- 新建工程：按“业务服务在前、托管框架服务在后，各自按名字排序”依次分配 0、1、2……（game-demo：game 0，account 1，activity 2 … session 9）；
+- 之后新增的服务（`add service`、命令或模板带进来的托管服务）取“当前最大块号 + 1”，几个同时新增时按上面的顺序；已有服务的块号与端口不受影响；
+- 手改 `roost.yaml` 加服务时不写块号：其他命令报错并给出下一个空闲块号，`roost project sync` 自动分配并写回；
+- 删除服务不回收块号；只有删掉的恰好是最大块号时，下一个新服务会拿到同一个号（删服务时一并删掉它的配置文件）。
+- 块号重复或超出 0～99 时加载失败。
+
+所有按服务区分的端口只从块号 N 派生（`codegen/internal/roost/port_blocks.go` 的 `portsFor`，规则只此一处），四段互不重叠：
+
+| 端口 | 开发配置 | 生产示例 / k8s Secret 示例 |
+| --- | --- | --- |
+| `ops.addr` | `127.0.0.1:9100+N`（9100–9199） | `0.0.0.0:9100` |
+| `etcd.advertise_addr`（写进服务注册、别的进程据此连接本服务；各服务必须不同） | `127.0.0.1:9000+N`（9000–9099；game-demo：game 9000、activity 9002、match 9006） | `CHANGE_ME:9000`（填这个容器自己的可达地址） |
+| `deploy/dev/second-game.sh` 第二个 game 的 ops | `9200+N`（9200–9299） | — |
+| 第二个 game 的 `etcd.advertise_addr` | `8900+N`（8900–8999） | — |
+
+第二个 game 改用独立的两段端口：改用块号之前它用“第一个 + 10”，工程有 11 个以上服务时会撞上别的服务。玩家 TCP（7000，第二个 game 7001）与 web（8080）各只有一个服务持有，不按服务派生。新建工程、之后 `add mod` 追加的段、doctor `config-sections` 的补段提示都经 `localizeDevConfig` 写入本服务的端口。配置归应用、可以手改：`roost config check --all` 与 doctor `config-across-services` 在开发配置的 `ops.addr` / `etcd.advertise_addr` 端口与块号派生值不一致时给 WARN（不影响退出码；`run.sh` 与 `second-game.sh` 按块号走），端口冲突与 advertise 重复才是失败。
 
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Wiring 内部的连接、重试、health 或 shutdown 逻辑。
 

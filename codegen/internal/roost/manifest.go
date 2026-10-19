@@ -137,6 +137,9 @@ type ServiceSpec struct {
 	// UsesRpcs lists project rpcs (owned by another service) this business
 	// service calls; each assembles the generated ClientMod here.
 	UsesRpcs []string `yaml:"uses_rpcs,omitempty"`
+	// PortBlock 是本服务的端口块号（port_blocks.go）：开发配置里的 ops 端口 9100+N、etcd.advertise_addr 9000+N 等都由它
+	// 派生。由生成器分配并写进 roost.yaml，一经分配不再改变；nil 只出现在内存里刚加进来、还没写回的服务上。
+	PortBlock *int `yaml:"port_block,omitempty"`
 }
 
 // AccessSpec declares an application-owned request boundary. Access layers
@@ -220,6 +223,9 @@ func LoadManifest(root string) (Manifest, error) {
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err
 	}
+	if err := manifest.requirePortBlocks(); err != nil {
+		return Manifest{}, err
+	}
 	return manifest, nil
 }
 
@@ -250,6 +256,7 @@ func decodeManifest(root string) (Manifest, error) {
 }
 
 func (m Manifest) Marshal() ([]byte, error) {
+	m = m.withPortBlocks() // 新加的服务在写 roost.yaml 时拿到块号，之后不再改变
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -296,6 +303,9 @@ func (m Manifest) Validate() error {
 		}
 	}
 	if err := m.validateFrameworkServices(); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	if err := m.validatePortBlocks(); err != nil {
 		joined = errors.Join(joined, err)
 	}
 	for name, access := range m.Access {

@@ -74,6 +74,8 @@ type crossServiceResult struct {
 	Reason   string   `json:"reason,omitempty"`
 	Services int      `json:"services,omitempty"`
 	Errors   []string `json:"errors,omitempty"`
+	// Warnings 不影响退出码：开发配置里的按服务端口与 roost.yaml 端口块号派生的值不一致。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func runConfigCheck(args []string, stdout, stderr io.Writer) error {
@@ -142,8 +144,8 @@ func runConfigCheck(args []string, stdout, stderr io.Writer) error {
 		report.Files = append(report.Files, checkOneConfigFile(root, manifest, t.path, t.service, *production, process))
 	}
 	if *all {
-		problems, compared := checkConfigAcrossServices(root, manifest, devConfigSet(manifest))
-		report.CrossService = crossServiceResult{Checked: true, Services: compared, Errors: problems}
+		problems, warnings, compared := checkConfigAcrossServices(root, manifest, devConfigSet(manifest))
+		report.CrossService = crossServiceResult{Checked: true, Services: compared, Errors: problems, Warnings: warnings}
 	} else {
 		report.CrossService = crossServiceResult{Reason: "only with --all"}
 	}
@@ -259,6 +261,10 @@ func (r configCheckReport) writeText(out io.Writer, all bool) {
 	}
 	if !all {
 		return
+	}
+	if len(r.CrossService.Warnings) > 0 {
+		fmt.Fprintln(out, "cross-service warnings (exit code unaffected):")
+		writeItems(out, r.CrossService.Warnings)
 	}
 	if len(r.CrossService.Errors) == 0 {
 		fmt.Fprintf(out, "cross-service consistency ok: %d service(s) (shared resource names; development listen ports)\n", r.CrossService.Services)

@@ -8,35 +8,13 @@ import (
 
 // opsPort gives every service its own ops listener on a developer machine, so
 // the processes a project declares can run side by side without editing
-// configs: business services in name order from 9100, then the hosted
-// framework services. Production configs keep 9100 everywhere — there each
-// process has its own container, and the Dockerfile / manifests expose 9100.
-func opsPort(m Manifest, service string) int {
-	port := 9100
-	for _, name := range sortedServiceNames(m) {
-		if m.isFrameworkService(name) {
-			continue
-		}
-		if name == service {
-			return port
-		}
-		port++
-	}
-	for _, name := range sortedServiceNames(m) {
-		if !m.isFrameworkService(name) {
-			continue
-		}
-		if name == service {
-			return port
-		}
-		port++
-	}
-	return port
-}
+// configs: 9100 + the service's port block (port_blocks.go). Production
+// configs keep 9100 everywhere — there each process has its own container,
+// and the Dockerfile / manifests expose 9100.
+func opsPort(m Manifest, service string) int { return portsOf(m, service).Ops }
 
-// advertisePort 是开发配置里 etcd.advertise_addr 的端口：9000 加 opsPort 的服务序号（ops 9100 的服务是 9000，
-// 9101 的是 9001……），两套端口按同一个序号分配，同一台机器上各服务互不相同。
-func advertisePort(m Manifest, service string) int { return opsPort(m, service) - 100 }
+// advertisePort 是开发配置里 etcd.advertise_addr 的端口：9000 + 端口块号（port_blocks.go）。
+func advertisePort(m Manifest, service string) int { return portsOf(m, service).Advertise }
 
 // devRunOrder is the order deploy/dev/run.sh starts processes: the hosted
 // framework services first (the business service looks their capabilities up
@@ -342,8 +320,8 @@ case "${1:-}" in
   logs) tail -f "$LOG_FILE" ;;
   *) echo "usage: sh deploy/dev/second-game.sh start|stop|restart|logs" >&2; exit 2 ;;
 esac
-`, gameService, secondGameSID, opsPort(m, gameService)+10, secondGameClientPort, opsPort(m, gameService), firstGameClientPort,
-		int64(serviceShutdownPlan(m, gameService).grace/time.Second), advertisePort(m, gameService), advertisePort(m, gameService)+10)
+`, gameService, secondGameSID, portsOf(m, gameService).SecondOps, secondGameClientPort, opsPort(m, gameService), firstGameClientPort,
+		int64(serviceShutdownPlan(m, gameService).grace/time.Second), advertisePort(m, gameService), portsOf(m, gameService).SecondAdvertise)
 }
 
 const (

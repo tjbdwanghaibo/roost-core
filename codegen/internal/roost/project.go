@@ -197,7 +197,8 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	if err != nil {
 		return SyncResult{}, err
 	}
-	manifest, err := LoadManifest(absRoot)
+	// project sync 是给手改 roost.yaml 加进来的服务分配端口块号的地方（其余命令遇到缺块号的 roost.yaml 报错并指向这里）。
+	manifest, assignedBlocks, err := loadManifestAssigningPortBlocks(absRoot)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -212,6 +213,18 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	inputs, err := snapshotProjectInputs(stage, manifest)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("snapshot project inputs: %w", err)
+	}
+	// 新分配的块号写进暂存树的 roost.yaml（在快照之后：快照描述的是真实工程），随这次提交一起写回。
+	var recorded []string
+	if len(assignedBlocks) > 0 {
+		raw, marshalErr := manifest.Marshal()
+		if marshalErr != nil {
+			return SyncResult{}, marshalErr
+		}
+		if err := writeAtomic(filepath.Join(stage, ManifestName), raw, 0o644); err != nil {
+			return SyncResult{}, err
+		}
+		recorded = append(recorded, ManifestName)
 	}
 	// Bring an unedited generated shutdown: block in the application-owned
 	// configs to the current Mods' plan in the staging tree,
@@ -241,7 +254,7 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	}
 	// The refreshed configs are application-owned: commit exactly those, each
 	// guarded by its bytes in the real project like every other change.
-	configChanges, err := planExplicitStagedFiles(absRoot, stage, refreshed...)
+	configChanges, err := planExplicitStagedFiles(absRoot, stage, append(refreshed, recorded...)...)
 	if err != nil {
 		return SyncResult{}, err
 	}

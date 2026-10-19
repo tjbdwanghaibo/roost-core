@@ -64,7 +64,7 @@ func addWebRoute(root string, m Manifest, o AddOptions) ([]string, error) {
 	if err != nil {
 		return nil, restoreFiles(root, backups, err)
 	}
-	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 	spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "web"))
 	m.Services[service] = spec
 	m.Features = uniqueSorted(append(m.Features, "webroute"))

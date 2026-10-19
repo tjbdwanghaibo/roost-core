@@ -343,6 +343,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
 | timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
+| services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
 ## 3. project

@@ -106,7 +106,7 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 	if captureErr != nil {
 		return created, restoreFiles(root, backups, captureErr)
 	}
-	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: spec.Mods, Uses: spec.Uses, Rpcs: append([]string(nil), spec.Rpcs...), UsesRpcs: spec.UsesRpcs})
+	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: spec.Mods, Uses: spec.Uses, Rpcs: append([]string(nil), spec.Rpcs...), UsesRpcs: spec.UsesRpcs})
 	spec.Rpcs = uniqueSorted(append(append([]string(nil), spec.Rpcs...), snake))
 	m.Services[service] = spec
 	m.Features = uniqueSorted(append(m.Features, "rpc"))

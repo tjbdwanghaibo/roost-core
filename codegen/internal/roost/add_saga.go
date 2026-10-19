@@ -633,7 +633,7 @@ func addSaga(root string, m Manifest, options AddOptions) ([]string, error) {
 	if err != nil {
 		return paths, restoreFiles(root, backups, err)
 	}
-	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+	previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, PortBlock: spec.PortBlock, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
 	spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "saga"))
 	m.Services[service] = spec
 	m.Features = uniqueSorted(append(m.Features, "saga"))
