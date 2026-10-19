@@ -290,6 +290,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 2. 用生成入口发起的 saga，发起方查不到结果
 
+**状态：已修（2026-10-19）**。取舍：不改 `EmitStart` 签名、不引入 saga ID 管理，用已有的唯一键 `(Type, BusinessKey)`——新增公开方法 `saga.Engine.GetByBusinessKey(ctx, sagaType, businessKey)`（委托 Store 已有的同名方法，还没启动时 `ErrNotFound`），生成的 `definition.go` 带 `Lookup(ctx, engine, businessKey)`，`EmitStart` 注释、`roost help saga`、add saga 的 next 提示写明业务键取能交还给客户端的值（例如请求号）。未采用：让 `EmitStart` 接受 / 返回确定的 saga ID（要改生成签名，业务键已能唯一定位）；终态通知仍没有默认实现（需要时由最后一步 / 补偿步骤自己发 effect，SAGA.md 写明）。已生成工程的 `definition.go` 是业务文件、不改写，可直接调 `engine.GetByBusinessKey(ctx, <name>.Type, key)`。下面是登记原文。
+
 **现象**：生成的 `<name>.EmitStart(businessKey, state, deadline)` 不能指定也不返回 saga ID；`saga.Engine` 对外只有 `Get(ctx, id)` 与 `List(query)`（`Query` 没有 BusinessKey），按业务键查找只在存储层（`MongoStore.GetByBusinessKey`，`Store` 接口内部用）。实测赠送 saga 发起后客户端立即拿到 `code=0`（只表示已启动），无法得知最终是成功还是被补偿。game-demo 绕开生成入口，在 controller 生成 sagaID、handler 手写 `saga.StartRequest{ID: sagaID, BusinessKey: sagaID}` 并返回给客户端，再用 `gift_status` 端点查 `engine.Get`。
 
 **建议修法**：生成的 `EmitStart` 接受或返回确定的 saga ID（例如由类型与 businessKey 推出），并生成 `Status(ctx, registry, businessKey)` 查询辅助；或 `Engine` 提供 `GetByBusinessKey`。终态通知（完成 / 补偿完毕时给发起方一个 effect 或推送）可作为可选生成项。

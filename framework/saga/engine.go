@@ -300,6 +300,13 @@ func startIntentDigest(request StartRequest) (string, error) {
 // Get 读取一条 saga 记录。
 func (e *Engine) Get(ctx context.Context, id string) (Record, error) { return e.store.Get(ctx, id) }
 
+// GetByBusinessKey 按 (类型, 业务键) 读取记录：同一对只能有一份 saga（StartSaga 的唯一性），所以发起方用自己给的
+// 业务键就能查到结果，不需要知道 saga ID（经 EmitStart 的事务性 outbox 启动时 ID 由启动消费者分配）。还没启动
+// （启动意图仍在 outbox / 流里）时返回 ErrNotFound，调用方按“尚未开始”处理而不是失败。
+func (e *Engine) GetByBusinessKey(ctx context.Context, sagaType, businessKey string) (Record, error) {
+	return e.store.GetByBusinessKey(ctx, strings.TrimSpace(sagaType), strings.TrimSpace(businessKey))
+}
+
 // List 按查询列出记录，Limit 缺省 100、上限 1000。
 func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
 	if query.Limit <= 0 {

@@ -49,7 +49,7 @@ roost add saga gift -service game -steps debit,credit,audit -native debit,credit
 roost add effect player.level_up -consumer game
 ```
 
-- `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`（不再生成 `Subscribe<Step>` 辅助：那是 `Steps` 之前的第二套写法）。
+- `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`、发起方按业务键查结果的 `Lookup(ctx, engine, businessKey)`（`Engine.GetByBusinessKey`，`ErrNotFound` 表示还没开始）（不再生成 `Subscribe<Step>` 辅助：那是 `Steps` 之前的第二套写法）。
 - `saga/<name>/steps.go`：`State` 与 `EncodeState` / `DecodeState`；每步正向与补偿的步骤体（原生步骤解出实体 ID 后调生成的 Sender，Mongo 步骤留 TODO 与“事务外副作用按 `IdempotencyKey` 幂等”的说明）；`RegisterSteps(steps, deps)` 按 `-steps` 顺序、按主题常量登记（`-native` 的用 `Native`，其余 `Mongo`；`WithAdmit` 空着并注释多进程分片要补）；`StartSteps(ctx, registry, deps)` = `NewSteps(registry, "<service>-<name>")` + `RegisterSteps` + `Start`。服务 Init 里一行 `steps, err := gift.StartSteps(context.Background(), registry, gift.StepDeps{})`，Shutdown 里 `steps.Drain(ctx)`（超时 `Stop()`）。
 - 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`，锁目标与 `add handler` 同一套解析（`-entity` / `-component`）。`-native` 必须是 `-steps` 的子集，不能重复；服务要有 nest Mod。
 - `roost add effect`：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`：在 Nest handler 里调用，effect 与实体修改同一条 WAL 记录）与 `internal/service/<consumer>/<topic>_consumer.go`（`kitdataengine.SubscribeEffects` 骨架，载荷解不开返回 `PoisonEffect`）。消费服务要有 dataengine Mod；同一 effect 的第二个消费服务只建自己的消费者。

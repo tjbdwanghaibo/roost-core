@@ -261,8 +261,21 @@ func Register(engine *saga.Engine) error {
 
 // EmitStart is the production entry point from a Nest handler: the Saga start
 // intent and current Entity mutations are committed in the same Nest WAL record.
+// A saga is identified by (Type, businessKey) — one saga per key — and its id is
+// assigned when the coordinator picks the intent up, so make businessKey
+// something the initiator can hand back to the client (a request id, say): the
+// client later asks with it and Lookup finds the outcome.
 func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 	return saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
+}
+
+// Lookup finds the saga EmitStart / Start started for businessKey on the
+// process hosting the coordinator (app.Lookup[*saga.Engine](registry, mods.ModSaga)).
+// saga.ErrNotFound means it has not started yet: the intent is still on its way
+// through the outbox, so treat it as pending, not as a failure. A terminal
+// record.Status (Completed / Compensated / Failed) is the outcome.
+func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error) {
+	return engine.GetByBusinessKey(ctx, Type, businessKey)
 }
 
 // Start is for durable consumers, administration and recovery paths which are
@@ -650,6 +663,7 @@ func printSagaNext(stdout io.Writer, name string, native bool) {
 	fmt.Fprintf(stdout, "  Init:     steps, err := %s.StartSteps(context.Background(), registry, %s.StepDeps{})   // import <module>/saga/%s\n", snake, snake, snake)
 	fmt.Fprintf(stdout, "  Shutdown: if err := steps.Drain(ctx); err != nil { steps.Stop() }\n")
 	fmt.Fprintf(stdout, "next: start a saga from a Nest handler: state, _ := %s.EncodeState(%s.State{...}); %s.EmitStart(businessKey, state, deadline)\n", snake, snake, snake)
+	fmt.Fprintf(stdout, "      the outcome: %s.Lookup(ctx, engine, businessKey) on the coordinator's process (saga.ErrNotFound = not started yet)\n", snake)
 	fmt.Fprintf(stdout, "capacity: %s; more load needs more processes sharded by sid (see roost help saga)\n", sagaCapacitySummary)
 	fmt.Fprintln(stdout, "guide: "+sagaGuideURL)
 }

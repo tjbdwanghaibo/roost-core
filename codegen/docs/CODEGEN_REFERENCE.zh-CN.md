@@ -162,7 +162,7 @@ roost add rpc guild -service game
 
 | 文件 | 内容 |
 | --- | --- |
-| `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
+| `saga/<name>/definition.go` | `Type` / `Version`、步骤主题常量 `Topic<Step>` / `Topic<Step>Compensation`、`Definition()` / `Definitions()`、`Register(engine)`、`EmitStart`、`Start`、`Lookup(ctx, engine, businessKey)`（发起方按自己给 `EmitStart` 的业务键查结果，`saga.ErrNotFound` = 还没开始；业务键取能交还给客户端的值，例如请求号）（不再生成 `Subscribe<Step>` 辅助：步骤消费者只有 `steps.go` 一种写法） |
 | `saga/<name>/steps.go` | `StepsGroup = "<service>-<name>"`（durable 前缀，上线后不要改名）、`StepDeps`、`State` + `EncodeState` / `DecodeState`、每步正向与补偿的步骤体、`RegisterSteps(steps, deps)`（按 `-steps` 顺序与主题常量登记：`-native` 的 `Steps.Native`，其余 `Steps.Mongo`；`WithAdmit` 留空并注释多进程分片要补）、`StartSteps(ctx, registry, deps)`；注释写明单进程容量 |
 | `game/handler/<name>_<step>.go`、`<name>_<step>_compensation.go` | 每个 `-native` 步骤两个 Nest handler：`func handler<Name><Step>(target <entity>.I<Component>Entity, step saga.NativeStep) error`，事务里 `step.Complete`，业务拒绝也提交 |
 

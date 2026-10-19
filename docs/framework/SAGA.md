@@ -76,6 +76,12 @@ WAL record，再由 Wiring 装配的 durable consumer 幂等创建 Saga。`EmitS
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
 
+**发起方查结果**：经 `EmitStart` 启动时 saga ID 由启动消费者分配（`StartRequest.ID` 留空），发起方手里只有业务键。
+`(Type, BusinessKey)` 唯一，`Engine.GetByBusinessKey(ctx, sagaType, businessKey)` 按它读记录；还没启动（意图仍在 outbox / 效果流里）时返回
+`ErrNotFound`，按“尚未开始”处理。生成的 `saga/<name>/definition.go` 带 `Lookup(ctx, engine, businessKey)`。所以业务键应取发起方能交还给客户端
+的值（例如请求号）。查询要在装了 saga Mod 的进程（`app.Lookup[*saga.Engine](registry, mods.ModSaga)`）；终态通知（完成 / 补偿完毕时主动告诉发起方）
+没有默认实现，需要时由最后一步或补偿步骤自己发 effect / 推送。
+
 Native Entity step 使用 Data Engine inbox。consumer 在同步调用步骤体前分配 `Reservation`；业务侧的正式形状是
 `saga.NativeStep`（D12 方向 A，`native_step.go`）：步骤运行时（`wiring/saga` 的 `Steps.Native`，或底层
 `inbox.StepHandler(body)`）从当前调用 context 取出本次投递的执行权构造它，步骤体把它作为**显式业务参数**传进 Nest

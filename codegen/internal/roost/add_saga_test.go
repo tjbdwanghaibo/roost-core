@@ -110,6 +110,11 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 	if strings.Contains(definition, "func Subscribe") || strings.Contains(definition, "SubscribeMongoStep") {
 		t.Errorf("definition.go still generates the Subscribe* helpers, a second way next to steps.go:\n%s", definition)
 	}
+	// 发起方按自己给 EmitStart 的业务键查结果（EmitStart 不带 saga ID；新用户第七轮：修前发起方查不到结果）。
+	if !strings.Contains(definition, "func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error)") ||
+		!strings.Contains(definition, "engine.GetByBusinessKey(ctx, Type, businessKey)") {
+		t.Errorf("definition.go has no Lookup by business key for the initiator:\n%s", definition)
+	}
 
 	steps := readProjectFile(t, root, "saga/gift/steps.go")
 	register := regexp.MustCompile(`steps\.(Native|Mongo)\("(\w+)", (Topic\w+),`).FindAllStringSubmatch(steps, -1)
