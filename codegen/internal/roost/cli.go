@@ -275,7 +275,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -309,6 +309,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
 		"effect": {"root", "consumer"},
 		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
+		"attribute": {"root"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
@@ -339,6 +340,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "effect" {
 		printEffectNext(stdout, args[1])
+	}
+	if args[0] == "attribute" {
+		fmt.Fprintln(stdout, "next: edit the fields and _<Field> formulas in game/gameplay/attribute/"+toSnake(args[1])+".go, then roost generate")
 	}
 	if args[0] == "skill" {
 		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then go test ./game/skills/ (TestSkillCatalogCompiles compiles every definition); call skills.CompileAll in the service Init so a broken definition stops startup")

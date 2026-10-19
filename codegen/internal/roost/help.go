@@ -122,7 +122,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--native、--consumer、--group、--id；saga 用 --steps 按执行顺序列步骤、--native 选出业务是 Nest 事务的步骤（见 roost help saga）；effect 用 --consumer 选消费服务（见 roost help effect）；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -308,11 +308,19 @@ type Monster struct {
 	},
 	{
 		Name: "attribute", Aliases: []string{"attr", "attributes"},
-		Summary:       "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/attribute [-output file] [-force]`,
-		Configuration: `profile 使用 //roost:attribute index=<start> max=<count>；字段可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
+		Summary: "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
+		Usage: `roost add attribute <Profile> [--root dir]
+roost generate
+# 单独运行生成器（roost generate 读的就是这个目录）：
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute@latest -dir ./game/gameplay/attribute [-output file] [-force]`,
+		Configuration: `roost add attribute 开启 attribute feature（project sync 写出 game/gameplay/attribute/doc.go 与受控的 runtime.go，生成代码引用的 AttrID、AttributeProfile 等在那里）、写带 dirtyMask 的 profile 骨架并立即生成。手改 roost.yaml 的 features 开启时要先 roost project sync，否则 roost generate 报错指出缺 runtime.go。profile 使用 //roost:attribute index=<start> max=<count>（写在 type 上一行），必须带未导出的 dirtyMask uint64 字段（生成的 setter 写它）；导出字段都是属性且必须是整数，可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
 		Example: `//roost:attribute index=1 max=64
-type PlayerProfile struct { HP int64; Attack int64; Power int64 }
+type PlayerProfile struct {
+    HP        int64
+    Attack    int64
+    Power     int64
+    dirtyMask uint64
+}
 
 func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
     return Attack*2 + HP/10

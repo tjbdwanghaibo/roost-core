@@ -296,6 +296,8 @@ ROOST_REVIEW_REDIS=127.0.0.1:6379 go test -mod=mod -race -count=1 \
 
 ### 3. 属性生成器（attribute）上手的四处断点
 
+**状态：已修（2026-10-19）**。新增 `roost add attribute <Profile>`：属性生成器是框架生成器，profile 的标记与 `dirtyMask` 是框架要求的形状，按“生成器只生成框架内容”原则可以提供骨架（字段与公式是业务的，骨架只建一次、之后归项目）；它开启 feature（project sync 写 `runtime.go`）、写骨架并立即生成，生成包可编译。`roost help attribute` 目录改为 `./game/gameplay/attribute`、示例带 `dirtyMask uint64`（回归照抄示例跑生成器）；feature 开着但没有 `runtime.go` 时 `roost generate` 报错指向 `roost project sync`。下面是登记原文。
+
 - 没有 `roost add attribute`（`unsupported artifact kind "attribute"`），`render.go` 的注释却写“`roost add attribute` produce code …”；开启只能手改 roost.yaml 的 `features` 再 `roost project sync`。
 - `roost help attribute` 的命令是 `-dir ./game/attribute`，`roost generate` 实际读 `game/gameplay/attribute`（`generate.go:124`）；放在 help 写的目录里 generate 不报错也不生成（feature 打开后才报 `no such file or directory`）。
 - help 的示例 struct 没有 `dirtyMask uint64`，照抄被拒：``PlayerProfile must declare an unexported `dirtyMask uint64` field``。

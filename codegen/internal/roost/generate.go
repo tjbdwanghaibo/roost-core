@@ -122,6 +122,11 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return nest.Run(forceArg([]string{"-dir", under(root, "game")}, force), w)
 		}},
 		{Feature: "attribute", Name: "attribute", Prefixes: []string{"game/gameplay/attribute/"}, Run: func(root string, w io.Writer) error {
+			// 只改了 roost.yaml 的 features、没跑 project sync 时没有 runtime.go：生成的代码会引用未定义的 AttrID 等类型，
+			// 编译时才失败。这里先指出缺的那一步。
+			if _, err := os.Stat(under(root, attributeDir+"/runtime.go")); os.IsNotExist(err) {
+				return errAttributeRuntimeMissing
+			}
 			return attribute.Run(forceArg([]string{"-dir", under(root, "game/gameplay/attribute")}, force), w)
 		}},
 		// tablegen keeps its historical unconditional -force: its outputs use

@@ -663,6 +663,13 @@ JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与
 
 ## 10. attribute
 
+```bash
+roost add attribute Combat     # 开启 feature（project sync 写 doc.go 与 runtime.go）、写 profile 骨架并立即生成
+roost generate                 # 改字段 / 公式之后
+```
+
+`roost add attribute <Profile>` 写 `game/gameplay/attribute/<profile>.go`（业务文件，只建一次）：第一个 profile 带示例字段与 `_Power` 公式，包里已有 profile 时只留 `dirtyMask` 与 TODO，`index=` 取已有 profile 范围之后（生成的 `Attr<Field>` 常量按字段名命名，同包不同 profile 的字段不能同名）。同名 profile 再 add 拒绝。手改 `roost.yaml` 的 `features` 开启时先 `roost project sync`；没有 `runtime.go` 时 `roost generate` 报错指出这一步。
+
 ```go
 //roost:attribute index=1 max=64
 type Combat struct {
@@ -681,7 +688,8 @@ func (p *Combat) _Power(Attack int64, HP int64) int64 {
 ```
 
 ```bash
-go run .../cmd/attribute@latest -dir ./game/attribute
+# 单独运行生成器时，目录与 roost generate 读的一致：
+go run .../cmd/attribute@latest -dir ./game/gameplay/attribute
 ```
 
 生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone 以及包级访问器
