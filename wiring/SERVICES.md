@@ -129,7 +129,7 @@ go run ./codegen/cmd/servicerpc -dir ./service/mail -check
 
 | 服务 | `run(ctx)` 做什么 | 为什么 |
 | --- | --- | --- |
-| `match` | 15s 扫过期 ticket | 被替换的实现写了 `ExpiresAt`、转发了它,**全代码库没有一处读它** |
+| `match` | 15s 扫过期 ticket,并移除结束超过 `match.retention` 的票、比赛与排队请求记录 | 被替换的实现写了 `ExpiresAt`、转发了它,**全代码库没有一处读它**;队列状态整体读写,已结束记录不清理时每次操作随历史变慢(维护者 2026-10-19 方案 A) |
 | `session` | 30s 扫过期 run | 同上:截止时间要有人读才算存在 |
 | `platform` | 30s 重试发货失败的订单 | 订单有 `Attempts`/`NextAttemptAtUnix`,但除非有人调 `AttemptDelivery` 否则永不推进——对这个包来说就是"玩家付了钱没拿到货" |
 | `chat` | 5min 按保留期裁剪 | 被替换的实现把时间戳存成毫秒 int64,连 TTL 都不可能;`Prune` 存在但没人调是同一个结果 |

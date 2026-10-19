@@ -29,15 +29,17 @@ import (
 type queueState struct {
 	// Waiting is the ticket ids in queue order, oldest first.
 	Waiting []string `json:"waiting"`
-	// Tickets holds every ticket this queue knows, live and resolved.
+	// Tickets holds the live tickets and the resolved ones still inside
+	// Config.Retention; see pruneResolvedLocked.
 	Tickets map[string]Ticket `json:"tickets"`
-	// Matches holds committed matches.
+	// Matches holds committed matches still inside Config.Retention.
 	Matches map[string]Match `json:"matches"`
 	// SubjectTickets maps a subject key to its live ticket id. This is what
 	// makes "one live ticket per subject" a lookup rather than a scan, and
 	// what stops the same player being committed into two matches.
 	SubjectTickets map[string]string `json:"subject_tickets"`
-	// Requests maps an enqueue idempotency key to the ticket it produced.
+	// Requests maps an enqueue idempotency key to the ticket it produced. An
+	// entry lives exactly as long as its ticket.
 	Requests map[string]string `json:"requests"`
 }
 
@@ -97,6 +99,15 @@ type Config struct {
 	// queue entry that leaks when its client disconnects, which is what
 	// happened when the deadline was written but never read.
 	TicketTTL time.Duration
+	// Retention 是已结束记录的保留期：已成局 / 取消 / 过期的票、已提交的比赛与排队请求记录，
+	// 从结束（ResolvedAtUnix / Match.CreatedAtUnix）起至少保留这么久，之后在下一次写入或 Sweep 时移除；
+	// 零取 DefaultRetention，不得小于 1s（时间按 Unix 秒记）。
+	//
+	// 为什么必须有：整个队列状态是一个版本化的值，Redis 存储每次 Enqueue / Commit / Sweep 都整体读写它，
+	// 只增不删时状态随历史无界增长，每次操作越来越慢（维护者 2026-10-19 选方案 A：固定时长保留）。
+	// 保留期内的读者照旧：读票、读比赛、同一 requestID 的 Enqueue 重放、同一票集合的 Commit 重放都返回原结果；
+	// 超期后它们看到的是“不存在”，见 Store.Commit 与 pruneResolvedLocked。
+	Retention time.Duration
 	// Now is the clock tickets are dated on (CreatedAtUnix, ExpiresAtUnix,
 	// ResolvedAtUnix, Match.CreatedAtUnix) and expiry is judged by; nil means
 	// time.Now. The match Mod injects the business clock: matchmaking
@@ -148,6 +159,15 @@ func NewStore(state versionstore.Store[string, queueState], cfg Config) (Store, 
 	}
 	if cfg.TicketTTL < time.Second {
 		return nil, fmt.Errorf("TicketTTL must be at least 1s: deadlines use Unix seconds")
+	}
+	if cfg.Retention < 0 {
+		return nil, fmt.Errorf("match: retention must not be negative")
+	}
+	if cfg.Retention == 0 {
+		cfg.Retention = DefaultRetention
+	}
+	if cfg.Retention < time.Second {
+		return nil, fmt.Errorf("match: retention must be at least 1s: resolution times use Unix seconds")
 	}
 	for _, queue := range cfg.SweepQueues {
 		if err := queue.Validate(); err != nil {
@@ -406,7 +426,8 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 		}
 		s.expireLocked(&current, now)
 		// 票集合就是提交身份。整组已匹配到同一局时返回原结果，不能再生成第二局，
-		// 也不能把部分重叠的集合当作重放。已匹配的票与比赛不会被清理，所以重放没有时间窗口。
+		// 也不能把部分重叠的集合当作重放。比赛与它的票只保留 Config.Retention：上面的 expireLocked
+		// 已移除到期记录，超期的重放在下面的校验里因票不存在得到 ErrTicketMissing。
 		first := current.Tickets[ticketIDs[0]]
 		if first.State == TicketMatched && first.Queue == queue {
 			previous, ok := current.Matches[first.MatchID]
@@ -511,7 +532,8 @@ func (s *queueStore) Sweep(ctx context.Context, queue Queue, limit int) (int, er
 			return current, false, nil
 		}
 		resolved = s.expireLockedLimit(&current, now, limit)
-		return current, resolved > 0, nil
+		pruned := s.pruneResolvedLocked(&current, now)
+		return current, resolved > 0 || pruned > 0, nil
 	})
 	if err != nil {
 		// Counted as well as returned: the background sweep only logs this,
@@ -551,8 +573,13 @@ func (s *queueStore) QueueLength(ctx context.Context, queue Queue) (int, error) 
 // every mutation, so an expired ticket can never be committed into a match
 // even if no sweep has run — the deadline is enforced by the code that would
 // otherwise use the ticket, not only by a background job.
+//
+// 同一处也移除超过保留期的已结束记录（pruneResolvedLocked）：状态有界不依赖是否配置了
+// match.sweep_queues——任何一次写入都会顺带清掉到期的历史，Sweep 只是让无人再写的队列也回落。
 func (s *queueStore) expireLocked(state *queueState, now time.Time) int {
-	return s.expireLockedLimit(state, now, len(state.Waiting))
+	resolved := s.expireLockedLimit(state, now, len(state.Waiting))
+	s.pruneResolvedLocked(state, now)
+	return resolved
 }
 
 func (s *queueStore) expireLockedLimit(state *queueState, now time.Time, limit int) int {
@@ -577,6 +604,70 @@ func (s *queueStore) expireLockedLimit(state *queueState, now time.Time, limit i
 		resolved++
 	}
 	return resolved
+}
+
+// pruneResolvedLocked 移除结束已满 Retention 的记录，返回移除的票数与比赛数之和。
+//
+// 规则（全部由状态与 now 决定，CAS 重跑得到同一结果）：
+//   - 比赛在 CreatedAtUnix+Retention 到期时，与它消耗的票（State=matched、MatchID 指向它）一起移除。
+//     票与比赛同进同出：不会留下指向已删比赛的 matched 票，也不会留下成员票已删的比赛。
+//   - 已取消 / 已过期的票，以及找不到比赛的 matched 票，在 ResolvedAtUnix+Retention 到期时移除。
+//   - 排队请求记录随它指向的票移除。
+//   - 等待中的票（不论等了多久）与保留期内的记录不动：这里只看终态，等待中的票只由过期、成局或取消结束。
+//
+// 被移除的票 ID 不会“复活”：票 ID 由 Enqueue 新铸，Commit 只接受状态里存在且等待中的票，
+// 所以超期后用同一票集合 Commit 得到 ErrTicketMissing，不会再成一局；同一 requestID 的 Enqueue
+// 重试则不再是重放，而是一次新的排队（新票、新 ID）。
+//
+// 不受 Sweep 的 limit 约束：状态本来就整体读写，一次清完到期记录不增加 I/O，正是它让写回的值变小。
+//
+// 时间按 Unix 秒记，真实结束时刻在 [R, R+1) 内；截止点多减 1s，保证“至少保留 Retention”，代价是最多多留约 2s。
+func (s *queueStore) pruneResolvedLocked(state *queueState, now time.Time) int {
+	cutoff := now.Add(-s.cfg.Retention - time.Second).Unix()
+	removed := 0
+	for matchID, match := range state.Matches {
+		if match.CreatedAtUnix > cutoff {
+			continue
+		}
+		for _, ticketID := range match.TicketIDs {
+			if ticket, ok := state.Tickets[ticketID]; ok && ticket.State == TicketMatched && ticket.MatchID == matchID {
+				dropResolvedTicket(state, ticket)
+				removed++
+			}
+		}
+		delete(state.Matches, matchID)
+		removed++
+	}
+	for _, ticket := range state.Tickets {
+		if !ticket.State.terminal() || ticket.ResolvedAtUnix > cutoff {
+			continue
+		}
+		if ticket.State == TicketMatched {
+			if _, ok := state.Matches[ticket.MatchID]; ok {
+				// 随它的比赛一起走，不单独移除。
+				continue
+			}
+		}
+		dropResolvedTicket(state, ticket)
+		removed++
+	}
+	for requestID, ticketID := range state.Requests {
+		if _, ok := state.Tickets[ticketID]; !ok {
+			delete(state.Requests, requestID)
+		}
+	}
+	return removed
+}
+
+// dropResolvedTicket 删除一张已结束的票。终态票在结束时已离开 Waiting 与 SubjectTickets（Cancel、
+// Commit、expireLockedLimit 各自移除）；主体映射这里仍按“只删指向它自己的条目”再清一次。Waiting 不逐个扫：
+// 那是 O(等待票数) 的线性删除，按不变量本来就不含终态票，万一残留的 ID 指向已删的票，
+// expireLockedLimit 会在下一次写入时移除，Candidates / QueueLength 也跳过它。
+func dropResolvedTicket(state *queueState, ticket Ticket) {
+	delete(state.Tickets, ticket.ID)
+	if state.SubjectTickets[ticket.Subject.Key()] == ticket.ID {
+		delete(state.SubjectTickets, ticket.Subject.Key())
+	}
 }
 
 func removeWaiting(state *queueState, ticketID string) {

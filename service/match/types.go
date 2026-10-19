@@ -26,6 +26,9 @@
 //     Here every operation naming a ticket also names its subject.
 //   - ExpiresAt was written and never read: nothing enforced a timeout. Here
 //     expiry is enforced on read and by an explicit sweep.
+//   - 已结束的票、比赛与排队请求记录保留 Config.Retention 后移除（维护者 2026-10-19 方案 A）。
+//     整个队列状态是一个整体读写的值，只增不删时每次操作随历史越来越慢；
+//     代价是重放与读历史只在保留期内有效。
 //
 // This is the domain half of the match service: types, error codes, the
 // ticket state machine behind Store, the Redis store and the Grouping
@@ -106,6 +109,18 @@ const (
 	// DefaultTicketTTL is how long a ticket waits before it expires. Unlike
 	// the implementation this replaces, this is enforced.
 	DefaultTicketTTL = 5 * time.Minute
+	// DefaultRetention 是已结束的票、比赛与排队请求记录的缺省保留期（Config.Retention，配置键 match.retention）。
+	//
+	// 取 10 分钟的理由：
+	//   - 它覆盖的读者都是短窗口：匹配器的 Commit 重试（单次调用超时 3s，按秒重试）、客户端的排队重试
+	//     （同一 requestID，秒级）、玩家轮询自己的票与成局成员（game-demo 的 PollMatch）。10 分钟比重试窗口长两个数量级，
+	//     是缺省票期限 DefaultTicketTTL 的两倍：排队后掉线的玩家在票的整个等待期之后再过 5 分钟回来，仍能读到结果。
+	//   - 更长的“这一局是谁”不由匹配服务回答：开局后业务自己保存 Match ID → 房间宿主 → 结算实体的路由
+	//     （见 docs/framework/MOBA-INTEGRATION.md），匹配记录不是对局档案。
+	//   - 代价是每次读写的状态大小：实测每名成局玩家约 580 字节 JSON（票 + 请求记录 + 比赛里的成员，不含 Payload），
+	//     每秒成局 1 人的队列在 10 分钟里约多 0.35 MB，小于满队列（MaxQueueLength 张等待票）本身的状态。
+	//     吞吐更高的队列可调小 match.retention，但不要短于匹配器与客户端的重试窗口。
+	DefaultRetention = 10 * time.Minute
 )
 
 // SubjectKind says what kind of entity is queueing. It is opaque to this

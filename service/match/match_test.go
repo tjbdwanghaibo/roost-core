@@ -840,3 +840,305 @@ func TestANilReporterChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// --- 已结束记录的保留期 ---
+
+// newStoreWithState 与 newStore 相同，另外交出底层状态，让用例能核对队列状态里实际留了什么。
+func newStoreWithState(t *testing.T, options ...func(*Config)) (Store, *clock, versionstore.Store[string, queueState]) {
+	t.Helper()
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	cfg := Config{Now: c.Now}
+	for _, option := range options {
+		option(&cfg)
+	}
+	state := versionstore.NewMemoryStore[string, queueState]()
+	store, err := NewStore(state, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, c, state
+}
+
+// stateSize 是队列状态编码后的字节数与三张只增表的条目数：Redis 存储每次 Enqueue / Commit / Sweep 都整体读写这一个值。
+func stateSize(t *testing.T, state versionstore.Store[string, queueState], queue Queue) (bytes, tickets, matches, requests int) {
+	t.Helper()
+	current, found, err := state.Get(context.Background(), queue.Key())
+	if err != nil || !found {
+		t.Fatalf("state: found=%v err=%v", found, err)
+	}
+	encoded, err := versionstore.JSONCodec[queueState]{}.Encode(current.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(encoded), len(current.Value.Tickets), len(current.Value.Matches), len(current.Value.Requests)
+}
+
+// 状态有界：已结束的票（成局 / 取消 / 过期）、已完成的比赛与它们的排队请求记录在保留期过后由 Sweep 移除，
+// 整个队列状态回落到只剩进行中的记录。修前三张表只增不删，每次操作整体读写的值随历史线性增长。
+func TestResolvedRecordsArePrunedAfterRetention(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) { cfg.TicketTTL = time.Minute })
+	ctx := context.Background()
+	queue := ranked()
+
+	const players = 400
+	tickets := make([]Ticket, 0, players)
+	for id := int64(1); id <= players; id++ {
+		tickets = append(tickets, enqueue(t, store, queue, player(id, 100), fmt.Sprintf("req-%d", id)))
+	}
+	// 前 300 人两两成局，接下来 50 人取消，最后 50 人等到过期。
+	for i := 0; i < 300; i += 2 {
+		if _, err := store.Commit(ctx, queue, []string{tickets[i].ID, tickets[i+1].ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ticket := range tickets[300:350] {
+		if _, err := store.Cancel(ctx, queue, ticket.ID, ticket.Subject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.advance(61 * time.Second)
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	grown, _, _, _ := stateSize(t, state, queue)
+
+	// 最晚结束的是刚过期的 50 张票；从它们算起满保留期（加秒取整的 1s）后清理。
+	c.advance(DefaultRetention + time.Second)
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	bytes, ticketCount, matchCount, requestCount := stateSize(t, state, queue)
+	if ticketCount != 0 || matchCount != 0 || requestCount != 0 {
+		t.Fatalf("after retention the queue state still holds %d tickets, %d matches, %d requests (%d bytes, was %d); "+
+			"resolved records must be pruned so the state stays bounded", ticketCount, matchCount, requestCount, bytes, grown)
+	}
+	if bytes*20 > grown {
+		t.Fatalf("the queue state is %d bytes after pruning, was %d", bytes, grown)
+	}
+	current, _, _ := state.Get(ctx, queue.Key())
+	if len(current.Value.Waiting) != 0 || len(current.Value.SubjectTickets) != 0 {
+		t.Fatalf("pruning left %d waiting ids and %d subject mappings", len(current.Value.Waiting), len(current.Value.SubjectTickets))
+	}
+}
+
+// 超过保留期的同一票集合重放：比赛与它的票已一起移除，Commit 报 ErrTicketMissing，不创建第二局；
+// 读票、读比赛都报不存在。
+func TestCommitReplayAfterRetentionReportsTheTicketsMissing(t *testing.T) {
+	store, c := newStore(t)
+	ctx := context.Background()
+	a, b := enqueue(t, store, ranked(), player(1, 100), "a"), enqueue(t, store, ranked(), player(2, 100), "b")
+	first, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(DefaultRetention + time.Second)
+	if _, err := store.Sweep(ctx, ranked(), MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := store.Commit(ctx, ranked(), []string{b.ID, a.ID})
+	if !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("replay after retention = (%s, %v), want ErrTicketMissing (original match %s)", replay.ID, err, first.ID)
+	}
+	if _, found, err := store.Ticket(ctx, ranked(), a.ID, player(1, 100)); err != nil || found {
+		t.Fatalf("a pruned ticket reads as found=%v err=%v", found, err)
+	}
+	if _, found, err := store.Match(ctx, ranked(), first.ID); err != nil || found {
+		t.Fatalf("a pruned match reads as found=%v err=%v", found, err)
+	}
+}
+
+// 保留期内（含边界）重放返回原 Match，读票、读比赛照旧；越过边界后同一重放报 ErrTicketMissing。
+// 中间插入的 Sweep 与另一名玩家的 Enqueue 都是会触发清理的写入，用来证明清理不提前。
+func TestCommitReplayInsideRetentionReturnsTheOriginalMatch(t *testing.T) {
+	const retention = 10 * time.Minute
+	store, c := newStore(t, func(cfg *Config) { cfg.Retention = retention; cfg.TicketTTL = time.Hour })
+	ctx := context.Background()
+	a, b := enqueue(t, store, ranked(), player(1, 100), "a"), enqueue(t, store, ranked(), player(2, 100), "b")
+	first, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.advance(retention)
+	if _, err := store.Sweep(ctx, ranked(), MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, store, ranked(), player(3, 100), "c")
+	again, err := store.Commit(ctx, ranked(), []string{b.ID, a.ID})
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("replay at the retention boundary = (%s, %v), want the original %s", again.ID, err, first.ID)
+	}
+	ticket, found, err := store.Ticket(ctx, ranked(), a.ID, player(1, 100))
+	if err != nil || !found || ticket.State != TicketMatched || ticket.MatchID != first.ID {
+		t.Fatalf("ticket inside retention = (%+v, %v, %v)", ticket, found, err)
+	}
+	if _, found, err := store.Match(ctx, ranked(), first.ID); err != nil || !found {
+		t.Fatalf("match inside retention: found=%v err=%v", found, err)
+	}
+
+	c.advance(time.Second)
+	if replay, err := store.Commit(ctx, ranked(), []string{a.ID, b.ID}); !errors.Is(err, ErrTicketMissing) {
+		t.Fatalf("replay past retention = (%s, %v), want ErrTicketMissing", replay.ID, err)
+	}
+}
+
+// 清理只碰终态：等得比保留期还久的等待票、保留期内的比赛与票都不动；等待票的请求记录与“一人一张活票”映射也保留。
+func TestPruningNeverTouchesLiveOrRecentRecords(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) {
+		cfg.Retention = time.Minute
+		cfg.TicketTTL = time.Hour
+	})
+	ctx := context.Background()
+	queue := ranked()
+	waiting := enqueue(t, store, queue, player(1, 100), "waiting")
+	b, cc := enqueue(t, store, queue, player(2, 100), "b"), enqueue(t, store, queue, player(3, 100), "c")
+	old, err := store.Commit(ctx, queue, []string{b.ID, cc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := enqueue(t, store, queue, player(4, 100), "d")
+	if _, err := store.Cancel(ctx, queue, cancelled.ID, cancelled.Subject); err != nil {
+		t.Fatal(err)
+	}
+
+	c.advance(30 * time.Minute)
+	e, f := enqueue(t, store, queue, player(5, 100), "e"), enqueue(t, store, queue, player(6, 100), "f")
+	recent, err := store.Commit(ctx, queue, []string{e.ID, f.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+
+	// 等了 30 分钟（保留期 1 分钟）的等待票还在：可读、是候选、占着主体、请求记录可重放。
+	read, found, err := store.Ticket(ctx, queue, waiting.ID, player(1, 100))
+	if err != nil || !found || read.State != TicketWaiting {
+		t.Fatalf("the long-waiting ticket = (%+v, %v, %v)", read, found, err)
+	}
+	candidates, err := store.Candidates(ctx, queue, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].ID != waiting.ID {
+		t.Fatalf("candidates = %+v %v, want only %s", candidates, err, waiting.ID)
+	}
+	if _, err := store.Enqueue(ctx, queue, player(1, 100), "another"); !errors.Is(err, ErrAlreadyQueued) {
+		t.Fatalf("the waiting subject enqueued again: %v", err)
+	}
+	if replay, err := store.Enqueue(ctx, queue, player(1, 100), "waiting"); err != nil || replay.ID != waiting.ID {
+		t.Fatalf("the waiting ticket's request replay = (%s, %v)", replay.ID, err)
+	}
+	// 保留期内的比赛与票都在。
+	if _, found, _ := store.Match(ctx, queue, recent.ID); !found {
+		t.Fatal("a match inside retention was pruned")
+	}
+	if read, found, _ := store.Ticket(ctx, queue, e.ID, player(5, 100)); !found || read.MatchID != recent.ID {
+		t.Fatalf("a matched ticket inside retention = (%+v, %v)", read, found)
+	}
+	// 到期的比赛与它的票一起走，已取消的票也走。
+	if _, found, _ := store.Match(ctx, queue, old.ID); found {
+		t.Fatal("a match past retention survived the sweep")
+	}
+	for _, ticket := range []Ticket{b, cc, cancelled} {
+		if _, found, _ := store.Ticket(ctx, queue, ticket.ID, ticket.Subject); found {
+			t.Fatalf("ticket %s past retention survived the sweep", ticket.ID)
+		}
+	}
+	current, _, _ := state.Get(ctx, queue.Key())
+	for request := range current.Value.Requests {
+		if request != "waiting" && request != "e" && request != "f" {
+			t.Fatalf("request %q outlived its ticket", request)
+		}
+	}
+	// 等待票照常能成局。
+	g := enqueue(t, store, queue, player(7, 100), "g")
+	if _, err := store.Commit(ctx, queue, []string{waiting.ID, g.ID}); err != nil {
+		t.Fatalf("the long-waiting ticket cannot be committed after pruning: %v", err)
+	}
+}
+
+// 排队请求记录与票同寿：保留期内同一 requestID 重试返回原票（即使已取消），超期后是一次新的排队。
+func TestEnqueueRetryAfterRetentionQueuesAgain(t *testing.T) {
+	store, c := newStore(t, func(cfg *Config) { cfg.Retention = time.Minute })
+	ctx := context.Background()
+	first := enqueue(t, store, ranked(), player(1, 100), "req")
+	if _, err := store.Cancel(ctx, ranked(), first.ID, player(1, 100)); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Minute)
+	if replay := enqueue(t, store, ranked(), player(1, 100), "req"); replay.ID != first.ID || replay.State != TicketCancelled {
+		t.Fatalf("retry inside retention = %+v, want the cancelled ticket %s", replay, first.ID)
+	}
+	c.advance(time.Second)
+	fresh := enqueue(t, store, ranked(), player(1, 100), "req")
+	if fresh.ID == first.ID || fresh.State != TicketWaiting {
+		t.Fatalf("retry past retention = %+v, want a new waiting ticket", fresh)
+	}
+}
+
+// 清理与 Commit 共用同一次比较并设置：并发的 Commit 与 Sweep 在保留期内只指向一场比赛，
+// 超期后全部报 ErrTicketMissing、也不生成新比赛。
+func TestConcurrentCommitsAndSweepsAgreeAcrossRetention(t *testing.T) {
+	store, c, state := newStoreWithState(t, func(cfg *Config) { cfg.Retention = time.Minute })
+	ctx := context.Background()
+	queue := ranked()
+	a, b := enqueue(t, store, queue, player(1, 100), ""), enqueue(t, store, queue, player(2, 100), "")
+	ids := []string{a.ID, b.ID}
+
+	race := func() (map[string]bool, int) {
+		var wait sync.WaitGroup
+		var mu sync.Mutex
+		matches, missing := map[string]bool{}, 0
+		for i := 0; i < 12; i++ {
+			wait.Add(2)
+			go func() {
+				defer wait.Done()
+				match, err := store.Commit(ctx, queue, ids)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					matches[match.ID] = true
+				case errors.Is(err, ErrTicketMissing):
+					missing++
+				default:
+					t.Errorf("unexpected commit error %v", err)
+				}
+			}()
+			go func() {
+				defer wait.Done()
+				if _, err := store.Sweep(ctx, queue, MaxPageSize); err != nil {
+					t.Errorf("sweep: %v", err)
+				}
+			}()
+		}
+		wait.Wait()
+		return matches, missing
+	}
+
+	matches, missing := race()
+	if len(matches) != 1 || missing != 0 {
+		t.Fatalf("inside retention: %d distinct matches, %d missing; want 1 and 0", len(matches), missing)
+	}
+	c.advance(time.Minute + time.Second)
+	matches, missing = race()
+	if len(matches) != 0 || missing != 12 {
+		t.Fatalf("past retention: %d matches, %d missing; want 0 and 12", len(matches), missing)
+	}
+	if _, tickets, matchCount, _ := stateSize(t, state, queue); tickets != 0 || matchCount != 0 {
+		t.Fatalf("past retention the state holds %d tickets and %d matches", tickets, matchCount)
+	}
+}
+
+func TestRetentionConfigIsValidated(t *testing.T) {
+	state := versionstore.NewMemoryStore[string, queueState]()
+	for _, bad := range []time.Duration{-time.Second, 500 * time.Millisecond} {
+		if _, err := NewStore(state, Config{Retention: bad}); err == nil {
+			t.Errorf("retention %v accepted", bad)
+		}
+	}
+	store, err := NewStore(state, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.(*queueStore).cfg.Retention; got != DefaultRetention {
+		t.Fatalf("zero retention selected %v, want DefaultRetention %v", got, DefaultRetention)
+	}
+}

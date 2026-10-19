@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### match：已结束的票、比赛与排队请求记录只保留固定时长（维护者 2026-10-19 方案 A）
+
+- **问题**（MOBA 接入审查发现）：`service/match` 一个队列的全部状态（`queueState`）是一个版本化值，Redis 存储每次 Enqueue / Commit / Sweep 都整体读写它；其中 `Tickets`、`Matches`、`Requests` 只增不删，状态无界增长、每次操作越来越慢，同一票集合的 Commit 重放也因此“没有时间窗口”。
+- **决定**：维护者 2026-10-19 选方案 A——已结束记录只保留固定时长。
+- **改动**：新增 `match.retention`（`Config.Retention`，缺省 `DefaultRetention` = 10 分钟，不得小于 1s）。已成局 / 取消 / 过期的票、已提交的比赛与排队请求记录从结束起至少保留这么久，之后在下一次写入（Enqueue / Cancel / Commit 开头的同一处清理）或 Sweep 时、在同一次比较并设置里移除（`pruneResolvedLocked`）；比赛与它消耗的票同时移除，请求记录随票移除，等待中的票不论等了多久都不动；Sweep 的移除不受 `limit` 约束、不计入返回值。状态有界不依赖是否配置 `match.sweep_queues`。
+- **缺省 10 分钟的理由**：读者都是短窗口——匹配器的 Commit 重试（调用超时 3s）、客户端同一 requestID 的排队重试（秒级）、玩家轮询自己的票与成局成员；10 分钟是票期限缺省值（5 分钟）的两倍。开局后的长期身份由业务保存（MOBA-INTEGRATION §5.1），匹配记录不是对局档案。实测每名成局玩家约 580 字节，每秒成局 1 人的队列 10 分钟约多 0.35 MB。
+- **行为变化**：保留期内读票、读比赛、Enqueue 重放、Commit 重放都返回原结果；超期后 `Ticket` / `Match` 读到不存在，同一票集合的 `Commit` 报 `ErrTicketMissing`（被移除的票 ID 不会回到等待状态，不会成第二局；game-demo 匹配器已把它当作“这一组提交不了”跳过），同一 requestID 的 `Enqueue` 是一次新的排队。
+- **测试（先红后绿）**：`TestResolvedRecordsArePrunedAfterRetention`（修前：`after retention the queue state still holds 400 tickets, 150 matches, 400 requests (207590 bytes, was 207590)`）、`TestCommitReplayAfterRetentionReportsTheTicketsMissing`（修前重放仍返回原 Match、err 为 nil）、`TestCommitReplayInsideRetentionReturnsTheOriginalMatch`（边界内返回原 Match、越过 1s 后 `ErrTicketMissing`）、`TestPruningNeverTouchesLiveOrRecentRecords`、`TestEnqueueRetryAfterRetentionQueuesAgain`、`TestConcurrentCommitsAndSweepsAgreeAcrossRetention`（-race）、`TestRetentionConfigIsValidated`、`wiring/match` 的 `TestRetentionConfigurationReachesTheStore`；真实 Redis `TestMatchRetentionShrinksTheQueueKeyOnRedis`（`wiring/integration`，`-tags integration` + `REDIS_ADDR`）。
+- **升级**：存储格式不变（只是少了到期记录）；新键有缺省值，不改配置即可升级。生成工程的服务配置会多出带注释的 `retention: 10m`（配置快照 `codegen/internal/roost/kitconfig_gen.go` 已重新生成）。
+- 文档：`service/match` 包注释与 `Store` 注释、guide/09-services §4、MOBA-INTEGRATION §5.1 / §7、KNOWN-LIMITS（MOBA 范围小节、“匹配队列状态”行）、wiring/SERVICES.md、demo WALKTHROUGH。
+
 ### 投影 checkpoint 缺省间隔保持 20 ms；原生步骤容量数字在生成器与文档里更新（2026-10-19）
 
 - **决定**：维护者 2026-10-19 按推荐选 A——`dataengine.projection.checkpoint_interval` 缺省保持 20 ms。20 ms 下特殊记录（投影事务约 16 ms）积压时合并系数约 2；需要更高吞吐的部署可调大，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。代码与配置缺省都不变。

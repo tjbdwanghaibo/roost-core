@@ -55,6 +55,8 @@ versionstore 写结果未知仍需调用方保留不确定状态，不能假设�
 
 account 的身份验证、玩家号分配、名字校验由接入方提供，不能用默认信任身份或进程内计数器替代。一个账号一区服一角色由 slot insert-only/建角计划约束；每个 slot 与角色都带建角身份（计划 ID / `CreationID`），缺计划的 slot、缺 `CreationID` 的角色不被推断，分别以 `ErrConflict` / `ErrNotResolvable` 拒绝并交线下处理；账号 ID 只用转义渠道后的形态（`Identity.AccountID`）。SelectRole 的 accountID 属可信服务边界，外部请求必须先绑定已认证身份。
 
+**match 的已结束记录只保留固定时长**（维护者 2026-10-19 方案 A）：一个队列的全部状态（等待票、已结束的票、比赛、排队请求记录）是一个版本化值，Redis 存储每次 Enqueue / Commit / Sweep 都整体读写它。已成局 / 取消 / 过期的票、已提交的比赛与排队请求记录从结束起至少保留 `match.retention`（缺省 10 分钟，是票期限缺省值的两倍，覆盖匹配器与客户端的重试和玩家轮询结果），之后在下一次写入或 Sweep 时移除；比赛与它的票同时移除，等待中的票不论等了多久都不动。保留期内的读票、读比赛、同一 requestID 的 Enqueue 重放、同一票集合的 Commit 重放都返回原结果；超期后读到不存在，Commit 重放报 `ErrTicketMissing`（被移除的票 ID 不会回到等待状态，不会成第二局），同一 requestID 的 Enqueue 是一次新的排队。状态上限因此是“等待票（≤ `MaxQueueLength`）+ 保留期内的成局量”；单键整体读写与单队列争用仍在，调用按队列 Key 路由（[store.go](../../../service/match/store.go)、[queue_store.go](../../../service/match/queue_store.go) 的 `pruneResolvedLocked`）。开局后的长期身份（Match ID → 房间宿主 → 结算实体）由业务保存，匹配记录不是对局档案。
+
 Player 静态绑定 sid，不自动做动态玩家租约迁移。directory 名字域是全局域；activity groups_file 明确组与 game 列表；每个开窗条目都带持久计划，没有计划的条目与超过 `MaxPendingActivities` 的窗口按畸形数据拒绝（报告并保留名额 / sweep 返回 `ErrConflict`），由运维 `RemoveMalformedWindowEntry` 或线下修复，不自动回收、不轮转扫描。activity 的观察重试不自动耗尽失联投递，无法恢复的目标按人工 ExhaustDispatch 等管理流程收口。
 
 **名字规则属于业务**（维护者 2026-10-17 决定）：角色名、公会名等的长度上限、敏感词、全服唯一都是业务规则，框架层不处理，生成的工程与 game-demo 也不内置（game-demo 的 `guild.ValidateName` 只拒绝空、全空白、控制字符与非法 UTF-8）。需要全服唯一时用 `service/directory` 的两阶段占名，不要用“先查有没有、再写”的两步做法（并发下两个请求都看到“没有”）：

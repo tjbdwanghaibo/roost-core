@@ -384,6 +384,76 @@ func TestMatchRunsOnRedis(t *testing.T) {
 	}
 }
 
+// 保留期在真实 Redis 上生效：成局 / 取消的历史让队列键变大，超过 match 保留期后一次 Sweep 把键缩回只剩等待票，
+// 保留期内的重放返回原 Match，超期重放报 ErrTicketMissing。
+func TestMatchRetentionShrinksTheQueueKeyOnRedis(t *testing.T) {
+	redisClient := client(t)
+	keyPrefix := prefix(t, "match")
+	var mu sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	clockNow := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); defer mu.Unlock(); now = now.Add(d) }
+	store, err := match.NewRedisStore(redisClient, keyPrefix, match.Config{Now: clockNow, Retention: time.Minute, TicketTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	queue := match.Queue{Mode: "ranked", GroupSize: 2, Partition: "eu"}
+	keySize := func() int {
+		t.Helper()
+		raw, err := redisClient.Get(ctx, keyPrefix+":queue:"+queue.Key())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(raw)
+	}
+
+	waiting, err := store.Enqueue(ctx, queue, match.Subject{Kind: "player", ID: 1, Score: 100}, "waiting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := keySize()
+	var first match.Match
+	var firstIDs []string
+	for id := int64(2); id < 202; id += 2 {
+		a, err := store.Enqueue(ctx, queue, match.Subject{Kind: "player", ID: id, Score: 100}, fmt.Sprintf("r%d", id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := store.Enqueue(ctx, queue, match.Subject{Kind: "player", ID: id + 1, Score: 100}, fmt.Sprintf("r%d", id+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		formed, err := store.Commit(ctx, queue, []string{a.ID, b.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.ID == "" {
+			first, firstIDs = formed, []string{b.ID, a.ID}
+		}
+	}
+	grown := keySize()
+
+	advance(time.Minute)
+	if replay, err := store.Commit(ctx, queue, firstIDs); err != nil || replay.ID != first.ID {
+		t.Fatalf("replay inside retention on Redis = (%s, %v), want %s", replay.ID, err, first.ID)
+	}
+	advance(time.Second)
+	if _, err := store.Sweep(ctx, queue, match.MaxPageSize); err != nil {
+		t.Fatal(err)
+	}
+	pruned := keySize()
+	if pruned > base+base/2 || pruned*10 > grown {
+		t.Fatalf("queue key is %d bytes after pruning (only the waiting ticket: %d, with history: %d)", pruned, base, grown)
+	}
+	if _, err := store.Commit(ctx, queue, firstIDs); !errors.Is(err, match.ErrTicketMissing) {
+		t.Fatalf("replay past retention on Redis = %v, want ErrTicketMissing", err)
+	}
+	if ticket, found, err := store.Ticket(ctx, queue, waiting.ID, waiting.Subject); err != nil || !found || ticket.State != match.TicketWaiting {
+		t.Fatalf("the waiting ticket after pruning = (%+v, %v, %v)", ticket, found, err)
+	}
+}
+
 // --- rank ---
 
 func TestRankRunsOnRedis(t *testing.T) {

@@ -177,6 +177,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "match.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:match", Required: true},
 		{Name: "match.ticket_ttl", Kind: "duration", Default: "5m", Min: "1s", Starter: true, Example: "60s"},
+		{Name: "match.retention", Kind: "duration", Default: "10m", Min: "1s", Help: "已结束的票、比赛与排队请求记录的保留期；超期后读到不存在，同一票集合的 Commit 重放报 ErrTicketMissing", Starter: true, Example: "10m"},
 		{Name: "match.sweep_queues", Kind: "strings", Starter: true, Example: "[]"},
 	}},
 	"match.client": {Keys: []configschema.Key{

@@ -19,13 +19,16 @@ type Store interface {
 	// Enqueue adds a waiting ticket. It refuses a subject that already holds
 	// a live ticket (ErrAlreadyQueued), and is idempotent per requestID: a
 	// repeat returns the existing ticket rather than queueing twice.
+	//
+	// 请求记录与它的票同寿：票结束满 Config.Retention 被移除后，同一 requestID 的重试是一次新的排队。
 	Enqueue(ctx context.Context, queue Queue, subject Subject, requestID string) (Ticket, error)
 
 	// Cancel withdraws a waiting ticket. subject must own it.
 	Cancel(ctx context.Context, queue Queue, ticketID string, subject Subject) (Ticket, error)
 
 	// Ticket reads one ticket. subject must own it, so a guessable id does not
-	// expose another subject's score or payload.
+	// expose another subject's score or payload. 已结束的票保留 Config.Retention，
+	// 移除后读到 found=false。
 	Ticket(ctx context.Context, queue Queue, ticketID string, subject Subject) (Ticket, bool, error)
 
 	// Candidates returns up to limit waiting, unexpired tickets in queue
@@ -36,17 +39,25 @@ type Store interface {
 	// Commit 原子地把票集合变成一场比赛：检查与写入是同一次比较并设置，失败不留副作用。
 	// 票集合就是提交身份：完整的同一票集合已匹配到同一局时幂等返回原 Match（票序可不同），
 	// 不创建第二局；与已匹配票只部分重叠，或含已取消 / 过期 / 不存在的票时拒绝（ErrConflict /
-	// ErrTicketMissing）。已匹配的票与比赛当前不清理，重放不受时间窗口限制。并发调用可以都成功回复，
-	// 但只指向同一场比赛，不能按成功回复次数计开局数。见 TestCommitReplayReturnsOriginalMatchForSameTicketSet、
+	// ErrTicketMissing）。并发调用可以都成功回复，但只指向同一场比赛，不能按成功回复次数计开局数。
+	//
+	// 重放只在保留期内返回原结果（Config.Retention，缺省 DefaultRetention，维护者 2026-10-19 方案 A）：
+	// 比赛与它的票从成局起至少保留 Retention，之后在下一次写入或 Sweep 时一起移除；超期后同一票集合的
+	// Commit 报 ErrTicketMissing——仍不会成第二局（被移除的票 ID 不会回到等待状态），只是拿不回原 Match。
+	// 匹配器要在保留期内完成自己的重试。见 TestCommitReplayReturnsOriginalMatchForSameTicketSet、
+	// TestCommitReplayInsideRetentionReturnsTheOriginalMatch、TestCommitReplayAfterRetentionReportsTheTicketsMissing、
 	// TestConcurrentCommitsProduceExactlyOneMatch、TestFailedCommitLeavesTheQueueUntouched。
 	Commit(ctx context.Context, queue Queue, ticketIDs []string) (Match, error)
 
-	// Match reads a committed match.
+	// Match reads a committed match. 比赛从成局起保留 Config.Retention，移除后读到 found=false。
 	Match(ctx context.Context, queue Queue, matchID string) (Match, bool, error)
 
 	// Sweep resolves tickets whose deadline has passed, up to limit, and
 	// returns how many it resolved. Nothing in the implementation this
 	// replaces ever read the deadline it wrote.
+	//
+	// 同一次比较并设置里还移除结束已满 Config.Retention 的票、比赛与请求记录（不受 limit 约束，
+	// 不计入返回值），让没人再写的队列状态也回落；任何写入也会顺带做同样的移除。
 	Sweep(ctx context.Context, queue Queue, limit int) (int, error)
 
 	// QueueLength reports how many waiting tickets a queue holds.

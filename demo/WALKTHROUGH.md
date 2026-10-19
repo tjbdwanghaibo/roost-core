@@ -102,7 +102,7 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
   等级差 5 以内立刻配，窗口随最老候选的等待每秒放宽 5，上限 50）；ticket 的 Score 在 JoinQueue 时经 `PlayerLevel` 读 handler 取（Player 锁内），
   PollMatch 带 `mode` 选队列。subject kind 是 `player`。matchmaker 每 500ms 扫两个 pool，各用自己的策略。
 - 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
-- `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票，不负责成组。
+- `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票、移除超过 `match.retention` 的已结束记录，不负责成组。
 - `Grouping` 是调用方的工具，不是 match 服务的配置：match 的 Wiring Mod 不接受 `Grouping` collaborator。demo 的 matchmaker 直接调 `FirstComeGrouping{}.Group`，这是那个接口唯一的用法。
 
 ## 跨服务：game → chat 聊天

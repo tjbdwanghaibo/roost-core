@@ -3,6 +3,7 @@ package match
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	domain "github.com/tjbdwanghaibo/roost-core/service/match"
@@ -43,4 +44,31 @@ func TestGroupingIsNotAnInjectionPointOfTheStore(t *testing.T) {
 	// codegen game-demo matchmaker), just not the store's configuration.
 	var _ domain.Grouping = domain.FirstComeGrouping{}
 	var _ domain.Grouping = domain.ScoreWindowGrouping{}
+}
+
+// match.retention：缺省值与领域常量 DefaultRetention 是同一个数（标签缺省与常量不能各说各的），
+// 配置值原样交给 Store，小于 1s 在 Init 拒绝。
+func TestRetentionConfigurationReachesTheStore(t *testing.T) {
+	load := func(retention any) (*Mod, error) {
+		cfg := viper.New()
+		cfg.Set("match.key_prefix", "roost:match")
+		if retention != nil {
+			cfg.Set("match.retention", retention)
+		}
+		mod := NewMod(nil)
+		return mod, mod.Init(cfg)
+	}
+	mod, err := load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mod.retention != domain.DefaultRetention {
+		t.Fatalf("default match.retention = %v, domain.DefaultRetention = %v", mod.retention, domain.DefaultRetention)
+	}
+	if mod, err = load("30s"); err != nil || mod.retention != 30*time.Second {
+		t.Fatalf("match.retention 30s loaded as %v (err %v)", mod.retention, err)
+	}
+	if _, err := load("500ms"); err == nil {
+		t.Fatal("Init accepted a sub-second match.retention")
+	}
 }
