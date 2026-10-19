@@ -1,0 +1,187 @@
+package towerdefense
+
+// 共享金币、地格、路线与命令回执同一事务。失败局部副本丢弃，不能先扣费再异步计算路径。
+func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
+	i := s.Index(id)
+	if i < 0 || c.Seq == 0 {
+		return Receipt{}, false, ErrRule
+	}
+	p := &s.Seats[i]
+	if c.Epoch != p.Epoch {
+		return Receipt{}, false, ErrRule
+	}
+	if c.Seq <= uint64(len(p.Receipts)) {
+		r := p.Receipts[c.Seq-1]
+		if r.Command != c {
+			return Receipt{}, false, ErrRule
+		}
+		return r, false, nil
+	}
+	if c.Seq != uint64(len(p.Receipts)+1) || len(p.Receipts) >= LedgerLimit || s.Phase != "prep" || p.Ready || !p.Connected || c.Round != s.Round || now < s.LastAt || now >= s.Deadline {
+		return Receipt{}, false, ErrRule
+	}
+	switch c.Kind {
+	case "build":
+		if c.A <= 0 || c.A >= 24 || c.B != 0 || s.Towers[c.A].Level != 0 || s.Gold < s.Rules.BuildCost {
+			return Receipt{}, false, ErrRule
+		}
+		s.Towers[c.A] = Tower{id, 1, s.Rules.BuildCost}
+		path := s.Route()
+		if len(path) == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		s.Path = path
+		s.Gold -= s.Rules.BuildCost
+	case "upgrade", "sell":
+		if c.A <= 0 || c.A >= 24 {
+			return Receipt{}, false, ErrRule
+		}
+		t := &s.Towers[c.A]
+		if t.Owner != id || t.Level != c.B || t.Level == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		if c.Kind == "upgrade" {
+			if t.Level >= 3 || s.Gold < 4 {
+				return Receipt{}, false, ErrRule
+			}
+			s.Gold -= 4
+			t.Level++
+			t.Paid += 4
+		} else {
+			s.Gold += t.Paid / 2
+			*t = Tower{}
+			s.Path = s.Route()
+		}
+	case "ready":
+		if c.A != 0 || c.B != 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Ready = true
+	default:
+		return Receipt{}, false, ErrRule
+	}
+	s.LastAt = now
+	all := true
+	for _, p := range s.Seats {
+		if !p.Ready {
+			all = false
+		}
+	}
+	if all {
+		s.startWave(now)
+	}
+	r := Receipt{c, s.Gold, s.Round, s.Phase}
+	p.Receipts = append(p.Receipts, r)
+	return r, true, s.Validate()
+}
+func (s *State) Connect(id int64, ticket uint64, connected bool) error {
+	i := s.Index(id)
+	if i < 0 || ticket == 0 {
+		return ErrRule
+	}
+	p := &s.Seats[i]
+	if connected {
+		if ticket < p.Epoch {
+			return ErrRule
+		}
+		if ticket == p.Epoch {
+			if !p.Connected {
+				return ErrRule
+			}
+			return nil
+		}
+		p.Epoch = ticket
+		p.Connected = true
+	} else {
+		if ticket != p.Epoch {
+			return ErrRule
+		}
+		p.Connected = false
+	}
+	return nil
+}
+func (s *State) startWave(now int64) {
+	s.Phase = "battle"
+	s.Tick = 0
+	s.Deadline = now + s.Rules.TickMillis
+	for i := range s.Enemies {
+		s.Enemies[i] = Enemy{HP: s.Rules.EnemyHP + s.Round - 1}
+	}
+}
+
+// 一次 timer 最多计算一个逻辑步。掉线继续已有防御；恢复不按停机秒数追算成百上千步。
+func (s *State) Advance(now int64) error {
+	if s.Phase == "done" || now < s.Deadline || now >= MaxTime {
+		return ErrRule
+	}
+	s.LastAt = now
+	if s.Phase == "prep" {
+		s.startWave(now)
+	} else {
+		s.fightStep(now)
+	}
+	return s.Validate()
+}
+func (s *State) fightStep(now int64) {
+	s.Tick++
+	// 地格升序攻击，优先最接近基地的敌人，同位置按固定敌人索引。没有客户端命中／伤害输入。
+	for cell, t := range s.Towers {
+		if t.Level == 0 {
+			continue
+		}
+		target := -1
+		for i, e := range s.Enemies {
+			if e.HP > 0 && distance(cell, s.Path[e.Step]) <= 2 && (target < 0 || e.Step > s.Enemies[target].Step) {
+				target = i
+			}
+		}
+		if target >= 0 {
+			e := &s.Enemies[target]
+			e.HP = max(0, e.HP-2*t.Level)
+			if e.HP == 0 {
+				s.Killed++
+				s.Gold++
+			}
+		}
+	}
+	alive := 0
+	for i := range s.Enemies {
+		e := &s.Enemies[i]
+		if e.HP == 0 {
+			continue
+		}
+		if e.Step == len(s.Path)-1 {
+			e.HP = 0
+			s.BaseHP = max(0, s.BaseHP-2)
+			s.Leaked++
+		} else {
+			e.Step++
+			alive++
+		}
+	}
+	if s.BaseHP == 0 {
+		s.Phase = "done"
+		s.Result = "lost"
+		s.Deadline = 0
+		return
+	}
+	if alive == 0 {
+		if s.Round == s.Rules.Waves {
+			s.Phase = "done"
+			s.Result = "won"
+			s.Deadline = 0
+			return
+		}
+		s.Round++
+		s.Phase = "prep"
+		s.Tick = 0
+		s.Enemies = [3]Enemy{}
+		s.Gold += 6
+		for i := range s.Seats {
+			s.Seats[i].Ready = false
+		}
+		s.Deadline = now + s.Rules.PrepMillis
+		return
+	}
+	s.Deadline = now + s.Rules.TickMillis
+}

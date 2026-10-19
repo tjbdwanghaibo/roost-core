@@ -503,6 +503,7 @@ var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖、补触发离线 Buff；不是崩溃注入"},
+	{"TestTowerDefenseRealCrashRecovery", "scripts/test-tower-defense-generated.sh", "^TestTowerDefenseRealCrashRecovery$", "ROOST_TOWER_DEFENSE_REAL=1，四人合作塔防活动波次 strict WAL 未投影时 SIGKILL，恢复路径／塔／怪物／基地，驱动续战并在第三进程重试四人奖励"},
 	{"TestAutoChessRealCrashRecovery", "scripts/test-auto-chess-generated.sh", "^TestAutoChessRealCrashRecovery$", "ROOST_AUTO_CHESS_REAL=1，八人冻结战斗 strict WAL 未投影时 SIGKILL，驱动循环恢复和推进阶段，第三进程核对八人领奖及命令回执"},
 	{"TestIdleSimRealCrashRecovery", "scripts/test-idle-sim-generated.sh", "^TestIdleSimRealCrashRecovery$", "ROOST_IDLE_SIM_REAL=1，五条 strict WAL 未投影时 SIGKILL；两工坊队列 / 倍率 / 收益截止时间 / timer 冷加载，经驱动补算一次，第三进程重放全部命令，投入与产出 / 离线收益 / 每日奖励不重复"},
 	{"TestMergeCasualRealCrashRecovery", "scripts/test-merge-casual-generated.sh", "^TestMergeCasualRealCrashRecovery$", "ROOST_MERGE_CASUAL_REAL=1，strict WAL 未投影时 SIGKILL；新进程冷加载完整棋盘 / 资产 / 回执与持久挑战期限，完成服务器目标，第三进程重试生产、广告与领奖不重复到账"},

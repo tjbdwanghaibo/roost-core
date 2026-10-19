@@ -1,0 +1,69 @@
+// Package towerdefense 是四人合作塔防教学业务，地图、数值与战斗规则不属于 core。
+package towerdefense
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("tower defense: invalid identity, phase, operation or limit")
+
+const Seats = 4
+const LedgerLimit = 128
+const MaxTime int64 = 4000000000000
+
+type Rules struct {
+	Version                           string
+	PrepMillis, TickMillis            int64
+	Waves, EnemyHP, BaseHP, BuildCost int
+}
+
+func DemoRules() Rules { return Rules{"tower-v1", 10000, 500, 3, 6, 12, 3} }
+func (r Rules) Validate() error {
+	if r.Version == "" || len(r.Version) > 64 || r.PrepMillis < 100 || r.PrepMillis > 60000 || r.TickMillis < 100 || r.TickMillis > 5000 || r.Waves < 1 || r.Waves > 8 || r.EnemyHP < 1 || r.EnemyHP > 100 || r.BaseHP < 1 || r.BaseHP > 100 || r.BuildCost < 1 || r.BuildCost > 10 {
+		return ErrRule
+	}
+	return nil
+}
+func encode(v any) string {
+	b, e := json.Marshal(v)
+	if e != nil {
+		panic(e)
+	}
+	return string(b)
+}
+func strictJSON(s string, v any) error {
+	if len(s) == 0 || len(s) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(s))
+	d.DisallowUnknownFields()
+	if e := d.Decode(v); e != nil {
+		return e
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func (r Rules) Hash() string { b := sha256.Sum256([]byte(encode(r))); return hex.EncodeToString(b[:]) }
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	r := configdata.NewRegistry()
+	configdata.MustRegisterObject(r, configdata.ObjectDef[Rules]{Name: "tower_rules", File: "tower.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	s := configdata.NewStore(r, dir)
+	_, e := s.Load(context.Background())
+	return s, e
+}
+func CaptureRules(s *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](s, "tower_rules")
+	if !ok {
+		return r, ErrRule
+	}
+	return r, r.Validate()
+}

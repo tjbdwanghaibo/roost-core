@@ -1,0 +1,38 @@
+package tower_room
+
+import (
+	tower "example.com/tower-defense-practice/game/towerdefense"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"time"
+)
+
+const TimerPhase int32 = 1
+
+func (c *TimerComponent) registerTimerHandlers(h *entitytimer.Handlers) {
+	h.Register(TimerPhase, func(f entitytimer.Fire) time.Duration {
+		d := c.owner.Dao()
+		if d.GetWakeTimer() != f.ID {
+			return 0
+		}
+		s, e := tower.Decode(d.GetState())
+		if e != nil {
+			panic(e)
+		}
+		if s.Deadline != f.Param1 || s.Deadline != f.Deadline.UnixMilli() {
+			panic(tower.ErrRule)
+		}
+		if e = s.Advance(f.Now.UnixMilli()); e != nil {
+			panic(e)
+		}
+		d.SetState(s.Encode())
+		d.SetWakeTimer(0)
+		if s.Deadline > 0 {
+			id := c.NewTimerAt(time.UnixMilli(s.Deadline), TimerPhase, s.Deadline, 0, nil)
+			if id == 0 {
+				panic(tower.ErrRule)
+			}
+			d.SetWakeTimer(id)
+		}
+		return 0
+	})
+}

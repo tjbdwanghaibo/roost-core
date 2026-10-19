@@ -1,0 +1,393 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	playerentity "example.com/tower-defense-practice/game/entities/player"
+	matchentity "example.com/tower-defense-practice/game/entities/tower_room"
+	sender "example.com/tower-defense-practice/game/handler/syncsender"
+	tower "example.com/tower-defense-practice/game/towerdefense"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type towerGetter map[int64]entity.IThreadSafeEntity
+
+func (g towerGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("entity %d missing", id)
+}
+func (g towerGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 仅替换提交器；真实 WAL / Mongo 与 SIGKILL 在独立准入入口验证。
+type towerCommitter struct{}
+
+func (towerCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const towerNow int64 = 1800000000000
+
+type towerFixture struct {
+	engine  *nest.NestMgr
+	match   *matchentity.TowerRoom
+	players [tower.Seats]*playerentity.Player
+	ids     [tower.Seats]int64
+	clock   atomic.Int64
+	rules   tower.Rules
+}
+
+func loadTowerRules(t *testing.T, r tower.Rules) tower.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	b, _ := json.Marshal(r)
+	if e := os.WriteFile(filepath.Join(dir, "tower.json"), b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, e := tower.OpenCatalog(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e = tower.CaptureRules(s.Current())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r
+}
+func newTowerFixture(t *testing.T) *towerFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	matchentity.RegisterEntity()
+	RegisterTowerDefenseNestHandlers()
+	RegisterTickTowerRoomTimerGenNestHandlers()
+	f := &towerFixture{rules: loadTowerRules(t, tower.DemoRules())}
+	f.clock.Store(towerNow)
+	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	g := towerGetter{}
+	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+		id, e := entity.BuildEntityID(unique, kind)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		if e != nil {
+			t.Fatal(e)
+		}
+		g[id] = v
+		return v
+	}
+	for i := range f.players {
+		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+		f.ids[i] = f.players[i].ID()
+	}
+	f.match = build(2000, matchentity.EntityKindTowerRoom).(*matchentity.TowerRoom)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(towerCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if e := f.engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	if e := matchentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		_ = matchentity.TimerDriver.Stop(context.Background())
+		_ = f.engine.Shutdown(context.Background())
+		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerInit(context.Background(), f.match.ID(), f.ids, f.rules, towerNow); e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range f.ids {
+		if e := sender.NewTowerDefenseSender(f.engine).Sync_TowerPlayerInit(context.Background(), id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	return f
+}
+func (f *towerFixture) state(t *testing.T) tower.State {
+	t.Helper()
+	s, e := tower.Decode(f.match.Dao().GetState())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return s
+}
+func (f *towerFixture) view(t *testing.T, i int) tower.View {
+	t.Helper()
+	v, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), f.ids[i])
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func (f *towerFixture) command(t *testing.T, i int, kind string, a, b int) tower.Command {
+	v := f.view(t, i)
+	return tower.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
+}
+func (f *towerFixture) send(i int, c tower.Command) (tower.Receipt, error) {
+	return sender.NewTowerDefenseSender(f.engine).Sync_TowerCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+}
+func (f *towerFixture) do(t *testing.T, i int, kind string, a, b int) tower.Receipt {
+	t.Helper()
+	r, e := f.send(i, f.command(t, i, kind, a, b))
+	if e != nil {
+		t.Fatal(kind, e)
+	}
+	return r
+}
+func (f *towerFixture) refuse(t *testing.T, i int, c tower.Command) {
+	t.Helper()
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	if _, e := f.send(i, c); e == nil {
+		t.Fatal("accepted invalid command")
+	}
+	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+		t.Fatal("rejected command changed state or timer")
+	}
+}
+func waitTower(t *testing.T, ok func() bool) {
+	t.Helper()
+	until := time.Now().Add(8 * time.Second)
+	for !ok() {
+		if time.Now().After(until) {
+			t.Fatal("bounded wait expired")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func (f *towerFixture) step(t *testing.T) {
+	t.Helper()
+	v := f.view(t, 0)
+	f.clock.Store(v.Deadline)
+	waitTower(t, func() bool {
+		due, ok := matchentity.TimerDriver.DueOf(f.match)
+		return ok && due.UnixMilli() == v.Deadline
+	})
+	if n := matchentity.TimerDriver.DeliverDue(context.Background()); n != 1 {
+		t.Fatalf("deliver %d", n)
+	}
+	waitTower(t, func() bool {
+		after := f.view(t, 0)
+		return after.Phase != v.Phase || after.Round != v.Round || after.Tick != v.Tick
+	})
+}
+func TestTowerDefenseConcurrentCellReservationAndRetry(t *testing.T) {
+	f := newTowerFixture(t)
+	var wg sync.WaitGroup
+	wins := make(chan int, tower.Seats)
+	for i := range f.ids {
+		c := f.command(t, i, "build", 1, 0)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, e := f.send(i, c); e == nil {
+				wins <- i
+			}
+		}()
+	}
+	wg.Wait()
+	close(wins)
+	winner := -1
+	n := 0
+	for i := range wins {
+		winner = i
+		n++
+	}
+	if n != 1 {
+		t.Fatal("same cell had multiple owners", n)
+	}
+	s := f.state(t)
+	if s.Gold != 21 || s.Towers[1].Owner != f.ids[winner] {
+		t.Fatal("shared resource double charged")
+	}
+	r := s.Seats[winner].Receipts[0]
+	for range 3 {
+		got, e := f.send(winner, r.Command)
+		if e != nil || got != r {
+			t.Fatal("retry changed receipt", e)
+		}
+	}
+	if f.state(t).Gold != 21 {
+		t.Fatal("retry charged again")
+	}
+}
+func TestTowerDefenseBlockingRouteAndForeignSaleRollback(t *testing.T) {
+	f := newTowerFixture(t)
+	f.do(t, 0, "build", 1, 0)
+	f.refuse(t, 1, f.command(t, 1, "build", 5, 0))
+	f.refuse(t, 1, f.command(t, 1, "sell", 1, 1))
+	f.refuse(t, 0, f.command(t, 0, "build", 0, 0))
+	f.refuse(t, 0, f.command(t, 0, "upgrade", 1, 2))
+	f.do(t, 0, "upgrade", 1, 1)
+	r := f.do(t, 0, "sell", 1, 2)
+	if f.state(t).Gold != 20 || f.state(t).Towers[1].Level != 0 {
+		t.Fatal("refund wrong")
+	}
+	if _, e := f.send(0, r.Command); e != nil {
+		t.Fatal(e)
+	}
+	if f.state(t).Gold != 20 {
+		t.Fatal("refund duplicated")
+	}
+}
+func TestTowerDefenseReadyDisconnectAndOldConnection(t *testing.T) {
+	f := newTowerFixture(t)
+	s := sender.NewTowerDefenseSender(f.engine)
+	ctx := context.Background()
+	f.do(t, 0, "build", 1, 0)
+	r := f.do(t, 0, "ready", 0, 0)
+	f.refuse(t, 0, f.command(t, 0, "sell", 1, 1))
+	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[1], 1, false); e != nil {
+		t.Fatal(e)
+	}
+	f.refuse(t, 1, f.command(t, 1, "build", 6, 0))
+	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Sync_TowerConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
+		t.Fatal("old disconnect kicked new connection")
+	}
+	f.refuse(t, 0, r.Command)
+	if got, e := s.Sync_TowerReceipt(ctx, f.match.ID(), f.ids[0], 2, r.Command.Seq); e != nil || got != r {
+		t.Fatal("lost receipt", e)
+	}
+	f.clock.Store(f.view(t, 0).Deadline)
+	f.refuse(t, 2, f.command(t, 2, "ready", 0, 0))
+	f.step(t)
+	v := f.view(t, 0)
+	if v.Phase != "battle" || v.Tick != 0 {
+		t.Fatal("offline seat stalled wave")
+	}
+	f.step(t)
+	if f.view(t, 0).Tick != 1 {
+		t.Fatal("driver did not advance exactly one step")
+	}
+}
+func TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer(t *testing.T) {
+	f := newTowerFixture(t)
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	c := f.command(t, 0, "build", 1, 0)
+	refused := errors.New("after tower construction")
+	name := nest.NewHandlerName("tower_undo_build")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerTowerCommand(es[0].(ITowerRoomEntity), f.ids[0], c, f.clock.Load())
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+		t.Fatal("partial build rollback")
+	}
+	if _, e := f.send(0, c); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestTowerDefenseCooperativeVictoryAndAtomicRewards(t *testing.T) {
+	f := newTowerFixture(t)
+	for i, cell := range []int{1, 6, 11, 16} {
+		f.do(t, i, "build", cell, 0)
+	}
+	for i := range f.ids {
+		f.do(t, i, "ready", 0, 0)
+	}
+	if f.view(t, 0).Phase != "battle" {
+		t.Fatal("ready barrier failed")
+	}
+	for range 100 {
+		if f.view(t, 0).Phase == "done" {
+			break
+		}
+		f.step(t)
+	}
+	v := f.view(t, 0)
+	if v.Result != "won" || v.Killed != 9 || v.Leaked != 0 || v.BaseHP != 12 {
+		t.Fatalf("unexpected combat outcome %+v", v)
+	}
+	before := f.match.Dao().GetState()
+	refused := errors.New("after team reward")
+	name := nest.NewHandlerName("tower_undo_claim")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerTowerClaim(es[0].(ITowerPlayerEntity), es[1].(ITowerRoomEntity))
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 0 {
+		t.Fatal("partial reward rollback")
+	}
+	var wg sync.WaitGroup
+	for _, id := range f.ids {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				got, e := sender.NewTowerDefenseSender(f.engine).MultiSync_TowerClaim(context.Background(), id, f.match.ID())
+				if e != nil || got != 70 {
+					t.Error("reward", got, e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	for _, p := range f.players {
+		if p.Dao().GetGold() != 70 {
+			t.Fatal("duplicate reward")
+		}
+	}
+	waitTower(t, func() bool { _, ok := matchentity.TimerDriver.DueOf(f.match); return !ok })
+}
+func TestTowerDefenseDefeatNoRewardAndViewCopy(t *testing.T) {
+	f := newTowerFixture(t)
+	v := f.view(t, 0)
+	v.Path[0] = 24
+	if f.view(t, 0).Path[0] != 0 {
+		t.Fatal("view aliases route")
+	}
+	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerView(context.Background(), f.match.ID(), 999); e == nil {
+		t.Fatal("outsider read")
+	}
+	for range 100 {
+		if f.view(t, 0).Phase == "done" {
+			break
+		}
+		f.step(t)
+	}
+	v = f.view(t, 0)
+	if v.Result != "lost" || v.BaseHP != 0 || v.Leaked != 6 {
+		t.Fatal("base loss did not finish")
+	}
+	for _, id := range f.ids {
+		got, e := sender.NewTowerDefenseSender(f.engine).MultiSync_TowerClaim(context.Background(), id, f.match.ID())
+		if e != nil || got != 0 {
+			t.Fatal("defeat rewarded", e)
+		}
+	}
+}
