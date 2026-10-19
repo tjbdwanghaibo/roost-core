@@ -1,0 +1,325 @@
+package cardrpg
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"math"
+)
+
+type Card struct {
+	ID                         int64
+	Template                   int
+	Level, Stars, Shards, Gear int64
+}
+type DrawReceipt struct {
+	Seq                 uint64
+	Count               int
+	Version, ConfigHash string
+	Templates           []int
+	GemsAfter           int64
+}
+type Manage struct {
+	Seq            uint64
+	Kind           string
+	CardID, Target int64
+	Team           [3]int64
+}
+type Managed struct {
+	Request    Manage
+	ConfigHash string
+}
+type Admission struct {
+	Seq        uint64
+	RunID      int64
+	Stage      int
+	ConfigHash string
+	Claimed    bool
+}
+type Profile struct {
+	Schema                             int
+	DrawKey                            string // 服务器私有随机密钥；绝不进入客户端投影 / 日志。
+	Gems, Gold, Dust, Energy, EnergyAt int64
+	Cards                              []Card
+	Team                               [3]int64
+	Pity                               int
+	Draws                              []DrawReceipt
+	Operations                         []Managed
+	Runs                               []Admission
+	ActiveRun                          int64
+	Clears                             [3]int
+	Wins                               int64
+	QuestClaimed                       bool
+}
+
+func NewProfile(key string, now int64) (Profile, error) {
+	raw, err := hex.DecodeString(key)
+	if err != nil || len(raw) != 32 || !ValidTime(now) {
+		return Profile{}, ErrRule
+	}
+	p := Profile{Schema: 1, DrawKey: key, Gems: 100, Gold: 100, Dust: 20, Energy: 10, EnergyAt: now, Team: [3]int64{1, 2, 3}}
+	for i := range 3 {
+		p.Cards = append(p.Cards, Card{ID: int64(i + 1), Template: i + 1, Level: 1, Stars: 1})
+	}
+	return p, nil
+}
+func (p Profile) Encode() string { return encode(p) }
+func DecodeProfile(raw string) (Profile, error) {
+	var p Profile
+	if err := StrictJSON(raw, &p); err != nil {
+		return p, err
+	}
+	key, err := hex.DecodeString(p.DrawKey)
+	if err != nil || len(key) != 32 || p.Schema != 1 || p.EnergyAt <= 0 || p.Gems < 0 || p.Gems > ValueLimit || p.Gold < 0 || p.Gold > ValueLimit || p.Dust < 0 || p.Dust > ValueLimit || p.Energy < 0 || p.Energy > 10 || p.Pity < 0 || p.Pity > 10 || len(p.Cards) < 3 || len(p.Cards) > 6 || len(p.Draws) > LedgerLimit || len(p.Operations) > LedgerLimit || len(p.Runs) > LedgerLimit {
+		return p, ErrRule
+	}
+	for i, c := range p.Cards {
+		if c.ID != int64(c.Template) || c.Template < 1 || c.Template > 6 || c.Level < 1 || c.Level > 10 || c.Stars < 1 || c.Stars > 3 || c.Shards < 0 || c.Shards > 640 || c.Gear < 0 || c.Gear > 3 {
+			return p, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if p.Cards[j].ID == c.ID {
+				return p, ErrRule
+			}
+		}
+	}
+	if !p.validTeam(p.Team) || p.Wins < 0 || p.Wins > ValueLimit || p.QuestClaimed && p.Wins == 0 {
+		return p, ErrRule
+	}
+	validHash := func(value string) bool { raw, err := hex.DecodeString(value); return err == nil && len(raw) == 32 }
+	for i, receipt := range p.Draws {
+		if receipt.Seq != uint64(i+1) || receipt.Count != 1 && receipt.Count != 10 || len(receipt.Templates) != receipt.Count || !validHash(receipt.ConfigHash) || receipt.Version == "" || receipt.GemsAfter < 0 || receipt.GemsAfter > ValueLimit {
+			return p, ErrRule
+		}
+		for _, id := range receipt.Templates {
+			if id < 1 || id > 6 {
+				return p, ErrRule
+			}
+		}
+	}
+	for i, op := range p.Operations {
+		if op.Request.Seq != uint64(i+1) || !validHash(op.ConfigHash) {
+			return p, ErrRule
+		}
+	}
+	active := 0
+	for i, run := range p.Runs {
+		if run.Seq != uint64(i+1) || run.RunID <= 0 || run.Stage < 1 || run.Stage > 3 || !validHash(run.ConfigHash) {
+			return p, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if p.Runs[j].RunID == run.RunID {
+				return p, ErrRule
+			}
+		}
+		if !run.Claimed {
+			active++
+			if run.RunID != p.ActiveRun {
+				return p, ErrRule
+			}
+		}
+	}
+	if active > 1 || active == 0 && p.ActiveRun != 0 {
+		return p, ErrRule
+	}
+	for _, stars := range p.Clears {
+		if stars < 0 || stars > 3 {
+			return p, ErrRule
+		}
+	}
+	return p, nil
+}
+func (p *Profile) card(id int64) *Card {
+	for i := range p.Cards {
+		if p.Cards[i].ID == id {
+			return &p.Cards[i]
+		}
+	}
+	return nil
+}
+func (p Profile) validTeam(team [3]int64) bool {
+	for i, id := range team {
+		if p.card(id) == nil {
+			return false
+		}
+		for j := 0; j < i; j++ {
+			if team[j] == id {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// 体力按服务器时间补算，保留未满时的余数；满体力丢弃溢出的时间，时钟回退明确拒绝。
+func (p *Profile) Regenerate(now int64) error {
+	if now < p.EnergyAt {
+		return ErrRule
+	}
+	if p.Energy == 10 {
+		p.EnergyAt = now
+		return nil
+	}
+	gain := (now - p.EnergyAt) / 3000
+	if gain > 0 {
+		p.Energy = min(int64(10), p.Energy+gain)
+		if p.Energy == 10 {
+			p.EnergyAt = now
+		} else {
+			p.EnergyAt += gain * 3000
+		}
+	}
+	return nil
+}
+
+// HMAC 按领域、单调序号和槽位派生随机事实。测试密钥固定；正式服用 crypto/rand 初始化私有密钥。
+func (p Profile) random(domain string, seq uint64, slot int) uint64 {
+	key, _ := hex.DecodeString(p.DrawKey)
+	h := hmac.New(sha256.New, key)
+	_, _ = fmt.Fprintf(h, "%s:%d:%d", domain, seq, slot)
+	return binary.BigEndian.Uint64(h.Sum(nil)[:8])
+}
+func (p Profile) BattleSeed(seq uint64) uint64 { return p.random("battle", seq, 0) | 1 }
+
+// Draw 的接收者必须是从 DAO 解码出的事务局部副本；失败不能把半次十连写回。
+func (p *Profile) Draw(seq uint64, count int, r Rules) (DrawReceipt, error) {
+	if seq == 0 || count != 1 && count != 10 {
+		return DrawReceipt{}, ErrRule
+	}
+	if seq <= uint64(len(p.Draws)) {
+		old := p.Draws[seq-1]
+		if old.Seq == seq && old.Count == count {
+			return old, nil
+		}
+		return DrawReceipt{}, ErrRule
+	}
+	if seq != uint64(len(p.Draws))+1 || len(p.Draws) >= LedgerLimit || r.Validate() != nil || p.Gems < int64(count)*r.DrawCost {
+		return DrawReceipt{}, ErrRule
+	}
+	receipt := DrawReceipt{Seq: seq, Count: count, Version: r.Version, ConfigHash: r.Hash()}
+	for slot := range count {
+		roll := p.random("draw", seq, slot)
+		rare := roll%5 == 0 || p.Pity+1 >= r.Pity
+		template := 1 + int((roll>>8)%3)
+		if rare {
+			template += 3
+			p.Pity = 0
+		} else {
+			p.Pity++
+		}
+		receipt.Templates = append(receipt.Templates, template)
+		if owned := p.card(int64(template)); owned != nil {
+			owned.Shards++
+			p.Dust++
+		} else {
+			p.Cards = append(p.Cards, Card{ID: int64(template), Template: template, Level: 1, Stars: 1})
+		}
+	}
+	p.Gems -= int64(count) * r.DrawCost
+	receipt.GemsAfter = p.Gems
+	p.Draws = append(p.Draws, receipt)
+	if p.Dust > ValueLimit {
+		return DrawReceipt{}, ErrRule
+	}
+	return receipt, nil
+}
+
+// Manage 共用永久顺序账本；旧序号只能重放相同业务内容，配置热更不重算已经成功的扣款。
+func (p *Profile) Manage(c Manage, r Rules, now int64) error {
+	if c.Seq == 0 {
+		return ErrRule
+	}
+	if c.Seq <= uint64(len(p.Operations)) {
+		if p.Operations[c.Seq-1].Request == c {
+			return nil
+		}
+		return ErrRule
+	}
+	if c.Seq != uint64(len(p.Operations))+1 || len(p.Operations) >= LedgerLimit || r.Validate() != nil {
+		return ErrRule
+	}
+	switch c.Kind {
+	case "team":
+		if c.CardID != 0 || c.Target != 0 || !p.validTeam(c.Team) {
+			return ErrRule
+		}
+		p.Team = c.Team
+	case "level", "star", "gear":
+		if c.Team != [3]int64{} {
+			return ErrRule
+		}
+		card := p.card(c.CardID)
+		if card == nil {
+			return ErrRule
+		}
+		switch c.Kind {
+		case "level":
+			if c.Target != card.Level+1 || c.Target > 10 || p.Gold < 5 || p.Dust < 2 {
+				return ErrRule
+			}
+			p.Gold -= 5
+			p.Dust -= 2
+			card.Level++
+		case "star":
+			if c.Target != card.Stars+1 || c.Target > 3 || card.Shards < 2 || p.Dust < 3 {
+				return ErrRule
+			}
+			card.Shards -= 2
+			p.Dust -= 3
+			card.Stars++
+		case "gear":
+			if c.Target != card.Gear+1 || c.Target > 3 || p.Gold < 3 {
+				return ErrRule
+			}
+			p.Gold -= 3
+			card.Gear++
+		}
+	case "sweep":
+		if c.CardID < 1 || c.CardID > 3 || c.Target < 1 || c.Target > 5 || c.Team != [3]int64{} || p.Clears[c.CardID-1] == 0 {
+			return ErrRule
+		}
+		if err := p.Regenerate(now); err != nil {
+			return err
+		}
+		stage := r.Stages[c.CardID-1]
+		cost := stage.Energy * c.Target
+		if p.Energy < cost || p.Gold > ValueLimit-stage.Gold*c.Target || p.Dust > ValueLimit-c.Target {
+			return ErrRule
+		}
+		p.Energy -= cost
+		p.Gold += stage.Gold * c.Target
+		p.Dust += c.Target
+	case "quest":
+		if c.CardID != 1 || c.Target != 0 || c.Team != [3]int64{} || p.Wins < 1 {
+			return ErrRule
+		}
+		if !p.QuestClaimed {
+			if p.Gems > ValueLimit-10 {
+				return ErrRule
+			}
+			p.Gems += 10
+			p.QuestClaimed = true
+		}
+	default:
+		return ErrRule
+	}
+	p.Operations = append(p.Operations, Managed{Request: c, ConfigHash: r.Hash()})
+	return nil
+}
+
+// View 明确裁剪私有密钥与内部重放账本；不要直接同步整个 DAO State 字符串。
+type ProfileView struct {
+	Gems, Gold, Dust, Energy int64
+	Cards                    []Card
+	Team                     [3]int64
+	ActiveRun                int64
+	Clears                   [3]int
+	Wins                     int64
+}
+
+func (p Profile) View() ProfileView {
+	return ProfileView{p.Gems, p.Gold, p.Dust, p.Energy, append([]Card(nil), p.Cards...), p.Team, p.ActiveRun, p.Clears, p.Wins}
+}
+func ValidTime(now int64) bool { return now > 0 && now < math.MaxInt64-TurnMillis }

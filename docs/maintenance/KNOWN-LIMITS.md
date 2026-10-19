@@ -462,3 +462,18 @@ MOBA 的[学习与接入手册](../framework/MOBA-INTEGRATION.md)与 `scripts/te
 框架历史裁剪后不自动重同步、demo / 独立 Gate 追帧背压仍按上文现行条目；业务持久重放路径未改变这些保证。所有真实入口已登记根包覆盖表；普通全仓的 skip 不记成真实资源通过。
 
 当前 core 全仓 build / vet / test 退出 0：8090 条测试事件通过、90 条跳过，145 个测试包通过、20 个无测试文件包另计。根包门禁通过，go generate 无额外跟踪文件漂移；Lockstep / nettransport race 通过。普通全仓的 skip 与上述显式真实入口分别统计。
+
+## 卡牌 RPG 接入实践与 main 复核
+
+基线 main `c939ec84`（v1.28.0 后的服务端口块提交）已普通合并，MOBA 消费者、文档和匹配 Store 的冲突沿用维护者版本。DAO 显式持久键 / StoredKeySet、match 保留期与跨分区原子成局、服务端口块等新契约保留，不拿旧消费者说明覆盖 main。DAO / attribute 生成器、match / DataEngine 的定向 race 通过；另跑 configdata、entitytimer、attribute、combat race 通过。真实 Remote 发布恢复的既有偶发失败仍按上面的未确认条目保留，本轮未声称解决。
+
+卡牌 RPG 新增[学习与接入手册](../framework/CARD-RPG-INTEGRATION.md)、`scripts/test-card-rpg-generated.sh` 和业务夹具：六模板、一模板一卡、三人编队双波次 PvE；配置和数值只属于业务，不加入公共生成器或框架。
+
+- 16 条顶层 race 场景实际通过、无 skip，消费者 build / vet、ID / generate --check 通过。覆盖配置原子热更与旧快照、正式属性生成、私有字段投影、抽卡 / 保底 / 并发重试 / 失败回滚、重复卡碎片、等级 / 星级 / 装备 / 编队、开局序号与体力、敌我控制与回合重放、护盾 / 法力 / 毒伤 / 治疗、双波次、首通 / 扫荡 / 任务、撤退、并发领奖、旧计时事件、离线只补一次及账本上限。
+- `ROOST_CARD_RPG_REAL=1` 的真实文件 WAL / Mongo 验证通过、无 skip：子进程的 5 条 strict 记录未投影时被父进程 SIGKILL，原 Player / Run / 定时器冷加载后核对资产，再按新配置重试旧抽卡 / 养成，仍不重掷 / 重扣；一次离线超时后继续旧配置战斗并领奖。随后再启动独立验证进程，先核对已领奖状态和资产，再重复抽卡 / 领奖，结果不变。只用本次唯一库与 WAL，成功删本次库，失败保留诊断现场；不删改 WAL，不模拟磁盘断电或 strict 回复未知。专门入口已登记根包覆盖表。
+- 生成接入第一次编译报 `undefined: RegisterCardRpgNestHandlers`：业务锁接口用了 `ICardPlayer` / `ICardRun`，没有满足生成器“类型名含 Entity”的现行实体参数推断约定。源码核对后改为 `ICardPlayerEntity` / `ICardRunEntity`，正式生成 / 编译 / 运行通过。这是学习 / 接入问题，没有改生成器规则，不登记为框架缺陷。
+- Skill Runtime 不在 DAO 回滚域；本消费者用生成属性、纯 combat 伤害管线和 DAO 内的确定性回合状态，没有伪称已将完整 Skill Host 迁入事务。回合期限节点、序号、日志和状态一起提交 / undo；原始 State 含服务器私有密钥和内部账本，不设 Sync，客户端仅用允许字段视图。
+
+保留边界：每局至多 120 次动作；抽卡 / 管理 / 开局账本各 64 条后拒绝新写、旧回执继续可重放，正式长期归档 / 分片需要业务设计。生产英雄内容 / 卡池 / 经济、卡牌实例、客户端 / 公网认证、充值 / 邮件 / 活动 / 排行的卡牌接线、PvP / 跨服、容量和长稳未在本消费者实施 / 验收。单场完整日志 / 状态整体提交和重算是教学选择，不作生产性能承诺。本轮未确认新的框架运行时缺陷。
+
+当前 core 全仓 build / vet / test 退出 0：8160 条测试事件通过、93 条跳过，146 个测试包通过、20 个无测试文件包另计。go generate 无额外跟踪文件漂移，根包门禁通过；显式卡牌真实恢复入口另计，不把普通全仓的 skip 记成真实依赖通过。

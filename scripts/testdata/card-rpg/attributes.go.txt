@@ -1,0 +1,13 @@
+package attribute
+
+// HeroStats 是业务声明；访问器、派生更新与快照由正式 attribute 生成器生成。
+//
+//roost:attribute index=1 max=64
+type HeroStats struct {
+	HP, Attack, Armor, Speed, Power int64
+	dirtyMask                       uint64
+}
+
+func (p *HeroStats) _Power(HP, Attack, Armor, Speed int64) int64 {
+	return HP/10 + Attack*2 + Armor + Speed
+}

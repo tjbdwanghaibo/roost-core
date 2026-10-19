@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 卡牌 RPG 业务消费者与教学入口
+
+- 新增 `scripts/test-card-rpg-generated.sh`：正式 game 工程、Player / CardRun DAO、实体定时器和 HeroStats 属性生成，业务规则留在 `scripts/testdata/card-rpg/`。配置快照、抽卡保底 / 私有随机身份、碎片与养成 / 编队、体力、双波次权威回合、首通 / 扫荡 / 任务均通过正式 Sender / Nest 提交。
+- 16 条基础 race 场景；显式真实入口在 5 条 strict 记录未投影时 SIGKILL，恢复抽卡 / 养成 / 战斗和回合计时，续战领奖，并在第三个进程冷加载后重试不重复支付或发奖。入口登记根包覆盖表，手册和 core-game-server skill 同步维护。
+- 教学边界：一模板一卡、每局最多 120 次动作，抽卡 / 管理 / 开局回执各 64 条后拒绝新写；不承诺生产容量，不改框架协议，不把纯 combat 管线当作完整 Skill Runtime / Host 接入。详见 [卡牌 RPG 接入](docs/framework/CARD-RPG-INTEGRATION.md)。
+
 ### roost config check：`--keys-only`、`--json` 与退出码、跨服务一致性（维护者 2026-10-19 批准，三项）
 
 - **`--keys-only`**：只做键检查（YAML / sid / 生产禁用值与按框架声明查键），不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束；可疑键不读业务声明复核，问题末尾注明。

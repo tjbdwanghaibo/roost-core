@@ -84,3 +84,5 @@
 - [指标与告警清单](OBSERVABILITY.md)
 
 - [MOBA 场景到框架的学习与接入](MOBA-INTEGRATION.md)：匹配与准备、5v5 三路、真实 KCP 追帧、活动帧崩溃恢复、静态 Player sid 的宿主交接和原服奖励，分学习接法与验收边界。
+
+- [卡牌 RPG 场景到框架的学习与接入](CARD-RPG-INTEGRATION.md)：配置、抽卡养成、编队、权威回合与持久计时、关卡奖励和真实崩溃恢复，附教学与生产边界。

@@ -1,0 +1,108 @@
+// Package cardrpg 是角色卡收集养成与三人编队回合制 PvE 的业务消费者，不是框架默认玩法。
+package cardrpg
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("card rpg: invalid identity, operation, state, funds or limit")
+
+const LedgerLimit = 64
+const ValueLimit int64 = 1000000
+const MaxActions = 120
+const TurnMillis int64 = 5000
+
+// 所有切片均为定长数组，捕获配置时按值复制，运行中的关卡不读取新一代数值。
+type HeroRule struct {
+	ID                       int
+	HP, Attack, Armor, Speed int64
+	Rare                     bool
+}
+type StageRule struct {
+	ID, Waves               int
+	HP, Attack              int64
+	Energy, Gold, FirstGold int64
+}
+type Rules struct {
+	Version  string
+	DrawCost int64
+	Pity     int
+	Heroes   [6]HeroRule
+	Stages   [3]StageRule
+}
+
+func DemoRules() Rules {
+	r := Rules{Version: "cards-v1", DrawCost: 2, Pity: 5}
+	for i := range r.Heroes {
+		r.Heroes[i] = HeroRule{ID: i + 1, HP: 80 + int64(i)*5, Attack: 24 + int64(i)*2, Armor: 5, Speed: 20 - int64(i), Rare: i >= 3}
+	}
+	for i := range r.Stages {
+		r.Stages[i] = StageRule{ID: i + 1, Waves: 2, HP: 25 + int64(i)*5, Attack: 4 + int64(i), Energy: 2, Gold: 3, FirstGold: 5}
+	}
+	return r
+}
+func (r Rules) Validate() error {
+	if len(r.Version) == 0 || len(r.Version) > 64 || r.DrawCost < 1 || r.DrawCost > 100 || r.Pity < 1 || r.Pity > 10 {
+		return ErrRule
+	}
+	for i, h := range r.Heroes {
+		if h.ID != i+1 || h.HP < 1 || h.HP > 1000 || h.Attack < 1 || h.Attack > 100 || h.Armor < 0 || h.Armor > 100 || h.Speed < 1 || h.Speed > 100 || h.Rare != (i >= 3) {
+			return ErrRule
+		}
+	}
+	for i, s := range r.Stages {
+		if s.ID != i+1 || s.Waves < 1 || s.Waves > 3 || s.HP < 1 || s.HP > 1000 || s.Attack < 1 || s.Attack > 100 || s.Energy < 1 || s.Energy > 10 || s.Gold < 0 || s.Gold > 100 || s.FirstGold < 0 || s.FirstGold > 100 {
+			return ErrRule
+		}
+	}
+	return nil
+}
+func (r Rules) Hash() string {
+	raw, _ := json.Marshal(r)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+func StrictJSON(raw string, out any) error {
+	if len(raw) == 0 || len(raw) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func encode(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// 进程启动加载业务表；端点捕获一份 Snapshot，得到 Rules 后再传内部 Sender，公网请求不携带 Rules。
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	registry := configdata.NewRegistry()
+	configdata.MustRegisterObject(registry, configdata.ObjectDef[Rules]{Name: "card_rules", File: "cards.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	store := configdata.NewStore(registry, dir)
+	_, err := store.Load(context.Background())
+	return store, err
+}
+func CaptureRules(snapshot *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](snapshot, "card_rules")
+	if !ok {
+		return Rules{}, ErrRule
+	}
+	return r, r.Validate()
+}

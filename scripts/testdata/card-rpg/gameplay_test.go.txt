@@ -1,0 +1,651 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"example.com/card-rpg-practice/game/cardrpg"
+	runentity "example.com/card-rpg-practice/game/entities/card_run"
+	playerentity "example.com/card-rpg-practice/game/entities/player"
+	sender "example.com/card-rpg-practice/game/handler/syncsender"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type cardGetter map[int64]entity.IThreadSafeEntity
+
+func (g cardGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("entity %d missing", id)
+}
+func (g cardGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 仅替换提交器；真实 WAL / Mongo 与 SIGKILL 在独立准入入口验证。
+type cardCommitter struct{}
+
+func (cardCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type cardFixture struct {
+	engine  *nest.NestMgr
+	players [2]*playerentity.Player
+	runs    [3]*runentity.CardRun
+	rules   cardrpg.Rules
+	clock   atomic.Int64
+}
+
+func loadCardRules(t *testing.T, rules cardrpg.Rules) cardrpg.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	raw, _ := json.Marshal(rules)
+	if err := os.WriteFile(filepath.Join(dir, "cards.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := cardrpg.OpenCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, err := cardrpg.CaptureRules(store.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return captured
+}
+func newCardFixture(t *testing.T) *cardFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	runentity.RegisterEntity()
+	RegisterCardRpgNestHandlers()
+	RegisterTickCardRunTimerGenNestHandlers()
+	f := &cardFixture{rules: loadCardRules(t, cardrpg.DemoRules())}
+	f.clock.Store(1800000000000)
+	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	g := cardGetter{}
+	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+		t.Helper()
+		id, err := entity.BuildEntityID(unique, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g[id] = e
+		return e
+	}
+	for i := range f.players {
+		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+	}
+	for i := range f.runs {
+		f.runs[i] = build(int64(2000+i), runentity.EntityKindCardRun).(*runentity.CardRun)
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(cardCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.engine.Shutdown(context.Background())
+		for _, r := range f.runs {
+			r.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+		}
+	})
+	for i, p := range f.players {
+		if _, err := sender.NewCardRpgSender(f.engine).Sync_CardInit(context.Background(), p.ID(), fmt.Sprintf("%064x", i+7), f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+func (f *cardFixture) profile(t *testing.T) cardrpg.Profile {
+	t.Helper()
+	p, err := cardrpg.DecodeProfile(f.players[0].Dao().GetState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+func (f *cardFixture) battle(t *testing.T, index int) cardrpg.Battle {
+	t.Helper()
+	b, err := cardrpg.DecodeBattle(f.runs[index].Dao().GetState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+func (f *cardFixture) start(t *testing.T, index int, seq uint64) cardrpg.Battle {
+	t.Helper()
+	id, err := sender.NewCardRpgSender(f.engine).MultiSync_CardStart(context.Background(), f.players[0].ID(), f.runs[index].ID(), seq, 1, f.rules, f.clock.Load())
+	if err != nil || id != f.runs[index].ID() {
+		t.Fatal("start", err)
+	}
+	return f.battle(t, index)
+}
+func (f *cardFixture) finish(t *testing.T, index int) cardrpg.BattleView {
+	t.Helper()
+	return finishCardBattle(t, f.engine, f.runs[index].ID(), f.players[0].ID(), &f.clock)
+}
+func finishCardBattle(t *testing.T, engine *nest.NestMgr, runID, ownerID int64, clock *atomic.Int64) cardrpg.BattleView {
+	t.Helper()
+	s := sender.NewCardRpgSender(engine)
+	ctx := context.Background()
+	for range cardrpg.MaxActions + 1 {
+		view, err := s.Sync_CardBattle(ctx, runID, ownerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.Status != "running" {
+			return view
+		}
+		now := clock.Add(1)
+		if view.Actor < 3 {
+			_, err = s.Sync_CardTurn(ctx, runID, ownerID, cardrpg.TurnCommand{Seq: view.NextSeq, ActorID: ownerID, Kind: "auto"}, now)
+		} else {
+			_, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq, now)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("battle failed to reach bounded terminal")
+	return cardrpg.BattleView{}
+}
+func TestCardRPGDrawConcurrentReplayPityAndConfigIdentity(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	receipts := make([]cardrpg.DrawReceipt, 8)
+	errs := make([]error, 8)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			receipts[i], errs[i] = s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 10, f.rules)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil || !reflect.DeepEqual(receipts[0], receipts[i]) {
+			t.Fatal("replayed draw rerolled", err)
+		}
+	}
+	p := f.profile(t)
+	if p.Gems != 80 || len(p.Draws) != 1 {
+		t.Fatal("draw paid repeatedly")
+	}
+	gap := 0
+	for _, template := range receipts[0].Templates {
+		if template >= 4 {
+			gap = 0
+		} else {
+			gap++
+			if gap >= 5 {
+				t.Fatal("pity violated")
+			}
+		}
+	}
+	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 1, f.rules); err == nil {
+		t.Fatal("same sequence changed draw size")
+	}
+	if _, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 3, 1, f.rules); err == nil {
+		t.Fatal("sequence gap accepted")
+	}
+	patched := f.rules
+	patched.Version = "patched"
+	patched.DrawCost = 99
+	old, err := s.Sync_CardDraw(ctx, f.players[0].ID(), 1, 10, patched)
+	if err != nil || !reflect.DeepEqual(old, receipts[0]) || f.profile(t).Gems != 80 {
+		t.Fatal("old draw repriced / rerolled", err)
+	}
+}
+func TestCardRPGDrawRefusalAndUndoKeepFundsAndRandomStream(t *testing.T) {
+	f := newCardFixture(t)
+	before := f.players[0].Dao().GetState()
+	refused := errors.New("refuse after draw")
+	name := nest.NewHandlerName("card_draw_undo")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if _, err := handlerCardDraw(es[0].(ICardPlayerEntity), 1, 10, f.rules); err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(context.Background(), name, f.players[0].ID(), nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if f.players[0].Dao().GetState() != before {
+		t.Fatal("draw rollback lost assets / random identity")
+	}
+	expected := f.profile(t)
+	receipt, err := expected.Draw(1, 10, f.rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := sender.NewCardRpgSender(f.engine).Sync_CardDraw(context.Background(), f.players[0].ID(), 1, 10, f.rules)
+	if err != nil || !reflect.DeepEqual(actual, receipt) {
+		t.Fatal("rollback changed random results", err)
+	}
+	expensive := f.rules
+	expensive.DrawCost = 100
+	before = f.players[0].Dao().GetState()
+	if _, err := sender.NewCardRpgSender(f.engine).Sync_CardDraw(context.Background(), f.players[0].ID(), 2, 10, expensive); err == nil || f.players[0].Dao().GetState() != before {
+		t.Fatal("insufficient draw partially applied")
+	}
+}
+func TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	p := f.players[0].ID()
+	if _, err := s.Sync_CardDraw(ctx, p, 1, 10, f.rules); err != nil {
+		t.Fatal(err)
+	}
+	seq := uint64(1)
+	manage := func(c cardrpg.Manage) {
+		t.Helper()
+		c.Seq = seq
+		seq++
+		if _, err := s.Sync_CardManage(ctx, p, c, f.rules, f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manage(cardrpg.Manage{Kind: "level", CardID: 1, Target: 2})
+	manage(cardrpg.Manage{Kind: "gear", CardID: 1, Target: 1})
+	owned := f.profile(t)
+	upgraded := false
+	for _, card := range owned.Cards {
+		if card.Shards >= 2 {
+			manage(cardrpg.Manage{Kind: "star", CardID: card.ID, Target: 2})
+			upgraded = true
+			break
+		}
+	}
+	if !upgraded {
+		t.Fatal("duplicate cards did not become shards")
+	}
+	manage(cardrpg.Manage{Kind: "team", Team: [3]int64{3, 2, 1}})
+	b := f.start(t, 0, 1)
+	frozen := b.Initial
+	manage(cardrpg.Manage{Kind: "level", CardID: 1, Target: 3})
+	if f.battle(t, 0).Initial != frozen {
+		t.Fatal("growth changed active battle")
+	}
+	if b.Initial[2].Attack <= b.Rules.Heroes[0].Attack {
+		t.Fatal("generated growth attributes not captured")
+	}
+}
+func TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	id := f.players[0].ID()
+	before := f.players[0].Dao().GetState()
+	for _, c := range []cardrpg.Manage{{Seq: 2, Kind: "level", CardID: 1, Target: 2}, {Seq: 1, Kind: "level", CardID: 99, Target: 2}, {Seq: 1, Kind: "star", CardID: 1, Target: 2}, {Seq: 1, Kind: "team", Team: [3]int64{1, 1, 2}}} {
+		if _, err := s.Sync_CardManage(ctx, id, c, f.rules, f.clock.Load()); err == nil || f.players[0].Dao().GetState() != before {
+			t.Fatal("invalid growth changed assets")
+		}
+	}
+	command := cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}
+	if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	gold := f.profile(t).Gold
+	for range 2 {
+		if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.profile(t).Gold != gold {
+		t.Fatal("upgrade charged twice")
+	}
+	command.Target = 3
+	if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err == nil {
+		t.Fatal("old operation replaced newer intent")
+	}
+}
+func TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[0].ID(), 1, 1, f.rules, f.clock.Load())
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := f.profile(t)
+	if p.Energy != 8 || len(p.Runs) != 1 || p.ActiveRun != f.runs[0].ID() {
+		t.Fatal("admission paid more than once")
+	}
+	original, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 1, 1, f.rules, f.clock.Load())
+	if err != nil || original != f.runs[0].ID() || f.runs[1].Dao().GetState() != "" {
+		t.Fatal("new candidate duplicated round", err)
+	}
+	if _, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 2, 1, f.rules, f.clock.Load()); err == nil {
+		t.Fatal("parallel active admission")
+	}
+	if _, err := s.MultiSync_CardStart(ctx, f.players[1].ID(), f.runs[1].ID(), 1, 2, f.rules, f.clock.Load()); err == nil {
+		t.Fatal("locked stage admitted")
+	}
+}
+func TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline(t *testing.T) {
+	f := newCardFixture(t)
+	b := f.start(t, 0, 1)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	id := f.runs[0].ID()
+	owner := f.players[0].ID()
+	bad := []cardrpg.TurnCommand{{Seq: 1, ActorID: f.players[1].ID(), Kind: "guard"}, {Seq: 1, Kind: "timeout"}, {Seq: 2, ActorID: owner, Kind: "guard"}, {Seq: 1, ActorID: owner, Kind: "attack", Target: 0}}
+	before := f.runs[0].Dao().GetState()
+	for _, c := range bad {
+		if _, err := s.Sync_CardTurn(ctx, id, c.ActorID, c, f.clock.Load()); err == nil || f.runs[0].Dao().GetState() != before {
+			t.Fatal("bad turn modified battle")
+		}
+	}
+	command := cardrpg.TurnCommand{Seq: 1, ActorID: owner, Kind: "guard", Target: b.CurrentActor()}
+	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+	timer := f.runs[0].Dao().GetTurnTimer()
+	saved := f.runs[0].Dao().GetState()
+	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Load()+30000); err != nil || f.runs[0].Dao().GetState() != saved || f.runs[0].Dao().GetTurnTimer() != timer {
+		t.Fatal("replay changed state / deadline", err)
+	}
+	command.Kind = "auto"
+	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Load()); err == nil {
+		t.Fatal("changed old action accepted")
+	}
+	for range 2 {
+		b = f.battle(t, 0)
+		if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}, f.clock.Add(1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b = f.battle(t, 0)
+	if b.CurrentActor() < 3 {
+		t.Fatal("enemy turn not reached")
+	}
+	if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}, f.clock.Load()); err == nil {
+		t.Fatal("player controlled enemy")
+	}
+	if _, err := s.Sync_CardEnemy(ctx, id, b.NextSeq(), f.clock.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestCardRPGCombatUsesShieldsManaPoisonAndHealing(t *testing.T) {
+	f := newCardFixture(t)
+	r := f.rules
+	r.Stages[0].HP = 200
+	r.Stages[0].Attack = 20
+	p := f.profile(t)
+	units, err := p.TeamUnits(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := cardrpg.NewBattle(f.players[0].ID(), f.runs[0].ID(), 1, 1, r, units, 42, f.clock.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(kind string, target int) {
+		t.Helper()
+		actor := b.CurrentActor()
+		owner := b.OwnerID
+		if actor >= 3 {
+			owner = 0
+			kind = "enemy"
+			target = 0
+		}
+		if err := b.Apply(cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: kind, Target: target}, f.clock.Add(1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("guard", 0)
+	if b.State.Units[0].Shield != 15 {
+		t.Fatal("guard did not shield")
+	}
+	apply("attack", 3)
+	apply("burst", 3)
+	if b.State.Units[2].Mana != 0 || b.State.Units[3].Poison != 2 {
+		t.Fatal("burst did not debit mana / poison")
+	}
+	hp := b.State.Units[3].HP
+	apply("enemy", 0)
+	if b.State.Units[3].Poison != 1 || b.State.Units[3].HP != hp-3 {
+		t.Fatal("poison did not advance on target turn")
+	}
+	apply("enemy", 0)
+	apply("enemy", 0)
+	hp = b.State.Units[0].HP
+	if hp >= b.State.Units[0].MaxHP {
+		t.Fatal("damage pipeline did not consume shield and health")
+	}
+	apply("heal", 0)
+	if b.State.Units[0].HP <= hp || b.State.Units[0].Mana != 1 {
+		t.Fatal("heal did not debit / restore")
+	}
+	if _, err := cardrpg.DecodeBattle(b.Encode()); err != nil {
+		t.Fatal("combat cannot replay", err)
+	}
+}
+func TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay(t *testing.T) {
+	f := newCardFixture(t)
+	f.start(t, 0, 1)
+	view := f.finish(t, 0)
+	if view.Status != "won" || view.Wave != 2 {
+		t.Fatal("PvE waves did not finish")
+	}
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.MultiSync_CardClaim(ctx, f.players[0].ID(), f.runs[0].ID())
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := f.profile(t)
+	if p.Gold != 108 || p.Dust != 21 || p.Wins != 1 || p.Clears[0] == 0 || p.ActiveRun != 0 {
+		t.Fatal("reward / first-clear repeated or missing")
+	}
+	for _, c := range []cardrpg.Manage{{Seq: 1, Kind: "quest", CardID: 1}, {Seq: 2, Kind: "sweep", CardID: 1, Target: 2}, {Seq: 3, Kind: "quest", CardID: 1}} {
+		if _, err := s.Sync_CardManage(ctx, f.players[0].ID(), c, f.rules, f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p = f.profile(t)
+	if p.Gems != 110 || p.Gold != 114 || p.Energy != 4 || p.Dust != 23 {
+		t.Fatal("sweep / quest economy incorrect")
+	}
+}
+func TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	owner := f.players[0].ID()
+	b := f.start(t, 0, 1)
+	if _, err := s.Sync_CardTurn(ctx, f.runs[0].ID(), owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "retreat"}, f.clock.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MultiSync_CardClaim(ctx, f.players[1].ID(), f.runs[0].ID()); err == nil {
+		t.Fatal("another Player claimed result")
+	}
+	if _, err := s.MultiSync_CardClaim(ctx, owner, f.runs[0].ID()); err != nil {
+		t.Fatal(err)
+	}
+	if f.profile(t).Gold != 100 || f.profile(t).Wins != 0 {
+		t.Fatal("retreat paid reward")
+	}
+	for i := 1; i < 3; i++ {
+		f.start(t, i, uint64(i+1))
+		if f.finish(t, i).Status != "won" {
+			t.Fatal("repeated stage lost")
+		}
+		if _, err := s.MultiSync_CardClaim(ctx, owner, f.runs[i].ID()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.profile(t).Gold != 111 || f.profile(t).Wins != 2 {
+		t.Fatal("first-clear repeated / missed")
+	}
+}
+func TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce(t *testing.T) {
+	f := newCardFixture(t)
+	b := f.start(t, 0, 1)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	id := f.runs[0].ID()
+	oldDeadline := b.State.Deadline
+	oldTimer := f.runs[0].Dao().GetTurnTimer()
+	if _, err := s.Sync_CardTurn(ctx, id, b.OwnerID, cardrpg.TurnCommand{Seq: 1, ActorID: b.OwnerID, Kind: "guard"}, f.clock.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+	if f.runs[0].Dao().GetTurnTimer() == oldTimer {
+		t.Fatal("new turn reused timer")
+	}
+	f.clock.Store(oldDeadline)
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if f.battle(t, 0).NextSeq() != 2 {
+		t.Fatal("old deadline advanced new turn")
+	}
+	f.clock.Add(100000)
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	b = f.battle(t, 0)
+	if b.NextSeq() != 3 || b.Log[1].Command.Kind != "timeout" || b.State.Deadline != f.clock.Load()+cardrpg.TurnMillis {
+		t.Fatal("overdue timer chased turns / lost next deadline")
+	}
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if f.battle(t, 0).NextSeq() != 3 {
+		t.Fatal("same overdue timer advanced twice")
+	}
+}
+func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
+	f := newCardFixture(t)
+	refused := errors.New("refuse after admission")
+	name := nest.NewHandlerName("card_start_undo")
+	ctx := context.Background()
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, err := handlerCardStart(es[0].(ICardPlayerEntity), es[1].(ICardRunEntity), 1, 1, f.rules, f.clock.Load())
+		if err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.RequestMulti(ctx, name, []int64{f.players[0].ID(), f.runs[0].ID()}, nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if f.profile(t).Energy != 10 || f.profile(t).ActiveRun != 0 || f.runs[0].Dao().GetState() != "" || f.runs[0].Dao().GetTurnTimer() != 0 || len(f.runs[0].TimerComp().Timers()) != 0 {
+		t.Fatal("partial admission / timer survived undo")
+	}
+	f.start(t, 0, 1)
+	before := f.runs[0].Dao().GetState()
+	timer := f.runs[0].Dao().GetTurnTimer()
+	turn := nest.NewHandlerName("card_turn_undo")
+	nest.MustRegisterHandlerWithMeta(turn, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		r := es[0].(ICardRunEntity)
+		b, err := cardrpg.DecodeBattle(r.Dao().GetState())
+		if err != nil {
+			return nil, err
+		}
+		_, err = handlerCardTurn(r, b.OwnerID, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: b.OwnerID, Kind: "auto"}, f.clock.Load())
+		if err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.Request(ctx, turn, f.runs[0].ID(), nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if f.runs[0].Dao().GetState() != before || f.runs[0].Dao().GetTurnTimer() != timer {
+		t.Fatal("battle and timer did not roll back together")
+	}
+}
+func TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence(t *testing.T) {
+	f := newCardFixture(t)
+	s := sender.NewCardRpgSender(f.engine)
+	ctx := context.Background()
+	id := f.players[0].ID()
+	cheap := f.rules
+	cheap.DrawCost = 1
+	for i := uint64(1); i <= cardrpg.LedgerLimit; i++ {
+		if _, err := s.Sync_CardDraw(ctx, id, i, 1, cheap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := f.players[0].Dao().GetState()
+	if _, err := s.Sync_CardDraw(ctx, id, 65, 1, cheap); err == nil || f.players[0].Dao().GetState() != before {
+		t.Fatal("full draw ledger evicted evidence")
+	}
+	if _, err := s.Sync_CardDraw(ctx, id, 1, 1, f.rules); err != nil {
+		t.Fatal("old draw lost after full ledger", err)
+	}
+	for i := uint64(1); i <= cardrpg.LedgerLimit; i++ {
+		if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: i, Kind: "team", Team: [3]int64{1, 2, 3}}, f.rules, f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: 65, Kind: "level", CardID: 1, Target: 2}, f.rules, f.clock.Load()); err == nil {
+		t.Fatal("full operation ledger silently evicted")
+	}
+	f.start(t, 0, 1)
+	p := f.profile(t)
+	if err := p.Regenerate(p.EnergyAt + 4500); err != nil || p.Energy != 9 {
+		t.Fatal("offline energy lost remainder")
+	}
+	at := p.EnergyAt
+	if err := p.Regenerate(at + 3000); err != nil || p.Energy != 10 {
+		t.Fatal("offline energy did not cap")
+	}
+	if err := p.Regenerate(at); err == nil {
+		t.Fatal("backward clock accepted")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", p.View()), "DrawKey") {
+		t.Fatal("private state in view")
+	}
+}

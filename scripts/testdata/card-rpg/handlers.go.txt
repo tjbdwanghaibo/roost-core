@@ -1,0 +1,242 @@
+package handler
+
+import (
+	db "example.com/card-rpg-practice/db"
+	"example.com/card-rpg-practice/game/cardrpg"
+	runentity "example.com/card-rpg-practice/game/entities/card_run"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type ICardPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+type ICardRunEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.CardRunDao
+	TimerComp() *runentity.TimerComponent
+}
+
+// Bootstrap 是受信任的首登入口；密钥来自服务端 crypto/rand，不能让客户端指定或投影给客户端。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardInit(player ICardPlayerEntity, key string, now int64) (cardrpg.ProfileView, error) {
+	if player.Dao().GetState() != "" {
+		p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+		if err != nil {
+			return cardrpg.ProfileView{}, err
+		}
+		if p.DrawKey != key {
+			return cardrpg.ProfileView{}, cardrpg.ErrRule
+		}
+		return p.View(), nil
+	}
+	p, err := cardrpg.NewProfile(key, now)
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	player.Dao().SetState(p.Encode())
+	return p.View(), nil
+}
+
+// Rules 由端点捕获 configdata Snapshot 后传入，仅是内部业务参数，不是公网协议字段。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardDraw(player ICardPlayerEntity, seq uint64, count int, rules cardrpg.Rules) (cardrpg.DrawReceipt, error) {
+	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+	if err != nil {
+		return cardrpg.DrawReceipt{}, err
+	}
+	receipt, err := p.Draw(seq, count, rules)
+	if err != nil {
+		return receipt, err
+	}
+	player.Dao().SetState(p.Encode())
+	return receipt, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerCardManage(player ICardPlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, now int64) (cardrpg.ProfileView, error) {
+	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	if err := p.Manage(command, rules, now); err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	player.Dao().SetState(p.Encode())
+	return p.View(), nil
+}
+
+// 体力、开局顺序身份、冻结的编队和 Run 一起提交。Player 保持静态 sid，Run 由同一原服承载。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, now int64) (int64, error) {
+	if !entity.MatchEntityID(run.ID(), runentity.EntityKindCardRun) || !cardrpg.ValidTime(now) {
+		return 0, cardrpg.ErrRule
+	}
+	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+	if err != nil {
+		return 0, err
+	}
+	if seq > 0 && seq <= uint64(len(p.Runs)) {
+		old := p.Runs[seq-1]
+		if old.Stage != stage {
+			return 0, cardrpg.ErrRule
+		}
+		return old.RunID, nil
+	}
+	if seq == 0 || seq != uint64(len(p.Runs))+1 || len(p.Runs) >= cardrpg.LedgerLimit || p.ActiveRun != 0 || stage < 1 || stage > 3 || stage > 1 && p.Clears[stage-2] == 0 || rules.Validate() != nil || run.Dao().GetState() != "" {
+		return 0, cardrpg.ErrRule
+	}
+	if err := p.Regenerate(now); err != nil {
+		return 0, err
+	}
+	if p.Energy < rules.Stages[stage-1].Energy {
+		return 0, cardrpg.ErrRule
+	}
+	units, err := p.TeamUnits(rules)
+	if err != nil {
+		return 0, err
+	}
+	b, err := cardrpg.NewBattle(player.ID(), run.ID(), seq, stage, rules, units, p.BattleSeed(seq), now)
+	if err != nil {
+		return 0, err
+	}
+	p.Energy -= rules.Stages[stage-1].Energy
+	p.ActiveRun = run.ID()
+	p.Runs = append(p.Runs, cardrpg.Admission{Seq: seq, RunID: run.ID(), Stage: stage, ConfigHash: rules.Hash()})
+	player.Dao().SetState(p.Encode())
+	return run.ID(), saveCardBattle(run, b)
+}
+
+// saveCardBattle 在 Nest 锁内持久化下一回合期限；替换定时器 ID，使旧回调不能推进新回合。
+func saveCardBattle(run ICardRunEntity, b cardrpg.Battle) error {
+	if old := run.Dao().GetTurnTimer(); old != 0 {
+		run.TimerComp().RemoveTimer(old)
+		run.Dao().SetTurnTimer(0)
+	}
+	run.Dao().SetState(b.Encode())
+	if b.State.Status == "running" {
+		id := run.TimerComp().NewTimerAt(time.UnixMilli(b.State.Deadline), runentity.TimerTurn, int64(b.NextSeq()), 0, nil)
+		if id == 0 {
+			return cardrpg.ErrRule
+		}
+		run.Dao().SetTurnTimer(id)
+	}
+	return nil
+}
+
+// 公网玩家入口只传已鉴权 PlayerID；不接收 ActorID=0 的 server-only 超时或敌方控制命令。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnCommand, now int64) (cardrpg.BattleView, error) {
+	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
+	if err != nil {
+		return cardrpg.BattleView{}, err
+	}
+	if actorID != b.OwnerID || command.ActorID != actorID {
+		return cardrpg.BattleView{}, cardrpg.ErrRule
+	}
+	before := len(b.Log)
+	if err := b.Apply(command, now); err != nil {
+		return cardrpg.BattleView{}, err
+	}
+	if len(b.Log) != before {
+		if err := saveCardBattle(run, b); err != nil {
+			return cardrpg.BattleView{}, err
+		}
+	}
+	return b.View(), nil
+}
+
+// 服务器敌方 AI 入口不暴露为客户端 endpoint；超时由持久 TimerComponent 驱动。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardEnemy(run ICardRunEntity, expected uint64, now int64) (cardrpg.BattleView, error) {
+	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
+	if err != nil {
+		return cardrpg.BattleView{}, err
+	}
+	before := len(b.Log)
+	if err := b.Apply(cardrpg.TurnCommand{Seq: expected, Kind: "enemy"}, now); err != nil {
+		return cardrpg.BattleView{}, err
+	}
+	if len(b.Log) != before {
+		if err := saveCardBattle(run, b); err != nil {
+			return cardrpg.BattleView{}, err
+		}
+	}
+	return b.View(), nil
+}
+
+// 同一 Run 与 Player 的奖励、首通、星级、任务进度和领奖事实同事务，不信任客户端报胜或奖励数值。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardClaim(player ICardPlayerEntity, run ICardRunEntity) (cardrpg.ProfileView, error) {
+	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	if b.OwnerID != player.ID() || b.RunID != run.ID() || b.AdmissionSeq == 0 || b.AdmissionSeq > uint64(len(p.Runs)) || b.State.Status == "running" {
+		return cardrpg.ProfileView{}, cardrpg.ErrRule
+	}
+	admission := &p.Runs[b.AdmissionSeq-1]
+	if admission.RunID != b.RunID || admission.ConfigHash != b.ConfigHash || admission.Stage != b.Stage || admission.Claimed != b.Claimed {
+		return cardrpg.ProfileView{}, cardrpg.ErrRule
+	}
+	if b.Claimed {
+		return p.View(), nil
+	}
+	if p.ActiveRun != run.ID() {
+		return cardrpg.ProfileView{}, cardrpg.ErrRule
+	}
+	if b.State.Status == "won" {
+		stage := b.Rules.Stages[b.Stage-1]
+		reward := stage.Gold
+		if p.Clears[b.Stage-1] == 0 {
+			reward += stage.FirstGold
+		}
+		if p.Gold > cardrpg.ValueLimit-reward || p.Dust >= cardrpg.ValueLimit || p.Wins >= cardrpg.ValueLimit {
+			return cardrpg.ProfileView{}, cardrpg.ErrRule
+		}
+		p.Gold += reward
+		p.Dust++
+		p.Wins++
+		p.Clears[b.Stage-1] = max(p.Clears[b.Stage-1], b.Stars())
+	}
+	admission.Claimed = true
+	b.Claimed = true
+	p.ActiveRun = 0
+	player.Dao().SetState(p.Encode())
+	run.Dao().SetState(b.Encode())
+	return p.View(), nil
+}
+
+// 读取也经正式锁边界，防止并发修改时直接从实体指针复制撕裂的视图。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCardProfile(player ICardPlayerEntity) (cardrpg.ProfileView, error) {
+	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
+	if err != nil {
+		return cardrpg.ProfileView{}, err
+	}
+	return p.View(), nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerCardBattle(run ICardRunEntity, actorID int64) (cardrpg.BattleView, error) {
+	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
+	if err != nil {
+		return cardrpg.BattleView{}, err
+	}
+	if b.OwnerID != actorID {
+		return cardrpg.BattleView{}, cardrpg.ErrRule
+	}
+	return b.View(), nil
+}
