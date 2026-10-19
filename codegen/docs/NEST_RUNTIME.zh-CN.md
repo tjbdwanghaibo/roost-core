@@ -3,7 +3,7 @@
 ## Handler 定义
 
 新项目使用 `//roost:nest`。`target`/`targets` 明确指出函数开头有多少个
-Entity capability 参数，因此 capability 无需以 `Entity` 命名。
+Entity capability 参数，因此 capability 无需以 `Entity` 命名。不写 `target(s)` 时，类型名含 `Entity` 的参数被推断为锁目标；两者都没有的 `//roost:nest` 函数在 generate 时报错，不会被静默跳过。
 
 ```go
 type BagOwner interface {

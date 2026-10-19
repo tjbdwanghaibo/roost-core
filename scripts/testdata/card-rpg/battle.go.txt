@@ -1,0 +1,329 @@
+package cardrpg
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	attr "example.com/card-rpg-practice/game/gameplay/attribute"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"reflect"
+	"sort"
+)
+
+type Unit struct {
+	HP, MaxHP, Attack, Armor, Speed, Mana, Shield, Poison int64
+	Power                                                 int64
+}
+type TurnCommand struct {
+	Seq     uint64
+	ActorID int64
+	Kind    string
+	Target  int
+}
+type TurnLog struct {
+	Command TurnCommand
+	At      int64
+}
+type BattleState struct {
+	Units               [6]Unit
+	Order               [6]int
+	Cursor, Round, Wave int
+	RNG                 uint64
+	Status              string
+	Deadline            int64
+	Actions             int
+}
+type Battle struct {
+	Schema         int
+	OwnerID, RunID int64
+	AdmissionSeq   uint64
+	Stage          int
+	Rules          Rules
+	ConfigHash     string
+	Initial        [6]Unit
+	InitialSeed    uint64
+	StartedAt      int64
+	State          BattleState
+	Log            []TurnLog
+	Claimed        bool
+}
+
+func (p Profile) TeamUnits(r Rules) ([6]Unit, error) {
+	var units [6]Unit
+	if !p.validTeam(p.Team) || r.Validate() != nil {
+		return units, ErrRule
+	}
+	for i, id := range p.Team {
+		c := p.card(id)
+		base := r.Heroes[c.Template-1]
+		profile := &attr.HeroStats{}
+		profile.SetHP(base.HP + c.Level*10 + c.Stars*5)
+		profile.SetAttack(base.Attack + c.Level*2 + c.Stars*3 + c.Gear*4)
+		profile.SetArmor(base.Armor + c.Gear*2)
+		profile.SetSpeed(base.Speed)
+		profile.Update()
+		units[i] = Unit{HP: profile.HP, MaxHP: profile.HP, Attack: profile.Attack, Armor: profile.Armor, Speed: profile.Speed, Mana: 3, Power: profile.Power}
+	}
+	return units, nil
+}
+func NewBattle(ownerID, runID int64, seq uint64, stage int, r Rules, initial [6]Unit, seed uint64, now int64) (Battle, error) {
+	if ownerID <= 0 || runID <= 0 || seq == 0 || stage < 1 || stage > 3 || r.Validate() != nil || seed == 0 || !ValidTime(now) {
+		return Battle{}, ErrRule
+	}
+	b := Battle{Schema: 1, OwnerID: ownerID, RunID: runID, AdmissionSeq: seq, Stage: stage, Rules: r, ConfigHash: r.Hash(), Initial: initial, InitialSeed: seed, StartedAt: now}
+	for _, u := range initial[:3] {
+		if u.HP != u.MaxHP || u.HP < 1 || u.HP > 2000 || u.Attack < 1 || u.Attack > 200 || u.Armor < 0 || u.Armor > 200 || u.Speed < 1 || u.Speed > 100 || u.Mana != 3 || u.Poison != 0 || u.Shield != 0 {
+			return Battle{}, ErrRule
+		}
+	}
+	b.State = BattleState{Units: initial, RNG: seed, Status: "running", Wave: 1, Round: 1, Deadline: now + TurnMillis}
+	b.spawn()
+	b.order()
+	return b, nil
+}
+func (b *Battle) spawn() {
+	s := b.Rules.Stages[b.Stage-1]
+	for i := 3; i < 6; i++ {
+		b.State.Units[i] = Unit{HP: s.HP, MaxHP: s.HP, Attack: s.Attack, Armor: 2, Speed: int64(10 - i), Mana: 3}
+	}
+}
+func (b *Battle) order() {
+	for i := range b.State.Order {
+		b.State.Order[i] = i
+	}
+	sort.SliceStable(b.State.Order[:], func(i, j int) bool {
+		return b.State.Units[b.State.Order[i]].Speed > b.State.Units[b.State.Order[j]].Speed
+	})
+	b.State.Cursor = 0
+	for b.State.Units[b.State.Order[b.State.Cursor]].HP == 0 {
+		b.State.Cursor++
+	}
+}
+func (b Battle) CurrentActor() int {
+	if b.State.Status != "running" {
+		return -1
+	}
+	return b.State.Order[b.State.Cursor]
+}
+func (b Battle) NextSeq() uint64 { return uint64(len(b.Log)) + 1 }
+func (b Battle) Encode() string  { return encode(b) }
+func (b Battle) Digest() string {
+	sum := sha256.Sum256([]byte(b.Encode()))
+	return hex.EncodeToString(sum[:])
+}
+func DecodeBattle(raw string) (Battle, error) {
+	var b Battle
+	if err := StrictJSON(raw, &b); err != nil {
+		return b, err
+	}
+	if b.Schema != 1 || b.ConfigHash != b.Rules.Hash() || len(b.Log) > MaxActions {
+		return b, ErrRule
+	}
+	replay, err := NewBattle(b.OwnerID, b.RunID, b.AdmissionSeq, b.Stage, b.Rules, b.Initial, b.InitialSeed, b.StartedAt)
+	if err != nil {
+		return b, err
+	}
+	for _, log := range b.Log {
+		if err := replay.step(log.Command, log.At); err != nil {
+			return b, err
+		}
+	}
+	if !reflect.DeepEqual(replay.State, b.State) || b.Claimed && b.State.Status == "running" {
+		return b, ErrRule
+	}
+	return b, nil
+}
+
+// Apply 以事务局部副本执行；序号和业务命令是永久身份，重放不重复 RNG / 伤害，服务器时间不属于客户端身份。
+func (b *Battle) Apply(c TurnCommand, now int64) error {
+	if c.Seq == 0 {
+		return ErrRule
+	}
+	if c.Seq < b.NextSeq() {
+		if b.Log[c.Seq-1].Command == c {
+			return nil
+		}
+		return ErrRule
+	}
+	return b.step(c, now)
+}
+func (b *Battle) automatic(actor int) (string, int) {
+	side := actor / 3
+	if b.State.Units[actor].Mana >= 2 {
+		for i := side * 3; i < side*3+3; i++ {
+			u := b.State.Units[i]
+			if u.HP > 0 && u.HP < u.MaxHP/2 {
+				return "heal", i
+			}
+		}
+	}
+	target := 0
+	if side == 0 {
+		target = 3
+	}
+	for b.State.Units[target].HP == 0 {
+		target++
+	}
+	if b.State.Units[actor].Mana >= 3 {
+		return "burst", target
+	}
+	return "attack", target
+}
+func (b *Battle) step(c TurnCommand, now int64) error {
+	if b.State.Status != "running" || c.Seq != b.NextSeq() || len(b.Log) >= MaxActions || !ValidTime(now) || now < b.StartedAt || len(b.Log) > 0 && now < b.Log[len(b.Log)-1].At {
+		return ErrRule
+	}
+	actor := b.CurrentActor()
+	kind, target := c.Kind, c.Target
+	if c.ActorID == b.OwnerID {
+		if kind == "retreat" {
+			if target != 0 {
+				return ErrRule
+			}
+			b.State.Status = "retreated"
+			b.Log = append(b.Log, TurnLog{c, now})
+			b.State.Actions++
+			return nil
+		}
+		if actor >= 3 || now >= b.State.Deadline {
+			return ErrRule
+		}
+		if kind == "auto" {
+			if target != 0 {
+				return ErrRule
+			}
+			kind, target = b.automatic(actor)
+		}
+	} else if c.ActorID == 0 {
+		if target != 0 || kind != "enemy" && kind != "timeout" || kind == "enemy" && actor < 3 || kind == "timeout" && now < b.State.Deadline {
+			return ErrRule
+		}
+		kind, target = b.automatic(actor)
+	} else {
+		return ErrRule
+	}
+	if target < 0 || target >= 6 || b.State.Units[target].HP == 0 {
+		return ErrRule
+	}
+	source := &b.State.Units[actor]
+	victim := &b.State.Units[target]
+	switch kind {
+	case "attack", "burst":
+		if actor/3 == target/3 || kind == "burst" && source.Mana < 3 {
+			return ErrRule
+		}
+	case "heal":
+		if actor/3 != target/3 || source.Mana < 2 {
+			return ErrRule
+		}
+	case "guard":
+		if target != actor {
+			return ErrRule
+		}
+	default:
+		return ErrRule
+	}
+	if source.Poison > 0 {
+		source.HP = max(int64(0), source.HP-3)
+		source.Poison--
+	}
+	if source.HP > 0 {
+		switch kind {
+		case "guard":
+			source.Shield = min(int64(30), source.Shield+15)
+		case "heal":
+			source.Mana -= 2
+			victim.HP = min(victim.MaxHP, victim.HP+18)
+		case "attack", "burst":
+			amount := source.Attack
+			if kind == "burst" {
+				source.Mana -= 3
+				amount = amount * 3 / 2
+			} else {
+				source.Mana = min(int64(5), source.Mana+1)
+			}
+			b.State.RNG ^= b.State.RNG << 13
+			b.State.RNG ^= b.State.RNG >> 7
+			b.State.RNG ^= b.State.RNG << 17
+			src := combat.Combatant{Alive: true, Health: source.HP, MaxHealth: source.MaxHP, ForceCritical: b.State.RNG%5 == 0}
+			dst := combat.Combatant{Alive: true, Health: victim.HP, MaxHealth: victim.MaxHP, Shield: victim.Shield, Armor: victim.Armor}
+			if _, ok := combat.ResolveDamage(&src, &dst, combat.DamageInput{Amount: amount, Type: combat.DamageTypePhysical, CanCritical: true}, nil); !ok {
+				return ErrRule
+			}
+			victim.HP = dst.Health
+			victim.Shield = dst.Shield
+			if kind == "burst" && victim.HP > 0 {
+				victim.Poison = 2
+			}
+		}
+	}
+	b.Log = append(b.Log, TurnLog{c, now})
+	b.State.Actions++
+	alive := [2]int{}
+	for i, u := range b.State.Units {
+		if u.HP > 0 {
+			alive[i/3]++
+		}
+	}
+	switch {
+	case alive[0] == 0:
+		b.State.Status = "lost"
+	case alive[1] == 0:
+		if b.State.Wave == b.Rules.Stages[b.Stage-1].Waves {
+			b.State.Status = "won"
+		} else {
+			b.State.Wave++
+			b.State.Round++
+			b.spawn()
+			b.order()
+		}
+	}
+	if b.State.Status == "running" && b.State.Actions >= MaxActions {
+		b.State.Status = "lost"
+	}
+	if b.State.Status == "running" {
+		if alive[1] != 0 {
+			for {
+				b.State.Cursor++
+				if b.State.Cursor >= 6 {
+					b.State.Round++
+					b.order()
+					break
+				}
+				if b.State.Units[b.State.Order[b.State.Cursor]].HP > 0 {
+					break
+				}
+			}
+		}
+		b.State.Deadline = now + TurnMillis
+	}
+	return nil
+}
+func (b Battle) Stars() int {
+	if b.State.Status != "won" {
+		return 0
+	}
+	stars := 3
+	for _, u := range b.State.Units[:3] {
+		if u.HP == 0 {
+			stars = 1
+		}
+	}
+	if b.State.Actions > 40 {
+		stars = min(stars, 2)
+	}
+	return stars
+}
+
+type BattleView struct {
+	RunID                     int64
+	Stage, Wave, Round, Actor int
+	NextSeq                   uint64
+	Deadline                  int64
+	Units                     [6]Unit
+	Status                    string
+	Claimed                   bool
+}
+
+func (b Battle) View() BattleView {
+	return BattleView{b.RunID, b.Stage, b.State.Wave, b.State.Round, b.CurrentActor(), b.NextSeq(), b.State.Deadline, b.State.Units, b.State.Status, b.Claimed}
+}

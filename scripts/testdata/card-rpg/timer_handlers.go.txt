@@ -1,0 +1,40 @@
+package card_run
+
+import (
+	"example.com/card-rpg-practice/game/cardrpg"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"time"
+)
+
+const TimerTurn int32 = 1
+
+func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+	handlers.Register(TimerTurn, func(f entitytimer.Fire) time.Duration {
+		d := component.owner.Dao()
+		// ID 与下一命令序号都必须属于本回合；旧断线 / 旧定时器不会推进新回合。
+		if d.GetTurnTimer() != f.ID {
+			return 0
+		}
+		b, err := cardrpg.DecodeBattle(d.GetState())
+		if err != nil {
+			panic(err)
+		}
+		if b.State.Status != "running" || int64(b.NextSeq()) != f.Param1 || b.State.Deadline != f.Deadline.UnixMilli() {
+			panic(cardrpg.ErrRule)
+		}
+		if err := b.Apply(cardrpg.TurnCommand{Seq: b.NextSeq(), Kind: "timeout"}, f.Now.UnixMilli()); err != nil {
+			panic(err)
+		}
+		d.SetState(b.Encode())
+		d.SetTurnTimer(0)
+		// 离线过期只补一次，从本次实际触发时间开始下一回合，遵循 entitytimer 不追帧契约。
+		if b.State.Status == "running" {
+			id := component.NewTimerAt(time.UnixMilli(b.State.Deadline), TimerTurn, int64(b.NextSeq()), 0, nil)
+			if id == 0 {
+				panic(cardrpg.ErrRule)
+			}
+			d.SetTurnTimer(id)
+		}
+		return 0
+	})
+}

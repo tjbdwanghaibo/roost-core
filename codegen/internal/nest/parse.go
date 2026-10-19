@@ -629,8 +629,11 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 		return nil, fmt.Errorf("targets declares %d entity parameters, parsed %d", len(declaredTargets), len(fi.Entities))
 	}
 
+	// 标了 //roost:nest 就必须生成：没有锁目标的 handler 无法调度。以前在这里静默返回 nil，generate 成功退出、
+	// 还把此前生成的 Sender 当孤儿删掉，业务只在远处看到 undefined 的编译错误（卡牌 RPG 接入时实际遇到）。
 	if !hasEntity {
-		return nil, nil
+		return nil, errors.New("//roost:nest found no entity parameter: declare target=<entity> / targets=<a>,<b> " +
+			"for the leading capability parameters, or name their types with Entity (for example IPlayerEntity)")
 	}
 
 	// Parse return values

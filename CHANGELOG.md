@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Nest 生成器：`//roost:nest` 找不到锁目标时报错，不再静默跳过
+
+- 标了 `//roost:nest` 的函数既没写 `target` / `targets`、参数类型名也不含 `Entity` 时，以前 `roost generate` 静默跳过、退出 0，还把此前生成的 Sender 当孤儿删除，业务只在编译时看到 `undefined: Register…NestHandlers`（卡牌 RPG 接入时遇到）。现在报 `nest: handler <名>: //roost:nest found no entity parameter: …` 并给出两种写法，generate 失败。
+- 测试：`codegen/internal/nest` 的 `TestRoostMarkerWithoutAnEntityParameterIsRejected`（修前 `a //roost:nest handler with no entity parameter was silently skipped`）。文档：CODEGEN_REFERENCE §6、NEST_RUNTIME。升级影响：以前被静默忽略的这类函数现在让 generate 失败，按报错补 `target(s)` 或改类型名。
+
+### 卡牌 RPG 接入：学习手册与业务消费者（scripts/test-card-rpg-generated.sh）
+
+- 新增 [卡牌 RPG 框架学习与验收](docs/framework/CARD-RPG-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-card-rpg-generated.sh`：公共 CLI 生成 `game` 工程、Player / CardRun DAO、CardRun 实体定时器与 HeroStats 属性，业务规则只在 `scripts/testdata/card-rpg`（框架、生成器与 demo 不含这些规则）：配置按值捕获、抽卡保底与养成的序号账本、开局多实体事务、服务器权威回合与持久回合定时器、首通 / 扫荡 / 任务、视图裁剪。16 条场景全部 race、无 skip。
+- 真实依赖：`ROOST_CARD_RPG_REAL=1`（需隔离 Mongo 副本集）追加 `TestCardRPGRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对资产与战斗、由驱动 `DeliverDue` 补触发一回合（离线只补一次）、续战领奖，第三个进程冷加载重试不重复扣费发奖；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，一模板一张卡、每局至多 120 次动作、三个账本各 64 条后拒绝新写；没有生产容量、完整 Skill Host、客户端协议与跨服玩法的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“卡牌 RPG 接入验收的范围”。
+
 ### roost config check：`--keys-only`、`--json` 与退出码、跨服务一致性（维护者 2026-10-19 批准，三项）
 
 - **`--keys-only`**：只做键检查（YAML / sid / 生产禁用值与按框架声明查键），不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束；可疑键不读业务声明复核，问题末尾注明。

@@ -1,0 +1,141 @@
+package cardrpg
+
+import (
+	"context"
+	"encoding/json"
+	attr "example.com/card-rpg-practice/game/gameplay/attribute"
+	frameworkattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestCardRPGCatalogReloadIsAtomicAndFrozenRulesRemainUsable(t *testing.T) {
+	dir := t.TempDir()
+	write := func(r Rules) {
+		t.Helper()
+		raw, _ := json.Marshal(r)
+		if err := os.WriteFile(filepath.Join(dir, "cards.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := DemoRules()
+	write(original)
+	store, err := OpenCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Current()
+	captured, err := CaptureRules(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := original
+	bad.Heroes[0].Attack = 0
+	write(bad)
+	if _, err := store.Reload(context.Background()); err == nil {
+		t.Fatal("invalid content published")
+	}
+	if store.Current() != snapshot {
+		t.Fatal("failed reload replaced snapshot")
+	}
+	patched := original
+	patched.Version = "cards-v2"
+	patched.DrawCost = 3
+	patched.Heroes[0].Attack = 70
+	write(patched)
+	if _, err := store.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := CaptureRules(store.Current())
+	if err != nil || current.Hash() == captured.Hash() || captured != original {
+		t.Fatal("mixed or stale config")
+	}
+	if old, err := CaptureRules(snapshot); err != nil || old != original {
+		t.Fatal("published snapshot mutated")
+	}
+}
+func TestCardRPGGeneratedAttributesDeriveAndSnapshotIsIndependent(t *testing.T) {
+	p := &attr.HeroStats{}
+	p.SetHP(100)
+	p.SetAttack(20)
+	p.SetArmor(5)
+	p.SetSpeed(10)
+	p.Update()
+	if p.Power != 65 {
+		t.Fatal("generated formula not used", p.Power)
+	}
+	container := frameworkattr.NewContainer()
+	container.Install(frameworkattr.Final, p)
+	snap := container.Snapshot(frameworkattr.Final)
+	p.SetAttack(40)
+	p.Update()
+	old, ok := snap.Profile.(*attr.HeroStats)
+	if !ok || old.Attack != 20 || old.Power != 65 || p.Power != 105 {
+		t.Fatal("snapshot aliases live profile")
+	}
+}
+func TestCardRPGPrivateKeysNeverAppearInPublicProjection(t *testing.T) {
+	key := strings.Repeat("ab", 32)
+	p, err := NewProfile(key, 1800000000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Draw(1, 10, DemoRules()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(p.View())
+	for _, private := range []string{key, "DrawKey", "Draws", "Operations"} {
+		if strings.Contains(string(raw), private) {
+			t.Fatal("private field exposed", private)
+		}
+	}
+	units, err := p.TeamUnits(DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewBattle(1, 2, 1, 1, DemoRules(), units, p.BattleSeed(1), 1800000000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(b.View())
+	for _, private := range []string{"InitialSeed", "RNG", "Rules", "Log"} {
+		if strings.Contains(string(raw), private) {
+			t.Fatal("private battle detail exposed", private)
+		}
+	}
+}
+func TestCardRPGMalformedStateAndFrozenBattleTamperingFailClosed(t *testing.T) {
+	key := strings.Repeat("ab", 32)
+	p, err := NewProfile(key, 1800000000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeProfile(p.Encode() + "{}"); err == nil {
+		t.Fatal("trailing JSON accepted")
+	}
+	units, err := p.TeamUnits(DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewBattle(1, 2, 1, 1, DemoRules(), units, p.BattleSeed(1), 1800000000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Apply(TurnCommand{Seq: 1, ActorID: 1, Kind: "auto"}, 1800000000001); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeBattle(b.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	b.State.Units[0].HP--
+	if _, err := DecodeBattle(b.Encode()); err == nil {
+		t.Fatal("changed checkpoint accepted")
+	}
+	b.State.Units[0].HP++
+	b.Rules.Heroes[0].Attack++
+	if _, err := DecodeBattle(b.Encode()); err == nil {
+		t.Fatal("changed frozen rules accepted")
+	}
+}
