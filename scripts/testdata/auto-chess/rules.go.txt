@@ -1,0 +1,78 @@
+// Package autochess 是八席共享卡池竞技的教学业务，数值与战斗规则不属于 core。
+package autochess
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("auto chess: invalid identity, phase, operation or limit")
+
+const Seats = 8
+const LedgerLimit = 128
+const MaxTime int64 = 4000000000000
+
+type UnitRule struct{ Copies, Cost, HP, Attack int }
+type Rules struct {
+	Version                  string
+	Units                    [3]UnitRule
+	PrepMillis, BattleMillis int64
+	MaxRounds                int
+}
+
+func DemoRules() Rules {
+	return Rules{"chess-v1", [3]UnitRule{{32, 1, 8, 2}, {32, 2, 10, 3}, {32, 3, 12, 4}}, 10000, 1000, 8}
+}
+func (r Rules) Validate() error {
+	if r.Version == "" || len(r.Version) > 64 || r.PrepMillis < 100 || r.PrepMillis > 60000 || r.BattleMillis < 100 || r.BattleMillis > 60000 || r.MaxRounds < 1 || r.MaxRounds > 16 {
+		return ErrRule
+	}
+	for _, u := range r.Units {
+		if u.Copies < 8 || u.Copies > 100 || u.Cost < 1 || u.Cost > 10 || u.HP < 1 || u.HP > 100 || u.Attack < 1 || u.Attack > 100 {
+			return ErrRule
+		}
+	}
+	return nil
+}
+func encode(v any) string {
+	b, e := json.Marshal(v)
+	if e != nil {
+		panic(e)
+	}
+	return string(b)
+}
+func strictJSON(s string, v any) error {
+	if len(s) == 0 || len(s) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(s))
+	d.DisallowUnknownFields()
+	if e := d.Decode(v); e != nil {
+		return e
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func (r Rules) Hash() string { b := sha256.Sum256([]byte(encode(r))); return hex.EncodeToString(b[:]) }
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	r := configdata.NewRegistry()
+	configdata.MustRegisterObject(r, configdata.ObjectDef[Rules]{Name: "chess_rules", File: "chess.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	s := configdata.NewStore(r, dir)
+	_, e := s.Load(context.Background())
+	return s, e
+}
+func CaptureRules(s *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](s, "chess_rules")
+	if !ok {
+		return r, ErrRule
+	}
+	return r, r.Validate()
+}
