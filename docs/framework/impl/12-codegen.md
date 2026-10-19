@@ -1,6 +1,6 @@
 # 次核心：Codegen 与工程工具：实现与维护
 
-适用版本：v1.28.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/12-codegen.md) · 用户文档：[入口](../../../codegen/README.md) · [命令与标记参考](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
+适用版本：v1.29.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/12-codegen.md) · 用户文档：[入口](../../../codegen/README.md) · [命令与标记参考](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
 
 ## 如何阅读
 

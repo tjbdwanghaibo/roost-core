@@ -2,11 +2,11 @@
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-当前版本v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)：Sync 慢消费者与自身视图、嵌入 TCP 出站队列、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局等，含破坏性变化；生成物最低 core 升到 v1.28.0）；上一版 v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)：`game/playeraccess` 改名、Remote WAL 级 Rejected 精简）；此前补丁 v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.29.0（[发布说明](../release/v1.29.0-NOTES.md)：wiring/web P1 四项、`roost config check` 退出码与跨服务一致性、`roost.yaml` 端口块与各服务不同的 `etcd.advertise_addr`、卡牌 RPG 接入、Nest 生成器找不到锁目标时报错；生成物最低 core 升到 v1.29.0）；上一版 v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)：Sync 慢消费者与自身视图、嵌入 TCP 出站队列、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局等，含破坏性变化；生成物最低 core 升到 v1.28.0）；v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)：`game/playeraccess` 改名、Remote WAL 级 Rejected 精简）；此前补丁 v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
-单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。当前生成物最低运行依赖是 core v1.28.0（生成物使用 `framework/nest/entitytimer`、`wiring/selfsync`、`dataengine.NewStoredKeySet`、saga `Engine.GetByBusinessKey` 等 v1.28.0 新 API；钉 v1.27.0 编译失败）。文档补丁不改变最低版本和业务 API。
+单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。当前生成物最低运行依赖是 core v1.29.0（生成的 `roost.yaml` 带 v1.29.0 起必填的 `services.<name>.port_block`，生成的 Makefile 按钉住的 core 跑 `cmd/roost`，v1.28.0 的生成器读不了这个字段；生成物另用到 `framework/nest/entitytimer`、`wiring/selfsync`、`dataengine.NewStoredKeySet`、saga `Engine.GetByBusinessKey` 等 v1.28.0 起的 API）。文档补丁不改变最低版本和业务 API。
 
 Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 

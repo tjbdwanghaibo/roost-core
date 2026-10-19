@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [v1.29.0] - 2026-10-19
+
+次版本：wiring/web 的超时与请求体上限可配置、默认错误映射接 errcode、panic 日志带路由模板、路由级指标；`roost config check` 的 `--keys-only` / `--json` / 区分结论的退出码与跨服务一致性检查；各服务的 `etcd.advertise_addr` 互不相同；`roost.yaml` 的 `services.<name>.port_block` 端口块；卡牌 RPG 学习手册与验收脚本；Nest 生成器对找不到锁目标的 `//roost:nest` 报错。**含行为变化**（线上尚未部署，不做旧工程兼容）；生成物最低 core 由 v1.28.0 升到 **v1.29.0**（当前生成器写出的 `roost.yaml` 带 `port_block`，生成的 Makefile 按钉住的 core 跑 `cmd/roost`，钉 v1.28.0 时 `make id-check` 报 `field port_block not found in type roost.ServiceSpec`）。发布说明见 docs/release/v1.29.0-NOTES.md。
+
+**升级必读**（细节在下面各小节，操作顺序见发布说明 §1）：
+
+- `roost.yaml` 的 `services.<name>.port_block` 必填：缺块号时除 `project sync` / `upgrade` 外的命令报错，先跑 `roost project sync`（或 `project upgrade`）自动分配；曾 `add service` 导致端口错位的旧工程，按 `config check --all` / doctor 的 WARN 改配置或改块号。
+- 多服务共用 `etcd.advertise_addr`（如都写 `127.0.0.1:9000`）的旧工程，`roost config check --all` 退出码 4，按提示给各服务换端口（生成规则 `9000 + 块号`）。`deploy/dev/second-game.sh` 的第二个 game 端口改为 ops `9200+N`、advertise `8900+N`。
+- `roost config check` 退出码：0 通过、1 命令没跑成、2 键错误、3 跨 Mod 规则错误、4 跨服务不一致、5 检查没跑全（修前工程编译不过时以 0 结束，任何失败都是 1）；按退出码或文本判断的脚本核对。
+- wiring/web 默认错误响应：带 errcode 的错误 400 `{"ok":false,"code":<码>,"reason":"<message>"}`，没有码的错误 500 `{"ok":false,"code":1,"reason":"server error"}`；修前一律 400 `{"ok":false,"error":"<err.Error()>"}`，读 `error` 字段的客户端改读 `code` / `reason`。web Engine 改在 `Mod.Init` 建，Init 之前 `Register` 报错。
+- Nest 生成器：标了 `//roost:nest` 却找不到锁目标的函数让 `roost generate` 失败（修前静默跳过并删除已生成的 Sender），按报错补 `target(s)` 或改参数类型名。
+
 ### Nest 生成器：`//roost:nest` 找不到锁目标时报错，不再静默跳过
 
 - 标了 `//roost:nest` 的函数既没写 `target` / `targets`、参数类型名也不含 `Entity` 时，以前 `roost generate` 静默跳过、退出 0，还把此前生成的 Sender 当孤儿删除，业务只在编译时看到 `undefined: Register…NestHandlers`（卡牌 RPG 接入时遇到）。现在报 `nest: handler <名>: //roost:nest found no entity parameter: …` 并给出两种写法，generate 失败。

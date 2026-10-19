@@ -96,6 +96,9 @@
 
 ## docs/release
 
+- [v1.29.0-NOTES.md](../release/v1.29.0-NOTES.md)：v1.29.0 发布说明（行为变化与升级清单：端口块、advertise 地址、config check 退出码、web 错误响应、Nest 生成器报错；新能力；最低 core v1.29.0）
+- [v1.29.0-IMPLEMENTATION.md](../release/v1.29.0-IMPLEMENTATION.md)：v1.29.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
+- [v1.29.0-VALIDATION.md](../release/v1.29.0-VALIDATION.md)：v1.29.0 发布验收
 - [v1.28.0-NOTES.md](../release/v1.28.0-NOTES.md)：v1.28.0 发布说明（破坏性变化与升级清单、新能力、修复、性能；最低 core v1.28.0）
 - [v1.28.0-IMPLEMENTATION.md](../release/v1.28.0-IMPLEMENTATION.md)：v1.28.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
 - [v1.28.0-VALIDATION.md](../release/v1.28.0-VALIDATION.md)：v1.28.0 发布验收
