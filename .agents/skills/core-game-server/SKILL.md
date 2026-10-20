@@ -101,7 +101,7 @@ SLG 联盟活动主线先运行 `scripts/test-slg-alliance.sh`（显式隔离 Re
 
 `ROOST_SLG_REMOTE=1 bash scripts/test-slg-alliance-player.sh` 把联盟事实换成 CLI 生成的 Managed Remote 实体，生成 Sender 执行业务条件写，Mongo 权威 / Redis 锁与 L2 / 两个 Runtime 的独立 WAL 按正式装配接线。先比较完整冷事实，再继续同一活动、原服义务与 Player 崩溃恢复。显式 owner 2000→2001 要检查 marker / route 上升、旧 Runtime 活着仍被拒；Claim 后检查 Shared，不无条件重复 EnterShared。业务 CAS 版本不是 Remote fence，未知提交不当作冲突盲重算。两 Runtime 位于同一父进程，不声称跨机 HA、Mirror 推送或 lease 中途过期已测。
 
-联盟各入口的视野用正式 frame.Receiver 解码，验证来源撤销、权限读取失败先 held、重连 Full 和旧 epoch 拒绝；内存捕获不等于真实 TCP 或空间迷雾。原服 `deliverPending` 从持久义务发现最多 128 个窗口，Player 成功后才写 Delivered；测试在到账未标记时 SIGKILL，恢复重投由永久回执去重，第三进程无待发项。一次有界泵不等于常驻调度或长期归档。后续重点是 SpatialComponent 提交门、多块观察、跨服权限传播与真实客户端，不重复把独立基础测试当整条链路完成。
+联盟各入口的视野经真实回环 gateway.TCPServer / TCPRuntime、selfsync.PushPlayerFrame 与 wire.Read，再用正式 frame.Receiver 解码；验证来源撤销、权限读取失败先 held、真实断线重连 Full 和旧 epoch 拒绝。持久 PermissionGeneration 与成员权限同 CAS，NATS 提示只触发权威重读，重复／乱序不能恢复旧授权；通知下限保留，落后读取或同代异值保持 held。普通 Pub/Sub 可能丢通知，测试票不等于账号鉴权，生产需定期重读与最大缓存年龄规则。原服 `deliverPending` 从持久义务发现最多 128 个窗口，Player 成功后才写 Delivered；测试在到账未标记时 SIGKILL，恢复重投由永久回执去重，第三进程无待发项。一次有界泵不等于常驻调度或长期归档。后续重点是持久位置／SpatialComponent 提交门、多块迷雾、权限定期重读驱动与跨机传播延迟，不重复把独立基础测试当整条链路完成。DAO 保持 db=main，经 DatabaseMap 映射本次物理库；Remote MongoCommitter 与 DataEngine 必须绑定同一表，未投影 WAL 不能随意换映射。
 
 ### 全框架实践与问题归属
 

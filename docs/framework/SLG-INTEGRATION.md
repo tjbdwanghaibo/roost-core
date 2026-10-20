@@ -76,9 +76,9 @@ bash scripts/test-slg-alliance.sh
 
 实跑证据：`TestSLGAllianceActivity` 经 race 通过、无 skip，随后消费者 vet 通过。一个测试覆盖以下连续流程：八个并发重复战果只留一个意图；错服与身份盗用拒绝；退盟、独立侦察保留及最后来源撤销；已提交贡献丢失应用确认；冻结但仍有未确认意图时禁止结算；真正重启协调器后补报只计一次；超出重放期限拒绝自动补报；两服阶段屏障；原服义务已写未 ACK，再次重启协调器后通过 OwedDispatches 找回旧窗口、原 token 重投、不重写回执、错误 token 拒绝、重复 ACK 幂等。唯一 Redis 命名空间和 NATS subject 隔离，结束只清理本次资源。
 
-**证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，协调器未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野已用正式帧 Receiver 解码与重建对象表，但传输仍是内存捕获，不证明 TCP 客户端或跨服撤权传播。基础入口的联盟权威用业务 Redis CAS；Remote 扩展改用正式生成实体并验证 owner 交接，见下文；基础入口的原服对象重建只验证持久义务回执；Player 扩展启动独立原服测试子进程做实际发奖和 SIGKILL，但不是带登录网关的完整 game 服务。
+**证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，协调器未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野已经真实回环 TCP 与正式帧 Receiver 重建对象表，NATS 失效提示验证重复／乱序后的权威重读；不证明跨机即时撤权、正式账号鉴权或消息不丢。基础入口的联盟权威用业务 Redis CAS；Remote 扩展改用正式生成实体并验证 owner 交接，见下文；基础入口的原服对象重建只验证持久义务回执；Player 扩展启动独立原服测试子进程做实际发奖和 SIGKILL，但不是带登录网关的完整 game 服务。
 
-**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。下一步加入持久空间事实、真实客户端与跨服撤权传播；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
+**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。下一步加入持久空间事实、多块迷雾与权限定期重读驱动；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
 
 ### Player 到账扩展：义务已 ACK，金币仍能恢复补发
 
@@ -131,16 +131,27 @@ bash scripts/test-slg-alliance-player.sh
 
 **范围**：两个联盟 owner 是同一父进程里的独立 Runtime，证明真实共享存储上的显式交接与旧写者拒绝；不证明跨机网络分区、自动选主、lease 中途过期或并发在途提交时的交接。此处 Remote 使用普通 NATS，快照推送按框架契约关闭，未验证 JetStream / Mirror 订阅；业务读通过权威 Nest 路径，不用陈旧 Mirror 作权限。原服 Player 与活动协调器仍有真实子进程。本例的 128 KiB 联盟状态与 128 条账本是教学限制，不是生产容量结论。
 
-### 视野扩展：从订阅表检查到实际编码帧与重连
+### 视野扩展：真实 TCP、权限代际与重连
 
-[视野接线](../../scripts/testdata/slg-alliance/runtime_test.go)现在捕获 Manager 输出的实际编码帧，[fog_test.go](../../scripts/testdata/slg-alliance/fog_test.go)用正式 `frame.Receiver` 维护客户端对象表，所有三个联盟入口都会执行这段检查。
+[视野接线](../../scripts/testdata/slg-alliance/runtime_test.go) 经 [TCP 接线](../../scripts/testdata/slg-alliance/tcp_test.go) 的 `gateway.TCPServer / TCPRuntime` 和 `selfsync.PushPlayerFrame` 发送，两个实际回环 socket 用 `wire.Read` 收包；[fog_test.go](../../scripts/testdata/slg-alliance/fog_test.go) 再以正式 `frame.Receiver` 维护客户端对象表。所有三个联盟入口执行同一条链，包含真实断开／重新握手，不能把 Manager 的会话 id 与 TCP 连接生命周期混为一谈。
 
-1. `alliance` 与 `scout` 来源归并，退出联盟保留独立侦察，最后来源撤销产生对象删除；Receiver 最终确认 Alice 有据点、Bob 无据点。
-2. `reconcileFrom` **先 HoldSession，再读取权限**。注入权限读取失败时 Flush 不得发送新帧；读取成功才 Apply 关系并 ReadySession。持有旧缓存不允许绕过失败继续发布。
-3. 重建会话后先 held，按最新权限 Resubscribe / Apply，再 Ready。Receiver 必须收到新的 Full，已退盟且无侦察的 Bob 不得重新得到据点；把旧 epoch 帧再次交给 Receiver，不得进入应用回调。
-4. 每个公开对象载荷逐字节核对为 `{"objective":99}`，没有成员名单、贡献意图或永久奖励回执。此为公开据点的教学白名单，不是完整敌军／隐身 Profile。
+| 业务步骤 | 正式接法与提交顺序 | 实际断言 |
+| --- | --- | --- |
+| 退盟 | 持久 CAS 同时修改 Active 与 PermissionGeneration；重复退盟不增加代际 | alliance 来源消失，scout 仍命中时保留对象；最后来源撤销后 Bob 无据点 |
+| 失效提示 | [permission_test.go](../../scripts/testdata/slg-alliance/permission_test.go) 用独立 NATS 连接发送权限代际；消息只表示重读下限，不携带成员授权 | 新提示、重复提示、延迟旧提示均拉当前持久权威；旧消息不能恢复旧权限 |
+| 暂停与重建 | `HoldSession → 读取权威 → 校验代际 → Interest.Apply → ReadySession → Flush`；通知下限保留，失败重试不能降低 | 读失败、低于已知代际或通知下限、同代成员内容冲突均保持 held，不发送新帧 |
+| TCP 重连 | 关闭旧 socket，等待接入注销；重新握手注册后 OpenHeldSession / Resubscribe，再读取最新权威 | 客户端收到新 Full；退盟者仍无据点；旧 epoch 帧不能进入应用回调 |
+| 公开字段 | Sync 通道 envelope 和对象载荷逐包校验 | 仅 `{"objective":99}`；没有成员名单、贡献意图和永久奖励回执 |
 
-这部分验证的是编码／接收协议与本地会话恢复，传输仍为内存捕获；尚未接真实 TCP、位置 DAO / SpatialComponent 提交门、多块迷雾或跨服撤权消息。尤其不能声称“权限源不可达时已把玩家过去收到的信息收回”：held 只停止后续发布，恢复后 Full 才重建当前对象表。生产还需定义跨服权限失效的传播代际、允许延迟与会话收口策略。
+这是一套业务撤权接法，不是框架自动提供的分布式权限系统。普通 NATS Pub/Sub 可以丢通知；测试中的提示队列有界，满时丢提示而不能无界积压。生产需要定期权威重读、可信 subject 权限以及串行视野协调循环，定义最大缓存年龄和故障时是否断线；本例只直接调用重读入口，没有常驻定时驱动或跨机延迟验收。held 只停止后续发布，不能收回已经发给客户端的信息。两个固定测试票不代表真实账号服务验签。
+
+位置 DAO / SpatialComponent 提交门、多块观察、战争迷雾和敌军隐身 Profile 仍未接入这条联合链；`MoveWithObservedBlocks` 的额外被观察覆盖不等于玩家侦察授权。不要把 TCP 据点视图通过解释成完整空间迷雾已完成。
+
+### main 新契约接入：逻辑库与物理库分开
+
+DAO 定义保持 `db=main`，生成 `db.DatabaseMain`；脚本不再替换定义里的库名。每次运行把 `main` 经 `coredata.NewDatabaseMap` 映射到唯一的 `roost_slg_reward_it_*` 物理库，传给 `engine.MongoStoreConfig.Databases`。Remote 的 `MongoCommitter.BindDatabaseMap` 必须绑定同一张表，确保权威 DAO 写入与 DataEngine 冷加载／投影一致；Remote 控制库和 DataEngine 默认控制库仍直接使用物理库名。
+
+这个改动使业务代码与部署库名解耦，且 WAL 仍记录逻辑名；带未投影记录时不得更换映射，否则 Runtime 拒绝启动。当前消费者沿用相同映射完成两服 strict WAL SIGKILL／冷恢复与 Remote owner 交接。映射不是数据迁移，跨进程配置一致性仍由部署保证。主分支契约与接法见 [DataEngine 指南](guide/03-dataengine.md)，不要直接用 DAO.DbName() 打开 Mongo 物理库。
 
 ### 1. 适合谁、先读什么
 

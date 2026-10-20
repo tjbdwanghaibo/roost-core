@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 联合链：真实 TCP 与权限代际
+
+- 联盟活动的三个入口改经真实回环 `TCPServer / TCPRuntime`、`PushPlayerFrame`、`wire.Read` 与正式 Receiver 验证来源撤销、断线重连 Full、旧 epoch 拒绝与公开载荷白名单。
+- 成员撤权与权限代际同 CAS，真实 NATS 仅发送重读提示；重复／乱序提示不能恢复旧权限，落后／冲突权限读取保持 held。定期重读驱动、持久空间事实与多块迷雾仍待接入，边界见 [SLG 手册](docs/framework/SLG-INTEGRATION.md)。业务规则仅在消费者夹具。
+- 跟随 main 的 DAO 逻辑库契约，生成定义保留 `db=main`；Player 的 MongoStore 与 Remote MongoCommitter 绑定部署映射，不再生成临时物理库名到 DAO 源码。
+
 ### SLG 联盟联合链：Remote owner、视野帧恢复与原服待发扫描
 
 - `ROOST_SLG_REMOTE=1 scripts/test-slg-alliance-player.sh` 生成 Managed Remote 联盟 DAO/Sender，通过真实 Mongo/Redis 的两个 Runtime 显式交接 owner 2000→2001；旧 Runtime 写被 fence 拒绝，新 Runtime 冷读完整事实后继续同一活动与两服 Player SIGKILL 恢复。不是跨机自动 HA。
