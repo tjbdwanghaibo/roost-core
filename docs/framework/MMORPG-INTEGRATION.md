@@ -6,6 +6,25 @@
 
 ## 第一部分：学习
 
+### 专题优先级：跨服、视野、活动
+
+MMORPG 后续优先围绕“跨服世界 Boss／限时副本”学习这三条线。先复用已有跨服赠礼和多地图消费者理解契约，再定义 Boss／副本权威和活动事实；不把本地切图等同于跨服，也不把基础交易通过等同于多人活动完成。
+
+| 专题与 MMO 场景 | 框架接法 | 重点学习问题 |
+| --- | --- | --- |
+| 跨服组队／副本／世界 Boss | Player 静态归属，业务服务定义副本／Boss 权威；原服资产经 Saga／effect 协作，适合 Remote 的共享实体走 owner／lease／fence | 匹配成员、实际参战与领奖身份如何绑定；超时后查询哪个事实；旧服务进程能否继续写；部分玩家到账后怎样恢复 |
+| 同屏／副本隔离／队伍与隐身 | 每张地图独立 Interest，同一连接由同一个 Sync Manager 管理；来源归并及 Profile 控制字段 | 同坐标不同副本不能互见；队伍退出或隐身变化如何撤权；切图失败如何按持久事实 Reconcile；重连 Full 是否清掉旧对象 |
+| 世界 Boss／限时副本／节日活动 | 业务时间与持久 timer、本服通知、activity 协调聚合、贡献事实、结算投递、原服邮件／领取 | 参与和有效贡献由谁裁决；死亡／离线／重复命中是否计分；截止时已准入操作如何归窗；Boss 胜负和活动阶段是否一致；发奖与领奖的防重身份在哪里 |
+
+**跨服**：先读 §6 与 §13，运行已有 `scripts/test-mmorpg-cross-sid.sh` 学错服拒绝、双向赠礼、失败补偿和重复邮件领取；它要求预先启动双 sid demo。Remote 与 Mirror 的测试另走 `scripts/test-remote-generated.sh`。跨服 Boss 的单写权威、成员快照、贡献记录和逐个原服兑奖是下一步业务接入，不能从赠礼结果推断已完成副本迁移或战场 HA。
+
+**视野**：先读 §5 的 `mmoScenes.Reconcile`，运行 `bash scripts/test-mmorpg-scenes.sh` 观察两个地图、真实 TCP、切图重试和重连。接着用 [Block AOI](INTEREST-BLOCK-AOI.md) 与 [policy 测试](../../framework/sync/entitysync/policy/interest_test.go) 学提交屏障、来源撤销与视图白名单。下一步专题应补同坐标不同副本、队伍解散、隐身／反隐、观战权限和密集 Boss 扇出。`SetTeam` 只提供关系来源，AOI 可见不等于攻击授权；战斗 handler 仍须核对同图、存活、距离与技能条件。
+
+**活动**：按 [SLG 活动学习顺序](SLG-INTEGRATION.md#专题优先级跨服视野活动) 追到 `OpenActivity → NotifyPhaseDue → Contribute → AttemptDispatch → settle → AckDispatch`。在 MMO 里把输入事实换成服务器确认的参战、伤害／治疗／任务贡献，先定义合格参与与奖励政策，再做持久账本；不能接受客户端伤害总数作为结算依据。确认活动实例与窗口、Boss／副本身份、参与者和原服 sid，重复消息用原身份；重启后恢复原窗口，不把旧贡献灌入新活动。
+
+当前证据是分开的：§13 验证双 sid 赠礼，§12 的地图脚本验证同进程多地图 TCP；通用 activity 与 demo 覆盖协调、贡献、活动榜和投递接法。**跨服世界 Boss＋副本权限视野＋活动结算的联合消费者尚未验收**，包括中途掉线、窗口关闭与战斗完成竞争、原服派奖中断／补发。后续以这条联合链路深化学习，并把真实客户端、跨机故障和目标密度容量单独验收。
+
+
 ### 1. 适合谁、先读什么
 
 基础阅读顺序：[入门](../GETTING-STARTED.md) → [Nest / Entity](guide/02-nest-entity.md) → [DataEngine](guide/03-dataengine.md) → [同步](guide/04-sync.md) → 本文对应场景。
