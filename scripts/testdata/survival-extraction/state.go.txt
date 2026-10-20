@@ -1,0 +1,262 @@
+package survival
+
+// 四种物资按 wood / ore / food / medkit 排列，只有服务器封存的撤离清单可兑换永久资产。
+type Inventory [4]int
+
+func (v Inventory) Count() int {
+	n := 0
+	for _, x := range v {
+		n += x
+	}
+	return n
+}
+func (v Inventory) Valid() bool {
+	for _, x := range v {
+		if x < 0 || x > 1000 {
+			return false
+		}
+	}
+	return true
+}
+
+type Command struct {
+	Seq, Epoch uint64
+	Kind       string
+	A, B       int
+}
+type Receipt struct {
+	Command   Command
+	Inventory Inventory
+	Status    string
+	At        int64
+}
+type Seat struct {
+	PlayerID                     int64
+	Epoch                        uint64
+	Connected, Joined, Claimed   bool
+	Status                       string
+	Pos, HP                      int
+	Inventory, Extracted         Inventory
+	CraftAt, ExtractAt, NextMove int64
+	Receipts                     []Receipt
+}
+type Drop struct {
+	Pos       int
+	Inventory Inventory
+}
+type State struct {
+	Schema                            int
+	Rules                             Rules
+	Phase                             string
+	Seats                             [Seats]Seat
+	Nodes                             [3]int
+	Drops                             [Seats]Drop
+	Crafted, UsedMedkits              int
+	LastAt, EndAt, HazardAt, Deadline int64
+}
+type PublicSeat struct {
+	PlayerID  int64
+	Status    string
+	Pos, HP   int
+	Connected bool
+}
+type SeatView struct {
+	Epoch, NextSeq       uint64
+	Inventory, Extracted Inventory
+	CraftAt, ExtractAt   int64
+	Claimed              bool
+}
+type View struct {
+	Phase, ConfigHash       string
+	LastAt, EndAt, Deadline int64
+	Nodes                   [3]int
+	Drops                   [Seats]Drop
+	Players                 [Seats]PublicSeat
+	Self                    SeatView
+}
+
+func (s State) Index(id int64) int {
+	for i, p := range s.Seats {
+		if p.PlayerID == id {
+			return i
+		}
+	}
+	return -1
+}
+func (s State) View(id int64) (View, error) {
+	i := s.Index(id)
+	if i < 0 {
+		return View{}, ErrRule
+	}
+	v := View{Phase: s.Phase, ConfigHash: s.Rules.Hash(), LastAt: s.LastAt, EndAt: s.EndAt, Deadline: s.Deadline, Nodes: s.Nodes, Drops: s.Drops}
+	for j, p := range s.Seats {
+		v.Players[j] = PublicSeat{p.PlayerID, p.Status, p.Pos, p.HP, p.Connected}
+	}
+	p := s.Seats[i]
+	v.Self = SeatView{p.Epoch, uint64(len(p.Receipts) + 1), p.Inventory, p.Extracted, p.CraftAt, p.ExtractAt, p.Claimed}
+	return v, nil
+}
+func New(ids [Seats]int64, r Rules, now int64) (State, error) {
+	s := State{Schema: 1, Rules: r, Phase: "running", Nodes: r.Nodes, LastAt: now, EndAt: now + r.RaidMillis, HazardAt: now + r.HazardMillis}
+	if r.Validate() != nil || now <= 0 || s.EndAt >= MaxTime {
+		return State{}, ErrRule
+	}
+	for i, id := range ids {
+		if id <= 0 {
+			return State{}, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if ids[j] == id {
+				return State{}, ErrRule
+			}
+		}
+		s.Seats[i] = Seat{PlayerID: id, Epoch: 1, Connected: true, Status: "pending"}
+	}
+	s.schedule()
+	return s, s.Validate()
+}
+func (s State) Encode() string { return encode(s) }
+func Decode(raw string) (State, error) {
+	var s State
+	if e := strictJSON(raw, &s); e != nil {
+		return s, e
+	}
+	return s, s.Validate()
+}
+func (s State) next() int64 {
+	if s.Phase == "done" {
+		return 0
+	}
+	d := min(s.EndAt, s.HazardAt)
+	for _, p := range s.Seats {
+		for _, at := range []int64{p.CraftAt, p.ExtractAt} {
+			if at > 0 {
+				d = min(d, at)
+			}
+		}
+	}
+	return d
+}
+func (s *State) schedule() {
+	active := false
+	for _, p := range s.Seats {
+		if p.Status == "alive" || p.Status == "pending" {
+			active = true
+		}
+	}
+	if !active {
+		s.Phase = "done"
+	}
+	s.Deadline = s.next()
+}
+func (p Seat) Load() int {
+	n := p.Inventory.Count()
+	if p.CraftAt != 0 {
+		n += 3
+	}
+	return n
+}
+func (s State) Validate() error {
+	if s.Schema != 1 || s.Rules.Validate() != nil || (s.Phase != "running" && s.Phase != "done") || s.LastAt <= 0 || s.LastAt >= MaxTime || s.EndAt <= 0 || s.EndAt >= MaxTime || s.HazardAt <= 0 || s.HazardAt >= MaxTime || s.Deadline != s.next() || s.Crafted < 0 || s.Crafted > 1000 || s.UsedMedkits < 0 || s.UsedMedkits > s.Crafted {
+		return ErrRule
+	}
+	if s.Phase == "running" && (s.EndAt <= s.LastAt || s.HazardAt <= s.LastAt || s.Deadline <= s.LastAt) {
+		return ErrRule
+	}
+	total := Inventory{s.Nodes[0], s.Nodes[1], s.Nodes[2], 0}
+	joined := 0
+	active := false
+	for k, n := range s.Nodes {
+		if n < 0 || n > s.Rules.Nodes[k] {
+			return ErrRule
+		}
+	}
+	for i, p := range s.Seats {
+		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Epoch == 0 || p.Pos < 0 || p.Pos > 3 || p.HP < 0 || p.HP > s.Rules.HP || !p.Inventory.Valid() || !p.Extracted.Valid() || p.Load() > s.Rules.Capacity || p.Extracted.Count() > s.Rules.Capacity || len(p.Receipts) > LedgerLimit || p.NextMove < 0 || p.NextMove >= MaxTime {
+			return ErrRule
+		}
+		if p.Joined {
+			joined++
+		}
+		switch p.Status {
+		case "pending":
+			active = true
+			if p.Joined || p.HP != 0 {
+				return ErrRule
+			}
+		case "alive":
+			active = true
+			if !p.Joined || p.HP == 0 {
+				return ErrRule
+			}
+		case "dead":
+			if !p.Joined || p.HP != 0 {
+				return ErrRule
+			}
+		case "extracted":
+			if !p.Joined || p.HP == 0 || p.Pos != 0 {
+				return ErrRule
+			}
+		case "missed":
+			if p.Joined || p.HP != 0 {
+				return ErrRule
+			}
+		default:
+			return ErrRule
+		}
+		if p.Status != "alive" && (p.Inventory.Count() != 0 || p.CraftAt != 0 || p.ExtractAt != 0) {
+			return ErrRule
+		}
+		if p.Status != "extracted" && p.Extracted.Count() != 0 {
+			return ErrRule
+		}
+		if p.Claimed && (p.Status != "extracted" && p.Status != "dead") {
+			return ErrRule
+		}
+		for _, at := range []int64{p.CraftAt, p.ExtractAt} {
+			if at != 0 && (at <= s.LastAt || at >= s.EndAt) {
+				return ErrRule
+			}
+		}
+		if p.ExtractAt != 0 && (p.Pos != 0 || p.CraftAt != 0) {
+			return ErrRule
+		}
+		for j, r := range p.Receipts {
+			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || r.Command.Epoch > p.Epoch || r.At <= 0 || r.At > s.LastAt {
+				return ErrRule
+			}
+		}
+		d := s.Drops[i]
+		if d.Pos < 0 || d.Pos > 3 || !d.Inventory.Valid() || (p.Status != "dead" && d.Inventory.Count() != 0) {
+			return ErrRule
+		}
+		for k := range total {
+			total[k] += p.Inventory[k] + p.Extracted[k] + d.Inventory[k]
+		}
+		if p.CraftAt != 0 {
+			total[0] += 2
+			total[2]++
+		}
+	}
+	if (s.Phase == "done") == active {
+		return ErrRule
+	}
+	// 制作的原料与已使用药剂也入账，检查整个局的物资守恒，而不只检查余额非负。
+	total[0] += 2 * s.Crafted
+	total[2] += s.Crafted
+	total[3] += s.UsedMedkits
+	if total[0] != s.Rules.Nodes[0]+2*joined || total[1] != s.Rules.Nodes[1] || total[2] != s.Rules.Nodes[2]+joined || total[3] != s.Crafted {
+		return ErrRule
+	}
+	return nil
+}
+func (s State) Reward(i int) int64 {
+	if s.Seats[i].Status != "extracted" {
+		return 0
+	}
+	n := int64(0)
+	for k, v := range s.Seats[i].Extracted {
+		n += int64(v * s.Rules.Prices[k])
+	}
+	return n
+}

@@ -1,0 +1,192 @@
+package survival
+
+func (s *State) Enter(id int64, now int64) (bool, error) {
+	i := s.Index(id)
+	if i < 0 {
+		return false, ErrRule
+	}
+	p := &s.Seats[i]
+	if p.Joined {
+		return false, nil
+	}
+	if s.Phase != "running" || p.Status != "pending" || now < s.LastAt || now >= s.Deadline {
+		return false, ErrRule
+	}
+	p.Joined = true
+	p.Status = "alive"
+	p.HP = s.Rules.HP
+	p.Inventory = Inventory{2, 0, 1, 0}
+	s.LastAt = now
+	return true, s.Validate()
+}
+
+// 在事务局部副本执行。全球最早期限已到则新操作拒绝，等 timer 提交后重试原 Seq，不能跨越待决的死亡或撤离。
+func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
+	i := s.Index(id)
+	if i < 0 || c.Seq == 0 {
+		return Receipt{}, false, ErrRule
+	}
+	p := &s.Seats[i]
+	if c.Epoch != p.Epoch {
+		return Receipt{}, false, ErrRule
+	}
+	if c.Seq <= uint64(len(p.Receipts)) {
+		r := p.Receipts[c.Seq-1]
+		if r.Command != c {
+			return Receipt{}, false, ErrRule
+		}
+		return r, false, nil
+	}
+	if c.Seq != uint64(len(p.Receipts)+1) || len(p.Receipts) >= LedgerLimit || p.Status != "alive" || !p.Connected || s.Phase != "running" || now < s.LastAt || now >= s.Deadline {
+		return Receipt{}, false, ErrRule
+	}
+	if p.ExtractAt != 0 && c.Kind != "move" && c.Kind != "cancel_extract" {
+		return Receipt{}, false, ErrRule
+	}
+	switch c.Kind {
+	case "move":
+		delta := p.Pos - c.A
+		if c.B != 0 || c.A < 0 || c.A > 3 || (delta != 1 && delta != -1) || now < p.NextMove {
+			return Receipt{}, false, ErrRule
+		}
+		p.Pos = c.A
+		p.NextMove = now + 100
+		p.ExtractAt = 0
+	case "gather":
+		if c.A < 0 || c.A >= 3 || c.B != 0 || p.Pos != c.A+1 || s.Nodes[c.A] == 0 || p.Load() >= s.Rules.Capacity {
+			return Receipt{}, false, ErrRule
+		}
+		s.Nodes[c.A]--
+		p.Inventory[c.A]++
+	case "craft":
+		if c.A != 0 || c.B != 0 || p.CraftAt != 0 || p.Inventory[0] < 2 || p.Inventory[2] < 1 || now+s.Rules.CraftMillis >= s.EndAt {
+			return Receipt{}, false, ErrRule
+		}
+		p.Inventory[0] -= 2
+		p.Inventory[2]--
+		p.CraftAt = now + s.Rules.CraftMillis
+	case "cancel_craft":
+		if c.A != 0 || c.B != 0 || p.CraftAt == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Inventory[0] += 2
+		p.Inventory[2]++
+		p.CraftAt = 0
+	case "heal":
+		if c.A != 0 || c.B != 0 || p.Inventory[3] == 0 || p.HP == s.Rules.HP {
+			return Receipt{}, false, ErrRule
+		}
+		p.Inventory[3]--
+		s.UsedMedkits++
+		p.HP = min(s.Rules.HP, p.HP+3)
+	case "loot":
+		if c.A < 0 || c.A >= Seats || c.B < 0 || c.B >= 4 || s.Seats[c.A].Status != "dead" || s.Drops[c.A].Pos != p.Pos || s.Drops[c.A].Inventory[c.B] == 0 || p.Load() >= s.Rules.Capacity {
+			return Receipt{}, false, ErrRule
+		}
+		s.Drops[c.A].Inventory[c.B]--
+		p.Inventory[c.B]++
+	case "extract":
+		if c.A != 0 || c.B != 0 || p.Pos != 0 || p.CraftAt != 0 || now+s.Rules.ExtractMillis >= s.EndAt {
+			return Receipt{}, false, ErrRule
+		}
+		p.ExtractAt = now + s.Rules.ExtractMillis
+	case "cancel_extract":
+		if c.A != 0 || c.B != 0 || p.ExtractAt == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.ExtractAt = 0
+	default:
+		return Receipt{}, false, ErrRule
+	}
+	s.LastAt = now
+	s.schedule()
+	r := Receipt{c, p.Inventory, p.Status, now}
+	p.Receipts = append(p.Receipts, r)
+	return r, true, s.Validate()
+}
+func (s *State) Connect(id int64, ticket uint64, connected bool) error {
+	i := s.Index(id)
+	if i < 0 || ticket == 0 {
+		return ErrRule
+	}
+	p := &s.Seats[i]
+	if connected {
+		if ticket < p.Epoch {
+			return ErrRule
+		}
+		if ticket == p.Epoch {
+			if !p.Connected {
+				return ErrRule
+			}
+			return nil
+		}
+		p.Epoch = ticket
+		p.Connected = true
+	} else {
+		if ticket != p.Epoch {
+			return ErrRule
+		}
+		p.Connected = false
+	}
+	return nil
+}
+func (s *State) die(i int) {
+	p := &s.Seats[i]
+	if p.CraftAt != 0 {
+		p.Inventory[0] += 2
+		p.Inventory[2]++
+		p.CraftAt = 0
+	}
+	s.Drops[i] = Drop{p.Pos, p.Inventory}
+	p.Inventory = Inventory{}
+	p.ExtractAt = 0
+	p.HP = 0
+	p.Status = "dead"
+}
+
+// 有界事件：先完成到期制作和安全区撤离，再收局／一次环境伤害。离线不逐秒追伤害，但 Raid End 不延长。
+func (s *State) Advance(now int64) error {
+	if s.Phase != "running" || now < s.Deadline || now >= MaxTime {
+		return ErrRule
+	}
+	for i := range s.Seats {
+		p := &s.Seats[i]
+		if p.Status != "alive" {
+			continue
+		}
+		if p.CraftAt != 0 && p.CraftAt <= now {
+			p.CraftAt = 0
+			p.Inventory[3]++
+			s.Crafted++
+		}
+		if p.ExtractAt != 0 && p.ExtractAt <= now {
+			p.ExtractAt = 0
+			p.Extracted = p.Inventory
+			p.Inventory = Inventory{}
+			p.Status = "extracted"
+		}
+	}
+	if now >= s.EndAt {
+		for i, p := range s.Seats {
+			if p.Status == "alive" {
+				s.die(i)
+			} else if p.Status == "pending" {
+				s.Seats[i].Status = "missed"
+			}
+		}
+	} else if now >= s.HazardAt {
+		for i := range s.Seats {
+			p := &s.Seats[i]
+			if p.Status == "alive" && p.Pos > 0 {
+				p.HP--
+				if p.HP == 0 {
+					s.die(i)
+				}
+			}
+		}
+		s.HazardAt = now + s.Rules.HazardMillis
+	}
+	s.LastAt = now
+	s.schedule()
+	return s.Validate()
+}

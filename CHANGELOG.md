@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 合作生存撤离接入：学习手册与业务消费者（scripts/test-survival-extraction-generated.sh）
+
+- 新增 [合作生存撤离框架学习与验收](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-survival-extraction-generated.sh`：公共 CLI 生成 `game` 工程、Player / SurvivalRaid DAO 与 SurvivalRaid 实体定时器，业务规则只在 `scripts/testdata/survival-extraction`（框架、生成器与 demo 不含这些规则）：入场扣费与撤离兑付是两个多实体事务，局内采集、制作预扣与背包容量、环境伤害与治疗、死亡掉落与拾取竞争、撤离读条与封存清单都在探险实体内，整局物资守恒在加载与每次修改后校验，一个定时器节点取最早期限。12 条场景（4 条规则 + 8 条 Nest）全部 race、无 skip。
+- 真实依赖：`ROOST_SURVIVAL_EXTRACTION_REAL=1`（需隔离 Mongo 副本集）追加 `TestSurvivalExtractionRealCrashRecovery`：制作与撤离读条都在途、strict WAL 有 15 条未投影记录时 SIGKILL 子进程，冷加载后整份探险状态与定时器 ID 逐字节一致，驱动投递循环补触发一次（完成到期的制作与撤离、环境伤害只算一次、结束时刻不变）、再按期收局，第三个进程冷加载重试入场、命令与兑付不重复；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、开放世界、局外仓库、跨服兑付与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作生存撤离接入验收的范围”。框架与生成器未改。
+
 ### 合作塔防接入：学习手册与业务消费者（scripts/test-tower-defense-generated.sh）
 
 - 新增 [合作塔防框架学习与验收](docs/framework/TOWER-DEFENSE-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-tower-defense-generated.sh`：公共 CLI 生成 `game` 工程、Player / TowerRoom DAO 与 TowerRoom 实体定时器，业务规则只在 `scripts/testdata/tower-defense`（框架、生成器与 demo 不含这些规则）：四人共享一个房间实体，共享金币建造 / 升级 / 出售与阻路 BFS 同事务，命令序号与会话 Epoch，准备屏障与按期开波，每次定时器触发只推进一步，基地胜负与多实体团队领奖。10 条场景（4 条规则 + 6 条 Nest）全部 race、无 skip。

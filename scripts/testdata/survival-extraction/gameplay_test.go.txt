@@ -1,0 +1,486 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	playerentity "example.com/survival-extraction-practice/game/entities/player"
+	matchentity "example.com/survival-extraction-practice/game/entities/survival_raid"
+	sender "example.com/survival-extraction-practice/game/handler/syncsender"
+	survival "example.com/survival-extraction-practice/game/survival"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type survivalGetter map[int64]entity.IThreadSafeEntity
+
+func (g survivalGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("entity %d missing", id)
+}
+func (g survivalGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 仅替换提交器；真实 WAL / Mongo 与 SIGKILL 在独立准入入口验证。
+type survivalCommitter struct{}
+
+func (survivalCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const survivalNow int64 = 1800000000000
+
+type survivalFixture struct {
+	engine  *nest.NestMgr
+	match   *matchentity.SurvivalRaid
+	players [survival.Seats]*playerentity.Player
+	ids     [survival.Seats]int64
+	clock   atomic.Int64
+	rules   survival.Rules
+}
+
+func loadSurvivalRules(t *testing.T, r survival.Rules) survival.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	b, _ := json.Marshal(r)
+	if e := os.WriteFile(filepath.Join(dir, "survival.json"), b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, e := survival.OpenCatalog(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e = survival.CaptureRules(s.Current())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r
+}
+func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	matchentity.RegisterEntity()
+	RegisterSurvivalExtractionNestHandlers()
+	RegisterTickSurvivalRaidTimerGenNestHandlers()
+	f := &survivalFixture{rules: loadSurvivalRules(t, survival.DemoRules())}
+	f.clock.Store(survivalNow)
+	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	g := survivalGetter{}
+	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+		id, e := entity.BuildEntityID(unique, kind)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		if e != nil {
+			t.Fatal(e)
+		}
+		g[id] = v
+		return v
+	}
+	for i := range f.players {
+		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+		f.ids[i] = f.players[i].ID()
+	}
+	f.match = build(2000, matchentity.EntityKindSurvivalRaid).(*matchentity.SurvivalRaid)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(survivalCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if e := f.engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	if e := matchentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		_ = matchentity.TimerDriver.Stop(context.Background())
+		_ = f.engine.Shutdown(context.Background())
+		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	if _, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalInit(context.Background(), f.match.ID(), f.ids, f.rules, survivalNow); e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range f.ids {
+		if e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalPlayerInit(context.Background(), id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if len(enter) == 0 || enter[0] {
+		for _, id := range f.ids {
+			if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	return f
+}
+func (f *survivalFixture) state(t *testing.T) survival.State {
+	t.Helper()
+	s, e := survival.Decode(f.match.Dao().GetState())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return s
+}
+func (f *survivalFixture) view(t *testing.T, i int) survival.View {
+	t.Helper()
+	v, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalView(context.Background(), f.match.ID(), f.ids[i])
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func (f *survivalFixture) command(t *testing.T, i int, kind string, a, b int) survival.Command {
+	v := f.view(t, i)
+	return survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a, B: b}
+}
+func (f *survivalFixture) send(i int, c survival.Command) (survival.Receipt, error) {
+	return sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+}
+func (f *survivalFixture) do(t *testing.T, i int, kind string, a, b int) survival.Receipt {
+	t.Helper()
+	if f.clock.Load()+100 >= f.view(t, i).Deadline {
+		f.step(t)
+	}
+	f.clock.Add(100)
+	r, e := f.send(i, f.command(t, i, kind, a, b))
+	if e != nil {
+		t.Fatal(kind, e)
+	}
+	return r
+}
+func (f *survivalFixture) refuse(t *testing.T, i int, c survival.Command) {
+	t.Helper()
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	if _, e := f.send(i, c); e == nil {
+		t.Fatal("accepted invalid command")
+	}
+	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+		t.Fatal("rejected command changed state or timer")
+	}
+}
+func waitSurvival(t *testing.T, ok func() bool) {
+	t.Helper()
+	until := time.Now().Add(8 * time.Second)
+	for !ok() {
+		if time.Now().After(until) {
+			t.Fatal("bounded wait expired")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func (f *survivalFixture) step(t *testing.T) {
+	t.Helper()
+	v := f.view(t, 0)
+	f.clock.Store(v.Deadline)
+	waitSurvival(t, func() bool {
+		due, ok := matchentity.TimerDriver.DueOf(f.match)
+		return ok && due.UnixMilli() == v.Deadline
+	})
+	if n := matchentity.TimerDriver.DeliverDue(context.Background()); n != 1 {
+		t.Fatalf("deliver %d", n)
+	}
+	waitSurvival(t, func() bool {
+		after := f.view(t, 0)
+		return after.LastAt != v.LastAt || after.Phase != v.Phase
+	})
+}
+func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
+	f := newSurvivalFixture(t, false)
+	before := f.match.Dao().GetState()
+	refused := errors.New("after entry fee")
+	name := nest.NewHandlerName("survival_undo_entry")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if e := handlerSurvivalEnter(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity), f.clock.Load()); e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if before != f.match.Dao().GetState() || f.players[0].Dao().GetGold() != 100 {
+		t.Fatal("partial admission rollback")
+	}
+	var wg sync.WaitGroup
+	for _, id := range f.ids {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+					t.Error(e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	for i, p := range f.players {
+		if p.Dao().GetGold() != 95 || !f.state(t).Seats[i].Joined {
+			t.Fatal("entry duplicated")
+		}
+	}
+}
+func TestSurvivalExtractionSharedNodeCompetitionAndRetry(t *testing.T) {
+	f := newSurvivalFixture(t)
+	for i := range f.ids {
+		f.do(t, i, "move", 1, 0)
+	}
+	var wg sync.WaitGroup
+	for i := range f.ids {
+		c := f.command(t, i, "gather", 0, 0)
+		for range 3 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, e := f.send(i, c); e != nil {
+					t.Error(e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	if f.state(t).Nodes[0] != 2 {
+		t.Fatal("resource duplicated")
+	}
+	f.do(t, 0, "gather", 0, 0)
+	f.do(t, 1, "gather", 0, 0)
+	f.refuse(t, 2, f.command(t, 2, "gather", 0, 0))
+	f.refuse(t, 2, f.command(t, 2, "gather", 1, 0))
+	if e := f.state(t).Validate(); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestSurvivalExtractionCraftCapacityCancellationAndHealing(t *testing.T) {
+	f := newSurvivalFixture(t)
+	f.do(t, 0, "craft", 0, 0)
+	f.do(t, 0, "move", 1, 0)
+	for range 3 {
+		f.do(t, 0, "gather", 0, 0)
+	}
+	f.refuse(t, 0, f.command(t, 0, "gather", 0, 0))
+	cancel := f.do(t, 0, "cancel_craft", 0, 0)
+	if _, e := f.send(0, cancel.Command); e != nil {
+		t.Fatal(e)
+	}
+	if p := f.state(t).Seats[0]; p.Inventory != (survival.Inventory{5, 0, 1, 0}) {
+		t.Fatal("refund lost ingredients")
+	}
+	f.do(t, 0, "craft", 0, 0)
+	f.step(t)
+	if p := f.state(t).Seats[0]; p.Inventory != (survival.Inventory{3, 0, 0, 1}) || p.CraftAt != 0 {
+		t.Fatal("craft completion wrong")
+	}
+	f.step(t)
+	if f.state(t).Seats[0].HP != 5 {
+		t.Fatal("hazard did not damage")
+	}
+	r := f.do(t, 0, "heal", 0, 0)
+	if _, e := f.send(0, r.Command); e != nil {
+		t.Fatal(e)
+	}
+	if p := f.state(t).Seats[0]; p.HP != 6 || p.Inventory[3] != 0 || f.state(t).UsedMedkits != 1 {
+		t.Fatal("heal duplicated")
+	}
+}
+func TestSurvivalExtractionDeathDropsAndConcurrentLoot(t *testing.T) {
+	f := newSurvivalFixture(t)
+	f.do(t, 0, "move", 1, 0)
+	for range 6 {
+		f.step(t)
+	}
+	s := f.state(t)
+	if s.Seats[0].Status != "dead" || s.Drops[0].Inventory != (survival.Inventory{2, 0, 1, 0}) {
+		t.Fatal("death did not drop once")
+	}
+	f.refuse(t, 0, f.command(t, 0, "gather", 0, 0))
+	for i := 1; i < 4; i++ {
+		f.do(t, i, "move", 1, 0)
+	}
+	var wg sync.WaitGroup
+	wins := make(chan int, 3)
+	for i := 1; i < 4; i++ {
+		c := f.command(t, i, "loot", 0, 2)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, e := f.send(i, c); e == nil {
+				wins <- i
+			}
+		}()
+	}
+	wg.Wait()
+	close(wins)
+	n := 0
+	for range wins {
+		n++
+	}
+	if n != 1 || f.state(t).Drops[0].Inventory[2] != 0 {
+		t.Fatal("single drop had multiple winners")
+	}
+	if got, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID()); e != nil || got != 0 || f.players[0].Dao().GetGold() != 95 {
+		t.Fatal("dead player exported loot", e)
+	}
+	if e := f.state(t).Validate(); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestSurvivalExtractionChannelCancellationAndAtomicClaim(t *testing.T) {
+	f := newSurvivalFixture(t)
+	f.do(t, 0, "extract", 0, 0)
+	f.do(t, 0, "move", 1, 0)
+	if f.state(t).Seats[0].ExtractAt != 0 {
+		t.Fatal("movement did not cancel extraction")
+	}
+	f.do(t, 0, "move", 0, 0)
+	start := f.do(t, 0, "extract", 0, 0)
+	f.refuse(t, 0, f.command(t, 0, "craft", 0, 0))
+	if _, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID()); e == nil {
+		t.Fatal("channel start paid out")
+	}
+	f.step(t)
+	if f.state(t).Seats[0].Status != "extracted" {
+		t.Fatal("channel did not seal manifest")
+	}
+	if _, e := f.send(0, start.Command); e != nil {
+		t.Fatal(e)
+	}
+	before := f.match.Dao().GetState()
+	refused := errors.New("after extraction payout")
+	name := nest.NewHandlerName("survival_undo_claim")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerSurvivalClaim(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity))
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 95 {
+		t.Fatal("partial payout rollback")
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalClaim(context.Background(), f.ids[0], f.match.ID())
+			if e != nil || got != 3 {
+				t.Error(got, e)
+			}
+		}()
+	}
+	wg.Wait()
+	if f.players[0].Dao().GetGold() != 98 {
+		t.Fatal("duplicated payout")
+	}
+}
+func TestSurvivalExtractionReconnectPrivateInventoryAndDeadline(t *testing.T) {
+	f := newSurvivalFixture(t)
+	r := f.do(t, 0, "craft", 0, 0)
+	api := sender.NewSurvivalExtractionSender(f.engine)
+	ctx := context.Background()
+	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 1, false); e != nil {
+		t.Fatal(e)
+	}
+	f.refuse(t, 0, f.command(t, 0, "move", 1, 0))
+	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
+		t.Fatal(e)
+	}
+	if e := api.Sync_SurvivalConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
+		t.Fatal("old disconnect accepted")
+	}
+	f.refuse(t, 0, r.Command)
+	if got, e := api.Sync_SurvivalReceipt(ctx, f.match.ID(), f.ids[0], 2, 1); e != nil || got != r {
+		t.Fatal("old receipt lost", e)
+	}
+	if _, e := api.Sync_SurvivalView(ctx, f.match.ID(), 999); e == nil {
+		t.Fatal("outsider read")
+	}
+	raw, _ := json.Marshal(f.view(t, 1).Players[0])
+	if strings.Contains(string(raw), "Inventory") {
+		t.Fatal("teammate private backpack leaked")
+	}
+	c := f.command(t, 1, "extract", 0, 0)
+	f.clock.Store(f.view(t, 1).Deadline)
+	f.refuse(t, 1, c)
+	f.step(t)
+	if f.state(t).Seats[0].Inventory[3] != 1 {
+		t.Fatal("offline crafting lost")
+	}
+}
+func TestSurvivalExtractionExpiryCannotReopenOrReenter(t *testing.T) {
+	f := newSurvivalFixture(t)
+	f.do(t, 0, "extract", 0, 0)
+	f.clock.Store(f.view(t, 0).EndAt + 3600000)
+	before := f.view(t, 0)
+	waitSurvival(t, func() bool {
+		due, ok := matchentity.TimerDriver.DueOf(f.match)
+		return ok && due.UnixMilli() == before.Deadline
+	})
+	if n := matchentity.TimerDriver.DeliverDue(context.Background()); n != 1 {
+		t.Fatal(n)
+	}
+	waitSurvival(t, func() bool { return f.view(t, 0).Phase == "done" })
+	s := f.state(t)
+	if s.Seats[0].Status != "extracted" || s.Seats[1].Status != "dead" {
+		t.Fatal("expiry overwrote confirmed channel or left player alive")
+	}
+	for _, id := range f.ids {
+		if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+			t.Fatal("admission retry should preserve fact", e)
+		}
+	}
+	if f.match.Dao().GetState() != s.Encode() {
+		t.Fatal("reentry resurrected raid")
+	}
+	for _, p := range f.players {
+		if p.Dao().GetGold() != 95 {
+			t.Fatal("entry charged twice")
+		}
+	}
+	waitSurvival(t, func() bool { _, ok := matchentity.TimerDriver.DueOf(f.match); return !ok })
+}
+func TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer(t *testing.T) {
+	f := newSurvivalFixture(t)
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	c := f.command(t, 0, "craft", 0, 0)
+	refused := errors.New("after craft mutation")
+	name := nest.NewHandlerName("survival_undo_craft")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerSurvivalCommand(es[0].(ISurvivalRaidEntity), f.ids[0], c, f.clock.Load())
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+		t.Fatal("partial craft rollback")
+	}
+	if _, e := f.send(0, c); e != nil {
+		t.Fatal(e)
+	}
+}
