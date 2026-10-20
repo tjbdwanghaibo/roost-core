@@ -499,30 +499,12 @@ func identifierFromAlias(alias string) string {
 
 // collectUsedImports finds which source imports are referenced by handler entity/param types.
 func collectUsedImports(funcs []*FuncInfo, imports []ImportInfo) []ImportInfo {
-	// Collect all type strings
-	typeRefs := make(map[string]bool)
+	// 与生成类型校验共用解析，指针、切片、map、泛型中的包引用不能漏收。
+	typeRefs := generatedTypeRefs(funcs, false, false)
 	for _, f := range funcs {
-		for _, e := range f.Entities {
-			if dot := strings.Index(e.Type, "."); dot > 0 {
-				typeRefs[e.Type[:dot]] = true
-			}
-		}
-		for _, p := range f.Params {
-			if dot := strings.Index(p.Type, "."); dot > 0 {
-				typeRefs[p.Type[:dot]] = true
-			}
-		}
 		for _, ret := range f.Returns {
-			if dot := strings.Index(ret.Type, "."); dot > 0 {
-				typeRefs[ret.Type[:dot]] = true
-			}
-		}
-		for _, access := range f.RemoteAccess {
-			if dot := strings.Index(access.Scope, "."); dot > 0 {
-				typeRefs[access.Scope[:dot]] = true
-			}
-			if dot := strings.Index(access.Type, "."); dot > 0 {
-				typeRefs[access.Type[:dot]] = true
+			for _, pkg := range packageRefs(ret.Type) {
+				typeRefs[pkg] = true
 			}
 		}
 	}
