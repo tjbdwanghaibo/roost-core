@@ -17,6 +17,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
@@ -33,6 +35,9 @@ type rewardRuntime struct {
 	nest      *nest.NestMgr
 	access    *entity.ManagerAccess
 	id        int64
+	syncer    *entitysync.Manager
+	interest  *policy.Interest
+	sink      *viewSink
 }
 
 func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
@@ -73,7 +78,8 @@ func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 	rt, e := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{})
 	check(t, e)
 	check(t, rt.Start(ctx))
-	n := nest.NewEngine(append(rt.NestOptions(), nest.NestOptionWithGetter(access))...)
+	syncer, interest, sink := newSpatialView(t)
+	n := nest.NewEngine(append(rt.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithEntitySync(syncer))...)
 	check(t, n.Start())
 	id, e := entity.BuildEntityID(int64(sid)*100, player.EntityKindPlayer)
 	check(t, e)
@@ -83,5 +89,5 @@ func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 		check(t, n.Shutdown(ctx))
 		check(t, rt.Shutdown(ctx))
 	})
-	return &rewardRuntime{rt, projector, n, access, id}
+	return &rewardRuntime{rt, projector, n, access, id, syncer, interest, sink}
 }

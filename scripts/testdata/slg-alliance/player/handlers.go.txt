@@ -1,9 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
+	"slices"
 
 	db "example.com/slg-alliance-practice/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -30,6 +35,9 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 		}
 		return p.Dao().GetGold(), nil
 	}
+	p.Dao().SetX(800)
+	p.Dao().SetY(800)
+	p.Dao().SetCoverage("[]")
 	p.Dao().SetHomeSID(sid)
 	p.Dao().SetReceipts("{}")
 	return p.Dao().GetGold(), nil
@@ -72,9 +80,42 @@ func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activit
 //roost:nest rollback=undo durability=strict
 func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
 	raw, e := json.Marshal(struct {
+		X, Y     int64
+		Coverage string
 		Home     int32
 		Gold     int64
 		Receipts string
-	}{p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
 	return string(raw), e
+}
+
+// 内部教学移动入口；坐标和覆盖由服务器规则产生，不接客户端自报覆盖。
+// 同一 strict 事务保存位置和覆盖，空间索引只接已提交事实；reject 是回滚验收注入点。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMove(p IAllianceRewardPlayerEntity, interest *policy.Interest, syncer *entitysync.Manager, x, y int64, blocks []int64, reject bool) (int64, error) {
+	before := syncer.Subscribers(p.ID())
+	component, e := policy.NewSpatialComponent(p, interest, false, func(at spatial.Point) { p.Dao().SetX(at.X); p.Dao().SetY(at.Y) })
+	if e != nil {
+		return 0, e
+	}
+	if e = component.MoveWithObservedBlocks(spatial.Point{X: x, Y: y}, blocks); e != nil {
+		return 0, e
+	}
+	raw, e := json.Marshal(blocks)
+	if e != nil {
+		return 0, e
+	}
+	p.Dao().SetCoverage(string(raw))
+	// 特意在事务尚未提交时驱动一次政策/发布，验证索引不能抢先放出对象。
+	if e = syncer.Flush(context.Background()); e != nil {
+		return 0, e
+	}
+	if !slices.Equal(before, syncer.Subscribers(p.ID())) {
+		return 0, errors.New("uncommitted spatial subscription escaped")
+	}
+	if reject {
+		return 0, errors.New("injected movement rollback")
+	}
+	return x, nil
 }

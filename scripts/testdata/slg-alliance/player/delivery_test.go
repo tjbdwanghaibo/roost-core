@@ -69,6 +69,7 @@ func rewardChild(t *testing.T, mode string) {
 		check(t, e)
 		_, e = s.Sync_AllianceHomeInit(ctx, n.id, sid)
 		check(t, e)
+		verifyPlayerSpatial(t, n, true)
 		before, found, e := h.store.Get(ctx, "rewards")
 		check(t, e)
 		if !found {
@@ -101,8 +102,8 @@ func rewardChild(t *testing.T, mode string) {
 				return e
 			}
 			stats := n.projector.Stats()
-			if stats.Projected != 0 || stats.WALUnacked != 2 {
-				return fmt.Errorf("want two unprojected strict records: %+v", stats)
+			if stats.Projected != 0 || stats.WALUnacked != 4 {
+				return fmt.Errorf("want four unprojected strict records: %+v", stats)
 			}
 			if e = os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600); e != nil {
 				return e
@@ -133,6 +134,7 @@ func rewardChild(t *testing.T, mode string) {
 	if wallet.Home != sid || wallet.Gold != 10 || len(receipts) != 1 || receipts[key.String()] != 10 {
 		t.Fatal("cold permanent receipt or asset missing", wallet)
 	}
+	verifyPlayerSpatial(t, n, false)
 	// 恢复先比钱包，再从原服账本发现未完成义务；第三进程必须已无待发工作。
 	delivered, e := h.deliverPending(ctx, 1, func(ctx context.Context, work activity.Key, p string, amount int64) error {
 		if p != name {

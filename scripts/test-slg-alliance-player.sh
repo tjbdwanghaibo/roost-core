@@ -28,6 +28,9 @@ python3 - "$project_root/db/def/player.go" <<'PY'
 from pathlib import Path
 import os,sys
 p=Path(sys.argv[1]);s=p.read_text().replace('type PlayerDao struct {','''type PlayerDao struct {
+ X int64 `bson:"x" dao:"persist,sync"`
+ Y int64 `bson:"y" dao:"persist,sync"`
+ Coverage string `bson:"coverage" dao:"persist"`
  HomeSID int32 `bson:"home_sid" dao:"persist"`
  Gold int64 `bson:"gold" dao:"persist"`
  Receipts string `bson:"receipts" dao:"persist"`''');p.write_text(s)
@@ -35,7 +38,7 @@ PY
 cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handler/alliance_rewards.go
 mkdir -p game/alliance
 cp "$repo_root"/scripts/testdata/slg-alliance/*.go game/alliance/
-for name in runtime delivery; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
+for name in runtime delivery spatial; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
 if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
  "$review_root/roost" add mod remote_entity -service game >> "$review_root/generate.log" 2>&1
  "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1
