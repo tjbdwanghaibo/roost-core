@@ -582,6 +582,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 - 行为回归（`framework/dataengine/engine/entity_unload_test.go`，正式 Nest + 文件 WAL + Mongo 替身）：排空后卸载、卸载期间写入被拒并回滚、冷加载与卸载前一致；投影超时；在途事务超时 busy / 期限内等它完成；未加载 / 非持久 / 并发 / 业务 worker；Remote 托管实体。变异：去掉 `reserve` 里的屏障检查 → `write during unload = <nil>`；去掉排空等待 → `unloading entities = 0, want 1` 与超时用例 `Unloaded:true, <nil>`；去掉第①步取锁 → `the transaction that held the entity when the unload began was refused: nest: transaction commit rejected`。
 - 真实依赖：生成工程 `TestGeneratedDataEngineAdminUnload`（strict / async / pipelined，真实 Mongo + 文件 WAL，`scripts/test-dataengine-generated.sh` 三阶段全通过）；`TestRealGateAdminKickClosesTheClientConnection`（独立 Gate + 真实 NATS，客户端连接被断开）；嵌入 TCP 见生成工程用例（真实 TCP 连接被关、可重新登录）。
 
+**实施后维护者决定（2026-10-20，均按推荐）**：①`entity.kick` 不做短时禁止重登（封禁属于账号 / 接入层的产品状态，另做）；②`entity.unload` 缺省 timeout 保持 5s（受 `ops.admin_timeout` 约束），不加配置键；③`kind` 只接受数值，不加 kind 名注册表（只给 `player_id` 时自动定位）；④命令开始时在途的事务按“等它结束、超过 timeout 报 busy”处理，不改为立即失败。
+
 ## D17 全服邮件的内置投递策略
 
 **状态：维护者 2026-10-20 决定 A，已实施（2026-10-20）。** 维护者原意：全局邮件是一个 ID，个人邮箱每次从全局拉取合并到个人邮箱。细则（按推荐）：①登录时拉一次，`List` / `Summary` 前再检查；②每玩家一个水位（已合并到的最大全局邮件 ID）；③合并生成带全局邮件 ID 的个人邮件，已读 / 已领 / 删除记在个人这份，按全局 ID 去重、附件只领一次；④全局邮件有有效期，过期后不再合并，已合并的按个人邮件有效期；⑤目标条件用业务谓词，框架内置“注册时间早于发送时间”；⑥可撤回，未合并的不再合并，已合并的默认不动；⑦范围与 `AudienceBroadcast` 一致（全服 / 单服 / 公会）。登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
@@ -608,6 +610,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 - ⑦范围：`""` / `mail.ServerScope` / `mail.GuildScope`；公会成员关系由业务在画像里提供，变化后再拉一次。
 - 与细则的偏差：已合并副本的有效期没有单独配置（与全局邮件同一过期时刻）；“注册时间早于发送时间”取严格早于、按秒。
 - 证据与剩余边界：CHANGELOG `[Unreleased]` 与 [KNOWN-LIMITS](KNOWN-LIMITS.md) 的“全服邮件 `mail.LazyBroadcast`”。
+
+**实施后维护者决定（2026-10-20）**：合并进个人邮箱的那份**随全局邮件一起过期**（选 A，不另设个人有效期）——取代状态行细则④里“已合并的按个人邮件有效期”的说法；`RoleCreatedAtClaim` 放在 `service/account`、撤回只在 Mail RPC 上提供（均按推荐）。
 
 ## D18 业务时区与“业务日”边界
 
