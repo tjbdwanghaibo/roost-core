@@ -374,8 +374,10 @@ Example_snapshotRecovery（去掉 Provider）：panic: lockstep match: catch-up 
 MOBA（去掉 Provider）：player 2 3 from frame 41: lockstep match: catch-up range trimmed from history: from 41, history starts at 232
 ```
 
-**验收**：包内判定表、Provider 线程、错误语义、分块节奏与重发、钉住、长局与两个 fuzz（`snapshot_test.go`）；真实回环 TCP 4 MiB 快照与 bot 断线 4 个窗口后恢复（`tcp_test.go`）；`Example_snapshotRecovery`；MOBA 十个 KCP 客户端中两人断线超过 4 个窗口后经 Arena 检查点恢复、局末同摘要；生成工程 C# 客户端经真实 TCP 断线 200 帧后重新登录、经快照恢复；toxiproxy 限速演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate 在 64 KB/s（1 MiB）与 256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连从头再传，未恢复。
+**验收**：包内判定表、Provider 线程、错误语义、分块节奏与重发、钉住、长局与两个 fuzz（`snapshot_test.go`）；真实回环 TCP 4 MiB 快照与 bot 断线 4 个窗口后恢复（`tcp_test.go`）；`Example_snapshotRecovery`；MOBA 十个 KCP 客户端中两人断线超过 4 个窗口后经 Arena 检查点恢复、局末同摘要（直接驱动 Match 一条，经持久对局 `Room` 与已提交门一条）；Room 下一帧提交卡住 / 结果未知时可靠通道只发到已提交帧（`TestMOBARoomCatchupNeverSendsUncommittedFrames`）；生成工程 C# 客户端经真实 TCP 断线 200 帧后重新登录、经快照恢复；toxiproxy 限速演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate 在 64 KB/s（1 MiB）与 256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连从头再传，未恢复。
 
 **行为变化与升级**：配了 Provider 的 Match 越界不再返回 `*CatchupUnservableError`；C9 v1 删除、新增 CA 01 下行消息，旧客户端 SDK 把它们当坏包终止，升级需同时更新服务端与 Go / C# 客户端（项目未上线，不做兼容）。
 
-**未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room`（MOBA 夹具）接快照来源（维护者 2026-10-20 决定接入，另行实施中）。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。
+**已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
+
+**未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room` 只在替身权威下验收（不含真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生）。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。

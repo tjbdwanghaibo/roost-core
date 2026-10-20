@@ -39,7 +39,8 @@
 - Go `FrameAssembler.Receive` / `ResumeAfterSnapshot`、`robot.LockstepBot.Restore`；C# `LockstepClient` 的 `restore`；校验失败一律终止、不自动重试。
 - 指标 `lockstep.snapshot.total{reason}` / `bytes.total` / `failed.total{reason}`（含维护者 2026-10-20 追加的 `detached`）。
 - 验收：包内与真实回环 TCP、`Example_snapshotRecovery`、MOBA 十客户端 KCP 长断线恢复、生成工程 C# 端到端、toxiproxy 限速演练（嵌入 TCP 两档恢复；独立 Gate 慢链路上大快照被断开循环）。
-- 未做 / 后续：MOBA 持久对局 `Room` 接快照来源（维护者 2026-10-20 决定接入，另行实施中）；独立 Gate 写出回执；客户端上传快照；Unity / IL2CPP 实测。剩余边界见 [KNOWN-LIMITS](KNOWN-LIMITS.md#lockstep)，现行说明见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。
+- 已做（2026-10-20）：MOBA 持久对局 `Room` 接快照来源（已提交门 `MatchConfig.CommittedFrame`，设计 §15）。
+- 未做 / 后续：独立 Gate 写出回执；客户端上传快照；Unity / IL2CPP 实测。剩余边界见 [KNOWN-LIMITS](KNOWN-LIMITS.md#lockstep)，现行说明见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。
 
 **原登记（2026-10-15）**：宿主不裁剪则内存随对局长度线性增长，裁得太激进则断线较久的玩家无法追帧，且“追不上时怎么办”没有框架级约定；可选 A 维持现状 + 文档、B 自动裁剪 + 全量重同步（需状态快照来源）、C 只加自动裁剪 + 明确错误。
 

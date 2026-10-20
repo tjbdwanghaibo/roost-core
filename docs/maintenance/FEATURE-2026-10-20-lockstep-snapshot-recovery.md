@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已实施（P1～P5，维护者 2026-10-20 批准，§12 全部按推荐）。** 分期见 §11，实施记录与偏差见 §14。P5 同时实施了维护者 2026-10-20 的追加决定：恢复中被 Detach 计 `failed{reason="detached"}`（§14 P5）；MOBA 持久对局 `Room` 接快照来源已决定接入，另行实施中（§14 P4 第 1 条）。现行说明以 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动) 与 [impl/04-sync §2D](../framework/impl/04-sync.md#2d-lockstep-快照恢复的实现契约) 为准，本篇 §3～§10 是评审稿（§6.3 已按实测改写），与实现不同处以 §14 为准。
+**状态：已实施（P1～P5，维护者 2026-10-20 批准，§12 全部按推荐）。** 分期见 §11，实施记录与偏差见 §14。P5 同时实施了维护者 2026-10-20 的追加决定：恢复中被 Detach 计 `failed{reason="detached"}`（§14 P5）；MOBA 持久对局 `Room` 已接快照来源，为此新增已提交门 `MatchConfig.CommittedFrame`（§15）。现行说明以 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动) 与 [impl/04-sync §2D](../framework/impl/04-sync.md#2d-lockstep-快照恢复的实现契约) 为准，本篇 §3～§10 是评审稿（§6.3 已按实测改写），与实现不同处以 §14 为准。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -648,7 +648,7 @@ C#：Unhandled exception. System.IO.IOException: Unable to read data from the tr
 
 与草案的偏差与说明：
 
-1. **MOBA 的快照来源接在 KCP 场景直接驱动的 Match 上，不接 `Room`**：`Room` 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 Sender 确认提交后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，会绕过“先提交、再广播”这道门（可能发出尚未提交的帧）。§8 已把“Room 是否改为 auto + 可靠通道、去掉业务 replay 分页”列为夹具自己的取舍、本期不强制；接法要另行设计，本期不做。**维护者 2026-10-20 决定接入（选 B），涉及“只发已提交的页 / 块”的门，另行实施中。**
+1. **MOBA 的快照来源接在 KCP 场景直接驱动的 Match 上，不接 `Room`**：`Room` 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 Sender 确认提交后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，会绕过“先提交、再广播”这道门（可能发出尚未提交的帧）。§8 已把“Room 是否改为 auto + 可靠通道、去掉业务 replay 分页”列为夹具自己的取舍、本期不强制；接法要另行设计，本期不做。**维护者 2026-10-20 决定接入（选 B），已实施：已提交门 `MatchConfig.CommittedFrame` 与 `RecoverRoomWithSnapshots`，见 §15。**
 2. **演练用共享隔离环境的 toxiproxy**（§9 表写的是 `mirror-local.sh` 私有实例）：按本期任务要求，持 `remote-acceptance.lock`、只建带 `lsp4-` 前缀的临时代理、用完删除，演练后代理列表与演练前相同。
 3. **独立 Gate 的断开方式与 §6.3 写法不同**：实测是 Gate 写 socket 时写期限到期（`player tcp: connection cannot take the frame: writev ...: i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是出站积压超过 `max_age` 250ms；是 5s `write_timeout` 还是该帧剩余发送预算先到期，这次没有区分（尚未确认）。“链路速度低于 `UnpacedBytesPerTick × 帧率` 即断开”也不准确：1 MiB / 256 KB/s 低于预算却传完了（超出部分被缓冲吸收），4 MiB / 256 KB/s 才断开。§6.3 的正文留给 P5 按实测改写。
 4. **框架看不出独立 Gate 下的反复重来**：Gate 断开后 Game 的 `OnClosed` 调 `DetachSession`，`Detach` 丢掉进行中的恢复时不计任何指标，`lockstep.snapshot.failed.total` 不动，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1（不分会话）。§6.3 写的“计数 `failed{abandoned}` 与同一会话的重复快照次数”现状只能间接看出后一项。是否在“恢复进行中被 Detach”时计一次失败（例如新原因 `detached`），交维护者决定。**维护者 2026-10-20 决定 A（计数），P5 已实施。**
@@ -678,7 +678,7 @@ C#：Unhandled exception. System.IO.IOException: Unable to read data from the tr
 
 （旁观者三条同样失败。）三条“计 0”的反例另做变异核对：把条件改成恒真后，“普通追帧”与“失败通知在途”两条分别报 `detached = 1 for a plain catch-up, want 0`、`detached = 1 after the recovery already failed, want 0`（首版“失败通知在途”用例里状态在断言前已被删除、反例不成立，改为让通知停在发送里后才有效）。
 
-**MOBA `Room`**：维护者 2026-10-20 决定接入快照来源（选 B），需要“只发已提交的页 / 块”的门，可能改框架，另派实施；本期文档写为“接入进行中（另行实施）”，落地后补记。
+**MOBA `Room`**：维护者 2026-10-20 决定接入快照来源（选 B），需要“只发已提交的页 / 块”的门；P5 文档先写为“接入进行中”，已在 §15 落地后改为已接入。
 
 **其余文档里的 Go 注释**：`ErrCatchupUnservable` 与 `MatchConfig.HistoryRetainFrames` 的注释原写“不做全量重同步”，改为按恢复方式区分。
 
@@ -731,3 +731,41 @@ B 的不变量：可靠通道上发出的任何 C7 帧、任何快照分块对�
 | `TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot` | `scripts/testdata/moba/arena_network_test.go.txt` | 十个真实 loopback KCP 客户端接 `Room`（经 `HostEndpoint`）；两人断线超过 4 个窗口后换会话重连、照常请求追帧，经已提交检查点快照恢复、续帧到头部，局末十人与权威同摘要；客户端收到的每一帧都不超过当时的已提交帧 |
 
 先红：去掉门（`CommittedFrame` 不生效）时框架用例与 Room 用例的失败原文；不配 Provider（`RecoverRoom`）时 Room 越界请求的失败原文。
+
+### 15.6 实施结果（2026-10-20）
+
+已实施，按 §15.2 方案 B。提交：`4ba83cf5`（框架门与回归、本节设计）、`b9c477f4`（Room 接入与两条 MOBA 用例）、文档收口一笔（本节结果、现行文档）。
+
+**框架**（[match.go](../../framework/sync/lockstep/match.go)、[snapshot.go](../../framework/sync/lockstep/snapshot.go)）：
+
+- `MatchConfig.CommittedFrame` 与 `Match.committed`；`servableHead()` = `min(history.Latest(), committed())`，nil 时就是 `Latest()`。
+- `pumpCatchup` 开头算一次 `head`；读页上界取 `min(catchupBatch, head - next + 1)`；`next > head` 且 `next <= Latest()` 的会话 `continue`（不发页、不删恢复状态）。`launchFetch(ctx, head)` 的 `MaxFrame = head`。
+- 与 §15.2 草案的偏差：**空闲会话切回实时**。红绿时发现只加读页上界会让 Room 这种宿主的会话永远回不到实时：Tick 里已提交帧总是 `Latest() - 1`，页面发到它为止，游标停在 `Latest()`，`settleCatchup` 的“越过最新帧”永远不成立；而页面在本 Tick 的等待里就结算完，`collectCatchups` 只看“上个 Tick 之后才结算的页”，也不会触发切回。改为配了门时 `collectCatchups` 同样检查空闲（无在途发送、非快照阶段、非失败通知待发）的会话，`next + depth > Latest()` 即删状态切回实时（本 Tick 的冗余包覆盖它，宿主提交后才发这个包）。没配门时空闲会话照旧 `continue`，现行行为逐字节不变。
+- 限制（已写进 `CommittedFrame` 注释与 guide / impl 04）：宿主提交落后切帧超过 `RedundancyDepth - 1` 帧时，恢复中的会话一直经可靠通道逐页跟随已提交帧、不切回实时。已提交帧落后于窗口起点时 `MinFrame > MaxFrame`，取快照一直 `ErrSnapshotUnavailable`。
+
+**Room**（[room.go.txt](../../scripts/testdata/moba/room.go.txt)）：`RecoverRoomWithSnapshots` / `RoomSnapshots{Reliable, Checkpoints, CheckpointEvery}`（间隔缺省 16，须小于 64 帧窗口，否则 `ErrRule`）；Match 配 `Reliable`、`Snapshots.Provider`、`CommittedFrame = len(record.Frames)`；重建后先 `Publish(checked.Reference)`，提交成功后每 16 帧 `Publish(saved.Reference)`；新增 `catchup` 操作（`HostEndpoint` 只接受当前绑定会话）；`Room.tick` 只在 `f.ID == 0`（Match 已关闭）时因 Tick 错误停房间，发送错误并入返回值。`RecoverRoom` 签名不变。
+
+**红绿**（去掉门 = 临时让 `servableHead` 直接返回 `Latest()`，其余不变；原文，框架行号是 rebase 到 P5 之前的）：
+
+```text
+框架 TestMatchCommittedFrameGatesCatchupAndSnapshots：
+  snapshot_test.go:1338: committed 20, head 26: catch-up page carried frames [15 16 17 18 19 20 21 22 23 24], want 15..20
+  snapshot_test.go:1413: snapshot requests MaxFrame [201], want [200] (committed 200, head 201)
+去掉空闲切回实时（门保留）：
+  snapshot_test.go:1356: session did not return to live broadcasts once commits caught up
+  snapshot_test.go:1419: catching up true, holes [], next 207, head 207
+Room TestMOBARoomCatchupNeverSendsUncommittedFrames（生成工程 game/handler）：
+  moba_round_test.go:663: frame 31 cut but not committed: catch-up page carried frames [25 26 27 28 29 30 31], want 25..30
+Room TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot（生成工程 game/moba）：
+  arena_network_test.go:734: session 202 was sent frame 298 on the reliable lane while 297 was committed
+不配快照（同一 KCP 用例改用 RecoverRoom）：
+  arena_network_test.go:675: player 2 catchup frame 41: lockstep match: no reliable sender for catch-up
+```
+
+KCP 用例的核对点放在服务端发送那一刻（包装可靠通道）：最初写在客户端收包时，去掉门也能通过——客户端收到包时提交往往已经跟上，这个位置证明不了门。Nest 用例的红是确定的：提交卡住期间同步等到追帧页发出再断言。首版 Nest 用例在断言失败时会卡死（`defer a.Stop` 等一个卡在提交里的 Actor），已改为先放开提交再停。
+
+绿：两条 Room 用例在生成工程 `-race` 下通过；KCP 用例实测两人都从第 288 帧的已提交检查点恢复，局末第 360 帧十人与权威同摘要；Nest 用例从第 96 帧的检查点恢复。已有 Room 用例不改即通过；`scripts/test-moba-generated.sh` PASS 断言 26 → 28。
+
+**benchstat**（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)，基线 `11e39297`，5 轮交替各 count 2，n=10）：`MatchTickTenPlayers` 1.147µs ± 10% → 1.079µs ± 13%（p=0.616），`HistoryRollingWindow` 两档 p=0.896 / 0.739，B/op 与 allocs/op 全等。没有恢复中会话的 Tick 不经过门，结论是无差异；本轮机器噪声比 P1 那次大（±7～13%）。
+
+**未做**：真实 WAL / Mongo 下的 Room 快照恢复（真实模式的 active / routing 夹具没改，仍用 `RecoverRoom`）；宿主交接与快照恢复同时发生；独立 Gate 部署下的 Room。

@@ -1,0 +1,55 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	114464769	        10.47 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.47 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	49996180	        23.30 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	49538500	        24.07 ns/op	     152 B/op	       0 allocs/op
+BenchmarkMatchTickTenPlayers-10              	  983686	      1175 ns/op	    2355 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-10              	  986953	      1202 ns/op	    2355 B/op	      18 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.59 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.93 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	52434850	        23.41 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	46328020	        23.94 ns/op	     152 B/op	       0 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1143 ns/op	    2355 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1151 ns/op	    2355 B/op	      18 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	93771676	        11.52 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	100000000	        11.36 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	49520186	        25.83 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	44200794	        26.40 ns/op	     152 B/op	       0 allocs/op
+BenchmarkMatchTickTenPlayers-10              	  938091	      1270 ns/op	    2355 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1255 ns/op	    2355 B/op	      18 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.12 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.24 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	54586188	        21.71 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	52253238	        22.41 ns/op	     152 B/op	       0 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1032 ns/op	    2355 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1051 ns/op	    2355 B/op	      18 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.05 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	100000000	        10.18 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	54777531	        20.97 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	54671053	        21.98 ns/op	     152 B/op	       0 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1034 ns/op	    2355 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-10              	 1000000	      1028 ns/op	    2355 B/op	      18 allocs/op
+PASS
