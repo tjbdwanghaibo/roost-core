@@ -628,6 +628,11 @@ func (m *Match) broadcastOrder() []broadcastReceiver {
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
 // forward past history the client is still missing.
+//
+// 以上是 RecoveryCatchup（没有配置快照来源时的缺省）的行为。RecoveryAuto / RecoverySnapshot 下由服务端按
+// MatchConfig.Recovery 判定走追帧还是全量快照（见 routeRecovery）：起点已被裁掉时不再返回 *CatchupUnservableError，
+// 而是返回 nil 并在之后的 Tick 里取快照、分块下发、从快照帧续帧；只有快照路线最终失败才发 C9 v2 失败通知。
+// 快照在取或在传时再次调用是空操作。
 func (m *Match) StartCatchup(player PlayerID, from FrameID) error {
 	session, attached := m.sessions[player]
 	if !attached {
@@ -953,6 +958,8 @@ func (m *Match) TrimHashReports(before FrameID) {
 // is for hosts that trim further, or that disabled automatic retention.
 // Catch-ups older than keep are abandoned on their next pump with
 // ErrCatchupUnservable and the catch-up-failed notice.
+// 宿主手动裁剪不受快照恢复的钉住约束：裁过钉住点后，auto / snapshot 模式的会话在续帧时改取新快照，
+// catchup 模式照上面结束并通知。
 func (m *Match) TrimHistory(keep FrameID) {
 	m.history.TrimBefore(keep)
 }

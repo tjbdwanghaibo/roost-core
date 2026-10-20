@@ -468,8 +468,8 @@ func TestMatchSnapshotProviderRunsOffTheTick(t *testing.T) {
 	}
 	match := newSnapshotMatch(t, lanes, provider, func(c *MatchConfig) {
 		c.Recovery = RecoverySnapshot
-		c.CatchupSendWait = 0 // 缺省 5ms：Tick 不等 Provider
-		c.Snapshots.FetchTimeout = 50 * time.Millisecond
+		c.CatchupSendWait = 0                             // 缺省 5ms：Tick 不等 Provider
+		c.Snapshots.FetchTimeout = 300 * time.Millisecond // Tick 若等 Provider，5 个 Tick 至少 300ms
 	})
 	if err := match.Attach(1, 101); err != nil {
 		t.Fatal(err)
@@ -490,7 +490,7 @@ func TestMatchSnapshotProviderRunsOffTheTick(t *testing.T) {
 	for range 5 {
 		_ = tickInputs(t, match)
 	}
-	if elapsed := time.Since(began); elapsed > 40*time.Millisecond {
+	if elapsed := time.Since(began); elapsed > 150*time.Millisecond {
 		t.Fatalf("5 ticks with a blocked provider took %v", elapsed)
 	}
 	for deadline := time.Now().Add(5 * time.Second); provider.calls.Load() == 0 && time.Now().Before(deadline); {
@@ -499,7 +499,7 @@ func TestMatchSnapshotProviderRunsOffTheTick(t *testing.T) {
 	if calls := provider.calls.Load(); calls != 1 {
 		t.Fatalf("two waiting sessions made %d provider calls, want 1 shared", calls)
 	}
-	time.Sleep(60 * time.Millisecond) // 过 FetchTimeout：下一 Tick 计一次失败，再下一 Tick 重取
+	time.Sleep(320 * time.Millisecond) // 过 FetchTimeout：下一 Tick 计一次失败，再下一 Tick 重取
 	if err := tickInputs(t, match); err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("timed-out fetch: %v", err)
 	}
@@ -594,6 +594,24 @@ func TestMatchSnapshotFailureSemantics(t *testing.T) {
 		client.feed(t, lanes.take(101))
 		if provider.calls.Load() != 1 || client.notice != nil || len(client.holes) != 0 || match.CatchingUp(1) {
 			t.Fatalf("calls %d notice %v holes %v catching %v", provider.calls.Load(), client.notice, client.holes, match.CatchingUp(1))
+		}
+	})
+	t.Run("send failures never switch to a snapshot", func(t *testing.T) {
+		// §3.5：追帧页连续发不出去说明链路有问题，快照只会更大；auto 不因此换路，达到上限放弃且不通知。
+		match, lanes, provider := setup(t, unavailable, nil)
+		if err := match.StartCatchup(1, 160); err != nil {
+			t.Fatal(err)
+		}
+		lanes.setFail(101, -1)
+		errs := drive(t, match, 5)
+		lanes.setFail(101, 0)
+		if provider.calls.Load() != 0 || match.CatchingUp(1) || len(errs) != 3 || !strings.Contains(errs[2].Error(), "abandoned after 3 failures") {
+			t.Fatalf("calls %d catching %v errs %v", provider.calls.Load(), match.CatchingUp(1), errs)
+		}
+		for _, packet := range lanes.take(101) {
+			if packet.reliable {
+				t.Fatal("abandoned catch-up sent something on the reliable lane")
+			}
 		}
 	})
 	t.Run("unavailable until the failure budget", func(t *testing.T) {
@@ -1143,5 +1161,89 @@ func TestMatchSnapshotMetricNames(t *testing.T) {
 	}
 	if MetricSnapshot != "lockstep.snapshot.total" || MetricSnapshotBytes != "lockstep.snapshot.bytes.total" || MetricSnapshotFailed != "lockstep.snapshot.failed.total" {
 		t.Fatal("snapshot metric names changed")
+	}
+}
+
+// 没有会话再等快照（断线、关闭）时取消在途的取快照：Provider 的 ctx 被取消，结果不挂在 Match 上。
+func TestMatchSnapshotFetchIsCancelledWhenNobodyWaits(t *testing.T) {
+	for _, end := range []string{"detach", "close"} {
+		t.Run(end, func(t *testing.T) {
+			lanes := newLaneLog()
+			cancelled := make(chan error, 1)
+			provider := &referenceProvider{fn: func(ctx context.Context, _ SnapshotRequest) (Snapshot, error) {
+				<-ctx.Done()
+				cancelled <- ctx.Err()
+				return Snapshot{}, ctx.Err()
+			}}
+			match := newSnapshotMatch(t, lanes, provider, func(c *MatchConfig) {
+				c.Recovery = RecoverySnapshot
+				c.Snapshots.FetchTimeout = time.Hour
+			})
+			if err := match.Attach(1, 101); err != nil {
+				t.Fatal(err)
+			}
+			_ = tickInputs(t, match)
+			if err := match.StartCatchup(1, 1); err != nil {
+				t.Fatal(err)
+			}
+			_ = tickInputs(t, match)
+			if match.fetch == nil {
+				t.Fatal("fetch not launched")
+			}
+			if end == "detach" {
+				match.Detach(1)
+			} else {
+				match.Close()
+			}
+			if match.fetch != nil {
+				t.Fatal("fetch still held after the last waiter left")
+			}
+			select {
+			case err := <-cancelled:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("provider ctx ended with %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("provider context was not cancelled")
+			}
+		})
+	}
+}
+
+// 只准入的可靠通道（不实现 ReliablePacer，例如独立 Gate）按 UnpacedBytesPerTick 节流，不用 BytesPerTick。
+func TestMatchSnapshotUnpacedLaneUsesTheFixedBudget(t *testing.T) {
+	lanes := newLaneLog()
+	match := newSnapshotMatch(t, lanes, &referenceProvider{size: 10_000}, func(c *MatchConfig) {
+		c.Reliable = lanes // 不声明随链路放慢
+		c.Recovery = RecoverySnapshot
+		c.Snapshots.ChunkBytes = 1000
+		c.Snapshots.BytesPerTick = 8000
+		c.Snapshots.UnpacedBytesPerTick = 2000
+	})
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	_ = tickInputs(t, match)
+	if err := match.StartCatchup(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = tickInputs(t, match)
+	awaitFetch(t, match)
+	lanes.take(101)
+	for tick := range 5 {
+		_ = tickInputs(t, match)
+		chunks := 0
+		for _, packet := range lanes.take(101) {
+			if IsSnapshotChunk(packet.data) {
+				chunks++
+			}
+		}
+		if chunks != 2 {
+			t.Fatalf("tick %d sent %d chunks, want 2 (UnpacedBytesPerTick 2000 / ChunkBytes 1000)", tick, chunks)
+		}
+	}
+	_ = tickInputs(t, match) // 10 KB 在 5 个 Tick 传完，下一 Tick 一页续帧追到头
+	if match.CatchingUp(1) {
+		t.Fatal("recovery did not finish after the transfer and one catch-up page")
 	}
 }

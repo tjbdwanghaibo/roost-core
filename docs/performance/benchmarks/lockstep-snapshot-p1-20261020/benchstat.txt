@@ -1,0 +1,27 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/new.txt │
+                              │                                                 sec/op                                                 │                                     sec/op                                      vs base               │
+HistoryRollingWindow/300-10                                                                                                10.07n ± 2%                                                                      10.02n ± 1%       ~ (p=0.541 n=10)
+HistoryRollingWindow/18000-10                                                                                              21.68n ± 2%                                                                      21.63n ± 1%       ~ (p=0.725 n=10)
+MatchTickTenPlayers-10                                                                                                     1.032µ ± 1%                                                                      1.034µ ± 1%       ~ (p=0.566 n=10)
+geomean                                                                                                                    60.85n                                                                           60.73n       -0.19%
+
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/new.txt │
+                              │                                                  B/op                                                  │                                     B/op                                      vs base                 │
+HistoryRollingWindow/300-10                                                                                                 67.00 ± 0%                                                                     67.00 ± 0%       ~ (p=1.000 n=10) ¹
+HistoryRollingWindow/18000-10                                                                                               152.0 ± 0%                                                                     152.0 ± 0%       ~ (p=1.000 n=10) ¹
+MatchTickTenPlayers-10                                                                                                    2.300Ki ± 0%                                                                   2.300Ki ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                     288.4                                                                          288.4       +0.00%
+¹ all samples are equal
+
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/lsp1/new.txt │
+                              │                                               allocs/op                                                │                                  allocs/op                                    vs base                 │
+HistoryRollingWindow/300-10                                                                                               0.000 ± 0%                                                                       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+HistoryRollingWindow/18000-10                                                                                             0.000 ± 0%                                                                       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MatchTickTenPlayers-10                                                                                                    18.00 ± 0%                                                                       18.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                              ²                                                                                 +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

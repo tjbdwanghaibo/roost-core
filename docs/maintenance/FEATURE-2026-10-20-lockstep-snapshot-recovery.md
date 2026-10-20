@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）实施中，P2～P5 未开始。
+**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）已实施（实施记录与偏差见 §14），P2～P5 未开始。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -534,3 +534,21 @@ func (c *checkpointCache) Snapshot(_ context.Context, req lockstep.SnapshotReque
 - **独立 Gate 写出回执**：让 `gate.Transport.SendReliable` 能等写出，追帧与快照都随链路放慢（KNOWN-LIMITS 已登记）。
 - **检查点持久化与宿主崩溃续赛**：MOBA 5v5 现在每帧重写整段日志并从第 1 帧重算；有了快照接口，可以把检查点 + 之后的输入段作为持久事实，恢复上限与 tick 预算可测。属于业务 / 夹具层面，另行设计。
 - **增量快照 / 压缩**：先测真实游戏的快照大小再说；分块格式的 `flags` 留了位。
+
+## 14. 实施记录
+
+### P1 服务端核心（2026-10-20）
+
+已实施：`RecoveryMode` / `SnapshotConfig` / `SnapshotProvider`（[snapshot.go](../../framework/sync/lockstep/snapshot.go)）、请求时与进行中判定、`StartSnapshot` / `SpectatorSnapshot`、取快照 goroutine 与共享、CA 01 分块与 C9 v2（[snapshot_wire.go](../../framework/sync/lockstep/snapshot_wire.go)、[wire.go](../../framework/sync/lockstep/wire.go)）、历史钉住、`nettransport.ReliablePacer`、指标、金样。用例在 [snapshot_test.go](../../framework/sync/lockstep/snapshot_test.go)（判定表、Provider 线程、错误语义、分块节奏与重发、钉住、窗口越过改走快照、宿主强制、长局、编解码与两个 fuzz）与 [tcp_test.go](../../framework/sync/lockstep/tcp_test.go)（真实回环 TCP，4 MiB，带只准入对照）。热路径前后对照见 [benchmarks/lockstep-snapshot-p1-20261020](../performance/benchmarks/lockstep-snapshot-p1-20261020/benchstat.txt)（无差异）。
+
+与本篇草案的偏差（都已在代码注释里写明）：
+
+1. **分块大小核对改用新接口 `nettransport.ReliablePayloadLimiter`（`MaxReliableBytes`）**，不用 `DatagramPayloadLimiter`：KCP / QUIC 的 `MaxDatagramPayload` 是数据报上限（1200），拿来核对可靠通道会把 16 KiB 分块误判为超限。实现方：KCP、QUIC（`config.MaxReliableBytes`）、`TCPSender`、`gate.Transport`（与各自单包上限相同）、`AsyncTransport`（已有同名方法）；`CompositeTransport` 转发。
+2. **`SnapshotReceiver` 与 `ReceivedSnapshot` 在 P1 提供**（导出，服务端测试与 P2 的 `FrameAssembler.Receive` 共用），重组规则按 §5.1：新编号且偏移 0 取代未完成的旧传输；同编号偏移小于已收字节（含已完成传输的重发）丢弃；偏移跳跃、越过 total、首块超过上限是坏包；到齐后核对 SHA-256，不符返回 `ErrSnapshotCorrupt`。
+3. **恢复进行中的重复请求是幂等的**：已在追帧 / 续帧的会话再发 `OpCatchup(from)` 且 `from` 不早于游标时照原样继续，snapshot 模式也不为重试重新发快照（避免客户端重试让服务端反复发 MB 级数据）；更早的起点才按 §3.2 重新判定。快照在取或在传时任何追帧请求都是空操作。
+4. **Provider 不响应 ctx**：Match 在 `FetchTimeout` 到期后按超时计失败、不再等它，下一 Tick 可以再发起一次——“同一局至多一次在途”只对遵守 ctx 的实现成立（接口注释写明）。取快照后的帧号 / 大小校验与 SHA-256 在调用 goroutine 内完成，Tick 只收结果。
+5. **错误与标签**：新增 `ErrSnapshotTooLarge`、`ErrSnapshotInvalid`（帧号越界或空数据）、`ErrSnapshotNotConfigured`（没有 Provider 时 `StartSnapshot`）、`ErrSnapshotCorrupt`（客户端摘要不符）；panic 转成内部错误、指标标签记 `unavailable`。auto 超阈值取快照失败回退追帧时只计 `failed{unavailable}`，不进 Tick 错误。
+6. **C9 v2 编码函数**：`EncodeCatchupUnservable(from, start)` 保留为 history_trimmed 的写法（服务端追帧越界、robot 测试沿用），新增 `EncodeRecoveryFailure(reason, from, start)`；`CatchupUnservableError.Reason` 为 0 时按 history_trimmed 解释。解码对所有原因要求 `from >= 1`，只对 history_trimmed 要求 `from < start`。
+7. **钉住点**：等快照的会话钉住进入快照阶段时的窗口起点；采用快照后钉 `Frame + 1`；续帧钉游标。`retainWindow` 裁剪点 = min(正常裁剪点, 钉住点)，下限为正常裁剪点 − `PinFrames`，早于下限的会话发 `recovery_expired`。宿主手动 `TrimHistory` 不受钉住约束。
+
+给 P2 / P3 的协议要点：金样在 [client/spec/packets.json](../../client/spec/packets.json)（`catchup_unservable` 已是 v2：`c9 02 01 ac02 f0a204`；`recovery_failed_snapshot_unavailable`：reason 2、from 90000、start 70000；`snapshot_first_chunk` + `snapshot_next_chunk`：transfer 3，帧 1234，总长 24，状态 hash 9223372036854780468（最高位为 1，验证 uvarint64），两块数据拼起来是 ASCII `roost-snapshot-golden-24`，首块带其 SHA-256）。生成：`GOWORK=off go test ./client/wire -run TestClientProtocolGolden -update`。C# SDK 在 P3 之前仍按 v1 解码 C9，`scripts/test-client-dotnet.sh` 在 `catchup_unservable` 处失败，属预期。
