@@ -23,6 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -642,6 +643,62 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	}
 	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
 		t.Fatalf("the translation gives %d, want the player id %d", got, uniqueID)
+	}
+}
+
+// A client's view request (scene_view) goes straight into the policy, like a
+// move: a wider view subscribes the player that came into range, the radius
+// is clamped to the scene's maximum, a level the scene does not configure is
+// refused, and a second change within a second is refused without touching
+// the view.
+func TestSceneViewRequestWidensClampsAndIsRateLimited(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const viewerID, farID = int64(9501), int64(9502)
+	viewer, far := newScenePlayer(t, viewerID), newScenePlayer(t, farID)
+	joinReady(t, scene, ctx, viewer, spatial.Point{X: 300, Y: 500})
+	joinReady(t, scene, ctx, far, spatial.Point{X: 520, Y: 500})
+	sees := func() bool {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		for _, session := range scene.manager.Subscribers(far.ID()) {
+			if session == entitysync.SessionID(viewerID) {
+				return true
+			}
+		}
+		return false
+	}
+	if sees() {
+		t.Fatal("premise: 220 units away is visible with the default view")
+	}
+	view, err := scene.SetView(viewerID, policy.ObserverView{Radius: 10_000})
+	if err != nil || view != (policy.ObserverView{Radius: sceneMaxLeaveRadius - (sceneLeaveRadius - sceneEnterRadius)}) {
+		t.Fatalf("SetView = %+v, %v; want the radius clamped to the scene's maximum", view, err)
+	}
+	if !sees() {
+		t.Fatal("the widened view did not subscribe the player that came into range")
+	}
+	if _, err := scene.SetView(viewerID, policy.ObserverView{Radius: sceneEnterRadius}); !errors.Is(err, policy.ErrObserverViewRate) {
+		t.Fatalf("a second change within a second: %v", err)
+	}
+	if _, err := scene.SetView(viewerID, policy.ObserverView{LOD: 1}); !errors.Is(err, policy.ErrObserverView) {
+		t.Fatalf("an unconfigured LOD level: %v", err)
+	}
+	if !sees() {
+		t.Fatal("a refused request changed the view")
 	}
 }
 

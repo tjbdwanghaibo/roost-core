@@ -1,0 +1,13 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// ErrSceneViewLOD: the client asked for an LOD level the scene does not
+// configure. The radius is never refused — the server clamps it — but a
+// level is a choice from a table, and there is no nearest level to round to.
+var ErrSceneViewLOD = errcode.Define(100022, "scene_view_lod", "unknown LOD level")
+
+// ErrSceneViewRate: the player changed its view too often (once a second at
+// most). The request is dropped, not queued: the next one carries whatever
+// the client wants by then.
+var ErrSceneViewRate = errcode.Define(100023, "scene_view_rate", "view changed too often, try again")
