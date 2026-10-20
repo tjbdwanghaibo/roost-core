@@ -187,7 +187,7 @@ SLG 手册的[通用接入原则](SLG-INTEGRATION.md#8-通用接入原则)（定
 | `scripts/test-mmorpg-scenes.sh` 与 demo 场景回归 | 无外部依赖 | §12 |
 | `scripts/test-mmorpg-cross-sid.sh` | 已启动的双 sid game-demo 与隔离 Mongo / NATS / Redis / etcd | §13 |
 
-这些脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑；当前执行结果维护在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“MMORPG 接入验收的范围”。
+这些脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑；本部分是 MMORPG 验收范围的完整说明，[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
 
 ### 10. 业务纵切
 
@@ -283,4 +283,4 @@ bash scripts/test-mmorpg-cross-sid.sh
 
 ### 14. 验收范围小结
 
-已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复与 SIGKILL 崩溃恢复（定时器经驱动投递循环）、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不以本文清单的长度代替验收。
+已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复与 SIGKILL 崩溃恢复（定时器经驱动投递循环）、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不能用 DAO 人数守恒代替 AOI 客户端视图验收。队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现（不因此算框架缺陷）；夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则。不以本文清单的长度代替验收。

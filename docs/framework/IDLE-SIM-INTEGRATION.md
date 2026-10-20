@@ -218,7 +218,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 bash scripts/test-idle-sim-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、业务幂等与时间积分；配置原子发布与存档冻结；视图深拷贝。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过驱动投递循环与加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份。代码里有上限但测试没有填满的：原料 100 上限、工坊与收入等级 5 级上限。夹具里的数值是样例。
@@ -249,4 +249,6 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 配方、产能与经济缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 结算、时间被重复计算或生成物编译失败，则应在公共实现中修复。本夹具接入时没有触发框架或生成器缺陷。当前存储是教学规模：账本 128 条、每工坊四个在途与四格待领；整份存档每次整体编码提交，窗口内每秒一次唤醒提交，没有生产吞吐或延迟承诺，不能从功能回归推算在线容量。
 
-本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“放置模拟接入验收的范围”维护，不为每一轮另建报告。
+尚未实施或验收：工序依赖 / 运输 / 雇员、自动循环生产、经营活动日历、配置迁移、真实客户端 / 鉴权 / 支付 / 广告、跨服市场、容量与长稳（均不因此算框架缺陷）。
+
+本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。

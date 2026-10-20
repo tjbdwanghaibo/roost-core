@@ -428,7 +428,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 | 再加 `ROOST_MOBA_ROUTING=1`（必须与 `ROOST_MOBA_REAL=1` 同用） | 隔离 Mongo 副本集 + 隔离 NATS | §11 |
 | `go test -race -count=1 ./framework/sync/lockstep ./framework/sync/nettransport` | 无外部依赖 | §12 |
 
-前三项不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity`、多实体 Sender 生成或 Lockstep 时手动跑；三条真实入口都登记在根包 `integration_coverage_test.go`。当前范围维护在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“MOBA 接入验收的范围”。
+前三项不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity`、多实体 Sender 生成或 Lockstep 时手动跑；三条真实入口都登记在根包 `integration_coverage_test.go`。本部分是 MOBA 验收范围的完整说明，[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
 
 ### 10. 业务纵切
 

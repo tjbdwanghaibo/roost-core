@@ -243,7 +243,7 @@ sequenceDiagram
 bash scripts/test-merge-casual-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 15 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_MERGE_CASUAL_KEEP=1` 时保留。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 15 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_MERGE_CASUAL_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest 在 15 个业务组合下的事务、undo 回滚、业务幂等和期限核对；配置原子发布与存档冻结；视图字段裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过驱动投递循环与加载后补触发；单进程，无 Redis / NATS；鉴权与登录票是合成的。代码里有上限但测试没有填满的：单批 16 条（未测超限）、广告账本 128 条（只到每日三次）。夹具里的数值是样例。
@@ -274,4 +274,6 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 物品链、数值和广告策略缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 发奖、状态越权或生成物编译失败，则应在公共实现中修复。本夹具接入时没有触发框架或生成器缺陷。当前存储是教学规模：单批 16 条、两个账本各 128 条；整份存档每次整体编码提交，没有生产吞吐或延迟承诺，不能从 15 条功能回归推算容量。
 
-本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“合成休闲接入验收的范围”维护，不为每一轮另建报告。
+尚未实施或验收：登录票的持久分配、真实广告平台（签名协议、订单查询、撤销）、内购、客户端预测与冲突提示、公网鉴权与限流、跑酷 / 物理关卡判分、容量与长稳（均不因此算框架缺陷）。
+
+本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。

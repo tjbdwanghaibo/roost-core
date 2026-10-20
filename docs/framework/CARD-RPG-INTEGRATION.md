@@ -237,10 +237,10 @@ sequenceDiagram
 bash scripts/test-card-rpg-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_CARD_RPG_KEEP=1` 时保留。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_CARD_RPG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player / CardRun DAO、实体定时器、属性代码、多实体 Sender 与 Nest 在 16 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；视图字段裁剪。
-- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份。夹具里的数值是样例。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份；开局账本满 64 条由代码强制，测试没有填满。夹具里的数值是样例。
 
 ### 12. 真实 WAL / Mongo 崩溃恢复
 
@@ -257,6 +257,8 @@ ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 3. 业务时间推进一小时。断言冷加载已把存量回合期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次补触发，托管一回合后下一回合从实际触发时间起算、新期限再次进入索引，投递计数恰为 1、没有重投。再把业务时间推进到这个新期限，循环按时投递下一回合（从期限时刻起算，计数到 2）。继续用开局那一代配置打完、获胜，领奖三次只得一份。
 4. 正常关闭后再起第三个进程冷加载：核对领奖终态、资产与无待执行定时器，再重试领奖与抽卡，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
+去掉第 3 步的 `Start` 时，用例在补触发处超时失败（`driver loop did not run turn 2`），所以补触发确实由循环完成。
+
 - **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复；恢复后的定时器节点由驱动投递循环在加载后自动补触发一次，框架不追帧；下一个期限由循环按时投递；跨进程重试不重复扣费或发奖。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例冻结业务时钟、由循环按 MaxWait 重读）、准入失败重试与 Redeliver（由 entitytimer 包测试覆盖）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
@@ -264,4 +266,6 @@ ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 
 卡池、数值和经济缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 发奖、状态越权或生成物编译失败，则应在公共实现中修复（本轮的 handler 被静默跳过即按此修复）。当前存储是教学规模：每局至多 120 次动作、三个账本各 64 条；单场日志与状态整体提交、加载时重算，没有生产吞吐或延迟承诺，正式长局需要分段日志与检查点。
 
-本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“卡牌 RPG 接入验收的范围”维护，不为每一轮另建报告。
+尚未实施或验收：一模板一张卡之外的正式卡牌实例、卡池 / 概率发布、经济、英雄与技能内容、完整 Skill Host（本例只用纯 `combat.ResolveDamage`，Skill Runtime 不在 DAO 回滚域）、充值 / 邮件 / 活动 / 排行的卡牌接线、PvP / 跨服、客户端协议与公网认证、容量与长稳（均不因此算框架缺陷）。
+
+本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
