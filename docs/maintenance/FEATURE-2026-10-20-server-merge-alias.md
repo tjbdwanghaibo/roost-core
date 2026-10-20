@@ -1,6 +1,6 @@
 # 功能设计：别名合服（2026-10-20）
 
-**状态：提案，待维护者评审，未实施。** 来源：新用户试用第八轮（游戏服务器专家视角）登记的“合服没有框架支持”，维护者问“合服可以用迁服实现吗”“方案 A 是不是有些麻烦”之后，按“最小框架改动、可回退、不触发双角色冲突”重新给出的方案。本篇写给评审者与实施 agent；源码位置按本分支基线（origin/main，2026-10-20）核对，实施前请对照当时的 HEAD 再核一次行号。
+**状态：提案，待维护者评审，未实施。** 2026-10-20 按维护者意见修订：合服是停服窗口内的离线操作，A、B 都停机；`dbscope=sid` 只表示数据归该 sid 独占，与“允不允许合服”无关，合服时作为离线迁移步骤处理（§5.2、§6.1）。 来源：新用户试用第八轮（游戏服务器专家视角）登记的“合服没有框架支持”，维护者问“合服可以用迁服实现吗”“方案 A 是不是有些麻烦”之后，按“最小框架改动、可回退、不触发双角色冲突”重新给出的方案。本篇写给评审者与实施 agent；源码位置按本分支基线（origin/main，2026-10-20）核对，实施前请对照当时的 HEAD 再核一次行号。
 
 ## 1. 现状与问题
 
@@ -29,14 +29,14 @@
 
 - 把服 A 并入服 B：A 的角色此后由 B 的 game 进程承载，**角色身份（PlayerID、`Role.ServerID`、slot）不变**。
 - 框架改动只在 account（数据模型、解析、运维入口）和读会话 sid 的两处消费者；game 进程与 Nest / DataEngine / Sync 三大块不改。
-- B 进程**不需要重启**即可开始承载 A 的玩家。
+- 合服在停服窗口内**离线**完成：A、B 都停机并排空，迁完按 sid 独占的数据后只启动 B；game 进程代码不改，B 也不需要改配置。
 - 可回退：撤销别名后 A 可以重新单独部署。
 - 双角色账号在合服后两个角色都能正常登录。
 
 **非目标**
 
 - 不把两个角色合并成一个身份（那是“物理合服”，见 §9 未采用方案 B）。
-- 不自动合并按服的业务数据（排行、World 单例、活动组等）——框架给清单与检查，处置由业务决定（§6）。
+- 按 sid 独占的数据（`dbscope=sid`）由框架工具做通用的离线搬迁（§6.1）；需要业务语义的合并（排行、World 单例、活动组等）框架给清单，处置由业务决定（§6.2）。
 - 不处理客户端接入地址的发布（服务器列表、网关 / LB 路由属于部署，§5.4 只给要求）。
 - 不支持把 A 并入一个本身已并入别处的服（链式合服）以外的拓扑变化；链式解析见 §3.2。
 
@@ -66,7 +66,7 @@ servingServer(origin) =
           seen.add(s); s = rec.MergedInto
 ```
 
-- 链式允许（A→B，之后 B→C，A 的角色由 C 承载），深度上限与环检测在**写入别名时**就拒绝，解析时再防御一次。
+- **链式合服**指合服之后再合服：A 并入 B 之后，B 又并入 C，A 的角色应由 C 承载。两种实现：按链解析（记录保持 A→B、B→C，解析沿链走，需要环检测与深度上限），或**拍平**（执行 B→C 时把所有指向 B 的别名一并改成指向 C，记录永远只有一跳）。合服是离线操作，拍平只是同一窗口里多改几条记录，因此推荐拍平（§10-2）；采用拍平时解析只看一跳，上面伪代码里的循环与环检测退化为“目标服不得再有 `MergedInto`”的写入校验。
 - 承载服记录不存在、或承载服 `Status` 为 `maintenance`：解析成功（返回承载 sid），是否放行登录与现状一致——由承载服自己的状态决定，不在解析里另设规则。
 
 ### 3.3 返回结构加字段（只读、不存储）
@@ -110,19 +110,19 @@ go run ./cmd/accountctl -redis … show-server    -sid 1001
 - `UnmergeServer`：清空 `MergedInto`，`Status` 保持 `closed`，由运维在 A 重新部署后用 `upsert-server -status open` 打开。
 - 每次写入记审计日志（操作者、from、into、时间），沿用 account 现有的 admin 审计方式。
 
-### 5.2 合服步骤（runbook，写进 `docs/framework/PLAYER-MIGRATION.md` 新增一节）
+### 5.2 合服步骤（离线，runbook 写进 `docs/framework/PLAYER-MIGRATION.md` 新增一节）
 
-1. 公告停服；A 的接入层停止接受新连接，game(A) 优雅停机。
-2. `sidmove wal-drained -dir <A 的 WAL 目录>` → 必须 Drained。
-3. `sidmove singleton -key …:game:<A>` → 锁已释放。
-4. `sidmove players -ids <A 的抽样玩家> -out before.json`。
-5. 按 §6 清单处置 A 的按服数据（业务脚本）；`accountctl merge-server -from A -into B -dry-run` 打印检查结果。
-6. `accountctl merge-server -from A -into B`。
+1. 公告停服；A、B 的接入层停止接受新连接，game(A)、game(B) 都优雅停机。
+2. 对 A、B 各跑一次 `sidmove wal-drained -dir <WAL 目录>` → 都必须 Drained；`sidmove singleton` → 两个 sid 的锁都已释放。
+3. `sidmove players -ids <A、B 的抽样玩家> -out before.json`。
+4. **按 sid 独占数据的离线迁移**（§6.1）：`sidmerge migrate -from A -into B -dry-run` 列出每个 `dbscope=sid` 逻辑库在 A、B 的物理库、文档数与 `_id` 冲突；无冲突后正式执行，生成迁移清单 `merge-A-into-B.json`。
+5. 业务语义合并（§6.2，业务脚本）：World 单例、排行、活动组等。
+6. `accountctl merge-server -from A -into B`（§5.1）。
 7. 部署层把 A 的客户端入口指向 B（服务器列表把 A 显示为“已并入 B”，网关 / LB 路由改到 B，§5.4）。
-8. 玩家登录 A 服角色：会话承载服为 B，由 game(B) 加载；`sidmove players -compare before.json` 在首批登录前比对，证明空窗期无写入。
-9. 不再部署 game(A)。
+8. 启动 game(B)；在开放登录前 `sidmove players -compare before.json`，并按迁移清单核对迁入文档的 `_version` / 摘要，证明窗口内没有第三个写者。
+9. 开放登录：A 服角色的会话承载服为 B，由 game(B) 加载。之后不再部署 game(A)。
 
-B 全程不停机、不改配置。
+B 只在窗口内停机重启，配置与代码都不变。
 
 ### 5.3 防止 A 被误启动
 
@@ -136,22 +136,36 @@ B 全程不停机、不改配置。
 
 ### 5.5 回退
 
-在 B 承载期间 A 的玩家产生的数据都写在全服玩家集合里，撤销别名不需要搬数据：
+合服后 A 的玩家写入的非独占数据都在全服集合里，撤销别名不需要搬这部分。按 sid 独占的数据要看情况：
 
-1. game(B) 照常运行；A 的玩家下线（公告）；
-2. `accountctl unmerge-server -from A`；
-3. 部署 game(A)（新 WAL 目录），`upsert-server -sid A -status open`，接入层改回。
+1. 停服窗口内停 game(B)，`sidmove wal-drained` 确认排空；
+2. `sidmerge revert -manifest merge-A-into-B.json`：把清单里合服时迁入 B 的文档按当前版本搬回 A 的物理库（迁移后又被改过的照当前内容搬回）；
+3. 合服期间**新产生**的按 sid 独占数据都写在 B 的库里，框架无法判断归属（进程只知道自己是 B）。业务需要按自己的键规则（例如文档里记录了 `OriginServerIDClaim`）判断哪些属于 A 的玩家，否则这部分只能留在 B——runbook 写明，回退前由业务确认；
+4. `accountctl unmerge-server -from A`；部署 game(A)（新 WAL 目录），`upsert-server -sid A -status open`，接入层改回；启动 B。
 
-若在合服期间业务把 A 的按服数据并进了 B（§6），回退需要业务反向处置，runbook 写明这一点。
+没有按 sid 独占数据的工程，回退只有第 1、4 步。
 
-## 6. 按服数据清单与检查
+## 6. 按服数据
 
-`merge-server -dry-run` 打印、doctor 新增只读检查 `merge-readiness`（需要工程上下文）列出：
+### 6.1 按 sid 独占的数据：离线迁移（框架工具）
+
+`dbscope=sid` 只是存储标记：这个逻辑库的数据归某个 sid 独占，物理库名是 `<physical>_<sid>`（D9）。合服时它不是阻碍，而是一个确定的搬迁步骤：把 A 的独占数据并入 B 的独占库。在停服、两边 WAL 都已排空的前提下，这是纯粹的离线数据操作：
+
+- **工具**：`cmd/sidmerge migrate -from A -into B [-dry-run] [-manifest out.json]`（生成进 game-demo，同 sidmove；物理库按服务配置的 `dataengine.databases` 换算，与 game 进程同一条规则 `kitdataengine.LoadDatabaseMapFile`）。逻辑库清单取生成器写出的 DAO 常量文件里 `dbscope=sid` 的那些（D9 修订版 A 的常量文件）。
+- **前置**：A、B 两个 sid 的 `wal-drained` 与 `singleton` 都通过；否则拒绝执行。
+- **逐集合拷贝**：原样拷贝文档，包括 `_version` / `_schema` / `_last_tx` 与墓碑字段（`_deleted`）；B 启动后冷加载就从这些元数据继续，WAL 为空不受影响。不拷贝 DataEngine 自己的簿记集合（`_dataengine_*`：排空后没有待处理内容）。
+- **`_id` 冲突**：PlayerID 由全局唯一的分配器发出，玩家相关文档不会撞；按 sid 定 ID 的文档（如以 sid 为 UniqueID 的单例）会撞。冲突时整体停止并逐条报告，不覆盖、不跳过——这类文档属于 §6.2 的业务语义合并，业务先处置（合并后删掉 A 的那份，或改为全局库）再重跑。
+- **幂等与清单**：重跑时与目标内容摘要相同的文档跳过；每条迁入记录（库、集合、`_id`、版本、摘要）写进清单，供开服前核对（§5.2 第 8 步）和回退（§5.5）。
+- **源库**：迁移成功后 A 的独占库保留为只读归档还是删除，见 §10-4。
+- **Remote 托管（`remote=managed`）的 kind**：所有权元数据不在本工具范围；有这类数据的工程由 dry-run 点名，按 Remote 的迁移规则另行处理。
+
+### 6.2 需要业务语义的合并（框架给清单）
+
+`sidmerge migrate -dry-run` 与 doctor 只读检查 `merge-readiness`（需要工程上下文）列出：
 
 | 类别 | 现状 | 合服时的处置（业务决定） |
 | --- | --- | --- |
-| `dbscope=sid` 的 DAO | 物理库 `<logical>_<sid>`，B 进程读不到 A 的库 | **默认拒绝合服**并点名 DAO；业务把数据搬进 B 的库后用 `-allow-sid-dao <name>` 声明已处置 |
-| World 单例 | UniqueID = sid（`WorldUniqueID`），合服后 World(A) 不再加载 | 业务决定合并计数 / 丢弃；清单点名 World(A) 文档 |
+| World 单例 | UniqueID = sid（`WorldUniqueID`），合服后只加载 World(B) | 合并计数 / 进度到 World(B)，或丢弃；清单点名 World(A) 文档 |
 | 排行（rank board 按服） | board 名常含 sid | 并存（保留 A 榜只读）或重算合并榜 |
 | 活动组 `activity.groups_file` | 按 game sid 列组 | 从组里移除 A，必要时把 A 的贡献并入 |
 | 跨服 global `Routing` | 按 game sid 绑定组 | A 的绑定解除（`Routing` 已有迁移操作，按进程 sid 不再需要 A） |
@@ -180,12 +194,12 @@ B 全程不停机、不改配置。
 **真实进程验收（game-demo 两服）**
 
 1. 起 sid 1000、1001 两个 game 与 account；在两服各建若干角色，其中一个账号在两服各有一个角色；各自写入一些数据；
-2. 停 1001，`sidmove wal-drained / singleton / players -out`；
-3. `accountctl merge-server -from 1001 -into 1000`；
-4. 1001 的角色登录：被 1000 进程承载，数据与停机前一致（`players -compare`），能继续写入；
+2. 停 1001 与 1000，两边 `sidmove wal-drained / singleton`，`players -out`；
+3. 验收工程加一个 `dbscope=sid` 的 DAO（game-demo 本身没有），两服各写若干文档、并放一个按 sid 定 ID 的文档：`sidmerge migrate -dry-run` 报出该冲突；业务处置后正式迁移，清单条数与文档摘要核对；
+4. `accountctl merge-server -from 1001 -into 1000`，启动 1000；1001 的角色登录：被 1000 进程承载，玩家数据与按 sid 独占的数据都与停机前一致（`players -compare` + 清单），能继续写入；
 5. 双角色账号的两个角色先后在 1000 登录，互不影响；
 6. 在 1001 上 `CreateRole` 被拒；
-7. 回退：`unmerge-server`、重新部署 1001、1001 的角色回到 1001 承载，期间在 1000 写入的数据仍在；
+7. 回退：停 1000、`sidmerge revert -manifest`、`unmerge-server`、重新部署 1001；1001 的角色回到 1001 承载，迁入文档回到 1001 的独占库，期间写入的全服数据仍在；
 8. 独立 Gate 部署同样走一遍步骤 4（按承载服路由）。
 
 ## 9. 未采用的方案
@@ -197,10 +211,10 @@ B 全程不停机、不改配置。
 ## 10. 待维护者决定（含推荐）
 
 1. **字段命名与语义**：`Role.ServingServerID` / `Session.ServingServerID`、`ServerIDClaim` 改为承载服、新增 `OriginServerIDClaim`。**推荐**按本篇。
-2. **链式合服**：允许并限深 8（推荐），或只允许一跳（实现更简单，后续再并需先把下游改指向终点）。
+2. **链式合服**（合服之后再合服，见 §3.2）：`merge-server -from B -into C` 时把所有 `MergedInto == B` 的服一并改为 C，记录只有一跳、解析不需要环检测（推荐，离线窗口里多改几条记录）；或保留链并在解析时沿链走、限深 8。
 3. **合服后误启动 A**：game 启动时经 account 检查 `MergedInto` 并拒绝启动（推荐，需要 game 装配了 account 能力；没装配时只靠 runbook），或只靠 runbook。
-4. **`dbscope=sid` 的默认处置**：默认拒绝合服、需显式声明已处置（推荐），或只警告。
-5. **按服数据检查放在哪**：`accountctl merge-server -dry-run` 只做 account 侧检查，工程侧清单由 doctor `merge-readiness` 做（推荐，二者都只读）；或全部放进一个独立的 `cmd/sidmerge` 工具（类似 sidmove，生成进 game-demo）。
+4. **按 sid 独占数据迁移后的源库**：保留为只读归档，回退与核对时使用，确认无误后由运维手动删除（推荐）；或迁移成功即删除。
+5. **工具划分**：account 记录用 `accountctl merge-server`；离线数据迁移与按服清单用独立的 `cmd/sidmerge`（类似 sidmove，生成进 game-demo）；doctor `merge-readiness` 只读复用同一份清单（推荐）。或把 account 改写也并进 `sidmerge`（一条命令完成，但 sidmerge 要拿 account 存储凭据）。
 6. **显示原服标识**：框架只提供 `OriginServerIDClaim`，名字后缀由业务做（推荐）；或 account 在 `Role` 里提供显示名模板。
 
 ## 11. 分期
@@ -209,5 +223,5 @@ B 全程不停机、不改配置。
 | --- | --- | --- |
 | P1 | account：`MergedInto`、解析、`ServingServerID`、`MergeServer` / `UnmergeServer`、errcode、单元测试 | §8 单元 |
 | P2 | 消费者：Gate 认证器、game-demo 认证器与登录端点注释、生成骨架注释、`OriginServerIDClaim`；全仓 `.ServerID` 判定 | §8 Gate |
-| P3 | 运维：accountctl 三个子命令、dry-run 检查、（按 §10-3）启动自检、PLAYER-MIGRATION 合服 runbook | runbook 走查 |
-| P4 | 工程侧清单：doctor `merge-readiness` 或 `cmd/sidmerge`（按 §10-5）；真实进程两服验收 | §8 真实进程 |
+| P3 | 运维：accountctl 三个子命令（含拍平）、`cmd/sidmerge migrate / revert`（按 sid 独占数据的离线迁移、冲突报告、清单）、（按 §10-3）启动自检、PLAYER-MIGRATION 合服 runbook | runbook 走查；sidmerge 单元与真实 Mongo 用例 |
+| P4 | 工程侧清单：doctor `merge-readiness` 复用 sidmerge 的清单（按 §10-5）；真实进程两服验收（含 `dbscope=sid` 迁移与回退） | §8 真实进程 |
