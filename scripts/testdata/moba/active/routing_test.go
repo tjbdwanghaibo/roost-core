@@ -128,7 +128,13 @@ func runMOBARoutingChild(t *testing.T, role string) {
 				err := b.CallTo(ctx, "authority", mobaAuthoritySID, "round", change, &saved)
 				return saved, err
 			}
-			room, err := moba.RecoverRoom(r, persist, nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { return nil }})
+			// 按快照恢复的接法重建（设计 FEATURE-2026-10-20 §15.3）：每次 load 新建检查点缓存，重建后先发布已提交头部，
+			// 交接后的新宿主立刻能服务快照；本演练的路由会话不请求追帧，两条下行通道都丢给空实现。
+			lanes := nettransport.TransportFunc{
+				Datagram: func(context.Context, nettransport.SessionID, []byte) error { return nil },
+				Reliable: func(context.Context, nettransport.SessionID, []byte) error { return nil },
+			}
+			room, err := moba.RecoverRoomWithSnapshots(r, persist, lanes, moba.RoomSnapshots{Reliable: lanes, Checkpoints: &moba.ArenaCheckpoints{}})
 			if err != nil {
 				return nil, err
 			}

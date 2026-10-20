@@ -770,4 +770,21 @@ KCP 用例的核对点放在服务端发送那一刻（包装可靠通道）：�
 
 **维护者决定（2026-10-20，均按推荐）**：①Room 在帧已切出后不因发送错误停房间，这条对 `RecoverRoom` 同样生效、不改为只在配了快照时生效（单个会话的追帧 / 分块发送失败不该停整局；没配可靠通道时这条路径实际碰不到）；②真实依赖模式的 active / routing 夹具改用 `RecoverRoomWithSnapshots`，补 SIGKILL 后经快照恢复的演练，排在 2026-10-20 夜间性能补测之后实施。
 
-**未做**：真实 WAL / Mongo 下的 Room 快照恢复（真实模式的 active / routing 夹具没改，仍用 `RecoverRoom`）；宿主交接与快照恢复同时发生；独立 Gate 部署下的 Room。
+**真实依赖夹具改接快照恢复（维护者决定②，已做，2026-10-20）**：
+
+- `TestMOBARealActiveRoundCrashRecovery` 与 `TestMOBARealCrossSIDHostRouting` 的宿主都改用 `RecoverRoomWithSnapshots`（[crash_test.go](../../scripts/testdata/moba/active/crash_test.go)、[routing_test.go](../../scripts/testdata/moba/active/routing_test.go)），原有断言全部保留并通过；崩溃用例补一条“可靠通道 0 个包”（没有会话请求追帧）。路由演练每次 `load` 新建检查点缓存，两条下行通道仍是空实现。
+- 新增 `TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL`（[snapshot_test.go](../../scripts/testdata/moba/active/snapshot_test.go)）：子进程 strict 文件 WAL、关掉后台投影，建局后提交 100 帧，断言已投影 0、未投影 = 建局记录数 + 100（每帧一条，实测 23 + 100 = 123），被父进程 SIGKILL；父进程用同一 WAL 与本次唯一 Mongo 库冷加载、`resume` 到 Epoch 2，用 `RecoverRoomWithSnapshots` 重建 Room（重建后发布的检查点 = 冷加载出的第 100 帧，窗口从第 37 帧起）。席位 2 从第 1 帧、席位 8 从第 21 帧请求追帧（都早于窗口），下行通道是发送那一刻核对已提交帧的记录器（`committedLog`，与 §15.5 Nest 用例同一个），快照分块在后台发送 goroutine 上挡 8 个 Tick，让续帧必须经已提交门下的追帧页。断言：两人各恢复一次、快照帧 = 第 100 帧、恢复状态 = SIGKILL 前的权威摘要、共用一次取快照；续帧到头部、再跑 3 帧后与权威同摘要；任何包发送时都不超过已提交帧；`lockstep.snapshot.total{reason=out_of_window}` +2、`snapshot.bytes.total` = 两人收到的快照字节、`snapshot.failed.total` / `catchup.unservable.total` +0、`catchup.frames.total` = 可靠通道上的页帧数、`frame.total` = 重建 100 帧 + 新切帧。实测：快照 2886 字节，页帧 16，头部 112。
+- 脚本 `ROOST_MOBA_REAL=1` 阶段多跑一次 `go test -run '^TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL$'`，同样要求恰好 1 个 PASS、无 SKIP；新用例登记在根包 `integration_coverage_test.go`。框架未改。
+
+红（生成工程 game/handler，原文）：
+
+```text
+同一演练改用 RecoverRoom（不配可靠通道与 Provider）：
+  moba_snapshot_test.go:182: lockstep match: no reliable sender for catch-up
+临时让已提交门失效（servableHead 直接返回 Latest()，其余不变）：
+  moba_snapshot_test.go:250: session 502 was sent frame 109 while 108 was committed
+```
+
+首版演练没有挡快照分块：分块在一个 Tick 内发完，游标 101 已在本 Tick 冗余包的覆盖范围内，空闲会话直接切回实时，追帧页帧数为 0——这一版去掉门也能通过，证明不了门。加了 8 个 Tick 的挡之后去掉门即红（上面第二条）。
+
+**未做**：宿主交接与快照恢复同时发生；独立 Gate 部署下的 Room；真实依赖演练里的 KCP 客户端（下行是记录器；KCP 只在替身权威的 §15.5 用例）。

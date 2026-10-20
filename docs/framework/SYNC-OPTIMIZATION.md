@@ -380,4 +380,4 @@ MOBA（去掉 Provider）：player 2 3 from frame 41: lockstep match: catch-up r
 
 **已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
 
-**未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room` 只在替身权威下验收（不含真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生）。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。
+**未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room` 在替身权威下有 KCP / Nest 回归，真实 strict WAL / Mongo 下有 SIGKILL 冷加载后经已提交检查点快照恢复的演练（下行是记录器、不经 KCP），不含真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。
