@@ -2,11 +2,13 @@
 
 本手册把 SLG 的主要业务路径映射到 core 的正式接口，分两部分：**第一部分“学习”**讲框架怎么用、为什么这样设计，按建造、行军、抢地等场景给出阅读顺序与可编译的调用示例；**第二部分“验收”**说明每个脚本证明什么、不证明什么。建筑数值、兵种、战斗规则、赛季政策和部署容量由游戏定义。下面的业务夹具只是学习和验收样例：框架与生成器不包含任何 SLG 规则，生成器也不生成这些业务文件；完整的参考应用仍是 [game-demo](../../demo/README.md)。另一种游戏的独立手册见 [MMORPG](MMORPG-INTEGRATION.md)。
 
+学习主线分两段：建造、行军和抢地是事务入门（§3～§6）；跨服联盟活动把联盟权威、视野和活动奖励串成一条链路（§7），先分清框架已有、业务要做和框架没有的部分，不把框架模块存在当作玩法已经完成。
+
 ## 第一部分：学习
 
 ### 1. 适合谁、先读什么
 
-适合准备用 core 做 SLG 的后端工程师。先读[入门](../GETTING-STARTED.md)，再按“一个玩家建造 / 行军 → 两名玩家抢地 → 联盟 / 跨服 → 战斗与结算 → 恢复”的顺序实践：前两步有可运行的生成工程（§3～§5），后面几步从 game-demo 的现成接法学（§7）。
+适合准备用 core 做 SLG 的后端工程师。先读[入门](../GETTING-STARTED.md)，再按“一个玩家建造 / 行军 → 两名玩家抢地 → 联盟 / 跨服 → 战斗与结算 → 恢复”的顺序实践：前两步有可运行的生成工程（§3～§5），联盟 / 跨服 / 活动结算有可运行的联合链路（§7，真实依赖模式），战斗与其余路线从 game-demo 的现成接法学（§8）。
 
 ### 2. 模块分工：先分清状态归谁
 
@@ -49,8 +51,8 @@ ROOST_SLG_KEEP=1 bash scripts/test-slg-generated.sh   # 保留生成工程以便
 脚本打印临时目录，生成工程在其中的 `project/`。它做的事就是一个新工程的接入步骤：
 
 1. `roost project new slg-practice -module example.com/slg-practice -template game`；
-2. `roost add dao Player --entity Player`、`roost add timer --entity Player`、`roost add entity Tile`、`roost add dao Tile --entity Tile`；
-3. 业务只改这几处：在 `db/def/player.go`、`db/def/tile.go` 填 DAO 字段；把 `game/entities/tile/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（地块是被许多玩家争用的世界对象，锁序要低于 Player）；写定时器回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/slg_tasks.go`；
+2. `roost add dao Player --entity Player`、`roost add timer --entity Player`、`roost add entity Tile`、`roost add dao Tile --entity Tile`；联盟活动（§7）再加 `roost add mod remote_entity -service game`、`roost add entity AllianceAuthority`、`roost add dao AllianceAuthority --entity AllianceAuthority`；
+3. 业务只改这几处：在 `db/def/player.go`、`db/def/tile.go`、`db/def/alliance_authority.go` 填 DAO 字段（骨架的逻辑库 `db=main` 不改，联盟权威加 `dbscope=global`）；把 `game/entities/tile/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（地块是被许多玩家争用的世界对象，锁序要低于 Player），把 `game/entities/alliance_authority/entity.go` 改为 Remote 托管（§7.4）；写定时器回调 `game/entities/player/timer_handlers.go`、handler `game/handler/slg_tasks.go`、`alliance_rewards.go`、`alliance_authority.go` 与联盟业务包 `game/alliance/alliance.go`；
 4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
 
 #### 3.2 阅读顺序
@@ -112,7 +114,7 @@ func buildResearchAndClaim(ctx context.Context, client nest.Client, playerEntity
 | 离线资源产出 | 一次回调按 Deadline / Now / Interval 补算，最多补 10 期，库存上限 1000 | DAO 序列化重建后只补触发一次，之后从当前业务时间恢复周期；补算公式和上限由业务提供 |
 | 两名玩家抢占同一地块 | Tile 在 World 锁档，Player 在更高锁档；地块只能有一个拥有者，获胜者支付 1 金 | 多实体 Sender 和锁顺序；并发竞争只有一人获胜，归属与扣款一起提交，拥有者重放不再支付 |
 
-上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见 §10。
+上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见 §11。
 
 ### 4. 建造完成为什么能接行军
 
@@ -134,16 +136,126 @@ func buildResearchAndClaim(ctx context.Context, client nest.Client, playerEntity
 
 定时器回调只改自己已锁实体的 DAO、操作本实体的定时器或记录 effect。需要交易、战斗结算等其他实体一起变化时，交给多实体 Nest handler；需要其他服务时，通过事务性 effect 或 Saga，不能在回调持锁期间同步做 I/O。
 
-### 7. 更多 SLG 路线：接法、源码与业务边界
+### 7. 跨服联盟活动：权限、视野、活动与原服奖励
+
+SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事：谁能写联盟（跨服）、谁能看到什么（视野）、活动贡献怎样变成原服玩家的奖励（活动）。本节先分清框架已有什么、业务要做什么、框架现在没有什么，再用一条可运行的联合链路（`ROOST_SLG_REAL=1`，§12）讲接法。
+
+#### 7.1 方向：框架已有、业务要做、框架没有
+
+| 方向 | 框架已有（正式接口） | 业务要做 | 框架现在没有（不要假设） |
+| --- | --- | --- | --- |
+| 跨服联盟 / 国战权威 | Remote 托管实体的 owner / lease / fence：`ClaimRemoteOwnership`、`EnterRemoteSharedMode`、`TransferRemoteOwnership`，旧 owner 写入被拒（[Remote 指南](guide/05-remote-mirror.md)）；Mirror 只读快照；跨服务多步协作用 [Saga](guide/06-saga.md) / effect | 联盟成员、权限、贡献意图这些业务事实与它们的条件更新；名称唯一、成员上限等唯一性规则 | 自动选主后的业务续跑策略、玩家（Player）随联盟跨 sid 迁移；本例只演练显式交接，不覆盖 lease 中途过期、跨机分区 |
+| 战争迷雾 / 侦察 / 联盟视野 | Interest 的关系来源归并（`Relation(name).Set/Clear`，最后一个来源撤销才退订）、Block AOI 与 `SpatialComponent.MoveWithObservedBlocks`、Profile 字段白名单、Manager 的 `HoldSession` / `ReadySession`、`frame.Receiver` 拒绝旧 epoch 帧（[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md)） | 侦察 / 迷雾规则产生“谁对什么有权”的授权；权限读取失败时先停发布；不可见对象的敏感字段不下发 | 跨服撤权传播协议（每服 Interest 只管本服会话，权限变化怎样通知各服、允许多大延迟由业务定义）；已经下发给客户端的信息无法收回，held 只停止后续发布 |
+| 赛季 / 联盟活动 / 跨服积分 | [activity 协调器](../../service/activity/)：`OpenActivity`、`NotifyPhase`、`ApplyProgress`（按请求身份去重，去重只在 `ReservationTTL` 内有效）、`OwedDispatches` / `AttemptDispatch` / `AckDispatch`；demo 的 [ActivityRunner](../../demo/internal/service/game/activity.go.tmpl) 是接线参考 | 窗口身份、参与服集合（从活动组与存活事实取得）、持久贡献意图与补报、结算前冻结、原服奖励义务账本与 Player 永久到账回执、补发与人工对账政策 | 贡献意图 / 补报的通用组件（要业务自己持久化）；Redis 义务账本与 Player DAO 之间的分布式原子事务（只能“先持久接收义务、再可重试到账”）；常驻的原服补发调度 |
+
+**活动学习顺序**（demo 的 `ActivityRunner`）：`openWindow` 调 `OpenActivity`，expected 集合按活动组与存活查询取得，路由分组不等于每个服此刻在线；本服 World 的持久期限到点后 `NotifyPhaseDue` 通知协调器，协调器不靠自己的时钟启动阶段，第一个服通知后才开始宽限窗口（[types.go](../../service/activity/types.go)）；业务成功事实形成稳定贡献身份经 `Contribute` 上报；`AttemptDispatch` 取得结算投递，`settle` 发奖后 `AckDispatch`。投递确认不等于玩家已领取。demo 的尽力贡献失败不补报是已接受取舍；赛季若要求不漏计，按下面的联合链路做持久意图与补报。
+
+#### 7.2 生成与阅读顺序
+
+`ROOST_SLG_KEEP=1 bash scripts/test-slg-generated.sh` 生成的工程里已有这条链路的全部业务文件（§3.1 第 2 步的 `add mod remote_entity` 与 `AllianceAuthority`）；`ROOST_SLG_REAL=1` 时脚本再把真实依赖测试复制进 `game/alliance/`。按顺序读：
+
+1. `game/alliance/alliance.go`（源 [alliance.go](../../scripts/testdata/slg/alliance/alliance.go)）：联盟成员与贡献意图（`contribute` / `revoke` / `freeze`）、补报（`drain`）、阶段屏障（`phase`）、原服奖励义务（`home.receive`）与有界补发（`home.deliverPending`）。
+2. `game/handler/alliance_rewards.go`（源 [alliance_rewards.go.txt](../../scripts/testdata/slg/alliance_rewards.go.txt)）：Player 建档 `AllianceHomeInit` 与到账 `AllianceCredit`，金币与永久到账回执同一 strict 事务。
+3. `game/handler/alliance_authority.go`（源 [alliance_authority.go.txt](../../scripts/testdata/slg/alliance_authority.go.txt)）：Remote 托管的联盟权威，读与条件写 `AllianceRemoteRead` / `AllianceRemoteCAS`。
+4. 测试（源 [alliance/](../../scripts/testdata/slg/alliance/)）：`runtime_test.go` 是协调器子进程、NATS 总线与视野接线；`alliance_test.go` 是连续流程与断言；`fog_test.go` 用 Receiver 解码视野帧；`player_*_test.go` 是 Player 的 WAL / Mongo 接线与 SIGKILL 恢复；`remote_*_test.go` 是 Remote 装配、业务 CAS 适配器与 owner 交接。
+
+**教学规则**：Alice 静态归属 sid 1000，Bob 静态归属 sid 1001；一个联盟、一个固定赛季窗口、一个公开据点。可信战斗权威每确认一个唯一战果贡献 10 分（本例不实现战斗判胜负）。退盟拒绝新贡献，已获准的贡献保留。每个窗口最多 128 个战果，原服最多 128 个窗口回执，Player 最多 128 个到账身份；满后拒绝，不删除旧身份。客户端不能提供 sid、得分、战果成功或奖励金额。这些数值都是样例。
+
+#### 7.3 状态归谁、怎样调用
+
+```mermaid
+sequenceDiagram
+    participant H as 两个原服
+    participant A as 联盟权威（业务 CAS / Remote 实体）
+    participant V as 本服 Interest 视野
+    participant C as 活动协调器（独立进程）
+    participant R as 原服奖励义务账本
+    participant P as 原服 Player（strict WAL）
+    H->>A: 已鉴权角色 + 静态 sid + 唯一战果
+    A->>A: 一次条件更新里校验成员并记录贡献意图
+    A->>V: 按已提交的成员权限重建 alliance 来源
+    A->>C: ApplyProgress（窗口、玩家、战果身份）
+    A->>A: 成功后标记已报；freeze 停止准入
+    H->>C: 两个服分别 NotifyPhase
+    H->>C: OwedDispatches / AttemptDispatch
+    H->>R: 按窗口写不可变奖励义务，成功后 AckDispatch
+    R->>P: deliverPending → AllianceCredit（金币 + 永久回执同事务）
+```
+
+| 业务状态 | 拥有者与框架接法 | 调用与失败处理 |
+| --- | --- | --- |
+| 成员、静态原服、贡献意图 | 联盟权威：基础入口用 `versionstore.NewRedisStore`，Remote 入口用生成的 Remote 托管实体 | `contribute` 在同一次条件更新里校验成员并记录意图，`revoke` 与它经同一版本串行裁决；回调只算状态、不做 RPC。同身份重试查回旧事实，换玩家复用身份被拒 |
+| 贡献补报 | 联盟意图 + `activity.Coordinator.ApplyProgress` | `drain` 在条件更新之外调用 RPC，成功才标记已报；回复丢失时用原 `Key + 玩家 + 战果身份` 重试，协调器按请求身份去重。意图存在超过协调器的 `ReservationTTL`（本例 1 小时）即停止自动补报、转人工对账，不换身份重加 |
+| 活动阶段 | 本服业务时间线 + 协调器 expected 集合 | `freeze` 后 `phase` 要求全部意图已报才 `NotifyPhase`，否则结算会截断未报的战果；一个服通知时活动仍是 collecting，两个服都通知后完成。本例 expected 固定为 1000 / 1001 |
+| 原服奖励义务 | 按 sid 分开的业务 `versionstore` 记录 | `receive` 核对投递的目标 sid、窗口、完成原因与冻结状态，从冻结的意图算出本服玩家积分，按窗口写不可变清单；写成功才 ACK。重投返回原记录、不提升版本；同窗口清单变化被拒 |
+| Player 金币与永久回执 | 原服 Player DAO，生成 Sender `Sync_AllianceCredit` → Nest strict | 金币与 `Receipts[窗口]` 同一事务；同窗口同金额返回原余额，错服、改金额被拒。义务账本与 Player 是两个存储，没有跨存储原子事务：`deliverPending` 先到账、再标记完成，中间崩溃时恢复会重投同一身份，由 Player 回执去重 |
+
+**奖励义务不是金币到账**：协调器 ACK 只表示原服已持久接收“谁应得多少”的义务；ACK 之后 `OwedDispatches` 为空，恢复必须从原服义务账本找工作（`deliverPending` 按窗口 / 玩家排序，一次最多 1～128 个窗口），不能靠协调器的索引或内存待发列表。本例是受信任的内部调用，不是公网领奖接口；常驻补发调度、义务归档、邮件附件与 Saga 资产协作仍要业务接入。
+
+#### 7.4 联盟权威放进 Remote 托管实体
+
+| 步骤 | 接法 | 要核对的事实 |
+| --- | --- | --- |
+| 生成 | `roost add mod remote_entity -service game`、`roost add entity AllianceAuthority`、`roost add dao AllianceAuthority --entity AllianceAuthority`；实体注解改为 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，DAO 写 `db=main dbscope=global` | 三处一起改再 `roost generate`；`dbscope=sid` 会被生成器拒绝。Remote 托管实体不挂本地实体定时器 |
+| 装配 | `NewMongoCommitter` → `NewBackend` → `BindDatabaseMap` → `Assemble`；`MongoStore.SetRemoteProjection`；Runtime 与 Nest 注入同一个 Remote Manager | 自建装配必须把 DataEngine 的库名映射绑给 Remote 存储：直接构造的提交器未绑定时按逻辑名 `main` 写 DAO 文档（wiring 装配总会绑定，未绑定时拒绝写） |
+| 读写 | 生成 Sender `Sync_AllianceRemoteRead` / `Sync_AllianceRemoteCAS`；联盟全部事实存为一个 DAO 字段 | 业务版本只管条件更新，不代替 Remote 的 marker / route / lock fence；只有明确的版本冲突才重读重算，其他错误直接返回，结果未知不盲目重执行 |
+| 首次拥有 | `ClaimRemoteOwnership`，返回的 lease 未共享时再 `EnterRemoteSharedMode` | 先看 Claim 返回的 `Shared`：接管可能继承共享状态，再进一次会被拒，这是接入用法不是框架故障 |
+| 交接 | owner 2000 调 `TransferRemoteOwnership(..., 2001)` | marker 与 route epoch 都上升；旧 Runtime 仍在运行时尝试写（撤销成员）被拒 |
+| 冷加载继续 | 新 Runtime（sid 2001）用自己的 WAL 从 Mongo 加载 | 先比较完整联盟事实与交接前一致，再继续补报、阶段与 Player 到账 |
+
+#### 7.5 视野：先停发布，再读权限
+
+`fog.reconcileFrom` 的顺序是：两个会话先 `HoldSession` → 读联盟权限 → 按成员是否有效 `Relation("alliance").Set/Clear` → `Interest.Apply` → `ReadySession` → `Flush`。权限读取失败时会话保持 held，Flush 不发新帧；不能拿旧缓存继续 Ready。`scout` 是独立来源：退出联盟只撤 `alliance`，仍有侦察时据点保留，最后一个来源撤销才产生删除。重连时 `CloseSession` → `OpenHeldSession` → `Resubscribe` → 重新 reconcile，客户端收到新的 Full；旧 epoch 的帧交给 Receiver 不会进入应用回调。每个对象载荷只有公开据点 `{"objective":99}`，没有成员名单、贡献意图或奖励账本。
+
+held 只停止后续发布，不收回客户端已经收到的信息；传输是内存捕获，不是 TCP 客户端。
+
+#### 7.6 示例：原服到账与联盟条件写
+
+下面的文件放进保留的生成工程（例如 `internal/slgalliance/flow.go`）可直接编译：
+
+```go
+package slgalliance
+
+import (
+	"context"
+
+	syncsender "example.com/slg-practice/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+// reportContribution 补报一条已持久记录的贡献意图：重试时窗口、玩家和战果身份都不变，协调器按身份去重。
+func reportContribution(ctx context.Context, c activity.Coordinator, key activity.Key, player, battleID string) error {
+	_, err := c.ApplyProgress(ctx, key, player, battleID, activity.ProgressDelta{Score: 10, Progress: 1})
+	return err
+}
+
+// creditObligation 由原服的受信任补发循环调用：key 与 amount 读自原服持久义务，homeSID 来自本进程配置，
+// 都不来自客户端。重复调用返回原余额，不重复加金币。
+func creditObligation(ctx context.Context, client nest.Client, playerEntityID int64, homeSID int32, key activity.Key, amount int64) (int64, error) {
+	return syncsender.NewAllianceRewardsSender(client).Sync_AllianceCredit(ctx, playerEntityID, homeSID, key, amount)
+}
+
+// casAlliance 在 Remote 写准入之后做业务条件写；expected 是业务版本，不代替 Remote 的 fence。
+func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64, expected uint64, next string) (string, error) {
+	return syncsender.NewAllianceAuthoritySender(client).Sync_AllianceRemoteCAS(ctx, allianceEntityID, expected, next)
+}
+```
+
+锁目标的能力接口按 `I...Entity` 命名（本例 `IAllianceRewardPlayerEntity`、`IAllianceAuthorityEntity`）或显式写 `target=`；两者都没有时 `roost generate` 报错，改业务声明，不手改生成的 Sender。
+
+可靠贡献意图、退盟政策、冻结屏障和永久奖励回执都是业务设计；这条链路没有据此发现框架缺陷。MMORPG 的跨服世界 Boss 可以复用“窗口 / 意图 / 回执”的思路，但队伍、副本权限和退队分奖规则要自己定义（[MMORPG §6](MMORPG-INTEGRATION.md#6-保持-player-归属的跨服协作)）。
+
+### 8. 更多 SLG 路线：接法、源码与业务边界
 
 | SLG 方向 | 从哪个源码 / 文档学 | 框架接法与证据入口 | 业务仍需定义 |
 | --- | --- | --- | --- |
 | 登录、角色、断线与归属 | [玩家接入](PLAYER-ACCESS.md)，game-demo 的 account / EnterGame | 真实凭据机器人与重连回归 | 渠道认证、区服开放与角色政策 |
 | 城建、研究、行军与离线收益 | 上面的纵切；[业务时间与实体定时器](guide/10-time.md#4-按实体的持久定时器) | `roost add timer --entity Player`；期限与资源同事务 | 队列、速度、消耗、加速、离线补算与库存上限 |
 | 地图、寻路与行军可见性 | [Map 组件](../../demo/game/entities/player/map_component.go.tmpl)、[地图 runtime](../../demo/game/scene/runtime/)、[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md) | 位置 / 行军事实存 DAO；地形验证与兴趣索引分开；Tile 竞争纵切 | 地块所有权、寻路限制、战争迷雾、侦察与联盟视野；空间索引不充当持久权威 |
-| 联盟、公会与跨服观察 | [Guild 组件](../../demo/game/entities/guild/)、[Remote 指南](guide/05-remote-mirror.md) | 联盟写走正式 owner / lease / fence；Mirror 只读快照，不能先看镜像再直接本地写 | 联盟权限、名称唯一、成员上限 |
+| 联盟、公会与跨服观察 | [Guild 组件](../../demo/game/entities/guild/)、[Remote 指南](guide/05-remote-mirror.md) | 联盟写走正式 owner / lease / fence；Mirror 只读快照，不能先看镜像再直接本地写；联合链路见 §7.4 | 联盟权限、名称唯一、成员上限 |
 | 多人协作、交易与跨服赠礼 | [gift_item saga](../../demo/saga/gift_item/)、[Saga 指南](guide/06-saga.md) | 同进程已知实体用多实体 Nest；跨服务用原生步骤 / effect，失败补偿，结果未知按身份查询 | 收件人路由与人工补偿政策 |
-| 联盟活动与世界事件 | [World 定时组件](../../demo/game/entities/world/timer_component.go.tmpl)、[活动接线](../../demo/internal/service/game/activity.go.tmpl) | World 是手写接入 `entitytimer.Host` / `Driver` 的参考实现；基础 `game` 工程用 `roost add timer`；生成器不搬入 demo 业务 | 活动窗口与阶段规则 |
+| 联盟活动与世界事件 | [World 定时组件](../../demo/game/entities/world/timer_component.go.tmpl)、[活动接线](../../demo/internal/service/game/activity.go.tmpl) | World 是手写接入 `entitytimer.Host` / `Driver` 的参考实现；基础 `game` 工程用 `roost add timer`；生成器不搬入 demo 业务 | 活动窗口与阶段规则；跨服联盟活动的贡献意图、阶段屏障与原服奖励见 §7 |
 | 副本、赛季奖励与排行 | [ClaimDungeon](../../demo/game/handler/claim_dungeon.go.tmpl)、[FinishDungeon](../../demo/game/controllers/player/finish_dungeon.go.tmpl) | 通关账本、奖励与每赛季累计次数同事务；排行提交累计快照（`UpdateMax`），不依赖短期去重环做增量 | 奖励额度、赛季切换、补发政策 |
 | 活动贡献与结算榜 | [活动接线](../../demo/internal/service/game/activity.go.tmpl) | 只在首次真实付款时贡献；结算榜保留较大的累计值 | 活动尽力贡献失败不自动补报是已接受取舍，不能借重放把旧奖励贡献到新窗口 |
 | 邮件与补偿资产 | [ClaimMail](../../demo/game/controllers/player/claim_mail.go.tmpl)、[ClaimMailReward](../../demo/game/handler/claim_mail_reward.go.tmpl) | 服务预留、玩家侧幂等奖励、服务提交是多阶段；玩家侧长期领取事实覆盖重放窗口 | 邮件有效期与补发规则 |
@@ -151,11 +263,11 @@ func buildResearchAndClaim(ctx context.Context, client nest.Client, playerEntity
 | 装备、成长与配置 | [EquipItem](../../demo/game/handler/equip_item.go.tmpl)、[配置热更](guide/07-config.md) | 装备从背包移入槽位、旧件归还与属性刷新同事务 | 长周期任务如何钉住配置版本、数值平衡 |
 | 战斗、技能与回放 | [技能 / 战斗](guide/08-skill.md)、[Lockstep 与客户端](guide/04-sync.md) | demo Lockstep 机器人、技能目录编译；按需求选状态同步、独立战斗计算或帧同步 | 兵种、战斗算法与技能 Host 不由框架预设 |
 | 聊天、匹配与 session | [服务指南](guide/09-services.md)、[demo 机器人场景](../../demo/loadtest/scenarios/demo.yaml.tmpl) | 服务声明和正式客户端 | 世界 / 联盟频道与战斗匹配；不为“用全所有模块”强行拼装互斥模式 |
-| 持久化、恢复、搬服和运维 | [DataEngine](guide/03-dataengine.md)、[schema](SCHEMA-MIGRATION.md)、[按 sid 搬服](PLAYER-MIGRATION.md) | 先排空并核对 WAL / 投影，再切机器或 schema；§11 的三套真实生成工程脚本；readiness / metrics / admin | 恢复目标、部署容量、监控接收、跨机与生产操作流程 |
+| 持久化、恢复、搬服和运维 | [DataEngine](guide/03-dataengine.md)、[schema](SCHEMA-MIGRATION.md)、[按 sid 搬服](PLAYER-MIGRATION.md) | 先排空并核对 WAL / 投影，再切机器或 schema；§12 的真实依赖脚本；readiness / metrics / admin | 恢复目标、部署容量、监控接收、跨机与生产操作流程 |
 
 技能模块可以单独入门：进入 `gameplay/skill/examples`（独立模块）运行 `go run ./fireball`，沿 Parse → Compile → Host → Runtime → Activate / Advance 阅读。该例用 MemoryHost，证明的是技能计算流程，不代表持久化的 SLG 战斗 Host 已接进 Nest 回滚。
 
-### 8. 通用接入原则
+### 9. 通用接入原则
 
 | 原则 | 为什么 | 现行文档 / 回归 |
 | --- | --- | --- |
@@ -167,26 +279,44 @@ func buildResearchAndClaim(ctx context.Context, client nest.Client, playerEntity
 
 未解决问题与剩余限制在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)，已修复问题的经过见 [CHANGELOG](../../CHANGELOG.md)；框架契约以当前源码和指南为准。
 
-### 9. 练习
+### 10. 练习
 
 在现有 handler 里加“加速建造但不能重复扣加速道具”，或“一个地块同时只能被一个联盟驻守”。先写清拥有者、幂等身份、事务参与者、取消和恢复语义，再选 Nest / 定时器 / Saga，不另设计一套与框架平行的持久或并发状态机。
 
 ## 第二部分：验收
 
-### 10. 业务纵切证明什么
+### 11. 业务纵切证明什么
 
 ```bash
 bash scripts/test-slg-generated.sh
 ```
 
-脚本按 §3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 DAO / 组件 / Sender / Nest / 实体定时器生成时手动跑。
+脚本按 §3.1 的步骤生成工程（含联盟活动的 Remote 实体与业务文件），replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后对整个工程 build / vet，执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 DAO / 组件 / Sender / Nest / 实体定时器 / Remote 实体生成时手动跑。
 
-- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）。
+- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet（缺省模式不运行它们）。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；离线恢复用真实 DAO 的序列化 / 水合接口重建实体，再由用例手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递；单进程，无 Redis / NATS。[业务文件与测试](../../scripts/testdata/slg/)中的数值是样例。
 
-### 11. 真实依赖与恢复验收
+### 12. 真实依赖与恢复验收
 
-先按[隔离环境说明](../../wiring/scripts/integration/README.md)准备独立资源并设置脚本要求的地址变量，再运行：
+先按[隔离环境说明](../../wiring/scripts/integration/README.md)准备独立资源并设置脚本要求的地址变量（`ROOST_DATAENGINE_IT_MONGO_URI` / `_REDIS_ADDR` / `_NATS_URL`）。
+
+#### 12.1 联盟活动联合链路（`ROOST_SLG_REAL=1`）
+
+```bash
+ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh
+```
+
+共享隔离环境上运行时先持有 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`。缺省模式通过后，脚本把 [alliance/](../../scripts/testdata/slg/alliance/) 的测试复制进 `game/alliance/`，vet 后依次运行三条用例，每条都必须实际 PASS、无 skip。写 Mongo 的两条各用一个本次唯一的物理库（`roost_slg_it_<ppid>_<pid>_player` / `_remote`，DAO 的逻辑库 `main` 经 `NewDatabaseMap` 映射过去，与进程的 `dataengine.databases` 同一条规则）和一份 WAL 根；Redis 键前缀与 NATS subject 也按本次运行唯一。成功后删除库和 Redis 键；失败时保留工程、WAL、子进程日志并打印库名。
+
+| 用例 | 实际走过的流程 | 关键断言 |
+| --- | --- | --- |
+| `TestSLGAllianceActivity` | 业务 Redis CAS 联盟；正式 Activity RPC 经真实 NATS 调用协调器子进程（两个静态 sid 客户端各一条 NATS 连接，同在父进程）；协调器正常排空重启两次 | 八路并发同一战果只留一个意图；错服、换玩家复用身份、退盟后新贡献、冻结后新贡献被拒；退盟撤 `alliance` 来源而 `scout` 保留，最后来源撤销才消失；Receiver 解码的视野帧与权限一致，权限读取失败时不发布，重连收到新 Full、旧 epoch 帧被拒；注入“协调器已应用、本地未确认”后，冻结但有未报意图时阶段被拒；重启协调器后超过 1 小时的意图拒绝自动补报，正常补报每人 Score 10、Applies 1；一个服通知后仍 collecting；原服写义务后不 ACK、再重启协调器，`OwedDispatches` 找回原窗口，投递 token 不变、Attempts 为 2，重投不改义务记录版本，错 token 拒绝，重复 ACK 幂等 |
+| `TestSLGAlliancePlayerDelivery` | 上一行的同一条流程，ACK 之后继续：每个原服依次起 write / recover / verify 三个子进程，各用自己的 strict 文件 WAL 与真实 Mongo | write：注入 Player 不可用时义务不标完成、版本不变；建档与到账两条 strict 记录已确认、投影数 0、未投影 2、原服未标完成时被父进程 SIGKILL。recover：冷加载后完整钱包与崩溃前一致（HomeSID、10 金币、一个到账身份），再从义务账本发现 1 条待发并重投（余额不变）；八路并发重放、错服、改归属、同窗口改金额都不改钱包。verify：第三个进程发现 0 条待发，钱包不变 |
+| `TestSLGAllianceRemoteDelivery` | 联盟权威换成生成的 Remote 托管实体（sid 2000 首次拥有并进入共享）；冻结后、补报之前在同一父进程内 `TransferRemoteOwnership` 到 sid 2001，再继续补报、阶段、原服义务与两个原服的 Player 到账（同上一行） | 初始 lease 为 sid 2000 且共享；交接后 marker 与 route epoch 都上升；旧 Runtime 仍在运行时写入被拒；sid 2001 冷加载的联盟事实（成员、冻结状态、待报意图）与交接前序列化后一致；八路并发同一战果经业务版本冲突重试后全部成功、只计一次 |
+
+**不证明**：两个联盟 owner 与两个 sid 客户端都在同一父进程，协调器与原服 Player 是本机子进程；服务发现是固定列表，不含 etcd、singleton 或自动 HA；协调器只做正常排空重启，没有注入网络分区、SIGKILL 或 Redis 故障；Redis 跨进程读到数据不证明节点断电持久；Remote 用普通 NATS SyncBus（默认可丢），不经 Mirror 读，未验证 JetStream 与 Mirror 订阅、lease 中途过期或在途提交时的交接；视野传输是内存捕获，不是 TCP 客户端，也没有空间迷雾或跨服撤权；原服子进程按 sid 依次运行，不证明两服并发、进程自动拉起或 strict 结果未知；这条链路不含实体定时器，离线定时器的真实重载与驱动投递看下面的通用脚本。128 条 / 128 KiB 是教学上限，不是容量结论。
+
+#### 12.2 通用真实依赖脚本
 
 ```bash
 bash scripts/test-demo-generated.sh
@@ -200,11 +330,11 @@ bash scripts/test-remote-generated.sh
 
 D12 的框架胶水另有 wiring 包里的 integration 标签测试：`wiring/saga` 的 `TestRealStepsRunNativeAndMongoStepsThroughTheMods`、`TestRealStepsRunNativeStepsUnderTheRealNestScheduler`，`wiring/dataengine` 的 `TestRealSubscribeEffectsDeliversEachEffectOnce`，需要真实 Mongo 与三节点 NATS JetStream。每条脚本和测试都要检查退出状态、实际执行与 skip，不把编译通过或未设置门变量时的跳过算作功能通过。
 
-### 12. 完整 demo 场景
+### 13. 完整 demo 场景
 
-在新生成的 game-demo 中用 `go run ./cmd/loadtest -count 4`（依实际地址传 `-endpoint`、`-account-nats`）。它覆盖多条服务链，但不替代上面的建造 / 行军纵切，也不等于所有 SLG 规则和部署规模已验证。
+在新生成的 game-demo 中用 `go run ./cmd/loadtest -count 4`（依实际地址传 `-endpoint`、`-account-nats`）。它覆盖多条服务链，但不替代上面的建造 / 行军纵切与联盟活动链路，也不等于所有 SLG 规则和部署规模已验证。
 
-### 13. 结论怎样给
+### 14. 结论怎样给
 
 业务命名、经济、战斗和赛季政策等规则缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、错误取消、重复提交、状态越权或生成物编译失败，则应在公共实现或 demo 接法中修复。维护者已接受的边界（离线实体不被定时器准点唤醒、Remote 托管实体不支持定时器等）见 [已知限制](../maintenance/KNOWN-LIMITS.md)。
 

@@ -1,0 +1,80 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"math"
+
+	db "example.com/slg-practice/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+type IAllianceRewardPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+var errAllianceReward = errors.New("alliance reward: invalid identity, home, amount or full ledger")
+
+// 仅由受信任的原服建档入口调用。Player 始终归属首次持久写入的 sid，不迁移。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, error) {
+	if sid != 1000 && sid != 1001 {
+		return 0, errAllianceReward
+	}
+	if old := p.Dao().GetHomeSID(); old != 0 {
+		if old != sid {
+			return 0, errAllianceReward
+		}
+		return p.Dao().GetGold(), nil
+	}
+	p.Dao().SetHomeSID(sid)
+	p.Dao().SetReceipts("{}")
+	return p.Dao().GetGold(), nil
+}
+
+// 金币和永久回执同一 Player strict 事务。key 与 amount 来自原服持久义务，
+// sid 来自本进程可信配置；本方法不是公网 handler，不允许客户端自报奖励。
+// 同身份重试必须金额一致；账本满后拒新身份，不淘汰旧身份。RPC / Redis 读取在事务外。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
+	if p.Dao().GetHomeSID() != sid || (sid != 1000 && sid != 1001) || key.Validate() != nil || key.Phase != activity.PhaseSettle || amount <= 0 || amount > 100000 {
+		return 0, errAllianceReward
+	}
+	receipts := map[string]int64{}
+	if e := json.Unmarshal([]byte(p.Dao().GetReceipts()), &receipts); e != nil || receipts == nil {
+		return 0, errAllianceReward
+	}
+	if old, ok := receipts[key.String()]; ok {
+		if old != amount {
+			return 0, errAllianceReward
+		}
+		return p.Dao().GetGold(), nil
+	}
+	if len(receipts) >= 128 || p.Dao().GetGold() > math.MaxInt64-amount {
+		return 0, errAllianceReward
+	}
+	receipts[key.String()] = amount
+	raw, e := json.Marshal(receipts)
+	if e != nil {
+		return 0, e
+	}
+	p.Dao().SetGold(p.Dao().GetGold() + amount)
+	p.Dao().SetReceipts(string(raw))
+	return p.Dao().GetGold(), nil
+}
+
+// 仅内部恢复核对使用，不能把永久账本同步给客户端。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
+	raw, e := json.Marshal(struct {
+		Home     int32
+		Gold     int64
+		Receipts string
+	}{p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+	return string(raw), e
+}
