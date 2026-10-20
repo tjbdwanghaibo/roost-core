@@ -84,7 +84,10 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 		slog.Debug("session ticket rejected", "player_id", playerID, "err", err)
 		return gateway.Principal{}, gateway.ErrUnauthenticated
 	}
-	return newPrincipal(role.PlayerID, role.ServerID), nil
+	principal := newPrincipal(role.PlayerID, role.ServerID)
+	// 角色建立时间给登录端点拉全服邮件用（mail.BroadcastProfile.RegisteredAtUnix）。
+	principal.Claims[svcaccount.RoleCreatedAtClaim] = strconv.FormatInt(role.CreatedAtUnix, 10)
+	return principal, nil
 }
 
 // newPrincipal mints a SessionID unique per connection: the access layer uses

@@ -61,10 +61,11 @@ type SentRecord struct {
 
 // Deliverer fans a broadcast envelope out into individual mailboxes.
 //
-// It is an interface and has no default, because "how does one server-wide
-// mail reach a hundred thousand mailboxes" is a deployment decision — a job
-// queue, a lazy backfill on first read, a nightly sweep — and a library that
-// picked one would be wrong for the others.
+// It is an interface and the Service has no default, because "how does one
+// server-wide mail reach a hundred thousand mailboxes" is a deployment decision
+// — a job queue, a lazy backfill on first read, a nightly sweep. The package
+// ships one strategy, LazyBroadcast (store once, each mailbox pulls), that a
+// deployment opts into; nil still refuses broadcasts.
 //
 // What this package does guarantee is that whatever the caller picks, Deliver
 // is idempotent per (mailbox, mail): a redelivered mail does not become unread

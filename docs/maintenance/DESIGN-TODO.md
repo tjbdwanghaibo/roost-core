@@ -20,7 +20,7 @@
 | D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），已实施（2026-10-20；前后 benchstat 由维护者夜间统一跑） |
 | D15 | 合服（把一个服并入另一个服） | 维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，实施中 |
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
-| D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），实施中 |
+| D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），实施中 |
 
@@ -546,7 +546,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D17 全服邮件的内置投递策略
 
-**状态：维护者 2026-10-20 决定 A，实施中。** 维护者原意：全局邮件是一个 ID，个人邮箱每次从全局拉取合并到个人邮箱。细则（按推荐）：①登录时拉一次，`List` / `Summary` 前再检查；②每玩家一个水位（已合并到的最大全局邮件 ID）；③合并生成带全局邮件 ID 的个人邮件，已读 / 已领 / 删除记在个人这份，按全局 ID 去重、附件只领一次；④全局邮件有有效期，过期后不再合并，已合并的按个人邮件有效期；⑤目标条件用业务谓词，框架内置“注册时间早于发送时间”；⑥可撤回，未合并的不再合并，已合并的默认不动；⑦范围与 `AudienceBroadcast` 一致（全服 / 单服 / 公会）。登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 A，已实施（2026-10-20）。** 维护者原意：全局邮件是一个 ID，个人邮箱每次从全局拉取合并到个人邮箱。细则（按推荐）：①登录时拉一次，`List` / `Summary` 前再检查；②每玩家一个水位（已合并到的最大全局邮件 ID）；③合并生成带全局邮件 ID 的个人邮件，已读 / 已领 / 删除记在个人这份，按全局 ID 去重、附件只领一次；④全局邮件有有效期，过期后不再合并，已合并的按个人邮件有效期；⑤目标条件用业务谓词，框架内置“注册时间早于发送时间”；⑥可撤回，未合并的不再合并，已合并的默认不动；⑦范围与 `AudienceBroadcast` 一致（全服 / 单服 / 公会）。登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：`AudienceBroadcast` 的范围是一个服 / 公会 / 全体（`service/mail/types.go:242-246`），投递只经业务提供的 `mail.Deliverer`（`service/mail/store.go:62-77`：没有缺省，“任务队列、首次读取时懒回填、夜间扫描”由部署选择；`Deliver` 按（邮箱、邮件）幂等）；`Broadcast` 为 nil 时拒绝广播（`service.go:167`）。`Service.Deliver`（`service.go:361`）导出给 Deliverer 使用，但 mail 没有“按 scope 列出广播信封”的入口，业务要做懒合并就得自己维护广播索引与每玩家水位。生成骨架原注释“投给每个在线玩家”与契约不符，会引向漏发离线玩家的实现，已修正（CHANGELOG `[Unreleased]`，`TestMailBroadcastSkeletonDescribesTheWholeAudience`）。
 
@@ -558,6 +558,18 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 **建议**：A，作为可选策略、不改缺省。全服补偿 / 公告是几乎所有长线游戏都有的需求，懒合并要碰 mail 的读路径，业务在包外做不干净；`store.go` 现有的“库不替部署选策略”的取舍保留为缺省 nil。
 
 **需要拍板**：1）选 A / B / C；2）选 A 时目标条件用业务谓词还是固定字段（注册时间、等级）。
+
+**实施结果（2026-10-20）**：
+- 形态：`service/mail/broadcast.go` 的 `LazyBroadcast`（`NewLazyBroadcast(LazyBroadcastConfig{Index, Eligible, MaxActive})`）实现 `Deliverer`，`Service.New` 按类型识别；骨架缺省仍为 nil，接入一行，`wiring/mail` 的 Mod 在策略没有自带账本时给它 `<key_prefix>:bcast:` 下的 Redis 账本。存储有 Redis（`NewRedisBroadcastIndex`）与内存（`NewMemoryBroadcastIndex`）两版，共用一份实现：账本是一个 versionstore 文档，旁边一个只增的版本提示键。
+- ①登录拉一次：新 RPC `Mail.PullBroadcasts(ctx, playerID, BroadcastProfile)`，接点是登录端点（game-demo `enter_game`，与付费补发同一位置；框架的实体加载钩子 `OnEntityLoaded` 不带画像、且可能在快池上，不适合阻塞 RPC）；`List` / `Summary` 前再检查，账本头不高于水位时只读一次版本键（O(1)），账本按版本在进程内缓存。
+- ②水位：`Mailbox.BroadcastWatermark`；全局邮件 ID 在账本文档的同一次 CAS 里分配并登记（不另用 id-gen：分开的计数器与记录会让读者先看到 8 再看到 7，水位越过 7）。
+- ③合并：条目键是广播信封 id，`Entry.GlobalID` 记全局邮件 ID，已读 / 已领 / 删除记在这条上；水位与条目同一次 CAS，删除后不重现。合并不另存个人信封（“存一份”），条目指向那一份信封。
+- ④有效期：过期的不再合并；已合并的按信封自身 `ExpiresAtUnix`（与全局邮件相同）消失。回收：过期记录在下一次发布 / 撤回时移除，未过期至多 `MaxActive`（缺省 1000），超过以 `ErrBroadcastFull`（590116）拒绝。
+- ⑤条件：内置“注册时间早于发送时间”，注册时间由登录端点放进画像（`RegisteredAtUnix`，取 account `Role.CreatedAtUnix`；game-demo 经认证器的 `svcaccount.RoleCreatedAtClaim`）；业务谓词 `Eligible(profile, mail)`，输入放 `Attributes`。
+- ⑥撤回：新 RPC `Mail.RevokeBroadcast`，未合并的不再合并，已合并的不动。
+- ⑦范围：`""` / `mail.ServerScope` / `mail.GuildScope`；公会成员关系由业务在画像里提供，变化后再拉一次。
+- 与细则的偏差：已合并副本的有效期没有单独配置（与全局邮件同一过期时刻）；“注册时间早于发送时间”取严格早于、按秒。
+- 证据与剩余边界：CHANGELOG `[Unreleased]` 与 [KNOWN-LIMITS](KNOWN-LIMITS.md) 的“全服邮件 `mail.LazyBroadcast`”。
 
 ## D18 业务时区与“业务日”边界
 

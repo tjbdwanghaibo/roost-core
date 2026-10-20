@@ -294,6 +294,12 @@ type Session struct {
 // 它说的正是 account 返回的那个 ServerID。
 const ServerIDClaim = "server_id"
 
+// RoleCreatedAtClaim 是认证器把 ValidateSession 返回的 Role.CreatedAtUnix（十进制 Unix 秒）记进
+// gateway.Principal.Claims 用的键。登录端点用它作为 mail.BroadcastProfile.RegisteredAtUnix 调
+// Mail.PullBroadcasts：全服邮件的内置条件是“注册时间早于发送时间”，建角之后才发出的补偿才属于这个
+// 角色。与 ServerIDClaim 一样放在两边都依赖的 account 包里。
+const RoleCreatedAtClaim = "role_created_at"
+
 // Slot records that an account occupies its role allowance on one server.
 //
 // It exists as its own record — rather than being derived by counting roles —

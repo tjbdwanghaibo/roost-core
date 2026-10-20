@@ -41,6 +41,18 @@ type Mailbox struct {
 	// history says so instead of just being shorter than the client expects.
 	Evicted uint64 `json:"evicted,omitempty"`
 
+	// BroadcastWatermark is the highest global mail id (GlobalMail.ID) this
+	// mailbox has considered under LazyBroadcast: every global mail at or
+	// below it was merged, or was judged not this player's. It moves in the
+	// same compare-and-set as the entries it merges, which is what makes a
+	// merge happen once per global mail however many logins and reads race,
+	// and what keeps a deleted broadcast from being merged again.
+	BroadcastWatermark uint64 `json:"broadcast_watermark,omitempty"`
+	// BroadcastProfile is the profile from this player's latest
+	// PullBroadcasts. List and Summary merge with it; nil means the player has
+	// never pulled (never logged in under LazyBroadcast) and nothing is merged.
+	BroadcastProfile *BroadcastProfile `json:"broadcast_profile,omitempty"`
+
 	UpdatedAtUnix int64 `json:"updated_at_unix"`
 }
 
@@ -49,6 +61,10 @@ type Entry struct {
 	MailID                string `json:"mail_id"`
 	Status                Status `json:"status"`
 	EnvelopeExpiresAtUnix int64  `json:"envelope_expires_at_unix,omitempty"`
+	// GlobalID is the global mail id when LazyBroadcast merged this entry
+	// from the ledger, zero otherwise. A non-zero GlobalID is this player's
+	// proof of address for a scoped broadcast: the merge checked the scope.
+	GlobalID uint64 `json:"global_id,omitempty"`
 
 	// ClaimToken is the idempotency key for this mail's attachment delivery.
 	//
@@ -334,6 +350,10 @@ func (m Mailbox) clone() Mailbox {
 		for id, settled := range m.SettledClaims {
 			out.SettledClaims[id] = settled
 		}
+	}
+	if m.BroadcastProfile != nil {
+		profile := m.BroadcastProfile.clone()
+		out.BroadcastProfile = &profile
 	}
 	return out
 }

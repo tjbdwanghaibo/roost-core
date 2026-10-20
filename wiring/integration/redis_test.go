@@ -906,6 +906,8 @@ var everyNamespace = []string{
 	// this guard is exactly what noticed.
 	":activity:owed:",
 	":mail:env:", ":mail:box:", ":mail:send:",
+	// D17：LazyBroadcast 的账本与版本提示。
+	":mail:bcast:",
 	":match:queue:",
 	":platform:order:", ":platform:pending",
 	":rank:z:", ":rank:o:",
@@ -1090,7 +1092,7 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 		t.Fatal(err)
 	}
 
-	// mail: envelopes, mailboxes, send ledger.
+	// mail: envelopes, mailboxes, send ledger, and the lazy broadcast ledger (D17).
 	mailStores, err := mail.NewRedisStores(c, mail.RedisConfig{
 		Prefix: root + ":mail", SendTTL: time.Hour,
 	})
@@ -1099,6 +1101,7 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 	}
 	mailSvc, err := mail.New(mail.Config{
 		Envelopes: mailStores.Envelopes, Mailboxes: mailStores.Mailboxes, Sends: mailStores.Sends,
+		Broadcast: mail.NewLazyBroadcast(mail.LazyBroadcastConfig{Index: mailStores.Broadcasts}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1106,6 +1109,12 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 	if _, err := mailSvc.Send(ctx, mail.SendRequest{
 		Audience: mail.AudienceDirect, Recipients: []int64{1}, Subject: "s",
 		ExpiresInSeconds: 3600, RequestID: "r1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mailSvc.Send(ctx, mail.SendRequest{
+		Audience: mail.AudienceBroadcast, Subject: "b",
+		ExpiresInSeconds: 3600, RequestID: "r2",
 	}); err != nil {
 		t.Fatal(err)
 	}

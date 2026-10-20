@@ -107,11 +107,27 @@ func NameRules() account.NameValidator {
 		Collabs: `// Broadcast delivers a broadcast envelope (AudienceBroadcast: a server, a
 // guild, everyone) into the mailboxes in its scope — offline players and
 // players who log in later included, not just whoever is online now. How is
-// this project's choice (see mail.Deliverer): write every mailbox from a job,
-// or store the envelope once and merge it into a mailbox on that player's
-// next read. Deliver is idempotent per (mailbox, mail), so retries are safe.
-// nil is a valid, fail-closed configuration: broadcasts are refused rather
-// than dropped.
+// this project's choice (see mail.Deliverer). nil is a valid, fail-closed
+// configuration: broadcasts are refused rather than dropped.
+//
+// The built-in strategy stores the envelope once and lets each mailbox pull
+// it. To use it, return it here (the mail Mod gives it the Redis ledger under
+// mail.key_prefix):
+//
+//	func Broadcast() mail.Deliverer { return mail.NewLazyBroadcast(mail.LazyBroadcastConfig{}) }
+//
+// and call Mail.PullBroadcasts once in the login endpoint with the player's
+// mail.BroadcastProfile — Scopes: mail.ServerScope(role's server) and
+// mail.GuildScope(guild) when in one; RegisteredAtUnix: account's
+// Role.CreatedAtUnix (a player registered after a mail was sent does not get
+// it) — and again when the guild changes. List and Summary then top up on
+// their own. LazyBroadcastConfig.Eligible adds a business condition (level,
+// VIP, ...) over BroadcastProfile.Attributes; Mail.RevokeBroadcast withdraws
+// a broadcast from mailboxes that have not merged it yet.
+//
+// Writing your own Deliverer (a job that writes every mailbox, a nightly
+// sweep) is the other way; Service.Deliver is idempotent per (mailbox, mail),
+// so retries are safe.
 func Broadcast() mail.Deliverer { return nil }
 `,
 	},
@@ -659,6 +675,8 @@ func renderFrameworkServicesGuide(m Manifest) string {
 	b.WriteString("默认实现**全部拒绝**（fail-closed）：account 不签发任何会话、chat 不允许任何发布与读取、mail 拒绝广播。这不是缺陷，是\n")
 	b.WriteString("\"没有决定的信任\"不应默认存在。`roost project doctor` 的 `collaborators:<服务>` 项在文件里还含生成的 stub（\"is not configured\"）时报失败，\n")
 	b.WriteString("`roost project next` 在业务链完成后也会提示。实现方式：改写对应函数，返回你自己的实现；把默认的 errors.New 分支删掉。\n\n")
+	b.WriteString("mail 的广播有内置策略：`Broadcast()` 改为返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`（全服邮件存一份，owner Mod 给它 `<mail.key_prefix>:bcast:` 下的 Redis 账本），\n")
+	b.WriteString("登录端点调用一次 `Mail.PullBroadcasts`（画像：`mail.ServerScope` / `mail.GuildScope` 与角色建立时间 `Role.CreatedAtUnix`），之后 List / Summary 自己补齐。写法见 collaborators.go 里 `Broadcast()` 的注释。\n\n")
 	b.WriteString("## 业务 Service 如何调用\n\n")
 	for _, name := range sortedServiceNames(m) {
 		service := m.Services[name]

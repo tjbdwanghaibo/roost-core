@@ -69,6 +69,13 @@ type Mail interface {
 	// error: a cancel that found nothing to release is not the same outcome as
 	// one that did.
 	CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (released bool, err error)
+	// PullBroadcasts records the player's broadcast profile and merges the
+	// lazy broadcasts that are theirs. The login endpoint calls it; without a
+	// LazyBroadcast it only answers the summary. See Service.PullBroadcasts.
+	PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (summary Summary, err error)
+	// RevokeBroadcast stops a lazy broadcast from reaching mailboxes that have
+	// not merged it yet; merged copies stay. See Service.RevokeBroadcast.
+	RevokeBroadcast(ctx context.Context, mailID string) (revoked bool, err error)
 }
 
 var _ Mail = (*Service)(nil)

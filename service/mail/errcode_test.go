@@ -25,7 +25,7 @@ const (
 	// pins the set exactly. Adding a public error code therefore means editing
 	// this number, which is right: a new code in a published segment is a
 	// deliberate act, not something that should slip in.
-	segmentAllocated = 15
+	segmentAllocated = 16
 )
 
 // internalReason is what errcode.ClientError returns for anything it cannot

@@ -34,6 +34,13 @@
 //   - `PlayerID` came from the request body, so any caller could claim another
 //     player's attachments. Here the caller identity is a parameter of the
 //     service call and is never read out of a request struct.
+//
+// Server-wide mail (AudienceBroadcast) reaches mailboxes through a Deliverer.
+// The built-in one, LazyBroadcast (broadcast.go), stores a broadcast once with
+// a monotonic global mail id and lets each mailbox pull it — at login through
+// PullBroadcasts and before List / Summary — behind a per-player watermark, so
+// offline players and players who log in later receive it exactly once. nil
+// stays the default and refuses broadcasts.
 package mail
 
 import (
@@ -71,6 +78,7 @@ const (
 	CodeRequestInvalid   int32 = 590113
 	CodeConflict         int32 = 590114
 	CodeClaimHistoryFull int32 = 590115
+	CodeBroadcastFull    int32 = 590116
 )
 
 // The sentinels. Each carries its code, so errors.Is keeps working unchanged
@@ -112,9 +120,15 @@ var (
 	// Refusing is deliberate; forgetting an identity is how the same
 	// attachment gets a second token.
 	ErrClaimHistoryFull = errcode.Define(CodeClaimHistoryFull, "mail: claim history is full", "")
-	ErrRangeInvalid     = errcode.Define(CodeRangeInvalid, "mail: range is invalid", "")
-	ErrRequestInvalid   = errcode.Define(CodeRequestInvalid, "mail: request is invalid", "")
-	ErrConflict         = errcode.Define(CodeConflict, "mail: conflict", "")
+	// ErrBroadcastFull reports that the lazy broadcast ledger already holds
+	// LazyBroadcastConfig.MaxActive unexpired broadcasts. The ledger is one
+	// document every merge reads, so its size is bounded and publishing over
+	// the bound is refused rather than growing it; records leave it when they
+	// expire.
+	ErrBroadcastFull  = errcode.Define(CodeBroadcastFull, "mail: broadcast ledger is full", "")
+	ErrRangeInvalid   = errcode.Define(CodeRangeInvalid, "mail: range is invalid", "")
+	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "mail: request is invalid", "")
+	ErrConflict       = errcode.Define(CodeConflict, "mail: conflict", "")
 )
 
 // codeBySentinel is the pairing above, as data, so a test can check it rather
@@ -142,6 +156,7 @@ var codeBySentinel = map[int32]error{
 	CodeRequestInvalid:   ErrRequestInvalid,
 	CodeConflict:         ErrConflict,
 	CodeClaimHistoryFull: ErrClaimHistoryFull,
+	CodeBroadcastFull:    ErrBroadcastFull,
 }
 
 // Error maps an error to the code and reason a client sees.
@@ -240,9 +255,11 @@ const (
 	// AudienceDirect addresses an explicit, bounded recipient list.
 	AudienceDirect Audience = "direct"
 	// AudienceBroadcast addresses a scope — a server, a guild, everyone.
-	// Delivery into individual mailboxes is the caller's decision, expressed
-	// through Deliverer: "how does one mail reach a hundred thousand players"
-	// is a deployment question, not a library one.
+	// Delivery into individual mailboxes is the deployment's decision,
+	// expressed through Deliverer: "how does one mail reach a hundred thousand
+	// players" is a deployment question. LazyBroadcast is the built-in answer
+	// (store once, each mailbox pulls it at login and before List / Summary);
+	// nil, the default, refuses broadcasts.
 	AudienceBroadcast Audience = "broadcast"
 )
 

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	domain "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -144,5 +145,41 @@ func TestClientModFollowsTheConfiguredRPCTransport(t *testing.T) {
 				t.Fatalf("transport=%q: %d reliable calls, want %d", tc.transport, b.reliable, tc.reliable)
 			}
 		})
+	}
+}
+
+// unreachableRedis satisfies the Redis capability without a server: building
+// the stores does not touch Redis, so Provide can be checked without one. Any
+// call panics on the nil embedded interface, which would fail the test loudly.
+type unreachableRedis struct{ fredis.IRedis }
+
+// 内置的 LazyBroadcast 不带账本时，Mod 在 Provide 里给它同一前缀下的 Redis 账本：业务的 Broadcast()
+// 只需一行 mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})。自带账本的不被替换。
+func TestModGivesALazyBroadcastTheRedisLedger(t *testing.T) {
+	provide := func(lazy *domain.LazyBroadcast) error {
+		mod := NewMod(lazy, nil)
+		if err := mod.Init(modConfig()); err != nil {
+			t.Fatal(err)
+		}
+		registry := app.NewRegistry(viper.New())
+		if err := mods.RegisterAll(registry, mods.Capability{Name: mods.ModRedis, Value: fredis.IRedis(unreachableRedis{})}); err != nil {
+			t.Fatal(err)
+		}
+		return mod.Provide(registry)
+	}
+	lazy := domain.NewLazyBroadcast(domain.LazyBroadcastConfig{})
+	if err := provide(lazy); err != nil {
+		t.Fatalf("Provide with a lazy broadcast: %v", err)
+	}
+	if !lazy.HasIndex() {
+		t.Fatal("the Mod did not give the lazy broadcast a ledger; nothing would ever be merged")
+	}
+	own := domain.NewMemoryBroadcastIndex()
+	configured := domain.NewLazyBroadcast(domain.LazyBroadcastConfig{Index: own})
+	if err := provide(configured); err != nil {
+		t.Fatalf("Provide with a lazy broadcast that has its own ledger: %v", err)
+	}
+	if err := configured.UseIndex(own); err == nil {
+		t.Fatal("a configured ledger was replaced or could be replaced")
 	}
 }

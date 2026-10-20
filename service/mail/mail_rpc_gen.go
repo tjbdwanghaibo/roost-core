@@ -36,14 +36,16 @@ const ServiceType = "mail"
 // The RPC method names, prefixed with the service type so a bus subject is
 // unambiguous when several services register handlers on one connection.
 const (
-	MethodSend         = "mail.Send"
-	MethodList         = "mail.List"
-	MethodSummary      = "mail.Summary"
-	MethodMarkRead     = "mail.MarkRead"
-	MethodDelete       = "mail.Delete"
-	MethodReserveClaim = "mail.ReserveClaim"
-	MethodCommitClaim  = "mail.CommitClaim"
-	MethodCancelClaim  = "mail.CancelClaim"
+	MethodSend            = "mail.Send"
+	MethodList            = "mail.List"
+	MethodSummary         = "mail.Summary"
+	MethodMarkRead        = "mail.MarkRead"
+	MethodDelete          = "mail.Delete"
+	MethodReserveClaim    = "mail.ReserveClaim"
+	MethodCommitClaim     = "mail.CommitClaim"
+	MethodCancelClaim     = "mail.CancelClaim"
+	MethodPullBroadcasts  = "mail.PullBroadcasts"
+	MethodRevokeBroadcast = "mail.RevokeBroadcast"
 )
 
 // Methods is every method on Mail, in interface order.
@@ -59,6 +61,8 @@ var Methods = []string{
 	MethodReserveClaim,
 	MethodCommitClaim,
 	MethodCancelClaim,
+	MethodPullBroadcasts,
+	MethodRevokeBroadcast,
 }
 
 // rpcStatus is the envelope every response embeds.
@@ -228,6 +232,39 @@ type rpcCancelClaimResponse struct {
 	Released bool `json:"released"`
 }
 
+// rpcPullBroadcastsRequest is the PullBroadcasts request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcPullBroadcastsRequest struct {
+	PlayerID int64            `json:"player_id"`
+	Profile  BroadcastProfile `json:"profile"`
+}
+
+// rpcPullBroadcastsResponse is the PullBroadcasts response on the wire.
+type rpcPullBroadcastsResponse struct {
+	rpcStatus
+	Summary Summary `json:"summary"`
+}
+
+// rpcRevokeBroadcastRequest is the RevokeBroadcast request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcRevokeBroadcastRequest struct {
+	MailID string `json:"mail_id"`
+}
+
+// rpcRevokeBroadcastResponse is the RevokeBroadcast response on the wire.
+type rpcRevokeBroadcastResponse struct {
+	rpcStatus
+	Revoked bool `json:"revoked"`
+}
+
 // --- server ---
 
 // RegisterHandlers publishes Mail on a bus.
@@ -307,6 +344,22 @@ func RegisterHandlers(b bus.IBus, service Mail) error {
 			}
 			released, err := service.CancelClaim(ctx.Context(), wire.PlayerID, wire.MailID, wire.Token, wire.Attempts)
 			return rpcCancelClaimResponse{rpcStatus: statusOf(err), Released: released}, nil
+		},
+		MethodPullBroadcasts: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcPullBroadcastsRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcPullBroadcastsResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			summary, err := service.PullBroadcasts(ctx.Context(), wire.PlayerID, wire.Profile)
+			return rpcPullBroadcastsResponse{rpcStatus: statusOf(err), Summary: summary}, nil
+		},
+		MethodRevokeBroadcast: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcRevokeBroadcastRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcRevokeBroadcastResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			revoked, err := service.RevokeBroadcast(ctx.Context(), wire.MailID)
+			return rpcRevokeBroadcastResponse{rpcStatus: statusOf(err), Revoked: revoked}, nil
 		},
 	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -464,6 +517,30 @@ func (c *BusClient) CancelClaim(ctx context.Context, playerID int64, mailID stri
 	return resp.Released, err
 }
 
+// PullBroadcasts records the player's broadcast profile and merges the
+// lazy broadcasts that are theirs. The login endpoint calls it; without a
+// LazyBroadcast it only answers the summary. See Service.PullBroadcasts.
+// PullBroadcasts implements Mail.
+func (c *BusClient) PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (Summary, error) {
+	var resp rpcPullBroadcastsResponse
+	err := c.call(ctx, MethodPullBroadcasts, rpcPullBroadcastsRequest{
+		PlayerID: playerID,
+		Profile:  profile,
+	}, &resp)
+	return resp.Summary, err
+}
+
+// RevokeBroadcast stops a lazy broadcast from reaching mailboxes that have
+// not merged it yet; merged copies stay. See Service.RevokeBroadcast.
+// RevokeBroadcast implements Mail.
+func (c *BusClient) RevokeBroadcast(ctx context.Context, mailID string) (bool, error) {
+	var resp rpcRevokeBroadcastResponse
+	err := c.call(ctx, MethodRevokeBroadcast, rpcRevokeBroadcastRequest{
+		MailID: mailID,
+	}, &resp)
+	return resp.Revoked, err
+}
+
 // --- capability ---
 
 // capability is what a Mod puts in the registry.
@@ -516,6 +593,14 @@ func (c capability) CommitClaim(ctx context.Context, playerID int64, mailID stri
 
 func (c capability) CancelClaim(ctx context.Context, playerID int64, mailID string, token string, attempts int32) (bool, error) {
 	return c.inner.CancelClaim(ctx, playerID, mailID, token, attempts)
+}
+
+func (c capability) PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (Summary, error) {
+	return c.inner.PullBroadcasts(ctx, playerID, profile)
+}
+
+func (c capability) RevokeBroadcast(ctx context.Context, mailID string) (bool, error) {
+	return c.inner.RevokeBroadcast(ctx, mailID)
 }
 
 // Capability wraps a Mail for registration. Both Mods use it, so the

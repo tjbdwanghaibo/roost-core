@@ -848,6 +848,8 @@ type Mail interface {
 
 拥有者进程：`mods.RegisterAll(r, OwnerCapabilities(service)...)` 加一个手写的 `func (s *Server) run(ctx context.Context) error`；调用方进程：`mail.NewClientMod()`。两者发布同一个 capability 名，同一进程放不下两份——registry 拒绝第二个，这是想要的行为。工程内的跨进程服务用 `roost add rpc`（见 [项目生成器 §6](PROJECT_GENERATOR.zh-CN.md#6-日常业务脚手架)）。
 
+托管框架服务的协作者骨架（`internal/service/<服务>/collaborators.go`）只生成一次、缺省拒绝。mail 的 `Broadcast()` 缺省 `nil`（拒绝 `AudienceBroadcast`）；注释给出内置的“存一份 + 拉取合并”接法：返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`（owner Mod 给它 `<mail.key_prefix>:bcast:` 下的 Redis 账本），登录端点调用一次 `Mail.PullBroadcasts(ctx, playerID, mail.BroadcastProfile{Scopes: …, RegisteredAtUnix: Role.CreatedAtUnix})`，公会变化时再调一次；业务条件写在 `LazyBroadcastConfig.Eligible`，撤回用 `Mail.RevokeBroadcast`。game-demo 的 `enter_game` 已经这样调用（没启用时是 no-op）。语义见 [Service 指南 · Mail 全服邮件](../../docs/framework/guide/09-services.md#1b-mail-全服邮件)。
+
 `-check` 用于 CI：先跑全部拒绝规则，再生成并逐字节比对磁盘上的文件，任何差异非零退出，并区分"缺失"（没人跑过生成器）与"不一致"（文件被改过或由另一版本生成器产出）。它不写文件。
 
 拒绝规则（每条都对应一个真实踩过的坑）：

@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // HandleEnterGame makes sure the authenticated player has a Player Entity.
@@ -120,6 +121,23 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	} else if len(settled) > 0 {
 		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
 	}
+	// Server-wide mail (AudienceBroadcast) sent while this player was offline
+	// reaches the mailbox now: the login half of mail.LazyBroadcast. The mail
+	// service records the profile and merges every broadcast that is this
+	// player's — the server's, everyone's, and one sent after the role was
+	// created (the built-in condition) — exactly once; List and Summary top up
+	// from the same profile afterwards. Without LazyBroadcast configured
+	// (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
+	// A game with guild-wide broadcasts adds mail.GuildScope(guild) here and
+	// pulls again when the player joins or leaves a guild. Best effort — a
+	// failed pull is retried by the next List / Summary / login.
+	if mailer := controller.Mailer(); mailer != nil {
+		if profile, ok := BroadcastProfile(context.Session, boundSID); !ok {
+			slog.Warn("enter_game: the session carries no role creation time; server-wide mail not pulled", "player_id", context.PlayerID)
+		} else if _, pullErr := mailer.PullBroadcasts(context.Context(), context.PlayerID, profile); pullErr != nil {
+			slog.Warn("enter_game: server-wide mail not pulled", "player_id", context.PlayerID, "err", pullErr)
+		}
+	}
 	// From here on the player receives world-channel pushes.
 	controller.Presence().Add(context.PlayerID)
 	// The game announces the login on the world channel through the chat
@@ -187,4 +205,22 @@ func BoundServerID(session gateway.Session) (int32, bool) {
 		return 0, false
 	}
 	return int32(sid), true
+}
+
+// BroadcastProfile 是登录端点拉全服邮件用的画像：本服范围加上认证器从 account 取来的角色建立时间
+// （svcaccount.RoleCreatedAtClaim）。没有这个 claim 或值不是正整数时回答 false：注册时间未知就无法
+// 判断“注册时间早于发送时间”，不拉取，而不是把玩家当成老玩家。
+func BroadcastProfile(session gateway.Session, serverID int32) (svcmail.BroadcastProfile, bool) {
+	if session == nil {
+		return svcmail.BroadcastProfile{}, false
+	}
+	raw, ok := session.Principal().Claims[svcaccount.RoleCreatedAtClaim]
+	if !ok {
+		return svcmail.BroadcastProfile{}, false
+	}
+	createdAt, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || createdAt <= 0 {
+		return svcmail.BroadcastProfile{}, false
+	}
+	return svcmail.BroadcastProfile{Scopes: []string{svcmail.ServerScope(serverID)}, RegisteredAtUnix: createdAt}, true
 }

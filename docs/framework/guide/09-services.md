@@ -39,6 +39,22 @@ Gate Session 表示网络连接与绑定；Account token 表示登录认证；Sy
 
 Gate 尚未成为上述目录中的独立服务。当前已提供 `infra/network/gateway` 边界工具和嵌入 Game 的 TCP 接入实现；后续的跨进程路由、回推和会话恢复见[网关现状与独立 Gate 设计](../GATEWAY.md)。
 
+## 1B. Mail 全服邮件
+
+`AudienceBroadcast`（全服 `""` / 单服 / 公会）怎样到达每个邮箱由 `Config.Broadcast`（`mail.Deliverer`）决定；缺省 `nil` 拒绝广播。框架内置一种策略 `mail.NewLazyBroadcast`（维护者 2026-10-20 决定，DESIGN-TODO D17）：全局邮件只存一份信封，个人邮箱拉取合并。
+
+- **接入一行**：生成骨架 `Broadcast()` 返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`；owner Mod 给它同一 `key_prefix` 下的 Redis 账本（`<key_prefix>:bcast:ledger` 与版本提示 `<key_prefix>:bcast:version`）。直接 `mail.New` 时自己给 `Index`（`NewRedisBroadcastIndex` / 测试用 `NewMemoryBroadcastIndex`）。
+- **全局邮件 ID 与账本**：广播发出时 `Deliver` 把它登记进账本，分配单调递增的全局邮件 ID（`GlobalMail.ID`）。账本是一个版本化文档，“分配 ID 与登记”在同一次 compare-and-set 里完成，所以账本头以下的 ID 全部可见，水位可以只是一个数字。登记按信封 id 幂等，发送重放安全。
+- **拉取时机**：登录端点调用一次 `Mail.PullBroadcasts(ctx, playerID, BroadcastProfile)`；`List` / `Summary` 前再检查一次，账本头不高于玩家水位时只花一次 O(1) 的版本读（进程内缓存账本，版本提示没变不重读）。没有调用过 `PullBroadcasts` 的玩家（没有画像）不合并。没配置 LazyBroadcast 时 `PullBroadcasts` 只返回摘要，登录端点可以无条件调用。
+- **画像**：`BroadcastProfile{Scopes, RegisteredAtUnix, Attributes}` 由登录端点给出、记在邮箱里，`List` / `Summary` 用最近一次的画像。`Scopes` 用 `mail.ServerScope(sid)`、`mail.GuildScope(guildID)`（发件方用同一写法填 `SendRequest.Scope`）；公会是业务提供的成员关系：入会 / 退会后要再调一次 `PullBroadcasts`，否则按旧画像合并、水位越过新公会已发出的邮件。`RegisteredAtUnix` 必填，取 account 的 `Role.CreatedAtUnix`（game-demo 由认证器写进 `svcaccount.RoleCreatedAtClaim`，`enter_game` 读出）。
+- **合并**：每个玩家一个水位（`Mailbox.BroadcastWatermark`，已合并到的最大全局邮件 ID）。合并在邮箱的同一次 compare-and-set 里把 ID 大于水位、范围匹配、未过期、未撤回、满足条件的全局邮件写成条目（键是广播信封 id，`Entry.GlobalID` / `Item.GlobalID` 记全局邮件 ID），并把水位推进到账本头。并发登录 + List、重复拉取只合并一次；已读 / 已领 / 删除记在个人这条上，附件沿用恒定 token 只领一次；删除后条目即使被保留策略清掉，水位也挡住再次合并。合并来的范围邮件领取时不必再给 scope（条目带 `GlobalID` 即为收件凭证）。邮箱满（全是未读）时合并停在放不下的那封之前、水位不越过它，腾出位置后补上，并计 `refused:merge_broadcast:mailbox_full`。
+- **条件**：内置“注册时间早于发送时间”（严格早于，按秒），新注册的玩家收不到旧补偿；业务谓词 `LazyBroadcastConfig.Eligible(profile, mail)` 在其后过滤，输入放进 `Attributes`，必须是纯函数、不做 I/O（它在 compare-and-set 回调里，可能执行多次）。被判为不满足的邮件水位越过它，之后不再重新判断。
+- **有效期**：全局邮件过期后不再合并；已合并的那份按个人邮件的有效期处理——条目的过期就是信封自己的 `ExpiresAtUnix`（与全局邮件相同），撤回或从账本回收都不影响它。
+- **撤回**：`Mail.RevokeBroadcast(mailID)`：未合并的不再合并，已合并的不动；重复撤回返回 false，账本里没有（不是 lazy 广播或已过期）报 `ErrMailMissing`。
+- **账本上界与回收**：未过期的全局邮件最多 `LazyBroadcastConfig.MaxActive` 条（缺省 `DefaultMaxActiveBroadcasts` = 1000），超过时发布以 `ErrBroadcastFull`（590116）拒绝，发送方看到 `ErrConflict` 并可重试；过期记录在下一次发布 / 撤回时从账本移除，撤回的记录保留到过期（挡住发送重放再次登记）。账本因此至多是“上界条数 + 上次写入后才过期的条数”。
+
+源码入口：[broadcast.go](../../../service/mail/broadcast.go)、[service.go](../../../service/mail/service.go) 的 `PullBroadcasts` / `refreshMailbox`、[mail_mod.go](../../../wiring/mail/mail_mod.go)。剩余边界见 [KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)。
+
 ## 2. owner 与调用方
 
 owner Mod 持有存储并发布公开接口与 .local；Server 注册总线 handler 并运行周期工作。调用方使用 ClientMod/BusClient，只依赖公开契约。同进程也通过同一能力接口；业务不要依赖把公开接口断言成具体 Service。

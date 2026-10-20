@@ -15,7 +15,8 @@ import (
 
 // Mod wires a mail Service into an app and registers it as a capability.
 //
-// The broadcast Deliverer is optional, and it is the one optional collaborator
+// The broadcast Deliverer is optional (mail.NewLazyBroadcast is the built-in
+// strategy; this Mod gives it the Redis ledger when it has none), and it is the one optional collaborator
 // in this repository that is safe to leave out — because leaving it out does
 // not weaken anything: Send refuses AudienceBroadcast outright when it is
 // absent, rather than accepting the send and delivering to nobody. A
@@ -99,6 +100,13 @@ func (m *Mod) Provide(r *app.Registry) error {
 	})
 	if err != nil {
 		return fmt.Errorf("mail mod: %w", err)
+	}
+	// 内置的“存一份 + 拉取合并”策略（mail.NewLazyBroadcast）没有自带账本时，用同一前缀下的 Redis
+	// 账本（<key_prefix>:bcast:）。业务的 Broadcast() 因此只需一行，不必自己接存储。
+	if lazy, ok := m.broadcast.(*domain.LazyBroadcast); ok && lazy != nil && !lazy.HasIndex() {
+		if err := lazy.UseIndex(stores.Broadcasts); err != nil {
+			return fmt.Errorf("mail mod: %w", err)
+		}
 	}
 	service, err := domain.New(domain.Config{
 		Envelopes: stores.Envelopes, Mailboxes: stores.Mailboxes, Sends: stores.Sends,

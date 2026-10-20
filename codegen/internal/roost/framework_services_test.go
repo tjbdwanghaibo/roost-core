@@ -570,7 +570,11 @@ func TestMailBroadcastSkeletonDescribesTheWholeAudience(t *testing.T) {
 	if strings.Contains(body, "online player") {
 		t.Errorf("mail Broadcast skeleton describes the broadcast audience as online players only:\n%s", body)
 	}
-	for _, want := range []string{"offline", "mail.Deliverer"} {
+	// D17：骨架缺省仍为 nil，注释给出内置“存一份 + 拉取合并”的一行接法与登录钩子。
+	if !strings.Contains(body, "func Broadcast() mail.Deliverer { return nil }") {
+		t.Errorf("mail Broadcast skeleton no longer defaults to nil (refuse broadcasts):\n%s", body)
+	}
+	for _, want := range []string{"offline", "mail.Deliverer", "mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})", "PullBroadcasts", "RegisteredAtUnix"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("mail Broadcast skeleton does not mention %q:\n%s", want, body)
 		}
