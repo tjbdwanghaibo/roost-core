@@ -161,7 +161,7 @@ environment_test() {
 	(
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./wiring/selfsync ./wiring/saga ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
+			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./wiring/selfsync ./wiring/saga ./wiring/sidmerge ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
 	)
 	# 生成工程里需要真实依赖的功能用例（codegen/internal/entity/testdata 的 dataengine、remoteflow，game-demo 模板与
 	# codegen/internal/roost 写进 game-demo 的用例）：它们只在复制或新生成的工程里运行，go test ./... 看不到；之前只有

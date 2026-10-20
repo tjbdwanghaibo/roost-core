@@ -600,7 +600,7 @@ Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Wiring Mod�
 需要时手工调大该服务的 `shutdown.total_timeout` 与下面各处宽限期；
 k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh` / `second-game.sh` 的
 `kill -9` 前等待均为 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`（读 `config.<svc>.yaml`、`.prod.example.yaml` 与 k8s secret 示例，
-缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 117s / 122s（`-mods configdata,mongo,nats,dataengine,nest` 时 24 个 → 114s / 119s）；每个框架服务 6 个 Mod → 23s / 28s。
+缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 26 个 Mod → 120s / 125s（`-mods configdata,mongo,nats,dataengine,nest` 时 25 个 → 117s / 122s；含合服启动自检 `svcaccount.NewServingGuardMod()`）；每个框架服务 6 个 Mod → 23s / 28s。
 配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
 改过的段或旧版生成器写的段保持不动，宽限期跟随它们的值。配置段的改写在渲染模板之前、与模板同一次提交（同受回滚与并发输入检查保护），
 增减 Mod 后一次 sync 即收敛、`roost project diff` 为空。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置

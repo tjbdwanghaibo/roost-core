@@ -497,8 +497,15 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	}
 	used := append([]string(nil), m.Services[name].Uses...)
 	sort.Strings(used)
+	usesAccount := false
 	for _, target := range used {
 		out = append(out, fmt.Sprintf("svc%s.NewClientMod()", frameworkCatalog[m.Services[target].Framework].Package))
+		usesAccount = usesAccount || m.Services[target].Framework == "account"
+	}
+	// 承载玩家（access.player 指向它）且接了 account 的服务：启动自检本服没有被合服并入别处
+	// （wiring/account.ServingGuardMod，DataEngine Mod 排在它之后）。
+	if access, enabled := m.Access["player"]; enabled && access.Service == name && usesAccount {
+		out = append(out, "svcaccount.NewServingGuardMod()")
 	}
 	// The project's own rpcs: the owner Mod wraps the implementation
 	// (New() takes whatever the service needs; edit the call here), a

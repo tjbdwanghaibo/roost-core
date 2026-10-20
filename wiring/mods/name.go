@@ -52,4 +52,7 @@ const (
 	ModEntityTimer app.ModName = "entity_timer"
 	// ModWeb 是业务 HTTP 路由的监听 Mod（wiring/web），同名登记 webroute.Registerer。
 	ModWeb app.ModName = "web"
+	// ModAccountServingGuard 是装配了 account 的 game 进程的启动自检（wiring/account.ServingGuardMod）：本服已并入
+	// 另一服就拒绝启动。DataEngine Mod 把它列为可选依赖，让检查先于 WAL 与 outbox 打开。
+	ModAccountServingGuard app.ModName = "service.account.serving_guard"
 )

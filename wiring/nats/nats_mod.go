@@ -83,6 +83,31 @@ func (c config) jetStreamRPC() (bus.JetStreamRPCConfig, bool) {
 	}, true
 }
 
+// BusPersistence 是 nats.* 里决定总线消息会不会留在持久流里的部分（运维工具 cmd/sidmerge 的持久消息清单用）：
+// RPC 走 JetStream 时，发往某个 sid 的请求落在 RequestStream 里、由该 sid 的实例 durable
+// rpc_<服务>_<sid>_<方法> 消费；可靠总线（Reliable）按 <服务>:<sid> 在 Redis 记去重与死信。
+type BusPersistence struct {
+	Prefix string
+	// JetStreamRPC 为 false 时 RPC 是 NATS request-reply，不落盘；为 true 时 RPC 是补齐缺省值后的配置。
+	JetStreamRPC    bool
+	RPC             bus.JetStreamRPCConfig
+	ReliableEnabled bool
+	ReliablePrefix  string
+}
+
+// LoadBusPersistence 按 NATS Mod 的声明（与 Init 同一个结构体）读 BusPersistence，不另抄缺省。
+func LoadBusPersistence(cfg *viper.Viper) (BusPersistence, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return BusPersistence{}, fmt.Errorf("nats: %w", err)
+	}
+	rpc, jetStream := settings.jetStreamRPC()
+	return BusPersistence{
+		Prefix: settings.Prefix, JetStreamRPC: jetStream, RPC: rpc.WithDefaults(),
+		ReliableEnabled: settings.Reliable.Enabled, ReliablePrefix: settings.Reliable.Prefix,
+	}, nil
+}
+
 // NewNatsMod creates a NatsMod with an optional codec.
 // If codec is nil, the current MessagePack codec is used.
 func NewNatsMod(codec bus.Codec) *NatsMod {

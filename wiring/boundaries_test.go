@@ -13,6 +13,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/wiring/account"
 	"github.com/tjbdwanghaibo/roost-core/wiring/configdata"
 	kitconfigdata "github.com/tjbdwanghaibo/roost-core/wiring/configdata"
 	"github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
@@ -237,6 +238,9 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),
 		statslog.NewStatsLogMod(),
+		// 承载玩家的 game 进程的合服启动自检与它依赖的 account 客户端（DataEngine 把自检列为可选依赖）。
+		account.NewClientMod(),
+		account.NewServingGuardMod(),
 	}
 	names := map[app.ModName]bool{}
 	for _, mod := range all {

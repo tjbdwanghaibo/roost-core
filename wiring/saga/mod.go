@@ -56,6 +56,29 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine}
 }
 
+// Locations 是 saga Mod 按配置使用的持久位置：Mongo 存储（库与集合，没写的集合名为空、由 core 取缺省）与
+// JetStream 流名、主题前缀。
+type Locations struct {
+	Store         coresaga.MongoStoreOptions
+	Stream        string
+	SubjectPrefix string
+}
+
+// LoadLocations 按 saga Mod 的声明读 Locations（与 Init 同一个结构体）：运维工具（cmd/sidmerge 的“全部 saga
+// 终态”检查）用它找 saga 记录，不另抄缺省。
+func LoadLocations(cfg *viper.Viper) (Locations, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return Locations{}, fmt.Errorf("saga: %w", err)
+	}
+	c := settings.Saga
+	return Locations{
+		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
+			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
+		Stream: c.Stream, SubjectPrefix: c.SubjectPrefix,
+	}, nil
+}
+
 // ConfigSchema 声明 saga.*。
 func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 

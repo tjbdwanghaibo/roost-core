@@ -100,7 +100,8 @@ func (mod *Mod) DependsOn() []app.ModName { return nil }
 // loads: Mongo, NATS (JetStream is the NATS Mod's capability, not a Mod of
 // its own) and, when remote projection is on, Remote Entity.
 func (mod *Mod) OptionalDependsOn() []app.ModName {
-	deps := []app.ModName{mods.ModMongo, mods.ModNats}
+	// ModAccountServingGuard：合服后误启动的 game 在打开 WAL 与 outbox 之前被拒绝（wiring/account.ServingGuardMod）。
+	deps := []app.ModName{mods.ModMongo, mods.ModNats, mods.ModAccountServingGuard}
 	if mod != nil && mod.remoteEnabled {
 		deps = append(deps, mods.ModRemoteEntity)
 	}
@@ -200,12 +201,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	sid := settings.Sid
-	dir := settings.WAL.Dir
-	// 缺省按 sid 分目录：同一工作目录、同一份配置用 --sid 起的多个进程各用各的 WAL。
-	// 生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
-	if dir == "" {
-		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
-	}
+	dir := walDir(settings.WAL.Dir, sid)
 	wal := nestwal.DefaultOptions(dir)
 	if value := settings.WAL.SegmentBytes; value > 0 {
 		wal.SegmentBytes = value
@@ -585,6 +581,30 @@ func LoadEffectsConfig(cfg *viper.Viper) (EffectsConfig, error) {
 
 // Prefix 是效果主题前缀去掉首尾点之后的值，与 Mod 发布效果时用的相同。
 func (c EffectsConfig) Prefix() string { return c.subjectPrefix() }
+
+// walDir 是 WAL 目录的规则：dataengine.wal.dir 写了就用它；不写时缺省按 sid 分目录
+// data/wal/dataengine/<sid>（相对进程工作目录），同一工作目录、同一份配置用 --sid 起的多个进程各用各的 WAL。
+// 生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
+func walDir(configured string, sid int32) string {
+	if configured != "" {
+		return configured
+	}
+	return filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
+}
+
+// WALDir 按 DataEngine Mod 的声明与同一条规则（walDir）返回 cfg 对应进程的 WAL 目录；sid 不为 0 时覆盖
+// 配置里的 sid（与进程 --sid 一致）。运维工具（cmd/sidmove、cmd/sidmerge）检查一个已停进程的 WAL 时用它，
+// 不另抄缺省。相对路径相对那个进程的工作目录。
+func WALDir(cfg *viper.Viper, sid int32) (string, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", fmt.Errorf("dataengine: %w", err)
+	}
+	if sid == 0 {
+		sid = settings.Sid
+	}
+	return walDir(settings.WAL.Dir, sid), nil
+}
 
 // EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流
 // 要用的三样：效果收件箱所在的库（dataengine.database）、主题前缀（去掉首尾点，与 Mod 发布时相同）与流名。

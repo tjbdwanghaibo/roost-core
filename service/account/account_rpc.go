@@ -62,6 +62,13 @@ type Accounts interface {
 	// MarkLogout records a logout time. The account id is required for the
 	// same reason.
 	MarkLogout(ctx context.Context, accountID string, playerID int64) (err error)
+
+	// GetServer returns one game server's record, merge fields included
+	// (ErrServerInvalid when there is none). It is read-only and the record is
+	// public listing information, so it needs no caller identity. A game
+	// process asks it at start-up whether its own server was merged away
+	// (wiring/account ServingGuardMod).
+	GetServer(ctx context.Context, serverID int32) (server GameServer, err error)
 }
 
 var _ Accounts = (*Service)(nil)

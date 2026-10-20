@@ -6,7 +6,7 @@
 
 静态绑定下，玩家建角时由 account 绑定到一个 game sid（`Role.ServerID`，[service/account/types.go](../../service/account/types.go)），之后不变；同一 sid 同一时刻只有一个进程（App 单实例锁），game 进程只为绑定在自己 sid 上的玩家服务（demo 的 [playerowner.go](../../demo/internal/service/game/playerowner.go.tmpl)）。因此“同一玩家至多一个写者”就等于“同一 sid 至多一个进程”。
 
-所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。框架**没有**把单个玩家改绑到另一个 sid 的能力（account 没有修改 `ServerID` 的接口，`PlayerOwners` 拒绝不属于本 sid 的玩家）；需要“合服 / 单个玩家换服”属于新的产品功能，不在本篇范围。
+所以跨机迁移搬的是 **sid**：旧机器上的 sid 进程停下，新机器上同一 sid 的进程接管，玩家仍绑定在原 sid。框架**没有**把单个玩家改绑到另一个 sid 的能力（account 没有修改 `ServerID` 的接口，`PlayerOwners` 拒绝不属于本 sid 的玩家）；把整个服并入另一个服用别名合服（[§6](#6-合服把服-a-并入服-b)），角色仍绑定原服，由承载服的进程服务。
 
 数据只以已落库（Mongo）为准：WAL 只保证本机落库，新机器用空的 WAL 目录启动，不搬运旧机器的 WAL 热状态（[guide/03-dataengine §6](guide/03-dataengine.md#6-维护与升级)）。整个流程的正确性取决于一点：**旧进程的 WAL 在新进程启动前已全部投影并确认**。
 
@@ -83,3 +83,57 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 **框架守住的部分**：还有未投影记录而映射变了的进程拒绝启动（`dataengine: database mapping changed while the WAL still holds unprojected records`，点名哪个逻辑库从哪个物理库变到哪个），记下的映射不被覆盖；用原映射重启即可恢复。没有 `databases.json` 的 WAL（引入映射之前写下的）按“物理名就是逻辑名”比较。**框架不守的部分**：第 3 步的数据复制与核对、多进程映射是否一致、已经排空后改映射却忘了迁移数据（新库是空的：冷加载得到“从未创建”，GetOrCreate 会新建玩家）——这些由运维流程保证。
 
+## 6. 合服：把服 A 并入服 B
+
+别名合服（[DESIGN-TODO D15](../maintenance/DESIGN-TODO.md#d15-合服把一个服并入另一个服)，设计与实施记录见 [FEATURE-2026-10-20-server-merge-alias](../maintenance/FEATURE-2026-10-20-server-merge-alias.md)）：A 的角色身份（PlayerID、`Role.ServerID`、slot、名字）一律不变，account 在 A 的服务器记录上写 `MergedInto = B`，此后会话里的承载服（`Role.ServingServerID`、`ServerIDClaim`）是 B，Gate 与嵌入 TCP 都把 A 的角色连到 B 的 game；B 的 game 进程、配置与代码不变，进程仍只认自己的 sid。原服在 `OriginServerIDClaim`，显示规则由业务决定。
+
+合服是停服窗口内的**离线**操作，A、B 都停机。工具：game-demo 的 `cmd/accountctl`（account 记录）与 `cmd/sidmerge`（跟着 sid 走的数据，逻辑在 [wiring/sidmerge](../../wiring/sidmerge/sidmerge.go)）；`roost project doctor` 的 `merge-readiness` 只读打印同一份清单。
+
+### 6.1 步骤
+
+| 步骤 | 做什么 | 检查点 |
+| --- | --- | --- |
+| 0 准备 | 读清单：`go run ./cmd/sidmerge checklist`（按 sid 分库的逻辑库要搬，共享逻辑库两侧必须同一位置，持久总线消息，需要业务语义的合并）。业务按 §6.3 准备自己的合并脚本 | 清单里每一项有负责人 |
+| 1 公告、停准入 | A、B 的 account 状态改 maintenance（`accountctl upsert-server -status maintenance`），接入层停止接受新连接 | — |
+| 2 停服 | A、B 的 game 进程正常停机（SIGTERM，等进程退出）；之前先按清单的 `bus` 项处理发往 A 的持久消息（可靠总线的死信、JetStream RPC 的实例 durable） | 进程退出；`sidmove singleton` 两把锁都已释放 |
+| 3 前置检查 | `go run ./cmd/sidmerge migrate -from A -into B [-from-config …] [-into-config …] -dry-run`：两侧 WAL 已排空（且配置的库名映射与该进程最后一次运行记下的相同）、每个非按 sid 的逻辑库两侧在同一 Mongo 的同一物理库、A 的 outbox 为空或两侧共用控制库、saga 全部终态、按 sid 分库的 `_id` 冲突扫描；持久总线清单要人工确认（`confirm`） | 报告 `ready: true`，`confirm` 项已逐条确认。WAL 不在本机时在那台机器跑 `sidmove wal-drained`，通过后加 `-from-wal-checked` / `-into-wal-checked` |
+| 4 抽样快照 | `sidmove players -ids <A 的抽样玩家> -out before.json` | — |
+| 5 迁移按 sid 独占的数据 | `go run ./cmd/sidmerge migrate -from A -into B -manifest merge-A.json`：A 的 `<物理名A>_<A>` 逐集合原样拷进 B 的 `<物理名B>_<B>`（两侧各按自己的 `dataengine.databases` 换算），带 `_version` / `_schema` / `_last_tx` 与墓碑字段；冲突整体停止、不覆盖不跳过；重跑幂等。没有 `dbscope=sid` DAO 的工程（game-demo）这一步什么也不写 | 报告 `copied` / `already_present`；清单文件保存好（回退要用）。源库保留为只读归档，确认无误后由运维手动删除 |
+| 6 业务语义合并 | 业务脚本（§6.3） | 业务自己的核对 |
+| 7 account 记录 | `accountctl merge-server -from A -into B -note "<窗口、工单>"`（先 `-dry-run` 看会改哪些记录）：A 写 `MergedInto = B`、`closed`；原来并入 A 的服一并改指 B（拍平） | `accountctl show-server -sid A`：`merged_into: B`；`show-server -sid B` 的 `merged_from` 含 A |
+| 8 部署层 | 服务器列表显示“A（已并入 B）”并给出 B 的接入地址；嵌入 TCP 部署把 A 的接入域名 / 端口指到 B；独立 Gate 不需要配置 | — |
+| 9 启动 B | 启动 game(B)，开放登录前 `sidmove players -compare before.json`（Player 等共享库文档未变），按清单核对迁入文档 | `/readyz` 200；比较通过 |
+| 10 开放登录 | B 的状态改回 open。之后不再部署 game(A) | A 的角色登录到 B；`CreateRole` 在 A 上被拒（`server … is merged into B`） |
+
+**误启动 A**：装配了 account 的 game 进程启动时由 `ServingGuardMod`（[wiring/account](../../wiring/account/serving_guard.go)）向 account 查本服记录，`MergedInto != 0` 拒绝启动并点名承载服；它排在 DataEngine Mod 之前（DataEngine 把它列为可选依赖），所以 WAL 与 outbox 都还没打开。account 一直查不到时在 30 秒内重试，仍查不到也拒绝启动（无法证明没被并入就不写数据）。本服还没在 account 登记时放行。
+
+### 6.2 回退
+
+1. 停服窗口内停 game(B)，`sidmove wal-drained` 确认排空。
+2. `go run ./cmd/sidmerge revert -from A -into B -manifest merge-A.json`：先核对（B 已排空、清单记的库名与按配置重新换算的相同、清单上每份文档都在 B 里），再把每份文档按 B 里的**当前版本**写回 A 的源库、按版本从 B 删掉。合服期间 B 里新产生、不在清单上的按 sid 独占文档不动，报告 `new_in_target` 计数：框架无法判断归属，由业务按自己的键规则处理，否则留在 B。
+3. `accountctl unmerge-server -from A -note …`：清空别名，A 保持 closed；拍平时一并改指 B 的其他服不受影响。
+4. 用**新的** WAL 目录部署 game(A)（旧目录已排空，可清掉），`accountctl upsert-server -sid A -status open`，接入层改回；启动 B。
+
+没有按 sid 独占数据的工程只有第 1、3、4 步。中途失败：revert 是逐份“写回 A、按版本删 B”，已搬回的文档在 A、不在 B，原样重跑会把它们报成 missing 并整体拒绝——对照报告去掉清单里已搬回的项再跑。
+
+### 6.3 持久总线消息与业务合并清单
+
+`sidmerge` 按 A 的配置列出下列总线用法（逐项核对过源码，`checklist` / `migrate -dry-run` 的 `bus` 段）。发往 A 的消息只有标为“按 sid 寻址”的会因 A 退役而无人消费：
+
+| 用法 | 持久？ | 按 sid 寻址？ | A 退役后 | 处理 |
+| --- | --- | --- | --- | --- |
+| DataEngine 效果流 `dataengine.effects.stream` | 是 | 否：共享 durable（game-demo `game-level-up-mail`、`game-activity-phase`，saga 的 `roost-saga-start` / `-result`） | 已发布的由 B 消费；A 暂存未发布的留在 outbox | outbox 检查 |
+| saga 流 `saga.stream` | 是 | 否：共享 durable（`game-gift-<step>`），但命令载荷可能带发起方 sid（赠礼 `FromSID`），只有那个 sid 的进程接纳 | 指向 A 的非终态 saga 永远推进不了 | saga 全部终态（检查） |
+| SyncBus（`syncbus.transport: jetstream`） | 是 | 是：每个主题每个 sid 一个 durable `sync_<topic>_<sid>_<hash>`（及 `.live`） | 广播副本无人消费，到流的 max age 丢弃；B 有自己的 durable，不丢只发给 A 的东西 | 合服后删 A 的 durable（`nats consumer ls <流> \| grep _A_`） |
+| 服务 RPC（`nats.rpc.transport: jetstream`） | 是 | 是：请求流里的实例 durable `rpc_<服务>_<sid>_<方法>`（game-demo 的赠礼步骤转交发往 `svc.game.<sid>`） | 发往 A 的请求等到 request TTL，调用方超时；不会重投给 B | 停服前确认 A 的实例 durable 没有积压，合服后删除。缺省 `core` 传输不落盘 |
+| 可靠总线（`nats.reliable.enabled`） | 是（Redis） | 是：去重收件箱与死信按消费者 `<服务>:<sid>` | A 的死信无人重放 | 停 A 前用 admin `bus.dlq.*` 列出，重放到 B 或丢弃（业务决定）。缺省关闭 |
+| Remote 快照兴趣 | 是（Redis） | 是：消费者 sid | 按 `remote_entity.snapshot_interest_ttl` 过期 | 无 |
+
+需要业务语义的合并（框架只列出，不实现）：World 单例（UniqueID = sid，合服后只加载 World(B)，World(A) 的计数 / 进度并入或丢弃）、按服排行榜（并存或重算）、活动组 `activity.groups_file`（移除 A）、跨服 global `Routing`（解除 A 的绑定）、按服唯一的名字（改名规则）、按服的邮件 / 聊天频道、业务数据里记着的 sid。
+
+### 6.4 边界
+
+- `sidmerge` 不连 NATS：持久总线一项只能列出、由运维确认，不自动检查积压。
+- “同一 Mongo” 按 URI 的主机列表 + 副本集名比较：同一集群换主机名写会被判为不同而拒绝（偏保守）。
+- saga 记录不带“属于哪个 sid”，检查的是整个 saga 存储：同一存储里还在运行的其他服的 saga 也会让检查不通过。
+- 剩余边界与尚未确认项见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#合服d15)。
