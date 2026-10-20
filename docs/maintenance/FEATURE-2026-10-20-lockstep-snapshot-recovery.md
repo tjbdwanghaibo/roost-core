@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）已实施（实施记录与偏差见 §14），P2～P5 未开始。
+**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P3（C# SDK）已实施（实施记录与偏差见 §14），其余各期见 §14。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -552,3 +552,30 @@ func (c *checkpointCache) Snapshot(_ context.Context, req lockstep.SnapshotReque
 7. **钉住点**：等快照的会话钉住进入快照阶段时的窗口起点；采用快照后钉 `Frame + 1`；续帧钉游标。`retainWindow` 裁剪点 = min(正常裁剪点, 钉住点)，下限为正常裁剪点 − `PinFrames`，早于下限的会话发 `recovery_expired`。宿主手动 `TrimHistory` 不受钉住约束。
 
 给 P2 / P3 的协议要点：金样在 [client/spec/packets.json](../../client/spec/packets.json)（`catchup_unservable` 已是 v2：`c9 02 01 ac02 f0a204`；`recovery_failed_snapshot_unavailable`：reason 2、from 90000、start 70000；`snapshot_first_chunk` + `snapshot_next_chunk`：transfer 3，帧 1234，总长 24，状态 hash 9223372036854780468（最高位为 1，验证 uvarint64），两块数据拼起来是 ASCII `roost-snapshot-golden-24`，首块带其 SHA-256）。生成：`GOWORK=off go test ./client/wire -run TestClientProtocolGolden -update`。C# SDK 在 P3 之前仍按 v1 解码 C9，`scripts/test-client-dotnet.sh` 在 `catchup_unservable` 处失败，属预期。
+
+### P3 C# SDK（2026-10-20）
+
+已实施（只改 `client/dotnet`、`client/README.md`、`scripts/test-client-dotnet.sh` 注释）：
+
+- C9 v2 解码（[LockstepCodec.cs](../../client/dotnet/Roost.Client/LockstepCodec.cs) `DecodeCatchupUnservable`）：`LockstepRecoveryFailureReason`（1～4）进 `LockstepCatchupUnservableException.Reason`；规则与 Go `DecodeCatchupUnservable` 相同（所有原因 from ≥ 1，只有 history_trimmed 要求 from < start，v1 / 未知原因 / 尾字节 / start 溢出是坏包）。
+- CA 01 解码 `DecodeSnapshotChunk`（internal）与重组（[LockstepClient.cs](../../client/dotnet/Roost.Client/LockstepClient.cs) `LockstepAssembler.Receive` / `AcceptChunk`），规则逐条对照 Go `SnapshotReceiver`：新编号且偏移 0 取代旧传输、新编号偏移非 0 坏包、同编号偏移小于已收（含已完成传输）丢弃、跳跃 / 越过 total / 首块超上限坏包、坏包时丢弃进行中的传输（编号清零）、摘要不符时编号保留（之后的重发丢弃）。SHA-256 用 `SHA256.Create().ComputeHash`（netstandard2.1 与 Unity / Mono 都有；`SHA256.HashData` 是 .NET 5+，不用）。
+- 类型：`LockstepSnapshot`、`LockstepDelivery`、`LockstepSnapshotCorruptException`、`LockstepSnapshotMismatchException`、`LockstepSnapshotUnsupportedException`；`LockstepAssembler(maxBuffered, maxSnapshotBytes)`、`Receive`、`ResumeAfterSnapshot`、`SnapshotInProgress` / `SnapshotPending`；`LockstepClient(..., restore, maxSnapshotBytes)`、`SnapshotInProgress`、`SnapshotsRestored`；`LockstepInputHasher.Reset`。Unity 适配层不变（只转发 `Packet`）。
+- 测试（[LockstepTests.cs](../../client/dotnet/Roost.Client.Tests/LockstepTests.cs)、[Program.cs](../../client/dotnet/Roost.Client.Tests/Program.cs)）：金样 `catchup_unservable` / `recovery_failed_snapshot_unavailable` / `snapshot_first_chunk` + `snapshot_next_chunk`（两块重组、SHA-256、uvarint64 状态 hash）；`TestLockstepSnapshot` 覆盖重发（首块、中间块、已完成传输）、跳跃、越过 total、新 transfer 取代与被取代传输的后续块、新 transfer 偏移非 0、摘要不符、头部严格校验与客户端上限、传输中 C7 丢弃、Resume 前拒收、`Ingest` 遇快照；`LockstepSnapshotClient`（真实回环 TCP）覆盖缺口 → 追帧 → 分块期间不模拟、不重发追帧 → restore → 从快照帧 +1 续帧，以及状态 hash 不符、restore 抛错、无 restore、摘要不符、分块跳跃五种终止。
+- 修前红：`scripts/test-client-dotnet.sh` 在 `catchup_unservable` 金样处 `Unhandled exception. System.IO.InvalidDataException: Invalid catch-up notice header.`（`LockstepCodec.cs:79`，exit 134）。修后 `bash scripts/test-client-dotnet.sh` 退出 0（含 `TestClientSDKAgainstGeneratedPlayerTCP`）。断言有效性另做两处变异核对（临时改源码后恢复）：去掉“传输中不计缺口重试”，回环用例报 `catchup re-sent during snapshot transfer`；去掉“偏移小于已收即丢弃”，重组用例报 `Snapshot chunk overruns total.`。
+
+与 §7.3 / §7.4 草案的偏差：
+
+1. **摘要不符的异常类型**：§7.3 表写 C# 与坏包同为 `InvalidDataException`，但 `InvalidDataException` 是密封类不能派生；改为独立的 `LockstepSnapshotCorruptException : Exception`（带 `Frame`），`LockstepClient` 同样记为 `Failure` 终止。坏包仍是 `InvalidDataException`。
+2. **`ResumeAfterSnapshot` 清空整个乱序缓冲**（Go 草案写“清空 <= frame 的帧”）：服务端快照之后从 frame+1 发历史页一直追到头，缓冲里的帧都会重发；只清 <= frame 时，若缓冲里留着 frame+1，下一页的 frame+1 会被当重复跳过而让缺口卡住（现有组装只在收到 `Next` 那帧时才排空缓冲）。没有待恢复快照时调用抛 `InvalidOperationException`。
+3. **`maxSnapshotBytes` 越界抛 `ArgumentOutOfRangeException`**（<= 0 或 > 64 MiB），Go 是 <= 0 取缺省、超过硬上限截断；与 C# 现有构造参数校验一致。
+4. **快照帧号允许为 0**（与 Go 解码相同）：`SnapshotRequest.MinFrame` = 最早保留帧 − 1，开局快照对应第 0 帧，恢复后从第 1 帧模拟。
+5. **快照传输期间 `LockstepClient` 不计缺口重试、不重发追帧**（草案只写恢复后重置计数）：否则每个分块包都计一次“停滞”，默认 64 块（约 1 MiB）后就会重发 `OpCatchup`；服务端在传快照时把它当空操作（§14 P1 第 3 条），但客户端不该制造这类请求。
+6. **传输期间收到的 C7 先严格解码再丢弃**：坏 C7 仍按坏包终止；坏 C7 不取消进行中的快照传输（Assembler 层面），`LockstepClient` 因终止也不会再收分块。
+7. **状态 hash 只在快照带 hash 时比较**；不带时 `restore` 的返回值不使用。
+8. **`restore == null` 的 `LockstepClient` 走 `Ingest`**：第一块分块到达即抛 `LockstepSnapshotUnsupportedException`，不先缓冲整份快照。
+9. **新增只读状态**：Assembler 的 `SnapshotInProgress` / `SnapshotPending`，Client 的 `SnapshotInProgress` / `SnapshotsRestored`（草案未列，供业务显示进度与计数）。`LockstepCatchupUnservableException` 构造函数加可选 `reason` 参数（缺省 `HistoryTrimmed`）。
+
+未完成 / 留给后续期：
+
+- **经真实生成工程的快照恢复端到端**（§9 表 C# 行的最后一项）：`TestClientSDKAgainstGeneratedPlayerTCP` 的服务端夹具（`codegen/internal/roost/player_client_test.go` 内的 `clientSDKGeneratedTest`）里 Match 没有配 `SnapshotProvider`，要覆盖就得改这段 Go 夹具，超出 P3 只改 C# 的范围；留给 P4 与框架 Example 一起做。P3 的快照路径由金样（Go 编码器生成）+ 回环 TCP 用例覆盖。
+- Unity 编辑器 / IL2CPP 上未实测 `SHA256.Create`（与 README 现有“尚未在 Unity 编辑器 / IL2CPP 平台实测”的边界相同）。
