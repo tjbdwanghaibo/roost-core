@@ -82,10 +82,10 @@ gofmt -w db/def/*.go game/moba/*.go game/handler/moba_*.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/moba ./game/handler | tee "$review_root/test.log"
-# 26 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 28 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMOBA' "$review_root/test.log" || true)"
-if [[ "$passed" != 26 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 26 passing TestMOBA scenarios, got $passed" >&2
+if [[ "$passed" != 28 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 28 passing TestMOBA scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...
