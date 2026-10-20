@@ -1,0 +1,45 @@
+[
+  {
+    _id: Long('2049028'),
+    equipment: {
+      slots: {
+        '1': {
+          item_id: Long('7001'),
+          level: 1
+        }
+      }
+    },
+    _version: Long('4'),
+    _schema: Long('2'),
+    _last_tx: '64fbde130600be740000000000000002',
+    items: {
+      '1001': 4
+    }
+  },
+  {
+    _id: Long('2050052'),
+    _version: Long('4'),
+    _schema: Long('2'),
+    _last_tx: '64fbde130600be740000000000000003',
+    items: {
+      '1001': 4
+    },
+    equipment: {
+      slots: {
+        '1': {
+          item_id: Long('7001'),
+          level: 1
+        }
+      }
+    }
+  },
+  {
+    _id: Long('2051076'),
+    items: {
+      '1001': 3
+    },
+    _version: Long('3'),
+    _schema: Long('2'),
+    _last_tx: 'schema-migration:player_weapon_to_equipment'
+  }
+]

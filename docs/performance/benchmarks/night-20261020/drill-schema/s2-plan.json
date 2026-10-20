@@ -1,0 +1,12 @@
+{
+  "mode": "plan",
+  "collection": "nightdrill.player",
+  "from": 1,
+  "to": 2,
+  "pending": 3,
+  "at_target": 0,
+  "tombstones": 0,
+  "converted": 3,
+  "written": 0,
+  "resumed": 0
+}

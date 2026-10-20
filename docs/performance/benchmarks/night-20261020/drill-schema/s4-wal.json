@@ -1,0 +1,10 @@
+{
+  "dir": "data/wal/dataengine/1000",
+  "drained": true,
+  "records_retained": 3,
+  "checkpoint": "segment 1 offset 830",
+  "last_record": "segment 1 offset 830 (64fbde130600be740000000000000003)",
+  "databases": {
+    "main": "nightdrill"
+  }
+}

@@ -1,0 +1,582 @@
+//go:build matchperf
+
+package match_test
+
+// 一次性容量测量（夜间补测第 11 项，不提交为常驻用例）：真实 Redis 上的匹配队列。
+// 负载：MATCHPERF_PARTITIONS 个分区（同一逻辑队列），每分区每秒 MATCHPERF_RATE 名玩家排队（并发 Enqueue，
+// 每分区在途上限 MATCHPERF_INFLIGHT），每分区一个匹配器每 200ms 取 Candidates 成局；MATCHPERF_ACROSS_PCT% 的局
+// 改为一半票取自相邻分区的 CommitAcross（与相邻分区的匹配器竞争同一批票）。每分区每秒 Sweep 一次。
+// 保留期缺省 10 分钟（match.retention 缺省值），所以状态在前 10 分钟随“成局人数 × 时间”增长，之后持平。
+// 每秒采样：各分区键的字节数（STRLEN）与等待票数、PING 往返、versionstore CAS 计数。
+// MATCHPERF_FAULT_AT + MATCHPERF_FAULT_CMD：到点执行一条 shell 命令（Cluster 故障切换）。
+// 结束后核对：一张票 / 一名玩家至多在一场比赛里；保留期内每场比赛在每个涉及分区都读得到、成员票都指向它。
+//
+//   MATCHPERF_ADDRS=127.0.0.1:6379 MATCHPERF_DURATION=15m MATCHPERF_OUTPUT=/path/out.json \
+//     GOWORK=off go test -tags matchperf -count=1 -timeout 0 -run TestMatchQueueCapacity -v ./service/match/
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/rand"
+	"os"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/match"
+)
+
+func perfEnvInt(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+func perfEnvDur(name string, def time.Duration) time.Duration {
+	if v, err := time.ParseDuration(os.Getenv(name)); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+// latencies 按分钟分桶保存原始样本（本负载总量在十万级，直接存）。
+type latencies struct {
+	mu      sync.Mutex
+	byMin   map[int][]time.Duration
+	errs    map[int]map[string]int
+	all     []time.Duration
+	errsAll map[string]int
+}
+
+func newLatencies() *latencies {
+	return &latencies{byMin: map[int][]time.Duration{}, errs: map[int]map[string]int{}, errsAll: map[string]int{}}
+}
+
+func (l *latencies) add(minute int, d time.Duration, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err != nil {
+		class := classify(err)
+		if l.errs[minute] == nil {
+			l.errs[minute] = map[string]int{}
+		}
+		l.errs[minute][class]++
+		l.errsAll[class]++
+		return
+	}
+	l.byMin[minute] = append(l.byMin[minute], d)
+	l.all = append(l.all, d)
+}
+
+func classify(err error) string {
+	switch {
+	case errors.Is(err, match.ErrConflict) || errors.Is(err, versionstore.ErrConflict):
+		return "conflict"
+	case errors.Is(err, match.ErrTicketMissing):
+		return "ticket_missing"
+	case errors.Is(err, match.ErrTicketMatched):
+		return "ticket_matched"
+	case errors.Is(err, versionstore.ErrOutcomeUnknown):
+		return "outcome_unknown"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	default:
+		s := err.Error()
+		if len(s) > 80 {
+			s = s[:80]
+		}
+		return "other: " + s
+	}
+}
+
+type quant struct {
+	N                   int
+	P50MS, P99MS, MaxMS float64
+}
+
+func quantiles(in []time.Duration) quant {
+	if len(in) == 0 {
+		return quant{}
+	}
+	s := append([]time.Duration(nil), in...)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	at := func(q float64) float64 { return float64(s[int(q*float64(len(s)-1))]) / 1e6 }
+	return quant{N: len(s), P50MS: at(0.50), P99MS: at(0.99), MaxMS: float64(s[len(s)-1]) / 1e6}
+}
+
+type sample struct {
+	Second       int
+	StateBytes   []int64
+	Waiting      []int
+	PingMS       float64
+	CASApplied   int64
+	CASLost      int64
+	CASExhausted int64
+}
+
+func TestMatchQueueCapacity(t *testing.T) {
+	addrs := os.Getenv("MATCHPERF_ADDRS")
+	if addrs == "" {
+		t.Skip("MATCHPERF_ADDRS not set")
+	}
+	duration := perfEnvDur("MATCHPERF_DURATION", time.Minute)
+	partitions := perfEnvInt("MATCHPERF_PARTITIONS", 4)
+	group := perfEnvInt("MATCHPERF_GROUP", 10)
+	rate := perfEnvInt("MATCHPERF_RATE", 10)
+	acrossPct := perfEnvInt("MATCHPERF_ACROSS_PCT", 10)
+	if os.Getenv("MATCHPERF_ACROSS_PCT") == "0" {
+		acrossPct = 0
+	}
+	inflightCap := perfEnvInt("MATCHPERF_INFLIGHT", 32)
+	retention := perfEnvDur("MATCHPERF_RETENTION", 0)
+	faultAt := perfEnvDur("MATCHPERF_FAULT_AT", 0)
+	faultCmd := os.Getenv("MATCHPERF_FAULT_CMD")
+
+	cfg := fredis.DefaultConfig("")
+	list := strings.Split(addrs, ",")
+	if len(list) > 1 || os.Getenv("MATCHPERF_CLUSTER") == "1" {
+		cfg.ClusterAddrs = list
+	} else {
+		cfg.Addr = list[0]
+	}
+	client, err := redisdriver.NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	raw := client.(*redisdriver.Client).Raw()
+
+	reg := metrics.NewRegistry()
+	old := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(reg)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(old) })
+
+	keyPrefix := redistest.Prefix(t, addrs, "nightmatch")
+	store, err := match.NewRedisStore(client, keyPrefix, match.Config{Retention: retention})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queues := make([]match.Queue, partitions)
+	for i := range queues {
+		queues[i] = match.Queue{Mode: "ranked", GroupSize: group, Partition: fmt.Sprintf("p%d", i)}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	minuteOf := func(at time.Time) int { return int(at.Sub(start) / time.Minute) }
+
+	enqueueLat, enqueueLag := newLatencies(), newLatencies()
+	candLat, commitLat, acrossLat, sweepLat := newLatencies(), newLatencies(), newLatencies(), newLatencies()
+	var skipped atomic.Int64
+	var nextID atomic.Int64
+
+	type known struct {
+		ticket match.Ticket
+	}
+	var knownMu sync.Mutex
+	tickets := map[string]match.Ticket{} // ticketID → ticket（Enqueue 成功返回的）
+	matches := map[string]match.Match{}  // matchID → Commit/CommitAcross 成功返回的
+	var unknownCommits atomic.Int64
+	recordMatch := func(m match.Match) {
+		knownMu.Lock()
+		matches[m.ID] = m
+		knownMu.Unlock()
+	}
+
+	loadCtx, stopLoad := context.WithTimeout(ctx, duration)
+	defer stopLoad()
+	var wg sync.WaitGroup
+
+	// 排队发生器：每分区按 1/rate 的计划时刻发起 Enqueue，每条一个协程（在途上限 inflightCap）。
+	for p := range queues {
+		queue := queues[p]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			interval := time.Second / time.Duration(rate)
+			var inflight atomic.Int64
+			var calls sync.WaitGroup
+			defer calls.Wait()
+			due := time.Now()
+			for {
+				due = due.Add(interval)
+				wait := time.Until(due)
+				if wait > 0 {
+					select {
+					case <-loadCtx.Done():
+						return
+					case <-time.After(wait):
+					}
+				} else if loadCtx.Err() != nil {
+					return
+				}
+				if inflight.Load() >= int64(inflightCap) {
+					skipped.Add(1)
+					continue
+				}
+				inflight.Add(1)
+				calls.Add(1)
+				planned := due
+				go func() {
+					defer calls.Done()
+					defer inflight.Add(-1)
+					id := nextID.Add(1)
+					began := time.Now()
+					enqueueLag.add(minuteOf(began), began.Sub(planned), nil)
+					opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+					ticket, err := store.Enqueue(opCtx, queue, match.Subject{Kind: "player", ID: id, Score: rand.Int63n(3000)}, fmt.Sprintf("req-%d", id))
+					opCancel()
+					enqueueLat.add(minuteOf(began), time.Since(began), err)
+					if err == nil {
+						knownMu.Lock()
+						tickets[ticket.ID] = ticket
+						knownMu.Unlock()
+					}
+				}()
+			}
+		}()
+	}
+
+	// 匹配器：每分区每 200ms 一轮。
+	rng := rand.New(rand.NewSource(1))
+	var rngMu sync.Mutex
+	chance := func(pct int) bool { rngMu.Lock(); defer rngMu.Unlock(); return rng.Intn(100) < pct }
+	commitCall := func(lat *latencies, run func(context.Context) (match.Match, error)) {
+		began := time.Now()
+		opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+		m, err := run(opCtx)
+		opCancel()
+		lat.add(minuteOf(began), time.Since(began), err)
+		if err == nil {
+			recordMatch(m)
+		} else if c := classify(err); c != "conflict" && c != "ticket_missing" && c != "ticket_matched" {
+			unknownCommits.Add(1)
+		}
+	}
+	matcherDone := make(chan struct{})
+	for p := range queues {
+		queue, neighbor := queues[p], queues[(p+1)%partitions]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(200 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-matcherDone:
+					return
+				case <-ticker.C:
+				}
+				began := time.Now()
+				opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+				cands, err := store.Candidates(opCtx, queue, group*8)
+				opCancel()
+				candLat.add(minuteOf(began), time.Since(began), err)
+				if err != nil {
+					continue
+				}
+				for len(cands) >= group {
+					if partitions > 1 && chance(acrossPct) {
+						began := time.Now()
+						opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+						other, err := store.Candidates(opCtx, neighbor, group)
+						opCancel()
+						candLat.add(minuteOf(began), time.Since(began), err)
+						half := group / 2
+						if err == nil && len(other) >= group-half {
+							refs := make(match.TicketRefs, 0, group)
+							for _, tk := range cands[:half] {
+								refs = append(refs, match.TicketRef{Queue: tk.Queue, TicketID: tk.ID})
+							}
+							for _, tk := range other[:group-half] {
+								refs = append(refs, match.TicketRef{Queue: tk.Queue, TicketID: tk.ID})
+							}
+							commitCall(acrossLat, func(c context.Context) (match.Match, error) { return store.CommitAcross(c, refs) })
+							cands = cands[half:]
+							continue
+						}
+					}
+					ids := make([]string, 0, group)
+					for _, tk := range cands[:group] {
+						ids = append(ids, tk.ID)
+					}
+					commitCall(commitLat, func(c context.Context) (match.Match, error) { return store.Commit(c, queue, ids) })
+					cands = cands[group:]
+				}
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-matcherDone:
+					return
+				case <-ticker.C:
+				}
+				began := time.Now()
+				opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+				_, err := store.Sweep(opCtx, queue, 1000)
+				opCancel()
+				sweepLat.add(minuteOf(began), time.Since(began), err)
+			}
+		}()
+	}
+
+	// 每秒采样。
+	var samples []sample
+	casValue := func(result string) int64 {
+		var total int64
+		for _, m := range reg.Snapshot() {
+			if m.Name == versionstore.MetricCompareAndSet && m.Labels["result"] == result {
+				total += m.Value
+			}
+		}
+		return total
+	}
+	exhausted := func() int64 {
+		var total int64
+		for _, m := range reg.Snapshot() {
+			if m.Name == versionstore.MetricConflict {
+				total += m.Value
+			}
+		}
+		return total
+	}
+	samplerDone := make(chan struct{})
+	var samplerWG sync.WaitGroup
+	samplerWG.Add(1)
+	go func() {
+		defer samplerWG.Done()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-samplerDone:
+				return
+			case <-ticker.C:
+			}
+			s := sample{Second: int(time.Since(start) / time.Second)}
+			for _, q := range queues {
+				opCtx, opCancel := context.WithTimeout(ctx, 5*time.Second)
+				n, _ := raw.StrLen(opCtx, match.RedisKey(keyPrefix, q)).Result()
+				opCancel()
+				s.StateBytes = append(s.StateBytes, n)
+				opCtx, opCancel = context.WithTimeout(ctx, 5*time.Second)
+				w, _ := store.QueueLength(opCtx, q)
+				opCancel()
+				s.Waiting = append(s.Waiting, w)
+			}
+			began := time.Now()
+			opCtx, opCancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := raw.Ping(opCtx).Err(); err == nil {
+				s.PingMS = float64(time.Since(began)) / 1e6
+			} else {
+				s.PingMS = -1
+			}
+			opCancel()
+			s.CASApplied, s.CASLost, s.CASExhausted = casValue("applied"), casValue("lost"), exhausted()
+			samples = append(samples, s)
+		}
+	}()
+
+	var faultLog string
+	if faultAt > 0 && faultCmd != "" {
+		time.AfterFunc(faultAt, func() {
+			began := time.Now()
+			out, err := exec.Command("bash", "-c", faultCmd).CombinedOutput()
+			faultLog = fmt.Sprintf("fault at %v took %v err=%v output=%s", faultAt, time.Since(began).Round(time.Millisecond), err, strings.TrimSpace(string(out)))
+			t.Log(faultLog)
+		})
+	}
+
+	<-loadCtx.Done()
+	t.Logf("load stopped after %v; draining matchers 5s", time.Since(start).Round(time.Millisecond))
+	time.Sleep(5 * time.Second)
+	close(matcherDone)
+	wg.Wait()
+	close(samplerDone)
+	samplerWG.Wait()
+
+	// 核对。
+	verifyCtx := context.Background()
+	ticketMatch := map[string]string{}
+	subjectMatch := map[int64]string{}
+	var doubleTicket, doubleSubject, unreadable, halfApplied, checkedMatches, resolvedUnknown int
+	retentionEff := retention
+	if retentionEff == 0 {
+		retentionEff = match.DefaultRetention
+	}
+	// 结果未知的提交：读每张已知票，指向不认识的比赛就把它读进来。
+	if unknownCommits.Load() > 0 {
+		for id, tk := range tickets {
+			read, found, err := store.Ticket(verifyCtx, tk.Queue, id, tk.Subject)
+			if err != nil || !found || read.State != match.TicketMatched {
+				continue
+			}
+			if _, ok := matches[read.MatchID]; ok {
+				continue
+			}
+			if m, found, err := store.Match(verifyCtx, tk.Queue, read.MatchID); err == nil && found {
+				matches[m.ID] = m
+				resolvedUnknown++
+			}
+		}
+	}
+	for id, m := range matches {
+		for _, tid := range m.TicketIDs {
+			if prev, ok := ticketMatch[tid]; ok && prev != id {
+				doubleTicket++
+			}
+			ticketMatch[tid] = id
+		}
+		for _, s := range m.Members {
+			if prev, ok := subjectMatch[s.ID]; ok && prev != id {
+				doubleSubject++
+			}
+			subjectMatch[s.ID] = id
+		}
+		// 保留期内（留 1 分钟余量）的比赛：每个涉及分区都读得到，成员票都指向它。
+		if time.Since(time.Unix(m.CreatedAtUnix, 0)) > retentionEff-time.Minute {
+			continue
+		}
+		checkedMatches++
+		parts := map[string]bool{m.Queue.Partition: true}
+		for _, p := range m.TicketPartitions {
+			parts[p] = true
+		}
+		for p := range parts {
+			q := match.Queue{Mode: "ranked", GroupSize: group, Partition: p}
+			if _, found, err := store.Match(verifyCtx, q, id); err != nil || !found {
+				unreadable++
+			}
+		}
+		for i, tid := range m.TicketIDs {
+			home := m.Queue
+			if m.TicketPartitions != nil {
+				home = match.Queue{Mode: "ranked", GroupSize: group, Partition: m.TicketPartitions[i]}
+			}
+			read, found, err := store.Ticket(verifyCtx, home, tid, m.Members[i])
+			if err != nil || !found || read.State != match.TicketMatched || read.MatchID != id {
+				halfApplied++
+			}
+		}
+	}
+	waitingEnd := make([]int, len(queues))
+	for i, q := range queues {
+		waitingEnd[i], _ = store.QueueLength(verifyCtx, q)
+	}
+
+	type minuteRow struct {
+		Minute                                         int
+		Enqueue, EnqueueLag, Candidates, Commit, Across, Sweep quant
+		Errors                                         map[string]map[string]int
+		StateBytesMax                                  int64
+		StateBytesAvg                                  float64
+		WaitingAvg                                     float64
+		PingP50MS, PingP99MS                           float64
+		CASLostRatio                                   float64
+		CASExhausted                                   int64
+	}
+	var rows []minuteRow
+	maxMinute := int(duration/time.Minute) + 1
+	for m := 0; m <= maxMinute; m++ {
+		row := minuteRow{Minute: m, Errors: map[string]map[string]int{}}
+		get := func(l *latencies) quant { l.mu.Lock(); defer l.mu.Unlock(); return quantiles(l.byMin[m]) }
+		row.Enqueue, row.EnqueueLag, row.Candidates, row.Commit, row.Across, row.Sweep = get(enqueueLat), get(enqueueLag), get(candLat), get(commitLat), get(acrossLat), get(sweepLat)
+		for name, l := range map[string]*latencies{"enqueue": enqueueLat, "candidates": candLat, "commit": commitLat, "across": acrossLat, "sweep": sweepLat} {
+			if e := l.errs[m]; len(e) > 0 {
+				row.Errors[name] = e
+			}
+		}
+		var pings []time.Duration
+		var n int
+		var sumBytes, sumWait float64
+		var first, last *sample
+		for i := range samples {
+			s := &samples[i]
+			if s.Second/60 != m {
+				continue
+			}
+			if first == nil {
+				first = s
+			}
+			last = s
+			if s.PingMS >= 0 {
+				pings = append(pings, time.Duration(s.PingMS*1e6))
+			}
+			for k := range s.StateBytes {
+				sumBytes += float64(s.StateBytes[k])
+				sumWait += float64(s.Waiting[k])
+				if s.StateBytes[k] > row.StateBytesMax {
+					row.StateBytesMax = s.StateBytes[k]
+				}
+			}
+			n += len(s.StateBytes)
+		}
+		if n == 0 && row.Enqueue.N == 0 {
+			continue
+		}
+		if n > 0 {
+			row.StateBytesAvg, row.WaitingAvg = sumBytes/float64(n), sumWait/float64(n)
+		}
+		pq := quantiles(pings)
+		row.PingP50MS, row.PingP99MS = pq.P50MS, pq.P99MS
+		if first != nil && last != nil {
+			applied, lost := last.CASApplied-first.CASApplied, last.CASLost-first.CASLost
+			if applied+lost > 0 {
+				row.CASLostRatio = float64(lost) / float64(applied+lost)
+			}
+			row.CASExhausted = last.CASExhausted - first.CASExhausted
+		}
+		rows = append(rows, row)
+	}
+	result := map[string]any{
+		"Config": map[string]any{"Addrs": addrs, "Cluster": cfg.IsCluster(), "Duration": duration.String(), "Partitions": partitions, "GroupSize": group,
+			"RatePerPartition": rate, "AcrossPct": acrossPct, "InflightCap": inflightCap, "Retention": retentionEff.String(), "FaultAt": faultAt.String(), "FaultCmd": faultCmd},
+		"Totals": map[string]any{
+			"EnqueueOK": quantiles(enqueueLat.all), "EnqueueLag": quantiles(enqueueLag.all), "Candidates": quantiles(candLat.all),
+			"Commit": quantiles(commitLat.all), "Across": quantiles(acrossLat.all), "Sweep": quantiles(sweepLat.all),
+			"Errors": map[string]any{"enqueue": enqueueLat.errsAll, "candidates": candLat.errsAll, "commit": commitLat.errsAll, "across": acrossLat.errsAll, "sweep": sweepLat.errsAll},
+			"SkippedAdmissions": skipped.Load(), "TicketsKnown": len(tickets), "Matches": len(matches), "UnknownCommitErrors": unknownCommits.Load(),
+			"ResolvedUnknownMatches": resolvedUnknown, "WaitingAtEnd": waitingEnd,
+		},
+		"Verify": map[string]any{"DoubleTicket": doubleTicket, "DoubleSubject": doubleSubject, "CheckedMatches": checkedMatches,
+			"MatchUnreadableInPartition": unreadable, "MemberTicketNotPointingToMatch": halfApplied},
+		"Fault":   faultLog,
+		"Minutes": rows,
+		"Samples": samples,
+	}
+	if out := os.Getenv("MATCHPERF_OUTPUT"); out != "" {
+		raw, _ := json.MarshalIndent(result, "", "  ")
+		if err := os.WriteFile(out, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("totals: %+v", result["Totals"])
+	t.Logf("verify: %+v", result["Verify"])
+	for _, r := range rows {
+		t.Logf("min %2d: state avg %.0f max %d B waiting %.1f | enqueue n=%d p50 %.1f p99 %.1f max %.1f | commit n=%d p99 %.1f | across n=%d p99 %.1f | ping p99 %.2f | cas lost %.3f exhausted %d | errors %v",
+			r.Minute, r.StateBytesAvg, r.StateBytesMax, r.WaitingAvg, r.Enqueue.N, r.Enqueue.P50MS, r.Enqueue.P99MS, r.Enqueue.MaxMS, r.Commit.N, r.Commit.P99MS, r.Across.N, r.Across.P99MS, r.PingP99MS, r.CASLostRatio, r.CASExhausted, r.Errors)
+	}
+	if doubleTicket > 0 || doubleSubject > 0 || unreadable > 0 || halfApplied > 0 {
+		t.Errorf("consistency violated: double ticket %d, double subject %d, unreadable %d, half-applied %d", doubleTicket, doubleSubject, unreadable, halfApplied)
+	}
+	_ = known{}
+}

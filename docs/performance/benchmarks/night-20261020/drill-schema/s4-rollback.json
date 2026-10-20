@@ -1,0 +1,17 @@
+{
+  "mode": "rollback",
+  "collection": "nightdrill.player",
+  "from": 1,
+  "to": 2,
+  "pending": 0,
+  "at_target": 0,
+  "tombstones": 0,
+  "converted": 0,
+  "written": 0,
+  "resumed": 0,
+  "rolled_back": 1,
+  "refused": [
+    "_id=2049028 _version=4 _last_tx=64fbde130600be740000000000000002",
+    "_id=2050052 _version=4 _last_tx=64fbde130600be740000000000000003"
+  ]
+}

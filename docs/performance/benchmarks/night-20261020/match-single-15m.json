@@ -1,0 +1,1028 @@
+{
+ "Config": {
+  "AcrossPct": 10,
+  "Addrs": "127.0.0.1:41379",
+  "Cluster": false,
+  "Duration": "15m0s",
+  "FaultAt": "0s",
+  "FaultCmd": "",
+  "GroupSize": 10,
+  "InflightCap": 32,
+  "Partitions": 4,
+  "RatePerPartition": 10,
+  "Retention": "10m0s"
+ },
+ "Fault": "",
+ "Minutes": [
+  {
+   "Minute": 0,
+   "Enqueue": {
+    "N": 2396,
+    "P50MS": 11.7285,
+    "P99MS": 26.836416,
+    "MaxMS": 39.652959
+   },
+   "EnqueueLag": {
+    "N": 2396,
+    "P50MS": 2.047916,
+    "P99MS": 3.182875,
+    "MaxMS": 9.251459
+   },
+   "Candidates": {
+    "N": 1223,
+    "P50MS": 4.536584,
+    "P99MS": 12.772083,
+    "MaxMS": 18.523875
+   },
+   "Commit": {
+    "N": 228,
+    "P50MS": 13.229291,
+    "P99MS": 32.25425,
+    "MaxMS": 33.051792
+   },
+   "Across": {
+    "N": 10,
+    "P50MS": 6.60025,
+    "P99MS": 21.669375,
+    "MaxMS": 23.48725
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 15
+    },
+    "commit": {
+     "conflict": 4
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 236
+    }
+   },
+   "StateBytesMax": 299443,
+   "StateBytesAvg": 151082.14830508476,
+   "WaitingAvg": 7.012711864406779,
+   "PingP50MS": 0.056125,
+   "PingP99MS": 0.132209,
+   "CASLostRatio": 0.0829443447037702,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 1,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 22.506,
+    "P99MS": 37.727708,
+    "MaxMS": 50.217208
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.033875,
+    "P99MS": 2.238959,
+    "MaxMS": 5.58025
+   },
+   "Candidates": {
+    "N": 1226,
+    "P50MS": 5.903459,
+    "P99MS": 13.264583,
+    "MaxMS": 19.369792
+   },
+   "Commit": {
+    "N": 226,
+    "P50MS": 28.835917,
+    "P99MS": 40.329791,
+    "MaxMS": 42.681208
+   },
+   "Across": {
+    "N": 12,
+    "P50MS": 26.095625,
+    "P99MS": 37.421542,
+    "MaxMS": 38.081
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 14
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 603889,
+   "StateBytesAvg": 452592.25416666665,
+   "WaitingAvg": 6.1875,
+   "PingP50MS": 0.076292,
+   "PingP99MS": 0.111333,
+   "CASLostRatio": 0.08403954802259887,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 2,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 28.176958,
+    "P99MS": 38.868542,
+    "MaxMS": 65.480084
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.026292,
+    "P99MS": 2.128583,
+    "MaxMS": 2.321416
+   },
+   "Candidates": {
+    "N": 1228,
+    "P50MS": 6.883667,
+    "P99MS": 11.651125,
+    "MaxMS": 13.154292
+   },
+   "Commit": {
+    "N": 222,
+    "P50MS": 35.703417,
+    "P99MS": 43.077333,
+    "MaxMS": 51.979209
+   },
+   "Across": {
+    "N": 19,
+    "P50MS": 42.764417,
+    "P99MS": 49.436084,
+    "MaxMS": 50.200458
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 9
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 910970,
+   "StateBytesAvg": 758625.2666666667,
+   "WaitingAvg": 7.420833333333333,
+   "PingP50MS": 0.072125,
+   "PingP99MS": 0.101792,
+   "CASLostRatio": 0.0833039181080127,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 3,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 34.344917,
+    "P99MS": 49.091583,
+    "MaxMS": 66.813583
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.025458,
+    "P99MS": 2.123542,
+    "MaxMS": 2.337417
+   },
+   "Candidates": {
+    "N": 1228,
+    "P50MS": 8.535583,
+    "P99MS": 14.665,
+    "MaxMS": 16.395459
+   },
+   "Commit": {
+    "N": 226,
+    "P50MS": 44.3915,
+    "P99MS": 56.934542,
+    "MaxMS": 60.393458
+   },
+   "Across": {
+    "N": 14,
+    "P50MS": 53.563417,
+    "P99MS": 59.661459,
+    "MaxMS": 61.360458
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 12
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 1217432,
+   "StateBytesAvg": 1066185.8041666667,
+   "WaitingAvg": 6.725,
+   "PingP50MS": 0.076042,
+   "PingP99MS": 0.091833,
+   "CASLostRatio": 0.08655876143560873,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 4,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 40.666458,
+    "P99MS": 62.105166,
+    "MaxMS": 90.879167
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.027375,
+    "P99MS": 2.130542,
+    "MaxMS": 2.155708
+   },
+   "Candidates": {
+    "N": 1229,
+    "P50MS": 9.9735,
+    "P99MS": 17.9835,
+    "MaxMS": 21.354333
+   },
+   "Commit": {
+    "N": 220,
+    "P50MS": 55.096208,
+    "P99MS": 79.752,
+    "MaxMS": 83.6515
+   },
+   "Across": {
+    "N": 20,
+    "P50MS": 59.595916,
+    "P99MS": 74.843958,
+    "MaxMS": 83.6895
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 9
+    },
+    "commit": {
+     "conflict": 5
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 1529085,
+   "StateBytesAvg": 1373702.2041666666,
+   "WaitingAvg": 6.2875,
+   "PingP50MS": 0.077625,
+   "PingP99MS": 0.097125,
+   "CASLostRatio": 0.08720112517580872,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 5,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 46.529042,
+    "P99MS": 67.335583,
+    "MaxMS": 110.498833
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.021583,
+    "P99MS": 2.121833,
+    "MaxMS": 2.155417
+   },
+   "Candidates": {
+    "N": 1221,
+    "P50MS": 11.313625,
+    "P99MS": 19.709292,
+    "MaxMS": 24.835
+   },
+   "Commit": {
+    "N": 224,
+    "P50MS": 62.864792,
+    "P99MS": 83.938,
+    "MaxMS": 89.30825
+   },
+   "Across": {
+    "N": 16,
+    "P50MS": 71.948375,
+    "P99MS": 90.406042,
+    "MaxMS": 99.48025
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 5
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 1835891,
+   "StateBytesAvg": 1683102.35,
+   "WaitingAvg": 7.254166666666666,
+   "PingP50MS": 0.0815,
+   "PingP99MS": 0.139417,
+   "CASLostRatio": 0.08430335097001763,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 6,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 53.639709,
+    "P99MS": 85.181791,
+    "MaxMS": 153.561209
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.013625,
+    "P99MS": 2.126833,
+    "MaxMS": 5.862875
+   },
+   "Candidates": {
+    "N": 1231,
+    "P50MS": 13.08775,
+    "P99MS": 23.626917,
+    "MaxMS": 26.444708
+   },
+   "Commit": {
+    "N": 225,
+    "P50MS": 75.623167,
+    "P99MS": 108.600625,
+    "MaxMS": 117.140333
+   },
+   "Across": {
+    "N": 15,
+    "P50MS": 73.466292,
+    "P99MS": 163.928541,
+    "MaxMS": 166.356084
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 15
+    },
+    "commit": {
+     "conflict": 3
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2144504,
+   "StateBytesAvg": 1991313.725,
+   "WaitingAvg": 7.220833333333333,
+   "PingP50MS": 0.082,
+   "PingP99MS": 0.1215,
+   "CASLostRatio": 0.09578544061302682,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 7,
+   "Enqueue": {
+    "N": 2400,
+    "P50MS": 60.558916,
+    "P99MS": 147.7415,
+    "MaxMS": 180.361417
+   },
+   "EnqueueLag": {
+    "N": 2400,
+    "P50MS": 2.001333,
+    "P99MS": 4.820208,
+    "MaxMS": 11.888958
+   },
+   "Candidates": {
+    "N": 1224,
+    "P50MS": 14.783833,
+    "P99MS": 33.169291,
+    "MaxMS": 43.497917
+   },
+   "Commit": {
+    "N": 233,
+    "P50MS": 98.090708,
+    "P99MS": 203.874959,
+    "MaxMS": 221.96675
+   },
+   "Across": {
+    "N": 8,
+    "P50MS": 108.56825,
+    "P99MS": 179.758667,
+    "MaxMS": 189.269667
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 16
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2451603,
+   "StateBytesAvg": 2300143.9541666666,
+   "WaitingAvg": 5.266666666666667,
+   "PingP50MS": 0.082875,
+   "PingP99MS": 0.099209,
+   "CASLostRatio": 0.1426213271706834,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 8,
+   "Enqueue": {
+    "N": 1688,
+    "P50MS": 69.704333,
+    "P99MS": 8956.047041,
+    "MaxMS": 10001.632583
+   },
+   "EnqueueLag": {
+    "N": 1945,
+    "P50MS": 1.68375,
+    "P99MS": 7.909041,
+    "MaxMS": 33.710167
+   },
+   "Candidates": {
+    "N": 808,
+    "P50MS": 16.069,
+    "P99MS": 488.7055,
+    "MaxMS": 729.169084
+   },
+   "Commit": {
+    "N": 144,
+    "P50MS": 97.950416,
+    "P99MS": 5993.23725,
+    "MaxMS": 9718.344
+   },
+   "Across": {
+    "N": 12,
+    "P50MS": 132.56275,
+    "P99MS": 403.151833,
+    "MaxMS": 509.746167
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 8,
+     "deadline": 1
+    },
+    "commit": {
+     "conflict": 8
+    },
+    "enqueue": {
+     "conflict": 257
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2668222,
+   "StateBytesAvg": 2565209.7045454546,
+   "WaitingAvg": 8.875,
+   "PingP50MS": 0.081542,
+   "PingP99MS": 644.221375,
+   "CASLostRatio": 0.6116442738323736,
+   "CASExhausted": 205
+  },
+  {
+   "Minute": 9,
+   "Enqueue": {
+    "N": 358,
+    "P50MS": 6658.190917,
+    "P99MS": 10001.515917,
+    "MaxMS": 10004.333583
+   },
+   "EnqueueLag": {
+    "N": 918,
+    "P50MS": 0.563208,
+    "P99MS": 9.558791,
+    "MaxMS": 21.569667
+   },
+   "Candidates": {
+    "N": 17,
+    "P50MS": 564.807542,
+    "P99MS": 720.226958,
+    "MaxMS": 756.575625
+   },
+   "Commit": {
+    "N": 9,
+    "P50MS": 7391.109208,
+    "P99MS": 8618.081042,
+    "MaxMS": 9756.138916
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 1,
+     "deadline": 8
+    },
+    "commit": {
+     "conflict": 9
+    },
+    "enqueue": {
+     "conflict": 560
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2710396,
+   "StateBytesAvg": 2688234.625,
+   "WaitingAvg": 65.72916666666667,
+   "PingP50MS": 565.387417,
+   "PingP99MS": 633.7995,
+   "CASLostRatio": 0.9419149648476732,
+   "CASExhausted": 538
+  },
+  {
+   "Minute": 10,
+   "Enqueue": {
+    "N": 365,
+    "P50MS": 6391.311583,
+    "P99MS": 10000.295292,
+    "MaxMS": 10001.998167
+   },
+   "EnqueueLag": {
+    "N": 947,
+    "P50MS": 0.51325,
+    "P99MS": 4.898291,
+    "MaxMS": 15.243834
+   },
+   "Candidates": {
+    "N": 8,
+    "P50MS": 556.620167,
+    "P99MS": 649.902708,
+    "MaxMS": 664.017208
+   },
+   "Commit": {
+    "N": 13,
+    "P50MS": 7197.790417,
+    "P99MS": 8381.166833,
+    "MaxMS": 8893.881458
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 1,
+     "deadline": 2,
+     "outcome_unknown": 1
+    },
+    "commit": {
+     "conflict": 13
+    },
+    "enqueue": {
+     "conflict": 582
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2710005,
+   "StateBytesAvg": 2577253.3333333335,
+   "WaitingAvg": 133.20833333333334,
+   "PingP50MS": 530.751416,
+   "PingP99MS": 609.614875,
+   "CASLostRatio": 0.9418351997325757,
+   "CASExhausted": 546
+  },
+  {
+   "Minute": 11,
+   "Enqueue": {
+    "N": 414,
+    "P50MS": 5539.452208,
+    "P99MS": 9288.240791,
+    "MaxMS": 9444.248167
+   },
+   "EnqueueLag": {
+    "N": 1066,
+    "P50MS": 0.453375,
+    "P99MS": 5.882541,
+    "MaxMS": 13.380416
+   },
+   "Candidates": {
+    "N": 5,
+    "P50MS": 471.466,
+    "P99MS": 487.830459,
+    "MaxMS": 523.206875
+   },
+   "Commit": {
+    "N": 11,
+    "P50MS": 6071.70275,
+    "P99MS": 8133.988666,
+    "MaxMS": 8511.819458
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "deadline": 1
+    },
+    "commit": {
+     "conflict": 19
+    },
+    "enqueue": {
+     "conflict": 652
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2442780,
+   "StateBytesAvg": 2319364.653846154,
+   "WaitingAvg": 199.67307692307693,
+   "PingP50MS": 464.286125,
+   "PingP99MS": 588.670041,
+   "CASLostRatio": 0.9414476717381282,
+   "CASExhausted": 605
+  },
+  {
+   "Minute": 12,
+   "Enqueue": {
+    "N": 471,
+    "P50MS": 4156.299292,
+    "P99MS": 8230.763,
+    "MaxMS": 8319.691875
+   },
+   "EnqueueLag": {
+    "N": 1213,
+    "P50MS": 0.451959,
+    "P99MS": 6.148459,
+    "MaxMS": 17.851333
+   },
+   "Candidates": {
+    "N": 6,
+    "P50MS": 440.9605,
+    "P99MS": 454.137709,
+    "MaxMS": 508.139167
+   },
+   "Commit": {
+    "N": 6,
+    "P50MS": 3700.089208,
+    "P99MS": 5547.782875,
+    "MaxMS": 6388.63775
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "deadline": 1,
+     "outcome_unknown": 1
+    },
+    "commit": {
+     "conflict": 26
+    },
+    "enqueue": {
+     "conflict": 742
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 2196713,
+   "StateBytesAvg": 2065248.6,
+   "WaitingAvg": 291.48333333333335,
+   "PingP50MS": 446.586208,
+   "PingP99MS": 493.738458,
+   "CASLostRatio": 0.9410448743255692,
+   "CASExhausted": 719
+  },
+  {
+   "Minute": 13,
+   "Enqueue": {
+    "N": 528,
+    "P50MS": 3672.666291,
+    "P99MS": 7454.190083,
+    "MaxMS": 7673.21775
+   },
+   "EnqueueLag": {
+    "N": 1349,
+    "P50MS": 0.391,
+    "P99MS": 7.386833,
+    "MaxMS": 20.971709
+   },
+   "Candidates": {
+    "N": 9,
+    "P50MS": 393.259125,
+    "P99MS": 424.683333,
+    "MaxMS": 429.409
+   },
+   "Commit": {
+    "N": 7,
+    "P50MS": 4824.205791,
+    "P99MS": 5690.328791,
+    "MaxMS": 6452.439666
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 2,
+     "outcome_unknown": 3
+    },
+    "commit": {
+     "conflict": 24
+    },
+    "enqueue": {
+     "conflict": 821
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 1937716,
+   "StateBytesAvg": 1808970.9264705882,
+   "WaitingAvg": 397.55882352941177,
+   "PingP50MS": 403.418291,
+   "PingP99MS": 439.366917,
+   "CASLostRatio": 0.9406297199953526,
+   "CASExhausted": 807
+  },
+  {
+   "Minute": 14,
+   "Enqueue": {
+    "N": 641,
+    "P50MS": 2975.008083,
+    "P99MS": 6280.753041,
+    "MaxMS": 6494.251417
+   },
+   "EnqueueLag": {
+    "N": 1609,
+    "P50MS": 0.3335,
+    "P99MS": 5.251917,
+    "MaxMS": 11.359792
+   },
+   "Candidates": {
+    "N": 14,
+    "P50MS": 337.483292,
+    "P99MS": 374.435167,
+    "MaxMS": 385.912208
+   },
+   "Commit": {
+    "N": 13,
+    "P50MS": 4272.13725,
+    "P99MS": 5835.250666,
+    "MaxMS": 5954.749584
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 9
+    },
+    "commit": {
+     "conflict": 22
+    },
+    "enqueue": {
+     "conflict": 968
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 1688148,
+   "StateBytesAvg": 1562081.95,
+   "WaitingAvg": 511.3625,
+   "PingP50MS": 315.253875,
+   "PingP99MS": 363.401208,
+   "CASLostRatio": 0.9401785714285714,
+   "CASExhausted": 957
+  },
+  {
+   "Minute": 15,
+   "Enqueue": {
+    "N": 3,
+    "P50MS": 2641.576417,
+    "P99MS": 2641.576417,
+    "MaxMS": 2793.015208
+   },
+   "EnqueueLag": {
+    "N": 3,
+    "P50MS": 0.143292,
+    "P99MS": 0.143292,
+    "MaxMS": 0.15575
+   },
+   "Candidates": {
+    "N": 60,
+    "P50MS": 8.022125,
+    "P99MS": 129.060042,
+    "MaxMS": 255.240459
+   },
+   "Commit": {
+    "N": 223,
+    "P50MS": 22.167125,
+    "P99MS": 331.534167,
+    "MaxMS": 2165.921292
+   },
+   "Across": {
+    "N": 4,
+    "P50MS": 75.242542,
+    "P99MS": 90.163583,
+    "MaxMS": 511.377583
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 10
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 23
+    }
+   },
+   "StateBytesMax": 1479474,
+   "StateBytesAvg": 1456599.65,
+   "WaitingAvg": 351.5,
+   "PingP50MS": 1.218834,
+   "PingP99MS": 3.938375,
+   "CASLostRatio": 0.10810810810810811,
+   "CASExhausted": 8
+  }
+ ],
+ "Totals": {
+  "Across": {
+   "N": 130,
+   "P50MS": 54.708458,
+   "P99MS": 403.151833,
+   "MaxMS": 511.377583
+  },
+  "Candidates": {
+   "N": 10737,
+   "P50MS": 9.554292,
+   "P99MS": 47.53375,
+   "MaxMS": 756.575625
+  },
+  "Commit": {
+   "N": 2230,
+   "P50MS": 47.878584,
+   "P99MS": 6362.55075,
+   "MaxMS": 9756.138916
+  },
+  "EnqueueLag": {
+   "N": 28246,
+   "P50MS": 1.985292,
+   "P99MS": 3.718709,
+   "MaxMS": 33.710167
+  },
+  "EnqueueOK": {
+   "N": 23664,
+   "P50MS": 42.768209,
+   "P99MS": 8518.689209,
+   "MaxMS": 10004.333583
+  },
+  "Errors": {
+   "across": {
+    "conflict": 126,
+    "deadline": 13,
+    "outcome_unknown": 5
+   },
+   "candidates": {},
+   "commit": {
+    "conflict": 138
+   },
+   "enqueue": {
+    "conflict": 4582
+   },
+   "sweep": {
+    "other: match: queue is invalid: limit 1000 exceeds 200": 3619
+   }
+  },
+  "Matches": 2360,
+  "ResolvedUnknownMatches": 0,
+  "SkippedAdmissions": 7754,
+  "Sweep": {
+   "N": 0,
+   "P50MS": 0,
+   "P99MS": 0,
+   "MaxMS": 0
+  },
+  "TicketsKnown": 23664,
+  "UnknownCommitErrors": 18,
+  "WaitingAtEnd": [
+   1,
+   8,
+   5,
+   5
+  ]
+ },
+ "Verify": {
+  "CheckedMatches": 438,
+  "DoubleSubject": 0,
+  "DoubleTicket": 0,
+  "MatchUnreadableInPartition": 0,
+  "MemberTicketNotPointingToMatch": 0
+ },
+ "SampleCount": 617
+}

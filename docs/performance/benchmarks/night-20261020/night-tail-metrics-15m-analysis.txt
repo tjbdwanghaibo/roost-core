@@ -1,0 +1,13 @@
+dir=/Users/whb/roost/roost-core-wt-night/artifacts/perf/nest/night-tail-metrics-15m/sample-1.tail GOMAXPROCS=10 threshold=50ms
+  stream sync      events=284 during_capture=0 max=52.589ms
+runtime metrics: seconds=902 events_used=284 unmatched=0 gc_stw_max=0.328ms other_stw_max=0.524ms sched_latency_max=20.972ms (tail windows 20.972ms) involuntary_ctxsw/s all=71727 tail=48429
+  gc_cycle                     seconds=100.00% tail_events=100.00% enrichment=1.00
+  gc_stw_over_1ms              seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  other_stw_any                seconds= 99.89% tail_events=100.00% enrichment=1.00
+  sched_latency_over_10ms      seconds=  0.11% tail_events=100.00% enrichment=902.00
+  sched_latency_over_50ms      seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  cpu_over_90pct               seconds=  0.00% tail_events=  0.00% enrichment=0.00
+  mark_assist_over_50ms_cpu    seconds= 99.67% tail_events=100.00% enrichment=1.00
+  ticker_lag_over_10ms         seconds=  0.00% tail_events=  0.00% enrichment=0.00
+episodes (gap>=1s): 1; minute phase of episode starts (second-of-minute:count): map[1:1]
+  episode at=610.13s wall=01:21:01.411 span=2.3ms events=284 max=52.6ms map[sync:284]

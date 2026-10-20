@@ -1,0 +1,436 @@
+{
+ "Config": {
+  "AcrossPct": 30,
+  "Addrs": "127.0.0.1:42400,127.0.0.1:42401,127.0.0.1:42402,127.0.0.1:42403,127.0.0.1:42404,127.0.0.1:42405",
+  "Cluster": true,
+  "Duration": "5m0s",
+  "FaultAt": "1m30s",
+  "FaultCmd": "cd /Users/whb/roost/roost-core-wt-night && ROOST_MIRROR_LOCAL_HOME=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/env ROOST_MIRROR_LOCAL_OFFSET=25000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'; sleep 60; ROOST_MIRROR_LOCAL_HOME=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/env ROOST_MIRROR_LOCAL_OFFSET=25000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'",
+  "GroupSize": 10,
+  "InflightCap": 32,
+  "Partitions": 4,
+  "RatePerPartition": 5,
+  "Retention": "10m0s"
+ },
+ "Fault": "fault at 1m30s took 1m14.979s err=<nil> output=killed cluster master 1 (port 42400); new master 5\nkilled cluster master 5 (port 42404); new master 1",
+ "Minutes": [
+  {
+   "Minute": 0,
+   "Enqueue": {
+    "N": 1196,
+    "P50MS": 8.070916,
+    "P99MS": 15.514,
+    "MaxMS": 19.66625
+   },
+   "EnqueueLag": {
+    "N": 1196,
+    "P50MS": 2.069458,
+    "P99MS": 2.373875,
+    "MaxMS": 2.565958
+   },
+   "Candidates": {
+    "N": 1233,
+    "P50MS": 2.884167,
+    "P99MS": 7.232208,
+    "MaxMS": 13.706166
+   },
+   "Commit": {
+    "N": 94,
+    "P50MS": 6.997542,
+    "P99MS": 16.93925,
+    "MaxMS": 17.243083
+   },
+   "Across": {
+    "N": 23,
+    "P50MS": 9.637208,
+    "P99MS": 17.904292,
+    "MaxMS": 19.145917
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 11
+    },
+    "commit": {
+     "conflict": 3
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 236
+    }
+   },
+   "StateBytesMax": 154311,
+   "StateBytesAvg": 76996.22881355933,
+   "WaitingAvg": 7.237288135593221,
+   "PingP50MS": 0.074,
+   "PingP99MS": 0.116042,
+   "CASLostRatio": 0.07541696881798404,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 1,
+   "Enqueue": {
+    "N": 1152,
+    "P50MS": 17.307334,
+    "P99MS": 33.368583,
+    "MaxMS": 418.223625
+   },
+   "EnqueueLag": {
+    "N": 1200,
+    "P50MS": 2.084291,
+    "P99MS": 2.402,
+    "MaxMS": 3.906791
+   },
+   "Candidates": {
+    "N": 1193,
+    "P50MS": 5.750041,
+    "P99MS": 14.014208,
+    "MaxMS": 405.088208
+   },
+   "Commit": {
+    "N": 88,
+    "P50MS": 18.525208,
+    "P99MS": 27.864167,
+    "MaxMS": 28.295542
+   },
+   "Across": {
+    "N": 28,
+    "P50MS": 21.701375,
+    "P99MS": 29.730542,
+    "MaxMS": 30.920416
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 11
+    },
+    "candidates": {
+     "other: dial tcp 127.0.0.1:42400: connect: connection refused": 15
+    },
+    "enqueue": {
+     "other: dial tcp 127.0.0.1:42400: connect: connection refused": 48
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 307158,
+   "StateBytesAvg": 228946.4625,
+   "WaitingAvg": 6.029166666666667,
+   "PingP50MS": 0.093125,
+   "PingP99MS": 0.192292,
+   "CASLostRatio": 0.08247422680412371,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 2,
+   "Enqueue": {
+    "N": 1160,
+    "P50MS": 26.8185,
+    "P99MS": 50.513375,
+    "MaxMS": 441.871
+   },
+   "EnqueueLag": {
+    "N": 1200,
+    "P50MS": 2.117083,
+    "P99MS": 2.375208,
+    "MaxMS": 2.854958
+   },
+   "Candidates": {
+    "N": 1191,
+    "P50MS": 7.985708,
+    "P99MS": 16.014625,
+    "MaxMS": 448.738208
+   },
+   "Commit": {
+    "N": 96,
+    "P50MS": 29.419416,
+    "P99MS": 40.222208,
+    "MaxMS": 47.483667
+   },
+   "Across": {
+    "N": 20,
+    "P50MS": 28.664,
+    "P99MS": 35.305625,
+    "MaxMS": 39.547834
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 10
+    },
+    "candidates": {
+     "other: dial tcp 127.0.0.1:42404: connect: connection refused": 13
+    },
+    "enqueue": {
+     "other: dial tcp 127.0.0.1:42404: connect: connection refused": 40
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 459822,
+   "StateBytesAvg": 379995.22033898305,
+   "WaitingAvg": 5.148305084745763,
+   "PingP50MS": 0.090417,
+   "PingP99MS": 0.16725,
+   "CASLostRatio": 0.07929515418502203,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 3,
+   "Enqueue": {
+    "N": 1200,
+    "P50MS": 35.161542,
+    "P99MS": 55.616583,
+    "MaxMS": 64.567167
+   },
+   "EnqueueLag": {
+    "N": 1200,
+    "P50MS": 2.101,
+    "P99MS": 2.33125,
+    "MaxMS": 3.024666
+   },
+   "Candidates": {
+    "N": 1247,
+    "P50MS": 9.634333,
+    "P99MS": 18.95675,
+    "MaxMS": 32.678
+   },
+   "Commit": {
+    "N": 85,
+    "P50MS": 37.161708,
+    "P99MS": 52.386875,
+    "MaxMS": 54.887875
+   },
+   "Across": {
+    "N": 35,
+    "P50MS": 41.20675,
+    "P99MS": 49.541375,
+    "MaxMS": 53.915625
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 11
+    },
+    "commit": {
+     "conflict": 4
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 621694,
+   "StateBytesAvg": 538465.2583333333,
+   "WaitingAvg": 5.158333333333333,
+   "PingP50MS": 0.079833,
+   "PingP99MS": 0.100125,
+   "CASLostRatio": 0.08784258608573436,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 4,
+   "Enqueue": {
+    "N": 1200,
+    "P50MS": 42.145875,
+    "P99MS": 60.502959,
+    "MaxMS": 66.344458
+   },
+   "EnqueueLag": {
+    "N": 1200,
+    "P50MS": 2.096833,
+    "P99MS": 2.353708,
+    "MaxMS": 2.699583
+   },
+   "Candidates": {
+    "N": 1244,
+    "P50MS": 10.959458,
+    "P99MS": 23.128917,
+    "MaxMS": 38.9845
+   },
+   "Commit": {
+    "N": 99,
+    "P50MS": 43.104417,
+    "P99MS": 63.110125,
+    "MaxMS": 63.378334
+   },
+   "Across": {
+    "N": 22,
+    "P50MS": 42.698292,
+    "P99MS": 55.966125,
+    "MaxMS": 69.869417
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "across": {
+     "conflict": 18
+    },
+    "commit": {
+     "conflict": 1
+    },
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 240
+    }
+   },
+   "StateBytesMax": 778311,
+   "StateBytesAvg": 698151.7666666667,
+   "WaitingAvg": 5.125,
+   "PingP50MS": 0.078584,
+   "PingP99MS": 0.107667,
+   "CASLostRatio": 0.08982456140350877,
+   "CASExhausted": 0
+  },
+  {
+   "Minute": 5,
+   "Enqueue": {
+    "N": 4,
+    "P50MS": 32.508625,
+    "P99MS": 32.559625,
+    "MaxMS": 32.750417
+   },
+   "EnqueueLag": {
+    "N": 4,
+    "P50MS": 1.318209,
+    "P99MS": 1.339041,
+    "MaxMS": 1.394833
+   },
+   "Candidates": {
+    "N": 104,
+    "P50MS": 9.344709,
+    "P99MS": 14.616042,
+    "MaxMS": 14.832916
+   },
+   "Commit": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Across": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Sweep": {
+    "N": 0,
+    "P50MS": 0,
+    "P99MS": 0,
+    "MaxMS": 0
+   },
+   "Errors": {
+    "sweep": {
+     "other: match: queue is invalid: limit 1000 exceeds 200": 21
+    }
+   },
+   "StateBytesMax": 781683,
+   "StateBytesAvg": 777805.2916666666,
+   "WaitingAvg": 2.9166666666666665,
+   "PingP50MS": 0.091125,
+   "PingP99MS": 0.146,
+   "CASLostRatio": 0,
+   "CASExhausted": 0
+  }
+ ],
+ "Totals": {
+  "Across": {
+   "N": 128,
+   "P50MS": 28.80925,
+   "P99MS": 53.915625,
+   "MaxMS": 69.869417
+  },
+  "Candidates": {
+   "N": 6212,
+   "P50MS": 7.473042,
+   "P99MS": 20.67625,
+   "MaxMS": 448.738208
+  },
+  "Commit": {
+   "N": 462,
+   "P50MS": 28.309708,
+   "P99MS": 59.732875,
+   "MaxMS": 63.378334
+  },
+  "EnqueueLag": {
+   "N": 6000,
+   "P50MS": 2.095666,
+   "P99MS": 2.371916,
+   "MaxMS": 3.906791
+  },
+  "EnqueueOK": {
+   "N": 5912,
+   "P50MS": 26.100541,
+   "P99MS": 53.553208,
+   "MaxMS": 441.871
+  },
+  "Errors": {
+   "across": {
+    "conflict": 61
+   },
+   "candidates": {
+    "other: dial tcp 127.0.0.1:42400: connect: connection refused": 15,
+    "other: dial tcp 127.0.0.1:42404: connect: connection refused": 13
+   },
+   "commit": {
+    "conflict": 8
+   },
+   "enqueue": {
+    "other: dial tcp 127.0.0.1:42400: connect: connection refused": 48,
+    "other: dial tcp 127.0.0.1:42404: connect: connection refused": 40
+   },
+   "sweep": {
+    "other: match: queue is invalid: limit 1000 exceeds 200": 1217
+   }
+  },
+  "Matches": 590,
+  "ResolvedUnknownMatches": 0,
+  "SkippedAdmissions": 0,
+  "Sweep": {
+   "N": 0,
+   "P50MS": 0,
+   "P99MS": 0,
+   "MaxMS": 0
+  },
+  "TicketsKnown": 5912,
+  "UnknownCommitErrors": 0,
+  "WaitingAtEnd": [
+   3,
+   3,
+   3,
+   3
+  ]
+ },
+ "Verify": {
+  "CheckedMatches": 590,
+  "DoubleSubject": 0,
+  "DoubleTicket": 0,
+  "MatchUnreadableInPartition": 0,
+  "MemberTicketNotPointingToMatch": 0
+ },
+ "SampleCount": 304
+}

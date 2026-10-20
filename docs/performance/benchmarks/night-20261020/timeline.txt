@@ -1,0 +1,100 @@
+2026-10-20 23:40:13 chain-a start
+2026-10-20 23:40:13 begin night-embedded-scene-15m wt=/Users/whb/roost/roost-core-wt-night
+2026-10-20 23:55:21 end night-embedded-scene-15m rc=0
+2026-10-20 23:55:21 begin night-embedded-self-15m wt=/Users/whb/roost/roost-core-wt-night
+2026-10-21 00:10:24 end night-embedded-self-15m rc=0
+2026-10-21 00:10:24 begin night-abab-a1-v127 wt=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/wt-v127
+2026-10-21 00:10:24 nats night-abab-a1-v127 pid=14069 url=nats://127.0.0.1:24464
+2026-10-21 00:25:31 nats stopped pid=14069 slow_consumer_lines=0
+2026-10-21 00:25:31 end night-abab-a1-v127 rc=0
+2026-10-21 00:25:31 begin night-abab-b1-head wt=/Users/whb/roost/roost-core-wt-night
+2026-10-21 00:25:31 nats night-abab-b1-head pid=16576 url=nats://127.0.0.1:24217
+2026-10-21 00:40:36 nats stopped pid=16576 slow_consumer_lines=0
+2026-10-21 00:40:36 end night-abab-b1-head rc=0
+2026-10-21 00:40:36 begin night-abab-a2-v127 wt=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/wt-v127
+2026-10-21 00:40:37 nats night-abab-a2-v127 pid=19182 url=nats://127.0.0.1:24813
+2026-10-21 00:55:42 nats stopped pid=19182 slow_consumer_lines=0
+2026-10-21 00:55:42 end night-abab-a2-v127 rc=0
+2026-10-21 00:55:42 begin night-abab-b2-head wt=/Users/whb/roost/roost-core-wt-night
+2026-10-21 00:55:42 nats night-abab-b2-head pid=21641 url=nats://127.0.0.1:24547
+2026-10-21 01:10:48 nats stopped pid=21641 slow_consumer_lines=0
+2026-10-21 01:10:48 end night-abab-b2-head rc=0
+2026-10-21 01:10:48 begin night-tail-metrics-15m wt=/Users/whb/roost/roost-core-wt-night
+2026-10-21 01:10:48 nats night-tail-metrics-15m pid=24447 url=nats://127.0.0.1:24040
+2026-10-21 01:25:55 nats stopped pid=24447 slow_consumer_lines=0
+2026-10-21 01:25:55 end night-tail-metrics-15m rc=0
+2026-10-21 01:25:55 begin night-aoi-cpu4-heavy-15m wt=/Users/whb/roost/roost-core-wt-night
+2026-10-21 01:25:55 nats night-aoi-cpu4-heavy-15m pid=27654 url=nats://127.0.0.1:24462
+2026-10-21 01:41:00 nats stopped pid=27654 slow_consumer_lines=0
+2026-10-21 01:41:00 end night-aoi-cpu4-heavy-15m rc=0
+2026-10-21 01:41:00 chain-a done
+2026-10-21 01:41:19 chain-b start
+2026-10-21 01:41:19 lock acquired
+2026-10-21 01:41:22 begin night-native-forward8-15m tmp=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/tmp load={ 5.86 5.37 6.33 }
+2026-10-21 01:56:32 end night-native-forward8-15m rc=0
+2026-10-21 01:56:32 begin night-native-compensate5-15m tmp=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/tmp load={ 4.20 4.84 5.38 }
+2026-10-21 02:11:42 end night-native-compensate5-15m rc=0
+2026-10-21 02:11:43 ramdisk attached /dev/disk4
+2026-10-21 02:11:44 begin night-native-forward8-ramdisk-15m tmp=/Volumes/NightWAL/tmp load={ 3.54 4.90 5.12 }
+2026-10-21 02:26:54 end night-native-forward8-ramdisk-15m rc=0
+2026-10-21 02:27:05 ramdisk detached /dev/disk4
+2026-10-21 02:27:05 begin night-native-forward8-disk-15m tmp=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/night/tmp load={ 3.57 4.25 4.55 }
+2026-10-21 02:42:14 end night-native-forward8-disk-15m rc=0
+2026-10-21 02:42:14 lock released
+2026-10-21 02:42:14 begin night-saga-forward-30-10m load={ 3.32 4.59 4.68 }
+2026-10-21 02:53:26 end night-saga-forward-30-10m rc=1
+2026-10-21 02:53:26 begin night-saga-compensate-15-10m load={ 3.52 4.78 4.89 }
+2026-10-21 03:04:12 end night-saga-compensate-15-10m rc=1
+2026-10-21 03:04:12 begin night-remote-80-15m load={ 5.29 4.62 4.73 }
+2026-10-21 03:20:26 end night-remote-80-15m rc=0
+2026-10-21 03:20:26 chain-b done
+2026-10-21 03:20:29 chain-c start
+2026-10-21 03:20:32 aoi micro alternating start
+2026-10-21 03:22:27 aoi micro round 1 done load={ 2.51 4.81 5.34 }
+2026-10-21 03:24:16 aoi micro round 2 done load={ 3.16 4.35 5.09 }
+2026-10-21 03:26:07 aoi micro round 3 done load={ 2.63 3.72 4.75 }
+2026-10-21 03:27:59 aoi micro round 4 done load={ 2.80 3.46 4.52 }
+2026-10-21 03:29:49 aoi micro round 5 done load={ 2.72 3.31 4.33 }
+2026-10-21 03:31:40 aoi micro round 6 done load={ 2.95 3.17 4.15 }
+2026-10-21 03:33:31 aoi micro round 7 done load={ 2.99 3.08 3.99 }
+2026-10-21 03:35:21 aoi micro round 8 done load={ 3.07 3.04 3.86 }
+2026-10-21 03:37:09 aoi micro round 9 done load={ 3.53 3.27 3.85 }
+2026-10-21 03:39:00 aoi micro round 10 done load={ 2.87 3.12 3.72 }
+2026-10-21 03:39:00 aoi D19 view benches (P2 only)
+2026-10-21 03:42:03 begin sync-aoi aoi-p0 load={ 2.26 2.78 3.46 }
+2026-10-21 03:42:37 end sync-aoi aoi-p0 rc=1
+2026-10-21 03:42:37 begin sync-aoi aoi-p1 load={ 2.31 2.73 3.41 }
+2026-10-21 03:43:10 end sync-aoi aoi-p1 rc=1
+2026-10-21 03:43:10 begin sync-aoi aoi-p2 load={ 2.27 2.68 3.36 }
+2026-10-21 03:43:44 end sync-aoi aoi-p2 rc=1
+2026-10-21 03:43:44 begin sync-aoi aoi-p2-direct load={ 2.05 2.59 3.31 }
+2026-10-21 03:44:17 end sync-aoi aoi-p2-direct rc=1
+2026-10-21 03:44:17 begin sync-aoi aoi-p2-views4 load={ 2.79 2.69 3.31 }
+2026-10-21 03:44:57 end sync-aoi aoi-p2-views4 rc=1
+2026-10-21 03:44:57 begin sync-aoi aoi-p2-views4-direct load={ 3.02 2.77 3.31 }
+2026-10-21 03:45:37 end sync-aoi aoi-p2-views4-direct rc=1
+2026-10-21 03:45:37 begin sync-aoi aoi-p2-views16 load={ 2.17 2.58 3.22 }
+2026-10-21 03:46:34 end sync-aoi aoi-p2-views16 rc=1
+2026-10-21 03:46:34 begin sync-aoi aoi-p2-views16-direct load={ 2.97 2.76 3.25 }
+2026-10-21 03:47:30 end sync-aoi aoi-p2-views16-direct rc=1
+2026-10-21 03:47:30 begin sync-aoi aoi-p2-alliance100 load={ 2.95 2.79 3.22 }
+2026-10-21 03:48:06 end sync-aoi aoi-p2-alliance100 rc=1
+2026-10-21 03:48:06 begin sync-aoi aoi-p2-alliance100-direct load={ 2.47 2.67 3.16 }
+2026-10-21 03:48:42 end sync-aoi aoi-p2-alliance100-direct rc=1
+2026-10-21 03:48:42 begin sync-aoi aoi-p2-alliance1000 load={ 2.31 2.61 3.12 }
+2026-10-21 03:49:43 end sync-aoi aoi-p2-alliance1000 rc=1
+2026-10-21 03:49:43 begin sync-aoi aoi-p2-alliance1000-direct load={ 2.70 2.69 3.11 }
+2026-10-21 03:50:43 end sync-aoi aoi-p2-alliance1000-direct rc=1
+2026-10-21 03:50:43 chain-c done
+2026-10-21 03:50:43 chain-d start
+2026-10-21 03:50:43 begin lockstep catch-up drill
+2026-10-21 03:51:34 end lockstep catch-up drill rc=0
+2026-10-21 03:52:01 mirror-local up
+2026-10-21 03:52:01 begin match capacity redis single 15m
+2026-10-21 03:52:33 chain-d aborted: wrong private Redis address 42379 (actual 41379); match runs restarted as chain-e
+2026-10-21 03:53:03 chain-e start
+2026-10-21 03:53:03 begin match capacity redis single 15m
+2026-10-21 04:10:14 end match capacity single rc=0
+2026-10-21 04:10:14 begin match cluster failover 5m
+2026-10-21 04:15:33 end match cluster failover rc=0
+2026-10-21 04:15:33 chain-e done
