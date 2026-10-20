@@ -17,6 +17,7 @@
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
+| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 待维护者决定（登记 2026-10-20） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -376,3 +377,96 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 **需要拍板**：1）是否采用 B，包括“删字段 / 改 `nopersist` 也必须先迁移”；2）A 的显式名用 `bson` 标签还是 `dao:"key=..."`；3）B 是否递归校验嵌套子文档（建议先只校验顶层与嵌套类型的直接字段）。
 
+## D14 AOI 观察者改为 playerId、视野半径按观察者配置
+
+**状态：待维护者决定。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
+
+### 现状（已核对当前源码）
+
+**observer 与 subject 共用实体 ID，session 在最后一步换算。**
+
+- `InterestConfig.Session` 的注释写明：观察者、目标、关系都按实体 ID 编号，只在交给 Manager 时经 `Session` 换成会话 ID 一次；不设 `Session` 时会话 ID 就是观察者 ID。
+- `Interest.Enter(id, at)` 用同一个 `id` 先 `aoi.AddSubject`、再 `aoi.AddObserver`，并 `self.Set(id, []int64{id})`。`Interest.Move` 用同一个 `id` 先 `MoveSubject` 再 `MoveObserver`。
+- demo 场景（`demo/internal/service/game/scene.go.tmpl`）：`Join` 用 `subject.ID()`（完整 EntityID）调 `Enter`，`sessionFor` 用 `GetUniqueIDFromEntityID` 换成 playerId 作会话；`SetTeam` 把成员 playerId 转成实体 ID 后 `team.Set(observer, peers)`。
+- 事务内入口的观察者都取 `e.ID()`：`QueueMove(e, at, observer=true)`、`QueueSpatial`、`QueueRelation` / `QueueRelationDelta`（`interest_queue.go` 应用时 `fact.id`）。
+
+**“observer 可以是任意实体”只是名义抽象。** `Interest` 只有两种登记入口：`Enter`（既看又被看）和 `Show`（只被看），没有“只看”的入口；仓库里所有 `Enter` 调用方登记的都是有会话的玩家：demo 场景是玩家实体（会话 = playerId）；`scripts/perf/sync-aoi` 与 `codegen/internal/entity/testdata` 的 nestgame / dataengine 夹具是模拟玩家，先 `OpenSession(SessionID(实体 ID))` 再 `Enter`，不设 `Session`（会话 ID 直接等于实体 ID），其余单位一律 `Show`。会被订阅下发的 observer 必须对应一个会话，而会话按玩家开。
+
+**依赖“observer 与 subject 同一 ID 空间”的 4 处：**
+
+1. `aoi.go` `evaluatePair`：`if observer.id == subject { return }`（空间来源不订阅自己）。
+2. `aoi.go` `evaluateObserver`：入场候选筛选 `subject != observer.id`。
+3. `interest.go` `Enter`：`self.Set(id, []int64{id})`。
+4. `interest.go` `Leave`：`relation.Clear(id)`（作为观察者）与 `relation.Forget(id)`（作为目标）用同一个 `id`。
+
+`AOI` 与 `AOICluster` 的注释没有写这条约定（`AOICluster` 只写“ids are cluster-global”）。绕过 `Interest` 直接调用 `AOI.AddObserver` / `AOICluster.AddObserver`、把会话 ID 或 playerId 当 observer 时，第 1、2 处比的是两种 ID：自己不被排除，实体 ID 数值恰好等于该 playerId 的目标会被误当成自己而看不见。仓库里目前没有这样的调用方。
+
+**订阅合并键与多对一的隐患。** `Interest.held` 按 `(observer, subject)` 记来源；`Manager` 侧一个来源对一个 `(session, subject)` 只记一份订阅（`SubscriptionSource.Unsubscribe`：“释放本来源对 (session, subject) 的订阅”），而整个 `Interest` 是一个来源。所以两个 observer 经 `Session` 映射到同一会话、都看见同一目标时，其中一个看不见了就会 `Unsubscribe`，把另一个也需要的订阅一起退掉。`Session` 的注释没有禁止多对一，现在没有这样的调用方。
+
+**半径全局一份。** `AOIConfig.EnterRadius`、`LeaveRadius`、`Bands`、`MaxVisible` 对所有观察者相同。使用点：`aoi.go` `resubscribe`（以 `LeaveRadius` 为半边长的方框决定订阅哪些块）、`evaluatePair`（进入用 `EnterRadius`、保持用 `LeaveRadius`、分档用 `Bands`、容量用 `MaxVisible`）、`evaluateObserver`（候选按 `EnterRadius` 筛选）、`aoi_cluster.go` `placeObserverLocked`（边界镜像的方框按 `LeaveRadius`）、配置期 `AOIConfig.validate` 的 `worstObserverBlocks`（按全局 `LeaveRadius` 算单个观察者最多订阅的块数，超过 `MaxObserverBlocks` 启动即拒绝——注释强调“启动期拒绝，不在生产里第一次遇到”）。
+
+### 问题
+
+1. **概念错位**：observer 实际是“某个玩家的视野”，却以实体 ID 编号；自排除、self 关系与退场清理都靠“同一个号既是实体又是视野”成立，约定只写在 `Interest` 和 demo 里，`AOI` / `AOICluster` 单独使用时容易用错。
+2. **视野距离只能全局一个**：不同玩家的视距设置、设备档位、玩法（侦察类 buff、观战、GM 视角）无法各自不同。
+
+### 方向一：observer 用什么编号
+
+- **A1 observer = playerId（建议）**：观察者表按 playerId 记，观察者带上“自己的实体”（`self`，玩家自身实体 ID；为 0 表示没有，例如观战）。
+  - 自排除改为 `subject == observer.self`（上面第 1、2 处）。
+  - `Session` 变成恒等：observer 就是会话 ID，`held` 的键自然是 `(session, subject)`，上面的多对一隐患随之消失；demo 的 `sessionFor` 去掉。
+  - 关系源的 observer 改为 playerId、subject 仍是实体 ID，语义是“玩家关心哪些实体”。demo 的 `SetTeam` 变简单：observer 直接用成员 playerId，只有 subject 要 `BuildEntityID`。
+  - 视点不再绑死在玩家实体上：玩家控制英雄、载具时，observer 的位置取被控制实体的位置即可。
+  - 代价：observer 只能是有会话的玩家；“非玩家也要看”（NPC 感知）不走这套 Interest（它本来就是给同步下发用的）。
+- **A2 视野 ID（摄像机抽象）**：observer 是独立的视野，带 `session` 与可选的跟随实体。最通用（一个玩家多个视野、观战、小地图远景），但要多做两件事：合并表按 `(session, subject)` 记、来源里区分各视野的空间来源；同一目标在两个视野落在不同距离档时，要在视野之间选视图。现在没有多视野需求；将来需要时可以在 A1 上加（一个 playerId 下挂多个视野）。
+- **A0 保持现状**：只在 `AOI` / `AOICluster` 注释里写明“observer 与 subject 同为实体 ID”，并可加构造期检查。
+
+### 方向二：半径放在哪里
+
+- **B1 每个观察者自己的视野参数，配置给缺省值与上限（建议）**：
+  - 观察者新增 `EnterRadius` / `LeaveRadius`；`AOIConfig` 的同名字段作缺省值，新增 `MaxLeaveRadius` 作上限。
+  - 预算检查保持在启动期：`worstObserverBlocks` 改按 `MaxLeaveRadius` 计算；单个观察者登记或修改时校验 `0 < Enter ≤ Leave ≤ MaxLeaveRadius`，不合法返回 `ErrInterestConfig`，不在生产里第一次超预算。
+  - 所有使用点改读观察者自己的值：`resubscribe` 方框、`evaluatePair`、`evaluateObserver` 候选筛选、`AOICluster.placeObserverLocked` 镜像方框。
+  - 正确性不变：目标移动时只评估登记在旧、新块上的观察者（`observersAt`），而每个观察者按自己的半径订阅块，大视野的观察者自然登记在更多块上。订阅本来就是单向的，A 看得见 B 不要求 B 看得见 A。
+  - 运行期改半径：新增“设置视野参数”的操作，效果同 `MoveObserver` 带覆盖变化（`resubscribe` + 完整重评）。
+  - 代价：每个观察者多两个 int64；视野大的观察者订阅更多块（由上限约束）；`AOICluster.crossesCapacityLocked` 不涉及半径，不受影响。
+- **B0 保持全局**：需要不同视距时按视距分多个 `Interest` / `AOI`。代价是同一张地图的实体要登记多份。
+
+### 改动点（A1 + B1）
+
+| 位置 | 改动 |
+| --- | --- |
+| `framework/sync/entitysync/policy/aoi.go` | `interestObserver` 加 `self`、`enter`、`leave`；`AddObserver` / `addObserverUnbounded` 接收它们；`resubscribe`、`evaluatePair`、`evaluateObserver` 改读观察者的值，自排除改比 `self`；`AOIConfig` 加 `MaxLeaveRadius`，`validate` 按它算预算；类型注释写明 observer 键是 playerId |
+| `framework/sync/entitysync/policy/aoi_cluster.go` | `AddObserver` / `MoveObserver` 同步签名；镜像方框按观察者自己的 `LeaveRadius`；注释写明键约定 |
+| `framework/sync/entitysync/policy/interest.go` | `Enter` / `Move` / `Leave` 区分 playerId 与实体 ID；`self` 关系改为 `Set(playerID, [entityID])`；`Leave` 用 playerId 做 `Clear`、实体 ID 做 `Forget`；`Session` 按拍板项处理；`Resubscribe` / `Visible` 参数改为 playerId |
+| `framework/sync/entitysync/policy/interest_queue.go`、`spatial_component.go` | `QueueMove(observer=true)`、`QueueSpatial`、`QueueRelation` / `QueueRelationDelta` 的观察者由 `e.ID()` 换成 playerId（换算方式按拍板项）；新增排队版的视野参数修改 |
+| `demo/internal/service/game/scene.go.tmpl` | `Join` / `Move` / `Leave` 传两个 ID；去掉 `sessionFor`；`SetTeam` 的 observer 改用 playerId |
+| `scripts/perf/sync-aoi`、`codegen/internal/entity/testdata`（nestgame、dataengine 夹具）、`policy` 包测试 | 跟随新签名；自排除、关系、`Leave` 清理、按观察者半径的进出与预算拒绝补回归 |
+| 文档 | `docs/framework/guide/04-sync.md`、`docs/framework/INTEREST-BLOCK-AOI.md`、`docs/framework/impl/04-sync.md`、CHANGELOG（公开 API 变化，未上线不做兼容） |
+
+### API 变化（A1 + B1，草案）
+
+| 现在 | 改后（草案） |
+| --- | --- |
+| `Interest.Enter(id, at)` | `Interest.Enter(playerID, entityID int64, at spatial.Point, view ObserverView)`；`view` 为零值时取 `AOIConfig` 缺省 |
+| `Interest.Move(id, to)` | `Interest.Move(playerID, entityID int64, to spatial.Point)`（同时移动目标与视点） |
+| `Interest.Leave(id)` | `Interest.Leave(playerID, entityID int64)` |
+| `Interest.Resubscribe(observer)` / `Visible(observer)` | 参数改为 playerId |
+| `QueueMove(e, at, observer)` / `QueueSpatial(...)` / `QueueRelation(e, ...)` / `QueueRelationDelta(e, ...)` | 签名不变，观察者由 `e` 换算成 playerId |
+| `RelationSource.Set(observer, subjects)` 等 | 签名不变，`observer` 语义改为 playerId，`subjects` 仍为实体 ID |
+| `AOI.AddObserver(id, at)` / `AOICluster.AddObserver(id, at)` | `AddObserver(playerID, self int64, at spatial.Point, view ObserverView)` |
+| — | 新增 `ObserverView{EnterRadius, LeaveRadius int64}`、`AOIConfig.MaxLeaveRadius`、`Interest.SetObserverView(playerID, view)` 与排队版 |
+| `InterestConfig.Session` | 按拍板项删除或保留 |
+
+### 建议
+
+A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`resubscribe`、`evaluatePair`），分两次会把这些签名改两遍。`Bands` 与 `MaxVisible` 先保持全局，等有具体玩法需要时再按观察者配置。属于 sync 三大块的公开契约调整，按 roost-coding 纯重构流程实施：先补现有行为的回归，再改签名，最后补新行为的红绿用例。
+
+### 需要拍板
+
+1. observer 编号：A1（playerId）、A2（视野 ID）还是 A0（保持现状、只补注释）。
+2. `Enter` / `Move` / `Leave` 的新形状：直接改成两个 ID 参数（上表），还是新增 `EnterPlayer` 等并删除旧入口。
+3. 事务内入口从实体换算 playerId 的方式：`InterestConfig` 新增 `ObserverOf func(entityID int64) (playerID int64, ok bool)`（业务可控，非玩家返回 false），还是固定用 `GetUniqueIDFromEntityID` 并只接受玩家这一种实体类型。
+4. `InterestConfig.Session`：A1 下删除（observer 就是会话 ID），还是保留作 playerId → 会话的换算（为将来会话 ID 不等于 playerId 留口）。
+5. 半径：是否采用 B1（每观察者可配，`MaxLeaveRadius` 作启动期预算上限）；`Bands`、`MaxVisible` 是否也按观察者配置（建议先不）。
+6. 运行期修改视野参数是否需要排队版（事务内调用走提交门），还是只提供政策阶段外的直接调用。
