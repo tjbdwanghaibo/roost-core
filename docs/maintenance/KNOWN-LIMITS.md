@@ -40,7 +40,7 @@
 
 ### 5. 进程级写入吞吐约 125 TPS，与实体是否热点无关（尚未确认根因）
 
-**现象**（本机 macOS、GOMAXPROCS=10、共享隔离环境同机；生成工程加一个最小 strict handler `Tap`：每次 Player 金币 +1）：
+**现象**（本机 macOS、GOMAXPROCS=10、共享隔离环境同机；生成工程加一个最小 strict handler `Tap`：每次 Player 金币 +1，普通 Nest 单实体事务，**不经 Saga、不发 effect**）：
 
 | 场景 | 结果 |
 | --- | --- |
@@ -49,6 +49,7 @@
 | 同上，再关掉 `access.player.self_sync` | 125 TPS，P50 400ms |
 | 同一玩家 2 连接 | 129 TPS，P50 16ms |
 | 300 个新玩家同时登录（GetOrCreate + strict 发新手金币） | 全部成功，墙钟 2.58s，P99 2.55s |
+| 对照：干净工程（只有 Player、Tap、登录与 TCP 接入；进程 Mod 为 config_data / mongo / nats / dataengine / nest / access.player(.tcp)，**无 saga、无 self_sync、无 effect 消费者**），50 连接各自一个玩家 | 118 TPS，P50 436ms；同一玩家 2 连接 115 TPS、P50 17ms；`nestwal_append_total == nestwal_batch_total`（1756 / 1756），fsync 平均 6.2ms，Tap 持锁平均 8.7ms |
 
 指标（strict 那轮）：`nestwal_append_total == nestwal_batch_total`（1202 / 1202，每批 1 条，组提交没有合并），`nestwal_fsync_duration` 平均 5.9ms、最大 14ms；`nest_handler_lock_hold` 平均 8.6ms（handler 只做一次加法）；`nest_dispatch_cost` 平均 86ms；`player_tcp_dispatch_duration` 平均 409ms；short 池 10 个 worker、压测结束时队列积压 40。async 与关 self_sync 两轮的持锁时间与“每批 1 条”都不变。吞吐 ≈ 1 / 单笔持锁时间，说明提交在进程内实际是逐笔串行的；短池 10 个 worker 每个任务平均占 ~80ms，其中持锁只有 ~8ms，其余时间去向未查明。
 
