@@ -1,0 +1,27 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+                              │ base-11e39297.txt │          gate-4ba83cf5.txt          │
+                              │      sec/op       │    sec/op     vs base               │
+HistoryRollingWindow/300-10          10.47n ±  9%   10.93n ±  8%       ~ (p=0.896 n=10)
+HistoryRollingWindow/18000-10        23.36n ± 11%   23.04n ±  7%       ~ (p=0.739 n=10)
+MatchTickTenPlayers-10               1.147µ ± 10%   1.079µ ± 13%       ~ (p=0.616 n=10)
+geomean                              65.46n         64.76n        -1.07%
+
+                              │ base-11e39297.txt │           gate-4ba83cf5.txt           │
+                              │       B/op        │     B/op      vs base                 │
+HistoryRollingWindow/300-10            67.00 ± 0%     67.00 ± 0%       ~ (p=1.000 n=10) ¹
+HistoryRollingWindow/18000-10          152.0 ± 0%     152.0 ± 0%       ~ (p=1.000 n=10) ¹
+MatchTickTenPlayers-10               2.300Ki ± 0%   2.300Ki ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                288.4          288.4       +0.00%
+¹ all samples are equal
+
+                              │ base-11e39297.txt │          gate-4ba83cf5.txt          │
+                              │     allocs/op     │ allocs/op   vs base                 │
+HistoryRollingWindow/300-10          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+HistoryRollingWindow/18000-10        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MatchTickTenPlayers-10               18.00 ± 0%     18.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                         ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

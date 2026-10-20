@@ -247,8 +247,10 @@ func TestGeneratedPlayerTCPStopContract(t *testing.T) {
 const clientSDKGeneratedTest = `package tcp
 import (
  "context"
+ "encoding/binary"
  "encoding/json"
  "encoding/hex"
+ "errors"
  "net"
  "os"
  "os/exec"
@@ -258,7 +260,9 @@ import (
  "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
  "github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
  "github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+ "sync"
  "sync/atomic"
+ "github.com/tjbdwanghaibo/roost-core/robot"
  accessplayer "example.com/planet/internal/access/player"
  "example.com/planet/game/playeraccess"
  "example.com/planet/protocol/pb"
@@ -267,8 +271,12 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  registry:=playeraccess.NewProtocolRegistry()
  transport:=NewRuntime(registry,defaultLoginTimeout)
  // 仅测试夹具隐藏live帧；生产TCPSender不会丢帧。实时通道只准入，追帧通道入队并等写出。
+ // offline期间丢弃全部下行，模拟客户端断线超过历史窗口；快照分块与恢复失败通知不是C7，原样放行。
+ var offline atomic.Bool
  hideLive:=func(push func(context.Context,string,uint32,[]byte)error)func(context.Context,string,uint32,[]byte)error{
   return func(ctx context.Context,id string,msg uint32,data []byte)error{
+   if offline.Load(){return nil}
+   if lockstep.IsSnapshotChunk(data)||lockstep.IsCatchupNotice(data){return push(ctx,id,msg,data)}
    frames,err:=lockstep.DecodeBroadcast(data);if err!=nil{return err}
    if last:=frames[len(frames)-1].ID;last>1 && last<10 {return nil}
    return push(ctx,id,msg,data)
@@ -276,21 +284,39 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  }
  sender,err:=lockstep.NewTCPSender(50002,wire.DefaultMaxPayload,func(id nettransport.SessionID)(string,bool){return "sdk",id==7},hideLive(transport.PushLockstepSession),hideLive(transport.TCPRuntime.PushLockstepSessionWritten))
  if err!=nil{t.Fatal(err)}
- room,err:=lockstep.NewMatch(lockstep.MatchConfig{Sequencer:lockstep.SequencerConfig{Players:[]lockstep.PlayerID{7},MaxInputBytes:16},Datagrams:sender,Reliable:sender,RedundancyDepth:1,CatchupBatchFrames:16,CatchupSendWait:time.Second})
+ // 服务器参考模拟：输入链hash（与C# LockstepInputHasher、robot.FrameHasher同一算法），每8帧发布一份40 KiB的不可变检查点
+ // （前16字节为帧号与链值，其余是可推导的填充，让快照经真实TCP分成多块）；Provider只读已发布的检查点。
+ reference:=robot.NewFrameHasher();var checkpoint atomic.Pointer[lockstep.Snapshot]
+ var sumsMu sync.Mutex;sums:=map[lockstep.FrameID]uint64{};reported:=map[lockstep.FrameID]uint64{}
+ provider:=lockstep.SnapshotProviderFunc(func(_ context.Context,req lockstep.SnapshotRequest)(lockstep.Snapshot,error){
+  s:=checkpoint.Load();if s==nil||s.Frame<req.MinFrame||s.Frame>req.MaxFrame{return lockstep.Snapshot{},lockstep.ErrSnapshotUnavailable};return *s,nil
+ })
+ // 历史窗口取下限64帧，让断线超过窗口的场景只需几百帧；窗口内的缺口（帧2..9）仍按追帧补齐。
+ room,err:=lockstep.NewMatch(lockstep.MatchConfig{Sequencer:lockstep.SequencerConfig{Players:[]lockstep.PlayerID{7},MaxInputBytes:16},Datagrams:sender,Reliable:sender,RedundancyDepth:1,CatchupBatchFrames:16,CatchupSendWait:time.Second,HistoryRetainFrames:lockstep.MinHistoryRetainFrames,Snapshots:lockstep.SnapshotConfig{Provider:provider}})
  if err!=nil{t.Fatal(err)};if err:=room.Attach(7,7);err!=nil{t.Fatal(err)}
- type action struct {ctx context.Context; command *lockstep.Command;ticks int; done chan error}
+ // tick在owner上切一帧并推进参考模拟；Tick的err只说明发送失败，帧已切出。
+ tick:=func(ctx context.Context)error{
+  f,err:=room.Tick(ctx);reference.Fold(f);sum:=reference.Sum()
+  sumsMu.Lock();sums[f.ID]=sum;sumsMu.Unlock()
+  if f.ID%8==0{data:=make([]byte,40<<10);binary.LittleEndian.PutUint64(data,uint64(f.ID));binary.LittleEndian.PutUint64(data[8:],sum);for i:=16;i<len(data);i++{data[i]=byte(i*31+int(f.ID))};checkpoint.Store(&lockstep.Snapshot{Frame:f.ID,Data:data,StateHash:sum,HasStateHash:true})}
+  return err
+ }
+ type action struct {ctx context.Context; command *lockstep.Command;ticks int;fn func()error; done chan error}
  actions:=make(chan action);ownerDone:=make(chan struct{})
  go func(){defer close(ownerDone);defer room.Close();for a:=range actions {
   var err error
+  if a.fn!=nil {a.done<-a.fn();continue}
   if a.command!=nil {err=room.HandleCommand(7,*a.command)}
-  if err==nil {for i:=0;i<a.ticks;i++ {if _,err=room.Tick(a.ctx);err!=nil{break}}}
+  if err==nil {for i:=0;i<a.ticks;i++ {if err=tick(a.ctx);err!=nil{break}}}
   a.done<-err
  }}()
  defer func(){close(actions);<-ownerDone}()
  run:=func(ctx context.Context,c *lockstep.Command,ticks int)error{a:=action{ctx:ctx,command:c,ticks:ticks,done:make(chan error,1)};select{case actions<-a:case <-ctx.Done():return ctx.Err()};return <-a.done}
+ own:=func(ctx context.Context,fn func()error)error{a:=action{fn:fn,done:make(chan error,1)};select{case actions<-a:case <-ctx.Done():return ctx.Err()};return <-a.done}
  var lockstepDecoded atomic.Int32
  if err:=playeraccess.RegisterPayloadNotify(registry,50001,wire.PayloadLockstep,func(data []byte)(lockstep.Command,error){lockstepDecoded.Add(1);return lockstep.DecodeCommand(data)},func(ctx *playeraccess.Context,c lockstep.Command)error{
   if ctx.PlayerID!=7 {t.Error("unauthenticated seat")}
+  if c.Operation==lockstep.OpHash {sumsMu.Lock();reported[c.Frame]=c.Hash;sumsMu.Unlock()}
   ticks:=0;if c.Operation==lockstep.OpInput || c.Operation==lockstep.OpCatchup {ticks=1}
   return run(ctx.Context(),&c,ticks)
  });err!=nil{t.Fatal(err)}
@@ -304,6 +330,23 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  func(ctx *playeraccess.Context,req *pb.AddExpRequest)(*pb.AddExpResponse,error){
   if req.Amount==43{if err:=run(ctx.Context(),nil,9);err!=nil{return nil,err}}
   if req.Amount==42{if err:=transport.PushSyncPlayer(ctx.Context(),7,10103,syncPayload);err!=nil{return nil,err}}
+  // 快照恢复端到端：44 = 客户端断线期间切200帧（超过64帧窗口，下行全部丢弃），回最新帧号；
+  // 45 = 按5ms周期切帧直到座位回到实时（取快照、分块、续帧都在这些Tick里推进），回最新帧号；
+  // 46 = 客户端在最新帧上报的链值是否与服务器参考一致（1 一致）。
+  head:=int32(0)
+  switch req.Amount {
+  case 44:
+   offline.Store(true)
+   err:=own(ctx.Context(),func()error{for i:=0;i<200;i++{if err:=tick(ctx.Context());err!=nil{return err}};head=int32(room.NextFrame()-1);return nil})
+   offline.Store(false);if err!=nil{return nil,err}
+   return &pb.AddExpResponse{LevelsGained:head},nil
+  case 45:
+   if err:=own(ctx.Context(),func()error{for i:=0;i<400&&room.CatchingUp(7);i++{time.Sleep(5*time.Millisecond);if err:=tick(ctx.Context());err!=nil{return err}};head=int32(room.NextFrame()-1);if room.CatchingUp(7){return errors.New("seat still recovering")};return nil});err!=nil{return nil,err}
+   return &pb.AddExpResponse{LevelsGained:head},nil
+  case 46:
+   last:=lockstep.FrameID(0);sumsMu.Lock();for f:=range reported{last=max(last,f)};ok:=last>12&&reported[last]==sums[last];sumsMu.Unlock()
+   if ok{head=1};return &pb.AddExpResponse{LevelsGained:head},nil
+  }
   return &pb.AddExpResponse{LevelsGained:int32(req.Amount)},nil
  })
  if err!=nil{t.Fatal(err)};if err:=registry.Seal();err!=nil{t.Fatal(err)}
@@ -317,6 +360,9 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  ctx,cancel:=context.WithTimeout(context.Background(),time.Minute);defer cancel()
  cmd:=exec.CommandContext(ctx,"dotnet",os.Getenv("ROOST_CLIENT_TEST_DLL"),os.Getenv("ROOST_CLIENT_GOLDEN"),host,port)
  out,err:=cmd.CombinedOutput();if err!=nil{t.Fatalf("C# real TCP: %v\n%s",err,out)};t.Log(string(out))
+ // C#客户端经快照恢复后续帧，在最新帧上报的链值必须等于服务器参考模拟在同一帧的值。
+ sumsMu.Lock();last:=lockstep.FrameID(0);for f:=range reported{last=max(last,f)};want,got:=sums[last],reported[last];sumsMu.Unlock()
+ if last<=212||got!=want{t.Fatalf("C# hash after snapshot recovery: frame %d got %d want %d",last,got,want)}
  // 错误kind不能到达任何decoder，包括使用已知合法Command/PB载荷。
  for _,tc:=range []struct{flags byte;id uint32;payload []byte}{{0,50001,[]byte{0xc8,1,3,1}},{wire.FlagLockstep,42,[]byte{8,1}},{6,42,nil}} {
   beforeLS,beforePB:=lockstepDecoded.Load(),pbDecoded.Load()

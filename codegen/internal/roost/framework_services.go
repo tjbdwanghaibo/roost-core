@@ -104,8 +104,14 @@ func NameRules() account.NameValidator {
 	"mail": {
 		Package: "mail", Interface: "Mail", Depends: []string{"redis", "nats"},
 		ModArgs: []string{"Broadcast()", "Metrics()"},
-		Collabs: `// Broadcast delivers broadcast mail to every online player. nil is a valid,
-// fail-closed configuration: broadcasts are refused rather than dropped.
+		Collabs: `// Broadcast delivers a broadcast envelope (AudienceBroadcast: a server, a
+// guild, everyone) into the mailboxes in its scope — offline players and
+// players who log in later included, not just whoever is online now. How is
+// this project's choice (see mail.Deliverer): write every mailbox from a job,
+// or store the envelope once and merge it into a mailbox on that player's
+// next read. Deliver is idempotent per (mailbox, mail), so retries are safe.
+// nil is a valid, fail-closed configuration: broadcasts are refused rather
+// than dropped.
 func Broadcast() mail.Deliverer { return nil }
 `,
 	},

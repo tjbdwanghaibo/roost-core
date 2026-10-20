@@ -5,7 +5,8 @@
 # 不是框架默认玩法。
 # 缺省不连接外部存储：提交器是替身。ROOST_MOBA_REAL=1（并提供隔离 Mongo 副本集
 # ROOST_DATAENGINE_IT_MONGO_URI）时追加：两个独立进程正常停机后冷加载的结算重放，以及活动对局未投影时
-# SIGKILL 子进程后的 WAL 恢复续赛；再加 ROOST_MOBA_ROUTING=1（并提供 ROOST_DATAENGINE_IT_NATS_URL）时
+# SIGKILL 子进程后的 WAL 恢复续赛，以及 SIGKILL 后冷加载、经已提交检查点快照恢复窗口外客户端的演练（两者都用
+# RecoverRoomWithSnapshots 重建宿主）；再加 ROOST_MOBA_ROUTING=1（并提供 ROOST_DATAENGINE_IT_NATS_URL）时
 # 追加五进程真实 NATS 宿主交接与原服奖励崩溃重投。各阶段用本次唯一库，完成后删除。
 set -euo pipefail
 if [[ "${ROOST_MOBA_ROUTING:-0}" == 1 && "${ROOST_MOBA_REAL:-0}" != 1 ]]; then
@@ -82,10 +83,10 @@ gofmt -w db/def/*.go game/moba/*.go game/handler/moba_*.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/moba ./game/handler | tee "$review_root/test.log"
-# 25 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 28 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMOBA' "$review_root/test.log" || true)"
-if [[ "$passed" != 25 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 25 passing TestMOBA scenarios, got $passed" >&2
+if [[ "$passed" != 28 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 28 passing TestMOBA scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...
@@ -104,6 +105,8 @@ if [[ "${ROOST_MOBA_REAL:-0}" == 1 ]]; then
   for path in "$repo_root"/scripts/testdata/moba/active/*_test.go; do cp "$path" "game/handler/moba_$(basename "$path")"; done
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundCrashRecovery$' ./game/handler | tee "$review_root/active-crash.log"
   if [[ "$(grep -c '^--- PASS: TestMOBARealActiveRoundCrashRecovery' "$review_root/active-crash.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-crash.log"; then exit 1; fi
+  go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL$' ./game/handler | tee "$review_root/active-snapshot.log"
+  if [[ "$(grep -c '^--- PASS: TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL' "$review_root/active-snapshot.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-snapshot.log"; then exit 1; fi
   if [[ "${ROOST_MOBA_ROUTING:-0}" == 1 ]]; then
     : "${ROOST_DATAENGINE_IT_NATS_URL:?isolated NATS required}"
     go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealCrossSIDHostRouting$' ./game/handler | tee "$review_root/cross-sid.log"

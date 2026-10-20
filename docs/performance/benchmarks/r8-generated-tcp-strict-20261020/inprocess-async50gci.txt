@@ -1,0 +1,1 @@
+    tap_perf_test.go:188: mode="async" workers=50 players=50 gci="2ms": ok=10877 err=0 elapsed=10.043s TPS=1083 P50=47.001708ms P99=66.922084ms walAppended=10877 walSyncs=940

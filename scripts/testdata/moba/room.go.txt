@@ -1,6 +1,7 @@
 package moba
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,19 +23,47 @@ type stagedPacket struct {
 // 这里只实现样例宿主；固定权威 Round Entity 是唯一持久事实，不在每个宿主复制另一套存储。
 type Room struct {
 	match   *lockstep.Match
-	record  Round
+	record  Round // 只在权威提交成功后替换：len(record.Frames) 就是已提交帧数
 	persist PersistRound
 	wire    nettransport.DatagramSender
 	staged  []stagedPacket
 	stopped bool
+	// checkpoints 非 nil 表示开了快照恢复（RecoverRoomWithSnapshots）：每 every 帧在提交成功后发布一份已提交检查点。
+	checkpoints *ArenaCheckpoints
+	every       lockstep.FrameID
 }
 
+// RoomSnapshots 打开 Room 的框架恢复（追帧页 + 快照，Recovery 零值即 auto）。
+// 追帧页与快照分块由 Match 的后台 goroutine 经 Reliable 发出、不经暂存区，所以 Match 配已提交门
+// （MatchConfig.CommittedFrame = 已提交帧数）：可靠通道上只发已提交的帧；检查点只取权威提交返回的参考状态。
+// 窗口（64 帧）内的缺口走追帧页，越过窗口走快照；持久日志分页（replay）留给没有快照能力的客户端与观战 / 回放。
+type RoomSnapshots struct {
+	Reliable    nettransport.ReliableSender
+	Checkpoints *ArenaCheckpoints
+	// CheckpointEvery 是发布检查点的帧间隔；0 取 16。必须小于 64 帧窗口，否则最新检查点可能早于快照请求的下界。
+	CheckpointEvery int
+}
+
+// RecoverRoom 按已提交记录重建房间；没有可靠通道，窗口外的帧由 replay 从持久日志分页补。
 func RecoverRoom(record Round, persist PersistRound, wire nettransport.DatagramSender) (*Room, error) {
+	return recoverRoom(record, persist, wire, RoomSnapshots{})
+}
+
+// RecoverRoomWithSnapshots 是开了快照恢复的 RecoverRoom：重建完 Match 后先发布已提交头部的检查点，
+// 交接 / 重启后的新宿主立刻能服务快照。
+func RecoverRoomWithSnapshots(record Round, persist PersistRound, wire nettransport.DatagramSender, snapshots RoomSnapshots) (*Room, error) {
+	if snapshots.Reliable == nil || snapshots.Checkpoints == nil || snapshots.CheckpointEvery < 0 || snapshots.CheckpointEvery >= lockstep.MinHistoryRetainFrames {
+		return nil, ErrRule
+	}
+	return recoverRoom(record, persist, wire, snapshots)
+}
+
+func recoverRoom(record Round, persist PersistRound, wire nettransport.DatagramSender, snapshots RoomSnapshots) (*Room, error) {
 	checked, err := DecodeRound(record.Encode())
 	if err != nil || checked.Phase != "playing" && checked.Phase != "ended" || persist == nil || wire == nil {
 		return nil, ErrRule
 	}
-	r := &Room{record: checked, persist: persist, wire: wire}
+	r := &Room{record: checked, persist: persist, wire: wire, checkpoints: snapshots.Checkpoints, every: lockstep.FrameID(cmp.Or(snapshots.CheckpointEvery, 16))}
 	sink := nettransport.TransportFunc{Datagram: func(_ context.Context, s nettransport.SessionID, raw []byte) error {
 		if len(r.staged) >= ArenaSeats {
 			return ErrBusy
@@ -46,7 +75,14 @@ func RecoverRoom(record Round, persist PersistRound, wire nettransport.DatagramS
 	for i := range seats {
 		seats[i] = lockstep.PlayerID(i + 1)
 	}
-	r.match, err = lockstep.NewMatch(lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: seats, MaxInputBytes: 4}, RedundancyDepth: 3, HistoryRetainFrames: lockstep.MinHistoryRetainFrames, Datagrams: sink})
+	config := lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: seats, MaxInputBytes: 4}, RedundancyDepth: 3, HistoryRetainFrames: lockstep.MinHistoryRetainFrames, Datagrams: sink}
+	if r.checkpoints != nil {
+		// 已提交门：CommittedFrame 在 Tick 的协程（Actor）上调用，读 owner 自己的 record，不用锁。
+		config.Reliable = snapshots.Reliable
+		config.Snapshots = lockstep.SnapshotConfig{Provider: r.checkpoints}
+		config.CommittedFrame = func() lockstep.FrameID { return lockstep.FrameID(len(r.record.Frames)) }
+	}
+	r.match, err = lockstep.NewMatch(config)
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +98,9 @@ func RecoverRoom(record Round, persist PersistRound, wire nettransport.DatagramS
 			r.Close()
 			return nil, err
 		}
+	}
+	if r.checkpoints != nil {
+		r.checkpoints.Publish(checked.Reference) // DecodeRound 已核对它等于已提交日志的重算结果
 	}
 	return r, nil
 }
@@ -95,16 +134,27 @@ func (r *Room) input(epoch uint64, session nettransport.SessionID, frame lockste
 	}
 	return r.match.HandleCommand(session, lockstep.Command{Operation: lockstep.OpInput, Frame: frame, Payload: raw})
 }
+
+// catchup 是客户端的 OpCatchup(from)：走追帧页还是快照由 Match 判定。没开快照恢复的房间没有可靠通道，返回
+// lockstep.ErrCatchupUnavailable，客户端改用 replay。
+func (r *Room) catchup(epoch uint64, session nettransport.SessionID, from lockstep.FrameID) error {
+	if r.stopped || epoch != r.record.Epoch {
+		return ErrRule
+	}
+	return r.match.HandleCommand(session, lockstep.Command{Operation: lockstep.OpCatchup, Frame: from})
+}
 func (r *Room) tick(ctx context.Context) (lockstep.Frame, error) {
 	if r.stopped || r.record.Phase != "playing" {
 		return lockstep.Frame{}, ErrRule
 	}
 	r.staged = nil
-	f, err := r.match.Tick(ctx)
-	if err != nil {
+	f, sendErr := r.match.Tick(ctx)
+	if f.ID == 0 {
 		r.Close()
-		return f, err
+		return f, cmp.Or(sendErr, ErrRule)
 	}
+	// 帧已切出时 Tick 的错误只说明部分发送失败（暂存区满、某个会话的追帧页 / 快照分块没发出）：
+	// 只影响对应会话的恢复，照常提交，不停房间。
 	saved, err := r.persist(ctx, Change{Op: "frame", HostSID: r.record.HostSID, Epoch: r.record.Epoch, Frame: f})
 	if err != nil {
 		r.Close()
@@ -115,9 +165,13 @@ func (r *Room) tick(ctx context.Context) (lockstep.Frame, error) {
 		return f, ErrRule
 	}
 	r.record = saved
+	if r.checkpoints != nil && f.ID%r.every == 0 {
+		// 检查点只取已提交状态：saved.Reference 是权威实体按已提交日志重算的参考模拟，帧号 = len(saved.Frames)。
+		r.checkpoints.Publish(saved.Reference)
+	}
 	packets := r.staged
 	r.staged = nil
-	var errs []error
+	errs := []error{sendErr}
 	for _, p := range packets {
 		if err := r.wire.SendDatagram(ctx, p.session, p.raw); err != nil {
 			errs = append(errs, err)
@@ -248,6 +302,8 @@ func (a *Actor) execute(ctx context.Context, c RoomRequest) (RoomReply, error) {
 		}
 	case "input":
 		err = r.input(c.Epoch, c.Session, c.Frame, c.Payload)
+	case "catchup":
+		err = r.catchup(c.Epoch, c.Session, c.Frame)
 	case "tick":
 		out.Frame, err = r.tick(ctx)
 	case "state":
@@ -328,7 +384,7 @@ func (e *HostEndpoint) Call(ctx context.Context, fromSID int32, c RoomRequest) (
 			e.bindings[index] = 0
 		}
 		return out, err
-	case "input", "replay":
+	case "input", "replay", "catchup":
 		if e.bindings[index] != c.Session {
 			return RoomReply{}, ErrRule
 		}

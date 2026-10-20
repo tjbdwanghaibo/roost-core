@@ -100,11 +100,9 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.
 		}
 	}
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}, Session: func(observer int64) entitysync.SessionID {
-		load.sessionsMu.RLock()
-		defer load.sessionsMu.RUnlock()
-		return load.sessions[observer]
-	}})
+	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49},
+		// 观察者编号就是会话 ID：独立 Gate 下会话是连接号而不是玩家 ID，所以事务内入口从玩家 Unit 换算到它的会话。
+		ObserverOf: load.observerOf})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +171,14 @@ func (load *syncGameLoad) openSession(index int, session entitysync.SessionID) e
 	load.sessionsMu.Unlock()
 	return load.manager.OpenHeldSession(session)
 }
+
+// observerOf 是玩家 Unit 的观察者编号（会话 ID）；NPC 没有会话，不是观察者。
+func (load *syncGameLoad) observerOf(entityID int64) (int64, bool) {
+	load.sessionsMu.RLock()
+	defer load.sessionsMu.RUnlock()
+	session, ok := load.sessions[entityID]
+	return int64(session), ok
+}
 func (load *syncGameLoad) active(binding gateway.Binding, id uint64) error {
 	return load.openSession(int(binding.PlayerID)-1, entitysync.SessionID(id))
 }
@@ -204,7 +210,11 @@ func (load *syncGameLoad) start(t *testing.T, network loadFrontend) {
 	for index, unit := range load.units {
 		var err error
 		if index < load.config.Players {
-			err = load.interest.Enter(unit.ID(), load.position(unit))
+			observer, ok := load.observerOf(unit.ID())
+			if !ok {
+				t.Fatalf("player unit %d has no session", unit.ID())
+			}
+			err = load.interest.Enter(observer, unit.ID(), load.position(unit), policy.ObserverView{})
 		} else {
 			err = load.interest.Show(unit.ID(), load.position(unit))
 		}
@@ -287,7 +297,8 @@ func (load *syncGameLoad) wanted(index int) []int64 {
 	if load.self {
 		return []int64{load.units[index].ID()}
 	}
-	return append(load.interest.Visible(load.units[index].ID()), load.units[index].ID())
+	observer, _ := load.observerOf(load.units[index].ID())
+	return append(load.interest.Visible(observer), load.units[index].ID())
 }
 func (load *syncGameLoad) valuesMatch() bool {
 	for index := range load.clients {

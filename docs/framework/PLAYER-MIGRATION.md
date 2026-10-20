@@ -14,7 +14,7 @@
 
 | 步骤 | 做什么 | 用到的现有能力（源码） | 检查点 |
 | --- | --- | --- | --- |
-| 0 准备 | 新机器部署同版本程序与同一份配置（同 sid），只改本机地址：`ops.addr`、`player_access.tcp.addr`、`etcd.advertise_addr`，`dataengine.wal.dir` 指向本机一个**空**目录；网络能到同一套 Mongo / NATS / Redis / etcd | 配置 | `--check-config` 通过 |
+| 0 准备 | 新机器部署同版本程序与同一份配置（同 sid），只改本机地址：`ops.addr`、`player_access.tcp.addr`、`etcd.advertise_addr`，WAL 目录是本机一个**空**目录（`dataengine.wal.dir` 不写时是工作目录下的 `data/wal/dataengine/<sid>`，新机器上本来就空；同一台机器上演练时显式写一个空目录）；网络能到同一套 Mongo / NATS / Redis / etcd | 配置 | `--check-config` 通过 |
 | 1 拒绝新准入 | ① account 把该 sid 标为 maintenance，阻止在该 sid 上新建角色；② 负载均衡 / DNS 停止把新连接导向旧机器 | `Service.UpsertServer`（[service/account/service.go](../../service/account/service.go)；demo `cmd/accountctl upsert-server -status maintenance`）。注意 maintenance 只拒绝 `CreateRole`，**不拒绝已有角色登录**；已有玩家的准入由第 2 步的停机关闭 | accountctl 输出 `"status": "maintenance"` |
 | 2 停写 | 向旧进程发 SIGTERM，走正常停机：Service.Shutdown 先断开本进程服务中的全部玩家（`PlayerOwners.CloseServedSessions`），之后新请求被 Nest 以 `nest: stopped` 拒绝；各 Mod 逆序停止 | App 停机顺序；demo [service.go](../../demo/internal/service/game/service.go.tmpl) 的 `Shutdown` | 进程退出（以 PID 为准，不以停机命令返回为准）；停机未完成不得进入下一步 |
 | 3 等投影落库 | DataEngine 停机先 `Projector.Flush`（WAL fsync，再回放到一轮没有可处理记录），再关闭 Projector、WAL、Outbox | `Runtime.Shutdown` → `Projector.Flush`（[runtime.go](../../framework/dataengine/engine/runtime.go)、[projector.go](../../framework/dataengine/engine/projector.go)） | `sidmove wal-drained -dir <旧 WAL 目录>`：`drained: true`（checkpoint 等于最后一条记录，或没有记录）。进程仍持有 `writer.lock` 时它拒绝检查 |
@@ -35,7 +35,7 @@ game-demo 的 `cmd/sidmove`（只读，不搬数据、不切路由、不起停�
 
 ```sh
 # 第 3 步：旧进程停完之后，WAL 是否全部确认（进程还在跑、尾部未确认、WAL 损坏都以非零码退出）
-go run ./cmd/sidmove wal-drained -dir data/wal/dataengine
+go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000
 # 第 4 步：单实例锁现在被谁持有（不打印锁值里的令牌）
 go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:<project>:singleton:game:1000
 # 第 6 步：停旧进程后记一份，新进程写入前比较（Player 所在物理库按 -config 的 dataengine.databases 换算，-db 可直接指定）

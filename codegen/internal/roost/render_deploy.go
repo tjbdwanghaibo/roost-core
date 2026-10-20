@@ -285,7 +285,7 @@ func renderStatefulWALGuard(stateful []string) string {
 	return `case "$SERVICE" in
   ` + strings.Join(stateful, "|") + `)
     if ! grep -F "$STATE_ROOT/wal" "$CONFIG_SOURCE" >/dev/null 2>&1; then
-      printf 'nest.wal.dir in %s must be %s/wal for service %s\n' "$CONFIG_SOURCE" "$STATE_ROOT" "$SERVICE" >&2
+      printf 'dataengine.wal.dir in %s must be %s/wal for service %s\n' "$CONFIG_SOURCE" "$STATE_ROOT" "$SERVICE" >&2
       exit 2
     fi
     ;;

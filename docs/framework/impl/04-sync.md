@@ -16,7 +16,7 @@
 
 1. 持久水位和 Guard 冻结共同约束状态可见性。
 2. 客户端状态缺口恢复全量，不在失效 base 上继续应用。
-3. Lockstep 席位来自认证 session；历史默认按 `HistoryRetainFrames`（3600 帧）在 Tick 末尾自动裁剪，越界追帧以 `ErrCatchupUnservable` 失败并发 C9 通知，客户端终止、不自动重同步。
+3. Lockstep 席位来自认证 session；历史默认按 `HistoryRetainFrames`（3600 帧）在 Tick 末尾自动裁剪。落后会话按 `MatchConfig.Recovery` 恢复：catchup（没配快照来源时的缺省）越界以 `ErrCatchupUnservable` 失败并发 C9 v2 通知、客户端终止；auto / snapshot 越界改发业务快照（CA 01 分块）再续帧，只有快照路线最终失败才通知终止。`Tick` 从不等快照来源，恢复中的会话钉住历史但有上限（§2D）。
 4. 有限投递、流保留与业务 ACK 语义不能等同 exactly-once。
 5. `Manager.Drain` 不放弃任何条目；ctx 结束时返回带卡住条目摘要的 `*DrainStalledError`，`errors.Is` ctx 错误不变。
 
@@ -28,7 +28,7 @@
 
 [command.go](../../../framework/sync/lockstep/command.go)的HandleCommand须在Match串行handler中运行：先拒绝closed/非法command，再查sessionOwners；旁观者只走SpectatorCatchup，普通玩家分别走StartCatchup/ReportHash/SubmitInput。没有seat字段让客户端覆盖服务端绑定，也没有把发送成功当模拟已执行的业务ACK。
 
-[match.go](../../../framework/sync/lockstep/match.go)的Tick顺序是：切帧、追加历史、结算上次的追帧页、实时广播、发本次追帧页，最后retainWindow裁历史（hash报告按64帧步长）。裁剪必须在追帧页发出之后：页面发出前已编码成独立字节，先裁会让“从最早帧追帧”在同一Tick被判越界。startCatchup把起点0当帧1核对，越界时登记追帧状态并立即返回`*CatchupUnservableError`；pumpCatchup发现游标早于`History.start()`时把状态标为unservable、发C9通知（作为该会话最后一次可靠发送，结算后删除状态）。客户端侧[assembler.go](../../../framework/sync/lockstep/assembler.go)的Ingest按首字节0xC9识别通知，[robot/lockstep.go](../../../robot/lockstep.go)与C# LockstepClient随即终止。
+[match.go](../../../framework/sync/lockstep/match.go)的Tick顺序是：切帧、追加历史、结算上次的追帧页、实时广播、发本次追帧页，最后retainWindow裁历史（hash报告按64帧步长）。裁剪必须在追帧页发出之后：页面发出前已编码成独立字节，先裁会让“从最早帧追帧”在同一Tick被判越界。startCatchup把起点0当帧1核对，越界时登记追帧状态并立即返回`*CatchupUnservableError`；pumpCatchup发现游标早于`History.start()`时把状态标为unservable、发C9通知（作为该会话最后一次可靠发送，结算后删除状态）。客户端侧[assembler.go](../../../framework/sync/lockstep/assembler.go)的Receive / Ingest按首字节0xC9识别通知，[robot/lockstep.go](../../../robot/lockstep.go)与C# LockstepClient随即终止。以上是catchup模式；auto / snapshot模式下越界与“游标被窗口越过”都转入快照阶段，实现见§2D。
 
 [drain.go](../../../framework/sync/entitysync/drain.go)的Drain只在ctx结束时收集诊断：pending按ID升序，附Flush记录的deferral（原因、首次暂缓时间、最后错误，由settleDeferrals在Flush末尾维护：被暂缓的重新排队并保留首次时间，本轮处理过、没再暂缓的删除，forget/Close清空）；随后是waitingSnapshots、政策阶段的释放/重新提交通知与各政策的PolicyHooks.Stalls。诊断只读，不改变排空判定与重试；指标无标签。
 
@@ -59,6 +59,62 @@
 - **首个全量在登录回包之后**：嵌入 TCP 的激活在 `TCPHandshake.AfterACK`（ACK 已同步写出、连接已登记）里，推送进同一条 FIFO 出站队列；独立 Gate 是 Bind → ACK → Activate。`wiring/selfsync` 的 `TestSelfSyncFirstSnapshotFollowsTheLoginACK` 把一次 Flush 挤进握手回调里连跑 20 轮，客户端仍先读到 ACK。
 - **所有权：一个内容状态一个 Manager**（2026-10-20，维护者批准）：SelfView 拥有其 Manager 里玩家实体这类 subject 的登记。脏通知器、冻结内容与在途捕获在 `SubjectSyncState` 上各只有一份，第二个 Manager 登记会换掉第一个的通知器（第一个 Manager 的订阅者从此收不到变化）。强制点在状态上：`SubjectSyncState.ClaimSyncOwner` / `ReleaseSyncOwner`（[subject_sync.go](../../../framework/entity/subject_sync.go)）记一个主人；`Manager.register` 在 `m.mu` 内、放进表之前认领（锁序 m.mu → 状态锁，与 `forget` 相同），`rebind` 在 `subj.mu` 内认领新状态、放开已关闭的旧状态，`forget` 与 `Close` 在清通知器的同一处释放。被拒时本 Manager 不变，返回 `ErrSubjectRegisteredElsewhere`，信息点名实体 / kind / 命名空间与持有它的 Manager（`ManagerConfig.Name`，`Manager.String`；wiring/nest 缺省 `nest`，自身视图 `self_sync`，game-demo 场景 `scene`）。同一个 Manager 重复登记仍是空操作；注销后要等退役完成（remove 交付或订阅者会话关闭，即 `forget`）才放开：退役期间旧 Manager 仍欠订阅者 remove、仍持有通知器，提前放开会让它的 `forget` 清掉新 Manager 的通知器。SelfView 登记被拒时留在 waiting，按错误文本去重记一次 Warn（`refused`）并计入滞留指标。`ConfigureUnloadResync` 的“已接线”拒绝同样点名已接上的 Manager，所以 game-demo 打开 self_sync 时启动在 `service game init` 失败、信息指向 `self_sync`。回归 `TestASubjectStateFeedsOneManager`（entitysync；修前第二个 Manager 登记成功，第一个 Manager 的订阅者对之后的变化收到 0 帧）。
 - **帧上限取接入层上限**（2026-10-20）：Manager 的 `Limits.MaxFrameBytes` 在 `NewManager` 时经 `FrameSizeLimiter` 定下、之后不变，所以接入层上限必须在 Nest Mod Init 之前交给 `wiring/selfsync`。`wiring/nest.EntitySyncSetup` 新增 `ConfigSchema` / `LoadConfig`：Nest Mod 把前者并入自己的声明（App 在任何 Mod Init 之前检查一次，`--check-config` 同一处），在 `Configure` 与 `NewManager` 之前调后者。selfsync 以与生成的 player TCP Mod 逐字相同的声明读 `player_access.tcp.max_payload_bytes`（不同即 `configschema.Merge` 报冲突；codegen `TestPlayerTCPDeclarationAgreesWithKit` 经快照 `kitconfig_gen.go` 的 `selfsync` 组钉住）。独立 Gate 部署下生成的 `IngressMod.WithSelfSync` 在装配期调 `SelfSync.LimitFrameBytes(Config.MaxPayloadBytes)`（Manager 建好后再调返回错误，经 `IngressMod.Init` 报出）。`SelfSync.FrameLimit` 取 `Config.MaxFrameBytes`、配置上限、Ingress 上限中非零者的最小值，都没有时取 gateway 缺省。以前帧超过接入层上限时被接入层拒收 → `PushPlayerFrame` 关连接 → 重连全量同样超限，反复重连；现在单个玩家实体超过上限时在 Manager 内编码失败（KNOWN-LIMITS 第 ③ 条：不关连接、滞留指标告警）。回归 `TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit`（真实 Nest Mod Init + 真实 TCP；修前读到 `EOF`、`push_refused{outcome=closed}` 0 → 1）、`TestSelfSyncFrameLimitTakesTheSmallestAccessLimit`（wiring/selfsync），生成工程里的 `TestSelfSyncFrameLimitFollowsTheAccessLimit`（`New()` 的配置检查 + 嵌入 TCP 与 IngressMod 两种接线，由 codegen `TestSelfSyncGeneratedProjectOverRealTCP` 运行）。
+
+## 2D. Lockstep 快照恢复的实现契约
+
+快照恢复（2026-10-20，DESIGN-TODO D1 方案 B）在 [snapshot.go](../../../framework/sync/lockstep/snapshot.go)（配置、判定、取快照、分块、钉住）、[snapshot_wire.go](../../../framework/sync/lockstep/snapshot_wire.go)（CA 01 编解码与客户端重组 `SnapshotReceiver`）、[match.go](../../../framework/sync/lockstep/match.go)（`catchupState` 与 `pumpCatchup` / `settleCatchup` 接线）、[wire.go](../../../framework/sync/lockstep/wire.go)（C9 v2）。设计、各期偏差与证据见[功能设计 §14](../../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#14-实施记录)；用法见[使用篇](../guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。下面是修改时必须保持的东西。
+
+**配置只解析一次**。`resolveRecovery` 在 `NewMatch` 里把 `Recovery` 零值解析成 catchup（没配 Provider）或 auto（配了），之后 `m.recovery` 不会是 `RecoveryUnset`；snapshot / auto 要求 Provider 与 `Reliable` 都非 nil；`MaxBytes` 不超过 `MaxSnapshotBytes`；可靠通道实现 `nettransport.ReliablePayloadLimiter` 时核对 `ChunkBytes + MaxSnapshotChunkHeaderBytes` 不超过 `MaxReliableBytes`；可靠通道实现 `nettransport.ReliablePacer` 且返回 true 时每 Tick 预算取 `BytesPerTick`，否则取 `UnpacedBytesPerTick`（只准入）。`m.snapshots` 只在配了 Provider 时非 nil；catchup 模式的代码路径与快照前逐字节相同，`retainWindow` 在没有恢复中会话时只多一次空 map 判断（热路径前后 benchstat 无差异，[样本](../../performance/benchmarks/lockstep-snapshot-p1-20261020/benchstat.txt)）。
+
+**每会话一个状态机**（`catchupState`，只在 Match 的串行 owner 里改）：
+
+| 阶段 | 字段 | 下一 Tick 的 `pumpCatchup` 做什么 | 钉住点（`recoveryPin`） |
+| --- | --- | --- | --- |
+| 追帧 / 续帧 | `snapshot == nil`；`recovered` 表示快照之后的续帧 | 发下一页 C7；游标早于窗口时 catchup 置 `unservable`，auto / snapshot 调 `beginSnapshot(SnapshotOutOfWindow)` | `recovered` 时钉游标，普通追帧不钉 |
+| 等快照 | `snapshot != nil && snapshot.image == nil` | 不发送，只标记需要取快照 | 进入快照阶段时的窗口起点 `snapshot.pin` |
+| 传快照 | `snapshot.image != nil` | `launchChunks` 从 `snapshot.offset` 发一批 | `image.Frame + 1` |
+| 失败待通知 | `unservable != nil` | 发 C9 v2（这次恢复的最后一次可靠发送），结算后删除状态 | 不钉 |
+
+- 进入快照阶段只有 `beginSnapshot` 一处：取消在途的追帧页（`state.drop()`）、清 `recovered`、计 `lockstep.snapshot.total{reason}`。调用点：`routeRecovery`（请求时判定，auto 超阈值时 `fallback = true`）、`pumpCatchup` 里游标被窗口越过、`startSnapshot`（宿主强制）。
+- 幂等：`startCatchup` 在会话已有 `snapshot` 时直接返回 nil；`routeRecovery` 对 `from >= state.next` 的重复请求原样继续、不重新判定；`unservable` 在途时返回同一错误。
+- 结束：`failRecovery` 把状态改成待通知（取消在途发送、清快照阶段）；`settleChunks` 传完后 `state.next = image.Frame + 1`、`recovered = true`，快照就在头部时直接删状态回到实时；续帧页追到头由 `settleCatchup` / `collectCatchups` 删状态。`Detach` / `DetachSession` / `DetachSpectator` 与同一席位 `Attach` 到新会话都经 `dropCatchup` 删状态并 `releaseIdleFetch`；状态处于快照恢复中（`snapshot != nil` 或 `recovered`，且不在待通知阶段）时计一次 `failed{reason="detached"}`（维护者 2026-10-20 决定 A，`TestMatchSnapshotRecoveryDetachIsCounted`：三个阶段、座位与旁观者各计 1；普通追帧、失败通知在途、`Match.Close` 计 0）。`Close` 不经 `dropCatchup`，取消全部在途发送与取快照，不计数（对局结束不是恢复失败）。
+
+**取快照：Match 自己的 goroutine，Tick 不等**。
+
+- `launchFetch` 在 `pumpCatchup` 末尾、本 Tick 有会话在等且 `m.fetch == nil` 且本 Tick 没刚收到结果时发起，每局同一时刻一次：请求范围按发起时的窗口定（`MinFrame = history.start() - 1`，`MaxFrame = servableHead()`，即 `history.Latest()`，配了已提交门时不超过已提交帧；`Reason` 取第一个等待会话的原因），ctx 是 `context.WithoutCancel(Tick ctx)` 加 `FetchTimeout`，结果经容量 1 的 channel 交回。
+- `fetchSnapshot` 在调用 goroutine 内完成全部校验与 SHA-256：panic recover 成 `errSnapshotProviderPanic`（记 ERROR）、超过 `maxBytes` 为 `ErrSnapshotTooLarge`、空数据或帧号越界为 `ErrSnapshotInvalid`；`Tick` 只收结果。
+- `collectFetch` 用 `select default` 非阻塞收取；到 `deadline` 仍没结果就按 `context.DeadlineExceeded` 结算、不再等那个 goroutine（Provider 不响应 ctx 时它可能还在跑，下一 Tick 可再发起一次）。
+- `applyFetch` 把一次结果分给此刻所有等快照的会话：成功时每个会话拿同一个只读 `snapshotImage`、各自新的 `transfer` 编号（`m.lastTransfer` 单调递增）、偏移 0、失败计数清零；快照帧 + 1 早于当前窗口起点（只有宿主 `TrimHistory` 越过钉住点才会发生）按 `ErrSnapshotInvalid` 计该会话一次失败。失败时按错误定标签（too_large / invalid / 其余 unavailable）计一次 `failed`，然后逐会话：too_large 立即 `failRecovery(snapshot_too_large)`；`fallback` 且游标仍在窗口内的回退追帧（`state.snapshot = nil`，不计会话失败）；其余 `snapshotAttemptFailed`，达到 `CatchupMaxFailures` 时 `failRecovery(snapshot_unavailable)`。
+- `releaseIdleFetch`：没有会话再等快照时取消在途的取快照、丢掉 `m.fetch`，几 MiB 的结果不挂在 Match 上。`pumpCatchup` 在本 Tick 没人等时、`pinnedTrim` 让会话过期后、`dropCatchup` 时调用。
+
+**分块与重发**。
+
+- `launchChunks` 在后台 goroutine 上从已确认偏移起逐块 `SendReliable`，直到本批确认字节达到预算或传完；每批至少一块，所以实际每批字节是预算向上取整到整块。整批受 `CatchupSendTimeout`（同一个 ctx），交回 `written`（确认写出的数据字节，失败时为失败前已成功的部分）。分块字节由 `snapshotImage.chunk` 每次重新编码，首块（偏移 0）带头部。
+- `settleChunks`：`offset += written`；有进展清零失败计数并计 `lockstep.snapshot.bytes.total`；有错误计一次失败，达到 `CatchupMaxFailures` 时删状态、计 `failed{abandoned}`、不发通知（`Tick` 错误带 “snapshot transfer abandoned … the client must reconnect”），否则下一 Tick 从确认偏移重发。超时但其实已写出的块会被再发一次，客户端按 “同编号、偏移小于已收” 丢弃。
+- 嵌入 TCP 的“确认写出”是 `PushLockstepSessionWritten` 返回 nil，即写进本机 socket 发送缓冲；独立 Gate 是 Game 本地准入。两者都不是客户端已收到。
+- 客户端 `SnapshotReceiver.Accept` 是重组规则的唯一实现（Go 客户端与服务端测试共用，C# `LockstepAssembler` 逐条对照）：新编号且偏移 0 取代未完成的旧传输；新编号偏移非 0、偏移跳跃、越过 total、首块 total 超过客户端上限是坏包（`ErrFrameCorrupt`，丢弃进行中的传输）；同编号偏移小于已收（含已完成传输的重发）丢弃；到齐后核对 SHA-256，不符为 `ErrSnapshotCorrupt`（编号仍记着，之后的重发被丢弃）。
+
+**钉住**。`retainWindow` 在有恢复中会话且配了快照时调 `pinnedTrim(keep)`：裁剪点 = min(正常裁剪点, 所有会话的 `recoveryPin`)，下限 `keep - PinFrames`；钉住点早于下限的会话 `failRecovery(recovery_expired)`、计 `failed{expired}`，释放钉住。宿主 `TrimHistory` 直接裁，不看钉住（之后 `applyFetch` 与续帧路径按上面的规则兜住）。
+
+**客户端（Go）**。`FrameAssembler.Receive` 按首字节分流 C9 / CA / C7；交出快照后置 `hasUnapplied`，`Receive` 与 `IngestFrames` 在 `ResumeAfterSnapshot` 前都返回 `ErrSnapshotNotApplied`；传输进行中 `IngestFrames` 丢弃帧并计入 `Duplicates`。`ResumeAfterSnapshot` 清空整个乱序缓冲：只清 `<= frame` 时缓冲里的 `frame + 1` 永远不会被排空，`Gap()` 恒真、bot 周期性重发追帧（`TestFrameAssemblerResumeDropsBufferedFramesPastTheSnapshot`，C# 同一处理）。`robot.LockstepBot`：首字节 0xCA 且 `Receive` 报错一律终止（C7 坏包仍按“请求追帧”）；传输未到齐也算缺口未合（`checkGap` 看 `SnapshotInProgress`），推进中的分块把重试计数清零，避免分块数多于 `CatchupRetryPackets` 时重复请求；恢复时丢弃 pending 帧与 apply 游标，`FrameHasher.Reset(got)`。
+
+**错误与指标**。取快照、分块、续帧、钉住的失败都进 `Tick` 返回的 joined error（auto 超阈值回退追帧不进），按会话写明 `catchup session N`；通知 C9 v2 的原因由 `CatchupUnservableError.Reason` 决定，`Reason` 为 0 按 history_trimmed 解释（`EncodeCatchupUnservable` 保留为 history_trimmed 的写法）。指标名是包常量 `MetricSnapshot` / `MetricSnapshotBytes` / `MetricSnapshotFailed`，由 `TestMatchSnapshotMetricNames` 与根包指标门禁钉住；`failed` 的 reason 取值：unavailable / too_large / invalid / abandoned / expired / detached，口径见 [OBSERVABILITY](../OBSERVABILITY.md)。
+
+**已提交门**（`MatchConfig.CommittedFrame`，2026-10-20，[设计 §15](../../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)）。不变量：配置后，可靠通道上发出的 C7 帧与快照首块的快照帧都 ≤ 发起发送时 `CommittedFrame()` 的值。强制点只有两处，都经 `servableHead()`（`min(history.Latest(), committed())`，nil 时就是 `Latest()`）：`pumpCatchup` 开头算一次 `head`，读页上界取 `min(catchupBatch, head - next + 1)`，`next > head` 且 `next <= Latest()` 的会话 `continue`（不删恢复状态、不发页）；`launchFetch(ctx, head)` 的 `MaxFrame = head`。第三处是活性：Room 这种每 Tick 同步提交的宿主，页面最多发到 `Latest() - 1`、游标停在 `Latest()`，`settleCatchup` 的“越过最新帧”永远不成立，所以 `collectCatchups` 在配了门时也检查空闲（无在途发送、非快照阶段、非失败通知）的会话，落进本 Tick 冗余包覆盖范围（`next + depth > Latest()`）就删状态、切回实时——之后它收的是宿主提交后才发的广播。没配门时三处与改动前逐字节相同（空闲会话照旧由 `pumpCatchup` 发页）。门只挡 Match 自己在后台发的东西；实时广播由宿主的 Datagrams 负责挡到提交之后。回归 `TestMatchCommittedFrameGatesCatchupAndSnapshots`（去掉门报 `catch-up page carried frames [15 ... 24], want 15..20` 与 `snapshot requests MaxFrame [201], want [200]`；去掉空闲切回实时报 `session did not return to live broadcasts once commits caught up`）；业务形态见 MOBA 夹具 Room 的两条用例。热路径对照见[样本](../../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)（无差异）。
+
+**修改检查**：改已提交门跑 `TestMatchCommittedFrameGatesCatchupAndSnapshots` 与 `scripts/test-moba-generated.sh`（Room 两条）；改判定先跑 `TestMatchRecoveryRouting`（三种模式 × 窗口内 / 超阈值 / 越界）与 catchup 模式的全部原有用例（必须不改即通过）；改取快照跑 `TestMatchSnapshotProviderRunsOffTheTick`、`TestMatchSnapshotFailureSemantics`、`TestMatchSnapshotFetchIsCancelledWhenNobodyWaits`；改分块跑 `TestMatchSnapshotChunkPacingAndResend`、`TestMatchSnapshotUnpacedLaneUsesTheFixedBudget`、两个 fuzz 与 `tcp_test.go` 的真实回环用例；改钉住跑 `TestMatchSnapshotPinsHistoryWithinBound` 与长局用例。并发相关加 `-race -count=2`。
+
+## 2E. Interest 的观察者编号与视野（D14）
+
+维护者 2026-10-20 决定 A1 + B1，用法见 [guide/04-sync](../guide/04-sync.md#附近的人观察者是玩家视野按观察者d14)。实现要守住的几条：
+
+1. **两种编号不混用**。`AOI.observers`、`AOICluster.observers`、`Interest.held` 的 observer 键、`RelationSource` 的 observer 键、`InterestEvent.Observer`、`Refusal.Observer` 都是玩家 ID（= 会话 ID，`sessionOf` 是恒等换算）；`AOI.subjects`、`observed`、关系成员、`InterestEvent.Subject` 是实体 ID。自排除只比 `interestObserver.self`：[aoi.go](../../../framework/sync/entitysync/policy/aoi.go) `evaluatePair`（`removed || subject == observer.self`，自身实体若因 `self` 改变仍在可见集里则按离开处理）、`evaluateObserver` 的候选筛选、[aoi_block.go](../../../framework/sync/entitysync/policy/aoi_block.go) `evaluateObserved`。`self` 为 0（`Watch`）时不会命中任何目标，因为实体 ID 不为 0。
+2. **角色表分开**。`Interest.subjectRoles`（实体）与 `observerRoles`（玩家）由 `queueMu` 保护，供 `queueFact` 准入；`supersedeQueuedMovesLocked(subject, observer)` 与 `supersedeQueuedRelationsLocked(observer, subject)` 分别按实体与玩家改写排队事实，语义与 D14 前逐项相同（Leave 作废观察者一半与它作为观察者的关系事实，Hide 只作废目标一半并从关系成员里剔除）。排队事实的 `observerID` 在入队时由 `ObserverOf` 换算一次并随事实保存，应用时不再调用业务代码；同一实体的事实顺序仍按 `fact.id`（实体）阻塞。
+3. **视野归一只有一处**。`AOIConfig.withViewDefaults` 补零值，`validate` 在补齐后的配置上检查（视野范围包含缺省视野、`EnterRadius` 在网格上、每层分档、按 `MaxLeaveRadius` 的块预算），`NewAOI` / `NewAOICluster` 保存补齐后的配置；`normalizeView` 是运行期唯一的夹取量化入口，`AOI.AddObserver` / `SetObserverView`、`AOICluster.AddObserver` / `SetObserverView`、`Interest.Enter` / `Watch` / `SetObserverView` 都经过它。`AOI.placeObserver` 是登记、移动、换视野的共同落点：更新 `self` / 位置 / 视野 → `resubscribe` → `refreshObserver`，Cluster 的镜像对每个区域调用同一个函数。
+4. **SetObserverView 不进提交门**。它在 `Interest.mu` 下直接改 AOI（与 `Move` 同锁、同串行），不入 `facts`、不持 `HoldSyncPublication`，因此 `QueueMove` 等排队入口的提交门语义不变；它不调用 `Apply`，订阅变化由调用方随后的 `Apply`（或排队模式下 Manager 的政策阶段 `applyQueued` 末尾的 `applyLocked`）说给 Manager。限速状态 `viewChanged` 由 `mu` 保护，`Leave` / `Unwatch` / `Close` 清除；同值请求在限速判断之前返回，不记时间。
+5. **锁与 goroutine 不变**。没有新增锁、goroutine 或回调线程；`ObserverOf` 在 `queueFact` 里、取 `queueMu` 之前调用（业务线程、Entity 锁内），不在 `mu` 或 `queueMu` 内调用业务代码。
+
+回归：[policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go) `TestObserverAndSubjectIDSpacesStayApart`（D14 前以 Session 换算写法在 D14 第一笔提交（改签名前的回归）上通过、断言未改）、`TestTwoObserversDoNotReleaseEachOthersSubscription`、`TestSetObserverView*`、`TestWatchSeesWithoutBeingSeen`、`TestObserverOfMapsAControlledEntityToItsPlayer`；[aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go) `TestAOIObserverNeverSeesItsOwnSubject`、`TestAOICoverageExcludesSelfNotObserverID`、`TestAOIObserverRadiusIsPerObserver`、`TestAOISetObserverViewGrowsChangesLODAndShrinks`、`TestAOIViewIsClampedAndQuantized`、`TestAOIViewConfigIsCheckedAtStartup`、`TestAOIObserverSelfChangeReevaluates`、`TestClusterMirrorFollowsObserverView`。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -117,7 +173,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [aoi.go](../../../framework/sync/entitysync/policy/aoi.go) | `InterestEventKind`、`InterestEvent`、`AOIConfig`、`AOI` |
+| [aoi.go](../../../framework/sync/entitysync/policy/aoi.go) | `InterestEventKind`、`InterestEvent`、`AOIConfig`、`ObserverView`、`AOI` |
 | [aoi_cluster.go](../../../framework/sync/entitysync/policy/aoi_cluster.go) | `AreaID`、`AOICluster` |
 | [direct.go](../../../framework/sync/entitysync/policy/direct.go) | `Direct` |
 | [self_view.go](../../../framework/sync/entitysync/policy/self_view.go) | `SelfProfile`、`SelfViewConfig`、`SelfView` |
@@ -139,18 +195,20 @@
 
 ### sync/lockstep
 
-8 个实现文件、6 个测试文件。
+10 个实现文件、9 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [assembler.go](../../../framework/sync/lockstep/assembler.go) | `FrameAssembler` |
+| [assembler.go](../../../framework/sync/lockstep/assembler.go) | `FrameAssembler`、`Delivery`、`SnapshotMismatchError` |
 | [command.go](../../../framework/sync/lockstep/command.go) | `Operation`、`Command` |
 | [desync.go](../../../framework/sync/lockstep/desync.go) | `DesyncDetector`、`DesyncVerdict` |
 | [history.go](../../../framework/sync/lockstep/history.go) | `History` |
 | [match.go](../../../framework/sync/lockstep/match.go) | `MatchConfig`、`Match` |
 | [sequencer.go](../../../framework/sync/lockstep/sequencer.go) | `PlayerID`、`FrameID`、`Input`、`Frame`、`SequencerConfig`、`Sequencer` |
+| [snapshot.go](../../../framework/sync/lockstep/snapshot.go) | `RecoveryMode`、`SnapshotReason`、`SnapshotRequest`、`Snapshot`、`SnapshotProvider`、`SnapshotProviderFunc`、`SnapshotConfig` |
+| [snapshot_wire.go](../../../framework/sync/lockstep/snapshot_wire.go) | `SnapshotChunk`、`ReceivedSnapshot`、`SnapshotReceiver` |
 | [tcp.go](../../../framework/sync/lockstep/tcp.go) | `TCPSender` |
-| [wire.go](../../../framework/sync/lockstep/wire.go) | `RedundantEncoder`、`CatchupUnservableError` |
+| [wire.go](../../../framework/sync/lockstep/wire.go) | `RedundantEncoder`、`CatchupUnservableError`、`RecoveryFailureReason` |
 
 ### sync/nettransport
 
@@ -162,7 +220,7 @@
 | [counters.go](../../../framework/sync/nettransport/counters.go) | `AsyncTransportCounters` |
 | [kcp_transport.go](../../../framework/sync/nettransport/kcp_transport.go) | `KCPTransportConfig`、`KCPTransport`、`KCPTransportStats`、`KCPDatagramHandler` |
 | [quic_transport.go](../../../framework/sync/nettransport/quic_transport.go) | `QUICTransportConfig`、`QUICTransport`、`QUICTransportStats` |
-| [sender.go](../../../framework/sync/nettransport/sender.go) | `DatagramSender`、`DatagramPayloadLimiter`、`DatagramBatchSender`、`ReliableSender`、`CompositeTransport` |
+| [sender.go](../../../framework/sync/nettransport/sender.go) | `DatagramSender`、`DatagramPayloadLimiter`、`DatagramBatchSender`、`ReliableSender`、`ReliablePacer`、`ReliablePayloadLimiter`、`CompositeTransport` |
 | [session.go](../../../framework/sync/nettransport/session.go) | `SessionID`、`SessionInfo` |
 | [transport.go](../../../framework/sync/nettransport/transport.go) | `Transport`、`DatagramBatchTransport`、`SessionTransport`、`TransportFunc` |
 | [udp_crypto.go](../../../framework/sync/nettransport/udp_crypto.go) | `AEADSessionProtector` |
@@ -248,11 +306,11 @@
 
 ### sync/entitysync/policy
 
-- [aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go)：`TestInterestEnterLeaveWithHysteresis`、`TestInterestBandsAndObserverMovement`、`TestInterestMaxVisibleEvictsFarthest`、`TestInterestObserverIsAlsoSubjectSymmetry`、`TestInterestDeterministicEventStream`；其余 23 项见文件
+- [aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go)：`TestInterestEnterLeaveWithHysteresis`、`TestInterestBandsAndObserverMovement`、`TestInterestMaxVisibleEvictsFarthest`、`TestInterestObserverIsAlsoSubjectSymmetry`、`TestInterestDeterministicEventStream`；其余 31 项见文件
 - [aoi_cluster_movement_test.go](../../../framework/sync/entitysync/policy/aoi_cluster_movement_test.go)：`TestClusterMaxVisibleReselectsOnSameBandMovement`、`TestClusterMovementCapacityMatchesDistanceOrder`、`TestClusterCapacityStaysNearestAmongCandidates`（Cluster 容量在同档移动后仍是候选内最近 N 个）
 - [benchmark_test.go](../../../framework/sync/entitysync/policy/benchmark_test.go)
 - [interest_test.go](../../../framework/sync/entitysync/policy/interest_test.go)：`TestObservedBlocksKeepOnePositionAndSubscription`、`TestSpatialAndBlockHandoverDoesNotRecreateBaseline`、`TestCoverageCommitRollbackRejectAndLifetime`、`TestCoverageLateObserverBudgetAndVisibilityLimit`、`TestFactAdmissionDoesNotWaitForPolicyLock`；其余 16 项见文件
-- [policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go)：`TestEnteringSubscribesToYourself`、`TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary`、`TestARelationKeepsASubscriptionDistanceDropped`、`TestLeavingReleasesBothDirections`、`TestARefusedSubscribeIsSaidAgainUntilItIsTaken`；其余 13 项见文件
+- [policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go)：`TestEnteringSubscribesToYourself`、`TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary`、`TestARelationKeepsASubscriptionDistanceDropped`、`TestLeavingReleasesBothDirections`、`TestARefusedSubscribeIsSaidAgainUntilItIsTaken`；其余 19 项见文件
 - [relation_index_test.go](../../../framework/sync/entitysync/policy/relation_index_test.go)：`TestRelationDeltaMatchesFullReplacement`、`TestRelationForgetAfterReplacementClearAndReadd`、`TestRelationSetMatchesMembershipModel`、`TestRelationSetWorkspaceConcurrentLifecycle`
 - [self_view_test.go](../../../framework/sync/entitysync/policy/self_view_test.go)：`TestSelfViewSendsAFullSnapshotThenDeltas`、`TestSelfViewWaitsForTheEntityToAppear`、`TestSelfViewReconnectGetsAFullSnapshot`、`TestSelfViewReplacedConnectionKeepsTheView`、`TestSelfViewWaitsForTheConnectionToCloseAfterALoss`、`TestSelfViewEveryIsolatedLossIsRecoveredByTheReconnect`、`TestSelfViewLossRacingANewConnection`、`TestSelfViewCountsPlayersOnlineWithoutASession`、`TestSelfViewUnloadRetractionIsResubmitted`、`TestSelfViewRolledBackCreateIsBoundAgain`、`TestSelfViewCloseDuringFlush`、`TestSelfViewLoginAndDisconnectRace`、`TestNewSelfViewRefusesAnIncompleteConfig`
 - [resubmit_test.go](../../../framework/sync/entitysync/policy/resubmit_test.go)：`TestInterestResubmitsASubscriptionTheFrameworkRetracted`、`TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway`、`TestEachPolicyResubmitsItsOwnRetractedSubscription`、`TestGroupAndDirectResubmitAfterRetraction`、`TestGroupResubmitsAfterASecondRetractionBeforeDelivery`；其余 5 项见文件
@@ -266,7 +324,9 @@
 ### sync/lockstep
 
 - [command_test.go](../../../framework/sync/lockstep/command_test.go)：`TestCommandCodecAndOwnership`、`TestTCPSenderRejectsShortWorkerBeforeResolverOrSocket`、`TestMatchCommandUsesCurrentAuthenticatedBinding`、`TestTCPSenderBothLanesUseSameRouteAndBudget`
-- [tcp_test.go](../../../framework/sync/lockstep/tcp_test.go)（Match 经 TCPSender 接真实嵌入 TCP）：`TestACatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt`、`TestACatchUpPageTheLinkCannotTakeTimesOutWithoutHoldingOtherSessions`、`TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection`
+- [tcp_test.go](../../../framework/sync/lockstep/tcp_test.go)（Match 经 TCPSender 接真实嵌入 TCP）：`TestACatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt`、`TestACatchUpPageTheLinkCannotTakeTimesOutWithoutHoldingOtherSessions`、`TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection`、`TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted`、`TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive`（4 MiB 快照，含只准入对照）、`TestRobotsRecoverFromASnapshotOverEmbeddedTCP`
+- [snapshot_test.go](../../../framework/sync/lockstep/snapshot_test.go)（快照恢复）：`TestMatchCommittedFrameGatesCatchupAndSnapshots`（已提交门）、`TestMatchRecoveryRouting`、`TestMatchRecoveryConfigValidation`、`TestMatchSnapshotProviderRunsOffTheTick`、`TestMatchSnapshotFailureSemantics`、`TestMatchSnapshotChunkPacingAndResend`、`TestMatchSnapshotPinsHistoryWithinBound`、`TestMatchSnapshotUnpacedLaneUsesTheFixedBudget`、`TestFrameAssemblerResumeDropsBufferedFramesPastTheSnapshot`、`FuzzDecodeSnapshotChunk`、`FuzzSnapshotReassembly`；其余 13 项见文件
+- [example_snapshot_test.go](../../../framework/sync/lockstep/example_snapshot_test.go)：`Example_snapshotRecovery`（服务器参考模拟发布检查点、断线超过窗口后经快照恢复，核对输出）
 - [e2e_gate_test.go](../../../framework/sync/lockstep/e2e_gate_test.go)：`TestLockstepEndToEndGate`、`TestE2EBotShutdownWaitsForInFlightOutput`
 - [history_long_test.go](../../../framework/sync/lockstep/history_long_test.go)：`TestMatchLongRunCatchupAfterRollingTrim`、`TestHistoryExtremeRangeAndTrim`、`TestHistoryLongRollingWindow`、`TestHistoryGradualShrinkReleasesBackingArray`、`TestMatchDefaultRetentionBoundsLongMatch`、`TestMatchAutoRetentionOvertakesStalledCatchup`、`TestMatchRetainFullHistoryKeepsEveryFrame`、`TestMatchHistoryRetainFramesValidation`
 - [lockstep_test.go](../../../framework/sync/lockstep/lockstep_test.go)：`TestSequencerOptimisticLockingAndLateFolding`、`TestSequencerDeterministicFrameBytes`、`TestRedundancySurvivesPacketLoss`、`TestBroadcastCodecRoundTripAndFailFast`、`TestHistoryCatchupPagingAndSequenceGuard`；其余 13 项见文件

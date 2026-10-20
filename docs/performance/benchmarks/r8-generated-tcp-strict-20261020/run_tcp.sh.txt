@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# usage: run_tcp.sh <label> [tapload flags...]   (env MODIFY_SELF_SYNC etc. not used)
+set -uo pipefail
+S="$(cd "$(dirname "$0")" && pwd)"
+source "$HOME/.roost-it/roost-dataengine-it/env.sh" >/dev/null 2>&1
+lock="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
+if ! mkdir "$lock" 2>/dev/null; then echo "lock held by someone else"; exit 2; fi
+label=$1; shift
+tag="r8tcp$$"
+run="$S/run-$label"; rm -rf "$run"; mkdir -p "$run/configs/service"
+cp -R "$S/tapproj/configs/data" "$run/configs/" 2>/dev/null
+cp -R "$S/tapproj/configs/generated" "$run/configs/" 2>/dev/null
+python3 - "$S/tapproj/configs/service/config.game.yaml" "$run/configs/service/config.game.yaml" "$tag" <<'PY'
+import os,sys,re
+src,dst,tag=sys.argv[1:4]
+s=open(src).read()
+env=os.environ
+rep=[
+ (r'(?m)^sid: \d+', 'sid: 904'),
+ (r'(\n  uri: )mongodb://127\.0\.0\.1:27017/\?replicaSet=rs0', r'\g<1>'+env['ROOST_DATAENGINE_IT_MONGO_URI']),
+ (r'(\n  url: )nats://127\.0\.0\.1:4222', r'\g<1>'+env['ROOST_DATAENGINE_IT_NATS_URL']),
+ (r'(\nredis:\n(?:  #.*\n)*  addr: )127\.0\.0\.1:6379', r'\g<1>'+env['ROOST_DATAENGINE_IT_REDIS_ADDR']),
+ (r'(\n  prefix: )planet\n', r'\g<1>'+tag+'\n'),
+ (r'(\ndataengine:\n(?:  #.*\n)*  database: )planet', r'\g<1>'+tag+'_de'),
+ (r'databases: \{main: planet\}', 'databases: {main: '+tag+'_dao}'),
+ (r'subject_prefix: planet\.effect', 'subject_prefix: '+tag+'.effect'),
+ (r'stream: PLANET_EFFECTS', 'stream: '+tag.upper()+'_EFFECTS'),
+ (r'database: planet_saga', 'database: '+tag+'_saga'),
+ (r'subject_prefix: planet\.saga', 'subject_prefix: '+tag+'.saga'),
+ (r'stream: PLANET_SAGA', 'stream: '+tag.upper()+'_SAGA'),
+ (r'key_prefix: roost:planet:singleton', 'key_prefix: roost:'+tag+':singleton'),
+ (r'(\n    max_bytes: )8589934592', r'\g<1>67108864'),
+ (r'stream_max_bytes: 8589934592', 'stream_max_bytes: 67108864'),
+ (r'addr: 127\.0\.0\.1:9100', 'addr: 127.0.0.1:19904'),
+ (r'addr: 0\.0\.0\.0:7000', 'addr: 127.0.0.1:17904'),
+]
+for a,b in rep:
+    s,n=re.subn(a,b,s,count=1)
+    if n!=1: sys.exit('no match: '+a)
+extra=os.environ.get('R8_EXTRA','')
+for kv in filter(None, extra.split(';')):
+    a,b=kv.split('=>')
+    s,n=re.subn(a,b,s,count=1)
+    if n!=1: sys.exit('no match extra: '+a)
+open(dst,'w').write(s)
+PY
+[ $? -eq 0 ] || { rmdir "$lock"; exit 3; }
+cleanup() {
+  [ -n "${gpid:-}" ] && kill -TERM "$gpid" 2>/dev/null && wait "$gpid" 2>/dev/null
+  "$S/tapload" -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -drop-dbs "${tag}_de,${tag}_dao,${tag}_saga" -nats "$ROOST_DATAENGINE_IT_NATS_URL" -drop-streams "$(echo $tag | tr a-z A-Z)_EFFECTS,$(echo $tag | tr a-z A-Z)_SAGA" >/dev/null 2>&1
+  rmdir "$lock" 2>/dev/null
+}
+trap cleanup EXIT
+cd "$run"
+"$S/tapgame" game --config configs/service/config.game.yaml --sid 904 > "$run/game.log" 2>&1 &
+gpid=$!
+for i in $(seq 1 120); do nc -z 127.0.0.1 17904 2>/dev/null && break; sleep 0.5; done
+nc -z 127.0.0.1 17904 || { echo "game not listening"; tail -20 "$run/game.log"; exit 4; }
+"$S/tapload" -addr 127.0.0.1:17904 -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -db "${tag}_dao" "$@" | tee "$run/load.txt"
+curl -s http://127.0.0.1:19904/metrics > "$run/metrics.txt"
+grep -E '^(nestwal_append_total|nestwal_batch_total|nest_handler_lock_hold_(sum|count)|nest_dispatch_cost_(sum|count)|player_tcp_dispatch_duration_(sum|count)|nestwal_fsync_duration_(sum|count))' "$run/metrics.txt" | grep -v bucket

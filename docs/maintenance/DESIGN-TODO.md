@@ -4,7 +4,7 @@
 
 | # | 事项 | 状态 |
 | --- | --- | --- |
-| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施 |
+| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施；2026-10-20 方案 B（全量快照恢复）立项并批准（§12 全部按推荐），已实施（P1～P5） |
 | D2 | SyncBus 有限投递的兜底 | 维护者 2026-10-15 决定 A，已实施 |
 | D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 维护者 2026-10-15 决定 A，已实施 |
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
@@ -17,12 +17,17 @@
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
+| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），已实施（2026-10-20；前后 benchstat 由维护者夜间统一跑） |
+| D15 | 合服（把一个服并入另一个服） | 提案，待维护者评审（2026-10-20，新用户试用第八轮） |
+| D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 待维护者决定（2026-10-20，新用户试用第八轮） |
+| D17 | 全服邮件的内置投递策略 | 待维护者决定（2026-10-20，新用户试用第八轮） |
+| D18 | 业务时区与“业务日”边界 | 待维护者决定（2026-10-20，新用户试用第八轮） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
 ## D1 Lockstep 历史的保留与过期策略
 
-**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）不做，等有具体游戏需求再定。
+**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）当时不做；**维护者 2026-10-20 决定立项**（恢复方式做成 Match 选项 catchup / snapshot / auto，快照来源由业务经接口提供），设计见 [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)（维护者 2026-10-20 批准，§12 十三个决定点全部按推荐）。**方案 B 已实施（P1～P5）**，结果见下文“方案 B 实施结果”。
 
 **实施结果**：
 - `MatchConfig.HistoryRetainFrames` 默认 `DefaultHistoryRetainFrames` = **3600 帧**（60Hz 下 60 秒、30Hz 下 120 秒；依据：重连窗口按 60 秒、常见逻辑帧率上限 60Hz 换算，10 席 × 8 字节输入约 1.5MB / 局）。`RetainFullHistory`（-1）显式关闭，退回宿主手动 `TrimHistory` / `TrimHashReports`；正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64（Sequencer 视为仍在线的落后量，同时覆盖一整页追帧与最大冗余深度），不满足时 `NewMatch` 返回 `ErrMatchConfigInvalid`。
@@ -31,7 +36,16 @@
 - 客户端表现统一为“追帧失败、交由业务决定踢出或重开”，不自动重同步：Go `FrameAssembler.Ingest` 返回 `*CatchupUnservableError`、`robot.LockstepBot` 终止；C# `LockstepClient` 抛 `LockstepCatchupUnservableException` 并终止实例。
 - 一并修复：起点 0 原先绕过越界检查，裁剪后从 0 追帧会得到一段有洞的帧流且无错误。
 
-说明与证据见 [Sync 使用指南](../framework/guide/04-sync.md#追帧越界明确失败不自动重同步)、[SYNC-OPTIMIZATION 末节](../framework/SYNC-OPTIMIZATION.md#lockstep-自动保留与追帧失败通知2026-10-15)。仍待：真实网络下断线超过窗口的端到端演练（见 [KNOWN-LIMITS](KNOWN-LIMITS.md)“Lockstep历史”）。
+说明与证据见 [Sync 使用指南](../framework/guide/04-sync.md#越界的处理按恢复方式区分)、[SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md#lockstep-自动保留与追帧失败通知2026-10-15)。上面的“越界即失败”现在只是 catchup 模式（没配快照来源时的缺省）的行为；C9 已升 v2。
+
+**方案 B 实施结果**（2026-10-20，P1 `f33e1b01` / `a02c3999`、P2 `69fa9e79`、P3 `f03a6602`、P4 `8781b32a`、P5 文档与 detached 计数）：
+- `MatchConfig.Recovery`（catchup / snapshot / auto；零值在配了 `Snapshots.Provider` 时为 auto，没配仍是 catchup，现有工程行为不变）与 `SnapshotConfig`（阈值缺省 0、上限 4 MiB / 硬上限 64 MiB、分块 16 KiB、每 Tick 64 KiB / 只准入 16 KiB、取快照 2s、钉住缺省一个窗口）。
+- 业务快照来源 `SnapshotProvider`：Match 自己的 goroutine 调用、`Tick` 不等、每局至多一次在途、多会话共享；快照以 CA 01 分块经可靠通道下发（SHA-256 摘要 + 可选状态 hash），之后续发历史页；恢复期间钉住历史；失败通知 C9 v2 带原因（history_trimmed / snapshot_unavailable / snapshot_too_large / recovery_expired）。
+- Go `FrameAssembler.Receive` / `ResumeAfterSnapshot`、`robot.LockstepBot.Restore`；C# `LockstepClient` 的 `restore`；校验失败一律终止、不自动重试。
+- 指标 `lockstep.snapshot.total{reason}` / `bytes.total` / `failed.total{reason}`（含维护者 2026-10-20 追加的 `detached`）。
+- 验收：包内与真实回环 TCP、`Example_snapshotRecovery`、MOBA 十客户端 KCP 长断线恢复、生成工程 C# 端到端、toxiproxy 限速演练（嵌入 TCP 两档恢复；独立 Gate 慢链路上大快照被断开循环）。
+- 已做（2026-10-20）：MOBA 持久对局 `Room` 接快照来源（已提交门 `MatchConfig.CommittedFrame`，设计 §15）。
+- 未做 / 后续：独立 Gate 写出回执；客户端上传快照；Unity / IL2CPP 实测。剩余边界见 [KNOWN-LIMITS](KNOWN-LIMITS.md#lockstep)，现行说明见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。
 
 **原登记（2026-10-15）**：宿主不裁剪则内存随对局长度线性增长，裁得太激进则断线较久的玩家无法追帧，且“追不上时怎么办”没有框架级约定；可选 A 维持现状 + 文档、B 自动裁剪 + 全量重同步（需状态快照来源）、C 只加自动裁剪 + 明确错误。
 
@@ -204,15 +218,15 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D9 DAO 库名不随配置、`_id` 是编码后的 EntityID
 
-**状态：维护者 2026-10-16 决定 B，已实施（`a068be37`）；2026-10-20 决定实施方案 A 的修订版（代码里写逻辑库名，部署时映射成物理库名），已实施。** 下文先写修订版 A 的结果，再保留方案 B 的实施记录与原始登记。
+**状态：维护者 2026-10-16 决定 B，已实施（`a068be37`）；2026-10-20 决定实施方案 A 的修订版（代码里写逻辑库名，部署时映射成物理库名），已实施；同日对映射规则再定两条：回调与配置冲突拒绝启动（选 B），没有映射回退到逻辑名并告警（选 A，保持），已实施。** 下文先写修订版 A 的结果，再保留方案 B 的实施记录与原始登记。
 
 **修订版 A 实施结果（2026-10-20）**：
 
 - **常量文件**：DAO 生成器扫描全部持久 DAO 的 `db=`（逻辑名，解析时校验：小写字母开头，小写字母、数字、下划线，不是系统库名；规则与运行期 `dataengine.ValidLogicalDatabaseName` 相同，因生成器不得 import 运行时而写了一份，不一致时生成物 `init` 里的 `DeclareDatabases` 会 panic），在 DAO 包（`db/`）生成 `gen_databases.go`：每个逻辑库一个常量（`DatabaseMain = "main"`），`init` 里 `dataengine.DeclareDatabases` 登记（含是否有 DAO 按 sid 分库）；`<Dao>DBName` 引用它。文件名沿用 DAO 生成器的 `gen_*` 命名（孤儿清理按这个前缀与生成头识别），没有持久 DAO 时按孤儿删除。
 - **骨架**：`roost add dao` 写 `db=main`，game-demo 同样；生成配置写 `dataengine.databases: {main: <project_db>}`（`daoDatabaseName` 规则不变），新工程开箱的物理库与方案 B 相同。
-- **映射入口与冻结**：配置 `dataengine.databases`（Mod 配置声明，`--check-config` / doctor 同源）与 `kitdataengine.WithDatabaseResolver`。DataEngine Mod **Init** 时合成并冻结（`dataengine.NewDatabaseMap`）：回调对每个声明的逻辑库调用一次；优先级回调非空结果 > 配置 > 逻辑名本身；回调覆盖配置时启动日志告警。运行中只查表。表以能力 `dataengine.databases` 发布，并在 Provide 时绑定给 Remote 的 Mongo 存储（Remote 存储先于 DataEngine Provide、写入只在 Start 之后，所以第一次写之前已绑定；wiring 装配下未绑定拒绝写）。
-- **没有映射时**：物理名就是逻辑名本身（启动日志告警）。理由：现有 `DefaultDatabase` 回退只针对空库名（引擎侧兜底到 DataEngine 自己的库，生成 DAO 走不到），框架对“没有部署信息”的取舍是给出确定、可预期的名字而不是拒绝；identity 与引入映射前的行为一致（已有工程 `db=<工程名>` 的数据位置不变），测试夹具与工具不配映射照常工作；新工程总有生成配置里的映射，不会落到 `main`。代价：手写配置删掉映射会落到名为 `main` 的库（只有告警），记入 KNOWN-LIMITS。未采用“声明的逻辑库必须映射，否则拒绝启动”：所有测试、夹具、工具都要配映射，且对已有工程是一次破坏性升级。
-- **一次校验**（失败拒绝启动并点名）：配置里未声明的逻辑名；物理名为空、含 Mongo 禁止字符、是系统库、按 sid 分库时加 `_<sid>` 超过 63 字节（按本进程 sid 计算）；两个逻辑库映射到同一物理库（大小写不同也算）；回调错误。**不提供“允许共用物理库”的开关**：两个逻辑库里同名集合的文档会混在一起，改其中一个映射时也无法单独搬走；现在没有需要它的场景，以后加开关是放宽、不破坏兼容，反过来则不然。二进制一个逻辑库都没声明时（工程还没有 DAO）无从判断拼写，只告警。
+- **映射入口与冻结**：配置 `dataengine.databases`（Mod 配置声明，`--check-config` / doctor 同源）与 `kitdataengine.WithDatabaseResolver`。DataEngine Mod **Init** 时合成并冻结（`dataengine.NewDatabaseMap`）：回调对每个声明的逻辑库调用一次。**同一逻辑库只能有一个来源**（维护者 2026-10-20 选 B）：配置没写的逻辑库取回调返回的非空物理名；配置写了的，回调返回空串（沿用配置）或与配置相同的值都允许，返回不同的非空值拒绝启动，报错点名逻辑库与两个值。先前“回调覆盖配置、启动日志告警”的行为已删除：两处给出不同的名字时静默选一个，等于让数据落到运维以为的库之外。冲突只能在 Init 判断——回调是代码、只在 Init 调用，`--check-config` / doctor 拿不到它，只校验配置本身。运行中只查表。表以能力 `dataengine.databases` 发布，并在 Provide 时绑定给 Remote 的 Mongo 存储（Remote 存储先于 DataEngine Provide、写入只在 Start 之后，所以第一次写之前已绑定；wiring 装配下未绑定拒绝写）。
+- **没有映射时**（维护者 2026-10-20 选 A，保持现状）：物理名就是逻辑名本身（启动日志告警）。理由：现有 `DefaultDatabase` 回退只针对空库名（引擎侧兜底到 DataEngine 自己的库，生成 DAO 走不到），框架对“没有部署信息”的取舍是给出确定、可预期的名字而不是拒绝；identity 与引入映射前的行为一致（已有工程 `db=<工程名>` 的数据位置不变），测试夹具与工具不配映射照常工作；新工程总有生成配置里的映射，不会落到 `main`。代价：手写配置删掉映射会落到名为 `main` 的库（只有告警），记入 KNOWN-LIMITS。未采用“声明的逻辑库必须映射，否则拒绝启动”：所有测试、夹具、工具都要配映射，且对已有工程是一次破坏性升级。
+- **一次校验**（失败拒绝启动并点名）：配置里未声明的逻辑名；物理名为空、含 Mongo 禁止字符、是系统库、按 sid 分库时加 `_<sid>` 超过 63 字节（按本进程 sid 计算）；两个逻辑库映射到同一物理库（大小写不同也算）；回调与配置对同一逻辑库给出不同的物理名（只在 Init）；回调错误。**不提供“允许共用物理库”的开关**：两个逻辑库里同名集合的文档会混在一起，改其中一个映射时也无法单独搬走；现在没有需要它的场景，以后加开关是放宽、不破坏兼容，反过来则不然。二进制一个逻辑库都没声明时（工程还没有 DAO）无从判断拼写，只告警。
 - **唯一解析点**：`MongoStore.physicalDatabase`（单条 / 批量投影、冷加载、墓碑）、`MongoCommitter.dataDB`（Remote 写 DAO 文档）、`kitdataengine.DAOCollection` / `Databases` / `LoadDatabaseMapFile`（业务与工具：game-demo 公会号序列、送礼收件人检查、`cmd/sidmove players`、`cmd/schemamigrate`）。控制库（`dataengine.database`、`remote_entity.mongo.database`、saga 库、lease fence 的库）是配置给出的物理名，不经映射。守卫：根包 `TestNoMongoDatabaseOpenedWithALogicalDAOName`（产品代码与模板里 `.Database(` / `.DatabaseForSid(` 的参数不得直接是 `DbName()` / `<Dao>DBName` / `db.Database*` / `Key.Database`，除非经 `.Physical(`；只看同一行）。
 - **WAL**：只记逻辑名（DocumentKey 与 Remote 提交原样写入；Remote 提交的 digest 覆盖库名，投影前改写会让发布路径的重放校验失败，所以只在写 Mongo 的那一刻换算）。可行性评估结论：可行。DataEngine 启动在打开 WAL（持有 `writer.lock`）之后、构造 Projector（构造即回放）之前读 WAL 目录的 `databases.json`，用 `WAL.HasUnacknowledgedRecords`（读到第一条未确认记录即停）判断有无未投影记录；有且上次映射里任一逻辑库的换算结果变了（文件不存在按 identity 比较）就以 `ErrDatabaseMappingChanged` 拒绝启动、不改文件，否则原子写入本次映射。`walinspect` 与 `sidmove wal-drained` 的报告带上它。改映射的步骤写进 [PLAYER-MIGRATION §5](../framework/PLAYER-MIGRATION.md#5-改-dao-库名映射)（停写 → 排空 WAL → 迁移 → 改映射），SCHEMA-MIGRATION 指向它。
 - **未采用的方案**：①原登记的方案 A（`db=` 省略时取 `dataengine.database` 或新键 `dataengine.business_database`）：仍是“一个工程一个业务库”，多个逻辑库无法分别部署，且把 DAO 数据和 DataEngine 系统集合的库绑在一起；②运行中按需调用回调（懒解析）：投影热路径上做不可控的业务调用，同一逻辑库在进程生命周期内可能得到不同结果；③在 Nest 提交时把逻辑名换成物理名写进 WAL：WAL 与部署绑定，改映射后旧记录无法按新部署解释，且破坏 Remote 提交的 digest；④给 Mongo 客户端整体套一层改名包装：DataEngine / Remote / saga 自己的控制库也会被误映射；⑤允许共用物理库的开关：见上。
@@ -367,3 +381,193 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 **需要拍板**：1）是否采用 B，包括“删字段 / 改 `nopersist` 也必须先迁移”；2）A 的显式名用 `bson` 标签还是 `dao:"key=..."`；3）B 是否递归校验嵌套子文档（建议先只校验顶层与嵌套类型的直接字段）。
 
+## D14 AOI 观察者改为 playerId、视野半径按观察者配置
+
+**状态：维护者 2026-10-20 决定 A1 + B1，已实施（2026-10-20，见下文“实施结果”）。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
+
+### 维护者决定（2026-10-20，六项均按推荐）
+
+1. observer 编号：**A1**，observer = playerId，观察者带 `self`（玩家自身实体 ID，0 表示没有）。A2（视野 ID）不做，将来需要多视野时在 A1 上加。
+2. 入口形状：`Enter` / `Move` / `Leave` 直接改成两个 ID 参数，不保留旧入口（未上线，不做兼容）。
+3. 事务内入口换算：`InterestConfig` 新增 `ObserverOf func(entityID int64) (playerID int64, ok bool)`，缺省用 `GetUniqueIDFromEntityID`，业务可覆盖（玩家控制英雄 / 载具时视点实体不是 Player）。
+4. `InterestConfig.Session`：删除（A1 下 observer 就是会话 ID，多对一隐患随之消失）。
+5. 半径与距离分档：**B1，LOD 层级与视野大小分开配置**（2026-10-20 维护者补充：视野变化一般来自客户端的 LOD 请求，请求带 **LOD 层级**和**视野大小**两项）。`AOIConfig` 新增 LOD 层级表，每一层是一组 `Bands`（例如 low / medium / high 各自的距离分档）；视野大小单独配置允许范围 `[MinViewRadius, MaxLeaveRadius]` 与量化步长，`EnterRadius` 取请求的视野大小、`LeaveRadius` = 视野大小 + 配置的滞回量（客户端只报一个数，进出半径由服务端推出）。启动期按 `MaxLeaveRadius` 算 `worstObserverBlocks` 预算，超过即拒绝；每层的 `Bands` 在启动期校验（递增、不超过 `MaxLeaveRadius`）。观察者记自己当前的 LOD 层级与视野大小，`resubscribe`、`evaluatePair`（进入 / 保持 / 分档）、`evaluateObserver`、`AOICluster` 镜像方框都读观察者的值。`MaxVisible` 暂保持全局。
+6. 运行期切换：**客户端 AOI / LOD 请求带 `(lodLevel, viewRadius)`，直接生效**（2026-10-20 维护者补充后修订，取代“提供排队版”）。①LOD 层级只能选配置里的层；视野大小由服务端夹到允许范围并按步长量化（防止改过的客户端拉大视野多看单位、放大订阅与带宽，量化也减少细碎请求引起的重订阅）；②由接入层收到请求后调用 `Interest.SetObserverView(playerID, ObserverView{LOD, Radius})`，与移动请求同样串行处理，不排队、不走提交门（不改业务状态，没有回滚问题）；③同一玩家请求限速（缺省如每秒至多一次，可配置），超频拒绝并计数；量化后与当前值相同的请求不触发重评；④视野变大时新入范围的单位按进入下发全量，变小时超出的按离开退订；LOD 层级变化只按新 `Bands` 重新分档、重发视图，不改订阅块；两者都复用移动时的 `resubscribe` + 完整重评。排队版暂不做：将来有“Buff 改视野”的玩法时，业务在提交后发一次请求，或再加排队版。
+
+**实施时一并补的两点（评审补充）**：①新增“只看、不被看”的观察者入口（观战 / GM 视角，`self = 0`），A1 下与 `Enter`、`Show` 并列；②属于 sync 三大块的公开契约调整，按维护手册对 `scripts/perf/sync-aoi` 与 `policy` 包 AOI 基准做前后 benchstat。实施顺序按 roost-coding 纯重构流程：先补现有行为的回归，再改签名，最后补新行为的红绿用例。
+
+### 实施结果（2026-10-20）
+
+按 roost-coding 纯重构流程三步提交：先在旧代码上补观察者编号回归（`TestObserverAndSubjectIDSpacesStayApart` 只对 Manager 的订阅表断言，D14 前后断言一字未改；`TestSessionManyToOneDropsASharedSubscription` 在旧代码上证实多对一隐患属实，随 `Session` 删除），再改签名与数据结构、全部调用方跟随，最后补新行为用例并逐项变异验证。提交见 CHANGELOG `[Unreleased]` 本条。
+
+| 决定 | 落点 |
+| --- | --- |
+| 1 A1 | `AOI` / `AOICluster` 的观察者键是玩家 ID，`interestObserver.self` 是自身实体；自排除三处（`evaluatePair`、`evaluateObserver` 候选、`aoi_block.go` `evaluateObserved`——草案的依赖点清单漏了覆盖块这一处）都比 `self`；`self` 改变时连同覆盖可见集重评 |
+| 2 入口 | `Enter(playerID, entityID, at, view)`、`Move(playerID, entityID, to)`、`Leave(playerID, entityID)`，旧入口删除 |
+| 3 ObserverOf | `InterestConfig.ObserverOf`，缺省 `DefaultObserverOf`（`GetUniqueIDFromEntityID`，0 视为不是观察者）；入队时换算一次存进事实 |
+| 4 Session | 删除；会话 ID = 观察者 ID |
+| 5 B1 | `AOIConfig.LODs`（每层一组 Bands，与 `Bands` 二选一）、`MinViewRadius` / `MaxLeaveRadius` / `ViewRadiusStep`；滞回量取缺省视野的 `LeaveRadius − EnterRadius`；`worstObserverBlocks` 按 `MaxLeaveRadius`；每层分档启动期校验；`MaxVisible` 保持全局 |
+| 6 运行期 | `Interest.SetObserverView(playerID, ObserverView{LOD, Radius})` 直接生效、不排队不走提交门；`ViewChangeInterval` 缺省 1 秒，超频 `ErrObserverViewRate`，未配置层级 `ErrObserverView`，均计 `entitysync_interest_view_rejected_total{reason}`；同值不重评、不占限速；返回生效的视野 |
+| 评审 ① | `Watch` / `MoveView` / `Unwatch`（`self = 0`） |
+| 评审 ② | benchstat 由维护者在夜间性能测试统一跑（基准名与命令见实施汇报） |
+
+与草案的偏差：① 滞回量没有单独的配置项，取缺省视野的 `LeaveRadius − EnterRadius`（规则只声明一次，零值配置行为不变）；② 视野大小零值 = 缺省视野，范围零值 = 只允许缺省视野，`EnterRadius` 必须落在量化网格上；③ `Bands` 现在也检查不超过 `MaxLeaveRadius`；④ 新增 `MoveView`（只移动视点）与 `Interest.ObserverView` 读取当前视野，demo 重连时沿用玩家上次请求的视野。
+
+接入层：game-demo 新增 `scene_view`（消息 10025）→ `HandleSceneView` → `Scene.SetView` → `SetObserverView` + `Apply`，错误码 100022 / 100023；框架接入层（`game/playeraccess`、生成器）不提供这个消息：LOD 表、视野范围与错误码都是业务的，与 `move` 一样写在业务端点里。
+
+### 现状（实施前，已核对当时源码）
+
+**observer 与 subject 共用实体 ID，session 在最后一步换算。**
+
+- `InterestConfig.Session` 的注释写明：观察者、目标、关系都按实体 ID 编号，只在交给 Manager 时经 `Session` 换成会话 ID 一次；不设 `Session` 时会话 ID 就是观察者 ID。
+- `Interest.Enter(id, at)` 用同一个 `id` 先 `aoi.AddSubject`、再 `aoi.AddObserver`，并 `self.Set(id, []int64{id})`。`Interest.Move` 用同一个 `id` 先 `MoveSubject` 再 `MoveObserver`。
+- demo 场景（`demo/internal/service/game/scene.go.tmpl`）：`Join` 用 `subject.ID()`（完整 EntityID）调 `Enter`，`sessionFor` 用 `GetUniqueIDFromEntityID` 换成 playerId 作会话；`SetTeam` 把成员 playerId 转成实体 ID 后 `team.Set(observer, peers)`。
+- 事务内入口的观察者都取 `e.ID()`：`QueueMove(e, at, observer=true)`、`QueueSpatial`、`QueueRelation` / `QueueRelationDelta`（`interest_queue.go` 应用时 `fact.id`）。
+
+**“observer 可以是任意实体”只是名义抽象。** `Interest` 只有两种登记入口：`Enter`（既看又被看）和 `Show`（只被看），没有“只看”的入口；仓库里所有 `Enter` 调用方登记的都是有会话的玩家：demo 场景是玩家实体（会话 = playerId）；`scripts/perf/sync-aoi` 与 `codegen/internal/entity/testdata` 的 nestgame / dataengine 夹具是模拟玩家，先 `OpenSession(SessionID(实体 ID))` 再 `Enter`，不设 `Session`（会话 ID 直接等于实体 ID），其余单位一律 `Show`。会被订阅下发的 observer 必须对应一个会话，而会话按玩家开。
+
+**依赖“observer 与 subject 同一 ID 空间”的 4 处：**
+
+1. `aoi.go` `evaluatePair`：`if observer.id == subject { return }`（空间来源不订阅自己）。
+2. `aoi.go` `evaluateObserver`：入场候选筛选 `subject != observer.id`。
+3. `interest.go` `Enter`：`self.Set(id, []int64{id})`。
+4. `interest.go` `Leave`：`relation.Clear(id)`（作为观察者）与 `relation.Forget(id)`（作为目标）用同一个 `id`。
+
+`AOI` 与 `AOICluster` 的注释没有写这条约定（`AOICluster` 只写“ids are cluster-global”）。绕过 `Interest` 直接调用 `AOI.AddObserver` / `AOICluster.AddObserver`、把会话 ID 或 playerId 当 observer 时，第 1、2 处比的是两种 ID：自己不被排除，实体 ID 数值恰好等于该 playerId 的目标会被误当成自己而看不见。仓库里目前没有这样的调用方。
+
+**订阅合并键与多对一的隐患。** `Interest.held` 按 `(observer, subject)` 记来源；`Manager` 侧一个来源对一个 `(session, subject)` 只记一份订阅（`SubscriptionSource.Unsubscribe`：“释放本来源对 (session, subject) 的订阅”），而整个 `Interest` 是一个来源。所以两个 observer 经 `Session` 映射到同一会话、都看见同一目标时，其中一个看不见了就会 `Unsubscribe`，把另一个也需要的订阅一起退掉。`Session` 的注释没有禁止多对一，现在没有这样的调用方。
+
+**半径全局一份。** `AOIConfig.EnterRadius`、`LeaveRadius`、`Bands`、`MaxVisible` 对所有观察者相同。使用点：`aoi.go` `resubscribe`（以 `LeaveRadius` 为半边长的方框决定订阅哪些块）、`evaluatePair`（进入用 `EnterRadius`、保持用 `LeaveRadius`、分档用 `Bands`、容量用 `MaxVisible`）、`evaluateObserver`（候选按 `EnterRadius` 筛选）、`aoi_cluster.go` `placeObserverLocked`（边界镜像的方框按 `LeaveRadius`）、配置期 `AOIConfig.validate` 的 `worstObserverBlocks`（按全局 `LeaveRadius` 算单个观察者最多订阅的块数，超过 `MaxObserverBlocks` 启动即拒绝——注释强调“启动期拒绝，不在生产里第一次遇到”）。
+
+### 问题
+
+1. **概念错位**：observer 实际是“某个玩家的视野”，却以实体 ID 编号；自排除、self 关系与退场清理都靠“同一个号既是实体又是视野”成立，约定只写在 `Interest` 和 demo 里，`AOI` / `AOICluster` 单独使用时容易用错。
+2. **视野距离只能全局一个**：不同玩家的视距设置、设备档位、玩法（侦察类 buff、观战、GM 视角）无法各自不同。
+
+### 方向一：observer 用什么编号
+
+- **A1 observer = playerId（建议）**：观察者表按 playerId 记，观察者带上“自己的实体”（`self`，玩家自身实体 ID；为 0 表示没有，例如观战）。
+  - 自排除改为 `subject == observer.self`（上面第 1、2 处）。
+  - `Session` 变成恒等：observer 就是会话 ID，`held` 的键自然是 `(session, subject)`，上面的多对一隐患随之消失；demo 的 `sessionFor` 去掉。
+  - 关系源的 observer 改为 playerId、subject 仍是实体 ID，语义是“玩家关心哪些实体”。demo 的 `SetTeam` 变简单：observer 直接用成员 playerId，只有 subject 要 `BuildEntityID`。
+  - 视点不再绑死在玩家实体上：玩家控制英雄、载具时，observer 的位置取被控制实体的位置即可。
+  - 代价：observer 只能是有会话的玩家；“非玩家也要看”（NPC 感知）不走这套 Interest（它本来就是给同步下发用的）。
+- **A2 视野 ID（摄像机抽象）**：observer 是独立的视野，带 `session` 与可选的跟随实体。最通用（一个玩家多个视野、观战、小地图远景），但要多做两件事：合并表按 `(session, subject)` 记、来源里区分各视野的空间来源；同一目标在两个视野落在不同距离档时，要在视野之间选视图。现在没有多视野需求；将来需要时可以在 A1 上加（一个 playerId 下挂多个视野）。
+- **A0 保持现状**：只在 `AOI` / `AOICluster` 注释里写明“observer 与 subject 同为实体 ID”，并可加构造期检查。
+
+### 方向二：半径放在哪里
+
+- **B1 每个观察者自己的视野参数，配置给缺省值与上限（建议）**：
+  - 观察者新增 `EnterRadius` / `LeaveRadius`；`AOIConfig` 的同名字段作缺省值，新增 `MaxLeaveRadius` 作上限。
+  - 预算检查保持在启动期：`worstObserverBlocks` 改按 `MaxLeaveRadius` 计算；单个观察者登记或修改时校验 `0 < Enter ≤ Leave ≤ MaxLeaveRadius`，不合法返回 `ErrInterestConfig`，不在生产里第一次超预算。
+  - 所有使用点改读观察者自己的值：`resubscribe` 方框、`evaluatePair`、`evaluateObserver` 候选筛选、`AOICluster.placeObserverLocked` 镜像方框。
+  - 正确性不变：目标移动时只评估登记在旧、新块上的观察者（`observersAt`），而每个观察者按自己的半径订阅块，大视野的观察者自然登记在更多块上。订阅本来就是单向的，A 看得见 B 不要求 B 看得见 A。
+  - 运行期改半径：新增“设置视野参数”的操作，效果同 `MoveObserver` 带覆盖变化（`resubscribe` + 完整重评）。
+  - 代价：每个观察者多两个 int64；视野大的观察者订阅更多块（由上限约束）；`AOICluster.crossesCapacityLocked` 不涉及半径，不受影响。
+- **B0 保持全局**：需要不同视距时按视距分多个 `Interest` / `AOI`。代价是同一张地图的实体要登记多份。
+
+### 改动点（A1 + B1）
+
+| 位置 | 改动 |
+| --- | --- |
+| `framework/sync/entitysync/policy/aoi.go` | `interestObserver` 加 `self`、`enter`、`leave`；`AddObserver` / `addObserverUnbounded` 接收它们；`resubscribe`、`evaluatePair`、`evaluateObserver` 改读观察者的值，自排除改比 `self`；`AOIConfig` 加 `MaxLeaveRadius`，`validate` 按它算预算；类型注释写明 observer 键是 playerId |
+| `framework/sync/entitysync/policy/aoi_cluster.go` | `AddObserver` / `MoveObserver` 同步签名；镜像方框按观察者自己的 `LeaveRadius`；注释写明键约定 |
+| `framework/sync/entitysync/policy/interest.go` | `Enter` / `Move` / `Leave` 区分 playerId 与实体 ID；`self` 关系改为 `Set(playerID, [entityID])`；`Leave` 用 playerId 做 `Clear`、实体 ID 做 `Forget`；`Session` 按拍板项处理；`Resubscribe` / `Visible` 参数改为 playerId |
+| `framework/sync/entitysync/policy/interest_queue.go`、`spatial_component.go` | `QueueMove(observer=true)`、`QueueSpatial`、`QueueRelation` / `QueueRelationDelta` 的观察者由 `e.ID()` 换成 playerId（换算方式按拍板项）；新增排队版的视野参数修改 |
+| `demo/internal/service/game/scene.go.tmpl` | `Join` / `Move` / `Leave` 传两个 ID；去掉 `sessionFor`；`SetTeam` 的 observer 改用 playerId |
+| `scripts/perf/sync-aoi`、`codegen/internal/entity/testdata`（nestgame、dataengine 夹具）、`policy` 包测试 | 跟随新签名；自排除、关系、`Leave` 清理、按观察者半径的进出与预算拒绝补回归 |
+| 文档 | `docs/framework/guide/04-sync.md`、`docs/framework/INTEREST-BLOCK-AOI.md`、`docs/framework/impl/04-sync.md`、CHANGELOG（公开 API 变化，未上线不做兼容） |
+
+### API 变化（A1 + B1，草案）
+
+| 现在 | 改后（草案） |
+| --- | --- |
+| `Interest.Enter(id, at)` | `Interest.Enter(playerID, entityID int64, at spatial.Point, view ObserverView)`；`view` 为零值时取 `AOIConfig` 缺省 |
+| `Interest.Move(id, to)` | `Interest.Move(playerID, entityID int64, to spatial.Point)`（同时移动目标与视点） |
+| `Interest.Leave(id)` | `Interest.Leave(playerID, entityID int64)` |
+| `Interest.Resubscribe(observer)` / `Visible(observer)` | 参数改为 playerId |
+| `QueueMove(e, at, observer)` / `QueueSpatial(...)` / `QueueRelation(e, ...)` / `QueueRelationDelta(e, ...)` | 签名不变，观察者由 `e` 换算成 playerId |
+| `RelationSource.Set(observer, subjects)` 等 | 签名不变，`observer` 语义改为 playerId，`subjects` 仍为实体 ID |
+| `AOI.AddObserver(id, at)` / `AOICluster.AddObserver(id, at)` | `AddObserver(playerID, self int64, at spatial.Point, view ObserverView)` |
+| — | 新增 `ObserverView{EnterRadius, LeaveRadius int64}`、`AOIConfig.MaxLeaveRadius`、`Interest.SetObserverView(playerID, view)` 与排队版 |
+| `InterestConfig.Session` | 按拍板项删除或保留 |
+
+### 建议
+
+A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`resubscribe`、`evaluatePair`），分两次会把这些签名改两遍。`Bands` 与 `MaxVisible` 先保持全局，等有具体玩法需要时再按观察者配置。属于 sync 三大块的公开契约调整，按 roost-coding 纯重构流程实施：先补现有行为的回归，再改签名，最后补新行为的红绿用例。
+
+### 需要拍板
+
+1. observer 编号：A1（playerId）、A2（视野 ID）还是 A0（保持现状、只补注释）。
+2. `Enter` / `Move` / `Leave` 的新形状：直接改成两个 ID 参数（上表），还是新增 `EnterPlayer` 等并删除旧入口。
+3. 事务内入口从实体换算 playerId 的方式：`InterestConfig` 新增 `ObserverOf func(entityID int64) (playerID int64, ok bool)`（业务可控，非玩家返回 false），还是固定用 `GetUniqueIDFromEntityID` 并只接受玩家这一种实体类型。
+4. `InterestConfig.Session`：A1 下删除（observer 就是会话 ID），还是保留作 playerId → 会话的换算（为将来会话 ID 不等于 playerId 留口）。
+5. 半径：是否采用 B1（每观察者可配，`MaxLeaveRadius` 作启动期预算上限）；`Bands`、`MaxVisible` 是否也按观察者配置（建议先不）。
+6. 运行期修改视野参数是否需要排队版（事务内调用走提交门），还是只提供政策阶段外的直接调用。
+
+## D15 合服（把一个服并入另一个服）
+
+**状态：提案，待维护者评审，未实施。** 登记：2026-10-20 新用户试用第八轮（游戏服务器专家视角）；源码基线 `8ca14004`。设计全文：[FEATURE-2026-10-20-server-merge-alias.md](FEATURE-2026-10-20-server-merge-alias.md)。
+
+**现状**：迁服（[PLAYER-MIGRATION](../framework/PLAYER-MIGRATION.md)、game-demo `cmd/sidmove`）搬的是同一个 sid，玩家绑定不变，只做 WAL 排空 / 单实例锁 / 玩家文档比对三项检查；玩家与服的绑定只在 account 的 `Role.ServerID` 与会话 sid，Gate 与 game 按会话 sid 静态判断。阻碍：slot 键 `(accountID, serverID)` insert-only，同账号两服各有角色时改绑必然冲突；没有改绑接口；一个进程只认一个 sid（会话比对、`dbscope=sid` 库名带本进程 sid、单实例锁、World UniqueID）。
+
+**可选方向**：
+- **别名合服（推荐）**：离线（A、B 停服排空），按 sid 独占的数据由工具搬进 B 的库，account 记录“A 并入 B”，会话的承载服解析为 B；角色身份与 slot 不变，game 进程与三大块不改，可回退。改动在 account 与两处读会话 sid 的消费者，外加 `accountctl` 子命令与 `cmd/sidmerge`。
+- 一个进程服务多个 sid：改动落在接入、单实例锁、按 sid 分库、多 World 共存，成本高。
+- 物理合服（改绑 `ServerID`）：先要决定双角色怎么处理，不可回退。
+
+**审查对原提案的更正与补充**（设计 §1.4、§6.3）：
+- D9 之后物理库来自每个服务配置的 `dataengine.databases`：“玩家文档不用搬”只在 A、B 把每个非按 sid 逻辑库映射到同一 Mongo 上的同一物理库时成立；建议不同则拒绝合服。`sidmerge` 要分别用 A、B 的配置换算源库与目标库。D9 的映射不能代替搬迁（映射按逻辑库、加本进程 sid，两个逻辑库不得共用物理库），合服也不改 B 的映射、不触发 `ErrDatabaseMappingChanged`。
+- `wal-drained` 不覆盖 outbox：停机时已暂存的 effect 留在 Mongo，认领不按 sid 过滤；A、B 不共用控制库时 A 剩下的 effect 没人发。前置条件要加“A 的 outbox 为空或共用控制库”。
+- 持久化的 sid（如赠礼 saga 的 `FromSID`）使“全部 saga 终态”成为必需条件；发往 A 的持久总线消息需要清单（哪些主题持久尚未逐个核对）。
+- 行号、`_id` 冲突举例、审计方式、错误码的更正见设计 §1.4。
+
+**需要拍板**：设计 §10 的八项（字段命名、多次合服拍平、误启动自检、源库处置、工具划分、原服标识显示，以及审查补充的“非按 sid 逻辑库位置不同时拒绝”与“outbox 检查放在哪里”）。
+
+## D16 单个实体 / 玩家的运维入口
+
+**状态：待维护者决定。** 登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
+
+**现状（已核对）**：框架的 admin 命令只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`，没有针对单个实体 / 玩家的命令；代码层只有 `ManagerAccess.Unload`。投影按版本条件写：`Put` / `Patch` 的过滤条件是 `_id` + `_version == expected`（`framework/dataengine/engine/mongo_store.go:222-224`），成功后写 `_version = next`、`_schema`、`_last_tx`。所以运行期直接改 Mongo 的结果是确定的、按设计的：
+- 只改字段、不动 `_version`：版本仍匹配，下一次投影按内存状态覆盖改动（改动静默丢失）。
+- 恢复旧备份（`_version` 回退）：版本不匹配，`ErrProjectionConflict` fatal，进程 fence；重启时启动投影恢复再次冲突、起不来，直到人工处理。
+
+这不是投影的缺陷：内存是权威，第三个写者就是 fail-stop 要拦的情形。缺的是**安全的运维入口**与文档：回档、补偿改档在运营里是常规操作。本次审查已把“运行期不得直接改权威集合”与冲突的识别 / 处置补进 [guide/03 §2](../framework/guide/03-dataengine.md) 与[维护手册 §4](README.md#4-故障处理)。
+
+**可选方向**：
+- **A 框架提供实体运维命令**：`entity.kick`（关该玩家全部会话）、`entity.unload`（排空该实体投影后卸载、期间拒绝写入）、`entity.inspect`、`entity.restore <id> <doc>`（经 Nest + DataEngine 以一次正常事务整文档写回：进 WAL、版本 +1、可审计）。代价：admin 命令要按实体类型找 Manager 与 DAO、处理 Remote 托管与按 sid 分库，`restore` 要定义 schema 校验与哪些字段可写。
+- **B 只给写法与 runbook**：在线改档写成业务的 GM handler（一条普通 Nest 消息，strict 写入，就是今天的正式链路）；整档恢复走离线流程（停该 sid 进程 → `sidmove wal-drained` → 写回备份文档，`_version` 任意 → 启动后冷加载以库里的版本继续）。代价：每个项目自己写 GM handler；离线恢复要停整个 sid。
+- **C 折中**：框架只做 `entity.kick` 与 `entity.unload`（通用、与业务字段无关），改档 / 恢复按 B。
+
+**建议**：C。踢下线与卸载与业务字段无关，框架做一次各项目继承；改档的字段语义、校验与审计属于业务（参考 `service/account` 的 `ResolvePendingCreation` 把操作者备注写进记录的做法）。
+
+**需要拍板**：1）选 A / B / C；2）选 A 或 C 时命令走现有 admin 鉴权与审计接线，还是要求单独的审批（部署方）。
+
+## D17 全服邮件的内置投递策略
+
+**状态：待维护者决定。** 登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
+
+**现状（已核对）**：`AudienceBroadcast` 的范围是一个服 / 公会 / 全体（`service/mail/types.go:242-246`），投递只经业务提供的 `mail.Deliverer`（`service/mail/store.go:62-77`：没有缺省，“任务队列、首次读取时懒回填、夜间扫描”由部署选择；`Deliver` 按（邮箱、邮件）幂等）；`Broadcast` 为 nil 时拒绝广播（`service.go:167`）。`Service.Deliver`（`service.go:361`）导出给 Deliverer 使用，但 mail 没有“按 scope 列出广播信封”的入口，业务要做懒合并就得自己维护广播索引与每玩家水位。生成骨架原注释“投给每个在线玩家”与契约不符，会引向漏发离线玩家的实现，已修正（CHANGELOG `[Unreleased]`，`TestMailBroadcastSkeletonDescribesTheWholeAudience`）。
+
+**可选方向**：
+- **A 框架提供可选的“存一份 + 懒合并”策略**（例如 `mail.NewLazyBroadcast`）：广播信封按 scope 建索引（有效期、目标条件如注册时间 / 等级由业务谓词给出），每个玩家一个水位，`List` / `Summary` 前或登录时合并到邮箱；骨架缺省仍为 nil。代价：mail 的读路径要多一步合并与一份按 scope 的存储，十万级 scope 的索引大小与过期回收要定。
+- **B 不进框架，给参考实现**：game-demo 或文档给一份懒合并的 Deliverer + 登录钩子写法。代价：每个项目复制一份。
+- **C 维持现状**（只靠修正后的注释）。
+
+**建议**：A，作为可选策略、不改缺省。全服补偿 / 公告是几乎所有长线游戏都有的需求，懒合并要碰 mail 的读路径，业务在包外做不干净；`store.go` 现有的“库不替部署选策略”的取舍保留为缺省 nil。
+
+**需要拍板**：1）选 A / B / C；2）选 A 时目标条件用业务谓词还是固定字段（注册时间、等级）。
+
+## D18 业务时区与“业务日”边界
+
+**状态：待维护者决定。** 登记：2026-10-20 新用户试用第八轮第 4 项；源码基线 `8ca14004`。
+
+**现状（已核对）**：`infra/base/clock` 的业务时钟只有偏移（`time.logic_offset`），包注释把“日 / 周重置”列为业务时钟的用途，但没有业务时区配置，也没有业务日边界工具；文档没有每日重置的推荐写法。业务只能用 `time.Local` 或自己 `LoadLocation`。生成的 Dockerfile 运行层是 `gcr.io/distroless/static-debian12:nonroot`（`codegen/internal/roost/render.go:1364`），生成的 k8s / compose 清单与 `main` 都不设 `TZ`、不嵌入 `time/tzdata`：容器内 `time.Local` 是 UTC，开发机通常是本地时区，同一份代码跨天时刻不同。distroless 镜像是否自带 zoneinfo 本次未在容器内实测（尚未确认），嵌入 `time/tzdata` 可消除这个依赖。
+
+**可选方向**：
+- **A 配置 + 工具**：`time.business_timezone`（缺省 UTC，启动日志打印；生产配置示例写明），`clock` 提供 `BusinessDay(t)` / `NextDayStart(t)`（可带每日重置时刻），生成的 `main` 导入 `time/tzdata`；文档补“存上次重置的业务日，登录 / 首次操作时惰性重置，需要准点推送时用实体定时器”的写法；`glsvet` 对业务包里的 `time.Local` 给提示。代价：多一个配置键与少量 API。
+- **B 只给文档与部署**：文档写推荐写法，生成部署写出 `TZ`。代价：时区仍是进程环境，开发与线上不一致的风险留给部署。
+
+**建议**：A。规则声明一次（配置 schema），运行期加载时强制一次，与业务时钟的单一来源一致；时区不应取决于容器环境变量。
+
+**需要拍板**：1）选 A / B；2）选 A 时缺省 UTC 还是必填。

@@ -200,6 +200,17 @@ func (transport *QUICTransport) SendDatagramBatch(ctx context.Context, session S
 	return nil
 }
 
+// PacesReliableToLink 返回 true：可靠流的发送窗口满时 SendReliable 阻塞（受 ctx 截止时间约束），发送随链路放慢。
+func (transport *QUICTransport) PacesReliableToLink() bool { return true }
+
+// MaxReliableBytes 是 SendReliable 接受的单条上限。
+func (transport *QUICTransport) MaxReliableBytes() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxReliableBytes
+}
+
 func (transport *QUICTransport) SendReliable(ctx context.Context, session SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
@@ -455,3 +466,8 @@ func DialQUIC(ctx context.Context, address string, tlsConfig *tls.Config, config
 var _ Transport = (*QUICTransport)(nil)
 var _ DatagramBatchTransport = (*QUICTransport)(nil)
 var _ SessionTransport = (*QUICTransport)(nil)
+
+var (
+	_ ReliablePacer          = (*QUICTransport)(nil)
+	_ ReliablePayloadLimiter = (*QUICTransport)(nil)
+)

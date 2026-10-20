@@ -317,12 +317,15 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 - **距离与关系是不同来源**：距离由 AOI 计算，队友关系经 `Interest.Relation("team").Set` 声明；一对（观察者，主体）可能被多个来源同时持有
   （队友正好站在旁边），撤掉一个来源不会退掉另一个来源仍需要的订阅。
-- **全程用 entity id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id 只在 kind 内唯一，
-  拿它做索引会让 Player 42 和 Monster 42 相撞。转成传输会话只在一个地方发生：`sessionFor`。
+- **被看的用 entity id，看的人用 player id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id
+  只在 kind 内唯一，拿它索引目标会让 Player 42 和 Monster 42 相撞。观察者是玩家，就是 player id，也是 Manager 的会话 id；
+  `Enter(playerID, entityID, …)` 两个都给，玩家实体到 player id 的换算只在 `playerOf` 一处。
 - **滞回**：进圈 120、出圈 150。在边界上来回微动不产生 Enter/Leave 抖动——每一次抖动都会重发一次快照。
 - **格边长约等于视野半径**：一个观察者订阅的格数是 `(⌈2·出圈半径/格边长⌉+1)²`，格子远小于视野不会让 AOI 更准
   （半径判定本来就是精确的），只会让观察者每动一步的簿记成倍增加。框架不强制这个比值，所以它写在 `scene.go` 的注释里。
 - **没配档位**：档位要能裁字段才有意义，而 demo 的 packer 不按字段掩码裁剪（生成的字段掩码常量是 DAO 包私有的，尚未解决）。
+- **视野由客户端请求**：`scene_view`（层级 + 视野大小）直接进政策，像移动一样不排队、不走提交门；层级只有 0，视野大小夹到
+  60～270 并按 30 取整，每秒至多改一次，应答带生效的视野。大视野让观察者订阅更多格子，上限在启动时按最大出圈半径核过预算。
 
 ## 属性：层、合成，以及两种存储意图
 

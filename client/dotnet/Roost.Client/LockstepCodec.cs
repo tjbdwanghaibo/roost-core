@@ -57,31 +57,174 @@ namespace Roost.Client
         internal LockstepFrame(uint id, List<LockstepInput> inputs) { Id = id; Inputs = inputs.AsReadOnly(); }
     }
 
-    // 服务端追帧失败通知（C9 v1）：客户端缺的帧已被裁出服务端历史，本场无法继续。
+    // C9 v2恢复失败通知的原因，取值与Go lockstep.RecoveryFailureReason一致。
+    public enum LockstepRecoveryFailureReason : byte
+    {
+        // 起点已被裁出服务端保留窗口（只追帧的对局；原C9 v1的唯一语义）。
+        HistoryTrimmed = 1,
+        // 服务端快照来源连续失败达到上限。
+        SnapshotUnavailable = 2,
+        // 快照超过服务端配置的上限。
+        SnapshotTooLarge = 3,
+        // 恢复期间钉住的历史超过服务端上限（链路太慢，追不上）。
+        RecoveryExpired = 4,
+    }
+
+    // 服务端恢复失败通知（C9 v2）：追帧或快照恢复都无法完成，本场无法继续。Reason说明原因；
+    // HistoryStart是服务端当时仍保留的最早帧（只有HistoryTrimmed保证RequestedFrom < HistoryStart，其余原因仅供日志）。
     // 收到后LockstepClient终止；由业务决定踢出或开新局，SDK不自动重同步、不跳过缺帧。
     public sealed class LockstepCatchupUnservableException : Exception
     {
+        public LockstepRecoveryFailureReason Reason { get; }
         public uint RequestedFrom { get; }
         public uint HistoryStart { get; }
-        public LockstepCatchupUnservableException(uint requestedFrom, uint historyStart)
-            : base($"Lockstep catch-up from frame {requestedFrom} cannot be served: server history starts at {historyStart}.")
-        { RequestedFrom = requestedFrom; HistoryStart = historyStart; }
+        public LockstepCatchupUnservableException(uint requestedFrom, uint historyStart,
+            LockstepRecoveryFailureReason reason = LockstepRecoveryFailureReason.HistoryTrimmed)
+            : base(reason == LockstepRecoveryFailureReason.HistoryTrimmed
+                ? $"Lockstep catch-up from frame {requestedFrom} cannot be served: server history starts at {historyStart}."
+                : $"Lockstep recovery from frame {requestedFrom} failed ({ReasonName(reason)}); server history starts at {historyStart}.")
+        { Reason = reason; RequestedFrom = requestedFrom; HistoryStart = historyStart; }
+
+        private static string ReasonName(LockstepRecoveryFailureReason reason) => reason switch
+        {
+            LockstepRecoveryFailureReason.SnapshotUnavailable => "snapshot_unavailable",
+            LockstepRecoveryFailureReason.SnapshotTooLarge => "snapshot_too_large",
+            LockstepRecoveryFailureReason.RecoveryExpired => "recovery_expired",
+            _ => "history_trimmed",
+        };
     }
 
-    // 直接消费sync/lockstep的C7 v1广播和追帧页，不另定义客户端帧格式。
+    // 快照分块坏包（头部、偏移、超限）抛InvalidDataException；字节都到齐但SHA-256与首块摘要不符抛本异常
+    // （InvalidDataException是密封类，不能派生；LockstepClient同样记为Failure终止）。可靠通道上出现即是实现缺陷，
+    // 重试会得到同样结果。
+    public sealed class LockstepSnapshotCorruptException : Exception
+    {
+        public uint Frame { get; }
+        public LockstepSnapshotCorruptException(uint frame, int length)
+            : base($"Lockstep snapshot of frame {frame} ({length} bytes) does not match its SHA-256 digest.")
+        { Frame = frame; }
+    }
+
+    // 业务restore返回的状态hash与快照携带的不同：字节对而状态不同，说明客户端版本、规则或确定性与服务器参考不一致。
+    // 再要一份快照结果相同，SDK终止实例；业务据此提示更新客户端或踢出（可选在终止前自己ReportHashAsync(Frame, Actual)留证）。
+    public sealed class LockstepSnapshotMismatchException : Exception
+    {
+        public uint Frame { get; }
+        public ulong Expected { get; }
+        public ulong Actual { get; }
+        public LockstepSnapshotMismatchException(uint frame, ulong expected, ulong actual)
+            : base($"Lockstep snapshot of frame {frame} restored to state hash {actual}, server reference is {expected}.")
+        { Frame = frame; Expected = expected; Actual = actual; }
+    }
+
+    // 服务端发来了快照分块，但调用方没有启用快照恢复（LockstepAssembler.Ingest，或LockstepClient没有restore回调）。
+    // 不能跳过快照继续模拟，实例终止。
+    public sealed class LockstepSnapshotUnsupportedException : Exception
+    {
+        public LockstepSnapshotUnsupportedException()
+            : base("Lockstep server sent a snapshot but this client has no snapshot restore; supply a restore callback.") { }
+    }
+
+    // 一份重组完成、SHA-256已核对的快照。Data归调用方所有（SDK不再引用）；Frame是快照对应的帧，
+    // 恢复后从Frame+1继续模拟。HasStateHash为true时StateHash是服务器参考的业务状态hash（与ReportHash同一算法）。
+    public sealed class LockstepSnapshot
+    {
+        public uint Frame { get; }
+        public ReadOnlyMemory<byte> Data { get; }
+        public ulong StateHash { get; }
+        public bool HasStateHash { get; }
+        internal LockstepSnapshot(uint frame, byte[] data, ulong stateHash, bool hasStateHash)
+        { Frame = frame; Data = data; StateHash = stateHash; HasStateHash = hasStateHash; }
+    }
+
+    // 一个下行包的处理结果：Frames是按序可模拟的帧；Snapshot非null表示快照已完整且摘要已核对，
+    // 调用方恢复状态后必须调用LockstepAssembler.ResumeAfterSnapshot(Snapshot.Frame)才能继续接收。
+    public sealed class LockstepDelivery
+    {
+        public IReadOnlyList<LockstepFrame> Frames { get; }
+        public LockstepSnapshot? Snapshot { get; }
+        internal LockstepDelivery(IReadOnlyList<LockstepFrame> frames, LockstepSnapshot? snapshot)
+        { Frames = frames; Snapshot = snapshot; }
+    }
+
+    // 解码后的CA 01分块；First（Offset=0）时头部字段有效。Data引用解码时传入的包。
+    internal readonly ref struct LockstepSnapshotChunk
+    {
+        public readonly ulong Transfer;
+        public readonly int Offset;
+        public readonly uint Frame;
+        public readonly int Total;
+        public readonly ulong StateHash;
+        public readonly bool HasStateHash;
+        public readonly ReadOnlySpan<byte> Digest;
+        public readonly ReadOnlySpan<byte> Data;
+        public bool First => Offset == 0;
+        public LockstepSnapshotChunk(ulong transfer, int offset, uint frame, int total, ulong stateHash, bool hasStateHash,
+            ReadOnlySpan<byte> digest, ReadOnlySpan<byte> data)
+        {
+            Transfer = transfer; Offset = offset; Frame = frame; Total = total;
+            StateHash = stateHash; HasStateHash = hasStateHash; Digest = digest; Data = data;
+        }
+    }
+
+    // 直接消费sync/lockstep的C7 v1广播和追帧页、C9 v2恢复失败通知与CA 01快照分块，不另定义客户端帧格式。
     public static class LockstepCodec
     {
-        public static bool IsCatchupNotice(ReadOnlySpan<byte> data) => data.Length > 0 && data[0] == 0xC9;
+        // 快照上限与Go lockstep.DefaultMaxSnapshotBytes / MaxSnapshotBytes一致：首块声明的总长超过客户端上限即坏包，
+        // 不按恶意总长分配内存。
+        public const int DefaultMaxSnapshotBytes = 4 << 20;
+        public const int MaxSnapshotBytes = 64 << 20;
+        internal const int SnapshotDigestBytes = 32;
 
-        // 严格解码C9 01 from(uvarint) start(uvarint)，要求from<start；坏包抛InvalidDataException。
+        public static bool IsCatchupNotice(ReadOnlySpan<byte> data) => data.Length > 0 && data[0] == 0xC9;
+        public static bool IsSnapshotChunk(ReadOnlySpan<byte> data) => data.Length > 0 && data[0] == 0xCA;
+
+        // 严格解码C9 02 reason(uvarint) from(uvarint) start(uvarint)：reason只接受1..4，所有原因要求from>=1，
+        // 只有HistoryTrimmed要求from<start；v1、未知原因、截断、尾字节都抛InvalidDataException。
         public static LockstepCatchupUnservableException DecodeCatchupUnservable(ReadOnlySpan<byte> data)
         {
-            if (data.Length < 4 || data[0] != 0xC9 || data[1] != 1) throw new InvalidDataException("Invalid catch-up notice header.");
+            if (data.Length < 5 || data[0] != 0xC9 || data[1] != 2) throw new InvalidDataException("Invalid catch-up notice header.");
             int offset = 2;
+            ulong reason = ReadVarint(data, ref offset);
             uint from = ReadFrame(data, ref offset);
             ulong start = ReadVarint(data, ref offset);
-            if (offset != data.Length || start > uint.MaxValue || from >= start) throw new InvalidDataException("Invalid catch-up notice.");
-            return new LockstepCatchupUnservableException(from, (uint)start);
+            if (offset != data.Length || reason < (ulong)LockstepRecoveryFailureReason.HistoryTrimmed ||
+                reason > (ulong)LockstepRecoveryFailureReason.RecoveryExpired || start > uint.MaxValue ||
+                ((LockstepRecoveryFailureReason)reason == LockstepRecoveryFailureReason.HistoryTrimmed && from >= start))
+                throw new InvalidDataException("Invalid catch-up notice.");
+            return new LockstepCatchupUnservableException(from, (uint)start, (LockstepRecoveryFailureReason)reason);
+        }
+
+        // 严格解码CA 01分块（与Go lockstep.DecodeSnapshotChunk同一规则）：
+        //   chunk  = CA 01 transfer(uvarint≠0) offset(uvarint) [header，仅offset=0] data(>=1B)
+        //   header = frame(uvarint32) total(uvarint 1..maxTotal) flags(1B，bit0=带状态hash，其余位为0) [stateHash(uvarint64)] digest(32B)
+        // offset>=maxTotal、首块数据超过total也是坏包；非首块是否越过total由重组器判断。
+        internal static LockstepSnapshotChunk DecodeSnapshotChunk(ReadOnlySpan<byte> data, int maxTotal)
+        {
+            if (data.Length < 5 || data[0] != 0xCA || data[1] != 1) throw new InvalidDataException("Invalid snapshot chunk header.");
+            int offset = 2;
+            ulong transfer = ReadVarint(data, ref offset);
+            ulong chunkOffset = ReadVarint(data, ref offset);
+            if (transfer == 0 || chunkOffset >= (ulong)maxTotal) throw new InvalidDataException("Invalid snapshot transfer/offset.");
+            uint frame = 0; ulong total = 0, stateHash = 0; bool hasStateHash = false;
+            ReadOnlySpan<byte> digest = default;
+            if (chunkOffset == 0)
+            {
+                ulong id = ReadVarint(data, ref offset);
+                total = ReadVarint(data, ref offset);
+                // 帧号可以是0：MinFrame = 最早保留帧 - 1，开局快照对应第0帧（初始状态），恢复后从第1帧模拟。
+                if (id > uint.MaxValue || total == 0 || total > (ulong)maxTotal || offset == data.Length)
+                    throw new InvalidDataException("Invalid snapshot frame/total.");
+                frame = (uint)id;
+                byte flags = data[offset++];
+                if ((flags & ~1) != 0) throw new InvalidDataException("Invalid snapshot flags.");
+                if ((flags & 1) != 0) { stateHash = ReadVarint(data, ref offset); hasStateHash = true; }
+                if (data.Length - offset < SnapshotDigestBytes) throw new InvalidDataException("Truncated snapshot digest.");
+                digest = data.Slice(offset, SnapshotDigestBytes); offset += SnapshotDigestBytes;
+                if ((ulong)(data.Length - offset) > total) throw new InvalidDataException("First snapshot chunk exceeds total.");
+            }
+            if (offset == data.Length) throw new InvalidDataException("Empty snapshot chunk.");
+            return new LockstepSnapshotChunk(transfer, (int)chunkOffset, frame, (int)total, stateHash, hasStateHash, digest, data.Slice(offset));
         }
 
         public static IReadOnlyList<LockstepFrame> DecodeBroadcast(ReadOnlySpan<byte> data)

@@ -12,6 +12,8 @@ internal static partial class Program
 {
     private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     private static byte[] RawSync = Array.Empty<byte>();
+    private static readonly LockstepAssembler GoldenSnapshot = new LockstepAssembler();
+    private static ulong GoldenStateHash;
     private static async Task<int> Main(string[] args)
     {
         // 只接受两种调用：金样路径（本地自测），或金样路径 + 生成工程 TCP 地址（TestClientSDKAgainstGeneratedPlayerTCP）。
@@ -47,7 +49,31 @@ internal static partial class Program
             {
                 Check(packet.Kind == PayloadKind.Lockstep && packet.IsPush && LockstepCodec.IsCatchupNotice(packet.Payload.Span), "notice routing");
                 var notice = LockstepCodec.DecodeCatchupUnservable(packet.Payload.Span);
-                Check(notice.RequestedFrom == 300 && notice.HistoryStart == 70000, "Go/C# catch-up notice");
+                Check(notice.Reason == LockstepRecoveryFailureReason.HistoryTrimmed && notice.RequestedFrom == 300 && notice.HistoryStart == 70000, "Go/C# catch-up notice");
+            }
+            if (item.GetProperty("name").GetString() == "recovery_failed_snapshot_unavailable")
+            {
+                Check(packet.Kind == PayloadKind.Lockstep && packet.IsPush && packet.MessageId == 50002, "recovery notice routing");
+                var notice = LockstepCodec.DecodeCatchupUnservable(packet.Payload.Span);
+                // 原因2～4不要求from<start：这里from=90000晚于start=70000。
+                Check(notice.Reason == LockstepRecoveryFailureReason.SnapshotUnavailable && notice.RequestedFrom == 90000 && notice.HistoryStart == 70000, "Go/C# recovery notice");
+            }
+            if (item.GetProperty("name").GetString() == "snapshot_first_chunk")
+            {
+                Check(packet.Kind == PayloadKind.Lockstep && packet.IsPush && packet.MessageId == 50002 && LockstepCodec.IsSnapshotChunk(packet.Payload.Span), "snapshot routing");
+                GoldenStateHash = ulong.Parse(item.GetProperty("hash").GetString()!);
+                var delivery = GoldenSnapshot.Receive(packet.Payload.Span);
+                Check(delivery.Snapshot == null && delivery.Frames.Count == 0 && GoldenSnapshot.SnapshotInProgress, "first chunk alone is incomplete");
+                Refuses(() => new LockstepAssembler().Ingest(packet.Payload.Span), "snapshot without restore", typeof(LockstepSnapshotUnsupportedException));
+            }
+            if (item.GetProperty("name").GetString() == "snapshot_next_chunk")
+            {
+                var snapshot = GoldenSnapshot.Receive(packet.Payload.Span).Snapshot;
+                Check(snapshot != null && snapshot.Frame == 1234 && System.Text.Encoding.ASCII.GetString(snapshot.Data.Span) == "roost-snapshot-golden-24", "Go/C# snapshot reassembly and SHA-256");
+                // 状态hash最高位为1，核对uvarint64解码。
+                Check(snapshot!.HasStateHash && snapshot.StateHash == GoldenStateHash && GoldenStateHash >= 1UL << 63, "Go/C# snapshot state hash");
+                GoldenSnapshot.ResumeAfterSnapshot(snapshot.Frame);
+                Check(GoldenSnapshot.Next == 1235 && !GoldenSnapshot.SnapshotInProgress, "resume after golden snapshot");
             }
             if (item.GetProperty("name").GetString()!.StartsWith("lockstep_"))
             {
@@ -67,17 +93,20 @@ internal static partial class Program
         Refuses(() => SyncFrame.Decode(RawSync.AsSpan(0, RawSync.Length - 1)), "truncated sync");
         Console.WriteLine("PASS malformed/limits/lockstep");
         TestLockstep();
+        TestLockstepSnapshot();
         TestSyncReceiver();
         await TestUnitySyncAdapter();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
         else
-            { await LocalSession(); await Capacity(); await LockstepGapRetry(); }
+            { await LocalSession(); await Capacity(); await LockstepGapRetry(); await LockstepSnapshotClient(); }
         return 0;
     }
-    private static void Refuses(Action run, string why)
+    private static void Refuses(Action run, string why, Type? expected = null)
     {
-        try { run(); } catch (InvalidDataException) { return; }
+        expected ??= typeof(InvalidDataException);
+        try { run(); }
+        catch (Exception error) when (error.GetType() == expected) { return; }
         throw new Exception("accepted " + why);
     }
 
@@ -108,6 +137,7 @@ internal static partial class Program
         }
         Console.WriteLine("PASS generated TCP auth/PB/concurrent sequence/raw Sync");
         await GeneratedLockstep(session);
+        await GeneratedLockstepSnapshot(session, host, port);
     }
 
     private static async Task LocalSession()

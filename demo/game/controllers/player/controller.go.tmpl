@@ -19,6 +19,7 @@ import (
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -92,6 +93,9 @@ type sceneJoiner interface {
 	// Ready releases the session Join held: the client's decoder is up.
 	Ready(playerID int64) error
 	Moved(ctx context.Context, subjectID int64, to spatial.Point)
+	// SetView applies the client's LOD / view-radius request and returns the
+	// view in force (clamped and quantized by the scene's interest policy).
+	SetView(playerID int64, view policy.ObserverView) (policy.ObserverView, error)
 	Leave(ctx context.Context, subjectID int64)
 }
 

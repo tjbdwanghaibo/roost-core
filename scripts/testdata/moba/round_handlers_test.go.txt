@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -524,5 +525,212 @@ func TestMOBARewardLedgerRefusesOverflowWithoutEvictingReceipts(t *testing.T) {
 	}
 	if f.players[0].Dao().GetLosses() != 64 || f.players[0].Dao().GetMobaRewards() != before {
 		t.Fatal("failed overflow changed assets / history")
+	}
+}
+
+// committedLog 记下 Room 两条下行通道上的包（按发送先后），并在发送那一刻核对：C7 帧、快照帧都不得超过已提交帧。
+// committed 由 persist 包装在权威 Sender 返回成功后更新；提交只会前移，发送协程晚于提交运行只会看到更大的值，不会误报。
+type committedLog struct {
+	mu        sync.Mutex
+	committed atomic.Int64
+	packets   map[nettransport.SessionID][][]byte
+	sent      chan nettransport.SessionID
+	violation string
+	maxSent   lockstep.FrameID
+}
+
+func newCommittedLog() *committedLog {
+	return &committedLog{packets: make(map[nettransport.SessionID][][]byte), sent: make(chan nettransport.SessionID, 4096)}
+}
+func (l *committedLog) record(session nettransport.SessionID, raw []byte) error {
+	committed := lockstep.FrameID(l.committed.Load())
+	var last lockstep.FrameID
+	switch {
+	case lockstep.IsSnapshotChunk(raw):
+		if chunk, err := lockstep.DecodeSnapshotChunk(raw, lockstep.MaxSnapshotBytes); err != nil {
+			return err
+		} else if chunk.Offset == 0 {
+			last = chunk.Frame
+		}
+	case lockstep.IsCatchupNotice(raw):
+	default:
+		frames, err := lockstep.DecodeBroadcast(raw)
+		if err != nil || len(frames) == 0 {
+			return fmt.Errorf("bad packet: %v", err)
+		}
+		last = frames[len(frames)-1].ID
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if last > committed && l.violation == "" {
+		l.violation = fmt.Sprintf("session %d was sent frame %d while %d was committed", session, last, committed)
+	}
+	l.maxSent = max(l.maxSent, last)
+	l.packets[session] = append(l.packets[session], append([]byte(nil), raw...))
+	select {
+	case l.sent <- session:
+	default:
+	}
+	return nil
+}
+func (l *committedLog) SendDatagram(_ context.Context, s nettransport.SessionID, raw []byte) error {
+	return l.record(s, raw)
+}
+func (l *committedLog) SendReliable(_ context.Context, s nettransport.SessionID, raw []byte) error {
+	return l.record(s, raw)
+}
+func (l *committedLog) take(session nettransport.SessionID) [][]byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := l.packets[session]
+	l.packets[session] = nil
+	return out
+}
+func (l *committedLog) check(t *testing.T) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.violation != "" {
+		t.Fatal(l.violation)
+	}
+}
+
+// Room 接快照恢复后的已提交门（设计 FEATURE-2026-10-20 §15）：追帧页与快照分块由 Match 的后台 goroutine 经可靠通道发出、
+// 不经暂存区，Room 用 MatchConfig.CommittedFrame 把它们挡在已提交帧之内。
+// 一、窗口内追帧请求之后，下一帧的权威提交卡住：卡住期间可靠通道发出的帧最大号就是已提交帧；提交以结果未知结束、房间停止后，
+// 任何通道上都没有出现这一帧。二、按已提交记录 resume 重建的房间里，丢了本地状态的客户端从第 1 帧请求：越过窗口，
+// 经提交后才发布的检查点快照恢复、续帧到头部，与权威同摘要；全程每个包在发送时都不超过已提交帧。
+func TestMOBARoomCatchupNeverSendsUncommittedFrames(t *testing.T) {
+	f := newRoundFixture(t)
+	lanes := newCommittedLog()
+	var hold lockstep.FrameID
+	entered, release := make(chan struct{}), make(chan bool, 1)
+	persist := func(ctx context.Context, c moba.Change) (moba.Round, error) {
+		if hold != 0 && c.Op == "frame" && c.Frame.ID == hold {
+			close(entered)
+			if !<-release {
+				return moba.Round{}, errors.New("commit outcome unknown")
+			}
+		}
+		r, err := f.persist(ctx, c)
+		if err == nil {
+			lanes.committed.Store(int64(len(r.Frames)))
+		}
+		return r, err
+	}
+	room, err := moba.RecoverRoomWithSnapshots(f.record, persist, lanes, moba.RoomSnapshots{Reliable: lanes, Checkpoints: &moba.ArenaCheckpoints{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := moba.NewActor(room)
+	defer a.Stop(context.Background())
+	var releaseOnce sync.Once
+	unknown := func() { releaseOnce.Do(func() { release <- false }) }
+	defer unknown() // 先于 Stop 运行：断言失败时放开卡住的提交，Actor 才能结束
+	bindRoster(t, a, f.record, 101)
+	for range 30 {
+		actorCall(t, a, moba.RoomRequest{Op: "tick", Epoch: 1})
+	}
+	m := f.record.Members[0]
+	actorCall(t, a, moba.RoomRequest{Op: "bind", Epoch: 1, PlayerID: m.PlayerID, PlayerSID: m.SID, Session: 201})
+	actorCall(t, a, moba.RoomRequest{Op: "catchup", Epoch: 1, Session: 201, Frame: 25})
+	hold = 31
+	tickDone := make(chan error, 1)
+	go func() {
+		_, err := a.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1})
+		tickDone <- err
+	}()
+	<-entered
+	for page := false; !page; {
+		select {
+		case session := <-lanes.sent:
+			page = session == 201
+		case <-time.After(5 * time.Second):
+			t.Fatal("no catch-up page while frame 31 was being committed")
+		}
+	}
+	var got []lockstep.FrameID
+	for _, raw := range lanes.take(201) {
+		frames, err := lockstep.DecodeBroadcast(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range frames {
+			got = append(got, frame.ID)
+		}
+	}
+	if len(got) == 0 || got[0] != 25 || got[len(got)-1] != 30 {
+		t.Fatalf("frame 31 cut but not committed: catch-up page carried frames %v, want 25..30", got)
+	}
+	unknown()
+	if err := <-tickDone; err == nil {
+		t.Fatal("unknown commit continued")
+	}
+	if _, err := a.Call(context.Background(), moba.RoomRequest{Op: "tick", Epoch: 1}); err == nil {
+		t.Fatal("failed room advanced again")
+	}
+	lanes.check(t)
+	if lanes.maxSent != 30 {
+		t.Fatalf("highest frame sent on any lane %d, want 30", lanes.maxSent)
+	}
+	stored := f.apply(t, moba.Change{Op: "read"})
+	if len(stored.Frames) != 30 {
+		t.Fatalf("authority has %d frames", len(stored.Frames))
+	}
+
+	hold = 0
+	stored = f.apply(t, moba.Change{Op: "resume", HostSID: stored.HostSID, Epoch: stored.Epoch, NextHost: stored.HostSID})
+	checkpoints := &moba.ArenaCheckpoints{}
+	recovered, err := moba.RecoverRoomWithSnapshots(stored, persist, lanes, moba.RoomSnapshots{Reliable: lanes, Checkpoints: checkpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := moba.NewActor(recovered)
+	defer b.Stop(context.Background())
+	bindRoster(t, b, stored, 301)
+	for range 80 {
+		actorCall(t, b, moba.RoomRequest{Op: "tick", Epoch: 2})
+	}
+	actorCall(t, b, moba.RoomRequest{Op: "bind", Epoch: 2, PlayerID: m.PlayerID, PlayerSID: m.SID, Session: 401})
+	actorCall(t, b, moba.RoomRequest{Op: "catchup", Epoch: 2, Session: 401, Frame: 1})
+	client := moba.NewArena(42)
+	assembler := lockstep.NewFrameAssembler(128)
+	var restored []lockstep.FrameID
+	for tick := 0; ; tick++ {
+		if tick == 40 {
+			t.Fatalf("player did not recover: next %d, snapshot in progress %v", assembler.Next(), assembler.SnapshotInProgress())
+		}
+		out := actorCall(t, b, moba.RoomRequest{Op: "tick", Epoch: 2})
+		// 追帧页与分块在 Match 的后台 goroutine 上发出，晚到的包在下一个 Tick 之后取走，不影响结论。
+		for _, raw := range lanes.take(401) {
+			delivery, err := assembler.Receive(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s := delivery.Snapshot; s != nil {
+				state, err := moba.RestoreArena(s.Data, 42)
+				if err != nil || !s.HasStateHash || state.Hash() != s.StateHash || state.Tick != s.Frame {
+					t.Fatal("snapshot restore", err)
+				}
+				client, restored = state, append(restored, s.Frame)
+				assembler.ResumeAfterSnapshot(s.Frame)
+			}
+			for _, frame := range delivery.Frames {
+				if err := client.Apply(frame); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if assembler.Next() > out.Frame.ID && !assembler.SnapshotInProgress() {
+			break
+		}
+	}
+	lanes.check(t)
+	stored = f.apply(t, moba.Change{Op: "read"})
+	if len(restored) != 1 || restored[0]%16 != 0 || int(restored[0]) < len(stored.Frames)-64 || client.Digest() != stored.Reference.Digest() {
+		t.Fatalf("restored from %v at head %d; digest match %v", restored, len(stored.Frames), client.Digest() == stored.Reference.Digest())
+	}
+	if checkpoints.Served() != 1 {
+		t.Fatalf("checkpoint served %d times", checkpoints.Served())
 	}
 }

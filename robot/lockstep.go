@@ -54,14 +54,36 @@ type LockstepBotConfig struct {
 	// 64). The server abandons a catch-up whose sends keep failing; without
 	// a retry the bot would wait on it forever (RR-20261006-65).
 	CatchupRetryPackets int
+
+	// Restore 用服务端下发的快照替换 bot 的模拟状态，返回恢复后的状态 hash（与 Hash 同一算法；
+	// 没设 Hash 时就是输入链 hash，即 FrameHasher 的值）。bot 核对它与快照携带的 StateHash，
+	// 不符即终止（*lockstep.SnapshotMismatchError），之后从快照帧 +1 续帧，FrameHasher 以它为新的链值。
+	//
+	// nil 表示 bot 不支持快照恢复：收到快照即终止（链上 lockstep.ErrSnapshotUnsupported）。例外是
+	// 没有设置 Simulate 与 Hash 的纯线协议 bot：它的状态就是输入链 hash，快照携带 StateHash 时直接以它
+	// 为新的链值续帧，不需要回调（服务端 Provider 用 FrameHasher 折叠同一段帧得出这个值）。
+	//
+	// 返回错误时 bot 终止：业务状态可能已被部分覆盖，无法安全继续。调用在 bot 的驱动 goroutine 上同步执行。
+	Restore func(snapshot lockstep.ReceivedSnapshot) (stateHash uint64, err error)
+	// MaxSnapshotBytes 是 bot 愿意接受的快照上限（<= 0 取 lockstep.DefaultMaxSnapshotBytes）：
+	// 首块声明的总长超过它即坏包、bot 终止。
+	MaxSnapshotBytes int
+	// ReportSnapshotMismatch 为 true 时，恢复后状态 hash 不符的 bot 在终止前发一次 ReportHash(快照帧, 算出的 hash)，
+	// 让服务端日志 / DesyncDetector 留下不一致的证据。缺省 false：不自动上报，避免把一次本地错误变成服务端的
+	// desync 告警噪声（设计 §12 第 12 条）。上报失败不改变终止结论。
+	ReportSnapshotMismatch bool
 }
 
 // ErrLockstepBotTerminal marks a bot that must not be used again: its
 // simulation and the authoritative frame stream have diverged, the sink
 // has failed for longer than the bot is willing to buffer, or the server
-// reported that the frames it is missing were trimmed from history
-// (lockstep.ErrCatchupUnservable is in the chain). Rebuild the bot
-// (or restore it from a snapshot) instead of retrying.
+// reported that its recovery failed (lockstep.ErrCatchupUnservable is in
+// the chain). Snapshot recovery failures are terminal too — a corrupt
+// chunk (lockstep.ErrFrameCorrupt), a digest mismatch
+// (lockstep.ErrSnapshotCorrupt), a failed Restore, a restored state hash
+// that differs from the server's (lockstep.ErrSnapshotMismatch), or no way
+// to restore (lockstep.ErrSnapshotUnsupported): the same snapshot would
+// fail the same way again. Rebuild the bot instead of retrying.
 var ErrLockstepBotTerminal = errors.New("robot lockstep: bot is terminal")
 
 // applyStep is how far one frame got through apply. It exists because the
@@ -95,6 +117,7 @@ type LockstepBotStats struct {
 	HashesReported    uint64
 	CatchupsRequested uint64
 	DuplicatesDropped uint64
+	SnapshotsRestored uint64
 }
 
 // LockstepBot is the client half of the kit lockstep Match: it ingests
@@ -149,31 +172,86 @@ func NewLockstepBot(cfg LockstepBotConfig) (*LockstepBot, error) {
 	}
 	return &LockstepBot{
 		cfg:          cfg,
-		assembler:    lockstep.NewFrameAssembler(cfg.MaxBuffer),
+		assembler:    lockstep.NewFrameAssemblerLimits(cfg.MaxBuffer, cfg.MaxSnapshotBytes),
 		hasher:       NewFrameHasher(),
 		maxPending:   maxPending,
 		catchupRetry: retry,
 	}, nil
 }
 
-// HandleBroadcast ingests one broadcast packet (or catch-up page). Frames
-// that became releasable are applied in order. Any gap still open after the
-// packet — frames buffered ahead of a missing one, which redundancy did not
-// heal — triggers a catch-up request from the missing frame, once per gap
-// (repeated if the gap outlives CatchupRetryPackets more packets), instead
-// of waiting for the out-of-order buffer to overflow (RR-20261006-65).
+// HandleBroadcast ingests one downlink lockstep packet: a broadcast or
+// catch-up page (C7), a recovery-failed notice (C9), or a snapshot chunk
+// (CA). Frames that became releasable are applied in order. Any gap still
+// open after the packet — frames buffered ahead of a missing one, which
+// redundancy did not heal — triggers a catch-up request from the missing
+// frame, once per gap (repeated if the gap outlives CatchupRetryPackets more
+// packets), instead of waiting for the out-of-order buffer to overflow
+// (RR-20261006-65). A completed snapshot replaces the simulation through
+// Restore and the bot continues from the snapshot frame + 1.
 func (b *LockstepBot) HandleBroadcast(packet []byte) error {
 	if b.terminal != nil {
 		return b.terminal
 	}
-	frames, err := b.assembler.Ingest(packet)
-	if errors.Is(err, lockstep.ErrCatchupUnservable) {
+	delivery, err := b.assembler.Receive(packet)
+	switch {
+	case errors.Is(err, lockstep.ErrCatchupUnservable):
 		return b.catchupUnservable(err)
+	case lockstep.IsSnapshotChunk(packet):
+		return b.snapshotChunk(delivery.Snapshot, err)
 	}
-	if applyErr := b.apply(frames); applyErr != nil {
+	if applyErr := b.apply(delivery.Frames); applyErr != nil {
 		return applyErr
 	}
 	return b.checkGap(err)
+}
+
+// snapshotChunk 处理一个快照分块的结果。分块坏包、摘要不符都终止：可靠通道上出现即是实现或版本问题，
+// 再要一份结果相同（设计 §7.3）。传输在推进时不把分块计入追帧重试，快照到齐后恢复。
+func (b *LockstepBot) snapshotChunk(snapshot *lockstep.ReceivedSnapshot, err error) error {
+	if err != nil {
+		return b.fail(fmt.Errorf("%w: snapshot chunk: %w", ErrLockstepBotTerminal, err))
+	}
+	// 快照就是这次恢复的应答：没有在途请求（宿主强制的快照）时也记一个，传输中途若被服务端放弃，
+	// 按 CatchupRetryPackets 的节奏再请求，而不是每个迟到的实时包都立即请求一次。
+	if b.catchupFrom == 0 {
+		b.catchupFrom = b.assembler.Next()
+	}
+	b.catchupWait = 0
+	if snapshot == nil {
+		return nil
+	}
+	return b.restore(*snapshot)
+}
+
+// restore 用快照取代 bot 的状态：丢弃未完成的 pending 帧与 apply 游标（快照取代它们）→ 业务 Restore →
+// 核对状态 hash → 输入链 hasher 以恢复后的 hash 为新链值 → 组装器续于快照帧 +1 → 清除追帧去重状态。
+func (b *LockstepBot) restore(snapshot lockstep.ReceivedSnapshot) error {
+	restore := b.cfg.Restore
+	if restore == nil {
+		if b.cfg.Simulate != nil || b.cfg.Hash != nil || !snapshot.HasStateHash {
+			return b.fail(fmt.Errorf("%w: snapshot at frame %d: %w", ErrLockstepBotTerminal, snapshot.Frame, lockstep.ErrSnapshotUnsupported))
+		}
+		// 纯线协议 bot 的状态就是输入链 hash：服务端给出的 StateHash 就是恢复后的链值。
+		restore = func(snapshot lockstep.ReceivedSnapshot) (uint64, error) { return snapshot.StateHash, nil }
+	}
+	b.pending, b.owned, b.cursor = nil, 0, applyCursor{}
+	got, err := restore(snapshot)
+	if err != nil {
+		return b.fail(fmt.Errorf("%w: restore snapshot at frame %d: %w", ErrLockstepBotTerminal, snapshot.Frame, err))
+	}
+	if snapshot.HasStateHash && got != snapshot.StateHash {
+		mismatch := &lockstep.SnapshotMismatchError{Frame: snapshot.Frame, Want: snapshot.StateHash, Got: got}
+		if b.cfg.ReportSnapshotMismatch {
+			// 只为留证：服务端据此记下这名玩家在快照帧上的不一致；发送失败不改变终止结论。
+			_ = b.cfg.Sink.ReportHash(snapshot.Frame, got)
+		}
+		return b.fail(fmt.Errorf("%w: %w", ErrLockstepBotTerminal, mismatch))
+	}
+	b.hasher.Reset(got)
+	b.assembler.ResumeAfterSnapshot(snapshot.Frame)
+	b.catchupFrom, b.catchupWait = 0, 0
+	b.stats.SnapshotsRestored++
+	return nil
 }
 
 // catchupUnservable 处理服务端的追帧失败（失败通知，或进程内 sink 直接返回的错误）：缺的帧已不在
@@ -196,8 +274,11 @@ func (b *LockstepBot) HandleFrames(frames []lockstep.Frame) error {
 
 // checkGap asks for a catch-up when the assembler holds frames past a
 // missing one, or reported an ingest error (overflow, undecodable packet).
+// A snapshot transfer that has started but not finished also counts as an
+// open gap: if the server abandons it, the live frames that follow are all
+// dropped by the assembler, and only the retry gets the bot going again.
 func (b *LockstepBot) checkGap(ingestErr error) error {
-	if ingestErr == nil && !b.assembler.Gap() {
+	if ingestErr == nil && !b.assembler.Gap() && !b.assembler.SnapshotInProgress() {
 		b.catchupFrom, b.catchupWait = 0, 0
 		return nil
 	}
@@ -392,3 +473,6 @@ func (f *FrameHasher) Fold(frame lockstep.Frame) {
 
 // Sum is the running hash over everything folded so far.
 func (f *FrameHasher) Sum() uint64 { return f.sum }
+
+// Reset 把链值置为 sum：快照恢复后以快照帧处的状态 hash 为起点，继续折叠之后的帧。
+func (f *FrameHasher) Reset(sum uint64) { f.sum = sum }

@@ -84,7 +84,7 @@ func TestForeignGeneratedFileIsNotOwnedByRoost(t *testing.T) {
 }
 
 // `roost generate` / `roost project sync` 先快照工程里的应用输入，提交前再核对，有变化就拒绝。工程运行期往工程目录写的
-// 输出（`make dev-run` 的 `.dev/*.log`、DataEngine 默认 WAL 目录 `data/wal/dataengine`）不算应用输入、不进暂存树、
+// 输出（`make dev-run` 的 `.dev/*.log`、DataEngine 默认 WAL 目录 `data/wal/dataengine/<sid>`）不算应用输入、不进暂存树、
 // 也不会被提交计划当成待删的生成物，dev-run 期间照常 generate / sync；真正的应用输入在生成期间被改仍然拒绝提交。
 // 不能按目录名跳过 data（configs/data 是生成器的输出）。
 

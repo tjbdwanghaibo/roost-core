@@ -198,7 +198,10 @@ esac
 //	ops.addr    the /readyz and metrics listener, one per process
 //	client port the player TCP listener
 //	WAL dir     nestwal takes an exclusive lock on its directory and correctly
-//	            refuses the second process otherwise
+//	            refuses the second process otherwise. The generated config
+//	            leaves dataengine.wal.dir unset, so the runtime default
+//	            data/wal/dataengine/<sid> already separates the two; the sed
+//	            rule below only rewrites a dir: the application wrote by hand
 //
 // Each game process serves only the players bound to its sid (the role's
 // server_id from account; internal/service/<game>/playerowner.go), and the App
@@ -236,9 +239,12 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 derive_config() {
   [ -f "$TARGET" ] && return 0
   [ -f "$SOURCE" ] || { echo "$SOURCE not found; run from the project root" >&2; exit 1; }
-  # Four overrides each of which the second process cannot start without, and
+  # Overrides each of which the second process cannot start without, and
   # its own etcd.advertise_addr (every process on one host advertises its own
   # address; roost config check / doctor refuse two services sharing one).
+  # The WAL needs no override while dataengine.wal.dir is unset (the default is
+  # data/wal/dataengine/<sid>); a hand-written .../wal/dataengine is moved to
+  # .../wal/dataengine-<sid>.
   sed \
     -e "s/^\(  *\)sid: .*/\1sid: $SID/" \
     -e "s#^\(  *\)addr: \(.*\):%[5]d\$#\1addr: \2:$OPS_PORT#" \

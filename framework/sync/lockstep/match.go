@@ -18,10 +18,11 @@ var (
 	ErrSessionInUse       = errors.New("lockstep match: session already bound to another receiver")
 	ErrCatchupUnavailable = errors.New("lockstep match: no reliable sender for catch-up")
 	ErrCatchupFuture      = errors.New("lockstep match: catch-up start beyond the next frame")
-	// ErrCatchupUnservable 表示请求的追帧起点已被裁出历史，这次追帧不可能补齐。
-	// 服务端在 StartCatchup / Tick 的错误里返回它，并经可靠通道给该会话发追帧失败通知；
-	// 客户端（FrameAssembler、robot、C# LockstepClient）收到通知后终止本场模拟，交由业务决定踢出或重开，
-	// 框架不自动重同步。具体起点见 *CatchupUnservableError。
+	// ErrCatchupUnservable 表示这次恢复无法完成：catchup 模式下请求的追帧起点已被裁出历史；
+	// auto / snapshot 模式下是快照路线最终失败（快照取不到、过大或钉住过期，原因见 *CatchupUnservableError.Reason）。
+	// 服务端在 StartCatchup / Tick 的错误里返回它，并经可靠通道给该会话发 C9 v2 恢复失败通知；
+	// 客户端（FrameAssembler、robot、C# LockstepClient）收到通知后终止本场模拟，交由业务决定踢出或重开。
+	// 起点越界本身在 auto / snapshot 模式下不是失败：改发业务快照（见 RecoveryMode）。
 	ErrCatchupUnservable = errors.New("lockstep match: catch-up range trimmed from history")
 	ErrHashFrameInvalid  = errors.New("lockstep match: hash report for an uncut or invalid frame")
 )
@@ -36,6 +37,13 @@ const (
 	// MetricCatchupUnservable 计数因起点已被裁出历史而失败的追帧（含请求时即拒绝与追帧途中被裁过）。
 	MetricCatchupUnservable = "lockstep.catchup.unservable.total"
 	MetricDesync            = "lockstep.desync.total"
+	// MetricSnapshot 计数发起的快照恢复（会话进入取快照阶段），标签 reason 见 SnapshotReason。
+	MetricSnapshot = "lockstep.snapshot.total"
+	// MetricSnapshotBytes 计数确认写出的快照分块数据字节。
+	MetricSnapshotBytes = "lockstep.snapshot.bytes.total"
+	// MetricSnapshotFailed 计数快照恢复的失败，标签 reason：unavailable / too_large / invalid（取快照，每次调用计一次）、
+	// abandoned（发送连续失败放弃）、expired（钉住超过 PinFrames）、detached（恢复进行中会话被 Detach，每会话一次）。
+	MetricSnapshotFailed = "lockstep.snapshot.failed.total"
 )
 
 // DefaultMaxDatagramBytes is the datagram PAYLOAD bound used when neither
@@ -112,7 +120,7 @@ type MatchConfig struct {
 	// HistoryRetainFrames 是自动保留的历史帧数（含最新帧）：每次 Tick 切帧后裁掉更早的帧，
 	// 并按 hashTrimStride 步长裁掉同一窗口之外的 hash 报告。0 取 DefaultHistoryRetainFrames；
 	// RetainFullHistory（-1）关闭自动裁剪；其他值必须不小于 MinHistoryRetainFrames。
-	// 起点早于窗口的追帧以 ErrCatchupUnservable 失败，不做全量重同步。宿主仍可调用
+	// 起点早于窗口时 catchup 模式以 ErrCatchupUnservable 失败，auto / snapshot 模式改发业务快照（Recovery）。宿主仍可调用
 	// TrimHistory / TrimHashReports 裁得更多，但不能把已裁掉的帧找回来。
 	HistoryRetainFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
@@ -150,39 +158,72 @@ type MatchConfig struct {
 	// were not surfaced before (set difference, not cardinality — an
 	// equal-size flip of the outlier set fires too). Nil ignores verdicts.
 	OnDesync func(DesyncVerdict)
+	// Recovery 决定落后的会话怎样回到对局（追帧 / 快照 / 自动），零值见 RecoveryUnset。
+	// RecoverySnapshot / RecoveryAuto 要求 Snapshots.Provider 与 Reliable 都非 nil。
+	Recovery RecoveryMode
+	// Snapshots 配置快照来源与下发节奏，见 SnapshotConfig。
+	Snapshots SnapshotConfig
+	// CommittedFrame 是已提交门：返回宿主已持久提交的最新帧。nil 表示切出即提交（现行行为）。
+	// 用于“提交后才广播”的宿主——实时广播由宿主暂存、权威提交后才发（MOBA 夹具 Room），而追帧页与快照分块
+	// 由 Match 的后台 goroutine 直接经可靠通道发出，没有这道门就会把刚切出、还没提交的帧发给客户端。
+	// 配置后：追帧页只覆盖 <= min(最新帧, CommittedFrame()) 的帧，游标已越过它的会话本 Tick 不发页、保留恢复状态，
+	// 等宿主提交后的 Tick 再发；取快照的 SnapshotRequest.MaxFrame 取同一个值。回到实时广播后发什么仍由宿主的
+	// Datagrams 决定，宿主须自己把实时广播挡到提交之后。
+	// 在调用 Tick 的协程上调用，只在有恢复中的会话时调用，不得阻塞；返回值大于最新帧时按最新帧处理。
+	// 宿主提交落后切帧超过 RedundancyDepth-1 帧时，恢复中的会话一直经可靠通道逐页跟随，不切回实时广播。
+	// 设计见 docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md §15。
+	CommittedFrame func() FrameID
 }
 
-// catchupState is one session's paging cursor.
+// catchupState is one session's recovery state: paging cursor, or a snapshot
+// transfer followed by paging from the snapshot frame on.
 type catchupState struct {
 	next     FrameID
 	failures int
-	// unservable 非 nil 表示游标已落到保留窗口之前：这次追帧已失败，inflight 是发往客户端的
-	// 失败通知，结算后删除该会话的追帧状态。期间会话仍不收实时广播（客户端已终止本场）。
+	// unservable 非 nil 表示这次恢复已失败（起点被裁掉、快照取不到或过大、钉住过期）：inflight 是或将是
+	// 发往客户端的失败通知，结算后删除该会话的恢复状态。期间会话仍不收实时广播（客户端已终止本场）。
 	unservable *CatchupUnservableError
 	// inflight is the page currently being sent, or nil. At most one page
 	// per session is in flight; the cursor moves only when it succeeds.
 	inflight *catchupSend
+	// snapshot 非 nil 表示会话处于快照阶段：image 为 nil 时在等本局共享的取快照，否则在分块下发。
+	snapshot *snapshotTransfer
+	// recovered 表示快照已传完、正在从快照帧之后续帧；游标钉住历史，直到回到实时。
+	recovered bool
 }
 
 // catchupSend is one page handed to the reliable lane off the match's
 // goroutine. done is buffered so the sender never blocks on a match that
 // stopped caring (detach, close).
 type catchupSend struct {
-	start    FrameID // cursor when the page was read
-	end      FrameID // cursor after this page succeeds
-	frames   int
-	done     chan error
+	start  FrameID // cursor when the page was read
+	end    FrameID // cursor after this page succeeds
+	frames int
+	// chunks 表示这是一批快照分块；written 是本批确认写出的数据字节（失败时为失败前已成功的部分）。
+	chunks   bool
+	done     chan sendResult
 	cancel   context.CancelFunc
 	finished bool
 	err      error
+	written  int
+}
+
+// sendResult 是后台发送 goroutine 交回的结果。
+type sendResult struct {
+	err     error
+	written int
+}
+
+func (s *catchupSend) settle(result sendResult) {
+	s.err, s.written, s.finished = result.err, result.written, true
 }
 
 // poll collects the send's result without blocking.
 func (s *catchupSend) poll() bool {
 	if !s.finished {
 		select {
-		case s.err = <-s.done:
-			s.finished = true
+		case result := <-s.done:
+			s.settle(result)
 		default:
 		}
 	}
@@ -230,6 +271,15 @@ type Match struct {
 	// ruled tracks the outliers already surfaced per judged frame, so
 	// OnDesync fires exactly on set growth/change, not cardinality change.
 	ruled map[FrameID]map[PlayerID]struct{}
+	// recovery 是解析后的恢复方式（不会是 RecoveryUnset）；snapshots 在没有配置 Provider 时为 nil。
+	recovery  RecoveryMode
+	snapshots *snapshotSettings
+	// fetch 是本局唯一在途的取快照（nil 表示没有）；等快照的会话共用它的结果。
+	fetch *snapshotFetch
+	// lastTransfer 是最近分配的快照传输编号（单调递增，从 1 开始）。
+	lastTransfer uint64
+	// committed 是 MatchConfig.CommittedFrame（nil 表示切出即提交）。
+	committed func() FrameID
 }
 
 // ownerSpectator marks a session owned by a spectator in sessionOwners.
@@ -284,6 +334,10 @@ func NewMatch(config MatchConfig) (*Match, error) {
 	if quorum <= 0 {
 		quorum = players/2 + 1
 	}
+	recovery, snapshots, err := resolveRecovery(config, retain)
+	if err != nil {
+		return nil, err
+	}
 	detector := NewDesyncDetector(quorum)
 	detector.seats = players
 	sendTimeout := config.CatchupSendTimeout
@@ -313,6 +367,9 @@ func NewMatch(config MatchConfig) (*Match, error) {
 		sessionOwners: make(map[nettransport.SessionID]PlayerID),
 		catchups:      make(map[nettransport.SessionID]*catchupState),
 		ruled:         make(map[FrameID]map[PlayerID]struct{}),
+		recovery:      recovery,
+		snapshots:     snapshots,
+		committed:     config.CommittedFrame,
 	}, nil
 }
 
@@ -431,10 +488,18 @@ func (m *Match) DetachSpectator(session nettransport.SessionID) {
 }
 
 // dropCatchup ends a session's catch-up and cancels its in-flight page.
+// 快照恢复进行中（等快照、传快照、快照之后续帧）的会话被拆掉（Detach / DetachSession / DetachSpectator，
+// 或同一席位 Attach 到新会话）计一次 failed{reason="detached"}（维护者 2026-10-20 决定 A）：独立 Gate 断开后
+// Game 经 DetachSession 走到这里，不计数时“传到一半被断开、重连从头再传”的循环在失败指标上看不见。
+// 已在发失败通知的恢复已按原因计过，不重复计；普通追帧不计；Match.Close 不经这里（对局结束不是恢复失败）。
 func (m *Match) dropCatchup(session nettransport.SessionID) {
 	if state, ok := m.catchups[session]; ok {
+		if state.unservable == nil && (state.snapshot != nil || state.recovered) {
+			metrics.IncCounter(MetricSnapshotFailed, metrics.Labels{"reason": "detached"}, 1)
+		}
 		state.drop()
 		delete(m.catchups, session)
+		m.releaseIdleFetch()
 	}
 }
 
@@ -514,22 +579,31 @@ func (m *Match) Tick(ctx context.Context) (Frame, error) {
 	}
 	// 裁剪放在追帧之后：页面在发出前已编码成独立字节，裁剪不影响在途页；
 	// 从当前最早帧开始的追帧因此还能先发出第一页，不会被本次 Tick 刚裁掉。
-	m.retainWindow(frame.ID)
+	if err := m.retainWindow(frame.ID); err != nil {
+		errs = append(errs, err)
+	}
 	return frame, errors.Join(errs...)
 }
 
 // retainWindow 是自动保留：切出 latest 后只留最近 retain 帧，hash 报告按步长跟随同一窗口。
-// 游标落到窗口之前的追帧，在下一次 Tick 的 pumpCatchup 里以 ErrCatchupUnservable 结束并通知客户端。
-func (m *Match) retainWindow(latest FrameID) {
+// 游标落到窗口之前的追帧，在下一次 Tick 的 pumpCatchup 里以 ErrCatchupUnservable 结束并通知客户端
+// （auto / snapshot 模式改为转入取快照）。快照恢复中的会话钉住历史（pinnedTrim），最多多留 PinFrames 帧。
+// 没有恢复中的会话时这里只多一次空 map 判断。
+func (m *Match) retainWindow(latest FrameID) error {
 	if m.retain == 0 || latest <= FrameID(m.retain) {
-		return
+		return nil
 	}
 	keep := latest - FrameID(m.retain) + 1
-	m.history.TrimBefore(keep)
+	trim, err := keep, error(nil)
+	if len(m.catchups) != 0 && m.snapshots != nil {
+		trim, err = m.pinnedTrim(keep)
+	}
+	m.history.TrimBefore(trim)
 	if keep-m.hashTrimmed >= hashTrimStride {
 		m.TrimHashReports(keep)
 		m.hashTrimmed = keep
 	}
+	return err
 }
 
 type broadcastReceiver struct {
@@ -575,6 +649,11 @@ func (m *Match) broadcastOrder() []broadcastReceiver {
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
 // forward past history the client is still missing.
+//
+// 以上是 RecoveryCatchup（没有配置快照来源时的缺省）的行为。RecoveryAuto / RecoverySnapshot 下由服务端按
+// MatchConfig.Recovery 判定走追帧还是全量快照（见 routeRecovery）：起点已被裁掉时不再返回 *CatchupUnservableError，
+// 而是返回 nil 并在之后的 Tick 里取快照、分块下发、从快照帧续帧；只有快照路线最终失败才发 C9 v2 失败通知。
+// 快照在取或在传时再次调用是空操作。
 func (m *Match) StartCatchup(player PlayerID, from FrameID) error {
 	session, attached := m.sessions[player]
 	if !attached {
@@ -608,7 +687,13 @@ func (m *Match) startCatchup(session nettransport.SessionID, from FrameID) error
 	if catching && existing.unservable != nil {
 		return existing.unservable // 失败通知还在途：这次追帧已经结束
 	}
+	if catching && existing.snapshot != nil {
+		return nil // 快照已在取或在传：它覆盖任何起点，之后从快照帧续帧
+	}
 	start := m.history.start()
+	if m.recovery != RecoveryCatchup {
+		return m.routeRecovery(session, existing, from, start)
+	}
 	if catching {
 		if from < existing.next {
 			existing.next = from // 游标落到窗口之前时由 pumpCatchup 统一结束并通知
@@ -617,7 +702,7 @@ func (m *Match) startCatchup(session nettransport.SessionID, from FrameID) error
 		m.catchups[session] = &catchupState{next: from}
 	}
 	if from < start {
-		return &CatchupUnservableError{From: from, Start: start}
+		return &CatchupUnservableError{Reason: RecoveryHistoryTrimmed, From: from, Start: start}
 	}
 	return nil
 }
@@ -648,6 +733,9 @@ func (m *Match) catchupSessions() []nettransport.SessionID {
 // frames from Latest-depth+1 on) is caught up: the broadcast that follows
 // carries the rest. Without this a page that always outlives the wait
 // would trail the head by one frame forever.
+// 配置了 CommittedFrame 时，空闲（没有在途发送）的会话也按同一条件切回实时：已提交门让页面最多发到已提交帧，
+// 宿主每 Tick 同步提交时游标总停在最新帧，settleCatchup 的“越过最新帧”永远不成立；本 Tick 的冗余包覆盖它，
+// 而宿主在提交后才发这个包。
 func (m *Match) collectCatchups() error {
 	if len(m.catchups) == 0 {
 		return nil
@@ -655,14 +743,18 @@ func (m *Match) collectCatchups() error {
 	var errs []error
 	for _, session := range m.catchupSessions() {
 		state := m.catchups[session]
-		if state.inflight == nil || !state.inflight.poll() {
-			continue
+		if state.inflight != nil {
+			if !state.inflight.poll() {
+				continue
+			}
+			if err := m.settleCatchup(session, state); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		} else if m.committed == nil || state.unservable != nil {
+			continue // 没有已提交门：空闲会话由本 Tick 的 pumpCatchup 发页（现行行为）
 		}
-		if err := m.settleCatchup(session, state); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if _, catching := m.catchups[session]; catching && state.inflight == nil && state.next+FrameID(m.depth) > m.history.Latest() {
+		if _, catching := m.catchups[session]; catching && state.inflight == nil && state.snapshot == nil && state.next+FrameID(m.depth) > m.history.Latest() {
 			delete(m.catchups, session)
 		}
 	}
@@ -683,10 +775,16 @@ func (m *Match) settleCatchup(session nettransport.SessionID, state *catchupStat
 		}
 		return nil
 	}
+	if send.chunks {
+		return m.settleChunks(session, state, send)
+	}
 	if send.err != nil {
 		state.failures++
 		if state.failures >= m.catchupMax {
 			delete(m.catchups, session)
+			if state.recovered {
+				metrics.IncCounter(MetricSnapshotFailed, metrics.Labels{"reason": "abandoned"}, 1)
+			}
 			return fmt.Errorf("catchup session %d abandoned after %d failures: %w — the client must reconnect", session, state.failures, send.err)
 		}
 		return fmt.Errorf("catchup session %d: %w", session, send.err)
@@ -712,30 +810,78 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 	}
 	var errs []error
 	var launched []nettransport.SessionID
+	// 已提交门：可靠通道上本 Tick 最多发到 head；没有配置 CommittedFrame 时 head 就是最新帧。
+	head := m.servableHead()
+	// 取快照只非阻塞地收结果：上一 Tick 及更早发起的那一次结束了才分给等快照的会话。
+	fetched := false
+	if m.fetch != nil {
+		var err error
+		if fetched, err = m.collectFetch(time.Now()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	needFetch := false
 	for _, session := range m.catchupSessions() {
 		state := m.catchups[session]
 		if state.inflight != nil {
 			continue // still sending: only this session waits
+		}
+		if state.unservable != nil {
+			// 快照恢复失败或钉住过期（在发送之外判定）：通知是这次恢复的最后一次发送。
+			state.inflight = m.launchSend(ctx, session, EncodeRecoveryFailure(state.unservable.reason(), state.unservable.From, state.unservable.Start), catchupSend{start: state.next, end: state.next})
+			launched = append(launched, session)
+			continue
+		}
+		if state.snapshot != nil {
+			if state.snapshot.image == nil {
+				needFetch = true // 等本局共享的取快照
+				continue
+			}
+			state.inflight = m.launchChunks(ctx, session, state.snapshot)
+			launched = append(launched, session)
+			continue
+		}
+		if start := m.history.start(); state.next < start && m.recovery != RecoveryCatchup {
+			// auto / snapshot：追帧途中被窗口越过改为取快照，不通知客户端失败。
+			m.beginSnapshot(state, SnapshotOutOfWindow, false)
+			needFetch = true
+			continue
 		}
 		// History trimmed past the cursor: the gap can never be served —
 		// abandon loudly instead of paging a stream with a hole in it, and
 		// tell the client over the reliable lane (the notice is the session's
 		// last catch-up send; settleCatchup removes the state once it is done).
 		if start := m.history.start(); state.next < start {
-			state.unservable = &CatchupUnservableError{From: state.next, Start: start}
+			state.unservable = &CatchupUnservableError{Reason: RecoveryHistoryTrimmed, From: state.next, Start: start}
 			metrics.IncCounter(MetricCatchupUnservable, nil, 1)
 			errs = append(errs, fmt.Errorf("catchup session %d: %w", session, state.unservable))
 			state.inflight = m.launchSend(ctx, session, EncodeCatchupUnservable(state.unservable.From, state.unservable.Start), catchupSend{start: state.next, end: state.next})
 			launched = append(launched, session)
 			continue
 		}
-		page := m.history.ReadRange(state.next, m.catchupBatch)
+		limit := m.catchupBatch
+		if latest := m.history.Latest(); head < latest {
+			if state.next > head {
+				if state.next <= latest {
+					continue // 游标之后的帧还没提交：保留恢复状态，等宿主提交后的 Tick 再发
+				}
+			} else {
+				limit = min(limit, int(head-state.next)+1)
+			}
+		}
+		page := m.history.ReadRange(state.next, limit)
 		if len(page) == 0 {
 			delete(m.catchups, session) // caught up: live broadcasts take over
 			continue
 		}
 		state.inflight = m.launchSend(ctx, session, EncodeBroadcast(page), catchupSend{start: state.next, end: page[len(page)-1].ID + 1, frames: len(page)})
 		launched = append(launched, session)
+	}
+	// 每 Tick 至多发起一次取快照；本 Tick 刚收到结果（含失败）的，下一 Tick 再取。
+	if needFetch && m.fetch == nil && !fetched {
+		m.launchFetch(ctx, head)
+	} else if !needFetch {
+		m.releaseIdleFetch()
 	}
 	if len(launched) == 0 {
 		return errors.Join(errs...)
@@ -747,8 +893,8 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 		send := m.catchups[session].inflight
 		if !expired {
 			select {
-			case send.err = <-send.done:
-				send.finished = true
+			case result := <-send.done:
+				send.settle(result)
 			case <-wait.C:
 				expired = true
 			case <-ctx.Done():
@@ -765,6 +911,15 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// servableHead 是可靠通道上可以发出的最后一帧：最新帧，配置了 CommittedFrame 时不超过已提交帧。
+func (m *Match) servableHead() FrameID {
+	head := m.history.Latest()
+	if m.committed != nil {
+		head = min(head, m.committed())
+	}
+	return head
+}
+
 // launchSend sends one catch-up payload (a page, or the catch-up-failed
 // notice) on its own goroutine. The send keeps the caller's context values
 // but not its cancellation (it may outlive the Tick), and is bounded by
@@ -777,12 +932,12 @@ func (m *Match) launchSend(ctx context.Context, session nettransport.SessionID, 
 		start:  cursor.start,
 		end:    cursor.end,
 		frames: cursor.frames,
-		done:   make(chan error, 1),
+		done:   make(chan sendResult, 1),
 		cancel: cancel,
 	}
 	reliable := m.reliable
 	go func() {
-		send.done <- reliable.SendReliable(sendCtx, session, payload)
+		send.done <- sendResult{err: reliable.SendReliable(sendCtx, session, payload)}
 	}()
 	return send
 }
@@ -852,6 +1007,8 @@ func (m *Match) TrimHashReports(before FrameID) {
 // is for hosts that trim further, or that disabled automatic retention.
 // Catch-ups older than keep are abandoned on their next pump with
 // ErrCatchupUnservable and the catch-up-failed notice.
+// 宿主手动裁剪不受快照恢复的钉住约束：裁过钉住点后，auto / snapshot 模式的会话在续帧时改取新快照，
+// catchup 模式照上面结束并通知。
 func (m *Match) TrimHistory(keep FrameID) {
 	m.history.TrimBefore(keep)
 }
@@ -867,6 +1024,10 @@ func (m *Match) History() *History { return m.history }
 func (m *Match) Close() {
 	for _, state := range m.catchups {
 		state.drop()
+	}
+	if m.fetch != nil {
+		m.fetch.cancel()
+		m.fetch = nil
 	}
 	m.closed = true
 	m.broadcastReceivers = nil

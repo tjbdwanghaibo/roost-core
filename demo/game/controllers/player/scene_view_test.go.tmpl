@@ -1,0 +1,69 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	player "{{MODULE}}/game/entities/player"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// sceneViewStub answers SetView with a fixed view and error; the other scene
+// methods are not reached by the scene_view endpoint.
+type sceneViewStub struct {
+	asked policy.ObserverView
+	view  policy.ObserverView
+	err   error
+}
+
+func (*sceneViewStub) Join(context.Context, *player.Player, spatial.Point) error { return nil }
+func (*sceneViewStub) Ready(int64) error                                       { return nil }
+func (*sceneViewStub) Moved(context.Context, int64, spatial.Point)             {}
+func (*sceneViewStub) Leave(context.Context, int64)                            {}
+func (stub *sceneViewStub) SetView(_ int64, view policy.ObserverView) (policy.ObserverView, error) {
+	stub.asked = view
+	return stub.view, stub.err
+}
+
+// scene_view hands the level and radius to the scene and answers with the view
+// in force; the policy's refusals become the client's codes, not internal
+// errors.
+func TestSceneViewAnswersTheViewInForceAndCodesRefusals(t *testing.T) {
+	current := policy.ObserverView{LOD: 0, Radius: 120}
+	cases := []struct {
+		name string
+		err  error
+		code int32
+	}{
+		{"applied", nil, errcode.CodeOK},
+		{"unknown level", fmt.Errorf("wrapped: %w", policy.ErrObserverView), apperrors.ErrSceneViewLOD.Code()},
+		{"too often", policy.ErrObserverViewRate, apperrors.ErrSceneViewRate.Code()},
+		{"not in the scene", policy.ErrInterestUnknown, apperrors.ErrScenePosition.Code()},
+		{"anything else", errors.New("boom"), errcode.CodeInternal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &sceneViewStub{view: current, err: c.err}
+			controller := &Controller{}
+			var joiner sceneJoiner = stub
+			controller.scene.Store(&joiner)
+			response, err := controller.HandleSceneView(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7}, &pb.SceneViewRequest{LodLevel: 1, ViewRadius: 999})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stub.asked != (policy.ObserverView{LOD: 1, Radius: 999}) {
+				t.Fatalf("the scene was asked %+v", stub.asked)
+			}
+			if response.Code != c.code || response.LodLevel != int32(current.LOD) || response.ViewRadius != current.Radius {
+				t.Fatalf("response = %+v, want code %d and the view in force %+v", response, c.code, current)
+			}
+		})
+	}
+}

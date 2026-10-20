@@ -34,7 +34,6 @@ func newMMOScenes(transport scenePusher, locate func(context.Context, int64) (in
 	for _, id := range ids {
 		in, err := policy.NewInterest(policy.InterestConfig{
 			Manager: manager,
-			Session: sessionFor,
 			// self 来源仍用完整视图；附近玩家只能看到 near 视图中的公开字段。
 			SourceProfiles: map[string]map[int]entity.SyncProfile{
 				policy.SourceSpatial: {0: {Key: "near"}},
@@ -69,7 +68,8 @@ func (world *mmoScenes) Reconcile(ctx context.Context, subjectID int64, gate fun
 	if target == nil {
 		return fmt.Errorf("mmorpg: unknown scene %d", sceneID)
 	}
-	session := sessionFor(subjectID)
+	playerID := playerOf(subjectID)
+	session := entitysync.SessionID(playerID)
 	if err := world.manager.HoldSession(session); errors.Is(err, entitysync.ErrSessionUnknown) {
 		if err := world.manager.OpenHeldSession(session); err != nil {
 			return err
@@ -78,7 +78,7 @@ func (world *mmoScenes) Reconcile(ctx context.Context, subjectID int64, gate fun
 		return err
 	}
 	if old := world.indexed[subjectID]; old != 0 {
-		if err := world.scenes[old].Leave(subjectID); err != nil {
+		if err := world.scenes[old].Leave(playerID, subjectID); err != nil {
 			return err
 		}
 		delete(world.indexed, subjectID)
@@ -91,7 +91,7 @@ func (world *mmoScenes) Reconcile(ctx context.Context, subjectID int64, gate fun
 			return err
 		}
 	}
-	if err := target.Enter(subjectID, at); err != nil {
+	if err := target.Enter(playerID, subjectID, at, policy.ObserverView{}); err != nil {
 		return err
 	}
 	world.indexed[subjectID] = sceneID
@@ -106,12 +106,12 @@ func (world *mmoScenes) Disconnect(subjectID int64) error {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	if old := world.indexed[subjectID]; old != 0 {
-		if err := world.scenes[old].Leave(subjectID); err != nil {
+		if err := world.scenes[old].Leave(playerOf(subjectID), subjectID); err != nil {
 			return err
 		}
 		delete(world.indexed, subjectID)
 		world.scenes[old].Apply()
 	}
-	world.manager.CloseSession(sessionFor(subjectID))
+	world.manager.CloseSession(entitysync.SessionID(playerOf(subjectID)))
 	return nil
 }

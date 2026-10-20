@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -167,7 +168,11 @@ func TestMOBARealActiveRoundCrashRecovery(t *testing.T) {
 	}
 	packets := 0
 	wire := nettransport.TransportFunc{Datagram: func(context.Context, nettransport.SessionID, []byte) error { packets++; return nil }}
-	room, err := moba.RecoverRoom(r, h.apply, wire)
+	// 真实依赖下的宿主按快照恢复的接法重建（设计 FEATURE-2026-10-20 §15.3）：可靠通道、已提交门、提交后才发布的检查点。
+	// 本用例没有客户端请求追帧，可靠通道上不应出现任何包；窗口外经快照恢复的演练见 TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL。
+	var reliablePackets atomic.Int64
+	reliable := nettransport.TransportFunc{Reliable: func(context.Context, nettransport.SessionID, []byte) error { reliablePackets.Add(1); return nil }}
+	room, err := moba.RecoverRoomWithSnapshots(r, h.apply, wire, moba.RoomSnapshots{Reliable: reliable, Checkpoints: &moba.ArenaCheckpoints{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,8 +204,8 @@ func TestMOBARealActiveRoundCrashRecovery(t *testing.T) {
 			t.Fatal("resumed clients diverged")
 		}
 	}
-	if packets != 200 {
-		t.Fatalf("resumed broadcasts=%d", packets)
+	if packets != 200 || reliablePackets.Load() != 0 {
+		t.Fatalf("resumed broadcasts=%d reliable=%d", packets, reliablePackets.Load())
 	}
 	if err := actor.Stop(context.Background()); err != nil {
 		t.Fatal(err)

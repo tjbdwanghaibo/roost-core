@@ -61,8 +61,14 @@ func (transport Transport) SendDatagram(ctx context.Context, id nettransport.Ses
 }
 func (transport Transport) MaxDatagramPayload() int { return transport.MaxFrameBytes() }
 
+// MaxReliableBytes 与 MaxDatagramPayload 相同：两条通道走同一个 Game 出站与单包上限。
+// Transport 不实现 nettransport.ReliablePacer：SendReliable 只做 Game 本地准入、写出后没有回执，
+// lockstep 快照在这里按 SnapshotConfig.UnpacedBytesPerTick 固定节流。
+func (transport Transport) MaxReliableBytes() int { return transport.MaxFrameBytes() }
+
 var _ entitysync.Transport = Transport{}
 var _ entitysync.SessionLifecycle = Transport{}
 var _ entitysync.FrameSizeLimiter = Transport{}
 var _ nettransport.ReliableSender = Transport{}
 var _ nettransport.DatagramSender = Transport{}
+var _ nettransport.ReliablePayloadLimiter = Transport{}

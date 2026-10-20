@@ -18,6 +18,8 @@ var (
 	// because the cost it guards is invisible at run time — nothing fails,
 	// the manager just gets slower in proportion to a ratio nobody looked at.
 	ErrInterestBudget = errors.New("policy: one observer would subscribe to more blocks than the budget allows")
+	// ErrObserverView：请求的 LOD 层级不在配置的层级表里。视野大小越界不算错误，服务端夹取。
+	ErrObserverView = errors.New("policy: observer view not configured")
 )
 
 // InterestEventKind classifies one visibility transition.
@@ -35,6 +37,7 @@ const (
 
 // InterestEvent is one incremental visibility change. Band carries the
 // distance-band index for Enter and BandChanged, and -1 for Leave.
+// Observer 是观察者的玩家 ID（会话 ID），Subject 是目标的实体 ID。
 type InterestEvent struct {
 	Observer int64
 	Subject  int64
@@ -54,9 +57,22 @@ type AOIConfig struct {
 	// Bands lists distance-band outer edges in ascending order; a visible
 	// subject's band is the first edge its distance fits under (subjects
 	// beyond the last edge use len(Bands)). Empty means a single band 0.
+	// 配置了 LODs 时 Bands 必须为空：Bands 只是“只有一层 LOD”的写法。
 	Bands []int64
+	// LODs 是观察者可选的 LOD 层级表，下标即 ObserverView.LOD，每层是一组距离分档（规则同 Bands）。
+	// 为空时只有层级 0，分档取 Bands。每层分档递增、为正、不超过 MaxLeaveRadius，启动期校验。
+	LODs [][]int64
+	// 观察者视野大小（ObserverView.Radius，即进入半径）的允许范围与量化步长。
+	// 离开半径 = 视野大小 + 滞回量，滞回量取缺省视野的 LeaveRadius − EnterRadius；
+	// 请求的视野大小先夹到 [MinViewRadius, MaxLeaveRadius − 滞回量]，再从 MinViewRadius 起按 ViewRadiusStep 向下取整。
+	// 零值：MinViewRadius 取 EnterRadius、MaxLeaveRadius 取 LeaveRadius（只允许缺省视野）、ViewRadiusStep 取 1。
+	// EnterRadius 必须落在量化网格上，客户端报出缺省视野时得到的正是缺省视野。
+	// 单个观察者的块预算（MaxObserverBlocks）按 MaxLeaveRadius 计算，启动期超出即拒绝。
+	MinViewRadius  int64
+	MaxLeaveRadius int64
+	ViewRadiusStep int64
 	// MaxObserverBlocks caps how many blocks ONE observer may subscribe to.
-	// The count is (⌈2·LeaveRadius/BlockSize⌉+1)² — the leave-radius box
+	// The count is (⌈2·MaxLeaveRadius/BlockSize⌉+1)² — the widest leave-radius box
 	// discretized — and it is the cost of every observer move, twice over
 	// (the observer's own block set and the reverse table). Zero takes
 	// DefaultMaxObserverBlocks; a deployment that really wants a wide view
@@ -87,6 +103,27 @@ const maxInterestRadius = int64(1) << 62
 // configurations that quietly turn an incremental AOI into a full-map scan.
 const DefaultMaxObserverBlocks = 1024
 
+// ObserverView 是一个观察者的视野：LOD 层级（AOIConfig.LODs 的下标）与视野大小（进入半径）。
+// 零值是缺省视野：层级 0、Radius 取 AOIConfig.EnterRadius。
+type ObserverView struct {
+	LOD    int
+	Radius int64
+}
+
+// withViewDefaults 补齐视野范围的零值；validate、NewAOI、NewAOICluster 都在补齐后的配置上工作。
+func (c AOIConfig) withViewDefaults() AOIConfig {
+	if c.MinViewRadius == 0 {
+		c.MinViewRadius = c.EnterRadius
+	}
+	if c.MaxLeaveRadius == 0 {
+		c.MaxLeaveRadius = c.LeaveRadius
+	}
+	if c.ViewRadiusStep == 0 {
+		c.ViewRadiusStep = 1
+	}
+	return c
+}
+
 func (c AOIConfig) validate() error {
 	if c.MaxObservedBlocks < 0 {
 		return ErrInterestConfig
@@ -94,9 +131,25 @@ func (c AOIConfig) validate() error {
 	if c.EnterRadius <= 0 || c.LeaveRadius < c.EnterRadius || c.LeaveRadius >= maxInterestRadius {
 		return ErrInterestConfig
 	}
-	for index, edge := range c.Bands {
-		if edge <= 0 || index > 0 && edge <= c.Bands[index-1] {
-			return ErrInterestConfig
+	c = c.withViewDefaults()
+	if c.MinViewRadius <= 0 || c.MinViewRadius > c.EnterRadius || c.MaxLeaveRadius < c.LeaveRadius || c.MaxLeaveRadius >= maxInterestRadius {
+		return fmt.Errorf("%w: view radius range [%d, leave %d] must contain the default view (enter %d, leave %d)",
+			ErrInterestConfig, c.MinViewRadius, c.MaxLeaveRadius, c.EnterRadius, c.LeaveRadius)
+	}
+	if c.ViewRadiusStep <= 0 || (c.EnterRadius-c.MinViewRadius)%c.ViewRadiusStep != 0 {
+		return fmt.Errorf("%w: enter radius %d is not on the view radius grid (min %d, step %d)",
+			ErrInterestConfig, c.EnterRadius, c.MinViewRadius, c.ViewRadiusStep)
+	}
+	if len(c.LODs) > 0 && len(c.Bands) > 0 {
+		return fmt.Errorf("%w: Bands and LODs both set", ErrInterestConfig)
+	}
+	for level := range max(len(c.LODs), 1) {
+		bands, _ := c.lodBands(level)
+		for index, edge := range bands {
+			if edge <= 0 || index > 0 && edge <= bands[index-1] || edge > c.MaxLeaveRadius {
+				return fmt.Errorf("%w: LOD %d band %d edge %d (ascending, positive, at most max leave radius %d)",
+					ErrInterestConfig, level, index, edge, c.MaxLeaveRadius)
+			}
 		}
 	}
 	if c.BlockSize <= 0 {
@@ -109,10 +162,48 @@ func (c AOIConfig) validate() error {
 		budget = DefaultMaxObserverBlocks
 	}
 	if worst := c.worstObserverBlocks(); worst > int64(budget) {
-		return fmt.Errorf("%w: leave radius %d over block size %d covers %d blocks, budget is %d",
-			ErrInterestBudget, c.LeaveRadius, c.BlockSize, worst, budget)
+		return fmt.Errorf("%w: max leave radius %d over block size %d covers %d blocks, budget is %d",
+			ErrInterestBudget, c.MaxLeaveRadius, c.BlockSize, worst, budget)
 	}
 	return nil
+}
+
+// lodBands 返回某个 LOD 层级的距离分档；层级不存在时 ok 为 false。
+func (c AOIConfig) lodBands(level int) (bands []int64, ok bool) {
+	if len(c.LODs) == 0 {
+		return c.Bands, level == 0
+	}
+	if level < 0 || level >= len(c.LODs) {
+		return nil, false
+	}
+	return c.LODs[level], true
+}
+
+// maxBands 是所有层级里分档最多的那一层的分档数；距离档号的取值是 0..maxBands。
+func (c AOIConfig) maxBands() int {
+	most := len(c.Bands)
+	for _, bands := range c.LODs {
+		most = max(most, len(bands))
+	}
+	return most
+}
+
+// hysteresis 是离开半径比视野大小多出的量，取缺省视野的差。
+func (c AOIConfig) hysteresis() int64 { return c.LeaveRadius - c.EnterRadius }
+
+// normalizeView 把请求的视野换成服务端允许的视野：层级必须已配置；Radius 为零取缺省，
+// 否则夹到允许范围并按步长向下量化。调用方传入的是补齐过零值的配置。
+func (c AOIConfig) normalizeView(view ObserverView) (ObserverView, error) {
+	if _, ok := c.lodBands(view.LOD); !ok {
+		return ObserverView{}, fmt.Errorf("%w: LOD level %d", ErrObserverView, view.LOD)
+	}
+	if view.Radius == 0 {
+		view.Radius = c.EnterRadius
+		return view, nil
+	}
+	radius := min(max(view.Radius, c.MinViewRadius), c.MaxLeaveRadius-c.hysteresis())
+	view.Radius = c.MinViewRadius + (radius-c.MinViewRadius)/c.ViewRadiusStep*c.ViewRadiusStep
+	return view, nil
 }
 
 // worstObserverBlocks is the largest number of blocks one observer's box can
@@ -122,7 +213,8 @@ func (c AOIConfig) validate() error {
 // answers "enormous" instead of wrapping to "small".
 func (c AOIConfig) worstObserverBlocks() int64 {
 	blockSize := c.BlockSize
-	span := spatial.SaturatingAdd(spatial.SaturatingAdd(c.LeaveRadius, c.LeaveRadius), 1)
+	leave := max(c.MaxLeaveRadius, c.LeaveRadius)
+	span := spatial.SaturatingAdd(spatial.SaturatingAdd(leave, leave), 1)
 	perSide := spatial.SaturatingAdd(spatial.DivideCeil(span, blockSize), 1)
 	// The box is also clipped by the map, so a small world cannot be made
 	// expensive by an enormous radius.
@@ -149,9 +241,15 @@ func (c AOIConfig) boundedSides(blockSize int64) int64 {
 	return spatial.DivideCeil(longest, blockSize)
 }
 
+// interestObserver 是一个观察者（一个玩家的视野）。id 是玩家 ID；self 是玩家自身的实体 ID，
+// 0 表示没有（只看不被看）。self 永远不进自己的可见集。enter / leave / bands 由 view 推出。
 type interestObserver struct {
 	dirty        observerDirty
 	id           int64
+	self         int64
+	view         ObserverView
+	enter, leave int64
+	bands        []int64
 	at           spatial.Point
 	blocks       map[int64]struct{}
 	visible      map[int64]int // subject id -> current band
@@ -164,6 +262,9 @@ type interestObserver struct {
 // observers subscribe to the blocks their leave radius covers, subject and
 // observer movement re-evaluates only the affected neighborhood, and Flush
 // drains the resulting Enter/Leave/BandChanged events deterministically.
+//
+// 编号：观察者按玩家 ID 编号，目标按实体 ID 编号，两张表互不相通；观察者登记时带上自身实体（self），
+// 自排除比的是 self，不是观察者 ID。每个观察者有自己的视野（ObserverView），进出半径与距离分档都读观察者的值。
 //
 // 并发边界：公开写方法由 Interest 或 AOICluster 协调，不能由外部并发调用。
 // 物理成员索引复用 BlockIndex 的块级读写锁；扩展块保存观察关系与额外覆盖。
@@ -193,8 +294,13 @@ func NewAOI(config AOIConfig) (*AOI, error) {
 	if err != nil {
 		return nil, err
 	}
+	config = config.withViewDefaults()
 	config.Bounds = index.Bounds()
 	config.Bands = slices.Clone(config.Bands)
+	config.LODs = slices.Clone(config.LODs)
+	for level, bands := range config.LODs {
+		config.LODs[level] = slices.Clone(bands)
+	}
 	if config.MaxObservedBlocks == 0 {
 		config.MaxObservedBlocks = 1024
 	}
@@ -210,13 +316,13 @@ func NewAOI(config AOIConfig) (*AOI, error) {
 // Bounds returns the managed area.
 func (m *AOI) Bounds() spatial.Rect { return m.config.Bounds }
 
-func (m *AOI) band(distanceFrom, to spatial.Point) int {
-	for index, edge := range m.config.Bands {
-		if spatial.WithinDistance(distanceFrom, to, edge) {
+func (m *AOI) band(observer *interestObserver, to spatial.Point) int {
+	for index, edge := range observer.bands {
+		if spatial.WithinDistance(observer.at, to, edge) {
 			return index
 		}
 	}
-	return len(m.config.Bands)
+	return len(observer.bands)
 }
 
 func (m *AOI) emit(observer, subject int64, kind InterestEventKind, band int) {
@@ -279,55 +385,88 @@ func (m *AOI) RemoveSubject(id int64) error {
 }
 
 // AddObserver registers an observer and evaluates its initial visible set.
-// An id may be both an observer and a subject; it never observes itself.
-func (m *AOI) AddObserver(id int64, at spatial.Point) error {
+// id 是玩家 ID；self 是玩家自身的实体 ID（0 表示只看不被看），它永远不出现在自己的可见集里。
+// view 先按配置归一（层级必须存在，视野大小夹取量化）。已登记的观察者按新位置、新视野重新登记。
+func (m *AOI) AddObserver(id, self int64, at spatial.Point, view ObserverView) error {
 	if id == 0 {
 		return ErrInterestUnknown
 	}
 	if !m.config.Bounds.Contains(at) {
 		return spatial.ErrInvalidBounds
 	}
-	return m.addObserverUnbounded(id, at)
+	view, err := m.config.normalizeView(view)
+	if err != nil {
+		return err
+	}
+	m.placeObserver(id, self, at, view)
+	return nil
 }
 
-// addObserverUnbounded registers an observer whose position may lie outside
-// this manager's bounds: AOICluster mirrors border observers into
+// placeObserver registers or updates an observer whose position may lie
+// outside this manager's bounds: AOICluster mirrors border observers into
 // neighboring areas at their true world position, and block subscription
-// clamps to this area's bounds on its own.
-func (m *AOI) addObserverUnbounded(id int64, at spatial.Point) error {
-	if _, exists := m.observers[id]; exists {
-		return m.moveObserverUnbounded(id, at)
+// clamps to this area's bounds on its own. view 已归一。
+func (m *AOI) placeObserver(id, self int64, at spatial.Point, view ObserverView) {
+	observer, exists := m.observers[id]
+	reason := dirtySpatial
+	if !exists {
+		observer = &interestObserver{id: id, blocks: make(map[int64]struct{}), visible: make(map[int64]int)}
+		m.observers[id] = observer
+		reason |= dirtyCoverage
+	} else if observer.self != self {
+		// 自身实体换了：额外覆盖的可见集也按新的 self 重新排除。
+		reason |= dirtyCoverage
 	}
-	observer := &interestObserver{id: id, at: at, blocks: make(map[int64]struct{}), visible: make(map[int64]int)}
-	m.observers[id] = observer
-	m.resubscribe(observer)
-	m.refreshObserver(observer, dirtySpatial|dirtyCoverage)
-	return nil
+	observer.self, observer.at = self, at
+	m.setView(observer, view)
+	if m.resubscribe(observer) {
+		reason |= dirtyCoverage
+	}
+	m.refreshObserver(observer, reason)
+}
+
+func (m *AOI) setView(observer *interestObserver, view ObserverView) {
+	observer.view = view
+	observer.bands, _ = m.config.lodBands(view.LOD)
+	observer.enter = view.Radius
+	observer.leave = view.Radius + m.config.hysteresis()
 }
 
 // MoveObserver relocates an observer and re-evaluates its whole visible set.
 func (m *AOI) MoveObserver(id int64, to spatial.Point) error {
-	if _, exists := m.observers[id]; !exists {
+	observer, exists := m.observers[id]
+	if !exists {
 		return ErrInterestUnknown
 	}
 	if !m.config.Bounds.Contains(to) {
 		return spatial.ErrInvalidBounds
 	}
-	return m.moveObserverUnbounded(id, to)
+	m.placeObserver(id, observer.self, to, observer.view)
+	return nil
 }
 
-func (m *AOI) moveObserverUnbounded(id int64, to spatial.Point) error {
+// SetObserverView 换一个观察者的视野并完整重评：视野变大时新进入半径内的目标进入，变小时超出离开半径的离开，
+// 只换层级时按新分档产生 BandChanged。返回归一后的视野。
+func (m *AOI) SetObserverView(id int64, view ObserverView) (ObserverView, error) {
 	observer, exists := m.observers[id]
 	if !exists {
-		return ErrInterestUnknown
+		return ObserverView{}, ErrInterestUnknown
 	}
-	observer.at = to
-	reason := dirtySpatial
-	if m.resubscribe(observer) {
-		reason |= dirtyCoverage
+	view, err := m.config.normalizeView(view)
+	if err != nil {
+		return observer.view, err
 	}
-	m.refreshObserver(observer, reason)
-	return nil
+	m.placeObserver(id, observer.self, observer.at, view)
+	return view, nil
+}
+
+// ObserverViewOf 返回观察者当前的（归一后的）视野。
+func (m *AOI) ObserverViewOf(id int64) (ObserverView, bool) {
+	observer, exists := m.observers[id]
+	if !exists {
+		return ObserverView{}, false
+	}
+	return observer.view, true
 }
 
 // RemoveObserver drops an observer, emitting Leave for its visible set.
@@ -384,11 +523,11 @@ func (m *AOI) Flush() []InterestEvent {
 }
 
 // resubscribe diffs the observer's block subscriptions against the blocks
-// its leave-radius box currently covers.
+// its own leave-radius box currently covers.
 func (m *AOI) resubscribe(observer *interestObserver) (changed bool) {
-	reach := spatial.SaturatingAdd(m.config.LeaveRadius, 1)
+	reach := spatial.SaturatingAdd(observer.leave, 1)
 	box := spatial.Rect{
-		Min: spatial.Point{X: spatial.SaturatingSub(observer.at.X, m.config.LeaveRadius), Y: spatial.SaturatingSub(observer.at.Y, m.config.LeaveRadius)},
+		Min: spatial.Point{X: spatial.SaturatingSub(observer.at.X, observer.leave), Y: spatial.SaturatingSub(observer.at.Y, observer.leave)},
 		Max: spatial.Point{X: spatial.SaturatingAdd(observer.at.X, reach), Y: spatial.SaturatingAdd(observer.at.Y, reach)},
 	}
 	next, _ := m.index.BlockRects(box)
@@ -476,8 +615,8 @@ type entryCandidate struct {
 }
 
 // evaluateObserver re-evaluates an observer's entire visible set: current
-// members against the leave radius, subscription-neighborhood subjects
-// against the enter radius.
+// members against its leave radius, subscription-neighborhood subjects
+// against its enter radius.
 func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, reason observerDirty) {
 	if reason&dirtyCoverage != 0 {
 		m.evaluateObserved(observer)
@@ -521,7 +660,7 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 			}
 			seen[subject] = struct{}{}
 			// 自身和进入半径外的实体不会入场，排序前排除；距离判断保留溢出安全语义。
-			if at, exists := m.subjects[subject]; exists && subject != observer.id && spatial.WithinDistance(observer.at, at, m.config.EnterRadius) {
+			if at, exists := m.subjects[subject]; exists && subject != observer.self && spatial.WithinDistance(observer.at, at, observer.enter) {
 				candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: spatial.DistanceSquared(observer.at, at)})
 			}
 		}
@@ -545,11 +684,9 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 }
 
 func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial.Point, removed bool) {
-	if observer.id == subject {
-		return
-	}
 	previousBand, wasVisible := observer.visible[subject]
-	if removed {
+	// 自身实体不进可见集（self 为 0 时不会命中：实体 ID 不为零）；self 换过时旧可见里的它按离开处理。
+	if removed || subject == observer.self {
 		if wasVisible {
 			delete(observer.visible, subject)
 			m.emit(observer.id, subject, InterestLeave, -1)
@@ -557,18 +694,18 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 		return
 	}
 	if wasVisible {
-		if !spatial.WithinDistance(observer.at, at, m.config.LeaveRadius) {
+		if !spatial.WithinDistance(observer.at, at, observer.leave) {
 			delete(observer.visible, subject)
 			m.emit(observer.id, subject, InterestLeave, -1)
 			return
 		}
-		if band := m.band(observer.at, at); band != previousBand {
+		if band := m.band(observer, at); band != previousBand {
 			observer.visible[subject] = band
 			m.emit(observer.id, subject, InterestBandChanged, band)
 		}
 		return
 	}
-	if !spatial.WithinDistance(observer.at, at, m.config.EnterRadius) {
+	if !spatial.WithinDistance(observer.at, at, observer.enter) {
 		return
 	}
 	if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible {
@@ -576,7 +713,7 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 			return
 		}
 	}
-	band := m.band(observer.at, at)
+	band := m.band(observer, at)
 	observer.visible[subject] = band
 	m.emit(observer.id, subject, InterestEnter, band)
 }

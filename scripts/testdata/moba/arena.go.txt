@@ -1,10 +1,15 @@
 package moba
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"io"
+	"sync/atomic"
 )
 
 // Arena 是 5v5 三路业务规则。固定配置版本和种子随对局保存；数值只是教学选择。
@@ -99,6 +104,59 @@ func (a *Arena) Digest() string {
 	sum := sha256.Sum256(a.Snapshot())
 	return hex.EncodeToString(sum[:])
 }
+
+// Hash 是 Arena 的状态 hash（与单路 State.Hash 同一做法：SHA-256 前 8 字节），快照携带它供客户端恢复后核对。
+func (a *Arena) Hash() uint64 {
+	sum := sha256.Sum256(a.Snapshot())
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+// maxArenaSnapshot 是 Arena 检查点的业务上限；实际约几 KB，远小于框架缺省 4 MiB。
+const maxArenaSnapshot = 64 << 10
+
+// RestoreArena 是客户端用服务器参考模拟的检查点替换本地状态：严格解码（未知字段、尾随数据拒绝），
+// 版本与种子必须与本局相同。字节摘要由框架核对，状态 hash 由调用方与快照携带的值比较。
+func RestoreArena(raw []byte, seed uint64) (*Arena, error) {
+	if len(raw) == 0 || len(raw) > maxArenaSnapshot {
+		return nil, ErrRule
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	a := new(Arena)
+	if err := decoder.Decode(a); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, ErrRule
+	}
+	if a.Version != ArenaVersion || a.Seed != seed || a.Tick > MaxFrames || a.Winner < 0 || a.Winner > 2 || !a.Ended && a.Winner != 0 {
+		return nil, ErrRule
+	}
+	return a, nil
+}
+
+// ArenaCheckpoints 是服务器参考模拟的检查点缓存，实现 lockstep.SnapshotProvider：
+// 房间 owner 切帧并推进参考模拟后按间隔 Publish 一份不可变检查点；Provider 在 Match 的取快照 goroutine 上
+// 只读最新一份，不碰 owner 独占的参考状态。间隔必须小于历史窗口，否则最新检查点可能早于 MinFrame。
+type ArenaCheckpoints struct {
+	latest atomic.Pointer[lockstep.Snapshot]
+	served atomic.Int64
+}
+
+func (c *ArenaCheckpoints) Publish(reference *Arena) {
+	c.latest.Store(&lockstep.Snapshot{Frame: reference.Tick, Data: reference.Snapshot(), StateHash: reference.Hash(), HasStateHash: true})
+}
+func (c *ArenaCheckpoints) Snapshot(_ context.Context, req lockstep.SnapshotRequest) (lockstep.Snapshot, error) {
+	s := c.latest.Load()
+	if s == nil || s.Frame < req.MinFrame || s.Frame > req.MaxFrame {
+		return lockstep.Snapshot{}, lockstep.ErrSnapshotUnavailable
+	}
+	c.served.Add(1)
+	return *s, nil
+}
+
+// Served 是交出检查点的次数（多个会话同时等快照时共用一次）。
+func (c *ArenaCheckpoints) Served() int64 { return c.served.Load() }
 
 // Visible 是客户端展示规则；全输入帧同步仍暴露输入，不构成对修改客户端的信息保密。
 func (a *Arena) Visible(team, target int) bool {

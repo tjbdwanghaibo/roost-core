@@ -1,0 +1,273 @@
+//go:build integration && lsdrill
+
+package gate_test
+
+// 一次性功能演练（不是性能基线、不提交为常驻用例）：独立 Gate（只准入、写出无回执）经 toxiproxy 限速链路传快照，
+// 把设计 §6.3 风险 1（慢链路被 Gate 按积压超龄规则断开、重连后重来）落成实测。参数全部取缺省，不为通过调参。
+// 用法：source 共享隔离环境 env.sh、持 remote-acceptance.lock 后
+//   LS_DRILL_RATES=0,256,64 GOWORK=off go test -tags 'integration lsdrill' -count=1 -v -run TestSnapshotDrillStandaloneGate ./wiring/gate
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+)
+
+func gateDrillToxiproxy(t *testing.T, api, name, upstream string, rateKB int) string {
+	t.Helper()
+	call := func(method, path string, body any) []byte {
+		raw, _ := json.Marshal(body)
+		request, err := http.NewRequest(method, api+path, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var out bytes.Buffer
+		_, _ = out.ReadFrom(response.Body)
+		if response.StatusCode/100 != 2 {
+			t.Fatalf("toxiproxy %s %s: %d %s", method, path, response.StatusCode, out.String())
+		}
+		return out.Bytes()
+	}
+	created := call(http.MethodPost, "/proxies", map[string]any{"name": name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+	t.Cleanup(func() { call(http.MethodDelete, "/proxies/"+name, nil) })
+	var proxy struct{ Listen string }
+	if err := json.Unmarshal(created, &proxy); err != nil {
+		t.Fatal(err)
+	}
+	if rateKB > 0 {
+		call(http.MethodPost, "/proxies/"+name+"/toxics", map[string]any{"name": "bw", "type": "bandwidth", "stream": "downstream", "toxicity": 1, "attributes": map[string]int{"rate": rateKB}})
+	}
+	return proxy.Listen
+}
+
+func TestSnapshotDrillStandaloneGate(t *testing.T) {
+	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
+	if api == "" || os.Getenv("LS_DRILL_RATES") == "" {
+		t.Skip("toxiproxy drill not configured")
+	}
+	for _, field := range strings.Split(os.Getenv("LS_DRILL_RATES"), ",") {
+		rate, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(fmt.Sprintf("rate%dKBps", rate), func(t *testing.T) { snapshotDrillStandaloneGate(t, api, rate) })
+	}
+}
+
+func snapshotDrillStandaloneGate(t *testing.T, api string, rateKB int) {
+	const (
+		tickPeriod    = time.Second / 30
+		prebuilt      = lockstep.DefaultHistoryRetainFrames + 100
+		attempts      = 3
+	)
+	jobs := make(chan func(), 32)
+	stop := make(chan struct{})
+	ownerDone := make(chan struct{})
+	var room *lockstep.Match
+	var head atomic.Uint64
+	var tickErrors atomic.Int64
+	var lastTickErr atomic.Pointer[error]
+	run := func(fn func() error) error {
+		done := make(chan error, 1)
+		jobs <- func() { done <- fn() }
+		return <-done
+	}
+	var h *gateHarness
+	h = realGateHarness(t, func(ctx context.Context, s gateway.Session, id, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
+		if id != 301 || kind != wire.PayloadLockstep {
+			return nil, gateway.ErrInvalidRequest
+		}
+		command, err := lockstep.DecodeCommand(payload)
+		if err != nil {
+			return nil, err
+		}
+		_, receiver, ok := h.game.SessionReceiver(s.Principal().SessionID)
+		if !ok {
+			return nil, gateway.ErrBindingStale
+		}
+		return nil, run(func() error { return room.HandleCommand(nettransport.SessionID(receiver), command) })
+	}, func(deps *gateway.GameDependencies) {
+		deps.OnActive = func(_ gateway.Binding, id uint64) error {
+			return run(func() error { return room.Attach(123, nettransport.SessionID(id)) })
+		}
+		deps.OnClosed = func(_ gateway.Binding, id uint64) {
+			_ = run(func() error { room.DetachSession(123, nettransport.SessionID(id)); return nil })
+		}
+	})
+	transport := gatewiring.Transport{Game: h.game, LockstepMessageID: 302}
+	snapshotBytes := 1 << 20
+	if size, err := strconv.Atoi(os.Getenv("LS_DRILL_SNAPSHOT_BYTES")); err == nil && size > 0 {
+		snapshotBytes = size
+	}
+	data := bytes.Repeat([]byte("roost-lockstep-snapshot-drill-"), snapshotBytes/30+1)[:snapshotBytes]
+	var served atomic.Int64
+	provider := lockstep.SnapshotProviderFunc(func(_ context.Context, req lockstep.SnapshotRequest) (lockstep.Snapshot, error) {
+		served.Add(1)
+		return lockstep.Snapshot{Frame: req.MaxFrame, Data: data, StateHash: uint64(req.MaxFrame), HasStateHash: true}, nil
+	})
+	var err error
+	room, err = lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{123}, MaxInputBytes: 8},
+		Datagrams: transport, Reliable: transport, Snapshots: lockstep.SnapshotConfig{Provider: provider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range prebuilt {
+		if _, err := room.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	go func() {
+		defer close(ownerDone)
+		defer room.Close()
+		ticker := time.NewTicker(tickPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case job := <-jobs:
+				job()
+			case <-ticker.C:
+				frame, err := room.Tick(context.Background())
+				head.Store(uint64(frame.ID))
+				if err != nil {
+					tickErrors.Add(1)
+					lastTickErr.Store(&err)
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-ownerDone })
+	name := fmt.Sprintf("lsp4-gate-%d-%d", os.Getpid(), rateKB)
+	listen := gateDrillToxiproxy(t, api, name, h.server.Addr().String(), rateKB)
+	before := metrics.Snapshot()
+	t.Logf("snapshot %d B, rate %d KB/s (1 KB = 1000 B); Gate outbound defaults: queue %d entries, %d B per session, max_age %v; UnpacedBytesPerTick default %d B at %v ticks (%.0f KB/s)",
+		snapshotBytes, rateKB, h.config.Outbound.QueueEntries, h.config.Outbound.PerSessionBytes, h.config.Outbound.MaxAge, lockstep.DefaultSnapshotUnpacedBytesPerTick, tickPeriod, float64(lockstep.DefaultSnapshotUnpacedBytesPerTick)/tickPeriod.Seconds()/1000)
+	recovered := false
+	for attempt := 1; attempt <= attempts && !recovered; attempt++ {
+		connection, err := net.DialTimeout("tcp", listen, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+		if err := wire.Write(connection, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte("ticket")}}, 8192); err != nil {
+			t.Fatal(err)
+		}
+		if ack, err := wire.Read(connection, 8192); err != nil || ack.MsgID != 0 || ack.Seq != 1 {
+			t.Fatalf("auth through proxy: %+v %v", ack, err)
+		}
+		_ = connection.SetDeadline(time.Time{})
+		// 新连接上的客户端从第 1 帧请求（本地状态为空），起点早已裁掉，auto 走快照。
+		command, _ := lockstep.EncodeCommand(lockstep.Command{Operation: lockstep.OpCatchup, Frame: 1})
+		if err := wire.Write(connection, []*wire.Packet{{Flags: wire.FlagLockstep, MsgID: 301, Seq: 2, Payload: command}}, h.config.MaxPayloadBytes); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		assembler := lockstep.NewFrameAssembler(0)
+		chunks, chunkBytes := 0, 0
+		var firstChunk, complete time.Time
+		var snapshotFrame lockstep.FrameID
+		var end string
+		for {
+			_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+			packet, err := wire.Read(connection, h.config.MaxPayloadBytes)
+			if err != nil {
+				end = fmt.Sprintf("connection ended: %v", err)
+				break
+			}
+			if packet.MsgID != 302 {
+				continue
+			}
+			if lockstep.IsSnapshotChunk(packet.Payload) {
+				if chunks == 0 {
+					firstChunk = time.Now()
+				}
+				chunks++
+				chunkBytes += len(packet.Payload)
+			}
+			delivery, err := assembler.Receive(packet.Payload)
+			if err != nil {
+				end = fmt.Sprintf("client error: %v", err)
+				break
+			}
+			if delivery.Snapshot != nil {
+				complete, snapshotFrame = time.Now(), delivery.Snapshot.Frame
+				assembler.ResumeAfterSnapshot(delivery.Snapshot.Frame)
+			}
+			if snapshotFrame != 0 && uint64(assembler.Next()) >= head.Load() {
+				recovered = true
+				end = "caught up to the head"
+				break
+			}
+			if time.Since(start) > 150*time.Second {
+				end = "timeout"
+				break
+			}
+		}
+		_ = connection.Close()
+		transfer := "incomplete"
+		if !complete.IsZero() {
+			transfer = complete.Sub(firstChunk).Round(time.Millisecond).String()
+		}
+		t.Logf("attempt %d: %s after %v; snapshot chunks received %d (%d wire bytes), transfer %s, snapshot frame %d, client next %d, head %d",
+			attempt, end, time.Since(start).Round(time.Millisecond), chunks, chunkBytes, transfer, snapshotFrame, assembler.Next(), head.Load())
+		time.Sleep(300 * time.Millisecond) // 让旧绑定的关闭与 DetachSession 先落地，再开下一次
+	}
+	after := metrics.Snapshot()
+	var lastErr error
+	if e := lastTickErr.Load(); e != nil {
+		lastErr = *e
+	}
+	t.Logf("recovered %v; provider calls %d; Tick errors %d (last %v)", recovered, served.Load(), tickErrors.Load(), lastErr)
+	for _, line := range drillMetricDiff(before, after) {
+		t.Log(line)
+	}
+}
+
+// drillMetricDiff 列出演练期间变化过的 lockstep / gateway 计数器。
+func drillMetricDiff(before, after []metrics.Metric) []string {
+	key := func(m metrics.Metric) string { return fmt.Sprintf("%s%v", m.Name, m.Labels) }
+	old := map[string]int64{}
+	for _, m := range before {
+		old[key(m)] = m.Value
+	}
+	var out []string
+	for _, m := range after {
+		if !strings.HasPrefix(m.Name, "lockstep.") && !strings.Contains(m.Name, "gate") && !strings.Contains(m.Name, "outbound") {
+			continue
+		}
+		if m.Kind != metrics.KindCounter {
+			continue
+		}
+		if delta := m.Value - old[key(m)]; delta != 0 {
+			out = append(out, fmt.Sprintf("metric %s +%d", key(m), delta))
+		}
+	}
+	sort.Strings(out)
+	return out
+}

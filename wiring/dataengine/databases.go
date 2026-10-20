@@ -12,7 +12,8 @@ import (
 )
 
 // NewDatabaseMap 合成并冻结本进程的逻辑库 → 物理库表：代码声明的逻辑库（生成的 db/gen_databases.go 在
-// init 里登记）、配置 dataengine.databases 与回调 resolver（可为 nil，每个声明的逻辑库调用一次，非空结果覆盖配置）。
+// init 里登记）、配置 dataengine.databases 与回调 resolver（可为 nil，每个声明的逻辑库调用一次；同一逻辑库只能有
+// 一个来源，回调对配置已写的逻辑库返回不同的非空物理名即拒绝启动，返回空串或相同的值沿用配置）。
 // 任何一项不合法即返回错误（调用方拒绝启动）；结果与告警写启动日志。
 func NewDatabaseMap(configured map[string]string, sid int32, resolver coredata.DatabaseResolver) (*coredata.DatabaseMap, error) {
 	databases, warnings, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{

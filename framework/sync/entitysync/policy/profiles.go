@@ -39,7 +39,7 @@ func (in *Interest) validateConfiguredProfiles(config InterestConfig) error {
 		}
 		return nil
 	}
-	for band := 0; band <= len(config.AOI.Bands); band++ {
+	for band := 0; band <= in.aoi.config.maxBands(); band++ {
 		if err := check(SourceSpatial, band); err != nil {
 			return err
 		}

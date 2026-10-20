@@ -23,6 +23,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -599,12 +600,12 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 
 // The id-space contract, pinned rather than commented.
 //
-// The interest system and the manager's subjects carry the **full entity
-// id** — the id that is unique across kinds, as opposed to a unique id, which
-// is only unique within one (a Player 42 and a Monster 42 share it). The
-// manager's sessions are whatever the transport addresses; in this demo that
-// is the player id, and sessionFor is the one place that crosses from one
-// space to the other.
+// The manager's subjects carry the **full entity id** — the id that is
+// unique across kinds, as opposed to a unique id, which is only unique
+// within one (a Player 42 and a Monster 42 share it). An interest observer
+// is the player id, which is also the manager's session id and what the
+// transport addresses; playerOf is the one place that crosses from a
+// player's entity id to its player id.
 func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	recorder := newSceneRecorder()
 	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
@@ -633,8 +634,8 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	if len(subscribers) == 0 {
 		t.Fatal("the player is not subscribed to its own subject")
 	}
-	// And the one place that leaves the entity id space is sessionFor, on
-	// its way to a transport session: the session IS the player id.
+	// And the one place that leaves the entity id space is playerOf, on its
+	// way to an observer and a transport session: both ARE the player id.
 	for _, session := range subscribers {
 		if session != entitysync.SessionID(uniqueID) {
 			t.Errorf("a session id is %d; this bridge's sessions are player ids (%d)", session, uniqueID)
@@ -642,6 +643,62 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	}
 	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
 		t.Fatalf("the translation gives %d, want the player id %d", got, uniqueID)
+	}
+}
+
+// A client's view request (scene_view) goes straight into the policy, like a
+// move: a wider view subscribes the player that came into range, the radius
+// is clamped to the scene's maximum, a level the scene does not configure is
+// refused, and a second change within a second is refused without touching
+// the view.
+func TestSceneViewRequestWidensClampsAndIsRateLimited(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const viewerID, farID = int64(9501), int64(9502)
+	viewer, far := newScenePlayer(t, viewerID), newScenePlayer(t, farID)
+	joinReady(t, scene, ctx, viewer, spatial.Point{X: 300, Y: 500})
+	joinReady(t, scene, ctx, far, spatial.Point{X: 520, Y: 500})
+	sees := func() bool {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		for _, session := range scene.manager.Subscribers(far.ID()) {
+			if session == entitysync.SessionID(viewerID) {
+				return true
+			}
+		}
+		return false
+	}
+	if sees() {
+		t.Fatal("premise: 220 units away is visible with the default view")
+	}
+	view, err := scene.SetView(viewerID, policy.ObserverView{Radius: 10_000})
+	if err != nil || view != (policy.ObserverView{Radius: sceneMaxLeaveRadius - (sceneLeaveRadius - sceneEnterRadius)}) {
+		t.Fatalf("SetView = %+v, %v; want the radius clamped to the scene's maximum", view, err)
+	}
+	if !sees() {
+		t.Fatal("the widened view did not subscribe the player that came into range")
+	}
+	if _, err := scene.SetView(viewerID, policy.ObserverView{Radius: sceneEnterRadius}); !errors.Is(err, policy.ErrObserverViewRate) {
+		t.Fatalf("a second change within a second: %v", err)
+	}
+	if _, err := scene.SetView(viewerID, policy.ObserverView{LOD: 1}); !errors.Is(err, policy.ErrObserverView) {
+		t.Fatalf("an unconfigured LOD level: %v", err)
+	}
+	if !sees() {
+		t.Fatal("a refused request changed the view")
 	}
 }
 
@@ -937,8 +994,8 @@ func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *te
 	// 2. The manager dropped the session after a failed push; the player logs
 	// in again before the settle runs. The new Join opens a new session and
 	// gets the player's view back by itself; the late settle changes nothing.
-	scene.manager.CloseSession(sessionFor(re.ID()))
-	scene.sessionLost(sessionFor(re.ID()), errors.New("old socket: write timeout"))
+	scene.manager.CloseSession(entitysync.SessionID(playerOf(re.ID())))
+	scene.sessionLost(entitysync.SessionID(playerOf(re.ID())), errors.New("old socket: write timeout"))
 	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
 	runPending()
 	if members := scene.Members(); members != 2 {
@@ -1677,7 +1734,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	// The mover joins but its own replication session cannot be opened: the
 	// first open is "not yet" and the retry is refused for good. It stays in
 	// the scene with nobody — itself included — subscribed to it.
-	moverSession := sessionFor(moverEntity)
+	moverSession := entitysync.SessionID(playerOf(moverEntity))
 	lane.refuse(moverSession, 1)
 	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
 	lane.breakOpens(moverSession, errors.New("session limit reached"))

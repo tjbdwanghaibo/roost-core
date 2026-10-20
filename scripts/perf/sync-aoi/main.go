@@ -327,7 +327,9 @@ func runServer(c config) error {
 		_ = manager.Close(ctx)
 	}()
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: c.Visible - 1}})
+	// 模拟玩家的玩家 ID 与实体 ID 取同一个数（会话也按它打开），事务内入口按同号换算观察者。
+	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: c.Visible - 1},
+		ObserverOf: func(id int64) (int64, bool) { return id, true }})
 	if err != nil {
 		return err
 	}
@@ -353,7 +355,7 @@ func runServer(c config) error {
 			if err := manager.OpenSession(entitysync.SessionID(id)); err != nil {
 				return err
 			}
-			err = interest.Enter(id, at)
+			err = interest.Enter(id, id, at, policy.ObserverView{})
 		} else {
 			err = interest.Show(id, at)
 		}
@@ -433,7 +435,7 @@ func runServer(c config) error {
 			}
 			s.state.MarkDirty(1)
 			if expectedIDs[id] {
-				err = interest.Move(id, at)
+				err = interest.Move(id, id, at)
 			} else {
 				err = interest.MoveShown(id, at)
 			}

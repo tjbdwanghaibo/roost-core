@@ -38,7 +38,7 @@ func TestClusterMaxVisibleReselectsOnSameBandMovement(t *testing.T) {
 						}
 					}
 					point := func(x int64) spatial.Point { return spatial.Point{X: x, Y: 5000} }
-					if err := c.AddObserver(1, point(9950)); err != nil {
+					if err := c.AddObserver(1, 1, point(9950), ObserverView{}); err != nil {
 						t.Fatal(err)
 					}
 					if err := c.AddSubject(2, point(9800)); err != nil {
@@ -61,7 +61,7 @@ func TestClusterMaxVisibleReselectsOnSameBandMovement(t *testing.T) {
 					case "add_subject_moves":
 						err = c.AddSubject(3, point(10050))
 					case "add_observer_moves":
-						err = c.AddObserver(1, point(10025))
+						err = c.AddObserver(1, 1, point(10025), ObserverView{})
 					}
 					if err != nil {
 						t.Fatal(err)
@@ -99,7 +99,7 @@ func TestClusterMovementCapacityMatchesDistanceOrder(t *testing.T) {
 			point := func() spatial.Point { return spatial.Point{X: 9800 + rng.Int64N(400), Y: 4900 + rng.Int64N(200)} }
 			observers := map[int64]spatial.Point{100: point(), 101: point()}
 			for _, id := range []int64{100, 101} {
-				if err := c.AddObserver(id, observers[id]); err != nil {
+				if err := c.AddObserver(id, id, observers[id], ObserverView{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -208,7 +208,7 @@ func TestClusterCapacityStaysNearestAmongCandidates(t *testing.T) {
 		at := make(map[int64]spatial.Point)
 		for _, id := range observers {
 			at[id] = point()
-			if err := c.AddObserver(id, at[id]); err != nil {
+			if err := c.AddObserver(id, id, at[id], ObserverView{}); err != nil {
 				t.Fatal(err)
 			}
 		}

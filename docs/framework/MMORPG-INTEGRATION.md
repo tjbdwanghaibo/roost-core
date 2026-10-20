@@ -178,6 +178,18 @@ sid A 的玩家 → 本地 Nest 扣物品 / 记意图 → Saga / outbox
 
 Remote / Mirror 用于公会等跨服实体：读镜像不代表拥有写权，写走正式 owner / lease / fence 路径。
 
+#### 6.1 下一步方向：跨服世界 Boss / 限时副本
+
+MMORPG 后续以“跨服世界 Boss / 限时副本”深化跨服、视野和活动三条线。先用已有的跨服赠礼（§13）和多地图消费者（§5、§12）理解契约，再定义 Boss / 副本的权威和活动事实；本地切图不等于跨服，基础交易通过也不等于多人活动完成。
+
+| 方向 | 框架已有 | 业务要做 | 框架现在没有（不要假设） |
+| --- | --- | --- | --- |
+| 跨服组队 / 副本 / 世界 Boss | Player 静态归属与错服拒绝；Saga / effect 做原服资产协作；共享实体可用 Remote 的 owner / lease / fence（[Remote 指南](guide/05-remote-mirror.md)） | Boss / 副本权威放在哪个服务；匹配成员、实际参战与领奖身份如何绑定；超时后按哪个身份查询；部分玩家到账后怎样恢复 | Player 跨 sid 动态迁移；副本 / 战场的自动 HA |
+| 同屏 / 副本隔离 / 队伍与隐身 | 每张地图一个 Interest、同一连接一个 Manager；来源归并（demo 的 `Scene.SetTeam` 只提供队伍关系来源）、Profile 字段白名单、Hold / Ready 与重连 Full | 同坐标不同副本不能互见；退队、隐身 / 反隐时撤哪个来源；切图失败按持久事实重试 `Reconcile`；AOI 可见不等于攻击授权，战斗 handler 仍核对同图、存活、距离与技能条件 | 跨服撤权传播协议；已下发信息的收回 |
+| 世界 Boss / 限时副本 / 节日活动 | [activity 协调器](../../service/activity/) 与 demo `ActivityRunner` 的 `OpenActivity → NotifyPhaseDue → Contribute → AttemptDispatch → settle → AckDispatch` | 合格参与与有效贡献由服务器确认（伤害 / 治疗 / 任务），不接受客户端伤害总数；死亡、离线、重复命中是否计分；截止时已准入操作归哪个窗口；奖励与领奖的防重身份 | 贡献意图 / 补报的通用组件；义务账本与 Player DAO 之间的跨存储原子事务 |
+
+SLG 的[跨服联盟活动链路](SLG-INTEGRATION.md#7-跨服联盟活动权限视野活动与原服奖励)是活动层的可运行参考：固定窗口、持久贡献意图、退盟后拒绝新命令、结算前冻结屏障、原服奖励义务回执与 ACK、Player 永久到账与 SIGKILL 恢复。它只证明 SLG 那条链路；MMO 仍要把 Boss 伤害权威、队伍 / 副本视野与 Player 资产接到自己的链路上，退盟规则不能直接当作退队分奖规则。**跨服世界 Boss + 副本权限视野 + 活动结算的联合消费者尚未验收**，包括中途掉线、窗口关闭与战斗完成竞争、原服派奖中断与补发。
+
 ### 7. 容易混淆的边界
 
 | 常见误解 | 正确接法 |
@@ -191,7 +203,7 @@ Remote / Mirror 用于公会等跨服实体：读镜像不代表拥有写权，�
 | 框架有 Lockstep，所以 MMO 必须帧同步 | 开放世界可做服务器权威状态同步；竞技副本可单独选 Lockstep |
 | 真实 TCP 场景通过就说明容量合格 | 功能与容量分开；玩家密度、带宽、分位时延、跨机故障和长稳需要目标负载证据 |
 
-SLG 手册的[通用接入原则](SLG-INTEGRATION.md#8-通用接入原则)（定时器只经组件 API、长期幂等靠实体上的持久事实、累计榜只增不减等）同样适用于 MMORPG。
+SLG 手册的[通用接入原则](SLG-INTEGRATION.md#9-通用接入原则)（定时器只经组件 API、长期幂等靠实体上的持久事实、累计榜只增不减等）同样适用于 MMORPG。
 
 ### 8. 练习
 
@@ -277,7 +289,7 @@ go test -race -count=1 ./internal/service/game ./game/scene/... ./cmd/loadtest
 
    然后把 `configs/service/config.*.yaml` 的 Mongo / NATS / Redis / etcd 地址改指隔离环境（见 [demo README](../../demo/README.md)“本地实跑”），按需改 ops 端口避免冲突。
 2. `sh deploy/dev/run.sh start`：起 account 等九个托管服务和 sid 1000 的 game（共十个进程），并把 sid 1000 注册进 account。
-3. 起第二个 game：优先用生成器提供的 `sh deploy/dev/second-game.sh start`。它从 `config.game.yaml` 派生 `config.game2.yaml`，改五处——sid 1001、ops 端口（`9200 + game 的端口块号`，game-demo 是 9200）、玩家 TCP 端口 7001、`etcd.advertise_addr` 的端口（`8900 + 端口块号`，game-demo 是 8900；端口块见[项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)）、独立的 WAL 目录——然后等它的 `/readyz`；端口可用 `SECOND_OPS_PORT`、`SECOND_CLIENT_PORT`、`SECOND_ADVERTISE_PORT` 覆盖。`etcd.advertise_addr` 写进服务注册，同一台机器上的每个进程各用一个（维护者 2026-10-19 决定；生成的配置里 game、activity、match 已各不相同，`roost config check --all` 会拒绝两个服务写同一个）；服务间请求仍按 NATS 主题 `<prefix>.svc.<type>.<sid>` 寻址。second-game.sh **不会**把 sid 1001 注册进 account，要手动注册，Redis 参数与 run.sh 读 `config.account.yaml` 的方式一致（`redis.addr`、`redis.password`、`redis.db`、`account.key_prefix`；用 Redis Cluster 时改传 `-redis-cluster <cluster_addrs>`）：
+3. 起第二个 game：优先用生成器提供的 `sh deploy/dev/second-game.sh start`。它从 `config.game.yaml` 派生 `config.game2.yaml`，改四处——sid 1001、ops 端口（`9200 + game 的端口块号`，game-demo 是 9200）、玩家 TCP 端口 7001、`etcd.advertise_addr` 的端口（`8900 + 端口块号`，game-demo 是 8900；端口块见[项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)）——然后等它的 `/readyz`。WAL 目录不用改：生成的开发配置不写 `dataengine.wal.dir`，运行期按 sid 取 `data/wal/dataengine/1001`，与 sid 1000 的 `data/wal/dataengine/1000` 分开（配置里手写了 `…/wal/dataengine` 的，脚本把它改成 `…/wal/dataengine-1001`）；端口可用 `SECOND_OPS_PORT`、`SECOND_CLIENT_PORT`、`SECOND_ADVERTISE_PORT` 覆盖。`etcd.advertise_addr` 写进服务注册，同一台机器上的每个进程各用一个（维护者 2026-10-19 决定；生成的配置里 game、activity、match 已各不相同，`roost config check --all` 会拒绝两个服务写同一个）；服务间请求仍按 NATS 主题 `<prefix>.svc.<type>.<sid>` 寻址。second-game.sh **不会**把 sid 1001 注册进 account，要手动注册，Redis 参数与 run.sh 读 `config.account.yaml` 的方式一致（`redis.addr`、`redis.password`、`redis.db`、`account.key_prefix`；用 Redis Cluster 时改传 `-redis-cluster <cluster_addrs>`）：
 
    ```bash
    go run ./cmd/accountctl -redis <redis.addr> -redis-password <redis.password> -redis-db <redis.db> \

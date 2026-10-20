@@ -1,0 +1,12 @@
+seeded r8tcp13805_dao.player count=2
+conns=2 same=true ok=1078 bad=0 elapsed=10.009s TPS=108 P50=17.661625ms P99=32.361667ms
+nest_dispatch_cost_count{handler="handlerTap",result="ok",type="Single"} 1078
+nest_dispatch_cost_sum_nanos{handler="handlerTap",result="ok",type="Single"} 9988394223
+nest_handler_lock_hold_count{handler="handlerTap"} 1078
+nest_handler_lock_hold_sum_nanos{handler="handlerTap"} 9926103650
+nestwal_append_total 1078
+nestwal_batch_total 1078
+nestwal_fsync_duration_count 1078
+nestwal_fsync_duration_sum_nanos 7062945726
+player_tcp_dispatch_duration_count 1078
+player_tcp_dispatch_duration_sum_nanos 19799246442

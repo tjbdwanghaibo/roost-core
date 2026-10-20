@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# C# 客户端 SDK 的验证：金样（client/spec/packets.json）往返、会话 / 推送 / Sync 恢复 / Lockstep 追帧 / Unity 适配
+# C# 客户端 SDK 的验证：金样（client/spec/packets.json）往返、会话 / 推送 / Sync 恢复 / Lockstep 追帧与快照恢复 / Unity 适配
 # 自测，以及真实生成工程上的 TCP 鉴权 → PB → Sync 推送 → Lockstep 追帧（TestClientSDKAgainstGeneratedPlayerTCP）。
 #
 # 何时跑：改协议、client/wire、framework/sync/frame、entitysync 帧、lockstep 编码或 client/dotnet 时；pretag 与 CI 的

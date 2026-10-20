@@ -55,8 +55,10 @@ func WithRemoteProjection(enabled bool) ModOption {
 }
 
 // WithDatabaseResolver 注册逻辑库 → 物理库的回调（与配置 dataengine.databases 合并）：Init 时对代码声明的
-// 每个逻辑库调用一次，返回非空物理名即覆盖配置（启动日志告警两者不同），返回空串沿用配置或逻辑名本身，
-// 返回错误则拒绝启动。运行中只查 Init 时冻结的表，不再调用它。
+// 每个逻辑库调用一次。同一逻辑库只能有一个来源：配置没写的逻辑库取回调返回的非空物理名；配置写了的，回调
+// 返回空串或相同的值沿用配置，返回不同的值拒绝启动（报错点名逻辑库与两个值）。返回空串且配置也没写时用逻辑名
+// 本身并告警；返回错误则拒绝启动。冲突只能在 Init 判断，--check-config 不调用回调、发现不了。运行中只查 Init
+// 时冻结的表，不再调用它。
 func WithDatabaseResolver(resolver func(logical string) (string, error)) ModOption {
 	return func(mod *Mod) { mod.resolver = resolver }
 }
@@ -127,13 +129,13 @@ type config struct {
 	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	WAL                   struct {
-		Dir                 string        `config:"dir" example:"data/wal/dataengine" help:"不写取 data/wal/dataengine/<sid>"`
+		Dir                 string        `config:"dir" help:"不写取 data/wal/dataengine/<sid>；显式写时只给一个进程用（见 dataengine.wal）"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
 		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
 		MaxUnackedAge       time.Duration `config:"max_unacked_age" min:"0" example:"24h"`
 		QueueCapacity       int           `config:"queue_capacity" min:"0" example:"8192"`
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
-	} `config:"dataengine.wal"`
+	} `config:"dataengine.wal" help:"dir 不写取 data/wal/dataengine/<sid>（相对进程工作目录），每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
 		RemoteWorkers      int           `config:"remote_workers" min:"1" max:"64"`
 		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
@@ -198,6 +200,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	sid := settings.Sid
 	dir := settings.WAL.Dir
+	// 缺省按 sid 分目录：同一工作目录、同一份配置用 --sid 起的多个进程各用各的 WAL。
+	// 生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
 	if dir == "" {
 		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
 	}

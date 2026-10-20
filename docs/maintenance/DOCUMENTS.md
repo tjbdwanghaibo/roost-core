@@ -33,7 +33,7 @@
 - [SYNC-OPTIMIZATION.md](../framework/SYNC-OPTIMIZATION.md)：Controller 生成边界与 Sync（Flush、AOI、Relation、Lockstep）局部优化及同机基准
 - [INTEREST-BLOCK-AOI.md](../framework/INTEREST-BLOCK-AOI.md)：Interest 的 Block AOI 与手写空间组件
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
-- [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、联盟活动的权限视野 / 跨进程协调 / 原服奖励义务）与验收范围
+- [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、跨服联盟活动的权限 / 视野 / 活动与原服奖励、通用接入原则）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
 - [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
 - [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，卡牌 RPG 场景的框架学习（配置快照、抽卡 / 养成幂等账本、开局多实体事务、权威回合与持久回合定时器、领奖与视图裁剪）与验收范围
@@ -96,6 +96,8 @@
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
 - [REFACTOR-2026-10-17-timer-scheduler.md](REFACTOR-2026-10-17-timer-scheduler.md)：timer.Scheduler 用节点状态替代 Tick 期间推迟闭包的重构方案（状态表、操作 × 状态矩阵、语义对照、panic 语义、性能预期）
+- [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)：Lockstep 可追帧也可全量快照恢复的功能设计（D1 方案 B，评审中、未实施：catchup / snapshot / auto 判定、`SnapshotProvider` 接口、CA 分块与 C9 v2 协议、嵌入 TCP 与独立 Gate 下的发送节奏、Go / C# SDK 接口、测试与分期、待决定清单）
+- [FEATURE-2026-10-20-server-merge-alias.md](FEATURE-2026-10-20-server-merge-alias.md)：别名合服的功能设计（DESIGN-TODO D15，提案、待评审、未实施：account 的 `MergedInto` 与承载服解析、`ServingServerID` / `OriginServerIDClaim`、accountctl merge-server、`cmd/sidmerge` 离线迁移按 sid 独占数据、复用 sidmove 检查、审查补充的 D9 映射 / outbox / 持久 sid 约束、回退）
 - [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
 - [DOCUMENTS.md](DOCUMENTS.md)：本清单

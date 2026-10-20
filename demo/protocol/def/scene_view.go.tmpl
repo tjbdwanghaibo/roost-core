@@ -1,0 +1,30 @@
+//go:build protocoldef
+
+package protocoldef
+
+// SceneViewRequest is the client's LOD / view request: which LOD level it
+// wants and how far it wants to see. Both are requests, not settings — the
+// level must be one the server configured, and the radius is clamped to the
+// server's range and rounded to its step, so a modified client cannot see
+// farther than the server budgeted for.
+type SceneViewRequest struct {
+	LodLevel   int32 `pb:"1"`
+	ViewRadius int64 `pb:"2"`
+}
+
+// SceneViewResponse carries the view now in force. A client renders what the
+// server settled on, the way MoveResponse carries the position: a refused
+// request (unknown level, asked too often) answers with a code and the view
+// the player still has.
+type SceneViewResponse struct {
+	Code       int32  `pb:"1"`
+	Reason     string `pb:"2"`
+	LodLevel   int32  `pb:"3"`
+	ViewRadius int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=player
+type SceneViewProtocol interface {
+	//roost:msg id=10025
+	SceneView(SceneViewRequest) SceneViewResponse
+}

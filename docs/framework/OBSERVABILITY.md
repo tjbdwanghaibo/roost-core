@@ -106,7 +106,10 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `lockstep.input.late.total` | Counter | 迟到输入折入后续帧的次数（客户端上行 RTT 健康度；占比高应上调 `SubmitWindow` 或降逻辑帧率） |
 | `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
-| `lockstep.catchup.unservable.total` | Counter | 起点已被裁出保留窗口而失败的追帧（请求即拒绝或追帧途中被窗口越过；客户端收到失败通知后终止本场）。持续增长说明 `HistoryRetainFrames` 短于实际断线时长 |
+| `lockstep.catchup.unservable.total` | Counter | 起点已被裁出保留窗口而失败的追帧，只在 catchup 模式计（auto / snapshot 下越界改走快照，失败看 `lockstep.snapshot.failed.total`）（请求即拒绝或追帧途中被窗口越过；客户端收到失败通知后终止本场）。持续增长说明 `HistoryRetainFrames` 短于实际断线时长 |
+| `lockstep.snapshot.total{reason}` | Counter | 进入快照阶段的会话数：每个会话每次进入计一次（多个会话共用一次取快照时按会话各计一次；客户端重试同一恢复、快照在取或在传时的重复请求不计）。reason：out_of_window（请求起点或追帧游标早于保留窗口）/ over_threshold（auto 缺口超过 `AutoCatchupMaxFrames`）/ mode_snapshot（snapshot 模式）/ host_forced（宿主 `StartSnapshot` / `SpectatorSnapshot`）。不分会话：同一时段与 `failed{detached}` 同步增长说明有会话在“快照—断开—重连”里循环（独立 Gate 下见 [guide/04-sync §6](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)） |
+| `lockstep.snapshot.bytes.total` | Counter | 确认写出的快照分块**数据**字节（不含分块头），每批结算时按确认部分计入。“确认写出”随可靠通道而定：嵌入 TCP 是写进本机 socket 发送缓冲（不是客户端已收到），KCP / QUIC 是进入可靠流，独立 Gate 只是 Game 本地准入。超时但其实已写出的块重发时会再计一次；每次重连从头重传都重新计入，所以它是服务端恢复带宽，不是成功恢复的快照大小之和 |
+| `lockstep.snapshot.failed.total{reason}` | Counter | 快照恢复的失败。取快照类（**每次 Provider 调用结果计一次，不按等待的会话数**）：unavailable（`ErrSnapshotUnavailable`、其他错误、`FetchTimeout` 超时、panic；auto 超阈值回退追帧的那次也计，虽然客户端不受影响）/ too_large（超过 `MaxBytes`，确定失败，客户端收到 C9 v2 后终止）/ invalid（帧号越界或空数据）。按会话计：abandoned（分块或快照之后的续帧页连续发送失败达到 `CatchupMaxFailures`，不发通知）/ expired（钉住超过 `PinFrames`，客户端收到 recovery_expired 终止）/ detached（2026-10-20 起：等快照、传快照或续帧中的会话被 Detach / DetachSession / DetachSpectator 或同席位 Attach 到新会话；`Match.Close`、普通追帧、失败通知已在途的会话不计）。宿主手动 `TrimHistory` 越过钉住点使快照过旧时计入会话的失败次数与 `Tick` 错误，但不计本指标。too_large 非零说明业务快照超过上限；expired 持续增长说明链路慢于窗口推进；detached 持续增长说明恢复中的玩家掉线，独立 Gate 下多半是快照被 Gate 断开后反复重传 |
 | `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
 
 ### Saga（core/saga）
@@ -252,6 +255,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_frames_admitted_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_interest_view_rejected_total` | Counter | `sync/entitysync/policy/interest.go:IncCounter` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
@@ -266,6 +270,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.catchup.unservable.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.snapshot.bytes.total` | Counter | `sync/lockstep/snapshot.go:IncCounter` |
+| `lockstep.snapshot.failed.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.snapshot.total` | Counter | `sync/lockstep/snapshot.go:IncCounter` |
 | `lockstep.frame.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.input.late.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.input.rejected.total` | Counter | `sync/lockstep/match.go:IncCounter` |

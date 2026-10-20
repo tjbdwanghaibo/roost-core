@@ -27,7 +27,8 @@ type AreaID int64
 // AOICluster stitches per-region AOI instances into one seamless
 // interest space over a SHARED world coordinate system: areas are
 // non-overlapping rectangles of the same plane, adjacency follows from the
-// geometry, and ids are cluster-global.
+// geometry, and ids are cluster-global. 编号约定同 AOI：观察者按玩家 ID、目标按实体 ID，
+// 观察者带自身实体（self）与自己的视野；边界镜像按观察者自己的离开半径决定登记到哪些区域。
 //
 // Seamlessness rests on two mechanisms:
 //
@@ -73,6 +74,9 @@ type clusterPlacement struct {
 	// home is the area containing the position; observers are additionally
 	// mirrored into every area their leave radius touches.
 	home AreaID
+	// self / view 只对观察者有意义：自身实体 ID 与归一后的视野。
+	self int64
+	view ObserverView
 }
 
 type interestPair struct {
@@ -96,6 +100,7 @@ func NewAOICluster(config AOIConfig) (*AOICluster, error) {
 	if config.BlockSize <= 0 {
 		return nil, spatial.ErrInvalidBounds
 	}
+	config = config.withViewDefaults()
 	return &AOICluster{
 		config:        config,
 		areas:         make(map[AreaID]*clusterArea),
@@ -143,7 +148,8 @@ func (c *AOICluster) AddArea(id AreaID, bounds spatial.Rect) error {
 	}
 	slices.Sort(observers)
 	for _, observer := range observers {
-		if err := c.placeObserverLocked(observer, c.observers[observer].at); err != nil {
+		placement := c.observers[observer]
+		if err := c.placeObserverLocked(observer, placement.self, placement.at, placement.view); err != nil {
 			return err
 		}
 	}
@@ -247,31 +253,53 @@ func (c *AOICluster) RemoveSubject(id int64) error {
 }
 
 // AddObserver registers an observer in its home area and mirrors it into
-// every neighboring area its leave radius touches.
-func (c *AOICluster) AddObserver(id int64, at spatial.Point) error {
+// every neighboring area its leave radius touches. id 是玩家 ID，self 是其自身实体 ID（0 表示没有），
+// view 按配置归一。
+func (c *AOICluster) AddObserver(id, self int64, at spatial.Point, view ObserverView) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.placeObserverLocked(id, at)
+	view, err := c.config.normalizeView(view)
+	if err != nil {
+		return err
+	}
+	return c.placeObserverLocked(id, self, at, view)
 }
 
 // MoveObserver relocates an observer, rebuilding its boundary mirrors.
 func (c *AOICluster) MoveObserver(id int64, to spatial.Point) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.observers[id]; !exists {
+	placement, exists := c.observers[id]
+	if !exists {
 		return ErrInterestUnknown
 	}
-	return c.placeObserverLocked(id, to)
+	return c.placeObserverLocked(id, placement.self, to, placement.view)
 }
 
-func (c *AOICluster) placeObserverLocked(id int64, at spatial.Point) error {
+// SetObserverView 换观察者的视野，按新的离开半径重建边界镜像；返回归一后的视野。
+func (c *AOICluster) SetObserverView(id int64, view ObserverView) (ObserverView, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	placement, exists := c.observers[id]
+	if !exists {
+		return ObserverView{}, ErrInterestUnknown
+	}
+	view, err := c.config.normalizeView(view)
+	if err != nil {
+		return placement.view, err
+	}
+	return view, c.placeObserverLocked(id, placement.self, placement.at, view)
+}
+
+func (c *AOICluster) placeObserverLocked(id, self int64, at spatial.Point, view ObserverView) error {
 	home, ok := c.areaAt(at)
 	if !ok {
 		return ErrAreaUnknown
 	}
-	span := spatial.SaturatingAdd(c.config.LeaveRadius, 1)
+	leave := view.Radius + c.config.hysteresis()
+	span := spatial.SaturatingAdd(leave, 1)
 	reach := spatial.Rect{
-		Min: spatial.Point{X: spatial.SaturatingSub(at.X, c.config.LeaveRadius), Y: spatial.SaturatingSub(at.Y, c.config.LeaveRadius)},
+		Min: spatial.Point{X: spatial.SaturatingSub(at.X, leave), Y: spatial.SaturatingSub(at.Y, leave)},
 		Max: spatial.Point{X: spatial.SaturatingAdd(at.X, span), Y: spatial.SaturatingAdd(at.Y, span)},
 	}
 	for _, areaID := range c.order {
@@ -279,23 +307,17 @@ func (c *AOICluster) placeObserverLocked(id int64, at spatial.Point) error {
 		inReach := rectsOverlap(area.bounds, reach)
 		_, registered := area.manager.observers[id]
 		switch {
-		case inReach && registered:
+		case inReach:
 			// The manager clamps evaluation to its own bounds; the mirror
 			// keeps the observer's true position even when outside them.
-			if err := area.manager.moveObserverUnbounded(id, at); err != nil {
-				return err
-			}
-		case inReach && !registered:
-			if err := area.manager.addObserverUnbounded(id, at); err != nil {
-				return err
-			}
-		case !inReach && registered:
+			area.manager.placeObserver(id, self, at, view)
+		case registered:
 			if err := area.manager.RemoveObserver(id); err != nil {
 				return err
 			}
 		}
 	}
-	c.observers[id] = clusterPlacement{at: at, home: home.id}
+	c.observers[id] = clusterPlacement{at: at, home: home.id, self: self, view: view}
 	if c.config.MaxVisible > 0 {
 		// 观察者自己移动，到所有目标的距离都变了，即使没有区域事件也要重排。
 		c.collectAfterMove([]int64{id}, 0, true)

@@ -1,0 +1,58 @@
+package roost
+
+import (
+	"bytes"
+	"os"
+	"testing"
+)
+
+// 临时：第八轮第 5 项定位用，不提交。把 saga_native 工程加一个 Tap handler 后复制到 R8_OUT。
+func TestR8PrepareTapProject(t *testing.T) {
+	out := os.Getenv("R8_OUT")
+	if out == "" {
+		t.Skip("R8_OUT")
+	}
+	root := copyOfSagaNativeProject(t)
+	var log bytes.Buffer
+	for _, args := range [][]string{
+		{"add", "handler", "StartGift", "--entity", "Player", "--component", "Wallet"},
+		{"add", "handler", "LevelUp", "--entity", "Player", "--component", "Wallet"},
+		{"add", "handler", "Tap", "--entity", "Player", "--component", "Wallet"},
+		{"add", "handler", "TapAsync", "--entity", "Player", "--component", "Wallet"},
+		{"add", "saga", "Gift", "-steps", "debit,credit,audit", "-native", "debit,credit", "-component", "Wallet"},
+		{"add", "effect", "player.level_up", "-consumer", "game"},
+	} {
+		if err := Run(append(args, "--root", root), &log, &log); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, log.String())
+		}
+	}
+	fillSagaNativeBusiness(t, root)
+	writeProjectFile(t, root, "game/handler/tap.go", `package handler
+
+import player "example.com/planet/game/entities/player"
+
+//roost:nest rollback=undo durability=strict
+func handlerTap(target player.IWalletEntity) (int64, error) {
+	target.WalletComp().Refund(1)
+	return target.WalletComp().Gold(), nil
+}
+`)
+	writeProjectFile(t, root, "game/handler/tap_async.go", `package handler
+
+import player "example.com/planet/game/entities/player"
+
+//roost:nest rollback=undo durability=async
+func handlerTapAsync(target player.IWalletEntity) (int64, error) {
+	target.WalletComp().Refund(1)
+	return target.WalletComp().Gold(), nil
+}
+`)
+	useLocalRoostCore(t, root)
+	if err := Run([]string{"generate", "--root", root}, &log, &log); err != nil {
+		t.Fatalf("generate: %v\n%s", err, log.String())
+	}
+	runGeneratedGo(t, root, "build", "./...")
+	if err := copyProjectTree(root, out); err != nil {
+		t.Fatal(err)
+	}
+}

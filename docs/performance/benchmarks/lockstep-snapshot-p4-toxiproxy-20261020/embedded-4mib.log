@@ -1,0 +1,20 @@
+=== RUN   TestSnapshotDrillEmbeddedTCP
+=== RUN   TestSnapshotDrillEmbeddedTCP/rate256KBps
+2026/10/20 16:40:33 INFO player tcp listener started addr=127.0.0.1:64090 max_connections=10000
+    snapshot_drill_test.go:231: rate 256 KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot 4194304 B in 256 chunks (4196007 wire bytes) at frame 3701; client first-chunk->complete 16.464s (size/rate 16.384s, ratio 1.00); server request->live 13.567s; client caught up to head after 16.6s; session closed false; Tick errors 0 (last <nil>); provider calls 1; client read end: read tcp 127.0.0.1:64093->127.0.0.1:64092: use of closed network connection; client next 4198, head 4198
+    snapshot_drill_test.go:234: metric lockstep.snapshot.total: [] -> [map[reason:out_of_window]=1]
+    snapshot_drill_test.go:234: metric lockstep.snapshot.bytes.total: [] -> [map[]=4194304]
+    snapshot_drill_test.go:234: metric lockstep.snapshot.failed.total: [] -> []
+    snapshot_drill_test.go:234: metric lockstep.catchup.unservable.total: [] -> []
+=== RUN   TestSnapshotDrillEmbeddedTCP/rate64KBps
+2026/10/20 16:40:50 INFO player tcp listener started addr=127.0.0.1:64096 max_connections=10000
+    snapshot_drill_test.go:231: rate 64 KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot 4194304 B in 265 chunks (4343521 wire bytes) at frame 3701; client first-chunk->complete 1m8.281s (size/rate 1m5.536s, ratio 1.04); server request->live 39.801s; client caught up to head after 1m9.034s; session closed false; Tick errors 12 (last catchup session 1: snapshot chunk at byte 4014080: context deadline exceeded); provider calls 1; client read end: read tcp 127.0.0.1:64098->127.0.0.1:64097: use of closed network connection; client next 5771, head 5771
+    snapshot_drill_test.go:234: metric lockstep.snapshot.total: [map[reason:out_of_window]=1] -> [map[reason:out_of_window]=2]
+    snapshot_drill_test.go:234: metric lockstep.snapshot.bytes.total: [map[]=4194304] -> [map[]=8388608]
+    snapshot_drill_test.go:234: metric lockstep.snapshot.failed.total: [] -> []
+    snapshot_drill_test.go:234: metric lockstep.catchup.unservable.total: [] -> []
+--- PASS: TestSnapshotDrillEmbeddedTCP (85.65s)
+    --- PASS: TestSnapshotDrillEmbeddedTCP/rate256KBps (16.61s)
+    --- PASS: TestSnapshotDrillEmbeddedTCP/rate64KBps (69.04s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	86.245s

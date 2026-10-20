@@ -1,0 +1,51 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	apperrors "{{MODULE}}/internal/errors"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleSceneView applies the client's LOD / view request to this player's
+// view of the scene.
+//
+// It is handled like a move, not like a transaction: the scene's interest
+// policy takes it directly, serialized with moves, with no queue and no
+// commit gate — the view is no business state, so nothing has to be rolled
+// back if something else fails. The policy decides what the request is
+// worth: the level must be configured, the radius is clamped and quantized,
+// a player asking more than once a second is refused (and counted), and a
+// request that quantizes to the current view changes nothing. The answer
+// carries the view in force either way.
+func (controller *Controller) HandleSceneView(context *playeraccess.Context, request *pb.SceneViewRequest) (*pb.SceneViewResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("scene_view endpoint: context and request are required")
+	}
+	scene, err := controller.Scene()
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.SceneViewResponse{Code: code, Reason: reason}, nil
+	}
+	view, err := scene.SetView(context.PlayerID, policy.ObserverView{LOD: int(request.LodLevel), Radius: request.ViewRadius})
+	response := &pb.SceneViewResponse{LodLevel: int32(view.LOD), ViewRadius: view.Radius}
+	switch {
+	case err == nil:
+	case errors.Is(err, policy.ErrObserverView):
+		response.Code, response.Reason = errcode.ClientError(apperrors.ErrSceneViewLOD)
+	case errors.Is(err, policy.ErrObserverViewRate):
+		response.Code, response.Reason = errcode.ClientError(apperrors.ErrSceneViewRate)
+	case errors.Is(err, policy.ErrInterestUnknown):
+		// Not in the scene (EnterGame has not joined it, or it already left).
+		response.Code, response.Reason = errcode.ClientError(apperrors.ErrScenePosition)
+	default:
+		response.Code, response.Reason = errcode.ClientError(err)
+		slog.Warn("scene_view: view not changed", "player_id", context.PlayerID, "err", err)
+	}
+	return response, nil
+}

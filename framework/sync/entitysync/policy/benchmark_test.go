@@ -32,7 +32,7 @@ func BenchmarkAOIBatchRecompute(b *testing.B) {
 						check(a.AddSubject(int64(i+1), positions[i]))
 					}
 					for i := range 128 {
-						check(a.AddObserver(int64(i+1000), positions[i*4]))
+						check(a.AddObserver(int64(i+1000), int64(i+1000), positions[i*4], ObserverView{}))
 					}
 					a.Flush()
 					(blockSource{a}).Flush()
@@ -75,7 +75,7 @@ func BenchmarkAOIEventCollection(b *testing.B) {
 					b.Fatal(err)
 				}
 				for i := 1; i <= count; i++ {
-					if err := aoi.AddObserver(int64(i), spatial.Point{X: int64(i) * 1000, Y: 100}); err != nil {
+					if err := aoi.AddObserver(int64(i), int64(i), spatial.Point{X: int64(i) * 1000, Y: 100}, ObserverView{}); err != nil {
 						b.Fatal(err)
 					}
 				}

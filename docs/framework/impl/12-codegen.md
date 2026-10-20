@@ -624,7 +624,7 @@ DESIGN-TODO D12 方向 B（维护者 2026-10-18 批准）。运行期是方向 A
 ### robot
 
 - [context_test.go](../../../robot/context_test.go)：`TestContextRefusesMissingRunnerSessionAndCaptureArguments`
-- [lockstep_test.go](../../../robot/lockstep_test.go)：`TestLockstepBotTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotSimulateFailureIsTerminal`、`TestLockstepBotPendingApplyIsBounded`、`TestLockstepBotRetainedFramesDoNotAliasCallerPayloads`、`TestLockstepBotRequestsCatchupOnAnyUnhealedGap`；其余 1 项见文件
+- [lockstep_test.go](../../../robot/lockstep_test.go)：`TestLockstepBotTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotSimulateFailureIsTerminal`、`TestLockstepBotPendingApplyIsBounded`、`TestLockstepBotRetainedFramesDoNotAliasCallerPayloads`、`TestLockstepBotRequestsCatchupOnAnyUnhealedGap`、`TestLockstepBotRestoresFromASnapshotAndContinues`（快照恢复：另有纯线协议续链、失败终止、取代 pending 帧、传输停住后重试）；其余 7 项见文件
 - [robot_impl_test.go](../../../robot/robot_impl_test.go)：`TestKCPDialerEndToEnd`、`TestQUICDialerEndToEnd`、`TestQUICDialerRequiresALPN`、`TestLockstepBotsSurviveThirtyPercentLoss`、`TestLockstepBotRequestsCatchupOncePerGap`；其余 1 项见文件
 - [robot_test.go](../../../robot/robot_test.go)：`TestPacketCodecRoundTrip`、`TestSessionCallEchoAndPush`、`TestSessionCloseFansOutToPendingAndWaiters`、`TestTypedKeyAndBlackboard`、`TestCoalescerDedupsAndFlushes`；其余 5 项见文件
 

@@ -1,0 +1,47 @@
+=== RUN   TestSnapshotDrillStandaloneGate
+=== RUN   TestSnapshotDrillStandaloneGate/rate0KBps
+2026/10/20 16:42:10 INFO nats: connected url=<isolated NATS, redacted>
+2026/10/20 16:42:10 INFO nats: connected url=<isolated NATS, redacted>
+2026/10/20 16:42:10 INFO player tcp listener started addr=127.0.0.1:64107 max_connections=10000
+    snapshot_drill_test.go:169: snapshot 4194304 B, rate 0 KB/s (1 KB = 1000 B); Gate outbound defaults: queue 32 entries, 2097152 B per session, max_age 250ms; UnpacedBytesPerTick default 16384 B at 33.333333ms ticks (492 KB/s)
+    snapshot_drill_test.go:237: attempt 1: caught up to the head after 8.866s; snapshot chunks received 256 (4196007 wire bytes), transfer 8.504s, snapshot frame 3701, client next 3967, head 3966
+    snapshot_drill_test.go:246: recovered true; provider calls 1; Tick errors 0 (last <nil>)
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:control result:completed role:game] +4
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:forward result:completed role:game] +1
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:outbound result:completed role:gate] +265
+    snapshot_drill_test.go:248: metric lockstep.catchup.frames.totalmap[] +265
+    snapshot_drill_test.go:248: metric lockstep.frame.totalmap[] +275
+    snapshot_drill_test.go:248: metric lockstep.snapshot.bytes.totalmap[] +4194304
+    snapshot_drill_test.go:248: metric lockstep.snapshot.totalmap[reason:out_of_window] +1
+=== RUN   TestSnapshotDrillStandaloneGate/rate256KBps
+2026/10/20 16:42:19 INFO nats: disconnected err=<nil>
+2026/10/20 16:42:19 INFO nats: connection closed
+2026/10/20 16:42:19 INFO nats: disconnected err=<nil>
+2026/10/20 16:42:19 INFO nats: connection closed
+2026/10/20 16:42:19 INFO nats: connected url=<isolated NATS, redacted>
+2026/10/20 16:42:19 INFO nats: connected url=<isolated NATS, redacted>
+2026/10/20 16:42:19 INFO player tcp listener started addr=127.0.0.1:64117 max_connections=10000
+    snapshot_drill_test.go:169: snapshot 4194304 B, rate 256 KB/s (1 KB = 1000 B); Gate outbound defaults: queue 32 entries, 2097152 B per session, max_age 250ms; UnpacedBytesPerTick default 16384 B at 33.333333ms ticks (492 KB/s)
+2026/10/20 16:42:23 WARN gate closed binding after channel failure receiver=1 game_sid=22 err="player tcp: connection cannot take the frame: writev tcp 127.0.0.1:64117->127.0.0.1:64120: i/o timeout"
+    snapshot_drill_test.go:237: attempt 1: connection ended: unexpected EOF after 6.415s; snapshot chunks received 98 (1606259 wire bytes), transfer incomplete, snapshot frame 0, client next 1, head 3892
+2026/10/20 16:42:29 WARN gate closed binding after channel failure receiver=2 game_sid=22 err="player tcp: connection cannot take the frame: writev tcp 127.0.0.1:64117->127.0.0.1:64122: i/o timeout"
+    snapshot_drill_test.go:237: attempt 2: connection ended: unexpected EOF after 6.397s; snapshot chunks received 98 (1606259 wire bytes), transfer incomplete, snapshot frame 0, client next 1, head 4093
+2026/10/20 16:42:36 WARN gate closed binding after channel failure receiver=3 game_sid=22 err="player tcp: connection cannot take the frame: writev tcp 127.0.0.1:64117->127.0.0.1:64124: i/o timeout"
+    snapshot_drill_test.go:237: attempt 3: connection ended: unexpected EOF after 6.391s; snapshot chunks received 98 (1606259 wire bytes), transfer incomplete, snapshot frame 0, client next 1, head 4294
+    snapshot_drill_test.go:246: recovered false; provider calls 3; Tick errors 0 (last <nil>)
+    snapshot_drill_test.go:248: metric gate.channel.failure_totalmap[phase:socket role:gate] +3
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:control result:completed role:game] +9
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:forward result:completed role:game] +3
+    snapshot_drill_test.go:248: metric gate.channel.result_totalmap[phase:outbound result:completed role:gate] +318
+    snapshot_drill_test.go:248: metric lockstep.frame.totalmap[] +603
+    snapshot_drill_test.go:248: metric lockstep.snapshot.bytes.totalmap[] +5210112
+    snapshot_drill_test.go:248: metric lockstep.snapshot.totalmap[reason:out_of_window] +3
+2026/10/20 16:42:39 INFO nats: disconnected err=<nil>
+2026/10/20 16:42:39 INFO nats: connection closed
+--- PASS: TestSnapshotDrillStandaloneGate (29.31s)
+    --- PASS: TestSnapshotDrillStandaloneGate/rate0KBps (9.18s)
+    --- PASS: TestSnapshotDrillStandaloneGate/rate256KBps (20.13s)
+2026/10/20 16:42:39 INFO nats: disconnected err=<nil>
+2026/10/20 16:42:39 INFO nats: connection closed
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	29.924s

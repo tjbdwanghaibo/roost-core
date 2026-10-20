@@ -62,6 +62,19 @@ type ReliableSender interface {
 	SendReliable(context.Context, SessionID, []byte) error
 }
 
+// ReliablePacer 由“发送会随链路放慢”的可靠通道实现：SendReliable 等写出（嵌入 TCP 的 lockstep.TCPSender），
+// 或发送窗口满即阻塞（KCP、QUIC）。没实现或返回 false 的通道视为只准入（独立 Gate 的 gate.Transport：
+// 返回 nil 只表示 Game 本地收下），调用方（lockstep Match 的快照下发）要自己按固定预算节流。
+type ReliablePacer interface {
+	PacesReliableToLink() bool
+}
+
+// ReliablePayloadLimiter 由声明单条可靠消息上限的通道实现（KCP / QUIC 的 MaxReliableBytes、
+// AsyncTransport、嵌入 TCP 与 Gate 的单包上限）。需要预先切块的调用方（lockstep 快照分块）据此核对块大小。
+type ReliablePayloadLimiter interface {
+	MaxReliableBytes() int
+}
+
 // CompositeTransport joins independent unreliable and reliable network lanes.
 // A QUIC adapter, for example, can supply a DATAGRAM sender and a stream sender.
 type CompositeTransport struct {
@@ -96,6 +109,20 @@ func (transport CompositeTransport) SendDatagramBatch(ctx context.Context, sessi
 func (transport CompositeTransport) MaxDatagramPayload() int {
 	if limiter, ok := transport.Datagrams.(DatagramPayloadLimiter); ok && !isNilInterface(transport.Datagrams) {
 		return limiter.MaxDatagramPayload()
+	}
+	return 0
+}
+
+// PacesReliableToLink 转发可靠通道的声明（没有声明时为 false，按只准入处理）。
+func (transport CompositeTransport) PacesReliableToLink() bool {
+	pacer, ok := transport.Reliable.(ReliablePacer)
+	return ok && !isNilInterface(transport.Reliable) && pacer.PacesReliableToLink()
+}
+
+// MaxReliableBytes 转发可靠通道声明的单条上限（没有声明时为 0）。
+func (transport CompositeTransport) MaxReliableBytes() int {
+	if limiter, ok := transport.Reliable.(ReliablePayloadLimiter); ok && !isNilInterface(transport.Reliable) {
+		return limiter.MaxReliableBytes()
 	}
 	return 0
 }
@@ -159,3 +186,8 @@ func interruptReadOnCancel(ctx context.Context, setter readDeadlineSetter) func(
 var _ Transport = CompositeTransport{}
 
 var _ DatagramBatchTransport = CompositeTransport{}
+
+var (
+	_ ReliablePacer          = CompositeTransport{}
+	_ ReliablePayloadLimiter = CompositeTransport{}
+)

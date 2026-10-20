@@ -2,8 +2,10 @@ package wire_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"os"
 	"testing"
@@ -50,15 +52,30 @@ func TestClientProtocolGolden(t *testing.T) {
 		}
 		packets = append(packets, &wire.Packet{Flags: wire.FlagLockstep, MsgID: 50001, Seq: 11, Payload: data})
 	}
-	// 追帧失败通知与广播 / 追帧页同一路由下发。
+	// 恢复失败通知（C9 v2）与快照分块（CA 01）都与广播 / 追帧页同一路由下发。
 	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 12, Payload: lockstep.EncodeCatchupUnservable(300, 70000)})
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 13, Payload: lockstep.EncodeRecoveryFailure(lockstep.RecoverySnapshotUnavailable, 90000, 70000)})
+	// 快照：帧 1234、24 字节、状态 hash 最高位为 1（检验 uvarint64），按 16 字节切两块；两块拼起来的 SHA-256 等于首块摘要。
+	snapshot := []byte("roost-snapshot-golden-24")
+	first, err := lockstep.EncodeSnapshotChunk(lockstep.SnapshotChunk{Transfer: 3, Offset: 0, Frame: 1234, Total: len(snapshot),
+		StateHash: 1<<63 | 0x1234, HasStateHash: true, Digest: sha256.Sum256(snapshot), Data: snapshot[:16]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := lockstep.EncodeSnapshotChunk(lockstep.SnapshotChunk{Transfer: 3, Offset: 16, Data: snapshot[16:]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 14, Payload: first},
+		&wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 15, Payload: next})
 	type golden struct {
 		Name string `json:"name"`
 		Hex  string `json:"hex"`
 		Hash string `json:"hash,omitempty"`
 	}
 	want := []golden{}
-	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable"} {
+	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable",
+		"recovery_failed_snapshot_unavailable", "snapshot_first_chunk", "snapshot_next_chunk"} {
 		raw, err := wire.Encode([]*wire.Packet{packets[i]}, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -66,6 +83,9 @@ func TestClientProtocolGolden(t *testing.T) {
 		entry := golden{Name: name, Hex: hex.EncodeToString(raw)}
 		if name == "lockstep" {
 			entry.Hash = strconv.FormatUint(hasher.Sum(), 10)
+		}
+		if name == "snapshot_first_chunk" {
+			entry.Hash = strconv.FormatUint(1<<63|0x1234, 10) // 首块携带的状态 hash，C# 解码后核对
 		}
 		want = append(want, entry)
 	}
@@ -90,3 +110,84 @@ func TestClientProtocolGolden(t *testing.T) {
 		t.Fatal("cross-language golden changed: regenerate deliberately and run C# consumer")
 	}
 }
+
+// Go 客户端消费同一份金样（C# 在 LockstepTests 消费）：C9 v2 解出原因，两块 CA 分块经 FrameAssembler.Receive
+// 重组成帧 1234 的快照（摘要已核对、状态 hash 与金样记录的一致），恢复后续于 1235；FrameAssembler 与
+// robot.LockstepBot 走同一条解码路径。
+func TestClientProtocolGoldenDecodesThroughTheGoClient(t *testing.T) {
+	content, err := os.ReadFile("../spec/packets.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		Name string `json:"name"`
+		Hex  string `json:"hex"`
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(content, &entries); err != nil {
+		t.Fatal(err)
+	}
+	payloads := map[string][]byte{}
+	hashes := map[string]string{}
+	for _, entry := range entries {
+		raw, err := hex.DecodeString(entry.Hex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packets, err := wire.Decode(raw, 0)
+		if err != nil || len(packets) != 1 {
+			t.Fatalf("%s: %d packets, %v", entry.Name, len(packets), err)
+		}
+		payloads[entry.Name], hashes[entry.Name] = packets[0].Payload, entry.Hash
+	}
+	for name, want := range map[string]lockstep.CatchupUnservableError{
+		"catchup_unservable":                   {Reason: lockstep.RecoveryHistoryTrimmed, From: 300, Start: 70000},
+		"recovery_failed_snapshot_unavailable": {Reason: lockstep.RecoverySnapshotUnavailable, From: 90000, Start: 70000},
+	} {
+		_, err := lockstep.NewFrameAssembler(0).Receive(payloads[name])
+		var notice *lockstep.CatchupUnservableError
+		if !errors.As(err, &notice) || *notice != want || !errors.Is(err, lockstep.ErrCatchupUnservable) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	assembler := lockstep.NewFrameAssembler(0)
+	first, err := assembler.Receive(payloads["snapshot_first_chunk"])
+	if err != nil || first.Snapshot != nil || !assembler.SnapshotInProgress() {
+		t.Fatalf("first chunk: %+v, %v", first, err)
+	}
+	last, err := assembler.Receive(payloads["snapshot_next_chunk"])
+	if err != nil || last.Snapshot == nil {
+		t.Fatalf("next chunk: %+v, %v", last, err)
+	}
+	snapshot := last.Snapshot
+	if snapshot.Frame != 1234 || string(snapshot.Data) != "roost-snapshot-golden-24" || !snapshot.HasStateHash ||
+		strconv.FormatUint(snapshot.StateHash, 10) != hashes["snapshot_first_chunk"] {
+		t.Fatalf("golden snapshot frame %d data %q hash %v/%d (golden %s)", snapshot.Frame, snapshot.Data, snapshot.HasStateHash, snapshot.StateHash, hashes["snapshot_first_chunk"])
+	}
+	assembler.ResumeAfterSnapshot(snapshot.Frame)
+	if assembler.Next() != 1235 {
+		t.Fatalf("next after the golden snapshot %d", assembler.Next())
+	}
+	// 同一份金样经 robot：纯线协议 bot 以金样的状态 hash 续链。
+	bot, err := robot.NewLockstepBot(robot.LockstepBotConfig{Sink: nopLockstepSink{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"snapshot_first_chunk", "snapshot_next_chunk"} {
+		if err := bot.HandleBroadcast(payloads[name]); err != nil {
+			t.Fatalf("robot %s: %v", name, err)
+		}
+	}
+	if bot.Next() != 1235 || bot.Stats().SnapshotsRestored != 1 {
+		t.Fatalf("robot after the golden snapshot: next %d, stats %+v", bot.Next(), bot.Stats())
+	}
+	if err := bot.HandleBroadcast(payloads["recovery_failed_snapshot_unavailable"]); !errors.Is(err, robot.ErrLockstepBotTerminal) || !errors.Is(err, lockstep.ErrCatchupUnservable) {
+		t.Fatalf("robot on the golden recovery-failed notice: %v", err)
+	}
+}
+
+type nopLockstepSink struct{}
+
+func (nopLockstepSink) SubmitInput(lockstep.FrameID, []byte) error { return nil }
+func (nopLockstepSink) ReportHash(lockstep.FrameID, uint64) error  { return nil }
+func (nopLockstepSink) RequestCatchup(lockstep.FrameID) error      { return nil }

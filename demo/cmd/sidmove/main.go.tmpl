@@ -56,7 +56,7 @@ func main() {
 	switch os.Args[1] {
 	case "wal-drained":
 		fs := flag.NewFlagSet("wal-drained", flag.ExitOnError)
-		dir := fs.String("dir", "", "the stopped game process's WAL directory (dataengine.wal.dir/<sid>)")
+		dir := fs.String("dir", "", "the stopped game process's WAL directory (dataengine.wal.dir; data/wal/dataengine/<sid> when unset)")
 		_ = fs.Parse(os.Args[2:])
 		result, err = walDrained(ctx, *dir)
 	case "singleton":
