@@ -4,7 +4,7 @@
 
 ## 环境
 
-- macOS（本机），当前分支 `feat/d15-server-merge`（基于 main `057513bb` 之后的 rebase）生成的 game-demo，工程名 `mergedrill`，`replace` 指回工作树。
+- macOS（本机），当时的分支 `feat/d15-server-merge`（基于 main `057513bb`，D17 合入之前）生成的 game-demo，工程名 `mergedrill`，`replace` 指回工作树。
 - 依赖：`scripts/mirror-local.sh up`（私有根目录、端口偏移 26000：Mongo 副本集 53117–53119、NATS JetStream 40222–40224、Redis 42379），另起私有 etcd 46379；不碰共享隔离环境。
 - 进程：account / activity / chat / global / mail / match / platform / rank / session 九个支撑服务 + game sid 1000（`config.game.yaml`）+ game sid 1001（`config.game1001.yaml`）。两份 game 配置的 D9 映射不同：`main` 两侧都映射到 `mergedrill`（共享），验收加的 `dbscope=sid` 逻辑库 `zone`（DAO `ZoneStateDao`，`//roost:dao coll=zone_state db=zone dbscope=sid`）在 1000 映射到 `md_zone_b`、在 1001 映射到 `md_zone_a`，物理库分别是 `md_zone_b_1000` 与 `md_zone_a_1001`。
 - 客户端：[mergedrill.go.txt](mergedrill.go.txt)（真实 account 总线登录 / 建角 / 选角，按会话里的 `ServingServerID` 连对应 sid 的嵌入 TCP 端点，`EnterGame` + `AddItem`）。脚本 [lib.sh.txt](lib.sh.txt)、[phase1](phase1.sh.txt)、[phase2](phase2.sh.txt)、[phase3](phase3.sh.txt)；路径是本次会话的临时目录。

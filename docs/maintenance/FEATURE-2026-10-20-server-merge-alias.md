@@ -1,6 +1,6 @@
 # 功能设计：别名合服（2026-10-20）
 
-**状态：提案，待维护者评审，未实施。** 对应 [DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服)。来源：新用户试用第八轮（游戏服务器专家视角）登记的“合服没有框架支持”；维护者 2026-10-20 的意见：合服是停服窗口内的**离线**操作（A、B 都停机排空），`dbscope=sid` 只表示该逻辑库的数据归一个 sid 独占，与“能不能合服”无关，合服时作为离线迁移步骤处理。
+**状态：已实施（2026-10-20，P1～P4，§12 实施记录）。维护者 2026-10-20 决定按本篇做，§10 八项都按推荐。** 现行说明以 [PLAYER-MIGRATION §6](../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)、[guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界) 与源码为准；以下 §1～§11 保留为决定时的设计。原状态：提案。 对应 [DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服)。来源：新用户试用第八轮（游戏服务器专家视角）登记的“合服没有框架支持”；维护者 2026-10-20 的意见：合服是停服窗口内的**离线**操作（A、B 都停机排空），`dbscope=sid` 只表示该逻辑库的数据归一个 sid 独占，与“能不能合服”无关，合服时作为离线迁移步骤处理。
 
 本篇由审查按 main（`8ca14004`，D9 修订版 A 与映射冲突拒绝启动之后）的源码重新核对、改写，§1.4 列出对原提案事实陈述的更正，§6.3 补上原提案没有考虑到的约束（D9 库名映射、outbox、总线与持久化里的 sid）。源码行号按该基线，实施前对照当时的 HEAD 再核一次。
 
@@ -178,3 +178,26 @@ game 进程、`PlayerOwners`、Nest / DataEngine / Sync、global `Routing`（按
 | P2 | 消费者：Gate 认证器、game-demo 认证器与登录端点注释、生成骨架注释、`OriginServerIDClaim` | §8 Gate |
 | P3 | 运维：accountctl 三个子命令（含拍平）、`cmd/sidmerge migrate / revert`（含 §6.3 前置检查）、按 §10-3 的启动自检、PLAYER-MIGRATION 合服 runbook | runbook 走查；sidmerge 单元与真实 Mongo 用例 |
 | P4 | 工程侧清单：doctor 只读 `merge-readiness` 复用 sidmerge 的清单；真实进程两服验收（含 `dbscope=sid` 迁移与回退） | §8 真实进程 |
+
+## 12. 实施记录（2026-10-20）
+
+分期与提交（分支 `feat/d15-server-merge`，rebase 到 main `a09c9b3b`（含 D16、D17、D18）之后；P1 `19fa4ac0`、P2 `5267d51f`、P3 `f74ef6a4`、P4 `65557f31`）：
+
+| 期 | 内容 | 验收 |
+| --- | --- | --- |
+| P1 | `service/account`：`GameServer.MergedInto` / `MergedFrom` / `MergedAtUnix` / `MergeNote`；`Role` / `Session` 的只读 `ServingServerID`；唯一解析点 `servingServer`（只看一跳）；`Admin.MergeServer`（拍平、DryRun、幂等、写入校验、结束复核）/ `UnmergeServer`；`CodeServerMergeCycle` 560117（“服不存在”沿用 `ErrServerInvalid`）；`ServerIDClaim` 注释、`OriginServerIDClaim` | `merge_test.go` 11 条（Memory 与真实 Redis 两种存储） |
+| P2 | `wiring/gate` 认证器、game-demo 认证器与登录端点注释、生成骨架注释 | `wiring/gate` 正式 account 服务 + `FixedGameResolver`；game-demo `auth_test` |
+| P3 | `Accounts.GetServer`（只读 RPC）；`wiring/account.ServingGuardMod` 启动自检（DataEngine Mod 把它列为可选依赖）；生成器给承载玩家且接 account 的服务装它；`wiring/sidmerge`（检查、迁移、回退、清单、`WALDrained`）；game-demo `cmd/sidmerge`、`cmd/accountctl` 三个子命令、`cmd/sidmove` 改用 `sidmerge.WALDrained`；PLAYER-MIGRATION §6 runbook | `wiring/sidmerge` 单元 + 真实 Mongo `TestSidMergeMigratesAndRevertsOnRealMongo`；`wiring/account` 启动自检；game-demo `cmd/sidmerge` 用例 |
+| P4 | doctor 只读 `merge-readiness`（运行工程的 `cmd/sidmerge checklist`）；两服真实进程演练 | `TestDoctorMergeReadinessReadsTheChecklist`；[演练证据](../performance/benchmarks/d15-server-merge-20261020/README.md) |
+
+**与本篇的偏差**（实施时的选择，均写进现行文档）：
+
+- 拍平需要找到“所有并入来源服的服”，versionstore 不能枚举，所以服务器记录加了辅助索引 `MergedFrom`（是否并入仍以对方的 `MergedInto` 为准）。
+- 启动自检需要 game 进程问 account 本服记录，`Accounts` 上加了只读的 `GetServer`（本篇没有写这个方法）。自检做成 `wiring/account.ServingGuardMod`，查不到时 30 秒后拒绝启动（fail-closed）；为了让它先于 WAL 与 outbox，`wiring/dataengine` 的 Mod 把它列为可选依赖（只改 Mod 的启动顺序，framework/dataengine 不改）。多一个 Mod 让生成的 `shutdown.total_timeout` 多 3s。
+- §6.1 的“逻辑库清单取 `db/gen_databases.go`”经 `dataengine.DeclaredDatabases()` 实现（工具在工程内编译、导入 db 包）。按 sid 分库的逻辑库也可能有不按 sid 的 DAO：两侧基础库位置不同、且 A 的基础库里没有集合时放行，否则同样拒绝。
+- 前置检查另加了“配置的库名映射与该进程最后一次运行记下的（WAL 目录 `databases.json`）相同”，防止拿错配置换算库名；WAL 不在本机时以 `-*-wal-checked` 记为人工确认。
+- §6.3 第 5 条的持久主题已逐项核对，清单在 PLAYER-MIGRATION §6.3 与 `sidmerge` 报告的 `bus` 段；`sidmerge` 不连 NATS，按 sid 寻址的持久用法记为 confirm（人工确认），不检查积压。
+- saga 终态检查覆盖整个 saga 存储（记录不带 sid）。
+
+**没有做 / 留给后续**：独立 Gate 的真实进程演练；`sidmerge` 检查 JetStream 积压；按类型过滤 saga 检查；`dbscope=sid` 数据经实体冷加载的真实进程验证（演练里的这类文档是直接写 Mongo 的）。见 [KNOWN-LIMITS](KNOWN-LIMITS.md#合服d15)。
+

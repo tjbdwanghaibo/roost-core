@@ -42,6 +42,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
 | `db/migrations/`、`cmd/schemamigrate` | Player schema 1 → 2 的离线迁移示例（plan / apply / verify / rollback），见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md) |
 | `cmd/sidmove` | 把一个 game sid 搬到另一台机器时的检查工具（WAL 已排空、单实例锁、玩家文档未变），见[参考流程](../docs/framework/PLAYER-MIGRATION.md) |
+| `cmd/sidmerge` | 把一个服并入另一个服（别名合服）的离线数据工具：合服清单、前置检查、按 sid 分库的迁移与回退；account 记录用 `cmd/accountctl merge-server`，见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b) |
 | `deploy/dev/` | 本机 compose、`run.sh` 与可选的 Prometheus + Grafana |
 
 ## 本地实跑

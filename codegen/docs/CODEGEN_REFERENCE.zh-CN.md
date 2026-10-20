@@ -186,6 +186,8 @@ roost add rpc guild -service game
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
 
+**接 account 的玩家接入（别名合服，D15）**：应用的 `auth.go` 骨架默认拒绝，注释写明接 account 时的写法：经 `svcaccount.Accounts.ValidateSession` 校验票据，用返回的 `role.ServingServerID`（承载服：角色自己的服，或它已并入的那个服）填 `svcaccount.ServerIDClaim`，`role.ServerID`（原服，供显示）填 `svcaccount.OriginServerIDClaim`；按 `role.ServerID` 路由会把合服后原服的每个角色拒绝成 `player_elsewhere`（完整示例是 game-demo 的 `internal/access/player/tcp/auth.go`）。`access.player` 指向、且 `uses: account` 的服务，生成的 bootstrap 在 account 的 ClientMod 之后多装一个 `svcaccount.NewServingGuardMod()`：进程启动时问 account 本服是否已并入另一服，已并入就拒绝启动（DataEngine Mod 排在它之后，WAL 与 outbox 都还没打开）；它计入生成的 `shutdown.total_timeout`（多一个 3s 保底）。工程带 `cmd/sidmerge`（game-demo）时，`roost project doctor` 多一项只读的 `merge-readiness`（OK / WARN，不让 doctor 失败）：运行 `go run ./cmd/sidmerge checklist`，概括按 sid 分库（合服时要搬）与共享（两侧部署必须同一位置）的逻辑库、按 sid 寻址的持久总线用法、需要业务语义的合并项数；WAL / outbox / saga / 冲突只能在停服窗口里由 `sidmerge migrate -dry-run` 检查（[PLAYER-MIGRATION §6](../../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。
+
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
 （`Handle<Protocol>` 只返回 `fmt.Errorf("Handle<Protocol>: not implemented")`）；add endpoint 认出**仍未改动**的占位并在同一次

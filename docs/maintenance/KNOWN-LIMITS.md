@@ -97,6 +97,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 ### Lockstep
 
+- **尚未确认：`TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted` 在全仓 `go test ./...` 下偶发失败**（2026-10-20，D15 分支上连续两次全仓运行各失败一次，`tcp_test.go:513`：`Tick after the budget was returned = … resident byte budget exhausted: frame of 16455 bytes, 261344 of 262144 resident`）；单独运行该包与该用例（`-count=5`，main 上 `-count=10`）都通过，D15 没有改 lockstep / gateway。疑为负载下预算归还与下一次 Tick 之间的时序假设；下一步：在负载下（`-count` 加并行压力）复现并读断言前的归还路径。
 - **Lockstep历史**：默认自动保留 3600 帧（60Hz 60 秒 / 30Hz 120 秒，D1 方案 C，`a6376934`）。越界按 `MatchConfig.Recovery` 区分（D1 方案 B，维护者 2026-10-20 批准，P1～P5 已实施，[设计](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)）：配了 `Snapshots.Provider`（零值即 auto）或显式 snapshot 时，越界改发业务快照、客户端恢复后续帧，只有快照路线最终失败（取不到、过大、钉住过期）才发 C9 v2 通知让客户端终止；catchup（没配快照来源时的缺省）仍是越界明确失败、通知客户端终止、不自动重同步。快照内容来自业务的服务器参考模拟，框架不提供默认模拟、不替业务持久化检查点。本地 20000 帧周期性快照恢复与默认窗口长局有界已验证；按业务帧率、断线时长与快照大小核对窗口和预算未做。见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)、[SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md)。
 - **Lockstep TCP 追帧**（`640e9fac`，维护者 2026-10-16 方向 A）：`lockstep.TCPSender` 实时帧 `SendDatagram` 只准入，追帧页 `SendReliable` 经 `TCPRuntime.PushLockstepSessionWritten` 入队并等写出，追帧随链路放慢、积压只有在途一页，`CatchupSendTimeout` 生效。等写出只在 Match 的 `launchSend` goroutine 上；一个停读追帧会话最多让发起那一页的 Tick 晚 `CatchupSendWait`（默认 5ms）。限速链路上：快照分块与快照之后的续帧页经同一等写出机制在 toxiproxy 256 KB/s、64 KB/s 下演练过（2026-10-20，main 代码，1 MiB 与 4 MiB 都恢复、连接不断、耗时与“大小 / 速率”对应，[演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）；纯追帧页的限速演练与 v1.29 上的表现仍未做（待补测）。见 [guide/04-sync §6](../framework/guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
 - **Lockstep 追帧链路背压（独立 Gate）**：维护者 2026-10-20 决定暂不做。独立 Gate 的 `wiring/gate.Transport` 两条通道都经 `GameIngress.PushBound`，nil 只表示 Game 本地准入：Game 侧队列满返回 `ErrReliableBackpressure`（每 Tick 计一次追帧失败，连续 `CatchupMaxFailures` 次放弃），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时关闭连接；追帧与快照都不随链路放慢。快照按 `UnpacedBytesPerTick`（缺省 16 KiB/Tick，30Hz 约 492 KB/s）固定节流；2026-10-20 toxiproxy 实测（30Hz、缺省参数，[演练 §3](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md#3-独立-gate63-风险-1-实测成立)）：64 KB/s × 1 MiB、256 KB/s × 4 MiB 每次连接都在同一位置被 Gate 断开、重连后从头重传，三次都未恢复；256 KB/s × 1 MiB 恢复（低于预算的超出部分被缓冲吸收）。是否断开取决于快照大小、每 Tick 预算与链路速度三者；断开发生在 Gate 写 socket 的期限到期（`writev ... i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是 `max_age` 积压规则，具体是 5s `write_timeout` 还是单帧发送预算先到期**尚未确认**（按代码缺省配置下单帧预算 ≤ `outbound.send_timeout` 250ms 更早，日志未区分）。2026-10-20 起恢复中被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`，这个循环可见。配置建议见[设计 §6.3](FEATURE-2026-10-20-lockstep-snapshot-recovery.md#63-独立-gate只准入时的行为与风险)。纯追帧页在独立 Gate 慢链路上的影响未实测。要做到随链路放慢，Gate 需要在写出 socket 后回执给 Game，这是协议改动，等有具体游戏使用“Lockstep + 独立 Gate”时再做。生成 game-demo 在独立 Gate 部署（`accessplayertcp.NewIngressMod`）下拿不到 `TCPRuntime`，战斗的追帧页同样只准入（`battleLinks`）。
@@ -149,6 +150,21 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **Session 运行服务**：保持现状、不改为可选（维护者 2026-10-14）；后续事项见 [ACCESS-SYNC-FOLLOWUPS](ACCESS-SYNC-FOLLOWUPS.md)。
 - **观测接线**：ExportMetrics / admin 元数据不是自动外部监控或审批系统；部署实际接线与鉴权审计归部署方。
 
+
+### 合服（D15）
+
+别名合服（[DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服) 已实施，设计与实施记录 [FEATURE-2026-10-20-server-merge-alias](FEATURE-2026-10-20-server-merge-alias.md)，runbook [PLAYER-MIGRATION §6](../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。当前边界：
+
+- **持久总线消息只列清单、不检查积压**：`wiring/sidmerge` 不连 NATS。按 sid 寻址的持久用法（`syncbus.transport: jetstream` 的每 sid durable、`nats.rpc.transport: jetstream` 的实例 durable、可靠总线的死信）由运维按清单人工确认（检查项 `bus` 为 `confirm`）。框架不把发往 A 的消息重投到 B。
+- **saga 终态检查是整个 saga 存储**：saga 记录不带“属于哪个 sid”，同一存储里其他仍在运行的服的非终态 saga 也会让检查不通过；只有全集群停服窗口里才自然满足。是否提供“按类型 / 按业务键过滤”的检查需要维护者决定（尚未决定）。
+- **“同一 Mongo”按 URI 比较**：主机列表（小写排序）+ 副本集名；同一集群换主机名或 IP 写会被判为不同而拒绝合服（偏保守，不会把两套 Mongo 当一套）。
+- **跨记录的 account 写不是原子的**：每条服务器记录按版本条件写；写入顺序保证中途停下不会出现两跳，结束复核，并发合服造成的两跳报 `ErrServerMergeCycle` 并给修复命令（unmerge 再 merge）。拍平之后“X 是经由 A 并入的”这一历史不保留：`UnmergeServer` 只恢复一条记录，经 A 改指的其他服仍指向承载服。`MergedFrom` 是辅助索引，可能多出并发留下的项，是否并入以对方的 `MergedInto` 为准。
+- **启动自检的范围**：`ServingGuardMod` 只在生成器装配的、承载玩家且接了 account 的服务里；手写装配要自己加。它排在 DataEngine 之前，但不排在 `syncbus`、`remote_entity` 等 Mod 之前：误启动的 A 在被拒之前这些 Mod 已经 Start 又随即停止（2026-10-20 演练：拒绝发生在启动后约 60ms）。account 不可达时 30 秒后拒绝启动（fail-closed），代价是 account 故障期间 game 起不来。
+- **按 sid 独占数据的迁移不拷贝索引**：B 启动时按 DAO 声明建；不拷贝 `_dataengine_*` 控制集合。Remote 托管（`remote=managed`）落在按 sid 分库里的集合只在报告里点名，所有权元数据按 Remote 规则另行处理。回退不动合服期间 B 新产生的按 sid 独占文档（只计数），归属由业务判断。
+- **源库保留为只读归档**：框架不加只读保护，靠启动自检与 runbook；删除由运维确认后手动做。
+- **消费者**：Gate 转交给 game 的绑定不带 Claims，game 侧需要原服标识时从自己的角色数据取；`OriginServerIDClaim` 只在认证器那一侧可见（嵌入 TCP 的 Principal 里两者都有）。CreateRole 被拒经总线时客户端看到的是 `ErrServerClosed` 的通用原因，“已并入 B”的详情只在 account 进程的错误里。 game-demo 拉全服邮件（D17）时，原服并入本服的角色另带原服范围 `ServerScope(A)`，合服前发给 A、还没拉到的全服邮件照样属于他——这是 demo 的业务选择，框架不规定。
+- **验证边界**：真实进程两服演练（私有环境，sid 1000 / 1001，[证据](../performance/benchmarks/d15-server-merge-20261020/README.md)）覆盖嵌入 TCP；独立 Gate 只有单元级（正式 account 服务 + `FixedGameResolver`）。演练里的 `dbscope=sid` 文档是直接写 Mongo 的（game-demo 没有用它的实体），B 的进程没有冷加载它们；玩家数据（共享库 main）经真实进程读写。
+
 ## 平台与外部验证
 
 - **跨机HA与Linux物理故障**：本机集群 / loopback 不证明跨机器分区、掉电、真实网卡；具名清单见 [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) E01～E28。
@@ -156,7 +172,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **原生C++接入**：无完整 C++ / Unreal / GDExtension SDK 承诺，需独立设计和协议一致性验收。
 - **独立 Gate**：已实施 Gate / Game、广播与 Sync / Lockstep（[GATEWAY](../framework/GATEWAY.md)）；不用本机多实例代替多进程 / 跨机矩阵。容量结论见能力表。
 - **schema升级**：DAO 自动迁移已撤销，运行时只接受当前 schema；离线迁移按 [schema 变更操作手册](../framework/SCHEMA-MIGRATION.md)（停写→备份→转换→校验→切换→回退），game-demo 有执行器与 `cmd/schemamigrate`。在线双读与 `roost add migration` 骨架未实施，上线后重新决定；业务需明确离线转换和保留数据范围。v1.29 未演练（待补测）。
-- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid 无框架能力；合服（把一个服并入另一个服）无框架支持，别名合服提案待维护者评审（[DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。v1.29 未演练（待补测）。
+- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid 无框架能力；合服用别名合服（D15 已实施，边界见下文[合服（D15）](#合服d15)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。v1.29 未演练（待补测）。
 - **Windows**：非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'` 和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异（打开中的文件不能改名 / 删除：nestwal 损坏记录检查、日志轮转、statslog；checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真；run 38500440362 的 6 个失败）。本机结果不改变 macOS / Linux 支持范围，跨平台也成立的缺陷不归入此条。
 
 ## 能力与验证边界

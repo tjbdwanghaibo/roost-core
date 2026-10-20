@@ -295,6 +295,8 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 玩家静态绑定在 sid 上，搬机搬的是 sid：旧进程正常停机（断开玩家、WAL 全部投影、释放单实例锁），新机器上同一 sid 的进程用空 WAL 目录接管。`cmd/sidmove` 只做步骤之间的检查：`wal-drained`（旧 WAL 已全部确认，进程还在跑就拒绝）、`singleton`（锁现在被谁持有）、`players`（停旧进程后与新进程写入前的玩家文档是否一致）。步骤、所用能力与本机演练见[参考流程](../docs/framework/PLAYER-MIGRATION.md)。
 
+把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 DAO 都在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
+
 ## 兴趣：距离是一种来源，关系是另一种
 
 "谁该收到谁的状态"由 `framework/sync/entitysync/policy.Interest` 回答，scene（`internal/service/game/scene.go`）只给配置：
