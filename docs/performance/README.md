@@ -44,6 +44,51 @@ bash scripts/perf/nest-game.sh
 
 长尾归因时在上面命令前加 `ROOST_NEST_GAME_TAIL=metrics`（每秒 runtime/metrics 与 rusage，开销小）或 `ROOST_NEST_GAME_TAIL=trace`（另开 Go flight recorder，超过 `ROOST_NEST_GAME_TAIL_THRESHOLD`（默认 50ms）的完成事件后保存前后窗口，`_TAIL_BASELINE_EVERY` 另存对照窗口）；其余变量见夹具 [tailtrace_test.go](../../codegen/internal/entity/testdata/nestgame/tailtrace_test.go) 文件头。产物在样本目录的 `sample-N.tail/`，脚本结束后自动用 [tailtrace](../../scripts/perf/tailtrace/main.go)（独立模块，依赖 `golang.org/x/exp/trace`）生成 `analysis.txt` / `analysis.json`：长尾事件与 GC / STW / 调度延迟 / 互斥等待 / 可运行队列的关联与富集比、长尾簇的墙钟分钟相位，以及 trace 中各分段的 goroutine 状态；单个 trace 的簇内对照用 [burst](../../scripts/perf/tailtrace/burst/main.go)。宿主噪声在本机很明显，见 [2026-10-15 报告 §1](PERF-ROUND-20261015.md#1-长尾延迟定位)。默认关闭；开启后有观测开销，结果只用于归因，不与无采集样本的延迟数字比较。
 
+### 嵌入 TCP 重档
+
+[KNOWN-LIMITS“v1.29 待补测”](../maintenance/KNOWN-LIMITS.md#v129-待补测)第 1、2 项的入口（夹具 2026-10-20 加入，重档尚未跑）。`ROOST_NEST_GAME_EMBEDDED=1` 让玩家连接直连 Game 进程内的 `gateway.TCPServer` + `TCPRuntime`（接线同生成的 player TCP Mod：`NewTCPServer` → `ConnectRuntime` → `ConnectHandshake` → `Start`），不经独立 Gate 和 NATS，所以**不需要** `ROOST_DATAENGINE_IT_NATS_URL`。TCP 配置取生产缺省（`max_payload_bytes` 1 MiB、`write_timeout` 5s、`outbound.resident_bytes` 256 MiB），只改监听地址、连接上限与限流（与 Gate 模式的 TCPServer 一样关掉每连接限流）。夹具见 [embedded_load_test.go](../../codegen/internal/entity/testdata/nestgame/embedded_load_test.go)。
+
+- **场景 Sync**（`ROOST_NEST_GAME_SYNC=1`）：负载形状与上面的独立 Gate 重档相同（玩家数、每玩家消息速率、全部 Entity 的 HB、修改率、Interest/AOI 上限 49 加自己、on_change 即时处理）。差别只在接入：会话 ID 是玩家 ID，Manager 的 Transport 是 `selfsync.PushPlayerFrame(TCPRuntime)`（与 game-demo 场景的 `sceneLane` 同一条），会话在鉴权 ACK 写出后的 `AfterACK` 以 held 打开、开跑前统一 Ready；回包与 Sync 推送都进每连接出站队列，由写协程写出。
+- **自身视图**（`ROOST_NEST_GAME_SELF_SYNC=1`，只在嵌入模式下）：按生产装配 `selfsync.New` → `EntitySyncSetup`（Config → Configure → NewManager → Attach）→ `BindPlayers(TCPRuntime)` → `ConnectHandshake(SelfSync.Handshake())`；玩家 Unit 每次改动（业务消息与 HB 的修改）推给本人一帧，NPC Unit 不启用 Sync。Mode / Interval 与场景 Sync 相同（on_change、50ms）。**不能与 `SYNC=1` 同时打开**：一个 `SubjectSyncState` 只能登记在一个 Manager（`entitysync.ErrSubjectRegisteredElsewhere`），生产同样不支持场景与自身视图同时覆盖玩家实体（[PLAYER-ACCESS §7](../framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)），夹具在开跑前拒绝这个组合。所以自身视图档没有 AOI 扇出，推送量约为“玩家改动次数”（1000 玩家 × 每秒约 1 次），远低于场景档，结果只与自身视图自己比较。
+- 自身视图不在独立 Gate 下跑（生产支持 Gate + self_sync，经 Game Ingress 的 `OnActive` / `OnClosed`；本夹具没有接这条，需要时另加）。
+
+晚上正式跑的命令（维护者 2026-10-20：每项 15 分钟。除 `ROOST_NEST_GAME_DURATION=15m` 外与 [V1290 复测 §2](V1290-HEAVY-30M-20261019.md#2-命令) 的重档参数逐项相同，只把 `GATE=1` 换成 `EMBEDDED=1`；不需要私有 NATS）：
+
+```sh
+# 1. 嵌入 TCP + 场景 Sync，15 分钟
+ROOST_PERF_LABEL=perf129-embedded-scene-15m ROOST_PERF_COUNT=1 ROOST_PERF_CPU=0 \
+ROOST_NEST_GAME_DIRTY=5 ROOST_NEST_GAME_DURATION=15m ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_EMBEDDED=1 ROOST_NEST_GAME_HZ=10 \
+ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_PROFILE=0 \
+ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_SYNC=1 \
+  bash scripts/perf/nest-game.sh
+
+# 2. 嵌入 TCP + 自身视图，15 分钟（同一组参数，SYNC=1 换成 SELF_SYNC=1）
+ROOST_PERF_LABEL=perf129-embedded-self-15m ROOST_PERF_COUNT=1 ROOST_PERF_CPU=0 \
+ROOST_NEST_GAME_DIRTY=5 ROOST_NEST_GAME_DURATION=15m ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_EMBEDDED=1 ROOST_NEST_GAME_HZ=10 \
+ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_PROFILE=0 \
+ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_SELF_SYNC=1 \
+  bash scripts/perf/nest-game.sh
+```
+
+- 预计时长：每档生成 + 编译约 1～2 分钟，负载 15 分钟，建连、收敛与停机约 1 分钟，合计约 17～18 分钟；两档串行约 35 分钟。要同晚加跑一次独立 Gate 对照（V1290 §2 原命令，`ROOST_NEST_GAME_DURATION` 同样改为 15m，需私有 NATS）再加约 18 分钟，三档合计约 55 分钟。15 分钟样本与 V1290 的 30 分钟样本比较 P50～P99 可以，>50ms 条数与最大值要按时长折算且只作参考。
+- 两档串行跑，不与 race、profile、`ROOST_NEST_GAME_TAIL`、索引重建或别的 `go build` / `go test` 并跑；长稳前看 `sysctl vm.swapusage`，按 V1290 §1 记录宿主负载。
+- 冒烟（缩小规模、约 1 分钟）只说明夹具能起、报告字段齐全，不是性能结论。
+
+嵌入模式额外输出（JSON 的 `Embedded` 与每秒 `Samples[].Outbound`、每分钟 `Minutes[].Outbound`）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `Embedded.RoundTrip` | 客户端写出请求 → 读到回包，服务端为主；与 `GateRoundTrip` 同口径，少 Gate 与 NATS 两跳 |
+| `Embedded.CountersDelta.budget_exhausted` | `player_tcp_outbound_budget_exhausted_total` 在负载开始到 Sync 收敛之间的增量，正常负载期望 0 |
+| `Embedded.CountersDelta.push_refused_retried / _closed` | `player.sync.push_refused.total{outcome="retried"/"closed"}`（`selfsync.PushPlayerFrame`） |
+| `overflow` / `push_closed` / `write_errors` / `dispatch_errors` / `dispatch_timeouts` | 每连接上限溢出、推送关连接、写 socket 失败、dispatch 失败 / 超时 |
+| `stranded_players` / `connections` | 自身视图滞留玩家（Gauge，分钟内取最大值）、当前连接数（Gauge） |
+| `Embedded.GoroutinesAtStart / AtEnd` | 负载前 / 后按栈数出的写协程（`tcpSession.writeLoop`）与读循环（`TCPServer.serveConnection`）；取 goroutine profile 有短暂停顿，只在被测区间外取两次 |
+| `Embedded.OutboundClean` | 上面几项拒绝 / 关闭计数都是 0；只报告，不是通过门槛 |
+| `Embedded.QueuePeak` | 每连接出站队列峰值与全进程驻留字节**取不到**：在未导出的 `tcpSession` 里，框架也没有驻留 Gauge（KNOWN-LIMITS“嵌入 TCP 出站”） |
+
+所有模式新增 `Minutes`：按负载分钟汇总每秒采样（业务 / HB 每秒、堆最小 / 平均 / 最大、goroutine 范围、short 池平均 worker 等待、200ms 慢 dispatch 增量），在负载结束后离线计算，不改变被测区间。延迟分位仍只有整段（按分钟的分位要开 `ROOST_NEST_GAME_TAIL=metrics`）。
+
 ## 读结果：压测端与服务端
 
 维护者 2026-10-15 要求所有负载型压测把延迟拆成“压测端”（发生器节拍、模拟客户端排队与解码、观测轮询）和“服务端”（框架实际处理）两部分。各入口原有的端到端字段与通过门槛**不变**，保留它们只为与历史样本同口径比较；新增的 `Harness.*` / `Server.*`（JSON 小写为 `harness.*` / `server.*`）是同一段时间的拆分。评估框架延迟看 `Server.*`，`Harness.*` 偏大说明发生器或观测本身成了瓶颈。2026-10-15 之前的样本没有这些拆分；同一入口的分段除特别说明外在同一进程的单调时钟上取，各分段的分位分别统计，不能把分位相加。
@@ -63,7 +108,7 @@ bash scripts/perf/nest-game.sh
 | `Server.Completion` | 请求写出 → Entity 释放 | 服务端合计 |
 | `Completion` / `QueueWait` | 计划 / 投递 → 释放 / 开始 | 混合（历史口径） |
 
-`GateRoundTrip` 是客户端写出到收到回包（服务端为主）。Sync 的 `PlannedToClient` 从计划时刻起算、含压测端等待（混合）；`ChangedToClient` / `CommittedToClient` 从 handler 改值 / 提交起算，是服务端到客户端的同步延迟。
+`GateRoundTrip` 是客户端写出到收到回包（服务端为主），嵌入 TCP 模式下同一段是 `Embedded.RoundTrip`。嵌入模式的 `Server.*` 区间是“请求写出 → Game 进程内 TCP 读循环 → Nest”，不含 Gate 与 NATS。Sync 的 `PlannedToClient` 从计划时刻起算、含压测端等待（混合）；`ChangedToClient` / `CommittedToClient` 从 handler 改值 / 提交起算，是服务端到客户端的同步延迟。
 
 ### nest-msg.sh（已分清，不改）
 

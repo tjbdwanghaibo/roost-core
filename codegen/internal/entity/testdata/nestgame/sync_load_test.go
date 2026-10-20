@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -44,12 +45,22 @@ type syncLoadReport struct {
 	ValuesVerified, LatencyPassed                       bool
 	PlannedToClient, ChangedToClient, CommittedToClient latencyResult
 }
+
+// syncGameLoad 是 Sync 负载的两种形态，客户端解码、终值核对与延迟口径相同：
+//   - 场景（ROOST_NEST_GAME_SYNC=1）：全部 Unit 登记在一个 Manager，Interest/AOI 决定每个玩家订阅谁（最多 49 个加自己）。
+//     独立 Gate 下会话 ID 是 Game Ingress 的 receiver（gatewiring.Transport）；嵌入 TCP 下会话 ID 就是玩家 ID，
+//     传输是 selfsync.PushPlayerFrame（与 game-demo 场景 sceneLane 同一条，见 embedded_load_test.go）。
+//   - 自身视图（ROOST_NEST_GAME_SELF_SYNC=1，只在嵌入 TCP 下）：玩家 Unit 由 wiring/selfsync 的 SelfView 登记，
+//     每个玩家只订阅自己；没有 Interest，NPC Unit 不启用 Sync。
 type syncGameLoad struct {
-	units                           []*Unit
-	config                          gameConfig
-	manager                         *entitysync.Manager
-	interest                        *policy.Interest
-	transport                       *gatewiring.Transport
+	units    []*Unit
+	config   gameConfig
+	manager  *entitysync.Manager
+	interest *policy.Interest // 自身视图下为 nil
+	// gateTransport 只在独立 Gate 下非 nil，由 gateFrontend 接上 Game Ingress。
+	gateTransport                   *gatewiring.Transport
+	self                            bool
+	selfSync                        *selfsync.SelfSync
 	sessionsMu                      sync.RWMutex
 	sessions                        map[int64]entitysync.SessionID
 	clients                         []syncLoadClient
@@ -63,20 +74,27 @@ func (load *syncGameLoad) position(unit *Unit) spatial.Point {
 	side := int64(math.Ceil(math.Sqrt(float64(load.config.Entities))))
 	return spatial.Point{X: 200 + (i%side)*30 + (unit.state.GetX()%7)*2, Y: 200 + (i/side)*30 + (unit.state.GetHP()%7)*2}
 }
-func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig) *syncGameLoad {
+
+// enableUnitSync 打开一个 Unit 的同步内容；packer 不区分视图（场景与自身视图 "self" 都给全部同步字段）。
+func enableUnitSync(unit *Unit) {
+	pack := func(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+		return entity.TakeFrozenSyncPayload(1, unit.state.MarshalSync(mask)), nil
+	}
+	unit.EnableSync(entity.EntitySyncCreateParam{Enabled: true, EntityID: unit.ID(), Namespace: "unit", Packer: entity.SubjectSyncPackFunc{Snapshot: func(p entity.SyncProfile) (entity.FrozenSyncPayload, error) { return pack(p, dataengine.AllFields) }, Delta: pack}})
+}
+
+// newSyncGameLoad 是场景 Sync；lane 是独立 Gate 的 gatewiring.Transport 或嵌入 TCP 的 embeddedSceneLane。
+func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.Transport) *syncGameLoad {
 	t.Helper()
-	load := &syncGameLoad{units: units, config: c, transport: &gatewiring.Transport{SyncMessageID: 501}, sessions: make(map[int64]entitysync.SessionID), clients: make([]syncLoadClient, c.Players)}
+	load := &syncGameLoad{units: units, config: c, sessions: make(map[int64]entitysync.SessionID), clients: make([]syncLoadClient, c.Players)}
 	mode := entitysync.ModeOnChange
 	var err error
-	load.manager, err = entitysync.NewManager(entitysync.ManagerConfig{Mode: mode, Interval: 50 * time.Millisecond, Transport: load.transport, SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: 1000, PerSessionObjects: 50}})
+	load.manager, err = entitysync.NewManager(entitysync.ManagerConfig{Mode: mode, Interval: 50 * time.Millisecond, Transport: lane, SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: 1000, PerSessionObjects: 50}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, unit := range units {
-		pack := func(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-			return entity.TakeFrozenSyncPayload(1, unit.state.MarshalSync(mask)), nil
-		}
-		unit.EnableSync(entity.EntitySyncCreateParam{Enabled: true, EntityID: unit.ID(), Namespace: "unit", Packer: entity.SubjectSyncPackFunc{Snapshot: func(p entity.SyncProfile) (entity.FrozenSyncPayload, error) { return pack(p, dataengine.AllFields) }, Delta: pack}})
+		enableUnitSync(unit)
 		if err := load.manager.Register(unit.Sync()); err != nil {
 			t.Fatal(err)
 		}
@@ -101,27 +119,88 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig) *syncGameLoad {
 	})
 	return load
 }
-func (load *syncGameLoad) active(binding gateway.Binding, id uint64) error {
-	index := int(binding.PlayerID) - 1
+
+// newSelfSyncGameLoad 是自身视图：与生产装配相同，由 selfsync.New → EntitySyncSetup 建 Manager 并装上 SelfView
+// （wiring/nest.NewModWithEntitySync 的 initEntitySync 同一顺序：Config → Configure → NewManager → Attach），
+// 推送走 selfsync 的 Transport（PushPlayerFrame）。只有玩家 Unit 启用 Sync；登记、开会话由 SelfView 在
+// 连接激活（嵌入 TCP 的 AfterACK）之后的政策阶段完成，夹具不 Register。Mode / Interval 与场景 Sync 相同，便于对照。
+func newSelfSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, access *entity.ManagerAccess) *syncGameLoad {
+	t.Helper()
+	load := &syncGameLoad{units: units, config: c, self: true, sessions: make(map[int64]entitysync.SessionID), clients: make([]syncLoadClient, c.Players)}
+	var err error
+	load.selfSync, err = selfsync.New(selfsync.Config{Entities: access, Kind: kindUnit, MessageID: 502})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := load.selfSync.EntitySyncSetup()
+	config := setup.Config
+	config.Mode, config.Interval = entitysync.ModeOnChange, 50*time.Millisecond
+	if setup.Configure != nil {
+		setup.Configure(&config)
+	}
+	load.manager, err = entitysync.NewManager(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detach, err := setup.Attach(load.manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unit := range units[:c.Players] {
+		enableUnitSync(unit)
+	}
+	for index := range load.clients {
+		load.clients[index] = syncLoadClient{receiver: frame.NewReceiver(frame.DefaultLimits()), objects: make(map[int64]syncClientObject), refs: make(map[frame.ObjectRef]int64)}
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = load.manager.Close(ctx)
+		if detach != nil {
+			detach()
+		}
+	})
+	return load
+}
+
+// openSession 记下玩家 Unit 对应的会话并以 held 打开；start 统一 Ready，与独立 Gate 的 OnActive 同一时机。
+func (load *syncGameLoad) openSession(index int, session entitysync.SessionID) error {
 	if index < 0 || index >= load.config.Players {
 		return gateway.ErrUnauthenticated
 	}
-	receiver := entitysync.SessionID(id)
 	load.sessionsMu.Lock()
-	load.sessions[load.units[index].ID()] = receiver
+	load.sessions[load.units[index].ID()] = session
 	load.sessionsMu.Unlock()
-	return load.manager.OpenHeldSession(receiver)
+	return load.manager.OpenHeldSession(session)
+}
+func (load *syncGameLoad) active(binding gateway.Binding, id uint64) error {
+	return load.openSession(int(binding.PlayerID)-1, entitysync.SessionID(id))
 }
 func (load *syncGameLoad) closed(_ gateway.Binding, id uint64) {
 	load.manager.CloseSession(entitysync.SessionID(id))
 }
 func (load *syncGameLoad) changed(unit *Unit, in invocation) error {
+	if load.self && unit.Sync() == nil {
+		return nil // 自身视图只看玩家 Unit，NPC 没有同步内容
+	}
 	unit.state.SetPlannedNS(loadTimestamp(in.planned))
 	unit.state.SetChangedNS(loadTimestamp(time.Now()))
+	if load.self {
+		return nil
+	}
 	return load.interest.QueueMove(unit, load.position(unit), entity.GetUniqueIDFromEntityID(unit.ID()) <= int64(load.config.Players))
 }
-func (load *syncGameLoad) start(t *testing.T, network *gateFrontend) {
+func (load *syncGameLoad) start(t *testing.T, network loadFrontend) {
 	t.Helper()
+	if load.self {
+		// 会话、登记与绑定由 SelfView 在 Manager 的政策阶段完成；这里只启动并等每个玩家收到自己的全量。
+		if err := load.manager.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		load.awaitValues(t, network)
+		load.measuring.Store(true)
+		return
+	}
 	for index, unit := range load.units {
 		var err error
 		if index < load.config.Players {
@@ -202,10 +281,17 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 	})
 	return err
 }
+
+// wanted 是玩家 index 的客户端此刻应该持有的对象：场景是 AOI 可见集合加自己，自身视图只有自己。
+func (load *syncGameLoad) wanted(index int) []int64 {
+	if load.self {
+		return []int64{load.units[index].ID()}
+	}
+	return append(load.interest.Visible(load.units[index].ID()), load.units[index].ID())
+}
 func (load *syncGameLoad) valuesMatch() bool {
 	for index := range load.clients {
-		wanted := load.interest.Visible(load.units[index].ID())
-		wanted = append(wanted, load.units[index].ID())
+		wanted := load.wanted(index)
 		client := &load.clients[index]
 		client.mu.Lock()
 		matches := len(client.objects) == len(wanted)
@@ -226,15 +312,12 @@ func (load *syncGameLoad) valuesMatch() bool {
 }
 
 // 仅在业务未启动或已 Shutdown 时读 DAO；不会在客户端网络 goroutine 读 Entity。
-func (load *syncGameLoad) awaitValues(t *testing.T, network *gateFrontend) {
+func (load *syncGameLoad) awaitValues(t *testing.T, network loadFrontend) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for !load.valuesMatch() {
-		network.mu.Lock()
-		failure := network.failure
-		network.mu.Unlock()
-		if failure != nil {
+		if failure := network.currentFailure(); failure != nil {
 			t.Logf("Sync mismatch: %s", load.mismatch())
 			client := &load.clients[0]
 			client.mu.Lock()
@@ -252,10 +335,14 @@ func (load *syncGameLoad) awaitValues(t *testing.T, network *gateFrontend) {
 		}
 	}
 }
-func (load *syncGameLoad) finish(t *testing.T, network *gateFrontend) *syncLoadReport {
+func (load *syncGameLoad) finish(t *testing.T, network loadFrontend) *syncLoadReport {
 	load.awaitValues(t, network)
 	load.measuring.Store(false)
-	report := &syncLoadReport{Mode: load.manager.Mode().String(), Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
+	mode := load.manager.Mode().String()
+	if load.self {
+		mode = "self:" + mode
+	}
+	report := &syncLoadReport{Mode: mode, Frames: load.frames.Load(), Updates: load.updates.Load(), ValuesVerified: true, PlannedToClient: load.planned.result(), ChangedToClient: load.changedTime.result(), CommittedToClient: load.committed.result(), VisibleMin: math.MaxInt}
 	for index := range load.clients {
 		client := &load.clients[index]
 		client.mu.Lock()
@@ -269,7 +356,7 @@ func (load *syncGameLoad) finish(t *testing.T, network *gateFrontend) *syncLoadR
 
 func (load *syncGameLoad) mismatch() string {
 	for index := range load.clients {
-		wanted := append(load.interest.Visible(load.units[index].ID()), load.units[index].ID())
+		wanted := load.wanted(index)
 		client := &load.clients[index]
 		client.mu.Lock()
 		if len(wanted) != len(client.objects) {

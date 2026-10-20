@@ -190,8 +190,8 @@ v1.29 口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版�
 
 维护者 2026-10-20 已批准全部补测，结果出来后回填本文件与能力表。
 
-1. **嵌入 TCP 出站重档**：v1.28 改为每连接有界队列 + 写协程，`cf6ad085` 加全进程预算（缺省 256 MiB 为推算值）。核对推送路径 CPU、内存与 `player_tcp_outbound_budget_exhausted_total` 是否为 0，并据此决定是否做驻留 Gauge / 按帧龄关闭。现有 `scripts/perf/nest-game.sh` 的重档只有独立 Gate 模式（`ROOST_NEST_GAME_SYNC=1` 要求 `ROOST_NEST_GAME_GATE=1`），需要补一个经嵌入 `TCPRuntime` 的重档夹具。
-2. **自身视图（self_sync）重档**：Game Ingress / 嵌入 TCP 预算耗尽时的整轮重试放大（上文 self_sync 第 4 条）。入口同第 1 项。
+1. **嵌入 TCP 出站重档**：v1.28 改为每连接有界队列 + 写协程，`cf6ad085` 加全进程预算（缺省 256 MiB 为推算值）。核对推送路径 CPU、内存与 `player_tcp_outbound_budget_exhausted_total` 是否为 0，并据此决定是否做驻留 Gauge / 按帧龄关闭。入口：`scripts/perf/nest-game.sh` 的嵌入模式 `ROOST_NEST_GAME_EMBEDDED=1`（2026-10-20 夹具，玩家直连 Game 内 `TCPServer` + `TCPRuntime`，场景 Sync 经 `selfsync.PushPlayerFrame`；命令、预计时长与输出字段见 [性能 README](../performance/README.md#嵌入-tcp-重档)）；只做过缩小规模的冒烟，重档尚未跑。每连接出站队列峰值与驻留字节夹具取不到（没有 Gauge），只有拒绝 / 关闭计数与写协程数。
+2. **自身视图（self_sync）重档**：Game Ingress / 嵌入 TCP 预算耗尽时的整轮重试放大（上文 self_sync 第 4 条）。入口同第 1 项加 `ROOST_NEST_GAME_SELF_SYNC=1`（只在嵌入模式下；与场景 Sync 互斥，一个玩家实体只能登记在一个 Manager）；独立 Gate + self_sync 的夹具没有。
 3. **重档 P99 小幅上升与 Sync / Gate >50ms 条数**：v1.29 对同日 v1.27.0 对照的差异是否来自代码，需同机 A-B-A-B 交替多轮（`scripts/perf/nest-game.sh`，参数见 [V1290 复测 §2](../performance/V1290-HEAVY-30M-20261019.md#2-命令)）。
 4. **Sync 长尾的归因**：整分钟周期任务同秒的归因与不在整分钟的簇在 v1.29 上复核；入口 `ROOST_NEST_GAME_TAIL=metrics`（有开销，结果不与正式样本比较）与 `scripts/perf/tailtrace`；有独占服务器 / Linux 实机时按方案 A 复测。
 5. **Block AOI 重档**：v1.29 未跑；入口见 [Block AOI](../framework/INTEREST-BLOCK-AOI.md) 与 [Gate/AOI 性能报告](../performance/GATE-AOI.md)。

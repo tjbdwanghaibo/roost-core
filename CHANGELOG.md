@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 压测夹具：nest-game 重档加嵌入 TCPRuntime 模式与自身视图子模式（维护者 2026-10-20 批准补测）
+
+- `scripts/perf/nest-game.sh` 新增 `ROOST_NEST_GAME_EMBEDDED=1`：玩家连接直连 Game 进程内的 `gateway.TCPServer` + `TCPRuntime`（接线同生成的 player TCP Mod），不经独立 Gate 与 NATS；`ROOST_NEST_GAME_SYNC=1` 叠加场景 Sync，Transport 是 `selfsync.PushPlayerFrame`（与 game-demo 场景同一条）；`ROOST_NEST_GAME_SELF_SYNC=1` 叠加自身视图（按 `selfsync.EntitySyncSetup` 生产装配），与场景 Sync 互斥（一个玩家实体只能登记在一个 Manager），只在嵌入模式下。可选 `ROOST_NEST_GAME_TCP_RESIDENT_BYTES` 覆盖出站驻留预算。
+- 输出：嵌入模式加 `Embedded`（往返时延、`player_tcp_outbound_budget_exhausted_total`、`player.sync.push_refused.total` 按 outcome、溢出 / 关连接 / 写失败计数、负载前后的写协程与读循环数）与每秒 `Samples[].Outbound`；所有模式加 `Minutes`（按分钟的吞吐、堆、goroutine、short 池平均等待，离线计算）。每连接出站队列峰值与驻留字节框架不导出，夹具取不到。
+- 独立 Gate 与直接投递两种模式的负载与采样不变（模拟客户端抽成两种模式共用的 `loadClients`，代码搬移）；长尾分析 `scripts/perf/tailtrace` 认识新的 `embedded` 流。框架、生成器与 demo 未改。正式参数与预计时长见 [性能 README“嵌入 TCP 重档”](docs/performance/README.md#嵌入-tcp-重档)；本次只做缩小规模的冒烟，没有性能结论。
+
 ### 文档：KNOWN-LIMITS 只保留当前限制（维护者 2026-10-20 批准）
 
 - `docs/maintenance/KNOWN-LIMITS.md` 删除已修复问题的经过，只保留 v1.29.0 + main 仍有效的限制、维护者已接受的代价与验证边界；不确定项改为 v1.29 口径（[v1.29.0 发版后复测](docs/performance/V1290-HEAVY-30M-20261019.md)），无 v1.29 证据的列入文末“v1.29 待补测”。九个游戏的接入验收改为一张摘要表，详细范围在各手册“第二部分 验收”（补齐了原先只在 KNOWN-LIMITS 里的手动运行说明、未实施清单与去掉 `Start` 的对照）。已修复问题的经过见本文件与 docs/release。
