@@ -1,0 +1,412 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	playerentity "example.com/idle-sim-practice/game/entities/player"
+	sender "example.com/idle-sim-practice/game/handler/syncsender"
+	idle "example.com/idle-sim-practice/game/idlesim"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type idleGetter map[int64]entity.IThreadSafeEntity
+
+func (g idleGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing entity %d", id)
+}
+func (g idleGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// 基础用例只替换提交器；真实 WAL 的未投影崩溃恢复另有显式入口。
+type idleCommitter struct{}
+
+func (idleCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const idleNow int64 = 1800000000000
+
+type idleFixture struct {
+	engine *nest.NestMgr
+	player *playerentity.Player
+	clock  atomic.Int64
+	rules  idle.Rules
+}
+
+func loadIdleRules(t *testing.T, r idle.Rules) idle.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	raw, _ := json.Marshal(r)
+	if err := os.WriteFile(filepath.Join(dir, "idle.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := idle.OpenCatalog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = idle.CaptureRules(store.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterIdleSimNestHandlers()
+	RegisterTickPlayerTimerGenNestHandlers()
+	rules := idle.DemoRules()
+	if len(custom) > 0 {
+		rules = custom[0]
+	}
+	f := &idleFixture{rules: loadIdleRules(t, rules)}
+	f.clock.Store(idleNow)
+	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	id, err := entity.BuildEntityID(91001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = e.(*playerentity.Player)
+	g := idleGetter{id: e}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(idleCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := playerentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.engine.Shutdown(context.Background())
+		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, idleNow, f.rules); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// 测试只在 Sender 已完成、并发 goroutine 全部退出后查看实体快照。
+func (f *idleFixture) state(t *testing.T) idle.State {
+	t.Helper()
+	s, err := idle.Decode(f.player.Dao().GetState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *idleFixture) command(t *testing.T, kind string, station, recipe int, count int64, job uint64) idle.Command {
+	t.Helper()
+	s := f.state(t)
+	return idle.Command{Seq: uint64(len(s.Receipts)) + 1, Kind: kind, Station: station, Recipe: recipe, Count: count, JobID: job}
+}
+func (f *idleFixture) send(c idle.Command) (idle.Receipt, error) {
+	return sender.NewIdleSimSender(f.engine).Sync_IdleCommand(context.Background(), f.player.ID(), c, f.clock.Load())
+}
+func (f *idleFixture) do(t *testing.T, kind string, station, recipe int, count int64, job uint64) idle.Receipt {
+	t.Helper()
+	r, err := f.send(f.command(t, kind, station, recipe, count, job))
+	if err != nil {
+		t.Fatal(kind, err)
+	}
+	return r
+}
+func (f *idleFixture) refuse(t *testing.T, c idle.Command) {
+	t.Helper()
+	before := f.player.Dao().GetState()
+	timer := f.player.Dao().GetWakeTimer()
+	if _, err := f.send(c); err == nil {
+		t.Fatal("invalid command accepted", c)
+	}
+	if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer {
+		t.Fatal("refusal changed state or timer")
+	}
+}
+func TestIdleSimParallelQueuesReserveAndFinishIndependently(t *testing.T) {
+	f := newIdleFixture(t)
+	f.do(t, "queue", 0, 0, 0, 0)
+	f.do(t, "queue", 1, 1, 0, 0)
+	f.do(t, "queue", 2, 2, 0, 0)
+	if f.state(t).Raw != 40 {
+		t.Fatal("inputs not reserved")
+	}
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	s := f.state(t)
+	if len(s.Stations[0].Ready) != 1 || s.Stations[1].Queue[0].Progress != 10000 || s.Stations[2].Queue[0].Progress != 10000 {
+		t.Fatal("parallel queues shared a time budget")
+	}
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	s = f.state(t)
+	if len(s.Stations[0].Ready) != 1 || len(s.Stations[1].Ready) != 1 || s.Stations[2].Queue[0].Progress != 20000 {
+		t.Fatal("completion duplicated / wrong progress")
+	}
+	for range 3 {
+		f.do(t, "queue", 2, 2, 0, 0)
+	}
+	f.refuse(t, f.command(t, "queue", 2, 2, 0, 0))
+	f.refuse(t, f.command(t, "upgrade", 2, 0, 0, 0))
+}
+func TestIdleSimCancellationRefundsOnlyUnstartedJobsOnce(t *testing.T) {
+	f := newIdleFixture(t)
+	first := f.do(t, "queue", 0, 2, 0, 0)
+	second := f.do(t, "queue", 0, 2, 0, 0)
+	f.clock.Add(5000)
+	cancel := f.do(t, "cancel", 0, 0, 0, second.Command.Seq)
+	for range 3 {
+		if _, err := f.send(cancel.Command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := f.state(t)
+	if s.Raw != 45 || len(s.Stations[0].Queue) != 1 || s.Stations[0].Queue[0].Progress != 5000 {
+		t.Fatal("cancel duplicated refund / lost head progress")
+	}
+	f.refuse(t, f.command(t, "cancel", 0, 0, 0, first.Command.Seq))
+	f.refuse(t, f.command(t, "cancel", 1, 0, 0, first.Command.Seq))
+	f.refuse(t, f.command(t, "cancel", 0, 0, 0, 999))
+}
+func TestIdleSimWarehouseCapacityOrdersAndSalesAreAtomic(t *testing.T) {
+	rules := idle.DemoRules()
+	rules.WarehouseCap = 3
+	f := newIdleFixture(t, rules)
+	f.do(t, "queue", 0, 0, 0, 0)
+	f.do(t, "queue", 1, 1, 0, 0)
+	f.clock.Add(20000)
+	f.do(t, "collect", 0, 0, 0, 0)
+	f.do(t, "queue", 0, 0, 0, 0)
+	f.clock.Add(10000)
+	f.refuse(t, f.command(t, "collect", 0, 0, 0, 0))
+	f.do(t, "collect", 1, 0, 0, 0)
+	order := f.do(t, "order", 0, 0, 0, 0)
+	f.do(t, "collect", 0, 0, 0, 0)
+	if _, err := f.send(order.Command); err != nil {
+		t.Fatal(err)
+	}
+	sale := f.do(t, "sell", 0, 0, 2, 0)
+	if _, err := f.send(sale.Command); err != nil {
+		t.Fatal(err)
+	}
+	s := f.state(t)
+	if s.Gold != 126 || s.Inventory != [3]int64{} || s.Orders != 1 {
+		t.Fatal("warehouse / order / sale duplicated or lost assets")
+	}
+	f.refuse(t, f.command(t, "sell", 0, 0, 1, 0))
+}
+func TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem(t *testing.T) {
+	f := newIdleFixture(t)
+	f.clock.Add(5000)
+	f.do(t, "income_upgrade", 0, 0, 0, 0)
+	f.do(t, "boost", 0, 0, 0, 0)
+	f.refuse(t, f.command(t, "boost", 0, 0, 0, 0))
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	s := f.state(t)
+	if s.Pending != 4 || s.IncomeRemainder != 5000 || s.Gold != 90 || s.Gems != 8 {
+		t.Fatal("new rate applied retroactively")
+	}
+	f.clock.Add(5000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	if f.state(t).Pending != 5 {
+		t.Fatal("expired boost continued")
+	}
+	f.do(t, "upgrade", 0, 0, 0, 0)
+	f.do(t, "queue", 0, 0, 0, 0)
+	if f.state(t).Stations[0].Queue[0].Required != 5000 {
+		t.Fatal("factory upgrade not frozen into task")
+	}
+	patched := f.rules
+	patched.Version = "idle-v2"
+	patched.Recipes[0].Raw = 9
+	before := f.player.Dao().GetState()
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), f.player.ID(), f.clock.Load(), patched); err != nil || f.player.Dao().GetState() != before {
+		t.Fatal("existing state changed on bootstrap retry")
+	}
+}
+func TestIdleSimConcurrentAdmissionAndClaimsRetainOriginalReceipt(t *testing.T) {
+	f := newIdleFixture(t)
+	parallel := func(c idle.Command) idle.Receipt {
+		t.Helper()
+		var wg sync.WaitGroup
+		errs := make([]error, 8)
+		results := make([]idle.Receipt, 8)
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) { defer wg.Done(); results[i], errs[i] = f.send(c) }(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil || results[i] != results[0] {
+				t.Fatal("concurrent replay diverged", err)
+			}
+		}
+		return results[0]
+	}
+	queue := parallel(f.command(t, "queue", 0, 0, 0, 0))
+	timer := f.player.Dao().GetWakeTimer()
+	if _, err := f.send(queue.Command); err != nil || f.player.Dao().GetWakeTimer() != timer {
+		t.Fatal("retry rearmed timer")
+	}
+	if f.state(t).Raw != 48 || len(f.state(t).Stations[0].Queue) != 1 {
+		t.Fatal("duplicate admission")
+	}
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	parallel(f.command(t, "claim", 0, 0, 0, 0))
+	parallel(f.command(t, "daily", 0, 0, 0, 0))
+	if f.state(t).Gold != 106 || f.state(t).Pending != 0 {
+		t.Fatal("duplicate offline / daily reward")
+	}
+	r, err := sender.NewIdleSimSender(f.engine).Sync_IdleReceipt(context.Background(), f.player.ID(), queue.Command.Seq)
+	if err != nil || r != queue {
+		t.Fatal("unknown outcome cannot query original identity", err)
+	}
+}
+func waitIdle(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatal("idle driver did not settle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func TestIdleSimDriverCatchupCannotExtendOfflineHorizon(t *testing.T) {
+	f := newIdleFixture(t)
+	f.do(t, "queue", 0, 2, 0, 0)
+	horizon := f.state(t).Horizon
+	waitIdle(t, func() bool {
+		due, ok := playerentity.TimerDriver.DueOf(f.player)
+		return ok && due.UnixMilli() == idleNow+1000
+	})
+	f.clock.Add(365 * idle.DayMillis)
+	if delivered := playerentity.TimerDriver.DeliverDue(context.Background()); delivered != 1 {
+		t.Fatal("missing due entity", delivered)
+	}
+	waitIdle(t, func() bool {
+		view, err := sender.NewIdleSimSender(f.engine).Sync_IdleView(context.Background(), f.player.ID())
+		return err == nil && view.LastAt == f.clock.Load()
+	})
+	waitIdle(t, func() bool { _, ok := playerentity.TimerDriver.DueOf(f.player); return !ok })
+	s := f.state(t)
+	if s.Pending != 3 || s.Horizon != horizon || s.Stations[0].Queue[0].Progress != 30000 || f.player.Dao().GetWakeTimer() != 0 {
+		t.Fatal("offline horizon extended / time not capped")
+	}
+	if n := playerentity.TimerDriver.DeliverDue(context.Background()); n != 0 {
+		t.Fatal("expired horizon kept scheduling")
+	}
+	f.do(t, "settle", 0, 0, 0, 0)
+	if f.state(t).Pending != 3 {
+		t.Fatal("repeated settlement recovered discarded time")
+	}
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	if s := f.state(t); s.Pending != 4 || len(s.Stations[0].Ready) != 1 {
+		t.Fatal("new activity did not resume remaining work")
+	}
+}
+func TestIdleSimDailyBoundaryAndMissedDaysDoNotMultiplyRewards(t *testing.T) {
+	f := newIdleFixture(t)
+	first := f.do(t, "daily", 0, 0, 0, 0)
+	nextDay := (idleNow/idle.DayMillis + 1) * idle.DayMillis
+	f.clock.Store(nextDay - 1)
+	f.refuse(t, f.command(t, "daily", 0, 0, 0, 0))
+	f.clock.Store(nextDay)
+	f.do(t, "daily", 0, 0, 0, 0)
+	if _, err := f.send(first.Command); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Add(10 * idle.DayMillis)
+	f.do(t, "daily", 0, 0, 0, 0)
+	s := f.state(t)
+	if s.Gold != 115 || s.DailyDay != f.clock.Load()/idle.DayMillis {
+		t.Fatal("missed days or old retry paid extra")
+	}
+	f.clock.Add(-1)
+	f.refuse(t, f.command(t, "settle", 0, 0, 0, 0))
+}
+func TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline(t *testing.T) {
+	f := newIdleFixture(t)
+	refused := errors.New("refuse after idle mutation")
+	for _, kind := range []string{"queue", "boost"} {
+		c := f.command(t, kind, 0, 2, 0, 0)
+		before := f.player.Dao().GetState()
+		timer := f.player.Dao().GetWakeTimer()
+		name := nest.NewHandlerName("idle_undo_" + kind)
+		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+			_, err := handlerIdleCommand(es[0].(IIdlePlayerEntity), c, f.clock.Load())
+			if err != nil {
+				return nil, err
+			}
+			return nil, refused
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+		if _, err := f.engine.Request(context.Background(), name, f.player.ID(), nil); !errors.Is(err, refused) {
+			t.Fatal(err)
+		}
+		if f.player.Dao().GetState() != before || f.player.Dao().GetWakeTimer() != timer || len(f.player.TimerComp().Timers()) != 1 {
+			t.Fatal("undo left resource or timer changes")
+		}
+		if _, err := f.send(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestIdleSimFullBufferPausesAndLedgerNeverEvicts(t *testing.T) {
+	f := newIdleFixture(t)
+	for range 4 {
+		f.do(t, "queue", 0, 0, 0, 0)
+	}
+	f.clock.Add(20000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	f.clock.Add(20000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	f.do(t, "queue", 0, 0, 0, 0)
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	s := f.state(t)
+	if len(s.Stations[0].Ready) != 4 || s.Stations[0].Queue[0].Progress != 0 {
+		t.Fatal("full output buffer consumed work")
+	}
+	f.do(t, "collect", 0, 0, 0, 0)
+	f.clock.Add(10000)
+	f.do(t, "settle", 0, 0, 0, 0)
+	if len(f.state(t).Stations[0].Ready) != 1 {
+		t.Fatal("queue failed to resume after collection")
+	}
+	old := f.state(t).Receipts[0]
+	for len(f.state(t).Receipts) < idle.LedgerLimit {
+		f.do(t, "settle", 0, 0, 0, 0)
+	}
+	f.refuse(t, f.command(t, "queue", 1, 0, 0, 0))
+	before := f.player.Dao().GetState()
+	got, err := f.send(old.Command)
+	if err != nil || !reflect.DeepEqual(old, got) || f.player.Dao().GetState() != before {
+		t.Fatal("full ledger evicted original facts")
+	}
+}

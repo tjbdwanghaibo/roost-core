@@ -1,0 +1,84 @@
+// Package idlesim 是三工坊生产与放置收益的业务示例，不是公共框架内建经济规则。
+package idlesim
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("idle sim: invalid identity, time, operation, inventory or limit")
+
+const LedgerLimit = 128
+const QueueLimit = 4
+const ValueLimit int64 = 1000000
+const DayMillis int64 = 86400000
+const MaxTime int64 = 4000000000000
+
+type Recipe struct{ Work, Raw, Output, Price int64 }
+type Rules struct {
+	Version                                                       string
+	Recipes                                                       [3]Recipe
+	OfflineCap, TickMillis, IncomePeriod, PendingCap, BoostMillis int64
+	WarehouseCap, RawCap                                          int64
+}
+
+func DemoRules() Rules {
+	return Rules{Version: "idle-v1", Recipes: [3]Recipe{{10000, 2, 2, 3}, {20000, 3, 1, 8}, {40000, 5, 1, 15}}, OfflineCap: 30000, TickMillis: 1000, IncomePeriod: 10000, PendingCap: 100, BoostMillis: 10000, WarehouseCap: 20, RawCap: 100}
+}
+func (r Rules) Validate() error {
+	if r.Version == "" || len(r.Version) > 64 || r.OfflineCap < 1000 || r.OfflineCap > DayMillis || r.TickMillis < 100 || r.TickMillis > r.OfflineCap || r.IncomePeriod < 100 || r.IncomePeriod > DayMillis || r.PendingCap < 1 || r.PendingCap > 10000 || r.BoostMillis < 100 || r.BoostMillis > DayMillis || r.WarehouseCap < 3 || r.WarehouseCap > 1000 || r.RawCap < 50 || r.RawCap > 1000 {
+		return ErrRule
+	}
+	for _, v := range r.Recipes {
+		if v.Work < 100 || v.Work > DayMillis || v.Raw < 1 || v.Raw > 10 || v.Output < 1 || v.Output > 10 || v.Price < 1 || v.Price > 100 {
+			return ErrRule
+		}
+	}
+	return nil
+}
+func (r Rules) Hash() string {
+	sum := sha256.Sum256([]byte(encode(r)))
+	return hex.EncodeToString(sum[:])
+}
+func validTime(now int64) bool { return now > 0 && now < MaxTime }
+func encode(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+func strictJSON(raw string, out any) error {
+	if len(raw) == 0 || len(raw) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	r := configdata.NewRegistry()
+	configdata.MustRegisterObject(r, configdata.ObjectDef[Rules]{Name: "idle_rules", File: "idle.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	s := configdata.NewStore(r, dir)
+	_, err := s.Load(context.Background())
+	return s, err
+}
+func CaptureRules(s *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](s, "idle_rules")
+	if !ok {
+		return Rules{}, ErrRule
+	}
+	return r, r.Validate()
+}

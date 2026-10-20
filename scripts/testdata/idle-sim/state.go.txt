@@ -1,0 +1,123 @@
+package idlesim
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
+type Command struct {
+	Seq             uint64
+	Kind            string
+	Station, Recipe int
+	JobID           uint64
+	Count           int64
+}
+type Receipt struct {
+	Command                Command
+	At, Gold, Raw, Pending int64
+	ConfigHash             string
+}
+
+// 任务创建时冻结工作量、投入和产出，队列等待中的任务也不随工坊升级重新定价。
+type Job struct {
+	ID                              uint64
+	Recipe                          int
+	Required, Progress, Raw, Output int64
+}
+type Station struct {
+	Level        int64
+	Queue, Ready []Job
+}
+
+// Horizon 由有效新玩家命令推进；后台 timer 和读视图均不延长离线收益窗口。
+// LastAt 始终推进到服务端本次 now，丢弃 Horizon 之后时间，不能靠重复 settle 补领被截掉的区间。
+type State struct {
+	Schema                                                 int
+	Rules                                                  Rules
+	ConfigHash                                             string
+	LastAt, Horizon, BoostUntil                            int64
+	IncomeLevel, IncomeRemainder, Pending, Gold, Gems, Raw int64
+	Inventory                                              [3]int64
+	Stations                                               [3]Station
+	DailyDay                                               int64
+	Orders                                                 int64
+	Receipts                                               []Receipt
+}
+
+func NewState(now int64, r Rules) (State, error) {
+	if !validTime(now) || !validTime(now+r.OfflineCap) || r.Validate() != nil {
+		return State{}, ErrRule
+	}
+	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), LastAt: now, Horizon: now + r.OfflineCap, IncomeLevel: 1, Gold: 100, Gems: 10, Raw: 50, DailyDay: -1}
+	for i := range s.Stations {
+		s.Stations[i].Level = 1
+	}
+	return s, nil
+}
+func (s State) Encode() string { return encode(s) }
+func (s State) Digest() string {
+	sum := sha256.Sum256([]byte(s.Encode()))
+	return hex.EncodeToString(sum[:])
+}
+func Decode(raw string) (State, error) {
+	var s State
+	if err := strictJSON(raw, &s); err != nil {
+		return s, err
+	}
+	if s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || !validTime(s.LastAt) || !validTime(s.Horizon) || s.Horizon > s.LastAt+s.Rules.OfflineCap || s.BoostUntil < 0 || s.BoostUntil >= MaxTime || s.IncomeLevel < 1 || s.IncomeLevel > 5 || s.IncomeRemainder < 0 || s.IncomeRemainder >= s.Rules.IncomePeriod || s.Pending < 0 || s.Pending > s.Rules.PendingCap || s.Gold < 0 || s.Gold > ValueLimit || s.Gems < 0 || s.Gems > ValueLimit || s.Raw < 0 || s.Raw > s.Rules.RawCap || s.DailyDay < -1 || s.DailyDay > s.LastAt/DayMillis || s.Orders < 0 || s.Orders > ValueLimit || len(s.Receipts) > LedgerLimit {
+		return s, ErrRule
+	}
+	total := int64(0)
+	for _, v := range s.Inventory {
+		if v < 0 || v > s.Rules.WarehouseCap {
+			return s, ErrRule
+		}
+		total += v
+	}
+	if total > s.Rules.WarehouseCap {
+		return s, ErrRule
+	}
+	seen := map[uint64]bool{}
+	for _, station := range s.Stations {
+		if station.Level < 1 || station.Level > 5 || len(station.Queue) > QueueLimit || len(station.Ready) > QueueLimit {
+			return s, ErrRule
+		}
+		for group, jobs := range [][]Job{station.Queue, station.Ready} {
+			for i, j := range jobs {
+				if j.ID == 0 || j.ID > uint64(len(s.Receipts)) || seen[j.ID] || j.Recipe < 0 || j.Recipe >= 3 || j.Required < 1 || j.Required > DayMillis || j.Progress < 0 || j.Progress > j.Required || j.Raw < 1 || j.Raw > 10 || j.Output < 1 || j.Output > 10 {
+					return s, ErrRule
+				}
+				seen[j.ID] = true
+				if s.Receipts[j.ID-1].Command.Kind != "queue" || group == 0 && (j.Progress == j.Required || i > 0 && j.Progress != 0) || group == 1 && j.Progress != j.Required {
+					return s, ErrRule
+				}
+			}
+		}
+	}
+	for i, r := range s.Receipts {
+		if r.Command.Seq != uint64(i+1) || !validTime(r.At) || r.At > s.LastAt || i > 0 && r.At < s.Receipts[i-1].At || r.ConfigHash != s.ConfigHash || r.Gold < 0 || r.Gold > ValueLimit || r.Raw < 0 || r.Raw > s.Rules.RawCap || r.Pending < 0 || r.Pending > s.Rules.PendingCap {
+			return s, ErrRule
+		}
+	}
+	return s, nil
+}
+
+// View 深拷贝生产队列，返回者不能通过切片别名修改实体状态；长期回执通过独立查询取得。
+type View struct {
+	NextSeq                               uint64
+	LastAt, Horizon, BoostUntil           int64
+	Gold, Gems, Raw, Pending, IncomeLevel int64
+	Inventory                             [3]int64
+	Stations                              [3]Station
+	DailyDay, Orders                      int64
+	ConfigHash                            string
+}
+
+func (s State) View() View {
+	stations := s.Stations
+	for i := range stations {
+		stations[i].Queue = append([]Job(nil), stations[i].Queue...)
+		stations[i].Ready = append([]Job(nil), stations[i].Ready...)
+	}
+	return View{uint64(len(s.Receipts)) + 1, s.LastAt, s.Horizon, s.BoostUntil, s.Gold, s.Gems, s.Raw, s.Pending, s.IncomeLevel, s.Inventory, stations, s.DailyDay, s.Orders, s.ConfigHash}
+}

@@ -40,6 +40,7 @@
 - [TOWER-DEFENSE-INTEGRATION.md](../framework/TOWER-DEFENSE-INTEGRATION.md)：学习文档，合作塔防场景的框架学习（共享房间实体、共享金币建造与阻路校验、准备屏障与持久波次定时器、团队领奖、重连与视图）与验收范围
 - [SURVIVAL-EXTRACTION-INTEGRATION.md](../framework/SURVIVAL-EXTRACTION-INTEGRATION.md)：学习文档，合作生存撤离场景的框架学习（付费入场与兑付的多实体事务、共享采集 / 制作 / 死亡掉落、物资守恒、最早期限定时器、撤离封存清单、重连与视图）与验收范围
 - [MERGE-CASUAL-INTEGRATION.md](../framework/MERGE-CASUAL-INTEGRATION.md)：学习文档，合成休闲场景的框架学习（服务器权威存档、离线命令批次与设备代际、惰性体力恢复、限时挑战定时器、广告到账回执与视图裁剪）与验收范围
+- [IDLE-SIM-INTEGRATION.md](../framework/IDLE-SIM-INTEGRATION.md)：学习文档，放置模拟场景的框架学习（生产队列与原料预扣、有界离线窗口的区间积分、唤醒定时器、仓库 / 订单 / 每日奖励回执）与验收范围
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议

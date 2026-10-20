@@ -1,0 +1,89 @@
+package handler
+
+import (
+	db "example.com/idle-sim-practice/db"
+	playerentity "example.com/idle-sim-practice/game/entities/player"
+	idle "example.com/idle-sim-practice/game/idlesim"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type IIdlePlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+	TimerComp() *playerentity.TimerComponent
+}
+
+// Rules 来自服务端捕获的 configdata Snapshot；已有存档不因重试或新配置改变经济。
+//
+//roost:nest rollback=undo durability=strict
+func handlerIdleInit(p IIdlePlayerEntity, now int64, rules idle.Rules) (idle.View, error) {
+	if p.Dao().GetState() != "" {
+		s, err := idle.Decode(p.Dao().GetState())
+		return s.View(), err
+	}
+	s, err := idle.NewState(now, rules)
+	if err != nil {
+		return idle.View{}, err
+	}
+	if err := saveIdle(p, s); err != nil {
+		return idle.View{}, err
+	}
+	return s.View(), nil
+}
+
+// PlayerID 取鉴权会话，now 取服务端时钟；命令不能上报工时、产出、余额或离线长度。
+//
+//roost:nest rollback=undo durability=strict
+func handlerIdleCommand(p IIdlePlayerEntity, c idle.Command, now int64) (idle.Receipt, error) {
+	s, err := idle.Decode(p.Dao().GetState())
+	if err != nil {
+		return idle.Receipt{}, err
+	}
+	before := len(s.Receipts)
+	r, err := s.Apply(c, now)
+	if err != nil {
+		return r, err
+	}
+	if len(s.Receipts) != before {
+		if err := saveIdle(p, s); err != nil {
+			return idle.Receipt{}, err
+		}
+	}
+	return r, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerIdleView(p IIdlePlayerEntity) (idle.View, error) {
+	s, err := idle.Decode(p.Dao().GetState())
+	return s.View(), err
+}
+
+// 结果未知保持原 Seq 查询；不得为领取或取消生成新身份盲重试。
+//
+//roost:nest rollback=undo durability=strict
+func handlerIdleReceipt(p IIdlePlayerEntity, seq uint64) (idle.Receipt, error) {
+	s, err := idle.Decode(p.Dao().GetState())
+	if err != nil {
+		return idle.Receipt{}, err
+	}
+	if seq == 0 || seq > uint64(len(s.Receipts)) {
+		return idle.Receipt{}, idle.ErrRule
+	}
+	return s.Receipts[seq-1], nil
+}
+func saveIdle(p IIdlePlayerEntity, s idle.State) error {
+	if old := p.Dao().GetWakeTimer(); old != 0 {
+		p.TimerComp().RemoveTimer(old)
+		p.Dao().SetWakeTimer(0)
+	}
+	p.Dao().SetState(s.Encode())
+	if deadline := s.NextDeadline(); deadline != 0 {
+		id := p.TimerComp().NewTimerAt(time.UnixMilli(deadline), playerentity.TimerProduction, deadline, 0, nil)
+		if id == 0 {
+			return idle.ErrRule
+		}
+		p.Dao().SetWakeTimer(id)
+	}
+	return nil
+}
