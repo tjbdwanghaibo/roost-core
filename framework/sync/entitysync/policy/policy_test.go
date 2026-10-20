@@ -78,10 +78,15 @@ func subscribed(manager *entitysync.Manager, observer, subject int64) bool {
 	return slices.Contains(manager.Subscribers(subject), entitysync.SessionID(observer))
 }
 
+// sameIDObserver：这些用例用同一个小整数同时当玩家 ID 与它的实体 ID（玩家 n 的实体也是 n），
+// 事务内入口按同号换算观察者。玩家 ID 与实体 ID 分开的情形见 TestObserverAndSubjectIDSpacesStayApart。
+func sameIDObserver(id int64) (int64, bool) { return id, true }
+
 func newInterest(t *testing.T, manager *entitysync.Manager, relations ...string) *Interest {
 	t.Helper()
 	interest, err := NewInterest(InterestConfig{
-		Manager: manager,
+		Manager:    manager,
+		ObserverOf: sameIDObserver,
 		AOI: AOIConfig{
 			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
 			EnterRadius: 120, LeaveRadius: 150,
@@ -112,7 +117,7 @@ func TestEnteringSubscribesToYourself(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager)
 	player(t, manager, watcherID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -127,10 +132,10 @@ func TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary(t *testing.T) {
 	interest := newInterest(t, manager)
 	player(t, manager, watcherID)
 	player(t, manager, moverID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(moverID, spatial.Point{X: 500 + 119, Y: 500}); err != nil {
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 500 + 119, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -142,7 +147,7 @@ func TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary(t *testing.T) {
 	}
 	before := manager.Stats().FramesAdmitted
 	for _, x := range []int64{125, 140, 121, 149, 130} {
-		if err := interest.Move(moverID, spatial.Point{X: 500 + x, Y: 500}); err != nil {
+		if err := interest.Move(moverID, moverID, spatial.Point{X: 500 + x, Y: 500}); err != nil {
 			t.Fatal(err)
 		}
 		mustApply(t, interest)
@@ -153,7 +158,7 @@ func TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary(t *testing.T) {
 	if !subscribed(manager, watcherID, moverID) || manager.Stats().FramesAdmitted != before {
 		t.Fatalf("jittering between the radii churned the subscription: subscribed=%v frames=%d→%d", subscribed(manager, watcherID, moverID), before, manager.Stats().FramesAdmitted)
 	}
-	if err := interest.Move(moverID, spatial.Point{X: 700, Y: 500}); err != nil {
+	if err := interest.Move(moverID, moverID, spatial.Point{X: 700, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -168,10 +173,10 @@ func TestARelationKeepsASubscriptionDistanceDropped(t *testing.T) {
 	interest := newInterest(t, manager, "team")
 	player(t, manager, watcherID)
 	player(t, manager, moverID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 520, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	interest.Relation("team").Set(watcherID, []int64{moverID})
@@ -179,7 +184,7 @@ func TestARelationKeepsASubscriptionDistanceDropped(t *testing.T) {
 	if !subscribed(manager, watcherID, moverID) {
 		t.Fatal("the teammate was not subscribed")
 	}
-	if err := interest.Move(moverID, spatial.Point{X: 900, Y: 500}); err != nil {
+	if err := interest.Move(moverID, moverID, spatial.Point{X: 900, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -199,15 +204,15 @@ func TestLeavingReleasesBothDirections(t *testing.T) {
 	interest := newInterest(t, manager, "team")
 	player(t, manager, watcherID)
 	player(t, manager, moverID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 520, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	interest.Relation("team").Set(watcherID, []int64{moverID})
 	mustApply(t, interest)
-	if err := interest.Leave(moverID); err != nil {
+	if err := interest.Leave(moverID, moverID); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -222,7 +227,7 @@ func TestARefusedSubscribeIsSaidAgainUntilItIsTaken(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager, "team")
 	player(t, manager, watcherID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 100, Y: 100}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	// The teammate has not joined: no subject, no session.
@@ -237,7 +242,7 @@ func TestARefusedSubscribeIsSaidAgainUntilItIsTaken(t *testing.T) {
 		t.Fatalf("second refusal = %+v, want one retry", refusals)
 	}
 	player(t, manager, moverID)
-	if err := interest.Enter(moverID, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 900, Y: 900}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -255,7 +260,7 @@ func TestARefusedSubscribeForAReleasedPairIsDropped(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager, "team")
 	player(t, manager, watcherID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 100, Y: 100}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	interest.Relation("team").Set(watcherID, []int64{moverID})
@@ -365,10 +370,10 @@ func TestResubscribeRestoresAReopenedObserversView(t *testing.T) {
 	interest := newInterest(t, manager, "team")
 	player(t, manager, watcherID)
 	player(t, manager, moverID)
-	if err := interest.Enter(watcherID, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 520, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	interest.Relation("team").Set(watcherID, []int64{moverID})
@@ -402,7 +407,7 @@ func TestResubscribeRestoresAReopenedObserversView(t *testing.T) {
 	if refusals := interest.Apply(); len(refusals) != 0 {
 		t.Fatalf("an idle apply refused: %+v", refusals)
 	}
-	if err := interest.Leave(moverID); err != nil {
+	if err := interest.Leave(moverID, moverID); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -809,9 +814,10 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 
 // ---- 观察者编号与实体编号分开时的订阅结果（D14 改签名前后的回归基线） ----
 //
-// 玩家 ID（会话）与实体 ID 是两种编号：订阅表里会话用玩家 ID，被订阅的目标用实体 ID。下面两个用例只对 Manager 的订阅表断言，
-// 不读 Interest 内部的键，所以同一组断言在“观察者按实体 ID 编号、经 Session 换算”与“观察者直接按玩家 ID 编号”两种实现下
-// 都应成立：自己只经 self 关系看见自己、距离双向、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
+// 玩家 ID（会话）与实体 ID 是两种编号：订阅表里会话用玩家 ID，被订阅的目标用实体 ID。用例只对 Manager 的订阅表断言，
+// 不读 Interest 内部的键。D14 之前它以“观察者按实体 ID 编号、经 Session 换算”的写法在 953ad6bc 通过；D14 之后观察者直接是
+// 玩家 ID、事务内入口经缺省 ObserverOf 换算，断言一字未改：自己只经 self 关系看见自己、距离双向、数值等于玩家 ID 的实体不被
+// 误当成自己、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
 
 // playerEntity 拼一个能被 entity.GetUniqueIDFromEntityID 还原成 playerID 的实体 ID（低位填一个非零标记），
 // 让实体 ID 与玩家 ID 数值不同。
@@ -861,9 +867,6 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
 			EnterRadius: 120, LeaveRadius: 150,
 		},
-		Session: func(observer int64) entitysync.SessionID {
-			return entitysync.SessionID(entity.GetUniqueIDFromEntityID(observer))
-		},
 		Relations: []string{"team"},
 	})
 	if err != nil {
@@ -877,10 +880,10 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	if err := manager.Register(subjectState(t, monster)); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(entityA, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := interest.Enter(playerA, entityA, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interest.Enter(entityB, spatial.Point{X: 540, Y: 500}); err != nil {
+	if err := interest.Enter(playerB, entityB, spatial.Point{X: 540, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := interest.Show(monster, spatial.Point{X: 520, Y: 500}); err != nil {
@@ -890,14 +893,14 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	requireSessions(t, manager, entityA, 7, 8)
 	requireSessions(t, manager, entityB, 7, 8)
 	requireSessions(t, manager, monster, 7, 8)
-	if got := interest.Visible(entityA); !slices.Equal(got, []int64{monster, entityB}) {
+	if got := interest.Visible(playerA); !slices.Equal(got, []int64{monster, entityB}) {
 		t.Fatalf("A sees %v through distance, want the monster and B (never itself)", got)
 	}
 
 	// 关系：A 把 B 当队友；B 走远后 A 仍看得见 B，B 看不见 A 与怪。
-	interest.Relation("team").Set(entityA, []int64{entityB})
+	interest.Relation("team").Set(playerA, []int64{entityB})
 	mustApply(t, interest)
-	if err := interest.Move(entityB, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := interest.Move(playerB, entityB, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
@@ -922,57 +925,11 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	requireSessions(t, manager, monster, 7, 8)
 
 	// 退场：B 双向退出，其他观察者对 B 的订阅、B 对别人的订阅、B 的 self 都释放。
-	if err := interest.Leave(entityB); err != nil {
+	if err := interest.Leave(playerB, entityB); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, interest)
 	requireSessions(t, manager, entityB)
 	requireSessions(t, manager, entityA, 7)
 	requireSessions(t, manager, monster, 7)
-}
-
-// 现状记录（D14 之前）：两个观察者经 Session 映射到同一会话、都看见同一目标时，其中一个看不见了就退订，
-// 把另一个仍需要的订阅一起退掉。D14 删除 Session 后观察者就是会话，这种多对一无法再构造，本用例随之删除。
-func TestSessionManyToOneDropsASharedSubscription(t *testing.T) {
-	manager := newManager(t)
-	interest, err := NewInterest(InterestConfig{
-		Manager: manager,
-		AOI: AOIConfig{
-			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
-			EnterRadius: 120, LeaveRadius: 150,
-		},
-		Session: func(int64) entitysync.SessionID { return 1 },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(interest.Close)
-	if err := manager.OpenSession(1); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []int64{11, 12, 20} {
-		if err := manager.Register(subjectState(t, id)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := interest.Enter(11, spatial.Point{X: 500, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Enter(12, spatial.Point{X: 500, Y: 520}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Show(20, spatial.Point{X: 520, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	requireSessions(t, manager, 20, 1)
-	if err := interest.Move(12, spatial.Point{X: 900, Y: 900}); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	if got := interest.Visible(11); !slices.Contains(got, 20) {
-		t.Fatalf("observer 11 should still see 20 through distance: %v", got)
-	}
-	// 隐患：观察者 11 仍看得见 20，会话 1 的订阅却被观察者 12 的离开退掉了。
-	requireSessions(t, manager, 20)
 }

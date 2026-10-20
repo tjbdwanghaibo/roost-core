@@ -47,7 +47,7 @@ func requireEvents(t *testing.T, got, want []InterestEvent) {
 
 func TestInterestEnterLeaveWithHysteresis(t *testing.T) {
 	manager := interestFixture(t, AOIConfig{})
-	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5000}); err != nil {
+	if err := manager.AddObserver(1, 1, spatial.Point{X: 5000, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.AddSubject(2, spatial.Point{X: 5000, Y: 5700}); err != nil { // 700: between enter(600) and leave(800)
@@ -89,7 +89,7 @@ func TestInterestBandsAndObserverMovement(t *testing.T) {
 	if err := manager.AddSubject(9, spatial.Point{X: 5000, Y: 5000}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5150}); err != nil { // band 0 (<=200)
+	if err := manager.AddObserver(1, 1, spatial.Point{X: 5000, Y: 5150}, ObserverView{}); err != nil { // band 0 (<=200)
 		t.Fatal(err)
 	}
 	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 9, Kind: InterestEnter, Band: 0}})
@@ -109,7 +109,7 @@ func TestInterestBandsAndObserverMovement(t *testing.T) {
 
 func TestInterestMaxVisibleEvictsFarthest(t *testing.T) {
 	manager := interestFixture(t, AOIConfig{MaxVisible: 2})
-	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5000}); err != nil {
+	if err := manager.AddObserver(1, 1, spatial.Point{X: 5000, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	manager.AddSubject(10, spatial.Point{X: 5000, Y: 5400}) // distance 400
@@ -133,7 +133,7 @@ func TestInterestObserverIsAlsoSubjectSymmetry(t *testing.T) {
 	manager := interestFixture(t, AOIConfig{})
 	for _, id := range []int64{1, 2} {
 		at := spatial.Point{X: 5000, Y: 5000 + 100*(id-1)}
-		if err := manager.AddObserver(id, at); err != nil {
+		if err := manager.AddObserver(id, id, at, ObserverView{}); err != nil {
 			t.Fatal(err)
 		}
 		if err := manager.AddSubject(id, at); err != nil {
@@ -151,7 +151,7 @@ func TestInterestDeterministicEventStream(t *testing.T) {
 		manager := interestFixture(t, AOIConfig{Bands: []int64{300}, MaxVisible: 8})
 		var all []InterestEvent
 		for id := int64(1); id <= 20; id++ {
-			manager.AddObserver(id, spatial.Point{X: 5000 + id*37%900, Y: 5000 + id*53%900})
+			manager.AddObserver(id, id, spatial.Point{X: 5000 + id*37%900, Y: 5000 + id*53%900}, ObserverView{})
 			manager.AddSubject(id, spatial.Point{X: 5000 + id*37%900, Y: 5000 + id*53%900})
 		}
 		all = append(all, manager.Flush()...)
@@ -191,7 +191,7 @@ func clusterFixture(t *testing.T) *AOICluster {
 func TestClusterBoundaryVisibilityIsSeamless(t *testing.T) {
 	cluster := clusterFixture(t)
 	// Observer in area 1 near the seam sees a subject in area 2's border strip.
-	if err := cluster.AddObserver(1, spatial.Point{X: 9800, Y: 5000}); err != nil {
+	if err := cluster.AddObserver(1, 1, spatial.Point{X: 9800, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cluster.AddSubject(2, spatial.Point{X: 10200, Y: 5000}); err != nil { // area 2, distance 400
@@ -199,7 +199,7 @@ func TestClusterBoundaryVisibilityIsSeamless(t *testing.T) {
 	}
 	requireEvents(t, cluster.Flush(), []InterestEvent{{Observer: 1, Subject: 2, Kind: InterestEnter, Band: 1}})
 	// And symmetrically: an observer in area 2 sees into area 1.
-	if err := cluster.AddObserver(3, spatial.Point{X: 10100, Y: 5000}); err != nil {
+	if err := cluster.AddObserver(3, 3, spatial.Point{X: 10100, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cluster.AddSubject(4, spatial.Point{X: 9900, Y: 5000}); err != nil {
@@ -217,7 +217,7 @@ func TestClusterBoundaryVisibilityIsSeamless(t *testing.T) {
 
 func TestClusterMigrationDoesNotBlink(t *testing.T) {
 	cluster := clusterFixture(t)
-	if err := cluster.AddObserver(1, spatial.Point{X: 9900, Y: 5000}); err != nil {
+	if err := cluster.AddObserver(1, 1, spatial.Point{X: 9900, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cluster.AddSubject(2, spatial.Point{X: 9700, Y: 5000}); err != nil {
@@ -272,7 +272,7 @@ func TestClusterDeterministicAcrossRuns(t *testing.T) {
 		var all []InterestEvent
 		for id := int64(1); id <= 16; id++ {
 			at := spatial.Point{X: 9000 + id*151%2000, Y: 4000 + id*97%2000}
-			cluster.AddObserver(id, at)
+			cluster.AddObserver(id, id, at, ObserverView{})
 			cluster.AddSubject(id, at)
 		}
 		all = append(all, cluster.Flush()...)
@@ -305,7 +305,7 @@ func BenchmarkClusterFlushRandomWalk(b *testing.B) {
 		cluster.AddSubject(id, spatial.Point{X: (id * 397) % 40000, Y: (id * 269) % 10000})
 	}
 	for id := int64(2001); id <= 2100; id++ {
-		cluster.AddObserver(id, spatial.Point{X: (id * 397) % 40000, Y: (id * 269) % 10000})
+		cluster.AddObserver(id, id, spatial.Point{X: (id * 397) % 40000, Y: (id * 269) % 10000}, ObserverView{})
 	}
 	cluster.Flush()
 	b.ReportAllocs()
@@ -334,7 +334,7 @@ func BenchmarkClusterFlushRandomWalkCapped(b *testing.B) {
 		cluster.AddSubject(id, spatial.Point{X: (id * 397) % 10000, Y: (id * 269) % 2500})
 	}
 	for id := int64(2001); id <= 2100; id++ {
-		cluster.AddObserver(id, spatial.Point{X: (id * 397) % 10000, Y: (id * 269) % 2500})
+		cluster.AddObserver(id, id, spatial.Point{X: (id * 397) % 10000, Y: (id * 269) % 2500}, ObserverView{})
 	}
 	cluster.Flush()
 	b.ReportAllocs()
@@ -362,7 +362,7 @@ func TestClusterMaxVisibleHoldsAcrossSeams(t *testing.T) {
 	if err := cluster.AddArea(2, spatial.Rect{Min: spatial.Point{X: 10000, Y: 0}, Max: spatial.Point{X: 20000, Y: 10000}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cluster.AddObserver(1, spatial.Point{X: 9900, Y: 5000}); err != nil {
+	if err := cluster.AddObserver(1, 1, spatial.Point{X: 9900, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	cluster.AddSubject(2, spatial.Point{X: 9800, Y: 5000})  // area 1, distance 100
@@ -397,7 +397,7 @@ func TestClusterAddAreaBackfillsStationaryObservers(t *testing.T) {
 	if err := cluster.AddArea(1, spatial.Rect{Min: spatial.Point{X: 0, Y: 0}, Max: spatial.Point{X: 10000, Y: 10000}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cluster.AddObserver(1, spatial.Point{X: 9900, Y: 5000}); err != nil { // stationary turret at the future seam
+	if err := cluster.AddObserver(1, 1, spatial.Point{X: 9900, Y: 5000}, ObserverView{}); err != nil { // stationary turret at the future seam
 		t.Fatal(err)
 	}
 	if err := cluster.AddArea(2, spatial.Rect{Min: spatial.Point{X: 10000, Y: 0}, Max: spatial.Point{X: 20000, Y: 10000}}); err != nil {
@@ -420,7 +420,7 @@ func TestInterestRejectsZeroIDAndWrappingRadius(t *testing.T) {
 	if err := manager.AddSubject(0, spatial.Point{X: 5000, Y: 5000}); err == nil {
 		t.Fatal("subject id 0 accepted")
 	}
-	if err := manager.AddObserver(0, spatial.Point{X: 5000, Y: 5000}); err == nil {
+	if err := manager.AddObserver(0, 0, spatial.Point{X: 5000, Y: 5000}, ObserverView{}); err == nil {
 		t.Fatal("observer id 0 accepted")
 	}
 	if _, err := NewAOI(AOIConfig{
@@ -438,7 +438,7 @@ func TestInterestObserverEvaluationAdmitsNearestFirst(t *testing.T) {
 	// Farther subject sits in a lower block index than the nearer one.
 	manager.AddSubject(5, spatial.Point{X: 4600, Y: 4600}) // farther
 	manager.AddSubject(9, spatial.Point{X: 5050, Y: 5050}) // nearer
-	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5000}); err != nil {
+	if err := manager.AddObserver(1, 1, spatial.Point{X: 5000, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	events := manager.Flush()
@@ -489,7 +489,7 @@ func TestTheNineBlockShapeFitsTheDefaultBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the classic nine-block configuration was refused: %v", err)
 	}
-	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5000}); err != nil {
+	if err := manager.AddObserver(1, 1, spatial.Point{X: 5000, Y: 5000}, ObserverView{}); err != nil {
 		t.Fatalf("add observer: %v", err)
 	}
 	if blocks := len(manager.observers[1].blocks); blocks > 16 {
@@ -570,7 +570,7 @@ func TestInterestManagerRefusesOutOfBoundsAndUnknownIDs(t *testing.T) {
 	if err := m.AddSubject(1, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
 		t.Fatalf("AddSubject outside = %v", err)
 	}
-	if err := m.AddObserver(9, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
+	if err := m.AddObserver(9, 9, outside, ObserverView{}); !errors.Is(err, spatial.ErrInvalidBounds) {
 		t.Fatalf("AddObserver outside = %v", err)
 	}
 	if err := m.MoveSubject(1, spatial.Point{X: 1, Y: 1}); !errors.Is(err, ErrInterestUnknown) {
@@ -588,7 +588,7 @@ func TestInterestManagerRefusesOutOfBoundsAndUnknownIDs(t *testing.T) {
 	if err := m.AddSubject(1, spatial.Point{X: 10, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.AddObserver(9, spatial.Point{X: 12, Y: 12}); err != nil {
+	if err := m.AddObserver(9, 9, spatial.Point{X: 12, Y: 12}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.MoveSubject(1, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
@@ -633,7 +633,7 @@ func TestAOICandidatesMatchReference(t *testing.T) {
 				for id := int64(1); id <= 24; id++ {
 					at := point()
 					for _, a := range []*AOI{actual, reference} {
-						check(a.AddObserver(id, at))
+						check(a.AddObserver(id, id, at, ObserverView{}))
 					}
 				}
 				compare := func() {
@@ -668,7 +668,7 @@ func TestAOICandidatesMatchReference(t *testing.T) {
 								check(a.SetObservedBlocks(sid, blocks))
 							case 3:
 								check(a.RemoveObserver(oid))
-								check(a.AddObserver(oid, at))
+								check(a.AddObserver(oid, oid, at, ObserverView{}))
 							case 4:
 								check(a.RemoveSubject(sid))
 								check(a.AddSubject(sid, at))
@@ -766,7 +766,7 @@ func TestAOIMaxVisibleEvictsNegativeID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	check(m.AddObserver(1001, spatial.Point{X: 1000, Y: 1000}))
+	check(m.AddObserver(1001, 1001, spatial.Point{X: 1000, Y: 1000}, ObserverView{}))
 	check(m.AddSubject(-2, spatial.Point{X: 1090, Y: 1000}))
 	m.Flush()
 	check(m.AddSubject(3, spatial.Point{X: 1010, Y: 1000}))
@@ -792,7 +792,7 @@ func TestAOICandidatesPreserveDistanceTies(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		check(m.AddObserver(1001, spatial.Point{X: 1000, Y: 1000}))
+		check(m.AddObserver(1001, 1001, spatial.Point{X: 1000, Y: 1000}, ObserverView{}))
 		check(m.AddSubject(-2, spatial.Point{X: 1090, Y: 1000}))
 		check(m.AddSubject(2, spatial.Point{X: 910, Y: 1000}))
 		m.beginBatch()
@@ -822,7 +822,7 @@ func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
 		at := spatial.Point{X: 100, Y: 100}
 		check(a.AddSubject(100, at))
 		for id := int64(1); id <= 8; id++ {
-			check(a.AddObserver(id, at))
+			check(a.AddObserver(id, id, at, ObserverView{}))
 		}
 		a.Flush()
 		(blockSource{a}).Flush()
@@ -840,7 +840,7 @@ func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
 			}
 		}
 		check(a.RemoveObserver(1))
-		check(a.AddObserver(1, at))
+		check(a.AddObserver(1, 1, at, ObserverView{}))
 		lifecycle := (blockSource{a}).Flush()
 		if len(lifecycle) != 2 || lifecycle[0].Kind != InterestLeave || lifecycle[1].Kind != InterestEnter {
 			t.Fatalf("reordered lifecycle: %v", lifecycle)
@@ -885,7 +885,7 @@ func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
 			for id := int64(1); id <= 24; id++ {
 				at := point()
 				for _, a := range []*AOI{actual, reference} {
-					check(a.AddObserver(id, at))
+					check(a.AddObserver(id, id, at, ObserverView{}))
 				}
 			}
 			compare := func() {
@@ -920,7 +920,7 @@ func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
 							check(a.SetObservedBlocks(sid, blocks))
 						case 3:
 							check(a.RemoveObserver(oid))
-							check(a.AddObserver(oid, at))
+							check(a.AddObserver(oid, oid, at, ObserverView{}))
 						case 4:
 							check(a.RemoveSubject(sid))
 							check(a.AddSubject(sid, at))
@@ -989,7 +989,7 @@ func TestInterestSelectsSourceViewsBeforeComparingPriority(t *testing.T) {
 	}
 	defer in.Close()
 	profiles["team"][0] = near
-	if err := in.Enter(1, spatial.Point{X: 500, Y: 500}); err != nil {
+	if err := in.Enter(1, 1, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := in.Show(2, spatial.Point{X: 510, Y: 500}); err != nil {
@@ -1022,7 +1022,7 @@ func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
 	if err := manager.AddSubject(1, at); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.AddObserver(1, at); err != nil {
+	if err := manager.AddObserver(1, 1, at, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.AddSubject(2, spatial.Point{X: 5100, Y: 5000}); err != nil {

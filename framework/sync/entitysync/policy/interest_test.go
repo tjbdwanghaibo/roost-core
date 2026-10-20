@@ -167,7 +167,7 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 
 func TestCoverageLateObserverBudgetAndVisibilityLimit(t *testing.T) {
 	m := newManager(t)
-	cfg := InterestConfig{Manager: m, AOI: interestConfig()}
+	cfg := InterestConfig{Manager: m, AOI: interestConfig(), ObserverOf: sameIDObserver}
 	cfg.AOI.MaxObservedBlocks = 1
 	cfg.AOI.MaxVisible = 1
 	in, err := NewInterest(cfg)
@@ -198,7 +198,7 @@ func TestCoverageLateObserverBudgetAndVisibilityLimit(t *testing.T) {
 	if !subscribed(m, 1, 2) || !subscribed(m, 1, 3) {
 		t.Fatal("late observer or spatial cap suppressed explicit coverage")
 	}
-	if err := in.Move(1, spatial.Point{X: 900, Y: 100}); err != nil {
+	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 100}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -294,7 +294,7 @@ func TestParallelObserverBatchesAgainstDistanceReference(t *testing.T) {
 	for id := int64(1); id <= 20; id++ {
 		observers[id] = positions[id]
 		visible[id] = make(map[int64]bool)
-		if err := a.AddObserver(id, observers[id]); err != nil {
+		if err := a.AddObserver(id, id, observers[id], ObserverView{}); err != nil {
 			t.Fatal(err)
 		}
 		for _, sid := range a.Visible(id) {
@@ -390,7 +390,7 @@ func TestPublicationHoldsReleaseOnDiscardAndClose(t *testing.T) {
 				mutation.Admit()
 				mutation.Confirm()
 				mutation.Release()
-				if err := in.Leave(1); err != nil {
+				if err := in.Leave(1, 1); err != nil {
 					t.Fatal(err)
 				}
 			case "close":
@@ -599,7 +599,7 @@ func TestQueuedRelationDeltaExitAndReentry(t *testing.T) {
 			mutation.Release()
 			switch action {
 			case "leave-observer":
-				check(in.Leave(2))
+				check(in.Leave(2, 2))
 				mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
 			case "hide-observer":
 				check(in.Hide(2))
@@ -635,10 +635,10 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 	in := newInterest(t, m, "team")
 	player(t, m, 1)
 	player(t, m, 2)
-	if err := in.Enter(1, spatial.Point{X: 10, Y: 10}); err != nil {
+	if err := in.Enter(1, 1, spatial.Point{X: 10, Y: 10}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := in.Enter(2, spatial.Point{X: 20, Y: 10}); err != nil {
+	if err := in.Enter(2, 2, spatial.Point{X: 20, Y: 10}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -784,7 +784,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 		batch.Confirm()
 		batch.Release()
 		// 事实已就绪、尚未应用：此刻业务让 2 离开。
-		if err := in.Leave(2); err != nil {
+		if err := in.Leave(2, 2); err != nil {
 			t.Fatal(err)
 		}
 		for round := 0; round < 3; round++ {
@@ -877,7 +877,7 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 
 func mustEnter(t *testing.T, in *Interest, id int64, at spatial.Point) {
 	t.Helper()
-	if err := in.Enter(id, at); err != nil {
+	if err := in.Enter(id, id, at, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -898,7 +898,7 @@ func TestRemoteRejectKeepsCommittedLocalInterestFact(t *testing.T) {
 	player(t, m, 2)
 	player(t, m, 3)
 	for id, x := range map[int64]int64{1: 10, 2: 20, 3: 30} {
-		if err := in.Enter(id, spatial.Point{X: x, Y: 10}); err != nil {
+		if err := in.Enter(id, id, spatial.Point{X: x, Y: 10}, ObserverView{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -972,10 +972,10 @@ func TestPureRemoteRejectDiscardsItsInterestFacts(t *testing.T) {
 	in := newInterest(t, m, "team")
 	player(t, m, 1)
 	player(t, m, 3)
-	if err := in.Enter(1, spatial.Point{X: 10, Y: 10}); err != nil {
+	if err := in.Enter(1, 1, spatial.Point{X: 10, Y: 10}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := in.Enter(3, spatial.Point{X: 30, Y: 10}); err != nil {
+	if err := in.Enter(3, 3, spatial.Point{X: 30, Y: 10}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)

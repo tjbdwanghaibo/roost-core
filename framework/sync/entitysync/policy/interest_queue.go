@@ -15,13 +15,11 @@ import (
 
 var ErrInterestQueueFull = errors.New("policy: interest fact queue is full")
 
-type interestRole struct{ subject, observer bool }
+// ErrObserverViewRate：同一玩家改视野太频繁（见 InterestConfig.ViewChangeInterval），这次请求被丢弃。
+var ErrObserverViewRate = errors.New("policy: observer view changed too often")
 
-func (in *Interest) setRole(id int64, role interestRole) {
-	in.queueMu.Lock()
-	in.roles[id] = role
-	in.queueMu.Unlock()
-}
+// viewRejectedMetric 计数被拒绝的视野请求，reason 为 rate（超频）或 lod（层级未配置）。
+const viewRejectedMetric = "entitysync_interest_view_rejected_total"
 
 type queuedInterestFact struct {
 	releasePublication func()
@@ -33,7 +31,9 @@ type queuedInterestFact struct {
 	id                 int64
 	condition          func() (bool, bool)
 	at                 spatial.Point
-	observer           bool
+	// observer 为真时同时移动观察者；observerID 是 id 换算出的玩家 ID（关系事实同样以它为观察者）。
+	observer   bool
+	observerID int64
 	// subjectGone：Hide 在事实应用前移走了被观察方，只剩观察者那一半要移动。
 	subjectGone     bool
 	relation        string
@@ -51,54 +51,55 @@ type queuedInterestFact struct {
 // 所以 Leave / Hide 把自己的效果写进排队事实，使应用结果与“先应用事实、再 Leave / Hide”逐项相同，不多丢也不多留：
 //   - 位置事实：MoveSubject 后 RemoveSubject ≡ RemoveSubject，被观察方那一半作废；MoveObserver 后 RemoveObserver
 //     同理。两半都作废才丢弃整条——Hide 只移走被观察方，observer=true 的事实保留观察者的移动。
-//   - 关系事实：Set(o, S) 后 Forget(id) ≡ Set(o, S\{id})，从成员里去掉 id；Leave 还 Clear(id)，
-//     Set(id, S) 后 Clear(id) ≡ Clear(id)，id 自己作为观察者的关系事实整条丢弃。
+//   - 关系事实：Set(o, S) 后 Forget(e) ≡ Set(o, S\{e})，从成员里去掉实体 e；Leave 还 Clear(p)，
+//     Set(p, S) 后 Clear(p) ≡ Clear(p)，玩家 p 作为观察者的关系事实整条丢弃。
 // 只按 AOI 实际发生的删除改写（RemoveObserver / RemoveSubject 失败时那一半不动），所以不会丢掉仍然有效的事实。
 
-// supersedeQueuedRelationsLocked 在关系源 Forget(id)（clear 为真时还有 Clear(id)）之后调用。调用方持有 in.mu。
-func (in *Interest) supersedeQueuedRelationsLocked(id int64, clear bool) {
+// supersedeQueuedRelationsLocked 在关系源 Clear(observer)（observer 非零时）与 Forget(subject)（subject 非零时）之后调用。
+// observer 是玩家 ID，subject 是实体 ID。调用方持有 in.mu。
+func (in *Interest) supersedeQueuedRelationsLocked(observer, subject int64) {
 	in.queueMu.Lock()
 	defer in.queueMu.Unlock()
 	in.rewriteFactsLocked(func(fact *queuedInterestFact) bool {
 		if fact.relation == "" {
 			return true
 		}
-		if clear && fact.id == id {
+		if observer != 0 && fact.observerID == observer {
 			return false
 		}
-		fact.subjects = slices.DeleteFunc(fact.subjects, func(subject int64) bool { return subject == id })
+		if subject == 0 {
+			return true
+		}
+		fact.subjects = slices.DeleteFunc(fact.subjects, func(id int64) bool { return id == subject })
 		// 增量同样不能在退出后重放旧新增；旧移除已由 Forget 完成。
-		fact.removedSubjects = slices.DeleteFunc(fact.removedSubjects, func(subject int64) bool { return subject == id })
+		fact.removedSubjects = slices.DeleteFunc(fact.removedSubjects, func(id int64) bool { return id == subject })
 		return true
 	})
 }
 
-// supersedeQueuedMovesLocked 在 AOI 实际移走 id 的被观察方（subject）或观察者（observer）之后调用。调用方持有 in.mu。
-func (in *Interest) supersedeQueuedMovesLocked(id int64, subject, observer bool) {
+// supersedeQueuedMovesLocked 在 AOI 实际移走实体 subject 的被观察方，或玩家 observer 的观察者之后调用（另一个传 0）。
+// 调用方持有 in.mu。
+func (in *Interest) supersedeQueuedMovesLocked(subject, observer int64) {
 	in.queueMu.Lock()
 	defer in.queueMu.Unlock()
-	role := in.roles[id]
-	if subject {
-		role.subject = false
+	if subject != 0 {
+		delete(in.subjectRoles, subject)
 	}
-	if observer {
-		role.observer = false
-	}
-	if !role.subject && !role.observer {
-		delete(in.roles, id)
-	} else {
-		in.roles[id] = role
+	if observer != 0 {
+		delete(in.observerRoles, observer)
 	}
 	in.rewriteFactsLocked(func(fact *queuedInterestFact) bool {
-		if fact.relation != "" || fact.id != id {
+		if fact.relation != "" {
 			return true
 		}
-		fact.subjectGone = fact.subjectGone || subject
-		if subject {
+		if subject != 0 && fact.id == subject {
+			fact.subjectGone = true
 			fact.replaceCoverage = false
 			fact.coverage = nil
 		}
-		fact.observer = fact.observer && !observer
+		if observer != 0 && fact.observerID == observer {
+			fact.observer = false
+		}
 		return !fact.subjectGone || fact.observer
 	})
 }
@@ -123,12 +124,14 @@ func (in *Interest) rewriteFactsLocked(keep func(*queuedInterestFact) bool) {
 }
 
 // QueueMove 在 Entity 锁内记录位置事实；锁外确认提交后、捕获同步内容前应用。
-// observer=true 同时移动观察者，false 只移动被观察实体。失败需由 handler 返回。
+// observer=true 同时移动观察者（玩家 ID 由 InterestConfig.ObserverOf 从 e 换算），false 只移动被观察实体。
+// 失败需由 handler 返回。
 func (in *Interest) QueueMove(e entity.IThreadSafeEntity, at spatial.Point, observer bool) error {
 	return in.queueFact(e, queuedInterestFact{at: at, observer: observer})
 }
 
 // QueueRelation 复制关系成员，避免业务后续修改切片。source 必须已声明。
+// 观察者是 ObserverOf(e.ID()) 换算出的玩家 ID，成员是实体 ID。
 func (in *Interest) QueueRelation(e entity.IThreadSafeEntity, source string, subjects []int64) error {
 	if source == "" {
 		return errors.New("policy: relation source required")
@@ -151,6 +154,13 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 		return errors.New("policy: entity required")
 	}
 	fact.id = e.ID()
+	if fact.relation != "" || fact.observer {
+		playerID, ok := in.observerOf(fact.id)
+		if !ok || playerID == 0 {
+			return fmt.Errorf("%w: entity %d has no observer", ErrInterestUnknown, fact.id)
+		}
+		fact.observerID = playerID
+	}
 	fact.commit = entity.CurrentSyncMutation()
 	fact.condition = entity.SyncConditionFor(e)
 	in.queueMu.Lock()
@@ -165,8 +175,9 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 		if !fact.coverageOnly && !in.aoi.Bounds().Contains(fact.at) {
 			return spatial.ErrInvalidBounds
 		}
-		role := in.roles[fact.id]
-		if !role.subject || fact.observer && !role.observer {
+		_, subject := in.subjectRoles[fact.id]
+		_, observer := in.observerRoles[fact.observerID]
+		if !subject || fact.observer && !observer {
 			return ErrInterestUnknown
 		}
 	}
@@ -240,9 +251,9 @@ func (in *Interest) applyQueued() error {
 		var err error
 		if fact.relation != "" {
 			if fact.relationDelta {
-				in.relations[fact.relation].ApplyDelta(fact.id, fact.subjects, fact.removedSubjects)
+				in.relations[fact.relation].ApplyDelta(fact.observerID, fact.subjects, fact.removedSubjects)
 			} else {
-				in.relations[fact.relation].Set(fact.id, fact.subjects)
+				in.relations[fact.relation].Set(fact.observerID, fact.subjects)
 			}
 		} else {
 			if !fact.subjectGone {
@@ -254,7 +265,7 @@ func (in *Interest) applyQueued() error {
 				}
 			}
 			if err == nil && fact.observer {
-				err = in.aoi.MoveObserver(fact.id, fact.at)
+				err = in.aoi.MoveObserver(fact.observerID, fact.at)
 			}
 		}
 		if err != nil {
@@ -343,7 +354,7 @@ func (in *Interest) noteRefusedLocked(key pair, err error) {
 	}
 	metrics.IncCounter("entitysync_interest_retry_stalled_total", nil, 1)
 	slog.Warn("entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain",
-		"observer", key.observer, "subject", key.subject, "session", in.session(key.observer),
+		"observer", key.observer, "subject", key.subject, "session", sessionOf(key.observer),
 		"attempts", retryStallAfter, "err", err)
 }
 
@@ -387,7 +398,7 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 		if record.count >= retryStallAfter {
 			continue
 		}
-		stall := entitysync.DrainStall{Source: "interest", Subject: key.subject, Session: in.session(key.observer), Reason: "subscribe_refused",
+		stall := entitysync.DrainStall{Source: "interest", Subject: key.subject, Session: sessionOf(key.observer), Reason: "subscribe_refused",
 			Detail: fmt.Sprintf("observer %d, refused %d time(s)", key.observer, record.count), Err: record.err}
 		if !record.since.IsZero() {
 			stall.Waited = now.Sub(record.since)

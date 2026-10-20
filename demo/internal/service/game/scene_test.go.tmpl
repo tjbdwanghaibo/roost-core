@@ -599,12 +599,12 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 
 // The id-space contract, pinned rather than commented.
 //
-// The interest system and the manager's subjects carry the **full entity
-// id** — the id that is unique across kinds, as opposed to a unique id, which
-// is only unique within one (a Player 42 and a Monster 42 share it). The
-// manager's sessions are whatever the transport addresses; in this demo that
-// is the player id, and sessionFor is the one place that crosses from one
-// space to the other.
+// The manager's subjects carry the **full entity id** — the id that is
+// unique across kinds, as opposed to a unique id, which is only unique
+// within one (a Player 42 and a Monster 42 share it). An interest observer
+// is the player id, which is also the manager's session id and what the
+// transport addresses; playerOf is the one place that crosses from a
+// player's entity id to its player id.
 func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	recorder := newSceneRecorder()
 	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
@@ -633,8 +633,8 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	if len(subscribers) == 0 {
 		t.Fatal("the player is not subscribed to its own subject")
 	}
-	// And the one place that leaves the entity id space is sessionFor, on
-	// its way to a transport session: the session IS the player id.
+	// And the one place that leaves the entity id space is playerOf, on its
+	// way to an observer and a transport session: both ARE the player id.
 	for _, session := range subscribers {
 		if session != entitysync.SessionID(uniqueID) {
 			t.Errorf("a session id is %d; this bridge's sessions are player ids (%d)", session, uniqueID)
@@ -937,8 +937,8 @@ func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *te
 	// 2. The manager dropped the session after a failed push; the player logs
 	// in again before the settle runs. The new Join opens a new session and
 	// gets the player's view back by itself; the late settle changes nothing.
-	scene.manager.CloseSession(sessionFor(re.ID()))
-	scene.sessionLost(sessionFor(re.ID()), errors.New("old socket: write timeout"))
+	scene.manager.CloseSession(entitysync.SessionID(playerOf(re.ID())))
+	scene.sessionLost(entitysync.SessionID(playerOf(re.ID())), errors.New("old socket: write timeout"))
 	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
 	runPending()
 	if members := scene.Members(); members != 2 {
@@ -1677,7 +1677,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	// The mover joins but its own replication session cannot be opened: the
 	// first open is "not yet" and the retry is refused for good. It stays in
 	// the scene with nobody — itself included — subscribed to it.
-	moverSession := sessionFor(moverEntity)
+	moverSession := entitysync.SessionID(playerOf(moverEntity))
 	lane.refuse(moverSession, 1)
 	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
 	lane.breakOpens(moverSession, errors.New("session limit reached"))

@@ -55,6 +55,21 @@ const (
 	sceneEnterRadius = 120
 	sceneLeaveRadius = 150
 
+	// A client may ask for a different view radius (scene_view). The server
+	// clamps the request to [sceneMinViewRadius, sceneMaxLeaveRadius −
+	// hysteresis] and rounds it down to a multiple of sceneViewRadiusStep
+	// above the minimum, so a modified client cannot widen its view past
+	// what the block budget was checked for at start-up, and small jitters
+	// in the requested value do not each resubscribe. The leave radius
+	// follows the view radius with the same 30-unit hysteresis as the
+	// default. The demo has one LOD level: its packer does not pack less for
+	// a far subject, so there is nothing for a second level's bands to
+	// select (the client still names the level, and anything but 0 is
+	// refused).
+	sceneMinViewRadius  = 60
+	sceneMaxLeaveRadius = 300
+	sceneViewRadiusStep = 30
+
 	// relationTeam is the demo's one social relationship: the members of a
 	// formed match see each other wherever they are.
 	relationTeam = "team"
@@ -275,12 +290,13 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)
 	}
-	// The policy: distance on the map's grid, plus the team. Ids everywhere
-	// in it are ENTITY ids — unique across kinds, so a Player 42 and a
-	// Monster 42 never collide — and sessionFor is the one translation to
-	// the transport's player id. Bands are deliberately not configured: a
-	// band only means something once the packer can pack less for a far
-	// subject, and the demo's packer is mask-opaque.
+	// The policy: distance on the map's grid, plus the team. An observer is
+	// a PLAYER id — the manager's session id — and what it sees are ENTITY
+	// ids, unique across kinds, so a Player 42 and a Monster 42 never
+	// collide; playerOf is the one translation from a player's entity to its
+	// player id. Bands are deliberately not configured: a band only means
+	// something once the packer can pack less for a far subject, and the
+	// demo's packer is mask-opaque.
 	interest, err := policy.NewInterest(policy.InterestConfig{
 		Manager: manager,
 		AOI: policy.AOIConfig{
@@ -288,8 +304,11 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 			BlockSize:   config.BlockSize,
 			EnterRadius: sceneEnterRadius,
 			LeaveRadius: sceneLeaveRadius,
+
+			MinViewRadius:  sceneMinViewRadius,
+			MaxLeaveRadius: sceneMaxLeaveRadius,
+			ViewRadiusStep: sceneViewRadiusStep,
 		},
-		Session:   sessionFor,
 		Relations: []string{relationTeam},
 	})
 	if err != nil {
@@ -440,11 +459,11 @@ func (bridge *Scene) CheckHealth(ctx context.Context) health.Result {
 	return bridge.manager.CheckHealth(ctx)
 }
 
-// sessionFor is the one translation this bridge makes: the policy and the
-// subjects speak entity ids, the transport speaks player ids, and the
-// manager's session id is the latter.
-func sessionFor(entityID int64) entitysync.SessionID {
-	return entitysync.SessionID(coreentity.GetUniqueIDFromEntityID(entityID))
+// playerOf is the one translation this bridge makes: subjects are entity
+// ids, while an observer — and the manager's session, and the transport —
+// is the player id.
+func playerOf(entityID int64) int64 {
+	return coreentity.GetUniqueIDFromEntityID(entityID)
 }
 
 // Join registers the player as a replicated subject, opens their session HELD
@@ -478,7 +497,8 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	// reset to snapshots. One the manager dropped after a refused push — or a
 	// first join — gets a new session, and the policy says the player's pairs
 	// again: the manager forgot them, the policy did not.
-	session := sessionFor(subjectID)
+	playerID := playerOf(subjectID)
+	session := entitysync.SessionID(playerID)
 	reopened, opening := false, false
 	if err := bridge.manager.HoldSession(session); errors.Is(err, entitysync.ErrSessionUnknown) {
 		switch err := bridge.manager.OpenHeldSession(session); {
@@ -503,11 +523,14 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	bridge.members[subjectID] = sceneMember{generation: generation, opening: opening}
 	bridge.mu.Unlock()
 
-	if err := bridge.interest.Enter(subjectID, at); err != nil {
+	// A rejoin keeps the view the player last asked for; a first join takes
+	// the default.
+	view, _ := bridge.interest.ObserverView(playerID)
+	if err := bridge.interest.Enter(playerID, subjectID, at, view); err != nil {
 		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
 	}
 	if reopened {
-		bridge.interest.Resubscribe(subjectID)
+		bridge.interest.Resubscribe(playerID)
 	}
 	bridge.apply()
 	if opening {
@@ -583,11 +606,33 @@ func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point)
 	if bridge == nil {
 		return
 	}
-	if err := bridge.interest.Move(subjectID, to); err != nil {
+	if err := bridge.interest.Move(playerOf(subjectID), subjectID, to); err != nil {
 		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
 		return
 	}
 	bridge.apply()
+}
+
+// SetView applies a client's LOD / view-radius request (scene_view). It is
+// handled like a move: straight into the policy and applied, no queue and no
+// commit gate — it changes no business state, so there is nothing to roll
+// back. The policy clamps and quantizes the radius, refuses a level that is
+// not configured (policy.ErrObserverView) and a player asking more often
+// than once a second (policy.ErrObserverViewRate, counted); a request equal
+// to the current view after quantizing does nothing. A wider view
+// subscribes what came into range (a full snapshot each), a narrower one
+// releases what fell out. It returns the view now in force, which the
+// client is told so it does not have to guess what the clamp did.
+func (bridge *Scene) SetView(playerID int64, view policy.ObserverView) (policy.ObserverView, error) {
+	if bridge == nil || bridge.interest == nil {
+		return policy.ObserverView{}, errors.New("scene: not started")
+	}
+	applied, err := bridge.interest.SetObserverView(playerID, view)
+	if err != nil {
+		return applied, err
+	}
+	bridge.apply()
+	return applied, nil
 }
 
 // apply lets the policy say its changes to the manager and logs what the
@@ -635,14 +680,14 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 	if !present {
 		return
 	}
-	if err := bridge.interest.Leave(subjectID); err != nil {
+	if err := bridge.interest.Leave(playerOf(subjectID), subjectID); err != nil {
 		slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
 	}
 	bridge.apply()
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
 	}
-	bridge.manager.CloseSession(sessionFor(subjectID))
+	bridge.manager.CloseSession(entitysync.SessionID(playerOf(subjectID)))
 }
 
 // ShowSubject registers something that is seen but does not see: a monster, a
@@ -679,10 +724,9 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 }
 
 // SetTeam makes a formed match a relationship: each member is interested in
-// the others wherever they are. Player ids in, entity ids out — the policy
-// keys on the id that is unique across kinds, and this is one of the two
-// places the demo crosses that boundary (the other is sessionFor, in the
-// other direction).
+// the others wherever they are. The observer is the member's player id, the
+// subjects are the others' entity ids — a relation says which entities a
+// player cares about.
 func (bridge *Scene) SetTeam(members []int64) {
 	if bridge == nil {
 		return
@@ -691,15 +735,17 @@ func (bridge *Scene) SetTeam(members []int64) {
 	if team == nil {
 		return
 	}
+	observers := make([]int64, 0, len(members))
 	subjects := make([]int64, 0, len(members))
 	for _, member := range members {
 		subjectID, err := coreentity.BuildEntityID(member, player.EntityKindPlayer)
 		if err != nil {
 			continue
 		}
+		observers = append(observers, member)
 		subjects = append(subjects, subjectID)
 	}
-	for index, observer := range subjects {
+	for index, observer := range observers {
 		peers := make([]int64, 0, len(subjects)-1)
 		for other, subject := range subjects {
 			if other != index {
@@ -722,7 +768,7 @@ func (bridge *Scene) sweepLocked() {
 	}
 	bridge.mu.Unlock()
 	for _, subjectID := range candidates {
-		if bridge.sessions.ActiveSessions(coreentity.GetUniqueIDFromEntityID(subjectID)) == 0 {
+		if bridge.sessions.ActiveSessions(playerOf(subjectID)) == 0 {
 			bridge.leaveLocked(subjectID)
 		}
 	}
@@ -790,7 +836,7 @@ func (bridge *Scene) settle(subjectID int64, generation uint64) {
 		slog.Debug("scene: disconnect for a superseded join ignored", "subject_id", subjectID, "reported", generation, "current", member.generation)
 		return
 	}
-	if bridge.sessions.ActiveSessions(coreentity.GetUniqueIDFromEntityID(subjectID)) > 0 {
+	if bridge.sessions.ActiveSessions(playerOf(subjectID)) > 0 {
 		return
 	}
 	bridge.leaveLocked(subjectID)
@@ -806,7 +852,7 @@ func (bridge *Scene) settle(subjectID int64, generation uint64) {
 // its own view to come back with its next login — a warning and one count on
 // sceneOpenFailedMetric per player. Called with transitions held.
 func (bridge *Scene) openLocked(subjectID int64, member sceneMember, attempt int) {
-	session := sessionFor(subjectID)
+	session := entitysync.SessionID(playerOf(subjectID))
 	open := bridge.manager.OpenHeldSession
 	if member.ready {
 		open = bridge.manager.OpenSession
@@ -828,7 +874,7 @@ func (bridge *Scene) openLocked(subjectID int64, member sceneMember, attempt int
 		slog.Warn("scene: replication session not opened", "subject_id", subjectID, "attempts", attempt, "reason", reason, "err", err)
 		return
 	}
-	queued := bridge.interest.Resubscribe(subjectID)
+	queued := bridge.interest.Resubscribe(playerOf(subjectID))
 	bridge.apply()
 	slog.Info("scene: replication session opened after a retry", "subject_id", subjectID, "pairs", queued, "attempts", attempt)
 }

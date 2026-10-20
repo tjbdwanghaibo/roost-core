@@ -99,7 +99,7 @@ func (m *AOI) evaluateObserved(o *interestObserver) {
 		if b := m.blocks[blockID]; b != nil {
 			b.mu.RLock()
 			for id := range b.observed {
-				if id != o.id {
+				if id != o.self {
 					next[id] = 0
 				}
 			}

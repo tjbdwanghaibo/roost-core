@@ -59,7 +59,8 @@ func TestSpatialComponentNestCommitAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer interest.Close()
-	if err := interest.Enter(42, spatial.Point{X: 10, Y: 10}); err != nil {
+	// 会话 42 只看不被看。
+	if err := interest.Watch(42, spatial.Point{X: 10, Y: 10}, policy.ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := interest.Show(id, spatial.Point{X: 500, Y: 10}); err != nil {

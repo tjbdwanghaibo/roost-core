@@ -61,7 +61,9 @@ func newMixedLoad(t *testing.T, ctx context.Context, count int) *mixedLoad {
 	}
 	t.Cleanup(func() { _ = l.manager.Close(context.Background()) })
 	side := int64(math.Ceil(math.Sqrt(float64(count))))
-	l.interest, err = policy.NewInterest(policy.InterestConfig{Manager: l.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
+	l.interest, err = policy.NewInterest(policy.InterestConfig{Manager: l.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49},
+		// 这里会话按实体 ID 打开，观察者编号与实体 ID 相同。
+		ObserverOf: func(id int64) (int64, bool) { return id, true }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,7 @@ func (l *mixedLoad) start(t *testing.T, scheduler *nest.NestMgr, access *entity.
 			if err = l.manager.OpenSession(sid); err != nil {
 				t.Fatal(err)
 			}
-			err = l.interest.Enter(id, l.point(i, 0))
+			err = l.interest.Enter(id, id, l.point(i, 0), policy.ObserverView{})
 		} else {
 			err = l.interest.Show(id, l.point(i, 0))
 		}
