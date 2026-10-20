@@ -38,7 +38,7 @@
 
 **建议修法**：配置项 `time.business_timezone`（必填或默认 UTC 并在启动日志打印），`app.BusinessClock` 提供 `BusinessDay(t)` / `NextDayStart(t)`；文档补“按日重置：存上次重置的业务日，登录 / 首次操作时惰性重置，必要时用实体定时器在零点推送”的写法；生成部署写出 `TZ` 或在 doctor 提示。
 
-### 5. 进程级写入吞吐约 125 TPS，与实体是否热点无关（尚未确认根因）
+### 5. 生成工程整条链路的写入吞吐约 125 TPS，远低于框架夹具的 ~850 TPS（尚未确认根因，问题在 wiring 装配或 TCP 接入一侧）
 
 **现象**（本机 macOS、GOMAXPROCS=10、共享隔离环境同机；生成工程加一个最小 strict handler `Tap`：每次 Player 金币 +1，普通 Nest 单实体事务，**不经 Saga、不发 effect**）：
 
@@ -53,9 +53,11 @@
 
 指标（strict 那轮）：`nestwal_append_total == nestwal_batch_total`（1202 / 1202，每批 1 条，组提交没有合并），`nestwal_fsync_duration` 平均 5.9ms、最大 14ms；`nest_handler_lock_hold` 平均 8.6ms（handler 只做一次加法）；`nest_dispatch_cost` 平均 86ms；`player_tcp_dispatch_duration` 平均 409ms；short 池 10 个 worker、压测结束时队列积压 40。async 与关 self_sync 两轮的持锁时间与“每批 1 条”都不变。吞吐 ≈ 1 / 单笔持锁时间，说明提交在进程内实际是逐笔串行的；短池 10 个 worker 每个任务平均占 ~80ms，其中持锁只有 ~8ms，其余时间去向未查明。
 
-**影响**：`roost add handler` 默认 `durability=strict`；若这个上限在独占机器上依然成立，一个游戏进程所有写请求合计只有一百多 TPS，远低于 MMO / SLG 单进程的常规需求（世界 Boss、全服计数器等热点场景同样受它约束而不是受单实体锁约束）。
+**框架夹具对照（同机、同日、GOMAXPROCS=10）**：`ROOST_PERF_SHAPES=single ROOST_PERF_POLICIES="strict async" ROOST_PERF_REQUESTS=3000 ROOST_PERF_CPU=10 bash scripts/perf/dataengine.sh`（正式 DAO 生成链路，Nest + `nestwal.DefaultOptions` WAL + Projector + Mongo，32 writer × 128 实体，闭环直接调 Nest `Request`）：**strict 857 TPS、P95 49ms、P99 67ms；async 1674 TPS、P99 45ms**，全部投影、零冲突。也就是说 Nest + DataEngine 核心并不把进程限制在一百多 TPS；约 125 TPS、每批 1 条、Tap 持锁 8ms 只出现在生成工程的完整链路上（TCP 读循环 → endpoint → 生成 Sender → wiring 装配的 Nest Mod / DataEngine Mod）。
 
-**尚未确认**：宿主机有已知干扰（共享环境同机，fseventsd / swap，见性能文档），需要在独占机器复测；根因候选：WAL 追加与 Nest 提交之间的某个串行点（每批只有 1 条说明同一时刻只有一笔在追加）、或 async 也在锁内等待 writer 回复。复现：上述 Tap handler + 50 个 TCP 连接循环请求，读 `/metrics` 的 `nestwal_append_total` / `nestwal_batch_total` 与 `nest_handler_lock_hold`。
+**影响**：生成工程是业务实际使用的形态；`roost add handler` 默认 `durability=strict`，若完整链路在独占机器上依然只有一百多 TPS，一个游戏进程所有写请求合计远低于 MMO / SLG 单进程的常规需求。现行性能文档里没有“生成工程完整链路 + 持久写入”的吞吐基线：重档 nest-game 夹具的 handler 是 `DurabilityMemory`（`codegen/internal/entity/testdata/nestgame/load_test.go:396`），不写 WAL；写 WAL 的 Remote / Saga 测试都是固定低速率（80 TPS / 20 每秒）。
+
+**尚未确认**：宿主机有已知干扰（共享环境同机），需要在独占机器复测；根因候选按与夹具的差异排查：wiring 的 DataEngine Mod 选项（`dataengine.wal.*`、projection / outbox / checkpoint 配置与夹具的 `DefaultOptions` 不同）、wiring 的 Nest Mod 装配（持久水位、完成泵、release notifier）、嵌入 TCP 接入层（同步读循环、出站队列）。复现：生成工程加上述 Tap handler + 50 个 TCP 连接循环请求，读 `/metrics` 的 `nestwal_append_total` / `nestwal_batch_total`、`nest_handler_lock_hold`、`nest_dispatch_cost`、`player_tcp_dispatch_duration`；夹具结果见本机 `artifacts/perf/dataengine/newbie-r8-single-150901/`（未提交）。
 
 ## Nest 与实体定时器
 
