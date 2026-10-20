@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -1594,6 +1595,43 @@ func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	waitReleased(t, server, 0)
 	if got := runtime.CloseSessions(7, nil); got != 0 {
 		t.Errorf("CloseSessions for a player with no tcpSession reported %d, want 0", got)
+	}
+}
+
+// entity.kick（D16）经 admin 注册表执行 CloseSessions：玩家的两条连接都被关闭（客户端读到连接结束），回答 closed=2；
+// 再踢一次 closed=0；参数缺 player_id 或不是 JSON 按 ErrCommandInvalid 拒绝（ops 回 400）。
+func TestAdminEntityKickClosesThePlayersSessions(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	first := dialAuthenticated(t, server, "first")
+	second := dialAuthenticated(t, server, "second")
+	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
+	commands := admin.NewRegistry()
+	if err := RegisterAdminCommands(commands, runtime); err != nil {
+		t.Fatal(err)
+	}
+	kick := admin.Command{Name: AdminCommandEntityKick, Payload: []byte(`{"player_id":7,"reason":"unit test"}`)}
+	result, err := commands.Execute(context.Background(), kick)
+	if err != nil || result.Data["closed"] != 2 {
+		t.Fatalf("entity.kick = %+v, %v; want closed=2", result, err)
+	}
+	waitClosed(t, closed, "first", "second")
+	for _, connection := range []net.Conn{first, second} {
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := connection.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("a kicked connection is still open: read = %v", err)
+		}
+	}
+	if result, err = commands.Execute(context.Background(), kick); err != nil || result.Data["closed"] != 0 || result.Message == "" {
+		t.Fatalf("second entity.kick = %+v, %v; want closed=0 with a message", result, err)
+	}
+	for _, payload := range []string{`{}`, `{"player_id":-1}`, `not json`} {
+		if _, err := commands.Execute(context.Background(), admin.Command{Name: AdminCommandEntityKick, Payload: []byte(payload)}); !errors.Is(err, admin.ErrCommandInvalid) {
+			t.Errorf("entity.kick %s = %v, want ErrCommandInvalid", payload, err)
+		}
+	}
+	if err := RegisterAdminCommands(commands, nil); err == nil {
+		t.Fatal("entity.kick registered without a player runtime")
 	}
 }
 

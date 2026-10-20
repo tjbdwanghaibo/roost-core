@@ -26,7 +26,7 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 持实体锁时记录处于 held，投影器不得越过这道边界修改权威。解锁后按依赖推进；同实体版本不能倒序。Mongo 通过条件版本、事务身份、receipt/fence 等判定重复与冲突；“数据库版本更高”不是无条件成功。
 
-**运行期不得直接改权威集合**：加载着的实体以内存为权威，投影按 `_id` + `_version == expected` 条件写（`MongoStore`，`framework/dataengine/engine/mongo_store.go`）。在进程运行时直接改 Mongo 文档：只改字段、不动 `_version` 时版本仍匹配，下一次投影按内存状态覆盖改动（静默丢失）；改了 `_version`（如恢复旧备份）时投影 `ErrProjectionConflict` fatal、进程 fence，重启时启动投影恢复仍冲突、起不来。在线改档写成业务的 GM handler（一条普通 Nest 消息，走正式提交链路）；整档恢复先停该 sid 的进程并确认 WAL 已排空（game-demo `cmd/sidmove wal-drained`），再写回文档，启动后冷加载以库里的版本继续。冲突后的识别与处置见[维护手册 §4](../../maintenance/README.md#4-故障处理)；框架级实体运维命令待决定（[DESIGN-TODO D16](../../maintenance/DESIGN-TODO.md#d16-单个实体--玩家的运维入口)）。
+**运行期不得直接改权威集合**：加载着的实体以内存为权威，投影按 `_id` + `_version == expected` 条件写（`MongoStore`，`framework/dataengine/engine/mongo_store.go`）。在进程运行时直接改 Mongo 文档：只改字段、不动 `_version` 时版本仍匹配，下一次投影按内存状态覆盖改动（静默丢失）；改了 `_version`（如恢复旧备份）时投影 `ErrProjectionConflict` fatal、进程 fence，重启时启动投影恢复仍冲突、起不来。在线改档写成业务的 GM handler（一条普通 Nest 消息，走正式提交链路）；整档恢复先停该 sid 的进程并确认 WAL 已排空（game-demo `cmd/sidmove wal-drained`），再写回文档，启动后冷加载以库里的版本继续。冲突后的识别与处置见[维护手册 §4](../../maintenance/README.md#4-故障处理)。框架只提供与业务字段无关的两条运维命令 `entity.kick` / `entity.unload`（[§6 单实体运维命令](#单实体运维命令d16)），改档与恢复不进框架（[DESIGN-TODO D16](../../maintenance/DESIGN-TODO.md#d16-单个实体--玩家的运维入口)，维护者 2026-10-20 决定 C）。
 
 投影器可重放同一已提交记录，外部副作用必须通过稳定身份去重。WAL checkpoint 只决定崩溃后从哪里重放：投影器按条数 / 间隔（`dataengine.projection.checkpoint_records` / `checkpoint_interval`，缺省 256 条 / 20 ms）合并确认，带回执 / effect 的记录（saga 原生步骤）与普通记录一样合并（2026-10-18 起）。这类记录逐条投影约 16 ms，缺省 20 ms 间隔下积压时合并系数约 2；维护者 2026-10-19 决定缺省保持 20 ms，需要更高吞吐的部署可调大 `checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。崩溃后会多重放这段已投影的记录，由事务标记判定为已应用，lease fence、回执与 effect 都保持首投的结果。只有单 mutation 快路记录仍逐条确认。effect 暂存进 outbox 后投影器立即唤醒 outbox 发布（2026-10-18 起），`dataengine.outbox.poll_interval`（缺省 100ms）只是兜底轮询，不再决定 effect 的发布延迟。WAL backlog、磁盘/年龄健康阈值、outbox 硬容量分别处理，不能统称任一超限都直接 fail-stop。启用前核对容量与保留期，receipt/事务标记不能在仍有重放可能时提前过期。
 
@@ -58,6 +58,35 @@ Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未�
 要等 Mongo 落库，用明确 Flush/投影等待契约，不能只等 strict handler 成功。静态 Player 跨机迁移只以已落库数据为准，WAL 负责本机恢复与落库，不提供跨机本地 WAL 热迁移；按 sid 搬机的步骤与检查点见[参考流程](../PLAYER-MIGRATION.md)。旧版本升级先停写、排空、用旧程序完成需保留数据落库，保留备份；新程序用新 WAL 目录。框架不自动清库或迁移 schema。
 
 只读故障分析使用 cmd/walinspect 与 nestwal 的检查/完整副本入口；不要用正在运行的权威 WAL 目录做破坏性实验。
+
+### 单实体运维命令（D16）
+
+每个装配了 DataEngine 的进程自带 `entity.unload`，每个有玩家接入的进程自带 `entity.kick`，经 ops 的 `/admin/execute` 调用（`ops.admin_enabled` 与 admin token 照常生效，审计是 admin 注册表的 `admin command started / finished` 日志与 `admin.execute.total{command,outcome}`，不另设审批；维护者 2026-10-20 决定）。业务不用手写。两条都只作用于收到命令的那个进程：按 sid 绑定的玩家，发给持有它的 sid。
+
+| 命令 | 参数 | 做什么 / 回答 |
+| --- | --- | --- |
+| `entity.kick` | `player_id`、`reason?` | 关闭该玩家在本进程的全部会话（嵌入 TCP 关连接；独立 Gate 部署下 Game Ingress 关绑定、Gate 随即断开客户端），关闭走与网络断开相同的路径（场景、聊天在线、自身视图照常清理）。回答 `closed`（本次关闭的会话数），没有会话时 `closed=0`。不改实体状态、不卸载、不封禁，玩家可以立刻重新登录 |
+| `entity.unload` | `entity_id`（完整 Entity ID）或 `player_id` + `kind?`；`timeout?`（Go 时长，缺省 5s）、`reason?` | 先保证内存里每笔已提交的修改都已落库，再把实体从本进程内存卸载（不删数据），下一次访问按正常冷加载读回。回答 `entity_id`、`kind`、`resident`（命令开始时是否常驻）、`unloaded`、`drained`（等到投影完成的在途事务数）。没有常驻时成功、`resident=false`，什么也不做。只给 `player_id` 时在本进程已加载的实体里找唯一号相同的那一个，多个 kind 都加载着时要求写 `kind` |
+
+`entity.unload` 的过程（`Runtime.UnloadEntity`，`framework/dataengine/engine/entity_unload.go`）：
+
+1. 在业务池取得实体锁——正在执行、持有该实体的事务先照常结束（不被拒绝）——然后在 WAL 准入处登记卸载屏障。之后写到该实体的事务在准入处以可重试的 `dataengine.ErrEntityUnloading` 拒绝（同时满足 `nest.ErrCommitRejected`），Nest 在 Guard 内回滚；其他实体照常。
+2. 等屏障之前已准入、写到该实体的记录投影完成（冷加载用的同一个屏障）。
+3. 在业务池卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，与驱逐同一入口）。
+4. 撤销屏障（任何结果都撤销）。
+
+失败不强行卸载、实体不受影响：持有它的事务在 `timeout` 内没结束、已有另一次卸载在进行、Remote 托管实体的所有权处于 fenced / recovering / quarantined 或迁移中（由 Remote 运行时负责收尾）时返回“忙”（`ErrEntityUnloadBusy`）；投影在 `timeout` 内没完成（Mongo 慢或中断）返回 `ErrEntityUnloadTimeout`，记录留在 WAL 里照常投影；不是自动持久化的实体（库里没有它）拒绝。这些都是确定的“没有卸载”，ops 回 500 与原因，而不是 504 的“结果未知”。所有权稳定（local_owned / shared）的 Remote 托管实体与本地实体同一流程。
+
+玩家在线、仍有 Sync 订阅时，卸载后框架会立刻为订阅者从库重载（`nest.unload_resync`）；要让实体真正离开内存，先 `entity.kick`。用途是让一个实体从库重建内存（例如怀疑非持久的派生状态有误）或释放内存；它**不是**改档入口：卸载之后，任何一次访问（玩家请求、实体定时器、saga 步骤、订阅者重载）都会立刻把实体重新加载，没有“卸载着、可以改库”的窗口；运行期仍不得直接改权威集合（§3）。
+
+```bash
+curl -s -H 'X-Admin-Token: <token>' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"entity.kick","payload":{"player_id":10001,"reason":"ticket 42"}}'
+curl -s -H 'X-Admin-Token: <token>' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"entity.unload","payload":{"player_id":10001,"timeout":"10s","reason":"ticket 42"}}'
+```
+
+改档与整档恢复不进框架：在线改档写成业务的 GM handler（一条普通 Nest 消息，strict 写入，操作者与原因写进业务记录，参考 `service/account` 的 `ResolvePendingCreation`）；整档恢复走 §3 的离线流程。
 
 ## 源码与核对范围
 

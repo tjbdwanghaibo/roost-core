@@ -20,6 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -349,6 +350,15 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		return fmt.Errorf("dataengine mod: capability %q not found", mods.ModHealth)
 	}
 	healthRegistry.Register("dataengine", health.CheckerFunc(mod.checkHealth))
+	// entity.unload（D16）是运维动作，由框架挂到 App 的 admin 注册表（与 configdata.* 相同），经 ops 的 /admin/execute
+	// 调用；Runtime 在 Start 之后才存在，命令执行时再取。
+	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
+	if !ok || commands == nil {
+		return fmt.Errorf("dataengine mod: capability %q not found", mods.ModAdmin)
+	}
+	if err := engine.RegisterAdminCommands(commands, mod.Runtime); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
+	}
 	return nil
 }
 

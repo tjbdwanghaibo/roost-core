@@ -19,7 +19,7 @@
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
 | D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），已实施（2026-10-20；前后 benchstat 由维护者夜间统一跑） |
 | D15 | 合服（把一个服并入另一个服） | 维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，实施中 |
-| D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
+| D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20：`entity.kick` / `entity.unload`） |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），实施中 |
@@ -527,7 +527,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D16 单个实体 / 玩家的运维入口
 
-**状态：维护者 2026-10-20 决定 C（按推荐），实施中。** 决定：框架只做 `entity.kick` 与 `entity.unload`，命令走现有 admin 鉴权与审计接线（不另设审批）；改档 / 恢复按 B 的业务 GM handler 与离线流程。登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20，结果见下文“实施结果”）。** 决定：框架只做 `entity.kick` 与 `entity.unload`，命令走现有 admin 鉴权与审计接线（不另设审批）；改档 / 恢复按 B 的业务 GM handler 与离线流程。登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：框架的 admin 命令只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`，没有针对单个实体 / 玩家的命令；代码层只有 `ManagerAccess.Unload`。投影按版本条件写：`Put` / `Patch` 的过滤条件是 `_id` + `_version == expected`（`framework/dataengine/engine/mongo_store.go:222-224`），成功后写 `_version = next`、`_schema`、`_last_tx`。所以运行期直接改 Mongo 的结果是确定的、按设计的：
 - 只改字段、不动 `_version`：版本仍匹配，下一次投影按内存状态覆盖改动（改动静默丢失）。
@@ -543,6 +543,44 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 **建议**：C。踢下线与卸载与业务字段无关，框架做一次各项目继承；改档的字段语义、校验与审计属于业务（参考 `service/account` 的 `ResolvePendingCreation` 把操作者备注写进记录的做法）。
 
 **需要拍板**：1）选 A / B / C；2）选 A 或 C 时命令走现有 admin 鉴权与审计接线，还是要求单独的审批（部署方）。
+
+### 实施结果（2026-10-20）
+
+**命令的最终形状**（使用说明在 [guide/03 §6](../framework/guide/03-dataengine.md#单实体运维命令d16)，实现契约在 [impl/03 §2 第 9 条](../framework/impl/03-dataengine.md#2-必须保持的契约)）：
+
+| 命令 | 注册位置 | 参数 | 回答 |
+| --- | --- | --- | --- |
+| `entity.kick` | `infra/network/gateway/admin.go` `RegisterAdminCommands`；经 `wiring/gate.RegisterPlayerAdminCommands` 由 `GameIngressMod.Provide`（独立 Gate）与生成的嵌入 TCP Mod `Provide`（`internal/access/player/tcp/server_gen.go`）调用 | `player_id`、`reason?` | `player_id`、`closed` |
+| `entity.unload` | `framework/dataengine/engine/admin.go` `RegisterAdminCommands`；`wiring/dataengine` Mod 在 Provide 时注册 | `entity_id`（完整 ID）或 `player_id` + `kind?`（EntityKind 数值）；`timeout?`（缺省 5s）、`reason?` | `entity_id`、`kind`、`resident`、`unloaded`、`drained` |
+
+两条都经 ops `/admin/execute`，鉴权与审计用现有接线，各另记一条带 reason / trace_id / operator 的 Info 日志；不另设审批。
+
+**`entity.unload` 的语义**（`Runtime.UnloadEntity`，`framework/dataengine/engine/entity_unload.go`）：①业务池取实体锁（持有实体的在途事务先照常结束、不被拒绝）后，在 Projector 准入临界区登记卸载屏障；②命令 goroutine 等该实体已准入的记录投影完（`WaitEntityProjection`）；③业务池 `ManagerAccess.Unload`；④撤销屏障。屏障期间写到该实体的事务在 WAL 前以可重试的 `dataengine.ErrEntityUnloading` 拒绝、Nest 回滚。下一次访问正常冷加载。
+
+| 情形 | 结果 |
+| --- | --- |
+| 未加载 | 成功，`resident=false`，什么也不做（不登记屏障） |
+| 在途事务持有实体超过 timeout | `ErrEntityUnloadBusy`，没有登记屏障，那笔事务照常提交 |
+| 已准入记录在 timeout 内没投影完 | `ErrEntityUnloadTimeout`，实体留在内存、屏障撤销，记录照常投影 |
+| 另一次卸载进行中 | `ErrEntityUnloadBusy` |
+| Remote 托管、所有权 local_owned / shared | 与本地实体同一流程（Remote 写同样经准入与投影；屏障在 WAL 前挡住 Remote 记录） |
+| Remote 托管、所有权 fenced / recovering / quarantined / sharing / draining / unknown | `ErrEntityUnloadBusy`（由 Remote 运行时收尾） |
+| `AutoPersist=false` | `ErrEntityUnloadNotPersistent`（库里没有它，卸载等于丢弃） |
+| 在业务 worker 上调用 | `fctx.ErrBlockingInBusinessWorker`，不做任何事 |
+
+失败都是确定的“没有卸载”，错误不包裹 ctx 错误（admin 审计 outcome 记 `error`，ops 回 500 + 原因，不是 504 的“结果未知”）。指标 `dataengine.entity_unload.total{result}`、`dataengine.entity_unload.admission_rejected.total`。
+
+**与草案的偏差**：
+1. `entity.kick` 的注册：独立 Gate 由框架 Mod（`GameIngressMod`）注册；嵌入 TCP 的 TCPRuntime 由生成的 player TCP Mod 创建，框架 Mod 拿不到它，所以由生成的 `Provide` 调一行框架函数 `gatewiring.RegisterPlayerAdminCommands`（命令实现与注册函数都在框架里）。
+2. “在途事务”落到两处：命令开始时持有实体的事务**先等它结束**、不拒绝（取锁受 timeout 约束，超时才 busy）；屏障之后才开始的写入被拒绝。这样一次运维操作不会把恰好在执行的玩家请求打回。
+3. `player_id` 不写 `kind` 时在本进程已注册的 kind 里找唯一号相同、已加载的实体：唯一一个就是它，没有就是“未加载”，多个则要求写 `kind`。`kind` 用 EntityKind 数值（框架里没有 kind 名注册表）。
+4. 卸载后若玩家在线、仍有 Sync 订阅，框架会立即为订阅者从库重载（既有 `nest.unload_resync`）；要实体真正离开内存先 `entity.kick`。不为 unload 关掉重载。
+5. 踢下线不封禁、不给客户端发原因（协议里没有踢下线消息）；reason 只进日志。
+
+**证据**：
+- 修前红：`TestModRegistersEntityUnloadAdminCommand`（`wiring/dataengine`）`admin commands after Provide = [], want "entity.unload"`；生成工程 `TestAdminEntityKickClosesThePlayersConnections`（`TestGeneratedPlayerTCPAdminKick` 运行）`server_gen_test.go:53: admin commands after Provide = [], want entity.kick`。
+- 行为回归（`framework/dataengine/engine/entity_unload_test.go`，正式 Nest + 文件 WAL + Mongo 替身）：排空后卸载、卸载期间写入被拒并回滚、冷加载与卸载前一致；投影超时；在途事务超时 busy / 期限内等它完成；未加载 / 非持久 / 并发 / 业务 worker；Remote 托管实体。变异：去掉 `reserve` 里的屏障检查 → `write during unload = <nil>`；去掉排空等待 → `unloading entities = 0, want 1` 与超时用例 `Unloaded:true, <nil>`；去掉第①步取锁 → `the transaction that held the entity when the unload began was refused: nest: transaction commit rejected`。
+- 真实依赖：生成工程 `TestGeneratedDataEngineAdminUnload`（strict / async / pipelined，真实 Mongo + 文件 WAL，`scripts/test-dataengine-generated.sh` 三阶段全通过）；`TestRealGateAdminKickClosesTheClientConnection`（独立 Gate + 真实 NATS，客户端连接被断开）；嵌入 TCP 见生成工程用例（真实 TCP 连接被关、可重新登录）。
 
 ## D17 全服邮件的内置投递策略
 

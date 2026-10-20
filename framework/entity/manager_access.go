@@ -701,6 +701,14 @@ func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity
 	return err
 }
 
+// WithLocked 见 EntityManager.WithLocked。
+func (access *ManagerAccess) WithLocked(ctx context.Context, value IThreadSafeEntity, fn func()) error {
+	if access == nil || access.manager == nil {
+		return ErrEntityNotManaged
+	}
+	return access.manager.WithLocked(ctx, value, fn)
+}
+
 // UnloadRemoteEntity 实现 IRemoteEntityUnloader，与 Unload 同一路径。
 func (access *ManagerAccess) UnloadRemoteEntity(ctx context.Context, value IThreadSafeRemoteEntity) error {
 	if value == nil {

@@ -193,7 +193,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	mu, err := m.lockManagedForDestroy(ctx, e)
+	mu, err := m.lockManaged(ctx, e)
 	if err != nil {
 		return err
 	}
@@ -260,9 +260,33 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	return admissionErr
 }
 
-// lockManagedForDestroy 为销毁取得 e 的引用与实体锁，并确认它仍是本 Manager 托管的当前实例、ctx 未取消。成功时调用方
-// 持有锁与引用；失败时两者都已归还。
-func (m *EntityManager) lockManagedForDestroy(ctx context.Context, e IThreadSafeEntity) (lock.Mutex, error) {
+// WithLocked 取得 e 的引用与实体锁（等待受 ctx 约束），确认它仍是本 Manager 托管的当前实例后执行 fn，fn 返回后解锁、
+// 归还引用。e 已移除或已不是当前托管实例时返回 ErrEntityRemoved / ErrEntityNotManaged，ctx 先结束时返回 ctx 的错误，
+// 这些情况下 fn 都不执行。fn 在持锁时运行，不能做 I/O 或等待；实体锁可重入，fn 里再取同一把锁不阻塞。
+// 要取实体锁：在本地执行入口（业务池，或 Nest 未装配时就地）调用。框架用它在实体锁内登记 DataEngine 的卸载屏障
+// （entity.unload，D16）。
+func (m *EntityManager) WithLocked(ctx context.Context, e IThreadSafeEntity, fn func()) error {
+	if m == nil || e == nil || e.Base() == nil {
+		return ErrEntityNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	mu, err := m.lockManaged(ctx, e)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		mu.Unlock()
+		e.UnTouch()
+	}()
+	fn()
+	return nil
+}
+
+// lockManaged 为销毁（Destroy）或持锁执行（WithLocked）取得 e 的引用与实体锁，并确认它仍是本 Manager 托管的当前实例、
+// ctx 未取消。成功时调用方持有锁与引用；失败时两者都已归还。
+func (m *EntityManager) lockManaged(ctx context.Context, e IThreadSafeEntity) (lock.Mutex, error) {
 	if !e.Touch() {
 		return nil, ErrEntityRemoved
 	}
