@@ -270,6 +270,7 @@ func (in *Interest) Relation(name string) *RelationSource {
 
 // Enter puts a player in: it both sees and is seen, and (when SelfVisible)
 // it sees itself. playerID 是观察者（会话）编号，entityID 是玩家自身实体；view 为零值时取缺省视野。
+// 已登记的玩家再次 Enter（重连）按这次的位置与视野重新登记，要保留原视野就传 ObserverView(playerID) 的结果。
 // Its subject must already be registered with the manager; its session must already be open.
 func (in *Interest) Enter(playerID, entityID int64, at spatial.Point, view ObserverView) error {
 	in.mu.Lock()
@@ -306,6 +307,10 @@ func (in *Interest) Watch(playerID int64, at spatial.Point, view ObserverView) e
 	defer in.mu.Unlock()
 	if in.closed {
 		return errors.New("policy: interest is closed")
+	}
+	if observer := in.aoi.observers[playerID]; observer != nil && observer.self != 0 {
+		// 改成只看会让玩家看见自己的实体，而它仍被别人看见；先 Leave 再 Watch。
+		return fmt.Errorf("%w: player %d is in with entity %d; Leave first", ErrInterestConfig, playerID, observer.self)
 	}
 	if err := in.aoi.AddObserver(playerID, 0, at, view); err != nil {
 		return err

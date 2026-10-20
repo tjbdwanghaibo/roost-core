@@ -1074,6 +1074,9 @@ func TestWatchSeesWithoutBeingSeen(t *testing.T) {
 	if err := interest.Watch(spectator, spatial.Point{X: 900, Y: 900}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := interest.Watch(watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); !errors.Is(err, ErrInterestConfig) {
+		t.Fatalf("a player already in turned into a spectator: %v", err)
+	}
 	mustApply(t, interest)
 	requireSessions(t, manager, watcherID, entitysync.SessionID(watcherID))
 	if err := interest.MoveView(spectator, spatial.Point{X: 520, Y: 500}); err != nil {
