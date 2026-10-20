@@ -1210,6 +1210,161 @@ func TestMatchSnapshotFetchIsCancelledWhenNobodyWaits(t *testing.T) {
 	}
 }
 
+// detachedFailures 读 lockstep.snapshot.failed.total{reason="detached"} 的当前值。
+func detachedFailures() int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == MetricSnapshotFailed && metric.Labels["reason"] == "detached" {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+// 快照恢复进行中的会话被 Detach（断线、换连接、旁观者离开）计一次 failed{reason="detached"}（维护者 2026-10-20 决定 A）：
+// 否则独立 Gate 下“快照传到一半被断开、重连从头再传”的循环在失败指标上完全看不见。
+// 等快照、传快照、快照之后续帧三个阶段都算；普通追帧、已在发失败通知的恢复、Match.Close 不算。
+func TestMatchSnapshotRecoveryDetachIsCounted(t *testing.T) {
+	previous := metrics.DefaultRegistry()
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+	// olderCheckpoint 交出窗口起点处的快照，让快照之后有几页续帧。
+	olderCheckpoint := func(_ context.Context, req SnapshotRequest) (Snapshot, error) {
+		frame := req.MinFrame + 1
+		return Snapshot{Frame: frame, Data: referenceData(frame, 2000), StateHash: referenceHash(frame), HasStateHash: true}, nil
+	}
+	var lanes *laneLog
+	setup := func(t *testing.T, provider *referenceProvider, spectator bool) (*Match, func()) {
+		t.Helper()
+		metrics.SetDefaultRegistry(metrics.NewRegistry())
+		lanes = newLaneLog()
+		match := newSnapshotMatch(t, lanes, provider, func(c *MatchConfig) {
+			c.Snapshots.ChunkBytes = 500
+			c.Snapshots.BytesPerTick = 500
+			c.Snapshots.FetchTimeout = time.Hour
+		})
+		if err := match.Attach(1, 101); err != nil {
+			t.Fatal(err)
+		}
+		detach := func() { match.Detach(1) }
+		if spectator {
+			if err := match.AttachSpectator(201); err != nil {
+				t.Fatal(err)
+			}
+			detach = func() { match.DetachSpectator(201) }
+		}
+		for range 100 {
+			_ = tickInputs(t, match)
+		}
+		return match, detach
+	}
+	request := func(t *testing.T, match *Match, spectator bool, from FrameID) {
+		t.Helper()
+		var err error
+		if spectator {
+			err = match.SpectatorCatchup(201, from)
+		} else {
+			err = match.StartCatchup(1, from)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := func(spectator bool) nettransport.SessionID {
+		if spectator {
+			return 201
+		}
+		return 101
+	}
+
+	for _, phase := range []string{"waiting", "transferring", "recovered"} {
+		for _, spectator := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/spectator=%v", phase, spectator), func(t *testing.T) {
+				provider := &referenceProvider{fn: olderCheckpoint}
+				match, detach := setup(t, provider, spectator)
+				request(t, match, spectator, 1) // 起点 1 早已裁出 64 帧窗口：auto 走快照
+				_ = tickInputs(t, match)        // 发起取快照
+				state := match.catchups[session(spectator)]
+				if phase != "waiting" {
+					awaitFetch(t, match)
+					_ = tickInputs(t, match) // 收到快照、发第一批分块
+				}
+				if phase == "recovered" {
+					for range 20 {
+						if state.recovered {
+							break
+						}
+						_ = tickInputs(t, match)
+					}
+				}
+				switch {
+				case state == nil || match.catchups[session(spectator)] != state:
+					t.Fatal("recovery state gone before detach")
+				case phase == "waiting" && (state.snapshot == nil || state.snapshot.image != nil):
+					t.Fatalf("not waiting for the snapshot: %+v", state.snapshot)
+				case phase == "transferring" && (state.snapshot == nil || state.snapshot.image == nil):
+					t.Fatalf("not transferring: %+v", state.snapshot)
+				case phase == "recovered" && !state.recovered:
+					t.Fatal("never reached the continuation pages after the snapshot")
+				}
+				detach()
+				if got := detachedFailures(); got != 1 {
+					t.Fatalf("lockstep.snapshot.failed.total{reason=detached} = %d after detaching a session %s, want 1", got, phase)
+				}
+			})
+		}
+	}
+
+	t.Run("plain catch-up is not a snapshot recovery", func(t *testing.T) {
+		match, detach := setup(t, &referenceProvider{size: 2000}, false)
+		request(t, match, false, match.NextFrame()-20) // 窗口内：auto 追帧
+		_ = tickInputs(t, match)
+		if state := match.catchups[101]; state == nil || state.snapshot != nil || state.recovered {
+			t.Fatalf("want a plain catch-up, got %+v", state)
+		}
+		detach()
+		if got := detachedFailures(); got != 0 {
+			t.Fatalf("detached = %d for a plain catch-up, want 0", got)
+		}
+	})
+
+	t.Run("failed recovery is counted once", func(t *testing.T) {
+		provider := &referenceProvider{fn: func(context.Context, SnapshotRequest) (Snapshot, error) {
+			return Snapshot{Frame: 1, Data: make([]byte, DefaultMaxSnapshotBytes+1)}, nil
+		}}
+		match, detach := setup(t, provider, false)
+		match.sendWait = time.Millisecond // Tick 不等停住的通知（白盒：testSendWait 是一分钟）
+		// 失败通知停在发送里，恢复状态留在“待通知”阶段直到 Detach。
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		lanes.reliableBefore = func(_ nettransport.SessionID, packet []byte) error {
+			if IsCatchupNotice(packet) {
+				<-release
+			}
+			return nil
+		}
+		request(t, match, false, 1)
+		_ = tickInputs(t, match)
+		awaitFetch(t, match)
+		_ = tickInputs(t, match) // too_large：已计 failed{too_large}，失败通知在途
+		if state := match.catchups[101]; state == nil || state.unservable == nil {
+			t.Fatalf("want a recovery whose failure notice is in flight, got %+v", state)
+		}
+		detach()
+		if got := detachedFailures(); got != 0 {
+			t.Fatalf("detached = %d after the recovery already failed, want 0", got)
+		}
+	})
+
+	t.Run("match close is not a detach", func(t *testing.T) {
+		match, _ := setup(t, &referenceProvider{fn: olderCheckpoint}, false)
+		request(t, match, false, 1)
+		_ = tickInputs(t, match)
+		match.Close()
+		if got := detachedFailures(); got != 0 {
+			t.Fatalf("detached = %d after Match.Close, want 0", got)
+		}
+	})
+}
+
 // 只准入的可靠通道（不实现 ReliablePacer，例如独立 Gate）按 UnpacedBytesPerTick 节流，不用 BytesPerTick。
 func TestMatchSnapshotUnpacedLaneUsesTheFixedBudget(t *testing.T) {
 	lanes := newLaneLog()

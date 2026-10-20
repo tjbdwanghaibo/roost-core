@@ -94,7 +94,7 @@ if (session.TryDequeuePush(out var push))
 
 ## Lockstep接入
 
-服务端保留原Sequencer/Match/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞；没有将TCP包装成UDP性能保证。TCPSender的实时帧只进连接出站队列、不等socket写出（停读连接队满即被关闭，不拖住同一Tick的其他接收者），追帧页入队并等写出，追帧随链路速度放慢、CatchupSendTimeout生效。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
+服务端保留原Sequencer/Match/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞；没有将TCP包装成UDP性能保证。TCPSender的实时帧只进连接出站队列、不等socket写出（停读连接队满即被关闭，不拖住同一Tick的其他接收者），追帧页、快照分块与恢复失败通知入队并等写出，追帧与快照随链路速度放慢、CatchupSendTimeout生效。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
 
 生成access/player.NewMod可接收ProtocolRegistrar；在已有PB注册之后、Seal之前执行，注册冲突或失败会中止启动。业务在自己的app装配中使用player.NewMod(registerMatch)，原无参调用保持PB行为。注册函数通过RegisterPayloadNotify(...wire.PayloadLockstep, lockstep.DecodeCommand, handler)接线，handler只将认证PlayerID/Session.Principal().SessionID和Command交给业务Nest Sender，不能从网络handler并发操作Match。示意：
 
@@ -149,6 +149,10 @@ var match = new Roost.Client.LockstepClient(session, commandMessageId, frameMess
 - 失败一律终止（记为`Failure`，不自动重试）：分块坏包`InvalidDataException`；摘要不符`LockstepSnapshotCorruptException`；状态hash不符`LockstepSnapshotMismatchException`（`Frame`/`Expected`/`Actual`，说明客户端版本/规则/确定性与服务器参考不一致；业务可在新建实例前自行`ReportHashAsync(Frame, Actual)`留证）；`restore`抛出的异常原样记录；没有传`restore`却收到快照`LockstepSnapshotUnsupportedException`。
 - 只用`LockstepAssembler`的调用方：`Receive`返回`LockstepDelivery`（`Frames` + 可选`Snapshot`），拿到快照、恢复后必须调用`ResumeAfterSnapshot(snapshot.Frame)`，在此之前`Receive`抛`InvalidOperationException`；`Ingest`只追帧，遇到快照分块抛`LockstepSnapshotUnsupportedException`。`LockstepInputHasher.Reset(value)`可在恢复后续接输入链诊断。
 - Unity适配层不变：`RoostConnection`只转发`Packet`，`restore`与模拟一样在`PacketReceived`处理者所在的主线程执行。
+- 重连即新实例：`LockstepClient`绑定一个`TcpSession`，重新登录后要新建实例，组装器从帧1开始。缺的帧仍在服务端窗口内时（auto缺省阈值0）服务端从帧1追帧，业务须先把模拟状态重置到开局再消费；越界才走快照。生成工程的C#端到端（`TestClientSDKAgainstGeneratedPlayerTCP`的`GeneratedLockstepSnapshot`）走的是越界路径：断线200帧后重新登录、新实例经40 KiB多块快照恢复、续帧到头部，链值与服务器参考一致。
+- 平台边界：SHA-256用`SHA256.Create().ComputeHash`（netstandard2.1与Unity/Mono都有，不用.NET 5+的`SHA256.HashData`）；只在本机.NET 10测试中运行过，尚未在Unity编辑器/IL2CPP平台实测。
+
+Go客户端（`framework/sync/lockstep`与`robot`）对应接口：`FrameAssembler.Receive(packet)`返回`Delivery{Frames, Snapshot}`，恢复并核对状态hash后调`ResumeAfterSnapshot(snapshot.Frame)`（之前再投包返回`ErrSnapshotNotApplied`），客户端快照上限用`NewFrameAssemblerLimits`；`Ingest`遇快照分块返回`ErrSnapshotUnsupported`。`robot.LockstepBotConfig.Restore`/`MaxSnapshotBytes`/`ReportSnapshotMismatch`，`Stats().SnapshotsRestored`，`FrameHasher.Reset`；没设`Simulate`/`Hash`的纯线协议bot不设`Restore`也能以快照的StateHash续输入链。失败语义与C#相同（坏分块`ErrFrameCorrupt`、摘要`ErrSnapshotCorrupt`、hash不符`*SnapshotMismatchError`，一律终止）。服务端配置、快照来源写法与限速链路实测见[guide/04-sync §6](../docs/framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。
 
 实例从帧1开始，一实例一场比赛。原C7不含match/epoch；应用须在握手/订阅/路由生命周期隔离比赛，跨比赛复用同一路由且仍有旧包时不能仅新建Assembler。没有`restore`时重连不提供游戏快照或自动跳帧；业务恢复/重放准备后再消费。游戏定点计算、随机种子、配置一致性和作弊裁决仍由业务实现，FrameHasher不证明游戏状态一致。[本轮方案与验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。
 

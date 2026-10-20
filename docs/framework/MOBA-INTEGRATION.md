@@ -38,7 +38,7 @@
 | 移动、普攻与技能 | 业务输入 codec + 参考模拟 | 命令只带动作、目标类别、移动方向；语法在 `Submit` 校验，射程 / 冷却 / 消耗在 `Apply` 校验 | 框架只看输入字节长度（`MaxInputBytes`），不知道英雄能否攻击；伤害与金币不能由客户端上报 |
 | 兵线、塔与基地 | 业务 `State.Apply` | 整数状态、固定 seat 次序和逻辑帧；塔未摧毁时基地不受击，基地归零才产生胜者 | NPC、技能、装备和防御机制不搬进公共 Lockstep；本例同帧先后顺序不是平衡方案 |
 | 实时广播与短暂丢包 | `Match.Tick`、冗余广播（`RedundancyDepth`）、`FrameAssembler` | Tick 返回本帧输入，服务器与客户端按同一顺序模拟；冗余深度 N 能补上至多 N-1 个连续丢包 | 客户端只能应用连续帧，不能跳过缺口自行向前模拟 |
-| 断线、换连接与追帧 | Attach、可靠通道（`Reliable`）、`StartCatchup` / `OpCatchup` | 新连接 Attach 后，从客户端 `FrameAssembler.Next()` 请求历史；每会话一页在途，追帧期间不收实时帧 | 历史已被裁掉时以 `ErrCatchupUnservable` 明确失败，不自动快照重同步（§6） |
+| 断线、换连接与追帧 | Attach、可靠通道（`Reliable`）、`StartCatchup` / `OpCatchup` | 新连接 Attach 后，从客户端 `FrameAssembler.Next()` 请求历史；每会话一页在途，追帧期间不收实时帧 | 历史已被裁掉时：没配快照来源以 `ErrCatchupUnservable` 明确失败；配了 `SnapshotProvider` 改发服务器参考模拟的检查点快照（§6） |
 | 观战与分歧检测 | `AttachSpectator`、`ReportHash`、`OnDesync` | 旁观者可收帧 / 追帧，没有输入权；关键帧 hash 报告用于发现状态分歧 | 多数 hash 不是反作弊证明；两席不一致判为 `NoMajority`，处理策略归业务 |
 | 逻辑检查点 | 业务 `Snapshot` / `Restore` | 保存整个参考模拟及版本，恢复后继续推进得到相同摘要 | 双英雄入门不持久化活动对局；只能说明快照可恢复，不能声称崩溃后续赛 |
 | 活动对局持久与续赛（5v5） | BattleRound 的输入帧日志 + strict WAL；`RecoverRoom` 用公开 API 重放 | 每帧提交成功才广播；恢复时加载同一 Round，`resume` / `handoff` 推进 Epoch，按已提交帧重建 Match | 每帧重写整段日志并重算，无 tick 预算保证；只恢复 strict 已确认的帧（§5.6、§11） |
@@ -147,7 +147,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 
 `Match` 不加锁：网络回调把命令投进有界房间队列，由所有者 goroutine 依次调用 `onCommand` / `tick`；不要让网络回调与 Nest handler 并发访问同一个 Match，也不要持玩家锁等待对局循环。`settle` 是同步 Nest 请求，不能在 handler 内调用（框架返回 `ErrSyncInHandler`）。获胜奖励 10 金币与局内金币无关，正式经济、排位积分和赛季要业务建模。
 
-#### 4.4 二十五个场景各学什么
+#### 4.4 二十六个场景各学什么
 
 | 场景 | 业务建模 | 学到的框架契约 |
 | --- | --- | --- |
@@ -164,7 +164,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 | 无胜者终态（`TestMOBANoWinnerSettlementNeverPays`） | 对局取消 | 终态保留（`Status=2`），重放不变，不发获胜奖励 |
 | 完整服务器结果链（`TestMOBAServerReferenceSettlesTheFinishedRound`） | 排队成局 → 会话输入 → Match → 参考胜负 → 结算 | 结算用成局的 Match ID 作本场身份，重复结算只付一次 |
 
-以上十二条是双英雄入门，下面十三条是 5v5 三路：
+以上十二条是双英雄入门，下面十四条是 5v5 三路：
 
 | 场景 | 业务建模 | 学到的框架契约 |
 | --- | --- | --- |
@@ -173,6 +173,7 @@ func settle(ctx context.Context, client nest.Client, reference *moba.State, resu
 | 日志重算与配置固定（`TestMOBAArenaReplayVersionSeedAndFogBoundary`） | 80 帧十人输入写进 Round | `DecodeRound` 重算日志：改快照、改规则版本、改种子都被拒；坏输入不半帧生效；`Visible` 只是展示规则 |
 | 投降与到时（`TestMOBAArenaSurrenderAndTimeLimit`） | 同队四票投降；600 帧无胜者 | 终态后不再接受帧；到时 `Winner=0` |
 | 十个 KCP 客户端（`TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup`） | 十个客户端经 loopback KCP 打 120 帧，客户端 1 丢掉第 3～8 帧的广播 | 在第 9 帧发一次 `OpCatchup`，从 Match 历史（缺省保留窗口）经可靠通道补齐，十个客户端与服务器参考同摘要 |
+| 断线超过历史窗口后经快照恢复（`TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect`） | 窗口 64 帧；席位 2、8（各属一队）在第 40 帧后断线、关掉 KCP 会话，4 个窗口后换新会话重连，照常从第 41 帧请求追帧；服务端循环每 16 帧发布一份 Arena 检查点（`ArenaCheckpoints`） | Match 只配快照来源，`Recovery` 零值即 auto：越界改发快照，两个等快照的会话共用一次取快照，各自 `RestoreArena` 并核对状态 hash，从检查点帧 +1 续帧到头部；局末十人与服务器参考同摘要。去掉快照来源时同一请求报 `catch-up range trimmed from history` |
 | 提交后广播、结果未知停房间（`TestMOBAActiveRoundCommitBeforeBroadcastAndUnknownStopsRoom`） | 权威提交成功后回复丢失 | 广播只在权威提交后发出；提交结果未知时房间停止、不发这一帧、之后的 Tick 被拒；`resume` 后旧会话与已提交帧的输入被拒，`replay` 从帧 1 补齐，帧号接着走 |
 | 交接隔离旧宿主（`TestMOBARoundHandoffFencesOldHostAndKeepsPlayerSID`） | 2000 → 2001 交接 | 旧宿主下一次提交在权威实体锁内被拒、不广播；过期的交接请求被拒；错 sid 不能绑定；同一已提交帧重放不重复追加，改过内容的同号帧被拒；成员与 sid 不变 |
 | 原服奖励部分投递（`TestMOBAFiveVFiveAwardPartialDeliveryReplayAndIdentity`） | 先发三人，再整队重发两遍并确认 | 资产与回执只计一次；换胜者、发给别的 Player 都被拒 |
@@ -375,7 +376,11 @@ flowchart LR
 
 #### 5.7 重连、宿主代际与交接
 
-Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFrames`（64），框架追帧只覆盖最近 64 帧；更早的帧由业务的 `replay` 从持久日志分页补（每页至多 `lockstep.MaxBroadcastFrames` = 64 帧），客户端仍经 `FrameAssembler` 连续应用。这是夹具的选择——框架缺省窗口仍是 3600 帧（§6），历史裁剪后仍不自动快照重同步。`HostEndpoint` 用十个固定绑定槽：新 SessionID 绑定替换旧的，旧连接的输入被拒，旧连接迟到的 disconnect 不拆新绑定。
+Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFrames`（64），框架追帧只覆盖最近 64 帧；更早的帧由业务的 `replay` 从持久日志分页补（每页至多 `lockstep.MaxBroadcastFrames` = 64 帧），客户端仍经 `FrameAssembler` 连续应用。这是夹具的选择——框架缺省窗口仍是 3600 帧（§6）。
+
+框架 2026-10-20 起支持快照恢复（Match 配 `SnapshotProvider` 后越界改发服务器参考模拟的检查点，[指南](guide/04-sync.md#落后的会话怎样回来追帧快照或自动)），十客户端 KCP 场景已用 Arena 检查点验收（§4.4）。**Room 接快照来源：接入进行中（另行实施，维护者 2026-10-20 决定接入）**。难点在于 Room 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 strict 提交成功后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，不加约束就会绕过“先提交、再广播”这道门、发出尚未提交的帧，所以要先有“只发已提交的页 / 块”的门。落地之前，持久对局里窗口外的玩家仍由业务 `replay` 从持久日志补齐。
+
+`HostEndpoint` 用十个固定绑定槽：新 SessionID 绑定替换旧的，旧连接的输入被拒，旧连接迟到的 disconnect 不拆新绑定。
 
 宿主代际是业务 Epoch：管理入口以当前 HostSID / Epoch 提交 `handoff`（换宿主）或 `resume`（同宿主重启），Epoch 加 1；之后旧宿主的提交在权威实体锁内被拒，它暂存的广播不会发出。新宿主查询 Round 后用 `RecoverRoom` 按已提交帧重建 Match、按新 Epoch 重新绑定。宿主 SID 相同不代表同一次进程生命周期，重启必须 `resume`。交接结果未知时查询原记录再处理。
 
@@ -387,10 +392,10 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 
 ### 6. 网络、恢复和反作弊边界
 
-- **历史窗口**：`HistoryRetainFrames` 缺省自动保留 3600 帧（60Hz 下 60 秒），按“允许断线秒数 × 逻辑帧率”自行配置（[指南：历史保留窗口](guide/04-sync.md#长局如何控制内存历史保留窗口)）。起点早于窗口的追帧返回 `ErrCatchupUnservable`，并经可靠通道通知客户端终止本场；框架不做全量状态重同步（[指南：追帧越界](guide/04-sync.md#追帧越界明确失败不自动重同步)）。双英雄与十客户端 KCP 场景都用缺省窗口，600 帧小于它，客户端能从帧 1 追帧；5v5 的 Room 把窗口设为 64 帧，更早的帧由业务持久日志补（§5.7）。更长的对局要么调大窗口，要么由业务设计检查点 / 输入日志，不能把已裁掉的帧补回来。
+- **历史窗口**：`HistoryRetainFrames` 缺省自动保留 3600 帧（60Hz 下 60 秒），按“允许断线秒数 × 逻辑帧率”自行配置（[指南：历史保留窗口](guide/04-sync.md#长局如何控制内存历史保留窗口)）。起点早于窗口时按 `MatchConfig.Recovery` 处理（[指南：越界的处理](guide/04-sync.md#越界的处理按恢复方式区分)）：没配快照来源（catchup）返回 `ErrCatchupUnservable` 并经可靠通道通知客户端终止本场；配了 `SnapshotProvider`（零值即 auto）改发服务器参考模拟的检查点快照，客户端恢复后从检查点帧 +1 续帧。双英雄与十客户端追帧场景用缺省窗口，600 帧小于它，客户端能从帧 1 追帧；十客户端快照场景把窗口设为 64 帧、配 Arena 检查点，验证越界经快照回来；5v5 的 Room 把窗口设为 64 帧，接快照来源正在另行实施，落地前更早的帧由业务持久日志补（§5.7）。更长的对局要么调大窗口，要么配快照来源，要么由业务设计检查点 / 输入日志；已裁掉的帧本身补不回来。
 - **活动对局恢复**：双英雄入门只验证逻辑快照与恢复后的连续性。5v5 夹具把输入帧日志与参考快照 strict 提交到固定权威的 Round，再广播；恢复的是 strict 已确认的帧（真实进程 SIGKILL 演练见 §11），宿主没提交成功的输入要由客户端重发。框架本身没有活动对局持久化的默认实现。
 - **分歧**：`ReportHash` 发现同帧分歧，`NoMajority` 明确表示没有多数。相同的 hash 不证明客户端没有作弊；参考模拟、服务器准入、权限、配置版本、随机种子与输入审计要按实际对局方案确定。
-- **传输与追帧背压**：追帧的限速依赖可靠通道在链路慢时让发送变慢——KCP / QUIC 窗口满了就阻塞；嵌入 TCP 用 `lockstep.TCPSender`，可靠通道等写出、实时通道只准入（[指南：经嵌入 TCP 追帧](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)）。生成 game-demo 的战斗房间同样经 `TCPSender`（2026-10-20）。独立 Gate 两条通道都只做准入，追帧不随链路放慢（维护者 2026-10-20 决定暂不做，需 Gate 写出回执），见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“Lockstep 追帧链路背压（独立 Gate）”。
+- **传输与追帧背压**：追帧的限速依赖可靠通道在链路慢时让发送变慢——KCP / QUIC 窗口满了就阻塞；嵌入 TCP 用 `lockstep.TCPSender`，可靠通道等写出、实时通道只准入（[指南：经嵌入 TCP 追帧](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)）。生成 game-demo 的战斗房间同样经 `TCPSender`（2026-10-20）。独立 Gate 两条通道都只做准入，追帧不随链路放慢（维护者 2026-10-20 决定暂不做，需 Gate 写出回执），见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“Lockstep 追帧链路背压（独立 Gate）”。快照分块走同一条可靠通道：嵌入 TCP / KCP / QUIC 随链路放慢，限速链路上 4 MiB 快照也能传完；独立 Gate 按 `UnpacedBytesPerTick` 固定节流，快照大、链路慢时会被 Gate 断开并在每次重连后从头重传，配置建议见[指南](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)与[限速链路演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)。
 - **KCP 的支持范围**：`nettransport` 提供 KCP 传输（`ListenKCP` / `DialKCP` / `KCPTransport`），`roost project new ... -features nettransport-kcp` 只生成装配函数（`roost help replication`）；监听、握手鉴权、密钥与 Session 绑定由宿主自己写。玩家接入层（player TCP、独立 Gate）只走 TCP，Gate 不提供 UDP / KCP 承诺（[GATEWAY §4](GATEWAY.md#4-synclockstep-与广播)）。本例 KCP 会话用固定测试密钥与固定绑定，不是真实账号鉴权。
 - **容量与平台**：本机 KCP / TCP 回归不代表 5v5 目标负载、真实客户端引擎、移动网络或跨数据中心。Tick 预算、分位延迟、密集技能、断线长稳及回放存储要另测。
 
@@ -403,7 +408,7 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 | 客户端报的胜负 / hash 一致就能发奖 | 胜负与摘要只取服务器参考模拟；hash 只用于发现分歧 |
 | Lockstep 的输入去重能防长期重放 | 只在 `ReplayHorizon` 内有效；业务自己限制迟到帧数，资产重放靠结算实体上的持久事实 |
 | `Tick` 报错就是这一帧没切出 | 只有 `ErrMatchClosed` 不切帧；其他错误是发送 / 追帧失败，帧已在历史里，参考模拟照样应用 |
-| 断线多久都能追帧 | 只能追保留窗口内的帧，越界明确失败，不自动重同步 |
+| 断线多久都能追帧 | 只能追保留窗口内的帧；越界时没配快照来源就明确失败，配了快照来源（服务器参考模拟的检查点）才经快照回来 |
 | 每帧把局内状态写进 DAO 才安全 | 局内状态由输入序列确定；持久的是结算事实。需要崩溃续赛时另行设计快照与输入日志 |
 | 结算每次重试都可以换一个新的结算 ID | 结算 ID 开局时分配并保留；换 ID 就绕开了幂等记录 |
 | 用了 KCP 就有了玩家接入与鉴权 | KCP 只是传输；监听、握手鉴权和 Session 绑定由宿主实现，接入层只提供 TCP |
@@ -436,11 +441,11 @@ Room 里的 Match 把 `HistoryRetainFrames` 设为 `lockstep.MinHistoryRetainFra
 bash scripts/test-moba-generated.sh
 ```
 
-按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 26 条顶层 race 场景（§4.4 列前 25 条，第 26 条见下）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
+按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 26 条顶层 race 场景（§4.4 全部列出）且无 skip，随后对消费者 build / vet，执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MOBA_KEEP=1` 时保留。
 
 - **证明（双英雄 12 条）**：生成的 DAO / Entity / 多实体 Sender 与 Nest 在结算并发重放、身份冲突、拒绝回滚、无胜者终态下的事务行为；框架 `Match` / `Sequencer` / `FrameAssembler` 在会话身份、输入重放与窗口、冗余去重、断线追帧、旁观者、历史过期、`NoMajority` 下的行为；`service/match` 内存存储的排队、取消、过期与并发 Commit 幂等；一条真实 loopback KCP 链路上的丢包、追帧与三方摘要收敛。
 - **证明（5v5 14 条）**：十人成局与准备状态机；三路规则、日志重算拒绝被改的快照 / 规则版本 / 种子；十个 KCP 客户端在一次可靠追帧（缺口第 3～8 帧，Match 缺省历史窗口）后与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup`）；十个 KCP 客户端中两人（各属一队）在第 40 帧后断线、超过 4 个历史窗口（窗口 64 帧）后换新会话重连，照常从缺的第一帧请求追帧，Match 以服务器参考模拟的 Arena 检查点（`ArenaCheckpoints`，每 16 帧发布，实现 `SnapshotProvider`）为快照来源、`Recovery` 零值即 auto，两人共用一次取快照、各自 `RestoreArena` 并核对状态 hash、从检查点帧 +1 续帧到头部，局末十人与服务器参考同摘要（`TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect`；去掉快照来源时同一请求报 `catch-up range trimmed from history: from 41, history starts at 232`）；生成的 BattleRound / BattleDirectory / Player Sender 与 Nest 在提交后广播、提交结果未知停房间、`resume` / `handoff` 代际隔离、帧与快照 undo、目录并发只分配一局、奖励部分投递重放、回执账本满后拒绝上的行为；Room 的有界邮箱与排空；超过 64 帧后从持久日志分页补齐（in-process，到第 100 帧）。
-- **不证明**：提交器是替身，不含文件 WAL 与 Mongo；除三条 KCP 场景外，网络由记录器代替，宿主与权威在同一进程直接调用 Sender、不经 RPC；匹配不经服务 RPC、Redis 存储与认证；KCP 会话是固定测试绑定，不是真实账号鉴权；没有经 handler 跑满 600 帧，也不测每帧提交的耗时；单进程，不含跨机网络与目标负载。快照恢复只在 KCP 场景直接驱动的 Match 上验收：持久对局的 `Room` 仍不配可靠通道与快照来源（它的广播要等权威提交后才发，追帧页与快照分块走可靠通道会绕过这道门，接法要另行设计），窗口外的玩家照旧从持久日志分页补齐；Arena 快照只有几 KB、一块传完，限速链路上的大快照见 [限速链路演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)。
+- **不证明**：提交器是替身，不含文件 WAL 与 Mongo；除三条 KCP 场景外，网络由记录器代替，宿主与权威在同一进程直接调用 Sender、不经 RPC；匹配不经服务 RPC、Redis 存储与认证；KCP 会话是固定测试绑定，不是真实账号鉴权；没有经 handler 跑满 600 帧，也不测每帧提交的耗时；单进程，不含跨机网络与目标负载。快照恢复只在 KCP 场景直接驱动的 Match 上验收：持久对局的 `Room` 接快照来源正在另行实施（它的广播要等权威提交后才发，追帧页与快照分块走可靠通道会绕过这道门，要先有“只发已提交的页 / 块”的门，§5.7），落地前窗口外的玩家照旧从持久日志分页补齐；Arena 快照只有几 KB、一块传完，限速链路上的大快照见 [限速链路演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)。
 
 ### 11. 真实 WAL / Mongo / NATS 进程演练
 

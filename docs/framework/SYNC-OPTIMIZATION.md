@@ -10,7 +10,7 @@
 | AOI | 事件归集、分类重算、有界工作区、候选过滤与提前结束 | 小批量不保证并行更快，集中热点仍需目标环境验证 |
 | Relation | 反向索引、重复 Set 工作区、QueueRelationDelta 增量入口 | 业务需显式使用增量入口；退出重加存在已记录的耗时代价 |
 | OnChange | 可配置固定合批窗口 | 默认 0；开启后增加等待，周期检查可提前触发 |
-| Lockstep | 广播名单缓存、滚动历史裁剪与容量回收；默认自动保留窗口（3600 帧）与追帧失败通知（2026-10-15） | 窗口按允许断线时长 × 帧率核对；越界追帧明确失败、不自动重同步 |
+| Lockstep | 广播名单缓存、滚动历史裁剪与容量回收；默认自动保留窗口（3600 帧）与追帧失败通知（2026-10-15）；全量快照恢复（2026-10-20） | 窗口按允许断线时长 × 帧率核对；没配快照来源时越界追帧明确失败，配了时越界改发业务快照 |
 | 玩家 Controller | 自动补齐缺少的方法、保留已有业务、修复 typed nil 响应 | 业务编写方法内容，生成器不会代办 Entity 操作 |
 
 这里的完成范围不等于全框架零缺陷，也不等于生产验收完成。配置和代码示例见 [Sync 使用指南](guide/04-sync.md)，玩家协议接入见 [Controller 教程](PLAYER-ACCESS.md)。后文保留各次改动的基线、测量和失败样本，数字只适用于对应场景，不作为当前待办列表。
@@ -21,10 +21,11 @@
 | --- | --- | --- |
 | OnChange 合批 | 根据延迟要求决定是否设置 on_change_batch_window；0 保持即时唤醒 | 部署配置与预期一致，功能验证中最终状态和版本连续正确 |
 | Relation 增量 | 已知新增/移除成员时使用 QueueRelationDelta；完整列表仍可使用 QueueRelation | 通过正式提交入口，回滚不发布，退出重建不被旧事实影响 |
-| Lockstep 保留 | 核对默认 3600 帧（60Hz 60 秒 / 30Hz 120 秒）是否覆盖允许的断线时长，不够就按“秒 × 帧率”配置 HistoryRetainFrames；需要整局回放时独立复制并持久化，或配置 RetainFullHistory 自行裁剪 | 正常追帧范围仍可服务；客户端收到追帧失败后有业务处理（踢出、回大厅或开新局）；`lockstep.catchup.unservable.total` 符合预期 |
+| Lockstep 保留 | 核对默认 3600 帧（60Hz 60 秒 / 30Hz 120 秒）是否覆盖允许的断线时长，不够就按“秒 × 帧率”配置 HistoryRetainFrames；需要整局回放时独立复制并持久化，或配置 RetainFullHistory 自行裁剪 | 正常追帧范围仍可服务；客户端收到恢复失败后有业务处理（踢出、回大厅或开新局）；`lockstep.catchup.unservable.total` 符合预期 |
+| Lockstep 快照恢复 | 断线可能超过窗口时提供 `SnapshotProvider`（服务器参考模拟发布检查点），Recovery 零值即 auto；按快照大小与最低带宽核对 `MaxBytes`、每 Tick 预算（独立 Gate 下尤其要按[实测建议](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)配置）；客户端接 restore 并核对状态 hash | 越界重连经快照回到头部、状态 hash 一致；`lockstep.snapshot.failed.total` 符合预期 |
 | 版本升级 | 发布时按维护流程执行；业务固定新版本并编译消费者 | 新配置/API 随正式版本交付，不能只升级文档而仍使用旧 tag |
 
-Lockstep 默认保留 3600 帧，依据见[使用指南](guide/04-sync.md#长局如何控制内存历史保留窗口)；它不是适合所有游戏的唯一值。过期追帧返回 ErrCatchupUnservable 并给客户端发追帧失败通知后，业务必须明确选择恢复方案，例如有完整状态恢复能力时重新入场，否则退出对局并给出原因；框架不会凭输入历史自动生成权威快照（D1 方案 B 留待具体游戏需求）。hash 报告默认跟随同一窗口；判定窗口更短时宿主可再调用 TrimHashReports。
+Lockstep 默认保留 3600 帧，依据见[使用指南](guide/04-sync.md#长局如何控制内存历史保留窗口)；它不是适合所有游戏的唯一值。没配快照来源（catchup 模式）时，过期追帧返回 ErrCatchupUnservable 并给客户端发恢复失败通知，业务必须明确选择处理方式（重新入场或退出对局并给出原因）；配了 `SnapshotProvider` 时越界改发业务快照（[快照恢复](#lockstep-快照恢复2026-10-20)）。框架不会凭输入历史自动生成权威快照，快照内容来自业务的服务器参考模拟。hash 报告默认跟随同一窗口；判定窗口更短时宿主可再调用 TrimHashReports。
 
 ## 尚待目标环境验收
 
@@ -331,7 +332,7 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `a6376934`。
 
-**做了什么**：`MatchConfig.HistoryRetainFrames` 默认 3600 帧自动保留（`RetainFullHistory` 关闭，正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64）；`Tick` 在发出本次追帧页之后裁历史，hash 报告按 64 帧步长跟随窗口。越界追帧在 `StartCatchup` 时即返回 `*CatchupUnservableError`，下一次 `Tick` 经可靠通道发 C9 v1 追帧失败通知；Go `FrameAssembler` / `robot.LockstepBot` 与 C# `LockstepAssembler` / `LockstepClient` 收到后终止本场，不再请求追帧。使用说明见[使用指南](guide/04-sync.md#追帧越界明确失败不自动重同步)。
+**做了什么**：`MatchConfig.HistoryRetainFrames` 默认 3600 帧自动保留（`RetainFullHistory` 关闭，正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64）；`Tick` 在发出本次追帧页之后裁历史，hash 报告按 64 帧步长跟随窗口。越界追帧在 `StartCatchup` 时即返回 `*CatchupUnservableError`，下一次 `Tick` 经可靠通道发 C9 v1 追帧失败通知；Go `FrameAssembler` / `robot.LockstepBot` 与 C# `LockstepAssembler` / `LockstepClient` 收到后终止本场，不再请求追帧。使用说明见[使用指南](guide/04-sync.md#越界的处理按恢复方式区分)。2026-10-20 起 C9 v1 已被 v2（带失败原因）取代，越界在 auto / snapshot 模式下改走快照（下一节）。
 
 **裁剪放在追帧之后的原因**：若在切帧后立即裁剪，从当前最早帧开始的追帧会在本次 `Tick` 的追帧阶段就被判定越界，窗口实际比配置少一帧且“从最早帧追”永远失败（实现时 `TestMatchAutoRetentionOvertakesStalledCatchup` 首版即因此失败）。页面在发出前已编码成独立字节，之后裁剪不影响在途页。
 
@@ -354,3 +355,27 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 **未验证**：真实网络下断线超过窗口的端到端演练、Unity/IL2CPP 上的 C# 行为、生成工程（demo 战斗只有 45 帧，不会触发裁剪）。
 
+
+## Lockstep 快照恢复（2026-10-20）
+
+维护者 2026-10-20 决定把 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B 立项，设计（`fe9453dd`）同日批准、§12 十三个决定点全部按推荐，分五期实施：P1 服务端核心（`f33e1b01`、`a02c3999`）、P2 Go 客户端（`69fa9e79`）、P3 C# SDK（`f03a6602`）、P4 示例与验收（`8781b32a`）、P5 现行文档。设计、各期实施记录与偏差见 [FEATURE-2026-10-20-lockstep-snapshot-recovery](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)；用法见[使用指南](guide/04-sync.md#落后的会话怎样回来追帧快照或自动)，实现契约见 [impl/04-sync §2D](impl/04-sync.md#2d-lockstep-快照恢复的实现契约)。
+
+**做了什么**：`MatchConfig.Recovery`（catchup / snapshot / auto，零值在配了 `Snapshots.Provider` 时为 auto，否则为 catchup）与 `SnapshotConfig`；业务快照来源 `SnapshotProvider` 在 Match 自己的 goroutine 上调用、同一局至多一次在途、多会话共享，`Tick` 只非阻塞收结果；快照以 `CA 01` 分块经可靠通道下发（首块带 SHA-256 摘要与可选状态 hash），每会话一批在途，随链路放慢的通道按 `BytesPerTick`、只准入的通道（独立 Gate）按 `UnpacedBytesPerTick` 节流（`nettransport.ReliablePacer`）；快照之后从快照帧 +1 续发历史页；恢复期间历史钉住，最多多留 `PinFrames` 帧；恢复失败通知 C9 升 v2（带原因）。Go `FrameAssembler.Receive` / `ResumeAfterSnapshot`、`robot.LockstepBot.Restore`，C# `LockstepClient` 的 `restore`。P5 按维护者追加决定，恢复进行中的会话被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`（`TestMatchSnapshotRecoveryDetachIsCounted`；修前同一用例报 `... = 0 after detaching a session waiting, want 1`），独立 Gate 下“断开—重连—从头重传”的循环因此在失败指标上可见。
+
+**为什么不改缺省窗口**：快照让窗口不再决定“断线多久还能回来”，但 3600 帧在 10 席下只有约 1.5MB / 局，缩短窗口省下的内存少，却会把更多短断线推到更贵的快照，并依赖业务的检查点间隔（设计 §10，§12 第 9 条）。缺省仍是 3600 帧，等有游戏按真实断线分布与快照大小测过再定。
+
+**热路径**：没有恢复中会话时 `Tick` 只多一次空 map 判断；P1 前后 `BenchmarkHistoryRollingWindow` 与 Match Tick 的 benchstat 无差异（[样本](../performance/benchmarks/lockstep-snapshot-p1-20261020/benchstat.txt)）。
+
+**修前现行行为**（新功能没有修前缺陷，取同一场景在旧代码或去掉快照来源时的表现，原文）：
+
+```text
+TestMatchAutoRecoveryServesOutOfWindowRequestWithSnapshot：out-of-window request with a snapshot provider (auto): lockstep match: catch-up range trimmed from history: from 5, history starts at 20
+Example_snapshotRecovery（去掉 Provider）：panic: lockstep match: catch-up range trimmed from history: from 21, history starts at 137
+MOBA（去掉 Provider）：player 2 3 from frame 41: lockstep match: catch-up range trimmed from history: from 41, history starts at 232
+```
+
+**验收**：包内判定表、Provider 线程、错误语义、分块节奏与重发、钉住、长局与两个 fuzz（`snapshot_test.go`）；真实回环 TCP 4 MiB 快照与 bot 断线 4 个窗口后恢复（`tcp_test.go`）；`Example_snapshotRecovery`；MOBA 十个 KCP 客户端中两人断线超过 4 个窗口后经 Arena 检查点恢复、局末同摘要；生成工程 C# 客户端经真实 TCP 断线 200 帧后重新登录、经快照恢复；toxiproxy 限速演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate 在 64 KB/s（1 MiB）与 256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连从头再传，未恢复。
+
+**行为变化与升级**：配了 Provider 的 Match 越界不再返回 `*CatchupUnservableError`；C9 v1 删除、新增 CA 01 下行消息，旧客户端 SDK 把它们当坏包终止，升级需同时更新服务端与 Go / C# 客户端（项目未上线，不做兼容）。
+
+**未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room`（MOBA 夹具）接快照来源（维护者 2026-10-20 决定接入，另行实施中）。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。

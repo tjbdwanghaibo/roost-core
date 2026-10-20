@@ -52,7 +52,7 @@ PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续�
 | 接入 | 收不下时 |
 | --- | --- |
 | 嵌入 TCP | 出站队列满或 `write_timeout` 内写不出：接入层当场关闭该连接（下一节）；全进程驻留预算 `player_access.tcp.outbound.resident_bytes` 耗尽不关连接，见下方例外 |
-| 独立 Gate 的 Gate 侧 | 任何入队失败（每连接出站队列满，也包括 Gate 自己的 `outbound.resident_bytes` 耗尽）、帧超过 `outbound.max_age`、序号不连续：关闭该连接 |
+| 独立 Gate 的 Gate 侧 | 任何入队失败（每连接出站队列满，也包括 Gate 自己的 `outbound.resident_bytes` 耗尽）、帧超过 `outbound.max_age`、序号不连续、写 socket 时一帧写到一半写期限到期：关闭该连接。Lockstep 快照在慢链路上被断开实测就是最后一种（[guide/04-sync §6](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)） |
 | Game Ingress（Game 侧可靠队列） | 异步发送失败、帧超过 `outbound.max_age`：退役绑定并通知 Gate 关闭连接。入队背压（这条绑定的队列满）只把错误交还推送方：**Entity Sync 推送**由推送方关闭该玩家的全部连接（`wiring/selfsync.PushPlayerFrame`，自身视图与 game-demo 场景共用）；PB 推送仍由业务按返回的错误处理 |
 
 **例外：Game 进程的驻留预算耗尽**（Game Ingress 的 `outbound.resident_bytes`，对应 `nettransport.ErrResidentBudgetExhausted`，它同时满足 `ErrReliableBackpressure`）不是哪个连接慢：Entity Sync 推送交还 `entitysync.ErrRetryLater`，Manager 整轮重试、保留脏状态，不断开任何人。预算不会被停滞的绑定长期占住——每帧从入队起最多驻留 `outbound.max_age`，到期发不出去的绑定被关闭、释放预算；持续耗尽只在健康流量持续超过发送能力时出现，代价是同步延迟上升（细节与放大见 [impl/04-sync §2C](impl/04-sync.md#2c-自身视图selfview的生命周期)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）。只有同一玩家的部分连接因预算拒收时仍按“收不下”断开：收下这一帧的连接会把重试的同一 tick 当旧包丢掉。Gate 侧自己的驻留预算耗尽目前仍关闭连接，没有这个例外（KNOWN-LIMITS）。嵌入 TCP 的全进程驻留预算（`player_access.tcp.outbound.resident_bytes`，`gateway.ErrResidentBudgetExhausted`，2026-10-20 起）用同一个例外：`PushPlayerFrame` 把两个哨兵都当整轮重试，区别是停读连接占着的预算要到每连接上限或 `write_timeout` 才归还，没有 `max_age`（下一节）。
@@ -63,7 +63,7 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 
 嵌入 Game 的 TCP 没有 Gate 那一跳，出站同样有界、异步：每个连接一条出站队列和唯一写协程（[tcp_session.go](../../infra/network/gateway/tcp_session.go) 的 `enqueue` / `writeLoop`），PB 推送、Sync、Lockstep、读循环的回包与心跳 ACK 按入队顺序写出。`TCPRuntime.Push*` 只入队：返回 nil 表示该连接已准入，不表示已写出；准入只取一把不跨 I/O 的队列锁、不等 socket，所以 `Push*` 不需要 `fctx.BlockingError` 守卫，业务 worker、场景 Sync Flush、Lockstep Tick 都可以直接调用。payload 入队时复制，调用返回后可复用。
 
-唯一例外是 `TCPRuntime.PushLockstepSessionWritten`（2026-10-16，`tcpSession.pushWritten`）：同一条队列，入队后等这一帧被写协程写出，只给 Lockstep 追帧页用（`lockstep.TCPSender` 的可靠通道），让追帧随链路速度放慢。返回 nil 表示已写进 socket；写出失败或连接关闭立即返回 `errConnectionBroken`；ctx 结束时这一帧若还没被写协程取走就撤回（不写出、归还额度、推送序号不留空洞），已取走的照常写完，调用方都得到 ctx 的错误，连接不因此关闭。它不走读循环回包的直写快路径：调用方截止早于 `write_timeout` 时直写写出半帧会关闭连接。实时帧（Tick 的当前帧广播、场景 Sync）不得用它，见 [guide/04-sync §6](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
+唯一例外是 `TCPRuntime.PushLockstepSessionWritten`（2026-10-16，`tcpSession.pushWritten`）：同一条队列，入队后等这一帧被写协程写出，只给 Lockstep 可靠通道用（`lockstep.TCPSender` 的 `SendReliable`：追帧页、快照分块与恢复失败通知），让追帧与快照随链路速度放慢。返回 nil 表示已写进 socket；写出失败或连接关闭立即返回 `errConnectionBroken`；ctx 结束时这一帧若还没被写协程取走就撤回（不写出、归还额度、推送序号不留空洞），已取走的照常写完，调用方都得到 ctx 的错误，连接不因此关闭。它不走读循环回包的直写快路径：调用方截止早于 `write_timeout` 时直写写出半帧会关闭连接。实时帧（Tick 的当前帧广播、场景 Sync）不得用它，见 [guide/04-sync §6](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
 
 慢连接策略与独立 Gate 一致：一帧入队会让该连接的“排队 + 在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节时，拒绝这一帧并当场关闭该连接（`player_tcp_outbound_overflow_total`），推送方得到 `errConnectionBroken` 并注销它；一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败，由写协程关闭连接（`player_tcp_write_error_total`）。“在途”是写协程已从队列整批取走、还没写完的帧：帧数与字节都在入队时计入、写出一帧后才扣减，所以两个上限就是一条连接最多驻留的量（停读连接最多收下 1024 帧，第 1025 帧被拒）；读循环直写快路径上的那一帧不经队列、不计入。队列里剩下的帧随连接丢弃，客户端重连后恢复全量/追帧。因此逐会话串行推送的调用方不会被一个停读客户端每轮拖住 `write_timeout`（修复前默认每次 Flush / Tick 卡 5s）。每连接上限不开放配置键。帧数上限 1024 是维护者 2026-10-16 的决定：场景 Sync / Lockstep 每次每连接只推几帧，上千帧突发不现实；需要更大突发时再评估。
 

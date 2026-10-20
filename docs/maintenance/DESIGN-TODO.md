@@ -4,7 +4,7 @@
 
 | # | 事项 | 状态 |
 | --- | --- | --- |
-| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施；2026-10-20 方案 B（全量快照恢复）立项，设计已批准（§12 全部按推荐），实施中 |
+| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施；2026-10-20 方案 B（全量快照恢复）立项并批准（§12 全部按推荐），已实施（P1～P5） |
 | D2 | SyncBus 有限投递的兜底 | 维护者 2026-10-15 决定 A，已实施 |
 | D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 维护者 2026-10-15 决定 A，已实施 |
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
@@ -22,7 +22,7 @@
 
 ## D1 Lockstep 历史的保留与过期策略
 
-**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）当时不做；**维护者 2026-10-20 决定立项**（恢复方式做成 Match 选项 catchup / snapshot / auto，快照来源由业务经接口提供），设计见 [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)（维护者 2026-10-20 批准，§12 十三个决定点全部按推荐；按 §11 分期实施中）。
+**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）当时不做；**维护者 2026-10-20 决定立项**（恢复方式做成 Match 选项 catchup / snapshot / auto，快照来源由业务经接口提供），设计见 [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)（维护者 2026-10-20 批准，§12 十三个决定点全部按推荐）。**方案 B 已实施（P1～P5）**，结果见下文“方案 B 实施结果”。
 
 **实施结果**：
 - `MatchConfig.HistoryRetainFrames` 默认 `DefaultHistoryRetainFrames` = **3600 帧**（60Hz 下 60 秒、30Hz 下 120 秒；依据：重连窗口按 60 秒、常见逻辑帧率上限 60Hz 换算，10 席 × 8 字节输入约 1.5MB / 局）。`RetainFullHistory`（-1）显式关闭，退回宿主手动 `TrimHistory` / `TrimHashReports`；正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64（Sequencer 视为仍在线的落后量，同时覆盖一整页追帧与最大冗余深度），不满足时 `NewMatch` 返回 `ErrMatchConfigInvalid`。
@@ -31,7 +31,15 @@
 - 客户端表现统一为“追帧失败、交由业务决定踢出或重开”，不自动重同步：Go `FrameAssembler.Ingest` 返回 `*CatchupUnservableError`、`robot.LockstepBot` 终止；C# `LockstepClient` 抛 `LockstepCatchupUnservableException` 并终止实例。
 - 一并修复：起点 0 原先绕过越界检查，裁剪后从 0 追帧会得到一段有洞的帧流且无错误。
 
-说明与证据见 [Sync 使用指南](../framework/guide/04-sync.md#追帧越界明确失败不自动重同步)、[SYNC-OPTIMIZATION 末节](../framework/SYNC-OPTIMIZATION.md#lockstep-自动保留与追帧失败通知2026-10-15)。仍待：真实网络下断线超过窗口的端到端演练（见 [KNOWN-LIMITS](KNOWN-LIMITS.md)“Lockstep历史”）。
+说明与证据见 [Sync 使用指南](../framework/guide/04-sync.md#越界的处理按恢复方式区分)、[SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md#lockstep-自动保留与追帧失败通知2026-10-15)。上面的“越界即失败”现在只是 catchup 模式（没配快照来源时的缺省）的行为；C9 已升 v2。
+
+**方案 B 实施结果**（2026-10-20，P1 `f33e1b01` / `a02c3999`、P2 `69fa9e79`、P3 `f03a6602`、P4 `8781b32a`、P5 文档与 detached 计数）：
+- `MatchConfig.Recovery`（catchup / snapshot / auto；零值在配了 `Snapshots.Provider` 时为 auto，没配仍是 catchup，现有工程行为不变）与 `SnapshotConfig`（阈值缺省 0、上限 4 MiB / 硬上限 64 MiB、分块 16 KiB、每 Tick 64 KiB / 只准入 16 KiB、取快照 2s、钉住缺省一个窗口）。
+- 业务快照来源 `SnapshotProvider`：Match 自己的 goroutine 调用、`Tick` 不等、每局至多一次在途、多会话共享；快照以 CA 01 分块经可靠通道下发（SHA-256 摘要 + 可选状态 hash），之后续发历史页；恢复期间钉住历史；失败通知 C9 v2 带原因（history_trimmed / snapshot_unavailable / snapshot_too_large / recovery_expired）。
+- Go `FrameAssembler.Receive` / `ResumeAfterSnapshot`、`robot.LockstepBot.Restore`；C# `LockstepClient` 的 `restore`；校验失败一律终止、不自动重试。
+- 指标 `lockstep.snapshot.total{reason}` / `bytes.total` / `failed.total{reason}`（含维护者 2026-10-20 追加的 `detached`）。
+- 验收：包内与真实回环 TCP、`Example_snapshotRecovery`、MOBA 十客户端 KCP 长断线恢复、生成工程 C# 端到端、toxiproxy 限速演练（嵌入 TCP 两档恢复；独立 Gate 慢链路上大快照被断开循环）。
+- 未做 / 后续：MOBA 持久对局 `Room` 接快照来源（维护者 2026-10-20 决定接入，另行实施中）；独立 Gate 写出回执；客户端上传快照；Unity / IL2CPP 实测。剩余边界见 [KNOWN-LIMITS](KNOWN-LIMITS.md#lockstep)，现行说明见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)。
 
 **原登记（2026-10-15）**：宿主不裁剪则内存随对局长度线性增长，裁得太激进则断线较久的玩家无法追帧，且“追不上时怎么办”没有框架级约定；可选 A 维持现状 + 文档、B 自动裁剪 + 全量重同步（需状态快照来源）、C 只加自动裁剪 + 明确错误。
 

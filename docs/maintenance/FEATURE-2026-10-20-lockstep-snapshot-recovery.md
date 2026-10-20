@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P2（Go 客户端）、P3（C# SDK）、P4（示例与验收）已实施（实施记录与偏差见 §14），P5（现行文档收口）未完成。
+**状态：已实施（P1～P5，维护者 2026-10-20 批准，§12 全部按推荐）。** 分期见 §11，实施记录与偏差见 §14。P5 同时实施了维护者 2026-10-20 的追加决定：恢复中被 Detach 计 `failed{reason="detached"}`（§14 P5）；MOBA 持久对局 `Room` 接快照来源已决定接入，另行实施中（§14 P4 第 1 条）。现行说明以 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动) 与 [impl/04-sync §2D](../framework/impl/04-sync.md#2d-lockstep-快照恢复的实现契约) 为准，本篇 §3～§10 是评审稿（§6.3 已按实测改写），与实现不同处以 §14 为准。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -300,14 +300,37 @@ sequenceDiagram
 
 ### 6.3 独立 Gate：只准入时的行为与风险
 
-`wiring/gate.Transport.SendReliable`（[transport.go:56](../../wiring/gate/transport.go)）经 `GameIngress.PushBound` 进 Game 侧有界队列，返回 nil 只表示 Game 本地准入；之后经 NATS 到 Gate 侧队列再写 socket，**写出后没有回执**。缺省限额（[config.go:55](../../infra/network/gateway/config.go)）：每绑定 32 条、2 MiB，`outbound.max_age` 250ms，Gate 侧队列满或积压超龄即关闭连接（[GATEWAY §4](../framework/GATEWAY.md#慢消费者跟不上就断开)）。
+本节在 P5 按 P4 的 toxiproxy 实测（[演练报告](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md) §3）改写；评审稿的写法（“链路低于 `UnpacedBytesPerTick × 帧率` 时 Gate 侧积压在约一秒内超过 `max_age` 250ms、关闭连接”）与实测不符，原文见 Git 历史 `fe9453dd`。
 
-本期在独立 Gate 下的行为：
+`wiring/gate.Transport.SendReliable`（[transport.go](../../wiring/gate/transport.go)）经 `GameIngress.PushBound` 进 Game 侧有界队列，返回 nil 只表示 Game 本地准入；之后经 NATS 到 Gate 侧队列再写 socket，**写出后没有回执**。`gate.Transport` 不实现 `nettransport.ReliablePacer`，Match 按只准入处理，每会话每 Tick 发 `UnpacedBytesPerTick`（缺省 16 KiB：30Hz 下约 492 KB/s，60Hz 下约 983 KB/s），这个预算就是发送速率。Game 侧准入失败（`ErrReliableBackpressure`）计一次恢复失败。
 
-- **节流靠固定预算，不随链路放慢**：可靠通道声明自己是否随链路放慢（新增可选接口，见下），不声明的按“只准入”处理，每会话每 Tick 只发 `UnpacedBytesPerTick`（推荐缺省 16 KiB：30Hz 下约 480 KiB/s，60Hz 下约 960 KiB/s）。Game 侧准入失败（`ErrReliableBackpressure`）计一次恢复失败。
-- **风险 1：慢链路被 Gate 断开并反复重来**。客户端下行带宽低于 `UnpacedBytesPerTick × 逻辑帧率` 时，Gate 侧积压在约一秒内超过 250ms，Gate 关闭连接；客户端重连后再请求，服务端再发快照，可能循环。框架能做的是计数（`lockstep.snapshot.failed.total{reason="abandoned"}` 与同一会话的重复快照次数）并在文档里要求：用独立 Gate 部署 Lockstep 的游戏按“最低支持下行带宽 / 逻辑帧率”的一半设置 `UnpacedBytesPerTick`，必要时调大 Gate 的 `outbound.max_age`。
-- **风险 2：快照挤占同一玩家的其他推送**：PB、Sync、Lockstep 共用每绑定 OutSeq 与有界出站，传输期间这名玩家的 Sync / PB 推送延迟上升。
-- **根本解法**仍是 Gate 写出 socket 后回执给 Game，让 `SendReliable` 能等写出——等有具体游戏用“Lockstep + 独立 Gate”时与追帧背压一起做（登记仍在 KNOWN-LIMITS）。
+**实测**（30Hz，框架、Gate、Match 参数全部缺省，每档最多重连 3 次，每次是新连接上的空客户端从第 1 帧请求）：
+
+| 快照 | 下行限速 | 结果 |
+| --- | --- | --- |
+| 1 MiB | 不限速 | 恢复（传输 2.1s） |
+| 1 MiB | 256 KB/s | 恢复（传输 4.1s，没有断开） |
+| 1 MiB | 64 KB/s | 三次都约 12.7s 后被 Gate 断开（收到 48/64 块），未恢复 |
+| 4 MiB | 不限速 | 恢复（传输 8.5s） |
+| 4 MiB | 256 KB/s | 三次都约 6.4s 后被 Gate 断开（收到 98/256 块），未恢复 |
+
+**结论**：
+
+1. **是否断开取决于快照大小、每 Tick 预算、链路速度三者，不只看速率**。发送快于链路时，超出的部分（约 `大小 × (1 − 链路 / 发送速率)`）先堆在 Gate 侧 socket 发送缓冲与沿途缓冲里：堆得下就传完（1 MiB / 256 KB/s 超出约 0.5 MB，低于预算却恢复了），堆不下就断开（4 MiB / 256 KB/s 超出约 2 MB；1 MiB / 64 KB/s 超出约 0.9 MB）。缓冲能吸收多少随系统与沿途设备变化，这是由两档对比得出的推断，没有单独测量缓冲占用。
+2. **断开发生在 Gate 写 socket 的期限到期，不是 `max_age` 积压规则**。Gate 日志 `gate closed binding after channel failure ... err="player tcp: connection cannot take the frame: writev ...: i/o timeout"`，`gate.channel.failure_total{phase="socket",role="gate"}` 每次 +1：Gate 往 socket 写一帧写到一半时写期限到期，按连接故障关闭（[tcp_session.go](../../infra/network/gateway/tcp_session.go) `writeFrame`：期限取 `write_timeout` 与调用方期限中较早者）。Gate 的调用方期限来自这一帧的发送预算（[gate_outbound.go](../../infra/network/gateway/gate_outbound.go) `writeOutbound`：`Budget.Context` 取包内剩余预算与 `outbound.send_timeout` 缺省 250ms 中较小者），按代码在缺省配置下它总早于 5s 的 `write_timeout`；但演练日志没有区分是哪一个期限，**具体是 5s `write_timeout` 还是单帧发送预算先到期，尚未确认**。两者都是“慢链路跟不上就断开”（[GATEWAY §4](../framework/GATEWAY.md#慢消费者跟不上就断开)）的同一类规则，结论不变。
+3. **每次重连从头重传**。Gate 断开后 Game 的 `OnClosed` 调 `DetachSession`，进行中的恢复随会话一起清掉；新连接是新会话、新传输编号，快照不续传。演练中三次连接的分块数逐字节相同，每次多发约 0.8～1.6 MB；客户端按现行 SDK 规则会一直重连重试，在同一位置被断开。
+4. **观测**：演练时（计数实施前）`lockstep.snapshot.failed.total` 三次都不变，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1（不分会话）。维护者 2026-10-20 决定 A：恢复进行中的会话被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`（P5 实施，§14），这个循环从此表现为 `failed{detached}` 与 `snapshot.total{out_of_window}` 同步增长。
+5. **风险 2：快照挤占同一玩家的其他推送**。PB、Sync、Lockstep 共用每绑定 OutSeq 与有界出站，传输期间这名玩家的 Sync / PB 推送延迟上升（未单独测量）。
+
+**给业务的配置建议（按实测）**：
+
+- 先估最大快照大小 S 和要支持的最低下行带宽 B（扣掉同一连接上 Sync / PB 的占用）。让快照发送速率 `UnpacedBytesPerTick × 逻辑帧率` 不高于 B，并留余量（例如取一半）；预算小于 `ChunkBytes`（缺省 16 KiB）时把 `ChunkBytes` 一起调小——每批至少发一块，否则速率降不到“一块 / Tick”以下。
+- 传输时长约 `S / (UnpacedBytesPerTick × 帧率)`，必须短于 `PinFrames / 帧率`（缺省 3600 帧，30Hz 下约 120 秒），否则 `recovery_expired`；传输期间这名玩家不收实时帧。
+- 1 MiB 级快照在链路略低于预算时实测能靠缓冲传完，但大快照不能指望缓冲；不要以“没超过预算”为准，按 S 与 B 一起算。
+- 调大 Gate 的 `write_timeout` / `outbound.send_timeout` 没有测过，不作为建议。
+- 做不到时：用嵌入 TCP / KCP / QUIC（实现 `ReliablePacer`，随链路放慢，演练中 64 KB/s 下 4 MiB 也能传完），或等 Gate 写出回执。
+
+**根本解法**仍是 Gate 写出 socket 后回执给 Game，让 `SendReliable` 能等写出——等有具体游戏用“Lockstep + 独立 Gate”时与追帧背压一起做（登记仍在 KNOWN-LIMITS）。业务侧说明同步在 [guide/04-sync §6](../framework/guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
 
 新增的可选接口（放 `framework/sync/nettransport`）：
 
@@ -625,11 +648,38 @@ C#：Unhandled exception. System.IO.IOException: Unable to read data from the tr
 
 与草案的偏差与说明：
 
-1. **MOBA 的快照来源接在 KCP 场景直接驱动的 Match 上，不接 `Room`**：`Room` 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 Sender 确认提交后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，会绕过“先提交、再广播”这道门（可能发出尚未提交的帧）。§8 已把“Room 是否改为 auto + 可靠通道、去掉业务 replay 分页”列为夹具自己的取舍、本期不强制；接法要另行设计，本期不做。
+1. **MOBA 的快照来源接在 KCP 场景直接驱动的 Match 上，不接 `Room`**：`Room` 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 Sender 确认提交后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，会绕过“先提交、再广播”这道门（可能发出尚未提交的帧）。§8 已把“Room 是否改为 auto + 可靠通道、去掉业务 replay 分页”列为夹具自己的取舍、本期不强制；接法要另行设计，本期不做。**维护者 2026-10-20 决定接入（选 B），涉及“只发已提交的页 / 块”的门，另行实施中。**
 2. **演练用共享隔离环境的 toxiproxy**（§9 表写的是 `mirror-local.sh` 私有实例）：按本期任务要求，持 `remote-acceptance.lock`、只建带 `lsp4-` 前缀的临时代理、用完删除，演练后代理列表与演练前相同。
 3. **独立 Gate 的断开方式与 §6.3 写法不同**：实测是 Gate 写 socket 时写期限到期（`player tcp: connection cannot take the frame: writev ...: i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是出站积压超过 `max_age` 250ms；是 5s `write_timeout` 还是该帧剩余发送预算先到期，这次没有区分（尚未确认）。“链路速度低于 `UnpacedBytesPerTick × 帧率` 即断开”也不准确：1 MiB / 256 KB/s 低于预算却传完了（超出部分被缓冲吸收），4 MiB / 256 KB/s 才断开。§6.3 的正文留给 P5 按实测改写。
-4. **框架看不出独立 Gate 下的反复重来**：Gate 断开后 Game 的 `OnClosed` 调 `DetachSession`，`Detach` 丢掉进行中的恢复时不计任何指标，`lockstep.snapshot.failed.total` 不动，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1（不分会话）。§6.3 写的“计数 `failed{abandoned}` 与同一会话的重复快照次数”现状只能间接看出后一项。是否在“恢复进行中被 Detach”时计一次失败（例如新原因 `detached`），交维护者决定。
+4. **框架看不出独立 Gate 下的反复重来**：Gate 断开后 Game 的 `OnClosed` 调 `DetachSession`，`Detach` 丢掉进行中的恢复时不计任何指标，`lockstep.snapshot.failed.total` 不动，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1（不分会话）。§6.3 写的“计数 `failed{abandoned}` 与同一会话的重复快照次数”现状只能间接看出后一项。是否在“恢复进行中被 Detach”时计一次失败（例如新原因 `detached`），交维护者决定。**维护者 2026-10-20 决定 A（计数），P5 已实施。**
 5. **嵌入 TCP 的“写出”是写进本机 socket 发送缓冲**：服务端认为恢复结束时，客户端可能还差 1 MB 以上（本机发送缓冲自动增长上限 4 MiB，加代理缓冲）；之后的实时帧排在这些字节后面，客户端在链路排空后才回到头部。没有断连、没有丢帧，只是慢链路玩家恢复后头几秒的实时延迟等于排空时间（推断，见演练报告 §2）。
 6. **C# 重连即新实例**：`LockstepClient` 绑定一个 `TcpSession`，重新登录后业务要新建实例，组装器从第 1 帧开始；窗口内会从第 1 帧追帧（业务须先把模拟状态重置到开局），越界才走快照。端到端用例走的是越界路径。P5 写 client README 时要讲清这一点。
 
 留给 P5：guide / impl 04、SYNC-OPTIMIZATION、client README、OBSERVABILITY、GATEWAY 的现行说明；MOBA-INTEGRATION 第一部分（§4.4 场景表加第 26 条、标题“二十五个”，§5.7 / §6 讲快照恢复与 `Room` 未接的原因），本期只改了第二部分验收；KNOWN-LIMITS“Lockstep 追帧链路背压（独立 Gate）”按演练实测补数据，本期只改了游戏接入验收表的 MOBA 行；§6.3 按上面第 3、4 条改写；D1 收口。
+
+### P5 现行文档收口（2026-10-20）
+
+把快照恢复写进现行文档，内容以当前源码与 P1～P4 的实际偏差为准：
+
+- [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)：恢复方式与判定表、`SnapshotConfig` 字段与缺省、快照来源与检查点写法（指向 `Example_snapshotRecovery`）、下发与钉住、失败与客户端表现、Go / robot / C# 的恢复接口与“重连即新实例”；原“追帧越界：明确失败，不自动重同步”改为[越界的处理：按恢复方式区分](../framework/guide/04-sync.md#越界的处理按恢复方式区分)；嵌入 TCP 与独立 Gate 两节补快照的实测与配置建议。
+- [impl/04-sync §2D](../framework/impl/04-sync.md#2d-lockstep-快照恢复的实现契约)：配置解析、会话状态机、取快照 goroutine 与共享、分块与重发、钉住、客户端重组、错误与指标、修改检查；契约第 3 条、文件与回归索引同步。
+- [SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md#lockstep-快照恢复2026-10-20) 新增快照恢复一节；[MOBA-INTEGRATION](../framework/MOBA-INTEGRATION.md) 第一部分 §4.4（二十六个场景，加第 26 条）、§5.7、§6、§7；[client README](../../client/README.md#快照恢复) 补 Go 客户端接口与重连即新实例；[OBSERVABILITY](../framework/OBSERVABILITY.md) 三条快照指标的口径；[GATEWAY](../framework/GATEWAY.md) 的 `PushLockstepSessionWritten` 用途；本篇 §6.3 按 P4 实测改写；[KNOWN-LIMITS](KNOWN-LIMITS.md#lockstep)、[DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略)、CHANGELOG 收口。
+
+**追加实施：恢复中被 Detach 计数**（维护者 2026-10-20 决定 A，回应 P4 第 4 条）。[match.go](../../framework/sync/lockstep/match.go) `dropCatchup`：会话处于快照恢复中（`snapshot != nil` 或 `recovered`，且不在失败通知待发阶段）时计 `lockstep.snapshot.failed.total{reason="detached"}`。`dropCatchup` 是 `Detach` / `DetachSession` / `DetachSpectator` 与“同一席位 `Attach` 到新会话”的唯一收尾点，所以这四种拆会话都计；普通追帧不计（不是快照恢复）；失败通知已在途的不重复计（已按原因计过）；`Match.Close` 不经这里、不计（对局结束不是恢复失败；维护者原话“断线、Close”按连接关闭——Game `OnClosed` → `DetachSession`——理解，若要求 `Match.Close` 也计，改 `Close` 一处）。回归 `TestMatchSnapshotRecoveryDetachIsCounted`（[snapshot_test.go](../../framework/sync/lockstep/snapshot_test.go)）：等快照、传快照、快照之后续帧三个阶段 × 座位 / 旁观者各断言 +1，普通追帧、失败通知在途、`Match.Close` 断言 0。修前红（基线 `8781b32a`，同一用例，原文）：
+
+```text
+--- FAIL: TestMatchSnapshotRecoveryDetachIsCounted/waiting/spectator=false (0.00s)
+    snapshot_test.go:1309: lockstep.snapshot.failed.total{reason=detached} = 0 after detaching a session waiting, want 1
+--- FAIL: TestMatchSnapshotRecoveryDetachIsCounted/transferring/spectator=false (0.00s)
+    snapshot_test.go:1309: lockstep.snapshot.failed.total{reason=detached} = 0 after detaching a session transferring, want 1
+--- FAIL: TestMatchSnapshotRecoveryDetachIsCounted/recovered/spectator=false (0.00s)
+    snapshot_test.go:1309: lockstep.snapshot.failed.total{reason=detached} = 0 after detaching a session recovered, want 1
+```
+
+（旁观者三条同样失败。）三条“计 0”的反例另做变异核对：把条件改成恒真后，“普通追帧”与“失败通知在途”两条分别报 `detached = 1 for a plain catch-up, want 0`、`detached = 1 after the recovery already failed, want 0`（首版“失败通知在途”用例里状态在断言前已被删除、反例不成立，改为让通知停在发送里后才有效）。
+
+**MOBA `Room`**：维护者 2026-10-20 决定接入快照来源（选 B），需要“只发已提交的页 / 块”的门，可能改框架，另派实施；本期文档写为“接入进行中（另行实施）”，落地后补记。
+
+**其余文档里的 Go 注释**：`ErrCatchupUnservable` 与 `MatchConfig.HistoryRetainFrames` 的注释原写“不做全量重同步”，改为按恢复方式区分。
+
+留给后续：发版时的双文档（`docs/release/`）；下次发版须把生成物最低版本（`codegen/internal/roost/manifest.go` `minimumVersions.Core` 与 `framework-compat.yml` 的 minimum）升到含 C9 v2 的版本。

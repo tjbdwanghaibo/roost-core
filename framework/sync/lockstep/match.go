@@ -18,10 +18,11 @@ var (
 	ErrSessionInUse       = errors.New("lockstep match: session already bound to another receiver")
 	ErrCatchupUnavailable = errors.New("lockstep match: no reliable sender for catch-up")
 	ErrCatchupFuture      = errors.New("lockstep match: catch-up start beyond the next frame")
-	// ErrCatchupUnservable 表示请求的追帧起点已被裁出历史，这次追帧不可能补齐。
-	// 服务端在 StartCatchup / Tick 的错误里返回它，并经可靠通道给该会话发追帧失败通知；
-	// 客户端（FrameAssembler、robot、C# LockstepClient）收到通知后终止本场模拟，交由业务决定踢出或重开，
-	// 框架不自动重同步。具体起点见 *CatchupUnservableError。
+	// ErrCatchupUnservable 表示这次恢复无法完成：catchup 模式下请求的追帧起点已被裁出历史；
+	// auto / snapshot 模式下是快照路线最终失败（快照取不到、过大或钉住过期，原因见 *CatchupUnservableError.Reason）。
+	// 服务端在 StartCatchup / Tick 的错误里返回它，并经可靠通道给该会话发 C9 v2 恢复失败通知；
+	// 客户端（FrameAssembler、robot、C# LockstepClient）收到通知后终止本场模拟，交由业务决定踢出或重开。
+	// 起点越界本身在 auto / snapshot 模式下不是失败：改发业务快照（见 RecoveryMode）。
 	ErrCatchupUnservable = errors.New("lockstep match: catch-up range trimmed from history")
 	ErrHashFrameInvalid  = errors.New("lockstep match: hash report for an uncut or invalid frame")
 )
@@ -41,7 +42,7 @@ const (
 	// MetricSnapshotBytes 计数确认写出的快照分块数据字节。
 	MetricSnapshotBytes = "lockstep.snapshot.bytes.total"
 	// MetricSnapshotFailed 计数快照恢复的失败，标签 reason：unavailable / too_large / invalid（取快照，每次调用计一次）、
-	// abandoned（发送连续失败放弃）、expired（钉住超过 PinFrames）。
+	// abandoned（发送连续失败放弃）、expired（钉住超过 PinFrames）、detached（恢复进行中会话被 Detach，每会话一次）。
 	MetricSnapshotFailed = "lockstep.snapshot.failed.total"
 )
 
@@ -119,7 +120,7 @@ type MatchConfig struct {
 	// HistoryRetainFrames 是自动保留的历史帧数（含最新帧）：每次 Tick 切帧后裁掉更早的帧，
 	// 并按 hashTrimStride 步长裁掉同一窗口之外的 hash 报告。0 取 DefaultHistoryRetainFrames；
 	// RetainFullHistory（-1）关闭自动裁剪；其他值必须不小于 MinHistoryRetainFrames。
-	// 起点早于窗口的追帧以 ErrCatchupUnservable 失败，不做全量重同步。宿主仍可调用
+	// 起点早于窗口时 catchup 模式以 ErrCatchupUnservable 失败，auto / snapshot 模式改发业务快照（Recovery）。宿主仍可调用
 	// TrimHistory / TrimHashReports 裁得更多，但不能把已裁掉的帧找回来。
 	HistoryRetainFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
@@ -474,8 +475,15 @@ func (m *Match) DetachSpectator(session nettransport.SessionID) {
 }
 
 // dropCatchup ends a session's catch-up and cancels its in-flight page.
+// 快照恢复进行中（等快照、传快照、快照之后续帧）的会话被拆掉（Detach / DetachSession / DetachSpectator，
+// 或同一席位 Attach 到新会话）计一次 failed{reason="detached"}（维护者 2026-10-20 决定 A）：独立 Gate 断开后
+// Game 经 DetachSession 走到这里，不计数时“传到一半被断开、重连从头再传”的循环在失败指标上看不见。
+// 已在发失败通知的恢复已按原因计过，不重复计；普通追帧不计；Match.Close 不经这里（对局结束不是恢复失败）。
 func (m *Match) dropCatchup(session nettransport.SessionID) {
 	if state, ok := m.catchups[session]; ok {
+		if state.unservable == nil && (state.snapshot != nil || state.recovered) {
+			metrics.IncCounter(MetricSnapshotFailed, metrics.Labels{"reason": "detached"}, 1)
+		}
 		state.drop()
 		delete(m.catchups, session)
 		m.releaseIdleFetch()
