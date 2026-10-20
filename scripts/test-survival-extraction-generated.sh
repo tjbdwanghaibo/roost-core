@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 四人合作生存／撤离正式消费者；默认替身提交器，REAL=1 追加独立 Mongo / 文件 WAL SIGKILL 恢复。
+# 合作生存撤离业务接入纵切：正式生成器、Player / SurvivalRaid DAO、SurvivalRaid 实体定时器、多实体 Sender 与 Nest。
+# 业务规则（付费入场、共享采集、制作预扣与容量、环境伤害与治疗、死亡掉落与拾取、撤离读条与封存清单、永久兑付）
+# 只在 scripts/testdata/survival-extraction，不是框架默认玩法，生成器也不生成这些文件。
+# 缺省不连接外部存储：提交器是替身。ROOST_SURVIVAL_EXTRACTION_REAL=1（并提供隔离 Mongo 副本集
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在制作与撤离读条都在途时（strict 已确认、WAL 未投影）被父进程 SIGKILL，
+# 新进程冷加载、由驱动投递循环一次补触发完成到期事件、续局兑付，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-survival-extraction.XXXXXX")"
@@ -48,7 +53,7 @@ for name, fields in {
     text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `bson:"{key}" dao:"persist"`\n' for field, typ, key in fields))
     text = text.replace('db=survival_extraction_practice', 'db=' + os.environ['ROOST_SURVIVAL_EXTRACTION_DB'])
     p.write_text(text)
-# SurvivalRaid 与 Player 在同一事务里领奖；把 Match 放在 World 锁档（低于 Player），多实体锁序固定。
+# SurvivalRaid 与 Player 在同一事务里入场 / 兑付；把 SurvivalRaid 放在 World 锁档（低于 Player），多实体锁序固定。
 p = root / 'game/entities/survival_raid/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
@@ -61,6 +66,7 @@ cp "$repo_root/scripts/testdata/survival-extraction/gameplay_test.go.txt" game/h
 gofmt -w db/def/*.go game/survival/*.go game/entities/survival_raid/*.go game/handler/survival_extraction*.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSurvivalExtraction' ./game/survival ./game/handler | tee "$review_root/test.log"
+# 12 条场景（4 条规则 + 8 条 Nest）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSurvivalExtraction' "$review_root/test.log" || true)"
 if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
   echo "expected 12 passing TestSurvivalExtraction scenarios, got $passed" >&2

@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 八人自走棋正式消费者；默认替身提交器，REAL=1 追加独立 Mongo / 文件 WAL SIGKILL 恢复。
+# 自走棋业务接入纵切：正式生成器、Player / ChessMatch DAO、ChessMatch 实体定时器、多实体 Sender 与 Nest。
+# 业务规则（八席共享卡池与商店、经济与升级、合星、编队、准备 / 战斗阶段、确定性战斗与配对、淘汰与排名、
+# 断线接管、按排名领奖）只在 scripts/testdata/auto-chess，不是框架默认玩法，生成器也不生成这些文件。
+# 缺省不连接外部存储：提交器是替身。ROOST_AUTO_CHESS_REAL=1（并提供隔离 Mongo 副本集
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程
+# 冷加载、由驱动投递循环续完整局、八人领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-auto-chess.XXXXXX")"
@@ -61,6 +66,7 @@ cp "$repo_root/scripts/testdata/auto-chess/gameplay_test.go.txt" game/handler/au
 gofmt -w db/def/*.go game/autochess/*.go game/entities/chess_match/*.go game/handler/auto_chess*.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAutoChess' ./game/autochess ./game/handler | tee "$review_root/test.log"
+# 12 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestAutoChess' "$review_root/test.log" || true)"
 if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
   echo "expected 12 passing TestAutoChess scenarios, got $passed" >&2

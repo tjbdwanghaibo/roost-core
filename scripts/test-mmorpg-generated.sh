@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # MMORPG 业务接入纵切：正式生成器、Player / Scene / Trade / Monster DAO、Player 持久定时器、多实体 Sender 与 Nest。
 # 缺省不连接外部存储：提交器是替身，验证内存事务组合。ROOST_MMORPG_REAL=1（并提供隔离 Mongo 副本集
-# ROOST_DATAENGINE_IT_MONGO_URI）时追加两个独立进程的真实文件 WAL / Mongo 停机后冷加载恢复，用后删除本次唯一库。
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加两个真实文件 WAL / Mongo 用例，定时器到期都由 Player 驱动的投递循环投递：
+# 两个独立进程正常停机后冷加载恢复；子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程冷加载、
+# 由循环补触发离线到期的 Buff / 复活并按时投递下一期限，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-mmorpg.XXXXXX")"
@@ -75,12 +77,15 @@ fi
 "$review_root/roost" generate --check
 if [[ "${ROOST_MMORPG_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
-  cp "$repo_root/scripts/testdata/mmorpg/persistence/persistence_test.go" game/handler/mmo_persistence_test.go
-  gofmt -w game/handler/mmo_persistence_test.go
-  export ROOST_MMORPG_WAL="$review_root/persistence"
+  for path in "$repo_root"/scripts/testdata/mmorpg/persistence/*_test.go; do cp "$path" "game/handler/mmo_$(basename "$path")"; done
+  gofmt -w game/handler/mmo_persistence_test.go game/handler/mmo_recovery_test.go
+  # 两个用例各用自己的 WAL 根（共用本次唯一库；正常停机用例成功时先删库，崩溃用例再从空库开始）。
   for phase in write recover; do
-    ROOST_MMORPG_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPGRealPersistenceAcrossProcesses$' ./game/handler | tee "$review_root/persistence-$phase.log"
+    ROOST_MMORPG_WAL="$review_root/persistence" ROOST_MMORPG_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPGRealPersistenceAcrossProcesses$' ./game/handler | tee "$review_root/persistence-$phase.log"
     if [[ "$(grep -c '^--- PASS: TestMMORPGRealPersistenceAcrossProcesses' "$review_root/persistence-$phase.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/persistence-$phase.log"; then exit 1; fi
   done
+  ROOST_MMORPG_WAL="$review_root/crash" go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMMORPGRealCrashRecovery$' ./game/handler | tee "$review_root/recovery.log"
+  if [[ "$(grep -c '^--- PASS: TestMMORPGRealCrashRecovery' "$review_root/recovery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/recovery.log"; then exit 1; fi
+  go vet -mod=mod -p 2 ./...
 fi
 succeeded=1

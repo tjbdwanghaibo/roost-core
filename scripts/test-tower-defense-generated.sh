@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# 四人塔防正式消费者；默认替身提交器，REAL=1 追加独立 Mongo / 文件 WAL SIGKILL 恢复。
+# 合作塔防业务接入纵切：正式生成器、Player / TowerRoom DAO、TowerRoom 实体定时器、多实体 Sender 与 Nest。
+# 业务规则（配置校验、5×5 地图与阻路 BFS、共享金币建造 / 升级 / 出售、准备与托管、波次战斗、基地胜负、团队奖励）
+# 只在 scripts/testdata/tower-defense，不是框架默认玩法，生成器也不生成这些文件。
+# 缺省不连接外部存储：提交器是替身。ROOST_TOWER_DEFENSE_REAL=1（并提供隔离 Mongo 副本集
+# ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在第一波打完第一步后（strict 已确认、WAL 未投影）被父进程 SIGKILL，
+# 新进程冷加载、由驱动投递循环补触发一步并打完三波、领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-tower-defense.XXXXXX")"
@@ -48,7 +53,7 @@ for name, fields in {
     text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `bson:"{key}" dao:"persist"`\n' for field, typ, key in fields))
     text = text.replace('db=tower_defense_practice', 'db=' + os.environ['ROOST_TOWER_DEFENSE_DB'])
     p.write_text(text)
-# TowerRoom 与 Player 在同一事务里领奖；把 Match 放在 World 锁档（低于 Player），多实体锁序固定。
+# TowerRoom 与 Player 在同一事务里领奖；把 TowerRoom 放在 World 锁档（低于 Player），多实体锁序固定。
 p = root / 'game/entities/tower_room/entity.go'
 p.write_text(p.read_text().replace('category=entity.EntityCategoryOther', 'category=entity.EntityCategoryWorld'))
 DEFS
@@ -61,6 +66,7 @@ cp "$repo_root/scripts/testdata/tower-defense/gameplay_test.go.txt" game/handler
 gofmt -w db/def/*.go game/towerdefense/*.go game/entities/tower_room/*.go game/handler/tower_defense*.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/towerdefense ./game/handler | tee "$review_root/test.log"
+# 10 条场景（4 条规则 + 6 条 Nest）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestTowerDefense' "$review_root/test.log" || true)"
 if [[ "$passed" != 10 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
   echo "expected 10 passing TestTowerDefense scenarios, got $passed" >&2

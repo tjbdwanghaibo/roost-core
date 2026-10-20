@@ -12,7 +12,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"os"
@@ -31,15 +33,15 @@ func (survivalNoEffects) Publish(context.Context, engine.OutboxItem) error {
 }
 
 type survivalRuntime struct {
-	runtime         *engine.Runtime
-	projector       *engine.Projector
-	scheduler       *nest.NestMgr
-	access          *entity.ManagerAccess
-	mongo           *mongodriver.Client
-	database        string
-	playerID, runID int64
-	ids             [survival.Seats]int64
-	clock           atomic.Int64
+	runtime   *engine.Runtime
+	projector *engine.Projector
+	scheduler *nest.NestMgr
+	access    *entity.ManagerAccess
+	mongo     *mongodriver.Client
+	database  string
+	runID     int64
+	ids       [survival.Seats]int64
+	clock     atomic.Int64
 }
 
 func openSurvivalRuntime(t *testing.T, manual bool, now int64) *survivalRuntime {
@@ -109,10 +111,6 @@ func openSurvivalRuntime(t *testing.T, manual bool, now int64) *survivalRuntime 
 	if err := runentity.TimerDriver.Bind(h.scheduler, func(id int64) entity.IThreadSafeEntity { return h.access.Manager().Get(id) }); err != nil {
 		t.Fatal(err)
 	}
-	h.playerID, err = entity.BuildEntityID(81001, playerentity.EntityKindPlayer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindSurvivalRaid)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +137,17 @@ func (h *survivalRuntime) close(t *testing.T) {
 	if err := h.runtime.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
+}
+
+// survivalTimerCounter 读 SurvivalRaid 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+func survivalTimerCounter(name string) int64 {
+	var total int64
+	for _, m := range metrics.Snapshot() {
+		if m.Name == name && m.Labels["driver"] == runentity.TimerDriver.Name() {
+			total += m.Value
+		}
+	}
+	return total
 }
 
 type survivalBarrier struct {
@@ -367,11 +376,31 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 			}
 		}
 	}
+	// 冷加载时 Host 把存量最早期限报告给驱动索引；到这里投递循环还没启动，直接读 DAO 不会与 Tick 并发。
 	if due, ok := runentity.TimerDriver.DueOf(m); !ok || due.UnixMilli() != state.Deadline {
 		t.Fatal("cold load did not report deadline")
 	}
+	// 启动驱动自己的投递循环（与进程装配同一入口），用例不调用 DeliverDue。离线期间撤离、制作、两次环境期限都已过，
+	// 框架只补触发一次；业务回调在这一次里完成全部已到期的制作 / 撤离，环境伤害只算一次，EndAt 不变。
+	deliveredBefore, redeliveredBefore := survivalTimerCounter(entitytimer.DeliveredMetric), survivalTimerCounter(entitytimer.RedeliveredMetric)
 	if e = runentity.TimerDriver.Start(); e != nil {
 		t.Fatal(e)
+	}
+	// awaitDelivered 等新期限进入索引（deadline 为 0 表示不再有期限）且投递计数恰为 want；超过 want 立即失败。
+	awaitDelivered := func(want int64, deadline int64) {
+		t.Helper()
+		until := time.Now().Add(8 * time.Second)
+		for {
+			due, ok := runentity.TimerDriver.DueOf(m)
+			got := survivalTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore
+			if got == want && (deadline == 0 && !ok || ok && due.UnixMilli() == deadline) {
+				return
+			}
+			if got > want || time.Now().After(until) {
+				t.Fatalf("deliveries=%d want %d; due=%v ok=%v want %d", got, want, due, ok, deadline)
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	view := func() survival.View {
 		v, e := s.Sync_SurvivalView(ctx, h.runID, h.ids[0])
@@ -385,6 +414,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	if caught.Seats[0].Inventory != (survival.Inventory{0, 0, 0, 1}) || caught.Seats[1].Status != "extracted" || caught.Seats[1].Extracted != (survival.Inventory{3, 0, 1, 0}) || caught.Seats[2].HP != 5 || caught.EndAt != state.EndAt {
 		t.Fatal("cold driver lost materials, duplicated damage or extended raid")
 	}
+	awaitDelivered(1, caught.Deadline)
 	for _, id := range h.ids {
 		if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID, h.clock.Load()); e != nil {
 			t.Fatal(e)
@@ -408,10 +438,14 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	command(2, "extract", 0)
 	command(3, "extract", 0)
 	v := view()
-	waitSurvival(t, func() bool { due, ok := runentity.TimerDriver.DueOf(m); return ok && due.UnixMilli() == v.Deadline })
+	awaitDelivered(1, v.Deadline)
+	// 三人撤离读条的完成时刻相同，是下一个最早期限；业务时钟推进到它，循环按时投递一次，三人同时封存、本局结束。
 	h.clock.Store(v.Deadline)
 	waitSurvival(t, func() bool { return view().Phase == "done" })
-	waitSurvival(t, func() bool { _, ok := runentity.TimerDriver.DueOf(m); return !ok })
+	awaitDelivered(2, 0)
+	if got := survivalTimerCounter(entitytimer.RedeliveredMetric) - redeliveredBefore; got != 0 {
+		t.Fatalf("driver redelivered %d ticks: a Tick commit did not report its next deadline", got)
+	}
 	if e = runentity.TimerDriver.Stop(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -437,5 +471,5 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.Database(h.database).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; four-player materials, crafting and extraction restored; driver bounded catch-up and next deadline; third process retried admission, commands and sealed payouts", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected strict records; four-player materials, crafting and extraction restored; driver loop delivered one overdue tick after cold load and the next deadline on time; third process retried admission, commands and sealed payouts", barrier.Unprojected)
 }

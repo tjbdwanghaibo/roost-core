@@ -126,16 +126,18 @@ func TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch(t *testing.T) {
 	r.Version = "new"
 	r.Units[0].Cost++
 	write()
-	if _, e = store.Load(context.Background()); e != nil {
+	if _, e = store.Reload(context.Background()); e != nil {
 		t.Fatal(e)
 	}
 	newRules, e := CaptureRules(store.Current())
 	if e != nil || newRules.Hash() == old.Hash() || s.Rules.Hash() != old.Hash() {
 		t.Fatal("snapshot changed", e)
 	}
+	// 非法热更整次被拒，当前快照仍是上一代（不发布半份配置）。
+	published := store.Current()
 	r.Units[0].Copies = 0
 	write()
-	if _, e = store.Load(context.Background()); e == nil {
-		t.Fatal("invalid rules accepted")
+	if _, e = store.Reload(context.Background()); e == nil || store.Current() != published {
+		t.Fatal("invalid rules accepted or replaced the published snapshot")
 	}
 }

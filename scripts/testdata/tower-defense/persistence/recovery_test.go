@@ -12,7 +12,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"os"
@@ -27,19 +29,19 @@ import (
 type towerNoEffects struct{}
 
 func (towerNoEffects) Publish(context.Context, engine.OutboxItem) error {
-	return errors.New("unexpected effect in local card RPG workflow")
+	return errors.New("unexpected effect in local tower defense workflow")
 }
 
 type towerRuntime struct {
-	runtime         *engine.Runtime
-	projector       *engine.Projector
-	scheduler       *nest.NestMgr
-	access          *entity.ManagerAccess
-	mongo           *mongodriver.Client
-	database        string
-	playerID, runID int64
-	ids             [tower.Seats]int64
-	clock           atomic.Int64
+	runtime   *engine.Runtime
+	projector *engine.Projector
+	scheduler *nest.NestMgr
+	access    *entity.ManagerAccess
+	mongo     *mongodriver.Client
+	database  string
+	runID     int64
+	ids       [tower.Seats]int64
+	clock     atomic.Int64
 }
 
 func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
@@ -109,10 +111,6 @@ func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
 	if err := runentity.TimerDriver.Bind(h.scheduler, func(id int64) entity.IThreadSafeEntity { return h.access.Manager().Get(id) }); err != nil {
 		t.Fatal(err)
 	}
-	h.playerID, err = entity.BuildEntityID(81001, playerentity.EntityKindPlayer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	h.runID, err = entity.BuildEntityID(82001, runentity.EntityKindTowerRoom)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +137,17 @@ func (h *towerRuntime) close(t *testing.T) {
 	if err := h.runtime.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
+}
+
+// towerTimerCounter 读 TowerRoom 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+func towerTimerCounter(name string) int64 {
+	var total int64
+	for _, m := range metrics.Snapshot() {
+		if m.Name == name && m.Labels["driver"] == runentity.TimerDriver.Name() {
+			total += m.Value
+		}
+	}
+	return total
 }
 
 type towerBarrier struct {
@@ -360,9 +369,13 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 			}
 		}
 	}
+	// 冷加载时 Host 把存量期限报告给驱动索引；到这里投递循环还没启动，直接读 DAO 不会与 Tick 并发。
 	if due, ok := runentity.TimerDriver.DueOf(m); !ok || due.UnixMilli() != state.Deadline {
 		t.Fatal("cold load did not report deadline")
 	}
+	// 启动驱动自己的投递循环（与进程装配同一入口），用例不调用 DeliverDue：循环发现已过期的战斗期限，
+	// 给这个实体投递一次加载后的补触发。离线一小时只算一步（框架不追帧），下一期限从实际触发时间起算。
+	deliveredBefore, redeliveredBefore := towerTimerCounter(entitytimer.DeliveredMetric), towerTimerCounter(entitytimer.RedeliveredMetric)
 	if e = runentity.TimerDriver.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -373,25 +386,47 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		}
 		return v
 	}
+	// awaitDelivered 等新期限重新进入索引且投递计数恰为 want：新期限在 Tick 提交后报告、计数在投递准入后才加，
+	// 都可能略晚于读到的提交结果，所以有界轮询；超过 want 立即失败（多投或重投）。
+	awaitDelivered := func(want int64, deadline int64) {
+		t.Helper()
+		until := time.Now().Add(8 * time.Second)
+		for {
+			due, ok := runentity.TimerDriver.DueOf(m)
+			got := towerTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore
+			if got == want && (deadline == 0 && !ok || ok && due.UnixMilli() == deadline) {
+				return
+			}
+			if got > want || time.Now().After(until) {
+				t.Fatalf("deliveries=%d want %d; due=%v ok=%v want %d", got, want, due, ok, deadline)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	waitTower(t, func() bool { return view().Tick == 2 })
 	v := view()
 	if v.Round != 1 || v.Deadline != h.clock.Load()+state.Rules.TickMillis {
 		t.Fatal("offline loop skipped stages")
 	}
-	// 驱动在冻结业务时钟下每次只推进一个阶段；同一循环继续准时处理下一期限。
+	awaitDelivered(1, v.Deadline)
+	// 之后每个期限由用例把业务时钟推进到期限本身，循环（至多 MaxWait 后重读时钟）按时投递一次。
+	delivered := int64(1)
 	for n := 0; n < 100 && v.Phase != "done"; n++ {
-		waitTower(t, func() bool { due, ok := runentity.TimerDriver.DueOf(m); return ok && due.UnixMilli() == v.Deadline })
 		before := v
 		h.clock.Store(v.Deadline)
 		waitTower(t, func() bool {
 			v = view()
 			return v.Round != before.Round || v.Phase != before.Phase || v.Tick != before.Tick
 		})
+		delivered++
+		awaitDelivered(delivered, v.Deadline)
 	}
 	if v.Phase != "done" {
 		t.Fatal("match did not terminate")
 	}
-	waitTower(t, func() bool { _, ok := runentity.TimerDriver.DueOf(m); return !ok })
+	if got := towerTimerCounter(entitytimer.RedeliveredMetric) - redeliveredBefore; got != 0 {
+		t.Fatalf("driver redelivered %d ticks: a Tick commit did not report its next deadline", got)
+	}
 	if e = runentity.TimerDriver.Stop(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -419,5 +454,5 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.Database(h.database).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; four-player active wave restored, driver loop resumed one step and completed three waves, third process retried all commands and team rewards", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected strict records; four-player active wave restored, driver loop delivered one overdue step after cold load and %d deliveries in total to finish three waves, third process retried all commands and team rewards", barrier.Unprojected, delivered)
 }

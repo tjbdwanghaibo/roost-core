@@ -35,13 +35,13 @@
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
 - [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
-- [AUTO-CHESS-INTEGRATION.md](../framework/AUTO-CHESS-INTEGRATION.md)：学习文档，八席共享卡池、准备／战斗阶段、排名领奖和冻结战斗恢复
-- [TOWER-DEFENSE-INTEGRATION.md](../framework/TOWER-DEFENSE-INTEGRATION.md)：学习文档，四人共享建造、阻路校验、持久波次、基地胜负与团队奖励恢复
-- [SURVIVAL-EXTRACTION-INTEGRATION.md](../framework/SURVIVAL-EXTRACTION-INTEGRATION.md)：学习文档，付费入场、共享采集／制作、死亡掉落、撤离封存清单与永久兑付恢复
-- [IDLE-SIM-INTEGRATION.md](../framework/IDLE-SIM-INTEGRATION.md)：学习文档，多生产队列、离线窗口、倍率积分、跨天奖励与经济恢复
-- [MERGE-CASUAL-INTEGRATION.md](../framework/MERGE-CASUAL-INTEGRATION.md)：学习文档，合成棋盘／仓库、离线命令与设备代际、服务器挑战、广告到账身份和 WAL 崩溃恢复
-- [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，角色卡抽取 / 养成、三人编队回合制 PvE、配置固定、持久回合计时与领奖恢复
 - [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
+- [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，卡牌 RPG 场景的框架学习（配置快照、抽卡 / 养成幂等账本、开局多实体事务、权威回合与持久回合定时器、领奖与视图裁剪）与验收范围
+- [TOWER-DEFENSE-INTEGRATION.md](../framework/TOWER-DEFENSE-INTEGRATION.md)：学习文档，合作塔防场景的框架学习（共享房间实体、共享金币建造与阻路校验、准备屏障与持久波次定时器、团队领奖、重连与视图）与验收范围
+- [SURVIVAL-EXTRACTION-INTEGRATION.md](../framework/SURVIVAL-EXTRACTION-INTEGRATION.md)：学习文档，合作生存撤离场景的框架学习（付费入场与兑付的多实体事务、共享采集 / 制作 / 死亡掉落、物资守恒、最早期限定时器、撤离封存清单、重连与视图）与验收范围
+- [MERGE-CASUAL-INTEGRATION.md](../framework/MERGE-CASUAL-INTEGRATION.md)：学习文档，合成休闲场景的框架学习（服务器权威存档、离线命令批次与设备代际、惰性体力恢复、限时挑战定时器、广告到账回执与视图裁剪）与验收范围
+- [IDLE-SIM-INTEGRATION.md](../framework/IDLE-SIM-INTEGRATION.md)：学习文档，放置模拟场景的框架学习（生产队列与原料预扣、有界离线窗口的区间积分、唤醒定时器、仓库 / 订单 / 每日奖励回执）与验收范围
+- [AUTO-CHESS-INTEGRATION.md](../framework/AUTO-CHESS-INTEGRATION.md)：学习文档，自走棋场景的框架学习（一局一个权威实体的共享卡池、成局冻结、每席序号与连接代际、阶段定时器、确定性战斗与排名、多实体领奖与视图裁剪）与验收范围
 - [GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
 - [GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate 设计评审与实施方案
 - [REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
@@ -69,8 +69,6 @@
 | 12 | Codegen 与工程工具 | [guide](../framework/guide/12-codegen.md) | [impl](../framework/impl/12-codegen.md) |
 | 13 | Wiring 装配 | [guide](../framework/guide/13-wiring.md) | [impl](../framework/impl/13-wiring.md) |
 | 14 | 其他包与公共基础设施 | [guide](../framework/guide/14-foundation.md) | [impl](../framework/impl/14-foundation.md) |
-
-[MOBA-INTEGRATION](../framework/MOBA-INTEGRATION.md)：MOBA 的业务 / 框架学习、5v5 三路消费者、活动帧崩溃与跨 sid 宿主 / 原服奖励验收。
 
 ## docs/performance
 

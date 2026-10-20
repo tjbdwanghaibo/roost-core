@@ -4,23 +4,41 @@
 
 ## [Unreleased]
 
-### 多人合作生存／撤离业务消费者
+### MMORPG 真实依赖验收：定时器经投递循环，新增 SIGKILL 崩溃恢复（scripts/test-mmorpg-generated.sh）
 
-- 新增 `scripts/test-survival-extraction-generated.sh` 与学习手册：四人付费准入、共享采集、制作预扣／容量预留、死亡掉落、撤离清单封存与永久兑付，规则仅位于独立业务夹具，框架运行时未改。
-- 12 项基础 race 场景与三进程真实 Mongo／WAL 恢复：制作／撤离在途、15 条 strict 未投影记录后 SIGKILL，驱动有界补算与下一期限，第三进程重试入场、命令和兑付不重复扣费发奖。教学范围与外部验收见 [生存／撤离接入](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)。
+- `TestMMORPGRealPersistenceAcrossProcesses`（正常停机两进程）不再手发 `Sync_TickPlayerTimer`：第二进程冷加载后核对 Buff 期限已进驱动索引（`DueOf`），启动 Player 驱动的投递循环（`Driver.Start`，与进程装配同一入口），由循环补触发一次离线到期的 Buff（`delivered_total` 增量 1、`redelivered_total` 增量 0）；关 Nest 前先停循环。维护者 2026-10-20 批准。
+- 新增 `TestMMORPGRealCrashRecovery`（`ROOST_MMORPG_REAL=1`，需隔离 Mongo 副本集）：野外战斗在途——买家阵亡、复活计时，卖家击杀拾取领奖后上 Buff，托管交易卖家已确认——strict WAL 有 12 条未投影记录时 SIGKILL 子进程；冷加载后四个实体 DAO 字节与两个定时器 ID 一致、两个期限已进索引，原参数重试不变；投递循环给两个过期玩家各补触发一次（计数 2），到期交易退款一次、迟到确认被拒，重新上 Buff 后按时投递（计数 3、无重投）；第三个进程冷加载重放不重复发奖或退款。登记在根包 `integration_coverage_test.go`；脚本真实模式断言两个用例都 PASS、无 SKIP。去掉 `Start` 的对照运行两个用例都在补触发处超时失败。
+- 夹具修正：原恢复夹具忽略 `BuildEntityID` 的错误且没有注册 Scene 实体，地图 ID 实际为 0（同图校验恒成立）；现在注册 Scene 并检查错误。两个用例的公共装配（文件 WAL + Mongo Runtime、Nest、驱动接线、种子与只读视图 handler）放在 `scripts/testdata/mmorpg/persistence/persistence_test.go`。框架、生成器与 demo 未改；没有发现框架缺陷。范围见 MMORPG 手册 §11 与 KNOWN-LIMITS“MMORPG 接入验收的范围”。
 
-### 放置／模拟经营业务消费者
+### 合作生存撤离接入：学习手册与业务消费者（scripts/test-survival-extraction-generated.sh）
 
-- 新增 `scripts/test-idle-sim-generated.sh`、业务夹具和[学习手册](docs/framework/IDLE-SIM-INTEGRATION.md)：正式 Player DAO／Sender／timer，三工坊预扣生产、未开工取消、缓冲／仓库容量、升级／双倍的分段积分、固定离线截止、收益／订单／每日奖励与永久回执。业务规则不进入公共框架。
-- 12 条基础 race 场景；五条未投影 strict WAL 后 SIGKILL，恢复半成品／已完成产物／倍率／离线截止与 timer，驱动一次补算，第三进程冷加载并重放所有命令不重复扣料或发奖。消费者 build／vet、ID／生成检查和真实依赖入口覆盖登记。
-- 默认三工坊、每队四任务／四产出、30 秒离线窗口、128 条命令账本；客户端／真实支付／长期归档／配置迁移／生产容量另行验收，不承诺完整商业经营游戏。
+- 新增 [合作生存撤离框架学习与验收](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-survival-extraction-generated.sh`：公共 CLI 生成 `game` 工程、Player / SurvivalRaid DAO 与 SurvivalRaid 实体定时器，业务规则只在 `scripts/testdata/survival-extraction`（框架、生成器与 demo 不含这些规则）：入场扣费与撤离兑付是两个多实体事务，局内采集、制作预扣与背包容量、环境伤害与治疗、死亡掉落与拾取竞争、撤离读条与封存清单都在探险实体内，整局物资守恒在加载与每次修改后校验，一个定时器节点取最早期限。12 条场景（4 条规则 + 8 条 Nest）全部 race、无 skip。
+- 真实依赖：`ROOST_SURVIVAL_EXTRACTION_REAL=1`（需隔离 Mongo 副本集）追加 `TestSurvivalExtractionRealCrashRecovery`：制作与撤离读条都在途、strict WAL 有 15 条未投影记录时 SIGKILL 子进程，冷加载后整份探险状态与定时器 ID 逐字节一致，驱动投递循环补触发一次（完成到期的制作与撤离、环境伤害只算一次、结束时刻不变）、再按期收局，第三个进程冷加载重试入场、命令与兑付不重复；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、开放世界、局外仓库、跨服兑付与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作生存撤离接入验收的范围”。框架与生成器未改。
 
+### 合作塔防接入：学习手册与业务消费者（scripts/test-tower-defense-generated.sh）
 
-### 合成／超休闲业务消费者与教学入口
+- 新增 [合作塔防框架学习与验收](docs/framework/TOWER-DEFENSE-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-tower-defense-generated.sh`：公共 CLI 生成 `game` 工程、Player / TowerRoom DAO 与 TowerRoom 实体定时器，业务规则只在 `scripts/testdata/tower-defense`（框架、生成器与 demo 不含这些规则）：四人共享一个房间实体，共享金币建造 / 升级 / 出售与阻路 BFS 同事务，命令序号与会话 Epoch，准备屏障与按期开波，每次定时器触发只推进一步，基地胜负与多实体团队领奖。10 条场景（4 条规则 + 6 条 Nest）全部 race、无 skip。
+- 真实依赖：`ROOST_TOWER_DEFENSE_REAL=1`（需隔离 Mongo 副本集）追加 `TestTowerDefenseRealCrashRecovery`：第一波进行中 strict WAL 有 14 条未投影记录时 SIGKILL 子进程，冷加载后整份房间状态与定时器 ID 逐字节一致，驱动投递循环补触发一次只算一步（框架不追帧）、之后按期打完三波，第三个进程冷加载重试命令与领奖不重复；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、匹配、跨服奖励与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作塔防接入验收的范围”。框架与生成器未改。
 
-- 新增 `scripts/test-merge-casual-generated.sh`：正式 game 工程、Player DAO／Sender／持久 timer，业务规则保留在 `scripts/testdata/merge-casual/`。4×4 棋盘／仓库、合成／生产／出售撤销／订单、离线时间恢复、有序批次与跨设备代际、服务器限时挑战、广告签名与到账回执均走 Nest strict 提交。
-- 15 条基础 race 场景；真实入口在五条 strict WAL 未投影时 SIGKILL，冷加载完整存档与期限，续完服务器目标／领奖，第三进程重试生产／广告／领奖不重复到账。基础与真实消费者均 build／vet、ID／生成检查；专门入口登记根包覆盖表。
-- 128 条永久命令／广告账本满后拒绝，单批最多 16 步；教学 HMAC 广告回调不等于真实平台接线，登录票分配／客户端／长期归档／容量另行验收。框架运行时与公开协议未改，详见[合成／超休闲接入](docs/framework/MERGE-CASUAL-INTEGRATION.md)。
+### 合成休闲接入：学习手册与业务消费者（scripts/test-merge-casual-generated.sh）
+
+- 新增 [合成休闲框架学习与验收](docs/framework/MERGE-CASUAL-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-merge-casual-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/merge-casual`（框架、生成器与 demo 不含这些规则）：服务器权威存档与首登冻结配置、离线命令批次（整批原子、序号 / 存档版本冲突）、设备代际接管与按原身份查回执、惰性体力恢复、限时挑战与持久定时器、模拟签名广告回调与永久到账账本、视图裁剪。15 条场景全部 race、无 skip。
+- 真实依赖：`ROOST_MERGE_CASUAL_REAL=1`（需隔离 Mongo 副本集）追加 `TestMergeCasualRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不手发 Tick）补触发一次判负过期挑战、重新开局后按期判负下一局，续玩领奖，第三个进程冷加载重试不重复到账；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，单批至多 16 条、命令与广告账本各 128 条后拒绝新写（单批上限与广告账本未在测试中填满）；没有真实广告平台、登录票分配、客户端协议与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合成休闲接入验收的范围”。
+
+### 放置模拟接入：学习手册与业务消费者（scripts/test-idle-sim-generated.sh）
+
+- 新增 [放置模拟框架学习与验收](docs/framework/IDLE-SIM-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-idle-sim-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/idle-sim`（框架、生成器与 demo 不含这些规则）：三工坊生产队列（入队冻结工时 / 投入 / 产出）、原料预扣与取消退款、有界离线窗口内的区间积分（倍率分段、余数、封顶、待领格满暂停）、仓库 / 出售 / 订单 / UTC 每日奖励、永久命令回执。12 条场景全部 race、无 skip。
+- 真实依赖：`ROOST_IDLE_SIM_REAL=1`（需隔离 Mongo 副本集）追加 `TestIdleSimRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不调用 `DeliverDue`）补触发一次只积分到原窗口、收取后按期投递下一秒的刷新，领取结算后第三个进程冷加载重放全部命令不重复结算；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，命令账本 128 条后拒绝新写、窗口内每秒一次唤醒提交（原料上限与等级上限未在测试中填满）；没有生产容量、客户端协议与跨服市场的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“放置模拟接入验收的范围”。
+
+### 自走棋接入：学习手册与业务消费者（scripts/test-auto-chess-generated.sh）
+
+- 新增 [自走棋框架学习与验收](docs/framework/AUTO-CHESS-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-auto-chess-generated.sh`：公共 CLI 生成 `game` 工程、Player / ChessMatch DAO、ChessMatch 实体定时器与多实体 Sender，业务规则只在 `scripts/testdata/auto-chess`（框架、生成器与 demo 不含这些规则）：一局一个权威实体管八席共享卡池与商店、成局冻结配置与服务器种子、每席命令序号与连接代际、准备 / 战斗阶段定时器、确定性战斗与轮空 / 淘汰 / 排名、按排名的多实体领奖、按观察者裁剪的视图。12 条场景全部 race、无 skip。
+- 真实依赖：`ROOST_AUTO_CHESS_REAL=1`（需隔离 Mongo 副本集）追加 `TestAutoChessRealCrashRecovery`：八人冻结战斗后 strict WAL 有 33 条未投影记录时 SIGKILL 子进程，冷加载后核对整局与驱动索引里的期限，启动驱动投递循环（不手发 Tick）只补一个阶段（投递计数 1）、之后每个期限投递一次推进一个阶段到终局（计数与阶段逐次对应、无重投），八人领奖，第三个进程冷加载重试不重复购买或发奖；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、至多 8 回合；没有真实匹配、客户端协议、跨 sid 发奖与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“自走棋接入验收的范围”。
 
 ## [v1.29.0] - 2026-10-19
 
