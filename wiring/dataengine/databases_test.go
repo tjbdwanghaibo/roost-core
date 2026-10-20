@@ -75,13 +75,14 @@ func TestDataEngineModProjectsLogicalDatabaseIntoMappedPhysicalDatabase(t *testi
 	}
 }
 
-// 回调对每个声明的逻辑库只在 Init 时调用一次；非空结果覆盖配置；配置写错（未知逻辑名、系统库）在 Init 拒绝并点名。
+// 回调对每个声明的逻辑库只在 Init 时调用一次；配置没写的逻辑库取回调的非空结果，配置写了的回调返回空串即沿用配置；
+// 回调与配置对同一逻辑库给出不同物理名、配置写错（未知逻辑名、系统库）都在 Init 拒绝并点名。
 func TestDataEngineModFreezesTheMappingAtInitAndRefusesInvalidConfig(t *testing.T) {
 	coredata.DeclareDatabases(coredata.LogicalDatabase{Name: "wiring_main"}, coredata.LogicalDatabase{Name: "wiring_audit", ServerScoped: true})
 	calls := map[string]int{}
 	cfg := newModConfig(t)
 	cfg.Set("sid", 12)
-	cfg.Set("dataengine.databases", map[string]any{"wiring_main": "planet_main", "wiring_audit": "planet_audit"})
+	cfg.Set("dataengine.databases", map[string]any{"wiring_main": "planet_main"})
 	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())), WithDatabaseResolver(func(logical string) (string, error) {
 		calls[logical]++
 		if logical == "wiring_audit" {
@@ -106,6 +107,20 @@ func TestDataEngineModFreezesTheMappingAtInitAndRefusesInvalidConfig(t *testing.
 	}
 	if calls["wiring_main"] != 1 {
 		t.Fatal("looking up the frozen map called the resolver")
+	}
+
+	// 同一逻辑库两个来源给出不同的值：Init 拒绝，报错点名逻辑库与两个值。
+	conflict := newModConfig(t)
+	conflict.Set("sid", 12)
+	conflict.Set("dataengine.databases", map[string]any{"wiring_main": "planet_main", "wiring_audit": "planet_audit"})
+	err := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())), WithDatabaseResolver(func(logical string) (string, error) {
+		if logical == "wiring_audit" {
+			return "vault_audit", nil
+		}
+		return "", nil
+	})).Init(conflict)
+	if err == nil || !strings.Contains(err.Error(), `logical database "wiring_audit"`) || !strings.Contains(err.Error(), `"planet_audit"`) || !strings.Contains(err.Error(), `"vault_audit"`) {
+		t.Fatalf("config planet_audit vs resolver vault_audit: Init = %v, want a refusal naming wiring_audit and both values", err)
 	}
 
 	for key, want := range map[string]string{

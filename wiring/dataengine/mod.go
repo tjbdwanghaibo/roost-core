@@ -55,8 +55,10 @@ func WithRemoteProjection(enabled bool) ModOption {
 }
 
 // WithDatabaseResolver 注册逻辑库 → 物理库的回调（与配置 dataengine.databases 合并）：Init 时对代码声明的
-// 每个逻辑库调用一次，返回非空物理名即覆盖配置（启动日志告警两者不同），返回空串沿用配置或逻辑名本身，
-// 返回错误则拒绝启动。运行中只查 Init 时冻结的表，不再调用它。
+// 每个逻辑库调用一次。同一逻辑库只能有一个来源：配置没写的逻辑库取回调返回的非空物理名；配置写了的，回调
+// 返回空串或相同的值沿用配置，返回不同的值拒绝启动（报错点名逻辑库与两个值）。返回空串且配置也没写时用逻辑名
+// 本身并告警；返回错误则拒绝启动。冲突只能在 Init 判断，--check-config 不调用回调、发现不了。运行中只查 Init
+// 时冻结的表，不再调用它。
 func WithDatabaseResolver(resolver func(logical string) (string, error)) ModOption {
 	return func(mod *Mod) { mod.resolver = resolver }
 }

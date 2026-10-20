@@ -6,41 +6,80 @@ import (
 	"testing"
 )
 
-// 映射表的合成规则：回调非空结果 > 配置 > 逻辑名本身；回调对每个声明的逻辑库只调用一次；表冻结后查表不再调用回调。
+// 映射表的合成规则：每个逻辑库的物理名只有一个来源——配置、回调非空结果，二者都没有时是逻辑名本身；
+// 回调与配置给出相同的值、或回调返回空串（沿用配置）都允许；回调对每个声明的逻辑库只调用一次；表冻结后查表不再调用回调。
 func TestDatabaseMapPriorityAndResolverCalledOncePerLogicalDatabase(t *testing.T) {
 	calls := map[string]int{}
 	resolver := func(logical string) (string, error) {
 		calls[logical]++
-		if logical == "audit" {
-			return "audit_eu", nil
+		switch logical {
+		case "audit":
+			return "audit_eu", nil // 配置没写 audit：物理名来自回调
+		case "shared":
+			return "shared_db", nil // 与配置相同：不算冲突
 		}
 		return "", nil // 不表态：沿用配置或逻辑名
 	}
 	databases, warnings, err := NewDatabaseMap(DatabaseMapConfig{
-		Declared:   []LogicalDatabase{{Name: "main"}, {Name: "audit"}, {Name: "logs"}},
-		Configured: map[string]string{"main": "planet", "audit": "audit_cfg"},
+		Declared:   []LogicalDatabase{{Name: "main"}, {Name: "audit"}, {Name: "logs"}, {Name: "shared"}},
+		Configured: map[string]string{"main": "planet", "shared": "shared_db"},
 		Resolver:   resolver,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for logical, want := range map[string]string{"main": "planet", "audit": "audit_eu", "logs": "logs", "undeclared": "undeclared", "": ""} {
+	for logical, want := range map[string]string{"main": "planet", "audit": "audit_eu", "logs": "logs", "shared": "shared_db", "undeclared": "undeclared", "": ""} {
 		if got := databases.Physical(logical); got != want {
 			t.Errorf("Physical(%q) = %q, want %q", logical, got, want)
 		}
 	}
-	for _, logical := range []string{"main", "audit", "logs"} {
+	sources := map[string]string{}
+	for _, entry := range databases.Entries() {
+		sources[entry.Logical] = entry.Source
+	}
+	wantSources := map[string]string{"main": DatabaseSourceConfig, "audit": DatabaseSourceResolver, "logs": DatabaseSourceIdentity, "shared": DatabaseSourceConfig}
+	for logical, want := range wantSources {
+		if sources[logical] != want {
+			t.Errorf("source of %q = %q, want %q", logical, sources[logical], want)
+		}
+	}
+	for _, logical := range []string{"main", "audit", "logs", "shared"} {
 		if calls[logical] != 1 {
 			t.Errorf("resolver called %d times for %q, want exactly once at construction", calls[logical], logical)
 		}
 	}
-	joined := strings.Join(warnings, "\n")
-	if !strings.Contains(joined, `"audit_eu", overriding dataengine.databases ("audit_cfg")`) || !strings.Contains(joined, `logical database "logs" has no mapping`) {
-		t.Fatalf("warnings = %q; want the resolver override and the identity fallback named", warnings)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `logical database "logs" has no mapping`) {
+		t.Fatalf("warnings = %q; want only the identity fallback of logs", warnings)
 	}
 	var nilMap *DatabaseMap
 	if nilMap.Physical("main") != "main" {
 		t.Fatal("a nil map must map every logical name to itself")
+	}
+}
+
+// 同一个逻辑库，配置给了物理名、回调又返回非空且不同的物理名：拒绝启动（维护者 2026-10-20 选 B），
+// 报错点名逻辑库与两个值，不再由回调覆盖配置。
+func TestDatabaseMapRefusesResolverConflictingWithConfig(t *testing.T) {
+	databases, warnings, err := NewDatabaseMap(DatabaseMapConfig{
+		Declared:   []LogicalDatabase{{Name: "main"}, {Name: "audit"}},
+		Configured: map[string]string{"main": "planet", "audit": "audit_cfg"},
+		Resolver: func(logical string) (string, error) {
+			if logical == "audit" {
+				return "audit_eu", nil
+			}
+			return "", nil
+		},
+	})
+	if err == nil {
+		t.Fatalf("NewDatabaseMap accepted a conflict: map=%+v warnings=%q", databases.Entries(), warnings)
+	}
+	for _, want := range []string{`logical database "audit"`, `"audit_cfg"`, `"audit_eu"`, "one source"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v; want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), `"main"`) {
+		t.Fatalf("err = %v; main has no conflict and must not be named", err)
 	}
 }
 

@@ -14,9 +14,10 @@ import (
 // 逻辑库名与物理库名（DESIGN-TODO D9 修订版 A）。
 //
 // DAO 标记的 db= 是代码里的逻辑库名（缺省骨架写 main），DocumentKey.Database、WAL 记录与 Remote 提交
-// 里的库名都是它；Mongo 里的物理库名只由部署决定：配置 dataengine.databases（逻辑名 → 物理名）与启动装配时
-// 注册的 DatabaseResolver。进程启动时把二者合成一张 DatabaseMap 并冻结，之后所有访问 Mongo 业务库的
-// 路径（投影、冷加载、墓碑、Remote 存储、运维工具）都经 DatabaseMap.Physical 取物理名，运行中不再调用回调。
+// 里的库名都是它；Mongo 里的物理库名只由部署决定：配置 dataengine.databases（逻辑名 → 物理名）或启动装配时
+// 注册的 DatabaseResolver，同一个逻辑库只能有一个来源（两者给出不同的值拒绝启动）。进程启动时把二者合成一张
+// DatabaseMap 并冻结，之后所有访问 Mongo 业务库的路径（投影、冷加载、墓碑、Remote 存储、运维工具）都经
+// DatabaseMap.Physical 取物理名，运行中不再调用回调。
 //
 // 改映射等于搬数据：先停写、排空 WAL（全部投影确认），离线迁移数据，再改映射启动。WAL 只记逻辑名，
 // 上次启动的映射记在 WAL 目录（nestwal.DatabaseMappingFile），有未投影记录而映射变了的进程拒绝启动。
@@ -29,7 +30,8 @@ type LogicalDatabase struct {
 }
 
 // DatabaseResolver 是启动装配时注册的映射回调：对每个声明的逻辑库调用一次，返回物理库名；
-// 返回空串表示不改变配置给出的结果，返回错误则拒绝启动。只在启动时调用，结果随表冻结。
+// 返回空串表示不表态（沿用配置，配置也没有就用逻辑名本身），返回错误则拒绝启动。配置已给出物理名的逻辑库，
+// 回调只能返回空串或同一个值，返回不同的值拒绝启动（同一逻辑库只能有一个来源）。只在启动时调用，结果随表冻结。
 type DatabaseResolver func(logical string) (string, error)
 
 // mongoDatabaseNameLimit 是 Mongo 库名的字节上限（不含结尾 NUL，即少于 64 字节）。
@@ -140,7 +142,8 @@ type DatabaseMap struct {
 	physical map[string]string
 }
 
-// ValidateDatabaseConfig 只校验配置本身（不调用回调）：配置里每个逻辑名都必须是代码声明过的（拼写检查），
+// ValidateDatabaseConfig 只校验配置本身（不调用回调，所以 --check-config 与 doctor 发现不了回调与配置的冲突，
+// 冲突只在 Init 合成映射表时拒绝）：配置里每个逻辑名都必须是代码声明过的（拼写检查），
 // 物理名合法，且两个逻辑库不能映射到同一个物理库。代码一个逻辑库都没声明时（工程还没有 DAO，或这个
 // 二进制没有链接 DAO 包）无从判断拼写，未知名字不报错——NewDatabaseMap 会把它们记成告警交给调用方。
 // 它被配置声明的 ValidateConfig 调用，所以 --check-config 与 doctor 走的是同一份规则。
@@ -149,10 +152,11 @@ func ValidateDatabaseConfig(declared []LogicalDatabase, configured map[string]st
 	return err
 }
 
-// NewDatabaseMap 合成并冻结映射表。优先级：回调返回的非空物理名 > 配置 > 逻辑名本身（identity）。
-// 任何一项不合法、配置里出现未声明的逻辑名、两个逻辑库落到同一个物理库，或回调返回错误，都返回错误，
-// 调用方应拒绝启动。warnings 是不阻止启动但运维应当知道的事（回调覆盖了配置、未声明逻辑库的配置无从校验、
-// 声明的逻辑库没有映射而直接用逻辑名）。
+// NewDatabaseMap 合成并冻结映射表。每个逻辑库的物理名只有一个来源：配置，或回调返回的非空物理名；
+// 二者都没有时是逻辑名本身（identity）。回调对配置已写的逻辑库返回空串或相同的值时沿用配置，返回不同的值
+// 是冲突（不让其中一方静默覆盖另一方）。任何一项不合法、配置里出现未声明的逻辑名、回调与配置冲突、
+// 两个逻辑库落到同一个物理库，或回调返回错误，都返回错误，调用方应拒绝启动。warnings 是不阻止启动但运维
+// 应当知道的事（未声明逻辑库的配置无从校验、声明的逻辑库没有映射而直接用逻辑名）。
 func NewDatabaseMap(cfg DatabaseMapConfig) (*DatabaseMap, []string, error) {
 	entries, warnings, err := buildDatabaseEntries(cfg, true)
 	if err != nil {
@@ -209,10 +213,14 @@ func buildDatabaseEntries(cfg DatabaseMapConfig, resolve bool) ([]DatabaseMappin
 				errs = append(errs, fmt.Errorf("database resolver for logical database %q: %w", logical, err))
 				continue
 			}
-			if physical = strings.TrimSpace(physical); physical != "" {
-				if entry.Source == DatabaseSourceConfig && physical != entry.Physical {
-					warnings = append(warnings, fmt.Sprintf("logical database %q: the database resolver returns %q, overriding dataengine.databases (%q)", logical, physical, entry.Physical))
-				}
+			physical = strings.TrimSpace(physical)
+			switch {
+			case physical == "" || (entry.Source == DatabaseSourceConfig && physical == entry.Physical):
+				// 回调不表态，或与配置一致：沿用现有结果。
+			case entry.Source == DatabaseSourceConfig:
+				errs = append(errs, fmt.Errorf("logical database %q: dataengine.databases gives %q but the database resolver returns %q; a logical database takes its physical name from one source only (drop it from dataengine.databases, or have the resolver return \"\" or the same name)", logical, entry.Physical, physical))
+				continue
+			default:
 				entry.Physical, entry.Source = physical, DatabaseSourceResolver
 			}
 		}
