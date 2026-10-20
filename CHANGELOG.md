@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 自身视图（self_sync）：一个 Player 一个 Manager 的守卫，帧上限取接入层上限（维护者 2026-10-20 批准）
+
+- **行为变化（以前允许、现在拒绝）**：同一个 `SubjectSyncState` 已登记在一个 `entitysync.Manager` 时，另一个 Manager 的 `Register` / `RegisterAfterRetirement` / `Rebind` 以前返回 nil 并静默换掉脏通知器（第一个 Manager 的订阅者从此收不到变化，game-demo 场景与 self_sync 同时打开就是这样），现在返回新哨兵 `entitysync.ErrSubjectRegisteredElsewhere`，信息点名实体 / kind / 命名空间与已登记它的 Manager，本 Manager 不变。同一个 Manager 重复登记仍是空操作；在原 Manager 注销且退役完成（remove 交付或订阅者会话关闭）之后可以登记到另一个 Manager，退役期间仍被拒。强制点是状态上的 `SubjectSyncState.ClaimSyncOwner` / `ReleaseSyncOwner`（新 API）。修前红：第二个 Manager 登记 = nil，第一个 Manager 的订阅者对之后的变化收到 0 帧（`TestASubjectStateFeedsOneManager`）。
+- 新增 `ManagerConfig.Name`（只用于诊断）与 `Manager.String()`；wiring/nest 的 Manager 缺省名 `nest`，自身视图 `self_sync`，game-demo 场景 `scene`。`ManagerAccess.ConfigureUnloadResync` 的“已接线”拒绝改为点名已接上的那一个，所以 game-demo 打开 self_sync 时启动在 `service game init` 失败并报 `unload resync is already configured for entity sync manager "self_sync"`（以前同一处失败，信息不指向 self_sync）。SelfView 登记被拒的日志按错误文本去重（以前每次新包一层的错误每个 tick 记一次）。这个组合本身仍不支持（PLAYER-ACCESS §7）。
+- **行为变化（帧上限）**：`wiring/selfsync` 一帧的上限不再固定取 gateway 缺省 1 MiB，而是在 Nest Mod Init、Manager 创建之前取接入层上限：嵌入 TCP 读 `player_access.tcp.max_payload_bytes`（`wiring/nest.EntitySyncSetup` 新增 `ConfigSchema` / `LoadConfig`，Nest Mod 并入声明、在建 Manager 前调用；selfsync 的声明与生成的 TCP Mod 逐字相同，App 启动前与 `--check-config` 合并检查，codegen 快照 `kitconfig_gen.go` 新增 `selfsync` 组）；独立 Gate 由生成的 `IngressMod.WithSelfSync` 调新 API `SelfSync.LimitFrameBytes(Config.MaxPayloadBytes)`（缺省 512 KiB；以前帧上限 1 MiB 大于 Ingress 缺省上限，512 KiB～1 MiB 的帧同样被拒收）。`selfsync.Config.MaxFrameBytes` 改为“在接入层上限之下再收紧”，大于接入层上限时按接入层上限；新增 `SelfSync.FrameLimit()`。修前红：调小到 16 KiB 后一帧 24 KiB 的改动让连接被关（`EOF`，`player.sync.push_refused.total{outcome="closed"}` 0 → 1），重连全量同样超限；修后单个玩家实体超过上限时在 Manager 内编码失败（KNOWN-LIMITS 第③条，不关连接）。回归 `TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit`、`TestSelfSyncFrameLimitTakesTheSmallestAccessLimit`，生成工程 `TestSelfSyncFrameLimitFollowsTheAccessLimit`。
+- 升级：已打开 self_sync 的工程 `roost project sync` 重新生成 `internal/access/player/tcp/server_gen.go`（`IngressMod.WithSelfSync` 改用 `LimitFrameBytes`）；这段生成物需要包含本改动的 core，发版时 `minimumVersions.Core` 需要随之上调（当前 v1.29.0 没有 `LimitFrameBytes`）。没有存储或协议变化。KNOWN-LIMITS“自身视图”一行的 ①② 改为已修复，过时的第⑦条（生成物需要下一个发布的 core）删除。
+
 ### MMORPG 真实依赖验收：定时器经投递循环，新增 SIGKILL 崩溃恢复（scripts/test-mmorpg-generated.sh）
 
 - `TestMMORPGRealPersistenceAcrossProcesses`（正常停机两进程）不再手发 `Sync_TickPlayerTimer`：第二进程冷加载后核对 Buff 期限已进驱动索引（`DueOf`），启动 Player 驱动的投递循环（`Driver.Start`，与进程装配同一入口），由循环补触发一次离线到期的 Buff（`delivered_total` 增量 1、`redelivered_total` 增量 0）；关 Nest 前先停循环。维护者 2026-10-20 批准。

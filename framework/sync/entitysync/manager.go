@@ -20,6 +20,8 @@ const DefaultInterval = 50 * time.Millisecond
 
 // ManagerConfig shapes the one Manager a process runs.
 type ManagerConfig struct {
+	// Name 只用于诊断：登记被拒（ErrSubjectRegisteredElsewhere）等错误里用它点名 Manager。空时按地址点名。
+	Name string
 	// Trace 是可选的有界阶段诊断，nil 时不记录。
 	Trace *SyncTrace
 	Mode  SyncMode
@@ -271,6 +273,9 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 // Register makes an entity's sync state a subject. From now on its dirty
 // notifications schedule it for the next tick; nobody receives it until a
 // policy subscribes a session.
+//
+// 一个状态只能登记在一个 Manager：已登记在另一个 Manager（且那边尚未退役完成）时返回
+// ErrSubjectRegisteredElsewhere，本 Manager 不变；同一个 Manager 重复登记同一状态是空操作。
 func (m *Manager) Register(state *entity.SubjectSyncState) error {
 	_, err := m.register(state, nil)
 	return err
@@ -300,6 +305,12 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 		m.mu.Unlock()
 		return false, ErrSubjectLimit
 	}
+	// 一个内容状态只喂一个 Manager：脏通知器、冻结内容与在途捕获在状态上各只有一份。认领在放进表之前、m.mu 内
+	// （锁序 m.mu → 状态锁，与 forget 相同），被拒时本 Manager 什么都没改。释放在 forget / Close 清通知器的同一处。
+	if holder, ok := state.ClaimSyncOwner(m); !ok {
+		m.mu.Unlock()
+		return false, registeredElsewhere(state, holder)
+	}
 	created := newSubject(state)
 	m.subjects[id] = created
 	m.mu.Unlock()
@@ -310,6 +321,24 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 	// 同 ID 此前被框架撤销的政策订阅交还政策，在下一次政策阶段重新提交。
 	m.releaseRetracted(created)
 	return false, nil
+}
+
+// registeredElsewhere 是登记被拒的错误：点名实体、命名空间与已登记它的 Manager。
+func registeredElsewhere(state *entity.SubjectSyncState, holder any) error {
+	id := state.SubjectID()
+	return fmt.Errorf("%w: entity %d (kind %d, namespace %q) is registered with %v; one SubjectSyncState feeds one manager, so unregister it there and let that retirement finish first",
+		ErrSubjectRegisteredElsewhere, id, entity.GetEntityKindFromID(id), state.Namespace(), holder)
+}
+
+// String 是诊断里点名本 Manager 的写法（ManagerConfig.Name；空时按地址）。
+func (m *Manager) String() string {
+	if m == nil {
+		return "entity sync manager <nil>"
+	}
+	if m.config.Name != "" {
+		return fmt.Sprintf("entity sync manager %q", m.config.Name)
+	}
+	return fmt.Sprintf("entity sync manager %p", m)
 }
 
 // installDirtyNotifier also fires the notifier when the state is already
@@ -380,7 +409,13 @@ func (m *Manager) rebind(subj *subject, state *entity.SubjectSyncState, done fun
 		subj.mu.Unlock()
 		return false, ErrSubjectRegistered
 	}
+	// 新状态同样只能有一个 Manager（锁序 subj.mu → 状态锁，与上面读 Enabled 相同）；旧状态已关闭，放开它。
+	if holder, ok := state.ClaimSyncOwner(m); !ok {
+		subj.mu.Unlock()
+		return false, registeredElsewhere(state, holder)
+	}
 	previous := subj.state
+	previous.ReleaseSyncOwner(m)
 	subj.state = state
 	for sid, sub := range subj.subscribers {
 		if sub.kind == kindLeaving {
@@ -632,7 +667,7 @@ var _ entity.SyncSubjectRetractor = (*Manager)(nil)
 // the state queued behind the retirement, if any (RegisterAfterRetirement).
 //
 // 只忘掉调用方看到的那个 subject：表里同 ID 已是另一个 subject（上一次 forget 之后重新登记的）时什么都不做。
-// 旧 subject 装在状态上的脏通知器与冻结内容在删表之前、同一把 m.mu 内清除：删表一放开，
+// 旧 subject 装在状态上的脏通知器、冻结内容与主人（ClaimSyncOwner）在删表之前、同一把 m.mu 内清除：删表一放开，
 // 同一个状态对象就可能被 Register（RegisterAfterRetirement 的直接登记，或下面排队的登记）装上新 subject 的
 // 通知器，之后再清就会清掉新 subject 的，后续 MarkDirty 不再调度。锁序 m.mu → 状态锁：SetDirtyNotifier(nil)
 // 不回调，DiscardFrozenSync 只归还原子计数，状态锁内不取 Manager 的锁。
@@ -646,6 +681,7 @@ func (m *Manager) forget(subj *subject) {
 	}
 	state.SetDirtyNotifier(nil)
 	state.DiscardFrozenSync()
+	state.ReleaseSyncOwner(m)
 	delete(m.subjects, subj.id)
 	m.mu.Unlock()
 	if m.forgetUnlinked != nil {
@@ -879,6 +915,7 @@ func (m *Manager) Close(ctx context.Context) error {
 		subj.mu.Unlock()
 		state.SetDirtyNotifier(nil)
 		state.DiscardFrozenSync()
+		state.ReleaseSyncOwner(m)
 		queued.finish(ErrManagerClosed)
 	}
 	m.clearRetracted()

@@ -148,10 +148,19 @@ var playerTCPSelfSyncEdits = []struct{ anchor, replace string }{
 	},
 	{
 		anchor: "type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod }\n",
-		replace: "type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod; selfSync *selfsync.SelfSync }\n\n" +
+		replace: "type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod; selfSync *selfsync.SelfSync; selfSyncErr error }\n\n" +
 			"// WithSelfSync 是独立 Gate 部署下的自身视图接线：Game Ingress 的 OnActive / OnClosed 登记与撤销连接\n" +
-			"// （在 options 里原有的回调之后），推送经 Game Ingress。\n" +
-			"func (mod *IngressMod) WithSelfSync(self *selfsync.SelfSync) *IngressMod { mod.selfSync = self; return mod }\n",
+			"// （在 options 里原有的回调之后），推送经 Game Ingress。一帧的上限取 Game Ingress 的 Config.MaxPayloadBytes\n" +
+			"// （装配期、Nest Mod Init 之前交给 selfsync；超过它的帧会被 Ingress 拒收、连接被关，重连后的全量同样超限）。\n" +
+			"func (mod *IngressMod) WithSelfSync(self *selfsync.SelfSync) *IngressMod {\n" +
+			" mod.selfSync = self\n" +
+			" mod.selfSyncErr = self.LimitFrameBytes(mod.options.Config.MaxPayloadBytes)\n" +
+			" return mod\n" +
+			"}\n",
+	},
+	{
+		anchor:  " if parsed.Enabled { return errors.New(\"game ingress: embedded TCP listener must be disabled\") }\n return mod.options.Config.Validate()\n",
+		replace: " if parsed.Enabled { return errors.New(\"game ingress: embedded TCP listener must be disabled\") }\n if err:=mod.options.Config.Validate();err!=nil{return err}\n if mod.selfSyncErr!=nil { return fmt.Errorf(\"game ingress: self_sync frame limit: %w\",mod.selfSyncErr) }\n return nil\n",
 	},
 	{
 		anchor: " mod.inner=gatewiring.NewGameIngressMod(dispatch,runtime.Protocols.Encode,mod.options)\n",

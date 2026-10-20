@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
@@ -37,9 +39,25 @@ type Config struct {
 	Kind entity.EntityKind
 	// MessageID 是 Sync 推送使用的协议编号，客户端按 Sync 载荷类型 + 这个编号交给帧解码器。
 	MessageID uint32
-	// MaxFrameBytes 是一帧的上限，应不大于接入层的 max_payload_bytes；0 取 gateway 默认的 max_payload_bytes。
+	// MaxFrameBytes 可选：在接入层上限之下再收紧一帧的上限；0 表示就用接入层上限。一帧的上限不由业务对齐：
+	// 取它与接入层上限的较小值——嵌入 TCP 是 player_access.tcp.max_payload_bytes（Nest Mod Init 时经
+	// EntitySyncSetup.LoadConfig 读，同一份声明），独立 Gate 是 Game Ingress 的 Config.MaxPayloadBytes
+	// （生成的 IngressMod.WithSelfSync 交给 LimitFrameBytes）。超过接入层上限的帧会被接入层拒收、连接被关，
+	// 客户端重连后的全量同样超限，反复断线重连，所以帧上限永远不大于接入层上限。
 	MaxFrameBytes int
 }
+
+// accessConfig 是自身视图读的接入层配置：嵌入 TCP 一帧载荷的上限。键属于生成的 player TCP Mod（tcpConfig），
+// 这里的声明必须与它逐字相同——App 合并声明时比较（不同即启动 / --check-config 报错），codegen 的
+// TestPlayerTCPDeclarationAgreesWithKit 经快照 kitconfig_gen.go 钉住。
+type accessConfig struct {
+	TCP struct {
+		MaxPayloadBytes uint32 `config:"max_payload_bytes" default:"1048576" example:"1048576"`
+	} `config:"player_access.tcp"`
+}
+
+// ConfigSchema 是 EntitySyncSetup 并入 Nest Mod 的声明（player_access.tcp.max_payload_bytes）。
+func ConfigSchema() app.ConfigSchema { return app.SchemaOf(accessConfig{}) }
 
 // SelfSync 是一个进程的自身视图接线。New 之后交给 Nest Mod（EntitySyncSetup）与 player TCP Mod
 // （BindPlayers + Handshake，或独立 Gate 的 OnActive / OnClosed）。
@@ -47,6 +65,9 @@ type SelfSync struct {
 	config  Config
 	players atomic.Pointer[playerRuntime]
 	view    atomic.Pointer[policy.SelfView]
+	// accessLimit 是从配置读到的 player_access.tcp.max_payload_bytes（loadConfig）；ingressLimit 是独立 Gate 部署下
+	// Game Ingress 的载荷上限（LimitFrameBytes）。0 表示没有。Manager 创建时经 transport.MaxFrameBytes 取一次。
+	accessLimit, ingressLimit atomic.Int64
 }
 
 // playerRuntime 包一层，让 atomic.Pointer 能存接口值。
@@ -66,9 +87,6 @@ func New(config Config) (*SelfSync, error) {
 	if config.MaxFrameBytes < 0 {
 		return nil, fmt.Errorf("selfsync: max frame bytes %d is negative", config.MaxFrameBytes)
 	}
-	if config.MaxFrameBytes == 0 {
-		config.MaxFrameBytes = int(gateway.DefaultTCPConfig().MaxPayloadBytes)
-	}
 	return &SelfSync{config: config}, nil
 }
 
@@ -84,7 +102,7 @@ func MustNew(config Config) *SelfSync {
 // EntitySyncSetup 交给 wiring/nest.NewModWithEntitySync。同一个 SelfSync 只能装到一个 Mod 上。
 func (s *SelfSync) EntitySyncSetup() wiringnest.EntitySyncSetup {
 	return wiringnest.EntitySyncSetup{
-		Config: entitysync.ManagerConfig{Transport: transport{owner: s}},
+		Config: entitysync.ManagerConfig{Name: "self_sync", Transport: transport{owner: s}},
 		Configure: func(config *entitysync.ManagerConfig) {
 			previous := config.SessionLost
 			config.SessionLost = func(session entitysync.SessionID, cause error) {
@@ -96,7 +114,52 @@ func (s *SelfSync) EntitySyncSetup() wiringnest.EntitySyncSetup {
 		},
 		Attach:       s.attach,
 		EntityLoaded: s.entityLoaded,
+		ConfigSchema: ConfigSchema(),
+		LoadConfig:   s.loadConfig,
 	}
+}
+
+// loadConfig 在 Nest Mod Init、Manager 创建之前读接入层的帧上限（声明见 accessConfig）。
+func (s *SelfSync) loadConfig(cfg *viper.Viper) error {
+	var settings accessConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("selfsync: %w", err)
+	}
+	s.accessLimit.Store(int64(settings.TCP.MaxPayloadBytes))
+	return nil
+}
+
+// LimitFrameBytes 让一帧不超过 limit（> 0）：独立 Gate 部署下生成的 IngressMod.WithSelfSync 用 Game Ingress 的
+// Config.MaxPayloadBytes 调它。必须在 Nest Mod Init（Manager 创建）之前调用——装配期构造 Mod 时；之后调用不再
+// 改变已创建的 Manager，返回错误。多次调用取最小值。
+func (s *SelfSync) LimitFrameBytes(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("selfsync: frame limit %d must be positive", limit)
+	}
+	if s.view.Load() != nil {
+		return errors.New("selfsync: the entity sync manager already exists; limit frames before the Nest Mod initializes")
+	}
+	for {
+		current := s.ingressLimit.Load()
+		if current != 0 && current <= int64(limit) || s.ingressLimit.CompareAndSwap(current, int64(limit)) {
+			return nil
+		}
+	}
+}
+
+// FrameLimit 是一帧的上限：Config.MaxFrameBytes、接入层上限（配置的 max_payload_bytes、Game Ingress 的上限）
+// 中非零者的最小值；都没有时取 gateway 默认的 max_payload_bytes。Manager 创建时读一次。
+func (s *SelfSync) FrameLimit() int {
+	limit := int64(0)
+	for _, candidate := range []int64{int64(s.config.MaxFrameBytes), s.accessLimit.Load(), s.ingressLimit.Load()} {
+		if candidate > 0 && (limit == 0 || candidate < limit) {
+			limit = candidate
+		}
+	}
+	if limit == 0 {
+		return int(gateway.DefaultTCPConfig().MaxPayloadBytes)
+	}
+	return int(limit)
 }
 
 // StrandedPlayersMetric 是自身视图“在线却没有打开的同步会话”的玩家数（Gauge，无标签，见 SelfView.Stranded）。
@@ -242,8 +305,8 @@ func every(errs []error, target error) bool {
 	return len(errs) > 0
 }
 
-// MaxFrameBytes 实现 entitysync.FrameSizeLimiter：Manager 构造时取它与帧默认上限的较小值。
-func (t transport) MaxFrameBytes() int { return t.owner.config.MaxFrameBytes }
+// MaxFrameBytes 实现 entitysync.FrameSizeLimiter：Manager 构造时取它与帧默认上限的较小值（见 FrameLimit）。
+func (t transport) MaxFrameBytes() int { return t.owner.FrameLimit() }
 
 var _ entitysync.FrameSizeLimiter = transport{}
 

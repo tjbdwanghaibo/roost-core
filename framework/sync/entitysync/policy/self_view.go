@@ -464,7 +464,8 @@ func (v *SelfView) ensureSubject(step selfStep, binding *selfBinding) bool {
 
 // refused 记录一次拒绝；同一原因只记一次，避免 waiting 里的玩家每个 tick 刷日志。
 func (v *SelfView) refused(player int64, binding *selfBinding, step string, err error) {
-	if binding.failure != nil && errors.Is(err, binding.failure) {
+	// 拒绝错误多是每次新包的一层（例如 ErrSubjectRegisteredElsewhere 点名实体与 Manager），按文本判断“同一原因”。
+	if binding.failure != nil && (errors.Is(err, binding.failure) || err.Error() == binding.failure.Error()) {
 		return
 	}
 	binding.failure = err

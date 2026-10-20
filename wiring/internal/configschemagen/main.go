@@ -39,6 +39,7 @@ import (
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/wiring/statslog"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
@@ -63,6 +64,9 @@ func groups() map[string][]app.ConfigSchema {
 		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
 		"saga":          {kitsaga.NewMod().ConfigSchema()},
 		"web":           {kitweb.NewMod().ConfigSchema()},
+		// access.player.self_sync 时并入 Nest Mod 的声明；读的是生成的 player TCP Mod 的键，
+		// TestPlayerTCPDeclarationAgreesWithKit 按这份快照检查两边逐字相同。
+		"selfsync": {selfsync.ConfigSchema()},
 
 		"account":   {new(account.Mod).ConfigSchema()},
 		"chat":      {new(chat.Mod).ConfigSchema()},

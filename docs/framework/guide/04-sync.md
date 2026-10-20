@@ -32,6 +32,8 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 慢消费者：**跟不上就断开**。一帧被活着的连接拒收时，传输（`wiring/selfsync.PushPlayerFrame`）关闭这名玩家的全部连接、Manager 关会话，客户端重连从全量开始；SelfView 不在原连接上重开。整个进程的出站驻留预算耗尽是例外：不是谁慢，整轮重试、保留脏状态，连接与会话都不动。自建 Manager、会话 ID 就是玩家 ID 的场景（如 game-demo 的场景）用同一个函数做 Transport。规则与理由见 [impl/04-sync §2C](../impl/04-sync.md#2c-自身视图selfview的生命周期)、[GATEWAY §4](../GATEWAY.md#慢消费者跟不上就断开)。
 
+两条由框架强制、业务不用对齐的规则：一帧的上限取接入层上限（嵌入 TCP 的 `player_access.tcp.max_payload_bytes`、独立 Gate 下 Game Ingress 的载荷上限），在 Manager 创建前定下，所以超过接入层上限的帧不会推出去；一个 `SubjectSyncState` 只能登记在一个 Manager，第二个 Manager 登记时得到 `entitysync.ErrSubjectRegisteredElsewhere`（点名已登记它的 Manager），所以工程里另有自建 Manager 登记 Player 时不能同时打开 self_sync。
+
 ### 好友、队伍等关系如何更新
 
 关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用 v1.26.0 新增的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。

@@ -3,6 +3,7 @@ package entity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,6 +166,11 @@ func (access *ManagerAccess) ConfigureUnloadResync(target UnloadedSubjectSync, c
 	current := access.resync.Load()
 	if (current != nil && !current.isStopped()) || !access.resync.CompareAndSwap(current, resync) {
 		cancel()
+		// 点名已接上的那一个（entitysync.Manager 按 ManagerConfig.Name 打印）：两个同步 Manager 争同一个实体运行时
+		// （例如 self_sync 的 Nest Mod Manager 与业务自建的场景 Manager）时，报错说明是谁先接上的。
+		if current != nil {
+			return nil, fmt.Errorf("entity manager access: unload resync is already configured for %v; one entity runtime takes one", current.target)
+		}
 		return nil, errors.New("entity manager access: unload resync is already configured")
 	}
 	return resync.stop, nil

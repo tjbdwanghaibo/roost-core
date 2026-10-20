@@ -22,13 +22,18 @@ var (
 	ErrSubjectRegistered    = errors.New("entitysync: subject is already registered")
 	ErrSubjectNotRegistered = errors.New("entitysync: subject is not registered")
 	ErrSubjectRetiring      = errors.New("entitysync: subject is retiring")
-	ErrSubjectLimit         = errors.New("entitysync: subject limit reached")
-	ErrSessionInvalid       = errors.New("entitysync: session is invalid")
-	ErrSessionUnknown       = errors.New("entitysync: session is not open")
-	ErrSessionLimit         = errors.New("entitysync: session limit reached")
-	ErrSubscriberLimit      = errors.New("entitysync: subscriber limit reached for this subject")
-	ErrSubscriptionNotFound = errors.New("entitysync: subscription not found")
-	ErrWireFrame            = errors.New("entitysync: malformed wire frame")
+	// ErrSubjectRegisteredElsewhere：这个内容状态（SubjectSyncState）已登记在另一个 Manager。一个状态只喂一个
+	// Manager——脏通知器、冻结内容与在途捕获在状态上各只有一份，第二个登记会抢走第一个的变化通知。错误信息点名
+	// 实体、命名空间与已登记它的 Manager（ManagerConfig.Name）。在那个 Manager 注销、退役完成（remove 已交付或
+	// 订阅者会话已关闭）之后才能登记到别的 Manager；同一个 Manager 重复登记仍是空操作。
+	ErrSubjectRegisteredElsewhere = errors.New("entitysync: subject sync state is registered with another manager")
+	ErrSubjectLimit               = errors.New("entitysync: subject limit reached")
+	ErrSessionInvalid             = errors.New("entitysync: session is invalid")
+	ErrSessionUnknown             = errors.New("entitysync: session is not open")
+	ErrSessionLimit               = errors.New("entitysync: session limit reached")
+	ErrSubscriberLimit            = errors.New("entitysync: subscriber limit reached for this subject")
+	ErrSubscriptionNotFound       = errors.New("entitysync: subscription not found")
+	ErrWireFrame                  = errors.New("entitysync: malformed wire frame")
 
 	// ErrRetryLater is what a Transport returns when it cannot take frames
 	// from ANYBODY right now (starting up, shutting down). The tick is
