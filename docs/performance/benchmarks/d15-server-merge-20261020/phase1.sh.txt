@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 第一段：起依赖服务与两个 game（1000 / 1001），建角写数据，写按 sid 分库的文档，停两个 game。
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+sed "s|MMO_MODULE|example.com/mergedrill|g" $D/drill/main.go.txt > $RUN/main.go
+go build -mod=mod -o $RUN/mergedrill $RUN/main.go
+port=36101
+for svc in account activity chat global mail match platform rank session; do
+  start $svc $svc configs/service/config.$svc.yaml $port 1000; port=$((port+1))
+done
+accountctl upsert-server -sid 1000 >/dev/null
+accountctl upsert-server -sid 1001 >/dev/null
+start game1000 game configs/service/config.game.yaml 36100 1000
+start game1001 game configs/service/config.game1001.yaml 36110 1001
+drill setup -items 10 | tee $RUN/setup.log
+# 每个服的按 sid 分库：一份全局唯一 ID 的文档，和一份两服都取常量 ID "season" 的文档（内容不同）。
+mongosh_eval '
+db.getSiblingDB("md_zone_a_1001").zone_state.insertMany([{_id: NumberLong(91001), _version: NumberLong(2), _schema: NumberLong(1), _last_tx: "tx-a", round: NumberLong(7)}, {_id: "season", _version: NumberLong(4), round: NumberLong(3)}]);
+db.getSiblingDB("md_zone_b_1000").zone_state.insertOne({_id: "season", _version: NumberLong(1), round: NumberLong(1)});'
+stop game1001
+stop game1000
+log "phase1 done"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 第三段：回退。停 1000，B 写过一份迁入的文档并新建一份；revert；unmerge；1001 用新 WAL 目录启动，角色回到 1001。
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+merge_flags=(-from 1001 -into 1000 -from-config configs/service/config.game1001.yaml -into-config configs/service/config.game.yaml)
+stop game1000
+go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000 > $RUN/wal-1000-revert.json
+mongosh_eval 'var b = db.getSiblingDB("md_zone_b_1000").zone_state; b.updateOne({_id: NumberLong(91001)}, {$set: {_version: NumberLong(3), round: NumberLong(8), _last_tx: "tx-b"}}); b.insertOne({_id: NumberLong(92000), _version: NumberLong(1)});'
+go run ./cmd/sidmerge revert "${merge_flags[@]}" -manifest $RUN/manifest.json > $RUN/revert.json
+grep -q '"reverted": 2' $RUN/revert.json || { log "revert"; cat $RUN/revert.json; exit 1; }
+grep -q '"zone/zone_state": 2' $RUN/revert.json || { log "new_in_target"; cat $RUN/revert.json; exit 1; }
+accountctl unmerge-server -from 1001 -note "D15 drill revert" > $RUN/unmerge.json
+accountctl upsert-server -sid 1001 -status open > /dev/null
+mv data/wal/dataengine/1001 $RUN/wal-1001-retired
+start game1000 game configs/service/config.game.yaml 36100 1000
+start game1001 game configs/service/config.game1001.yaml 36110 1001
+drill login -who u2:1001 -expect-serving 1001 -add 1 -expect-count 16
+drill login -who u3:1001 -expect-serving 1001 -add 1 -expect-count 13
+drill login -who u3:1000 -expect-serving 1000 -add 1 -expect-count 12
+drill login -who u1:1000 -expect-serving 1000 -add 1 -expect-count 12
+mongosh_eval 'printjson({a: db.getSiblingDB("md_zone_a_1001").zone_state.find().sort({_id:1}).toArray(), b: db.getSiblingDB("md_zone_b_1000").zone_state.find().sort({_id:1}).toArray()})' > $RUN/zone-after-revert.txt
+log "phase3 done"

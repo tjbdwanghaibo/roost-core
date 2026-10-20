@@ -1,0 +1,15 @@
+[drill 22:27:40] WALs drained
+[drill 22:27:46] dry-run refused: exit status 1
+{ acknowledged: true, insertedId: 'season-b' }
+[drill 22:27:53] migrated: 2 documents
+[drill 22:27:54] game 1001 refused to start: server 1001 was merged into 1000 (D15 drill) and its roles are served there
+[drill 22:27:54] start game1000
+mergedrill login: add item: code 100002 item count must be positive
+# phase2 在 u1 那一行因 -add 0 被游戏拒绝（item count must be positive）后，改为 -add 1，其余步骤（phase2b）重跑：
+u1:1000 role=100001 origin=1000 serving=1000 bag[1001]=11
+u2:1001 role=100002 origin=1001 serving=1000 bag[1001]=15
+u3:1000 role=100003 origin=1000 serving=1000 bag[1001]=11
+u3:1001 role=100004 origin=1001 serving=1000 bag[1001]=12
+create on 1001 refused: remote.560105: account: server is not open
+create on 1000: role=100005 serving=1000
+[drill 22:28:10] phase2 done

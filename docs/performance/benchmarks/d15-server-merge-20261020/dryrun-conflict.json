@@ -1,0 +1,72 @@
+{
+  "ready": false,
+  "checks": [
+    {
+      "name": "wal:1001",
+      "status": "ok",
+      "detail": "data/wal/dataengine/1001 drained (segment 1 offset 2112)"
+    },
+    {
+      "name": "wal:1000",
+      "status": "ok",
+      "detail": "data/wal/dataengine/1000 drained (segment 1 offset 2112)"
+    },
+    {
+      "name": "co-location:main",
+      "status": "ok",
+      "detail": "both map \"main\" to mergedrill on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it"
+    },
+    {
+      "name": "co-location:zone",
+      "status": "ok",
+      "detail": "sid 1001 maps \"zone\" to md_zone_a on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it, sid 1000 to md_zone_b on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it; A's base database holds no collection, so only its dbscope=sid part (migrated) has data"
+    },
+    {
+      "name": "outbox:1001",
+      "status": "ok",
+      "detail": "A and B share control database mergedrill on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it: B publishes what A left in the outbox"
+    },
+    {
+      "name": "saga:mergedrill_saga",
+      "status": "ok",
+      "detail": "every saga is terminal"
+    },
+    {
+      "name": "bus",
+      "status": "confirm",
+      "detail": "confirm by hand before the merge, as listed under bus: syncbus"
+    },
+    {
+      "name": "conflicts",
+      "status": "fail",
+      "detail": "1 documents have the same _id on both sides with different content (listed under conflicts); the business resolves them (renumber, drop one side) and the migrate runs again — nothing is overwritten or skipped"
+    }
+  ],
+  "conflicts": [
+    {
+      "logical": "zone",
+      "collection": "zone_state",
+      "_id": "{\"_id\":\"season\"}",
+      "source_digest": "e987ae7f99c570f7189053967014a5b5",
+      "target_digest": "91205a5ea8ceb5ba3b85b439ae3a8d9f"
+    }
+  ],
+  "server_scoped_databases": [
+    {
+      "logical": "zone",
+      "source_database": "md_zone_a_1001",
+      "target_database": "md_zone_b_1000",
+      "source_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it",
+      "target_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it",
+      "collections": [
+        {
+          "name": "zone_state",
+          "documents": 2,
+          "to_copy": 1,
+          "already_present": 0,
+          "conflicts": 1
+        }
+      ]
+    }
+  ]
+}

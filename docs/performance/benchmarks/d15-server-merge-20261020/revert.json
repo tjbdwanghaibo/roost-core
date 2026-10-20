@@ -1,0 +1,25 @@
+{
+  "from": 1001,
+  "into": 1000,
+  "checks": [
+    {
+      "name": "wal:1000",
+      "status": "ok",
+      "detail": "data/wal/dataengine/1000 drained (segment 1 offset 3810)"
+    },
+    {
+      "name": "manifest-databases",
+      "status": "ok",
+      "detail": "the manifest's databases match the configs"
+    },
+    {
+      "name": "manifest-documents",
+      "status": "ok",
+      "detail": "all 2 manifest documents are in B"
+    }
+  ],
+  "reverted": 2,
+  "new_in_target": {
+    "zone/zone_state": 2
+  }
+}

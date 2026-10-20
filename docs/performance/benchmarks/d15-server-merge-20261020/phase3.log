@@ -1,0 +1,9 @@
+[drill 22:28:27] stopped game1000 (pid 34702)
+{ acknowledged: true, insertedId: Long('92000') }
+[drill 22:28:28] start game1000
+[drill 22:28:29] start game1001
+u2:1001 role=100002 origin=1001 serving=1001 bag[1001]=16
+u3:1001 role=100004 origin=1001 serving=1001 bag[1001]=13
+u3:1000 role=100003 origin=1000 serving=1000 bag[1001]=12
+u1:1000 role=100001 origin=1000 serving=1000 bag[1001]=12
+[drill 22:28:31] phase3 done
