@@ -116,3 +116,5 @@ MMORPG 多地图网络接入：`bash scripts/test-mmorpg-scenes.sh`，生成 gam
 MOBA 正式业务消费者：`bash scripts/test-moba-generated.sh`，CLI 生成 Player / MatchResult DAO 与多实体 Sender，结合正式 Match、FrameAssembler、真实 loopback KCP 跑匹配、会话输入、单路模拟、追帧 / 观战 / 分歧及结算 race 场景。`ROOST_MOBA_REAL=1` 与隔离 Mongo URI 追加两个独立进程的文件 WAL / Mongo 结算恢复；活动对局恢复另有边界。`ROOST_MOBA_KEEP=1` 保留成功消费者，失败保留目录和真实模式的唯一库名。[MOBA 学习手册](../docs/framework/MOBA-INTEGRATION.md)列出业务 / 框架映射与使用方式。
 
 SLG 联盟活动联合场景：`bash scripts/test-slg-alliance.sh`，需显式隔离 Redis / NATS。正式 Activity RPC 连独立协调器子进程，验证成员撤权与关系视野、贡献持久意图与重放、冻结阶段屏障、原服奖励义务回执和丢失 ACK 后重投；不含 Player 实际金币到账或 Remote 联盟权威。流程与边界见 [SLG 主线手册](../docs/framework/SLG-INTEGRATION.md#联盟活动主线从准入到原服接收奖励义务)。
+
+SLG 联盟活动 Player 到账扩展：`bash scripts/test-slg-alliance-player.sh`，显式提供隔离 Redis / NATS / Mongo 副本集。CLI 生成 Player DAO/Sender，在同一活动流程 ACK 后读取原服义务，两个 sid 分别经 strict WAL 未投影 SIGKILL、恢复先核对资产再重投、第三进程复核永久回执；build / vet / ID / 生成检查。流程与边界见 [SLG Player 到账](../docs/framework/SLG-INTEGRATION.md#player-到账扩展义务已-ack金币仍能恢复补发)。

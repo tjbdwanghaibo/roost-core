@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### SLG 联盟活动：原服 Player 实际到账与崩溃恢复
+
+- 新增 `scripts/test-slg-alliance-player.sh`，CLI 生成 Player DAO/Sender，复用同一联盟活动链；奖励义务 ACK 后从原服持久记录继续兑现，金币与永久回执同一 strict 事务，错服与同身份改金额拒绝。
+- 两个静态 sid 各自子进程 / WAL，在建档和到账两条 strict 未投影记录后 SIGKILL；冷恢复先比完整钱包，再并发重试，第三进程保持每人 10 金币、一个到账身份。真实 Redis/NATS/Mongo race、消费者 build/vet 与生成检查通过；无框架运行时改动。教学接法与未覆盖范围见 [SLG 手册](docs/framework/SLG-INTEGRATION.md)。
+
 ### SLG 联盟活动联合教学切片
 
 - 新增 `scripts/test-slg-alliance.sh`：业务 CAS 成员授权与贡献意图、Interest 联盟／侦察来源归并、真实 NATS 生成 RPC 连协调器子进程、冻结窗口与阶段屏障、原服持久奖励义务和 ACK 重投；真实 Redis / NATS race 场景覆盖协调器正常重启与应用确认丢失。

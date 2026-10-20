@@ -24,6 +24,12 @@ func TestSLGAllianceActivity(t *testing.T) {
 	if addr == "" || os.Getenv("ROOST_DATAENGINE_IT_NATS_URL") == "" {
 		t.Skip("run scripts/test-slg-alliance.sh with isolated Redis and NATS")
 	}
+	runAllianceActivity(t, nil)
+}
+
+// deliver 用于扩展同一条活动链路；基础入口只验收原服义务，生成 Player 入口继续实际到账。
+func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity.Key)) {
+	addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	prefix := namespace()
@@ -201,5 +207,8 @@ func TestSLGAllianceActivity(t *testing.T) {
 			t.Fatal("acked work still owed")
 		}
 	}
-	t.Log("real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (Player currency delivery remains separate)")
+	if deliver != nil {
+		deliver(t, prefix, key)
+	}
+	t.Log("real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (base workflow establishes obligations; optional generated consumer verifies Player delivery)")
 }
