@@ -13,7 +13,6 @@ import (
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
@@ -37,11 +36,18 @@ import (
 // over through a channel instead of calling the room directly.
 //
 // The wire is deliberately the demo's existing player TCP connection:
-// broadcasts go out as an ordinary server push (msg 10102) and inputs come
-// back as ordinary requests (10015). Lockstep does not require a datagram
-// lane — it requires that frames arrive; the redundancy in the packet is
-// what makes a lossy lane work, and a UDP/KCP deployment swaps this adapter
-// for the nettransport one without touching the room.
+// broadcasts go out as server pushes of msg 10102 carrying the lockstep
+// packet itself (RS v2 Lockstep flag, no PB wrapper), and inputs come back as
+// ordinary requests (10015). Lockstep does not require a datagram lane — it
+// requires that frames arrive; the redundancy in the packet is what makes a
+// lossy lane work, and a UDP/KCP deployment swaps lockstep.TCPSender for the
+// nettransport sender without touching the room.
+//
+// 两条发送通道经 lockstep.TCPSender（battleLanes）：实时帧只准入，Tick 不等任何连接；
+// 追帧页在嵌入 TCP 下经 TCPRuntime.PushLockstepSessionWritten 入队并等写出，追帧随链路放慢，
+// 慢连接不会因追帧积压超过出站上限被关闭。等写出只发生在 Match 为追帧页起的 goroutine（launchSend）上，
+// 不在房间的 Tick 协程，也不在业务 worker（端点只把命令投进 channel）。独立 Gate 部署拿不到 TCPRuntime，
+// 追帧页仍只准入（Gate 写出 socket 后没有回执给 Game），见 battleLinks 与 KNOWN-LIMITS。
 // BattleCapability is the name the battle manager is published under, so the
 // player endpoints can reach it without importing this package (they are
 // imported BY it, through the protocol binding — the same cycle the push
@@ -76,17 +82,17 @@ const (
 	battleDrainWindow = 2 * time.Second
 )
 
-// battlePusher is the slice of the player TCP Runtime a battle needs: one
-// push to one player. It is an interface so the room's broadcast lane can be
-// watched in a test without a listener, and so a deployment can put battles
-// behind a different transport without touching the room.
-type battlePusher interface {
-	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
-}
+// battlePush hands one lockstep packet to one player connection, named by the
+// access layer's session id (gateway.Principal.SessionID).
+type battlePush func(ctx context.Context, session string, messageID uint32, packet []byte) error
 
 // battleManager owns every battle room in this process.
 type battleManager struct {
-	transport battlePusher
+	// push only admits a packet to the connection's outbound queue (live
+	// frames); pushWritten also waits until the packet is written to the
+	// socket (catch-up pages). See battleLinks for where they come from.
+	push        battlePush
+	pushWritten battlePush
 
 	mu     sync.Mutex
 	rooms  map[string]*battleRoom
@@ -99,6 +105,9 @@ type battleRoom struct {
 	id       string
 	seats    map[int64]lockstep.PlayerID // player id → seat
 	commands chan battleCommand
+	// connections binds the seats to the connections they speak from; the
+	// room's two lanes resolve through it.
+	connections *battleConnections
 	// stop asks the room's goroutine to end (shutdown); done is closed by
 	// that goroutine when it has. The commands channel is never closed:
 	// endpoints may still be writing to it while shutdown runs.
@@ -112,7 +121,10 @@ type battleRoom struct {
 // battleCommand is one piece of work for the room's goroutine. reply is
 // buffered by the sender, so the loop never blocks on a caller that left.
 type battleCommand struct {
-	seat        lockstep.PlayerID
+	seat lockstep.PlayerID
+	// connection is the access-layer session the message arrived on: the
+	// seat receives frames on the connection it last spoke from.
+	connection  string
 	frame       lockstep.FrameID
 	payload     []byte
 	hashFrame   lockstep.FrameID
@@ -122,41 +134,131 @@ type battleCommand struct {
 	reply       chan error
 }
 
-// battleSender is the room's transport adapter: the lockstep session id is
-// the player id, so a broadcast is a push to that player's sessions.
-type battleSender struct {
-	battleID  string
-	transport battlePusher
+// battleConnections maps a room's lockstep sessions to player connections.
+//
+// A seat is attached to the connection its first message (input, hash report
+// or catch-up request) arrived on, under a lockstep session id of its own; a
+// message from another connection — a reconnect, the demo's session ids are
+// unique per connection — attaches that one under a fresh id, so a session id
+// never spans two connections (lockstep.TCPSender's contract) and the old
+// connection's catch-up is dropped. A seat that has not spoken receives
+// nothing: frames cut before it joins reach it by catch-up, which the client
+// asks for when its first packet shows a gap.
+//
+// join runs on the room's goroutine only; resolve is also called by the
+// goroutines the Match sends catch-up pages from, hence the lock.
+type battleConnections struct {
+	mu    sync.Mutex
+	byID  map[nettransport.SessionID]string
+	seats map[lockstep.PlayerID]nettransport.SessionID
+	last  nettransport.SessionID
 }
 
-func (sender battleSender) SendDatagram(ctx context.Context, session nettransport.SessionID, packet []byte) error {
-	return sender.push(ctx, session, packet)
+func newBattleConnections() *battleConnections {
+	return &battleConnections{byID: make(map[nettransport.SessionID]string), seats: make(map[lockstep.PlayerID]nettransport.SessionID)}
 }
 
-func (sender battleSender) SendReliable(ctx context.Context, session nettransport.SessionID, packet []byte) error {
-	return sender.push(ctx, session, packet)
+// resolve is lockstep.TCPSender's resolver: lockstep session → connection.
+func (connections *battleConnections) resolve(id nettransport.SessionID) (string, bool) {
+	connections.mu.Lock()
+	defer connections.mu.Unlock()
+	connection, ok := connections.byID[id]
+	return connection, ok
 }
 
-func (sender battleSender) push(ctx context.Context, session nettransport.SessionID, packet []byte) error {
-	if sender.transport == nil {
-		return errors.New("battle: player tcp runtime is unavailable")
+// join attaches seat to connection unless it already is. Owned by the room's
+// goroutine (it calls room.Attach).
+func (connections *battleConnections) join(room *lockstep.Match, seat lockstep.PlayerID, connection string) error {
+	if connection == "" {
+		return errors.New("battle: the message did not say which connection it came on")
 	}
-	// A player who went offline mid-battle is not an error the room should
-	// abandon the frame for: the other seats still get it, and this one
-	// catches up (or the battle ends without them).
-	err := sender.transport.PushPlayer(ctx, int64(session), msgid.MsgBattleFrame, &pb.BattleFramePush{BattleID: sender.battleID, Packet: packet})
-	if err != nil {
-		slog.Debug("battle: frame not delivered", "battle_id", sender.battleID, "player_id", int64(session), "err", err)
+	connections.mu.Lock()
+	previous, attached := connections.seats[seat]
+	if attached && connections.byID[previous] == connection {
+		connections.mu.Unlock()
+		return nil
+	}
+	connections.last++
+	id := connections.last
+	connections.byID[id] = connection
+	connections.mu.Unlock()
+	if err := room.Attach(seat, id); err != nil {
+		connections.mu.Lock()
+		delete(connections.byID, id)
+		connections.mu.Unlock()
+		return err
+	}
+	connections.mu.Lock()
+	if attached {
+		delete(connections.byID, previous)
+	}
+	connections.seats[seat] = id
+	connections.mu.Unlock()
+	return nil
+}
+
+// battleLiveLane is the room's live lane: lockstep.TCPSender's datagram lane
+// (admission only) with the demo's tolerance for one receiver missing a
+// frame. A player whose connection is gone or full is not something the room
+// should abandon the frame for: the other seats still get it, and this one
+// heals from the next packet's redundant frames or catches up.
+type battleLiveLane struct {
+	sender   *lockstep.TCPSender
+	battleID string
+}
+
+func (lane battleLiveLane) SendDatagram(ctx context.Context, session nettransport.SessionID, packet []byte) error {
+	if err := lane.sender.SendDatagram(ctx, session, packet); err != nil {
+		slog.Debug("battle: frame not delivered", "battle_id", lane.battleID, "session", uint64(session), "err", err)
 	}
 	return nil
 }
 
-func newBattleManager(registry *app.Registry) (*battleManager, error) {
-	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
-	if !ok || transport == nil {
-		return nil, errors.New("battle: player tcp runtime is unavailable")
+func (lane battleLiveLane) MaxDatagramPayload() int { return lane.sender.MaxDatagramPayload() }
+
+// battleLanes builds a room's two lanes over the player connections. The
+// catch-up lane is the TCPSender itself: its errors (a page that timed out
+// waiting for a slow link, a connection that is gone) reach the Match, which
+// counts them toward CatchupMaxFailures.
+func (manager *battleManager) battleLanes(battleID string, connections *battleConnections) (nettransport.DatagramSender, nettransport.ReliableSender, error) {
+	sender, err := lockstep.NewTCPSender(msgid.MsgBattleFrame, 0, connections.resolve, manager.push, manager.pushWritten)
+	if err != nil {
+		return nil, nil, fmt.Errorf("battle: lanes for %s: %w", battleID, err)
 	}
-	return &battleManager{transport: transport, rooms: make(map[string]*battleRoom)}, nil
+	return battleLiveLane{sender: sender, battleID: battleID}, sender, nil
+}
+
+// battleLinks picks the two pushes from the player TCP Runtime.
+//
+// Embedded TCP (the generated default, accessplayertcp.Mod) has a
+// TCPRuntime: live frames go through PushLockstepSession (admission only) and
+// catch-up pages through PushLockstepSessionWritten (enqueue and wait until
+// written), so catch-up follows the link.
+//
+// A standalone Gate deployment (accessplayertcp.IngressMod) has no
+// TCPRuntime: the Game only knows its own queue took the packet, and the Gate
+// does not report back when it wrote one to the socket. Both lanes then only
+// admit, and a catch-up page is not slowed by the link — that needs a Gate
+// receipt, a protocol change the maintainer deferred (KNOWN-LIMITS “Lockstep
+// 追帧链路背压（独立 Gate）”).
+func battleLinks(runtime *accessplayertcp.Runtime) (push, pushWritten battlePush, err error) {
+	if runtime == nil || runtime.PlayerRuntime == nil {
+		return nil, nil, errors.New("battle: player tcp runtime is unavailable")
+	}
+	push = runtime.PushLockstepSession
+	if runtime.TCPRuntime == nil {
+		return push, push, nil
+	}
+	return push, runtime.TCPRuntime.PushLockstepSessionWritten, nil
+}
+
+func newBattleManager(registry *app.Registry) (*battleManager, error) {
+	runtime, _ := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	push, pushWritten, err := battleLinks(runtime)
+	if err != nil {
+		return nil, err
+	}
+	return &battleManager{push: push, pushWritten: pushWritten, rooms: make(map[string]*battleRoom)}, nil
 }
 
 // battleFrameBudget is what a room cuts before it drains; it is here so the
@@ -187,6 +289,12 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 	for index, member := range members {
 		seats[member] = battle.Seat(index)
 	}
+	connections := newBattleConnections()
+	live, catchup, err := manager.battleLanes(battleID, connections)
+	if err != nil {
+		manager.mu.Unlock()
+		return err
+	}
 	room, err := lockstep.NewMatch(lockstep.MatchConfig{
 		Sequencer: lockstep.SequencerConfig{
 			Players:      battle.Seats(len(members)),
@@ -196,8 +304,8 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 		RedundancyDepth:    battle.RedundancyDepth,
 		MaxDatagramBytes:   battle.MaxDatagramBytes,
 		CatchupBatchFrames: battle.CatchupBatchFrames,
-		Datagrams:          battleSender{battleID: battleID, transport: manager.transport},
-		Reliable:           battleSender{battleID: battleID, transport: manager.transport},
+		Datagrams:          live,
+		Reliable:           catchup,
 		OnDesync: func(verdict lockstep.DesyncVerdict) {
 			// A verdict is the framework telling the game that some seat's
 			// simulation no longer matches the quorum's. A real game kicks
@@ -210,16 +318,9 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 		manager.mu.Unlock()
 		return fmt.Errorf("battle: open %s: %w", battleID, err)
 	}
-	// The session id is the player id: the room hands it back to the sender
-	// adapter untouched, which is all it is for.
-	for member, seat := range seats {
-		if err := room.Attach(seat, nettransport.SessionID(member)); err != nil {
-			room.Close()
-			manager.mu.Unlock()
-			return fmt.Errorf("battle: attach player %d to %s: %w", member, battleID, err)
-		}
-	}
-	managed := &battleRoom{id: battleID, seats: seats, commands: make(chan battleCommand, battleCommandBuffer), stop: make(chan struct{}), done: make(chan struct{})}
+	// No seat is attached yet: each joins on the connection its first
+	// message arrives on (battleConnections).
+	managed := &battleRoom{id: battleID, seats: seats, connections: connections, commands: make(chan battleCommand, battleCommandBuffer), stop: make(chan struct{}), done: make(chan struct{})}
 	manager.rooms[battleID] = managed
 	manager.wg.Add(1)
 	manager.mu.Unlock()
@@ -256,7 +357,7 @@ func (manager *battleManager) run(managed *battleRoom, room *lockstep.Match) {
 			// The first input opens the battle early: the clients are here,
 			// so there is no reason to wait out the grace.
 			started = true
-			command.reply <- manager.apply(ctx, room, command)
+			command.reply <- managed.apply(ctx, room, command)
 		case <-grace.C:
 			// Nobody spoke within the grace. Start anyway — the seats that
 			// are missing contribute empty frames, and the ones that arrive
@@ -292,7 +393,7 @@ func (manager *battleManager) run(managed *battleRoom, room *lockstep.Match) {
 			slog.Info("battle: room stopped while draining", "battle_id", managed.id, "frames_cut", cut)
 			return
 		case command := <-managed.commands:
-			command.reply <- manager.apply(ctx, room, command)
+			command.reply <- managed.apply(ctx, room, command)
 		case <-drain.C:
 			slog.Info("battle: room finished", "battle_id", managed.id, "frames_cut", cut)
 			return
@@ -301,7 +402,12 @@ func (manager *battleManager) run(managed *battleRoom, room *lockstep.Match) {
 }
 
 // apply runs one command against the room. It is only ever called from run.
-func (manager *battleManager) apply(ctx context.Context, room *lockstep.Match, command battleCommand) error {
+// The seat joins (or follows) the connection the command came on first, so a
+// catch-up request or the first input already has somewhere to send to.
+func (managed *battleRoom) apply(ctx context.Context, room *lockstep.Match, command battleCommand) error {
+	if err := managed.connections.join(room, command.seat, command.connection); err != nil {
+		return err
+	}
 	if command.catchup {
 		return room.StartCatchup(command.seat, command.catchupFrom)
 	}
@@ -322,11 +428,14 @@ func (manager *battleManager) apply(ctx context.Context, room *lockstep.Match, c
 
 // SubmitBattleInput is the endpoint's entry point: one client's per-frame
 // message (input, optional keyframe hash report, optional catch-up
-// request). Plain parameters, because the caller is the player controller in
-// another package — it holds this manager through an interface it declares
-// itself, not through this package's types.
-func (manager *battleManager) SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error {
+// request), and connection, the access-layer session it arrived on
+// (gateway.Principal.SessionID) — the room sends this seat's frames there.
+// Plain parameters, because the caller is the player controller in another
+// package — it holds this manager through an interface it declares itself,
+// not through this package's types.
+func (manager *battleManager) SubmitBattleInput(ctx context.Context, battleID string, playerID int64, connection string, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error {
 	return manager.submit(ctx, battleID, playerID, battleCommand{
+		connection:  connection,
 		frame:       lockstep.FrameID(frame),
 		payload:     payload,
 		hashFrame:   lockstep.FrameID(hashFrame),

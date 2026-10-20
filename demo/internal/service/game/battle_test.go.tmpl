@@ -1,49 +1,63 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"{{MODULE}}/game/battle"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
-// recordingPusher stands in for the player TCP Runtime: a battle's broadcast
-// lane is one call per receiver, so watching it is enough to see whether the
-// room is cutting frames and to whom.
-type recordingPusher struct {
+// recordingPushes stands in for the player connections: a battle's lanes
+// are one push per receiver connection, so watching them is enough to see
+// whether the room is cutting frames and to whom.
+type recordingPushes struct {
 	mu      sync.Mutex
-	pushes  map[int64]int
+	pushes  map[string]int
 	message uint32
 }
 
-func newRecordingPusher() *recordingPusher {
-	return &recordingPusher{pushes: make(map[int64]int)}
+func newRecordingPushes() *recordingPushes {
+	return &recordingPushes{pushes: make(map[string]int)}
 }
 
-func (pusher *recordingPusher) PushPlayer(_ context.Context, playerID int64, messageID uint32, _ any) error {
-	pusher.mu.Lock()
-	defer pusher.mu.Unlock()
-	pusher.pushes[playerID]++
-	pusher.message = messageID
+func (recorder *recordingPushes) push(_ context.Context, connection string, messageID uint32, _ []byte) error {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.pushes[connection]++
+	recorder.message = messageID
 	return nil
 }
 
-func (pusher *recordingPusher) count(playerID int64) int {
-	pusher.mu.Lock()
-	defer pusher.mu.Unlock()
-	return pusher.pushes[playerID]
+func (recorder *recordingPushes) count(connection string) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.pushes[connection]
+}
+
+func newRecordingBattleManager(recorder *recordingPushes) *battleManager {
+	return &battleManager{push: recorder.push, pushWritten: recorder.push, rooms: make(map[string]*battleRoom)}
 }
 
 // A room must start cutting frames after the start grace even if nobody has
 // sent an input: the grace is a promise that a client who never connects does
 // not strand the ones who did. Waiting for a first command instead made the
-// constant a lie — no input meant no frame, ever.
+// constant a lie — no input meant no frame, ever. Frames go only to the
+// connections seats have spoken from: a seat that speaks late joins on its
+// connection, and the silent one receives nothing.
 func TestBattleStartsAfterTheGraceWithoutAnyInput(t *testing.T) {
-	pusher := newRecordingPusher()
-	manager := &battleManager{transport: pusher, rooms: make(map[string]*battleRoom)}
+	recorder := newRecordingPushes()
+	manager := newRecordingBattleManager(recorder)
 	t.Cleanup(manager.Close)
 
 	const battleID = "grace-1"
@@ -75,14 +89,26 @@ func TestBattleStartsAfterTheGraceWithoutAnyInput(t *testing.T) {
 	if cut := managed.cut.Load(); cut == 0 {
 		t.Fatalf("no frame was cut %s after the room opened, although the grace is %s", battleStartGrace+2*time.Second, battleStartGrace)
 	}
-	// Every seat receives the broadcast, not just the one that spoke (none did).
-	for _, member := range members {
-		if pusher.count(member) == 0 {
-			t.Errorf("seat %d received no frame", member)
-		}
+
+	// Seat 101 speaks (a hash report for no frame carries nothing but the
+	// connection) and from then on receives the broadcast on that connection.
+	if err := manager.SubmitBattleInput(context.Background(), battleID, 101, "conn-101", 0, nil, 0, 0, 0); err != nil {
+		t.Fatalf("join seat 101: %v", err)
 	}
-	if pusher.message != msgid.MsgBattleFrame {
-		t.Errorf("frames went out as message %d, want the battle frame push %d", pusher.message, msgid.MsgBattleFrame)
+	for wait := time.Now().Add(2 * time.Second); recorder.count("conn-101") == 0 && time.Now().Before(wait); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if recorder.count("conn-101") == 0 {
+		t.Fatal("the seat that spoke received no frame on its connection")
+	}
+	if got := recorder.count("conn-102"); got != 0 {
+		t.Errorf("a connection no seat spoke from received %d frames", got)
+	}
+	recorder.mu.Lock()
+	message := recorder.message
+	recorder.mu.Unlock()
+	if message != msgid.MsgBattleFrame {
+		t.Errorf("frames went out as message %d, want the battle frame push %d", message, msgid.MsgBattleFrame)
 	}
 }
 
@@ -90,7 +116,7 @@ func TestBattleStartsAfterTheGraceWithoutAnyInput(t *testing.T) {
 // lifetime cap is the backstop. Neither may outlive the other by much, or a
 // room nobody plays keeps a goroutine.
 func TestBattleRoomEndsWithinItsLifetime(t *testing.T) {
-	manager := &battleManager{transport: newRecordingPusher(), rooms: make(map[string]*battleRoom)}
+	manager := newRecordingBattleManager(newRecordingPushes())
 	t.Cleanup(manager.Close)
 	const battleID = "lifetime-1"
 	if err := manager.Open(battleID, []int64{201, 202}); err != nil {
@@ -106,5 +132,260 @@ func TestBattleRoomEndsWithinItsLifetime(t *testing.T) {
 	}
 	if cut := managed.cut.Load(); cut != int64(battle.Frames) {
 		t.Errorf("the room ended after %d frames, want the full budget of %d", cut, battle.Frames)
+	}
+}
+
+// fakeIngress is a standalone Gate's player Runtime (no TCPRuntime): only
+// PushLockstepSession is used by a battle.
+type fakeIngress struct {
+	gateway.PlayerRuntime
+	pushes atomic.Int64
+}
+
+func (ingress *fakeIngress) PushLockstepSession(context.Context, string, uint32, []byte) error {
+	ingress.pushes.Add(1)
+	return nil
+}
+
+// Under a standalone Gate the Game cannot see when the Gate wrote a packet,
+// so both lanes stay admission only (KNOWN-LIMITS); under embedded TCP the
+// catch-up lane is the write-waiting push, exercised end to end below.
+func TestBattleLinksUnderAStandaloneGateOnlyAdmit(t *testing.T) {
+	ingress := &fakeIngress{}
+	push, pushWritten, err := battleLinks(&accessplayertcp.Runtime{PlayerRuntime: ingress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := push(context.Background(), "s", msgid.MsgBattleFrame, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushWritten(context.Background(), "s", msgid.MsgBattleFrame, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ingress.pushes.Load(); got != 2 {
+		t.Fatalf("standalone Gate lanes made %d PushLockstepSession calls, want 2", got)
+	}
+	if _, _, err := battleLinks(&accessplayertcp.Runtime{}); err == nil {
+		t.Fatal("a Runtime without a player runtime was accepted")
+	}
+}
+
+// battleTCPSeats make every frame large (8 seats × 1 KiB input ≈ 8 KiB), so a
+// few hundred frames of history are several MiB — past the embedded TCP
+// per-connection outbound byte limit (about 2 MiB by default). The demo's own
+// battle is far smaller; the lanes are what is under test.
+var battleTCPSeats = []lockstep.PlayerID{1, 2, 3, 4, 5, 6, 7, 8}
+
+// battleTCPServer is a real embedded TCP access on loopback, wired the way
+// the generated player TCP Mod wires it: the token is the session id.
+type battleTCPServer struct {
+	server  *gateway.TCPServer
+	runtime *accessplayertcp.Runtime
+	closed  chan gateway.TCPSessionClosed
+}
+
+func newBattleTCPServer(t *testing.T, players map[string]int64) *battleTCPServer {
+	t.Helper()
+	config := gateway.DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	config.WriteTimeout = 10 * time.Second
+	runtime := accessplayertcp.NewRuntime(nil, config.LoginTimeout)
+	dispatch := func(context.Context, gateway.Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
+		return nil, nil
+	}
+	server, err := gateway.NewTCPServer(config, dispatch, gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+		return gateway.Principal{PlayerID: players[token], SessionID: token}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ConnectRuntime(runtime.TCPRuntime); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan gateway.TCPSessionClosed, 16)
+	runtime.TCPRuntime.OnSessionClosed(func(event gateway.TCPSessionClosed) { closed <- event })
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+	return &battleTCPServer{server: server, runtime: runtime, closed: closed}
+}
+
+// dial authenticates one client and shrinks its receive buffer to readBuffer.
+func (tcp *battleTCPServer) dial(t *testing.T, token string, playerID int64, readBuffer int) net.Conn {
+	t.Helper()
+	connection, err := net.Dial("tcp", tcp.server.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	_ = connection.(*net.TCPConn).SetReadBuffer(readBuffer)
+	if err := wire.Write(connection, []*wire.Packet{{Seq: 1, Payload: []byte(token)}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if ack, err := wire.Read(connection, 0); err != nil || ack.MsgID != 0 || ack.Seq != 1 {
+		t.Fatalf("authentication ack %+v: %v", ack, err)
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	for deadline := time.Now().Add(2 * time.Second); tcp.runtime.TCPRuntime.ActiveSessions(playerID) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s never registered", token)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return connection
+}
+
+// sessionClosed reports whether the server has closed this session (drains
+// the close events seen so far, does not wait).
+func (tcp *battleTCPServer) sessionClosed(sessionID string, seen map[string]bool) bool {
+	for {
+		select {
+		case event := <-tcp.closed:
+			seen[event.SessionID] = true
+		default:
+			return seen[sessionID]
+		}
+	}
+}
+
+// battleReader reads the battle pushes off a client connection into a
+// FrameAssembler; next is the frame it expects next.
+type battleReader struct {
+	next   atomic.Uint64
+	failed atomic.Pointer[error]
+}
+
+// readBattle waits for start (the stalled phase), then reads, sleeping pause
+// after each packet (the slow link).
+func readBattle(connection net.Conn, start <-chan struct{}, pause time.Duration) *battleReader {
+	reader := &battleReader{}
+	reader.next.Store(1)
+	go func() {
+		<-start
+		assembler := lockstep.NewFrameAssembler(0)
+		for {
+			packet, err := wire.Read(connection, 0)
+			if err != nil {
+				return // closed: the test decides whether it should have been
+			}
+			if packet.Flags != wire.FlagPush|wire.FlagLockstep || packet.MsgID != msgid.MsgBattleFrame {
+				continue
+			}
+			if _, err := assembler.Ingest(packet.Payload); err != nil {
+				reader.failed.Store(&err)
+				return
+			}
+			reader.next.Store(uint64(assembler.Next()))
+			if pause > 0 {
+				time.Sleep(pause)
+			}
+		}
+	}()
+	return reader
+}
+
+func (reader *battleReader) err() error {
+	if failed := reader.failed.Load(); failed != nil {
+		return *failed
+	}
+	return nil
+}
+
+// Catch-up over the demo's lanes must follow the link: one page in flight
+// per session, the next sent only after it is written, so the connection's
+// backlog is one page. Lanes that only admit pour one page per Tick into the
+// outbound queue; several MiB of history pass the byte limit before the link
+// reads them, the connection is closed and the catch-up fails. The client
+// first stops reading for 200ms (pages in flight but unwritable, within
+// CatchupSendTimeout), then reads slowly, 5ms per packet.
+func TestABattleCatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt(t *testing.T) {
+	const historyFrames = 1000 // ≈ 8 MiB, far past ~2 MiB of outbound and the socket buffers
+	tcp := newBattleTCPServer(t, map[string]int64{"slow": 1})
+	connection := tcp.dial(t, "slow", 1, 16<<10)
+	push, pushWritten, err := battleLinks(tcp.runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &battleManager{push: push, pushWritten: pushWritten, rooms: make(map[string]*battleRoom)}
+	connections := newBattleConnections()
+	live, catchup, err := manager.battleLanes("catchup-1", connections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer:          lockstep.SequencerConfig{Players: battleTCPSeats, MaxInputBytes: lockstep.MaxInputPayloadBytes},
+		RedundancyDepth:    1,
+		CatchupSendTimeout: 10 * time.Second, // no timeout while stalled: only whether catch-up follows the link
+		CatchupSendWait:    5 * time.Millisecond,
+		Datagrams:          live,
+		Reliable:           catchup,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+	// History first, with nobody attached: no broadcast yet.
+	input := bytes.Repeat([]byte{0x5a}, lockstep.MaxInputPayloadBytes)
+	for range historyFrames {
+		for _, seat := range battleTCPSeats {
+			if _, err := match.SubmitInput(seat, match.NextFrame(), input); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := match.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Seat 1 speaks from connection "slow" (what the room's apply does) and
+	// asks for history from frame 1.
+	if err := connections.join(match, 1, "slow"); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.StartCatchup(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	reader := readBattle(connection, start, 5*time.Millisecond)
+	time.AfterFunc(200*time.Millisecond, func() { close(start) })
+
+	var tickErrs []error
+	closed := map[string]bool{}
+	deadline := time.Now().Add(30 * time.Second)
+	for match.CatchingUp(1) && time.Now().Before(deadline) && !tcp.sessionClosed("slow", closed) {
+		if _, err := match.Tick(context.Background()); err != nil {
+			tickErrs = append(tickErrs, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if tcp.sessionClosed("slow", closed) || len(tickErrs) > 0 {
+		t.Fatalf("catch-up over a slow TCP link closed the connection (closed=%v) or failed (%d Tick errors, first: %v): pages were admitted faster than the link drains them",
+			closed["slow"], len(tickErrs), errors.Join(tickErrs...))
+	}
+	if match.CatchingUp(1) {
+		t.Fatalf("catch-up still running after 30s; the client has frames up to %d of %d", reader.next.Load()-1, match.History().Latest())
+	}
+	// Caught up, the seat is on the live broadcast: the client must hold a
+	// continuous stream up to the newest frame, on the same connection.
+	head := uint64(match.History().Latest())
+	for wait := time.Now().Add(5 * time.Second); reader.next.Load() <= head && reader.err() == nil && time.Now().Before(wait); {
+		if _, err := match.Tick(context.Background()); err != nil {
+			t.Fatalf("live Tick after the catch-up: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := reader.err(); err != nil {
+		t.Fatalf("client frame stream: %v", err)
+	}
+	if got := reader.next.Load(); got <= head {
+		t.Fatalf("client has frames up to %d, want at least %d", got-1, head)
+	}
+	if tcp.sessionClosed("slow", closed) || tcp.runtime.TCPRuntime.ActiveSessions(1) != 1 {
+		t.Fatal("the catching-up connection was closed")
 	}
 }

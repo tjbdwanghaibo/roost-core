@@ -182,7 +182,7 @@ Lockstep 与 PB/Entity Sync 共用 Gate、Core NATS 和 MessagePack 信封，不
 | --- | --- | --- |
 | [command.go](../../framework/sync/lockstep/command.go) | 原始 Command 编解码；HandleCommand 根据认证 session 处理 Input/Hash/Catchup | Gate 原样转发 flags=4 的字节；Game 校验 PayloadKind 后解码，完整 BindID 映射到当前数值 session，再进入 Match 的串行入口 |
 | [match.go](../../framework/sync/lockstep/match.go) | 席位/旁观者绑定、输入收集、C7 广播、历史追帧 | Match 和成员真相保留在 Game；连接换代通过 Attach/旁观者入口更新，追帧复用当前 History/Catchup |
-| [tcp.go](../../framework/sync/lockstep/tcp.go) | TCPSender 把实时通道接到 PushLockstepSession（只准入）、可靠通道接到 PushLockstepSessionWritten（嵌入 TCP 入队并等写出，追帧随链路放慢） | 独立 Gate 用 [wiring/gate.Transport](../../wiring/gate/transport.go)：两条通道都经 Game 的有序 Gate 出站，只做本地准入，追帧没有链路背压（Gate 没有写出回执，见 KNOWN-LIMITS“Lockstep 追帧链路背压（独立 Gate / demo）”）；resolver/包大小/禁止业务 worker 阻塞契约相同 |
+| [tcp.go](../../framework/sync/lockstep/tcp.go) | TCPSender 把实时通道接到 PushLockstepSession（只准入）、可靠通道接到 PushLockstepSessionWritten（嵌入 TCP 入队并等写出，追帧随链路放慢） | 独立 Gate 用 [wiring/gate.Transport](../../wiring/gate/transport.go)：两条通道都经 Game 的有序 Gate 出站，只做本地准入，追帧没有链路背压（Gate 没有写出回执，见 KNOWN-LIMITS“Lockstep 追帧链路背压（独立 Gate）”）；resolver/包大小/禁止业务 worker 阻塞契约相同 |
 | [生成 TCP](../../codegen/internal/roost/render_player_tcp.go)、[ProtocolRegistry](../../codegen/internal/roost/render_access.go) | flags=4 上行和 flags=5 推送；显式注册 Lockstep Notify | Gate 保留 RS 头与类型校验；Game 保留路由注册；Gate writer 写出原始 C7/追帧字节 |
 
 MessagePack 只编码内部 envelope，不重新编码 Command、C7 或追帧页。实时帧和追帧页首期最终均走 Gate TCP，有界发送且不采用只保留最新帧；不能因为 Match 的实时接口名叫 SendDatagram，就宣称 Gate 首期提供 UDP/KCP。

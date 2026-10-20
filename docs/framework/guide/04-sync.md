@@ -172,10 +172,11 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 接线：`lockstep.NewTCPSender(messageID, maxPayload, resolve, push, pushWritten)` 的最后两个参数分别是实时与追帧的发送函数，生产接 `runtime.PushLockstepSession` 与 `runtime.PushLockstepSessionWritten`（生成工程用 `Runtime.TCPRuntime`）；接反了，要么实时广播被停读连接拖住，要么追帧又失去链路背压。
 
-不在本次范围的同类路径（[KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)“Lockstep 追帧链路背压（独立 Gate / demo）”）：
+生成 game-demo 的战斗房间（`demo/internal/service/game/battle.go.tmpl`，2026-10-20 维护者决定）也经 `TCPSender`：`battleLinks` 在嵌入 TCP 下把追帧接到 `Runtime.TCPRuntime.PushLockstepSessionWritten`，实时帧经 `battleLiveLane` 只准入、单个接收者发送失败只记 Debug（冗余帧或追帧补上）。10102 推送的是 Lockstep 包本身（flags=5，不带 PB 包装与 battle id），按接入层 SessionID 寻址：座位在第一条 `BattleInput` 到达的连接上加入（换连接则换一个新的 Lockstep 会话 ID），没说过话的座位不收帧，晚加入的座位靠追帧补齐。回归 `TestABattleCatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt` 在生成工程 `internal/service/game` 里，与上面包内用例同一场景。
 
-- 独立 Gate（`wiring/gate.Transport`）：两条通道都经 `GameIngress.PushBound` 进 Game 侧有界队列，再经 NATS 交给 Gate 侧队列与 `WritePacket`；`SendReliable` 返回 nil 只表示 Game 本地准入，追帧同样不随链路放慢。慢链路上 Game 侧队列满时准入返回 `ErrReliableBackpressure`（计一次追帧失败，每 Tick 一次），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时 Gate 关闭连接。要等写出需要 Gate 在 socket 写出后再回执，是协议改动。
-- 生成 demo 的 `battleSender`（`demo/internal/service/game/battle.go.tmpl`）两条通道都走 `PushPlayer`（PB 封装、只准入），不经 `TCPSender`，追帧也没有链路背压。
+仍只准入的路径（[KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)“Lockstep 追帧链路背压（独立 Gate）”，维护者 2026-10-20 决定暂不做）：
+
+- 独立 Gate（`wiring/gate.Transport`）：两条通道都经 `GameIngress.PushBound` 进 Game 侧有界队列，再经 NATS 交给 Gate 侧队列与 `WritePacket`；`SendReliable` 返回 nil 只表示 Game 本地准入，追帧同样不随链路放慢。慢链路上 Game 侧队列满时准入返回 `ErrReliableBackpressure`（计一次追帧失败，每 Tick 一次），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时 Gate 关闭连接。要等写出需要 Gate 在 socket 写出后再回执，是协议改动，等有具体游戏使用“Lockstep + 独立 Gate”时再做。game-demo 换成独立 Gate 部署（`accessplayertcp.NewIngressMod`）时没有 `TCPRuntime`，`battleLinks` 让追帧页也只准入。
 
 ## 7. 公共客户端协议
 

@@ -2,19 +2,23 @@
 
 package protocoldef
 
-// BattleFramePush carries one lockstep broadcast packet: the frames the room
-// has cut, most recent last, encoded by roost-core/sync/lockstep. The packet
-// holds the last few frames rather than only the newest one, so a client
-// that missed a push heals from the next one without asking for anything —
-// that redundancy is why lockstep tolerates a lossy lane. The demo pushes it
-// over the player's TCP connection; a UDP or KCP deployment sends the same
-// bytes as a datagram.
+// BattleFramePush declares the message ID and generated schema artifact of
+// one lockstep broadcast packet: the frames the room has cut, most recent
+// last, encoded by roost-core/sync/lockstep. The room sends the packet bytes
+// themselves through lockstep.TCPSender (RS v2 Lockstep flag), without
+// serializing this PB wrapper — the same arrangement as EntitySyncPush. The
+// packet holds the last few frames rather than only the newest one, so a
+// client that missed a push heals from the next one without asking for
+// anything — that redundancy is why lockstep tolerates a lossy lane. A UDP or
+// KCP deployment sends the same bytes as a datagram.
+//
+// The packet carries no battle id: a connection receives the frames of the
+// rooms it has spoken in, and the demo's client plays one battle at a time.
 //
 // A client decodes it with lockstep.FrameAssembler (roost-core/robot's
 // LockstepBot does exactly that) and applies the frames in order.
 type BattleFramePush struct {
-	BattleID string `pb:"1"`
-	Packet   []byte `pb:"2"`
+	Packet []byte `pb:"1"`
 }
 
 //roost:protocol group=game handler=player

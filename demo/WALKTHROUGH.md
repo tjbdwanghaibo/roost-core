@@ -361,8 +361,15 @@ demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程
   给掉线重连的会话分页补发历史、把关键帧的哈希报告按法定人数判成 desync 裁决。
 - **工程写的**（`internal/service/<game>/battle.go`）：房间的生命周期、驱动它的那条串行 goroutine、以及线。
   `lockstep.Match` 是单所有者状态（内部没有锁），所以所有调用都在一条 goroutine 上；端点把消息投进 channel，不直接碰房间。
-- **线是 demo 已有的 player TCP 连接**：广播就是一条普通服务器推送（`BattleFrame`，10102），输入回来是一条普通请求（`BattleInput`，10015）。
-  lockstep 不要求数据报通道，它要求帧能到；包里的冗余是让有损通道能用的东西。换成 UDP / KCP 部署时替换 `battleSender` 这个适配器即可，房间一行不动。
+- **线是 demo 已有的 player TCP 连接**：广播是服务器推送 `BattleFrame`（10102），载荷就是 Lockstep 包本身（RS v2 Lockstep 标志，不带 PB 包装和 battle id）；
+  输入回来是一条普通请求（`BattleInput`，10015）。lockstep 不要求数据报通道，它要求帧能到；包里的冗余是让有损通道能用的东西。
+  换成 UDP / KCP 部署时把 `lockstep.TCPSender` 换成对应的 nettransport 发送器即可，房间一行不动。
+- **两条发送通道经 `lockstep.TCPSender`**：实时帧只入出站队列、Tick 不等任何连接；追帧页在嵌入 TCP（生成默认）下经
+  `TCPRuntime.PushLockstepSessionWritten` 等写出，追帧随链路放慢，慢连接不会因追帧积压超过出站上限被断开。等写出只发生在 Match 为追帧页起的
+  goroutine 上，不在房间的 Tick 协程，也不在业务 worker。换成独立 Gate 部署时拿不到 `TCPRuntime`，追帧页只准入（Gate 写出后不回执，
+  见 KNOWN-LIMITS“Lockstep 追帧链路背压（独立 Gate）”）。
+- **帧按连接发**：座位在它第一条 `BattleInput` 到达的连接（接入层 SessionID）上加入，重连后下一条消息把座位带到新连接。还没说过话的座位收不到帧；
+  晚加入的座位第一个包就看到缺口，客户端请求追帧补齐。帧不带 battle id，所以一条连接同时只打一场战斗。
 - **一条消息三件事**：`BattleInput` 同时带本帧输入、关键帧的模拟哈希、以及"从第 N 帧开始补发"的请求——这三样都是每帧节奏的东西。
 - **收尾窗口**：房间切完最后一帧不会立刻关。客户端只有应用了关键帧才能报出那一帧的哈希，所以最后一个关键帧的报告必然晚于模拟结束；
   切完就关的房间会正好拒掉 desync 裁决需要的那批报告。战绩结算、反作弊校验也在这个窗口里做。
@@ -375,8 +382,8 @@ demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程
 - **desync 长什么样**：两个客户端的模拟不一致时，房间在关键帧判出 outlier，game 日志里是一条 `battle: desync verdict` 的 ERROR。
   真实游戏在这里踢人或强制重同步；demo 只记录——所有客户端都诚实时它不该出现。
 - **边界**：房间是进程内状态，只有形成比赛的那个 game 进程持有它。多 game 进程部署要把战斗做成自己的服务、按 match id 寻址；
-  进程重启会结束它托管的战斗（框架能给重连会话补发历史，但只在房间还活着时）。ranked 匹配也会开房间，但 demo 的机器人只打 duel 那一场，
-  没人进的房间在 `battleStartGrace + battleIdleTimeout` 后自己退出。
+  进程重启会结束它托管的战斗（框架能给重连会话补发历史，但只在房间还活着时）。ranked 匹配也会开房间，但 demo 的机器人只打 duel 那一场；
+  没人进的房间在 `battleStartGrace` 后照常切帧（没有座位加入，帧不发给任何人），切完帧预算、过完收尾窗口后退出，最迟 `battleMaxLifetime`。
 
 ## GM 运维面：admin 命令，不是另一个 HTTP 服务
 
