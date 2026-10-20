@@ -24,6 +24,17 @@
 
 **需要决定**：是否提供“合服”参考流程与工具（类似 `cmd/sidmove`：停写 → 排空 → 改绑 ServerID → 搬 sid 库 → 合并排行 / 名字冲突处理 → 校验），以及 account 是否增加受审计的 `ServerID` 改绑接口。
 
+**迁服（`cmd/sidmove`）能复用什么**（2026-10-20 补充，按当日 origin/main 核对）：迁服搬的是**同一个 sid** 到另一台机器，玩家绑定不变；`sidmove` 本身只做检查，不搬数据、不切路由、不起停进程。它的三项检查可以直接用作合服的前置门槛：`wal-drained`（被合服与目标服各自停机后 WAL 已全部投影确认）、`singleton`（两个 sid 的单实例锁都已释放）、`players -out / -compare`（停机后与接管前比对玩家文档的 `_version` / `_schema` / `_last_tx` / 摘要，证明空窗期没有第三个写者；物理库按 `dataengine.databases` 换算）。另一个有利事实：game-demo 的 Player DAO 不按 sid 分库（`sidmove` 注释：“Player 不按 sid 分库，sid 只参与校验”），所有服的玩家文档本来就在同一个集合，合服不需要搬玩家文档。迁服**不覆盖**的正是合服的核心：改玩家所属区服、处理双角色、合并按服数据。
+
+**双角色 slot 冲突**：account 的“一个账号一个区服一个角色”由 insert-only 的 slot 保证，键是 `slotKeyFor(accountID, serverID)`（`service/account/create_role.go`、`admin.go`）。同一账号在 A、B 两服各有角色时，把 A 服角色改绑到 B 会与 B 服已有 slot 冲突——这是合服最常见的产品问题，模型本身不允许；`cmd/accountctl` 只有 `upsert-server`，account 也没有改绑 `Role.ServerID` 的接口。此外 game 进程按会话 Claims 里的 `server_id` 与本进程 sid 静态比对（`PlayerOwners` / `BoundServerID`），按 sid 分库的 DAO 物理库名带 `_<sid>`（D9）、单实例锁按 `server_type + sid`，都意味着一个进程只认一个 sid。
+
+**两种方案**：
+
+- **方案 A：逻辑合服（推荐）**。每个角色保留原 `ServerID`，目标服进程同时服务一组 sid（例如配置 `served_sids: [B, A]`）。需要框架支持：接入层与 `PlayerOwners` 按 sid 集合判断；`dbscope=sid` 的数据按玩家所属 sid 选物理库（或合服前要求把按服数据收敛到全局库）；单实例锁对集合里的每个 sid 都加锁，防止被合服的旧进程误启动；account 的服务器记录标记“A 已并入 B”，登录 A 时返回 B 的接入地址；排行、活动等按服数据可以并存（保留各服榜）或另建合并榜。优点：不改玩家身份、不触发双角色冲突、不搬玩家文档、可以按原 sid 再拆开；与行业里“合服后保留原区服标识（角色名带 [S1] 等后缀）”的常见做法一致。代价：框架要支持“一进程多 sid”，按服数据的并存语义要定义。
+- **方案 B：物理合服**。把 A 服角色的 `ServerID` 改绑成 B，合并按服数据后退役 A。需要：account 受审计的改绑接口；双角色策略（产品决定：允许一服多角色并让玩家选择、或合并 / 删除其中一个——都要改 slot 模型或做不可逆的数据处理）；服内唯一名字冲突（公会名等）的改名规则；按 sid 分库数据搬迁；排行重算。改动面大且不可回退。
+
+**推荐**：方案 A。它绕开了 slot 模型这个结构性冲突，复用了现有的迁服检查与 D9 库名映射，失败时可以退回原 sid 部署；方案 B 留给确有“合并成一个身份”需求的产品。
+
 ### 3. 全服邮件只有“业务自己实现扇出”，生成骨架的语义是“只投递在线玩家”
 
 **现象**：`service/mail` 的 `AudienceBroadcast` 需要业务提供 `Deliverer`（`mail.go` 注释“Whatever strategy a deployment picks”），框架没有内置策略；生成的 `internal/service/mail/collaborators.go` 写 `// Broadcast delivers broadcast mail to every online player`，默认 nil（拒绝广播）。
