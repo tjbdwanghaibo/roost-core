@@ -10,6 +10,11 @@
 - `ROOST_SLG_REAL=1`（隔离 Mongo / Redis / NATS，共享环境上先持有 `remote-acceptance.lock`）追加 3 条用例：`TestSLGAllianceActivity`（正式 Activity RPC 连协调器子进程并重启两次，成员撤权与视野来源归并、Receiver 解码视野帧，贡献意图补报只计一次，冻结与两服阶段屏障，原服奖励义务丢 ACK 后重投）、`TestSLGAlliancePlayerDelivery`（两个原服 Player 在 strict 文件 WAL 上到账，“已到账、未标记完成”处 SIGKILL 后冷加载补完，第三进程无待发）、`TestSLGAllianceRemoteDelivery`（联盟权威经 Remote owner 交接，旧 owner 写入被拒，冷加载事实一致后继续）。写 Mongo 的两条各用本次唯一物理库，DAO 逻辑库 `main` 经库名映射（D9）换算，Remote 存储显式绑定同一张映射表；失败时保留工程并打印库名。
 - [SLG 手册](docs/framework/SLG-INTEGRATION.md)第一部分新增 §7“跨服联盟活动”：按“框架已有 / 业务要做 / 框架没有”区分跨服权威、视野和活动三条方向，状态归属与调用顺序、Remote 托管实体的装配与交接、先停发布再读权限的视野、可编译示例；原 §7～§13 顺延为 §8～§14，第二部分 §12.1 按实际断言写三条用例与不证明的范围。[MMORPG 手册](docs/framework/MMORPG-INTEGRATION.md)新增 §6.1“跨服世界 Boss / 限时副本”方向表。根包覆盖表、KNOWN-LIMITS 游戏表 SLG 行、scripts/README、docs/framework/README、DOCUMENTS 同步。
 
+### 生成的 mail `Broadcast` 骨架注释改为说明完整受众（新用户试用第八轮第 3 项）
+
+- **修正（生成器）**：`internal/service/mail/collaborators.go` 的 `Broadcast()` 注释原写“投给每个在线玩家”，与 `service/mail` 的契约（`AudienceBroadcast` 的范围是一个服 / 公会 / 全体，投递策略由部署选择）不一致，会把业务引向漏发离线玩家与之后才登录的玩家的实现。现改为写明受众包含离线与后来登录的玩家、两种常见策略（任务逐个写邮箱，或存一份、玩家下次读时合并）与 `Deliver` 按（邮箱、邮件）幂等；缺省仍为 nil（拒绝广播）。只影响新生成的工程（该文件只生成一次、归业务），已有工程按需手工改注释。
+- 修前红：`TestMailBroadcastSkeletonDescribesTheWholeAudience`（`codegen/internal/roost`）报 `mail Broadcast skeleton describes the broadcast audience as online players only` 与 `does not mention "offline"`。
+
 ### Lockstep 快照恢复 P1～P5：服务端核心、Go / C# 客户端、示例与验收、现行文档（DESIGN-TODO D1 方案 B，维护者 2026-10-20 批准，§12 全部按推荐；已实施）
 
 - **新增（`framework/sync/lockstep`）**：`MatchConfig.Recovery`（`RecoveryCatchup` / `RecoverySnapshot` / `RecoveryAuto`，零值：配了 `Snapshots.Provider` 解析为 auto，没配仍是 catchup，现有工程行为不变）与 `MatchConfig.Snapshots`（`SnapshotConfig`：`AutoCatchupMaxFrames` 缺省 0 = 只按窗口判断；`MaxBytes` 缺省 4 MiB、硬上限 64 MiB；`ChunkBytes` 16 KiB；`BytesPerTick` 64 KiB / `UnpacedBytesPerTick` 16 KiB 按可靠通道是否实现 `nettransport.ReliablePacer` 自动选用；`FetchTimeout` 2s；`PinFrames` 缺省 = `HistoryRetainFrames`）。业务快照来源接口 `SnapshotProvider`（`SnapshotRequest` / `Snapshot` / `ErrSnapshotUnavailable`），在 Match 自己的 goroutine 上调用、同一局至多一次在途、多会话共享结果、panic 被 recover；`Tick` 只非阻塞收结果。宿主强制快照 `Match.StartSnapshot` / `SpectatorSnapshot`。

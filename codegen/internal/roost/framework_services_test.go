@@ -553,3 +553,26 @@ func TestServicePackageNamesAreLowercaseAndFollowAnExistingProject(t *testing.T)
 		}
 	}
 }
+
+// 生成的 mail Broadcast 骨架必须按 service/mail 的契约说明广播的受众：AudienceBroadcast 的范围是一个服 / 公会 /
+// 全体（含离线玩家与之后才登录的玩家），投递策略由部署选择（mail.Deliverer）。注释写成“投给每个在线玩家”会把业务
+// 引向漏发离线玩家的实现。
+func TestMailBroadcastSkeletonDescribesTheWholeAudience(t *testing.T) {
+	plan, err := renderProject(gameTemplateManifest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, ok := plan["internal/service/mail/collaborators.go"]
+	if !ok {
+		t.Fatal("internal/service/mail/collaborators.go missing")
+	}
+	body := string(file.Body)
+	if strings.Contains(body, "online player") {
+		t.Errorf("mail Broadcast skeleton describes the broadcast audience as online players only:\n%s", body)
+	}
+	for _, want := range []string{"offline", "mail.Deliverer"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("mail Broadcast skeleton does not mention %q:\n%s", want, body)
+		}
+	}
+}
