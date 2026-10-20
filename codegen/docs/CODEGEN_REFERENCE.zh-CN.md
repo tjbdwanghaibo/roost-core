@@ -335,6 +335,12 @@ type EquipInfo struct {
 `kitdataengine.DAOCollection(mongo, databases, db.NewPlayerDao(), sid)`，不要把 `db.<Type>DBName` 当库名（根包守卫
 `TestNoMongoDatabaseOpenedWithALogicalDAOName`）。改映射要先停写、排空 WAL、迁移数据（PLAYER-MIGRATION §5）。
 
+WAL 目录：生成的开发配置不写 `dataengine.wal.dir`，运行期取 `data/wal/dataengine/<sid>`（相对进程工作目录），同一份配置用
+`--sid` 起的几个进程各用各的目录；生产示例与 k8s Secret 示例写 `dir: /var/lib/roost/wal`（每个实例独占的持久卷）。显式写的
+目录只能给一个进程用：WAL 对目录加独占锁，第二个进程启动即报 `nestwal: directory is already locked`。回归见
+`TestGeneratedDevConfigGivesEachSidItsOwnWAL`（生成配置）与 `wiring/dataengine` 的 `TestDataEngineModWALDirectoryIsPerSid`
+（两个真实进程、同一工作目录、sid 1000 / 1001）。
+
 文档 `_id` 是完整 EntityID，不是玩家 ID：位布局 `[remote(1)][unique(52)][kind(8)][category 低 2 位]`，例如 kind 1、
 category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 `roost id entity` 换算：
 

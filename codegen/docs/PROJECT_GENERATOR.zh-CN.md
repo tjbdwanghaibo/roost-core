@@ -314,6 +314,8 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 
 第二个 game 改用独立的两段端口：改用块号之前它用“第一个 + 10”，工程有 11 个以上服务时会撞上别的服务。玩家 TCP（7000，第二个 game 7001）与 web（8080）各只有一个服务持有，不按服务派生。新建工程、之后 `add mod` 追加的段、doctor `config-sections` 的补段提示都经 `localizeDevConfig` 写入本服务的端口。配置归应用、可以手改：`roost config check --all` 与 doctor `config-across-services` 在开发配置的 `ops.addr` / `etcd.advertise_addr` 端口与块号派生值不一致时给 WARN（不影响退出码；`run.sh` 与 `second-game.sh` 按块号走），端口冲突与 advertise 重复才是失败。
 
+**按 sid 区分的本地状态：WAL 目录**（2026-10-20 修复）。开发配置不写 `dataengine.wal.dir`，运行期取工作目录下的 `data/wal/dataengine/<sid>`，同一工作目录、同一份配置用 `--sid` 起的几个进程各用各的目录（WAL 对目录加独占锁，共用目录的第二个进程启动时报 `nestwal: directory is already locked` 退出）。以前开发配置显式写了不带 sid 的 `data/wal/dataengine`，绕过了这条缺省；已有工程删掉这一行即可（目录里未投影的记录先排空，见 [PLAYER-MIGRATION](../../docs/framework/PLAYER-MIGRATION.md)）。生产示例与 k8s Secret 示例由 `productionizeConfig` 写 `dir: /var/lib/roost/wal`：生产每个实例一个容器 / Pod / systemd 单元，WAL 落在只挂给这个实例的持久卷上。`second-game.sh` 只在配置手写了 `…/wal/dataengine` 时把它改成 `…/wal/dataengine-<sid>`。
+
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Wiring 内部的连接、重试、health 或 shutdown 逻辑。
 
 增加 Service：

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 生成的开发配置不再写死不带 sid 的 WAL 目录（同一工作目录起两个 sid 时第二个进程启动失败）
+
+- **修正（生成器，行为变化）**：新工程的 `configs/service/config.<svc>.yaml` 不再写 `dataengine.wal.dir: data/wal/dataengine`，WAL 目录取运行期缺省 `data/wal/dataengine/<sid>`，按 sid 分开。以前这一行绕过了按 sid 分目录的缺省：同一工作目录、同一份配置用 `--sid` 再起一个 game 进程时两个进程争同一把 WAL 目录锁，第二个在 DataEngine Start 时报 `nestwal: directory is already locked` 退出（`deploy/dev/second-game.sh` 靠 sed 改目录才避开）。根因是 `wiring/dataengine/mod.go` 的 `WAL.Dir` 声明带了 `example:"data/wal/dataengine"`，带 example 的键都是 starter 键、会被写进生成配置。现去掉 example，解释改写在 `dataengine.wal` 段的注释上；`codegen/internal/roost/kitconfig_gen.go` 重新生成。生产示例与 k8s Secret 示例照旧写 `dir: /var/lib/roost/wal`（每个实例独占的持久卷），改由 `productionizeConfig` 插入（重复改写不会写出第二个 `dir`）。`second-game.sh` 的 sed 规则保留，只对手写了 `…/wal/dataengine` 的配置起作用。其他 starter 键里没有同类问题：`log.dir`（文件名含 sid）、`stats_log.dir`（文件名缺省 `<server_type>-<sid>.stats.log`）、`config_data.dir`（只读）都不按进程独占；`dataengine.outbox.owner`、`saga.owner`、`stats_log.filename` 本来就不写进生成配置、缺省含 sid；nestwal 只有 DataEngine 这一处打开，remote_entity / saga 没有本地 WAL 目录。
+- **升级**：已有工程的开发配置删掉 `dataengine.wal.dir: data/wal/dataengine` 一行（配置归应用，sync 不改）。旧目录里若有未投影记录，先用旧配置起进程排空（或 `cmd/sidmove wal-drained -dir data/wal/dataengine` 确认已排空）再删；线上尚未部署，开发环境也可以直接清空旧目录与测试库。
+- 顺带修正：systemd 安装脚本（`deploy/shell/install.sh`）检查 WAL 目录时报错文案写成不存在的键 `nest.wal.dir`，改为 `dataengine.wal.dir`；game-demo `cmd/sidmove` 的 `-dir` 说明、PLAYER-MIGRATION、MMORPG 手册 §13、PROJECT_GENERATOR、CODEGEN_REFERENCE 按新缺省改写。
+- 修前红（实测表现）：两个真实进程在同一工作目录用修前生成的 game 配置分别按 sid 1000 / 1001 起 DataEngine Mod，子进程报 `sid 1001: DataEngine Start: nestwal: directory is already locked` / `resource temporarily unavailable`，即第二个进程启动即失败（不是两个 writer 共用 WAL）。这个复现最初写在 codegen 测试里，因生成器不得 import 运行时（根包 `TestCoreDependencyBoundary`）拆成两半：`codegen/internal/roost` 的 `TestGeneratedDevConfigGivesEachSidItsOwnWAL` 断言开发配置不写 `dataengine.wal.dir`、生产示例写 `/var/lib/roost/wal`，在修前生成器上报 `configs/service/config.game.yaml: dataengine.wal.dir = "data/wal/dataengine", want ""`；`wiring/dataengine` 的 `TestDataEngineModWALDirectoryIsPerSid` 用两个真实进程验证不写 dir 时两个 sid 都能起、写同一个 dir 时第二个被目录锁拒绝。
+
 ### SLG 跨服联盟活动：联合链路的学习与真实依赖验收（scripts/test-slg-generated.sh，`ROOST_SLG_REAL=1`）
 
 - 业务规则只在 `scripts/testdata/slg`（新增 `alliance/` 业务包与测试、`alliance_rewards.go.txt`、`alliance_authority.go.txt`），框架、生成器模板与 demo 未改。生成工程加 `add mod remote_entity` 与 Remote 托管的 `AllianceAuthority`，缺省模式对整个工程 build / vet 并执行 `id check` / `generate --check`；6 条场景不变。

@@ -3,6 +3,9 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +112,82 @@ func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	if mod.Runtime() == nil || !mod.Runtime().Ready() || len(mod.NestOptions()) == 0 || jetStream.streams != 1 {
 		t.Fatalf("runtime=%v ready=%v options=%d streams=%d", mod.Runtime(), mod.Runtime() != nil && mod.Runtime().Ready(), len(mod.NestOptions()), jetStream.streams)
 	}
+}
+
+// 同一工作目录、同一份配置用 --sid 起两个进程：dataengine.wal.dir 不写时 WAL 取 data/wal/dataengine/<sid>，
+// 两个进程各用各的目录、都能启动；显式写了同一个目录时 nestwal 的目录锁拒绝第二个进程（启动即失败，不会两个
+// writer 共用一份 WAL）。生成的开发配置因此不写 dir（codegen 的 TestGeneratedDevConfigGivesEachSidItsOwnWAL）。
+// 两个真实进程：本测试进程按 sid 1000 起 Mod 并持有 WAL，再把测试二进制作为子进程在同一工作目录按 sid 1001 起。
+func TestDataEngineModWALDirectoryIsPerSid(t *testing.T) {
+	const childSid, childDir = "ROOST_TEST_WAL_CHILD_SID", "ROOST_TEST_WAL_CHILD_DIR"
+	if sid := os.Getenv(childSid); sid != "" {
+		value, err := strconv.Atoi(sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mod, err := startWALTestMod(value, os.Getenv(childDir))
+		if err != nil {
+			t.Fatalf("sid %d: DataEngine Start: %v", value, err)
+		}
+		mod.Stop()
+		return
+	}
+	for _, tc := range []struct {
+		name, dir   string
+		secondStart bool
+	}{
+		{"dir unset: per-sid default", "", true},
+		{"one explicit dir for both sids", "data/wal/dataengine", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			first, err := startWALTestMod(1000, tc.dir)
+			if err != nil {
+				t.Fatalf("sid 1000: DataEngine Start: %v", err)
+			}
+			defer first.Stop()
+			child := exec.Command(os.Args[0], "-test.run=^TestDataEngineModWALDirectoryIsPerSid$", "-test.count=1")
+			child.Env = append(os.Environ(), childSid+"=1001", childDir+"="+tc.dir)
+			out, err := child.CombinedOutput()
+			switch {
+			case tc.secondStart && err != nil:
+				t.Fatalf("sid 1001 could not start beside sid 1000 in one working directory (dataengine.wal.dir %q): %v\n%s", tc.dir, err, out)
+			case !tc.secondStart && err == nil:
+				t.Fatalf("sid 1001 started on the WAL directory %q sid 1000 holds; the directory lock did not refuse it", tc.dir)
+			case !tc.secondStart && !strings.Contains(string(out), "nestwal: directory is already locked"):
+				t.Fatalf("sid 1001 on a shared WAL directory failed for another reason: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+// startWALTestMod 起真实的 DataEngine Mod（Init、Provide、Start；Start 打开 WAL、对目录加锁），dir 为空时不写
+// dataengine.wal.dir。Mongo 与 JetStream 是进程内替身。
+func startWALTestMod(sid int, dir string) (*Mod, error) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("sid", sid)
+	if dir != "" {
+		cfg.Set("dataengine.wal.dir", dir)
+	}
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongotest.NewClient())); err != nil {
+		return nil, err
+	}
+	if err := registry.Register(mods.ModNatsJetStream, fnats.IJetStream(&modJetStream{})); err != nil {
+		return nil, err
+	}
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		return nil, err
+	}
+	if err := mod.Provide(registry); err != nil {
+		return nil, err
+	}
+	if err := mod.Start(); err != nil {
+		return nil, err
+	}
+	return mod, nil
 }
 
 func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {

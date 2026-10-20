@@ -129,13 +129,13 @@ type config struct {
 	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	WAL                   struct {
-		Dir                 string        `config:"dir" example:"data/wal/dataengine" help:"不写取 data/wal/dataengine/<sid>"`
+		Dir                 string        `config:"dir" help:"不写取 data/wal/dataengine/<sid>；显式写时只给一个进程用（见 dataengine.wal）"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
 		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
 		MaxUnackedAge       time.Duration `config:"max_unacked_age" min:"0" example:"24h"`
 		QueueCapacity       int           `config:"queue_capacity" min:"0" example:"8192"`
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
-	} `config:"dataengine.wal"`
+	} `config:"dataengine.wal" help:"dir 不写取 data/wal/dataengine/<sid>（相对进程工作目录），每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
 		RemoteWorkers      int           `config:"remote_workers" min:"1" max:"64"`
 		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
@@ -200,6 +200,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	}
 	sid := settings.Sid
 	dir := settings.WAL.Dir
+	// 缺省按 sid 分目录：同一工作目录、同一份配置用 --sid 起的多个进程各用各的 WAL。
+	// 生成的开发配置不写 dataengine.wal.dir，靠的就是这条缺省；生产示例显式写每实例独占的持久卷。
 	if dir == "" {
 		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
 	}

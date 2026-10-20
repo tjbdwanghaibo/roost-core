@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
@@ -144,6 +145,40 @@ func TestGeneratorConstantsMatchTheDeclaredExamples(t *testing.T) {
 	}
 	if key, _ := playerTCPSchema().Lookup("player_access.tcp.shutdown_timeout"); key.Example != seconds(generatedPlayerTCPShutdownTimeout) {
 		t.Errorf("player_access.tcp.shutdown_timeout example = %q, generatedPlayerTCPShutdownTimeout = %s", key.Example, seconds(generatedPlayerTCPShutdownTimeout))
+	}
+}
+
+// 同一工作目录下用同一份生成的开发配置起两个 sid（make dev-run 起 sid 1000，再 bin/app game --sid 1001
+// --config configs/service/config.game.yaml），两个进程的 DataEngine 必须各有自己的 WAL 目录：nestwal 对目录加
+// 独占锁，共用一个目录的第二个进程启动即失败。dataengine.wal.dir 不写时运行期取 data/wal/dataengine/<sid>，
+// 按 sid 分开（两个真实进程的验证在 wiring/dataengine 的 TestDataEngineModWALDirectoryIsPerSid；生成器不得
+// import 运行时，那一半放不进这里）；生成的开发配置以前显式写了不带 sid 的 data/wal/dataengine，绕过了这条缺省。
+// 生产示例与 k8s Secret 示例写每个实例独占的持久卷 /var/lib/roost/wal。
+func TestGeneratedDevConfigGivesEachSidItsOwnWAL(t *testing.T) {
+	plan, err := renderProject(gameTemplateManifest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ rel, want string }{
+		{"configs/service/config.game.yaml", ""},
+		{"configs/service/config.game.prod.example.yaml", "/var/lib/roost/wal"},
+	} {
+		body, ok := plan[tc.rel]
+		if !ok {
+			t.Fatalf("the game template renders no %s", tc.rel)
+		}
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(bytes.NewReader(body.Body)); err != nil {
+			t.Fatalf("%s: %v", tc.rel, err)
+		}
+		if !cfg.IsSet("dataengine.wal.segment_bytes") {
+			t.Fatalf("%s has no dataengine.wal section; the game template changed shape", tc.rel)
+		}
+		if got := cfg.GetString("dataengine.wal.dir"); got != tc.want {
+			t.Errorf("%s: dataengine.wal.dir = %q, want %q (unset in development: the runtime default data/wal/dataengine/<sid> keeps two sids started from one config in one working directory apart)",
+				tc.rel, got, tc.want)
+		}
 	}
 }
 

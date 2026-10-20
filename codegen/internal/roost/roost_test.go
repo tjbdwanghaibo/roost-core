@@ -1798,6 +1798,17 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if strings.Contains(production, "127.0.0.1") || strings.Contains(production, "file: true") {
 		t.Fatalf("development topology leaked into production config:\n%s", production)
 	}
+	// 开发配置不写 dataengine.wal.dir（运行期按 sid 分目录），生产示例由 productionizeConfig 补上持久卷；
+	// 再改写一次（add mod 追加段等）不能写出第二个 dir。
+	dev := renderServiceConfig(m, "game", false)
+	for _, line := range strings.Split(dev, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "dir: "); ok && strings.Contains(value, "wal") {
+			t.Errorf("development config pins the WAL directory %q instead of the per-sid default:\n%s", value, dev)
+		}
+	}
+	if again := productionizeConfig(production); again != production || strings.Count(production, "dir: /var/lib/roost/wal") != 1 {
+		t.Errorf("productionizeConfig is not idempotent on the WAL directory:\n%s", again)
+	}
 	dockerfile := renderDockerfile(m)
 	if !strings.Contains(dockerfile, `VOLUME ["/var/lib/roost/wal"]`) || !strings.Contains(dockerfile, "USER nonroot:nonroot") || !strings.Contains(dockerfile, "go mod download && go mod verify") {
 		t.Fatalf("durable non-root Dockerfile missing:\n%s", dockerfile)

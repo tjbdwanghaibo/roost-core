@@ -30,8 +30,8 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
 	add(".gitattributes", renderGitattributes(), true)
-	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/dataengine，
-	// second-game.sh 的 data/wal/dataengine-<sid>）是运行期输出。只忽略 .dev/ 的话，
+	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/dataengine/<sid>，
+	// second-game.sh 对手写 dir 改出的 data/wal/dataengine-<sid>）是运行期输出。只忽略 .dev/ 的话，
 	// dev-run 之后 git add -A 会把 WAL 段提交进仓库。只忽略 WAL 目录，不忽略
 	// data/（configs/data 是要提交的生成物，根目录 data/ 下也可能有使用者自己的文件）。
 	// .gitignore 归使用者所有，sync 不覆盖，已有工程需手工补这一行。
@@ -754,7 +754,35 @@ func productionizeConfig(value string) string {
 	// remote_entity.snapshot_l2_tombstone_wait_replicas 是 L2 墓碑 WAIT 的副本数，不是流副本，不能跟着变成 3。
 	value = streamReplicasLine.ReplaceAllString(value, "${1}replicas: 3")
 	value = strings.ReplaceAll(value, "file: true", "file: false")
-	return strings.ReplaceAll(value, "dir: data/wal/dataengine", "dir: /var/lib/roost/wal")
+	return productionWALDir(value)
+}
+
+// dataEngineWALSection 匹配 dataengine 段到其中 wal: 子段这一行为止：中间每行都属于 dataengine 段
+// （缩进行、注释行或空行），碰到下一个顶层键就不再匹配。
+var dataEngineWALSection = regexp.MustCompile(`(?m)^dataengine:\n(?:(?:  .*|#.*)?\n)*?  wal:\n`)
+
+// productionWALDir 给生产示例的 dataengine.wal 写上 dir: /var/lib/roost/wal。开发配置不写 dir，运行期取
+// data/wal/dataengine/<sid>，同一工作目录下不同 sid 的进程各用各的目录；生产每个实例一个容器 / Pod / systemd 单元，
+// WAL 必须落在挂给这个实例独占的持久卷上（生成的 compose、k8s、docker run 都挂 /var/lib/roost/wal），所以显式写。
+// wal: 下已经有 dir 的（重复调用、使用者手改）不动。
+func productionWALDir(value string) string {
+	loc := dataEngineWALSection.FindStringIndex(value)
+	if loc == nil {
+		return value
+	}
+	rest := value[loc[1]:]
+	for strings.HasPrefix(rest, "    #") {
+		next := strings.IndexByte(rest, '\n')
+		if next < 0 {
+			break
+		}
+		rest = rest[next+1:]
+	}
+	if strings.HasPrefix(rest, "    dir:") {
+		return value
+	}
+	return value[:loc[1]] + "    # 生产：本实例独占的持久卷（生成的 compose / k8s / docker run 都挂在这里），一个卷只给一个 sid\n" +
+		"    dir: /var/lib/roost/wal\n" + value[loc[1]:]
 }
 
 // appendModConfigSections writes the configuration sections of the Mods a
