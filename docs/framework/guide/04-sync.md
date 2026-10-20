@@ -34,6 +34,37 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 两条由框架强制、业务不用对齐的规则：一帧的上限取接入层上限（嵌入 TCP 的 `player_access.tcp.max_payload_bytes`、独立 Gate 下 Game Ingress 的载荷上限），在 Manager 创建前定下，所以超过接入层上限的帧不会推出去；一个 `SubjectSyncState` 只能登记在一个 Manager，第二个 Manager 登记时得到 `entitysync.ErrSubjectRegisteredElsewhere`（点名已登记它的 Manager），所以工程里另有自建 Manager 登记 Player 时不能同时打开 self_sync。
 
+### 附近的人：观察者是玩家，视野按观察者（D14）
+
+`policy.Interest` 把距离、额外覆盖块、自身与业务关系归并成订阅。编号规则（维护者 2026-10-20 决定 A1）：**观察者是玩家 ID**，也就是 Manager 的会话 ID；被看的目标是**实体 ID**。所以一个会话只对应一个观察者，订阅合并键 `(观察者, 目标)` 就是 `(会话, 目标)`，不会出现两个观察者合用一份订阅、其中一个走远把另一个也退订的情况；`InterestConfig.Session` 已删除。
+
+| 登记 | 看 | 被看 | 移动 | 退出 |
+| --- | --- | --- | --- | --- |
+| `Enter(playerID, entityID, at, view)` 玩家 | 是（经 self 关系看见自己） | 是 | `Move(playerID, entityID, to)`；只动视点用 `MoveView(playerID, to)` | `Leave(playerID, entityID)` |
+| `Watch(playerID, at, view)` 观战 / GM | 是（没有自身实体、没有 self） | 否 | `MoveView(playerID, to)` | `Unwatch(playerID)` |
+| `Show(entityID, at)` 怪物、掉落 | 否 | 是 | `MoveShown(entityID, to)` | `Hide(entityID)` |
+
+已用 `Enter` 登记的玩家不能直接改成 `Watch`（`ErrInterestConfig`，先 `Leave`）；同一玩家再次 `Enter`（重连）按这次的位置与视野重新登记，要保留原视野就传 `ObserverView(playerID)` 的结果（demo 就这样做）。
+
+观察者登记时带上自身实体（`Enter` 的 `entityID`，`Watch` 为 0）：距离入场、整体重评与额外覆盖块三条路径都不让观察者看见自己的实体，比的是这个实体 ID，不是玩家 ID——实体 ID 数值恰好等于某个玩家 ID 的单位照常可见。关系源同样是“玩家关心哪些实体”：`Relation("team").Set(playerID, entityIDs)`。
+
+事务内入口（`QueueMove` / `QueueSpatial` 的 `observer=true`、`QueueRelation` / `QueueRelationDelta`）只拿得到实体，由 `InterestConfig.ObserverOf func(entityID) (playerID, ok)` 换成观察者；缺省 `policy.DefaultObserverOf` 取 `entity.GetUniqueIDFromEntityID`（Player 实体的唯一号就是玩家 ID）。玩家控制英雄、载具时视点实体不是 Player，业务覆盖它；它在业务线程的 Entity 锁内调用，必须是纯函数、不阻塞。换不到观察者的实体（`ok=false`）只能当目标移动，`observer=true` 与关系入队返回 `ErrInterestUnknown`。
+
+**视野按观察者**（B1）。每个观察者有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
+
+- `AOIConfig.LODs` 是 LOD 层级表，下标即层级号，每层一组距离分档（规则同 `Bands`）；不配时只有层级 0、分档取 `Bands`，两者不能同时配。
+- 视野大小（`Radius`，即进入半径）允许范围 `[MinViewRadius, MaxLeaveRadius − 滞回量]`，按 `ViewRadiusStep` 从 `MinViewRadius` 起向下取整；离开半径 = 视野大小 + 滞回量，滞回量取缺省视野的 `LeaveRadius − EnterRadius`。零值：最小取 `EnterRadius`、最大取 `LeaveRadius`、步长 1，即只允许缺省视野，现有配置行为不变。`EnterRadius` 必须落在量化网格上，客户端报出缺省值时得到的正是缺省视野。
+- 启动期检查：单个观察者的块预算（`MaxObserverBlocks`）按 `MaxLeaveRadius` 算，超出拒绝（`ErrInterestBudget`）；每层分档递增、为正、不超过 `MaxLeaveRadius`。运行期的视野一律先归一，不会越过启动期检查过的范围。`MaxVisible` 仍是全局一个。
+
+客户端的 AOI / LOD 请求带 `(lodLevel, viewRadius)`，接入层收到后调用 `Interest.SetObserverView(playerID, ObserverView{LOD, Radius})`，与移动请求一样直接进政策、随后 `Apply`：不排队、不走提交门（视野不是业务状态，没有回滚问题）。规则：
+
+- 层级必须是配置里的，否则 `ErrObserverView`；视野大小由服务端夹取并量化，防止改过的客户端拉大视野多看单位、放大订阅与带宽，量化也减少细碎请求引起的重订阅。
+- 量化后与当前相同的请求什么也不做、不占限速；同一玩家距上次生效不足 `InterestConfig.ViewChangeInterval`（缺省 1 秒，负数拒绝构造）的请求返回 `ErrObserverViewRate`。两种拒绝都计 `entitysync_interest_view_rejected_total{reason="rate"|"lod"}`。
+- 生效后完整重评：视野变大，新进入的目标按进入订阅、下发全量；变小，超出离开半径的按离开退订；只换层级，按新分档重发视图，订阅块不变。返回值是此后生效的视野（拒绝时是当前视野），接入层回给客户端。
+- 排队版（事务内改视野）暂不提供：将来“Buff 改视野”这类玩法由业务在提交后发一次请求。
+
+game-demo 的接法：`scene_view` 请求（消息 10025，`SceneViewRequest{LodLevel, ViewRadius}`）→ `HandleSceneView` → `Scene.SetView` → `SetObserverView` + `Apply`，应答带生效的视野；未配置的层级、超频、不在场景分别回 `scene_view_lod`（100022）、`scene_view_rate`（100023）、`scene_position`（100013）。demo 只有一层 LOD（打包器不区分视图），视野大小 60～270、步长 30。框架接入层不提供这个消息：LOD 表、视野范围与错误码都是业务的。
+
 ### 好友、队伍等关系如何更新
 
 关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用 v1.26.0 新增的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。
@@ -49,7 +80,7 @@ if err := interest.QueueRelationDelta(player, "team", joinedIDs, leftIDs); err !
 
 两个 ID 切片在入队时复制，返回后可复用；空切片表示该方向无变化，两个都为空也仍走正常准入检查。单次调用中同一 ID 同时出现在两边时，退出优先；重复 ID 不重复发事件，零 ID 忽略。多次调用按同一实体的事实顺序执行，后一次全量替换会覆盖前面的增量结果。
 
-只有提交确认且政策事实应用后才发布内容；回滚丢弃增量。Leave 会作废观察者自己的旧事实，Hide 只撤销被观察身份；退出 ID 会从尚未应用的增量中剔除，防止同 ID 重建时被旧新增/移除影响。移除 team 来源不会取消其他来源仍持有的订阅。
+只有提交确认且政策事实应用后才发布内容；回滚丢弃增量。Leave 会作废观察者（玩家）自己的旧事实，Hide 只撤销被观察身份（实体）；退出 ID 会从尚未应用的增量中剔除，防止同 ID 重建时被旧新增/移除影响。移除 team 来源不会取消其他来源仍持有的订阅。
 
 底层 `RelationSource.ApplyDelta` 是立即更新的政策 API，不参与事务确认；普通业务 handler 应用上面的排队入口。增量与全量对照、边界测试和剩余优化项见 [Sync 优化说明](../SYNC-OPTIMIZATION.md)。
 

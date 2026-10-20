@@ -108,6 +108,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **SyncBus投递**：有限次数、保留期限及容量，不保证绝不丢；定位为默认可丢广播（维护者 2026-10-15）。需要最终一致的业务自建快照 / 对账闭环，不能仅测重试成功；兜底写法见 [guide/04-sync §5](../framework/guide/04-sync.md#syncbus-的定位与丢失兜底)；框架级对账为下一阶段候选。
 - **policy Drain**：等待 retry 和已承担事实；永久拒绝仍需修关系或 ctx 超时，Drain 不放弃条目，超时返回 `*DrainStalledError`（列出卡住条目、原因与等待时长）并计数（D3，维护者 2026-10-15 决定 A，`b86a1286`）。“放弃出口”（D3 方案 B）需先梳理永久拒绝的判定来源。
 - **AOICluster 容量抖动**：Cluster 的 `MaxVisible` 每次移动后严格等于候选内最近 N 个，容量层没有滞回，两个目标在第 N 名附近来回时每次移动都 Leave/Enter（`BenchmarkClusterFlushRandomWalkCapped` Enter +15.6%）。维护者 2026-10-17 决定不加滞回：抖动只在候选数超过 N 时出现，不设 `MaxVisible` 或把 N 设到常规候选数之上即可，容量只作人群聚集时的带宽保护阀。单区域 AOI 不受影响；Cluster 目前没有生产装配调用方。见 [INTEREST-BLOCK-AOI](../framework/INTEREST-BLOCK-AOI.md)。
+- **AOI 观察者与视野（D14，2026-10-20 实施）**：① 两个实体经 `ObserverOf` 换到同一玩家、各自排队 `observer=true` 的移动时，排队事实按实体（`fact.id`）保序，两个实体之间的先后不保证，视点停在哪一个的位置取决于政策批次内的顺序；需要视点跟随某个实体时只让那一个实体带 `observer=true`。② 视野变大时新进入范围的目标一次性订阅、各下发全量，峰值受 `MaxVisible`（全局）与 Manager 快照预算约束，没有按观察者单独的预算；`MaxVisible` 仍是全局一个。③ 改视野没有排队版（维护者决定），事务内想改视野的玩法须在提交后再调用 `SetObserverView`。④ D14 前后的性能对照（`policy` 包 AOI 基准、`scripts/perf/sync-aoi`）尚未跑，排在 2026-10-20 夜间性能测试（待补测）。见 [guide/04-sync](../framework/guide/04-sync.md#附近的人观察者是玩家视野按观察者d14)、[impl/04-sync §2E](../framework/impl/04-sync.md#2e-interest-的观察者编号与视野d14)。
 
 ## 生成器、配置与工具
 

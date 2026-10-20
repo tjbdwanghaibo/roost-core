@@ -17,7 +17,7 @@
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
-| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），待实施（排在 2026-10-20 夜间性能补测之后） |
+| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），已实施（2026-10-20；前后 benchstat 由维护者夜间统一跑） |
 | D15 | 合服（把一个服并入另一个服） | 提案，待维护者评审（2026-10-20，新用户试用第八轮） |
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 待维护者决定（2026-10-20，新用户试用第八轮） |
 | D17 | 全服邮件的内置投递策略 | 待维护者决定（2026-10-20，新用户试用第八轮） |
@@ -383,7 +383,7 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D14 AOI 观察者改为 playerId、视野半径按观察者配置
 
-**状态：维护者 2026-10-20 决定 A1 + B1，待实施（排在当晚性能补测之后）。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
+**状态：维护者 2026-10-20 决定 A1 + B1，已实施（2026-10-20，见下文“实施结果”）。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
 
 ### 维护者决定（2026-10-20，六项均按推荐）
 
@@ -396,7 +396,26 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 **实施时一并补的两点（评审补充）**：①新增“只看、不被看”的观察者入口（观战 / GM 视角，`self = 0`），A1 下与 `Enter`、`Show` 并列；②属于 sync 三大块的公开契约调整，按维护手册对 `scripts/perf/sync-aoi` 与 `policy` 包 AOI 基准做前后 benchstat。实施顺序按 roost-coding 纯重构流程：先补现有行为的回归，再改签名，最后补新行为的红绿用例。
 
-### 现状（已核对当前源码）
+### 实施结果（2026-10-20）
+
+按 roost-coding 纯重构流程三步提交：先在旧代码上补观察者编号回归（`TestObserverAndSubjectIDSpacesStayApart` 只对 Manager 的订阅表断言，D14 前后断言一字未改；`TestSessionManyToOneDropsASharedSubscription` 在旧代码上证实多对一隐患属实，随 `Session` 删除），再改签名与数据结构、全部调用方跟随，最后补新行为用例并逐项变异验证。提交见 CHANGELOG `[Unreleased]` 本条。
+
+| 决定 | 落点 |
+| --- | --- |
+| 1 A1 | `AOI` / `AOICluster` 的观察者键是玩家 ID，`interestObserver.self` 是自身实体；自排除三处（`evaluatePair`、`evaluateObserver` 候选、`aoi_block.go` `evaluateObserved`——草案的依赖点清单漏了覆盖块这一处）都比 `self`；`self` 改变时连同覆盖可见集重评 |
+| 2 入口 | `Enter(playerID, entityID, at, view)`、`Move(playerID, entityID, to)`、`Leave(playerID, entityID)`，旧入口删除 |
+| 3 ObserverOf | `InterestConfig.ObserverOf`，缺省 `DefaultObserverOf`（`GetUniqueIDFromEntityID`，0 视为不是观察者）；入队时换算一次存进事实 |
+| 4 Session | 删除；会话 ID = 观察者 ID |
+| 5 B1 | `AOIConfig.LODs`（每层一组 Bands，与 `Bands` 二选一）、`MinViewRadius` / `MaxLeaveRadius` / `ViewRadiusStep`；滞回量取缺省视野的 `LeaveRadius − EnterRadius`；`worstObserverBlocks` 按 `MaxLeaveRadius`；每层分档启动期校验；`MaxVisible` 保持全局 |
+| 6 运行期 | `Interest.SetObserverView(playerID, ObserverView{LOD, Radius})` 直接生效、不排队不走提交门；`ViewChangeInterval` 缺省 1 秒，超频 `ErrObserverViewRate`，未配置层级 `ErrObserverView`，均计 `entitysync_interest_view_rejected_total{reason}`；同值不重评、不占限速；返回生效的视野 |
+| 评审 ① | `Watch` / `MoveView` / `Unwatch`（`self = 0`） |
+| 评审 ② | benchstat 由维护者在夜间性能测试统一跑（基准名与命令见实施汇报） |
+
+与草案的偏差：① 滞回量没有单独的配置项，取缺省视野的 `LeaveRadius − EnterRadius`（规则只声明一次，零值配置行为不变）；② 视野大小零值 = 缺省视野，范围零值 = 只允许缺省视野，`EnterRadius` 必须落在量化网格上；③ `Bands` 现在也检查不超过 `MaxLeaveRadius`；④ 新增 `MoveView`（只移动视点）与 `Interest.ObserverView` 读取当前视野，demo 重连时沿用玩家上次请求的视野。
+
+接入层：game-demo 新增 `scene_view`（消息 10025）→ `HandleSceneView` → `Scene.SetView` → `SetObserverView` + `Apply`，错误码 100022 / 100023；框架接入层（`game/playeraccess`、生成器）不提供这个消息：LOD 表、视野范围与错误码都是业务的，与 `move` 一样写在业务端点里。
+
+### 现状（实施前，已核对当时源码）
 
 **observer 与 subject 共用实体 ID，session 在最后一步换算。**
 

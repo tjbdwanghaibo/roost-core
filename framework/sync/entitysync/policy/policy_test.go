@@ -817,7 +817,7 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 // ---- 观察者编号与实体编号分开时的订阅结果（D14 改签名前后的回归基线） ----
 //
 // 玩家 ID（会话）与实体 ID 是两种编号：订阅表里会话用玩家 ID，被订阅的目标用实体 ID。用例只对 Manager 的订阅表断言，
-// 不读 Interest 内部的键。D14 之前它以“观察者按实体 ID 编号、经 Session 换算”的写法在 953ad6bc 通过；D14 之后观察者直接是
+// 不读 Interest 内部的键。D14 之前它以“观察者按实体 ID 编号、经 Session 换算”的写法在 D14 第一笔提交（改签名前的回归）上通过；D14 之后观察者直接是
 // 玩家 ID、事务内入口经缺省 ObserverOf 换算，断言一字未改：自己只经 self 关系看见自己、距离双向、数值等于玩家 ID 的实体不被
 // 误当成自己、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
 
@@ -1170,7 +1170,7 @@ func TestObserverOfMapsAControlledEntityToItsPlayer(t *testing.T) {
 }
 
 // 多对一隐患消失：两个玩家各是一个会话，都看见同一目标；其中一个走远只退它自己的订阅。
-// D14 之前同样的场景经 Session 映射到同一会话时，订阅被一起退掉（953ad6bc 的 TestSessionManyToOneDropsASharedSubscription）。
+// D14 之前同样的场景经 Session 映射到同一会话时，订阅被一起退掉（D14 第一笔提交里的 TestSessionManyToOneDropsASharedSubscription，随 Session 删除）。
 func TestTwoObserversDoNotReleaseEachOthersSubscription(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager)

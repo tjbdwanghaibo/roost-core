@@ -104,6 +104,18 @@
 
 **修改检查**：改已提交门跑 `TestMatchCommittedFrameGatesCatchupAndSnapshots` 与 `scripts/test-moba-generated.sh`（Room 两条）；改判定先跑 `TestMatchRecoveryRouting`（三种模式 × 窗口内 / 超阈值 / 越界）与 catchup 模式的全部原有用例（必须不改即通过）；改取快照跑 `TestMatchSnapshotProviderRunsOffTheTick`、`TestMatchSnapshotFailureSemantics`、`TestMatchSnapshotFetchIsCancelledWhenNobodyWaits`；改分块跑 `TestMatchSnapshotChunkPacingAndResend`、`TestMatchSnapshotUnpacedLaneUsesTheFixedBudget`、两个 fuzz 与 `tcp_test.go` 的真实回环用例；改钉住跑 `TestMatchSnapshotPinsHistoryWithinBound` 与长局用例。并发相关加 `-race -count=2`。
 
+## 2E. Interest 的观察者编号与视野（D14）
+
+维护者 2026-10-20 决定 A1 + B1，用法见 [guide/04-sync](../guide/04-sync.md#附近的人观察者是玩家视野按观察者d14)。实现要守住的几条：
+
+1. **两种编号不混用**。`AOI.observers`、`AOICluster.observers`、`Interest.held` 的 observer 键、`RelationSource` 的 observer 键、`InterestEvent.Observer`、`Refusal.Observer` 都是玩家 ID（= 会话 ID，`sessionOf` 是恒等换算）；`AOI.subjects`、`observed`、关系成员、`InterestEvent.Subject` 是实体 ID。自排除只比 `interestObserver.self`：[aoi.go](../../../framework/sync/entitysync/policy/aoi.go) `evaluatePair`（`removed || subject == observer.self`，自身实体若因 `self` 改变仍在可见集里则按离开处理）、`evaluateObserver` 的候选筛选、[aoi_block.go](../../../framework/sync/entitysync/policy/aoi_block.go) `evaluateObserved`。`self` 为 0（`Watch`）时不会命中任何目标，因为实体 ID 不为 0。
+2. **角色表分开**。`Interest.subjectRoles`（实体）与 `observerRoles`（玩家）由 `queueMu` 保护，供 `queueFact` 准入；`supersedeQueuedMovesLocked(subject, observer)` 与 `supersedeQueuedRelationsLocked(observer, subject)` 分别按实体与玩家改写排队事实，语义与 D14 前逐项相同（Leave 作废观察者一半与它作为观察者的关系事实，Hide 只作废目标一半并从关系成员里剔除）。排队事实的 `observerID` 在入队时由 `ObserverOf` 换算一次并随事实保存，应用时不再调用业务代码；同一实体的事实顺序仍按 `fact.id`（实体）阻塞。
+3. **视野归一只有一处**。`AOIConfig.withViewDefaults` 补零值，`validate` 在补齐后的配置上检查（视野范围包含缺省视野、`EnterRadius` 在网格上、每层分档、按 `MaxLeaveRadius` 的块预算），`NewAOI` / `NewAOICluster` 保存补齐后的配置；`normalizeView` 是运行期唯一的夹取量化入口，`AOI.AddObserver` / `SetObserverView`、`AOICluster.AddObserver` / `SetObserverView`、`Interest.Enter` / `Watch` / `SetObserverView` 都经过它。`AOI.placeObserver` 是登记、移动、换视野的共同落点：更新 `self` / 位置 / 视野 → `resubscribe` → `refreshObserver`，Cluster 的镜像对每个区域调用同一个函数。
+4. **SetObserverView 不进提交门**。它在 `Interest.mu` 下直接改 AOI（与 `Move` 同锁、同串行），不入 `facts`、不持 `HoldSyncPublication`，因此 `QueueMove` 等排队入口的提交门语义不变；它不调用 `Apply`，订阅变化由调用方随后的 `Apply`（或排队模式下 Manager 的政策阶段 `applyQueued` 末尾的 `applyLocked`）说给 Manager。限速状态 `viewChanged` 由 `mu` 保护，`Leave` / `Unwatch` / `Close` 清除；同值请求在限速判断之前返回，不记时间。
+5. **锁与 goroutine 不变**。没有新增锁、goroutine 或回调线程；`ObserverOf` 在 `queueFact` 里、取 `queueMu` 之前调用（业务线程、Entity 锁内），不在 `mu` 或 `queueMu` 内调用业务代码。
+
+回归：[policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go) `TestObserverAndSubjectIDSpacesStayApart`（D14 前以 Session 换算写法在 D14 第一笔提交（改签名前的回归）上通过、断言未改）、`TestTwoObserversDoNotReleaseEachOthersSubscription`、`TestSetObserverView*`、`TestWatchSeesWithoutBeingSeen`、`TestObserverOfMapsAControlledEntityToItsPlayer`；[aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go) `TestAOIObserverNeverSeesItsOwnSubject`、`TestAOICoverageExcludesSelfNotObserverID`、`TestAOIObserverRadiusIsPerObserver`、`TestAOISetObserverViewGrowsChangesLODAndShrinks`、`TestAOIViewIsClampedAndQuantized`、`TestAOIViewConfigIsCheckedAtStartup`、`TestAOIObserverSelfChangeReevaluates`、`TestClusterMirrorFollowsObserverView`。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -161,7 +173,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [aoi.go](../../../framework/sync/entitysync/policy/aoi.go) | `InterestEventKind`、`InterestEvent`、`AOIConfig`、`AOI` |
+| [aoi.go](../../../framework/sync/entitysync/policy/aoi.go) | `InterestEventKind`、`InterestEvent`、`AOIConfig`、`ObserverView`、`AOI` |
 | [aoi_cluster.go](../../../framework/sync/entitysync/policy/aoi_cluster.go) | `AreaID`、`AOICluster` |
 | [direct.go](../../../framework/sync/entitysync/policy/direct.go) | `Direct` |
 | [self_view.go](../../../framework/sync/entitysync/policy/self_view.go) | `SelfProfile`、`SelfViewConfig`、`SelfView` |
@@ -294,11 +306,11 @@
 
 ### sync/entitysync/policy
 
-- [aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go)：`TestInterestEnterLeaveWithHysteresis`、`TestInterestBandsAndObserverMovement`、`TestInterestMaxVisibleEvictsFarthest`、`TestInterestObserverIsAlsoSubjectSymmetry`、`TestInterestDeterministicEventStream`；其余 23 项见文件
+- [aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go)：`TestInterestEnterLeaveWithHysteresis`、`TestInterestBandsAndObserverMovement`、`TestInterestMaxVisibleEvictsFarthest`、`TestInterestObserverIsAlsoSubjectSymmetry`、`TestInterestDeterministicEventStream`；其余 31 项见文件
 - [aoi_cluster_movement_test.go](../../../framework/sync/entitysync/policy/aoi_cluster_movement_test.go)：`TestClusterMaxVisibleReselectsOnSameBandMovement`、`TestClusterMovementCapacityMatchesDistanceOrder`、`TestClusterCapacityStaysNearestAmongCandidates`（Cluster 容量在同档移动后仍是候选内最近 N 个）
 - [benchmark_test.go](../../../framework/sync/entitysync/policy/benchmark_test.go)
 - [interest_test.go](../../../framework/sync/entitysync/policy/interest_test.go)：`TestObservedBlocksKeepOnePositionAndSubscription`、`TestSpatialAndBlockHandoverDoesNotRecreateBaseline`、`TestCoverageCommitRollbackRejectAndLifetime`、`TestCoverageLateObserverBudgetAndVisibilityLimit`、`TestFactAdmissionDoesNotWaitForPolicyLock`；其余 16 项见文件
-- [policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go)：`TestEnteringSubscribesToYourself`、`TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary`、`TestARelationKeepsASubscriptionDistanceDropped`、`TestLeavingReleasesBothDirections`、`TestARefusedSubscribeIsSaidAgainUntilItIsTaken`；其余 13 项见文件
+- [policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go)：`TestEnteringSubscribesToYourself`、`TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary`、`TestARelationKeepsASubscriptionDistanceDropped`、`TestLeavingReleasesBothDirections`、`TestARefusedSubscribeIsSaidAgainUntilItIsTaken`；其余 19 项见文件
 - [relation_index_test.go](../../../framework/sync/entitysync/policy/relation_index_test.go)：`TestRelationDeltaMatchesFullReplacement`、`TestRelationForgetAfterReplacementClearAndReadd`、`TestRelationSetMatchesMembershipModel`、`TestRelationSetWorkspaceConcurrentLifecycle`
 - [self_view_test.go](../../../framework/sync/entitysync/policy/self_view_test.go)：`TestSelfViewSendsAFullSnapshotThenDeltas`、`TestSelfViewWaitsForTheEntityToAppear`、`TestSelfViewReconnectGetsAFullSnapshot`、`TestSelfViewReplacedConnectionKeepsTheView`、`TestSelfViewWaitsForTheConnectionToCloseAfterALoss`、`TestSelfViewEveryIsolatedLossIsRecoveredByTheReconnect`、`TestSelfViewLossRacingANewConnection`、`TestSelfViewCountsPlayersOnlineWithoutASession`、`TestSelfViewUnloadRetractionIsResubmitted`、`TestSelfViewRolledBackCreateIsBoundAgain`、`TestSelfViewCloseDuringFlush`、`TestSelfViewLoginAndDisconnectRace`、`TestNewSelfViewRefusesAnIncompleteConfig`
 - [resubmit_test.go](../../../framework/sync/entitysync/policy/resubmit_test.go)：`TestInterestResubmitsASubscriptionTheFrameworkRetracted`、`TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway`、`TestEachPolicyResubmitsItsOwnRetractedSubscription`、`TestGroupAndDirectResubmitAfterRetraction`、`TestGroupResubmitsAfterASecondRetractionBeforeDelivery`；其余 5 项见文件

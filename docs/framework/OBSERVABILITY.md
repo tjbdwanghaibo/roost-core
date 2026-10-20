@@ -255,6 +255,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_frames_admitted_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_interest_view_rejected_total` | Counter | `sync/entitysync/policy/interest.go:IncCounter` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
