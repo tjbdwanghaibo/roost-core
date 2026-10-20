@@ -1,0 +1,144 @@
+package handler
+
+import (
+	db "example.com/auto-chess-practice/db"
+	chess "example.com/auto-chess-practice/game/autochess"
+	matchentity "example.com/auto-chess-practice/game/entities/chess_match"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type IChessMatchEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.ChessMatchDao
+	TimerComp() *matchentity.TimerComponent
+}
+type IChessPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// 创建内存实体不代表已持久化；玩家建档必须经过一次正式事务。
+//
+//roost:nest rollback=undo durability=strict
+func handlerChessPlayerInit(p IChessPlayerEntity) error { p.Dao().SetInitialized(true); return nil }
+
+// 成局名单、随机种子、配置、时间来自服务端。相同 Match ID 不允许改名单或重新掷种子。
+//
+//roost:nest rollback=undo durability=strict
+func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, now int64) (chess.View, error) {
+	if m.Dao().GetState() != "" {
+		s, e := chess.Decode(m.Dao().GetState())
+		if e != nil {
+			return chess.View{}, e
+		}
+		for i, id := range ids {
+			if s.Seats[i].PlayerID != id {
+				return chess.View{}, chess.ErrRule
+			}
+		}
+		return s.View(ids[0])
+	}
+	s, e := chess.New(ids, r, seed, now)
+	if e != nil {
+		return chess.View{}, e
+	}
+	if e = saveChess(m, s); e != nil {
+		return chess.View{}, e
+	}
+	return s.View(ids[0])
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerChessCommand(m IChessMatchEntity, playerID int64, c chess.Command, now int64) (chess.Receipt, error) {
+	s, e := chess.Decode(m.Dao().GetState())
+	if e != nil {
+		return chess.Receipt{}, e
+	}
+	r, changed, e := s.Apply(playerID, c, now)
+	if e != nil {
+		return r, e
+	}
+	if changed {
+		e = saveChess(m, s)
+	}
+	return r, e
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerChessView(m IChessMatchEntity, playerID int64) (chess.View, error) {
+	s, e := chess.Decode(m.Dao().GetState())
+	if e != nil {
+		return chess.View{}, e
+	}
+	return s.View(playerID)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerChessConnect(m IChessMatchEntity, playerID int64, ticket uint64, connected bool) error {
+	s, e := chess.Decode(m.Dao().GetState())
+	if e != nil {
+		return e
+	}
+	if e = s.Connect(playerID, ticket, connected); e != nil {
+		return e
+	}
+	m.Dao().SetState(s.Encode())
+	return nil
+}
+
+// 当前鉴权连接可查旧 Epoch 回执，但不能把旧命令换成新 Seq 重做。
+//
+//roost:nest rollback=undo durability=strict
+func handlerChessReceipt(m IChessMatchEntity, playerID int64, epoch, seq uint64) (chess.Receipt, error) {
+	s, e := chess.Decode(m.Dao().GetState())
+	if e != nil {
+		return chess.Receipt{}, e
+	}
+	i := s.Index(playerID)
+	if i < 0 || s.Seats[i].Epoch != epoch || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
+		return chess.Receipt{}, chess.ErrRule
+	}
+	return s.Seats[i].Receipts[seq-1], nil
+}
+
+// Player 静态归属；本地同 database 示例用 MultiSync。跨 sid 应另接 Remote/Saga，不伪装成本地事务。
+// Match 的 Claimed 与 Player 金币在同一个 strict 事务内；奖励仅由服务端终态排名推导。
+//
+//roost:nest rollback=undo durability=strict
+func handlerChessClaim(p IChessPlayerEntity, m IChessMatchEntity) (int64, error) {
+	s, e := chess.Decode(m.Dao().GetState())
+	if e != nil {
+		return 0, e
+	}
+	i := s.Index(p.ID())
+	if i < 0 || s.Phase != "done" || !p.Dao().GetInitialized() {
+		return 0, chess.ErrRule
+	}
+	reward := int64((chess.Seats + 1 - s.Seats[i].Rank) * 10)
+	if s.Seats[i].Claimed {
+		return reward, nil
+	}
+	if p.Dao().GetGold() > 1000000-reward {
+		return 0, chess.ErrRule
+	}
+	p.Dao().SetGold(p.Dao().GetGold() + reward)
+	s.Seats[i].Claimed = true
+	m.Dao().SetState(s.Encode())
+	return reward, nil
+}
+func saveChess(m IChessMatchEntity, s chess.State) error {
+	if id := m.Dao().GetWakeTimer(); id != 0 {
+		m.TimerComp().RemoveTimer(id)
+	}
+	m.Dao().SetWakeTimer(0)
+	m.Dao().SetState(s.Encode())
+	if s.Deadline > 0 {
+		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), matchentity.TimerPhase, s.Deadline, 0, nil)
+		if id == 0 {
+			return chess.ErrRule
+		}
+		m.Dao().SetWakeTimer(id)
+	}
+	return nil
+}

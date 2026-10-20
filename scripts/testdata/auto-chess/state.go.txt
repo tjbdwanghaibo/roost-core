@@ -1,0 +1,307 @@
+package autochess
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+)
+
+// Copies 为真实卡池张数（1/3/9），合星、出售、淘汰均按张数守恒。
+type Unit struct{ Kind, Copies int }
+type Command struct {
+	Seq   uint64
+	Epoch uint64
+	Round int
+	Kind  string
+	A, B  int
+}
+type Receipt struct {
+	Command     Command
+	Gold, Round int
+	Phase       string
+}
+type Seat struct {
+	PlayerID                          int64
+	Epoch                             uint64
+	Connected, Ready, Locked, Claimed bool
+	HP, Gold, Level, XP, Rank         int
+	Shop                              [3]int
+	Units                             [9]Unit
+	Receipts                          []Receipt
+}
+type Fight struct {
+	A, B, Winner, Damage int
+	Boards               [2][3]Unit
+}
+type State struct {
+	Schema           int
+	Rules            Rules
+	Seed             string
+	Draw             uint64
+	Phase            string
+	Round            int
+	Deadline, LastAt int64
+	Pool             [3]int
+	Seats            [Seats]Seat
+	Fights           []Fight
+}
+
+// View 明确白名单：不包含种子、卡池余量、对手商店、备用席或指令账本。
+type PublicSeat struct {
+	PlayerID         int64
+	HP, Rank         int
+	Ready, Connected bool
+	Board            [3]Unit
+}
+type View struct {
+	Phase      string
+	Round      int
+	Deadline   int64
+	ConfigHash string
+	Players    [Seats]PublicSeat
+	Self       SeatView
+}
+type SeatView struct {
+	Epoch, NextSeq  uint64
+	Gold, Level, XP int
+	Locked, Claimed bool
+	Shop            [3]int
+	Units           [9]Unit
+}
+
+func (s State) View(id int64) (View, error) {
+	i := s.Index(id)
+	if i < 0 {
+		return View{}, ErrRule
+	}
+	v := View{Phase: s.Phase, Round: s.Round, Deadline: s.Deadline, ConfigHash: s.Rules.Hash()}
+	for j, p := range s.Seats {
+		v.Players[j] = PublicSeat{PlayerID: p.PlayerID, HP: p.HP, Rank: p.Rank, Ready: p.Ready, Connected: p.Connected}
+		copy(v.Players[j].Board[:], p.Units[:3])
+	}
+	p := s.Seats[i]
+	v.Self = SeatView{p.Epoch, uint64(len(p.Receipts) + 1), p.Gold, p.Level, p.XP, p.Locked, p.Claimed, p.Shop, p.Units}
+	return v, nil
+}
+func (s State) Index(id int64) int {
+	for i, p := range s.Seats {
+		if p.PlayerID == id {
+			return i
+		}
+	}
+	return -1
+}
+func New(ids [Seats]int64, r Rules, seed string, now int64) (State, error) {
+	s := State{Schema: 1, Rules: r, Seed: seed, Phase: "prep", Round: 1, LastAt: now, Deadline: now + r.PrepMillis}
+	if r.Validate() != nil || len(seed) != 64 || now <= 0 || now >= MaxTime {
+		return State{}, ErrRule
+	}
+	for i, u := range r.Units {
+		s.Pool[i] = u.Copies
+	}
+	for i, id := range ids {
+		if id <= 0 {
+			return State{}, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if ids[j] == id {
+				return State{}, ErrRule
+			}
+		}
+		s.Seats[i] = Seat{PlayerID: id, Epoch: 1, Connected: true, HP: 6, Gold: 10, Level: 1}
+		s.refresh(i)
+	}
+	return s, s.Validate()
+}
+func (s State) Encode() string { return encode(s) }
+func Decode(raw string) (State, error) {
+	var s State
+	if e := strictJSON(raw, &s); e != nil {
+		return s, e
+	}
+	return s, s.Validate()
+}
+func (s State) Validate() error {
+	if s.Schema != 1 || s.Rules.Validate() != nil || len(s.Seed) != 64 || s.Round < 1 || s.Round > s.Rules.MaxRounds || s.LastAt <= 0 || s.LastAt >= MaxTime || s.Draw > 10000 {
+		return ErrRule
+	}
+	if s.Phase != "prep" && s.Phase != "battle" && s.Phase != "done" {
+		return ErrRule
+	}
+	if (s.Phase == "done" && s.Deadline != 0) || (s.Phase != "done" && (s.Deadline <= s.LastAt || s.Deadline >= MaxTime)) {
+		return ErrRule
+	}
+	total := s.Pool
+	ranks := map[int]bool{}
+	for i, p := range s.Seats {
+		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Epoch == 0 || p.HP < 0 || p.HP > 6 || p.Gold < 0 || p.Gold > 1000 || p.Level < 1 || p.Level > 3 || p.XP < 0 || p.XP > 3 || p.Rank < 0 || p.Rank > Seats || len(p.Receipts) > LedgerLimit {
+			return ErrRule
+		}
+		if p.Rank > 0 {
+			if ranks[p.Rank] {
+				return ErrRule
+			}
+			ranks[p.Rank] = true
+		}
+		if (s.Phase == "done" && p.Rank == 0) || (p.Claimed && s.Phase != "done") {
+			return ErrRule
+		}
+		deployed := 0
+		for j, u := range p.Units {
+			if u.Copies == 0 {
+				if u.Kind != 0 {
+					return ErrRule
+				}
+				continue
+			}
+			if u.Kind < 1 || u.Kind > 3 || (u.Copies != 1 && u.Copies != 3 && u.Copies != 9) {
+				return ErrRule
+			}
+			total[u.Kind-1] += u.Copies
+			if j < 3 {
+				deployed++
+			}
+		}
+		if deployed > p.Level {
+			return ErrRule
+		}
+		for _, k := range p.Shop {
+			if k < 0 || k > 3 {
+				return ErrRule
+			}
+			if k > 0 {
+				total[k-1]++
+			}
+		}
+		for j, r := range p.Receipts {
+			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || r.Command.Epoch > p.Epoch || r.Round < 1 || r.Round > s.Round {
+				return ErrRule
+			}
+		}
+	}
+	for i, n := range total {
+		if s.Pool[i] < 0 || n != s.Rules.Units[i].Copies {
+			return ErrRule
+		}
+	}
+	if len(s.Fights) > 4 || (s.Phase == "battle" && len(s.Fights) == 0) {
+		return ErrRule
+	}
+	seen := map[int]bool{}
+	for _, f := range s.Fights {
+		if f.A < 0 || f.A >= Seats || f.B < -1 || f.B >= Seats || f.A == f.B || seen[f.A] {
+			return ErrRule
+		}
+		seen[f.A] = true
+		if f.B >= 0 {
+			if seen[f.B] {
+				return ErrRule
+			}
+			seen[f.B] = true
+		}
+		for _, board := range f.Boards {
+			for _, u := range board {
+				if u.Copies == 0 {
+					if u.Kind != 0 {
+						return ErrRule
+					}
+					continue
+				}
+				if u.Kind < 1 || u.Kind > 3 || (u.Copies != 1 && u.Copies != 3 && u.Copies != 9) {
+					return ErrRule
+				}
+			}
+		}
+		if f.B < 0 {
+			if f.Winner != f.A || f.Damage != 0 || f.Boards[1] != [3]Unit{} {
+				return ErrRule
+			}
+		} else {
+			w, d := Resolve(s.Rules, f)
+			if w != f.Winner || d != f.Damage {
+				return ErrRule
+			}
+		}
+		if s.Phase == "battle" {
+			for side, i := range []int{f.A, f.B} {
+				if i < 0 {
+					continue
+				}
+				if s.Seats[i].HP == 0 {
+					return ErrRule
+				}
+				for j, u := range f.Boards[side] {
+					if s.Seats[i].Units[j] != u {
+						return ErrRule
+					}
+				}
+			}
+		}
+	}
+	if s.Phase == "battle" {
+		for i, p := range s.Seats {
+			if p.HP > 0 && !seen[i] {
+				return ErrRule
+			}
+		}
+	}
+	return nil
+}
+func (s *State) returnShop(i int) {
+	for j, k := range s.Seats[i].Shop {
+		if k > 0 {
+			s.Pool[k-1]++
+			s.Seats[i].Shop[j] = 0
+		}
+	}
+}
+func (s *State) refresh(i int) {
+	s.returnShop(i)
+	for j := range s.Seats[i].Shop {
+		total := s.Pool[0] + s.Pool[1] + s.Pool[2]
+		if total == 0 {
+			break
+		}
+		s.Draw++
+		b := sha256.Sum256([]byte(s.Seed + encode(s.Draw)))
+		n := int(binary.BigEndian.Uint64(b[:8]) % uint64(total))
+		for k, c := range s.Pool {
+			if n < c {
+				s.Seats[i].Shop[j] = k + 1
+				s.Pool[k]--
+				break
+			}
+			n -= c
+		}
+	}
+}
+func (s *State) release(i int) {
+	s.returnShop(i)
+	for j, u := range s.Seats[i].Units {
+		if u.Copies > 0 {
+			s.Pool[u.Kind-1] += u.Copies
+			s.Seats[i].Units[j] = Unit{}
+		}
+	}
+}
+
+// 三合一优先保留最前位置，满备用席拒绝购买；复制数不会凭空消失。
+func (p *Seat) merge() {
+	for _, n := range []int{1, 3} {
+		for k := 1; k <= 3; k++ {
+			for {
+				idx := []int{}
+				for j, u := range p.Units {
+					if u.Kind == k && u.Copies == n {
+						idx = append(idx, j)
+					}
+				}
+				if len(idx) < 3 {
+					break
+				}
+				p.Units[idx[0]].Copies = n * 3
+				p.Units[idx[1]] = Unit{}
+				p.Units[idx[2]] = Unit{}
+			}
+		}
+	}
+}

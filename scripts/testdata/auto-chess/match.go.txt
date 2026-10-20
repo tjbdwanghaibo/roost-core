@@ -1,0 +1,294 @@
+package autochess
+
+import "sort"
+
+// Apply 在事务局部副本执行；失败不写 DAO。Epoch 来自鉴权接管，Seq 永久递增。
+func (s *State) Apply(id int64, c Command, now int64) (Receipt, bool, error) {
+	i := s.Index(id)
+	if i < 0 || c.Seq == 0 {
+		return Receipt{}, false, ErrRule
+	}
+	p := &s.Seats[i]
+	if c.Epoch != p.Epoch {
+		return Receipt{}, false, ErrRule
+	}
+	if c.Seq <= uint64(len(p.Receipts)) {
+		r := p.Receipts[c.Seq-1]
+		if r.Command != c {
+			return Receipt{}, false, ErrRule
+		}
+		return r, false, nil
+	}
+	if c.Seq != uint64(len(p.Receipts)+1) || len(p.Receipts) >= LedgerLimit || s.Phase != "prep" || p.HP == 0 || p.Ready || !p.Connected || c.Round != s.Round || now < s.LastAt || now >= s.Deadline {
+		return Receipt{}, false, ErrRule
+	}
+	switch c.Kind {
+	case "buy":
+		if c.A < 0 || c.A >= 3 || c.B != 0 {
+			return Receipt{}, false, ErrRule
+		}
+		k := p.Shop[c.A]
+		if k == 0 || p.Gold < s.Rules.Units[k-1].Cost {
+			return Receipt{}, false, ErrRule
+		}
+		slot := -1
+		for j := 3; j < 9; j++ {
+			if p.Units[j].Copies == 0 {
+				slot = j
+				break
+			}
+		}
+		if slot < 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Units[slot] = Unit{k, 1}
+		p.Shop[c.A] = 0
+		p.Gold -= s.Rules.Units[k-1].Cost
+		p.merge()
+	case "sell":
+		if c.A < 0 || c.A >= 9 || c.B != 0 {
+			return Receipt{}, false, ErrRule
+		}
+		u := p.Units[c.A]
+		if u.Copies == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Units[c.A] = Unit{}
+		s.Pool[u.Kind-1] += u.Copies
+		p.Gold += u.Copies * s.Rules.Units[u.Kind-1].Cost
+	case "move":
+		if c.A < 0 || c.A >= 9 || c.B < 0 || c.B >= 9 || c.A == c.B || p.Units[c.A].Copies == 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Units[c.A], p.Units[c.B] = p.Units[c.B], p.Units[c.A]
+		n := 0
+		for _, u := range p.Units[:3] {
+			if u.Copies > 0 {
+				n++
+			}
+		}
+		if n > p.Level {
+			return Receipt{}, false, ErrRule
+		}
+	case "refresh":
+		if c.A != 0 || c.B != 0 || p.Gold < 2 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Gold -= 2
+		s.refresh(i)
+	case "xp":
+		if c.A != 0 || c.B != 0 || p.Gold < 4 || p.Level >= 3 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Gold -= 4
+		p.XP += 2
+		if p.XP >= 4 {
+			p.XP -= 4
+			p.Level++
+		}
+	case "lock":
+		if c.A != 0 || c.B != 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Locked = !p.Locked
+	case "ready":
+		if c.A != 0 || c.B != 0 {
+			return Receipt{}, false, ErrRule
+		}
+		p.Ready = true
+	default:
+		return Receipt{}, false, ErrRule
+	}
+	s.LastAt = now
+	all := true
+	for _, q := range s.Seats {
+		if q.HP > 0 && !q.Ready {
+			all = false
+		}
+	}
+	if all {
+		s.startBattle(now)
+	}
+	r := Receipt{c, p.Gold, s.Round, s.Phase}
+	p.Receipts = append(p.Receipts, r)
+	return r, true, s.Validate()
+}
+
+// 接管票由可信入口递增发放；同票重试不重复变更，旧连接断线不能踢掉新连接。
+func (s *State) Connect(id int64, ticket uint64, connected bool) error {
+	i := s.Index(id)
+	if i < 0 || ticket == 0 {
+		return ErrRule
+	}
+	p := &s.Seats[i]
+	if connected {
+		if ticket < p.Epoch {
+			return ErrRule
+		}
+		if ticket == p.Epoch {
+			if !p.Connected {
+				return ErrRule
+			}
+			return nil
+		}
+		p.Epoch = ticket
+		p.Connected = true
+	} else {
+		if ticket != p.Epoch {
+			return ErrRule
+		}
+		p.Connected = false
+	}
+	return nil
+}
+
+// 冷加载只推进一个阶段，下一期限从当前服务端时间起算，不追赶一小时的全部战斗。
+func (s *State) Advance(now int64) error {
+	if s.Phase == "done" || now < s.Deadline || now >= MaxTime {
+		return ErrRule
+	}
+	s.LastAt = now
+	if s.Phase == "prep" {
+		s.startBattle(now)
+	} else {
+		s.settle(now)
+	}
+	return s.Validate()
+}
+func (s *State) startBattle(now int64) {
+	s.Phase = "battle"
+	s.Deadline = now + s.Rules.BattleMillis
+	s.Fights = nil
+	alive := []int{}
+	for i, p := range s.Seats {
+		if p.HP > 0 {
+			alive = append(alive, i)
+		}
+	}
+	if len(alive) > 1 {
+		shift := (s.Round - 1) % len(alive)
+		alive = append(alive[shift:], alive[:shift]...)
+	}
+	for j := 0; j < len(alive); j += 2 {
+		a := alive[j]
+		f := Fight{A: a, B: -1, Winner: a}
+		copy(f.Boards[0][:], s.Seats[a].Units[:3])
+		if j+1 < len(alive) {
+			f.B = alive[j+1]
+			copy(f.Boards[1][:], s.Seats[f.B].Units[:3])
+			f.Winner, f.Damage = Resolve(s.Rules, f)
+		}
+		s.Fights = append(s.Fights, f)
+	}
+}
+
+// 位置从前排到后排；同 tick 同时攻击，最多 32 tick，余血相同时为平局。纯函数可从冻结编队重放。
+func Resolve(r Rules, f Fight) (int, int) {
+	hp := [2][3]int{}
+	attack := [2][3]int{}
+	for side, b := range f.Boards {
+		for j, u := range b {
+			if u.Copies > 0 {
+				star := 1
+				if u.Copies == 3 {
+					star = 2
+				} else if u.Copies == 9 {
+					star = 3
+				}
+				hp[side][j] = r.Units[u.Kind-1].HP * star
+				attack[side][j] = r.Units[u.Kind-1].Attack * star
+			}
+		}
+	}
+	for tick := 0; tick < 32; tick++ {
+		first := [2]int{-1, -1}
+		damage := [2]int{}
+		for side := range hp {
+			for j, v := range hp[side] {
+				if v > 0 {
+					if first[side] < 0 {
+						first[side] = j
+					}
+					damage[side] += attack[side][j]
+				}
+			}
+		}
+		if first[0] < 0 || first[1] < 0 {
+			break
+		}
+		hp[0][first[0]] -= damage[1]
+		hp[1][first[1]] -= damage[0]
+	}
+	sum := [2]int{}
+	for side := range hp {
+		for _, v := range hp[side] {
+			if v > 0 {
+				sum[side] += v
+			}
+		}
+	}
+	if sum[0] == sum[1] {
+		return -1, 1
+	}
+	if sum[0] > sum[1] {
+		return f.A, 3
+	}
+	return f.B, 3
+}
+func (s *State) settle(now int64) {
+	for _, f := range s.Fights {
+		if f.B < 0 {
+			continue
+		}
+		for _, i := range []int{f.A, f.B} {
+			if i != f.Winner {
+				s.Seats[i].HP = max(0, s.Seats[i].HP-f.Damage)
+			}
+		}
+	}
+	alive := []int{}
+	dead := []int{}
+	remaining := 0
+	for i, p := range s.Seats {
+		if p.Rank == 0 {
+			remaining++
+			if p.HP == 0 {
+				dead = append(dead, i)
+			} else {
+				alive = append(alive, i)
+			}
+		}
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(dead)))
+	for _, i := range dead {
+		s.Seats[i].Rank = remaining
+		remaining--
+		s.release(i)
+	}
+	if len(alive) <= 1 || s.Round == s.Rules.MaxRounds {
+		sort.Slice(alive, func(i, j int) bool {
+			a, b := alive[i], alive[j]
+			if s.Seats[a].HP == s.Seats[b].HP {
+				return a < b
+			}
+			return s.Seats[a].HP > s.Seats[b].HP
+		})
+		for rank, i := range alive {
+			s.Seats[i].Rank = rank + 1
+		}
+		s.Phase = "done"
+		s.Deadline = 0
+		return
+	}
+	s.Round++
+	s.Phase = "prep"
+	s.Deadline = now + s.Rules.PrepMillis
+	for _, i := range alive {
+		p := &s.Seats[i]
+		p.Ready = false
+		p.Gold += 5 + min(5, p.Gold/10)
+		if !p.Locked {
+			s.refresh(i)
+		}
+	}
+}

@@ -1,0 +1,418 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	chess "example.com/auto-chess-practice/game/autochess"
+	matchentity "example.com/auto-chess-practice/game/entities/chess_match"
+	playerentity "example.com/auto-chess-practice/game/entities/player"
+	sender "example.com/auto-chess-practice/game/handler/syncsender"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type chessGetter map[int64]entity.IThreadSafeEntity
+
+func (g chessGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("entity %d missing", id)
+}
+func (g chessGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		v, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// 仅替换提交器；真实 WAL / Mongo 与 SIGKILL 在独立准入入口验证。
+type chessCommitter struct{}
+
+func (chessCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const chessNow int64 = 1800000000000
+
+type chessFixture struct {
+	engine  *nest.NestMgr
+	match   *matchentity.ChessMatch
+	players [chess.Seats]*playerentity.Player
+	ids     [chess.Seats]int64
+	clock   atomic.Int64
+	rules   chess.Rules
+}
+
+func loadChessRules(t *testing.T, r chess.Rules) chess.Rules {
+	t.Helper()
+	dir := t.TempDir()
+	b, _ := json.Marshal(r)
+	if e := os.WriteFile(filepath.Join(dir, "chess.json"), b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, e := chess.OpenCatalog(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e = chess.CaptureRules(s.Current())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r
+}
+func newChessFixture(t *testing.T) *chessFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	matchentity.RegisterEntity()
+	RegisterAutoChessNestHandlers()
+	RegisterTickChessMatchTimerGenNestHandlers()
+	f := &chessFixture{rules: loadChessRules(t, chess.DemoRules())}
+	f.clock.Store(chessNow)
+	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	g := chessGetter{}
+	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+		id, e := entity.BuildEntityID(unique, kind)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, e := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		if e != nil {
+			t.Fatal(e)
+		}
+		g[id] = v
+		return v
+	}
+	for i := range f.players {
+		f.players[i] = build(int64(1000+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+		f.ids[i] = f.players[i].ID()
+	}
+	f.match = build(2000, matchentity.EntityKindChessMatch).(*matchentity.ChessMatch)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithTransactionCommitter(chessCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 128}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if e := f.engine.Start(); e != nil {
+		t.Fatal(e)
+	}
+	if e := matchentity.TimerDriver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return g[id] }); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		_ = matchentity.TimerDriver.Stop(context.Background())
+		_ = f.engine.Shutdown(context.Background())
+		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
+	})
+	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, f.rules, fmt.Sprintf("%064x", 17), chessNow); e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range f.ids {
+		if e := sender.NewAutoChessSender(f.engine).Sync_ChessPlayerInit(context.Background(), id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	return f
+}
+func (f *chessFixture) state(t *testing.T) chess.State {
+	t.Helper()
+	s, e := chess.Decode(f.match.Dao().GetState())
+	if e != nil {
+		t.Fatal(e)
+	}
+	return s
+}
+func (f *chessFixture) view(t *testing.T, i int) chess.View {
+	t.Helper()
+	v, e := sender.NewAutoChessSender(f.engine).Sync_ChessView(context.Background(), f.match.ID(), f.ids[i])
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func (f *chessFixture) command(t *testing.T, i int, kind string, a, b int) chess.Command {
+	v := f.view(t, i)
+	return chess.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
+}
+func (f *chessFixture) send(i int, c chess.Command) (chess.Receipt, error) {
+	return sender.NewAutoChessSender(f.engine).Sync_ChessCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+}
+func (f *chessFixture) do(t *testing.T, i int, kind string, a, b int) chess.Receipt {
+	t.Helper()
+	r, e := f.send(i, f.command(t, i, kind, a, b))
+	if e != nil {
+		t.Fatal(kind, e)
+	}
+	return r
+}
+func (f *chessFixture) refuse(t *testing.T, i int, c chess.Command) {
+	t.Helper()
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	if _, e := f.send(i, c); e == nil {
+		t.Fatal("accepted invalid command")
+	}
+	if before != f.match.Dao().GetState() || timer != f.match.Dao().GetWakeTimer() {
+		t.Fatal("rejected command changed state or timer")
+	}
+}
+func waitChess(t *testing.T, ok func() bool) {
+	t.Helper()
+	until := time.Now().Add(8 * time.Second)
+	for !ok() {
+		if time.Now().After(until) {
+			t.Fatal("bounded wait expired")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func (f *chessFixture) step(t *testing.T) {
+	t.Helper()
+	v := f.view(t, 0)
+	f.clock.Store(v.Deadline)
+	waitChess(t, func() bool {
+		due, ok := matchentity.TimerDriver.DueOf(f.match)
+		return ok && due.UnixMilli() == v.Deadline
+	})
+	if n := matchentity.TimerDriver.DeliverDue(context.Background()); n != 1 {
+		t.Fatalf("deliver %d", n)
+	}
+	waitChess(t, func() bool { after := f.view(t, 0); return after.Phase != v.Phase || after.Round != v.Round })
+}
+func TestAutoChessSharedPoolConcurrentPurchaseAndRetry(t *testing.T) {
+	f := newChessFixture(t)
+	var wg sync.WaitGroup
+	for i := range f.ids {
+		c := f.command(t, i, "buy", 0, 0)
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, e := f.send(i, c); e != nil {
+					t.Error(e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	s := f.state(t)
+	for _, p := range s.Seats {
+		if p.Shop[0] != 0 || p.Units[3].Copies != 1 || len(p.Receipts) != 1 {
+			t.Fatal("duplicated purchase")
+		}
+	}
+	if e := s.Validate(); e != nil {
+		t.Fatal(e)
+	}
+	f.do(t, 0, "sell", 3, 0)
+	f.do(t, 0, "refresh", 0, 0)
+	if e := f.state(t).Validate(); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestAutoChessReadyRaceFreezesOneBattle(t *testing.T) {
+	f := newChessFixture(t)
+	var wg sync.WaitGroup
+	for i := range f.ids {
+		c := f.command(t, i, "ready", 0, 0)
+		for range 3 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, e := f.send(i, c); e != nil {
+					t.Error(e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	s := f.state(t)
+	if s.Phase != "battle" || len(s.Fights) != 4 || len(f.match.TimerComp().Timers()) != 1 {
+		t.Fatal("barrier duplicated")
+	}
+	f.refuse(t, 0, chess.Command{Seq: 2, Epoch: 1, Round: 1, Kind: "refresh"})
+	f.step(t)
+	s = f.state(t)
+	if s.Round != 2 || s.Phase != "prep" {
+		t.Fatal("settlement duplicated")
+	}
+	for _, p := range s.Seats {
+		if p.HP != 5 || p.Gold != 16 {
+			t.Fatal("tie/income wrong")
+		}
+	}
+}
+func TestAutoChessDeadlineRejectsLateInputAndDisconnectCannotStall(t *testing.T) {
+	f := newChessFixture(t)
+	s := sender.NewAutoChessSender(f.engine)
+	if e := s.Sync_ChessConnect(context.Background(), f.match.ID(), f.ids[0], 1, false); e != nil {
+		t.Fatal(e)
+	}
+	f.refuse(t, 0, f.command(t, 0, "buy", 0, 0))
+	c := f.command(t, 1, "ready", 0, 0)
+	f.clock.Store(f.view(t, 0).Deadline)
+	f.refuse(t, 1, c)
+	f.step(t)
+	if f.view(t, 0).Phase != "battle" {
+		t.Fatal("disconnected seat stalled")
+	}
+	f.step(t)
+	if f.view(t, 0).Round != 2 {
+		t.Fatal("did not settle")
+	}
+}
+func TestAutoChessReconnectFencesAndPrivateView(t *testing.T) {
+	f := newChessFixture(t)
+	r := f.do(t, 0, "buy", 0, 0)
+	s := sender.NewAutoChessSender(f.engine)
+	ctx := context.Background()
+	if e := s.Sync_ChessConnect(ctx, f.match.ID(), f.ids[0], 2, true); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Sync_ChessConnect(ctx, f.match.ID(), f.ids[0], 1, false); e == nil {
+		t.Fatal("old disconnect accepted")
+	}
+	f.refuse(t, 0, r.Command)
+	got, e := s.Sync_ChessReceipt(ctx, f.match.ID(), f.ids[0], 2, 1)
+	if e != nil || got != r {
+		t.Fatal("old receipt lost", e)
+	}
+	if _, e = s.Sync_ChessView(ctx, f.match.ID(), 999); e == nil {
+		t.Fatal("outsider viewed")
+	}
+	v := f.view(t, 1)
+	v.Self.Shop[0] = 0
+	if f.view(t, 1).Self.Shop[0] == 0 {
+		t.Fatal("view aliases authoritative state")
+	}
+	raw, _ := json.Marshal(v)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	if _, ok := m["Seed"]; ok {
+		t.Fatal("private seed leaked")
+	}
+}
+func TestAutoChessFormationLevelShopLockAndConfigFrozen(t *testing.T) {
+	f := newChessFixture(t)
+	f.do(t, 0, "buy", 0, 0)
+	f.do(t, 0, "move", 3, 0)
+	f.do(t, 0, "buy", 1, 0)
+	f.refuse(t, 0, f.command(t, 0, "move", 3, 1))
+	f.do(t, 0, "lock", 0, 0)
+	shop := f.view(t, 0).Self.Shop
+	f.step(t)
+	battle := f.state(t)
+	if battle.Fights[0].Boards[0][0].Copies != 1 {
+		t.Fatal("formation not frozen")
+	}
+	f.step(t)
+	if f.view(t, 0).Self.Shop != shop {
+		t.Fatal("locked shop rerolled")
+	}
+	f.do(t, 0, "xp", 0, 0)
+	f.do(t, 0, "xp", 0, 0)
+	f.do(t, 0, "move", 3, 1)
+	patched := f.rules
+	patched.Version = "v2"
+	patched.Units[0].Cost = 9
+	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, patched, fmt.Sprintf("%064x", 999), f.clock.Load()); e != nil {
+		t.Fatal(e)
+	}
+	if f.state(t).Rules != f.rules {
+		t.Fatal("existing match repriced")
+	}
+}
+func TestAutoChessUndoRestoresPoolRandomReceiptAndTimer(t *testing.T) {
+	f := newChessFixture(t)
+	before := f.match.Dao().GetState()
+	timer := f.match.Dao().GetWakeTimer()
+	c := f.command(t, 0, "refresh", 0, 0)
+	refused := errors.New("injected after mutation")
+	name := nest.NewHandlerName("chess_undo_refresh")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerChessCommand(es[0].(IChessMatchEntity), f.ids[0], c, f.clock.Load())
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.Request(context.Background(), name, f.match.ID(), nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if f.match.Dao().GetState() != before || f.match.Dao().GetWakeTimer() != timer || len(f.match.TimerComp().Timers()) != 1 {
+		t.Fatal("rollback lost pool, RNG, receipt or timer")
+	}
+	if _, e := f.send(0, c); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestAutoChessTerminalRanksAndConcurrentRewards(t *testing.T) {
+	f := newChessFixture(t)
+	for range 32 {
+		if f.view(t, 0).Phase == "done" {
+			break
+		}
+		f.step(t)
+	}
+	s := f.state(t)
+	if s.Phase != "done" {
+		t.Fatal("no bounded terminal")
+	}
+	// 在两个 DAO 都已修改后注入拒绝，不能只撤回 Claimed 或只撤回余额。
+	before := f.match.Dao().GetState()
+	refused := errors.New("after reward mutation")
+	name := nest.NewHandlerName("chess_undo_reward")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		_, e := handlerChessClaim(es[0].(IChessPlayerEntity), es[1].(IChessMatchEntity))
+		if e != nil {
+			return nil, e
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, e := f.engine.RequestMulti(context.Background(), name, []int64{f.ids[0], f.match.ID()}, nil); !errors.Is(e, refused) {
+		t.Fatal(e)
+	}
+	if f.match.Dao().GetState() != before || f.players[0].Dao().GetGold() != 0 {
+		t.Fatal("reward undo was partial")
+	}
+	var wg sync.WaitGroup
+	for i := range f.ids {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, e := sender.NewAutoChessSender(f.engine).MultiSync_ChessClaim(context.Background(), f.ids[i], f.match.ID())
+				if e != nil {
+					t.Error(e)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	for i, p := range f.players {
+		if s.Seats[i].Rank != i+1 || p.Dao().GetGold() != int64((8-i)*10) {
+			t.Fatal("rank or duplicated reward", i, p.Dao().GetGold())
+		}
+	}
+	waitChess(t, func() bool { _, ok := matchentity.TimerDriver.DueOf(f.match); return !ok })
+}
+func TestAutoChessLedgerFullKeepsOriginalReceipt(t *testing.T) {
+	f := newChessFixture(t)
+	first := f.do(t, 0, "lock", 0, 0)
+	for range chess.LedgerLimit - 1 {
+		f.do(t, 0, "lock", 0, 0)
+	}
+	f.refuse(t, 0, f.command(t, 0, "lock", 0, 0))
+	got, e := f.send(0, first.Command)
+	if e != nil || got != first {
+		t.Fatal("old identity evicted", e)
+	}
+}

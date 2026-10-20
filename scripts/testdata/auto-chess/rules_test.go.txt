@@ -1,0 +1,143 @@
+package autochess
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func testState(t *testing.T) State {
+	t.Helper()
+	ids := [Seats]int64{}
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+	s, e := New(ids, DemoRules(), fmt.Sprintf("%064x", 17), 1800000000000)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return s
+}
+func TestAutoChessMergeSellAndPoolConservation(t *testing.T) {
+	s := testState(t)
+	for i := range s.Seats {
+		s.returnShop(i)
+	}
+	p := &s.Seats[0]
+	for j := range p.Units {
+		p.Units[j] = Unit{1, 1}
+		s.Pool[0]--
+	}
+	p.Level = 3
+	p.merge()
+	if p.Units[0] != (Unit{1, 9}) {
+		t.Fatal("chain merge failed")
+	}
+	if e := s.Validate(); e != nil {
+		t.Fatal(e)
+	}
+	r, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Round: 1, Kind: "sell", A: 0}, s.LastAt)
+	if e != nil || r.Gold != 19 || s.Pool[0] != s.Rules.Units[0].Copies {
+		t.Fatal("sell did not return nine copies", e)
+	}
+}
+func TestAutoChessCombatReplayOddByeAndElimination(t *testing.T) {
+	s := testState(t)
+	for i := range s.Seats {
+		s.returnShop(i)
+		s.Seats[i].HP = 3
+	}
+	s.Seats[7].HP = 0
+	s.Seats[7].Rank = 8
+	s.Seats[0].Units[0] = Unit{3, 9}
+	s.Pool[2] -= 9
+	s.startBattle(s.LastAt)
+	if len(s.Fights) != 4 || s.Fights[3].B != -1 {
+		t.Fatal("odd bye missing")
+	}
+	for _, f := range s.Fights {
+		if f.B >= 0 {
+			w, d := Resolve(s.Rules, f)
+			if w != f.Winner || d != f.Damage {
+				t.Fatal("replay differs")
+			}
+		}
+	}
+	if e := s.Advance(s.Deadline); e != nil {
+		t.Fatal(e)
+	}
+	if s.Seats[1].HP != 0 || s.Seats[1].Rank != 7 || s.Seats[6].HP != 3 {
+		t.Fatal("elimination / bye wrong")
+	}
+	if e := s.Validate(); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestAutoChessStrictDecodeAndBoundedRecovery(t *testing.T) {
+	s := testState(t)
+	raw := s.Encode()
+	for _, bad := range []string{raw + "{}", strings.Replace(raw, "\"Schema\":1", "\"Schema\":2", 1), strings.Repeat("x", 256*1024+1)} {
+		if _, e := Decode(bad); e == nil {
+			t.Fatal("bad state accepted")
+		}
+	}
+	s.Pool[0]++
+	if _, e := Decode(s.Encode()); e == nil {
+		t.Fatal("invented copies accepted")
+	}
+	s = testState(t)
+	now := s.LastAt + 3600000
+	if e := s.Advance(now); e != nil {
+		t.Fatal(e)
+	}
+	bad := s
+	bad.Fights = append([]Fight(nil), s.Fights...)
+	bad.Fights[0].Damage++
+	if _, e := Decode(bad.Encode()); e == nil {
+		t.Fatal("forged battle result accepted")
+	}
+	if s.Round != 1 || s.Phase != "battle" || s.Deadline != now+s.Rules.BattleMillis {
+		t.Fatal("offline fast-forwarded entire match")
+	}
+}
+func TestAutoChessCatalogReloadDoesNotRepriceFrozenMatch(t *testing.T) {
+	dir := t.TempDir()
+	r := DemoRules()
+	write := func() {
+		b, _ := json.Marshal(r)
+		if e := os.WriteFile(filepath.Join(dir, "chess.json"), b, 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	write()
+	store, e := OpenCatalog(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	old, e := CaptureRules(store.Current())
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := testState(t)
+	r.Version = "new"
+	r.Units[0].Cost++
+	write()
+	if _, e = store.Reload(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	newRules, e := CaptureRules(store.Current())
+	if e != nil || newRules.Hash() == old.Hash() || s.Rules.Hash() != old.Hash() {
+		t.Fatal("snapshot changed", e)
+	}
+	// 非法热更整次被拒，当前快照仍是上一代（不发布半份配置）。
+	published := store.Current()
+	r.Units[0].Copies = 0
+	write()
+	if _, e = store.Reload(context.Background()); e == nil || store.Current() != published {
+		t.Fatal("invalid rules accepted or replaced the published snapshot")
+	}
+}
