@@ -81,6 +81,11 @@ const (
 	// release" and "you did not say why".
 	CodeNotResolvable     int32 = 560115
 	CodeAdminNoteRequired int32 = 560116
+	// CodeServerMergeCycle belongs to server merge (merge.go): an alias
+	// that would point at a server which is itself merged, or that already
+	// does in stored data. Distinct from CodeServerInvalid because the
+	// servers exist and the refusal is about their arrangement.
+	CodeServerMergeCycle int32 = 560117
 )
 
 var (
@@ -111,6 +116,13 @@ var (
 	ErrNotResolvable = errcode.Define(CodeNotResolvable, "account: slot is not in a resolvable state", "")
 	// ErrAdminNoteRequired reports a missing or oversized operator note.
 	ErrAdminNoteRequired = errcode.Define(CodeAdminNoteRequired, "account: an operator note is required", "")
+	// ErrServerMergeCycle reports a merge alias with more than one hop: a
+	// merge whose target is itself merged (or would form a cycle), or a stored
+	// alias that already points at a merged server. Aliases are flattened on
+	// write (MergeServer), so resolution only ever follows one hop; meeting a
+	// second one means the records were edited by hand or two merges raced,
+	// and the role is refused rather than routed to a guess.
+	ErrServerMergeCycle = errcode.Define(CodeServerMergeCycle, "account: server merge alias would form a chain or cycle", "")
 )
 
 // Error maps an error to the code and reason a client sees.
@@ -246,6 +258,27 @@ type GameServer struct {
 	// Region groups servers for display; opaque here.
 	Region        string `json:"region"`
 	UpdatedAtUnix int64  `json:"updated_at_unix"`
+
+	// 别名合服（Admin.MergeServer）。下面四个字段只由 MergeServer / UnmergeServer 写，UpsertServer
+	// 原样保留它们。
+	//
+	// MergedInto 非 0 表示本服已并入该服：本服角色的身份（PlayerID、ServerID、slot）不变，由
+	// MergedInto 的 game 进程承载（Role.ServingServerID）。0 表示没有合服。记录永远只有一跳：并入时
+	// 把指向本服的别名一并改指新的承载服（拍平），承载服自己不能再有 MergedInto。
+	MergedInto int32 `json:"merged_into,omitempty"`
+	// MergedFrom 是并入本服、由本服承载的服（按 ID 排序），供拍平与 show-server 用。它是辅助索引：
+	// 是否并入以对方记录的 MergedInto 为准，索引里多出的项（并发改动留下）在拍平时按 MergedInto 核对后跳过。
+	MergedFrom []int32 `json:"merged_from,omitempty"`
+	// MergedAtUnix 与 MergeNote 记录最近一次合服 / 解除合服的操作时间（系统时间）与操作者备注：
+	// account 没有独立的审计日志，运维记录写在记录本身（与 ResolvePendingCreation 相同）。
+	MergedAtUnix int64  `json:"merged_at_unix,omitempty"`
+	MergeNote    string `json:"merge_note,omitempty"`
+}
+
+// clone 复制 MergedFrom，调用方拿到的记录不与存储共享切片。
+func (g GameServer) clone() GameServer {
+	g.MergedFrom = append([]int32(nil), g.MergedFrom...)
+	return g
 }
 
 // Role is one character under an account on one server.
@@ -258,7 +291,14 @@ type Role struct {
 	// service. It is the role's identity everywhere else in the system.
 	PlayerID  int64  `json:"player_id"`
 	AccountID string `json:"account_id"`
-	ServerID  int32  `json:"server_id"`
+	// ServerID 是原服：建角时写定、之后不变，slot 与名字都按它。显示原服标识、日志、按服的业务数据
+	// 归属用它；决定由哪个 game 进程承载、往哪里路由用 ServingServerID。
+	ServerID int32 `json:"server_id"`
+	// ServingServerID 是承载服：原服没有合服时等于 ServerID，原服已并入另一服（GameServer.MergedInto）
+	// 时是那个服。它不是存储字段：存储里的角色记录总是 0，ValidateSession、SelectRole、CreateRole、
+	// UpdateProfile 返回前由 account 唯一的解析点（servingServer）填入，经总线返回时随响应传递。
+	// 消费者（Gate 与嵌入 TCP 的认证器）一律用它决定路由与驻留。
+	ServingServerID int32 `json:"serving_server_id,omitempty"`
 	// Name is the display name; uniqueness is enforced on its normalized form.
 	Name string `json:"name"`
 	// Profile is opaque game state — level, power, guild, avatar. It is a
@@ -278,21 +318,28 @@ func (r Role) clone() Role {
 
 // Session is what a verified role selection produces.
 type Session struct {
-	PlayerID      int64  `json:"player_id"`
-	AccountID     string `json:"account_id"`
-	ServerID      int32  `json:"server_id"`
-	Token         string `json:"token"`
-	ExpiresAtUnix int64  `json:"expires_at_unix"`
+	PlayerID  int64  `json:"player_id"`
+	AccountID string `json:"account_id"`
+	// ServerID 是角色的原服，ServingServerID 是承载服，含义同 Role 的同名字段。
+	ServerID        int32  `json:"server_id"`
+	ServingServerID int32  `json:"serving_server_id"`
+	Token           string `json:"token"`
+	ExpiresAtUnix   int64  `json:"expires_at_unix"`
 }
 
-// ServerIDClaim 是游戏网关的认证器把 ValidateSession 返回的 Role.ServerID 记进
+// ServerIDClaim 是游戏网关的认证器把 ValidateSession 返回的承载服（Role.ServingServerID）记进
 // gateway.Principal.Claims 用的键（值是十进制 sid）。
 //
 // 写的一方是认证器（game-demo 的 internal/access/player/tcp/auth.go），读的一方是登录端点
-// （game/controllers/player/enter_game.go 的 BoundServerID），后者据此判断这个玩家是不是绑定在
-// 本服。两边分属传输包与控制器包，后者不能引用前者，所以键放在两边本来就依赖的 account 包里：
-// 它说的正是 account 返回的那个 ServerID。
+// （game/controllers/player/enter_game.go 的 BoundServerID），后者据此判断这个玩家是不是由本服承载，
+// 比较逻辑与合服前相同：没有合服时承载服就是原服。两边分属传输包与控制器包，后者不能引用前者，
+// 所以键放在两边本来就依赖的 account 包里：它说的正是 account 返回的那个承载服。
 const ServerIDClaim = "server_id"
+
+// OriginServerIDClaim 是认证器把角色原服（Role.ServerID）记进 Principal.Claims 用的键（十进制 sid），
+// 供业务显示原服标识（例如名字后缀“[A]”，显示规则由业务决定）与按原服归属的数据使用。路由与驻留
+// 不读它，读 ServerIDClaim。没有合服时两个值相同。
+const OriginServerIDClaim = "origin_server_id"
 
 // RoleCreatedAtClaim 是认证器把 ValidateSession 返回的 Role.CreatedAtUnix（十进制 Unix 秒）记进
 // gateway.Principal.Claims 用的键。登录端点用它作为 mail.BroadcastProfile.RegisteredAtUnix 调
