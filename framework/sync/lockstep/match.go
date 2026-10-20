@@ -163,6 +163,16 @@ type MatchConfig struct {
 	Recovery RecoveryMode
 	// Snapshots 配置快照来源与下发节奏，见 SnapshotConfig。
 	Snapshots SnapshotConfig
+	// CommittedFrame 是已提交门：返回宿主已持久提交的最新帧。nil 表示切出即提交（现行行为）。
+	// 用于“提交后才广播”的宿主——实时广播由宿主暂存、权威提交后才发（MOBA 夹具 Room），而追帧页与快照分块
+	// 由 Match 的后台 goroutine 直接经可靠通道发出，没有这道门就会把刚切出、还没提交的帧发给客户端。
+	// 配置后：追帧页只覆盖 <= min(最新帧, CommittedFrame()) 的帧，游标已越过它的会话本 Tick 不发页、保留恢复状态，
+	// 等宿主提交后的 Tick 再发；取快照的 SnapshotRequest.MaxFrame 取同一个值。回到实时广播后发什么仍由宿主的
+	// Datagrams 决定，宿主须自己把实时广播挡到提交之后。
+	// 在调用 Tick 的协程上调用，只在有恢复中的会话时调用，不得阻塞；返回值大于最新帧时按最新帧处理。
+	// 宿主提交落后切帧超过 RedundancyDepth-1 帧时，恢复中的会话一直经可靠通道逐页跟随，不切回实时广播。
+	// 设计见 docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md §15。
+	CommittedFrame func() FrameID
 }
 
 // catchupState is one session's recovery state: paging cursor, or a snapshot
@@ -268,6 +278,8 @@ type Match struct {
 	fetch *snapshotFetch
 	// lastTransfer 是最近分配的快照传输编号（单调递增，从 1 开始）。
 	lastTransfer uint64
+	// committed 是 MatchConfig.CommittedFrame（nil 表示切出即提交）。
+	committed func() FrameID
 }
 
 // ownerSpectator marks a session owned by a spectator in sessionOwners.
@@ -357,6 +369,7 @@ func NewMatch(config MatchConfig) (*Match, error) {
 		ruled:         make(map[FrameID]map[PlayerID]struct{}),
 		recovery:      recovery,
 		snapshots:     snapshots,
+		committed:     config.CommittedFrame,
 	}, nil
 }
 
@@ -720,6 +733,9 @@ func (m *Match) catchupSessions() []nettransport.SessionID {
 // frames from Latest-depth+1 on) is caught up: the broadcast that follows
 // carries the rest. Without this a page that always outlives the wait
 // would trail the head by one frame forever.
+// 配置了 CommittedFrame 时，空闲（没有在途发送）的会话也按同一条件切回实时：已提交门让页面最多发到已提交帧，
+// 宿主每 Tick 同步提交时游标总停在最新帧，settleCatchup 的“越过最新帧”永远不成立；本 Tick 的冗余包覆盖它，
+// 而宿主在提交后才发这个包。
 func (m *Match) collectCatchups() error {
 	if len(m.catchups) == 0 {
 		return nil
@@ -727,12 +743,16 @@ func (m *Match) collectCatchups() error {
 	var errs []error
 	for _, session := range m.catchupSessions() {
 		state := m.catchups[session]
-		if state.inflight == nil || !state.inflight.poll() {
-			continue
-		}
-		if err := m.settleCatchup(session, state); err != nil {
-			errs = append(errs, err)
-			continue
+		if state.inflight != nil {
+			if !state.inflight.poll() {
+				continue
+			}
+			if err := m.settleCatchup(session, state); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		} else if m.committed == nil || state.unservable != nil {
+			continue // 没有已提交门：空闲会话由本 Tick 的 pumpCatchup 发页（现行行为）
 		}
 		if _, catching := m.catchups[session]; catching && state.inflight == nil && state.snapshot == nil && state.next+FrameID(m.depth) > m.history.Latest() {
 			delete(m.catchups, session)
@@ -790,6 +810,8 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 	}
 	var errs []error
 	var launched []nettransport.SessionID
+	// 已提交门：可靠通道上本 Tick 最多发到 head；没有配置 CommittedFrame 时 head 就是最新帧。
+	head := m.servableHead()
 	// 取快照只非阻塞地收结果：上一 Tick 及更早发起的那一次结束了才分给等快照的会话。
 	fetched := false
 	if m.fetch != nil {
@@ -837,7 +859,17 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 			launched = append(launched, session)
 			continue
 		}
-		page := m.history.ReadRange(state.next, m.catchupBatch)
+		limit := m.catchupBatch
+		if latest := m.history.Latest(); head < latest {
+			if state.next > head {
+				if state.next <= latest {
+					continue // 游标之后的帧还没提交：保留恢复状态，等宿主提交后的 Tick 再发
+				}
+			} else {
+				limit = min(limit, int(head-state.next)+1)
+			}
+		}
+		page := m.history.ReadRange(state.next, limit)
 		if len(page) == 0 {
 			delete(m.catchups, session) // caught up: live broadcasts take over
 			continue
@@ -847,7 +879,7 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 	}
 	// 每 Tick 至多发起一次取快照；本 Tick 刚收到结果（含失败）的，下一 Tick 再取。
 	if needFetch && m.fetch == nil && !fetched {
-		m.launchFetch(ctx)
+		m.launchFetch(ctx, head)
 	} else if !needFetch {
 		m.releaseIdleFetch()
 	}
@@ -877,6 +909,15 @@ func (m *Match) pumpCatchup(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// servableHead 是可靠通道上可以发出的最后一帧：最新帧，配置了 CommittedFrame 时不超过已提交帧。
+func (m *Match) servableHead() FrameID {
+	head := m.history.Latest()
+	if m.committed != nil {
+		head = min(head, m.committed())
+	}
+	return head
 }
 
 // launchSend sends one catch-up payload (a page, or the catch-up-failed

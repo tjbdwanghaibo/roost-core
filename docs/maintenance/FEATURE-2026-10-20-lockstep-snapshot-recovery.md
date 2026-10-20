@@ -683,3 +683,51 @@ C#：Unhandled exception. System.IO.IOException: Unable to read data from the tr
 **其余文档里的 Go 注释**：`ErrCatchupUnservable` 与 `MatchConfig.HistoryRetainFrames` 的注释原写“不做全量重同步”，改为按恢复方式区分。
 
 留给后续：发版时的双文档（`docs/release/`）；下次发版须把生成物最低版本（`codegen/internal/roost/manifest.go` `minimumVersions.Core` 与 `framework-compat.yml` 的 minimum）升到含 C9 v2 的版本。
+
+## 15. Room 接入：已提交门（2026-10-20）
+
+维护者 2026-10-20 决定把快照恢复接到 MOBA 夹具的 `Room` 上（P4 汇报中的选项 B，见 §14 P4 偏差第 1 条）。本节先写现状核对与方案（实施前），实施结果见 §15.6。基线 origin/main `8781b32a`。
+
+### 15.1 现状：Match 历史里有尚未提交的帧
+
+- `Room.tick`（[room.go.txt:103](../../scripts/testdata/moba/room.go.txt)）先 `match.Tick`，再 `persist`（[room.go.txt:108](../../scripts/testdata/moba/room.go.txt)）。`Match.Tick` 切帧后立刻 `history.Append`（[match.go:538](../../framework/sync/lockstep/match.go)），所以从 Tick 返回到权威提交返回之间，Match 历史的头部是一帧**尚未提交**的帧；提交失败或结果未知时 Room 关闭，这一帧可能永远不会提交，换宿主或重启后同一帧号会按新的输入重新切出。
+- 现在 Room 不会把这一帧发出去，靠的是三件事：①实时广播经暂存区，提交成功后才发；②Room 没有可靠通道，`OpCatchup` 在 `startCatchup` 处以 `ErrCatchupUnavailable` 失败，Match 根本不发追帧页；③窗口外的帧由业务 `replay` 从 `record.Frames`（只含已提交帧）分页。**没有“提交后才 Append 进 Match”的约定，也做不到**：帧由 `Tick` 切出，切出即进历史。
+- 一旦给 Room 配可靠通道：同一次 `Tick` 里 `pumpCatchup` 读 `history.ReadRange(next, batch)`（[match.go:832](../../framework/sync/lockstep/match.go)）并在后台 goroutine 上立刻经可靠通道发出，游标接近头部的会话会收到刚切出、还没提交的帧——绕过了“先提交、再广播”。回到实时的判定（[match.go:729](../../framework/sync/lockstep/match.go)，游标进入本 Tick 冗余包的覆盖范围）没有问题：之后会话收的是实时广播，Room 的暂存区照样把它挡到提交之后。
+- 快照：分块内容来自业务 Provider，只要检查点在提交后才发布，快照帧就不会超前；但 `SnapshotRequest.MaxFrame` 现在取已切出的头部（[snapshot.go:401](../../framework/sync/lockstep/snapshot.go)），框架层面没有挡住超前的检查点。
+- 结论：现有约定**不**保证 Match 历史只含已提交帧，门不能只在业务层“快照只取已提交检查点”就算完——追帧页也要挡。
+
+### 15.2 方案
+
+| 方案 | 做法 | 代价 |
+| --- | --- | --- |
+| A 业务层包可靠通道 | Room 给 Match 的可靠通道包一层：解码 C7 页，页里有未提交帧就在发送 goroutine 上等 Room 的提交信号，Room 关闭时取消 | 不改框架；但页里含未提交头部帧的每个 Tick 都要等满 `CatchupSendWait` 才返回（Room owner 每帧多停 5ms）；业务要解析框架协议字节；“页已读出、等提交”与提交内容是否一致又要业务自己论证 |
+| **B 框架选项 `MatchConfig.CommittedFrame`（推荐，采用）** | `CommittedFrame func() FrameID` 返回宿主已提交的最新帧。配置后：追帧页只读到 `min(最新帧, CommittedFrame())`，游标已越过它的会话本 Tick 不发页、保留恢复状态等下一 Tick；取快照的 `MaxFrame` 取同一个值。nil 表示切出即提交（现行行为逐字节不变） | 改 Sync 三大块之一的 `lockstep`：需要红测试、`-race`；只在有恢复中的会话时每次 `pumpCatchup` 多调一次回调，没有恢复中会话的 Tick 热路径不变（前后 benchstat 对照） |
+
+B 的不变量：可靠通道上发出的任何 C7 帧、任何快照分块对应的快照帧，都 ≤ 发起发送时 `CommittedFrame()` 的值。强制点只有两处：`pumpCatchup` 读页的上界、`launchFetch` 的 `MaxFrame`。C9 通知不带帧。回到实时广播后发什么由宿主的 Datagrams 决定——`CommittedFrame` 的使用前提是宿主自己已把实时广播挡到提交之后（Room 的暂存区），框架只挡它自己在后台发出的东西。
+
+调用约定：在调用 `Tick` 的协程上调用（Room 的 owner 读自己的 `record`，不用锁），不得阻塞；返回值大于最新帧时按最新帧处理。限制：宿主的提交落后切帧超过 `RedundancyDepth - 1` 帧时，恢复中的会话会一直经可靠通道逐页跟随已提交帧、不切回实时广播（切回时本 Tick 的冗余包覆盖不到它缺的帧）；Room 每个 Tick 同步提交，只落后一帧，冗余深度 3，不受影响。
+
+### 15.3 Room 的接法
+
+- 新构造 `RecoverRoomWithSnapshots(record, persist, wire, RoomSnapshots{Reliable, Checkpoints, CheckpointEvery})`；`RecoverRoom` 签名与行为不变（无可靠通道、无快照来源），现有用例不改。
+- Match 配 `Reliable`、`Snapshots.Provider = Checkpoints`（`Recovery` 零值即 auto）、`CommittedFrame = len(record.Frames)`。`record` 只在提交成功后替换，所以它就是已提交帧数。
+- 检查点只取已提交状态：提交返回的 `saved.Reference` 是权威实体在实体锁内按已提交日志重算出的 Arena（`Round.Update` 里 `Replay` + `Apply`），帧号 = `len(saved.Frames)`；每 `CheckpointEvery` 帧（缺省 16，须小于 64 帧窗口）在提交成功后 `Publish`。`RecoverRoomWithSnapshots` 重建完 Match 后先发布 `record.Reference`（已提交头部），交接 / 重启后的新宿主立刻能服务快照。
+- 新增 `catchup` 操作（客户端的 `OpCatchup(from)`）：`HostEndpoint` 只接受当前绑定会话，Room 转给 `match.HandleCommand`。
+- 配了可靠通道后，`Match.Tick` 返回的错误可能只是某个会话的追帧页 / 分块发送失败。Room 改为：帧已切出（`f.ID != 0`）就照常提交，发送错误并入返回值、不停房间；停房间只留给 Match 已关闭、提交失败或结果未知、提交记录不符。没配可靠通道时 Tick 的错误只可能来自暂存区（十个会话、容量十，实际不会发生），行为不变。
+
+### 15.4 快照恢复与持久补帧的分工
+
+- **Match 窗口内**（起点仍在最近 64 帧里）：auto 追帧页，受已提交门约束。
+- **越过窗口**：auto 发已提交检查点的快照、从检查点帧 +1 续帧，**不走持久补帧**。理由：持久补帧要客户端从它已有的帧一直重算到头部，进程重启丢了本地状态的客户端只能从第 1 帧重算；夹具的 `Round.Frames` 每帧整段重写、样例上限 600 帧，正式长局用不了；快照按状态大小一次到位（Arena 几 KB），续帧最多一个检查点间隔加传输期间新切的帧。
+- **持久补帧 `replay` 保留给**：用 `RecoverRoom`（没配可靠通道）的宿主；没有快照能力的客户端（没实现 `Restore`，收到快照分块即终止）——业务让它改用 `replay` 从第 1 帧重算；审计、回放与延迟观战（`ObserverFrames`），它们要的是逐帧输入而不是状态。
+- 一个会话同一时刻只走一条路：框架恢复（追帧页或快照）在 Match 内，`replay` 在业务 RPC 上，两者都只交出已提交帧，客户端都经 `FrameAssembler` 按帧号连续应用。
+
+### 15.5 测试计划
+
+| 用例 | 位置 | 证明 |
+| --- | --- | --- |
+| `TestMatchCommittedFrameGatesCatchupAndSnapshots` | `framework/sync/lockstep/snapshot_test.go` | 提交停在 K、已切出 K+1 时：追帧页最多到 K、游标越过 K 时不发页也不结束恢复；取快照 `MaxFrame` = K；提交跟上后续帧无洞、回到实时；nil 时行为不变 |
+| `TestMOBARoomCatchupNeverSendsUncommittedFrames` | `scripts/testdata/moba/round_handlers_test.go.txt`（生成的 BattleRound Sender 与 Nest 提交） | 追帧请求后下一帧的提交卡住：卡住期间可靠通道发出的帧最大号 = 已提交帧；提交以结果未知结束、房间停止后，任何通道上都没有出现这一帧；按已提交记录 `resume` 重建的房间续帧到头部、与权威同摘要。窗口外的玩家经快照恢复，全程每个可靠包在发送时都不超过已提交帧 |
+| `TestMOBAFiveVFiveRoomKCPClientsRecoverFromCommittedSnapshot` | `scripts/testdata/moba/arena_network_test.go.txt` | 十个真实 loopback KCP 客户端接 `Room`（经 `HostEndpoint`）；两人断线超过 4 个窗口后换会话重连、照常请求追帧，经已提交检查点快照恢复、续帧到头部，局末十人与权威同摘要；客户端收到的每一帧都不超过当时的已提交帧 |
+
+先红：去掉门（`CommittedFrame` 不生效）时框架用例与 Room 用例的失败原文；不配 Provider（`RecoverRoom`）时 Room 越界请求的失败原文。

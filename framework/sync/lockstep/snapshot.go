@@ -96,7 +96,8 @@ func (reason SnapshotReason) String() string {
 
 // SnapshotRequest 描述一次取快照。快照帧号必须落在 [MinFrame, MaxFrame]：
 // MinFrame = 发起时历史仍保留的最早帧 - 1（恢复期间 MinFrame+1 起的帧由钉住保护，不被自动裁剪），
-// MaxFrame = 发起时已切出的最新帧（服务器参考模拟不可能超前于已切帧）。
+// MaxFrame = 发起时已切出的最新帧（服务器参考模拟不可能超前于已切帧）；配置了 MatchConfig.CommittedFrame 时
+// 不超过已提交帧。已提交帧落后于窗口起点时 MinFrame 可能大于 MaxFrame，此时没有可用快照。
 type SnapshotRequest struct {
 	MinFrame FrameID
 	MaxFrame FrameID
@@ -392,13 +393,14 @@ func (m *Match) releaseIdleFetch() {
 }
 
 // launchFetch 在 Match 自己起的 goroutine 上调用 Provider。请求范围按发起时的历史窗口定：等快照的会话
-// 把窗口起点钉住，所以拿到的快照帧之后的帧在续帧时仍在历史里。
-func (m *Match) launchFetch(ctx context.Context) {
+// 把窗口起点钉住，所以拿到的快照帧之后的帧在续帧时仍在历史里。上界 head 是 servableHead：
+// 配置了 CommittedFrame 时不超过已提交帧，Provider 交出超前的检查点按无效快照处理。
+func (m *Match) launchFetch(ctx context.Context, head FrameID) {
 	waiters := m.snapshotWaiters()
 	if len(waiters) == 0 {
 		return
 	}
-	request := SnapshotRequest{MinFrame: m.history.start() - 1, MaxFrame: m.history.Latest(), Reason: m.catchups[waiters[0]].snapshot.reason}
+	request := SnapshotRequest{MinFrame: m.history.start() - 1, MaxFrame: head, Reason: m.catchups[waiters[0]].snapshot.reason}
 	timeout := m.snapshots.fetchTimeout
 	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	fetch := &snapshotFetch{request: request, deadline: time.Now().Add(timeout), done: make(chan snapshotFetchResult, 1), cancel: cancel}

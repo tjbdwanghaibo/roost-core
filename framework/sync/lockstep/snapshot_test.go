@@ -1,4 +1,4 @@
-// 快照恢复：恢复方式判定、取快照线程与共享、分块下发与续帧、失败通知 v2、历史钉住、分块编解码与 fuzz、客户端 FrameAssembler 收快照与续帧。
+// 快照恢复：恢复方式判定、取快照线程与共享、分块下发与续帧、失败通知 v2、历史钉住、已提交门、分块编解码与 fuzz、客户端 FrameAssembler 收快照与续帧。
 
 package lockstep
 
@@ -1401,6 +1401,183 @@ func TestMatchSnapshotUnpacedLaneUsesTheFixedBudget(t *testing.T) {
 	if match.CatchingUp(1) {
 		t.Fatal("recovery did not finish after the transfer and one catch-up page")
 	}
+}
+
+// committedGate 是测试里的宿主提交游标：Tick 在测试协程上调用 CommittedFrame，后台发送协程经 hook 读它，所以用原子量。
+// 宿主模型同 MOBA Room：Tick 切帧之后才提交，所以 Tick 里看到的已提交帧总落后最新帧至少一帧。
+type committedGate struct {
+	frame      atomic.Uint32
+	violations atomic.Int64
+	firstBad   atomic.Value // string
+}
+
+func (g *committedGate) committed() FrameID { return FrameID(g.frame.Load()) }
+
+// check 是可靠通道发送前的 hook：C7 页里的帧、快照首块的快照帧都不得超过此刻的已提交帧。
+// 提交只会前移，发送协程晚于提交运行只会看到更大的值，所以这里不会误报。
+func (g *committedGate) check(_ nettransport.SessionID, packet []byte) error {
+	committed := g.committed()
+	var bad FrameID
+	switch {
+	case IsSnapshotChunk(packet):
+		if chunk, err := DecodeSnapshotChunk(packet, MaxSnapshotBytes); err == nil && chunk.Offset == 0 && chunk.Frame > committed {
+			bad = chunk.Frame
+		}
+	case IsCatchupNotice(packet):
+	default:
+		if frames, err := DecodeBroadcast(packet); err == nil && len(frames) != 0 && frames[len(frames)-1].ID > committed {
+			bad = frames[len(frames)-1].ID
+		}
+	}
+	if bad != 0 && g.violations.Add(1) == 1 {
+		g.firstBad.Store(fmt.Sprintf("reliable lane carried frame %d while only %d was committed", bad, committed))
+	}
+	return nil
+}
+
+func reliableFrames(t testing.TB, packets []lanePacket) []FrameID {
+	t.Helper()
+	var ids []FrameID
+	for _, packet := range packets {
+		if !packet.reliable || IsSnapshotChunk(packet.data) || IsCatchupNotice(packet.data) {
+			continue
+		}
+		frames, err := DecodeBroadcast(packet.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range frames {
+			ids = append(ids, frame.ID)
+		}
+	}
+	return ids
+}
+
+// 已提交门（设计 §15）：宿主“先切帧、后提交、提交后才广播”时，追帧页与取快照的上界都停在已提交帧，
+// 游标越过已提交帧的会话不发页也不结束恢复，提交跟上后续帧无洞、回到实时。
+// 红证据：没有这道门时第一步的页带上了刚切出、未提交的帧（见设计 §15.6）。
+func TestMatchCommittedFrameGatesCatchupAndSnapshots(t *testing.T) {
+	t.Run("catchup pages stop at the committed frame", func(t *testing.T) {
+		lanes := newLaneLog()
+		gate := &committedGate{}
+		lanes.reliableBefore = gate.check
+		match := newSnapshotMatch(t, lanes, nil, func(c *MatchConfig) {
+			c.Snapshots = SnapshotConfig{}
+			c.CommittedFrame = gate.committed
+		})
+		for player := PlayerID(1); player <= 2; player++ {
+			if err := match.Attach(player, nettransport.SessionID(100+player)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 20 {
+			if err := tickInputs(t, match); err != nil {
+				t.Fatal(err)
+			}
+			gate.frame.Store(uint32(match.History().Latest()))
+		}
+		// 宿主的第 21～25 帧提交在途（提交慢于切帧）：已提交帧停在 20。
+		for range 5 {
+			if err := tickInputs(t, match); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lanes.take(102)
+		if err := match.StartCatchup(2, 15); err != nil {
+			t.Fatal(err)
+		}
+		if err := tickInputs(t, match); err != nil { // 第 26 帧
+			t.Fatal(err)
+		}
+		if got := reliableFrames(t, lanes.take(102)); len(got) == 0 || got[0] != 15 || got[len(got)-1] != 20 {
+			t.Fatalf("committed 20, head 26: catch-up page carried frames %v, want 15..20", got)
+		}
+		if err := tickInputs(t, match); err != nil { // 第 27 帧，已提交仍是 20
+			t.Fatal(err)
+		}
+		if got := lanes.take(102); len(got) != 0 || !match.CatchingUp(2) {
+			t.Fatalf("cursor past the committed frame: sent %d packets, catching up %v; want nothing sent and the catch-up kept", len(got), match.CatchingUp(2))
+		}
+		client := newRecoveringClient(21)
+		gate.frame.Store(27)
+		for range 3 { // 第 28～30 帧；宿主每 Tick 之后提交，Tick 里已提交帧落后一帧
+			if err := tickInputs(t, match); err != nil {
+				t.Fatal(err)
+			}
+			client.feed(t, lanes.take(102))
+			gate.frame.Store(uint32(match.History().Latest()))
+		}
+		if match.CatchingUp(2) {
+			t.Fatal("session did not return to live broadcasts once commits caught up")
+		}
+		if len(client.holes) != 0 || client.next != match.History().Latest()+1 {
+			t.Fatalf("holes %v, next %d, head %d", client.holes, client.next, match.History().Latest())
+		}
+		client.checkFrames(t, 21, match.History().Latest())
+		if n := gate.violations.Load(); n != 0 {
+			t.Fatalf("%d uncommitted sends: %v", n, gate.firstBad.Load())
+		}
+	})
+	t.Run("snapshot requests stop at the committed frame", func(t *testing.T) {
+		lanes := newLaneLog()
+		gate := &committedGate{}
+		lanes.reliableBefore = gate.check
+		var maxFrames []FrameID
+		var mu sync.Mutex
+		provider := &referenceProvider{size: 3000}
+		provider.fn = func(_ context.Context, req SnapshotRequest) (Snapshot, error) {
+			mu.Lock()
+			maxFrames = append(maxFrames, req.MaxFrame)
+			mu.Unlock()
+			return Snapshot{Frame: req.MaxFrame, Data: referenceData(req.MaxFrame, 3000), StateHash: referenceHash(req.MaxFrame), HasStateHash: true}, nil
+		}
+		match := newSnapshotMatch(t, lanes, provider, func(c *MatchConfig) { c.CommittedFrame = gate.committed })
+		for player := PlayerID(1); player <= 2; player++ {
+			if err := match.Attach(player, nettransport.SessionID(100+player)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tick := func() {
+			t.Helper()
+			if err := tickInputs(t, match); err != nil {
+				t.Fatal(err)
+			}
+			gate.frame.Store(uint32(match.History().Latest())) // 提交在 Tick 之后
+		}
+		for range 200 {
+			tick()
+		}
+		lanes.take(102)
+		if err := match.StartCatchup(2, 5); err != nil { // 起点早已被裁掉：auto 走快照
+			t.Fatal(err)
+		}
+		client := newRecoveringClient(5)
+		if err := tickInputs(t, match); err != nil { // 第 201 帧：发起取快照，此刻已提交 200
+			t.Fatal(err)
+		}
+		awaitFetch(t, match)
+		gate.frame.Store(201)
+		for range 6 {
+			tick()
+			client.feed(t, lanes.take(102))
+		}
+		mu.Lock()
+		requested := append([]FrameID(nil), maxFrames...)
+		mu.Unlock()
+		if len(requested) != 1 || requested[0] != 200 {
+			t.Fatalf("snapshot requests MaxFrame %v, want [200] (committed 200, head 201)", requested)
+		}
+		if len(client.snapshots) != 1 || client.snapshots[0].Frame != 200 {
+			t.Fatalf("snapshots %d", len(client.snapshots))
+		}
+		if match.CatchingUp(2) || len(client.holes) != 0 || client.next != match.History().Latest()+1 {
+			t.Fatalf("catching up %v, holes %v, next %d, head %d", match.CatchingUp(2), client.holes, client.next, match.History().Latest())
+		}
+		client.checkFrames(t, 201, match.History().Latest())
+		if n := gate.violations.Load(); n != 0 {
+			t.Fatalf("%d uncommitted sends: %v", n, gate.firstBad.Load())
+		}
+	})
 }
 
 // ---- 客户端 FrameAssembler：收快照、恢复、续帧（设计 §7.1 / §7.3） ----
