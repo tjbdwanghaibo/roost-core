@@ -1,0 +1,191 @@
+package bootstrap
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
+	"github.com/spf13/viper"
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	db "example.com/planet/db"
+	player "example.com/planet/game/entities/player"
+	syncsender "example.com/planet/game/handler/syncsender"
+	registry "example.com/planet/internal/registry"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
+	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+)
+
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+func TestTapThroughput(t *testing.T) {
+	mongoURI, natsURL := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if mongoURI == "" || natsURL == "" {
+		t.Skip("env")
+	}
+	if err := registry.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	workers, players := envInt("R8_WORKERS", 50), envInt("R8_PLAYERS", 0)
+	if players == 0 {
+		players = workers
+	}
+	dur := time.Duration(envInt("R8_SECONDS", 10)) * time.Second
+	mode := os.Getenv("R8_MODE")
+	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000)
+	token := strings.ReplaceAll(suffix, "_", "x")
+	dataDatabase, playerDatabase, effectStream := "r8tap_de_"+suffix, "r8tap_dao_"+suffix, "R8TAP_EFFECTS_"+suffix
+	cfg := viper.New()
+	settings := map[string]any{
+		"sid": int32(904), "server_type": "game", "persistence.engine": "dataengine",
+		"mongo.uri": mongoURI, "mongo.require_replica_set": true, "mongo.connect_timeout": 5 * time.Second, "mongo.transaction_timeout": 15 * time.Second,
+		"nats.url": natsURL, "nats.prefix": "r8tap" + token,
+		"dataengine.database": dataDatabase, "dataengine.wal.dir": t.TempDir(),
+		"dataengine.databases":      map[string]any{db.DatabaseMain: playerDatabase},
+		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "r8tapeffect" + token,
+		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
+	}
+	if gci := os.Getenv("R8_GCI"); gci != "" {
+		d, _ := time.ParseDuration(gci)
+		settings["dataengine.wal.group_commit_interval"] = d
+	}
+	for key, value := range settings {
+		cfg.Set(key, value)
+	}
+	reg := app.NewRegistry(cfg)
+	mongoMod := kitmongo.NewMongoMod()
+	deMod := kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))
+	type lifecycle interface {
+		app.Mod
+		Init(*viper.Viper) error
+		Provide(*app.Registry) error
+		Start() error
+		StopWithContext(context.Context) error
+	}
+	all := []lifecycle{mongoMod, kitnats.NewNatsMod(nil), deMod, kitnest.NewMod(EntityAccess)}
+	var started []lifecycle
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		for i := len(started) - 1; i >= 0; i-- {
+			if i == 0 {
+				for _, database := range []string{playerDatabase, dataDatabase} {
+					_ = mongoMod.Client().Database(database).Drop(ctx)
+				}
+			}
+			_ = started[i].StopWithContext(ctx)
+		}
+		if nc, err := gonats.Connect(natsURL); err == nil {
+			if js, err := gojs.New(nc); err == nil {
+				_ = js.DeleteStream(ctx, effectStream)
+			}
+			nc.Close()
+		}
+	})
+	for _, mod := range all {
+		if err := mod.Init(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mod := range all {
+		if err := mod.Provide(reg); err != nil {
+			t.Fatal(err)
+		}
+		if err := mod.Start(); err != nil {
+			t.Fatal(err)
+		}
+		started = append(started, mod)
+	}
+	ctx := context.Background()
+	ids := make([]int64, players)
+	for i := range ids {
+		id, err := entity.BuildEntityID(int64(20_001+i), player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = id
+		if _, err := mongoMod.Client().Database(playerDatabase).Collection(db.PlayerDaoCollection).InsertOne(ctx,
+			bson.M{"_id": id, "_version": uint64(1), "_schema": db.PlayerDaoSchemaVersion, "gold": int64(0), "level": int32(1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nest := app.MustLookup[corenest.Client](reg, mods.ModNest)
+	strict, async := syncsender.NewTapSender(nest), syncsender.NewTapAsyncSender(nest)
+	call := func(id int64) error {
+		var err error
+		if mode == "async" {
+			_, err = async.Sync_TapAsync(ctx, id)
+		} else {
+			_, err = strict.Sync_Tap(ctx, id)
+		}
+		return err
+	}
+	for _, id := range ids { // warm: cold load every player
+		if err := call(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := deMod.Runtime().WAL.Stats()
+	var total, errs atomic.Int64
+	var mu sync.Mutex
+	var lat []time.Duration
+	deadline := time.Now().Add(dur)
+	start := time.Now()
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			var local []time.Duration
+			for i := 0; time.Now().Before(deadline); i++ {
+				id := ids[(w+i*workers)%players]
+				if players >= workers {
+					id = ids[w%players]
+				}
+				t0 := time.Now()
+				if err := call(id); err != nil {
+					errs.Add(1)
+					continue
+				}
+				local = append(local, time.Since(t0))
+				total.Add(1)
+			}
+			mu.Lock()
+			lat = append(lat, local...)
+			mu.Unlock()
+		}(w)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	after := deMod.Runtime().WAL.Stats()
+	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+	pct := func(p float64) time.Duration {
+		if len(lat) == 0 {
+			return 0
+		}
+		return lat[int(float64(len(lat)-1)*p)]
+	}
+	t.Logf("mode=%q workers=%d players=%d gci=%q: ok=%d err=%d elapsed=%v TPS=%.0f P50=%v P99=%v walAppended=%d walSyncs=%d",
+		mode, workers, players, os.Getenv("R8_GCI"), total.Load(), errs.Load(), elapsed.Round(time.Millisecond), float64(total.Load())/elapsed.Seconds(),
+		pct(0.5), pct(0.99), after.Appended-before.Appended, after.Syncs-before.Syncs)
+}

@@ -1,0 +1,167 @@
+// 临时：第八轮第 5 项定位用的 TCP 压测客户端（票据 = 玩家 ID）。
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"example.com/planet/db"
+	"example.com/planet/game/entities/player"
+	"example.com/planet/internal/registry"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	gonats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+func main() {
+	addr := flag.String("addr", "127.0.0.1:7000", "")
+	conns := flag.Int("conns", 50, "")
+	samePlayer := flag.Bool("same", false, "all connections use one player")
+	dur := flag.Duration("dur", 10*time.Second, "")
+	mongoURI := flag.String("mongo", "", "")
+	database := flag.String("db", "", "physical DAO db")
+	base := flag.Int64("base", 30001, "")
+	cleanupDBs := flag.String("drop-dbs", "", "comma-separated dbs to drop, then exit")
+	dropStreams := flag.String("drop-streams", "", "comma-separated streams to delete")
+	natsURL := flag.String("nats", "", "")
+	flag.Parse()
+	if err := registry.RegisterAll(); err != nil {
+		fail(err)
+	}
+	ctx := context.Background()
+	if *cleanupDBs != "" || *dropStreams != "" {
+		if *cleanupDBs != "" {
+			client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
+			if err != nil {
+				fail(err)
+			}
+			for _, name := range strings.Split(*cleanupDBs, ",") {
+				if err := client.Database(name).Drop(ctx); err != nil {
+					fmt.Println("drop", name, err)
+				}
+			}
+			_ = client.Disconnect(ctx)
+		}
+		if *dropStreams != "" {
+			nc, err := gonats.Connect(*natsURL)
+			if err != nil {
+				fail(err)
+			}
+			js, _ := jetstream.New(nc)
+			for _, name := range strings.Split(*dropStreams, ",") {
+				if err := js.DeleteStream(ctx, name); err != nil {
+					fmt.Println("delete stream", name, err)
+				}
+			}
+			nc.Close()
+		}
+		return
+	}
+	if *mongoURI != "" {
+		client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
+		if err != nil {
+			fail(err)
+		}
+		coll := client.Database(*database).Collection(db.PlayerDaoCollection)
+		for i := 0; i < *conns; i++ {
+			id, err := entity.BuildEntityID(*base+int64(i), player.EntityKindPlayer)
+			if err != nil {
+				fail(err)
+			}
+			_, err = coll.InsertOne(ctx, bson.M{"_id": id, "_version": uint64(1), "_schema": db.PlayerDaoSchemaVersion, "gold": int64(0), "level": int32(1)})
+			if err != nil && !mongo.IsDuplicateKeyError(err) {
+				fail(err)
+			}
+		}
+		n, _ := coll.CountDocuments(ctx, bson.M{})
+		fmt.Printf("seeded %s.%s count=%d\n", *database, db.PlayerDaoCollection, n)
+		_ = client.Disconnect(ctx)
+	}
+	var total, bad atomic.Int64
+	var mu sync.Mutex
+	var lat []time.Duration
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < *conns; i++ {
+		pid := *base + int64(i)
+		if *samePlayer {
+			pid = *base
+		}
+		c, err := net.Dial("tcp", *addr)
+		if err != nil {
+			fail(err)
+		}
+		if err := wire.Write(c, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte(fmt.Sprint(pid))}}, 8192); err != nil {
+			fail(err)
+		}
+		if p, err := wire.Read(c, 8192); err != nil || p.MsgID != 0 {
+			fail(fmt.Errorf("auth: %v", err))
+		}
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			defer c.Close()
+			<-start
+			deadline := time.Now().Add(*dur)
+			seq := uint32(1)
+			var local []time.Duration
+			for time.Now().Before(deadline) {
+				seq++
+				t0 := time.Now()
+				if err := wire.Write(c, []*wire.Packet{{MsgID: msgid.MsgTap, Seq: seq}}, 1<<20); err != nil {
+					bad.Add(1)
+					return
+				}
+				for {
+					p, err := wire.Read(c, 1<<20)
+					if err != nil {
+						bad.Add(1)
+						return
+					}
+					if p.Flags&wire.FlagPush != 0 || p.Seq != seq {
+						continue
+					}
+					if r, err := pb.UnmarshalTapResponse(p.Payload); err != nil || r.Code != 0 {
+						if bad.Add(1) == 1 {
+							fmt.Printf("first bad response: err=%v resp=%+v\n", err, r)
+						}
+					}
+					break
+				}
+				local = append(local, time.Since(t0))
+				total.Add(1)
+			}
+			mu.Lock()
+			lat = append(lat, local...)
+			mu.Unlock()
+		}(c)
+	}
+	t0 := time.Now()
+	close(start)
+	wg.Wait()
+	el := time.Since(t0)
+	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+	p := func(q float64) time.Duration {
+		if len(lat) == 0 {
+			return 0
+		}
+		return lat[int(float64(len(lat)-1)*q)]
+	}
+	fmt.Printf("conns=%d same=%v ok=%d bad=%d elapsed=%v TPS=%.0f P50=%v P99=%v\n", *conns, *samePlayer, total.Load(), bad.Load(), el.Round(time.Millisecond), float64(total.Load())/el.Seconds(), p(0.5), p(0.99))
+}
+
+func fail(err error) { fmt.Fprintln(os.Stderr, "tapload:", err); os.Exit(1) }

@@ -1,0 +1,39 @@
+package tcp
+
+import (
+	"context"
+	"net"
+	"strconv"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// applicationAuthenticator is application-owned. Validate a signed, expiring
+// login token here and return a stable, non-zero PlayerID and SessionID.
+// Keep the default fail-closed implementation in production until real auth is
+// wired; accepting an unverified player id from the socket is unsafe.
+type applicationAuthenticator struct{}
+
+func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
+	// TODO: load a verifier/key reference from config or Secret storage and
+	// return an authenticator with all immutable dependencies initialized.
+	//
+	// Config the authenticator reads is declared, not read ad hoc: put the keys
+	// on a struct with config tags, declare it on the service that owns player
+	// access (internal/service/<service>/service.go:
+	//   func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(tcp.AuthConfig{}) }),
+	// and read it here with app.LoadConfig(cfg, &settings). Reading cfg.GetString
+	// and friends directly fails roost project doctor (config-reads), and an
+	// undeclared key is reported as a misspelling by roost config check.
+	return applicationAuthenticator{}, nil
+}
+
+// 仅限本地压测：票据就是玩家 ID。
+func (applicationAuthenticator) Authenticate(_ context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
+	id, err := strconv.ParseInt(ticket, 10, 64)
+	if err != nil || id <= 0 {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	return gateway.Principal{PlayerID: id, ServerID: 904, SessionID: gateway.NewBroadcastID()}, nil
+}

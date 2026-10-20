@@ -176,6 +176,7 @@ v1.29 口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版�
 | Saga 原生步骤容量（单进程） | v1.29 未验证：现有容量指引（guide/06 §5、生成的 `steps.go` 注释、`roost help saga`）来自 v1.28.0 发布前 2026-10-18 的实测；限制与维护者决定见上文 [Saga](#saga) | [SAGA-CHECKPOINT](../performance/SAGA-CHECKPOINT-20261018.md) 复跑入口；待补测 |
 | 投影 checkpoint 与 outbox 唤醒同盘 | v1.29 未验证：2026-10-18 观测到投影后唤醒 outbox（`de8b6e97`）使 checkpoint 变慢，机制为推断（darwin 上 `WAL.Ack` 的 F_FULLFSYNC 与被唤醒 outbox 的 Mongo majority 写同时落盘），无逐次 fsync 证据，Linux 未测。唤醒的净收益为正，不回退；WAL 与 Mongo 分盘（第三档 C）不做 | 待补测 |
 | 匹配队列容量 | v1.29 未验证 | 待补测 |
+| 生成工程完整链路持久写入（嵌入 TCP + strict） | 2026-10-20 单样本、非独占宿主（[报告](../performance/GENERATED-TCP-STRICT-20261020.md)）：CLI 生成工程、strict handler 金币 +1、不经 Saga、无 self_sync，50 连接各自一个玩家**压测端** 1253 TPS、P50 38ms、P99 75ms，WAL 每批约 9.9 条；同一实体 108 TPS。上限约为 short 池 worker 数（缺省 GOMAXPROCS）/ 每笔持锁时间（strict 在锁内等所在批 fsync，本机约 8ms）。async 不比 strict 快（同机 1083 对 1257），原因尚未确认 | 独占宿主复测与 self_sync / pipelined 对照（待补测） |
 | schema 升级 / Player 跨机演练 | v1.29 未演练 | 待补测 |
 
 ## 游戏接入验收
@@ -211,3 +212,4 @@ v1.29 口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版�
 11. **匹配队列**：目标负载下的容量（每秒成局人数 × 保留期对应的状态大小与 Redis 往返延迟，含 `CommitAcross` 与单分区操作的竞争比例）；Redis Cluster 故障切换下的多键脚本。
 12. **schema 迁移演练**：上次 2026-10-15（v1.27 代码）；入口 [SCHEMA-MIGRATION](../framework/SCHEMA-MIGRATION.md) 与 game-demo `cmd/schemamigrate`。
 13. **Player 跨机演练**：上次 2026-10-15（v1.27 代码，同机两进程，含崩溃与未排空场景）；入口 [PLAYER-MIGRATION](../framework/PLAYER-MIGRATION.md) 与 game-demo `cmd/sidmove`。
+14. **生成工程完整链路持久写入**（2026-10-20 审查新增，未经维护者批准）：2026-10-20 只有非独占宿主的单样本（上表）；在独占宿主上用同一夹具复测，并加 self_sync 开、pipelined 与 async 的对照，查明 async 不比 strict 快的原因。入口见[报告 §4](../performance/GENERATED-TCP-STRICT-20261020.md#4-复跑)。

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# usage: run_tap.sh <label> [ENV=VAL ...]
+set -uo pipefail
+S="$(cd "$(dirname "$0")" && pwd)"
+source "$HOME/.roost-it/roost-dataengine-it/env.sh" >/dev/null 2>&1
+lock="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
+if ! mkdir "$lock" 2>/dev/null; then echo "lock held by someone else"; exit 2; fi
+trap 'rmdir "$lock" 2>/dev/null' EXIT
+label=$1; shift
+cd "$S/tapproj"
+env "$@" GOWORK=off go test -count=1 -timeout 5m -v -run '^TestTapThroughput$' ./internal/bootstrap/ > "$S/tap-$label.log" 2>&1
+code=$?
+grep -E 'TPS=|FAIL|panic' "$S/tap-$label.log" | head -5
+echo "exit=$code"
