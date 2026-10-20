@@ -3,7 +3,10 @@ package gate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +16,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 type roleVerifier struct {
@@ -29,7 +34,7 @@ func (verifier *roleVerifier) ValidateSession(_ context.Context, id int64, token
 	return verifier.role, nil
 }
 func TestAccountAuthenticatorUsesVerifiedFixedRoute(t *testing.T) {
-	verifier := &roleVerifier{role: account.Role{PlayerID: 77, ServerID: 8}}
+	verifier := &roleVerifier{role: account.Role{PlayerID: 77, ServerID: 8, ServingServerID: 8}}
 	auth := AccountAuthenticator{Accounts: verifier}
 	principal, err := auth.Authenticate(context.Background(), "session:77:signed:token", nil)
 	if err != nil || principal.PlayerID != 77 || principal.ServerID != 8 || len(principal.SessionID) != 32 || verifier.token != "signed:token" {
@@ -97,6 +102,83 @@ func (d *discoveryRecorder) Register(_ context.Context, info *etcd.ServiceInfo) 
 	return nil
 }
 func (d *discoveryRecorder) Deregister(context.Context) error { d.removes++; return d.deregisterErr }
+
+// 合服后（A 并入 B）A 的角色经正式 account 服务认证：Principal 的路由服是承载服 B，按它选到 B 的 game，
+// 原服 A 记在 OriginServerIDClaim；ServerIDClaim 与 Principal.ServerID 一致。未合服的 B 角色不受影响。
+func TestAccountAuthenticatorRoutesAMergedServersRoleToItsServingServer(t *testing.T) {
+	const serverA, serverB = int32(1001), int32(1000)
+	ctx := context.Background()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{Normalize: directory.NormalizeLower, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextID atomic.Int64
+	service, err := account.New(account.Config{
+		Accounts: versionstore.NewMemoryStore[string, account.Account](), Roles: versionstore.NewMemoryStore[int64, account.Role](),
+		Servers: versionstore.NewMemoryStore[int32, account.GameServer](), Slots: versionstore.NewMemoryStore[string, account.Slot](), Names: names,
+		Verifier: account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+			return account.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     account.AllocatorFunc(func(context.Context, int32) (int64, error) { return 5000 + nextID.Add(1), nil }),
+		NameRules:     account.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "gate-merge-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticketOn := func(openID string, sid int32) string {
+		t.Helper()
+		if _, err := service.UpsertServer(ctx, account.GameServer{ID: sid, Status: account.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+		acct, err := service.Login(ctx, account.Identity{Channel: "dev", OpenID: openID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := service.CreateRole(ctx, acct.ID, sid, openID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err := service.SelectRole(ctx, acct.ID, role.PlayerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)
+	}
+	ticketA, ticketB := ticketOn("on-a", serverA), ticketOn("on-b", serverB)
+	if _, err := service.MergeServer(ctx, account.MergeRequest{From: serverA, Into: serverB, Note: "gate test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	gameB := gateway.ProcessIdentity{ServerID: serverB, Incarnation: "game000000001000"}
+	resolve := FixedGameResolver(&discoveryRecorder{infos: []*etcd.ServiceInfo{
+		{Sid: serverB, Metadata: map[string]string{IngressReadyMetadata: "true", IncarnationMetadata: gameB.Incarnation}},
+	}}, "game")
+	auth := AccountAuthenticator{Accounts: service}
+	for _, check := range []struct {
+		label  string
+		ticket string
+		origin int32
+	}{{"role of the merged server A", ticketA, serverA}, {"role of B", ticketB, serverB}} {
+		principal, err := auth.Authenticate(ctx, check.ticket, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", check.label, err)
+		}
+		if principal.ServerID != serverB {
+			t.Fatalf("%s: Principal.ServerID = %d, want the serving server %d", check.label, principal.ServerID, serverB)
+		}
+		if got := principal.Claims[account.ServerIDClaim]; got != strconv.Itoa(int(serverB)) {
+			t.Fatalf("%s: ServerIDClaim = %q, want %d", check.label, got, serverB)
+		}
+		if got := principal.Claims[account.OriginServerIDClaim]; got != strconv.Itoa(int(check.origin)) {
+			t.Fatalf("%s: OriginServerIDClaim = %q, want %d", check.label, got, check.origin)
+		}
+		game, err := resolve(ctx, principal.ServerID)
+		if err != nil || game != gameB {
+			t.Fatalf("%s: ResolveGame(%d) = %+v, %v; want game B", check.label, principal.ServerID, game, err)
+		}
+	}
+}
 
 type flushRecorder struct {
 	fnats.RawClient

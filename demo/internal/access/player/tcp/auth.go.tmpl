@@ -84,7 +84,7 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 		slog.Debug("session ticket rejected", "player_id", playerID, "err", err)
 		return gateway.Principal{}, gateway.ErrUnauthenticated
 	}
-	principal := newPrincipal(role.PlayerID, role.ServerID)
+	principal := newPrincipal(role.PlayerID, role.ServingServerID, role.ServerID)
 	// 角色建立时间给登录端点拉全服邮件用（mail.BroadcastProfile.RegisteredAtUnix）。
 	principal.Claims[svcaccount.RoleCreatedAtClaim] = strconv.FormatInt(role.CreatedAtUnix, 10)
 	return principal, nil
@@ -93,14 +93,19 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 // newPrincipal mints a SessionID unique per connection: the access layer uses
 // it to tell two logins of the same player apart.
 //
-// serverID 是 account 校验会话时返回的角色 ServerID（建角时写入、之后不变），是权威值，不是客户端
-// 声称的值；认证器只负责记下它，不负责拒绝——握手失败只能断开连接，客户端得不到原因，拒绝由登录端点
-// 以 player_elsewhere 给出。键是 svcaccount.ServerIDClaim：登录端点（game/controllers/player 的
-// BoundServerID）用同一个常量读，auth_test.go 钉住两边能对上。
-func newPrincipal(playerID int64, serverID int32) gateway.Principal {
+// servingServerID 是 account 校验会话时返回的承载服（Role.ServingServerID：没有合服时就是建角时写入的原服，
+// 原服并入另一服之后是那个服），是权威值，不是客户端声称的值；认证器只负责记下它，不负责拒绝——握手失败只能
+// 断开连接，客户端得不到原因，拒绝由登录端点以 player_elsewhere 给出。键是 svcaccount.ServerIDClaim：登录端点
+// （game/controllers/player 的 BoundServerID）用同一个常量读，auth_test.go 钉住两边能对上。
+// originServerID 是原服（Role.ServerID），记在 svcaccount.OriginServerIDClaim，给业务显示原服标识用，路由与
+// 驻留不读它。
+func newPrincipal(playerID int64, servingServerID, originServerID int32) gateway.Principal {
 	return gateway.Principal{
 		PlayerID:  playerID,
 		SessionID: fmt.Sprintf("demo-%d-%d", playerID, time.Now().UnixNano()),
-		Claims:    map[string]string{svcaccount.ServerIDClaim: strconv.FormatInt(int64(serverID), 10)},
+		Claims: map[string]string{
+			svcaccount.ServerIDClaim:       strconv.FormatInt(int64(servingServerID), 10),
+			svcaccount.OriginServerIDClaim: strconv.FormatInt(int64(originServerID), 10),
+		},
 	}
 }

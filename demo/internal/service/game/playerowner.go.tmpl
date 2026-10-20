@@ -25,7 +25,8 @@ const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 // PlayerOwners 记录本进程正在为哪些玩家服务（驻留表），并据此回答写准入、做闲置卸载。
 //
 // 前提是静态绑定：玩家建角时由 account
-// 绑定到一个 game sid（Role.ServerID），之后不迁移；同一 sid 同一时刻只有一个进程，崩溃重启时的
+// 绑定到一个 game sid（Role.ServerID），之后不迁移；原服并入另一服（别名合服）后由承载服的进程服务
+// （会话里的 server_id 是 Role.ServingServerID），进程仍只认自己的一个 sid；同一 sid 同一时刻只有一个进程，崩溃重启时的
 // 短暂并存由 App 单实例锁处理（app.Singleton：任何 Mod Init 之前获取，失锁 fail-stop）。于是“同一玩家至多一个写者”就等于“只在玩家
 // 绑定的 sid 上为他服务”，不再需要按玩家的共享租约。本类型不感知那把锁，也不访问 Redis。
 //

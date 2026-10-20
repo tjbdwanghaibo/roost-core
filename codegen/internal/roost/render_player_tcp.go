@@ -31,6 +31,16 @@ import (
 // login token here and return a stable, non-zero PlayerID and SessionID.
 // Keep the default fail-closed implementation in production until real auth is
 // wired; accepting an unverified player id from the socket is unsafe.
+//
+// With the account service (services.<game>.uses: account), validate the
+// session ticket through svcaccount.Accounts.ValidateSession and build the
+// Principal from the Role it returns, never from the id the socket claimed.
+// Record role.ServingServerID — the server that serves the role: its own
+// server, or the one it was merged into — under svcaccount.ServerIDClaim, and
+// role.ServerID (the origin, for display) under svcaccount.OriginServerIDClaim.
+// A login endpoint compares ServerIDClaim with this process's sid; routing on
+// role.ServerID would refuse every role of a merged server. The game-demo
+// template's internal/access/player/tcp/auth.go is a complete example.
 type applicationAuthenticator struct{}
 
 func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
