@@ -22,7 +22,7 @@
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），实施中 |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
-| D19 | 一个玩家多个视野（多视点 AOI） | 待维护者决定（登记 2026-10-20，D14 之后的需求） |
+| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 待维护者决定（登记 2026-10-20，D14 之后的需求） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -584,45 +584,53 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 - 修前红：`infra/base/clock` 编译失败 `undefined: Calendar` / `undefined: ParseCalendar` 等（没有业务日函数）；`TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock` 报 `App does not declare time.business_timezone`；`TestRunSetsTheProcessCalendarAndLogsIt` 报 `process calendar after start = UTC 00:00`；`TestGeneratedConfigsWriteTheBusinessTimeZone` 对每个服务配置报 `does not write time.business_timezone: UTC and time.business_day_start: 00:00`；`TestGeneratedMainEmbedsTheTimeZoneDatabase` 报 `with the generated main's imports [] and no zoneinfo on the host, loading Asia/Shanghai: exit status 1: operation not permitted`；`TestDoctorChecksCrossModConfigRulesThroughTheProcess`（main 不导入 tzdata 时）报编译出的 game 进程 `config: time.business_timezone: business time zone "Asia/Shanghai" is not a time zone this process can load (...): operation not permitted`。变异核对：业务日改成“减去重置时刻取日期、起点 + 24h”，夏令时用例与整年不变量用例变红。
 - 剩余限制在 KNOWN-LIMITS“业务时区与每日重置”一行。
 
-## D19 一个玩家多个视野（多视点 AOI）
+## D19 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多
 
-**状态：待维护者决定。** 登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”。
+**状态：待维护者决定。** 登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
 
-### 现状
+### 现状（已核对源码）
 
-- D14（A1）之后观察者 = playerId，每个玩家**一个**视点：`Interest.Enter(playerID, entityID, at, view)` / `Watch(playerID, at, view)`，`MoveView` 移动这个视点，`SetObserverView` 改它的 LOD 与半径。D14 当时把“一个玩家多个视野”划给 A2、留作以后。
-- D14 之前靠 `InterestConfig.Session` 把多个观察者（实体）映射到同一个会话来表达多视野，但订阅合并按 `(session, subject)` 一份、来源是整个 `Interest`，一个视野看不见就整份退订，另一个仍看得见的视野也失去目标（D14 第 1 步回归在旧代码上复现）。所以旧写法不能作为多视野的方案。
+- D14（A1）之后观察者 = playerId，空间视点每个玩家**一个**：`Interest.Enter(playerID, entityID, at, view)` / `Watch`、`MoveView(playerID, to)`、`SetObserverView`。
+- 关系源 `RelationSource.Set(playerID, entityIDs)`（`policy/source.go`）按**玩家**存成员集合，没有距离分档（band 0）。联盟“成员彼此同步”要对每个成员各 `Set` 一份相同集合：N 个成员 × M 个目标，成员变化要改 N 份。
+- `Interest` 已经有按 `(player, subject)` 跨来源合并的机制：`held map[pair]*hold`，`hold.bands` 按**来源名**记各来源给的档（`interest.go:116-140`），任一来源持有就保持订阅，全部释放才退订。缺的是：来源内部不能区分“同一玩家的多个视点”，也不能让一份来源被多个玩家共享。
+- D14 之前靠 `Session` 多对一表达多视野，因为订阅合并不计数会互相退订（D14 第 1 步回归复现），不能作为方案。
 
-### 需求场景
+### 方案（建议）
 
-RTS / SLG 每个单位、建筑带视野；MOBA 英雄 + 召唤物 + 眼位；玩家本体 + 载具 / 宠物 / 侦察技能临时视野；观战时多个镜头。共同点：多个视点各自有位置与半径（多由服务端决定，如眼位固定半径），合起来决定这个玩家能看见什么；任何一个视点能看见就要下发。
-
-### 方案（建议：在 A1 上加“玩家下挂多个视野”，即 A2 的子集）
-
-1. **视野是玩家下的子对象**：键为 `(playerID, viewID)`。`viewID` 由业务给（通常就是提供视野的实体 ID；0 保留给 `Enter` / `Watch` 的主视野，现有 API 不变）。每个视野有自己的位置、`self`（跟随实体，用于自排除）、半径。
-2. **订阅按玩家合并、按视野计数**：AOI 内部仍按视野评估进出，但交给 Manager 的是“玩家 P 看得见目标 X”的并集：X 被 P 的第一个视野看见时订阅，P 的最后一个看得见 X 的视野看不见时才退订。距离分档取各视野里**最近**的那一档（细节最多的视图）。这样不会重新引入 D14 修掉的“互相退订”。
-3. **新 API（草案）**：`Interest.AddView(playerID, viewID, self int64, at, view ObserverView)`、`MoveView(playerID, viewID, to)`（现有 `MoveView(playerID, to)` 等价于 viewID 0）、`RemoveView(playerID, viewID)`、`SetViewRadius(playerID, viewID, radius)`（服务端决定的视野，如眼位、技能）；排队版同 D14 的事务内入口（视野多由事务里的游戏逻辑产生，如放眼、召唤，要走提交门）。
-4. **预算**：新增 `MaxViewsPerPlayer`（启动期配置）；`worstObserverBlocks × MaxViewsPerPlayer` 进启动期预算检查；`MaxVisible` 改为按玩家（并集）计，而不是按视野。
-5. **LOD 与半径的来源分开**：客户端 LOD 请求（D14 第 6 项）只改主视野（镜头）的 LOD 与视野大小；附属视野的半径由服务端设定（`SetViewRadius`，同样夹到 `[MinViewRadius, MaxLeaveRadius]`），LOD 层级按玩家一份（分档表随玩家的 LOD 层级）。
-6. **自排除**：每个视野排除自己的 `self`；玩家自己的其他单位照常按距离进入（RTS 里看得见自己的单位），或由业务用关系源（`self` 关系）保证总是可见。
+1. **视野 = 逻辑 ID 的可见性来源**：`ViewID` 是业务给的逻辑键（建议字符串，例如 `"alliance:123"`、`"camp:dungeon42:red"`、`"ward:777"`、`"unit:9001"`），**不绑定实体**；空间视野可以选择“跟随某个实体”，但跟随关系可改、可为空。
+2. **两类视野**：
+   - **空间视野**：一个点 + `ObserverView`（LOD / 半径）+ 可选 `self`（跟随实体，用于自排除）。玩家主视野（镜头）就是一个空间视野，D14 的 `Enter` / `Watch` / `MoveView` / `SetObserverView` 作用于它（保留现有 API）。
+   - **关系视野**：一个显式的实体集合（联盟成员、队伍、好友、阵营全体单位），可配一个固定档（缺省 band 0）。现有 `RelationSource` 保留为“每个玩家私有的关系视野”的写法，或改为在其上的薄封装。
+3. **玩家与视野多对多（Attach / Detach）**：一个玩家可挂多个视野，一个视野可被多个玩家共享。
+   - 联盟：`alliance:123` 关系视野挂给全体成员；成员加入 / 退出只改这一份集合和挂接关系。
+   - 副本阵营视野：`camp:…:red` 下挂该阵营所有单位 / 眼位的空间视野（或阵营本身是一组空间视野），挂给阵营里每个玩家——任何一个单位看得见，全阵营都看得见。
+   - 玩家个人的多单位视野（RTS、召唤物）：每个单位一个空间视野，只挂给自己。
+4. **合并沿用现有 `held`**：把 `hold` 的来源键从“来源名”扩成“视野 ID”；`(player, subject)` 只要有任一挂接的视野持有就订阅，最后一个释放才退订（不会互相退订）；分档取各视野里**最近**（细节最多）的一档，关系视野按其固定档参与比较。
+5. **API（草案）**：`DefineSpatialView(viewID, at, view, self)` / `MoveSpatialView` / `SetSpatialViewRadius`；`DefineRelationView(viewID, band)` / `SetViewMembers(viewID, subjects)` / `AddViewMembers` / `RemoveViewMembers`；`AttachView(playerID, viewID)` / `DetachView`；`RemoveView(viewID)`（自动从所有玩家解除）。事务内入口提供排队版（放眼、召唤、入盟多在事务里，走提交门）。
+6. **预算与上限**：`MaxViewsPerPlayer`（挂接数）、`MaxPlayersPerView`（共享扇出）、空间视野半径仍夹到 `[MinViewRadius, MaxLeaveRadius]`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算块预算；`MaxVisible` 按玩家并集计。
+7. **LOD 与半径**：客户端 LOD 请求只改玩家主视野；其他空间视野的半径由服务端设；分档表随玩家的 LOD 层级。
+8. **自排除**：空间视野排除自己跟随的实体；玩家自己的其他单位照常按距离或由关系视野（例如 `self`）保证可见。
 
 ### 代价与风险
 
-- 每个目标的可见判断从“一个视点”变成“多个视点取并集”，目标移动时要评估登记在相关块上的所有视野；视野多的玩家（RTS 上百单位）评估量线性增长，需要 benchstat 与 sync-aoi 加多视野场景压测。
-- 分档取最近档意味着同一目标的视图可能因另一个视野靠近而升档，切档次数增加。
-- `AOICluster` 镜像要按视野登记。
+- 共享视野的变化（关系成员增减、阵营单位移动）要扇出到挂接的所有玩家，成本 = 变化量 × 挂接人数，由 `MaxPlayersPerView` 约束；大联盟（上千人）挂接时要测。
+- 空间视野多的玩家 / 阵营（RTS 上百单位），目标移动时要评估相关块上的所有视野，评估量线性增长；需要 benchstat 与 sync-aoi 加多视野、共享视野场景。
+- 分档取最近档会增加切档次数；`AOICluster` 镜像要按视野登记。
+- 这是 D14 刚改的同一批代码（policy 包），公开 API 再改一次；建议在发版前一起完成，v1.30.0 只出现一次 AOI 接口变化。
 
 ### 未采用
 
-- 回到 `Session` 多对一：订阅合并语义错误（见现状）。
+- `viewID` 用实体 ID：绑死一个实体，阵营 / 联盟 / 眼位这类不是“一个实体”的视野表达不了（维护者 2026-10-20）。
+- 回到 `Session` 多对一：订阅合并不计数，互相退订。
 - 每个视野一个独立会话：客户端要处理多路订阅与去重，带宽翻倍。
-- 只给一个大半径覆盖所有单位：多块订阅、隐私（看到不该看到的区域）。
+- 关系需求继续每成员各 `Set` 一份：N × M 存储与 N 倍更新。
 
 ### 需要拍板
 
-1. 是否按上面的“玩家下挂多个视野、订阅按玩家并集”实施（建议是）。
-2. `viewID` 由业务给（建议，通常是视野实体 ID），还是框架分配。
-3. 多视野的距离分档取最近档（建议），还是按主视野。
-4. `MaxVisible` 按玩家并集计（建议），还是按视野。
-5. 附属视野的增删改是否需要排队版（建议需要，放眼 / 召唤多在事务里）。
-6. `MaxViewsPerPlayer` 缺省值（建议 64，RTS 需要时配置提高；启动期预算按它算）。
+1. 是否按“视野 = 逻辑 ID、空间 / 关系两类、玩家与视野多对多、合并沿用 held 计数”实施（建议是）。
+2. `ViewID` 类型：字符串（建议，可读、天然带命名空间）还是 int64。
+3. 多视野分档取最近档（建议）。
+4. `MaxVisible` 按玩家并集计（建议）。
+5. 视野增删改、成员变更、挂接是否提供排队版（建议提供）。
+6. 缺省上限：`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096（建议，启动期可配，预算按它们算）。
+7. 现有 `RelationSource` 去留：保留为“玩家私有关系视野”的薄封装（建议，现有调用方不改），还是全部迁到关系视野 API。
