@@ -41,11 +41,15 @@ type tcpSession struct {
 	// queuedFrames / queuedBytes 记“排队 + 在途”：入队时加，writeLoop 写出一帧后才减，
 	// 被取走、还卡在慢 socket 上的那一批仍占额度，上限因此就是这条连接最多驻留的帧数与字节数。
 	// 读循环直写快路径的那一帧不经过队列，不计入。
+	// queuedBytes 同时记在全进程预算 budget 上：两者在 queueMu 下同增同减，writeLoop 退出时把剩下的一次归还并置
+	// released，之后不再入队、不再扣减，所以每个字节恰好归还一次。
 	queueMu        sync.Mutex
 	queue          []outboundFrame
 	queuedFrames   int
 	queuedBytes    int64
 	maxQueuedBytes int64
+	budget         *outboundBudget
+	released       bool
 	// writing 表示有人正在按队列顺序写 socket：writeLoop 写一批，或读循环走直写快路径。
 	writing bool
 	wake    chan struct{}
@@ -69,7 +73,7 @@ type outboundFrame struct {
 // outboundQueueFrames 与 outboundQueueBytes 是每连接出站队列（排队 + writeLoop 已取走未写完）的上限。字节上限是内存界，至少容纳两个最大帧；
 // 条数上限只防海量小帧，要大于健康连接一次突发的帧数——生产者入队远快于逐帧写 socket，
 // 一个循环连推几十帧给同一连接是正常的。积压超过上限的客户端读得太慢，断开后由重连恢复全量 / 追帧。
-// 空闲连接不预分配队列；最坏驻留为 max_connections × 字节上限，只有全部连接同时停读才会达到。
+// 空闲连接不预分配队列；全部连接合计还受全进程驻留预算（outboundBudget）约束。
 const (
 	outboundQueueFrames   = 1024
 	minOutboundQueueBytes = 2 << 20
@@ -77,17 +81,79 @@ const (
 
 var errOutboundQueueFull = errors.New("player tcp: outbound queue full")
 
+// outboundBudget 是嵌入 TCP 的全进程出站驻留预算（player_access.tcp.outbound.resident_bytes），一个 TCPServer 的
+// 全部连接共用；口径与独立 Gate 的 outbound.resident_bytes 相同：排队中 + 写协程已取走还没写完的字节。
+// 每连接的帧数 / 字节上限只防一个停读客户端；这里防很多客户端同时停读（恶意连接或网络抖动）时，
+// 在 write_timeout 把它们逐个关掉之前内存先被撑满（修前最坏 max_connections × 每连接字节上限）。
+// 预留是原子的比较交换，不等待：预算不够当场拒绝，入队方（场景 Sync Flush、Lockstep Tick、业务 worker）
+// 从不为等预算阻塞。nil 表示不设预算（只有包内测试直接建会话时如此）。
+type outboundBudget struct {
+	limit int64
+	used  atomic.Int64
+}
+
+// reserve 预留 bytes；会超过上限时不改动并返回 false。
+func (budget *outboundBudget) reserve(bytes int64) bool {
+	if budget == nil {
+		return true
+	}
+	for {
+		used := budget.used.Load()
+		if bytes > budget.limit-used {
+			return false
+		}
+		if budget.used.CompareAndSwap(used, used+bytes) {
+			return true
+		}
+	}
+}
+
+// charge 计入不受预算拒绝的帧（读循环的回包与心跳 ACK）：它们照样占内存，必须算进驻留量，归还走同一条路径。
+func (budget *outboundBudget) charge(bytes int64) {
+	if budget != nil {
+		budget.used.Add(bytes)
+	}
+}
+
+func (budget *outboundBudget) release(bytes int64) {
+	if budget != nil && bytes != 0 {
+		budget.used.Add(-bytes)
+	}
+}
+
+func (budget *outboundBudget) resident() int64 {
+	if budget == nil {
+		return 0
+	}
+	return budget.used.Load()
+}
+
+// enqueueMode 说明一帧入队后调用方等不等写出、受不受全进程驻留预算的拒绝。
+type enqueueMode uint8
+
+const (
+	// enqueueAdmit：推送与业务 Session.Reply，只准入不等写出，受预算拒绝。
+	enqueueAdmit enqueueMode = iota
+	// enqueueAwait：pushWritten（Lockstep 追帧页），入队并等写出，受预算拒绝。
+	enqueueAwait
+	// enqueueReadLoop：读循环自己的回包与心跳 ACK，入队并等写出，计入驻留但不因预算拒绝。
+	// 读循环等它写出才读下一个请求，所以每连接至多一帧；拒绝它只能结束读循环、断开一个正常读的客户端，
+	// 而预算耗尽不是这个客户端的错。
+	enqueueReadLoop
+)
+
 func outboundQueueBytes(maxPayloadBytes uint32) int64 {
 	return max(minOutboundQueueBytes, 2*(int64(maxPayloadBytes)+headerSize))
 }
 
 // newTCPSession 创建会话并启动它的 writeLoop；连接 ctx 结束（Close 会结束它）时 writeLoop 退出，
 // 调用方在释放连接前等 writerDone。
-func newTCPSession(connectionCtx context.Context, cancel context.CancelCauseFunc, connection net.Conn, principal Principal, config TCPConfig) *tcpSession {
+// budget 是服务器的全进程出站驻留预算（nil 表示不设）。
+func newTCPSession(connectionCtx context.Context, cancel context.CancelCauseFunc, connection net.Conn, principal Principal, config TCPConfig, budget *outboundBudget) *tcpSession {
 	session := &tcpSession{
 		connection: connection, principal: clonePrincipal(principal), nonce: newBindingToken(),
 		writeTimeout: config.WriteTimeout, maxPayloadBytes: config.MaxPayloadBytes, cancel: cancel,
-		wake: make(chan struct{}, 1), maxQueuedBytes: outboundQueueBytes(config.MaxPayloadBytes),
+		wake: make(chan struct{}, 1), maxQueuedBytes: outboundQueueBytes(config.MaxPayloadBytes), budget: budget,
 		done: connectionCtx.Done(), writerDone: make(chan struct{}),
 	}
 	go session.writeLoop()
@@ -122,7 +188,7 @@ func (session *tcpSession) Reply(ctx context.Context, value any) error {
 	if err != nil {
 		return err
 	}
-	_, err = session.enqueue(ctx, outboundFrame{messageID: response.MessageID, sequence: response.Sequence, payload: response.Payload}, false)
+	_, err = session.enqueue(ctx, outboundFrame{messageID: response.MessageID, sequence: response.Sequence, payload: response.Payload}, enqueueAdmit)
 	return err
 }
 
@@ -153,7 +219,7 @@ func tcpResponse(value any) (*TCPResponse, error) {
 // pushKind 把一帧服务推送放进出站队列，不等待写出：返回 nil 只表示本连接已准入。
 // 调用方 ctx 只在入队前检查；入队后由 writeLoop 按 write_timeout 写出。
 func (session *tcpSession) pushKind(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
-	_, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, false)
+	_, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, enqueueAdmit)
 	return err
 }
 
@@ -168,7 +234,7 @@ func (session *tcpSession) pushWritten(ctx context.Context, messageID uint32, pa
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	written, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, true)
+	written, err := session.enqueue(ctx, outboundFrame{flags: flagServerPush | kind, messageID: messageID, payload: payload}, enqueueAwait)
 	if err != nil {
 		return err
 	}
@@ -203,8 +269,7 @@ func (session *tcpSession) withdraw(written <-chan error) bool {
 	for index, next := range session.queue {
 		if next.written == written {
 			session.queue = slices.Delete(session.queue, index, index+1)
-			session.queuedFrames--
-			session.queuedBytes -= int64(len(next.payload)) + headerSize
+			session.dequeuedLocked(next)
 			return true
 		}
 	}
@@ -230,7 +295,7 @@ func (session *tcpSession) writeQueued(ctx context.Context, flags byte, messageI
 		}
 		return err
 	}
-	written, err := session.enqueue(ctx, outboundFrame{flags: flags, messageID: messageID, sequence: sequence, payload: payload}, true)
+	written, err := session.enqueue(ctx, outboundFrame{flags: flags, messageID: messageID, sequence: sequence, payload: payload}, enqueueReadLoop)
 	if err != nil {
 		return err
 	}
@@ -243,9 +308,10 @@ func (session *tcpSession) writeQueued(ctx context.Context, flags byte, messageI
 }
 
 // enqueue 对一帧做出站准入：调用方 ctx 已结束或 payload 超限是拒绝，不关闭连接；
-// 会话已关闭返回 errConnectionBroken；排队 + 在途的条数或字节超限说明客户端读得太慢，关闭这条连接并返回 errConnectionBroken。
-// 准入不取 writeMu，writeLoop 正卡在慢 socket 上时入队也立即返回。payload 在这里复制，调用返回后调用方可复用。
-func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, wait bool) (<-chan error, error) {
+// 会话已关闭返回 errConnectionBroken；排队 + 在途的条数或字节超限说明客户端读得太慢，关闭这条连接并返回 errConnectionBroken；
+// 全进程驻留预算放不下这一帧返回 ErrResidentBudgetExhausted，不关闭连接（enqueueReadLoop 的帧只计入、不被拒）。
+// 准入不取 writeMu、不等预算，writeLoop 正卡在慢 socket 上时入队也立即返回。payload 在这里复制，调用返回后调用方可复用。
+func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, mode enqueueMode) (<-chan error, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -265,14 +331,27 @@ func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, wait
 	if len(next.payload) > 0 {
 		next.payload = append([]byte(nil), next.payload...)
 	}
-	if wait {
+	if mode != enqueueAdmit {
 		next.written = make(chan error, 1)
 	}
 	size := int64(len(next.payload)) + headerSize
 	session.queueMu.Lock()
+	if session.released {
+		// writeLoop 已退出并归还了这条连接的驻留：不能再入队，否则这一帧的字节无人归还。
+		session.queueMu.Unlock()
+		return nil, fmt.Errorf("%w: %w", errConnectionBroken, ErrSessionClosed)
+	}
 	if session.queuedFrames >= outboundQueueFrames || session.queuedBytes+size > session.maxQueuedBytes {
 		session.queueMu.Unlock()
 		return nil, session.overflow()
+	}
+	// 每连接上限先于预算：停读连接到了自己的上限照常被关闭，而不是因预算被拒后继续占着额度。
+	if mode == enqueueReadLoop {
+		session.budget.charge(size)
+	} else if !session.budget.reserve(size) {
+		session.queueMu.Unlock()
+		metrics.IncCounter("player_tcp_outbound_budget_exhausted_total", nil, 1)
+		return nil, fmt.Errorf("%w: frame of %d bytes, %d of %d resident", ErrResidentBudgetExhausted, size, session.budget.resident(), session.budget.limit)
 	}
 	session.queue = append(session.queue, next)
 	session.queuedFrames++
@@ -285,6 +364,27 @@ func (session *tcpSession) enqueue(ctx context.Context, next outboundFrame, wait
 	return next.written, nil
 }
 
+// dequeuedLocked 扣减一帧占的每连接与全进程额度（写出、撤回时）；调用方持有 queueMu。
+// writeLoop 退出后的剩余额度由 releaseOutbound 一次归还，这里不会在 released 之后被调用：
+// 写出扣减只发生在 writeLoop 自己退出之前，撤回只找得到还在队列里的帧（releaseOutbound 清空了队列）。
+func (session *tcpSession) dequeuedLocked(next outboundFrame) {
+	size := int64(len(next.payload)) + headerSize
+	session.queuedFrames--
+	session.queuedBytes -= size
+	session.budget.release(size)
+}
+
+// releaseOutbound 在 writeLoop 退出时归还这条连接剩下的全部驻留（队列里的帧，以及写失败时这一批还没写的帧），
+// 并置 released 拒绝之后的入队。连接关闭（Close、写失败、服务器停止）都经由 writeLoop 退出走到这里，是唯一的收尾点。
+func (session *tcpSession) releaseOutbound() {
+	session.queueMu.Lock()
+	session.released = true
+	session.budget.release(session.queuedBytes)
+	session.queuedBytes, session.queuedFrames = 0, 0
+	session.queue = nil
+	session.queueMu.Unlock()
+}
+
 func (session *tcpSession) overflow() error {
 	metrics.IncCounter("player_tcp_outbound_overflow_total", nil, 1)
 	session.close(fmt.Errorf("%w: %w", ErrSessionClosed, errOutboundQueueFull))
@@ -295,6 +395,7 @@ func (session *tcpSession) overflow() error {
 // 都关闭连接并退出；队列里剩下的帧随连接一起丢弃，客户端重连后恢复。
 func (session *tcpSession) writeLoop() {
 	defer close(session.writerDone)
+	defer session.releaseOutbound()
 	var batch []outboundFrame
 	for {
 		select {
@@ -314,8 +415,7 @@ func (session *tcpSession) writeLoop() {
 		for index, next := range batch {
 			err := session.writeFrame(context.Background(), next.flags, next.messageID, next.sequence, next.payload)
 			session.queueMu.Lock()
-			session.queuedFrames--
-			session.queuedBytes -= int64(len(next.payload)) + headerSize
+			session.dequeuedLocked(next)
 			session.queueMu.Unlock()
 			if next.written != nil {
 				next.written <- err

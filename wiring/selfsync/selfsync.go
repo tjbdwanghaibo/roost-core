@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync/atomic"
 
@@ -252,7 +253,8 @@ var ErrSyncPushRefused = errors.New("selfsync: a live connection refused a sync 
 //
 //   - ctx 已结束：原样交还，Manager 自己整轮重试；不关任何连接（停机不能把在线玩家踢掉）。
 //   - 接入层还没就绪 / 正在启停（gateway.ErrTransportUnavailable、nettransport.ErrTransportClosed），
-//     或整个进程的驻留字节预算耗尽（nettransport.ErrResidentBudgetExhausted，且这名玩家的每条连接都因此拒收）：
+//     或整个进程的驻留字节预算耗尽（独立 Gate 下 Game Ingress 的 nettransport.ErrResidentBudgetExhausted、嵌入 TCP 的
+//     gateway.ErrResidentBudgetExhausted，且这名玩家的每条连接都因此拒收）：
 //     不是谁的错，交还 entitysync.ErrRetryLater，整轮重试、保留脏状态；连接与会话都不动。
 //   - 玩家没有连接（每条拒收都是 gateway.ErrSessionNotFound，且此刻也数不到连接）：原样交还，Manager 关会话；
 //     之后来的连接是一次新激活 / 新登录，自己会打开会话。报“没有连接”时却数得到连接，按下一条处理。
@@ -273,7 +275,7 @@ func PushPlayerFrame(ctx context.Context, players PlayerConnections, playerID in
 	switch refusals := refusalsOf(err); {
 	case errors.Is(err, gateway.ErrTransportUnavailable), errors.Is(err, nettransport.ErrTransportClosed):
 		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
-	case every(refusals, nettransport.ErrResidentBudgetExhausted) && len(refusals) >= players.ActiveSessions(playerID):
+	case every(refusals, nettransport.ErrResidentBudgetExhausted, gateway.ErrResidentBudgetExhausted) && len(refusals) >= players.ActiveSessions(playerID):
 		metrics.IncCounter(SyncPushRefusedMetric, metrics.Labels{"outcome": "retried"}, 1)
 		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
 	case every(refusals, gateway.ErrSessionNotFound) && players.ActiveSessions(playerID) == 0:
@@ -296,9 +298,10 @@ func refusalsOf(err error) []error {
 	return []error{err}
 }
 
-func every(errs []error, target error) bool {
+// every 报告每个错误都是 targets 之一（errors.Is）。
+func every(errs []error, targets ...error) bool {
 	for _, err := range errs {
-		if !errors.Is(err, target) {
+		if !slices.ContainsFunc(targets, func(target error) bool { return errors.Is(err, target) }) {
 			return false
 		}
 	}

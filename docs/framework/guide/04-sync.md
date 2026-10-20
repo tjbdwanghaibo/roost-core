@@ -79,7 +79,7 @@ sync:
 
 ## 4. 背压与恢复
 
-状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。两种玩家接入都是有界异步出站：嵌入 TCP 的 `PushSync*` / `PushLockstep*` 只进入该连接的出站队列，独立 Gate 走 Game 有序出站口；读得太慢的客户端被关闭，不会拖住同一次 Flush / Tick 里排在它后面的会话（[GATEWAY §4 嵌入 TCP 的出站](../GATEWAY.md#嵌入-tcp-的出站)）。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
+状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。两种玩家接入都是有界异步出站：嵌入 TCP 的 `PushSync*` / `PushLockstep*` 只进入该连接的出站队列，独立 Gate 走 Game 有序出站口；读得太慢的客户端被关闭，不会拖住同一次 Flush / Tick 里排在它后面的会话；整个进程的出站驻留预算（独立 Gate 下 Game Ingress 与嵌入 TCP 各一个）耗尽时推送被拒、不关连接，Sync 整轮重试（[GATEWAY §4 嵌入 TCP 的出站](../GATEWAY.md#嵌入-tcp-的出站)）。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
 
 ### 停机排空（Drain）卡住时看什么
 
@@ -161,6 +161,7 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 - 实时通道 `SendDatagram`（Tick 给每个接收者的当前帧）接 `TCPRuntime.PushLockstepSession`，只做出站准入、几乎立即返回。Tick 逐接收者串行发送，等写出会让一个停读连接拖住同一 Tick 的所有人；停读连接只会因为自己的出站上限被关闭（[GATEWAY §4](../GATEWAY.md#嵌入-tcp-的出站)）。
 - 可靠通道 `SendReliable`（追帧页与追帧失败通知）接 `TCPRuntime.PushLockstepSessionWritten`，入队并等写出。慢链路上一页要等写协程把它写进 socket 才返回，下一页随后才发，追帧速度降到链路速度；该连接里属于追帧的积压只有在途那一页（加上至多一页已被写协程取走、等待超时后仍在写的页），不会因追帧超过出站上限被断开。
+- 嵌入 TCP 的全进程出站驻留预算（`player_access.tcp.outbound.resident_bytes`，2026-10-20 起）耗尽时，两条通道的这一帧都当场被拒（`gateway.ErrResidentBudgetExhausted`），连接不关闭、不等预算：实时帧对这个接收者按数据报丢失处理（`Tick` 返回带这个错误的结果，下一个广播包的冗余帧或客户端追帧补上），追帧页计一次追帧失败（`TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted`）。
 - 一页在 `CatchupSendTimeout` 内没写出：还在排队就撤回、不再写出，已在写的照常写完；计一次失败，下一 Tick 从同一游标重发（客户端按帧 ID 去重）。连续 `CatchupMaxFailures` 次后放弃这次追帧，`Tick` 返回 “abandoned after N failures”（链上带 `context.DeadlineExceeded`），会话恢复实时广播；之后它的实时帧仍只入队，链路依旧跟不上时由出站上限或 `write_timeout` 关闭连接，客户端重连后再追帧。
 
 阻塞边界：

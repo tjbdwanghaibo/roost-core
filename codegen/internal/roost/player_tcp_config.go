@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,8 @@ type playerTCPDeclaration struct {
 		ShutdownTimeout     time.Duration `config:"shutdown_timeout" default:"10s" example:"10s" help:"The generated Mod declares it as its stop budget and the generated shutdown.total_timeout counts it."`
 		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"0s" help:"Bound of one request; unset or 0 follows nest.request_timeout."`
 		LoginTimeout        time.Duration `config:"login_timeout" example:"0s" help:"Share of the dispatch budget a login gives to claim + cold load; unset or 0 is min(2s, dispatch_timeout)."`
+		// 全进程出站驻留预算，口径与独立 Gate 的 outbound.resident_bytes 相同；缺省理由见 gateway.defaultOutboundResidentBytes。
+		OutboundResidentBytes int64 `config:"outbound.resident_bytes" default:"268435456" example:"268435456" min:"1" help:"全进程所有连接出站队列（排队 + 写协程在途）的字节合计上限，缺省 256 MiB；超出的推送被拒（ErrResidentBudgetExhausted，Sync 整轮重试），不断开连接。不小于 max_payload_bytes + 16。"`
 	} `config:"player_access.tcp"`
 	Nest struct {
 		RequestTimeout time.Duration `config:"request_timeout" min:"0" example:"3s"`
@@ -189,10 +192,42 @@ func mergePlayerTCPConfig(text, name string, enabled bool) (string, error) {
 			if tcpNode.Kind != yaml.MappingNode || tcpNode.Style&yaml.FlowStyle != 0 {
 				return "", errors.New("player_access.tcp must use block-map YAML so codegen can safely fill defaults")
 			}
-			missing := make([]string, 0, len(defaults))
-			for _, item := range defaults {
-				if _, value := yamlMappingEntry(tcpNode, item.key); value == nil {
-					missing = append(missing, "    "+item.key+": "+item.value)
+			// 嵌套键（outbound.resident_bytes）：段已存在就补进段里（自下而上插，不挪动上方的行号），
+			// 段不存在就连段名一起补在 tcp: 下。
+			var missing []string
+			var children []nestedInsert
+			for _, group := range groupPlayerTCPDefaults(defaults) {
+				if group.parent == "" {
+					if _, value := yamlMappingEntry(tcpNode, group.items[0].key); value == nil {
+						missing = append(missing, "    "+group.items[0].key+": "+group.items[0].value)
+					}
+					continue
+				}
+				parentKey, parentNode := yamlMappingEntry(tcpNode, group.parent)
+				if parentNode == nil {
+					missing = append(missing, "    "+group.parent+":")
+					for _, item := range group.items {
+						missing = append(missing, "      "+item.key+": "+item.value)
+					}
+					continue
+				}
+				if parentNode.Kind != yaml.MappingNode || parentNode.Style&yaml.FlowStyle != 0 {
+					return "", fmt.Errorf("player_access.tcp.%s must use block-map YAML so codegen can safely fill defaults", group.parent)
+				}
+				indent := strings.Repeat(" ", parentKey.Column+1)
+				if len(parentNode.Content) > 0 {
+					indent = strings.Repeat(" ", parentNode.Content[0].Column-1)
+				}
+				for _, item := range group.items {
+					if _, value := yamlMappingEntry(parentNode, item.key); value == nil {
+						children = append(children, nestedInsert{line: parentKey.Line, text: indent + item.key + ": " + item.value})
+					}
+				}
+			}
+			slices.SortStableFunc(children, func(a, b nestedInsert) int { return b.line - a.line })
+			for _, child := range children {
+				if text, err = insertYAMLLines(text, child.line, []string{child.text}); err != nil {
+					return "", err
 				}
 			}
 			if len(missing) > 0 {
@@ -239,10 +274,51 @@ func playerTCPBlock(indent int, defaults []struct{ key, value string }) string {
 	} else {
 		builder.WriteString(prefix + "tcp:\n")
 	}
-	for _, item := range defaults {
-		builder.WriteString(valuePrefix + item.key + ": " + item.value + "\n")
+	for _, group := range groupPlayerTCPDefaults(defaults) {
+		if group.parent == "" {
+			builder.WriteString(valuePrefix + group.items[0].key + ": " + group.items[0].value + "\n")
+			continue
+		}
+		builder.WriteString(valuePrefix + group.parent + ":\n")
+		for _, item := range group.items {
+			builder.WriteString(valuePrefix + "  " + item.key + ": " + item.value + "\n")
+		}
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
+}
+
+// playerTCPDefaultGroup 是 player_access.tcp 下的一个键（parent 为空）或一个段（如 outbound）的全部键，
+// 段内的 key 去掉了段名。
+type playerTCPDefaultGroup struct {
+	parent string
+	items  []struct{ key, value string }
+}
+
+// groupPlayerTCPDefaults 按声明顺序分组：同一段的键归到该段第一次出现的位置，只支持一层段。
+func groupPlayerTCPDefaults(defaults []struct{ key, value string }) []playerTCPDefaultGroup {
+	var groups []playerTCPDefaultGroup
+	sections := map[string]int{}
+	for _, item := range defaults {
+		parent, child, nested := strings.Cut(item.key, ".")
+		if !nested {
+			groups = append(groups, playerTCPDefaultGroup{items: []struct{ key, value string }{item}})
+			continue
+		}
+		index, ok := sections[parent]
+		if !ok {
+			index = len(groups)
+			sections[parent] = index
+			groups = append(groups, playerTCPDefaultGroup{parent: parent})
+		}
+		groups[index].items = append(groups[index].items, struct{ key, value string }{child, item.value})
+	}
+	return groups
+}
+
+// nestedInsert 是补进已有段里的一行：插在段名所在行 line 之后。
+type nestedInsert struct {
+	line int
+	text string
 }
 
 func parseYAMLDocument(raw []byte) (*yaml.Node, error) {

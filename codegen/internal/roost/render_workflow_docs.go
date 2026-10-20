@@ -546,6 +546,7 @@ Lockstep使用PushLockstepPlayer/PushLockstepSession传既有广播字节（只�
 - max_handshake_bytes 单独限制登录票据，不能为了业务大包把鉴权帧也扩大。
 - handshake_timeout 限制慢速鉴权；idle_timeout 限制慢读；write_timeout 是每帧写出期限，写不出或出站队列满的慢客户端被断开，不拖住其他连接。
 - max_payload_bytes 在分配内存前检查；小 payload 使用有上限的复用池。
+- outbound.resident_bytes（缺省 256 MiB）限制全进程出站队列驻留字节合计：大量客户端同时停读时超出的推送被拒、不断开，Sync 整轮重试；看 player_tcp_outbound_budget_exhausted_total。
 - shutdown_timeout 是 TCP 的 StopBudget，计入 App 总 shutdown.total_timeout，必须为正；显式0会被拒绝。
 - Linux 同时配置合理的 nofile、listen backlog、conntrack 与 LB idle timeout；LB idle 应略大于应用 idle。
 - Docker/Kubernetes 模板会为拥有 player TCP 的 Service 声明 7000；Kubernetes 调用方命名空间必须带

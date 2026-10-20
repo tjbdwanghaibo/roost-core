@@ -30,6 +30,8 @@ func NewTCPRuntime(encode TCPEncoder, loginTimeout time.Duration) *TCPRuntime {
 // （lockstep.TCPSender 在业务 worker 内仍拒绝发送，那是 Match 的约束——比赛 Tick 驱动须在业务 worker /
 // Entity 锁之外——不是 Push* 本身的要求。）
 // 收不下的连接（停读导致队列满、已关闭）当场关闭，写出失败由该连接的写协程关闭连接。
+// 全进程出站驻留预算（player_access.tcp.outbound.resident_bytes）耗尽时这一帧被拒、返回 ErrResidentBudgetExhausted，
+// 不关闭连接，也不等预算：不是这条连接慢，由推送方按自己的规则处理（Entity Sync 整轮重试，见 wiring/selfsync.PushPlayerFrame）。
 type TCPRuntime struct {
 	owner        atomic.Pointer[TCPServer]
 	encode       TCPEncoder

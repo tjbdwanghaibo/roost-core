@@ -126,8 +126,10 @@ type TCPServer struct {
 	handshakeSlots  chan struct{}
 	wait            sync.WaitGroup
 	payloadPool     sync.Pool
-	stopping        bool
-	started         bool
+	// outbound 是全进程出站驻留预算，本服务器的全部连接共用（tcpSession.enqueue 预留、writeLoop 归还）。
+	outbound *outboundBudget
+	stopping bool
+	started  bool
 }
 
 func NewTCPServer(config TCPConfig, dispatch TCPDispatch, authenticator Authenticator) (*TCPServer, error) {
@@ -144,6 +146,9 @@ func NewTCPServer(config TCPConfig, dispatch TCPDispatch, authenticator Authenti
 	if config.LoginTimeout == 0 {
 		config.LoginTimeout = min(defaultLoginTimeout, config.DispatchTimeout)
 	}
+	if config.OutboundResidentBytes == 0 {
+		config.OutboundResidentBytes = defaultOutboundResidentBytes
+	}
 	if err := ValidateTCPConfig(config); err != nil {
 		return nil, err
 	}
@@ -155,6 +160,7 @@ func NewTCPServer(config TCPConfig, dispatch TCPDispatch, authenticator Authenti
 		playerSessions:  make(map[int64]map[string]*tcpSession),
 		connectionSlots: make(chan struct{}, config.MaxConnections),
 		handshakeSlots:  make(chan struct{}, config.MaxHandshakes),
+		outbound:        &outboundBudget{limit: config.OutboundResidentBytes},
 	}
 	server.payloadPool.New = func() any { return make([]byte, 4096) }
 	return server, nil
@@ -326,7 +332,7 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 	if !ok {
 		return
 	}
-	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config)
+	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config, server.outbound)
 	defer server.closeConnectionSession(session)
 	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
 		return
@@ -598,7 +604,8 @@ func (server *TCPServer) dropBrokenSession(current *tcpSession, cause error) {
 // it: the player is reachable, and the closed connection's client has to
 // reconnect anyway. It fails when no connection took it (all of them are closed
 // by then), and when a connection refused it before queueing (context already
-// done, payload too large) — that is not the connection's fault, so nothing is
+// done, payload too large, the process outbound budget exhausted —
+// ErrResidentBudgetExhausted) — that is not the connection's fault, so nothing is
 // closed and the caller learns the frame did not go out everywhere.
 func (server *TCPServer) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
 	return server.pushPlayerKind(ctx, playerID, messageID, payload, 0)

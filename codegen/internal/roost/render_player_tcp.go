@@ -240,6 +240,7 @@ func configFromViper(cfg *viper.Viper) (gateway.TCPConfig, error) {
 		MaxHandshakeBytes: tcp.MaxHandshakeBytes, MaxPayloadBytes: tcp.MaxPayloadBytes,
 		HandshakeTimeout: tcp.HandshakeTimeout, IdleTimeout: tcp.IdleTimeout, WriteTimeout: tcp.WriteTimeout,
 		ShutdownTimeout: tcp.ShutdownTimeout, DispatchTimeout: tcp.DispatchTimeout, LoginTimeout: tcp.LoginTimeout,
+		OutboundResidentBytes: tcp.OutboundResidentBytes,
 	}
 	// The dispatch budget follows the Nest request budget unless it is set on
 	// its own: a request is at least one Nest call, and a transport deadline
@@ -500,6 +501,7 @@ func TestConfigValuesOfTheWrongTypeAreRefusedByName(t *testing.T) {
 		{"idle_unitless", "player_access:\n  tcp:\n    idle_timeout: 90\n", "player_access.tcp.idle_timeout"},
 		{"handshake_word", "player_access:\n  tcp:\n    handshake_timeout: soon\n", "player_access.tcp.handshake_timeout"},
 		{"nest_request_unitless", "nest:\n  request_timeout: 7\n", "nest.request_timeout"},
+		{"resident_bytes_with_unit", "player_access:\n  tcp:\n    outbound:\n      resident_bytes: 256m\n", "player_access.tcp.outbound.resident_bytes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mod := newMod()
@@ -510,9 +512,9 @@ func TestConfigValuesOfTheWrongTypeAreRefusedByName(t *testing.T) {
 		})
 	}
 	mod := newMod()
-	valid := "player_access:\n  tcp:\n    enabled: \"true\"\n    max_payload_bytes: \"65536\"\n    max_handshake_bytes: 4096\n    idle_timeout: 30s\n"
+	valid := "player_access:\n  tcp:\n    enabled: \"true\"\n    max_payload_bytes: \"65536\"\n    max_handshake_bytes: 4096\n    idle_timeout: 30s\n    outbound:\n      resident_bytes: 1048576\n"
 	if err := mod.Init(yamlConfig(t, valid)); err != nil { t.Fatalf("valid config refused: %%v", err) }
-	if !mod.config.Enabled || mod.config.MaxPayloadBytes != 65536 || mod.config.MaxHandshakeBytes != 4096 || mod.config.IdleTimeout != 30*time.Second {
+	if !mod.config.Enabled || mod.config.MaxPayloadBytes != 65536 || mod.config.MaxHandshakeBytes != 4096 || mod.config.IdleTimeout != 30*time.Second || mod.config.OutboundResidentBytes != 1<<20 {
 		t.Fatalf("valid config read as %%+v", mod.config)
 	}
 }
@@ -539,6 +541,8 @@ func TestAnOutOfBoundsSettingIsRefusedByName(t *testing.T) {
 		{"idle_timeout_negative", map[string]any{"idle_timeout": "-1s"}, []string{key + "idle_timeout = -1s"}},
 		{"dispatch_timeout_above_five_minutes", map[string]any{"dispatch_timeout": "10m"}, []string{key + "dispatch_timeout = 10m0s"}},
 		{"login_above_dispatch", map[string]any{"dispatch_timeout": "1s", "login_timeout": "2s"}, []string{key + "login_timeout = 2s", key + "dispatch_timeout = 1s"}},
+		{"resident_bytes_below_one_frame", map[string]any{"max_payload_bytes": 65536, "outbound.resident_bytes": 1000}, []string{key + "outbound.resident_bytes = 1000", key + "max_payload_bytes"}},
+		{"resident_bytes_above_the_hard_cap", map[string]any{"outbound.resident_bytes": int64(1)<<41}, []string{key + "outbound.resident_bytes = 2199023255552"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := viper.New()

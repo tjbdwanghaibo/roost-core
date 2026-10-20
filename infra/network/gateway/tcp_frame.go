@@ -37,6 +37,12 @@ var (
 	// mark. write_timeout running out is the connection's fault even when
 	// nothing was written.
 	errConnectionBroken = errors.New("player tcp: connection cannot take the frame")
+	// ErrResidentBudgetExhausted 是嵌入 TCP 因全进程出站驻留预算（player_access.tcp.outbound.resident_bytes）
+	// 用尽而拒收一帧：不是这条连接读得慢，而是整个进程所有连接“排队 + 写协程在途”的字节到了上限。
+	// 它不带 errConnectionBroken，连接不因此关闭；语义与独立 Gate 下 Game Ingress 的
+	// nettransport.ErrResidentBudgetExhausted 相同（infra 不能依赖 framework，所以是两个哨兵），
+	// Entity Sync 推送（wiring/selfsync.PushPlayerFrame）把两者都当作整轮重试。
+	ErrResidentBudgetExhausted = errors.New("player tcp: process outbound resident byte budget exhausted")
 )
 
 // Wire format (network byte order): magic[2], version[1], flags[1],

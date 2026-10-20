@@ -34,9 +34,18 @@ type tcpLockstepServer struct {
 // newTCPLockstepServer 起一个嵌入 TCP 接入：令牌就是会话 ID，players 给出令牌对应的玩家 ID。
 func newTCPLockstepServer(t *testing.T, writeTimeout time.Duration, players map[string]int64) *tcpLockstepServer {
 	t.Helper()
+	return newTCPLockstepServerWith(t, writeTimeout, players, nil)
+}
+
+// newTCPLockstepServerWith 与 newTCPLockstepServer 相同，configure 非 nil 时在建服务器前改配置。
+func newTCPLockstepServerWith(t *testing.T, writeTimeout time.Duration, players map[string]int64, configure func(*gateway.TCPConfig)) *tcpLockstepServer {
+	t.Helper()
 	config := gateway.DefaultTCPConfig()
 	config.Addr = "127.0.0.1:0"
 	config.WriteTimeout = writeTimeout
+	if configure != nil {
+		configure(&config)
+	}
 	runtime := gateway.NewTCPRuntime(nil, config.LoginTimeout)
 	dispatch := func(context.Context, gateway.Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
 		return nil, nil
@@ -386,5 +395,115 @@ func TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection(t *testing
 	}
 	if !closed["stalled"] || closed["live"] {
 		t.Fatalf("closed sessions %v, want only the stalled one (its outbound queue overflowed)", closed)
+	}
+}
+
+// 嵌入 TCP 的全进程出站驻留预算耗尽时，实时帧按 Lockstep 已有的发送失败语义处理：这一帧对被拒的接收者算丢失
+// （Tick 返回带 gateway.ErrResidentBudgetExhausted 的错误），不等预算、不关闭任何连接；预算归还后实时帧继续，
+// 丢掉的帧由下一个广播包携带的冗余帧补上，客户端的 FrameAssembler 连续收齐，不需要追帧。
+// 预算由一条停读连接占满：推到它的帧卡在 socket 与出站队列里。
+func TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted(t *testing.T) {
+	tcp := newTCPLockstepServerWith(t, 30*time.Second, map[string]int64{"filler": 1, "live": 2}, func(config *gateway.TCPConfig) {
+		config.MaxPayloadBytes = 64 << 10
+		config.OutboundResidentBytes = 256 << 10 // 低于每连接 2 MiB 上限：占预算的连接不会先因自己的上限被关
+	})
+	filler := tcp.dial(t, "filler", 1, 4<<10)
+	live := tcp.dial(t, "live", 2, 64<<10)
+	sessions := map[nettransport.SessionID]string{2: "live"}
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer:       lockstep.SequencerConfig{Players: tcpLockstepSeats, MaxInputBytes: lockstep.MaxInputPayloadBytes},
+		RedundancyDepth: 2,
+		Datagrams:       tcpLockstepSender(t, tcp.runtime, sessions),
+		Reliable:        tcpLockstepSender(t, tcp.runtime, sessions),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+	if err := match.Attach(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	close(started)
+	reader := readLockstep(live, started, 0)
+	input := bytes.Repeat([]byte{0x5a}, lockstep.MaxInputPayloadBytes)
+	tick := func() error {
+		for _, seat := range tcpLockstepSeats {
+			if _, err := match.SubmitInput(seat, match.NextFrame(), input); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := match.Tick(context.Background())
+		return err
+	}
+	waitFrames := func(want uint64) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); reader.next.Load() <= want && reader.err() == nil; {
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if err := reader.err(); err != nil || reader.next.Load() <= want {
+			t.Fatalf("live client has frames up to %d, want %d (err %v)", reader.next.Load()-1, want, err)
+		}
+	}
+	if err := tick(); err != nil {
+		t.Fatal(err)
+	}
+	waitFrames(1)
+
+	// 占满预算：越来越小的帧（32 KiB → 1 KiB）把停读连接的 socket 缓冲与出站队列推满；停一会儿再探，
+	// 直到停下来之后连 1 KiB 也放不下。一个广播包约 16 KiB，必然被拒。
+	fill := func() {
+		for size := 32 << 10; size >= 1<<10; size /= 2 {
+			for attempt := 0; ; attempt++ {
+				err := tcp.runtime.PushLockstepSession(context.Background(), "filler", tcpLockstepMessageID, make([]byte, size))
+				if err == nil {
+					if attempt > 4096 {
+						t.Fatal("the filler connection never filled the process budget")
+					}
+					continue
+				}
+				if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
+					t.Fatalf("filler push refused with %v, want gateway.ErrResidentBudgetExhausted", err)
+				}
+				break
+			}
+		}
+	}
+	for settled := false; !settled; {
+		fill()
+		time.Sleep(20 * time.Millisecond)
+		settled = tcp.runtime.PushLockstepSession(context.Background(), "filler", tcpLockstepMessageID, make([]byte, 1<<10)) != nil
+	}
+
+	tickStart := time.Now()
+	err = tick() // 第 2 帧：live 被预算拒收
+	if elapsed := time.Since(tickStart); elapsed > 100*time.Millisecond {
+		t.Fatalf("a Tick with the budget exhausted took %v: it waited for the budget", elapsed)
+	}
+	if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
+		t.Fatalf("Tick with the budget exhausted = %v, want an error carrying gateway.ErrResidentBudgetExhausted", err)
+	}
+	closed := map[string]bool{}
+	if tcp.sessionClosed("live", closed) || tcp.sessionClosed("filler", closed) || tcp.runtime.ActiveSessions(2) != 1 {
+		t.Fatalf("closed sessions %v: no connection is closed for an exhausted process budget", closed)
+	}
+
+	// 占预算的连接关闭后预算归还：第 3 帧的广播带着冗余的第 2 帧，客户端连续收齐。
+	_ = filler.Close()
+	for deadline := time.Now().Add(5 * time.Second); !tcp.sessionClosed("filler", closed); {
+		if time.Now().After(deadline) {
+			t.Fatal("the filler connection was never closed after its client went away")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := tick(); err != nil {
+		t.Fatalf("Tick after the budget was returned = %v", err)
+	}
+	waitFrames(3)
+	if closed["live"] {
+		t.Fatal("the live connection was closed")
 	}
 }
