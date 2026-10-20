@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Flush | 修订表与编码工作区复用 | 在途发送字节仍独立，未池化 |
 | AOI | 事件归集、分类重算、有界工作区、候选过滤与提前结束 | 小批量不保证并行更快，集中热点仍需目标环境验证 |
-| Relation | 反向索引、重复 Set 工作区、QueueRelationDelta 增量入口 | 业务需显式使用增量入口；退出重加存在已记录的耗时代价 |
+| Relation | D19 起由关系视野取代（`DefineRelationView` / `SetViewMembers` / `AddViewMembers` / `RemoveViewMembers`，直接调用、按变化成员扇出）；下文 RelationSource / QueueRelationDelta 的测量是历史记录 | 共享视野的扇出成本 = 变化量 × 挂接人数，大联盟待压测 |
 | OnChange | 可配置固定合批窗口 | 默认 0；开启后增加等待，周期检查可提前触发 |
 | Lockstep | 广播名单缓存、滚动历史裁剪与容量回收；默认自动保留窗口（3600 帧）与追帧失败通知（2026-10-15）；全量快照恢复（2026-10-20） | 窗口按允许断线时长 × 帧率核对；没配快照来源时越界追帧明确失败，配了时越界改发业务快照 |
 | 玩家 Controller | 自动补齐缺少的方法、保留已有业务、修复 typed nil 响应 | 业务编写方法内容，生成器不会代办 Entity 操作 |
@@ -20,7 +20,7 @@
 | 项目 | 业务需要做什么 | 完成判据 |
 | --- | --- | --- |
 | OnChange 合批 | 根据延迟要求决定是否设置 on_change_batch_window；0 保持即时唤醒 | 部署配置与预期一致，功能验证中最终状态和版本连续正确 |
-| Relation 增量 | 已知新增/移除成员时使用 QueueRelationDelta；完整列表仍可使用 QueueRelation | 通过正式提交入口，回滚不发布，退出重建不被旧事实影响 |
+| Relation 增量 | 已知新增/移除成员时用 `AddViewMembers` / `RemoveViewMembers`，完整列表用 `SetViewMembers`（D19；原 QueueRelationDelta / QueueRelation 已删除） | 视野操作不走提交门（维护者 2026-10-20 决定），事务内决定的变化在提交后调用 |
 | Lockstep 保留 | 核对默认 3600 帧（60Hz 60 秒 / 30Hz 120 秒）是否覆盖允许的断线时长，不够就按“秒 × 帧率”配置 HistoryRetainFrames；需要整局回放时独立复制并持久化，或配置 RetainFullHistory 自行裁剪 | 正常追帧范围仍可服务；客户端收到恢复失败后有业务处理（踢出、回大厅或开新局）；`lockstep.catchup.unservable.total` 符合预期 |
 | Lockstep 快照恢复 | 断线可能超过窗口时提供 `SnapshotProvider`（服务器参考模拟发布检查点），Recovery 零值即 auto；按快照大小与最低带宽核对 `MaxBytes`、每 Tick 预算（独立 Gate 下尤其要按[实测建议](guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)配置）；客户端接 restore 并核对状态 hash | 越界重连经快照回到头部、状态 hash 一致；`lockstep.snapshot.failed.total` 符合预期 |
 | 版本升级 | 发布时按维护流程执行；业务固定新版本并编译消费者 | 新配置/API 随正式版本交付，不能只升级文档而仍使用旧 tag |

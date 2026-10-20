@@ -126,7 +126,7 @@ const (
 	moverID   = int64(1002)
 )
 
-// 进场就订阅自己——经 self 关系源，不经距离：spatial 不让任何东西观察自己。
+// 进场就订阅自己——经 self，不经距离：空间视野不看自己跟随的实体。
 func TestEnteringSubscribesToYourself(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager)
@@ -181,7 +181,7 @@ func TestDistanceSubscribesReleasesAndDoesNotChurnOnTheBoundary(t *testing.T) {
 	}
 }
 
-// 关系源比距离活得久：队友走出视野不撤订阅，退队之后（最后一个来源）才撤。
+// 关系视野比距离活得久：队友走出视野不撤订阅，退队之后（最后一个视野）才撤。
 func TestARelationKeepsASubscriptionDistanceDropped(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager)
@@ -837,7 +837,7 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 //
 // 玩家 ID（会话）与实体 ID 是两种编号：订阅表里会话用玩家 ID，被订阅的目标用实体 ID。用例只对 Manager 的订阅表断言，
 // 不读 Interest 内部的键。D14 之前它以“观察者按实体 ID 编号、经 Session 换算”的写法在 D14 第一笔提交（改签名前的回归）上通过；D14 之后观察者直接是
-// 玩家 ID、事务内入口经缺省 ObserverOf 换算，断言一字未改：自己只经 self 关系看见自己、距离双向、数值等于玩家 ID 的实体不被
+// 玩家 ID、事务内入口经缺省 ObserverOf 换算（D19 起主视野跟随实体、ObserverOf 删除），断言一字未改：自己只经 self 关系看见自己、距离双向、数值等于玩家 ID 的实体不被
 // 误当成自己、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
 
 // playerEntity 拼一个能被 entity.GetUniqueIDFromEntityID 还原成 playerID 的实体 ID（低位填一个非零标记），

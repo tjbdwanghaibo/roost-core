@@ -22,7 +22,7 @@
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20：`entity.kick` / `entity.unload`） |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
-| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），实施中 |
+| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20），待压测与三项小决定 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -640,7 +640,35 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D19 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多
 
-**状态：维护者 2026-10-20 决定实施，实施中。** 决定：①按本节模型实施；②`ViewID` 用 **int64**，由业务层分配与解释；③**同步层级**：视野给出同步层级（数据分级，例如联盟视野只同步标记为联盟层级的字段），同一目标被多个视野看见时同步级别高的（数据多的）；层级之间不是包含关系时，各层级的数据都同步（取并集）；④`MaxVisible` **按每个视野**计；⑤视野操作**不进 Nest、不做排队版**：视野的增删改、成员变更、挂接都是直接调用，由视野自身的锁保护；⑥上限缺省按建议（`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096，启动期可配）；⑦按最干净的方式处理、不留历史包袱：`RelationSource` 与按来源名的旧关系 API 删除，全部改为关系视野。登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
+**状态：维护者 2026-10-20 决定实施，已实施（2026-10-20，见下文“实施结果”）；压测与三项小决定待维护者。** 决定：①按本节模型实施；②`ViewID` 用 **int64**，由业务层分配与解释；③**同步层级**：视野给出同步层级（数据分级，例如联盟视野只同步标记为联盟层级的字段），同一目标被多个视野看见时同步级别高的（数据多的）；层级之间不是包含关系时，各层级的数据都同步（取并集）；④`MaxVisible` **按每个视野**计；⑤视野操作**不进 Nest、不做排队版**：视野的增删改、成员变更、挂接都是直接调用，由视野自身的锁保护；⑥上限缺省按建议（`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096，启动期可配）；⑦按最干净的方式处理、不留历史包袱：`RelationSource` 与按来源名的旧关系 API 删除，全部改为关系视野。登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
+
+### 实施结果（2026-10-20）
+
+按 roost-coding 纯重构流程分步提交：先在旧 API 上补关系与多来源合并的回归基线（关系进出与 Hide、关系先撤距离仍持有、分档换视图、self 与 Leave、队伍互见与离场双向清理；断言只看 Manager 订阅表与 packer 收到的视图），再提交同步层级并集（entity + Manager），再改 policy 的结构与 API 并迁移全部调用方（基线用例只改准备步骤），最后补新行为用例并逐项变异验证。提交见 CHANGELOG `[Unreleased]` 本条。
+
+| 决定 | 落点 |
+| --- | --- |
+| ① 模型 | 空间视野：`DefineSpatialView(id, at, sight, follow)` / `MoveSpatialView` / `SetSpatialView` / `SetViewFollow`；关系视野：`DefineRelationView(id, layer)` / `SetViewMembers` / `AddViewMembers` / `RemoveViewMembers`；多对多：`AttachView` / `DetachView`，`RemoveView` 自动从所有玩家解除；合并：`hold.layers` 的来源键从来源名改为视野内部编号（空间视野区分距离与块覆盖，0 为 self），任一挂接视野持有就保持订阅，最后一个释放才退订 |
+| ② ViewID | `policy.ViewID int64`，业务分配与解释；`MainView = 0` 保留给主视野（见下“主视野”），业务视野不能用 0。内部另有不复用的 `handle` 作 AOI 观察者编号与来源键，业务 ID 只用于登记表查找 |
+| ③ 同步层级 | 层级 = `SyncProfile`，字段沿用 `NamedSyncView` 按 DAO 字段名列出；`entity.UnionSyncProfiles` / `SyncProfile.Layers` 定义并集身份（Key 为各层级身份排序后用 `+` 连接），`SyncViewSet.Lookup` 解析为字段并集、`Covers` 判断包含；Interest `selectedProfile`：被包含的去掉、字段相同按优先级留一个、其余取并集，包含关系按 `ViewSets` 每个类型的字段判断；Manager `profilePriority` 对并集取各层级最优，与 `Lookup` 一致——Manager 的 profile 结构不用改，并集仍是一个 `SyncProfile` |
+| ④ MaxVisible | 每个空间视野是 AOI 的一个观察者，`MaxVisible` / `MaxObserverBlocks` 自然按视野计 |
+| ⑤ 不进 Nest | 视野操作只取视野登记表的锁（`viewMu`），改事实并记一条变更，由下一次 `Apply` / 政策阶段按调用顺序应用，不等待空间计算；不提供排队版。排队入口的处理见下 |
+| ⑥ 上限 | `MaxViewsPerPlayer`（缺省 64，含主视野）、`MaxPlayersPerView`（缺省 4096），超出 `ErrViewLimit` 并计 `entitysync_interest_view_limit_rejected_total{reason}`；启动期 `worstObserverBlocks × MaxViewsPerPlayer ≤ MaxPlayerBlocks`（新配置项，缺省 1024 × 64） |
+| ⑦ 不留包袱 | 删除 `RelationSource`、`Source`、`SourceSpatial/Self/Block`、`InterestConfig.Relations / SourceProfiles / Profile / ObserverOf`、`Interest.Relation`、`QueueRelation` / `QueueRelationDelta`、`MoveShown`、`DefaultObserverOf`；层级配置改为 `BandLayer` / `BlockLayer` / `SelfLayer` |
+
+**排队入口的处理**：位置是 DAO 驱动的事实，必须与提交一致——回滚的移动不能让视野先看见新位置——所以 `QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 保留提交门。改的是“谁跟着动”：空间视野可以跟随实体，事实应用时移动目标并带上跟随它的全部视野（主视野跟随玩家实体），于是 `observer` 参数与 `ObserverOf`（从实体换算观察者）都不再需要，删除；关系事实（`QueueRelation*`）属于视野配置，按决定⑤改为直接调用，删除。只有一套：位置走提交门，视野配置直接调用。Leave / Hide 对排队事实的改写保持“与先应用、再 Leave / Hide 逐项相同”：目标那一半作废，跟随者那一半保留。
+
+**主视野 ID 方案**：主视野是玩家 `Enter` / `Watch` 时自带的空间视野，没有全局 ViewID，只在按玩家的入口里出现（D14 的 `Enter` / `Watch` / `MoveView` / `SetObserverView` / `ObserverView` / `Visible` / `Unwatch` / `Leave` 都作用于它），文档与代码里用 `policy.MainView`（0）指代；所以 0 对业务视野保留。它只挂给玩家自己、计入 `MaxViewsPerPlayer`，不能被别人挂接（观战用 `Watch`，或业务另定义一个跟随目标的空间视野）。
+
+与草案的偏差：① ViewID 用 int64（决定②），不是字符串。② `SetSpatialViewRadius` 改为 `SetSpatialView(id, ObserverView)`，LOD 与视野大小一起改、归一规则同主视野；另加 `SetViewFollow`。③ 跟随实体不只用于自排除，视点也随实体移动（因此删掉 `observer` 参数与 `ObserverOf`）；`SetViewFollow(id, 0)` 后视点留在当前位置。④ `Move(entityID, to)` 合并了 `Move(player, entity, to)` 与 `MoveShown`。⑤ 草案“分档取最近档”“MaxVisible 按玩家并集”“提供排队版”“保留 RelationSource 薄封装”按决定③④⑤⑦改。⑥ 草案 7 的“分档表随玩家的 LOD 层级”改为每个空间视野有自己的 `ObserverView`（LOD 与半径），客户端 LOD 请求只改主视野。⑦ 块预算新增 `MaxPlayerBlocks`，没有把 `MaxObserverBlocks` 改成按玩家（见下“需要决定”）。⑧ 记过业务视野变更之后 Manager 的政策阶段也结算与重试（与排过事实同一规则），Drain 计入未应用的视野变更。⑨ 新增 `Seen(playerID)`（玩家经任一视野持有的全部目标，诊断与 sync-aoi 核对用）、`ViewPlayers` / `ViewMembers` / `ViewVisible`、`AOI.FlushBlocks`。
+
+调用方：game-demo 队伍改为每队一个关系视野（`Scene.SetTeam`，空了就 `RemoveView`）；SLG 夹具联盟改为共享关系视野（联盟同步示例）、侦察为私有关系视野；MMORPG 夹具 `BandLayer`；codegen nestgame / dataengine 夹具与 `scripts/perf/sync-aoi` 去掉 `observer` / `ObserverOf`，sync-aoi 新增 `-views-per-player`（每个玩家额外的跟随视野）与 `-alliance-size`（共享关系视野）场景开关，两项为 0 时负载不变。
+
+**需要维护者决定**（都不阻塞使用）：
+
+1. 跨政策来源的层级：同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图（未改）。A 保持（推荐：不同政策一般不在同一 Manager 上同看一个目标，SelfView 的 `self` 通常已是全字段）；B 在 Manager 的 `bestProfile` 里也取并集——Manager 不知道字段，只能一律并集身份，会改变现有 SelfView / Group 的视图身份。
+2. 块预算形式：A 现状（推荐），`MaxObserverBlocks` 仍按单个视野，另加 `MaxPlayerBlocks` 核算 `worst × MaxViewsPerPlayer`，缺省下只有单视野已超预算才触发；B 把 `MaxObserverBlocks` 改成按玩家，缺省 1024 ÷ 64 = 每视野 16 块，game-demo（最大视野 300、块 100，每视野 64 块）等现有配置启动即被拒，须各自调大。
+3. 关系视野是否排除挂接玩家自己的实体：A 不排除（推荐，现状），自己经 self 与联盟两个层级看见自己，按包含取高或取并集；B 排除，需要知道每个玩家的自身实体，挂接、成员变化时多一层过滤。
 
 ### 现状（已核对源码）
 
