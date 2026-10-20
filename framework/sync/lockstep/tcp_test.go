@@ -3,6 +3,7 @@ package lockstep_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
 // 这组用例把 Match 经 TCPSender 接到真实的嵌入 TCP 接入（gateway.TCPServer + TCPRuntime），
@@ -40,6 +42,12 @@ func newTCPLockstepServer(t *testing.T, writeTimeout time.Duration, players map[
 // newTCPLockstepServerWith 与 newTCPLockstepServer 相同，configure 非 nil 时在建服务器前改配置。
 func newTCPLockstepServerWith(t *testing.T, writeTimeout time.Duration, players map[string]int64, configure func(*gateway.TCPConfig)) *tcpLockstepServer {
 	t.Helper()
+	return newTCPLockstepServerDispatch(t, writeTimeout, players, configure, nil)
+}
+
+// newTCPLockstepServerDispatch 与 newTCPLockstepServerWith 相同，dispatch 非 nil 时处理客户端请求（缺省丢弃）。
+func newTCPLockstepServerDispatch(t *testing.T, writeTimeout time.Duration, players map[string]int64, configure func(*gateway.TCPConfig), dispatch gateway.TCPDispatch) *tcpLockstepServer {
+	t.Helper()
 	config := gateway.DefaultTCPConfig()
 	config.Addr = "127.0.0.1:0"
 	config.WriteTimeout = writeTimeout
@@ -47,8 +55,10 @@ func newTCPLockstepServerWith(t *testing.T, writeTimeout time.Duration, players 
 		configure(&config)
 	}
 	runtime := gateway.NewTCPRuntime(nil, config.LoginTimeout)
-	dispatch := func(context.Context, gateway.Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
-		return nil, nil
+	if dispatch == nil {
+		dispatch = func(context.Context, gateway.Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
+			return nil, nil
+		}
 	}
 	server, err := gateway.NewTCPServer(config, dispatch, gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
 		return gateway.Principal{PlayerID: players[token], SessionID: token}, nil
@@ -715,4 +725,325 @@ func snapshotOverEmbeddedTCP(t *testing.T, written bool) bool {
 		t.Fatal("the recovering connection was closed")
 	}
 	return false
+}
+
+// ---- 真实回环 TCP：robot.LockstepBot 断线超过窗口后经快照恢复（设计 §9“客户端 Go”与“连续性”） ----
+
+const tcpLockstepCommandID = 50001
+
+// tcpCommand 是 dispatch 交给对局 owner 的一条上行 C8 命令。
+type tcpCommand struct {
+	session string
+	payload []byte
+}
+
+// tcpBotSink 是 bot 的 Sink：C8 命令经同一条 TCP 连接以 Lockstep 请求上行。只由 bot 的驱动 goroutine 使用；
+// 换连接发生在旧读协程退出之后。
+type tcpBotSink struct {
+	connection net.Conn
+	sequence   uint32
+}
+
+func (s *tcpBotSink) send(command lockstep.Command) error {
+	data, err := lockstep.EncodeCommand(command)
+	if err != nil {
+		return err
+	}
+	s.sequence++
+	return wire.Write(s.connection, []*wire.Packet{{Flags: wire.FlagLockstep, MsgID: tcpLockstepCommandID, Seq: s.sequence, Payload: data}}, 0)
+}
+
+func (s *tcpBotSink) SubmitInput(frame lockstep.FrameID, payload []byte) error {
+	return s.send(lockstep.Command{Operation: lockstep.OpInput, Frame: frame, Payload: payload})
+}
+
+func (s *tcpBotSink) ReportHash(frame lockstep.FrameID, hash uint64) error {
+	return s.send(lockstep.Command{Operation: lockstep.OpHash, Frame: frame, Hash: hash})
+}
+
+func (s *tcpBotSink) RequestCatchup(from lockstep.FrameID) error {
+	return s.send(lockstep.Command{Operation: lockstep.OpCatchup, Frame: from})
+}
+
+// tcpSim 是端到端用的确定性小模拟：状态是折叠了全部输入的整数，状态 hash 就是它；服务器参考模拟用同一份。
+type tcpSim struct{ total uint64 }
+
+func (s *tcpSim) apply(frame lockstep.Frame) error {
+	for _, input := range frame.Inputs {
+		s.total = s.total*31 + uint64(input.Player)*7 + uint64(len(input.Payload))
+		if len(input.Payload) > 0 {
+			s.total += uint64(input.Payload[0])
+		}
+	}
+	return nil
+}
+
+// tcpBot 在一条 TCP 连接上驱动一个 robot.LockstepBot：读协程是 bot 唯一的驱动者。
+type tcpBot struct {
+	bot      *robot.LockstepBot
+	sim      *tcpSim // nil：纯线协议 bot（状态是输入链 hash）
+	sink     *tcpBotSink
+	next     atomic.Uint64
+	restored atomic.Uint64
+	failed   atomic.Pointer[error]
+	done     chan struct{}
+}
+
+func newTCPBot(t *testing.T, player lockstep.PlayerID, withRestore bool) *tcpBot {
+	t.Helper()
+	b := &tcpBot{sink: &tcpBotSink{}}
+	config := robot.LockstepBotConfig{
+		Player: player, Sink: b.sink, KeyframeInterval: 10,
+		Input: func(frame lockstep.FrameID) []byte { return []byte{byte(frame), byte(player)} },
+	}
+	if withRestore {
+		b.sim = &tcpSim{}
+		config.Simulate = b.sim.apply
+		config.Hash = func(lockstep.FrameID) uint64 { return b.sim.total }
+		config.Restore = func(snapshot lockstep.ReceivedSnapshot) (uint64, error) {
+			if len(snapshot.Data) < 8 {
+				return 0, errors.New("short snapshot")
+			}
+			b.sim.total = binary.LittleEndian.Uint64(snapshot.Data)
+			return b.sim.total, nil
+		}
+	}
+	bot, err := robot.NewLockstepBot(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.bot = bot
+	b.next.Store(1)
+	return b
+}
+
+// run 在 connection 上启动读协程（上一条连接的读协程必须已退出）。
+func (b *tcpBot) run(connection net.Conn) {
+	b.sink.connection, b.sink.sequence = connection, 1 // 握手用了序号 1
+	b.done = make(chan struct{})
+	go func() {
+		defer close(b.done)
+		for {
+			packet, err := wire.Read(connection, 0)
+			if err != nil {
+				return
+			}
+			if packet.Flags != wire.FlagPush|wire.FlagLockstep || packet.MsgID != tcpLockstepMessageID {
+				continue
+			}
+			if err := b.bot.HandleBroadcast(packet.Payload); err != nil && b.bot.Terminal() != nil {
+				b.failed.Store(&err)
+				return
+			}
+			b.next.Store(uint64(b.bot.Next()))
+			b.restored.Store(b.bot.Stats().SnapshotsRestored)
+		}
+	}()
+}
+
+func (b *tcpBot) err() error {
+	if failed := b.failed.Load(); failed != nil {
+		return *failed
+	}
+	return nil
+}
+
+// 两个 robot 经真实回环 TCP（下行 Lockstep 推送、上行 Lockstep 请求）接一场配了 SnapshotProvider 的对局（auto）。
+// 一个 bot 断线超过历史窗口后换连接重连：它的缺口触发追帧请求，服务端判定越界改发快照；bot 恢复、核对状态 hash、
+// 从快照帧 +1 续帧到头部。另一个 bot 一直在线。两者上报的关键帧 hash 逐帧一致，没有分歧判定，局末状态与服务器参考一致。
+// 两种 bot 各跑一遍：带业务 Restore 的模拟 bot（快照多于一个分块），和不设回调、以输入链 hash 续链的纯线协议 bot。
+// 修前（dd76c112）bot 把 CA 分块当坏包、请求追帧后停在缺口（见 robot 包的同一场景用例）。
+func TestRobotsRecoverFromASnapshotOverEmbeddedTCP(t *testing.T) {
+	t.Run("restore callback", func(t *testing.T) { robotsRecoverOverEmbeddedTCP(t, true) })
+	t.Run("wire-only input chain", func(t *testing.T) { robotsRecoverOverEmbeddedTCP(t, false) })
+}
+
+func robotsRecoverOverEmbeddedTCP(t *testing.T, withRestore bool) {
+	const checkpointEvery = 16
+	commands := make(chan tcpCommand, 4096)
+	dispatch := func(ctx context.Context, session gateway.Session, messageID, _ uint32, _ wire.PayloadKind, payload []byte) (any, error) {
+		if messageID == tcpLockstepCommandID {
+			select {
+			case commands <- tcpCommand{session: session.Principal().SessionID, payload: append([]byte(nil), payload...)}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return nil, nil
+	}
+	players := map[string]int64{"p1a": 1, "p2": 2, "p1b": 1}
+	tcp := newTCPLockstepServerDispatch(t, 10*time.Second, players, func(config *gateway.TCPConfig) {
+		config.RequestRate, config.RequestBurst = 100000, 100000
+	}, dispatch)
+	sessions := map[nettransport.SessionID]string{1: "p1a", 2: "p2", 3: "p1b"}
+	sessionIDs := map[string]nettransport.SessionID{"p1a": 1, "p2": 2, "p1b": 3}
+	sender := tcpLockstepSender(t, tcp.runtime, sessions)
+
+	// 服务器参考模拟：owner 切帧后应用，每 checkpointEvery 帧发布一份不可变检查点；Provider 在 Match 的 goroutine 上读。
+	reference, chain := &tcpSim{}, robot.NewFrameHasher()
+	var checkpoint atomic.Pointer[lockstep.Snapshot]
+	var provided atomic.Int64
+	provider := lockstep.SnapshotProviderFunc(func(_ context.Context, req lockstep.SnapshotRequest) (lockstep.Snapshot, error) {
+		snapshot := checkpoint.Load()
+		if snapshot == nil || snapshot.Frame < req.MinFrame || snapshot.Frame > req.MaxFrame {
+			return lockstep.Snapshot{}, lockstep.ErrSnapshotUnavailable
+		}
+		provided.Add(1)
+		return *snapshot, nil
+	})
+	publish := func(frame lockstep.FrameID) {
+		if withRestore {
+			// 40 KiB 填充让快照多于一个分块（缺省 16 KiB）；恢复只读前 8 字节。
+			data := binary.LittleEndian.AppendUint64(make([]byte, 0, 8+40<<10), reference.total)
+			data = append(data, bytes.Repeat([]byte{0x5a}, 40<<10)...)
+			checkpoint.Store(&lockstep.Snapshot{Frame: frame, Data: data, StateHash: reference.total, HasStateHash: true})
+			return
+		}
+		checkpoint.Store(&lockstep.Snapshot{Frame: frame, Data: binary.LittleEndian.AppendUint64(nil, chain.Sum()), StateHash: chain.Sum(), HasStateHash: true})
+	}
+	var desyncs atomic.Int64
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer:           lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}, MaxInputBytes: 8},
+		RedundancyDepth:     3,
+		HistoryRetainFrames: lockstep.MinHistoryRetainFrames,
+		CatchupSendTimeout:  5 * time.Second,
+		CatchupSendWait:     5 * time.Millisecond,
+		Datagrams:           sender,
+		Reliable:            sender,
+		Snapshots:           lockstep.SnapshotConfig{Provider: provider},
+		OnDesync:            func(lockstep.DesyncVerdict) { desyncs.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+
+	// owner 循环（本 goroutine）：先处理上行命令，再切帧、推进参考模拟、发布检查点。
+	reports := map[lockstep.PlayerID]map[lockstep.FrameID]uint64{1: {}, 2: {}}
+	var tickErrs []error
+	drain := func() {
+		for {
+			select {
+			case command := <-commands:
+				decoded, err := lockstep.DecodeCommand(command.payload)
+				if err != nil {
+					t.Errorf("uplink command from %s: %v", command.session, err)
+					continue
+				}
+				if decoded.Operation == lockstep.OpHash {
+					reports[lockstep.PlayerID(players[command.session])][decoded.Frame] = decoded.Hash
+				}
+				_ = match.HandleCommand(sessionIDs[command.session], decoded) // 迟到 / 已断开会话的命令被拒属正常
+			default:
+				return
+			}
+		}
+	}
+	tick := func() {
+		drain()
+		frame, err := match.Tick(context.Background())
+		if err != nil {
+			tickErrs = append(tickErrs, err)
+		}
+		_ = reference.apply(frame)
+		chain.Fold(frame)
+		if frame.ID%checkpointEvery == 0 {
+			publish(frame.ID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	waitFor := func(what string, done func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !done(); {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			tick()
+		}
+	}
+
+	recovering, live := newTCPBot(t, 1, withRestore), newTCPBot(t, 2, withRestore)
+	first := tcp.dial(t, "p1a", 1, 1<<20)
+	if err := match.Attach(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.Attach(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	recovering.run(first)
+	live.run(tcp.dial(t, "p2", 2, 1<<20))
+	waitFor("both bots online", func() bool { return recovering.next.Load() > 40 && live.next.Load() > 40 })
+
+	// 断线：先解绑再断开（不往已关的连接上推），等读协程退出、服务端关掉这条会话。
+	match.Detach(1)
+	_ = first.Close()
+	<-recovering.done
+	closed := map[string]bool{}
+	waitFor("the first connection to close", func() bool { return tcp.sessionClosed("p1a", closed) })
+	offlineFrom := lockstep.FrameID(recovering.next.Load())
+	for range 4 * lockstep.MinHistoryRetainFrames {
+		tick()
+	}
+	if start := match.History().FirstID(); start <= offlineFrom {
+		t.Fatalf("history start %d did not pass the offline bot's next frame %d", start, offlineFrom)
+	}
+
+	// 重连：新连接、新会话；bot 的缺口触发追帧请求，服务端越界改发快照。
+	reconnectHead := match.History().Latest()
+	second := tcp.dial(t, "p1b", 1, 1<<20)
+	if err := match.Attach(1, 3); err != nil {
+		t.Fatal(err)
+	}
+	recovering.run(second)
+	waitFor("the snapshot recovery", func() bool {
+		return recovering.err() != nil || (recovering.restored.Load() == 1 && !match.CatchingUp(1) &&
+			recovering.next.Load() > uint64(reconnectHead)+20)
+	})
+	for range 30 { // 恢复后再一起在线跑一段，让双方都上报几个关键帧
+		tick()
+	}
+	head := uint64(match.History().Latest())
+	for deadline := time.Now().Add(5 * time.Second); recovering.next.Load() <= head || live.next.Load() <= head; {
+		if time.Now().After(deadline) || recovering.err() != nil || live.err() != nil {
+			t.Fatalf("bots at %d / %d, head %d (errors %v / %v)", recovering.next.Load()-1, live.next.Load()-1, head, recovering.err(), live.err())
+		}
+		drain()
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // 最后几个关键帧 hash 上行
+	drain()
+	_ = second.Close()
+	<-recovering.done
+	_ = tcp.server.Stop(context.Background())
+	<-live.done
+
+	if err := errors.Join(recovering.err(), live.err(), errors.Join(tickErrs...)); err != nil {
+		t.Fatalf("bot or Tick failure: %v", err)
+	}
+	if recovering.bot.Next() != lockstep.FrameID(head)+1 || live.bot.Next() != lockstep.FrameID(head)+1 {
+		t.Fatalf("bots at %d / %d, head %d", recovering.bot.Next()-1, live.bot.Next()-1, head)
+	}
+	if got := recovering.bot.Stats().SnapshotsRestored; got != 1 || live.bot.Stats().SnapshotsRestored != 0 || provided.Load() == 0 {
+		t.Fatalf("snapshots restored %d / %d, provider served %d", got, live.bot.Stats().SnapshotsRestored, provided.Load())
+	}
+	if desyncs.Load() != 0 {
+		t.Fatalf("%d desync verdicts", desyncs.Load())
+	}
+	compared := 0
+	for frame, hash := range reports[2] {
+		if other, ok := reports[1][frame]; ok {
+			if other != hash {
+				t.Fatalf("keyframe %d: recovered bot hash %d, live bot hash %d", frame, other, hash)
+			}
+			if frame > reconnectHead {
+				compared++
+			}
+		}
+	}
+	if compared < 3 {
+		t.Fatalf("only %d keyframes after the reconnect were reported by both bots", compared)
+	}
+	if withRestore && (recovering.sim.total != reference.total || live.sim.total != reference.total) {
+		t.Fatalf("final state %d / %d, reference %d", recovering.sim.total, live.sim.total, reference.total)
+	}
 }

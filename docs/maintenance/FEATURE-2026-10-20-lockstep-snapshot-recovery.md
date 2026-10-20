@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P3（C# SDK）已实施（实施记录与偏差见 §14），其余各期见 §14。
+**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P2（Go 客户端）、P3（C# SDK）已实施（实施记录与偏差见 §14），P4、P5 未完成。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -552,6 +552,29 @@ func (c *checkpointCache) Snapshot(_ context.Context, req lockstep.SnapshotReque
 7. **钉住点**：等快照的会话钉住进入快照阶段时的窗口起点；采用快照后钉 `Frame + 1`；续帧钉游标。`retainWindow` 裁剪点 = min(正常裁剪点, 钉住点)，下限为正常裁剪点 − `PinFrames`，早于下限的会话发 `recovery_expired`。宿主手动 `TrimHistory` 不受钉住约束。
 
 给 P2 / P3 的协议要点：金样在 [client/spec/packets.json](../../client/spec/packets.json)（`catchup_unservable` 已是 v2：`c9 02 01 ac02 f0a204`；`recovery_failed_snapshot_unavailable`：reason 2、from 90000、start 70000；`snapshot_first_chunk` + `snapshot_next_chunk`：transfer 3，帧 1234，总长 24，状态 hash 9223372036854780468（最高位为 1，验证 uvarint64），两块数据拼起来是 ASCII `roost-snapshot-golden-24`，首块带其 SHA-256）。生成：`GOWORK=off go test ./client/wire -run TestClientProtocolGolden -update`。C# SDK 在 P3 之前仍按 v1 解码 C9，`scripts/test-client-dotnet.sh` 在 `catchup_unservable` 处失败，属预期。
+
+### P2 Go 客户端（2026-10-20）
+
+已实施：`FrameAssembler.Receive` / `ResumeAfterSnapshot` / `SnapshotInProgress` / `NewFrameAssemblerLimits` 与客户端错误 `ErrSnapshotUnsupported`、`ErrSnapshotNotApplied`、`ErrSnapshotMismatch` / `*SnapshotMismatchError`（[assembler.go](../../framework/sync/lockstep/assembler.go)，重组复用 P1 的 `SnapshotReceiver`）；`robot.LockstepBotConfig.Restore` / `MaxSnapshotBytes` / `ReportSnapshotMismatch`、`LockstepBotStats.SnapshotsRestored`、`FrameHasher.Reset`（[robot/lockstep.go](../../robot/lockstep.go)）。用例：[snapshot_test.go](../../framework/sync/lockstep/snapshot_test.go) 末尾的 `TestFrameAssembler*`（收快照与续帧、快照帧早于已应用帧、C9 v2 原因、校验失败、缓冲里已有快照帧之后的帧、经 Match 的连续性）；[robot/lockstep_test.go](../../robot/lockstep_test.go) 末尾五条（带 Restore 续帧、纯线协议续输入链、失败一律终止、快照取代 pending 帧、传输停住后重试）；[client/wire/golden_test.go](../../client/wire/golden_test.go) 的 `TestClientProtocolGoldenDecodesThroughTheGoClient`（金样 `catchup_unservable`、`recovery_failed_snapshot_unavailable`、`snapshot_first_chunk` + `snapshot_next_chunk` 经 `FrameAssembler` 与 robot 解码，金样未改）；[tcp_test.go](../../framework/sync/lockstep/tcp_test.go) 的 `TestRobotsRecoverFromASnapshotOverEmbeddedTCP`（真实回环 TCP，上下行都走嵌入 TCP；一个 bot 断线 4 个窗口后换连接重连，auto 走快照、续帧到头部，与一直在线的 bot 关键帧 hash 逐帧一致、无分歧判定；带 Restore 的模拟 bot（快照 40 KiB、多块）与纯线协议 bot 各一遍）。
+
+修前红（基线 `dd76c112`，临时用例，场景同 `TestLockstepBotWithoutRestoreContinuesTheInputChain`）：
+
+```text
+FrameAssembler.Ingest(CA first chunk) = lockstep: frame encoding corrupt: bad header
+after a snapshot at frame 200 and pages 201..205: Next = 1, terminal = <nil>, catch-up requests [1]; want Next 206
+```
+
+即现行 bot 并不终止：`Ingest` 的坏包错误走 `checkGap` 变成一次追帧请求，之后的页全部缓冲在缺口后面，bot 停在帧 1。
+
+与本篇草案的偏差：
+
+1. **客户端快照上限用新构造函数 `NewFrameAssemblerLimits(maxBuffer, maxSnapshotBytes)`**，`NewFrameAssembler(maxBuffer)` 签名不变（等于上限取缺省），现有调用方（含 MOBA 夹具、demo 模板）不改。
+2. **`ResumeAfterSnapshot` 清空整个乱序缓冲**，不只是 `<= frame` 的部分。缓冲里的帧都是恢复开始前收到的实时帧，服务端快照之后从 `frame + 1` 起发历史页、追到头才接回实时，它们一定会被重发。只清 `<= frame` 时，缓冲里的 `frame + 1` 在续帧页到达后不会被删除（组装器只在 `Next` 那一帧到达时按 `Next + 1` 往后排空），留下一个永远不清的条目：`Gap()` 恒为真，bot 每 `CatchupRetryPackets` 个包就再请求一次追帧，也占一个缓冲名额。P3 实施 C# 时发现同一问题（C# 表现为卡住），已统一为清空整个缓冲。用例 `TestFrameAssemblerResumeDropsBufferedFramesPastTheSnapshot`；把实现改回只清 `<= frame` 时它在 `after resume: next 21, gap true` 处变红，去掉这一断言后在续帧之后报 `pages from frame+1: released [21 22 23 24], next 25, gap true`。
+3. **`IngestFrames` 也遵守快照状态**：传输进行中丢弃帧（计入 Duplicates），交出快照后、`ResumeAfterSnapshot` 前返回 `ErrSnapshotNotApplied`，与 `Receive` 一致（robot 的 `HandleFrames` 走这条）。`ResumeAfterSnapshot` 不校验 `frame` 是否等于交出的快照帧；快照帧可以早于已应用的帧（snapshot 模式下检查点落后于客户端），组装器回到 `frame + 1` 重新交出之后的帧。
+4. **快照分块的错误在 bot 里一律终止**：§7.3 的“分块坏包 → 终止”在 robot 里按“这是快照分块（首字节 0xCA）且 `Receive` 报错”判断，C7 坏包仍沿用“请求追帧”的现行规则，不改。
+5. **传输中的追帧重试**：快照传输开始但未到齐也算缺口未合（`checkGap` 加 `SnapshotInProgress`），每个推进中的分块把重试计数清零；没有在途请求（宿主 `StartSnapshot` 强制的快照）时，第一个分块把当前 `Next` 记为在途请求。这样服务端放弃一次传输、会话回到实时广播后，被丢弃的实时包按 `CatchupRetryPackets` 节奏再请求（服务端重新判定、换新传输编号），而传输推进时不会因分块多于重试阈值（4 MiB / 16 KiB = 256 块 > 64）而重复请求。
+6. **纯线协议 bot 的缺省恢复**：`Restore` 为 nil 且没设 `Simulate` / `Hash` 时，以快照的 `StateHash` 作为新的输入链值；快照不带 `StateHash` 时无从续链，按 `ErrSnapshotUnsupported` 终止。设了 `Restore` 但没设 `Hash` 时，`Restore` 返回的就是输入链值（与 `Hash` 同一算法的约定），bot 以它 `Reset` 输入链 hasher；状态 hash 不符时不 `Reset`、直接终止。
+7. **`ReportSnapshotMismatch`（缺省 false）**：§12 第 12 条“业务可选在终止前发一次 `ReportHash(S, got)`”做成 bot 配置开关；发送失败不改变终止结论。
 
 ### P3 C# SDK（2026-10-20）
 

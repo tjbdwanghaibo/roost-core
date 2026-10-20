@@ -1,4 +1,4 @@
-// 快照恢复：恢复方式判定、取快照线程与共享、分块下发与续帧、失败通知 v2、历史钉住、分块编解码与 fuzz。
+// 快照恢复：恢复方式判定、取快照线程与共享、分块下发与续帧、失败通知 v2、历史钉住、分块编解码与 fuzz、客户端 FrameAssembler 收快照与续帧。
 
 package lockstep
 
@@ -1245,5 +1245,260 @@ func TestMatchSnapshotUnpacedLaneUsesTheFixedBudget(t *testing.T) {
 	_ = tickInputs(t, match) // 10 KB 在 5 个 Tick 传完，下一 Tick 一页续帧追到头
 	if match.CatchingUp(1) {
 		t.Fatal("recovery did not finish after the transfer and one catch-up page")
+	}
+}
+
+// ---- 客户端 FrameAssembler：收快照、恢复、续帧（设计 §7.1 / §7.3） ----
+
+// receiveAll 依次投包，返回释放的帧号、交出的快照与第一个错误（出错即停）。
+func receiveAll(assembler *FrameAssembler, packets ...[]byte) ([]FrameID, []*ReceivedSnapshot, error) {
+	var released []FrameID
+	var snapshots []*ReceivedSnapshot
+	for _, packet := range packets {
+		delivery, err := assembler.Receive(packet)
+		for _, frame := range delivery.Frames {
+			released = append(released, frame.ID)
+		}
+		if delivery.Snapshot != nil {
+			snapshots = append(snapshots, delivery.Snapshot)
+		}
+		if err != nil {
+			return released, snapshots, err
+		}
+	}
+	return released, snapshots, nil
+}
+
+func framePackets(ids ...FrameID) [][]byte {
+	packets := make([][]byte, 0, len(ids))
+	for _, id := range ids {
+		packets = append(packets, EncodeBroadcast([]Frame{{ID: id, Inputs: []Input{{Player: 1, Payload: []byte{byte(id)}}}}}))
+	}
+	return packets
+}
+
+// 收快照的完整流程：缺口 → 快照分块（传输中的 C7 丢弃、计入 Duplicates）→ 交出快照（摘要已核对）→
+// 恢复前继续投包被拒 → ResumeAfterSnapshot 清空乱序缓冲、续于快照帧 +1 → 同编号的重发分块丢弃 → 续帧。
+func TestFrameAssemblerReceivesSnapshotThenResumesAfterIt(t *testing.T) {
+	assembler := NewFrameAssembler(0)
+	released, _, err := receiveAll(assembler, framePackets(1, 2, 3, 10, 11)...)
+	if err != nil || len(released) != 3 || !assembler.Gap() || assembler.Next() != 4 {
+		t.Fatalf("before the snapshot: released %v, gap %v, next %d, err %v", released, assembler.Gap(), assembler.Next(), err)
+	}
+	data := referenceData(50, 10_000)
+	hash := uint64(1<<63 | 50)
+	chunks := snapshotChunks(t, 7, 50, data, 4096, &hash)
+	duplicates := assembler.Duplicates()
+	// 分块之间夹着恢复开始前发出、晚到的实时帧：传输进行中一律丢弃。
+	released, snapshots, err := receiveAll(assembler, chunks[0], framePackets(4)[0], chunks[1], framePackets(51)[0])
+	if err != nil || len(released) != 0 || len(snapshots) != 0 || !assembler.SnapshotInProgress() {
+		t.Fatalf("mid-transfer: released %v, snapshots %d, in progress %v, err %v", released, len(snapshots), assembler.SnapshotInProgress(), err)
+	}
+	if assembler.Duplicates() != duplicates+2 || assembler.Next() != 4 {
+		t.Fatalf("frames during the transfer: duplicates %d → %d, next %d", duplicates, assembler.Duplicates(), assembler.Next())
+	}
+	_, snapshots, err = receiveAll(assembler, chunks[2])
+	if err != nil || len(snapshots) != 1 || assembler.SnapshotInProgress() {
+		t.Fatalf("last chunk: snapshots %d, in progress %v, err %v", len(snapshots), assembler.SnapshotInProgress(), err)
+	}
+	snapshot := snapshots[0]
+	if snapshot.Frame != 50 || !bytes.Equal(snapshot.Data, data) || !snapshot.HasStateHash || snapshot.StateHash != hash {
+		t.Fatalf("snapshot frame %d, %d bytes, hash %v/%d", snapshot.Frame, len(snapshot.Data), snapshot.HasStateHash, snapshot.StateHash)
+	}
+	// 交出后、恢复前：两条入口都拒绝，调用方不能在旧状态上继续模拟。
+	if _, err := assembler.Receive(framePackets(51)[0]); !errors.Is(err, ErrSnapshotNotApplied) {
+		t.Fatalf("Receive before ResumeAfterSnapshot: %v", err)
+	}
+	if _, err := assembler.IngestFrames([]Frame{{ID: 4}}); !errors.Is(err, ErrSnapshotNotApplied) {
+		t.Fatalf("IngestFrames before ResumeAfterSnapshot: %v", err)
+	}
+	assembler.ResumeAfterSnapshot(snapshot.Frame)
+	if assembler.Next() != 51 || assembler.Gap() {
+		t.Fatalf("after resume: next %d, gap %v (frames 10, 11 must be dropped with the buffer)", assembler.Next(), assembler.Gap())
+	}
+	// 服务端把超时但其实已写出的分块再发一次：同编号的重发丢弃，不报错、不再交出快照。
+	released, snapshots, err = receiveAll(assembler, chunks[2], chunks[0])
+	if err != nil || len(released) != 0 || len(snapshots) != 0 || assembler.SnapshotInProgress() {
+		t.Fatalf("resent chunks after completion: released %v, snapshots %d, err %v", released, len(snapshots), err)
+	}
+	released, _, err = receiveAll(assembler, EncodeBroadcast([]Frame{{ID: 50}, {ID: 51}, {ID: 52}}), framePackets(53)[0])
+	if err != nil || len(released) != 3 || released[0] != 51 || released[2] != 53 || assembler.Next() != 54 {
+		t.Fatalf("pages after the snapshot: released %v, next %d, err %v", released, assembler.Next(), err)
+	}
+}
+
+// 快照帧可以早于已应用的帧（snapshot 模式下 Provider 的检查点落后于客户端）：状态整体回到快照帧，之后的帧重新交出。
+func TestFrameAssemblerSnapshotMayRewindTheCursor(t *testing.T) {
+	assembler := NewFrameAssembler(0)
+	if _, _, err := receiveAll(assembler, framePackets(1, 2, 3, 4, 5)...); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshots, err := receiveAll(assembler, snapshotChunks(t, 1, 2, []byte("state@2"), 4096, nil)...)
+	if err != nil || len(snapshots) != 1 || snapshots[0].HasStateHash {
+		t.Fatalf("snapshot: %d, %v", len(snapshots), err)
+	}
+	assembler.ResumeAfterSnapshot(2)
+	released, _, err := receiveAll(assembler, EncodeBroadcast([]Frame{{ID: 3}, {ID: 4}, {ID: 5}, {ID: 6}}))
+	if err != nil || len(released) != 4 || released[0] != 3 || assembler.Next() != 7 {
+		t.Fatalf("frames after a rewinding snapshot: %v, next %d, %v", released, assembler.Next(), err)
+	}
+}
+
+// C9 v2 的每种原因都原样交给调用方（errors.Is ErrCatchupUnservable 对所有原因成立），快照传输进行中也一样；
+// 解码 Ingest 与 Receive 一致。
+func TestFrameAssemblerSurfacesRecoveryFailureReason(t *testing.T) {
+	for _, reason := range []RecoveryFailureReason{RecoveryHistoryTrimmed, RecoverySnapshotUnavailable, RecoverySnapshotTooLarge, RecoveryExpired} {
+		from, start := FrameID(4), FrameID(70)
+		if reason != RecoveryHistoryTrimmed {
+			from = 90
+		}
+		notice := EncodeRecoveryFailure(reason, from, start)
+		assembler := NewFrameAssembler(0)
+		chunks := snapshotChunks(t, 2, 60, referenceData(60, 5000), 4096, nil)
+		_, _, err := receiveAll(assembler, chunks[0], notice)
+		var failed *CatchupUnservableError
+		if !errors.As(err, &failed) || !errors.Is(err, ErrCatchupUnservable) || failed.Reason != reason || failed.From != from || failed.Start != start {
+			t.Fatalf("%s via Receive mid-transfer: %v", reason, err)
+		}
+		if _, err := NewFrameAssembler(0).Ingest(notice); !errors.As(err, &failed) || failed.Reason != reason {
+			t.Fatalf("%s via Ingest: %v", reason, err)
+		}
+	}
+	if _, err := NewFrameAssembler(0).Receive([]byte{0xC9, 1, 1, 20}); !errors.Is(err, ErrFrameCorrupt) {
+		t.Fatalf("C9 v1 accepted: %v", err)
+	}
+}
+
+// 校验失败一律返回错误、不交出快照（调用方终止，不自动重试）；只会追帧的 Ingest 遇到分块明确报不支持。
+func TestFrameAssemblerRejectsBadSnapshots(t *testing.T) {
+	data := referenceData(30, 9000)
+	chunks := snapshotChunks(t, 5, 30, data, 4096, nil)
+	badDigest := snapshotChunks(t, 6, 30, data, 4096, nil)
+	badDigest[2] = append([]byte(nil), badDigest[2]...)
+	badDigest[2][len(badDigest[2])-1] ^= 1
+	cases := []struct {
+		name      string
+		assembler *FrameAssembler
+		packets   [][]byte
+		want      error
+	}{
+		{"digest mismatch", NewFrameAssembler(0), badDigest, ErrSnapshotCorrupt},
+		{"offset skip", NewFrameAssembler(0), [][]byte{chunks[0], chunks[2]}, ErrFrameCorrupt},
+		{"new transfer mid-stream", NewFrameAssembler(0), [][]byte{chunks[1]}, ErrFrameCorrupt},
+		{"over the client limit", NewFrameAssemblerLimits(0, 8000), [][]byte{chunks[0]}, ErrFrameCorrupt},
+		{"truncated chunk", NewFrameAssembler(0), [][]byte{chunks[0][:20]}, ErrFrameCorrupt},
+	}
+	for _, tc := range cases {
+		_, snapshots, err := receiveAll(tc.assembler, tc.packets...)
+		if !errors.Is(err, tc.want) || len(snapshots) != 0 || tc.assembler.SnapshotInProgress() {
+			t.Errorf("%s: err %v, snapshots %d, in progress %v", tc.name, err, len(snapshots), tc.assembler.SnapshotInProgress())
+		}
+	}
+	if _, err := NewFrameAssembler(0).Ingest(chunks[0]); !errors.Is(err, ErrSnapshotUnsupported) || errors.Is(err, ErrFrameCorrupt) {
+		t.Fatalf("Ingest on a snapshot chunk: %v", err)
+	}
+	mismatch := &SnapshotMismatchError{Frame: 30, Want: 1, Got: 2}
+	if !errors.Is(mismatch, ErrSnapshotMismatch) || !strings.Contains(mismatch.Error(), "frame 30") {
+		t.Fatalf("SnapshotMismatchError: %v", mismatch)
+	}
+}
+
+// 连续性：Match（auto，越界请求）经可靠通道发快照与续帧页，客户端只用 FrameAssembler.Receive——
+// 快照 → 续帧 → 实时，帧号无洞、输入载荷与提交的一致。
+func TestFrameAssemblerRecoversFromAMatchSnapshot(t *testing.T) {
+	lanes := newLaneLog()
+	provider := &referenceProvider{size: 50_000} // 多于一个分块
+	match := newSnapshotMatch(t, lanes, provider, nil)
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	assembler := NewFrameAssembler(0)
+	restored := 0
+	feed := func() {
+		t.Helper()
+		for _, packet := range lanes.take(101) {
+			delivery, err := assembler.Receive(packet.data)
+			if err != nil {
+				t.Fatalf("Receive (next %d): %v", assembler.Next(), err)
+			}
+			for _, frame := range delivery.Frames {
+				if len(frame.Inputs) != 2 || !bytes.Equal(frame.Inputs[1].Payload, []byte{byte(frame.ID), byte(frame.ID >> 8), 2}) {
+					t.Fatalf("frame %d inputs %+v", frame.ID, frame.Inputs)
+				}
+			}
+			if snapshot := delivery.Snapshot; snapshot != nil {
+				if !bytes.Equal(snapshot.Data, referenceData(snapshot.Frame, 50_000)) || snapshot.StateHash != referenceHash(snapshot.Frame) {
+					t.Fatalf("snapshot at %d does not match the provider", snapshot.Frame)
+				}
+				assembler.ResumeAfterSnapshot(snapshot.Frame)
+				restored++
+			}
+		}
+	}
+	for range 5 {
+		if err := tickInputs(t, match); err != nil {
+			t.Fatal(err)
+		}
+		feed()
+	}
+	match.Detach(1) // 断线超过窗口
+	for range 4 * MinHistoryRetainFrames {
+		if err := tickInputs(t, match); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.StartCatchup(1, assembler.Next()); err != nil {
+		t.Fatalf("out-of-window request: %v", err)
+	}
+	if err := tickInputs(t, match); err != nil {
+		t.Fatal(err)
+	}
+	awaitFetch(t, match)
+	for i := 0; match.CatchingUp(1) || i < 3; i++ {
+		if i > 100 {
+			t.Fatal("recovery did not finish in 100 Ticks")
+		}
+		if err := tickInputs(t, match); err != nil {
+			t.Fatal(err)
+		}
+		feed()
+	}
+	if provider.calls.Load() != 1 || restored != 1 {
+		t.Fatalf("provider calls %d, snapshots restored %d", provider.calls.Load(), restored)
+	}
+	if head := match.History().Latest(); assembler.Next() != head+1 || assembler.Gap() {
+		t.Fatalf("client next %d (gap %v), head %d", assembler.Next(), assembler.Gap(), head)
+	}
+}
+
+// 快照之前已有 frame+1、frame+2 进了乱序缓冲（恢复开始前的实时帧）：ResumeAfterSnapshot 清空整个缓冲，
+// 服务端从 frame+1 重发的历史页按序续到头部，不会因为缓冲里的 frame+1 被当重复帧跳过而永久卡住。
+// （P3 C# 实施时发现的同一问题；只清 <= frame 的写法在这里卡在 frame+1。）
+func TestFrameAssemblerResumeDropsBufferedFramesPastTheSnapshot(t *testing.T) {
+	assembler := NewFrameAssembler(0)
+	if _, _, err := receiveAll(assembler, framePackets(1, 2, 21, 22)...); err != nil || assembler.Next() != 3 || !assembler.Gap() {
+		t.Fatalf("before the snapshot: next %d, gap %v, %v", assembler.Next(), assembler.Gap(), err)
+	}
+	_, snapshots, err := receiveAll(assembler, snapshotChunks(t, 1, 20, []byte("state@20"), 4096, nil)...)
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshot: %d, %v", len(snapshots), err)
+	}
+	assembler.ResumeAfterSnapshot(20)
+	if assembler.Gap() || assembler.Next() != 21 {
+		t.Fatalf("after resume: next %d, gap %v", assembler.Next(), assembler.Gap())
+	}
+	var released []FrameID
+	for _, page := range [][]Frame{{{ID: 21}, {ID: 22}}, {{ID: 23}, {ID: 24}}} {
+		got, _, err := receiveAll(assembler, EncodeBroadcast(page))
+		if err != nil {
+			t.Fatal(err)
+		}
+		released = append(released, got...)
+	}
+	if len(released) != 4 || released[0] != 21 || released[3] != 24 || assembler.Next() != 25 || assembler.Gap() {
+		t.Fatalf("pages from frame+1: released %v, next %d, gap %v", released, assembler.Next(), assembler.Gap())
 	}
 }
