@@ -4,6 +4,8 @@
 
 学习主线分两段：建造、行军和抢地是事务入门（§3～§6）；跨服联盟活动把联盟权威、视野和活动奖励串成一条链路（§7），先分清框架已有、业务要做和框架没有的部分，不把框架模块存在当作玩法已经完成。
 
+两个入口的范围须分开：`scripts/test-slg-generated.sh` 是 main 整合的 SLG 基础／联盟验收（§7、§12）；`scripts/test-slg-alliance-player.sh` 是下文的深化入口，在同一活动流程里增加 TCP、权限代际、持久位置与多块覆盖恢复。两者目前使用独立消费者夹具，不能把深化入口的结果归到基础入口。
+
 ## 第一部分：学习
 
 ### 专题优先级：跨服、视野、活动
@@ -80,7 +82,7 @@ bash scripts/test-slg-alliance.sh
 
 **证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，协调器未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野已经真实回环 TCP 与正式帧 Receiver 重建对象表，NATS 失效提示验证重复／乱序后的权威重读；不证明跨机即时撤权、正式账号鉴权或消息不丢。基础入口的联盟权威用业务 Redis CAS；Remote 扩展改用正式生成实体并验证 owner 交接，见下文；基础入口的原服对象重建只验证持久义务回执；Player 扩展启动独立原服测试子进程做实际发奖和 SIGKILL，但不是带登录网关的完整 game 服务。
 
-**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。下一步加入持久空间事实、多块迷雾与权限定期重读驱动；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
+**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。下一步加入空间候选与敌军授权交集、多块迷雾规则及权限定期重读驱动；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
 
 ### Player 到账扩展：义务已 ACK，金币仍能恢复补发
 
@@ -101,7 +103,7 @@ ROOST_DATAENGINE_IT_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0' \
 bash scripts/test-slg-alliance-player.sh
 ```
 
-实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“建档＋到账”的两条已确认 strict WAL，断点确认投影数为 0、未投影数为 2，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
+实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“建档＋两次空间移动＋到账”的四条已确认 strict WAL，断点确认投影数为 0、未投影数为 4，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串（含 X/Y/Coverage），再重建空间索引，并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
 
 本例不改变 ACK 的含义。`home.deliverPending` 已实现一次有界扫描与补发：按窗口／玩家排序，最多处理调用方指定的 1～128 个窗口，先调用 Player，再持久记录 Delivered。Player 调用失败不标完成；Player 已到账而 Delivered 未写时，重启仍能发现并重投。测试在这个间隙 SIGKILL，恢复时发现一条工作，第三进程发现零条；独立重放 Player 身份仍返回原余额。尚未接常驻后台循环、最终义务归档或无限期账本。固定两个角色的映射需由生产账号／角色注册表替换；这是内部受信任调用，未开放公网领奖 API。原服子进程按 sid 依次验收，不证明两服网络并发、进程自动拉起、Redis 故障、磁盘断电或 strict 结果未知。Gold 与永久回执经真实 WAL / Mongo 恢复，**Remote owner/fence 要看下一节的专门扩展；邮件附件与 Saga 未因本项通过而自动获得验收**。
 
@@ -147,7 +149,23 @@ bash scripts/test-slg-alliance-player.sh
 
 这是一套业务撤权接法，不是框架自动提供的分布式权限系统。普通 NATS Pub/Sub 可以丢通知；测试中的提示队列有界，满时丢提示而不能无界积压。生产需要定期权威重读、可信 subject 权限以及串行视野协调循环，定义最大缓存年龄和故障时是否断线；本例只直接调用重读入口，没有常驻定时驱动或跨机延迟验收。held 只停止后续发布，不能收回已经发给客户端的信息。两个固定测试票不代表真实账号服务验签。
 
-位置 DAO / SpatialComponent 提交门、多块观察、战争迷雾和敌军隐身 Profile 仍未接入这条联合链；`MoveWithObservedBlocks` 的额外被观察覆盖不等于玩家侦察授权。不要把 TCP 据点视图通过解释成完整空间迷雾已完成。
+位置 DAO / SpatialComponent 提交门与多块覆盖已由下面的原服扩展接入；战争迷雾授权和敌军隐身 Profile 仍未接入这条联合链；`MoveWithObservedBlocks` 的额外被观察覆盖不等于玩家侦察授权。不要把 TCP 据点视图通过解释成完整空间迷雾已完成。
+
+### 空间扩展：持久位置、多个覆盖块与崩溃重建
+
+沿用 `scripts/test-slg-alliance-player.sh`（可加 `ROOST_SLG_REMOTE=1`），[空间消费者](../../scripts/testdata/slg-alliance/player/spatial_test.go) 在每个原服 Player 的同一条奖励恢复链中执行；不需要另起示例项目。Player DAO 新增 X / Y（persist,sync）与 Coverage（persist）；位置和额外覆盖在一次 strict 事务里保存。客户端仅收到 x / y，不收到覆盖块、钱包或回执。
+
+| 业务动作 | 接口与顺序 | 验收结果 |
+| --- | --- | --- |
+| 移动与覆盖 | 正式生成 `Sync_AllianceMove` → Nest Guard / undo → 手写 `SpatialComponent.MoveWithObservedBlocks` → DAO setter / Coverage JSON → strict WAL | handler 内特意 Flush，未提交的订阅仍不改变；显式回滚与非法块均不改钱包里的位置／覆盖，也不产生对象 |
+| 多点观察同一目标 | main 新接口 `Watch(playerID, point, ObserverView{})`；`Show(entityID, point)`；两个观察点在不同块，目标真实位置固定为 700,700 | 两个实际 TCP 客户端各看到同一 subject，一份真实位置；覆盖不复制实体，也不移动位置 |
+| 来源交接 | 第二观察端另有 scout 关系；移动提交只保留第一个覆盖块 | 移除第二块后 scout 保留对象；清除 scout 后第二端收到 Remove，第一端仍可见 |
+| 崩溃 | 建档、两次移动、奖励共四条 strict 已确认但未投影记录后 SIGKILL | 新进程先比较完整钱包字节（包含 X/Y/Coverage），再建同步与空间索引；不是先发移动命令覆盖冷事实 |
+| 冷重建 | 在尚未启动移动驱动的装配阶段，读取已加载 DAO → EnableSync / Register → Show → QueueObservedBlocks → Watch → Flush | 恢复端与第三进程均重建“第一端有对象、第二端无对象”，位置仍为 700,700；随后奖励重投不增币 |
+
+冷重建的 `QueueObservedBlocks` 是已提交事实的索引恢复；在线改位置应统一走 SpatialComponent 与 Nest，不能把直接重建接口当作绕过提交门的写入口。示例地图／网格配置固定，Coverage 中的块号只属于本 Interest；正式产品地图配置升级需要版本或稳定业务坐标转换，不能直接沿用旧块号。
+
+这一步验证了多块覆盖和独立来源交接，**尚未实现完整战争迷雾**。空间来源会直接订阅命中者；把侦察关系再加入同一个 Interest 是“并集”，不会形成“空间且已授权”的交集。隐藏敌军必须先设计授权过滤／分区或派生可见关系，不能把完整敌军加入本示例的公共空间源再指望客户端隐藏。两个固定观察视点不是行军单位、可移动侦察范围或跨服权限延迟验收。
 
 ### main 新契约接入：逻辑库与物理库分开
 

@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### SLG 深化入口：持久空间事实与 Nest 外部类型导入修复
+
+- `scripts/test-slg-alliance-player.sh`（含 Remote 模式）在同一活动／奖励链加入 Player X/Y/Coverage、生成 Sender 与 SpatialComponent；真实 TCP 验证未提交不放出对象、回滚／非法覆盖不变、多块覆盖与 scout 来源交接。四条 strict 未投影记录后 SIGKILL，恢复先比较完整事实，再重建空间索引，第三进程仍为同一位置与永久奖励回执。与 main 的 `test-slg-generated.sh` 基础入口分开，接法和空间授权交集的未完成边界见 SLG 手册。
+- **已确认生成器问题（基线 main d1fc6cd7）**：合法 Nest 参数 `*policy.Interest` / `*entitysync.Manager` 生成时报 `unresolved generated type package alias`。`collectUsedImports` 在首个点号前截字符串，得到带 `*` 的伪包名，与生成校验不一致。回归 `TestCollectUsedImportsHandlesWrappedPackageTypes` 修前实际收集空 imports；修后共用 `packageRefs` 类型解析，保留指针／切片／map 等包装内的包引用。Nest 生成器全包测试与真实生成 SLG 消费者通过；运行时热路径未改。
+
 ### SLG 联合链：真实 TCP 与权限代际
 
 - 联盟活动的三个入口改经真实回环 `TCPServer / TCPRuntime`、`PushPlayerFrame`、`wire.Read` 与正式 Receiver 验证来源撤销、断线重连 Full、旧 epoch 拒绝与公开载荷白名单。
