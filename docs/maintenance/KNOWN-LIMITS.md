@@ -4,6 +4,58 @@
 
 需要维护者做设计选择的事项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## 新用户试用第八轮（游戏服务器专家视角，2026-10-20 登记，尚未修复）
+
+基线 `0efd80e4`（origin/main，v1.29.0 之后）。先复核第七轮：D13 持久名（只改 Go 字段名保留 `bson:"gold"` 时生成仍用 `gold`；真改持久键时 generate 给出两条明确 WARN）、saga `Lookup`、`roost add attribute`、`add webroute` 开 feature 与 doctor `webroute:serve`、endpoint 接管占位、C# 测试进 CI —— 均已解决。本轮从生产运营角度在共享隔离环境起真实进程实测（工程由 CLI 生成，Player + strict handler + TCP 接入）。修复与方向由维护者在 main 上决定。
+
+### 1. 没有安全的单玩家运维入口；直接改权威文档会被覆盖，或让整服 fail-stop 并在重启时循环崩溃
+
+**现象**：框架的 admin 命令只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`，没有任何针对实体 / 玩家的命令（踢下线、卸载、查看、恢复存档）；代码层只有 `ManagerAccess.Unload`。回档、补偿改档在国内运营里是常规操作，GM 最自然的做法是改 Mongo。对一个已加载的玩家实测：
+
+- **A 只改字段**（`$set gold=500`，不动 `_version`）：下一次购买的投影条件写命中，内存里的 90→80 覆盖 GM 的 500，GM 修改**静默丢失**。
+- **B 恢复旧备份**（`_version` 回到 2）：下一次购买投影报 `dataengine mongo: fatal projection version conflict: r7/player/<id> expected=3 next=4 stored=2`，进程 fenced 退出，全服掉线；**重启时启动投影恢复再次冲突、进程起不来**（`startup projection recovery`），形成循环崩溃。触发崩溃的那笔购买客户端只看到 EOF，但已提交（重启恢复后数据包含它）。
+- 手工恢复验证有效：把文档 `_version` 改回 WAL 期望的 `expected` 值后重启，投影继续（GM 的内容被覆盖）。维护手册 §4 故障表只有 D10 墓碑情形，没有“权威被外部修改”的判别与这条处置。
+
+**建议修法**：提供实体运维命令：`entity.kick`（关该玩家全部会话）、`entity.unload`（排空该实体投影后卸载，期间拒绝写入）、`entity.restore <id> <doc>`（经 DataEngine 以 `current+1` 版本整文档写回，进 WAL、可审计）；文档明确“运行期不得直接改权威集合”；故障表补“外部修改导致投影冲突”的识别（`stored < expected` 或 `_last_tx` 不是本 WAL 的事务）与上面的恢复步骤。
+
+### 2. 合服没有框架支持（需要维护者决定方向）
+
+**现状**：`docs/framework/PLAYER-MIGRATION.md` 明确“合服 / 单个玩家换服属于新的产品需求”。可用的基础：`PlayerIDAllocator` 契约要求 id 全局唯一（`service/account/identity.go`），合服时玩家 id 不撞；directory 名字是全局域。阻碍：account 没有修改 `Role.ServerID` 的接口，`PlayerOwners` 按静态 sid 绑定拒绝外服玩家；`dbscope=sid` 的 DAO 文档在按 sid 区分的库里需要搬迁；排行（rank board 按服）、公会、邮件箱、活动组（activity groups_file）按服的数据需要合并或重建；合服前要排空各服 WAL / outbox / saga。长线 MMO / SLG 几乎都会合服，目前每个项目要自己设计全套流程。
+
+**需要决定**：是否提供“合服”参考流程与工具（类似 `cmd/sidmove`：停写 → 排空 → 改绑 ServerID → 搬 sid 库 → 合并排行 / 名字冲突处理 → 校验），以及 account 是否增加受审计的 `ServerID` 改绑接口。
+
+### 3. 全服邮件只有“业务自己实现扇出”，生成骨架的语义是“只投递在线玩家”
+
+**现象**：`service/mail` 的 `AudienceBroadcast` 需要业务提供 `Deliverer`（`mail.go` 注释“Whatever strategy a deployment picks”），框架没有内置策略；生成的 `internal/service/mail/collaborators.go` 写 `// Broadcast delivers broadcast mail to every online player`，默认 nil（拒绝广播）。
+
+**影响**：全服补偿 / 公告邮件的核心诉求是离线玩家与有效期内新登录 / 新建角的玩家也收到；按“在线扇出”写的实现会漏发，按“全量写每个邮箱”写的实现在十万级玩家时是大批量写。行业常见做法是全服邮件存一份、玩家拉取或登录时按游标懒合并。
+
+**建议修法**：mail 服务内置“全服邮件存一份 + 每玩家水位懒合并”的广播策略（有效期、目标条件如注册时间 / 等级），骨架注释改为说明语义与可选策略。
+
+### 4. 每日重置 / 跨天没有业务时区与日边界支持，生成的部署也不设时区
+
+**现象**：`infra/base/clock` 与 `app.BusinessClock` 只有偏移，没有业务时区配置，也没有“业务日”边界工具；文档里没有每日重置的推荐写法。业务只能用 `time.Local` 算零点。生成的 Dockerfile 运行层是 `gcr.io/distroless/static-debian12:nonroot`，k8s / compose 清单都不设 `TZ`，容器内 `time.Local` 是 UTC，而本机开发通常是本地时区（本机为北京时间），同一份代码在开发与线上的跨天时刻相差 8 小时。（未在容器内实测 tzdata 是否可用：distroless/static 一般自带 tzdata，`LoadLocation` 应可用。）
+
+**建议修法**：配置项 `time.business_timezone`（必填或默认 UTC 并在启动日志打印），`app.BusinessClock` 提供 `BusinessDay(t)` / `NextDayStart(t)`；文档补“按日重置：存上次重置的业务日，登录 / 首次操作时惰性重置，必要时用实体定时器在零点推送”的写法；生成部署写出 `TZ` 或在 doctor 提示。
+
+### 5. 进程级写入吞吐约 125 TPS，与实体是否热点无关（尚未确认根因）
+
+**现象**（本机 macOS、GOMAXPROCS=10、共享隔离环境同机；生成工程加一个最小 strict handler `Tap`：每次 Player 金币 +1）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 50 连接各自一个玩家循环 Tap 10s | 1151 次，115 TPS，P50 430ms、P99 530ms |
+| 同上，Tap 改 `durability=async` | 131 TPS，P50 377ms |
+| 同上，再关掉 `access.player.self_sync` | 125 TPS，P50 400ms |
+| 同一玩家 2 连接 | 129 TPS，P50 16ms |
+| 300 个新玩家同时登录（GetOrCreate + strict 发新手金币） | 全部成功，墙钟 2.58s，P99 2.55s |
+
+指标（strict 那轮）：`nestwal_append_total == nestwal_batch_total`（1202 / 1202，每批 1 条，组提交没有合并），`nestwal_fsync_duration` 平均 5.9ms、最大 14ms；`nest_handler_lock_hold` 平均 8.6ms（handler 只做一次加法）；`nest_dispatch_cost` 平均 86ms；`player_tcp_dispatch_duration` 平均 409ms；short 池 10 个 worker、压测结束时队列积压 40。async 与关 self_sync 两轮的持锁时间与“每批 1 条”都不变。吞吐 ≈ 1 / 单笔持锁时间，说明提交在进程内实际是逐笔串行的；短池 10 个 worker 每个任务平均占 ~80ms，其中持锁只有 ~8ms，其余时间去向未查明。
+
+**影响**：`roost add handler` 默认 `durability=strict`；若这个上限在独占机器上依然成立，一个游戏进程所有写请求合计只有一百多 TPS，远低于 MMO / SLG 单进程的常规需求（世界 Boss、全服计数器等热点场景同样受它约束而不是受单实体锁约束）。
+
+**尚未确认**：宿主机有已知干扰（共享环境同机，fseventsd / swap，见性能文档），需要在独占机器复测；根因候选：WAL 追加与 Nest 提交之间的某个串行点（每批只有 1 条说明同一时刻只有一笔在追加）、或 async 也在锁内等待 writer 回复。复现：上述 Tap handler + 50 个 TCP 连接循环请求，读 `/metrics` 的 `nestwal_append_total` / `nestwal_batch_total` 与 `nest_handler_lock_hold`。
+
 ## Nest 与实体定时器
 
 ### 按实体的持久定时器（D11）
