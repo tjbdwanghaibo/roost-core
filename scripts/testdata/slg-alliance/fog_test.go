@@ -9,7 +9,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
-// 用正式 Receiver 消费真实编码帧，重建客户端对象表；传输仍为内存捕获，不冒充 TCP 验收。
+// 用正式 Receiver 消费 TCP 收到的编码帧，重建客户端对象表。
 type fogClient struct {
 	receiver *frame.Receiver
 	objects  map[frame.ObjectRef]int64
@@ -77,9 +77,35 @@ func verifyFogRecovery(t *testing.T, f *fog, load func() (state, error)) {
 	if len(alice.objects) != 1 || len(bob.objects) != 0 {
 		t.Fatal("refresh restored stale membership")
 	}
+	// 旧缓存和同代伪造都不能恢复退盟角色；失败后依旧必须读权威才能重新发布。
+	latest, e := load()
+	check(t, e)
+	for _, stale := range []bool{true, false} {
+		bad := clone(latest)
+		if stale {
+			bad.PermissionGeneration--
+		}
+		m := bad.Members["bob"]
+		m.Active = true
+		bad.Members["bob"] = m
+		if e := f.reconcile(bad); !errors.Is(e, errRefused) {
+			t.Fatal("stale or conflicting authority accepted", e)
+		}
+		check(t, f.manager.Flush(context.Background()))
+		if len(f.sink.take(1))+len(f.sink.take(2)) != 0 {
+			t.Fatal("rejected authority published frames")
+		}
+		check(t, f.reconcileFrom(load))
+		alice.consume(t, f.sink.take(1))
+		bob.consume(t, f.sink.take(2))
+		if len(bob.objects) != 0 {
+			t.Fatal("revoked membership resurrected")
+		}
+	}
 	fulls := alice.fulls
 	for _, sid := range []entitysync.SessionID{1, 2} {
 		f.manager.CloseSession(sid)
+		f.sink.connect(sid)
 		check(t, f.manager.OpenHeldSession(sid))
 		f.interest.Resubscribe(int64(sid))
 	}

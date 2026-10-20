@@ -12,6 +12,7 @@ import (
 	db "example.com/slg-alliance-practice/db"
 	authority "example.com/slg-alliance-practice/game/entities/alliance_authority"
 	handler "example.com/slg-alliance-practice/game/handler"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -35,10 +36,12 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	database := db.NewAllianceAuthorityDao().DbName()
-	if database != db.NewPlayerDao().DbName() || database != os.Getenv("ROOST_SLG_REWARD_DB") {
+	database := os.Getenv("ROOST_SLG_REWARD_DB")
+	if db.NewAllianceAuthorityDao().DbName() != db.DatabaseMain || db.NewPlayerDao().DbName() != db.DatabaseMain {
 		t.Fatal("isolated Remote database must match consumer")
 	}
+	databases, _, e := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	check(t, e)
 	authority.RegisterEntity()
 	handler.RegisterAllianceAuthorityNestHandlers()
 	mongo, e := mongodriver.NewClient(fmongo.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")), mongodriver.IndexMigrationPolicy{})
@@ -46,7 +49,9 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	t.Cleanup(func() { _ = mongo.Close(context.Background()) })
 	check(t, mongo.Ping(ctx))
 	access := entity.NewManagerAccess(entity.NewEntityManager())
-	backend, e := remoteentity.NewBackend(access, remoteentity.NewMongoCommitter(mongo, database, sid, 0))
+	committer := remoteentity.NewMongoCommitter(mongo, database, sid, 0)
+	check(t, committer.BindDatabaseMap(databases))
+	backend, e := remoteentity.NewBackend(access, committer)
 	check(t, e)
 	cfg := remoteentity.DefaultConfig()
 	cfg.LockKey = prefix + ":lock"
@@ -58,7 +63,7 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	check(t, e)
 	t.Cleanup(nc.Close)
 	check(t, assembly.Start(ctx, syncdriver.NewNatsSyncBus(nc, sid, prefix+".remote")))
-	store, e := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database})
+	store, e := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	check(t, e)
 	check(t, store.EnsureInfrastructure(ctx))
 	check(t, store.SetRemoteProjection(backend, assembly.Manager))

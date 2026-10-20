@@ -85,9 +85,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 		t.Fatal("scout view missing")
 	}
 	check(t, a.revoke(ctx, "bob"))
-	s, e = a.read(ctx)
-	check(t, e)
-	check(t, f.reconcile(s))
+	verifyPermissionHints(t, ctx, prefix, a, f)
 	if !f.visible(t, 2) {
 		t.Fatal("revoking alliance incorrectly removed scout")
 	}

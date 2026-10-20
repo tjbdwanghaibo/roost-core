@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -131,35 +132,17 @@ func client(t *testing.T, prefix string, sid int32) *activity.BusClient {
 	return c
 }
 
-// 唯一公开的地图内容只有据点 id；该切片不发送坐标、敌方实体、成员名单或奖励账本。
-// 输出正式编码帧，由 fog_test 的 Receiver 验证关系撤销与重连；内存捕获不冒充 TCP 验收。
-type viewSink struct {
-	mu     sync.Mutex
-	frames map[entitysync.SessionID][][]byte
-}
-
-func (s *viewSink) Push(_ context.Context, id entitysync.SessionID, raw []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.frames[id] = append(s.frames[id], append([]byte(nil), raw...))
-	return nil
-}
-func (s *viewSink) take(id entitysync.SessionID) [][]byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.frames[id]
-	delete(s.frames, id)
-	return out
-}
-
 type fog struct {
-	manager  *entitysync.Manager
-	interest *policy.Interest
-	sink     *viewSink
+	generation uint64
+	required   uint64
+	members    map[string]member
+	manager    *entitysync.Manager
+	interest   *policy.Interest
+	sink       *viewSink
 }
 
 func newFog(t *testing.T) *fog {
-	sink := &viewSink{frames: map[entitysync.SessionID][][]byte{}}
+	sink := newViewSink(t)
 	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
 	check(t, e)
 	t.Cleanup(func() { check(t, m.Close(context.Background())) })
@@ -170,9 +153,9 @@ func newFog(t *testing.T) *fog {
 		return entity.TakeFrozenSyncPayload(1, []byte(`{"objective":99}`)), nil
 	}}})))
 	for _, id := range []int64{1, 2} {
-		check(t, m.OpenSession(entitysync.SessionID(id)))
+		check(t, m.OpenHeldSession(entitysync.SessionID(id)))
 	}
-	return &fog{m, in, sink}
+	return &fog{manager: m, interest: in, sink: sink}
 }
 
 // 持久成员状态成功之后才重建关系。调用方串行协调本服视野并暂停会话发布；
@@ -181,6 +164,12 @@ func (f *fog) reconcile(s state) error {
 	return f.reconcileFrom(func() (state, error) { return s, nil })
 }
 func (f *fog) reconcileFrom(load func() (state, error)) error {
+	return f.reconcileAtLeast(0, load)
+}
+
+// 通知只提供读取下限，不能携带授权；过期或同代异值都保持 held。
+func (f *fog) reconcileAtLeast(min uint64, load func() (state, error)) error {
+	f.required = max(f.required, min)
 	for _, id := range []entitysync.SessionID{1, 2} {
 		if e := f.manager.HoldSession(id); e != nil {
 			return e
@@ -189,6 +178,9 @@ func (f *fog) reconcileFrom(load func() (state, error)) error {
 	s, e := load()
 	if e != nil {
 		return e
+	}
+	if s.PermissionGeneration == 0 || s.PermissionGeneration < f.required || s.PermissionGeneration < f.generation || (s.PermissionGeneration == f.generation && !maps.Equal(s.Members, f.members)) {
+		return errRefused
 	}
 	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
 		if s.Members[p].Active {
@@ -200,6 +192,7 @@ func (f *fog) reconcileFrom(load func() (state, error)) error {
 	if refused := f.interest.Apply(); len(refused) > 0 {
 		return fmt.Errorf("view refused: %v", refused)
 	}
+	f.generation, f.members = s.PermissionGeneration, maps.Clone(s.Members)
 	for _, id := range []entitysync.SessionID{1, 2} {
 		if e := f.manager.ReadySession(id); e != nil {
 			return e

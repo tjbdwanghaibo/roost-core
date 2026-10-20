@@ -12,6 +12,7 @@ import (
 	db "example.com/slg-alliance-practice/db"
 	player "example.com/slg-alliance-practice/game/entities/player"
 	handler "example.com/slg-alliance-practice/game/handler"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -36,7 +37,12 @@ type rewardRuntime struct {
 
 func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 	t.Helper()
-	database := db.NewPlayerDao().DbName()
+	database := os.Getenv("ROOST_SLG_REWARD_DB")
+	if db.NewPlayerDao().DbName() != db.DatabaseMain {
+		t.Fatal("expected logical main")
+	}
+	databases, _, e := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	check(t, e)
 	if database != os.Getenv("ROOST_SLG_REWARD_DB") || !strings.HasPrefix(database, "roost_slg_reward_it_") {
 		t.Fatal("isolated generated database required")
 	}
@@ -52,7 +58,7 @@ func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 	check(t, mongo.Ping(ctx))
 	player.RegisterEntity()
 	handler.RegisterAllianceRewardsNestHandlers()
-	store, e := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database})
+	store, e := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	check(t, e)
 	check(t, store.EnsureInfrastructure(ctx))
 	wal, e := nestwal.Open(nestwal.DefaultOptions(filepath.Join(root, "wal")))

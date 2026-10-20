@@ -27,10 +27,11 @@ type intent struct {
 	CreatedAt int64
 }
 type state struct {
-	Key     activity.Key
-	Members map[string]member
-	Intents map[string]intent
-	Closed  bool
+	PermissionGeneration uint64
+	Key                  activity.Key
+	Members              map[string]member
+	Intents              map[string]intent
+	Closed               bool
 }
 
 // 联盟权威用一个 CAS 同时裁决成员权限和贡献意图。每个已验战果固定 10 分，
@@ -51,7 +52,7 @@ func newAlliance(r versionstore.RedisClient, prefix string, key activity.Key) (*
 	return &alliance{store: s, key: key}, e
 }
 func (a *alliance) open(ctx context.Context) error {
-	_, _, e := a.store.Create(ctx, a.key.String(), state{Key: a.key, Members: map[string]member{"alice": {1000, true}, "bob": {1001, true}}, Intents: map[string]intent{}})
+	_, _, e := a.store.Create(ctx, a.key.String(), state{PermissionGeneration: 1, Key: a.key, Members: map[string]member{"alice": {1000, true}, "bob": {1001, true}}, Intents: map[string]intent{}})
 	return e
 }
 func (a *alliance) read(ctx context.Context) (state, error) {
@@ -99,7 +100,14 @@ func (a *alliance) revoke(ctx context.Context, player string) error {
 		if !found || !ok {
 			return s, false, errRefused
 		}
+		if !m.Active {
+			return s, false, nil
+		}
+		if s.PermissionGeneration == ^uint64(0) {
+			return s, false, errRefused
+		}
 		s = clone(s)
+		s.PermissionGeneration++
 		m.Active = false
 		s.Members[player] = m
 		return s, true, nil

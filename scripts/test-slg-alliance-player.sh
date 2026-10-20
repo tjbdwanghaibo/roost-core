@@ -30,7 +30,7 @@ import os,sys
 p=Path(sys.argv[1]);s=p.read_text().replace('type PlayerDao struct {','''type PlayerDao struct {
  HomeSID int32 `bson:"home_sid" dao:"persist"`
  Gold int64 `bson:"gold" dao:"persist"`
- Receipts string `bson:"receipts" dao:"persist"`''').replace('db=slg_alliance_practice','db='+os.environ['ROOST_SLG_REWARD_DB']);p.write_text(s)
+ Receipts string `bson:"receipts" dao:"persist"`''');p.write_text(s)
 PY
 cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handler/alliance_rewards.go
 mkdir -p game/alliance
@@ -45,7 +45,7 @@ from pathlib import Path
 import os,sys
 root=Path(sys.argv[1]);p=root/'game/entities/alliance_authority/entity.go'
 s=p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryRemote remote=managed').replace('*entity.EntityBase','*entity.RemoteEntityBase');p.write_text(s)
-p=root/'db/def/alliance_authority.go';s=p.read_text().replace('type AllianceAuthorityDao struct {','type AllianceAuthorityDao struct {\n State string `bson:"state" dao:"persist"`').replace('db=slg_alliance_practice','db='+os.environ['ROOST_SLG_REWARD_DB']+' dbscope=global');p.write_text(s)
+p=root/'db/def/alliance_authority.go';s=p.read_text().replace('type AllianceAuthorityDao struct {','type AllianceAuthorityDao struct {\n State string `bson:"state" dao:"persist"`').replace('db=main','db=main dbscope=global');p.write_text(s)
 REMOTE
  cp "$repo_root/scripts/testdata/slg-alliance/remote/handlers.go.txt" game/handler/alliance_authority.go
  for name in runtime store remote; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
