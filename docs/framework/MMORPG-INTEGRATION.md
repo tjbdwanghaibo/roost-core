@@ -183,7 +183,7 @@ SLG 手册的[通用接入原则](SLG-INTEGRATION.md#8-通用接入原则)（定
 | 入口 | 依赖 | 详见 |
 | --- | --- | --- |
 | `scripts/test-mmorpg-generated.sh` | 无外部依赖（提交器替身） | §10 |
-| 同一脚本加 `ROOST_MMORPG_REAL=1` | 隔离 Mongo 副本集 | §11 |
+| 同一脚本加 `ROOST_MMORPG_REAL=1`（正常停机两进程恢复 + SIGKILL 崩溃恢复） | 隔离 Mongo 副本集 | §11 |
 | `scripts/test-mmorpg-scenes.sh` 与 demo 场景回归 | 无外部依赖 | §12 |
 | `scripts/test-mmorpg-cross-sid.sh` | 已启动的双 sid game-demo 与隔离 Mongo / NATS / Redis / etcd | §13 |
 
@@ -198,19 +198,32 @@ bash scripts/test-mmorpg-generated.sh
 按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 13 条顶层 race 场景（§4.4）且无 skip，随后执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MMORPG_KEEP=1` 时保留。
 
 - **证明**：生成代码、多实体取锁、DAO undo、定时器期限与业务幂等在 13 个业务组合下的交错行为。
-- **不证明**：提交器是替身，不含文件 WAL 与 Mongo；Buff 的“离线到期”用 DAO 序列化 / 水合重建实体后手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递；单进程。
+- **不证明**：提交器是替身，不含文件 WAL 与 Mongo；Buff 的“离线到期”用 DAO 序列化 / 水合重建实体后手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递（真实重载与驱动投递见 §11）；单进程。
 
-### 11. 真实 WAL / Mongo 两进程恢复
+### 11. 真实 WAL / Mongo 恢复：正常停机与 SIGKILL
 
 ```bash
 # ROOST_DATAENGINE_IT_MONGO_URI 指向隔离 Mongo 副本集（见 wiring/scripts/integration/README.md）。
 ROOST_MMORPG_REAL=1 bash scripts/test-mmorpg-generated.sh
 ```
 
-追加的[恢复夹具](../../scripts/testdata/mmorpg/persistence/persistence_test.go) `TestMMORPGRealPersistenceAcrossProcesses` 用本次唯一 DAO 库，先后运行两个独立 `go test` 进程，共用同一文件 WAL 与真实 Mongo：第一个进程完成战斗、领奖、登记 Buff，停在交易单方确认后正常停机；第二个冷加载后核对单方确认已恢复，完成交易、重放击杀 / 掉落 / 任务领奖（不重复发放），再手动发一次 `Sync_TickPlayerTimer`（业务时间 +1 小时），核对 Buff 已到期清除。两阶段必须实际通过且无 skip；成功后只删除本次唯一库，失败时保留并打印库名。根包 `integration_coverage_test.go` 登记了这个入口。
+追加的两个[恢复夹具](../../scripts/testdata/mmorpg/persistence/)共用本次唯一 DAO 库，各用自己的文件 WAL 根；定时器到期都由 Player 驱动自己的投递循环投递（`Driver.Start`，与进程装配同一入口），用例不手发 `Sync_TickPlayerTimer`、不调用 `DeliverDue`。业务时钟在两次推进之间冻结，循环按 MaxWait 重读时钟，所以投递次数是确定的，用例读 `entitytimer.delivered_total` / `redelivered_total` 的增量核对。关 Nest 前先停循环（`t.Cleanup` 里也会停）。
 
-- **证明**：交易、领奖事实与 Buff 定时器节点经文件 WAL / Mongo 两进程往返后不丢不重；恢复后的节点能按 Tick 正常到期。
-- **不证明**：驱动在加载后自动投递补触发（这一步由 `TestHostFiresAnOverdueTimerOnceAfterLoad` 与内存权威的 `TestEntityTimerGeneratedProjectEndToEnd` 覆盖，真实 Mongo 下尚未演练）；崩溃 / 断电注入——这是正常停机后的恢复。
+**正常停机两进程**（`TestMMORPGRealPersistenceAcrossProcesses`，[persistence_test.go](../../scripts/testdata/mmorpg/persistence/persistence_test.go)）：先后运行两个独立 `go test` 进程。第一个完成战斗、领奖、登记 Buff，停在交易单方确认后正常停机；第二个（业务时间 +1 小时）冷加载后核对单方确认已恢复，完成交易、重放击杀 / 掉落 / 任务领奖（不重复发放），核对冷加载已把 Buff 期限报告进驱动索引（`DueOf`），启动投递循环，由循环补触发一次离线到期的 Buff：Buff 清除，投递计数增量 1、重投 0，之后索引里不再有这个玩家。恢复来源是正常停机时已投影到 Mongo 的文档。
+
+**SIGKILL 崩溃恢复**（`TestMMORPGRealCrashRecovery`，[recovery_test.go](../../scripts/testdata/mmorpg/persistence/recovery_test.go)）：崩溃点选野外战斗进行中——买家在交易窗口开着时被怪物击倒、复活在计时；卖家击杀怪物、拾取并领了任务奖、刚上 Buff（计时中）；双方的托管交易已挂单、卖家已确认（卖家 1 件物品、买家 10 金币托管在 Trade 实体里）。选它是因为这是 MMORPG 最典型的在途组合：两种 Player 定时器节点同时在计时，托管资产不在任何一方背包里，战斗奖励已发。
+
+1. 子进程 strict 提交、关掉后台投影，断言恰有 12 条未投影记录（3 条种子 + 9 条业务命令）后写出屏障（四个实体的 DAO 持久字节与两个定时器节点 ID），被父进程 SIGKILL。
+2. 父进程用同一 WAL 与本次唯一库冷加载（业务时间 +1 小时）：四个实体逐字节一致，Buff（T0 + 2 秒）与复活（T0 + 3 秒）两个期限都在驱动索引里；用原参数重试战斗、拾取、领奖、挂单、卖家确认与复活，状态不变。
+3. 启动投递循环：两个过期玩家各补触发一次（Buff 清除、买家复活满血），计数增量 2。
+4. 交易已过 5 秒期限：服务内部按到期清理（actorID 0）退还托管资产，重试两次不重复退，买家迟到的确认被拒。
+5. 卖家重新上 Buff，新期限（当前业务时间 + 2 秒）入索引，期限之前不投递；业务时间推进到期限，循环按时投递一次（计数 3、重投 0）。
+6. 先停循环再关 Nest；第三个进程冷加载，核对四个实体字节不变、两个玩家都没有期限，再重放战斗 / 领奖 / 到期清理（原卖家确认、复活被拒），仍然不变。
+
+两个用例都必须实际通过且无 skip；成功后只删除本次唯一库，失败时保留并打印库名（`ROOST_MMORPG_KEEP=1` 时保留临时工程）。根包 `integration_coverage_test.go` 登记了这两个入口。去掉 `Start` 的对照运行两个用例都在补触发处超时失败。
+
+- **证明**：交易、托管、领奖事实与 Buff / 复活定时器节点在正常停机后（从 Mongo）和 SIGKILL 后（从未投影 WAL）都不丢不重；冷加载把存量期限报告进驱动索引，驱动投递循环在冷加载后自动给每个过期实体补触发一次，并按时投递下一个期限；跨进程重试不重复发奖、不重复退款。
+- **不证明**：提交在途 / 结果未知时的崩溃、断电、WAL 损坏；循环在系统时钟下的长时间计时（用例冻结业务时钟）、准入失败重试与 Redeliver（由 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd` 覆盖）；多进程 / 跨机与 Redis / NATS。
 
 ### 12. 多地图 TCP 纵切与单场景回归
 
@@ -270,4 +283,4 @@ bash scripts/test-mmorpg-cross-sid.sh
 
 ### 14. 验收范围小结
 
-已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不以本文清单的长度代替验收。
+已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复与 SIGKILL 崩溃恢复（定时器经驱动投递循环）、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不以本文清单的长度代替验收。

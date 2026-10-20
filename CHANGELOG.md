@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### MMORPG 真实依赖验收：定时器经投递循环，新增 SIGKILL 崩溃恢复（scripts/test-mmorpg-generated.sh）
+
+- `TestMMORPGRealPersistenceAcrossProcesses`（正常停机两进程）不再手发 `Sync_TickPlayerTimer`：第二进程冷加载后核对 Buff 期限已进驱动索引（`DueOf`），启动 Player 驱动的投递循环（`Driver.Start`，与进程装配同一入口），由循环补触发一次离线到期的 Buff（`delivered_total` 增量 1、`redelivered_total` 增量 0）；关 Nest 前先停循环。维护者 2026-10-20 批准。
+- 新增 `TestMMORPGRealCrashRecovery`（`ROOST_MMORPG_REAL=1`，需隔离 Mongo 副本集）：野外战斗在途——买家阵亡、复活计时，卖家击杀拾取领奖后上 Buff，托管交易卖家已确认——strict WAL 有 12 条未投影记录时 SIGKILL 子进程；冷加载后四个实体 DAO 字节与两个定时器 ID 一致、两个期限已进索引，原参数重试不变；投递循环给两个过期玩家各补触发一次（计数 2），到期交易退款一次、迟到确认被拒，重新上 Buff 后按时投递（计数 3、无重投）；第三个进程冷加载重放不重复发奖或退款。登记在根包 `integration_coverage_test.go`；脚本真实模式断言两个用例都 PASS、无 SKIP。去掉 `Start` 的对照运行两个用例都在补触发处超时失败。
+- 夹具修正：原恢复夹具忽略 `BuildEntityID` 的错误且没有注册 Scene 实体，地图 ID 实际为 0（同图校验恒成立）；现在注册 Scene 并检查错误。两个用例的公共装配（文件 WAL + Mongo Runtime、Nest、驱动接线、种子与只读视图 handler）放在 `scripts/testdata/mmorpg/persistence/persistence_test.go`。框架、生成器与 demo 未改；没有发现框架缺陷。范围见 MMORPG 手册 §11 与 KNOWN-LIMITS“MMORPG 接入验收的范围”。
+
 ### 合作生存撤离接入：学习手册与业务消费者（scripts/test-survival-extraction-generated.sh）
 
 - 新增 [合作生存撤离框架学习与验收](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-survival-extraction-generated.sh`：公共 CLI 生成 `game` 工程、Player / SurvivalRaid DAO 与 SurvivalRaid 实体定时器，业务规则只在 `scripts/testdata/survival-extraction`（框架、生成器与 demo 不含这些规则）：入场扣费与撤离兑付是两个多实体事务，局内采集、制作预扣与背包容量、环境伤害与治疗、死亡掉落与拾取竞争、撤离读条与封存清单都在探险实体内，整局物资守恒在加载与每次修改后校验，一个定时器节点取最早期限。12 条场景（4 条规则 + 8 条 Nest）全部 race、无 skip。
