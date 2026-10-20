@@ -1,6 +1,6 @@
 # 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P2（Go 客户端）、P3（C# SDK）已实施（实施记录与偏差见 §14），P4、P5 未完成。
+**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）、P2（Go 客户端）、P3（C# SDK）、P4（示例与验收）已实施（实施记录与偏差见 §14），P5（现行文档收口）未完成。
 
 维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
@@ -602,3 +602,34 @@ after a snapshot at frame 200 and pages 201..205: Next = 1, terminal = <nil>, ca
 
 - **经真实生成工程的快照恢复端到端**（§9 表 C# 行的最后一项）：`TestClientSDKAgainstGeneratedPlayerTCP` 的服务端夹具（`codegen/internal/roost/player_client_test.go` 内的 `clientSDKGeneratedTest`）里 Match 没有配 `SnapshotProvider`，要覆盖就得改这段 Go 夹具，超出 P3 只改 C# 的范围；留给 P4 与框架 Example 一起做。P3 的快照路径由金样（Go 编码器生成）+ 回环 TCP 用例覆盖。
 - Unity 编辑器 / IL2CPP 上未实测 `SHA256.Create`（与 README 现有“尚未在 Unity 编辑器 / IL2CPP 平台实测”的边界相同）。
+
+### P4 示例与验收（2026-10-20）
+
+只加示例、夹具、测试与证据，框架代码与生成器未改。
+
+- **框架示例**（[example_snapshot_test.go](../../framework/sync/lockstep/example_snapshot_test.go) 的 `Example_snapshotRecovery`，外部测试包，随 `go test ./...` 运行并核对输出）：两席确定性小模拟（整数位置，状态 hash 为编码的 FNV-1a）；房间 owner 每切一帧推进参考模拟、每 16 帧把参考状态编码后经 `atomic.Pointer[lockstep.Snapshot]` 发布，`checkpointCache.Snapshot` 只交出落在 `[MinFrame, MaxFrame]` 内的检查点（§8 原样）；席位 2 在第 20 帧后断线，第 200 帧后换会话重连、照常发 `OpCatchup(21)`（窗口 64 帧，历史起点 137），按 1ms Tick 推进到回到实时：恰好一次快照恢复、快照帧是检查点帧，席位 2、一直在线的席位 1 与参考模拟在头部状态相同。检查点缓存是示例里的业务代码，按 §12 第 10 条不导出。
+- **MOBA 夹具**（只改 `scripts/testdata/moba`）：[arena.go.txt](../../scripts/testdata/moba/arena.go.txt) 加 `Arena.Hash`（SHA-256 前 8 字节，同 `State.Hash`）、`RestoreArena`（严格解码：未知字段、尾随数据、版本或种子不符拒绝）、`ArenaCheckpoints`（检查点缓存，实现 `SnapshotProvider`，`Served` 计交出次数）；[arena_network_test.go.txt](../../scripts/testdata/moba/arena_network_test.go.txt) 把十个 KCP 会话的建立抽成 `newArenaKCP` / `connect`（原用例行为不变），新增 `TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect`：Match 窗口 64 帧、配 `ArenaCheckpoints`（每 16 帧发布）；席位 2、8（各属一队）在第 40 帧后 `DetachSession` 并关掉 KCP 会话，第 296 帧前（4 个窗口后）换新会话 `Attach`、照常从第 41 帧请求追帧（此时历史起点 232）；恢复中的玩家不提交输入，快照与历史页非阻塞收取，追到当前帧后改回逐帧等待实时广播；断言两人各恢复一次、快照帧是检查点帧、两个等快照的会话共用一次取快照（`Served() == 1`）、局末（第 360 帧）十人与服务器参考同摘要。`scripts/test-moba-generated.sh` 的 PASS 断言 25 → 26。实测两人都从第 288 帧的检查点恢复。
+- **生成工程 C# 端到端**（P3 留下的项）：[player_client_test.go](../../codegen/internal/roost/player_client_test.go) 的 `clientSDKGeneratedTest` 服务端夹具给 Match 配 `HistoryRetainFrames` 64 与检查点 Provider：服务器参考模拟是输入链 hash（`robot.FrameHasher`，与 C# `LockstepInputHasher` 同一算法），每 8 帧发布一份 40 KiB 检查点（前 16 字节为帧号与链值，其余是可推导的填充，经真实 TCP 分 3 块）；夹具隐藏下行的函数放行 CA / C9（原来对所有包都按 C7 解码）。新 PB 触发：44 = 断线期间切 200 帧并丢弃全部下行，45 = 按 5ms 周期切帧直到座位回到实时，46 = 核对客户端在头部上报的链值。C#（[LockstepTests.cs](../../client/dotnet/Roost.Client.Tests/LockstepTests.cs) `GeneratedLockstepSnapshot`）：原有流程后发 44，关闭会话、重新登录，新建带 `restore` 的 `LockstepClient`（新实例从第 1 帧开始），提交下一帧输入、收到实时帧即发现缺口并请求追帧，发 45，消费到头部：恰好一次恢复、快照帧是检查点帧、之后的帧连续且只应用一次，上报的链值与服务器参考一致（C# 侧经 46 核对，Go 侧在 C# 进程退出后再核对一次）。实测：断线到第 212 帧，从第 208 帧的检查点恢复，头部第 216 帧。
+- **toxiproxy 限速演练**：证据放 [docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)（夹具与原始日志在 `docs/performance/benchmarks/lockstep-snapshot-p4-toxiproxy-20261020/`），本篇只记结论。嵌入 TCP：256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 快照都恢复成功、连接不断，客户端传输耗时与“大小 / 速率”之比 1.00～1.04；64 KB/s 下个别批次超过 `CatchupSendTimeout` 后从已确认偏移重发（不影响结果）。独立 Gate（只准入，缺省 16 KiB/Tick 约 492 KB/s）：64 KB/s（1 MiB）与 256 KB/s（4 MiB）下每次连接都在同一位置被 Gate 断开、重连后从头再传，三次都没恢复——§6.3 风险 1 实测成立；256 KB/s（1 MiB）恢复成功。
+
+修前红（新功能没有修前缺陷，取“同一场景去掉快照来源、其余不变”在当前代码上的行为，原文）：
+
+```text
+Example_snapshotRecovery:  panic: lockstep match: catch-up range trimmed from history: from 21, history starts at 137
+MOBA:  arena_network_test.go:371: player 2 3 from frame 41: lockstep match: catch-up range trimmed from history: from 41, history starts at 232
+生成工程服务端：WARN player tcp dispatch failed player_id=7 message_id=50001 sequence=3 over_budget=false err="lockstep match: catch-up range trimmed from history: from 1, history starts at 150"
+C#：Unhandled exception. System.IO.IOException: Unable to read data from the transport connection: Connection reset by peer.（at Program.GeneratedLockstepSnapshot ... LockstepTests.cs:line 276）
+```
+
+即 catchup 模式下越界请求在 `HandleCommand` 处以 `ErrCatchupUnservable` 失败（MOBA 的 `3` 是 `OpCatchup` 的数值）；生成工程的 handler 把这个错误返回给接入层，连接被关，C# 在下一次请求时看到连接被重置。
+
+与草案的偏差与说明：
+
+1. **MOBA 的快照来源接在 KCP 场景直接驱动的 Match 上，不接 `Room`**：`Room` 的 Match 只有一个暂存 datagram 的发送器，广播要等权威 Sender 确认提交后才发（§5.6）；配快照必须给它可靠通道，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，会绕过“先提交、再广播”这道门（可能发出尚未提交的帧）。§8 已把“Room 是否改为 auto + 可靠通道、去掉业务 replay 分页”列为夹具自己的取舍、本期不强制；接法要另行设计，本期不做。
+2. **演练用共享隔离环境的 toxiproxy**（§9 表写的是 `mirror-local.sh` 私有实例）：按本期任务要求，持 `remote-acceptance.lock`、只建带 `lsp4-` 前缀的临时代理、用完删除，演练后代理列表与演练前相同。
+3. **独立 Gate 的断开方式与 §6.3 写法不同**：实测是 Gate 写 socket 时写期限到期（`player tcp: connection cannot take the frame: writev ...: i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是出站积压超过 `max_age` 250ms；是 5s `write_timeout` 还是该帧剩余发送预算先到期，这次没有区分（尚未确认）。“链路速度低于 `UnpacedBytesPerTick × 帧率` 即断开”也不准确：1 MiB / 256 KB/s 低于预算却传完了（超出部分被缓冲吸收），4 MiB / 256 KB/s 才断开。§6.3 的正文留给 P5 按实测改写。
+4. **框架看不出独立 Gate 下的反复重来**：Gate 断开后 Game 的 `OnClosed` 调 `DetachSession`，`Detach` 丢掉进行中的恢复时不计任何指标，`lockstep.snapshot.failed.total` 不动，只有 `lockstep.snapshot.total{reason="out_of_window"}` 每次重连 +1（不分会话）。§6.3 写的“计数 `failed{abandoned}` 与同一会话的重复快照次数”现状只能间接看出后一项。是否在“恢复进行中被 Detach”时计一次失败（例如新原因 `detached`），交维护者决定。
+5. **嵌入 TCP 的“写出”是写进本机 socket 发送缓冲**：服务端认为恢复结束时，客户端可能还差 1 MB 以上（本机发送缓冲自动增长上限 4 MiB，加代理缓冲）；之后的实时帧排在这些字节后面，客户端在链路排空后才回到头部。没有断连、没有丢帧，只是慢链路玩家恢复后头几秒的实时延迟等于排空时间（推断，见演练报告 §2）。
+6. **C# 重连即新实例**：`LockstepClient` 绑定一个 `TcpSession`，重新登录后业务要新建实例，组装器从第 1 帧开始；窗口内会从第 1 帧追帧（业务须先把模拟状态重置到开局），越界才走快照。端到端用例走的是越界路径。P5 写 client README 时要讲清这一点。
+
+留给 P5：guide / impl 04、SYNC-OPTIMIZATION、client README、OBSERVABILITY、GATEWAY 的现行说明；MOBA-INTEGRATION 第一部分（§4.4 场景表加第 26 条、标题“二十五个”，§5.7 / §6 讲快照恢复与 `Room` 未接的原因），本期只改了第二部分验收；KNOWN-LIMITS“Lockstep 追帧链路背压（独立 Gate）”按演练实测补数据，本期只改了游戏接入验收表的 MOBA 行；§6.3 按上面第 3、4 条改写；D1 收口。

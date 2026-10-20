@@ -5,15 +5,22 @@ import (
 	"context"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	kcp "github.com/xtaci/kcp-go/v5"
 	"testing"
 	"time"
 )
 
-// 真实 loopback KCP：固定测试凭据建立会话，输入经可靠通道，广播经 datagram，追帧经可靠通道。
-// 这是网络 / 模拟验收，不把固定绑定说成真实账号认证，也不据此声明跨机延迟或容量。
-func TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+// arenaKCP 是真实 loopback KCP 的服务端一侧：固定测试凭据建立会话，输入经可靠通道，广播经 datagram，
+// 追帧页与快照分块经可靠通道。
+type arenaKCP struct {
+	ctx      context.Context
+	key      []byte
+	listener *kcp.Listener
+	server   *nettransport.KCPTransport
+}
+
+func newArenaKCP(t *testing.T, ctx context.Context) *arenaKCP {
+	t.Helper()
 	key := bytes.Repeat([]byte{7}, 32)
 	crypt, err := nettransport.NewKCPAESGCM(key)
 	if err != nil {
@@ -23,80 +30,94 @@ func TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() { listener.Close() })
 	server, err := nettransport.NewKCPTransport(nettransport.KCPTransportConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	t.Cleanup(func() { server.Close() })
+	return &arenaKCP{ctx: ctx, key: key, listener: listener, server: server}
+}
+
+// connect 建立一条新会话：两端绑定同一 SessionID，客户端收到的 datagram 与可靠包按到达顺序进 inbox。
+func (n *arenaKCP) connect(t *testing.T, id nettransport.SessionID) (*nettransport.KCPTransport, chan []byte) {
+	t.Helper()
+	ctx := n.ctx
+	inbox := make(chan []byte, 128)
+	cipher, err := nettransport.NewKCPAESGCM(n.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := nettransport.DialKCP(n.listener.Addr().String(), cipher, 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if _, err := connection.Write([]byte("moba-test")); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetWriteDeadline(time.Time{})
+	accepted, err := n.listener.AcceptKCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = accepted.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := accepted.Read(make([]byte, 32)); err != nil {
+		t.Fatal(err)
+	}
+	_ = accepted.SetReadDeadline(time.Time{})
+	if err := n.server.BindSession(id, accepted); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.server.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	client, err := nettransport.NewKCPTransport(nettransport.KCPTransportConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	if err := client.BindSession(id, connection); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.BindDatagramHandler(id, func(_ nettransport.SessionID, raw []byte) {
+		select {
+		case inbox <- raw:
+		case <-ctx.Done():
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			page, err := client.ReceiveReliable(ctx, id)
+			if err != nil {
+				return
+			}
+			select {
+			case inbox <- page:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return client, inbox
+}
+
+// 真实 loopback KCP：固定测试凭据建立会话，输入经可靠通道，广播经 datagram，追帧经可靠通道。
+// 这是网络 / 模拟验收，不把固定绑定说成真实账号认证，也不据此声明跨机延迟或容量。
+func TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	network := newArenaKCP(t, ctx)
+	server := network.server
 	clients := make([]*nettransport.KCPTransport, ArenaSeats)
 	inboxes := make([]chan []byte, ArenaSeats)
-	for i := range inboxes {
-		inboxes[i] = make(chan []byte, 128)
-	}
 	for i := range ArenaSeats {
-		id := nettransport.SessionID(101 + i)
-		cipher, err := nettransport.NewKCPAESGCM(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		connection, err := nettransport.DialKCP(listener.Addr().String(), cipher, 10, 3)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = connection.SetWriteDeadline(time.Now().Add(2 * time.Second))
-		if _, err := connection.Write([]byte("moba-test")); err != nil {
-			t.Fatal(err)
-		}
-		_ = connection.SetWriteDeadline(time.Time{})
-		accepted, err := listener.AcceptKCP()
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = accepted.SetReadDeadline(time.Now().Add(2 * time.Second))
-		if _, err := accepted.Read(make([]byte, 32)); err != nil {
-			t.Fatal(err)
-		}
-		_ = accepted.SetReadDeadline(time.Time{})
-		if err := server.BindSession(id, accepted); err != nil {
-			t.Fatal(err)
-		}
-		if err := server.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
-			t.Fatal(err)
-		}
-		client, err := nettransport.NewKCPTransport(nettransport.KCPTransportConfig{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		clients[i] = client
-		defer client.Close()
-		if err := client.BindSession(id, connection); err != nil {
-			t.Fatal(err)
-		}
-		if err := client.RegisterSession(nettransport.SessionInfo{ID: id}); err != nil {
-			t.Fatal(err)
-		}
-		if err := client.BindDatagramHandler(id, func(_ nettransport.SessionID, raw []byte) {
-			select {
-			case inboxes[i] <- raw:
-			case <-ctx.Done():
-			}
-		}); err != nil {
-			t.Fatal(err)
-		}
-		go func() {
-			for {
-				page, err := client.ReceiveReliable(ctx, id)
-				if err != nil {
-					return
-				}
-				select {
-				case inboxes[i] <- page:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
+		clients[i], inboxes[i] = network.connect(t, nettransport.SessionID(101+i))
 	}
 	seats := make([]lockstep.PlayerID, ArenaSeats)
 	for i := range seats {
@@ -202,6 +223,228 @@ func TestMOBAFiveVFiveKCPClientsConvergeAfterCatchup(t *testing.T) {
 	for i, s := range states {
 		if s.Digest() != reference.Digest() {
 			t.Fatalf("KCP player %d diverged tick=%d/%d", i, s.Tick, reference.Tick)
+		}
+	}
+}
+
+// 长断线恢复：两名玩家（各属一队）断线 4 个历史窗口后换新 KCP 会话重连，照常请求从缺的第一帧追帧。
+// 起点早已被裁掉；Match 配了服务器参考模拟的检查点（ArenaCheckpoints）作快照来源，Recovery 零值即 auto，
+// 于是改发 Arena 检查点、从检查点帧 +1 续发历史页、追到头后接回实时广播。验收：两人各恢复一次、
+// 两个等快照的会话共用一次取快照，局末十个客户端与服务器参考模拟同摘要。
+// 没有快照来源时（catchup 模式）同一请求以 ErrCatchupUnservable 失败，客户端只能终止本场。
+func TestMOBAFiveVFiveKCPClientsRecoverFromSnapshotAfterLongDisconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const (
+		window       = lockstep.FrameID(lockstep.MinHistoryRetainFrames)
+		checkpointK  = 16
+		disconnectAt = lockstep.FrameID(40)
+		reconnectAt  = disconnectAt + 4*window
+		endAt        = reconnectAt + 64
+	)
+	network := newArenaKCP(t, ctx)
+	server := network.server
+	type seatClient struct {
+		transport  *nettransport.KCPTransport
+		inbox      chan []byte
+		session    nettransport.SessionID
+		assembler  *lockstep.FrameAssembler
+		state      *Arena
+		online     bool
+		recovering bool
+		restored   []lockstep.FrameID
+	}
+	players := make([]*seatClient, ArenaSeats)
+	for i := range players {
+		session := nettransport.SessionID(101 + i)
+		transport, inbox := network.connect(t, session)
+		players[i] = &seatClient{transport: transport, inbox: inbox, session: session, assembler: lockstep.NewFrameAssembler(128), state: NewArena(42), online: true}
+	}
+	seats := make([]lockstep.PlayerID, ArenaSeats)
+	for i := range seats {
+		seats[i] = lockstep.PlayerID(i + 1)
+	}
+	checkpoints := &ArenaCheckpoints{}
+	m, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer: lockstep.SequencerConfig{Players: seats, SubmitWindow: 8, MaxInputBytes: 4}, Datagrams: server, Reliable: server,
+		CatchupBatchFrames: 16, CatchupSendWait: 100 * time.Millisecond, HistoryRetainFrames: int(window),
+		Snapshots: lockstep.SnapshotConfig{Provider: checkpoints},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for i, p := range players {
+		if err := m.Attach(lockstep.PlayerID(i+1), p.session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := func(i int, c lockstep.Command) {
+		t.Helper()
+		p := players[i]
+		raw, err := lockstep.EncodeCommand(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.transport.SendReliable(ctx, p.session, raw); err != nil {
+			t.Fatal(err)
+		}
+		received, err := server.ReceiveReliable(ctx, p.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command, err := lockstep.DecodeCommand(received)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Operation == lockstep.OpInput {
+			_, err = DecodeArena(command.Payload)
+		}
+		if err == nil {
+			err = m.HandleCommand(p.session, command)
+		}
+		if err != nil {
+			t.Fatalf("player %d %v from frame %d: %v", i+1, command.Operation, command.Frame, err)
+		}
+	}
+	// deliver 把一个下行包交给客户端：快照到齐后用 RestoreArena 替换本地状态并核对状态 hash，再从快照帧 +1 续帧。
+	deliver := func(i int, packet []byte) {
+		t.Helper()
+		p := players[i]
+		delivery, err := p.assembler.Receive(packet)
+		if err != nil {
+			t.Fatalf("player %d: %v", i+1, err)
+		}
+		if s := delivery.Snapshot; s != nil {
+			restored, err := RestoreArena(s.Data, 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !s.HasStateHash || restored.Hash() != s.StateHash || restored.Tick != s.Frame {
+				t.Fatalf("player %d snapshot frame %d tick %d hash %d want %d", i+1, s.Frame, restored.Tick, restored.Hash(), s.StateHash)
+			}
+			p.state = restored
+			p.restored = append(p.restored, s.Frame)
+			p.assembler.ResumeAfterSnapshot(s.Frame)
+		}
+		for _, f := range delivery.Frames {
+			if err := p.state.Apply(f); err != nil {
+				t.Fatalf("player %d frame %d: %v", i+1, f.ID, err)
+			}
+		}
+	}
+	latest := func(packet []byte) lockstep.FrameID {
+		if lockstep.IsSnapshotChunk(packet) || lockstep.IsCatchupNotice(packet) {
+			return 0
+		}
+		frames, err := lockstep.DecodeBroadcast(packet)
+		if err != nil || len(frames) == 0 {
+			t.Fatalf("network packet: %v", err)
+		}
+		return frames[len(frames)-1].ID
+	}
+	away := []int{1, 7}
+	reference := NewArena(42)
+	historyStart := lockstep.FrameID(0)
+	for id := lockstep.FrameID(1); ; id++ {
+		if id > MaxFrames-1 {
+			t.Fatal("players did not recover before the arena time limit")
+		}
+		switch id {
+		case disconnectAt + 1:
+			for _, i := range away {
+				p := players[i]
+				m.DetachSession(lockstep.PlayerID(i+1), p.session)
+				p.online = false
+				_ = p.transport.Close()
+				server.RemoveSession(p.session)
+			}
+		case reconnectAt:
+			for _, i := range away {
+				p := players[i]
+				p.session = nettransport.SessionID(201 + i)
+				p.transport, p.inbox = network.connect(t, p.session)
+				if err := m.Attach(lockstep.PlayerID(i+1), p.session); err != nil {
+					t.Fatal(err)
+				}
+				p.online, p.recovering = true, true
+				send(i, lockstep.Command{Operation: lockstep.OpCatchup, Frame: p.assembler.Next()})
+			}
+			if historyStart = m.History().FirstID(); players[away[0]].assembler.Next() >= historyStart {
+				t.Fatalf("reconnect at %d: request %d is still inside the window starting at %d", id, players[away[0]].assembler.Next(), historyStart)
+			}
+		}
+		// 恢复中的玩家还没回到当前局面，不提交输入（真实客户端同样先追上再操作）。
+		for i, p := range players {
+			if p.online && !p.recovering {
+				send(i, lockstep.Command{Operation: lockstep.OpInput, Frame: id, Payload: arenaBot(id, i)})
+			}
+		}
+		frame, err := m.Tick(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reference.Apply(frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.ID%checkpointK == 0 {
+			checkpoints.Publish(reference)
+		}
+		recovering := false
+		for i, p := range players {
+			switch {
+			case !p.online:
+			case p.recovering:
+				// 快照分块与历史页经可靠通道到达，非阻塞收取；追到当前帧后改回逐帧等待实时广播。
+				for drained := false; !drained; {
+					select {
+					case packet := <-p.inbox:
+						deliver(i, packet)
+					default:
+						drained = true
+					}
+				}
+				if p.assembler.Next() > id && !p.assembler.SnapshotInProgress() {
+					p.recovering = false
+				} else {
+					recovering = true
+				}
+			default:
+				for {
+					var packet []byte
+					select {
+					case packet = <-p.inbox:
+					case <-ctx.Done():
+						t.Fatalf("player %d waiting for frame %d: %v", i+1, id, ctx.Err())
+					}
+					deliver(i, packet)
+					if latest(packet) >= id {
+						break
+					}
+				}
+				if p.assembler.Next() <= id {
+					t.Fatalf("player %d has a gap at %d after live frame %d", i+1, p.assembler.Next(), id)
+				}
+			}
+		}
+		if id >= endAt && !recovering {
+			break
+		}
+	}
+	for _, i := range away {
+		p := players[i]
+		if len(p.restored) != 1 || p.restored[0]%checkpointK != 0 || p.restored[0] < reconnectAt-window {
+			t.Fatalf("player %d restored from %v", i+1, p.restored)
+		}
+	}
+	t.Logf("reconnected before frame %d asking from frame %d (history starts at %d); players %d and %d restored from checkpoints %v / %v; all ten match the reference at frame %d",
+		reconnectAt, disconnectAt+1, historyStart, away[0]+1, away[1]+1, players[away[0]].restored, players[away[1]].restored, reference.Tick)
+	if served := checkpoints.Served(); served != 1 {
+		t.Fatalf("checkpoint served %d times; two waiting sessions should share one fetch", served)
+	}
+	for i, p := range players {
+		if p.state.Tick != reference.Tick || p.state.Digest() != reference.Digest() {
+			t.Fatalf("KCP player %d diverged tick=%d/%d", i+1, p.state.Tick, reference.Tick)
 		}
 	}
 }

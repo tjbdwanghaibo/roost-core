@@ -1,0 +1,249 @@
+//go:build lsdrill
+
+package lockstep_test
+
+// 一次性功能演练（不是性能基线、不提交为常驻用例）：嵌入 TCP 经 toxiproxy 限速链路传快照。
+// 用法：source 共享隔离环境 env.sh、持 remote-acceptance.lock 后
+//   LS_DRILL_RATES=256,64 GOWORK=off go test -tags lsdrill -count=1 -v -run TestSnapshotDrillEmbeddedTCP ./framework/sync/lockstep
+// 代理名带 lsp4 前缀与进程号，用完删除；不碰环境里已有的代理。
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+)
+
+func drillToxiproxy(t *testing.T, api, name, upstream string, rateKB int) string {
+	t.Helper()
+	call := func(method, path string, body any) []byte {
+		raw, _ := json.Marshal(body)
+		request, err := http.NewRequest(method, api+path, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var out bytes.Buffer
+		_, _ = out.ReadFrom(response.Body)
+		if response.StatusCode/100 != 2 {
+			t.Fatalf("toxiproxy %s %s: %d %s", method, path, response.StatusCode, out.String())
+		}
+		return out.Bytes()
+	}
+	created := call(http.MethodPost, "/proxies", map[string]any{"name": name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+	t.Cleanup(func() { call(http.MethodDelete, "/proxies/"+name, nil) })
+	var proxy struct{ Listen string }
+	if err := json.Unmarshal(created, &proxy); err != nil {
+		t.Fatal(err)
+	}
+	if rateKB > 0 {
+		call(http.MethodPost, "/proxies/"+name+"/toxics", map[string]any{"name": "bw", "type": "bandwidth", "stream": "downstream", "toxicity": 1, "attributes": map[string]int{"rate": rateKB}})
+	}
+	return proxy.Listen
+}
+
+func drillRates(t *testing.T) []int {
+	var rates []int
+	for _, field := range strings.Split(os.Getenv("LS_DRILL_RATES"), ",") {
+		rate, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil {
+			t.Fatalf("LS_DRILL_RATES: %v", err)
+		}
+		rates = append(rates, rate)
+	}
+	return rates
+}
+
+func TestSnapshotDrillEmbeddedTCP(t *testing.T) {
+	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
+	if api == "" || os.Getenv("LS_DRILL_RATES") == "" {
+		t.Skip("toxiproxy drill not configured")
+	}
+	for _, rate := range drillRates(t) {
+		t.Run(fmt.Sprintf("rate%dKBps", rate), func(t *testing.T) { snapshotDrillEmbeddedTCP(t, api, rate) })
+	}
+}
+
+func snapshotDrillEmbeddedTCP(t *testing.T, api string, rateKB int) {
+	const (
+		tickPeriod    = time.Second / 30
+		prebuilt      = lockstep.DefaultHistoryRetainFrames + 100
+	)
+	server := newTCPLockstepServer(t, gateway.DefaultTCPConfig().WriteTimeout, map[string]int64{"slow": 1})
+	sender := tcpLockstepSender(t, server.runtime, map[nettransport.SessionID]string{1: "slow"})
+	snapshotBytes := 1 << 20
+	if size, err := strconv.Atoi(os.Getenv("LS_DRILL_SNAPSHOT_BYTES")); err == nil && size > 0 {
+		snapshotBytes = size
+	}
+	data := bytes.Repeat([]byte("roost-lockstep-snapshot-drill-"), snapshotBytes/30+1)[:snapshotBytes]
+	var served atomic.Int64
+	provider := lockstep.SnapshotProviderFunc(func(_ context.Context, req lockstep.SnapshotRequest) (lockstep.Snapshot, error) {
+		served.Add(1)
+		return lockstep.Snapshot{Frame: req.MaxFrame, Data: data, StateHash: uint64(req.MaxFrame), HasStateHash: true}, nil
+	})
+	// 全部取缺省（窗口 3600、钉住 3600、64 KiB/Tick、16 KiB 分块、2s 发送时限），只配快照来源。
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}, MaxInputBytes: 8},
+		Datagrams: sender, Reliable: sender, Snapshots: lockstep.SnapshotConfig{Provider: provider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+	for range prebuilt {
+		if _, err := match.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := fmt.Sprintf("lsp4-embedded-%d-%d", os.Getpid(), rateKB)
+	listen := drillToxiproxy(t, api, name, server.server.Addr().String(), rateKB)
+	connection, err := net.Dial("tcp", listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := wire.Write(connection, []*wire.Packet{{Seq: 1, Payload: []byte("slow")}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if ack, err := wire.Read(connection, 0); err != nil || ack.MsgID != 0 {
+		t.Fatalf("auth through proxy: %+v %v", ack, err)
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	for deadline := time.Now().Add(2 * time.Second); server.runtime.ActiveSessions(1) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("session never registered")
+		}
+	}
+	type progress struct {
+		firstChunk, complete time.Time
+		chunks, bytes        int
+		snapshotFrame        lockstep.FrameID
+	}
+	var next atomic.Uint64
+	var readErr atomic.Pointer[error]
+	result := make(chan progress, 1)
+	go func() {
+		var p progress
+		defer func() { result <- p }()
+		assembler := lockstep.NewFrameAssembler(0)
+		for {
+			packet, err := wire.Read(connection, 0)
+			if err != nil {
+				readErr.Store(&err)
+				return
+			}
+			if packet.MsgID != tcpLockstepMessageID {
+				continue
+			}
+			if lockstep.IsSnapshotChunk(packet.Payload) {
+				if p.chunks == 0 {
+					p.firstChunk = time.Now()
+				}
+				p.chunks++
+				p.bytes += len(packet.Payload)
+			}
+			delivery, err := assembler.Receive(packet.Payload)
+			if err != nil {
+				readErr.Store(&err)
+				return
+			}
+			if delivery.Snapshot != nil {
+				p.complete, p.snapshotFrame = time.Now(), delivery.Snapshot.Frame
+				if !bytes.Equal(delivery.Snapshot.Data, data) {
+					err := fmt.Errorf("snapshot bytes differ")
+					readErr.Store(&err)
+					return
+				}
+				assembler.ResumeAfterSnapshot(delivery.Snapshot.Frame)
+			}
+			next.Store(uint64(assembler.Next()))
+		}
+	}()
+	if err := match.Attach(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	before := metrics.Snapshot()
+	start := time.Now()
+	// 客户端重启、本地状态为空：从第 1 帧请求，起点早已裁掉，auto 走快照。
+	if err := match.StartCatchup(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(tickPeriod)
+	defer ticker.Stop()
+	var serverDone time.Duration
+	var lastFrame lockstep.FrameID
+	tickErrors := 0
+	var lastTickErr error
+	seen := map[string]bool{}
+	closed := false
+	for {
+		<-ticker.C
+		frame, err := match.Tick(context.Background())
+		lastFrame = frame.ID
+		if err != nil {
+			tickErrors++
+			lastTickErr = err
+		}
+		if serverDone == 0 && !match.CatchingUp(1) {
+			serverDone = time.Since(start)
+		}
+		if server.sessionClosed("slow", seen) {
+			closed = true
+			break
+		}
+		if serverDone != 0 && next.Load() >= uint64(frame.ID) { // 本 Tick 的实时帧刚入队，客户端追到上一帧即算回到头部
+			break
+		}
+		if readErr.Load() != nil || time.Since(start) > 150*time.Second {
+			break
+		}
+	}
+	elapsed := time.Since(start)
+	_ = connection.Close()
+	p := <-result
+	after := metrics.Snapshot()
+	var clientErr error
+	if e := readErr.Load(); e != nil {
+		clientErr = *e
+	}
+	transfer := p.complete.Sub(p.firstChunk)
+	expect := time.Duration(float64(snapshotBytes) / float64(rateKB*1000) * float64(time.Second))
+	t.Logf("rate %d KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot %d B in %d chunks (%d wire bytes) at frame %d; client first-chunk->complete %v (size/rate %v, ratio %.2f); server request->live %v; client caught up to head after %v; session closed %v; Tick errors %d (last %v); provider calls %d; client read end: %v; client next %d, head %d",
+		rateKB, snapshotBytes, p.chunks, p.bytes, p.snapshotFrame, transfer.Round(time.Millisecond), expect.Round(time.Millisecond), float64(transfer)/float64(expect), serverDone.Round(time.Millisecond), elapsed.Round(time.Millisecond), closed, tickErrors, lastTickErr, served.Load(), clientErr, next.Load(), lastFrame)
+	for _, name := range []string{"lockstep.snapshot.total", "lockstep.snapshot.bytes.total", "lockstep.snapshot.failed.total", "lockstep.catchup.unservable.total"} {
+		t.Logf("metric %s: %v -> %v", name, drillMetric(before, name), drillMetric(after, name))
+	}
+	if closed || p.snapshotFrame == 0 || serverDone == 0 {
+		t.Errorf("drill did not recover: closed %v snapshot frame %d", closed, p.snapshotFrame)
+	}
+}
+
+func drillMetric(snapshot []metrics.Metric, name string) []string {
+	var out []string
+	for _, metric := range snapshot {
+		if metric.Name == name {
+			out = append(out, fmt.Sprintf("%v=%d", metric.Labels, metric.Value))
+		}
+	}
+	return out
+}

@@ -224,6 +224,74 @@ internal static partial class Program
         Console.WriteLine("PASS generated TCP Lockstep input/hash/gap/catchup/seat/terminal simulation");
     }
 
+    // AddExpResponse 只有 levels_gained（字段 3，varint）；夹具用它回帧号或核对结果。
+    private static uint LevelsGained(Packet reply)
+    {
+        var data = reply.Payload.Span;
+        Check(data.Length >= 2 && data[0] == 24, "AddExpResponse levels_gained");
+        uint value = 0; int shift = 0;
+        for (int i = 1; i < data.Length; i++, shift += 7)
+        {
+            value |= (uint)(data[i] & 0x7f) << shift;
+            if ((data[i] & 0x80) == 0) return value;
+        }
+        throw new InvalidDataException("truncated varint");
+    }
+
+    // 经真实生成工程TCP的快照恢复：客户端断线超过服务端历史窗口（64帧）后重新登录，新实例照常从第1帧请求追帧；
+    // 起点早已被裁掉，服务端（auto）改发服务器参考模拟的检查点（40 KiB、多块），restore替换输入链状态并核对
+    // 状态hash，从检查点帧+1续帧到头部，最后上报的链值与服务器参考一致。
+    private static async Task GeneratedLockstepSnapshot(TcpSession old, string host, int port)
+    {
+        // 44：断线期间服务端切200帧，夹具丢弃这些下行；随后真实断开并重新登录。
+        uint offlineHead = LevelsGained(await old.RequestAsync(42, 43, new byte[] { 8, 44 }, TimeSpan.FromSeconds(10)));
+        Check(offlineHead > 12 + 64, "offline beyond the history window");
+        old.Dispose();
+        using var session = await TcpSession.ConnectAsync(host, port, "ticket", TimeSpan.FromSeconds(10));
+        var hasher = new LockstepInputHasher();
+        LockstepSnapshot? restored = null;
+        var applied = new List<uint>();
+        var client = new LockstepClient(session, 50001, 50002, TimeSpan.FromSeconds(5), restore: snapshot =>
+        {
+            var data = snapshot.Data.Span;
+            Check(data.Length == 40 << 10 && BitConverter.ToUInt64(data.Slice(0, 8).ToArray(), 0) == snapshot.Frame, "checkpoint frame");
+            for (int i = 16; i < data.Length; i++) Check(data[i] == (byte)(i * 31 + (int)snapshot.Frame), "checkpoint padding");
+            restored = snapshot;
+            hasher.Reset(BitConverter.ToUInt64(data.Slice(8, 8).ToArray(), 0));
+            return hasher.Value;
+        });
+        Action<LockstepFrame> simulate = frame => { applied.Add(frame.Id); hasher.Apply(frame); };
+        // 新实例从第1帧开始：收到下一帧的实时广播即发现缺口并请求追帧（OpCatchup 1）。
+        await client.SubmitInputAsync(offlineHead + 1, new byte[] { 5 });
+        using (var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            while (client.Next == 1 && applied.Count == 0)
+            {
+                budget.Token.ThrowIfCancellationRequested();
+                if (session.TryDequeuePush(out var packet)) { await client.HandlePushAsync(packet!, simulate, budget.Token); break; }
+                await Task.Yield();
+            }
+        }
+        // 45：服务端按5ms周期切帧直到座位回到实时，回最新帧号。
+        uint head = LevelsGained(await session.RequestAsync(42, 43, new byte[] { 8, 45 }, TimeSpan.FromSeconds(10)));
+        using (var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            while (client.Next <= head)
+            {
+                budget.Token.ThrowIfCancellationRequested();
+                if (session.TryDequeuePush(out var packet)) await client.HandlePushAsync(packet!, simulate, budget.Token);
+                else await Task.Yield();
+            }
+        }
+        Check(client.Failure == null && client.SnapshotsRestored == 1 && restored != null, "restored once");
+        Check(restored!.Frame % 8 == 0 && restored.Frame > offlineHead - 64 && restored.HasStateHash, "restored from a server checkpoint");
+        Check(applied.Count == head - restored.Frame, "frames after the checkpoint applied once");
+        for (int i = 0; i < applied.Count; i++) Check(applied[i] == restored.Frame + 1 + (uint)i, "continuous frames after the snapshot");
+        await client.ReportHashAsync(head, hasher.Value);
+        Check(LevelsGained(await session.RequestAsync(42, 43, new byte[] { 8, 46 }, TimeSpan.FromSeconds(10))) == 1, "chain hash matches the server reference");
+        Console.WriteLine($"PASS generated TCP Lockstep snapshot recovery (offline to frame {offlineHead}, checkpoint {restored.Frame}, head {head})");
+    }
+
     private static async Task LockstepGapRetry()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();

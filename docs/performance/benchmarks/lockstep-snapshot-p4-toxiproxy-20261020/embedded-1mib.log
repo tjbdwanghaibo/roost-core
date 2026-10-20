@@ -1,0 +1,28 @@
+=== RUN   TestSnapshotDrillEmbeddedTCP
+=== RUN   TestSnapshotDrillEmbeddedTCP/rate0KBps
+2026/10/20 16:37:36 INFO player tcp listener started addr=127.0.0.1:64029 max_connections=10000
+    snapshot_drill_test.go:228: rate 0 KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot 1048576 B in 64 chunks (1048998 wire bytes) at frame 3701; client first-chunk->complete 501ms (size/rate 2562047h47m16.854775807s, ratio 0.00); server request->live 602ms; client caught up to head after 634ms; session closed false; Tick errors 0 (last <nil>); provider calls 1; client read end: read tcp 127.0.0.1:64032->127.0.0.1:64031: use of closed network connection; client next 3719, head 3719
+    snapshot_drill_test.go:231: metric lockstep.snapshot.total: [] -> [map[reason:out_of_window]=1]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.bytes.total: [] -> [map[]=1048576]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.failed.total: [] -> []
+    snapshot_drill_test.go:231: metric lockstep.catchup.unservable.total: [] -> []
+=== RUN   TestSnapshotDrillEmbeddedTCP/rate256KBps
+2026/10/20 16:37:37 INFO player tcp listener started addr=127.0.0.1:64034 max_connections=10000
+    snapshot_drill_test.go:228: rate 256 KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot 1048576 B in 64 chunks (1048998 wire bytes) at frame 3701; client first-chunk->complete 4.076s (size/rate 4.096s, ratio 1.00); server request->live 968ms; client caught up to head after 4.234s; session closed false; Tick errors 0 (last <nil>); provider calls 1; client read end: read tcp 127.0.0.1:64036->127.0.0.1:64035: use of closed network connection; client next 3827, head 3827
+    snapshot_drill_test.go:231: metric lockstep.snapshot.total: [map[reason:out_of_window]=1] -> [map[reason:out_of_window]=2]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.bytes.total: [map[]=1048576] -> [map[]=2097152]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.failed.total: [] -> []
+    snapshot_drill_test.go:231: metric lockstep.catchup.unservable.total: [] -> []
+=== RUN   TestSnapshotDrillEmbeddedTCP/rate64KBps
+2026/10/20 16:37:41 INFO player tcp listener started addr=127.0.0.1:64038 max_connections=10000
+    snapshot_drill_test.go:228: rate 64 KB/s (toxiproxy bandwidth, 1 KB = 1000 B): snapshot 1048576 B in 65 chunks (1065388 wire bytes) at frame 3701; client first-chunk->complete 16.568s (size/rate 16.384s, ratio 1.01); server request->live 3.367s; client caught up to head after 17.068s; session closed false; Tick errors 1 (last catchup session 1: snapshot chunk at byte 786432: context deadline exceeded); provider calls 1; client read end: read tcp 127.0.0.1:64040->127.0.0.1:64039: use of closed network connection; client next 4212, head 4212
+    snapshot_drill_test.go:231: metric lockstep.snapshot.total: [map[reason:out_of_window]=2] -> [map[reason:out_of_window]=3]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.bytes.total: [map[]=2097152] -> [map[]=3145728]
+    snapshot_drill_test.go:231: metric lockstep.snapshot.failed.total: [] -> []
+    snapshot_drill_test.go:231: metric lockstep.catchup.unservable.total: [] -> []
+--- PASS: TestSnapshotDrillEmbeddedTCP (21.96s)
+    --- PASS: TestSnapshotDrillEmbeddedTCP/rate0KBps (0.64s)
+    --- PASS: TestSnapshotDrillEmbeddedTCP/rate256KBps (4.24s)
+    --- PASS: TestSnapshotDrillEmbeddedTCP/rate64KBps (17.07s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	22.479s

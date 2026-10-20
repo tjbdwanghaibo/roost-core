@@ -137,6 +137,7 @@ internal static partial class Program
         }
         Console.WriteLine("PASS generated TCP auth/PB/concurrent sequence/raw Sync");
         await GeneratedLockstep(session);
+        await GeneratedLockstepSnapshot(session, host, port);
     }
 
     private static async Task LocalSession()
