@@ -39,7 +39,10 @@ type Inspection struct {
 	Complete    bool                   `json:"complete"`
 	Checkpoints []CheckpointInspection `json:"checkpoints"`
 	Segments    []SegmentInspection    `json:"segments"`
-	Problems    []string               `json:"problems,omitempty"`
+	// Databases 是写下这些记录的进程记在 DatabaseMappingFile 里的逻辑库 → 物理库映射；
+	// 未投影的记录按它投影，换映射前必须先排空。文件不存在时为空。
+	Databases map[string]string `json:"databases,omitempty"`
+	Problems  []string          `json:"problems,omitempty"`
 }
 
 // Inspect 取得现有writer.lock后只读检查，不调用会截断尾帧的Open。
@@ -91,6 +94,12 @@ func Inspect(ctx context.Context, opts InspectOptions) (report Inspection, err e
 		opts.MaxRecordBytes = DefaultOptions(source).MaxRecordBytes
 	}
 	err = inspectWAL(ctx, source, opts.MaxRecordBytes, &report)
+	if databases, _, mappingErr := ReadDatabaseMapping(source); mappingErr != nil {
+		report.Problems = append(report.Problems, mappingErr.Error())
+		err = errors.Join(err, mappingErr)
+	} else {
+		report.Databases = databases
+	}
 	if snapshot != "" && report.Complete {
 		if saveErr := finishWALSnapshot(snapshot, report); saveErr != nil {
 			err = errors.Join(err, saveErr)

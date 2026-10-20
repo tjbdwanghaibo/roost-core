@@ -154,6 +154,10 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
 			err = errors.Join(err, fmt.Errorf("dataengine: startup cleanup incomplete: %w", cleanupErr))
 		}
 	}()
+	// 映射核对必须在 Projector 构造（构造即开始回放）之前：未投影的记录只能按写下它们时的映射投影。
+	if err := reconcileDatabaseMapping(ctx, wal, a.cfg.Mongo.Databases); err != nil {
+		return err
+	}
 	// outbox 先于 Projector 构造（构造不启动循环）：Projector 一构造就开始回放，暂存 effect 后的唤醒要在那之前接好。
 	outboxStore, err := NewMongoOutboxStore(a.Store)
 	if err != nil {

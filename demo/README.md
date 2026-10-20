@@ -81,7 +81,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 
 ### 验证跑通了
 
-- `player` 集合在 DAO 标记写的 `db=<工程名>` 库里（工程 planet 即 `planet.player`，不是 `dataengine.database`）；文档 `_id` 是完整 EntityID，按玩家 ID 查用 `roost id entity --unique <玩家ID> --entity Player` 换算；重启 game 再跑一轮，items 与 level 在原值上累加；
+- `player` 集合在 DAO 逻辑库 `db=main` 经 `dataengine.databases` 映射到的物理库里（生成配置把 main 映射到工程名，工程 planet 即 `planet.player`；不是 `dataengine.database`，也不是名为 `main` 的库）；文档 `_id` 是完整 EntityID，按玩家 ID 查用 `roost id entity --unique <玩家ID> --entity Player` 换算；重启 game 再跑一轮，items 与 level 在原值上累加；
 - mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长；
 - 怪物不落库——工程库里没有怪的集合（`MonsterDao` 是 `//roost:dao nocoll`），GM `gm.scene.population` 才是看它们的地方；
 - chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个机器人多一句 hello；

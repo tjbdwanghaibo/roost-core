@@ -38,9 +38,12 @@ var (
 	ErrProjectionBatchNeedsPerRecord = errors.New("dataengine mongo: projection batch must be retried per record")
 )
 
-// MongoStoreConfig 配置投影存储：默认库、服务器分库 ID 与两类回执的保留期。
+// MongoStoreConfig 配置投影存储：默认库、逻辑库映射、服务器分库 ID 与两类回执的保留期。
 type MongoStoreConfig struct {
-	DefaultDatabase       string
+	DefaultDatabase string
+	// Databases 是启动时冻结的逻辑库 → 物理库表（D9 修订版 A）。DocumentKey.Database 是 DAO 的逻辑库名，
+	// 投影、冷加载与墓碑都经它换成物理库名；nil 表示没有映射，物理名就是逻辑名。
+	Databases             *coredata.DatabaseMap
 	ServerID              int32
 	TransactionReceiptTTL time.Duration
 	ReceiptTTL            time.Duration
@@ -267,15 +270,21 @@ func (store *MongoStore) classifyNoMatch(ctx context.Context, coll fmongo.IColle
 	if err != nil && !errors.Is(err, fmongo.ErrNotFound) {
 		return err
 	}
-	return fmt.Errorf("%w: %s/%s/%d expected=%d next=%d stored=%d", ErrProjectionConflict,
-		mutation.Key.Database, mutation.Key.Resource, mutation.Key.ID, mutation.ExpectedVersion, mutation.NextVersion, meta.Version)
+	return fmt.Errorf("%w: %s/%s/%d (physical database %s) expected=%d next=%d stored=%d", ErrProjectionConflict,
+		mutation.Key.Database, mutation.Key.Resource, mutation.Key.ID, store.physicalDatabase(mutation.Key), mutation.ExpectedVersion, mutation.NextVersion, meta.Version)
+}
+
+// physicalDatabase 是 key 所在的物理库名（不含 _<sid>）：逻辑库经映射表换算，空库名取 DataEngine 的默认库。
+// 本包访问业务文档的每条路径（单条与批量投影、冷加载、墓碑）都经 collection 走到这里。
+func (store *MongoStore) physicalDatabase(key coredata.DocumentKey) string {
+	if key.Database == "" {
+		return store.cfg.DefaultDatabase
+	}
+	return store.cfg.Databases.Physical(key.Database)
 }
 
 func (store *MongoStore) collection(key coredata.DocumentKey) fmongo.ICollection {
-	database := key.Database
-	if database == "" {
-		database = store.cfg.DefaultDatabase
-	}
+	database := store.physicalDatabase(key)
 	if key.Scope == coredata.DatabaseServer {
 		return store.client.DatabaseForSid(database, store.cfg.ServerID).Collection(key.Resource)
 	}

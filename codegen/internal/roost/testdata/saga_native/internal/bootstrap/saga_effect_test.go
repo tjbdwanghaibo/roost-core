@@ -43,7 +43,7 @@ import (
 // 核对恰好一次：两笔 saga 的终态；Mongo 里三个钱包的余额（A 100→70、B 100→130、C 995 不变）；audit 记录只有
 // 正向那一笔一条；升级通知一条、回执一条（再等一会儿仍是一条）。
 //
-// 资源：DAO 库（编译期常量 db.PlayerDaoDBName，生成时换成唯一名字）、库 sagagen_de_<pid>_<ns> / sagagen_saga_<…>、
+// 资源：DAO 物理库 sagagen_dao_<…>（逻辑库 main 经 dataengine.databases 映射过去，核对文档不落在名为 main 的库）、库 sagagen_de_<pid>_<ns> / sagagen_saga_<…>、
 // 流 SAGAGEN_SAGA_<…> / SAGAGEN_EFFECTS_<…>，用后删除。由 codegen/internal/roost 的
 // TestGeneratedSagaNativeStepsAndEffectConsumer 复制进新生成的工程后运行（scripts/test-demo-generated.sh）。
 func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
@@ -56,7 +56,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 	}
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000)
 	token := strings.ReplaceAll(suffix, "_", "x")
-	sagaDatabase, dataDatabase := "sagagen_saga_"+suffix, "sagagen_de_"+suffix
+	sagaDatabase, dataDatabase, playerDatabase := "sagagen_saga_"+suffix, "sagagen_de_"+suffix, "sagagen_dao_"+suffix
 	sagaStream, effectStream := "SAGAGEN_SAGA_"+suffix, "SAGAGEN_EFFECTS_"+suffix
 	cfg := viper.New()
 	for key, value := range map[string]any{
@@ -64,6 +64,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		"mongo.uri": mongoURI, "mongo.require_replica_set": true, "mongo.connect_timeout": 5 * time.Second, "mongo.transaction_timeout": 15 * time.Second,
 		"nats.url": natsURL, "nats.prefix": "sagagen" + token,
 		"dataengine.database": dataDatabase, "dataengine.wal.dir": t.TempDir(),
+		"dataengine.databases":      map[string]any{db.DatabaseMain: playerDatabase},
 		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "sagageneffect" + token,
 		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
 		"dataengine.outbox.poll_interval": 50 * time.Millisecond, "dataengine.outbox.retry_min": 100 * time.Millisecond, "dataengine.outbox.retry_max": time.Second,
@@ -99,7 +100,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		defer cancel()
 		for i := len(started) - 1; i >= 0; i-- {
 			if i == 0 && mongoClient != nil { // Mongo 最后停：先删本次的库
-				for _, database := range []string{db.PlayerDaoDBName, dataDatabase, sagaDatabase} {
+				for _, database := range []string{playerDatabase, dataDatabase, sagaDatabase} {
 					if err := mongoClient.Database(database).Drop(ctx); err != nil {
 						t.Errorf("cleanup: drop %s: %v", database, err)
 					}
@@ -143,7 +144,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 			t.Fatal(err)
 		}
 		players[wallet.name] = playerID
-		if _, err := mongoClient.Database(db.PlayerDaoDBName).Collection(db.PlayerDaoCollection).InsertOne(ctx,
+		if _, err := mongoClient.Database(playerDatabase).Collection(db.PlayerDaoCollection).InsertOne(ctx,
 			bson.M{"_id": entityID, "_version": uint64(1), "_schema": db.PlayerDaoSchemaVersion, "gold": wallet.gold, "level": int32(1)}); err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +214,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 			var document struct {
 				Gold int64 `bson:"gold"`
 			}
-			if err := mongoClient.Database(db.PlayerDaoDBName).Collection(db.PlayerDaoCollection).FindOne(ctx, bson.M{"_id": entityOf(name)}, &document); err != nil {
+			if err := mongoClient.Database(playerDatabase).Collection(db.PlayerDaoCollection).FindOne(ctx, bson.M{"_id": entityOf(name)}, &document); err != nil {
 				t.Fatal(err)
 			}
 			got[name] = document.Gold
@@ -226,6 +227,12 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// DAO 的 db=main 是逻辑名：名为 main 的库里不能有本次的文档。
+	for name := range wantGold {
+		if err := mongoClient.Database(db.PlayerDaoDBName).Collection(db.PlayerDaoCollection).FindOne(ctx, bson.M{"_id": entityOf(name)}, &bson.M{}); !errors.Is(err, fmongo.ErrNotFound) {
+			t.Fatalf("player %s found in the logical database %q (err %v); it must only be in %s", name, db.PlayerDaoDBName, err, playerDatabase)
+		}
+	}
 	count := func(database, collection string, filter bson.M) int64 {
 		n, err := mongoClient.Database(database).Collection(collection).CountDocuments(ctx, filter)
 		if err != nil {
@@ -233,23 +240,23 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		}
 		return n
 	}
-	if n := count(db.PlayerDaoDBName, "gift_audit", bson.M{"saga_id": sagaIDs["ok-"+token]}); n != 1 {
+	if n := count(playerDatabase, "gift_audit", bson.M{"saga_id": sagaIDs["ok-"+token]}); n != 1 {
 		t.Errorf("audit records for the completed gift = %d, want 1", n)
 	}
-	if n := count(db.PlayerDaoDBName, "gift_audit", bson.M{"saga_id": sagaIDs["refuse-"+token]}); n != 0 {
+	if n := count(playerDatabase, "gift_audit", bson.M{"saga_id": sagaIDs["refuse-"+token]}); n != 0 {
 		t.Errorf("audit records for the compensated gift = %d, want 0 (audit comes after the refused credit)", n)
 	}
 
 	// effect：通知一条、回执一条；再等一会儿仍是一条（没有重复消费）。
 	deadline = time.Now().Add(60 * time.Second)
-	for count(db.PlayerDaoDBName, "level_up_notices", bson.M{"player_id": players["a"], "level": int32(2)}) == 0 {
+	for count(playerDatabase, "level_up_notices", bson.M{"player_id": players["a"], "level": int32(2)}) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("no level-up notice: the player.level_up effect was not consumed")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	time.Sleep(2 * time.Second)
-	if n := count(db.PlayerDaoDBName, "level_up_notices", bson.M{}); n != 1 {
+	if n := count(playerDatabase, "level_up_notices", bson.M{}); n != 1 {
 		t.Errorf("level-up notices = %d, want exactly 1", n)
 	}
 	if n := count(dataDatabase, "_effect_inbox_"+serviceGame.PlayerLevelUpEffectDurable, bson.M{}); n != 1 {

@@ -414,7 +414,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			return addEntityDAO(root, m, o)
 		}
 		path = "db/def/" + snake + ".go"
-		body = renderDAODefinition(daoDatabaseName(m.Project.Name), snake, pascal+"Dao")
+		body = renderDAODefinition(snake, pascal+"Dao")
 	case "errcode":
 		path = "internal/errors/" + snake + ".go"
 		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")

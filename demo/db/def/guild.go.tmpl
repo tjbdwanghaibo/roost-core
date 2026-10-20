@@ -11,7 +11,7 @@ package dbdef
 // Nothing here is `sync`: a guild is not a replicated subject. What a client
 // sees of it comes back as an endpoint's answer, not as a state frame.
 //
-//roost:dao coll=guild db={{DAO_DB}}
+//roost:dao coll=guild db=main
 type GuildDao struct {
 	Name string `bson:"name" dao:"persist"`
 	// Members is player unique id -> when they joined. A map rather than a

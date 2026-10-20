@@ -38,10 +38,12 @@ game-demo 的 `cmd/sidmove`（只读，不搬数据、不切路由、不起停�
 go run ./cmd/sidmove wal-drained -dir data/wal/dataengine
 # 第 4 步：单实例锁现在被谁持有（不打印锁值里的令牌）
 go run ./cmd/sidmove singleton -redis 127.0.0.1:6379 -key roost:<project>:singleton:game:1000
-# 第 6 步：停旧进程后记一份，新进程写入前比较
-go run ./cmd/sidmove players -mongo "$URI" -ids 2001,2002 -out before.json
-go run ./cmd/sidmove players -mongo "$URI" -ids 2001,2002 -compare before.json
+# 第 6 步：停旧进程后记一份，新进程写入前比较（Player 所在物理库按 -config 的 dataengine.databases 换算，-db 可直接指定）
+go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -out before.json
+go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.yaml -ids 2001,2002 -compare before.json
 ```
+
+`wal-drained` 的报告带 `databases`：旧进程记在 WAL 目录 `databases.json` 里的逻辑库 → 物理库映射；新机器的 `dataengine.databases` 应与它一致，否则新进程会去别的库里冷加载同一批玩家。
 
 `wal-drained` 基于 `nestwal.Inspect`（[inspect.go](../../framework/nestwal/inspect.go)，与 [cmd/walinspect](../../cmd/walinspect/main.go) 相同的只读检查，先取 `writer.lock`），比较最新有效 checkpoint 与最后一条记录的位置。测试（生成工程 `cmd/sidmove/main_test.go`）覆盖：进程持有时拒绝、有未确认尾部时不通过、全部确认后通过；锁持有者解析不含令牌；两次快照之间的写入被发现。
 
@@ -66,3 +68,18 @@ go run ./cmd/sidmove players -mongo "$URI" -ids 2001,2002 -compare before.json
 2. 为了得到“未排空”的状态：写入中对三个私有 mongod 发 SIGSTOP 让投影停住 2 秒，期间 `kill -9` B，再 SIGCONT。`wal-drained` B：`drained: false`，checkpoint `segment 1 offset 32760`、最后一条记录 `offset 37310`，退出码非零。此时 Mongo 中的数量（94 / 93 / 93 / 92）落后于已确认给业务的数量（各 99）——**如果此刻在新机器用空 WAL 接管，这 5～7 次已确认的写入会丢失**。在原 WAL 目录重启 B 后正常停机，`wal-drained` 通过，Mongo 等于 99 / 99 / 99 / 99，`_version` 增量等于确认次数。
 
 **边界**：两台“机器”是同机两个进程，没有验证真实跨机网络、磁盘卷迁移与 DNS / 负载均衡切换；写入负载经 ops GM 命令而不是玩家 TCP 连接，客户端重连路径没有演练；只演练了 sid 1000 一个 game 进程。演练脚本与日志在本次会话的临时目录，未入库；本节记录的是其中的数字。
+
+## 5. 改 DAO 库名映射
+
+DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（或 `kitdataengine.WithDatabaseResolver`）决定（[DESIGN-TODO D9](../maintenance/DESIGN-TODO.md#d9-dao-库名不随配置_id-是编码后的-entityid) 修订版 A，[设计与使用](guide/03-dataengine.md#3-投影与幂等)）。WAL 只记逻辑名、投影时才换算，所以**改映射等于把数据搬到另一个库**，与搬机同一套停写纪律：
+
+| 步骤 | 做什么 | 检查点 |
+| --- | --- | --- |
+| 1 停写 | 用**原映射**正常停机所有写这些逻辑库的进程（含跨进程写 Remote 实体的） | 进程已退出、单实例锁已释放（`sidmove singleton`） |
+| 2 排空 WAL | 停机时 DataEngine 把 WAL 全部投影确认；异常退出的进程先用原映射在原 WAL 目录重启恢复、再正常停机 | 每个 sid `sidmove wal-drained`：`drained: true`，报告的 `databases` 是原映射 |
+| 3 迁移数据 | 离线把旧物理库的集合复制到新物理库（`mongodump` / `mongorestore --nsFrom/--nsTo`，或 `$out`），核对文档数与 `_version` | 新库文档数、抽样 `_version` / `_last_tx` 与旧库一致；`sidmove players -db <新库>` 与 `-db <旧库>` 的快照相同 |
+| 4 改映射启动 | 改所有进程的 `dataengine.databases`，再启动 | 启动日志 `dataengine mod: database mapping logical=… physical=<新库>`；WAL 目录的 `databases.json` 更新为新映射 |
+| 5 回退 | 新进程写入之前：改回原映射启动即可（旧库未动）。写入之后：只能向前修复或停写后再搬一次 | — |
+
+**框架守住的部分**：还有未投影记录而映射变了的进程拒绝启动（`dataengine: database mapping changed while the WAL still holds unprojected records`，点名哪个逻辑库从哪个物理库变到哪个），记下的映射不被覆盖；用原映射重启即可恢复。没有 `databases.json` 的 WAL（引入映射之前写下的）按“物理名就是逻辑名”比较。**框架不守的部分**：第 3 步的数据复制与核对、多进程映射是否一致、已经排空后改映射却忘了迁移数据（新库是空的：冷加载得到“从未创建”，GetOrCreate 会新建玩家）——这些由运维流程保证。
+

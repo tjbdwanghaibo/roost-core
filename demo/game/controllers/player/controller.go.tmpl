@@ -19,6 +19,7 @@ import (
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
@@ -235,6 +236,11 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || mongoClient == nil {
 		return nil, fmt.Errorf("player controller: guild id allocator requires mongo")
 	}
+	// 公会号序列与 Guild 文档在同一个物理库：Guild DAO 的 db= 是逻辑库名，经 DataEngine 冻结的映射表换算。
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: guild id allocator: %w", err)
+	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -248,7 +254,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
-		guildIDs: mongoClient.Database(db.NewGuildDao().DbName()).Collection("_guild_id_sequence"),
+		guildIDs: mongoClient.Database(databases.Physical(db.GuildDaoDBName)).Collection("_guild_id_sequence"),
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }

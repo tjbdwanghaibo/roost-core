@@ -54,6 +54,8 @@ go run ./cmd/schemamigrate -mongo "$URI" verify    # 切换前验收
 go run ./cmd/schemamigrate -mongo "$URI" rollback
 ```
 
+Player 文档所在的物理库按 `-config`（缺省 `configs/service/config.game.yaml`）的 `dataengine.databases` 把 Player DAO 的逻辑库 `db=main` 换算出来，与 game 进程同一条规则（`kitdataengine.LoadDatabaseMapFile`）；`-db` 可直接给物理库名。迁移期间不要改映射：改映射本身是一次数据搬迁，见 [PLAYER-MIGRATION §5](PLAYER-MIGRATION.md#5-改-dao-库名映射)。
+
 测试覆盖（生成工程的 `db/migrations/player_test.go`）：步骤对各种数字拼写与无武器文档的处理；plan 不写、apply 备份原样并推进版本、结果能被生成 DAO 按当前 schema 加载、重复 apply 不再改写、墓碑不动；任一份校验失败或遇到未知 schema / Remote 信封时一份都不写；有写入者没停时 `ErrNotStopped` 且不覆盖对方的写；回退只恢复迁移写的版本、之后被写过的文档列为 refused。`TestPlayerMigrationRealMongo` 在真实副本集上跑同一流程，由 [scripts/test-demo-generated.sh](../../scripts/test-demo-generated.sh) 选中。改错条件写、去掉写前 plan、去掉回退条件三种变体都会让对应用例变红（2026-10-15 在生成工程上实测）。
 
 ### 2026-10-15 真实 Mongo 演练

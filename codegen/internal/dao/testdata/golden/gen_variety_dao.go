@@ -29,7 +29,8 @@ var _ nest.RollbackSnapshotter = (*VarietyDao)(nil)
 var _ nest.MutationParticipant = (*VarietyDao)(nil)
 
 const (
-	VarietyDaoDBName               = "game"
+	// VarietyDaoDBName 是逻辑库名（db=），物理库名经 DataEngine 的映射表换算（gen_databases.go）。
+	VarietyDaoDBName               = DatabaseGame
 	VarietyDaoCollection           = "varieties"
 	VarietyDaoSchemaVersion uint32 = 1
 )

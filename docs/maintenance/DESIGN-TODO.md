@@ -12,7 +12,7 @@
 | D6 | 玩家看自己状态（Entity Sync 自身视图）的接入骨架 | 维护者 2026-10-16 决定折中方案，已实施（提交见本节） |
 | D7 | 实体不存在时给客户端的稳定错误码与首登步骤 | 维护者 2026-10-16 决定 C，已实施（`e7e59298`） |
 | D8 | 生成的服务包名大写（`package Game`） | 维护者 2026-10-16 决定 C，已实施（`bac32cd2`） |
-| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A 保留待评估 |
+| D9 | DAO 库名不随配置、`_id` 是编码后的 EntityID | 维护者 2026-10-16 决定 B，已实施（`a068be37`）；2026-10-20 决定方案 A 修订版（代码写逻辑名、部署映射物理库），已实施 |
 | D10 | 删档后用同一 ID 重建（投影版本冲突、进程 fail-stop） | 维护者 2026-10-17 决定 B，范围只守 GetOrCreate，已实施（`572d87c2`） |
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
@@ -204,9 +204,21 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D9 DAO 库名不随配置、`_id` 是编码后的 EntityID
 
-**状态：维护者 2026-10-16 决定 B，已实施（`a068be37`）；方案 A（库名取运行配置）不做，保留为后续评估。**
+**状态：维护者 2026-10-16 决定 B，已实施（`a068be37`）；2026-10-20 决定实施方案 A 的修订版（代码里写逻辑库名，部署时映射成物理库名），已实施。** 下文先写修订版 A 的结果，再保留方案 B 的实施记录与原始登记。
 
-**实施结果**：`roost add dao`（含 `--entity`）骨架写 `db=<project>`：`daoDatabaseName` 取 `project.name`，系统库 `admin` / `local` / `config` 加 `_data`，超过 52 字节截断并去掉末尾 `_`（Mongo 库名 63 字节上限，留出 `dbscope=sid` 的 `_<sid>`），骨架注释写明库名与 `_id` 换算；game-demo 的 Player / Guild / World DAO 改用同一规则（工程 planet → `planet` 库），demo 文档同步。`roost id entity` 双向换算完整 EntityID 与唯一号 / kind / category / remote（`--entity` 读工程 `//roost:entity` 标记）。已有工程 DAO 定义归业务、不改写，旧库数据不迁移（未上线不做兼容，升级说明见 CHANGELOG）。
+**修订版 A 实施结果（2026-10-20）**：
+
+- **常量文件**：DAO 生成器扫描全部持久 DAO 的 `db=`（逻辑名，解析时校验：小写字母开头，小写字母、数字、下划线，不是系统库名；规则与运行期 `dataengine.ValidLogicalDatabaseName` 相同，因生成器不得 import 运行时而写了一份，不一致时生成物 `init` 里的 `DeclareDatabases` 会 panic），在 DAO 包（`db/`）生成 `gen_databases.go`：每个逻辑库一个常量（`DatabaseMain = "main"`），`init` 里 `dataengine.DeclareDatabases` 登记（含是否有 DAO 按 sid 分库）；`<Dao>DBName` 引用它。文件名沿用 DAO 生成器的 `gen_*` 命名（孤儿清理按这个前缀与生成头识别），没有持久 DAO 时按孤儿删除。
+- **骨架**：`roost add dao` 写 `db=main`，game-demo 同样；生成配置写 `dataengine.databases: {main: <project_db>}`（`daoDatabaseName` 规则不变），新工程开箱的物理库与方案 B 相同。
+- **映射入口与冻结**：配置 `dataengine.databases`（Mod 配置声明，`--check-config` / doctor 同源）与 `kitdataengine.WithDatabaseResolver`。DataEngine Mod **Init** 时合成并冻结（`dataengine.NewDatabaseMap`）：回调对每个声明的逻辑库调用一次；优先级回调非空结果 > 配置 > 逻辑名本身；回调覆盖配置时启动日志告警。运行中只查表。表以能力 `dataengine.databases` 发布，并在 Provide 时绑定给 Remote 的 Mongo 存储（Remote 存储先于 DataEngine Provide、写入只在 Start 之后，所以第一次写之前已绑定；wiring 装配下未绑定拒绝写）。
+- **没有映射时**：物理名就是逻辑名本身（启动日志告警）。理由：现有 `DefaultDatabase` 回退只针对空库名（引擎侧兜底到 DataEngine 自己的库，生成 DAO 走不到），框架对“没有部署信息”的取舍是给出确定、可预期的名字而不是拒绝；identity 与引入映射前的行为一致（已有工程 `db=<工程名>` 的数据位置不变），测试夹具与工具不配映射照常工作；新工程总有生成配置里的映射，不会落到 `main`。代价：手写配置删掉映射会落到名为 `main` 的库（只有告警），记入 KNOWN-LIMITS。未采用“声明的逻辑库必须映射，否则拒绝启动”：所有测试、夹具、工具都要配映射，且对已有工程是一次破坏性升级。
+- **一次校验**（失败拒绝启动并点名）：配置里未声明的逻辑名；物理名为空、含 Mongo 禁止字符、是系统库、按 sid 分库时加 `_<sid>` 超过 63 字节（按本进程 sid 计算）；两个逻辑库映射到同一物理库（大小写不同也算）；回调错误。**不提供“允许共用物理库”的开关**：两个逻辑库里同名集合的文档会混在一起，改其中一个映射时也无法单独搬走；现在没有需要它的场景，以后加开关是放宽、不破坏兼容，反过来则不然。二进制一个逻辑库都没声明时（工程还没有 DAO）无从判断拼写，只告警。
+- **唯一解析点**：`MongoStore.physicalDatabase`（单条 / 批量投影、冷加载、墓碑）、`MongoCommitter.dataDB`（Remote 写 DAO 文档）、`kitdataengine.DAOCollection` / `Databases` / `LoadDatabaseMapFile`（业务与工具：game-demo 公会号序列、送礼收件人检查、`cmd/sidmove players`、`cmd/schemamigrate`）。控制库（`dataengine.database`、`remote_entity.mongo.database`、saga 库、lease fence 的库）是配置给出的物理名，不经映射。守卫：根包 `TestNoMongoDatabaseOpenedWithALogicalDAOName`（产品代码与模板里 `.Database(` / `.DatabaseForSid(` 的参数不得直接是 `DbName()` / `<Dao>DBName` / `db.Database*` / `Key.Database`，除非经 `.Physical(`；只看同一行）。
+- **WAL**：只记逻辑名（DocumentKey 与 Remote 提交原样写入；Remote 提交的 digest 覆盖库名，投影前改写会让发布路径的重放校验失败，所以只在写 Mongo 的那一刻换算）。可行性评估结论：可行。DataEngine 启动在打开 WAL（持有 `writer.lock`）之后、构造 Projector（构造即回放）之前读 WAL 目录的 `databases.json`，用 `WAL.HasUnacknowledgedRecords`（读到第一条未确认记录即停）判断有无未投影记录；有且上次映射里任一逻辑库的换算结果变了（文件不存在按 identity 比较）就以 `ErrDatabaseMappingChanged` 拒绝启动、不改文件，否则原子写入本次映射。`walinspect` 与 `sidmove wal-drained` 的报告带上它。改映射的步骤写进 [PLAYER-MIGRATION §5](../framework/PLAYER-MIGRATION.md#5-改-dao-库名映射)（停写 → 排空 WAL → 迁移 → 改映射），SCHEMA-MIGRATION 指向它。
+- **未采用的方案**：①原登记的方案 A（`db=` 省略时取 `dataengine.database` 或新键 `dataengine.business_database`）：仍是“一个工程一个业务库”，多个逻辑库无法分别部署，且把 DAO 数据和 DataEngine 系统集合的库绑在一起；②运行中按需调用回调（懒解析）：投影热路径上做不可控的业务调用，同一逻辑库在进程生命周期内可能得到不同结果；③在 Nest 提交时把逻辑名换成物理名写进 WAL：WAL 与部署绑定，改映射后旧记录无法按新部署解释，且破坏 Remote 提交的 digest；④给 Mongo 客户端整体套一层改名包装：DataEngine / Remote / saga 自己的控制库也会被误映射；⑤允许共用物理库的开关：见上。
+- **验证**：先红后绿与回归见 CHANGELOG `[Unreleased]`“DAO 逻辑库名”；真实依赖：`TestSagaNativeStepsAndEffectRealDependencies`（逻辑库 main 经 `dataengine.databases` 映射到唯一库，核对文档不在名为 main 的库）与游戏夹具（经映射表写唯一库）。
+
+**方案 B 实施结果（2026-10-16）**：`roost add dao`（含 `--entity`）骨架写 `db=<project>`：`daoDatabaseName` 取 `project.name`，系统库 `admin` / `local` / `config` 加 `_data`，超过 52 字节截断并去掉末尾 `_`（Mongo 库名 63 字节上限，留出 `dbscope=sid` 的 `_<sid>`），骨架注释写明库名与 `_id` 换算；game-demo 的 Player / Guild / World DAO 改用同一规则（工程 planet → `planet` 库），demo 文档同步。`roost id entity` 双向换算完整 EntityID 与唯一号 / kind / category / remote（`--entity` 读工程 `//roost:entity` 标记）。已有工程 DAO 定义归业务、不改写，旧库数据不迁移（未上线不做兼容，升级说明见 CHANGELOG）。
 
 登记：2026-10-16 新用户试用实测（与 2026-10-05 演练预演的发现相同，第二次出现）。
 

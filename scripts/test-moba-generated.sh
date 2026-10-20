@@ -60,7 +60,7 @@ for name, fields in {
  typename=''.join(part.title() for part in name.split('_'))+'Dao'
  marker='type '+typename+' struct {'
  text=p.read_text().replace(marker, marker+'\n'+''.join(f'{field} {typ} `bson:"{field.lower()}" dao:"persist"`\n' for field, typ in fields))
- text=text.replace('db=moba_practice', 'db='+os.environ['ROOST_MOBA_DB'])
+ assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
  p.write_text(text)
 # 结算记录、对局与比赛目录被多名玩家共同引用，是世界对象，锁序低于 Player。
 for name in ('match_result', 'battle_round', 'battle_directory'):

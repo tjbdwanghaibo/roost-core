@@ -233,8 +233,8 @@ ranks, err := Rank(registry) // internal/service/game/framework_clients_gen.go`,
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>
 go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
-		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]，add dao 骨架的 db= 默认是工程名（编译期常量，与 dataengine.database 无关；文档 _id 是完整 EntityID，用 roost id entity 换算）；只给 noPersist 实体用、全字段 nopersist 的内存 DAO 写 //roost:dao nocoll（不编造集合名，不生成持久化路径）。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
-		Example: `//roost:dao coll=players db=game dbscope=sid
+		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<logical database> [dbscope=sid|global]，db= 是逻辑库名（小写字母开头，小写字母、数字、下划线），add dao 骨架写 db=main；物理 Mongo 库由服务配置 dataengine.databases（逻辑名 → 物理名，生成配置把 main 映射到按工程名派生的库）或 kitdataengine.WithDatabaseResolver 决定，启动时冻结，db/gen_databases.go 为每个逻辑库生成一个常量（DatabaseMain）并登记；改映射要先排空 WAL 并迁移数据。文档 _id 是完整 EntityID，用 roost id entity 换算；只给 noPersist 实体用、全字段 nopersist 的内存 DAO 写 //roost:dao nocoll（不编造集合名，不生成持久化路径）。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
+		Example: `//roost:dao coll=players db=main dbscope=sid
 type PlayerDao struct {
     Name  string          ` + "`dao:\"persist,sync\"`" + `
     Items map[int64]int32 ` + "`dao:\"persist,sync,map=fast\"`" + `

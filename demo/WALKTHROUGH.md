@@ -171,8 +171,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
-    收件人查的是 Player DAO 自己的库和集合（`db.PlayerDaoDBName` / `db.PlayerDaoCollection`，即 DAO 标记的 `db=<工程名>`，例如 `db=planet`），不是 `dataengine.database`——
-    后者只给原生步骤的 inbox 用。
+    收件人查的是 Player DAO 所在的物理库和集合：DAO 标记的 `db=main` 是逻辑库名，启动时经 `kitdataengine.DAOCollection` 按 `dataengine.databases` 换成物理库（生成配置为 `main: planet`），不是 `dataengine.database`（它只给原生步骤的 inbox 用），也不能把 `db.PlayerDaoDBName` 直接当库名。
     所以登记为 `Steps.Mongo`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
     见 [Saga 契约](../docs/framework/SAGA.md)），但它只管写进 handler 那笔 Mongo 事务的东西；邮件是 bus 调用，不在事务里，
     被 fence 中止的尝试可能已经发出邮件，所以 mail 服务自己的幂等仍是**必需**的（Send 按 RequestID 去重，RequestID 就是命令的
@@ -288,7 +287,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 ## 持久 schema
 
-`//roost:dao coll=player db=<工程名> schema=2` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
+`//roost:dao coll=player db=main schema=2` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
 
 改形状时靠离线迁移：`db/migrations` 登记 Player 从 1 到 2 的步骤（v1 的扁平 `weapon_id` 变成 v2 的 `equipment.slots`）和写入前的校验（用生成 DAO 的 `RestorePersisted` 按当前 schema 解码），`offline.go` 是执行器，`cmd/schemamigrate plan|apply|verify|rollback` 是运维入口。只能在停写之后运行；apply 先完整 dry-run、全部通过才“写备份 → 带 `_version` 与 `_schema` 条件改写”，改写时 `_version` 加 1，没停干净的旧进程因此冲突而不是把旧 schema 写回去；rollback 只恢复仍是迁移写的那一版。流程与边界见 [schema 变更操作手册](../docs/framework/SCHEMA-MIGRATION.md)。
 

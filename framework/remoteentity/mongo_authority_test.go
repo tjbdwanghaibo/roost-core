@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
@@ -499,4 +500,69 @@ func TestMongoPayloadBatchingPreservesDeletesAndTransactionRollback(t *testing.T
 	if err := db.Collection("game", "players").FindOne(ctx, bson.M{"_id": c.EntityID}, &doc); !errors.Is(err, fmongo.ErrNotFound) {
 		t.Fatalf("replace/delete order: %v", err)
 	}
+}
+
+// Remote 写 DAO 文档经 DataEngine 绑定的同一张映射表：逻辑库 main → 物理库 planet_x，按 sid 分库再加 _<sid>；
+// 控制库（快照、事务）不经映射。wiring 装配（RequireDatabaseMap）未绑定时拒绝写，不按逻辑名写进名为 main 的库。
+func TestMongoCommitterWritesDAODocumentsIntoTheMappedDatabase(t *testing.T) {
+	const kind entity.EntityKind = 198
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(992, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(store *MongoCommitter, tx byte) entity.RemoteCommit {
+		return entity.RemoteCommit{
+			TransactionID: entity.RemoteTransactionID{15: tx}, EntityID: id, Kind: kind, BaseVersion: 0, NextVersion: 1,
+			MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1, LockFence: testWriteGrant(t, store, id).Fence,
+			Mutations: []entity.RemoteDataMutation{{Database: "main", DatabaseScope: 1, Collection: "guild", ID: id, Version: 1, Data: []byte("state")}},
+		}
+	}
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared: []coredata.LogicalDatabase{{Name: "main", ServerScoped: true}}, Configured: map[string]string{"main": "planet_x"}, ServerID: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unbound := NewMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
+	unbound.requireDatabaseMap = true
+	if _, err := unbound.CommitRemote(context.Background(), commit(unbound, 1)); !errors.Is(err, ErrDatabaseMapNotBound) {
+		t.Fatalf("required but unbound map: CommitRemote = %v, want ErrDatabaseMapNotBound", err)
+	}
+
+	mongo := newRemoteMongoFake()
+	store := NewMongoCommitter(mongo, "control", 7, 0)
+	store.requireDatabaseMap = true
+	backend, err := NewBackend(remoteLoaderStub{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.BindDatabaseMap(databases); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.BindDatabaseMap(databases); err != nil {
+		t.Fatalf("binding the same map again: %v", err)
+	}
+	other, _, _ := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err := backend.BindDatabaseMap(other); err == nil {
+		t.Fatal("a second, different map was bound")
+	}
+	if _, err := store.CommitRemote(context.Background(), commit(store, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mongo.Collection("planet_x_7", "guild").Lookup(id); !ok {
+		t.Fatal("the DAO document is not in planet_x_7.guild")
+	}
+	for _, name := range []string{"main", "main_7", "planet_x"} {
+		if n := mongo.Collection(name, "guild").Len(); n != 0 {
+			t.Fatalf("%s.guild holds %d documents; nothing may land outside the mapped physical database", name, n)
+		}
+	}
+}
+
+type remoteLoaderStub struct{}
+
+func (remoteLoaderStub) LoadRemoteEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeRemoteEntity, error) {
+	return nil, nil
 }

@@ -10,6 +10,7 @@ import (
 	playerentity "example.com/card-rpg-practice/game/entities/player"
 	sender "example.com/card-rpg-practice/game/handler/syncsender"
 	"fmt"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -51,7 +52,15 @@ func openCardRuntime(t *testing.T, manual bool, now int64) *cardRuntime {
 	if uri == "" {
 		t.Fatal("isolated Mongo replica set required")
 	}
-	database := db.NewPlayerDao().DbName()
+	// DAO 写逻辑库 db=main（骨架默认）；本次运行的唯一物理库经映射表给出，与进程的 dataengine.databases 同一条规则。
+	if logical := db.NewPlayerDao().DbName(); logical != db.DatabaseMain {
+		t.Fatalf("Player DAO logical database %q, want %q", logical, db.DatabaseMain)
+	}
+	database := os.Getenv("ROOST_CARD_RPG_DB")
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if database != os.Getenv("ROOST_CARD_RPG_DB") || !strings.HasPrefix(database, "roost_card_rpg_it_") {
 		t.Fatal("refusing a database outside this consumer")
 	}
@@ -73,7 +82,7 @@ func openCardRuntime(t *testing.T, manual bool, now int64) *cardRuntime {
 	if err := client.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database})
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	if err != nil {
 		t.Fatal(err)
 	}

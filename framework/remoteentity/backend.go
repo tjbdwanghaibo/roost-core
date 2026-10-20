@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -46,6 +47,14 @@ func (b *Backend) UnloadRemoteEntity(ctx context.Context, e entity.IThreadSafeRe
 		return unloader.UnloadRemoteEntity(ctx, e)
 	}
 	return entity.ErrRemoteUnloadUnsupported
+}
+
+// BindDatabaseMap 转给存储；存储不写 DAO 文档（不实现 DatabaseMapBinder）时无操作。
+func (b *Backend) BindDatabaseMap(databases *coredata.DatabaseMap) error {
+	if binder, ok := b.storage.(DatabaseMapBinder); ok {
+		return binder.BindDatabaseMap(databases)
+	}
+	return nil
 }
 
 func (b *Backend) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {

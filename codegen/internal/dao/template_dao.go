@@ -45,7 +45,8 @@ const {{daoKeyConst .Dao.Name}} = "{{.Dao.Name}}"
 var _ nest.MutationParticipant = (*{{.Dao.Name}})(nil)
 
 const (
-	{{daoDBConst .Dao.Name}} = "{{.Dao.Db}}"
+	// {{daoDBConst .Dao.Name}} 是逻辑库名（db=），物理库名经 DataEngine 的映射表换算（gen_databases.go）。
+	{{daoDBConst .Dao.Name}} = {{databaseConst .Dao.Db}}
 	{{daoCollConst .Dao.Name}} = "{{.Dao.Coll}}"
 	{{.Dao.Name}}SchemaVersion uint32 = {{schemaVersion .Dao}}
 )

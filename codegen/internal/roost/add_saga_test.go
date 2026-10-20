@@ -3,7 +3,6 @@ package roost
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -433,7 +432,7 @@ func replaceInFunc(t *testing.T, rel, body, signature, old, new string) string {
 
 // fillSagaNativeBusiness 是新手“填业务”的一步：testdata/saga_native 按原路径覆盖（DAO 字段、钱包逻辑、handler、服务
 // Init / Shutdown、真实依赖用例），生成的 steps.go、effect 载荷与消费者只在 TODO 处小改，其余保持生成的样子。
-func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
+func fillSagaNativeBusiness(t *testing.T, root string) {
 	t.Helper()
 	overlay := filepath.Join("testdata", "saga_native")
 	err := filepath.WalkDir(overlay, func(path string, entry os.DirEntry, err error) error {
@@ -448,7 +447,7 @@ func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
 		if err != nil {
 			return err
 		}
-		writeProjectFile(t, root, filepath.ToSlash(rel), strings.ReplaceAll(string(raw), "SAGAGEN_DB", daoDatabase))
+		writeProjectFile(t, root, filepath.ToSlash(rel), string(raw))
 		return nil
 	})
 	if err != nil {
@@ -458,8 +457,8 @@ func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
 	const stepsRel = "saga/gift/steps.go"
 	steps := readProjectFile(t, root, stepsRel)
 	steps = replaceOnce(t, stepsRel, steps, "\t\"github.com/tjbdwanghaibo/roost-core/framework/saga\"\n",
-		"\t\"github.com/tjbdwanghaibo/roost-core/framework/saga\"\n\tfmongo \"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo\"\n\t\"go.mongodb.org/mongo-driver/v2/bson\"\n\tdb \"example.com/planet/db\"\n")
-	steps = replaceOnce(t, stepsRel, steps, "\t// TODO: what the steps need besides that.\n", "\t// Mongo writes the audit step's record.\n\tMongo fmongo.IMongo\n")
+		"\t\"github.com/tjbdwanghaibo/roost-core/framework/saga\"\n\tfmongo \"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo\"\n\t\"go.mongodb.org/mongo-driver/v2/bson\"\n")
+	steps = replaceOnce(t, stepsRel, steps, "\t// TODO: what the steps need besides that.\n", "\t// Audit is gift_audit in the Player DAO's physical database (the logical\n\t// db=main resolved through dataengine.databases).\n\tAudit fmongo.ICollection\n")
 	steps = replaceOnce(t, stepsRel, steps, "\tPlayerID int64 `json:\"player_id\"`\n", "\tFrom   int64 `json:\"from\"`\n\tTo     int64 `json:\"to\"`\n\tAmount int64 `json:\"amount\"`\n")
 	for _, method := range []struct{ name, who string }{{"runDebit", "From"}, {"compensateDebit", "From"}, {"runCredit", "To"}, {"compensateCredit", "To"}} {
 		signature := "func (bodies stepBodies) " + method.name + "("
@@ -469,7 +468,7 @@ func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
 	steps = replaceInFunc(t, stepsRel, steps, "func (bodies stepBodies) runAudit(", `	_ = state
 	// TODO: the step's business. Until it is written the step refuses, so a saga
 	// cannot report success for work nobody did.
-	return saga.Completion{Success: false, Error: "gift.audit is not implemented"}, nil`, `	if _, err := bodies.deps.Mongo.Database(db.PlayerDaoDBName).Collection("gift_audit").InsertOne(ctx,
+	return saga.Completion{Success: false, Error: "gift.audit is not implemented"}, nil`, `	if _, err := bodies.deps.Audit.InsertOne(ctx,
 		bson.M{"_id": command.IdempotencyKey, "saga_id": command.SagaID, "from": state.From, "to": state.To, "amount": state.Amount}); err != nil {
 		return saga.Completion{}, err
 	}
@@ -488,7 +487,12 @@ func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
 	if !ok || mongoClient == nil {
 		return nil, fmt.Errorf("level-up notices: mongo is not available")
 	}
-	notices := mongoClient.Database(db.PlayerDaoDBName).Collection("level_up_notices")
+	// db=main 是逻辑库名：经 DataEngine 冻结的映射表换成物理库。
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return nil, fmt.Errorf("level-up notices: %w", err)
+	}
+	notices := mongoClient.Database(databases.Physical(db.DatabaseMain)).Collection("level_up_notices")
 	consumer := kitdataengine.EffectConsumer{`)
 	consumer = replaceOnce(t, consumerRel, consumer, `		_ = event
 		// TODO: act on the effect. Until this is written the effect is redelivered
@@ -501,7 +505,7 @@ func fillSagaNativeBusiness(t *testing.T, root, daoDatabase string) {
 // 新手流程从零走一遍并在真实依赖上验收（D12 方向 B）：add access / entity / component / dao / handler → add saga -native
 // （送礼两步原生 + 一步 Mongo）→ add effect（升级通知）→ 填业务 → generate / build / vet / doctor → 生成工程里的
 // TestSagaNativeStepsAndEffectRealDependencies 在真实 Mongo / NATS / DataEngine / Nest 上跑一笔正向、一笔补偿与一条
-// effect 消费，核对恰好一次。DAO 库名是编译期常量，这里换成本次唯一的名字，用例结束删库删流。
+// effect 消费，核对恰好一次。DAO 写逻辑库 db=main，用例经 dataengine.databases 映射到本次唯一的物理库，结束删库删流。
 //
 // 运行：source ~/.roost-it/roost-dataengine-it/env.sh，持有 remote-acceptance.lock；scripts/test-demo-generated.sh 调用。
 func TestGeneratedSagaNativeStepsAndEffectConsumer(t *testing.T) {
@@ -523,7 +527,7 @@ func TestGeneratedSagaNativeStepsAndEffectConsumer(t *testing.T) {
 			t.Fatalf("%v: %v\n%s", args, err, out.String())
 		}
 	}
-	fillSagaNativeBusiness(t, root, fmt.Sprintf("sagagen_%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000))
+	fillSagaNativeBusiness(t, root)
 	// 先指向本检出再 generate：generate 内的 go mod tidy 要解析 go.mod 里的最低 core，它可能是尚未发布的 tag。
 	useLocalRoostCore(t, root)
 	if err := Run([]string{"generate", "--root", root}, &out, &out); err != nil {

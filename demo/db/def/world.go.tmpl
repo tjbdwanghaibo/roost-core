@@ -5,7 +5,7 @@ package dbdef
 // players ever entered this server and how many matches it formed — and they
 // move only inside World's Nest lock, through the generated mutators.
 //
-//roost:dao coll=world db={{DAO_DB}}
+//roost:dao coll=world db=main
 type WorldDao struct {
 	PlayersEntered int64 `bson:"players_entered" dao:"persist,sync"`
 	MatchesFormed  int64 `bson:"matches_formed" dao:"persist,sync"`

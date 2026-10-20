@@ -18,6 +18,10 @@ func (s *MongoCommitter) writeCommitPayloads(ctx context.Context, commits []enti
 		collection fmongo.ICollection
 		models     []fmongo.WriteModel
 	}
+	databases, err := s.boundDatabaseMap()
+	if err != nil {
+		return err
+	}
 	positions := make(map[collectionKey]int)
 	var groups []collectionWrites
 	add := func(db fmongo.IDatabase, name string, model fmongo.WriteModel) {
@@ -33,10 +37,10 @@ func (s *MongoCommitter) writeCommitPayloads(ctx context.Context, commits []enti
 	for _, commit := range commits {
 		for _, mutation := range commit.Mutations {
 			doc := bson.M{"_id": mutation.ID, "_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "data": append([]byte(nil), mutation.Data...)}
-			add(s.dataDB(mutation.Database, mutation.DatabaseScope), mutation.Collection, fmongo.NewReplaceOneModel(bson.M{"_id": mutation.ID}, doc, true))
+			add(s.dataDB(databases, mutation.Database, mutation.DatabaseScope), mutation.Collection, fmongo.NewReplaceOneModel(bson.M{"_id": mutation.ID}, doc, true))
 		}
 		for _, item := range commit.Deletes {
-			add(s.dataDB(item.Database, item.DatabaseScope), item.Collection, fmongo.NewDeleteOneModel(bson.M{"_id": item.ID}))
+			add(s.dataDB(databases, item.Database, item.DatabaseScope), item.Collection, fmongo.NewDeleteOneModel(bson.M{"_id": item.ID}))
 		}
 		for _, snapshot := range commit.Snapshots {
 			key := remoteSnapshotStorageKey(snapshot.Key)

@@ -272,7 +272,7 @@ func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
 		roost(append(args, "--root", root)...)
 	}
 	// 业务字段与方法（新手手册的编辑点）。
-	write("db/def/player.go", "package dbdef\n\n//roost:dao coll=player db=game\ntype PlayerDao struct {\n\tGold int64 `bson:\"gold\" dao:\"persist,sync\"`\n}\n")
+	write("db/def/player.go", "package dbdef\n\n//roost:dao coll=player db=main\ntype PlayerDao struct {\n\tGold int64 `bson:\"gold\" dao:\"persist,sync\"`\n}\n")
 	// 组件只经生成的 setter 改 DAO，不手动标脏：客户端收到增量靠 Nest 提交时自动收集，本用例钉住这一点。
 	edit("game/entities/player/wallet_component.go", "// Add business methods below.", `// AddGold 加金币；同步变化由 Nest 在提交时收集，不用手动标脏。
 func (component *WalletComponent) AddGold(amount int64) error {

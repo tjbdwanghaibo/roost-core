@@ -558,3 +558,31 @@ func assertStructFieldsUnexported(t *testing.T, filename, typeName string) {
 	}
 	t.Fatalf("generated type %s not found", typeName)
 }
+
+// db= 是逻辑库名：写法不对（大写、连字符、系统库名）在解析时拒绝并点名；多个 DAO 的同一逻辑库合成一个常量，
+// 任一 DAO 按 sid 分库即登记为按 sid 分库；常量名撞车（a_1 与 a1 都是 DatabaseA1）时拒绝。
+func TestDatabaseMarkerIsALogicalNameAndGeneratesOneConstantPerDatabase(t *testing.T) {
+	for _, bad := range []string{"Game", "card-rpg", "admin", "9lives"} {
+		dir := t.TempDir()
+		source := "package def\n\n//roost:dao coll=heroes db=" + bad + "\ntype HeroDao struct {\n\tName string `dao:\"persist\"`\n}\n"
+		if err := os.WriteFile(filepath.Join(dir, "hero.go"), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseDefDir(dir); err == nil || !strings.Contains(err.Error(), "db="+bad+" is the logical database name") {
+			t.Fatalf("db=%s: parse = %v, want a refusal naming the logical database", bad, err)
+		}
+	}
+	databases, err := collectDatabases([]DaoDef{
+		{Name: "PlayerDao", Db: "main"}, {Name: "GuildDao", Db: "main", DbScope: "sid"}, {Name: "AuditDao", Db: "audit_log"}, {Name: "GhostDao", NoCollection: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(databases) != 2 || databases[0].Const != "DatabaseAuditLog" || databases[1].Const != "DatabaseMain" || !databases[1].ServerScoped ||
+		strings.Join(databases[1].Daos, ",") != "GuildDao,PlayerDao" {
+		t.Fatalf("databases = %+v", databases)
+	}
+	if _, err := collectDatabases([]DaoDef{{Name: "A", Db: "a_1"}, {Name: "B", Db: "a1"}}); err == nil || !strings.Contains(err.Error(), "both generate the constant DatabaseA1") {
+		t.Fatalf("colliding constants: %v", err)
+	}
+}
