@@ -2,7 +2,7 @@
 
 这份文档适合第一次接触 Roost 的开发者。你不需要先理解分布式事务、WAL 或所有 Go 类型。先知道一条游戏请求如何完成，再按需要阅读模块文档。
 
-这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。当前发布版本是 **v1.28.0**（[发布说明](release/v1.28.0-NOTES.md)；之后未发版的变化见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]`）。正式支持范围是 macOS 和 Linux。
+这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。当前发布版本是 **v1.29.0**（[发布说明](release/v1.29.0-NOTES.md)；之后未发版的变化见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]`）。正式支持范围是 macOS 和 Linux。
 
 ## 1. Roost 帮你解决什么
 
@@ -68,7 +68,7 @@ Roost 把这三件事分别交给三个核心模块：
 以下命令用于 macOS/Linux。安装 Git 和 Go 1.27.x，确认 `go version` 的输出符合要求。首次执行可能需要下载 Go 依赖。
 
 ```sh
-git clone --branch v1.28.0 https://github.com/tjbdwanghaibo/roost-core.git
+git clone --branch v1.29.0 https://github.com/tjbdwanghaibo/roost-core.git
 cd roost-core/examples/configgen
 GOWORK=off go run .
 ```
@@ -119,6 +119,6 @@ GOWORK=off go run ./fireball
 
 先看“必须保持的契约”和流程说明，带着一个具体问题再展开源码或测试目录。例如想知道持久字段写入为什么被拒绝，就查 DataEngine/Nest 对应的实现入口，而不是从所有测试文件的第一行开始读。
 
-源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.28.0-VALIDATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
+源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.29.0-VALIDATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
 
 [返回文档首页](README.md) · [完整模块目录](framework/README.md)

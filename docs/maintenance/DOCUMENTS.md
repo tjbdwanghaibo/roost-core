@@ -78,6 +78,7 @@
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准（池名为当时的 fast/slow）
 - [PERF-ROUND-20261015.md](../performance/PERF-ROUND-20261015.md)：2026-10-15 性能四项（长尾归因、nestwal 编码去反射 benchstat、Remote / Saga 复测、AOI 4 并行度重档）
+- [V1290-HEAVY-30M-20261019.md](../performance/V1290-HEAVY-30M-20261019.md)：v1.29.0 发版后同参数 30 分钟重档（通过）、同日 v1.27.0 对照与 Saga 正向 20/s / 全补偿 10/s 各 10 分钟
 - [V1270-HEAVY-30M-20261014.md](../performance/V1270-HEAVY-30M-20261014.md)：v1.27.0 发布后同参数 30 分钟重档复测（通过）与 15 分钟样本对照
 - [V1260-HEAVY-20261013.md](../performance/V1260-HEAVY-20261013.md)：v1.26.0 发布后同参数 15 分钟重档复测（通过）与上一样本对照
 - [REVIEW-20261012.md](../performance/REVIEW-20261012.md)：2026-10-12 新增提交的修复与性能验证、合批测试修复证据
@@ -101,6 +102,9 @@
 
 ## docs/release
 
+- [v1.29.0-NOTES.md](../release/v1.29.0-NOTES.md)：v1.29.0 发布说明（行为变化与升级清单：端口块、advertise 地址、config check 退出码、web 错误响应、Nest 生成器报错；新能力；最低 core v1.29.0）
+- [v1.29.0-IMPLEMENTATION.md](../release/v1.29.0-IMPLEMENTATION.md)：v1.29.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
+- [v1.29.0-VALIDATION.md](../release/v1.29.0-VALIDATION.md)：v1.29.0 发布验收
 - [v1.28.0-NOTES.md](../release/v1.28.0-NOTES.md)：v1.28.0 发布说明（破坏性变化与升级清单、新能力、修复、性能；最低 core v1.28.0）
 - [v1.28.0-IMPLEMENTATION.md](../release/v1.28.0-IMPLEMENTATION.md)：v1.28.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
 - [v1.28.0-VALIDATION.md](../release/v1.28.0-VALIDATION.md)：v1.28.0 发布验收

@@ -1,0 +1,38 @@
+== v1290-heavy-30m-20261019 forward rate 20 planned 12000 completed 12000 tps 19.990 wrong 0 starterr 0 outbox 0 leases 0 verified True err ''
+  mixed P50/P95/P99/max 401.5 / 531.3 / 618.9 / 788.2
+  Harness.AdmitLag P50/P95/P99/max 0.2 / 0.7 / 1.2 / 4.7 neg 0
+  Harness.ObserveLag P50/P95/P99/max 25.0 / 47.7 / 50.1 / 80.5 neg 1
+  Server.Start P50/P95/P99/max 15.8 / 21.6 / 25.7 / 79.8 neg 0
+  Server.Completion P50/P95/P99/max 375.2 / 501.3 / 591.9 / 740.8 neg 0
+  Server.TerminalMissing = 0
+  stats {'Started': 12000, 'Dispatched': 24000, 'Completed': 12000, 'Conflicts': 1}
+  min | n | P50 | P99 | max | ServerP99
+  0 | 1200 | 395.4 | 519.7 | 559.3 | 485.1
+  1 | 1200 | 389.7 | 559.2 | 606.0 | 528.4
+  2 | 1200 | 392.9 | 619.1 | 667.8 | 593.1
+  3 | 1200 | 392.9 | 549.8 | 569.0 | 510.7
+  4 | 1200 | 394.3 | 538.0 | 619.5 | 525.5
+  5 | 1200 | 403.6 | 585.5 | 634.6 | 572.5
+  6 | 1200 | 461.4 | 686.9 | 788.2 | 654.1
+  7 | 1200 | 419.4 | 657.3 | 703.0 | 630.1
+  8 | 1200 | 395.0 | 523.0 | 571.4 | 494.7
+  9 | 1200 | 397.5 | 526.9 | 568.6 | 486.4
+== v1290-heavy-30m-20261019 compensate rate 10 planned 6000 completed 6000 tps 9.994 wrong 0 starterr 0 outbox 0 leases 0 verified True err ''
+  mixed P50/P95/P99/max 475.7 / 560.2 / 612.8 / 729.0
+  Harness.AdmitLag P50/P95/P99/max 0.3 / 1.3 / 1.7 / 41.6 neg 0
+  Harness.ObserveLag P50/P95/P99/max 25.2 / 47.9 / 50.1 / 66.8 neg 1
+  Server.Start P50/P95/P99/max 15.4 / 20.1 / 24.0 / 41.4 neg 0
+  Server.Completion P50/P95/P99/max 448.3 / 532.7 / 582.3 / 702.6 neg 0
+  Server.TerminalMissing = 0
+  stats {'Started': 6000, 'Dispatched': 18000, 'Compensated': 6000, 'Conflicts': 1}
+  min | n | P50 | P99 | max | ServerP99
+  0 | 600 | 465.1 | 631.3 | 729.0 | 619.6
+  1 | 600 | 472.0 | 602.1 | 618.4 | 568.2
+  2 | 600 | 461.4 | 562.3 | 624.3 | 540.7
+  3 | 600 | 469.3 | 582.6 | 634.9 | 544.9
+  4 | 600 | 494.7 | 620.4 | 714.6 | 601.2
+  5 | 600 | 499.0 | 636.1 | 703.5 | 627.3
+  6 | 600 | 488.5 | 605.0 | 683.2 | 584.3
+  7 | 600 | 469.3 | 578.2 | 623.0 | 561.8
+  8 | 600 | 464.2 | 623.5 | 699.8 | 582.6
+  9 | 600 | 477.5 | 592.8 | 615.8 | 554.4

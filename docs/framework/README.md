@@ -1,6 +1,6 @@
 # Roost 框架模块目录
 
-当前版本v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)）：Sync 慢消费者与自身视图、嵌入 TCP 出站队列与 Lockstep 追帧背压、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局；上一版 v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)）是 playeraccess 改名与 Remote WAL 级 Rejected 精简；此前 Nest 三池与 Await、Sync 优化和旧兼容移除见 [v1.26.0](../release/v1.26.0-NOTES.md)。重档限制与复测见发布说明；之后未发版变化见 [CHANGELOG](../../CHANGELOG.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
+当前版本v1.29.0（[发布说明](../release/v1.29.0-NOTES.md)）：业务 HTTP 路由（wiring/web）超时与请求体上限可配置、错误响应接 errcode、路由级指标，生成器的配置跨服务检查、端口块与卡牌 RPG 接入（三块运行时逻辑不变）；上一版 v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)）：Sync 慢消费者与自身视图、嵌入 TCP 出站队列与 Lockstep 追帧背压、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局；v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)）是 playeraccess 改名与 Remote WAL 级 Rejected 精简；此前 Nest 三池与 Await、Sync 优化和旧兼容移除见 [v1.26.0](../release/v1.26.0-NOTES.md)。重档限制与复测见发布说明；之后未发版变化见 [CHANGELOG](../../CHANGELOG.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
 第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
 
