@@ -36,10 +36,31 @@ cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handle
 mkdir -p game/alliance
 cp "$repo_root"/scripts/testdata/slg-alliance/*.go game/alliance/
 for name in runtime delivery; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
-gofmt -w db/def/player.go game/handler/alliance_rewards.go game/alliance/*.go
+if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
+ "$review_root/roost" add mod remote_entity -service game >> "$review_root/generate.log" 2>&1
+ "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1
+ "$review_root/roost" add dao AllianceAuthority --entity AllianceAuthority >> "$review_root/generate.log" 2>&1
+ python3 - "$project_root" <<'REMOTE'
+from pathlib import Path
+import os,sys
+root=Path(sys.argv[1]);p=root/'game/entities/alliance_authority/entity.go'
+s=p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryRemote remote=managed').replace('*entity.EntityBase','*entity.RemoteEntityBase');p.write_text(s)
+p=root/'db/def/alliance_authority.go';s=p.read_text().replace('type AllianceAuthorityDao struct {','type AllianceAuthorityDao struct {\n State string `bson:"state" dao:"persist"`').replace('db=slg_alliance_practice','db='+os.environ['ROOST_SLG_REWARD_DB']+' dbscope=global');p.write_text(s)
+REMOTE
+ cp "$repo_root/scripts/testdata/slg-alliance/remote/handlers.go.txt" game/handler/alliance_authority.go
+ for name in runtime store remote; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
+fi
+gofmt -w db/def/*.go game/handler/*.go game/alliance/*.go
+
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAlliancePlayerDelivery$' ./game/alliance | tee "$review_root/delivery.log"
-if [[ "$(grep -c '^--- PASS: TestSLGAlliancePlayerDelivery ' "$review_root/delivery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/delivery.log"; then exit 1; fi
+if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
+ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAllianceRemoteDelivery$' ./game/alliance | tee "$review_root/delivery.log"
+ expected=TestSLGAllianceRemoteDelivery
+else
+ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAlliancePlayerDelivery$' ./game/alliance | tee "$review_root/delivery.log"
+ expected=TestSLGAlliancePlayerDelivery
+fi
+if [[ "$(grep -c "^--- PASS: $expected " "$review_root/delivery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/delivery.log"; then exit 1; fi
 go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check

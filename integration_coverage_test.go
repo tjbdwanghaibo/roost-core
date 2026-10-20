@@ -502,6 +502,7 @@ var generatedRealDependencyEntries = []struct {
 var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
+	{"TestSLGAllianceRemoteDelivery", "scripts/test-slg-alliance-player.sh", "^TestSLGAllianceRemoteDelivery$", "ROOST_SLG_REMOTE=1：CLI 生成 Managed Remote 联盟 DAO/Sender，两个同进程 Runtime 共用真实 Mongo/Redis，owner 2000→2001 推进 marker/route、旧写者被拒、新 owner 冷读完整事实后接续同一活动与两个 Player SIGKILL；实际帧 Receiver 验证撤权/held/重连与旧 epoch，原服有界义务扫描在到账未标记时恢复；不含跨机自动 HA"},
 	{"TestSLGAlliancePlayerDelivery", "scripts/test-slg-alliance-player.sh", "^TestSLGAlliancePlayerDelivery$", "同一 SLG 联盟活动链继续读取已 ACK 的原服持久义务；CLI 生成 Player DAO/Sender，两个静态 sid 各自子进程及 WAL，两条 strict 未投影记录后 SIGKILL；恢复先核对金币与永久回执，再并发重投，第三进程验证每人仅 10 金币；错服、修改金额拒绝；需要隔离 Redis/NATS/Mongo"},
 	{"TestSLGAllianceActivity", "scripts/test-slg-alliance.sh", "^TestSLGAllianceActivity$", "隔离 Redis/NATS：两个静态 sid 客户端经正式 activity RPC 调用独立协调器进程，成员撤权与 Interest 来源归并、持久贡献意图在应用确认丢失和协调器重启后只计一次、冻结后阶段屏障、原服奖励义务回执与 ACK 重投；不含 Player 金币到账、Remote 联盟权威或真实客户端视野"},
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖，核对 Buff 期限已进驱动索引后启动驱动投递循环（不手发 Tick、不调用 DeliverDue），循环补触发一次离线到期的 Buff（投递计数 1、无重投）；不是崩溃注入"},

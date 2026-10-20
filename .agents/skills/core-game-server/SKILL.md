@@ -95,9 +95,13 @@ review 每个重要结论都要关联该类型的具体玩法后果，并区分�
 
 每次选一条具体链路，产出“玩法输入 → 状态拥有者 → 正式接口与源码 → 提交／可见性／失败顺序 → 可执行场景 → 证据与缺口”，维护在 SLG／MMORPG 现行手册。建议主线为 SLG 跨服联盟活动、MMO 跨服世界 Boss；先完成各自独立模块验证，再连接跨服、视野和活动，不能把三个各自通过的测试当作联合链路已通过。
 
-SLG 联盟活动主线先运行 `scripts/test-slg-alliance.sh`（显式隔离 Redis / NATS），学习 `scripts/testdata/slg-alliance` 的“成员权限与贡献意图同 CAS → 已提交关系视野 → 窗口固定的贡献补报 → 冻结并清空待报意图 → 两服阶段聚合 → 原服奖励义务持久回执 → ACK”。此入口直接消费正式生成的 Activity RPC；协调器为子进程，两个静态 sid 客户端在父进程。按 SLG 手册区分已验收与后续：Interest 来源归并不等于空间迷雾或客户端协议；业务 Redis CAS 不等于 Remote owner/fence；原服收到奖励义务不等于 Player 已到账；正常重启不等于 SIGKILL／断电。超出贡献服务去重期限的未确认意图停止自动补报、交业务对账，不能换身份重加。Player 金币到账由下面的生成消费者扩展继续验证；后续把正式 Remote 联盟实体、邮件附件、空间提交门与跨服撤权传播逐项接入同一条链路，保留这些区别。
+SLG 联盟活动主线先运行 `scripts/test-slg-alliance.sh`（显式隔离 Redis / NATS），学习 `scripts/testdata/slg-alliance` 的“成员权限与贡献意图同 CAS → 已提交关系视野 → 窗口固定的贡献补报 → 冻结并清空待报意图 → 两服阶段聚合 → 原服奖励义务持久回执 → ACK”。此入口直接消费正式生成的 Activity RPC；协调器为子进程，两个静态 sid 客户端在父进程。按 SLG 手册区分已验收与后续：Interest 来源归并不等于空间迷雾或客户端协议；业务 Redis CAS 不等于 Remote owner/fence；原服收到奖励义务不等于 Player 已到账；正常重启不等于 SIGKILL／断电。超出贡献服务去重期限的未确认意图停止自动补报、交业务对账，不能换身份重加。Player 金币到账由下面的生成消费者扩展继续验证；Remote 联盟实体由下面的可选模式继续验证；邮件附件、空间提交门与跨服撤权传播仍逐项接入，保留这些区别。
 
-联盟活动的实际 Player 到账用 `scripts/test-slg-alliance-player.sh`：显式 Redis/NATS/Mongo，CLI 生成 Player DAO/Sender，同一活动链 ACK 后从原服持久义务继续发金币；每个静态 sid 独立 WAL 与测试子进程，建档＋到账两条 strict 未投影后 SIGKILL，恢复先比较完整钱包，再重读义务／并发重试，第三进程再次验证。金币与永久回执同一 Player 事务；错服／改金额拒绝，账本满后拒新身份。此项补齐实际资产证据，但不升级 ACK 为玩家已领奖，不证明 Remote 权威、Saga、邮件附件、自动扫描归档、完整网关服务或跨机故障。之后优先接 Remote 联盟实体与空间视野传播；继续维护 SLG 手册中的两个入口和各自证据边界。
+联盟活动的实际 Player 到账用 `scripts/test-slg-alliance-player.sh`：显式 Redis/NATS/Mongo，CLI 生成 Player DAO/Sender，同一活动链 ACK 后从原服持久义务继续发金币；每个静态 sid 独立 WAL 与测试子进程，建档＋到账两条 strict 未投影后 SIGKILL，恢复先比较完整钱包，再重读义务／并发重试，第三进程再次验证。金币与永久回执同一 Player 事务；错服／改金额拒绝，账本满后拒新身份。此项补齐实际资产证据，但不升级 ACK 为玩家已领奖，不证明 Remote 权威、Saga、邮件附件、常驻调度与长期归档、完整网关服务或跨机故障。Remote 联盟实体已有下一段扩展；之后优先接空间事实与跨服视野传播，继续维护各运行模式的证据边界。
+
+`ROOST_SLG_REMOTE=1 bash scripts/test-slg-alliance-player.sh` 把联盟事实换成 CLI 生成的 Managed Remote 实体，生成 Sender 执行业务条件写，Mongo 权威 / Redis 锁与 L2 / 两个 Runtime 的独立 WAL 按正式装配接线。先比较完整冷事实，再继续同一活动、原服义务与 Player 崩溃恢复。显式 owner 2000→2001 要检查 marker / route 上升、旧 Runtime 活着仍被拒；Claim 后检查 Shared，不无条件重复 EnterShared。业务 CAS 版本不是 Remote fence，未知提交不当作冲突盲重算。两 Runtime 位于同一父进程，不声称跨机 HA、Mirror 推送或 lease 中途过期已测。
+
+联盟各入口的视野用正式 frame.Receiver 解码，验证来源撤销、权限读取失败先 held、重连 Full 和旧 epoch 拒绝；内存捕获不等于真实 TCP 或空间迷雾。原服 `deliverPending` 从持久义务发现最多 128 个窗口，Player 成功后才写 Delivered；测试在到账未标记时 SIGKILL，恢复重投由永久回执去重，第三进程无待发项。一次有界泵不等于常驻调度或长期归档。后续重点是 SpatialComponent 提交门、多块观察、跨服权限传播与真实客户端，不重复把独立基础测试当整条链路完成。
 
 ### 全框架实践与问题归属
 

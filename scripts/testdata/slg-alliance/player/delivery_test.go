@@ -69,17 +69,48 @@ func rewardChild(t *testing.T, mode string) {
 		check(t, e)
 		_, e = s.Sync_AllianceHomeInit(ctx, n.id, sid)
 		check(t, e)
-		if gold := creditObligation(t, h, key, n, name); gold != 10 {
-			t.Fatal("first credit", gold)
-		}
-		raw, e := s.Sync_AllianceWallet(ctx, n.id)
+		before, found, e := h.store.Get(ctx, "rewards")
 		check(t, e)
-		stats := n.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 2 {
-			t.Fatalf("want two strict unprojected records: %+v", stats)
+		if !found {
+			t.Fatal("missing original home receipt")
 		}
-		check(t, os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600))
-		select {} // 父进程仅在两条已确认 strict 记录后杀掉自己启动的原服子进程。
+		failed, e := h.deliverPending(ctx, 1, func(context.Context, activity.Key, string, int64) error {
+			return fmt.Errorf("injected Player unavailable")
+		})
+		if e == nil || failed != 0 {
+			t.Fatal("failed Player call was completed")
+		}
+		after, found, e := h.store.Get(ctx, "rewards")
+		check(t, e)
+		if !found || after.Version != before.Version {
+			t.Fatal("failed delivery changed home receipt")
+		}
+		_, e = h.deliverPending(ctx, 1, func(ctx context.Context, work activity.Key, p string, amount int64) error {
+			if work != key || p != name || amount != 10 {
+				return fmt.Errorf("unexpected discovered obligation")
+			}
+			gold, e := s.Sync_AllianceCredit(ctx, n.id, sid, work, amount)
+			if e != nil {
+				return e
+			}
+			if gold != 10 {
+				return fmt.Errorf("first credit %d", gold)
+			}
+			raw, e := s.Sync_AllianceWallet(ctx, n.id)
+			if e != nil {
+				return e
+			}
+			stats := n.projector.Stats()
+			if stats.Projected != 0 || stats.WALUnacked != 2 {
+				return fmt.Errorf("want two unprojected strict records: %+v", stats)
+			}
+			if e = os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600); e != nil {
+				return e
+			}
+			select {} // Player 已到账、原服 Delivered 尚未写入；父进程此时 SIGKILL。
+		})
+		check(t, e)
+		t.Fatal("writer did not reach crash barrier")
 	}
 	if mode != "recover" && mode != "verify" {
 		t.Fatal("unknown child mode")
@@ -101,6 +132,32 @@ func rewardChild(t *testing.T, mode string) {
 	check(t, json.Unmarshal([]byte(wallet.Receipts), &receipts))
 	if wallet.Home != sid || wallet.Gold != 10 || len(receipts) != 1 || receipts[key.String()] != 10 {
 		t.Fatal("cold permanent receipt or asset missing", wallet)
+	}
+	// 恢复先比钱包，再从原服账本发现未完成义务；第三进程必须已无待发工作。
+	delivered, e := h.deliverPending(ctx, 1, func(ctx context.Context, work activity.Key, p string, amount int64) error {
+		if p != name {
+			return fmt.Errorf("wrong static player mapping")
+		}
+		gold, e := s.Sync_AllianceCredit(ctx, n.id, sid, work, amount)
+		if e == nil && gold != 10 {
+			return fmt.Errorf("recovered credit %d", gold)
+		}
+		return e
+	})
+	check(t, e)
+	want := 1
+	if mode == "verify" {
+		want = 0
+	}
+	if delivered != want {
+		t.Fatalf("discovered pending obligations=%d want %d", delivered, want)
+	}
+	again, e := h.deliverPending(ctx, 1, func(context.Context, activity.Key, string, int64) error {
+		return fmt.Errorf("completed obligation sent again")
+	})
+	check(t, e)
+	if again != 0 {
+		t.Fatal("delivered marker was not durable")
 	}
 	// 一笔已到账义务并发重投，资产与账本保持一致；错误金额及错服不能借旧身份绕过检查。
 	var wg sync.WaitGroup
@@ -152,15 +209,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	if os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" || os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR") == "" || os.Getenv("ROOST_DATAENGINE_IT_NATS_URL") == "" {
 		t.Skip("run scripts/test-slg-alliance-player.sh")
 	}
-	runAllianceActivity(t, func(t *testing.T, prefix string, key activity.Key) {
-		for _, sid := range []int32{1000, 1001} {
-			root := filepath.Join(os.Getenv("ROOST_SLG_REWARD_WAL"), fmt.Sprint(sid))
-			check(t, os.MkdirAll(root, 0700))
-			runRewardProcess(t, "write", sid, prefix, root)
-			runRewardProcess(t, "recover", sid, prefix, root)
-			runRewardProcess(t, "verify", sid, prefix, root)
-		}
-	})
+	runAllianceActivity(t, deliverPlayers)
 	// 仅成功后删除本次唯一库；失败保留数据库、WAL 与子进程日志。
 	mongo, e := mongodriver.NewClient(fmongo.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")), mongodriver.IndexMigrationPolicy{})
 	check(t, e)
@@ -168,6 +217,16 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_REWARD_DB")).Drop(context.Background()))
 	t.Log("same activity workflow: both static homes credit generated Player DAO; two unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
+func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
+	for _, sid := range []int32{1000, 1001} {
+		root := filepath.Join(os.Getenv("ROOST_SLG_REWARD_WAL"), fmt.Sprint(sid))
+		check(t, os.MkdirAll(root, 0700))
+		runRewardProcess(t, "write", sid, prefix, root)
+		runRewardProcess(t, "recover", sid, prefix, root)
+		runRewardProcess(t, "verify", sid, prefix, root)
+	}
+}
+
 func runRewardProcess(t *testing.T, mode string, sid int32, prefix, root string) {
 	t.Helper()
 	log, e := os.Create(filepath.Join(root, mode+".log"))

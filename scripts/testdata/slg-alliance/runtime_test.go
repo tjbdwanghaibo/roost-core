@@ -132,18 +132,35 @@ func client(t *testing.T, prefix string, sid int32) *activity.BusClient {
 }
 
 // 唯一公开的地图内容只有据点 id；该切片不发送坐标、敌方实体、成员名单或奖励账本。
-// 这里验证 Interest 的关系合并与撤销，不以传输计数冒充真实客户端协议验收。
-type viewSink struct{}
+// 输出正式编码帧，由 fog_test 的 Receiver 验证关系撤销与重连；内存捕获不冒充 TCP 验收。
+type viewSink struct {
+	mu     sync.Mutex
+	frames map[entitysync.SessionID][][]byte
+}
 
-func (viewSink) Push(context.Context, entitysync.SessionID, []byte) error { return nil }
+func (s *viewSink) Push(_ context.Context, id entitysync.SessionID, raw []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.frames[id] = append(s.frames[id], append([]byte(nil), raw...))
+	return nil
+}
+func (s *viewSink) take(id entitysync.SessionID) [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.frames[id]
+	delete(s.frames, id)
+	return out
+}
 
 type fog struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
+	sink     *viewSink
 }
 
 func newFog(t *testing.T) *fog {
-	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: viewSink{}})
+	sink := &viewSink{frames: map[entitysync.SessionID][][]byte{}}
+	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
 	check(t, e)
 	t.Cleanup(func() { check(t, m.Close(context.Background())) })
 	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, Relations: []string{"alliance", "scout"}, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
@@ -155,16 +172,25 @@ func newFog(t *testing.T) *fog {
 	for _, id := range []int64{1, 2} {
 		check(t, m.OpenSession(entitysync.SessionID(id)))
 	}
-	return &fog{m, in}
+	return &fog{m, in, sink}
 }
 
 // 持久成员状态成功之后才重建关系。调用方串行协调本服视野并暂停会话发布；
 // 失败保持 held，不能把陈旧成员缓存当授权。跨服撤权传播延迟不在此切片保证内。
 func (f *fog) reconcile(s state) error {
-	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
-		if e := f.manager.HoldSession(entitysync.SessionID(id)); e != nil {
+	return f.reconcileFrom(func() (state, error) { return s, nil })
+}
+func (f *fog) reconcileFrom(load func() (state, error)) error {
+	for _, id := range []entitysync.SessionID{1, 2} {
+		if e := f.manager.HoldSession(id); e != nil {
 			return e
 		}
+	}
+	s, e := load()
+	if e != nil {
+		return e
+	}
+	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
 		if s.Members[p].Active {
 			f.interest.Relation("alliance").Set(id, []int64{99})
 		} else {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
@@ -34,8 +35,14 @@ type state struct {
 
 // 联盟权威用一个 CAS 同时裁决成员权限和贡献意图。每个已验战果固定 10 分，
 // 教学账本最多 128 条，满后拒新写。业务实例不自动归档或删除旧身份。
+type allianceStore interface {
+	Get(context.Context, string) (versionstore.Versioned[state], bool, error)
+	Create(context.Context, string, state) (versionstore.Versioned[state], bool, error)
+	Update(context.Context, string, versionstore.Mutate[state]) (versionstore.Versioned[state], bool, error)
+}
+
 type alliance struct {
-	store versionstore.Store[string, state]
+	store allianceStore
 	key   activity.Key
 }
 
@@ -167,8 +174,9 @@ type reward struct {
 	Points map[string]int64
 }
 type homeState struct {
-	SID      int32
-	Receipts map[string]reward
+	SID       int32
+	Receipts  map[string]reward
+	Delivered map[string]bool
 }
 type home struct {
 	sid   int32
@@ -217,4 +225,71 @@ func (h *home) receive(ctx context.Context, d activity.Dispatch, s state) error 
 		return cur, true, nil
 	})
 	return e
+}
+
+// deliverPending 是启动／定时任务可调用的一次有界泵：从原服义务账本发现工作，
+// 不依赖已 ACK 的协调器索引，不猜当前窗口。只有全部 Player 永久到账成功才标记完成。
+// grant 在 CAS 外调用；进程在到账与标记之间退出时，恢复会重投同身份，由 Player 去重。
+// 回执与 Delivered 一起保留，不用这个标记替代 Player 永久回执；本示例不自动归档。
+func (h *home) deliverPending(ctx context.Context, limit int, grant func(context.Context, activity.Key, string, int64) error) (int, error) {
+	if limit < 1 || limit > 128 || grant == nil {
+		return 0, errRefused
+	}
+	stored, found, e := h.store.Get(ctx, "rewards")
+	if e != nil || !found {
+		return 0, e
+	}
+	if stored.Value.SID != h.sid {
+		return 0, errRefused
+	}
+	keys := make([]string, 0, len(stored.Value.Receipts))
+	for k := range stored.Value.Receipts {
+		if !stored.Value.Delivered[k] {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	done := 0
+	for _, k := range keys {
+		if done == limit {
+			break
+		}
+		r := stored.Value.Receipts[k]
+		if k != r.Key.String() {
+			return done, errRefused
+		}
+		players := make([]string, 0, len(r.Points))
+		for p := range r.Points {
+			players = append(players, p)
+		}
+		slices.Sort(players)
+		for _, p := range players {
+			if e := grant(ctx, r.Key, p, r.Points[p]); e != nil {
+				return done, e
+			}
+		}
+		_, _, e = h.store.Update(ctx, "rewards", func(cur homeState, found bool) (homeState, bool, error) {
+			if !found || cur.SID != h.sid {
+				return cur, false, errRefused
+			}
+			actual, ok := cur.Receipts[k]
+			if !ok || actual.Key != r.Key || !maps.Equal(actual.Points, r.Points) {
+				return cur, false, errRefused
+			}
+			if cur.Delivered[k] {
+				return cur, false, nil
+			}
+			cur.Delivered = maps.Clone(cur.Delivered)
+			if cur.Delivered == nil {
+				cur.Delivered = map[string]bool{}
+			}
+			cur.Delivered[k] = true
+			return cur, true, nil
+		})
+		if e != nil {
+			return done, e
+		}
+		done++
+	}
+	return done, nil
 }

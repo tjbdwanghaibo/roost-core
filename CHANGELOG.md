@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### SLG 联盟联合链：Remote owner、视野帧恢复与原服待发扫描
+
+- `ROOST_SLG_REMOTE=1 scripts/test-slg-alliance-player.sh` 生成 Managed Remote 联盟 DAO/Sender，通过真实 Mongo/Redis 的两个 Runtime 显式交接 owner 2000→2001；旧 Runtime 写被 fence 拒绝，新 Runtime 冷读完整事实后继续同一活动与两服 Player SIGKILL 恢复。不是跨机自动 HA。
+- 联盟视野增加正式 Receiver 编码帧／对象表验证、权限源失败先 held、重连 Full 与旧 epoch 拒绝；原服增加有界持久义务扫描，Player 失败不标完成、到账与完成标记之间 SIGKILL 后重投不增币。业务改动仅在消费者夹具，公共框架未改；接法与未验证范围见 [SLG 手册](docs/framework/SLG-INTEGRATION.md)。
+
 ### SLG 联盟活动：原服 Player 实际到账与崩溃恢复
 
 - 新增 `scripts/test-slg-alliance-player.sh`，CLI 生成 Player DAO/Sender，复用同一联盟活动链；奖励义务 ACK 后从原服持久记录继续兑现，金币与永久回执同一 strict 事务，错服与同身份改金额拒绝。

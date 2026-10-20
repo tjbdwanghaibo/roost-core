@@ -28,7 +28,7 @@ func TestSLGAllianceActivity(t *testing.T) {
 }
 
 // deliver 用于扩展同一条活动链路；基础入口只验收原服义务，生成 Player 入口继续实际到账。
-func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity.Key)) {
+func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity.Key), factories ...func(*testing.T, string, activity.Key) *alliance) {
 	addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -38,10 +38,17 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 	r := redisClient(t)
 	c1, c2 := client(t, prefix, 1000), client(t, prefix, 1001)
 	key := activity.Key{GroupID: "alliance", ActivityID: "season-1-window-1", Phase: activity.PhaseSettle}
-	a, e := newAlliance(r, prefix, key)
-	check(t, e)
+	createAlliance := func() *alliance {
+		if len(factories) > 0 {
+			return factories[0](t, prefix, key)
+		}
+		a, e := newAlliance(r, prefix, key)
+		check(t, e)
+		return a
+	}
+	a := createAlliance()
 	check(t, a.open(ctx))
-	_, e = c1.OpenActivity(ctx, key, []int32{1000, 1001})
+	_, e := c1.OpenActivity(ctx, key, []int32{1000, 1001})
 	check(t, e)
 	f := newFog(t)
 	s, e := a.read(ctx)
@@ -88,6 +95,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 	if f.visible(t, 2) || !f.visible(t, 1) {
 		t.Fatal("last source revocation incorrect")
 	}
+	verifyFogRecovery(t, f, func() (state, error) { return a.read(ctx) })
 	if e := a.contribute(ctx, 1001, "bob", "after-revoke", time.Now()); !errors.Is(e, errRefused) {
 		t.Fatal("revoked member contributed", e)
 	}
@@ -105,8 +113,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 	// 重建真正的协调器子进程以及业务对象，不能用旧内存的 Sent 标记冒充恢复。
 	stop()
 	stop = startCoordinator(t, prefix)
-	a, e = newAlliance(r, prefix, key)
-	check(t, e)
+	a = createAlliance()
 	// 超出 TTL 的待报意图必须人工对账，绝不能换请求身份或盲目重加。
 	if e := a.drain(ctx, c1, time.Now().Add(2*time.Hour)); e == nil {
 		t.Fatal("expired intent was automatically replayed")
