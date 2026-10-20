@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 业务时区与业务日：`time.business_timezone` / `time.business_day_start`、`clock` 业务日辅助、生成的 `main` 内嵌 `time/tzdata`（DESIGN-TODO D18，维护者 2026-10-20 决定 A；已实施）
+
+- **新增配置（App 声明）**：`time.business_timezone`（IANA 名，缺省 `UTC`）与 `time.business_day_start`（每日重置时刻，业务时区的墙上时间 `HH:MM`，缺省 `00:00`）。拼错 / 非 IANA 的名字、`Local`、空名、非两位 `HH:MM` 在加载时拒绝并点名键（启动前检查、`--check-config`、doctor `config-check`、`roost config check` 同一处）；两个键标了 `shared`，`roost config check --all` / doctor `config-across-services` 要求同一工程各服务相同。启动日志 `starting server` 打印 `business_timezone` 与 `business_day_start`。不写这两个键的现有配置行为不变（UTC 00:00）。
+- **新增 API（`infra/base/clock`）**：`Calendar`（`BusinessDay(t) Day`、`DayStart(t)`、`NextDayStart(t)`、`Location`、`DayStartOffset`）、`Day`（十进制 `YYYYMMDD`，可存 DAO、可比较）、`ParseCalendar` / `LoadTimezone` / `ParseDayStart` / `NewCalendar`、进程级 `SetCalendar` / `ProcessCalendar` 与包级 `BusinessDay` / `DayStart` / `NextDayStart`、带日历的业务时钟 `NewBusinessIn` 与 `CalendarOf`；`framework/app` 新增 `BusinessCalendar(registry)`。重置时刻按墙上时间：夏令时切换日是 23 / 25 小时。
+- **生成器（行为变化）**：每个服务的开发配置与生产示例新增 `time:` 段写明两个键；生成的 `main.go` 导入 `time/tzdata`（二进制约大 450 KB），distroless 运行镜像没有 zoneinfo 也能加载时区。生成工程的 IMPLEMENTATION 文档补“业务日”约定。
+- **glsvet**：业务包（`game` 目录）里的 `time.Local`、`time.LoadLocation` 打印 hint（`//glsvet:system-clock` 豁免），不计入失败。
+- **升级**：已有工程的 `main.go` 与服务配置归应用，sync 不改：在 `main.go` 的 import 里加 `_ "time/tzdata"`，在各服务配置里加 `time.business_timezone` / `time.business_day_start`（各服务相同）。不加导入时，没有 zoneinfo 的镜像里配置非 UTC 时区会在启动检查被拒绝（报错点名 `time/tzdata`），不会静默退回 UTC。
+- 修前红：`infra/base/clock` 新用例编译失败 `undefined: Calendar`；`TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock` 报 `App does not declare time.business_timezone`；`TestGeneratedMainEmbedsTheTimeZoneDatabase` 报 `with the generated main's imports [] and no zoneinfo on the host, loading Asia/Shanghai: exit status 1: operation not permitted`；编译出的 game-demo 进程（main 不导入 tzdata）在看不到 zoneinfo 的环境里拒绝 `Asia/Shanghai`。只设 `ZONEINFO` 为空目录模拟不了没有 zoneinfo（Go 回落到系统目录），回归在 macOS 上用 `sandbox-exec`，其他主机上能看到 zoneinfo 时 Skip。
+- 文档：[guide/10-time §2A](docs/framework/guide/10-time.md#2a-业务时区与业务日)、[impl/10-time §1A](docs/framework/impl/10-time.md#1a-业务日历design-todo-d18)、CODEGEN_REFERENCE §14、PROJECT_GENERATOR、[DESIGN-TODO D18](docs/maintenance/DESIGN-TODO.md#d18-业务时区与业务日边界)、KNOWN-LIMITS“业务时区与每日重置”。
+
 ### 生成的开发配置不再写死不带 sid 的 WAL 目录（同一工作目录起两个 sid 时第二个进程启动失败）
 
 - **修正（生成器，行为变化）**：新工程的 `configs/service/config.<svc>.yaml` 不再写 `dataengine.wal.dir: data/wal/dataengine`，WAL 目录取运行期缺省 `data/wal/dataengine/<sid>`，按 sid 分开。以前这一行绕过了按 sid 分目录的缺省：同一工作目录、同一份配置用 `--sid` 再起一个 game 进程时两个进程争同一把 WAL 目录锁，第二个在 DataEngine Start 时报 `nestwal: directory is already locked` 退出（`deploy/dev/second-game.sh` 靠 sed 改目录才避开）。根因是 `wiring/dataengine/mod.go` 的 `WAL.Dir` 声明带了 `example:"data/wal/dataengine"`，带 example 的键都是 starter 键、会被写进生成配置。现去掉 example，解释改写在 `dataengine.wal` 段的注释上；`codegen/internal/roost/kitconfig_gen.go` 重新生成。生产示例与 k8s Secret 示例照旧写 `dir: /var/lib/roost/wal`（每个实例独占的持久卷），改由 `productionizeConfig` 插入（重复改写不会写出第二个 `dir`）。`second-game.sh` 的 sed 规则保留，只对手写了 `…/wal/dataengine` 的配置起作用。其他 starter 键里没有同类问题：`log.dir`（文件名含 sid）、`stats_log.dir`（文件名缺省 `<server_type>-<sid>.stats.log`）、`config_data.dir`（只读）都不按进程独占；`dataengine.outbox.owner`、`saga.owner`、`stats_log.filename` 本来就不写进生成配置、缺省含 sid；nestwal 只有 DataEngine 这一处打开，remote_entity / saga 没有本地 WAL 目录。

@@ -884,11 +884,25 @@ roost format check
 键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)`（`--all` 时 `config keys ok (cross-mod rules not checked)`）结束、退出码 5，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
 production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
 
+**业务时区（`time:` 段，DESIGN-TODO D18）**：每个服务的开发配置与生产示例都写明
+
+```yaml
+time:
+  business_timezone: UTC     # IANA 名，例如 Asia/Shanghai；缺省 UTC
+  business_day_start: 00:00  # 每日重置时刻，业务时区的墙上时间 HH:MM；缺省 00:00
+```
+
+业务日、每日 / 每周重置、按日历划分的活动窗口按这两个键算（`app.BusinessCalendar(registry)`、`clock.BusinessDay` / `DayStart` / `NextDayStart`），
+不取机器的 `TZ` / `time.Local`；存储与协议里的时间仍是绝对时刻。生产上写游戏运营所在的时区（例如 `Asia/Shanghai`）。
+拼错的时区名、`Local`、不是两位 `HH:MM` 的重置时刻在进程的 `--check-config`（因而 `config check`、doctor `config-check:<service>`、启动前检查）里拒绝并点名键；
+两个键都标了 shared，`config check --all` / doctor `config-across-services` 要求各服务相同。生成的 `main.go` 导入 `time/tzdata`（约 450 KB），
+distroless 运行镜像里没有 zoneinfo 也能加载时区；手写或旧工程的 `main.go`（归应用，sync 不改）在这类镜像里要自己加 `_ "time/tzdata"`，否则启动检查报 `is not a time zone this process can load`。
+
 `--keys-only` 只做键检查：不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束（适合没有 Go 工具链或只改了键的 CI 步骤）；键检查里发现可疑键时也不读业务声明复核，会在问题末尾注明。
 
 `--all` 在逐个文件之后比较**各服务之间**（`checkConfigAcrossServices`，doctor 的 `config-across-services` 是同一个实现）。规则来自配置声明的 tag，不在生成器里另列：
 
-- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`。按写法比较（只去掉首尾空白）。
+- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start`。按写法比较（只去掉首尾空白）。
 - 同一主机上各不相同（`unique:"<组名>"`）：开发配置集里各服务的取值必须两两不同。当前只有 `etcd.advertise_addr`——它不是监听地址，是写进服务注册、别的进程据此连接本服务的地址，两个服务写同一个会把请求送错地方（生成器按端口块号给 `127.0.0.1:9000+N`，见[项目生成器](PROJECT_GENERATOR.zh-CN.md) §5“端口块”）。没写也没有缺省值的不比较；生产示例不比较。
 - 与端口块对照（WARN，不影响退出码）：开发配置里写的 `ops.addr` / `etcd.advertise_addr` 端口不是 `roost.yaml` 的 `services.<name>.port_block` 派生的 `9100+N` / `9000+N` 时，列在 `cross_service.warnings`（文本输出 `cross-service warnings`）；配置归应用、可以有意换端口，但 `deploy/dev/run.sh` 与 `second-game.sh` 按块号走。
 - 监听端口（`listen:"<开关键>"`）：开发配置集 `configs/service/config.<service>.yaml` 的服务在同一台机器上运行，开关打开的监听地址（`ops.addr`/`ops.enabled`、`web.addr`/`web.enabled`、`player_access.tcp.addr`/`player_access.tcp.enabled`）端口相同且主机重叠（相同，或任一方是 `0.0.0.0` / `::`）即冲突，同一服务内的两个地址同样比较；端口 0 不比较。生产示例每服务一个容器，doctor 只比较它们的共享资源名。

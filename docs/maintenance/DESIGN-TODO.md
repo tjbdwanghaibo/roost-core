@@ -21,7 +21,7 @@
 | D15 | 合服（把一个服并入另一个服） | 维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，实施中 |
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），实施中 |
-| D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐），实施中 |
+| D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -560,7 +560,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D18 业务时区与“业务日”边界
 
-**状态：维护者 2026-10-20 决定 A（按推荐），实施中。** 决定：`time.business_timezone` 缺省 UTC（启动日志打印，生产示例写明），`clock` 提供业务日辅助，生成的 `main` 内嵌 `time/tzdata`。登记：2026-10-20 新用户试用第八轮第 4 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 A（按推荐），已实施。** 决定：`time.business_timezone` 缺省 UTC（启动日志打印，生产示例写明），`clock` 提供业务日辅助，生成的 `main` 内嵌 `time/tzdata`。登记：2026-10-20 新用户试用第八轮第 4 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：`infra/base/clock` 的业务时钟只有偏移（`time.logic_offset`），包注释把“日 / 周重置”列为业务时钟的用途，但没有业务时区配置，也没有业务日边界工具；文档没有每日重置的推荐写法。业务只能用 `time.Local` 或自己 `LoadLocation`。生成的 Dockerfile 运行层是 `gcr.io/distroless/static-debian12:nonroot`（`codegen/internal/roost/render.go:1364`），生成的 k8s / compose 清单与 `main` 都不设 `TZ`、不嵌入 `time/tzdata`：容器内 `time.Local` 是 UTC，开发机通常是本地时区，同一份代码跨天时刻不同。distroless 镜像是否自带 zoneinfo 本次未在容器内实测（尚未确认），嵌入 `time/tzdata` 可消除这个依赖。
 
@@ -571,3 +571,14 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 **建议**：A。规则声明一次（配置 schema），运行期加载时强制一次，与业务时钟的单一来源一致；时区不应取决于容器环境变量。
 
 **需要拍板**：1）选 A / B；2）选 A 时缺省 UTC 还是必填。
+
+**实施结果**（2026-10-20）：
+
+- 配置：App 的声明 `timeConfig`（`framework/app/config_schema.go`）新增 `time.business_timezone`（缺省 `UTC`）与 `time.business_day_start`（每日重置时刻，`HH:MM`，缺省 `00:00`；草案的“可带每日重置时刻”做成第二个键）。两个键都带 `example`（生成器写进每个服务的开发配置与生产示例的 `time:` 段，`renderBusinessTimeConfig`）与 `shared`（`roost config check --all` / doctor `config-across-services` 要求各服务相同）。`timeConfig.ValidateConfig` 加载时拒绝拼错 / 非 IANA 的名字、`Local`、空名、非两位 `HH:MM`，各自点名键；启动前检查、`--check-config`、doctor `config-check` 同一处。启动日志 `starting server` 打印 `business_timezone` 与 `business_day_start`。
+- API（`infra/base/clock/calendar.go`）：`Calendar`（`Location`、`DayStartOffset`、`BusinessDay(t) Day`、`DayStart(t)`、`NextDayStart(t)`）与 `Day`（十进制 `YYYYMMDD`，可存 DAO、可比较）；`ParseCalendar` / `LoadTimezone` / `ParseDayStart` / `NewCalendar`；进程级 `SetCalendar` / `ProcessCalendar` 与包级 `BusinessDay` / `DayStart` / `NextDayStart`。业务时钟带日历：`clock.NewBusinessIn(offset, calendar)`、`clock.CalendarOf(business)`，`app.BusinessCalendar(registry)` = `CalendarOf(app.BusinessClock(registry))`。重置时刻按墙上时间，夏令时那天 23 / 25 小时。
+- tzdata：生成的 `main.go`（`renderMain`）导入 `time/tzdata`；game-demo 没有自己的 main 模板，同一个 `renderMain`。“distroless 是否带 zoneinfo（尚未确认）”不再相关：编译出的 game-demo 进程在看不到系统 zoneinfo 的环境里（macOS `sandbox-exec` 拒读 `/usr/share/zoneinfo`、`/var/db/timezone`、`GOROOT/lib/time`，`TZ` 清空、`ZONEINFO` 指向空目录）接受 `Asia/Shanghai`；镜像本身仍未在容器内实测。
+- glsvet：业务包（`game` 目录）里的 `time.Local`、`time.LoadLocation` 打印 hint（同一个 `//glsvet:system-clock` 豁免）。
+- 文档：[guide/10-time §2A](../framework/guide/10-time.md#2a-业务时区与业务日)（推荐写法：存上次重置的业务日、登录 / 首次操作惰性重置、准点用实体定时器取 `NextDayStart`）、[impl/10-time §1A](../framework/impl/10-time.md#1a-业务日历design-todo-d18)、CODEGEN_REFERENCE §14、PROJECT_GENERATOR §13 / §14 / §17、生成工程的 IMPLEMENTATION 文档；idle-sim / merge-casual 手册的 UTC 日界夹具不改，补一句正式业务按 `time.business_timezone`。game-demo 没有日界逻辑（活动窗口按 Unix 纪元对齐，与时区无关），只在 `game/activity` 的 `WindowStart` 注释写明按日历的窗口用业务日历。
+- 与草案的偏差：① 只设 `ZONEINFO` 为空目录模拟不了“没有 zoneinfo”（Go 在 `ZONEINFO` 里找不到时回落到系统目录，实测仍加载成功），回归改用 macOS `sandbox-exec`，并先用不内嵌 tzdata 的对照程序确认环境确实看不到 zoneinfo，看不到才断言，否则 Skip（自带 zoneinfo 的 Linux 主机）。② `Day` 不做日期运算，周重置由业务按 `Day` 推。
+- 修前红：`infra/base/clock` 编译失败 `undefined: Calendar` / `undefined: ParseCalendar` 等（没有业务日函数）；`TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock` 报 `App does not declare time.business_timezone`；`TestRunSetsTheProcessCalendarAndLogsIt` 报 `process calendar after start = UTC 00:00`；`TestGeneratedConfigsWriteTheBusinessTimeZone` 对每个服务配置报 `does not write time.business_timezone: UTC and time.business_day_start: 00:00`；`TestGeneratedMainEmbedsTheTimeZoneDatabase` 报 `with the generated main's imports [] and no zoneinfo on the host, loading Asia/Shanghai: exit status 1: operation not permitted`；`TestDoctorChecksCrossModConfigRulesThroughTheProcess`（main 不导入 tzdata 时）报编译出的 game 进程 `config: time.business_timezone: business time zone "Asia/Shanghai" is not a time zone this process can load (...): operation not permitted`。变异核对：业务日改成“减去重置时刻取日期、起点 + 24h”，夏令时用例与整年不变量用例变红。
+- 剩余限制在 KNOWN-LIMITS“业务时区与每日重置”一行。

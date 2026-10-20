@@ -18,6 +18,28 @@
 
 App 管理业务时间与持久高水位，运行中不允许时间倒退。初始 offset 可以为负，但生产必须为0，重启仍受持久高水位约束；“只允许前进”不是说所有测试初始 offset 都非负。offset 保存完整 Duration，不截断成整数秒。
 
+## 2A. 业务时区与业务日
+
+DESIGN-TODO D18（维护者 2026-10-20 决定 A，缺省 UTC）。存储与协议里的时间一律是绝对时刻（Unix 时间戳），“哪一天”只在**业务时区**里算。业务时区与每日重置时刻是部署配置，App 启动时读一次，不取机器的 `TZ` / `time.Local`——容器里 `time.Local` 是 UTC、开发机是本地时区，同一份代码跨天时刻会不同。
+
+| 键 | 缺省 | 含义 |
+| --- | --- | --- |
+| `time.business_timezone` | `UTC` | IANA 时区名（`Asia/Shanghai`、`America/New_York`）。`Local`、空名、加载不了的名字在加载时拒绝 |
+| `time.business_day_start` | `00:00` | 每日重置时刻，业务时区的墙上时间，两位 `HH:MM`。业务日从这一刻开始，之前的时间属前一天 |
+
+两个键在 App 的配置声明里（`--check-config`、doctor `config-check`、`roost config check` 同一处检查），标了 `shared`：同一工程各服务必须相同（`roost config check --all`、doctor `config-across-services`）。生成器把它们写进每个服务的开发配置与生产示例；启动日志 `starting server` 一行打印实际的 `business_timezone` 与 `business_day_start`。
+
+接口（`infra/base/clock` 的 `Calendar` 与 `Day`）：
+
+- `app.BusinessCalendar(registry)` 取日历（挂在 `app.BusinessClock(registry)` 上，`clock.CalendarOf(clock)` 同一份）；没有 Registry 的代码用进程级的 `clock.BusinessDay(t)` / `clock.DayStart(t)` / `clock.NextDayStart(t)`。
+- `BusinessDay(t)` 返回 `clock.Day`：业务日的日期，十进制 `YYYYMMDD`（`20261020`），可直接存进 DAO、按大小比较；零值表示“还没有过”。
+- `DayStart(t)` / `NextDayStart(t)`：`t` 所在业务日的起点（不晚于 `t`）与下一个起点（晚于 `t`），是业务时区里的时刻。重置时刻按墙上时间：夏令时切换那天是 23 或 25 小时，不按固定 24 小时推；重置时刻落在被跳过或重复的那一小时，那一天仍只有一个起点。
+- 时刻本身仍读业务时钟（带 `time.logic_offset`）：`cal.BusinessDay(app.BusinessClock(r).Now())`。
+
+**每日重置的推荐写法**：DAO 里存上次重置的业务日；登录或当天第一次操作时 `BusinessDay(now)` 与存的不同就在同一个事务里惰性重置，不需要全服零点扫描。需要准点动作（零点推送、活动开门）时用按实体的持久定时器（§4），期限取 `NextDayStart(now)`，回调里再登记下一天。周重置由业务按 `Day` 推（例如取业务日起点的 `Weekday()`）。glsvet 对业务包（`game` 目录）里的 `time.Local`、`time.LoadLocation` 打印提示。
+
+**时区数据库**：加载时区需要 zoneinfo。生成工程的 `main.go` 导入 `time/tzdata`（约 450 KB），distroless 运行镜像没有 zoneinfo 也能加载；手写或旧工程的 `main.go` 要自己加，否则启动检查报 `is not a time zone this process can load` 并拒绝启动（不会静默退回 UTC）。macOS 的文件系统不区分大小写，`asia/shanghai` 在开发机上能从系统 zoneinfo 加载、在 Linux 镜像里不能：照 IANA 原样写。
+
 ## 3. Scheduler
 
 通用 Scheduler 保留纳秒期限和同期限确定顺序，宿主决定驱动 Tick 与持久化。若宿主只持久毫秒，入队前应把期限对齐到同一精度，避免恢复后排序变化；不能声称任意宿主都有纳秒持久保证。

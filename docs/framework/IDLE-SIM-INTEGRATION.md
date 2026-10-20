@@ -182,7 +182,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 
 驱动的索引在提交之后（AfterCommit）才更新，测试读到新状态后仍有界等待索引变化，不能把二者当成同步返回的一件事。
 
-每日奖励用演示的 UTC 日界 `day = serverMillis / 86400000`：午夜前后是两天，长期缺席只领当天一份，原序号跨日重放仍返回原回执。其他时区或活动重置规则由业务定义，不能使用客户端日期或机器本地时区。
+每日奖励用演示的 UTC 日界 `day = serverMillis / 86400000`：午夜前后是两天，长期缺席只领当天一份，原序号跨日重放仍返回原回执。正式业务的日界按 `time.business_timezone` / `time.business_day_start` 算（`app.BusinessCalendar(registry).BusinessDay(now)`，DAO 存上次领取的业务日；见 [guide/10-time §2A](guide/10-time.md#2a-业务时区与业务日)），活动重置规则由业务定义，不能使用客户端日期或机器本地时区。
 
 ### 6. 幂等身份与结果未知
 
