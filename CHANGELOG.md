@@ -14,6 +14,14 @@
 - 新增 `scripts/test-slg-alliance.sh`：业务 CAS 成员授权与贡献意图、Interest 联盟／侦察来源归并、真实 NATS 生成 RPC 连协调器子进程、冻结窗口与阶段屏障、原服持久奖励义务和 ACK 重投；真实 Redis / NATS race 场景覆盖协调器正常重启与应用确认丢失。
 - 整理 [SLG 学习手册](docs/framework/SLG-INTEGRATION.md) 的状态归属、调用流程、运行方式与证据边界，并同步 skill。业务规则不进入框架；Remote 联盟权威、空间迷雾／客户端、Player 实际到账与跨机故障仍待联合接入。
 
+### game-demo 战斗经 `lockstep.TCPSender`，嵌入 TCP 下追帧随链路放慢（维护者 2026-10-20 决定）
+
+- **行为变化**：生成 game-demo 的战斗房间（`demo/internal/service/game/battle.go.tmpl`）不再用 `battleSender` 把两条通道都走 `PushPlayer`（只准入、错误吞掉），改经 `lockstep.TCPSender`：实时帧只准入（单个接收者失败只记 Debug），追帧页在嵌入 TCP 下经 `TCPRuntime.PushLockstepSessionWritten` 等写出，与 `640e9fac` 的嵌入 TCP 追帧同一规则。慢链路上追帧随链路放慢，连接不再因追帧积压超过出站上限被关闭。等写出只在 Match 的 `launchSend` goroutine 上，不在房间的 Tick 协程与业务 worker。
+- 修前红（生成工程，通道改回修前语义：两条通道都只准入、错误吞掉；约 8 MiB 历史、客户端先停读 200ms 再慢读）：`TestABattleCatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt` 报 `catch-up over a slow TCP link closed the connection (closed=true) or failed (0 Tick errors, first: <nil>)`；修后追帧完成、之后实时帧连续到达最新帧、连接不断。
+- **线格式变化（demo 协议，升级需同时换客户端）**：10102 推送的载荷改为 Lockstep 包本身（RS v2 Lockstep 标志，flags=5），不再是 PB `BattleFramePush{BattleID, Packet}`；`BattleFramePush` 只声明消息 ID（字段改为 `Packet`，与 `EntitySyncPush` 同一做法）。帧不带 battle id，一条连接同时只打一场战斗。`cmd/loadtest` 的 `battle` 动作改为按 Lockstep 标志读原始载荷，不再给 10102 注册 PB 解码器。
+- **寻址变化**：帧按连接（接入层 `Principal.SessionID`）发，不再按玩家发给全部连接。座位在第一条 `BattleInput` 到达的连接上加入（`SubmitBattleInput` 多一个 `connection` 参数，端点传 `context.Session.Principal().SessionID`），换连接用新的 Lockstep 会话 ID；没说过话的座位收不到帧，晚加入的座位靠追帧补齐。
+- 独立 Gate 部署（`accessplayertcp.NewIngressMod`）拿不到 `TCPRuntime`，`battleLinks` 让追帧页也只准入。独立 Gate 的追帧背压维护者决定暂不做（需要 Gate 写出 socket 后回执 Game，协议改动）；独立 Gate 下 Game 与 Gate 的 `MaxPayloadBytes` 一致性同样决定暂不加跨进程检查（需握手互报上限），继续由部署保证。见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)、[guide/04-sync §6](docs/framework/guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
+
 ### 压测夹具：nest-game 重档加嵌入 TCPRuntime 模式与自身视图子模式（维护者 2026-10-20 批准补测）
 
 - `scripts/perf/nest-game.sh` 新增 `ROOST_NEST_GAME_EMBEDDED=1`：玩家连接直连 Game 进程内的 `gateway.TCPServer` + `TCPRuntime`（接线同生成的 player TCP Mod），不经独立 Gate 与 NATS；`ROOST_NEST_GAME_SYNC=1` 叠加场景 Sync，Transport 是 `selfsync.PushPlayerFrame`（与 game-demo 场景同一条）；`ROOST_NEST_GAME_SELF_SYNC=1` 叠加自身视图（按 `selfsync.EntitySyncSetup` 生产装配），与场景 Sync 互斥（一个玩家实体只能登记在一个 Manager），只在嵌入模式下。可选 `ROOST_NEST_GAME_TCP_RESIDENT_BYTES` 覆盖出站驻留预算。

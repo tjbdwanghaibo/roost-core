@@ -23,7 +23,13 @@ func (controller *Controller) HandleBattleInput(context *playeraccess.Context, r
 	if err != nil {
 		return nil, fmt.Errorf("battle_input endpoint: %w", err)
 	}
-	err = battles.SubmitBattleInput(context.Context(), request.BattleID, context.PlayerID, request.Frame, request.Payload, request.HashFrame, request.Hash, request.CatchupFrom)
+	if context.Session == nil {
+		return nil, fmt.Errorf("battle_input endpoint: the request has no session")
+	}
+	// The room pushes this seat's frames to the connection the request came
+	// on, so a client that reconnects is followed by its next message.
+	connection := context.Session.Principal().SessionID
+	err = battles.SubmitBattleInput(context.Context(), request.BattleID, context.PlayerID, connection, request.Frame, request.Payload, request.HashFrame, request.Hash, request.CatchupFrom)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

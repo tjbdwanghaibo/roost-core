@@ -78,7 +78,9 @@ type Controller struct {
 // looked up by capability name, for the same reason pushTransport is — the
 // service package imports the controller, not the other way round.
 type battleRouter interface {
-	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
+	// connection is the access-layer session the request arrived on: the
+	// room sends this seat's frames to that connection.
+	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, connection string, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
 }
 
 // sceneJoiner is the slice of the scene an endpoint needs: put this player's

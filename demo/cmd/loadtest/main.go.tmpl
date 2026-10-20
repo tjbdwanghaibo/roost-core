@@ -713,7 +713,9 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 func registerPushes(protocols *protocol.Registry) {
 	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
 	protocols.MustRegisterDecoder(msgid.MsgChatMessage, protocol.DecodeTyped(msgid.MsgChatMessage, pb.UnmarshalChatMessagePush))
-	protocols.MustRegisterDecoder(msgid.MsgBattleFrame, protocol.DecodeTyped(msgid.MsgBattleFrame, pb.UnmarshalBattleFramePush))
+	// No decoder for BattleFrame (10102): the room sends the lockstep packet
+	// itself with the Lockstep flag, and the battle action's capture reads it
+	// raw — a PB decoder would try to parse those bytes as a message.
 	// The scene's state frames. A push whose id has no decoder is dropped
 	// before any capture sees it, so registering it is not optional bookkeeping.
 	protocols.MustRegisterDecoder(msgid.MsgEntitySync, protocol.DecodeTyped(msgid.MsgEntitySync, pb.UnmarshalEntitySyncPush))
@@ -1093,21 +1095,27 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 	// which is exactly what a lossy lane does: the next packet carries the
 	// frame again (redundancy), and a gap too wide for that asks the room
 	// for history.
+	//
+	// The push is the lockstep packet itself (Lockstep flag, no PB wrapper)
+	// and carries no battle id: this connection only receives frames from
+	// rooms it has spoken in, and it plays one battle at a time.
 	packets := make(chan []byte, 256)
 	if err := rb.EnsurePushCapture("battle:"+battleID, msgid.MsgBattleFrame, func(message *session.Message) {
-		push, ok := message.Value.(*pb.BattleFramePush)
-		if !ok || push.BattleID != battleID {
+		if message == nil || message.Packet == nil || message.Packet.Flags&wire.FlagLockstep == 0 {
 			return
 		}
 		select {
-		case packets <- push.Packet:
+		case packets <- message.Packet.Payload:
 		default:
 		}
 	}); err != nil {
 		return fmt.Errorf("battle: capture frames: %w", err)
 	}
 	// The first input opens the room: it starts cutting frames once a seat
-	// has spoken, so nobody waits on an opponent who never connected.
+	// has spoken, so nobody waits on an opponent who never connected. It also
+	// tells the room which connection this seat's frames go to; frames cut
+	// before it arrived come back by catch-up when the first packet shows
+	// the gap.
 	if err := sink.SubmitInput(bot.Next(), battle.Encode(battle.Input{DX: 1})); err != nil {
 		return fmt.Errorf("battle: first input: %w", err)
 	}
