@@ -31,7 +31,7 @@
 ### 自走棋接入：学习手册与业务消费者（scripts/test-auto-chess-generated.sh）
 
 - 新增 [自走棋框架学习与验收](docs/framework/AUTO-CHESS-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-auto-chess-generated.sh`：公共 CLI 生成 `game` 工程、Player / ChessMatch DAO、ChessMatch 实体定时器与多实体 Sender，业务规则只在 `scripts/testdata/auto-chess`（框架、生成器与 demo 不含这些规则）：一局一个权威实体管八席共享卡池与商店、成局冻结配置与服务器种子、每席命令序号与连接代际、准备 / 战斗阶段定时器、确定性战斗与轮空 / 淘汰 / 排名、按排名的多实体领奖、按观察者裁剪的视图。12 条场景全部 race、无 skip。
-- 真实依赖：`ROOST_AUTO_CHESS_REAL=1`（需隔离 Mongo 副本集）追加 `TestAutoChessRealCrashRecovery`：八人冻结战斗后 strict WAL 有 33 条未投影记录时 SIGKILL 子进程，冷加载后核对整局与驱动索引里的期限，启动驱动投递循环（不手发 Tick）只补一个阶段、之后按期推进到终局，八人领奖，第三个进程冷加载重试不重复购买或发奖；登记在根包 `integration_coverage_test.go`。
+- 真实依赖：`ROOST_AUTO_CHESS_REAL=1`（需隔离 Mongo 副本集）追加 `TestAutoChessRealCrashRecovery`：八人冻结战斗后 strict WAL 有 33 条未投影记录时 SIGKILL 子进程，冷加载后核对整局与驱动索引里的期限，启动驱动投递循环（不手发 Tick）只补一个阶段（投递计数 1）、之后每个期限投递一次推进一个阶段到终局（计数与阶段逐次对应、无重投），八人领奖，第三个进程冷加载重试不重复购买或发奖；登记在根包 `integration_coverage_test.go`。
 - 范围：教学夹具，每席账本 128 条后拒绝新写、至多 8 回合；没有真实匹配、客户端协议、跨 sid 发奖与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“自走棋接入验收的范围”。
 
 ## [v1.29.0] - 2026-10-19

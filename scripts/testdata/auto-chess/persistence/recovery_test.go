@@ -13,7 +13,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"os"
@@ -140,6 +142,17 @@ func (h *chessRuntime) close(t *testing.T) {
 	if err := h.runtime.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
+}
+
+// chessTimerCounter 读 ChessMatch 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+func chessTimerCounter(name string) int64 {
+	var total int64
+	for _, m := range metrics.Snapshot() {
+		if m.Name == name && m.Labels["driver"] == runentity.TimerDriver.Name() {
+			total += m.Value
+		}
+	}
+	return total
 }
 
 type chessBarrier struct {
@@ -354,9 +367,15 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 			}
 		}
 	}
+	// 冷加载时 Host 把存量期限报告给驱动索引；到这里投递循环还没启动，直接读 DAO 不会与 Tick 并发。
 	if due, ok := runentity.TimerDriver.DueOf(m); !ok || due.UnixMilli() != state.Deadline {
 		t.Fatal("cold load did not report deadline")
 	}
+	// 启动驱动自己的投递循环（与进程装配同一入口），用例不调用 DeliverDue、不手发 Tick。
+	// 计数来源：本进程里 ChessMatch 驱动只投递 TimerPhase 一种节点，Tick 回调每次恰好推进一个阶段
+	// （准备→战斗、战斗→下一回合准备或终局），所以投递计数与阶段推进一一对应。下面重试的玩家命令都命中
+	// 原回执、不重排定时器；即使业务命令经 saveChess 重排，也只是改索引里的期限，不算投递。
+	deliveredBefore, redeliveredBefore := chessTimerCounter(entitytimer.DeliveredMetric), chessTimerCounter(entitytimer.RedeliveredMetric)
 	if e = runentity.TimerDriver.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -367,22 +386,52 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		}
 		return v
 	}
+	// awaitDelivered 等新期限重新进入索引（终局时 deadline=0，要求索引里不再有期限）且投递计数恰为 want：
+	// 新期限在 Tick 提交后报告、计数在投递准入后才加，都可能略晚于读到的提交结果，所以有界轮询；
+	// 超过 want 立即失败（多投或重投）。
+	awaitDelivered := func(want int64, deadline int64) {
+		t.Helper()
+		until := time.Now().Add(8 * time.Second)
+		for {
+			due, ok := runentity.TimerDriver.DueOf(m)
+			got := chessTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore
+			if got == want && (deadline == 0 && !ok || ok && due.UnixMilli() == deadline) {
+				return
+			}
+			if got > want || time.Now().After(until) {
+				t.Fatalf("deliveries=%d want %d; due=%v ok=%v want %d", got, want, due, ok, deadline)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	// 加载后补触发：离线一小时的战斗阶段只结算这一次（框架不追帧），进入第 2 回合准备、期限从当前业务时间起算。
 	waitChess(t, func() bool { return view().Phase == "prep" })
 	v := view()
 	if v.Round != 2 || v.Deadline != h.clock.Load()+state.Rules.PrepMillis {
 		t.Fatal("offline loop skipped stages")
 	}
-	// 驱动在冻结业务时钟下每次只推进一个阶段；同一循环继续准时处理下一期限。
+	awaitDelivered(1, v.Deadline)
+	// 之后每个期限由用例把业务时钟推进到期限本身，循环（至多 MaxWait 后重读时钟）按时投递一次、恰好推进一个阶段；
+	// 两次推进之间业务时钟冻结，条目不会提前到期，计数是确定的。
+	delivered := int64(1)
 	for n := 0; n < 32 && v.Phase != "done"; n++ {
-		waitChess(t, func() bool { due, ok := runentity.TimerDriver.DueOf(m); return ok && due.UnixMilli() == v.Deadline })
 		before := v
 		h.clock.Store(v.Deadline)
 		waitChess(t, func() bool { v = view(); return v.Round != before.Round || v.Phase != before.Phase })
+		delivered++
+		awaitDelivered(delivered, v.Deadline)
 	}
 	if v.Phase != "done" {
 		t.Fatal("match did not terminate")
 	}
-	waitChess(t, func() bool { _, ok := runentity.TimerDriver.DueOf(m); return !ok })
+	// 总数：补触发 1 次（第 1 回合战斗→第 2 回合准备），第 2～R 回合每回合准备→战斗、战斗→准备 / 终局各 1 次，
+	// 共 1 + 2×(R-1)；第 1 回合的准备→战斗由写进程里第八人准备触发，不经定时器，也不在本进程计数里。
+	if want := int64(2*v.Round - 1); delivered != want {
+		t.Fatalf("deliveries=%d over %d rounds, want %d (one catch-up plus one per later stage)", delivered, v.Round, want)
+	}
+	if got := chessTimerCounter(entitytimer.RedeliveredMetric) - redeliveredBefore; got != 0 {
+		t.Fatalf("driver redelivered %d ticks: a Tick commit did not report its next deadline", got)
+	}
 	if e = runentity.TimerDriver.Stop(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -410,5 +459,5 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	if e = h.mongo.Database(h.database).Drop(ctx); e != nil {
 		t.Fatal(e)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored, driver loop settled and advanced deadlines, third process retried all commands and eight rewards", barrier.Unprojected)
+	t.Logf("SIGKILL: %d unprojected strict records; eight-seat frozen battle restored, driver loop delivered one catch-up stage after cold load and %d later stages at their deadlines (redelivered 0), third process retried all commands and eight rewards", barrier.Unprojected, delivered-1)
 }
