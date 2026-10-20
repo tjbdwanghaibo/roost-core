@@ -57,7 +57,7 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `bson:"state" dao:"persist"` `` 与 ``WakeTimer int64 `bson:"wake_timer" dao:"persist"` ``；放入业务包 `game/idlesim/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/idle_sim.go`；
 4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
-生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、接业务时钟、启动与停止投递循环），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `DeliverDue` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
+生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、接业务时钟、启动与停止投递循环），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `DeliverDue` / `Start` / `Stop` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
 #### 3.2 阅读顺序
 
@@ -235,11 +235,15 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 1. 子进程经 strict 文件 WAL 提交初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 5 条已确认未投影的记录（此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、视图与定时器 ID，重放全部命令得到原回执；核对冷加载已把存量唤醒期限报告给驱动索引（`DueOf`）。
-3. 调用一次驱动的 `DeliverDue`（循环每轮做的就是它；不启动投递循环）：恰好投递一次，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与钻石不变。随后收取、领取收益、领每日奖励、交订单，领取与订单各重放三次不变；最终金币 129。
-4. 正常关闭后再起第三个进程冷加载：核对存档摘要、视图与定时器，再重放全部命令，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
+3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次加载后的补触发，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与钻石不变；`entitytimer.delivered_total` 增量恰为 1。
+4. 收取第一个工坊：玩家命令把窗口重新推到 now + 30 秒，下一秒的刷新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，恰好积分一秒（余数 5000 → 6000，收益箱仍是 4，窗口不变），再排下一秒，投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
+5. 随后收取第二个工坊、领取收益、领每日奖励、交订单，领取与订单各重放三次不变；最终金币 129。其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
+6. 正常关闭后再起第三个进程冷加载：核对存档摘要、视图与定时器，再重放全部命令，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器）；冷加载把存量期限报告进驱动索引；离线一小时只投递一次、只积分到原窗口；跨进程重放不重复扣费或结算。
-- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；驱动投递循环本身（本用例只调用一次 `DeliverDue`；循环在真实 Mongo 下的演练见卡牌 RPG 与自走棋的恢复用例）；多进程 / 跨机、Redis / NATS；容量与长稳。
+本例“在线每秒看到收益涨”的准点刷新（第 5 节）不是另一套唤醒：它就是这一个 Player 实体定时器节点，期限取 `min(Horizon, LastAt + TickMillis)`，到期由同一个驱动把生成的 Tick 作为 Nest 消息投递。所以每一次每秒刷新都计入同一个 `delivered_total`，计数里没有别的来源；冷加载后窗口已过、没有期限，直到玩家命令重开窗口才排下一秒，用例据此断言恰好的次数。去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue production catch-up …`）。
+
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（队列、投入、倍率、窗口、收益与唤醒定时器）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次、只积分到原窗口，并按时投递下一秒的刷新；跨进程重放不重复扣费或结算。
+- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 12. 结论怎样给
 

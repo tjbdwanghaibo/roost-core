@@ -19,13 +19,13 @@
 ### 合成休闲接入：学习手册与业务消费者（scripts/test-merge-casual-generated.sh）
 
 - 新增 [合成休闲框架学习与验收](docs/framework/MERGE-CASUAL-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-merge-casual-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/merge-casual`（框架、生成器与 demo 不含这些规则）：服务器权威存档与首登冻结配置、离线命令批次（整批原子、序号 / 存档版本冲突）、设备代际接管与按原身份查回执、惰性体力恢复、限时挑战与持久定时器、模拟签名广告回调与永久到账账本、视图裁剪。15 条场景全部 race、无 skip。
-- 真实依赖：`ROOST_MERGE_CASUAL_REAL=1`（需隔离 Mongo 副本集）追加 `TestMergeCasualRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，用例手发一次 Tick 判负过期挑战（不启动驱动投递循环），续玩领奖，第三个进程冷加载重试不重复到账；登记在根包 `integration_coverage_test.go`。
+- 真实依赖：`ROOST_MERGE_CASUAL_REAL=1`（需隔离 Mongo 副本集）追加 `TestMergeCasualRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不手发 Tick）补触发一次判负过期挑战、重新开局后按期判负下一局，续玩领奖，第三个进程冷加载重试不重复到账；登记在根包 `integration_coverage_test.go`。
 - 范围：教学夹具，单批至多 16 条、命令与广告账本各 128 条后拒绝新写（单批上限与广告账本未在测试中填满）；没有真实广告平台、登录票分配、客户端协议与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合成休闲接入验收的范围”。
 
 ### 放置模拟接入：学习手册与业务消费者（scripts/test-idle-sim-generated.sh）
 
 - 新增 [放置模拟框架学习与验收](docs/framework/IDLE-SIM-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-idle-sim-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/idle-sim`（框架、生成器与 demo 不含这些规则）：三工坊生产队列（入队冻结工时 / 投入 / 产出）、原料预扣与取消退款、有界离线窗口内的区间积分（倍率分段、余数、封顶、待领格满暂停）、仓库 / 出售 / 订单 / UTC 每日奖励、永久命令回执。12 条场景全部 race、无 skip。
-- 真实依赖：`ROOST_IDLE_SIM_REAL=1`（需隔离 Mongo 副本集）追加 `TestIdleSimRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，调用一次驱动 `DeliverDue`（不启动投递循环）只积分到原窗口，领取结算后第三个进程冷加载重放全部命令不重复结算；登记在根包 `integration_coverage_test.go`。
+- 真实依赖：`ROOST_IDLE_SIM_REAL=1`（需隔离 Mongo 副本集）追加 `TestIdleSimRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不调用 `DeliverDue`）补触发一次只积分到原窗口、收取后按期投递下一秒的刷新，领取结算后第三个进程冷加载重放全部命令不重复结算；登记在根包 `integration_coverage_test.go`。
 - 范围：教学夹具，命令账本 128 条后拒绝新写、窗口内每秒一次唤醒提交（原料上限与等级上限未在测试中填满）；没有生产容量、客户端协议与跨服市场的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“放置模拟接入验收的范围”。
 
 ### 自走棋接入：学习手册与业务消费者（scripts/test-auto-chess-generated.sh）

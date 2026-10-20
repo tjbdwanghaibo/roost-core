@@ -57,7 +57,7 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `bson:"state" dao:"persist"` `` 与 ``WakeTimer int64 `bson:"wake_timer" dao:"persist"` ``；放入业务包 `game/mergecasual/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/merge_casual.go`；
 4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
-生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、接业务时钟、启动与停止投递循环），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` 是用例自己搭 Nest 时的替身接线，不是生产装配要抄的步骤。
+生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、接业务时钟、启动与停止投递循环），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `Start` / `Stop` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
 #### 3.2 阅读顺序
 
@@ -260,11 +260,15 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 1. 子进程经 strict 文件 WAL 提交首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 5 条已确认未投影的记录后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、公开视图与定时器 ID，并核对冷加载已把存量挑战期限报告给驱动索引（`DueOf`）；再重放第一次生产（同一掉落）与已过期的原广告证明（不再到账）。
-3. 用例手动发一次生成的 Tick（不启动驱动投递循环）：过期一小时的挑战只判负一次，体力与次数恢复到上限；领取失败的挑战、重新开局、合出四级物品获胜，领奖后重放三次只得一份。
-4. 正常关闭后再起第三个进程冷加载：核对存档摘要与视图，再重试第一次生产、领奖和原广告证明，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
+3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不手发 Tick、不调用 `DeliverDue`）：循环投递一次加载后的补触发，过期一小时的挑战只判负一次，体力与次数恢复到上限，挑战结束后不再挂期限；`entitytimer.delivered_total` 增量恰为 1。
+4. 领取判负的挑战、重新开局，新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，挑战在期限时刻判负（`LastAt` 等于期限、修订号只加 1），投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。
+5. 再领取、再开局、合出四级物品获胜，领奖后重放三次只得一份；其间循环不再投递（总计数 2、`redelivered_total` 增量 0）。先停循环再关 Nest（`close` 里与 `t.Cleanup` 还会再停一次）。
+6. 正常关闭后再起第三个进程冷加载：核对存档摘要与视图，再重试第一次生产、领奖和原广告证明，存档不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
-- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（棋盘、资产、回执、广告账本与挑战定时器）；冷加载把存量期限报告进驱动索引；迟到很久的一次 Tick 只判负一次；跨进程重试不重复生产、到账或发奖。
-- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；驱动投递循环本身（本用例手发 Tick；循环在真实 Mongo 下的演练见卡牌 RPG 与自走棋的恢复用例）；多进程 / 跨机、Redis / NATS；容量与长稳。
+去掉第 3 步的 `Start` 时，用例在补触发处等满 10 秒失败（`driver loop did not deliver the overdue challenge expiry …`），所以这一步的判负确实由循环完成。
+
+- **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复（棋盘、资产、回执、广告账本与挑战定时器）；冷加载把存量期限报告进驱动索引；驱动投递循环在冷加载后自动补触发一次（迟到一小时的挑战只判负一次），并按时投递下一个期限；跨进程重试不重复生产、到账或发奖。
+- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；循环在系统时钟下的长时间计时（用例用冻结的业务时钟，循环按 `MaxWait` 重读）、准入失败重试与 Redeliver（见 entitytimer 包测试与 `TestEntityTimerGeneratedProjectEndToEnd`）；多进程 / 跨机、Redis / NATS；容量与长稳。
 
 ### 13. 结论怎样给
 

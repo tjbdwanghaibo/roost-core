@@ -11,7 +11,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"os"
@@ -118,12 +120,28 @@ func (h *mergeRuntime) close(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	// 先停投递循环再关 Nest：停机之后循环不能再向已关闭的引擎投递。未启动时 Stop 直接返回；close 也登记在
+	// t.Cleanup 里，用例失败提前退出时同样先停循环。
+	if err := playerentity.TimerDriver.Stop(ctx); err != nil {
+		t.Error(err)
+	}
 	if err := h.scheduler.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
 	if err := h.runtime.Shutdown(ctx); err != nil {
 		t.Error(err)
 	}
+}
+
+// mergeTimerCounter 读 Player 驱动的一个 entitytimer 计数（进程内缺省注册表）；用前后差值判断循环投递了几次。
+func mergeTimerCounter(name string) int64 {
+	var total int64
+	for _, m := range metrics.Snapshot() {
+		if m.Name == name && m.Labels["driver"] == playerentity.TimerDriver.Name() {
+			total += m.Value
+		}
+	}
+	return total
 }
 
 type mergeBarrier struct {
@@ -306,8 +324,7 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	if state.Digest() != barrier.Digest || state.View() != barrier.View || p.Dao().GetWakeTimer() != barrier.Timer {
 		t.Fatal("WAL recovery lost board / asset / receipt / timer before mutations")
 	}
-	// 冷加载时 Host 把存量挑战期限报告给驱动索引。本用例不启动投递循环，下面由用例手发一次生成的 Tick
-	// （循环每轮做的也是向到期实体投递这条 Tick）；投递循环本身见卡牌 RPG / 自走棋的恢复用例。
+	// 冷加载时 Host 把存量挑战期限报告给驱动索引。到这里投递循环还没启动，上面直接读 DAO 不会与 Tick 并发。
 	if due, ok := playerentity.TimerDriver.DueOf(p); !ok || due.UnixMilli() != state.Challenge.Deadline {
 		t.Fatalf("cold load did not report the stored challenge deadline: due=%v ok=%v want=%d", due, ok, state.Challenge.Deadline)
 	}
@@ -319,14 +336,65 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	if _, err := sender.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1, h.clock.Load()); err != nil {
 		t.Fatal("expired original proof lost receipt", err)
 	}
-	if _, err := senderTick(h).Sync_TickPlayerTimer(ctx, h.playerID, h.clock.Load()); err != nil {
+	// 启动驱动自己的投递循环（与进程装配同一个入口），用例不手发 Tick、不调用 DeliverDue：循环发现离线期间
+	// 已过期的挑战，给这个 Player 投递一次加载后的补触发，判负。业务时钟在两次推进之间冻结，循环按 MaxWait
+	// 重读时钟，所以“何时到期”完全由用例推进时钟决定。
+	deliveredBefore, redeliveredBefore := mergeTimerCounter(entitytimer.DeliveredMetric), mergeTimerCounter(entitytimer.RedeliveredMetric)
+	if err := playerentity.TimerDriver.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// awaitLoop 等循环投递的 Tick 提交（经 Nest 读视图，done 判断业务结果），再等投递计数恰为 delivered、索引
+	// 里的期限为 deadline（0 表示不再有期限）。期限在 Tick 提交后（nest.AfterCommit）报告、计数在投递准入之后
+	// 才加，都可能略晚于读到的提交结果，所以有界轮询；计数超过 delivered 立即失败。
+	awaitLoop := func(step string, done func(casual.View) bool, delivered, deadline int64) {
+		t.Helper()
+		until := time.Now().Add(10 * time.Second)
+		for {
+			view, err := sender.Sync_MergeView(ctx, h.playerID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if done(view) {
+				break
+			}
+			if time.Now().After(until) {
+				t.Fatalf("driver loop did not deliver %s (business time %d): challenge=%+v", step, h.clock.Load(), view.Challenge)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		for {
+			due, ok := playerentity.TimerDriver.DueOf(p)
+			got := mergeTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore
+			if got == delivered && (deadline == 0 && !ok || ok && due.UnixMilli() == deadline) {
+				return
+			}
+			if got > delivered || time.Now().After(until) {
+				t.Fatalf("after %s: loop deliveries=%d want %d; due=%v ok=%v want %d", step, got, delivered, due, ok, deadline)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	// 加载后补触发：离线一小时只判负一次，按当前业务时间补体力 / 次数（封顶），挑战结束后不再挂期限。
+	awaitLoop("the overdue challenge expiry", func(v casual.View) bool { return v.Challenge.Status == "lost" }, 1, 0)
 	_, expired := mergeRuntimeState(t, h)
-	if expired.Challenge.Status != "lost" || expired.Energy != 10 || expired.Charges != 3 {
+	if expired.Challenge.ID != state.Challenge.ID || expired.Revision != state.Revision+1 || expired.LastAt != h.clock.Load() || expired.Energy != 10 || expired.Charges != 3 {
 		t.Fatal("cold deadline / capped recovery incorrect")
 	}
 	mergeRuntimeCommand(t, h, "claim", 0, 0, int64(expired.Challenge.ID))
+	// 下一个期限：新开的挑战经提交进入索引（循环还没有再投递）；业务时间直接推进到期限本身，循环（至多
+	// MaxWait 后重读时钟）按时投递一次，挑战在期限时刻判负。期限之前业务时间冻结，条目不会到期，计数也就
+	// 不会多出一次。
+	mergeRuntimeCommand(t, h, "start", 0, 0, 0)
+	_, started := mergeRuntimeState(t, h)
+	next := started.Challenge.Deadline
+	awaitLoop("nothing before the new deadline", func(casual.View) bool { return true }, 1, next)
+	h.clock.Store(next)
+	awaitLoop("the new challenge deadline", func(v casual.View) bool { return v.Challenge.Status == "lost" }, 2, 0)
+	_, timedOut := mergeRuntimeState(t, h)
+	if timedOut.Challenge.ID != started.Challenge.ID || timedOut.Revision != started.Revision+1 || timedOut.LastAt != next {
+		t.Fatal("loop did not expire the new challenge exactly once at its deadline")
+	}
+	mergeRuntimeCommand(t, h, "claim", 0, 0, int64(timedOut.Challenge.ID))
 	mergeRuntimeCommand(t, h, "start", 0, 0, 0)
 	mergeWin(t, h.scheduler, h.playerID, h.clock.Load())
 	_, won := mergeRuntimeState(t, h)
@@ -347,6 +415,17 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "claimed.json"), expectedRaw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// 第三局获胜时挑战结束、期限移出索引，业务时间停在第二个期限，循环一直在跑但没有再投递。
+	if got := mergeTimerCounter(entitytimer.DeliveredMetric) - deliveredBefore; got != 2 {
+		t.Fatalf("driver loop delivered %d ticks in total, want 2", got)
+	}
+	if got := mergeTimerCounter(entitytimer.RedeliveredMetric) - redeliveredBefore; got != 0 {
+		t.Fatalf("driver redelivered %d ticks: a Tick commit did not report its next deadline", got)
+	}
+	// 先停投递循环再关 Nest（close 里也会再停一次）。
+	if err := playerentity.TimerDriver.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
 	h.close(t)
 	verify := exec.Command(os.Args[0], "-test.run=^TestMergeCasualRealCrashRecovery$", "-test.v", "-test.timeout=60s")
 	verify.Env = append(os.Environ(), "ROOST_MERGE_CASUAL_CHILD=verify")
@@ -356,8 +435,5 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	if err := h.mongo.Database(h.database).Drop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("SIGKILL: %d unprojected strict records; exact board / assets / timer restored, one overdue expiry, server goal completed and rewards retried after third-process cold load", barrier.Unprojected)
-}
-func senderTick(h *mergeRuntime) *sender.TickPlayerTimerGenSender {
-	return sender.NewTickPlayerTimerGenSender(h.scheduler)
+	t.Logf("SIGKILL: %d unprojected strict records; exact board / assets / timer restored, driver loop delivered one overdue expiry after cold load and the next challenge expiry at its deadline, server goal completed and rewards retried after third-process cold load", barrier.Unprojected)
 }

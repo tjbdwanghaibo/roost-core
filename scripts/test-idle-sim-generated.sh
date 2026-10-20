@@ -4,7 +4,7 @@
 # 不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身。ROOST_IDLE_SIM_REAL=1（并提供隔离 Mongo 副本集
 # ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程 strict 提交后、WAL 记录未投影时被父进程 SIGKILL，新进程
-# 冷加载、由驱动补算一次离线收益、领取结算，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
+# 冷加载、由驱动投递循环补算一次离线收益并按时投递下一秒的刷新、领取结算，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-idle-sim.XXXXXX")"
