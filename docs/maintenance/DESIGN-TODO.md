@@ -17,7 +17,7 @@
 | D11 | 按实体的持久定时器接入（Buff 到期、建造完成等到点要做的事） | 维护者 2026-10-17 决定 B 与离线语义，已实施（`a2b4f4d8`、`5581deeb`） |
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
-| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 待维护者决定（登记 2026-10-20） |
+| D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（六项均按推荐），待实施（排在 2026-10-20 夜间性能补测之后） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -379,7 +379,18 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D14 AOI 观察者改为 playerId、视野半径按观察者配置
 
-**状态：待维护者决定。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
+**状态：维护者 2026-10-20 决定 A1 + B1，待实施（排在当晚性能补测之后）。** 登记：2026-10-20；源码基线 `4eccd3b1`。来源：维护者 review `AOI.evaluatePair` 的 `observer.id == subject` 时指出，observer 名义上是实体 ID、实际上只有玩家；视野半径也不该只有全局一个。本条只登记方案，不改代码。
+
+### 维护者决定（2026-10-20，六项均按推荐）
+
+1. observer 编号：**A1**，observer = playerId，观察者带 `self`（玩家自身实体 ID，0 表示没有）。A2（视野 ID）不做，将来需要多视野时在 A1 上加。
+2. 入口形状：`Enter` / `Move` / `Leave` 直接改成两个 ID 参数，不保留旧入口（未上线，不做兼容）。
+3. 事务内入口换算：`InterestConfig` 新增 `ObserverOf func(entityID int64) (playerID int64, ok bool)`，缺省用 `GetUniqueIDFromEntityID`，业务可覆盖（玩家控制英雄 / 载具时视点实体不是 Player）。
+4. `InterestConfig.Session`：删除（A1 下 observer 就是会话 ID，多对一隐患随之消失）。
+5. 半径：**B1**，每观察者 `EnterRadius` / `LeaveRadius`，`AOIConfig` 同名字段作缺省、新增 `MaxLeaveRadius` 作启动期预算上限；`Bands`、`MaxVisible` 暂保持全局。
+6. 运行期修改视野参数：提供排队版（事务内走提交门，视距变化多来自 Buff），同时保留政策阶段外的直接调用。
+
+**实施时一并补的两点（评审补充）**：①新增“只看、不被看”的观察者入口（观战 / GM 视角，`self = 0`），A1 下与 `Enter`、`Show` 并列；②属于 sync 三大块的公开契约调整，按维护手册对 `scripts/perf/sync-aoi` 与 `policy` 包 AOI 基准做前后 benchstat。实施顺序按 roost-coding 纯重构流程：先补现有行为的回归，再改签名，最后补新行为的红绿用例。
 
 ### 现状（已核对当前源码）
 
