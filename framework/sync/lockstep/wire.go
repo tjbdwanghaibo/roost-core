@@ -161,46 +161,98 @@ func DecodeBroadcast(packet []byte) ([]Frame, error) {
 	return frames, nil
 }
 
-// 追帧失败通知：服务端经可靠通道、与追帧页同一路由发给追帧起点已被裁掉的会话。
+// 恢复失败通知：服务端经可靠通道、与追帧页同一路由发给这次恢复（追帧或快照）已失败的会话。
 //
-//	notice = magic(0xC9) version(1) from(uvarint) start(uvarint)
+//	notice = magic(0xC9) version(2) reason(uvarint) from(uvarint) start(uvarint)
 //
-// from 是追帧游标（客户端缺的第一帧），start 是服务端仍保留的最早帧，from < start。
-// 客户端收到后终止本场模拟、交由业务决定踢出或重开；框架不提供全量重同步。
+// reason 见 RecoveryFailureReason；from 是客户端缺的第一帧（请求起点或追帧游标），start 是服务端当时仍保留的最早帧。
+// 只有 history_trimmed 要求 from < start。客户端收到任何原因都终止本场模拟、交由业务决定踢出或重开。
+// v1（不带 reason）已删除（项目未上线，不兼容旧客户端）：旧客户端把 v2 当坏包终止。
 const (
 	noticeMagic   = 0xC9
-	noticeVersion = 1
+	noticeVersion = 2
 )
 
-// CatchupUnservableError 是追帧起点已被裁出历史的具体信息；errors.Is(err, ErrCatchupUnservable) 成立。
-// 服务端 StartCatchup / Tick 返回它，客户端 FrameAssembler.Ingest 解出失败通知时也返回它。
+// RecoveryFailureReason 是 C9 v2 通知的失败原因。
+type RecoveryFailureReason uint8
+
+const (
+	// RecoveryHistoryTrimmed：起点已被裁出保留窗口（catchup 模式；原 C9 v1 的唯一语义）。
+	RecoveryHistoryTrimmed RecoveryFailureReason = 1
+	// RecoverySnapshotUnavailable：快照来源连续失败达到 CatchupMaxFailures。
+	RecoverySnapshotUnavailable RecoveryFailureReason = 2
+	// RecoverySnapshotTooLarge：快照超过 SnapshotConfig.MaxBytes。
+	RecoverySnapshotTooLarge RecoveryFailureReason = 3
+	// RecoveryExpired：恢复期间钉住的历史超过 SnapshotConfig.PinFrames 上限。
+	RecoveryExpired RecoveryFailureReason = 4
+)
+
+func (reason RecoveryFailureReason) String() string {
+	switch reason {
+	case RecoveryHistoryTrimmed:
+		return "history_trimmed"
+	case RecoverySnapshotUnavailable:
+		return "snapshot_unavailable"
+	case RecoverySnapshotTooLarge:
+		return "snapshot_too_large"
+	case RecoveryExpired:
+		return "recovery_expired"
+	default:
+		return fmt.Sprintf("reason_%d", uint8(reason))
+	}
+}
+
+// CatchupUnservableError 是一次恢复失败的具体信息；errors.Is(err, ErrCatchupUnservable) 对所有原因成立，
+// 客户端“终止、交业务处理”的判断点不变。服务端 StartCatchup / Tick 返回它，客户端 FrameAssembler.Ingest
+// 解出失败通知时也返回它。Reason 为 0 按 RecoveryHistoryTrimmed 处理（只设 From / Start 的旧写法）。
 type CatchupUnservableError struct {
-	From  FrameID // 追帧游标：客户端缺的第一帧
-	Start FrameID // 服务端仍保留的最早帧
+	Reason RecoveryFailureReason
+	From   FrameID // 客户端缺的第一帧
+	Start  FrameID // 服务端仍保留的最早帧
+}
+
+func (e *CatchupUnservableError) reason() RecoveryFailureReason {
+	if e.Reason == 0 {
+		return RecoveryHistoryTrimmed
+	}
+	return e.Reason
 }
 
 func (e *CatchupUnservableError) Error() string {
+	if reason := e.reason(); reason != RecoveryHistoryTrimmed {
+		return fmt.Sprintf("%v (%s): from %d, history starts at %d", ErrCatchupUnservable, reason, e.From, e.Start)
+	}
 	return fmt.Sprintf("%v: from %d, history starts at %d", ErrCatchupUnservable, e.From, e.Start)
 }
 
 func (e *CatchupUnservableError) Unwrap() error { return ErrCatchupUnservable }
 
-// EncodeCatchupUnservable 编码追帧失败通知。
+// EncodeCatchupUnservable 编码起点已被裁掉（history_trimmed）的失败通知。
 func EncodeCatchupUnservable(from, start FrameID) []byte {
+	return EncodeRecoveryFailure(RecoveryHistoryTrimmed, from, start)
+}
+
+// EncodeRecoveryFailure 编码 C9 v2 恢复失败通知。
+func EncodeRecoveryFailure(reason RecoveryFailureReason, from, start FrameID) []byte {
 	out := []byte{noticeMagic, noticeVersion}
+	out = binary.AppendUvarint(out, uint64(reason))
 	out = binary.AppendUvarint(out, uint64(from))
 	return binary.AppendUvarint(out, uint64(start))
 }
 
-// IsCatchupNotice 只看包头判断是否为追帧失败通知（广播与追帧页以 0xC7 开头）。
+// IsCatchupNotice 只看包头判断是否为恢复失败通知（广播与追帧页以 0xC7 开头，快照分块以 0xCA 开头）。
 func IsCatchupNotice(packet []byte) bool { return len(packet) > 0 && packet[0] == noticeMagic }
 
-// DecodeCatchupUnservable 严格解码追帧失败通知；坏包返回 ErrFrameCorrupt。
+// DecodeCatchupUnservable 严格解码 C9 v2 恢复失败通知；坏包（含 v1、未知原因）返回 ErrFrameCorrupt。
 func DecodeCatchupUnservable(packet []byte) (*CatchupUnservableError, error) {
-	if len(packet) < 4 || packet[0] != noticeMagic || packet[1] != noticeVersion {
+	if len(packet) < 5 || packet[0] != noticeMagic || packet[1] != noticeVersion {
 		return nil, fmt.Errorf("%w: bad catch-up notice header", ErrFrameCorrupt)
 	}
-	from, rest, err := readUvarint(packet[2:])
+	reason, rest, err := readUvarint(packet[2:])
+	if err != nil {
+		return nil, err
+	}
+	from, rest, err := readUvarint(rest)
 	if err != nil {
 		return nil, err
 	}
@@ -208,10 +260,12 @@ func DecodeCatchupUnservable(packet []byte) (*CatchupUnservableError, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(rest) != 0 || from == 0 || from > uint64(^FrameID(0)) || start > uint64(^FrameID(0)) || from >= start {
-		return nil, fmt.Errorf("%w: catch-up notice from %d start %d", ErrFrameCorrupt, from, start)
+	if len(rest) != 0 || reason < uint64(RecoveryHistoryTrimmed) || reason > uint64(RecoveryExpired) ||
+		from == 0 || from > uint64(^FrameID(0)) || start > uint64(^FrameID(0)) ||
+		(RecoveryFailureReason(reason) == RecoveryHistoryTrimmed && from >= start) {
+		return nil, fmt.Errorf("%w: catch-up notice reason %d from %d start %d", ErrFrameCorrupt, reason, from, start)
 	}
-	return &CatchupUnservableError{From: FrameID(from), Start: FrameID(start)}, nil
+	return &CatchupUnservableError{Reason: RecoveryFailureReason(reason), From: FrameID(from), Start: FrameID(start)}, nil
 }
 
 func readUvarint(data []byte) (uint64, []byte, error) {

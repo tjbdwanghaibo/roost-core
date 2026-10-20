@@ -507,3 +507,212 @@ func TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhaus
 		t.Fatal("the live connection was closed")
 	}
 }
+
+// snapshotReader 在客户端连接上读 Lockstep 推送：CA 分块交给 SnapshotReceiver，快照到齐后从快照帧续接 C7 帧。
+type snapshotReader struct {
+	next     atomic.Uint64
+	snapshot atomic.Pointer[lockstep.ReceivedSnapshot]
+	failed   atomic.Pointer[error]
+	done     chan struct{}
+}
+
+func readSnapshotRecovery(connection net.Conn, start <-chan struct{}, pause time.Duration) *snapshotReader {
+	reader := &snapshotReader{done: make(chan struct{})}
+	reader.next.Store(1)
+	fail := func(err error) { reader.failed.Store(&err) }
+	go func() {
+		defer close(reader.done)
+		<-start
+		receiver := lockstep.NewSnapshotReceiver(0)
+		next := lockstep.FrameID(1)
+		for {
+			packet, err := wire.Read(connection, 0)
+			if err != nil {
+				return
+			}
+			if packet.Flags != wire.FlagPush|wire.FlagLockstep || packet.MsgID != tcpLockstepMessageID {
+				continue
+			}
+			switch {
+			case lockstep.IsSnapshotChunk(packet.Payload):
+				snapshot, err := receiver.Accept(packet.Payload)
+				if err != nil {
+					fail(err)
+					return
+				}
+				if snapshot != nil {
+					reader.snapshot.Store(snapshot)
+					next = snapshot.Frame + 1
+				}
+			case lockstep.IsCatchupNotice(packet.Payload):
+				_, err := lockstep.DecodeCatchupUnservable(packet.Payload)
+				fail(errors.Join(errors.New("recovery failed"), err))
+				return
+			default:
+				frames, err := lockstep.DecodeBroadcast(packet.Payload)
+				if err != nil {
+					fail(err)
+					return
+				}
+				if receiver.Active() {
+					continue
+				}
+				for _, frame := range frames {
+					if frame.ID < next {
+						continue
+					}
+					if frame.ID > next {
+						fail(errors.New("frame gap after the snapshot"))
+						return
+					}
+					next++
+				}
+			}
+			reader.next.Store(uint64(next))
+			if pause > 0 {
+				time.Sleep(pause)
+			}
+		}
+	}()
+	return reader
+}
+
+func (reader *snapshotReader) err() error {
+	if failed := reader.failed.Load(); failed != nil {
+		return *failed
+	}
+	return nil
+}
+
+// 4 MiB 快照经 TCPSender 发给先停读、再慢读的客户端：分块随链路放慢（等写出），连接出站积压不超过一批，
+// 连接不断（4 MiB 远超每连接约 2 MiB 的出站字节上限，只准入地灌会被关闭）；快照后续帧无洞并回到实时。
+// 同一 Match 的另一条连接一直收实时帧，不受慢连接影响。
+//
+// 对照：可靠通道换成只准入（push 不等写出）时，同一场景在停读期间就把出站灌满、连接被关闭或拒收——
+// 说明这条用例落在“随链路放慢”这个承诺上，而不是规模恰好小到能过。
+func TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive(t *testing.T) {
+	t.Run("admission-only control overflows", func(t *testing.T) {
+		if overflowed := snapshotOverEmbeddedTCP(t, false); !overflowed {
+			t.Fatal("admission-only snapshot chunks did not overflow the stalled connection: the scenario is too small to tell")
+		}
+	})
+	t.Run("written lane follows the link", func(t *testing.T) { snapshotOverEmbeddedTCP(t, true) })
+}
+
+// snapshotOverEmbeddedTCP 跑一次场景。written=false 时可靠通道只准入，只返回慢连接是否溢出（被关闭或拒收），不做其他断言。
+func snapshotOverEmbeddedTCP(t *testing.T, written bool) bool {
+	const snapshotBytes = 4 << 20
+	tcp := newTCPLockstepServer(t, 10*time.Second, map[string]int64{"slow": 1, "fast": 2})
+	slow := tcp.dial(t, "slow", 1, 16<<10)
+	fast := tcp.dial(t, "fast", 2, 1<<20)
+	sessions := map[nettransport.SessionID]string{1: "slow", 2: "fast"}
+	data := bytes.Repeat([]byte("roost snapshot "), snapshotBytes/15+1)[:snapshotBytes]
+	var calls atomic.Int64
+	reliable := tcpLockstepSender(t, tcp.runtime, sessions)
+	if !written {
+		admission, err := lockstep.NewTCPSender(tcpLockstepMessageID, 0, func(id nettransport.SessionID) (string, bool) {
+			session, ok := sessions[id]
+			return session, ok
+		}, tcp.runtime.PushLockstepSession, tcp.runtime.PushLockstepSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reliable = admission
+	}
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer:           lockstep.SequencerConfig{Players: []lockstep.PlayerID{1, 2}, MaxInputBytes: 8},
+		RedundancyDepth:     3,
+		HistoryRetainFrames: lockstep.MinHistoryRetainFrames,
+		CatchupSendTimeout:  10 * time.Second,
+		CatchupSendWait:     5 * time.Millisecond,
+		Datagrams:           tcpLockstepSender(t, tcp.runtime, sessions),
+		Reliable:            reliable,
+		// 窗口只有 64 帧而慢读要几百个 Tick：钉住上限放宽，这里只看分块是否随链路推进（钉住上限另有用例）。
+		Snapshots: lockstep.SnapshotConfig{PinFrames: 1 << 20, Provider: lockstep.SnapshotProviderFunc(func(_ context.Context, req lockstep.SnapshotRequest) (lockstep.Snapshot, error) {
+			calls.Add(1)
+			return lockstep.Snapshot{Frame: req.MaxFrame, Data: data, StateHash: 99, HasStateHash: true}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+	if err := match.Attach(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	reading := make(chan struct{})
+	close(reading)
+	fastReader := readLockstep(fast, reading, 0)
+	tick := func() error {
+		frame := match.NextFrame()
+		for _, seat := range []lockstep.PlayerID{1, 2} {
+			if _, err := match.SubmitInput(seat, frame, []byte{byte(frame)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := match.Tick(context.Background())
+		return err
+	}
+	for range 3 * lockstep.MinHistoryRetainFrames { // 窗口已滚动：帧 1 不在历史里，只能走快照
+		if err := tick(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(200 * time.Microsecond)
+	}
+	if err := match.Attach(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.StartCatchup(1, 1); err != nil {
+		t.Fatalf("out-of-window request: %v", err)
+	}
+	start := make(chan struct{})
+	reader := readSnapshotRecovery(slow, start, time.Millisecond)
+	time.AfterFunc(200*time.Millisecond, func() { close(start) })
+
+	var tickErrs []error
+	closed := map[string]bool{}
+	began := time.Now()
+	deadline := began.Add(60 * time.Second)
+	for match.CatchingUp(1) && time.Now().Before(deadline) && !tcp.sessionClosed("slow", closed) {
+		if err := tick(); err != nil {
+			tickErrs = append(tickErrs, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !written {
+		return tcp.sessionClosed("slow", closed) || len(tickErrs) > 0
+	}
+	if tcp.sessionClosed("slow", closed) || len(tickErrs) > 0 {
+		t.Fatalf("snapshot over a slow TCP link closed the connection (closed=%v) or failed (%d Tick errors, first: %v)", closed["slow"], len(tickErrs), errors.Join(tickErrs...))
+	}
+	if match.CatchingUp(1) {
+		t.Fatalf("snapshot recovery still running after 60s (client next %d, err %v)", reader.next.Load(), reader.err())
+	}
+	if elapsed := time.Since(began); elapsed < 200*time.Millisecond {
+		t.Fatalf("4 MiB reached a stalled reader in %v: chunks did not wait for the link", elapsed)
+	}
+	head := uint64(match.History().Latest())
+	for wait := time.Now().Add(5 * time.Second); (reader.next.Load() <= head || fastReader.next.Load() <= head) && reader.err() == nil && time.Now().Before(wait); {
+		if err := tick(); err != nil {
+			t.Fatalf("live Tick after the snapshot: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := reader.err(); err != nil {
+		t.Fatalf("recovering client: %v", err)
+	}
+	if err := fastReader.err(); err != nil {
+		t.Fatalf("live client: %v", err)
+	}
+	snapshot := reader.snapshot.Load()
+	if snapshot == nil || !bytes.Equal(snapshot.Data, data) || snapshot.StateHash != 99 || calls.Load() != 1 {
+		t.Fatalf("snapshot %v, provider calls %d", snapshot != nil, calls.Load())
+	}
+	if reader.next.Load() <= head || fastReader.next.Load() <= head {
+		t.Fatalf("clients at %d / %d, head %d", reader.next.Load()-1, fastReader.next.Load()-1, head)
+	}
+	if tcp.sessionClosed("slow", closed) || tcp.runtime.ActiveSessions(1) != 1 {
+		t.Fatal("the recovering connection was closed")
+	}
+	return false
+}

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Lockstep 快照恢复 P1：服务端核心（DESIGN-TODO D1 方案 B，维护者 2026-10-20 批准，§12 全部按推荐；实施中）
+
+- **新增（`framework/sync/lockstep`）**：`MatchConfig.Recovery`（`RecoveryCatchup` / `RecoverySnapshot` / `RecoveryAuto`，零值：配了 `Snapshots.Provider` 解析为 auto，没配仍是 catchup，现有工程行为不变）与 `MatchConfig.Snapshots`（`SnapshotConfig`：`AutoCatchupMaxFrames` 缺省 0 = 只按窗口判断；`MaxBytes` 缺省 4 MiB、硬上限 64 MiB；`ChunkBytes` 16 KiB；`BytesPerTick` 64 KiB / `UnpacedBytesPerTick` 16 KiB 按可靠通道是否实现 `nettransport.ReliablePacer` 自动选用；`FetchTimeout` 2s；`PinFrames` 缺省 = `HistoryRetainFrames`）。业务快照来源接口 `SnapshotProvider`（`SnapshotRequest` / `Snapshot` / `ErrSnapshotUnavailable`），在 Match 自己的 goroutine 上调用、同一局至多一次在途、多会话共享结果、panic 被 recover；`Tick` 只非阻塞收结果。宿主强制快照 `Match.StartSnapshot` / `SpectatorSnapshot`。
+- **判定**：客户端仍只发 `OpCatchup(from)`。auto：窗口内且未超阈值追帧，超阈值或越界发快照（超阈值时取不到快照回退追帧）；snapshot：每个请求都发快照；catchup：现状。追帧途中被窗口越过时 auto / snapshot 改取快照，不再通知失败。快照分块（新下行消息 `CA 01`，首块带帧号、总长、flags、可选状态 hash 与 SHA-256 摘要）经可靠通道每会话一批在途下发，之后从快照帧的下一帧续发 C7 历史页并回到实时广播。恢复期间历史按会话钉住，最多比窗口多留 `PinFrames` 帧。
+- **线格式变化（升级需同时更新服务端与客户端 SDK）**：恢复失败通知 C9 升到 v2：`C9 02 reason from start`，reason 1 history_trimmed / 2 snapshot_unavailable / 3 snapshot_too_large / 4 recovery_expired；v1 删除。Go `*CatchupUnservableError` 加 `Reason`，`errors.Is(err, ErrCatchupUnservable)` 对所有原因成立；`EncodeCatchupUnservable(from, start)` 仍编码 history_trimmed。`client/spec/packets.json`：`catchup_unservable` 改为 v2 字节，新增 `recovery_failed_snapshot_unavailable`、`snapshot_first_chunk`、`snapshot_next_chunk`。**C# SDK 在 P3 之前仍按 v1 解码 C9，`scripts/test-client-dotnet.sh` 的 `catchup_unservable` 金样会失败，属预期。**
+- **新增（`framework/sync/nettransport`）**：可选接口 `ReliablePacer`（`TCPSender`、KCP、QUIC 返回 true；`gate.Transport` 不实现，按只准入）与 `ReliablePayloadLimiter`（`MaxReliableBytes`，KCP / QUIC / `TCPSender` / `gate.Transport` / `AsyncTransport`；`NewMatch` 用它核对分块加头部不超过单条上限）。`CompositeTransport` 转发两者。
+- 新指标 `lockstep.snapshot.total{reason}`、`lockstep.snapshot.bytes.total`、`lockstep.snapshot.failed.total{reason}`（OBSERVABILITY 已登记）。
+- 修前红：`TestMatchAutoRecoveryServesOutOfWindowRequestWithSnapshot`（配置 Provider、起点已裁出窗口）在未接线的代码上报 `out-of-window request with a snapshot provider (auto): lockstep match: catch-up range trimmed from history: from 5, history starts at 20`，继续 Tick 报 `out-of-window request terminated instead of recovering by snapshot: catchup session 101: ...`（客户端收到 C9 并终止）。
+- 未完成（后续期）：Go 客户端 `FrameAssembler.Receive` / `robot.LockstepBot.Restore`（P2，P1 已提供共用的 `SnapshotReceiver` 重组与摘要核对）、C# SDK（P3）、框架 Example 与 MOBA 验收（P4）、现行文档收口（P5）。
+
 ### DAO 逻辑库名：代码写逻辑名，部署映射物理库（D9 修订版 A，维护者 2026-10-20 决定）
 
 - **行为变化（生成器）**：DAO 标记的 `db=` 从此是**逻辑库名**（小写字母开头，小写字母、数字、下划线，解析时校验）。`roost add dao`（含 `--entity`）骨架写 `db=main`，不再写工程名；game-demo 的 Player / Guild / World 同样 `db=main`。DAO 生成器在 DAO 包多生成一个文件 `gen_databases.go`：每个逻辑库一个常量（`DatabaseMain = "main"`），`init` 里 `dataengine.DeclareDatabases` 登记；各 DAO 的 `<Dao>DBName` 改为引用它。生成配置多一个键 `dataengine.databases: {main: <工程名派生的库>}`（与以前骨架 `db=` 的规则相同，新工程开箱的物理库不变）。

@@ -1,10 +1,12 @@
-# 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20，评审中）
+# 功能设计：Lockstep 可追帧也可全量快照恢复（2026-10-20）
 
-维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；**本篇只是设计，没有改代码**。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
+**状态：已批准（维护者 2026-10-20，§12 全部按推荐），实施中。** 分期见 §11；P1（服务端核心）实施中，P2～P5 未开始。
+
+维护者 2026-10-20 决定把 [DESIGN-TODO D1](DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B（全量快照恢复）立项为一个 feature，要求先写设计给他看；本篇写于评审前，评审后按 §11 分期实施。基线 origin/main `fb4c36cc`（相对 `f2d952b4` 只改了 DataEngine，Lockstep 相关源码未变）。范围在 Sync 三大块之一的 `framework/sync/lockstep`，以及它的两端：Go 客户端（`FrameAssembler`、`robot.LockstepBot`）与 C# SDK（`client/dotnet`），协议金样 `client/spec/packets.json`。
 
 维护者已定的方向（原话要点）：
 
-- 恢复方式做成 Match 的选项：`catchup`（只追帧，即现状）、`snapshot`（总是全量快照）、`auto`（缺的帧还在历史窗口内就追帧，超出窗口或缺口超过阈值就发快照；推荐作缺省，缺省值在评审时定）。
+- 恢复方式做成 Match 的选项：`catchup`（只追帧，即现状）、`snapshot`（总是全量快照）、`auto`（缺的帧还在历史窗口内就追帧，超出窗口或缺口超过阈值就发快照；配置了快照来源时作缺省，§12 已定）。
 - 快照来源由业务提供，框架只定接口；先只提供接口 + 一个“服务器参考模拟”示例实现。“健康客户端上传快照、多数一致才采信”牵涉作弊判定，本期不做。
 - 框架负责：判断走追帧还是走快照；快照分块后走可靠通道、发送速度随链路放慢（复用嵌入 TCP 的 `PushLockstepSessionWritten` 等写出机制；独立 Gate 下暂不做写出回执，要写清行为）；快照之后续发输入；客户端恢复后哈希校验；Go 与 C# SDK 的“收快照、恢复、续帧”接口。
 
@@ -57,7 +59,7 @@ type RecoveryMode uint8
 
 const (
 	// RecoveryUnset 是零值：没有配置 Snapshots.Provider 时等于 RecoveryCatchup（现行行为），
-	// 配置了 Provider 时等于评审选定的缺省（推荐 RecoveryAuto，见 §12 第 1 条，待定）。
+	// 配置了 Provider 时等于 RecoveryAuto（§12 第 1 条，已定）。
 	RecoveryUnset RecoveryMode = iota
 	// RecoveryCatchup 只追帧；越界以 ErrCatchupUnservable 失败并发失败通知（现状）。
 	RecoveryCatchup
@@ -156,20 +158,20 @@ type MatchConfig struct {
 
 type SnapshotConfig struct {
 	Provider SnapshotProvider
-	// AutoCatchupMaxFrames 是 auto 的缺口阈值；0 = 只按窗口判断（§3.4，缺省待定）。
+	// AutoCatchupMaxFrames 是 auto 的缺口阈值；0 = 只按窗口判断（§3.4，缺省 0 已定）。
 	AutoCatchupMaxFrames int
-	// MaxBytes 是快照大小上限；0 取 DefaultMaxSnapshotBytes（待定，推荐 4 MiB），不得超过 MaxSnapshotBytes（硬上限，推荐 64 MiB）。
+	// MaxBytes 是快照大小上限；0 取 DefaultMaxSnapshotBytes（4 MiB，已定），不得超过 MaxSnapshotBytes（硬上限 64 MiB，已定）。
 	MaxBytes int
-	// ChunkBytes 是一个分块的数据字节数；0 取 DefaultSnapshotChunkBytes（待定，推荐 16 KiB）；
+	// ChunkBytes 是一个分块的数据字节数；0 取 DefaultSnapshotChunkBytes（16 KiB，已定）；
 	// 加上分块头后不得超过可靠通道声明的载荷上限（Reliable 实现 DatagramPayloadLimiter 时核对，TCPSender 与 gate.Transport 都实现）。
 	ChunkBytes int
-	// BytesPerTick 是每会话每 Tick 最多发起的快照字节（可靠通道随链路放慢时）；0 取缺省（待定，推荐 64 KiB）。
+	// BytesPerTick 是每会话每 Tick 最多发起的快照字节（可靠通道随链路放慢时）；0 取缺省 64 KiB（已定）。
 	BytesPerTick int
-	// UnpacedBytesPerTick 用于只做准入、不随链路放慢的可靠通道（独立 Gate）；0 取缺省（待定，推荐 16 KiB）。§6.3
+	// UnpacedBytesPerTick 用于只做准入、不随链路放慢的可靠通道（独立 Gate）；0 取缺省 16 KiB（已定）。§6.3
 	UnpacedBytesPerTick int
 	// FetchTimeout 限一次 Provider 调用；0 取 2s。
 	FetchTimeout time.Duration
-	// PinFrames 是恢复期间历史最多比保留窗口多留的帧数；0 取 HistoryRetainFrames（§6.4，待定）。
+	// PinFrames 是恢复期间历史最多比保留窗口多留的帧数；0 取 HistoryRetainFrames（§6.4，已定）。
 	PinFrames int
 }
 ```
@@ -510,21 +512,21 @@ func (c *checkpointCache) Snapshot(_ context.Context, req lockstep.SnapshotReque
 
 ## 12. 需要维护者决定的点
 
-每条给推荐与理由；“按推荐”即全部采用。
+每条给推荐与理由；“按推荐”即全部采用。**维护者 2026-10-20 批准：13 条全部按推荐。**
 
-1. **`auto` 是否作缺省**。推荐：`Recovery` 零值在**配置了 Provider 时**解析为 `auto`，没配 Provider 时仍是 `catchup`。理由：配了快照来源却缺省不用它没有意义；没配的对局行为逐字节不变，现有工程零改动。备选：零值永远是 `catchup`、要用快照必须显式写 `auto`（更显式，但多一个“配了却没生效”的坑）。
-2. **`auto` 阈值缺省值**（`AutoCatchupMaxFrames`）。推荐 0（只按窗口判断）。理由：框架不知道客户端重算一帧的成本和快照大小，任何非零缺省都是猜；0 让窗口内行为与现状相同，`auto` 只把“越界终止”换成“越界快照”，风险最小；模拟重的游戏按“愿意重算的秒数 × 帧率”自配。备选：缺省 600（60Hz 10 秒）。
-3. **哈希算法**。推荐：字节摘要 SHA-256 + 业务 uint64 状态 hash 两层。理由：Go / C# 标准库都有，Unity 可用，MOBA 夹具已在用，一次恢复只算一次、成本可忽略；状态 hash 才能发现“字节对、状态错”。备选：xxHash64 / CRC32C（更快，但 C# `netstandard2.1` 无内置，要自带实现并多一份金样）；只用状态 hash 不做字节摘要（省 32 字节，但重组 bug 会表现为难查的状态不一致）。
-4. **快照大小上限**。推荐缺省 4 MiB、硬上限 64 MiB。理由：MOBA / RTS 局内状态通常 KB～几百 KB，4 MiB 留足余量；客户端要按上限预分配校验，太大会让恶意首块撑爆手机内存；嵌入 TCP 64 KiB/Tick、30Hz 下 4 MiB 约 2 秒传完。
-5. **分块大小**。推荐 16 KiB。理由：远小于 TCP / KCP / QUIC 的 1 MiB 单包上限和 Gate `MaxPayloadBytes`；块小则重发代价小、对同连接其他推送的队头阻塞小；每块头部只有十几字节（首块约 70 字节），开销 < 0.5%。
-6. **每 Tick 发送量**。推荐 `BytesPerTick` 64 KiB（随链路放慢的通道），`UnpacedBytesPerTick` 16 KiB（只准入的通道，即独立 Gate），并新增 `nettransport.ReliablePacer` 让 Match 自动选用。理由：随链路放慢的通道上它只是上限，真实速度由链路决定；只准入的通道上它就是速率，必须低于最慢的目标链路，否则 Gate 断连（§6.3）。备选：只留一个旋钮、不加接口（更简单，但同一个游戏换部署形态就要改配置）。
-7. **恢复期间是否钉住历史**。推荐钉住，`PinFrames` 缺省 = `HistoryRetainFrames`（最坏两倍窗口）。理由：不钉住时一旦传输慢于窗口推进就会“传完即过期、重取、再过期”，慢链路上永远回不来；钉住的代价有上限且只在有人恢复时发生。备选：不钉住、越过就重取（实现少一块，但以后缩短窗口时会出问题）。
-8. **失败通知的形式**。推荐 C9 升 v2、加 `reason` 字段，删除 v1。理由：一个“恢复失败”消息、一处客户端判断点（`errors.Is ErrCatchupUnservable`）；未上线可以不兼容。备选：保留 C9 v1、另加一个快照失败消息（客户端多一个分支，两种失败语义其实相同：终止本场）。
-9. **历史窗口缺省是否随快照缩短**。推荐本期不改（仍 3600）。理由见 §10：省的内存少，缩短会把更多短断线推到更贵的快照，并依赖业务检查点间隔；等有游戏实测断线分布与快照大小再定。
-10. **服务器参考模拟示例放哪、检查点缓存是否导出**。推荐：框架包内 `Example_snapshotRecovery`（接口用法的权威样例，`go test ./...` 运行）+ MOBA 夹具（业务形态与网络验收）；检查点缓存本期不导出为框架类型。理由：符合“框架先只提供接口 + 一个示例”；Example 随包编译不腐烂；第二个游戏需要时再提升为导出类型。
-11. **客户端能否主动要求快照（新增上行命令）**。推荐不加；宿主可调 `StartSnapshot`。理由：客户端已有的 `OpCatchup` 足以触发（越界或超阈值时服务端自动选快照）；让客户端强制快照会给恶意客户端一个廉价的放大手段（每次请求让服务端发 MB 级数据）。
-12. **客户端恢复后状态 hash 不一致**。推荐：SDK 终止实例、不自动重试；业务可选在终止前发一次 `ReportHash(S, got)` 留证。理由：同一份快照重试结果相同，不一致只说明客户端版本 / 确定性有问题，该由业务提示更新或踢出；SDK 不自动上报，避免把一次本地错误变成服务端的 desync 告警噪声。
-13. **game-demo 战斗是否本期接入**。推荐不接。理由：demo 是手写参考实现（维护者 2026-10-18 规则），战斗只有 45 帧，远小于窗口，服务端没有参考模拟；接入要给 demo 造一个服务器参考模拟，与本期目标无关。框架 Example 与 MOBA 夹具已覆盖接法。
+1. **`auto` 是否作缺省****已定：按推荐。**。推荐：`Recovery` 零值在**配置了 Provider 时**解析为 `auto`，没配 Provider 时仍是 `catchup`。理由：配了快照来源却缺省不用它没有意义；没配的对局行为逐字节不变，现有工程零改动。备选：零值永远是 `catchup`、要用快照必须显式写 `auto`（更显式，但多一个“配了却没生效”的坑）。
+2. **`auto` 阈值缺省值****已定：按推荐。**（`AutoCatchupMaxFrames`）。推荐 0（只按窗口判断）。理由：框架不知道客户端重算一帧的成本和快照大小，任何非零缺省都是猜；0 让窗口内行为与现状相同，`auto` 只把“越界终止”换成“越界快照”，风险最小；模拟重的游戏按“愿意重算的秒数 × 帧率”自配。备选：缺省 600（60Hz 10 秒）。
+3. **哈希算法****已定：按推荐。**。推荐：字节摘要 SHA-256 + 业务 uint64 状态 hash 两层。理由：Go / C# 标准库都有，Unity 可用，MOBA 夹具已在用，一次恢复只算一次、成本可忽略；状态 hash 才能发现“字节对、状态错”。备选：xxHash64 / CRC32C（更快，但 C# `netstandard2.1` 无内置，要自带实现并多一份金样）；只用状态 hash 不做字节摘要（省 32 字节，但重组 bug 会表现为难查的状态不一致）。
+4. **快照大小上限****已定：按推荐。**。推荐缺省 4 MiB、硬上限 64 MiB。理由：MOBA / RTS 局内状态通常 KB～几百 KB，4 MiB 留足余量；客户端要按上限预分配校验，太大会让恶意首块撑爆手机内存；嵌入 TCP 64 KiB/Tick、30Hz 下 4 MiB 约 2 秒传完。
+5. **分块大小****已定：按推荐。**。推荐 16 KiB。理由：远小于 TCP / KCP / QUIC 的 1 MiB 单包上限和 Gate `MaxPayloadBytes`；块小则重发代价小、对同连接其他推送的队头阻塞小；每块头部只有十几字节（首块约 70 字节），开销 < 0.5%。
+6. **每 Tick 发送量****已定：按推荐。**。推荐 `BytesPerTick` 64 KiB（随链路放慢的通道），`UnpacedBytesPerTick` 16 KiB（只准入的通道，即独立 Gate），并新增 `nettransport.ReliablePacer` 让 Match 自动选用。理由：随链路放慢的通道上它只是上限，真实速度由链路决定；只准入的通道上它就是速率，必须低于最慢的目标链路，否则 Gate 断连（§6.3）。备选：只留一个旋钮、不加接口（更简单，但同一个游戏换部署形态就要改配置）。
+7. **恢复期间是否钉住历史****已定：按推荐。**。推荐钉住，`PinFrames` 缺省 = `HistoryRetainFrames`（最坏两倍窗口）。理由：不钉住时一旦传输慢于窗口推进就会“传完即过期、重取、再过期”，慢链路上永远回不来；钉住的代价有上限且只在有人恢复时发生。备选：不钉住、越过就重取（实现少一块，但以后缩短窗口时会出问题）。
+8. **失败通知的形式****已定：按推荐。**。推荐 C9 升 v2、加 `reason` 字段，删除 v1。理由：一个“恢复失败”消息、一处客户端判断点（`errors.Is ErrCatchupUnservable`）；未上线可以不兼容。备选：保留 C9 v1、另加一个快照失败消息（客户端多一个分支，两种失败语义其实相同：终止本场）。
+9. **历史窗口缺省是否随快照缩短****已定：按推荐。**。推荐本期不改（仍 3600）。理由见 §10：省的内存少，缩短会把更多短断线推到更贵的快照，并依赖业务检查点间隔；等有游戏实测断线分布与快照大小再定。
+10. **服务器参考模拟示例放哪、检查点缓存是否导出****已定：按推荐。**。推荐：框架包内 `Example_snapshotRecovery`（接口用法的权威样例，`go test ./...` 运行）+ MOBA 夹具（业务形态与网络验收）；检查点缓存本期不导出为框架类型。理由：符合“框架先只提供接口 + 一个示例”；Example 随包编译不腐烂；第二个游戏需要时再提升为导出类型。
+11. **客户端能否主动要求快照（新增上行命令）****已定：按推荐。**。推荐不加；宿主可调 `StartSnapshot`。理由：客户端已有的 `OpCatchup` 足以触发（越界或超阈值时服务端自动选快照）；让客户端强制快照会给恶意客户端一个廉价的放大手段（每次请求让服务端发 MB 级数据）。
+12. **客户端恢复后状态 hash 不一致****已定：按推荐。**。推荐：SDK 终止实例、不自动重试；业务可选在终止前发一次 `ReportHash(S, got)` 留证。理由：同一份快照重试结果相同，不一致只说明客户端版本 / 确定性有问题，该由业务提示更新或踢出；SDK 不自动上报，避免把一次本地错误变成服务端的 desync 告警噪声。
+13. **game-demo 战斗是否本期接入****已定：按推荐。**。推荐不接。理由：demo 是手写参考实现（维护者 2026-10-18 规则），战斗只有 45 帧，远小于窗口，服务端没有参考模拟；接入要给 demo 造一个服务器参考模拟，与本期目标无关。框架 Example 与 MOBA 夹具已覆盖接法。
 
 ## 13. 后续方向（本期不做）
 

@@ -47,6 +47,12 @@ func NewTCPSender(messageID uint32, maxPayload int,
 
 func (s *TCPSender) MaxDatagramPayload() int { return s.maxPayload }
 
+// MaxReliableBytes 与实时通道同一单包上限（同一条连接、同一路由）。
+func (s *TCPSender) MaxReliableBytes() int { return s.maxPayload }
+
+// PacesReliableToLink 返回 true：可靠通道入队并等写出（PushLockstepSessionWritten），快照与追帧页随链路放慢。
+func (s *TCPSender) PacesReliableToLink() bool { return true }
+
 // SendDatagram 发实时帧：只入队，不等写出。
 func (s *TCPSender) SendDatagram(ctx context.Context, id nettransport.SessionID, payload []byte) error {
 	return s.send(ctx, id, payload, s.push)
@@ -80,3 +86,5 @@ func (s *TCPSender) send(ctx context.Context, id nettransport.SessionID, payload
 var _ nettransport.DatagramSender = (*TCPSender)(nil)
 var _ nettransport.ReliableSender = (*TCPSender)(nil)
 var _ nettransport.DatagramPayloadLimiter = (*TCPSender)(nil)
+var _ nettransport.ReliablePacer = (*TCPSender)(nil)
+var _ nettransport.ReliablePayloadLimiter = (*TCPSender)(nil)

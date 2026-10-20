@@ -2,6 +2,7 @@ package wire_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -50,15 +51,30 @@ func TestClientProtocolGolden(t *testing.T) {
 		}
 		packets = append(packets, &wire.Packet{Flags: wire.FlagLockstep, MsgID: 50001, Seq: 11, Payload: data})
 	}
-	// 追帧失败通知与广播 / 追帧页同一路由下发。
+	// 恢复失败通知（C9 v2）与快照分块（CA 01）都与广播 / 追帧页同一路由下发。
 	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 12, Payload: lockstep.EncodeCatchupUnservable(300, 70000)})
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 13, Payload: lockstep.EncodeRecoveryFailure(lockstep.RecoverySnapshotUnavailable, 90000, 70000)})
+	// 快照：帧 1234、24 字节、状态 hash 最高位为 1（检验 uvarint64），按 16 字节切两块；两块拼起来的 SHA-256 等于首块摘要。
+	snapshot := []byte("roost-snapshot-golden-24")
+	first, err := lockstep.EncodeSnapshotChunk(lockstep.SnapshotChunk{Transfer: 3, Offset: 0, Frame: 1234, Total: len(snapshot),
+		StateHash: 1<<63 | 0x1234, HasStateHash: true, Digest: sha256.Sum256(snapshot), Data: snapshot[:16]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := lockstep.EncodeSnapshotChunk(lockstep.SnapshotChunk{Transfer: 3, Offset: 16, Data: snapshot[16:]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 14, Payload: first},
+		&wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 15, Payload: next})
 	type golden struct {
 		Name string `json:"name"`
 		Hex  string `json:"hex"`
 		Hash string `json:"hash,omitempty"`
 	}
 	want := []golden{}
-	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable"} {
+	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable",
+		"recovery_failed_snapshot_unavailable", "snapshot_first_chunk", "snapshot_next_chunk"} {
 		raw, err := wire.Encode([]*wire.Packet{packets[i]}, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -66,6 +82,9 @@ func TestClientProtocolGolden(t *testing.T) {
 		entry := golden{Name: name, Hex: hex.EncodeToString(raw)}
 		if name == "lockstep" {
 			entry.Hash = strconv.FormatUint(hasher.Sum(), 10)
+		}
+		if name == "snapshot_first_chunk" {
+			entry.Hash = strconv.FormatUint(1<<63|0x1234, 10) // 首块携带的状态 hash，C# 解码后核对
 		}
 		want = append(want, entry)
 	}

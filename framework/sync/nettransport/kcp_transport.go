@@ -291,6 +291,17 @@ func (transport *KCPTransport) SendDatagramBatch(ctx context.Context, sessionID 
 	return nil
 }
 
+// PacesReliableToLink 返回 true：可靠流的发送窗口满时 SendReliable 阻塞（受 ctx 截止时间约束），发送随链路放慢。
+func (transport *KCPTransport) PacesReliableToLink() bool { return true }
+
+// MaxReliableBytes 是 SendReliable 接受的单条上限。
+func (transport *KCPTransport) MaxReliableBytes() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxReliableBytes
+}
+
 func (transport *KCPTransport) SendReliable(ctx context.Context, sessionID SessionID, payload []byte) error {
 	if transport == nil {
 		return ErrTransportClosed
@@ -483,3 +494,8 @@ func DialKCP(address string, block kcp.BlockCrypt, dataShards, parityShards int)
 var _ Transport = (*KCPTransport)(nil)
 var _ DatagramBatchTransport = (*KCPTransport)(nil)
 var _ SessionTransport = (*KCPTransport)(nil)
+
+var (
+	_ ReliablePacer          = (*KCPTransport)(nil)
+	_ ReliablePayloadLimiter = (*KCPTransport)(nil)
+)

@@ -4,7 +4,7 @@
 
 | # | 事项 | 状态 |
 | --- | --- | --- |
-| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施；2026-10-20 方案 B（全量快照恢复）立项，设计评审中 |
+| D1 | Lockstep 历史的保留与过期策略 | 维护者 2026-10-15 决定 C，已实施；2026-10-20 方案 B（全量快照恢复）立项，设计已批准（§12 全部按推荐），实施中 |
 | D2 | SyncBus 有限投递的兜底 | 维护者 2026-10-15 决定 A，已实施 |
 | D3 | Entity Sync `Drain` 遇到永久拒绝的出口 | 维护者 2026-10-15 决定 A，已实施 |
 | D4 | 业务 schema 离线迁移的模板 / 流程 | 维护者 2026-10-15 决定 A，已实施 |
@@ -22,7 +22,7 @@
 
 ## D1 Lockstep 历史的保留与过期策略
 
-**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）当时不做；**维护者 2026-10-20 决定立项**（恢复方式做成 Match 选项 catchup / snapshot / auto，快照来源由业务经接口提供），设计见 [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)（评审中，未实施）。
+**状态：维护者 2026-10-15 决定 C（按推荐），已实施（`a6376934`）。** 方案 B（全量快照恢复）当时不做；**维护者 2026-10-20 决定立项**（恢复方式做成 Match 选项 catchup / snapshot / auto，快照来源由业务经接口提供），设计见 [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)（维护者 2026-10-20 批准，§12 十三个决定点全部按推荐；按 §11 分期实施中）。
 
 **实施结果**：
 - `MatchConfig.HistoryRetainFrames` 默认 `DefaultHistoryRetainFrames` = **3600 帧**（60Hz 下 60 秒、30Hz 下 120 秒；依据：重连窗口按 60 秒、常见逻辑帧率上限 60Hz 换算，10 席 × 8 字节输入约 1.5MB / 局）。`RetainFullHistory`（-1）显式关闭，退回宿主手动 `TrimHistory` / `TrimHashReports`；正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64（Sequencer 视为仍在线的落后量，同时覆盖一整页追帧与最大冗余深度），不满足时 `NewMatch` 返回 `ErrMatchConfigInvalid`。

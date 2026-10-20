@@ -107,6 +107,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
 | `lockstep.catchup.unservable.total` | Counter | 起点已被裁出保留窗口而失败的追帧（请求即拒绝或追帧途中被窗口越过；客户端收到失败通知后终止本场）。持续增长说明 `HistoryRetainFrames` 短于实际断线时长 |
+| `lockstep.snapshot.total{reason}` | Counter | 发起的快照恢复（会话进入取快照阶段；reason：out_of_window 起点或追帧游标早于保留窗口 / over_threshold auto 缺口超过 `AutoCatchupMaxFrames` / mode_snapshot / host_forced 宿主 `StartSnapshot`）。同一会话短时间内反复出现说明它在“快照—断开—重连”里循环（独立 Gate 下见 [Lockstep 快照恢复设计 §6.3](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#63-独立-gate只准入时的行为与风险)） |
+| `lockstep.snapshot.bytes.total` | Counter | 确认写出的快照分块数据字节（恢复带宽；嵌入 TCP 下等写出后才计入） |
+| `lockstep.snapshot.failed.total{reason}` | Counter | 快照恢复的失败：unavailable / too_large / invalid（取快照，每次 Provider 调用计一次；too_large 是确定失败，客户端收到 C9 v2 后终止）、abandoned（分块或续帧连续发送失败达到 `CatchupMaxFailures`，不发通知）、expired（钉住历史超过 `PinFrames`，客户端收到 recovery_expired 终止）。too_large 非零说明业务快照超过上限；expired 持续增长说明链路慢于窗口推进 |
 | `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
 
 ### Saga（core/saga）
@@ -266,6 +269,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.catchup.unservable.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.snapshot.bytes.total` | Counter | `sync/lockstep/snapshot.go:IncCounter` |
+| `lockstep.snapshot.failed.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.snapshot.total` | Counter | `sync/lockstep/snapshot.go:IncCounter` |
 | `lockstep.frame.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.input.late.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `lockstep.input.rejected.total` | Counter | `sync/lockstep/match.go:IncCounter` |
