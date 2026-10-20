@@ -1,0 +1,149 @@
+package handler
+
+import (
+	db "example.com/merge-casual-practice/db"
+	playerentity "example.com/merge-casual-practice/game/entities/player"
+	casual "example.com/merge-casual-practice/game/mergecasual"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type IMergePlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+	TimerComp() *playerentity.TimerComponent
+}
+
+// 登录票序号由已鉴权入口持久分配。密钥来自服务端 crypto/rand；Rules 捕获 configdata Snapshot。
+// 同票重试不提高 Epoch；更新票接管后旧设备不能再写，操作序号不重置。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now int64, rules casual.Rules) (casual.View, error) {
+	if ticket == 0 {
+		return casual.View{}, casual.ErrRule
+	}
+	if player.Dao().GetState() == "" {
+		if ticket != 1 {
+			return casual.View{}, casual.ErrRule
+		}
+		s, err := casual.NewState(key, now, rules)
+		if err != nil {
+			return casual.View{}, err
+		}
+		player.Dao().SetState(s.Encode())
+		return s.View(), nil
+	}
+	s, err := casual.Decode(player.Dao().GetState())
+	if err != nil {
+		return casual.View{}, err
+	}
+	if key != s.Key || ticket < s.Epoch || ticket > s.Epoch+1 {
+		return casual.View{}, casual.ErrRule
+	}
+	if ticket == s.Epoch {
+		return s.View(), nil
+	}
+	if ticket > uint64(casual.ValueLimit) || s.Revision >= uint64(casual.ValueLimit) {
+		return casual.View{}, casual.ErrRule
+	}
+	if err := s.Recover(now); err != nil {
+		return casual.View{}, err
+	}
+	s.Epoch = ticket
+	s.Revision++
+	s.Sale = casual.Sale{}
+	if err := saveMerge(player, s); err != nil {
+		return casual.View{}, err
+	}
+	return s.View(), nil
+}
+
+// 一个离线批次最多 16 步，全部成功才 SetState。公网只接收 Command，不接收 State / Rules / serverNow。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now int64) ([]casual.Receipt, error) {
+	if len(commands) == 0 || len(commands) > 16 {
+		return nil, casual.ErrRule
+	}
+	s, err := casual.Decode(player.Dao().GetState())
+	if err != nil {
+		return nil, err
+	}
+	before := s.Revision
+	receipts := make([]casual.Receipt, 0, len(commands))
+	for _, c := range commands {
+		r, err := s.Apply(c, now)
+		if err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, r)
+	}
+	if s.Revision != before {
+		if err := saveMerge(player, s); err != nil {
+			return nil, err
+		}
+	}
+	return receipts, nil
+}
+
+// 广告回调的签名密钥来自服务端依赖装配；该 Sender 不是允许客户端传 key 的公开 endpoint。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verificationKey string, epoch uint64, now int64) (casual.View, error) {
+	s, err := casual.Decode(player.Dao().GetState())
+	if err != nil {
+		return casual.View{}, err
+	}
+	before := s.Revision
+	if err := s.GrantAd(proof, verificationKey, player.ID(), epoch, now); err != nil {
+		return casual.View{}, err
+	}
+	if s.Revision != before {
+		if err := saveMerge(player, s); err != nil {
+			return casual.View{}, err
+		}
+	}
+	return s.View(), nil
+}
+
+// 读视图也在 Player 锁内取得；不顺便推进时间，因此客户端需显式 recover 后再以新版本发离线批次。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMergeView(player IMergePlayerEntity) (casual.View, error) {
+	s, err := casual.Decode(player.Dao().GetState())
+	if err != nil {
+		return casual.View{}, err
+	}
+	return s.View(), nil
+}
+
+func saveMerge(player IMergePlayerEntity, s casual.State) error {
+	old := player.Dao().GetWakeTimer()
+	if old != 0 {
+		player.TimerComp().RemoveTimer(old)
+		player.Dao().SetWakeTimer(0)
+	}
+	player.Dao().SetState(s.Encode())
+	if deadline := s.NextDeadline(); deadline != 0 {
+		id := player.TimerComp().NewTimerAt(time.UnixMilli(deadline), playerentity.TimerChallenge, int64(s.Challenge.ID), 0, nil)
+		if id == 0 {
+			return casual.ErrRule
+		}
+		player.Dao().SetWakeTimer(id)
+	}
+	return nil
+}
+
+// 结果未知后按原 seq 查回执；新设备用当前 Epoch 查询旧操作，不改写旧命令的 Epoch 或 Seq 再发一次。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMergeReceipt(player IMergePlayerEntity, epoch, seq uint64) (casual.Receipt, error) {
+	s, err := casual.Decode(player.Dao().GetState())
+	if err != nil {
+		return casual.Receipt{}, err
+	}
+	if epoch != s.Epoch || seq == 0 || seq > uint64(len(s.Receipts)) {
+		return casual.Receipt{}, casual.ErrRule
+	}
+	return s.Receipts[seq-1], nil
+}

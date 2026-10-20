@@ -1,0 +1,67 @@
+package mergecasual
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+)
+
+// SignedReward 模拟受信任广告平台的已完成回调。密钥由服务端注入，不在请求协议、配置表或 DAO。
+// 真实平台须按其签名、订单身份、账号绑定和撤销规则实现适配器，不能相信客户端观看成功布尔值。
+type SignedReward struct {
+	ID                  string
+	PlayerID, ExpiresAt int64
+	Kind, MAC           string
+}
+
+func rewardMAC(p SignedReward, key string) string {
+	h := hmac.New(sha256.New, []byte(key))
+	fmt.Fprintf(h, "%s\x00%d\x00%d\x00%s", p.ID, p.PlayerID, p.ExpiresAt, p.Kind)
+	return hex.EncodeToString(h.Sum(nil))
+}
+func SignReward(p SignedReward, key string) SignedReward { p.MAC = rewardMAC(p, key); return p }
+func (s *State) GrantAd(p SignedReward, key string, ownerID int64, epoch uint64, now int64) error {
+	if epoch != s.Epoch || len(key) < 32 || p.ID == "" || len(p.ID) > 64 || p.PlayerID != ownerID || p.Kind != "energy" {
+		return ErrRule
+	}
+	actual, e := hex.DecodeString(p.MAC)
+	expected, _ := hex.DecodeString(rewardMAC(p, key))
+	if e != nil || !hmac.Equal(actual, expected) {
+		return ErrRule
+	}
+	digest := sha256.Sum256([]byte(encode(p)))
+	identity := hex.EncodeToString(digest[:])
+	for _, r := range s.Ads {
+		if r.ID == p.ID {
+			if r.Digest != identity {
+				return ErrRule
+			}
+			return nil
+		}
+	}
+	if len(s.Ads) >= LedgerLimit || !validTime(p.ExpiresAt) || now >= p.ExpiresAt || s.Revision >= uint64(ValueLimit) {
+		return ErrRule
+	}
+	if err := s.Recover(now); err != nil {
+		return err
+	}
+	day := now / 86400000
+	count := 0
+	for _, r := range s.Ads {
+		if r.Day == day {
+			count++
+		}
+	}
+	if count >= 3 || s.Energy > s.Rules.EnergyCap-s.Rules.AdEnergy {
+		return ErrRule
+	}
+	s.Energy += s.Rules.AdEnergy
+	if s.Energy == s.Rules.EnergyCap {
+		s.EnergyAt = now
+	}
+	s.Ads = append(s.Ads, AdReceipt{p.ID, identity, day})
+	s.Revision++
+	s.Sale = Sale{}
+	return nil
+}

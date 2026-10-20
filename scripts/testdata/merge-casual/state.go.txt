@@ -1,0 +1,188 @@
+package mergecasual
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+)
+
+type Item struct{ Family, Level int }
+
+func (i Item) valid() bool {
+	return i == Item{} || i.Family >= 1 && i.Family <= 2 && i.Level >= 1 && i.Level <= 4
+}
+
+type Cell struct {
+	Item   Item
+	Locked bool
+}
+type Command struct {
+	Epoch, Seq, Base uint64
+	Kind             string
+	A, B             int
+	Value            int64
+}
+type Receipt struct {
+	Command      Command
+	Revision     uint64
+	Drop         Item
+	Gold, Energy int64
+	ConfigHash   string
+}
+type Sale struct {
+	Seq      uint64
+	Cell     int
+	Item     Item
+	Gold, At int64
+}
+type Challenge struct {
+	ID       uint64
+	Deadline int64
+	Status   string
+	Claimed  bool
+}
+type AdReceipt struct {
+	ID, Digest string
+	Day        int64
+}
+
+// 账本不淘汰。固定容量只用于教学，满后拒绝新写，旧命令仍可查询原回执。
+// Key 是服务端私有 HMAC 密钥，View 明确排除它及广告证明；DAO State 只有 persist，不标 sync。
+type State struct {
+	Schema                                            int
+	Rules                                             Rules
+	ConfigHash, Key                                   string
+	Epoch, Revision                                   uint64
+	Board                                             [16]Cell
+	Warehouse                                         [4]Item
+	Gold, Energy, EnergyAt, Charges, ChargeAt, LastAt int64
+	Receipts                                          []Receipt
+	Sale                                              Sale
+	Orders                                            int64
+	Challenge                                         Challenge
+	Ads                                               []AdReceipt
+}
+
+func NewState(key string, now int64, r Rules) (State, error) {
+	raw, err := hex.DecodeString(key)
+	if err != nil || len(raw) != 32 || !validTime(now) || r.Validate() != nil {
+		return State{}, ErrRule
+	}
+	s := State{Schema: 1, Rules: r, ConfigHash: r.Hash(), Key: key, Epoch: 1, Revision: 1, Gold: 30, Energy: r.EnergyCap, EnergyAt: now, Charges: 3, ChargeAt: now, LastAt: now}
+	for i := range 8 {
+		s.Board[i].Item = Item{1, 1}
+	}
+	s.Board[8].Item = Item{2, 1}
+	s.Board[9].Item = Item{2, 1}
+	for i := 12; i < 16; i++ {
+		s.Board[i].Locked = true
+	}
+	return s, nil
+}
+func Decode(raw string) (State, error) {
+	var s State
+	if err := StrictJSON(raw, &s); err != nil {
+		return s, err
+	}
+	key, err := hex.DecodeString(s.Key)
+	if err != nil || len(key) != 32 || s.Schema != 1 || s.Rules.Validate() != nil || s.ConfigHash != s.Rules.Hash() || s.Epoch == 0 || s.Epoch > uint64(ValueLimit) || s.Revision == 0 || s.Revision > uint64(ValueLimit) || s.Gold < 0 || s.Gold > ValueLimit || s.Energy < 0 || s.Energy > s.Rules.EnergyCap || s.Charges < 0 || s.Charges > 3 || !validTime(s.LastAt) || s.EnergyAt <= 0 || s.EnergyAt > s.LastAt || s.ChargeAt <= 0 || s.ChargeAt > s.LastAt || len(s.Receipts) > LedgerLimit || len(s.Ads) > LedgerLimit || s.Orders < 0 || s.Orders > ValueLimit {
+		return s, ErrRule
+	}
+	for i, c := range s.Board {
+		if !c.Item.valid() || c.Locked && c.Item != (Item{}) || i < 12 && c.Locked {
+			return s, ErrRule
+		}
+	}
+	for _, v := range s.Warehouse {
+		if !v.valid() {
+			return s, ErrRule
+		}
+	}
+	for i, r := range s.Receipts {
+		if r.Command.Seq != uint64(i+1) || r.Command.Epoch == 0 || r.Command.Epoch > s.Epoch || r.Command.Base >= r.Revision || r.Revision > s.Revision || i > 0 && r.Revision <= s.Receipts[i-1].Revision || r.ConfigHash != s.ConfigHash || !r.Drop.valid() || r.Gold < 0 || r.Gold > ValueLimit || r.Energy < 0 || r.Energy > s.Rules.EnergyCap {
+			return s, ErrRule
+		}
+	}
+	if s.Sale.Seq == 0 && s.Sale != (Sale{}) {
+		return s, ErrRule
+	}
+	if s.Sale.Seq != 0 && (s.Sale.Seq != uint64(len(s.Receipts)) || s.Receipts[s.Sale.Seq-1].Command.Kind != "sell" || !s.Sale.Item.valid() || s.Sale.Item == (Item{}) || s.Sale.Cell < 0 || s.Sale.Cell >= 16 || s.Sale.Gold != int64(s.Sale.Item.Level) || s.Sale.At > s.LastAt) {
+		return s, ErrRule
+	}
+	c := s.Challenge
+	if c.ID != 0 && (c.ID > uint64(len(s.Receipts)) || s.Receipts[c.ID-1].Command.Kind != "start" || !validTime(c.Deadline) || (c.Status != "active" && c.Status != "won" && c.Status != "lost") || c.Claimed && c.Status == "active") {
+		return s, ErrRule
+	}
+	if c.ID == 0 && c != (Challenge{}) {
+		return s, ErrRule
+	}
+	seen := map[string]bool{}
+	for _, r := range s.Ads {
+		hash, e := hex.DecodeString(r.Digest)
+		if r.ID == "" || len(r.ID) > 64 || seen[r.ID] || e != nil || len(hash) != 32 || r.Day < 0 {
+			return s, ErrRule
+		}
+		seen[r.ID] = true
+	}
+	return s, nil
+}
+func (s State) Encode() string { return encode(s) }
+func (s State) Digest() string {
+	sum := sha256.Sum256([]byte(s.Encode()))
+	return hex.EncodeToString(sum[:])
+}
+func (s State) View() View {
+	return View{s.Epoch, s.Revision, uint64(len(s.Receipts)) + 1, s.ConfigHash, s.Board, s.Warehouse, s.Gold, s.Energy, s.Charges, s.Orders, s.Challenge}
+}
+
+type View struct {
+	Epoch, Revision, NextSeq      uint64
+	ConfigHash                    string
+	Board                         [16]Cell
+	Warehouse                     [4]Item
+	Gold, Energy, Charges, Orders int64
+	Challenge                     Challenge
+}
+
+// 恢复使用服务端时间，按累计间隔计算一次，保留未满时的余数；满容量丢弃溢出时间，不补送道具或金币。
+func (s *State) Recover(now int64) error {
+	if !validTime(now) || now < s.LastAt {
+		return ErrRule
+	}
+	s.Energy, s.EnergyAt = recharge(s.Energy, s.Rules.EnergyCap, s.EnergyAt, now, s.Rules.EnergyMillis)
+	s.Charges, s.ChargeAt = recharge(s.Charges, 3, s.ChargeAt, now, s.Rules.ChargeMillis)
+	if s.Challenge.Status == "active" && now >= s.Challenge.Deadline {
+		s.Challenge.Status = "lost"
+	}
+	s.LastAt = now
+	return nil
+}
+func recharge(value, cap, at, now, period int64) (int64, int64) {
+	if value == cap {
+		return cap, now
+	}
+	n := (now - at) / period
+	if n >= cap-value {
+		return cap, now
+	}
+	return value + n, at + n*period
+}
+func (s State) NextDeadline() int64 {
+	if s.Challenge.Status == "active" {
+		return s.Challenge.Deadline
+	}
+	return 0
+}
+func (s State) drop(seq uint64) Item {
+	key, _ := hex.DecodeString(s.Key)
+	h := hmac.New(sha256.New, key)
+	fmt.Fprintf(h, "merge-drop/%d", seq)
+	x := binary.BigEndian.Uint64(h.Sum(nil)[:8])
+	level := 1
+	if x/2%5 == 0 {
+		level = 2
+	}
+	return Item{Family: 1 + int(x%2), Level: level}
+}

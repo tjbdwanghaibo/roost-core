@@ -1,0 +1,74 @@
+// Package mergecasual 是合成与限时挑战的业务消费者；不把棋盘、数值或广告策略加入公共框架。
+package mergecasual
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("merge casual: invalid identity, state, operation, revision or limit")
+
+const LedgerLimit = 128
+const ValueLimit int64 = 1000000
+const MaxTime int64 = 4000000000000
+
+// 配置全部为值类型。玩家棋盘创建时冻结规则，升级存档规则需独立迁移，登录不静默换表。
+type Rules struct {
+	Version                                                string
+	EnergyCap, EnergyMillis, ChargeMillis, ChallengeMillis int64
+	UnlockGold, OrderGold, ChallengeGold, AdEnergy         int64
+}
+
+func DemoRules() Rules { return Rules{"merge-v1", 10, 3000, 5000, 60000, 5, 20, 30, 2} }
+func (r Rules) Validate() error {
+	if r.Version == "" || len(r.Version) > 64 || r.EnergyCap < 3 || r.EnergyCap > 100 || r.EnergyMillis < 100 || r.EnergyMillis > 3600000 || r.ChargeMillis < 100 || r.ChargeMillis > 3600000 || r.ChallengeMillis < 1000 || r.ChallengeMillis > 3600000 || r.UnlockGold < 1 || r.UnlockGold > 100 || r.OrderGold < 1 || r.OrderGold > 100 || r.ChallengeGold < 1 || r.ChallengeGold > 100 || r.AdEnergy < 1 || r.AdEnergy > r.EnergyCap {
+		return ErrRule
+	}
+	return nil
+}
+func (r Rules) Hash() string {
+	sum := sha256.Sum256([]byte(encode(r)))
+	return hex.EncodeToString(sum[:])
+}
+func validTime(now int64) bool { return now > 0 && now < MaxTime }
+func encode(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+func StrictJSON(raw string, out any) error {
+	if len(raw) == 0 || len(raw) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	registry := configdata.NewRegistry()
+	configdata.MustRegisterObject(registry, configdata.ObjectDef[Rules]{Name: "merge_rules", File: "merge.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	store := configdata.NewStore(registry, dir)
+	_, err := store.Load(context.Background())
+	return store, err
+}
+func CaptureRules(s *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](s, "merge_rules")
+	if !ok {
+		return Rules{}, ErrRule
+	}
+	return r, r.Validate()
+}

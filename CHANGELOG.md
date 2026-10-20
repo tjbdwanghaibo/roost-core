@@ -16,6 +16,12 @@
 - 真实依赖：`ROOST_TOWER_DEFENSE_REAL=1`（需隔离 Mongo 副本集）追加 `TestTowerDefenseRealCrashRecovery`：第一波进行中 strict WAL 有 14 条未投影记录时 SIGKILL 子进程，冷加载后整份房间状态与定时器 ID 逐字节一致，驱动投递循环补触发一次只算一步（框架不追帧）、之后按期打完三波，第三个进程冷加载重试命令与领奖不重复；登记在根包 `integration_coverage_test.go`。
 - 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、匹配、跨服奖励与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作塔防接入验收的范围”。框架与生成器未改。
 
+### 合成休闲接入：学习手册与业务消费者（scripts/test-merge-casual-generated.sh）
+
+- 新增 [合成休闲框架学习与验收](docs/framework/MERGE-CASUAL-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-merge-casual-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/merge-casual`（框架、生成器与 demo 不含这些规则）：服务器权威存档与首登冻结配置、离线命令批次（整批原子、序号 / 存档版本冲突）、设备代际接管与按原身份查回执、惰性体力恢复、限时挑战与持久定时器、模拟签名广告回调与永久到账账本、视图裁剪。15 条场景全部 race、无 skip。
+- 真实依赖：`ROOST_MERGE_CASUAL_REAL=1`（需隔离 Mongo 副本集）追加 `TestMergeCasualRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，用例手发一次 Tick 判负过期挑战（不启动驱动投递循环），续玩领奖，第三个进程冷加载重试不重复到账；登记在根包 `integration_coverage_test.go`。
+- 范围：教学夹具，单批至多 16 条、命令与广告账本各 128 条后拒绝新写（单批上限与广告账本未在测试中填满）；没有真实广告平台、登录票分配、客户端协议与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合成休闲接入验收的范围”。
+
 ## [v1.29.0] - 2026-10-19
 
 次版本：wiring/web 的超时与请求体上限可配置、默认错误映射接 errcode、panic 日志带路由模板、路由级指标；`roost config check` 的 `--keys-only` / `--json` / 区分结论的退出码与跨服务一致性检查；各服务的 `etcd.advertise_addr` 互不相同；`roost.yaml` 的 `services.<name>.port_block` 端口块；卡牌 RPG 学习手册与验收脚本；Nest 生成器对找不到锁目标的 `//roost:nest` 报错。**含行为变化**（线上尚未部署，不做旧工程兼容）；生成物最低 core 由 v1.28.0 升到 **v1.29.0**（当前生成器写出的 `roost.yaml` 带 `port_block`，生成的 Makefile 按钉住的 core 跑 `cmd/roost`，钉 v1.28.0 时 `make id-check` 报 `field port_block not found in type roost.ServiceSpec`）。发布说明见 docs/release/v1.29.0-NOTES.md。

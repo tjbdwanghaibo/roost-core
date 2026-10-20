@@ -1,0 +1,141 @@
+package mergecasual
+
+// Apply 只修改从 DAO 解码的事务局部副本。调用者成功后 SetState；批次中任一步失败都不写回。
+// 先核对旧回执，再检查新版本 / 时间：断线重试得到原结果，不能借热更、时钟或重试重掷产物。
+func (s *State) Apply(c Command, now int64) (Receipt, error) {
+	if c.Epoch != s.Epoch || c.Seq == 0 {
+		return Receipt{}, ErrRule
+	}
+	if c.Seq <= uint64(len(s.Receipts)) {
+		r := s.Receipts[c.Seq-1]
+		if r.Command != c {
+			return Receipt{}, ErrRule
+		}
+		return r, nil
+	}
+	if c.Seq != uint64(len(s.Receipts))+1 || len(s.Receipts) >= LedgerLimit || c.Base != s.Revision || s.Revision >= uint64(ValueLimit) {
+		return Receipt{}, ErrRule
+	}
+	if err := s.Recover(now); err != nil {
+		return Receipt{}, err
+	}
+	oldSale := s.Sale
+	s.Sale = Sale{}
+	var drop Item
+	boardPair := func() bool {
+		return c.A >= 0 && c.A < 16 && c.B >= 0 && c.B < 16 && c.A != c.B && !s.Board[c.A].Locked && !s.Board[c.B].Locked
+	}
+	switch c.Kind {
+	case "move":
+		if !boardPair() || s.Board[c.A].Item == (Item{}) {
+			return Receipt{}, ErrRule
+		}
+		s.Board[c.A].Item, s.Board[c.B].Item = s.Board[c.B].Item, s.Board[c.A].Item
+	case "merge":
+		if !boardPair() {
+			return Receipt{}, ErrRule
+		}
+		item := s.Board[c.A].Item
+		if item == (Item{}) || item != s.Board[c.B].Item || item.Level >= 4 {
+			return Receipt{}, ErrRule
+		}
+		item.Level++
+		s.Board[c.A].Item = Item{}
+		s.Board[c.B].Item = item
+		if s.Challenge.Status == "active" && item.Level == 4 {
+			s.Challenge.Status = "won"
+		}
+	case "produce":
+		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item != (Item{}) || s.Charges == 0 || s.Energy == 0 {
+			return Receipt{}, ErrRule
+		}
+		drop = s.drop(c.Seq)
+		s.Board[c.A].Item = drop
+		s.Energy--
+		s.Charges--
+	case "store":
+		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item == (Item{}) || c.B < 0 || c.B >= 4 || s.Warehouse[c.B] != (Item{}) {
+			return Receipt{}, ErrRule
+		}
+		s.Warehouse[c.B] = s.Board[c.A].Item
+		s.Board[c.A].Item = Item{}
+	case "restore":
+		if c.A < 0 || c.A >= 4 || s.Warehouse[c.A] == (Item{}) || c.B < 0 || c.B >= 16 || s.Board[c.B].Locked || s.Board[c.B].Item != (Item{}) {
+			return Receipt{}, ErrRule
+		}
+		s.Board[c.B].Item = s.Warehouse[c.A]
+		s.Warehouse[c.A] = Item{}
+	case "unlock":
+		if c.A < 12 || c.A >= 16 || !s.Board[c.A].Locked || s.Gold < s.Rules.UnlockGold {
+			return Receipt{}, ErrRule
+		}
+		s.Gold -= s.Rules.UnlockGold
+		s.Board[c.A].Locked = false
+	case "sell":
+		if c.A < 0 || c.A >= 16 || s.Board[c.A].Locked || s.Board[c.A].Item == (Item{}) {
+			return Receipt{}, ErrRule
+		}
+		item := s.Board[c.A].Item
+		gold := int64(item.Level)
+		if s.Gold > ValueLimit-gold {
+			return Receipt{}, ErrRule
+		}
+		s.Gold += gold
+		s.Board[c.A].Item = Item{}
+		s.Sale = Sale{c.Seq, c.A, item, gold, now}
+	case "undo":
+		if oldSale.Seq == 0 || c.Value != int64(oldSale.Seq) || now-oldSale.At > 10000 || s.Board[oldSale.Cell].Item != (Item{}) || s.Gold < oldSale.Gold {
+			return Receipt{}, ErrRule
+		}
+		s.Gold -= oldSale.Gold
+		s.Board[oldSale.Cell].Item = oldSale.Item
+	case "order":
+		// 演示订单只有一类配方；精确消耗两格，客户端不能上报完成度或奖励额度。
+		if !boardPair() || s.Board[c.A].Item != (Item{1, 2}) || s.Board[c.B].Item != (Item{1, 3}) || s.Gold > ValueLimit-s.Rules.OrderGold || s.Orders >= ValueLimit {
+			return Receipt{}, ErrRule
+		}
+		s.Board[c.A].Item = Item{}
+		s.Board[c.B].Item = Item{}
+		s.Gold += s.Rules.OrderGold
+		s.Orders++
+	case "start":
+		if s.Challenge.ID != 0 && !s.Challenge.Claimed || s.Energy < 2 || !validTime(now+s.Rules.ChallengeMillis) {
+			return Receipt{}, ErrRule
+		}
+		s.Energy -= 2
+		s.Challenge = Challenge{ID: c.Seq, Deadline: now + s.Rules.ChallengeMillis, Status: "active"}
+	case "claim":
+		if s.Challenge.ID == 0 || c.Value != int64(s.Challenge.ID) || s.Challenge.Status == "active" {
+			return Receipt{}, ErrRule
+		}
+		if !s.Challenge.Claimed {
+			if s.Challenge.Status == "won" {
+				if s.Gold > ValueLimit-s.Rules.ChallengeGold {
+					return Receipt{}, ErrRule
+				}
+				s.Gold += s.Rules.ChallengeGold
+			}
+			s.Challenge.Claimed = true
+		}
+	case "recover": // 显式服务器时间恢复，不能携带客户端收益 / 余额快照。
+	default:
+		return Receipt{}, ErrRule
+	}
+	s.Revision++
+	r := Receipt{c, s.Revision, drop, s.Gold, s.Energy, s.ConfigHash}
+	s.Receipts = append(s.Receipts, r)
+	return r, nil
+}
+
+// Expire 是持久 timer 的业务处理；不轮询补发过期局数，也不循环产出物品。
+func (s *State) Expire(id uint64, deadline, now int64) error {
+	if s.Challenge.ID != id || s.Challenge.Status != "active" || s.Challenge.Deadline != deadline || now < deadline || s.Revision >= uint64(ValueLimit) {
+		return ErrRule
+	}
+	if err := s.Recover(now); err != nil {
+		return err
+	}
+	s.Revision++
+	s.Sale = Sale{}
+	return nil
+}
