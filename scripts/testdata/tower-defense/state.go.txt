@@ -1,0 +1,190 @@
+package towerdefense
+
+type Tower struct {
+	Owner       int64
+	Level, Paid int
+}
+type Enemy struct{ HP, Step int }
+type Command struct {
+	Seq, Epoch uint64
+	Round      int
+	Kind       string
+	A, B       int
+}
+type Receipt struct {
+	Command     Command
+	Gold, Round int
+	Phase       string
+}
+type Seat struct {
+	PlayerID                  int64
+	Epoch                     uint64
+	Connected, Ready, Claimed bool
+	Receipts                  []Receipt
+}
+type State struct {
+	Schema                                    int
+	Rules                                     Rules
+	Seats                                     [Seats]Seat
+	Towers                                    [25]Tower
+	Path                                      []int
+	Enemies                                   [3]Enemy
+	Phase, Result                             string
+	Round, Tick, Gold, BaseHP, Killed, Leaked int
+	Deadline, LastAt                          int64
+}
+type PublicSeat struct {
+	PlayerID                  int64
+	Connected, Ready, Claimed bool
+}
+type SeatView struct{ Epoch, NextSeq uint64 }
+type View struct {
+	Phase, Result, ConfigHash                 string
+	Round, Tick, Gold, BaseHP, Killed, Leaked int
+	Deadline                                  int64
+	Towers                                    [25]Tower
+	Path                                      []int
+	Enemies                                   [3]Enemy
+	Players                                   [Seats]PublicSeat
+	Self                                      SeatView
+}
+
+func (s State) Index(id int64) int {
+	for i, p := range s.Seats {
+		if p.PlayerID == id {
+			return i
+		}
+	}
+	return -1
+}
+func (s State) View(id int64) (View, error) {
+	i := s.Index(id)
+	if i < 0 {
+		return View{}, ErrRule
+	}
+	v := View{Phase: s.Phase, Result: s.Result, ConfigHash: s.Rules.Hash(), Round: s.Round, Tick: s.Tick, Gold: s.Gold, BaseHP: s.BaseHP, Killed: s.Killed, Leaked: s.Leaked, Deadline: s.Deadline, Towers: s.Towers, Path: append([]int(nil), s.Path...), Enemies: s.Enemies, Self: SeatView{s.Seats[i].Epoch, uint64(len(s.Seats[i].Receipts) + 1)}}
+	for i, p := range s.Seats {
+		v.Players[i] = PublicSeat{p.PlayerID, p.Connected, p.Ready, p.Claimed}
+	}
+	return v, nil
+}
+func New(ids [Seats]int64, r Rules, now int64) (State, error) {
+	s := State{Schema: 1, Rules: r, Phase: "prep", Round: 1, Gold: 24, BaseHP: r.BaseHP, LastAt: now, Deadline: now + r.PrepMillis}
+	if r.Validate() != nil || now <= 0 || now >= MaxTime {
+		return State{}, ErrRule
+	}
+	for i, id := range ids {
+		if id <= 0 {
+			return State{}, ErrRule
+		}
+		for j := 0; j < i; j++ {
+			if id == ids[j] {
+				return State{}, ErrRule
+			}
+		}
+		s.Seats[i] = Seat{PlayerID: id, Epoch: 1, Connected: true}
+	}
+	s.Path = s.Route()
+	return s, s.Validate()
+}
+func (s State) Encode() string { return encode(s) }
+func Decode(raw string) (State, error) {
+	var s State
+	if e := strictJSON(raw, &s); e != nil {
+		return s, e
+	}
+	return s, s.Validate()
+}
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+func distance(a, b int) int { return abs(a/5-b/5) + abs(a%5-b%5) }
+
+// 确定性 BFS：同一棋盘总取相同路径；入口 0 到基地 24 必须可达，禁止靠怪物卡住获胜。
+func (s State) Route() []int {
+	prev := [25]int{}
+	for i := range prev {
+		prev[i] = -1
+	}
+	prev[0] = 0
+	q := []int{0}
+	for len(q) > 0 {
+		v := q[0]
+		q = q[1:]
+		if v == 24 {
+			path := []int{24}
+			for v != 0 {
+				v = prev[v]
+				path = append(path, v)
+			}
+			for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+				path[i], path[j] = path[j], path[i]
+			}
+			return path
+		}
+		for _, n := range []int{v + 1, v + 5, v - 1, v - 5} {
+			if n >= 0 && n < 25 && distance(v, n) == 1 && prev[n] < 0 && s.Towers[n].Level == 0 {
+				prev[n] = v
+				q = append(q, n)
+			}
+		}
+	}
+	return nil
+}
+func (s State) Validate() error {
+	if s.Schema != 1 || s.Rules.Validate() != nil || s.Round < 1 || s.Round > s.Rules.Waves || s.Tick < 0 || s.Tick > 25 || s.Gold < 0 || s.Gold > 1000 || s.BaseHP < 0 || s.BaseHP > s.Rules.BaseHP || s.Killed < 0 || s.Leaked < 0 || s.Killed+s.Leaked > 3*s.Round || s.LastAt <= 0 || s.LastAt >= MaxTime {
+		return ErrRule
+	}
+	if s.Phase != "prep" && s.Phase != "battle" && s.Phase != "done" {
+		return ErrRule
+	}
+	if s.Phase == "done" {
+		if s.Deadline != 0 || (s.Result != "won" && s.Result != "lost") || (s.Result == "won" && (s.Round != s.Rules.Waves || s.BaseHP == 0)) || (s.Result == "lost" && s.BaseHP != 0) {
+			return ErrRule
+		}
+	} else if s.Result != "" || s.Deadline <= s.LastAt || s.Deadline >= MaxTime {
+		return ErrRule
+	}
+	for i, p := range s.Seats {
+		if p.PlayerID <= 0 || s.Index(p.PlayerID) != i || p.Epoch == 0 || len(p.Receipts) > LedgerLimit || (p.Claimed && s.Phase != "done") {
+			return ErrRule
+		}
+		for j, r := range p.Receipts {
+			if r.Command.Seq != uint64(j+1) || r.Command.Epoch == 0 || r.Command.Epoch > p.Epoch || r.Round < 1 || r.Round > s.Round {
+				return ErrRule
+			}
+		}
+	}
+	for i, t := range s.Towers {
+		if t.Level == 0 {
+			if t.Owner != 0 || t.Paid != 0 {
+				return ErrRule
+			}
+			continue
+		}
+		if i == 0 || i == 24 || s.Index(t.Owner) < 0 || t.Level < 1 || t.Level > 3 || t.Paid != s.Rules.BuildCost+4*(t.Level-1) {
+			return ErrRule
+		}
+	}
+	route := s.Route()
+	if len(route) == 0 || len(route) != len(s.Path) {
+		return ErrRule
+	}
+	for i, v := range route {
+		if s.Path[i] != v {
+			return ErrRule
+		}
+	}
+	for _, e := range s.Enemies {
+		if e.HP < 0 || e.HP > s.Rules.EnemyHP+s.Round-1 || e.Step < 0 || e.Step >= len(s.Path) {
+			return ErrRule
+		}
+		if s.Phase == "prep" && e.HP != 0 {
+			return ErrRule
+		}
+	}
+	return nil
+}
