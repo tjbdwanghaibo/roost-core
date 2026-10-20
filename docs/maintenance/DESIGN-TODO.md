@@ -22,6 +22,7 @@
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），实施中 |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
+| D19 | 一个玩家多个视野（多视点 AOI） | 待维护者决定（登记 2026-10-20，D14 之后的需求） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -582,3 +583,46 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 - 与草案的偏差：① 只设 `ZONEINFO` 为空目录模拟不了“没有 zoneinfo”（Go 在 `ZONEINFO` 里找不到时回落到系统目录，实测仍加载成功），回归改用 macOS `sandbox-exec`，并先用不内嵌 tzdata 的对照程序确认环境确实看不到 zoneinfo，看不到才断言，否则 Skip（自带 zoneinfo 的 Linux 主机）。② `Day` 不做日期运算，周重置由业务按 `Day` 推。
 - 修前红：`infra/base/clock` 编译失败 `undefined: Calendar` / `undefined: ParseCalendar` 等（没有业务日函数）；`TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock` 报 `App does not declare time.business_timezone`；`TestRunSetsTheProcessCalendarAndLogsIt` 报 `process calendar after start = UTC 00:00`；`TestGeneratedConfigsWriteTheBusinessTimeZone` 对每个服务配置报 `does not write time.business_timezone: UTC and time.business_day_start: 00:00`；`TestGeneratedMainEmbedsTheTimeZoneDatabase` 报 `with the generated main's imports [] and no zoneinfo on the host, loading Asia/Shanghai: exit status 1: operation not permitted`；`TestDoctorChecksCrossModConfigRulesThroughTheProcess`（main 不导入 tzdata 时）报编译出的 game 进程 `config: time.business_timezone: business time zone "Asia/Shanghai" is not a time zone this process can load (...): operation not permitted`。变异核对：业务日改成“减去重置时刻取日期、起点 + 24h”，夏令时用例与整年不变量用例变红。
 - 剩余限制在 KNOWN-LIMITS“业务时区与每日重置”一行。
+
+## D19 一个玩家多个视野（多视点 AOI）
+
+**状态：待维护者决定。** 登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”。
+
+### 现状
+
+- D14（A1）之后观察者 = playerId，每个玩家**一个**视点：`Interest.Enter(playerID, entityID, at, view)` / `Watch(playerID, at, view)`，`MoveView` 移动这个视点，`SetObserverView` 改它的 LOD 与半径。D14 当时把“一个玩家多个视野”划给 A2、留作以后。
+- D14 之前靠 `InterestConfig.Session` 把多个观察者（实体）映射到同一个会话来表达多视野，但订阅合并按 `(session, subject)` 一份、来源是整个 `Interest`，一个视野看不见就整份退订，另一个仍看得见的视野也失去目标（D14 第 1 步回归在旧代码上复现）。所以旧写法不能作为多视野的方案。
+
+### 需求场景
+
+RTS / SLG 每个单位、建筑带视野；MOBA 英雄 + 召唤物 + 眼位；玩家本体 + 载具 / 宠物 / 侦察技能临时视野；观战时多个镜头。共同点：多个视点各自有位置与半径（多由服务端决定，如眼位固定半径），合起来决定这个玩家能看见什么；任何一个视点能看见就要下发。
+
+### 方案（建议：在 A1 上加“玩家下挂多个视野”，即 A2 的子集）
+
+1. **视野是玩家下的子对象**：键为 `(playerID, viewID)`。`viewID` 由业务给（通常就是提供视野的实体 ID；0 保留给 `Enter` / `Watch` 的主视野，现有 API 不变）。每个视野有自己的位置、`self`（跟随实体，用于自排除）、半径。
+2. **订阅按玩家合并、按视野计数**：AOI 内部仍按视野评估进出，但交给 Manager 的是“玩家 P 看得见目标 X”的并集：X 被 P 的第一个视野看见时订阅，P 的最后一个看得见 X 的视野看不见时才退订。距离分档取各视野里**最近**的那一档（细节最多的视图）。这样不会重新引入 D14 修掉的“互相退订”。
+3. **新 API（草案）**：`Interest.AddView(playerID, viewID, self int64, at, view ObserverView)`、`MoveView(playerID, viewID, to)`（现有 `MoveView(playerID, to)` 等价于 viewID 0）、`RemoveView(playerID, viewID)`、`SetViewRadius(playerID, viewID, radius)`（服务端决定的视野，如眼位、技能）；排队版同 D14 的事务内入口（视野多由事务里的游戏逻辑产生，如放眼、召唤，要走提交门）。
+4. **预算**：新增 `MaxViewsPerPlayer`（启动期配置）；`worstObserverBlocks × MaxViewsPerPlayer` 进启动期预算检查；`MaxVisible` 改为按玩家（并集）计，而不是按视野。
+5. **LOD 与半径的来源分开**：客户端 LOD 请求（D14 第 6 项）只改主视野（镜头）的 LOD 与视野大小；附属视野的半径由服务端设定（`SetViewRadius`，同样夹到 `[MinViewRadius, MaxLeaveRadius]`），LOD 层级按玩家一份（分档表随玩家的 LOD 层级）。
+6. **自排除**：每个视野排除自己的 `self`；玩家自己的其他单位照常按距离进入（RTS 里看得见自己的单位），或由业务用关系源（`self` 关系）保证总是可见。
+
+### 代价与风险
+
+- 每个目标的可见判断从“一个视点”变成“多个视点取并集”，目标移动时要评估登记在相关块上的所有视野；视野多的玩家（RTS 上百单位）评估量线性增长，需要 benchstat 与 sync-aoi 加多视野场景压测。
+- 分档取最近档意味着同一目标的视图可能因另一个视野靠近而升档，切档次数增加。
+- `AOICluster` 镜像要按视野登记。
+
+### 未采用
+
+- 回到 `Session` 多对一：订阅合并语义错误（见现状）。
+- 每个视野一个独立会话：客户端要处理多路订阅与去重，带宽翻倍。
+- 只给一个大半径覆盖所有单位：多块订阅、隐私（看到不该看到的区域）。
+
+### 需要拍板
+
+1. 是否按上面的“玩家下挂多个视野、订阅按玩家并集”实施（建议是）。
+2. `viewID` 由业务给（建议，通常是视野实体 ID），还是框架分配。
+3. 多视野的距离分档取最近档（建议），还是按主视野。
+4. `MaxVisible` 按玩家并集计（建议），还是按视野。
+5. 附属视野的增删改是否需要排队版（建议需要，放眼 / 召唤多在事务里）。
+6. `MaxViewsPerPlayer` 缺省值（建议 64，RTS 需要时配置提高；启动期预算按它算）。
