@@ -14,6 +14,10 @@
 // 依赖存储服务端 TTL、与读系统时钟的进程比较、安全有效期、空间回收、审计的才是系统时钟。
 // 业务代码从 app.BusinessClock(registry) 拿 Business，或由服务的 Config.Now 注入；本包的全局函数
 // （Now / UnixMilli）是进程级业务时钟，给 fctx 与框架库在没有注入时做缺省。
+//
+// “哪一天”另有业务日历（calendar.go）：业务时区 time.business_timezone（缺省 UTC）与每日重置时刻
+// time.business_day_start（缺省 00:00），同样启动时读一次。日 / 周重置按 Calendar.BusinessDay 算，
+// 不读 time.Local。
 package clock
 
 import (
@@ -33,11 +37,29 @@ type BusinessFunc func() time.Time
 // Now 实现 Business。
 func (f BusinessFunc) Now() time.Time { return f() }
 
-// offsetBusiness 是固定偏移的业务时钟。偏移在构造时定下，之后不能改。
-type offsetBusiness struct{ offset time.Duration }
+// offsetBusiness 是固定偏移的业务时钟。偏移与日历在构造时定下，之后不能改。
+type offsetBusiness struct {
+	offset   time.Duration
+	calendar *Calendar // nil：没有自己的日历，CalendarOf 取进程级日历
+}
 
 // NewBusiness 返回“真实时间 + offset”的业务时钟。offset 为 0 时 Now 就是 time.Now()。
+// 它没有自己的业务日历，CalendarOf 取进程级日历；要带日历用 NewBusinessIn。
 func NewBusiness(offset time.Duration) Business { return offsetBusiness{offset: offset} }
+
+// NewBusinessIn 返回“真实时间 + offset”、带业务日历的业务时钟（app.NewRegistry 按配置构造它）。
+// 业务日按 CalendarOf(clock) 算：clock.Now() 给时刻，日历给“哪一天”。
+func NewBusinessIn(offset time.Duration, calendar Calendar) Business {
+	return offsetBusiness{offset: offset, calendar: &calendar}
+}
+
+// Calendar 是这个时钟的业务日历。
+func (c offsetBusiness) Calendar() Calendar {
+	if c.calendar == nil {
+		return ProcessCalendar()
+	}
+	return *c.calendar
+}
 
 func (c offsetBusiness) Now() time.Time {
 	now := time.Now()
@@ -51,6 +73,9 @@ func (c offsetBusiness) Now() time.Time {
 type processBusiness struct{}
 
 func (processBusiness) Now() time.Time { return global.Now() }
+
+// Calendar 是进程级业务日历（App 启动时 SetCalendar 设下）。
+func (processBusiness) Calendar() Calendar { return ProcessCalendar() }
 
 // Process 返回进程级业务时钟：偏移是 App 启动时从 time.logic_offset 设下的那个。
 // 没有 Registry 可用的框架库（timer、ai、actionflow 的缺省）与 app.BusinessClock 的兜底用它。

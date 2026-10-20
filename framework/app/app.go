@@ -218,6 +218,8 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	// 进程级业务时钟（fctx.Now、框架库的缺省）在这里、启动时设一次，运行期不改；
 	// 生产环境非 0 已被启动检查拒绝。Registry 的业务时钟读同一个键。
 	clock.SetOffset(a.settings.Time.LogicOffset)
+	// 进程级业务日历（clock.BusinessDay 等全局函数读它）同样只在这里设一次；非法时区已被启动检查拒绝。
+	clock.SetCalendar(a.settings.Time.calendar)
 	fctx.SetRuntimeConfig(a.cfg)
 	if err := flog.Init(flog.Options{
 		LevelText:        a.settings.Log.Level,
@@ -253,6 +255,8 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		"type", serverType,
 		"sid", a.settings.Sid,
 		"config", cfgPath,
+		"business_timezone", a.settings.Time.calendar.Location().String(),
+		"business_day_start", a.settings.Time.BusinessDayStart,
 	)
 
 	// 从启动开始接收终止信号，后续 Serve 沿用同一个来源，不留信号处理空窗。

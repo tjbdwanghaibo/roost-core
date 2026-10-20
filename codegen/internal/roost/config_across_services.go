@@ -198,7 +198,7 @@ func sharedValueProblems(docs []serviceConfigDocument, all configschema.Schema) 
 		for _, v := range values {
 			parts = append(parts, fmt.Sprintf("%s %q (%s)", v.service, v.value, v.from))
 		}
-		problems = append(problems, fmt.Sprintf("%s differs between services: %s; every service of the project reads one shared %s, so they would not see each other's messages / data: write the same value in each service's config",
+		problems = append(problems, fmt.Sprintf("%s differs between services: %s; every service of the project reads one shared %s, otherwise they would not see each other's messages / data (or would split business days at different moments): write the same value in each service's config",
 			resource, strings.Join(parts, ", "), resource))
 	}
 	return problems

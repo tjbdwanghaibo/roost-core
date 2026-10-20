@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
@@ -288,8 +289,33 @@ type appConfig struct {
 	Singleton singletonConfig `config:"singleton"`
 }
 
+// timeConfig 是业务时间的三个键（docs/framework/guide/10-time.md）。业务时区与重置时刻 shared：同一工程各服务取同一个值，
+// 否则活动窗口、每日重置在两个服务里切在不同时刻（roost config check --all、doctor config-across-services 检查）。
 type timeConfig struct {
-	LogicOffset time.Duration `config:"logic_offset" help:"业务时钟偏移（只给测试环境前拨业务时间用，生产必须为 0）"`
+	LogicOffset      time.Duration `config:"logic_offset" help:"业务时钟偏移（只给测试环境前拨业务时间用，生产必须为 0）"`
+	BusinessTimezone string        `config:"business_timezone" default:"UTC" example:"UTC" shared:"time.business_timezone" help:"业务时区（IANA 名，例如 Asia/Shanghai）：业务日与每日重置按它划分，不取机器的 TZ / time.Local；存储与协议里的时间仍是绝对时刻"`
+	BusinessDayStart string        `config:"business_day_start" default:"00:00" example:"00:00" shared:"time.business_day_start" help:"每日重置时刻（业务时区的墙上时间 HH:MM）：业务日从这一刻开始"`
+
+	// calendar 是按业务时区与重置时刻解析出的日历（ValidateConfig 填写）。
+	calendar clock.Calendar
+}
+
+// ValidateConfig 解析业务日历：时区名加载不了（拼错、不是 IANA 名、Local）或重置时刻不是 HH:MM 时在加载时拒绝，
+// 启动前检查、--check-config 与 doctor config-check 都经这里。
+func (c *timeConfig) ValidateConfig(bool) error {
+	loc, err := clock.LoadTimezone(c.BusinessTimezone)
+	if err != nil {
+		err = fmt.Errorf("config: time.business_timezone: %w", err)
+	}
+	dayStart, startErr := clock.ParseDayStart(c.BusinessDayStart)
+	if startErr != nil {
+		err = errors.Join(err, fmt.Errorf("config: time.business_day_start: %w", startErr))
+	}
+	if err != nil {
+		return err
+	}
+	c.calendar, err = clock.NewCalendar(loc, dayStart)
+	return err
 }
 
 type metricsConfig struct {

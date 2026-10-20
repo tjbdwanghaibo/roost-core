@@ -236,6 +236,7 @@ Entity 或 Component 加 mutex，也不要绕过 Sender 直接并发调用 handl
 - DAO：需要 save/load、rollback 或 sync 的状态，必须声明 persist/sync 意图。事务内会改的状态一律放进 DAO：不该落库的用 dao:"nopersist,sync"（只同步）或 dao:"nopersist,nosync"（只参与事务），派生值也一样——回滚由 DAO 统一完成，组件不要自己登记 undo，也不要把事务会改的状态放在组件的普通字段里（go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet 对两者都会提示；确属缓存、允许不随事务回滚的组件字段在声明上一行或行尾写 //roost:cache）。
 - Config：策划静态数据，放 configs/schema 与 configs/table，不写进 Entity。
 - 时间：业务时间（活动窗口、定时器、冷却、业务过期、赛季、排行周期、匹配票据、展示给玩家的聊天时间、账号与角色创建 / 登录时间）读业务时钟 app.BusinessClock(registry)，它带 time.logic_offset（只在测试环境用，生产必须为 0；同一套部署的所有服务配置必须一致，roost project doctor 会检查；业务时间只许前进，偏移改小到让业务时间回到部署已经到过的时刻时 App 拒绝启动，要回到过去只能清库重建）；租约、超时、重试、存储 TTL、日志是系统时间，直接用 time 包。game 目录下的包直接读 time.Now / Since / Until 时 glsvet 会提示，系统时间在同一行写 //glsvet:system-clock <理由>。
+- 业务日：每日 / 每周重置、“今天领过没有”、按日历划分的活动按 configs/service/config.<service>.yaml 的 time.business_timezone（IANA 名，缺省 UTC）与 time.business_day_start（HH:MM，缺省 00:00）算：app.BusinessCalendar(registry).BusinessDay(now) 给业务日（YYYYMMDD 整数，可直接存进 DAO），NextDayStart(now) 给下一次重置时刻；不读 time.Local（容器里是 UTC，开发机是本地时区，glsvet 会提示）。推荐写法：DAO 存上次重置的业务日，登录 / 首次操作时不同就惰性重置，需要准点推送时用 roost add timer 的实体定时器。各服务这两个键必须相同（roost config check --all 检查）；main.go 内嵌 time/tzdata，运行镜像没有 zoneinfo 也能加载时区。
 - Remote Entity：只有跨服所有权场景才启用；普通房间内 Entity 不要默认使用。
 
 ## 5. 每次修改后的固定检查

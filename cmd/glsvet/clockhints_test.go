@@ -147,3 +147,25 @@ func clockHintsForDirectory(fileSet *token.FileSet, directory string) int {
 	_, _ = vetDirectory(fileSet, directory)
 	return hintCount - before
 }
+
+// D18：业务包读机器时区（time.Local、time.LoadLocation）同样提示，豁免指令相同；框架包不提示。
+func TestClockHintsFlagMachineTimeZoneReads(t *testing.T) {
+	root := newModule(t)
+	dir := writeModuleFile(t, root, "game/daily/reset.go", `package daily
+import "time"
+func Today(t time.Time) int { return t.In(time.Local).YearDay() }
+func Shanghai() (*time.Location, error) { return time.LoadLocation("Asia/Shanghai") }
+func LogStamp(t time.Time) string { return t.In(time.Local).Format(time.Kitchen) } //glsvet:system-clock operator-facing log in local time
+func Fixed() *time.Location { return time.UTC }
+`)
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 2 {
+		t.Fatalf("hints = %d, want 2 (time.Local and time.LoadLocation; the marked line and time.UTC are not hinted)", hints)
+	}
+	framework := writeModuleFile(t, root, "infra/base/clock/zone.go", `package clock
+import "time"
+func Load(name string) (*time.Location, error) { return time.LoadLocation(name) }
+`)
+	if hints := clockHintsForDirectory(token.NewFileSet(), framework); hints != 0 {
+		t.Fatalf("hints = %d in a framework package, want 0", hints)
+	}
+}

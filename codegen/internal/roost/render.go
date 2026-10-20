@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
 func renderProject(m Manifest) (map[string]plannedFile, error) {
@@ -316,12 +318,18 @@ type ServiceMetrics = servicemetrics.Reporter
 `
 }
 
+// renderMain 是工程的 main.go（新建时写一次，之后归应用）。它导入 time/tzdata（约 450 KB）：业务时区
+// time.business_timezone 在启动检查里加载，生成的运行镜像（distroless static）与很多最小镜像没有 zoneinfo，
+// 不内嵌时 Asia/Shanghai 这类名字加载失败、进程拒绝启动（DESIGN-TODO D18）。
 func renderMain(m Manifest) string {
 	return fmt.Sprintf(`package main
 
 import (
 	"log/slog"
 	"os"
+	// The business time zone (time.business_timezone) is loaded at start; the runtime image
+	// has no zoneinfo, so the time zone database is embedded in the binary.
+	_ "time/tzdata"
 
 	"%s/internal/bootstrap"
 )
@@ -703,11 +711,28 @@ func renderSingletonConfig(project string, enabled bool) string {
 	return b.String()
 }
 
+// renderBusinessTimeConfig 是服务配置里的 time: 段：App 声明里标了 example 的业务时区与每日重置时刻
+// （time.business_timezone / time.business_day_start，DESIGN-TODO D18），注释取声明的 help。开发配置与生产示例
+// 都写明，缺省 UTC 00:00；同一工程各服务必须相同（shared，config check --all 检查）。
+func renderBusinessTimeConfig() string {
+	var keys []configschema.Key
+	for _, key := range kitConfigSchemas["app"].Keys {
+		if strings.HasPrefix(key.Name, "time.") && key.Starter {
+			keys = append(keys, key)
+		}
+	}
+	return "# Business days and daily resets follow this zone and wall-clock time, not the machine's TZ\n" +
+		"# (production: the zone the game's day follows, e.g. Asia/Shanghai); every service of the\n" +
+		"# project writes the same two values.\n" +
+		configschema.Schema{Keys: keys}.StarterYAML(nil)
+}
+
 func renderServiceConfig(m Manifest, service string, production bool) string {
 	var b strings.Builder
 	b.WriteString("# Generated starter configuration; application-owned after project creation.\n")
 	b.WriteString("sid: 1000\n")
 	b.WriteString("log:\n  level: info\n  json: true\n  stdout: true\n  file: true\n  dir: log\n")
+	b.WriteString(renderBusinessTimeConfig())
 	b.WriteString(renderShutdownConfig(serviceShutdownPlan(m, service)))
 	for _, section := range serviceConfigSections(m, service) {
 		b.WriteString(section)
