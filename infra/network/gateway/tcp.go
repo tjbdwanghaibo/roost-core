@@ -294,8 +294,8 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 // 归还握手槽 → 读循环按序分发请求。
 //
 // 资源所有权：连接槽、连接表与按 IP 计数、wait 由 acceptLoop 取得，这里在返回时归还。握手槽从取得起持有到
-// AfterACK 完成（handshakeHeld），中途返回由 defer 归还。会话创建后，返回时先注销（已注册时）、再关闭并通知
-// handshake.Closed。
+// AfterACK 完成（handshakeHeld），中途返回由 defer 归还。会话创建后，返回时先从查找表移除（已注册时，之后的推送
+// 找不到它）、再关闭会话并等写协程退出、然后发布关闭事件（已注册时）并通知 handshake.Closed。
 func (server *TCPServer) serveConnection(connection net.Conn) {
 	defer func() {
 		if value := recover(); value != nil {
@@ -333,12 +333,14 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 		return
 	}
 	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config, server.outbound)
-	defer server.closeConnectionSession(session)
+	registered := false
+	defer func() { server.closeConnectionSession(session, registered) }()
 	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
 		return
 	}
 	server.registerSession(session)
-	defer server.unregisterSession(session)
+	registered = true
+	defer server.forgetSession(session)
 	if server.handshake != nil {
 		if err := server.handshake.AfterACK(handshakeCtx, session); err != nil || handshakeCtx.Err() != nil {
 			return
@@ -416,11 +418,16 @@ func (server *TCPServer) authenticateConnection(handshakeCtx context.Context, co
 }
 
 // closeConnectionSession 在连接返回时关闭会话、等它的 writeLoop 退出（关闭 socket 会打断正在进行的写），
-// 再通知 handshake.Closed；连接槽与 Stop 的排空因此也覆盖出站写协程。
-func (server *TCPServer) closeConnectionSession(session *tcpSession) {
+// 已注册的会话随后发布关闭事件，最后通知 handshake.Closed；连接槽与 Stop 的排空因此也覆盖出站写协程。
+// 关闭事件必须在写协程退出之后：writeLoop 退出时才把这条连接排队与在途的字节还给全进程驻留预算
+// （releaseOutbound），订阅方收到关闭时预算已归还，不会紧接着因为一条已经关闭的连接被拒（GATEWAY §4）。
+func (server *TCPServer) closeConnectionSession(session *tcpSession, registered bool) {
 	_ = session.Close(ErrSessionClosed)
 	if session.writerDone != nil {
 		<-session.writerDone
+	}
+	if registered {
+		server.publishSessionClosed(session)
 	}
 	if server.handshake != nil {
 		server.handshake.Closed(session)
@@ -550,11 +557,12 @@ func (server *TCPServer) registerSession(current *tcpSession) {
 	}
 }
 
-func (server *TCPServer) unregisterSession(current *tcpSession) {
-	server.forgetSession(current)
-	// The connection is gone; say so once, asynchronously. Everything that
-	// maintains an "online" set needs this, and the alternative — noticing by
-	// failing to push — never fires if nothing tries.
+// publishSessionClosed says, once and asynchronously, that a registered
+// connection is gone. Everything that maintains an "online" set needs this,
+// and the alternative — noticing by failing to push — never fires if nothing
+// tries. It runs from closeConnectionSession after the writer exited, so the
+// connection's resident outbound bytes are already returned.
+func (server *TCPServer) publishSessionClosed(current *tcpSession) {
 	if server.transport != nil {
 		server.transport.publishClosed(TCPSessionClosed{PlayerID: current.principal.PlayerID, SessionID: current.principal.SessionID})
 	}
@@ -562,7 +570,7 @@ func (server *TCPServer) unregisterSession(current *tcpSession) {
 
 // forgetSession takes a tcpSession out of the lookup maps, if it is still the
 // one registered under its id. It is the only place that does; the tcpSession's
-// close event is published by unregisterSession, once, from the connection's
+// close event is published by publishSessionClosed, once, from the connection's
 // own teardown.
 func (server *TCPServer) forgetSession(current *tcpSession) {
 	server.mu.Lock()

@@ -513,47 +513,42 @@ func TestSelfSyncFrameLimitTakesTheSmallestAccessLimit(t *testing.T) {
 
 // 嵌入 TCP 的全进程出站驻留预算（player_access.tcp.outbound.resident_bytes）耗尽不是哪个玩家慢：与独立 Gate 下
 // Game Ingress 的预算同一规则，Sync 整轮重试（ErrRetryLater）、保留脏状态，不关任何连接、不丢会话；占预算的停读连接
-// 关闭后预算归还，同一会话照常收到增量。预算由另一个停读的连接占满（推到它的帧卡在 socket 与出站队列里）。
+// 关闭后预算归还，同一会话照常收到增量。预算由另一个停读的连接占满：推给它的一整帧卡在写协程里，它不读就永远写不完。
 func TestSelfSyncOverTCPRetriesTheTickWhenTheResidentBudgetIsExhausted(t *testing.T) {
-	h := newHarnessWithTCP(t, 64<<10, nil, func(config *gateway.TCPConfig) {
-		config.OutboundResidentBytes = 256 << 10 // 低于每连接 2 MiB 上限：占预算的连接不会先因自己的上限被关
+	const fillerBytes = 16 << 20 // 嵌入 TCP 的 max_payload_bytes 硬上限
+	h := newHarnessWithTCP(t, fillerBytes, nil, func(config *gateway.TCPConfig) {
+		// 预算恰好一帧（resident_bytes 允许的下限）：占预算的那一帧进队后剩余为 0。每连接字节上限是两帧，
+		// 占预算的连接不会先因自己的上限被关。
+		config.OutboundResidentBytes = fillerBytes + 16
 	})
 	player := newWallet(t, 7, 1)
 	h.access.Manager().Add(player)
 	c := dial(t, h, 7)
 	c.ack(t)
 	filler := dial(t, h, 8) // 只用来占预算的另一个玩家：没有实体，自身视图不向它推送；它从不读
+	_ = filler.connection.(*net.TCPConn).SetReadBuffer(4 << 10)
 	waitOnline(t, h, 2)
 	h.flush(t)
 	if kind, state := c.state(t); kind != frame.Full || state != "gold=1" {
 		t.Fatalf("first state = %v %q, want a Full with gold=1", kind, state)
 	}
 
-	// 占满预算：用越来越小的帧（32 KiB → 2 KiB）把停读连接的 socket 缓冲与出站队列推满，剩下不足一个 2 KiB 帧；
-	// 停一会儿再探一次，内核还在收（写协程又归还了字节）就再填一遍，直到停下来之后连 2 KiB 也放不下。
-	// 自身视图的帧带 4 KiB 填充，比剩下的大，必然被预算拒收。帧不小于 2 KiB，停读连接的帧数远低于 1024 帧上限。
+	// 占满预算：给停读连接推一帧 16 MiB。这一帧的字节要整帧写进内核才扣减，而它的接收缓冲 4 KiB、
+	// 单个 socket 缓冲有系统上限（macOS kern.ipc.maxsockbuf 8 MiB、自动调优上限 4 MiB；Linux tcp_wmem 缺省上限 4 MiB），
+	// 它不读就永远写不完：从这一帧进队到 filler 关闭，剩余预算一直是 0，带 4 KiB 填充的自身视图帧必然被拒，
+	// 不靠“停一会儿再探”判断缓冲已满。首帧全量要等写协程写完才扣减，客户端读到它时可能还没扣：这时 filler 被拒，
+	// 有界重试到首帧归还。
 	player.pad.Store(4 << 10)
-	fill := func() {
-		for size := 32 << 10; size >= 2<<10; size /= 2 {
-			for attempt := 0; ; attempt++ {
-				err := h.runtime.PushSyncPlayer(context.Background(), 8, testMessageID+1, make([]byte, size))
-				if err == nil {
-					if attempt > 4096 {
-						t.Fatal("the filler connection never filled the process budget")
-					}
-					continue
-				}
-				if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
-					t.Fatalf("filler push refused with %v, want gateway.ErrResidentBudgetExhausted", err)
-				}
-				break
-			}
+	filling := make([]byte, fillerBytes)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		err := h.runtime.PushSyncPlayer(context.Background(), 8, testMessageID+1, filling)
+		if err == nil {
+			break
 		}
-	}
-	for settled := false; !settled; {
-		fill()
-		time.Sleep(20 * time.Millisecond)
-		settled = h.runtime.PushSyncPlayer(context.Background(), 8, testMessageID+1, make([]byte, 2<<10)) != nil
+		if !errors.Is(err, gateway.ErrResidentBudgetExhausted) || time.Now().After(deadline) {
+			t.Fatalf("filler push = %v: the first state frame was never returned to the process budget", err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if h.runtime.ActiveSessions(8) != 1 {
 		t.Fatalf("filler connections = %d; want the budget exhausted with the filler still connected", h.runtime.ActiveSessions(8))
