@@ -380,3 +380,53 @@ func TestFullDirtyReusesSnapshotAndEmptyViewsStillCommit(t *testing.T) {
 		t.Fatal("unobserved dirty state not committed")
 	}
 }
+
+// 层级并集（D19）：并集身份可拆回各层级、与输入顺序无关、单个层级就是它本身；视图集把并集解析为字段的并集与最优优先级，
+// 任一层级未声明即未知；业务视图 Key 不能使用并集保留字符。
+func TestSyncLayerUnionResolvesFieldsAndPriority(t *testing.T) {
+	near, far, alliance := SyncProfile{Key: "near"}, SyncProfile{Key: "far", LOD: 1}, SyncProfile{Key: "alliance", SchemaVersion: 3}
+	union := UnionSyncProfiles(near, far, alliance, near)
+	if union != UnionSyncProfiles(far, UnionSyncProfiles(alliance, near)) {
+		t.Fatalf("union depends on order or nesting: %+v", union)
+	}
+	if union.Key != "alliance@0@3+far@1+near" || union.LOD != 0 {
+		t.Fatalf("union identity = %+v", union)
+	}
+	layers := union.Layers()
+	if len(layers) != 3 || layers[0] != alliance || layers[1] != far || layers[2] != near {
+		t.Fatalf("layers = %+v", layers)
+	}
+	if UnionSyncProfiles(near, near) != near || UnionSyncProfiles() != (SyncProfile{}).Normalize() {
+		t.Fatal("a single layer is not itself")
+	}
+	if got := (SyncProfile{Key: "far"}).Layers(); len(got) != 1 || got[0] != (SyncProfile{Key: "far"}) {
+		t.Fatalf("plain layers = %+v", got)
+	}
+	views, err := NewSyncViewSet(SyncView{Profile: near, Fields: 0b0111, Priority: 0}, SyncView{Profile: far, Fields: 0b0011, Priority: 5}, SyncView{Profile: alliance, Fields: 0b1001, Priority: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, ok := views.Lookup(UnionSyncProfiles(far, alliance))
+	if !ok || view.Fields != 0b1011 || view.Priority != 2 {
+		t.Fatalf("union view = %+v, %v", view, ok)
+	}
+	if _, ok := views.Lookup(UnionSyncProfiles(far, SyncProfile{Key: "undeclared"})); ok {
+		t.Fatal("a union with an undeclared layer resolved")
+	}
+	if !views.Covers(near, far) || views.Covers(far, near) || views.Covers(near, alliance) {
+		t.Fatal("covers is not field inclusion")
+	}
+	for _, key := range []string{"a+b", "a@1"} {
+		if _, err := NewSyncViewSet(SyncView{Profile: SyncProfile{Key: key}}); err == nil {
+			t.Fatalf("reserved key %q accepted", key)
+		}
+	}
+	packer, err := NewMaskedSyncPacker(views, 1, func(fields uint64) ([]byte, error) { return []byte{byte(fields)}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := packer.PackSubjectSnapshot(UnionSyncProfiles(far, alliance))
+	if err != nil || payload.BytesCopy()[0] != 0b1011 {
+		t.Fatalf("union packed %v, %v", payload.BytesCopy(), err)
+	}
+}
