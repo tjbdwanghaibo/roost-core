@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化视野：授权交集与定期重读
+
+- 固定视点先计算空间范围与联盟／侦察授权交集，再交 Interest 发布派生关系；真实 TCP 验证有权但远离、附近但无权、scout 越界均不下发目标。
+- 有界 permissionLoop 接真实 NATS 提示和 ticker，最高权限代际不回退；持久撤权漏通知、一次权威读取超时后，后续定期重读清空客户端视图，并验证取消退出。仍未接持久 Player 视点、多目标迷雾或跨机时延。
+- 接入回归修正：HoldSession 重置基线后最后目标撤销，服务器已无订阅但客户端旧对象仍在（首次 TCP 回归失败）；增加常驻公开控制标记，使新 Full 清空旧场景。属于业务接线，框架未改；证据与使用见 SLG 手册。
+
 ### SLG 深化入口：持久空间事实与 Nest 外部类型导入修复
 
 - `scripts/test-slg-alliance-player.sh`（含 Remote 模式）在同一活动／奖励链加入 Player X/Y/Coverage、生成 Sender 与 SpatialComponent；真实 TCP 验证未提交不放出对象、回滚／非法覆盖不变、多块覆盖与 scout 来源交接。四条 strict 未投影记录后 SIGKILL，恢复先比较完整事实，再重建空间索引，第三进程仍为同一位置与永久奖励回执。与 main 的 `test-slg-generated.sh` 基础入口分开，接法和空间授权交集的未完成边界见 SLG 手册。
