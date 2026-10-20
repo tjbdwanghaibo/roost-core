@@ -80,7 +80,8 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 		t.Fatal("phase advanced with open admission", e)
 	}
 	// 侦察是独立授权来源；退盟撤销共享视野，但仍有侦察权时不应隐藏据点。
-	f.interest.Relation("scout").Set(2, []int64{99})
+	f.scout[2] = true
+	check(t, f.reconcileFrom(func() (state, error) { return a.read(ctx) }))
 	if !f.visible(t, 2) {
 		t.Fatal("scout view missing")
 	}
@@ -89,11 +90,13 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 	if !f.visible(t, 2) {
 		t.Fatal("revoking alliance incorrectly removed scout")
 	}
-	f.interest.Relation("scout").Clear(2)
+	f.scout[2] = false
+	check(t, f.reconcileFrom(func() (state, error) { return a.read(ctx) }))
 	if f.visible(t, 2) || !f.visible(t, 1) {
 		t.Fatal("last source revocation incorrect")
 	}
 	verifyFogRecovery(t, f, func() (state, error) { return a.read(ctx) })
+	verifyPermissionLoop(t, ctx, a, prefix)
 	if e := a.contribute(ctx, 1001, "bob", "after-revoke", time.Now()); !errors.Is(e, errRefused) {
 		t.Fatal("revoked member contributed", e)
 	}

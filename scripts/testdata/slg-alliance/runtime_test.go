@@ -133,6 +133,8 @@ func client(t *testing.T, prefix string, sid int32) *activity.BusClient {
 }
 
 type fog struct {
+	positions  map[int64]spatial.Point
+	scout      map[int64]bool
 	generation uint64
 	required   uint64
 	members    map[string]member
@@ -152,10 +154,15 @@ func newFog(t *testing.T) *fog {
 	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 99, Namespace: "alliance-objective", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
 		return entity.TakeFrozenSyncPayload(1, []byte(`{"objective":99}`)), nil
 	}}})))
+	// 常驻公开视图标记保证最后目标撤销后仍发送新 epoch Full，让接收端清空旧表。
+	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 98, Namespace: "view-control", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+		return entity.TakeFrozenSyncPayload(1, []byte(`{"view":true}`)), nil
+	}}})))
 	for _, id := range []int64{1, 2} {
 		check(t, m.OpenHeldSession(entitysync.SessionID(id)))
+		check(t, m.Subscribe(entitysync.SessionID(id), 98, entity.SyncProfile{}))
 	}
-	return &fog{manager: m, interest: in, sink: sink}
+	return &fog{manager: m, interest: in, sink: sink, positions: map[int64]spatial.Point{1: {X: 10, Y: 10}, 2: {X: 10, Y: 10}}, scout: map[int64]bool{}}
 }
 
 // 持久成员状态成功之后才重建关系。调用方串行协调本服视野并暂停会话发布；
@@ -183,11 +190,17 @@ func (f *fog) reconcileAtLeast(min uint64, load func() (state, error)) error {
 		return errRefused
 	}
 	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
-		if s.Members[p].Active {
+		if f.inRange(id) && s.Members[p].Active {
 			f.interest.Relation("alliance").Set(id, []int64{99})
 		} else {
 			f.interest.Relation("alliance").Clear(id)
 		}
+		if f.inRange(id) && f.scout[id] {
+			f.interest.Relation("scout").Set(id, []int64{99})
+		} else {
+			f.interest.Relation("scout").Clear(id)
+		}
+
 	}
 	if refused := f.interest.Apply(); len(refused) > 0 {
 		return fmt.Errorf("view refused: %v", refused)
@@ -228,4 +241,15 @@ func (c lostProgress) ApplyProgress(ctx context.Context, k activity.Key, p, r st
 func namespace() string { return fmt.Sprintf("slg_alliance_%d_%d", os.Getpid(), time.Now().UnixNano()) }
 func safeNamespace(s string) bool {
 	return strings.HasPrefix(s, "slg_alliance_") && !strings.ContainsAny(s, "*.> :/")
+}
+
+// 固定 1000×1000 教学地图、目标 (10,10)、半径 100；越界拒绝且乘法有界。
+// 视点来自服务器场景事实，不接受客户端自报；空间和权限先取交集，再发布派生关系。
+func (f *fog) inRange(id int64) bool {
+	p, ok := f.positions[id]
+	if !ok || p.X < 0 || p.Y < 0 || p.X >= 1000 || p.Y >= 1000 {
+		return false
+	}
+	x, y := p.X-10, p.Y-10
+	return x*x+y*y <= 100*100
 }

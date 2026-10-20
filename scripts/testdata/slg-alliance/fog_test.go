@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
@@ -38,6 +39,9 @@ func (c *fogClient) consume(t *testing.T, frames [][]byte) {
 					if e != nil {
 						return e
 					}
+					if u.SubjectID == 98 && string(u.Payload.BytesCopy()) == `{"view":true}` {
+						continue
+					}
 					if u.SubjectID != 99 || string(u.Payload.BytesCopy()) != `{"objective":99}` {
 						return errors.New("sensitive or unexpected view payload")
 					}
@@ -59,7 +63,7 @@ func verifyFogRecovery(t *testing.T, f *fog, load func() (state, error)) {
 	alice.consume(t, f.sink.take(1))
 	bob.consume(t, f.sink.take(2))
 	if len(alice.objects) != 1 || len(bob.objects) != 0 || alice.fulls == 0 {
-		t.Fatal("encoded views disagree with revoked membership")
+		t.Fatalf("encoded views disagree: alice=%v bob=%v fulls=%d", alice.objects, bob.objects, alice.fulls)
 	}
 	old := append([]byte(nil), alice.last...)
 	// 远端权限读取失败：先停发布，再尝试读；不能拿旧权限继续 ReadySession。
@@ -107,6 +111,7 @@ func verifyFogRecovery(t *testing.T, f *fog, load func() (state, error)) {
 		f.manager.CloseSession(sid)
 		f.sink.connect(sid)
 		check(t, f.manager.OpenHeldSession(sid))
+		check(t, f.manager.Subscribe(sid, 98, entity.SyncProfile{}))
 		f.interest.Resubscribe(int64(sid))
 	}
 	check(t, f.reconcileFrom(load))
