@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +97,19 @@ type harness struct {
 // 挤进握手里）。
 func newHarness(t testing.TB, afterACK func(*harness)) *harness {
 	t.Helper()
+	return newHarnessWithPayloadLimit(t, 0, afterACK)
+}
+
+// newHarnessWithPayloadLimit 是部署写了 player_access.tcp.max_payload_bytes 的装配：同一个键既交给 Nest Mod 的
+// Init（与生成工程同一份配置），也是 TCP 服务的载荷上限（生成的 player TCP Mod 从同一个键读）。0 表示不写。
+func newHarnessWithPayloadLimit(t testing.TB, payloadLimit uint32, afterACK func(*harness)) *harness {
+	t.Helper()
+	return newHarnessWithTCP(t, payloadLimit, afterACK, nil)
+}
+
+// newHarnessWithTCP 与 newHarnessWithPayloadLimit 相同，configure 非 nil 时在建服务器前再改嵌入 TCP 的配置。
+func newHarnessWithTCP(t testing.TB, payloadLimit uint32, afterACK func(*harness), configure func(*gateway.TCPConfig)) *harness {
+	t.Helper()
 	playerKind(t)
 	h := &harness{access: entity.NewManagerAccess(entity.NewEntityManager())}
 	self, err := New(Config{Entities: h.access, Kind: testKind, MessageID: testMessageID})
@@ -104,7 +118,11 @@ func newHarness(t testing.TB, afterACK func(*harness)) *harness {
 	}
 	h.self = self
 	h.mod = wiringnest.NewModWithEntitySync(h.access, self.EntitySyncSetup())
-	if err := h.mod.Init(viper.New()); err != nil {
+	cfg := viper.New()
+	if payloadLimit > 0 {
+		cfg.Set("player_access.tcp.max_payload_bytes", payloadLimit)
+	}
+	if err := h.mod.Init(cfg); err != nil {
 		t.Fatal(err)
 	}
 	h.manager = h.mod.EntitySync()
@@ -112,6 +130,12 @@ func newHarness(t testing.TB, afterACK func(*harness)) *harness {
 
 	config := gateway.DefaultTCPConfig()
 	config.Enabled, config.Addr = true, "127.0.0.1:0"
+	if payloadLimit > 0 {
+		config.MaxPayloadBytes = payloadLimit
+	}
+	if configure != nil {
+		configure(&config)
+	}
 	server, err := gateway.NewTCPServer(config, func(context.Context, gateway.Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
 		return nil, errors.New("no business messages in this test")
 	}, gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
@@ -410,6 +434,175 @@ func TestSelfSyncOverTCPClosesAStalledReaderAndTheReconnectGetsAFull(t *testing.
 	}
 }
 
+// 部署调小 player_access.tcp.max_payload_bytes、不改别的：以前自身视图一帧的上限仍是 gateway 默认的 1MiB，
+// 超过接入层上限的帧被拒收、连接被关，客户端重连后的全量同样超限，反复断线重连。现在一帧的上限在 Nest Mod Init
+// 时从同一个键取：上限以内照常交付；单个玩家实体超过它时帧在 Manager 内编码失败（KNOWN-LIMITS 第③条，
+// 连接不关、靠滞留指标告警），不会推出一帧被接入层拒收的帧，连接不被关。
+func TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit(t *testing.T) {
+	const limit = 16 << 10
+	h := newHarnessWithPayloadLimit(t, limit, nil)
+	if got := h.self.FrameLimit(); got != limit {
+		t.Fatalf("frame limit = %d, want player_access.tcp.max_payload_bytes %d", got, limit)
+	}
+	player := newWallet(t, 7, 0)
+	player.pad.Store(8 << 10)
+	h.access.Manager().Add(player)
+	c := dial(t, h, 7)
+	c.ack(t)
+	waitOnline(t, h, 1)
+	h.flush(t)
+	if kind, _ := c.state(t); kind != frame.Full {
+		t.Fatalf("first state = %v, want Full", kind)
+	}
+	refusedBefore := counterValue(SyncPushRefusedMetric, "closed")
+	// 一次改动的帧超过接入层上限（仍在组件上限 64KiB 之内）。
+	player.pad.Store(24 << 10)
+	player.setGold(1)
+	h.flush(t)
+	_ = c.connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if packet, err := wire.Read(c.connection, wire.DefaultMaxPayload); err == nil {
+		t.Fatalf("a %d-byte frame was pushed over a %d-byte access limit", len(packet.Payload), limit)
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection was closed after a frame over player_access.tcp.max_payload_bytes (refused pushes %d → %d): %v; the reconnect's full would be refused the same way",
+			refusedBefore, counterValue(SyncPushRefusedMetric, "closed"), err)
+	}
+	if got := h.runtime.ActiveSessions(7); got != 1 {
+		t.Fatalf("player connections = %d, want 1: the access layer refused a frame and the connection was closed", got)
+	}
+	if got := counterValue(SyncPushRefusedMetric, "closed"); got != refusedBefore {
+		t.Fatalf("%s{outcome=closed} %d → %d: a frame over the access limit reached the transport", SyncPushRefusedMetric, refusedBefore, got)
+	}
+}
+
+// 独立 Gate 部署下帧上限取 Game Ingress 的载荷上限（生成的 IngressMod.WithSelfSync 调 LimitFrameBytes），与
+// 接入层配置、Config.MaxFrameBytes 一起取最小；Manager 建好之后不能再改。
+func TestSelfSyncFrameLimitTakesTheSmallestAccessLimit(t *testing.T) {
+	playerKind(t)
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	self := MustNew(Config{Entities: access, Kind: testKind, MessageID: testMessageID, MaxFrameBytes: 300 << 10})
+	if got := self.FrameLimit(); got != 300<<10 {
+		t.Fatalf("frame limit with only Config.MaxFrameBytes = %d, want %d", got, 300<<10)
+	}
+	if err := self.LimitFrameBytes(256 << 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := self.LimitFrameBytes(0); err == nil {
+		t.Fatal("a zero ingress limit was accepted")
+	}
+	mod := wiringnest.NewModWithEntitySync(access, self.EntitySyncSetup())
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.max_payload_bytes", 512<<10)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mod.EntitySync().Close(context.Background()) })
+	if got := self.FrameLimit(); got != 256<<10 {
+		t.Fatalf("frame limit = %d, want the ingress limit %d", got, 256<<10)
+	}
+	if err := self.LimitFrameBytes(128 << 10); err == nil {
+		t.Fatal("LimitFrameBytes after the manager was built was accepted; the manager's frame limit is already fixed")
+	}
+	declared := false
+	for _, key := range mod.ConfigSchema().Keys {
+		declared = declared || key.Name == "player_access.tcp.max_payload_bytes"
+	}
+	if !declared {
+		t.Fatal("the Nest Mod's declaration does not carry player_access.tcp.max_payload_bytes, so the App would not check it before Init")
+	}
+}
+
+// 嵌入 TCP 的全进程出站驻留预算（player_access.tcp.outbound.resident_bytes）耗尽不是哪个玩家慢：与独立 Gate 下
+// Game Ingress 的预算同一规则，Sync 整轮重试（ErrRetryLater）、保留脏状态，不关任何连接、不丢会话；占预算的停读连接
+// 关闭后预算归还，同一会话照常收到增量。预算由另一个停读的连接占满（推到它的帧卡在 socket 与出站队列里）。
+func TestSelfSyncOverTCPRetriesTheTickWhenTheResidentBudgetIsExhausted(t *testing.T) {
+	h := newHarnessWithTCP(t, 64<<10, nil, func(config *gateway.TCPConfig) {
+		config.OutboundResidentBytes = 256 << 10 // 低于每连接 2 MiB 上限：占预算的连接不会先因自己的上限被关
+	})
+	player := newWallet(t, 7, 1)
+	h.access.Manager().Add(player)
+	c := dial(t, h, 7)
+	c.ack(t)
+	filler := dial(t, h, 8) // 只用来占预算的另一个玩家：没有实体，自身视图不向它推送；它从不读
+	waitOnline(t, h, 2)
+	h.flush(t)
+	if kind, state := c.state(t); kind != frame.Full || state != "gold=1" {
+		t.Fatalf("first state = %v %q, want a Full with gold=1", kind, state)
+	}
+
+	// 占满预算：用越来越小的帧（32 KiB → 2 KiB）把停读连接的 socket 缓冲与出站队列推满，剩下不足一个 2 KiB 帧；
+	// 停一会儿再探一次，内核还在收（写协程又归还了字节）就再填一遍，直到停下来之后连 2 KiB 也放不下。
+	// 自身视图的帧带 4 KiB 填充，比剩下的大，必然被预算拒收。帧不小于 2 KiB，停读连接的帧数远低于 1024 帧上限。
+	player.pad.Store(4 << 10)
+	fill := func() {
+		for size := 32 << 10; size >= 2<<10; size /= 2 {
+			for attempt := 0; ; attempt++ {
+				err := h.runtime.PushSyncPlayer(context.Background(), 8, testMessageID+1, make([]byte, size))
+				if err == nil {
+					if attempt > 4096 {
+						t.Fatal("the filler connection never filled the process budget")
+					}
+					continue
+				}
+				if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
+					t.Fatalf("filler push refused with %v, want gateway.ErrResidentBudgetExhausted", err)
+				}
+				break
+			}
+		}
+	}
+	for settled := false; !settled; {
+		fill()
+		time.Sleep(20 * time.Millisecond)
+		settled = h.runtime.PushSyncPlayer(context.Background(), 8, testMessageID+1, make([]byte, 2<<10)) != nil
+	}
+	if h.runtime.ActiveSessions(8) != 1 {
+		t.Fatalf("filler connections = %d; want the budget exhausted with the filler still connected", h.runtime.ActiveSessions(8))
+	}
+
+	before := counterValue(SyncPushRefusedMetric, "retried")
+	player.setGold(2)
+	err := h.manager.Flush(context.Background())
+	if !errors.Is(err, entitysync.ErrRetryLater) {
+		t.Fatalf("flush with the resident budget exhausted = %v, want ErrRetryLater (the tick is retried, nobody is disconnected)", err)
+	}
+	if got := counterValue(SyncPushRefusedMetric, "retried") - before; got < 1 {
+		t.Fatalf("%s{outcome=retried} grew by %d, want at least 1", SyncPushRefusedMetric, got)
+	}
+	if lost := h.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("sessions lost = %d, want 0: an exhausted process budget is not the player's failure", lost)
+	}
+	if online := h.runtime.ActiveSessions(7); online != 1 {
+		t.Fatalf("player 7 connections = %d, want 1: no connection is closed for an exhausted process budget", online)
+	}
+
+	// 占预算的连接关闭：它排队与卡在写协程里的字节随写协程退出归还，下一轮把 gold=2 作为增量送到同一会话。
+	_ = filler.connection.Close()
+	waitOnline(t, h, 1)
+	player.pad.Store(0) // 之后的状态不带填充，便于比较
+	var kind frame.Kind
+	var state string
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		if err := h.manager.Flush(context.Background()); err == nil {
+			kind, state = c.state(t)
+			break
+		} else if !errors.Is(err, entitysync.ErrRetryLater) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the process budget was never returned after the filler connection closed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// 帧类型不作断言：被拒那一轮若已有帧准入（requireSnapshotsAfterRetry），下一轮按规则改发全量；承诺的是
+	// 同一会话、同一连接收到最新状态，期间没有丢会话。
+	if state != "gold=2" {
+		t.Fatalf("after the budget was returned = %v %q, want gold=2 on the same session", kind, state)
+	}
+	if lost := h.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("sessions lost = %d after the budget recovered, want 0", lost)
+	}
+}
+
 func TestSelfSyncAttachesToOneManagerOnly(t *testing.T) {
 	playerKind(t)
 	access := entity.NewManagerAccess(entity.NewEntityManager())
@@ -494,6 +687,12 @@ func TestTransportClassifiesRefusedPushes(t *testing.T) {
 			refuse: errors.Join(budget, fmt.Errorf("receiver 2: %w", budget)), connections: 2, retry: true},
 		// 另一条连接收下了这一帧：整轮重试会让它把同一 tick 的重发当旧包丢掉，所以按拒收处理。
 		"resident budget on one of two connections": {refuse: errors.Join(budget), connections: 2, close: true},
+		// 嵌入 TCP 的进程驻留预算（gateway.ErrResidentBudgetExhausted）与 Game Ingress 的同一规则。
+		"embedded tcp resident budget, one connection": {refuse: errors.Join(fmt.Errorf("tcpSession a: %w", gateway.ErrResidentBudgetExhausted)), connections: 1, retry: true},
+		"embedded tcp resident budget on every connection": {
+			refuse: errors.Join(fmt.Errorf("tcpSession a: %w", gateway.ErrResidentBudgetExhausted), fmt.Errorf("tcpSession b: %w", gateway.ErrResidentBudgetExhausted)), connections: 2, retry: true},
+		"embedded tcp resident budget on one of two connections": {
+			refuse: errors.Join(fmt.Errorf("tcpSession a: %w", gateway.ErrResidentBudgetExhausted)), connections: 2, close: true},
 		"no connection": {refuse: fmt.Errorf("%w: player 7", gateway.ErrSessionNotFound), connections: 0},
 		// 报“没有连接”时却数得到一条：不能留下它没有同步会话地活着。
 		"no connection reported, one counted": {refuse: fmt.Errorf("%w: player 7", gateway.ErrSessionNotFound), connections: 1, close: true},
@@ -544,6 +743,16 @@ func TestTransportClassifiesRefusedPushes(t *testing.T) {
 }
 
 // gaugeValue 读默认注册表里无标签 Gauge 的当前值；没有这个序列时为 0。
+// counterValue 读带 outcome 标签的计数（进程级累计，用前后差值）。
+func counterValue(name, outcome string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name && metric.Labels["outcome"] == outcome {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
 func gaugeValue(name string) int64 {
 	for _, metric := range metrics.Snapshot() {
 		if metric.Name == name && len(metric.Labels) == 0 {

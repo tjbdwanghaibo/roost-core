@@ -119,6 +119,8 @@ player_access:
     shutdown_timeout: 10s
     dispatch_timeout: 3s
     login_timeout: 2s
+    outbound:
+      resident_bytes: 268435456
 ```
 
 - `heartbeat_enabled`：是否接受鉴权后的空心跳，默认 true。关闭后收到消息号 0 的帧会断连。
@@ -130,6 +132,10 @@ player_access:
 - `login_timeout`：登录请求里“把玩家接入本进程”（归属 Claim + 冷加载）可用的份额，必须不大于
   `dispatch_timeout`；缺省为 min(2s, dispatch_timeout)。传输层本身不使用它，只经 `Runtime.LoginTimeout()` 发布给
   登录端点（game-demo 的 EnterGame 超出时回 `login_timeout` 错误码，客户端重试）。
+- `outbound.resident_bytes`：全进程所有连接出站队列（排队 + 写协程已取走未写完）的字节合计上限，缺省 256 MiB，
+  口径与独立 Gate 的 `outbound.resident_bytes` 相同；不小于 `max_payload_bytes + 16`，上限 1 TiB。超出的推送当场被拒
+  （`gateway.ErrResidentBudgetExhausted`，计 `player_tcp_outbound_budget_exhausted_total`），不关闭连接、不等待；
+  Entity Sync 推送整轮重试。读循环自己的回包与心跳 ACK 计入但不被拒。每连接 1024 帧 / 字节上限不变、不开放配置。
 
 完成 `auth.go` 后执行 `roost config enable player-tcp`。命令会先确认鉴权不再是默认骨架，再只修改
 `enabled` 标量；临时停流使用 `roost config disable player-tcp`，不需要手工编辑 YAML。
@@ -178,7 +184,8 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
   守卫，场景 / 帧同步循环逐会话推送不会被一个停读客户端拖住。某条连接收不下（排队加写协程已取走未写完的帧超过 1024 帧或
   `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节、已关闭）时这条连接立即注销并关闭（客户端看到断线、需重连；
   连接槽、按 IP 计数与会话关闭事件照常各释放一次），其余连接收下则返回 nil；没有任何连接收下时返回错误。
-  入队前就被拒绝的推送（ctx 已结束、payload 超限）不关闭连接并返回错误；入队后调用方 ctx 不再影响写出。
+  入队前就被拒绝的推送（ctx 已结束、payload 超限、全进程驻留预算 `player_access.tcp.outbound.resident_bytes` 耗尽——
+  `gateway.ErrResidentBudgetExhausted`）不关闭连接并返回错误；入队后调用方 ctx 不再影响写出。
   写协程一帧在 `write_timeout` 内写不出、写出半帧或 socket 失败时关闭该连接；
 - `PushSession`：只投递指定 SessionID，收不下同样关闭该会话；
 - `PushSyncPlayer/PushSyncSession`：发送已经编码的原始 Sync 帧，flags=3，不经过 PB encoder；
@@ -200,7 +207,7 @@ Sync/Lockstep 调用方负责提供对应格式的合法字节，传输层继续
 - `ProtocolRegistry` Seal 后通过 atomic immutable snapshot 无锁分发；
 - 每连接一个顺序读循环；同玩家多连接之间仍可能并发，由 Nest 和业务契约协调，不能把连接顺序当作全局玩家顺序；
 - payload 在读取长度后才分配，小于 64 KiB 的 buffer 有界复用；
-- 每连接有界出站队列 + 唯一写协程（每连接 goroutine 因此是读循环加写协程两个），推送方只入队；排队加在途超过上限或写满 `write_timeout` 仍写不进的连接被关闭，慢客户端只影响自己；连接存活期间队列不合并、不丢帧，连接关闭时剩余帧丢弃，客户端重连恢复；服务推送序号在写出时分配，回包写出后才读下一个请求；
+- 每连接有界出站队列 + 唯一写协程（每连接 goroutine 因此是读循环加写协程两个），推送方只入队；排队加在途超过上限或写满 `write_timeout` 仍写不进的连接被关闭，慢客户端只影响自己；全部连接合计受 `outbound.resident_bytes` 约束，超出的推送被拒、不断开；已入队的帧在连接存活期间不合并、不丢，连接关闭时剩余帧丢弃，客户端重连恢复；服务推送序号在写出时分配，回包写出后才读下一个请求；
 - accept 错误指数退避，满连接立即拒绝；TCP 开启 keepalive 与 no-delay；
 - 登录票据使用独立 8 KiB 上限，鉴权并发和单 IP 连接都有硬上限；
 - Response 和主动 Push 同样执行 payload 上限，不能绕过入站限包；

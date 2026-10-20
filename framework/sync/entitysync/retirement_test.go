@@ -5,6 +5,7 @@ package entitysync
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -904,5 +905,82 @@ func TestRebindRefusesToReplaceALiveState(t *testing.T) {
 	}
 	if err := manager.Register(labelledSubject(3002, "other")); !errors.Is(err, ErrSubjectRegistered) {
 		t.Fatalf("register over a live state=%v, want ErrSubjectRegistered", err)
+	}
+}
+
+// 一个内容状态只喂一个 Manager：脏通知器在状态上只有一份，第二个 Manager 登记会把它换成自己的，第一个 Manager
+// 的订阅者从此收不到变化（自身视图与另一个自建 Manager 同时登记 Player 时就是这样）。第二次登记必须被拒绝、
+// 点名实体 / 命名空间与已登记它的 Manager，第一个 Manager 照常交付；同一个 Manager 重复登记仍是空操作；
+// 在第一个 Manager 注销、退役完成（remove 已交付）之后，第二个 Manager 可以登记并接管变化通知。
+func TestASubjectStateFeedsOneManager(t *testing.T) {
+	firstTransport, secondTransport := newRecordingTransport(), newRecordingTransport()
+	first := newTestManager(t, firstTransport, ManagerConfig{Name: "self_view"})
+	second := newTestManager(t, secondTransport, ManagerConfig{Name: "scene"})
+	packs := 0
+	const id = int64(1501)
+	state := testSubject(t, id, &packs)
+	if err := first.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	open(t, first, 1)
+	mustSubscribe(t, first, 1, id, entity.SyncProfile{})
+	mustFlush(t, first)
+	if created := oneFrame(t, firstTransport, 1); created.objects[id] != frame.ObjectCreate {
+		t.Fatalf("premise: first frame=%v, want a create", created.objects)
+	}
+	if err := first.Register(state); err != nil {
+		t.Fatalf("registering the same state with the same manager again = %v, want a no-op", err)
+	}
+
+	err := second.Register(state)
+	if !errors.Is(err, ErrSubjectRegisteredElsewhere) {
+		t.Fatalf("a second manager registering the state = %v, want ErrSubjectRegisteredElsewhere", err)
+	}
+	for _, want := range []string{"1501", `"test"`, `"self_view"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %s", err, want)
+		}
+	}
+	if second.subject(id) != nil {
+		t.Fatal("the refused registration left a subject in the second manager")
+	}
+	state.MarkDirty(1)
+	mustFlush(t, first)
+	if frames := firstTransport.take(1); len(frames) != 1 || decodeFrame(t, frames[0]).objects[id] != frame.ObjectUpdate {
+		t.Fatalf("the first manager's subscriber got %d frame(s) for a change after the second registration: the second manager took the dirty notifier", len(frames))
+	}
+
+	// 注销之后、remove 交付之前仍属于第一个 Manager（它还欠订阅者 remove）。
+	if err := first.Unregister(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Register(state); !errors.Is(err, ErrSubjectRegisteredElsewhere) {
+		t.Fatalf("register with the second manager while the first still owes a remove = %v, want ErrSubjectRegisteredElsewhere", err)
+	}
+	mustFlush(t, first)
+	if removed := oneFrame(t, firstTransport, 1); len(removed.wire.Objects) != 1 || removed.wire.Objects[0].Operation != frame.ObjectRemove {
+		t.Fatalf("retirement frame=%+v, want ObjectRemove", removed.wire.Objects)
+	}
+	if err := second.Register(state); err != nil {
+		t.Fatalf("register with the second manager after the first retired it = %v, want nil", err)
+	}
+	open(t, second, 2)
+	mustSubscribe(t, second, 2, id, entity.SyncProfile{})
+	mustFlush(t, second)
+	oneFrame(t, secondTransport, 2)
+	state.MarkDirty(1)
+	mustFlush(t, second)
+	if updated := oneFrame(t, secondTransport, 2); updated.objects[id] != frame.ObjectUpdate {
+		t.Fatalf("change after the hand-over=%v, want an update from the second manager", updated.objects)
+	}
+	if err := first.Register(state); !errors.Is(err, ErrSubjectRegisteredElsewhere) || !strings.Contains(err.Error(), `"scene"`) {
+		t.Fatalf("the first manager registering it back = %v, want ErrSubjectRegisteredElsewhere naming \"scene\"", err)
+	}
+	// Close 放开它持有的状态。
+	if err := second.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Register(state); err != nil {
+		t.Fatalf("register after the holder closed = %v, want nil", err)
 	}
 }

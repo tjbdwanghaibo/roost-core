@@ -370,7 +370,7 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
-		for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "TestSelfSyncEndToEnd", "-v", "./internal/bootstrap"}} {
+		for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "^(TestSelfSyncEndToEnd|TestSelfSyncFrameLimitFollowsTheAccessLimit)$", "-v", "./internal/bootstrap"}} {
 			command := exec.CommandContext(ctx, "go", args...)
 			command.Dir = root
 			out, err := command.CombinedOutput()
@@ -378,8 +378,10 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 				t.Fatalf("%s: go %s: %v\n%s", label, strings.Join(args, " "), err, out)
 			}
 			if args[0] == "test" {
-				if !strings.Contains(string(out), "--- PASS: TestSelfSyncEndToEnd") {
-					t.Fatalf("%s: the generated end-to-end test did not run:\n%s", label, out)
+				for _, name := range []string{"TestSelfSyncEndToEnd", "TestSelfSyncFrameLimitFollowsTheAccessLimit"} {
+					if !strings.Contains(string(out), "--- PASS: "+name) {
+						t.Fatalf("%s: the generated %s did not run:\n%s", label, name, out)
+					}
 				}
 				t.Logf("%s:\n%s", label, out)
 			}
@@ -515,9 +517,12 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 
+	player "example.com/planet/game/entities/player"
 	registry "example.com/planet/internal/registry"
 )
 
@@ -699,5 +704,52 @@ func TestSelfSyncEndToEnd(t *testing.T) {
 	again.request(t, msgid.MsgAddGold, add)
 	again.expect(t, "delta gold=7")
 	t.Logf("reconnected: %v", again.log)
+}
+
+// 部署把 player_access.tcp.max_payload_bytes 调小、别的不改：生成的 bootstrap 照常通过启动前的配置检查（Nest Mod
+// 并入的 self_sync 声明与生成的 TCP Mod 声明逐字相同，--check-config 走同一处），Nest Mod Init 之后自身视图一帧的
+// 上限就是这个值——超过接入层上限的帧不会推出去、连接不会因此被关而反复重连。独立 Gate 部署（生成的
+// IngressMod.WithSelfSync）取 Game Ingress 的载荷上限。
+func TestSelfSyncFrameLimitFollowsTheAccessLimit(t *testing.T) {
+	cfg := viper.New()
+	cfg.SetConfigFile("../../configs/service/config.game.yaml")
+	if err := cfg.ReadInConfig(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Set("server_type", "game") // 进程启动时由命令行给出
+	cfg.Set("player_access.tcp.max_payload_bytes", 65536)
+	generated, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := generated.CheckServiceConfig("game", cfg); err != nil {
+		t.Fatalf("config check of the generated game service: %v", err)
+	}
+	embedded := selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: player.EntityKindPlayer, MessageID: msgid.MsgSelfSync})
+	nestMod := kitnest.NewModWithEntitySync(EntityAccess, embedded.EntitySyncSetup())
+	if err := nestMod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nestMod.EntitySync().Close(context.Background()) })
+	if got := embedded.FrameLimit(); got != 65536 {
+		t.Fatalf("embedded TCP: self_sync frame limit = %d, want player_access.tcp.max_payload_bytes 65536", got)
+	}
+
+	gate := selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: player.EntityKindPlayer, MessageID: msgid.MsgSelfSync})
+	options := gatewiring.DefaultOptions()
+	ingress := accessplayertcp.NewIngressMod(options).WithSelfSync(gate)
+	cfg.Set("player_access.tcp.max_payload_bytes", 1<<20)
+	cfg.Set("player_access.tcp.enabled", false)
+	gateNest := kitnest.NewModWithEntitySync(EntityAccess, gate.EntitySyncSetup())
+	if err := gateNest.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gateNest.EntitySync().Close(context.Background()) })
+	if got := gate.FrameLimit(); got != options.Config.MaxPayloadBytes {
+		t.Fatalf("independent Gate: self_sync frame limit = %d, want the Game Ingress payload limit %d", got, options.Config.MaxPayloadBytes)
+	}
+	if err := ingress.Init(cfg); err != nil {
+		t.Fatalf("ingress init: %v", err)
+	}
 }
 `

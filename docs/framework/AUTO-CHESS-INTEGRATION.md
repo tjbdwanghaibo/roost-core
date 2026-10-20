@@ -217,7 +217,7 @@ sequenceDiagram
 bash scripts/test-auto-chess-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player / ChessMatch DAO、实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与对局冻结；视图按观察者裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过投递循环与加载后补触发；八个“玩家”是同进程里的并发调用，不是八个网络客户端；单进程，无 Redis / NATS；鉴权与接管票是合成的。夹具里的数值是样例。
@@ -246,4 +246,6 @@ ROOST_AUTO_CHESS_REAL=1 bash scripts/test-auto-chess-generated.sh
 
 棋子、羁绊、经济与战斗缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、卡池不守恒、重复扣费 / 发奖、状态越权或生成物编译失败，则应在公共实现中修复。本夹具接入时没有触发框架或生成器缺陷。当前存储是教学规模：每席账本 128 条、至多 8 回合、整局状态每次整体编码提交并在加载时重算战斗结果，没有生产吞吐或延迟承诺。
 
-本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“自走棋接入验收的范围”维护，不为每一轮另建报告。
+尚未实施或验收：真实匹配 / 取消 / 候补、入场扣费、接管票签发、公网客户端与观战协议、装备 / 羁绊 / 选秀、自动奖励投递、赛季 MMR、长期归档、跨 sid 奖励（应经 Remote / Saga 回原服）、权威宿主 HA、容量与长稳（均不因此算框架缺陷）。
+
+本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。

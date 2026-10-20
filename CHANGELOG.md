@@ -9,41 +9,66 @@
 - 新增 `scripts/test-slg-alliance.sh`：业务 CAS 成员授权与贡献意图、Interest 联盟／侦察来源归并、真实 NATS 生成 RPC 连协调器子进程、冻结窗口与阶段屏障、原服持久奖励义务和 ACK 重投；真实 Redis / NATS race 场景覆盖协调器正常重启与应用确认丢失。
 - 整理 [SLG 学习手册](docs/framework/SLG-INTEGRATION.md) 的状态归属、调用流程、运行方式与证据边界，并同步 skill。业务规则不进入框架；Remote 联盟权威、空间迷雾／客户端、Player 实际到账与跨机故障仍待联合接入。
 
+### 压测夹具：nest-game 重档加嵌入 TCPRuntime 模式与自身视图子模式（维护者 2026-10-20 批准补测）
+
+- `scripts/perf/nest-game.sh` 新增 `ROOST_NEST_GAME_EMBEDDED=1`：玩家连接直连 Game 进程内的 `gateway.TCPServer` + `TCPRuntime`（接线同生成的 player TCP Mod），不经独立 Gate 与 NATS；`ROOST_NEST_GAME_SYNC=1` 叠加场景 Sync，Transport 是 `selfsync.PushPlayerFrame`（与 game-demo 场景同一条）；`ROOST_NEST_GAME_SELF_SYNC=1` 叠加自身视图（按 `selfsync.EntitySyncSetup` 生产装配），与场景 Sync 互斥（一个玩家实体只能登记在一个 Manager），只在嵌入模式下。可选 `ROOST_NEST_GAME_TCP_RESIDENT_BYTES` 覆盖出站驻留预算。
+- 输出：嵌入模式加 `Embedded`（往返时延、`player_tcp_outbound_budget_exhausted_total`、`player.sync.push_refused.total` 按 outcome、溢出 / 关连接 / 写失败计数、负载前后的写协程与读循环数）与每秒 `Samples[].Outbound`；所有模式加 `Minutes`（按分钟的吞吐、堆、goroutine、short 池平均等待，离线计算）。每连接出站队列峰值与驻留字节框架不导出，夹具取不到。
+- 独立 Gate 与直接投递两种模式的负载与采样不变（模拟客户端抽成两种模式共用的 `loadClients`，代码搬移）；长尾分析 `scripts/perf/tailtrace` 认识新的 `embedded` 流。框架、生成器与 demo 未改。正式参数与预计时长见 [性能 README“嵌入 TCP 重档”](docs/performance/README.md#嵌入-tcp-重档)；本次只做缩小规模的冒烟，没有性能结论。
+
+### 文档：KNOWN-LIMITS 只保留当前限制（维护者 2026-10-20 批准）
+
+- `docs/maintenance/KNOWN-LIMITS.md` 删除已修复问题的经过，只保留 v1.29.0 + main 仍有效的限制、维护者已接受的代价与验证边界；不确定项改为 v1.29 口径（[v1.29.0 发版后复测](docs/performance/V1290-HEAVY-30M-20261019.md)），无 v1.29 证据的列入文末“v1.29 待补测”。九个游戏的接入验收改为一张摘要表，详细范围在各手册“第二部分 验收”（补齐了原先只在 KNOWN-LIMITS 里的手动运行说明、未实施清单与去掉 `Start` 的对照）。已修复问题的经过见本文件与 docs/release。
+
+### 自身视图（self_sync）：一个 Player 一个 Manager 的守卫，帧上限取接入层上限（维护者 2026-10-20 批准）
+
+- **行为变化（以前允许、现在拒绝）**：同一个 `SubjectSyncState` 已登记在一个 `entitysync.Manager` 时，另一个 Manager 的 `Register` / `RegisterAfterRetirement` / `Rebind` 以前返回 nil 并静默换掉脏通知器（第一个 Manager 的订阅者从此收不到变化，game-demo 场景与 self_sync 同时打开就是这样），现在返回新哨兵 `entitysync.ErrSubjectRegisteredElsewhere`，信息点名实体 / kind / 命名空间与已登记它的 Manager，本 Manager 不变。同一个 Manager 重复登记仍是空操作；在原 Manager 注销且退役完成（remove 交付或订阅者会话关闭）之后可以登记到另一个 Manager，退役期间仍被拒。强制点是状态上的 `SubjectSyncState.ClaimSyncOwner` / `ReleaseSyncOwner`（新 API）。修前红：第二个 Manager 登记 = nil，第一个 Manager 的订阅者对之后的变化收到 0 帧（`TestASubjectStateFeedsOneManager`）。
+- 新增 `ManagerConfig.Name`（只用于诊断）与 `Manager.String()`；wiring/nest 的 Manager 缺省名 `nest`，自身视图 `self_sync`，game-demo 场景 `scene`。`ManagerAccess.ConfigureUnloadResync` 的“已接线”拒绝改为点名已接上的那一个，所以 game-demo 打开 self_sync 时启动在 `service game init` 失败并报 `unload resync is already configured for entity sync manager "self_sync"`（以前同一处失败，信息不指向 self_sync）。SelfView 登记被拒的日志按错误文本去重（以前每次新包一层的错误每个 tick 记一次）。这个组合本身仍不支持（PLAYER-ACCESS §7）。
+- **行为变化（帧上限）**：`wiring/selfsync` 一帧的上限不再固定取 gateway 缺省 1 MiB，而是在 Nest Mod Init、Manager 创建之前取接入层上限：嵌入 TCP 读 `player_access.tcp.max_payload_bytes`（`wiring/nest.EntitySyncSetup` 新增 `ConfigSchema` / `LoadConfig`，Nest Mod 并入声明、在建 Manager 前调用；selfsync 的声明与生成的 TCP Mod 逐字相同，App 启动前与 `--check-config` 合并检查，codegen 快照 `kitconfig_gen.go` 新增 `selfsync` 组）；独立 Gate 由生成的 `IngressMod.WithSelfSync` 调新 API `SelfSync.LimitFrameBytes(Config.MaxPayloadBytes)`（缺省 512 KiB；以前帧上限 1 MiB 大于 Ingress 缺省上限，512 KiB～1 MiB 的帧同样被拒收）。`selfsync.Config.MaxFrameBytes` 改为“在接入层上限之下再收紧”，大于接入层上限时按接入层上限；新增 `SelfSync.FrameLimit()`。修前红：调小到 16 KiB 后一帧 24 KiB 的改动让连接被关（`EOF`，`player.sync.push_refused.total{outcome="closed"}` 0 → 1），重连全量同样超限；修后单个玩家实体超过上限时在 Manager 内编码失败（KNOWN-LIMITS 第③条，不关连接）。回归 `TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit`、`TestSelfSyncFrameLimitTakesTheSmallestAccessLimit`，生成工程 `TestSelfSyncFrameLimitFollowsTheAccessLimit`。
+- 升级：已打开 self_sync 的工程 `roost project sync` 重新生成 `internal/access/player/tcp/server_gen.go`（`IngressMod.WithSelfSync` 改用 `LimitFrameBytes`）；这段生成物需要包含本改动的 core，发版时 `minimumVersions.Core` 需要随之上调（当前 v1.29.0 没有 `LimitFrameBytes`）。没有存储或协议变化。KNOWN-LIMITS“自身视图”一行的 ①② 改为已修复，过时的第⑦条（生成物需要下一个发布的 core）删除。
+
+### 嵌入 TCP 出站：全进程驻留预算 `player_access.tcp.outbound.resident_bytes`（维护者 2026-10-20 批准）
+
+- **行为变化：以前不拒，现在会拒。** 修前嵌入 TCP 只有每连接上限（1024 帧 / `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节），很多客户端同时停读时进程驻留可达 `max_connections × 每连接字节上限`（缺省约 20 GiB），在 `write_timeout` 逐个关掉它们之前内存可能先被撑满，期间没有任何拒绝。现在一个 `TCPServer` 的全部连接共用一个驻留预算，口径与独立 Gate 的 `outbound.resident_bytes` 相同（排队 + 写协程已取走未写完的字节）；放不下的一帧当场被拒，返回新哨兵 `gateway.ErrResidentBudgetExhausted`（不带 `errConnectionBroken`），计新指标 `player_tcp_outbound_budget_exhausted_total`，**不关闭连接、不等预算**（`Push*` 仍不阻塞，快池与 Sync / Tick 循环可直接调用）。修前红（8 条停读 pipe 连接各推约 1 MiB，预算 1 MiB）：`8 stalled connections hold 8396800 bytes queued + in flight together, over the 1048576-byte process budget; 0 of 512 pushes were refused`。
+- 上层处理：`wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景）把 `gateway.ErrResidentBudgetExhausted` 与 Game Ingress 的 `nettransport.ErrResidentBudgetExhausted` 同样当作整轮重试（`entitysync.ErrRetryLater`，保留脏状态、不断开；只有部分连接因预算拒收时仍关闭该玩家连接，规则不变）。修前红（新 gateway + 旧 selfsync）：`flush with the resident budget exhausted = <nil>, want ErrRetryLater`。Lockstep 经 `TCPSender`：实时帧对被拒的接收者按数据报丢失处理（`Tick` 返回带该错误的结果，冗余帧 / 追帧补），追帧页计一次追帧失败；`TCPSender` 注释里的“连接存活期间不丢帧”改为只对已入队的帧成立。PB 推送与业务异步 `Session.Reply` 把错误交给业务。`PushPlayer*` 中预算拒绝算“入队前拒绝”：其他连接收下也返回错误。
+- 计账与释放：入队时在队列锁内先查每连接上限、再原子预留全进程预算；写出、`pushWritten` 撤回各归还一帧；写协程退出（`Close`、写失败、服务器停止）时一次归还这条连接剩下的全部并拒绝之后的入队——唯一的收尾点，并发关闭与写协程退出不会重复或少扣（`TestTheResidentBudgetIsReturnedExactlyOnceWhenClosesRaceTheWriteLoop`、`TestAPushAfterTheWriterExitedIsRefusedAndNotCounted`）。读循环自己的回包与心跳 ACK 计入但不被拒（每连接至多一帧，拒绝它只能断开一个正常读的客户端），驻留可能因此超出预算至多 `max_connections × (max_payload_bytes + 16)`。
+- 配置：新键 `player_access.tcp.outbound.resident_bytes`（`TCPConfig.OutboundResidentBytes`），缺省 268435456（256 MiB：Gate 缺省 128 MiB 对应 4096 连接，按嵌入缺省 10000 连接折算约 312 MiB 取整），范围 `[max_payload_bytes + 16, 1 TiB]`，非法值（含配置里写 0）在加载时按键名拒绝；代码构造的 `TCPConfig` 不设（0）取缺省。生成器声明（configschema）同步，`roost add transport tcp` / 已有配置补键时写成 `outbound:` 段（段已存在则补进段里）；参考配置、`--print-config`、doctor 同源。每连接上限不变、不开放配置。**已生成工程**：重新生成 `internal/access/player/tcp/`（不重新生成时运行照常、预算按缺省 256 MiB 生效，但新键不被读取、手写会被 `roost config check` 报为未声明，旧的生成用例 `TestDeclaredDefaultsAreDefaultConfig` 因 `DefaultTCPConfig()` 多了这一项而失败）。
+- 剩余边界：缺省值未经重档压测验证；停读连接占着的预算要到每连接上限或 `write_timeout` 才归还（没有 Gate 的 `max_age`）；没有驻留字节 Gauge。见 [GATEWAY §4](docs/framework/GATEWAY.md#嵌入-tcp-的出站)、[KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)“嵌入 TCP 出站”、[OBSERVABILITY](docs/framework/OBSERVABILITY.md#嵌入-tcp-出站)。
+
 ### MMORPG 真实依赖验收：定时器经投递循环，新增 SIGKILL 崩溃恢复（scripts/test-mmorpg-generated.sh）
 
 - `TestMMORPGRealPersistenceAcrossProcesses`（正常停机两进程）不再手发 `Sync_TickPlayerTimer`：第二进程冷加载后核对 Buff 期限已进驱动索引（`DueOf`），启动 Player 驱动的投递循环（`Driver.Start`，与进程装配同一入口），由循环补触发一次离线到期的 Buff（`delivered_total` 增量 1、`redelivered_total` 增量 0）；关 Nest 前先停循环。维护者 2026-10-20 批准。
 - 新增 `TestMMORPGRealCrashRecovery`（`ROOST_MMORPG_REAL=1`，需隔离 Mongo 副本集）：野外战斗在途——买家阵亡、复活计时，卖家击杀拾取领奖后上 Buff，托管交易卖家已确认——strict WAL 有 12 条未投影记录时 SIGKILL 子进程；冷加载后四个实体 DAO 字节与两个定时器 ID 一致、两个期限已进索引，原参数重试不变；投递循环给两个过期玩家各补触发一次（计数 2），到期交易退款一次、迟到确认被拒，重新上 Buff 后按时投递（计数 3、无重投）；第三个进程冷加载重放不重复发奖或退款。登记在根包 `integration_coverage_test.go`；脚本真实模式断言两个用例都 PASS、无 SKIP。去掉 `Start` 的对照运行两个用例都在补触发处超时失败。
-- 夹具修正：原恢复夹具忽略 `BuildEntityID` 的错误且没有注册 Scene 实体，地图 ID 实际为 0（同图校验恒成立）；现在注册 Scene 并检查错误。两个用例的公共装配（文件 WAL + Mongo Runtime、Nest、驱动接线、种子与只读视图 handler）放在 `scripts/testdata/mmorpg/persistence/persistence_test.go`。框架、生成器与 demo 未改；没有发现框架缺陷。范围见 MMORPG 手册 §11 与 KNOWN-LIMITS“MMORPG 接入验收的范围”。
+- 夹具修正：原恢复夹具忽略 `BuildEntityID` 的错误且没有注册 Scene 实体，地图 ID 实际为 0（同图校验恒成立）；现在注册 Scene 并检查错误。两个用例的公共装配（文件 WAL + Mongo Runtime、Nest、驱动接线、种子与只读视图 handler）放在 `scripts/testdata/mmorpg/persistence/persistence_test.go`。框架、生成器与 demo 未改；没有发现框架缺陷。范围见 MMORPG 手册 §11 与 KNOWN-LIMITS“游戏接入验收”表。
 
 ### 合作生存撤离接入：学习手册与业务消费者（scripts/test-survival-extraction-generated.sh）
 
 - 新增 [合作生存撤离框架学习与验收](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-survival-extraction-generated.sh`：公共 CLI 生成 `game` 工程、Player / SurvivalRaid DAO 与 SurvivalRaid 实体定时器，业务规则只在 `scripts/testdata/survival-extraction`（框架、生成器与 demo 不含这些规则）：入场扣费与撤离兑付是两个多实体事务，局内采集、制作预扣与背包容量、环境伤害与治疗、死亡掉落与拾取竞争、撤离读条与封存清单都在探险实体内，整局物资守恒在加载与每次修改后校验，一个定时器节点取最早期限。12 条场景（4 条规则 + 8 条 Nest）全部 race、无 skip。
 - 真实依赖：`ROOST_SURVIVAL_EXTRACTION_REAL=1`（需隔离 Mongo 副本集）追加 `TestSurvivalExtractionRealCrashRecovery`：制作与撤离读条都在途、strict WAL 有 15 条未投影记录时 SIGKILL 子进程，冷加载后整份探险状态与定时器 ID 逐字节一致，驱动投递循环补触发一次（完成到期的制作与撤离、环境伤害只算一次、结束时刻不变）、再按期收局，第三个进程冷加载重试入场、命令与兑付不重复；登记在根包 `integration_coverage_test.go`。
-- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、开放世界、局外仓库、跨服兑付与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作生存撤离接入验收的范围”。框架与生成器未改。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、开放世界、局外仓库、跨服兑付与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“游戏接入验收”表。框架与生成器未改。
 
 ### 合作塔防接入：学习手册与业务消费者（scripts/test-tower-defense-generated.sh）
 
 - 新增 [合作塔防框架学习与验收](docs/framework/TOWER-DEFENSE-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-tower-defense-generated.sh`：公共 CLI 生成 `game` 工程、Player / TowerRoom DAO 与 TowerRoom 实体定时器，业务规则只在 `scripts/testdata/tower-defense`（框架、生成器与 demo 不含这些规则）：四人共享一个房间实体，共享金币建造 / 升级 / 出售与阻路 BFS 同事务，命令序号与会话 Epoch，准备屏障与按期开波，每次定时器触发只推进一步，基地胜负与多实体团队领奖。10 条场景（4 条规则 + 6 条 Nest）全部 race、无 skip。
 - 真实依赖：`ROOST_TOWER_DEFENSE_REAL=1`（需隔离 Mongo 副本集）追加 `TestTowerDefenseRealCrashRecovery`：第一波进行中 strict WAL 有 14 条未投影记录时 SIGKILL 子进程，冷加载后整份房间状态与定时器 ID 逐字节一致，驱动投递循环补触发一次只算一步（框架不追帧）、之后按期打完三波，第三个进程冷加载重试命令与领奖不重复；登记在根包 `integration_coverage_test.go`。
-- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、匹配、跨服奖励与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合作塔防接入验收的范围”。框架与生成器未改。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、单个状态至多 256 KiB；没有生产容量、客户端协议、匹配、跨服奖励与权威 HA 的承诺。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“游戏接入验收”表。框架与生成器未改。
 
 ### 合成休闲接入：学习手册与业务消费者（scripts/test-merge-casual-generated.sh）
 
 - 新增 [合成休闲框架学习与验收](docs/framework/MERGE-CASUAL-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-merge-casual-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/merge-casual`（框架、生成器与 demo 不含这些规则）：服务器权威存档与首登冻结配置、离线命令批次（整批原子、序号 / 存档版本冲突）、设备代际接管与按原身份查回执、惰性体力恢复、限时挑战与持久定时器、模拟签名广告回调与永久到账账本、视图裁剪。15 条场景全部 race、无 skip。
 - 真实依赖：`ROOST_MERGE_CASUAL_REAL=1`（需隔离 Mongo 副本集）追加 `TestMergeCasualRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不手发 Tick）补触发一次判负过期挑战、重新开局后按期判负下一局，续玩领奖，第三个进程冷加载重试不重复到账；登记在根包 `integration_coverage_test.go`。
-- 范围：教学夹具，单批至多 16 条、命令与广告账本各 128 条后拒绝新写（单批上限与广告账本未在测试中填满）；没有真实广告平台、登录票分配、客户端协议与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“合成休闲接入验收的范围”。
+- 范围：教学夹具，单批至多 16 条、命令与广告账本各 128 条后拒绝新写（单批上限与广告账本未在测试中填满）；没有真实广告平台、登录票分配、客户端协议与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“游戏接入验收”表。
 
 ### 放置模拟接入：学习手册与业务消费者（scripts/test-idle-sim-generated.sh）
 
 - 新增 [放置模拟框架学习与验收](docs/framework/IDLE-SIM-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-idle-sim-generated.sh`：公共 CLI 生成 `game` 工程、Player DAO 与 Player 实体定时器，业务规则只在 `scripts/testdata/idle-sim`（框架、生成器与 demo 不含这些规则）：三工坊生产队列（入队冻结工时 / 投入 / 产出）、原料预扣与取消退款、有界离线窗口内的区间积分（倍率分段、余数、封顶、待领格满暂停）、仓库 / 出售 / 订单 / UTC 每日奖励、永久命令回执。12 条场景全部 race、无 skip。
 - 真实依赖：`ROOST_IDLE_SIM_REAL=1`（需隔离 Mongo 副本集）追加 `TestIdleSimRealCrashRecovery`：strict WAL 有 5 条未投影记录时 SIGKILL 子进程，冷加载后核对存档、定时器 ID 与驱动索引里的期限，驱动投递循环（不调用 `DeliverDue`）补触发一次只积分到原窗口、收取后按期投递下一秒的刷新，领取结算后第三个进程冷加载重放全部命令不重复结算；登记在根包 `integration_coverage_test.go`。
-- 范围：教学夹具，命令账本 128 条后拒绝新写、窗口内每秒一次唤醒提交（原料上限与等级上限未在测试中填满）；没有生产容量、客户端协议与跨服市场的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“放置模拟接入验收的范围”。
+- 范围：教学夹具，命令账本 128 条后拒绝新写、窗口内每秒一次唤醒提交（原料上限与等级上限未在测试中填满）；没有生产容量、客户端协议与跨服市场的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“游戏接入验收”表。
 
 ### 自走棋接入：学习手册与业务消费者（scripts/test-auto-chess-generated.sh）
 
 - 新增 [自走棋框架学习与验收](docs/framework/AUTO-CHESS-INTEGRATION.md)（第一部分学习、第二部分验收）与 `scripts/test-auto-chess-generated.sh`：公共 CLI 生成 `game` 工程、Player / ChessMatch DAO、ChessMatch 实体定时器与多实体 Sender，业务规则只在 `scripts/testdata/auto-chess`（框架、生成器与 demo 不含这些规则）：一局一个权威实体管八席共享卡池与商店、成局冻结配置与服务器种子、每席命令序号与连接代际、准备 / 战斗阶段定时器、确定性战斗与轮空 / 淘汰 / 排名、按排名的多实体领奖、按观察者裁剪的视图。12 条场景全部 race、无 skip。
 - 真实依赖：`ROOST_AUTO_CHESS_REAL=1`（需隔离 Mongo 副本集）追加 `TestAutoChessRealCrashRecovery`：八人冻结战斗后 strict WAL 有 33 条未投影记录时 SIGKILL 子进程，冷加载后核对整局与驱动索引里的期限，启动驱动投递循环（不手发 Tick）只补一个阶段（投递计数 1）、之后每个期限投递一次推进一个阶段到终局（计数与阶段逐次对应、无重投），八人领奖，第三个进程冷加载重试不重复购买或发奖；登记在根包 `integration_coverage_test.go`。
-- 范围：教学夹具，每席账本 128 条后拒绝新写、至多 8 回合；没有真实匹配、客户端协议、跨 sid 发奖与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“自走棋接入验收的范围”。
+- 范围：教学夹具，每席账本 128 条后拒绝新写、至多 8 回合；没有真实匹配、客户端协议、跨 sid 发奖与容量的承诺。夹具接入时没有触发框架或生成器缺陷。证明 / 不证明见手册第二部分与 KNOWN-LIMITS“游戏接入验收”表。
 
 ## [v1.29.0] - 2026-10-19
 

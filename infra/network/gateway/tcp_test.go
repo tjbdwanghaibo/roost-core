@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 func TestTCPRuntimeBelongsToOneServerBeforeStart(t *testing.T) {
@@ -46,13 +47,16 @@ func TestTCPRuntimeBelongsToOneServerBeforeStart(t *testing.T) {
 
 func TestTCPDefaultRequestBudgetsAreAppliedAtConstruction(t *testing.T) {
 	config := DefaultTCPConfig()
-	config.DispatchTimeout, config.LoginTimeout = 0, 0
+	config.DispatchTimeout, config.LoginTimeout, config.OutboundResidentBytes = 0, 0, 0
 	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) { return Principal{}, nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if server.config.DispatchTimeout != defaultDispatchTimeout || server.config.LoginTimeout != defaultLoginTimeout {
 		t.Fatalf("request budgets: %+v", server.config)
+	}
+	if server.config.OutboundResidentBytes != defaultOutboundResidentBytes || server.outbound.limit != defaultOutboundResidentBytes {
+		t.Fatalf("outbound resident budget = %d (server %d), want the default %d", server.config.OutboundResidentBytes, server.outbound.limit, defaultOutboundResidentBytes)
 	}
 }
 
@@ -257,7 +261,7 @@ func TestRuntimePushPlayerEncodesOnceAndMarksServerPush(t *testing.T) {
 	defer client.Close()
 	defer remote.Close()
 	connectionCtx, cancel := context.WithCancelCause(context.Background())
-	current := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 1, SessionID: "tcpSession"}, server.config)
+	current := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 1, SessionID: "tcpSession"}, server.config, server.outbound)
 	defer server.closeConnectionSession(current)
 	server.registerSession(current)
 	defer server.unregisterSession(current)
@@ -894,7 +898,7 @@ func pipeSession(t *testing.T, writeTimeout time.Duration) (*tcpSession, net.Con
 	config := DefaultTCPConfig()
 	config.WriteTimeout = writeTimeout
 	connectionCtx, cancel := context.WithCancelCause(context.Background())
-	session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "pipe"}, config)
+	session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "pipe"}, config, nil)
 	t.Cleanup(func() {
 		_ = session.Close(ErrSessionClosed)
 		<-session.writerDone
@@ -1103,7 +1107,7 @@ func TestClosingASessionDuringConcurrentPushesLeavesNoGoroutine(t *testing.T) {
 		config := DefaultTCPConfig()
 		config.WriteTimeout = time.Second
 		connectionCtx, cancel := context.WithCancelCause(context.Background())
-		session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "close-race"}, config)
+		session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "close-race"}, config, nil)
 		drained := make(chan struct{})
 		if round%2 == 0 {
 			go func() { defer close(drained); _, _ = io.Copy(io.Discard, peer) }()
@@ -1148,6 +1152,334 @@ func TestClosingASessionDuringConcurrentPushesLeavesNoGoroutine(t *testing.T) {
 			t.Fatalf("goroutines = %d after %d close rounds, want at most %d", runtime.NumGoroutine(), rounds, base)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// budgetPipeSession 在 net.Pipe 上建一个登记到 server 的内嵌接入会话，共用 server 的全进程出站驻留预算；
+// 对端不读时 writeLoop 卡在第一帧上（net.Pipe 没有内核缓冲），后续推送全部留在队列里。
+func budgetPipeSession(t *testing.T, server *TCPServer, playerID int64) (*tcpSession, net.Conn) {
+	t.Helper()
+	client, peer := net.Pipe()
+	connectionCtx, cancel := context.WithCancelCause(context.Background())
+	session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: playerID, SessionID: fmt.Sprintf("budget-%d", playerID)}, server.config, server.outbound)
+	server.registerSession(session)
+	t.Cleanup(func() {
+		_ = session.Close(ErrSessionClosed)
+		<-session.writerDone
+		server.forgetSession(session)
+		_ = peer.Close()
+	})
+	return session, peer
+}
+
+// residentOf 是这些会话“排队 + 在途”的字节合计（每连接各自的记账）。
+func residentOf(sessions []*tcpSession) int64 {
+	var total int64
+	for _, session := range sessions {
+		session.queueMu.Lock()
+		total += session.queuedBytes
+		session.queueMu.Unlock()
+	}
+	return total
+}
+
+func counterValue(name string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name {
+			total += metric.Value
+		}
+	}
+	return total
+}
+
+// 很多客户端同时停读（恶意连接或网络抖动）时，每连接上限各自都没到，进程却已驻留 连接数 × 每连接上限：
+// 全进程出站驻留预算（outbound.resident_bytes）把所有连接“排队 + 在途”的字节合计限在预算内，超出的入队当场被拒
+// （ErrResidentBudgetExhausted，不带 errConnectionBroken，连接不关闭），计 player_tcp_outbound_budget_exhausted_total；
+// 字节在写出与连接关闭时归还，归还后同一连接又能入队。
+// 规模：8 个停读连接各推 64 帧 × 16 KiB ≈ 1 MiB（低于每连接 2 MiB 上限，不会因单连接溢出被关），合计约 8 MiB，预算 1 MiB。
+func TestStalledConnectionsTogetherStayWithinTheResidentBudget(t *testing.T) {
+	const connections, framesEach, frameBytes = 8, 64, 16 << 10
+	const budget = 1 << 20
+	config := DefaultTCPConfig()
+	config.MaxPayloadBytes = 64 << 10
+	config.OutboundResidentBytes = budget
+	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) { return Principal{}, nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := make([]*tcpSession, connections)
+	peers := make([]net.Conn, connections)
+	for index := range sessions {
+		sessions[index], peers[index] = budgetPipeSession(t, server, int64(index+1))
+	}
+	before := counterValue("player_tcp_outbound_budget_exhausted_total")
+	ctx := context.Background()
+	payload := make([]byte, frameBytes)
+	refused := 0
+	for range framesEach {
+		for _, session := range sessions {
+			err := server.pushPlayerKind(ctx, session.principal.PlayerID, pushTestMessageID, payload, flagSync)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, ErrResidentBudgetExhausted) || errors.Is(err, errConnectionBroken) {
+				t.Fatalf("push refused with %v, want ErrResidentBudgetExhausted without errConnectionBroken", err)
+			}
+			refused++
+		}
+	}
+	resident := residentOf(sessions)
+	if resident > budget || refused == 0 {
+		t.Fatalf("%d stalled connections hold %d bytes queued + in flight together, over the %d-byte process budget; %d of %d pushes were refused",
+			connections, resident, budget, refused, connections*framesEach)
+	}
+	if got := server.outbound.resident(); got != resident {
+		t.Fatalf("process budget counts %d resident bytes, connections hold %d", got, resident)
+	}
+	if got := counterValue("player_tcp_outbound_budget_exhausted_total") - before; got != int64(refused) {
+		t.Fatalf("player_tcp_outbound_budget_exhausted_total grew by %d, want %d (one per refused enqueue)", got, refused)
+	}
+	for _, session := range sessions {
+		if session.closed.Load() {
+			t.Fatalf("connection %s was closed for an exhausted process budget", session.principal.SessionID)
+		}
+	}
+
+	// 写出归还：前一半连接的客户端开始读，它们的驻留归零、预算随之归还，同一连接又能入队。
+	half := connections / 2
+	for _, peer := range peers[:half] {
+		go func() { _, _ = io.Copy(io.Discard, peer) }()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for residentOf(sessions[:half]) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the reading connections still hold %d bytes", residentOf(sessions[:half]))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got, want := server.outbound.resident(), residentOf(sessions[half:]); got != want {
+		t.Fatalf("after half the clients read everything the budget counts %d bytes, the stalled half holds %d", got, want)
+	}
+	if err := server.pushPlayerKind(ctx, sessions[0].principal.PlayerID, pushTestMessageID, payload, flagSync); err != nil {
+		t.Fatalf("push after the budget was released by writes = %v", err)
+	}
+	// 关闭归还：停读的一半关闭后，它们排队与卡在写协程里的字节一次归还。
+	for _, session := range sessions[half:] {
+		_ = session.Close(ErrSessionClosed)
+		waitWriterDone(t, session)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for server.outbound.resident() != residentOf(sessions[:half]) || residentOf(sessions[half:]) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the stalled connections closed the budget counts %d bytes, the open ones hold %d", server.outbound.resident(), residentOf(sessions[:half]))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := sessions[half].pushKind(ctx, pushTestMessageID, payload, flagSync); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("push to a closed connection = %v, want errConnectionBroken", err)
+	}
+}
+
+// 关连接与写协程退出并发时预算恰好归还一次：每轮几条共用一个预算的连接，有的对端在读（写协程边写边扣减），
+// 有的停读、写超时很短（写协程在一批中途因写失败退出），同时有并发推送（部分因预算被拒）、等写出后超时撤回的追帧页、
+// 读循环回包（只计入不拒）与重复 Close。全部返回、写协程退出后预算必须正好回到 0：重复扣减会变负，少扣会留正数；
+// 过程中采样也不得为负。
+func TestTheResidentBudgetIsReturnedExactlyOnceWhenClosesRaceTheWriteLoop(t *testing.T) {
+	const rounds, connections, pushers, pushesEach = 30, 4, 4, 64
+	for round := range rounds {
+		budget := &outboundBudget{limit: 96 << 10}
+		sessions := make([]*tcpSession, connections)
+		peers := make([]net.Conn, connections)
+		var readers sync.WaitGroup
+		for index := range sessions {
+			client, peer := net.Pipe()
+			config := DefaultTCPConfig()
+			config.WriteTimeout = time.Second
+			if index == connections-1 {
+				config.WriteTimeout = 20 * time.Millisecond // 停读且写超时短：写协程在一批中途写失败退出
+			}
+			connectionCtx, cancel := context.WithCancelCause(context.Background())
+			sessions[index] = newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: int64(index + 1), SessionID: fmt.Sprintf("race-%d", index)}, config, budget)
+			peers[index] = peer
+			if index%2 == 0 {
+				readers.Go(func() { _, _ = io.Copy(io.Discard, peer) })
+			}
+		}
+		stop := make(chan struct{})
+		var negative atomic.Int64
+		var sampler sync.WaitGroup
+		sampler.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if used := budget.resident(); used < 0 {
+					negative.Store(used)
+				}
+				runtime.Gosched()
+			}
+		})
+		start := make(chan struct{})
+		var producers sync.WaitGroup
+		for index, session := range sessions {
+			for pusher := range pushers {
+				producers.Go(func() {
+					<-start
+					payload := make([]byte, 1<<10*(1+pusher))
+					for range pushesEach {
+						if err := session.pushKind(context.Background(), pushTestMessageID, payload, flagSync); err != nil && !errors.Is(err, ErrResidentBudgetExhausted) {
+							return
+						}
+					}
+				})
+			}
+			producers.Go(func() {
+				<-start
+				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+				defer cancel()
+				_ = session.pushWritten(ctx, pushTestMessageID, make([]byte, 2<<10), flagLockstep)
+			})
+			producers.Go(func() {
+				<-start
+				_ = session.writeQueued(context.Background(), 0, stuckResponseID, 1, make([]byte, 512))
+			})
+			producers.Go(func() {
+				<-start
+				time.Sleep(time.Duration(index+round%3) * time.Millisecond)
+				_ = session.Close(ErrSessionClosed)
+				_ = session.Close(ErrSessionClosed)
+			})
+		}
+		close(start)
+		returned := make(chan struct{})
+		go func() { producers.Wait(); close(returned) }()
+		select {
+		case <-returned:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: pushes did not return after the connections closed", round)
+		}
+		for _, session := range sessions {
+			waitWriterDone(t, session)
+		}
+		close(stop)
+		sampler.Wait()
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+		readers.Wait()
+		if used := negative.Load(); used < 0 {
+			t.Fatalf("round %d: the process budget went negative (%d): a frame's bytes were returned twice", round, used)
+		}
+		if used := budget.resident(); used != 0 {
+			t.Fatalf("round %d: %d bytes still counted after every connection closed and its writer exited (want 0: returned twice < 0, never returned > 0)", round, used)
+		}
+		for _, session := range sessions {
+			if err := session.pushKind(context.Background(), pushTestMessageID, []byte("late"), 0); !errors.Is(err, errConnectionBroken) {
+				t.Fatalf("round %d: push after the writer exited = %v, want errConnectionBroken", round, err)
+			}
+		}
+		if used := budget.resident(); used != 0 {
+			t.Fatalf("round %d: a push refused after close left %d bytes counted", round, used)
+		}
+	}
+}
+
+// 服务器停止时连接 context 先结束：写协程退出并归还驻留，而会话要等读循环返回才被 Close（closed 仍为 false）。
+// 这个窗口里到达的推送必须被拒，否则它的字节进了一条再没有写协程的队列，永远不归还。
+func TestAPushAfterTheWriterExitedIsRefusedAndNotCounted(t *testing.T) {
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = peer.Close() })
+	budget := &outboundBudget{limit: 1 << 20}
+	connectionCtx, cancel := context.WithCancelCause(context.Background())
+	session := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 7, SessionID: "stopping"}, DefaultTCPConfig(), budget)
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	if err := session.pushKind(context.Background(), pushTestMessageID, []byte("written"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); budget.resident() != 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the written push is still counted: %d bytes", budget.resident())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel(errors.New("server stopping")) // 只结束连接 context，不经 session.close：空闲的写协程随之退出
+	waitWriterDone(t, session)
+	if session.closed.Load() {
+		t.Fatal("the session was closed; the test did not reach the window before the read loop closes it")
+	}
+	if used := budget.resident(); used != 0 {
+		t.Fatalf("after the writer exited the budget counts %d bytes, want 0", used)
+	}
+	if err := session.pushKind(context.Background(), pushTestMessageID, []byte("late"), 0); !errors.Is(err, errConnectionBroken) {
+		t.Fatalf("push after the writer exited = %v, want errConnectionBroken", err)
+	}
+	if used := budget.resident(); used != 0 {
+		t.Fatalf("a push after the writer exited left %d bytes counted that nobody will return", used)
+	}
+	_ = session.Close(ErrSessionClosed)
+}
+
+// 读循环自己的回包与心跳 ACK 计入驻留但不因预算被拒：预算耗尽时正常读的客户端发请求仍得到回包，不被断开；
+// 业务异步 Session.Reply 与推送一样受预算拒绝。
+func TestReadLoopRepliesAreCountedButNotRefusedByTheResidentBudget(t *testing.T) {
+	session, peer := pipeSession(t, 30*time.Second)
+	session.budget = &outboundBudget{limit: 4 << 10}
+	ctx := context.Background()
+	// 填满预算：对端不读，第一帧卡在写协程里，其余排队。
+	for session.pushKind(ctx, pushTestMessageID, make([]byte, 1<<10), 0) == nil {
+	}
+	if err := session.pushKind(ctx, pushTestMessageID, make([]byte, 1<<10), 0); !errors.Is(err, ErrResidentBudgetExhausted) {
+		t.Fatalf("push with the budget used up = %v, want ErrResidentBudgetExhausted", err)
+	}
+	if err := session.Reply(ctx, &TCPResponse{MessageID: stuckResponseID, Sequence: 9, Payload: make([]byte, 1<<10)}); !errors.Is(err, ErrResidentBudgetExhausted) {
+		t.Fatalf("business Reply with the budget used up = %v, want ErrResidentBudgetExhausted", err)
+	}
+	full := session.budget.resident()
+	replied := make(chan error, 1)
+	go func() { replied <- session.writeQueued(ctx, 0, stuckResponseID, 1, []byte("reply")) }()
+	// 回包排在卡住的推送后面：预算已满仍被收下，驻留多出这一帧。
+	want := full + headerSize + int64(len("reply"))
+	for deadline := time.Now().Add(2 * time.Second); session.budget.resident() != want; {
+		if time.Now().After(deadline) {
+			t.Fatalf("read-loop reply not counted: resident %d, want %d", session.budget.resident(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	if err := <-replied; err != nil {
+		t.Fatalf("read-loop reply with the budget used up = %v, want it written", err)
+	}
+	if session.closed.Load() {
+		t.Fatal("the connection was closed for an exhausted process budget")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for session.budget.resident() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the client read everything the budget still counts %d bytes", session.budget.resident())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestOutboundResidentBytesIsValidatedByItsKey(t *testing.T) {
+	for _, value := range []int64{-1, 64<<10 + headerSize - 1, maxOutboundResidentBytes + 1} {
+		config := DefaultTCPConfig()
+		config.MaxPayloadBytes = 64 << 10
+		config.OutboundResidentBytes = value
+		if err := ValidateTCPConfig(config); err == nil || !strings.Contains(err.Error(), "player_access.tcp.outbound.resident_bytes") {
+			t.Errorf("outbound.resident_bytes = %d: %v, want a refusal naming the key", value, err)
+		}
+	}
+	config := DefaultTCPConfig()
+	config.MaxPayloadBytes = 64 << 10
+	for _, value := range []int64{64<<10 + headerSize, 0} { // 0：代码构造的配置没设置，NewTCPServer 取缺省
+		config.OutboundResidentBytes = value
+		if err := ValidateTCPConfig(config); err != nil {
+			t.Fatalf("outbound.resident_bytes = %d was refused: %v", value, err)
+		}
 	}
 }
 

@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # 正式生成 Entity/DAO/Component + Nest ticker/快池，测普通游戏业务及心跳。
+# 普通业务的入口（夹具 load_test.go 的 gameConfig.Frontend）：
+#   缺省               ticker 直接投递 Nest；
+#   ROOST_NEST_GAME_GATE=1      TCP → 独立 Gate → NATS → Game Ingress → Nest（需私有 ROOST_DATAENGINE_IT_NATS_URL）；
+#   ROOST_NEST_GAME_EMBEDDED=1  TCP → Game 进程内 TCPServer + TCPRuntime → Nest（不需要 NATS，见 embedded_load_test.go）。
+# 叠加 Sync：ROOST_NEST_GAME_SYNC=1 场景 Sync（GATE 或 EMBEDDED）；ROOST_NEST_GAME_SELF_SYNC=1 自身视图（只 EMBEDDED，
+# 与 SYNC=1 互斥）。嵌入模式可选 ROOST_NEST_GAME_TCP_RESIDENT_BYTES 覆盖出站驻留预算。正式参数见 docs/performance/README.md。
 set -euo pipefail
 # 复用同一正式生成流程，仅验证手写空间组件，不启动负载或外部服务。
 test_pattern='^TestNestGameLoad$'

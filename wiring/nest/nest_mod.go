@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -120,8 +121,16 @@ type config struct {
 	} `config:"sync.entity"`
 }
 
-// ConfigSchema 声明 nest.*、sync.entity.* 与持久化引擎的选择。
-func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+// ConfigSchema 声明 nest.*、sync.entity.* 与持久化引擎的选择；NewModWithEntitySync 装配时并上
+// EntitySyncSetup.ConfigSchema（政策从部署配置读的键，例如 wiring/selfsync 读接入层的帧上限）。
+func (m *Mod) ConfigSchema() app.ConfigSchema {
+	schema := app.SchemaOf(config{})
+	if m == nil || m.syncSetup == nil || len(m.syncSetup.ConfigSchema.Keys) == 0 {
+		return schema
+	}
+	// 复制一份：不改 SchemaOf 返回值的底层数组。
+	return app.ConfigSchema{Keys: slices.Concat(schema.Keys, m.syncSetup.ConfigSchema.Keys)}
+}
 
 func (m *Mod) Init(cfg *viper.Viper) error {
 	if m == nil || m.getter == nil {
@@ -151,7 +160,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := m.initEntityLoadConfig(nest.EntityLoadTimeout); err != nil {
 		return err
 	}
-	return m.initEntitySync(settings, present["sync.entity.on_change_batch_window"])
+	return m.initEntitySync(cfg, settings, present["sync.entity.on_change_batch_window"])
 }
 
 // initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（缺省

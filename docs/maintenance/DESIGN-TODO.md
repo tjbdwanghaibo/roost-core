@@ -112,7 +112,7 @@
 **实施结果**：
 
 - core：`framework/sync/entitysync/policy.SelfView`（生命周期：回调只记事实，Flush 的政策阶段按净事实对齐会话 / 登记 / `Direct` 绑定，profile 固定 `self`）；`wiring/selfsync`（`PushSyncPlayer` → `entitysync.Transport`、嵌入 TCP 握手钩子与 Game Ingress OnActive / OnClosed、`EntitySyncSetup`）；`wiring/nest.EntitySyncSetup` 新增 `Attach` / `EntityLoaded` 两个可选钩子。包位置取舍：生命周期属于 Sync 块（只依赖 entitysync 与 entity，用 entitysync 的 harness 测各种事件顺序），放在已有 Direct / Interest 旁边；gateway 适配与 Nest Mod 装配属于接线，放 wiring，避免 sync 块依赖网络层。
-- 生成器：`roost.yaml` 的 `access.player.self_sync: true`（默认关，需要 tcp 传输与 entity feature）；开启时 `internal/bootstrap/generated.go` 改用 `NewModWithEntitySync` 并生成 `PlayerSelfSync`，`server_gen.go` 生成 `WithSelfSync`，缺失时创建一次业务文件 `protocol/def/self_sync.go`（推送编号）；Player 的标记缺省按 `sync=true`；2026-10-17 起没写 `subjectPacker=` 时 entity 生成器写默认 packer `game/entities/player/player_sync_packer_gen.go`（维护者决定，KNOWN-LIMITS 第三轮试用登记项 3），`project sync` / `generate` / `doctor` 对没有 DAO、多个 DAO、显式 `sync=false` 给出改法，对 DAO 没有 sync 字段给警告。关闭时生成物不变。
+- 生成器：`roost.yaml` 的 `access.player.self_sync: true`（默认关，需要 tcp 传输与 entity feature）；开启时 `internal/bootstrap/generated.go` 改用 `NewModWithEntitySync` 并生成 `PlayerSelfSync`，`server_gen.go` 生成 `WithSelfSync`，缺失时创建一次业务文件 `protocol/def/self_sync.go`（推送编号）；Player 的标记缺省按 `sync=true`；2026-10-17 起没写 `subjectPacker=` 时 entity 生成器写默认 packer `game/entities/player/player_sync_packer_gen.go`（维护者决定，代价见 KNOWN-LIMITS“self_sync 默认 packer 的代价”），`project sync` / `generate` / `doctor` 对没有 DAO、多个 DAO、显式 `sync=false` 给出改法，对 DAO 没有 sync 字段给警告。关闭时生成物不变。
 - 客户端：Go 解码示例 `wiring/selfsync/example_client_test.go`（随测试运行）；C# 本轮不做（`SyncReceiver` 能收帧，subject 载荷解码需业务自写）。
 - 回归：`policy/self_view_test.go`（断线重连、顶号、登录与断线并发、关闭与 Flush 并发、丢会话后等连接关闭（2026-10-17 起不再重开，见 impl/04-sync §2C）、卸载撤回重提交、新建回滚重绑）、`wiring/selfsync/selfsync_test.go`（真实 gateway TCP）、`codegen/internal/roost/self_sync_test.go`（按新手流程生成工程、打开开关、经生成接线跑真实 TCP）；另在共享隔离环境（真实 Mongo / NATS / Redis）跑了一次生成工程真实进程：登录 → EnterGame → 全量 gold=0 → AddGold → 增量 5、12 → 断线重连 → 全量 12 → 增量 13；进程重启后冷加载 → 全量 13。
 
@@ -218,7 +218,7 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 
 ## D11 按实体的持久定时器接入
 
-**状态：维护者 2026-10-17 决定方案 B（`roost add timer --entity X` 生成器），并定了离线语义：框架不做追帧；离线期间到期的定时器在实体 load 起来后只触发一次，追帧（补算错过的周期等）由业务在回调里根据传入的参数自己处理。已实施（`a2b4f4d8` core 驱动与宿主、`5581deeb` 生成器与 game-demo World 迁入）。game-demo World 已恢复手写（维护者 2026-10-18 规则：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不生成 demo），见下文“game-demo”一条。** 新用户试用第四轮登记项 3，剩余限制见 [KNOWN-LIMITS](KNOWN-LIMITS.md#3-按实体的持久定时器接入已实施d11)。
+**状态：维护者 2026-10-17 决定方案 B（`roost add timer --entity X` 生成器），并定了离线语义：框架不做追帧；离线期间到期的定时器在实体 load 起来后只触发一次，追帧（补算错过的周期等）由业务在回调里根据传入的参数自己处理。已实施（`a2b4f4d8` core 驱动与宿主、`5581deeb` 生成器与 game-demo World 迁入）。game-demo World 已恢复手写（维护者 2026-10-18 规则：game-demo 是手写的参考实现，不迁到生成器产物上；生成器只生成框架内容，不生成 demo），见下文“game-demo”一条。** 新用户试用第四轮登记项 3，剩余限制见 [KNOWN-LIMITS](KNOWN-LIMITS.md#按实体的持久定时器d11)。
 
 **后续决定（维护者 2026-10-18，均按推荐）**：①卸载与已入队 Tick 的窗口接受，不扩大 Nest 契约；②不做“离线也准点”的全局驱动——需要准点的由业务发送 Nest 消息，不需要的在回调里自己追帧；③去掉 `timers` 条目后生成部分不自动回收；④多一个 Mod 带来的 3s 停机保底接受，不改 app 规则。
 
@@ -330,7 +330,7 @@ WAL 准入只看内存版本链（`ValidateMutation`：`next = expected + 1`）�
 - **生成期 WARN**（`codegen/internal/dao/baseline.go`）：生成前读输出目录里上一次的生成物（`<dao>PersistDoc`；更早的生成物里是 `Unmarshal` 的局部 `rawDoc`；嵌套类型是 `<type>BSONDoc`）作为基线，持久键消失、新增、类型变化各打一条 WARN，写明后果、迁移手册与 `schema=` 是否提高；不阻断生成。保留原 `bson` 名改 Go 名时键不变，不告警。
 - **加载期 WARN**（`framework/dataengine/stored_keys.go`）：`dataengine.NewStoredKeySet[<dao>PersistDoc]` 从结构体标签推出键集合（嵌套按解码层级，map 值 / 切片元素路径写作 `*`）；生成的 `RestorePersisted` 在 schema 校验之后、解码之前调用 `WarnUnknown`：同一进程同一 DAO 同一键只打一次 `slog.Warn`（带 `dao`、`key`、`first_id`），每次出现计数 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载但不读入该键（WARN 写明“该键不再读取，下一次整文档写回会删除它；要保留数据请给字段写原 bson 名，或先离线迁移”）。顶层 `_` 开头的元数据键与缺失键不报。Remote 托管实体经同一个 `RestorePersisted`（payload 是信封的 data）。
 - **旧键不读入（撤销方案 A 后）**：持久文档结构体与嵌套 wire 文档不再有收未知键的 inline 字段，解码器忽略库里多出的键；整文档写回（`$replaceWith` / ReplaceOne、Remote data 信封替换）就把它们去掉，单字段补丁只 `$set` 自己的键、旧键留在库里但不再被读取（需要清掉时用一次性离线迁移）。存储写法、版本条件、冲突分类、墓碑语义都没有改。回归：生成 DAO 运行时 `TestUnknownStoredKeysWarnOncePerKeyAndAreNotLoaded`，真实 Mongo `TestOldStoredKeysAreNotLoadedAndTheNextFullWriteDropsThemRealMongo` / `TestRemoteEnvelopePayloadDropsOldStoredKeysRealMongo`（对 322a7c40 的方案 A 实现红：`after a full write the old keys [old_gold pos.old_z equips.1.old_color] are still stored, want them dropped`、`remote payload carries old keys [...]`）。
-- **剩余风险**：WARN 不阻断；忽略告警时旧值不再加载，下一次整文档写回即丢失——这由业务约束（保留原 `bson` 名或先离线迁移）承担，框架只通知。生成期基线只在工作树里，删掉生成物或换机器重新生成看不到上一次的形状，此时只剩加载期 WARN。见 [KNOWN-LIMITS](KNOWN-LIMITS.md)“新用户试用第七轮”第 1 项。
+- **剩余风险**：WARN 不阻断；忽略告警时旧值不再加载，下一次整文档写回即丢失——这由业务约束（保留原 `bson` 名或先离线迁移）承担，框架只通知。生成期基线只在工作树里，删掉生成物或换机器重新生成看不到上一次的形状，此时只剩加载期 WARN。见 [KNOWN-LIMITS](KNOWN-LIMITS.md#dao-持久键d13)。
 
 **原登记（2026-10-19）**：
 

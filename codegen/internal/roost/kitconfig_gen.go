@@ -370,6 +370,9 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "saga.result_effect_nak_backoff_min", Kind: "duration", Default: "250ms", Min: "1ns", Starter: true, Example: "250ms"},
 		{Name: "saga.result_effect_nak_backoff_max", Kind: "duration", Default: "30s", Min: "1ns", Starter: true, Example: "30s"},
 	}},
+	"selfsync": {Keys: []configschema.Key{
+		{Name: "player_access.tcp.max_payload_bytes", Kind: "int", Default: "1048576", Starter: true, Example: "1048576"},
+	}},
 	"session": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "redis.cluster_addrs", Kind: "strings", Help: "Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"},

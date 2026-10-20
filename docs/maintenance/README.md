@@ -65,6 +65,7 @@ git diff --exit-code
 | Sync 不发/延迟 | held/ready、订阅来源、profile、冻结预算、水位、背压 | setter只标脏；不绕过提交水位来降低延迟 |
 | 客户端增量缺口 | epoch/base/对象存在、重连代际 | 恢复全量；不继续应用不可信增量 |
 | 玩家 TCP 断线伴随 `player_tcp_outbound_overflow_total` / `player_tcp_write_error_total` 增长 | 客户端是否停读或链路过慢、单帧大小、`write_timeout` | 嵌入 TCP 出站队列满或写超时即关闭该连接，属预期的慢连接处理，重连恢复全量；不要为留住慢客户端放大队列或 `write_timeout`（[GATEWAY §4](../framework/GATEWAY.md#嵌入-tcp-的出站)） |
+| `player_tcp_outbound_budget_exhausted_total` 增长（嵌入 TCP），Sync 延迟上升、`player.sync.push_refused.total{outcome="retried"}` 增长 | 是否很多连接同时停读（占着预算直到 `write_timeout`）、健康流量是否超过发送能力、`player_access.tcp.outbound.resident_bytes` 是否过小 | 全进程出站驻留预算耗尽：推送被拒、不断开连接，Sync 整轮重试；按内存余量调大预算，或排查停读连接来源（[GATEWAY §4](../framework/GATEWAY.md#嵌入-tcp-的出站)） |
 | Remote 已提交但快照旧 | outbox进度、确认、L2水位和读取策略 | 区分数据权威与快照水位；不把旧L1写回覆盖 |
 | 总线停止/重订失败 | consumer关闭、在途回调、ErrSubscriptionBusy | 等真实排空；有限MaxDeliver不保证永不丢 |
 | 停机超时 | Service与各Mod预算、仍在途操作 | 保留依赖并继续等待，禁止先释放连接/锁 |
@@ -80,7 +81,7 @@ git diff --exit-code
 
 ## 6. 维护文档的规则
 
-接口/配置/格式改变时，同时更新设计篇、实现篇、源码定位、升级要求与已知限制。当前文档不保留相互矛盾的“旧段落+末尾更正”；过程讨论进Git历史，未解决问题留在KNOWN-LIMITS。历史证据链接固定commit，当前规范用仓内相对链接。
+接口/配置/格式改变时，同时更新设计篇、实现篇、源码定位、升级要求与已知限制。当前文档不保留相互矛盾的“旧段落+末尾更正”；过程讨论进Git历史，未解决问题与当前验证边界留在KNOWN-LIMITS：它只写当前仍有效的限制，已修复问题的经过归CHANGELOG、docs/release与Git历史，不留在KNOWN-LIMITS。历史证据链接固定commit，当前规范用仓内相对链接。
 
 根目录只保留 README、CHANGELOG、AGENTS 和许可证等仓库入口。详细契约归 `docs/framework/`，性能报告与随仓样本归 `docs/performance/`，发布过程与功能验收归 `docs/release/`；本目录保留维护规则、已知限制、外部验收与文档清单。各包 README 和工具手册保留在对应代码附近。
 

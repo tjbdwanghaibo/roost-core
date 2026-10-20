@@ -320,6 +320,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `player_tcp_dispatch_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_dispatch_timeout_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_frame_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
+| `player_tcp_outbound_budget_exhausted_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `player_tcp_outbound_overflow_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `player_tcp_push_closed_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
 | `player_tcp_push_error_total` | Counter | `infra/network/gateway/tcp.go:IncCounter` |
@@ -431,11 +432,12 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 
 | 指标 | 含义与口径 |
 | --- | --- |
+| `player_tcp_outbound_budget_exhausted_total` | 一帧因全进程出站驻留预算（`player_access.tcp.outbound.resident_bytes`，缺省 256 MiB，所有连接“排队 + 写协程在途”字节合计）放不下而被拒的次数（2026-10-20 起）；**不关闭连接**，推给玩家多条连接时每条各计一次。持续增长说明很多连接同时停读或健康流量超过发送能力：Entity Sync 整轮重试、延迟上升（同时看 `player.sync.push_refused.total{outcome="retried"}`），Lockstep 实时帧靠冗余补；修前没有这个预算，最坏驻留 `max_connections × 每连接字节上限` |
 | `player_tcp_outbound_overflow_total` | 一帧入队会让该连接“排队 + 写协程在途”超过 1024 帧或 `max(2 MiB, 2 × (max_payload_bytes + 16))` 字节而被拒的次数（拒绝即关闭连接）；计被拒次数，不是关闭的连接数，并发推送方同时撞到上限时各计一次 |
 | `player_tcp_push_closed_total` | 推送路径因 `errConnectionBroken`（溢出、连接已被写协程关闭但尚未注销）注销并关闭连接的次数；同一连接在注销前收到多次推送会多次计入，写协程关闭后没有推送到达的连接不计 |
 | `player_tcp_write_error_total` | 写 socket 失败次数（写协程、读循环直写、Gate `WritePacket`）：写超时、半帧、reset，以及关闭连接时被打断的那次写；连接已关闭后被拒的写不计 |
 
-一个停读连接因溢出被关闭时，上面三项通常各至少加一；写协程因 `write_timeout` 关闭的连接只保证 `write_error_total` 加一。见 [GATEWAY §4](GATEWAY.md#嵌入-tcp-的出站)。
+一个停读连接因溢出被关闭时，`overflow_total`、`push_closed_total`、`write_error_total` 三项通常各至少加一；写协程因 `write_timeout` 关闭的连接只保证 `write_error_total` 加一。见 [GATEWAY §4](GATEWAY.md#嵌入-tcp-的出站)。
 
 ### 独立 Gate 接入
 
@@ -482,7 +484,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
 8. `dataengine_fence_skipped_total` 速率阶跃到与被 fence 事务量同阶 —— 立即告警（claim schema 漂移：事务正在静默变成 no-op，既无错误也无失败测试）。
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
-10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接、会话打开被持续拒绝，或玩家实体的帧编码失败（日志 `self view:` / `entitysync`）。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`。
+10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接、会话打开被持续拒绝，或玩家实体的帧编码失败（日志 `self view:` / `entitysync`）。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。

@@ -263,6 +263,10 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	// survives a crash. The Data Engine names the watermark and the manager
 	// holds a subject back until it reaches the commit that produced it.
 	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+		// The name the framework's refusals use for this manager: a Player
+		// state feeds one manager, so with access.player.self_sync also on,
+		// whichever registers the player second is refused naming the first.
+		Name:             "scene",
 		Transport:        lane,
 		Interval:         sceneReplicationInterval,
 		DurableWatermark: watermark,

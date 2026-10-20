@@ -1276,6 +1276,31 @@ func TestPlayerTCPConfigPreservesCRLFAndExistingParentMap(t *testing.T) {
 	}
 }
 
+// player_access.tcp.outbound.resident_bytes 是段里的键：新块写成 outbound: 段，已有 tcp: 没有段时连段名补上，
+// 已有段缺这个键时补进段里（沿用段里已有键的缩进），已写的值不动；合并结果按声明读得出来。
+func TestPlayerTCPConfigFillsTheOutboundSection(t *testing.T) {
+	for name, tc := range map[string]struct{ original, want string }{
+		"new block":          {"sid: 1\n", "    outbound:\n      resident_bytes: 268435456\n"},
+		"tcp without it":     {"player_access:\n  tcp:\n    enabled: false\n", "    outbound:\n      resident_bytes: 268435456\n"},
+		"section without it": {"player_access:\n  tcp:\n    outbound:\n        future_key: 1\n", "    outbound:\n        resident_bytes: 268435456\n        future_key: 1\n"},
+		"value kept":         {"player_access:\n  tcp:\n    outbound:\n      resident_bytes: 1048576\n", "    outbound:\n      resident_bytes: 1048576\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			merged, err := mergePlayerTCPConfig(tc.original, "config.yaml", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(merged, tc.want) || strings.Count(merged, "resident_bytes:") != 1 || strings.Count(merged, "outbound:") != 1 {
+				t.Fatalf("merged config lacks %q once:\n%s", tc.want, merged)
+			}
+			again, err := mergePlayerTCPConfig(merged, "config.yaml", false)
+			if err != nil || again != merged {
+				t.Fatalf("a second merge changed the config (err %v):\n%s", err, again)
+			}
+		})
+	}
+}
+
 func TestCLIRejectsDangerousDefaultsAndUnexpectedArguments(t *testing.T) {
 	var output bytes.Buffer
 	err := Run([]string{"project", "new", "planet", "-out", filepath.Join(t.TempDir(), "planet")}, &output, &output)

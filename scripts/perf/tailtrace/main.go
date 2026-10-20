@@ -807,7 +807,7 @@ func classify(ev *traceEvent) string {
 				return "sync:" + name
 			}
 		}
-	case "gate", "tick":
+	case "gate", "embedded", "tick":
 		w := segs["window"]
 		switch {
 		case big(w.Runnable):

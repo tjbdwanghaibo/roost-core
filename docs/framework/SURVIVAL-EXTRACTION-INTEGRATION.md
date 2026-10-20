@@ -234,7 +234,7 @@ sequenceDiagram
 bash scripts/test-survival-extraction-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 12 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 12 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player / SurvivalRaid DAO、SurvivalRaid 实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；物资守恒校验；视图字段与归属校验。Nest 用例里的期限经驱动的 `DeliverDue` 投递（实体一直在内存）。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；没有经过加载后补触发与驱动投递循环的计时（`ExpiryCannotReopenOrReenter` 是业务时钟跳过结束时刻，不是重启）；单进程，无 Redis / NATS；鉴权与会话票是合成身份；账本上限在纯状态测试里直接填满，没有经 Nest 跑满 128 条命令。夹具里的数值是样例。
@@ -254,6 +254,8 @@ ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated
 3. 断言冷加载已把存量最早期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`）：循环投递一次加载后的补触发，投递计数恰为 1——这一次里玩家 0 得到药剂、玩家 1 的清单封存为 3 木材 + 1 食物、玩家 2 只扣 1 血，结束时刻不变。重复入场不再扣费；玩家 1 先兑付得 4。另外三人在安全区开始撤离（玩家 2 先走回安全区），业务时间推进到读条完成时刻，循环按时投递第 2 次，三人同时撤离、本局结束，全程无重投。
 4. 停驱动后四人各兑付三次，最终永久金币为 100 / 99 / 98 / 98（初始 100、入场费 5，加各自清单 5 / 4 / 3 / 3）；正常关闭后再起第三个进程冷加载：核对探险状态与四人金币和关闭前一致，再重试入场、重放所有命令并重试兑付，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
 
+对照：在真实依赖模式下把第 3 步的 `Start` 换掉跑一次，用例在等补触发的有界等待处失败（`bounded wait expired`，脚本退出码 1），所以补触发确实由循环完成。
+
 - **证明**：strict 已确认的提交在 SIGKILL 后可从未投影 WAL 恢复，在途的制作与撤离读条、背包、资源点、回执与定时器节点完整恢复；驱动投递循环在冷加载后自动补触发一次、不追帧，业务在这一次里有界地处理到期事件；之后按时投递下一期限；跨进程重试不重复扣入场费或重复兑付。
 - **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏或丢盘；探险结束时刻在恢复路径上的处理（恢复用例在结束前收局，结束处理由 Nest 用例覆盖）；循环在系统时钟下的长时间计时（用例冻结业务时钟、由循环按 MaxWait 重读）、准入失败重试与 Redeliver（由 entitytimer 包测试覆盖）；多进程 / 跨机、Redis / NATS；四个逻辑玩家是同进程 Sender 并发，不是四台客户端，容量与长稳未测。
 
@@ -261,4 +263,4 @@ ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated
 
 地图、物资、配方、伤害和价格缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 到账、物资凭空增减、状态越权或生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷。当前存储是教学规模：每席账本 128 条、单个状态至多 256 KiB 整体提交、加载时整段校验，没有生产吞吐或延迟承诺。
 
-尚未实施或验收：真实客户端与公网鉴权、会话票签发、匹配与队友补位、开放世界地图与 AOI / 视野、命中 / 物理移动 / 反作弊、PvP 与队友伤害、完整 Skill Host、局外逐件仓库与装备携入携出、自动结算、长期归档、跨 sid 兑付与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。当前执行结果在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“合作生存撤离接入验收的范围”维护，不为每一轮另建报告。
+尚未实施或验收：真实客户端与公网鉴权、会话票签发、匹配与队友补位、开放世界地图与 AOI / 视野、命中 / 物理移动 / 反作弊、PvP 与队友伤害、完整 Skill Host、局外逐件仓库与装备携入携出、自动结算、长期归档、跨 sid 兑付与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。

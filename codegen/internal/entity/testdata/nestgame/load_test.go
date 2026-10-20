@@ -15,11 +15,17 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 )
 
 type gameConfig struct {
 	Entities, Players, MessageTargets, MessagesPerPlayer, HeartbeatHz, DirtyPercent, Workers, IOWorkers, Queue int
 	Duration                                                                                                   time.Duration
+	// Frontend 是普通业务的入口：direct（ticker 直接投递 Nest）、gate（ROOST_NEST_GAME_GATE=1）、
+	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC。
+	Frontend            string
+	SceneSync, SelfSync bool
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -153,9 +159,87 @@ type gameSample struct {
 	HeapBytes            uint64
 	Goroutines           int
 	Nest                 nest.DispatcherStats
+	// Outbound 只在嵌入 TCP 模式下采（每秒一次 metrics 快照），其他模式不改变采样开销。
+	Outbound *outboundCounters `json:",omitempty"`
 }
+
+// minuteSummary 是按负载分钟汇总的每秒采样（离线计算，不在被测区间内）。
+// 速率与增量取本分钟最后一个采样减上一分钟最后一个采样；ShortAvgWorkerWaitUS = ΔWorkerWait / ΔStarted。
+type minuteSummary struct {
+	Minute, Samples                        int
+	MessagesPerSecond, HeartbeatsPerSecond float64
+	HeapMinMB, HeapAvgMB, HeapMaxMB        float64
+	GoroutinesMin, GoroutinesMax           int
+	ShortAvgWorkerWaitUS                   float64
+	// ShortPeakWaiting / ShortMaxWorkerWaitMS 是 Nest 的累计峰值，在本分钟末的读数。
+	ShortPeakWaiting     int
+	ShortMaxWorkerWaitMS float64
+	Slow200msMessages    uint64
+	// Outbound 是本分钟的嵌入 TCP 出站计数增量（StrandedPlayers 取本分钟最大值）。
+	Outbound *outboundCounters `json:",omitempty"`
+}
+
+func summarizeMinutes(samples []gameSample, duration time.Duration, outboundStart *outboundCounters) []minuteSummary {
+	if len(samples) == 0 {
+		return nil
+	}
+	minutes := int((duration + time.Minute - 1) / time.Minute)
+	result := make([]minuteSummary, 0, minutes)
+	previous := samples[0]
+	var previousOutbound outboundCounters
+	if outboundStart != nil {
+		previousOutbound = *outboundStart
+	}
+	for begin := 0; begin < len(samples); {
+		minute := min(int(samples[begin].Seconds/60), minutes-1)
+		end := begin
+		for end < len(samples) && min(int(samples[end].Seconds/60), minutes-1) == minute {
+			end++
+		}
+		group := samples[begin:end]
+		last := group[len(group)-1]
+		m := minuteSummary{Minute: minute, Samples: len(group), HeapMinMB: math.MaxFloat64, GoroutinesMin: math.MaxInt}
+		var heap float64
+		stranded := int64(0)
+		for _, sample := range group {
+			mb := float64(sample.HeapBytes) / (1 << 20)
+			heap += mb
+			m.HeapMinMB, m.HeapMaxMB = min(m.HeapMinMB, mb), max(m.HeapMaxMB, mb)
+			m.GoroutinesMin, m.GoroutinesMax = min(m.GoroutinesMin, sample.Goroutines), max(m.GoroutinesMax, sample.Goroutines)
+			if sample.Outbound != nil {
+				stranded = max(stranded, sample.Outbound.StrandedPlayers)
+			}
+		}
+		m.HeapAvgMB = heap / float64(len(group))
+		if seconds := last.Seconds - previous.Seconds; seconds > 0 {
+			m.MessagesPerSecond = float64(last.Messages-previous.Messages) / seconds
+			m.HeartbeatsPerSecond = float64(last.Heartbeats-previous.Heartbeats) / seconds
+		}
+		short, previousShort := last.Nest.Queue.Short, previous.Nest.Queue.Short
+		if started := short.Started - previousShort.Started; started > 0 {
+			m.ShortAvgWorkerWaitUS = float64(short.WorkerWait-previousShort.WorkerWait) / float64(started) / float64(time.Microsecond)
+		}
+		m.ShortPeakWaiting = short.PeakWaiting
+		m.ShortMaxWorkerWaitMS = float64(short.MaxWorkerWait) / float64(time.Millisecond)
+		m.Slow200msMessages = last.Nest.Work.Slow200msMessages - previous.Nest.Work.Slow200msMessages
+		if last.Outbound != nil {
+			delta := last.Outbound.sub(previousOutbound)
+			delta.StrandedPlayers = stranded
+			m.Outbound = &delta
+			previousOutbound = *last.Outbound
+		}
+		result = append(result, m)
+		previous = last
+		begin = end
+	}
+	return result
+}
+
 type gameResult struct {
-	SyncReport                                          *syncLoadReport
+	SyncReport *syncLoadReport
+	// Embedded 只在嵌入 TCP 模式下有，见 embedded_load_test.go。
+	Embedded                                            *embeddedReport `json:",omitempty"`
+	Minutes                                             []minuteSummary
 	GateEnabled                                         bool
 	GateCompleted                                       uint64
 	GateRoundTrip                                       latencyResult
@@ -200,6 +284,26 @@ func TestNestGameLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.Frontend = "direct"
+	switch gate, embedded := os.Getenv("ROOST_NEST_GAME_GATE") == "1", os.Getenv("ROOST_NEST_GAME_EMBEDDED") == "1"; {
+	case gate && embedded:
+		t.Fatal("ROOST_NEST_GAME_GATE and ROOST_NEST_GAME_EMBEDDED are two deployments of the player access; pick one")
+	case gate:
+		c.Frontend = "gate"
+	case embedded:
+		c.Frontend = "embedded"
+	}
+	c.SceneSync, c.SelfSync = os.Getenv("ROOST_NEST_GAME_SYNC") == "1", os.Getenv("ROOST_NEST_GAME_SELF_SYNC") == "1"
+	switch {
+	case c.SceneSync && c.Frontend == "direct":
+		t.Fatal("Sync mixed load requires real Gate or embedded TCP")
+	case c.SelfSync && c.Frontend != "embedded":
+		t.Fatal("self_sync load runs over embedded TCP only (ROOST_NEST_GAME_EMBEDDED=1)")
+	case c.SelfSync && c.SceneSync:
+		// 一个 SubjectSyncState 只能登记在一个 Manager（entitysync.ErrSubjectRegisteredElsewhere）；生产同样不支持
+		// 场景与自身视图同时覆盖玩家实体（PLAYER-ACCESS §7）。
+		t.Fatal("ROOST_NEST_GAME_SELF_SYNC and ROOST_NEST_GAME_SYNC cannot both cover the player units: a subject feeds one entity sync manager")
+	}
 	if c.Entities < 1 || c.Entities > 100000 || c.Players < 1 || c.Players > c.Entities || c.MessageTargets < 1 || c.MessageTargets > c.Entities || c.MessagesPerPlayer < 0 || c.MessagesPerPlayer > 1000 || c.HeartbeatHz < 0 || c.HeartbeatHz > 1000 || c.DirtyPercent < 0 || c.DirtyPercent > 100 || c.Workers < 1 || c.IOWorkers < 1 || c.Queue < 1 || c.Duration < time.Second || c.Duration > time.Hour || c.Duration%time.Second != 0 {
 		t.Fatal("invalid load configuration")
 	}
@@ -222,16 +326,29 @@ func TestNestGameLoad(t *testing.T) {
 	}
 	var stateSync *syncGameLoad
 	options := []nest.NestOption{nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: c.Workers, QueueCap: c.Queue}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: c.IOWorkers}), nest.NestOptionWithTickDuration(10 * time.Millisecond)}
-	if os.Getenv("ROOST_NEST_GAME_SYNC") == "1" {
-		if os.Getenv("ROOST_NEST_GAME_GATE") != "1" {
-			t.Fatal("Sync mixed load requires real Gate")
-		}
-		stateSync = newSyncGameLoad(t, units, c)
+	// 嵌入模式的 TCPRuntime 先于 Sync 创建：场景 Sync 的 Transport 与自身视图都推给它（生产由 player TCP Mod 在 Provide 时注册）。
+	var tcpRuntime *gateway.TCPRuntime
+	if c.Frontend == "embedded" {
+		tcpRuntime = gateway.NewTCPRuntime(nil, gateway.DefaultTCPConfig().LoginTimeout)
+	}
+	switch {
+	case c.SelfSync:
+		stateSync = newSelfSyncGameLoad(t, units, c, access)
+	case c.SceneSync && c.Frontend == "gate":
+		lane := &gatewiring.Transport{SyncMessageID: 501}
+		stateSync = newSyncGameLoad(t, units, c, lane)
+		stateSync.gateTransport = lane
+	case c.SceneSync:
+		stateSync = newSyncGameLoad(t, units, c, embeddedSceneLane{players: tcpRuntime})
+	}
+	if stateSync != nil {
 		options = append(options, nest.NestOptionWithEntitySync(stateSync.manager))
 	}
 	engine := nest.NewEngine(options...)
 	var messages, heartbeats loadCounters
-	var network *gateFrontend
+	var network loadFrontend
+	var gateNetwork *gateFrontend
+	var embeddedNetwork *embeddedFrontend
 	name := nest.NewHandlerName("perf.game.business")
 	engine.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		in := params[0].(invocation)
@@ -351,7 +468,12 @@ func TestNestGameLoad(t *testing.T) {
 		if second != lastSample {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			samples = append(samples, gameSample{elapsed.Seconds(), messages.completed.Load(), heartbeats.completed.Load(), m.HeapAlloc, runtime.NumGoroutine(), engine.Stats()})
+			sample := gameSample{elapsed.Seconds(), messages.completed.Load(), heartbeats.completed.Load(), m.HeapAlloc, runtime.NumGoroutine(), engine.Stats(), nil}
+			if embeddedNetwork != nil {
+				outbound := readOutboundCounters()
+				sample.Outbound = &outbound
+			}
+			samples = append(samples, sample)
 			lastSample = second
 		}
 		if !now.Before(end) {
@@ -366,14 +488,26 @@ func TestNestGameLoad(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	if os.Getenv("ROOST_NEST_GAME_GATE") == "1" {
-		if c.MessageTargets != c.Players {
-			t.Fatal("Gate load requires one declared player target per connection")
-		}
-		network = newGateFrontend(t, engine, name, units, c, stateSync)
-		if stateSync != nil {
-			stateSync.start(t, network)
-		}
+	if c.Frontend != "direct" && c.MessageTargets != c.Players {
+		t.Fatal("Gate / embedded TCP load requires one declared player target per connection")
+	}
+	switch c.Frontend {
+	case "gate":
+		gateNetwork = newGateFrontend(t, engine, name, units, c, stateSync)
+		network = gateNetwork
+	case "embedded":
+		embeddedNetwork = newEmbeddedFrontend(t, engine, name, units, c, tcpRuntime, stateSync)
+		network = embeddedNetwork
+	}
+	if stateSync != nil {
+		stateSync.start(t, network)
+	}
+	var embedded *embeddedReport
+	if embeddedNetwork != nil {
+		embedded = &embeddedReport{SceneSync: c.SceneSync, SelfSync: c.SelfSync, MaxPayloadBytes: embeddedNetwork.tcp.MaxPayloadBytes,
+			OutboundResidentBytes: embeddedNetwork.tcp.OutboundResidentBytes, WriteTimeoutMS: float64(embeddedNetwork.tcp.WriteTimeout) / float64(time.Millisecond),
+			GoroutinesAtStart: countTCPGoroutines(t), CountersAtStart: readOutboundCounters(),
+			QueuePeak: "not exported: per-connection queue depth lives in unexported gateway.tcpSession and there is no resident-bytes gauge (KNOWN-LIMITS embedded TCP outbound)"}
 	}
 	start = time.Now().Add(100 * time.Millisecond)
 	end = start.Add(c.Duration)
@@ -389,6 +523,9 @@ func TestNestGameLoad(t *testing.T) {
 	case <-done:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+	if embedded != nil {
+		embedded.GoroutinesAtEnd = countTCPGoroutines(t)
 	}
 	if network != nil {
 		if err := network.drain(); err != nil {
@@ -417,14 +554,31 @@ func TestNestGameLoad(t *testing.T) {
 	clockNow := time.Now()
 	r.ClockWallDriftNS = clockNow.UnixNano() - loadClockOrigin.UnixNano() - loadTimestamp(clockNow)
 	r.SyncReport = syncReport
+	var outboundStart *outboundCounters
+	if embedded != nil {
+		embedded.CountersDelta = readOutboundCounters().sub(embedded.CountersAtStart)
+		delta := embedded.CountersDelta
+		embedded.OutboundClean = delta.BudgetExhausted == 0 && delta.Overflow == 0 && delta.PushClosed == 0 && delta.WriteErrors == 0 && delta.PushRefusedRetried == 0 && delta.PushRefusedClosed == 0
+		embedded.Completed = embeddedNetwork.completed.Load()
+		embedded.RoundTrip = embeddedNetwork.roundTrip.result()
+		if embedded.Completed != r.Messages.Completed {
+			r.CountsVerified = false
+		}
+		if embedded.RoundTrip.P99MS > 50 {
+			r.LatencyPassed = false
+		}
+		r.Embedded = embedded
+		outboundStart = &embedded.CountersAtStart
+	}
+	r.Minutes = summarizeMinutes(samples, c.Duration, outboundStart)
 	if syncReport != nil {
 		r.EntityValuesVerified = r.EntityValuesVerified && syncReport.ValuesVerified
 		r.LatencyPassed = r.LatencyPassed && syncReport.LatencyPassed
 	}
-	if network != nil {
+	if gateNetwork != nil {
 		r.GateEnabled = true
-		r.GateCompleted = network.completed.Load()
-		r.GateRoundTrip = network.roundTrip.result()
+		r.GateCompleted = gateNetwork.completed.Load()
+		r.GateRoundTrip = gateNetwork.roundTrip.result()
 		if r.GateCompleted != r.Messages.Completed {
 			r.CountsVerified = false
 		}
@@ -459,6 +613,11 @@ func TestNestGameLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("messages=%.1f/s heartbeat=%.1f/s changes=%.1f/s p99=%.3f/%.3fms server_p99=%.3f/%.3fms counts=%v values=%v latency=%v\n", r.Messages.CompletedPerSecond, r.Heartbeats.CompletedPerSecond, r.EntityChangesPerSecond, r.Messages.Completion.P99MS, r.Heartbeats.Completion.P99MS, r.Messages.Server.Completion.P99MS, r.Heartbeats.Server.Completion.P99MS, r.CountsVerified, r.EntityValuesVerified, r.LatencyPassed)
+	if e := r.Embedded; e != nil {
+		d := e.CountersDelta
+		fmt.Printf("embedded scene_sync=%v self_sync=%v roundtrip_p99=%.3fms budget_exhausted=%d push_refused=retried:%d/closed:%d overflow=%d push_closed=%d write_errors=%d write_loops=%d->%d outbound_clean=%v\n",
+			e.SceneSync, e.SelfSync, e.RoundTrip.P99MS, d.BudgetExhausted, d.PushRefusedRetried, d.PushRefusedClosed, d.Overflow, d.PushClosed, d.WriteErrors, e.GoroutinesAtStart.WriteLoops, e.GoroutinesAtEnd.WriteLoops, e.OutboundClean)
+	}
 	if !r.CountsVerified || !r.EntityValuesVerified || !r.LatencyPassed {
 		t.Fatal("business load gate failed; full result retained")
 	}

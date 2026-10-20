@@ -92,7 +92,7 @@
 
 - [README.md](README.md)：维护手册（版本与兼容、升级回退、日常验证、故障、发版、文档规则、测试与生成代码、可读性要求）
 - [DESIGN-TODO.md](DESIGN-TODO.md)：待维护者决定的设计事项（Lockstep 历史保留、SyncBus 兜底、Drain 放弃出口、schema 迁移流程、Player 跨机迁移）
-- [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置
+- [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置，只写当前（最新版本 + main）仍有效的限制；末尾“v1.29 待补测”汇总待复测项，已修复问题的经过见 CHANGELOG / docs/release
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
 - [REFACTOR-2026-10-17-timer-scheduler.md](REFACTOR-2026-10-17-timer-scheduler.md)：timer.Scheduler 用节点状态替代 Tick 期间推迟闭包的重构方案（状态表、操作 × 状态矩阵、语义对照、panic 语义、性能预期）

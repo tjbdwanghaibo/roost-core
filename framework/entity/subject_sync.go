@@ -190,8 +190,11 @@ type SubjectSyncState struct {
 	packer          SubjectSyncPacker
 	lockEntity      subjectSyncLockFunc
 	dirtyNotifier   SubjectSyncDirtyNotifier
-	mutation        *syncMutationEntry
-	commitGate      *syncCommitGate
+	// syncOwner 是登记了本状态的同步 Manager（ClaimSyncOwner）。脏通知器、冻结内容与在途捕获在状态上各只有
+	// 一份，两个 Manager 同时登记会互相覆盖通知器、作废对方的捕获，所以同一时刻只认一个主人。
+	syncOwner  any
+	mutation   *syncMutationEntry
+	commitGate *syncCommitGate
 	// policyHolds 阻止内容越过尚未应用的空间/关系事实，不参与提交确认条件。
 	policyHolds     int
 	frozen          *frozenSubjectSync
@@ -301,6 +304,35 @@ func (s *SubjectSyncState) LastError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastError
+}
+
+// ClaimSyncOwner 让 owner（同步 Manager）独占本状态：一个内容状态只喂一个 Manager。本状态没有主人或主人就是
+// owner 时记下 owner、返回 (owner, true)；已被另一个主人持有时什么都不改，返回那个主人与 false，由调用方拒绝登记。
+// owner 为 nil 时返回 (nil, false)。主人在 ReleaseSyncOwner 之前一直有效（状态 Close 不清除它：关闭的状态不能再登记）。
+func (s *SubjectSyncState) ClaimSyncOwner(owner any) (holder any, ok bool) {
+	if s == nil || owner == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.syncOwner != nil && s.syncOwner != owner {
+		return s.syncOwner, false
+	}
+	s.syncOwner = owner
+	return owner, true
+}
+
+// ReleaseSyncOwner 在 owner 仍是主人时放开本状态，之后别的 Manager 可以登记它；不是 owner 持有时什么都不做
+// （迟到的释放不会放开别人的登记）。
+func (s *SubjectSyncState) ReleaseSyncOwner(owner any) {
+	if s == nil || owner == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.syncOwner == owner {
+		s.syncOwner = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *SubjectSyncState) SetDirtyNotifier(notifier SubjectSyncDirtyNotifier) {
