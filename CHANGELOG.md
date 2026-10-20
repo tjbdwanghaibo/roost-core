@@ -14,6 +14,7 @@
 
 - **修正（生成器）**：`internal/service/mail/collaborators.go` 的 `Broadcast()` 注释原写“投给每个在线玩家”，与 `service/mail` 的契约（`AudienceBroadcast` 的范围是一个服 / 公会 / 全体，投递策略由部署选择）不一致，会把业务引向漏发离线玩家与之后才登录的玩家的实现。现改为写明受众包含离线与后来登录的玩家、两种常见策略（任务逐个写邮箱，或存一份、玩家下次读时合并）与 `Deliver` 按（邮箱、邮件）幂等；缺省仍为 nil（拒绝广播）。只影响新生成的工程（该文件只生成一次、归业务），已有工程按需手工改注释。
 - 修前红：`TestMailBroadcastSkeletonDescribesTheWholeAudience`（`codegen/internal/roost`）报 `mail Broadcast skeleton describes the broadcast audience as online players only` 与 `does not mention "offline"`。
+- 框架是否内置“存一份 + 懒合并”的广播策略待维护者决定：[DESIGN-TODO D17](docs/maintenance/DESIGN-TODO.md#d17-全服邮件的内置投递策略)。
 
 ### Lockstep 快照恢复 P1～P5：服务端核心、Go / C# 客户端、示例与验收、现行文档（DESIGN-TODO D1 方案 B，维护者 2026-10-20 批准，§12 全部按推荐；已实施）
 

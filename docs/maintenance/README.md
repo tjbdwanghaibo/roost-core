@@ -61,6 +61,7 @@ git diff --exit-code
 | strict 成功但 Mongo 尚旧 | 投影队列、held、版本冲突、outbox | strict仅承诺WAL fsync；需要落库时用投影等待 |
 | WAL 格式拒绝 | 程序版本和codec、目录备份 | 用匹配旧程序完成落库；不删坏记录/推进checkpoint |
 | 启动投影恢复 `fatal projection version conflict ... expected=0 next=1` | 冲突的 `_id` 在 Mongo 是否为墓碑（`_deleted: true`）：是则为“删档后同 ID 重建”记录（D10 修复前写下，或直接 Create 复用了删过档的 ID） | 不删记录、不跳过、不放宽版本比较；按 [KNOWN-LIMITS“删档后同 ID 重建：违反约束或修复前写下的冲突记录”](KNOWN-LIMITS.md) 人工处置。修复后的 GetOrCreate 拒绝删过档的 ID（客户端码 `entity_deleted`）；直接 Create 必须用 id-gen 新 ID |
+| 投影 / 启动投影恢复 `fatal projection version conflict ... expected=N next=N+1 stored=M`（M ≠ N，`_id` 不是墓碑） | 运行期是否有人直接改过该文档：`stored < expected` 多为恢复了旧备份，`_last_tx` 不是本 WAL 里的事务即外部写入；`cmd/walinspect -dir <WAL目录> -snapshot <新目录>` 留证 | 不删记录、不跳过、不放宽版本比较。停进程，保留 WAL 与 Mongo 备份；把该文档 `_version` 改回错误给出的 `expected` 后重启，投影继续：WAL 记录写到的字段覆盖外部改动，没写到的字段保持库里现状（字段补丁时可能是备份与内存状态的混合，恢复后核对该实体）；外部改动要保留时，排空后按[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)的离线恢复重新写入。运行期不得直接改权威集合 |
 | Entity schema 不匹配 | 全部DAO descriptor及实际数据版本 | 校验发生在水合前；明确离线迁移计划，不自动“补默认值” |
 | Sync 不发/延迟 | held/ready、订阅来源、profile、冻结预算、水位、背压 | setter只标脏；不绕过提交水位来降低延迟 |
 | 客户端增量缺口 | epoch/base/对象存在、重连代际 | 恢复全量；不继续应用不可信增量 |

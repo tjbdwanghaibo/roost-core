@@ -39,6 +39,10 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 2. 按错误给出的事务 ID 与 `<库>/<集合>/<_id>`，在 Mongo 确认该 `_id` 是墓碑（`_deleted: true`），`roost id entity <_id>` 换算玩家 ID，`cmd/walinspect -dir <WAL目录> -snapshot <新目录>` 做一份只读副本留证（不推进 checkpoint、不跳过记录）。
 3. 线上尚未部署（维护者 2026-10-06）：停旧版本、清空该 sid 的 WAL 目录与测试库后起新版本。上线后若遇到，由维护者决定是否接受丢弃该事务（被丢弃的是删档后被错误重建的那条写入，客户端当时收到过成功），并修正复用 ID 的业务代码。见[维护手册 §4](README.md#4-故障处理)。
 
+### 运行期改档与单实体运维（D16）
+
+框架没有针对单个实体 / 玩家的运维命令（admin 只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`），方向待维护者决定（[DESIGN-TODO D16](DESIGN-TODO.md#d16-单个实体--玩家的运维入口)）。运行期直接改权威集合的结果按设计是确定的：只改字段时下一次投影覆盖改动；改 `_version`（恢复旧备份）时投影 fatal、进程 fence、重启起不来，直到人工处理（[维护手册 §4](README.md#4-故障处理)）。在线改档写成业务 GM handler，整档恢复走停服排空后的离线写回（[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)）。
+
 ### DAO 持久键（D13）
 
 定义里字段的 `bson:"x"` 就是持久键（缺省 snake_case），库里有、DAO 未声明的键不读入，下一次整文档写回即删除（维护者 2026-10-19，[DESIGN-TODO D13](DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。
@@ -139,6 +143,8 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **game-demo 副本排行**：排行准入就是奖励准入（领奖事务内的赛季通关数 + `UpdateMax`）。通关数按赛季计（维护者 2026-10-18），改 `ranking.CurrentSeason` 后新榜从 0 开始；`UpdateMax` 同分保留较早的 tie，补报的那一分在同分时按补报时间排序。
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大累计值，需要 Redis 6.2 及以上；只修复成功回复乱序导致的回退。Redis 写失败只记日志，协调器与结算索引不是一个事务，没有自动对账；Redis Cluster、跨机延迟与长稳未验证。业务将来允许扣分时需改用版本化快照或其他明确的顺序方案。
 - **game-demo 活动贡献**（维护者 2026-10-18 决定 A：只在奖励首次付款时贡献）：**已接受的代价**——付款之后、贡献之前进程崩溃或协调器调用失败，这一分永久丢失，重放不补（端点打 Warn）。协调器只在同一窗口内去重，业务在别处直接调用 Contribute 须自己保证每局一次。
+- **全服邮件投递**：`AudienceBroadcast` 只经业务提供的 `mail.Deliverer` 投递，框架没有内置策略，生成骨架缺省 nil（拒绝广播）；离线与后来登录的玩家也要收到，由业务的策略保证。是否内置“存一份 + 懒合并”待维护者决定（[DESIGN-TODO D17](DESIGN-TODO.md#d17-全服邮件的内置投递策略)）。
+- **业务时区与每日重置**：业务时钟只有偏移，没有业务时区配置与业务日边界工具；生成的部署不设 `TZ`、`main` 不嵌入 `time/tzdata`，容器内 `time.Local` 是 UTC，与开发机本地时区的跨天时刻不同。业务需要显式 `time.LoadLocation`；distroless 运行镜像是否自带 zoneinfo 尚未确认。方向待维护者决定（[DESIGN-TODO D18](DESIGN-TODO.md#d18-业务时区与业务日边界)）。
 - **Session 运行服务**：保持现状、不改为可选（维护者 2026-10-14）；后续事项见 [ACCESS-SYNC-FOLLOWUPS](ACCESS-SYNC-FOLLOWUPS.md)。
 - **观测接线**：ExportMetrics / admin 元数据不是自动外部监控或审批系统；部署实际接线与鉴权审计归部署方。
 
