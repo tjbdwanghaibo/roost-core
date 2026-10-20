@@ -1014,3 +1014,31 @@ func TestInterestSelectsSourceViewsBeforeComparingPriority(t *testing.T) {
 		t.Fatalf("source fallback lost: %+v", captured)
 	}
 }
+
+// 观察者不看见自己的实体：距离入场、整体重评与额外覆盖块三条路径都排除自身（D14 改签名前后的回归基线）。
+func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
+	manager := interestFixture(t, AOIConfig{})
+	at := spatial.Point{X: 5000, Y: 5000}
+	if err := manager.AddSubject(1, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddObserver(1, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddSubject(2, spatial.Point{X: 5100, Y: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetObservedBlocks(1, []int64{manager.BlockAt(spatial.Point{X: 5300, Y: 5000})}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MoveObserver(1, spatial.Point{X: 5010, Y: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MoveSubject(1, spatial.Point{X: 5010, Y: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 2, Kind: InterestEnter, Band: 0}})
+	if events := (blockSource{manager: manager}).Flush(); len(events) != 0 {
+		t.Fatalf("the observer saw its own coverage block: %+v", events)
+	}
+}
