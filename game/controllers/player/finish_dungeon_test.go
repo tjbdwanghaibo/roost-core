@@ -1,0 +1,382 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	gameactivity "example.com/planet/game/activity"
+	"example.com/planet/game/dungeon"
+	playerentity "example.com/planet/game/entities/player"
+	worldentity "example.com/planet/game/entities/world"
+	gamehandler "example.com/planet/game/handler"
+	playeraccess "example.com/planet/game/playeraccess"
+	"example.com/planet/game/ranking"
+	"example.com/planet/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
+)
+
+// 副本通关榜的承诺：同一局只计一次，与奖励账本同一个准入。
+//
+// rank 的 UpdateAdd 只记每个玩家最近 8 个请求 ID，是去重环而不是账本；端点在奖励重放（Claimed=false）
+// 时也要提交，才能补上“奖励已提交、排行没提交就崩溃”的那一分。两者叠加时，一局在领奖窗口内、却被
+// 后来 8 局挤出去重环之后重放，会再加一分。这里经正式 Controller、生成 Sender、Nest、Player / World
+// handler 与真实 Redis 上的 rank RedisStore 走一遍，session 返回固定的成功终态。
+
+type finishDungeonGetter map[int64]entity.IThreadSafeEntity
+
+func (g finishDungeonGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g finishDungeonGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	values := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		values[i] = value
+	}
+	return values, nil
+}
+
+// 本用例只验证端点与排行的组合行为，不覆盖 WAL fsync 与 Mongo 落库。
+type finishDungeonCommitter struct{}
+
+func (finishDungeonCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// session.Finish 的重放契约：同一局始终返回原来的成功终态与结束时间。
+type finishDungeonSessions struct {
+	svcsession.Session
+	resolvedAt int64
+}
+
+func (s finishDungeonSessions) Finish(_ context.Context, owner int64, runID string, _ svcsession.State, _ string) (svcsession.Run, error) {
+	return svcsession.Run{ID: runID, OwnerID: owner, Kind: "dungeon", State: svcsession.StateSucceeded, FinishedAtUnix: s.resolvedAt}, nil
+}
+
+// rankService 是 svcrank.Rank 的别名：直接内嵌接口会得到名为 Rank 的字段，与接口的 Rank 方法同名。
+type rankService = svcrank.Rank
+
+// flakyRanking 让下一次 Submit 失败一次，模拟“奖励已提交、排行服务这次没写进去”。
+type flakyRanking struct {
+	rankService
+	failNext atomic.Bool
+}
+
+func (r *flakyRanking) Submit(ctx context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	if r.failNext.CompareAndSwap(true, false) {
+		return svcrank.Entry{}, errors.New("rank unavailable (injected)")
+	}
+	return r.rankService.Submit(ctx, board, score, mode, requestID)
+}
+
+// finishDungeonHarness 是两条用例共用的正式链路：Controller、生成 Sender、Nest 与 Player / World handler，
+// session 返回固定的成功终态（结束时间取真实时钟，领奖窗口一直开着）。
+type finishDungeonHarness struct {
+	controller *Controller
+	subject    *playerentity.Player
+	world      *worldentity.World
+	ctx        *playeraccess.Context
+}
+
+func newFinishDungeonHarness(t *testing.T, board svcrank.Rank) *finishDungeonHarness {
+	t.Helper()
+	playerentity.RegisterEntity()
+	worldentity.RegisterEntity()
+	gamehandler.RegisterClaimDungeonNestHandlers()
+	const playerID int64 = 4242
+	playerFullID, err := entity.BuildEntityID(playerID, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldID, err := entity.BuildEntityID(1, worldentity.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtPlayer, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: playerentity.EntityKindPlayer, Id: playerFullID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtWorld, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: worldentity.EntityKindWorld, Id: worldID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := builtPlayer.(*playerentity.Player)
+	world := builtWorld.(*worldentity.World)
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(finishDungeonGetter{playerFullID: subject, worldID: world}),
+		nest.NestOptionWithTransactionCommitter(finishDungeonCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	controller := &Controller{
+		registry: app.NewRegistry(viper.New()), nestClient: engine, worldID: worldID,
+		sessions: finishDungeonSessions{resolvedAt: clock.Now().Unix()}, ranking: board,
+	}
+	return &finishDungeonHarness{
+		controller: controller, subject: subject, world: world,
+		ctx: &playeraccess.Context{BaseCtx: context.Background(), PlayerID: playerID},
+	}
+}
+
+func TestDungeonClearsBoardCountsEachRunOnceRealRedis(t *testing.T) {
+	addr := os.Getenv("ROOST_REVIEW_REDIS")
+	if addr == "" {
+		t.Skip("isolated Redis required (ROOST_REVIEW_REDIS)")
+	}
+	prefix := redistest.Prefix(t, addr, "review:dungeon-clears")
+	client, err := driver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	store, err := svcrank.NewRedisStore(client, svcrank.RedisConfig{Prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	board := &flakyRanking{rankService: store}
+	harness := newFinishDungeonHarness(t, board)
+	controller, subject, world, ctx := harness.controller, harness.subject, harness.world, harness.ctx
+	playerID := ctx.PlayerID
+	finish := func(runID string) *pb.FinishDungeonResponse {
+		t.Helper()
+		response, err := controller.HandleFinishDungeon(ctx, &pb.FinishDungeonRequest{RunID: runID, Success: true})
+		if err != nil || response == nil || response.Code != 0 {
+			t.Fatalf("finish %s: response=%+v err=%v", runID, response, err)
+		}
+		return response
+	}
+	boardValue := func() int64 {
+		t.Helper()
+		entry, found, err := store.Rank(context.Background(), ranking.ClearsBoard(), playerID)
+		if err != nil || !found {
+			t.Fatalf("rank: found=%v err=%v", found, err)
+		}
+		return entry.Score.Value
+	}
+
+	// 十局：第一局之后还有 9 局，超过 rank 去重环的 8 个槽位。
+	for i := 0; i < 10; i++ {
+		if response := finish(fmt.Sprintf("run-%d", i)); response.ExpGranted != dungeon.ClearExp {
+			t.Fatalf("clear %d granted %d exp, want %d", i, response.ExpGranted, dungeon.ClearExp)
+		}
+	}
+	if got := boardValue(); got != 10 {
+		t.Fatalf("ten clears put %d on the board, want 10", got)
+	}
+
+	// 领奖窗口内重放第一局：奖励不再发，排行也不能再加。
+	if replay := finish("run-0"); replay.ExpGranted != 0 {
+		t.Fatalf("replay of run-0 granted %d exp again", replay.ExpGranted)
+	}
+	if got := boardValue(); got != 10 {
+		t.Fatalf("ten clears then replaying the first gives %d leaderboard points; want 10 (reward claims remain %d)", got, subject.Dao().DungeonClaimsLen())
+	}
+
+	// 并发重放几局旧的：同样不加分。
+	var wg sync.WaitGroup
+	for i := 1; i <= 4; i++ {
+		for range 2 {
+			runID := fmt.Sprintf("run-%d", i)
+			wg.Go(func() {
+				response, err := controller.HandleFinishDungeon(ctx, &pb.FinishDungeonRequest{RunID: runID, Success: true})
+				if err != nil || response == nil || response.Code != 0 || response.ExpGranted != 0 {
+					t.Errorf("concurrent replay %s: response=%+v err=%v", runID, response, err)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	if got := boardValue(); got != 10 {
+		t.Fatalf("concurrent replays of old runs left %d on the board, want 10", got)
+	}
+
+	// 奖励提交了、排行这次没写进去：重放同一局把漏掉的一分补上，且只补一分。
+	board.failNext.Store(true)
+	if response := finish("run-10"); response.ExpGranted != dungeon.ClearExp {
+		t.Fatalf("clear run-10 granted %d exp, want %d", response.ExpGranted, dungeon.ClearExp)
+	}
+	if got := boardValue(); got != 10 {
+		t.Fatalf("a clear whose submit failed is already on the board: %d", got)
+	}
+	finish("run-10")
+	finish("run-10")
+	if got := boardValue(); got != 11 {
+		t.Fatalf("replaying a clear whose submit failed left %d on the board, want 11", got)
+	}
+	if world.Dao().GetExpGranted() != 11*dungeon.ClearExp {
+		t.Fatalf("World recorded %d exp, want %d", world.Dao().GetExpGranted(), 11*dungeon.ClearExp)
+	}
+}
+
+// 活动贡献的承诺：一局只在奖励首次付款时贡献一次，重放不贡献。
+//
+// 协调器按（窗口, 玩家, clear:<runID>）去重，而窗口由贡献那一刻的业务时钟选（每 gameactivity.WindowSeconds
+// 一个）。领奖窗口有 4 小时，同一局跨过窗口边界后重放会落进新窗口、键不同，若重放也贡献就再记一分（一局最多
+// 可进 48 个窗口，影响按名次发的活动邮件）。维护者 2026-10-18 决定只在 ClaimResult.Claimed（权威事务里真正
+// 付款）时贡献；代价是“奖励已付款、贡献没写进去”时这一分不再补，下面最后一段把这个代价钉住。
+//
+// clockedActivities 与正式 ActivityRunner.Contribute 走同一条协调器路径：用可拨的业务时钟选窗口
+// （gameactivity.ID）、同一个聚合键（gameactivity.Key）与请求 ID（gameactivity.ProgressRequestID），窗口
+// 不存在时开窗再记；协调器是正式 svcactivity.Service（内存版本存储，时钟与这里同一个）。正式 Runner 在
+// internal/service 包里（它导入本包），这里不能直接构造；它旁边的 Redis 结算榜由
+// TestActivityBoardKeepsTheLatestCumulativeScore 覆盖。
+type clockedActivities struct {
+	activityRunner
+	coordinator *svcactivity.Service
+	groupID     string
+	nowUnix     atomic.Int64
+	failNext    atomic.Bool
+}
+
+func (a *clockedActivities) now() time.Time { return time.Unix(a.nowUnix.Load(), 0) }
+
+func (a *clockedActivities) Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error) {
+	activityID := gameactivity.ID(a.now().Unix())
+	if a.failNext.CompareAndSwap(true, false) {
+		return activityID, svcactivity.Participant{}, errors.New("activity coordinator unavailable (injected)")
+	}
+	key := gameactivity.Key(a.groupID, activityID)
+	apply := func() (svcactivity.Participant, error) {
+		return a.coordinator.ApplyProgress(ctx, key, strconv.FormatInt(playerID, 10), gameactivity.ProgressRequestID(runID),
+			svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
+	}
+	participant, err := apply()
+	if svcactivity.Code(err) == svcactivity.CodeMissing {
+		if _, openErr := a.coordinator.OpenActivity(ctx, key, []int32{1000}); openErr != nil && svcactivity.Code(openErr) != svcactivity.CodeExists {
+			return activityID, svcactivity.Participant{}, openErr
+		}
+		participant, err = apply()
+	}
+	if err != nil {
+		return activityID, svcactivity.Participant{}, err
+	}
+	return activityID, participant, nil
+}
+
+// score 是协调器里这个玩家在 activityID 窗口的分数；窗口或参与者不存在时为 0。
+func (a *clockedActivities) score(t *testing.T, activityID string, playerID int64) int64 {
+	t.Helper()
+	participant, found, err := a.coordinator.LookupParticipant(context.Background(), gameactivity.Key(a.groupID, activityID), strconv.FormatInt(playerID, 10))
+	if svcactivity.Code(err) == svcactivity.CodeMissing || (err == nil && !found) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("lookup %s: %v", activityID, err)
+	}
+	return participant.Score
+}
+
+// acceptingRanking 接受每次提交、什么都不记：这条用例只看活动贡献，排行由上面的真实 Redis 用例覆盖。
+type acceptingRanking struct{ rankService }
+
+func (acceptingRanking) Submit(context.Context, svcrank.Board, svcrank.Score, svcrank.UpdateMode, string) (svcrank.Entry, error) {
+	return svcrank.Entry{}, nil
+}
+
+func TestAReplayContributesNothingToTheActivity(t *testing.T) {
+	harness := newFinishDungeonHarness(t, acceptingRanking{})
+	groups, err := svcactivity.ParseGroups([]byte("groups:\n  - id: review\n    game_sids: [1000]\n"), "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activities := &clockedActivities{groupID: "review"}
+	// 停在窗口末尾前一秒：真实时钟下最常见的跨窗口重放就是“边界前通关、边界后重试”。
+	activities.nowUnix.Store(gameactivity.WindowStart(clock.Now().Unix()) + gameactivity.WindowSeconds - 1)
+	coordinator, err := svcactivity.New(svcactivity.Config{
+		Groups:         &groups,
+		Activities:     versionstore.NewMemoryStore[svcactivity.Key, svcactivity.Activity](),
+		Participants:   versionstore.NewMemoryStore[svcactivity.ParticipantKey, svcactivity.Participant](),
+		Ledger:         versionstore.NewMemoryStore[svcactivity.RequestKey, svcactivity.ProgressReservation](),
+		Audits:         versionstore.NewMemoryStore[svcactivity.Key, svcactivity.NotifyAuditLog](),
+		Dispatches:     versionstore.NewMemoryStore[svcactivity.DispatchKey, svcactivity.Dispatch](),
+		Windows:        versionstore.NewMemoryStore[string, svcactivity.Window](),
+		ReservationTTL: 10 * time.Minute,
+		Now:            activities.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activities.coordinator = coordinator
+	var runner activityRunner = activities
+	harness.controller.activities.Store(&runner)
+	playerID := harness.ctx.PlayerID
+	finish := func(runID string) *pb.FinishDungeonResponse {
+		t.Helper()
+		response, err := harness.controller.HandleFinishDungeon(harness.ctx, &pb.FinishDungeonRequest{RunID: runID, Success: true})
+		if err != nil || response == nil || response.Code != 0 {
+			t.Fatalf("finish %s: response=%+v err=%v", runID, response, err)
+		}
+		return response
+	}
+
+	// 首次付款：贡献进当前窗口，并报出窗口 id。
+	first := finish("run-1")
+	firstWindow := gameactivity.ID(activities.now().Unix())
+	if first.ExpGranted != dungeon.ClearExp || first.ActivityID != firstWindow {
+		t.Fatalf("first clear: exp=%d activity=%q, want exp=%d in window %s", first.ExpGranted, first.ActivityID, dungeon.ClearExp, firstWindow)
+	}
+	if got := activities.score(t, firstWindow, playerID); got != 1 {
+		t.Fatalf("first clear counted %d in window %s, want 1", got, firstWindow)
+	}
+
+	// 跨过窗口边界后重放同一局（领奖窗口仍开着）：不付款，也不能在新窗口再记一分。
+	activities.nowUnix.Add(gameactivity.WindowSeconds)
+	replayWindow := gameactivity.ID(activities.now().Unix())
+	if replayWindow == firstWindow {
+		t.Fatalf("the clock did not leave window %s", firstWindow)
+	}
+	replay := finish("run-1")
+	if replay.ExpGranted != 0 {
+		t.Fatalf("replay of run-1 granted %d exp again", replay.ExpGranted)
+	}
+	if got := activities.score(t, replayWindow, playerID); got != 0 || replay.ActivityID != "" {
+		t.Fatalf("first window %s score=%d; replay of the same run in window %s score=%d activity=%q; want 0 and no window (a replay contributes nothing)",
+			firstWindow, activities.score(t, firstWindow, playerID), replayWindow, got, replay.ActivityID)
+	}
+
+	// 对照：新窗口里的新一局照常贡献，说明上面的 0 不是贡献整体失效。
+	if second := finish("run-2"); second.ActivityID != replayWindow || activities.score(t, replayWindow, playerID) != 1 {
+		t.Fatalf("a new clear in window %s: activity=%q score=%d, want the window and 1", replayWindow, second.ActivityID, activities.score(t, replayWindow, playerID))
+	}
+
+	// 已决定的代价：首次付款时贡献失败（如协调器不可用、或付款后进程崩溃），这一分不再由重放补上。
+	activities.failNext.Store(true)
+	if third := finish("run-3"); third.ExpGranted != dungeon.ClearExp || third.ActivityID != "" {
+		t.Fatalf("clear run-3 with the coordinator down: exp=%d activity=%q, want the reward and no window", third.ExpGranted, third.ActivityID)
+	}
+	finish("run-3")
+	if got := activities.score(t, replayWindow, playerID); got != 1 {
+		t.Fatalf("replaying run-3 after its contribution failed left score=%d in window %s, want 1 (a replay does not refill)", got, replayWindow)
+	}
+	if harness.world.Dao().GetExpGranted() != 3*dungeon.ClearExp {
+		t.Fatalf("World recorded %d exp, want %d", harness.world.Dao().GetExpGranted(), 3*dungeon.ClearExp)
+	}
+}

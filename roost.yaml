@@ -1,0 +1,103 @@
+# Roost project manifest. Run make sync after editing.
+# versions.* defaults to latest; go.mod records the concrete release resolved
+# for one build. Minimum: core v1.29.0. The generator runs at versions.core.
+schema: 1
+project:
+    name: planet
+    module: example.com/planet
+versions:
+    core: latest
+cicd:
+    provider: github
+    registry: ghcr
+    environments:
+        - staging
+        - production
+    deploy:
+        - shell
+        - docker
+        - k8s
+shared_mods:
+    - lock
+    - ops
+    - statslog
+services:
+    account:
+        framework: account
+        port_block: 1
+    activity:
+        framework: activity
+        port_block: 2
+    chat:
+        framework: chat
+        port_block: 3
+    game:
+        mods:
+            - configdata
+            - dataengine
+            - mongo
+            - nats
+            - nest
+            - redis
+            - remote_entity
+            - saga
+        uses:
+            - account
+            - activity
+            - chat
+            - global
+            - mail
+            - match
+            - platform
+            - rank
+            - session
+        port_block: 0
+    global:
+        framework: global
+        port_block: 4
+    mail:
+        framework: mail
+        port_block: 5
+    match:
+        framework: match
+        port_block: 6
+    platform:
+        framework: platform
+        port_block: 7
+    rank:
+        framework: rank
+        port_block: 8
+    session:
+        framework: session
+        port_block: 9
+access:
+    player:
+        service: game
+        transports:
+            - tcp
+features:
+    - attribute
+    - config
+    - dao
+    - entity
+    - errcode
+    - nest
+    - protocol
+    - saga
+sagas:
+    - gift_item
+ids:
+    component:
+        min: 2000
+        max: 2999
+    entity:
+        min: 1
+        max: 255
+    errcode:
+        min: 100000
+        max: 199999
+    protocol:
+        groups:
+            game:
+                min: 10000
+                max: 19999

@@ -1,0 +1,77 @@
+package handler
+
+import (
+	"example.com/planet/game/dungeon"
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+	apperrors "example.com/planet/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// handlerClaimDungeon pays for one cleared run, at most once.
+//
+// It is the AddExp transaction plus an identity: the run id is recorded on
+// the Player in the same WAL record as the experience and the World's
+// counter, so "this run was paid" and "the payment happened" are the same
+// durable fact. A replay finds the run id already there and returns
+// Claimed=false without touching anything — and because the record and the
+// payment commit together, a crash between them cannot leave a run that is
+// marked paid but was not (rollback=undo takes the record back with the rest).
+//
+// Why this is not the endpoint's job: the endpoint cannot read-then-write
+// atomically, so two replays arriving together would both see "not claimed".
+//
+// The ledger cannot be kept forever, so the identity it remembers has to
+// stop being replayable at some point. That point is resolvedAtUnix + the
+// claim window, and it is checked **here**, in the same transaction that
+// would pay — one choke point for every entry into the reward, sharing the
+// predicate with the pruning. A refusal is an error, not a
+// quiet zero: a player whose reward really did time out unclaimed has to be
+// visible to an operator, or the fix for double-paying becomes silent
+// under-paying.
+//
+// The same transaction counts the clear for the leaderboard season it is
+// told (season, the clears board's season): the count moves only when this
+// call pays, and both a payment and a replay report it (ClaimResult.Clears).
+// So the board point is admitted by exactly this window and this ledger — a
+// run too old to pay is refused before anything is counted, and a replay
+// inside the window resubmits a snapshot rather than adding a point. There is
+// no second ledger, with its own forgetting rule, to keep in line with this
+// one (game/ranking says why the rank service's request ring cannot be it).
+//
+//roost:nest rollback=undo durability=strict
+func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity, runID string, amount int64, resolvedAtUnix int64, nowUnix int64, season int64) (dungeon.ClaimResult, error) {
+	if runID == "" || season <= 0 {
+		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonRun, nil, "run_id", runID, "season", season)
+	}
+	// The window is judged at the time this transaction executes, not the
+	// time the endpoint read before queueing (executionNowUnix): a claim that
+	// waited behind a long queue must not reopen a window its ledger record
+	// has already been pruned behind.
+	nowUnix = executionNowUnix(nowUnix)
+	if dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix) {
+		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonClaimWindow, nil, "run_id", runID, "resolved_at", resolvedAtUnix, "now", nowUnix)
+	}
+	if target.ProfileComp().DungeonRunClaimed(runID) {
+		// Already paid. Not an error: the client asked again for something it
+		// already has, and the honest answer is "nothing happened" — plus the
+		// current count, so the caller can bring the board up to it.
+		return dungeon.ClaimResult{Clears: target.ProfileComp().DungeonClears(season)}, nil
+	}
+	// 经验范围在写账本之前校验：超限的奖励不留下“已领取”记录，也不靠 undo 撤回账本。
+	if err := checkExpGrant(target, stats, amount); err != nil {
+		return dungeon.ClaimResult{}, err
+	}
+	if !target.ProfileComp().ClaimDungeonRun(runID, resolvedAtUnix, nowUnix) {
+		return dungeon.ClaimResult{Clears: target.ProfileComp().DungeonClears(season)}, nil
+	}
+	gained, err := target.ProfileComp().AddExp(amount)
+	if err != nil {
+		return dungeon.ClaimResult{}, err
+	}
+	if err := stats.StatsComp().RecordExp(amount); err != nil {
+		return dungeon.ClaimResult{}, err
+	}
+	clears := target.ProfileComp().CountDungeonClear(season)
+	return dungeon.ClaimResult{Claimed: true, ExpGranted: amount, LevelsGained: gained, Clears: clears}, nil
+}

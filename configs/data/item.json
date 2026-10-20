@@ -1,0 +1,23 @@
+[
+  {
+    "attack": 0,
+    "hp": 0,
+    "id": 1001,
+    "max_stack": 99,
+    "name": "Health Potion"
+  },
+  {
+    "attack": 0,
+    "hp": 0,
+    "id": 1002,
+    "max_stack": 99,
+    "name": "Mana Potion"
+  },
+  {
+    "attack": 15,
+    "hp": 5,
+    "id": 2001,
+    "max_stack": 1,
+    "name": "Iron Sword"
+  }
+]

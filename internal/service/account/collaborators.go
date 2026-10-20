@@ -1,0 +1,206 @@
+// Package account supplies the collaborators the account service needs from
+// this project. The game-demo template wrote this file once; roost-codegen
+// will not overwrite it.
+package account
+
+import accountdomain "github.com/tjbdwanghaibo/roost-core/service/account"
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// DemoChannel is the one login channel this demo accepts. A real project has
+// one Channel per platform (an app store, a device attestation service, …)
+// and a verifier that calls that platform.
+const DemoChannel accountdomain.Channel = "demo"
+
+// demoCredentialPrefix: the credential that "proves" open id X is "demo:X".
+const demoCredentialPrefix = "demo:"
+
+// Verifier confirms a login identity with its channel.
+//
+// THIS IS NOT IDENTITY VERIFICATION. It accepts any open id whose credential
+// is the open id with a fixed prefix, so anyone can log in as anyone. It does
+// two things the real one must also do — it fails closed on every channel it
+// does not know, and it returns the identity it confirmed rather than the one
+// submitted — and nothing else. Replace the body with a call to the platform
+// before this project takes outside traffic.
+func Verifier() accountdomain.IdentityVerifier {
+	return accountdomain.VerifierFunc(func(_ context.Context, identity accountdomain.Identity) (accountdomain.Verified, error) {
+		if identity.Channel != DemoChannel {
+			return accountdomain.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this demo (only %q is)", accountdomain.ErrIdentityDenied, identity.Channel, DemoChannel)
+		}
+		openID, ok := strings.CutPrefix(identity.Credential, demoCredentialPrefix)
+		if !ok || openID == "" || openID != identity.OpenID {
+			return accountdomain.Verified{}, fmt.Errorf("%w: demo credential does not match the open id", accountdomain.ErrIdentityDenied)
+		}
+		return accountdomain.Verified{Channel: DemoChannel, OpenID: openID}, nil
+	})
+}
+
+// playerIDCounterKey is the Redis key the demo's player id counter lives
+// under: <account.key_prefix>:player_id, beside the accounts, roles and server
+// registrations the account service keeps under the same prefix.
+// Two deployments sharing one Redis database are told apart
+// by that prefix, so they must not share one counter, and a cleanup by prefix
+// must take the counter with the rest. A deployment that changes its prefix
+// while keeping its data moves every key under the old prefix — the counter
+// with them; the account store would be lost otherwise anyway.
+func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
+
+// retiredPlayerIDCounterKey is the fixed key the counter used before it moved under
+// the deployment's prefix. It is no longer read as a counter: while it exists every
+// allocation is refused (refuseRetiredCounter), because counting from 0 under the
+// prefix would hand out ids that key already handed out, and silently continuing
+// from it is the compatibility path the project dropped (not deployed yet).
+//
+// The key is reserved: a prefix whose counter key would be this key
+// (account.key_prefix=roost:demo) is refused in BindRegistry, before any Redis
+// call. Otherwise that deployment's first allocation would create the key and
+// every restart or new replica would refuse its own live counter as old data.
+// Because of that, a retired key seen at allocation time is never this
+// deployment's counter — but it may be the live counter of another deployment
+// on the same Redis that still runs with the reserved prefix, so the refusal
+// never tells the operator to delete it.
+const retiredPlayerIDCounterKey = "roost:demo:player_id"
+
+// errRetiredPlayerIDCounter is the refusal while retiredPlayerIDCounterKey exists.
+var errRetiredPlayerIDCounter = errors.New("demo player id allocator: retired counter key " + retiredPlayerIDCounterKey + " is still present and no longer read")
+
+// errReservedCounterPrefix is the configuration error for an account.key_prefix
+// whose counter key would be retiredPlayerIDCounterKey.
+var errReservedCounterPrefix = errors.New("demo player id allocator: account.key_prefix puts the player id counter at the retired key " + retiredPlayerIDCounterKey)
+
+// firstPlayerID keeps demo ids clear of the small numbers hand-written test
+// data tends to use.
+const firstPlayerID int64 = 100_000
+
+type redisHandle struct {
+	client     fredis.IRedis
+	counterKey string
+
+	// checked is set once refuseRetiredCounter has seen the retired key absent in
+	// this process; checkMu makes concurrent first allocations wait for it.
+	checked atomic.Bool
+	checkMu sync.Mutex
+}
+
+// refuseRetiredCounter refuses allocation while the retired fixed counter key
+// exists. It writes nothing; once the key has been seen absent the process does
+// not look again.
+func (handle *redisHandle) refuseRetiredCounter(ctx context.Context) error {
+	if handle.checked.Load() {
+		return nil
+	}
+	handle.checkMu.Lock()
+	defer handle.checkMu.Unlock()
+	if handle.checked.Load() {
+		return nil
+	}
+	_, err := handle.client.Get(ctx, retiredPlayerIDCounterKey)
+	switch {
+	case errors.Is(err, fredis.ErrNil):
+		handle.checked.Store(true)
+		return nil
+	case err != nil:
+		return fmt.Errorf("demo player id allocator: check retired counter %s: %w", retiredPlayerIDCounterKey, err)
+	default:
+		return fmt.Errorf("%w: first confirm it is not the live counter of a deployment on this Redis still configured with account.key_prefix=roost:demo; "+
+			"if it is the old counter, stop allocation and move its value to %s (only if that key does not exist yet) before removing it, "+
+			"otherwise give this deployment a Redis without that key",
+			errRetiredPlayerIDCounter, handle.counterKey)
+	}
+}
+
+// redisAllocator mints player ids from one INCR counter in the account
+// server's Redis. That satisfies the allocator contract — the counter is
+// durable and shared across every replica and restart — where a per-process
+// counter or a timestamp would not.
+//
+// It gets the client through account.RegistryBound: collaborators are built
+// before the app exists, so the account Mod hands over the registry in
+// Provide, after the Redis Mod has published its client.
+type redisAllocator struct {
+	handle atomic.Pointer[redisHandle]
+}
+
+func (allocator *redisAllocator) BindRegistry(registry *app.Registry) error {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return fmt.Errorf("demo player id allocator: %w", err)
+	}
+	// The same account.key_prefix the account Mod reads in Init.
+	prefix, err := account.KeyPrefix(registry.Config())
+	if err != nil {
+		return fmt.Errorf("demo player id allocator: %w", err)
+	}
+	// 在任何 Redis 调用之前拒绝保留前缀：计数键等于退役键时，第一次分配会创建它，之后的重启 / 新副本把这份部署自己的计数器当旧数据拒绝。
+	if playerIDCounterKey(prefix) == retiredPlayerIDCounterKey {
+		return fmt.Errorf("%w: account.key_prefix=%q is reserved; choose another prefix "+
+			"(a deployment already running on it must stop writes and move every key under the prefix, the counter included, to the new prefix)",
+			errReservedCounterPrefix, prefix)
+	}
+	allocator.handle.Store(&redisHandle{client: client, counterKey: playerIDCounterKey(prefix)})
+	return nil
+}
+
+// Allocate ignores serverID: one global counter is already unique across
+// servers. Production allocators usually fold the server into the id (server
+// in the high bits, counter in the low) so an id says where the role lives.
+func (allocator *redisAllocator) Allocate(ctx context.Context, _ int32) (int64, error) {
+	handle := allocator.handle.Load()
+	if handle == nil {
+		return 0, errors.New("demo player id allocator: not bound to a registry (the account Mod binds it in Provide)")
+	}
+	if err := handle.refuseRetiredCounter(ctx); err != nil {
+		return 0, err
+	}
+	next, err := handle.client.Incr(ctx, handle.counterKey)
+	if err != nil {
+		return 0, fmt.Errorf("demo player id allocator: %w", err)
+	}
+	return firstPlayerID + next, nil
+}
+
+var (
+	_ accountdomain.PlayerIDAllocator = (*redisAllocator)(nil)
+	_ account.RegistryBound           = (*redisAllocator)(nil)
+)
+
+// Allocator mints player ids per game server.
+func Allocator() accountdomain.PlayerIDAllocator {
+	return &redisAllocator{}
+}
+
+// NameRules validates role names. The default bounds length and refuses
+// whitespace; replace it with the project's own rules.
+func NameRules() accountdomain.NameValidator {
+	return accountdomain.NameValidatorFunc(func(raw string) error {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || len(trimmed) > 32 {
+			return errors.New("name must be 1–32 characters")
+		}
+		if strings.ContainsAny(trimmed, " \t\n") {
+			return errors.New("name must not contain whitespace")
+		}
+		return nil
+	})
+}
+
+// Metrics receives the service's counters. The default writes them into the
+// process's metrics registry, served as service_* series on the ops /metrics
+// endpoint (labels service, op, reason, name, key). Turn them off with
+// service_metrics.enabled: false in config, or by returning nil here; nil
+// never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("account") }

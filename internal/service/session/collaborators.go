@@ -1,0 +1,36 @@
+// Package session supplies the collaborators the session service needs from
+// this project. The game-demo template wrote this file once; roost-codegen
+// will not overwrite it.
+package session
+
+import (
+	"context"
+	"log/slog"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/service/session"
+)
+
+// Release frees a resource a run attached — a dungeon instance, a seat in a
+// room, a reservation on another service — when the run finishes, is left,
+// or expires. 释放成功后才保存持久标记；回复或标记丢失可能重复调用。
+// 实际业务必须按 run.ID/resource 身份幂等，不能假设 exactly once。
+//
+// The demo's dungeon holds nothing outside the session service itself, so
+// releasing is a log line and a nil. A real game frees the instance here and
+// returns an error only when the resource is still held — the service keeps
+// it pending and retries on the next Enter / sweep, which is the retry a
+// leaked instance needs.
+func Release() session.Releaser {
+	return session.ReleaserFunc(func(_ context.Context, run session.Run, resource session.Resource) error {
+		slog.Info("session: resource released", "run_id", run.ID, "owner_id", run.OwnerID, "kind", resource.Kind, "id", resource.ID)
+		return nil
+	})
+}
+
+// Metrics receives the service's counters. The default writes them into the
+// process's metrics registry, served as service_* series on the ops /metrics
+// endpoint (labels service, op, reason, name, key). Turn them off with
+// service_metrics.enabled: false in config, or by returning nil here; nil
+// never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("session") }

@@ -1,0 +1,252 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	db "example.com/planet/db"
+	"example.com/planet/game/dungeon"
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+	syncsender "example.com/planet/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// The clear reward is paid at most once per run, and the ledger that promises
+// it is bounded. Those two only hold together if forgetting a record and
+// refusing a claim are the same condition — otherwise there is a moment when
+// the run is forgotten but still payable, and the player collects twice (a
+// run succeeds, hours later another run's claim prunes its record, and
+// replaying the first pays a second 100 exp).
+//
+// Same harness idea as claim_mail_reward_test.go, with two entities: the
+// reward transaction touches the Player and the World's counter.
+
+// clearsSeason is the leaderboard season the claims in these tests count for.
+const clearsSeason int64 = 1
+
+type multiEntityGetter map[int64]entity.IThreadSafeEntity
+
+func (g multiEntityGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g multiEntityGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Client) {
+	t.Helper()
+	subject, counters, client, _ := newDungeonClaimHarnessWithCommitter(t)
+	return subject, counters, client
+}
+
+func newDungeonClaimHarnessWithCommitter(t *testing.T) (*player.Player, *world.World, nest.Client, *recordingCommitter) {
+	t.Helper()
+	player.RegisterEntity()
+	world.RegisterEntity()
+	RegisterClaimDungeonNestHandlers()
+
+	playerID, err := entity.BuildEntityID(4242, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldID, err := entity.BuildEntityID(1, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtPlayer, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: playerID})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	builtWorld, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: worldID})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	subject, ok := builtPlayer.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", builtPlayer)
+	}
+	counters, ok := builtWorld.(*world.World)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", builtWorld)
+	}
+	committer := &recordingCommitter{}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(multiEntityGetter{playerID: builtPlayer, worldID: builtWorld}),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return subject, counters, engine, committer
+}
+
+func TestDungeonClearIsPaidOnce(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	first, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-1", dungeon.ClearExp, now, now, clearsSeason)
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if !first.Claimed || first.ExpGranted != dungeon.ClearExp {
+		t.Fatalf("first claim = %+v, want the clear's exp granted", first)
+	}
+	replay, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "run-1", dungeon.ClearExp, now, now, clearsSeason)
+	if err != nil {
+		t.Fatalf("replayed claim: %v", err)
+	}
+	if replay.Claimed || replay.ExpGranted != 0 {
+		t.Fatalf("replayed claim = %+v, want nothing granted", replay)
+	}
+}
+
+// 通关数是排行的来源，它与奖励同一个准入：只在这笔事务真正付款时加一，重放（不论隔了多少局）只报当前值，
+// 窗口外的一局在计数之前就被拒绝；按赛季分开，并随 Player 持久化。
+func TestTheClearCountMovesOnlyWhenARunIsPaid(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const now int64 = 1_800_000_000
+	pinBusinessClock(t, now)
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+	claim := func(runID string, resolvedAt, season int64) (dungeon.ClaimResult, error) {
+		return sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), runID, dungeon.ClearExp, resolvedAt, now, season)
+	}
+	for i := 1; i <= 10; i++ {
+		result, err := claim(fmt.Sprintf("run-%d", i), now, clearsSeason)
+		if err != nil || !result.Claimed || result.Clears != int64(i) {
+			t.Fatalf("clear %d = %+v err=%v, want it paid and counted as clear %d", i, result, err, i)
+		}
+	}
+	replay, err := claim("run-1", now, clearsSeason)
+	if err != nil || replay.Claimed || replay.Clears != 10 {
+		t.Fatalf("replaying the first of ten clears = %+v err=%v, want unpaid with the current count 10", replay, err)
+	}
+	if _, err := claim("stale-run", now-dungeon.ClaimWindowSeconds-1, clearsSeason); err == nil {
+		t.Fatal("a run past its claim window was accepted")
+	}
+	if got := subject.ProfileComp().DungeonClears(clearsSeason); got != 10 {
+		t.Fatalf("after a refused claim the count is %d, want 10", got)
+	}
+	if _, err := claim("seasonless-run", now, 0); err == nil {
+		t.Fatal("a claim naming no season was accepted")
+	}
+
+	// 换赛季：新榜从 0 开始，上一季的数不带过去；上一季的局在新赛季重放也不计数。
+	next, err := claim("run-11", now, clearsSeason+1)
+	if err != nil || !next.Claimed || next.Clears != 1 {
+		t.Fatalf("the first clear of the next season = %+v err=%v, want counted as 1", next, err)
+	}
+	if replay, err := claim("run-2", now, clearsSeason+1); err != nil || replay.Claimed || replay.Clears != 1 {
+		t.Fatalf("replaying last season's run in the new season = %+v err=%v, want unpaid with the new season's count 1", replay, err)
+	}
+	if got := subject.ProfileComp().DungeonClears(clearsSeason); got != 10 {
+		t.Fatalf("the previous season's count moved to %d", got)
+	}
+
+	// 卸载重载：计数是持久字段，从持久化字节恢复出来的 DAO 仍是同样的数。
+	restored := db.NewPlayerDao()
+	if err := restored.RestorePersisted(subject.Dao().Marshal(), db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := restored.GetDungeonClears(clearsSeason); got != 10 {
+		t.Fatalf("restored count for season %d = %d, want 10", clearsSeason, got)
+	}
+	if got, _ := restored.GetDungeonClears(clearsSeason + 1); got != 1 {
+		t.Fatalf("restored count for season %d = %d, want 1", clearsSeason+1, got)
+	}
+}
+
+// The scenario the review reproduced: an old run's record is pruned by a
+// later claim, and the old run is then replayed. The ledger no longer
+// remembers it — the window has to be what refuses it.
+func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const first int64 = 1_800_000_000
+	pinBusinessClock(t, first)
+	// Far enough past the first run's resolution that its record may be
+	// dropped — the window plus the prune grace. It stopped being payable a
+	// grace earlier.
+	later := first + dungeon.ClaimWindowSeconds + dungeon.LedgerPruneGraceSeconds + 1
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first, clearsSeason); err != nil {
+		t.Fatalf("the first run's claim: %v", err)
+	}
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "new-run", dungeon.ClearExp, later, later, clearsSeason); err != nil {
+		t.Fatalf("the second run's claim: %v", err)
+	}
+	if subject.ProfileComp().DungeonRunClaimed("old-run") {
+		t.Fatal("the old run's record was not pruned; this test is no longer about what it says it is")
+	}
+
+	// The replay. Two legitimate clears happened, so the player is owed
+	// exactly two rewards.
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, later, clearsSeason); err == nil {
+		t.Fatal("replaying a run whose record was pruned was accepted; it pays a third time")
+	}
+	// The same replay carrying the time its endpoint read before it queued:
+	// the handler reads the clock itself under the lock, so an old "now"
+	// cannot reopen the window.
+	pinBusinessClock(t, later)
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first, clearsSeason); err == nil {
+		t.Fatal("a delayed replay carrying a stale now was accepted after its record was pruned; it pays a third time")
+	}
+	// The World's counter is the total actually paid out; the Player's own
+	// exp is consumed by level-ups and cannot be summed.
+	if got, want := counters.StatsComp().Snapshot().ExpGranted, 2*dungeon.ClearExp; got != want {
+		t.Fatalf("%d exp was paid out for two clears and replays, want %d", got, want)
+	}
+}
+
+// 清理发生在时钟靠前的进程，延迟的旧请求落到时钟稍慢的进程：那里窗口还开着，只能靠账本还记得这一局。
+// 账本比窗口晚一个宽限才清理，就是为了这一步（同 claim_mail_expiry_test.go 的邮件账本）。
+func TestAPrunedRunOnAClockAheadIsNotPaidOnAClockBehind(t *testing.T) {
+	subject, counters, client := newDungeonClaimHarness(t)
+	const first int64 = 1_800_000_000
+	pinBusinessClock(t, first)
+	ctx := context.Background()
+	sender := syncsender.NewClaimDungeonSender(client)
+
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first, clearsSeason); err != nil {
+		t.Fatalf("the first run's claim: %v", err)
+	}
+	// 时钟靠前的进程：窗口关上 1 秒后有别的一局写账本。
+	closed := first + dungeon.ClaimWindowSeconds + 1
+	if _, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "new-run", dungeon.ClearExp, closed, closed, clearsSeason); err != nil {
+		t.Fatalf("the second run's claim: %v", err)
+	}
+	// 时钟慢 31 秒的进程执行在途的旧请求。
+	pinBusinessClock(t, closed-31)
+	replay, err := sender.MultiSync_ClaimDungeon(ctx, subject.ID(), counters.ID(), "old-run", dungeon.ClearExp, first, first, clearsSeason)
+	if err != nil {
+		t.Fatalf("replay on the slower clock: %v", err)
+	}
+	if replay.Claimed {
+		t.Fatalf("a replay on a clock 31s behind was paid again: %+v", replay)
+	}
+	if got, want := counters.StatsComp().Snapshot().ExpGranted, 2*dungeon.ClearExp; got != want {
+		t.Fatalf("%d exp was paid out for two clears and one replay, want %d", got, want)
+	}
+}

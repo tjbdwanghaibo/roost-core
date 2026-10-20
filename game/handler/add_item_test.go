@@ -1,0 +1,42 @@
+package handler
+
+import (
+	"context"
+	"math"
+	"testing"
+
+	syncsender "example.com/planet/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 正数请求必须在加法前校验容量；溢出拒绝后不得改动道具或生成提交记录。
+func TestAddItemRejectsOverflowWithoutChangingTheBag(t *testing.T) {
+	subject, client, committer := newClaimHarness(t)
+	RegisterAddItemNestHandlers()
+	sender := syncsender.NewAddItemSender(client)
+	ctx := context.Background()
+	if _, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 1); err != nil {
+		t.Fatal(err)
+	}
+	before := len(committer.records)
+	_, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, math.MaxInt32)
+	if err == nil {
+		t.Fatalf("overflowing request accepted: bag=%d", subject.BagComp().ItemCount(1002))
+	}
+	if code, _ := errcode.ClientError(err); code != 100003 {
+		t.Fatalf("overflow error code=%d, want bag_full (100003): %v", code, err)
+	}
+	if got := subject.BagComp().ItemCount(1002); got != 1 {
+		t.Fatalf("rejected request changed bag to %d, want 1", got)
+	}
+	if got := len(committer.records); got != before {
+		t.Fatalf("rejected request added commit records: %d -> %d", before, got)
+	}
+	// 堆叠上限本身仍可达到，超过一件则必须拒绝。
+	if got, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 98); err != nil || got != 99 {
+		t.Fatalf("exact stack limit: count=%d err=%v", got, err)
+	}
+	if _, err := sender.Sync_AddItem(ctx, subject.ID(), 1002, 1); err == nil {
+		t.Fatal("accepted a stack above MaxStack")
+	}
+}

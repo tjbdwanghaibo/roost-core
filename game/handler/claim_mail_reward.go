@@ -1,0 +1,62 @@
+package handler
+
+import (
+	player "example.com/planet/game/entities/player"
+	"example.com/planet/game/rewards"
+	apperrors "example.com/planet/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// handlerClaimMailReward grants a mail attachment into the Bag, at most once
+// per mail.
+//
+// It is the AddItem transaction plus an identity, the same shape the dungeon
+// clear uses (handlerClaimDungeon): the mail id is recorded on the Player in
+// the same WAL record as the items, so "this mail was paid" and "the items
+// are there" are one durable fact. A replay finds the id already recorded and
+// returns Claimed=false without granting again.
+//
+// This is what closes the window the mail service's three-step claim leaves:
+// reserve and grant succeed, the commit is lost, the reservation lapses, and
+// the retry re-reserves under the same token. The mail service counts that as
+// a duplicate attempt — correctly, it cannot know whether the game granted —
+// so the answer has to be on the game's side.
+//
+//roost:nest rollback=undo durability=strict
+func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int64, count int32, expiresAtUnix int64, nowUnix int64) (rewards.ClaimResult, error) {
+	if mailID == "" {
+		return rewards.ClaimResult{}, errcode.Wrap(apperrors.ErrMailClaim, nil, "mail_id", mailID)
+	}
+	bag := target.BagComp()
+	// 邮件服务只拒绝过期后的新预留，挡不住过期前取得、晚到这里的旧请求；账本过期后又会被清理。
+	// 所以首次发放在这里按执行时间再判一次过期：已在账本里的只确认、不再发；不在账本里且已过期的拒绝，
+	// 错误与 ReserveClaim 拒绝过期邮件是同一个码。判断在任何 DAO 写入之前。
+	nowUnix = executionNowUnix(nowUnix)
+	if !bag.MailRewardClaimed(mailID) && rewards.ClaimWindowClosed(expiresAtUnix, nowUnix) {
+		return rewards.ClaimResult{}, errcode.Wrap(svcmail.ErrExpired, nil, "mail_id", mailID, "expires_at", expiresAtUnix, "now", nowUnix)
+	}
+	if !bag.ClaimMailReward(mailID, expiresAtUnix, nowUnix) {
+		// Already paid. Not an error: report what the player holds so the
+		// client's answer is the same either way.
+		return rewards.ClaimResult{BagCount: bag.ItemCount(itemID)}, nil
+	}
+	held, err := bag.AddItem(itemID, count)
+	if err != nil {
+		return rewards.ClaimResult{}, err
+	}
+	return rewards.ClaimResult{Claimed: true, BagCount: held}, nil
+}
+
+// executionNowUnix 是领奖事务判定过期与清理账本用的业务时间：调用方传入的时间与持锁后重新读到的
+// 进程业务时钟取较大者。
+//
+// 调用方的 nowUnix 是端点在排队之前读的，请求可能在 Nest 队列、Player 冷加载或重试里耽搁很久；
+// 只信它，一个过期前读到时间的请求在清理之后晚到，就会把已被遗忘的奖励再发一次。取较大者而不是只读
+// 时钟，是因为调用方的时钟可能略快（另一个进程），不能因此把已经关上的窗口重新打开。
+// 进程业务时钟与端点的 BusinessNow 读的是同一个 time.logic_offset。handlerClaimMailReward 与
+// handlerClaimDungeon 都用它。
+func executionNowUnix(callerNowUnix int64) int64 {
+	return max(callerNowUnix, clock.Now().Unix())
+}

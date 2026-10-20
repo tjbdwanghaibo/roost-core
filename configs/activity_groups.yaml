@@ -1,0 +1,21 @@
+# Activity groups: which game servers take part in the same server-wide
+# activity. The activity coordinator (activity.groups_file) and the game
+# servers that run activities read this one file.
+#
+#   id         the group's id, the coordinator's Key.GroupID; not "", no "/"
+#   game_sids  every game server (its --sid) that may take part; each sid in
+#              one group only, at most 64 per group (the coordinator's limit
+#              for one activity window), positive int32
+#
+# An activity window waits for the members whose process is up (the App
+# singleton lock's Live query), so listing a server that is not running is
+# harmless. A game whose --sid is in no group, or a file that breaks a rule
+# above, stops the process at start with the file named.
+#
+# The sids below are the ones the generated deployments start the game with
+# (local and k8s 1000, deploy/dev/second-game.sh 1001, the production compose
+# 1000+N). List your real servers here; a deployment that splits its servers
+# into independent groups adds a group per set.
+groups:
+  - id: planet
+    game_sids: [1000, 1001, 1003]
