@@ -20,7 +20,7 @@
 
 ### 2. 合服没有框架支持（需要维护者决定方向）
 
-**现状**：`docs/framework/PLAYER-MIGRATION.md` 明确“合服 / 单个玩家换服属于新的产品需求”。可用的基础：`PlayerIDAllocator` 契约要求 id 全局唯一（`service/account/identity.go`），合服时玩家 id 不撞；directory 名字是全局域。阻碍：account 没有修改 `Role.ServerID` 的接口，`PlayerOwners` 按静态 sid 绑定拒绝外服玩家；`dbscope=sid` 的 DAO 文档在按 sid 区分的库里需要搬迁；排行（rank board 按服）、公会、邮件箱、活动组（activity groups_file）按服的数据需要合并或重建；合服前要排空各服 WAL / outbox / saga。长线 MMO / SLG 几乎都会合服，目前每个项目要自己设计全套流程。
+**现状**：`docs/framework/PLAYER-MIGRATION.md` 明确“合服 / 单个玩家换服属于新的产品需求”。可用的基础：`PlayerIDAllocator` 契约要求 id 全局唯一（`service/account/identity.go`），合服时玩家 id 不撞；directory 名字是全局域。阻碍：account 没有修改 `Role.ServerID` 的接口，`PlayerOwners` 按静态 sid 绑定拒绝外服玩家；`dbscope=sid` 的 DAO 文档（归该 sid 独占）在按 sid 区分的库里，合服时离线搬进目标服的库；排行（rank board 按服）、公会、邮件箱、活动组（activity groups_file）按服的数据需要合并或重建；合服前要排空各服 WAL / outbox / saga。长线 MMO / SLG 几乎都会合服，目前每个项目要自己设计全套流程。
 
 **需要决定**：是否提供“合服”参考流程与工具（类似 `cmd/sidmove`：停写 → 排空 → 改绑 ServerID → 搬 sid 库 → 合并排行 / 名字冲突处理 → 校验），以及 account 是否增加受审计的 `ServerID` 改绑接口。
 
@@ -33,7 +33,7 @@
 - **方案 A：逻辑合服（推荐）**。每个角色保留原 `ServerID`，目标服进程同时服务一组 sid（例如配置 `served_sids: [B, A]`）。需要框架支持：接入层与 `PlayerOwners` 按 sid 集合判断；`dbscope=sid` 的数据按玩家所属 sid 选物理库（或合服前要求把按服数据收敛到全局库）；单实例锁对集合里的每个 sid 都加锁，防止被合服的旧进程误启动；account 的服务器记录标记“A 已并入 B”，登录 A 时返回 B 的接入地址；排行、活动等按服数据可以并存（保留各服榜）或另建合并榜。优点：不改玩家身份、不触发双角色冲突、不搬玩家文档、可以按原 sid 再拆开；与行业里“合服后保留原区服标识（角色名带 [S1] 等后缀）”的常见做法一致。代价：框架要支持“一进程多 sid”，按服数据的并存语义要定义。
 - **方案 B：物理合服**。把 A 服角色的 `ServerID` 改绑成 B，合并按服数据后退役 A。需要：account 受审计的改绑接口；双角色策略（产品决定：允许一服多角色并让玩家选择、或合并 / 删除其中一个——都要改 slot 模型或做不可逆的数据处理）；服内唯一名字冲突（公会名等）的改名规则；按 sid 分库数据搬迁；排行重算。改动面大且不可回退。
 
-**推荐（2026-10-20 修订）**：别名合服——比方案 A 更轻的变体：不让进程认识多个 sid，而是在 account 记录“A 并入 B”，会话的承载服解析为 B（角色 `ServerID`、slot 不变），Gate 与 game 照常按会话 sid 判断，B 不重启、可回退、不触发双角色冲突。完整设计与分期见分支 `learn/server-merge-proposal` 的 `docs/maintenance/FEATURE-2026-10-20-server-merge-alias.md`（DESIGN-TODO D14）。方案 A 改动落在接入 / 单实例锁 / 按 sid 分库 / 多 World 共存，成本高，不再推荐；方案 B 留给确有“合并成一个身份”需求的产品。
+**推荐（2026-10-20 修订）**：别名合服——比方案 A 更轻的变体：不让进程认识多个 sid，而是在 account 记录“A 并入 B”，会话的承载服解析为 B（角色 `ServerID`、slot 不变），Gate 与 game 照常按会话 sid 判断，可回退、不触发双角色冲突。合服是停服窗口内的离线操作（A、B 都停机排空）；`dbscope=sid` 只表示数据归该 sid 独占，合服时由工具离线搬进 B 的库，不影响能否合服。完整设计与分期见分支 `learn/server-merge-proposal` 的 `docs/maintenance/FEATURE-2026-10-20-server-merge-alias.md`（DESIGN-TODO D14）。方案 A 改动落在接入 / 单实例锁 / 按 sid 分库 / 多 World 共存，成本高，不再推荐；方案 B 留给确有“合并成一个身份”需求的产品。
 
 ### 3. 全服邮件只有“业务自己实现扇出”，生成骨架的语义是“只投递在线玩家”
 
