@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 容量指引按 2026-10-20 夜间 15 分钟补测更新：Saga 原生步骤、匹配队列（维护者 2026-10-21 批准）
+
+- **Saga 原生步骤**（只改文档、注释与提示字符串，不改行为）：guide/06 §5、生成的 `saga/<name>/steps.go` 容量注释、`roost add saga` 的 capacity 提示（`sagaCapacitySummary`）、`roost help saga`、CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK 原先写“正向 8/s、全补偿 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s）”，括号里的 P99 来自 2026-10-18 的 2 分钟单样本，在 15 分钟样本上不成立。改为 2026-10-20 口径：各 15 分钟（正向 8/s 两次各 7200 笔、全补偿 5/s 一次 4500 笔，全部 0 笔终态不对）服务端 P50 549～713 ms（“P50 < 1 s”成立），P99 0.9～3.9 s，两次正向 8/s 的 P99 相差 4 倍（0.92 s 与 3.89 s，分钟级尖峰）；WAL 放 RAM disk 时服务端 P50 555 → 334 ms、投影 checkpoint 57 → 1 ms，磁盘同步是主要成本，**部署时 WAL 放快盘**；Mongo 步骤单进程上限在正向 20～30/s、全补偿 10～15/s 之间（原写“正向 20/s 未饱和”）。生成的 `steps.go` 与 `roost help saga` 的实测链接加上夜间补测报告。见 [夜间补测](docs/performance/NIGHT-20261020.md) §6～§8。
+- **匹配队列规模建议**：[guide/09-services §4](docs/framework/guide/09-services.md#4-关键业务边界) 补“保留期也计入分区容量”：单分区“每秒成局人数 × `match.retention`”的持续上限约 4500 人（本机单样本、非目标负载），超过后 CAS 冲突比例升到 0.94、同一 Redis 的 PING P99 升到 0.6 s、拖慢同实例上的其他服务；`CommitAcross` 冲突约 49%；建议按分区拆分或缩短 retention。见 [夜间补测](docs/performance/NIGHT-20261020.md) §11。
+- **升级**：无行为变化；已生成的 `steps.go` 是业务文件、不会被重写，旧注释里的数字按本条理解。
+
 ### 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多，删除 RelationSource（DESIGN-TODO D19，维护者 2026-10-20 决定；已实施）
 
 - **模型**：视野是逻辑 ID（`policy.ViewID int64`，业务分配与解释，`0` 保留给主视野 `policy.MainView`）的可见性来源，分**空间视野**（视点 + `ObserverView` + 可选跟随实体）与**关系视野**（显式实体集合 + 一个同步层级），玩家与视野多对多。`(玩家, 目标)` 只要有任一挂接视野持有就保持订阅，最后一个释放才退订；同一目标被几个视野看见时，层级是包含关系取数据多的、不是包含关系取并集。`MaxVisible` / `MaxObserverBlocks` 按每个空间视野计。视野操作直接调用（不进 Nest、不排队），只取视野登记表的锁，效果由下一次 `Apply` / 政策阶段按调用顺序应用。
@@ -15,6 +21,7 @@
 - **调用方**：game-demo 的队伍改为每队一个关系视野（`Scene.SetTeam`）；SLG 夹具联盟改为共享关系视野、侦察为私有关系视野（联盟同步示例）；MMORPG 夹具、codegen nestgame / dataengine 夹具、`scripts/perf/sync-aoi` 跟随；sync-aoi 新增 `-views-per-player` / `-alliance-size` 多视野与共享视野场景（为 0 时负载不变，开启时按 `visible × (1 + views) + alliance` 放宽帧对象上限）。
 - **红绿**：改结构前在旧 API 上写下 5 条回归基线（关系进出、跨来源合并、分档、self 与 Leave、队伍），改结构后只改准备步骤即通过；新行为 10 条用例逐项变异（合并不分视野、只扇出给第一个玩家、跟随不带动视野、不取并集、不认包含、去掉两项上限、换跟随回到显式位置、移除不收回可见集、Leave 不解除、预算不乘视野数，以及 Manager 并集优先级退回单层）都在断言上变红；`TestSpatialViewFollowCanChangeOrBeCleared` 在实现时先红（`subscribers of 83 = [], want [1001]`：`SetViewFollow(0)` 跳回定义时的位置），修成停在当前位置后转绿。
 - **升级要点**：① `Relation(name).Set(player, subjects)` 改成关系视野：定义一次（`DefineRelationView`，联盟、队伍按业务 ID；玩家私有关系用玩家相关的 ID），维护成员，`AttachView` 给该看的玩家；事务内的关系变化在提交之后调用。② `Move(p, e, to)` / `MoveShown(e, to)` → `Move(e, to)`；`QueueMove` / `QueueSpatial` / `NewSpatialComponent` 去掉 `observer` 参数，删掉 `ObserverOf`（视点跟随实体时用 `Enter` 的实体或业务空间视野的 `follow`）。③ `SourceProfiles` / `Profile` 改成 `BandLayer`（空间视野的距离档）、`BlockLayer`、`SelfLayer`（零值 default，原先回落到 0 档）。④ 一个玩家挂多个视野时一并调大 Manager `Limits.MaxObjects`（缺省 100）。⑤ 同一目标被几个层级看见的视图身份可能变成并集，手写 packer 若不经 `SyncViewSet.Lookup` 要认 `SyncProfile.Layers()`。⑥ 前后性能对照（`policy` 包 AOI 与视野基准、`scripts/perf/sync-aoi` 含多视野场景）由维护者在压测阶段统一跑。
+- **已测规模与边界**（2026-10-20 夜间 sync-aoi，1000 玩家、1 万实体、20 Hz，本机两进程、每格 3 样本，[夜间补测](docs/performance/NIGHT-20261020.md) §14'.2；维护者 2026-10-21 决定先写边界、发版后再分析原因）：每玩家额外空间视野 **4 个以内已测**（1000 玩家时 Nest 模式改值→客户端 P99 78 ms，direct 49.5 ms）；**16 个额外空间视野（1.7 万个空间观察者）时 Nest 模式失守**：P99 350～376 ms，服务端 tick 工作 P95 86～90 ms、超过 50 ms 的 tick 间隔，帧数只有应发的 38%，同负载 direct 模式正常（58～62 ms、帧数全满）；共享关系视野（联盟 1000 人、每人可见约 1042）正常。瓶颈是空间视野数量在 Nest 路径上的评估，不是下发实体数，**原因尚未确认**（KNOWN-LIMITS“AOI 视野”④）。单视野时 D14 / D19 前后三点无差异。
 - 文档：[guide/04-sync](docs/framework/guide/04-sync.md#谁看见谁视野viewd19)、[impl/04-sync §2E](docs/framework/impl/04-sync.md#2e-interest-的视野d19在-d14-上扩展)、[Block AOI](docs/framework/INTEREST-BLOCK-AOI.md)、[OBSERVABILITY](docs/framework/OBSERVABILITY.md)、[DESIGN-TODO D19](docs/maintenance/DESIGN-TODO.md#d19-视野view逻辑-id空间--关系两类玩家与视野多对多)、[KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。
 
 ### 别名合服：把服 A 并入服 B（DESIGN-TODO D15，维护者 2026-10-20 决定，设计 §10 八项按推荐）

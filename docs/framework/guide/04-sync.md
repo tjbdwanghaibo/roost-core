@@ -77,6 +77,13 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 **上限**：`MaxVisible` 与 `MaxObserverBlocks` 按每个空间视野计；`MaxViewsPerPlayer`（缺省 64，含主视野）与 `MaxPlayersPerView`（缺省 4096）超出时 `AttachView` / `Enter` / `Watch` 返回 `ErrViewLimit`，计 `entitysync_interest_view_limit_rejected_total{reason="views_per_player"|"players_per_view"}`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算一个玩家的块预算，超过 `MaxPlayerBlocks`（缺省 `1024 × 64`）拒绝构造（`ErrInterestBudget`）。一个会话持有的目标还受 Manager 的 `Limits.MaxObjects`（缺省 100）约束，一个玩家挂很多视野时一并调大。
 
+**已测规模与边界**（2026-10-20 夜间 sync-aoi：1000 玩家、1 万实体、20 Hz、`-mode=periodic`，本机两进程 loopback，每格 3 个样本，[夜间补测](../../performance/NIGHT-20261020.md) §14'.2；periodic 的周期等待本身最多 50 ms，单视野 Nest 也在 64 ms 左右，比较看差异）：
+
+- **每玩家额外空间视野 4 个以内已测**：可见约 244，Nest 模式改值→客户端 P99 78 ms（direct 49.5 ms），帧数全满。
+- **16 个额外空间视野时 Nest 模式失守**：1000 玩家 × 17 个空间视野（1.7 万个空间观察者，可见约 827），改值→客户端 P99 350～376 ms，服务端 tick 工作 P95 86～90 ms、超过 50 ms 的 tick 间隔，帧数只有应发的 38%（tick 被跳过、变化合并）；同负载 direct 模式正常（P99 58～62 ms、帧数全满）。
+- **共享关系视野正常**：联盟 1000 人、每人可见约 1042，Nest 66 ms、direct 50 ms，与单视野同量级。
+- 所以瓶颈是空间视野的数量在 Nest 路径上的评估，不是下发的实体数；具体原因尚未确认，维护者决定发版后再分析（[KNOWN-LIMITS“广播与 AOI”](../../maintenance/KNOWN-LIMITS.md#广播与-aoi)）。一个玩家要挂十几个空间视野的玩法（RTS、大量眼位 / 召唤物）先按自己的密度压测。
+
 **视野参数**（D14 B1）。每个空间视野有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
 
 - `AOIConfig.LODs` 是 LOD 层级表，下标即层级号，每层一组距离分档（规则同 `Bands`）；不配时只有层级 0、分档取 `Bands`，两者不能同时配。
