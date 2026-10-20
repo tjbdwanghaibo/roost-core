@@ -144,7 +144,7 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 ### 追帧越界：明确失败，不自动重同步
 
-起点早于保留窗口的追帧不可能补齐，框架给出可判别的失败，客户端表现是“追帧失败、交由业务决定踢出或重开”，**不做全量重同步**（Lockstep 本身没有状态快照，方案 B 留待有具体游戏需求再定）：
+起点早于保留窗口的追帧不可能补齐，框架给出可判别的失败，客户端表现是“追帧失败、交由业务决定踢出或重开”，**不做全量重同步**（Lockstep 本身没有状态快照，方案 B 全量快照恢复已于 2026-10-20 立项、设计评审中，见 [设计](../../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)）：
 
 - 服务端：`StartCatchup` / `SpectatorCatchup` / `HandleCommand(OpCatchup)` 立即返回 `*CatchupUnservableError`（`errors.Is(err, lockstep.ErrCatchupUnservable)`，字段 `From` 是客户端缺的第一帧、`Start` 是仍保留的最早帧）；起点 0 按帧 1 处理，同样核对。已在追帧的会话若页面一直发不出去、游标被窗口越过，下一次 `Tick` 的错误里带同一错误。两种情况都计 `lockstep.catchup.unservable.total`。
 - 通知：下一次 `Tick` 经可靠通道、与追帧页同一路由给该会话发一条追帧失败通知（`C9 01 from start`，`EncodeCatchupUnservable`）。经 TCP Notify 发出的 Catchup 命令没有应答，客户端靠这条通知得知结果；通知发送失败只记进 `Tick` 的错误。
