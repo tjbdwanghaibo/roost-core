@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"reflect"
 	"slices"
@@ -1041,4 +1042,262 @@ func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
 	if events := (blockSource{manager: manager}).Flush(); len(events) != 0 {
 		t.Fatalf("the observer saw its own coverage block: %+v", events)
 	}
+}
+
+// ---- 按观察者配置的视野（D14 B1） ----
+
+// viewConfig：缺省视野 100/130（滞回 30），视野大小可在 [50, 300] 内按 50 取整，两层 LOD。
+func viewConfig() AOIConfig {
+	return AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100,
+		EnterRadius: 100, LeaveRadius: 130,
+		MinViewRadius: 50, MaxLeaveRadius: 330, ViewRadiusStep: 50,
+		LODs: [][]int64{{50}, {100, 200}},
+	}
+}
+
+func viewFixture(t *testing.T) *AOI {
+	t.Helper()
+	manager, err := NewAOI(viewConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
+// 两个观察者站在同一点，半径不同：各自按自己的进入 / 离开半径进出，订阅的块数也按各自的离开半径。
+func TestAOIObserverRadiusIsPerObserver(t *testing.T) {
+	manager := viewFixture(t)
+	center := spatial.Point{X: 1000, Y: 1000}
+	if err := manager.AddObserver(1, 0, center, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddObserver(2, 0, center, ObserverView{Radius: 300}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(manager.observers[2].blocks); got <= len(manager.observers[1].blocks) {
+		t.Fatalf("the wide observer subscribes %d blocks, the default one %d", got, len(manager.observers[1].blocks))
+	}
+	if err := manager.AddSubject(10, spatial.Point{X: 1200, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 2, Subject: 10, Kind: InterestEnter, Band: 1}})
+	// 离开半径 300+30：320 处仍保持，340 处离开；缺省观察者始终看不见。
+	if err := manager.MoveSubject(10, spatial.Point{X: 1320, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), nil)
+	if err := manager.MoveSubject(10, spatial.Point{X: 1340, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 2, Subject: 10, Kind: InterestLeave, Band: -1}})
+	// 缺省观察者按 100 进入、130 离开。
+	if err := manager.MoveSubject(10, spatial.Point{X: 1090, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{
+		{Observer: 1, Subject: 10, Kind: InterestEnter, Band: 1},
+		{Observer: 2, Subject: 10, Kind: InterestEnter, Band: 1},
+	})
+	if err := manager.MoveSubject(10, spatial.Point{X: 1140, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 10, Kind: InterestLeave, Band: -1}})
+}
+
+// 运行期换视野：变大时新进入的目标 Enter，只换层级时按新分档 BandChanged 且订阅块不变，变小时超出的 Leave。
+func TestAOISetObserverViewGrowsChangesLODAndShrinks(t *testing.T) {
+	manager := viewFixture(t)
+	center := spatial.Point{X: 1000, Y: 1000}
+	for id, x := range map[int64]int64{11: 40, 12: 150, 13: 250} {
+		if err := manager.AddSubject(id, spatial.Point{X: 1000 + x, Y: 1000}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.AddObserver(1, 0, center, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 11, Kind: InterestEnter, Band: 0}})
+
+	if view, err := manager.SetObserverView(1, ObserverView{Radius: 300}); err != nil || view != (ObserverView{Radius: 300}) {
+		t.Fatalf("grow: view=%+v err=%v", view, err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{
+		{Observer: 1, Subject: 12, Kind: InterestEnter, Band: 1},
+		{Observer: 1, Subject: 13, Kind: InterestEnter, Band: 1},
+	})
+
+	blocks := maps.Clone(manager.observers[1].blocks)
+	if _, err := manager.SetObserverView(1, ObserverView{LOD: 1, Radius: 300}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 13, Kind: InterestBandChanged, Band: 2}})
+	if !maps.Equal(blocks, manager.observers[1].blocks) {
+		t.Fatal("changing only the LOD level changed the subscribed blocks")
+	}
+
+	if _, err := manager.SetObserverView(1, ObserverView{LOD: 1, Radius: 100}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{
+		{Observer: 1, Subject: 12, Kind: InterestLeave, Band: -1},
+		{Observer: 1, Subject: 13, Kind: InterestLeave, Band: -1},
+	})
+	if got := manager.Visible(1); !slices.Equal(got, []int64{11}) {
+		t.Fatalf("visible after shrinking = %v", got)
+	}
+	if _, err := manager.SetObserverView(1, ObserverView{LOD: 2}); !errors.Is(err, ErrObserverView) {
+		t.Fatalf("unconfigured LOD accepted: %v", err)
+	}
+	if _, err := manager.SetObserverView(99, ObserverView{}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("unknown observer: %v", err)
+	}
+}
+
+// 视野大小夹到 [MinViewRadius, MaxLeaveRadius − 滞回量]，再从 MinViewRadius 起按步长向下取整；零值取缺省；层级必须已配置。
+func TestAOIViewIsClampedAndQuantized(t *testing.T) {
+	config := AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 120, LeaveRadius: 150,
+		MinViewRadius: 60, MaxLeaveRadius: 300, ViewRadiusStep: 30}
+	manager, err := NewAOI(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ asked, want int64 }{
+		{0, 120}, {-5, 60}, {10, 60}, {60, 60}, {89, 60}, {90, 90}, {119, 90}, {125, 120}, {269, 240}, {270, 270}, {1 << 40, 270},
+	} {
+		got, err := manager.config.normalizeView(ObserverView{Radius: c.asked})
+		if err != nil || got.Radius != c.want {
+			t.Errorf("radius %d → %+v, %v; want %d", c.asked, got, err, c.want)
+		}
+	}
+	for _, level := range []int{-1, 1} {
+		if _, err := manager.config.normalizeView(ObserverView{LOD: level}); !errors.Is(err, ErrObserverView) {
+			t.Errorf("LOD %d accepted: %v", level, err)
+		}
+	}
+	// 零值的范围只允许缺省视野。
+	plain := interestFixture(t, AOIConfig{})
+	if got, _ := plain.config.normalizeView(ObserverView{Radius: 5000}); got.Radius != 600 {
+		t.Fatalf("an unconfigured range let the view grow to %d", got.Radius)
+	}
+}
+
+// 启动期校验：块预算按 MaxLeaveRadius 算；视野范围必须包含缺省视野、EnterRadius 落在量化网格上；
+// 每层分档递增、为正、不超过 MaxLeaveRadius；Bands 与 LODs 不能同时配置。
+func TestAOIViewConfigIsCheckedAtStartup(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*AOIConfig)
+		want   error
+	}{
+		{"widest leave radius over budget", func(c *AOIConfig) { c.MaxObserverBlocks = 49; c.MaxLeaveRadius = 400 }, ErrInterestBudget},
+		{"default leave radius within the same budget", func(c *AOIConfig) { c.MaxObserverBlocks = 49; c.MaxLeaveRadius = 0; c.LODs = nil }, nil},
+		{"min view radius above enter", func(c *AOIConfig) { c.MinViewRadius = 110 }, ErrInterestConfig},
+		{"max leave radius below leave", func(c *AOIConfig) { c.MaxLeaveRadius = 120 }, ErrInterestConfig},
+		{"enter radius off the grid", func(c *AOIConfig) { c.ViewRadiusStep = 30 }, ErrInterestConfig},
+		{"negative step", func(c *AOIConfig) { c.ViewRadiusStep = -1 }, ErrInterestConfig},
+		{"band beyond max leave radius", func(c *AOIConfig) { c.LODs = [][]int64{{50}, {100, 400}} }, ErrInterestConfig},
+		{"band not ascending", func(c *AOIConfig) { c.LODs = [][]int64{{50}, {200, 100}} }, ErrInterestConfig},
+		{"Bands beyond max leave radius", func(c *AOIConfig) { c.LODs = nil; c.Bands = []int64{400} }, ErrInterestConfig},
+		{"Bands and LODs together", func(c *AOIConfig) { c.Bands = []int64{50} }, ErrInterestConfig},
+		{"an empty LOD level is one band", func(c *AOIConfig) { c.LODs = [][]int64{{}, {100}} }, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			config := viewConfig()
+			c.mutate(&config)
+			_, err := NewAOI(config)
+			if c.want == nil && err != nil || c.want != nil && !errors.Is(err, c.want) {
+				t.Fatalf("NewAOI = %v, want %v", err, c.want)
+			}
+			if _, clusterErr := NewAOICluster(config); (clusterErr == nil) != (err == nil) {
+				t.Fatalf("cluster and AOI disagree: %v vs %v", clusterErr, err)
+			}
+		})
+	}
+}
+
+// 观察者自身实体换了（同一玩家改控另一个实体）：旧的自身重新可见、新的自身退出可见集。
+func TestAOIObserverSelfChangeReevaluates(t *testing.T) {
+	manager := viewFixture(t)
+	for _, id := range []int64{21, 22} {
+		if err := manager.AddSubject(id, spatial.Point{X: 1000 + id, Y: 1000}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.AddObserver(1, 21, spatial.Point{X: 1000, Y: 1000}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 22, Kind: InterestEnter, Band: 0}})
+	if err := manager.AddObserver(1, 22, spatial.Point{X: 1000, Y: 1000}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, manager.Flush(), []InterestEvent{
+		{Observer: 1, Subject: 21, Kind: InterestEnter, Band: 0},
+		{Observer: 1, Subject: 22, Kind: InterestLeave, Band: -1},
+	})
+}
+
+// 区域边界镜像按观察者自己的离开半径：视野变大后镜像进邻区、看见缝对面的目标，变小后镜像撤回。
+func TestClusterMirrorFollowsObserverView(t *testing.T) {
+	config := viewConfig()
+	config.Bounds = spatial.Rect{}
+	cluster, err := NewAOICluster(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddArea(1, spatial.Rect{Max: spatial.Point{X: 1000, Y: 2000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddArea(2, spatial.Rect{Min: spatial.Point{X: 1000}, Max: spatial.Point{X: 2000, Y: 2000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddSubject(50, spatial.Point{X: 1040, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster.AddObserver(1, 0, spatial.Point{X: 800, Y: 1000}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, mirrored := cluster.areas[2].manager.observers[1]; mirrored || len(cluster.Flush()) != 0 {
+		t.Fatal("a default view 200 away from the seam is mirrored or sees across it")
+	}
+	if view, err := cluster.SetObserverView(1, ObserverView{Radius: 290}); err != nil || view.Radius != 250 {
+		t.Fatalf("view=%+v err=%v (290 rounds down to 250)", view, err)
+	}
+	if _, mirrored := cluster.areas[2].manager.observers[1]; !mirrored {
+		t.Fatal("the widened view was not mirrored into the neighbor")
+	}
+	requireEvents(t, cluster.Flush(), []InterestEvent{{Observer: 1, Subject: 50, Kind: InterestEnter, Band: 1}})
+	if _, err := cluster.SetObserverView(1, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, mirrored := cluster.areas[2].manager.observers[1]; mirrored {
+		t.Fatal("the narrowed view kept its mirror")
+	}
+	requireEvents(t, cluster.Flush(), []InterestEvent{{Observer: 1, Subject: 50, Kind: InterestLeave, Band: -1}})
+	if err := cluster.MoveObserver(1, spatial.Point{X: 960, Y: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	requireEvents(t, cluster.Flush(), []InterestEvent{{Observer: 1, Subject: 50, Kind: InterestEnter, Band: 1}})
+}
+
+// 额外覆盖块同样按 self 排除：玩家 7 的自身实体是 70；实体 7 只是数值等于玩家 ID 的另一个单位，经覆盖块照常可见。
+func TestAOICoverageExcludesSelfNotObserverID(t *testing.T) {
+	manager := viewFixture(t)
+	far := spatial.Point{X: 1900, Y: 1900}
+	for _, id := range []int64{7, 70} {
+		if err := manager.AddSubject(id, far); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.AddObserver(7, 70, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	near := []int64{manager.BlockAt(spatial.Point{X: 520, Y: 500})}
+	for _, id := range []int64{7, 70} {
+		if err := manager.SetObservedBlocks(id, near); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireEvents(t, (blockSource{manager: manager}).Flush(), []InterestEvent{{Observer: 7, Subject: 7, Kind: InterestEnter}})
 }

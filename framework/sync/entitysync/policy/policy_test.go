@@ -8,10 +8,12 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // ARCH-10 · M-14：组织方式只决定"谁订谁"，全部落到 Manager 的 Subscribe / Unsubscribe 上。
@@ -932,4 +934,262 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	requireSessions(t, manager, entityB)
 	requireSessions(t, manager, entityA, 7)
 	requireSessions(t, manager, monster, 7)
+}
+
+// ---- D14：观察者是玩家、视野按观察者 ----
+
+// viewInterest：缺省视野 120/150，视野大小 [60, 270] 按 30 取整，一层 LOD；同号换算观察者。
+func viewInterest(t *testing.T, manager *entitysync.Manager, relations ...string) *Interest {
+	t.Helper()
+	interest, err := NewInterest(InterestConfig{
+		Manager:    manager,
+		ObserverOf: sameIDObserver,
+		AOI: AOIConfig{
+			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
+			EnterRadius: 120, LeaveRadius: 150,
+			MinViewRadius: 60, MaxLeaveRadius: 300, ViewRadiusStep: 30,
+		},
+		Relations: relations,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(interest.Close)
+	return interest
+}
+
+// 客户端改视野直接生效：变大时新进入的目标订阅，变小时超出的退订；夹取与量化后的值回给调用方。
+func TestSetObserverViewSubscribesWhatCameIntoViewAndReleasesWhatLeft(t *testing.T) {
+	manager := newManager(t)
+	interest := viewInterest(t, manager)
+	player(t, manager, watcherID)
+	player(t, manager, moverID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 700, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	if subscribed(manager, watcherID, moverID) {
+		t.Fatal("setup: 200 units away is visible with the default view")
+	}
+	view, err := interest.SetObserverView(watcherID, ObserverView{Radius: 10_000})
+	if err != nil || view != (ObserverView{Radius: 270}) {
+		t.Fatalf("SetObserverView = %+v, %v; want the radius clamped to 270", view, err)
+	}
+	mustApply(t, interest)
+	if !subscribed(manager, watcherID, moverID) {
+		t.Fatal("a widened view did not subscribe the player that came into range")
+	}
+	if subscribed(manager, moverID, watcherID) {
+		t.Fatal("widening one player's view widened the other's")
+	}
+	if got, _ := interest.ObserverView(watcherID); got != view {
+		t.Fatalf("ObserverView = %+v, want %+v", got, view)
+	}
+	interest.now = func() time.Time { return time.Now().Add(2 * time.Second) }
+	if _, err := interest.SetObserverView(watcherID, ObserverView{Radius: 100}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	if subscribed(manager, watcherID, moverID) {
+		t.Fatal("a narrowed view kept a player that fell out of range")
+	}
+	if !subscribed(manager, watcherID, watcherID) {
+		t.Fatal("changing the view dropped the player's own subscription")
+	}
+}
+
+// 限速：同一玩家距上次生效不足 ViewChangeInterval 的请求拒绝并计数；量化后与当前相同的请求什么也不做、不占限速；
+// 层级未配置的请求拒绝并计数；不认识的玩家拒绝。
+func TestSetObserverViewIsRateLimitedAndIgnoresNoops(t *testing.T) {
+	manager := newManager(t)
+	interest := viewInterest(t, manager)
+	player(t, manager, watcherID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Unix(1000, 0)
+	interest.now = func() time.Time { return clock }
+	rate := func() int64 { return counterValueWith(viewRejectedMetric, "reason", "rate") }
+	lod := func() int64 { return counterValueWith(viewRejectedMetric, "reason", "lod") }
+	rateBefore, lodBefore := rate(), lod()
+
+	// 125 量化为 120，与当前相同：不重评、不记时间。
+	if view, err := interest.SetObserverView(watcherID, ObserverView{Radius: 125}); err != nil || view.Radius != 120 {
+		t.Fatalf("no-op request: %+v %v", view, err)
+	}
+	if _, err := interest.SetObserverView(watcherID, ObserverView{Radius: 200}); err != nil {
+		t.Fatalf("first change refused: %v", err)
+	}
+	clock = clock.Add(500 * time.Millisecond)
+	if view, err := interest.SetObserverView(watcherID, ObserverView{Radius: 240}); !errors.Is(err, ErrObserverViewRate) || view.Radius != 180 {
+		t.Fatalf("a second change within the interval: %+v %v (200 quantizes to 180)", view, err)
+	}
+	if rate() != rateBefore+1 {
+		t.Fatalf("rate refusals counted %d, want 1", rate()-rateBefore)
+	}
+	// 与当前相同的请求不受限速影响。
+	if _, err := interest.SetObserverView(watcherID, ObserverView{Radius: 190}); err != nil {
+		t.Fatalf("a request equal to the current view was refused: %v", err)
+	}
+	clock = clock.Add(500 * time.Millisecond)
+	if view, err := interest.SetObserverView(watcherID, ObserverView{Radius: 240}); err != nil || view.Radius != 240 {
+		t.Fatalf("a change after the interval: %+v %v", view, err)
+	}
+	if _, err := interest.SetObserverView(watcherID, ObserverView{LOD: 1}); !errors.Is(err, ErrObserverView) || lod() != lodBefore+1 {
+		t.Fatalf("an unconfigured LOD level: %v (counted %d)", err, lod()-lodBefore)
+	}
+	if _, err := interest.SetObserverView(moverID, ObserverView{}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("an unknown player: %v", err)
+	}
+	if _, err := NewInterest(InterestConfig{Manager: manager, AOI: interestConfig(), ViewChangeInterval: -time.Second}); !errors.Is(err, ErrInterestConfig) {
+		t.Fatalf("a negative interval was accepted: %v", err)
+	}
+}
+
+func counterValueWith(name, label, value string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name && metric.Labels[label] == value {
+			total += metric.Value
+		}
+	}
+	return total
+}
+
+// 只看不被看：Watch 登记的观察者看得见别人，别人看不见它，也没有 self 订阅；MoveView 移动视点，Unwatch 全部释放。
+func TestWatchSeesWithoutBeingSeen(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager, "team")
+	const spectator = int64(9)
+	if err := manager.OpenSession(entitysync.SessionID(spectator)); err != nil {
+		t.Fatal(err)
+	}
+	player(t, manager, watcherID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Watch(spectator, spatial.Point{X: 900, Y: 900}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, watcherID, entitysync.SessionID(watcherID))
+	if err := interest.MoveView(spectator, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Relation("team").Set(spectator, []int64{watcherID})
+	// 实体 ID 数值恰好等于观战者玩家 ID 的单位：观战者没有自身实体，它照常看得见。
+	if err := manager.Register(subjectState(t, spectator)); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Show(spectator, spatial.Point{X: 540, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, watcherID, entitysync.SessionID(spectator), entitysync.SessionID(watcherID))
+	requireSessions(t, manager, spectator, entitysync.SessionID(spectator), entitysync.SessionID(watcherID))
+	if got := interest.Visible(spectator); !slices.Equal(got, []int64{spectator, watcherID}) {
+		t.Fatalf("spectator sees %v", got)
+	}
+	if got := interest.Visible(watcherID); !slices.Equal(got, []int64{spectator}) {
+		t.Fatalf("the player sees %v; want only the unit, never the spectator", got)
+	}
+	if err := interest.Unwatch(spectator); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, watcherID, entitysync.SessionID(watcherID))
+	requireSessions(t, manager, spectator, entitysync.SessionID(watcherID))
+	if err := interest.MoveView(spectator, spatial.Point{X: 500, Y: 500}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("a spectator that left still moves: %v", err)
+	}
+}
+
+// ObserverOf 覆盖：玩家控制英雄时视点实体不是 Player，事务内入口按业务给的换算找观察者；换算不到的实体只能当目标移动。
+func TestObserverOfMapsAControlledEntityToItsPlayer(t *testing.T) {
+	manager := newManager(t)
+	const playerID, hero, other = int64(5), int64(500), int64(600)
+	interest, err := NewInterest(InterestConfig{
+		Manager: manager,
+		AOI:     AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150},
+		ObserverOf: func(entityID int64) (int64, bool) {
+			if entityID == hero {
+				return playerID, true
+			}
+			return 0, false
+		},
+		Relations: []string{"team"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(interest.Close)
+	if err := manager.OpenSession(entitysync.SessionID(playerID)); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{hero, other} {
+		if err := manager.Register(subjectState(t, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := interest.Enter(playerID, hero, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Show(other, spatial.Point{X: 800, Y: 800}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, other)
+	eHero, eOther := factEntity(t, hero), factEntity(t, other)
+	if err := interest.QueueMove(eOther, spatial.Point{X: 800, Y: 800}, true); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("an entity with no observer moved a view: %v", err)
+	}
+	if err := interest.QueueRelation(eOther, "team", []int64{hero}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("an entity with no observer set a relation: %v", err)
+	}
+	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eHero, eOther}, manager)
+	if err := interest.QueueMove(eHero, spatial.Point{X: 780, Y: 800}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.QueueMove(eOther, spatial.Point{X: 790, Y: 800}, false); err != nil {
+		t.Fatal(err)
+	}
+	mutation.Admit()
+	mutation.Confirm()
+	mutation.Release()
+	flushInterest(t, manager)
+	requireSessions(t, manager, other, entitysync.SessionID(playerID))
+	if got := interest.Visible(playerID); !slices.Equal(got, []int64{other}) {
+		t.Fatalf("the player's view did not follow the hero: %v", got)
+	}
+}
+
+// 多对一隐患消失：两个玩家各是一个会话，都看见同一目标；其中一个走远只退它自己的订阅。
+// D14 之前同样的场景经 Session 映射到同一会话时，订阅被一起退掉（953ad6bc 的 TestSessionManyToOneDropsASharedSubscription）。
+func TestTwoObserversDoNotReleaseEachOthersSubscription(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager)
+	player(t, manager, 11)
+	player(t, manager, 12)
+	if err := manager.Register(subjectState(t, 20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(11, 11, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(12, 12, spatial.Point{X: 500, Y: 520}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Show(20, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, 20, 11, 12)
+	if err := interest.Move(12, 12, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, 20, 11)
 }
