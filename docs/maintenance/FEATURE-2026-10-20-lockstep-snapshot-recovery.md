@@ -768,4 +768,6 @@ KCP 用例的核对点放在服务端发送那一刻（包装可靠通道）：�
 
 **benchstat**（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)，基线 `11e39297`，5 轮交替各 count 2，n=10）：`MatchTickTenPlayers` 1.147µs ± 10% → 1.079µs ± 13%（p=0.616），`HistoryRollingWindow` 两档 p=0.896 / 0.739，B/op 与 allocs/op 全等。没有恢复中会话的 Tick 不经过门，结论是无差异；本轮机器噪声比 P1 那次大（±7～13%）。
 
+**维护者决定（2026-10-20，均按推荐）**：①Room 在帧已切出后不因发送错误停房间，这条对 `RecoverRoom` 同样生效、不改为只在配了快照时生效（单个会话的追帧 / 分块发送失败不该停整局；没配可靠通道时这条路径实际碰不到）；②真实依赖模式的 active / routing 夹具改用 `RecoverRoomWithSnapshots`，补 SIGKILL 后经快照恢复的演练，排在 2026-10-20 夜间性能补测之后实施。
+
 **未做**：真实 WAL / Mongo 下的 Room 快照恢复（真实模式的 active / routing 夹具没改，仍用 `RecoverRoom`）；宿主交接与快照恢复同时发生；独立 Gate 部署下的 Room。
