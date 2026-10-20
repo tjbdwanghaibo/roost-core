@@ -33,7 +33,7 @@
 - [SYNC-OPTIMIZATION.md](../framework/SYNC-OPTIMIZATION.md)：Controller 生成边界与 Sync（Flush、AOI、Relation、Lockstep）局部优化及同机基准
 - [INTEREST-BLOCK-AOI.md](../framework/INTEREST-BLOCK-AOI.md)：Interest 的 Block AOI 与手写空间组件
 - [PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler
-- [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、通用接入原则）与验收范围
+- [SLG-INTEGRATION.md](../framework/SLG-INTEGRATION.md)：学习文档，SLG 场景的框架学习（模块分工、建造 / 行军 / 抢地生成工程、联盟活动的权限视野 / 跨进程协调 / 原服奖励义务）与验收范围
 - [MMORPG-INTEGRATION.md](../framework/MMORPG-INTEGRATION.md)：学习文档，MMORPG 场景的框架学习（组队、交易、战斗、多地图、静态 sid 跨服）与验收范围、双 sid 起栈步骤
 - [MOBA-INTEGRATION.md](../framework/MOBA-INTEGRATION.md)：学习文档，MOBA 场景的框架学习（匹配与准备、Lockstep 输入与追帧、5v5 三路参考模拟、持久对局与跨 sid 宿主、结算 / 原服奖励）与验收范围
 - [CARD-RPG-INTEGRATION.md](../framework/CARD-RPG-INTEGRATION.md)：学习文档，卡牌 RPG 场景的框架学习（配置快照、抽卡 / 养成幂等账本、开局多实体事务、权威回合与持久回合定时器、领奖与视图裁剪）与验收范围

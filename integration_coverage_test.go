@@ -502,6 +502,7 @@ var generatedRealDependencyEntries = []struct {
 var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
+	{"TestSLGAllianceActivity", "scripts/test-slg-alliance.sh", "^TestSLGAllianceActivity$", "隔离 Redis/NATS：两个静态 sid 客户端经正式 activity RPC 调用独立协调器进程，成员撤权与 Interest 来源归并、持久贡献意图在应用确认丢失和协调器重启后只计一次、冻结后阶段屏障、原服奖励义务回执与 ACK 重投；不含 Player 金币到账、Remote 联盟权威或真实客户端视野"},
 	{"TestMMORPGRealPersistenceAcrossProcesses", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealPersistenceAcrossProcesses$", "ROOST_MMORPG_REAL=1，两个独立进程先后用同一文件 WAL 与真实 Mongo：正常停机后冷加载，续完托管交易、重放战斗领奖，核对 Buff 期限已进驱动索引后启动驱动投递循环（不手发 Tick、不调用 DeliverDue），循环补触发一次离线到期的 Buff（投递计数 1、无重投）；不是崩溃注入"},
 	{"TestMMORPGRealCrashRecovery", "scripts/test-mmorpg-generated.sh", "^TestMMORPGRealCrashRecovery$", "ROOST_MMORPG_REAL=1，子进程经 strict 文件 WAL 提交野外战斗在途状态（买家阵亡复活计时、卖家击杀拾取领奖并上 Buff、托管交易卖家已确认）、关掉后台投影使 WAL 留有 12 条未投影记录后被父进程 SIGKILL；父进程用同一 WAL 与真实 Mongo 冷加载，四个实体 DAO 字节与定时器 ID 一致、两个期限已进驱动索引，原参数重试不变；启动驱动投递循环（不手发 Tick），两个过期玩家各补触发一次（计数 2），到期交易退款一次、迟到确认被拒，重新上 Buff 后业务时间推进到期限时循环按时投递（计数 3、无重投）；正常关闭后第三个进程冷加载重放不变；只覆盖 strict 已确认的提交，不含结果未知或断电"},
 	{"TestCardRPGRealCrashRecovery", "scripts/test-card-rpg-generated.sh", "^TestCardRPGRealCrashRecovery$", "ROOST_CARD_RPG_REAL=1，子进程经 strict 文件 WAL 提交首登、十连、升级、开局与第一回合，关掉后台投影使 WAL 留有 5 条未投影记录后被父进程 SIGKILL；父进程用同一 WAL 与真实 Mongo 冷加载，核对资产 / 战斗摘要 / 定时器 ID，按新配置重放抽卡与升级不重掷不重扣；冷加载报告的回合期限由驱动 DeliverDue 补触发一次（不启动投递循环），续战获胜、三次领奖一份；正常关闭后第三个进程冷加载核对并重试领奖 / 抽卡不变；只覆盖 strict 已确认的提交，不含结果未知或断电"},

@@ -114,3 +114,5 @@ MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生�
 MMORPG 多地图网络接入：`bash scripts/test-mmorpg-scenes.sh`，生成 game-demo 后填业务接法，一个 Manager 配多个 Interest，在真实 TCP 和 Receiver 上校验切图删除 / 全量、held 重试、旧 epoch、重连与字段隐私。`scripts/test-mmorpg-cross-sid.sh` 对已启动的隔离双 sid game-demo 运行真实账号错服拒绝、双向赠礼、邮件重放与失败补偿；资源、端口和命名空间从显式环境变量取得，不启动 / 停止服务、不改 Player sid。[MMORPG 学习与使用手册](../docs/framework/MMORPG-INTEGRATION.md)列出全部参数、业务映射和边界；[SLG 学习与使用手册](../docs/framework/SLG-INTEGRATION.md)独立维护。
 
 MOBA 正式业务消费者：`bash scripts/test-moba-generated.sh`，CLI 生成 Player / MatchResult DAO 与多实体 Sender，结合正式 Match、FrameAssembler、真实 loopback KCP 跑匹配、会话输入、单路模拟、追帧 / 观战 / 分歧及结算 race 场景。`ROOST_MOBA_REAL=1` 与隔离 Mongo URI 追加两个独立进程的文件 WAL / Mongo 结算恢复；活动对局恢复另有边界。`ROOST_MOBA_KEEP=1` 保留成功消费者，失败保留目录和真实模式的唯一库名。[MOBA 学习手册](../docs/framework/MOBA-INTEGRATION.md)列出业务 / 框架映射与使用方式。
+
+SLG 联盟活动联合场景：`bash scripts/test-slg-alliance.sh`，需显式隔离 Redis / NATS。正式 Activity RPC 连独立协调器子进程，验证成员撤权与关系视野、贡献持久意图与重放、冻结阶段屏障、原服奖励义务回执和丢失 ACK 后重投；不含 Player 实际金币到账或 Remote 联盟权威。流程与边界见 [SLG 主线手册](../docs/framework/SLG-INTEGRATION.md#联盟活动主线从准入到原服接收奖励义务)。

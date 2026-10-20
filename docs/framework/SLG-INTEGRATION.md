@@ -26,8 +26,59 @@ SLG 的重点学习路线固定为这三条线。基础建造、行军和抢地�
 4. `AttemptDispatch` 取得结算投递，`settle` 按原身份发送奖励邮件，再 `AckDispatch`。投递确认不等于玩家已领取；永久到账还需邮件／Player 的幂等事实，有限服务去重窗口不能代替永久账本。
 5. 故障练习至少包括重复与跨窗贡献、晚到累计值、一个服未通知、结算投递中断、发邮件成功但确认丢失、玩家重复领取。重开投递、排除失联目标或补发应有明确业务授权和审计，不能默认删除账本重跑。
 
-现有证据分层：通用 AOI／Remote／activity 模块有对应测试，demo 有活动榜及结算接法；§11 列真实资源入口。**跨服国战＋联盟迷雾＋赛季结算的联合消费者尚未在本手册验收**。接下来优先把该链路作为专题补齐，分别记录源码核对、实际运行与待验证状态。
+现有证据分层：通用 AOI／Remote／activity 模块有对应测试，demo 有活动榜及结算接法；§11 列真实资源入口。下面的联盟活动切片已把权限、关系视野、跨进程活动协调与原服奖励义务串在同一条测试中；**跨服国战、空间迷雾、Remote 联盟权威与 Player 实际到账仍未在这条联合链路验收**。
 
+
+### 联盟活动主线：从准入到原服接收奖励义务
+
+可运行入口：[scripts/test-slg-alliance.sh](../../scripts/test-slg-alliance.sh)。业务实现集中在 [alliance.go](../../scripts/testdata/slg-alliance/alliance.go)，接线与视野在 [runtime_test.go](../../scripts/testdata/slg-alliance/runtime_test.go)，完整顺序与断言在 [alliance_test.go](../../scripts/testdata/slg-alliance/alliance_test.go)。这是正式服务接口的消费者，直接使用仓库已生成的 Activity RPC，没有手改生成文件，也未修改框架运行时。
+
+**教学规则**：Alice 静态归属 sid 1000，Bob 静态归属 sid 1001；一个联盟、一个固定赛季窗口、一个公开据点。可信战斗权威每确认一个唯一战果贡献 10 分。退盟拒绝新贡献，已经获准的贡献和奖励保留。每个窗口最多 128 个战果，原服最多保留 128 个窗口回执；满后拒绝，不删除旧身份。客户端不能提供 sid、得分、战果成功或奖励清单。这个例子没有实现战斗判胜负，战果入口必须由真实游戏的可信战斗服务调用。
+
+```mermaid
+sequenceDiagram
+    participant H as 两个原服客户端
+    participant A as 联盟业务权威
+    participant V as Interest 关系视野
+    participant C as 独立活动协调器进程
+    participant R as 原服奖励义务存储
+    H->>A: 已鉴权角色 + 静态 sid + 唯一战果
+    A->>A: CAS 校验成员并持久保存贡献意图
+    A->>V: 按已提交的成员权限重建共享关系
+    A->>C: ApplyProgress（固定窗口、玩家、战果身份）
+    C-->>A: 累计分 / 重放结果
+    A->>A: 标记已确认；冻结准入并确认全部意图
+    H->>C: 两个服分别 NotifyPhase
+    H->>C: OwedDispatches / AttemptDispatch
+    H->>R: 按窗口原子写入不可变奖励义务回执
+    H->>C: AckDispatch
+```
+
+| 业务状态 / 输入 | 拥有者与框架接法 | 如何调用与失败处理 |
+| --- | --- | --- |
+| 成员、静态原服、待报战果 | 联盟业务记录；`versionstore.NewRedisStore`，无 TTL | `contribute` 在同一个 `Update` 中校验成员并记录意图；`revoke` 与贡献通过同一个 CAS 串行裁决。回调只计算状态，不执行 RPC；同身份重试可查旧事实，换玩家复用身份被拒 |
+| 联盟共享据点、独立侦察来源 | 本服 `entitysync.Manager` + `policy.Interest` | `reconcile` 先 HoldSession，再由**已提交**的成员快照更新 `alliance` 来源；Apply 成功后 ReadySession。撤盟保留 `scout`，最后来源撤销才消失；应用失败保持 held。这里只发送公开据点 ID，没有敏感成员或账本字段 |
+| 可靠贡献、丢失应用确认 | 联盟业务意图 + `activity.Coordinator` | `drain` 在 CAS 外调用 `ApplyProgress`，成功才标记 Sent；重启按原 `Key + participant + battleID` 重试。协调器的保留期为一小时，未确认意图达到该期限即停止自动补报，转人工对账，不生成新身份 |
+| 活动阶段 | 本服业务时间线 + 协调器 expected 集合 | `freeze` 停止新准入；`phase` 要求所有意图 Sent 后才能 NotifyPhase。一个服通知时保持 collecting，两个服通知后 complete。教学 expected 固定为 1000/1001；生产从活动组与 singleton 存活事实取得 |
+| 原服奖励义务、丢失 ACK | 静态 sid 分隔的业务 `versionstore` 存储 | `receive` 校验窗口、目标 sid、完整结算结果和冻结贡献，按窗口写不可变奖励清单与回执；写成功才 ACK。重投返回原回执，不提升存储版本；同窗口变更奖励清单被拒 |
+
+**奖励义务不是金币到账**：这个切片的 ACK 表示原服已持久接收“谁应获得多少积分奖励”的义务。它没有连接 Player DAO、邮件附件领取或 Saga 资产事务。后续应由原服消费者把义务转成实际资产，并在同一 Player 事务中写永久到账身份；不能把协调器的有限去重或原服收到义务，当作玩家已经领取。
+
+**视野如何继续扩展**：当前联合场景验证的是联盟与侦察两种授权来源归并，没有把“附近”自动等同可见。空间迷雾应由服务端侦察规则产生授权，再结合 `SpatialComponent` 的提交门、观察块与 Profile 白名单。跨服撤权通知仍存在传播窗口，正式产品需要定义可接受延迟和会话暂停策略；不能声称本例已验证撤权瞬间全服无泄漏。
+
+运行方式（现有隔离测试 Redis / NATS；不启动或停止共享服务）：
+
+```bash
+ROOST_DATAENGINE_IT_REDIS_ADDR=127.0.0.1:6379 \
+ROOST_DATAENGINE_IT_NATS_URL=nats://127.0.0.1:4222 \
+bash scripts/test-slg-alliance.sh
+```
+
+实跑证据：`TestSLGAllianceActivity` 经 race 通过、无 skip，随后消费者 vet 通过。一个测试覆盖以下连续流程：八个并发重复战果只留一个意图；错服与身份盗用拒绝；退盟、独立侦察保留及最后来源撤销；已提交贡献丢失应用确认；冻结但仍有未确认意图时禁止结算；真正重启协调器后补报只计一次；超出重放期限拒绝自动补报；两服阶段屏障；原服义务已写未 ACK，再次重启协调器后通过 OwedDispatches 找回旧窗口、原 token 重投、不重写回执、错误 token 拒绝、重复 ACK 幂等。唯一 Redis 命名空间和 NATS subject 隔离，结束只清理本次资源。
+
+**证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野只验证正式 Interest / Manager 的订阅表，传输是测试接收器，不证明客户端 Full／增量。联盟权威暂用业务 CAS 存储，尚未接入 Remote owner／lease／fence；原服对象重建验证持久义务回执，尚未启动独立 game 进程或完成实际 Player 发奖。
+
+**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。下一步优先把联盟权威换成正式生成的 Remote 实体，并把原服义务接入 Player / 邮件永久到账；之后加入持久空间事实、真实客户端与跨服撤权传播验收。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
 
 ### 1. 适合谁、先读什么
 
