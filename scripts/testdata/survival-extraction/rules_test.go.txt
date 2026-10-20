@@ -1,0 +1,134 @@
+package survival
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func testState(t *testing.T) State {
+	t.Helper()
+	s, e := New([Seats]int64{1, 2, 3, 4}, DemoRules(), 1800000000000)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for id := int64(1); id <= 4; id++ {
+		if _, e = s.Enter(id, s.LastAt); e != nil {
+			t.Fatal(e)
+		}
+	}
+	return s
+}
+func TestSurvivalExtractionDeathRefundsUnfinishedCraftAndConservesItems(t *testing.T) {
+	s := testState(t)
+	s.Seats[0].Pos = 1
+	for range 5 {
+		if e := s.Advance(s.Deadline); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, _, e := s.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "craft"}, s.HazardAt-500); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Advance(s.Deadline); e != nil {
+		t.Fatal(e)
+	}
+	if s.Drops[0].Inventory != (Inventory{2, 0, 1, 0}) || s.Crafted != 0 {
+		t.Fatal("pending recipe destroyed inputs")
+	}
+	if e := s.Validate(); e != nil {
+		t.Fatal(e)
+	}
+	s.Drops[0].Inventory[0]++
+	if _, e := Decode(s.Encode()); e == nil {
+		t.Fatal("invented loot passed conservation")
+	}
+}
+func TestSurvivalExtractionOfflineDamageIsBoundedAndRaidEndFixed(t *testing.T) {
+	s := testState(t)
+	s.Seats[0].Pos = 1
+	end := s.EndAt
+	now := s.LastAt + 30000
+	if e := s.Advance(now); e != nil {
+		t.Fatal(e)
+	}
+	if s.Seats[0].HP != 5 || s.EndAt != end || s.HazardAt != now+s.Rules.HazardMillis {
+		t.Fatal("offline damage fast-forwarded or raid extended")
+	}
+	if e := s.Advance(end); e != nil {
+		t.Fatal(e)
+	}
+	if s.Phase != "done" || s.Seats[0].Status != "dead" {
+		t.Fatal("raid expiry not enforced")
+	}
+}
+func TestSurvivalExtractionStrictDecodeLedgerAndMissingAdmission(t *testing.T) {
+	s := testState(t)
+	for _, raw := range []string{s.Encode() + "{}", strings.Repeat("x", 256*1024+1)} {
+		if _, e := Decode(raw); e == nil {
+			t.Fatal("bad state accepted")
+		}
+	}
+	for n := 0; n < LedgerLimit; n++ {
+		s.Seats[0].Receipts = append(s.Seats[0].Receipts, Receipt{Command: Command{Seq: uint64(n + 1), Epoch: 1, Kind: "extract"}, At: s.LastAt})
+	}
+	if _, _, e := s.Apply(1, Command{Seq: 129, Epoch: 1, Kind: "extract"}, s.LastAt); e == nil {
+		t.Fatal("ledger overflow")
+	}
+	r := s.Seats[0].Receipts[0]
+	if got, changed, e := s.Apply(1, r.Command, s.LastAt); e != nil || changed || got != r {
+		t.Fatal("old receipt evicted")
+	}
+	fresh, e := New([Seats]int64{1, 2, 3, 4}, DemoRules(), s.LastAt)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = fresh.Apply(1, Command{Seq: 1, Epoch: 1, Kind: "extract"}, s.LastAt); e == nil {
+		t.Fatal("unpaid entry played")
+	}
+	if e = fresh.Advance(fresh.EndAt); e != nil {
+		t.Fatal(e)
+	}
+	if fresh.Seats[0].Status != "missed" {
+		t.Fatal("unjoined slot became paid player")
+	}
+}
+func TestSurvivalExtractionConfigurationSnapshotPreservesPricesAndDuration(t *testing.T) {
+	dir := t.TempDir()
+	r := DemoRules()
+	write := func() {
+		b, _ := json.Marshal(r)
+		if e := os.WriteFile(filepath.Join(dir, "survival.json"), b, 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	write()
+	store, e := OpenCatalog(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	old, e := CaptureRules(store.Current())
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := testState(t)
+	r.Version = "new"
+	r.Prices[0]++
+	r.RaidMillis *= 2
+	write()
+	if _, e = store.Load(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	next, e := CaptureRules(store.Current())
+	if e != nil || next.Hash() == old.Hash() || s.Rules != old {
+		t.Fatal("existing raid repriced")
+	}
+	r.Capacity = 0
+	write()
+	if _, e = store.Load(context.Background()); e == nil {
+		t.Fatal("invalid rules accepted")
+	}
+}

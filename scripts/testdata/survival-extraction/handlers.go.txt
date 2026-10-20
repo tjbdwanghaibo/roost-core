@@ -1,0 +1,175 @@
+package handler
+
+import (
+	db "example.com/survival-extraction-practice/db"
+	matchentity "example.com/survival-extraction-practice/game/entities/survival_raid"
+	survival "example.com/survival-extraction-practice/game/survival"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"time"
+)
+
+type ISurvivalRaidEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.SurvivalRaidDao
+	TimerComp() *matchentity.TimerComponent
+}
+type ISurvivalPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// 创建内存实体不代表已持久化；玩家建档必须经过一次正式事务。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalPlayerInit(p ISurvivalPlayerEntity) error {
+	if !p.Dao().GetInitialized() {
+		p.Dao().SetGold(100)
+		p.Dao().SetInitialized(true)
+	}
+	return nil
+}
+
+// 成局名单、配置、时间来自服务端。相同 Room ID 不允许改名单或重置探险。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r survival.Rules, now int64) (survival.View, error) {
+	if m.Dao().GetState() != "" {
+		s, e := survival.Decode(m.Dao().GetState())
+		if e != nil {
+			return survival.View{}, e
+		}
+		for i, id := range ids {
+			if s.Seats[i].PlayerID != id {
+				return survival.View{}, survival.ErrRule
+			}
+		}
+		return s.View(ids[0])
+	}
+	s, e := survival.New(ids, r, now)
+	if e != nil {
+		return survival.View{}, e
+	}
+	if e = saveSurvival(m, s); e != nil {
+		return survival.View{}, e
+	}
+	return s.View(ids[0])
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalCommand(m ISurvivalRaidEntity, playerID int64, c survival.Command, now int64) (survival.Receipt, error) {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return survival.Receipt{}, e
+	}
+	r, changed, e := s.Apply(playerID, c, now)
+	if e != nil {
+		return r, e
+	}
+	if changed {
+		e = saveSurvival(m, s)
+	}
+	return r, e
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalView(m ISurvivalRaidEntity, playerID int64) (survival.View, error) {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return survival.View{}, e
+	}
+	return s.View(playerID)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalConnect(m ISurvivalRaidEntity, playerID int64, ticket uint64, connected bool) error {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return e
+	}
+	if e = s.Connect(playerID, ticket, connected); e != nil {
+		return e
+	}
+	m.Dao().SetState(s.Encode())
+	return nil
+}
+
+// 当前鉴权连接可查旧 Epoch 回执，但不能把旧命令换成新 Seq 重做。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalReceipt(m ISurvivalRaidEntity, playerID int64, epoch, seq uint64) (survival.Receipt, error) {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return survival.Receipt{}, e
+	}
+	i := s.Index(playerID)
+	if i < 0 || s.Seats[i].Epoch != epoch || seq == 0 || seq > uint64(len(s.Seats[i].Receipts)) {
+		return survival.Receipt{}, survival.ErrRule
+	}
+	return s.Seats[i].Receipts[seq-1], nil
+}
+
+// 入场费与局内身份原子提交；Joined 为固定 RaidID / PlayerID 的永久准入事实。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, now int64) error {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return e
+	}
+	if !p.Dao().GetInitialized() {
+		return survival.ErrRule
+	}
+	changed, e := s.Enter(p.ID(), now)
+	if e != nil {
+		return e
+	}
+	if !changed {
+		return nil
+	}
+	cost := int64(s.Rules.EntryCost)
+	if p.Dao().GetGold() < cost {
+		return survival.ErrRule
+	}
+	p.Dao().SetGold(p.Dao().GetGold() - cost)
+	return saveSurvival(m, s)
+}
+
+// Player 静态归属。本地同库 MultiSync 将封存清单兑付与 Claimed 原子提交；跨 sid 另接 Remote/Saga。
+//
+//roost:nest rollback=undo durability=strict
+func handlerSurvivalClaim(p ISurvivalPlayerEntity, m ISurvivalRaidEntity) (int64, error) {
+	s, e := survival.Decode(m.Dao().GetState())
+	if e != nil {
+		return 0, e
+	}
+	i := s.Index(p.ID())
+	if i < 0 || !p.Dao().GetInitialized() || !s.Seats[i].Joined || (s.Seats[i].Status != "extracted" && s.Seats[i].Status != "dead") {
+		return 0, survival.ErrRule
+	}
+	reward := s.Reward(i)
+	if s.Seats[i].Claimed {
+		return reward, nil
+	}
+	if p.Dao().GetGold() > 1000000-reward {
+		return 0, survival.ErrRule
+	}
+	p.Dao().SetGold(p.Dao().GetGold() + reward)
+	s.Seats[i].Claimed = true
+	m.Dao().SetState(s.Encode())
+	return reward, nil
+}
+func saveSurvival(m ISurvivalRaidEntity, s survival.State) error {
+	if id := m.Dao().GetWakeTimer(); id != 0 {
+		m.TimerComp().RemoveTimer(id)
+	}
+	m.Dao().SetWakeTimer(0)
+	m.Dao().SetState(s.Encode())
+	if s.Deadline > 0 {
+		id := m.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), matchentity.TimerPhase, s.Deadline, 0, nil)
+		if id == 0 {
+			return survival.ErrRule
+		}
+		m.Dao().SetWakeTimer(id)
+	}
+	return nil
+}

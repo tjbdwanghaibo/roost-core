@@ -1,0 +1,83 @@
+// Package survival 是四人合作生存／撤离教学业务，不是框架内建经济或战斗规则。
+package survival
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"io"
+)
+
+var ErrRule = errors.New("survival: invalid identity, phase, operation or limit")
+
+const Seats = 4
+const LedgerLimit = 128
+const MaxTime int64 = 4000000000000
+
+type Rules struct {
+	Version                                              string
+	RaidMillis, HazardMillis, CraftMillis, ExtractMillis int64
+	HP, Capacity, EntryCost                              int
+	Nodes                                                [3]int
+	Prices                                               [4]int
+}
+
+func DemoRules() Rules {
+	return Rules{"survival-v1", 120000, 5000, 3000, 2000, 6, 6, 5, [3]int{6, 6, 6}, [4]int{1, 3, 1, 5}}
+}
+func (r Rules) Validate() error {
+	if r.Version == "" || len(r.Version) > 64 || r.RaidMillis < 10000 || r.RaidMillis > 3600000 || r.HazardMillis < 1000 || r.HazardMillis > r.RaidMillis || r.CraftMillis < 100 || r.CraftMillis >= r.RaidMillis || r.ExtractMillis < 100 || r.ExtractMillis >= r.RaidMillis || r.HP < 1 || r.HP > 100 || r.Capacity < 3 || r.Capacity > 50 || r.EntryCost < 1 || r.EntryCost > 100 {
+		return ErrRule
+	}
+	for _, n := range r.Nodes {
+		if n < 1 || n > 100 {
+			return ErrRule
+		}
+	}
+	for _, v := range r.Prices {
+		if v < 1 || v > 100 {
+			return ErrRule
+		}
+	}
+	return nil
+}
+func encode(v any) string {
+	b, e := json.Marshal(v)
+	if e != nil {
+		panic(e)
+	}
+	return string(b)
+}
+func strictJSON(s string, v any) error {
+	if len(s) == 0 || len(s) > 256*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(s))
+	d.DisallowUnknownFields()
+	if e := d.Decode(v); e != nil {
+		return e
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}
+func (r Rules) Hash() string { b := sha256.Sum256([]byte(encode(r))); return hex.EncodeToString(b[:]) }
+func OpenCatalog(dir string) (*configdata.Store, error) {
+	r := configdata.NewRegistry()
+	configdata.MustRegisterObject(r, configdata.ObjectDef[Rules]{Name: "survival_rules", File: "survival.json", Validate: func(_ *configdata.BuildContext, r Rules) error { return r.Validate() }})
+	s := configdata.NewStore(r, dir)
+	_, e := s.Load(context.Background())
+	return s, e
+}
+func CaptureRules(s *configdata.Snapshot) (Rules, error) {
+	r, ok := configdata.ObjectFrom[Rules](s, "survival_rules")
+	if !ok {
+		return r, ErrRule
+	}
+	return r, r.Validate()
+}

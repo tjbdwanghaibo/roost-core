@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 多人合作生存／撤离业务消费者
+
+- 新增 `scripts/test-survival-extraction-generated.sh` 与学习手册：四人付费准入、共享采集、制作预扣／容量预留、死亡掉落、撤离清单封存与永久兑付，规则仅位于独立业务夹具，框架运行时未改。
+- 12 项基础 race 场景与三进程真实 Mongo／WAL 恢复：制作／撤离在途、15 条 strict 未投影记录后 SIGKILL，驱动有界补算与下一期限，第三进程重试入场、命令和兑付不重复扣费发奖。教学范围与外部验收见 [生存／撤离接入](docs/framework/SURVIVAL-EXTRACTION-INTEGRATION.md)。
+
 ### 放置／模拟经营业务消费者
 
 - 新增 `scripts/test-idle-sim-generated.sh`、业务夹具和[学习手册](docs/framework/IDLE-SIM-INTEGRATION.md)：正式 Player DAO／Sender／timer，三工坊预扣生产、未开工取消、缓冲／仓库容量、升级／双倍的分段积分、固定离线截止、收益／订单／每日奖励与永久回执。业务规则不进入公共框架。
