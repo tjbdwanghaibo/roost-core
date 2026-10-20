@@ -70,10 +70,6 @@ const (
 	sceneMaxLeaveRadius = 300
 	sceneViewRadiusStep = 30
 
-	// relationTeam is the demo's one social relationship: the members of a
-	// formed match see each other wherever they are.
-	relationTeam = "team"
-
 	// A Join's replication session the transport could not open yet — it is
 	// still closing the player's previous one, which a quick reconnect over a
 	// SessionLifecycle transport runs into (entitysync.SessionOpenRetryable) —
@@ -124,6 +120,15 @@ type Scene struct {
 	// It is held across manager and policy calls; none of
 	// them calls back into the scene (SessionLost only schedules a settle).
 	transitions sync.Mutex
+
+	// teamMu guards the team views. A formed match is the demo's one social
+	// relationship: its members see each other wherever they are. Each team
+	// is one relation view (a logical view id the scene hands out), holding
+	// the members' entities and attached to every member — a member joining
+	// or leaving touches that one view, not a copy per member.
+	teamMu   sync.Mutex
+	teams    map[int64]policy.ViewID // player id → the team view it is attached to
+	lastTeam policy.ViewID
 
 	mu      sync.Mutex
 	members map[int64]sceneMember // subject (entity) id → the Join it is in the scene under
@@ -272,7 +277,7 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 // scene through here.
 func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
 	config = config.Normalize()
-	scene := &Scene{members: make(map[int64]sceneMember), sessions: transport}
+	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
 	// before its WAL record is durable, so content can be newer than what
 	// survives a crash. The Data Engine names the watermark and the manager
@@ -290,7 +295,8 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)
 	}
-	// The policy: distance on the map's grid, plus the team. An observer is
+	// The policy: distance on the map's grid (each player's main view, which
+	// follows the player's entity), plus the team views. An observer is
 	// a PLAYER id — the manager's session id — and what it sees are ENTITY
 	// ids, unique across kinds, so a Player 42 and a Monster 42 never
 	// collide; playerOf is the one translation from a player's entity to its
@@ -309,7 +315,6 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 			MaxLeaveRadius: sceneMaxLeaveRadius,
 			ViewRadiusStep: sceneViewRadiusStep,
 		},
-		Relations: []string{relationTeam},
 	})
 	if err != nil {
 		_ = manager.Close(context.Background())
@@ -606,7 +611,7 @@ func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point)
 	if bridge == nil {
 		return
 	}
-	if err := bridge.interest.Move(playerOf(subjectID), subjectID, to); err != nil {
+	if err := bridge.interest.Move(subjectID, to); err != nil {
 		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
 		return
 	}
@@ -683,6 +688,11 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 	if err := bridge.interest.Leave(playerOf(subjectID), subjectID); err != nil {
 		slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
 	}
+	// Leave detached the player from its team view and took its entity out of
+	// the view's members; the scene only forgets which team it was in.
+	bridge.teamMu.Lock()
+	bridge.leaveTeamLocked(playerOf(subjectID))
+	bridge.teamMu.Unlock()
 	bridge.apply()
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
@@ -723,38 +733,62 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 	}
 }
 
-// SetTeam makes a formed match a relationship: each member is interested in
-// the others wherever they are. The observer is the member's player id, the
-// subjects are the others' entity ids — a relation says which entities a
-// player cares about.
+// SetTeam makes a formed match a relationship: each member sees the others
+// wherever they are. The team is one relation view: its members are the
+// players' entity ids (a view says which entities its players see), and it is
+// attached to every member's player id. A member who was in an earlier team
+// leaves that one first; a team view nobody is attached to any more is
+// removed. Being in the team's members also covers the member's own entity,
+// which it already sees through self — the two give the same layer.
 func (bridge *Scene) SetTeam(members []int64) {
-	if bridge == nil {
+	if bridge == nil || bridge.interest == nil {
 		return
 	}
-	team := bridge.interest.Relation(relationTeam)
-	if team == nil {
-		return
-	}
-	observers := make([]int64, 0, len(members))
+	players := make([]int64, 0, len(members))
 	subjects := make([]int64, 0, len(members))
 	for _, member := range members {
 		subjectID, err := coreentity.BuildEntityID(member, player.EntityKindPlayer)
 		if err != nil {
 			continue
 		}
-		observers = append(observers, member)
+		players = append(players, member)
 		subjects = append(subjects, subjectID)
 	}
-	for index, observer := range observers {
-		peers := make([]int64, 0, len(subjects)-1)
-		for other, subject := range subjects {
-			if other != index {
-				peers = append(peers, subject)
-			}
+	bridge.teamMu.Lock()
+	bridge.lastTeam++
+	team := bridge.lastTeam
+	err := bridge.interest.DefineRelationView(team, coreentity.SyncProfile{})
+	if err == nil {
+		err = bridge.interest.SetViewMembers(team, subjects)
+	}
+	for _, member := range players {
+		if err != nil {
+			break
 		}
-		team.Set(observer, peers)
+		bridge.leaveTeamLocked(member)
+		if err = bridge.interest.AttachView(member, team); err == nil {
+			bridge.teams[member] = team
+		}
+	}
+	bridge.teamMu.Unlock()
+	if err != nil {
+		slog.Warn("scene: team view", "team", team, "err", err)
 	}
 	bridge.apply()
+}
+
+// leaveTeamLocked detaches a player from its team view and removes the view
+// once nobody is attached to it. Called with teamMu held.
+func (bridge *Scene) leaveTeamLocked(playerID int64) {
+	team, ok := bridge.teams[playerID]
+	if !ok {
+		return
+	}
+	delete(bridge.teams, playerID)
+	_ = bridge.interest.DetachView(playerID, team)
+	if players, defined := bridge.interest.ViewPlayers(team); defined && len(players) == 0 {
+		_ = bridge.interest.RemoveView(team)
+	}
 }
 
 // sweepLocked removes members whose connection is gone. The session-close

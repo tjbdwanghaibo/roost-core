@@ -7,14 +7,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// QueueSpatial 在同一提交事实中移动实体并替换额外覆盖；空 blocks 表示清空。
+// QueueSpatial 在同一提交事实中移动实体（跟随它的空间视野一起移动）并替换额外覆盖；空 blocks 表示清空。
 // 覆盖校验、集合复制在入队前完成，失败不产生部分事实。handler 必须传播错误。
-func (in *Interest) QueueSpatial(e entity.IThreadSafeEntity, at spatial.Point, observer bool, blocks []int64) error {
+func (in *Interest) QueueSpatial(e entity.IThreadSafeEntity, at spatial.Point, blocks []int64) error {
 	coverage, err := in.aoi.checkedBlocks(blocks)
 	if err != nil {
 		return err
 	}
-	return in.queueFact(e, queuedInterestFact{at: at, observer: observer, coverage: coverage, replaceCoverage: true})
+	return in.queueFact(e, queuedInterestFact{at: at, coverage: coverage, replaceCoverage: true})
 }
 
 // QueueObservedBlocks 只改变被观察覆盖，不改变实体实际位置。
@@ -42,19 +42,19 @@ var ErrSpatialScope = errors.New("policy: spatial component requires a Nest sync
 // writePosition 只在调用者持 Guard 的业务线程上调用，应写入可回滚的 DAO setter；
 // 不得执行 I/O 或再次派发业务。所有方法由持有 owner 的 Nest handler 调用。
 // 不自动拦截绕过本组件的 DAO 写入，业务移动入口应统一使用 Move/MoveWithObservedBlocks。
+// 跟随 owner 的空间视野（例如玩家主视野）随它一起移动，组件本身不区分观察者。
 type SpatialComponent struct {
 	entity.ComponentBase
 	owner         entity.IThreadSafeEntity
 	interest      *Interest
-	observer      bool
 	writePosition func(spatial.Point)
 }
 
-func NewSpatialComponent(owner entity.IThreadSafeEntity, interest *Interest, observer bool, writePosition func(spatial.Point)) (*SpatialComponent, error) {
+func NewSpatialComponent(owner entity.IThreadSafeEntity, interest *Interest, writePosition func(spatial.Point)) (*SpatialComponent, error) {
 	if owner == nil || owner.Base() == nil || interest == nil || writePosition == nil {
 		return nil, errors.New("policy: spatial owner, interest and position writer required")
 	}
-	return &SpatialComponent{owner: owner, interest: interest, observer: observer, writePosition: writePosition}, nil
+	return &SpatialComponent{owner: owner, interest: interest, writePosition: writePosition}, nil
 }
 
 func (*SpatialComponent) Name() string { return "spatial" }
@@ -65,7 +65,7 @@ func (c *SpatialComponent) Move(to spatial.Point) error {
 	if !c.inScope() {
 		return ErrSpatialScope
 	}
-	if err := c.interest.QueueMove(c.owner, to, c.observer); err != nil {
+	if err := c.interest.QueueMove(c.owner, to); err != nil {
 		return err
 	}
 	c.writePosition(to)
@@ -76,7 +76,7 @@ func (c *SpatialComponent) MoveWithObservedBlocks(to spatial.Point, blocks []int
 	if !c.inScope() {
 		return ErrSpatialScope
 	}
-	if err := c.interest.QueueSpatial(c.owner, to, c.observer, blocks); err != nil {
+	if err := c.interest.QueueSpatial(c.owner, to, blocks); err != nil {
 		return err
 	}
 	c.writePosition(to)

@@ -6,13 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-func (in *Interest) profileFor(source string, band int) entity.SyncProfile {
-	if profile, ok := in.sourceProfiles[source][band]; ok {
-		return profile
-	}
-	return in.profile(band).Normalize()
-}
-
+// validateProfile 检查一个视图（层级或层级并集）在每个配置的实体类型里都已声明，且优先级与 Manager 一致。
 func (in *Interest) validateProfile(profile entity.SyncProfile) error {
 	for name, views := range in.viewSets {
 		view, ok := views.Lookup(profile)
@@ -26,40 +20,27 @@ func (in *Interest) validateProfile(profile entity.SyncProfile) error {
 	return nil
 }
 
-// validateConfiguredProfiles 在启动时检查已知 band 都能映射到授权视图。
-// 空间 band 有限，可在启动前检查 fallback。关系 band 由业务动态输入，
-// 已声明映射先检查，其他动态值在 Subscribe 前检查，绝不悄悄放宽视图。
-func (in *Interest) validateConfiguredProfiles(config InterestConfig) error {
+// validateConfiguredLayers 在启动时检查已知层级都能映射到授权视图：空间视野的每个距离档（有限，可以全查）、
+// self 与额外块覆盖。关系视野的层级在 DefineRelationView 时检查，层级并集在 Subscribe 前检查，绝不悄悄放宽视图。
+func (in *Interest) validateConfiguredLayers() error {
 	if len(in.viewSets) == 0 {
 		return nil
 	}
-	check := func(source string, band int) error {
-		if err := in.validateProfile(in.profileFor(source, band)); err != nil {
-			return fmt.Errorf("policy: source %q band %d: %w", source, band, err)
+	check := func(what string, layer entity.SyncProfile) error {
+		if err := in.validateProfile(layer); err != nil {
+			return fmt.Errorf("policy: %s layer: %w", what, err)
 		}
 		return nil
 	}
 	for band := 0; band <= in.aoi.config.maxBands(); band++ {
-		if err := check(SourceSpatial, band); err != nil {
+		if err := check(fmt.Sprintf("spatial band %d", band), in.layerForBand(band)); err != nil {
 			return err
 		}
 	}
-	if in.self != nil {
-		if err := check(SourceSelf, 0); err != nil {
+	if in.selfVisible {
+		if err := check("self", in.selfLayer); err != nil {
 			return err
 		}
 	}
-	for source, bands := range in.sourceProfiles {
-		for band := range bands {
-			if err := check(source, band); err != nil {
-				return err
-			}
-		}
-	}
-	for _, source := range config.Relations {
-		if err := check(source, 0); err != nil {
-			return err
-		}
-	}
-	return nil
+	return check("block", in.blockLayer)
 }

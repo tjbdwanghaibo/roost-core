@@ -119,8 +119,6 @@ func (m *AOI) evaluateObserved(o *interestObserver) {
 	o.blockVisible = next
 }
 
-type blockSource struct{ manager *AOI }
-
 func (m *AOI) emitBlock(o *interestObserver, event InterestEvent) {
 	if m.parallelEvents {
 		o.blockPending = append(o.blockPending, event)
@@ -129,10 +127,9 @@ func (m *AOI) emitBlock(o *interestObserver, event InterestEvent) {
 	}
 }
 
-func (blockSource) Name() string { return SourceBlock }
-
-func (s blockSource) Flush() []InterestEvent {
-	m := s.manager
+// FlushBlocks drains the extra-coverage (QueueObservedBlocks) visibility changes, ordered like Flush.
+// 块覆盖与距离可见是同一观察者的两种持有，分开排出，Interest 按两个来源分别记账。
+func (m *AOI) FlushBlocks() []InterestEvent {
 	events := m.blockPending
 	m.blockPending = nil
 	sortInterestEvents(events)

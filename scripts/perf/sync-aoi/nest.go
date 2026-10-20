@@ -61,10 +61,9 @@ func (g loadGetter) GetMany(ctx context.Context, ids []int64, cats []entity.Enti
 }
 
 type loadMutation struct {
-	step     int
-	planned  time.Time
-	sent     time.Time // 发生器调用 Request 之前的时刻（服务端进程单调时钟）。
-	observer bool
+	step    int
+	planned time.Time
+	sent    time.Time // 发生器调用 Request 之前的时刻（服务端进程单调时钟）。
 }
 
 // splitTimings 记录服务端进程里能看到的分段（只计正式测量 tick），写进 server.json 的 harness / server：
@@ -116,7 +115,7 @@ func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.
 			split.changed(change.sent)
 		}
 		s.tracker.MarkSync(1)
-		return nil, in.QueueMove(s, at, change.observer)
+		return nil, in.QueueMove(s, at)
 	})
 	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithEntitySync(m), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {

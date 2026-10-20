@@ -1,9 +1,12 @@
 package policy
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -35,7 +38,7 @@ func BenchmarkAOIBatchRecompute(b *testing.B) {
 						check(a.AddObserver(int64(i+1000), int64(i+1000), positions[i*4], ObserverView{}))
 					}
 					a.Flush()
-					(blockSource{a}).Flush()
+					a.FlushBlocks()
 					step := 0
 					b.ReportAllocs()
 					for b.Loop() {
@@ -56,7 +59,7 @@ func BenchmarkAOIBatchRecompute(b *testing.B) {
 						}
 						a.endBatch(workers)
 						a.Flush()
-						(blockSource{a}).Flush()
+						a.FlushBlocks()
 						step++
 					}
 				})
@@ -83,8 +86,7 @@ func BenchmarkAOIEventCollection(b *testing.B) {
 					b.Fatal(err)
 				}
 				aoi.Flush()
-				blocks := blockSource{manager: aoi}
-				blocks.Flush()
+				aoi.FlushBlocks()
 				b.ReportAllocs()
 				step := 0
 				for b.Loop() {
@@ -96,105 +98,184 @@ func BenchmarkAOIEventCollection(b *testing.B) {
 						step++
 					}
 					aoi.Flush()
-					blocks.Flush()
+					aoi.FlushBlocks()
 				}
 			})
 		}
 	}
 }
 
-func BenchmarkRelationUpdates(b *testing.B) {
-	for _, count := range []int{10, 10000} {
-		for _, forget := range []bool{false, true} {
-			b.Run(fmt.Sprintf("observers=%d/forget=%v", count, forget), func(b *testing.B) {
-				source := NewRelationSource("team")
-				for i := 1; i <= count; i++ {
-					source.Set(int64(i), []int64{int64(i + count)})
-				}
-				source.Flush()
-				b.ReportAllocs()
-				for b.Loop() {
-					if forget {
-						source.Forget(int64(count + 1))
-					}
-					source.Set(1, []int64{int64(count + 1)})
-					source.Flush()
-				}
-			})
-		}
+// ---- 视野（D19）：只测登记表与应用侧扇出（syncViewsLocked / drainAOILocked 写进 held），不含 Manager 订阅与打包 ----
+
+func benchmarkInterest(b *testing.B) *Interest {
+	b.Helper()
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &sink{}})
+	if err != nil {
+		b.Fatal(err)
 	}
+	b.Cleanup(func() { _ = manager.Close(context.Background()) })
+	in, err := NewInterest(InterestConfig{Manager: manager, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 100_000, Y: 100_000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(in.Close)
+	return in
 }
 
-// 集合规模与并发调用单独测量，避免只用单成员重复 Set 掩盖锁内构表成本。
-func BenchmarkRelationSetSize(b *testing.B) {
-	for _, size := range []int{32, 1024, 8192} {
-		for _, parallel := range []bool{false, true} {
-			b.Run(fmt.Sprintf("size=%d/parallel=%v", size, parallel), func(b *testing.B) {
-				s := NewRelationSource("friends")
-				ids := make([]int64, size)
+// settleViews 把登记表的变更与 AOI 事件写进 held，再丢掉结算标记：基准只量扇出，不量 Manager。
+func settleViews(in *Interest) {
+	in.mu.Lock()
+	in.syncViewsLocked()
+	in.drainAOILocked()
+	clear(in.touched)
+	in.mu.Unlock()
+}
+
+// 共享关系视野（联盟）每轮换一个成员：成本 = 变化成员数 × 挂接玩家数。
+func BenchmarkRelationViewMemberChange(b *testing.B) {
+	for _, players := range []int{1, 64, 1024} {
+		for _, members := range []int{32, 1024} {
+			b.Run(fmt.Sprintf("players=%d/members=%d", players, members), func(b *testing.B) {
+				in := benchmarkInterest(b)
+				const id = ViewID(1)
+				if err := in.DefineRelationView(id, entity.SyncProfile{}); err != nil {
+					b.Fatal(err)
+				}
+				ids := make([]int64, members)
 				for i := range ids {
 					ids[i] = int64(i + 1)
 				}
-				s.Set(1, ids)
-				s.Flush()
-				b.ReportAllocs()
-				b.ResetTimer()
-				if parallel {
-					b.RunParallel(func(pb *testing.PB) {
-						for pb.Next() {
-							s.Set(1, ids)
-						}
-					})
-				} else {
-					for range b.N {
-						s.Set(1, ids)
+				if err := in.SetViewMembers(id, ids); err != nil {
+					b.Fatal(err)
+				}
+				for player := 1; player <= players; player++ {
+					if err := in.AttachView(int64(1_000_000+player), id); err != nil {
+						b.Fatal(err)
 					}
+				}
+				settleViews(in)
+				b.ReportAllocs()
+				spare := int64(members + 1)
+				for b.Loop() {
+					if err := in.AddViewMembers(id, spare); err != nil {
+						b.Fatal(err)
+					}
+					if err := in.RemoveViewMembers(id, ids[0]); err != nil {
+						b.Fatal(err)
+					}
+					settleViews(in)
+					ids[0], spare = spare, ids[0]
 				}
 			})
 		}
 	}
 }
 
-// 相同存量与相同事件：每轮替换一个成员，比较全量 Set 和增量 ApplyDelta。
-// 不包含事实队列、网络或业务 DAO；不能据此推断端到端吞吐。
-func BenchmarkRelationMemberChange(b *testing.B) {
-	for _, size := range []int{1, 32, 1024, 8192} {
-		for _, delta := range []bool{false, true} {
-			b.Run(fmt.Sprintf("size=%d/delta=%v", size, delta), func(b *testing.B) {
-				s := NewRelationSource("team")
-				ids := make([]int64, size)
-				for i := range ids {
-					ids[i] = int64(i + 1)
+// 一个玩家挂接、解除一个关系视野：成本 = 成员数。
+func BenchmarkRelationViewAttach(b *testing.B) {
+	for _, members := range []int{32, 1024, 4096} {
+		b.Run(fmt.Sprintf("members=%d", members), func(b *testing.B) {
+			in := benchmarkInterest(b)
+			const id = ViewID(1)
+			if err := in.DefineRelationView(id, entity.SyncProfile{}); err != nil {
+				b.Fatal(err)
+			}
+			ids := make([]int64, members)
+			for i := range ids {
+				ids[i] = int64(i + 1)
+			}
+			if err := in.SetViewMembers(id, ids); err != nil {
+				b.Fatal(err)
+			}
+			settleViews(in)
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := in.AttachView(7, id); err != nil {
+					b.Fatal(err)
 				}
-				s.Set(10001, ids)
-				s.Flush()
-				b.ReportAllocs()
-				for b.Loop() {
-					previous := ids[0]
-					if previous == 1 {
-						ids[0] = int64(size + 1)
-					} else {
-						ids[0] = 1
-					}
-					if delta {
-						s.ApplyDelta(10001, []int64{ids[0]}, []int64{previous})
-					} else {
-						s.Set(10001, ids)
-					}
-					events := s.Flush()
-					if len(events) != 2 {
-						b.Fatalf("expected enter/leave, got %v", events)
+				settleViews(in)
+				if err := in.DetachView(7, id); err != nil {
+					b.Fatal(err)
+				}
+				settleViews(in)
+			}
+		})
+	}
+}
+
+// 一个玩家多个空间视野（RTS 单位、阵营眼位）：每轮移动全部被跟随的单位，每个视野按自己的块重评。
+func BenchmarkSpatialViewsPerPlayer(b *testing.B) {
+	for _, views := range []int{1, 16, 64} {
+		b.Run(fmt.Sprintf("views=%d", views), func(b *testing.B) {
+			in := benchmarkInterest(b)
+			for i := 0; i < 2000; i++ {
+				if err := in.Show(int64(100_000+i), spatial.Point{X: int64(i%100)*100 + 50, Y: int64(i/100)*100 + 50}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			for i := range views {
+				unit := int64(1 + i)
+				at := spatial.Point{X: int64(i%8)*1000 + 500, Y: int64(i/8)*500 + 500}
+				if err := in.Show(unit, at); err != nil {
+					b.Fatal(err)
+				}
+				if err := in.DefineSpatialView(ViewID(unit), at, ObserverView{}, unit); err != nil {
+					b.Fatal(err)
+				}
+				if err := in.AttachView(7, ViewID(unit)); err != nil {
+					b.Fatal(err)
+				}
+			}
+			settleViews(in)
+			b.ReportAllocs()
+			step := int64(0)
+			for b.Loop() {
+				step = (step + 1) % 2
+				for i := range views {
+					unit := int64(1 + i)
+					at := spatial.Point{X: int64(i%8)*1000 + 500 + step*100, Y: int64(i/8)*500 + 500}
+					if err := in.Move(unit, at); err != nil {
+						b.Fatal(err)
 					}
 				}
-				if len(s.members[10001]) != size {
-					b.Fatal("membership count changed")
+				settleViews(in)
+			}
+		})
+	}
+}
+
+// 共享空间视野（阵营眼位挂给全阵营）：目标进出一个视野，扇出到全部挂接玩家。
+func BenchmarkSharedSpatialView(b *testing.B) {
+	for _, players := range []int{1, 64, 1024} {
+		b.Run(fmt.Sprintf("players=%d", players), func(b *testing.B) {
+			in := benchmarkInterest(b)
+			if err := in.DefineSpatialView(1, spatial.Point{X: 500, Y: 500}, ObserverView{}, 0); err != nil {
+				b.Fatal(err)
+			}
+			for player := 1; player <= players; player++ {
+				if err := in.AttachView(int64(1_000_000+player), 1); err != nil {
+					b.Fatal(err)
 				}
-				for _, id := range ids {
-					if _, ok := s.members[10001][id]; !ok {
-						b.Fatal("incorrect final membership")
-					}
+			}
+			if err := in.Show(42, spatial.Point{X: 510, Y: 500}); err != nil {
+				b.Fatal(err)
+			}
+			settleViews(in)
+			b.ReportAllocs()
+			inside := true
+			for b.Loop() {
+				inside = !inside
+				at := spatial.Point{X: 900, Y: 500}
+				if inside {
+					at = spatial.Point{X: 510, Y: 500}
 				}
-			})
-		}
+				if err := in.Move(42, at); err != nil {
+					b.Fatal(err)
+				}
+				settleViews(in)
+			}
+		})
 	}
 }

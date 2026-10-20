@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -31,15 +30,8 @@ type queuedInterestFact struct {
 	id                 int64
 	condition          func() (bool, bool)
 	at                 spatial.Point
-	// observer 为真时同时移动观察者；observerID 是 id 换算出的玩家 ID（关系事实同样以它为观察者）。
-	observer   bool
-	observerID int64
-	// subjectGone：Hide 在事实应用前移走了被观察方，只剩观察者那一半要移动。
-	subjectGone     bool
-	relation        string
-	subjects        []int64
-	relationDelta   bool
-	removedSubjects []int64
+	// subjectGone：Hide / Leave 在事实应用前移走了目标，只剩跟随它的空间视野那一半要移动。
+	subjectGone bool
 }
 
 // ---- Leave / Hide 与排队事实 ----
@@ -49,58 +41,22 @@ type queuedInterestFact struct {
 // 取 pending 之前失败，之后每一次都一样——这个 Manager 上所有 subject 停发，Stop / Drain 一直报错。
 //
 // 所以 Leave / Hide 把自己的效果写进排队事实，使应用结果与“先应用事实、再 Leave / Hide”逐项相同，不多丢也不多留：
-//   - 位置事实：MoveSubject 后 RemoveSubject ≡ RemoveSubject，被观察方那一半作废；MoveObserver 后 RemoveObserver
-//     同理。两半都作废才丢弃整条——Hide 只移走被观察方，observer=true 的事实保留观察者的移动。
-//   - 关系事实：Set(o, S) 后 Forget(e) ≡ Set(o, S\{e})，从成员里去掉实体 e；Leave 还 Clear(p)，
-//     Set(p, S) 后 Clear(p) ≡ Clear(p)，玩家 p 作为观察者的关系事实整条丢弃。
-// 只按 AOI 实际发生的删除改写（RemoveObserver / RemoveSubject 失败时那一半不动），所以不会丢掉仍然有效的事实。
+// MoveSubject 后 RemoveSubject ≡ RemoveSubject，目标那一半作废；跟随它的空间视野在“先应用”时会被带到新位置，
+// 所以那一半保留（应用时按当时的跟随表移动，Leave 撤掉的主视野自然不在表里）。只改额外覆盖的事实整条丢弃。
+// 只按 AOI 实际发生的删除改写（RemoveSubject 失败时不动），所以不会丢掉仍然有效的事实。
 
-// supersedeQueuedRelationsLocked 在关系源 Clear(observer)（observer 非零时）与 Forget(subject)（subject 非零时）之后调用。
-// observer 是玩家 ID，subject 是实体 ID。调用方持有 in.mu。
-func (in *Interest) supersedeQueuedRelationsLocked(observer, subject int64) {
+// supersedeQueuedMovesLocked 在 AOI 实际移走实体 subject 之后调用。调用方持有 in.mu。
+func (in *Interest) supersedeQueuedMovesLocked(subject int64) {
 	in.queueMu.Lock()
 	defer in.queueMu.Unlock()
+	delete(in.subjectRoles, subject)
 	in.rewriteFactsLocked(func(fact *queuedInterestFact) bool {
-		if fact.relation == "" {
-			return true
-		}
-		if observer != 0 && fact.observerID == observer {
-			return false
-		}
-		if subject == 0 {
-			return true
-		}
-		fact.subjects = slices.DeleteFunc(fact.subjects, func(id int64) bool { return id == subject })
-		// 增量同样不能在退出后重放旧新增；旧移除已由 Forget 完成。
-		fact.removedSubjects = slices.DeleteFunc(fact.removedSubjects, func(id int64) bool { return id == subject })
-		return true
-	})
-}
-
-// supersedeQueuedMovesLocked 在 AOI 实际移走实体 subject 的被观察方，或玩家 observer 的观察者之后调用（另一个传 0）。
-// 调用方持有 in.mu。
-func (in *Interest) supersedeQueuedMovesLocked(subject, observer int64) {
-	in.queueMu.Lock()
-	defer in.queueMu.Unlock()
-	if subject != 0 {
-		delete(in.subjectRoles, subject)
-	}
-	if observer != 0 {
-		delete(in.observerRoles, observer)
-	}
-	in.rewriteFactsLocked(func(fact *queuedInterestFact) bool {
-		if fact.relation != "" {
-			return true
-		}
-		if subject != 0 && fact.id == subject {
+		if fact.id == subject {
 			fact.subjectGone = true
 			fact.replaceCoverage = false
 			fact.coverage = nil
 		}
-		if observer != 0 && fact.observerID == observer {
-			fact.observer = false
-		}
-		return !fact.subjectGone || fact.observer
+		return !fact.subjectGone || !fact.coverageOnly
 	})
 }
 
@@ -123,30 +79,11 @@ func (in *Interest) rewriteFactsLocked(keep func(*queuedInterestFact) bool) {
 	in.facts = kept
 }
 
-// QueueMove 在 Entity 锁内记录位置事实；锁外确认提交后、捕获同步内容前应用。
-// observer=true 同时移动观察者（玩家 ID 由 InterestConfig.ObserverOf 从 e 换算），false 只移动被观察实体。
+// QueueMove 在 Entity 锁内记录位置事实；锁外确认提交后、捕获同步内容前应用：移动目标 e，跟随 e 的空间视野
+// （玩家主视野、单位视野）一起移动。位置是 DAO 驱动的事实，必须与提交一致，所以走提交门；视野配置类操作不走。
 // 失败需由 handler 返回。
-func (in *Interest) QueueMove(e entity.IThreadSafeEntity, at spatial.Point, observer bool) error {
-	return in.queueFact(e, queuedInterestFact{at: at, observer: observer})
-}
-
-// QueueRelation 复制关系成员，避免业务后续修改切片。source 必须已声明。
-// 观察者是 ObserverOf(e.ID()) 换算出的玩家 ID，成员是实体 ID。
-func (in *Interest) QueueRelation(e entity.IThreadSafeEntity, source string, subjects []int64) error {
-	if source == "" {
-		return errors.New("policy: relation source required")
-	}
-	return in.queueFact(e, queuedInterestFact{relation: source, subjects: slices.Clone(subjects)})
-}
-
-// QueueRelationDelta 在 Entity 锁内记录关系增量，提交确认后按同 ID 顺序应用。
-// 输入立即复制；同一调用中 removed 优先，重复 ID 幂等，零 ID 忽略。
-// 错误必须由 handler 返回。它不替代业务关系 DAO 的修改和回滚。
-func (in *Interest) QueueRelationDelta(e entity.IThreadSafeEntity, source string, added, removed []int64) error {
-	if source == "" {
-		return errors.New("policy: relation source required")
-	}
-	return in.queueFact(e, queuedInterestFact{relation: source, relationDelta: true, subjects: slices.Clone(added), removedSubjects: slices.Clone(removed)})
+func (in *Interest) QueueMove(e entity.IThreadSafeEntity, at spatial.Point) error {
+	return in.queueFact(e, queuedInterestFact{at: at})
 }
 
 func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFact) error {
@@ -154,13 +91,6 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 		return errors.New("policy: entity required")
 	}
 	fact.id = e.ID()
-	if fact.relation != "" || fact.observer {
-		playerID, ok := in.observerOf(fact.id)
-		if !ok || playerID == 0 {
-			return fmt.Errorf("%w: entity %d has no observer", ErrInterestUnknown, fact.id)
-		}
-		fact.observerID = playerID
-	}
 	fact.commit = entity.CurrentSyncMutation()
 	fact.condition = entity.SyncConditionFor(e)
 	in.queueMu.Lock()
@@ -168,18 +98,11 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 	if in.queueClosed {
 		return errors.New("policy: interest is closed")
 	}
-	if fact.relation != "" && in.relations[fact.relation] == nil {
-		return errors.New("policy: unknown relation source")
+	if !fact.coverageOnly && !in.aoi.Bounds().Contains(fact.at) {
+		return spatial.ErrInvalidBounds
 	}
-	if fact.relation == "" {
-		if !fact.coverageOnly && !in.aoi.Bounds().Contains(fact.at) {
-			return spatial.ErrInvalidBounds
-		}
-		_, subject := in.subjectRoles[fact.id]
-		_, observer := in.observerRoles[fact.observerID]
-		if !subject || fact.observer && !observer {
-			return ErrInterestUnknown
-		}
+	if _, subject := in.subjectRoles[fact.id]; !subject {
+		return ErrInterestUnknown
 	}
 	if len(in.facts)+in.inflight >= in.maxQueuedFacts {
 		return ErrInterestQueueFull
@@ -201,9 +124,16 @@ func (in *Interest) applyQueued() error {
 	if in.closed {
 		return nil
 	}
+	// 视野登记表的变更先按顺序应用（批次写阶段之外），事实里的跟随移动才看得到新定义的视野。
+	// 排过事实或记过业务视野变更之后，政策阶段负责结算与重试；在此之前（纯直接模式）由调用方的 Apply 驱动。
+	_, viewsActive := in.registry.state()
+	in.syncViewsLocked()
 	in.queueMu.Lock()
 	if !in.queueActive {
 		in.queueMu.Unlock()
+		if viewsActive {
+			in.applyLocked()
+		}
 		return nil
 	}
 	// 抽取有界总队列；以 batchSize 限制新提交，已开始的同一提交整体应用。
@@ -249,24 +179,16 @@ func (in *Interest) applyQueued() error {
 		}
 		completed = append(completed, fact)
 		var err error
-		if fact.relation != "" {
-			if fact.relationDelta {
-				in.relations[fact.relation].ApplyDelta(fact.observerID, fact.subjects, fact.removedSubjects)
-			} else {
-				in.relations[fact.relation].Set(fact.observerID, fact.subjects)
+		if !fact.subjectGone {
+			if fact.replaceCoverage {
+				err = in.aoi.SetObservedBlocks(fact.id, fact.coverage)
 			}
-		} else {
-			if !fact.subjectGone {
-				if fact.replaceCoverage {
-					err = in.aoi.SetObservedBlocks(fact.id, fact.coverage)
-				}
-				if err == nil && !fact.coverageOnly {
-					err = in.aoi.MoveSubject(fact.id, fact.at)
-				}
+			if err == nil && !fact.coverageOnly {
+				err = in.aoi.MoveSubject(fact.id, fact.at)
 			}
-			if err == nil && fact.observer {
-				err = in.aoi.MoveObserver(fact.observerID, fact.at)
-			}
+		}
+		if err == nil && !fact.coverageOnly {
+			in.moveFollowersLocked(fact.id, fact.at)
 		}
 		if err != nil {
 			failed = errors.Join(failed, fmt.Errorf("policy: dropped queued fact for %d: %w", fact.id, err))
@@ -293,16 +215,20 @@ func (in *Interest) applyQueued() error {
 	return failed
 }
 
-// queuedPending 告诉 Drain 政策还有没做完的事：排队事实，以及还没停滞的重试 pair。
+// queuedPending 告诉 Drain 政策还有没做完的事：未应用的视野变更、排队事实，以及还没停滞的重试 pair。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return false
 	}
+	viewsPending, viewsActive := in.registry.state()
+	if viewsPending {
+		return true
+	}
 	in.queueMu.Lock()
 	pending := len(in.facts) > 0 || in.inflight > 0
-	active := in.queueActive
+	active := in.queueActive || viewsActive
 	in.queueMu.Unlock()
 	if !active {
 		return false

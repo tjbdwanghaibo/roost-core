@@ -220,7 +220,7 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find } 
 ## 服务端权威状态同步：Player 是复制主体，entitysync.Manager 是调度器，scene 是政策
 
 `sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。`entitysync.Manager`（进程一个）拥有全部主体与会话，
-每 tick 给每个会话一帧；谁订谁由 roost-core 的 `sync/entitysync/policy.Interest`（距离 + team 关系）决定；scene 只剩应用层的三件事：
+每 tick 给每个会话一帧；谁订谁由 roost-core 的 `sync/entitysync/policy.Interest`（主视野的距离 + 队伍关系视野）决定；scene 只剩应用层的三件事：
 把 TCP 推送接成 `entitysync.Transport`、会话生命周期（`enter_game` 以 held 开会话 → 客户端 `scene_ready` → 离场关会话）、地图尺寸与半径。设计与契约见 [Sync 设计与使用](../docs/framework/guide/04-sync.md) 与 [Entity Sync](../docs/framework/ENTITY_SYNC.md)。
 
 ```
@@ -237,8 +237,8 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   （尚未解决）。要自己的客户端协议的项目在这里换成自己的消息。
 - **持久化水位**：`wiring/dataengine` 的 `DurableLSN` 装进 `entitysync.ManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
   就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；Manager 会压住整个主体直到水位追上。
-- **谁订阅谁不在这里决定**：`policy.Interest` 决定（距离 + 关系源），并直接说给 Manager；scene 只在 `NewInterest` 里给出地图尺寸、半径和关系名。
-  加一种关系（好友、同盟）= `Relations` 里多一个名字加一处 `Relation(name).Set`。
+- **谁订阅谁不在这里决定**：`policy.Interest` 决定（视野：空间视野按距离、关系视野按成员），并直接说给 Manager；scene 只在 `NewInterest` 里给出地图尺寸与半径。
+  加一种关系（好友、同盟）= 定义一个关系视野（`DefineRelationView`，视野 ID 由业务分配，例如联盟号）、维护成员（`SetViewMembers` / `AddViewMembers`），再挂给该看的玩家（`AttachView`）。
 - **跟不上就断开**：lane 用框架的 `selfsync.PushPlayerFrame`（自身视图同一条规则）。活着的连接收不下一帧时先关闭该玩家的全部连接，Manager 再关会话并回调 `SessionLost`；
   接入层整体不可用或进程出站驻留预算耗尽是 `ErrRetryLater`，tick 重来、不踢人；玩家没有连接时只关会话。
   会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
@@ -297,13 +297,13 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 把一个服并入另一个服（别名合服）用 `cmd/sidmerge` 与 `cmd/accountctl merge-server`：角色身份不变，account 记录“A 并入 B”后会话的承载服是 B，认证器按承载服写 `server_id`、原服写 `origin_server_id`；`sidmerge` 做合服前的检查（两侧 WAL、共享库同处、outbox、saga 终态、持久总线清单）并搬按 sid 分库的数据（game-demo 的 DAO 都在共享库，不用搬）；装配了 account 的 game 进程启动时自检，本服已被并入就拒绝启动。步骤与回退见[参考流程 §6](../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)。
 
-## 兴趣：距离是一种来源，关系是另一种
+## 兴趣：距离是一种视野，关系是另一种
 
 "谁该收到谁的状态"由 `framework/sync/entitysync/policy.Interest` 回答，scene（`internal/service/game/scene.go`）只给配置：
-地图尺寸、AOI 格边长、进出圈半径和关系名 `team`。设计与契约见 [Sync 设计与使用](../docs/framework/guide/04-sync.md) 与 [Block AOI](../docs/framework/INTEREST-BLOCK-AOI.md)。
+地图尺寸、AOI 格边长与进出圈半径；队伍在 `SetTeam` 里建成一个关系视野。设计与契约见 [Sync 设计与使用](../docs/framework/guide/04-sync.md) 与 [Block AOI](../docs/framework/INTEREST-BLOCK-AOI.md)。
 
-- **距离与关系是不同来源**：距离由 AOI 计算，队友关系经 `Interest.Relation("team").Set` 声明；一对（观察者，主体）可能被多个来源同时持有
-  （队友正好站在旁边），撤掉一个来源不会退掉另一个来源仍需要的订阅。
+- **距离与关系是不同视野**：玩家的主视野（跟随玩家实体）按距离看，队伍是一个关系视野（成员是队员的实体，挂给每个队员）；一对（玩家，主体）可能被多个视野同时持有
+  （队友正好站在旁边），解除一个视野不会退掉另一个视野仍需要的订阅。
 - **被看的用 entity id，看的人用 player id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id
   只在 kind 内唯一，拿它索引目标会让 Player 42 和 Monster 42 相撞。观察者是玩家，就是 player id，也是 Manager 的会话 id；
   `Enter(playerID, entityID, …)` 两个都给，玩家实体到 player id 的换算只在 `playerOf` 一处。

@@ -34,10 +34,8 @@ func newMMOScenes(transport scenePusher, locate func(context.Context, int64) (in
 	for _, id := range ids {
 		in, err := policy.NewInterest(policy.InterestConfig{
 			Manager: manager,
-			// self 来源仍用完整视图；附近玩家只能看到 near 视图中的公开字段。
-			SourceProfiles: map[string]map[int]entity.SyncProfile{
-				policy.SourceSpatial: {0: {Key: "near"}},
-			},
+			// self 仍用完整视图（SelfLayer 零值即 default）；附近玩家只能看到 near 视图中的公开字段。
+			BandLayer: func(int) entity.SyncProfile { return entity.SyncProfile{Key: "near"} },
 			AOI: policy.AOIConfig{
 				Bounds:    spatial.Rect{Max: spatial.Point{X: 2048, Y: 2048}},
 				BlockSize: 128, EnterRadius: 120, LeaveRadius: 150,

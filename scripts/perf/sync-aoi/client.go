@@ -278,7 +278,7 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 			r.err = fmt.Errorf("unexpected packet kind %d", kind)
 			return
 		}
-		decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+		decoded, err := entitysync.DecodeFrame(raw, frameLimits(c))
 		if err != nil {
 			r.err = err
 			return

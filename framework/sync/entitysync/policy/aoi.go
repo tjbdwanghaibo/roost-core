@@ -37,7 +37,8 @@ const (
 
 // InterestEvent is one incremental visibility change. Band carries the
 // distance-band index for Enter and BandChanged, and -1 for Leave.
-// Observer 是观察者的玩家 ID（会话 ID），Subject 是目标的实体 ID。
+// Observer 是观察者（一个空间视野）的编号，Subject 是目标的实体 ID。Interest 用内部视野编号当 AOI 观察者，
+// 再按挂接关系把事件扇出给玩家；单独使用 AOI 时观察者编号由调用方决定。
 type InterestEvent struct {
 	Observer int64
 	Subject  int64
@@ -241,7 +242,7 @@ func (c AOIConfig) boundedSides(blockSize int64) int64 {
 	return spatial.DivideCeil(longest, blockSize)
 }
 
-// interestObserver 是一个观察者（一个玩家的视野）。id 是玩家 ID；self 是玩家自身的实体 ID，
+// interestObserver 是一个观察者（一个空间视野）。id 是视野编号；self 是视野跟随的实体 ID，
 // 0 表示没有（只看不被看）。self 永远不进自己的可见集。enter / leave / bands 由 view 推出。
 type interestObserver struct {
 	dirty        observerDirty
@@ -263,7 +264,7 @@ type interestObserver struct {
 // observer movement re-evaluates only the affected neighborhood, and Flush
 // drains the resulting Enter/Leave/BandChanged events deterministically.
 //
-// 编号：观察者按玩家 ID 编号，目标按实体 ID 编号，两张表互不相通；观察者登记时带上自身实体（self），
+// 编号：观察者是空间视野（Interest 给的内部编号），目标按实体 ID 编号，两张表互不相通；观察者登记时带上跟随的实体（self），
 // 自排除比的是 self，不是观察者 ID。每个观察者有自己的视野（ObserverView），进出半径与距离分档都读观察者的值。
 //
 // 并发边界：公开写方法由 Interest 或 AOICluster 协调，不能由外部并发调用。
@@ -385,7 +386,7 @@ func (m *AOI) RemoveSubject(id int64) error {
 }
 
 // AddObserver registers an observer and evaluates its initial visible set.
-// id 是玩家 ID；self 是玩家自身的实体 ID（0 表示只看不被看），它永远不出现在自己的可见集里。
+// id 是视野编号；self 是视野跟随的实体 ID（0 表示不跟随），它永远不出现在这个视野的可见集里。
 // view 先按配置归一（层级必须存在，视野大小夹取量化）。已登记的观察者按新位置、新视野重新登记。
 func (m *AOI) AddObserver(id, self int64, at spatial.Point, view ObserverView) error {
 	if id == 0 {

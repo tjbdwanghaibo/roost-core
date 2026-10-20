@@ -61,9 +61,7 @@ func newMixedLoad(t *testing.T, ctx context.Context, count int) *mixedLoad {
 	}
 	t.Cleanup(func() { _ = l.manager.Close(context.Background()) })
 	side := int64(math.Ceil(math.Sqrt(float64(count))))
-	l.interest, err = policy.NewInterest(policy.InterestConfig{Manager: l.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49},
-		// 这里会话按实体 ID 打开，观察者编号与实体 ID 相同。
-		ObserverOf: func(id int64) (int64, bool) { return id, true }})
+	l.interest, err = policy.NewInterest(policy.InterestConfig{Manager: l.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +272,8 @@ func (l *mixedLoad) installHandler(scheduler *nest.NestMgr) {
 			e.wallet.SetX(at.X)
 			e.wallet.SetY(at.Y)
 			e.wallet.SetChanged(time.Now().UnixNano())
-			_, observer := l.clients[entitysync.SessionID(e.ID())]
-			if err := l.interest.QueueMove(e, at, observer); err != nil {
+			// 有会话的 Trader 以自身实体进场，主视野跟随它一起移动。
+			if err := l.interest.QueueMove(e, at); err != nil {
 				return nil, err
 			}
 		}

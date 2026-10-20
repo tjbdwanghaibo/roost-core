@@ -152,6 +152,12 @@ func (s *viewSink) take(id entitysync.SessionID) [][]byte {
 	return out
 }
 
+// 视野编号由业务分配：联盟视野按联盟号，侦察视野按玩家。
+const (
+	allianceView policy.ViewID = 1_000_001
+	scoutView    policy.ViewID = 2_000_002
+)
+
 type fog struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
@@ -163,9 +169,15 @@ func newFog(t *testing.T) *fog {
 	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
 	check(t, e)
 	t.Cleanup(func() { check(t, m.Close(context.Background())) })
-	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, Relations: []string{"alliance", "scout"}, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
+	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
 	check(t, e)
 	t.Cleanup(in.Close)
+	// 联盟视野是一份共享的关系视野：成员是联盟共有的目标（据点 99），挂给每个在籍成员；成员变动只改挂接，不复制成员集合。
+	// 侦察视野是 bob 私有的关系视野，和联盟视野各自持有同一个据点，最后一个释放才退订。
+	check(t, in.DefineRelationView(allianceView, entity.SyncProfile{}))
+	check(t, in.SetViewMembers(allianceView, []int64{99}))
+	check(t, in.DefineRelationView(scoutView, entity.SyncProfile{}))
+	check(t, in.SetViewMembers(scoutView, []int64{99}))
 	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 99, Namespace: "alliance-objective", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
 		return entity.TakeFrozenSyncPayload(1, []byte(`{"objective":99}`)), nil
 	}}})))
@@ -191,10 +203,12 @@ func (f *fog) reconcileFrom(load func() (state, error)) error {
 		return e
 	}
 	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
+		attach := f.interest.DetachView
 		if s.Members[p].Active {
-			f.interest.Relation("alliance").Set(id, []int64{99})
-		} else {
-			f.interest.Relation("alliance").Clear(id)
+			attach = f.interest.AttachView
+		}
+		if e := attach(id, allianceView); e != nil {
+			return e
 		}
 	}
 	if refused := f.interest.Apply(); len(refused) > 0 {

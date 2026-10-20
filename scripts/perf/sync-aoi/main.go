@@ -24,6 +24,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -48,6 +49,8 @@ type config struct {
 	Padding            int    `json:"padding_bytes"`
 	Batches            int    `json:"event_batches_per_tick"`
 	Visible            int    `json:"visible_target"`
+	ViewsPerPlayer     int    `json:"extra_views_per_player"`
+	AllianceSize       int    `json:"alliance_size"`
 	Role               string `json:"-"`
 	Address            string `json:"-"`
 	Output             string `json:"-"`
@@ -74,6 +77,8 @@ func parseConfig() config {
 	flag.IntVar(&c.Padding, "padding", 64, "additional representative component bytes")
 	flag.IntVar(&c.Batches, "batches", 10, "spread state changes across the interval")
 	flag.IntVar(&c.Visible, "visible", 50, "spatial cap plus self")
+	flag.IntVar(&c.ViewsPerPlayer, "views-per-player", 0, "extra spatial views per player, each following another entity (D19 multi-view); 0 keeps the single main view")
+	flag.IntVar(&c.AllianceSize, "alliance-size", 0, "group players into shared relation views of this many members, attached to every member (D19 shared view fan-out); 0 disabled")
 	flag.StringVar(&c.Role, "role", "server", "server or client")
 	flag.StringVar(&c.Address, "address", "", "client connects to this loopback endpoint")
 	flag.StringVar(&c.Output, "output", "", "new result directory")
@@ -88,7 +93,7 @@ func (c config) validate() error {
 	if !c.Nest && mode == entitysync.ModeOnChange {
 		return errors.New("on_change requires formal Nest producer")
 	}
-	if c.Players < 1 || c.Entities < c.Players || c.Entities > 100000 || c.Ticks < 1 || c.Ticks > 10000 || c.Hz < 1 || c.Hz > 1000 || c.Dirty < 1 || c.Dirty > 100 || c.Padding < 0 || c.Padding > 4096 || c.Batches < 1 || c.Batches > 100 || c.Visible < 2 || c.Visible > 100 || c.Output == "" {
+	if c.Players < 1 || c.Entities < c.Players || c.Entities > 100000 || c.Ticks < 1 || c.Ticks > 10000 || c.Hz < 1 || c.Hz > 1000 || c.Dirty < 1 || c.Dirty > 100 || c.Padding < 0 || c.Padding > 4096 || c.Batches < 1 || c.Batches > 100 || c.Visible < 2 || c.Visible > 100 || c.ViewsPerPlayer < 0 || c.ViewsPerPlayer > 1000 || c.AllianceSize < 0 || c.AllianceSize > c.Players || c.Output == "" {
 		return errors.New("invalid workload: check counts, hz, dirty, padding, visible and output")
 	}
 	if c.TraceCapacity < 0 || c.TraceCapacity > 1<<20 {
@@ -251,7 +256,7 @@ func runServer(c config) error {
 	if err != nil {
 		return err
 	}
-	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity))
+	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity), fmt.Sprintf("-visible=%d", c.Visible), fmt.Sprintf("-views-per-player=%d", c.ViewsPerPlayer), fmt.Sprintf("-alliance-size=%d", c.AllianceSize))
 	log, err := os.Create(filepath.Join(c.Output, "client.log"))
 	if err != nil {
 		return err
@@ -317,7 +322,7 @@ func runServer(c config) error {
 	defer closeTrace()
 	transport.trace = trace
 	mode, _ := entitysync.ParseSyncMode(c.Mode)
-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Trace: trace, Mode: mode, Interval: time.Second / time.Duration(c.Hz), Transport: output, SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: c.SnapshotObjects, MaxBytes: c.SnapshotBytes, PerSessionObjects: c.SnapshotPerSession}})
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Trace: trace, Mode: mode, Interval: time.Second / time.Duration(c.Hz), Transport: output, Limits: frameLimits(c), SnapshotBudget: entitysync.SnapshotBudget{MaxObjects: c.SnapshotObjects, MaxBytes: c.SnapshotBytes, PerSessionObjects: c.SnapshotPerSession}})
 	if err != nil {
 		return err
 	}
@@ -327,9 +332,9 @@ func runServer(c config) error {
 		_ = manager.Close(ctx)
 	}()
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	// 模拟玩家的玩家 ID 与实体 ID 取同一个数（会话也按它打开），事务内入口按同号换算观察者。
+	// 模拟玩家的玩家 ID 与实体 ID 取同一个数（会话也按它打开），主视野跟随玩家自己的实体。
 	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: c.Visible - 1},
-		ObserverOf: func(id int64) (int64, bool) { return id, true }})
+		MaxViewsPerPlayer: max(policy.DefaultMaxViewsPerPlayer, c.ViewsPerPlayer+2), MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
 	if err != nil {
 		return err
 	}
@@ -363,6 +368,9 @@ func runServer(c config) error {
 			return err
 		}
 	}
+	if err := defineLoadViews(interest, states, c); err != nil {
+		return err
+	}
 	if r := interest.Apply(); len(r) > 0 {
 		return fmt.Errorf("initial subscription refusal: %v", r[0])
 	}
@@ -390,7 +398,7 @@ func runServer(c config) error {
 		if manager.Stats().Pending == 0 {
 			break
 		}
-		if startupTicks > c.Players*c.Visible+1 {
+		if startupTicks > c.Players*c.Visible*(1+c.ViewsPerPlayer)+c.AllianceSize+1 {
 			return errors.New("initial snapshots did not converge")
 		}
 		if wait := time.Until(startupStart.Add(time.Duration(startupTicks) * time.Second / time.Duration(c.Hz))); wait > 0 {
@@ -418,7 +426,7 @@ func runServer(c config) error {
 				split.sent(planned, begin, sent)
 			}
 			if engine != nil {
-				_, err := engine.Request(ctx, loadHandler, id, []any{loadMutation{step: step, planned: planned, sent: sent, observer: expectedIDs[id]}})
+				_, err := engine.Request(ctx, loadHandler, id, []any{loadMutation{step: step, planned: planned, sent: sent}})
 				if err != nil {
 					return err
 				}
@@ -434,12 +442,7 @@ func runServer(c config) error {
 				split.changed(sent)
 			}
 			s.state.MarkDirty(1)
-			if expectedIDs[id] {
-				err = interest.Move(id, id, at)
-			} else {
-				err = interest.MoveShown(id, at)
-			}
-			if err != nil {
+			if err := interest.Move(id, at); err != nil {
 				return err
 			}
 		}
@@ -589,7 +592,7 @@ func runServer(c config) error {
 						ids = ids[:c.ReconnectPlayers]
 					}
 					for _, id := range ids {
-						raw, err := json.Marshal(append(interest.Visible(id), id))
+						raw, err := json.Marshal(interest.Seen(id))
 						if err != nil {
 							return err
 						}
@@ -650,8 +653,7 @@ func runServer(c config) error {
 	stats := manager.Stats()
 	visible := make([]float64, 0, c.Players)
 	for _, id := range observerIDs(c) {
-		ids := append(interest.Visible(id), id)
-		slices.Sort(ids)
+		ids := interest.Seen(id)
 		visible = append(visible, float64(len(ids)))
 		raw, err := json.Marshal(ids)
 		if err != nil {
@@ -733,4 +735,52 @@ func (l *serverTransport) metadata() (int, int64) {
 	l.metaMu.RLock()
 	defer l.metaMu.RUnlock()
 	return l.tick, time.Now().UnixNano()
+}
+
+// defineLoadViews 按 -views-per-player 与 -alliance-size 给模拟玩家加视野（D19）：每个额外空间视野跟随一个确定挑选的
+// 其他实体（召唤物、眼位），随它的事务移动一起移动；联盟是一个共享关系视野，成员是同组玩家的实体，挂给同组每个玩家。
+// 两项都为 0 时什么也不加，负载与只有主视野时相同。
+func defineLoadViews(interest *policy.Interest, states []*subject, c config) error {
+	players := observerIDs(c)
+	next := policy.ViewID(1)
+	for index, playerID := range players {
+		for k := range c.ViewsPerPlayer {
+			followed := states[(index*c.ViewsPerPlayer*7919+k*104729+1)%len(states)].data
+			at := spatial.Point{X: followed.X, Y: followed.Y}
+			if err := interest.DefineSpatialView(next, at, policy.ObserverView{}, followed.ID); err != nil {
+				return err
+			}
+			if err := interest.AttachView(playerID, next); err != nil {
+				return err
+			}
+			next++
+		}
+	}
+	if c.AllianceSize == 0 {
+		return nil
+	}
+	for start := 0; start < len(players); start += c.AllianceSize {
+		group := players[start:min(start+c.AllianceSize, len(players))]
+		if err := interest.DefineRelationView(next, entity.SyncProfile{}); err != nil {
+			return err
+		}
+		if err := interest.SetViewMembers(next, group); err != nil {
+			return err
+		}
+		for _, playerID := range group {
+			if err := interest.AttachView(playerID, next); err != nil {
+				return err
+			}
+		}
+		next++
+	}
+	return nil
+}
+
+// frameLimits：多视野与联盟让一个会话持有的目标超过缺省的每帧 / 每会话 100 个对象，服务端与客户端按同一上限放宽。
+// 不加视野时保持缺省，负载与之前相同。
+func frameLimits(c config) frame.Limits {
+	limits := frame.DefaultLimits()
+	limits.MaxObjects = max(limits.MaxObjects, c.Visible*(1+c.ViewsPerPlayer)+c.AllianceSize)
+	return limits
 }
