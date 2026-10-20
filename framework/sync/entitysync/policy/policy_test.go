@@ -1196,3 +1196,206 @@ func TestTwoObserversDoNotReleaseEachOthersSubscription(t *testing.T) {
 	mustApply(t, interest)
 	requireSessions(t, manager, 20, 11)
 }
+
+// ---- 关系与多来源合并的回归基线（D19 改结构前在旧 API 上写下，断言只看 Manager 的订阅表与 packer 收到的视图） ----
+
+// profileRecorder 是记录最近一次全量视图的 subject：只有一个会话订阅它时，记录的就是这个会话拿到的视图。
+type profileRecorder struct {
+	mu   sync.Mutex
+	last entity.SyncProfile
+}
+
+func (r *profileRecorder) profile() entity.SyncProfile {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
+}
+
+func recordingSubject(t *testing.T, manager *entitysync.Manager, id int64) *profileRecorder {
+	t.Helper()
+	recorder := &profileRecorder{}
+	state := entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: id, Namespace: "test", Packer: entity.SubjectSyncPackFunc{
+		Snapshot: func(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+			recorder.mu.Lock()
+			recorder.last = profile
+			recorder.mu.Unlock()
+			return entity.TakeFrozenSyncPayload(1, []byte("snapshot")), nil
+		},
+	}})
+	if err := manager.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	return recorder
+}
+
+// 关系进出：成员集合给了就订阅、拿走就退订、再给又订阅；目标被 Hide 时从关系里消失。目标离观察者很远，只有关系在持有。
+func TestRelationMembershipSubscribesAndReleases(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager, "team")
+	player(t, manager, watcherID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(subjectState(t, moverID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Show(moverID, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Relation("team").Set(watcherID, []int64{moverID})
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
+	interest.Relation("team").Set(watcherID, nil)
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID)
+	interest.Relation("team").Set(watcherID, []int64{moverID})
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
+	if err := interest.Hide(moverID); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID)
+	// Hide 把它从关系里拿掉了：重新 Show 之后，只有关系的时候看不见它。
+	if err := interest.Show(moverID, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID)
+}
+
+// 跨来源合并的另一半：关系先撤、距离还在持有，订阅保持；距离也撤了才退订。
+func TestDistanceKeepsASubscriptionTheRelationDropped(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager, "team")
+	player(t, manager, watcherID)
+	player(t, manager, moverID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := interest.Enter(moverID, moverID, spatial.Point{X: 520, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	interest.Relation("team").Set(watcherID, []int64{moverID})
+	mustApply(t, interest)
+	interest.Relation("team").Set(watcherID, nil)
+	mustApply(t, interest)
+	if !subscribed(manager, watcherID, moverID) {
+		t.Fatal("dropping the relation released a pair distance still holds")
+	}
+	if err := interest.Move(moverID, moverID, spatial.Point{X: 900, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	if subscribed(manager, watcherID, moverID) {
+		t.Fatal("the last holder went away and the subscription survived")
+	}
+}
+
+// 分档：目标在同一观察者的距离档之间移动，订阅不断，packer 收到的视图随档变化（缺省映射 band n → bandN）。
+func TestDistanceBandsChangeTheSubscribedView(t *testing.T) {
+	manager := newManager(t)
+	interest, err := NewInterest(InterestConfig{Manager: manager, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
+		EnterRadius: 120, LeaveRadius: 150, Bands: []int64{40},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(interest.Close)
+	player(t, manager, watcherID)
+	if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := recordingSubject(t, manager, moverID)
+	if err := interest.Show(moverID, spatial.Point{X: 520, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
+	if got := recorder.profile(); got != DefaultBandProfile(0).Normalize() {
+		t.Fatalf("near view = %+v", got)
+	}
+	if err := interest.MoveShown(moverID, spatial.Point{X: 600, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
+	if got := recorder.profile(); got != DefaultBandProfile(1).Normalize() {
+		t.Fatalf("far view = %+v", got)
+	}
+}
+
+// self：进场经 self 看见自己；SelfVisible=false 时看不见；Leave 后撤掉。
+func TestSelfVisibilityFollowsConfigAndLeave(t *testing.T) {
+	for _, visible := range []bool{true, false} {
+		manager := newManager(t)
+		interest, err := NewInterest(InterestConfig{Manager: manager, SelfVisible: &visible, AOI: AOIConfig{
+			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		player(t, manager, watcherID)
+		if err := interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		if got := subscribed(manager, watcherID, watcherID); got != visible {
+			t.Fatalf("SelfVisible=%v: subscribed to itself = %v", visible, got)
+		}
+		if err := interest.Leave(watcherID, watcherID); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		if subscribed(manager, watcherID, watcherID) {
+			t.Fatalf("SelfVisible=%v: leaving kept the self subscription", visible)
+		}
+		interest.Close()
+	}
+}
+
+// 队伍：三个成员彼此可见（离得再远也一样）；一个成员离队只撤和他有关的 pair；
+// 离场（Leave）的成员作为观察者与作为目标两边都被清掉，重新进场后不会凭旧队伍看见任何人。
+func TestTeamMembersSeeEachOtherAndLeaveCleansBothSides(t *testing.T) {
+	manager := newManager(t)
+	interest := newInterest(t, manager, "team")
+	members := []int64{2001, 2002, 2003}
+	for index, id := range members {
+		player(t, manager, id)
+		if err := interest.Enter(id, id, spatial.Point{X: 100 + int64(index)*400, Y: 100}, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTeam := func(team []int64) {
+		for _, observer := range team {
+			peers := slices.DeleteFunc(slices.Clone(team), func(id int64) bool { return id == observer })
+			interest.Relation("team").Set(observer, peers)
+		}
+	}
+	setTeam(members)
+	mustApply(t, interest)
+	for _, subject := range members {
+		requireSessions(t, manager, subject, 2001, 2002, 2003)
+	}
+	// 2003 离队：剩下两人互见，2003 只看见自己、也不再被看见。
+	setTeam(members[:2])
+	interest.Relation("team").Set(2003, nil)
+	mustApply(t, interest)
+	requireSessions(t, manager, 2001, 2001, 2002)
+	requireSessions(t, manager, 2002, 2001, 2002)
+	requireSessions(t, manager, 2003, 2003)
+	// 2002 离场：两边都清掉；重新进场（远处）后，没有关系让他看见 2001，也没有人看见他。
+	if err := interest.Leave(2002, 2002); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, 2001, 2001)
+	requireSessions(t, manager, 2002)
+	if err := interest.Enter(2002, 2002, spatial.Point{X: 900, Y: 900}, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, interest)
+	requireSessions(t, manager, 2001, 2001)
+	requireSessions(t, manager, 2002, 2002)
+}
