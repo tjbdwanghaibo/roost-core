@@ -33,7 +33,8 @@ var _ nest.RollbackSnapshotter = (*HeroDao)(nil)
 var _ nest.MutationParticipant = (*HeroDao)(nil)
 
 const (
-	HeroDaoDBName               = "game"
+	// HeroDaoDBName 是逻辑库名（db=），物理库名经 DataEngine 的映射表换算（gen_databases.go）。
+	HeroDaoDBName               = DatabaseGame
 	HeroDaoCollection           = "heroes"
 	HeroDaoSchemaVersion uint32 = 1
 )

@@ -25,9 +25,7 @@ const (
 	demoGameServicePlaceholder        = "{{GAME_SERVICE}}"
 	demoGameServicePackagePlaceholder = "{{GAME_SERVICE_PKG}}"
 	demoProjectPlaceholder            = "{{PROJECT}}"
-	// demoDAODatabasePlaceholder 是 DAO 标记的 db=，与 roost add dao 骨架同一规则（daoDatabaseName，D9）。
-	demoDAODatabasePlaceholder = "{{DAO_DB}}"
-	demoGameServiceDir         = "internal/service/game/"
+	demoGameServiceDir                = "internal/service/game/"
 )
 
 // demoVars is what a template may refer to besides its own text.
@@ -39,7 +37,6 @@ type demoVars struct {
 
 func (vars demoVars) apply(body string) string {
 	body = strings.ReplaceAll(body, demoModulePlaceholder, vars.module)
-	body = strings.ReplaceAll(body, demoDAODatabasePlaceholder, daoDatabaseName(vars.project))
 	body = strings.ReplaceAll(body, demoProjectPlaceholder, vars.project)
 	// demo 只在 project new 时写出，目录是新建的：用新工程的小写包名（D8）。
 	body = strings.ReplaceAll(body, demoGameServicePackagePlaceholder, defaultServicePackage(vars.gameService))

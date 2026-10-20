@@ -6,21 +6,20 @@ import (
 
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// deliver 的收件人检查必须读 Player DAO 自己的库和集合。
+// deliver 的收件人检查必须读 Player DAO 所在的物理库和集合。
 //
-// Player 文档落在 DAO 标记 `//roost:dao coll=player db=<工程名>` 生成的库里
-// （db.PlayerDaoDBName / db.PlayerDaoCollection），与 `dataengine.database`
-// 无关——后者是 Data Engine 放 WAL 投影、fence 回执的库。旧代码把
-// `dataengine.database` 当作 Player 文档所在库去 FindOne，于是只要把
-// `dataengine.database` 配成非 `game`（README 推荐的隔离做法），每一个进过
-// 游戏的收件人都被当作"从未进过游戏"，saga 以 compensated 结束。这里不配
-// 任何 dataengine 库名：收件人在 DAO 的库里，deliver 就得找到他。
+// Player DAO 标记 `//roost:dao coll=player db=main` 的 db= 是逻辑库名，文档落在
+// dataengine.databases 把 main 映射到的物理库里，与 `dataengine.database`
+// （Data Engine 自己的集合）无关，也不是名为 main 的库。这里把 main 映射到
+// 一个别的名字：收件人在映射后的库里，deliver 就得找到他。
 
 // sendingMailer 记下 deliver 发的邮件；它不是被测对象。
 type sendingMailer struct {
@@ -33,6 +32,21 @@ func (m *sendingMailer) Send(_ context.Context, req svcmail.SendRequest) (svcmai
 	return svcmail.Envelope{}, nil
 }
 
+// recipientDatabase 是测试里 Player 逻辑库映射到的物理库。
+const recipientDatabase = "gift_recipient_physical"
+
+func recipientSteps(t *testing.T, mongo *mongotest.Client, mailer svcmail.Mail) giftSteps {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared:   coredata.DeclaredDatabases(),
+		Configured: map[string]string{db.PlayerDaoDBName: recipientDatabase},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return giftSteps{players: kitdataengine.DAOCollection(mongo, databases, db.NewPlayerDao(), 0), mailer: mailer}
+}
+
 func seedRecipient(t *testing.T, mongo *mongotest.Client, playerID int64) int64 {
 	t.Helper()
 	player.RegisterEntity()
@@ -40,7 +54,7 @@ func seedRecipient(t *testing.T, mongo *mongotest.Client, playerID int64) int64 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mongo.Collection(db.PlayerDaoDBName, db.PlayerDaoCollection).Seed(bson.M{"_id": entityID}); err != nil {
+	if err := mongo.Collection(recipientDatabase, db.PlayerDaoCollection).Seed(bson.M{"_id": entityID}); err != nil {
 		t.Fatal(err)
 	}
 	return entityID
@@ -53,7 +67,7 @@ func TestDeliverFindsTheRecipientInThePlayerDaoDatabase(t *testing.T) {
 	command := giftCommand(t, 42, 1000) // To = 43
 	seedRecipient(t, mongo, 43)
 	mailer := &sendingMailer{}
-	steps := giftSteps{mongo: mongo, mailer: mailer}
+	steps := recipientSteps(t, mongo, mailer)
 
 	completion, err := steps.deliver(context.Background(), command)
 	if err != nil {
@@ -74,7 +88,7 @@ func TestDeliverStillRefusesARecipientWhoNeverEnteredTheGame(t *testing.T) {
 	command := giftCommand(t, 42, 1000)
 	seedRecipient(t, mongo, 42) // 发送方在，收件人 43 不在
 	mailer := &sendingMailer{}
-	steps := giftSteps{mongo: mongo, mailer: mailer}
+	steps := recipientSteps(t, mongo, mailer)
 
 	completion, err := steps.deliver(context.Background(), command)
 	if err != nil {

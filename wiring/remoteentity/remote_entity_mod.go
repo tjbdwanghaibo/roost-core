@@ -97,7 +97,9 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	setPositive(&m.cfg.TransactionTrackTTL, re.TransactionTrackTTL)
 	setPositive(&m.cfg.WrapperCapacity, re.WrapperCapacity)
 	setPositive(&m.cfg.WrapperIdleTTL, re.WrapperIdleTTL)
-	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL}
+	// DAO 文档的库名映射由 DataEngine Mod 冻结后绑定（它在 Provide 里经 remote_entity.atomic_store 绑定）；
+	// 未绑定就写 DAO 文档拒绝，不按逻辑库名写错库。
+	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL, RequireDatabaseMap: true}
 	return nil
 }
 

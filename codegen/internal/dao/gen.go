@@ -296,6 +296,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"snakeCase":          toSnake,
 		"lower1":             lower1,
 		"daoDBConst":         daoDBConstName,
+		"databaseConst":      databaseConstName,
 		"daoCollConst":       daoCollectionConstName,
 		"daoKeyConst":        daoRegistryKeyConstName,
 		"dbScope":            databaseScopeExpr,

@@ -278,13 +278,14 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 
 默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, syncbus, remote_entity, dataengine, nest, manager`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环，未知 Mod 报 `unknown wiring mod`。
 
-**共享资源的名字按工程名派生**（新用户试用第四轮登记项 1，沿用 D9 的 DAO 库名规则）：生成配置里决定“与谁共享”的键不再是所有工程共用的固定值，两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。以工程 `planet` 为例：
+**共享资源的名字按工程名派生**（新用户试用第四轮登记项 1）：生成配置里决定“与谁共享”的键不再是所有工程共用的固定值，两个工程共用一套开发用 Mongo / NATS / etcd 时不撞库撞流。以工程 `planet` 为例：
 
 | 键 | 生成值 | 运行期缺省（不写这个键时） |
 | --- | --- | --- |
 | `nats.prefix` | `planet` | `roost` |
 | `syncbus.prefix`（流名由它推出） | `planet.sync`（流 `PLANET_SYNC`） | `roost.sync` |
-| `dataengine.database` | `planet`（与 DAO 骨架 `db=` 同一规则） | `game` |
+| `dataengine.database` | `planet` | `game` |
+| `dataengine.databases`（DAO 逻辑库 → 物理库，D9 修订版 A） | `{main: planet}`：骨架 DAO 写逻辑库 `db=main`，物理库按工程名派生 | `{}`：没有映射的逻辑库物理名就是逻辑名本身 |
 | `dataengine.effects.subject_prefix` / `stream` | `planet.effect` / `PLANET_EFFECTS` | `roost.effect` / `ROOST_EFFECTS` |
 | `saga.database` | `planet_saga` | `saga` |
 | `saga.subject_prefix` / `stream` | `planet.saga` / `PLANET_SAGA` | `roost.saga` / `ROOST_SAGA` |

@@ -24,17 +24,27 @@ import (
 	"{{MODULE}}/db/migrations"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
 
 func main() {
 	uri := flag.String("mongo", "mongodb://127.0.0.1:27017/?replicaSet=rs0", "the Mongo the game process writes Player documents to (mongo.uri in config.game.yaml)")
-	database := flag.String("db", db.PlayerDaoDBName, "database of the Player collection (the DAO marker's db=)")
+	config := flag.String("config", "configs/service/config.{{GAME_SERVICE}}.yaml", "the game service config: its dataengine.databases maps the Player DAO's logical db= to the Mongo database")
+	database := flag.String("db", "", "physical database of the Player collection; empty resolves it from -config")
 	collection := flag.String("coll", db.PlayerDaoCollection, "the Player collection")
 	backup := flag.String("backup", db.PlayerDaoCollection+"_schema1_backup", "collection that keeps each rewritten document as it was, for rollback")
 	timeout := flag.Duration("timeout", 30*time.Minute, "upper bound for the whole run")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fail("usage: schemamigrate [-mongo uri] [-db name] [-coll name] [-backup name] plan|apply|verify|rollback")
+		fail("usage: schemamigrate [-mongo uri] [-config file] [-db name] [-coll name] [-backup name] plan|apply|verify|rollback")
+	}
+	if *database == "" {
+		// 与 game 进程同一条规则：Player DAO 的 db= 是逻辑库名，物理库按服务配置的 dataengine.databases 换算。
+		databases, err := kitdataengine.LoadDatabaseMapFile(*config, 0, nil)
+		if err != nil {
+			fail("database mapping: %v", err)
+		}
+		*database = databases.Physical(db.PlayerDaoDBName)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

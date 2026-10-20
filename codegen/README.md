@@ -91,7 +91,7 @@ Component 与 DAO 自动挂到目标 Entity；业务在 Component 里写玩法�
 ```go
 package def
 
-//roost:dao coll=heroes db=game dbscope=sid
+//roost:dao coll=heroes db=main dbscope=sid
 type HeroDao struct {
 	Name    string                          // 无 tag：persist + sync 全开
 	Level   int32

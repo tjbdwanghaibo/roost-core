@@ -30,8 +30,11 @@ const (
 	ModEtcd       app.ModName = "etcd"
 	ModEtcdDiscov app.ModName = "etcd.discovery"
 
-	ModSyncBus                 app.ModName = "syncbus"
-	ModDataEngine              app.ModName = "dataengine"
+	ModSyncBus    app.ModName = "syncbus"
+	ModDataEngine app.ModName = "dataengine"
+	// ModDataEngineDatabases 是 DataEngine Mod 启动时冻结的逻辑库 → 物理库表（*dataengine.DatabaseMap）。
+	// 业务代码要直接打开 DAO 所在的 Mongo 库时经它取物理名，不要把 DAO 的 db= 常量当库名。
+	ModDataEngineDatabases     app.ModName = "dataengine.databases"
 	ModRemoteEntity            app.ModName = "remote_entity"
 	ModRemoteEntityAtomicStore app.ModName = "remote_entity.atomic_store"
 	// ModRemoteMirror 是只读快照能力（entity.RemoteSnapshotReadOnly，Mirror 第 5 步）：只读服务由

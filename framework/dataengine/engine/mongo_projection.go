@@ -321,11 +321,7 @@ func (store *MongoStore) batchMutationModel(txID string, mutation coredata.Mutat
 }
 
 func batchCollectionKey(store *MongoStore, key coredata.DocumentKey) string {
-	database := key.Database
-	if database == "" {
-		database = store.cfg.DefaultDatabase
-	}
-	return fmt.Sprintf("%d/%s/%s", key.Scope, database, key.Resource)
+	return fmt.Sprintf("%d/%s/%s", key.Scope, store.physicalDatabase(key), key.Resource)
 }
 
 func bulkMatched(result *fmongo.BulkWriteResult) int64 {

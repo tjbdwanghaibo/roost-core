@@ -72,7 +72,7 @@ func addEntityDAO(root string, manifest Manifest, options AddOptions) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	daoBody, err := format.Source([]byte(renderDAODefinition(daoDatabaseName(manifest.Project.Name), daoSnake, daoType)))
+	daoBody, err := format.Source([]byte(renderDAODefinition(daoSnake, daoType)))
 	if err != nil {
 		return nil, fmt.Errorf("format DAO scaffold: %w", err)
 	}
@@ -360,13 +360,18 @@ func (component *%sComponent) Owner() *%s { return component.owner }
 		componentType, entityType)
 }
 
-// renderDAODefinition 写 DAO 定义骨架。库名按工程名生成（daoDatabaseName），文档 _id 是完整 EntityID
-// （roost id entity 换算），两点都写进骨架注释，免得运维按玩家 ID 去 game 库里找。
-func renderDAODefinition(database, collection, typeName string) string {
-	return fmt.Sprintf("package dbdef\n\n// %s is stored in Mongo database %q, collection %q.\n// db= is a compile-time constant (db.%sDBName); give each project on a\n// shared Mongo its own name.\n// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// bson:\"...\" is the stored key (without it: the snake_case of the Go name).\n\t// Write it on every persisted field: renaming the Go field then keeps the\n\t// stored data, as long as the bson name stays.\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, database, collection, typeName, collection, database, typeName)
+// defaultDAODatabase 是 DAO 骨架 db= 的逻辑库名（D9 修订版 A）：代码里写固定的逻辑名，物理库名交给部署配置
+// dataengine.databases（生成配置写 main: <daoDatabaseName(工程名)>，新工程开箱的物理库名与工程名派生的规则一致）。
+const defaultDAODatabase = "main"
+
+// renderDAODefinition 写 DAO 定义骨架。db= 是逻辑库名（物理库名在配置 dataengine.databases 里），文档 _id 是
+// 完整 EntityID（roost id entity 换算），两点都写进骨架注释，免得运维按逻辑名或玩家 ID 去 Mongo 里找。
+func renderDAODefinition(collection, typeName string) string {
+	return fmt.Sprintf("package dbdef\n\n// %s is stored in collection %q of the logical database %q (db=, the\n// constant db.%sDBName). The Mongo database it lands in is deployment\n// configuration: dataengine.databases maps %s to a physical database (the\n// generated config maps it to one named after the project).\n// Each document's _id is the full EntityID, not the bare player id: convert\n// with `roost id entity --unique <player-id> --entity <Entity>` and back with\n// `roost id entity <_id>`.\n//\n//roost:dao coll=%s db=%s\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// bson:\"...\" is the stored key (without it: the snake_case of the Go name).\n\t// Write it on every persisted field: renaming the Go field then keeps the\n\t// stored data, as long as the bson name stays.\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", typeName, collection, defaultDAODatabase, typeName, defaultDAODatabase, collection, defaultDAODatabase, typeName)
 }
 
-// daoDatabaseName 是 DAO 骨架 db= 的默认值：工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$，
+// daoDatabaseName 是按工程名派生的 Mongo 物理库名（生成配置的 {project_db}：dataengine.database 与
+// dataengine.databases 里 main 的映射）：工程名（roost.yaml project.name，已满足 ^[a-z][a-z0-9_]*$，
 // 本身就是合法的 Mongo 库名）。两条修正：
 //   - Mongo 保留库 admin / local / config 加后缀 "_data"，业务集合不能写进系统库；
 //   - 截到 52 字节并去掉末尾的 "_"：Mongo 库名上限 63 字节，dbscope=sid 还要追加 "_<sid>"（最长 11 字节）。

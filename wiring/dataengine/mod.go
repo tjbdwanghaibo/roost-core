@@ -13,10 +13,12 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
@@ -29,9 +31,11 @@ import (
 type Mod struct {
 	remoteEnabled bool
 	access        *entity.ManagerAccess
-	cfg           modConfig
-	registry      *app.Registry
-	asm           *engine.Assembly
+	// resolver 是 WithDatabaseResolver 注册的映射回调，Init 时对每个声明的逻辑库各调用一次。
+	resolver coredata.DatabaseResolver
+	cfg      modConfig
+	registry *app.Registry
+	asm      *engine.Assembly
 
 	fatalMu  sync.RWMutex
 	fatalErr error
@@ -50,8 +54,15 @@ func WithRemoteProjection(enabled bool) ModOption {
 	return func(mod *Mod) { mod.remoteEnabled = enabled }
 }
 
+// WithDatabaseResolver 注册逻辑库 → 物理库的回调（与配置 dataengine.databases 合并）：Init 时对代码声明的
+// 每个逻辑库调用一次，返回非空物理名即覆盖配置（启动日志告警两者不同），返回空串沿用配置或逻辑名本身，
+// 返回错误则拒绝启动。运行中只查 Init 时冻结的表，不再调用它。
+func WithDatabaseResolver(resolver func(logical string) (string, error)) ModOption {
+	return func(mod *Mod) { mod.resolver = resolver }
+}
+
 type modConfig struct {
-	mongo           engine.MongoStoreConfig
+	mongo           engine.MongoStoreConfig // mongo.Databases 是 Init 时冻结的映射表
 	wal             nestwal.Options
 	projector       engine.ProjectorOptions
 	outbox          engine.OutboxWorkerOptions
@@ -109,11 +120,12 @@ type EffectsConfig struct {
 type config struct {
 	app.ServiceIdentity
 	mods.PersistenceConfig
-	Database              string        `config:"dataengine.database" default:"game" example:"{project_db}" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写，与 DAO 骨架的 db= 同一规则；共用一个 Mongo 的不同工程必须不同"`
-	StartupTimeout        time.Duration `config:"dataengine.startup_timeout" default:"30s" min:"1ns" example:"30s"`
-	ShutdownTimeout       time.Duration `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
-	TransactionReceiptTTL time.Duration `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
-	ReceiptTTL            time.Duration `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	Database              string          `config:"dataengine.database" default:"game" example:"{project_db}" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写；共用一个 Mongo 的不同工程必须不同"`
+	Databases             DatabasesConfig `config:"dataengine.databases" example:"{main: {project_db}}" help:"DAO 逻辑库（标记里的 db=）→ Mongo 物理库。没写的逻辑库物理名就是逻辑名本身；生成配置把骨架的 main 映射到按工程名派生的库。\n只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。\nWAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）"`
+	StartupTimeout        time.Duration   `config:"dataengine.startup_timeout" default:"30s" min:"1ns" example:"30s"`
+	ShutdownTimeout       time.Duration   `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
+	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	WAL                   struct {
 		Dir                 string        `config:"dir" example:"data/wal/dataengine" help:"不写取 data/wal/dataengine/<sid>"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
@@ -155,10 +167,17 @@ type config struct {
 	} `config:"nest.pipelined"`
 }
 
-// ValidateConfig：告警水位不能高于硬上限；嵌入的持久化选择也要检查（自己定义了 ValidateConfig，提升的那个被遮住）。
+// DatabasesConfig 是 dataengine.databases：DAO 逻辑库名 → Mongo 物理库名。
+type DatabasesConfig map[string]string
+
+// ValidateConfig：告警水位不能高于硬上限；嵌入的持久化选择也要检查（自己定义了 ValidateConfig，提升的那个被遮住）；
+// dataengine.databases 按本进程声明的逻辑库与 sid 校验（--check-config 与 doctor 走同一份规则，回调只在 Init 时调用）。
 func (c *config) ValidateConfig(production bool) error {
 	if err := c.PersistenceConfig.ValidateConfig(production); err != nil {
 		return err
+	}
+	if err := coredata.ValidateDatabaseConfig(coredata.DeclaredDatabases(), c.Databases, c.Sid); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	if c.Projection.MaxUnackedRecords > 0 && c.Projection.WarnUnackedRecords > c.Projection.MaxUnackedRecords {
 		return errors.New("dataengine mod: invalid projection checkpoint or backlog limits: warn_unacked_records exceeds max_unacked_records")
@@ -240,10 +259,14 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		BacklogInterval: settings.Outbox.BacklogInterval,
 		OnHardLimit:     mod.onFatal,
 	}
+	databases, err := NewDatabaseMap(settings.Databases, sid, mod.resolver)
+	if err != nil {
+		return err
+	}
 	effects := settings.Effects
 	prefix := effects.subjectPrefix()
 	mod.cfg = modConfig{
-		mongo: engine.MongoStoreConfig{DefaultDatabase: settings.Database, ServerID: sid,
+		mongo: engine.MongoStoreConfig{DefaultDatabase: settings.Database, Databases: databases, ServerID: sid,
 			TransactionReceiptTTL: settings.TransactionReceiptTTL, ReceiptTTL: settings.ReceiptTTL},
 		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix,
 		effectStream: fnats.JetStreamConfig{
@@ -295,6 +318,14 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		}
 		deps.RemoteManager, deps.RemoteStore = manager, remoteStore
 	}
+	if mod.remoteEnabled {
+		// Remote 写 DAO 文档与投影用同一张冻结的表（Remote 存储先于本 Mod Provide，写入只在 Start 之后发生）。
+		if binder, ok := deps.RemoteStore.(coreremote.DatabaseMapBinder); ok {
+			if err := binder.BindDatabaseMap(mod.cfg.mongo.Databases); err != nil {
+				return fmt.Errorf("dataengine mod: bind database map to remote storage: %w", err)
+			}
+		}
+	}
 	asm, err := engine.Assemble(deps, engine.AssemblyConfig{
 		Mongo: mod.cfg.mongo, WAL: mod.cfg.wal, Projector: mod.cfg.projector, Outbox: mod.cfg.outbox,
 		EffectPrefix: mod.cfg.effectPrefix, EffectStream: mod.cfg.effectStream, Pipelined: mod.cfg.pipelined,
@@ -303,7 +334,10 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		return err
 	}
 	mod.registry, mod.asm = registry, asm
-	if err := registry.Register(mods.ModDataEngine, mod); err != nil {
+	if err := mods.RegisterAll(registry,
+		mods.Capability{Name: mods.ModDataEngine, Value: mod},
+		mods.Capability{Name: mods.ModDataEngineDatabases, Value: mod.cfg.mongo.Databases},
+	); err != nil {
 		return err
 	}
 	healthRegistry, ok := app.Lookup[*health.Registry](registry, mods.ModHealth)

@@ -52,7 +52,7 @@ for name, fields in {
  p=root/'db/def'/f'{name}.go'
  text=p.read_text(); marker='type '+name.title()+'Dao struct {'
  text=text.replace(marker, marker+'\n'+''.join(f'{field} int64 `bson:"{field.lower()}" dao:"persist"`\n' for field in fields))
- text=re.sub(r"db=mmorpg_practice", "db="+os.environ["ROOST_MMORPG_DB"],text)
+ assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
  p.write_text(text)
 for name in ('scene', 'trade', 'monster'):
  p=root/f'game/entities/{name}/entity.go'

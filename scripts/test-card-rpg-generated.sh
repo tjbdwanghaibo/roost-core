@@ -52,7 +52,7 @@ for name, fields in {
     typename = ''.join(part.title() for part in name.split('_')) + 'Dao'
     marker = 'type ' + typename + ' struct {'
     text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `bson:"{key}" dao:"persist"`\n' for field, typ, key in fields))
-    text = text.replace('db=card_rpg_practice', 'db=' + os.environ['ROOST_CARD_RPG_DB'])
+    assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
     p.write_text(text)
 # CardRun 与 Player 在同一事务里开局 / 领奖；把 Run 放在 World 锁档（低于 Player），多实体锁序固定。
 p = root / 'game/entities/card_run/entity.go'

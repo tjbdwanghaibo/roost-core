@@ -20,6 +20,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
@@ -106,6 +107,12 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 	if !ok || mongoClient == nil {
 		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModMongo)
 	}
+	// The Player DAO's db= is a logical name; the Data Engine's frozen
+	// mapping (dataengine.databases) says which Mongo database it lands in.
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
 	mailer, err := Mail(registry)
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
@@ -125,7 +132,8 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, owners: owners, runtime: runtime}
+	players := kitdataengine.DAOCollection(mongoClient, databases, db.NewPlayerDao(), 0)
+	steps := giftSteps{nest: nestClient, mailer: mailer, players: players, owners: owners, runtime: runtime}
 	// The handoff path: a step that lands on the wrong process is sent to the
 	// one the sender is bound to instead of only being refused.
 	//
@@ -209,7 +217,9 @@ const (
 type giftSteps struct {
 	nest   corenest.Client
 	mailer svcmail.Mail
-	mongo  fmongo.IMongo
+	// players is the Player DAO's physical collection (kitdataengine.DAOCollection),
+	// where deliver looks the recipient up.
+	players fmongo.ICollection
 	// runtime is the framework's step consumers; a handed-over step runs
 	// through it under its own claim (runHandoff).
 	runtime *kitsaga.Steps
@@ -452,14 +462,14 @@ func (steps giftSteps) refund(ctx context.Context, step saga.NativeStep) error {
 // makes the coordinator compensate the debit. The mail service's own coded
 // refusals (mailbox full) do the same.
 //
-// Where the Player document is: the database and collection the Player DAO
-// was generated with (`//roost:dao coll=player db=<project>` in db/def/player.go
-// → db.PlayerDaoDBName / db.PlayerDaoCollection). NOT `dataengine.database`
-// — that is where the Data Engine keeps its WAL projections and fences, and
-// by default the two differ (the project name vs `game`). The first
-// version read `dataengine.database` here, so the README's own advice to
-// isolate a run by renaming it made every gift compensate as "recipient has
-// never entered the game".
+// Where the Player document is: the Player DAO's collection in the physical
+// database its logical db= (`//roost:dao coll=player db=main` in
+// db/def/player.go) maps to through dataengine.databases — resolved once in
+// startGiftSaga with kitdataengine.DAOCollection. NOT `dataengine.database`
+// (the Data Engine's own collections), and NOT db.PlayerDaoDBName used as a
+// database name: that is the logical name, and a deployment that maps it
+// elsewhere would make every gift compensate as "recipient has never entered
+// the game".
 func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.To })
 	if err != nil {
@@ -468,7 +478,7 @@ func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.
 	var recipient struct {
 		ID int64 `bson:"_id"`
 	}
-	if err := steps.mongo.Database(db.PlayerDaoDBName).Collection(db.PlayerDaoCollection).FindOne(ctx, bson.M{"_id": entityID}, &recipient); err != nil {
+	if err := steps.players.FindOne(ctx, bson.M{"_id": entityID}, &recipient); err != nil {
 		if errors.Is(err, fmongo.ErrNotFound) {
 			return refuse(giftRecipientNotFound), nil
 		}

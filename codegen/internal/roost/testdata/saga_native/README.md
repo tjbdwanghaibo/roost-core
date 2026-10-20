@@ -6,4 +6,4 @@
 `steps.go`、effect 载荷与消费者骨架只做小处修改（见测试里的 `fillSagaNativeBusiness`），然后 build / vet，并在真实
 Mongo / NATS / DataEngine / Nest 上跑 `internal/bootstrap` 的 `TestSagaNativeStepsAndEffectRealDependencies`。
 
-`SAGAGEN_DB` 是占位符，测试换成本次唯一的 DAO 库名（DAO 库名是编译期常量）。
+Player DAO 写逻辑库 `db=main`；用例经配置 `dataengine.databases` 把它映射到本次唯一的物理库，并核对文档只落在映射后的库里。

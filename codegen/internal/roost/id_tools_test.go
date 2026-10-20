@@ -146,7 +146,8 @@ func TestRoostIDEntityLayoutMatchesTheFramework(t *testing.T) {
 	}
 }
 
-// DAO 骨架的库名按工程名生成（db=<project>），不再写死 db=game：同一 Mongo 上的两个工程默认不写同一个库。
+// DAO 骨架写固定的逻辑库名 db=main（D9 修订版 A），物理库名在生成配置的 dataengine.databases 里按工程名派生：
+// 同一 Mongo 上的两个工程开箱不写同一个库，代码里也不出现部署相关的名字。
 func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
@@ -163,8 +164,15 @@ func TestDAOSkeletonDatabaseFollowsTheProjectName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "//roost:dao coll=player db=planet\n") {
-		t.Fatalf("DAO skeleton does not name the project database:\n%s", raw)
+	if !strings.Contains(string(raw), "//roost:dao coll=player db=main\n") {
+		t.Fatalf("DAO skeleton does not use the logical database main:\n%s", raw)
+	}
+	config, err := os.ReadFile(filepath.Join(target, "configs", "service", "config.game.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(config), "  databases: {main: planet}\n") {
+		t.Fatalf("generated config does not map the logical database main to the project database:\n%s", config)
 	}
 	for project, want := range map[string]string{
 		"planet":                       "planet",

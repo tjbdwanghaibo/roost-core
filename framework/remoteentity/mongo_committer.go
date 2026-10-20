@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -28,6 +30,40 @@ type MongoCommitter struct {
 	database       string
 	serverID       int32
 	transactionTTL time.Duration
+
+	// databases 是 DataEngine 冻结的逻辑库 → 物理库表（D9 修订版 A），由 BindDatabaseMap 绑定一次。
+	// RemoteDataMutation.Database 是 DAO 的逻辑库名，写 DAO 文档前经它换成物理库名；控制库 database
+	// 是配置给出的物理名，不经映射。requireDatabaseMap 为真（wiring 装配）时未绑定就写 DAO 文档会被拒绝，
+	// 不按逻辑名写进错误的库；直接构造（测试、自建装配）未绑定时物理名就是逻辑名。
+	databases          atomic.Pointer[coredata.DatabaseMap]
+	requireDatabaseMap bool
+}
+
+// ErrDatabaseMapNotBound：Remote 的 Mongo 存储要写 DAO 文档，但 DataEngine 还没有把库名映射表绑定过来。
+var ErrDatabaseMapNotBound = errors.New("remote_entity: the DataEngine database map is not bound to the Mongo storage")
+
+// DatabaseMapBinder 由 DataEngine 装配时调用（它持有冻结的映射表），让 Remote 写 DAO 文档时与投影用同一张表。
+type DatabaseMapBinder interface {
+	BindDatabaseMap(*coredata.DatabaseMap) error
+}
+
+// BindDatabaseMap 绑定映射表；只能绑定一次，再次绑定同一张表无操作，换一张表返回错误。
+func (s *MongoCommitter) BindDatabaseMap(databases *coredata.DatabaseMap) error {
+	if s == nil || databases == nil {
+		return errors.New("remote_entity: nil database map")
+	}
+	if s.databases.CompareAndSwap(nil, databases) || s.databases.Load() == databases {
+		return nil
+	}
+	return errors.New("remote_entity: a different database map is already bound")
+}
+
+func (s *MongoCommitter) boundDatabaseMap() (*coredata.DatabaseMap, error) {
+	databases := s.databases.Load()
+	if databases == nil && s.requireDatabaseMap {
+		return nil, ErrDatabaseMapNotBound
+	}
+	return databases, nil
 }
 
 // AtomicCommitStore 在另一个基础设施组件拥有的 MongoDB 事务内应用 Remote Entity 提交。实现不得开启或提交嵌套会话，
@@ -382,9 +418,12 @@ func loadMongoRemoteSnapshot(ctx context.Context, db fmongo.IDatabase, key entit
 
 func (s *MongoCommitter) controlDB() fmongo.IDatabase { return s.mongo.Database(s.database) }
 
-func (s *MongoCommitter) dataDB(name string, scope uint8) fmongo.IDatabase {
+// dataDB 是 DAO 文档所在的物理库：逻辑库名经映射表换算，按 sid 分库时再加 _<sid>；空库名取控制库。
+func (s *MongoCommitter) dataDB(databases *coredata.DatabaseMap, name string, scope uint8) fmongo.IDatabase {
 	if name == "" {
 		name = s.database
+	} else {
+		name = databases.Physical(name)
 	}
 	if scope == 1 {
 		return s.mongo.DatabaseForSid(name, s.serverID)

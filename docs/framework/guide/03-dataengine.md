@@ -30,6 +30,15 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 **消费 effect（事务性 outbox 的消费端）**：业务用 `wiring/dataengine` 的 `SubscribeEffects(ctx, registry, EffectConsumer{Durable, Topic}, handler)`（D12 方向 A，维护者 2026-10-18 决定）。效果流、主题前缀与回执库按 DataEngine Mod 的声明（`dataengine.effects.*`、`dataengine.database`）取，回执集合缺省每个 durable 一个（`_effect_inbox_<durable>`）。语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经传入 ctx 的 Mongo 写与回执原子提交，再到达读到回执就跳过；Mongo 驱动可能重跑事务回调，事务外的副作用（调用别的服务）按 EffectID 幂等（demo 升级邮件把它当 mail 的 RequestID）。handler 返回普通错误 → 不写回执、按退避 nak 重投（缺省 250ms..30s，MaxDeliver 25000）；返回 `PoisonEffect(err)`、信封解不开或同一 EffectID 内容不同 → 直接 Term 不重投、ERROR 日志并计 `dataengine.effect_consumer.handled_total{result="poison"}`（非零要人核对）；handler 的 ctx 以 AckWait（缺省 30s）为截止。回执 TTL（缺省 30 天）不长于 `dataengine.effects.max_age` 时拒绝订阅。
 
+**逻辑库名与物理库名**（[DESIGN-TODO D9](../../maintenance/DESIGN-TODO.md#d9-dao-库名不随配置_id-是编码后的-entityid) 修订版 A，维护者 2026-10-20 决定）：DAO 标记的 `db=` 是**逻辑库名**（小写字母开头，小写字母、数字、下划线；骨架写 `db=main`），`DocumentKey.Database`、WAL 记录与 Remote 提交里的库名都是它。Mongo 里的物理库名只由部署决定，启动时合成一张冻结的表（`dataengine.DatabaseMap`），之后只查表、不再算：
+
+- **两个入口**：配置 `dataengine.databases`（逻辑名 → 物理名，走配置声明、`--check-config` 与 doctor 的同一份规则）；代码回调 `kitdataengine.WithDatabaseResolver(func(logical string) (string, error))`，DataEngine Mod Init 时对代码声明的每个逻辑库各调用一次。优先级：回调返回的非空物理名 > 配置 > 逻辑名本身；回调覆盖了配置时启动日志告警两者，回调返回空串表示沿用配置。
+- **声明**：生成的 `db/gen_databases.go` 每个逻辑库一个常量（`DatabaseMain = "main"`，各 DAO 的 `<Dao>DBName` 引用它），`init` 里 `dataengine.DeclareDatabases` 登记（是否有 DAO 按 sid 分库也一起登记）。
+- **没有映射**：声明了却没有配置也没有回调结果的逻辑库，物理名就是逻辑名本身（启动日志告警），与引入映射之前的行为一致；生成配置总是写 `main: <工程名派生的库>`，新工程开箱不会落到名为 `main` 的库。
+- **一次校验**（Init 时，失败拒绝启动并点名）：配置里出现代码未声明的逻辑名（拼写错误；二进制一个逻辑库都没声明时无从判断，只告警）；物理名为空、含 Mongo 禁止的字符、是系统库（admin / local / config）、按 sid 分库时加上 `_<sid>` 超过 63 字节；两个逻辑库映射到同一个物理库（大小写不同也算，不提供允许开关）；回调返回错误。
+- **唯一解析点**：投影（单条与批量）、冷加载、删档墓碑经 `MongoStore` 的 `physicalDatabase`；Remote 写 DAO 文档经 `MongoCommitter.dataDB`（DataEngine Mod 在 Provide 时把同一张表绑定给 Remote 存储，未绑定就拒绝写）；业务与工具经 `kitdataengine.DAOCollection` / `Databases(registry)`（能力 `dataengine.databases`）/ `LoadDatabaseMapFile`。根包 `TestNoMongoDatabaseOpenedWithALogicalDAOName` 守住产品代码与模板里没有把 `DbName()` / `<Dao>DBName` 直接交给 `.Database(`。
+- **改映射等于搬数据**：WAL 只记逻辑名、投影时才换算；上次启动的映射记在 WAL 目录的 `databases.json`，还有未投影记录而映射变了（含没有该文件的旧 WAL 配非 identity 映射）的进程以 `ErrDatabaseMappingChanged` 拒绝启动。顺序是停写 → 排空 WAL → 离线迁移数据 → 改映射启动（[PLAYER-MIGRATION §5](../PLAYER-MIGRATION.md#5-改-dao-库名映射)）。同一部署里所有会写同一批文档的进程（含跨进程写 Remote 实体的）映射必须一致。
+
 ## 4. 冷加载与 schema
 
 EntityRepository 读取聚合一致性视图，先验证所有持久 DAO 的完整性与当前 schema，再水合并发布 Entity。旧/未来 schema 都拒绝；生成 RestorePersisted 在解码前校验。自动 schema 迁移已撤销，不能把仍存在的通用 migration 包解释成 Repository 自动转换旧 DAO 的能力。改了持久结构时按[业务 schema 变更操作手册](../SCHEMA-MIGRATION.md)停写后离线转换。

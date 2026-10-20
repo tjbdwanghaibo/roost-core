@@ -37,6 +37,50 @@ func TestInspectAcceptsDurableCheckpointBoundary(t *testing.T) {
 	}
 }
 
+// 检查报告带上写下这些记录的进程的库名映射（DatabaseMappingFile）：工具（walinspect、sidmove wal-drained）
+// 据此核对新进程的 dataengine.databases；未投影记录在场时 HasUnacknowledgedRecords 为真。
+func TestInspectReportsTheRecordedDatabaseMapping(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	w, err := Open(testOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close(ctx) })
+	if pending, err := w.HasUnacknowledgedRecords(ctx); err != nil || pending {
+		t.Fatalf("empty WAL pending=%v err=%v", pending, err)
+	}
+	if err := w.WriteDatabaseMapping(map[string]string{"main": "planet"}); err != nil {
+		t.Fatal(err)
+	}
+	fence, err := w.Append(ctx, testRecord(1, corenest.DurabilityStrict))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := w.HasUnacknowledgedRecords(ctx); err != nil || !pending {
+		t.Fatalf("one unacknowledged record: pending=%v err=%v", pending, err)
+	}
+	if err := w.Ack(ctx, fence); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := w.HasUnacknowledgedRecords(ctx); err != nil || pending {
+		t.Fatalf("after ack pending=%v err=%v", pending, err)
+	}
+	if err := w.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Inspect(ctx, InspectOptions{Dir: dir})
+	if err != nil || report.Databases["main"] != "planet" {
+		t.Fatalf("report databases = %v, err %v", report.Databases, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, DatabaseMappingFile), []byte(`{"version":9}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inspect(ctx, InspectOptions{Dir: dir}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("unknown mapping version: Inspect = %v, want ErrCorrupt", err)
+	}
+}
+
 func TestInspectRefusesRunningWriterWithoutCreatingSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	w, err := Open(testOptions(dir))

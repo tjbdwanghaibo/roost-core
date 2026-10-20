@@ -273,6 +273,9 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				if dbScope == "" {
 					dbScope = "global"
 				}
+				if err := validateDatabaseName(m.params["db"]); err != nil {
+					return fmt.Errorf("line %d: //roost:dao on %s: db=%s is the logical database name: %w", m.line, typeSpec.Name.Name, m.params["db"], err)
+				}
 				schema, err := parseSchemaParam(m.params["schema"])
 				if err != nil {
 					return fmt.Errorf("line %d: //roost:dao on %s: %w", m.line, typeSpec.Name.Name, err)

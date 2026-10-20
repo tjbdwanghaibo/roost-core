@@ -88,6 +88,25 @@ func Run(args []string, stdout io.Writer) error {
 
 	expected := make(map[string]bool, len(defs.Daos)+len(defs.RedisDaos)+len(defs.Nested))
 
+	// 逻辑库常量与登记先于各 DAO 生成：DAO 的 <Dao>DBName 引用这里的常量。没有持久 DAO 时不生成（旧文件按孤儿删除）。
+	databases, err := collectDatabases(defs.Daos)
+	if err != nil {
+		return fmt.Errorf("generate databases: %w", err)
+	}
+	if len(databases) > 0 {
+		outFile := filepath.Join(absOutDir, databasesFileName)
+		expected[databasesFileName] = true
+		changed, err := generateDatabases(databases, *pkg, outFile, *force)
+		if err != nil {
+			return fmt.Errorf("generate databases: %w", err)
+		}
+		if changed {
+			_, _ = fmt.Fprintf(stdout, "generated: %s\n", outFile)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
+		}
+	}
+
 	// Generate DAO files
 	for _, dao := range defs.Daos {
 		outFile := filepath.Join(absOutDir, daoFileName(dao.Name))
@@ -196,7 +215,7 @@ func removeOrphanGenerated(dir string, expected map[string]bool) ([]string, erro
 		if entry.IsDir() || expected[name] || !strings.HasPrefix(name, "gen_") {
 			continue
 		}
-		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") {
+		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") && name != databasesFileName {
 			continue
 		}
 		path := filepath.Join(dir, name)

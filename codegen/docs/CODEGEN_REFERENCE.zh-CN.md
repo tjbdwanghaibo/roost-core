@@ -296,7 +296,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest \
 ```go
 package dbdef
 
-//roost:dao coll=players db=game dbscope=sid
+//roost:dao coll=players db=main dbscope=sid
 type PlayerDao struct {
     Name      string                              // 无 tag：persist + sync 全开
     Level     int32
@@ -316,15 +316,24 @@ type EquipInfo struct {
 
 ### struct 级标记
 
-    //roost:dao coll=<collection> db=<database> [dbscope=global|sid]
+    //roost:dao coll=<collection> db=<logical database> [dbscope=global|sid]
     //roost:dao nocoll                       # 无集合 DAO，见 §4.1
     //roost:redisdao key=<字段路径> prefix=<键前缀> [mode=ref-hmap|raw] [key_type=...] [version=...] [ttl=<Go duration>] [name=...]
 
-**库名与 `_id`**（D9，维护者 2026-10-16 决定 B）：`db=` 是编译期常量（生成 `db.<Type>DBName`），不读运行配置；
-`dataengine.database` 只决定 Data Engine 自己的集合（receipts / transactions / outbox），生成配置里它也按同一规则取工程名（与 effects / saga 的主题与流等一起按工程名派生，见 PROJECT_GENERATOR §5）。`roost add dao` 骨架按工程名写
-`db=<project>`：取 `roost.yaml project.name`（已满足 `^[a-z][a-z0-9_]*$`），Mongo 系统库名 `admin` / `local` / `config`
-加后缀 `_data`，超过 52 字节截断并去掉末尾 `_`（库名上限 63 字节，`dbscope=sid` 还要追加 `_<sid>`）。同一 Mongo 上的
-两个工程因此默认不写同一个库；已有 DAO 的 `db=` 归业务，不改写。库名改由运行配置决定（方案 A）未实施，见 DESIGN-TODO D9。
+**逻辑库名与物理库名**（D9 修订版 A，维护者 2026-10-20 决定）：`db=` 是**逻辑库名**（小写字母开头，小写字母、数字、
+下划线，解析时校验），`roost add dao`（含 `--entity`）骨架写 `db=main`。生成器扫描全部持久 DAO 的 `db=`，在 DAO 包生成
+`gen_databases.go`：每个逻辑库一个常量（`main` → `DatabaseMain`，常量名撞车时拒绝），`init` 里
+`dataengine.DeclareDatabases` 登记（含是否有 DAO 按 sid 分库）；各 DAO 的 `<Type>DBName` 引用这个常量。没有持久 DAO
+时不生成，旧文件按孤儿删除。
+
+物理 Mongo 库名是部署配置：服务配置 `dataengine.databases`（逻辑名 → 物理名），或启动装配时
+`kitdataengine.WithDatabaseResolver`；DataEngine Mod 启动时合成一张冻结的表，投影、冷加载、墓碑、Remote 存储与工具都经它
+换算，规则与校验见 [guide/03-dataengine §3](../../docs/framework/guide/03-dataengine.md#3-投影与幂等)。生成配置写
+`databases: {main: <project_db>}`：`<project_db>` 是工程名（系统库 `admin` / `local` / `config` 加 `_data`，超过 52 字节
+截断并去掉末尾 `_`），新工程开箱的物理库与以前按工程名生成的 `db=` 相同。`dataengine.database` 只决定 Data Engine 自己的
+集合（receipts / transactions / outbox），生成配置里也取 `<project_db>`。业务代码要直接读写 DAO 文档时用
+`kitdataengine.DAOCollection(mongo, databases, db.NewPlayerDao(), sid)`，不要把 `db.<Type>DBName` 当库名（根包守卫
+`TestNoMongoDatabaseOpenedWithALogicalDAOName`）。改映射要先停写、排空 WAL、迁移数据（PLAYER-MIGRATION §5）。
 
 文档 `_id` 是完整 EntityID，不是玩家 ID：位布局 `[remote(1)][unique(52)][kind(8)][category 低 2 位]`，例如 kind 1、
 category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 `roost id entity` 换算：

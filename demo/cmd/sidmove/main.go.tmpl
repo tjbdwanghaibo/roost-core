@@ -11,7 +11,8 @@
 //	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -out before.json
 //	go run ./cmd/sidmove players -mongo "$URI" -ids 1001,1002 -compare before.json
 //	    记录 / 比较玩家文档的 _version、_schema、_last_tx 与内容摘要：旧进程停完后记一份，
-//	    新进程接管、业务写入之前再比一次，证明空窗期没有第三个写者。
+//	    新进程接管、业务写入之前再比一次，证明空窗期没有第三个写者。Player 文档所在的物理库按
+//	    -config（缺省 configs/service/config.{{GAME_SERVICE}}.yaml）的 dataengine.databases 换算，-db 可直接指定。
 //
 // 每个子命令打印一份 JSON；检查不通过时以非零码退出。
 package main
@@ -38,6 +39,7 @@ import (
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -68,13 +70,20 @@ func main() {
 	case "players":
 		fs := flag.NewFlagSet("players", flag.ExitOnError)
 		uri := fs.String("mongo", "mongodb://127.0.0.1:27017/?replicaSet=rs0", "mongo.uri in config.game.yaml")
-		database := fs.String("db", db.PlayerDaoDBName, "database of the Player collection")
+		config := fs.String("config", "configs/service/config.{{GAME_SERVICE}}.yaml", "the game service config: its dataengine.databases maps the Player DAO's logical db= to the Mongo database")
+		sid := fs.Int("sid", 0, "the game sid (only for a dbscope=sid DAO; 0 keeps the config's sid)")
+		database := fs.String("db", "", "physical database of the Player collection; empty resolves it from -config")
 		collection := fs.String("coll", db.PlayerDaoCollection, "the Player collection")
 		ids := fs.String("ids", "", "comma-separated player ids (the unique id the client sees, or the document _id)")
 		out := fs.String("out", "", "write the snapshot to this file")
 		compare := fs.String("compare", "", "compare with a snapshot written earlier by -out")
 		_ = fs.Parse(os.Args[2:])
-		result, err = players(ctx, *uri, *database, *collection, *ids, *out, *compare)
+		if *database == "" {
+			*database, err = playerDatabase(*config, int32(*sid))
+		}
+		if err == nil {
+			result, err = players(ctx, *uri, *database, *collection, *ids, *out, *compare)
+		}
 	default:
 		fail("unknown command %q (commands: wal-drained, singleton, players)", os.Args[1])
 	}
@@ -94,6 +103,9 @@ type WALReport struct {
 	Checkpoint string `json:"checkpoint,omitempty"`
 	LastRecord string `json:"last_record,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+	// Databases 是写下这些记录的进程的逻辑库 → 物理库映射（WAL 目录的 databases.json）：搬机后新进程
+	// 的 dataengine.databases 应与它一致，否则同一份数据会去不同的库里找。
+	Databases map[string]string `json:"databases,omitempty"`
 }
 
 // ErrNotDrained 表示旧 WAL 里还有没投影确认的记录：新机器用空 WAL 目录启动会丢掉它们。
@@ -113,6 +125,7 @@ func walDrained(ctx context.Context, dir string) (WALReport, error) {
 		}
 		return report, err
 	}
+	report.Databases = inspection.Databases
 	var checkpoint *nestwal.CheckpointInspection
 	for i := range inspection.Checkpoints {
 		entry := &inspection.Checkpoints[i]
@@ -202,6 +215,16 @@ func parseHolder(value string) (hostname, pid, started string) {
 		started = time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
 	}
 	return parts[1], parts[2], started
+}
+
+// playerDatabase 按服务配置的 dataengine.databases 把 Player DAO 的逻辑库（db.PlayerDaoDBName）换成物理库名，
+// 与 game 进程用同一条规则（kitdataengine.LoadDatabaseMapFile）；Player 不按 sid 分库，sid 只参与校验。
+func playerDatabase(configPath string, sid int32) (string, error) {
+	databases, err := kitdataengine.LoadDatabaseMapFile(configPath, sid, nil)
+	if err != nil {
+		return "", err
+	}
+	return databases.Physical(db.PlayerDaoDBName), nil
 }
 
 // PlayerState 是一份玩家文档的指纹：版本元数据加整份文档的摘要。
