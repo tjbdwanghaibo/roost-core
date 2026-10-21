@@ -177,8 +177,8 @@ func TestSyncApplyOneFlushDrainsTheCommittedBacklog(t *testing.T) {
 }
 
 // 业务线程（Nest 快池 worker、提交后回调）上调用的 Interest 入口不等 AOI 批次：政策阶段持有应用侧状态做空间计算与
-// 订阅结算时，Enter / Leave / Show / Hide / Move / MoveView / SetObserverView / Apply / Resubscribe / ObserverView
-// 与视野操作都立即返回。批次用 BandLayer（政策阶段结算时按距离档取层级的业务回调）钉住，不靠时序。
+// 订阅结算时，Enter / Leave / Show / Hide / Move / MoveView / SetObserverView / Resubscribe / ObserverView 与视野
+// 操作都立即返回。（显式 Apply 是“在调用方线程排空并结算”，按设计会等这一步，不在快池上调用，不在此列。）批次用 BandLayer（政策阶段结算时按距离档取层级的业务回调）钉住，不靠时序。
 // 历史：学习分支 learn/main-review-20261021 KNOWN-LIMITS“main 近期提交审查”第 6 条（实测阻塞 15～46ms）。
 func TestDirectCallsDoNotWaitForTheAOIBatch(t *testing.T) {
 	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
@@ -243,8 +243,7 @@ func TestDirectCallsDoNotWaitForTheAOIBatch(t *testing.T) {
 			{"MoveView", func() { _ = in.MoveView(1, spatial.Point{X: 12, Y: 10}) }},
 			{"SetObserverView", func() { _, _ = in.SetObserverView(1, ObserverView{}) }},
 			{"ObserverView", func() { _, _ = in.ObserverView(1) }},
-			{"Resubscribe", func() { _ = in.Resubscribe(1) }},
-			{"Apply", func() { _ = in.Apply() }},
+			{"Resubscribe", func() { in.Resubscribe(1) }},
 			{"DefineSpatialView+AttachView", func() {
 				_ = in.DefineSpatialView(40, spatial.Point{X: 100, Y: 100}, ObserverView{}, 0)
 				_ = in.AttachView(20, 40)
@@ -288,4 +287,70 @@ func TestDirectCallsDoNotWaitForTheAOIBatch(t *testing.T) {
 			t.Fatalf("%s: while the policy phase held the AOI batch, these calls did not return: %v", mode, blocked)
 		}
 	})
+}
+
+// Leave 之后、下一次结算之前业务关闭又重开了会话并重新 Enter（断线重连、顶号）：Manager 在 CloseSession 时丢掉了
+// 这个会话的订阅，所以同一次结算里重新持有的 pair 要重新说给 Manager，而不是当作“一直订阅着”什么也不做。
+func TestLeaveAndEnterInOneSettleSubscribeTheReopenedSessionAgain(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		m := newManager(t)
+		in := newInterestMode(t, m, mode)
+		player(t, m, 1)
+		player(t, m, 2)
+		mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+		mustEnter(t, in, 2, spatial.Point{X: 20, Y: 10})
+		flushInterest(t, in, m)
+		if !subscribed(m, 2, 1) || !subscribed(m, 2, 2) {
+			t.Fatal("setup: player 2 does not see 1 and itself")
+		}
+		if err := in.Leave(2, 2); err != nil {
+			t.Fatal(err)
+		}
+		m.CloseSession(entitysync.SessionID(2))
+		if err := m.OpenSession(entitysync.SessionID(2)); err != nil {
+			t.Fatal(err)
+		}
+		mustEnter(t, in, 2, spatial.Point{X: 20, Y: 10})
+		flushInterest(t, in, m)
+		if !subscribed(m, 2, 1) || !subscribed(m, 2, 2) || !subscribed(m, 1, 2) {
+			t.Fatalf("%s: after Leave → reopen → Enter in one settle: 2 sees 1 %v, 2 sees itself %v, 1 sees 2 %v",
+				mode, subscribed(m, 2, 1), subscribed(m, 2, 2), subscribed(m, 1, 2))
+		}
+	})
+}
+
+// 政策阶段里结算被拒的订阅交给 InterestConfig.OnRefusal（显式 Apply 的拒绝仍由返回值给出）。
+func TestPolicyPhaseRefusalsReachOnRefusal(t *testing.T) {
+	m := newManager(t)
+	var got []Refusal
+	in, err := NewInterest(InterestConfig{
+		Manager: m,
+		AOI: AOIConfig{
+			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
+			EnterRadius: 120, LeaveRadius: 150,
+		},
+		OnRefusal: func(refusal Refusal) { got = append(got, refusal) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.Close)
+	player(t, m, 1)
+	// 实体 7 没在 Manager 登记：玩家 1 经距离看见它时订阅被拒。
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	if err := in.Show(7, spatial.Point{X: 20, Y: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Observer != 1 || got[0].Subject != 7 || got[0].Retry || got[0].Err == nil {
+		t.Fatalf("OnRefusal got %+v, want one first refusal of (1, 7)", got)
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[1].Retry {
+		t.Fatalf("the retry was not reported as a retry: %+v", got)
+	}
 }

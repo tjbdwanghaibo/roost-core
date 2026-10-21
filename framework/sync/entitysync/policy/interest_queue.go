@@ -20,6 +20,7 @@ var ErrObserverViewRate = errors.New("policy: observer view changed too often")
 // viewRejectedMetric 计数被拒绝的视野请求，reason 为 rate（超频）或 lod（层级未配置）。
 const viewRejectedMetric = "entitysync_interest_view_rejected_total"
 
+// queuedInterestFact 是一条门控事实：位置 / 额外覆盖，走提交门，提交确认后才应用。
 type queuedInterestFact struct {
 	releasePublication func()
 	commit             *entity.SyncMutation
@@ -28,36 +29,10 @@ type queuedInterestFact struct {
 	replaceCoverage    bool
 	coverageOnly       bool
 	id                 int64
-	condition          func() (bool, bool)
-	at                 spatial.Point
-	// subjectGone：Hide / Leave 在事实应用前移走了目标，只剩跟随它的空间视野那一半要移动。
-	subjectGone bool
-}
-
-// ---- Leave / Hide 与排队事实 ----
-//
-// 排队事实在调用顺序上早于之后的 Leave / Hide，却在下一次政策阶段才应用。若 Leave / Hide 不改写 in.facts，
-// 就绪的位置事实会在 MoveSubject 处得到 ErrInterestUnknown，被留下并阻塞该 id，错误一路返回到 Flush，Flush 在
-// 取 pending 之前失败，之后每一次都一样——这个 Manager 上所有 subject 停发，Stop / Drain 一直报错。
-//
-// 所以 Leave / Hide 把自己的效果写进排队事实，使应用结果与“先应用事实、再 Leave / Hide”逐项相同，不多丢也不多留：
-// MoveSubject 后 RemoveSubject ≡ RemoveSubject，目标那一半作废；跟随它的空间视野在“先应用”时会被带到新位置，
-// 所以那一半保留（应用时按当时的跟随表移动，Leave 撤掉的主视野自然不在表里）。只改额外覆盖的事实整条丢弃。
-// 只按 AOI 实际发生的删除改写（RemoveSubject 失败时不动），所以不会丢掉仍然有效的事实。
-
-// supersedeQueuedMovesLocked 在 AOI 实际移走实体 subject 之后调用。调用方持有 in.mu。
-func (in *Interest) supersedeQueuedMovesLocked(subject int64) {
-	in.queueMu.Lock()
-	defer in.queueMu.Unlock()
-	delete(in.subjectRoles, subject)
-	in.rewriteFactsLocked(func(fact *queuedInterestFact) bool {
-		if fact.id == subject {
-			fact.subjectGone = true
-			fact.replaceCoverage = false
-			fact.coverage = nil
-		}
-		return !fact.subjectGone || !fact.coverageOnly
-	})
+	// gen 是登记时目标的代际号：之后的 Leave / Hide / 再次放置换代，旧代际的事实应用时作废（见 runLogLocked）。
+	gen       uint64
+	condition func() (bool, bool)
+	at        spatial.Point
 }
 
 func (fact queuedInterestFact) finish() {
@@ -66,17 +41,16 @@ func (fact queuedInterestFact) finish() {
 	}
 }
 
-func (in *Interest) rewriteFactsLocked(keep func(*queuedInterestFact) bool) {
-	kept := in.facts[:0]
-	for _, fact := range in.facts {
-		if keep(&fact) {
-			kept = append(kept, fact)
-		} else {
-			fact.finish()
-		}
-	}
-	clear(in.facts[len(kept):])
-	in.facts = kept
+// logEntry 是登记侧日志的一条：门控事实（op 为 nil）或其他命令（op）。日志的顺序就是登记顺序，只有应用方按序执行。
+type logEntry struct {
+	fact queuedInterestFact
+	op   *viewOp
+}
+
+// subjectGen 是“同一目标、同一代际”的键：未确认的事实只挡住同一代际后面的事实。
+type subjectGen struct {
+	id  int64
+	gen uint64
 }
 
 // QueueMove 在 Entity 锁内记录位置事实；锁外确认提交后、捕获同步内容前应用：移动目标 e，跟随 e 的空间视野
@@ -86,6 +60,8 @@ func (in *Interest) QueueMove(e entity.IThreadSafeEntity, at spatial.Point) erro
 	return in.queueFact(e, queuedInterestFact{at: at})
 }
 
+// queueFact 只取登记侧短锁：检查边界、目标是否登记与预算，记下目标当前的代际，持有发布屏障并追加到日志。
+// 不做 AOI 工作，不等应用方。
 func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFact) error {
 	if e == nil || e.Base() == nil {
 		return errors.New("policy: entity required")
@@ -93,25 +69,28 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 	fact.id = e.ID()
 	fact.commit = entity.CurrentSyncMutation()
 	fact.condition = entity.SyncConditionFor(e)
-	in.queueMu.Lock()
-	defer in.queueMu.Unlock()
-	if in.queueClosed {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("policy: interest is closed")
 	}
 	if !fact.coverageOnly && !in.aoi.Bounds().Contains(fact.at) {
 		return spatial.ErrInvalidBounds
 	}
-	if _, subject := in.subjectRoles[fact.id]; !subject {
+	gen, subject := r.subjects[fact.id]
+	if !subject {
 		return ErrInterestUnknown
 	}
-	if len(in.facts)+in.inflight >= in.maxQueuedFacts {
+	if r.facts >= in.maxQueuedFacts {
 		return ErrInterestQueueFull
 	}
+	fact.gen = gen
 	fact.releasePublication = e.Base().Sync().HoldSyncPublication()
-	in.queueActive = true
-	in.facts = append(in.facts, fact)
-	// 两种模式都不在业务线程（Nest worker）上做 AOI 工作：异步模式只通知应用线程；同步模式由 Manager 的政策阶段应用，
-	// 已确认时提醒 Manager（on_change 下尽快 Flush，periodic 下无效果）。
+	r.facts++
+	r.active = true
+	r.log = append(r.log, logEntry{fact: fact})
+	// 同步模式由 Manager 的政策阶段应用，已确认时提醒 Manager（on_change 下尽快 Flush，periodic 下无效果）。
 	if in.applyMode == ApplyAsync {
 		in.signalApplierLocked()
 	} else if ready, _ := fact.condition(); ready {
@@ -120,29 +99,25 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 	return nil
 }
 
-// ---- 排队事实的应用（DESIGN-TODO D19“两种应用模式”）----
+// ---- 日志的执行（单写者，REFACTOR-2026-10-21-interest-single-writer）----
 //
-// 两种模式共用同一个取批与应用步骤（applyBatchLocked）和同一个结算入口（applyLocked → releaseAppliedLocked），
-// 只是谁、何时调用 applyBatchLocked 不同：
+// 全部写入口只在登记侧追加日志；应用方（同步模式：Manager Flush 的政策阶段；异步模式：应用线程；以及显式 Apply 与
+// 诊断读）持 mu 按日志顺序执行，两种模式共用 runLogLocked 与同一个结算入口（applyLocked → releaseAppliedLocked）。
 //
-//   - ApplySync：settleQueued（Manager Flush 的政策阶段）先在 mu 内应用一批，再结算；没有应用线程。
-//   - ApplyAsync：应用线程调用（下文），settleQueued 只结算。
+// 执行规则：
+//   - 门控事实：回滚 / 拒绝的完成并释放屏障；代际号不是目标当前代际的（期间被 Leave / Hide / 再次放置）作废；
+//     未确认的留在原位，同一 (目标, 代际) 后面的事实不能越过，其他目标可以；就绪的进入 AOI 批次。
+//   - 其他命令不等未确认的事实（它们不依赖提交）；在 AOI 批次之外串行执行。
+//   - 一步取到 BatchSize 个就绪事实即在此切开：之后的命令与事实留到下一步（同一提交不切开），已就绪的事实不会被
+//     它后面的命令越过——所以“已提交的移动、再 Leave → Enter”与“先应用移动、再 Leave → Enter”逐项相同。
 //
-// 所以“只有提交后的事实生效、同实体按序、Leave / Hide 改写、屏障到结算之后才释放、Drain、Close”两种模式逐项相同。
-//
-// 异步模式：排队事实不在 Flush 里应用：每个 Interest 有一个应用线程（第一条排队事实时启动），一步取一批已确认的事实
-// （≤ BatchSize），在 mu 内做 AOI 写阶段与并行重评；AOI 事件留在 AOI 的事件缓冲里，应用完的事实记入 applied，
-// 发布屏障仍然持有。Manager Flush 的政策阶段（settleQueued）只做结算：把 AOI 事件归并进 held、说给 Manager，
-// 然后释放 applied 的屏障，同一 Flush 随后捕获内容——新位置与它带来的进出视野仍在同一帧。
-// 一致点是批次边界：应用一步与结算都持 mu，Flush 撞上正在算的一批时最多等这一批。
-//
-// 唤醒：queueFact 与视野登记表变更非阻塞地通知应用线程；periodic 模式下提交确认没有通知（Manager.WakeSync 只在
-// on_change 生效），所以队里有未确认事实时按 applierPollMin 起、最长 applierPollMax 的退避轮询提交门。
+// 异步模式的唤醒：登记时非阻塞通知应用线程；periodic 模式下提交确认没有通知（Manager.WakeSync 只在 on_change
+// 生效），所以日志里有未确认事实时按 applierPollMin 起、最长 applierPollMax 的退避轮询提交门。
 
 const (
 	applierPollMin = time.Millisecond
 	applierPollMax = 8 * time.Millisecond
-	// 指标：排队 + 应用中 + 已应用未结算的事实数；应用线程每一步的耗时；一批从应用完成到被结算的等待。
+	// 指标：排队 + 应用中 + 已应用未结算的事实数；应用方每一步的耗时；一批从应用完成到被结算的等待。
 	factBacklogMetric   = "entitysync_interest_fact_backlog"
 	applyDurationMetric = "entitysync_interest_apply_duration"
 	settleDelayMetric   = "entitysync_interest_settle_delay"
@@ -157,30 +132,22 @@ func applyGatherFor(m *entitysync.Manager) time.Duration {
 	return m.Interval() / 10
 }
 
-// signalApplierLocked 非阻塞地唤醒应用线程（第一次调用时启动它）。调用方持有 queueMu，且队列未关闭。
+// syncApplyBudgetFor 是同步模式一次政策阶段排空日志的耗时预算：同步周期的一半（至少 1ms）。超出时剩余的留到下一次
+// 政策阶段（on_change 下立即再来一轮），Flush 不会因为积压而无界变长。
+func syncApplyBudgetFor(m *entitysync.Manager) time.Duration {
+	return max(m.Interval()/2, time.Millisecond)
+}
+
+// signalApplierLocked 非阻塞地唤醒应用线程（第一次调用时启动它）。调用方持有登记侧锁，且登记侧未关闭。
 func (in *Interest) signalApplierLocked() {
 	if !in.applierStarted {
 		in.applierStarted = true
-		in.applierRunning.Store(true)
 		go in.runApplier()
 	}
 	select {
 	case in.applierWake <- struct{}{}:
 	default:
 	}
-}
-
-// wakeViews 是视野登记表的唤醒：通知 Manager（on_change 下尽快进入政策阶段），已启动的应用线程也一并唤醒。
-// 在 viewMu 内调用，不阻塞。
-func (in *Interest) wakeViews() {
-	// 只读原子标志：这里持有 viewMu，不能再取 queueMu（两把锁不同时持有）。通道不会关闭，停止后的发送无害。
-	if in.applierRunning.Load() {
-		select {
-		case in.applierWake <- struct{}{}:
-		default:
-		}
-	}
-	in.wake()
 }
 
 func (in *Interest) runApplier() {
@@ -226,7 +193,7 @@ func (in *Interest) runApplier() {
 			backoff = 0
 			continue
 		}
-		// 队里还有未确认的事实：有进展时从最短间隔重新轮询，没有进展时加倍退避。
+		// 日志里还有未确认的事实：有进展时从最短间隔重新轮询，没有进展时加倍退避。
 		if progressed || backoff == 0 {
 			backoff = applierPollMin
 		} else {
@@ -236,63 +203,87 @@ func (in *Interest) runApplier() {
 	}
 }
 
-// applyStep 是应用线程的一步（异步模式）：取一批已确认的事实应用到 AOI，见 applyBatchLocked。
+// applyStep 是应用线程的一步（异步模式）：见 runLogLocked。
 func (in *Interest) applyStep() (applied, more, waiting bool) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return false, false, false
 	}
-	// 视野登记表的变更先按顺序应用（批次写阶段之外），事实里的跟随移动才看得到新定义的视野。
-	in.syncViewsLocked()
-	return in.applyBatchLocked()
+	return in.runLogLocked()
 }
 
-// applyBatchLocked 取一批（≤ BatchSize）已确认的事实应用到 AOI，应用完的事实记入 applied（发布屏障仍持有，
-// 由下一次结算释放）。返回 applied（本步应用或丢弃了事实）、more（还有已确认的事实没取完）、waiting（队里仍有
-// 事实，可能在等提交确认）。未确认事实留在原顺序，后来的同 ID 事实不能越过；其他 ID 可在本批继续。
-// 调用方持有 mu，且已先应用登记表的变更（syncViewsLocked）。
-func (in *Interest) applyBatchLocked() (applied, more, waiting bool) {
-	in.queueMu.Lock()
-	if len(in.facts) == 0 {
-		in.queueMu.Unlock()
+// drainLogLocked 一步接一步执行日志，直到没有可执行的条目（只剩未确认事实或日志空）。显式 Apply 与诊断读用它；
+// 同步模式的政策阶段另有耗时预算（settleQueued）。调用方持有 mu。
+func (in *Interest) drainLogLocked() {
+	for {
+		if _, more, _ := in.runLogLocked(); !more {
+			return
+		}
+	}
+}
+
+// runLogLocked 执行一步：取出日志，按序执行命令、把就绪事实应用到 AOI（≤ BatchSize，见上文规则），应用完的事实
+// 记入 applied（发布屏障仍持有，由下一次结算释放）。返回 progressed（执行了命令或完成了事实）、more（还有可执行的
+// 条目没取完）、waiting（日志里仍有事实，可能在等提交确认）。调用方持有 mu。
+func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
+	r := &in.registry
+	r.mu.Lock()
+	if len(r.log) == 0 {
+		r.mu.Unlock()
 		return false, false, false
 	}
 	started := time.Now()
-	// 抽取有界总队列；以 batchSize 限制新提交，已开始的同一提交整体应用。
-	// 仍检查未确认前缀后面的其他ID，避免待确认事务饿死无关实体。
-	count := len(in.facts)
-	batch := in.facts
-	// 提交条件只读取框架原子门，不调用业务。必须在抽取的同一短锁内固定：
-	// 若锁外才读ready，producer可能刚追加同一handler的后半段并提交，
-	// 导致本轮只应用前半段。这里ready意味着该提交的全部事实已经在队列内。
+	batch := r.log
+	r.log = nil
+	// 提交条件只读取框架原子门，不调用业务。必须在取日志的同一短锁内固定：若锁外才读 ready，producer 可能刚追加
+	// 同一 handler 的后半段并提交，导致本步只应用前半段。这里 ready 意味着该提交的全部事实已经在日志里。
 	for i := range batch {
-		batch[i].ready, batch[i].discarded = batch[i].condition()
+		if batch[i].op == nil {
+			batch[i].fact.ready, batch[i].fact.discarded = batch[i].fact.condition()
+		}
 	}
-	in.facts = nil
-	in.inflight += count
-	in.queueMu.Unlock()
-	blocked := make(map[int64]bool)
-	pending := make([]queuedInterestFact, 0, len(batch))
+	r.mu.Unlock()
+
+	blocked := make(map[subjectGen]bool)
+	pending := make([]logEntry, 0, len(batch))
 	completed := make([]queuedInterestFact, 0, len(batch))
-	var failed error
-	taken := 0
 	appliedCommits := make(map[*entity.SyncMutation]bool)
-	in.aoi.beginBatch()
-	for _, fact := range batch {
+	var failed error
+	taken, cut, batching := 0, false, false
+	endBatch := func() {
+		if batching {
+			in.aoi.endBatch(in.workers)
+			batching = false
+		}
+	}
+	for _, entry := range batch {
+		if entry.op != nil {
+			if cut {
+				pending = append(pending, entry)
+				continue
+			}
+			endBatch()
+			in.runOpLocked(entry.op)
+			progressed = true
+			continue
+		}
+		fact := entry.fact
+		key := subjectGen{id: fact.id, gen: fact.gen}
 		if fact.discarded {
 			completed = append(completed, fact)
 			continue
 		}
-		if !fact.ready || blocked[fact.id] {
-			blocked[fact.id] = true
-			pending = append(pending, fact)
+		if !fact.ready || blocked[key] {
+			blocked[key] = true
+			pending = append(pending, entry)
 			continue
 		}
-		if taken >= in.batchSize && (fact.commit == nil || !appliedCommits[fact.commit]) {
-			pending = append(pending, fact)
-			blocked[fact.id] = true
-			more = true
+		sameCommit := fact.commit != nil && appliedCommits[fact.commit]
+		if (cut || taken >= in.batchSize) && !sameCommit {
+			cut, more = true, true
+			blocked[key] = true
+			pending = append(pending, entry)
 			continue
 		}
 		taken++
@@ -300,32 +291,43 @@ func (in *Interest) applyBatchLocked() (applied, more, waiting bool) {
 			appliedCommits[fact.commit] = true
 		}
 		completed = append(completed, fact)
+		if gen, placed := in.placed[fact.id]; !placed || gen != fact.gen {
+			// 目标在事实之后被撤除或重新放置（那条命令越过了还没确认的它）：之后的放置决定位置，这条作废。
+			continue
+		}
+		if !batching {
+			in.aoi.beginBatch()
+			batching = true
+		}
 		var err error
-		if !fact.subjectGone {
-			if fact.replaceCoverage {
-				err = in.aoi.SetObservedBlocks(fact.id, fact.coverage)
-			}
-			if err == nil && !fact.coverageOnly {
-				err = in.aoi.MoveSubject(fact.id, fact.at)
-			}
+		if fact.replaceCoverage {
+			err = in.aoi.SetObservedBlocks(fact.id, fact.coverage)
 		}
 		if err == nil && !fact.coverageOnly {
-			in.moveFollowersLocked(fact.id, fact.at)
+			err = in.aoi.MoveSubject(fact.id, fact.at)
+			if err == nil {
+				in.moveFollowersLocked(fact.id, fact.at)
+			}
 		}
 		if err != nil {
 			failed = errors.Join(failed, fmt.Errorf("policy: dropped queued fact for %d: %w", fact.id, err))
-			blocked[fact.id] = true
+			blocked[key] = true
 		}
 	}
-	in.aoi.endBatch(in.workers)
-	in.queueMu.Lock()
-	// 未确认的前缀必须仍在新事实之前，且在途工作一直占预算；应用完的事实占预算直到被结算。
-	arrived := len(in.facts)
-	in.facts = append(pending, in.facts...)
-	in.inflight -= len(pending)
-	waiting = len(in.facts) > 0
-	backlog := len(in.facts) + in.inflight
-	in.queueMu.Unlock()
+	endBatch()
+	r.mu.Lock()
+	// 留下的条目必须仍在新登记的条目之前（未确认的前缀与切开处之后的部分）。
+	arrived := len(r.log)
+	r.log = append(pending, r.log...)
+	waiting = false
+	for _, entry := range r.log {
+		if entry.op == nil {
+			waiting = true
+			break
+		}
+	}
+	backlog := r.facts
+	r.mu.Unlock()
 	more = more || arrived > 0
 	in.applyErr = errors.Join(in.applyErr, failed)
 	if len(completed) > 0 {
@@ -333,48 +335,59 @@ func (in *Interest) applyBatchLocked() (applied, more, waiting bool) {
 			in.appliedAt = time.Now()
 		}
 		in.applied = append(in.applied, completed...)
-		applied = true
-		// 异步模式：on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。同步模式已在政策阶段里，随即结算。
-		if in.applyMode == ApplyAsync {
-			in.wake()
-		}
+		progressed = true
+	}
+	// 异步模式：on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。同步模式已在政策阶段里，随即结算。
+	if progressed && in.applyMode == ApplyAsync {
+		in.wake()
 	}
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 	metrics.ObserveHistogram(applyDurationMetric, nil, time.Since(started))
-	return applied, more, waiting
+	return progressed, more, waiting
 }
 
-// settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里应用一批已确认的事实（还有剩余时提醒 Manager，
-// on_change 下尽快再来一轮，periodic 下等下一周期）；异步模式不应用（那是应用线程的事）。然后两种模式相同：应用登记表
-// 剩余的变更，把 AOI 事件归并进 held 并说给 Manager，释放已应用事实的发布屏障（applyLocked），返回应用时攒下的错误
-// （无法应用而丢弃的事实，只让一次 Flush 失败）。排过事实或记过业务视野变更之前（纯直接模式）由调用方的 Apply 驱动。
+// settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里执行日志（一步接一步，直到没有可执行的条目或耗时预算
+// 用完；剩余的留给下一次，on_change 下尽快再来一轮）；异步模式不执行（那是应用线程的事）。然后两种模式相同：把 AOI
+// 事件与关系变更归并进 held 并说给 Manager，释放已应用事实的发布屏障（applyLocked），拒绝交给 OnRefusal，返回
+// 应用时攒下的错误（无法应用而丢弃的事实，只让一次 Flush 失败）。从未登记过任何条目的 Interest 什么也不做。
 func (in *Interest) settleQueued() error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return nil
 	}
-	_, viewsActive := in.registry.state()
-	in.syncViewsLocked()
-	in.queueMu.Lock()
-	active := in.queueActive
-	in.queueMu.Unlock()
-	if !active && !viewsActive {
+	in.registry.mu.Lock()
+	active := in.registry.active
+	in.registry.mu.Unlock()
+	if !active {
 		return nil
 	}
 	if in.applyMode == ApplySync {
-		if _, more, _ := in.applyBatchLocked(); more {
-			in.wake()
+		deadline := time.Now().Add(in.syncBudget)
+		for {
+			_, more, _ := in.runLogLocked()
+			if !more {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				in.wake()
+				break
+			}
 		}
 	}
-	in.applyLocked()
+	refusals := in.applyLocked()
+	if in.onRefusal != nil {
+		for _, refusal := range refusals {
+			in.onRefusal(refusal)
+		}
+	}
 	err := in.applyErr
 	in.applyErr = nil
 	return err
 }
 
 // releaseAppliedLocked 在结算之后释放已应用事实的发布屏障，并把它们移出预算。任何结算入口（Flush 的政策阶段、
-// 业务直接 Apply）都调它，订阅先到、内容被屏障挡住的半态不会留到下一次捕获。调用方持有 mu。
+// 显式 Apply）都调它，订阅先到、内容被屏障挡住的半态不会留到下一次捕获。调用方持有 mu。
 func (in *Interest) releaseAppliedLocked() {
 	if len(in.applied) == 0 {
 		return
@@ -383,30 +396,27 @@ func (in *Interest) releaseAppliedLocked() {
 	for _, fact := range in.applied {
 		fact.finish()
 	}
-	in.queueMu.Lock()
-	in.inflight -= len(in.applied)
-	backlog := len(in.facts) + in.inflight
-	in.queueMu.Unlock()
+	in.registry.mu.Lock()
+	in.registry.facts -= len(in.applied)
+	backlog := in.registry.facts
+	in.registry.mu.Unlock()
 	clear(in.applied)
 	in.applied = in.applied[:0]
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 }
 
-// queuedPending 告诉 Drain 政策还有没做完的事：未应用的视野变更、排队事实，以及还没停滞的重试 pair。
+// queuedPending 告诉 Drain 政策还有没做完的事：日志里的条目、应用中与已应用未结算的事实，以及还没停滞的重试 pair。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return false
 	}
-	viewsPending, viewsActive := in.registry.state()
-	if viewsPending {
-		return true
-	}
-	in.queueMu.Lock()
-	pending := len(in.facts) > 0 || in.inflight > 0
-	active := in.queueActive || viewsActive
-	in.queueMu.Unlock()
+	r := &in.registry
+	r.mu.Lock()
+	pending := len(r.log) > 0 || r.facts > 0
+	active := r.active
+	r.mu.Unlock()
 	if !active {
 		return false
 	}
@@ -423,10 +433,9 @@ func (in *Interest) queuedPending() bool {
 
 // ---- 重试停滞 ----
 //
-// 被拒的订阅留在 retry 里，每次 Apply 重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决）。
+// 被拒的订阅留在 retry 里，每次结算重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决）。
 // 不能把整个 retry 计入 queuedPending：一个永远不会被接受的 pair（观察者会话已关闭且不再重开、subject 已注销
-// 而政策没 Hide……）会让 Drain 永不结束，只能等 ctx 超时，停机走不到 Close；排队模式也不返回 Refusal，
-// 这种停滞没有任何其他痕迹。
+// 而政策没 Hide……）会让 Drain 永不结束，只能等 ctx 超时，停机走不到 Close。
 //
 // 同一 pair 连续被拒 retryStallAfter 次即判定为停滞：计数 entitysync_interest_retry_stalled_total、Warn 一次，
 // 不再计入 queuedPending。它仍留在 retry 里照旧重说——会话重开、容量释放后照常订阅，计数随成功清零。
@@ -462,7 +471,7 @@ func (in *Interest) noteRefusedLocked(key pair, err error) {
 }
 
 // drainStalls 是 Drain 超时诊断（entitysync.PolicyHooks.Stalls）：列出仍让 queuedPending 为真的条目——
-// 未确认提交的排队事实（按入队顺序，同一 ID 只列一次），以及拒绝次数未到 retryStallAfter 的重试 pair。
+// 日志里的事实（按登记顺序，同一 ID 只列一次）与命令，以及拒绝次数未到 retryStallAfter 的重试 pair。
 // 排队事实不记录入队时间（入队在 Entity 锁内，不为诊断多读一次时钟），Waited 为 0。
 func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 	in.mu.Lock()
@@ -478,9 +487,17 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 			stalls = append(stalls, stall)
 		}
 	}
-	in.queueMu.Lock()
+	r := &in.registry
+	r.mu.Lock()
 	seen := make(map[int64]bool)
-	for _, fact := range in.facts {
+	queued, commands := 0, 0
+	for _, entry := range r.log {
+		if entry.op != nil {
+			commands++
+			continue
+		}
+		queued++
+		fact := entry.fact
 		if seen[fact.id] {
 			continue
 		}
@@ -491,10 +508,13 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 		}
 		add(entitysync.DrainStall{Source: "interest", Subject: fact.id, Reason: reason})
 	}
-	if in.inflight > 0 && len(in.facts) == 0 {
-		add(entitysync.DrainStall{Source: "interest", Reason: "facts_in_flight", Detail: fmt.Sprintf("%d fact(s) being applied", in.inflight)})
+	if commands > 0 {
+		add(entitysync.DrainStall{Source: "interest", Reason: "queued_commands", Detail: fmt.Sprintf("%d command(s) not yet applied", commands)})
 	}
-	in.queueMu.Unlock()
+	if inflight := r.facts - queued; inflight > 0 && queued == 0 {
+		add(entitysync.DrainStall{Source: "interest", Reason: "facts_in_flight", Detail: fmt.Sprintf("%d fact(s) being applied", inflight)})
+	}
+	r.mu.Unlock()
 	now := time.Now()
 	for _, key := range in.retry {
 		record := in.refused[key]

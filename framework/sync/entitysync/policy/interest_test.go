@@ -417,11 +417,18 @@ func TestPublicationHoldsReleaseOnDiscardAndClose(t *testing.T) {
 					if err := in.Hide(1); err != nil {
 						t.Fatal(err)
 					}
+					// 被 Hide 作废的事实在下一次结算（同一 Flush 的捕获之前）释放屏障。
+					if err := in.applyQueued(); err != nil {
+						t.Fatal(err)
+					}
 				case "leave":
 					mutation.Admit()
 					mutation.Confirm()
 					mutation.Release()
 					if err := in.Leave(1, 1); err != nil {
+						t.Fatal(err)
+					}
+					if err := in.applyQueued(); err != nil {
 						t.Fatal(err)
 					}
 				case "close":
@@ -445,6 +452,8 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 		m := newManager(t)
 		in := newInterestMode(t, m, mode)
 		in.batchSize = 1
+		// 同步模式一次政策阶段在预算内排空日志，只有预算用完才停在批次边界：预算设到最小，让它在第一批之后停。
+		in.syncBudget = time.Nanosecond
 		manualApplier(in)
 		var entities []*queuedEntity
 		for id := int64(1); id <= 2; id++ {
@@ -523,7 +532,7 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 		second.Finish(false)
 		second.Release()
 		flushInterest(t, in, m)
-		if len(in.Visible(1)) != 0 || len(in.facts) != 0 {
+		if len(in.Visible(1)) != 0 || queuedFacts(in) != 0 {
 			t.Fatal("rolled back facts escaped or leaked")
 		}
 		if subscribed(m, 2, 1) {
@@ -582,6 +591,38 @@ func TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen(t *testing.T) {
 	})
 }
 
+// injectFact 绕过 queueFact 把一条已确认的事实直接放进日志（不唤醒应用线程）；代际取目标当前已应用的代际。
+func injectFact(in *Interest, id int64, at spatial.Point) {
+	in.mu.Lock()
+	gen := in.placed[id]
+	in.mu.Unlock()
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.active = true
+	r.facts++
+	r.log = append(r.log, logEntry{fact: queuedInterestFact{id: id, gen: gen, at: at, condition: func() (bool, bool) { return true, false }}})
+}
+
+// queuedFacts 是门控事实的预算占用（日志里的、应用中的与已应用未结算的）；loggedFacts 只数还在日志里的。
+func queuedFacts(in *Interest) int {
+	in.registry.mu.Lock()
+	defer in.registry.mu.Unlock()
+	return in.registry.facts
+}
+
+func loggedFacts(in *Interest) int {
+	in.registry.mu.Lock()
+	defer in.registry.mu.Unlock()
+	n := 0
+	for _, entry := range in.registry.log {
+		if entry.op == nil {
+			n++
+		}
+	}
+	return n
+}
+
 func retryLen(in *Interest) int {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -631,6 +672,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 				t.Fatal(err)
 			}
 			for round := 0; round < 3; round++ {
+				stepApplier(t, in)
 				if err := m.Flush(ctx); err != nil {
 					t.Fatalf("flush %d after Leave with a ready queued fact: %v", round, err)
 				}
@@ -641,17 +683,13 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 			// 其他 subject 照常出帧：4 走进 1 的视野，会话 1 要收到它的快照。
 			before := frames.count(1)
 			mustEnter(t, in, 4, spatial.Point{X: 15, Y: 10})
-			if err := m.Flush(ctx); err != nil {
-				t.Fatal(err)
-			}
+			flushInterest(t, in, m)
 			if frames.count(1) == before {
 				t.Fatal("session 1 received nothing after the invalidated fact: the manager stopped emitting")
 			}
 			// 同一 id 重新进入：被 Leave 作废的旧位置不能套到它身上。
 			mustEnter(t, in, 2, spatial.Point{X: 30, Y: 10})
-			if err := m.Flush(ctx); err != nil {
-				t.Fatal(err)
-			}
+			flushInterest(t, in, m)
 			if !subscribed(m, 1, 2) {
 				t.Fatal("stale queued move applied to the re-entered id")
 			}
@@ -682,6 +720,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 				t.Fatal(err)
 			}
 			for round := 0; round < 3; round++ {
+				stepApplier(t, in)
 				if err := m.Flush(ctx); err != nil {
 					t.Fatalf("flush %d after Hide with a ready queued fact: %v", round, err)
 				}
@@ -704,11 +743,8 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 		player(t, m, 1)
 		mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
 		mustApply(t, in)
-		in.mu.Lock()
-		in.queueActive = true
-		in.facts = append(in.facts, queuedInterestFact{id: 99, at: spatial.Point{X: 5, Y: 5}, condition: func() (bool, bool) { return true, false }})
-		in.mu.Unlock()
-		// 应用线程丢弃这条事实并攒下错误，由下一次 Flush 的结算返回一次。
+		// 一条应用时才失败的事实（边界外，绕过了登记侧的检查）：应用方丢弃它并攒下错误，由下一次 Flush 的结算返回一次。
+		injectFact(in, 1, spatial.Point{X: -5, Y: -5})
 		stepApplier(t, in)
 		if err := m.Flush(context.Background()); err == nil {
 			t.Fatal("unappliable fact not reported")
@@ -733,18 +769,14 @@ func TestFlushSettlesButDoesNotApplyQueuedFacts(t *testing.T) {
 	mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
 	mustApply(t, in)
 	flushInterest(t, in, m)
-	in.mu.Lock()
-	in.queueMu.Lock()
-	in.queueActive = true
-	in.facts = append(in.facts, queuedInterestFact{id: 2, at: spatial.Point{X: 20, Y: 10}, condition: func() (bool, bool) { return true, false }})
-	in.queueMu.Unlock()
-	in.mu.Unlock()
+	injectFact(in, 2, spatial.Point{X: 20, Y: 10})
 	if err := m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	in.mu.Lock()
-	at, queued := in.aoi.subjects[2], len(in.facts)
+	at := in.aoi.subjects[2]
 	in.mu.Unlock()
+	queued := loggedFacts(in)
 	if at != (spatial.Point{X: 900, Y: 900}) || queued != 1 {
 		t.Fatalf("Flush applied a queued fact on its own path: position=%v queued=%d", at, queued)
 	}
@@ -903,8 +935,9 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 		mustApply(t, in)
 		m.CloseSession(2)
 
-		// 玩家 2 的会话已关闭：挂给它的关系视野应用后订阅被拒。
+		// 玩家 2 的会话已关闭：挂给它的关系视野应用后订阅被拒（异步模式由应用线程应用，这里先走一步，结果确定）。
 		setRelation(t, in, 2, 1)
+		stepApplier(t, in)
 
 		// 实体 3 的提交一直没确认：事实留在队列里。
 		pendingEntity := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
@@ -972,10 +1005,18 @@ func manualApplier(in *Interest) {
 	if in.applyMode == ApplySync {
 		return
 	}
-	in.queueMu.Lock()
+	in.registry.mu.Lock()
+	started := in.applierStarted
 	in.applierStarted = true
-	in.queueMu.Unlock()
-	close(in.applierDone)
+	in.registry.mu.Unlock()
+	if !started {
+		close(in.applierDone)
+		return
+	}
+	// 之前的登记已经启动了后台应用线程：停掉它（Close 之后再关一次 applierStop 用新的通道）。
+	close(in.applierStop)
+	<-in.applierDone
+	in.applierStop = make(chan struct{})
 }
 
 // 后台应用线程与 Manager 周期 Flush 同时运行：回滚的移动（落在观察者 W 身边）从不生效——W 的会话一帧也没收到；
@@ -1036,11 +1077,9 @@ func TestApplierNeverAppliesRolledBackFactsAndKeepsOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 		in.mu.Lock()
-		at, queued := in.aoi.subjects[mover], len(in.facts)
+		at := in.aoi.subjects[mover]
 		in.mu.Unlock()
-		in.queueMu.Lock()
-		inflight := in.inflight
-		in.queueMu.Unlock()
+		queued, inflight := loggedFacts(in), queuedFacts(in)
 		if at != last || queued != 0 || inflight != 0 {
 			t.Fatalf("after Drain: position=%v want %v, queued=%d inflight=%d", at, last, queued, inflight)
 		}
@@ -1234,9 +1273,9 @@ func TestApplyModeDecidesWhenACommittedMoveIsVisible(t *testing.T) {
 		if !sees(m) || !slices.Contains(in.Visible(1), int64(2)) {
 			t.Fatalf("ApplySync: the Flush after the commit did not apply the move: subscribers=%v visible=%v", m.Subscribers(2), in.Visible(1))
 		}
-		in.queueMu.Lock()
+		in.registry.mu.Lock()
 		started := in.applierStarted
-		in.queueMu.Unlock()
+		in.registry.mu.Unlock()
 		if started {
 			t.Fatal("ApplySync started an applier thread")
 		}
