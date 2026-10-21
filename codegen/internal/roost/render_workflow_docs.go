@@ -637,6 +637,11 @@ go test ./game/skills/ 与 roost project doctor 的 skills:catalog 项都会失�
 负责确定性 tick、Program、checkpoint 和 replay。技能激活应从 Nest handler 进入，避免在 Entity 锁外
 修改 combat state。客户端消费 PresentationEvent/StateMutation，不执行服务器权威判定。
 
+推进不写周期消息：技能 Runtime 用 combatcomponent.NewRuntimeBeat（技能心跳，有在途施法时跳、空闲时停，
+handler 里经 RuntimeBeat.Start / Input / Do 改 Runtime），buff 到期用 CombatComponent.AttachBeat（Buff 心跳，
+有限时 buff 时跳、清空后停）；两者共用一把 skill.TickClock。心跳宿主取 roost add heartbeat 生成的
+HeartbeatComponent.Host()（服务自动装上 heartbeat Mod）。细则见 roost-core 的 docs/framework/guide/10-time.md §4E。
+
 ## 4. 发布检查
 
 技能 JSON、权威 CompileEnvironment revision/digest、Program identity 和客户端表现资源 manifest 必须一起

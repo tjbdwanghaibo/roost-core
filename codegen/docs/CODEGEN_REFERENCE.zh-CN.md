@@ -320,6 +320,10 @@ roost add timedomain --entity <Scene> [--id <component-id>]
 一样，只在有心跳实体的服务上装（add 命令自动加进 `mods`）。`heartbeat.*` 配置段按 Mod 的配置声明写（`kitconfig_gen.go`；现在是 `heartbeat.delivery: dispatch`，`batch` 是未经正式压测的 Nest 批量心跳作业），
 doctor 与 `--check-config` 用同一份声明。服务 Init / Shutdown 不用改。
 
+**技能与 Buff**：生成器不生成战斗组件骨架；战斗单位要 buff 到期、场景要推进技能 Runtime 时，用 `HeartbeatComponent.Host()`
+接 `combatcomponent.CombatComponent.AttachBeat`（Buff 心跳）与 `combatcomponent.NewRuntimeBeat`（技能心跳），两者共用 `skill.TickClock`
+（guide/10-time §4E）。
+
 **拒绝**（都在改任何文件之前）：没有实体、`--entity` 与名字不一致、`heartbeat` 带 `--ai` / `--state`、实体已有心跳宿主 / 行为组件 /
 时间域、组件名被占用、示例 handler 同名、服务不存在或没有 nest、`--id` 越界或已占用；timedomain 另有没有 DAO、DAO 字段只有一部分或类型不同。
 Remote 托管与 noPersist 实体都可以装（心跳只在拥有方跳；共享模式下不允许挂载，见 guide §4A）。
