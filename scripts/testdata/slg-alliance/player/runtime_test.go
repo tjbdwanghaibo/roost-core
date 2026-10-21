@@ -11,6 +11,7 @@ import (
 
 	db "example.com/slg-alliance-practice/db"
 	player "example.com/slg-alliance-practice/game/entities/player"
+	scoutmap "example.com/slg-alliance-practice/game/entities/scout_map"
 	handler "example.com/slg-alliance-practice/game/handler"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
@@ -35,6 +36,7 @@ type rewardRuntime struct {
 	nest      *nest.NestMgr
 	access    *entity.ManagerAccess
 	id        int64
+	mapID     int64
 	syncer    *entitysync.Manager
 	interest  *policy.Interest
 	sink      *viewSink
@@ -62,6 +64,7 @@ func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 	t.Cleanup(func() { check(t, mongo.Close(context.Background())) })
 	check(t, mongo.Ping(ctx))
 	player.RegisterEntity()
+	scoutmap.RegisterEntity()
 	handler.RegisterAllianceRewardsNestHandlers()
 	store, e := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	check(t, e)
@@ -89,5 +92,7 @@ func openRewardRuntime(t *testing.T, sid int32, manual bool) *rewardRuntime {
 		check(t, n.Shutdown(ctx))
 		check(t, rt.Shutdown(ctx))
 	})
-	return &rewardRuntime{rt, projector, n, access, id, syncer, interest, sink}
+	mapID, e := entity.BuildEntityID(int64(sid)*100, scoutmap.EntityKindScoutMap)
+	check(t, e)
+	return &rewardRuntime{rt, projector, n, access, id, mapID, syncer, interest, sink}
 }

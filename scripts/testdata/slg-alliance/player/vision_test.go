@@ -17,7 +17,7 @@ import (
 
 // 敌方目标使用单独的授权发布 Interest，不进入公共空间订阅源。
 // 每次通过生成 Sender 在 Nest 锁内同时读已提交的位置和侦察位图，避免从两份缓存拼接权限。
-// 目标位置是固定教学地图配置；只复用已持久的玩家视点，未实现敌方目标 DAO、行军速度或碰撞。
+// 目标位置与命令回执归独立 ScoutMap，联合快照只在本服 Nest 内成立。
 type durableVision struct {
 	refresh  func(context.Context) error
 	expect   func(...int64)
@@ -28,6 +28,7 @@ type durableVision struct {
 func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *durableVision {
 	t.Helper()
 	m, in, sink := newSpatialView(t)
+	positions := map[int64]spatial.Point{}
 	for _, id := range []int64{98, 501, 502, 503, 504} {
 		id := id
 		raw := []byte(fmt.Sprintf(`{"target":%d}`, id))
@@ -35,6 +36,13 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 			raw = []byte(`{"view":true}`)
 		}
 		check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: id, Namespace: "authorized-target", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+			if id != 98 {
+				at, ok := positions[id]
+				if !ok {
+					return entity.FrozenSyncPayload{}, fmt.Errorf("missing committed target")
+				}
+				raw = []byte(fmt.Sprintf(`{"target":%d,"x":%d,"y":%d}`, id, at.X, at.Y))
+			}
 			return entity.TakeFrozenSyncPayload(1, raw), nil
 		}}})))
 	}
@@ -46,10 +54,9 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 		check(t, m.OpenHeldSession(sid))
 		check(t, m.Subscribe(sid, 98, entity.SyncProfile{}))
 	}
-	positions := map[int64]spatial.Point{501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700}}
 	v := &durableVision{}
 	v.load = func(ctx context.Context) (string, error) {
-		return sender.NewAllianceRewardsSender(n.nest).Sync_AllianceWallet(ctx, n.id)
+		return sender.NewAllianceRewardsSender(n.nest).MultiSync_AllianceVision(ctx, n.id, n.mapID)
 	}
 	v.noFrames = func() {
 		for _, id := range []entitysync.SessionID{1, 2} {
@@ -71,13 +78,26 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 		if e = ctx.Err(); e != nil {
 			return e
 		}
-		var state struct{ X, Y, VisionMask, ScoutUntil int64 }
+		var state struct {
+			X, Y, VisionMask, ScoutUntil int64
+			Revision                     uint64
+			Targets                      map[int64]spatial.Point
+		}
 		if e = json.Unmarshal([]byte(raw), &state); e != nil {
 			return e
 		}
 		if state.X < 0 || state.Y < 0 || state.X >= 1000 || state.Y >= 1000 {
 			return fmt.Errorf("invalid durable viewpoint")
 		}
+		if state.Revision == 0 || len(state.Targets) != 4 {
+			return fmt.Errorf("invalid target snapshot")
+		}
+		for id, at := range state.Targets {
+			if id < 501 || id > 504 || at.X < 0 || at.Y < 0 || at.X >= 1000 || at.Y >= 1000 {
+				return fmt.Errorf("invalid target coordinate")
+			}
+		}
+		positions = state.Targets
 		// 期限是业务事实，过期时不延长、不删档；读不到合法期限即不授予临时视野。
 		now := business.Now().UnixMilli()
 		var visible []int64
@@ -129,7 +149,7 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 							if u.SubjectID == 98 && string(u.Payload.BytesCopy()) == `{"view":true}` {
 								continue
 							}
-							if _, ok := positions[u.SubjectID]; !ok || string(u.Payload.BytesCopy()) != fmt.Sprintf(`{"target":%d}`, u.SubjectID) {
+							if _, ok := positions[u.SubjectID]; !ok || string(u.Payload.BytesCopy()) != fmt.Sprintf(`{"target":%d,"x":%d,"y":%d}`, u.SubjectID, positions[u.SubjectID].X, positions[u.SubjectID].Y) {
 								return fmt.Errorf("private or unexpected target payload")
 							}
 							objects[i][o.Ref] = u.SubjectID

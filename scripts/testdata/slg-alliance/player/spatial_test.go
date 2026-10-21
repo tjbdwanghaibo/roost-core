@@ -178,6 +178,47 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	check(t, e)
 	expect(true, true)
 	vision(501, 504)
+	// 地图目标独立移动：失败不改位置，重复命令不把目标拉回旧坐标。
+	mapBefore, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, e)
+	if _, e = s.Sync_AllianceTargetMove(ctx, n.mapID, "rollback", 1, 503, 700, 700, true); e == nil {
+		t.Fatal("target rollback accepted")
+	}
+	mapAfter, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, e)
+	if mapAfter != mapBefore {
+		t.Fatal("target rollback persisted")
+	}
+	vision(501, 504)
+	for _, bad := range []struct {
+		revision uint64
+		x        int64
+	}{{9, 700}, {1, -1}} {
+		if _, e = s.Sync_AllianceTargetMove(ctx, n.mapID, "bad", bad.revision, 503, bad.x, 700, false); e == nil {
+			t.Fatal("invalid target move accepted")
+		}
+	}
+	rev, e := s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false)
+	check(t, e)
+	if rev != 2 {
+		t.Fatal("target revision", rev)
+	}
+	vision(501, 503, 504)
+	rev, e = s.Sync_AllianceTargetMove(ctx, n.mapID, "target-out", 2, 503, 900, 900, false)
+	check(t, e)
+	if rev != 3 {
+		t.Fatal("target revision", rev)
+	}
+	vision(501, 504)
+	rev, e = s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false)
+	check(t, e)
+	if rev != 2 {
+		t.Fatal("replayed target receipt", rev)
+	}
+	if _, e = s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 701, 700, false); e == nil {
+		t.Fatal("changed target command accepted")
+	}
+	vision(501, 504)
 	// 独立侦察授权仍有效时，清除覆盖块不能误删对象；最后授权来源撤销才删除。
 	check(t, n.interest.SetViewMembers(900, []int64{n.id}))
 	expect(true, true)
@@ -213,18 +254,17 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	replayInit()
 	vision(504)
 	// 由真实 ticker 推动到期，不在 observe 内手动 refresh；所有发布串行归此循环。
-	loop, err := newPermissionLoop(20*time.Millisecond, 50*time.Millisecond)
-	check(t, err)
+	service := &VisionService{Interval: 20 * time.Millisecond, ReadTimeout: 50 * time.Millisecond}
 	loopCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	originalLoad := view.load
 	cycles := 0
 	view.load = func(readCtx context.Context) (string, error) {
 		switch cycles {
-		case 1:
+		case 2:
 			<-readCtx.Done()
 			return "", readCtx.Err()
-		case 2:
+		case 3:
 			// 模拟期限之后才返回的有效快照；即使 loader 漏报超时，也不能 Ready/Flush。
 			raw, e := originalLoad(readCtx)
 			if e != nil {
@@ -232,46 +272,65 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 			}
 			<-readCtx.Done()
 			return raw, nil
-		case 3:
+		case 4:
 			return "{", nil // 损坏的内部快照同样保持 held。
 		}
 		return originalLoad(readCtx)
 	}
-	err = loop.run(loopCtx, func(readCtx context.Context, _ uint64) error {
+	service.Refresh = func(readCtx context.Context, _ uint64) error {
 		return view.refresh(readCtx)
-	}, func(refreshErr error) {
+	}
+	service.Observe = func(refreshErr error) {
 		cycles++
 		switch cycles {
 		case 1:
 			check(t, refreshErr)
 			view.expect(504)
+			rev, err := s.Sync_AllianceTargetMove(ctx, n.mapID, "loop-in", 3, 503, 700, 700, false)
+			check(t, err)
+			if rev != 4 {
+				t.Fatal("periodic move revision", rev)
+			}
+		case 2:
+			check(t, refreshErr)
+			view.expect(503, 504)
+			rev, err := s.Sync_AllianceTargetMove(ctx, n.mapID, "loop-out", 4, 503, 950, 950, false)
+			check(t, err)
+			if rev != 5 {
+				t.Fatal("periodic move revision", rev)
+			}
 			now = deadline // 不发提示；下次 ticker 必须发现到期。
-		case 2, 3:
+		case 3, 4:
 			if !errors.Is(refreshErr, context.DeadlineExceeded) {
 				t.Fatalf("want read deadline, got %v", refreshErr)
 			}
 			view.noFrames()
-		case 4:
+		case 5:
 			if refreshErr == nil {
 				t.Fatal("invalid authority snapshot was accepted")
 			}
 			view.noFrames()
-		case 5:
+		case 6:
 			check(t, refreshErr)
 			view.expect() // 超时后重读期限，Full 清掉最后目标。
 			cancel()
 		default:
 			t.Fatal("loop continued after cancellation")
 		}
-	})
-	if !errors.Is(err, context.Canceled) || cycles != 5 {
+	}
+	check(t, service.Init(nil))
+	err := service.Serve(loopCtx)
+	check(t, service.Shutdown(context.Background()))
+	if err != nil || cycles != 6 {
 		t.Fatalf("loop exit=%v cycles=%d", err, cycles)
 	}
 	view.load = originalLoad
+	verifyVisionServiceLifecycle(t)
 	replayInit()
 	vision()
 	now = deadline + 1
 	vision()
+	verifyVisionApp(t, view)
 	t.Log("scouting: deadline persisted, before/exact/after expiry checked over TCP, duplicate init never renews")
 	t.Log("strict spatial movement: precommit hidden, rollback/invalid coverage unchanged, two blocks one subject, remove one block, TCP public position only")
 }

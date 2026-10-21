@@ -142,3 +142,99 @@ func handlerAllianceRevokeVision(p IAllianceRewardPlayerEntity, sid int32, targe
 	}
 	return next, nil
 }
+
+// ScoutMap 属于本原服的教学地图权威，不把公共敌军位置塞入 Player。
+// 跨 sid 地图必须另接 Remote/Saga，不能把这里的 MultiSync 当作分布式快照。
+type IAllianceMapEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.ScoutMapDao
+}
+type scoutMove struct {
+	Target, X, Y       int64
+	Expected, Revision uint64
+}
+type scoutMapState struct {
+	Revision uint64
+	Targets  map[int64]spatial.Point
+	Moves    map[string]scoutMove
+}
+
+func readScoutMap(m IAllianceMapEntity) (scoutMapState, error) {
+	var state scoutMapState
+	err := json.Unmarshal([]byte(m.Dao().GetState()), &state)
+	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil {
+		return state, errAllianceReward
+	}
+	return state, nil
+}
+func saveScoutMap(m IAllianceMapEntity, state scoutMapState) error {
+	raw, err := json.Marshal(state)
+	if err == nil {
+		m.Dao().SetState(string(raw))
+	}
+	return err
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMapInit(m IAllianceMapEntity) error {
+	if m.Dao().GetState() != "" {
+		_, err := readScoutMap(m)
+		return err
+	}
+	return saveScoutMap(m, scoutMapState{Revision: 1, Targets: map[int64]spatial.Point{
+		501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700},
+	}, Moves: map[string]scoutMove{}})
+}
+
+// 坐标来自可信地图模拟。固定命令身份与原参数同持久写入，未知结果只重试原身份；
+// 不同命令按预期地图版本写，账本满拒新身份，不淘汰旧回执。reject 仅供回滚验收。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceTargetMove(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, reject bool) (uint64, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return 0, err
+	}
+	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 {
+		return 0, errAllianceReward
+	}
+	if old, ok := state.Moves[key]; ok {
+		if old.Target != target || old.X != x || old.Y != y || old.Expected != expected {
+			return 0, errAllianceReward
+		}
+		return old.Revision, nil
+	}
+	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves) >= 128 {
+		return 0, errAllianceReward
+	}
+	state.Revision++
+	state.Targets[target] = spatial.Point{X: x, Y: y}
+	state.Moves[key] = scoutMove{target, x, y, expected, state.Revision}
+	if err = saveScoutMap(m, state); err != nil {
+		return 0, err
+	}
+	if reject {
+		return 0, errors.New("injected target movement rollback")
+	}
+	return state.Revision, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMapSnapshot(m IAllianceMapEntity) (string, error) { return m.Dao().GetState(), nil }
+
+// 同一 Nest 锁住本服 Player 与地图，读取权限和位置的联合已提交快照。
+// 返回仅供内部筛选，账本与期限不向客户端发送。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceVision(p IAllianceRewardPlayerEntity, m IAllianceMapEntity) (string, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(struct {
+		X, Y, VisionMask, ScoutUntil int64
+		Revision                     uint64
+		Targets                      map[int64]spatial.Point
+	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetVisionMask(), p.Dao().GetScoutUntil(), state.Revision, state.Targets})
+	return string(raw), err
+}

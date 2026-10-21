@@ -13,6 +13,7 @@ import (
 	"time"
 
 	player "example.com/slg-alliance-practice/game/entities/player"
+	scoutmap "example.com/slg-alliance-practice/game/entities/scout_map"
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
@@ -69,6 +70,9 @@ func rewardChild(t *testing.T, mode string) {
 		check(t, e)
 		_, e = s.Sync_AllianceHomeInit(ctx, n.id, sid)
 		check(t, e)
+		_, e = n.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: n.mapID, Kind: scoutmap.EntityKindScoutMap})
+		check(t, e)
+		check(t, s.Sync_AllianceMapInit(ctx, n.mapID))
 		verifyPlayerSpatial(t, n, true)
 		before, found, e := h.store.Get(ctx, "rewards")
 		check(t, e)
@@ -102,10 +106,21 @@ func rewardChild(t *testing.T, mode string) {
 				return e
 			}
 			stats := n.projector.Stats()
-			if stats.Projected != 0 || stats.WALUnacked != 5 {
-				return fmt.Errorf("want five unprojected strict records: %+v", stats)
+			if stats.Projected != 0 || stats.WALUnacked != 10 {
+				return fmt.Errorf("want ten unprojected strict records: %+v", stats)
 			}
-			if e = os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600); e != nil {
+			mapRaw, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+			if e != nil {
+				return e
+			}
+			if e = os.WriteFile(filepath.Join(root, "map-ready.json"), []byte(mapRaw), 0600); e != nil {
+				return e
+			}
+			// 主分支修正同样适用于深化夹具：完整写入后才发布 SIGKILL 标记。
+			if e = os.WriteFile(filepath.Join(root, "ready.json.tmp"), []byte(raw), 0600); e != nil {
+				return e
+			}
+			if e = os.Rename(filepath.Join(root, "ready.json.tmp"), filepath.Join(root, "ready.json")); e != nil {
 				return e
 			}
 			select {} // Player 已到账、原服 Delivered 尚未写入；父进程此时 SIGKILL。
@@ -133,6 +148,22 @@ func rewardChild(t *testing.T, mode string) {
 	check(t, json.Unmarshal([]byte(wallet.Receipts), &receipts))
 	if wallet.Home != sid || wallet.Gold != 10 || len(receipts) != 1 || receipts[key.String()] != 10 {
 		t.Fatal("cold permanent receipt or asset missing", wallet)
+	}
+	mapExpected, e := os.ReadFile(filepath.Join(root, "map-ready.json"))
+	check(t, e)
+	mapRaw, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, e)
+	if mapRaw != string(mapExpected) {
+		t.Fatal("cold map differs BEFORE replay")
+	}
+	check(t, s.Sync_AllianceMapInit(ctx, n.mapID))
+	if rev, e := s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false); e != nil || rev != 2 {
+		t.Fatalf("cold target receipt: %d %v", rev, e)
+	}
+	mapAfter, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, e)
+	if mapAfter != mapRaw {
+		t.Fatal("cold replay reset target position")
 	}
 	verifyPlayerSpatial(t, n, false)
 	// 恢复先比钱包，再从原服账本发现未完成义务；第三进程必须已无待发工作。
@@ -217,7 +248,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(context.Background())
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_REWARD_DB")).Drop(context.Background()))
-	t.Log("same activity workflow: both static homes credit generated Player DAO; five unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
+	t.Log("same activity workflow: both static homes credit generated Player DAO; ten unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 	for _, sid := range []int32{1000, 1001} {
