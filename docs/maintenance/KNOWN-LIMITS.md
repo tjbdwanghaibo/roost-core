@@ -23,7 +23,7 @@
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
 
-- **还没有业务接入**：P1 只有框架与 Mod。生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环；P2（MapBasic / Move 组件、actionflow 适配）、P3（game-demo）、P4（压测改心跳驱动）未做。
+- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P3（game-demo）、P4（压测改心跳驱动）、P5（迁移现有快池 tick）未做。
 - **投递是单目标 Dispatch**：压测 50 万次/秒约 4.25 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)），CPU 约六成是 worker 每条消息停放 / 唤醒。Nest 批量入队（方案 D）原型另行进行，达标后只换投递层（`deliverer`）。本轮只做 5 万实体 1s 档的功能冒烟（10 万拍全部执行、零跳拍），**没有正式性能测量**。
 - **卸载窗口**：投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
@@ -32,6 +32,20 @@
 - **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。
 - **`Elapsed` 上限**：取 `max(1s, 档位)`，不是一律 1 秒（2s 及以上的档每拍都会少算），待维护者确认。
 - **装了心跳的服务多一个 Mod**：与 entitytimer 相同，`shutdown.total_timeout` 多 3s 保底。
+
+### 移动与动作（D20 第 2 期）
+
+`gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow`）与 `actionflow.BeatRunner`（[DESIGN-TODO D20 P2](DESIGN-TODO.md#p2-实施结果2026-10-21)）。用法见 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，契约见 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
+
+- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
+- **runner 不随事务回滚**（actionflow 既有性质）：在一个随后回滚的 handler 里启停动作，runner 的状态保留、心跳登记与 `Move` 的状态却回滚。可见后果：①回滚的 `MoveTo` 动作留在 runner 里、`Move` 没有在动，它等不到结论，直到被同组新动作取代或被结束；②需要周期 tick 的动作在、`"actionflow"` 心跳却停了，直到下一次动作切换（`BeatRunner.Sync` 可手动重算）。规避：改 runner 的 handler 先做完会失败的校验再 `Start`。让 runner 随事务回滚是 actionflow 的设计变更，未做。
+- **动作收尾在移动心跳的事务里**：`Move` 到达时在本拍回调里经 `Waker` 让 runner 结束动作；本拍事务若之后提交失败（只改 nopersist 字段时提交记录为空，实际极少），位置回滚而动作已结束。
+- **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 取 Interest 的锁并 `Apply` 一次，在 Nest worker 上可能等一个 AOI 应用批次（进出场景是低频事件，未测）；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 生效，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）。
+- **不持久“在场景里”与“正在移动”**：实例重新加载后由业务按自己的 DAO 状态重新 `Enter`、重新发起移动；只从内存卸载不调用 `Leave`（`MapBasic.OnDestroy` 只发布“已不在”，跟随者以 `TargetLost` 收尾）。
+- **跟随只看本进程、只看提交后的位置**：`LocateIn` 经实体管理器的只读查找，目标不在本进程内存（另一个进程的 Remote 实体、已卸载）即 `TargetLost`；读的是目标最近一次提交的快照，最多落后目标一拍。
+- **地形判定按 0.5 格采样**：每进一个新格问一次 `Terrain`，斜穿两个被挡格的夹缝可能漏判；一拍的位移不设上限（速度 × `Elapsed`，`Elapsed` 上限 `max(1s, 档位)`），速度极大时采样数随距离增长。
+- **Remote 共享模式停心跳后组件不感知**：实体运行中进入共享模式时框架停掉 `"move"` / `"actionflow"` / `"map.save"`，回到独占不自动恢复；心跳没有“被停掉”的回调，`Move` 保持移动中但不推进、动作不收尾、周期落库停，直到业务在回到独占后调用 `Move.Resume` / `BeatRunner.Sync` / 重新 `Enter`。只在单元用例里模拟了“框架停掉登记”的结果，没有经真实 Remote 共享模式切换的移动用例。
+- **`MemFields` 只给测试、示例与不持久的 NPC**：逆操作只在 `rollback=undo` 的 handler 里登记，`rollback=state` 不恢复；它不标同步脏（`OnChange` 由使用方接）。需要同步的实体用 DAO 字段实现 `Fields`。
 
 ### Skill Runtime
 

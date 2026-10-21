@@ -64,6 +64,25 @@ DESIGN-TODO D20 第 1 期（维护者 2026-10-21 定方案与压测后决定）�
 
 验证（`GOWORK=off go test -race -count=1 ./gameplay/heartbeat ./wiring/heartbeat`）：`driver_test.go`（档位规则与相位打散、在途跳拍 / 准入满 / 限频 Warn、卡住重投翻倍与只执行一次、换档、多登记不合并与按登记选 handler、投递前与执行时的实例核对、Stop 顺序、并发启停 / 推进 / 执行）；`nest_test.go`（真实 Nest：回调在实体锁与事务内、与同实体业务消息串行；慢池实体在慢池；事务回滚作废启停、回调报错回滚回调侧记录；卸载重载令牌；5 万实体冒烟，-race 下 2000 实体）；`remote_test.go`（两个引擎 + 模拟 Remote 写准入的所有权迁移：旧拥有方离开 `LocalOwned` 后零执行、新拥有方成为拥有方前零执行；共享模式下登记被拒、运行期进入共享（拥有方切换与第二个写者首拍准入）后心跳被停掉且回调零执行、多个登记全部停掉且 Warn 限频、共享期间 `Start` 被拒、回到独占后不自动恢复且重新 `Start` 照常跳）；`wiring/heartbeat/heartbeat_test.go`（依赖 Nest、业务时钟、登记驱动、启停）。变异核对 M1～M11 各让对应用例变红，原文记录在 [D20 实施结果](../../maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)。
 
+## 2C. 移动与动作的心跳驱动
+
+DESIGN-TODO D20 第 2 期。`gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow` 动作）与 `gameplay/actionflow` 的 `BeatRunner`，都建在 §2B 的心跳上，只用它的公共 API（`Host.Register`、`Reg.Start` / `Stop` / `SetPeriod` / `Active` / `Period`），不改投递层。依赖边界：`actionflow` 只多 import `gameplay/heartbeat`（同属 nest 块）；`movement` 建在三块之上（import nest、entity、`sync/entitysync/policy`、heartbeat、actionflow），不归入任何一块（`dependency_boundary_test.go`）。
+
+1. **只在实体锁内、只做内存与入队**：三者的方法都在 Nest handler、心跳回调或加载 / 新建的初始化阶段调用（`Published` 除外）。心跳回调里只做内存计算与入队（写 DAO 字段、`QueueMove`、记提交后工作），不阻塞、不做 I/O、不 `Dispatch` / `Request`。
+2. **位置的权威是 DAO**（`map_basic.go` `Fields`）：组件不另存位置。`SetPos` 先 `Space.QueueMove`、成功才写字段与登记回滚；`QueueMove` 由 `policy.Interest` 绑定当前 `SyncMutation` 的提交条件，提交确认后应用、回滚丢弃，所以“回滚的移动不生效”由 Interest 的提交门保证，组件只负责“被拒时什么都不写”。强制点：`SetPos`。
+3. **进出场景在提交之后**（`addOp` / `stagedCommit` / `afterCommit`）：一个事务里的进出与要发布的快照攒进一条按**事务 ID**识别的记录，第一次改动时登记 `nest.AfterCommit`；提交后在实体锁外按顺序调 `Space.Enter` / `Leave`，再发布快照。之后的事务各有自己的记录，提交后回调只读自己那条，不读组件的其他状态（锁外读会与下一个事务竞争）。同一事务先进后出抵消；进场景后又 `SetPos` 时不入队（AOI 还不认识它），直接改记录里 Enter 的位置。回滚时记录作废（AfterCommit 不执行），`mapState`（所在 Space、是否待落库）由 `guard` 登记的 `DeferRollback` 恢复。不在事务里立即执行。强制点：`addOp`、`SetPos` 的 `entering` 分支、`guard`。
+4. **发布按序号**（`publish`）：快照带序号，CAS 只接受更大的；`OnDestroy` 用最大序号封住。同一实体的提交后回调即使与下一个事务交错，发布也不倒退；回滚的改动从不发布。
+5. **Move 的推进状态随事务回滚**（`move.go` `guard`）：`moveState`（模式、编号、亚格位置、路径进度、跟随参数）整体快照，每个事务第一次改动时登记 `DeferRollback`；编号 `nextToken` 只增、不回滚。路径切片设定后不再修改，快照可以共享。
+6. **一拍只按 Elapsed 走一次**（`beat`）：位移 = 速度 × `Beat.Elapsed`，沿路径逐段推进；不追帧，`Beat.Skipped` 不参与计算。位置变化只在本拍结束时写一次（`commitStep`）：一拍走三格只入队一次。亚格位置 `x, y` 累积零头，`cell` 记上一次写进 `MapBasic` 的格；`MapBasic` 的位置被别处改过（瞬移）时从新位置接着走。
+7. **结束即停心跳**（`finish`）：清状态、`reg.Stop()`，再回调 `Done`（回调里可以立刻开始新的移动）。调用方 `Stop` 不回调；`MoveTo` / `Follow` 取代进行中的移动时旧的以 `Replaced` 回调，回调在新状态生效之后。AOI 排队满（`policy.ErrInterestQueueFull`）整拍回到 `beatStart`、不结束；其他 `SetPos` 错误以 `Refused` 结束。
+8. **跟随读提交后的快照**（`follow` + `LocateIn`）：`Locator` 在跟随者的锁内调用，只经实体管理器的只读查找拿到目标的 `MapBasic`，读它的原子快照；不取目标的锁。目标查不到 / `Present` 为假 → `TargetLost`，场景不同 → `TargetLeft`。
+9. **动作由事件推进**（`action.go`）：`MoveTo` / `Follow` 的 `TickInterval` 为 0；`Start` 要求 `ctx.Owner` 实现 `MoveOwner`、`ctx.Waker` 非 nil（`BeatRunner` 填），调 `Move.MoveTo` / `Follow` 并记下编号；`Move` 的 `Done` 只认自己的编号，记下结论后 `Waker.Wake(action)`，runner 马上 tick 这个组、`Tick` 交出结果（`Arrived` 成功、`Replaced` 取消、其余失败）。`Cancel` 停自己那次移动（不回调）。
+10. **BeatRunner 的启停**（`actionflow/heartbeat.go`）：包住业务的 `OnTransition` 记录每组的当前动作及其周期（`intervalOf`：未实现 `TickIntervaler` 取 `BeatConfig.Period`，0 为事件推进，正数取不大于它的最长档），每次切换 `Sync`：没有需要 tick 的动作就 `Stop`，否则换到最短档再 `Start`（同状态时心跳 API 不做事）。包住 `PopulateContext`（旧的 `Context` 钩子同样经它）补 `Owner`（取宿主实体）、`Waker`、`Elapsed`。每拍按组号顺序 tick 仍需周期 tick 的组（前面的组的回调可能换掉了后面的组的动作），再 tick 任务，最后 `Sync`；runner 的错误经 `OnError` 报告，本拍不回滚。
+11. **runner 不随事务回滚**：这是 actionflow 的既有性质，心跳登记却随事务回滚，两者在“启停动作的事务回滚了”时可能不一致，直到下一次动作切换或业务调 `Sync`。见 KNOWN-LIMITS。
+12. **Remote 共享模式**（main `96724b6a` / `d287031f`：`Reg.Start` 在共享模式返回 `ErrHeartbeatRemoteShared`，运行中进入共享时框架在下一拍停掉登记、回到独占不自动恢复）：`Move.begin` 先 `Start` 再改状态，挂不上就原样返回错误（进行中的移动照旧）；`MapBasic.Enter` 配了周期落库时先 `Start` `"map.save"`；`BeatRunner.Sync` 返回 `Start` 的错误（切换与每拍时经 `OnError` 报告）。被框架停掉之后组件不感知（心跳没有停止回调）：`Move` 仍处于移动中、不推进，`Move.Resume` / `BeatRunner.Sync` 由业务在回到独占后调用。强制点：`begin`、`Enter`、`Sync`（变异 M16～M18）。
+
+验证（`GOWORK=off go test -race -count=1 ./gameplay/movement ./gameplay/actionflow`）：`move_test.go`（直接调回调：按速度与 Elapsed 推进、到达停心跳、跳拍一次覆盖与亚格累积、取代、被阻挡、跟随 / 目标销毁 / 目标离开、进出场景与落库、背压与拒绝）；`nest_test.go`（真实 Nest + 同步 Manager + Interest + 启动的心跳驱动：位置经 QueueMove 进 AOI、回滚的移动不生效；进出场景随事务；回滚的 MoveTo 不留心跳；runner 由心跳 tick 且空闲停；MoveTo 动作经移动心跳到达、被新的取代；Follow 在目标卸载后收尾）；`smoke_test.go`（3000 实体随机 MoveTo，观察者经同步帧收到每个实体的终点位置，-race 下 300）；`shared_test.go`（Remote 共享模式下拒绝、回到独占后 Resume / Sync）；`actionflow/heartbeat_test.go`（启停与档位、按组顺序 tick 与 Elapsed、Wake）。变异核对 M1～M18 原文见 [D20 P2 实施结果](../../maintenance/DESIGN-TODO.md#p2-实施结果2026-10-21)。
+
 ## 3. 并发、失败与恢复的修改检查
 
 持久化钩子是第三个调用位置（前两个是回调里直接调用、回调里重入 Tick）：钩子里取消、改期、新建和重入 Tick 都允许，钩子能看到回调里看不到的过渡状态（见 §2 第 6 条）。改动发变化的路径时，在 `TestHookOperationsOnEveryNodeStateItCanSee` 里补对应的状态行，而不是只加单点用例；2026-10-17 重构后第一处缺陷（收尾钩子重入 Tick 触发尚未通知的新节点，ID 未经 upsert）就出在这个维度，见[重构方案 §9](../../maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
@@ -116,6 +135,16 @@ DESIGN-TODO D20 第 1 期（维护者 2026-10-21 定方案与压测后决定）�
 | [host.go](../../../gameplay/heartbeat/host.go) | `Beat`、`Func`、`RegOption`、`Host`、`Reg` |
 | [wiring/heartbeat/heartbeat.go](../../../wiring/heartbeat/heartbeat.go) | `Mod` |
 
+### movement
+
+3 个实现文件、8 个测试文件（含 `example_test.go`）。心跳驱动的 runner 在 [actionflow/heartbeat.go](../../../gameplay/actionflow/heartbeat.go)（`BeatConfig`、`BeatRunner`）。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [map_basic.go](../../../gameplay/movement/map_basic.go) | `Facing`、`Fields`、`Space`、`InterestSpace`、`Snapshot`、`MapConfig`、`MapBasic`、`MapOwner`、`MemFields` |
+| [move.go](../../../gameplay/movement/move.go) | `StopReason`、`Result`、`Done`、`Locator`、`MoveConfig`、`MoveOwner`、`Move` |
+| [action.go](../../../gameplay/movement/action.go) | `MoveToParam`、`FollowParam`（`RegisterActions`） |
+
 </details>
 
 ## 5. 回归入口
@@ -148,6 +177,15 @@ DESIGN-TODO D20 第 1 期（维护者 2026-10-21 定方案与压测后决定）�
 - [nest_test.go](../../../gameplay/heartbeat/nest_test.go)：`TestBeatRunsUnderTheEntityLockInsideATransaction`、`TestBeatRunsInTheEntitysPool`、`TestStartStopFollowTheTransaction`、`TestBeatOfAnUnloadedInstanceDoesNotRunOnItsReplacement`、`TestFiftyThousandEntitiesSmoke`
 - [remote_test.go](../../../gameplay/heartbeat/remote_test.go)：`TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats`
 - [wiring/heartbeat_test.go](../../../wiring/heartbeat/heartbeat_test.go)：`TestModBindsNestAndTheBusinessClock`
+
+### movement
+
+- [move_test.go](../../../gameplay/movement/move_test.go)：`TestMoveToAdvancesBySpeedAndElapsedThenArrivesAndStopsTheHeartbeat`、`TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`、`TestNewMoveToReplacesTheOldOne`、`TestMoveToStopsWhereTheTerrainBlocks`、`TestFollowTracksTheTargetUntilItIsGone`、`TestEnterAndLeaveTheScene`、`TestRefusedPositionHoldsOnBackpressureAndEndsOtherwise`
+- [nest_test.go](../../../gameplay/movement/nest_test.go)：`TestPositionChangesReachTheAOIOnlyWhenCommitted`、`TestEnterAndLeaveFollowTheTransaction`、`TestRolledBackMoveToLeavesNothingRunning`、`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`、`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne`、`TestFollowActionEndsWhenTheTargetIsUnloaded`
+- [shared_test.go](../../../gameplay/movement/shared_test.go)：`TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode`
+- [smoke_test.go](../../../gameplay/movement/smoke_test.go)：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`
+- [example_test.go](../../../gameplay/movement/example_test.go)：`Example`
+- [actionflow/heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestBeatRunnerHeartbeatFollowsTheActionsThatNeedTicks`、`TestBeatTicksTheGroupsInOrderAndWakeTicksAnEventDrivenAction`
 
 </details>
 

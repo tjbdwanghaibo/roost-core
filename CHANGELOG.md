@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 移动与动作由实体心跳驱动：gameplay/movement（MapBasic / Move / MoveTo / Follow）与 actionflow.BeatRunner（DESIGN-TODO D20 第 2 期）
+
+- **新增（`gameplay/movement`）**：`MapBasic`（`NewMapBasic(owner, host, MapConfig)`；`Enter(sceneID, space, at)` / `Leave()` / `SetPos` / `SetFacing` / `Save` / `Published` / `OnDestroy`）、`Fields`（场景 ID、位置、朝向的存放接口，由业务 DAO 实现）、`Space`（AOI 接线：`Enter` / `QueueMove` / `Leave`）与 `InterestSpace`（`policy.Interest` 适配）、`Snapshot`、`Facing`（1/100 度）、`MemFields`（内存实现）；`Move`（`NewMove(host, mb, MoveConfig)`；`MoveTo(path, speed, done)`、`Follow(target, speed, keep, stopWhenReached, done)`、`Stop(token)`、`Resume`、`Moving`、`Token`）、`StopReason`（Arrived / Replaced / Blocked / LeftScene / TargetLost / TargetLeft / Refused）、`Result`、`Done`、`Locator` 与 `LocateIn`；`RegisterActions(registry, moveTo, follow)` 与 `MoveToParam` / `FollowParam`。用法见 [guide/10-time §4B](docs/framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 Example，契约见 [impl/10-time §2C](docs/framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
+- **新增（`gameplay/actionflow`）**：`BeatRunner`（`NewBeatRunner(ActionRunnerConfig, BeatConfig)`、`Runner`、`Reg`、`Ticking`、`Wake`、`Sync() error`）与 `BeatConfig`；`TickIntervaler`（动作可选：返回 0 = 由事件推进）与 `Waker` 接口；`ActionContext` 新增 `Elapsed`、`Waker` 两个字段（按字段名构造的代码不受影响）。
+- **语义**：位置的权威是业务 DAO（nopersist + sync），不每拍落库，离开场景 / 周期落库由业务选；位置变化先 `QueueMove`（事务内入队、走提交门，回滚的移动不进 AOI）再写字段；进出场景在提交后调 `Space.Enter` / `Leave`，回滚的不发生。`Move` 移动中挂心跳 `"move"`（缺省 100ms），每拍按 `Beat.Elapsed` 走一次（不追帧、亚格累积），结束即停心跳；AOI 排队满时整拍作废、下一拍接着走。Remote 共享模式（不允许挂心跳）下 `MoveTo` / `Follow`、带周期落库的 `Enter` 返回 `heartbeat.ErrHeartbeatRemoteShared`、不改状态；运行中被框架停掉心跳后，回到独占由业务 `Move.Resume` / `BeatRunner.Sync` 接着走。`BeatRunner` 只在有需要周期 tick 的动作时挂 `"actionflow"` 心跳，周期取最短档，空闲停；`MoveTo` / `Follow` 由事件推进，不另挂 runner 心跳。回调只做内存计算与入队。
+- **测试**：直接调回调的单元用例、真实 Nest + 同步 Manager + Interest + 心跳驱动的事务 / 回滚 / runner tick 用例、3000 实体端到端冒烟（-race 下 300，观察者经同步帧收到每个实体的终点）；18 个变异核对各让对应用例变红（[D20 P2 实施结果](docs/maintenance/DESIGN-TODO.md#p2-实施结果2026-10-21)）。没有新指标（沿用 `heartbeat.*`）。
+- **未做**：game-demo 接入（P3）、压测改用心跳驱动（P4）、迁移现有快池 tick（P5）；巡逻、寻路。
+- **限制**：见 [KNOWN-LIMITS“移动与动作”](docs/maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)。
+
 ### 按实体的心跳框架 gameplay/heartbeat 与 wiring/heartbeat Mod（DESIGN-TODO D20 第 1 期，维护者 2026-10-21 定方案）
 
 - **新增（`gameplay/heartbeat`）**：`Driver`（一个 Nest 引擎一个，`NewDriver(Config{Name})`、`SetClock`、`Bind`、`Start` / `Stop`、`NewHost`、`Stats`）、`Host`（`Register(name, period, fn, opts...)`、`OnDestroy`）、`Reg`（`Start` / `Stop` / `SetPeriod` / `Active` / `Period` / `Name`）、`Beat{Now, Elapsed, Period, Skipped, First}`、`Func func(Beat) error`、`WithDurability`、`Periods`（10 个固定档位 50ms～60s）、`Resolution`（10ms）。所有跑在 Nest 业务池上的实体周期逻辑以它为底层；用法见 [guide/10-time §4A](docs/framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](docs/framework/impl/10-time.md#2b-实体心跳)。
