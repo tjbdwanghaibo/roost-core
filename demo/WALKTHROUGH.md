@@ -262,7 +262,7 @@ move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体�
 - **策略不问“我是不是被定身了”**：门控是这条规则唯一的位置；策略只看移动组是否空闲。
 - **客户端看得见**：`Rooted` 经状态观察者镜像进 `MonsterDao.Rooted`（`nopersist,sync`），观察者在改 buff 的同一个事务里写，随它回滚。
 - GM：`gm.scene.root {"monster_id", "rooted"}` 加 / 驱散定身 buff（handler `handlerRootMonster` 只写 buff，其余跟着来）。
-  定身 buff 永久、直到驱散：`TickBuffs` 挂心跳是 D20 P5 的另一项。
+  定身 buff 永久、直到驱散：demo 没有接 P5 的 `combatcomponent.AttachBeat`（Buff 由心跳到期）。
 - **没做**：追击与回巢、怪物占地、战斗伤害（只有 GM 的“杀掉”）。
 
 ## 场景时间：副本 2 倍速（D22）

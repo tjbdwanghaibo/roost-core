@@ -73,7 +73,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **玩家不经 `LeaveScene` 离开**：断线只走复制桥的 `settle`（不进 Nest 事务）、卸载不调 `Leave`，所以 `SaveOnLeave` 在 demo 里不会触发，存档位置只靠 10 秒一次的周期落库（`actor.SavePeriod`）：崩溃或卸载最多丢 10 秒的走动；仍在内存里的玩家重连时留在原处。
 - **寻路预算用完走直线**：`PathFind.Path` 最多访问 4096 个节点，开阔地上远处的斜向目标就会用完；用完时改走直线，`Move` 每进一格问一次地形，被挡停在最后一个可走的格（动作以 `Blocked` 失败），不绕路。证明不可达的目标直接拒绝。
 - **`Join` 之前的移动 AOI 不跟**：`actor.InterestMoves` 对兴趣政策还不认识的实体（进场景事务已提交、`Scene.Join` 还没做或失败）忽略 `ErrInterestUnknown`，位置照写、AOI 不更新；`Join` 用进场景事务返回的位置，期间走的几步要等下一步才进 AOI。
-- **定身 buff 永久、直到 GM 驱散**：`TickBuffs` 挂心跳是 P5 的另一项（另行实施），demo 的 buff 不到期。怪物的 `CombatDao` / `StateDao` 不在 DaoManager 里（怪物不持久），只有 `rollback=undo` 的 handler 能回滚它们（demo 的 handler 都是 undo）。
+- **定身 buff 永久、直到 GM 驱散**：demo 没有接 P5 的 `combatcomponent.AttachBeat`（Buff 由心跳到期），定身 buff 是永久的，demo 的 buff 不到期。怪物的 `CombatDao` / `StateDao` 不在 DaoManager 里（怪物不持久），只有 `rollback=undo` 的 handler 能回滚它们（demo 的 handler 都是 undo）。
 - **怪物只巡逻**：没有追击、回巢、占地与战斗伤害；巡逻走直线（出生点附近边长 12 的正方形），角按地形裁剪。
 - **刷怪一次一批**：上一批还在建时交来的批次丢弃，等下一拍；建一只要一次 `lifecycle.Create`、一次 `ShowSubject` 与一条场景 + 怪物的两实体 Nest 消息（场景实体是这一步的串行点，玩家的 `move_target` / `move` 也锁场景）。
 - **场景视野的扇出上限 65536**：每个成员都挂在场景视野上（`MaxPlayersPerView` 由缺省 4096 调到 `sceneMaxMembers`）；超过时 `AttachView` 失败、只打 Warn，那个玩家收不到场景时间。
