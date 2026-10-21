@@ -60,6 +60,8 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 		"game/entities/monster/behavior_component_gen.go", "game/entities/monster/behavior_actions.go",
 		"game/handler/monster_behavior.go", "game/entities/monster/behavior_strategy.go", "game/entities/monster/states.go",
 		"internal/bootstrap/generated.go",
+		// 服务新装了 heartbeat Mod：已有的服务配置补上它的配置段（heartbeat.delivery，缺省 dispatch）。
+		"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml", "deploy/k8s/base/secret.game.example.yaml",
 	}
 	if strings.Join(paths, ",") != strings.Join(want, ",") {
 		t.Fatalf("paths = %v\nwant %v", paths, want)
@@ -93,9 +95,11 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 			"//roost:nest rollback=undo\nfunc handlerStartExampleMonsterAction(target monster.IBehaviorEntity, millis int64) (int64, error)",
 			"func handlerStartExampleMonsterStrategy(target monster.IBehaviorEntity) (string, error)",
 		},
-		"game/entities/monster/entity.go": {"heartbeat *HeartbeatComponent `comp:\"CompTypeHeartbeat\"`", "behavior  *BehaviorComponent  `comp:\"CompTypeBehavior\"`"},
-		"roost.yaml":                      {"heartbeats:\n    monster:\n        id: 2000\n        service: game\n        behavior:\n            id: 2001\n            ai: true\n            state: true\n", "            - heartbeat\n"},
-		"internal/bootstrap/generated.go": {"kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)", `gameheartbeat "example.com/planet/game/heartbeat"`, `kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"`},
+		"game/entities/monster/entity.go":               {"heartbeat *HeartbeatComponent `comp:\"CompTypeHeartbeat\"`", "behavior  *BehaviorComponent  `comp:\"CompTypeBehavior\"`"},
+		"roost.yaml":                                    {"heartbeats:\n    monster:\n        id: 2000\n        service: game\n        behavior:\n            id: 2001\n            ai: true\n            state: true\n", "            - heartbeat\n"},
+		"configs/service/config.game.yaml":              {"\nheartbeat:\n", "  delivery: dispatch\n"},
+		"configs/service/config.game.prod.example.yaml": {"\nheartbeat:\n", "  delivery: dispatch\n"},
+		"internal/bootstrap/generated.go":               {"kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)", `gameheartbeat "example.com/planet/game/heartbeat"`, `kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"`},
 	} {
 		body := readProjectFile(t, root, rel)
 		for _, fragment := range fragments {
@@ -176,6 +180,9 @@ func TestAddHeartbeatThenBehaviorAndTimeDomain(t *testing.T) {
 	}
 	if contains(paths, "game/heartbeat/driver_gen.go") || contains(paths, "game/entities/scene/heartbeat_component_gen.go") {
 		t.Fatalf("second add re-created the host: %v", paths)
+	}
+	if config := readProjectFile(t, root, "configs/service/config.game.yaml"); strings.Count(config, "\nheartbeat:\n") != 1 {
+		t.Fatalf("the heartbeat config section is not there exactly once:\n%s", config)
 	}
 	manifest := readProjectFile(t, root, "roost.yaml")
 	if !strings.Contains(manifest, "    scene:\n        id: 2042\n        service: game\n        behavior:\n            id: 2000\n") || strings.Count(manifest, "- heartbeat") != 1 {

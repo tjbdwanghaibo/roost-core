@@ -1124,7 +1124,7 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 
 **装配决定：按需装配**（与 entitytimer 相同）。依据“开箱可用、不用的实体零开销”：实体侧本来就零开销（没有登记、登记都停着的实例不占调度；生成的示例登记是停止状态，AI 不设策略不跳），所以“开箱可用”由 add 命令保证——它把 `heartbeat` 加进实体所在服务的 `mods`，bootstrap 随之装上，不需要手工接线。不缺省装进新工程，因为进程侧有固定开销：驱动 goroutine 空转也每 10ms 走一格，多一个 Mod 让 `shutdown.total_timeout` 多 3s 保底（实测新工程 game 服务 74s → 77s、k8s 宽限期 79 → 82s）。`heartbeat` 做成 catalog Mod（依赖 nest），配置段、doctor 的配置检查、停机预算与 `roost add mod heartbeat` 都走 Mod 的现成路径。
 
-**配置**：生成配置的 `heartbeat:` 段来自 `kitconfig_gen.go` 里 Mod 的配置声明（`modConfigSection`）。实施时（`53cc3f97`）`wiring/heartbeat` 还没有配置项，所以没有这一段；选项 C 的 `heartbeat.delivery` 合入后在 `wiring/internal/configschemagen` 加 `heartbeat` 组、重新生成即可（见下文“与并行任务的衔接”）。
+**配置**：生成配置的 `heartbeat:` 段来自 `kitconfig_gen.go` 里 Mod 的配置声明（`modConfigSection`）。rebase 到 `6576b7fb`（选项 C 已合入）后在 `wiring/internal/configschemagen` 加了 `heartbeat` 组，生成配置（开发、生产示例、k8s Secret 示例）写 `heartbeat:\n  delivery: dispatch`；add 命令给已有服务配置补这一段（`appendModConfigSections`），重复 add 不重复写。红：快照里去掉 `heartbeat` 组时 `TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles` 变红（返回的路径里没有三份配置文件）。
 
 **红绿证据**：修前（`53cc3f97` 的 `roost`，新工程加 Monster 实体后）原文：`roost add heartbeat --entity Monster` → `unexpected arguments ["Monster"]`；`roost add behavior --entity Monster --ai` → `unexpected arguments ["Monster" "--ai"]`；`roost add timedomain --entity Monster` → `unexpected arguments ["Monster"]`；`roost add mod heartbeat -service game` → `unknown wiring mod "heartbeat"`。修后 `add_heartbeat_test.go` 六条用例通过，生成工程端到端通过（`TestGeneratedHeartbeatBehaviorEndToEnd`：`example action: last progress "running ticks=5 waited=470 started=0", executed beats 6`）。变异核对：把生成的 `BehaviorConfig.Beat` 改成 nil（行为组件不挂心跳），端到端变红，原文 `timed out waiting for the heartbeat to tick the example action (driver {Delivered:0 Executed:0 ... Registered:0})`。
 
@@ -1135,7 +1135,7 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 1. heartbeat Mod 的装配方式：A 按需（现状，推荐：进程侧固定开销只在用到时付）；B 新工程里装了 nest 的服务缺省装（新手不必跑 add 也能直接用 `game/heartbeat.Driver`；代价是每个 game 进程多一个空转 goroutine 与 3s 停机预算）。
 2. 生成工程端到端脚本是否进 pretag：A 不进（现状，与其他 `test-*-generated.sh` 相同，手工运行）；B 进 pretag（发版前多约 3 分钟）。
 
-**与并行任务的衔接**：选项 C（`heartbeat.delivery`）若在本分支 rebase 时已在 main，则同批接入 configschemagen 的 `heartbeat` 组（见本节“验证”）；P3（game-demo）不用这个生成器（demo 是手写参考实现，维护者 2026-10-18）。
+**与并行任务的衔接**：选项 C（`heartbeat.delivery`）已在 rebase 时接入（见上文“配置”）；P3（game-demo）不用这个生成器（demo 是手写参考实现，维护者 2026-10-18）。
 
 **验证**：见本节末尾（rebase 后填写）。
 
