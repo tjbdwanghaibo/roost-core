@@ -87,6 +87,8 @@ func TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles(t *testing.T) {
 			"//roost:component type=2001", "ai.NewBeatController(", "ai.BeatConfig{Host: host, TimeDomain: domain}",
 			"Beat:         &actionflow.BeatConfig{Host: host, TimeDomain: domain},", "Observer:     component.ai,",
 			"Registry:     behaviorRegistry,", "return component.onBehaviorReady(isCreate)",
+			"func (component *BehaviorComponent) OnDestroy(entity.EntityDestroyReason) {\n\tif component.ai != nil {\n\t\tcomponent.ai.Close(\"owner destroyed\")",
+			"component.behavior.OnDestroy()",
 		},
 		"game/entities/monster/behavior_actions.go":  {"ActionExample actionflow.ActionKind = 1", "func NewExampleAction(param any) (actionflow.Action, error)", "a.waited += ctx.Elapsed", "func (component *BehaviorComponent) timeDomain() *timedomain.Domain"},
 		"game/entities/monster/behavior_strategy.go": {"type ExampleStrategy struct", "ctx.ActionList.CreateAction(ActionExample"},

@@ -305,7 +305,7 @@ roost add timedomain --entity <Scene> [--id <component-id>]
 | `db/def/<entity>.go`（timedomain） | 业务（add 时加字段） | `TimeAnchorBusiness int64`、`TimeAnchorDomain int64`、`TimeRate float64`，`dao:"nopersist,sync"`；三个都已同类型存在时不改，只有一部分时拒绝 |
 | `game/heartbeat/driver_gen.go` | 生成（sync 重写） | 工程唯一的 `Driver = heartbeat.NewDriver(...)`（一个 Nest 引擎一个驱动；每个进程只跑一个服务） |
 | `game/entities/<entity>/heartbeat_component_gen.go` | 生成 | `HeartbeatComponent`：构造时 `Driver.NewHost`；`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`；`OnInitFinish` 调业务 `onHeartbeatInit`，`OnDestroy` 让实例离开驱动 |
-| `game/entities/<entity>/behavior_component_gen.go` | 生成 | `BehaviorComponent`：`OnInitFinish` 用实体的宿主与业务的 `timeDomain()` 构造 `Behavior`（与 `--ai` 的 Controller，作 Observer），再调业务 `onBehaviorReady`；`Behavior()` / `AI()` |
+| `game/entities/<entity>/behavior_component_gen.go` | 生成 | `BehaviorComponent`：`OnInitFinish` 用实体的宿主与业务的 `timeDomain()` 构造 `Behavior`（与 `--ai` 的 Controller，作 Observer），再调业务 `onBehaviorReady`；`OnDestroy` 先 `AI().Close`、再 `Behavior.OnDestroy`（在途动作与任务以 `actionflow.ErrOwnerDestroyed` 结束，动作指标减回）；`Behavior()` / `AI()` |
 | `game/entities/<entity>/timedomain_component_gen.go` | 生成 | `TimeDomainComponent`：加载时 `timedomain.New(DAO 适配, timeDomainConfig())`；`Domain()` |
 | `internal/bootstrap/generated.go` | 生成 | 服务追加 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`（Nest 之后启动、之前停止） |
 | `heartbeat_beats.go` | 业务（只在缺失时创建） | `onHeartbeatInit`：示例登记 `"example"`（1s，停止状态，不占调度）；共享模式的 Remote 实体跳过 |

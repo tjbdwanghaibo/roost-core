@@ -162,7 +162,7 @@ func (component *HeartbeatComponent) onExampleBeat(beat heartbeat.Beat) error {
 }
 
 func renderBehaviorComponent(n heartbeatNames, spec BehaviorSpec) string {
-	aiImport, aiField, aiBuild, aiAccessor, observer := "", "", "", "", ""
+	aiImport, aiField, aiBuild, aiAccessor, observer, aiClose := "", "", "", "", "", ""
 	if spec.AI {
 		aiImport = "\n\t\"github.com/tjbdwanghaibo/roost-core/gameplay/ai\""
 		aiField = "\n\t// ai 是 AI 决策（ai.NewBeatController）：独立的 \"ai\" 心跳，周期由当前策略决定；没有策略时不跳。\n\tai *ai.Controller"
@@ -183,13 +183,17 @@ func renderBehaviorComponent(n heartbeatNames, spec BehaviorSpec) string {
 // AI 是本实例的 AI 决策；SetStrategy 设定策略后 AI 心跳才开始跳（behavior_strategy.go 有示例策略）。
 func (component *BehaviorComponent) AI() *ai.Controller { return component.ai }`
 		observer = "\n\t\tObserver: component.ai, // 动作 / 任务结束先交给任务，再交给 AI"
+		aiClose = `
+	if component.ai != nil {
+		component.ai.Close("owner destroyed") // 先撤下 AI：卸下策略、撤销 "ai" 心跳，不再收结束通知、不再决策
+	}`
 	}
 	timeImport := ""
 	if spec.AI {
 		timeImport = "\n\t\"time\""
 	}
 	return generatedHeader + n.replacer("@BehaviorID@", strconv.FormatInt(spec.ID, 10), "@AIImport@", aiImport, "@AIField@", aiField,
-		"@AIBuild@", aiBuild, "@AIAccessor@", aiAccessor, "@Observer@", observer, "@TimeImport@", timeImport).Replace(`
+		"@AIBuild@", aiBuild, "@AIAccessor@", aiAccessor, "@Observer@", observer, "@TimeImport@", timeImport, "@AIClose@", aiClose).Replace(`
 // roost add behavior --entity @Entity@ 生成，project sync 重写；动作种类、组、注册表与示例动作在 behavior_actions.go
 // （业务文件）。运行期在 core 的 gameplay/actionflow：@BehaviorDoc@
 package @entity@
@@ -261,8 +265,14 @@ func (component *BehaviorComponent) OnInitFinish(_ *entity.EntityCreateParam, is
 	return component.onBehaviorReady(isCreate)
 }
 
-// OnDestroy：心跳登记随 HeartbeatComponent 的 OnDestroy 离开驱动；行为组件本身不持有别的资源。
-func (component *BehaviorComponent) OnDestroy(entity.EntityDestroyReason) {}
+// OnDestroy：卸载、删档或撤销新建时收尾：在途动作与任务以 actionflow.ErrOwnerDestroyed 结束（取消状态，按 ID 等结果的
+// 一方收到结论，开了动作指标时 running 减回），之后经它发起的动作被拒绝；心跳登记随 HeartbeatComponent 的
+// OnDestroy 离开驱动。不在事务里：这时的改动只做内存收尾、不落库。
+func (component *BehaviorComponent) OnDestroy(entity.EntityDestroyReason) {@AIClose@
+	if component.behavior != nil {
+		component.behavior.OnDestroy()
+	}
+}
 `)
 }
 
@@ -456,8 +466,9 @@ import "github.com/tjbdwanghaibo/roost-core/gameplay/state"
 //
 // 状态位是一组各自独立的“是否生效”事实（定身、缴械、无敌、保护期……），不是状态机。Catalog 在启动时声明一次；
 // 实体上按它建 state.Set（state.NewStateDao + state.NewSet），再用 state.Gate 把状态接到行为组件的动作组上冻结 /
-// 打断，例如 state.Rule{State: StateExample, Group: GroupMain, Mode: actionflow.FreezeCancel}。声明了 Persist 的状态
-// 要把 StateDao 登记进实体的 DaoManager（随 DAO 落库）；生成器只生成这份声明，Set / Gate 的接线由业务写。
+// 打断，例如 state.Rule{State: StateExample, Group: GroupMain, Mode: actionflow.FreezeCancel}。声明了 Persist 的状态、
+// 或在 rollback=state 的 handler 里改状态，都要把 StateDao 登记进实体的 DaoManager（随 DAO 落库、随快照回滚；没登记时
+// rollback=state 下改状态返回 state.ErrRollbackNotCaptured）；生成器只生成这份声明，Set / Gate 的接线由业务写。
 
 const (
 	// StateExample 是示例状态，换成自己的（ID 从 1 开始；持久状态的键是 Name，改名等于丢弃旧数据）。

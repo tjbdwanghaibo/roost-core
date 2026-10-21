@@ -115,10 +115,15 @@ func (component *MapComponent) OnInitFinish(*entity.EntityCreateParam, bool) err
 }
 
 // OnDestroy runs when the instance leaves memory (unload, delete, a create
-// that was taken back). The followers of this player end with TargetLost on
-// their next beat; the heartbeat host leaves the driver for good. It does not
-// leave the scene: unloading is not leaving, and a reload is placed again.
+// that was taken back). The action in progress ends as canceled with
+// actionflow.ErrOwnerDestroyed; the followers of this player end with
+// TargetLost on their next beat; the heartbeat host leaves the driver for
+// good. It does not leave the scene: unloading is not leaving, and a reload is
+// placed again.
 func (component *MapComponent) OnDestroy(entity.EntityDestroyReason) {
+	if component.behavior != nil {
+		component.behavior.OnDestroy()
+	}
 	if component.mb != nil {
 		component.mb.OnDestroy()
 	}
