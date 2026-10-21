@@ -260,17 +260,7 @@ func (b *BeatRunner) intervalOf(a Action) time.Duration {
 	if !ok {
 		return b.period
 	}
-	want := ti.TickInterval()
-	if want <= 0 {
-		return 0
-	}
-	period := heartbeat.Periods[0]
-	for _, p := range heartbeat.Periods {
-		if p <= want {
-			period = p
-		}
-	}
-	return period
+	return heartbeat.PeriodAtMost(ti.TickInterval())
 }
 
 func (b *BeatRunner) sortedGroups() []ActionGroup {
