@@ -826,7 +826,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”；spawner 一项归 P3），生成器接入已实施（下文“生成器接入实施结果”），P3 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”），生成器接入已实施（下文“生成器接入实施结果”），P3 game-demo 接入已实施（下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
@@ -1036,6 +1036,59 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 端到端冒烟（非性能测量）：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`，真实 Nest + 心跳驱动 + 同步 Manager + Interest（ApplySync），3000 实体各自进场景、随机 `MoveTo`（距离 ≤ 150 格的方框、150 格/秒），64 个观察者铺满 1280×1280 地图：`3000 entities, 3000 moved, 64 watchers, 53233 position payloads pushed; heartbeat {Delivered:25437 Executed:25437 ... StoppedShared:0 Registered:0}`（与第一版 Move 自挂心跳时的 25414 拍同一量级：每个移动实体每拍一条消息）；全部动作成功、位置等于终点、每个实体至少一个邻近观察者最后收到的就是终点位置，结束后驱动上没有登记。-race 下 300 实体。冒烟里每会话对象数超过同步帧缺省上限 100，测试把 `frame.Limits.MaxObjects` 调到 4096（缺省值未改）。
 
 **验证**：偶发失败的修前 / 修后失败率（`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` → 改名后的 `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`）：不加负载 `-race -count=100 -run <三个经心跳等事件的用例>`，修前（`345616ad`）24/100、修后 0/100；加负载（后台循环 `go test -race -count=5 ./framework/sync/entitysync/policy/`）`-race -count=50 ./gameplay/movement/ ./gameplay/actionflow/`，修前 1/50（该用例，2850 次顶层用例里 1 次失败），修后 0/50（2851 次全部通过，退出码 0）。负载复现时 nestbatch 的正式对比在跑，它的脚本在检测到外来 go 进程时作废并重跑那一轮，所以不影响它的数据、只会推迟。gofmt、`GOWORK=off go vet ./...`、`go test -race -count=1 ./gameplay/... ./framework/sync/... ./wiring/...`、根包 `go test -count=1 .`、全量 `go test -count=1 ./...` 的结果见本轮交付报告（全部退出码 0 才提交）。
+
+### P3 实施结果（2026-10-21）
+
+**状态：P3 已实施**（分支 `feat/d20-p3-demo`，基于 main `53cc3f97`，本地提交、未推送）。改动只在 `demo/`（手写参考实现，不迁到生成器）、`codegen/internal/roost/demo.go`（demo 的写文件步骤表，新模板必须登记）与 C# 客户端 `client/dotnet`；**没有改框架包**。说明见 [WALKTHROUGH“移动”“怪物”“场景时间”“刷新”](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) 与 [guide/10-time §4B“参考接法”](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，剩余边界 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)。codebase-memory 图的根是主检出、generation 早于 D21 / D22，demo 是 `.tmpl` 不进图，结构结论以 worktree 源码与生成工程为准。
+
+**按要求逐条落实**：
+
+1. **心跳接线**：`game/actor.Heartbeat`（包级驱动）在 `internal/service/<game>/heartbeat.go` 手写 `Bind`（Nest 客户端 + 只读实体查找）并 `Start`，`Service.Init` 里早于 World 与场景，`Shutdown` 一开始就停（Nest 仍在）；与 World 定时器驱动同一种写法，不装 `wiring/heartbeat` Mod。
+2. **玩家移动（决定 ⑭）**：新协议 `MoveTarget`（msg 10026，`{X, Y, Follow}` → `{Code, Reason, ActionID, X, Y}`），handler `handlerMoveTarget`（场景 + 玩家）：找一次路，最后一步 `Behavior.CreateAction(MoveTo / Follow)`；每拍由玩家自己的移动组心跳 `Move.Advance(Elapsed)` → `MapBasic.SetPos` → DAO + `QueueMove`，观察者经 Entity Sync 看到每一步。寻路预算（4096 节点）用完时走直线，`Move` 按 `actor.Ground` 每格检查、被挡停下。原按点移动（msg 10017）保留为瞬移：`MapComponent.Teleport` 校验地形、`SetPos`、最后结束正在走的路；端点不再调 `Scene.Moved`（删除）。
+3. **位置不每拍落库（决定 ⑮）**：`PlayerDao.PosX/PosY/SceneID/Facing` 改 `nopersist,sync`，新增持久的 `SavedSceneID/SavedPosX/SavedPosY`，由 `MapBasic` 的 `SaveOnLeave` 与 `SaveEvery: 10s`（`"map.save"`）写，进场景以它为首选点。未上线、不兼容：旧文档的 `pos_x/pos_y/scene_id` 不再读。
+4. **怪物**：`ActorComponent`（新组件 2101）挂 `MapBasic` / `Move` / `Behavior` / `ai.NewBeatController`（策略 `actor.Patrol`：移动组空闲时走向下一个角）/ `state.Set` + `state.Gate`（`Rooted` → 移动组 `FreezePause`）/ `CombatComponent.BindStates`（`root` 标签派生 `Rooted`）；`Rooted` 经状态观察者镜像进 `MonsterDao.Rooted`（`nopersist,sync`）给客户端；GM `gm.scene.root`。没做追击 / 回巢（可选项，未做）。
+5. **刷怪（P5 可选项）**：见上表“已做”一行。先后顺序写在 `spawner.go` 类型注释与 WALKTHROUGH“刷新”：① `lifecycle.Create`（AI 无策略、不跑）→ ② 放身体（可见前唯一一次写）→ ③ `ShowSubject`（先 Register 再 Show）→ ④ `handlerSpawnMonster`（`MapBasic.Enter` + 开始巡逻，提交后心跳才开始，所以第一步在可见之后）→ ⑤ `Refresh.Spawned`；任何一步失败逆序撤销、下一拍重来。一次只建一批（`busy`），否则还没 `Spawned` 的请求会被下一拍再交一次。
+6. **场景时间域**：场景实体新增 `SceneDao`（`nocoll`，三个字段 `nopersist,sync`）与 `timedomain.Domain`（倍率 [0, 4]）；玩家、怪物的 `Behavior` 与 AI 以 `BeatConfig.TimeDomain: actor.WorldTime()` 构造。GM `gm.scene.time_rate` → `handlerSetSceneTimeRate`（场景锁内 `SetRate`）。场景自己是复制主体（`sync=true`），复制桥把它放进关系视野 `sceneView`，每个 `Join` 挂上；`MaxPlayersPerView` 调到 65536。C# 客户端新增 `Roost.Client.SceneTimeDomain`（`Update` / `At` / `Now`，与服务端 `State.At` 同一公式、单调托底）与自测。
+7. **loadtest**：新动作 `move_target`、`move_arrive`（等自己的复制位置到达目标），场景脚本在 `move_out_of_bounds` 之后走 30 格。
+
+**与要求的偏差（如实记录）**：
+
+1. **“副本场景”是 demo 唯一的世界场景**：demo 没有副本场景实体（副本是 session 服务的 run），时间域挂在世界场景上；`actor.WorldTime` / `actor.Ground` 是进程级的，成员构造时绑定（多场景的写法见 KNOWN-LIMITS）。
+2. **场景时间下发走关系视野**：场景不是空间主体，没有 `Show` 进 AOI；每个成员挂场景视野。代价是一个视野扇出到全场景（上限 65536）。
+3. **`actor.InterestMoves` 的 `Enter` / `Leave` 是空操作**：进出场景（复制主体、会话、Show / Hide）仍由复制桥负责（它处理重连代际、退役中的主体），`MapBasic` 只报告移动；对兴趣政策还不认识的实体（`Join` 之前）忽略 `ErrInterestUnknown`。
+4. **demo 的玩家不调 `LeaveScene`**：断线 / 卸载不经 Nest 离开场景，`SaveOnLeave` 不触发，存档位置靠 10 秒周期落库（KNOWN-LIMITS）。
+5. **改了 `codegen/internal/roost/demo.go`**：只是 demo 的写文件步骤表（新模板必须有一步写它，`TestDemoTemplateStepsAndShippedFilesAgree` 钉住），另加 `Scene` 的 DAO 与怪物 `Actor` 组件两个 `add` 步骤；不涉及生成器心跳装配。
+6. **测试的组件状态在实体锁里读**：第一版在测试 goroutine 里直接读 `Move.Moving()` 等，`-race -count=20` 报 4 处 data race（测试读法问题，产品代码在锁内）；改为经一个测试 handler 在实体锁里读（`locked`）后 `-race -count=20` 全过。
+
+**红绿证据**：新功能，实现与测试同轮写成，红用变异核对给出（每个强制点改掉一处，在生成工程里重新生成后跑对应用例，原文）。端到端用例在 `internal/service/<game>/scene_movement_test.go`：真实 Nest 引擎 + 生成的 handler + 运行中的心跳驱动 + 复制桥（Manager + Interest），业务时钟换成手动推进的（`clock.SetSource`）——驱动仍按真实时间醒来，时钟不动时每拍推进 0，推进一步时恰好由下一拍走完，所以“走了几格”是确定的数、“不动”可以不靠 sleep 断言；提交后的状态先 `settle`（同实体一条空消息）、组件状态在实体锁里读。
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| M1 `InterestMoves.QueueMove` 不排进兴趣政策 | `TestAPlayerWalksToItsGoalOnItsOwnHeartbeatAndTheWatcherSeesTheSteps`：`the walk brought the walker within 100 cells of player 9703, which still does not see it at {600 500}: {}`（第一版用例只看近处观察者，这个变异没变红——近处观察者本来就订着，位置靠同步增量到达；补了“走进远处玩家视野”这一段之后变红） |
+| M2 瞬移不结束正在走的路 | 同上：`after a teleport: at {450 450} walking true heartbeat true, want {450 450} and no walk` |
+| M3 玩家 `Behavior` 不挂场景时间域 | `TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers`：`the 2x step: never happened; last saw {300 360}`（1 倍速只走了 30 格） |
+| M4 门控不加 `Rooted` → 移动组规则 | `TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed`：`rooted: move group frozen false, heartbeat active true; want frozen and not beating` |
+| M5 场景的刷怪心跳不启动 | `TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols`：`the scene's beat fills the table's population: never happened; last saw 0` |
+| M6 `Spawn` 不进场景的移动（`MapBasic.Enter`） | 同上：`monster 2323435195258110993 is counted but not on the map` |
+| M7 玩家的 `Move` 不带地形 | `TestAPlayerWalks…`：`the straight walk stops at the wall: never happened; last saw {492 492}`（穿墙继续走） |
+| M8 寻路预算用完不改走直线 | 同上：`scene_position: invalid scene position [reason=no route to_x=700 to_y=700]: spatial: path search budget exhausted` |
+| M9 `Join` 不挂场景视野 | `TestATwiceAsFast…`：`the member never received the scene's own subject; got subjects [9944068]` |
+| M10 巡逻不看移动组是否有当前动作 | `TestPatrolStartsTheNextCornerOnlyWhenTheMoveGroupIsIdle`：`a walk in progress was replaced: next 2` |
+| M11 刷怪心跳用墙钟而不是 `Beat.Now` 判重生 | `TestTheScenes…`：`the slot is refilled after the delay: never happened; last saw 2` |
+| C1 C# `SceneTimeDomain.At` 不乘倍率 | `scripts/test-client-dotnet.sh`（`ROOST_DOTNET_GOLDEN_ONLY=1`）：`Unhandled exception. System.Exception: 2x doubles the business time after the anchor` |
+
+没变红、如实记录的两个：① 怪物 AI 心跳不挂时间域（`ai.BeatConfig.TimeDomain` 去掉）——没有用例变红：巡逻策略只看“移动组是否空闲”，不读时间，demo 里域时间只影响 AI 的 `FreezeFor` 等到期判断（demo 不用）；怪物走路的加速由 `Behavior` 的域保证（与 M3 同一路径）。② 巡逻里的 `Frozen` 判断是兜底：冻结的组本来就拒绝 `CreateAction`，去掉它行为不变。刷怪“提交后才交出”（`AfterCommit`）与“一次只建一批”（`busy`）没有确定的观察点（拍不会回滚、两批相隔 1 秒），没有变异用例，靠代码与注释。
+
+**验证**（生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`）：结果见下文“验证结果”。
+
+**冒烟（待补测，2026-10-21 因宿主资源占用推迟）**：维护者 2026-10-21 要求本轮不跑 loadtest / robot 冒烟与任何压测，loadtest 只要求编译与单元测试通过（已通过）。复跑命令（生成工程目录里，依赖用 `scripts/mirror-local.sh` 起的私有环境或 README 的隔离环境，把配置改指向它）：
+
+```bash
+make dev-run                       # 十个进程 + accountctl 登记 sid 1000
+make dev-smoke                     # 两个机器人走完整条链，含 move_target → move_arrive
+make loadtest LOADTEST_COUNT=20    # 冒烟规模，不是压测
+make dev-stop
+```
 
 ### P4 实施结果（2026-10-21）
 
@@ -1333,7 +1386,7 @@ roost 的取舍：
 | `gameplay/actionflow`、`gameplay/ai` 的 `Tick` | 是（应当在实体锁内调用） | P2 由心跳驱动 |
 | `combatcomponent.TickBuffs` 与周期性 Buff 效果、冷却、回复 | 是 | **已实施（P5，`AttachBeat`，见“P5 实施结果”）**。原计划：有到期 buff 或周期效果时挂 1Hz（或按 buff 粒度）登记，全部清空时停；加载后的第一拍顺带清理过期记录（注释里“重启后首次业务 tick”）。需要离线也准点、且结果要落档的长时 buff 仍用 entitytimer。风险中（战斗数值的时间粒度要与技能 tick 对齐） |
 | Skill `Runtime.Advance(tick)` | 是（挂在实体组件上时） | **已实施（P5，`NewRuntimeBeat`，见“P5 实施结果”）**。原计划：有在途施法 / 衍生物时挂登记，每拍把 Runtime 推进到 `beat.Now` 对应的 tick，空闲停。风险中（技能确定性依赖整数 tick 与回放，换算规则要测） |
-| game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | P5 可选：改成场景实体 1Hz 心跳里决定缺额、提交后由进程侧建实体。风险中（建实体与同步登记的先后要拆清），不是必须 |
+| game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | **已做（随 P3，2026-10-21）**：场景实体的 1Hz 心跳 `"scene.spawn"` 在场景锁里决定缺额，提交后（`AfterCommit`）交给进程侧按“建实体 → 放身体 → 登记同步并进 AOI → Nest 事务进场景并启动 AI → 计数”的顺序建，ticker 删除；见“P3 实施结果” |
 | SLG 行军、建造、研究、收入（夹具） | 到期部分不是周期 | 继续用 entitytimer；行军途中如果大地图 AOI 需要服务端位置，加 1～2Hz 心跳插值位置 + `QueueMove`。风险低 |
 | tower-defense / auto-chess / survival / idle 夹具的 `Advance(now)` | 不是周期（按下一个期限推进） | 继续用 entitytimer；某个玩法需要连续模拟（例如塔防里怪物连续移动）时，房间实体挂心跳 |
 | 活动阶段（World 期限 + 服务 `runActivity` 5s 循环） | 期限是持久定时器；循环是服务后台工作（跨服务协调、经总线） | 不迁：期限留在 entitytimer，服务循环不在范围内 |

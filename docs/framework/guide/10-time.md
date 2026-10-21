@@ -196,7 +196,9 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Move` | `gameplay/movement` | 被动：速度、路径或跟随目标、状态；`MoveTo` / `Follow` 设定、`Advance(token, elapsed)` 推进一次、`Stop`。自己不挂心跳 |
 | `MoveTo` / `Follow` 动作 | `gameplay/movement` | `RegisterActions` 以业务选定的种类注册；Start 设定移动，每拍 Tick 调 `Advance(ctx.Elapsed)`，移动结束即动作结束 |
 
-巡逻、寻路以后再做；寻路这类重计算在发起 `MoveTo` 之前做，路径作为参数。
+寻路这类重计算在发起 `MoveTo` 之前做，路径作为参数；框架没有巡逻组件，巡逻是 AI 策略按自己的状态发起 `MoveTo`。
+
+**参考接法：game-demo**（D20 第 3 期，[WALKTHROUGH“移动”“怪物”“场景时间”](../../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20)）：玩家的客户端只发目标（`move_target`），handler 找一次路、最后一步 `CreateAction(MoveTo)`，每拍由玩家自己的心跳推进并 `QueueMove`，观察者经 Entity Sync 看到每一步；按点移动保留为瞬移。怪物挂 `Behavior` + AI 心跳巡逻，定身 buff 经 `BindStates` 派生 `Rooted`，`state.Gate` 冻结移动组；场景实体的 1Hz 心跳决定刷怪缺额、提交后交给进程侧建实体；场景挂时间域，成员的行为与 AI 跟随域时间。demo 手写接线（不装 `wiring/heartbeat` Mod），端到端用例用手动推进的业务时钟逐格核对。
 
 **接法**：实体一个心跳宿主，组件共用；实体实现 `movement.MapOwner`（被跟随时读位置）与 `movement.MoveOwner`（动作找组件），`OnDestroy` 里先 `MapBasic.OnDestroy` 再 `Host.OnDestroy`。
 
