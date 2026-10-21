@@ -4,6 +4,54 @@
 
 需要维护者做设计选择的事项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## main 近期提交审查（游戏服务器专家视角，2026-10-21 登记，尚未修复）
+
+范围：`4eccd3b1..53cc3f97`（D14～D22 与零散修复，89 个提交），按当日 origin/main 核对（其后的 D20 P4 提交只动压测与文档，不影响下列结论）。D15 别名合服、D16 单实体卸载、D17 全服邮件、D18 业务日、AOI“只评估移动过的目标”、D22 业务时间冻结与时间域逐项核对成立，不在此列。下列各条按严重度排序，“已确认”的都有测试或代码路径证据；修法是建议，取舍由维护者定。
+
+1. **P1（已确认，D19 回归）Leave→Enter / Hide→Show 窗口里的旧排队移动把新主视野拖回旧位置。**
+   - 复现：玩家 2 `QueueMove` 到 (900,900) 并提交，事实应用之前 `Leave(2,2)` 再 `Enter(2,2,(30,10))`，`Drain` 三轮。ApplySync 与 ApplyAsync 两种模式都是：实体在 (30,10)，主视野在 (900,900)，邻居 1 未订阅（探针用例 `TestProbeRejoinBeforeQueuedMoveApplies`，`go test -overlay` 挂进 `framework/sync/entitysync/policy`）。
+   - 根因：`interest_queue.go` 对 `subjectGone` 的事实仍执行 `moveFollowersLocked(fact.id, fact.at)`；D19 之前 Leave 会清掉事实的观察者一半，现在不再清。现有 `TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush/leave` 在 Flush 之后才重新 Enter，正好绕开窗口。
+   - 影响：断线重连、顶号、复活 / 换相位（业务空间视野的 Hide→Show 同一路径，读代码推断）后玩家看的是旧区域，实体不再移动就一直如此。登录风暴时这个窗口最容易命中。
+   - 建议：Enter / Show / 直接放置时作废同 id 的旧排队事实，或给事实带代际号。
+
+2. **P2（已确认）`heartbeat.Host` 没有注销，文档给的“换场景重建行为组件”做不到。**
+   - KNOWN-LIMITS“域要在构造时给”写着成员换场景要重建 `BeatRunner` / `Behavior` / `Controller`；但 `Host` 只有 `Register` 与 `OnDestroy`，同名登记返回 `ErrDuplicateName`。探针：同一 Host 上第二个 BeatRunner 的 `Start` 返回 nil，OnError 收到 `registration name already used ... "actionflow/1"`，动作以失败结束、没有心跳。`ai.NewBeatController` 的 `"ai"` 登记同理。
+   - 影响：副本进出换时间域是常规操作；唯一绕法是每次换名字前缀，`h.regs` 只增不减。
+   - 建议：`Host.Unregister`，或 BeatRunner / Controller 提供 `SetTimeDomain`。
+
+3. **P2（已确认）actionflow 被抢占组的排队项一直挂着，且本文件未登记。**
+   - 复现：组 1 正在 walk、队列里有 later；组 3 以 `PreemptRunning` 抢占组 1；抢占方 `End` 后两组各 `Tick`：`group1 current=<nil> queue=1 later.starts=0`，later 也没有收到 OnEnded。
+   - 根因：`action_runner.go` `preempt()` 用 `finish(..., startNext=false)`（有意为之，DESIGN-TODO 变异 D4 锁定）；BeatRunner 在组空闲时停了心跳，没有任何东西再推进它。
+   - 影响：按 ID 等结果的 `TaskflowAction` / `PlanMission` 永久挂住，直到有人再碰这个组（例如被击倒后排队的走位）。
+   - 建议：抢占时丢弃排队项并各发一次取消 OnEnded，或抢占方结束时推进被抢占组的队列；至少在“行为控制”一节写明。
+
+4. **P2（已确认）`StateDao` 在 rollback=state 下没登记进 DaoManager 时静默不回滚，注释自相矛盾。**
+   - `gameplay/state/dao.go` 类型注释前面说 rollback=state 时“DAO 必须登记在实体的 DaoManager 里”，同一段末尾又说“不登记进 DaoManager 也能回滚与同步”。`change()` 只在 `RollbackUndo` 下登记逆操作，rollback=state 靠 `captureDao` 对 `RangeDao` 里的 DAO 拍快照。
+   - 影响：不持久的控制状态（定身等）在 rollback=state 的 handler 失败后残留，无报错。
+   - 建议：改正注释；或在 `change()` 发现 `RollbackState` 且该 DAO 未被快照时 fail-fast。
+
+5. **P2（已确认）ApplySync 在 periodic 驱动下每个周期只应用一批。**
+   - `interest_queue.go` 取满 `batchSize` 即停，`settleQueued` 的 `in.wake()` 在 periodic 下是空操作。吞吐上限 BatchSize / 周期（缺省 1024 条、20Hz 约 2 万事实/秒），超出后队列涨到 `ErrInterestQueueFull`。
+   - 这一上限 01e4f736 之前就有，但 ApplySync 现在是缺省；guide 的模式选择只看视野数，没有提移动频率与 BatchSize 要一起调。
+   - 建议：Flush 在一个周期内取到队列空或耗时预算用完；或在 guide 里写明并给出计算式。
+
+6. **P2（锁竞争已确认，阻塞时长按实测 15～46ms 推算）直接 API 在业务 worker 上等 AOI 批次。**
+   - `SetObserverView` / `Move` / `Apply` / `Enter` / `Leave` 都拿 `Interest.mu`；ApplySync 的政策阶段整批 AOI 计算持有它，ApplyAsync 的应用线程每步也持有。demo 的 `Scene.SetView`、`Moved`（`scene.go.tmpl`）在 handler 里直接调这些，D14 的 `scene_view` 又多一个入口，与“快 worker 不阻塞”冲突。
+   - 建议：handler 一侧只走排队接口（`QueueMove` 一类），或在 guide 写明这些直接 API 只能在 io 池 / 场景线程调用。
+
+7. **P3（已确认）其他小项。**
+   - 心跳：实体已 `IsRemoved()` 而组件没调 `Host.OnDestroy` 时，`driver.go` step 只计 `dropRemoved` 跳过，登记留在环上、Host 一直持有实体；建议遇到即摘除。`WithDurability(Strict)` 每拍在实体 worker 上等落盘，guide 没有警告。
+   - Buff→state：删掉 `RemoveBuff` 里的 `buffsChanged()` 后 combatcomponent 全绿（变异未被捕获）；`SetBuffStacks`、`AdoptBuff` 也没有用例。
+   - 动作指标：Behavior 没有 OnDestroy，实体卸载时在途动作不发结束，开了 Metrics 时 `actionflow.actions.running` 只升不降，而 OBSERVABILITY 把“只升不降”解释成有动作卡住。
+   - 文档过时：本文件“`Elapsed` 上限……待维护者确认”维护者已在 `2b47c959` 选 A；DESIGN-TODO D21-1～D21-4 实施结果仍写“本地提交…由维护者推送 / 分支 feat/d21-gameplay”。
+
+8. **设计意见（非缺陷，供取舍）。**
+   - 规模：每拍每个动作组一条 Nest 事务、不合并（D20 决定 ③）。5000 NPC × (2Hz AI + 10Hz 移动) 约 6 万事务/秒，原型数据 50 万拍/秒要 4.25 核、约六成花在 worker 停放唤醒。建议把批量入队（方案 D）与“无观察者降档 / 停跳”作为大规模 NPC 的前置条件，而不是可选项。
+   - 行为控制：计划步骤的 Timeout 在定身（FreezePause）期间照样计时，定身长于 Timeout 就失败，护送 / 巡逻任务偏严；状态通知不等提交、回滚不补发（已登记），可考虑回滚后自动 Refresh 缩短窗口。控制等级 / 韧性 / 递减没有框架支持，宜在 guide 写明由业务在 buff 层做。
+   - 视野：`MaxViewsPerPlayer` 数挂接，已定义未挂接的空间视野（每个都是 AOI 观察者）不受限，更合适的门槛是每个 Interest 的空间视野总数或政策阶段耗时预算。guide 表格让 MOBA 用 ApplySync，但阵营视野来自几十个友方单位，挂接数远超 9，建议改表或提供“一个视野多个视点”。可见性只看距离，没有隐身 / 反隐、相位、遮挡这类按观察者过滤；MaxVisible 按距离选，密集主城里当前目标、BOSS 可能被挤掉。
+   - 移动：SLG 行军应按“起点 + 速度 + 出发时刻”按需算位置、到达用 entitytimer，不宜逐拍移动，建议 guide 写明边界；可变步长 `Elapsed` 不适合确定性玩法（MOBA / 帧同步走 Lockstep）。
+   - 合理之处：动作驱动移动统一了取代 / 冲突 / 打断；“全局不变速、只做场景时间域”避免污染持久期限与租约；状态“按来源 + 派生”消除了匿名计数多减一次；共享视野只算一次再扇出、服务端夹取并量化客户端 LOD 都符合业界做法。
+
 ## Nest 与实体定时器
 
 ### 按实体的持久定时器（D11）
