@@ -132,9 +132,51 @@ DESIGN-TODO D22 场景时间域（原 D22-3；维护者 2026-10-21 决定 ③⑤
 4. **读取**（`Read`）：`fctx.Frozen(d, …)`，一条消息第一次读取时用冻结的 `B` 与当时发布的参数算出并冻结，`Now` / `Rate` 同一次冻结。`read` 把结果与 `high`（已交出的最大域时间，原子）取较大者并 CAS 推进。保证：同一条消息内一致；所有读者看到的域时间单调不减（包括改倍率发布前后）。限制：发布之前开始的成员消息按旧倍率算，之后的读数被 `high` 托住，与场景 / 客户端的公式值差“发布延迟 × 倍率”，直到公式值追上（时停时一直差这一点点）。
 5. **心跳接线**（`gameplay/heartbeat/host.go` `WithTimeDomain`、`runBeat`；`driver.go` `Reg.startClock`）：只改 `Beat.Now` 的来源、`Elapsed` 上限与启动时刻，调度、投递层不动。上限 `max(DefaultMaxElapsed, 档位) × 倍率`，时停为 0。
 6. **actionflow / ai 的接线**（D21 合入后补，`actionflow/heartbeat.go` `BeatConfig.TimeDomain` / `registrationOptions` / `populate`，`actionflow/behavior.go` `NewBehavior`，`ai/beat.go` `NewBeatController`）：`TimeDomain` 非 nil 时登记选项追加 `heartbeat.WithTimeDomain`（动作组心跳、`Behavior` 的任务心跳、AI 心跳），拍里的 `ActionContext.Now` / `Elapsed`、`MissionRunner.Tick(beat.Now)`、AI 的 `Tick(beat.Now)` 是域时间；`BeatRunner.populate` 在心跳之外（`ticking` 为假）把 `ActionContext.Now` 换成 `Domain.Now()`；`Behavior.now` 与 `ai.Controller` 的 `Now` 钩子缺省取 `Domain.Now`，所以计划步骤 `Timeout` 的起点（`MissionContext.Now`）与任务心跳的到期判断、`FreezeFor` 的期限与 AI 心跳的到期判断各自同一把尺子。没挂域时这些缺省都是 `fctx.Now`（`Behavior` 原来缺省 `clock.Now`，D21 合入后补改）。
-7. **不接的**：entitytimer（决定 ⑦）；技能 `Runtime`（业务在心跳里按域时间推进 tick）；`Domain` 不随场景卸载重载迁移（新实例新对象）。
+7. **不接的**：entitytimer（决定 ⑦）；`Domain` 不随场景卸载重载迁移（新实例新对象）。技能 `Runtime` 与 buff 在 D20 第 5 期接上（§2G 第 1、4 条）。
 
 变异核对（`timedomain_test.go`、`heartbeat/nest_test.go`）：去掉 `high` 托底（成员在时停发布后读到 `…16:00:00`，早于之前的 `…16:00:02`）；去掉 `fctx.Frozen`（一条消息先后读到 `{…00 1}` 与 `{…01 5}`）；提交前发布（`a rate change was published before its transaction committed`）；去掉序号比较（晚到的旧发布覆盖新的）；新锚点不托底（`the new anchor … is earlier than a domain time members already read`）；新锚点取业务时间而非当前映射（`the stop instant reads …16 want …22`）；去掉范围检查（`SetRate(-0.1) = <nil>`）；`BeatRunner` 心跳之外不换域时间、`Behavior` / `ai` 缺省不取域时间、登记不追加 `WithTimeDomain`（`TestBehaviorOnATimeDomainUsesDomainTime`、`TestABeatControllerOnATimeDomainUsesDomainTime`、`TestSceneMembersActOnTheSceneTimeDomain`）；心跳不读域（`Beat.Now … but the beat's message reads the domain at …`）；上限不乘倍率（`a 2s stall at 10x gave Elapsed 1s, want the 10s cap`）。
+
+## 2G. 技能与 Buff 的心跳
+
+DESIGN-TODO D20 第 5 期（现有快池 tick 迁移）。现行说明见 [guide §4E](../guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)。代码在 `gameplay/skill/tick_clock.go`、`gameplay/skill/scheduler.go`（`CurrentTick`、`Pending`）、`gameplay/skill/combatcomponent/beat.go`（buff）与 `runtime_beat.go`（Runtime）。放在 `combatcomponent` 而不是 `skill`：`skill` 是不依赖 Nest 的纯 DSL 运行时（只 import 标准库、`combat` 与 metrics），`combatcomponent` 本来就是“技能 / 战斗接进 roost 实体”的那一层。
+
+1. **换算**（`TickClock.TickAt`）：`tick = floor((t.UnixNano − Origin) / Length)`，负数也向下（Go 整除向零截断，余数为负时减一）。`Origin` 零值是 Unix 纪元，所以 tick 绝对、可持久（buff 的 `DueTick`、Runtime checkpoint 的 `CurrentTick`）；`Length` 限 [1ms, 1s]。`StartOf(k)` 是 tick k 的起点，`TickAt(StartOf(k)) == k`。`Ticks(d)` 向上取整。拍里用 `Beat.Now`（挂了时间域时是域时间），handler 里用本条消息冻结的 `fctx.Now` 或 `Domain.Now`，同一把尺子。
+2. **Buff 心跳的启停**（`beat.go` `alignBeat` / `wantsBeat`）：想要心跳当且仅当容器里有 `DueTick != 0` 的实例（`combat.BuffContainer.NextDue`）或 `Periodic()` 为真。对齐点：`buffsChanged`（`ApplyBuff` 真的施加了、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs` 有过期、`OnInitFinish`）与 `SetBuffDueTick`（集合不变、限时与否可能变），以及拍末尾（`Periodic` 的答案可能变了）。启停经 `heartbeat.Reg`：事务里提交后生效、回滚作废，所以 buff 集合与心跳一致。周期 `PeriodAtMost(Granularity)`，缺省 1s。挂不上（Remote 共享模式）交给 `OnError`，不让 mutator 失败。
+3. **Buff 拍**（`runBeat`）：`TickBuffs(TickAt(Beat.Now))`，然后 `OnBeat`，最后对齐。`TickBuffs` 在没有到期实例时直接返回、不登记逆操作（每拍不复制容器）。加载出的过期记录：`OnInitFinish` 不在事务里，只启动心跳，第一拍清掉。
+4. **Runtime 推进规则**（`runtime_beat.go` `advanceTo`，确定性的唯一实现）：
+   - 目标不大于当前 tick：不动（不倒退；同一 tick 的工作已在上次推进时执行）。
+   - Runtime 空闲（`Pending` 为假）：拍不推进；handler 的输入一次 `Advance(target)`（计 `Idle`）。
+   - 忙：从下一个 tick 起逐 tick `Advance(t)`；推进中一旦空闲，拍停在这个 tick（空闲点），输入照上一条一次跳到目标。
+   - 逐 tick 的步数到上限（`MaxCatchUp × max(倍率, 1) / Length`，向下取整、至少 1；`MaxCatchUp` 缺省 `max(1s, 周期)`）时剩余一次 `Advance(target)`，计 `Jumps` / `JumpedTicks`，限频 Warn（10 秒一条）。
+   - 时间域：拍的 `Beat.Now` 与倍率来自同一条消息的 `Domain.Read`，时停时目标不变、Runtime 不动；2 倍速时一拍的目标走两倍、上限也乘 2。
+
+   **为什么逐 tick**：`Runtime.Advance(N)` 本身按到期顺序执行全部任务，但 Host 只在到期点与 N 被推进（`advanceHost`）；`MemoryHost.Advance` 每次推进都发 `tick_advanced`、`revision++`、按 tick 让状态过期，所以“一次推到 N”与“1、2、…、N”结果不同。逐 tick 让 Host 被推进的序列只取决于 tick，与拍的分组无关。**为什么空闲点由 Runtime 决定**：若拍在空闲时也推进，空闲期间推进到哪个 tick 取决于拍的时刻，下一次输入之前 Host 被推进的次数就随抖动变化。**保证**：在没有发生 `Jumps` 的区间，同一输入序列（每个输入落在同一 tick）在任何拍间隔、重复、晚到的拍下，Host 每次被推进时的状态逐 tick 相同（`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：每 tick 一拍、每两 tick 一拍、10～400ms 随机含重复与晚到、600～990ms 长间隔，各 5 个种子，逐 tick 记录与输入结果全部相同）。**限制**：输入落在哪个 tick 由 handler 开始执行时冻结的时刻决定，本身随网络与排队变化——回放要记录输入的 tick（`RecordingHost` 记 Host 调用，带 tick），不记拍；发生过 `Jumps` 的区间 Host tick 被合并，回放要按同样的 tick 跳（`Stats` 与 Warn 指出）。
+5. **Runtime 心跳的启停**（`Sync`）：`Pending` 当且仅当有活动施法、排程任务（含排队的被动 / 外部事件、弹药回充、能力覆盖到期）、逐 tick 推进的衍生物、未用尽重试的待停止衍生物。冷却不是工作。每拍末尾与每次输入（`Start` / `Input` / `Do`）末尾对齐。拍里的 `Advance` 错误经 `OnError` 报告、拍返回 nil（Runtime 不在回滚域里，回滚 Host 已经对战斗 DAO 做的修改只会更不一致）。handler 的输入在 Runtime 上不回滚、心跳启动随回滚作废——与 actionflow runner 相同，由业务把输入放在最后一步，或之后调 `Sync`。
+6. **周期与心跳契约**：Runtime 心跳缺省 `PeriodAtMost(Length)`（tick 短于 50ms 时一拍 2～3 个 tick）；buff 心跳按 `Granularity`。两者都是普通心跳登记：每实体至多一拍在途、跳拍计数、不持久、Remote 共享模式不允许挂载（`Start` 返回 `ErrHeartbeatRemoteShared`）。
+
+变异核对（`runtime_beat_test.go`、`beat_test.go`、`skill/scheduler_test.go`；每处改掉一个强制点，对应用例在当前代码上变红，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| R1 拍直接一次推到目标 | `TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：`every other tick seed 1: per-tick results differ` |
+| R2 拍推进空闲的 Runtime | 同上；`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`：`a beat on an idle runtime moved it to 60 (<nil>)` |
+| R3 推进不停在空闲点 | 同上；`after the cast: active false tick 40, want stopped at the idle point 8 (windup 3 + recovery 2 from tick 3)` |
+| R4 输入前不推进到输入的 tick | `TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：`every other tick seed 1: inputs …`（输入落在拍留下的 tick 上） |
+| R5 没有追帧上限 | `TestRuntimeBeatJumpsPastTheCatchUpLimit`：`100 ticks behind: {Steps:110 Idle:0 Jumps:0 JumpedTicks:0} at tick 110, want 20 more steps, one jump over 80 ticks, at tick 110` |
+| R6 上限不乘倍率 | `TestHandlerTicksFollowTheTimeDomain`：`catch-up limit at rate 2 = 100 ticks, want 200 (1s x 2 / 10ms)` |
+| R7 `Sync` 不停 | `TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`：`idle runtime: active true registered 1 hp 75, want stopped after the fireball landed` |
+| R8 handler 的 tick 不取域时间 | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000020 / 180000000010, want 180000000020 (20 ticks of 10ms)` |
+| B1 改 buff 不对齐心跳 | `TestTimedBuffsBeatUntilTheyExpire`：`a timed buff did not start the beat`；`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`：`loaded timed buffs did not start the beat` |
+| B2 拍不推进 buff | `TestTimedBuffsBeatUntilTheyExpire`：`after expiry: buffs [… {Instance:2 … DueTick:179258611960}] active true registered 1, want only the aura and no heartbeat` |
+| B3 拍的 tick 早一个 | `TestBuffBeatExpiresExactlyAtTheDueTick`：`a beat 1ns before tick 1005 expired the buff` |
+| B4 拍末尾不重新对齐 | `TestPeriodicWorkKeepsTheBuffBeat`：`periodic work ended: active true registered 1, want stopped` |
+| B5 buff 的 tick 不取域时间 | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000010 / 180000000020, want 180000000020 (20 ticks of 10ms)` |
+| B6 buff 心跳不挂域 | `TestBuffsStopExpiringWhileTheSceneIsPaused`：`paused scene: 1 expired, 0 active, want the buff to stay` |
+| B7 `SetBuffDueTick` 不对齐 | `TestSetBuffDueTickAlignsTheBeat`：`a permanent buff made timed: active false registered 0, want the beat` |
+| T1 换算向零截断 | `TestTickClockFloorsAndRoundTrips`：`TickAt(origin-1ns) = 0, want -1` |
+| T2 换算四舍五入 | 同上：`TickAt(origin49ms) = 1, want 0` |
+
+`Pending` 去掉“活动施法”一项（P1）没有让用例变红：测试用的程序在施法活动期间总有排程任务，两者等价；保留这一项是保守的（活动施法可能在等输入或 Host 事件），没有对应的强制点证据。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -206,6 +248,16 @@ DESIGN-TODO D22 场景时间域（原 D22-3；维护者 2026-10-21 决定 ③⑤
 | [move.go](../../../gameplay/movement/move.go) | `StopReason`、`Result`、`Locator`、`MoveConfig`、`MoveOwner`、`Move` |
 | [action.go](../../../gameplay/movement/action.go) | `MoveToParam`、`FollowParam`（`RegisterActions`） |
 
+### 技能与 Buff 的心跳
+
+D20 第 5 期，契约见 §2G。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [skill/tick_clock.go](../../../gameplay/skill/tick_clock.go) | `TickClock`（`ErrTickClockInvalid`）；`Runtime.CurrentTick` / `Pending` 在 [scheduler.go](../../../gameplay/skill/scheduler.go) |
+| [combatcomponent/beat.go](../../../gameplay/skill/combatcomponent/beat.go) | `BeatConfig`、`BuffBeat`（`CombatComponent.AttachBeat` / `BeatReg` / `CurrentTick` / `SyncBeat`） |
+| [combatcomponent/runtime_beat.go](../../../gameplay/skill/combatcomponent/runtime_beat.go) | `RuntimeBeatConfig`、`RuntimeBeat`、`RuntimeBeatStats`（`NewRuntimeBeat`） |
+
 ### state
 
 4 个实现文件、2 个测试文件（D21 第 2 期，契约见 §2D 第 6～8 条）。
@@ -267,6 +319,12 @@ DESIGN-TODO D22 场景时间域（原 D22-3；维护者 2026-10-21 决定 ③⑤
 - [example_test.go](../../../gameplay/movement/example_test.go)：`Example`
 - [actionflow/heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`、`TestAFrozenGroupStopsBeatingAndResumesOnRecover`
 - [movement/nest_test.go](../../../gameplay/movement/nest_test.go)（D21）：`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`、`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`
+
+### 技能与 Buff 的心跳
+
+- [skill/scheduler_test.go](../../../gameplay/skill/scheduler_test.go)：`TestTickClockFloorsAndRoundTrips`、`TestRuntimePendingFollowsCastsAndTasks`
+- [combatcomponent/runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)：`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`、`TestRuntimeBeatJumpsPastTheCatchUpLimit`、`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`
+- [combatcomponent/beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)（真实 Nest + 心跳驱动）：`TestTimedBuffsBeatUntilTheyExpire`、`TestBuffBeatExpiresExactlyAtTheDueTick`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestHandlerTicksFollowTheTimeDomain`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`
 
 ### state
 

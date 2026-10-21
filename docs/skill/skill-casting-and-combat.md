@@ -214,7 +214,7 @@ component.ProjectAttributes(projectCombat)
 ## 掷点、buff 推进与资源池的接入契约
 
 - `ChanceRoll` 只返回确定性布尔值，不替 Host 注入本次伤害。Combatant 的 Dodge/ForceCritical 是持久 vitals，写一次会影响后续全部伤害；业务需要每伤害坐标重新计算，在本次结算结束后恢复临时事实，或以本次调用专属 `combat.Hooks` 实现暴击覆盖。statusbridge 示例恢复 ForceCritical 时读取结算后的 vitals，避免覆盖吸血等变化。HostAdapter 本身不提供每次概率注入器。
-- `TickBuffs(now)` 由业务的 Nest 心跳/定时 handler 在实体锁内驱动；now 必须和 StatusBridge.CurrentTick 使用同一业务 tick。Runtime.Advance 不会扫描其他 DAO。掉线/重启后的首次推进也应清理过期 buff；该调用产生的持久和 Sync 脏位跟随本次事务提交。
+- buff 到期由 buff 心跳驱动（`CombatComponent.AttachBeat(BeatConfig{Host, Clock, ...})`，D20 P5）：有限时 buff 时挂心跳、每拍 `TickBuffs(本拍 tick)`、清空后停；加载后的第一拍清掉停服期间到期的记录。`StatusBridge.CurrentTick` 接 `CombatComponent.CurrentTick`，与心跳用同一个 `skill.TickClock`。`TickBuffs(now)` 仍是推进一步的原语，只给不在 Nest 快池上的驱动与测试用。Runtime.Advance 不会扫描其他 DAO；Runtime 自己由 `combatcomponent.NewRuntimeBeat` 的心跳推进。过期产生的持久和 Sync 脏位跟随这一拍的事务提交。
 - state 回滚只覆盖已声明并由 Nest 捕获的实体。伤害来源（含吸血）、目标、copy/transfer 的目的实体必须一并通过 RequestMulti 的目标或 Cast 动态纳入事务。Resolver 只返回已持锁对象，不是随意获取跨实体对象的入口；绕开这条约束的 DAO 不承诺 state 回滚。正式两种策略 × handler 错误/提交拒绝回归验证了真实吸血和 AdoptBuff 目的实体恢复，不能把该测试解释成未捕获对象也有保护。
 - ResourceRead/PayCosts/ResourceCommand 都使用映射属性的 base 作为可支付资源池；AttributeRead 读取包含 buff 的 Current。资源修饰不会凭空制造可消费余额。
 - 属性修饰聚合使用精确整数桶，撤销可逆、与施加顺序无关；Current 进入固定点公式时钳位。持续时间 0 表示永久，refresh 永久实例不转成 1 tick；重施永久规格清除旧到期，层数按新上限钳位。

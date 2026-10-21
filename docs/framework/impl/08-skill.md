@@ -372,6 +372,7 @@
 ### skill/combatcomponent
 
 - [adapter_test.go](../../../gameplay/skill/combatcomponent/adapter_test.go)：`TestHostAdapterAppliesDamageWithEvents`、`TestHostAdapterHealShieldAndReads`、`TestHostAdapterShieldReportsEffectiveDeltaAndSkipsNoOpCommit`、`TestHostAdapterPayCostsIsAtomic`、`TestResourceCommandRefusesEachIllegalOperation`；其余 10 项见文件
+- [beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)、[runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)：buff 与 Runtime 的心跳（D20 P5），目录见 [impl/10-time §5](10-time.md#5-回归入口)
 - [benchmark_test.go](../../../gameplay/skill/combatcomponent/benchmark_test.go)
 - [component_test.go](../../../gameplay/skill/combatcomponent/component_test.go)：`TestNestUndoRollbackRestoresCombatStateExactly`、`TestCombatDaoPersistenceRoundTrip`、`TestNestUndoWorksThroughRealHandlers`、`TestCombatDaoProducesTransactionLocalMutationAndSyncMask`、`TestCombatMutationOutsideTransactionPanicsBeforeStateChange`；其余 6 项见文件
 - [refusals_test.go](../../../gameplay/skill/combatcomponent/refusals_test.go)：`TestDetachedTransactionFailuresAreReturnedNotDereferenced`、`TestReadsAndPaymentsRefuseUnknownEntitiesAndUnmappedResources`、`TestCombatDaoRefusesForeignPersistedStateAndEmptyPatches`、`TestStatusBridgeRefusesToModifyABuffWithoutACatalogPolicy`
