@@ -35,6 +35,7 @@ p=Path(sys.argv[1]);s=p.read_text().replace('type PlayerDao struct {','''type Pl
  Coverage string `bson:"coverage" dao:"persist"`
  HomeSID int32 `bson:"home_sid" dao:"persist"`
  Gold int64 `bson:"gold" dao:"persist"`
+ Inbox string `bson:"inbox" dao:"persist"`
  Receipts string `bson:"receipts" dao:"persist"`''');p.write_text(s)
 PY
 "$review_root/roost" add entity ScoutMap >> "$review_root/generate.log" 2>&1
@@ -48,7 +49,7 @@ cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handle
 mkdir -p game/alliance game/scout
 cp "$repo_root"/scripts/testdata/slg-alliance/scout/*.go game/scout/
 cp "$repo_root"/scripts/testdata/slg-alliance/*.go game/alliance/
-for name in runtime delivery spatial vision service arrival; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
+for name in runtime delivery spatial vision service arrival inbox; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
 if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
  "$review_root/roost" add mod remote_entity -service game >> "$review_root/generate.log" 2>&1
  "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1

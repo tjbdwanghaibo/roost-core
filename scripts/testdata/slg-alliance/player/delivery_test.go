@@ -58,7 +58,11 @@ func rewardChild(t *testing.T, mode string) {
 	key := activity.Key{GroupID: "alliance", ActivityID: "season-1-window-1", Phase: activity.PhaseSettle}
 	h, e := newHome(redisClient(t), prefix, sid)
 	check(t, e)
-	n := openRewardRuntime(t, sid, mode == "write" || mode == "arrival-write")
+	n := openRewardRuntime(t, sid, mode == "write" || mode == "arrival-write" || mode == "inbox-write")
+	if strings.HasPrefix(mode, "inbox-") {
+		runInboxChild(t, n, sid, mode)
+		return
+	}
 	if strings.HasPrefix(mode, "arrival-") {
 		runArrivalChild(t, n, mode)
 		return
@@ -77,7 +81,7 @@ func rewardChild(t *testing.T, mode string) {
 		check(t, e)
 		_, e = n.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: n.mapID, Kind: scoutmap.EntityKindScoutMap})
 		check(t, e)
-		check(t, s.Sync_AllianceMapInit(ctx, n.mapID))
+		check(t, s.Sync_AllianceMapInit(ctx, n.mapID, n.id, sid))
 		verifyPlayerSpatial(t, n, true)
 		before, found, e := h.store.Get(ctx, "rewards")
 		check(t, e)
@@ -161,7 +165,7 @@ func rewardChild(t *testing.T, mode string) {
 	if mapRaw != string(mapExpected) {
 		t.Fatal("cold map differs BEFORE replay")
 	}
-	check(t, s.Sync_AllianceMapInit(ctx, n.mapID))
+	check(t, s.Sync_AllianceMapInit(ctx, n.mapID, n.id, sid))
 	if rev, e := s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false); e != nil || rev != 2 {
 		t.Fatalf("cold target receipt: %d %v", rev, e)
 	}
@@ -268,6 +272,9 @@ func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 		runRewardProcess(t, "arrival-write", sid, prefix, root)
 		runRewardProcess(t, "arrival-recover", sid, prefix, root)
 		runRewardProcess(t, "arrival-verify", sid, prefix, root)
+		runRewardProcess(t, "inbox-write", sid, prefix, root)
+		runRewardProcess(t, "inbox-recover", sid, prefix, root)
+		runRewardProcess(t, "inbox-verify", sid, prefix, root)
 	}
 }
 
@@ -292,8 +299,11 @@ func runRewardProcess(t *testing.T, mode string, sid int32, prefix, root string)
 		}
 	}()
 	fail := func(e error) { raw, _ := os.ReadFile(log.Name()); t.Fatalf("home %d %s: %v\n%s", sid, mode, e, raw) }
-	if mode == "write" || mode == "arrival-write" {
+	if mode == "write" || mode == "arrival-write" || mode == "inbox-write" {
 		marker := "ready.json"
+		if mode == "inbox-write" {
+			marker = "inbox-ready.json"
+		}
 		if mode == "arrival-write" {
 			marker = "arrival-ready.json"
 		}

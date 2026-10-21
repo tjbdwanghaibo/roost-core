@@ -46,6 +46,7 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 	p.Dao().SetCoverage("[]")
 	p.Dao().SetHomeSID(sid)
 	p.Dao().SetReceipts("{}")
+	p.Dao().SetInbox("{}")
 	return p.Dao().GetGold(), nil
 }
 
@@ -170,6 +171,9 @@ type scoutArrivalReport struct {
 	Destination spatial.Point
 }
 type scoutMapState struct {
+	Recipient   int64
+	HomeSID     int32
+	ReportAck   map[string]bool
 	Arrivals    map[string]scoutArrivalEvent
 	Reports     map[string]scoutArrivalReport
 	ReportTotal uint64
@@ -183,7 +187,7 @@ type scoutMapState struct {
 func readScoutMap(m IAllianceMapEntity) (scoutMapState, error) {
 	var state scoutMapState
 	err := json.Unmarshal([]byte(m.Dao().GetState()), &state)
-	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil || state.Arrivals == nil || state.Reports == nil {
+	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil || state.Arrivals == nil || state.Reports == nil || state.ReportAck == nil || state.Recipient <= 0 || (state.HomeSID != 1000 && state.HomeSID != 1001) {
 		return state, errAllianceReward
 	}
 	return state, nil
@@ -196,13 +200,21 @@ func saveScoutMap(m IAllianceMapEntity, state scoutMapState) error {
 	return err
 }
 
+// 每张教学地图固定一个报告收件人；只能由可信建档入口设置，重试不得改归属。
+//
 //roost:nest rollback=undo durability=strict
-func handlerAllianceMapInit(m IAllianceMapEntity) error {
+func handlerAllianceMapInit(m IAllianceMapEntity, recipient int64, sid int32) error {
+	if recipient <= 0 || (sid != 1000 && sid != 1001) {
+		return errAllianceReward
+	}
 	if m.Dao().GetState() != "" {
-		_, err := readScoutMap(m)
+		state, err := readScoutMap(m)
+		if err == nil && (state.Recipient != recipient || state.HomeSID != sid) {
+			return errAllianceReward
+		}
 		return err
 	}
-	return saveScoutMap(m, scoutMapState{Revision: 1, Targets: map[int64]spatial.Point{
+	return saveScoutMap(m, scoutMapState{Recipient: recipient, HomeSID: sid, ReportAck: map[string]bool{}, Revision: 1, Targets: map[int64]spatial.Point{
 		501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700},
 	}, Moves: map[string]scoutMove{}, Routes: map[int64]scout.Route{}, Marches: map[string]scoutMarchReceipt{}, Arrivals: map[string]scoutArrivalEvent{}, Reports: map[string]scoutArrivalReport{}})
 }
@@ -398,3 +410,116 @@ func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, nowUnixMil
 	}
 	return true, nil
 }
+
+func reportEnvelope(m IAllianceMapEntity, state scoutMapState, key string) (scout.Report, error) {
+	r, ok := state.Reports[key]
+	if !ok {
+		return scout.Report{}, errAllianceReward
+	}
+	out := scout.Report{MapID: m.ID(), Recipient: state.Recipient, HomeSID: state.HomeSID, Key: key, Target: r.Target, At: r.At, Destination: r.Destination}
+	if !out.Valid() {
+		return scout.Report{}, errAllianceReward
+	}
+	return out, nil
+}
+
+// 报告本身就是持久投递义务，Ack 与到达消费 Delivered 分开；按身份排序、有界重读。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAlliancePendingReports(m IAllianceMapEntity, limit int) ([]string, error) {
+	if limit < 1 || limit > 128 {
+		return nil, errAllianceReward
+	}
+	state, err := readScoutMap(m)
+	if err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for key := range state.Reports {
+		if !state.ReportAck[key] {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceReport(m IAllianceMapEntity, key string) (scout.Report, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return scout.Report{}, err
+	}
+	return reportEnvelope(m, state, key)
+}
+
+// 仅可信投递服务在 Player 成功后调用；不在地图锁内做 RPC。
+// Ack 比较完整原信封，避免错误/旧响应确认另一份义务。reject 仅用于回滚验收。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceAckReport(m IAllianceMapEntity, report scout.Report, reject bool) error {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return err
+	}
+	expected, err := reportEnvelope(m, state, report.Key)
+	if err != nil || expected != report {
+		return errAllianceReward
+	}
+	if state.ReportAck[report.Key] {
+		return nil
+	}
+	if state.Revision == math.MaxUint64 {
+		return errAllianceReward
+	}
+	state.ReportAck[report.Key] = true
+	state.Revision++
+	if err = saveScoutMap(m, state); err != nil {
+		return err
+	}
+	if reject {
+		return errors.New("injected report ack rollback")
+	}
+	return nil
+}
+
+// 原服可信入口校验配置 sid 和 Player ID；信封来自地图权威，结构校验不是身份认证。
+// 报告正文即永久收件回执，同身份改内容拒绝；满账本拒新身份，不清除旧去重键。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceReceiveReport(p IAllianceRewardPlayerEntity, sid int32, report scout.Report, reject bool) (bool, error) {
+	if !report.Valid() || report.HomeSID != sid || p.Dao().GetHomeSID() != sid || report.Recipient != p.ID() {
+		return false, errAllianceReward
+	}
+	inbox := map[string]scout.Report{}
+	if err := json.Unmarshal([]byte(p.Dao().GetInbox()), &inbox); err != nil || inbox == nil {
+		return false, errAllianceReward
+	}
+	if old, ok := inbox[report.Identity()]; ok {
+		if old != report {
+			return false, errAllianceReward
+		}
+		return false, nil
+	}
+	if len(inbox) >= 128 {
+		return false, errAllianceReward
+	}
+	inbox[report.Identity()] = report
+	raw, err := json.Marshal(inbox)
+	if err != nil {
+		return false, err
+	}
+	p.Dao().SetInbox(string(raw))
+	if reject {
+		return false, errors.New("injected report receipt rollback")
+	}
+	return true, nil
+}
+
+// 内部冷恢复核对，私有收件箱不作为公共同步数据。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceInbox(p IAllianceRewardPlayerEntity) string { return p.Dao().GetInbox() }
