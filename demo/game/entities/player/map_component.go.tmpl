@@ -2,10 +2,15 @@ package player
 
 import (
 	"fmt"
+	"log/slog"
 
+	"{{MODULE}}/game/actor"
 	gamescene "{{MODULE}}/game/scene"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -13,19 +18,41 @@ import (
 //roost:component type=2004
 const CompTypeMap entity.ComponentType = 2004
 
-// MapComponent is where the player is. It is the only door: every read of a
-// position goes through Pos() to the DAO, and every write goes through
-// MoveTo(). Nothing caches a position anywhere else.
+// MapComponent is where the player is and how it moves. It is the only door:
+// every read of a position goes through it to the DAO, and every write goes
+// through movement.MapBasic, which it owns.
 //
 // That rule is worth stating because the obvious shortcut — letting the
 // scene's AOI index answer "where is this player" — creates a second truth
 // that can disagree with the stored one, and the disagreement shows up as a
 // player who is somewhere else after a reconnect. The index exists to answer
-// "who is near whom", which is a question the DAO cannot answer cheaply; it
-// is written from here and never read back as authority.
+// "who is near whom", which is a question the DAO cannot answer cheaply; it is
+// written from here (MapBasic.SetPos → Space.QueueMove, commit-gated) and
+// never read back as authority.
+//
+// Movement is server-driven (DESIGN-TODO D20 decision 14): the client names a
+// goal — a point, or someone to follow — and the server walks there. The goal
+// becomes a MoveTo / Follow action on the player's actionflow.Behavior; the
+// Behavior hangs the move group on the player's own heartbeat, and each beat
+// advances movement.Move by the beat's elapsed time, writes the cell reached
+// through MapBasic and queues it for the AOI. Nothing walks every player: an
+// idle player has no heartbeat registration at all, a walking one has one.
+//
+// The point-to-point move the demo started with is kept as Teleport: a
+// one-shot position write, checked against the terrain, that ends whatever
+// walk was in progress — the reference path to compare the server-driven one
+// against, and what a GM or a skill's blink uses.
+//
+// Like every component, it is only called under the player's lock (a Nest
+// handler, a heartbeat beat, or the load / create initialization).
 type MapComponent struct {
 	entity.ComponentBase
 	owner *Player
+
+	host     *heartbeat.Host
+	mb       *movement.MapBasic
+	move     *movement.Move
+	behavior *actionflow.Behavior
 }
 
 // IMapEntity is the narrow lock-safe view for Nest handlers that move a
@@ -49,52 +76,131 @@ func (component *MapComponent) Name() string { return "map" }
 
 func (component *MapComponent) Owner() *Player { return component.owner }
 
-// Pos is the player's position, read from the DAO. Callers hold the entity
-// lock (a Nest handler does by construction).
-func (component *MapComponent) Pos() spatial.Point {
-	dao := component.owner.Dao()
-	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
+// OnInitFinish builds the movement parts on the player's heartbeat host. A
+// heartbeat is not persisted, and neither is "on the map": a player loaded
+// again is placed again by the enter-scene transaction, which is what starts
+// anything periodic (the position save).
+//
+// The Behavior's beats follow the scene's time domain (actor.WorldTime): a
+// scene at 2× walks twice as far per real second. Nil before a scene exists
+// (a test that builds no scene) — then the player's time is business time.
+func (component *MapComponent) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	owner := component.owner
+	component.host = actor.Heartbeat.NewHost(owner)
+	var err error
+	component.mb, err = movement.NewMapBasic(owner, component.host, movement.MapConfig{
+		Fields:      playerFields{owner: owner},
+		Save:        component.save,
+		SaveOnLeave: true,
+		SaveEvery:   actor.SavePeriod,
+	})
+	if err != nil {
+		return fmt.Errorf("map component: %w", err)
+	}
+	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Locate: actor.Locate}); err != nil {
+		return fmt.Errorf("map component: %w", err)
+	}
+	component.behavior, err = actionflow.NewBehavior(owner, actionflow.BehaviorConfig{
+		Registry:     actor.Registry,
+		GroupForKind: actor.Groups,
+		Beat:         &actionflow.BeatConfig{Host: component.host, TimeDomain: actor.WorldTime()},
+		OnError: func(err error) {
+			slog.Warn("player behavior", "player_id", entity.GetUniqueIDFromEntityID(owner.ID()), "err", err)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("map component: %w", err)
+	}
+	return nil
 }
 
-// SceneID is which scene the player is in, 0 for nowhere.
-func (component *MapComponent) SceneID() int64 { return component.owner.Dao().GetSceneID() }
+// OnDestroy runs when the instance leaves memory (unload, delete, a create
+// that was taken back). The followers of this player end with TargetLost on
+// their next beat; the heartbeat host leaves the driver for good. It does not
+// leave the scene: unloading is not leaving, and a reload is placed again.
+func (component *MapComponent) OnDestroy(entity.EntityDestroyReason) {
+	if component.mb != nil {
+		component.mb.OnDestroy()
+	}
+	if component.host != nil {
+		component.host.OnDestroy()
+	}
+}
 
-// InScene reports whether the player is placed on a map.
-func (component *MapComponent) InScene() bool { return component.SceneID() != 0 }
+// MapBasic and MoveComponent make the Player a movement.MapOwner (a follower
+// reads its position) and a movement.MoveOwner (a move action finds its Move).
+func (player *Player) MapBasic() *movement.MapBasic { return player.mapComp.mb }
+
+func (player *Player) MoveComponent() *movement.Move { return player.mapComp.move }
+
+// Behavior is the player's action list (gameplay/actionflow).
+func (component *MapComponent) Behavior() *actionflow.Behavior { return component.behavior }
+
+// Pos is the player's position, read from the DAO.
+func (component *MapComponent) Pos() spatial.Point { return component.mb.Pos() }
+
+// Facing is the direction of the last step.
+func (component *MapComponent) Facing() movement.Facing { return component.mb.Facing() }
+
+// SceneID is which scene the player is in, 0 for nowhere.
+func (component *MapComponent) SceneID() int64 { return component.mb.SceneID() }
+
+// InScene reports whether the player is placed on a map (in this instance:
+// a player loaded again is not, until the enter-scene transaction runs).
+func (component *MapComponent) InScene() bool { return component.mb.InScene() }
+
+// SavedPos is the stored position: where the player was when it was last
+// written (leaving the scene, or the periodic save). Zero for a new player.
+func (component *MapComponent) SavedPos() spatial.Point {
+	dao := component.owner.Dao()
+	return spatial.Point{X: dao.GetSavedPosX(), Y: dao.GetSavedPosY()}
+}
 
 // EnterScene places the player. The caller resolves the point first (through
 // the scene's PathFind.Place, so a remembered position that is now blocked
 // becomes the nearest free one) — this component does not know about scenes,
-// only about what it was told to write.
-func (component *MapComponent) EnterScene(sceneID int64, at spatial.Point) error {
+// only about what it was told to write. A player already on this map (a
+// reconnect while still loaded) stays where it is and the answer is that
+// point: the client starts from what the server has, not from a respawn.
+func (component *MapComponent) EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error) {
 	if sceneID == 0 {
-		return errcode.Wrap(apperrors.ErrScenePosition, nil, "scene_id", sceneID)
+		return spatial.Point{}, errcode.Wrap(apperrors.ErrScenePosition, nil, "scene_id", sceneID)
 	}
-	dao := component.owner.Dao()
-	dao.SetSceneID(sceneID)
-	dao.SetPosX(at.X)
-	dao.SetPosY(at.Y)
-	component.owner.PublishSyncDirty()
+	if component.mb.InScene() {
+		if component.mb.SceneID() == sceneID {
+			return component.mb.Pos(), nil
+		}
+		if err := component.LeaveScene(); err != nil {
+			return spatial.Point{}, err
+		}
+	}
+	if err := component.mb.Enter(sceneID, space, at); err != nil {
+		return spatial.Point{}, err
+	}
+	return at, nil
+}
+
+// LeaveScene takes the player off the map: the position is saved (it is where
+// they will be when they come back), the scene id cleared, and any walk ends.
+func (component *MapComponent) LeaveScene() error {
+	if err := component.mb.Leave(); err != nil {
+		return err
+	}
+	// The action list does not roll back with the transaction (D20 P2
+	// decision 3), so it is the last step.
+	component.behavior.EndAllAction(true, actionflow.NewActionReason("left the scene"))
 	return nil
 }
 
-// LeaveScene takes the player off the map. The position is kept: it is where
-// they will be when they come back.
-func (component *MapComponent) LeaveScene() {
-	component.owner.Dao().SetSceneID(0)
-	component.owner.PublishSyncDirty()
-}
-
-// MoveTo writes a new position, having checked it against the terrain the
-// caller supplies. The check is here rather than at the endpoint because this
-// is the only write path: a move that skipped the check would be a move the
-// map never agreed to.
+// Teleport writes a new position in one step, having checked it against the
+// terrain the caller supplies, and ends the walk in progress. The check is
+// here rather than at the endpoint because this is the only write path: a
+// move that skipped the check would be a move the map never agreed to.
 //
-// Distance is not checked here. How far a player may travel in one message is
-// a rule about the CLIENT (its tick rate, its input buffering), and a game
-// that cares enforces it where it knows those numbers; a component that
+// Distance is not checked here. How far a teleport may reach is a rule about
+// whoever asks for it (a GM, a blink skill's range), and a component that
 // invented a limit would be guessing.
-func (component *MapComponent) MoveTo(terrain gamescene.Terrain, to spatial.Point) error {
+func (component *MapComponent) Teleport(terrain gamescene.Terrain, to spatial.Point) error {
 	if terrain == nil {
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain")
 	}
@@ -102,9 +208,6 @@ func (component *MapComponent) MoveTo(terrain gamescene.Terrain, to spatial.Poin
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
 	}
 	from := component.Pos()
-	if from == to {
-		return nil
-	}
 	// Walkable, not Occupy: players do not take the ground they stand on, so
 	// two of them may share a point and nothing has to be released when a
 	// connection drops. Occupancy is for things that really do block — a wall
@@ -113,9 +216,88 @@ func (component *MapComponent) MoveTo(terrain gamescene.Terrain, to spatial.Poin
 	if !terrain.Walkable(to) {
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
 	}
-	dao := component.owner.Dao()
-	dao.SetPosX(to.X)
-	dao.SetPosY(to.Y)
-	component.owner.PublishSyncDirty()
+	if err := component.mb.SetPos(to); err != nil {
+		return err
+	}
+	// Last, because the action list does not roll back: a walk that went on
+	// from its own idea of where the player is would drag it back.
+	if component.behavior.CurAction(actor.GroupMove) != nil {
+		component.behavior.EndCurAction(actor.GroupMove, true, actionflow.NewActionReason("teleported"))
+	}
 	return nil
 }
+
+// WalkTo starts walking the path (the route from the scene's PathFind, the
+// player's own cell excluded) and returns the action id. It replaces the walk
+// in progress. The route is computed before this call — pathfinding is the
+// expensive part and belongs to the request, not to every beat.
+func (component *MapComponent) WalkTo(path []spatial.Point) (int64, error) {
+	if !component.InScene() {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
+	}
+	if len(path) == 0 {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "empty path")
+	}
+	return component.behavior.CreateAction(actor.ActMoveTo, movement.MoveToParam{Path: path, Speed: actor.PlayerSpeed})
+}
+
+// Follow starts following another entity (a player's or a monster's entity
+// id) until it is reached, gone or left the scene, and returns the action id.
+func (component *MapComponent) Follow(target int64) (int64, error) {
+	if !component.InScene() {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in a scene")
+	}
+	if target == 0 || target == component.owner.ID() {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no one to follow", "target", target)
+	}
+	return component.behavior.CreateAction(actor.ActFollow, movement.FollowParam{Target: target, Speed: actor.PlayerSpeed, Keep: actor.FollowKeep, StopWhenReached: true})
+}
+
+// Walking reports whether a walk is in progress.
+func (component *MapComponent) Walking() bool { return component.move.Moving() }
+
+// save writes the stored copy of the position (MapConfig.Save): inside the
+// transaction that leaves the scene, or the periodic save's beat.
+func (component *MapComponent) save(sceneID int64, at spatial.Point, _ movement.Facing) error {
+	dao := component.owner.Dao()
+	dao.SetSavedSceneID(sceneID)
+	dao.SetSavedPosX(at.X)
+	dao.SetSavedPosY(at.Y)
+	return nil
+}
+
+// playerFields is movement.Fields over the Player's DAO: the generated
+// setters record their undo in the transaction and the sync mark, and one
+// PublishSyncDirty per write hands the mark to the replicated subject.
+type playerFields struct{ owner *Player }
+
+func (f playerFields) SceneID() int64 { return f.owner.Dao().GetSceneID() }
+
+func (f playerFields) SetSceneID(v int64) {
+	f.owner.Dao().SetSceneID(v)
+	f.owner.PublishSyncDirty()
+}
+
+func (f playerFields) Pos() spatial.Point {
+	dao := f.owner.Dao()
+	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
+}
+
+func (f playerFields) SetPos(v spatial.Point) {
+	dao := f.owner.Dao()
+	dao.SetPosX(v.X)
+	dao.SetPosY(v.Y)
+	f.owner.PublishSyncDirty()
+}
+
+func (f playerFields) Facing() movement.Facing { return movement.Facing(f.owner.Dao().GetFacing()) }
+
+func (f playerFields) SetFacing(v movement.Facing) {
+	f.owner.Dao().SetFacing(int32(v))
+	f.owner.PublishSyncDirty()
+}
+
+var (
+	_ movement.MapOwner  = (*Player)(nil)
+	_ movement.MoveOwner = (*Player)(nil)
+)

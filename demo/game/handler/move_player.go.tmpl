@@ -6,22 +6,25 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// handlerMovePlayer moves a player one step, in a transaction that holds both
-// the Scene and the Player.
+// handlerMovePlayer puts a player on a point in one step — a teleport — in a
+// transaction that holds both the Scene and the Player. It is the demo's
+// first movement path, kept next to the server-driven one (handlerMoveTarget)
+// as the reference to compare it against and as what a blink or a GM jump
+// uses: no walk, no heartbeat, one checked write. It ends the walk in
+// progress.
 //
-// Why both: the move changes the Player's stored position AND the ground the
-// Scene hands out (two objects cannot stand on the same point). Those two
-// facts have to agree, so they move together — a rollback takes the ground
-// back with the position. The lock order is the framework's: Scene is a
-// world-ranked kind (rank 2), Player is rank 4, so a transaction that takes
-// both always takes them in that order and cannot deadlock against one that
-// takes them for something else.
+// Why both entities: the move is checked against the ground the Scene hands
+// out, in the same transaction that writes the Player's position. The lock
+// order is the framework's: Scene is a world-ranked kind (rank 2), Player is
+// rank 4, so a transaction that takes both always takes them in that order
+// and cannot deadlock against one that takes them for something else.
 //
-// The terrain check itself is not here: it is in MapComponent.MoveTo, which
-// is the only path that writes a position. A handler that checked the terrain
-// itself would be a second place that has to get it right.
+// The terrain check itself is not here: it is in MapComponent.Teleport,
+// which is the only path that writes a position this way. The AOI follows
+// from the same write (MapBasic.SetPos queues the position, commit-gated), so
+// the endpoint has nothing to tell the scene afterwards.
 //
 //roost:nest rollback=undo durability=async
 func handlerMovePlayer(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
-	return target.MapComp().MoveTo(area.Terrain(), spatial.Point{X: x, Y: y})
+	return target.MapComp().Teleport(area.Terrain(), spatial.Point{X: x, Y: y})
 }

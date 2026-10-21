@@ -1,0 +1,231 @@
+package monster
+
+import (
+	"fmt"
+	"log/slog"
+	"time"
+
+	"{{MODULE}}/game/actor"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+//roost:component type=2101
+const CompTypeActor entity.ComponentType = 2101
+
+// PatrolHalf is the half-side of the square a monster patrols around where it
+// was spawned.
+const PatrolHalf int64 = 12
+
+// ActorComponent is what makes a monster act: it moves, it decides, it can be
+// rooted. Every part is a framework component wired the way a game would wire
+// it, and every part runs in the monster's own lock on the monster's own
+// heartbeat — nothing outside the monster walks it:
+//
+//	ai.Controller (heartbeat "ai", 500ms)      decides: Patrol starts a MoveTo when the move group is idle
+//	actionflow.Behavior (heartbeat "actionflow/1", 100ms while moving)
+//	                                            runs the MoveTo: each beat Move.Advance(elapsed)
+//	movement.Move / MapBasic                    the walk, and the position written to MonsterDao + queued for the AOI
+//	state.Set + state.Gate                      Rooted → the move group is frozen (FreezePause)
+//	combatcomponent.CombatComponent             the root buff; BindStates derives Rooted from its tag
+//
+// Both heartbeats follow the scene's time domain (actor.WorldTime): a 2×
+// scene patrols twice as fast. The position is the DAO's (MonsterDao, all
+// `nopersist,sync`) and is never saved: a monster is rebuilt by the spawner
+// on every start.
+//
+// The combat and state DAOs are not in the monster's DaoManager: the monster
+// is not persisted, and both record their own undo in the transaction
+// (rollback=undo), which is all a handler that applies a buff needs.
+type ActorComponent struct {
+	entity.ComponentBase
+	owner *Monster
+
+	host     *heartbeat.Host
+	mb       *movement.MapBasic
+	move     *movement.Move
+	behavior *actionflow.Behavior
+	brain    *ai.Controller
+	states   *state.Set
+	gate     *state.Gated
+	combat   *combatcomponent.CombatComponent
+}
+
+// IActorEntity is the narrow lock-safe view for Nest handlers that drive a
+// monster.
+type IActorEntity interface {
+	entity.IThreadSafeEntity
+	ActorComp() *ActorComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeActor, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Monster)
+		if !ok {
+			return nil, fmt.Errorf("actor component: owner %T is not *Monster", owner)
+		}
+		return &ActorComponent{owner: typed}, nil
+	})
+}
+
+func (component *ActorComponent) Name() string { return "actor" }
+
+// OnInitFinish wires the parts. The AI is built with no strategy, so it has
+// no heartbeat yet: a monster acts only once Spawn put it on a map.
+func (component *ActorComponent) OnInitFinish(param *entity.EntityCreateParam, isCreate bool) error {
+	owner := component.owner
+	report := func(err error) {
+		slog.Warn("monster actor", "monster_id", owner.ID(), "err", err)
+	}
+	component.host = actor.Heartbeat.NewHost(owner)
+	var err error
+	if component.mb, err = movement.NewMapBasic(owner, component.host, movement.MapConfig{Fields: monsterFields{owner: owner}}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Locate: actor.Locate}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	domain := actor.WorldTime()
+	component.brain, err = ai.NewBeatController(ai.ControllerHooks{
+		Context: func(now time.Time) *ai.Context {
+			return &ai.Context{Owner: owner, ActionList: component.behavior, Now: now}
+		},
+		EndActions: func(reason actionflow.ActionReason) { component.behavior.EndAllAction(true, reason) },
+		OnError:    report,
+	}, ai.BeatConfig{Host: component.host, TimeDomain: domain})
+	if err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	component.behavior, err = actionflow.NewBehavior(owner, actionflow.BehaviorConfig{
+		Registry:     actor.Registry,
+		GroupForKind: actor.Groups,
+		Beat:         &actionflow.BeatConfig{Host: component.host, TimeDomain: domain},
+		Observer:     component.brain,
+		OnError:      report,
+	})
+	if err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	component.states = state.NewSet(state.NewStateDao(owner.ID(), "game", actor.Catalog), state.SetConfig{OnError: report})
+	component.combat = combatcomponent.NewCombatComponent(combatcomponent.NewCombatDao(owner.ID(), "game"))
+	if err := component.combat.BindStates(component.states, combatcomponent.StateBinding{State: actor.Rooted, Tags: []combat.Tag{actor.TagRoot}}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	// The client draws "rooted" from the DAO, so the state is mirrored into
+	// it. The watcher runs inside the transaction that changed the buff, so
+	// the DAO write rolls back with it.
+	if _, err := component.states.Watch(actor.Rooted, func(change state.Change) {
+		owner.Dao().SetRooted(change.Active)
+		owner.PublishSyncDirty()
+	}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	// The gate is the one place "rooted stops walking" lives: while Rooted
+	// holds, the move group is frozen and the walk in progress pauses where
+	// it is (FreezePause); when it ends, the walk resumes.
+	if component.gate, err = state.Gate(component.states, component.behavior, report,
+		state.Rule{State: actor.Rooted, Group: actor.GroupMove, Mode: actionflow.FreezePause}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
+	return component.combat.OnInitFinish(param, isCreate)
+}
+
+// OnDestroy runs when the monster leaves memory (killed, drained at
+// shutdown): followers end with TargetLost, the heartbeat host leaves the
+// driver.
+func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
+	if component.mb != nil {
+		component.mb.OnDestroy()
+	}
+	if component.host != nil {
+		component.host.OnDestroy()
+	}
+}
+
+// MapBasic and MoveComponent make the Monster a movement.MapOwner and a
+// movement.MoveOwner.
+func (monster *Monster) MapBasic() *movement.MapBasic { return monster.act.mb }
+
+func (monster *Monster) MoveComponent() *movement.Move { return monster.act.move }
+
+// Spawn puts the monster on the map at the point its body was placed and
+// starts its AI. The patrol corners are clipped to what the scene's terrain
+// says is walkable. The AI goes last: the action list and the AI do not roll
+// back with the transaction (D20 P2 decision 3), so everything that can fail
+// comes first.
+func (component *ActorComponent) Spawn(sceneID int64, space movement.Space, at spatial.Point, walkable func(spatial.Point) bool) error {
+	if err := component.mb.Enter(sceneID, space, at); err != nil {
+		return err
+	}
+	return component.brain.SetStrategy(actor.NewPatrol(at, PatrolHalf, walkable, actor.MonsterSpeed))
+}
+
+// SetRooted applies or dispels the root buff. The state, the gate and the
+// DAO mirror follow from the buff (BindStates); nothing here touches them.
+func (component *ActorComponent) SetRooted(rooted bool) {
+	if rooted {
+		if !component.combat.HasBuffTag(actor.TagRoot) {
+			component.combat.ApplyBuff(actor.RootBuff, 0, 0)
+		}
+		return
+	}
+	component.combat.DispelBuffs(actor.TagRoot, 0)
+}
+
+// Rooted reports the derived state.
+func (component *ActorComponent) Rooted() bool { return component.states.Has(actor.Rooted) }
+
+// Moving reports whether a walk is in progress (paused counts).
+func (component *ActorComponent) Moving() bool { return component.move.Moving() }
+
+// InScene reports whether Spawn put the monster on a map.
+func (component *ActorComponent) InScene() bool { return component.mb.InScene() }
+
+// Pos is the monster's position.
+func (component *ActorComponent) Pos() spatial.Point { return component.mb.Pos() }
+
+// Behavior, Brain and States are the parts (tests, GM).
+func (component *ActorComponent) Behavior() *actionflow.Behavior { return component.behavior }
+func (component *ActorComponent) Brain() *ai.Controller          { return component.brain }
+func (component *ActorComponent) States() *state.Set             { return component.states }
+
+// monsterFields is movement.Fields over MonsterDao.
+type monsterFields struct{ owner *Monster }
+
+func (f monsterFields) SceneID() int64 { return f.owner.Dao().GetSceneID() }
+
+func (f monsterFields) SetSceneID(v int64) {
+	f.owner.Dao().SetSceneID(v)
+	f.owner.PublishSyncDirty()
+}
+
+func (f monsterFields) Pos() spatial.Point {
+	dao := f.owner.Dao()
+	return spatial.Point{X: dao.GetPosX(), Y: dao.GetPosY()}
+}
+
+func (f monsterFields) SetPos(v spatial.Point) {
+	dao := f.owner.Dao()
+	dao.SetPosX(v.X)
+	dao.SetPosY(v.Y)
+	f.owner.PublishSyncDirty()
+}
+
+func (f monsterFields) Facing() movement.Facing { return movement.Facing(f.owner.Dao().GetFacing()) }
+
+func (f monsterFields) SetFacing(v movement.Facing) {
+	f.owner.Dao().SetFacing(int32(v))
+	f.owner.PublishSyncDirty()
+}
+
+var (
+	_ movement.MapOwner  = (*Monster)(nil)
+	_ movement.MoveOwner = (*Monster)(nil)
+)

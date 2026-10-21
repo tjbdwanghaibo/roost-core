@@ -40,6 +40,7 @@ type Service struct {
 	activity       *ActivityRunner
 	stopActivity   func()
 	stopTimers     func(context.Context) error
+	stopHeartbeat  func(context.Context) error
 	activityPhase  fnats.IJetStreamSubscription
 }
 
@@ -81,6 +82,15 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopTimers = stopTimers
+	// The heartbeat driver before the scene and before any player or monster
+	// exists: their components take a host from it as they initialize
+	// (heartbeat.go). Movement, the monsters' AI and the scene's population
+	// all run on it.
+	stopHeartbeat, err := startHeartbeat(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopHeartbeat = stopHeartbeat
 	value, err := lifecycle.EnsureWorld(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -122,6 +132,13 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)
 	}
 	s.scene = scene
+	// Members are entered with the bridge's Space (their steps reach the AOI
+	// commit-gated), and the scene's own subject — its time domain — is
+	// replicated to every member through the scene view.
+	area.SetSpace(scene.MoveSpace())
+	if err := scene.ShowScene(area); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
  // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
  if checks,ok:=app.Lookup[*health.Registry](registry,mods.ModHealth);ok && checks!=nil {checks.Register("entitysync.scene",scene)}
 	// The spawner last among the scene's users: it needs both the entity and
@@ -257,6 +274,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
+	}
+	// The heartbeat driver early: no walk advances, no monster decides and
+	// the scene asks for no new population while the rest closes. Nest is
+	// still up for a beat already delivered.
+	if s.stopHeartbeat != nil {
+		if err := s.stopHeartbeat(ctx); err != nil {
+			slog.Warn("heartbeat driver did not stop in time", "err", err)
+		}
+		s.stopHeartbeat = nil
 	}
 	// The gift steps finish what they are running within the stop budget;
 	// past it they are stopped and JetStream redelivers what was not acked.

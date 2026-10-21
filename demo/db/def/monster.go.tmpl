@@ -27,4 +27,14 @@ type MonsterDao struct {
 	PosX     int64 `bson:"pos_x" dao:"nopersist,sync"`
 	PosY     int64 `bson:"pos_y" dao:"nopersist,sync"`
 	HP       int64 `bson:"hp" dao:"nopersist,sync"`
+	// Facing is the direction of the last step (movement.Facing), drawn by
+	// the client like the player's.
+	Facing int32 `bson:"facing" dao:"nopersist,sync"`
+	// SceneID is which scene the monster is in (movement.Fields).
+	SceneID int64 `bson:"scene_id" dao:"nopersist,sync"`
+	// Rooted mirrors the actor.Rooted state bit (a root buff is on), so a
+	// client can draw it: the state set itself is not packed, the DAO is.
+	// Written by the state watcher in the same transaction as the buff, so
+	// it rolls back with it.
+	Rooted bool `bson:"rooted" dao:"nopersist,sync"`
 }

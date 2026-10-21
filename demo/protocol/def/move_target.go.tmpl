@@ -1,0 +1,35 @@
+//go:build protocoldef
+
+package protocoldef
+
+// MoveTargetRequest names where the player wants to go and lets the server
+// walk it there (DESIGN-TODO D20 decision 14): a point (X, Y), or another
+// player to follow (Follow, a player id; when non-zero X and Y are ignored).
+// The client sends intent, not positions — the server finds the route,
+// advances the walk on the player's own heartbeat and replicates every cell
+// reached. A new request replaces the walk in progress; Move (msg 10017) is
+// the one-step teleport and also ends it.
+type MoveTargetRequest struct {
+	X      int64 `pb:"1"`
+	Y      int64 `pb:"2"`
+	Follow int64 `pb:"3"`
+}
+
+// MoveTargetResponse says whether the walk started. ActionID names it (0:
+// the player already stands on the goal, nothing to walk). X / Y are where
+// the player is NOW — the start of the walk — and the walk itself arrives as
+// the replicated pos_x / pos_y / facing, frame by frame; a refused request
+// answers with a code and the same current position.
+type MoveTargetResponse struct {
+	Code     int32  `pb:"1"`
+	Reason   string `pb:"2"`
+	ActionID int64  `pb:"3"`
+	X        int64  `pb:"4"`
+	Y        int64  `pb:"5"`
+}
+
+//roost:protocol group=game handler=player
+type MoveTargetProtocol interface {
+	//roost:msg id=10026
+	MoveTarget(MoveTargetRequest) MoveTargetResponse
+}

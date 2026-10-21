@@ -95,6 +95,7 @@ internal static partial class Program
         TestLockstep();
         TestLockstepSnapshot();
         TestSyncReceiver();
+        TestSceneTimeDomain();
         await TestUnitySyncAdapter();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));

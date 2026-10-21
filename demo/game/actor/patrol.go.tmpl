@@ -1,0 +1,89 @@
+package actor
+
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// PatrolInterval is how often a patrolling monster decides (its AI
+// heartbeat). Walking is not decided at this rate: the MoveTo it starts is
+// advanced on the move group's own heartbeat (100ms), and the AI only looks
+// again for "am I idle".
+const PatrolInterval = 500 * time.Millisecond
+
+// Patrol is the monster's AI: walk the waypoints in order, forever.
+//
+// It is deliberately the simplest strategy that exercises the whole chain —
+// AI heartbeat (gameplay/ai.NewBeatController) → action (MoveTo on the
+// Behavior) → move-group heartbeat → Move.Advance → MapBasic.SetPos →
+// QueueMove — and the state gate: when the monster is rooted the move group
+// is frozen (FreezePause), the MoveTo in progress stops where it is, and this
+// strategy sees a current action (paused) or a refused start and simply
+// waits. It never asks whether the monster is rooted: the gate is the one
+// place that rule lives.
+//
+// Like every runner-side state, the strategy's own index is not rolled back
+// with a transaction (D20 P2 decision 3); the AI beat never fails, so the
+// index only moves when the start it records did happen.
+type Patrol struct {
+	Waypoints []spatial.Point
+	Speed     float64
+	next      int
+}
+
+// NewPatrol is the strategy for a monster spawned at home: the corners of a
+// square of the given half-side, clipped to the walkable ones. A home with no
+// walkable corner patrols nowhere (the strategy idles).
+func NewPatrol(home spatial.Point, half int64, walkable func(spatial.Point) bool, speed float64) *Patrol {
+	corners := []spatial.Point{
+		{X: home.X + half, Y: home.Y},
+		{X: home.X + half, Y: home.Y + half},
+		{X: home.X, Y: home.Y + half},
+		home,
+	}
+	points := make([]spatial.Point, 0, len(corners))
+	for _, corner := range corners {
+		if walkable == nil || walkable(corner) {
+			points = append(points, corner)
+		}
+	}
+	return &Patrol{Waypoints: points, Speed: speed}
+}
+
+func (p *Patrol) Name() string { return "patrol" }
+
+func (p *Patrol) Init(*ai.Context) error { return nil }
+
+// TickInterval is the AI heartbeat's period (actionflow.TickIntervaler).
+func (p *Patrol) TickInterval() time.Duration { return PatrolInterval }
+
+// Tick starts the walk to the next waypoint when the move group is idle.
+func (p *Patrol) Tick(ctx *ai.Context, _ time.Time) {
+	if len(p.Waypoints) == 0 || ctx == nil || ctx.ActionList == nil {
+		return
+	}
+	if ctx.ActionList.CurAction(GroupMove) != nil || ctx.ActionList.Frozen(GroupMove) {
+		return
+	}
+	goal := p.Waypoints[p.next%len(p.Waypoints)]
+	// A refused start (the group froze in between) leaves the index where
+	// it is: the same waypoint is tried on the next decision.
+	if _, err := ctx.ActionList.CreateAction(ActMoveTo, movement.MoveToParam{Path: []spatial.Point{goal}, Speed: p.Speed}); err == nil {
+		p.next++
+	}
+}
+
+// Next is the index of the waypoint the next walk goes to (tests).
+func (p *Patrol) Next() int { return p.next }
+
+func (p *Patrol) OnActionEnd(*ai.Context, int64, actionflow.ActionKind, actionflow.ActionReason) {}
+
+func (p *Patrol) OnMissionEnd(*ai.Context, actionflow.Mission, actionflow.ActionReason) {}
+
+func (p *Patrol) CanStopByNext(ai.Strategy) bool { return true }
+
+var _ ai.Strategy = (*Patrol)(nil)

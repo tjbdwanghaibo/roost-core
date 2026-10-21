@@ -1,0 +1,80 @@
+package handler
+
+import (
+	"errors"
+
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// handlerMoveTarget starts a server-driven walk (DESIGN-TODO D20 decision 14:
+// the client sends the goal, the server's heartbeat moves the player). It
+// returns the id of the action that carries the walk out.
+//
+//   - follow == 0: walk to (x, y). The route is the scene's PathFind — the
+//     expensive part, done once here and handed to the MoveTo action as its
+//     path, never recomputed per beat. A goal the search proves unreachable
+//     is refused with the same position error as an unwalkable teleport; one
+//     beyond the search's budget is walked in a straight line, stopped by the
+//     first blocked cell.
+//   - follow != 0: follow that player (a player id; the client knows players
+//     by id, not by entity id) until within actor.FollowKeep cells, it leaves
+//     the map, or it goes away.
+//
+// Either way the walk replaces the one in progress, and it is advanced on the
+// player's own move heartbeat (100ms): each beat moves speed × elapsed,
+// writes the cell reached through MapBasic and queues it for the AOI. This
+// handler returns before the first step; the client sees the walk in the
+// replicated position (pos_x / pos_y / facing) frame by frame.
+//
+// The action is started last: the action list does not roll back with the
+// transaction (D20 P2 decision 3), so every check that can fail comes first.
+//
+//roost:nest rollback=undo durability=async
+func handlerMoveTarget(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64, follow int64) (int64, error) {
+	component := target.MapComp()
+	if !component.InScene() || component.SceneID() != area.ID() {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "not in this scene")
+	}
+	if follow != 0 {
+		followed, err := entity.BuildEntityID(follow, player.EntityKindPlayer)
+		if err != nil {
+			return 0, errcode.Wrap(apperrors.ErrScenePosition, err, "reason", "bad follow target")
+		}
+		return component.Follow(followed)
+	}
+	to := spatial.Point{X: x, Y: y}
+	terrain, pathFind := area.Terrain(), area.PathFind()
+	if terrain == nil || pathFind == nil {
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain")
+	}
+	if !terrain.Walkable(to) {
+		from := component.Pos()
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
+	}
+	path, err := pathFind.Path(component.Pos(), to)
+	switch {
+	case errors.Is(err, spatial.ErrPathBudgetExhausted):
+		// The search is bounded (a long route over open ground exhausts it):
+		// walk the straight line. The player's Move checks every cell it
+		// enters against the ground (actor.Ground), so a wall on the way stops
+		// the walk where it is instead of letting it through.
+		path = []spatial.Point{to}
+	case err != nil:
+		return 0, errcode.Wrap(apperrors.ErrScenePosition, err, "reason", "no route", "to_x", to.X, "to_y", to.Y)
+	}
+	// The route starts at the player's own cell; the action wants the cells
+	// still to walk.
+	if len(path) > 0 && path[0] == component.Pos() {
+		path = path[1:]
+	}
+	if len(path) == 0 {
+		// Already standing on the goal: nothing to walk, no action (id 0).
+		return 0, nil
+	}
+	return component.WalkTo(path)
+}

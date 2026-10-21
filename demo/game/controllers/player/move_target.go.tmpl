@@ -1,0 +1,44 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+	player "{{MODULE}}/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleMoveTarget starts a server-driven walk: the client sends the goal,
+// the server walks (handlerMoveTarget). The endpoint resolves WHICH scene and
+// the transaction does the rest — the route is found and the walk started
+// under the Scene's and the Player's locks — and the answer is where the
+// player stands as the walk begins. The walk itself is not in the answer: it
+// reaches the client as replicated positions, one per step, through the same
+// Entity Sync frames that carry every other change, so a client that renders
+// the replicated position needs nothing else.
+func (controller *Controller) HandleMoveTarget(context *playeraccess.Context, request *pb.MoveTargetRequest) (*pb.MoveTargetResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("move_target endpoint: context and request are required")
+	}
+	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("move_target endpoint: %w", err)
+	}
+	actionID, moveErr := syncsender.NewMoveTargetSender(controller.NestClient()).MultiSync_MoveTarget(context.Context(), playerEntityID, controller.WorldSceneID(), request.X, request.Y, request.Follow)
+	response := &pb.MoveTargetResponse{ActionID: actionID}
+	if moveErr != nil {
+		code, reason := errcode.ClientError(moveErr)
+		if code == errcode.CodeInternal {
+			slog.Error("move_target failed", "player_id", context.PlayerID, "x", request.X, "y", request.Y, "follow", request.Follow, "err", moveErr)
+		}
+		response = &pb.MoveTargetResponse{Code: code, Reason: reason}
+	}
+	if position, readErr := syncsender.NewPlayerPositionSender(controller.NestClient()).Sync_PlayerPosition(context.Context(), playerEntityID); readErr == nil {
+		response.X, response.Y = position.X, position.Y
+	}
+	return response, nil
+}

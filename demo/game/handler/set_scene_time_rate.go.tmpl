@@ -1,0 +1,26 @@
+package handler
+
+import (
+	sceneentity "{{MODULE}}/game/entities/scene"
+)
+
+// handlerSetSceneTimeRate changes how fast the scene runs (gameplay/
+// timedomain) and answers the rate now in force. It is the GM's
+// `scene_time_rate`; a game changes it from the scene's own logic (a dungeon
+// boss's slow-motion phase, a "fast forward" vote).
+//
+// It runs in the scene's lock, the one place the domain may change: the new
+// anchor is the domain time at this message's business time, so domain time
+// stays continuous; the parameters are written to SceneDao (rolled back with
+// the transaction, replicated to every member through the scene's subject),
+// and published to the members after the commit. Every member's walk, patrol
+// and AI decision then advances by domain time. A rate outside
+// [0, MaxTimeRate] is refused and nothing changes.
+//
+//roost:nest rollback=undo durability=async
+func handlerSetSceneTimeRate(area sceneentity.ISceneEntity, rate float64) (float64, error) {
+	if err := area.SetTimeRate(rate); err != nil {
+		return area.TimeDomain().State().EffectiveRate(), err
+	}
+	return rate, nil
+}

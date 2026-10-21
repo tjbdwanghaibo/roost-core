@@ -8,6 +8,7 @@ import (
 	gameactivity "{{MODULE}}/game/activity"
 	guild "{{MODULE}}/game/entities/guild"
 	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
@@ -48,6 +49,8 @@ const (
 	gmSagaList  = "gm.saga.list"
 	gmScenePop  = "gm.scene.population"
 	gmSceneKill = "gm.scene.kill"
+	gmSceneRoot = "gm.scene.root"
+	gmSceneTime = "gm.scene.time_rate"
 	gmActClose  = "gm.activity.close"
 	gmFlagList  = "gm.flag.list"
 	gmFlagSet   = "gm.flag.set"
@@ -68,6 +71,15 @@ type gmFlagSetPayload struct {
 
 type gmSceneKillPayload struct {
 	MonsterID int64 `json:"monster_id"`
+}
+
+type gmSceneRootPayload struct {
+	MonsterID int64 `json:"monster_id"`
+	Rooted    bool  `json:"rooted"`
+}
+
+type gmSceneTimePayload struct {
+	Rate float64 `json:"rate"`
 }
 
 type gmSagaGetPayload struct {
@@ -136,6 +148,10 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		return fmt.Errorf("gm: saga engine %q is unavailable", mods.ModSaga)
 	}
 	worldID, err := lifecycle.WorldID(registry)
+	if err != nil {
+		return fmt.Errorf("gm: %w", err)
+	}
+	sceneID, err := entity.BuildEntityID(lifecycle.WorldSceneUniqueID, sceneentity.EntityKindScene)
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
 	}
@@ -333,6 +349,40 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"killed": payload.MonsterID, "alive": spawn.Count()}}, nil
+			},
+		},
+		{
+			Name: gmSceneRoot,
+			Description: "root (rooted=true) or free one monster: applies or dispels the root buff; the Rooted state follows " +
+				"from the buff, and the state gate pauses the monster's walk where it stands until it is freed. " +
+				"Payload: {\"monster_id\": <entity id from gm.scene.population>, \"rooted\": true|false}.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSceneRootPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				rooted, err := syncsender.NewRootMonsterSender(nestClient).Sync_RootMonster(ctx, payload.MonsterID, payload.Rooted)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"monster_id": payload.MonsterID, "rooted": rooted}}, nil
+			},
+		},
+		{
+			Name: gmSceneTime,
+			Description: "change how fast the map runs (its time domain): 1 is normal, 2 twice as fast, 0.5 half, 0 stops it; " +
+				"walks, patrols and AI decisions follow, and every member receives the new rate through the scene's " +
+				"replicated state. Payload: {\"rate\": <0..4>}.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSceneTimePayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				rate, err := syncsender.NewSetSceneTimeRateSender(nestClient).Sync_SetSceneTimeRate(ctx, sceneID, payload.Rate)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"rate": rate}}, nil
 			},
 		},
 		{

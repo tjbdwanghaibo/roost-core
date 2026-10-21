@@ -199,6 +199,21 @@ scenarios:
           param:
             x: 100000
             y: 100000
+        # The server-driven walk: the robot sends a goal 30 cells away and
+        # waits to be REPLICATED there — every step is taken on the player's
+        # own heartbeat and reaches this client as its own pos_x / pos_y, so
+        # arriving proves the whole chain (goal → MoveTo action → move
+        # heartbeat → DAO → AOI → frame). At 60 cells a second it takes half a
+        # second; the timeout is for a loaded server.
+        - action: move_target
+          param:
+            x: 531
+            y: 500
+        - action: move_arrive
+          param:
+            x: 531
+            y: 500
+            timeout: 10s
         - action: scene_expect
           param:
             # Everything below is asserted on THIS client's own subject, so

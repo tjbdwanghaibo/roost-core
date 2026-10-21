@@ -24,7 +24,7 @@ type monsterSyncPacker struct{ monster *Monster }
 
 var monsterViews, monsterViewsErr = dataengine.NewSyncViewSet(db.MonsterDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Template", "PosX", "PosY", "HP"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Template", "PosX", "PosY", "Facing", "HP", "Rooted"}, Priority: 0},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Template", "PosX", "PosY"}, Priority: 10},
 )
 

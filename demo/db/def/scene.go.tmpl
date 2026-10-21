@@ -1,0 +1,25 @@
+package dbdef
+
+// SceneDao is the scene's own state: the parameters of its time domain
+// (gameplay/timedomain, DESIGN-TODO D22). Domain time is a piecewise-linear
+// map of business time, D(B) = AnchorDomain + (B − AnchorBusiness) × Rate, and
+// these three numbers are the map.
+//
+// `nopersist,sync`, like a monster's position, and for the same two reasons:
+// a scene is rebuilt from configuration on every start (`noPersist=true
+// lifetime=runtime_rebuild`), so a 2× set on a dungeon dies with the process;
+// and the client needs them — it extrapolates domain time from its own
+// estimate of the server's business time with the same formula, which is
+// what lets it animate a 2× scene at 2× between frames. Being DAO fields is
+// what rolls a refused rate change back.
+//
+// A scene that must survive a restart (a persistent world with a slowed
+// region) declares them persisted instead; the domain then picks up from the
+// stored anchor and rate (the framework does not decide that, the tag does).
+//
+//roost:dao nocoll
+type SceneDao struct {
+	TimeAnchorBusiness int64   `bson:"time_anchor_business" dao:"nopersist,sync"`
+	TimeAnchorDomain   int64   `bson:"time_anchor_domain" dao:"nopersist,sync"`
+	TimeRate           float64 `bson:"time_rate" dao:"nopersist,sync"`
+}

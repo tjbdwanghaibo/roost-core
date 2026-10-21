@@ -195,27 +195,88 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 
 ## 地图：Scene 是一个实体，它的 system 各自带锁
 
-`game/entities/scene` 是地图实体：有 id、有框架驱动的生命周期、GM 能寻址、将来能跨进程——但**没有 DAO**
-（`noPersist=true lifetime=runtime_rebuild`），因为一张地图每次启动都是从配置重建出来的。
+`game/entities/scene` 是地图实体：有 id、有框架驱动的生命周期、GM 能寻址、将来能跨进程；`noPersist=true lifetime=runtime_rebuild`，
+因为一张地图每次启动都是从配置重建出来的。它唯一的 DAO `SceneDao`（`//roost:dao nocoll`，全部 `nopersist,sync`）放场景时间域的三个参数（下文“场景时间”）。
 
 ```
-Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find }   按序 Start，逆序 Stop
-   │
-   └─ Terrain() / PathFind()  →  game/scene 里声明的接口，不是实现
+Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, refresh }   按序 Start，逆序 Stop
+   │                       ─▶ timedomain.Domain（SceneDao 的锚点与倍率）
+   │                       ─▶ 心跳 "scene.spawn"（1Hz，场景自己的锁里决定刷怪）
+   └─ Terrain() / PathFind() / Space() / TimeDomain()  →  接口，不是实现
 ```
 
-- **system 自带锁，不借实体锁**。地形查询来自端点、来自刷新计时器、来自 AOI tick；让它们都去拿 Scene 的实体锁，
+- **system 自带锁，不借实体锁**。地形查询来自端点、来自成员的心跳、来自 AOI tick；让它们都去拿 Scene 的实体锁，
   等于让地图成为这个场景里所有事情的瓶颈。实体锁排的是**实体状态**的事务顺序，"这里能不能站"不是那个问题。
-- **位置的权威在 DAO，别处不缓存**。读位置 → `MapComponent.Pos()` → DAO；写位置 → `MapComponent.MoveTo()` → DAO。
-  AOI 将来会持一份 id→坐标的索引，那是索引不是第二个真相：只由这一条写入路径更新，永远不被当作"X 在哪"的答案读出来。
-  两个可写的真相就是重连之后玩家出现在别处的那种 bug。
-- **移动是两实体事务**（Scene rank 2 → Player rank 4）：位置改动与地图交出去的地面必须一致，所以它们一起提交、一起回滚。
-  `durability=async` 而不是 `strict`——移动要持久，但不该每一步都等 fsync。
+- **位置的权威在 DAO，别处不缓存**。读位置 → `MapComponent.Pos()` → DAO；写位置只经 `movement.MapBasic`（`MapComponent` 持有）→ DAO，
+  同一次写在事务里把新位置排进 AOI（`Space.QueueMove`，走提交门：回滚的一步不进 AOI）。AOI 的 id→坐标索引是索引不是第二个真相，
+  永远不被当作"X 在哪"的答案读出来。两个可写的真相就是重连之后玩家出现在别处的那种 bug。
+- **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY`，
+  由 `MapBasic` 在离开场景时与在场景里每 10 秒（`actor.SavePeriod`，心跳 `"map.save"`）写一次、位置没变不写；进场景时以它为首选点。
 - **玩家不占地**（`Walkable` 而不是 `Occupy`）：两个玩家可以站在同一点，于是断线也没有残留占位要回收。占位留给真正会挡路的东西
   （地图里的墙、将来判定为实心的怪）。
 - **落点用 `Place` 向外一圈圈找**：地图每次重建，玩家记住的位置可能不再可用；返回最近的可站点，而不是"某个"可站点。
   登录不会因为地面变了而失败。
-- 拒绝只有一个码（`scene_position`）：越界、被占、不在地图上共用它——能精确知道哪些点被占的客户端，等于拿到了所有人的位置。
+- 拒绝只有一个码（`scene_position`）：越界、被占、不在地图上、到不了共用它——能精确知道哪些点被占的客户端，等于拿到了所有人的位置。
+
+## 移动：客户端发目标，服务端在实体自己的心跳里走（D20）
+
+```
+move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体事务）
+        PathFind.Path 找路（只此一次）─▶ Behavior.CreateAction(MoveTo{path, 60 格/秒})   ← 最后一步
+                                                │  BeatRunner 给移动组挂心跳 "actionflow/1"（100ms）
+每一拍（玩家自己的 Nest worker、实体锁与事务内）：
+        Move.Advance(Beat.Elapsed) ─▶ MapBasic.SetPos ─▶ DAO PosX/PosY/Facing + Space.QueueMove ─▶ 提交 ─▶ AOI ─▶ 帧
+到达 / 被新目标取代 / 被瞬移结束 / 被挡 ─▶ 动作结束，移动组的心跳停
+```
+
+- **客户端只发意图**（`MoveTargetRequest{X, Y, Follow}`，msg 10026）：回复只说动作开始了、从哪里开始；路上的每一格都作为
+  复制的 `pos_x / pos_y / facing` 到达客户端，客户端渲染复制下来的位置即可。`Follow` 跟随另一个玩家（玩家 id），走到 3 格以内结束。
+- **不追帧**：每拍走“速度 × 本拍经过的时间”，掉拍后下一拍一次走完；空闲的玩家没有任何心跳登记，走路的玩家一个。
+  一个进程里成千上万人走路时，心跳按实体 ID 的哈希打散在周期里，没有“全服每 100ms 一起走一步”的尖峰。
+- **寻路只做一次**：`PathFind.Path` 有 4096 节点的预算（开阔地上远处的斜向目标会用完它）；用完时改走直线，`Move` 每进一格
+  问一次地形（`actor.Ground`），被挡就停在最后一个可走的格（动作以 `Blocked` 失败结束）。证明到不了的目标直接拒绝。
+- **按点移动保留为瞬移**（`move`，msg 10017）：一次校验过的写位置，结束正在走的路；它是服务端驱动之前的写法，留作对照与闪现 / GM 用。
+  AOI 同样由 `MapBasic.SetPos` 的 `QueueMove` 跟上，端点之后不再调 `Scene.Moved`（已删除）。
+- **runner 不随事务回滚**：handler 先做完全部会失败的校验，最后一步才 `CreateAction` / `EndCurAction`（D20 P2 决定 3）。
+- **心跳驱动手写接线**：`internal/service/<game>/heartbeat.go` 在 `Service.Init` 开头 `Bind`（Nest 客户端 + 只读实体查找）并 `Start`
+  `actor.Heartbeat`，与 World 定时器驱动同一种写法；生成工程用 `wiring/heartbeat` Mod。`Shutdown` 一开始就停驱动，Nest 还在。
+- **共用的东西在 `game/actor`**：驱动、动作种类与注册表、状态目录、`InterestMoves`（成员进场景用的 `movement.Space`：只报告移动，
+  进出场景仍由复制桥的 `Join` / `ShowSubject` 负责）、`Ground`、`WorldTime`。
+- 测试：`internal/service/<game>/scene_movement_test.go` 在真实 Nest + 运行中的心跳驱动 + 复制桥上，用手动推进的业务时钟
+  （`clock.SetSource`）逐步核对“走了几格”：发目标 → 每拍推进 → 到达 → 观察者看到每一步；新目标取代旧的；瞬移结束走路；
+  超出寻路预算走直线、被墙挡住；怪物巡逻、定身、刷怪补齐；2 倍速。断言提交后的状态先 `settle`（同实体一条空消息），
+  组件状态在实体锁里读（`locked`），不 sleep。
+
+## 怪物：巡逻、定身与状态门控（D21）
+
+`game/entities/monster/actor_component.go` 把框架的组件按游戏会用的方式接起来，全部跑在怪物自己的锁与心跳上：
+
+| 组件 | 做什么 |
+| --- | --- |
+| `ai.Controller`（`ai.NewBeatController`，心跳 `"ai"`，500ms） | `actor.Patrol`：移动组空闲且没被冻结时，走向下一个角（出生点为一角、边长 12 的正方形，按地形裁掉不可走的角） |
+| `actionflow.Behavior`（心跳 `"actionflow/1"`） | 执行 MoveTo，每拍推进 |
+| `movement.Move` / `MapBasic` | 走路，位置写 `MonsterDao`、排进 AOI；怪物不落库 |
+| `state.Set` + `state.Gate` | `Rooted` 生效时冻结移动组（`FreezePause`：正在走的路停在原地，心跳停；解除后接着走） |
+| `combatcomponent.CombatComponent` + `BindStates` | 定身 buff（标签 `root`）是唯一的持有者，`Rooted` 从标签派生，不复制 |
+
+- **策略不问“我是不是被定身了”**：门控是这条规则唯一的位置；策略只看移动组是否空闲。
+- **客户端看得见**：`Rooted` 经状态观察者镜像进 `MonsterDao.Rooted`（`nopersist,sync`），观察者在改 buff 的同一个事务里写，随它回滚。
+- GM：`gm.scene.root {"monster_id", "rooted"}` 加 / 驱散定身 buff（handler `handlerRootMonster` 只写 buff，其余跟着来）。
+  定身 buff 永久、直到驱散：`TickBuffs` 挂心跳是 D20 P5 的另一项。
+- **没做**：追击与回巢、怪物占地、战斗伤害（只有 GM 的“杀掉”）。
+
+## 场景时间：副本 2 倍速（D22）
+
+场景实体持有 `timedomain.Domain`，参数在 `SceneDao`（`nopersist,sync`：随进程结束的副本不落库，但下发给客户端）。
+
+- **成员跟着域时间走**：玩家的 `Behavior`、怪物的 `Behavior` 与 AI 都用 `BeatConfig.TimeDomain: actor.WorldTime()` 构造，
+  所以动作每拍的 `Elapsed`、AI 的决策周期判断都是域时间：2 倍速时走路、巡逻快一倍，0 时全场停住。
+- **只在场景自己的锁里改**：GM `gm.scene.time_rate {"rate": 0..4}` → `handlerSetSceneTimeRate` → `Domain.SetRate`；新锚点是生效时刻的
+  域时间（连续不跳），写 `SceneDao`（随事务回滚），提交后发布给成员。越界拒绝、什么都不改。
+- **下发给每个成员**：场景自己是一个复制主体（`sync=true`），复制桥把它放进一个关系视野（`sceneView`），每个 `Join` 把玩家挂上去，
+  站在哪里都收得到；C# 客户端 `Roost.Client.SceneTimeDomain` 用同一公式按估计的服务端业务时间外推。
+- **一个进程一张地图**：`actor.WorldTime` / `actor.Ground` 是进程级的，成员在构造时绑定域；多场景的游戏要在进入场景时为成员
+  构造行为组件（KNOWN-LIMITS）。
 
 ## 服务端权威状态同步：Player 是复制主体，entitysync.Manager 是调度器，scene 是政策
 
@@ -260,9 +321,14 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 
 `configs/table/spawn.csv` 一行是一组：模板、数量、血量、中心点、半径、重生秒数。
 
-- **系统只说"该生成什么"，装配层去建**。`Refresh.Due(now)` 返回 `[]SpawnRequest`，`internal/service/<game>/spawner.go`
-  建实体、放位置、注册进复制与 AOI，然后才 `Spawned` 回报。与兴趣系统只产出订阅变更是同一个形状——
-  也正好避开包环：建实体要 lifecycle，lifecycle 要实体包，实体包持有 runtime。
+- **场景自己的 1Hz 心跳决定缺额**（D20 P5）：`"scene.spawn"` 在场景的锁里问 `Refresh.Due(beat.Now)`，事务**提交之后**
+  （`nest.AfterCommit`）把这一批交给 spawner；原来服务 goroutine 每秒一次的 ticker 删掉了。
+- **建实体在服务 goroutine，按四步、按这个顺序**（`internal/service/<game>/spawner.go`）：① 取 id、`lifecycle.Create`（组件建好、AI 还没有策略，什么都不跑）；
+  ② 放身体（模板、血量、位置——任何人看见之前的唯一一次写，所以不会在 (0,0) 被复制）；③ `ShowSubject`（先登记复制主体、再进 AOI，否则观察者会订到 Manager 没有的主体）；
+  ④ Nest 事务 `handlerSpawnMonster`（场景 + 怪物）：进场景的移动（`MapBasic.Enter`）并开始巡逻——提交后它的心跳才开始，第一步一定在它可见之后。
+  全部成功才 `Spawned`；任何一步失败按逆序撤销（Hide、Destroy），下一拍的 `Due` 里重新出现。
+- **一次只建一批**：上一批还在建时交来的批次丢弃。`Refresh` 数的是被告知存在的，还没 `Spawned` 的请求下一拍会再要一次，
+  不丢弃就会建两只。
 - **数的是"被告知存在的"而不是"被请求过的"**。一次失败的创建会在下一次 `Due` 里重新出现；若按请求扣减，
   这个进程余下的时间里都会少一只，而且没人会说。
 - **怪的 DAO 每个字段都是 `nopersist,sync`**：不存，但复制。这是为了让"位置住在 DAO 里、经组件读写"对**所有**实体一致——
@@ -270,9 +336,9 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   它用 `//roost:dao nocoll` 声明**没有集合**：不编造 Mongo 集合名，生成物里没有集合常量、`PrepareMutation`、`RestorePersisted`
   这条永远不会写东西的持久化路径，只有读写方法、回滚快照与 `MarshalSync`；DaoManager 里以 `db.MonsterDaoRegistryKey` 登记。
   生成器保证它全字段 `nopersist`、且只被 `noPersist=true` 的实体使用（[设计记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/DAO-NO-COLLECTION-2026-10-04.md)）。
-- **计时器在装配层**，不在 system 里：system 仍是纯状态机（`Due(now)` 的时间是传进去的），所以它可测、可重放。
-- GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒后回到满员且是一个**新 id**。
-- **没做**：怪不动（没有 AI），战斗只有 GM 的"杀掉"，id 由进程本地计数器生成（第二个进程会撞，尚未解决）。
+- **system 仍是纯状态机**：`Due(now)` 的时间是传进去的（心跳的 `Beat.Now`），所以它可测、可重放。
+- GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒（业务时间）后的那一拍回到满员且是一个**新 id**；
+  `gm.scene.root` 定身。怪物 id 由 `game/runtimeid` 按 sid 编码，两个进程不会撞。
 
 ## 装备栏：demo 唯一的嵌套字段，以及为什么它在这里
 

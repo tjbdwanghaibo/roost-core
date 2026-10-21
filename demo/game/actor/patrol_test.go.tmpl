@@ -1,0 +1,93 @@
+package actor
+
+import (
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/ai"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// walker is the smallest thing a patrol can drive: a Behavior with no
+// heartbeat (ticked by hand), over a Move on in-memory fields.
+type walker struct {
+	*entity.EntityBase
+	mb       *movement.MapBasic
+	move     *movement.Move
+	behavior *actionflow.Behavior
+}
+
+func (w *walker) Base() *entity.EntityBase      { return w.EntityBase }
+func (w *walker) MapBasic() *movement.MapBasic  { return w.mb }
+func (w *walker) MoveComponent() *movement.Move { return w.move }
+
+func newWalker(t *testing.T, at spatial.Point) *walker {
+	t.Helper()
+	w := &walker{EntityBase: entity.NewEntityBase(1<<20|1, entity.EntityCategoryOther, true)}
+	var err error
+	if w.mb, err = movement.NewMapBasic(w, nil, movement.MapConfig{Fields: &movement.MemFields{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.mb.Enter(1, Nowhere{}, at); err != nil {
+		t.Fatal(err)
+	}
+	if w.move, err = movement.NewMove(w.mb, movement.MoveConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if w.behavior, err = actionflow.NewBehavior(w, actionflow.BehaviorConfig{Registry: Registry, GroupForKind: Groups}); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// The patrol decides only when the move group is idle: a walk in progress, or
+// a walk paused by a freeze (the rooted gate), is left alone, and a start the
+// frozen group refuses keeps the same corner for the next decision. It never
+// looks at the state itself — the freeze is the one rule.
+func TestPatrolStartsTheNextCornerOnlyWhenTheMoveGroupIsIdle(t *testing.T) {
+	home := spatial.Point{X: 100, Y: 100}
+	w := newWalker(t, home)
+	patrol := NewPatrol(home, 10, func(p spatial.Point) bool { return p.X <= 110 && p.Y <= 110 }, 5)
+	if len(patrol.Waypoints) != 4 {
+		t.Fatalf("waypoints %v, want the four walkable corners", patrol.Waypoints)
+	}
+	ctx := &ai.Context{Owner: w, ActionList: w.behavior}
+
+	patrol.Tick(ctx, ctx.Now)
+	if patrol.Next() != 1 || w.behavior.CurAction(GroupMove) == nil || !w.move.Moving() {
+		t.Fatalf("idle walker: next %d current %v moving %v, want the first corner started", patrol.Next(), w.behavior.CurAction(GroupMove), w.move.Moving())
+	}
+	patrol.Tick(ctx, ctx.Now)
+	if patrol.Next() != 1 {
+		t.Fatalf("a walk in progress was replaced: next %d", patrol.Next())
+	}
+	// Rooted: the gate freezes the group and the walk pauses.
+	if err := w.behavior.Freeze(GroupMove, actionflow.FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	patrol.Tick(ctx, ctx.Now)
+	if patrol.Next() != 1 {
+		t.Fatalf("a paused walk was replaced: next %d", patrol.Next())
+	}
+	// Freed and idle (the walk ended while frozen is the same as never
+	// started): the next corner.
+	if err := w.behavior.Recover(GroupMove); err != nil {
+		t.Fatal(err)
+	}
+	w.behavior.EndCurAction(GroupMove, true, actionflow.NewActionReason("test"))
+	patrol.Tick(ctx, ctx.Now)
+	if patrol.Next() != 2 {
+		t.Fatalf("idle again: next %d, want 2", patrol.Next())
+	}
+	// Frozen while idle: the start is refused and the corner kept.
+	w.behavior.EndCurAction(GroupMove, true, actionflow.NewActionReason("test"))
+	if err := w.behavior.Freeze(GroupMove, actionflow.FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	patrol.Tick(ctx, ctx.Now)
+	if patrol.Next() != 2 || w.behavior.CurAction(GroupMove) != nil {
+		t.Fatalf("frozen and idle: next %d current %v, want the corner kept and nothing started", patrol.Next(), w.behavior.CurAction(GroupMove))
+	}
+}

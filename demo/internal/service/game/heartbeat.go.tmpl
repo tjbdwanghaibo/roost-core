@@ -1,0 +1,57 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"{{MODULE}}/game/actor"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// startHeartbeat binds the game's heartbeat driver (actor.Heartbeat, the
+// framework's gameplay/heartbeat.Driver) to this process and starts it. It
+// returns the stop function Shutdown calls.
+//
+// This is the hand-written form of what wiring/heartbeat's Mod does (the
+// demo wires its drivers itself, like the World's timer driver in
+// activity.go):
+//
+//   - Bind: the Nest client every beat is delivered through (normal
+//     admission, the entity's own worker, lock and transaction) and a
+//     read-only lookup of the published entities — a beat is never what
+//     loads an entity back.
+//   - actor.SetLookup: the same lookup for Follow, which reads its target's
+//     last committed position without its lock.
+//   - Start: one goroutine, 10ms slots, phase = hash(entity id), so the
+//     beats of thousands of walkers are spread over the period instead of
+//     landing together.
+//
+// It runs before the World and the scene are built: their components take a
+// host from the driver as they initialize (registering is fine before Start;
+// nothing is delivered until then). Stopping loses nothing — a heartbeat is
+// not persisted; the walk in progress simply does not advance — and the
+// service stops it first in Shutdown, while Nest is still up.
+func startHeartbeat(registry *app.Registry) (func(context.Context) error, error) {
+	client, ok := app.Lookup[corenest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, errors.New("heartbeat: nest client is unavailable")
+	}
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil || access.Manager() == nil {
+		return nil, errors.New("heartbeat: entity runtime is unavailable")
+	}
+	manager := access.Manager()
+	lookup := func(id int64) coreentity.IThreadSafeEntity { return manager.Get(id) }
+	if err := actor.Heartbeat.Bind(client, lookup); err != nil {
+		return nil, fmt.Errorf("heartbeat: %w", err)
+	}
+	actor.SetLookup(lookup)
+	if err := actor.Heartbeat.Start(); err != nil {
+		return nil, fmt.Errorf("heartbeat: %w", err)
+	}
+	return actor.Heartbeat.Stop, nil
+}

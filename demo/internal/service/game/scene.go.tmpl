@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/lifecycle"
 	gamescene "{{MODULE}}/game/scene"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
@@ -18,6 +21,7 @@ import (
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -88,6 +92,14 @@ const (
 	// stays in the scene without its own view until its next login; a warning
 	// per player was the only trace.
 	sceneOpenFailedMetric = "scene_session_open_failed_total"
+
+	// sceneView is the relation view every member is attached to: its one
+	// member is the scene's own subject (SceneDao: the time domain), which
+	// everyone on the map sees wherever they stand. Team views count up from
+	// 1, so this id cannot collide with one.
+	sceneView policy.ViewID = 1 << 40
+	// sceneMaxMembers bounds the scene view's fan-out (MaxPlayersPerView).
+	sceneMaxMembers = 1 << 16
 )
 
 // SceneCapability is the name the scene is published under, so an endpoint
@@ -129,6 +141,9 @@ type Scene struct {
 	teamMu   sync.Mutex
 	teams    map[int64]policy.ViewID // player id → the team view it is attached to
 	lastTeam policy.ViewID
+
+	// sceneShown says ShowScene defined the scene view; Join attaches to it.
+	sceneShown atomic.Bool
 
 	mu      sync.Mutex
 	members map[int64]sceneMember // subject (entity) id → the Join it is in the scene under
@@ -312,6 +327,10 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	interest, err := policy.NewInterest(policy.InterestConfig{
 		Manager:   manager,
 		ApplyMode: policy.ApplySync,
+		// Every member is attached to the scene view (the scene's own subject,
+		// its time domain), so one view fans out to everyone on the map; the
+		// framework's default of 4096 players per view would cap the map.
+		MaxPlayersPerView: sceneMaxMembers,
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
@@ -541,6 +560,15 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	if err := bridge.interest.Enter(playerID, subjectID, at, view); err != nil {
 		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
 	}
+	// The scene's own subject (its time domain), wherever the player stands.
+	// Leave detaches every view of the player, so a rejoin attaches again.
+	// A scene that was never shown (a test without one) has no view: the
+	// player just does not receive scene facts.
+	if bridge.sceneShown.Load() {
+		if err := bridge.interest.AttachView(playerID, sceneView); err != nil {
+			slog.Warn("scene: member not attached to the scene view", "player_id", playerID, "err", err)
+		}
+	}
 	if reopened {
 		bridge.interest.Resubscribe(playerID)
 	}
@@ -611,18 +639,39 @@ func (bridge *Scene) Ready(playerID int64) error {
 	return nil
 }
 
-// Moved tells the policy where a player is now. It is called after the move
-// transaction committed — the DAO is the authority and the index follows it,
-// never the other way round.
-func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point) {
-	if bridge == nil {
-		return
+// MoveSpace is the movement.Space players and monsters are entered with
+// (Scene entity SetSpace): their steps are queued in this scene's interest
+// policy inside the step's transaction (commit-gated) and applied in the
+// manager's next flush, together with the content they produced. Membership —
+// Join / Leave, ShowSubject / HideSubject — stays here; see actor.InterestMoves.
+func (bridge *Scene) MoveSpace() movement.Space {
+	if bridge == nil || bridge.interest == nil {
+		return actor.Nowhere{}
 	}
-	if err := bridge.interest.Move(subjectID, to); err != nil {
-		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
-		return
+	return actor.InterestMoves{Interest: bridge.interest}
+}
+
+// ShowScene replicates the scene's own subject — SceneDao, its time domain —
+// to every member: the subject is registered with the manager and made the
+// one member of the scene view, which each Join attaches the player to. It is
+// not a spatial subject (not Shown in the AOI): a scene's rate is not a fact
+// about a point on the map. Called once, after Start and before anyone joins.
+func (bridge *Scene) ShowScene(area *sceneentity.Scene) error {
+	if bridge == nil || bridge.manager == nil || area == nil {
+		return errors.New("scene: not started")
 	}
+	if err := bridge.manager.Register(area.Sync()); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		return fmt.Errorf("scene: register the scene subject %d: %w", area.ID(), err)
+	}
+	if err := bridge.interest.DefineRelationView(sceneView, coreentity.SyncProfile{}); err != nil {
+		return fmt.Errorf("scene: scene view: %w", err)
+	}
+	if err := bridge.interest.SetViewMembers(sceneView, []int64{area.ID()}); err != nil {
+		return fmt.Errorf("scene: scene view: %w", err)
+	}
+	bridge.sceneShown.Store(true)
 	bridge.apply()
+	return nil
 }
 
 // SetView applies a client's LOD / view-radius request (scene_view). It is
