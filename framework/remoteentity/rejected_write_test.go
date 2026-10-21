@@ -132,7 +132,7 @@ func newRejectedMemoryFixture(t *testing.T, rawID int64) (rejectedMemoryFixture,
 	t.Helper()
 	const kind entity.EntityKind = 123
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	storage := &switchableStorage{MongoCommitter: store, statusCalls: make(chan struct{}, 1)}
 	loader := localLookupLoader{newRemoteTestLoader()}
 	live := newFullDocRemoteEntity(rawID, kind)
@@ -429,7 +429,7 @@ func newReloadFixture(t *testing.T, rawID int64) (reloadFixture, *reloadableFull
 	t.Helper()
 	const kind entity.EntityKind = 125
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	storage := &rejectingStorage{switchableStorage: &switchableStorage{MongoCommitter: store, statusCalls: make(chan struct{}, 1)}, statusHeld: make(chan struct{}, 1)}
 	manager := entity.NewEntityManager()
 	access := entity.NewManagerAccess(manager)

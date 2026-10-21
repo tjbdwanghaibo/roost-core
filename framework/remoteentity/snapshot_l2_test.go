@@ -454,7 +454,7 @@ func TestSnapshotL2KeyPrefixValidation(t *testing.T) {
 // Assemble 把 Config.SnapshotL2KeyPrefix 接到 Manager 实际使用的 L2 上，非法前缀在装配时拒绝。
 func TestAssembleWiresSnapshotL2KeyPrefix(t *testing.T) {
 	key := l2TestKey(t, 1913)
-	backend, err := NewBackend(newRemoteTestLoader(), NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0))
+	backend, err := NewBackend(newRemoteTestLoader(), newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}

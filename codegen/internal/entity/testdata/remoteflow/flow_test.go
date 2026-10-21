@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -25,6 +26,17 @@ import (
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// fixtureDatabases 是夹具自建装配用的库名表：DAO 的 db= 已由脚本换成本轮唯一库名，表里不配映射（逻辑名即物理名）。
+// Remote 存储与 DataEngine 投影绑定同一张表，与 wiring 装配一致；Remote 存储没绑定映射表时拒绝写 DAO 文档。
+func fixtureDatabases(t testing.TB) *coredata.DatabaseMap {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return databases
+}
 
 // 业务 loader 是 Remote 唯一需要应用提供的能力；测试实体由正式生成器创建。
 type vaultLoader struct{ values map[int64]*Vault }
@@ -165,6 +177,10 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			databases := fixtureDatabases(t)
+			if err := backend.BindDatabaseMap(databases); err != nil {
+				t.Fatal(err)
+			}
 			cfg := remoteentity.DefaultConfig()
 			// 一个负载观察节点订阅每个实体的两个 DAO scope；这是实际建模容量，
 			// 不能沿用只容纳 16384 个 scope 的缺省 consumer 配额验收 10000×2。
@@ -246,7 +262,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 					t.Fatal("NATS interest not delivered", ctx.Err())
 				}
 			}
-			store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database})
+			store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 			if err != nil {
 				t.Fatal(err)
 			}

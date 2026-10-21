@@ -157,7 +157,7 @@ func newRejectionRaceFixture(t *testing.T, id int64, tx entity.RemoteTransaction
 	t.Helper()
 	mongo, database := realRejectionRaceMongo(t)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: rejectionRaceKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(mongo, database, 1000, 0)
+	store := newBoundMongoCommitter(mongo, database, 1000, 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := store.EnsureRemoteStorage(ctx); err != nil {
@@ -200,7 +200,7 @@ type commitResult struct {
 // startGatedCommit 用拦截了事务集合 InsertOne 的 committer 发起提交，并等到暂停点。
 func (f rejectionRaceFixture) startGatedCommit(t *testing.T, gate *txInsertGate) <-chan commitResult {
 	t.Helper()
-	gated := NewMongoCommitter(gatedTxMongo{IMongo: f.mongo, control: f.database, gate: gate}, f.database, 1000, 0)
+	gated := newBoundMongoCommitter(gatedTxMongo{IMongo: f.mongo, control: f.database, gate: gate}, f.database, 1000, 0)
 	done := make(chan commitResult, 1)
 	go func() {
 		receipts, err := gated.CommitRemoteBatch(context.Background(), f.commits)

@@ -134,7 +134,7 @@ const takeoverSid int32 = 1101
 func newTakeoverFixture(t *testing.T) *takeoverFixture {
 	t.Helper()
 	ctx := context.Background()
-	f := &takeoverFixture{t: t, redis: newTakeoverRedis(), store: NewMongoCommitter(newRemoteMongoFake(), "control", takeoverSid, 0), cfg: DefaultConfig()}
+	f := &takeoverFixture{t: t, redis: newTakeoverRedis(), store: newBoundMongoCommitter(newRemoteMongoFake(), "control", takeoverSid, 0), cfg: DefaultConfig()}
 	f.cfg.LockTTL = 3 * time.Second
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	f.entity, _ = entity.BuildEntityID(997, 198)

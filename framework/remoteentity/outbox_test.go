@@ -28,7 +28,7 @@ func TestOutboxFailedFirstPageDoesNotStarveLaterTransaction(t *testing.T) {
 	defer fixture.StopFinalizer(context.Background())
 	seed := batch.Commits()[0]
 	db := newRemoteMongoFake()
-	storage := NewMongoCommitter(db, "outbox_pages", 1000, 0)
+	storage := newBoundMongoCommitter(db, "outbox_pages", 1000, 0)
 	backend, err := NewBackend(newRemoteTestLoader(), storage)
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestPublicationFailureDoesNotBlockLaterProjection(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	tx1 := remoteTestTxID(168)
 	storage := &failingPublicationStorage{MongoCommitter: committer, target: tx1}
 	storage.fail.Store(true)
@@ -431,7 +431,7 @@ func TestProjectorRetryAndFinalizerAcknowledgeConcurrently(t *testing.T) {
 	const kind entity.EntityKind = 125
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	for i := 0; i < 200; i++ {
-		store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+		store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 		storage := &flakyPublicationStorage{MongoCommitter: store}
 		loader := newRemoteTestLoader()
 		live := newTestRemoteEntity(int64(3000+i), 1, kind)

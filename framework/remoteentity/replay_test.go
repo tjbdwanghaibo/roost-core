@@ -309,7 +309,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	tx1, tx2 := remoteTestTxID(111), remoteTestTxID(112)
 	storage := &scriptedPublicationStorage{
 		MongoCommitter: committer, target: tx1,
@@ -485,7 +485,7 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	tx1, tx2, tx3 := remoteTestTxID(131), remoteTestTxID(132), remoteTestTxID(133)
 	storage := &suffixReplayStorage{
 		MongoCommitter: committer, prefix: tx1, suffix: tx2,

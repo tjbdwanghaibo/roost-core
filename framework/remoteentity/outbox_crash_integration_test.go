@@ -65,7 +65,7 @@ func TestRemoteOutboxCrashHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mongo.Close(context.Background())
-	storage := &crashAfterPersistence{MongoCommitter: NewMongoCommitter(mongo, input.Database, 1000, 0), ready: path + ".ready"}
+	storage := &crashAfterPersistence{MongoCommitter: newBoundMongoCommitter(mongo, input.Database, 1000, 0), ready: path + ".ready"}
 	backend, err := NewBackend(newRemoteTestLoader(), storage)
 	if err != nil {
 		t.Fatal(err)

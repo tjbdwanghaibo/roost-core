@@ -75,7 +75,7 @@ func newMemoryUnresolvedFixture(t *testing.T, id int64, wrap func(*MongoCommitte
 	t.Helper()
 	const kind entity.EntityKind = 119
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	loader := newRemoteTestLoader()
 	live := newTestRemoteEntity(id, 1, kind)
 	loader.add(live)

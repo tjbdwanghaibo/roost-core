@@ -137,7 +137,15 @@ func runRemotePublicationAndWALRecovery(t *testing.T, interruptSecondPublication
 			return true
 		})
 	})
+	// 自建装配：Remote 存储与投影绑定同一张库名表（不配映射，逻辑名即夹具的唯一库名）；没绑定时 Remote 拒绝写 DAO 文档。
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	remoteStore := remoteentity.NewMongoCommitter(fx.mongo, fx.database, 901, 0)
+	if err := remoteStore.BindDatabaseMap(databases); err != nil {
+		t.Fatal(err)
+	}
 	if err := remoteStore.EnsureRemoteStorage(fx.context()); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +164,7 @@ func runRemotePublicationAndWALRecovery(t *testing.T, interruptSecondPublication
 		return m
 	}
 	manager := newManager()
-	store, err := engine.NewMongoStore(fx.mongo, engine.MongoStoreConfig{DefaultDatabase: fx.database})
+	store, err := engine.NewMongoStore(fx.mongo, engine.MongoStoreConfig{DefaultDatabase: fx.database, Databases: databases})
 	if err != nil {
 		t.Fatal(err)
 	}

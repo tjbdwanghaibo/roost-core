@@ -33,14 +33,17 @@ type MongoCommitter struct {
 
 	// databases 是 DataEngine 冻结的逻辑库 → 物理库表（D9 修订版 A），由 BindDatabaseMap 绑定一次。
 	// RemoteDataMutation.Database 是 DAO 的逻辑库名，写 DAO 文档前经它换成物理库名；控制库 database
-	// 是配置给出的物理名，不经映射。requireDatabaseMap 为真（wiring 装配）时未绑定就写 DAO 文档会被拒绝，
-	// 不按逻辑名写进错误的库；直接构造（测试、自建装配）未绑定时物理名就是逻辑名。
-	databases          atomic.Pointer[coredata.DatabaseMap]
-	requireDatabaseMap bool
+	// 是配置给出的物理名，不经映射。无论 wiring 装配还是直接构造（测试、自建装配），没绑定映射表就写带库名的
+	// DAO 文档一律返回 ErrDatabaseMapNotBound，不按逻辑名写进错误的库（维护者 2026-10-21）。已绑定、但表里
+	// 没有某个逻辑库时物理名仍是逻辑名本身（DatabaseMap.Physical 的 identity 规则），不在这里拦。
+	databases atomic.Pointer[coredata.DatabaseMap]
 }
 
 // ErrDatabaseMapNotBound：Remote 的 Mongo 存储要写 DAO 文档，但 DataEngine 还没有把库名映射表绑定过来。
-var ErrDatabaseMapNotBound = errors.New("remote_entity: the DataEngine database map is not bound to the Mongo storage")
+// wiring 装配由 DataEngine Mod 在 Provide 时绑定；自建装配要在第一次提交前用 DataEngine 冻结的同一张表调用
+// Backend.BindDatabaseMap 或 MongoCommitter.BindDatabaseMap（测试可用 dataengine.NewDatabaseMap 合成）。
+var ErrDatabaseMapNotBound = errors.New("remote_entity: the DataEngine database map is not bound to the Mongo storage; " +
+	"call BindDatabaseMap (Backend or MongoCommitter) with the DataEngine's frozen dataengine.DatabaseMap before committing DAO documents")
 
 // DatabaseMapBinder 由 DataEngine 装配时调用（它持有冻结的映射表），让 Remote 写 DAO 文档时与投影用同一张表。
 type DatabaseMapBinder interface {
@@ -58,12 +61,25 @@ func (s *MongoCommitter) BindDatabaseMap(databases *coredata.DatabaseMap) error 
 	return errors.New("remote_entity: a different database map is already bound")
 }
 
-func (s *MongoCommitter) boundDatabaseMap() (*coredata.DatabaseMap, error) {
-	databases := s.databases.Load()
-	if databases == nil && s.requireDatabaseMap {
-		return nil, ErrDatabaseMapNotBound
+// boundDatabaseMap 返回绑定的映射表；提交里有带库名的 DAO 写入或删除而表还没绑定时返回 ErrDatabaseMapNotBound。
+// 只写控制库的提交（没有 DAO 写入，或 DAO 没写库名、落在控制库）不需要映射表。
+func (s *MongoCommitter) boundDatabaseMap(commits []entity.RemoteCommit) (*coredata.DatabaseMap, error) {
+	if databases := s.databases.Load(); databases != nil {
+		return databases, nil
 	}
-	return databases, nil
+	for i := range commits {
+		for _, mutation := range commits[i].Mutations {
+			if mutation.Database != "" {
+				return nil, ErrDatabaseMapNotBound
+			}
+		}
+		for _, item := range commits[i].Deletes {
+			if item.Database != "" {
+				return nil, ErrDatabaseMapNotBound
+			}
+		}
+	}
+	return nil, nil
 }
 
 // AtomicCommitStore 在另一个基础设施组件拥有的 MongoDB 事务内应用 Remote Entity 提交。实现不得开启或提交嵌套会话，

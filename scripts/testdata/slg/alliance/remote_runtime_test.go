@@ -45,7 +45,7 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	backend, e := remoteentity.NewBackend(access, remoteentity.NewMongoCommitter(mongo, database, sid, 0))
 	check(t, e)
-	// 直接构造的提交器未绑定映射时按逻辑名 main 写 DAO 文档；与 wiring 的 DataEngine 装配一样先绑定。
+	// 直接构造的提交器没绑定映射表时拒绝写 DAO 文档（ErrDatabaseMapNotBound）；与 wiring 的 DataEngine 装配一样先绑定。
 	check(t, backend.BindDatabaseMap(databases))
 	cfg := remoteentity.DefaultConfig()
 	cfg.LockKey = prefix + ":lock"

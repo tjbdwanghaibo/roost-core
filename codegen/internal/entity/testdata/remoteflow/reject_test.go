@@ -262,6 +262,10 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	if err != nil {
 		t.Fatal(err)
 	}
+	databases := fixtureDatabases(t)
+	if err := backend.BindDatabaseMap(databases); err != nil {
+		t.Fatal(err)
+	}
 	cfg := remoteentity.DefaultConfig()
 	cfg.LockTTL = 3 * time.Second
 	assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: scoped, Backend: backend}, cfg, 1000, remoteentity.MongoBackendConfig{})
@@ -283,7 +287,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 			t.Errorf("Remote stop: %v", err)
 		}
 	})
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	if err != nil {
 		t.Fatal(err)
 	}

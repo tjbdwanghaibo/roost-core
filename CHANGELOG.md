@@ -14,6 +14,14 @@
 - **测试**：20 个排队事实语义用例改为两种模式各跑一遍；`TestApplyModeDecidesWhenACommittedMoveIsVisible`、`TestSyncApplyModeCapsViewsPerPlayer` 修前红。
 - **升级**：线上未部署，不做兼容。缺省从“应用线程”（上一条，未发版）变回“政策阶段同步应用”：提交后的下一次 Flush 就能看到结果；每个玩家挂接超过 9 个视野（含主视野与关系视野）的 Interest 会在构造时失败，按报错改为 `ApplyMode: policy.ApplyAsync`，并且在 Flush 之后断言排队事实结果的测试改用 `Drain`。`ManagerCounters` 多了 `PolicyDuration` 字段（按字段名构造 / 比较的代码不受影响，按位置构造的要补）。
 
+### Remote 存储没绑定库名映射表时写 DAO 文档一律报错（D9 收紧，维护者 2026-10-21 决定）
+
+- **行为收紧（`framework/remoteentity`）**：D9 只在 wiring 装配下拒绝“没绑定映射表就写 DAO 文档”，直接 `NewMongoCommitter` 的自建装配没绑定时按逻辑名写库；SLG 夹具审查（62f25848）发现自建装配漏 `BindDatabaseMap` 会把文档写进共享环境里名为 `main` 的库。现在任何构造方式下，提交里有带库名的 DAO 写入或删除而映射表没绑定时，`CommitRemote` / `CommitRemoteBatch` / `ApplyRemoteCommitsInTransaction` 返回 `remoteentity.ErrDatabaseMapNotBound`（错误文本说明用 `BindDatabaseMap` 绑定 DataEngine 冻结的同一张表），在写任何 DAO 文档前拒绝、整个 Mongo 事务回滚。已绑定、但表里某个逻辑库没配物理名时仍按 D9 用逻辑名本身，不变；只写控制库（没有 DAO 写入，或 DAO 没写库名）的提交不需要表。
+- **删除（不兼容）**：`remoteentity.MongoBackendConfig.RequireDatabaseMap`（现在总是要求），`wiring/remoteentity` 不再设置它。
+- **修前红**：`framework/remoteentity` 的 `TestMongoCommitterWritesDAODocumentsIntoTheMappedDatabase`（直接构造、不绑定、提交一条逻辑库 `main` 按 sid 分库的 DAO 写入）报 `directly constructed committer without a bound map: CommitRemote = <nil>, want ErrDatabaseMapNotBound`，同一提交在修前代码上落进 `main_7.guild`。
+- **调用点补绑**：`framework/remoteentity` 包内直接构造并提交 DAO 文档的测试改用绑定了空映射表（逻辑名即物理名）的 `newBoundMongoCommitter`；生成器 Remote 夹具 `codegen/internal/entity/testdata/remoteflow`（flow / reject / mirror / mirror_local）、`wiring/dataengine` 的 Remote 投影集成测试、game-demo 模板 `guild_ids_test.go.tmpl` 与 `framework/dataengine/engine` 的创建冲突用例让 Remote 存储与 `MongoStore` 绑定同一张表；SLG 夹具原本已绑定。
+- **升级**：线上未部署，不做兼容。自建装配（不经 wiring）要在第一次提交前调 `Backend.BindDatabaseMap` / `MongoCommitter.BindDatabaseMap`，传 DataEngine 投影所用的同一张 `dataengine.DatabaseMap`；已生成的 game-demo 工程里的 `game/controllers/player/guild_ids_test.go` 是 write-once 文件（`roost project sync` 不更新），需手工按模板加上绑定，否则该真实 Mongo 用例（`ROOST_GUILD_IT_MONGO_URI`）报 `ErrDatabaseMapNotBound`。见 [guide/03-dataengine §3](docs/framework/guide/03-dataengine.md#3-投影与幂等)、[KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)“DAO 库名映射”②。
+
 ### D19 多视野下 Nest 模式失守：AOI 批次只评估移动过的目标，排队事实改由应用线程分批应用（维护者 2026-10-21 要求分析、给出异步应用方向）
 
 - **现象**（[夜间补测 §14'.2](docs/performance/NIGHT-20261020.md#142-sync-aoi服务端--客户端两个进程)）：每玩家 16 个额外空间视野（1000 玩家 1.7 万个空间观察者）时 Nest 模式改值→客户端 P99 350～376 ms、帧数 38%，同负载 direct 58～62 ms。

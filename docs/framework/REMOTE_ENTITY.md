@@ -17,7 +17,7 @@ Remote Entity 只保留一条写链路：Nest 声明目标 → 全局顺序获�
 
 多实体写要求 `IRemoteAtomicBatchCommitter`，不支持时 fail-fast，绝不退化成逐实体提交。删除 commit 必须带完整 `RemoteDataDelete` 集合，codegen 自动生成。
 
-框架只接受完整的 `IRemoteEntityBackend`，并通过 `IRemoteEntityManager.SetBackend` 一次注入，缺少 load、原子 batch commit、snapshot loader 或 outbox 任一能力都会在编译期暴露。组合方式是 `remoteentity.NewBackend(loader, remoteentity.NewMongoCommitter(...))`：业务只实现 `LoadRemoteEntity`，Wiring中由 `WithMongoStorage(loader)` 装配（没有 `NewMongoBackend`）。
+框架只接受完整的 `IRemoteEntityBackend`，并通过 `IRemoteEntityManager.SetBackend` 一次注入，缺少 load、原子 batch commit、snapshot loader 或 outbox 任一能力都会在编译期暴露。组合方式是 `remoteentity.NewBackend(loader, remoteentity.NewMongoCommitter(...))`：业务只实现 `LoadRemoteEntity`，Wiring中由 `WithMongoStorage(loader)` 装配（没有 `NewMongoBackend`）。自建装配还要在第一次提交前用 DataEngine 投影所用的同一张 `dataengine.DatabaseMap` 调 `Backend.BindDatabaseMap`：没绑定时写 DAO 文档返回 `ErrDatabaseMapNotBound`（wiring 由 DataEngine Mod 在 Provide 时绑定）。
 
 ## WAL 与 outbox
 
