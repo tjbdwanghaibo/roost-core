@@ -38,6 +38,26 @@ const (
 	ActionStatusExpired
 )
 
+// String 返回状态名（指标标签用）：idle / running / success / failed / canceled / expired。
+func (s ActionStatus) String() string {
+	switch s {
+	case ActionStatusIdle:
+		return "idle"
+	case ActionStatusRunning:
+		return "running"
+	case ActionStatusSuccess:
+		return "success"
+	case ActionStatusFailed:
+		return "failed"
+	case ActionStatusCanceled:
+		return "canceled"
+	case ActionStatusExpired:
+		return "expired"
+	default:
+		return "unknown"
+	}
+}
+
 // MissionStatus 是任务的状态。
 type MissionStatus uint8
 

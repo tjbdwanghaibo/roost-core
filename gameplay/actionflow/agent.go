@@ -3,11 +3,24 @@ package actionflow
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+)
+
+// 动作指标（D21 A9，AgentConfig.Metrics 打开时写；缺省关闭）。标签 kind 是动作种类编号（uint8，有界），status 是
+// ActionStatus.String()。
+const (
+	// MetricActionsStarted：成为组的当前动作的次数（含 Start 即完成的）。
+	MetricActionsStarted = "actionflow.actions.started_total"
+	// MetricActionsEnded：结束的动作（含从未启动就被丢弃的排队项、被拒绝的延后 Start），按结束状态。
+	MetricActionsEnded = "actionflow.actions.ended_total"
+	// MetricActionsRunning：此刻是某组当前动作的动作数（全部打开指标的 Agent 合计）。
+	MetricActionsRunning = "actionflow.actions.running"
 )
 
 // Agent 是框架提供的 ActionList 默认装配（DESIGN-TODO D21 A1，对照 ssr 的 action_list 模块那一层）：一个实体的
@@ -69,6 +82,9 @@ type AgentConfig struct {
 	// MaxDeferredCommands / MaxDeferredSteps 同 ActionRunnerConfig / MissionRunnerConfig，两个 runner 共用。
 	MaxDeferredCommands int
 	MaxDeferredSteps    int
+	// Metrics 为 true 时写动作指标（MetricActionsStarted / Ended / Running）。每个动作开始、结束各写一次注册表，
+	// 缺省关闭（D21 A9，是否默认开启待维护者决定）。
+	Metrics bool
 }
 
 // NewAgent 为 owner 构造并接好 ActionRunner（或 BeatRunner）与 MissionRunner。
@@ -100,6 +116,14 @@ func NewAgent(owner entity.IThreadSafeEntity, config AgentConfig) (*Agent, error
 		},
 		MaxDeferredCommands: config.MaxDeferredCommands,
 		MaxDeferredSteps:    config.MaxDeferredSteps,
+	}
+	if config.Metrics {
+		runnerConfig.Hooks.OnTransition = countTransition
+		runnerConfig.Hooks.OnEnded = func(s ActionSnapshot, reason ActionReason) {
+			metrics.IncCounter(MetricActionsEnded, metrics.Labels{"kind": strconv.Itoa(int(s.Kind)),
+				"status": reason.ToActionResult(ActionStatusSuccess).Status.String()}, 1)
+			a.actionEnded(s, reason)
+		}
 	}
 	var err error
 	if config.Beat != nil {
@@ -197,6 +221,16 @@ func (a *Agent) CurMission() Mission { return a.missions.CurMission() }
 func (a *Agent) EndCurMission(reason ActionReason) { a.missions.EndCurMission(reason) }
 
 // --- 接线 ---
+
+// countTransition 记动作成为 / 不再是组的当前动作（打开指标时的 OnTransition）。
+func countTransition(s ActionSnapshot, entering bool) {
+	if entering {
+		metrics.IncCounter(MetricActionsStarted, metrics.Labels{"kind": strconv.Itoa(int(s.Kind))}, 1)
+		metrics.AddGauge(MetricActionsRunning, nil, 1)
+		return
+	}
+	metrics.AddGauge(MetricActionsRunning, nil, -1)
+}
 
 // missionTag 是新动作的归属任务：任务回调运行期间（MissionRunner 正在执行）发起的动作属于当前任务。
 func (a *Agent) missionTag() int64 {

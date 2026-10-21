@@ -40,3 +40,16 @@ type Strategy interface {
 type StoppableStrategy interface {
 	Stop(ctx *Context, reason string)
 }
+
+// Event 是投给 AI 的一个游戏事件（D21 C1）：Kind 由业务定义（被攻击、看见敌人、状态变化、Buff 生效……），Data 是事件
+// 内容。框架不定义事件词表（ssr 的约 25 个具体事件是玩法词表，不照搬）。
+type Event struct {
+	Kind uint16
+	Data any
+}
+
+// EventStrategy 是接收事件的策略（可选）。BehaviorStrategy 实现它：事件缓冲到下一拍，树里用 EventReceived 叶子或
+// BehaviorContext.HasEvent / TakeEvent 读。
+type EventStrategy interface {
+	OnEvent(ctx *Context, ev Event)
+}

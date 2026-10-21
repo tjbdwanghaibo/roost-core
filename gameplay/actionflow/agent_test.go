@@ -9,6 +9,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // Agent 的接线（D21 A1）：动作结束先送任务、再送观察者；任务回调里发起的动作归属任务、随任务结束；Clear 先结束
@@ -297,5 +298,69 @@ func TestPlanRetriesAreCountedPerStep(t *testing.T) {
 	}
 	if info := agent.Missions().MissionInfo(); info.Status != MissionStatusSuccess || first.starts != 2 || second.starts != 2 {
 		t.Fatalf("mission %+v, starts %d / %d (want each step retried once, then success)", info, first.starts, second.starts)
+	}
+}
+
+// --- D21 第 5 期：动作指标（可选） ---
+
+// 打开 Metrics 时：动作成为当前动作记一次 started（按种类）、结束记一次 ended（按种类与结束状态，含从未启动就被丢弃的
+// 排队项），running 是此刻的当前动作数；不打开时什么都不写。
+func TestAgentMetricsCountStartsEndsAndRunningActions(t *testing.T) {
+	registry := metrics.NewRegistry()
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+
+	build := func(enabled bool) *Agent {
+		owner := &beatEntity{entity.NewEntityBase(4<<20, entity.EntityCategoryOther, true)}
+		agent, err := NewAgent(owner, AgentConfig{Registry: newActionOnlyRegistry(t), GroupForKind: func(kind ActionKind) (ActionGroup, bool) { return ActionGroup(kind), true }, Metrics: enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return agent
+	}
+	quiet := build(false)
+	if _, err := quiet.CreateAction(1, &runnerTestAction{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(registry.Snapshot()); got != 0 {
+		t.Fatalf("an agent without metrics wrote %d series", got)
+	}
+
+	agent := build(true)
+	if _, err := agent.CreateAction(1, &runnerTestAction{label: "walk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.EnqueueAction(1, &runnerTestAction{label: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.CreateAction(2, &runnerTestAction{instant: true}); err != nil {
+		t.Fatal(err)
+	}
+	agent.ClearNextActions()
+	if err := agent.Runner().End(1, true, NewActionReason("stop")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.CreateAction(1, &runnerTestAction{label: "again"}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, m := range registry.Snapshot() {
+		key := m.Name
+		if kind := m.Labels["kind"]; kind != "" {
+			key += " " + kind
+		}
+		if status := m.Labels["status"]; status != "" {
+			key += " " + status
+		}
+		got[key] = m.Value
+	}
+	want := map[string]int64{
+		MetricActionsStarted + " 1": 2, MetricActionsStarted + " 2": 1,
+		MetricActionsEnded + " 1 canceled": 2, MetricActionsEnded + " 2 success": 1,
+		MetricActionsRunning: 1,
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("metrics %v, want %v", got, want)
 	}
 }

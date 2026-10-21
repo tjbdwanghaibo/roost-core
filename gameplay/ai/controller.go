@@ -223,6 +223,25 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 	}
 }
 
+// OnEvent 把一个事件交给当前策略（实现了 EventStrategy 的），返回是否送达。冻结、切换中、没有策略时丢弃（对照 ssr：
+// 冻结与手动操作时屏蔽决策）；动作 / 任务结束不受影响，照常送达。策略在 OnEvent 里请求的切换同样延后到回调返回后。
+// 状态变化要让 AI 知道时，业务在 state 的观察者里调它（例如 Event{Kind: 状态变化, Data: state.Change}）。
+func (c *Controller) OnEvent(ev Event) bool {
+	if !c.ready() {
+		return false
+	}
+	receiver, ok := c.strategy.(EventStrategy)
+	if !ok {
+		return false
+	}
+	c.enterCallback()
+	defer c.leaveCallback()
+	if err := callStrategyEvent(receiver, c.context(c.now()), ev); err != nil {
+		c.report(err)
+	}
+	return true
+}
+
 // Shutdown 卸下当前策略：调它的 Stop（若实现了 StoppableStrategy）并发布“变为无策略”。
 // 与 SetStrategy 不同，它不调 EndActions，在途动作不会被结束——要结束的话见
 // StoppableStrategy 的说明。在策略回调里调用时延后到
@@ -389,6 +408,11 @@ func callStrategyActionEnd(strategy Strategy, ctx *Context, id int64, kind coref
 func callStrategyMissionEnd(strategy Strategy, ctx *Context, mission coreflow.Mission, reason coreflow.ActionReason) (err error) {
 	defer recoverStrategyPanic("mission end", &err)
 	strategy.OnMissionEnd(ctx, mission, reason)
+	return nil
+}
+func callStrategyEvent(strategy EventStrategy, ctx *Context, ev Event) (err error) {
+	defer recoverStrategyPanic("event", &err)
+	strategy.OnEvent(ctx, ev)
 	return nil
 }
 func callStrategyStop(strategy Strategy, ctx *Context, reason string) (err error) {
