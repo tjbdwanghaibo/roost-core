@@ -73,6 +73,9 @@ type BeatRunner struct {
 	// ticking 在某个组的一拍 tick 期间为 true：拍里的时间已经是 Beat.Now（挂了域时是域时间），populate 不再换。
 	ticking bool
 
+	// syncExtra 由 Behavior 设置：Sync 时一并重新挂上同一宿主上由 Behavior 管理的任务心跳（"<Name>/mission"）。
+	syncExtra func() error
+
 	userTransition func(ActionSnapshot, bool)
 	userFreeze     func(ActionGroup, bool)
 	userPopulate   func(*ActionContext, time.Time)
@@ -153,6 +156,8 @@ func (b *BeatRunner) Ticking() bool {
 // Sync 按各组的当前动作重新挂上心跳（需要周期 tick 而心跳没在跳的组），返回挂不上的错误。业务在 Remote 托管实体
 // 回到独占之后调用：运行中进入共享模式时框架停掉了心跳（共享模式不允许挂心跳，回到独占不自动恢复），这期间动作
 // 留在 runner 里、不推进。也可以在一个随后回滚的 handler 改过 runner 之后用它让心跳与 runner 重新一致（见包说明）。
+// 属于 Behavior 的 BeatRunner 同时重新挂上 Behavior 的任务心跳（当前任务在运行、需要周期 tick 而没在跳时）。挂不上时
+// 只返回错误，不结束动作或任务（共享期间调用的结果与之前相同，回到独占后再调一次即可）。
 func (b *BeatRunner) Sync() error {
 	var errs []error
 	for _, group := range b.sortedGroups() {
@@ -160,6 +165,9 @@ func (b *BeatRunner) Sync() error {
 		if gb.current != 0 && gb.interval > 0 && !gb.reg.Active() && !b.runner.Frozen(group) {
 			errs = append(errs, b.startGroup(gb))
 		}
+	}
+	if b.syncExtra != nil {
+		errs = append(errs, b.syncExtra())
 	}
 	return errors.Join(errs...)
 }

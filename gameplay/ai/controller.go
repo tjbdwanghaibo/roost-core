@@ -82,15 +82,18 @@ func (c *Controller) SetStrategy(next Strategy) error {
 		c.pending = &pendingSwitch{next: next}
 		return nil
 	}
+	if sameStrategy(next, c.strategy) {
+		// 设成当前策略不是替换（不问 CanStopByNext、不 Init / Stop），只按当前状态重新对齐 AI 心跳：Remote 托管实体
+		// 运行中进入共享模式时框架停掉了 "ai" 心跳，回到独占不自动恢复，业务重新设置当前策略来恢复（挂不上经 OnError）。
+		c.syncBeat()
+		return nil
+	}
 	canStop, err := callStrategyCanStop(c.strategy, next)
 	if err != nil {
 		return err
 	}
 	if c.strategy != nil && !canStop {
 		return ErrStrategyRejected
-	}
-	if sameStrategy(next, c.strategy) {
-		return nil
 	}
 	c.switching = true
 	defer func() { c.switching = false }()

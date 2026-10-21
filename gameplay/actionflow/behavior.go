@@ -142,6 +142,9 @@ func NewBehavior(owner entity.IThreadSafeEntity, config BehaviorConfig) (*Behavi
 	if err != nil {
 		return nil, err
 	}
+	if b.beat != nil {
+		b.beat.syncExtra = b.resyncMissionBeat
+	}
 	b.missions, err = NewMissionRunner(MissionRunnerConfig{
 		Registry:    config.Registry,
 		DefaultKind: config.DefaultMission,
@@ -309,6 +312,30 @@ func (b *Behavior) syncMissionBeat() {
 	if err := b.mission.Start(); err != nil {
 		b.failMission(err)
 	}
+}
+
+// resyncMissionBeat 是 BeatRunner.Sync 里的任务心跳对齐（Remote 托管实体回到独占之后，业务经 Beat().Sync() 调用）：
+// 运行中进入共享模式时框架停掉了任务心跳，任务留在 runner 里不被 tick（步骤时限不检查）。当前任务在运行、需要周期
+// tick 而心跳没在跳时按它的周期重新启动；挂不上只返回错误，不结束任务（与动作组的 Sync 相同），不同于任务推进时的
+// syncMissionBeat（那时挂不上以失败结束任务）。
+func (b *Behavior) resyncMissionBeat() error {
+	m := b.missions.CurMission()
+	if b.mission == nil || b.mission.Active() || m == nil || m.Status() != MissionStatusRunning {
+		return nil
+	}
+	interval := missionPeriod(m)
+	if interval == 0 {
+		return nil
+	}
+	if b.mission.Period() != interval {
+		if err := b.mission.SetPeriod(interval); err != nil {
+			return fmt.Errorf("actionflow: mission heartbeat: %w", err)
+		}
+	}
+	if err := b.mission.Start(); err != nil {
+		return fmt.Errorf("actionflow: mission heartbeat: %w", err)
+	}
+	return nil
 }
 
 func (b *Behavior) failMission(err error) {

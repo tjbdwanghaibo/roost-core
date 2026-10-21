@@ -247,6 +247,26 @@ func TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat(t *testing.T) 
 	}
 }
 
+// Remote 托管实体运行中进入共享模式时框架停掉任务心跳（这里直接 Stop 模拟），回到独占后业务经 Beat().Sync() 恢复：
+// 动作组与任务心跳一起重新挂上，任务没有被结束（真实 Remote 下的同一流程见 movement 的 shared_test.go）。
+func TestBeatSyncResumesAStoppedMissionHeartbeat(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	behavior, _, d := newBeatBehaviorForTest(t, &now)
+	plan := MissionPlan{Steps: []MissionStep{{Action: 1, Param: &runnerTestAction{label: "never ends"}, Timeout: time.Minute}}}
+	if err := behavior.SetMission(1, plan); err != nil {
+		t.Fatal(err)
+	}
+	behavior.MissionReg().Stop()
+	behavior.Beat().Reg(1).Stop()
+	if err := behavior.Beat().Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if !behavior.MissionReg().Active() || !behavior.Beat().Reg(1).Active() || d.Registered() != 2 || behavior.CurMission() == nil {
+		t.Fatalf("after Sync: mission beat %v group beat %v registered %d mission %v",
+			behavior.MissionReg().Active(), behavior.Beat().Reg(1).Active(), d.Registered(), behavior.CurMission())
+	}
+}
+
 // 没有时限的步不挂任务心跳；从有时限的步走到没有时限的步，心跳停。取消的步不重试。
 func TestTheMissionHeartbeatFollowsTheCurrentStep(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)

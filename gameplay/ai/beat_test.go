@@ -65,6 +65,23 @@ func newBeatControllerForTest(t *testing.T, hooks ControllerHooks) (*Controller,
 	return c, d
 }
 
+// 重新设置当前策略不是替换（不问 CanStopByNext、不 Init / Stop），只按当前状态重新对齐心跳：Remote 托管实体回到独占之后，
+// 共享期间被框架停掉的 "ai" 心跳由业务这样恢复（这里直接 Stop 模拟框架停掉；真实 Remote 见 movement 的 shared_test.go）。
+func TestSettingTheCurrentStrategyAgainResumesAStoppedBeat(t *testing.T) {
+	c, d := newBeatControllerForTest(t, ControllerHooks{})
+	strategy := &refusingStrategy{controllerTestStrategy{name: "keep"}} // 拒绝被替换，也照样能重新设置自己
+	if err := c.SetStrategy(strategy); err != nil {
+		t.Fatal(err)
+	}
+	c.BeatReg().Stop()
+	if err := c.SetStrategy(strategy); err != nil {
+		t.Fatalf("setting the current strategy again: %v", err)
+	}
+	if !c.BeatReg().Active() || d.Registered() != 1 || c.Strategy() != strategy {
+		t.Fatalf("after setting the current strategy again: beat %v registered %d", c.BeatReg().Active(), d.Registered())
+	}
+}
+
 // 周期由策略决定（不实现取 BeatConfig.Period，返回 0 停），没有策略或无定时的冻结时停；每拍之后按策略重新取档。
 func TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen(t *testing.T) {
 	c, d := newBeatControllerForTest(t, ControllerHooks{})
