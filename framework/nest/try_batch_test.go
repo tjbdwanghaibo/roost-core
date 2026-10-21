@@ -651,3 +651,52 @@ func TestTryBatchAlternatesWithOrdinaryJobs(t *testing.T) {
 		t.Fatalf("batch job starved behind the ordinary backlog: %v", got)
 	}
 }
+
+// loadedOnlyRecorder 记录 Get 是否带 LoadedEntitiesOnly（批量作业只读已加载的实体，不冷加载）。
+type loadedOnlyRecorder struct {
+	entity.Getter
+	coldCalls atomic.Int32
+}
+
+func (g *loadedOnlyRecorder) Get(ctx context.Context, id int64, category entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if !entity.LoadedEntitiesOnly(ctx) {
+		g.coldCalls.Add(1)
+	}
+	return g.Getter.Get(ctx, id, category)
+}
+
+// 卸载窗口：批量作业只经 LoadedEntitiesOnly 读目标；目标不在内存（卸载后没有重载）时交回 ErrEntityNotFound，不冷加载、
+// 不执行 handler。
+// 强制点是 entity.LoadedEntitiesOnly 认业务 worker 身份（批量作业在业务池 worker 上执行）；执行器另包的 loadedGetter
+// 只是防御，去掉它本用例仍绿（变异已核对），本用例是契约检查。
+func TestTryBatchReadsOnlyLoadedTargets(t *testing.T) {
+	ResetHandlersForTest()
+	t.Cleanup(ResetHandlersForTest)
+	base := newMockGetter()
+	loaded := mustBuildCastID(t, 8651, 1, nestLocalKind)
+	unloaded := mustBuildCastID(t, 8652, 1, nestLocalKind)
+	base.Add(newMockEntity(loaded, 1))
+	getter := &loadedOnlyRecorder{Getter: base}
+	var ran atomic.Int32
+	MustRegisterMemoryHandler(NewHandlerName("tb_loaded_beat"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		ran.Add(1)
+		return nil, nil
+	})
+	engine := startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 1, QueueCap: 16})
+	hb := newHandBackRecorder()
+	if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{
+		{Handler: NewHandlerName("tb_loaded_beat"), ID: loaded},
+		{Handler: NewHandlerName("tb_loaded_beat"), ID: unloaded},
+	}, hb.handBack); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "hand-back", func() bool { _, n := hb.snapshot(); return n == 1 })
+	waitFor(t, "loaded target", func() bool { return ran.Load() == 1 })
+	got, _ := hb.snapshot()
+	if !errors.Is(got[unloaded], ErrEntityNotFound) {
+		t.Fatalf("unloaded target hand-back %v, want ErrEntityNotFound", got[unloaded])
+	}
+	if n := getter.coldCalls.Load(); n != 0 {
+		t.Fatalf("%d Get calls without LoadedEntitiesOnly: a try-batch must not cold-load", n)
+	}
+}
