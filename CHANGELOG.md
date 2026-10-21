@@ -94,7 +94,7 @@
 - **新增指标**：`nest.dispatch.try_batch.cost`、`executed.total`、`failed.total`、`converted.total`（冲突转单目标次数）、`handed_back.total`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md)）。批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计慢的）。
 - **业务时间（与 D22-1 一致）**：新增 `fctx.Context.Refreeze`（同一请求上下文里开始新的一次执行：重新冻结 Now / NowMilli、清 `Frozen`）；批量作业每个目标调用一次，`Beat.Now` 与场景时间域的域时间按拍各冻结一次。
 - **测试**：Nest 11 个、心跳 6 个、wiring 1 个、fctx 1 个新用例；现有心跳用例（驱动、真实 Nest、Remote 迁移与共享模式）在 `dispatch` / `batch` 两种方式下各跑一遍；23 条变异核对 22 红 1 绿（[性能报告 §5](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#5-语义变异核对)）。
-- **性能**：压测暂停，待补（维护者 2026-10-21 要求先完成代码；复跑步骤见 [NEST-BATCH-HEARTBEAT-20261021 §4](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#4-待补测复跑步骤)）。方案 D 的实验记录随仓保留在 [NEST-DISPATCH-BATCH-20261021](docs/performance/NEST-DISPATCH-BATCH-20261021.md)。
+- **性能**：2026-10-22 补测：不达标，建议暂不改缺省——同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核（另一时段 3.42 / 0.91 / 0.33），业务 p99 X 0.078 / C 0.235ms；跳拍 / 准入失败 / 快池拒绝 0；普通短 handler 不退化（−9.9%）（[NEST-BATCH-HEARTBEAT-20261021 §3～§3E](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#3-2026-10-22-补测正式对比3-轮中位数-最小最大)）。缺省仍是 `dispatch`。方案 D 的实验记录随仓保留在 [NEST-DISPATCH-BATCH-20261021](docs/performance/NEST-DISPATCH-BATCH-20261021.md)。
 - **升级**：无存储 / 协议变化。按日志文本匹配的使用方注意：批内目标失败仍打 `async handler failed`，不再打逐条的慢派发 trace。
 - **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)。
 

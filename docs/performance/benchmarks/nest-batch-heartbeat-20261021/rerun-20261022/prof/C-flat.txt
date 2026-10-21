@@ -1,0 +1,60 @@
+File: bin-final.test
+Type: cpu
+Time: 2026-10-22 01:00:01 CST
+Duration: 13.21s, Total samples = 22.91s (173.37%)
+Showing nodes accounting for 19.68s, 85.90% of 22.91s total
+Dropped 289 nodes (cum <= 0.11s)
+      flat  flat%   sum%        cum   cum%
+     8.10s 35.36% 35.36%      8.10s 35.36%  runtime.usleep
+     1.56s  6.81% 42.16%      1.56s  6.81%  runtime.pthread_cond_wait
+     0.80s  3.49% 45.66%      1.45s  6.33%  runtime.mapaccess1_fast64
+     0.58s  2.53% 48.19%      1.70s  7.42%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*EntityGuard).TryRequireEntity
+     0.57s  2.49% 50.68%      0.57s  2.49%  runtime.pthread_cond_signal
+     0.54s  2.36% 53.03%      0.70s  3.06%  github.com/tjbdwanghaibo/roost-core/framework/nest.rejectPendingEntityGroupTransition
+     0.49s  2.14% 55.17%      0.70s  3.06%  runtime.mapaccess2_fast64
+     0.48s  2.10% 57.27%      0.52s  2.27%  runtime.nanotime1
+     0.48s  2.10% 59.36%      0.48s  2.10%  sync/atomic.(*Int32).Add (inline)
+     0.41s  1.79% 61.15%      0.41s  1.79%  runtime.madvise
+     0.39s  1.70% 62.85%      0.77s  3.36%  runtime.unlock2
+     0.31s  1.35% 64.21%      0.50s  2.18%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).beat
+     0.30s  1.31% 65.52%      0.32s  1.40%  runtime.walltime
+     0.29s  1.27% 66.78%      0.90s  3.93%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*tryBatchExec).runLocked.func1.4
+     0.27s  1.18% 67.96%      0.27s  1.18%  runtime.kevent
+     0.22s  0.96% 68.92%      0.25s  1.09%  github.com/tjbdwanghaibo/roost-core/framework/entity.NormalizeFullID
+     0.21s  0.92% 69.84%      0.26s  1.13%  runtime.mapassign_fast64
+     0.18s  0.79% 70.62%      0.29s  1.27%  runtime.mallocgcSmallScanNoHeaderSC4
+     0.16s   0.7% 71.32%      0.16s   0.7%  runtime.cheaprandu64 (inline)
+     0.15s  0.65% 71.98%      8.93s 38.98%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*tryBatchExec).run
+     0.15s  0.65% 72.63%      0.59s  2.58%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).deliver
+     0.13s  0.57% 73.20%      0.13s  0.57%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*hbEntity).Base
+     0.12s  0.52% 73.72%      0.56s  2.44%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*tryBatchExec).resetMsg
+     0.12s  0.52% 74.25%      1.57s  6.85%  github.com/tjbdwanghaibo/roost-core/infra/base/fctx.CurrentContext
+     0.11s  0.48% 74.73%      2.12s  9.25%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope
+     0.11s  0.48% 75.21%      1.05s  4.58%  github.com/tjbdwanghaibo/roost-core/framework/nest.invokeBusinessHandler
+     0.11s  0.48% 75.69%      0.61s  2.66%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.init.0.func1
+     0.11s  0.48% 76.17%      0.45s  1.96%  internal/runtime/maps.(*Map).Delete
+     0.11s  0.48% 76.65%      0.27s  1.18%  runtime.mutexSampleContention (inline)
+     0.11s  0.48% 77.13%      8.19s 35.75%  runtime.stealWork
+     0.10s  0.44% 77.56%      1.63s  7.11%  github.com/tjbdwanghaibo/roost-core/framework/nest.runTransaction
+     0.10s  0.44% 78.00%      0.13s  0.57%  github.com/tjbdwanghaibo/roost-core/infra/base/fctx.(*Context).ApplySnapshot
+     0.09s  0.39% 78.39%      0.77s  3.36%  runtime.chanrecv
+     0.08s  0.35% 78.74%      0.21s  0.92%  internal/runtime/maps.(*table).Delete
+     0.08s  0.35% 79.09%      0.30s  1.31%  internal/sync.(*Mutex).lockSlow
+     0.08s  0.35% 79.44%      0.13s  0.57%  runtime.mallocgcSmallScanNoHeaderSC2
+     0.07s  0.31% 79.75%      4.61s 20.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*tryBatchExec).runLocked.func1
+     0.07s  0.31% 80.05%      0.47s  2.05%  github.com/tjbdwanghaibo/roost-core/framework/nest.loadedGetter.Get
+     0.06s  0.26% 80.31%     10.56s 46.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).runTryBatchLocked.func1
+     0.06s  0.26% 80.58%      1.15s  5.02%  github.com/tjbdwanghaibo/roost-core/framework/nest.invokeMemoryHandler
+     0.06s  0.26% 80.84%      0.15s  0.65%  runtime.mallocgcSmallScanNoHeaderSC5
+     0.05s  0.22% 81.06%      0.15s  0.65%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*EntityBase).IsRemoved
+     0.05s  0.22% 81.27%      0.31s  1.35%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*EntityGuard).doReleaseEntity
+     0.05s  0.22% 81.49%      0.12s  0.52%  runtime.(*_panic).nextDefer
+     0.05s  0.22% 81.71%      0.57s  2.49%  runtime.nanotime (inline)
+     0.04s  0.17% 81.89%      0.38s  1.66%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*EntityGuard).ReleaseEntity
+     0.04s  0.17% 82.06%      1.67s  7.29%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).invokeTryBatchTransaction
+     0.04s  0.17% 82.23%      0.29s  1.27%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).prepareTryBatchGroupLocked
+     0.04s  0.17% 82.41%      0.32s  1.40%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).releaseIDsLocked
+     0.04s  0.17% 82.58%      0.51s  2.23%  github.com/tjbdwanghaibo/roost-core/framework/nest.recoverRelease
+     0.04s  0.17% 82.76%      0.46s  2.01%  github.com/tjbdwanghaibo/roost-core/framework/nest.tryLockTryBatchTarget.func1
+     0.04s  0.17% 82.93%      0.30s  1.31%  github.com/tjbdwanghaibo/roost-core/infra/base/clock.(*logicClock).real
+     0.04s  0.17% 83.11%      0.31s  1.35%  runtime.lock2

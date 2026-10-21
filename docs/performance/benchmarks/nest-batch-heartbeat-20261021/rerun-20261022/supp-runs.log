@@ -1,0 +1,43 @@
+02:43:32 round=1 Cs100 start loadavg={ 2.76 2.51 2.61 }
+02:43:51 Cs100 r1 ok
+02:44:22 round=1 Cg4 start loadavg={ 2.90 2.59 2.64 }
+02:44:42 Cg4 r1 ok
+02:45:13 round=1 Cg16 start loadavg={ 2.62 2.57 2.63 }
+02:45:34 Cg16 r1 ok
+02:46:05 round=1 none start loadavg={ 2.87 2.70 2.67 }
+02:46:24 none r1 ok
+02:46:55 round=1 X start loadavg={ 2.12 2.55 2.62 }
+02:47:13 X r1 ok
+02:47:45 round=1 Y start loadavg={ 2.28 2.54 2.61 }
+02:48:03 Y r1 ok
+02:48:34 round=1 C start loadavg={ 2.09 2.45 2.57 }
+02:48:53 C r1 ok
+02:49:24 round=2 none start loadavg={ 2.89 2.64 2.64 }
+02:49:43 none r2 ok
+02:50:14 round=2 X start loadavg={ 3.15 2.74 2.67 }
+02:50:32 X r2 ok
+02:51:03 round=2 Y start loadavg={ 3.17 2.87 2.73 }
+02:51:22 Y r2 ok
+02:51:53 round=2 C start loadavg={ 3.00 2.83 2.72 }
+02:52:12 C r2 ok
+02:52:43 round=2 Cs100 start loadavg={ 2.85 2.85 2.73 }
+02:53:02 Cs100 r2 ok
+02:53:33 round=2 Cg4 start loadavg={ 2.66 2.82 2.73 }
+02:53:51 Cg4 r2 ok
+02:54:23 round=2 Cg16 start loadavg={ 2.01 2.62 2.66 }
+02:54:41 Cg16 r2 ok
+02:55:12 round=3 C start loadavg={ 3.15 2.86 2.74 }
+02:55:31 C r3 ok
+02:56:02 round=3 Cs100 start loadavg={ 2.59 2.80 2.73 }
+02:56:21 Cs100 r3 ok
+02:56:52 round=3 Cg4 start loadavg={ 2.56 2.78 2.73 }
+02:57:10 Cg4 r3 ok
+02:57:41 round=3 Cg16 start loadavg={ 2.54 2.76 2.72 }
+02:58:00 Cg16 r3 ok
+02:58:31 round=3 none start loadavg={ 2.82 2.83 2.75 }
+02:58:50 none r3 ok
+02:59:21 round=3 X start loadavg={ 3.08 2.97 2.81 }
+02:59:39 X r3 ok
+03:00:11 round=3 Y start loadavg={ 3.46 3.13 2.88 }
+03:00:29 Y r3 ok
+03:00:29 all done
