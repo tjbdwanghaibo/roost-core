@@ -73,7 +73,9 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 **跟随**：空间视野跟随一个实体时视点取实体位置、随实体移动（`Move`、事务内的 `QueueMove` / `QueueSpatial`），并且看不见它自己跟随的实体；`SetViewFollow(id, 0)` 不再跟随，视点停在当前位置；换成跟随另一个实体时跳到那个实体的位置。实体 ID 数值恰好等于某个玩家 ID 的单位照常可见。
 
-**视野操作不进 Nest、不排队**（维护者 2026-10-20 决定）：定义、修改、成员变更、挂接都是直接调用，只取视野登记表自己的锁，参数当场校验并写进登记表，效果由下一次 `Apply`（排队模式下由 Manager 的政策阶段，ApplyAsync 时也可能由 Interest 的应用线程）按调用顺序应用，不等待空间计算，可以在业务线程里调用。它们不走提交门：事务里决定的视野变化（入盟、放眼、组队）由业务在**提交之后**调用。位置不同：它是 DAO 驱动的事实，`QueueMove(e, at)` / `QueueSpatial(e, at, blocks)` 仍走提交门，提交确认后移动目标并带上跟随它的视野，回滚不移动。
+**视野操作不进 Nest、不排队**（维护者 2026-10-20 决定）：定义、修改、成员变更、挂接都是直接调用，参数当场校验并写进登记表，不等待空间计算，可以在业务线程里调用。它们不走提交门：事务里决定的视野变化（入盟、放眼、组队）由业务在**提交之后**调用。位置不同：它是 DAO 驱动的事实，`QueueMove(e, at)` / `QueueSpatial(e, at, blocks)` 仍走提交门，提交确认后移动目标并带上跟随它的视野，回滚不移动。
+
+**调用只登记、按调用顺序生效**（单写者，2026-10-21，[重构方案](../../maintenance/REFACTOR-2026-10-21-interest-single-writer.md)）：Interest 的全部写入口——`Enter` / `Watch` / `Leave` / `Unwatch` / `Show` / `Hide` / `Move` / `MoveView` / `SetObserverView` / `Resubscribe`、视野操作、`QueueMove` / `QueueSpatial` / `QueueObservedBlocks`——只取一把登记侧短锁：校验参数、改登记事实、追加一条有序日志，错误当场返回，**不做 AOI 计算，不等 AOI 批次**，可以在 Nest 快池的 handler 与提交后回调里直接调用。日志由唯一的应用方按调用顺序执行（同步模式在 Manager Flush 的政策阶段，异步模式在 Interest 的应用线程），所以先调用的先生效对全部入口成立：一条已提交、还没应用的移动之后的 `Leave` → `Enter`、`Hide` → `Show` 或再次 `Enter`，结果与“先应用移动、再做之后的操作”相同。还没确认的移动被同一目标之后的撤除 / 再次放置越过时，它确认后作废（目标的代际号已换），不会把目标或跟随视野拖回去。效果在下一次结算可见（同步模式：下一次 Flush；异步模式：应用线程走到之后的 Flush）。政策阶段里被拒的订阅交给 `InterestConfig.OnRefusal`（在政策阶段调用，只能记日志）。`Apply()` 是“在调用方线程排空并结算”，给测试、工具和离线驱动用，会等正在进行的一步，**不在快池上调用**；`Visible` / `Seen` / `ViewVisible` / `ObservedBlocks` 是诊断读，同样取应用侧锁、先执行已登记的条目。`Leave` 之后同一次结算里又被持有的 pair（断线重连、顶号：业务在中间关闭 / 重开了会话或注销 / 重新登记了目标）重新说给 Manager，客户端收到一次全量。
 
 **上限**：`MaxVisible` 与 `MaxObserverBlocks` 按每个空间视野计；`MaxViewsPerPlayer`（含主视野与关系视野；缺省 ApplySync 9、ApplyAsync 64，ApplySync 下显式超过 9 拒绝构造，见下“两种应用模式”）与 `MaxPlayersPerView`（缺省 4096）超出时 `AttachView` / `Enter` / `Watch` 返回 `ErrViewLimit`，计 `entitysync_interest_view_limit_rejected_total{reason="views_per_player"|"players_per_view"}`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算一个玩家的块预算，超过 `MaxPlayerBlocks`（缺省 `1024 × 64`）拒绝构造（`ErrInterestBudget`）。一个会话持有的目标还受 Manager 的 `Limits.MaxObjects`（缺省 100）约束，一个玩家挂很多视野时一并调大。
 
@@ -90,8 +92,8 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 | | ApplySync（缺省） | ApplyAsync |
 | --- | --- | --- |
-| 在哪里应用 | Manager Flush 的政策阶段，应用一批（不超过 `BatchSize`）随即结算；没有额外线程 | 每个 Interest 一个应用线程分批应用，Flush 的政策阶段只结算 |
-| 结果何时可见 | 提交后的下一次 Flush | 应用线程走到之后的那次 Flush；提交后立即 Flush 不一定看得到，测试与停机用 `Drain` |
+| 在哪里应用 | Manager Flush 的政策阶段，一批接一批（每批不超过 `BatchSize`）直到没有可应用的条目或用完同步周期一半的耗时预算，随即结算；没有额外线程 | 每个 Interest 一个应用线程连续分批应用，Flush 的政策阶段只结算 |
+| 结果何时可见 | 提交 / 调用后的下一次 Flush（积压超过预算时顺延到下一次，on_change 下立即再来一轮） | 应用线程走到之后的那次 Flush；提交后立即 Flush 不一定看得到，测试与停机用 `Drain` |
 | 每玩家视野上限 | 主视野 + 8 个额外视野（`SyncApplyMaxViewsPerPlayer` = 9，关系视野也计入）；`MaxViewsPerPlayer` 显式超过即拒绝构造，报错提示改用 ApplyAsync | 不受此限（`MaxViewsPerPlayer` 缺省 64） |
 | 代价 | AOI 计算在 Flush 关键路径上，视野越多 Flush 越长 | periodic 下尾延迟约多一个同步周期（截止前到达的事实等下一周期结算）；多一个常驻线程 |
 | 适合 | 每玩家额外视野不超过 8：MMO、MOBA、卡牌、休闲 / 放置、塔防、自走棋 | 每玩家额外视野多于 8：RTS（每个单位一个视野）、大量召唤物 / 眼位 / 侦察单位 |
@@ -105,7 +107,7 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 | RTS | 每个单位一个视野 | ApplyAsync |
 | 大量召唤物 / 眼位 / 侦察单位的玩法 | 十几个以上 | ApplyAsync |
 
-选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），同一实体按入队顺序生效，Leave / Hide 对排队事实的改写相同，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途事实全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Move` / `Apply`，不经提交门）不受模式影响，AOI 在调用方线程里算，但视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
+选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），全部入口按调用顺序生效，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途条目全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Enter` / `Move` / `SetObserverView`……，不经提交门）与排队事实进同一条日志，由所选模式的应用方执行，视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
 
 **视野参数**（D14 B1）。每个空间视野有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
 

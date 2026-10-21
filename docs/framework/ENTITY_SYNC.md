@@ -60,7 +60,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 ## 组织方式（`framework/sync/entitysync/policy`）
 
 - `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）上的视野（D19）：空间视野（玩家主视野与业务的空间视野，一个视野是 AOI 的一个观察者）与关系视野（显式实体集合），玩家与视野多对多；按 (玩家, 目标) 聚合成一份订阅——第一个持有的视野订、最后一个释放的视野撤，层级包含取高、不包含取并集；
-  band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
+  band → profile；全部写入口只登记一条有序日志（不做 AOI 计算、不等批次），由 Manager 的政策阶段（ApplySync）或 Interest 的应用线程（ApplyAsync）按调用顺序执行并说给 Manager，被拒的 subscribe 每次结算再说，直到被接受或 pair 释放（政策阶段的拒绝交给 `InterestConfig.OnRefusal`；测试与工具可用 `Apply()` 在调用方线程排空并结算，返回 `Refusal`，`Retry` 供调用方分日志级别）。
 - `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。

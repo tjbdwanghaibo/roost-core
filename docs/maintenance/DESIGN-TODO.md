@@ -723,6 +723,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 两种模式共用取批与应用步骤 `applyBatchLocked`（提交门、同 ID 不越过、`BatchSize` 不切开同一提交）和结算入口（`applyLocked` → `releaseAppliedLocked`，结算之后才释放发布屏障），所以语义逐项相同：只有提交后的事实生效、同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧、Drain 等到在途事实全部应用并结算、Close 释放全部屏障。只有“结果何时可见”和“线程模型”不同。直接调用（`Move` / `Apply`）不经队列，不受模式影响，但视野上限照样按模式检查。
 
+**2026-10-21 单写者重构之后**（[REFACTOR-2026-10-21-interest-single-writer](REFACTOR-2026-10-21-interest-single-writer.md)）：上面的 `applyBatchLocked` 与“Leave / Hide 对排队事实的改写”已由统一日志的 `runLogLocked` 与目标代际号取代；直接调用（`Enter` / `Move` / `SetObserverView`……）不再在调用方线程算 AOI，而是与排队事实进同一条日志、由所选模式的应用方按调用顺序执行；ApplySync 一次政策阶段执行到没有可执行条目或用完同步周期一半的预算（不再是一批）。阈值、选择指引与本节实测不变（实测是重构前的数字，重构后未复测）。
+
 **阈值**：`SyncApplyMaxExtraViews = 8`、`SyncApplyMaxViewsPerPlayer = 1 + 8`（主视野 + 8），写在 `interest.go` 并注明来源（维护者决定 + 下表实测）。`MaxViewsPerPlayer` 本来就含主视野与关系视野，所以队伍、公会、联盟等关系视野也计入这 9 个。构造时 `ApplySync` 且 `MaxViewsPerPlayer > 9` 返回 `ErrInterestConfig`，报错原文：“ApplySync allows at most 9 views per player (main view + 8 extra), MaxViewsPerPlayer is N; games with more views per player (RTS units, many summons / wards) should set ApplyMode: policy.ApplyAsync”。未知模式同样拒绝构造。Interest 配置由业务代码构造，不经 wiring 或生成配置暴露，所以没有加配置键；game-demo 模板显式写 `ApplyMode: policy.ApplySync` 并说明怎么选。
 
 **适用游戏类型与选择指引**：

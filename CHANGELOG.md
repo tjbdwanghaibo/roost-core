@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Interest 单写者：全部写入口只登记有序日志，应用方按调用顺序执行（AOI 视野重构）
+
+- **原因**：近两周 Interest 连续出问题——RR-20261006-48（`04378f7c`）、D19 改写规则（`d2c2cdce`）后的 Leave→Enter / Hide→Show 旧移动拖回新视野、16 视野 Nest 失守后的应用线程与两种模式（`6304ffa0` / `01e4f736` / `b6ef5573`）、ApplySync 每周期一批的吞吐上限、直接 API 在业务 worker 上等 AOI 批次（实测 15～46ms）。根因是三个写入口（直接调用、视野登记表、排队事实）之间没有全序，方案与 ssr 对照见 [REFACTOR-2026-10-21-interest-single-writer](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md)。
+- **结构**：`Enter` / `Watch` / `Leave` / `Unwatch` / `Show` / `Hide` / `Move` / `MoveView` / `SetObserverView` / `Resubscribe`、视野操作与 `QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 只取登记侧短锁（原 `queueMu` 与 `viewMu` 合并）：校验、改登记事实、追加一条日志，错误当场返回，不取 `Interest.mu`、不做 AOI 计算。应用方（ApplySync 在政策阶段、ApplyAsync 在应用线程）按日志顺序执行；Leave / Hide 对队列的改写删除，改为目标代际号：被之后的撤除 / 再次放置越过的未确认事实确认后作废。
+- **修复**：已提交未应用的移动之后的 Leave→Enter、Hide→Show、再次 Enter 不再把实体或跟随视野拖回旧目标；业务线程上的 Interest 写入口不再等 AOI 批次；ApplySync 一次政策阶段执行到没有可执行条目或用完同步周期一半的预算（`BatchSize` 只是一批的大小）；Leave 之后同一次结算里重新 Enter（会话关闭又重开）的 pair 重新说给 Manager（之前不调 `Apply` 时这些订阅会丢）。
+- **API 变化（未上线，不做兼容）**：`Interest.Resubscribe` 不再返回 pair 数；新增 `InterestConfig.OnRefusal`（政策阶段里被拒的订阅；显式 `Apply()` 仍返回 `[]Refusal`）。`Apply()` 保留为“在调用方线程排空并结算”，给测试 / 工具 / 离线驱动，**不在 Nest 快池上调用**；`Visible` / `Seen` / `ViewVisible` / `ObservedBlocks` 是诊断读，先执行已登记的条目。
+- **行为变化**：直接调用的效果在下一次结算可见（同步模式下一次 Flush，异步模式应用线程走到之后的 Flush），不再是调用返回时；未确认的移动被同一目标之后的 `Hide` 越过时整条作废（跟随视野停在 Hide 前的位置）；`Hide` → `Show` 落在同一周期时客户端多收一次全量。
+- **调用方**：game-demo 场景桥（`Join` / `SetView` / `Leave` / `ShowSubject` / `HideSubject` / `SetTeam` / `ShowScene` / 会话重开）去掉 `apply()`，拒绝经 `OnRefusal` 记日志；`gameplay/movement.InterestSpace` 去掉 `Apply`。
+- **测试**：`framework/sync/entitysync/policy/interest_apply_test.go`（修前红：重进拖回、ApplySync 一周期一批、直接 API 等 AOI 批次；新增代际作废、重连同一结算、OnRefusal，均有变异核对）。
+- **升级**：线上未部署，不做兼容；用 `Resubscribe` 返回值或在业务 handler 里调 `Apply()` 的代码要改。
+- **限制**：见 [KNOWN-LIMITS“Interest 单写者”](docs/maintenance/KNOWN-LIMITS.md#广播与-aoi)；没有性能测量，对照方法见方案 §6。
+
 ### 心跳、行为控制、状态与 Nest 慢派发 trace 的审查修复（DESIGN-TODO D20 / D21）
 
 - **新增（`gameplay/heartbeat`）**：`Reg.Close()` 撤销一个登记——立即离开驱动、释放名字（同一实例上可以马上同名再 `Register`），之后 `Start` / `SetPeriod` 返回 `ErrRegClosed`；已经投出的拍到达时按 `dropped{reason="stale"}` 丢弃、不执行回调。与 `Register` 一样不随事务回滚。`Reg.Closed()`。
@@ -17,6 +29,7 @@
 - **文档**：guide/10-time §4A（`Reg.Close`、`Strict` 每拍等落盘）、§4C（卸载收尾、抢占后的排队项、`StateDao` 登记）、§4D（换场景重建）；impl/10-time §2B 第 2、6A、7 条与 §2D 第 2、6、16 条；OBSERVABILITY（慢派发 trace 的参数样本、`heartbeat.dropped_total`、`actionflow.actions.running`）；KNOWN-LIMITS（删去已修的“慢派发 trace”与已决定的“`Elapsed` 上限”，改写“域要在构造时给”）；DESIGN-TODO D20 / D21 状态行改为已合入 main。
 - **升级**：线上未部署，不做兼容。直接调用 `StateDao.CaptureRollbackState` / `RestoreRollbackState` 的代码（仓库内没有）改用 Nest 的快照；rollback=state 下改状态的实体要把 `StateDao` 登记进 DaoManager。
 - **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)、[“行为控制”](docs/maintenance/KNOWN-LIMITS.md#行为控制d21)、[“慢派发 trace 的参数样本”](docs/maintenance/KNOWN-LIMITS.md#慢派发-trace-的参数样本)。
+
 
 ### 生成器接入实体心跳、行为组件与场景时间域（DESIGN-TODO D20～D22）
 

@@ -177,6 +177,62 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 代码量：预计删除 `supersedeQueuedMovesLocked` / `rewriteFactsLocked` / `subjectGone` / `wakeViews` 的原子标志与两把锁之间的规则，新增命令种类与执行器；净变化实施后如实报告。
 
-## 10. 实施结果
+## 10. 实施结果（2026-10-21）
 
-（实施后填写：提交、`path:line`、红绿、测试命令、偏差。）
+维护者同日指示“方案定稿后直接实施，产品选择先按推荐”，§8 七项全部按推荐（1A、2A、3A、4A、5A、6A、7A）实施。
+
+### 10.1 提交
+
+| 提交 | 内容 |
+| --- | --- |
+| `1c602d33` | 本方案 + 三条修前红测试 |
+| `d75713e1` | 第 1、2 期合在一次提交：登记侧 + 有序日志 + 单应用方、代际号、撤除换代、ApplySync 预算排空、`OnRefusal`、`Resubscribe` 去返回值；包内测试跟随 |
+| `ca8a0ab9` | 代际号作废的独立用例 |
+| 本提交之后一个 | 第 3 期：调用方（game-demo 场景桥、`gameplay/movement`）与文档 |
+
+### 10.2 强制点（`framework/sync/entitysync/policy`）
+
+- 登记侧：`view.go:102` `viewRegistry`（日志、目标代际、限速、预算），`view.go:137` `record`；写入口 `interest.go:378` `Enter`、`:487` `SetObserverView`、`:545` `leave`、`:599` `Hide` 等，`interest_queue.go:65` `queueFact`——都只取 `registry.mu`。
+- 单应用方：`interest_queue.go:229` `runLogLocked`（`:283` 切开处之后的命令与事实留到下一步，`:294` 代际号不符的事实作废），`view.go:636` `runOpLocked`；撤除换代 `interest.go:663` `leaveLocked` / `:678` `removeSubjectLocked` 记 `departed*`，`:873` `settlePair` 先退订再订阅。
+- 吞吐：`interest_queue.go:353` `settleQueued`，`:366` 预算循环，`:137` `syncApplyBudgetFor`。
+- `Apply`：`interest.go:779`（取 `mu`，给测试 / 工具）。
+
+### 10.3 红 → 绿
+
+修前文本见 §7。修后 `GOWORK=off go test -count=5 ./framework/sync/entitysync/policy/` 与 `-race -count=2` 全绿。变异核对：
+
+| 变异 | 变红的用例与文本 |
+| --- | --- |
+| 去掉代际比较（只看目标是否在场） | `TestAnUnconfirmedMoveOvertakenByLeaveAndEnterIsDropped`：`sync: entity 2 at {900 900}, main view at {900 900}, player 2 sees [], facts left 0`（async 同） |
+| 去掉 `settlePair` 的撤除换代分支 | `TestLeaveAndEnterInOneSettleSubscribeTheReopenedSessionAgain`：`sync: after Leave → reopen → Enter in one settle: 2 sees 1 false, 2 sees itself false, 1 sees 2 true`（async 同） |
+
+撤除换代这一条在修前代码上同样成立（不是本重构引入）：在 `494134ae` 上用探针（Leave → CloseSession → OpenSession → Enter，之后才 `Apply` 一次）得到 `2 sees 1 false, 2 sees itself false, 1 sees 2 true`。之前的调用方（demo）在 Leave 之后立即 `Apply`，所以没有撞到；重构后去掉了这些 `Apply`，必须由 Interest 自己保证。
+
+### 10.4 与方案的偏差
+
+1. 第 1、2 期合在一次提交（`d75713e1`）：日志执行器重写时预算循环只是 `settleQueued` 里的几行，拆开反而要写一个过渡版本。两条红测试在提交前都已存在。
+2. `TestDirectCallsDoNotWaitForTheAOIBatch` 的检查列表去掉了 `Apply`：按 §8 第 5 项 A，`Apply` 保留为“在调用方线程排空并结算”，按设计会等正在进行的一步，业务路径上的 `Apply` 调用全部删除；其余 9 个入口在修前红、修后绿，断言未放宽。同一文件因 `Resubscribe` 去掉返回值改了调用写法。
+3. 包内既有用例的调整（都是驱动方式，断言的承诺不变）：`TestBatchLimitRetainsLaterEntityPublication` 同步模式把预算设到最小，让政策阶段在第一批之后停；`TestPublicationHoldsReleaseOnDiscardAndClose` 的 hide / leave 在断言前结算一次（被作废事实的屏障在下一次结算、同一 Flush 的捕获之前释放）；`TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush`、`TestDrainTimeoutListsInterestStalls` 异步模式先让应用线程走一步（视野操作现在也由应用线程执行）；`TestQueuedFactThatCannotApplyFailsOneFlushOnly` 注入的事实改为“目标在场、位置越界”（旧注入的“目标不在场”现在按代际作废，不再是应用失败）；`TestResubscribeRestoresAReopenedObserversView` 改为数重试表；`manualApplier` 在应用线程已启动时先停掉它。
+4. 撤除换代（§3.3 第 3 条）用“本次结算内撤除过的玩家 / 目标集合”实现，而不是按 pair 打标记：AOI 的离开事件要到结算时才归并，按 pair 打标记会漏掉它们。
+
+### 10.5 验证
+
+- `GOWORK=off go build ./...`；`go vet`（policy、`framework/sync/...`、`gameplay/movement`、`scripts/perf/sync-aoi`）；`GOWORK=off go test -race -count=1 ./framework/sync/... ./gameplay/movement/...` 全部 ok。
+- `GOWORK=off go run ./cmd/glsvet ./framework/sync/entitysync/...`：退出 0，无输出。
+- `scripts/test-sync-modes-generated.sh`：`ok syncmodes`。
+- `scripts/test-mmorpg-scenes.sh`（直接调用 `Leave` / `Enter` + `Apply` 的场景夹具）：通过。
+- `scripts/test-slg-generated.sh`（缺省模式）：失败于 `game/handler/slg_tasks_test.go:93`“too many arguments in call to `Sync_TickPlayerTimer`”，在未改动的 `494134ae` 上同样失败，与本重构无关；联盟夹具（`scripts/testdata/slg/alliance`，用 `Apply`）只在真实依赖模式运行，本次未跑。
+- game-demo、根包与全量：见 10.6。
+- 代码量（三个实现文件，含注释）：`interest.go` +298 / −238，`interest_queue.go` +198 / −178，`view.go` +106 / −84，净增约 100 行；删除 `supersedeQueuedMovesLocked` / `rewriteFactsLocked` / `subjectGone` / `syncViewsLocked` / `applyBatchLocked` / `wakeViews` 与两把锁之间的规则，新增命令种类、执行器、代际与撤除换代。
+
+### 10.6 生成工程与全量
+
+- game-demo（`roost project new planet -template game-demo --skip-deps` + replace 指回本检出）：`go build` / `go vet` / `go test ./...` 通过；`-race` 跑 `internal/service/game` 与 `game/controllers/player` 通过。场景桥两条用例（`TestTheBridgeKeepsEveryIdInTheEntityIdSpace`、`TestSceneRetriesASubscribeTheRoomRefused`）原来在 `Join` 返回后立即读 Manager 的订阅表，改为先走一个 tick（`scene.Flush`）再读——`Join` 现在只登记，tick 应用。
+- 根包 `GOWORK=off go test -count=1 .` 与全量 `GOWORK=off go test -count=1 ./...` 通过。
+- 未做：压测（§6，维护者统一安排）；`scripts/perf/nest-game.sh` 里的 nestgame 夹具（只在压测脚本里运行）；SLG 真实依赖模式。
+
+### 10.7 维护者需要知道的
+
+- §8 七项均按推荐实施，其中会改变对外语义的是：直接调用不再在返回时生效（行为变化 1）、`Resubscribe` 去返回值、`Apply()` 不在快池上调用、`Hide` 越过未确认移动时跟随视野的位置（行为变化 3）、`Hide` → `Show` 同一周期多一次全量。
+- 实施中确认的一处既有缺陷：Leave → 关闭 / 重开会话 → 再 Enter 之间不调 `Apply` 时，重开会话的订阅丢失（修前探针原文见 10.3），本重构一并修复。
+- 方向判断：Interest 的三个写入口收成一条日志之后，“谁在什么时候改状态”只有一个答案；之后同类问题（新的入口、新的交错）应当表现为日志里一条命令的执行语义，而不是又一处队列改写。若后续仍在这块反复出问题，下一步该看的是应用侧的批次与结算（`runLogLocked` / `applyLocked`），不是入口。
