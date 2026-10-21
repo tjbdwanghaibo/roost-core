@@ -322,7 +322,8 @@ doctor 与 `--check-config` 用同一份声明。服务 Init / Shutdown 不用�
 
 **技能与 Buff**：生成器不生成战斗组件骨架；战斗单位要 buff 到期、场景要推进技能 Runtime 时，用 `HeartbeatComponent.Host()`
 接 `combatcomponent.CombatComponent.AttachBeat`（Buff 心跳）与 `combatcomponent.NewRuntimeBeat`（技能心跳），两者共用 `skill.TickClock`
-（guide/10-time §4E）。
+（guide/10-time §4E）。心跳只是驱动方式之一：推进规则在 `skill.Stepper` 与 `CombatComponent.DriveBuffs` 里，不在快池上的定步长循环
+（Lockstep 房间）直接用它们，按帧调 `StepToTick` / `StepBuffsToTick`。
 
 **拒绝**（都在改任何文件之前）：没有实体、`--entity` 与名字不一致、`heartbeat` 带 `--ai` / `--state`、实体已有心跳宿主 / 行为组件 /
 时间域、组件名被占用、示例 handler 同名、服务不存在或没有 nest、`--id` 越界或已占用；timedomain 另有没有 DAO、DAO 字段只有一部分或类型不同。

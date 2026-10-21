@@ -53,10 +53,10 @@ func (component *CombatComponent) hasAnyBuffTag(tags []combat.Tag) bool {
 	return slices.ContainsFunc(tags, component.dao.buffs.HasTag)
 }
 
-// buffsChanged 在 buff 集合变化后通知绑定的派生状态（没有绑定时什么都不做），并对齐 buff 心跳（AttachBeat，D20 P5）。
+// buffsChanged 在 buff 集合变化后通知绑定的派生状态（没有绑定时什么都不做），并通知 buff 的驱动（DriveBuffs / AttachBeat，D20 P5）。
 func (component *CombatComponent) buffsChanged() {
 	if component.buffStatesChanged != nil {
 		component.buffStatesChanged()
 	}
-	component.alignBeat()
+	component.alignBuffDriver()
 }

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,8 +14,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
-// 技能 Runtime 的心跳（D20 P5）：换算规则与推进规则的纯逻辑测试——不经 Nest，直接按给定的时刻调用拍回调与输入，
-// 模拟心跳的不同抖动（拍间隔、跳拍、重复、晚到）。真实心跳驱动下的启停见 beat_test.go。
+// 技能 Runtime 的心跳适配（D20 P5）：推进规则本身在 skill.Stepper，推进器层的用例在 gameplay/skill/stepper_test.go；
+// 这里经心跳适配层（拍回调、Reg 的启停、输入侧取 fctx.Now）跑同样的抖动——不经 Nest，直接按给定的时刻调用拍回调，
+// 输入的时刻经可控的业务时钟给出。真实心跳驱动下的启停见 beat_test.go。
 
 const beatFireballJSON = `{"schema":"roost.skill/v2","id":"skill.test.beat.fireball","name":"Fireball","description":"Windup, commit, burn.",
 "activation":{"type":"active","policy":{"mode":"tap"},"cast_window":{"windup_ticks":3,"commit_tick":2,"recovery_ticks":2,"movement":"locked","turning":"allowed","interrupt_tags":[],"refund_before_commit":true}},
@@ -56,13 +58,17 @@ type beatWorld struct {
 	host tickLogHost
 	log  []string
 	reg  *heartbeat.Reg
+	// now 是业务时钟（pinBusinessClock）：handler 侧的输入经 fctx.Now 读到它。
+	now *atomic.Int64
 }
+
+func (w *beatWorld) setNow(at time.Time) { w.now.Store(at.UnixNano()) }
 
 // newBeatWorld 构造一个由 RuntimeBeat 驱动的 Runtime：心跳宿主来自一个不启动的驱动（登记与启停照常记账，没有投递），
 // 拍由测试直接调用。
 func newBeatWorld(t *testing.T, clock skill.TickClock, environment skill.CompileEnvironment, config RuntimeBeatConfig) *beatWorld {
 	t.Helper()
-	w := &beatWorld{}
+	w := &beatWorld{now: pinBusinessClock(t, time.Unix(0, 0))}
 	memory := skill.NewMemoryHost(skill.AuthorityIdentity{Revision: environment.Revision, Digest: environment.Digest})
 	memory.ConfigureGameplayCatalog(environment.Gameplay)
 	memory.UpsertEntity(skill.MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}})
@@ -91,7 +97,7 @@ type beatInput struct {
 }
 
 // runJitterProfile 按一种心跳抖动驱动同一组输入，返回逐 tick 记录与每次输入的结果。
-func runJitterProfile(t *testing.T, seed int64, gaps func(*rand.Rand) time.Duration) (ticks, inputs []string, stats RuntimeBeatStats) {
+func runJitterProfile(t *testing.T, seed int64, gaps func(*rand.Rand) time.Duration) (ticks, inputs []string, stats skill.StepperStats) {
 	t.Helper()
 	fireball, environment := compileBeatProgram(t, beatFireballJSON)
 	burn, _ := compileBeatProgram(t, beatBurnJSON)
@@ -125,7 +131,7 @@ func runJitterProfile(t *testing.T, seed int64, gaps func(*rand.Rand) time.Durat
 			}
 			continue
 		}
-		w.beat.now = func() time.Time { return e.at }
+		w.setNow(e.at)
 		program := fireball
 		if e.input.Burn {
 			program = burn
@@ -192,7 +198,7 @@ func TestRuntimeBeatJumpsPastTheCatchUpLimit(t *testing.T) {
 	origin := time.Unix(1_800_000_000, 0)
 	clock := skill.TickClock{Length: 50 * time.Millisecond, Origin: origin}
 	w := newBeatWorld(t, clock, environment, RuntimeBeatConfig{Period: 100 * time.Millisecond}) // 上限 max(1s, 100ms) = 20 tick
-	w.beat.now = func() time.Time { return origin }
+	w.setNow(origin)
 	if _, err := w.beat.Start(burn, skill.CastInput{Caster: 3, Target: 2}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +229,7 @@ func TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint(t *testing.T) {
 	if w.reg.Active() || w.reg.Period() != 50*time.Millisecond {
 		t.Fatalf("a new runtime beat: active %v period %v, want stopped at the tier of one tick", w.reg.Active(), w.reg.Period())
 	}
-	w.beat.now = func() time.Time { return clock.StartOf(3) }
+	w.setNow(clock.StartOf(3))
 	if _, err := w.beat.Start(fireball, skill.CastInput{Caster: 1, Target: 2}); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +246,7 @@ func TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint(t *testing.T) {
 	if err := w.beat.beat(heartbeat.Beat{Now: clock.StartOf(60)}); err != nil || w.beat.Runtime().CurrentTick() != idle {
 		t.Fatalf("a beat on an idle runtime moved it to %d (%v)", w.beat.Runtime().CurrentTick(), err)
 	}
-	w.beat.now = func() time.Time { return clock.StartOf(70) }
+	w.setNow(clock.StartOf(70))
 	if err := w.beat.CatchUp(); err != nil || w.beat.Runtime().CurrentTick() != 70 || w.beat.Stats().Idle != 2 {
 		t.Fatalf("CatchUp on an idle runtime: tick %d stats %+v (%v), want one more idle jump (the first was Start's 0 -> 3) to 70", w.beat.Runtime().CurrentTick(), w.beat.Stats(), err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -262,11 +263,11 @@ func TestBuffBeatExpiresExactlyAtTheDueTick(t *testing.T) {
 		return nil
 	})
 	lastNanoBeforeDue := beatClock.StartOf(due).Add(-time.Nanosecond)
-	f.mustRun(id, func() error { return c.runBeat(heartbeat.Beat{Now: lastNanoBeforeDue}) })
+	f.mustRun(id, func() error { return c.runBeat(heartbeat.Beat{Now: lastNanoBeforeDue}, rec.onBeat) })
 	if n, _ := rec.expired(); n != 0 {
 		t.Fatalf("a beat 1ns before tick %d expired the buff", due)
 	}
-	f.mustRun(id, func() error { return c.runBeat(heartbeat.Beat{Now: beatClock.StartOf(due)}) })
+	f.mustRun(id, func() error { return c.runBeat(heartbeat.Beat{Now: beatClock.StartOf(due)}, rec.onBeat) })
 	if n, _ := rec.expired(); n != 1 || rec.lastTick() != due {
 		t.Fatalf("the beat at the start of tick %d: expired %d at tick %d", due, n, rec.lastTick())
 	}
@@ -339,7 +340,7 @@ func TestPeriodicWorkKeepsTheBuffBeat(t *testing.T) {
 		e, id := newBeatCombatant(t, f, 9405, BeatConfig{Granularity: 50 * time.Millisecond, OnBeat: rec.onBeat, Periodic: regenerating.Load})
 		c := e.component
 		regenerating.Store(true)
-		f.mustRun(id, c.SyncBeat)
+		f.mustRun(id, c.SyncBuffDriver)
 		f.waitFor("two regeneration beats", func() bool { return rec.count() >= 2 })
 		regenerating.Store(false)
 		before := rec.count()
@@ -413,7 +414,8 @@ func inMessage(fn func()) {
 	fn()
 }
 
-// 时间域：2 倍速时 tick 走两倍、时停时不动；buff 与 Runtime 的 handler 侧 tick 都取域时间，Runtime 的追帧上限乘倍率。
+// 时间域：2 倍速时 tick 走两倍、时停时不动；buff 与 Runtime 的 handler 侧 tick 都取域时间。追帧上限乘倍率见
+// TestRuntimeBeatPassesTheDomainRate。
 func TestHandlerTicksFollowTheTimeDomain(t *testing.T) {
 	start := time.Unix(1_800_000_000, 0)
 	now := pinBusinessClock(t, start)
@@ -444,15 +446,55 @@ func TestHandlerTicksFollowTheTimeDomain(t *testing.T) {
 	if b, r := read(); b != int64(base)+20 || r != base+20 {
 		t.Fatalf("100ms at rate 2: ticks %d / %d, want %d (20 ticks of 10ms)", b, r, base+20)
 	}
-	if got := beat.catchUpTicks(2); got != 200 {
-		t.Fatalf("catch-up limit at rate 2 = %d ticks, want 200 (1s x 2 / 10ms)", got)
-	}
 	if err := domain.SetRate(0); err != nil {
 		t.Fatal(err)
 	}
 	now.Add(int64(time.Second))
 	if b, r := read(); b != int64(base)+20 || r != base+20 {
 		t.Fatalf("paused for 1s: ticks %d / %d, want still %d", b, r, base+20)
+	}
+}
+
+// 时间域：心跳适配层把域的倍率交给 Stepper——拍里的一步与 handler 的追帧都按 2 倍速的追帧上限（1s × 2 / 10ms =
+// 200 tick），落后 150 tick 不跳。
+func TestRuntimeBeatPassesTheDomainRate(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	now := pinBusinessClock(t, start)
+	domain := newTestDomain(t)
+	if err := domain.SetRate(2); err != nil {
+		t.Fatal(err)
+	}
+	burn, environment := compileBeatProgram(t, strings.Replace(beatBurnJSON, `"times":5,"interval_ticks":3`, `"times":60,"interval_ticks":10`, 1)) // 忙 600 tick
+	memory := skill.NewMemoryHost(skill.AuthorityIdentity{Revision: environment.Revision, Digest: environment.Digest})
+	memory.ConfigureGameplayCatalog(environment.Gameplay)
+	memory.UpsertEntity(skill.MemoryEntity{ID: 2, Alive: true, Health: 500, MaxHealth: 500})
+	memory.UpsertEntity(skill.MemoryEntity{ID: 3, Alive: true, Health: 100, MaxHealth: 100})
+	owner, _ := newCombatTestEntity(t, 9411)
+	beat, err := NewRuntimeBeat(skill.NewRuntime(memory, skill.RuntimeOptions{}), RuntimeBeatConfig{
+		Host: heartbeat.NewDriver(heartbeat.Config{Name: "domain-rate"}).NewHost(owner), Clock: beatClock, TimeDomain: domain,
+		OnError: func(err error) { t.Errorf("runtime beat: %v", err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first skill.Tick
+	inMessage(func() {
+		first = beat.Tick()
+		if _, err := beat.Start(burn, skill.CastInput{Caster: 3, Target: 2}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := beat.beat(heartbeat.Beat{Now: beatClock.StartOf(first + 150)}); err != nil { // 拍落后 150 tick
+		t.Fatal(err)
+	}
+	now.Add(int64(1500 * time.Millisecond)) // 域时间走 3s（到第 300 个 tick）：handler 的追帧落后 150 tick
+	inMessage(func() {
+		if err := beat.CatchUp(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if got := beat.Stats(); got.Jumps != 0 || got.Steps != 300 || beat.Runtime().CurrentTick() != first+300 {
+		t.Fatalf("two 150-tick gaps at rate 2: %+v at tick %d, want 300 steps from %d and no jump (limit 200 ticks)", got, beat.Runtime().CurrentTick(), first)
 	}
 }
 
