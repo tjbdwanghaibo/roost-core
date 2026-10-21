@@ -23,6 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20），待压测与三项小决定 |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 提出方向，待细节确认 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -716,3 +717,30 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 5. 视野增删改、成员变更、挂接是否提供排队版（建议提供）。
 6. 缺省上限：`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096（建议，启动期可配，预算按它们算）。
 7. 现有 `RelationSource` 去留：保留为“玩家私有关系视野”的薄封装（建议，现有调用方不改），还是全部迁到关系视野 API。
+
+## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
+
+**状态：维护者 2026-10-21 提出方向，待细节确认。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。
+
+### 现状
+
+- `scripts/perf/sync-aoi`：压测端一个循环每 tick 挑 1% 实体、分 10 批改值并移动（direct 模式直接 `interest.Move`；Nest 模式对每个实体发 `engine.Request` 到 load handler，handler 里 `QueueMove`）。移动由全局控制器驱动，不是实体自己的心跳。
+- 框架没有“每实体非持久心跳”：现有按实体的周期机制是 D11 的持久定时器 `framework/nest/entitytimer`（期限进 DAO、离线语义、走 Nest 消息），为持久到期动作设计，不适合每 50～200ms 一次的移动。
+- `gameplay/actionflow`（ActionRunner / Mission / PlanMission）已有动作与任务的运行时，目前被 `gameplay/ai` 使用；game-demo 场景的移动是端点收到移动请求后 `Scene.Moved` / `QueueMove`。
+
+### 方向（待确认的草案）
+
+1. **实体心跳**：每个活跃实体一个轻量的、非持久的周期心跳，在实体自己的 Nest worker 上执行（与该实体的其他消息串行），首次相位打散（按实体 ID 哈希或随机偏移）。有移动 / 动作在途才挂心跳，空闲实体不占调度。
+2. **`MapBasic` 组件**：所在地图 / 场景、位置、朝向，以及与 AOI 的接线（进入场景 `Enter`、位置变化 `QueueMove`、离开 `Leave`）。
+3. **`Move` 组件**：速度、目标点或路径、状态；在心跳里按经过的时间推进位置，写 `MapBasic`，触发 `QueueMove`；到达 / 打断 / 被阻挡由 actionflow 收尾。
+4. **actionflow 控制**：移动是一个 Action（MoveTo / Follow / Patrol 等），由实体的 ActionRunner 驱动；心跳就是 runner 的 tick。技能、AI 等其他动作共用同一个 runner 与心跳。
+5. **压测**：sync-aoi（及 nest-game）的移动改为实体心跳驱动，替代全局循环；保留旧负载开关以便对比。
+6. **与“排队事实异步应用”的关系**：心跳在 Nest worker 上只做位置推进与入队（marshal + `QueueMove`），AOI 计算由 sync 侧分批应用线程做（见 D19 实施结果后的“排队事实异步应用”，进行中）。两者互补。
+
+### 需要确认
+
+1. 组件放在哪里：只放 game-demo（手写参考实现），还是框架 `gameplay/` 下提供通用组件（`gameplay/movement`），game-demo 与生成器 `roost add` 都可用。
+2. 心跳机制放在哪里：框架 Nest 提供“按实体的非持久周期心跳”（例如 `nest` 或 `framework/nest/entityhb`），还是由组件自己用延时 Sender 实现。
+3. 位置是否每次心跳持久化：建议位置为 nopersist（只同步），按周期或离开场景时落库一次；还是每次心跳 strict 写入。
+4. 心跳频率：固定（例如 10Hz / 20Hz）还是按动作需要（移动中才高频、空闲停）。
+5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起。
