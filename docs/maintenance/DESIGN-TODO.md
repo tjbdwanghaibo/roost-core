@@ -830,13 +830,15 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
+**审查修复（2026-10-21）**：心跳登记可以撤销（`Reg.Close`，换场景重建行为组件）、驱动摘除已移除实例、被抢占组的排队项在抢占方结束时推进、`StateDao` 在 rollback=state 下未登记时 fail-fast、`Behavior.OnDestroy`、Nest 慢派发 trace 不再反射打印参数，见 D21 节末“[D20 与 D21 审查修复](#d20-与-d21-审查修复2026-10-21)”。
+
 **压测后维护者决定（2026-10-21）**：调度结构按档分环、10ms 分辨率；驱动 1 个；投递方式 P1 先用单目标 `Dispatch`（X），驱动接口按“一格到期的一批心跳一次交出”设计，内部先逐个 Dispatch；同时做方案 D（Nest 批量入队、逐个执行：一次取队列锁入队一批独立的单目标作业、每个 worker 只唤醒一次并连续取作业，作业语义与 X 相同）的原型与压测，达标（CPU 接近 Y、业务 p99 不差于 X、语义不变）则心跳切到 D，否则保留 X。E（搭便车）、F（按 worker 固定分片）不做。
 
 **维护者决定（2026-10-21，对方案 §需要拍板逐条）**：①包放 `gameplay`（`gameplay/heartbeat`、`gameplay/movement`，装配 `wiring/heartbeat`）；②投递方式由压测决定：单目标 `Dispatch` 与 ssr 式“每条消息带一批实体、worker 逐个 TryLock”对比（维护者经验 ssr 方式更好）；③**不合并**：同一实体的多个心跳登记各自投递；④**跳拍**：上一拍在途时跳过，不累积不补发，**跳拍打 Warn 日志**（限频）并计数；⑤快池很快、理论上不会满：去掉水位整格让路与每格上限，只保留“每实体至多一拍在途”与 `ErrQueueFull` 跳拍兜底；⑥频率采用 ssr 式**固定档位**（如 50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s），不支持任意周期；⑦驱动 goroutine 数参考 ssr；⑧HB 本身不持久化，心跳里改持久字段由业务按自己的持久级别处理；⑨卸载窗口接受（实例核对 + 令牌）；⑩**所有实体都支持**：心跳投到实体所在的池（快池 / 慢池）；Remote 托管实体投到当前拥有方，所有权迁移时旧拥有方停、新拥有方重新登记；⑪调度结构由压测决定：ssr 式固定档位环、时间轮、最小堆对比（维护者经验 ssr 方式更好）；⑫entitytimer 的驱动不改；⑬实体的 tick 都走 HB（房间 / 场景本身是实体，用自己的 HB）；⑭⑮按推荐：game-demo 移动改为客户端发目标、服务端心跳推进；位置不每拍落库（nopersist，按周期或离开场景落库）。回调只做内存计算与入队、不阻塞。
 
 ### P1 实施结果（2026-10-21）
 
-**状态：P1 已实施**（分支 `feat/d20-heartbeat-p1`，基于 `be5a76f5`；本地提交，由维护者推送）。框架 `gameplay/heartbeat`，装配 `wiring/heartbeat`（Mod 名 `heartbeat`）。用法 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)，指标 [OBSERVABILITY“实体心跳”](../framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)，剩余边界 [KNOWN-LIMITS“实体心跳”](KNOWN-LIMITS.md#实体心跳d20-第-1-期)。读代码时 codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码核对为准。
+**状态：P1 已实施**（分支 `feat/d20-heartbeat-p1`，基于 `be5a76f5`；已合入 main）。框架 `gameplay/heartbeat`，装配 `wiring/heartbeat`（Mod 名 `heartbeat`）。用法 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)，指标 [OBSERVABILITY“实体心跳”](../framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)，剩余边界 [KNOWN-LIMITS“实体心跳”](KNOWN-LIMITS.md#实体心跳d20-第-1-期)。读代码时 codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码核对为准。
 
 **API 最终形状**：
 
@@ -899,7 +901,7 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 ### 决定 ④ 实施结果：Remote 共享模式不允许挂载心跳（2026-10-21）
 
-**状态：已实施**（分支 `fix/heartbeat-remote-shared`，基于 `c299c4cc`；本地提交，由维护者推送）。
+**状态：已实施**（分支 `fix/heartbeat-remote-shared`，基于 `c299c4cc`；已合入 main）。
 
 **共享是运行期状态，不是静态声明**（已核对源码）：`entity.RemotePolicy` 只有 None / Managed / Mirror（`framework/entity/policy.go`），codegen 也只有 `remote=managed`；共享模式由 `remoteentity.Manager.EnterRemoteSharedMode` / `LeaveRemoteSharedMode`（`framework/remoteentity/ownership.go`）按实体 ID 在运行期切换（LocalOwned → Sharing → Shared；Shared → Draining → LocalOwned）。实例加载时是 `Unknown`（`LoadRemoteEntity` 不设所有权状态），共享权威下第一次写准入经 `newWriteLease` 的 marked 分支转 `Shared`（`framework/remoteentity/batch.go`）。所以组件在 `OnInitFinish` 登记时，第二个写者看到的是 `Unknown`，登记时判定不出来。
 
@@ -927,7 +929,7 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 ### 真实 Remote 共享模式切换验证（2026-10-21）
 
-**状态：已验证**（分支 `test/remote-heartbeat`，本地提交，由维护者推送）。补的是决定 ④、P2 第 6 条、D21 A6 / C4 留下的未验证项：之前“框架停掉心跳”只在单元用例里直接 `Stop` 登记或用模拟写准入的假 Manager。
+**状态：已验证**（分支 `test/remote-heartbeat`，已合入 main）。补的是决定 ④、P2 第 6 条、D21 A6 / C4 留下的未验证项：之前“框架停掉心跳”只在单元用例里直接 `Stop` 登记或用模拟写准入的假 Manager。
 
 **怎么验**：`gameplay/movement/shared_test.go` 的三个场景经真实的 `remoteentity.Manager` 做所有权流转（第一次写认领、`EnterRemoteSharedMode` / `LeaveRemoteSharedMode` / `TransferRemoteOwnership`、写准入与共享模式的分布式锁、写门排空），每个进程是真实 Nest 引擎 + 实体管理器 + 启动的心跳驱动 + 自己的 Manager；实体 `remoteNPC` 装了 `MapBasic`（周期落库）、`Move`、`Behavior`（移动组 / 工作组心跳、任务心跳）与 AI 心跳，共 5 个登记。进程内用例的 Remote 权威（所有权记录与带 fence 的版本锁）是替身 `memRemoteAuthority`，状态机、准入与排空都是 Manager 自己的；`shared_integration_test.go`（`-tags integration`）用正式装配 `remoteentity.Assemble`（真实 Redis 版本锁与快照 L2、Mongo 持久写权威、NATS 复制）跑同一组场景，隔离库名 / 键前缀 / 主题前缀每次唯一、用完删除。每个场景在两种心跳投递方式下各跑一遍（`heartbeat.delivery` 的 `dispatch` 缺省 / `batch`，D20 选项 C）：驱动绑定的客户端包了一层记录，核对 Remote 实体的每一拍都走单目标 `Dispatch`、没有一拍进 `DispatchTryBatch`，同进程里一个本地对照实体在 `batch` 下走批量作业、在 `dispatch` 下走单目标（证明投递方式确实生效）；所有权检查（共享模式停掉、非拥有方不跳、迁移无双推进）两种方式结论相同。变异核对：让 Remote 的拍进批量作业 → `batch` 子测试红（Nest 不接受 Remote 目标、拍交回，`first start: A1 is not running every heartbeat … ai ticks 0, work ticks 0`），`dispatch` 子测试不受影响。
 
@@ -956,7 +958,7 @@ shared_test.go:865: resumed after the first shared window: A1 is not running eve
 
 ### P2 实施结果（2026-10-21）
 
-**状态：P2 已实施**（分支 `feat/d20-movement-p2`，本地提交，由维护者推送）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P2 已实施**（分支 `feat/d20-movement-p2`，已合入 main）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
 **P2 中维护者决定（2026-10-21）**：
 
@@ -1039,7 +1041,7 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 ### P3 实施结果（2026-10-21）
 
-**状态：P3 已实施**（分支 `feat/d20-p3-demo`，基于 main `53cc3f97`，本地提交、未推送）。改动只在 `demo/`（手写参考实现，不迁到生成器）、`codegen/internal/roost/demo.go`（demo 的写文件步骤表，新模板必须登记）与 C# 客户端 `client/dotnet`；**没有改框架包**。说明见 [WALKTHROUGH“移动”“怪物”“场景时间”“刷新”](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) 与 [guide/10-time §4B“参考接法”](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，剩余边界 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)。codebase-memory 图的根是主检出、generation 早于 D21 / D22，demo 是 `.tmpl` 不进图，结构结论以 worktree 源码与生成工程为准。
+**状态：P3 已实施**（分支 `feat/d20-p3-demo`，基于 main `53cc3f97`，已合入 main）。改动只在 `demo/`（手写参考实现，不迁到生成器）、`codegen/internal/roost/demo.go`（demo 的写文件步骤表，新模板必须登记）与 C# 客户端 `client/dotnet`；**没有改框架包**。说明见 [WALKTHROUGH“移动”“怪物”“场景时间”“刷新”](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) 与 [guide/10-time §4B“参考接法”](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，剩余边界 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)。codebase-memory 图的根是主检出、generation 早于 D21 / D22，demo 是 `.tmpl` 不进图，结构结论以 worktree 源码与生成工程为准。
 
 **按要求逐条落实**：
 
@@ -1099,7 +1101,7 @@ make dev-stop
 
 ### P4 实施结果（2026-10-21）
 
-**状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；本地提交，由维护者推送）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
+**状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；已合入 main）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
 
 **落实**：
 
@@ -1121,7 +1123,7 @@ make dev-stop
 
 ### P5 实施结果（2026-10-21）
 
-**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；本地提交，由维护者推送）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；已合入 main）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
 **API 最终形状**：
 
@@ -1172,7 +1174,7 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 
 ### 生成器接入实施结果（2026-10-21）
 
-**状态：已实施**（分支 `feat/codegen-heartbeat`，开工基于 `53cc3f97`、交回前 rebase 到 `ddeeffa3`（含 P4、选项 C、P5、Remote 验证）；提交 `237d9cd2` 命令与装配、`33ffecb4` 配置段、`ce7bae9e` 端到端两种投递方式、`c7064b47` 技能 / Buff 心跳入口的文档；本地提交，由维护者推送）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
+**状态：已实施**（分支 `feat/codegen-heartbeat`，开工基于 `53cc3f97`、交回前 rebase 到 `ddeeffa3`（含 P4、选项 C、P5、Remote 验证）；提交 `237d9cd2` 命令与装配、`33ffecb4` 配置段、`ce7bae9e` 端到端两种投递方式、`c7064b47` 技能 / Buff 心跳入口的文档；已合入 main）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
 
 **命令与生成结构**（生成部分 project sync 重写，业务文件只在缺失时创建）：
 
@@ -1711,7 +1713,7 @@ roost 的取舍：
 
 ##### D21-1 实施结果（2026-10-21）
 
-**状态：已实施**（分支 `feat/d21-gameplay`，本地提交 `86c6dc1c`，由维护者推送）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
+**状态：已实施**（提交 `86c6dc1c`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
 
 **API 最终形状**：
 
@@ -1767,7 +1769,7 @@ type ActionList interface { …; EndAction(id, force, reason) error; Freeze(grou
 
 ##### D21-2 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `849031fa`）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
+**状态：已实施**（提交 `849031fa`，已合入 main）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
 
 **API 最终形状**：
 
@@ -1820,7 +1822,7 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 
 ##### D21-3 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `575f216a`）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条。
+**状态：已实施**（提交 `575f216a`，已合入 main）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条。
 
 **API**：`type StateBinding struct{ State state.ID; Tags []combat.Tag }`；`func (c *CombatComponent) BindStates(set *state.Set, bindings ...StateBinding) error`（构造时一次；每个状态一个提供函数，持久状态、空标签被拒）；`func (c *CombatComponent) HasBuffTag(tag combat.Tag) bool`。
 
@@ -1841,7 +1843,7 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 
 ##### D21-4 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `79138636`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 10～12 条。
+**状态：已实施**（提交 `79138636`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 10～12 条。
 
 **API 最终形状**：
 
@@ -1893,7 +1895,7 @@ func PeriodAtMost(want time.Duration) time.Duration                        // �
 
 ##### D21-5 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `e95916f7`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
+**状态：已实施**（提交 `e95916f7`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
 
 **API 最终形状**：
 
@@ -1942,11 +1944,37 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 
 ##### 调研一 · 收尾（2026-10-21）
 
-- **提交**（分支 `feat/d21-gameplay`，本地，未推送）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
+- **提交**（已合入 main）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
 - **全量验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例 `-race -count=30`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`。退出码均为 0。
 - **待拍板（都已先按推荐实施）**：① `FreezeCancel` 是否连排队项一起丢弃（现：保留）；② 门控在 handler 回滚后的一致性（现：下一次状态通知时纠正、不累积）；③ 被取消的计划步骤是否重试（现：不重试）；④ 动作指标是否缺省开启（现：关闭）。
 - **维护者 2026-10-21 决定：上述 4 项全部按推荐（即现状）**：① `FreezeCancel` 只打断当前动作、排队项保留，去留由业务决定；② 门控在 handler 回滚后不由框架补发，下一次状态通知或业务 `Refresh` 时纠正、每条规则至多持有一次冻结；③ 被取消的计划步骤不重试，直接走 OnFail；④ 动作指标缺省关闭，由 `BehaviorConfig.Metrics` 打开。
 - **没做 / 不在本轮**：game-demo 与生成器接入 `Behavior`、`state`、AI 心跳（随 D20 P3）；`TickBuffs` 挂心跳（D20 P5）；其余 ssr 候选（`trigger_engine`、`eca_man`、`cooldown`、`timer`、空间、战斗、经济、社交）的调研。
+
+##### D20 与 D21 审查修复（2026-10-21）
+
+**状态：已修复**（分支 `fix/main-review-20261021`，基于 `5464dd6d`）。来源：学习分支 `learn/main-review-20261021` 的“main 近期提交审查”第 2、3、4、7 条，与 KNOWN-LIMITS 原“慢派发 trace 与 handler 并发读消息参数”一条（选项 C 与 Remote 验证两轮都撞到）；维护者 2026-10-21 要求解决别的 agent 提的问题。逐条先在当前 main 上写出变红的回归，再修。
+
+| # | 问题 | 修法 | 修前红（原文） |
+| --- | --- | --- | --- |
+| 1 | `heartbeat.Host` 没有注销，换场景重建 `BeatRunner` / `Behavior` / `ai.Controller` 报 `ErrDuplicateName` | `heartbeat.Reg.Close`（立即离开驱动、释放名字、不随回滚；在途拍按 `stale` 丢弃）；上层 `BeatRunner.Close(reason)`、`Behavior.Close(reason)`、`ai.Controller.Close(reason)`。不做 `SetTimeDomain`（理由见下） | `TestABeatRunnerCanBeRebuiltOnTheSameHost`：`rebuilt runner: errors [heartbeat: registration name already used on this entity: "actionflow/1" on entity 1048576 …] active false registered 0`；`TestABeatControllerCanBeRebuiltOnTheSameHost`（修前用 `Shutdown` 代替 Close）：`rebuilt controller: reported [ai: heartbeat: heartbeat: registration name already used on this entity: "ai" on entity 2097152] active false registered 0` |
+| 2 | 被抢占组的排队项永远不推进、不发 OnEnded | 抢占时被抢占组记下抢占方（`preemptedBy`），抢占方离开当前位时 `resumePreempted` 推进一次；保留排队，抢占那一刻仍不推进（变异 D4 锁定） | `TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds/ended`：`after the preemptor ended: current1 <nil> queue 1 later starts 0 ended { <nil> {idle }}`；`/finished_by_its_tick`：`after the preemptor finished: current1 <nil> later starts 0` |
+| 3 | `StateDao` 在 rollback=state 下没登记进 DaoManager 时静默不回滚，注释自相矛盾 | `StateDao` 改为实现 `nest.RollbackParticipant`（`CaptureRollback` 拍快照并记下事务），`change` 在 rollback=state 下发现本事务没对它拍快照就返回 `ErrRollbackNotCaptured`、不改；改正类型注释 | `TestAnUnlistedStateDaoRefusesChangesUnderRollbackState`：`rollback=state with an unlisted StateDao: Add = <nil>, handler = business refused, states after the rollback [1] (want Add to fail and nothing left)` |
+| 4a | 实体已 `IsRemoved` 而组件没调 `Host.OnDestroy` 时，驱动只计数、登记留在环上 | `step` 遇到 `IsRemoved` 即 `Host.OnDestroy`（计一次 `dropped{removed}`） | `TestARemovedInstanceLeavesTheDriver`（dispatch / batch 两种都红）：`removed instance still on the driver: registered 2 dropped removed 42 (want 0 / 2, one per registration)`（修后按“同一格一起到期的登记各计一次”把计数断言改为 1～2，摘除的断言不变） |
+| 4b | guide 没有写 `WithDurability(Strict)` 每拍在实体 worker 上等落盘 | guide §4A 表格与 KNOWN-LIMITS“实体心跳”写明 | 文档项，无测试 |
+| 4c | `RemoveBuff` 里的 `buffsChanged()` 变异不被捕获，`SetBuffStacks` / `AdoptBuff` 没有用例 | `TestEveryBuffMutatorNotifiesBoundStates`：逐个 mutator 断言观察者当场看到变化 | 变异（新用例在 main 上是绿的，缺的是覆盖）：去掉 `RemoveBuff` 的 `buffsChanged()`：`remove: watcher saw [], want [false]`；去掉 `SetBuffStacks` 的：`set stacks to 0: watcher saw [], want [false]`；去掉 `AdoptBuff` 的：`adopt: watcher saw [], want [true]` |
+| 4d | Behavior 没有 OnDestroy，卸载时在途动作不结束，`actionflow.actions.running` 只升不降 | `Behavior.OnDestroy()` 即 `Close(ErrOwnerDestroyed，取消状态)`；生成的 `BehaviorComponent.OnDestroy` 与 game-demo 的玩家 / 怪物组件接上（AI 先 `Close`） | `TestBehaviorOnDestroyEndsWhatIsRunning`（修前只能 `Host.OnDestroy`）：`after destroy: running 1 observer [] (want [action 1 4 step -1 action 2 4 step -1]) walk cancels 0 registered 0` |
+| 4e | 文档过时：KNOWN-LIMITS“`Elapsed` 上限……待维护者确认”（维护者已在 `2b47c959` 选 A）；D20 / D21 各期实施结果写“本地提交 / 由维护者推送 / 分支 feat/d21-gameplay” | 删去前者；状态行改为“已合入 main”（所引提交都已核对是 HEAD 的祖先） | 文档项 |
+| 5 | Nest 慢派发 trace 用 `%#v` 打印消息参数，handler 执行期间与可变字段数据竞争 | `nestParamSamples` 只打印按值装箱的标量与实现了 `fmt.GoStringer` 的参数，其余只给类型名 | `TestSlowDispatchTraceDoesNotFormatParamsTheHandlerMayMutate`：普通运行 `the running trace formatted a parameter the handler was mutating: … param_samples:[&nest.mutableTraceParam{n:7211729, items:[]int{7211765}} stable:reg 7 "tick"] …`；`-race` 下另报 2 处 `WARNING: DATA RACE`（trace 的 `reflect.Value.Int` 读与 handler 的写同一地址）、`race detected during execution of test` |
+
+**第 1 条为什么是 Close + 重建、不做 `SetTimeDomain`**：域时刻散在多处——心跳登记的 `lastRun` / `startedAt`（`Elapsed` 基线）、计划步骤的 `deadline`、`ai.Controller.frozenUntil`、`Behavior.now` 绑定的时钟——原地换域要把每一处都换算或作废，漏一处就是一次错误的 `Elapsed` 或时限；而成员换场景本来就要结束旧场景里的动作（`MoveTo` 的目标点、跟随目标都属于旧场景）。Close + 重建只需要“名字能释放”这一个新能力，其余沿用构造路径。结合 D20 的契约：① 每个登记至多一拍在途按 `*Reg` 成立，同名重建后旧登记的在途拍到达即按 `stale` 丢弃（`runBeat` 在实体锁内看 `closed`），不执行回调，同一实体的回调仍由实体锁串行；② 卸载窗口不变（Close 不涉及实例替换；卸载由 `Host.OnDestroy` 处理，Close 之后再 OnDestroy 无害）；③ Remote 共享模式：Close 不经准入，共享期间也能撤销；重建时 `Register` 照常在共享模式下返回 `ErrHeartbeatRemoteShared`，动作以失败结束（与原规则相同）。`Close` 与 `Register` 一样不随事务回滚：换场景的调用放在 handler 最后一步（D20 决定 3 的口径）。
+
+**第 2 条为什么保留排队、不丢弃**：维护者 2026-10-21 定 D21 待拍板 ①“`FreezeCancel` 只打断当前动作、排队项保留、去留由业务决定”，抢占是同一类“打断正在做的事”。抢占那一刻不推进（排队项若这时启动，会被正在启动的抢占方按跨组规则挡住或互相抢占，变异 D4 锁的就是这一点），推进点放在抢占方离开当前位时（完成、被结束、被取代、启动失败，`finish` 与 `start` 的失败路径共用 `resumePreempted`）。推进照常过冻结与跨组规则：冻结中的由 `Recover` 推进；业务已在这组启动了别的动作的不动；抢占方被同组的另一个动作取代时，若新动作同样挡住排队项，排队项按现有规则以失败结束（写进 KNOWN-LIMITS“行为控制”）。没有需要待拍板的丢弃语义。
+
+**第 3 条为什么返回错误、不 panic**：检查在改动之前，返回错误时什么都没改，handler 返回它即整条回滚；与同一个 `change` 里的 `ErrNotInTransaction` 一致（D21-2 决定 4：状态写入是常规业务调用，返回错误，而不是像 `CombatDao` 那样 panic）。`MarkPersist` 失败仍 panic，那是改动已经做了之后的内部不变量。`StateDao` 记最近 4 个快照事务的 ID：handler 里嵌套的隔离事务对同一实体再拍一次快照之后，外层事务的那次仍要认。
+
+**第 5 条的范围**：只改 `framework/nest/trace.go` 的参数取样，trace 的触发、限频、字段都不变。`*heartbeat.Reg` 的 `GoString` 保留（它就是登记名能出现在 trace 里的方式）。按值传的结构体是副本、本身没有竞争，也只给类型名：为了不在 trace 里判断“副本里有没有引用”（切片、map 字段的内容 `%#v` 会跟进去读）。
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；glsvet（`./framework/nest ./gameplay/... ./wiring/heartbeat`）；`GOWORK=off go test -race -count=1 ./framework/nest/... ./gameplay/... ./wiring/...`；心跳相关用例 `-race -count=20`（`gameplay/heartbeat` 的新用例与实例核对用例在两种投递方式下各跑，`gameplay/actionflow`、`gameplay/ai`、`gameplay/state` 全包）；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；生成模板改动之后用 game-demo 生成工程（本地 replace 到本分支）跑 `go build ./... && go vet ./... && go test ./...`，并在其中 `roost add entity npc` + `roost add behavior --entity Npc --ai --state` 之后 build / vet / `go test ./game/...`。
 
 ## D22 业务时间取自 ctx、支持变速
 

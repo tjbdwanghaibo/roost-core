@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 心跳、行为控制、状态与 Nest 慢派发 trace 的审查修复（DESIGN-TODO D20 / D21）
+
+- **新增（`gameplay/heartbeat`）**：`Reg.Close()` 撤销一个登记——立即离开驱动、释放名字（同一实例上可以马上同名再 `Register`），之后 `Start` / `SetPeriod` 返回 `ErrRegClosed`；已经投出的拍到达时按 `dropped{reason="stale"}` 丢弃、不执行回调。与 `Register` 一样不随事务回滚。`Reg.Closed()`。
+- **新增（`gameplay/actionflow`、`gameplay/ai`）**：`BeatRunner.Close(reason)`、`Behavior.Close(reason)` / `Behavior.OnDestroy()` / `Closed()`、`ai.Controller.Close(reason)` / `Closed()`；`ErrBeatRunnerClosed`、`ErrBehaviorClosed`、`ErrOwnerDestroyed`、`ai.ErrControllerClosed`。成员换场景（换时间域）时 Close 旧的、在同一心跳宿主上按新域重建；修前同名登记报 `ErrDuplicateName`，KNOWN-LIMITS 写的“重建行为组件”做不到。不提供 `SetTimeDomain`（旧域里记下的时刻不能拿到新域里比较），理由见 [DESIGN-TODO](docs/maintenance/DESIGN-TODO.md#d20-与-d21-审查修复2026-10-21)。
+- **修复（`gameplay/actionflow`，行为变化）**：被跨组 `PreemptRunning` 抢占的组，排队项在抢占方结束时推进一次（保留排队，抢占那一刻仍不推进）；修前排队项永远不推进、不发 OnEnded，按 ID 等结果的 `TaskflowAction` / `PlanMission` 挂住。
+- **修复（`gameplay/actionflow`，行为变化）**：`Behavior.OnDestroy` 在实体卸载 / 删档 / 撤销新建时结束在途动作与任务（`ErrOwnerDestroyed`，取消状态），`actionflow.actions.running` 减回；之后经 Behavior 发起的动作与任务返回 `ErrBehaviorClosed`。生成的 `BehaviorComponent.OnDestroy`（`roost add behavior`）与 game-demo 的玩家 / 怪物组件已接上（AI 先 `Close`）；已有生成工程 `roost project sync` 后得到新的生成部分，手写组件要自己在实体的 `OnDestroy` 里调。
+- **修复（`gameplay/state`，行为变化）**：`StateDao` 改为实现 `nest.RollbackParticipant`（去掉 `CaptureRollbackState` / `RestoreRollbackState`）；rollback=state 的 handler 里改状态而这个事务没对 `StateDao` 拍快照（没登记进实体的 DaoManager）时返回 `ErrRollbackNotCaptured`、什么都不改。修前静默改、handler 失败后定身之类的状态残留，类型注释前后矛盾（已改正）。rollback=undo 不受影响。
+- **修复（`gameplay/heartbeat`）**：驱动在登记到期时发现实例已移除（`IsRemoved`）就撤销整个宿主（组件漏调 `Host.OnDestroy` 时由驱动补上）；修前只计数、登记一直留在环上、驱动一直持有实例。
+- **修复（`framework/nest`）**：慢派发 trace 的 `param_samples` 只打印按值装箱的标量与实现了 `fmt.GoStringer` 的参数，其余只给类型名；修前用 `%#v` 反射打印，handler 还在执行时与参数的可变字段数据竞争（`-race` 报告，日志可能是撕裂的值）。要在 trace 里看到参数内容，让类型实现 `GoString`。
+- **测试**：`TestABeatRunnerCanBeRebuiltOnTheSameHost`、`TestABehaviorCanBeRebuiltOnTheSameHostAfterClose`、`TestABeatControllerCanBeRebuiltOnTheSameHost`、`TestAClosedRegistrationFreesItsNameAndItsQueuedBeatDoesNotRun`、`TestCloseInsideATransactionIsImmediateAndIgnoresEarlierStarts`、`TestARemovedInstanceLeavesTheDriver`、`TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds`、`TestBehaviorOnDestroyEndsWhatIsRunning`、`TestAnUnlistedStateDaoRefusesChangesUnderRollbackState`、`TestEveryBuffMutatorNotifiesBoundStates`（补 `RemoveBuff` / `SetBuffStacks` / `AdoptBuff` 的覆盖）、`TestSlowDispatchTraceDoesNotFormatParamsTheHandlerMayMutate`；修前失败原文见 DESIGN-TODO。
+- **文档**：guide/10-time §4A（`Reg.Close`、`Strict` 每拍等落盘）、§4C（卸载收尾、抢占后的排队项、`StateDao` 登记）、§4D（换场景重建）；impl/10-time §2B 第 2、6A、7 条与 §2D 第 2、6、16 条；OBSERVABILITY（慢派发 trace 的参数样本、`heartbeat.dropped_total`、`actionflow.actions.running`）；KNOWN-LIMITS（删去已修的“慢派发 trace”与已决定的“`Elapsed` 上限”，改写“域要在构造时给”）；DESIGN-TODO D20 / D21 状态行改为已合入 main。
+- **升级**：线上未部署，不做兼容。直接调用 `StateDao.CaptureRollbackState` / `RestoreRollbackState` 的代码（仓库内没有）改用 Nest 的快照；rollback=state 下改状态的实体要把 `StateDao` 登记进 DaoManager。
+- **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)、[“行为控制”](docs/maintenance/KNOWN-LIMITS.md#行为控制d21)、[“慢派发 trace 的参数样本”](docs/maintenance/KNOWN-LIMITS.md#慢派发-trace-的参数样本)。
+
 ### 生成器接入实体心跳、行为组件与场景时间域（DESIGN-TODO D20～D22）
 
 - **新增命令**：`roost add heartbeat --entity <Entity>`（实体的心跳宿主 `HeartbeatComponent`：`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`，业务在 `heartbeat_beats.go` 的 `onHeartbeatInit` 里登记）；`roost add behavior --entity <Entity> [--ai] [--state]`（`BehaviorComponent`：`actionflow.Behavior` 挂实体的心跳宿主，`--ai` 时 `ai.NewBeatController` 作观察者；业务文件 `behavior_actions.go` 带示例动作 `ExampleAction`、`--ai` 的 `behavior_strategy.go` 带示例策略、`--state` 的 `states.go` 是 `gameplay/state` 的 Catalog 声明、`game/handler/<entity>_behavior.go` 是发起示例动作 / 设定示例策略的 Nest handler；没有心跳宿主时一并加上）；`roost add timedomain --entity <Scene>`（主 DAO 定义加 `TimeAnchorBusiness` / `TimeAnchorDomain` / `TimeRate` 三个 `nopersist,sync` 字段，`TimeDomainComponent` 加载时 `timedomain.New`，倍率范围在 `timedomain_config.go`）。生成部分（`*_component_gen.go`、`game/heartbeat/driver_gen.go`）由 project sync 重写，业务文件只在缺失时创建；服务 Init / Shutdown 不用改。

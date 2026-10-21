@@ -39,7 +39,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/completion_failed/indeterminate——**indeterminate 非零即事故**） |
 | `nest.entity_group.transition.total` | Counter | 锁组迁移 |
 
-Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身份与上下文的详细慢日志按进程每5秒至多记录一次，`suppressed_since_last_trace` 表示跳过的重复诊断数。自动慢诊断不采集全 goroutine 堆栈，避免抓栈 STW 将短暂延迟放大为网络超时。全栈由运维在需要时显式通过已启用的 pprof/admin 诊断入口采集，并评估暂停开销；没有开启入口的服务不自动提供该能力。
+Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身份与上下文的详细慢日志按进程每5秒至多记录一次，`suppressed_since_last_trace` 表示跳过的重复诊断数。详细慢日志可能在 handler 还在执行时打印（`result=running`），所以 `param_samples` 不按反射读参数：只打印按值装箱的标量（布尔、数字、字符串）与实现了 `fmt.GoStringer` 的参数，其余只给类型名（`<*pkg.T>`，类型另见 `param_types`）；要看到某个参数的内容，让它的类型实现 `GoString` 并只读构造后不变的字段（例如 `*heartbeat.Reg`）。自动慢诊断不采集全 goroutine 堆栈，避免抓栈 STW 将短暂延迟放大为网络超时。全栈由运维在需要时显式通过已启用的 pprof/admin 诊断入口采集，并评估暂停开销；没有开启入口的服务不自动提供该能力。
 
 `NestOptionWithStageMetrics(true)` 开启 `nest.stage.duration{handler,stage}`（Duration，默认关闭）。
 
@@ -200,11 +200,11 @@ DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个
 | `heartbeat.executed_total{driver}` | Counter | 执行了回调的拍。与 `delivered_total` 的差是执行时按规则丢弃的（见 `dropped_total`）与还在队列里的 |
 | `heartbeat.skipped_total{driver,reason}` | Counter | 跳过的拍：`inflight`（上一拍还没执行完）、`queue_full`（快池准入满，含 Nest 批量作业里同 ID 冲突转单目标作业被拒）、`rejected`（其他准入失败，例如引擎停止中）。**基线应为零**；持续增长说明实体所在的 worker 跟不上或回调太慢。同时打限频 Warn `heartbeat: beats skipped`（缺省 10s 一条，汇总间隔内的计数并带一个样本实体） |
 | `heartbeat.stalled_total{driver}` | Counter | 在途超过 `StallAfter`（缺省 10s，同一登记连续卡住时翻倍）视为丢失而重投的拍。**基线应为零**；非零说明 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败），或 worker 排队超过 10s。同样计入 Warn |
-| `heartbeat.dropped_total{driver,reason}` | Counter | 按规则丢弃、不执行回调的拍：`removed`（实例已卸载 / 删档）、`stale`（已被同 ID 新实例取代或已 OnDestroy；含卸载窗口里旧实例的拍到达新实例）、`not_loaded`（实例还没发布）、`stopped`（停止生效后才到达）、`not_owner`（Remote 托管实体本进程不是独占拥有方）、`duplicate`（卡住重投后同一次投递的另一份已执行）。不打日志 |
+| `heartbeat.dropped_total{driver,reason}` | Counter | 按规则丢弃、不执行回调的拍：`removed`（实例已卸载 / 删档；驱动随即撤销这个实例的全部登记，每个登记至多计一次）、`stale`（已被同 ID 新实例取代、已 OnDestroy 或登记已 `Close`；含卸载窗口里旧实例的拍到达新实例、换场景重建后旧登记的在途拍）、`not_loaded`（实例还没发布）、`stopped`（停止生效后才到达）、`not_owner`（Remote 托管实体本进程不是独占拥有方）、`duplicate`（卡住重投后同一次投递的另一份已执行）。不打日志 |
 | `heartbeat.stopped_total{driver,reason}` | Counter | 框架自动停掉的登记：`remote_shared`（Remote 托管实体进入共享模式，共享模式不允许挂载心跳）。同时打 Warn `heartbeat: registrations stopped because their Remote entity entered shared mode`（按 `WarnInterval` 限频，缺省 10 秒一条，带间隔内停掉的个数与一个样本实体）。非零说明有组件给会进入共享模式的 Remote 实体挂了心跳，应改由业务层驱动 |
 | `heartbeat.registered{driver}` | Gauge | 正在跳（启动已生效）的登记数 |
 
-D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`）没有自己的指标，都计在上面这组里：每个组的当前动作需要周期 tick 时有一个 `"actionflow/<组号>"` 登记（移动中的实体就是移动组这一个），配了周期落库的在场景里有一个 `"map.save"` 登记；`registered` 随动作开始 / 结束涨落，空闲实体不计。指标不带登记名标签（低基数），按登记名排查看限频 Warn 里的样本（`sample_registration`）。
+D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`）没有自己的指标，都计在上面这组里：每个组的当前动作需要周期 tick 时有一个 `"actionflow/<组号>"` 登记（移动中的实体就是移动组这一个），配了周期落库的在场景里有一个 `"map.save"` 登记；`registered` 随动作开始 / 结束涨落，空闲实体不计。指标不带登记名标签（低基数），按登记名排查看限频 Warn 里的样本（`sample_registration`）。换场景重建行为组件（`Behavior.Close` / `Controller.Close` → `Reg.Close`）时旧登记离开、新登记加入，`registered` 不变；旧登记已经在队列里的拍计 `dropped{reason="stale"}`。组件漏调 `Host.OnDestroy` 时，实例已移除的登记在到期时被驱动撤销，计一次 `dropped{reason="removed"}`（每个登记至多一次），之后 `registered` 随之减少。
 
 ### 动作（gameplay/actionflow，可选）
 
@@ -214,7 +214,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | --- | --- | --- |
 | `actionflow.actions.started_total{kind}` | Counter | 成为组的当前动作的次数（含 Start 即完成的瞬时动作） |
 | `actionflow.actions.ended_total{kind,status}` | Counter | 结束的动作，按结束状态；含从未启动就被丢弃的排队项与被拒绝的延后 Start，所以可以多于 `started_total` |
-| `actionflow.actions.running` | Gauge | 此刻是某组当前动作的动作数（全部打开指标的 Behavior 合计）。只升不降说明有动作卡住（不结束、组被冻结后没有解冻） |
+| `actionflow.actions.running` | Gauge | 此刻是某组当前动作的动作数（全部打开指标的 Behavior 合计）。实体卸载时由 `Behavior.OnDestroy` 结束在途动作并减回（组件要在实体的 `OnDestroy` 里调它，生成的 `BehaviorComponent` 与 game-demo 已调）；只升不降说明有动作卡住（不结束、组被冻结后没有解冻），或某个组件漏调了 `OnDestroy` |
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 

@@ -19,9 +19,9 @@
 - **game-demo 手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段绑时钟；demo 的 `startWorldTimers` 在 `Service.Init`、`EnsureWorld` 之前调用，“World 第一次加载在驱动接上之后”靠 demo 自己的启动顺序（写闸门 `require_write_gate: true` 在 `EnsureWorld` 之后才发布），不是框架保证；更早加载的 World 按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
 - **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader 代替 DataEngine + Mongo；循环的其余计时分支（MaxWait 重读时钟、准入失败重试、Redeliver）由它与 entitytimer 包测试覆盖。真实 WAL / Mongo 下的定时器往返由 7 个游戏夹具的 SIGKILL 崩溃恢复与 MMORPG 的正常停机夹具覆盖，全部经驱动投递循环（`Driver.Start`）、不手发 Tick，见 [游戏接入验收](#游戏接入验收)。
 
-### 慢派发 trace 与 handler 并发读消息参数（2026-10-21 发现，尚未修复）
+### 慢派发 trace 的参数样本
 
-`framework/nest/trace.go` 的慢派发 trace（`startSlowDispatchTraceWatch`，执行超过 200ms 时由 `time.AfterFunc` 的 goroutine 触发）用 `fmt.Sprintf("%#v")` 打印消息参数（`nestParamSamples`），这时 handler 可能仍在执行、正在改同一个参数对象：参数是可变指针时，`-race` 报数据竞争，日志里可能是撕裂的值。发现于心跳 5 万实体冒烟 `-race -count=30`（`TestFiftyThousandEntitiesSmoke/dispatch`，单目标方式，与批量作业无关）。心跳这一侧已让 `*heartbeat.Reg` 实现 `GoString`、只打印构造后不变的字段（`TestRegFormatsWithoutReadingMutableState`，红在 `-race`）；Nest 侧对任意可变参数的同类竞争没有改（超出本轮范围），可选做法：trace 只打印 `%T`、或在准入时快照参数文本、或只在 handler 返回后打印。
+慢派发 trace（handler 执行超过 200ms，可能在 handler 还在跑时由计时 goroutine 打印）的 `param_samples` 只打印按值装箱的标量（布尔、数字、字符串）与实现了 `fmt.GoStringer` 的参数，其余参数只给类型名（`<*pkg.T>`）：不按反射读 handler 可能正在改写的对象（[DESIGN-TODO“D20 与 D21 审查修复”](DESIGN-TODO.md#d20-与-d21-审查修复2026-10-21)）。要在 trace 里看到某个参数的内容，让它的类型实现 `GoString`，并保证只读构造后不变的字段（例如 `*heartbeat.Reg`）；按值传的结构体（是副本、没有竞争）也只给类型名，这是为了不在 trace 里区分“副本里有没有引用”。
 
 ### 实体心跳（D20 第 1 期）
 
@@ -36,7 +36,9 @@
 - **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。只有独占拥有（`LocalOwned`）才执行。共享模式下的所有权迁移（生成工程的 Remote 流程）已在真实 `remoteentity.Manager` 下验证没有双推进（进程内权威替身与真实 Redis + Mongo 两套，见 [DESIGN-TODO“真实 Remote 共享模式切换验证”](DESIGN-TODO.md#真实-remote-共享模式切换验证2026-10-21)）；独占模式下不经共享的直接迁移仍只有模拟 Remote 写准入的用例（`heartbeat/remote_test.go`），真实依赖下的故障注入（Redis / Mongo 断开时切换）没有做。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式下各写者实例都是 `Shared`，分不出谁该跳。共享是运行期状态、不是种类声明，所以登记时只拦得住“当时已在共享”的实例（`Register` / `Start` 返回 `ErrHeartbeatRemoteShared`）；登记后才进入共享的（拥有方 `EnterRemoteSharedMode`，或第二个写者加载时是 `Unknown`、第一拍准入才转 `Shared`），由下一拍在实体锁内停掉，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn。Remote 没有所有权切换回调，检测靠心跳自己读实例状态（驱动到期时、handler 执行时）。边界：① 这一拍要走一次共享模式写准入（分布式锁），回调不执行；② 共享窗口短于登记的周期、期间没有到期的拍时，这个登记不会被停掉（期间也没有执行），回到独占后照常跳；全部登记停掉最多要一个最长档位的周期；③ 回到独占（`LeaveRemoteSharedMode`）后不自动恢复，业务需要时自己 `Start`（维护者 2026-10-21 决定）；④ 2026-10-21 已在真实 `remoteentity.Manager`（进程内权威替身）与真实 Redis 分布式锁 + Mongo 持久权威下验证停掉、计数与不自动恢复（`movement/shared_test.go`、`shared_integration_test.go`）。共享实体的周期逻辑由业务层驱动（例如负责它的服务按周期发 Nest 消息）。
 - **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。
-- **`Elapsed` 上限**：取 `max(1s, 档位)`，不是一律 1 秒（2s 及以上的档每拍都会少算），待维护者确认。
+- **`Strict` 持久级别的心跳每拍都在实体 worker 上等落盘**：`WithDurability(nest.DurabilityStrict)` 的登记，每一拍的提交都按 strict 走，回调改了持久字段的拍要在实体 worker 上、持实体锁等提交持久化完成才返回（与任何 strict handler 相同），快池实体的高频心跳会把 worker 时间花在等 I/O 上；缺省 `Async`。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)。
+- **组件漏调 `Host.OnDestroy` 时由驱动补上，但要等登记到期**：驱动在登记到期、发现实例已移除（`IsRemoved`）时撤销整个宿主，所以环与驱动对已移除实例的引用最多再保留一个最长档位的周期（60s 档最多 60s）；`dropped{reason="removed"}` 每个登记至多计一次。还没发布或被同 ID 另一实例顶替的不撤销（可能是暂时的），只丢这一拍。
+- **`Reg.Close` 不随事务回滚**：与 `Register` 一样是生命周期操作，立即生效；回滚的 handler 里 Close 掉的登记不会回来，同一 handler 里同名新登记的 `Start` 随回滚撤销、登记本身保留（名字被占着，要再 Close 或复用）。换场景重建的调用放在 handler 最后一步（与 runner 的约束相同）。
 - **装了心跳的服务多一个 Mod**：与 entitytimer 相同，`shutdown.total_timeout` 多 3s 保底。
 
 ### 移动与动作（D20 第 2 期）
@@ -94,6 +96,8 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **决策轨迹不留存**：`Trace` 只是钩子，框架不保存轨迹；打开 `TraceNodes` 后每个节点每拍多一次接口调用，适合按实体采样，不要全服常开（没有测量）。
 - **动作指标缺省关闭**：`BehaviorConfig.Metrics` 打开后每个动作开始、结束各写一次注册表（拼标签有分配），全服量级的开销没有测量。
 - **`FreezeCancel` 只打断当前动作**：排队项保留，解冻后接着推进；要连排队一起丢弃，业务另调 `ClearQueue` / `EndAction`。
+- **被抢占组的排队项在抢占方结束时推进，照常过跨组冲突**（[DESIGN-TODO D20 / D21 审查修复](DESIGN-TODO.md#d20-与-d21-审查修复2026-10-21)）：抢占时不推进（变异 D4 锁定），抢占方（那一个动作）结束时推进一次。抢占方被同组的另一个动作取代时，推进排在新动作启动之后，按跨组规则判定：新动作同样挡住它（`BlockIncoming`）时排队项以失败结束、接着试下一个，整队可能这样各收到一次失败；要“等这一类动作全部结束再走”的，由业务在抢占时自己 `ClearQueue` 或在结束回调里重新排队。
+- **`Behavior.OnDestroy` 不在事务里**：卸载时结束在途动作与任务（`ErrOwnerDestroyed`，取消状态），动作的 `Cancel` 与观察者这时改的持久字段不落库；组件要按装配顺序调（AI 的 `Controller.Close` 在前，见 guide §4C）。漏调时在途动作没有结论、`actionflow.actions.running` 不减。直接经 `Runner()` 发起的动作不受 Close 后的拒绝约束，只是挂不上心跳（以 `ErrBeatRunnerClosed` 失败结束）。
 - **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，回滚后的不一致在下一次状态通知时纠正（见下条）。
 - **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。
 - **Buff 到期才撤销派生状态**：`BindStates` 的状态随 buff 心跳（D20 P5）移除到期 buff 而失效，最多晚一个心跳周期（`BeatConfig.Granularity` 取档，缺省 1 秒）加 tick 取整；没装 `AttachBeat` 的实体只在业务自己调 `TickBuffs` 时失效。
@@ -122,7 +126,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **进程业务时钟与 Registry 业务时钟同源但不是同一个对象**：心跳与 entitytimer 驱动、`fctx.Now` 读进程业务时钟（App 启动时 `clock.SetOffset`），服务读 `app.BusinessClock(r)`。同一进程里起多个 App 且 `time.logic_offset` 不同时，进程级偏移是最后启动的那个（与 D22 之前 `fctx.Now` 的行为相同）。
 - **时间域：成员看到改倍率比场景晚一个发布**：场景事务提交后（`AfterCommit`）才发布；之间开始的成员消息按旧倍率。域时间对读者单调（取已交出的最大值），代价是改倍率前后成员与客户端的域时间差“发布延迟 × 倍率”（微秒到毫秒级），时停期间一直差这一点。
 - **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
-- **域要在构造时给**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域（成员换场景要重建行为组件，或不挂域、由业务自己传时间）。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
+- **域要在构造时给，换场景靠重建**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域。成员换场景时先 `Controller.Close`、`Behavior.Close`（在途动作与任务以给定原因结束、心跳登记撤销、名字释放），再在同一心跳宿主上按新域重建（[guide/10-time §4D](../framework/guide/10-time.md#4d-场景时间域变速)）；不提供 `SetTimeDomain`：旧域里记下的时刻（上一拍的 `Elapsed` 基线、计划步骤时限的起点、`FreezeFor` 的期限）不能拿到新域里比较，而换场景本来就要结束场景里的动作。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
 - **技能 / Buff 的时间域在构造时给**（D20 P5 起已接域，原“没有自动接域”一条关闭）：`combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain` 在 `AttachBeat` / `NewRuntimeBeat` 时定下，运行中不能换域。buff 的 `DueTick` 是按域时间算的绝对 tick：实体换到另一个域（或离开变速场景）时，已有 buff 的剩余时长按新域的 tick 算，2 倍速场景里攒下的“领先”会让 buff 在常速域里多持续一段，框架不换算。
 - **客户端外推只有 C# 的计算类**：game-demo 的场景已挂时间域（D20 P3，单场景、`nopersist,sync`、经场景视野下发给每个成员）；生成器的 `roost add timedomain` 只生成场景侧的字段与组件，成员怎样拿到所在场景的域由业务写；C# 客户端有 `Roost.Client.SceneTimeDomain`（同一公式、单调托底）；SDK 不解码业务载荷，三个字段由游戏自己的解码器读出交给它；“估计的服务端业务时间”由游戏提供（SDK 没有对时）；Unity 适配层没有接。
 - **生成工程消费夹具未实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，本轮没有在真实依赖上跑。
@@ -134,7 +138,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **按需装配，不进缺省 Mod 集**：`heartbeat` Mod 只在 add 命令（或 `roost add mod heartbeat`）之后才装在那个服务上。实体侧零开销（没有登记、登记都停着不占调度，生成的示例登记是停止状态、AI 不设策略不跳），进程侧装上之后驱动空转也每 10ms 走一格、停机预算多 3s。是否改成“装了 nest 的服务缺省装”待维护者决定。
 - **工程只有一个驱动变量**：`game/heartbeat.Driver`，依据是生成工程每个进程只跑一个服务；同一个进程里起两个装了 heartbeat Mod 的 App（测试）时它们共用一个驱动：后一次 `Bind` 覆盖前一次的 Nest 客户端（`Bind` 允许重复调用），拍都投到后接上的那个 Nest。驱动的 `Name`（日志 / 指标标签）是工程名，不区分服务。
 - **示例 AI 的 `EndActions` 结束全部组的动作**：生成的 `ai.ControllerHooks.EndActions` 是 `Behavior.EndAllAction(true, reason)`（切换策略时清场），写在生成部分，业务要换成“只结束某些组”需要另写 Controller，生成器不提供钩子。
-- **成员挂场景时间域由业务写**：生成的 `timeDomain()` 返回 nil；域在构造时定下、运行中不能换（D22 边界），实体换场景要重建行为组件，生成器没有生成重建入口。
+- **成员挂场景时间域由业务写**：生成的 `timeDomain()` 返回 nil；域在构造时定下、运行中不能换（D22 边界），实体换场景要 `Close` 旧的行为组件后重建（`Behavior.Close` / `Controller.Close`，见上文“域要在构造时给”），生成器没有生成重建入口；生成的 `BehaviorComponent.OnDestroy` 已调 `Controller.Close` 与 `Behavior.OnDestroy`。
 - **时间域字段缺省 `nopersist,sync`**：随进程结束的副本场景；要持久的场景手工改成 `persist`（DAO 定义归业务）。三个字段名固定，已有同名字段只有一部分或类型不同时 add 拒绝。
 - **去掉 `heartbeats` / `time_domains` 条目后生成部分不自动删除**：与 `timers` 相同，需要手工删 `*_component_gen.go` 与实体里的组件字段；服务 `mods` 里的 `heartbeat` 也不自动去掉。
 - **端到端用的是内存权威**：`scripts/test-heartbeat-generated.sh` 以不落库 committer 代替 DataEngine，只覆盖新建实体（不覆盖卸载重载后重新登记、Remote 托管实体、真实 WAL / Mongo）；脚本不在 pretag 与 `go test ./...` 里，要手工运行。

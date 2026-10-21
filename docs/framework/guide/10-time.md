@@ -152,8 +152,9 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Driver.NewHost(entity)` | 每个实体实例一个宿主（Remote 托管、慢池实体都可以） |
 | `Host.Register(name, period, fn, opts...)` | 登记，返回停止状态的 `*Reg`；name 在实例内唯一。一个实体可以有多个登记，**各自投递、不合并**。Remote 托管实体处于共享模式时返回 `ErrHeartbeatRemoteShared` |
 | `Reg.Start` / `Stop` / `SetPeriod` | 启停、换档。在事务里调用时**提交后生效、回滚作废**；不在事务里（加载发布前）立即生效。回调里调用的随本拍事务。`Start` 返回 `error`：Remote 托管实体处于共享模式时返回 `ErrHeartbeatRemoteShared`、不启动，其余情况为 nil |
-| `Host.OnDestroy()` | 卸载、删档、撤销新建时由组件调用：实例永久离开驱动，之后的启停被忽略 |
-| `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒） |
+| `Reg.Close()` | 撤销一个登记：立即离开驱动、释放名字（同一实例上马上可以同名再 `Register`），之后 `Start` / `SetPeriod` 返回 `ErrRegClosed`。已经投出、还在队列里的拍到达时不执行回调（按过期丢弃）。与 `Register` 一样不随事务回滚。行为组件换场景重建时经 `Behavior.Close` / `Controller.Close` 调用（§4D） |
+| `Host.OnDestroy()` | 卸载、删档、撤销新建时由组件调用：实例永久离开驱动，之后的启停被忽略。组件漏调时，驱动在登记到期、发现实例已移除时替它撤销（计 `dropped{reason="removed"}`），但要等到期，最多一个最长档位的周期 |
+| `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒）。**`strict` 每一拍都在实体 worker 上、持实体锁等提交落盘**（改了持久字段的拍要等一次 WAL 持久化才释放 worker），快池实体的高频心跳不要用；要“这一拍的结果一定落盘才算”的少数登记才用，并选低档位 |
 | `WithTimeDomain(d)` | 本登记按场景的时间域计时（§4D）：调度仍按真实时间，`Beat.Now` / `Elapsed` 是域时间 |
 
 **档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 100ms、AI 200ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
@@ -265,6 +266,7 @@ m.behavior, _ = actionflow.NewBehavior(m, actionflow.BehaviorConfig{
 - 任务回调运行期间（`Start` / `Tick` / `OnActionEnd`，含它们同步引出的回调）经 `CreateAction` / `EnqueueAction` 发起的动作**归属当前任务**，任务结束时一并取消；AI 或 handler 发起的不属于任何任务。
 - `Clear(reason)` 清场：先结束任务、再强制结束全部动作，之后什么都不在运行。
 - 和 runner 一样只在实体锁内调用、不随事务回滚（§4B 的业务约束照旧）。
+- **卸载与撤销**：组件在实体的 `OnDestroy` 里先 `controller.Close(reason)`（AI 卸下策略、撤销 `"ai"` 心跳），再 `behavior.OnDestroy()`：在途动作与任务以 `actionflow.ErrOwnerDestroyed`（取消状态）各结束一次，按 ID 等结果的一方有结论，动作指标的 `running` 减回；最后心跳宿主 `Host.OnDestroy()`。这时不在事务里，动作的 `Cancel` 只做内存收尾。`Behavior.Close(reason)` 是同一件事、原因由调用方给，用于换场景重建（§4D）；之后经 Behavior 发起的动作与任务返回 `ErrBehaviorClosed`。生成的 `BehaviorComponent.OnDestroy` 已按这个顺序调用。
 - **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Behavior 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束；运行中被框架停掉的（进入共享模式），回到独占后由 `Beat().Sync()` 重新挂上，任务不被结束。
 
 **计划步骤的时限与重试**（`MissionStep.Timeout` / `Retry`，`MissionPlan.Period`）：
@@ -307,7 +309,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 
 强制结束（`End` / `EndAll` / `EndAction` / 冻结打断 / 跨组抢占）不问它。
 
-**跨组冲突：`ActionRunnerConfig.Conflict`（`BehaviorConfig.Conflict`）**（对照 ssr 的硬编码矩阵，改为业务给的函数）。动作要启动（`Start`，或排队项成为当前动作）时，对其他每个有当前动作的组（组号升序）调用 `Conflict(running, incoming)`：任一组 `BlockIncoming` 即拒绝新动作（`ErrBlockedByGroup`，什么都不改）；否则先取消全部 `PreemptRunning` 的组的当前动作（取消状态，不推进它们的队列），再按同组规则启动。缺省 nil：组之间互不影响。
+**跨组冲突：`ActionRunnerConfig.Conflict`（`BehaviorConfig.Conflict`）**（对照 ssr 的硬编码矩阵，改为业务给的函数）。动作要启动（`Start`，或排队项成为当前动作）时，对其他每个有当前动作的组（组号升序）调用 `Conflict(running, incoming)`：任一组 `BlockIncoming` 即拒绝新动作（`ErrBlockedByGroup`，什么都不改）；否则先取消全部 `PreemptRunning` 的组的当前动作（取消状态），再按同组规则启动。缺省 nil：组之间互不影响。被抢占组的**排队项保留**：抢占的那一刻不推进（否则排队项会先启动、再被正在启动的抢占方挡住），**抢占方结束时**（完成、被结束、被取代、启动失败）推进一次，排队项照常过冻结与跨组规则成为当前动作，按 ID 等它的 `TaskflowAction` / `PlanMission` 不会挂住；这期间组被冻结的由 `Recover` 推进，业务已在这组启动了别的动作的不动。与 `FreezeCancel` 相同的口径：打断只停下正在做的事，排队的计划去留由业务决定（`ClearQueue` / `EndAction`）。
 
 **按 ID 结束：`EndAction(id, force, reason)`**：结束某组的当前动作（并推进该组队列），或把排队中的动作移出队列（取消状态）；找不到返回 `ErrActionNotFound`（回调里延后执行时找不到不报告——动作可能已在这之前结束）。
 
@@ -339,7 +341,7 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 
 - **两种写入**：按来源 `Add(id, Source{Kind, ID})` / `Remove` / `RemoveSource`——有任一来源即生效，同一来源重复加不叠加、撤掉不存在的来源无效（`Source.Kind` 由业务定义：Buff、动作、GM……）；派生 `Provide(id, func() bool)`——查询时现算、不存储，拥有数据的组件在数据变化后调 `Changed(id)`。没有一次性事件（生命周期事件走实体回调或 AI 事件），没有通用参数槽。
 - **查询**：`Has`、`Any`、`Satisfies(Requirement{All, None})`（“能否做某个操作”）、`Sources`、`Active`、`Synced`（同步打包读它）。
-- **随事务回滚**：按来源的状态存在 `StateDao`，handler 回滚时一起撤销（两种回滚策略都支持；`rollback=state` 要求 DAO 登记在实体的 DaoManager 里）。声明了 `Sync` 的变化标同步脏（`FieldStates`，业务的同步打包读 `Set.Synced()`），声明了 `Persist` 的进持久文档（键是状态名；改名等于丢弃旧数据），缺省都不。持久状态只能在 Nest 事务里改（事务外返回 `ErrNotInTransaction`）；不持久的可以在加载 / 新建的初始化阶段直接改。
+- **随事务回滚**：按来源的状态存在 `StateDao`，handler 回滚时一起撤销（两种回滚策略都支持；`rollback=state` 靠 Nest 对实体 DaoManager 里的 DAO 拍快照，所以要求 `StateDao` 登记在那里——没登记时 `rollback=state` 的 handler 里改状态返回 `state.ErrRollbackNotCaptured`、什么都不改；`rollback=undo` 不依赖登记）。声明了 `Sync` 的变化标同步脏（`FieldStates`，业务的同步打包读 `Set.Synced()`），声明了 `Persist` 的进持久文档（键是状态名；改名等于丢弃旧数据），缺省都不。持久状态只能在 Nest 事务里改（事务外返回 `ErrNotInTransaction`）；不持久的可以在加载 / 新建的初始化阶段直接改。
 - **观察者**：`Watch(id, fn)` / `Unwatch`，`NewWatcher()` 打包一次撤销。按“观察者上次看到的值”算差通知（总是交替的 true / false），顺序 = 注册顺序；观察者里改状态立即生效、引出的通知排到本轮之后。**回滚不通知**：观察者的副作用保留，下一次任何状态改动或 `Refresh()` 时按差补发。能用门控表达的不要写观察者。
 - **门控 `Gate`**：规则 `{State, Group, Mode}`，状态生效时对动作组计数冻结（`FreezeCancel` 在生效那一刻取消在途动作），失效时撤销；装上时按当前状态对齐，`Close` 撤销它持有的全部冻结。冻结计数不随事务回滚，所以 handler 回滚撤掉了一个门控状态时，组保持冻结直到下一次通知（每条规则至多持有一次冻结，不会累积）；需要立即一致就在回滚之后调 `Refresh`。
 - **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
@@ -397,6 +399,17 @@ brain, err := ai.NewBeatController(hooks, ai.BeatConfig{Host: host, TimeDomain: 
 
 - **成员读发布的快照，不读场景的 DAO**：成员在自己的锁里，不跨实体加锁。快照在场景事务提交后才发布，所以生效时刻之后、发布之前开始的成员消息仍按旧倍率算；为了让成员读到的域时间单调，域记下已经交出去的最大域时间，读数取两者较大者，改倍率时新锚点也不低于它。代价是改倍率前后成员与客户端可能差“发布延迟 × 倍率”（微秒到毫秒级），随后一致。
 - **actionflow / ai**：`actionflow.BeatConfig.TimeDomain`（`BeatRunner`、`Behavior` 的动作组心跳与任务心跳）与 `ai.BeatConfig.TimeDomain`（AI 心跳）挂上域：动作每拍的 `ActionContext.Now` / `Elapsed` 是域时间，移动（`Move.Advance(ctx.Elapsed)`）随之加速、慢放、时停；心跳之外调用 runner（handler 里 `Start` / `End`）时 `ActionContext.Now` 也是本条消息的域时间（不论调用方传没传时间）；`Behavior` 没配 `Now` 时取域时间，任务上下文与计划步骤 `Timeout` 的起点、任务心跳的到期判断同一把尺子；`ai.Controller` 没配 `Now` 钩子时取域时间，`FreezeFor` 的期限与 AI 心跳的到期判断同一把尺子。只想让某个登记按域计时，也可以直接把 `heartbeat.WithTimeDomain` 放进 `Options`。
+- **成员换场景（换时间域）靠重建**：域在构造时给，运行中不换。成员进出副本时，在换场景的 handler 最后一步撤掉旧的、在同一心跳宿主上按新域重建：
+
+  ```go
+  m.brain.Close("scene change")                              // AI 卸下策略、撤销 "ai" 心跳，名字释放
+  m.behavior.Close(actionflow.NewActionReason("scene change")) // 任务与动作以这个原因结束，组心跳与任务心跳撤销
+  m.brain, _ = ai.NewBeatController(hooks, ai.BeatConfig{Host: m.host, TimeDomain: next.time})
+  m.behavior, _ = actionflow.NewBehavior(m, actionflow.BehaviorConfig{ /* 同上 */ Observer: m.brain,
+  	Beat: &actionflow.BeatConfig{Host: m.host, TimeDomain: next.time}})
+  ```
+
+  `Close` 立即撤销心跳登记（`heartbeat.Reg.Close`：离开驱动、释放名字），所以同名登记马上可以重建；旧登记已经在队列里的拍到达时不执行回调。不提供 `SetTimeDomain`：旧域里记下的时刻（上一拍的 `Elapsed` 基线、计划步骤时限的起点、`FreezeFor` 的期限）拿到新域里比较没有意义，而换场景本来就要结束旧场景里的动作（MoveTo 的目标点属于旧场景）。`Close` 与构造一样不随事务回滚（见 §4B 的业务约束）。只用 `BeatRunner` 的组件用 `BeatRunner.Close(reason)`。
 - **技能 / Buff**：`combatcomponent.RuntimeBeatConfig.TimeDomain` 与 `BeatConfig.TimeDomain`（§4E）挂上域：技能 tick 与 buff 的到期按域时间换算，时停时 tick 不前进、2 倍速时走两倍；handler 里的 `RuntimeBeat.Start` / `CurrentTick` 同样取域时间。
 - **持久化的期限与 entitytimer 不接时间域**（维护者决定 ⑦）：持久定时器的离线补触发只对业务时间成立；域内的定时走心跳（按域时间判定到期）。存进 DAO 的业务期限（邮件过期、活动截止）仍是业务时间。
 - **持久与否**：`Fields` 是否持久由业务选。随进程结束的副本用 `nopersist,sync`（推荐）；要持久的场景用持久字段，重载后域时间按存下的锚点与倍率接着走（停服期间同样按倍率前进，时停的保持时停）。`Domain` 实例随场景实例：场景卸载重载后是新的 `Domain`，成员要换成新的。
