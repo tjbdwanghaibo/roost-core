@@ -18,7 +18,14 @@ import (
 // 敌方目标使用单独的授权发布 Interest，不进入公共空间订阅源。
 // 每次通过生成 Sender 在 Nest 锁内同时读已提交的位置和侦察位图，避免从两份缓存拼接权限。
 // 目标位置是固定教学地图配置；只复用已持久的玩家视点，未实现敌方目标 DAO、行军速度或碰撞。
-func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) func(...int64) {
+type durableVision struct {
+	refresh  func(context.Context) error
+	expect   func(...int64)
+	load     func(context.Context) (string, error)
+	noFrames func()
+}
+
+func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *durableVision {
 	t.Helper()
 	m, in, sink := newSpatialView(t)
 	for _, id := range []int64{98, 501, 502, 503, 504} {
@@ -40,17 +47,36 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) f
 		check(t, m.Subscribe(sid, 98, entity.SyncProfile{}))
 	}
 	positions := map[int64]spatial.Point{501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700}}
-	return func(want ...int64) {
-		t.Helper()
-		for _, sid := range []entitysync.SessionID{1, 2} {
-			check(t, m.HoldSession(sid))
+	v := &durableVision{}
+	v.load = func(ctx context.Context) (string, error) {
+		return sender.NewAllianceRewardsSender(n.nest).Sync_AllianceWallet(ctx, n.id)
+	}
+	v.noFrames = func() {
+		for _, id := range []entitysync.SessionID{1, 2} {
+			if len(sink.take(id)) != 0 {
+				t.Fatal("failed authority read published a frame")
+			}
 		}
-		raw, e := sender.NewAllianceRewardsSender(n.nest).Sync_AllianceWallet(context.Background(), n.id)
-		check(t, e)
+	}
+	v.refresh = func(ctx context.Context) error {
+		for _, sid := range []entitysync.SessionID{1, 2} {
+			if err := m.HoldSession(sid); err != nil {
+				return err
+			}
+		}
+		raw, e := v.load(ctx)
+		if e != nil {
+			return e
+		}
+		if e = ctx.Err(); e != nil {
+			return e
+		}
 		var state struct{ X, Y, VisionMask, ScoutUntil int64 }
-		check(t, json.Unmarshal([]byte(raw), &state))
+		if e = json.Unmarshal([]byte(raw), &state); e != nil {
+			return e
+		}
 		if state.X < 0 || state.Y < 0 || state.X >= 1000 || state.Y >= 1000 {
-			t.Fatal("invalid durable viewpoint")
+			return fmt.Errorf("invalid durable viewpoint")
 		}
 		// 期限是业务事实，过期时不延长、不删档；读不到合法期限即不授予临时视野。
 		now := business.Now().UnixMilli()
@@ -65,14 +91,21 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) f
 			}
 		}
 		slices.Sort(visible)
-		check(t, in.SetViewMembers(901, visible))
+		if e = in.SetViewMembers(901, visible); e != nil {
+			return e
+		}
 		if refused := in.Apply(); len(refused) > 0 {
-			t.Fatal(refused)
+			return fmt.Errorf("view application refused: %v", refused)
 		}
 		for _, sid := range []entitysync.SessionID{1, 2} {
-			check(t, m.ReadySession(sid))
+			if e = m.ReadySession(sid); e != nil {
+				return e
+			}
 		}
-		check(t, m.Flush(context.Background()))
+		return m.Flush(ctx)
+	}
+	v.expect = func(want ...int64) {
+		t.Helper()
 		for i := range receivers {
 			raws := sink.take(entitysync.SessionID(i + 1))
 			if len(raws) == 0 {
@@ -119,8 +152,9 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) f
 				expected = nil
 			} // 第二个客户端没有该玩家的侦察授权。
 			if !slices.Equal(got, expected) {
-				t.Fatalf("client %d targets=%v want=%v at=%+v", i+1, got, expected, state)
+				t.Fatalf("client %d targets=%v want=%v", i+1, got, expected)
 			}
 		}
 	}
+	return v
 }

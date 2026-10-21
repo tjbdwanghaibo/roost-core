@@ -3,6 +3,7 @@ package alliance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -129,7 +130,11 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	if !write {
 		now = deadline + 1
 	} // 离线越过期限；先前完整冷事实比较包含此期限。
-	vision := newDurableVision(t, n, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }))
+	view := newDurableVision(t, n, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }))
+	vision := func(want ...int64) {
+		check(t, view.refresh(ctx))
+		view.expect(want...)
+	}
 	replayInit := func() {
 		s := sender.NewAllianceRewardsSender(n.nest)
 		before, err := s.Sync_AllianceWallet(ctx, n.id)
@@ -207,8 +212,62 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	vision(504) // 最后 1ms 内仍可见；501 的撤权不影响独立临时授权。
 	replayInit()
 	vision(504)
-	now = deadline
-	vision() // 半开区间，到期的同一毫秒就不再可见。
+	// 由真实 ticker 推动到期，不在 observe 内手动 refresh；所有发布串行归此循环。
+	loop, err := newPermissionLoop(20*time.Millisecond, 50*time.Millisecond)
+	check(t, err)
+	loopCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	originalLoad := view.load
+	cycles := 0
+	view.load = func(readCtx context.Context) (string, error) {
+		switch cycles {
+		case 1:
+			<-readCtx.Done()
+			return "", readCtx.Err()
+		case 2:
+			// 模拟期限之后才返回的有效快照；即使 loader 漏报超时，也不能 Ready/Flush。
+			raw, e := originalLoad(readCtx)
+			if e != nil {
+				return "", e
+			}
+			<-readCtx.Done()
+			return raw, nil
+		case 3:
+			return "{", nil // 损坏的内部快照同样保持 held。
+		}
+		return originalLoad(readCtx)
+	}
+	err = loop.run(loopCtx, func(readCtx context.Context, _ uint64) error {
+		return view.refresh(readCtx)
+	}, func(refreshErr error) {
+		cycles++
+		switch cycles {
+		case 1:
+			check(t, refreshErr)
+			view.expect(504)
+			now = deadline // 不发提示；下次 ticker 必须发现到期。
+		case 2, 3:
+			if !errors.Is(refreshErr, context.DeadlineExceeded) {
+				t.Fatalf("want read deadline, got %v", refreshErr)
+			}
+			view.noFrames()
+		case 4:
+			if refreshErr == nil {
+				t.Fatal("invalid authority snapshot was accepted")
+			}
+			view.noFrames()
+		case 5:
+			check(t, refreshErr)
+			view.expect() // 超时后重读期限，Full 清掉最后目标。
+			cancel()
+		default:
+			t.Fatal("loop continued after cancellation")
+		}
+	})
+	if !errors.Is(err, context.Canceled) || cycles != 5 {
+		t.Fatalf("loop exit=%v cycles=%d", err, cycles)
+	}
+	view.load = originalLoad
 	replayInit()
 	vision()
 	now = deadline + 1
