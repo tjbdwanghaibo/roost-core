@@ -27,7 +27,7 @@
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
 
-- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo 未接。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P4（压测改心跳驱动）代码已实施、缺省仍是全局循环且没有测量，见“压测工具的心跳驱动”一节；P3（game-demo）、P5（迁移现有快池 tick）未做。
+- **业务接入**：生成器已接入（`roost add heartbeat` / `behavior` / `timedomain`，边界见下文“生成器接入心跳、行为与时间域”）；game-demo 未接。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P4（压测改心跳驱动）代码已实施、缺省仍是全局循环且没有测量，见“压测工具的心跳驱动”一节；P3（game-demo）、P5（迁移现有快池 tick）未做。
 - **批量心跳投递未经正式压测，缺省关闭**（维护者 2026-10-21 决定：选项 C 先合入、缺省关闭）：缺省 `heartbeat.delivery: dispatch` 仍是每拍一条单目标 `Dispatch`，50 万次/秒约 4 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)）。`batch`（D20 选项 C，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)）64 拍一个 Nest 批量作业，每拍仍在实体自己的 Guard 作用域与事务里执行、Remote 托管实体仍单目标；正式压测暂停，只有 1 轮不作结论的数据与探索性运行（[NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)），Linux 上没有测。合批优化压测通过后再改为缺省开启。
 - **批量方式下的观测口径不同**：批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计超过慢阈值的），按批记 `nest.dispatch.try_batch.*`。业务时间与 Frozen 派生值仍按拍各冻结一次（与单目标方式相同）。
 - **（批量方式）冲突转单目标时可能有一次 worker 等锁**：同 ID 冲突的拍转成单目标作业排在冲突消息之后，执行时锁一定空闲；但若实体锁被 Nest 作业顺序之外的持有者占着（别的 handler 的 `Cast` 等），转成的单目标作业与普通 `Dispatch` 一样在 worker 上等这把锁，与 X 相同、不比 X 多。热点实体（同一实体高频业务消息）下的转换率没有测。
@@ -68,7 +68,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 `actionflow.Behavior`、`Replacer`、跨组 `Conflict`、`EndAction`、计数冻结与 Start 即完成（[DESIGN-TODO D21](DESIGN-TODO.md#6-调研一--实施)）。用法见 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约见 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
 
-- **还没有业务接入**：game-demo 与生成器都没有用 `Behavior`、`state`、AI 心跳（随 D20 P3 一起接）；仓库里实现 `Action` 的只有 `movement` 的两个动作与测试动作。
+- **业务接入**：生成器的 `roost add behavior [--ai] [--state]` 生成 `Behavior` + AI 心跳控制器 + 示例动作 / 策略 + `state` 的 Catalog 声明（边界见下文“生成器接入心跳、行为与时间域”）；game-demo 没有用 `Behavior`、`state`、AI 心跳（随 D20 P3 一起接）；仓库里实现 `Action` 的只有 `movement` 的两个动作、测试动作与生成的示例动作。
 - **Behavior 与 runner 一样不随事务回滚**（D20 决定 3）：冻结计数、取代与抢占的结果、任务的推进都是内存状态，handler 回滚后保留，由业务把这些调用放在 handler 最后一步。
 - **任务回调期间结束的动作，观察者可能先于任务收到**：动作结束经 `MissionRunner.OnActionEnd` 送任务，任务正在执行自己的回调时（例如任务 `Start` 里发起的动作启动即失败）这次送达延后到回调返回后，而观察者（AI）在当次就收到。“先任务后观察者”只在任务不处于自己的回调时成立。
 - **动作的归属任务按“任务 runner 是否正在执行”判定**：任务回调同步引出的其他回调（例如任务回调里启动的动作启动即失败、`OnEnded` 送到观察者、观察者又发起动作）发起的动作也会记在当前任务名下，随任务结束被取消。
@@ -83,7 +83,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。
 - **Buff 到期才撤销派生状态**：`BindStates` 的状态随 buff 心跳（D20 P5）移除到期 buff 而失效，最多晚一个心跳周期（`BeatConfig.Granularity` 取档，缺省 1 秒）加 tick 取整；没装 `AttachBeat` 的实体只在业务自己调 `TickBuffs` 时失效。
 - **派生状态的变化要数据拥有者调 `Changed`**：派生函数查询时现算，`Has` 总是正确，但观察者与同步脏位只在 `Changed`（或任何其他改动 / `Refresh`）时才更新；漏调时门控与客户端看到的是旧值。
-- **持久状态改名等于丢弃旧数据**：持久文档的键是状态名，`RestorePersisted` 跳过不认识的名字（不报警），下一次整文档写回时消失；同步打包、game-demo 与生成器都还没有接 `state`。
+- **持久状态改名等于丢弃旧数据**：持久文档的键是状态名，`RestorePersisted` 跳过不认识的名字（不报警），下一次整文档写回时消失；同步打包与 game-demo 都还没有接 `state`；生成器只生成 Catalog 声明（`--state`），`Set` / `Gate` 与 `StateDao` 的接线由业务写。
 
 ### 技能与 Buff 的心跳（D20 第 5 期）
 
@@ -109,8 +109,21 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
 - **域要在构造时给**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域（成员换场景要重建行为组件，或不挂域、由业务自己传时间）。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
 - **技能 / Buff 的时间域在构造时给**（D20 P5 起已接域，原“没有自动接域”一条关闭）：`combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain` 在 `AttachBeat` / `NewRuntimeBeat` 时定下，运行中不能换域。buff 的 `DueTick` 是按域时间算的绝对 tick：实体换到另一个域（或离开变速场景）时，已有 buff 的剩余时长按新域的 tick 算，2 倍速场景里攒下的“领先”会让 buff 在常速域里多持续一段，框架不换算。
-- **没有业务接入与客户端插值示例**：game-demo 的场景没有挂时间域；客户端按同步下发的三个字段外推域时间的写法只在文档里，C# 客户端没有现成接口。
+- **没有业务接入与客户端插值示例**：game-demo 的场景没有挂时间域（生成器的 `roost add timedomain` 只生成场景侧的字段与组件，成员怎样拿到所在场景的域由业务写）；客户端按同步下发的三个字段外推域时间的写法只在文档里，C# 客户端没有现成接口。
 - **生成工程消费夹具未实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，本轮没有在真实依赖上跑。
+
+### 生成器接入心跳、行为与时间域
+
+`roost add heartbeat` / `roost add behavior [--ai] [--state]` / `roost add timedomain`（[DESIGN-TODO D20“生成器接入”](DESIGN-TODO.md#生成器接入实施结果2026-10-21)，用法见 [CODEGEN_REFERENCE](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)）。
+
+- **按需装配，不进缺省 Mod 集**：`heartbeat` Mod 只在 add 命令（或 `roost add mod heartbeat`）之后才装在那个服务上。实体侧零开销（没有登记、登记都停着不占调度，生成的示例登记是停止状态、AI 不设策略不跳），进程侧装上之后驱动空转也每 10ms 走一格、停机预算多 3s。是否改成“装了 nest 的服务缺省装”待维护者决定。
+- **工程只有一个驱动变量**：`game/heartbeat.Driver`，依据是生成工程每个进程只跑一个服务；同一个进程里起两个装了 heartbeat Mod 的 App（测试）时它们共用一个驱动：后一次 `Bind` 覆盖前一次的 Nest 客户端（`Bind` 允许重复调用），拍都投到后接上的那个 Nest。驱动的 `Name`（日志 / 指标标签）是工程名，不区分服务。
+- **示例 AI 的 `EndActions` 结束全部组的动作**：生成的 `ai.ControllerHooks.EndActions` 是 `Behavior.EndAllAction(true, reason)`（切换策略时清场），写在生成部分，业务要换成“只结束某些组”需要另写 Controller，生成器不提供钩子。
+- **成员挂场景时间域由业务写**：生成的 `timeDomain()` 返回 nil；域在构造时定下、运行中不能换（D22 边界），实体换场景要重建行为组件，生成器没有生成重建入口。
+- **时间域字段缺省 `nopersist,sync`**：随进程结束的副本场景；要持久的场景手工改成 `persist`（DAO 定义归业务）。三个字段名固定，已有同名字段只有一部分或类型不同时 add 拒绝。
+- **去掉 `heartbeats` / `time_domains` 条目后生成部分不自动删除**：与 `timers` 相同，需要手工删 `*_component_gen.go` 与实体里的组件字段；服务 `mods` 里的 `heartbeat` 也不自动去掉。
+- **端到端用的是内存权威**：`scripts/test-heartbeat-generated.sh` 以不落库 committer 代替 DataEngine，只覆盖新建实体（不覆盖卸载重载后重新登记、Remote 托管实体、真实 WAL / Mongo）；脚本不在 pretag 与 `go test ./...` 里，要手工运行。
+- **`heartbeat.*` 配置段跟着 Mod 的声明走**：配置段、doctor 与 `--check-config` 用 `kitconfig_gen.go` 里的快照（`wiring/internal/configschemagen` 的 `heartbeat` 组）；Mod 没有声明时生成配置里没有 `heartbeat:` 段。
 
 ### Skill Runtime
 

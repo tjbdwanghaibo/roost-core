@@ -145,6 +145,8 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 
 控制实体行为的逻辑（移动、技能、AI 决策）不这样直接挂组件心跳，而是写成动作、由 `actionflow.BeatRunner` 挂心跳（维护者 2026-10-21，见 §4B）。
 
+**生成工程的入口**：`roost add heartbeat --entity <Entity>` 生成上面这套接线——工程唯一的驱动 `game/heartbeat/driver_gen.go`（`Driver`）、实体的 `HeartbeatComponent`（构造时 `Driver.NewHost`，`OnDestroy` 时 `Host.OnDestroy`，`Register(name, period, fn)` / `Beat(name)`），并把 `heartbeat` Mod 加进实体所在服务、bootstrap 装 `wiring/heartbeat`（Nest 之后启动、之前停止，服务 Init / Shutdown 不用改）。业务只写 `heartbeat_beats.go` 的 `onHeartbeatInit`（加载 / 新建时登记，示例登记是停止状态）。Mod 按需装配，不进新工程的缺省 Mod 集：实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 停机预算多 3s。细则见 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)。
+
 | API | 说明 |
 | --- | --- |
 | `Driver.NewHost(entity)` | 每个实体实例一个宿主（Remote 托管、慢池实体都可以） |
@@ -342,6 +344,8 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 - **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期由 buff 心跳推进（`CombatComponent.AttachBeat`，§4E），派生状态随之失效。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
 
+**生成工程的入口**：`roost add behavior --entity <Entity> [--ai] [--state]` 生成 `BehaviorComponent`：在 `OnInitFinish` 用实体的心跳宿主构造 `Behavior`（`--ai` 时先构造 `ai.NewBeatController` 作 `Observer`，`Context` 钩子给出 `ActionList`）。业务文件只建一次：`behavior_actions.go`（动作种类、组、注册表、跨组冲突、`timeDomain()`、`onBehaviorReady`、示例动作 `ExampleAction`）、`--ai` 的 `behavior_strategy.go`（示例策略）、`--state` 的 `states.go`（`state.NewCatalog` 声明；Set / Gate 接线由业务写）与 `game/handler/<entity>_behavior.go`（发起示例动作 / 设定示例策略的 Nest handler）。没有心跳宿主时一并加上（同 §4A）。AI 不设策略不跳，示例策略要在 `onBehaviorReady` 或 handler 里 `SetStrategy`。
+
 边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
 
 ## 4D. 场景时间域（变速）
@@ -395,6 +399,8 @@ brain, err := ai.NewBeatController(hooks, ai.BeatConfig{Host: host, TimeDomain: 
 - **持久化的期限与 entitytimer 不接时间域**（维护者决定 ⑦）：持久定时器的离线补触发只对业务时间成立；域内的定时走心跳（按域时间判定到期）。存进 DAO 的业务期限（邮件过期、活动截止）仍是业务时间。
 - **持久与否**：`Fields` 是否持久由业务选。随进程结束的副本用 `nopersist,sync`（推荐）；要持久的场景用持久字段，重载后域时间按存下的锚点与倍率接着走（停服期间同样按倍率前进，时停的保持时停）。`Domain` 实例随场景实例：场景卸载重载后是新的 `Domain`，成员要换成新的。
 - **下发给客户端**：`Fields` 的三个字段标 `sync`，随 Entity Sync 下发；客户端按同一公式用自己估计的服务器业务时间外推域时间。
+
+**生成工程的入口**：`roost add timedomain --entity <Scene>` 在场景的主 DAO 定义里加 `TimeAnchorBusiness` / `TimeAnchorDomain` / `TimeRate` 三个 `nopersist,sync` 字段，生成 `TimeDomainComponent`（加载时 `timedomain.New` 并发布，`Domain()`，上面那段 `Fields` 适配），倍率范围写在 `timedomain_config.go`（业务文件，缺省 `[0, 4]`）。成员的行为组件在 `behavior_actions.go` 的 `timeDomain()` 里返回场景的域（生成的是 `nil`：成员怎样找到所在场景的域由业务决定）。
 
 实现契约见 [impl/10-time §2F](../impl/10-time.md#2f-场景时间域)。
 

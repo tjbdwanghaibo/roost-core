@@ -66,6 +66,21 @@ DESIGN-TODO D12 方向 B（维护者 2026-10-18 批准）。运行期是方向 A
 
 回归：[add_saga_test.go](../../../codegen/internal/roost/add_saga_test.go)（生成物与登记顺序、错误输入工程逐字节不变、服务无 nest、无 `-native` 的 Mongo 登记、doctor 两项、生成工程 build / vet / doctor，以及真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`：`testdata/saga_native` 覆盖最小业务，生成工程里的 `TestSagaNativeStepsAndEffectRealDependencies` 在真实 Mongo / NATS / DataEngine / Nest 上核对一笔正向、一笔补偿、一条 effect 恰好一次，入口 `scripts/test-demo-generated.sh`）、[add_effect_test.go](../../../codegen/internal/roost/add_effect_test.go)。修前（`5afd19fc`）`add saga -native` 报 `flag provided but not defined: -native`，`add effect` 报 `flag provided but not defined: -consumer`。
 
+## 2E. roost add heartbeat / behavior / timedomain
+
+DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add_heartbeat.go](../../../codegen/internal/roost/add_heartbeat.go) 实现 add、清单校验与渲染，模板在 [add_heartbeat_render.go](../../../codegen/internal/roost/add_heartbeat_render.go)；运行期在 core 的 `gameplay/heartbeat`、`gameplay/actionflow`、`gameplay/ai`、`gameplay/state`、`gameplay/timedomain`（[impl/10-time §2B～§2F](10-time.md#2b-实体心跳)）。
+
+- **清单是唯一声明**：`heartbeats.<entity>`（`HeartbeatSpec`：id、service、`behavior.{id, ai, state}`）与 `time_domains.<entity>`（`TimeDomainSpec`：id、dao）。`renderHeartbeatFiles` 按它渲染生成部分（`heartbeat_component_gen.go`、`behavior_component_gen.go`、`timedomain_component_gen.go`）与业务文件（`Owned=false`，只在缺失时创建）。所有名字由 `newHeartbeatNames` 从实体名推出。
+- **驱动是 catalog Mod**：`modCatalog["heartbeat"]`（`wiring/heartbeat`，`Depends: nest`）。只要工程里有服务装了它，就渲染 `game/heartbeat/driver_gen.go`（工程唯一的 `Driver`；每个进程只跑一个服务，所以一个变量对应一个 Nest 引擎），`renderModConstructor` 写 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`。走 catalog 而不是像 entitytimer 那样按条目隐式装：配置段（`modConfigSection`，按 `kitconfig_gen.go` 里 Mod 的声明）、doctor 的配置检查（`serviceConfigSchema`）、停机预算（`serviceModConstructors` 计数）、`roost add mod heartbeat` 全部沿用 Mod 的现成路径，不加特例。`validateHeartbeat` 要求 `heartbeats.<e>.service` 的 Mod 里有 heartbeat。
+- **按需装配**：add 命令在实体所在服务没有 heartbeat Mod 时加进 `services.<s>.mods`（`uniqueSorted`，与 `add mod` 相同），并按 `appendModConfigSections` 给已有的服务配置补段。不进新工程的缺省 Mod 集：实体侧零开销（没有登记、登记都停着不占调度），但驱动 goroutine 空转也每 10ms 走一格，多一个 Mod 让 `shutdown.total_timeout` 多 3s 保底。
+- **组件之间**：宿主在 `HeartbeatComponent` 的工厂里 `Driver.NewHost`，所以行为组件的 `OnInitFinish` 不论初始化顺序都取得到；自动分配号时宿主取小号（组件按类型号初始化，业务的 `onHeartbeatInit` 先于 `onBehaviorReady`）。行为组件在 `OnInitFinish` 构造 `actionflow.Behavior`（`Beat` 接宿主、`TimeDomain` 取业务的 `timeDomain()`）；`--ai` 时先构造 `ai.NewBeatController`（`Context` 钩子给出 `ActionList = Behavior`，`EndActions` 结束全部动作），再把它作 `Observer`。
+- **业务文件里的钩子**：`behaviorRegistry`、`behaviorGroupForKind`、`behaviorConflict`、`timeDomain()`、`onBehaviorReady(isCreate)`、`onBehaviorError(err)`、`onHeartbeatInit(isCreate)`、`timeDomainConfig()`。生成部分只引用这些名字，业务改实现不影响 sync。
+- **两处业务文件只在 add 时改一次**：`entity.go` 加组件字段（`wireComponentField`），timedomain 在主 DAO 定义里加三个 `nopersist,sync` 字段（`addTimeDomainDaoFields`：三个都同类型存在时不改，只有一部分或类型不同拒绝）。先改这些、再写清单并 sync，sync 失败时一并还原（`restoreFilesIfCurrent`）。
+- **拒绝在改文件之前**：实体事实由 `entity.InspectComponentHost` 读（不拒绝 Remote 托管 / noPersist：心跳支持全部实体，决定 ⑩）；组件名被占用（`packageDeclaresConst` 或已有字段）、示例 handler 同名（扫 `game/handler` 的函数声明）、目标文件已存在、`--id` 越界或已占用（`allocateComponentIDs` 合并 `ScanIDs` 与清单里已登记的号）都拒绝。
+- **已知缺口**：去掉清单条目后生成部分不自动删除（与 timers 相同）。
+
+回归：[add_heartbeat_test.go](../../../codegen/internal/roost/add_heartbeat_test.go)；生成工程端到端 [test-heartbeat-generated.sh](../../../scripts/test-heartbeat-generated.sh)（夹具 `scripts/testdata/heartbeat`）。修前（`53cc3f97`）`roost add heartbeat --entity Monster` 报 `unexpected arguments ["Monster"]`，`roost add mod heartbeat -service game` 报 `unknown wiring mod "heartbeat"`。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。

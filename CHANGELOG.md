@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 生成器接入实体心跳、行为组件与场景时间域（DESIGN-TODO D20～D22）
+
+- **新增命令**：`roost add heartbeat --entity <Entity>`（实体的心跳宿主 `HeartbeatComponent`：`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`，业务在 `heartbeat_beats.go` 的 `onHeartbeatInit` 里登记）；`roost add behavior --entity <Entity> [--ai] [--state]`（`BehaviorComponent`：`actionflow.Behavior` 挂实体的心跳宿主，`--ai` 时 `ai.NewBeatController` 作观察者；业务文件 `behavior_actions.go` 带示例动作 `ExampleAction`、`--ai` 的 `behavior_strategy.go` 带示例策略、`--state` 的 `states.go` 是 `gameplay/state` 的 Catalog 声明、`game/handler/<entity>_behavior.go` 是发起示例动作 / 设定示例策略的 Nest handler；没有心跳宿主时一并加上）；`roost add timedomain --entity <Scene>`（主 DAO 定义加 `TimeAnchorBusiness` / `TimeAnchorDomain` / `TimeRate` 三个 `nopersist,sync` 字段，`TimeDomainComponent` 加载时 `timedomain.New`，倍率范围在 `timedomain_config.go`）。生成部分（`*_component_gen.go`、`game/heartbeat/driver_gen.go`）由 project sync 重写，业务文件只在缺失时创建；服务 Init / Shutdown 不用改。
+- **装配**：catalog 新增 `heartbeat` Mod（`wiring/heartbeat`，依赖 nest），bootstrap 写 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`（工程唯一的驱动 `game/heartbeat.Driver`）。**按需装配**：add 命令把 Mod 加进实体所在服务的 `mods`（也可 `roost add mod heartbeat -service <s>`），不进新工程的缺省 Mod 集——实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 让 `shutdown.total_timeout` 多 3s。
+- **roost.yaml**：新增 `heartbeats.<entity>`（`id`、`service`、`behavior.{id, ai, state}`）与 `time_domains.<entity>`（`id`、`dao`），加载时校验（服务要有 heartbeat Mod、工程要有 entity / nest 或 entity / dao feature、组件号为正）。
+- **文档**：CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK、生成工程的 BEGINNER_WORKBOOK §3.7 与 ROOST_YAML、`roost help heartbeat|behavior|timedomain`、guide/10-time §4A / §4C / §4D 的“生成工程的入口”、impl/12-codegen §2E。
+- **测试**：`codegen/internal/roost/add_heartbeat_test.go`；生成工程端到端 `scripts/test-heartbeat-generated.sh`（`roost project new --skip-deps` + 本地 replace，三个 add 命令后 build / vet / `test -race` 全过，示例动作被心跳推进到结束、示例 AI 策略经 AI 心跳反复发起动作、场景示例心跳执行、时间域改倍率后发布）。修前三个命令报 `unexpected arguments`，`roost add mod heartbeat` 报 `unknown wiring mod "heartbeat"`。
+- **升级**：线上未部署，不做兼容；旧工程不受影响（没有新条目就不渲染）。
+- **限制**：见 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](docs/maintenance/KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。
+
 ### Remote 共享模式切换下的心跳、移动、任务与 AI：真实 Manager 验证与两处恢复修复（DESIGN-TODO D20 / D21 补测）
 
 - **验证**：`gameplay/movement/shared_test.go` 经真实 `remoteentity.Manager` 跑独占 → 共享 → 独占（两轮）、共享模式下的所有权迁移、卸载重载三个场景（真实 Nest + 启动的心跳驱动，实体带移动组 / 工作组 / 任务 / AI / 周期落库 5 个登记）；`shared_integration_test.go`（`-tags integration`）以 `remoteentity.Assemble` 在真实 Redis + Mongo + NATS 下跑同一组，已列入 `dataengine-env.sh test`。结论：每登记停掉计数 +1、共享期间零推进、不自动恢复、迁移无双推进、卸载窗口里排队的拍不执行；详见 [DESIGN-TODO“真实 Remote 共享模式切换验证”](docs/maintenance/DESIGN-TODO.md#真实-remote-共享模式切换验证2026-10-21)。

@@ -282,6 +282,53 @@ DAO 里，到点由驱动投递一次 Tick，在实体的 Nest 锁与事务内�
 不依赖生成器产物，维护者 2026-10-18）：它手写同一套接入——`game/entities/world/timer_component.go` 的组件与 Store 适配、
 `game/handler/tick_world_timers.go`、game 服务 `activity.go` 的 `startWorldTimers`（绑业务时钟与 Nest、启动、停机时停止）。
 
+### roost add heartbeat / behavior / timedomain（实体心跳、行为与时间域）
+
+DESIGN-TODO D20～D22 的生成器接入。三个命令都可以写成 `roost add <kind> <Entity>` 或 `--entity <Entity>`：
+
+```bash
+roost add heartbeat  --entity <Entity> [--service <service>] [--id <component-id>]
+roost add behavior   --entity <Entity> [--ai] [--state] [--service <service>] [--id <component-id>]
+roost add timedomain --entity <Scene> [--id <component-id>]
+```
+
+- `heartbeat`：实体的心跳宿主（`gameplay/heartbeat.Host`），在线周期推进（回复、冷却、场景逻辑帧）。
+- `behavior`：行为组件 `actionflow.Behavior`，挂在心跳宿主上（没有宿主时一并加上）；`--ai` 同时构造 `ai.NewBeatController`
+  （独立的 `"ai"` 心跳）并生成示例策略，`--state` 生成 `gameplay/state` 的 Catalog 声明。
+- `timedomain`：场景实体的时间域 `gameplay/timedomain.Domain`（倍速、慢放、时停）。
+
+| 文件 | 归属 | 内容 |
+| --- | --- | --- |
+| `roost.yaml` `heartbeats.<entity>` / `time_domains.<entity>` | 声明 | `id`（组件类型号）、`service`、`behavior.{id, ai, state}`；`time_domains` 是 `id` 与 `dao` |
+| `roost.yaml` `services.<service>.mods` | add 时加 `heartbeat` | catalog Mod `heartbeat`（`wiring/heartbeat`，依赖 nest）；也可以 `roost add mod heartbeat -service <s>` 单独装 |
+| `game/entities/<entity>/entity.go` | 业务（add 时加字段） | `heartbeat *HeartbeatComponent`、`behavior *BehaviorComponent`、`timeDomain *TimeDomainComponent` |
+| `db/def/<entity>.go`（timedomain） | 业务（add 时加字段） | `TimeAnchorBusiness int64`、`TimeAnchorDomain int64`、`TimeRate float64`，`dao:"nopersist,sync"`；三个都已同类型存在时不改，只有一部分时拒绝 |
+| `game/heartbeat/driver_gen.go` | 生成（sync 重写） | 工程唯一的 `Driver = heartbeat.NewDriver(...)`（一个 Nest 引擎一个驱动；每个进程只跑一个服务） |
+| `game/entities/<entity>/heartbeat_component_gen.go` | 生成 | `HeartbeatComponent`：构造时 `Driver.NewHost`；`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`；`OnInitFinish` 调业务 `onHeartbeatInit`，`OnDestroy` 让实例离开驱动 |
+| `game/entities/<entity>/behavior_component_gen.go` | 生成 | `BehaviorComponent`：`OnInitFinish` 用实体的宿主与业务的 `timeDomain()` 构造 `Behavior`（与 `--ai` 的 Controller，作 Observer），再调业务 `onBehaviorReady`；`Behavior()` / `AI()` |
+| `game/entities/<entity>/timedomain_component_gen.go` | 生成 | `TimeDomainComponent`：加载时 `timedomain.New(DAO 适配, timeDomainConfig())`；`Domain()` |
+| `internal/bootstrap/generated.go` | 生成 | 服务追加 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`（Nest 之后启动、之前停止） |
+| `heartbeat_beats.go` | 业务（只在缺失时创建） | `onHeartbeatInit`：示例登记 `"example"`（1s，停止状态，不占调度）；共享模式的 Remote 实体跳过 |
+| `behavior_actions.go` | 业务 | 动作种类 / 组、`behaviorRegistry`、`behaviorGroupForKind`、`behaviorConflict`、`timeDomain()`、`onBehaviorReady`、`onBehaviorError`、示例 `ExampleAction`（按 `ctx.Elapsed` 累计，满 `Duration` 成功，100ms 档） |
+| `behavior_strategy.go`（`--ai`） | 业务 | 示例 `ExampleStrategy`：500ms 决策一次，主组空闲时发起示例动作 |
+| `states.go`（`--state`） | 业务 | `stateCatalog`（`state.NewCatalog`）；Set / Gate 的接线（持久状态要把 StateDao 登记进 DaoManager）由业务写 |
+| `game/handler/<entity>_behavior.go` | 业务 | `handlerStartExample<Entity>Action(target, millis)`；`--ai` 时加 `handlerStartExample<Entity>Strategy(target)` |
+| `timedomain_config.go` | 业务 | `timeDomainConfig()`：倍率范围，缺省 `[0, 4]` |
+
+**装配（按需，不缺省装配）**：实体侧本来就零开销——没有登记、或登记都停着的实例不占调度，示例登记也是停止状态，AI 没有策略
+不跳；但驱动 goroutine 空转时也每 10ms 走一格，每多一个 Mod `shutdown.total_timeout` 多 3s 保底，所以与 `wiring/entitytimer`
+一样，只在有心跳实体的服务上装（add 命令自动加进 `mods`）。`heartbeat.*` 配置段按 Mod 的配置声明写（`kitconfig_gen.go`），
+doctor 与 `--check-config` 用同一份声明。服务 Init / Shutdown 不用改。
+
+**拒绝**（都在改任何文件之前）：没有实体、`--entity` 与名字不一致、`heartbeat` 带 `--ai` / `--state`、实体已有心跳宿主 / 行为组件 /
+时间域、组件名被占用、示例 handler 同名、服务不存在或没有 nest、`--id` 越界或已占用；timedomain 另有没有 DAO、DAO 字段只有一部分或类型不同。
+Remote 托管与 noPersist 实体都可以装（心跳只在拥有方跳；共享模式下不允许挂载，见 guide §4A）。
+
+回归：`codegen/internal/roost/add_heartbeat_test.go`（生成物形状与归属、sync 重写与业务文件保留 / 重建、先 heartbeat 后 behavior、显式 ID、
+timedomain 字段、拒绝的输入逐字节不变、清单校验、`roost add mod heartbeat`）；生成工程端到端 `scripts/test-heartbeat-generated.sh`
+（`roost project new --skip-deps` + 本地 replace，三个 add 命令后 build / vet / `test -race` 全过，`TestGeneratedHeartbeatBehaviorEndToEnd`：
+示例动作被主组心跳推进到结束、组空闲后心跳停、示例策略经 AI 心跳反复发起动作、场景示例心跳执行、时间域改倍率后发布与越界拒绝）。
+
 ## 4. DAO 生成器
 
 命令（`roost generate` 的 dao 步骤等价于它；`roost add dao <name> --entity <entity>` 生成初始骨架）：

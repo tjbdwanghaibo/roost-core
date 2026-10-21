@@ -826,7 +826,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”；spawner 一项归 P3），P3 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”；spawner 一项归 P3），生成器接入已实施（下文“生成器接入实施结果”），P3 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
@@ -1109,6 +1109,35 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 **验证**：gofmt；`GOWORK=off go vet ./gameplay/... ./wiring/...`；`GOWORK=off go test -race -count=30 ./gameplay/skill/combatcomponent/`（心跳相关用例，35s，退出码 0）；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；`go run ./cmd/glsvet ./gameplay/skill/ ./gameplay/skill/combatcomponent/` 无提示。退出码见本轮交付报告（全部为 0 才提交文档）。没有改生成工程用到的东西，没跑 `scripts/test-*-generated.sh`。
 
 **待拍板**（先按推荐做了）：① 技能心跳的位置：A 放 `combatcomponent`（现状，推荐：`skill` 保持不依赖 Nest）；B 新子包 `gameplay/skill/skillbeat`。② Buff 粒度：A 固定 `Granularity`（现状，推荐：简单、可预期）；B 按下一个到期自适应换档。③ 超过追帧上限：A 剩余一次跳过、计数 + Warn（现状，推荐：落后有界）；B 留到下一拍继续逐 tick 补（确定性完全保住，过载时落后无界）。④ `TickBuffs` 保留为导出的原语（现状，推荐）；B 改为未导出、测试经钩子调用。
+
+### 生成器接入实施结果（2026-10-21）
+
+**状态：已实施**（分支 `feat/codegen-heartbeat`，基于 `53cc3f97`；本地提交，由维护者推送）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
+
+**命令与生成结构**（生成部分 project sync 重写，业务文件只在缺失时创建）：
+
+| 命令 | 生成部分 | 业务文件 |
+| --- | --- | --- |
+| `roost add heartbeat --entity E` | `game/heartbeat/driver_gen.go`（工程唯一的 `Driver`）、`E/heartbeat_component_gen.go`（宿主、`Register` / `Beat`）、bootstrap 的 `kitheartbeat.NewMod` | `heartbeat_beats.go`（`onHeartbeatInit`，示例登记停止状态） |
+| `roost add behavior --entity E [--ai] [--state]` | `E/behavior_component_gen.go`（`Behavior` 接宿主；`--ai` 时 `ai.NewBeatController` 作 Observer） | `behavior_actions.go`（种类 / 组 / 注册表 / 冲突 / `timeDomain()` / `onBehaviorReady` / 示例 `ExampleAction`）、`--ai` 的 `behavior_strategy.go`、`--state` 的 `states.go`（Catalog）、`game/handler/E_behavior.go`（示例 handler） |
+| `roost add timedomain --entity S` | `S/timedomain_component_gen.go`（`timedomain.New` + DAO 适配） | `timedomain_config.go`（倍率范围）；DAO 定义 add 时加三个 `nopersist,sync` 字段 |
+
+**装配决定：按需装配**（与 entitytimer 相同）。依据“开箱可用、不用的实体零开销”：实体侧本来就零开销（没有登记、登记都停着的实例不占调度；生成的示例登记是停止状态，AI 不设策略不跳），所以“开箱可用”由 add 命令保证——它把 `heartbeat` 加进实体所在服务的 `mods`，bootstrap 随之装上，不需要手工接线。不缺省装进新工程，因为进程侧有固定开销：驱动 goroutine 空转也每 10ms 走一格，多一个 Mod 让 `shutdown.total_timeout` 多 3s 保底（实测新工程 game 服务 74s → 77s、k8s 宽限期 79 → 82s）。`heartbeat` 做成 catalog Mod（依赖 nest），配置段、doctor 的配置检查、停机预算与 `roost add mod heartbeat` 都走 Mod 的现成路径。
+
+**配置**：生成配置的 `heartbeat:` 段来自 `kitconfig_gen.go` 里 Mod 的配置声明（`modConfigSection`）。实施时（`53cc3f97`）`wiring/heartbeat` 还没有配置项，所以没有这一段；选项 C 的 `heartbeat.delivery` 合入后在 `wiring/internal/configschemagen` 加 `heartbeat` 组、重新生成即可（见下文“与并行任务的衔接”）。
+
+**红绿证据**：修前（`53cc3f97` 的 `roost`，新工程加 Monster 实体后）原文：`roost add heartbeat --entity Monster` → `unexpected arguments ["Monster"]`；`roost add behavior --entity Monster --ai` → `unexpected arguments ["Monster" "--ai"]`；`roost add timedomain --entity Monster` → `unexpected arguments ["Monster"]`；`roost add mod heartbeat -service game` → `unknown wiring mod "heartbeat"`。修后 `add_heartbeat_test.go` 六条用例通过，生成工程端到端通过（`TestGeneratedHeartbeatBehaviorEndToEnd`：`example action: last progress "running ticks=5 waited=470 started=0", executed beats 6`）。变异核对：把生成的 `BehaviorConfig.Beat` 改成 nil（行为组件不挂心跳），端到端变红，原文 `timed out waiting for the heartbeat to tick the example action (driver {Delivered:0 Executed:0 ... Registered:0})`。
+
+**与任务书的偏差**：①时间域是单独的命令 `roost add timedomain`，不是 behavior 的选项——挂域的是场景实体，用域的是成员实体，两者通常不是同一个；②`--state` 只生成 Catalog 声明，不接 `Set` / `Gate` / `StateDao`（持久状态要登记进 DaoManager，接法因实体而异）；③生成了一个业务 Nest handler 文件（`game/handler/<entity>_behavior.go`），用来发起示例动作、设定示例策略，端到端经它验证“示例动作被心跳推进”；④端到端用例放在脚本夹具（`scripts/testdata/heartbeat`），不在 `go test ./codegen/...` 里（避免再加一个要编译整个生成工程的用例）。
+
+**需要维护者决定**：
+
+1. heartbeat Mod 的装配方式：A 按需（现状，推荐：进程侧固定开销只在用到时付）；B 新工程里装了 nest 的服务缺省装（新手不必跑 add 也能直接用 `game/heartbeat.Driver`；代价是每个 game 进程多一个空转 goroutine 与 3s 停机预算）。
+2. 生成工程端到端脚本是否进 pretag：A 不进（现状，与其他 `test-*-generated.sh` 相同，手工运行）；B 进 pretag（发版前多约 3 分钟）。
+
+**与并行任务的衔接**：选项 C（`heartbeat.delivery`）若在本分支 rebase 时已在 main，则同批接入 configschemagen 的 `heartbeat` 组（见本节“验证”）；P3（game-demo）不用这个生成器（demo 是手写参考实现，维护者 2026-10-18）。
+
+**验证**：见本节末尾（rebase 后填写）。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
