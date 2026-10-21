@@ -750,6 +750,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 **状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试；尚未实施。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
+**维护者决定（2026-10-21，对方案 §需要拍板逐条）**：①包放 `gameplay`（`gameplay/heartbeat`、`gameplay/movement`，装配 `wiring/heartbeat`）；②投递方式由压测决定：单目标 `Dispatch` 与 ssr 式“每条消息带一批实体、worker 逐个 TryLock”对比（维护者经验 ssr 方式更好）；③**不合并**：同一实体的多个心跳登记各自投递；④**跳拍**：上一拍在途时跳过，不累积不补发，**跳拍打 Warn 日志**（限频）并计数；⑤快池很快、理论上不会满：去掉水位整格让路与每格上限，只保留“每实体至多一拍在途”与 `ErrQueueFull` 跳拍兜底；⑥频率采用 ssr 式**固定档位**（如 50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s），不支持任意周期；⑦驱动 goroutine 数参考 ssr；⑧HB 本身不持久化，心跳里改持久字段由业务按自己的持久级别处理；⑨卸载窗口接受（实例核对 + 令牌）；⑩**所有实体都支持**：心跳投到实体所在的池（快池 / 慢池）；Remote 托管实体投到当前拥有方，所有权迁移时旧拥有方停、新拥有方重新登记；⑪调度结构由压测决定：ssr 式固定档位环、时间轮、最小堆对比（维护者经验 ssr 方式更好）；⑫entitytimer 的驱动不改；⑬实体的 tick 都走 HB（房间 / 场景本身是实体，用自己的 HB）；⑭⑮按推荐：game-demo 移动改为客户端发目标、服务端心跳推进；位置不每拍落库（nopersist，按周期或离开场景落库）。回调只做内存计算与入队、不阻塞。
+
 ### 现状（已核对源码，基线 `6e65ba12`）
 
 - `scripts/perf/sync-aoi`：压测端一个循环每 tick 挑 1% 实体、分 10 批改值并移动（direct 模式直接 `interest.Move`；Nest 模式对每个实体发 `engine.Request` 到 load handler，handler 里 `QueueMove`，见 [nest.go](../../scripts/perf/sync-aoi/nest.go) `newLoadNest`）。移动由全局控制器驱动，不是实体自己的心跳。
