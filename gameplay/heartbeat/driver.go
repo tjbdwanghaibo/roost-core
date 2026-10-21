@@ -183,6 +183,14 @@ func (d *Driver) SetClock(now func() time.Time) {
 // Now 是驱动的业务时间。
 func (d *Driver) Now() time.Time { return (*d.now.Load())() }
 
+// startClock 是登记启动生效时记下的时刻：挂了时间域时是域时间，与 Beat.Now 同一把尺子。
+func (r *Reg) startClock() time.Time {
+	if r.domain != nil {
+		return r.domain.Now()
+	}
+	return r.host.driver.Now()
+}
+
 // Bind 接上投递用的 Nest 客户端与只读实体查找。进程装配在 Nest 可用之后调用一次；可以重复调用（测试）。
 func (d *Driver) Bind(client nest.Client, lookup Lookup) error {
 	if client == nil || lookup == nil {
@@ -363,7 +371,7 @@ func mayOwn(state entity.RemoteOwnershipState) bool {
 // apply 让一次启停 / 改档在驱动上生效（Reg.change 经 AfterCommit 或立即调用）。序号不大于已生效序号的变化是晚到的旧变化，
 // 丢弃；实例已 OnDestroy 时忽略。
 func (d *Driver) apply(r *Reg, seq uint64, active bool, t tier) {
-	now := d.Now()
+	now := r.startClock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if r.host.closed.Load() || seq <= r.ring.seq {

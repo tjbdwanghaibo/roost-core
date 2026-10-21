@@ -8,6 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
 var (
@@ -35,7 +36,8 @@ type Beat struct {
 	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now（D22-1），回调里再读 fctx.Now 是同一个值。
 	// 挂了时间域（WithTimeDomain）时是这条消息的域时间。
 	Now time.Time
-	// Elapsed 是距本登记上次执行的业务时间；首拍是距本次启动生效。夹到 [0, max(DefaultMaxElapsed, Period)]：
+	// Elapsed 是距本登记上次执行的业务时间（挂了时间域时是域时间，上限再乘倍率）；首拍是距本次启动生效。
+	// 夹到 [0, max(DefaultMaxElapsed, Period)]：
 	// 掉拍、进程停顿或业务时钟被调整时不让一拍走出几公里。框架不追帧，掉拍后下一拍按 Elapsed 算一次。
 	Elapsed time.Duration
 	// Period 是本登记当前档位。
@@ -55,6 +57,7 @@ type RegOption func(*regOptions)
 
 type regOptions struct {
 	durability nest.DurabilityPolicy
+	domain     *timedomain.Domain
 }
 
 // WithDurability 选本登记心跳 handler 的持久级别（缺省 nest.DurabilityAsync）。心跳本身什么都不持久；回调里改了持久
@@ -62,6 +65,14 @@ type regOptions struct {
 // DurabilityPipelined 要求引擎装了 pipelined 提交器。回滚策略固定 undo。
 func WithDurability(policy nest.DurabilityPolicy) RegOption {
 	return func(o *regOptions) { o.durability = policy }
+}
+
+// WithTimeDomain 让本登记按场景的时间域计时（DESIGN-TODO D22，维护者 2026-10-21 决定 ③）：调度仍按真实时间（档位
+// 不缩放，CPU 不随倍率涨）；Beat.Now 是这一拍消息的域时间（timedomain.Domain.Now），Elapsed 是距上次执行的域时间，
+// 时停时为 0；Elapsed 的上限乘这一拍的倍率（max(DefaultMaxElapsed, 档位) × 倍率），否则 10 倍速时 100ms 档每拍
+// 都被夹住。d 为 nil 时不挂。
+func WithTimeDomain(d *timedomain.Domain) RegOption {
+	return func(o *regOptions) { o.domain = d }
 }
 
 // Host 是一个实体实例的心跳宿主，由组件在构造或 OnInitFinish 里经 Driver.NewHost 取得。Register 与 Reg 的
@@ -141,7 +152,7 @@ func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegO
 	if !ok {
 		return nil, fmt.Errorf("heartbeat: registration %q: unsupported durability %v", name, o.durability)
 	}
-	r := &Reg{host: h, name: name, fn: fn, handler: handler, tier: t}
+	r := &Reg{host: h, name: name, fn: fn, handler: handler, tier: t, domain: o.domain}
 	r.params = nest.Params{r}
 	// 追加在实体锁内；同时持 Driver.mu，让 OnDestroy（卸载流程里解锁之后调用）读到完整的列表。
 	h.driver.mu.Lock()
@@ -166,6 +177,8 @@ type Reg struct {
 	fn      Func
 	handler nest.HandlerName
 	params  nest.Params
+	// domain 非 nil 时本登记按时间域计时（WithTimeDomain）：Beat.Now / Elapsed 与启动时刻都是域时间。
+	domain *timedomain.Domain
 
 	// 以下只在实体锁内读写：业务看到的状态（随事务回滚恢复）与回调侧的上次执行记录。
 	active  bool
@@ -185,7 +198,7 @@ type Reg struct {
 
 	// 原子：驱动与回调之间。
 	startGen  atomic.Uint64 // 每次启动生效加一；回调据此判断 First
-	startedAt atomic.Int64  // 最近一次启动生效的业务时间（UnixNano），先于 startGen 写
+	startedAt atomic.Int64  // 最近一次启动生效的业务时间（挂了时间域时是域时间，UnixNano），先于 startGen 写
 	inflight  atomic.Bool   // 已投递、回调还没执行完
 	skipped   atomic.Int64  // 上次执行以来跳过的拍数
 
@@ -335,7 +348,11 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 		}
 	}
 
-	now := d.Now()
+	now, rate := d.Now(), 1.0
+	if r.domain != nil {
+		reading := r.domain.Read() // 这一拍消息的域时间与倍率，同一次冻结
+		now, rate = reading.Now, reading.Rate
+	}
 	period := r.tier.period()
 	gen := r.startGen.Load()
 	first := gen != r.lastGen
@@ -345,6 +362,9 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 	}
 	elapsed := now.Sub(since)
 	limit := max(DefaultMaxElapsed, period)
+	if r.domain != nil {
+		limit = time.Duration(float64(limit) * rate) // 时停时为 0：Elapsed 为 0
+	}
 	elapsed = min(max(elapsed, 0), limit)
 	skipped := r.skipped.Swap(0)
 
