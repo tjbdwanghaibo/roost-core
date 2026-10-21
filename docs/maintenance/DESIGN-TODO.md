@@ -1112,7 +1112,7 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 
 ### 生成器接入实施结果（2026-10-21）
 
-**状态：已实施**（分支 `feat/codegen-heartbeat`，基于 `53cc3f97`；本地提交，由维护者推送）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
+**状态：已实施**（分支 `feat/codegen-heartbeat`，开工基于 `53cc3f97`、交回前 rebase 到 `ddeeffa3`（含 P4、选项 C、P5、Remote 验证）；提交 `237d9cd2` 命令与装配、`33ffecb4` 配置段、`ce7bae9e` 端到端两种投递方式、`c7064b47` 技能 / Buff 心跳入口的文档；本地提交，由维护者推送）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
 
 **命令与生成结构**（生成部分 project sync 重写，业务文件只在缺失时创建）：
 
@@ -1137,7 +1137,9 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 
 **与并行任务的衔接**：选项 C（`heartbeat.delivery`）已在 rebase 时接入（见上文“配置”）；P3（game-demo）不用这个生成器（demo 是手写参考实现，维护者 2026-10-18）。
 
-**验证**：见本节末尾（rebase 后填写）。
+**验证**（rebase 到 `ddeeffa3` 之后的 `c7064b47` 的树，退出码直接读；rebase 前在 `cc24027f` 上同样跑过一遍、结果相同）：gofmt 无输出；`GOWORK=off go build ./...`、`go vet ./...` 通过；`GOWORK=off go test -count=1 ./...` 通过（153 个包 ok，其中 `codegen/internal/roost` 276s、根包 12s）；`bash scripts/test-heartbeat-generated.sh` 通过（生成工程 build / vet / `test -race ./...` 全过，端到端 dispatch 一遍 `0 Nest batch jobs`、batch 一遍 `21 Nest batch jobs`，`roost id check`、`roost generate --check` 通过）；`bash scripts/test-sync-modes-generated.sh` 通过；`go generate ./codegen/... ./wiring/...` 后 porcelain 干净。生成工程放在会话 scratchpad，脚本结束时删除。
+
+**未验证**：真实 DataEngine / Mongo 下的生成工程心跳（卸载重载后重新登记）、Remote 托管实体上的生成组件、`roost project doctor` 只在 rebase 前（`53cc3f97` 基线）的生成工程上跑过一次（退出码 0），rebase 后没有重跑。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
