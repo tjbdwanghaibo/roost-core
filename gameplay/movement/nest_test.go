@@ -124,6 +124,15 @@ func read[T any](f *nestFixture, e *mover, fn func(*mover) T) T {
 	return out
 }
 
+// settle 让 e 上已经开始执行的消息（包括心跳拍）全部收尾：同实体的消息按准入顺序串行，一条消息要等前驱的作业整个
+// 结束（含提交后回调：MapBasic 的发布、心跳登记的启停生效）才开始，所以这条空消息返回时，在它之前准入的拍的提交后
+// 状态都已可见。用在“从拍的事务里观察到一个事件（动作结束）之后，要断言提交后的状态（Published、Registered）”的
+// 地方：动作结束发生在拍的事务里，提交后回调在实体锁释放之后才执行，直接读会读到上一次提交的值。
+func (f *nestFixture) settle(e *mover) {
+	f.t.Helper()
+	f.mustRun(e, func(*mover) error { return nil })
+}
+
 func (f *nestFixture) flush() {
 	f.t.Helper()
 	if err := f.sync.Flush(context.Background()); err != nil {
@@ -263,6 +272,7 @@ func TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle(t *testing.T) {
 		return err
 	})
 	waitFor(t, "the tick action to end", func() bool { return len(e.endedActions()) == 1 })
+	f.settle(e)
 	ticks := action.seen()
 	if len(ticks) != 3 {
 		t.Fatalf("ticks %+v, want 3", ticks)
@@ -296,6 +306,7 @@ func TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne(t *testing.
 		t.Fatal("the runner put an event-driven move on its own heartbeat")
 	}
 	waitFor(t, "the move to arrive", func() bool { return len(e.endedActions()) == 1 })
+	f.settle(e)
 	if got := e.endedActions()[0]; got.kind != actMoveTo || got.status != actionflow.ActionStatusSuccess || e.mb.Published().Pos != (spatial.Point{X: 3, Y: 3}) {
 		t.Fatalf("ended %+v at %+v", got, e.mb.Published())
 	}
@@ -313,6 +324,7 @@ func TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne(t *testing.
 		return err
 	})
 	waitFor(t, "the replacing move to arrive", func() bool { return len(e.endedActions()) == 3 })
+	f.settle(e)
 	ended := e.endedActions()
 	if ended[1].status != actionflow.ActionStatusCanceled || ended[2].status != actionflow.ActionStatusSuccess {
 		t.Fatalf("ended %+v, want the long move canceled and the replacing one done", ended)
@@ -346,6 +358,10 @@ func TestFollowActionEndsWhenTheTargetIsUnloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the follow to end", func() bool { return len(follower.endedActions()) == 1 })
+	f.settle(follower)
+	if f.driver.Registered() != 0 {
+		t.Fatalf("registered %d after the follow ended", f.driver.Registered())
+	}
 	if got := follower.endedActions()[0]; got.status != actionflow.ActionStatusFailed || got.reason != TargetLost.String() {
 		t.Fatalf("ended %+v", got)
 	}

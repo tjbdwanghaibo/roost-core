@@ -91,7 +91,12 @@ func TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats(t *testing.T) {
 		}
 		return true
 	})
-	waitFor(t, "every heartbeat to stop", func() bool { return f.driver.Registered() == 0 })
+	for _, e := range movers {
+		f.settle(e) // 到达那一拍的提交后回调（发布终点、停心跳）都已执行
+	}
+	if f.driver.Registered() != 0 {
+		t.Fatalf("registered %d after every move ended", f.driver.Registered())
+	}
 	close(stop)
 	flushes.Wait()
 	f.flush()
