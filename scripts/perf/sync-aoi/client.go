@@ -369,9 +369,12 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 			}
 			if tick > 0 {
 				r.updates++
-				// Old snapshots are not new state changes. Only this tick's changed
-				// subjects contribute to the mutation SLO; all frames are still verified.
-				if value.Step > 0 && value.Step > measured[value.ID] && (value.Step == int64(tick) || object.Operation == frame.ObjectUpdate) {
+				// 只对新改值计时（所有帧仍逐项核对）：增量一定是本会话没收到过的新改值，晚几个 tick 到也照常计时；
+				// 全量（新建对象，或已有对象的全量重建）里可能是本会话没计过时的旧改值——视野进出、换档、重建基线时
+				// 带上的是目标最后一次改的值，按改值时刻计时量到的是旧值的年龄而不是下发延迟——所以全量只计本 tick
+				// 改的值（Step 等于帧的 tick）。代价：跨 tick 才送到的全量不计入（偏乐观），全量 P99 只看同 tick 送达的部分。
+				fresh := !update.Full || value.Step == int64(tick)
+				if value.Step > 0 && value.Step > measured[value.ID] && fresh {
 					measured[value.ID] = value.Step
 					now := time.Now().UnixNano()
 					latency := float64(now-value.Changed) / 1e6
