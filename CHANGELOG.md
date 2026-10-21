@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：Managed Remote 地图报告交接
+
+- 新增 `ROOST_SLG_REMOTE_MAP=1` 独立消费者模式，同一地图 handler 经 CLI 生成 managed/global ScoutMap；真实 Mongo/Redis/NATS 上验证 owner 3000→3001→3002、完整冷事实、旧 owner 写入 fence、未 ACK 报告重投与 ACK 回滚。
+- 原服新增 RoutedReportReceiver，每次重读权威 owner/MarkerEpoch/RouteEpoch，拒绝旧来源或旧代际；代际不改变永久报告身份，Player 回执与钱包不变。明确校验前后交接窗口与可信总线边界。
+- 更新学习文档、脚本入口及 skill，区分同进程 Remote 交接和此前固定地图多进程崩溃证据。同步 main 技能/Buff 心跳接入，Shared Remote 禁挂心跳保持。
+
 ### SLG 深化：独立地图进程向原服投递报告
 
 - 固定地图权威与 Player 原服通过真实 NATS Bus 协作；新增 ReportReceiver 的来源／目的归属检查，保留可信总线与生产 ACL 边界。

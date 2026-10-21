@@ -388,6 +388,36 @@ sequenceDiagram
 
 main 本轮合入的批量作业按目标重新冻结业务时间、心跳 Reg 安全格式化已读源码并通过 fctx／Nest／heartbeat race 回归；本消费者继续走普通生成 Sender，不声称已接批量心跳或测过其性能。通用慢派发 trace 的可变参数竞争仍按 [已知限制](../maintenance/KNOWN-LIMITS.md) 保留。
 
+### Managed Remote 地图：报告未确认时交接 owner
+
+独立入口：
+
+```bash
+ROOST_SLG_REMOTE_MAP=1 bash scripts/test-slg-alliance-player.sh
+```
+
+仍需显式配置隔离 Redis、NATS、Mongo 副本集。此开关自动启用 Remote 装配，把本次新生成工程的 ScoutMap 定义改为 `category=Remote remote=managed`、DAO 改为 `dbscope=global`；继续使用同一份行军／到达／报告业务 handler，由 CLI 重新生成 DAO 与 Sender。该模式只执行 `TestSLGRemoteMapReports`，不执行本服 MultiSync 视野或固定地图 SIGKILL 链，避免用一份结果替代另一种契约。
+
+[装配](../../scripts/testdata/slg-alliance/remote/runtime_test.go) 复用 Remote MongoCommitter、Redis 锁／L2、Manager、DataEngine 与 Nest；各 Runtime 使用独立 WAL，所有 DAO 通过同一 DatabaseMap 指向本次唯一物理库。Claim 后先检查 Shared，只在需要时 EnterShared。地图待办和报告使用 Remote 正式写，不把旧固定权威的本地 WAL 搬给新 owner。
+
+[验收](../../scripts/testdata/slg-alliance/remote/map_test.go) 的步骤如下：
+
+1. owner 3000 建图、发起行军、生成报告；原服 1000 收件成功，地图尚未 ACK，保存完整地图与 Player 事实。
+2. `TransferRemoteOwnership(..., 3001)`，确认 MarkerEpoch 和 RouteEpoch 均增加；旧 Runtime 保持运行，对原报告的 ACK 必须返回 `entity.ErrRemoteFenced`。
+3. 新 Runtime Claim 并加载地图，在重投前逐字比较完整状态；原报告、路线、收件人、Revision 和未确认义务不变。
+4. 新 owner 重投原报告，Player 返回已有永久回执；注入 ACK 事务失败，整个 Remote 地图回滚不变；随后正常确认，待办清空。
+5. 再交接到 3002，第三个 Runtime 加载的完整最终状态与确认后相同；3001 的重复 ACK 也必须被 fence 拒绝。Player 仍只有一份报告，钱包不变。
+
+原服接入 [RoutedReportReceiver](../../scripts/testdata/slg-alliance/scout/report_rpc.go)：每次 RPC 用 `Manager.GetRemoteOwnership` 重读权威所有权记录，不依赖调用方自报或进程缓存。传输信封 `RoutedReport` 包含原 `Report` 和独立 `OwnerRoute{SID, Marker, Route}`；接收方同时核对 FromSid、当前 owner、两种代际及原服／地图／收件人。路由代际不进入永久 Report 身份或 Player 正文，换 owner 不能因此产生新收件。
+
+真实 NATS 验收覆盖：权威读取失败不写 Player；旧 owner＋旧代际拒绝；新 owner＋旧代际拒绝；旧 owner＋当前代际也拒绝。发送方只有在收到 `accepted=true` 后才允许地图 ACK。生产仍须服务凭据与 subject ACL；路由检查不替代传输身份认证。
+
+**准入边界**：读取权威路由与 Player 提交是两次独立操作。交接前已经通过校验的请求，可能在交接后完成；本协议允许这份已固定报告收件，并用永久回执防重。它不提供“交接瞬间撤销所有已准入报告”的保证。需要撤回报告、取消奖励或改变收件归属的玩法须另设业务协议，不能仅增加一个 epoch 字段便宣称实现分布式 fence。
+
+**证据范围**：三个 Remote Runtime 与原服 Runtime 在同一测试进程中，连接真实 Mongo／Redis／NATS；本轮没有杀进程，也未测锁续期失败／租约中途过期、网络分区或跨机故障。上节已验证固定地图多进程 SIGKILL，本节验证 Managed Remote 交接，二者尚未联合成“多进程 Managed Remote 地图交接＋崩溃”的单条验收。普通 NATS SyncBus 不确认快照推送订阅，Mirror 推送另验。成功关闭全部运行时后清理唯一库，失败保留证据。
+
+main 新增的技能／Buff 心跳接入已核对并通过 `go test -race ./gameplay/skill/...`；Shared Remote 禁挂心跳的约束保持。本模式仍靠持久到达待办与有界工作轮次，不挂技能心跳、不宣称完成技能 Host 或战斗接入。
+
 ### main 视野 API 迁移
 
 main 已删除 `RelationSource`：业务现在先 `DefineRelationView(viewID, profile)`，再 `AttachView(playerID, viewID)`，用 `SetViewMembers` 修改目标集合。深化联盟分别为每个玩家定义 alliance / scout 逻辑视野；多块空间验收的 scout 视野与空间视野仍按持有计数合并，删除一个来源不影响另一个。持久目标筛选使用独立关系视野，避免未授权对象从公共空间视野进入客户端。
