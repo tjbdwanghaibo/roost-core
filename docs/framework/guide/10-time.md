@@ -219,6 +219,54 @@ return err
 
 边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 
+## 4C. 行为控制：Agent、取代、冲突与冻结
+
+DESIGN-TODO D21（吸收 ssr 的 action / action_list / mission / ai / state，维护者 2026-10-21 决定调研一 13 条全部按推荐实施）。本节随分期补全；第 1 期是 actionflow 本身的扩展。
+
+**`actionflow.Agent`：框架的 ActionList 实现**（对照 ssr 的 action_list 模块）。一个实体一个，把 `ActionRunner`（配置 `Beat` 时由 `BeatRunner` 驱动）、`MissionRunner` 与上层观察者（通常是 `ai.Controller`）按固定顺序接好：
+
+```go
+m.agent, _ = actionflow.NewAgent(m, actionflow.AgentConfig{
+	Registry: registry, GroupForKind: groups,
+	Beat:     &actionflow.BeatConfig{Host: m.host}, // 不配则不挂心跳（测试 / 手动 tick）
+	Observer: m.ai,                                 // *ai.Controller 实现 actionflow.Observer
+	OnError:  logError,
+})
+// handler 里最后一步：m.agent.CreateAction(ActMoveTo, param) / m.agent.SetMission(MissionPatrol, plan)
+```
+
+- 动作结束先交给当前任务，再交给观察者；任务结束先取消属于它的动作，再交给观察者。所以一个任务在处理动作结束时自己结束了，观察者先收到任务结束、再收到这次动作结束。
+- 任务回调运行期间（`Start` / `Tick` / `OnActionEnd`，含它们同步引出的回调）经 `CreateAction` / `EnqueueAction` 发起的动作**归属当前任务**，任务结束时一并取消；AI 或 handler 发起的不属于任何任务。
+- `Clear(reason)` 清场：先结束任务、再强制结束全部动作，之后什么都不在运行。
+- 和 runner 一样只在实体锁内调用、不随事务回滚（§4B 的业务约束照旧）。
+
+**动作的 Start 可以“启动即完成”**（瞬时动作：传送、改朝向、已经在终点的移动）。`Action.Start(ctx) (done bool, result ActionResult, err error)`：`err` 非空是没能启动（以失败结束）；`done` 为真时 runner 不再 tick 它，立即以 `result` 结束（状态为空算成功），照常发 `OnEnded`、通知任务、推进本组队列，不挂心跳。`movement` 的 `MoveTo` / `Follow` 在 Start 时按 0 时长核对一次：已经在终点、目标已在 `Keep` 以内且 `StopWhenReached`、目标已消失或不在本场景，都在发起它的 handler 里结束。
+
+**同组取代：`Replacer`**（对照 ssr 的 `CanCancelByNext`）。当前动作可选实现 `ReplaceBy(ctx, next ActionSnapshot) ReplaceDecision`：
+
+| 答复 | 结果 |
+| --- | --- |
+| `ReplaceAllow`（不实现即此） | 新动作取代当前动作（当前动作以取消结束） |
+| `ReplaceKeep` | 保留当前动作；新动作拿到 ID、不启动，以取消结束一次（原因 `kept current action`），`Start` 返回 nil。用于“同一个请求不必重来”，例如同目的地的移动 |
+| `ReplaceReject` | 保留当前动作；`Start` 返回 `ErrReplaceRejected`（回调里延后的以失败结束）。用于“手动操作不被 AI 打断” |
+
+强制结束（`End` / `EndAll` / `EndAction` / 冻结打断 / 跨组抢占）不问它。
+
+**跨组冲突：`ActionRunnerConfig.Conflict`（`AgentConfig.Conflict`）**（对照 ssr 的硬编码矩阵，改为业务给的函数）。动作要启动（`Start`，或排队项成为当前动作）时，对其他每个有当前动作的组（组号升序）调用 `Conflict(running, incoming)`：任一组 `BlockIncoming` 即拒绝新动作（`ErrBlockedByGroup`，什么都不改）；否则先取消全部 `PreemptRunning` 的组的当前动作（取消状态，不推进它们的队列），再按同组规则启动。缺省 nil：组之间互不影响。
+
+**按 ID 结束：`EndAction(id, force, reason)`**：结束某组的当前动作（并推进该组队列），或把排队中的动作移出队列（取消状态）；找不到返回 `ErrActionNotFound`（回调里延后执行时找不到不报告——动作可能已在这之前结束）。
+
+**冻结是计数的，分两种模式**：`Freeze(group, mode)` / `Recover(group, now)`，多个来源（定身、缴械、剧情）可同时冻结同一组，每次 `Freeze` 对应一次 `Recover`，计数归零才解冻；多 `Recover` 一次返回 `ErrActionGroupNotFrozen`。冻结期间 `Start` 被拒（`ErrActionGroupFrozen`）、当前动作不被 tick、队列不推进；`BeatRunner` 停掉这个组的心跳，解冻后重新挂上（解冻后第一拍的 `Elapsed` 从重新启动算起，暂停的时间不计入）。
+
+| 模式 | 当前动作 |
+| --- | --- |
+| `FreezePause` | 留在组里、暂停，解冻后接着跑 |
+| `FreezeCancel` | 取消（取消状态、原因 `action group frozen`，`Err` 是 `ErrActionGroupFrozen`）；排队项保留，解冻后推进 |
+
+计数立即生效（回调里也是），`FreezeCancel` 的打断有回调、在回调里调用时延后。
+
+边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)。
+
 ## 5. 运维
 
 区分业务时间推进失败与机器系统时钟漂移；日志与故障记录使用系统时间。glsvet 的时钟检查提供静态提示，不能识别任意封装后的错误时钟。开发测试同时注入两个时钟，验证推进业务钟不会导致基础设施超时。

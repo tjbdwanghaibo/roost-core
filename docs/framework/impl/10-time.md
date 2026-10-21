@@ -82,6 +82,18 @@ DESIGN-TODO D20 第 2 期。`gameplay/actionflow` 的 `BeatRunner` 与 `gameplay
 
 验证（`GOWORK=off go test -race -count=1 ./gameplay/movement ./gameplay/actionflow`）：`move_test.go`（直接调 Advance：按速度与 Elapsed 推进到达、跳拍一次覆盖与亚格累积、取代、被阻挡、跟随 / 目标销毁 / 目标离开、进出场景与落库、背压与拒绝）；`nest_test.go`（真实 Nest + 同步 Manager + Interest + 启动的心跳驱动：位置经 QueueMove 进 AOI、回滚的移动不生效；进出场景随事务；回滚的 `Move.MoveTo` 不生效；runner 由组的心跳 tick 且空闲停；MoveTo 动作由 runner 心跳驱动、移动中只有一个登记、被新的取代；Follow 在目标卸载后收尾）；`shared_test.go`（Remote 共享模式：进场景被拒、启动的移动以失败结束并停掉移动、被停掉后 Sync 在共享期报错、回到独占后重新挂上）；`smoke_test.go`（3000 实体随机 MoveTo，观察者经同步帧收到每个实体的终点位置，-race 下 300）；`actionflow/heartbeat_test.go`（每组按当前动作的周期挂心跳、一拍只 tick 本组并带 Elapsed）。变异核对 M1～M19 原文见 [D20 P2 实施结果](../../maintenance/DESIGN-TODO.md#p2-实施结果2026-10-21)。
 
+## 2D. 行为控制：Agent、取代、冲突、冻结与状态
+
+DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）。全部建在 §2C 的 `ActionRunner` / `BeatRunner` 上，方法只在实体锁内调用、只做内存计算与入队；runner 与 Agent 不随事务回滚（§2C 第 4 条的业务约束不变）。codebase-memory 图的根是主检出、generation 早于本轮，D21 的文件不在图里，下列结构以 worktree 源码为准。
+
+1. **Start 即完成**（`runtime.go` `Action.Start` 返回 `(done, result, err)`；`action_runner.go` `start`）：`err` 非空走原失败路径（Cancel → 离开切换 → 失败的 OnEnded）；`done` 为真时不调 Cancel，直接 `finish(unit, false, 结果, startNext=true)`——与 Tick 报告结束同一条收尾（结果状态为空记成功）。`BeatRunner` 在进入切换时照常 Start 心跳、离开时 Stop，事务里两次变化按序号生效，净效果是没挂上。`movement` 的动作在 `Start` 末尾调 `Move.Advance(token, 0)`，为此 `walkPath` 改为与当前位置重合的途经点不耗距离、0 时长也越过（原来 `budget > 0` 才进循环）。强制点：`start` 的 `done` 分支、`moveAction.Start`、`walkPath` 的循环条件（变异 D1、D12）。
+2. **取代否决与跨组冲突**（`applyStart`）：判定顺序固定为 冻结 → `crossGroup`（其他组按组号升序问 `Conflict`，任一 `BlockIncoming` 立即拒绝、什么都不改）→ 本组当前动作的 `Replacer`（Keep：新动作以取消结束、返回 nil；Reject：拒绝）→ `preempt`（取消被抢占组的当前动作，`startNext=false`）→ 取代本组当前动作 → `start`。被拒绝的新动作：最外层调用返回错误、不发 OnEnded（调用方没拿到 ID，与冻结一致）；延后执行的（ID 已交出）发一次失败状态的 OnEnded。排队项成为当前动作（`applyAdvance`）同样过 `crossGroup`，被挡时以失败结束、经 OnError 报告、接着试下一个；此时同组空闲，不问 `Replacer`。`ReplaceBy` / `Conflict` 的 panic 分别按 Allow / NoConflict 处理并报告。强制点：`applyStart`、`crossGroup`、`preempt`、`replaceDecision`（D2、D3、D4）。
+3. **按 ID 结束**（`applyEndAction`）：先找各组当前动作（`finish`，推进队列），再找排队项（`discardQueued` 只丢这一个，取消状态）；最外层调用找不到返回 `ErrActionNotFound`，延后命令找不到返回 nil（动作可能已在这之前结束）。强制点（D5）。
+4. **计数冻结**（`actionGroupState.freezes`）：`Freeze` 立即加一（0→1 时调 `OnFreeze(group, true)`），`FreezeCancel` 再提交一条 `opInterrupt`（有回调，按 submit 规则延后），执行时组仍冻结且有当前动作才 `finish(cancel, startNext=false)`，原因 `action group frozen` / `ErrActionGroupFrozen`；`Recover` 是命令（`opRecover`）：计数为 0 返回 `ErrActionGroupNotFrozen`、不变负，减到 0 时 `OnFreeze(group, false)` 并在组空闲时推进队列。所有原来读 `frozen` 的地方改读 `freezes > 0`（Start 预检、Enqueue、Tick、finish 的推进、advance）。`BeatRunner.freeze` 包住 `OnFreeze`：冻结 `Stop` 组的心跳，解冻时当前动作需要周期 tick 就 `startGroup`（挂不上同 `transition`，以失败结束）；`transition` 进入与 `Sync` 都跳过冻结的组。强制点：`Freeze`、`opRecover`、`opInterrupt`、`BeatRunner.freeze`（D6、D7、D8）。
+5. **Agent 的接线**（`agent.go`）：`ActionRunnerHooks` 只用三个——`PopulateContext` 填 Owner / ActionList（Agent 自己）/ CurrentMission，`OnEnded` 先 `MissionRunner.OnActionEnd` 再 `Observer.OnActionEnd`，`OnError`；`MissionRunnerHooks` 的 `ClearActions` 接 `ActionRunner.ClearMission(id, cancel=true)`、`OnEnded` 接 `Observer.OnMissionEnd`、`Context` 给任务同一个 ActionList。动作的归属任务由 `missionTag` 决定：`MissionRunner.Deferring()`（任务 runner 正在执行，即在任务回调或它同步引出的回调里）时取当前任务 ID，否则 0。`Clear` 先 `EndCurMission` 再 `EndAll(force)`。`Beat` 非空时用 `NewBeatRunner`（宿主必须属于同一实体，`NewAgent` 检查）。`ai.Controller` 有编译期断言实现 `actionflow.Observer`。强制点：`actionEnded`、`missionTag`、`Clear`（D9、D10、D11）。
+
+验证（`GOWORK=off go test -race -count=1 ./gameplay/actionflow ./gameplay/movement`）：`action_runner_test.go`（Start 即完成并推进队列、延后的瞬时动作；Keep / Reject 与延后的 Reject、强制结束不问；Block / Preempt 与被挡的排队项、无规则互不影响；按 ID 结束当前与排队项、找不到；计数冻结、多撤销一次、暂停不 tick、打断保留队列、OnFreeze 只在 0↔1；回调里的打断延后）；`heartbeat_test.go`（冻结的组停心跳、迟到的拍不 tick、`Sync` 不重挂冻结的组、解冻重挂、打断后不再挂）；`agent_test.go`（先任务后观察者、任务标签与随任务结束、Clear 后什么都不运行、经 ActionList 的计数冻结、拒绝别的实体的心跳宿主）；`movement/nest_test.go`（真实 Nest + 心跳：已经结束的移动在 handler 里结束且不挂心跳；暂停移动组时驱动上没有登记、位置不变，解冻后走到终点，打断模式取消在途移动）。涉及心跳的用例 `-race -count=30` 通过。变异核对 D1～D12 原文见 [D21 实施结果](../../maintenance/DESIGN-TODO.md#6-调研一--实施)。
+
 ## 3. 并发、失败与恢复的修改检查
 
 持久化钩子是第三个调用位置（前两个是回调里直接调用、回调里重入 Tick）：钩子里取消、改期、新建和重入 Tick 都允许，钩子能看到回调里看不到的过渡状态（见 §2 第 6 条）。改动发变化的路径时，在 `TestHookOperationsOnEveryNodeStateItCanSee` 里补对应的状态行，而不是只加单点用例；2026-10-17 重构后第一处缺陷（收尾钩子重入 Tick 触发尚未通知的新节点，ID 未经 upsert）就出在这个维度，见[重构方案 §9](../../maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
@@ -184,7 +196,8 @@ DESIGN-TODO D20 第 2 期。`gameplay/actionflow` 的 `BeatRunner` 与 `gameplay
 - [shared_test.go](../../../gameplay/movement/shared_test.go)：`TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode`
 - [smoke_test.go](../../../gameplay/movement/smoke_test.go)：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`
 - [example_test.go](../../../gameplay/movement/example_test.go)：`Example`
-- [actionflow/heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`
+- [actionflow/heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`、`TestAFrozenGroupStopsBeatingAndResumesOnRecover`
+- [movement/nest_test.go](../../../gameplay/movement/nest_test.go)（D21）：`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`、`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`
 
 </details>
 

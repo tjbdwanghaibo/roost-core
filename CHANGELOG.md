@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 行为控制：吸收 ssr 的 action_list / mission / ai / state（DESIGN-TODO D21 调研一，维护者 2026-10-21 决定 13 条全部按推荐）
+
+- **第 1 期（`gameplay/actionflow`，`86c6dc1c`）**：新增 `Agent`（`NewAgent(owner, AgentConfig{Registry, GroupForKind, Conflict, DefaultMission, Beat, Observer, Now, OnError, ...})`，`Runner` / `Beat` / `Missions` / `Clear`，实现 `ActionList`）与 `Observer`（`ai.Controller` 实现）：动作结束先送任务再送观察者，任务回调里发起的动作归属任务、随任务取消，`Clear` 先结束任务再结束动作。新增 `Replacer`（`ReplaceBy(ctx, next) ReplaceDecision`：`ReplaceAllow` / `ReplaceKeep` / `ReplaceReject`，`ErrReplaceRejected`）、`ActionRunnerConfig.Conflict`（`NoConflict` / `BlockIncoming` / `PreemptRunning`，`ErrBlockedByGroup`）、`ActionRunner.EndAction(id, force, reason)`（`ErrActionNotFound`）、`FreezeMode`（`FreezePause` / `FreezeCancel`）、`ActionRunner.FreezeCount`、`ActionRunnerHooks.OnFreeze`、`ErrActionGroupNotFrozen`。`BeatRunner` 冻结时停组的心跳、解冻后重挂。
+- **不兼容（第 1 期）**：`Action.Start(ctx) error` → `Start(ctx) (done bool, result ActionResult, err error)`（`done` 表示启动即完成，立即以 `result` 结束、不挂心跳）；`ActionRunner.Freeze(group)` → `Freeze(group, mode) error`，冻结改为计数（每次 `Freeze` 对应一次 `Recover`，多撤销一次返回 `ErrActionGroupNotFrozen`）；`ActionList` 去掉 `Frozen(group)` / `Recover(group)` / `GetFrozen(group)`，改为 `Freeze(group, mode) error` / `Recover(group) error` / `Frozen(group) bool`，并新增 `EndAction`。仓库内只有 `gameplay/movement` 的两个动作与测试动作实现了 `Action`，已同步修改；业务自己实现的动作需要改 `Start` 的返回值。
+- **行为变化（第 1 期，`gameplay/movement`）**：`MoveTo` / `Follow` 动作在 Start 时按 0 时长核对一次——已经在终点（路径上的点都是当前格）、目标已在 `Keep` 以内且 `StopWhenReached`、目标已消失或不在本场景时，在发起它的 handler 里结束，不挂心跳（原来要等第一拍）。`Move` 的路径推进：与当前位置重合的途经点不再要求本拍有剩余距离。
+- **测试**：每项先写回归，再用变异核对确认红（D1～D12，原文见 [DESIGN-TODO D21 实施](docs/maintenance/DESIGN-TODO.md#6-调研一--实施)）；涉及心跳的用例 `-race -count=30` 通过。
+- **限制**：见 [KNOWN-LIMITS“行为控制”](docs/maintenance/KNOWN-LIMITS.md#行为控制d21)。
+
 ### 移动与动作由实体心跳驱动：gameplay/movement（MapBasic / Move / MoveTo / Follow）与 actionflow.BeatRunner（DESIGN-TODO D20 第 2 期）
 
 - **维护者决定（2026-10-21）**：① 移动参考 ssr、由动作驱动——`Move` 是被动组件，`MoveTo` / `Follow` 动作由实体的 `ActionRunner` 驱动，runner 给动作所在的组挂心跳，每拍动作调 `Move.Advance`；② 所有控制实体行为的逻辑（移动、技能、AI 决策……）都经 `ActionRunner` 下发与收尾，不绕过动作直接驱动组件；③ runner 不随事务回滚由业务层保证、框架不处理：handler 先做完可能失败的校验与修改，最后一步才调用动作接口。

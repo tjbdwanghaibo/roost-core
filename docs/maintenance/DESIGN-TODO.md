@@ -1501,6 +1501,62 @@ roost 的取舍：
 
 实施中，分期结果按完成顺序写在下面。
 
+##### D21-1 实施结果（2026-10-21）
+
+**状态：已实施**（分支 `feat/d21-gameplay`，本地提交 `86c6dc1c`，由维护者推送）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
+
+**API 最终形状**：
+
+```go
+// gameplay/actionflow
+type Action interface { Kind() ActionKind; Start(*ActionContext) (done bool, result ActionResult, err error); Tick(*ActionContext) (bool, ActionResult); Cancel(*ActionContext, string) }
+type Replacer interface{ ReplaceBy(ctx *ActionContext, next ActionSnapshot) ReplaceDecision } // ReplaceAllow / ReplaceKeep / ReplaceReject
+type Conflict uint8                                                                            // NoConflict / BlockIncoming / PreemptRunning
+ActionRunnerConfig.Conflict func(running, incoming ActionSnapshot) Conflict
+ActionRunnerHooks.OnFreeze func(group ActionGroup, frozen bool)
+func (r *ActionRunner) EndAction(id int64, force bool, reason ActionReason) error
+func (r *ActionRunner) Freeze(group ActionGroup, mode FreezeMode) error // FreezePause / FreezeCancel，计数
+func (r *ActionRunner) Recover(group ActionGroup, now time.Time) error  // 计数归零才解冻
+func (r *ActionRunner) Frozen(group) bool / FreezeCount(group) int
+var ErrActionGroupNotFrozen, ErrActionNotFound, ErrReplaceRejected, ErrBlockedByGroup
+type Observer interface{ OnActionEnd(id int64, kind ActionKind, reason ActionReason); OnMissionEnd(Mission, ActionReason) }
+func NewAgent(owner entity.IThreadSafeEntity, AgentConfig{Registry, GroupForKind, Conflict, DefaultMission, Beat *BeatConfig, Observer, Now, OnError, MaxDeferredCommands, MaxDeferredSteps}) (*Agent, error)
+func (a *Agent) Runner() / Beat() / Missions() / Clear(reason) + ActionList 全部方法
+type ActionList interface { …; EndAction(id, force, reason) error; Freeze(group, mode) error; Recover(group) error; Frozen(group) bool; … } // 去掉 Frozen(group) / Recover(group) / GetFrozen
+```
+
+**实施中的决定（方案没写死的细节，按“不引入”清单与 roost-coding 定）**：
+
+1. **被拒绝的新动作是否发 OnEnded**：与现有的“冻结”一致——最外层直接调用被拒（`ErrReplaceRejected` / `ErrBlockedByGroup`）时返回错误、不发 OnEnded（调用方没拿到 ID）；回调里延后的（ID 已交出）发一次失败状态的 OnEnded。`ReplaceKeep` 总是给 ID 并发一次取消状态的 OnEnded，`Start` 返回 nil（方案原文）。
+2. **跨组冲突也约束排队项**：排队项成为当前动作时同样过 `Conflict`，被挡以失败结束、报告、接着试下一个——否则一个被挡的 Start 可以经 Enqueue 绕过规则。此时同组空闲，不问 `Replacer`。
+3. **`FreezeCancel` 只打断当前动作，排队项保留**（ssr 的三组都关了排队，没有先例）：打断是“停下正在做的事”，排队的计划是否作废由业务决定（`ClearQueue` / `EndAction`）。列为待拍板 ①。
+4. **冻结的组停心跳**：新增 `ActionRunnerHooks.OnFreeze`（只在计数 0↔1 时调用），`BeatRunner` 用它停 / 重挂组的心跳；暂停期间不占调度，解冻后第一拍的 `Elapsed` 从重新启动算起（暂停的时间不计入移动）。
+5. **`EndAction` 的延后执行找不到时不报告**：回调里按 ID 结束一个随后在同一轮里已经结束的动作是正常时序，不算错误；最外层直接调用找不到返回 `ErrActionNotFound`。
+6. **`movement` 的 Start 即完成用 `Advance(token, 0)`**：不在动作里另写一套“是否已到达”的判断；为此 `walkPath` 让与当前位置重合的途经点在 0 时长下也越过（原来 `budget > 0` 才进循环，有剩余距离时行为不变）。
+7. **Agent 的“先任务后观察者”在任务回调里有一处例外**（任务回调期间的送达延后、观察者当次收到），不为它在 Agent 里另加一层延后队列（方案“不引入”的复杂调度层），写进 KNOWN-LIMITS。
+8. **测试里的 `planActionList` 保留**：它测的是“业务自己接线”的底层路径（`ActionRunner` + `MissionRunner` 直接接），`Agent` 的同类行为在 `agent_test.go` 另测。
+
+**红绿证据**：新功能，实现与测试同轮写成；红用变异核对给出（每个强制点改掉一处，对应用例在当前代码上变红，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| D1 `start` 忽略 `done` | `TestAnActionThatCompletesInStartEndsAtOnceAndTheQueueMoves`：`after an instant action: current &{instant ...} (want the queued one), instant starts 1 cancels 0, queued starts 0`；`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`：`ended inside the handler after each start: [0 1 2]; registered 1` |
+| D2 不问 `Replacer` | `TestTheCurrentActionCanKeepItselfOrRejectAReplacement`：`keep: Start = 2, <nil>; current kept false; new starts 1; current cancels 1` |
+| D3 不认 `BlockIncoming` | `TestConflictRulesBlockOrPreemptOtherGroups`：`blocked start: <nil> starts 1` |
+| D4 抢占时推进对方队列 | 同上：`preempt: <nil> current3 true current1 &{later walk ...} walk cancels 1 later starts 1 queue 0` |
+| D5 `EndAction` 不找排队项 | `TestEndActionEndsTheCurrentOrAQueuedActionByID`：`actionflow: action not found: 3` |
+| D6 冻结不计数（Recover 清零） | `TestFreezingIsCountedAndCancelModeInterruptsTheCurrentAction`：`one of two sources recovered: <nil> frozen false` |
+| D7 `FreezeCancel` 不打断 | 同上：`cancel freeze: current &{moving ...} cancels 0 queue 1 next starts 0`；`TestCancelFreezeFromACallbackInterruptsAfterTheCallback`：`after the callback: current &{moving ...} cancels 0` |
+| D8 冻结不停组心跳 | `TestAFrozenGroupStopsBeatingAndResumesOnRecover`：`paused group: active true registered 1`；`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`：`paused move: registered 1 ended []` |
+| D9 先观察者后任务 | `TestAgentDeliversActionEndsToTheMissionBeforeTheObserver`：`observer saw [action 1 2 step 0 action 2 2 step 1 mission 1 2], want [action 1 2 step 1 mission 1 2 action 2 2 step -1]` |
+| D10 不打任务标签 | `TestAgentEndsAMissionsActionsWithTheMissionOnly`：`mission tags: step 0 (mission 1) ai 0` |
+| D11 `Clear` 先动作后任务 | `TestAgentClearLeavesNothingRunning`：`after Clear: group 1 <nil> group 2 <nil> second starts 1 mission <nil>` |
+| D12 0 时长不越过重合的途经点 | `TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`：`ended inside the handler after each start: [0 2 3]; registered 0` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳的用例（actionflow 的心跳用例、movement 的 nest 用例）`-race -count=30` 全部通过；根包 `GOWORK=off go test -count=1 .` 通过（退出码均为 0）。
+
+**待拍板（先按推荐做了）**：① `FreezeCancel` 是否连排队项一起丢弃——现按“只打断当前、保留排队”（推荐：排队计划的去留由业务决定）；备选 B：打断时丢弃本组排队项（各发一次取消的 OnEnded）。
+
 ## D22 业务时间取自 ctx、支持变速
 
 **状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**

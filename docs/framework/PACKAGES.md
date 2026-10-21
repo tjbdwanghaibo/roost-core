@@ -73,7 +73,7 @@
 | [framework/sync/syncbus/driver](../../framework/sync/syncbus/driver) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 2 | 13 |
 | [framework/sync/syncbus/mirror](../../framework/sync/syncbus/mirror) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 1 | 5 |
 | [framework/sync/syncstream](../../framework/sync/syncstream) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 8 | 13 |
-| [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 7 | 4 |
+| [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 8 | 5 |
 | [gameplay/ai](../../gameplay/ai) | [其他包与公共基础设施](impl/14-foundation.md) | 7 | 8 |
 | [gameplay/attribute](../../gameplay/attribute) | [游戏技能、战斗与空间](impl/08-skill.md) | 2 | 2 |
 | [gameplay/heartbeat](../../gameplay/heartbeat) | [时间与定时器](impl/10-time.md) | 3 | 6 |
