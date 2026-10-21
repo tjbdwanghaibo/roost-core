@@ -257,6 +257,19 @@ type interestObserver struct {
 	blockVisible map[int64]int
 	pending      []InterestEvent
 	blockPending []InterestEvent
+	// moved 是本批次里落在这个观察者订阅块内移动过的目标（写阶段追加，可重复，读阶段归一）。
+	moved []int64
+	// settled：自上次完整重评或 evaluateMoved 以来，可见集没有被逐对评估改过，下面的“未入选下界”有效。
+	// 逐对评估（串行路径的 evaluatePair）不补位，之后的状态可能与完整重评不同，所以它清掉 settled。
+	settled bool
+	// refused / refusedMin：可能存在进入半径内却未入选的目标（被容量拒绝或被淘汰），refusedMin 是它们
+	// 距离平方的下界（保守，只降不升，完整重评时重算）。refused 为假表示没有这样的目标。
+	refused    bool
+	refusedMin int64
+	// farthest*：可见集里最远的成员（同距取较小 ID）的缓存，供 evictFarther 与 evaluateMoved 共用；
+	// 可见集变化或成员移动后失效（evaluatePair 一律失效，evaluateMoved 见到移动过的成员时重算）。
+	farthestKnown, farthestOK         bool
+	farthestSubject, farthestDistance int64
 }
 
 // AOI is the incremental interest (AOI) layer over spatial.BlockIndex:
@@ -285,6 +298,8 @@ type AOI struct {
 	dirty          map[int64]*interestObserver
 	serialWork     aoiWorkspace
 	workerWork     []aoiWorkspace
+	// fullScans 累计完整候选遍历（evaluateObserver 的空间部分）次数，供测试断言重评范围。
+	fullScans uint64
 }
 
 func NewAOI(config AOIConfig) (*AOI, error) {
@@ -351,7 +366,7 @@ func (m *AOI) AddSubject(id int64, at spatial.Point) error {
 	}
 	m.subjects[id] = at
 	m.index.Add(id, at)
-	m.evaluateSubjectFor(m.observersAt(at), id, at, false)
+	m.subjectChanged(id, at, false, at, at)
 	return nil
 }
 
@@ -367,8 +382,7 @@ func (m *AOI) MoveSubject(id int64, to spatial.Point) error {
 	}
 	m.index.Move(id, from, to)
 	m.subjects[id] = to
-	affected := m.observersAt(from, to)
-	m.evaluateSubjectFor(affected, id, to, false)
+	m.subjectChanged(id, to, false, from, to)
 	return nil
 }
 
@@ -381,7 +395,7 @@ func (m *AOI) RemoveSubject(id int64) error {
 	_ = m.SetObservedBlocks(id, nil)
 	m.index.Remove(id, at)
 	delete(m.subjects, id)
-	m.evaluateSubjectFor(m.observersAt(at), id, at, true)
+	m.subjectChanged(id, at, true, at, at)
 	return nil
 }
 
@@ -596,16 +610,47 @@ func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestO
 	return result
 }
 
+// subjectChanged 处理一个目标的登记、移动或移除：from / to 是旧、新位置（登记与移除时相同），两处所在块的观察者受影响。
+// 批次写阶段只把目标记到这些观察者上（不建临时集合，重复由读阶段归一），读阶段再决定逐对评估还是完整重评；
+// 否则立即逐对评估（evaluateSubjectFor）。
+func (m *AOI) subjectChanged(subject int64, at spatial.Point, removed bool, from, to spatial.Point) {
+	if !m.batching {
+		if from == to {
+			m.evaluateSubjectFor(m.observersAt(from), subject, at, removed)
+		} else {
+			m.evaluateSubjectFor(m.observersAt(from, to), subject, at, removed)
+		}
+		return
+	}
+	first := m.index.BlockIndex(from)
+	m.markMovedIn(first, subject)
+	if second := m.index.BlockIndex(to); second != first {
+		m.markMovedIn(second, subject)
+	}
+}
+
+// markMovedIn 把移动的目标记到登记在块 block 上的每个观察者；已要完整重评的观察者不必再记。
+func (m *AOI) markMovedIn(block, subject int64) {
+	b := m.blocks[block]
+	if b == nil {
+		return
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, observer := range b.observers {
+		if observer.dirty&dirtySpatial == 0 {
+			observer.moved = append(observer.moved, subject)
+		}
+		observer.dirty |= dirtyMoved
+		m.dirty[observer.id] = observer
+	}
+}
+
 // evaluateSubjectFor runs the visibility state machine for one subject
-// against each candidate observer.
+// against each candidate observer (outside a batch).
 func (m *AOI) evaluateSubjectFor(observers []*interestObserver, subject int64, at spatial.Point, removed bool) {
 	for _, observer := range observers {
-		if m.batching {
-			observer.dirty |= dirtySpatial
-			m.dirty[observer.id] = observer
-		} else {
-			m.evaluatePair(observer, subject, at, removed)
-		}
+		m.evaluatePair(observer, subject, at, removed)
 	}
 }
 
@@ -622,9 +667,18 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 	if reason&dirtyCoverage != 0 {
 		m.evaluateObserved(observer)
 	}
-	if reason&dirtySpatial == 0 {
-		return
+	moved := observer.moved
+	observer.moved = observer.moved[:0]
+	if cap(observer.moved) > aoiWorkspaceLimit {
+		observer.moved = nil
 	}
+	if reason&dirtySpatial == 0 {
+		if reason&dirtyMoved == 0 || m.evaluateMoved(observer, work, moved) {
+			return
+		}
+	}
+	work.fullScans++
+	observer.refused, observer.refusedMin, observer.farthestKnown = false, 0, false
 	work.visible = work.visible[:0]
 	for id := range observer.visible {
 		work.visible = append(work.visible, id)
@@ -668,6 +722,14 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 	}
 	work.query, work.candidates = query, candidates
 	work.seenPeak = max(work.seenPeak, len(seen))
+	m.admitNearest(observer, candidates)
+	observer.settled = true
+}
+
+// admitNearest 按距离从近到远（同距按 ID）让候选入选，满额时只淘汰严格更远的成员。
+// 最近的剩余候选都无法替换时，后续候选也不会改变可见集；这个被拒的距离记作未入选下界。
+// 等距离仍保留原成员；成功腾出位置后 evaluatePair 不会再次淘汰。
+func (m *AOI) admitNearest(observer *interestObserver, candidates []entryCandidate) {
 	slices.SortFunc(candidates, func(a, b entryCandidate) int {
 		if order := cmp.Compare(a.distance, b.distance); order != 0 {
 			return order
@@ -675,16 +737,93 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 		return cmp.Compare(a.subject, b.subject)
 	})
 	for _, candidate := range candidates {
-		// 候选已按距离递增。最近的剩余候选都无法替换时，后续候选也不会改变可见集。
-		// 等距离仍保留原成员；成功腾出位置后 evaluatePair 不会再次淘汰。
 		if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible && !m.evictFarther(observer, candidate.at) {
+			noteRefused(observer, candidate.distance)
 			break
 		}
 		m.evaluatePair(observer, candidate.subject, candidate.at, false)
 	}
 }
 
+// movedMember 报告 ids（升序）里是否有当前可见成员。
+func movedMember(observer *interestObserver, ids []int64) bool {
+	for _, subject := range ids {
+		if _, visible := observer.visible[subject]; visible {
+			return true
+		}
+	}
+	return false
+}
+
+// noteRefused 记一个进入半径内却没入选的目标的距离平方（被拒或被淘汰），维护未入选下界。
+func noteRefused(observer *interestObserver, distance int64) {
+	if !observer.refused || distance < observer.refusedMin {
+		observer.refused, observer.refusedMin = true, distance
+	}
+}
+
+// evaluateMoved 是只有目标移动时的读阶段：观察者没动、视野没变，只评估本批移动过的目标，结果与 evaluateObserver
+// 的完整重评逐项相同（事件、顺序与可见集）；不能证明相同时返回 false，由调用方完整重评。
+//
+// 为什么相同：完整重评先按 ID 重评可见成员，再把进入半径内的未入选目标按距离从近到远补入。没动的成员与没动的
+// 未入选目标相对观察者的距离不变——成员重评不产生事件；未入选目标在上次完整重评（或上次本函数）结束时都不比
+// 最远成员近（settled），距离不小于 refusedMin。所以只要本批之后可见集仍是满的、最远成员不比 refusedMin 远，
+// 没动的未入选目标在完整重评里也一个都进不来，完整重评的事件就只来自移动过的目标，按同样的顺序评估它们即可。
+// 没有未入选目标（!refused）时无论满不满都成立。成员离开腾出位置、或成员移远超过下界时，回到完整重评补位。
+func (m *AOI) evaluateMoved(observer *interestObserver, work *aoiWorkspace, moved []int64) bool {
+	if !observer.settled {
+		return false
+	}
+	ids := append(work.visible[:0], moved...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	work.visible = ids
+	if limit := m.config.MaxVisible; limit > 0 && observer.refused {
+		// 本批之后（成员重评之后）可见集的人数与最远距离。没有成员移动时成员都仍在离开半径内，
+		// 直接用最远成员缓存；有成员移动时按新位置数一遍。
+		count, farthest := len(observer.visible), int64(-1)
+		if movedMember(observer, ids) {
+			count = 0
+			for subject := range observer.visible {
+				at, exists := m.subjects[subject]
+				if !exists || !spatial.WithinDistance(observer.at, at, observer.leave) {
+					continue
+				}
+				count++
+				farthest = max(farthest, spatial.DistanceSquared(observer.at, at))
+			}
+		} else if _, distance, ok := m.farthestMember(observer); ok {
+			farthest = distance
+		}
+		if count < limit || farthest > observer.refusedMin {
+			return false
+		}
+	}
+	for _, subject := range ids {
+		if _, visible := observer.visible[subject]; visible {
+			at, exists := m.subjects[subject]
+			m.evaluatePair(observer, subject, at, !exists)
+		}
+	}
+	candidates := work.candidates[:0]
+	for _, subject := range ids {
+		if _, visible := observer.visible[subject]; visible {
+			continue
+		}
+		if at, exists := m.subjects[subject]; exists && subject != observer.self && spatial.WithinDistance(observer.at, at, observer.enter) {
+			candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: spatial.DistanceSquared(observer.at, at)})
+		}
+	}
+	work.candidates = candidates
+	m.admitNearest(observer, candidates)
+	observer.settled = true
+	return true
+}
+
 func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial.Point, removed bool) {
+	// 单独的逐对评估不补位；完整重评与 evaluateMoved 在评估结束后重新置位。
+	// 这对目标可能是移动过的成员或新成员，最远成员缓存一并失效。
+	observer.settled, observer.farthestKnown = false, false
 	previousBand, wasVisible := observer.visible[subject]
 	// 自身实体不进可见集（self 为 0 时不会命中：实体 ID 不为零）；self 换过时旧可见里的它按离开处理。
 	if removed || subject == observer.self {
@@ -723,25 +862,39 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 // the farthest current member if it is strictly farther (ties keep the
 // incumbent; the farthest scan breaks distance ties by id for determinism).
 func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
-	farthestSubject, farthestDistance := int64(-1), int64(-1)
-	hasCandidate := false // 非零负数也是合法 ID，不能用 ID 的符号表示是否找到成员。
-	for subject := range observer.visible {
-		position, exists := m.subjects[subject]
-		if !exists {
-			continue
-		}
-		distance := spatial.DistanceSquared(observer.at, position)
-		if distance > farthestDistance || (distance == farthestDistance && subject < farthestSubject) {
-			farthestSubject, farthestDistance = subject, distance
-			hasCandidate = true
-		}
-	}
+	farthestSubject, farthestDistance, hasCandidate := m.farthestMember(observer)
 	if !hasCandidate || spatial.DistanceSquared(observer.at, at) >= farthestDistance {
 		return false
 	}
+	// 被淘汰的成员可能仍在进入半径内，计入未入选下界。
+	noteRefused(observer, farthestDistance)
 	delete(observer.visible, farthestSubject)
+	observer.farthestKnown = false
 	m.emit(observer.id, farthestSubject, InterestLeave, -1)
 	return true
+}
+
+// farthestMember 返回可见集里仍存在的最远成员（同距取较小 ID）及其距离平方；没有成员时 ok 为 false。
+// 结果缓存在观察者上，直到可见集变化或成员移动。
+func (m *AOI) farthestMember(observer *interestObserver) (subject, distance int64, ok bool) {
+	if observer.farthestKnown {
+		return observer.farthestSubject, observer.farthestDistance, observer.farthestOK
+	}
+	subject, distance = -1, -1
+	for member := range observer.visible {
+		position, exists := m.subjects[member]
+		if !exists {
+			continue
+		}
+		d := spatial.DistanceSquared(observer.at, position)
+		// 非零负数也是合法 ID，不能用 ID 的符号表示是否找到成员。
+		if !ok || d > distance || (d == distance && member < subject) {
+			subject, distance, ok = member, d, true
+		}
+	}
+	observer.farthestKnown, observer.farthestOK = true, ok
+	observer.farthestSubject, observer.farthestDistance = subject, distance
+	return subject, distance, ok
 }
 
 func sortedVisible(visible map[int64]int) []int64 {

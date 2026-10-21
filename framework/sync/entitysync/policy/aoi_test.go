@@ -941,6 +941,195 @@ func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
 	}
 }
 
+// denseSaturatedAOI 是与 sync-aoi 多视野同形的小场景：目标按 30 的间距排成网格，观察者多于目标、站在网格点上，
+// 进入半径内约 78 个目标，MaxVisible 20，每个观察者都处在容量饱和状态。
+func denseSaturatedAOI(t testing.TB, side, observers int) (*AOI, []spatial.Point) {
+	t.Helper()
+	a, err := NewAOI(AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: int64(side)*30 + 600, Y: int64(side)*30 + 600}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := make([]spatial.Point, side*side+1)
+	for id := 1; id <= side*side; id++ {
+		positions[id] = spatial.Point{X: 300 + int64((id-1)%side)*30, Y: 300 + int64((id-1)/side)*30}
+		if err := a.AddSubject(int64(id), positions[id]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range observers {
+		at := positions[1+(i*7919)%(side*side)]
+		if err := a.AddObserver(int64(100_000+i), 0, at, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.Flush()
+	a.FlushBlocks()
+	return a, positions
+}
+
+// 一批里只有目标移动、观察者没动时，只需要评估移动了的那些 (观察者, 目标)；不能因为目标落在观察者订阅的块里，
+// 就对每个这样的观察者重新遍历全部候选（多视野时几乎所有观察者每批都被波及，D19 sync-aoi 16 视野 Nest 失守的原因）。
+// 这里移动的目标要么在观察者进入半径之外，要么远于已满的可见集里最远的成员，结果不变，所以一次完整遍历都不应发生。
+func TestAOIBatchSubjectMovesDoNotRescanSettledObservers(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+			a, positions := denseSaturatedAOI(t, 20, 0)
+			// 观察者集中在网格左下角，目标从右上角移动：同在订阅块内，却远在进入半径之外。
+			for i := range 30 {
+				at := spatial.Point{X: 300 + int64(i%6)*30, Y: 300 + int64(i/6)*30}
+				if err := a.AddObserver(int64(100_000+i), 0, at, ObserverView{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a.Flush()
+			a.FlushBlocks()
+			before := a.fullScans
+			a.beginBatch()
+			moved := 0
+			for id := 1; id < len(positions); id++ {
+				at := positions[id]
+				if at.X < 300+8*30 || at.Y < 300+8*30 || at.X > 300+11*30 || at.Y > 300+11*30 {
+					continue
+				}
+				at.X++
+				if err := a.MoveSubject(int64(id), at); err != nil {
+					t.Fatal(err)
+				}
+				moved++
+			}
+			dirtied := len(a.dirty)
+			a.endBatch(workers)
+			if moved == 0 || dirtied == 0 {
+				t.Fatalf("scene must dirty observers: moved=%d dirtied=%d", moved, dirtied)
+			}
+			if events := a.Flush(); len(events) != 0 {
+				t.Fatalf("far moves changed visibility: %v", events)
+			}
+			if scans := a.fullScans - before; scans != 0 {
+				t.Fatalf("%d subject moves made %d of %d dirtied observers rescan all candidates; want 0", moved, scans, dirtied)
+			}
+		})
+	}
+}
+
+// 只评估移动目标（evaluateMoved）必须与完整重评逐项相同：容量饱和、同距并列、成员离开后补位、成员移远、
+// 目标退出与重建、观察者移动、额外覆盖，以及批次之间穿插的串行逐对评估（它不补位，之后必须回到完整重评）。
+// 对照组把每个被波及的观察者强制完整重评；同时确认快速路径确实被走到，测试不是空转。
+func TestAOIMovedOnlyEvaluationMatchesFullRecompute(t *testing.T) {
+	for _, limit := range []int{0, 3, 12} {
+		for _, workers := range []int{1, 4} {
+			t.Run(fmt.Sprintf("limit=%d/workers=%d", limit, workers), func(t *testing.T) {
+				config := AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 150, LeaveRadius: 190, MaxVisible: limit, Bands: []int64{60, 110}}
+				actual, err := NewAOI(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reference, err := NewAOI(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				check := func(err error) {
+					t.Helper()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				rng := rand.New(rand.NewPCG(41, uint64(limit*10+workers)))
+				// 坐标取 10 的倍数，制造大量同距并列。
+				point := func() spatial.Point { return spatial.Point{X: 500 + 10*rng.Int64N(60), Y: 500 + 10*rng.Int64N(60)} }
+				positions := make(map[int64]spatial.Point)
+				for id := int64(1); id <= 120; id++ {
+					positions[id] = point()
+					for _, a := range []*AOI{actual, reference} {
+						check(a.AddSubject(id, positions[id]))
+					}
+				}
+				for id := int64(1); id <= 30; id++ {
+					at := point()
+					for _, a := range []*AOI{actual, reference} {
+						check(a.AddObserver(1000+id, id, at, ObserverView{}))
+					}
+				}
+				compare := func(round int) {
+					t.Helper()
+					if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
+						t.Fatalf("round %d spatial events differ:\n%v\n%v", round, a, r)
+					}
+					if a, r := actual.FlushBlocks(), reference.FlushBlocks(); !reflect.DeepEqual(a, r) {
+						t.Fatalf("round %d coverage events differ:\n%v\n%v", round, a, r)
+					}
+					for id := int64(1001); id <= 1030; id++ {
+						if !reflect.DeepEqual(actual.Visible(id), reference.Visible(id)) {
+							t.Fatalf("round %d observer %d differs: %v vs %v", round, id, actual.Visible(id), reference.Visible(id))
+						}
+					}
+				}
+				compare(-1)
+				dirtied, scansBefore := 0, actual.fullScans
+				for round := range 300 {
+					actual.beginBatch()
+					reference.beginBatch()
+					for range 10 {
+						sid, oid := 1+rng.Int64N(120), 1001+rng.Int64N(30)
+						// 小步移动为主（快速路径的常见情形），偶尔远跳、观察者移动、覆盖、退出重建。
+						at := positions[sid]
+						at.X = min(max(at.X+10*(rng.Int64N(7)-3), 0), 1999)
+						at.Y = min(max(at.Y+10*(rng.Int64N(7)-3), 0), 1999)
+						kind, far := rng.IntN(20), point()
+						for _, a := range []*AOI{actual, reference} {
+							switch {
+							case kind < 14:
+								check(a.MoveSubject(sid, at))
+							case kind < 16:
+								check(a.MoveSubject(sid, far))
+							case kind < 17:
+								check(a.MoveObserver(oid, far))
+							case kind < 18:
+								check(a.SetObservedBlocks(sid, []int64{a.BlockAt(at)}))
+							case kind < 19:
+								check(a.RemoveSubject(sid))
+								check(a.AddSubject(sid, at))
+							default:
+								check(a.RemoveSubject(sid))
+							}
+						}
+						switch {
+						case kind < 14:
+							positions[sid] = at
+						case kind < 16:
+							positions[sid] = far
+						case kind == 19:
+							for _, a := range []*AOI{actual, reference} {
+								check(a.AddSubject(sid, positions[sid]))
+							}
+						}
+					}
+					dirtied += len(actual.dirty)
+					for _, o := range reference.dirty {
+						o.dirty = dirtySpatial | dirtyCoverage
+					}
+					actual.endBatch(workers)
+					reference.endBatch(1)
+					compare(round)
+					// 批次之间偶尔走串行逐对评估：它不补位，被它碰过的观察者下一批必须完整重评。
+					if round%7 == 0 {
+						sid := 1 + rng.Int64N(120)
+						at := point()
+						positions[sid] = at
+						for _, a := range []*AOI{actual, reference} {
+							check(a.MoveSubject(sid, at))
+						}
+						compare(round)
+					}
+				}
+				if scans := int(actual.fullScans - scansBefore); scans >= dirtied {
+					t.Fatalf("moved-only path never taken: %d full scans for %d dirtied observers", scans, dirtied)
+				}
+			})
+		}
+	}
+}
+
 func TestAOIWorkspaceDropsOversizedScratch(t *testing.T) {
 	w := aoiWorkspace{visible: make([]int64, 0, aoiWorkspaceLimit+1), blocks: make([]int64, 0, aoiWorkspaceLimit+1), query: make([]int64, 0, aoiWorkspaceLimit+1), candidates: make([]entryCandidate, 0, aoiWorkspaceLimit+1), seen: map[int64]struct{}{1: {}}, seenPeak: aoiWorkspaceLimit + 1}
 	w.release()
