@@ -76,6 +76,7 @@ type gmSceneKillPayload struct {
 type gmSceneRootPayload struct {
 	MonsterID int64 `json:"monster_id"`
 	Rooted    bool  `json:"rooted"`
+	Seconds   int64 `json:"seconds,omitempty"`
 }
 
 type gmSceneTimePayload struct {
@@ -355,13 +356,14 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 			Name: gmSceneRoot,
 			Description: "root (rooted=true) or free one monster: applies or dispels the root buff; the Rooted state follows " +
 				"from the buff, and the state gate pauses the monster's walk where it stands until it is freed. " +
-				"Payload: {\"monster_id\": <entity id from gm.scene.population>, \"rooted\": true|false}.",
+				"A timed root (seconds > 0) wears off on the monster's buff heartbeat. " +
+				"Payload: {\"monster_id\": <entity id from gm.scene.population>, \"rooted\": true|false, \"seconds\": <0 = until freed>}.",
 			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[gmSceneRootPayload](command)
 				if err != nil {
 					return admin.Result{}, err
 				}
-				rooted, err := syncsender.NewRootMonsterSender(nestClient).Sync_RootMonster(ctx, payload.MonsterID, payload.Rooted)
+				rooted, err := syncsender.NewRootMonsterSender(nestClient).Sync_RootMonster(ctx, payload.MonsterID, payload.Rooted, payload.Seconds)
 				if err != nil {
 					return admin.Result{}, err
 				}

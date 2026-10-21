@@ -39,6 +39,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
@@ -101,12 +102,26 @@ const (
 	Rooted state.ID = 1
 )
 
-// TagRoot is the buff tag that roots, and RootBuff the buff the GM command
-// applies: permanent until dispelled, because the demo does not tick buffs
-// yet (D20 P5 moves TickBuffs onto a heartbeat).
+// TagRoot is the buff tag that roots.
 const TagRoot combat.Tag = "root"
 
-var RootBuff = combat.BuffSpec{ID: 9001, Tags: []combat.Tag{TagRoot}}
+// SkillClock turns time into skill ticks (100ms each) for every combat
+// component: buff durations are counted in these ticks, and the buff
+// heartbeat (combatcomponent.AttachBeat) expires them by the same clock —
+// scene time when the scene has a time domain, so a 2× scene's roots wear off
+// twice as fast.
+var SkillClock = skill.TickClock{Length: 100 * time.Millisecond}
+
+// RootBuff is the buff the GM command applies for the given number of
+// seconds (0: until dispelled). A timed one is expired by the monster's buff
+// heartbeat, never by a loop that walks every monster.
+func RootBuff(seconds int64) combat.BuffSpec {
+	spec := combat.BuffSpec{ID: 9001, Tags: []combat.Tag{TagRoot}}
+	if seconds > 0 {
+		spec.DurationTicks = seconds * int64(time.Second/SkillClock.Length)
+	}
+	return spec
+}
 
 // Catalog declares the game's state bits once.
 var Catalog = mustCatalog()

@@ -3,6 +3,7 @@ package monster
 import (
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"{{MODULE}}/game/actor"
@@ -34,7 +35,8 @@ const PatrolHalf int64 = 12
 //	                                            runs the MoveTo: each beat Move.Advance(elapsed)
 //	movement.Move / MapBasic                    the walk, and the position written to MonsterDao + queued for the AOI
 //	state.Set + state.Gate                      Rooted → the move group is frozen (FreezePause)
-//	combatcomponent.CombatComponent             the root buff; BindStates derives Rooted from its tag
+//	combatcomponent.CombatComponent (heartbeat "combat", 1Hz while a timed buff is on)
+//	                                            the root buff, expired on its own heartbeat; BindStates derives Rooted from its tag
 //
 // Both heartbeats follow the scene's time domain (actor.WorldTime): a 2×
 // scene patrols twice as fast. The position is the DAO's (MonsterDao, all
@@ -56,6 +58,8 @@ type ActorComponent struct {
 	states   *state.Set
 	gate     *state.Gated
 	combat   *combatcomponent.CombatComponent
+	// combatBeats counts the buff heartbeat's beats (tests, diagnostics).
+	combatBeats atomic.Int64
 }
 
 // IActorEntity is the narrow lock-safe view for Nest handlers that drive a
@@ -115,6 +119,14 @@ func (component *ActorComponent) OnInitFinish(param *entity.EntityCreateParam, i
 	}
 	component.states = state.NewSet(state.NewStateDao(owner.ID(), "game", actor.Catalog), state.SetConfig{OnError: report})
 	component.combat = combatcomponent.NewCombatComponent(combatcomponent.NewCombatDao(owner.ID(), "game"))
+	// Buffs expire on the monster's own heartbeat ("combat", 1Hz while a
+	// timed buff is on, stopped when none is), in scene time.
+	if err := component.combat.AttachBeat(combatcomponent.BeatConfig{
+		Host: component.host, Clock: actor.SkillClock, TimeDomain: domain, OnError: report,
+		OnBeat: func(combatcomponent.BuffBeat) error { component.combatBeats.Add(1); return nil },
+	}); err != nil {
+		return fmt.Errorf("actor component: %w", err)
+	}
 	if err := component.combat.BindStates(component.states, combatcomponent.StateBinding{State: actor.Rooted, Tags: []combat.Tag{actor.TagRoot}}); err != nil {
 		return fmt.Errorf("actor component: %w", err)
 	}
@@ -167,17 +179,24 @@ func (component *ActorComponent) Spawn(sceneID int64, space movement.Space, at s
 	return component.brain.SetStrategy(actor.NewPatrol(at, PatrolHalf, walkable, actor.MonsterSpeed))
 }
 
-// SetRooted applies or dispels the root buff. The state, the gate and the
-// DAO mirror follow from the buff (BindStates); nothing here touches them.
-func (component *ActorComponent) SetRooted(rooted bool) {
+// SetRooted applies the root buff for seconds (0: until dispelled) or
+// dispels it. The state, the gate and the DAO mirror follow from the buff
+// (BindStates), and so does its end: a timed root is expired by the buff
+// heartbeat; nothing here touches the state.
+func (component *ActorComponent) SetRooted(rooted bool, seconds int64) {
 	if rooted {
-		if !component.combat.HasBuffTag(actor.TagRoot) {
-			component.combat.ApplyBuff(actor.RootBuff, 0, 0)
-		}
+		component.combat.DispelBuffs(actor.TagRoot, 0)
+		component.combat.ApplyBuff(actor.RootBuff(seconds), component.combat.CurrentTick(), 0)
 		return
 	}
 	component.combat.DispelBuffs(actor.TagRoot, 0)
 }
+
+// CombatBeat is the buff heartbeat's registration (tests, diagnostics).
+func (component *ActorComponent) CombatBeat() *heartbeat.Reg { return component.combat.BeatReg() }
+
+// CombatBeats is how many buff beats have run; any goroutine.
+func (component *ActorComponent) CombatBeats() int64 { return component.combatBeats.Load() }
 
 // Rooted reports the derived state.
 func (component *ActorComponent) Rooted() bool { return component.states.Has(actor.Rooted) }

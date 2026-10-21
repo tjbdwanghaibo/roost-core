@@ -4,8 +4,9 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 )
 
-// handlerRootMonster applies (rooted) or dispels the root buff on a monster
-// and answers whether it is rooted afterwards. It is the GM's
+// handlerRootMonster applies (rooted, for seconds; 0 is until dispelled) or
+// dispels the root buff on a monster and answers whether it is rooted
+// afterwards. A timed root wears off on the monster's buff heartbeat. It is the GM's
 // `monster_root`; a game applies the same buff from a skill.
 //
 // The buff is the only thing it writes. Everything else follows from it in
@@ -16,7 +17,7 @@ import (
 // and the state with it.
 //
 //roost:nest rollback=undo durability=async
-func handlerRootMonster(target monster.IActorEntity, rooted bool) (bool, error) {
-	target.ActorComp().SetRooted(rooted)
+func handlerRootMonster(target monster.IActorEntity, rooted bool, seconds int64) (bool, error) {
+	target.ActorComp().SetRooted(rooted, seconds)
 	return target.ActorComp().Rooted(), nil
 }

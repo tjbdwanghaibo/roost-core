@@ -628,6 +628,18 @@ func waitSceneBeats(t *testing.T, w *moveWorld, n int64) {
 	})
 }
 
+// waitBuffBeats waits until the monster's buff heartbeat has run twice more:
+// at least one of those beats froze the business time set before the call.
+func waitBuffBeats(t *testing.T, w *moveWorld, value *monster.Monster) {
+	t.Helper()
+	before := value.ActorComp().CombatBeats()
+	eventually(t, "two buff beats", func() (bool, string) {
+		got := value.ActorComp().CombatBeats()
+		return got >= before+2, fmt.Sprint(got - before)
+	})
+	w.settle(value.ID())
+}
+
 // Rooted: the root buff derives the Rooted state (BindStates), the gate
 // freezes the move group — the walk in progress pauses where it is and its
 // heartbeat stops, so business time passing moves nothing — and the client
@@ -652,7 +664,7 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 		return at == halfway, fmt.Sprint(at)
 	})
 
-	rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true)
+	rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true, 0)
 	if err != nil || !rooted {
 		t.Fatalf("root: %v %v", rooted, err)
 	}
@@ -676,7 +688,7 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 	}
 
 	// Freed: the walk resumes from where it paused and reaches the corner.
-	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), false); err != nil || rooted {
+	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), false, 0); err != nil || rooted {
 		t.Fatalf("free: %v %v", rooted, err)
 	}
 	w.settle(target.ID())
@@ -689,6 +701,38 @@ func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
 		at := target.MapBasic().Published().Pos
 		return at == corner, fmt.Sprint(at)
 	})
+	// A timed root (2s) wears off on the monster's own buff heartbeat: held
+	// while less than 2s of business time has passed, walking again after.
+	eventually(t, "the patrol walks on to the next corner", func() (bool, string) {
+		return locked(w, target.ID(), target.ActorComp().Moving), "idle"
+	})
+	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true, 2); err != nil || !rooted {
+		t.Fatalf("timed root: %v %v", rooted, err)
+	}
+	w.settle(target.ID())
+	combatReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.ActorComp().CombatBeat() })
+	if combatReg == nil || !locked(w, target.ID(), combatReg.Active) {
+		t.Fatal("a timed buff is on but the monster's buff heartbeat is not running")
+	}
+	held := target.MapBasic().Published().Pos
+	w.clock.advance(1500 * time.Millisecond)
+	waitBuffBeats(t, w, target)
+	if !locked(w, target.ID(), target.ActorComp().Rooted) || target.MapBasic().Published().Pos != held {
+		t.Fatalf("1.5s into a 2s root: rooted %v at %v, want still held at %v", locked(w, target.ID(), target.ActorComp().Rooted), target.MapBasic().Published().Pos, held)
+	}
+	w.clock.advance(time.Second)
+	eventually(t, "the timed root wears off", func() (bool, string) {
+		return !locked(w, target.ID(), target.ActorComp().Rooted), "rooted"
+	})
+	eventually(t, "the buff heartbeat stops with no timed buff left", func() (bool, string) {
+		return !locked(w, target.ID(), combatReg.Active), "active"
+	})
+	eventually(t, "it walks again", func() (bool, string) {
+		w.clock.advance(100 * time.Millisecond)
+		at := target.MapBasic().Published().Pos
+		return at != held, fmt.Sprint(at)
+	})
+
 	if err := w.bridge.Flush(w.ctx); err != nil {
 		t.Fatal(err)
 	}

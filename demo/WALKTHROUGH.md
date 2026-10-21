@@ -257,12 +257,12 @@ move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体�
 | `actionflow.Behavior`（心跳 `"actionflow/1"`） | 执行 MoveTo，每拍推进 |
 | `movement.Move` / `MapBasic` | 走路，位置写 `MonsterDao`、排进 AOI；怪物不落库 |
 | `state.Set` + `state.Gate` | `Rooted` 生效时冻结移动组（`FreezePause`：正在走的路停在原地，心跳停；解除后接着走） |
-| `combatcomponent.CombatComponent` + `BindStates` | 定身 buff（标签 `root`）是唯一的持有者，`Rooted` 从标签派生，不复制 |
+| `combatcomponent.CombatComponent` + `BindStates` + `AttachBeat`（心跳 `"combat"`） | 定身 buff（标签 `root`）是唯一的持有者，`Rooted` 从标签派生，不复制；限时 buff 由这个心跳到期 |
 
 - **策略不问“我是不是被定身了”**：门控是这条规则唯一的位置；策略只看移动组是否空闲。
 - **客户端看得见**：`Rooted` 经状态观察者镜像进 `MonsterDao.Rooted`（`nopersist,sync`），观察者在改 buff 的同一个事务里写，随它回滚。
 - GM：`gm.scene.root {"monster_id", "rooted"}` 加 / 驱散定身 buff（handler `handlerRootMonster` 只写 buff，其余跟着来）。
-  定身 buff 永久、直到驱散：demo 没有接 P5 的 `combatcomponent.AttachBeat`（Buff 由心跳到期）。
+  `"seconds"` 给了就是限时定身：buff 时长按技能 tick（`actor.SkillClock`，100ms）计，由怪物自己的 buff 心跳（`combatcomponent.AttachBeat`，`"combat"`，1Hz、场景时间，有限时 buff 时才挂）到点移除——快池上的周期逻辑一律走心跳，没有扫全部怪物的循环。
 - **没做**：追击与回巢、怪物占地、战斗伤害（只有 GM 的“杀掉”）。
 
 ## 场景时间：副本 2 倍速（D22）

@@ -52,11 +52,11 @@
 
 - **玩家移动（协议变化，不兼容）**：新增 `MoveTarget`（msg 10026，`{X, Y, Follow}` → `{Code, Reason, ActionID, X, Y}`）：客户端只发目标（点或要跟随的玩家），服务端找一次路、启动 `MoveTo` / `Follow` 动作，玩家自己的移动组心跳每拍推进并 `QueueMove`，观察者经 Entity Sync 收到每一步（维护者决定 ⑭）。寻路预算用完时走直线，`Move` 按地形逐格检查、被挡停下。原 `Move`（msg 10017）保留为瞬移：校验地形、写位置、结束正在走的路；AOI 由同一次写的 `QueueMove` 跟上，`Scene.Moved` 删除。
 - **位置不每拍落库（决定 ⑮，存储格式变化，不兼容）**：`PlayerDao.pos_x / pos_y / scene_id` 改为 `nopersist,sync`，新增 `facing`（`nopersist,sync`）与持久的 `saved_scene_id / saved_pos_x / saved_pos_y`（离开场景时与在场景里每 10 秒写一次，位置没变不写）；`MonsterDao` 新增 `facing`、`scene_id`、`rooted`。
-- **怪物**：新组件 `ActorComponent`：`movement.MapBasic` / `Move`、`actionflow.Behavior`、`ai.NewBeatController`（巡逻策略 `actor.Patrol`）、`state.Set` + `state.Gate`（`Rooted` 冻结移动组，`FreezePause`）、`CombatComponent.BindStates`（`root` buff 标签派生 `Rooted`）。GM `gm.scene.root`。
+- **怪物**：新组件 `ActorComponent`：`movement.MapBasic` / `Move`、`actionflow.Behavior`、`ai.NewBeatController`（巡逻策略 `actor.Patrol`）、`state.Set` + `state.Gate`（`Rooted` 冻结移动组，`FreezePause`）、`CombatComponent.BindStates`（`root` buff 标签派生 `Rooted`）与 `AttachBeat`（Buff 由怪物自己的 1Hz 心跳到期，按场景时间）。GM `gm.scene.root`（可限时）。
 - **刷怪**：spawner 的每秒 ticker 删除，改为场景实体的 1Hz 心跳 `"scene.spawn"` 决定缺额、提交后交给进程侧建实体；建一只的顺序（建实体 → 放身体 → 登记同步并进 AOI → Nest 事务进场景并启动 AI → 计数）写在 `spawner.go` 与 WALKTHROUGH。
 - **场景时间域**：场景实体新增 `SceneDao`（`nocoll`，锚点与倍率 `nopersist,sync`）与 `timedomain.Domain`；成员的行为与 AI 跟随域时间；场景是复制主体，经关系视野下发给每个成员；GM `gm.scene.time_rate`。C# 客户端新增 `Roost.Client.SceneTimeDomain`（按同步下来的参数外推域时间）。
 - **接线**：`game/actor`（心跳驱动、动作词表、状态目录、`InterestMoves` / `Ground` / `WorldTime`）；心跳驱动在 `Service.Init` 手写 `Bind` + `Start`、`Shutdown` 先停（不装 `wiring/heartbeat` Mod）。loadtest 新增 `move_target`、`move_arrive`。
-- **测试**：端到端用例 `scene_movement_test.go`（真实 Nest + 运行中的心跳驱动 + 复制桥，手动推进的业务时钟逐格核对）与巡逻单测；变异核对 M1～M11、C1 的原文见 [DESIGN-TODO D20 P3](docs/maintenance/DESIGN-TODO.md#p3-实施结果2026-10-21)。机器人冒烟因宿主资源占用推迟（复跑命令同上）。
+- **测试**：端到端用例 `scene_movement_test.go`（真实 Nest + 运行中的心跳驱动 + 复制桥，手动推进的业务时钟逐格核对）与巡逻单测；变异核对 M1～M13、C1 的原文见 [DESIGN-TODO D20 P3](docs/maintenance/DESIGN-TODO.md#p3-实施结果2026-10-21)。机器人冒烟因宿主资源占用推迟（复跑命令同上）。
 - **升级**：线上未部署，不做兼容：重新生成 game-demo；旧玩家文档的位置不再读取（首次进场景落在出生点）；客户端改用 `MoveTarget` 并渲染复制下来的位置。
 - **限制**：见 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](docs/maintenance/KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)。
 
