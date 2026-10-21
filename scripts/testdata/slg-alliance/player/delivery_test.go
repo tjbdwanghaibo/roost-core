@@ -17,7 +17,6 @@ import (
 	scoutmap "example.com/slg-alliance-practice/game/entities/scout_map"
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
@@ -166,7 +165,7 @@ func rewardChild(t *testing.T, mode string) {
 	if rev, e := s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false); e != nil || rev != 2 {
 		t.Fatalf("cold target receipt: %d %v", rev, e)
 	}
-	if rev, e := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, clock.Process(), false); e != nil || rev != 6 {
+	if rev, e := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, false); e != nil || rev != 6 {
 		t.Fatalf("cold march receipt: %d %v", rev, e)
 	}
 	mapAfter, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)

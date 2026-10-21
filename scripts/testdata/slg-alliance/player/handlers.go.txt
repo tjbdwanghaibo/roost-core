@@ -6,7 +6,7 @@ import (
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
 	"slices"
@@ -40,7 +40,7 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 	}
 	p.Dao().SetVisionMask(13) // 501、503 长期授权，504 限时侦察；502 未授权。
 	// 首次建档赠送一次侦察；重试在上方返回，绝不重算期限。时间来自服务器业务钟。
-	p.Dao().SetScoutUntil(clock.Now().Add(time.Hour).UnixMilli())
+	p.Dao().SetScoutUntil(fctx.Now().Add(time.Hour).UnixMilli())
 	p.Dao().SetX(800)
 	p.Dao().SetY(800)
 	p.Dao().SetCoverage("[]")
@@ -267,16 +267,16 @@ func handlerAllianceVision(p IAllianceRewardPlayerEntity, m IAllianceMapEntity) 
 	return string(raw), err
 }
 
-// 行军命令只由可信服务器调用，时钟来自服务端注入。重试不重算 Start/End。
+// 行军命令只由可信服务器调用，nowUnixMilli 由生成包装从 fctx 注入，不在 Sender 参数中。重试不重算 Start/End。
 // 本教学规则为十秒直线行军，不允许中途改道；到达后可用新身份开启下一段。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, business clock.Business, reject bool) (uint64, error) {
+func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, nowUnixMilli int64, reject bool) (uint64, error) {
 	state, err := readScoutMap(m)
 	if err != nil {
 		return 0, err
 	}
-	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 || business == nil {
+	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 {
 		return 0, errAllianceReward
 	}
 	if old, ok := state.Marches[key]; ok {
@@ -291,7 +291,7 @@ func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, tar
 	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves)+len(state.Marches) >= 128 {
 		return 0, errAllianceReward
 	}
-	now := business.Now().UnixMilli()
+	now := nowUnixMilli
 	if now <= 0 || now > math.MaxInt64-scout.DurationMillis {
 		return 0, errAllianceReward
 	}
@@ -321,18 +321,18 @@ func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, tar
 }
 
 // 在所属地图内按持久事件发现待办，不依赖进程内定时器或当前 Routes（可能已换新路线）。
-// 本服务只能传可信业务钟。一次最多枚举 128 个，返回身份后消费仍须重新验期限。
+// 本方法取本条消息冻结的业务时刻。一次最多枚举 128 个，返回身份后消费仍须重新验期限。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceDueArrivals(m IAllianceMapEntity, business clock.Business, limit int) ([]string, error) {
-	if business == nil || limit < 1 || limit > 128 {
+func handlerAllianceDueArrivals(m IAllianceMapEntity, nowUnixMilli int64, limit int) ([]string, error) {
+	if limit < 1 || limit > 128 {
 		return nil, errAllianceReward
 	}
 	state, err := readScoutMap(m)
 	if err != nil {
 		return nil, err
 	}
-	now := business.Now().UnixMilli()
+	now := nowUnixMilli
 	keys := []string{}
 	for key, event := range state.Arrivals {
 		if !event.Delivered && event.Route.End <= now {
@@ -365,10 +365,7 @@ func handlerAllianceDueArrivals(m IAllianceMapEntity, business clock.Business, l
 // 不发外部 RPC、不增 Player 金币，不把本地原子性扩展为跨服恰好一次。
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, business clock.Business, reject bool) (bool, error) {
-	if business == nil {
-		return false, errAllianceReward
-	}
+func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, nowUnixMilli int64, reject bool) (bool, error) {
 	state, err := readScoutMap(m)
 	if err != nil {
 		return false, err
@@ -385,7 +382,7 @@ func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, business c
 		}
 		return false, nil
 	}
-	if exists || business.Now().UnixMilli() < event.Route.End || state.Revision == math.MaxUint64 || state.ReportTotal == math.MaxUint64 {
+	if exists || nowUnixMilli < event.Route.End || state.Revision == math.MaxUint64 || state.ReportTotal == math.MaxUint64 {
 		return false, errAllianceReward
 	}
 	event.Delivered = true

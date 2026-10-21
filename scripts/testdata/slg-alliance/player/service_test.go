@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,3 +89,6 @@ func verifyVisionApp(t *testing.T, view *durableVision) {
 	}
 	view.expect()
 }
+
+// 只给独立测试子进程换真实时间来源；不可变闭包通过 clock 的原子入口发布。
+func freezeBusinessTime(ms int64) { clock.SetSource(func() time.Time { return time.UnixMilli(ms) }) }

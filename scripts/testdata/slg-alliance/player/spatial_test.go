@@ -164,7 +164,9 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 		s := sender.NewAllianceRewardsSender(n.nest)
 		before, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
 		check(t, err)
-		_, err = s.Sync_AllianceMarch(ctx, n.mapID, "next-route", 6, 503, 600, 600, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }), true)
+		freezeBusinessTime(now)
+		t.Cleanup(func() { clock.SetSource(nil) })
+		_, err = s.Sync_AllianceMarch(ctx, n.mapID, "next-route", 6, 503, 600, 600, true)
 		if err == nil || err.Error() != "injected march rollback" {
 			t.Fatalf("arrived route could not start next leg: %v", err)
 		}
@@ -358,8 +360,9 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	// 先留下期限前的在途事实，后续进程按同一原路线求位置，不能重设出发时间。
 	marchBefore, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
 	check(t, err)
-	business := clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) })
-	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, true); err == nil {
+	freezeBusinessTime(now)
+	t.Cleanup(func() { clock.SetSource(nil) })
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, true); err == nil {
 		t.Fatal("march rollback accepted")
 	}
 	marchAfter, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
@@ -367,7 +370,7 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	if marchAfter != marchBefore {
 		t.Fatal("route survived rollback")
 	}
-	revision, err := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, false)
+	revision, err := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, false)
 	check(t, err)
 	if revision != 6 {
 		t.Fatal("march revision", revision)
@@ -375,20 +378,22 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	started := now
 	vision()
 	now = started + scout.DurationMillis/2
+	freezeBusinessTime(now)
 	vision() // (825,825)，仍未进入半径 50。
-	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "reroute", 6, 503, 600, 600, business, false); err == nil {
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "reroute", 6, 503, 600, 600, false); err == nil {
 		t.Fatal("active route replaced")
 	}
 	if _, err = s.Sync_AllianceTargetMove(ctx, n.mapID, "teleport", 6, 503, 700, 700, false); err == nil {
 		t.Fatal("active route teleported")
 	}
-	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 701, 700, business, false); err == nil {
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 701, 700, false); err == nil {
 		t.Fatal("changed march identity accepted")
 	}
 	original, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
 	check(t, err)
 	now = started + 9*scout.DurationMillis/10
-	revision, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, false)
+	freezeBusinessTime(now)
+	revision, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, false)
 	check(t, err)
 	if revision != 6 {
 		t.Fatal("duplicate march revision", revision)
