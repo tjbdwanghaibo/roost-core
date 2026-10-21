@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### SLG 深化：动态地图权威与视野服务生命周期
+
+- CLI 生成独立 ScoutMap DAO 与 Sender，持久目标坐标／Revision／有界永久命令回执；本服 MultiSync 联合读取 Player 权限与地图位置，TCP 只发目标 ID 和公开坐标。验证移动 undo、错版本／非法坐标、重复旧命令不回退及参数冲突。
+- 周期刷新无通知发现目标进出，再衔接侦察到期和失败恢复。Player 五条、地图建档加四次移动五条，共十条 strict 未投影记录后 SIGKILL，先比双方冷事实，再重试；第三进程不重置坐标或重复发奖。深化夹具同步 main 的 ready.json 临时写加 rename 修正。
+- 新增业务 VisionService 实现 app.Service，正式 App game 入口执行真实权威读取；停机先取消再等待，超时不谎报排空，可重试，覆盖部分初始化及幂等停止。基础设施由消费者预装配，未宣称完整生成 game Mod 部署、生产 singleton 或容量完成。
+- 合入 main 的 ApplySync/ApplyAsync 与严格 DatabaseMap 契约，定向回归及真实消费者验证。地图仍是原服本地权威，跨服地图、连续行军／遮挡与生产长稳继续单列。
+
 ### SLG 深化：Player 视野周期刷新
 
 - 将持久 Player 视野的发布与 TCP 断言拆分，正式 Sender 沿刷新 context 读取；读取成功后再次检查截止时间，避免迟到快照恢复发布。

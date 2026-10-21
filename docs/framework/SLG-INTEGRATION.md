@@ -82,7 +82,7 @@ bash scripts/test-slg-alliance.sh
 
 **证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，协调器未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野已经真实回环 TCP 与正式帧 Receiver 重建对象表，NATS 失效提示验证重复／乱序后的权威重读；不证明跨机即时撤权、正式账号鉴权或消息不丢。基础入口的联盟权威用业务 Redis CAS；Remote 扩展改用正式生成实体并验证 owner 交接，见下文；基础入口的原服对象重建只验证持久义务回执；Player 扩展启动独立原服测试子进程做实际发奖和 SIGKILL，但不是带登录网关的完整 game 服务。
 
-**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。空间候选与授权交集、定期权限重读已由下文深化入口验证；持久 Player 视点、多目标授权筛选与一次性侦察期限已接入，Player 读取也已接入下述周期刷新验收，下一步补动态目标规则及正式服务生命周期装配；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
+**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。空间候选与授权交集、定期权限重读已由下文深化入口验证；持久 Player 视点、多目标授权筛选与一次性侦察期限已接入，Player 读取也已接入下述周期刷新验收，动态目标与正式 App Service 启停已由下文补齐教学验证，下一步深化行军轨迹及跨服地图版本协议；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
 
 ### Player 到账扩展：义务已 ACK，金币仍能恢复补发
 
@@ -103,7 +103,7 @@ ROOST_DATAENGINE_IT_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0' \
 bash scripts/test-slg-alliance-player.sh
 ```
 
-实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“建档＋两次空间移动＋侦察撤权＋到账”的五条已确认 strict WAL，断点确认投影数为 0、未投影数为 5，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串（含 X/Y/Coverage/VisionMask），再重建空间索引，并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
+实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“Player 建档＋两次空间移动＋侦察撤权＋到账”和“地图建档＋四次目标移动”的十条已确认 strict WAL，断点确认投影数为 0、未投影数为 10，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串（含 X/Y/Coverage/VisionMask/ScoutUntil）及独立地图状态（坐标、Revision、移动回执），再重建空间索引，并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
 
 本例不改变 ACK 的含义。`home.deliverPending` 已实现一次有界扫描与补发：按窗口／玩家排序，最多处理调用方指定的 1～128 个窗口，先调用 Player，再持久记录 Delivered。Player 调用失败不标完成；Player 已到账而 Delivered 未写时，重启仍能发现并重投。测试在这个间隙 SIGKILL，恢复时发现一条工作，第三进程发现零条；独立重放 Player 身份仍返回原余额。尚未接常驻后台循环、最终义务归档或无限期账本。固定两个角色的映射需由生产账号／角色注册表替换；这是内部受信任调用，未开放公网领奖 API。原服子进程按 sid 依次验收，不证明两服网络并发、进程自动拉起、Redis 故障、磁盘断电或 strict 结果未知。Gold 与永久回执经真实 WAL / Mongo 恢复，**Remote owner/fence 要看下一节的专门扩展；邮件附件与 Saga 未因本项通过而自动获得验收**。
 
@@ -160,7 +160,7 @@ bash scripts/test-slg-alliance-player.sh
 | 移动与覆盖 | 正式生成 `Sync_AllianceMove` → Nest Guard / undo → 手写 `SpatialComponent.MoveWithObservedBlocks` → DAO setter / Coverage JSON → strict WAL | handler 内特意 Flush，未提交的订阅仍不改变；显式回滚与非法块均不改钱包里的位置／覆盖，也不产生对象 |
 | 多点观察同一目标 | main 新接口 `Watch(playerID, point, ObserverView{})`；`Show(entityID, point)`；两个观察点在不同块，目标真实位置固定为 700,700 | 两个实际 TCP 客户端各看到同一 subject，一份真实位置；覆盖不复制实体，也不移动位置 |
 | 来源交接 | 第二观察端另有 scout 关系；移动提交只保留第一个覆盖块 | 移除第二块后 scout 保留对象；清除 scout 后第二端收到 Remove，第一端仍可见 |
-| 崩溃 | 建档、两次移动、侦察撤权、奖励共五条 strict 已确认但未投影记录后 SIGKILL | 新进程先比较完整钱包字节（包含 X/Y/Coverage/VisionMask），再建同步与空间索引；不是先发移动命令覆盖冷事实 |
+| 崩溃 | Player 五条与地图建档／四次目标移动五条，共十条 strict 已确认但未投影记录后 SIGKILL | 新进程先比较完整钱包字节（包含 X/Y/Coverage/VisionMask/ScoutUntil）和独立地图状态，再建同步与空间索引；不是先发移动命令覆盖冷事实 |
 | 冷重建 | 在尚未启动移动驱动的装配阶段，读取已加载 DAO → EnableSync / Register → Show → QueueObservedBlocks → Watch → Flush | 恢复端与第三进程均重建“第一端有对象、第二端无对象”，位置仍为 700,700；随后奖励重投不增币 |
 
 冷重建的 `QueueObservedBlocks` 是已提交事实的索引恢复；在线改位置应统一走 SpatialComponent 与 Nest，不能把直接重建接口当作绕过提交门的写入口。示例地图／网格配置固定，Coverage 中的块号只属于本 Interest；正式产品地图配置升级需要版本或稳定业务坐标转换，不能直接沿用旧块号。
@@ -185,7 +185,7 @@ bash scripts/test-slg-alliance-player.sh
 
 ### 持久视点与多目标筛选：移动、撤权和侦察期限共同恢复
 
-[newDurableVision](../../scripts/testdata/slg-alliance/player/vision_test.go) 通过正式生成 `Sync_AllianceWallet` 在同一次 Nest 读中取得 X/Y、私有 VisionMask 和 ScoutUntil，再计算半径与授权交集。隐藏目标不 Show 到公共空间 Interest；筛选结果用逻辑关系视野 901 的 `SetViewMembers` 发布，只挂接到获准客户端。四个静态目标为 501=(700,700)、502=(710,700)、503=(800,800)、504=(720,700)。初始长期授权 501 和 503，504 获得一次限时侦察，502 未授权；半径 50 与一小时赠送期限是教学规则。
+[newDurableVision](../../scripts/testdata/slg-alliance/player/vision_test.go) 通过正式生成 `MultiSync_AllianceVision` 在本服同一次 Nest 多实体锁中取得 Player 的 X/Y、私有 VisionMask、ScoutUntil 和独立 ScoutMap 的目标位置，再计算半径与授权交集。隐藏目标不 Show 到公共空间 Interest；筛选结果用逻辑关系视野 901 的 `SetViewMembers` 发布，只挂接到获准客户端。四个目标的初始坐标为 501=(700,700)、502=(710,700)、503=(800,800)、504=(720,700)。初始长期授权 501 和 503，504 获得一次限时侦察，502 未授权；半径 50 与一小时赠送期限是教学规则。
 
 | 过程 | 实际 TCP 对象表 |
 | --- | --- |
@@ -198,35 +198,56 @@ bash scripts/test-slg-alliance-player.sh
 | 到期前后重复建档 | 整份钱包不变，不续期、不恢复已撤销的位图 |
 | SIGKILL 后恢复、第三进程复核 | 先比较包含位置／权限／期限的完整冷事实，随后重新读取并筛选，已撤销的 501 与离线过期的 504 不复活；钱包重投仍不重复到账 |
 
-`VisionMask` 和 `ScoutUntil` 只持久化、不参与同步；客户端对象载荷只有 `{"target":目标ID}`，逐包校验不带钱包、位图或未授权目标。常驻控制标记沿用上一节的空场景重建方式。生成 handler 的撤权注入失败点只供 undo 验收，正式业务应由受信任权限服务调用，不允许客户端设置位图。
+`VisionMask` 和 `ScoutUntil` 只持久化、不参与同步；客户端对象载荷只有 `{"target":目标ID,"x":当前X,"y":当前Y}`，逐包校验不带钱包、位图或未授权目标。常驻控制标记沿用上一节的空场景重建方式。生成 handler 的撤权注入失败点只供 undo 验收，正式业务应由受信任权限服务调用，不允许客户端设置位图。
 
 期限接法：`handlerAllianceHomeInit` 首次在 Player strict 事务内写入 `clock.Now().Add(time.Hour).UnixMilli()`，已有 HomeSID 的同服重试直接返回，不能按重试时刻重算。刷新读取已提交期限，并用注入的 `clock.Business` 判定 `now < ScoutUntil`；期限缺失或到期即排除 504，不靠删除持久位图表达过期。生产装配从 `app.BusinessClock(registry)` 获取业务钟，跨重启保持框架的业务时间不回退约束，客户端不得上传时间或授权期限。
 
-验收用 `clock.BusinessFunc` 在服务端精确推进到期限前、等于期限、超过期限；没有等待真实一小时，也没有修改进程全局偏移。恢复进程先比较完整冷事实，再以超过期限的服务端测试时间首次发布；第三进程重复核对。到期过滤和重复建档不写新状态，仍是建档／两次移动／撤权／到账五条未投影 WAL。这是发布时惰性到期：通过下面的周期刷新清除在线客户端对象，未接独立实体 timer；攻击等业务命令仍需独立校验期限。
+验收用 `clock.BusinessFunc` 在服务端精确推进到期限前、等于期限、超过期限；没有等待真实一小时，也没有修改进程全局偏移。恢复进程先比较完整冷事实，再以超过期限的服务端测试时间首次发布；第三进程重复核对。到期过滤和重复建档不写新状态，Player 仍是建档／两次移动／撤权／到账五条未投影 WAL；地图另外建档一次、移动四次，总计十条。这是发布时惰性到期：通过下面的周期刷新清除在线客户端对象，未接独立实体 timer；攻击等业务命令仍需独立校验期限。
 
-这条链验证了持久观察位置、有限多目标、永久撤权与一次性侦察期限的联合恢复。目标位置仍为固定地图配置，未实现敌方目标 DAO、行军速度／轨迹、障碍遮挡、多次付费侦察／续期身份账本或大量目标索引；移动和撤权仍在事务后显式刷新，期限路径已经接入真实周期循环验收，但尚未装入正式 game 服务启动／排空生命周期。移动提交到刷新之间存在窗口，不能据此承诺跨服即时隐身。
+这条链验证了持久观察位置、有限多目标、永久撤权与一次性侦察期限的联合恢复。目标坐标现在归独立持久 ScoutMap；尚未实现行军速度／轨迹、障碍遮挡、多次付费侦察／续期身份账本或大量目标索引。目标移动和到期已由周期刷新验收，并经过正式 App Service 启停；完整生成 game 的其他模块装配与生产容量仍需独立验收。移动提交到刷新之间存在窗口，不能据此承诺跨服即时隐身。
 
 ### Player 周期刷新：期限、读失败与退出
 
-`newDurableVision` 将发布与客户端断言分开：`refresh(ctx)` 负责 Hold → 生成 Sender 读 Player → 校验快照和业务期限 → SetViewMembers / Apply → Ready / Flush；`expect` 只消费真实 TCP 帧，不触发发布。读取必须使用循环传入的期限 context，不能另起无期限的后台读取。即使读取返回成功，也要先检查 `ctx.Err()`，迟到的快照不能恢复发布。
+`newDurableVision` 将发布与客户端断言分开：`refresh(ctx)` 负责 Hold → 生成 MultiSync Sender 联合读 Player／ScoutMap → 校验快照和业务期限 → SetViewMembers / Apply → Ready / Flush；`expect` 只消费真实 TCP 帧，不触发发布。读取必须使用循环传入的期限 context，不能另起无期限的后台读取。即使读取返回成功，也要先检查 `ctx.Err()`，迟到的快照不能恢复发布。
 
-把 `refresh` 交给已有 `permissionLoop.run`，由唯一循环串行管理这个视野分区；业务操作或另一个 goroutine 不得同时对它调用 Flush / Ready。Player 是本服 Nest 的权威读取，此适配器不消费远端权限代际参数；远端副本仍需前面独立的 minimum-generation 校验。
+把 `refresh` 交给已有 `permissionLoop.run`，由唯一循环串行管理这个视野分区；业务操作或另一个 goroutine 不得同时对它调用 Flush / Ready。Player 和 ScoutMap 是同一本服 Nest 的权威读取，此适配器不消费远端权限代际参数；远端副本仍需前面独立的 minimum-generation 校验。
 
-Player 与 Remote 两个深化入口均执行五轮真实 ticker 验收：
+Player 与 Remote 两个深化入口均执行六轮真实 ticker 验收：
 
-1. 初次生成 Sender 读取，504 在期限前可见；测试只推进服务端业务时钟到期限，不发送通知。
-2. 权威读取等到 context 超时并返回错误：会话保持 held，没有新帧。
-3. 权威读取获得合法快照，但延迟到超时后才返回成功：刷新再次检查 context，仍不发布。
-4. 读取返回损坏 JSON：不恢复 Ready，没有新帧。
-5. 再次经生成 Sender 读真实 Player，发现已到期，带控制标记的 Full 清空客户端；取消后循环退出，不再发起下一轮读取。
+1. 初次联合读取，504 在期限前可见；随后通过生成 Sender 把目标 503 移入范围，不手动刷新、不发通知。
+2. ticker 的下一轮看到 503 和 504；再将 503 移出并推进测试业务时钟到侦察期限。
+3. 权威读取等到 context 超时并返回错误：会话保持 held，没有新帧。
+4. 权威读取获得合法快照，但延迟到超时后才返回成功：刷新再次检查 context，仍不发布。
+5. 读取返回损坏 JSON：不恢复 Ready，没有新帧。
+6. 再次经生成 Sender 读权威，确认 503 已远离、504 已到期，带控制标记的 Full 清空客户端；取消后退出，不再发起下一轮读取。
 
 每轮 20ms、读期限 50ms、测试总期限 2s 只用于功能验收，不能当作生产延迟或吞吐承诺。业务时间由注入时钟精确推进，调度／I/O 截止仍用真实系统时间。循环不会强行打断不响应 context 的 loader；正式接线需要依赖超时、可观察的失败状态、退出排空与每分区预算。held 阻止新发布，不会抹掉客户端已经收到的历史信息。此项属于业务消费接线，未修改公共框架保证。
+
+### 动态地图与 game 服务启停
+
+[地图 handler](../../scripts/testdata/slg-alliance/player/handlers.go.txt) 的 `ScoutMap` 是 CLI 新增的独立持久实体，每个原服一个教学地图，拥有四个目标、地图 Revision 和最多 128 条命令回执；Player 保留自己的位置与授权。`AllianceTargetMove` 只接受可信模拟产生的目标与坐标，按 expected Revision 写入；回执保存命令身份和原参数，同身份重试返回原 Revision，不把目标移回旧位置，改参数或旧版本新命令被拒。满账本拒新身份，长期归档另行设计。
+
+```go
+s := syncsender.NewAllianceRewardsSender(nestMgr)
+// 目标 503 从远处进入玩家视野；坐标来自服务器地图规则。
+revision, err := s.Sync_AllianceTargetMove(ctx, mapID, "target-in", 1, 503, 700, 700, false)
+// 内部联合快照，禁止直接发给客户端；只在同一 Nest 内提供多实体一致读取。
+raw, err := s.MultiSync_AllianceVision(ctx, playerID, mapID)
+```
+
+实际验收覆盖移动失败 undo、非法坐标、错误预期版本、目标进出范围、重复旧身份／改参数拒绝、周期发现移动，以及公开坐标载荷白名单。SIGKILL 后先比较完整地图字节，再重放旧移动身份；最终 503 保持在 (950,950)、Revision=5，旧 `target-in` 仍返回回执 2，不重置地图。钱包标记沿用 main 的修正：先写临时文件再 rename 为 ready.json，避免父进程在空标记已创建而内容尚未写完时杀进程；仅证明进程 SIGKILL，不是磁盘断电。
+
+[VisionService](../../scripts/testdata/slg-alliance/vision_service.go) 实现正式 `app.Service`：Init 装配循环，Serve 独占刷新，Shutdown 取消并等待在途读取结束。停止期限不足则返回 context 错误，不能把未结束的读取当作已排空；再次 Shutdown 可继续等待。测试包含部分初始化、尚未 Serve 就停机、阻塞读取导致首次停机超时、释放后重试成功及幂等停机。
+
+[服务验收](../../scripts/testdata/slg-alliance/player/service_test.go) 还执行 `app.New(...).RegisterServer("game", service).Execute()`，真实读取已装配的 Nest/WAL/地图/TCP，等 Service 结束后 App 才返回，之后由夹具关闭基础设施。这里明确关闭测试 singleton，未验证生产多副本准入；真实依赖由消费者预先装配，不声称完整生成 game 的所有 Mod 启动链已经部署。实际业务可把同一受管循环放入自己的 game Serve/Shutdown，并让 App 在 Service 排空后关闭依赖 Mod。
+
+地图是原服本地权威；Remote 模式只替换联盟权威，不把这张地图变成跨服共享地图。跨服地图的 Remote owner、位置／权限版本联合协议、视野分区容量和自动进程拉起仍需单独实施。行军路径、碰撞与遮挡是下一层业务规则，不因离散坐标移动通过就宣称已覆盖。
 
 ### main 视野 API 迁移
 
 main 已删除 `RelationSource`：业务现在先 `DefineRelationView(viewID, profile)`，再 `AttachView(playerID, viewID)`，用 `SetViewMembers` 修改目标集合。深化联盟分别为每个玩家定义 alliance / scout 逻辑视野；多块空间验收的 scout 视野与空间视野仍按持有计数合并，删除一个来源不影响另一个。持久目标筛选使用独立关系视野，避免未授权对象从公共空间视野进入客户端。
 
-`NewSpatialComponent` 不再接 observer 布尔参数，跟随实体的空间视野由新政策统一推进；位置仍通过 Nest 提交门修改。本轮按 main 契约迁移并执行 policy 回归和真实消费者，没有保留旧 Relation API 兼容层。
+`NewSpatialComponent` 不再接 observer 布尔参数，跟随实体的空间视野由新政策统一推进；位置仍通过 Nest 提交门修改。沿用 main 契约并执行 policy 回归和真实消费者，没有保留旧 Relation API 兼容层。当前默认 ApplySync 适用于本夹具少量视野，main 的同步上限包括关系视野；大规模单位视野要显式评估 ApplyAsync，并按其异步应用契约等待 Drain，不能照搬本夹具的即时 Flush 断言。逻辑库映射缺失现在由 main 的投影／冷加载及 Remote 写入共同拒绝，本消费者继续显式绑定同一 DatabaseMap。
 
 ### main 新契约接入：逻辑库与物理库分开
 
