@@ -218,5 +218,16 @@
   "desc": "批量作业逐目标不 Refreeze（整批共用一个冻结时刻）",
   "old": "\t\texec.ctx.Refreeze()\n",
   "new": ""
+ },
+ {
+  "name": "G1",
+  "file": "gameplay/heartbeat/host.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestRegFormatsWithoutReadingMutableState",
+  "timeout": "150s",
+  "race": true,
+  "desc": "去掉 Reg.GoString（慢派发 trace 按反射打印参数）",
+  "old": "func (r *Reg) GoString() string {",
+  "new": "func (r *Reg) goStringDisabled() string {"
  }
 ]
