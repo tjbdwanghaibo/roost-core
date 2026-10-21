@@ -163,6 +163,29 @@ DAO、不做 I/O。玩家离线期间到期的，下次加载时只触发一次�
 fire.Now 是实际触发时刻。周期性的（例如每小时收益）错过几个周期框架不补，用
 (fire.Now - fire.Deadline) / fire.Interval 自己算。回调返回正值是下次间隔（从 fire.Now 起算），返回 0 结束。
 
+### 3.7 在线周期推进与行为：心跳、动作、AI、场景变速
+
+回复、冷却、怪物巡逻、AI 决策这类“在线时一直在推进”的事，不要写“服务 goroutine 每 N 秒给实体发一条消息”的
+循环，用实体自己的心跳。给要行动的实体加行为组件（没有心跳宿主时一并加上，服务自动装上 heartbeat Mod）：
+
+    roost add behavior --entity Monster --ai --state
+    roost generate
+
+生成的是框架胶水（HeartbeatComponent、BehaviorComponent 与工程唯一的心跳驱动 game/heartbeat.Driver）；你写的是
+业务文件：behavior_actions.go（动作种类、组、示例动作 ExampleAction）、behavior_strategy.go（示例 AI 策略）、
+states.go（状态目录）与 game/handler/monster_behavior.go（发起示例动作的 Nest handler）。动作在 handler 的最后一步
+发起（runner 不随事务回滚），由动作组自己的心跳推进；按 ctx.Elapsed（经过的业务时间）算，不按“第几拍”：
+
+    //roost:nest rollback=undo
+    func handlerStartExampleMonsterAction(target monster.IBehaviorEntity, millis int64) (int64, error) {
+        return target.BehaviorComp().Behavior().CreateAction(monster.ActionExample, monster.ExampleParam{Duration: time.Duration(millis) * time.Millisecond})
+    }
+
+只要周期逻辑、不要动作的实体（场景的逻辑帧）用 roost add heartbeat --entity Scene，在 heartbeat_beats.go 里登记；
+场景要倍速 / 慢放 / 时停时 roost add timedomain --entity Scene（DAO 加三个 nopersist,sync 字段），成员的行为组件在
+behavior_actions.go 的 timeDomain 里返回场景的域。服务的 Init / Shutdown 不用改。心跳不持久，加载后按 DAO 状态重新
+登记、发起；离线也要准点的事仍用 3.6 的定时器。
+
 ## 4. 接真实 TCP 客户端（可选）
 
 如果已有独立网关，可以实现同一个 gateway.Session/Dispatch 边界并跳过本节。使用框架自带 TCP：

@@ -1,0 +1,179 @@
+package bootstrap
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	monster "example.com/planet/game/entities/monster"
+	scene "example.com/planet/game/entities/scene"
+	gameheartbeat "example.com/planet/game/heartbeat"
+	registry "example.com/planet/internal/registry"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+)
+
+// 生成工程的心跳端到端（scripts/test-heartbeat-generated.sh）：roost add behavior --ai --state / heartbeat / timedomain
+// 生成的组件，经与生成 bootstrap 同样构造的 Nest Mod 与 heartbeat Mod、真实 Nest 引擎与心跳驱动循环运行。
+// DataEngine 换成不落库的 committer，实体只新建、不冷加载（loader 一律 not found）。
+
+type noDurableStore struct{}
+
+func (noDurableStore) NestOptions() []corenest.NestOption {
+	return []corenest.NestOption{corenest.NestOptionWithTransactionCommitter(noDurableStore{})}
+}
+func (noDurableStore) Commit(context.Context, corenest.CommitRecord) error { return nil }
+
+type nothingStored struct{}
+
+func (nothingStored) LoadEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	return nil, engine.ErrEntityAggregateNotFound
+}
+
+func TestGeneratedHeartbeatBehaviorEndToEnd(t *testing.T) {
+	if err := registry.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EntityAccess.ConfigureLoader(nothingStored{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := viper.New()
+	reg := app.NewRegistry(cfg)
+	if err := reg.Register(mods.ModDataEngine, noDurableStore{}); err != nil {
+		t.Fatal(err)
+	}
+	// 与生成的 bootstrap 同样的两个构造。
+	nestMod := kitnest.NewMod(EntityAccess)
+	heartbeatMod := kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)
+	all := []app.Mod{nestMod, heartbeatMod}
+	for _, mod := range all {
+		if err := mod.Init(cfg); err != nil {
+			t.Fatalf("%s init: %v", mod.Name(), err)
+		}
+	}
+	for _, mod := range all {
+		if err := mod.Provide(reg); err != nil {
+			t.Fatalf("%s provide: %v", mod.Name(), err)
+		}
+	}
+	for _, mod := range all {
+		if err := mod.Start(); err != nil {
+			t.Fatalf("%s start: %v", mod.Name(), err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = heartbeatMod.StopWithContext(ctx)
+		_ = nestMod.StopWithContext(ctx)
+	})
+	nest, ok := app.Lookup[*corenest.NestMgr](reg, mods.ModNest)
+	if !ok {
+		t.Fatal("nest engine not published")
+	}
+	ctx := context.Background()
+	request := func(handler string, id int64, params ...any) any {
+		t.Helper()
+		value, err := nest.Request(ctx, corenest.NewHandlerName(handler), id, corenest.NewParams(params...))
+		if err != nil {
+			t.Fatalf("%s: %v", handler, err)
+		}
+		return value
+	}
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s (driver %+v)", what, gameheartbeat.Driver.Stats())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	create := func(kind entity.EntityKind, unique int64) int64 {
+		t.Helper()
+		created, err := EntityAccess.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: unique, Kind: kind, Category: entity.MustEntityCategoryOfKind(kind)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created.ID()
+	}
+
+	// 1. 新建的实体没有在跳的登记（示例心跳停着、行为组件空闲、AI 没有策略）：不占调度。
+	monsterID := create(monster.EntityKindMonster, 7)
+	sceneID := create(scene.EntityKindScene, 1)
+	if got := gameheartbeat.Driver.Registered(); got != 0 {
+		t.Fatalf("idle entities hold %d running registrations, want 0", got)
+	}
+
+	// 2. 生成的示例 handler 发起示例动作：主组的心跳（100ms 档）推进它，满 500ms 成功结束，组空闲后心跳停。
+	executedBefore := gameheartbeat.Driver.Stats().Executed
+	if id := request("handlerStartExampleMonsterAction", monsterID, int64(500)).(int64); id <= 0 {
+		t.Fatalf("example action id = %d", id)
+	}
+	progress := func() string { return request("handlerMonsterExampleProgress", monsterID).(string) }
+	var lastRunning string
+	waitFor("the heartbeat to tick the example action", func() bool {
+		p := progress()
+		if strings.HasPrefix(p, "running") && !strings.HasPrefix(p, "running ticks=0 ") {
+			lastRunning = p
+			return true
+		}
+		return false
+	})
+	waitFor("the example action to finish", func() bool {
+		p := progress()
+		if strings.HasPrefix(p, "running") {
+			lastRunning = p
+		}
+		return p == "idle started=0"
+	})
+	waitFor("the idle group to stop its heartbeat", func() bool { return gameheartbeat.Driver.Registered() == 0 })
+	stats := gameheartbeat.Driver.Stats()
+	if beats := stats.Executed - executedBefore; beats < 4 {
+		t.Fatalf("the 500ms example action finished after %d executed beats (last seen %q), want at least 4 at 100ms", beats, lastRunning)
+	}
+	t.Logf("example action: last progress %q, executed beats %d, stats %+v", lastRunning, stats.Executed-executedBefore, stats)
+
+	// 3. AI：设定示例策略后 AI 心跳（500ms）决策，主组空闲就发起 1s 的示例动作，动作由主组心跳推进，结束后再发起下一个。
+	if name := request("handlerStartExampleMonsterStrategy", monsterID).(string); name != "example" {
+		t.Fatalf("strategy = %q", name)
+	}
+	waitFor("the AI to start a second example action after the first one ended", func() bool {
+		var started int
+		p := progress()
+		_, _ = fmt.Sscanf(p[strings.Index(p, "started="):], "started=%d", &started)
+		return started >= 2
+	})
+
+	// 4. 场景：示例心跳 Start 之后由驱动执行；时间域 SetRate 提交后发布，存进 nopersist,sync 字段。
+	executedBefore = gameheartbeat.Driver.Stats().Executed
+	request("handlerSceneStartExampleBeat", sceneID)
+	waitFor("the scene's example beat to run", func() bool { return gameheartbeat.Driver.Stats().Executed >= executedBefore+2 })
+	request("handlerSceneSetRate", sceneID, 2.0)
+	live, ok := EntityManager.Get(sceneID).(*scene.Scene)
+	if !ok {
+		t.Fatal("scene is not loaded")
+	}
+	if got := live.TimeDomainComp().Domain().State().EffectiveRate(); got != 2 {
+		t.Fatalf("published rate = %v, want 2", got)
+	}
+	if err := nest.RunLocal(ctx, func() {
+		if got := live.Dao().GetTimeRate(); got != 2 {
+			t.Errorf("TimeRate field = %v, want 2", got)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nest.Request(ctx, corenest.NewHandlerName("handlerSceneSetRate"), sceneID, corenest.NewParams(9.0)); err == nil {
+		t.Fatal("a rate outside timeDomainConfig was accepted")
+	}
+}

@@ -129,6 +129,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	if err := renderTimerFiles(m, addGo); err != nil {
 		return nil, err
 	}
+	// roost add heartbeat / behavior / timedomain：心跳驱动、心跳宿主、行为组件与时间域（生成部分重写，业务文件只建一次）。
+	if err := renderHeartbeatFiles(m, addGo); err != nil {
+		return nil, err
+	}
 
 	services := sortedServiceNames(m)
 	for _, name := range services {
@@ -403,6 +407,9 @@ func renderBootstrap(m Manifest) string {
 	for _, name := range m.Sagas {
 		imports[m.Project.Module+"/saga/"+name] = "saga" + safeIdent(name)
 	}
+	if contains(allMods, "heartbeat") {
+		imports[m.Project.Module+"/"+heartbeatDriverDir] = heartbeatDriverAlias
+	}
 	if len(m.Timers) > 0 {
 		imports[entityTimerWiring] = "kitentitytimer"
 		for _, name := range sortedTimerEntities(m) {
@@ -562,6 +569,9 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 			return "kitnest.NewModWithEntitySync(EntityAccess, " + selfSyncVar + ".EntitySyncSetup())"
 		}
 		return "kitnest.NewMod(EntityAccess)"
+	case "heartbeat":
+		// 工程唯一的心跳驱动（game/heartbeat/driver_gen.go），实体组件经它 NewHost。
+		return "kitheartbeat.NewMod(EntityAccess, " + heartbeatDriverAlias + ".Driver)"
 	case "saga":
 		if len(m.Sagas) == 0 {
 			return "kitsaga.NewMod()"

@@ -3,9 +3,11 @@ package roost
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -45,7 +47,12 @@ type Manifest struct {
 	Sagas      []string               `yaml:"sagas,omitempty"`
 	// Timers 是按实体的持久定时器（roost add timer --entity <Entity>，D11），键为实体名（snake）。
 	Timers map[string]TimerSpec `yaml:"timers,omitempty"`
-	IDs    map[string]IDSpace   `yaml:"ids,omitempty"`
+	// Heartbeats 是按实体的心跳宿主与行为组件（roost add heartbeat / roost add behavior --entity <Entity>，D20～D22），
+	// 键为实体名（snake）。
+	Heartbeats map[string]HeartbeatSpec `yaml:"heartbeats,omitempty"`
+	// TimeDomains 是场景时间域（roost add timedomain --entity <Scene>，D22），键为实体名（snake）。
+	TimeDomains map[string]TimeDomainSpec `yaml:"time_domains,omitempty"`
+	IDs         map[string]IDSpace        `yaml:"ids,omitempty"`
 
 	// configuredShutdown is each service's longest shutdown.total_timeout
 	// found in the project's configs, filled by withConfiguredShutdown when
@@ -398,6 +405,12 @@ func (m Manifest) Validate() error {
 	}
 	for _, entityName := range sortedTimerEntities(m) {
 		joined = errors.Join(joined, m.validateTimer(entityName))
+	}
+	for _, entityName := range slices.Sorted(maps.Keys(m.Heartbeats)) {
+		joined = errors.Join(joined, m.validateHeartbeat(entityName))
+	}
+	for _, entityName := range slices.Sorted(maps.Keys(m.TimeDomains)) {
+		joined = errors.Join(joined, m.validateTimeDomain(entityName))
 	}
 	for _, sagaName := range m.Sagas {
 		if !validName(sagaName) {
