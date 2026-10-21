@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 联盟活动同一条链路继续到真实 Player 资产与永久回执；两个原服各自 WAL / 子进程。
 set -euo pipefail
+# 独立模式：把同一 ScoutMap 定义改为托管 Remote，不混用本服 MultiSync / 固定权威恢复证据。
+if [[ "${ROOST_SLG_REMOTE_MAP:-0}" == 1 ]]; then export ROOST_SLG_REMOTE=1; fi
 : "${ROOST_DATAENGINE_IT_REDIS_ADDR:?set isolated Redis address}"
 : "${ROOST_DATAENGINE_IT_NATS_URL:?set isolated NATS URL}"
 : "${ROOST_DATAENGINE_IT_MONGO_URI:?set isolated Mongo replica-set URI}"
@@ -62,12 +64,24 @@ s=p.read_text().replace('category=entity.EntityCategoryOther','category=entity.E
 p=root/'db/def/alliance_authority.go';s=p.read_text().replace('type AllianceAuthorityDao struct {','type AllianceAuthorityDao struct {\n State string `bson:"state" dao:"persist"`').replace('db=main','db=main dbscope=global');p.write_text(s)
 REMOTE
  cp "$repo_root/scripts/testdata/slg-alliance/remote/handlers.go.txt" game/handler/alliance_authority.go
- for name in runtime store remote; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
+ for name in runtime store remote map; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
+fi
+if [[ "${ROOST_SLG_REMOTE_MAP:-0}" == 1 ]]; then
+ python3 - "$project_root" <<'REMOTEMAP'
+from pathlib import Path
+import sys
+root=Path(sys.argv[1]);p=root/'game/entities/scout_map/entity.go'
+s=p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryRemote remote=managed').replace('*entity.EntityBase','*entity.RemoteEntityBase');p.write_text(s)
+p=root/'db/def/scout_map.go';s=p.read_text().replace('db=main','db=main dbscope=global');p.write_text(s)
+REMOTEMAP
 fi
 gofmt -w db/def/*.go game/handler/*.go game/alliance/*.go game/scout/*.go
 
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
+if [[ "${ROOST_SLG_REMOTE_MAP:-0}" == 1 ]]; then
+ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGRemoteMapReports$' ./game/alliance | tee "$review_root/delivery.log"
+ expected=TestSLGRemoteMapReports
+elif [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
  go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestSLGAllianceRemoteDelivery$' ./game/alliance | tee "$review_root/delivery.log"
  expected=TestSLGAllianceRemoteDelivery
 else

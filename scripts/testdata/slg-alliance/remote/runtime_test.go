@@ -34,6 +34,16 @@ type allianceOwner struct {
 
 func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *allianceOwner {
 	t.Helper()
+	authority.RegisterEntity()
+	handler.RegisterAllianceAuthorityNestHandlers()
+	id, e := entity.BuildEntityID(99123, authority.EntityKindAllianceAuthority)
+	check(t, e)
+	return openPracticeRemoteOwner(t, prefix, sid, create, id, authority.EntityKindAllianceAuthority)
+}
+
+// 同一正式装配供联盟与地图消费者复用；实体注册与 ID 由调用方明确提供。
+func openPracticeRemoteOwner(t *testing.T, prefix string, sid int32, create bool, id int64, kind entity.EntityKind) *allianceOwner {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	database := os.Getenv("ROOST_SLG_REWARD_DB")
@@ -42,8 +52,6 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	}
 	databases, _, e := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.DatabaseMain: database}})
 	check(t, e)
-	authority.RegisterEntity()
-	handler.RegisterAllianceAuthorityNestHandlers()
 	mongo, e := mongodriver.NewClient(fmongo.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")), mongodriver.IndexMigrationPolicy{})
 	check(t, e)
 	t.Cleanup(func() { _ = mongo.Close(context.Background()) })
@@ -91,10 +99,8 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 		})
 	}
 	t.Cleanup(close)
-	id, e := entity.BuildEntityID(99123, authority.EntityKindAllianceAuthority)
-	check(t, e)
 	if create {
-		_, e = access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: authority.EntityKindAllianceAuthority})
+		_, e = access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
 		check(t, e)
 	}
 	lease, e := assembly.Manager.ClaimRemoteOwnership(ctx, id)

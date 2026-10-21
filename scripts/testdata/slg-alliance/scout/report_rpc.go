@@ -34,3 +34,51 @@ func (r ReportReceiver) Handle(c *bus.RpcContext) (any, error) {
 	}
 	return true, nil
 }
+
+// OwnerRoute 是投递准入代际，不属于永久报告身份。换 owner 不得换 MapID/Key 或重写正文。
+type OwnerRoute struct {
+	SID           int32
+	Marker, Route uint64
+}
+type RoutedReport struct {
+	Report Report
+	Owner  OwnerRoute
+}
+
+// RoutedReportReceiver 每次请求重读权威路由，查询失败即拒绝；不信任调用方自报 owner。
+// 路由校验与 Player 提交不是一个分布式事务：校验通过的在途请求可跨越交接完成，
+// 安全性来自已固定的报告正文与永久回执；需要撤销已准入报告的业务必须另设协议。
+type RoutedReportReceiver struct {
+	HomeSID          int32
+	MapID, Recipient int64
+	Resolve          func(context.Context, int64) (OwnerRoute, error)
+	Receive          func(context.Context, Report) error
+}
+
+func (r RoutedReportReceiver) Handle(c *bus.RpcContext) (any, error) {
+	if c == nil || r.Resolve == nil || r.Receive == nil || r.HomeSID <= 0 || r.MapID <= 0 || r.Recipient <= 0 {
+		return nil, errors.New("invalid routed report receiver")
+	}
+	var req RoutedReport
+	if err := c.Decode(&req); err != nil {
+		return nil, err
+	}
+	report := req.Report
+	if !report.Valid() || report.MapID != r.MapID || report.HomeSID != r.HomeSID || report.Recipient != r.Recipient {
+		return nil, errors.New("report destination mismatch")
+	}
+	current, err := r.Resolve(c.Context(), report.MapID)
+	if err != nil {
+		return nil, err
+	}
+	if current.SID <= 0 || current.Marker == 0 || current.Route == 0 || current != req.Owner || current.SID != c.FromSid {
+		return nil, errors.New("stale report owner route")
+	}
+	if err = c.Context().Err(); err != nil {
+		return nil, err
+	}
+	if err = r.Receive(c.Context(), report); err != nil {
+		return nil, err
+	}
+	return true, nil
+}
