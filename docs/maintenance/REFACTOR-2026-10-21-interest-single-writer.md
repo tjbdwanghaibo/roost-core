@@ -188,7 +188,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 | `1c602d33` | 本方案 + 三条修前红测试 |
 | `d75713e1` | 第 1、2 期合在一次提交：登记侧 + 有序日志 + 单应用方、代际号、撤除换代、ApplySync 预算排空、`OnRefusal`、`Resubscribe` 去返回值；包内测试跟随 |
 | `ca8a0ab9` | 代际号作废的独立用例 |
-| 本提交之后一个 | 第 3 期：调用方（game-demo 场景桥、`gameplay/movement`）与文档 |
+| `6fefa5e0` | 第 3 期：调用方（game-demo 场景桥、`gameplay/movement`）与文档 |
 
 ### 10.2 强制点（`framework/sync/entitysync/policy`）
 
