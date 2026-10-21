@@ -6,9 +6,11 @@ import (
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"math"
 	"slices"
+	"time"
 
 	db "example.com/slg-alliance-practice/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -35,7 +37,9 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 		}
 		return p.Dao().GetGold(), nil
 	}
-	p.Dao().SetVisionMask(5) // 教学目标 501、503 已获侦察权；502 未授权。
+	p.Dao().SetVisionMask(13) // 501、503 长期授权，504 限时侦察；502 未授权。
+	// 首次建档赠送一次侦察；重试在上方返回，绝不重算期限。时间来自服务器业务钟。
+	p.Dao().SetScoutUntil(clock.Now().Add(time.Hour).UnixMilli())
 	p.Dao().SetX(800)
 	p.Dao().SetY(800)
 	p.Dao().SetCoverage("[]")
@@ -81,13 +85,14 @@ func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activit
 //roost:nest rollback=undo durability=strict
 func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
 	raw, e := json.Marshal(struct {
+		ScoutUntil int64
 		VisionMask int64
 		X, Y       int64
 		Coverage   string
 		Home       int32
 		Gold       int64
 		Receipts   string
-	}{p.Dao().GetVisionMask(), p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+	}{p.Dao().GetScoutUntil(), p.Dao().GetVisionMask(), p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
 	return string(raw), e
 }
 
@@ -127,7 +132,7 @@ func handlerAllianceMove(p IAllianceRewardPlayerEntity, interest *policy.Interes
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceRevokeVision(p IAllianceRewardPlayerEntity, sid int32, target int64, reject bool) (int64, error) {
-	if p.Dao().GetHomeSID() != sid || target < 501 || target > 503 {
+	if p.Dao().GetHomeSID() != sid || target < 501 || target > 504 {
 		return 0, errAllianceReward
 	}
 	next := p.Dao().GetVisionMask() &^ (int64(1) << uint(target-501))

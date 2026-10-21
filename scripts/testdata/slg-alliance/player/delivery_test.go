@@ -217,7 +217,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(context.Background())
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_REWARD_DB")).Drop(context.Background()))
-	t.Log("same activity workflow: both static homes credit generated Player DAO; two unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
+	t.Log("same activity workflow: both static homes credit generated Player DAO; five unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 	for _, sid := range []int32{1000, 1001} {

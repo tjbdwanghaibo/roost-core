@@ -28,6 +28,7 @@ python3 - "$project_root/db/def/player.go" <<'PY'
 from pathlib import Path
 import os,sys
 p=Path(sys.argv[1]);s=p.read_text().replace('type PlayerDao struct {','''type PlayerDao struct {
+ ScoutUntil int64 `bson:"scout_until" dao:"persist"`
  VisionMask int64 `bson:"vision_mask" dao:"persist"`
  X int64 `bson:"x" dao:"persist,sync"`
  Y int64 `bson:"y" dao:"persist,sync"`

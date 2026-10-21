@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	player "example.com/slg-alliance-practice/game/entities/player"
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
@@ -12,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -118,8 +120,30 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 			}
 		}
 	}
-	vision := newDurableVision(t, n)
+	// 测试时钟只注入服务端视野刷新，不从客户端接收时间，不修改全局时钟。
+	deadline := p.Dao().GetScoutUntil()
+	if deadline <= 0 {
+		t.Fatal("missing durable scout deadline")
+	}
+	now := deadline - 1
 	if !write {
+		now = deadline + 1
+	} // 离线越过期限；先前完整冷事实比较包含此期限。
+	vision := newDurableVision(t, n, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }))
+	replayInit := func() {
+		s := sender.NewAllianceRewardsSender(n.nest)
+		before, err := s.Sync_AllianceWallet(ctx, n.id)
+		check(t, err)
+		_, err = s.Sync_AllianceHomeInit(ctx, n.id, p.Dao().GetHomeSID())
+		check(t, err)
+		after, err := s.Sync_AllianceWallet(ctx, n.id)
+		check(t, err)
+		if before != after {
+			t.Fatal("duplicate init renewed scouting or changed wallet")
+		}
+	}
+	if !write {
+		replayInit()
 		vision()
 		expect(true, false)
 		return
@@ -148,7 +172,7 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	_, e = s.Sync_AllianceMove(ctx, n.id, n.interest, n.syncer, 700, 700, blocks, false)
 	check(t, e)
 	expect(true, true)
-	vision(501)
+	vision(501, 504)
 	// 独立侦察授权仍有效时，清除覆盖块不能误删对象；最后授权来源撤销才删除。
 	check(t, n.interest.SetViewMembers(900, []int64{n.id}))
 	expect(true, true)
@@ -171,15 +195,24 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	if after != before {
 		t.Fatal("vision rollback changed durable permission")
 	}
-	vision(501)
+	vision(501, 504)
 	if _, e = s.Sync_AllianceRevokeVision(ctx, n.id, p.Dao().GetHomeSID()+1, 501, false); e == nil {
 		t.Fatal("wrong home changed vision")
 	}
 	remaining, e := s.Sync_AllianceRevokeVision(ctx, n.id, p.Dao().GetHomeSID(), 501, false)
 	check(t, e)
-	if remaining != 4 {
+	if remaining != 12 {
 		t.Fatal("revoking 501 changed unrelated permission", remaining)
 	}
+	vision(504) // 最后 1ms 内仍可见；501 的撤权不影响独立临时授权。
+	replayInit()
+	vision(504)
+	now = deadline
+	vision() // 半开区间，到期的同一毫秒就不再可见。
+	replayInit()
 	vision()
+	now = deadline + 1
+	vision()
+	t.Log("scouting: deadline persisted, before/exact/after expiry checked over TCP, duplicate init never renews")
 	t.Log("strict spatial movement: precommit hidden, rollback/invalid coverage unchanged, two blocks one subject, remove one block, TCP public position only")
 }

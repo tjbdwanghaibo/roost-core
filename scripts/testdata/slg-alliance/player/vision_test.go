@@ -11,16 +11,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // 敌方目标使用单独的授权发布 Interest，不进入公共空间订阅源。
 // 每次通过生成 Sender 在 Nest 锁内同时读已提交的位置和侦察位图，避免从两份缓存拼接权限。
 // 目标位置是固定教学地图配置；只复用已持久的玩家视点，未实现敌方目标 DAO、行军速度或碰撞。
-func newDurableVision(t *testing.T, n *rewardRuntime) func(...int64) {
+func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) func(...int64) {
 	t.Helper()
 	m, in, sink := newSpatialView(t)
-	for _, id := range []int64{98, 501, 502, 503} {
+	for _, id := range []int64{98, 501, 502, 503, 504} {
 		id := id
 		raw := []byte(fmt.Sprintf(`{"target":%d}`, id))
 		if id == 98 {
@@ -38,7 +39,7 @@ func newDurableVision(t *testing.T, n *rewardRuntime) func(...int64) {
 		check(t, m.OpenHeldSession(sid))
 		check(t, m.Subscribe(sid, 98, entity.SyncProfile{}))
 	}
-	positions := map[int64]spatial.Point{501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}}
+	positions := map[int64]spatial.Point{501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700}}
 	return func(want ...int64) {
 		t.Helper()
 		for _, sid := range []entitysync.SessionID{1, 2} {
@@ -46,14 +47,19 @@ func newDurableVision(t *testing.T, n *rewardRuntime) func(...int64) {
 		}
 		raw, e := sender.NewAllianceRewardsSender(n.nest).Sync_AllianceWallet(context.Background(), n.id)
 		check(t, e)
-		var state struct{ X, Y, VisionMask int64 }
+		var state struct{ X, Y, VisionMask, ScoutUntil int64 }
 		check(t, json.Unmarshal([]byte(raw), &state))
 		if state.X < 0 || state.Y < 0 || state.X >= 1000 || state.Y >= 1000 {
 			t.Fatal("invalid durable viewpoint")
 		}
+		// 期限是业务事实，过期时不延长、不删档；读不到合法期限即不授予临时视野。
+		now := business.Now().UnixMilli()
 		var visible []int64
 		for id, at := range positions {
 			x, y := state.X-at.X, state.Y-at.Y
+			if id == 504 && (state.ScoutUntil <= 0 || now >= state.ScoutUntil) {
+				continue
+			}
 			if state.VisionMask&(int64(1)<<uint(id-501)) != 0 && x*x+y*y <= 50*50 {
 				visible = append(visible, id)
 			}
