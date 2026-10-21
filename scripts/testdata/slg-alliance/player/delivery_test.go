@@ -102,8 +102,8 @@ func rewardChild(t *testing.T, mode string) {
 				return e
 			}
 			stats := n.projector.Stats()
-			if stats.Projected != 0 || stats.WALUnacked != 4 {
-				return fmt.Errorf("want four unprojected strict records: %+v", stats)
+			if stats.Projected != 0 || stats.WALUnacked != 5 {
+				return fmt.Errorf("want five unprojected strict records: %+v", stats)
 			}
 			if e = os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600); e != nil {
 				return e

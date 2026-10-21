@@ -148,7 +148,7 @@ func newFog(t *testing.T) *fog {
 	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
 	check(t, e)
 	t.Cleanup(func() { check(t, m.Close(context.Background())) })
-	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, Relations: []string{"alliance", "scout"}, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
+	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
 	check(t, e)
 	t.Cleanup(in.Close)
 	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 99, Namespace: "alliance-objective", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
@@ -161,6 +161,10 @@ func newFog(t *testing.T) *fog {
 	for _, id := range []int64{1, 2} {
 		check(t, m.OpenHeldSession(entitysync.SessionID(id)))
 		check(t, m.Subscribe(entitysync.SessionID(id), 98, entity.SyncProfile{}))
+		for _, view := range []policy.ViewID{policy.ViewID(100 + id), policy.ViewID(200 + id)} {
+			check(t, in.DefineRelationView(view, entity.SyncProfile{}))
+			check(t, in.AttachView(id, view))
+		}
 	}
 	return &fog{manager: m, interest: in, sink: sink, positions: map[int64]spatial.Point{1: {X: 10, Y: 10}, 2: {X: 10, Y: 10}}, scout: map[int64]bool{}}
 }
@@ -191,14 +195,22 @@ func (f *fog) reconcileAtLeast(min uint64, load func() (state, error)) error {
 	}
 	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
 		if f.inRange(id) && s.Members[p].Active {
-			f.interest.Relation("alliance").Set(id, []int64{99})
+			if e := f.interest.SetViewMembers(policy.ViewID(100+id), []int64{99}); e != nil {
+				return e
+			}
 		} else {
-			f.interest.Relation("alliance").Clear(id)
+			if e := f.interest.SetViewMembers(policy.ViewID(100+id), nil); e != nil {
+				return e
+			}
 		}
 		if f.inRange(id) && f.scout[id] {
-			f.interest.Relation("scout").Set(id, []int64{99})
+			if e := f.interest.SetViewMembers(policy.ViewID(200+id), []int64{99}); e != nil {
+				return e
+			}
 		} else {
-			f.interest.Relation("scout").Clear(id)
+			if e := f.interest.SetViewMembers(policy.ViewID(200+id), nil); e != nil {
+				return e
+			}
 		}
 
 	}

@@ -21,9 +21,11 @@ func newSpatialView(t *testing.T) (*entitysync.Manager, *policy.Interest, *viewS
 	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
 	check(t, e)
 	t.Cleanup(func() { check(t, m.Close(context.Background())) })
-	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, Relations: []string{"scout"}, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 20, LeaveRadius: 30}})
+	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 20, LeaveRadius: 30}})
 	check(t, e)
 	t.Cleanup(in.Close)
+	check(t, in.DefineRelationView(900, entity.SyncProfile{}))
+	check(t, in.AttachView(2, 900))
 	return m, in, sink
 }
 
@@ -116,11 +118,14 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 			}
 		}
 	}
+	vision := newDurableVision(t, n)
 	if !write {
+		vision()
 		expect(true, false)
 		return
 	}
 	expect(false, false)
+	vision(503)
 	s := sender.NewAllianceRewardsSender(n.nest)
 	blocks := []int64{n.interest.BlockAt(spatial.Point{X: 10, Y: 10}), n.interest.BlockAt(spatial.Point{X: 210, Y: 10})}
 	before, e := s.Sync_AllianceWallet(ctx, n.id)
@@ -138,21 +143,43 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 			t.Fatal("position or coverage rollback diverged")
 		}
 		expect(false, false)
+		vision(503)
 	}
 	_, e = s.Sync_AllianceMove(ctx, n.id, n.interest, n.syncer, 700, 700, blocks, false)
 	check(t, e)
 	expect(true, true)
+	vision(501)
 	// 独立侦察授权仍有效时，清除覆盖块不能误删对象；最后授权来源撤销才删除。
-	n.interest.Relation("scout").Set(2, []int64{n.id})
+	check(t, n.interest.SetViewMembers(900, []int64{n.id}))
 	expect(true, true)
 	// 清除一个覆盖块只移走该视点来源；位置仍在 700,700，不复制两个实体。
 	_, e = s.Sync_AllianceMove(ctx, n.id, n.interest, n.syncer, 700, 700, blocks[:1], false)
 	check(t, e)
 	expect(true, true)
-	n.interest.Relation("scout").Clear(2)
+	check(t, n.interest.SetViewMembers(900, nil))
 	expect(true, false)
 	if got := n.interest.ObservedBlocks(n.id); len(got) != 1 || got[0] != blocks[0] {
 		t.Fatal("committed coverage mismatch", got)
 	}
+	before, e = s.Sync_AllianceWallet(ctx, n.id)
+	check(t, e)
+	if _, e = s.Sync_AllianceRevokeVision(ctx, n.id, p.Dao().GetHomeSID(), 501, true); e == nil {
+		t.Fatal("vision rollback accepted")
+	}
+	after, e := s.Sync_AllianceWallet(ctx, n.id)
+	check(t, e)
+	if after != before {
+		t.Fatal("vision rollback changed durable permission")
+	}
+	vision(501)
+	if _, e = s.Sync_AllianceRevokeVision(ctx, n.id, p.Dao().GetHomeSID()+1, 501, false); e == nil {
+		t.Fatal("wrong home changed vision")
+	}
+	remaining, e := s.Sync_AllianceRevokeVision(ctx, n.id, p.Dao().GetHomeSID(), 501, false)
+	check(t, e)
+	if remaining != 4 {
+		t.Fatal("revoking 501 changed unrelated permission", remaining)
+	}
+	vision()
 	t.Log("strict spatial movement: precommit hidden, rollback/invalid coverage unchanged, two blocks one subject, remove one block, TCP public position only")
 }

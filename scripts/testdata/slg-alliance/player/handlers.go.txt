@@ -35,6 +35,7 @@ func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, e
 		}
 		return p.Dao().GetGold(), nil
 	}
+	p.Dao().SetVisionMask(5) // 教学目标 501、503 已获侦察权；502 未授权。
 	p.Dao().SetX(800)
 	p.Dao().SetY(800)
 	p.Dao().SetCoverage("[]")
@@ -80,12 +81,13 @@ func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activit
 //roost:nest rollback=undo durability=strict
 func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
 	raw, e := json.Marshal(struct {
-		X, Y     int64
-		Coverage string
-		Home     int32
-		Gold     int64
-		Receipts string
-	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+		VisionMask int64
+		X, Y       int64
+		Coverage   string
+		Home       int32
+		Gold       int64
+		Receipts   string
+	}{p.Dao().GetVisionMask(), p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
 	return string(raw), e
 }
 
@@ -95,7 +97,7 @@ func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
 //roost:nest rollback=undo durability=strict
 func handlerAllianceMove(p IAllianceRewardPlayerEntity, interest *policy.Interest, syncer *entitysync.Manager, x, y int64, blocks []int64, reject bool) (int64, error) {
 	before := syncer.Subscribers(p.ID())
-	component, e := policy.NewSpatialComponent(p, interest, false, func(at spatial.Point) { p.Dao().SetX(at.X); p.Dao().SetY(at.Y) })
+	component, e := policy.NewSpatialComponent(p, interest, func(at spatial.Point) { p.Dao().SetX(at.X); p.Dao().SetY(at.Y) })
 	if e != nil {
 		return 0, e
 	}
@@ -118,4 +120,20 @@ func handlerAllianceMove(p IAllianceRewardPlayerEntity, interest *policy.Interes
 		return 0, errors.New("injected movement rollback")
 	}
 	return x, nil
+}
+
+// 受信任原服撤销某个目标的侦察权；与位置同属 Player 持久事实，客户端不能自报授权。
+// reject 只用于验收 undo，实际接入由服务器权限规则调用。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRevokeVision(p IAllianceRewardPlayerEntity, sid int32, target int64, reject bool) (int64, error) {
+	if p.Dao().GetHomeSID() != sid || target < 501 || target > 503 {
+		return 0, errAllianceReward
+	}
+	next := p.Dao().GetVisionMask() &^ (int64(1) << uint(target-501))
+	p.Dao().SetVisionMask(next)
+	if reject {
+		return 0, errors.New("injected vision rollback")
+	}
+	return next, nil
 }
