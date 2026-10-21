@@ -138,47 +138,72 @@ DESIGN-TODO D22 场景时间域（原 D22-3；维护者 2026-10-21 决定 ③⑤
 
 变异核对（`timedomain_test.go`、`heartbeat/nest_test.go`）：去掉 `high` 托底（成员在时停发布后读到 `…16:00:00`，早于之前的 `…16:00:02`）；去掉 `fctx.Frozen`（一条消息先后读到 `{…00 1}` 与 `{…01 5}`）；提交前发布（`a rate change was published before its transaction committed`）；去掉序号比较（晚到的旧发布覆盖新的）；新锚点不托底（`the new anchor … is earlier than a domain time members already read`）；新锚点取业务时间而非当前映射（`the stop instant reads …16 want …22`）；去掉范围检查（`SetRate(-0.1) = <nil>`）；`BeatRunner` 心跳之外不换域时间、`Behavior` / `ai` 缺省不取域时间、登记不追加 `WithTimeDomain`（`TestBehaviorOnATimeDomainUsesDomainTime`、`TestABeatControllerOnATimeDomainUsesDomainTime`、`TestSceneMembersActOnTheSceneTimeDomain`）；心跳不读域（`Beat.Now … but the beat's message reads the domain at …`）；上限不乘倍率（`a 2s stall at 10x gave Elapsed 1s, want the 10s cap`）。
 
-## 2G. 技能与 Buff 的心跳
+## 2G. 技能与 Buff 的推进与驱动
 
-DESIGN-TODO D20 第 5 期（现有快池 tick 迁移）。现行说明见 [guide §4E](../guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)。代码在 `gameplay/skill/tick_clock.go`、`gameplay/skill/scheduler.go`（`CurrentTick`、`Pending`）、`gameplay/skill/combatcomponent/beat.go`（buff）与 `runtime_beat.go`（Runtime）。放在 `combatcomponent` 而不是 `skill`：`skill` 是不依赖 Nest 的纯 DSL 运行时（只 import 标准库、`combat` 与 metrics），`combatcomponent` 本来就是“技能 / 战斗接进 roost 实体”的那一层。
+DESIGN-TODO D20 第 5 期（现有快池 tick 迁移）；维护者 2026-10-21 决定：**心跳只是技能 / Buff 的驱动方式之一，skill 只用接口**（实施提交 `35120c86`）。现行说明见 [guide §4E](../guide/10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)。
 
-1. **换算**（`TickClock.TickAt`）：`tick = floor((t.UnixNano − Origin) / Length)`，负数也向下（Go 整除向零截断，余数为负时减一）。`Origin` 零值是 Unix 纪元，所以 tick 绝对、可持久（buff 的 `DueTick`、Runtime checkpoint 的 `CurrentTick`）；`Length` 限 [1ms, 1s]。`StartOf(k)` 是 tick k 的起点，`TickAt(StartOf(k)) == k`。`Ticks(d)` 向上取整。拍里用 `Beat.Now`（挂了时间域时是域时间），handler 里用本条消息冻结的 `fctx.Now` 或 `Domain.Now`，同一把尺子。
-2. **Buff 心跳的启停**（`beat.go` `alignBeat` / `wantsBeat`）：想要心跳当且仅当容器里有 `DueTick != 0` 的实例（`combat.BuffContainer.NextDue`）或 `Periodic()` 为真。对齐点：`buffsChanged`（`ApplyBuff` 真的施加了、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs` 有过期、`OnInitFinish`）与 `SetBuffDueTick`（集合不变、限时与否可能变），以及拍末尾（`Periodic` 的答案可能变了）。启停经 `heartbeat.Reg`：事务里提交后生效、回滚作废，所以 buff 集合与心跳一致。周期 `PeriodAtMost(Granularity)`，缺省 1s。挂不上（Remote 共享模式）交给 `OnError`，不让 mutator 失败。
-3. **Buff 拍**（`runBeat`）：`TickBuffs(TickAt(Beat.Now))`，然后 `OnBeat`，最后对齐。`TickBuffs` 在没有到期实例时直接返回、不登记逆操作（每拍不复制容器）。加载出的过期记录：`OnInitFinish` 不在事务里，只启动心跳，第一拍清掉。
-4. **Runtime 推进规则**（`runtime_beat.go` `advanceTo`，确定性的唯一实现）：
+**分层与依赖方向**（只有心跳适配文件 import `heartbeat` / `timedomain` / `fctx`）：
+
+| 层 | 代码 | 依赖 |
+| --- | --- | --- |
+| 换算与推进规则（技能） | `gameplay/skill/tick_clock.go`（`TickClock`）、`stepper.go`（`Driver`、`Stepper`）、`scheduler.go`（`CurrentTick`、`Pending`） | 标准库、`combat`、metrics；不依赖 Nest、心跳、时间域、fctx |
+| Buff 的数据 | `gameplay/skill/combat`（`BuffContainer.NextDue` / `Tick`） | 纯数据，不知道驱动 |
+| Buff 的推进规则 | `combatcomponent/buff_stepper.go`（`DriveBuffs`、`StepBuffs`、`BuffsPending`……） | `skill.Driver` / `TickClock`、`combat`、组件自己的事务修改；不 import 心跳 |
+| 心跳驱动（适配） | `combatcomponent/runtime_beat.go`（`NewRuntimeBeat`、`heartbeatDriver`）、`beat.go`（`AttachBeat`） | `heartbeat`、`timedomain`、`fctx` |
+
+**结构守卫**（根包 `dependency_boundary_test.go`）：`TestCombatAndSkillDependencyBoundary` 拒绝 `gameplay/skill` 的非测试文件直接 import `framework/nest`、`gameplay/heartbeat`、`gameplay/timedomain`、`infra/base/fctx`；`TestCombatComponentHeartbeatStaysInTheAdapters` 拒绝 `combatcomponent` 里 `beat.go`、`runtime_beat.go` 以外的文件 import `heartbeat` / `timedomain`。只查直接 import，不查传递依赖（`skill` 的传递依赖只有 `combat` 与 metrics，见 `go list`）；加 import 的变异让两者变红（`gameplay/skill/stepper.go: skill only uses the Driver interface; fctx belongs to a driver adapter (combatcomponent): …`、`gameplay/skill/combatcomponent/buff_stepper.go: only the heartbeat adapters (beat.go, runtime_beat.go) import heartbeat: …`）。
+
+`combat` 不能依赖 `skill`（`skill` import `combat`），所以 Buff 的推进不放 `combat`：它要调组件的事务修改（`TickBuffs` 的 `beginChange` / `markChanged`、属性投影、派生状态通知），本来就在 `combatcomponent`；`skill.Driver` 被它复用，Buff 与技能同一个接口。驱动方式：心跳（快池上的实体，`NewRuntimeBeat` / `AttachBeat`）、定步长循环（Lockstep 房间直接用 `skill.NewStepper` / `DriveBuffs`，按帧调 `StepToTick` / `StepBuffsToTick`）、测试里手动调用。
+
+1. **换算**（`TickClock.TickAt`）：`tick = floor((t.UnixNano − Origin) / Length)`，负数也向下（Go 整除向零截断，余数为负时减一）。`Origin` 零值是 Unix 纪元，所以 tick 绝对、可持久（buff 的 `DueTick`、Runtime checkpoint 的 `CurrentTick`）；`Length` 限 [1ms, 1s]。`StartOf(k)` 是 tick k 的起点，`TickAt(StartOf(k)) == k`。`Ticks(d)` 向上取整。驱动的一步用驱动给的时刻（心跳：`Beat.Now`，挂了时间域时是域时间）或直接给 tick；输入用 `StepperConfig.Now` / `BuffDriveConfig.Now`（心跳适配层给的是本条消息冻结的 `fctx.Now` 或 `Domain.Now`），同一把尺子。
+2. **Driver 接口**（`skill.Driver{Wake() error; Sleep()}`）：Stepper / Buff 推进在每次推进与输入之后按“有没有工作”调 `Wake` 或 `Sleep`。**电平式**：同一状态可能连续通知多次，驱动自己去重；推进器不记驱动的状态。原因：驱动的状态会被外部改掉——心跳的启动随 handler 回滚作废、Remote 共享模式时框架停掉心跳——电平式通知让下一次输入或 `Sync` 自动补上；边沿式（推进器记“已经叫醒过”）在这两种情况下会一直不再叫醒。`Wake` 返回错误表示挂不上（`ErrHeartbeatRemoteShared`），工作留着，之后 `Sync` 重试。心跳实现 `heartbeatDriver`：`Wake` → `Reg.Start`、`Sleep` → `Reg.Stop`，只在 `Reg.Active`（业务视角、随回滚撤销）不同时启停，不每拍多一次事务登记。
+3. **Buff 的推进**（`buff_stepper.go`）：有工作当且仅当容器里有 `DueTick != 0` 的实例（`NextBuffDue`）或 `Periodic()` 为真（`BuffsPending`）。通知点：`buffsChanged`（`ApplyBuff` 真的施加了、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs` 有过期、`OnInitFinish`）、`SetBuffDueTick`（集合不变、限时与否可能变），以及每一步末尾（`Periodic` 的答案可能变了）。一步（`stepBuffs`，`StepBuffs` / `StepBuffsToTick` / 心跳的 `runBeat` 共用）：`TickBuffs(tick)`，然后业务回调（`OnStep`；心跳是包了 `heartbeat.Beat` 的 `OnBeat`），最后通知；回调出错时原样返回、不通知（心跳让本拍事务回滚）。`TickBuffs` 在没有到期实例时直接返回、不登记逆操作。`Wake` 的错误交给 `OnError`，不让 mutator 失败。加载出的过期记录：`OnInitFinish` 不在事务里，只通知驱动，第一步清掉。**非事务驱动**（定步长循环）：施加限时 buff 的事务回滚了，buff 撤销而驱动已被叫醒，下一步没有工作、驱动自己睡——多醒一步，不会一直醒着（`TestARolledBackBuffCostsANonTransactionalDriverOneStep`）；心跳驱动的启停随事务，没有这一步。
+4. **Runtime 推进规则**（`skill/stepper.go` `advanceTo`，确定性的唯一实现；`StepTo` / `StepToTick` 是驱动的一步，`CatchUp` / `Start` / `Input` / `Do` 是输入）：
    - 目标不大于当前 tick：不动（不倒退；同一 tick 的工作已在上次推进时执行）。
-   - Runtime 空闲（`Pending` 为假）：拍不推进；handler 的输入一次 `Advance(target)`（计 `Idle`）。
-   - 忙：从下一个 tick 起逐 tick `Advance(t)`；推进中一旦空闲，拍停在这个 tick（空闲点），输入照上一条一次跳到目标。
-   - 逐 tick 的步数到上限（`MaxCatchUp × max(倍率, 1) / Length`，向下取整、至少 1；`MaxCatchUp` 缺省 `max(1s, 周期)`）时剩余一次 `Advance(target)`，计 `Jumps` / `JumpedTicks`，限频 Warn（10 秒一条）。
-   - 时间域：拍的 `Beat.Now` 与倍率来自同一条消息的 `Domain.Read`，时停时目标不变、Runtime 不动；2 倍速时一拍的目标走两倍、上限也乘 2。
+   - Runtime 空闲（`Pending` 为假）：驱动的一步不推进；输入一次 `Advance(target)`（计 `Idle`）。
+   - 忙：从下一个 tick 起逐 tick `Advance(t)`；推进中一旦空闲，驱动的一步停在这个 tick（空闲点），输入照上一条一次跳到目标。
+   - 逐 tick 的步数到上限（`MaxCatchUp × max(倍率, 1) / Length`，向下取整、至少 1；`MaxCatchUp` 缺省 `skill.DefaultMaxCatchUp` = 1s，心跳适配层缺省 `max(1s, 周期)`）时剩余一次 `Advance(target)`，计 `Jumps` / `JumpedTicks`，限频 Warn（10 秒一条）。倍率：驱动的一步用 `StepTo` 的参数，输入用 `StepperConfig.Rate`（nil 为 1）。
+   - 时间域（心跳适配层）：拍的 `Beat.Now` 与倍率来自同一条消息的 `Domain.Read`，时停时目标不变、Runtime 不动；2 倍速时一拍的目标走两倍、上限也乘 2；输入侧的 `Now` / `Rate` 是 `Domain.Now` / `Domain.Rate`。
 
-   **为什么逐 tick**：`Runtime.Advance(N)` 本身按到期顺序执行全部任务，但 Host 只在到期点与 N 被推进（`advanceHost`）；`MemoryHost.Advance` 每次推进都发 `tick_advanced`、`revision++`、按 tick 让状态过期，所以“一次推到 N”与“1、2、…、N”结果不同。逐 tick 让 Host 被推进的序列只取决于 tick，与拍的分组无关。**为什么空闲点由 Runtime 决定**：若拍在空闲时也推进，空闲期间推进到哪个 tick 取决于拍的时刻，下一次输入之前 Host 被推进的次数就随抖动变化。**保证**：在没有发生 `Jumps` 的区间，同一输入序列（每个输入落在同一 tick）在任何拍间隔、重复、晚到的拍下，Host 每次被推进时的状态逐 tick 相同（`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：每 tick 一拍、每两 tick 一拍、10～400ms 随机含重复与晚到、600～990ms 长间隔，各 5 个种子，逐 tick 记录与输入结果全部相同）。**限制**：输入落在哪个 tick 由 handler 开始执行时冻结的时刻决定，本身随网络与排队变化——回放要记录输入的 tick（`RecordingHost` 记 Host 调用，带 tick），不记拍；发生过 `Jumps` 的区间 Host tick 被合并，回放要按同样的 tick 跳（`Stats` 与 Warn 指出）。
-5. **Runtime 心跳的启停**（`Sync`）：`Pending` 当且仅当有活动施法、排程任务（含排队的被动 / 外部事件、弹药回充、能力覆盖到期）、逐 tick 推进的衍生物、未用尽重试的待停止衍生物。冷却不是工作。每拍末尾与每次输入（`Start` / `Input` / `Do`）末尾对齐。拍里的 `Advance` 错误经 `OnError` 报告、拍返回 nil（Runtime 不在回滚域里，回滚 Host 已经对战斗 DAO 做的修改只会更不一致）。handler 的输入在 Runtime 上不回滚、心跳启动随回滚作废——与 actionflow runner 相同，由业务把输入放在最后一步，或之后调 `Sync`。
-6. **周期与心跳契约**：Runtime 心跳缺省 `PeriodAtMost(Length)`（tick 短于 50ms 时一拍 2～3 个 tick）；buff 心跳按 `Granularity`。两者都是普通心跳登记：每实体至多一拍在途、跳拍计数、不持久、Remote 共享模式不允许挂载（`Start` 返回 `ErrHeartbeatRemoteShared`）。
+   **为什么逐 tick**：`Runtime.Advance(N)` 本身按到期顺序执行全部任务，但 Host 只在到期点与 N 被推进（`advanceHost`）；`MemoryHost.Advance` 每次推进都发 `tick_advanced`、`revision++`、按 tick 让状态过期，所以“一次推到 N”与“1、2、…、N”结果不同。逐 tick 让 Host 被推进的序列只取决于 tick，与驱动的节奏无关。**为什么空闲点由 Runtime 决定**：若驱动在空闲时也推进，空闲期间推进到哪个 tick 取决于驱动的时刻，下一次输入之前 Host 被推进的次数就随抖动变化。**保证**：在没有发生 `Jumps` 的区间，同一输入序列（每个输入落在同一 tick）在任何驱动节奏、重复、晚到的一步下，Host 每次被推进时的状态逐 tick 相同——推进器层 `TestStepperResultsDoNotDependOnDriverJitter`（每 tick 一步、每两 tick 一步、10～400ms 随机含重复与晚到、600～990ms 长间隔，各 5 个种子）；换一种驱动方式也相同——`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`（只推进醒着的 Runtime 的定步长循环与抖动的手动驱动逐 tick 记录、输入结果全部相同）；心跳适配层 `TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter` 经拍回调跑同样的 4 × 5。**限制**：输入落在哪个 tick 由输入的时刻决定（心跳下是 handler 开始执行时冻结的时刻），本身随网络与排队变化——回放要记录输入的 tick（`RecordingHost` 记 Host 调用，带 tick），不记驱动的节奏；发生过 `Jumps` 的区间 Host tick 被合并，回放要按同样的 tick 跳（`Stats` 与 Warn 指出）。
+5. **Runtime 的通知**（`Stepper.Sync`）：`Pending` 当且仅当有活动施法、排程任务（含排队的被动 / 外部事件、弹药回充、能力覆盖到期）、逐 tick 推进的衍生物、未用尽重试的待停止衍生物。冷却不是工作。每一步末尾与每次输入（`Start` / `Input` / `Do`）末尾通知。心跳适配层：拍里推进的错误经 `OnError` 报告、拍返回 nil（Runtime 不在回滚域里，回滚 Host 已经对战斗 DAO 做的修改只会更不一致）；handler 的输入在 Runtime 上不回滚、心跳启动随回滚作废——与 actionflow runner 相同，由业务把输入放在最后一步，或之后调 `Sync`。
+6. **周期与心跳契约**（心跳适配层）：Runtime 心跳缺省 `PeriodAtMost(Length)`（tick 短于 50ms 时一拍 2～3 个 tick）；buff 心跳按 `Granularity`。两者都是普通心跳登记：每实体至多一拍在途、跳拍计数、不持久、Remote 共享模式不允许挂载（`Start` 返回 `ErrHeartbeatRemoteShared`）；`dispatch` 与 `batch` 两种投递方式行为相同。
+7. **撤销与重建**（与 `heartbeat.Reg.Close`、actionflow / ai 的 `Close` 一致）：`CombatComponent.CloseBuffDriver` 先把 `drive` 清空（之后 mutator 不再通知、`CurrentTick` / `StepBuffs` 要求重新装驱动、可以再 `DriveBuffs` / `AttachBeat`），再按驱动类型收尾——心跳驱动 `Reg.Close`（立即离开驱动、释放名字，已投出的拍按过期丢弃），其他驱动一次 `Sleep`；`CombatComponent.OnDestroy` 调它。`RuntimeBeat.Close` 是 `Reg.Close`：之后旧推进器的输入在 Runtime 有工作时报 `ErrRegClosed`，Runtime 不动，可以交给按同名重建的新 `RuntimeBeat`。两者立即生效、不随事务回滚（登记是组件的生命周期，回滚只恢复启停）；重建后有工作的要 `SyncBuffDriver` / `Sync` 一次（装驱动不自动通知）。
 
-变异核对（`runtime_beat_test.go`、`beat_test.go`、`skill/scheduler_test.go`；每处改掉一个强制点，对应用例在当前代码上变红，原文）：
+变异核对（`skill/stepper_test.go`、`combatcomponent/runtime_beat_test.go`、`beat_test.go`、`buff_stepper_test.go`、`skill/scheduler_test.go`；2026-10-21 按推进器 / 适配层的新结构重做，加撤销 C1～C5，每处改掉一个强制点，对应用例在当前代码上变红，原文）：
 
-| 变异 | 变红的用例与原文 |
+| 变异（位置） | 变红的用例与原文 |
 | --- | --- |
-| R1 拍直接一次推到目标 | `TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：`every other tick seed 1: per-tick results differ` |
-| R2 拍推进空闲的 Runtime | 同上；`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`：`a beat on an idle runtime moved it to 60 (<nil>)` |
-| R3 推进不停在空闲点 | 同上；`after the cast: active false tick 40, want stopped at the idle point 8 (windup 3 + recovery 2 from tick 3)` |
-| R4 输入前不推进到输入的 tick | `TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：`every other tick seed 1: inputs …`（输入落在拍留下的 tick 上） |
-| R5 没有追帧上限 | `TestRuntimeBeatJumpsPastTheCatchUpLimit`：`100 ticks behind: {Steps:110 Idle:0 Jumps:0 JumpedTicks:0} at tick 110, want 20 more steps, one jump over 80 ticks, at tick 110` |
-| R6 上限不乘倍率 | `TestHandlerTicksFollowTheTimeDomain`：`catch-up limit at rate 2 = 100 ticks, want 200 (1s x 2 / 10ms)` |
-| R7 `Sync` 不停 | `TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`：`idle runtime: active true registered 1 hp 75, want stopped after the fireball landed` |
-| R8 handler 的 tick 不取域时间 | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000020 / 180000000010, want 180000000020 (20 ticks of 10ms)` |
-| B1 改 buff 不对齐心跳 | `TestTimedBuffsBeatUntilTheyExpire`：`a timed buff did not start the beat`；`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`：`loaded timed buffs did not start the beat` |
-| B2 拍不推进 buff | `TestTimedBuffsBeatUntilTheyExpire`：`after expiry: buffs [… {Instance:2 … DueTick:179258611960}] active true registered 1, want only the aura and no heartbeat` |
-| B3 拍的 tick 早一个 | `TestBuffBeatExpiresExactlyAtTheDueTick`：`a beat 1ns before tick 1005 expired the buff` |
-| B4 拍末尾不重新对齐 | `TestPeriodicWorkKeepsTheBuffBeat`：`periodic work ended: active true registered 1, want stopped` |
-| B5 buff 的 tick 不取域时间 | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000010 / 180000000020, want 180000000020 (20 ticks of 10ms)` |
-| B6 buff 心跳不挂域 | `TestBuffsStopExpiringWhileTheSceneIsPaused`：`paused scene: 1 expired, 0 active, want the buff to stay` |
-| B7 `SetBuffDueTick` 不对齐 | `TestSetBuffDueTickAlignsTheBeat`：`a permanent buff made timed: active false registered 0, want the beat` |
+| R1 驱动的一步直接推到目标（`stepper.go` `advanceTo`） | `TestStepperResultsDoNotDependOnDriverJitter`：`every other tick seed 1: per-tick results differ`；`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`：`fixed-step loop: per-tick results differ from the jittered driver`；`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`：`every other tick seed 1: per-tick results differ` |
+| R2 驱动的一步推进空闲的 Runtime（同上） | 同上抖动用例；`TestStepperWakesWhileBusyAndSleepsAtTheIdlePoint`：`a step on an idle runtime moved it to 60 (<nil>)`；`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`：`a beat on an idle runtime moved it to 60 (<nil>)` |
+| R3 推进不停在空闲点（同上） | 同上抖动用例；`after the cast: awake false tick 40, want asleep at the idle point 8 (windup 3 + recovery 2 from tick 3)`；适配层 `after the cast: active false tick 40, want stopped at the idle point 8 (windup 3 + recovery 2 from tick 3)` |
+| R4 输入前不推进到输入的 tick（`Stepper.Do`） | `TestStepperResultsDoNotDependOnDriverJitter`：`every other tick seed 1: inputs …`（输入落在驱动留下的 tick 上）；`fixed-step loop: per-tick results differ from the jittered driver` |
+| R5 没有追帧上限（`advanceTo`） | `TestStepperJumpsPastTheCatchUpLimit` 与 `TestRuntimeBeatJumpsPastTheCatchUpLimit`：`100 ticks behind: {Steps:110 Idle:0 Jumps:0 JumpedTicks:0} at tick 110, want 20 more steps, one jump over 80 ticks, at tick 110` |
+| R6 上限不乘倍率（`catchUpTicks`） | `TestStepperCatchUpLimitScalesWithTheRate`：`catch-up limit at rate 2 = 100 ticks, want 200 (1s x max(rate, 1) / 10ms)`；`TestRuntimeBeatPassesTheDomainRate`：`two 150-tick gaps at rate 2: {Steps:200 Idle:1 Jumps:2 JumpedTicks:100} at tick 180000000300, want 300 steps from 180000000000 and no jump (limit 200 ticks)` |
+| R6b 心跳的拍不传域倍率（`runtime_beat.go` `beat`） | `TestRuntimeBeatPassesTheDomainRate`：`… {Steps:250 Idle:1 Jumps:1 JumpedTicks:50} …` |
+| R6c 输入侧不传域倍率（`StepperConfig.Rate`） | 同上：`… {Steps:250 Idle:1 Jumps:1 JumpedTicks:50} …` |
+| R7 空闲时不通知 `Sleep`（`Stepper.Sync`） | `TestStepperWakesWhileBusyAndSleepsAtTheIdlePoint`：`after the cast: awake true tick 8, want asleep at the idle point 8 …`；`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`：`the loop stepped 158 times over 161 frames with 1 still awake, …`；`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`（两种投递）：`idle runtime: active true registered 1 hp 75, want stopped after the fireball landed` |
+| R8 handler 的 tick 不取域时间（`RuntimeBeat.messageNow`） | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000020 / 180000000010, want 180000000020 (20 ticks of 10ms)` |
+| S1 通知改成边沿式（`Stepper.Sync` 记“已叫醒”） | `TestStepperNotifiesTheDriverByLevel`：`Sync after the driver lost its state: awake false (<nil>), want woken again` |
+| D1 心跳驱动的 `Wake` 不启动登记（`heartbeatDriver`） | `TestTimedBuffsBeatUntilTheyExpire`：`a timed buff did not start the beat`；`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`：`after Start: active false registered 0` |
+| D2 心跳驱动的 `Sleep` 不停登记 | `TestTimedBuffsBeatUntilTheyExpire`：`after expiry: buffs [{Instance:1 … DueTick:0}] active true registered 1, want only the aura and no heartbeat`；`idle runtime: active true registered 1 hp 75, …` |
+| B1 改 buff 不通知驱动（`buffsChanged`） | `TestTimedBuffsBeatUntilTheyExpire`：`a timed buff did not start the beat`；`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`：`loaded timed buffs did not start the beat`；`TestBuffsOnAFixedStepLoop`：`the 5-tick stun applied at frame 10 expired at [] (buffs 1), want once at tick 15` |
+| B2 一步不推进 buff（`stepBuffs`） | `TestTimedBuffsBeatUntilTheyExpire`：`after expiry: buffs [… {Instance:2 … DurationTicks:5 …}] …`；`TestBuffsOnAFixedStepLoop`：同 B1；`TestBuffsSteppedByHand`：`the first step: expired at [], pending true, want the stale buff cleared at tick 1000` |
+| B3 拍的 tick 早一个（`runBeat`） | `TestBuffBeatExpiresExactlyAtTheDueTick`：`a beat 1ns before tick 1005 expired the buff` |
+| B3b 手动一步的 tick 早一个（`StepBuffs`） | `TestBuffsSteppedByHand`：`the first step: expired at [1001], pending false, want the stale buff cleared at tick 1000` |
+| B4 一步末尾不重新通知（`stepBuffs`） | `TestPeriodicWorkKeepsTheBuffBeat`：`periodic work ended: active true registered 1, want stopped`；`TestBuffsOnAFixedStepLoop`：`periodic work from frame 20 to 25: steps [{Tick:20 …} … {Tick:30 Expired:[]}], want frames 20..25` |
+| B5 buff 的 tick 不取域时间（`beat.go` `messageNow`） | `TestHandlerTicksFollowTheTimeDomain`：`100ms at rate 2: ticks 180000000010 / 180000000020, want 180000000020 (20 ticks of 10ms)` |
+| B6 buff 心跳不挂域（`AttachBeat`） | `TestBuffsStopExpiringWhileTheSceneIsPaused`：`paused scene: 1 expired, 0 active, want the buff to stay` |
+| B7 `SetBuffDueTick` 不通知 | `TestSetBuffDueTickAlignsTheBeat`：`a permanent buff made timed: active false registered 0, want the beat` |
+| C1 `CloseBuffDriver` 不撤销心跳登记（`heartbeatDriver.close`） | `TestABuffBeatCanBeRebuiltOnTheSameHost`：`after CloseBuffDriver: old closed false BeatReg set false registered 1, want the registration gone`；`TestAClosedBuffBeatStopsAndTheRebuiltOneTakesOver`（两种投递）：`heartbeat: registration name already used on this entity: "combat" on entity …` |
+| C2 `OnDestroy` 不卸下驱动 | `TestABuffBeatCanBeRebuiltOnTheSameHost`：`after OnDestroy: registered 1 BeatReg set true, want the registration gone`；`TestAClosedBuffBeatStopsAndTheRebuiltOneTakesOver`：`after OnDestroy: registered 1, want 0` |
+| C3 `RuntimeBeat.Close` 不撤销登记 | `TestARuntimeBeatCanBeRebuiltOnTheSameHost`：`after Close: closed false registered 1` |
+| C4 `CloseBuffDriver` 不清空驱动接线 | `TestABuffBeatCanBeRebuiltOnTheSameHost`：`after CloseBuffDriver: old closed true BeatReg set true registered 0, want the registration gone`；`TestCloseBuffDriverPutsANonHeartbeatDriverToSleep`：`a buff applied after CloseBuffDriver woke the old driver: awake true (<nil>)` |
+| C5 非心跳驱动卸下时不 `Sleep` | `TestCloseBuffDriverPutsANonHeartbeatDriverToSleep`：`after CloseBuffDriver: awake true` |
 | T1 换算向零截断 | `TestTickClockFloorsAndRoundTrips`：`TickAt(origin-1ns) = 0, want -1` |
 | T2 换算四舍五入 | 同上：`TickAt(origin49ms) = 1, want 0` |
 
-`Pending` 去掉“活动施法”一项（P1）没有让用例变红：测试用的程序在施法活动期间总有排程任务，两者等价；保留这一项是保守的（活动施法可能在等输入或 Host 事件），没有对应的强制点证据。
+心跳类用例（`TestTimedBuffsBeatUntilTheyExpire`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`、`TestAClosedBuffBeatStopsAndTheRebuiltOneTakesOver`）经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 下各跑一遍，D1 / D2 / B1 / B4 / B6 / B7 / R7 / C1 / C2 在两种投递方式下都变红。`Pending` 去掉“活动施法”一项（P1）没有让用例变红：测试用的程序在施法活动期间总有排程任务，两者等价；保留这一项是保守的（活动施法可能在等输入或 Host 事件），没有对应的强制点证据。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -250,15 +275,17 @@ DESIGN-TODO D20 第 5 期（现有快池 tick 迁移）。现行说明见 [guide
 | [move.go](../../../gameplay/movement/move.go) | `StopReason`、`Result`、`Locator`、`MoveConfig`、`MoveOwner`、`Move` |
 | [action.go](../../../gameplay/movement/action.go) | `MoveToParam`、`FollowParam`（`RegisterActions`） |
 
-### 技能与 Buff 的心跳
+### 技能与 Buff 的推进与驱动
 
 D20 第 5 期，契约见 §2G。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [skill/tick_clock.go](../../../gameplay/skill/tick_clock.go) | `TickClock`（`ErrTickClockInvalid`）；`Runtime.CurrentTick` / `Pending` 在 [scheduler.go](../../../gameplay/skill/scheduler.go) |
-| [combatcomponent/beat.go](../../../gameplay/skill/combatcomponent/beat.go) | `BeatConfig`、`BuffBeat`（`CombatComponent.AttachBeat` / `BeatReg` / `CurrentTick` / `SyncBeat`） |
-| [combatcomponent/runtime_beat.go](../../../gameplay/skill/combatcomponent/runtime_beat.go) | `RuntimeBeatConfig`、`RuntimeBeat`、`RuntimeBeatStats`（`NewRuntimeBeat`） |
+| [skill/stepper.go](../../../gameplay/skill/stepper.go) | `Driver`、`Stepper`、`StepperConfig`、`StepperStats`（`NewStepper`、`DefaultMaxCatchUp`）：与驱动无关的 Runtime 推进 |
+| [combatcomponent/buff_stepper.go](../../../gameplay/skill/combatcomponent/buff_stepper.go) | `BuffDriveConfig`、`BuffStep`（`CombatComponent.DriveBuffs` / `StepBuffs` / `StepBuffsToTick` / `BuffsPending` / `NextBuffDue` / `SyncBuffDriver` / `CloseBuffDriver` / `CurrentTick`）：与驱动无关的 buff 推进 |
+| [combatcomponent/beat.go](../../../gameplay/skill/combatcomponent/beat.go) | `BeatConfig`、`BuffBeat`（`CombatComponent.AttachBeat` / `BeatReg`）：buff 的心跳驱动 |
+| [combatcomponent/runtime_beat.go](../../../gameplay/skill/combatcomponent/runtime_beat.go) | `RuntimeBeatConfig`、`RuntimeBeat`（`NewRuntimeBeat`，嵌入 `*skill.Stepper`；`Close` / `Closed`）、`heartbeatDriver`（未导出，两者共用）：技能 Runtime 的心跳驱动 |
 
 ### state
 
@@ -323,11 +350,13 @@ D20 第 5 期，契约见 §2G。
 - [actionflow/action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)、[behavior_test.go](../../../gameplay/actionflow/behavior_test.go)、[ai/beat_test.go](../../../gameplay/ai/beat_test.go)（D20 / D21 审查修复）：`TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds`、`TestBehaviorOnDestroyEndsWhatIsRunning`、`TestABehaviorCanBeRebuiltOnTheSameHostAfterClose`、`TestABeatControllerCanBeRebuiltOnTheSameHost`
 - [movement/nest_test.go](../../../gameplay/movement/nest_test.go)（D21）：`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`、`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`
 
-### 技能与 Buff 的心跳
+### 技能与 Buff 的推进与驱动
 
 - [skill/scheduler_test.go](../../../gameplay/skill/scheduler_test.go)：`TestTickClockFloorsAndRoundTrips`、`TestRuntimePendingFollowsCastsAndTasks`
-- [combatcomponent/runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)：`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`、`TestRuntimeBeatJumpsPastTheCatchUpLimit`、`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`
-- [combatcomponent/beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)（真实 Nest + 心跳驱动；走运行中驱动的用例经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 两种投递方式下各跑一遍）：`TestTimedBuffsBeatUntilTheyExpire`、`TestBuffBeatExpiresExactlyAtTheDueTick`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestHandlerTicksFollowTheTimeDomain`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`
+- [skill/stepper_test.go](../../../gameplay/skill/stepper_test.go)（推进器层，手动驱动与定步长循环驱动）：`TestStepperResultsDoNotDependOnDriverJitter`、`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`、`TestStepperJumpsPastTheCatchUpLimit`、`TestStepperCatchUpLimitScalesWithTheRate`、`TestStepperWakesWhileBusyAndSleepsAtTheIdlePoint`、`TestStepperNotifiesTheDriverByLevel`、`TestStepperConfig`；[stepper_example_test.go](../../../gameplay/skill/stepper_example_test.go)：`ExampleStepper_fixedStepLoop`
+- [combatcomponent/buff_stepper_test.go](../../../gameplay/skill/combatcomponent/buff_stepper_test.go)（不走心跳的 buff 驱动）：`TestBuffsOnAFixedStepLoop`、`TestARolledBackBuffCostsANonTransactionalDriverOneStep`、`TestBuffsSteppedByHand`、`TestDriveBuffsConfig`、`TestCloseBuffDriverPutsANonHeartbeatDriverToSleep`
+- [combatcomponent/runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)（心跳适配层，拍回调直接调用）：`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`、`TestRuntimeBeatJumpsPastTheCatchUpLimit`、`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`
+- [combatcomponent/beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)（真实 Nest + 心跳驱动；走运行中驱动的用例经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 两种投递方式下各跑一遍）：`TestTimedBuffsBeatUntilTheyExpire`、`TestBuffBeatExpiresExactlyAtTheDueTick`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestHandlerTicksFollowTheTimeDomain`、`TestRuntimeBeatPassesTheDomainRate`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`、`TestABuffBeatCanBeRebuiltOnTheSameHost`、`TestARuntimeBeatCanBeRebuiltOnTheSameHost`、`TestAClosedBuffBeatStopsAndTheRebuiltOneTakesOver`
 
 ### state
 

@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”）；**P3 game-demo 接入已实施**（见下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）；**生成器接入已实施**（`roost add heartbeat` / `behavior` / `timedomain`，见下文“生成器接入实施结果”）；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”）；**维护者 2026-10-21 决定心跳只是技能 / Buff 的驱动方式之一、skill 只用接口，已实施**（`skill.Driver` / `skill.Stepper` + `CombatComponent.DriveBuffs`，心跳驱动改为薄包装，见下文“驱动接口实施结果”）；**P3 game-demo 接入已实施**（见下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）；**生成器接入已实施**（`roost add heartbeat` / `behavior` / `timedomain`，见下文“生成器接入实施结果”）；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
@@ -1125,9 +1125,9 @@ make dev-stop
 
 ### P5 实施结果（2026-10-21）
 
-**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；已合入 main）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；已合入 main）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
-**API 最终形状**：
+**API 最终形状**（P5 当时的形状；同日改为驱动接口后 `SyncBeat` 改名 `SyncBuffDriver`、`RuntimeBeatStats` 改为 `skill.StepperStats`、推进规则移到 `skill.Stepper`，见下文“驱动接口实施结果”）：
 
 ```go
 // gameplay/skill（纯运行时，不依赖 Nest）
@@ -1173,6 +1173,52 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 **验证**：gofmt；`GOWORK=off go vet ./gameplay/... ./wiring/...`；`GOWORK=off go test -race -count=30 ./gameplay/skill/combatcomponent/`（心跳相关用例，35s，退出码 0）；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；`go run ./cmd/glsvet ./gameplay/skill/ ./gameplay/skill/combatcomponent/` 无提示。退出码见本轮交付报告（全部为 0 才提交文档）。没有改生成工程用到的东西，没跑 `scripts/test-*-generated.sh`。
 
 **待拍板**（先按推荐做了）：① 技能心跳的位置：A 放 `combatcomponent`（现状，推荐：`skill` 保持不依赖 Nest）；B 新子包 `gameplay/skill/skillbeat`。② Buff 粒度：A 固定 `Granularity`（现状，推荐：简单、可预期）；B 按下一个到期自适应换档。③ 超过追帧上限：A 剩余一次跳过、计数 + Warn（现状，推荐：落后有界）；B 留到下一拍继续逐 tick 补（确定性完全保住，过载时落后无界）。④ `TickBuffs` 保留为导出的原语（现状，推荐）；B 改为未导出、测试经钩子调用。
+
+### 驱动接口实施结果（2026-10-21）
+
+**维护者 2026-10-21 决定：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只用接口。** 技能与 Buff 两边都改（维护者确认）。P5 的 4 项拍板（技能心跳放 `combatcomponent`、Buff 固定粒度、超过追帧上限一次跳过、`TickBuffs` 保留导出）不变，这一轮只把推进规则与驱动方式分开。
+
+**状态：已实施**（分支 `refactor/skill-driver`，代码提交 `35120c86`（推进器与心跳适配）、`fc8981a2`（结构守卫）、`ee646614`（撤销与 OnDestroy）；本地提交，由维护者推送）。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)，分层、契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)，边界 [KNOWN-LIMITS“技能与 Buff 的推进与驱动”](KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+
+**API**：
+
+```go
+// gameplay/skill（不依赖 Nest / heartbeat / timedomain / fctx）
+type Driver interface{ Wake() error; Sleep() }                     // 电平式通知，驱动幂等
+func NewStepper(*Runtime, StepperConfig{Clock, Now, Rate, Driver, MaxCatchUp, Name}) (*Stepper, error)
+func (s *Stepper) StepTo(now time.Time, rate float64) error / StepToTick(Tick, rate float64) error   // 驱动的一步
+func (s *Stepper) Start / Input / Do / CatchUp / Sync / Tick / Runtime / Clock / Stats             // 输入与查询
+// gameplay/skill/combatcomponent（与驱动无关的 buff 推进，不 import heartbeat）
+func (c *CombatComponent) DriveBuffs(BuffDriveConfig{Clock, Now, Driver, Periodic, OnStep, OnError, Name}) error
+func (c *CombatComponent) StepBuffs(time.Time) error / StepBuffsToTick(int64) error / BuffsPending() bool / NextBuffDue() (int64, bool) / SyncBuffDriver() error / CurrentTick() int64
+type BuffStep struct{ Tick int64; Expired []combat.BuffInstance }
+// 心跳驱动（同包，只有这两个文件 import heartbeat）
+func NewRuntimeBeat(*skill.Runtime, RuntimeBeatConfig) (*RuntimeBeat, error)   // RuntimeBeat 嵌入 *skill.Stepper，多 Reg() / Close() / Closed()
+func (c *CombatComponent) AttachBeat(BeatConfig) error / BeatReg() *heartbeat.Reg  // BuffBeat{heartbeat.Beat; BuffStep}
+func (c *CombatComponent) CloseBuffDriver() / OnDestroy(reason)                    // 撤销：心跳驱动 Reg.Close，其他驱动 Sleep
+```
+
+**依赖方向**：`combat`（纯数据：`BuffContainer.NextDue` / `Tick`）← `skill`（`Driver`、`TickClock`、`Stepper`）← `combatcomponent`（`buff_stepper.go` 把组件的事务修改与 `skill.Driver` 接在一起；`beat.go` / `runtime_beat.go` 是心跳适配）。Buff 的推进不放 `combat`：`combat` 不能 import `skill`（反向已有），推进又要调组件的事务修改（`beginChange` / `markChanged`、投影、派生状态），本来就在组件里；放在 `combatcomponent` 并复用 `skill.Driver`，两边同一个接口，`combat` 不依赖 heartbeat。
+
+**按要求逐条落实**：
+
+1. **skill 定义驱动接口**：`Driver{Wake() error; Sleep()}` 与 `Stepper`；原 `runtime_beat.go` 文件头第 1～6 条规则（逐 tick、空闲停、输入跳、追帧上限、时刻倒退不动、跳跃计数与 Warn、`Stats`）全部搬到 `skill/stepper.go`（`advanceTo` 仍是唯一实现）。“本条消息冻结的时刻”由适配层经 `StepperConfig.Now` / `Rate` 给出。
+2. **Buff 同样的形状**：`DriveBuffs` 给出“有没有工作”（`BuffsPending`）与“下一个到期 tick”（`NextBuffDue`），按 Wake / Sleep 通知驱动，`TickBuffs` 仍是原语；`Periodic` / `OnBeat` 的钩子语义不变（`OnBeat` 在 `TickBuffs` 之后、同一事务里，返回错误让本拍回滚）。
+3. **心跳适配在 `combatcomponent`**：`heartbeatDriver`（`Wake` → `Reg.Start`、`Sleep` → `Reg.Stop`）两边共用；每拍 `StepTo(Beat.Now, 域倍率)`；时间域、两种投递方式、Remote 共享模式时 `Start` 报错保持现状。`NewRuntimeBeat` / `AttachBeat` 保留名字、改为薄包装。按协调方要求与 heartbeat / actionflow / ai 审查修复（`Reg.Close`、`Close(reason)`、`Behavior.OnDestroy`）保持一致：新增 `CombatComponent.CloseBuffDriver`（心跳驱动 `Reg.Close`、其他驱动一次 `Sleep`）并接进 `CombatComponent.OnDestroy`，`RuntimeBeat.Close` / `Closed`；game-demo 怪物的 `OnDestroy` 转调 `combat.OnDestroy`。
+4. **非心跳驱动的示例与测试**：定步长循环 `ExampleStepper_fixedStepLoop`（只推进醒着的 Runtime）、`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`（与抖动的手动驱动逐 tick 相同）、`TestBuffsOnAFixedStepLoop`；手动驱动 `TestStepper*`（`manualDriver`）、`TestBuffsSteppedByHand`。没有迁移现有 Lockstep / 夹具代码（按要求）。
+5. **使用方**：`rg` 全仓——game-demo 怪物只用 `AttachBeat` / `BuffBeat` / `BeatReg` / `CurrentTick`，名字与语义都不变，不用改；生成器的技能指南与 CODEGEN_REFERENCE 改了说明；其余引用都在文档里（已改）。`gameplay/actionflow` / `ai` 的同名 `BeatConfig` / `DefaultBeatName` 与本轮无关。
+
+**与要求的偏差（如实记录）**：
+
+1. **`Wake` 返回 `error`**：要求举例是 `Wake()`；心跳的 `Reg.Start` 在 Remote 共享模式下返回 `ErrHeartbeatRemoteShared`，原来 `Start` / `Input` / `Do` / `Sync` 会把它交给调用方，去掉返回值就要换成回调，行为会变。
+2. **通知是电平式的，不只在边沿**：要求写的是“从空闲变成有工作时调 Wake、推进到空闲时调 Sleep”。推进器若自己记“已叫醒”，心跳的启动随回滚作废、Remote 共享模式停掉心跳之后就再也不会叫醒（原来 `Sync` 读 `Reg.Active` 才补得上）；所以推进器每次推进 / 输入后按状态通知、驱动去重（心跳驱动按 `Reg.Active`，与原来相同，不多事务登记）。变异 S1（改成边沿式）让 `TestStepperNotifiesTheDriverByLevel` 变红。
+3. **`StepToTick` 也带倍率参数**：追帧上限乘 max(倍率, 1)，给 tick 的驱动同样可能在变速里；定步长循环传 1。
+4. **demo 只改了收尾**：心跳驱动保留了原名与语义，怪物的接线不用改；只在 `ActorComponent.OnDestroy` 加 `combat.OnDestroy`（上一条）。按要求生成 game-demo 工程跑了 build / vet / `test -race`。
+5. **Buff 的不走心跳驱动不随事务**：心跳的启停随事务；一般驱动不是事务的一部分，施加限时 buff 的事务回滚后驱动仍醒着，下一步没有工作才睡（多醒一步，`TestARolledBackBuffCostsANonTransactionalDriverOneStep`），写进 KNOWN-LIMITS。
+
+**红绿证据**：纯重构，原用例在重构后照常通过（行为不变的证据）；新结构的强制点用变异核对给出：原 17 项按新位置重做，另加 R6b / R6c（适配层的拍与输入各自传域倍率）、S1（电平式通知）、D1 / D2（心跳驱动的 Wake / Sleep）、B3b（手动一步的 tick），加撤销 C1～C5（`CloseBuffDriver` 不撤销登记 / 不清接线 / 非心跳驱动不 Sleep、`OnDestroy` 不卸下、`RuntimeBeat.Close` 不撤销），共 28 项，每项对应用例在当前代码上变红，原文全文在 impl §2G 的表里。摘要：R1 → `every other tick seed 1: per-tick results differ`、`fixed-step loop: per-tick results differ from the jittered driver`；R7 → `the loop stepped 158 times over 161 frames with 1 still awake, …`；S1 → `Sync after the driver lost its state: awake false (<nil>), want woken again`；B4 → `periodic work from frame 20 to 25: steps [{Tick:20 …} … {Tick:30 Expired:[]}], want frames 20..25`。
+
+**验证**：见本轮交付报告（gofmt、vet、glsvet、`-race ./gameplay/... ./wiring/...`、`-race -count=20 ./gameplay/skill/...`、codegen、根包、全量、生成 game-demo 工程 build / vet / `test -race`；全部为 0 才提交文档）。
 
 ### 生成器接入实施结果（2026-10-21）
 
@@ -1442,6 +1488,7 @@ roost 的取舍：
 ### 维护者 2026-10-21 晚：各期待拍板项的决定
 
 - **Remote（先不处理，记录方向）**：Remote 托管实体理论上不应挂 Move（`movement`）与心跳（`heartbeat`）组件。真实 Remote 共享模式验证提出的 `MapBasic.Sync` 不加；“运行中被停掉的动作暂停、回到独占后 `Sync` 接着走，共享期间新发起的才失败”维持现状。后续方向：Remote 托管实体禁止挂移动 / 心跳组件（装配或登记时拒绝），另行设计。
+- **技能 / Buff 的驱动方式**：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只使用接口。技能与 Buff 两边都改。已实施，见上文“驱动接口实施结果”。
 - **其余按推荐（即现状）**：
   - P5：① 技能心跳放 `combatcomponent`（`skill` 不依赖 Nest）；② Buff 心跳固定按 `Granularity` 取档；③ 超过追帧上限的部分一次跳过、计数并限频 Warn；④ `TickBuffs` 保留为导出原语。
   - 选项 C：批大小 64、批量作业时间片 200µs（合批优化压测后再调）；`DispatchTryBatch` 对业务导出，文档注明目前只有心跳使用。

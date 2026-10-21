@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 技能与 Buff 的推进与驱动方式分开：心跳只是驱动之一（DESIGN-TODO D20，维护者 2026-10-21 决定）
+
+- **维护者决定（2026-10-21）**：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只使用接口。技能与 Buff 两边都改。
+- **新增（`gameplay/skill`）**：`Driver{Wake() error; Sleep()}`（驱动方式；通知是电平式的，同一状态可能连续调多次，实现必须幂等）；`Stepper`（`NewStepper(runtime, StepperConfig{Clock, Now, Rate, Driver, MaxCatchUp, Name})`；驱动的一步 `StepTo(now, rate)` / `StepToTick(tick, rate)`；输入 `Start` / `Input` / `Do` / `CatchUp`；`Sync`、`Tick`、`Runtime`、`Clock`、`Stats`）、`StepperStats`、`DefaultMaxCatchUp`（1s）。原 `RuntimeBeat` 的推进规则（逐 tick、空闲点、输入跳、追帧上限、不倒退、跳跃计数与 Warn）整体搬到这里；`skill` 仍不依赖 Nest、heartbeat、timedomain、fctx，输入侧的时刻经 `StepperConfig.Now` / `Rate` 由适配层给。
+- **新增（`gameplay/skill/combatcomponent`）**：与驱动无关的 buff 推进 `CombatComponent.DriveBuffs(BuffDriveConfig{Clock, Now, Driver, Periodic, OnStep, OnError, Name})`、`BuffStep{Tick, Expired}`、`StepBuffs(now)` / `StepBuffsToTick(tick)`、`BuffsPending`、`NextBuffDue`、`SyncBuffDriver`；`TickBuffs` 仍是导出的原语（维护者 2026-10-21 P5 ④）。
+- **改为薄包装（心跳驱动）**：`NewRuntimeBeat` 返回的 `RuntimeBeat` 嵌入 `*skill.Stepper`（`Start` / `Input` / `Do` / `CatchUp` / `Sync` / `Tick` / `Runtime` / `Stats` 都是 Stepper 的），只多心跳登记 `Reg()`；`AttachBeat` 改为心跳驱动的 `DriveBuffs`。两者共用未导出的 `heartbeatDriver`（`Wake` → `Reg.Start`、`Sleep` → `Reg.Stop`，按 `Reg.Active` 去重）。时间域、`dispatch` / `batch` 两种投递方式、Remote 共享模式下启动报错（`ErrHeartbeatRemoteShared`）的行为不变。
+- **新增撤销（与 `heartbeat.Reg.Close`、actionflow / ai 的 `Close` 一致）**：`CombatComponent.CloseBuffDriver()`（心跳驱动 `Reg.Close`、其他驱动一次 `Sleep`，之后可以重新 `DriveBuffs` / `AttachBeat`）；`CombatComponent.OnDestroy` 调它（原来是空的）；`RuntimeBeat.Close()` / `Closed()`。game-demo 怪物的 `ActorComponent.OnDestroy` 转调 `combat.OnDestroy`。换场景（换时间域）按同名重建后 `SyncBuffDriver` / `Sync`。
+- **不兼容（线上未部署，不做兼容）**：`combatcomponent.RuntimeBeatStats` 删除，改用 `skill.StepperStats`；`CombatComponent.SyncBeat` 改名 `SyncBuffDriver`；`BuffBeat` 改为嵌入 `heartbeat.Beat` 与 `BuffStep`（`Tick` / `Expired` 字段名不变，按字段名写的复合字面量要改成 `BuffStep: BuffStep{...}`）；`CurrentTick` 在没装 `DriveBuffs` / `AttachBeat` 时 panic（原来是没装 `AttachBeat`）；`RuntimeBeatConfig.MaxCatchUp` 短于一个 tick 的报错文本改为 `skill: stepper …`。存储格式与协议不变，无需清数据。
+- **迁移的使用方**：game-demo 的怪物（`demo/game/entities/monster/actor_component.go.tmpl`）用的 `AttachBeat` / `BuffBeat` / `BeatReg` / `CurrentTick` 名字与语义都没变，只在 `OnDestroy` 里加了 `combat.OnDestroy`（撤销 buff 心跳）；生成器的技能指南（`render_workflow_docs.go` “运行时边界”）与 CODEGEN_REFERENCE “技能与 Buff” 改为说明推进器与驱动的关系。
+- **测试**：推进器层 `gameplay/skill/stepper_test.go`（4 种抖动 × 5 个种子逐 tick 相同；只推进醒着的 Runtime 的定步长循环与抖动驱动逐 tick 相同；追帧上限与倍率；电平式通知）、示例 `ExampleStepper_fixedStepLoop`；不走心跳的 buff 驱动 `combatcomponent/buff_stepper_test.go`（定步长循环、回滚后多醒一步、手动驱动）；心跳适配层新增 `TestRuntimeBeatPassesTheDomainRate`，原心跳用例保留并在两种投递方式下跑。根包结构守卫：`TestCombatAndSkillDependencyBoundary` 增加 `skill` 不得直接 import nest / heartbeat / timedomain / fctx，新增 `TestCombatComponentHeartbeatStaysInTheAdapters`（只有 `beat.go`、`runtime_beat.go` import heartbeat / timedomain）。变异核对按新结构重做 28 项（原 R1～R8、B1～B7、T1、T2 加 R6b、R6c、S1、D1、D2、B3b 与撤销 C1～C5），各让对应用例变红，原文见 [impl/10-time §2G](docs/framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)。
+- **限制**：见 [KNOWN-LIMITS“技能与 Buff 的推进与驱动”](docs/maintenance/KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)（新增：不随事务的驱动在回滚后多醒一步；没有迁移现有 Lockstep 房间与 `scripts/testdata` 夹具）。
+
 ### Interest 单写者：全部写入口只登记有序日志，应用方按调用顺序执行（AOI 视野重构）
 
 - **原因**：近两周 Interest 连续出问题——RR-20261006-48（`04378f7c`）、D19 改写规则（`d2c2cdce`）后的 Leave→Enter / Hide→Show 旧移动拖回新视野、16 视野 Nest 失守后的应用线程与两种模式（`6304ffa0` / `01e4f736` / `b6ef5573`）、ApplySync 每周期一批的吞吐上限、直接 API 在业务 worker 上等 AOI 批次（实测 15～46ms）。根因是三个写入口（直接调用、视野登记表、排队事实）之间没有全序，方案与 ssr 对照见 [REFACTOR-2026-10-21-interest-single-writer](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md)。
@@ -65,9 +77,9 @@
 - **新增（`gameplay/skill/combatcomponent`）**：buff 心跳 `CombatComponent.AttachBeat(BeatConfig{Host, Clock, Name, Granularity, Options, TimeDomain, Periodic, OnBeat, OnError})`、`BeatReg`、`CurrentTick`、`SyncBeat`、`BuffBeat`——有限时 buff 或业务的周期工作时挂心跳（缺省 1Hz，按 `Granularity` 取档），每拍 `TickBuffs(本拍 tick)`，清空后停，启停随事务；加载后的第一拍清掉停服期间到期的记录。技能 Runtime 心跳 `NewRuntimeBeat(runtime, RuntimeBeatConfig{Host, Clock, Name, Period, MaxCatchUp, Options, TimeDomain, OnError})`、`RuntimeBeat.Start` / `Input` / `Do` / `CatchUp` / `Sync` / `Tick` / `Stats`——有工作时挂心跳、忙时逐 tick 推进到本拍的 tick、空闲时停在空闲点并停心跳，输入先推进到输入的 tick；同一输入序列在不同心跳抖动下逐 tick 相同，超过追帧上限时剩余一次跳过并计数。两者都可挂场景时间域（时停时 tick 不前进、2 倍速走两倍），D22 的“技能 / Buff 没有自动接域”关闭。
 - **行为变化**：`CombatComponent.TickBuffs` 在没有到期 buff 时直接返回，不再登记逆操作（事务外调用也不再 panic）；它保留为推进一步的原语，快池上的实体改用 `AttachBeat`。没装 `AttachBeat` 的组件行为不变。
 - **迁移**：仓库内没有快池上手写周期消息调 `TickBuffs` / `Runtime.Advance` 的业务调用方（game-demo、生成器、`scripts/testdata` 夹具都没有）；`status_bridge_test` / `state_bridge_test` 直接调 `TickBuffs` 测原语本身、`skillsync` 与 `examples` 直接调 `Advance` 测纯 Runtime，保持原样；`scripts/testdata` 玩法夹具的 `Advance(now)` 是按期限推进的对局逻辑（entitytimer），按 P5 表不迁。
-- **测试**：变异核对 17 项（R1～R8、B1～B7、T1、T2）各让对应用例变红，原文见 [impl/10-time §2G](docs/framework/impl/10-time.md#2g-技能与-buff-的心跳)；心跳用例 `-race -count=30` 通过。没有新指标。
+- **测试**：变异核对 17 项（R1～R8、B1～B7、T1、T2）各让对应用例变红，原文见 [impl/10-time §2G](docs/framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)；心跳用例 `-race -count=30` 通过。没有新指标。
 - **升级**：线上未部署，不做兼容；新增 API，无需迁移数据。
-- **限制**：见 [KNOWN-LIMITS“技能与 Buff 的心跳”](docs/maintenance/KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。
+- **限制**：见 [KNOWN-LIMITS“技能与 Buff 的心跳”](docs/maintenance/KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。
 
 ### Nest 批量心跳作业 DispatchTryBatch 与心跳投递开关，缺省关闭（DESIGN-TODO D20 选项 C，维护者 2026-10-21 批准按推荐做）
 

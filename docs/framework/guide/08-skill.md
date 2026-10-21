@@ -30,7 +30,7 @@ Spawn 是由 Runtime 驱动的飞行物、区域、光束、位移、环绕等�
 
 ## 4. 事务与战斗边界
 
-Skill Runtime 不在 Nest DAO 回滚域内；handler 失败不会自动回退 cooldown/ammo/cast/proc/Spawn 账本。战斗 DAO 可以随实体事务恢复，两者不能混淆。HostAdapter 是需业务包装的适配器，不等于 MemoryHost 的全部能力。Buff 到期与 Runtime 推进在 Nest 快池上都由实体心跳驱动（`CombatComponent.AttachBeat`、`combatcomponent.NewRuntimeBeat`，共用 `skill.TickClock`，见 [10-time §4E](10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)）；Runtime 不会替战斗组件推进 buff，两者各自挂在自己的实体上。
+Skill Runtime 不在 Nest DAO 回滚域内；handler 失败不会自动回退 cooldown/ammo/cast/proc/Spawn 账本。战斗 DAO 可以随实体事务恢复，两者不能混淆。HostAdapter 是需业务包装的适配器，不等于 MemoryHost 的全部能力。Buff 到期与 Runtime 推进的规则在与驱动无关的推进器里（`skill.Stepper`、`CombatComponent.DriveBuffs`，经 `skill.Driver` 接口通知驱动，共用 `skill.TickClock`）；心跳只是驱动方式之一：Nest 快池上的实体用心跳驱动（`CombatComponent.AttachBeat`、`combatcomponent.NewRuntimeBeat`），房间自己的定步长循环直接用推进器（见 [10-time §4E](10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)）。Runtime 不会替战斗组件推进 buff，两者各自由自己的驱动推进。
 
 ## 5. 同步与持久格式
 
