@@ -342,9 +342,51 @@ main D22 的时间契约已同步：建档读 fctx.Now，行军／发现／消�
 | inbox-recover | 重投前先逐字比较两边完整冷事实；八路重投不重复收件，改正文／改确认内容拒绝；Ack 注入失败不改变地图；随后重投并确认 |
 | inbox-verify | 再次冷加载两边完整事实，确认位仍在，待办为空，直接重试原收件与确认均幂等，钱包不变 |
 
-现在两个静态原服各运行九个顺序子进程、三个 SIGKILL 断点。Player 与 `ROOST_SLG_REMOTE=1` 模式都走同一组报告验收；Remote 模式的联盟权威仍按既有接法交接，**报告的 ScoutMap 与收件 Player 仍在同一个原服 Runtime**，不据此声称跨服报告 RPC 已通过。另有纯协议回归覆盖错地图／错 Key、查询失败、查询或收件取消后迟到成功、收件错误与 Ack 错误，保证失败阶段不继续产生后续副作用。
+上述本服链在两个静态原服各运行九个顺序子进程、三个 SIGKILL 断点。Player 与 `ROOST_SLG_REMOTE=1` 模式都走同一组报告验收；Remote 模式的联盟权威仍按既有接法交接，**报告的 ScoutMap 与收件 Player 仍在同一个原服 Runtime**，不据此声称跨服报告 RPC 已通过。另有纯协议回归覆盖错地图／错 Key、查询失败、查询或收件取消后迟到成功、收件错误与 Ack 错误，保证失败阶段不继续产生后续副作用。
 
-本轮新增 Inbox 与地图收件归属仅用于每次新建的隔离消费者库；没有提供已有生产存档的 schema 转换。后续重点是跨服地图权威和原服路由、全局地图目录／公平调度、长期账本归档、客户端通知与真实部署容量。
+本轮新增 Inbox 与地图收件归属仅用于每次新建的隔离消费者库；没有提供已有生产存档的 schema 转换。下节继续验证固定地图权威到原服的真实跨进程路由；Remote 地图交接、全局地图目录／公平调度、长期账本归档、客户端通知与真实部署容量仍待实施。
+
+### 跨服报告：固定地图权威到静态原服的真实 RPC
+
+本节将前述两笔持久事务放到独立进程。地图 2000 向静态原服 1000 投递，地图 2001 向静态原服 1001 投递；每对依次执行。地图进程只加载自己的 ScoutMap，原服进程只读取／写入原服 Player，两者独立 Runtime、Nest 与 WAL；父进程只控制故障和检查结果，不代替收件处理。
+
+```mermaid
+sequenceDiagram
+    participant M as 固定地图权威 / ScoutMap
+    participant B as NATS Bus
+    participant H as 静态原服 / Player
+    M->>M: 读取持久 Reports 中未 ACK 的原身份
+    M->>B: CallTo(reporthome, report.HomeSID, receive)
+    B->>H: ReportReceiver 校验来源与目的归属
+    H->>H: 生成 Sender 严格提交 Inbox 正文与永久身份
+    H--xM: 成功响应未返回，RPC 到期
+    Note over M,H: 两进程各自未投影 WAL，随后分别 SIGKILL
+    M->>M: 恢复先比完整冷事实，仍有待办
+    H->>H: 恢复先比完整 Inbox / 钱包
+    M->>B: 原身份重投
+    B->>H: 同身份同正文返回持久收件成功
+    H-->>M: 确认收件
+    M->>M: 独立地图事务保存 ReportAck
+```
+
+接入代码：[ReportReceiver](../../scripts/testdata/slg-alliance/scout/report_rpc.go)、[跨进程验收](../../scripts/testdata/slg-alliance/player/cross_report_test.go)。地图端仍用 `ReportDelivery`，只把 Receive 回调换为正式 `bus.CallTo(ctx, "reporthome", report.HomeSID, "receive", report, &accepted)`。Bus 的成功返回还必须带 `accepted=true`，才允许地图确认。接收方注册 `HandleRpc("receive", receiver.Handle)`，校验 FromSid、配置中的地图 ID／原服 sid／玩家 ID，再调用原服生成 Sender；不根据请求内容重新选择收件人。
+
+`FromSid` 是受信任服务总线里的路由声明，**不是密码学认证**。本验收使用隔离本地 NATS，验证来源 allowlist 和目的归属拒绝；生产必须配置服务凭据与 subject ACL，防止任意连接伪造来源。这里的固定地图路由也不是 Remote owner/fence；不能同时启动多个地图写者，让不同本地 WAL 写相同地图身份。
+
+在原有脚本中自动执行，无需新增开关：
+
+| 场景 | 实际验证 |
+| --- | --- |
+| 非地图来源直接投递 | 管理端 FromSid 不在地图 allowlist，拒绝 |
+| 合法地图来源、错误目的 | 错 HomeSID、Recipient 或 MapID 均拒绝 |
+| Player 提交后不返回成功 | 接收端保存完整冷事实标记后等待真实 RPC context 到期；地图工作轮次返回错误，ReportAck 不变 |
+| 两边独立崩溃 | 地图建档／行军／到达三条未投影 WAL，原服新增收件一条未投影 WAL；分别 SIGKILL，两边都不是先落 Mongo 再模拟重启 |
+| 两边恢复再投递 | 在开放 RPC 前逐字核对完整冷事实；八个并发地图工作轮次重投同一信封，Player 收件箱不变、钱包不变、地图待办清空 |
+| 正常排空与第三次启动 | 先排空 Bus 再关闭 Runtime；第三组进程再次核对两边完整最终事实，空待办重跑不改状态 |
+
+每个原服在本服九进程之后追加三组地图／原服进程，共十五次子进程执行、五次 SIGKILL；两个原服都执行。Player 与 Remote 联盟模式均执行该链，但 Remote 模式只是沿用已有联盟权威，**本节 ScoutMap 仍是固定 sid 权威，尚未接 Managed Remote 地图交接**。测试在同机多进程、真实 NATS 与 Mongo 上完成，不证明跨机 HA、网络分区、生产 ACL、自动地图目录或容量。
+
+main 本轮合入的批量作业按目标重新冻结业务时间、心跳 Reg 安全格式化已读源码并通过 fctx／Nest／heartbeat race 回归；本消费者继续走普通生成 Sender，不声称已接批量心跳或测过其性能。通用慢派发 trace 的可变参数竞争仍按 [已知限制](../maintenance/KNOWN-LIMITS.md) 保留。
 
 ### main 视野 API 迁移
 
