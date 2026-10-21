@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
+	"example.com/slg-alliance-practice/game/scout"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
@@ -82,6 +83,7 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 			X, Y, VisionMask, ScoutUntil int64
 			Revision                     uint64
 			Targets                      map[int64]spatial.Point
+			Routes                       map[int64]scout.Route
 		}
 		if e = json.Unmarshal([]byte(raw), &state); e != nil {
 			return e
@@ -100,6 +102,16 @@ func newDurableVision(t *testing.T, n *rewardRuntime, business clock.Business) *
 		positions = state.Targets
 		// 期限是业务事实，过期时不延长、不删档；读不到合法期限即不授予临时视野。
 		now := business.Now().UnixMilli()
+		for id, route := range state.Routes {
+			if _, ok := positions[id]; !ok {
+				return fmt.Errorf("route for unknown target")
+			}
+			at, err := route.At(now)
+			if err != nil {
+				return err
+			}
+			positions[id] = at
+		}
 		var visible []int64
 		for id, at := range positions {
 			x, y := state.X-at.X, state.Y-at.Y

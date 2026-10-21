@@ -45,7 +45,8 @@ import sys
 p=Path(sys.argv[1]);s=p.read_text().replace('type ScoutMapDao struct {', 'type ScoutMapDao struct {\n State string `bson:"state" dao:"persist"`');p.write_text(s)
 MAP
 cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handler/alliance_rewards.go
-mkdir -p game/alliance
+mkdir -p game/alliance game/scout
+cp "$repo_root"/scripts/testdata/slg-alliance/scout/*.go game/scout/
 cp "$repo_root"/scripts/testdata/slg-alliance/*.go game/alliance/
 for name in runtime delivery spatial vision service; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
 if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
@@ -62,7 +63,7 @@ REMOTE
  cp "$repo_root/scripts/testdata/slg-alliance/remote/handlers.go.txt" game/handler/alliance_authority.go
  for name in runtime store remote; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
 fi
-gofmt -w db/def/*.go game/handler/*.go game/alliance/*.go
+gofmt -w db/def/*.go game/handler/*.go game/alliance/*.go game/scout/*.go
 
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
@@ -73,6 +74,7 @@ else
  expected=TestSLGAlliancePlayerDelivery
 fi
 if [[ "$(grep -c "^--- PASS: $expected " "$review_root/delivery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/delivery.log"; then exit 1; fi
+go test -mod=mod -race -count=1 ./game/scout
 go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check

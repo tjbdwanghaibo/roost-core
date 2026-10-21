@@ -16,6 +16,7 @@ import (
 	scoutmap "example.com/slg-alliance-practice/game/entities/scout_map"
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
@@ -106,8 +107,8 @@ func rewardChild(t *testing.T, mode string) {
 				return e
 			}
 			stats := n.projector.Stats()
-			if stats.Projected != 0 || stats.WALUnacked != 10 {
-				return fmt.Errorf("want ten unprojected strict records: %+v", stats)
+			if stats.Projected != 0 || stats.WALUnacked != 11 {
+				return fmt.Errorf("want eleven unprojected strict records: %+v", stats)
 			}
 			mapRaw, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
 			if e != nil {
@@ -159,6 +160,9 @@ func rewardChild(t *testing.T, mode string) {
 	check(t, s.Sync_AllianceMapInit(ctx, n.mapID))
 	if rev, e := s.Sync_AllianceTargetMove(ctx, n.mapID, "target-in", 1, 503, 700, 700, false); e != nil || rev != 2 {
 		t.Fatalf("cold target receipt: %d %v", rev, e)
+	}
+	if rev, e := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, clock.Process(), false); e != nil || rev != 6 {
+		t.Fatalf("cold march receipt: %d %v", rev, e)
 	}
 	mapAfter, e := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
 	check(t, e)
@@ -248,7 +252,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(context.Background())
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_REWARD_DB")).Drop(context.Background()))
-	t.Log("same activity workflow: both static homes credit generated Player DAO; ten unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
+	t.Log("same activity workflow: both static homes credit generated Player DAO; eleven unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 	for _, sid := range []int32{1000, 1001} {

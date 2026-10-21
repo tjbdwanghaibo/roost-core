@@ -13,6 +13,7 @@ import (
 	"time"
 
 	db "example.com/slg-alliance-practice/db"
+	"example.com/slg-alliance-practice/game/scout"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
 )
@@ -153,7 +154,14 @@ type scoutMove struct {
 	Target, X, Y       int64
 	Expected, Revision uint64
 }
+type scoutMarchReceipt struct {
+	Target             int64
+	Expected, Revision uint64
+	Route              scout.Route
+}
 type scoutMapState struct {
+	Routes   map[int64]scout.Route
+	Marches  map[string]scoutMarchReceipt
 	Revision uint64
 	Targets  map[int64]spatial.Point
 	Moves    map[string]scoutMove
@@ -162,7 +170,7 @@ type scoutMapState struct {
 func readScoutMap(m IAllianceMapEntity) (scoutMapState, error) {
 	var state scoutMapState
 	err := json.Unmarshal([]byte(m.Dao().GetState()), &state)
-	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil {
+	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil {
 		return state, errAllianceReward
 	}
 	return state, nil
@@ -183,7 +191,7 @@ func handlerAllianceMapInit(m IAllianceMapEntity) error {
 	}
 	return saveScoutMap(m, scoutMapState{Revision: 1, Targets: map[int64]spatial.Point{
 		501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700},
-	}, Moves: map[string]scoutMove{}})
+	}, Moves: map[string]scoutMove{}, Routes: map[int64]scout.Route{}, Marches: map[string]scoutMarchReceipt{}})
 }
 
 // 坐标来自可信地图模拟。固定命令身份与原参数同持久写入，未知结果只重试原身份；
@@ -204,7 +212,13 @@ func handlerAllianceTargetMove(m IAllianceMapEntity, key string, expected uint64
 		}
 		return old.Revision, nil
 	}
-	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves) >= 128 {
+	if _, ok := state.Routes[target]; ok {
+		return 0, errAllianceReward
+	}
+	if _, ok := state.Marches[key]; ok {
+		return 0, errAllianceReward
+	}
+	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves)+len(state.Marches) >= 128 {
 		return 0, errAllianceReward
 	}
 	state.Revision++
@@ -235,6 +249,59 @@ func handlerAllianceVision(p IAllianceRewardPlayerEntity, m IAllianceMapEntity) 
 		X, Y, VisionMask, ScoutUntil int64
 		Revision                     uint64
 		Targets                      map[int64]spatial.Point
-	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetVisionMask(), p.Dao().GetScoutUntil(), state.Revision, state.Targets})
+		Routes                       map[int64]scout.Route
+	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetVisionMask(), p.Dao().GetScoutUntil(), state.Revision, state.Targets, state.Routes})
 	return string(raw), err
+}
+
+// 行军命令只由可信服务器调用，时钟来自服务端注入。重试不重算 Start/End。
+// 本教学规则为十秒直线行军，不允许中途改道；到达后可用新身份开启下一段。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, business clock.Business, reject bool) (uint64, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return 0, err
+	}
+	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 || business == nil {
+		return 0, errAllianceReward
+	}
+	if old, ok := state.Marches[key]; ok {
+		if old.Target != target || old.Expected != expected || old.Route.To != (spatial.Point{X: x, Y: y}) {
+			return 0, errAllianceReward
+		}
+		return old.Revision, nil
+	}
+	if _, ok := state.Moves[key]; ok {
+		return 0, errAllianceReward
+	}
+	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves)+len(state.Marches) >= 128 {
+		return 0, errAllianceReward
+	}
+	now := business.Now().UnixMilli()
+	if now <= 0 || now > math.MaxInt64-scout.DurationMillis {
+		return 0, errAllianceReward
+	}
+	from := state.Targets[target]
+	if old, ok := state.Routes[target]; ok {
+		if old.Validate() != nil || now < old.End {
+			return 0, errAllianceReward
+		}
+		from = old.To
+	}
+	route := scout.Route{From: from, To: spatial.Point{X: x, Y: y}, Start: now, End: now + scout.DurationMillis}
+	if err = route.Validate(); err != nil {
+		return 0, err
+	}
+	state.Revision++
+	state.Targets[target] = from
+	state.Routes[target] = route
+	state.Marches[key] = scoutMarchReceipt{target, expected, state.Revision, route}
+	if err = saveScoutMap(m, state); err != nil {
+		return 0, err
+	}
+	if reject {
+		return 0, errors.New("injected march rollback")
+	}
+	return state.Revision, nil
 }

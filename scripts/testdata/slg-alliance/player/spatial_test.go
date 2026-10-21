@@ -10,6 +10,7 @@ import (
 
 	player "example.com/slg-alliance-practice/game/entities/player"
 	sender "example.com/slg-alliance-practice/game/handler/syncsender"
+	"example.com/slg-alliance-practice/game/scout"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
@@ -128,7 +129,16 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	}
 	now := deadline - 1
 	if !write {
-		now = deadline + 1
+		raw, err := sender.NewAllianceRewardsSender(n.nest).Sync_AllianceMapSnapshot(ctx, n.mapID)
+		check(t, err)
+		var state struct{ Routes map[int64]scout.Route }
+		check(t, json.Unmarshal([]byte(raw), &state))
+		route, ok := state.Routes[503]
+		if !ok {
+			t.Fatal("cold march missing")
+		}
+		check(t, route.Validate())
+		now = route.End + 1
 	} // 离线越过期限；先前完整冷事实比较包含此期限。
 	view := newDurableVision(t, n, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }))
 	vision := func(want ...int64) {
@@ -149,7 +159,21 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	}
 	if !write {
 		replayInit()
-		vision()
+		vision(503) // 离线越过到达时刻，第一次 Full 就发布终点。
+		// 已到达可以申请下一段；注入失败验证新路线与起点更新一起 undo。
+		s := sender.NewAllianceRewardsSender(n.nest)
+		before, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+		check(t, err)
+		_, err = s.Sync_AllianceMarch(ctx, n.mapID, "next-route", 6, 503, 600, 600, clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) }), true)
+		if err == nil || err.Error() != "injected march rollback" {
+			t.Fatalf("arrived route could not start next leg: %v", err)
+		}
+		after, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+		check(t, err)
+		if after != before {
+			t.Fatal("next leg rollback changed cold route")
+		}
+		vision(503)
 		expect(true, false)
 		return
 	}
@@ -331,6 +355,51 @@ func verifyPlayerSpatial(t *testing.T, n *rewardRuntime, write bool) {
 	now = deadline + 1
 	vision()
 	verifyVisionApp(t, view)
+	// 先留下期限前的在途事实，后续进程按同一原路线求位置，不能重设出发时间。
+	marchBefore, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, err)
+	business := clock.BusinessFunc(func() time.Time { return time.UnixMilli(now) })
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, true); err == nil {
+		t.Fatal("march rollback accepted")
+	}
+	marchAfter, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, err)
+	if marchAfter != marchBefore {
+		t.Fatal("route survived rollback")
+	}
+	revision, err := s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, false)
+	check(t, err)
+	if revision != 6 {
+		t.Fatal("march revision", revision)
+	}
+	started := now
+	vision()
+	now = started + scout.DurationMillis/2
+	vision() // (825,825)，仍未进入半径 50。
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "reroute", 6, 503, 600, 600, business, false); err == nil {
+		t.Fatal("active route replaced")
+	}
+	if _, err = s.Sync_AllianceTargetMove(ctx, n.mapID, "teleport", 6, 503, 700, 700, false); err == nil {
+		t.Fatal("active route teleported")
+	}
+	if _, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 701, 700, business, false); err == nil {
+		t.Fatal("changed march identity accepted")
+	}
+	original, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, err)
+	now = started + 9*scout.DurationMillis/10
+	revision, err = s.Sync_AllianceMarch(ctx, n.mapID, "march", 5, 503, 700, 700, business, false)
+	check(t, err)
+	if revision != 6 {
+		t.Fatal("duplicate march revision", revision)
+	}
+	afterReplay, err := s.Sync_AllianceMapSnapshot(ctx, n.mapID)
+	check(t, err)
+	if original != afterReplay {
+		t.Fatal("duplicate march extended deadline")
+	}
+	vision(503) // (725,725) 已进入；此后在途 SIGKILL，不持久化每一帧。
+
 	t.Log("scouting: deadline persisted, before/exact/after expiry checked over TCP, duplicate init never renews")
 	t.Log("strict spatial movement: precommit hidden, rollback/invalid coverage unchanged, two blocks one subject, remove one block, TCP public position only")
 }
