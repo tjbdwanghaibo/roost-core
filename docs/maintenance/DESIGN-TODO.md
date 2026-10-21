@@ -24,6 +24,7 @@
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；P2～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务，未排期 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -1153,3 +1154,19 @@ roost 的取舍：
 3. 位置是否每次心跳持久化：建议位置为 nopersist（只同步），按周期或离开场景时落库一次；还是每次心跳 strict 写入。
 4. ~~心跳频率~~：由上文方案给出（按登记、移动中才高频、空闲停），缺省值见 §9 第 6 条。
 5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起（与 §9 第 14 条一起定）。
+
+## D21 吸收 ssr 的优秀组件进 `gameplay`
+
+**状态：维护者 2026-10-21 登记为后续任务，未排期。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
+
+**原则**：按 roost 的模型重写，不复制 ssr 代码；只收“与具体游戏玩法无关、多数游戏都会用”的通用部件，玩法规则留给业务（demo 是参考，生成器只生成框架内容）；所有控制实体行为的逻辑走 actionflow（D20 维护者决定），周期推进走心跳（D20）；每个组件先写方案（与现有 roost 包的关系、事务 / 回滚 / 同步语义、持久化），维护者确认后再实施。
+
+**ssr 候选（待调研，按可能的通用性初排；`gameplay` 现有 actionflow / ai / attribute / heartbeat / skill，D20 P2 新增 movement）**：
+
+- 行为与调度：`action`、`action_list`、`mission`、`ai` / `ai_engine` / `bt_engine`（行为树）、`trigger_engine`、`eca_man`（事件-条件-动作）、`state`、`cooldown`、`timer`。
+- 空间与移动：`map_basic`、`move`、`follow_agent`、`rvo`（避让）、`dynamic_obstacle`、`hexagon` / `hexagon_map`、`search_entity`、`observe` / `radar`、`mist`（迷雾）。
+- 战斗与效果：`effect` / `effectid`、`damage`、`aggro`（仇恨）、`fight`、`skill_pool`、`power`。
+- 经济与道具：`bag` / `bag_light`、`currency`、`prop`、`drop`、`store`、`gacha`、`limit`（次数 / 频率限制）、`refresh`。
+- 社交与组织（多数已有 `service/*` 对应，主要是比对补缺）：`team`、`rank` / `top_list_*`、`task` / `taskcore`、`reddot`、`uniqname`。
+
+**下一步（排期后）**：逐项调研 ssr 实现与 roost 现状（是否已有、差距在哪），产出“收 / 不收 / 收哪部分”的清单与优先级，交维护者确认后分批实施。
