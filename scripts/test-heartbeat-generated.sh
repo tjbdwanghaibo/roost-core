@@ -40,12 +40,15 @@ cp "$repo_dir/scripts/testdata/heartbeat/heartbeat_e2e_test.go.txt" internal/boo
 go build -mod=mod ./...
 go vet -mod=mod ./...
 go test -mod=mod -race -count=1 -timeout 10m ./...
-go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestGeneratedHeartbeatBehaviorEndToEnd$' ./internal/bootstrap | tee "$work_dir/e2e.log"
-# 用例必须实际执行并通过：-run 写错或被跳过时 go test 仍会 ok。
-if [[ "$(grep -c '^--- PASS: TestGeneratedHeartbeatBehaviorEndToEnd' "$work_dir/e2e.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$work_dir/e2e.log"; then
-	echo "TestGeneratedHeartbeatBehaviorEndToEnd did not pass" >&2
-	exit 1
-fi
+# 两种投递方式各跑一遍（heartbeat.delivery：dispatch 缺省；batch 是 Nest 批量心跳作业，缺省关闭）。
+for delivery in dispatch batch; do
+	ROOST_HEARTBEAT_DELIVERY="$delivery" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestGeneratedHeartbeatBehaviorEndToEnd$' ./internal/bootstrap | tee "$work_dir/e2e-$delivery.log"
+	# 用例必须实际执行并通过：-run 写错或被跳过时 go test 仍会 ok。
+	if [[ "$(grep -c '^--- PASS: TestGeneratedHeartbeatBehaviorEndToEnd' "$work_dir/e2e-$delivery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$work_dir/e2e-$delivery.log"; then
+		echo "TestGeneratedHeartbeatBehaviorEndToEnd ($delivery) did not pass" >&2
+		exit 1
+	fi
+done
 "$roost" id check
 "$roost" generate --check >> "$work_dir/generate.log" 2>&1
 succeeded=1

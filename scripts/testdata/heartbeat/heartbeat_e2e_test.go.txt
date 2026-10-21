@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,10 @@ func TestGeneratedHeartbeatBehaviorEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := viper.New()
+	// 投递方式（heartbeat.delivery）：缺省 dispatch；脚本另用 batch（Nest 批量心跳作业）再跑一遍。
+	if delivery := os.Getenv("ROOST_HEARTBEAT_DELIVERY"); delivery != "" {
+		cfg.Set("heartbeat.delivery", delivery)
+	}
 	reg := app.NewRegistry(cfg)
 	if err := reg.Register(mods.ModDataEngine, noDurableStore{}); err != nil {
 		t.Fatal(err)
@@ -79,6 +84,21 @@ func TestGeneratedHeartbeatBehaviorEndToEnd(t *testing.T) {
 	if !ok {
 		t.Fatal("nest engine not published")
 	}
+	wantDelivery := os.Getenv("ROOST_HEARTBEAT_DELIVERY")
+	if wantDelivery == "" {
+		wantDelivery = "dispatch"
+	}
+	if got := string(gameheartbeat.Driver.Delivery()); got != wantDelivery {
+		t.Fatalf("heartbeat.delivery = %q, want %q", got, wantDelivery)
+	}
+	// 批量方式下心跳经 Nest 批量作业交出（快池实体）；单目标方式一个都没有。
+	t.Cleanup(func() {
+		batches := nest.Stats().Queue.Short.TryBatchJobs
+		if (wantDelivery == "batch") != (batches > 0) {
+			t.Errorf("delivery %s: %d Nest batch jobs", wantDelivery, batches)
+		}
+		t.Logf("delivery %s: %d Nest batch jobs", wantDelivery, batches)
+	})
 	ctx := context.Background()
 	request := func(handler string, id int64, params ...any) any {
 		t.Helper()
