@@ -70,9 +70,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、整轮重试。接入层未就绪与玩家没有连接不计 |
 | `entitysync_drain_timeout_total` | Counter | `Manager.Drain` 因 ctx 超时 / 取消而未排空的次数（停机预算不够或有条目卡住；卡住条目见返回的 `*DrainStalledError`） |
 | `entitysync_drain_remaining_entries` | Gauge | 最近一次 Drain 结束时仍未排空的条目数（成功排空为 0） |
-| `entitysync_interest_fact_backlog` | Gauge | Interest 排队事实的积压：排队 + 应用中 + 已应用未结算（同一进程多个 Interest 时是最近写入者的值）。持续逼近 `MaxQueuedFacts`（缺省 65536）= 应用线程跟不上或 Flush 停摆，`Queue*` 将返回 `ErrInterestQueueFull` |
-| `entitysync_interest_apply_duration` | Histogram | Interest 应用线程每一步（取一批已确认事实、AOI 写阶段与并行重评）的耗时；Flush 撞上正在算的一批时最多等这么久 |
-| `entitysync_interest_settle_delay` | Histogram | 一批事实从应用完成到被结算（Flush 政策阶段或直接 `Apply`）的等待；periodic 下通常不超过一个同步周期 |
+| `entitysync_interest_fact_backlog` | Gauge | Interest 排队事实的积压：排队 + 应用中 + 已应用未结算（同一进程多个 Interest 时是最近写入者的值）。持续逼近 `MaxQueuedFacts`（缺省 65536）= 应用线程跟不上（ApplyAsync）或 Flush 停摆，`Queue*` 将返回 `ErrInterestQueueFull` |
+| `entitysync_interest_apply_duration` | Histogram | Interest 每一批排队事实的应用（取一批已确认事实、AOI 写阶段与并行重评）耗时：ApplyAsync 是应用线程每一步，Flush 撞上正在算的一批时最多等这么久；ApplySync 是 Flush 政策阶段里的应用部分 |
+| `entitysync_interest_settle_delay` | Histogram | 一批事实从应用完成到被结算（Flush 政策阶段或直接 `Apply`）的等待；ApplyAsync 在 periodic 下通常不超过一个同步周期，ApplySync 应用后随即结算、接近 0 |
 
 ### 缓存与总线（core）
 

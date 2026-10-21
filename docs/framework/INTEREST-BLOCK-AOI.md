@@ -9,13 +9,13 @@ Nest handler（持 Entity Guard）
   → 手写 SpatialComponent.Move / MoveWithObservedBlocks
   → 校验并准入不可变空间事实 → 写业务 DAO setter
   → Nest 原有 Admit / Confirm / Release
-  → Interest 应用线程读取已确认事实（2026-10-21 起，不在 Flush 里）
+  → 读取已确认事实：ApplySync（缺省）在 Sync Manager 政策阶段里；ApplyAsync 在 Interest 应用线程里
   → 更新块索引 → 并行计算 Observer（AOI 事件留在缓冲里）
   → Sync Manager 政策阶段结算：归并全部订阅来源、说给 Manager
   → 释放事实的内容发布屏障 → 同一 Flush 捕获、编码发送
 ```
 
-应用线程与结算的分工、一致点、唤醒与背压见 [DESIGN-TODO D19“排队事实异步应用”](../maintenance/DESIGN-TODO.md#排队事实异步应用2026-10-21维护者-2026-10-21-给出方向)：每个 Interest 一个应用线程（第一条排队事实时启动），一步在 `mu` 内取一批（≤ `BatchSize`）做写阶段与并行重评；Flush 的政策阶段只结算，结算之后才释放已应用事实的发布屏障，所以内容与它带来的进出视野仍在同一帧。Flush 撞上正在算的一批时最多等这一批。
+两种应用模式（`InterestConfig.ApplyMode`，维护者 2026-10-21 决定由业务按游戏类型选）见 [DESIGN-TODO D19“两种应用模式”](../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)：ApplySync 在 Flush 的政策阶段于 `mu` 内取一批（≤ `BatchSize`）做写阶段与并行重评、随即结算，每玩家视野数不超过主视野 + 8；ApplyAsync 每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算，Flush 撞上正在算的一批时最多等这一批（分工、一致点、唤醒与背压见 [“排队事实异步应用”](../maintenance/DESIGN-TODO.md#排队事实异步应用2026-10-21维护者-2026-10-21-给出方向)）。两种模式都在结算之后才释放已应用事实的发布屏障，所以内容与它带来的进出视野在同一帧。
 
 setter仍只标脏。组件在业务线程中执行位置写入，handler必须传播错误。先做事实准入，队列满/越界不会先调用位置writer。writer应只写可回滚DAO，不能I/O、派发消息或在异步线程修改实体。DAO回滚沿用Nest，空间事实由 `SyncConditionFor` 的提交/拒绝结论控制。
 
@@ -50,12 +50,12 @@ return spatialComponent.SetObservedBlocks(observedBlocks)
 Interest按视野归并（每个空间视野的距离与块覆盖、每个关系视野、self，D19），不新增入口服务、另一套ID调度器或常驻AOI线程池。
 
 - `queueMu` 只保护准入、角色登记、待处理事实与在途预算。Queue*不获取AOI计算锁。
-- `mu` 串行化应用线程的每一步、政策阶段的结算、直接生命周期操作及订阅归并。`BandLayer` 等业务回调维持串行调用，不要求业务突然改成并发安全。
+- `mu` 串行化事实的每一批应用（ApplySync 在政策阶段里，ApplyAsync 在应用线程里）、政策阶段的结算、直接生命周期操作及订阅归并。`BandLayer` 等业务回调维持串行调用，不要求业务突然改成并发安全。
 - `viewMu`（视野登记表）只保护视野定义、挂接与关系成员；业务视野操作只取它，记下变更后由下一次政策阶段在 `mu` 下按顺序应用。
 - 只允许 `mu → queueMu`、`mu → viewMu`，不能反向获取，`queueMu` 与 `viewMu` 不同时持有。Leave / Hide 在短队列锁内改写退出前的位置事实：目标那一半作废，跟随它的视野那一半保留。
-- 已抽取、已应用未结算的事实仍占队列预算（`MaxQueuedFacts`），不能用隐藏的第二条队列绕过容量；应用线程落后或 Flush 停摆时 `Queue*` 返回 `ErrInterestQueueFull`。积压量、应用耗时、结算等待见指标 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`。
+- 已抽取、已应用未结算的事实仍占队列预算（`MaxQueuedFacts`），不能用隐藏的第二条队列绕过容量；Flush 停摆（两种模式）或应用线程落后（ApplyAsync）时 `Queue*` 返回 `ErrInterestQueueFull`。积压量、应用耗时、结算等待见指标 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`。
 
-`BatchSize` 默认1024，是每轮就绪事实的软上限，同一Nest提交的多条事实不会被切开；事实总数由 `MaxQueuedFacts`（默认65536）限制。会检查待确认前缀后面的其他ID，避免一个未确认事务饿死无关实体；同ID后续事实不得越过前驱。批次剩余就绪工作由应用线程立即继续；队里有未确认事实时应用线程按 1ms 起、最长 8ms 退避轮询提交门（periodic 下提交确认没有通知），应用完一批调 `Manager.WakeSync`，on_change 下尽快结算。抽取时在同一个短队列锁内固定框架原子提交门的结果，避免业务刚补齐后半段并提交、政策却只处理已抽出的前半段。
+`BatchSize` 默认1024，是每轮就绪事实的软上限，同一Nest提交的多条事实不会被切开；事实总数由 `MaxQueuedFacts`（默认65536）限制。会检查待确认前缀后面的其他ID，避免一个未确认事务饿死无关实体；同ID后续事实不得越过前驱。批次剩余就绪工作：ApplySync 留给下一次政策阶段（调 `Manager.WakeSync`，on_change 下尽快再来一轮）；ApplyAsync 由应用线程立即继续，队里有未确认事实时按 1ms 起、最长 8ms 退避轮询提交门（periodic 下提交确认没有通知），应用完一批调 `Manager.WakeSync`，on_change 下尽快结算。抽取时在同一个短队列锁内固定框架原子提交门的结果，避免业务刚补齐后半段并提交、政策却只处理已抽出的前半段。
 
 直接Enter/Watch/Show/Move/MoveView/Hide/Leave/Unwatch/SetObserverView与批次由同一协调锁串行。业务持Entity锁时使用Queue*、SpatialComponent或视野操作，不同步等待直接生命周期操作或AOI计算。
 

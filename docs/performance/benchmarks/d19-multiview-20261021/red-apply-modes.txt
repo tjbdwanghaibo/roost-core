@@ -1,0 +1,8 @@
+--- FAIL: TestSyncApplyModeCapsViewsPerPlayer (0.00s)
+    interest_test.go:1101: ApplySync with 10 views per player: <nil>, want ErrInterestConfig pointing at ApplyAsync
+--- FAIL: TestApplyModeDecidesWhenACommittedMoveIsVisible (0.05s)
+    --- FAIL: TestApplyModeDecidesWhenACommittedMoveIsVisible/sync/flush (0.00s)
+        interest_test.go:1173: ApplySync: the Flush after the commit did not apply the move: subscribers=[2] visible=[]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.527s
+FAIL

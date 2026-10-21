@@ -88,8 +88,9 @@ const (
 
 // SyncApplyMaxExtraViews 是 ApplySync 下每个玩家主视野之外最多的视野数；SyncApplyMaxViewsPerPlayer = 主视野 + 它。
 // 来源：维护者 2026-10-21 决定按“每玩家额外视野 8 个以内 / 以上”分两种模式、由业务选择。实测依据（本机 M5、
-// sync-aoi 原场景 1000 玩家 / 1 万实体 / 20Hz）：只评估移动过的目标（S1）之后，政策阶段同步应用、16 个额外视野时
-// Flush 约 41ms（政策 19 + 打包 22），已逼近 50ms 周期；8 个以内的数据见 DESIGN-TODO D19“两种应用模式”。
+// sync-aoi 原场景 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，2026-10-21 两轮对照）：ApplySync 的 Flush 均值
+// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；数据见 DESIGN-TODO
+// D19“两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
 // 关系视野（队伍、联盟）也计入 MaxViewsPerPlayer。
 const (
 	SyncApplyMaxExtraViews     = 8
