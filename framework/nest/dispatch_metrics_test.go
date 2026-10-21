@@ -525,6 +525,68 @@ func TestNestDispatchLogsSlowTraceWithMsgInfoWithoutGlobalStack(t *testing.T) {
 	}
 }
 
+// mutableTraceParam 是 handler 执行期间被改写的消息参数（例如心跳的登记、业务的会话对象）。
+type mutableTraceParam struct {
+	n     int
+	items []int
+}
+
+// stableTraceParam 实现 fmt.GoStringer：作者保证它在 handler 执行期间可以被另一个 goroutine 调用。
+type stableTraceParam struct{ name string }
+
+func (p *stableTraceParam) GoString() string { return "stable:" + p.name }
+
+// 慢派发 trace 在 handler 还在执行时由计时 goroutine 打印（result=running）：它不能按反射读任意参数——参数是 handler
+// 正在改写的指针、切片或含引用的值时，那是一次与 handler 的数据竞争（-race 报告），日志里也可能是撕裂的值。只打印
+// 按值装箱的标量（布尔、数字、字符串，装进 interface 时已复制）与实现了 fmt.GoStringer 的参数，其余只给类型名。
+// 红有两层：内容断言在普通运行下即红；-race 下按反射打印还会报数据竞争。
+func TestSlowDispatchTraceDoesNotFormatParamsTheHandlerMayMutate(t *testing.T) {
+	slowDispatchLogGate.mu.Lock()
+	slowDispatchLogGate.next = time.Time{}
+	slowDispatchLogGate.suppressed = 0
+	slowDispatchLogGate.mu.Unlock()
+	var buf bytes.Buffer
+	if err := flog.Init(flog.Options{Level: slog.LevelWarn, Output: &buf, DisableGoID: true, DisableFrame: true, DisableContext: true}); err != nil {
+		t.Fatalf("init log: %v", err)
+	}
+	t.Cleanup(func() { _ = flog.Init(flog.Options{Level: slog.LevelInfo, Output: io.Discard}) })
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 1002, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
+	mgr := &NestMgr{getter: getter}
+	ResetHandlersForTest()
+	t.Cleanup(ResetHandlersForTest)
+	mutable := &mutableTraceParam{}
+	MustRegisterMemoryHandler(NewHandlerName("slow_mutating"), func(_ []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
+		p := params[0].(*mutableTraceParam)
+		deadline := time.Now().Add(nestSlowDispatchTraceThreshold + 60*time.Millisecond)
+		for time.Now().Before(deadline) {
+			p.n++
+			p.items = append(p.items[:0], p.n)
+		}
+		return nil, nil
+	})
+	NestDispatch(mgr, &Msg{
+		Name:   "slow_mutating",
+		Type:   MsgTypeSingle,
+		Tid:    id,
+		Params: []any{mutable, &stableTraceParam{name: "reg"}, 7, "tick"},
+	})
+	out := buf.String()
+	if !strings.Contains(out, "result=running") {
+		t.Fatalf("no trace while the handler was running:\n%s", out)
+	}
+	if strings.Contains(out, "mutableTraceParam{") || strings.Contains(out, "items:") {
+		t.Fatalf("the running trace formatted a parameter the handler was mutating:\n%s", out)
+	}
+	for _, want := range []string{`param_samples:[<*nest.mutableTraceParam> stable:reg 7 \"tick\"]`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("slow dispatch trace log missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
 	t.Cleanup(ResetHandlersForTest) // 清掉本用例注册的包级 handler，-count>1 重跑不重复注册
 	metrics.DefaultRegistry().Reset()
