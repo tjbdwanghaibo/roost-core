@@ -238,8 +238,13 @@ func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bo
 	component.buffsChanged()
 	return nil
 }
-func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason) {}
-func (component *CombatComponent) Dao() *CombatDao                        { return component.dao }
+
+// OnDestroy 在实体离开内存（卸载、删档、撤销新建）时卸下 buff 的驱动（CloseBuffDriver：心跳驱动撤销登记、释放名字）。
+// 组件由别的组件持有、不直接挂在实体上时（例如 game-demo 怪物的 ActorComponent），由持有者的 OnDestroy 转调。
+func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason) {
+	component.CloseBuffDriver()
+}
+func (component *CombatComponent) Dao() *CombatDao { return component.dao }
 
 // ProjectAttributes 安装属性投影并立刻投影一次。在实体工厂里构造组件后调用一次即可；
 // 之后组件在每个改属性来源的 mutator（InitCombatant、SetAttributeBase / Bounds、

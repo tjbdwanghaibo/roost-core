@@ -241,3 +241,26 @@ func TestDriveBuffsConfig(t *testing.T) {
 		t.Errorf("a non-heartbeat drive: BeatReg %v CurrentTick %d", c.BeatReg(), c.CurrentTick())
 	}
 }
+
+// 非心跳驱动的卸下：CloseBuffDriver 给驱动一次 Sleep（循环不再推进它），之后组件不再通知；可以重新 DriveBuffs。
+func TestCloseBuffDriverPutsANonHeartbeatDriverToSleep(t *testing.T) {
+	room := &buffRoom{awake: make(map[*CombatComponent]bool)}
+	c := room.join(t, 9507, BuffDriveConfig{})
+	room.run(t, 1, 1, map[int64]func(){1: func() { c.ApplyBuff(combat.BuffSpec{ID: 2, DurationTicks: 50}, c.CurrentTick(), 0) }})
+	if !room.awake[c] {
+		t.Fatal("a timed buff did not wake the loop")
+	}
+	c.CloseBuffDriver()
+	if room.awake[c] || c.BeatReg() != nil {
+		t.Fatalf("after CloseBuffDriver: awake %v", room.awake[c])
+	}
+	if err := room.inFrame(t, func() error { c.ApplyBuff(combat.BuffSpec{ID: 3, DurationTicks: 50}, 2, 0); return nil }); err != nil || room.awake[c] {
+		t.Fatalf("a buff applied after CloseBuffDriver woke the old driver: awake %v (%v)", room.awake[c], err)
+	}
+	if err := c.DriveBuffs(BuffDriveConfig{Clock: buffRoomClock, Now: time.Now, Driver: &buffRoomMember{room: room, component: c}}); err != nil {
+		t.Fatalf("DriveBuffs after CloseBuffDriver: %v", err)
+	}
+	if err := c.SyncBuffDriver(); err != nil || !room.awake[c] {
+		t.Fatalf("the redriven component: awake %v (%v)", room.awake[c], err)
+	}
+}

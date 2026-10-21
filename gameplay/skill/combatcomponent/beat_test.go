@@ -586,3 +586,125 @@ func TestSetBuffDueTickAlignsTheBeat(t *testing.T) {
 		}
 	})
 }
+
+// 撤销与重建（与 heartbeat.Reg.Close、actionflow / ai 的 Close 一致）：CloseBuffDriver 撤销 buff 心跳登记、释放名字，
+// 同一宿主上马上可以按同名 AttachBeat 重建（成员换场景、换时间域）；OnDestroy 同样撤销。
+func TestABuffBeatCanBeRebuiltOnTheSameHost(t *testing.T) {
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "buff-rebuild", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	e, _ := newCombatTestEntity(t, 9412)
+	host := d.NewHost(e)
+	c := e.component
+	attach := func() {
+		t.Helper()
+		if err := c.AttachBeat(BeatConfig{Host: host, Clock: beatClock, OnError: func(err error) { t.Errorf("buff beat: %v", err) }}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attach()
+	if err := c.OnInitFinish(nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nest.RunDetachedTransaction(context.Background(), acceptingCombatCommitter{}, "buff_rebuild_apply", func() (any, error) {
+		c.ApplyBuff(combat.BuffSpec{ID: 2, DurationTicks: 1000}, c.CurrentTick(), 0)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := c.BeatReg()
+	if !old.Active() || d.Registered() != 1 {
+		t.Fatalf("a timed buff: active %v registered %d", old.Active(), d.Registered())
+	}
+	c.CloseBuffDriver()
+	if !old.Closed() || c.BeatReg() != nil || d.Registered() != 0 {
+		t.Fatalf("after CloseBuffDriver: old closed %v BeatReg set %v registered %d, want the registration gone", old.Closed(), c.BeatReg() != nil, d.Registered())
+	}
+	attach() // 同名 "combat" 已释放
+	if err := c.SyncBuffDriver(); err != nil || !c.BeatReg().Active() || d.Registered() != 1 {
+		t.Fatalf("rebuilt beat after SyncBuffDriver: active %v registered %d (%v), want the timed buff beating again", c.BeatReg().Active(), d.Registered(), err)
+	}
+	c.OnDestroy(entity.EntityDestroyReason(0))
+	if d.Registered() != 0 || c.BeatReg() != nil {
+		t.Fatalf("after OnDestroy: registered %d BeatReg set %v, want the registration gone", d.Registered(), c.BeatReg() != nil)
+	}
+}
+
+// 技能心跳的撤销与重建：Close 之后旧推进器的输入在 Runtime 有工作时报 ErrRegClosed；同一个 Runtime 在同一宿主上按同名
+// 重建，Sync 后接着推进。
+func TestARuntimeBeatCanBeRebuiltOnTheSameHost(t *testing.T) {
+	pinBusinessClock(t, time.Unix(1_800_000_000, 0))
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "runtime-rebuild", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	owner, _ := newCombatTestEntity(t, 9413)
+	host := d.NewHost(owner)
+	burn, environment := compileBeatProgram(t, beatBurnJSON)
+	memory := skill.NewMemoryHost(skill.AuthorityIdentity{Revision: environment.Revision, Digest: environment.Digest})
+	memory.ConfigureGameplayCatalog(environment.Gameplay)
+	memory.UpsertEntity(skill.MemoryEntity{ID: 2, Alive: true, Health: 500, MaxHealth: 500})
+	memory.UpsertEntity(skill.MemoryEntity{ID: 3, Alive: true, Health: 100, MaxHealth: 100})
+	runtime := skill.NewRuntime(memory, skill.RuntimeOptions{})
+	config := RuntimeBeatConfig{Host: host, Clock: beatClock, OnError: func(err error) { t.Errorf("runtime beat: %v", err) }}
+	old, err := NewRuntimeBeat(runtime, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Start(burn, skill.CastInput{Caster: 3, Target: 2}); err != nil || d.Registered() != 1 {
+		t.Fatalf("Start: registered %d (%v)", d.Registered(), err)
+	}
+	old.Close()
+	if !old.Closed() || d.Registered() != 0 {
+		t.Fatalf("after Close: closed %v registered %d", old.Closed(), d.Registered())
+	}
+	if err := old.Sync(); !errors.Is(err, heartbeat.ErrRegClosed) {
+		t.Fatalf("Sync on a closed runtime beat with work = %v, want ErrRegClosed", err)
+	}
+	rebuilt, err := NewRuntimeBeat(runtime, config) // 同名 "skill" 已释放
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuilt.Sync(); err != nil || !rebuilt.Reg().Active() || d.Registered() != 1 {
+		t.Fatalf("rebuilt runtime beat after Sync: active %v registered %d (%v)", rebuilt.Reg().Active(), d.Registered(), err)
+	}
+}
+
+// 真实心跳驱动：在 handler 里撤销 buff 心跳并按同名重建，旧登记之后不再执行回调（已经投出的拍按过期丢弃），新登记
+// 接着推进同一组 buff。
+func TestAClosedBuffBeatStopsAndTheRebuiltOneTakesOver(t *testing.T) {
+	forEachBeatDelivery(t, func(t *testing.T) {
+		f := newBeatFixture(t)
+		var before, after beatRecorder
+		e, id := newCombatTestEntity(t, 9414)
+		host := f.driver.NewHost(e)
+		c := e.component
+		if err := c.AttachBeat(BeatConfig{Host: host, Clock: beatClock, Granularity: 50 * time.Millisecond, OnBeat: before.onBeat}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.OnInitFinish(nil, false); err != nil {
+			t.Fatal(err)
+		}
+		f.getter.Add(e)
+		f.mustRun(id, func() error {
+			c.ApplyBuff(combat.BuffSpec{ID: 2, DurationTicks: 100_000}, c.CurrentTick(), 0)
+			return nil
+		})
+		f.waitFor("two beats on the first registration", func() bool { return before.count() >= 2 })
+		var closedAt int
+		f.mustRun(id, func() error {
+			c.CloseBuffDriver()
+			closedAt = before.count()
+			if err := c.AttachBeat(BeatConfig{Host: host, Clock: beatClock, Granularity: 50 * time.Millisecond, OnBeat: after.onBeat}); err != nil {
+				return err
+			}
+			return c.SyncBuffDriver()
+		})
+		f.waitFor("three beats on the rebuilt registration", func() bool { return after.count() >= 3 })
+		f.settle(id)
+		if got := before.count(); got != closedAt || f.driver.Registered() != 1 || len(f.buffs(id, c)) != 1 {
+			t.Fatalf("after the rebuild: old registration ran %d beats after Close, registered %d, buffs %d; want none, one registration, the buff kept",
+				got-closedAt, f.driver.Registered(), len(f.buffs(id, c)))
+		}
+		f.mustRun(id, func() error { c.OnDestroy(entity.EntityDestroyReason(0)); return nil })
+		f.settle(id)
+		if f.driver.Registered() != 0 {
+			t.Fatalf("after OnDestroy: registered %d, want 0", f.driver.Registered())
+		}
+	})
+}

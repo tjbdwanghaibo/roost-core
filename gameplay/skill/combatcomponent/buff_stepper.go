@@ -166,6 +166,26 @@ func (component *CombatComponent) SyncBuffDriver() error {
 	return nil
 }
 
+// CloseBuffDriver 卸下 buff 的驱动：心跳驱动（AttachBeat）撤销心跳登记（heartbeat.Reg.Close：立即离开驱动、释放
+// 名字），其他驱动收到一次 Sleep。之后组件不再通知任何驱动、CurrentTick 与 StepBuffs 要求重新装驱动；可以在同一心跳
+// 宿主上重新 DriveBuffs / AttachBeat（例如成员换场景、换时间域时按新域重建），重建后有限时 buff 的话调一次
+// SyncBuffDriver。实体卸载时由 OnDestroy 调用。与 Reg.Close 一样立即生效、不随事务回滚；可重复调用；只能在实体锁内
+// 调用。
+func (component *CombatComponent) CloseBuffDriver() {
+	drive := component.drive
+	if drive == nil {
+		return
+	}
+	component.drive = nil
+	switch driver := drive.driver.(type) {
+	case nil:
+	case interface{ close() }:
+		driver.close()
+	default:
+		driver.Sleep()
+	}
+}
+
 // alignBuffDriver 在改了 buff（集合或到期 tick）之后、每一步末尾通知驱动；Wake 的错误交给 OnError。
 func (component *CombatComponent) alignBuffDriver() {
 	if err := component.SyncBuffDriver(); err != nil {

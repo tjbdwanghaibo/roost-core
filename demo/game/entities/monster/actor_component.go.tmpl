@@ -151,14 +151,18 @@ func (component *ActorComponent) OnInitFinish(param *entity.EntityCreateParam, i
 
 // OnDestroy runs when the monster leaves memory (killed, drained at
 // shutdown): the brain stops deciding, the action in progress ends as
-// canceled with actionflow.ErrOwnerDestroyed, followers end with TargetLost,
-// the heartbeat host leaves the driver.
-func (component *ActorComponent) OnDestroy(entity.EntityDestroyReason) {
+// canceled with actionflow.ErrOwnerDestroyed, the buff heartbeat
+// ("combat") is closed, followers end with TargetLost, the heartbeat host
+// leaves the driver.
+func (component *ActorComponent) OnDestroy(reason entity.EntityDestroyReason) {
 	if component.brain != nil {
 		component.brain.Close("monster destroyed")
 	}
 	if component.behavior != nil {
 		component.behavior.OnDestroy()
+	}
+	if component.combat != nil {
+		component.combat.OnDestroy(reason)
 	}
 	if component.mb != nil {
 		component.mb.OnDestroy()

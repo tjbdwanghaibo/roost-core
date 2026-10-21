@@ -108,6 +108,16 @@ func NewRuntimeBeat(runtime *skill.Runtime, config RuntimeBeatConfig) (*RuntimeB
 // Reg 返回心跳登记（诊断、测试用；启停由 Stepper 经 Wake / Sleep 管理，业务不要直接 Start / Stop）。
 func (b *RuntimeBeat) Reg() *heartbeat.Reg { return b.reg }
 
+// Close 撤销技能心跳登记（heartbeat.Reg.Close：立即离开驱动、释放名字，同一宿主上可以马上按同名重建）。之后输入
+// （Start / Input / Do）在 Runtime 有工作时返回 heartbeat.ErrRegClosed，拍不再到来；Runtime 本身不动（它归业务，
+// 可以 checkpoint 或交给新的推进器）。持有 RuntimeBeat 的组件在 OnDestroy 里调用；成员换场景（换时间域）时撤掉旧的、
+// 用同一个 Runtime 按新域 NewRuntimeBeat 重建，之后只用新的。与 Reg.Close 一样立即生效、不随事务回滚；可重复调用；
+// 只能在实体锁内调用。
+func (b *RuntimeBeat) Close() { b.reg.Close() }
+
+// Closed 报告是否已 Close。
+func (b *RuntimeBeat) Closed() bool { return b.reg.Closed() }
+
 // messageNow 是输入侧的“现在”：本条消息冻结的业务时间，挂了时间域时是域时间。
 func (b *RuntimeBeat) messageNow() time.Time {
 	if b.domain != nil {
@@ -164,3 +174,6 @@ func (d *heartbeatDriver) Sleep() {
 		d.reg.Stop()
 	}
 }
+
+// close 撤销登记（CombatComponent.CloseBuffDriver 用）。
+func (d *heartbeatDriver) close() { d.reg.Close() }
