@@ -404,6 +404,7 @@ var pillarPackages = []struct{ pattern, pillar string }{
 	{"framework/nest/...", pillarNest},
 	{"framework/entity/...", pillarNest},
 	{"gameplay/actionflow/...", pillarNest},
+	{"gameplay/heartbeat/...", pillarNest}, // D20：心跳就是 Nest 消息，只依赖 nest / entity
 	{"infra/base/lock/...", pillarNest},
 	{"framework/dataengine/...", pillarDataEngine},
 	{"framework/nestwal/...", pillarDataEngine},

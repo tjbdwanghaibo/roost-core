@@ -50,6 +50,8 @@ const (
 	ModManager       app.ModName = "manager"
 	// ModEntityTimer 是按实体持久定时器的驱动装配（wiring/entitytimer）。
 	ModEntityTimer app.ModName = "entity_timer"
+	// ModHeartbeat 是按实体心跳的驱动装配（wiring/heartbeat），同名登记 *gameplay/heartbeat.Driver。
+	ModHeartbeat app.ModName = "heartbeat"
 	// ModWeb 是业务 HTTP 路由的监听 Mod（wiring/web），同名登记 webroute.Registerer。
 	ModWeb app.ModName = "web"
 	// ModAccountServingGuard 是装配了 account 的 game 进程的启动自检（wiring/account.ServingGuardMod）：本服已并入
