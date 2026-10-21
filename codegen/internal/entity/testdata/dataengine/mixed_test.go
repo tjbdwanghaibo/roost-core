@@ -217,10 +217,11 @@ func (l *mixedLoad) stop(t *testing.T) *mixedResult {
 	if err := l.manager.Stop(l.ctx); err != nil {
 		t.Fatal(err)
 	}
-	for tries := 0; l.manager.Stats().Pending > 0 && tries < 100; tries++ {
-		if err := l.manager.Flush(l.ctx); err != nil {
-			t.Fatal(err)
-		}
+	// 排队事实由 Interest 的应用线程异步应用、Flush 只结算：Drain 等到在途事实全部应用并结算、pending 排空。
+	drainCtx, cancelDrain := context.WithTimeout(l.ctx, 30*time.Second)
+	defer cancelDrain()
+	if err := l.manager.Drain(drainCtx); err != nil {
+		t.Fatal(err)
 	}
 	stats := l.manager.Stats()
 	if stats.Pending != 0 || stats.FlushFailures != 0 || stats.SessionsLost != 0 {

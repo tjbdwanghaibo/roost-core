@@ -99,7 +99,10 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		m.lastFlushNanos.Store(uint64(elapsed))
 		metrics.ObserveHistogram("entitysync_flush_duration", nil, elapsed)
 	}()
-	if err := m.applyPolicies(); err != nil {
+	policyStarted := time.Now()
+	err := m.applyPolicies()
+	m.policyNanos.Add(uint64(time.Since(policyStarted)))
+	if err != nil {
 		return fmt.Errorf("sync policy: %w", err)
 	}
 	m.refreshSnapshotWindow()

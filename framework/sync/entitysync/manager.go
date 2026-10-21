@@ -166,6 +166,7 @@ type Manager struct {
 	stopState *managerStop
 
 	captureNanos      atomic.Uint64
+	policyNanos       atomic.Uint64
 	encodeNanos       atomic.Uint64
 	admissionNanos    atomic.Uint64
 	flushCalls        atomic.Uint64

@@ -51,6 +51,11 @@ type config struct {
 	Visible            int    `json:"visible_target"`
 	ViewsPerPlayer     int    `json:"extra_views_per_player"`
 	AllianceSize       int    `json:"alliance_size"`
+	World              int64  `json:"world_size"`
+	Block              int64  `json:"block_size"`
+	EnterRadius        int64  `json:"enter_radius"`
+	LeaveRadius        int64  `json:"leave_radius"`
+	MoveAmplitude      int64  `json:"move_amplitude"`
 	Role               string `json:"-"`
 	Address            string `json:"-"`
 	Output             string `json:"-"`
@@ -67,7 +72,7 @@ func parseConfig() config {
 	flag.IntVar(&c.ReconnectTick, "reconnect-tick", 0, "reset client baselines at this measured tick; 0 disabled")
 	flag.IntVar(&c.ReconnectPlayers, "reconnect-players", 0, "number of sessions reset; 0 means all")
 	flag.BoolVar(&c.Async, "async", false, "use production reliable queue before loopback TCP")
-	flag.BoolVar(&c.Profile, "profile", false, "capture server-only CPU and allocation profiles; do not compare profiled latency")
+	flag.BoolVar(&c.Profile, "profile", false, "capture server-only CPU, allocation, mutex and block profiles; do not compare profiled latency")
 	flag.BoolVar(&c.RuntimeTrace, "runtime-trace", false, "capture server Go execution trace in a separate diagnostic run")
 	flag.IntVar(&c.Players, "players", 1000, "observers, also subjects")
 	flag.IntVar(&c.Entities, "entities", 10000, "total subjects including players")
@@ -79,6 +84,11 @@ func parseConfig() config {
 	flag.IntVar(&c.Visible, "visible", 50, "spatial cap plus self")
 	flag.IntVar(&c.ViewsPerPlayer, "views-per-player", 0, "extra spatial views per player, each following another entity (D19 multi-view); 0 keeps the single main view")
 	flag.IntVar(&c.AllianceSize, "alliance-size", 0, "group players into shared relation views of this many members, attached to every member (D19 shared view fan-out); 0 disabled")
+	flag.Int64Var(&c.World, "world", 0, "square map side; 0 keeps the dense grid (spacing 30) sized from -entities, >0 spreads entities pseudo-uniformly over world×world")
+	flag.Int64Var(&c.Block, "block", 150, "AOI block size")
+	flag.Int64Var(&c.EnterRadius, "enter-radius", 150, "AOI enter radius (default view radius)")
+	flag.Int64Var(&c.LeaveRadius, "leave-radius", 180, "AOI leave radius")
+	flag.Int64Var(&c.MoveAmplitude, "move-amplitude", 48, "X span of the per-entity back-and-forth movement (16 phases; 48 = the original 3 per phase)")
 	flag.StringVar(&c.Role, "role", "server", "server or client")
 	flag.StringVar(&c.Address, "address", "", "client connects to this loopback endpoint")
 	flag.StringVar(&c.Output, "output", "", "new result directory")
@@ -95,6 +105,9 @@ func (c config) validate() error {
 	}
 	if c.Players < 1 || c.Entities < c.Players || c.Entities > 100000 || c.Ticks < 1 || c.Ticks > 10000 || c.Hz < 1 || c.Hz > 1000 || c.Dirty < 1 || c.Dirty > 100 || c.Padding < 0 || c.Padding > 4096 || c.Batches < 1 || c.Batches > 100 || c.Visible < 2 || c.Visible > 100 || c.ViewsPerPlayer < 0 || c.ViewsPerPlayer > 1000 || c.AllianceSize < 0 || c.AllianceSize > c.Players || c.Output == "" {
 		return errors.New("invalid workload: check counts, hz, dirty, padding, visible and output")
+	}
+	if c.World < 0 || (c.World > 0 && c.World < 4*c.MoveAmplitude+100) || c.Block < 1 || c.EnterRadius < 1 || c.LeaveRadius < c.EnterRadius || c.MoveAmplitude < 0 || c.MoveAmplitude > 1000 {
+		return errors.New("invalid geometry: check world, block, radii and move amplitude")
 	}
 	if c.TraceCapacity < 0 || c.TraceCapacity > 1<<20 {
 		return errors.New("invalid trace capacity")
@@ -155,9 +168,13 @@ func (s *subject) PackSubjectSnapshot(entity.SyncProfile) (entity.FrozenSyncPayl
 func (s *subject) PackSubjectDelta(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) {
 	return s.pack()
 }
+
+// position 是实体在某一步的位置（服务端与客户端各自计算、逐项核对）：基点加 X 方向的往返偏移，偏移按 32 步一周期
+// 在 0..16 档之间来回，第 phase 档为 phase × MoveAmplitude / 16（缺省 48，即原来的每档 3）。
+// 基点：-world 为 0 时是间距 30 的方阵（原负载）；否则按实体序号做 splitmix64 散列，在 world × world 内近似均匀分布，
+// 两维都留出 MoveAmplitude 与 1 的边距。
 func position(id int64, step int, c config) spatial.Point {
 	id = workloadIndex(id, c)
-	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
 	phase := (step + int(id%31)) % 32
 	if phase < 0 {
 		phase += 32
@@ -165,7 +182,30 @@ func position(id int64, step int, c config) spatial.Point {
 	if phase > 16 {
 		phase = 32 - phase
 	}
-	return spatial.Point{X: 200 + (id-1)%side*30 + int64(phase)*3, Y: 200 + (id-1)/side*30}
+	offset := int64(phase) * c.MoveAmplitude / 16
+	if c.World > 0 {
+		span := uint64(c.World - c.MoveAmplitude - 2)
+		h := splitmix64(uint64(id))
+		return spatial.Point{X: 1 + int64(h%span) + offset, Y: 1 + int64((h>>32)%span)}
+	}
+	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
+	return spatial.Point{X: 200 + (id-1)%side*30 + offset, Y: 200 + (id-1)/side*30}
+}
+
+func splitmix64(x uint64) uint64 {
+	x += 0x9e3779b97f4a7c15
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	return x ^ (x >> 31)
+}
+
+// worldBounds：原负载按方阵边长加 500 的边距；-world 时就是 world × world。
+func worldBounds(c config) spatial.Rect {
+	if c.World > 0 {
+		return spatial.Rect{Max: spatial.Point{X: c.World, Y: c.World}}
+	}
+	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
+	return spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}
 }
 func observerIDs(c config) []int64 {
 	ids := make([]int64, c.Players)
@@ -256,7 +296,7 @@ func runServer(c config) error {
 	if err != nil {
 		return err
 	}
-	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity), fmt.Sprintf("-visible=%d", c.Visible), fmt.Sprintf("-views-per-player=%d", c.ViewsPerPlayer), fmt.Sprintf("-alliance-size=%d", c.AllianceSize))
+	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity), fmt.Sprintf("-visible=%d", c.Visible), fmt.Sprintf("-views-per-player=%d", c.ViewsPerPlayer), fmt.Sprintf("-alliance-size=%d", c.AllianceSize), fmt.Sprintf("-world=%d", c.World), fmt.Sprintf("-block=%d", c.Block), fmt.Sprintf("-enter-radius=%d", c.EnterRadius), fmt.Sprintf("-leave-radius=%d", c.LeaveRadius), fmt.Sprintf("-move-amplitude=%d", c.MoveAmplitude))
 	log, err := os.Create(filepath.Join(c.Output, "client.log"))
 	if err != nil {
 		return err
@@ -331,9 +371,8 @@ func runServer(c config) error {
 		defer cancel()
 		_ = manager.Close(ctx)
 	}()
-	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
 	// 模拟玩家的玩家 ID 与实体 ID 取同一个数（会话也按它打开），主视野跟随玩家自己的实体。
-	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: c.Visible - 1},
+	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: worldBounds(c), BlockSize: c.Block, EnterRadius: c.EnterRadius, LeaveRadius: c.LeaveRadius, MaxVisible: c.Visible - 1},
 		MaxViewsPerPlayer: max(policy.DefaultMaxViewsPerPlayer, c.ViewsPerPlayer+2), MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
 	if err != nil {
 		return err
@@ -416,6 +455,8 @@ func runServer(c config) error {
 		stride += 2
 	}
 	// begin 是本批次醒来开始发送的时刻；同一批里的状态变化由一个发生器串行发出，后面的要等前面的 Request 返回。
+	// driverMove 累计直接模式下压测端线程里 interest.Move 的耗时（AOI 工作在这里），与政策阶段同口径对比。
+	var driverMove time.Duration
 	mutate := func(step, start, end int, planned, begin time.Time) error {
 		for j := start; j < end; j++ {
 			index := ((step+10)*count + j) * stride % c.Entities
@@ -442,7 +483,10 @@ func runServer(c config) error {
 				split.changed(sent)
 			}
 			s.state.MarkDirty(1)
-			if err := interest.Move(id, at); err != nil {
+			moveStarted := time.Now()
+			err := interest.Move(id, at)
+			driverMove += time.Since(moveStarted)
+			if err != nil {
 				return err
 			}
 		}
@@ -499,6 +543,9 @@ func runServer(c config) error {
 			_ = cpuFile.Close()
 			return err
 		}
+		// 锁竞争与阻塞等待只在测量窗口内采样（诊断运行，不比较其延迟）。
+		runtime.SetMutexProfileFraction(5)
+		runtime.SetBlockProfileRate(int(100 * time.Microsecond))
 		defer func() {
 			if cpuFile != nil {
 				pprof.StopCPUProfile()
@@ -516,6 +563,11 @@ func runServer(c config) error {
 	start := time.Now()
 	trace.Record(entitysync.SyncTraceEvent{Stage: "measurement_started", At: start.UnixNano()})
 	work, flush, lag := make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks)
+	// 同口径（每 tick）：policy 是 Manager 政策阶段的耗时增量（排队模式下 AOI 全在这里），driverInterest 是压测端线程里
+	// interest.Move 与 interest.Apply 的耗时（直接模式下 AOI 在这里；排队模式下只剩 Apply，主要是等 Interest 的锁）。
+	policyPerTick, driverInterest := make([]float64, 0, c.Ticks), make([]float64, 0, c.Ticks)
+	policyBefore := manager.Counters().PolicyDuration
+	driverMove = 0
 	var overWork int
 	var slow []map[string]any
 	var recoverySetup time.Duration
@@ -561,7 +613,8 @@ func runServer(c config) error {
 		if r := interest.Apply(); len(r) > 0 {
 			return fmt.Errorf("subscription refusal: %v", r[0])
 		}
-		active += time.Since(begin)
+		applied := time.Since(begin)
+		active += applied
 		if wait := time.Until(due); wait > 0 {
 			time.Sleep(wait)
 		}
@@ -607,6 +660,11 @@ func runServer(c config) error {
 			return err
 		}
 		work = append(work, milliseconds(active))
+		policyNow := manager.Counters().PolicyDuration
+		policyPerTick = append(policyPerTick, milliseconds(policyNow-policyBefore))
+		policyBefore = policyNow
+		driverInterest = append(driverInterest, milliseconds(driverMove+applied))
+		driverMove = 0
 		flush = append(flush, milliseconds(elapsed))
 		lag = append(lag, milliseconds(begin.Sub(due)))
 		if active > 50*time.Millisecond {
@@ -649,6 +707,19 @@ func runServer(c config) error {
 		if err != nil {
 			return err
 		}
+		runtime.SetMutexProfileFraction(0)
+		runtime.SetBlockProfileRate(0)
+		for _, name := range []string{"mutex", "block"} {
+			file, err := os.Create(filepath.Join(c.Output, name+".out"))
+			if err != nil {
+				return err
+			}
+			err = pprof.Lookup(name).WriteTo(file, 0)
+			_ = file.Close()
+			if err != nil {
+				return err
+			}
+		}
 	}
 	stats := manager.Stats()
 	visible := make([]float64, 0, c.Players)
@@ -677,6 +748,7 @@ func runServer(c config) error {
 	}
 	report := map[string]any{"recovery_admission_caught_up_ms": milliseconds(recoveryCaughtUp), "recovery_samples": recoverySamples, "startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
 	report["flush_failures_before_stop"] = failuresBeforeStop
+	report["same_basis"] = map[string]any{"policy_phase_per_tick_ms": quantiles(policyPerTick), "driver_interest_per_tick_ms": quantiles(driverInterest)}
 	report["harness"], report["server"] = split.report()
 	if last := manager.LastError(); last != nil {
 		report["manager_last_error"] = last.Error()

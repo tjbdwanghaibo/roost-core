@@ -1,0 +1,25 @@
+File: sync-aoi-after3
+Type: delay
+Time: 2026-10-21 10:03:31 CST
+Showing nodes accounting for 53.99s, 99.68% of 54.16s total
+Dropped 8 nodes (cum <= 0.27s)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     39.85s 73.57%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0%     0%     39.85s 73.57%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+    39.85s 73.57% 73.57%     39.85s 73.57%  sync.(*Cond).Wait
+    12.08s 22.31% 95.88%     12.08s 22.31%  runtime.selectgo
+         0     0% 95.88%      9.94s 18.35%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Ticker).Start.gowrap2
+         0     0% 95.88%      9.94s 18.35%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Ticker).run
+         0     0% 95.88%      3.65s  6.75%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Start.gowrap2
+         0     0% 95.88%      3.65s  6.75%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run
+         0     0% 95.88%      1.69s  3.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0% 95.88%      1.69s  3.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0% 95.88%      1.69s  3.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).endBatch
+         0     0% 95.88%      1.69s  3.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued
+         0     0% 95.88%      1.69s  3.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued-fm
+     1.69s  3.12% 99.00%      1.69s  3.12%  sync.(*WaitGroup).Wait
+         0     0% 99.00%      0.71s  1.31%  main.main
+         0     0% 99.00%      0.71s  1.31%  main.runServer
+         0     0% 99.00%      0.71s  1.31%  runtime.main
+     0.37s  0.68% 99.68%      0.37s  0.68%  sync.(*Mutex).Lock (inline)
+         0     0% 99.68%      0.37s  0.68%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).Apply

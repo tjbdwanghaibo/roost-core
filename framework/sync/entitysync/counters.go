@@ -14,6 +14,9 @@ type ManagerCounters struct {
 	SessionsLost, DurabilityDeferred                                  uint64
 	FlushDuration, LastFlushDuration                                  time.Duration
 	CaptureDuration, EncodeDuration, AdmissionDuration                time.Duration
+	// PolicyDuration 是 Flush 政策阶段（释放 / 重新提交通知与各政策的 Apply，例如 Interest 应用排队的位置事实）
+	// 的累计耗时。排队模式下 AOI 的工作都在这里，直接调用模式下大部分在调用方线程里，不计入。
+	PolicyDuration time.Duration
 }
 
 func (m *Manager) Counters() ManagerCounters {
@@ -28,5 +31,6 @@ func (m *Manager) Counters() ManagerCounters {
 		SessionsLost: m.sessionsLost.Load(), DurabilityDeferred: m.deferred.Load(),
 		FlushDuration: time.Duration(m.flushNanos.Load()), LastFlushDuration: time.Duration(m.lastFlushNanos.Load()),
 		CaptureDuration: time.Duration(m.captureNanos.Load()), EncodeDuration: time.Duration(m.encodeNanos.Load()), AdmissionDuration: time.Duration(m.admissionNanos.Load()),
+		PolicyDuration: time.Duration(m.policyNanos.Load()),
 	}
 }

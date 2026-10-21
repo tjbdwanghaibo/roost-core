@@ -671,6 +671,34 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 2. 块预算形式：A 现状（推荐），`MaxObserverBlocks` 仍按单个视野，另加 `MaxPlayerBlocks` 核算 `worst × MaxViewsPerPlayer`，缺省下只有单视野已超预算才触发；B 把 `MaxObserverBlocks` 改成按玩家，缺省 1024 ÷ 64 = 每视野 16 块，game-demo（最大视野 300、块 100，每视野 64 块）等现有配置启动即被拒，须各自调大。
 3. 关系视野是否排除挂接玩家自己的实体：A 不排除（推荐，现状），自己经 self 与联盟两个层级看见自己，按包含取高或取并集；B 排除，需要知道每个玩家的自身实体，挂接、成员变化时多一层过滤。
 
+### 排队事实异步应用（2026-10-21，维护者 2026-10-21 给出方向）
+
+**问题**（[夜间补测 §14'.2](../performance/NIGHT-20261020.md#142-sync-aoi服务端--客户端两个进程)“根因与修复”）：排队模式下 `QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 只入队，全部事实在 Manager `Flush` 的政策阶段由 `applyQueued` 一次性应用：AOI 的写阶段、并行重评与订阅结算都在 Flush 的关键路径上，Flush = AOI + 打包下发；直接调用模式下 AOI 在调用方线程里分散完成，Flush 只剩打包下发。16 个额外空间视野时 Flush 超过同步周期，tick 被跳过。
+
+**方向**：排队事实的应用改为分批、由独立的应用线程持续消费，不占 Flush 关键路径，也不占 Nest 线程；Flush 只结算已经应用好的结果并下发。
+
+**必须保持的语义**（与改动前逐项相同）：
+
+1. 只有提交后的事实生效：应用线程取事实时读同一个框架提交门（`SyncConditionFor`），未确认的留在队首，回滚 / 拒绝的丢弃并释放发布屏障；回滚的移动永远不被看见。
+2. 同一实体按顺序生效：取批规则不变（未确认前缀阻塞同 ID 后续事实，其他 ID 可越过；`BatchSize` 不切开同一提交）。
+3. Leave / Hide 与排队事实的改写规则不变：改写只作用于还在队列里的事实；应用线程取批与应用在同一次 `Interest.mu` 持有内完成，Leave / Hide 也持 `mu`，所以不会插进一批的中间。已应用、未结算的事实等同于“先应用、再 Leave / Hide”。
+4. 内容与可见性同一帧出现：事实持有的发布屏障（`HoldSyncPublication`）在**结算之后**才释放，结算（订阅 / 退订说给 Manager）在 Flush 的政策阶段，同一 Flush 随后才捕获内容；所以一个移动的新位置与它带来的进出视野仍在同一帧。
+5. Drain 等到在途事实全部应用并结算：`queuedPending` 计入队列、应用中与已应用未结算的事实；应用线程的错误（事实无法应用）由下一次结算返回，只让一次 Flush 失败（同改动前）。
+6. 关闭顺序：`Interest.Close` 先注销政策钩子，再停应用线程并等它退出（不持 `mu` 等待），最后在 `mu` 内释放队列中与已应用未结算事实的发布屏障、退订全部 pair。
+
+**线程模型**：先做**单个应用线程**（每个 `Interest` 一个 goroutine，第一条排队事实时启动）。理由：`Interest.mu` 是一把锁，保护 AOI、`held` 与订阅结算；AOI 的写阶段本来就是串行短写入，读阶段已经按观察者并行（`InterestConfig.Workers`），单线程消费已能把 AOI 移出 Flush。按 `AOICluster` 分区或按块分片做多线程需要把 `mu` 拆成 AOI 分片锁与结算锁、跨分片的视野与跟随要协调，改动面大，等单线程版的数据证明不够再做。
+
+**唤醒**：`queueFact` 非阻塞通知应用线程；视野登记表的变更同样通知。事实的提交确认在 periodic 模式下没有通知（`Manager.WakeSync` 只在 on_change 生效，不改 Manager 契约），所以队里有未确认事实时应用线程按 1ms 起、最长 8ms 的退避轮询提交门；有事实应用完时调 `Manager.WakeSync`（on_change 下让 Manager 尽快结算）。**合批**：两步之间至少隔 `applyGather`——periodic 取同步周期的 1/10（20 Hz 时 5 ms），on_change 取 `OnChangeBatchWindow`（缺省 0，不合批）。结算只在 Flush 里发生，周期内拆得更细只会让同一观察者被几个事实分别波及、多次重评（不合批的早期版本在 16 视野负载下每步约 6.5 个事实，10 秒里应用线程的并行重评累计 4.6 s；S1 每个 Flush 一批时累计约 2.6 s）。
+
+**Flush 与应用线程的交接**：一致点是批次边界。应用线程每一步在 `mu` 内取一批（≤ `BatchSize`）、写阶段、并行重评，AOI 事件留在 AOI 的事件缓冲里，应用完的事实记入“已应用未结算”；Flush 的政策钩子在 `mu` 内结算：应用登记表剩余变更、把 AOI 事件归并进 `held` 并说给 Manager、重试被拒的 pair，最后释放已应用事实的发布屏障。任何结算入口（政策钩子、业务直接 `Apply`）都在结算后释放屏障，不会出现订阅先到、内容被屏障挡住的半态。屏障就是 `mu` 本身：Flush 若撞上应用线程正在算的一批，最多等这一批算完（不等后面的批）。Flush 期间不执行 AOI 应用。
+
+**背压**：队列总量仍由 `MaxQueuedFacts`（缺省 65536）限制，计入排队、应用中与已应用未结算的事实；应用线程落后、或 Flush 停摆时队列满，`QueueMove` 等返回 `ErrInterestQueueFull`（不变），由 handler 返回失败。新增指标：`entitysync_interest_fact_backlog`（gauge，排队 + 应用中 + 已应用未结算）、`entitysync_interest_apply_duration`（histogram，应用线程每一步的耗时）、`entitysync_interest_settle_delay`（histogram，一批从应用完成到被结算的等待）。
+
+**实施结果（2026-10-21）**：按上述最小一步实施（单应用线程 + 合批），没有改 Manager 与 Nest 的契约（Manager 只多了 `ManagerCounters.PolicyDuration` 计数）。原场景 16 视野 Nest：Flush 41 → 30 ms（政策阶段 19 → 7 ms），P99 约 130 → 97～141 ms（单机噪声大，3 样本），帧数 98～100%；direct 57～70 ms。剩下约一个同步周期的差距是结构性的：Manager 按自己的周期结算，截止前几毫秒才应用完的事实要等下一周期。可选方向（都要改交接，待维护者决定）：A Flush 开始前等应用线程追上已确认的事实（AOI 重新部分回到 Flush 关键路径，上限是一批）；B 应用线程按 Manager 周期对齐，截止前一个合批窗口强制走一步；C 维持现状，延迟敏感的场景用 on_change。证据见 [夜间补测 §14'.2a](../performance/NIGHT-20261020.md#142a-根因与修复2026-10-21)。
+
+**未采用**：Flush 用 `TryLock` 撞上就跳过结算（Flush 完全不等，但这批内容要多等一个周期）；多应用线程（见上）；把结算也放进应用线程（结算会与 Flush 的捕获交错，一批的进出视野可能分在两帧，屏障释放早于捕获时还要另加交接）。
+
+
 ### 现状（已核对源码）
 
 - D14（A1）之后观察者 = playerId，空间视点每个玩家**一个**：`Interest.Enter(playerID, entityID, at, view)` / `Watch`、`MoveView(playerID, to)`、`SetObserverView`。

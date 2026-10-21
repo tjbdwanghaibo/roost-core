@@ -1,0 +1,124 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                                         │ bench-before.txt │           bench-final.txt            │
+                                                         │      sec/op      │    sec/op     vs base                │
+ClusterFlushRandomWalk-4                                        190.2µ ± 1%    189.5µ ± 0%        ~ (p=0.493 n=10)
+ClusterFlushRandomWalkCapped-4                                  9.962m ± 1%   10.017m ± 1%        ~ (p=0.247 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=1-4       26.643µ ± 1%    4.878µ ± 1%  -81.69% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=4-4       31.108µ ± 0%    8.457µ ± 1%  -72.81% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=true/workers=1-4         20.32µ ± 4%    20.30µ ± 1%        ~ (p=0.631 n=10)
+AOIBatchRecompute/dense=false/coverage=true/workers=4-4         30.02µ ± 3%    30.20µ ± 0%        ~ (p=0.165 n=10)
+AOIBatchRecompute/dense=true/coverage=false/workers=1-4         3.739m ± 1%    1.277m ± 1%  -65.84% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=false/workers=4-4        1339.4µ ± 2%    477.4µ ± 2%  -64.36% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=true/workers=1-4          514.9µ ± 2%    514.4µ ± 1%        ~ (p=0.481 n=10)
+AOIBatchRecompute/dense=true/coverage=true/workers=4-4          505.8µ ± 1%    502.2µ ± 1%        ~ (p=0.190 n=10)
+AOIBatchDenseViews/workers=1-4                                 46.571m ± 2%    2.034m ± 1%  -95.63% (p=0.000 n=10)
+AOIBatchDenseViews/workers=4-4                                 14.303m ± 3%    1.017m ± 3%  -92.89% (p=0.000 n=10)
+AOIEventCollection/observers=1000/move=false-4                  3.499n ± 2%    3.569n ± 5%   +1.99% (p=0.023 n=10)
+AOIEventCollection/observers=1000/move=true-4                   156.5n ± 3%    156.9n ± 1%        ~ (p=1.000 n=10)
+AOIEventCollection/observers=10000/move=false-4                 3.527n ± 3%    3.643n ± 5%        ~ (p=0.118 n=10)
+AOIEventCollection/observers=10000/move=true-4                  156.6n ± 2%    157.1n ± 2%        ~ (p=0.493 n=10)
+RelationViewMemberChange/players=1/members=32-4                 440.2n ± 2%    442.9n ± 2%        ~ (p=0.101 n=10)
+RelationViewMemberChange/players=1/members=1024-4               521.1n ± 2%    524.2n ± 1%        ~ (p=0.085 n=10)
+RelationViewMemberChange/players=64/members=32-4                8.373µ ± 1%    8.347µ ± 3%        ~ (p=0.739 n=10)
+RelationViewMemberChange/players=64/members=1024-4              19.91µ ± 1%    19.79µ ± 2%        ~ (p=0.436 n=10)
+RelationViewMemberChange/players=1024/members=32-4              212.1µ ± 2%    211.3µ ± 1%        ~ (p=0.143 n=10)
+RelationViewMemberChange/players=1024/members=1024-4            965.4µ ± 5%    963.6µ ± 9%        ~ (p=0.971 n=10)
+RelationViewAttach/members=32-4                                 3.002µ ± 3%    2.948µ ± 4%        ~ (p=0.218 n=10)
+RelationViewAttach/members=1024-4                               145.5µ ± 1%    145.3µ ± 1%        ~ (p=0.739 n=10)
+RelationViewAttach/members=4096-4                               679.8µ ± 1%    684.2µ ± 2%        ~ (p=0.190 n=10)
+SpatialViewsPerPlayer/views=1-4                                 2.104µ ± 1%    2.101µ ± 1%        ~ (p=0.644 n=10)
+SpatialViewsPerPlayer/views=16-4                                35.98µ ± 1%    35.89µ ± 0%        ~ (p=0.516 n=10)
+SpatialViewsPerPlayer/views=64-4                                108.8µ ± 0%    109.1µ ± 4%        ~ (p=0.105 n=10)
+SharedSpatialView/players=1-4                                   231.0n ± 1%    230.8n ± 1%        ~ (p=0.897 n=10)
+SharedSpatialView/players=64-4                                  2.726µ ± 2%    2.762µ ± 4%   +1.34% (p=0.025 n=10)
+SharedSpatialView/players=1024-4                                44.71µ ± 2%    45.48µ ± 1%   +1.70% (p=0.035 n=10)
+geomean                                                         26.52µ         18.71µ       -29.44%
+
+                                                         │ bench-before.txt │            bench-final.txt             │
+                                                         │       B/op       │     B/op      vs base                  │
+ClusterFlushRandomWalk-4                                     48.33Ki ± 0%     48.32Ki ± 0%   -0.01% (p=0.002 n=10)
+ClusterFlushRandomWalkCapped-4                               3.395Mi ± 1%     3.410Mi ± 0%        ~ (p=0.631 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=1-4     2.891Ki ± 0%     1.188Ki ± 0%  -58.92% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=4-4     4.346Ki ± 0%     2.641Ki ± 0%  -39.24% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=true/workers=1-4      11.25Ki ± 0%     11.25Ki ± 0%        ~ (p=1.000 n=10) ¹
+AOIBatchRecompute/dense=false/coverage=true/workers=4-4      21.05Ki ± 0%     21.05Ki ± 0%   +0.00% (p=0.011 n=10)
+AOIBatchRecompute/dense=true/coverage=false/workers=1-4     317.79Ki ± 0%     59.82Ki ± 0%  -81.18% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=false/workers=4-4     355.85Ki ± 0%     97.54Ki ± 0%  -72.59% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=true/workers=1-4       863.9Ki ± 0%     863.9Ki ± 0%        ~ (p=1.000 n=10)
+AOIBatchRecompute/dense=true/coverage=true/workers=4-4       1.010Mi ± 0%     1.010Mi ± 0%        ~ (p=0.895 n=10)
+AOIBatchDenseViews/workers=1-4                              932.02Ki ± 0%     85.57Ki ± 0%  -90.82% (p=0.000 n=10)
+AOIBatchDenseViews/workers=4-4                              900.42Ki ± 0%     91.15Ki ± 0%  -89.88% (p=0.000 n=10)
+AOIEventCollection/observers=1000/move=false-4                 0.000 ± 0%       0.000 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=1000/move=true-4                  72.00 ± 0%       72.00 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=10000/move=false-4                0.000 ± 0%       0.000 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=10000/move=true-4                 72.00 ± 0%       72.00 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1/members=32-4                704.0 ± 0%       704.0 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1/members=1024-4              704.0 ± 0%       704.0 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=64/members=32-4             1.672Ki ± 0%     1.672Ki ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=64/members=1024-4           1.672Ki ± 0%     1.672Ki ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1024/members=32-4           16.75Ki ± 0%     16.75Ki ± 0%        ~ (p=0.587 n=10)
+RelationViewMemberChange/players=1024/members=1024-4         17.04Ki ± 0%     17.03Ki ± 0%        ~ (p=0.541 n=10)
+RelationViewAttach/members=32-4                              1.016Ki ± 0%     1.016Ki ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewAttach/members=1024-4                            16.60Ki ± 0%     16.60Ki ± 0%        ~ (p=0.892 n=10)
+RelationViewAttach/members=4096-4                            66.03Ki ± 0%     66.04Ki ± 0%        ~ (p=0.492 n=10)
+SpatialViewsPerPlayer/views=1-4                                880.0 ± 0%       880.0 ± 0%        ~ (p=1.000 n=10) ¹
+SpatialViewsPerPlayer/views=16-4                             13.47Ki ± 0%     13.47Ki ± 0%        ~ (p=1.000 n=10) ¹
+SpatialViewsPerPlayer/views=64-4                             53.88Ki ± 0%     53.88Ki ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=1-4                                  40.00 ± 0%       40.00 ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=64-4                                 40.00 ± 0%       40.00 ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=1024-4                               40.00 ± 0%       40.00 ± 0%        ~ (p=1.000 n=10) ¹
+geomean                                                                   ²                 -25.26%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                         │ bench-before.txt │            bench-final.txt            │
+                                                         │    allocs/op     │  allocs/op   vs base                  │
+ClusterFlushRandomWalk-4                                      1.400k ± 0%     1.400k ± 0%        ~ (p=1.000 n=10) ¹
+ClusterFlushRandomWalkCapped-4                                14.39k ± 1%     14.44k ± 0%        ~ (p=0.603 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=1-4      70.000 ± 0%      8.000 ± 0%  -88.57% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=false/workers=4-4       94.00 ± 0%      32.00 ± 0%  -65.96% (p=0.000 n=10)
+AOIBatchRecompute/dense=false/coverage=true/workers=1-4        63.00 ± 0%      63.00 ± 0%        ~ (p=1.000 n=10) ¹
+AOIBatchRecompute/dense=false/coverage=true/workers=4-4        160.0 ± 0%      160.0 ± 0%        ~ (p=1.000 n=10) ¹
+AOIBatchRecompute/dense=true/coverage=false/workers=1-4       401.00 ± 0%      14.00 ± 0%  -96.51% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=false/workers=4-4        610.0 ± 0%      223.0 ± 0%  -63.44% (p=0.000 n=10)
+AOIBatchRecompute/dense=true/coverage=true/workers=1-4         971.0 ± 0%      971.0 ± 0%        ~ (p=1.000 n=10) ¹
+AOIBatchRecompute/dense=true/coverage=true/workers=4-4        1.743k ± 0%     1.743k ± 0%        ~ (p=1.000 n=10) ¹
+AOIBatchDenseViews/workers=1-4                                 631.0 ± 0%      212.0 ± 0%  -66.40% (p=0.000 n=10)
+AOIBatchDenseViews/workers=4-4                                 755.0 ± 1%      292.0 ± 1%  -61.32% (p=0.000 n=10)
+AOIEventCollection/observers=1000/move=false-4                 0.000 ± 0%      0.000 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=1000/move=true-4                  3.000 ± 0%      3.000 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=10000/move=false-4                0.000 ± 0%      0.000 ± 0%        ~ (p=1.000 n=10) ¹
+AOIEventCollection/observers=10000/move=true-4                 3.000 ± 0%      3.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1/members=32-4                8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1/members=1024-4              8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=64/members=32-4               8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=64/members=1024-4             8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1024/members=32-4             8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewMemberChange/players=1024/members=1024-4           10.00 ± 0%      10.00 ± 0%        ~ (p=1.000 n=10)
+RelationViewAttach/members=32-4                                8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewAttach/members=1024-4                              8.000 ± 0%      8.000 ± 0%        ~ (p=1.000 n=10) ¹
+RelationViewAttach/members=4096-4                              15.00 ± 0%      15.00 ± 0%        ~ (p=1.000 n=10) ¹
+SpatialViewsPerPlayer/views=1-4                                7.000 ± 0%      7.000 ± 0%        ~ (p=1.000 n=10) ¹
+SpatialViewsPerPlayer/views=16-4                               106.0 ± 0%      106.0 ± 0%        ~ (p=1.000 n=10) ¹
+SpatialViewsPerPlayer/views=64-4                               424.0 ± 0%      424.0 ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=1-4                                  2.000 ± 0%      2.000 ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=64-4                                 2.000 ± 0%      2.000 ± 0%        ~ (p=1.000 n=10) ¹
+SharedSpatialView/players=1024-4                               2.000 ± 0%      2.000 ± 0%        ~ (p=1.000 n=10) ¹
+geomean                                                                   ²                -26.74%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                               │ bench-final.txt │
+                               │   dirtied/op    │
+AOIBatchDenseViews/workers=1-4       4.227k ± 0%
+AOIBatchDenseViews/workers=4-4       4.226k ± 0%
+geomean                              4.226k
+
+                               │ bench-final.txt │
+                               │  fullscans/op   │
+AOIBatchDenseViews/workers=1-4        62.72 ± 1%
+AOIBatchDenseViews/workers=4-4        62.82 ± 1%
+geomean                               62.77

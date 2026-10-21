@@ -1,0 +1,13 @@
+File: sync-aoi-before
+Type: delay
+Time: 2026-10-21 09:03:30 CST
+Showing nodes accounting for 5.91s, 100% of 5.91s total
+Dropped 39 nodes (cum <= 0.03s)
+      flat  flat%   sum%        cum   cum%
+     5.91s   100%   100%      5.91s   100%  sync.(*Mutex).Unlock
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Start.gowrap2
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued
+         0     0%   100%      5.91s   100%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued-fm

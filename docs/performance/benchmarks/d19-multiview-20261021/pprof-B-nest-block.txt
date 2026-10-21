@@ -1,0 +1,25 @@
+File: sync-aoi-before
+Type: delay
+Time: 2026-10-21 09:03:30 CST
+Showing nodes accounting for 59.90s, 99.78% of 60.03s total
+Dropped 25 nodes (cum <= 0.30s)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     39.85s 66.37%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0%     0%     39.85s 66.37%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+    39.84s 66.37% 66.37%     39.84s 66.37%  sync.(*Cond).Wait
+    10.19s 16.98% 83.35%     10.19s 16.98%  runtime.selectgo
+         0     0% 83.35%      9.88s 16.45%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Ticker).Start.gowrap2
+         0     0% 83.35%      9.88s 16.45%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Ticker).run
+         0     0% 83.35%      5.35s  8.91%  main.main
+         0     0% 83.35%      5.35s  8.91%  main.runServer
+         0     0% 83.35%      5.35s  8.91%  runtime.main
+     4.96s  8.26% 91.62%      4.96s  8.26%  sync.(*Mutex).Lock (inline)
+         0     0% 91.62%      4.96s  8.26%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).Apply
+         0     0% 91.62%      4.90s  8.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0% 91.62%      4.90s  8.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0% 91.62%      4.90s  8.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).endBatch
+         0     0% 91.62%      4.90s  8.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued
+         0     0% 91.62%      4.90s  8.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued-fm
+     4.90s  8.16% 99.78%      4.90s  8.16%  sync.(*WaitGroup).Wait
+         0     0% 99.78%      4.88s  8.14%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Start.gowrap2
+         0     0% 99.78%      4.88s  8.14%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run

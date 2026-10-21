@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -100,6 +101,13 @@ type Interest struct {
 	maxQueuedFacts int
 	wake           func()
 	cancelQueue    func()
+	// 应用线程（interest_queue.go）：applierStarted 受 queueMu 保护；applierWake 容量 1，合并唤醒。
+	applierStarted bool
+	applierRunning atomic.Bool // 与 applierStarted 同值，供持 viewMu 的 wakeViews 无锁读取
+	applierWake    chan struct{}
+	applierStop    chan struct{}
+	applierDone    chan struct{}
+	applyGather    time.Duration
 
 	// 视野登记表，见 view.go；viewMu 保护。
 	registry viewRegistry
@@ -130,6 +138,11 @@ type Interest struct {
 	// retry holds the pairs whose subscribe the manager refused, waiting
 	// for the next Apply to say them again.
 	retry []pair
+	// applied 是应用线程已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批
+	// 应用完成的时刻；applyErr 是应用线程攒下的错误，由下一次结算返回。都受 mu 保护。
+	applied   []queuedInterestFact
+	appliedAt time.Time
+	applyErr  error
 	// refused counts consecutive refusals per held pair (with the first
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
@@ -232,8 +245,12 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		in.batchSize = 1024
 	}
 	in.wake = config.Manager.WakeSync
-	in.registry.wake = in.wake
-	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.applyQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
+	in.applierWake = make(chan struct{}, 1)
+	in.applierStop = make(chan struct{})
+	in.applierDone = make(chan struct{})
+	in.applyGather = applyGatherFor(config.Manager)
+	in.registry.wake = in.wakeViews
+	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.settleQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
 	return in, nil
 }
 
@@ -683,6 +700,7 @@ func (in *Interest) applyLocked() []Refusal {
 		}
 		in.subscribe(key, hold, true, &refusals)
 	}
+	in.releaseAppliedLocked()
 	return refusals
 }
 
@@ -765,12 +783,25 @@ func (in *Interest) Close() {
 	if in.cancelQueue != nil {
 		in.cancelQueue()
 	}
+	// 先关队列（不再有新事实、不再启动应用线程），再停应用线程并等它退出——它要拿 mu，所以不能持 mu 等。
+	in.queueMu.Lock()
+	alreadyClosed := in.queueClosed
+	in.queueClosed = true
+	started := in.applierStarted
+	in.queueMu.Unlock()
+	if started && !alreadyClosed {
+		close(in.applierStop)
+		<-in.applierDone
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
 	in.registry.close()
+	for _, fact := range in.applied {
+		fact.finish()
+	}
+	in.applied = nil
 	in.queueMu.Lock()
-	in.queueClosed = true
 	for _, fact := range in.facts {
 		fact.finish()
 	}

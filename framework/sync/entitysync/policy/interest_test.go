@@ -23,8 +23,12 @@ func factEntity(t *testing.T, id int64) *queuedEntity {
 	e.SetSyncState(subjectState(t, id))
 	return e
 }
-func flushInterest(t *testing.T, m *entitysync.Manager) {
+
+// flushInterest 先让应用线程把已确认的排队事实应用完（与后台应用线程互斥，不改变谁先谁后的结果），
+// 再走一次 Flush 结算并下发；未确认的事实仍留在队列里。
+func flushInterest(t *testing.T, in *Interest, m *entitysync.Manager) {
 	t.Helper()
+	stepApplier(t, in)
 	if err := m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +52,7 @@ func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks[0] = in.BlockAt(original)
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	if got := m.Subscribers(2); !slices.Equal(got, []entitysync.SessionID{1}) {
 		t.Fatalf("subscribers=%v", got)
 	}
@@ -67,7 +71,7 @@ func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 	if err := in.QueueObservedBlocks(e, expected[1:]); err != nil {
 		t.Fatal(err)
 	}
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	if !subscribed(m, 1, 2) {
 		t.Fatal("one remaining block was ignored")
 	}
@@ -76,7 +80,7 @@ func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 	if err := in.QueueObservedBlocks(e, nil); err != nil {
 		t.Fatal(err)
 	}
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	if !subscribed(m, 1, 2) {
 		t.Fatal("block removal dropped team subscription")
 	}
@@ -100,13 +104,13 @@ func TestSpatialAndBlockHandoverDoesNotRecreateBaseline(t *testing.T) {
 	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
 	mustEnter(t, in, 2, spatial.Point{X: 20, Y: 10})
 	mustApply(t, in)
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	before := transport.count(1)
 	e := factEntity(t, 2)
 	if err := in.QueueSpatial(e, spatial.Point{X: 900, Y: 900}, []int64{in.BlockAt(spatial.Point{X: 10, Y: 10})}); err != nil {
 		t.Fatal(err)
 	}
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	if !subscribed(m, 1, 2) || transport.count(1) != before {
 		t.Fatal("source handover recreated or removed baseline")
 	}
@@ -126,7 +130,7 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 		if err := in.QueueSpatial(e, spatial.Point{X: 800, Y: 800}, near); err != nil {
 			t.Fatal(err)
 		}
-		flushInterest(t, m)
+		flushInterest(t, in, m)
 		if len(in.ObservedBlocks(2)) != 0 {
 			t.Fatal("unconfirmed coverage escaped")
 		}
@@ -140,12 +144,12 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 			mutation.Admit()
 			mutation.Confirm()
 		}
-		flushInterest(t, m)
+		flushInterest(t, in, m)
 		if len(in.ObservedBlocks(2)) != 0 {
 			t.Fatal("coverage escaped before release")
 		}
 		mutation.Release()
-		flushInterest(t, m)
+		flushInterest(t, in, m)
 		if (outcome == "commit") != subscribed(m, 1, 2) {
 			t.Fatalf("outcome=%s subscription mismatch", outcome)
 		}
@@ -159,7 +163,7 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 	if err := in.Show(2, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	if subscribed(m, 1, 2) || len(in.ObservedBlocks(2)) != 0 {
 		t.Fatal("old coverage resurrected after Hide/Show")
 	}
@@ -192,7 +196,7 @@ func TestCoverageLateObserverBudgetAndVisibilityLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	flushInterest(t, m)
+	flushInterest(t, in, m)
 	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
 	mustApply(t, in)
 	if !subscribed(m, 1, 2) || !subscribed(m, 1, 3) {
@@ -412,6 +416,7 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 	m := newManager(t)
 	in := newInterest(t, m)
 	in.batchSize = 1
+	manualApplier(in)
 	var entities []*queuedEntity
 	for id := int64(1); id <= 2; id++ {
 		mustEnter(t, in, id, spatial.Point{X: 10 * id, Y: 10})
@@ -471,16 +476,12 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 	}
 	first.Admit()
 	first.Release()
-	if err := m.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	flushInterest(t, in, m)
 	if len(in.Visible(1)) != 1 {
 		t.Fatal("unconfirmed movement applied")
 	}
 	first.Confirm()
-	if err := m.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	flushInterest(t, in, m)
 	if len(in.Visible(1)) != 0 {
 		t.Fatal("confirmed movement not applied")
 	}
@@ -490,9 +491,7 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 	}
 	second.Finish(false)
 	second.Release()
-	if err := m.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	flushInterest(t, in, m)
 	if len(in.Visible(1)) != 0 || len(in.facts) != 0 {
 		t.Fatal("rolled back facts escaped or leaked")
 	}
@@ -672,6 +671,8 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 	in.queueActive = true
 	in.facts = append(in.facts, queuedInterestFact{id: 99, at: spatial.Point{X: 5, Y: 5}, condition: func() (bool, bool) { return true, false }})
 	in.mu.Unlock()
+	// 应用线程丢弃这条事实并攒下错误，由下一次 Flush 的结算返回一次。
+	stepApplier(t, in)
 	if err := m.Flush(context.Background()); err == nil {
 		t.Fatal("unappliable fact not reported")
 	}
@@ -679,6 +680,45 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 		if err := m.Flush(context.Background()); err != nil {
 			t.Fatalf("flush %d still failing on a dropped fact: %v", round, err)
 		}
+	}
+}
+
+// Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里（DESIGN-TODO D19
+// “排队事实异步应用”）。这里直接把一条已确认的事实放进队列，不经 queueFact，所以没有应用线程被唤醒；Flush 之后
+// 事实必须仍在队列里、AOI 里的位置不变、订阅没变。应用一步之后，下一次 Flush 才结算并下发。
+func TestFlushSettlesButDoesNotApplyQueuedFacts(t *testing.T) {
+	m := newManager(t)
+	in := newInterest(t, m)
+	player(t, m, 1)
+	player(t, m, 2)
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
+	mustApply(t, in)
+	flushInterest(t, in, m)
+	in.mu.Lock()
+	in.queueMu.Lock()
+	in.queueActive = true
+	in.facts = append(in.facts, queuedInterestFact{id: 2, at: spatial.Point{X: 20, Y: 10}, condition: func() (bool, bool) { return true, false }})
+	in.queueMu.Unlock()
+	in.mu.Unlock()
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	in.mu.Lock()
+	at, queued := in.aoi.subjects[2], len(in.facts)
+	in.mu.Unlock()
+	if at != (spatial.Point{X: 900, Y: 900}) || queued != 1 {
+		t.Fatalf("Flush applied a queued fact on its own path: position=%v queued=%d", at, queued)
+	}
+	if slices.Contains(m.Subscribers(2), entitysync.SessionID(1)) {
+		t.Fatal("Flush subscribed through an unapplied fact")
+	}
+	stepApplier(t, in)
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(m.Subscribers(2), entitysync.SessionID(1)) {
+		t.Fatal("applied fact not settled by the next Flush")
 	}
 }
 
@@ -728,9 +768,7 @@ func TestRemoteRejectKeepsCommittedLocalInterestFact(t *testing.T) {
 	mutation.Release()
 	// Remote 确认无结论 → finalizer 拿到持久拒绝：只拒绝 Remote 批次里的实体。
 	mutation.RejectEntities([]int64{remote.ID()})
-	if err := m.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	flushInterest(t, in, m)
 	if !local.Sync().SyncCommitReady() || !remote.Sync().SyncCommitReady() {
 		t.Fatalf("gates still frozen: local=%v remote=%v", local.Sync().SyncCommitReady(), remote.Sync().SyncCommitReady())
 	}
@@ -795,9 +833,7 @@ func TestPureRemoteRejectDiscardsItsInterestFacts(t *testing.T) {
 	mutation.Admit()
 	mutation.Release()
 	mutation.RejectEntities([]int64{remote.ID()})
-	if err := m.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	flushInterest(t, in, m)
 	if !remote.Sync().SyncCommitReady() {
 		t.Fatal("rejected commit still blocks the gate")
 	}
@@ -860,4 +896,193 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 	if refused.Err == nil || refused.Waited <= 0 || !strings.Contains(refused.Detail, "observer 2, refused 1 time") {
 		t.Fatalf("refused stall = %+v", *refused)
 	}
+}
+
+// stepApplier 让应用线程走一步（与后台应用线程互斥于 Interest.mu，可以同时存在）。
+func stepApplier(t *testing.T, in *Interest) {
+	t.Helper()
+	for {
+		_, more, _ := in.applyStep()
+		if !more {
+			return
+		}
+	}
+}
+
+// applyQueued 是改动前“政策阶段应用一批并结算”的测试替身：应用线程走一步，再按 Flush 的政策阶段结算。
+func (in *Interest) applyQueued() error {
+	in.applyStep()
+	return in.settleQueued()
+}
+
+// manualApplier 让这个 Interest 不启动后台应用线程，由用例自己调 applyStep 一步一步走（断言单步的取批规则时用）。
+func manualApplier(in *Interest) {
+	in.queueMu.Lock()
+	in.applierStarted = true
+	in.queueMu.Unlock()
+	close(in.applierDone)
+}
+
+// 后台应用线程与 Manager 周期 Flush 同时运行：回滚的移动（落在观察者 W 身边）从不生效——W 的会话一帧也没收到；
+// 已提交的移动按顺序生效，最后的位置就是最后一笔提交的位置；Drain 等到在途事实全部应用并结算。
+func TestApplierNeverAppliesRolledBackFactsAndKeepsOrder(t *testing.T) {
+	transport := &sink{}
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport, Interval: 2 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	in := newInterest(t, m)
+	const mover, watcher = int64(2), int64(9)
+	player(t, m, mover)
+	if err := m.OpenSession(entitysync.SessionID(watcher)); err != nil {
+		t.Fatal(err)
+	}
+	trap := spatial.Point{X: 900, Y: 900}
+	if err := in.Watch(watcher, trap, ObserverView{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Show(mover, spatial.Point{X: 100, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, in)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e := factEntity(t, mover)
+	rng := rand.New(rand.NewPCG(7, 11))
+	last := spatial.Point{X: 100, Y: 100}
+	for step := range 400 {
+		mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+		commit := rng.IntN(3) != 0
+		at := trap
+		if commit {
+			at = spatial.Point{X: 100 + int64(step%50)*4, Y: 100}
+		}
+		if err := in.QueueMove(e, at); err != nil {
+			t.Fatal(err)
+		}
+		if commit {
+			mutation.Admit()
+			mutation.Confirm()
+			last = at
+		} else {
+			mutation.Finish(false)
+		}
+		mutation.Release()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	in.mu.Lock()
+	at, queued := in.aoi.subjects[mover], len(in.facts)
+	in.mu.Unlock()
+	in.queueMu.Lock()
+	inflight := in.inflight
+	in.queueMu.Unlock()
+	if at != last || queued != 0 || inflight != 0 {
+		t.Fatalf("after Drain: position=%v want %v, queued=%d inflight=%d", at, last, queued, inflight)
+	}
+	if frames := transport.count(entitysync.SessionID(watcher)); frames != 0 {
+		t.Fatalf("a rolled back move reached the watcher: %d frame(s)", frames)
+	}
+}
+
+// 同一实体的事实按入队顺序生效：后一笔先确认也要等前一笔；前一笔确认后两笔按顺序应用，最终在后一笔的位置。
+func TestApplierKeepsPerEntityOrderAcrossOutOfOrderConfirms(t *testing.T) {
+	m := newManager(t)
+	in := newInterest(t, m)
+	manualApplier(in)
+	player(t, m, 2)
+	if err := in.Show(2, spatial.Point{X: 100, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, in)
+	e := factEntity(t, 2)
+	first := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+	if err := in.QueueMove(e, spatial.Point{X: 200, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	first.Admit()
+	first.Release()
+	second := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+	if err := in.QueueMove(e, spatial.Point{X: 300, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	second.Admit()
+	second.Confirm()
+	second.Release()
+	stepApplier(t, in)
+	if at := in.aoi.subjects[2]; at != (spatial.Point{X: 100, Y: 100}) {
+		t.Fatalf("a later fact overtook an unconfirmed earlier one: %v", at)
+	}
+	first.Confirm()
+	stepApplier(t, in)
+	if at := in.aoi.subjects[2]; at != (spatial.Point{X: 300, Y: 100}) {
+		t.Fatalf("facts not applied in order: %v", at)
+	}
+}
+
+// 背压：已应用、未结算的事实仍占队列预算；队列满时 QueueMove 返回 ErrInterestQueueFull，结算之后恢复。
+func TestAppliedButUnsettledFactsKeepTheQueueBudget(t *testing.T) {
+	m := newManager(t)
+	cfg := InterestConfig{Manager: m, AOI: interestConfig(), MaxQueuedFacts: 2}
+	in, err := NewInterest(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.Close)
+	manualApplier(in)
+	player(t, m, 2)
+	if err := in.Show(2, spatial.Point{X: 100, Y: 100}); err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, in)
+	e := factEntity(t, 2)
+	for x := int64(200); x <= 300; x += 100 {
+		if err := in.QueueMove(e, spatial.Point{X: x, Y: 100}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stepApplier(t, in)
+	if err := in.QueueMove(e, spatial.Point{X: 400, Y: 100}); !errors.Is(err, ErrInterestQueueFull) {
+		t.Fatalf("applied but unsettled facts left the budget: %v", err)
+	}
+	flushInterest(t, in, m)
+	if err := in.QueueMove(e, spatial.Point{X: 400, Y: 100}); err != nil {
+		t.Fatalf("settled facts still hold the budget: %v", err)
+	}
+}
+
+// 已应用、未结算的事实仍挡住内容发布：内容与它带来的进出视野要在同一次结算之后、同一帧里出现。
+func TestAppliedFactHoldsContentUntilSettled(t *testing.T) {
+	m := newManager(t)
+	in := newInterest(t, m)
+	manualApplier(in)
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	e := factEntity(t, 1)
+	if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatal(err)
+	}
+	stepApplier(t, in)
+	prepared, err := e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
+	if prepared != nil {
+		prepared.Abort()
+	}
+	if !errors.Is(err, entity.ErrSyncCommitPending) {
+		t.Fatalf("content published before the applied fact was settled: %v", err)
+	}
+	if err := in.settleQueued(); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err = e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Abort()
 }

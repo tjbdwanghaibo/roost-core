@@ -938,7 +938,7 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	mutation.Confirm()
 	mutation.Release()
 	setRelation(t, interest, playerA)
-	flushInterest(t, manager)
+	flushInterest(t, interest, manager)
 	requireSessions(t, manager, entityA, 7, 8)
 	requireSessions(t, manager, monster, 7, 8)
 
@@ -1157,7 +1157,7 @@ func TestQueuedMoveCarriesTheViewsThatFollowTheEntity(t *testing.T) {
 	mutation.Admit()
 	mutation.Confirm()
 	mutation.Release()
-	flushInterest(t, manager)
+	flushInterest(t, interest, manager)
 	requireSessions(t, manager, other, entitysync.SessionID(playerID))
 	if got := interest.Visible(playerID); !slices.Equal(got, []int64{other}) {
 		t.Fatalf("the player's view did not follow the hero: %v", got)
