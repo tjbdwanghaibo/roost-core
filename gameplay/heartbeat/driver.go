@@ -90,13 +90,18 @@ type beat struct {
 	reg *Reg
 }
 
-// deliverer 把一格到期的一批心跳一次交出。P1 的 dispatchDeliverer 逐个 nest.Client.Dispatch；Nest 批量入队
-// （DESIGN-TODO D20 方案 D）落地后只换这一层。rejected 对每个没有准入的拍调用一次（驱动按跳拍处理）。
+// deliverer 把一格到期的一批心跳一次交出。rejected 对每个没有准入的拍在驱动 goroutine 上同步调用一次（驱动按跳拍
+// 处理）；准入之后 Nest 才发现不能执行的拍经 Driver.handBack 交回（见 batchDeliverer）。
 type deliverer interface {
 	deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error))
 }
 
-// dispatchDeliverer 是 P1 的投递：每拍一条单目标 Dispatch，走 Nest 正式准入。
+// beatBatchSize 是一个 Nest 批量作业带的拍数（ssr 同为 64；按 D20 选项 C 压测定，见
+// docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
+const beatBatchSize = 64
+
+// dispatchDeliverer 是单目标投递：每拍一条 Dispatch，走 Nest 正式准入。客户端不支持批量作业（测试替身、包装客户端）
+// 时用它；batchDeliverer 用它投 Remote 托管实体的拍。
 type dispatchDeliverer struct{ client nest.Client }
 
 func (p dispatchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error)) {
@@ -114,6 +119,111 @@ func (p dispatchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejec
 	}
 }
 
+// batchDeliverer 按 beatBatchSize 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，设计见
+// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：每拍仍在实体自己的 Guard 作用域与事务里执行；
+// 同 ID 有已准入未完成的消息时 Nest 当场把这一拍转成单目标作业排在它后面（不跳拍），只有准入被拒、目标不在内存等
+// 才交回（Driver.handBack，下一格开头按跳拍 / 丢弃处理）。Remote 托管实体的拍逐个单目标 Dispatch：它的写要在
+// I/O 池取得 Remote 写批次，批量作业不接受。只由驱动 goroutine 调用。
+type batchDeliverer struct {
+	single  dispatchDeliverer
+	batch   nest.TryBatchDispatcher
+	driver  *Driver
+	targets []nest.TryBatchTarget
+	pending []beat // 与 targets 一一对应，整批准入失败时逐拍 rejected
+	remote  []beat
+}
+
+func (p *batchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error)) {
+	p.targets, p.pending, p.remote = p.targets[:0], p.pending[:0], p.remote[:0]
+	flush := func() {
+		if len(p.targets) == 0 {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			for _, b := range p.pending {
+				rejected(b, err)
+			}
+		} else if err := p.batch.DispatchTryBatch(ctx, p.targets, p.driver.handBack); err != nil {
+			// 整批没有准入（引擎停止 / fence、ctx 取消）：逐拍按准入失败处理。
+			for _, b := range p.pending {
+				rejected(b, err)
+			}
+		}
+		clear(p.targets)
+		p.targets, p.pending = p.targets[:0], p.pending[:0]
+	}
+	for _, b := range batch {
+		if b.reg.host.remote != nil {
+			p.remote = append(p.remote, b)
+			continue
+		}
+		p.targets = append(p.targets, nest.TryBatchTarget{Handler: b.reg.handler, ID: b.reg.host.id, Params: b.reg.params})
+		p.pending = append(p.pending, b)
+		if len(p.targets) == beatBatchSize {
+			flush()
+		}
+	}
+	flush()
+	if len(p.remote) > 0 {
+		p.single.deliverBatch(ctx, p.remote, rejected)
+	}
+	clear(p.pending)
+	clear(p.remote)
+}
+
+// returnedBeat 是 Nest 批量作业交回的一拍（没有执行）与原因。
+type returnedBeat struct {
+	reg *Reg
+	err error
+}
+
+// handBack 是批量作业的交回回调：可能在 Nest worker 上调用，只把拍放进交回队列（一把短锁的追加），不改驱动状态；
+// 驱动在下一格开头处理（drainReturned）。在途标志保持到那时，这期间到期的同一登记照常按 inflight 跳拍。
+func (d *Driver) handBack(target nest.TryBatchTarget, err error) {
+	r, ok := target.Params[0].(*Reg)
+	if !ok || r == nil {
+		return
+	}
+	d.returnedMu.Lock()
+	d.returned = append(d.returned, returnedBeat{reg: r, err: err})
+	d.returnedMu.Unlock()
+}
+
+// drainReturned 处理交回队列：清在途；目标不在内存计 dropped{not_loaded}；其余按跳拍计数（queue_full / rejected）并
+// 限频 Warn。驱动停止中（ctx 已取消）只清在途。只由驱动 goroutine 调用。
+func (d *Driver) drainReturned(ctx context.Context) {
+	d.returnedMu.Lock()
+	returned := d.returned
+	d.returned = d.drained[:0]
+	d.returnedMu.Unlock()
+	for i, rb := range returned {
+		returned[i] = returnedBeat{}
+		r := rb.reg
+		r.inflight.Store(false)
+		switch {
+		case errors.Is(rb.err, nest.ErrEntityNotFound):
+			d.stats.dropNotLoaded.add(r.host.id)
+		case ctx.Err() != nil:
+		default:
+			d.skip(r, rb.err)
+		}
+	}
+	d.drained = returned[:0]
+}
+
+// skip 记一次因准入失败（含批量作业交回）跳过的拍：计数、限频 Warn。只由驱动 goroutine 调用。
+func (d *Driver) skip(r *Reg, err error) {
+	r.skipped.Add(1)
+	reason := "rejected"
+	if errors.Is(err, nest.ErrQueueFull) {
+		reason = "queue_full"
+		d.stats.skipQueueFull.add(r.host.id)
+	} else {
+		d.stats.skipRejected.add(r.host.id)
+	}
+	d.warn.noteErr(r, reason, err)
+}
+
 // Driver 是一个 Nest 引擎上的心跳驱动（进程里每个引擎一个），由 wiring/heartbeat 装配。
 type Driver struct {
 	config     Config
@@ -128,6 +238,11 @@ type Driver struct {
 	done    chan struct{}
 	// lastDone 是最近一次启动的循环的退出信号，Stop 之后保留，Start 据此拒绝与未退出的旧循环并存。
 	lastDone chan struct{}
+
+	// returned 是 Nest 批量作业交回、等驱动处理的拍（handBack 追加，drainReturned 取走）；drained 是取走后留着复用的底层数组。
+	returnedMu sync.Mutex
+	returned   []returnedBeat
+	drained    []returnedBeat
 
 	stats driverStats
 	// sharedSample 是最近一个因共享模式被停掉的登记（回调侧写、flush 读后清），Warn 的样本。
@@ -196,8 +311,13 @@ func (d *Driver) Bind(client nest.Client, lookup Lookup) error {
 	if client == nil || lookup == nil {
 		return fmt.Errorf("heartbeat: driver %s: nest client and entity lookup are required", d.config.Name)
 	}
+	var deliver deliverer = dispatchDeliverer{client: client}
+	if batch, ok := client.(nest.TryBatchDispatcher); ok {
+		// 生产装配的客户端（*nest.NestMgr）都支持批量作业；不支持的（测试替身、包装客户端）退回单目标 Dispatch。
+		deliver = &batchDeliverer{single: dispatchDeliverer{client: client}, batch: batch, driver: d}
+	}
 	d.mu.Lock()
-	d.deliver, d.lookup = dispatchDeliverer{client: client}, lookup
+	d.deliver, d.lookup = deliver, lookup
 	d.mu.Unlock()
 	return nil
 }
@@ -285,6 +405,7 @@ func (d *Driver) step(ctx context.Context) {
 	deliver, lookup := d.deliver, d.lookup
 	d.mu.Unlock()
 
+	d.drainReturned(ctx)
 	d.batch = d.batch[:0]
 	for i, r := range d.due {
 		d.due[i] = nil
@@ -340,17 +461,11 @@ func (d *Driver) step(ctx context.Context) {
 		if ctx.Err() != nil {
 			return // 驱动停止中：不算跳拍
 		}
-		b.reg.skipped.Add(1)
-		reason := "rejected"
-		if errors.Is(err, nest.ErrQueueFull) {
-			reason = "queue_full"
-			d.stats.skipQueueFull.add(b.reg.host.id)
-		} else {
-			d.stats.skipRejected.add(b.reg.host.id)
-		}
-		d.warn.noteErr(b.reg, reason, err)
+		d.skip(b.reg, err)
 	})
 	d.stats.delivered.addN(admitted)
+	// 准入前就能判定的交回（例如 ID 非法）在 DispatchTryBatch 里同步发生，本格处理掉。
+	d.drainReturned(ctx)
 }
 
 // mayOwn 报告 Remote 托管实体的实例在这个所有权状态下是否投递：LocalOwned 是本进程独占；Unknown / Recovering

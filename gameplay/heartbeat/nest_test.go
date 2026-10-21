@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,6 +98,18 @@ func (f *nestFixture) idle() {
 		}
 		return q.LongContinuations == 0 && q.ContinuationRunning == 0 && st.ShortContinuations == 0
 	})
+}
+
+// stepUntilDelivered 逐格推进，直到驱动累计投出 n 拍（至多一个最长档的格数）。
+func (f *nestFixture) stepUntilDelivered(n int64) {
+	f.t.Helper()
+	for range 6000 {
+		if f.driver.Stats().Delivered >= n {
+			return
+		}
+		f.step(1)
+	}
+	f.t.Fatalf("no beat delivered: %+v", f.driver.Stats())
 }
 
 func (f *nestFixture) step(n int) {
@@ -490,5 +504,128 @@ func TestBeatsOnATimeDomainFollowItsRate(t *testing.T) {
 	f.clock.Advance(2 * time.Second)
 	if long := beat(); long.beat.Elapsed != 10*time.Second {
 		t.Fatalf("a 2s stall at 10x gave Elapsed %v, want the 10s cap (max(1s, period) x rate)", long.beat.Elapsed)
+	}
+}
+
+// 批量投递（Nest 批量作业）下的同 ID 顺序：业务消息已准入、尚未执行（它同时声明了另一个实体，排在那个实体正在执行的
+// 消息后面；本实体的锁此时没人持有）时，到期的拍在
+// 这条消息之后、同一格内执行——Nest 当场把它转成单目标作业排在后面，不跳拍、不等下一格（Nest 计“冲突转单目标”1 次）。
+// 转成单目标作业后这一拍仍在途：之后一个周期里到期的同一登记按 inflight 跳过，不会有第二拍在途。
+// 变异核对：① Nest 冲突时直接执行而不排队（prepareTryBatchTargetLocked 对已有 tails 的目标照样执行）时拍插到业务消息
+// 之前，本用例变红；② 驱动不看在途标志照投时同一登记投出两拍，本用例变红。
+func TestConflictingBeatRunsRightAfterTheAdmittedMessage(t *testing.T) {
+	block := nest.NewHandlerName("hb_test_conflict_block")
+	biz := nest.NewHandlerName("hb_test_conflict_biz")
+	entered, gate := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	var events []string
+	var mu sync.Mutex
+	logEvent := func(s string) { mu.Lock(); events = append(events, s); mu.Unlock() }
+	f := newNestFixture(t, func(m *nest.NestMgr) {
+		m.MustRegisterHandlerWithMeta(block, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+			close(entered)
+			<-gate
+			logEvent("running")
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+		m.MustRegisterHandlerWithMeta(biz, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+			logEvent("admitted")
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	})
+	t.Cleanup(release) // 断言失败时也放开占住 worker 的消息，先于引擎停机执行
+	e := newHBEntity(t, f.driver, 40, kindShort)
+	other := newHBEntity(t, f.driver, 42, kindShort)
+	f.manager.Add(e)
+	f.manager.Add(other)
+	r, _ := e.host.Register("x", 50*time.Millisecond, func(Beat) error { logEvent("beat"); return nil })
+	r.Start()
+	if err := f.engine.Dispatch(context.Background(), block, other.ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	// 业务消息声明 e 与 other：排在 other 正在执行的消息后面等前驱，占着 e 的 tails，但不持 e 的锁。
+	if err := f.engine.DispatchMulti(context.Background(), biz, []int64{e.ID(), other.ID()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.stepUntilDelivered(1) // 首拍到期、投递
+	waitFor(t, "the beat to be converted or to run", func() bool {
+		mu.Lock()
+		ran := slices.Contains(events, "beat")
+		mu.Unlock()
+		return ran || f.engine.Stats().Queue.Short.TryBatchConverted == 1
+	})
+	mu.Lock()
+	early := slices.Clone(events)
+	mu.Unlock()
+	if slices.Contains(early, "beat") {
+		t.Fatalf("events %v: the beat ran before the already admitted message", early)
+	}
+	f.step(10) // 再过一个多周期：同一登记到期，上一拍仍在途
+	release()
+	f.settle(r)
+	f.idle()
+	if fmt.Sprint(events) != "[running admitted beat]" {
+		t.Fatalf("events %v: the beat must run right after the already admitted message", events)
+	}
+	st := f.driver.Stats()
+	if st.Delivered != 1 || st.Executed != 1 || st.SkippedQueueFull+st.SkippedRejected != 0 || st.SkippedInflight == 0 {
+		t.Fatalf("stats %+v: want one delivered and executed beat, no admission skips, and the next due beat skipped as in flight", st)
+	}
+	if c := f.engine.Stats().Queue.Short.TryBatchConverted; c != 1 {
+		t.Fatalf("converted %d, want 1", c)
+	}
+}
+
+// 冲突的拍转单目标作业被准入拒绝（快池等待位已满）时才算跳拍：清在途、计 skipped{queue_full}、打限频 Warn；
+// 下一个周期照常投。
+func TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses(t *testing.T) {
+	block := nest.NewHandlerName("hb_test_full_block")
+	biz := nest.NewHandlerName("hb_test_full_biz")
+	entered, gate := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	logs := &countingHandler{}
+	f := newNestFixture(t, func(m *nest.NestMgr) {
+		m.MustRegisterHandlerWithMeta(block, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+			close(entered)
+			<-gate
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+		m.MustRegisterHandlerWithMeta(biz, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	}, nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 1}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	t.Cleanup(release) // 断言失败时也放开占住 worker 的消息，先于引擎停机执行
+	f.driver.config.Logger = slog.New(logs)
+	e := newHBEntity(t, f.driver, 41, kindShort)
+	f.manager.Add(e)
+	var runs atomic.Int32
+	r, _ := e.host.Register("x", 50*time.Millisecond, func(Beat) error { runs.Add(1); return nil })
+	r.Start()
+	if err := f.engine.Dispatch(context.Background(), block, e.ID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err := f.engine.Dispatch(context.Background(), biz, e.ID(), nil); err != nil { // 占满唯一的等待位
+		t.Fatal(err)
+	}
+	f.stepUntilDelivered(1)
+	waitFor(t, "the beat to be handed back", func() bool {
+		f.driver.returnedMu.Lock()
+		defer f.driver.returnedMu.Unlock()
+		return len(f.driver.returned) == 1
+	})
+	f.step(1) // 下一格开头处理交回
+	f.driver.flush(time.Now())
+	st := f.driver.Stats()
+	if st.SkippedQueueFull != 1 || r.inflight.Load() || logs.count() == 0 {
+		t.Fatalf("stats %+v inflight=%v warns=%d: a refused conversion is a skipped beat (queue_full, Warn)", st, r.inflight.Load(), logs.count())
+	}
+	release()
+	f.idle()
+	f.step(5) // 下一个周期照常投、执行
+	f.settle(r)
+	if runs.Load() != 1 {
+		t.Fatalf("runs %d after the next period, want 1", runs.Load())
 	}
 }
