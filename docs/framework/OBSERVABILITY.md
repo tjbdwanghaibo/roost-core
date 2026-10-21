@@ -197,6 +197,7 @@ DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个
 | `heartbeat.skipped_total{driver,reason}` | Counter | 跳过的拍：`inflight`（上一拍还没执行完）、`queue_full`（快池准入满）、`rejected`（其他准入失败，例如引擎停止中）。**基线应为零**；持续增长说明实体所在的 worker 跟不上或回调太慢。同时打限频 Warn `heartbeat: beats skipped`（缺省 10s 一条，汇总间隔内的计数并带一个样本实体） |
 | `heartbeat.stalled_total{driver}` | Counter | 在途超过 `StallAfter`（缺省 10s，同一登记连续卡住时翻倍）视为丢失而重投的拍。**基线应为零**；非零说明 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败），或 worker 排队超过 10s。同样计入 Warn |
 | `heartbeat.dropped_total{driver,reason}` | Counter | 按规则丢弃、不执行回调的拍：`removed`（实例已卸载 / 删档）、`stale`（已被同 ID 新实例取代或已 OnDestroy；含卸载窗口里旧实例的拍到达新实例）、`not_loaded`（实例还没发布）、`stopped`（停止生效后才到达）、`not_owner`（Remote 托管实体本进程不是独占拥有方）、`duplicate`（卡住重投后同一次投递的另一份已执行）。不打日志 |
+| `heartbeat.stopped_total{driver,reason}` | Counter | 框架自动停掉的登记：`remote_shared`（Remote 托管实体进入共享模式，共享模式不允许挂载心跳）。同时打 Warn `heartbeat: registrations stopped because their Remote entity entered shared mode`（每秒至多一条，带个数与一个样本实体）。非零说明有组件给会进入共享模式的 Remote 实体挂了心跳，应改由业务层驱动 |
 | `heartbeat.registered{driver}` | Gauge | 正在跳（启动已生效）的登记数 |
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
