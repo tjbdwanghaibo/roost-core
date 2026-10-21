@@ -24,7 +24,7 @@
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
-| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；**维护者 2026-10-21 决定调研一 13 条全部按推荐（A），实施中**（D21-1 → D21-5，见本节“调研一 · 实施”） |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，本地分支 `feat/d21-gameplay`，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；4 项实施中的小决定先按推荐做、待拍板；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；调研与方案已写，待拍板，代码未改 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
@@ -1241,7 +1241,7 @@ roost 的取舍：
 
 ## D21 吸收 ssr 的优秀组件进 `gameplay`
 
-**状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”。维护者 2026-10-21 决定：调研一 13 条拍板项全部按推荐（A）实施，按 D21-1 → D21-5 分期进行（实施中，结果见“调研一 · 实施”）。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
+**状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”。维护者 2026-10-21 决定：调研一 13 条拍板项全部按推荐（A）实施，按 D21-1 → D21-5 分期进行，已实施（结果见“调研一 · 实施”）。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
 
 **原则**：按 roost 的模型重写，不复制 ssr 代码；只收“与具体游戏玩法无关、多数游戏都会用”的通用部件，玩法规则留给业务（demo 是参考，生成器只生成框架内容）；所有控制实体行为的逻辑走 actionflow（D20 维护者决定），周期推进走心跳（D20）；每个组件先写方案（与现有 roost 包的关系、事务 / 回滚 / 同步语义、持久化），维护者确认后再实施。
 
@@ -1501,7 +1501,7 @@ roost 的取舍：
 
 **维护者 2026-10-21 决定：Agent 更名为 Behavior**（`actionflow.Agent` → `actionflow.Behavior`，`NewAgent` → `NewBehavior`，`AgentConfig` → `BehaviorConfig`）：Agent 容易和 AI agent 混淆；它是 action_list + mission + 接 AI 的融合，是实体的“行为组件”（运行时组件，不带 DAO）。`ActionList` 接口名与 `ai.Controller` 不变，Behavior 是 `ActionList` 的默认实现。改名在 D21-5 之后单独提交（refactor），下文与上文方案里的名字已统一改成 Behavior（ssr state 模块自己的 `Agent` 除外）。
 
-实施中，分期结果按完成顺序写在下面。
+分期结果按完成顺序写在下面，最后是“调研一 · 收尾”。
 
 ##### D21-1 实施结果（2026-10-21）
 
@@ -1733,6 +1733,13 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 **验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`（含指标名门禁）；全量 `GOWORK=off go test -count=1 ./...`（见下文“调研一 · 收尾”）。退出码均为 0。
 
 **待拍板（先按推荐做了）**：④ 动作指标是否缺省开启——现按“缺省关闭、`BehaviorConfig.Metrics` 打开”（推荐：每个动作两次注册表写入，全服开销没有测量）；备选 B：缺省开启，按需关闭。
+
+##### 调研一 · 收尾（2026-10-21）
+
+- **提交**（分支 `feat/d21-gameplay`，本地，未推送）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
+- **全量验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例 `-race -count=30`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`。退出码均为 0。
+- **待拍板（都已先按推荐实施）**：① `FreezeCancel` 是否连排队项一起丢弃（现：保留）；② 门控在 handler 回滚后的一致性（现：下一次状态通知时纠正、不累积）；③ 被取消的计划步骤是否重试（现：不重试）；④ 动作指标是否缺省开启（现：关闭）。
+- **没做 / 不在本轮**：game-demo 与生成器接入 `Behavior`、`state`、AI 心跳（随 D20 P3）；`TickBuffs` 挂心跳（D20 P5）；其余 ssr 候选（`trigger_engine`、`eca_man`、`cooldown`、`timer`、空间、战斗、经济、社交）的调研。
 
 ## D22 业务时间取自 ctx、支持变速
 
