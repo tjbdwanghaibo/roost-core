@@ -97,8 +97,9 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	setPositive(&m.cfg.TransactionTrackTTL, re.TransactionTrackTTL)
 	setPositive(&m.cfg.WrapperCapacity, re.WrapperCapacity)
 	setPositive(&m.cfg.WrapperIdleTTL, re.WrapperIdleTTL)
-	// DAO 文档的库名映射由 DataEngine Mod 冻结后绑定（它在 Provide 里经 remote_entity.atomic_store 绑定）；
-	// 存储未绑定就写 DAO 文档一律拒绝（ErrDatabaseMapNotBound），不按逻辑库名写错库。
+	// DAO 文档的库名映射由 DataEngine Mod 冻结，engine.Assemble 接 Remote 投影（remote_entity.atomic_store）时
+	// 经 MongoStore.SetRemoteProjection 绑过来；存储未绑定就写 DAO 文档一律拒绝（dataengine.ErrDatabaseMapNotBound），
+	// 不按逻辑库名写错库。
 	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL}
 	return nil
 }

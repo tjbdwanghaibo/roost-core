@@ -352,7 +352,7 @@ func TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{Databases: f.store.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestWALRemoteAuthorityConflictNeverProducesRejected(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+			store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{Databases: f.store.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}

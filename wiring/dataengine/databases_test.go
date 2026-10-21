@@ -2,6 +2,7 @@ package dataengine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,24 @@ func TestToolsReadTheSameDatabaseMapping(t *testing.T) {
 	}
 	if client.Collection("planet_tool", "player").Len() != 1 || client.Collection("planet_tool_1000", "player").Len() != 1 {
 		t.Fatal("a global DAO must land in planet_tool and a dbscope=sid DAO in planet_tool_1000")
+	}
+}
+
+// 进程里有声明的逻辑库（生成的 gen_databases.go 在 init 里登记）而自建装配没给 DataEngine 映射表：构造 MongoStore
+// （engine.Assemble 也经它）时就拒绝，不等第一次投影——那时记录已经进了 WAL，只能卡在投影上。给了表照常构造。
+func TestSelfAssembledMongoStoreRequiresAMapWhenDatabasesAreDeclared(t *testing.T) {
+	coredata.DeclareDatabases(coredata.LogicalDatabase{Name: "wiring_main"})
+	client := mongotest.NewClient()
+	_, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: "de_system", ServerID: 1000})
+	if !errors.Is(err, coredata.ErrDatabaseMapNotBound) || !strings.Contains(err.Error(), "wiring_main") {
+		t.Fatalf("NewMongoStore without a map while wiring_main is declared = %v; want ErrDatabaseMapNotBound naming wiring_main", err)
+	}
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), ServerID: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: "de_system", ServerID: 1000, Databases: databases}); err != nil {
+		t.Fatalf("NewMongoStore with a map: %v", err)
 	}
 }
 

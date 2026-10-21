@@ -18,7 +18,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
@@ -319,14 +318,8 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		}
 		deps.RemoteManager, deps.RemoteStore = manager, remoteStore
 	}
-	if mod.remoteEnabled {
-		// Remote 写 DAO 文档与投影用同一张冻结的表（Remote 存储先于本 Mod Provide，写入只在 Start 之后发生）。
-		if binder, ok := deps.RemoteStore.(coreremote.DatabaseMapBinder); ok {
-			if err := binder.BindDatabaseMap(mod.cfg.mongo.Databases); err != nil {
-				return fmt.Errorf("dataengine mod: bind database map to remote storage: %w", err)
-			}
-		}
-	}
+	// Remote 写 DAO 文档与投影用同一张冻结的表：engine.Assemble 经 MongoStore.SetRemoteProjection 绑给 Remote 存储
+	// （Remote 存储先于本 Mod Provide，写入只在 Start 之后发生）；Remote 存储已绑另一张表时这里报错。
 	asm, err := engine.Assemble(deps, engine.AssemblyConfig{
 		Mongo: mod.cfg.mongo, WAL: mod.cfg.wal, Projector: mod.cfg.projector, Outbox: mod.cfg.outbox,
 		EffectPrefix: mod.cfg.effectPrefix, EffectStream: mod.cfg.effectStream, Pipelined: mod.cfg.pipelined,

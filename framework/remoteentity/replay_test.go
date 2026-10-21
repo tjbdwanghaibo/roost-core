@@ -334,7 +334,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 		_ = mgr.StopFinalizer(stop)
 	})
 
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: committer.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 		_ = mgr.StopFinalizer(stop)
 	})
 
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: committer.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

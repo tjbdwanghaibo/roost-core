@@ -35,6 +35,17 @@ type nativeStepHarness struct {
 	fail    error
 }
 
+// projectionDatabases 是测试自建 DataEngine 投影存储用的库名表：不配映射（逻辑名即物理名）。
+// MongoStore 没有表时拒绝读写带库名的 DAO 文档（dataengine.ErrDatabaseMapNotBound）。
+func projectionDatabases(t testing.TB) *coredata.DatabaseMap {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return databases
+}
+
 func newNativeStepHarness(t *testing.T) *nativeStepHarness {
 	t.Helper()
 	h := &nativeStepHarness{t: t, mongo: mongotest.NewClient(), jetstream: newRecordingJetStream(), success: true}
@@ -43,7 +54,7 @@ func newNativeStepHarness(t *testing.T) *nativeStepHarness {
 		t.Fatal(err)
 	}
 	h.inbox = inbox
-	projector, err := deengine.NewMongoStore(h.mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(h.mongo, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +329,7 @@ func TestNativeStepReceiptWaitersAreBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

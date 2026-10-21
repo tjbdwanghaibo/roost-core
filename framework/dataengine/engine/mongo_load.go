@@ -48,7 +48,10 @@ func (store *MongoStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec,
 		ctx = context.Background()
 	}
 	key := coredata.DocumentKey{Database: spec.Database, Scope: spec.Scope, Resource: spec.Resource}
-	collection := store.collection(key)
+	collection, err := store.collection(key)
+	if err != nil {
+		return err
+	}
 	filter := activeLoadFilter(spec.Filter)
 	if spec.IncludeDeleted {
 		filter = bson.M(spec.Filter)

@@ -13,6 +13,17 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// identityDatabases 是不配映射的库名表（逻辑名即物理名）：测试与自建装配没有映射需求时交给 MongoStoreConfig.Databases。
+// 不能留 nil——没有表时带库名的 DAO 文档一律被拒绝（coredata.ErrDatabaseMapNotBound）。
+func identityDatabases(t testing.TB) *coredata.DatabaseMap {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return databases
+}
+
 func mappedDatabases(t *testing.T, configured map[string]string) *coredata.DatabaseMap {
 	t.Helper()
 	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
@@ -72,6 +83,54 @@ func TestMongoStoreResolvesLogicalDatabasesOnEveryDocumentPath(t *testing.T) {
 		if n := client.Collection(name, "player").Len(); n != 0 {
 			t.Fatalf("%s.player holds %d documents; nothing may land outside the mapped physical database", name, n)
 		}
+	}
+}
+
+// 没有映射表（MongoStoreConfig.Databases 为 nil）时，带逻辑库名的 DAO 文档在投影（单条快路与批量）、删档墓碑、
+// 冷加载与墓碑读取上一律拒绝（ErrDatabaseMapNotBound），不按逻辑名落进名为 main 的库；与 Remote 存储没绑定表
+// 时同一条规则、同一个哨兵（维护者 2026-10-21）。只碰默认库（控制库）的操作不需要表。
+func TestMongoStoreWithoutDatabaseMapRefusesLogicalDatabases(t *testing.T) {
+	if declared := coredata.DeclaredDatabases(); len(declared) != 0 {
+		t.Fatalf("this test binary declares logical databases %v; the store below must be constructible without a map", declared)
+	}
+	client := mongotest.NewClient()
+	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "de_system", ServerID: 3, TransactionReceiptTTL: time.Hour})
+	if err != nil {
+		t.Fatalf("NewMongoStore without a map when no logical database is declared: %v", err)
+	}
+	ctx := context.Background()
+	if err := store.Project(ctx, mappedRecord(1, coredata.MutationPut, 0, 1)); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Errorf("single projection without a database map = %v, want ErrDatabaseMapNotBound", err)
+	}
+	if err := store.ProjectBatch(ctx, []coredata.CommitRecord{mappedRecord(2, coredata.MutationPut, 1, 2)}); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Errorf("batch projection without a database map = %v, want ErrDatabaseMapNotBound", err)
+	}
+	if err := store.Project(ctx, mappedRecord(3, coredata.MutationDelete, 2, 3)); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Errorf("tombstone projection without a database map = %v, want ErrDatabaseMapNotBound", err)
+	}
+	if docs, err := store.Load(ctx, coredata.LoadSpec{Database: "main", Scope: coredata.DatabaseServer, Resource: "player"}); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Errorf("cold load without a database map = %d documents, %v; want ErrDatabaseMapNotBound", len(docs), err)
+	}
+	if docs, err := store.Load(ctx, coredata.LoadSpec{Database: "main", Scope: coredata.DatabaseServer, Resource: "player", IncludeDeleted: true}); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Errorf("tombstone read without a database map = %d documents, %v; want ErrDatabaseMapNotBound", len(docs), err)
+	}
+	for _, name := range []string{"main", "main_3"} {
+		if n := client.Collection(name, "player").Len(); n != 0 {
+			t.Errorf("%s.player holds %d documents; without a map nothing may be written under the logical name", name, n)
+		}
+	}
+
+	// 只碰默认库（控制库）的操作不需要表：只带业务回执的记录照常投影，不写库名的读取落在默认库。
+	controlOnly := coredata.CommitRecord{ID: coredata.TransactionID{15: 4}, Durability: coredata.DurabilityStrict,
+		Receipts: []coredata.Receipt{{Namespace: "gift", ID: "order-1", Digest: []byte{1}, Payload: []byte("ok")}}}
+	if err := store.Project(ctx, controlOnly); err != nil {
+		t.Fatalf("a record that touches only the default database needs no map: %v", err)
+	}
+	if client.Collection("de_system", ReceiptCollection).Len() != 1 {
+		t.Fatal("the receipt-only record did not stage its receipt in the default database")
+	}
+	if _, err := store.Load(ctx, coredata.LoadSpec{Resource: "player"}); err != nil {
+		t.Fatalf("a load without a database name reads the default database and needs no map: %v", err)
 	}
 }
 

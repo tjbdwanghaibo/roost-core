@@ -45,7 +45,8 @@ func openAllianceOwner(t *testing.T, prefix string, sid int32, create bool) *all
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	backend, e := remoteentity.NewBackend(access, remoteentity.NewMongoCommitter(mongo, database, sid, 0))
 	check(t, e)
-	// 直接构造的提交器没绑定映射表时拒绝写 DAO 文档（ErrDatabaseMapNotBound）；与 wiring 的 DataEngine 装配一样先绑定。
+	// Remote 在 DataEngine 接上投影之前启动（Start 可能恢复上一轮未完成的提交、写 DAO 文档），所以先显式绑上
+	// DataEngine 的同一张表；之后 SetRemoteProjection 再绑同一张是无操作。没绑定时拒绝写（dataengine.ErrDatabaseMapNotBound）。
 	check(t, backend.BindDatabaseMap(databases))
 	cfg := remoteentity.DefaultConfig()
 	cfg.LockKey = prefix + ":lock"

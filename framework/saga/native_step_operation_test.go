@@ -396,7 +396,7 @@ func newNativeWorldWithSteps(t *testing.T, attempts uint32, t0 time.Time, sagaDe
 	if _, err := engine.StartSaga(w.ctx, start); err != nil {
 		t.Fatal(err)
 	}
-	projector, err := deengine.NewMongoStore(w.mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(w.mongo, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

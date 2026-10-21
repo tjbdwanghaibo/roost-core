@@ -136,7 +136,9 @@ const (
 	DatabaseSourceIdentity = "identity"
 )
 
-// DatabaseMap 是冻结的逻辑库 → 物理库表。构造后只读，可并发使用；nil 表示没有任何映射（物理名就是逻辑名）。
+// DatabaseMap 是冻结的逻辑库 → 物理库表。构造后只读，可并发使用。nil 的 Physical 仍返回逻辑名本身
+// （映射核对、工具输出用）；但 DataEngine 投影存储与 Remote 存储没有表时拒绝读写带库名的 DAO 文档
+// （ErrDatabaseMapNotBound），不把 nil 当成“逻辑名直用”。
 type DatabaseMap struct {
 	entries  []DatabaseMapping // 按逻辑名排序
 	physical map[string]string
@@ -259,6 +261,21 @@ func (m *DatabaseMap) Physical(logical string) string {
 		return physical
 	}
 	return logical
+}
+
+// ErrDatabaseMapNotBound：要读写带逻辑库名的 DAO 文档，但没有映射表（DataEngine 投影存储的
+// MongoStoreConfig.Databases 为 nil，或 Remote 的 Mongo 存储没有绑定表）。两边是同一条规则、同一个哨兵：
+// 没有表就不按逻辑名访问库（否则文档会落进名为逻辑名的库，例如 main），只访问控制库 / 默认库的操作不受影响；
+// 有表、但表里没有某个逻辑库时物理名仍是逻辑名本身（Physical 的 identity 规则）。提供表的方式：wiring 装配由
+// DataEngine Mod 冻结并注入；自建装配用 NewDatabaseMap 合成一张（不配映射时 DatabaseMapConfig{} 即逻辑名直用），
+// 交给 MongoStoreConfig.Databases，engine.Assemble / MongoStore.SetRemoteProjection 会把同一张表绑给 Remote 存储。
+var ErrDatabaseMapNotBound = errors.New("dataengine: no database map for DAO documents that name a logical database")
+
+// DatabaseMapBinder 是要写 DAO 文档的 Remote 存储实现的接口：DataEngine 接上 Remote 投影时
+// （MongoStore.SetRemoteProjection）把自己冻结的表绑过去，两边用同一张表。只能绑一次；再绑同一张表无操作，
+// 换一张表返回错误。
+type DatabaseMapBinder interface {
+	BindDatabaseMap(*DatabaseMap) error
 }
 
 // Entries 返回表的全部项（按逻辑名排序的副本），用于启动日志、持久到 WAL 目录与工具输出。
