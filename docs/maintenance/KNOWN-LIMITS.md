@@ -19,6 +19,19 @@
 - **game-demo 手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段绑时钟；demo 的 `startWorldTimers` 在 `Service.Init`、`EnsureWorld` 之前调用，“World 第一次加载在驱动接上之后”靠 demo 自己的启动顺序（写闸门 `require_write_gate: true` 在 `EnsureWorld` 之后才发布），不是框架保证；更早加载的 World 按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
 - **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader 代替 DataEngine + Mongo；循环的其余计时分支（MaxWait 重读时钟、准入失败重试、Redeliver）由它与 entitytimer 包测试覆盖。真实 WAL / Mongo 下的定时器往返由 7 个游戏夹具的 SIGKILL 崩溃恢复与 MMORPG 的正常停机夹具覆盖，全部经驱动投递循环（`Driver.Start`）、不手发 Tick，见 [游戏接入验收](#游戏接入验收)。
 
+### 实体心跳（D20 第 1 期）
+
+`gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
+
+- **还没有业务接入**：P1 只有框架与 Mod。生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环；P2（MapBasic / Move 组件、actionflow 适配）、P3（game-demo）、P4（压测改心跳驱动）未做。
+- **投递是单目标 Dispatch**：压测 50 万次/秒约 4.25 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)），CPU 约六成是 worker 每条消息停放 / 唤醒。Nest 批量入队（方案 D）原型另行进行，达标后只换投递层（`deliverer`）。本轮只做 5 万实体 1s 档的功能冒烟（10 万拍全部执行、零跳拍），**没有正式性能测量**。
+- **卸载窗口**：投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。
+- **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
+- **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。**共享模式（Shared）下 P1 不跳**：只有独占拥有（`LocalOwned`）才执行，共享模式由谁跳需要维护者决定。所有权迁移的测试用的是模拟 Remote 写准入的假 Manager（按 `remoteentity.Manager.beginWrite` 与 `TransferRemoteOwnership` 的写门 / 状态顺序），没有真实 Mongo / Redis 下的迁移演练。
+- **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。
+- **`Elapsed` 上限**：取 `max(1s, 档位)`，不是一律 1 秒（2s 及以上的档每拍都会少算），待维护者确认。
+- **装了心跳的服务多一个 Mod**：与 entitytimer 相同，`shutdown.total_timeout` 多 3s 保底。
+
 ### Skill Runtime
 
 不参与 Nest 回滚；Host 副作用和确定性由业务契约保证。Host 能力、重入、阻塞、恢复和回放测试仍待补。

@@ -82,6 +82,72 @@ SLG 行军或建造可以用 typed 节点保存任务身份与期限；宿主须
 
 不支持 Remote 托管实体（`remote=managed`）与 `noPersist` 实体，`roost add timer` 拒绝并说明原因：前者所有权在进程间迁移，驱动只索引本进程加载的实例；后者没有可补触发的存储。生成物、归属与命令细则见 [CODEGEN_REFERENCE“roost add timer”](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)，实现契约见 [impl/10-time §2A](../impl/10-time.md#2a-按实体的持久定时器驱动)。game-demo 的 World 不用这个生成器：demo 是手写的参考实现，不依赖生成器产物（维护者 2026-10-18），它手写组件、Store 适配、Tick handler 与驱动接线，直接调用 `framework/nest/entitytimer`（`timer_component.go`、`tick_world_timers.go`、game 服务 `activity.go` 的 `startWorldTimers`），是不用生成器时接入同一套驱动的写法。
 
+## 4A. 实体心跳（周期推进）
+
+所有跑在 Nest 业务池上的实体周期逻辑——移动、actionflow / AI 的 tick、周期性伤害与回复、冷却推进、房间或场景实体自己的逻辑帧——都以 `gameplay/heartbeat` 为底层（DESIGN-TODO D20，维护者 2026-10-21 定方案，第 1 期已实施）。不要再写“服务 goroutine 每 N 秒给实体发一条消息”的循环。
+
+**它是什么**：每个到期的登记由驱动投一条单目标 Nest 消息，框架注册的心跳 handler 在**实体自己的 Nest worker 上、实体锁与事务内**调用回调，与该实体的其他消息串行；快池实体在快池、慢池实体在慢池（Nest 按实体种类分流）。所以回调里能做的事与普通 handler 相同：改 DAO、记 effect、`QueueMove`，Sync 冻结与提交门照常成立。回调只做内存计算和入队，**不阻塞、不做 I/O、不 `Dispatch` / `Request`**（快池规则）；返回错误时本拍事务回滚。
+
+**用法**：一个 Nest 引擎一个驱动，写成包级变量；组件取宿主、登记、按自己的状态启停；进程装配用 `wiring/heartbeat`。
+
+```go
+// 业务包：一个驱动（与 Nest 引擎一一对应）。
+var Heartbeat = heartbeat.NewDriver(heartbeat.Config{Name: "game"})
+
+func (c *MoveComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	c.hb = Heartbeat.NewHost(c.owner)
+	reg, err := c.hb.Register("move", 100*time.Millisecond, c.onBeat)
+	if err != nil {
+		return err
+	}
+	c.move = reg
+	if c.dao.Moving() { // 心跳不持久：加载后按自己的持久状态决定是否启动
+		reg.Start()
+	}
+	return nil
+}
+
+func (c *MoveComponent) OnDestroy(entity.EntityDestroyReason) { c.hb.OnDestroy() }
+
+func (c *MoveComponent) onBeat(b heartbeat.Beat) error {
+	arrived := c.advance(b.Elapsed) // 按经过时间推进，不按“第几拍”
+	if arrived {
+		c.move.Stop()
+	}
+	return nil
+}
+
+// 进程装配（依赖 Nest Mod，先于 Nest 停止）：wiringheartbeat.NewMod(entityAccess, Heartbeat)
+```
+
+| API | 说明 |
+| --- | --- |
+| `Driver.NewHost(entity)` | 每个实体实例一个宿主（Remote 托管、慢池实体都可以） |
+| `Host.Register(name, period, fn, opts...)` | 登记，返回停止状态的 `*Reg`；name 在实例内唯一。一个实体可以有多个登记，**各自投递、不合并** |
+| `Reg.Start` / `Stop` / `SetPeriod` | 启停、换档。在事务里调用时**提交后生效、回滚作废**；不在事务里（加载发布前）立即生效。回调里调用的随本拍事务 |
+| `Host.OnDestroy()` | 卸载、删档、撤销新建时由组件调用：实例永久离开驱动，之后的启停被忽略 |
+| `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒） |
+
+**档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 100ms、AI 200ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
+
+**`Beat` 与跳拍语义**：
+
+| 字段 | 含义 |
+| --- | --- |
+| `Now` | 本拍业务时间（App 业务时钟） |
+| `Elapsed` | 距本登记上次执行（首拍：距启动生效）的业务时间，夹到 `[0, max(1s, 档位)]`：掉拍、停顿、业务时钟被调整时不让一拍走出几公里 |
+| `Period` | 本登记当前档位 |
+| `Skipped` | 上次执行以来跳过的拍数，只供观测 |
+| `First` | 本次启动后的第一拍（重载后重新启动、Stop 后再 Start 都算新的一次） |
+
+- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是业务自己的推进，不是框架追帧。
+- **卸载窗口**：驱动投递前核对实例（已卸载、已被同 ID 新实例取代、还没发布的不投，不唤醒不在内存的实体）；执行时再核对实例与令牌，卸载后同 ID 重载的新实例收到旧实例的拍时按过期丢弃，不会在新实例上跑旧登记的回调（维护者决定 ⑨）。投递之后、执行之前被卸载的实体可能因这条消息被 Nest 冷加载一次，与发给它的任何消息相同。
+- **Remote 托管实体**：只在当前拥有方跳。本进程实例处于独占拥有（`LocalOwned`）时投递并执行；首次接触（`Unknown`）交给 Nest 的 Remote 写准入判定；转移中、已隔离、共享模式不投。所有权迁移时旧拥有方在离开 `LocalOwned` 后不再执行任何一拍，新拥有方加载实例（组件重新登记）或实例回到 `LocalOwned` 后开始跳，两边不会同时跳。每拍要经过一次 Remote 写准入（I/O 阶段），比普通实体贵，档位选低一些。共享模式下 P1 不跳（见 [KNOWN-LIMITS](../../maintenance/KNOWN-LIMITS.md)）。
+
+**与按实体持久定时器（§4）的分工**：持久、准点、离线也要算的事走 entitytimer（Buff 到期写档、建造完成、行军到达、活动阶段、离线产出）；在线周期推进走心跳（移动、AI、周期效果、冷却、逻辑帧）。同一件事可以两者都用：行军到达是 entitytimer 期限，行军途中给 AOI 的位置是 1～2Hz 心跳。心跳不持久，加载后由组件重新启动；entitytimer 的驱动不改（维护者决定 ⑫）。房间、场景本身是实体，它们的逻辑帧就是自己的心跳登记，不提供“非实体心跳”（决定 ⑬）。
+
+实现契约见 [impl/10-time §2B](../impl/10-time.md#2b-实体心跳)，指标见 [OBSERVABILITY“实体心跳”](../OBSERVABILITY.md#实体心跳gameplayheartbeat)。
+
 ## 5. 运维
 
 区分业务时间推进失败与机器系统时钟漂移；日志与故障记录使用系统时间。glsvet 的时钟检查提供静态提示，不能识别任意封装后的错误时钟。开发测试同时注入两个时钟，验证推进业务钟不会导致基础设施超时。

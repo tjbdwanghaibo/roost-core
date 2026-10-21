@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`infra/base/clock`（业务时钟与业务日历）、`infra/base/timer`，以及按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`infra/base/clock`（业务时钟与业务日历）、`infra/base/timer`，按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)），以及按实体的心跳 `gameplay/heartbeat`（`wiring/heartbeat` 装配，§2B）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -45,6 +45,23 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 7. **时钟**：缺省 `clock.Now`；`wiring/entitytimer` 在 Provide 时换成 `app.BusinessClock`（实体加载之前）。测试用 `SetClock` 换可控时钟、不启动循环直接调 `DeliverDue`。
 
 验证：`framework/nest/entitytimer` 的 `driver_test.go`（只投到期的、待报告不重投、静默重投、旧报告丢弃、关闭后不投、核对实例、准入失败重试、同时刻按 ID、循环被更早期限叫醒、`-race` 下加载 / 卸载 / 期限变化 / 投递并发）、`host_test.go`（在线一次、周期续期、离线错过十个周期加载后只触发一次且参数正确、重建不复用 ID、多定时器最早期限、登记错误在初始化报出；回调内登记下一阶段、取消 / 改期同轮到期的另一阶段、显式改期自己、回调读到自己的写入、panic 清理、回滚后重试）、`nest_test.go`（真实 Nest 引擎：回滚不改索引、提交后才改、投递的 Tick 在锁内执行并清掉待报告）；变异核对（提交前立即报告、接受旧报告、不核对实例、关闭后仍接受报告、`Overdue` 恒假）各让对应用例变红，记录在 [D11 实施说明](../../maintenance/DESIGN-TODO.md#d11-按实体的持久定时器接入)。生成工程端到端见 `codegen/internal/roost/add_timer_test.go` 的 `TestEntityTimerGeneratedProjectEndToEnd`。
+
+## 2B. 实体心跳
+
+DESIGN-TODO D20 第 1 期（维护者 2026-10-21 定方案与压测后决定）。`gameplay/heartbeat` 三个类型：`Driver`（一个 Nest 引擎一个，业务包级变量，`wiring/heartbeat` 装配）、`Host`（每个实体实例一个）、`Reg`（一个登记）。依赖边界：只 import `framework/nest`、`framework/entity` 与 infra，根包门禁把它归入 nest 块（`dependency_boundary_test.go`）。
+
+1. **调度结构**（`tier.go`）：按档分环，`Resolution` 10ms；10 个固定档位 `Periods`，`tierOf` 拒绝其他周期（`ErrUnsupportedPeriod`）。每档一个环、环长 = 该档格数，登记只进一格 `cellOf = hash % 6000 % 本档格数`（`hash = misc.Hash64(实体 ID)`，各档按同一相位对齐），格是切片、登记记下标，撤销 / 换档 O(1)。原型与压测见 [HB-STRUCTURES-20261021](../../performance/HB-STRUCTURES-20261021.md)。环只在 `Driver.mu` 下读写。
+2. **一个驱动 goroutine**（`driver.go` `loop`）：10ms ticker，按单调时间追到应到的格逐格 `step`；每 100 格 `flush` 一次。`step` 在 `mu` 下取出本格到期的登记，出锁逐个核对后交给投递层：实例已 `OnDestroy` / `IsRemoved` / 查到同 ID 的另一个实例 / 查不到（未发布）→ 丢弃；Remote 托管实例的所有权状态不是 `LocalOwned` / `Unknown` / `Recovering`（`mayOwn`）→ 丢弃；在途 → 跳拍。核对不阻塞、不持锁。
+3. **投递层只换一处**：`deliverer.deliverBatch(ctx, []beat, rejected)` 一次交出一格的一批；P1 的 `dispatchDeliverer` 逐个 `nest.Client.Dispatch`（单目标、每个到期登记一条、不合并）。Nest 批量入队（D20 方案 D）落地后只换这个实现，驱动其余部分与语义不变。参数是预先建好的 `nest.Params{*Reg}`（Nest 准入时复制进消息，可复用）。
+4. **至多一拍在途**：`Reg.inflight` 在投递前置位、在心跳 handler 返回时清掉（`defer`，panic 也清）；到期时仍在途就跳拍（`skipped` 计数交给下一拍的 `Beat.Skipped`）。准入失败（`ErrQueueFull` / 其他）立即清在途、计跳拍，不在本格重试；驱动停止时批里还没投的拍不再投、清在途（`deliverBatch` 看 `ctx`），`Stop` 返回后不再 `Dispatch`。没有水位让路与每格上限（维护者决定 ⑤）。
+5. **卡住兜底**：在途超过 `StallAfter`（缺省 10s）视为丢失、重投并计 `stalled`；同一登记连续卡住时阈值翻倍（最多 3 次，80s），看到不在途时复位。丢失只来自 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败）。重投后两份消息至多一份执行回调：handler 先看在途标志，没有在途按 `duplicate` 丢弃。翻倍是因为拍没丢只是排得久时重投会多压消息（2s 不翻倍时 -race 冒烟里重投与积压互相放大，见 D20 实施记录）。
+6. **事务内启停**（`host.go` `change`）：`Reg` 的 `active` / `tier` 是业务视角、只在实体锁内读写；变化时序号加一，在事务里登记 `DeferRollback`（恢复业务视角）与 `AfterCommit`（驱动生效），不在事务里立即生效。`Driver.apply` 只接受更大的序号（AfterCommit 在锁释放后执行、pipelined 下可能晚于后一个事务），实例 `OnDestroy` 后忽略。启动生效时先写 `startedAt` 再加 `startGen`，回调据此判 `First`。
+7. **心跳 handler**（`runBeat`，包级注册 `heartbeat.beat.{memory,async,strict,pipelined}`，回滚策略 undo，持久级别由登记选）：依次核对在途、实例（`es[0]` 必须是登记所属实例且未 `OnDestroy`，卸载重载窗口里旧实例的拍按 `stale` 丢弃）、业务视角的启停（锁序上更早提交的 Stop）、Remote 实例是 `LocalOwned`；通过后算 `Beat`：`Elapsed` 从上次执行（首拍从 `startedAt`）起算，夹到 `[0, max(DefaultMaxElapsed, 档位)]`。回调侧的 `lastRun` / `lastGen` 随本拍事务回滚恢复（`DeferRollback`），回滚的一拍不算执行过。
+8. **Remote 托管实体**：发给 Remote 托管 ID 的消息由 Nest 自动走 I/O 阶段的 Remote 写准入（`prepareRemoteWriteBatch`）：非拥有方被拒、`Unknown` 转 `LocalOwned`。旧拥有方转移时先排空已准入的写、实例转 `Draining` 再改权威，所以它最后一拍先于新拥有方的第一拍；驱动侧 `mayOwn` 与 handler 侧 `LocalOwned` 核对让非拥有方不投、共享模式不跳，并避免非拥有期间被拒的拍卡住新拥有方（变异核对 M6）。
+9. **计数与日志**：驱动内部按实体 ID 分片的原子计数（回调侧由全部 worker 并发写），`flush` 每秒把增量写进 metrics 注册表；跳拍 / 卡住汇总进 `warnState`，按 `WarnInterval`（缺省 10s）打一条 Warn，带一个样本实体与原因。
+10. **不改 Nest**：只用 `Client.Dispatch`、`HandlerMeta`、`CurrentRollbackTx` / `AfterCommit` / `DeferRollback`；entitytimer 不改。
+
+验证（`GOWORK=off go test -race -count=1 ./gameplay/heartbeat ./wiring/heartbeat`）：`driver_test.go`（档位规则与相位打散、在途跳拍 / 准入满 / 限频 Warn、卡住重投翻倍与只执行一次、换档、多登记不合并与按登记选 handler、投递前与执行时的实例核对、Stop 顺序、并发启停 / 推进 / 执行）；`nest_test.go`（真实 Nest：回调在实体锁与事务内、与同实体业务消息串行；慢池实体在慢池；事务回滚作废启停、回调报错回滚回调侧记录；卸载重载令牌；5 万实体冒烟，-race 下 2000 实体）；`remote_test.go`（两个引擎 + 模拟 Remote 写准入的所有权迁移：旧拥有方离开 `LocalOwned` 后零执行、新拥有方成为拥有方前零执行；共享模式不投）；`wiring/heartbeat/heartbeat_test.go`（依赖 Nest、业务时钟、登记驱动、启停）。变异核对 M1～M11 各让对应用例变红，原文记录在 [D20 实施结果](../../maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -87,6 +104,17 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 | [host.go](../../../framework/nest/entitytimer/host.go) | `Store`、`Fire`、`Handler`、`Handlers`、`Host` |
 | [wiring/entitytimer/entitytimer.go](../../../wiring/entitytimer/entitytimer.go) | `Mod` |
 
+### heartbeat
+
+3 个实现文件、6 个测试文件（另有 `internal/bench` 压测原型）。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [tier.go](../../../gameplay/heartbeat/tier.go) | `Resolution`、`Periods` |
+| [driver.go](../../../gameplay/heartbeat/driver.go) | `Config`、`Lookup`、`Driver`、`Stats` |
+| [host.go](../../../gameplay/heartbeat/host.go) | `Beat`、`Func`、`RegOption`、`Host`、`Reg` |
+| [wiring/heartbeat/heartbeat.go](../../../wiring/heartbeat/heartbeat.go) | `Mod` |
+
 </details>
 
 ## 5. 回归入口
@@ -112,6 +140,13 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 - [host_test.go](../../../framework/nest/entitytimer/host_test.go)：`TestHostFiresAnOnlineDeadlineOnce`、`TestHostRearmsAPeriodicTimerByItsReturnValue`、`TestHostFiresAnOverdueTimerOnceAfterLoad`、`TestHostDoesNotReuseIDsAcrossReload`、`TestHostIndexesTheEarliestOfSeveralTimers`、`TestHostReportsBadHandlerRegistrationAtInit`
 - [nest_test.go](../../../framework/nest/entitytimer/nest_test.go)：`TestHostReportsThroughNestTransactions`
 - [wiring/entitytimer_test.go](../../../wiring/entitytimer/entitytimer_test.go)：`TestModBindsNestAndTheBusinessClock`、`TestModRefusesADriverInstalledTwice`
+
+### heartbeat
+
+- [driver_test.go](../../../gameplay/heartbeat/driver_test.go)：`TestTiersFireOnTheirPhaseOncePerPeriod`、`TestInflightBeatSkipsCountsAndWarnsAtALimitedRate`、`TestStalledBeatIsRedeliveredAndRunsOnce`、`TestSetPeriodMovesToTheNewTier`、`TestRegistrationsOfOneEntityAreDeliveredSeparately`、`TestInstanceChecksDropStaleBeats`、`TestStopWaitsForTheBatchAndDispatchesNothingAfter`、`TestConcurrentChangesStepsAndBeats`
+- [nest_test.go](../../../gameplay/heartbeat/nest_test.go)：`TestBeatRunsUnderTheEntityLockInsideATransaction`、`TestBeatRunsInTheEntitysPool`、`TestStartStopFollowTheTransaction`、`TestBeatOfAnUnloadedInstanceDoesNotRunOnItsReplacement`、`TestFiftyThousandEntitiesSmoke`
+- [remote_test.go](../../../gameplay/heartbeat/remote_test.go)：`TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats`
+- [wiring/heartbeat_test.go](../../../wiring/heartbeat/heartbeat_test.go)：`TestModBindsNestAndTheBusinessClock`
 
 </details>
 

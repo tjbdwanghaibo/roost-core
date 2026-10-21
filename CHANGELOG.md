@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 按实体的心跳框架 gameplay/heartbeat 与 wiring/heartbeat Mod（DESIGN-TODO D20 第 1 期，维护者 2026-10-21 定方案）
+
+- **新增（`gameplay/heartbeat`）**：`Driver`（一个 Nest 引擎一个，`NewDriver(Config{Name})`、`SetClock`、`Bind`、`Start` / `Stop`、`NewHost`、`Stats`）、`Host`（`Register(name, period, fn, opts...)`、`OnDestroy`）、`Reg`（`Start` / `Stop` / `SetPeriod` / `Active` / `Period` / `Name`）、`Beat{Now, Elapsed, Period, Skipped, First}`、`Func func(Beat) error`、`WithDurability`、`Periods`（10 个固定档位 50ms～60s）、`Resolution`（10ms）。所有跑在 Nest 业务池上的实体周期逻辑以它为底层；用法见 [guide/10-time §4A](docs/framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](docs/framework/impl/10-time.md#2b-实体心跳)。
+- **语义**：按档分环、10ms 一格、1 个驱动 goroutine，相位 = hash(实体 ID)；每拍每个到期登记一条单目标 `Dispatch`（不合并，投递层按“一格一批”设计，以后可换 Nest 批量入队）；回调在实体自己的 worker 上、实体锁与事务内执行，快池 / 慢池按实体种类；每个登记至多一拍在途，上一拍没执行完或快池 `ErrQueueFull` 就跳拍，不累积不补发，计数并限频 Warn；不追帧，`Elapsed` 夹到 `max(1s, 档位)`；事务内启停提交后生效、回滚作废；卸载重载用实例核对 + 令牌丢弃旧实例的拍；Remote 托管实体只在独占拥有方（`LocalOwned`）跳，迁移时旧拥有方停、新拥有方重新登记。心跳本身不持久，entitytimer 不改。
+- **新增 Mod**：`wiring/heartbeat.NewMod(access, driver)`，名字 `heartbeat`（`mods.ModHeartbeat`，同名登记驱动），依赖 Nest、先于 Nest 停止，没有配置项。生成器本期不接入。
+- **新增指标**：`heartbeat.delivered_total`、`executed_total`、`skipped_total{reason}`、`stalled_total`、`dropped_total{reason}`、`registered`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)）；告警基线第 12 条。
+- **测试**：`gameplay/heartbeat` 的驱动 / 真实 Nest / Remote 迁移用例与 `wiring/heartbeat` Mod 用例，5 万实体冒烟；11 个变异核对各让对应用例变红（[D20 实施结果](docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)）。根包依赖门禁把 `gameplay/heartbeat` 归入 nest 块。
+- **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)。
+
 ### Interest 排队事实的两种应用模式：ApplySync（缺省）/ ApplyAsync，由业务按游戏类型选择（DESIGN-TODO D19，维护者 2026-10-21 决定）
 
 - **决定**：① 异步应用时 Nest 比 direct 多约一个同步周期——选 C，接受，不加“Flush 前等应用线程”、不做周期对齐；② sync-aoi 夹具的新订阅全量延迟只按本 tick 改的值计时；③ 接受两项可见变化（`ApplyAsync` 下提交后立即 Flush 看不到结果、要用 `Drain`；`ManagerCounters` 新增 `PolicyDuration` 字段）；④ 第①项本质是模式问题：按每玩家额外视野 8 个以内 / 以上分两种模式，由业务层选。
