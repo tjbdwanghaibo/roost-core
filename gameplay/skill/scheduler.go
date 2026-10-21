@@ -308,6 +308,30 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	return nil
 }
 
+// CurrentTick 返回 Runtime 已推进到的 tick（新建时为 0，恢复时是 checkpoint 的 CurrentTick）。
+func (runtime *Runtime) CurrentTick() Tick {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	return runtime.currentTick
+}
+
+// Pending 报告 Runtime 是否还有要随 tick 推进的工作：活动中的施法、排程任务（施法的后续步骤、冷却外的弹药回充、
+// 能力覆盖到期、排队的被动激活与外部事件）、逐 tick 推进的衍生物（施放中与已移交），以及还要按退避重试的待停止衍生物。
+// 为 false 时继续 Advance 不会执行任何技能工作（只推进 Host 的 tick），驱动方可以停下（D20 P5：空闲时停心跳）。
+// 冷却本身不是工作：它是“到某个 tick 之前不能再放”的记录，下一次施法前把 Runtime 推进到当时的 tick 即可判定。
+func (runtime *Runtime) Pending() bool {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if runtime.activeCastCount > 0 || runtime.scheduler.Len() > 0 || runtime.spawns.count(spawnSteppedPartitions...) > 0 {
+		return true
+	}
+	pending := false
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		pending = pending || !spawn.stopRetryExhausted
+	}, spawnStopPending)
+	return pending
+}
+
 // nextOwnedSpawnTick 是逐 tick 推进的衍生物（施放中与已移交，spawnSteppedPartitions）里最早的下一步 tick。
 func (runtime *Runtime) nextOwnedSpawnTick() (Tick, bool) {
 	var due Tick

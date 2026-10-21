@@ -166,7 +166,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Skipped` | 上次执行以来跳过的拍数，只供观测 |
 | `First` | 本次启动后的第一拍（重载后重新启动、Stop 后再 Start 都算新的一次） |
 
-- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是业务自己的推进，不是框架追帧。
+- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是组件自己的推进，不是框架追帧（`combatcomponent.RuntimeBeat`，§4E）。
 - **卸载窗口**：驱动投递前核对实例（已卸载、已被同 ID 新实例取代、还没发布的不投，不唤醒不在内存的实体）；执行时再核对实例与令牌，卸载后同 ID 重载的新实例收到旧实例的拍时按过期丢弃，不会在新实例上跑旧登记的回调（维护者决定 ⑨）。投递之后、执行之前被卸载的实体可能因这条消息被 Nest 冷加载一次，与发给它的任何消息相同。
 - **Remote 托管实体**：只在当前拥有方跳。本进程实例处于独占拥有（`LocalOwned`）时投递并执行；首次接触（`Unknown`）交给 Nest 的 Remote 写准入判定；转移中、已隔离不投。所有权迁移时旧拥有方在离开 `LocalOwned` 后不再执行任何一拍，新拥有方加载实例（组件重新登记）或实例回到 `LocalOwned` 后开始跳，两边不会同时跳。每拍要经过一次 Remote 写准入（I/O 阶段），比普通实体贵，档位选低一些。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式（`EnterRemoteSharedMode` 之后）各写者进程的实例都是 `Shared`、都经分布式锁写，本地分不出谁该跳，心跳无法执行。共享与否是**运行期**的所有权状态（同一种类的实体可以独占、也可以共享，`LeaveRemoteSharedMode` 回到独占），不是种类声明，所以分两处拦：
@@ -339,7 +339,7 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 - **观察者**：`Watch(id, fn)` / `Unwatch`，`NewWatcher()` 打包一次撤销。按“观察者上次看到的值”算差通知（总是交替的 true / false），顺序 = 注册顺序；观察者里改状态立即生效、引出的通知排到本轮之后。**回滚不通知**：观察者的副作用保留，下一次任何状态改动或 `Refresh()` 时按差补发。能用门控表达的不要写观察者。
 - **门控 `Gate`**：规则 `{State, Group, Mode}`，状态生效时对动作组计数冻结（`FreezeCancel` 在生效那一刻取消在途动作），失效时撤销；装上时按当前状态对齐，`Close` 撤销它持有的全部冻结。冻结计数不随事务回滚，所以 handler 回滚撤掉了一个门控状态时，组保持冻结直到下一次通知（每条规则至多持有一次冻结，不会累积）；需要立即一致就在回滚之后调 `Refresh`。
 - **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
-- **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期靠业务的 `TickBuffs`（D20 P5 计划挂 1Hz 心跳）。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
+- **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期由 buff 心跳推进（`CombatComponent.AttachBeat`，§4E），派生状态随之失效。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
 
 边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
@@ -391,12 +391,46 @@ brain, err := ai.NewBeatController(hooks, ai.BeatConfig{Host: host, TimeDomain: 
 
 - **成员读发布的快照，不读场景的 DAO**：成员在自己的锁里，不跨实体加锁。快照在场景事务提交后才发布，所以生效时刻之后、发布之前开始的成员消息仍按旧倍率算；为了让成员读到的域时间单调，域记下已经交出去的最大域时间，读数取两者较大者，改倍率时新锚点也不低于它。代价是改倍率前后成员与客户端可能差“发布延迟 × 倍率”（微秒到毫秒级），随后一致。
 - **actionflow / ai**：`actionflow.BeatConfig.TimeDomain`（`BeatRunner`、`Behavior` 的动作组心跳与任务心跳）与 `ai.BeatConfig.TimeDomain`（AI 心跳）挂上域：动作每拍的 `ActionContext.Now` / `Elapsed` 是域时间，移动（`Move.Advance(ctx.Elapsed)`）随之加速、慢放、时停；心跳之外调用 runner（handler 里 `Start` / `End`）时 `ActionContext.Now` 也是本条消息的域时间（不论调用方传没传时间）；`Behavior` 没配 `Now` 时取域时间，任务上下文与计划步骤 `Timeout` 的起点、任务心跳的到期判断同一把尺子；`ai.Controller` 没配 `Now` 钩子时取域时间，`FreezeFor` 的期限与 AI 心跳的到期判断同一把尺子。只想让某个登记按域计时，也可以直接把 `heartbeat.WithTimeDomain` 放进 `Options`。
-- **技能 / Buff**：技能 `Runtime` 按 tick 推进，由业务在心跳里把它推进到域时间对应的 tick（`(beat.Now − 起点) / tick 间隔`），Buff 时长按技能 tick 计，随之变速；冷却等“到某个时刻”的判定读 `Domain.Now()`。框架没有替技能自动接域（KNOWN-LIMITS）。
+- **技能 / Buff**：`combatcomponent.RuntimeBeatConfig.TimeDomain` 与 `BeatConfig.TimeDomain`（§4E）挂上域：技能 tick 与 buff 的到期按域时间换算，时停时 tick 不前进、2 倍速时走两倍；handler 里的 `RuntimeBeat.Start` / `CurrentTick` 同样取域时间。
 - **持久化的期限与 entitytimer 不接时间域**（维护者决定 ⑦）：持久定时器的离线补触发只对业务时间成立；域内的定时走心跳（按域时间判定到期）。存进 DAO 的业务期限（邮件过期、活动截止）仍是业务时间。
 - **持久与否**：`Fields` 是否持久由业务选。随进程结束的副本用 `nopersist,sync`（推荐）；要持久的场景用持久字段，重载后域时间按存下的锚点与倍率接着走（停服期间同样按倍率前进，时停的保持时停）。`Domain` 实例随场景实例：场景卸载重载后是新的 `Domain`，成员要换成新的。
 - **下发给客户端**：`Fields` 的三个字段标 `sync`，随 Entity Sync 下发；客户端按同一公式用自己估计的服务器业务时间外推域时间。
 
 实现契约见 [impl/10-time §2F](../impl/10-time.md#2f-场景时间域)。
+
+## 4E. 技能与 Buff：心跳驱动（D20 第 5 期）
+
+快池上的技能推进与 buff 到期都由实体自己的心跳驱动（`gameplay/skill/combatcomponent`），业务不再写周期消息调 `Runtime.Advance` / `TickBuffs`。两者共用一把尺子 `skill.TickClock`：
+
+```go
+var SkillClock = skill.TickClock{Length: 50 * time.Millisecond} // Origin 缺省 = Unix 纪元：tick 是绝对的，可以存进 DAO
+
+// 战斗单位：限时 buff / 业务周期工作在时挂 1Hz 心跳，清空后停。
+err := combat.AttachBeat(combatcomponent.BeatConfig{Host: host, Clock: SkillClock, TimeDomain: scene.time,
+	Periodic: regen.Active, OnBeat: regen.Beat}) // Periodic / OnBeat 可选：回复、周期伤害、冷却这类业务自己的周期工作
+id, outcome := combat.ApplyBuff(spec, combat.CurrentTick(), source)         // handler 里：tick 取本条消息的 tick
+bridge := &combatcomponent.StatusBridge{CurrentTick: func() skill.Tick { return skill.Tick(combat.CurrentTick()) }, ...}
+
+// 场景 / 房间实体上的技能 Runtime：有在途施法或衍生物时挂心跳，空闲时停。
+beat, err := combatcomponent.NewRuntimeBeat(runtime, combatcomponent.RuntimeBeatConfig{Host: host, Clock: SkillClock, TimeDomain: scene.time})
+castID, err := beat.Start(program, skill.CastInput{Caster: caster, Target: target}) // handler 的最后一步
+err = beat.Do(func(rt *skill.Runtime) error { return rt.Release(castID) })      // 其他改 Runtime 的输入
+```
+
+| API | 说明 |
+| --- | --- |
+| `skill.TickClock{Length, Origin}` | `tick = floor((t − Origin) / Length)`，向下取整；`Length` 在 [1ms, 1s]；`Origin` 零值是 Unix 纪元。存进 DAO 的 tick（buff 的 `DueTick`、Runtime checkpoint）不能换 `Length` / `Origin`。`Ticks(d)` 把时长换成 tick 数（向上取整） |
+| `CombatComponent.AttachBeat(BeatConfig)` | 构造时装一次，登记一个停止状态的心跳 `"combat"`。有限时 buff（`DueTick != 0`）或 `Periodic()` 为真时启动，周期取不大于 `Granularity`（缺省 1s）的最长档；每拍 `TickBuffs(本拍 tick)` 再调 `OnBeat`；全部清空后停 |
+| `CombatComponent.CurrentTick()` / `SyncBeat()` | 本条消息的 tick（fctx.Now 或域时间经 Clock 换算）；`Periodic` 的答案变了、Remote 回到独占之后调 `SyncBeat` |
+| `NewRuntimeBeat(runtime, RuntimeBeatConfig)` | 登记一个停止状态的心跳 `"skill"`，周期缺省取不大于 tick 长度的最长档（50ms tick → 50ms）。`Runtime.Pending()`（在途施法、排程任务、衍生物、待重试的停止）时启动，空闲时停 |
+| `RuntimeBeat.Start` / `Input` / `Do` | handler 里改 Runtime 的入口：先把 Runtime 推进到本条消息的 tick，再执行输入，最后按需启停心跳。读冷却、弹药前用 `CatchUp` |
+
+- **事务**：buff 心跳的启停随事务（施加限时 buff 的 handler 回滚，心跳不启动）；拍在实体锁与事务内，过期、属性投影、派生状态通知随这一拍提交或回滚。技能 Runtime 不在回滚域里（[08-skill §4](08-skill.md#4-事务与战斗边界)）：`Start` / `Input` 放在 handler 的最后一步；之后回滚了，Runtime 里的施法还在、心跳没挂上，调 `RuntimeBeat.Sync` 补上。拍里的 `Advance` 错误交给 `OnError`、不让本拍回滚。
+- **加载**：`OnInitFinish` 按加载出的 buff 启动心跳，停服期间已经到期的 buff 在加载后的**第一拍**清掉（`OnInitFinish` 不在事务里，不能在那里改 DAO）；第一拍之前读到的 `ActiveBuffs` 仍含这些记录。恢复出的 Runtime 还有工作时，构造 `RuntimeBeat` 后调一次 `Sync`。
+- **精度**：buff 最多晚一个心跳周期（缺省 1 秒）加 tick 取整过期；短控制多的游戏调小 `Granularity`。需要离线也准点、结果要落档的长时 buff 用 entitytimer（§4）。
+- **确定性**：Runtime 忙时逐 tick 推进（Host 每个 tick 恰好推进一次），一拍覆盖几个 tick 不改变结果；空闲点由 Runtime 决定，之后的输入一次跳到输入的 tick。所以同一输入序列（落在同样的 tick 上）在任何心跳抖动下逐 tick 相同。落后超过追帧上限（`MaxCatchUp`，缺省 `max(1s, 周期)`，挂了时间域乘倍率）时剩下的一次跳过，`Stats().Jumps` 计数并打限频 Warn，这段不满足逐 tick 确定性。规则与回放的关系见 [impl/10-time §2G](../impl/10-time.md#2g-技能与-buff-的心跳)。
+- **Remote 共享模式**：与所有心跳相同，不允许挂载（`ErrHeartbeatRemoteShared` 经 `OnError` 报告）；回到独占后调 `SyncBeat` / `Sync`。
+- **不走心跳的驱动**：`TickBuffs(now)` 与 `Runtime.Advance(tick)` 仍是推进一步的原语，给不在 Nest 快池上的定步长循环（Lockstep 房间）与测试用；快池上的实体一律用上面的心跳入口。
 
 ## 5. 运维
 

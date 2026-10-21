@@ -80,9 +80,22 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **`FreezeCancel` 只打断当前动作**：排队项保留，解冻后接着推进；要连排队一起丢弃，业务另调 `ClearQueue` / `EndAction`。
 - **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，回滚后的不一致在下一次状态通知时纠正（见下条）。
 - **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。
-- **Buff 到期才撤销派生状态**：`BindStates` 的状态随 `TickBuffs` 移除到期 buff 而失效；业务还没有把 `TickBuffs` 挂上心跳（D20 P5），到期时刻取决于业务调用它的频率。
+- **Buff 到期才撤销派生状态**：`BindStates` 的状态随 buff 心跳（D20 P5）移除到期 buff 而失效，最多晚一个心跳周期（`BeatConfig.Granularity` 取档，缺省 1 秒）加 tick 取整；没装 `AttachBeat` 的实体只在业务自己调 `TickBuffs` 时失效。
 - **派生状态的变化要数据拥有者调 `Changed`**：派生函数查询时现算，`Has` 总是正确，但观察者与同步脏位只在 `Changed`（或任何其他改动 / `Refresh`）时才更新；漏调时门控与客户端看到的是旧值。
 - **持久状态改名等于丢弃旧数据**：持久文档的键是状态名，`RestorePersisted` 跳过不认识的名字（不报警），下一次整文档写回时消失；同步打包、game-demo 与生成器都还没有接 `state`。
+
+### 技能与 Buff 的心跳（D20 第 5 期）
+
+用法见 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约见 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)。
+
+- **逐 tick 确定性只在追帧上限内成立**：落后超过 `MaxCatchUp`（缺省 `max(1s, 周期)`，挂域时乘倍率）时剩余部分一次 `Advance`，Host 的中间 tick 合并；`RuntimeBeat.Stats().Jumps` 计数并打限频 Warn，没有指标。回放要在同样的 tick 跳。
+- **输入落在哪个 tick 取决于 handler 开始执行的时刻**：同一输入序列在不同心跳抖动下逐 tick 相同，前提是“每个输入落在同一 tick”；输入本身的 tick 随网络与排队变化，回放要记录输入的 tick。
+- **Runtime 不随事务回滚、心跳启动随回滚作废**：handler 的 `Start` / `Input` 之后回滚，施法留在 Runtime 里、心跳没挂上，要等下一次输入或业务调 `Sync`（与 actionflow runner 同一规则，业务把输入放在最后一步）。拍里 `Advance` 的错误只经 `OnError` 报告，下一拍从 Runtime 实际到达的 tick 继续。
+- **忙时每个 tick 推进一次 Host**：长时排程任务（例如 30 秒后的弹药回充）让 Runtime 保持“忙”，期间逐 tick 推进（50ms tick 下每秒 20 次空推进）；没有“跳到下一个到期点”的稀疏推进，那样 Host 的 tick 序列会随拍变化。
+- **`Pending` 的“活动施法”一项没有强制点证据**：测试用的程序在施法活动期间总有排程任务，去掉这一项的变异没有变红；保留是保守的。
+- **buff 到期精度是一个心跳周期**：缺省 1Hz，短控制（0.3 秒眩晕）最多多持续约 1 秒，要更准调小 `Granularity`；需要离线准点、结果要落档的长时 buff 用 entitytimer。
+- **周期伤害、冷却、回复不在组件里**：`combatcomponent` 只持有 buff；业务的周期工作经 `BeatConfig.Periodic` / `OnBeat` 挂在同一个 buff 心跳上，答案变了要调 `SyncBeat`。
+- **Runtime 与持有它的实体**：`RuntimeBeat` 只在 Runtime 所属实体的锁内推进；Host 对其他实体（战斗单位）的效果按 Host 自己的规则进它们的事务（`StatusBridge.Committer` 等），心跳不替它加锁。game-demo 与生成器没有接 `RuntimeBeat` / `AttachBeat`（demo 由 P3 负责）。
 
 ### 业务时间取自 ctx 与场景时间域（D22）
 
@@ -94,7 +107,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **时间域：成员看到改倍率比场景晚一个发布**：场景事务提交后（`AfterCommit`）才发布；之间开始的成员消息按旧倍率。域时间对读者单调（取已交出的最大值），代价是改倍率前后成员与客户端的域时间差“发布延迟 × 倍率”（微秒到毫秒级），时停期间一直差这一点。
 - **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
 - **域要在构造时给**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域（成员换场景要重建行为组件，或不挂域、由业务自己传时间）。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
-- **技能 / Buff 没有自动接域**：技能 `Runtime` 的 tick 由业务在心跳里按域时间换算推进（guide §4D）；框架没有“按域时间推进 Runtime”的组件，`skill/combatcomponent` 也没接。
+- **技能 / Buff 的时间域在构造时给**（D20 P5 起已接域，原“没有自动接域”一条关闭）：`combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain` 在 `AttachBeat` / `NewRuntimeBeat` 时定下，运行中不能换域。buff 的 `DueTick` 是按域时间算的绝对 tick：实体换到另一个域（或离开变速场景）时，已有 buff 的剩余时长按新域的 tick 算，2 倍速场景里攒下的“领先”会让 buff 在常速域里多持续一段，框架不换算。
 - **没有业务接入与客户端插值示例**：game-demo 的场景没有挂时间域；客户端按同步下发的三个字段外推域时间的写法只在文档里，C# 客户端没有现成接口。
 - **生成工程消费夹具未实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，本轮没有在真实依赖上跑。
 

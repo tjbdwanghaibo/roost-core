@@ -91,6 +91,16 @@
 
 - 新增 `scripts/test-slg-alliance.sh`：业务 CAS 成员授权与贡献意图、Interest 联盟／侦察来源归并、真实 NATS 生成 RPC 连协调器子进程、冻结窗口与阶段屏障、原服持久奖励义务和 ACK 重投；真实 Redis / NATS race 场景覆盖协调器正常重启与应用确认丢失。
 - 整理 [SLG 学习手册](docs/framework/SLG-INTEGRATION.md) 的状态归属、调用流程、运行方式与证据边界，并同步 skill。业务规则不进入框架；Remote 联盟权威、空间迷雾／客户端、Player 实际到账与跨机故障仍待联合接入。
+### 技能与 Buff 由实体心跳驱动（DESIGN-TODO D20 第 5 期：现有快池 tick 迁移）
+
+- **新增（`gameplay/skill`）**：`TickClock{Length, Origin}`（`TickAt` / `StartOf` / `Ticks` / `Validate`，`ErrTickClockInvalid`）——业务时间与技能 tick 的换算，`tick = floor((t − Origin) / Length)`，`Origin` 零值为 Unix 纪元（tick 绝对、可持久）；`Runtime.CurrentTick()`、`Runtime.Pending()`（还有要随 tick 推进的工作：活动施法、排程任务、衍生物、待重试的停止）。`combat.BuffContainer.NextDue()`。
+- **新增（`gameplay/skill/combatcomponent`）**：buff 心跳 `CombatComponent.AttachBeat(BeatConfig{Host, Clock, Name, Granularity, Options, TimeDomain, Periodic, OnBeat, OnError})`、`BeatReg`、`CurrentTick`、`SyncBeat`、`BuffBeat`——有限时 buff 或业务的周期工作时挂心跳（缺省 1Hz，按 `Granularity` 取档），每拍 `TickBuffs(本拍 tick)`，清空后停，启停随事务；加载后的第一拍清掉停服期间到期的记录。技能 Runtime 心跳 `NewRuntimeBeat(runtime, RuntimeBeatConfig{Host, Clock, Name, Period, MaxCatchUp, Options, TimeDomain, OnError})`、`RuntimeBeat.Start` / `Input` / `Do` / `CatchUp` / `Sync` / `Tick` / `Stats`——有工作时挂心跳、忙时逐 tick 推进到本拍的 tick、空闲时停在空闲点并停心跳，输入先推进到输入的 tick；同一输入序列在不同心跳抖动下逐 tick 相同，超过追帧上限时剩余一次跳过并计数。两者都可挂场景时间域（时停时 tick 不前进、2 倍速走两倍），D22 的“技能 / Buff 没有自动接域”关闭。
+- **行为变化**：`CombatComponent.TickBuffs` 在没有到期 buff 时直接返回，不再登记逆操作（事务外调用也不再 panic）；它保留为推进一步的原语，快池上的实体改用 `AttachBeat`。没装 `AttachBeat` 的组件行为不变。
+- **迁移**：仓库内没有快池上手写周期消息调 `TickBuffs` / `Runtime.Advance` 的业务调用方（game-demo、生成器、`scripts/testdata` 夹具都没有）；`status_bridge_test` / `state_bridge_test` 直接调 `TickBuffs` 测原语本身、`skillsync` 与 `examples` 直接调 `Advance` 测纯 Runtime，保持原样；`scripts/testdata` 玩法夹具的 `Advance(now)` 是按期限推进的对局逻辑（entitytimer），按 P5 表不迁。
+- **测试**：变异核对 17 项（R1～R8、B1～B7、T1、T2）各让对应用例变红，原文见 [impl/10-time §2G](docs/framework/impl/10-time.md#2g-技能与-buff-的心跳)；心跳用例 `-race -count=30` 通过。没有新指标。
+- **升级**：线上未部署，不做兼容；新增 API，无需迁移数据。
+- **限制**：见 [KNOWN-LIMITS“技能与 Buff 的心跳”](docs/maintenance/KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。
+
 ### Nest 批量心跳作业 DispatchTryBatch 与心跳投递开关，缺省关闭（DESIGN-TODO D20 选项 C，维护者 2026-10-21 批准按推荐做）
 
 - **合入方式（维护者 2026-10-21 决定 A）**：代码先合入，心跳缺省仍走单目标 `Dispatch`；批量心跳作业做成开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。

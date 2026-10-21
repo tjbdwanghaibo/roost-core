@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；P3、P5 未做；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”；spawner 一项归 P3）；P3 未做；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
@@ -826,7 +826,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P3、P5 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”；spawner 一项归 P3），P3 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
@@ -1030,6 +1030,57 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 **合入后补修（2026-10-21，协调方）**：`TestDriverOpenLoop` 的小档接线断言在 main 上偶发失败（`-race`、宿主 load 12～15 下 `-count=20` 失败 5 次），两处是用例口径错，不是产品缺陷：① “投递数 ≥ 执行数”用的是测量窗口内的差值，窗口起点取在拍子在途时，窗口前投递、窗口内执行的拍只进 Executed（失败样本 `Delivered:586 Executed:601`）——改为比较驱动的累计计数（结果新增 `driver_totals`）；② 在途跳拍与墙钟间隔 p50 量的是宿主调度（跳拍 100～184 次、p50 63～100ms，驱动本身被拖晚、不记为跳拍），不属于接线断言——跳拍只记日志（由 `TestBusyShortPoolSkipsBeatsAndResumes` 覆盖），周期改为断言每拍自带的 `Beat.Period` 等于登记周期（确定性；结果新增 `wrong_period_beats`，变异“比较 2×周期”变红：`beats carried a period other than the registered 50ms`）。墙钟间隔仍记在结果里，零跳拍与间隔分布是正式开环测量（`HB_OPENLOOP=1`）的结论。修后同负载 `-race -count=60` 通过。
 
+### P5 实施结果（2026-10-21）
+
+**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；本地提交，由维护者推送）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+
+**API 最终形状**：
+
+```go
+// gameplay/skill（纯运行时，不依赖 Nest）
+type TickClock struct{ Length time.Duration; Origin time.Time }    // tick = floor((t − Origin) / Length)；Origin 零值 = Unix 纪元
+func (c TickClock) TickAt(time.Time) Tick / StartOf(Tick) time.Time / Ticks(time.Duration) Tick / Validate() error
+func (r *Runtime) CurrentTick() Tick / Pending() bool
+// gameplay/skill/combat
+func (c *BuffContainer) NextDue() (int64, bool)
+// gameplay/skill/combatcomponent
+func (c *CombatComponent) AttachBeat(BeatConfig{Host, Clock, Name, Granularity, Options, TimeDomain, Periodic, OnBeat, OnError}) error
+func (c *CombatComponent) BeatReg() *heartbeat.Reg / CurrentTick() int64 / SyncBeat() error
+type BuffBeat struct{ heartbeat.Beat; Tick int64; Expired []combat.BuffInstance }
+func NewRuntimeBeat(*skill.Runtime, RuntimeBeatConfig{Host, Clock, Name, Period, MaxCatchUp, Options, TimeDomain, OnError}) (*RuntimeBeat, error)
+func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func(*skill.Runtime) error) / CatchUp() / Sync() / Tick() / Runtime() / Reg() / Stats()
+```
+
+**换算规则**（impl §2G 第 1、4 条）：tick 长度由业务的 `TickClock.Length` 定（[1ms, 1s]），向下取整（tick k 覆盖 `[Origin + k·L, Origin + (k+1)·L)`），`Origin` 缺省 Unix 纪元（tick 绝对、可存进 DAO）。Runtime 忙时**逐 tick** 推进（每个 tick 调一次 `Advance(t)`），推进中一旦空闲就停在空闲点、停心跳；空闲时拍不推进，handler 的输入一次跳到输入的 tick。一拍最多逐 tick 推进 `MaxCatchUp`（缺省 `max(1s, 周期)`，挂域时乘倍率）换算出的 tick 数，超过的剩余一次 `Advance(target)`，计 `Stats().Jumps` 并限频 Warn。时刻倒退不动。挂时间域时 `Beat.Now` 与 handler 的时刻都是域时间：时停 tick 不前进、2 倍速走两倍。
+
+**与回放、确定性的关系**：`MemoryHost.Advance` 每次推进都发 `tick_advanced`、`revision++`、按 tick 过期状态，“一次推到 N”与“逐个推到 N”结果不同，所以忙时必须逐 tick；空闲点由 Runtime 状态决定（而不是拍的时刻），空闲之后由输入跳。由此在没有 `Jumps` 的区间，**同一输入序列（每个输入落在同一 tick）在任何心跳抖动下逐 tick 相同**——`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter` 用每 tick 一拍、每两 tick 一拍、10～400ms 随机（含重复与晚到的拍）、600～990ms 长间隔四种抖动各 5 个种子，比较 Host 每次被推进时的记录（tick、revision、目标生命、施法者法力）与每次输入的结果，全部相同。回放记录输入的 tick（`RecordingHost` 带 tick），不记拍；发生过 `Jumps` 的区间回放要在同样的 tick 跳。
+
+**按要求逐条落实**：
+
+1. **Buff 心跳**：`AttachBeat` 登记一个停止状态的 `"combat"` 心跳；有限时 buff（`DueTick != 0`）或业务的 `Periodic()` 为真时自动启动，周期 `heartbeat.PeriodAtMost(Granularity)`（缺省 1s = 1Hz）；每拍 `TickBuffs(TickAt(Beat.Now))` 后调 `OnBeat`，全部清空且 `Periodic` 为假时停。启停随事务（施加限时 buff 的 handler 回滚，心跳不启动）。`OnInitFinish` 按加载出的 buff 启动，**停服期间到期的记录在加载后的第一拍清掉**（`OnInitFinish` 不在事务里，不能在那里改 DAO）。可选 `TimeDomain`，buff 时长按域时间算。周期效果、冷却、回复不在组件里：组件只持有 buff，业务的周期工作经 `Periodic` / `OnBeat` 挂在同一个心跳上（`SyncBeat` 重新对齐）。
+2. **保留 `TickBuffs`**：项目没上线、不做兼容，但它是“推进一步”的原语（与 `Runtime.Advance` 对称）——buff 心跳的拍就是调它；不在 Nest 快池上的驱动（Lockstep 房间的定步长循环）与 `status_bridge_test` / `state_bridge_test`（测原语本身与派生状态的通知）需要它。删掉它只能换成一个同样的未导出函数加测试钩子，不更简单。改了一处：没有到期 buff 时直接返回、不登记逆操作（每拍不复制容器）。
+3. **Skill 心跳**：`NewRuntimeBeat` 登记一个停止状态的 `"skill"` 心跳（周期缺省 `PeriodAtMost(Length)`），`Runtime.Pending()`（活动施法、排程任务、逐 tick 推进的衍生物、未用尽重试的待停止衍生物）时启动，空闲时停；每拍按上面的规则推进。handler 改 Runtime 一律经 `Start` / `Input` / `Do`（先推进到输入的 tick，再执行，最后对齐心跳）。拍里的 `Advance` 错误交给 `OnError`、不让本拍回滚（Runtime 不在回滚域里）。
+4. **夹具和使用方**：仓库里没有快池上手写周期消息调 `TickBuffs` / `Runtime.Advance` 的调用方——game-demo、生成器、`scripts/testdata` 都没有（`rg` 核对）。直接调用的只有：`combatcomponent` 的 `status_bridge_test` / `state_bridge_test`（原语测试，保留）、`skillsync` 测试与 `gameplay/skill/examples`（纯 Runtime，不在 Nest 上，保留）；`scripts/testdata` 玩法夹具的 `s.Advance(f.Now.UnixMilli())` 是对局按期限推进（entitytimer 驱动），按 P5 表保持原样。`demo/` 没有用到本轮改的 API（只用 `skill.DefaultCompileEnvironment`）；生成器的 `render_workflow_docs.go` 第 613 行“运行时边界”只提到 HostAdapter，没有提心跳入口，归生成器 agent。
+5. **放在 `combatcomponent`**：`gameplay/skill` 是不依赖 Nest 的纯 DSL 运行时（只 import 标准库、`combat` 与 metrics），`examples` 与 `skillsync` 测试在 Nest 之外用它；`combatcomponent` 本来就是“技能 / 战斗接进 roost 实体”的那一层，已依赖 nest / entity。`TickClock` 是纯换算，放在 `skill`。
+
+**与方案的偏差（如实记录）**：
+
+1. **Buff 粒度固定，不按“下一个到期”自适应**：周期只按 `Granularity` 取档，短 buff 多时由业务调小；没做“离到期越近跳得越快”的自适应换档（每次施加 / 每拍都可能 `SetPeriod`，收益是短 buff 的精度）。
+2. **追帧超过上限时跳，不无限补**：方案只写“追帧上限”；超过上限的部分一次 `Advance(target)`（到期任务仍按 tick 顺序执行，只合并 Host 的中间 tick），而不是留到下一拍继续逐 tick 补（那样确定性完全保住，但过载时落后无界增长）。
+3. **忙时每个 tick 都推进 Host**：没有“只在到期点推进”的稀疏推进（Host 的 tick 序列会随拍变化，见上）；长时排程任务（30 秒后的弹药回充）期间每 tick 一次空推进。
+4. **`Pending` 的“活动施法”一项没有强制点证据**：变异 P1（去掉这一项）没有让用例变红——测试程序在施法活动期间总有排程任务。保留是保守的，写进 KNOWN-LIMITS。
+5. **`gameplay/skill` 的 `TickClock` 测试与 `Pending` 测试放在 `scheduler_test.go`**（推进主题），combatcomponent 的两组新测试是新主题、新文件（`beat_test.go`、`runtime_beat_test.go`）。
+
+**红绿证据**：新代码，实现与测试同轮写成，红用变异核对给出（17 项各改一处强制点，对应用例在当前代码上变红；原文全文在 impl §2G 的表里）。摘要：R1 拍直接一次推到目标 → `every other tick seed 1: per-tick results differ`；R2 拍推进空闲的 Runtime → `a beat on an idle runtime moved it to 60 (<nil>)`；R3 推进不停在空闲点 → `after the cast: active false tick 40, want stopped at the idle point 8 (windup 3 + recovery 2 from tick 3)`；R5 没有追帧上限 → `100 ticks behind: {Steps:110 Idle:0 Jumps:0 JumpedTicks:0} at tick 110, want 20 more steps, one jump over 80 ticks, at tick 110`；B1 改 buff 不对齐心跳 → `a timed buff did not start the beat`；B3 拍的 tick 早一个 → `a beat 1ns before tick 1005 expired the buff`；B6 buff 心跳不挂域 → `paused scene: 1 expired, 0 active, want the buff to stay`；T1 换算向零截断 → `TickAt(origin-1ns) = 0, want -1`。实现过程中第一版有一个真缺陷被抖动测试抓到：handler 的追帧推进到空闲点就停（与拍同一规则），输入落在空闲点而不是输入的 tick——长间隔抖动下 `tick 31 applied at 18: cast 0 err skill: skill is on cooldown`；改为输入在空闲点之后照常一次跳到输入的 tick。
+
+**两种投递方式**：rebase 到选项 C（`heartbeat.delivery`）之后，走运行中驱动的 7 个用例（`TestTimedBuffsBeatUntilTheyExpire`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`）经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 下各跑一遍；用例只断言契约（启停、到期、空闲后停），不断言批量作业特有的计数，没有单独核对 batch 方式确实走了批量路径（驱动 `Stats` 没有批量计数，按配置选择）。
+
+**断言方式**：真实 Nest 用例经同一实体的一条空消息等前一拍收尾（`settle`）再读提交后状态，登记的 `Active` 与 buff 列表在实体锁内读，不 sleep 断言；等待拍里的事件用带期限的轮询（只观察，不作断言）。
+
+**验证**：gofmt；`GOWORK=off go vet ./gameplay/... ./wiring/...`；`GOWORK=off go test -race -count=30 ./gameplay/skill/combatcomponent/`（心跳相关用例，35s，退出码 0）；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；`go run ./cmd/glsvet ./gameplay/skill/ ./gameplay/skill/combatcomponent/` 无提示。退出码见本轮交付报告（全部为 0 才提交文档）。没有改生成工程用到的东西，没跑 `scripts/test-*-generated.sh`。
+
+**待拍板**（先按推荐做了）：① 技能心跳的位置：A 放 `combatcomponent`（现状，推荐：`skill` 保持不依赖 Nest）；B 新子包 `gameplay/skill/skillbeat`。② Buff 粒度：A 固定 `Granularity`（现状，推荐：简单、可预期）；B 按下一个到期自适应换档。③ 超过追帧上限：A 剩余一次跳过、计数 + Warn（现状，推荐：落后有界）；B 留到下一拍继续逐 tick 补（确定性完全保住，过载时落后无界）。④ `TickBuffs` 保留为导出的原语（现状，推荐）；B 改为未导出、测试经钩子调用。
+
 ### 现状（已核对源码，基线 `6e65ba12`）
 
 - `scripts/perf/sync-aoi`：压测端一个循环每 tick 挑 1% 实体、分 10 批改值并移动（direct 模式直接 `interest.Move`；Nest 模式对每个实体发 `engine.Request` 到 load handler，handler 里 `QueueMove`，见 [nest.go](../../scripts/perf/sync-aoi/nest.go) `newLoadNest`）。移动由全局控制器驱动，不是实体自己的心跳。
@@ -1220,8 +1271,8 @@ roost 的取舍：
 | `scripts/perf/sync-aoi` Nest 模式的全局移动循环 | 是（每个实体一条 `Request` 到快池） | **P4 代码已实施（`3c5e41e3`）**：`-move-driver=heartbeat` 为心跳 + movement 巡逻，`loop` 保留且仍是缺省；测量待 v1.31 发版前压测 |
 | nest-game 夹具帧回调逐个投递心跳 | 是 | **P4 代码已实施（`22b01614`）**：`ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat` 用 `gameplay/heartbeat`，`ticker`（`HeartbeatHz` 旧路径）保留且仍是缺省；测量待 v1.31 发版前压测 |
 | `gameplay/actionflow`、`gameplay/ai` 的 `Tick` | 是（应当在实体锁内调用） | P2 由心跳驱动 |
-| `combatcomponent.TickBuffs` 与周期性 Buff 效果、冷却、回复 | 是 | P5：有到期 buff 或周期效果时挂 1Hz（或按 buff 粒度）登记，全部清空时停；加载后的第一拍顺带清理过期记录（注释里“重启后首次业务 tick”）。需要离线也准点、且结果要落档的长时 buff 仍用 entitytimer。风险中（战斗数值的时间粒度要与技能 tick 对齐） |
-| Skill `Runtime.Advance(tick)` | 是（挂在实体组件上时） | P5：有在途施法 / 衍生物时挂登记，每拍把 Runtime 推进到 `beat.Now` 对应的 tick，空闲停。风险中（技能确定性依赖整数 tick 与回放，换算规则要测） |
+| `combatcomponent.TickBuffs` 与周期性 Buff 效果、冷却、回复 | 是 | **已实施（P5，`AttachBeat`，见“P5 实施结果”）**。原计划：有到期 buff 或周期效果时挂 1Hz（或按 buff 粒度）登记，全部清空时停；加载后的第一拍顺带清理过期记录（注释里“重启后首次业务 tick”）。需要离线也准点、且结果要落档的长时 buff 仍用 entitytimer。风险中（战斗数值的时间粒度要与技能 tick 对齐） |
+| Skill `Runtime.Advance(tick)` | 是（挂在实体组件上时） | **已实施（P5，`NewRuntimeBeat`，见“P5 实施结果”）**。原计划：有在途施法 / 衍生物时挂登记，每拍把 Runtime 推进到 `beat.Now` 对应的 tick，空闲停。风险中（技能确定性依赖整数 tick 与回放，换算规则要测） |
 | game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | P5 可选：改成场景实体 1Hz 心跳里决定缺额、提交后由进程侧建实体。风险中（建实体与同步登记的先后要拆清），不是必须 |
 | SLG 行军、建造、研究、收入（夹具） | 到期部分不是周期 | 继续用 entitytimer；行军途中如果大地图 AOI 需要服务端位置，加 1～2Hz 心跳插值位置 + `QueueMove`。风险低 |
 | tower-defense / auto-chess / survival / idle 夹具的 `Advance(now)` | 不是周期（按下一个期限推进） | 继续用 entitytimer；某个玩法需要连续模拟（例如塔防里怪物连续移动）时，房间实体挂心跳 |
@@ -1807,7 +1858,7 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 - `heartbeat.WithTimeDomain(d)`：调度不变，`Beat.Now` / `Elapsed` 用域时间，时停 `Elapsed = 0`，上限乘倍率。对 heartbeat 的改动只限 `Beat.Now` 的来源、上限与启动时刻，投递层不动。
 - actionflow / ai（D21 合入后补，推荐并实施：改动只是透传 `WithTimeDomain` 与缺省时间取域时间，不需要另行拍板）：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain`。动作组心跳、`Behavior` 的任务心跳、AI 心跳挂上域；心跳之外调用 runner 时 `ActionContext.Now` 也是域时间；`Behavior` 与 `ai.Controller` 没配 `Now` 时取域时间，所以计划步骤 `Timeout`、`FreezeFor` 与各自心跳的到期判断同一把尺子。端到端用例经真实 Nest、运行中的心跳驱动与 `BeatRunner`。
 - D21 新增的取时间处逐个核对（D22-1）：`Behavior.now` 原缺省 `clock.Now`，改为 `fctx.Now`（先红：`Behavior action context Now = …002, want … frozen …001`）；任务心跳、AI 心跳用 `Beat.Now`（驱动缺省 `fctx.Now`）；`ai.NewBeatController` 与 `FreezeFor` 经 `Controller.now`（D22-1 已改 `fctx.Now`）；计划步骤 `Timeout` 的起点是 `MissionContext.Now`（经 `Behavior.now`），到期判断是任务心跳的 `Beat.Now`。
-- 技能 / Buff：没有自动接线，文档给出接法（业务在心跳里按域时间推进 `Runtime` 的 tick，Buff 按 tick 计）；`skill/combatcomponent` 没改，放不进本轮。
+- 技能 / Buff：本轮没有自动接线；**D20 P5 已接上**（`combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain`，见 D20“P5 实施结果”）。
 - entitytimer 不接时间域（决定 ⑦）。
 
 **证据**：每项先在当前代码上变红（单步时钟让“第二次现读”一定不同）再改：心跳 `Beat.Now = …00.004, but the beat's message froze …00.003`；entitytimer `Fire.Now = …00.005, but the Tick message froze …00.007`；生成的分发包装 `handler got business time 1800000000001, but its message froze 1800000000003`；actionflow / AI `ActionContext.Now = …00.002, want … frozen …00.001`；glsvet `hints = 0, want 3`。时间域 9 个变异核对各让对应用例变红（失败文本在 impl §2F）。验证命令与结果见本轮汇报与 CHANGELOG。

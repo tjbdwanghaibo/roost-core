@@ -1,8 +1,10 @@
 package skill
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestSchedulerOrdersByDueTickThenSequence(t *testing.T) {
@@ -117,4 +119,66 @@ func compileRuntimeJSON(t *testing.T, input string) (*Program, CompileEnvironmen
 
 func asyncSkillJSON(id, input, flow string) string {
 	return `{"schema":"roost.skill/v2","id":"skill.test.runtime.` + id + `","name":"Async","description":"Async runtime.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":` + input + `,"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+}
+
+// TickClock（D20 P5）：tick 向下取整，同一时刻换算出同一个 tick；走完一整个 Length 才进下一个 tick；负数同样向下。
+func TestTickClockFloorsAndRoundTrips(t *testing.T) {
+	origin := time.Unix(1_800_000_000, 0)
+	clock := TickClock{Length: 50 * time.Millisecond, Origin: origin}
+	if err := clock.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		at   time.Duration
+		want Tick
+	}{{0, 0}, {49 * time.Millisecond, 0}, {50 * time.Millisecond, 1}, {149 * time.Millisecond, 2}, {-1, -1}, {-50 * time.Millisecond, -1}, {-51 * time.Millisecond, -2}}
+	for _, c := range cases {
+		if got := clock.TickAt(origin.Add(c.at)); got != c.want {
+			t.Errorf("TickAt(origin%+v) = %d, want %d", c.at, got, c.want)
+		}
+	}
+	for _, tick := range []Tick{-3, 0, 7, 36_000_000_000} { // 最后一个约是 2027 年的 Unix 纪元 tick（相对 origin 再晚约 57 年）
+		if got := clock.TickAt(clock.StartOf(tick)); got != tick {
+			t.Errorf("TickAt(StartOf(%d)) = %d", tick, got)
+		}
+	}
+	if got := clock.Ticks(250 * time.Millisecond); got != 5 {
+		t.Errorf("Ticks(250ms) = %d, want 5", got)
+	}
+	if got := (TickClock{Length: 100 * time.Millisecond}).Ticks(250 * time.Millisecond); got != 3 {
+		t.Errorf("Ticks(250ms) at 100ms = %d, want 3 (rounded up)", got)
+	}
+	unix := TickClock{Length: 100 * time.Millisecond}
+	if got := unix.TickAt(time.Unix(1, 0)); got != 10 {
+		t.Errorf("a zero Origin is the Unix epoch: TickAt(1s) = %d, want 10", got)
+	}
+	for _, bad := range []time.Duration{0, time.Microsecond, 2 * time.Second} {
+		if err := (TickClock{Length: bad}).Validate(); !errors.Is(err, ErrTickClockInvalid) {
+			t.Errorf("Validate(%v) = %v", bad, err)
+		}
+	}
+}
+
+// Pending 与 CurrentTick（D20 P5 的空闲判定）：等待中的施法、它的排程任务算工作；施法结束、只剩冷却记录时空闲。
+func TestRuntimePendingFollowsCastsAndTasks(t *testing.T) {
+	flow := `{"flow":"wait","ticks":3,"then":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":3,"damage_type":"physical"}},{"flow":"finish"}]}}`
+	input := asyncSkillJSON("pending", `{"type":"entity"}`, flow)
+	input = stringsReplaceOnce(t, input, `"cooldown_ticks":0`, `"cooldown_ticks":50`)
+	program, environment := compileRuntimeJSON(t, input)
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
+	if runtime.Pending() || runtime.CurrentTick() != 0 {
+		t.Fatalf("a new runtime: pending %v tick %d", runtime.Pending(), runtime.CurrentTick())
+	}
+	if _, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.Pending() {
+		t.Fatal("a waiting cast is not pending work")
+	}
+	if err := runtime.Advance(3); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Pending() || runtime.CurrentTick() != 3 {
+		t.Fatalf("after the cast finished: pending %v tick %d (a cooldown is not work)", runtime.Pending(), runtime.CurrentTick())
+	}
 }
