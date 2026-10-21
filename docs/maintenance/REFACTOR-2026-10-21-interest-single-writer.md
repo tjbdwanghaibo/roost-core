@@ -236,3 +236,14 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 - §8 七项均按推荐实施，其中会改变对外语义的是：直接调用不再在返回时生效（行为变化 1）、`Resubscribe` 去返回值、`Apply()` 不在快池上调用、`Hide` 越过未确认移动时跟随视野的位置（行为变化 3）、`Hide` → `Show` 同一周期多一次全量。
 - 实施中确认的一处既有缺陷：Leave → 关闭 / 重开会话 → 再 Enter 之间不调 `Apply` 时，重开会话的订阅丢失（修前探针原文见 10.3），本重构一并修复。
 - 方向判断：Interest 的三个写入口收成一条日志之后，“谁在什么时候改状态”只有一个答案；之后同类问题（新的入口、新的交错）应当表现为日志里一条命令的执行语义，而不是又一处队列改写。若后续仍在这块反复出问题，下一步该看的是应用侧的批次与结算（`runLogLocked` / `applyLocked`），不是入口。
+
+## 11. 实施后发现
+
+### 11.1 异步模式下已执行、未结算的命令不计入 Drain（2026-10-22，产品缺陷，本重构引入）
+
+- **现象**：合入 main（`e5b382a7`）后，`TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen/async` 在负载下偶发失败：`interest_test.go:569: stalled retry counted 0 times, want 1`（main `de3955a1` 上单跑本包 `-count=10` 失败 4 次，宿主 load 约 8；本机 `-count=30 -run` 复现 7 次，全部是 async 子用例）。
+- **根因**：重构后视野操作与 Enter 等命令在异步模式下由应用线程执行（重构前视野变更由结算入口自己应用）。应用线程恰在 Drain 的某次 Flush 结算之后、Drain 检查 `Pending` 之前执行完一步时，变化只在 `touched` / AOI 事件缓冲里，还没说给 Manager；而 `queuedPending` 只看日志、事实预算与重试表，返回假，Drain 提前返回。违反“Drain 等到在途条目全部应用并结算”。门控事实不受影响（结算前一直计入 `facts`）；同步模式不受影响（执行与结算在同一次政策阶段里）。
+- **修法**：应用侧新增 `unsettled`，`runLogLocked` 有进展时置位，`applyLocked` 结算时清除；`queuedPending` 为真时它也为真，`drainStalls` 列出 `applied_unsettled`。
+- **红 → 绿**：确定性用例 `TestPendingCountsAppliedButUnsettledCommands`（手动让应用线程走一步后直接问 Pending，不依赖时序），修前 `the applier executed the relation view but Pending is false: Drain would return before the subscribe is said (subscribers of 2: [2])`，修后通过；原偶发用例 `-count=50 -run` 0 失败。
+- **同时修正的用例口径**：`TestFlushSettlesButDoesNotApplyQueuedFacts` 假设“不经 queueFact 就没有应用线程”，重构后 Enter 等命令也会启动应用线程，它可能在断言前把注入的事实应用掉（`-race -count=50` 时出现 1 次 `Flush applied a queued fact on its own path: position={20 10} queued=0`）。改为先停掉后台应用线程（`manualApplier`），断言不变。
+- **验证**（rebase 到 `b86c4fa4` 之后）：`-race -count=50 ./framework/sync/entitysync/policy/` 通过；负载下（两份 `entitysync` 包 `-race -count=6` 并行，`policy` 包 `-race -count=20 -cpu=1,2,8`）通过；`glsvet ./framework/sync/entitysync/...` 退出 0；根包、`scripts/test-sync-modes-generated.sh` 通过。
