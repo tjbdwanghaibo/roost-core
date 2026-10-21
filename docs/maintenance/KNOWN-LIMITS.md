@@ -64,6 +64,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **缺省仍是全局循环**：两种工具不加开关时是原负载，已有报告的复跑命令不变；对比做完后由维护者定缺省。
 - **心跳模式没有计划时刻**：sync-aoi 的 `Planned` 取这一拍消息冻结的业务时间、nest-game 的 `Completion` 从回调开始算，都不含驱动与快池的迟到（看 `beat_interval_ms` / `Beats.Interval` 与跳拍计数），与全局循环的“计划 → 客户端”不是同一口径。
 - **sync-aoi 心跳模式的核对弱于全局循环**：位置取决于心跳时机，客户端只核对在实体的巡逻带上（全局循环逐项核对位置）；同一实体在一个 tick 里改两次时第二次不计时（照常核对）。
+- **`TestBusyShortPoolSkipsBeatsAndResumes` 偶发失败已收口（2026-10-21）**：原用例按墙钟划窗口（占位消息自 Dispatch 起占住 250ms、放开后 100ms 内每个登记至少两拍），宿主负载下占位消息晚开始、窗口里只剩一拍（`-race -count=50`、烧满 CPU 时 2 次 `ran 1 beats after the pool was released, want it to resume`；驱动 Delivered = Executed、没有卡住）。判断为用例口径问题、不是产品缺陷；改为按事件推进后同负载 `-race -count=100` 全过（提交说明见 git log `test(heartbeat/bench, demo)`）。
 - **负载形状不同**：心跳模式的移动者是固定集合、持续巡逻（改值速率按与全局循环相同折算），全局循环每 tick 换一批实体；两者 AOI 进出的空间分布不同。
 
 ### game-demo 的移动、怪物与场景时间（D20 第 3 期）
@@ -219,6 +220,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - 只有拒绝计数，没有驻留字节 Gauge。
 - 推送入队多一次 payload 复制，每连接 goroutine 由 1 变 2（独立 Gate 模式下同样多一个通常空闲的写协程）。
 - 证据只有包内回归（含关连接与写协程并发退出时恰好归还一次）、自身视图与 Lockstep 的真实回环 TCP 集成用例与生成 demo 场景用例。
+- **生成 demo `TestAStalledOldConnectionDoesNotResetTheLiveClient` 偶发 `outbound queue full`（2026-10-21 收口）**：`pushPlayerKind` 只有在没有任何连接接住这一帧时才返回错误（`infra/network/gateway/tcp.go` 的 `delivered > 0 && !refused`），所以这条失败说明活连接也溢出了——用例紧循环推 512KiB 填充帧，活连接的写协程 / 读端在负载下被晚调度时，它的出站队列（几帧）与停读连接在同一次推送里一起满。判断为用例推送节奏问题、不是产品缺陷；原日志被截断，本机负载 13～16 下 290 次未复现，按代码推断。改为每推一帧等活连接读到再推下一帧；变异“任一连接失败就整体报错”仍让用例变红。
 
 ### Lockstep
 
@@ -228,6 +230,13 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **Lockstep 追帧链路背压（独立 Gate）**：维护者 2026-10-20 决定暂不做。独立 Gate 的 `wiring/gate.Transport` 两条通道都经 `GameIngress.PushBound`，nil 只表示 Game 本地准入：Game 侧队列满返回 `ErrReliableBackpressure`（每 Tick 计一次追帧失败，连续 `CatchupMaxFailures` 次放弃），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时关闭连接；追帧与快照都不随链路放慢。快照按 `UnpacedBytesPerTick`（缺省 16 KiB/Tick，30Hz 约 492 KB/s）固定节流；2026-10-20 toxiproxy 实测（30Hz、缺省参数，[演练 §3](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md#3-独立-gate63-风险-1-实测成立)）：64 KB/s × 1 MiB、256 KB/s × 4 MiB 每次连接都在同一位置被 Gate 断开、重连后从头重传，三次都未恢复；256 KB/s × 1 MiB 恢复（低于预算的超出部分被缓冲吸收）。是否断开取决于快照大小、每 Tick 预算与链路速度三者；断开发生在 Gate 写 socket 的期限到期（`writev ... i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是 `max_age` 积压规则，具体是 5s `write_timeout` 还是单帧发送预算先到期**尚未确认**（按代码缺省配置下单帧预算 ≤ `outbound.send_timeout` 250ms 更早，日志未区分）。2026-10-20 起恢复中被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`，这个循环可见。配置建议见[设计 §6.3](FEATURE-2026-10-20-lockstep-snapshot-recovery.md#63-独立-gate只准入时的行为与风险)。纯追帧页在独立 Gate 慢链路上的影响未实测。要做到随链路放慢，Gate 需要在写出 socket 后回执给 Game，这是协议改动，等有具体游戏使用“Lockstep + 独立 Gate”时再做。生成 game-demo 在独立 Gate 部署（`accessplayertcp.NewIngressMod`）下拿不到 `TCPRuntime`，战斗的追帧页同样只准入（`battleLinks`）。
 - **Lockstep 快照恢复的剩余边界**（2026-10-20）：① MOBA 持久对局 `Room` 已接快照来源（2026-10-20，`RecoverRoomWithSnapshots` + 已提交门 `MatchConfig.CommittedFrame`，[MOBA §5.7](../framework/MOBA-INTEGRATION.md#57-重连宿主代际与交接)），替身权威下有 KCP 与 Nest 两条回归，真实 strict WAL / Mongo 下有 SIGKILL 冷加载后窗口外客户端经已提交检查点快照恢复的演练（`TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL`，下行是记录器、不经 KCP）；真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生、宿主与权威分属不同进程时的快照恢复未测；已提交门要求宿主提交落后切帧不超过 `RedundancyDepth - 1` 帧，否则恢复中的会话一直经可靠通道逐页跟随、不切回实时（Room 每 Tick 同步提交，不受影响）；② C# 的 `SHA256.Create` 与 restore 路径只在本机 .NET 10 测试过，Unity 编辑器 / IL2CPP 未实测；③ 服务端“写出”只到本机 socket 发送缓冲（嵌入 TCP）或 Game 本地准入（独立 Gate）：服务端认为恢复结束时慢链路客户端可能还差 1 MB 以上，之后的实时帧排在后面，恢复后头几秒延迟等于排空时间（演练推断，未单独测量缓冲）；④ 快照不续传：断开重连后从头重传，独立 Gate 慢链路上会循环（上条）；⑤ Provider 不响应 ctx 时 `FetchTimeout` 后可能再发起一次，“每局至多一次在途”不成立；⑥ 宿主手动 `TrimHistory` 越过钉住点时快照作废、按失败计，但不计 `failed` 指标；⑦ 真实移动网络、跨机与目标负载下的快照恢复、快照大小分布与窗口取值未测；⑧ 客户端上传快照（多数一致）、增量 / 压缩快照、检查点持久化与宿主崩溃续赛未做（设计 §13）；game-demo 战斗未接（§12 第 13 条）。
 - **game-demo 战斗经 `lockstep.TCPSender`**（维护者 2026-10-20 决定）：生成 demo 的战斗房间（`demo/internal/service/game/battle.go.tmpl`）两条通道改经 `TCPSender`，嵌入 TCP（生成默认）下追帧页经 `TCPRuntime.PushLockstepSessionWritten` 等写出，与上面嵌入 TCP 追帧同一规则；回归 `TestABattleCatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt`（生成工程 `go test ./internal/service/game`）。线格式随之变化：10102 推送的是 Lockstep 包本身（RS v2 Lockstep 标志、不带 PB 包装与 battle id），按连接（接入层 SessionID）寻址；座位在它第一条 BattleInput 到达的连接上加入，没说过话的座位收不到帧，晚加入的座位靠追帧补齐。一条连接同时只打一场战斗（帧不带 battle id）。限速链路与真实进程下的 demo 战斗未演练。
+
+### 会话 Hold / Ready
+
+2026-10-21 起 Hold 之后撤到一个订阅都不剩，Ready 后补发一个不含对象的 Full（学习分支 `learn/main-review-20261021` 第 8 条，[ENTITY_SYNC §会话](../framework/ENTITY_SYNC.md#会话)）。剩余边界：
+
+- **每次 Hold → Ready 都按全量重发仍在的对象**：没有“只停发布、保留基线与待发 Remove”的暂停原语（第 8 条的方向 B，未做，待维护者决定）。按周期刷新权限、每轮都 Hold 的业务（SLG §7.5 / §7.7）每个周期每个对象重发一次全量；SLG 文档建议只在权限读失败与重连时 Hold。
+- **仍有订阅但一时没有可发的快照时，新 epoch 的 Full 会推迟**：例如 Ready 时剩下的订阅指向已卸载、等待重载的实体，或被冷创建预算推到后面的窗口；Full 发出之前接收端还留着上一 epoch 的对象（包括 held 期间撤掉的）。只在一个订阅都不剩时才补空 Full（读代码推断，未写用例）。
 
 ### 广播与 AOI
 
