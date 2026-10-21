@@ -1,0 +1,227 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+                                                                       │   base.txt    │             final2.txt              │
+                                                                       │    sec/op     │    sec/op     vs base               │
+DispatchCompare/noop/uniform/nest-4                                       705.9n ±  2%   595.2n ± 18%  -15.68% (p=0.004 n=6)
+DispatchCompare/noop/uniform/nest-10                                     1079.0n ± 13%   999.9n ± 14%   -7.33% (p=0.041 n=6)
+DispatchCompare/noop/colliding_ids/nest-4                                 710.1n ±  2%   592.6n ± 11%  -16.55% (p=0.002 n=6)
+DispatchCompare/noop/colliding_ids/nest-10                                1.081µ ±  3%   1.014µ ±  4%   -6.20% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-4                                        769.3n ±  1%   701.5n ±  4%   -8.81% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-10                                      1042.5n ±  1%   953.8n ±  5%   -8.51% (p=0.002 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4                              2.972µ ±  6%   2.879µ ±  3%        ~ (p=0.169 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10                             1.854µ ±  3%   1.757µ ± 26%        ~ (p=0.394 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4                              13.55µ ±  5%   13.33µ ±  3%        ~ (p=0.409 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10                             7.396µ ±  9%   7.090µ ±  2%   -4.14% (p=0.041 n=6)
+DispatchCompareProducers/p1/nest-4                                        681.1n ± 13%   577.5n ±  5%  -15.21% (p=0.002 n=6)
+DispatchCompareProducers/p1/nest-10                                      1045.5n ± 13%   882.8n ± 13%  -15.57% (p=0.002 n=6)
+DispatchCompareProducers/p16/nest-4                                       757.8n ± 10%   625.3n ± 24%  -17.47% (p=0.026 n=6)
+DispatchCompareProducers/p16/nest-10                                     1030.5n ±  6%   875.3n ± 15%  -15.06% (p=0.002 n=6)
+ClientRequestSingle-4                                                     3.456µ ± 11%   3.478µ ± 13%        ~ (p=0.240 n=6)
+ClientRequestSingle-10                                                    3.442µ ±  9%   3.491µ ± 11%        ~ (p=0.093 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-4     1.745µ ± 34%   1.735µ ± 18%        ~ (p=0.818 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-10    2.228µ ±  9%   2.118µ ±  6%   -4.94% (p=0.041 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-4      1.272µ ± 45%   1.230µ ± 19%   -3.34% (p=0.039 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-10     1.642µ ± 11%   1.584µ ± 10%        ~ (p=0.240 n=6)
+geomean                                                                   1.611µ         1.486µ         -7.74%
+
+                                              │   base.txt   │              final2.txt              │
+                                              │ completed/s  │  completed/s   vs base               │
+DispatchCompare/noop/uniform/nest-4             1.417M ±  2%    1.680M ± 15%  +18.59% (p=0.004 n=6)
+DispatchCompare/noop/uniform/nest-10            926.8k ± 11%    999.9k ± 12%   +7.89% (p=0.041 n=6)
+DispatchCompare/noop/colliding_ids/nest-4       1.408M ±  2%    1.688M ± 10%  +19.84% (p=0.002 n=6)
+DispatchCompare/noop/colliding_ids/nest-10      925.4k ±  3%    986.6k ±  4%   +6.61% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-4              1.300M ±  1%    1.426M ±  4%   +9.66% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-10             958.9k ±  1%   1048.4k ±  5%   +9.33% (p=0.002 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4    336.5k ±  6%    347.4k ±  3%        ~ (p=0.180 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10   539.4k ±  3%    569.4k ± 21%        ~ (p=0.394 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4    73.82k ±  6%    75.01k ±  3%        ~ (p=0.394 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10   135.2k ±  8%    141.1k ±  2%   +4.32% (p=0.041 n=6)
+DispatchCompareProducers/p1/nest-4              1.468M ± 11%    1.732M ±  4%  +17.94% (p=0.002 n=6)
+DispatchCompareProducers/p1/nest-10             956.7k ± 12%   1133.0k ± 12%  +18.42% (p=0.002 n=6)
+DispatchCompareProducers/p16/nest-4             1.320M ±  9%    1.599M ± 19%  +21.17% (p=0.026 n=6)
+DispatchCompareProducers/p16/nest-10            970.3k ±  6%   1142.5k ± 13%  +17.75% (p=0.002 n=6)
+geomean                                         701.2k          780.9k        +11.36%
+
+                                              │    base.txt    │              final2.txt              │
+                                              │ handler-avg-ms │ handler-avg-ms  vs base              │
+DispatchCompare/noop/uniform/nest-4               29.55µ ±  3%     29.75µ ± 13%       ~ (p=0.626 n=6)
+DispatchCompare/noop/uniform/nest-10              36.80µ ± 29%     35.60µ ± 13%  -3.26% (p=0.035 n=6)
+DispatchCompare/noop/colliding_ids/nest-4         29.45µ ±  1%     29.60µ ±  8%       ~ (p=0.221 n=6)
+DispatchCompare/noop/colliding_ids/nest-10        36.80µ ±  3%     35.85µ ±  3%       ~ (p=0.058 n=6)
+DispatchCompare/noop/hot_id/nest-4                29.00µ ±  1%     29.30µ ±  2%       ~ (p=0.087 n=6)
+DispatchCompare/noop/hot_id/nest-10               29.85µ ±  2%     29.65µ ±  6%       ~ (p=0.199 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4      10.73m ±  6%     10.42m ±  3%       ~ (p=0.193 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10     12.88m ±  4%     12.96m ±  9%       ~ (p=0.699 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4      53.17m ±  5%     52.31m ±  3%       ~ (p=0.310 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10     66.92m ±  7%     65.23m ±  2%  -2.53% (p=0.026 n=6)
+DispatchCompareProducers/p1/nest-4                29.65µ ± 20%     29.90µ ±  1%       ~ (p=0.565 n=6)
+DispatchCompareProducers/p1/nest-10               32.15µ ± 19%     31.25µ ± 16%  -2.80% (p=0.035 n=6)
+DispatchCompareProducers/p16/nest-4               30.45µ ±  9%     29.85µ ± 25%       ~ (p=0.067 n=6)
+DispatchCompareProducers/p16/nest-10              35.70µ ± 10%     34.95µ ± 16%       ~ (p=0.310 n=6)
+geomean                                           217.2µ           214.6µ        -1.21%
+
+                                              │    base.txt    │               final2.txt               │
+                                              │ iterations/1ms │ iterations/1ms  vs base                │
+DispatchCompare/noop/uniform/nest-4              757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompare/noop/uniform/nest-10             757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompare/noop/colliding_ids/nest-4        757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompare/noop/colliding_ids/nest-10       757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompare/noop/hot_id/nest-4               757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompare/noop/hot_id/nest-10              757.5k ± 7%        748.6k ± 7%       ~ (p=0.485 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4     723.4k ± 4%        717.7k ± 3%       ~ (p=0.310 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10    723.4k ± 4%        717.7k ± 3%       ~ (p=0.310 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4     723.4k ± 4%        717.7k ± 3%       ~ (p=0.310 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10    723.4k ± 4%        717.7k ± 3%       ~ (p=0.310 n=6)
+DispatchCompareProducers/p1/nest-4                0.000 ± 0%         0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-10               0.000 ± 0%         0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-4               0.000 ± 0%         0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-10              0.000 ± 0%         0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                      ²                   -0.74%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                              │   base.txt   │             final2.txt             │
+                                              │   rejected   │  rejected   vs base                │
+DispatchCompare/noop/uniform/nest-4             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/uniform/nest-10            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-4       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-10      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-4              0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-10             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-4    0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-10   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-4    0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-10   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-4              0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-10             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-4             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-10            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                    ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                              │    base.txt     │              final2.txt               │
+                                              │  total-max-ms   │  total-max-ms   vs base               │
+DispatchCompare/noop/uniform/nest-4              209.4m ±  620%   192.9m ± 3097%        ~ (p=1.000 n=6)
+DispatchCompare/noop/uniform/nest-10            2706.5m ±   87%   528.5m ± 4666%        ~ (p=0.394 n=6)
+DispatchCompare/noop/colliding_ids/nest-4        230.8m ± 1332%   347.8m ±  249%        ~ (p=0.818 n=6)
+DispatchCompare/noop/colliding_ids/nest-10       311.0m ±  720%   320.9m ±  756%        ~ (p=0.937 n=6)
+DispatchCompare/noop/hot_id/nest-4               220.5m ± 1112%   263.9m ± 4027%        ~ (p=0.310 n=6)
+DispatchCompare/noop/hot_id/nest-10              312.4m ±   14%   312.5m ±  188%        ~ (p=0.937 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4      2.099 ±  616%    1.657 ±   40%        ~ (p=1.000 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10     1.165 ±  901%    3.306 ±  277%        ~ (p=0.485 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4      9.602 ±   44%   10.869 ±   43%        ~ (p=0.394 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10     3.876 ±  465%    3.528 ±  260%        ~ (p=0.818 n=6)
+DispatchCompareProducers/p1/nest-4               127.8m ± 2644%   109.1m ±  212%        ~ (p=0.818 n=6)
+DispatchCompareProducers/p1/nest-10              401.1m ±  911%   190.5m ± 4480%        ~ (p=0.589 n=6)
+DispatchCompareProducers/p16/nest-4             1762.1m ± 1347%   344.9m ± 1082%        ~ (p=0.310 n=6)
+DispatchCompareProducers/p16/nest-10            1713.5m ±  592%   964.5m ±  406%        ~ (p=0.589 n=6)
+geomean                                          793.8m           624.2m          -21.37%
+
+                                              │   base.txt   │             final2.txt              │
+                                              │ total-p99-ms │ total-p99-ms  vs base               │
+DispatchCompare/noop/uniform/nest-4             50.75m ±  5%   36.08m ± 49%        ~ (p=0.065 n=6)
+DispatchCompare/noop/uniform/nest-10            66.90m ± 16%   57.33m ± 19%  -14.30% (p=0.041 n=6)
+DispatchCompare/noop/colliding_ids/nest-4       51.41m ±  3%   35.69m ± 38%  -30.58% (p=0.002 n=6)
+DispatchCompare/noop/colliding_ids/nest-10      67.69m ±  3%   58.40m ±  4%  -13.72% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-4              59.16m ± 11%   56.11m ± 36%        ~ (p=0.310 n=6)
+DispatchCompare/noop/hot_id/nest-10             88.25m ± 11%   81.14m ± 31%        ~ (p=0.240 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4    199.6m ± 19%   185.6m ± 25%        ~ (p=0.180 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10   137.5m ±  5%   129.3m ± 42%        ~ (p=0.509 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4    789.1m ±  5%   778.3m ±  2%        ~ (p=0.329 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10   472.3m ± 25%   454.4m ±  6%        ~ (p=0.093 n=6)
+DispatchCompareProducers/p1/nest-4              27.56m ± 82%   19.23m ± 39%  -30.22% (p=0.015 n=6)
+DispatchCompareProducers/p1/nest-10             29.50m ± 67%   21.54m ± 69%  -26.98% (p=0.026 n=6)
+DispatchCompareProducers/p16/nest-4             64.71m ± 22%   60.31m ± 50%        ~ (p=0.093 n=6)
+DispatchCompareProducers/p16/nest-10            132.3m ±  8%   131.2m ± 15%        ~ (p=0.485 n=6)
+geomean                                         94.30m         81.25m        -13.83%
+
+                                              │   base.txt   │             final2.txt              │
+                                              │ wait-p99-ms  │ wait-p99-ms   vs base               │
+DispatchCompare/noop/uniform/nest-4             50.71m ±  5%   36.06m ± 49%        ~ (p=0.065 n=6)
+DispatchCompare/noop/uniform/nest-10            66.85m ± 16%   57.29m ± 19%  -14.31% (p=0.041 n=6)
+DispatchCompare/noop/colliding_ids/nest-4       51.38m ±  3%   35.64m ± 37%  -30.62% (p=0.002 n=6)
+DispatchCompare/noop/colliding_ids/nest-10      67.65m ±  3%   58.35m ±  4%  -13.74% (p=0.002 n=6)
+DispatchCompare/noop/hot_id/nest-4              59.15m ± 11%   56.08m ± 36%        ~ (p=0.310 n=6)
+DispatchCompare/noop/hot_id/nest-10             88.22m ± 11%   81.12m ± 31%        ~ (p=0.240 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-4    187.1m ± 19%   174.2m ± 25%        ~ (p=0.180 n=6)
+DispatchCompareMicro/cpu_10us/uniform/nest-10   120.3m ±  4%   113.0m ± 35%        ~ (p=0.394 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-4    736.4m ±  4%   725.5m ±  2%        ~ (p=0.240 n=6)
+DispatchCompareMicro/cpu_50us/uniform/nest-10   379.0m ± 13%   372.9m ±  5%   -1.62% (p=0.026 n=6)
+DispatchCompareProducers/p1/nest-4              27.52m ± 82%   19.21m ± 39%  -30.20% (p=0.015 n=6)
+DispatchCompareProducers/p1/nest-10             29.46m ± 67%   21.48m ± 70%  -27.09% (p=0.026 n=6)
+DispatchCompareProducers/p16/nest-4             64.68m ± 22%   60.27m ± 50%        ~ (p=0.093 n=6)
+DispatchCompareProducers/p16/nest-10            132.3m ±  8%   131.1m ± 15%        ~ (p=0.485 n=6)
+geomean                                         91.02m         78.54m        -13.72%
+
+                                              │     base.txt      │                final2.txt                 │
+                                              │ zero-duration-pct │ zero-duration-pct  vs base                │
+DispatchCompare/noop/uniform/nest-4                  0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/uniform/nest-10                 0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-4            0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-10           0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-4                   0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-10                  0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-4         0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-10        0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-4         0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-10        0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-4                   0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-10                  0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-4                  0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-10                 0.000 ± 0%            0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                         ²                      +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                                       │   base.txt   │              final2.txt              │
+                                                                       │     B/op     │     B/op      vs base                │
+DispatchCompare/noop/uniform/nest-4                                        177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/uniform/nest-10                                       177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-4                                  177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-10                                 177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-4                                         185.0 ± 0%     185.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-10                                        185.0 ± 0%     185.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-4                               177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-10                              177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-4                               177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-10                              177.5 ± 0%     177.0 ± 1%       ~ (p=0.545 n=6)
+DispatchCompareProducers/p1/nest-4                                         177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-10                                        177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-4                                        177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-10                                       177.0 ± 0%     177.0 ± 0%       ~ (p=1.000 n=6) ¹
+ClientRequestSingle-4                                                    1.495Ki ± 0%   1.495Ki ± 0%       ~ (p=1.000 n=6) ¹
+ClientRequestSingle-10                                                   1.521Ki ± 2%   1.521Ki ± 2%       ~ (p=1.000 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-4    1.438Ki ± 0%   1.439Ki ± 1%       ~ (p=0.842 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-10   1.473Ki ± 1%   1.482Ki ± 1%       ~ (p=0.387 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-4     1.096Ki ± 3%   1.103Ki ± 1%       ~ (p=0.221 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-10    1.120Ki ± 1%   1.119Ki ± 3%       ~ (p=0.970 n=6)
+geomean                                                                    329.0          329.2       +0.05%
+¹ all samples are equal
+
+                                                                       │  base.txt  │             final2.txt              │
+                                                                       │ allocs/op  │  allocs/op   vs base                │
+DispatchCompare/noop/uniform/nest-4                                      4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/uniform/nest-10                                     4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-4                                4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/colliding_ids/nest-10                               4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompare/noop/hot_id/nest-4                                       5.000 ± 0%   5.000 ± 20%       ~ (p=1.000 n=6)
+DispatchCompare/noop/hot_id/nest-10                                      5.000 ± 0%   5.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-4                             4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_10us/uniform/nest-10                            4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-4                             4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareMicro/cpu_50us/uniform/nest-10                            4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-4                                       4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p1/nest-10                                      4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-4                                      4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+DispatchCompareProducers/p16/nest-10                                     4.000 ± 0%   4.000 ±  0%       ~ (p=1.000 n=6) ¹
+ClientRequestSingle-4                                                    35.00 ± 0%   35.00 ±  0%       ~ (p=1.000 n=6) ¹
+ClientRequestSingle-10                                                   37.00 ± 5%   37.00 ±  5%       ~ (p=1.000 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-4    36.00 ± 0%   36.00 ±  3%       ~ (p=0.455 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=false-10   38.00 ± 0%   38.00 ±  0%       ~ (p=1.000 n=6) ¹
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-4     33.00 ± 6%   33.00 ±  6%       ~ (p=1.000 n=6)
+NestHotPath/cpu=false/workers=8/independent=true/single/async=true-10    33.00 ± 0%   33.00 ±  0%       ~ (p=1.000 n=6) ¹
+geomean                                                                  7.860        7.860        +0.00%
+¹ all samples are equal

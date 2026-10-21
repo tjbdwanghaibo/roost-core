@@ -1,0 +1,40 @@
+== X
+  sync(mutex): 257340
+  cond.Wait: 95868
+101788 framework/nest.(*dispatchQueue).work
+48263 framework/nest.(*dispatchQueue).admit <- framework/nest.(*Dispatcher).TrySendMsg <- framework/nest.(*NestMgr).admi
+29361 framework/entity.storeGuardScope <- framework/entity.NewGuardScope <- framework/nest.runNestLogic
+25040 framework/entity.releaseGuardScope <- framework/entity.NewGuardScope.func1 <- framework/nest.runNestLogic.func3
+23701 framework/nest.pushCurrentNestDispatchMsg <- framework/nest.dispatchNest <- framework/nest.NestDispatch
+== D
+  sync(mutex): 117756
+  cond.Wait: 9190
+27809 framework/entity.storeGuardScope <- framework/entity.NewGuardScope <- framework/nest.runNestLogic
+24499 framework/nest.pushCurrentNestDispatchMsg <- framework/nest.dispatchNest <- framework/nest.NestDispatch
+21635 framework/nest.(*dispatchQueue).work
+21283 framework/entity.releaseGuardScope <- framework/entity.NewGuardScope.func1 <- framework/nest.runNestLogic.func3
+16184 framework/nest.pushCurrentNestDispatchMsg.func3 <- framework/nest.dispatchNest.func2 <- framework/nest.dispatchNes
+== Y
+  sync(mutex): 1438
+  cond.Wait: 16650
+535 framework/nest.(*dispatchQueue).work
+255 framework/nest.(*dispatchQueue).admit <- framework/nest.(*Dispatcher).TrySendMsg <- framework/nest.(*NestMgr).admit
+180 framework/entity.releaseGuardScope <- framework/entity.NewGuardScope.func1 <- framework/nest.runNestLogic.func3
+149 framework/nest.pushCurrentNestDispatchMsg <- framework/nest.dispatchNest <- framework/nest.NestDispatch
+136 framework/entity.storeGuardScope <- framework/entity.NewGuardScope <- framework/nest.runNestLogic
+== D-shard
+  sync(mutex): 32347
+  cond.Wait: 10167
+25333 framework/nest.(*dispatchQueue).work
+1739 framework/nest.(*NestMgr).FenceError <- framework/nest.dispatchNest <- framework/nest.NestDispatch
+1430 framework/nest.(*dispatchQueue).admit <- framework/nest.(*Dispatcher).TrySendMsg <- framework/nest.(*NestMgr).admit
+1250 framework/nest.(*NestMgr).groupLockManager <- framework/nest.(*NestMgr).dispatchLoadedEntities <- framework/nest.(*
+1175 framework/nest.(*NestMgr).FenceError <- framework/nest.runNestLogic <- framework/nest.dispatchNest
+== X-shard
+  sync(mutex): 191055
+  cond.Wait: 284934
+115657 framework/nest.(*dispatchQueue).work
+67441 framework/nest.(*dispatchQueue).admit <- framework/nest.(*Dispatcher).TrySendMsg <- framework/nest.(*NestMgr).admi
+2246 framework/nest.(*NestMgr).FenceError <- framework/nest.dispatchNest <- framework/nest.NestDispatch
+1775 framework/nest.(*NestMgr).FenceError <- framework/nest.validateClientDispatch <- framework/nest.(*NestMgr).Dispatch
+1765 framework/nest.(*NestMgr).FenceError <- framework/nest.runNestLogic <- framework/nest.dispatchNest

@@ -1,0 +1,270 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 1776171	       624.4 ns/op	   1601510 completed/s	         0.0000302 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         0.1837 total-max-ms	         0.03954 total-p99-ms	         0.03950 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1208313	      1002 ns/op	    997569 completed/s	         0.0000357 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         1.125 total-max-ms	         0.05771 total-p99-ms	         0.05767 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 2031198	       593.0 ns/op	   1686478 completed/s	         0.0000294 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         0.2223 total-max-ms	         0.03521 total-p99-ms	         0.03517 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1222068	      1033 ns/op	    968142 completed/s	         0.0000366 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         0.3262 total-max-ms	         0.05925 total-p99-ms	         0.05921 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1636912	       696.8 ns/op	   1435102 completed/s	         0.0000291 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         0.2658 total-max-ms	         0.05396 total-p99-ms	         0.05396 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1256480	       953.8 ns/op	   1048429 completed/s	         0.0000296 handler-avg-ms	    757628 iterations/1ms	         0 rejected	         0.2812 total-max-ms	         0.08121 total-p99-ms	         0.08121 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  429378	      2802 ns/op	    356847 completed/s	         0.01023 handler-avg-ms	    716650 iterations/1ms	         0 rejected	         2.315 total-max-ms	         0.1802 total-p99-ms	         0.1695 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  652760	      1932 ns/op	    517529 completed/s	         0.01334 handler-avg-ms	    716650 iterations/1ms	         0 rejected	         5.483 total-max-ms	         0.1463 total-p99-ms	         0.1263 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   87817	     13228 ns/op	     75598 completed/s	         0.05195 handler-avg-ms	    716650 iterations/1ms	         0 rejected	         9.598 total-max-ms	         0.7817 total-p99-ms	         0.7286 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  178203	      7152 ns/op	    139820 completed/s	         0.06486 handler-avg-ms	    716650 iterations/1ms	         0 rejected	        12.70 total-max-ms	         0.4561 total-p99-ms	         0.3742 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 1994233	       577.1 ns/op	   1732824 completed/s	         0.0000298 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1076 total-max-ms	         0.01883 total-p99-ms	         0.01879 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1379065	       894.3 ns/op	   1118232 completed/s	         0.0000314 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1229 total-max-ms	         0.02254 total-p99-ms	         0.02246 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1910104	       626.9 ns/op	   1595096 completed/s	         0.0000298 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.2548 total-max-ms	         0.06087 total-p99-ms	         0.06083 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1383470	       870.4 ns/op	   1148928 completed/s	         0.0000345 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.5418 total-max-ms	         0.1309 total-p99-ms	         0.1308 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  340701	      3469 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  340190	      3463 ns/op	    1558 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  688084	      1740 ns/op	    1482 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  569822	      2084 ns/op	    1496 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  952311	      1228 ns/op	    1131 B/op	      33 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  739614	      1580 ns/op	    1148 B/op	      33 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 1552154	       704.1 ns/op	   1420328 completed/s	         0.0000337 handler-avg-ms	    695788 iterations/1ms	         0 rejected	         2.008 total-max-ms	         0.05379 total-p99-ms	         0.05371 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1000000	      1143 ns/op	    874968 completed/s	         0.0000404 handler-avg-ms	    695788 iterations/1ms	         0 rejected	        25.19 total-max-ms	         0.06808 total-p99-ms	         0.06800 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 1745781	       657.6 ns/op	   1520626 completed/s	         0.0000321 handler-avg-ms	    695788 iterations/1ms	         0 rejected	         1.154 total-max-ms	         0.04908 total-p99-ms	         0.04900 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1000000	      1051 ns/op	    951690 completed/s	         0.0000369 handler-avg-ms	    695788 iterations/1ms	         0 rejected	         0.7033 total-max-ms	         0.06100 total-p99-ms	         0.06096 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1706590	       730.1 ns/op	   1369704 completed/s	         0.0000300 handler-avg-ms	    695788 iterations/1ms	         0 rejected	        10.89 total-max-ms	         0.07650 total-p99-ms	         0.07642 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1249192	       965.7 ns/op	   1035506 completed/s	         0.0000298 handler-avg-ms	    695788 iterations/1ms	         0 rejected	         0.3284 total-max-ms	         0.08871 total-p99-ms	         0.08867 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  406410	      2962 ns/op	    337573 completed/s	         0.01071 handler-avg-ms	    718732 iterations/1ms	         0 rejected	         1.613 total-max-ms	         0.2316 total-p99-ms	         0.2176 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  734878	      1773 ns/op	    563977 completed/s	         0.01282 handler-avg-ms	    718732 iterations/1ms	         0 rejected	         1.799 total-max-ms	         0.1316 total-p99-ms	         0.1146 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   83136	     13176 ns/op	     75897 completed/s	         0.05178 handler-avg-ms	    718732 iterations/1ms	         0 rejected	        12.14 total-max-ms	         0.7702 total-p99-ms	         0.7190 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  173593	      7008 ns/op	    142689 completed/s	         0.06442 handler-avg-ms	    718732 iterations/1ms	         0 rejected	         2.936 total-max-ms	         0.4505 total-p99-ms	         0.3717 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 2071863	       587.8 ns/op	   1701184 completed/s	         0.0000300 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.3397 total-max-ms	         0.02183 total-p99-ms	         0.02179 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1332603	       897.6 ns/op	   1114045 completed/s	         0.0000317 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.2117 total-max-ms	         0.02433 total-p99-ms	         0.02429 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1869901	       633.2 ns/op	   1579256 completed/s	         0.0000301 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.4679 total-max-ms	         0.06300 total-p99-ms	         0.06296 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1343890	       870.7 ns/op	   1148510 completed/s	         0.0000350 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.6580 total-max-ms	         0.1305 total-p99-ms	         0.1304 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  339554	      3466 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  347944	      3891 ns/op	    1558 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  672494	      1730 ns/op	    1472 B/op	      36 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  574831	      2122 ns/op	    1528 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  970824	      1231 ns/op	    1127 B/op	      31 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  763965	      1728 ns/op	    1134 B/op	      33 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 2019207	       594.6 ns/op	   1681876 completed/s	         0.0000294 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         0.1904 total-max-ms	         0.03579 total-p99-ms	         0.03579 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1211766	       997.8 ns/op	   1002241 completed/s	         0.0000355 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         0.4268 total-max-ms	         0.05708 total-p99-ms	         0.05704 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 2021896	       591.2 ns/op	   1691581 completed/s	         0.0000294 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         0.1424 total-max-ms	         0.03533 total-p99-ms	         0.03529 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1216312	       995.4 ns/op	   1004643 completed/s	         0.0000356 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         0.2924 total-max-ms	         0.05675 total-p99-ms	         0.05671 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1724508	       694.8 ns/op	   1439284 completed/s	         0.0000292 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         2.798 total-max-ms	         0.05367 total-p99-ms	         0.05367 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1266640	       949.2 ns/op	   1053480 completed/s	         0.0000297 handler-avg-ms	    759219 iterations/1ms	         0 rejected	         0.2800 total-max-ms	         0.08017 total-p99-ms	         0.08017 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  418026	      2893 ns/op	    345609 completed/s	         0.01058 handler-avg-ms	    740646 iterations/1ms	         0 rejected	         1.581 total-max-ms	         0.1846 total-p99-ms	         0.1730 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  719163	      1698 ns/op	    588981 completed/s	         0.01300 handler-avg-ms	    740646 iterations/1ms	         0 rejected	         0.6035 total-max-ms	         0.1237 total-p99-ms	         0.1080 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   89449	     13475 ns/op	     74213 completed/s	         0.05300 handler-avg-ms	    740646 iterations/1ms	         0 rejected	        15.57 total-max-ms	         0.7749 total-p99-ms	         0.7223 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  176245	      7021 ns/op	    142436 completed/s	         0.06561 handler-avg-ms	    740646 iterations/1ms	         0 rejected	         3.183 total-max-ms	         0.4452 total-p99-ms	         0.3698 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 2077014	       573.0 ns/op	   1745119 completed/s	         0.0000300 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1556 total-max-ms	         0.01925 total-p99-ms	         0.01925 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1371446	       870.8 ns/op	   1148403 completed/s	         0.0000311 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1576 total-max-ms	         0.02029 total-p99-ms	         0.02025 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1924098	       618.7 ns/op	   1616206 completed/s	         0.0000298 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.2913 total-max-ms	         0.05912 total-p99-ms	         0.05908 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1354204	       879.9 ns/op	   1136555 completed/s	         0.0000349 handler-avg-ms	         0 iterations/1ms	         0 rejected	         2.519 total-max-ms	         0.1316 total-p99-ms	         0.1315 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  333294	      3462 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  346434	      3509 ns/op	    1558 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  687680	      1719 ns/op	    1470 B/op	      36 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  569236	      2125 ns/op	    1518 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  982861	      1213 ns/op	    1137 B/op	      33 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  735255	      1588 ns/op	    1175 B/op	      33 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 1946853	       591.8 ns/op	   1689815 completed/s	         0.0000296 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         0.1954 total-max-ms	         0.03567 total-p99-ms	         0.03562 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1000000	      1003 ns/op	    997269 completed/s	         0.0000360 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         0.6302 total-max-ms	         0.05758 total-p99-ms	         0.05754 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 2020330	       631.2 ns/op	   1584223 completed/s	         0.0000316 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         1.213 total-max-ms	         0.04404 total-p99-ms	         0.04400 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1000000	      1023 ns/op	    977330 completed/s	         0.0000361 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         0.2448 total-max-ms	         0.05892 total-p99-ms	         0.05887 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1718710	       694.7 ns/op	   1439552 completed/s	         0.0000291 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         0.1623 total-max-ms	         0.05292 total-p99-ms	         0.05287 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1249708	       953.8 ns/op	   1048422 completed/s	         0.0000296 handler-avg-ms	    754371 iterations/1ms	         0 rejected	         0.3490 total-max-ms	         0.07904 total-p99-ms	         0.07900 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  420537	      2879 ns/op	    347287 completed/s	         0.01051 handler-avg-ms	    735206 iterations/1ms	         0 rejected	         1.980 total-max-ms	         0.1867 total-p99-ms	         0.1754 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  719965	      1730 ns/op	    577952 completed/s	         0.01291 handler-avg-ms	    735206 iterations/1ms	         0 rejected	         1.288 total-max-ms	         0.1270 total-p99-ms	         0.1115 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   89792	     13645 ns/op	     73285 completed/s	         0.05362 handler-avg-ms	    735206 iterations/1ms	         0 rejected	         9.142 total-max-ms	         0.7880 total-p99-ms	         0.7351 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  155661	      7219 ns/op	    138524 completed/s	         0.06664 handler-avg-ms	    735206 iterations/1ms	         0 rejected	         6.951 total-max-ms	         0.4810 total-p99-ms	         0.3907 wait-p99-ms	         0 zero-duration-pct	     178 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 2078876	       573.1 ns/op	   1744896 completed/s	         0.0000297 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1069 total-max-ms	         0.01850 total-p99-ms	         0.01846 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1385924	       871.2 ns/op	   1147805 completed/s	         0.0000311 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.3291 total-max-ms	         0.02054 total-p99-ms	         0.02050 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1908226	       619.8 ns/op	   1613387 completed/s	         0.0000299 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.3580 total-max-ms	         0.05950 total-p99-ms	         0.05946 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1275072	       906.4 ns/op	   1103281 completed/s	         0.0000368 handler-avg-ms	         0 iterations/1ms	         0 rejected	         4.877 total-max-ms	         0.1364 total-p99-ms	         0.1364 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  337714	      3682 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  349633	      3441 ns/op	    1558 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  685848	      1723 ns/op	    1489 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  576304	      2113 ns/op	    1535 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  947442	      1228 ns/op	    1139 B/op	      33 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  770716	      1557 ns/op	    1127 B/op	      33 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 1861508	       592.8 ns/op	   1686890 completed/s	         0.0000294 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         0.1554 total-max-ms	         0.03550 total-p99-ms	         0.03550 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1234500	       983.2 ns/op	   1017051 completed/s	         0.0000346 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         0.2298 total-max-ms	         0.05629 total-p99-ms	         0.05625 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 1986290	       592.1 ns/op	   1688766 completed/s	         0.0000293 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         0.1994 total-max-ms	         0.03546 total-p99-ms	         0.03542 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1227458	       979.9 ns/op	   1020532 completed/s	         0.0000349 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         2.748 total-max-ms	         0.05613 total-p99-ms	         0.05608 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1653574	       707.6 ns/op	   1413152 completed/s	         0.0000296 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         0.1853 total-max-ms	         0.06146 total-p99-ms	         0.06142 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1000000	      1005 ns/op	    995295 completed/s	         0.0000315 handler-avg-ms	    699509 iterations/1ms	         0 rejected	         0.8998 total-max-ms	         0.1060 total-p99-ms	         0.1059 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  391083	      2878 ns/op	    347463 completed/s	         0.01033 handler-avg-ms	    701685 iterations/1ms	         0 rejected	         1.655 total-max-ms	         0.2055 total-p99-ms	         0.1938 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  679167	      2216 ns/op	    451275 completed/s	         0.01415 handler-avg-ms	    701685 iterations/1ms	         0 rejected	         4.813 total-max-ms	         0.1837 total-p99-ms	         0.1528 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   88730	     13438 ns/op	     74417 completed/s	         0.05268 handler-avg-ms	    701685 iterations/1ms	         0 rejected	         8.571 total-max-ms	         0.7837 total-p99-ms	         0.7291 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  171316	      7263 ns/op	    137682 completed/s	         0.06600 handler-avg-ms	    701685 iterations/1ms	         0 rejected	         3.873 total-max-ms	         0.4752 total-p99-ms	         0.3727 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 1954063	       604.2 ns/op	   1654960 completed/s	         0.0000303 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1105 total-max-ms	         0.02675 total-p99-ms	         0.02671 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1000000	      1001 ns/op	    999346 completed/s	         0.0000362 handler-avg-ms	         0 iterations/1ms	         0 rejected	         8.725 total-max-ms	         0.03650 total-p99-ms	         0.03646 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1649666	       773.2 ns/op	   1293315 completed/s	         0.0000372 handler-avg-ms	         0 iterations/1ms	         0 rejected	         4.076 total-max-ms	         0.09042 total-p99-ms	         0.09037 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1261784	      1003 ns/op	    997027 completed/s	         0.0000406 handler-avg-ms	         0 iterations/1ms	         0 rejected	         1.271 total-max-ms	         0.1509 total-p99-ms	         0.1508 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  333180	      3919 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  338131	      3511 ns/op	    1534 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  620612	      2041 ns/op	    1476 B/op	      36 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  516832	      2253 ns/op	    1506 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  826801	      1464 ns/op	    1125 B/op	      33 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  679879	      1745 ns/op	    1153 B/op	      33 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4          	 2039382	       595.9 ns/op	   1678248 completed/s	         0.0000299 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         6.167 total-max-ms	         0.03637 total-p99-ms	         0.03633 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/uniform/nest-10         	 1212758	       970.8 ns/op	   1030046 completed/s	         0.0000350 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         0.2290 total-max-ms	         0.05596 total-p99-ms	         0.05592 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-4    	 2004867	       590.4 ns/op	   1693645 completed/s	         0.0000298 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         0.4733 total-max-ms	         0.03592 total-p99-ms	         0.03587 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/colliding_ids/nest-10   	 1215600	      1004 ns/op	    995868 completed/s	         0.0000354 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         0.3156 total-max-ms	         0.05788 total-p99-ms	         0.05783 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-4           	 1707864	       706.2 ns/op	   1415963 completed/s	         0.0000294 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         0.2620 total-max-ms	         0.05825 total-p99-ms	         0.05821 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+BenchmarkDispatchCompare/noop/hot_id/nest-10          	 1210881	       950.7 ns/op	   1051811 completed/s	         0.0000296 handler-avg-ms	    742753 iterations/1ms	         0 rejected	         0.2966 total-max-ms	         0.08108 total-p99-ms	         0.08104 wait-p99-ms	         0 zero-duration-pct	     185 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4          	  429054	      2785 ns/op	    359084 completed/s	         0.01017 handler-avg-ms	    712278 iterations/1ms	         0 rejected	         1.660 total-max-ms	         0.1794 total-p99-ms	         0.1685 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	  733528	      1740 ns/op	    574808 completed/s	         0.01254 handler-avg-ms	    712278 iterations/1ms	         0 rejected	        12.47 total-max-ms	         0.1255 total-p99-ms	         0.1107 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-4          	   92838	     12971 ns/op	     77098 completed/s	         0.05094 handler-avg-ms	    712278 iterations/1ms	         0 rejected	        12.21 total-max-ms	         0.7639 total-p99-ms	         0.7133 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	  175135	      7027 ns/op	    142312 completed/s	         0.06391 handler-avg-ms	    712278 iterations/1ms	         0 rejected	         1.972 total-max-ms	         0.4528 total-p99-ms	         0.3730 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareProducers/p1/nest-4          	 2073294	       577.9 ns/op	   1730312 completed/s	         0.0000296 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1006 total-max-ms	         0.01921 total-p99-ms	         0.01917 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p1/nest-10         	 1387212	       868.4 ns/op	   1151592 completed/s	         0.0000308 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.1693 total-max-ms	         0.02046 total-p99-ms	         0.02042 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-4         	 1924063	       623.8 ns/op	   1603103 completed/s	         0.0000298 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.3319 total-max-ms	         0.05975 total-p99-ms	         0.05971 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareProducers/p16/nest-10        	 1391478	       853.2 ns/op	   1172025 completed/s	         0.0000339 handler-avg-ms	         0 iterations/1ms	         0 rejected	         0.5609 total-max-ms	         0.1271 total-p99-ms	         0.1270 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestSingle-4     	  340887	      3487 ns/op	    1531 B/op	      35 allocs/op
+BenchmarkClientRequestSingle-10    	  344539	      3473 ns/op	    1558 B/op	      37 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-4          	  692998	      1764 ns/op	    1470 B/op	      36 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  575218	      2114 ns/op	    1517 B/op	      38 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-4           	  969168	      1235 ns/op	    1120 B/op	      33 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  755522	      1559 ns/op	    1144 B/op	      33 allocs/op
+PASS

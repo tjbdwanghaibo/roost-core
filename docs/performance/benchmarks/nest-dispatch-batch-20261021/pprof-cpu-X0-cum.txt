@@ -1,0 +1,68 @@
+File: bin-base.test
+Type: cpu
+Time: 2026-10-21 15:33:46 CST
+Duration: 13.11s, Total samples = 52.68s (401.89%)
+Showing nodes accounting for 39.29s, 74.58% of 52.68s total
+Dropped 393 nodes (cum <= 0.26s)
+Showing top 60 nodes out of 143
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     31.24s 59.30%  runtime.mcall
+         0     0%     0%     31.20s 59.23%  runtime.park_m
+     0.04s 0.076% 0.076%     31.01s 58.86%  runtime.schedule
+         0     0% 0.076%     30.51s 57.92%  runtime.findRunnable
+    27.82s 52.81% 52.89%     27.83s 52.83%  runtime.usleep
+     0.11s  0.21% 53.09%     24.08s 45.71%  runtime.stealWork
+     0.03s 0.057% 53.15%     23.93s 45.43%  runtime.runqsteal
+     0.04s 0.076% 53.23%     23.90s 45.37%  runtime.runqgrab
+     0.02s 0.038% 53.26%     17.86s 33.90%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+     0.01s 0.019% 53.28%        12s 22.78%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+     0.02s 0.038% 53.32%     11.99s 22.76%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work.func1
+         0     0% 53.32%     10.87s 20.63%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)
+         0     0% 53.32%     10.87s 20.63%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewEngine.func1
+     0.06s  0.11% 53.44%     10.87s 20.63%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest
+         0     0% 53.44%      7.14s 13.55%  runtime.semasleep
+     7.13s 13.53% 66.97%      7.13s 13.53%  runtime.pthread_cond_wait
+     0.04s 0.076% 67.05%      6.60s 12.53%  runtime.lock2
+         0     0% 67.05%      6.60s 12.53%  runtime.lockWithRank (inline)
+     0.03s 0.057% 67.10%      5.63s 10.69%  github.com/tjbdwanghaibo/roost-core/framework/nest.runNestLogic
+         0     0% 67.10%      4.70s  8.92%  runtime.stopm
+         0     0% 67.10%      4.63s  8.79%  runtime.mPark (inline)
+         0     0% 67.10%      4.63s  8.79%  runtime.notesleep
+     0.55s  1.04% 68.15%      4.41s  8.37%  internal/sync.(*Mutex).Lock (inline)
+     0.39s  0.74% 68.89%      4.30s  8.16%  internal/sync.(*Mutex).Unlock (partial-inline)
+         0     0% 68.89%      3.97s  7.54%  runtime.osyield (inline)
+     0.02s 0.038% 68.93%      3.91s  7.42%  internal/sync.(*Mutex).unlockSlow
+         0     0% 68.93%      3.89s  7.38%  internal/sync.runtime_Semrelease
+     0.01s 0.019% 68.94%      3.89s  7.38%  runtime.semrelease1
+     0.75s  1.42% 70.37%      3.86s  7.33%  internal/sync.(*Mutex).lockSlow
+         0     0% 70.37%      3.71s  7.04%  sync.(*Mutex).Lock (partial-inline)
+     0.08s  0.15% 70.52%      3.60s  6.83%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).singleDispatch
+         0     0% 70.52%      3.60s  6.83%  sync.(*Mutex).Unlock
+     0.01s 0.019% 70.54%      3.18s  6.04%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest.func2
+     0.06s  0.11% 70.65%      2.88s  5.47%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities
+         0     0% 70.65%      2.76s  5.24%  internal/sync.runtime_SemacquireMutex
+     0.03s 0.057% 70.71%      2.76s  5.24%  runtime.semacquire1
+         0     0% 70.71%      2.60s  4.94%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0% 70.71%      2.56s  4.86%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).deliver
+         0     0% 70.71%      2.56s  4.86%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).driverLoop
+     0.06s  0.11% 70.82%      2.03s  3.85%  github.com/tjbdwanghaibo/roost-core/framework/nest.observeDispatch
+         0     0% 70.82%      1.85s  3.51%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).admit
+     0.01s 0.019% 70.84%      1.81s  3.44%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+     0.05s 0.095% 70.94%      1.77s  3.36%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0% 70.94%      1.63s  3.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).invokeHandlerTransaction
+     0.01s 0.019% 70.96%      1.57s  2.98%  github.com/tjbdwanghaibo/roost-core/infra/observe/metrics.(*Registry).ObserveDuration
+         0     0% 70.96%      1.57s  2.98%  github.com/tjbdwanghaibo/roost-core/infra/observe/metrics.ObserveDuration
+     1.56s  2.96% 73.92%      1.56s  2.96%  runtime.pthread_cond_signal
+         0     0% 73.92%      1.56s  2.96%  runtime.semawakeup
+         0     0% 73.92%      1.55s  2.94%  github.com/tjbdwanghaibo/roost-core/infra/observe/metrics.metricKey
+     0.04s 0.076% 73.99%      1.29s  2.45%  github.com/tjbdwanghaibo/roost-core/infra/base/fctx.NewContext
+         0     0% 73.99%      1.19s  2.26%  runtime.unlock (inline)
+     0.12s  0.23% 74.22%      1.19s  2.26%  runtime.unlock2
+         0     0% 74.22%      1.19s  2.26%  runtime.unlockWithRank (inline)
+     0.01s 0.019% 74.24%      1.19s  2.26%  time.Now
+     0.06s  0.11% 74.35%      1.18s  2.24%  time.runtimeNow
+     0.02s 0.038% 74.39%      1.16s  2.20%  github.com/tjbdwanghaibo/roost-core/infra/observe/metrics.(*Registry).timer
+         0     0% 74.39%      1.15s  2.18%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Store (inline)
+     0.06s  0.11% 74.51%      1.15s  2.18%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Swap
+         0     0% 74.51%      1.15s  2.18%  sync.(*Map).Store (inline)
+     0.04s 0.076% 74.58%      1.12s  2.13%  time.now
