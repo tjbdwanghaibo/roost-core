@@ -1,0 +1,8 @@
+--- FAIL: TestAOIBatchSubjectMovesDoNotRescanSettledObservers (0.00s)
+    --- FAIL: TestAOIBatchSubjectMovesDoNotRescanSettledObservers/1 (0.00s)
+        aoi_test.go:1009: 16 subject moves made 30 of 30 dirtied observers rescan all candidates; want 0
+    --- FAIL: TestAOIBatchSubjectMovesDoNotRescanSettledObservers/4 (0.00s)
+        aoi_test.go:1009: 16 subject moves made 30 of 30 dirtied observers rescan all candidates; want 0
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.302s
+FAIL

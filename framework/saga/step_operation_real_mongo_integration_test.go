@@ -101,7 +101,7 @@ func TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize(t *testing.T) 
 	client, database := realMongoU0280(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	projector, err := deengine.NewMongoStore(client, deengine.MongoStoreConfig{DefaultDatabase: database, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(client, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: database, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestRealMongoTakeoverFencesTheEarlierAttemptsProjection(t *testing.T) {
 	client, database := realMongoU0280(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	projector, err := deengine.NewMongoStore(client, deengine.MongoStoreConfig{DefaultDatabase: database, ServerID: 4, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(client, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: database, ServerID: 4, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

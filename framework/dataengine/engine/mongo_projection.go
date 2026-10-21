@@ -244,10 +244,18 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 				if err != nil {
 					return err
 				}
-				groupKey := batchCollectionKey(store, mutation.Key)
+				physical, err := store.physicalDatabase(mutation.Key)
+				if err != nil {
+					return err
+				}
+				groupKey := fmt.Sprintf("%d/%s/%s", mutation.Key.Scope, physical, mutation.Key.Resource)
 				group := groups[groupKey]
 				if group == nil {
-					group = &mutationGroup{collection: store.collection(mutation.Key)}
+					collection, err := store.collection(mutation.Key)
+					if err != nil {
+						return err
+					}
+					group = &mutationGroup{collection: collection}
 					groups[groupKey] = group
 					groupKeys = append(groupKeys, groupKey)
 				}
@@ -318,10 +326,6 @@ func (store *MongoStore) batchMutationModel(txID string, mutation coredata.Mutat
 	default:
 		return fmongo.WriteModel{}, coredata.ErrInvalidMutationKind
 	}
-}
-
-func batchCollectionKey(store *MongoStore, key coredata.DocumentKey) string {
-	return fmt.Sprintf("%d/%s/%s", key.Scope, store.physicalDatabase(key), key.Resource)
 }
 
 func bulkMatched(result *fmongo.BulkWriteResult) int64 {

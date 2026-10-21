@@ -49,9 +49,9 @@ func (b *Backend) UnloadRemoteEntity(ctx context.Context, e entity.IThreadSafeRe
 	return entity.ErrRemoteUnloadUnsupported
 }
 
-// BindDatabaseMap 转给存储；存储不写 DAO 文档（不实现 DatabaseMapBinder）时无操作。
+// BindDatabaseMap 转给存储；存储不写 DAO 文档（不实现 coredata.DatabaseMapBinder）时无操作。
 func (b *Backend) BindDatabaseMap(databases *coredata.DatabaseMap) error {
-	if binder, ok := b.storage.(DatabaseMapBinder); ok {
+	if binder, ok := b.storage.(coredata.DatabaseMapBinder); ok {
 		return binder.BindDatabaseMap(databases)
 	}
 	return nil

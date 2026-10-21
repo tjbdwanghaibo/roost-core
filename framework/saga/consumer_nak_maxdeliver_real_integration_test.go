@@ -255,7 +255,7 @@ func TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	projector, err := deengine.NewMongoStore(mongo, deengine.MongoStoreConfig{Databases: projectionDatabases(t), DefaultDatabase: "game", ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

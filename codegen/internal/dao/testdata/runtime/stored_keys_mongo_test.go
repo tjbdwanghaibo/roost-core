@@ -49,7 +49,12 @@ func newStoredKeysEnv(t *testing.T) *storedKeysEnv {
 		_ = client.Database(database).Drop(context.Background())
 		_ = client.Close(context.Background())
 	})
-	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database})
+	// 自建装配给 MongoStore 一张不配映射的表（逻辑名即物理名）；没有表时带库名的 DAO 文档一律被拒绝。
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: databases})
 	if err != nil {
 		t.Fatal(err)
 	}

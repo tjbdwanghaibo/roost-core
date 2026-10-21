@@ -334,7 +334,7 @@ func TestRealRemoteRedisClusterUnreplicatedFence(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	store := NewMongoCommitter(mongo, database, 7, 0)
+	store := newBoundMongoCommitter(mongo, database, 7, 0)
 	authority := store.WriteAuthority()
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, err := entity.BuildEntityID(997, 198)

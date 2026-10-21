@@ -22,7 +22,8 @@
 | D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20：`entity.kick` / `entity.unload`） |
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
-| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20），待压测与三项小决定 |
+| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 提出方向并定了位置（组件与心跳框架在 `gameplay`、心跳在 Nest 快池上执行、快池业务周期逻辑统一以心跳为底层）；心跳（HB）方案已写，待确认后试做 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -525,6 +526,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 **需要拍板**：设计 §10 的八项（字段命名、多次合服拍平、误启动自检、源库处置、工具划分、原服标识显示，以及审查补充的“非按 sid 逻辑库位置不同时拒绝”与“outbox 检查放在哪里”）。
 
+**实施后维护者决定（2026-10-21，均按推荐，保持现实现）**：①启动自检在 account 不可达时重试 30 秒后拒绝启动（fail-closed）；②合服前 saga 终态检查覆盖整个 saga 存储（严格）；③demo 合服角色登录拉全服邮件时带原服范围 `ServerScope(A)`。
+
 ## D16 单个实体 / 玩家的运维入口
 
 **状态：维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20，结果见下文“实施结果”）。** 决定：框架只做 `entity.kick` 与 `entity.unload`，命令走现有 admin 鉴权与审计接线（不另设审批）；改档 / 恢复按 B 的业务 GM handler 与离线流程。登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
@@ -640,7 +643,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D19 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多
 
-**状态：维护者 2026-10-20 决定实施，已实施（2026-10-20，见下文“实施结果”）；压测与三项小决定待维护者。** 决定：①按本节模型实施；②`ViewID` 用 **int64**，由业务层分配与解释；③**同步层级**：视野给出同步层级（数据分级，例如联盟视野只同步标记为联盟层级的字段），同一目标被多个视野看见时同步级别高的（数据多的）；层级之间不是包含关系时，各层级的数据都同步（取并集）；④`MaxVisible` **按每个视野**计；⑤视野操作**不进 Nest、不做排队版**：视野的增删改、成员变更、挂接都是直接调用，由视野自身的锁保护；⑥上限缺省按建议（`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096，启动期可配）；⑦按最干净的方式处理、不留历史包袱：`RelationSource` 与按来源名的旧关系 API 删除，全部改为关系视野。登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
+**状态：维护者 2026-10-20 决定实施，已实施（2026-10-20，见下文“实施结果”）；多视野修复后的后续三项与“两种应用模式”维护者 2026-10-21 已决定并实施（见下文“两种应用模式”）；“实施结果”末尾的三项小决定维护者 2026-10-21 均按推荐保留现实现。** 决定：①按本节模型实施；②`ViewID` 用 **int64**，由业务层分配与解释；③**同步层级**：视野给出同步层级（数据分级，例如联盟视野只同步标记为联盟层级的字段），同一目标被多个视野看见时同步级别高的（数据多的）；层级之间不是包含关系时，各层级的数据都同步（取并集）；④`MaxVisible` **按每个视野**计；⑤视野操作**不进 Nest、不做排队版**：视野的增删改、成员变更、挂接都是直接调用，由视野自身的锁保护；⑥上限缺省按建议（`MaxViewsPerPlayer` 64——2026-10-21 起只是 ApplyAsync 的缺省，ApplySync 缺省与上限是 9——、`MaxPlayersPerView` 4096，启动期可配）；⑦按最干净的方式处理、不留历史包袱：`RelationSource` 与按来源名的旧关系 API 删除，全部改为关系视野。登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
 
 ### 实施结果（2026-10-20）
 
@@ -669,6 +672,104 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 1. 跨政策来源的层级：同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图（未改）。A 保持（推荐：不同政策一般不在同一 Manager 上同看一个目标，SelfView 的 `self` 通常已是全字段）；B 在 Manager 的 `bestProfile` 里也取并集——Manager 不知道字段，只能一律并集身份，会改变现有 SelfView / Group 的视图身份。
 2. 块预算形式：A 现状（推荐），`MaxObserverBlocks` 仍按单个视野，另加 `MaxPlayerBlocks` 核算 `worst × MaxViewsPerPlayer`，缺省下只有单视野已超预算才触发；B 把 `MaxObserverBlocks` 改成按玩家，缺省 1024 ÷ 64 = 每视野 16 块，game-demo（最大视野 300、块 100，每视野 64 块）等现有配置启动即被拒，须各自调大。
 3. 关系视野是否排除挂接玩家自己的实体：A 不排除（推荐，现状），自己经 self 与联盟两个层级看见自己，按包含取高或取并集；B 排除，需要知道每个玩家的自身实体，挂接、成员变化时多一层过滤。
+
+### 排队事实异步应用（2026-10-21，维护者 2026-10-21 给出方向）
+
+**问题**（[夜间补测 §14'.2](../performance/NIGHT-20261020.md#142-sync-aoi服务端--客户端两个进程)“根因与修复”）：排队模式下 `QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 只入队，全部事实在 Manager `Flush` 的政策阶段由 `applyQueued` 一次性应用：AOI 的写阶段、并行重评与订阅结算都在 Flush 的关键路径上，Flush = AOI + 打包下发；直接调用模式下 AOI 在调用方线程里分散完成，Flush 只剩打包下发。16 个额外空间视野时 Flush 超过同步周期，tick 被跳过。
+
+**方向**：排队事实的应用改为分批、由独立的应用线程持续消费，不占 Flush 关键路径，也不占 Nest 线程；Flush 只结算已经应用好的结果并下发。
+
+**必须保持的语义**（与改动前逐项相同）：
+
+1. 只有提交后的事实生效：应用线程取事实时读同一个框架提交门（`SyncConditionFor`），未确认的留在队首，回滚 / 拒绝的丢弃并释放发布屏障；回滚的移动永远不被看见。
+2. 同一实体按顺序生效：取批规则不变（未确认前缀阻塞同 ID 后续事实，其他 ID 可越过；`BatchSize` 不切开同一提交）。
+3. Leave / Hide 与排队事实的改写规则不变：改写只作用于还在队列里的事实；应用线程取批与应用在同一次 `Interest.mu` 持有内完成，Leave / Hide 也持 `mu`，所以不会插进一批的中间。已应用、未结算的事实等同于“先应用、再 Leave / Hide”。
+4. 内容与可见性同一帧出现：事实持有的发布屏障（`HoldSyncPublication`）在**结算之后**才释放，结算（订阅 / 退订说给 Manager）在 Flush 的政策阶段，同一 Flush 随后才捕获内容；所以一个移动的新位置与它带来的进出视野仍在同一帧。
+5. Drain 等到在途事实全部应用并结算：`queuedPending` 计入队列、应用中与已应用未结算的事实；应用线程的错误（事实无法应用）由下一次结算返回，只让一次 Flush 失败（同改动前）。
+6. 关闭顺序：`Interest.Close` 先注销政策钩子，再停应用线程并等它退出（不持 `mu` 等待），最后在 `mu` 内释放队列中与已应用未结算事实的发布屏障、退订全部 pair。
+
+**线程模型**：先做**单个应用线程**（每个 `Interest` 一个 goroutine，第一条排队事实时启动）。理由：`Interest.mu` 是一把锁，保护 AOI、`held` 与订阅结算；AOI 的写阶段本来就是串行短写入，读阶段已经按观察者并行（`InterestConfig.Workers`），单线程消费已能把 AOI 移出 Flush。按 `AOICluster` 分区或按块分片做多线程需要把 `mu` 拆成 AOI 分片锁与结算锁、跨分片的视野与跟随要协调，改动面大，等单线程版的数据证明不够再做。
+
+**唤醒**：`queueFact` 非阻塞通知应用线程；视野登记表的变更同样通知。事实的提交确认在 periodic 模式下没有通知（`Manager.WakeSync` 只在 on_change 生效，不改 Manager 契约），所以队里有未确认事实时应用线程按 1ms 起、最长 8ms 的退避轮询提交门；有事实应用完时调 `Manager.WakeSync`（on_change 下让 Manager 尽快结算）。**合批**：两步之间至少隔 `applyGather`——periodic 取同步周期的 1/10（20 Hz 时 5 ms），on_change 取 `OnChangeBatchWindow`（缺省 0，不合批）。结算只在 Flush 里发生，周期内拆得更细只会让同一观察者被几个事实分别波及、多次重评（不合批的早期版本在 16 视野负载下每步约 6.5 个事实，10 秒里应用线程的并行重评累计 4.6 s；S1 每个 Flush 一批时累计约 2.6 s）。
+
+**Flush 与应用线程的交接**：一致点是批次边界。应用线程每一步在 `mu` 内取一批（≤ `BatchSize`）、写阶段、并行重评，AOI 事件留在 AOI 的事件缓冲里，应用完的事实记入“已应用未结算”；Flush 的政策钩子在 `mu` 内结算：应用登记表剩余变更、把 AOI 事件归并进 `held` 并说给 Manager、重试被拒的 pair，最后释放已应用事实的发布屏障。任何结算入口（政策钩子、业务直接 `Apply`）都在结算后释放屏障，不会出现订阅先到、内容被屏障挡住的半态。屏障就是 `mu` 本身：Flush 若撞上应用线程正在算的一批，最多等这一批算完（不等后面的批）。Flush 期间不执行 AOI 应用。
+
+**背压**：队列总量仍由 `MaxQueuedFacts`（缺省 65536）限制，计入排队、应用中与已应用未结算的事实；应用线程落后、或 Flush 停摆时队列满，`QueueMove` 等返回 `ErrInterestQueueFull`（不变），由 handler 返回失败。新增指标：`entitysync_interest_fact_backlog`（gauge，排队 + 应用中 + 已应用未结算）、`entitysync_interest_apply_duration`（histogram，应用线程每一步的耗时）、`entitysync_interest_settle_delay`（histogram，一批从应用完成到被结算的等待）。
+
+**实施结果（2026-10-21）**：按上述最小一步实施（单应用线程 + 合批），没有改 Manager 与 Nest 的契约（Manager 只多了 `ManagerCounters.PolicyDuration` 计数）。原场景 16 视野 Nest：Flush 41 → 30 ms（政策阶段 19 → 7 ms），P99 约 130 → 97～141 ms（单机噪声大，3 样本），帧数 98～100%；direct 57～70 ms。剩下约一个同步周期的差距是结构性的：Manager 按自己的周期结算，截止前几毫秒才应用完的事实要等下一周期。可选方向（都要改交接，待维护者决定）：A Flush 开始前等应用线程追上已确认的事实（AOI 重新部分回到 Flush 关键路径，上限是一批）；B 应用线程按 Manager 周期对齐，截止前一个合批窗口强制走一步；C 维持现状，延迟敏感的场景用 on_change。证据见 [夜间补测 §14'.2a](../performance/NIGHT-20261020.md#142a-根因与修复2026-10-21)。**维护者 2026-10-21 选 C**，并把它当作模式问题处理：本节的应用线程成为 `ApplyAsync`，缺省改为 `ApplySync`（见下“两种应用模式”）。
+
+**未采用**：Flush 用 `TryLock` 撞上就跳过结算（Flush 完全不等，但这批内容要多等一个周期）；多应用线程（见上）；把结算也放进应用线程（结算会与 Flush 的捕获交错，一批的进出视野可能分在两帧，屏障释放早于捕获时还要另加交接）。
+
+
+### 两种应用模式（2026-10-21，维护者决定）
+
+**决定**（维护者 2026-10-21，对上一节“排队事实异步应用”留下的三项）：
+
+1. **Nest 比 direct 多约一个同步周期：选 C**，接受，不加“Flush 前等应用线程”，也不做周期对齐。
+2. **修夹具口径**：sync-aoi 的“新订阅全量”延迟只按本 tick 改的值计时，不把全量更新里本会话没见过的旧改值按改值时刻计时。先用确定的小场景证明旧口径会把旧值年龄算进去，再修（见下“夹具口径”）。
+3. **接受两项可见变化**：提交后立即 Flush 看不到结果、要改用 Drain；`ManagerCounters` 新增 `PolicyDuration` 字段。写进 CHANGELOG 与升级说明。
+4. **第 1 项本质是模式问题**（维护者：每个玩家额外视野 8 个以内和 8 个以上分成两种模式，由业务层选择，对应不同游戏类型）：同步应用模式适合每玩家不超过 8 个额外视野（MMO、MOBA、卡牌），排队事实在 Flush 的政策阶段同步应用、保留“只评估移动过的目标”，提交后 Flush 就能看到结果，不需要应用线程；异步应用模式适合 8 个以上（RTS、大量召唤物 / 眼位），即上一节的应用线程，Flush 只结算，Flush 不会因 AOI 超时，代价是尾延迟多约一个周期。缺省同步（维护者倾向：大多数游戏视野不多）。
+
+**实施**（[interest.go](../../framework/sync/entitysync/policy/interest.go) `ApplyMode` / `viewsPerPlayerFor`，[interest_queue.go](../../framework/sync/entitysync/policy/interest_queue.go) `applyBatchLocked` / `settleQueued`）：
+
+| | `ApplySync`（零值，缺省） | `ApplyAsync` |
+| --- | --- | --- |
+| 应用在哪里 | `settleQueued`（Flush 政策阶段）在 `Interest.mu` 内先应用一批（不超过 `BatchSize`），随即结算 | 每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，`settleQueued` 只结算 |
+| 线程 | 没有额外线程；AOI 计算在 Manager 的 Flush 线程上 | 多一个常驻 goroutine；Flush 撞上正在算的一批时最多等这一批 |
+| 结果何时可见 | 提交后的下一次 Flush（`BatchSize` 以内；剩余的下一次政策阶段继续，on_change 下 `WakeSync` 尽快再来） | 应用线程走到之后的那次 Flush；提交后立即 Flush 不保证可见，要全部可见用 `Drain` |
+| 视野上限 | `MaxViewsPerPlayer` 零值取 `SyncApplyMaxViewsPerPlayer`（9），显式超过拒绝构造 | 零值 64，不受此限 |
+
+两种模式共用取批与应用步骤 `applyBatchLocked`（提交门、同 ID 不越过、`BatchSize` 不切开同一提交）和结算入口（`applyLocked` → `releaseAppliedLocked`，结算之后才释放发布屏障），所以语义逐项相同：只有提交后的事实生效、同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧、Drain 等到在途事实全部应用并结算、Close 释放全部屏障。只有“结果何时可见”和“线程模型”不同。直接调用（`Move` / `Apply`）不经队列，不受模式影响，但视野上限照样按模式检查。
+
+**阈值**：`SyncApplyMaxExtraViews = 8`、`SyncApplyMaxViewsPerPlayer = 1 + 8`（主视野 + 8），写在 `interest.go` 并注明来源（维护者决定 + 下表实测）。`MaxViewsPerPlayer` 本来就含主视野与关系视野，所以队伍、公会、联盟等关系视野也计入这 9 个。构造时 `ApplySync` 且 `MaxViewsPerPlayer > 9` 返回 `ErrInterestConfig`，报错原文：“ApplySync allows at most 9 views per player (main view + 8 extra), MaxViewsPerPlayer is N; games with more views per player (RTS units, many summons / wards) should set ApplyMode: policy.ApplyAsync”。未知模式同样拒绝构造。Interest 配置由业务代码构造，不经 wiring 或生成配置暴露，所以没有加配置键；game-demo 模板显式写 `ApplyMode: policy.ApplySync` 并说明怎么选。
+
+**适用游戏类型与选择指引**：
+
+| 游戏类型 | 每玩家视野（主视野之外） | 模式 |
+| --- | --- | --- |
+| MMO / MMORPG | 队伍、公会、联盟关系视野，少量召唤物 | ApplySync |
+| MOBA | 队伍（阵营）视野，少量眼位 / 召唤物 | ApplySync；眼位可能超过 8 个时 ApplyAsync |
+| 卡牌、休闲、放置、塔防、自走棋 | 很少或没有 | ApplySync |
+| SLG | 联盟关系视野 + 行军队列 / 侦察单位 | 行军与侦察单位加起来不超过 8 用 ApplySync，否则 ApplyAsync |
+| RTS | 每个单位一个视野 | ApplyAsync |
+| 大量召唤物 / 眼位 / 侦察单位的玩法 | 十几个以上 | ApplyAsync |
+
+数法：主视野 1 + 关系视野个数 + 空间视野（召唤物、眼位、单位）个数，不超过 9 用缺省；可能超过就选 ApplyAsync，并按自己的密度压测。
+
+**实测**（2026-10-21，本机 M5、GOMAXPROCS 4 / 进程，sync-aoi 每次约 20 秒、10 秒测量、200 个 tick，两轮交替顺序，只做对照不算正式测量；夹具用修好口径的版本；被测 `b6ef5573`（测量时是变基前代码相同的提交）；ApplySync 16 视野用“只把 `SyncApplyMaxExtraViews` 改成 16”的诊断构建，未入库）。原场景 `-players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50`，改值→客户端（`state_change_to_client`）：
+
+| 额外视野 | 模式 | P50 ms | P99 ms | 帧数（应发 ≤200000） | Flush 均值 ms = 政策 + 打包 | 政策阶段每 tick P95 ms | 新订阅全量 P99 ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 | ApplySync | 38.0 / 38.3 | 65.1 / 65.2 | 190113 / 190153 | 14.8 = 5.9 + 8.9 / 15.3 = 6.1 + 9.2 | 7.5 / 8.4 | 64.9 / 64.1 |
+| 4 | ApplyAsync | 33.1 / 33.2 | 59.3 / 58.9 | 190327 / 190237 | 10.0 = 0.6 + 9.4 / 10.0 = 0.6 + 9.4 | 1.2 / 1.3 | 60.6 / 58.8 |
+| 4 | direct | 31.6 / 32.1 | 49.4 / 51.5 | 190716 ×2 | 8.1 / 8.8（AOI 在压测线程，每 tick P50 6.8 ms） | 0 | 49.4 / 51.0 |
+| 8 | ApplySync | 45.9 / 47.5 | 79.8 / 88.2 | 200000 / 199995 | 24.6 = 10.3 + 14.3 / 26.5 = 11.4 + 15.1 | 14.9 / 15.1 | 73.1 / 77.3 |
+| 8 | ApplyAsync | 37.1 / 37.0 | 82.0 / 72.6 | 199598 / 199758 | 17.2 = 2.2 + 14.9 / 17.1 = 2.2 + 14.9 | 5.5 / 5.6 | 68.6 / 62.7 |
+| 8 | direct | 34.8 / 35.2 | 60.9 / 56.1 | 200000 ×2 | 14.1 / 14.2（压测线程每 tick P50 13 ms） | 0 | 60.2 / 54.8 |
+| 16 | ApplySync（诊断构建） | 65.3 / 63.9 | 150.1 / 144.3 | 190000 / 195170 | 47.3 = 21.9 + 25.4 / 45.7 = 21.3 + 24.4 | 38.8 / 39.0 | 79.7 / 73.4 |
+| 16 | ApplyAsync | 49.6 / 51.1 | 129.6 / 137.6 | 195000 / 191998 | 35.1 = 9.0 + 26.1 / 35.6 = 9.1 + 26.5 | 29.0 / 31.3 | 62.8 / 47.2 |
+| 16 | direct | 35.0 / 32.4 | 68.5 / 90.0 | 200000 ×2 | 22.6 / 24.0（压测线程每 tick P50 23～25 ms） | 0 | 68.9 / 89.2 |
+
+新场景（`-world=4000 -block=20 -enter-radius=30 -leave-radius=36 -move-amplitude=10 -entities=50000`）：
+
+| 额外视野 | 模式 | P99 ms | 帧数 | Flush 均值 ms = 政策 + 打包 | 新订阅全量 P99 ms |
+| --- | --- | --- | --- | --- | --- |
+| 4 | ApplySync | 53.9 / 53.8 | 80204 / 80218 | 4.3 = 1.0 + 3.2 / 4.1 = 1.0 + 3.1 | 53.0 / 52.6 |
+| 4 | ApplyAsync | 52.7 / 53.1 | 80215 / 80340 | 3.1 = 0.0 + 3.1 / 3.4 = 0.0 + 3.3 | 52.1 / 51.5 |
+| 4 | direct | 50.0 / 50.1 | 80240 ×2 | 3.0 / 2.9 | 50.1 / 50.1 |
+| 8 | ApplySync | 55.9 / 55.1 | 119577 / 119576 | 6.7 = 1.7 + 5.0 / 5.8 = 1.4 + 4.4 | 53.0 / 54.2 |
+| 8 | ApplyAsync | 54.2 / 53.7 | 119694 / 119809 | 5.4 = 0.1 + 5.3 / 4.4 = 0.1 + 4.3 | 54.4 / 52.3 |
+| 8 | direct | 49.9 / 50.0 | 119597 ×2 | 4.6 / 4.3 | 49.8 / 49.9 |
+
+Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热的少量 Flush），政策 = `PolicyDuration / FlushCalls`，打包 = 两者之差；“政策阶段每 tick P95”只算测量窗口。periodic 下周期等待本身最多 50 ms，所以 P99 在 50 ms 上下是结构性的，比较看差异。异步 16 视野第 2 个样本运行时另一个 agent 的 worktree 里有一条短的编辑命令（不是基准），数字与第 1 个样本同量级。原始产物在会话 scratchpad 的 `applymode/`，摘要在 [benchmarks/d19-multiview-20261021/applymode-runs.jsonl](../performance/benchmarks/d19-multiview-20261021/applymode-runs.jsonl)。
+
+**8 这个阈值**：原场景 ApplySync 的 Flush 均值按视野数近似线性增长（4 / 8 / 16 视野 15 / 25.5 / 46.5 ms，每个视野约 2.6 ms），8 视野时 Flush 约为周期（50 ms）的一半、政策阶段每 tick P95 15 ms，帧数满，有余量；16 视野时 Flush 46～47 ms 贴着周期，Flush 次数 203～208（异步 205～208、8 视野 213），开始丢 tick。所以在这台机器、这个密度（每个视野可见约 50、1000 玩家）下，8 落在“Flush 不超过半个周期”的位置，数据支持 8；按 Flush 不超过周期算的上限约 17。阈值按每个玩家的视野数定，实际 Flush 还与玩家数、可见数、移动比例成正比，玩家更多或更密时同样 8 个视野也可能更紧（没有测）。新场景（小块小视野）8 视野 ApplySync 的 Flush 只有 6～7 ms，远在周期内。
+
+**与预期不同的一点（如实记录，没有改实现）**：本夹具里 ApplySync 的延迟没有比 ApplyAsync 低。原场景 4 视野 ApplySync P50 / P99 比 ApplyAsync 高约 5 / 6 ms，8 视野 P50 高约 9 ms、P99 两者交错（79.8 / 88.2 对 82.0 / 72.6），16 视野 ApplySync 全面更差。原因：本夹具的改值均匀分布在周期里（每 tick 10 批），ApplyAsync 的应用线程在周期内就把大部分事实算完，Flush 只结算，Flush 更短；只有截止前几毫秒到达的事实要多等一个周期，只占尾部很少的比例。ApplySync 把 AOI 放回 Flush，所有改值都要等这次 Flush 的政策阶段算完才捕获，Flush 越长整条分布越往后移。ApplySync 的好处是确定性——提交后的下一次 Flush 必定可见、没有额外线程、没有“截止前到达多一个周期”的尾巴，不是测得的延迟更低。改值集中在周期末尾到达的负载（D20 心跳打散前的全局循环恰好不是这种）在 ApplyAsync 下尾部会更差，没有测。
+
+**夹具口径**（决定 2）：[client.go](../../scripts/perf/sync-aoi/client.go) 修前对 `ObjectUpdate` 一律计时，全量重建带上的是目标最后一次改的值，本会话没计过时就按那次改值时刻计时。确定场景 `TestFullUpdateTimesOnlyThisTicksChange`（手工编帧：tick 5 新建 Step 3、改值时刻两秒前；tick 6 同一对象全量重建仍是 Step 3；tick 7 全量 Step 7；tick 9 增量 Step 8）修前全量样本 [2000.2, 0.2] ms（P99 即 2000.2），修后 [0.0]，增量两次都是 1 个样本。修后规则：增量照常计时（晚几个 tick 到也计）；全量（新建或重建）只计 Step 等于帧 tick 的改值。代价是跨 tick 才送到的全量不计入，全量 P99 偏乐观。本轮 30 次运行的全量 P99 都在 47～90 ms。
+
+**未采用**：按视野数自动切换模式（模式是业务对游戏类型的选择，运行中切换会改变“何时可见”的契约）；阈值按负载动态算（同一份配置在不同机器上行为不同）；只数空间视野、不数关系视野（`MaxViewsPerPlayer` 本来就含关系视野，另起一个计数要多一项配置；关系视野的应用成本不在 AOI 批次里；是否改为只数空间视野交维护者决定）。
 
 ### 现状（已核对源码）
 
@@ -716,3 +817,239 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 5. 视野增删改、成员变更、挂接是否提供排队版（建议提供）。
 6. 缺省上限：`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096（建议，启动期可配，预算按它们算）。
 7. 现有 `RelationSource` 去留：保留为“玩家私有关系视野”的薄封装（建议，现有调用方不改），还是全部迁到关系视野 API。
+
+**实施后维护者决定（2026-10-21，均按推荐，保持现实现）**：①同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图，不在 Manager 里取并集；②块预算新增 `MaxPlayerBlocks`，`MaxObserverBlocks` 仍按单个视野计；③关系视野不排除挂接玩家自己的实体（按包含取高或取并集）。
+
+**两种应用模式的后续决定（维护者 2026-10-21）**：①缺省 `ApplySync`（保持）；②同步模式上限 9 计入关系视野（`MaxViewsPerPlayer` 含关系视野，保持现实现）；③“提交后立即 Flush 看不到排队事实、要用 Drain”只在 `ApplyAsync` 下出现，CHANGELOG 按此写，确认。
+
+## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
+
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试；尚未实施。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+
+**维护者决定（2026-10-21，对方案 §需要拍板逐条）**：①包放 `gameplay`（`gameplay/heartbeat`、`gameplay/movement`，装配 `wiring/heartbeat`）；②投递方式由压测决定：单目标 `Dispatch` 与 ssr 式“每条消息带一批实体、worker 逐个 TryLock”对比（维护者经验 ssr 方式更好）；③**不合并**：同一实体的多个心跳登记各自投递；④**跳拍**：上一拍在途时跳过，不累积不补发，**跳拍打 Warn 日志**（限频）并计数；⑤快池很快、理论上不会满：去掉水位整格让路与每格上限，只保留“每实体至多一拍在途”与 `ErrQueueFull` 跳拍兜底；⑥频率采用 ssr 式**固定档位**（如 50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s），不支持任意周期；⑦驱动 goroutine 数参考 ssr；⑧HB 本身不持久化，心跳里改持久字段由业务按自己的持久级别处理；⑨卸载窗口接受（实例核对 + 令牌）；⑩**所有实体都支持**：心跳投到实体所在的池（快池 / 慢池）；Remote 托管实体投到当前拥有方，所有权迁移时旧拥有方停、新拥有方重新登记；⑪调度结构由压测决定：ssr 式固定档位环、时间轮、最小堆对比（维护者经验 ssr 方式更好）；⑫entitytimer 的驱动不改；⑬实体的 tick 都走 HB（房间 / 场景本身是实体，用自己的 HB）；⑭⑮按推荐：game-demo 移动改为客户端发目标、服务端心跳推进；位置不每拍落库（nopersist，按周期或离开场景落库）。回调只做内存计算与入队、不阻塞。
+
+### 现状（已核对源码，基线 `6e65ba12`）
+
+- `scripts/perf/sync-aoi`：压测端一个循环每 tick 挑 1% 实体、分 10 批改值并移动（direct 模式直接 `interest.Move`；Nest 模式对每个实体发 `engine.Request` 到 load handler，handler 里 `QueueMove`，见 [nest.go](../../scripts/perf/sync-aoi/nest.go) `newLoadNest`）。移动由全局控制器驱动，不是实体自己的心跳。
+- **框架里没有按实体的心跳**（维护者问“现在框架里没有 hb 吗”）。全仓查 heartbeat / HB / tick / 延时 Sender / entitytimer / AutoTick 的结论，逐项见下文 §1。
+- `gameplay/actionflow`（ActionRunner / Mission / PlanMission）与 `gameplay/ai`（Controller / 行为树）已有 `Tick` 接口，但仓库里**没有任何生产调用方**：除各自包内的测试外没有人调用 `ActionRunner.Tick` 或 `ai.Controller.Tick`。
+- game-demo 场景的移动是客户端发一个点、端点经 `MultiSync_MovePlayer`（玩家 + 场景实体两个目标）在事务里校验并写位置，提交后端点调 `Scene.Moved` → `interest.Move`（[move.go](../../demo/game/controllers/player/move.go.tmpl)、[scene.go](../../demo/internal/service/game/scene.go.tmpl) `Moved`）。服务器不做连续移动；怪物（`entities/monster`）只有位置与血量，不移动。
+
+### 方向（组件部分；心跳部分已由下文方案取代）
+
+1. **实体心跳**：见下文“心跳（HB）方案”。
+2. **`MapBasic` 组件**：所在地图 / 场景、位置、朝向，以及与 AOI 的接线（进入场景 `Enter`、位置变化 `QueueMove`、离开 `Leave`）。
+3. **`Move` 组件**：速度、目标点或路径、状态；在心跳里按经过的时间推进位置，写 `MapBasic`，触发 `QueueMove`；到达 / 打断 / 被阻挡由 actionflow 收尾。
+4. **actionflow 控制**：移动是一个 Action（MoveTo / Follow / Patrol 等），由实体的 ActionRunner 驱动；心跳就是 runner 的 tick（接法见方案 §5.4）。技能、AI 等其他动作共用同一个 runner 与心跳。
+5. **压测**：sync-aoi（及 nest-game）的移动改为实体心跳驱动，替代全局循环；保留旧负载开关以便对比。
+6. **与“排队事实异步应用”的关系**：心跳在 Nest 快池 worker 上只做位置推进与入队（marshal + `QueueMove`），AOI 计算由 sync 侧做：ApplySync 在 Flush 的政策阶段、ApplyAsync 在应用线程（见 D19“两种应用模式”，2026-10-21 已实施）。两者互补。
+
+### 心跳（HB）方案（2026-10-21，待确认）
+
+#### 1. 结论：roost 现在没有可直接用的心跳
+
+全仓用 codebase-memory 图（BM25 “heartbeat tick periodic entity”，名字正则 `heartbeat|autotick|hb` 在函数层 0 命中）与 `rg -i heartbeat|autotick` 核对，与“周期驱动实体”相关的只有下面几样，**没有一样是“按实体、非持久、在实体快池 worker 上执行的周期消息”**：
+
+| 现有机制 | 是什么 | 为什么不是心跳 |
+| --- | --- | --- |
+| Nest 帧 Ticker（[ticker.go](../../framework/nest/ticker.go) `RegisterTickCallback` / `doTick`，`NewEngine` 构造、`nest.tick_duration` 缺省 100ms） | 引擎一个 goroutine，按间隔递增帧号，依次调用**包级**注册的回调 | 回调在 Ticker 自己的 goroutine 上顺序执行，不经实体锁、不在事务里；注册表是包级的（所有引擎共用）。生产代码里没有调用方，帧号只用于日志（`app.LogFrame`）。唯一用户是 nest-game 压测夹具：它在帧回调里按 `HeartbeatHz` 给每个实体 `Dispatch` 一条消息（[load_test.go](../../codegen/internal/entity/testdata/nestgame/load_test.go) “唯一正式 ticker 只负责投递”），这正是下文推荐的形状，但只存在于测试夹具里 |
+| 延时 Sender（`Delay_X`、`nest.SendOptionWithDelay`，[dispatcher.go](../../framework/nest/dispatcher.go) `TryDelaySendMsg`） | 进程内按到期时间的最小堆，到期再走正常准入；不持久，容量 `nest.delayed_capacity` | 不能在 handler 里自我续期：handler 内调 `Dispatch` 返回 `ErrAsyncInHandler`（[client.go](../../framework/nest/client.go) `validateClientDispatch`）。即使从外面续期，也没有取消句柄（停不了，只能靠标志空跑）、没有去重（重复启动会出现两条链）、没有相位控制；到期时实体若已卸载，冷目标会被 I/O 阶段重新加载，唤醒不在内存的实体 |
+| 按实体持久定时器 `framework/nest/entitytimer`（D11） | 期限进 DAO、已加载实例的最早期限小堆、到期投一次 Tick、10s 重投、离线后加载补触发一次 | 为稀疏、持久、准点的到期动作设计：每次续期都写 DAO 节点（走 WAL），每秒十次的移动会把位置推进变成持久写；驱动按“最早期限”而不是“周期 + 相位”组织 |
+| `gameplay/actionflow`、`gameplay/ai` | `Action.Tick` / `Mission.Tick` / `ActionRunner.Tick(group, now)` / `Controller.Tick(now)` | 只有接口，没有驱动；“谁、在哪个锁里、多久调一次”目前没有答案 |
+| `gameplay/skill/combatcomponent.TickBuffs` | 让到期 buff 过期 | 注释写明“由业务的 Nest 心跳/定时 handler 在实体锁内调用”，但仓库里没有这样的心跳 handler |
+| 其余同名项 | Gateway TCP 连接保活（`answerHeartbeat`）、nest-game 夹具的 `HeartbeatComponent` 与 tailtrace 的 `heartbeat` 流名 | 与实体周期逻辑无关，或只是压测夹具 |
+
+缺的是四件事：①按实体登记 / 停止 / 改频率的入口，随实体加载 / 卸载自动登记和解除；②一个只负责“按周期与相位把消息投进快池”的驱动；③一个框架注册的心跳 handler，在实体锁内按登记表依次调用各组件的回调；④与快池准入一致的合并、跳拍与背压规则。
+
+#### 2. 模型：按实体的非持久周期 Nest 消息
+
+推荐：**心跳是一条投递到该实体快池 worker 的单目标 Nest 消息**，由框架注册的心跳 handler 在实体锁内执行，与该实体的其他消息串行（同 ID 顺序由 Nest 准入统一建立，心跳不另建顺序）。驱动只负责“按时投递”，自己不执行任何业务。
+
+| 方案 | 做法 | 结论 |
+| --- | --- | --- |
+| **A 按实体的周期 Nest 消息（推荐）** | 驱动到点给实体 `Dispatch` 一条心跳消息；handler 在实体锁内调回调 | 符合“心跳处理本质也是 Nest”：锁、事务、回滚、Sync 冻结、`QueueMove` 提交门全部沿用正式链路；回调里能做的事与普通快池 handler 完全相同 |
+| B 驱动批量回调 | 驱动 goroutine 自己取实体锁（或 TryLock）逐个调回调（ssr 的执行方式接近这种：广播消息到 worker 后 TryLock，失败重投） | 绕过 Nest 的准入、同 ID 顺序与事务收尾；回调里改 DAO 不在事务里，Sync 冻结与提交门都不成立。不采用 |
+
+投递粒度：**每个实体每拍一条单目标消息**（`Client.Dispatch`）。`DispatchBroadcast` 能把至多 32 个目标（`MaxBroadcastIdNum`）合成一次准入、在同一个 worker 上逐个加锁执行，准入次数降到 1/32，但一批要等批内每个目标的前驱都完成才能开始（批内任一实体忙，整批等），批内一个慢回调拖后面 31 个；广播路径也不支持 Remote。先用单目标，P4 用微基准判断准入开销是否值得换成批量（见 §7、§9 第 2 条）。
+
+handler 元信息：单目标，参数是“实例令牌”（见 §5.1），`rollback=undo`；持久级别见 §9 第 8 条（推荐 `async`：本拍只改 nopersist 字段时提交记录为空，[rollback.go](../../framework/nest/rollback.go) `durableCommit` 在 `record.Empty()` 处直接返回，不写 WAL）。实体种类必须走快池：`BusinessPoolLong` 的种类在建 Host 时拒绝（心跳是快池业务）；Remote 托管实体的权威不在本进程，P1 同样拒绝（与 D11 生成器拒绝 `remote=managed` 一致）。
+
+#### 3. 调度结构
+
+**驱动放在哪里**：`gameplay/heartbeat.Driver`，进程一个（服务进程里每个 Nest 引擎一个），由 `wiring/heartbeat` Mod 装配：Provide 时绑定 Nest 客户端、只读实体查找（`ManagerAccess.Manager().Get`，不加载、不等待）、`app.BusinessClock` 与 Nest 统计；Nest 启动之后 `Start`，App 先停 Service、再停本 Mod、最后停 Nest（与 `wiring/entitytimer` 同一顺序）。不复用 Nest 帧 Ticker 的包级回调：那里的回调串行跑在一个共享 goroutine 上，一拍投几千条消息会拖慢其他回调，注册表也是包级的（测试之间互相影响）。
+
+**goroutine 数**：缺省 **1 个**驱动 goroutine；配置 `heartbeat.shards`（缺省 1）可按实体 ID 哈希分成 N 个分片，每片一个时间轮、一把锁、一个 goroutine。只有 P4 微基准证明单 goroutine 在目标速率下占用超过约 1/4 核时才调大。
+
+**时间轮（推荐）而不是最小堆或 ssr 的固定档位环**：
+
+- 单层时间轮：分辨率 `heartbeat.resolution` 缺省 **10ms**，周期范围 `[MinPeriod, MaxPeriod]` 缺省 **[50ms, 60s]**（最高 20Hz；更长的周期是“定时”而不是“心跳”，用 entitytimer），轮长 = `MaxPeriod / resolution` = 6000 格。每格是一个切片，条目记自己的格号与下标，删除 O(1)（与末尾交换）。
+- 每 10ms 驱动醒一次，取当前格的全部条目逐个处理，处理完放回 `当前格 + 周期格数`。周期按分辨率向上量化，不限于几个固定档。
+- 不用最小堆：5 万条目、每秒几十万次出入堆，每次 O(log n) 且同一把锁下比较时间；时间轮每次出入 O(1)。不用 ssr 的“每档一个环、实体插入所有命中格”：那要求周期取固定档、一个条目占多格，换频率要删多格。
+- **相位打散**：首拍时刻 = 下一个“周期网格点 + 相位”，相位 = `hash(实体ID) mod 周期格数`。确定性（同一实体重载后相位不变、测试可复现），同周期的实体均匀落在周期内的各格上，每 10ms 一格的投递量 ≈ 总拍率 × 10ms，没有整点尖峰。同一实体上多个登记共用这个相位（见 §4 合并），所以 100ms 与 1s 的登记在同一格上相遇。
+
+**每拍的上界与背压（与快池准入规则一致）**：
+
+- **一个实体至多一条在途心跳**：条目有 `inflight` 标志；到点时若上一拍还没执行（还在快池排队或执行中），本拍**跳过**、计入 `Skipped`，不再入队、不累积。所以排队中的心跳消息数 ≤ 登记了心跳的实体数，心跳自己永远不会把快池队列灌满。handler 一开始执行就清掉 `inflight`（defer，panic 也清）。
+- **准入失败就跳拍**：`Dispatch` 返回 `ErrQueueFull`（快池等待数达到 `nest.short.queue_capacity`，见 [dispatch_queue.go](../../framework/nest/dispatch_queue.go) 准入）或引擎停止中时，清 `inflight`、计 `heartbeat.skipped_total{reason="queue_full"}`，下一拍自然重试；不在本拍内重试、不进延时队列。
+- **水位让路**：驱动每 10ms 读一次 `NestMgr.Stats()`；快池等待数超过 `heartbeat.high_water`（缺省队列容量的 50%）时，这一格的条目全部跳拍（`reason="high_water"`）、照常放回轮上。保证业务消息始终至少有一半队列可用；心跳是“晚一拍就按经过时间多算一点”的工作，比玩家请求更适合让路。
+- **每格上界**：`heartbeat.max_per_slot`（缺省 16384）；超出的条目本拍跳过，下一格从被跳过处轮转开始，避免总是同一批实体挨饿。正常相位分布下远达不到这个数（§7）。
+- **卡住兜底**：`inflight` 超过 `heartbeat.stall_after`（缺省 2s）没有清除（消息被 Nest 丢弃而 handler 没执行，例如目标在准入后被卸载），驱动视为丢失、重新投递并计 `heartbeat.stalled_total`。
+
+**投递前核对实例**（沿用 entitytimer `DeliverDue` 的做法）：条目对应的实例已 `IsRemoved()`，或查到的是同 ID 的另一个实例，就丢弃条目、不投递——驱动不唤醒不在内存的实体。
+
+#### 4. API 草案（`gameplay/heartbeat`）
+
+```go
+// Beat 是交给回调的一拍。
+type Beat struct {
+	Now     time.Time     // 业务时间（app.BusinessClock），本拍执行时读取
+	Elapsed time.Duration // 距本登记上次执行的业务时间，夹到 [0, MaxElapsed]；首拍等于 Period
+	Period  time.Duration // 本登记当前周期（量化后）
+	Skipped int           // 上次执行以来因在途 / 背压被跳过的拍数；只供观测，不补投
+	First   bool          // 本登记启动后（含实例加载后重新启动）的第一拍
+}
+
+type Func func(Beat)
+
+// Host 每个实体实例一个，由组件在构造时取得；只在实体锁内（或加载发布之前）调用。
+func (d *Driver) NewHost(owner entity.IThreadSafeEntity) (*Host, error) // 长池种类、Remote 托管实体返回错误
+func (h *Host) Register(name string, period time.Duration, fn Func) *Reg // 登记即停止状态；同名重复登记报错
+func (h *Host) OnDestroy()                                              // 组件 OnDestroy 调用：永久离开驱动
+
+func (r *Reg) Start()                     // 开始；已在跑时无操作
+func (r *Reg) Stop()                      // 停止；全部登记都停时实体离开时间轮（空闲不占调度）
+func (r *Reg) SetPeriod(p time.Duration)  // 改频率：下一拍按新周期，从本登记上次执行起算
+func (r *Reg) Active() bool
+
+// Owner 由实体实现，框架心跳 handler 据此找到 Host。
+type Owner interface{ HeartbeatHost() *Host }
+```
+
+- **声明**：组件在构造或 `OnInitFinish` 里 `Register`（例如 Move 组件登记 `"move"`、100ms）；需要时 `Start`，做完 `Stop`。周期、回调、启停都由组件持有，框架只看登记表。
+- **加载 / 卸载 / 删除**：心跳不持久。实例加载后所有登记都是停止状态；组件在 `OnInitFinish` 里按自己的 DAO 状态决定是否 `Start`（例如持久的“行军中”状态加载后重新启动位置推进）。`OnDestroy`（卸载、删档、撤销新建）让实例永久离开驱动，之后的启停一律忽略。不用 finalizer 兜底。
+- **事务内的启停**：在 Nest 事务里调用的 `Start` / `Stop` / `SetPeriod` 先记在 Host 的待办里，经 `nest.AfterCommit` 生效；事务回滚就丢弃（与 entitytimer 的报告同一规则）。不在事务里（加载发布前）立即生效。心跳回调里调用的同样延后到本拍提交后（不在遍历登记表时改它）。
+- **频率可变、空闲停**：`SetPeriod` 改频率；实体的投递周期 = 正在跑的登记里最短的周期，登记变化后重算并移到新格。没有正在跑的登记时条目移出时间轮，零成本。
+- **回调参数**：`Elapsed` 按“本登记上次执行”算，不按“实体上次心跳”算，所以同一实体上 100ms 与 1s 的两个登记各自得到正确的经过时间；掉拍时 `Elapsed` 自然变大（只算一次），`Skipped` 告诉回调掉过几拍。`MaxElapsed` 缺省 1s，可按登记覆盖：业务时钟偏移在运行中被调整、或进程长时间停顿时，不让一拍走出几公里。
+
+#### 5. 语义
+
+1. **非持久**：登记、相位、在途状态都只在进程内存；停机即丢，加载后由组件重新登记。消息参数带实例令牌（Host 创建时分配的进程内序号）：handler 发现令牌与实体当前 Host 不一致（旧实例的迟到消息碰上重载后的新实例）就什么都不做、计 `heartbeat.stale_total`。投递前核对之后、执行之前实例被卸载时，这条心跳可能让 Nest 把实体重新加载一次（准入时判为冷目标、改道 I/O 阶段），也可能因取不到实体而被丢弃（由 `stall_after` 兜底）——这与 D11 已接受的“卸载与已入队 Tick 的窗口”同一类（维护者 2026-10-18 决定①）；空闲实体（最可能被卸载的）已经停了心跳，窗口实际很小。是否另加“只投已加载目标”的 Nest 发送选项见 §9 第 9 条。
+2. **不追帧**：框架从不为错过的拍补投消息；掉拍后下一拍 `Elapsed` 覆盖整段时间，回调按经过时间算一次（移动 = 速度 × Elapsed，沿路径推进，越过终点即到达）。需要逐拍确定性的逻辑（技能 Runtime 按整数 tick 推进）在回调里把“推进到 Now 对应的 tick”交给它自己的推进函数，它内部按序处理到期工作，这不算框架追帧。
+3. **与 D11 持久定时器的分工**：持久、准点、离线也要算的事走 entitytimer（Buff 到期写档、建造完成、行军到达、活动阶段、离线产出）；在线周期推进走心跳（移动、actionflow / AI、周期性伤害与回复、冷却推进、实体自己的逻辑帧）。同一件事可以两者都用：行军到达是 entitytimer 期限，行军途中给 AOI 的位置是 1～2Hz 心跳。**entitytimer 的驱动不改成基于心跳**（§9 第 12 条）：它按“最早期限”只在到期时唤醒一次，期限可以是几小时之后，还要处理“加载后补触发”与重投；放进心跳要么让时间轮支持任意长周期（多层轮），要么每个有定时器的实体都挂一个低频心跳轮询，两者都比现在贵、语义也不同。
+4. **与 actionflow 的接法（心跳即 runner tick）**：`gameplay/actionflow` 增加一个适配（P2），持有实体的 ActionRunner / MissionRunner 和一个心跳登记 `"actionflow"`：有当前动作或任务时 `Start`，周期取当前各组动作周期的最小值（动作可选实现 `TickInterval() time.Duration`，不改 `Action` 接口，缺省 100ms），全部结束时 `Stop`。每拍对每个有当前动作的组调 `ActionRunner.Tick(group, beat.Now)`，再调 `MissionRunner.Tick`；runner 自己的延后队列照常在最外层返回前执行。`ai.Controller.Tick` 作为另一个登记（例如 `"ai"`、200ms）或在 actionflow 登记的回调里顺序调用，由接入方选择。
+5. **与 AOI 的接法**：心跳回调里只推进位置、写 `MapBasic` 的位置字段（nopersist、参与同步）并 `interest.QueueMove(e, pos)`；`QueueMove` 在实体锁内只记事实、走提交门（[interest_queue.go](../../framework/sync/entitysync/policy/interest_queue.go) `QueueMove`），AOI 计算由 sync 侧在提交后应用（D19 后续的“排队事实异步应用”进一步把它移出提交路径）。注意：D19 记录的“每玩家 16 个额外空间视野时 Nest 模式失守”恰好在这条提交路径上，原因尚未确认（KNOWN-LIMITS“AOI 视野”④）；心跳不改变它，P4 压测须同时覆盖这一点。
+6. **快池不阻塞**：回调只做内存计算和入队（改 DAO、记 effect、`QueueMove`、记待办），不能阻塞、不能做 I/O，不能在回调里 `Dispatch` / `Request`（Nest 本来就拒绝）。需要等待或 I/O 的，按现有规则处理：持久后续动作记 effect；需要查询的走 Await（I/O 池，首版只支持无回滚 memory handler）或长池消息，由进程侧组件在提交后投递。寻路这类重计算在接到移动命令的那条消息里做（或预计算），不在每拍里做。
+7. **业务时钟**：`Beat.Now` 与 `Elapsed` 都按 `app.BusinessClock`（测试注入可控时钟，与 entitytimer 一致）；时间轮本身按系统单调时间醒来，只决定“何时投递”，不进入业务计算。
+
+#### 6. 与 ssr heartbeat 模块的差异和取舍
+
+ssr 的模型（参考 ssr 的 heartbeat 模块、定时器模块与行动 / 任务模块的用法整理）：
+
+- **登记**：每个实体带一个自动心跳模块；组件调用 `Register(周期档, 回调)` 得到 ID、`Remove(ID)` 撤销；另有“每拍都调”和“每秒最多一次”两类回调；回调为空的登记只用来把实体心跳提速。
+- **周期与相位**：周期只能取 10 个固定档（50ms 基础帧的 1、2、4、10、20、40、100、200、600、1200 倍）；实体的心跳频率 = 已登记的最短档。相位 seed = `hash(实体ID) mod 1200`，所有档共用一个 seed，按 `帧号 mod 档 == seed mod 档` 触发，各档天然对齐。
+- **结构**：实体内用“10 档定长桶 + 最短档游标”存登记，O(1) 求最短档；最小堆与排序数组是同一接口的另外两种实现，只在测试里对照，生产用桶。全局调度器是 4 个环（跨度 2 / 20 / 200 / 1200 帧），每格一个 ID 集合，实体按（最短档, seed）插入命中的所有格。
+- **驱动**：进程一个 50ms 全局帧 goroutine，在一把全局锁下取出本帧格里的 ID，按每条消息至多 64 个目标广播进实体消息队列。
+- **执行**：消息队列 worker 逐个目标 TryLock 实体，在实体锁内遍历登记、按档过滤后调回调，参数是（距该登记上次执行的时间, 帧差, now）；TryLock 失败把消息原样重投，不合并。回调期间的登记 / 撤销延后到本拍结束。
+- **卸载、频率、空闲**：`Release` 清空并退出全局环（另有 finalizer 兜底），`Frozen` / `Recover` 暂停与恢复，`UseTicker` 可换成场景自己的帧；换频率 = 撤销 + 重新登记，行动列表与任务按当前 Action / Mission 的 `LoopInterval` 登记、切换时换档；没有登记时退出全局环。
+- **与 timer 的关系**：ssr 的定时器挂在心跳上（每秒心跳检查到期，临近到期时登记一个空回调把心跳提到 1s / 2s / 10s… 档），定时器精度受心跳档约束，实体不在内存就不触发。
+- **性能取舍**：固定档 + 预先算好的格 → 每帧收集 O(本帧 ID 数)、广播 64 目标一包减少入队；代价是周期只有 10 档、全局锁、消息队列没有上界和背压、TryLock 失败重投会放大排队，心跳与业务消息同一队列没有让路规则。
+
+roost 的取舍：
+
+| 项 | 照搬 | 不照搬 / 改法 | 理由 |
+| --- | --- | --- | --- |
+| 按实体 ID 哈希定相位、多登记共用相位 | 照搬 | — | 确定、无尖峰，多登记在同一拍相遇才能合并投递 |
+| 实体频率 = 最短登记周期，按登记各自算经过时间 | 照搬 | — | 一实体一条消息，回调看到自己的周期 |
+| 回调期间的登记变化延后 | 照搬 | 改为随事务 `AfterCommit` 生效，回滚丢弃 | roost 的回调在事务里，回滚的启停不能生效 |
+| 没有登记时退出调度 | 照搬 | — | 空闲零成本 |
+| 驱动广播 + worker TryLock、失败重投 | 不照搬 | 单目标 `Dispatch` 走 Nest 准入，至多一条在途，跳拍不重投 | Nest 已有同 ID 顺序与前驱等待，不需要 TryLock；重投在快池满时会放大排队 |
+| 固定 10 档、多环、每格 ID 集合 | 不照搬 | 单层时间轮、周期按 10ms 量化 | roost 不需要档位来对齐，也避免一个条目占多格 |
+| 定时器挂在心跳上 | 不照搬 | 持久定时器仍走 entitytimer | roost 的定时器持久、离线后加载补触发，精度不受心跳档约束 |
+| finalizer 兜底、`UseTicker` 换驱动 | 不照搬 | `OnDestroy` 显式离开；场景帧用场景实体自己的心跳 | roost 实体生命周期有明确的销毁回调；一套驱动更容易保证背压规则 |
+| 心跳与业务同一队列、无让路 | 不照搬 | 水位让路 + 准入失败跳拍 | 快池准入有容量上限，心跳不能挤掉玩家请求 |
+
+#### 7. 性能估算（推算，未实测）
+
+已测的参照：v1.29.0 重档（Apple M5，GOMAXPROCS=10）1 万实体全部 10Hz 心跳 + 1000 玩家各 10 条/秒业务，即每秒 10 万条心跳 + 1 万条业务，short 8 worker / 队列 65536，30 分钟心跳与业务拒绝都是 0，被测进程（nest-game 夹具进程，含 Gate 与 Sync）约 4.2～4.6 核（见 [V1290-HEAVY-30M](../performance/V1290-HEAVY-30M-20261019.md)）。那里的心跳由夹具的帧回调逐个 `Dispatch`，形状与本方案相同，所以“每秒 10 万条单目标心跳”在这台机器上已有证据；更高的速率没有。
+
+**只算移动（5 万实体、10Hz）**：
+
+| 移动中占比 | 每秒心跳消息 | 每 10ms 一格 | 排队心跳上界（=移动实体数） |
+| ---: | ---: | ---: | ---: |
+| 10% | 5 万 | 500 | 5000 |
+| 20% | 10 万（与已测重档同量级） | 1000 | 1 万 |
+| 50% | 25 万 | 2500 | 2.5 万 |
+| 100% | 50 万 | 5000 | 5 万 |
+
+**所有快池业务 tick 都走心跳之后**（示例分布，供拍板时代入自己的数字）：5 万实体 = 1 万玩家 + 4 万怪物 / NPC。
+
+| 群体 | 数量 | 登记 | 不合并（每个登记一条） | 按实体合并（取最短周期） |
+| --- | ---: | --- | ---: | ---: |
+| 移动中的玩家 | 2000 | 移动 10Hz + Buff / 回复 1Hz | 2.2 万/s | 2 万/s |
+| 静止、有 Buff 的玩家 | 4000 | Buff / 回复 1Hz | 4000/s | 4000/s |
+| 活跃且移动的怪物 | 6000 | 移动 10Hz + AI 5Hz + 回复 1Hz | 9.6 万/s | 6 万/s |
+| 活跃未移动的怪物 | 4000 | AI 5Hz + 回复 1Hz | 2.4 万/s | 2 万/s |
+| 其余（空闲） | 3.4 万 | 无 | 0 | 0 |
+| 合计 | 5 万（32% 挂心跳） | | **14.6 万/s** | **10.4 万/s（省约 29%）** |
+
+- 合并省掉的是“同一实体上同频或倍频的登记”（移动 + AI + actionflow 常常同时在跑）；单一用途的实体省不了。跨实体的批量准入（`DispatchBroadcast` 32 个一批）另外能把准入次数降到约 1/32（10.4 万/s → 约 3300 次准入/s），但执行条数不变，代价见 §2。
+- **驱动开销**：每拍一个条目 = 出格 + 两次内存核对 + 一次 `Dispatch` 准入（取消息对象、短锁登记同 ID 尾）。按每条 1～3µs 粗估，10 万/s 约 0.1～0.3 核、25 万/s 约 0.25～0.75 核，单 goroutine 在 25 万/s 附近可能到顶，那时开分片或批量准入。驱动每秒只醒 100 次；时间轮本身的出入格与 5 万条目的内存（每条约 100 字节量级，约 5MB）可以忽略。
+- **快池队列压力**：心跳在队列里的数量 ≤ 挂心跳的实体数（示例 1.6 万，占 65536 的 24%），加上 50% 水位让路，业务始终至少有一半队列；每 10ms 一格约 1000 条的突发远小于队列容量。真正的约束是 worker 的执行时间：10.4 万/s × 每拍回调耗时（移动 + `QueueMove` 估 5～20µs）≈ 0.5～2 核 worker 时间，叠加 D19 记录的“提交后 Interest 事实应用随视野数线性增长”。
+
+**后续微基准（P1 / P4 做，本轮不测）**：`BenchmarkWheelAdvance`（5 万条目、混合周期，只测时间轮出入，不投递）；`BenchmarkDriverDispatch`（假客户端，测驱动单 goroutine 每秒能处理的条目数）；真实 Nest + 空 handler 的开环投递 10 / 25 / 50 万 每秒，记录完成数、跳拍数、快池等待峰值、P99；同负载 `Dispatch` 与 `DispatchBroadcast` 对照；时间轮与最小堆在 5 万条目下对照（验证 §3 的选择）；快池被业务占满时的跳拍与让路行为。同机交替、benchstat、保存全部样本。
+
+#### 8. 测试计划与实施分期
+
+**测试（P1，`-race`，先红后绿）**：可控业务时钟 + 假 Nest 客户端（显式推进时间轮，事件顺序由测试决定）：相位按 ID 哈希确定、同周期实体均匀分布；周期量化与上下限；多登记取最短周期、各自的 `Elapsed`；启停与改频率后移格、全部停止后离开时间轮；在途时跳拍且 `Skipped` 正确、不累积；`ErrQueueFull` 与水位让路跳拍；每格上界轮转；卡住兜底重投；`MaxElapsed` 夹取；`OnDestroy` 之后不再投递；旧实例令牌在新实例上不执行；事务回滚丢弃启停、提交后生效；长池种类与 Remote 托管实体拒绝。真实 Nest 引擎：心跳 handler 在实体锁内执行，与同一实体的普通消息严格串行（用 barrier 证明不并发），实例卸载后不再投递。每个强制点配一个变异核对（例如“跳拍改为累积”“回滚不丢弃启停”“不核对实例”各自让对应用例变红），修前失败文本原样记录。
+
+| 分期 | 内容 | 风险 |
+| --- | --- | --- |
+| P1 心跳框架 | `gameplay/heartbeat`（Driver / Host / 心跳 handler）、`wiring/heartbeat` Mod 与配置 schema、指标（`heartbeat.delivered_total`、`skipped_total{reason}`、`stalled_total`、`stale_total`、`registered`）、guide / impl 文档与 OBSERVABILITY | 中：新 Mod 增加停机预算一项；指标名进门禁 |
+| P2 组件与 actionflow | `gameplay` 下 `MapBasic` / `Move` 组件（MoveTo / Follow，路径推进、到达 / 打断）；actionflow 心跳适配；`ai.Controller` 接法 | 中：actionflow / ai 第一次有生产驱动，延后队列与回调重入要按现有用例再核一遍 |
+| P3 game-demo 接入 | 玩家移动改为“客户端发目标 → MoveTo 动作 → 心跳推进 → `QueueMove`”；怪物巡逻；保留现有按点移动作为对照或瞬移 | 中：改变 demo 的客户端协议与 loadtest 场景；demo 是手写参考实现，不迁到生成器 |
+| P4 压测改为心跳驱动 | sync-aoi 与 nest-game 的移动 / 心跳负载改用 `gameplay/heartbeat` 驱动，保留旧全局循环开关对照；补 §7 微基准；同时复测 D19 多视野 Nest 模式 | 中：压测数字口径变化，前后要同机对照 |
+| P5 现有快池 tick 迁移 | 见下表 | 按项 |
+
+**现有周期写法按“是否跑在快池里”筛选后的去留**：
+
+| 现有写法 | 是否快池业务 | 以后 |
+| --- | --- | --- |
+| game-demo World 的 `Sync_TickWorldTimers` 每秒 ticker | 曾是（服务 goroutine 每秒给 World 发一条快池消息） | 已在 D11 去掉，World 现在用 entitytimer 驱动（持久期限）。不再迁移；以后再出现“业务自己每 N 秒给实体发周期消息”的写法，一律改用心跳 |
+| `scripts/perf/sync-aoi` Nest 模式的全局移动循环 | 是（每个实体一条 `Request` 到快池） | P4 改为心跳驱动，保留旧开关。风险低 |
+| nest-game 夹具帧回调逐个投递心跳 | 是 | P4 改用 `gameplay/heartbeat` 驱动，保留 `HeartbeatHz` 旧路径对照。风险低 |
+| `gameplay/actionflow`、`gameplay/ai` 的 `Tick` | 是（应当在实体锁内调用） | P2 由心跳驱动 |
+| `combatcomponent.TickBuffs` 与周期性 Buff 效果、冷却、回复 | 是 | P5：有到期 buff 或周期效果时挂 1Hz（或按 buff 粒度）登记，全部清空时停；加载后的第一拍顺带清理过期记录（注释里“重启后首次业务 tick”）。需要离线也准点、且结果要落档的长时 buff 仍用 entitytimer。风险中（战斗数值的时间粒度要与技能 tick 对齐） |
+| Skill `Runtime.Advance(tick)` | 是（挂在实体组件上时） | P5：有在途施法 / 衍生物时挂登记，每拍把 Runtime 推进到 `beat.Now` 对应的 tick，空闲停。风险中（技能确定性依赖整数 tick 与回放，换算规则要测） |
+| game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | P5 可选：改成场景实体 1Hz 心跳里决定缺额、提交后由进程侧建实体。风险中（建实体与同步登记的先后要拆清），不是必须 |
+| SLG 行军、建造、研究、收入（夹具） | 到期部分不是周期 | 继续用 entitytimer；行军途中如果大地图 AOI 需要服务端位置，加 1～2Hz 心跳插值位置 + `QueueMove`。风险低 |
+| tower-defense / auto-chess / survival / idle 夹具的 `Advance(now)` | 不是周期（按下一个期限推进） | 继续用 entitytimer；某个玩法需要连续模拟（例如塔防里怪物连续移动）时，房间实体挂心跳 |
+| 活动阶段（World 期限 + 服务 `runActivity` 5s 循环） | 期限是持久定时器；循环是服务后台工作（跨服务协调、经总线） | 不迁：期限留在 entitytimer，服务循环不在范围内 |
+
+**不在范围内（不是快池业务，只写边界、不纳入心跳）**：Lockstep `Match` / 房间的 `Tick` 协程（game-demo battle 30ms、MOBA 夹具 room，定步长、单 owner goroutine）；Sync Manager 的 Flush 与兜底 ticker；DataEngine 投影器与 outbox worker；Nest WAL group commit；entitytimer 驱动自身的调度循环；各 service 的后台 sweep（session / match / chat / activity / platform）、Gateway 续约、statslog、业务时间高水位、Remote 版本锁续约；game-demo 的 playerowner 卸载扫描、匹配器循环、场景重试；robot / loadtest 压测端；I/O 池与长池上的工作。
+
+**房间 / 场景级 tick**：房间、场景本身就是实体（game-demo 的场景实体被移动事务锁住、World 实体、MOBA 的对局实体），房间逻辑帧就是该实体自己的心跳登记；不提供“非实体心跳”。限制：心跳是单目标消息，房间心跳只能改房间自己的状态；需要每拍同时改多个成员的逻辑，要么拆成成员各自的心跳读房间下发的事实，要么由业务消息（`DispatchMulti`）承担——是否给心跳加“按组投递”留到 P5 之后视需要再定。
+
+#### 9. 需要维护者拍板
+
+1. **包名与位置**：`gameplay/heartbeat`（Driver / Host / 心跳 handler）+ `wiring/heartbeat`（Mod 装配）；移动组件放 `gameplay/movement`（`MapBasic` / `Move`）。推荐这样：心跳框架在 gameplay（维护者要求），装配与 entitytimer 一样放 wiring。
+2. **投递粒度**：A 每实体每拍一条单目标 `Dispatch`（推荐，已有 10 万/s 证据、无批内互等）；B `DispatchBroadcast` 32 个一批。推荐 A，P4 微基准证明准入开销成为瓶颈再评估 B。
+3. **同一实体多个组件登记**：A 合并为一条投递，实体周期取最短、各登记按自己的周期与经过时间触发（推荐，示例分布省约 29%）；B 每个登记各自投递。
+4. **合并 / 跳拍**：至多一条在途，上一拍没执行完就跳过、只计 `Skipped`，不累积、不补投（推荐）；备选“累积到下一拍一起执行”会让慢实体越积越多，不推荐。
+5. **背压**：准入失败跳拍 + 快池等待超过 50% 容量时整格跳拍 + 每格上界 16384（推荐）。水位比例是否接受 50%。
+6. **时间参数**：分辨率 10ms、周期范围 [50ms, 60s]、`MaxElapsed` 1s；缺省频率建议移动 10Hz、AI 5Hz、Buff / 回复 / 冷却 1Hz（只作文档建议，由组件登记时给出）。推荐这一组。
+7. **驱动 goroutine**：缺省 1 个，`heartbeat.shards` 可调（推荐）。
+8. **心跳 handler 的持久级别**：A `async`（推荐：只改 nopersist 时记录为空、不写 WAL；偶尔需要落档的结果，例如动作完成发奖，与普通快池 handler 一样提交）；B `memory`（回调里一切持久写被拒绝，持久结果只能走 entitytimer 或别的业务消息，最严格也最便宜）。
+9. **卸载窗口**：A 接受“准入后被卸载的实体可能被冷加载一次”，靠投递前核对实例 + 实例令牌保证不在新实例上误执行（推荐，与 D11 决定①一致）；B 给 Nest 加“只投已加载目标、冷目标直接丢弃”的发送选项（扩大 Nest 契约，三大块之一）。
+10. **种类限制**：长池种类与 Remote 托管实体在 P1 拒绝建 Host（推荐）。
+11. **调度结构**：单层时间轮（推荐），不用最小堆、不用 ssr 的固定档多环；不复用 Nest 帧 Ticker 的包级回调（推荐）。Nest 帧 Ticker 的包级回调目前没有生产调用方，是否另行清理不在本条范围。
+12. **entitytimer 驱动是否改成基于心跳**：不改（推荐，理由见 §5.3）。
+13. **房间 / 场景级 tick**：房间、场景都是实体，用自己的心跳；不提供非实体心跳（推荐）。
+14. **P3 范围**：game-demo 玩家移动是否改成“发目标点、服务器按心跳推进”（推荐，才能展示 MoveTo / actionflow；按点移动保留为对照或瞬移），连同原“需要确认”第 5 条（本期只做 MoveTo / Follow，还是连巡逻、寻路一起）一起定。
+
+### 需要确认（原登记）
+
+1. ~~组件放在哪里~~：维护者 2026-10-21 定为框架 `gameplay`（包名见上文 §9 第 1 条）。
+2. ~~心跳机制放在哪里~~：维护者 2026-10-21 定为写进 `gameplay`、在 Nest 快池上执行（方案见上文）。
+3. 位置是否每次心跳持久化：建议位置为 nopersist（只同步），按周期或离开场景时落库一次；还是每次心跳 strict 写入。
+4. ~~心跳频率~~：由上文方案给出（按登记、移动中才高频、空闲停），缺省值见 §9 第 6 条。
+5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起（与 §9 第 14 条一起定）。

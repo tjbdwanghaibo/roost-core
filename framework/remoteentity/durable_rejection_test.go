@@ -75,7 +75,7 @@ func newMemoryUnresolvedFixture(t *testing.T, id int64, wrap func(*MongoCommitte
 	t.Helper()
 	const kind entity.EntityKind = 119
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	loader := newRemoteTestLoader()
 	live := newTestRemoteEntity(id, 1, kind)
 	loader.add(live)
@@ -352,7 +352,7 @@ func TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{Databases: f.store.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestWALRemoteAuthorityConflictNeverProducesRejected(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+			store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{Databases: f.store.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}

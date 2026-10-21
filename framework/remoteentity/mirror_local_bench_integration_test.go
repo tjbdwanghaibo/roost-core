@@ -100,7 +100,7 @@ func (s *countingStorage) LoadRemoteSnapshot(ctx context.Context, key entity.Rem
 // assemble 装一个 Manager（owner 与只读方同一装配）；bus 非 nil 时 Start。
 func (env *mirrorLocalBenchEnv) assemble(b *testing.B, sid int32, staleness time.Duration, bus fsyncbus.ISyncBus) (*Assembly, *countingStorage) {
 	b.Helper()
-	storage := &countingStorage{MongoCommitter: NewMongoCommitter(env.mongo, env.database, sid, 0)}
+	storage := &countingStorage{MongoCommitter: newBoundMongoCommitter(env.mongo, env.database, sid, 0)}
 	backend, err := NewBackend(newMockLoader(), storage)
 	if err != nil {
 		b.Fatal(err)

@@ -856,6 +856,8 @@ func TestRemoteCreationConflictFencesProjectorAndKeepsWAL(t *testing.T) {
 	}
 	store, client, heroes := newMongoStoreTest(t)
 	remote := remoteentity.NewMongoCommitter(client, "remote", 3, 0)
+	// SetRemoteProjection 把投影存储的库名表绑给 Remote 存储，投影失败只来自本用例要验证的创建冲突
+	// （未绑定的 Remote 存储拒绝写 DAO 文档）。
 	if err := store.SetRemoteProjection(remote, &mongoRemoteProjectionFake{}); err != nil {
 		t.Fatal(err)
 	}

@@ -145,7 +145,7 @@ func TestJetStreamOutboxPublisherRefusesIncompleteEffects(t *testing.T) {
 func TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression(t *testing.T) {
 	mongo := &gatedTransactionMongo{Client: mongotest.NewClient(), entered: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(mongo.open)
-	cfg := AssemblyConfig{Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1}}
+	cfg := AssemblyConfig{Mongo: MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: "game", ServerID: 1}}
 	cfg.WAL = nestwal.DefaultOptions(t.TempDir())
 	cfg.WAL.GroupCommitInterval = time.Millisecond
 	cfg.Projector = ProjectorOptions{ManualReplay: true, CloseWAL: true}
@@ -370,7 +370,7 @@ func TestAssemblyKeepsTheRuntimeUntilShutdownCompletes(t *testing.T) {
 func lifecycleAssembly(t *testing.T, client fmongo.IMongo, js fnats.IJetStream) *Assembly {
 	t.Helper()
 	cfg := AssemblyConfig{
-		Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1},
+		Mongo: MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: "game", ServerID: 1},
 		WAL:   nestwal.DefaultOptions(t.TempDir()), Projector: DefaultProjectorOptions(),
 		Outbox: OutboxWorkerOptions{Owner: "lifecycle"},
 	}

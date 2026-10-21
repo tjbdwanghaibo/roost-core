@@ -73,16 +73,39 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 **跟随**：空间视野跟随一个实体时视点取实体位置、随实体移动（`Move`、事务内的 `QueueMove` / `QueueSpatial`），并且看不见它自己跟随的实体；`SetViewFollow(id, 0)` 不再跟随，视点停在当前位置；换成跟随另一个实体时跳到那个实体的位置。实体 ID 数值恰好等于某个玩家 ID 的单位照常可见。
 
-**视野操作不进 Nest、不排队**（维护者 2026-10-20 决定）：定义、修改、成员变更、挂接都是直接调用，只取视野登记表自己的锁，参数当场校验并写进登记表，效果由下一次 `Apply`（或排队模式下 Manager 的政策阶段）按调用顺序应用，不等待空间计算，可以在业务线程里调用。它们不走提交门：事务里决定的视野变化（入盟、放眼、组队）由业务在**提交之后**调用。位置不同：它是 DAO 驱动的事实，`QueueMove(e, at)` / `QueueSpatial(e, at, blocks)` 仍走提交门，提交确认后移动目标并带上跟随它的视野，回滚不移动。
+**视野操作不进 Nest、不排队**（维护者 2026-10-20 决定）：定义、修改、成员变更、挂接都是直接调用，只取视野登记表自己的锁，参数当场校验并写进登记表，效果由下一次 `Apply`（排队模式下由 Manager 的政策阶段，ApplyAsync 时也可能由 Interest 的应用线程）按调用顺序应用，不等待空间计算，可以在业务线程里调用。它们不走提交门：事务里决定的视野变化（入盟、放眼、组队）由业务在**提交之后**调用。位置不同：它是 DAO 驱动的事实，`QueueMove(e, at)` / `QueueSpatial(e, at, blocks)` 仍走提交门，提交确认后移动目标并带上跟随它的视野，回滚不移动。
 
-**上限**：`MaxVisible` 与 `MaxObserverBlocks` 按每个空间视野计；`MaxViewsPerPlayer`（缺省 64，含主视野）与 `MaxPlayersPerView`（缺省 4096）超出时 `AttachView` / `Enter` / `Watch` 返回 `ErrViewLimit`，计 `entitysync_interest_view_limit_rejected_total{reason="views_per_player"|"players_per_view"}`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算一个玩家的块预算，超过 `MaxPlayerBlocks`（缺省 `1024 × 64`）拒绝构造（`ErrInterestBudget`）。一个会话持有的目标还受 Manager 的 `Limits.MaxObjects`（缺省 100）约束，一个玩家挂很多视野时一并调大。
+**上限**：`MaxVisible` 与 `MaxObserverBlocks` 按每个空间视野计；`MaxViewsPerPlayer`（含主视野与关系视野；缺省 ApplySync 9、ApplyAsync 64，ApplySync 下显式超过 9 拒绝构造，见下“两种应用模式”）与 `MaxPlayersPerView`（缺省 4096）超出时 `AttachView` / `Enter` / `Watch` 返回 `ErrViewLimit`，计 `entitysync_interest_view_limit_rejected_total{reason="views_per_player"|"players_per_view"}`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算一个玩家的块预算，超过 `MaxPlayerBlocks`（缺省 `1024 × 64`）拒绝构造（`ErrInterestBudget`）。一个会话持有的目标还受 Manager 的 `Limits.MaxObjects`（缺省 100）约束，一个玩家挂很多视野时一并调大。
 
 **已测规模与边界**（2026-10-20 夜间 sync-aoi：1000 玩家、1 万实体、20 Hz、`-mode=periodic`，本机两进程 loopback，每格 3 个样本，[夜间补测](../../performance/NIGHT-20261020.md) §14'.2；periodic 的周期等待本身最多 50 ms，单视野 Nest 也在 64 ms 左右，比较看差异）：
 
-- **每玩家额外空间视野 4 个以内已测**：可见约 244，Nest 模式改值→客户端 P99 78 ms（direct 49.5 ms），帧数全满。
-- **16 个额外空间视野时 Nest 模式失守**：1000 玩家 × 17 个空间视野（1.7 万个空间观察者，可见约 827），改值→客户端 P99 350～376 ms，服务端 tick 工作 P95 86～90 ms、超过 50 ms 的 tick 间隔，帧数只有应发的 38%（tick 被跳过、变化合并）；同负载 direct 模式正常（P99 58～62 ms、帧数全满）。
+- **每玩家额外空间视野 4 个以内已测**：可见约 244，Nest 模式改值→客户端 P99 78 ms（direct 49.5 ms），帧数全满（2026-10-20）；2026-10-21 AOI 批次重评修复后 65 ms（单样本）。
+- **16 个额外空间视野（1.7 万个空间观察者，可见约 827）**：2026-10-20 时 Nest 模式失守（P99 350～376 ms、帧数 38%）；2026-10-21 修复后（[§14'.2a](../../performance/NIGHT-20261020.md#142a-根因与修复2026-10-21)）同负载 Nest P99 97～141 ms、帧数 98～100%，direct 57～70 ms。根因是 AOI 批次里每个目标移动让附近全部视野完整重评，以及排队事实在 Flush 里一次性应用；现在只评估移动过的目标；排队事实在异步应用模式下由 Interest 的应用线程分批应用、Flush 只结算（这组数字是 ApplyAsync），缺省的同步应用模式限制每玩家额外视野不超过 8 个（见下“两种应用模式”）。
+- **小块小视野**（4000×4000、块 20、视野 30、5 万实体、每 tick 500 次移动）：单视野、+4、+16 视野 Nest 57～60 ms、direct 50 ms。
 - **共享关系视野正常**：联盟 1000 人、每人可见约 1042，Nest 66 ms、direct 50 ms，与单视野同量级。
-- 所以瓶颈是空间视野的数量在 Nest 路径上的评估，不是下发的实体数；具体原因尚未确认，维护者决定发版后再分析（[KNOWN-LIMITS“广播与 AOI”](../../maintenance/KNOWN-LIMITS.md#广播与-aoi)）。一个玩家要挂十几个空间视野的玩法（RTS、大量眼位 / 召唤物）先按自己的密度压测。
+- **两种应用模式对照**（2026-10-21，原场景两轮单机对照，[DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)）：ApplySync 的 Flush 均值 4 / 8 / 16 个额外视野时 15 / 25～27 / 46～47 ms（16 视野只在放宽上限的诊断构建里测），8 视野约半个周期、帧数满，16 视野贴着 50 ms 周期开始丢 tick——这是上限取主视野 + 8 的依据；ApplyAsync 的 Flush 10 / 17 / 35 ms。改值→客户端 P99：ApplySync 65 / 80～88 / 144～150 ms，ApplyAsync 59 / 73～82 / 130～138 ms，direct 49～52 / 56～61 / 69～90 ms。本夹具的改值均匀分布在周期里，ApplySync 的延迟没有比 ApplyAsync 低（它的好处是提交后下一次 Flush 必定可见、没有额外线程），见设计记录。小块小视野场景 +4 / +8 视野两种模式 P99 都在 53～56 ms、Flush 不超过 7 ms。
+- **剩余差距**：ApplyAsync 比 direct 多约一个同步周期——Manager 按自己的周期结算，截止前几毫秒才应用完的事实要等下一周期；维护者 2026-10-21 决定接受（不加“Flush 前等应用线程”、不做周期对齐）。一个玩家要挂十几个空间视野的玩法（RTS、大量眼位 / 召唤物）用 ApplyAsync，并先按自己的密度压测（[KNOWN-LIMITS“广播与 AOI”](../../maintenance/KNOWN-LIMITS.md#广播与-aoi)）。
+
+**排队事实的两种应用模式**（维护者 2026-10-21 决定，由业务按游戏类型选，`InterestConfig.ApplyMode`）：`QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 两种模式都只在业务线程（Nest worker）上入队，不做 AOI 计算；区别只在于已确认的事实在哪里、何时应用到 AOI。
+
+| | ApplySync（缺省） | ApplyAsync |
+| --- | --- | --- |
+| 在哪里应用 | Manager Flush 的政策阶段，应用一批（不超过 `BatchSize`）随即结算；没有额外线程 | 每个 Interest 一个应用线程分批应用，Flush 的政策阶段只结算 |
+| 结果何时可见 | 提交后的下一次 Flush | 应用线程走到之后的那次 Flush；提交后立即 Flush 不一定看得到，测试与停机用 `Drain` |
+| 每玩家视野上限 | 主视野 + 8 个额外视野（`SyncApplyMaxViewsPerPlayer` = 9，关系视野也计入）；`MaxViewsPerPlayer` 显式超过即拒绝构造，报错提示改用 ApplyAsync | 不受此限（`MaxViewsPerPlayer` 缺省 64） |
+| 代价 | AOI 计算在 Flush 关键路径上，视野越多 Flush 越长 | periodic 下尾延迟约多一个同步周期（截止前到达的事实等下一周期结算）；多一个常驻线程 |
+| 适合 | 每玩家额外视野不超过 8：MMO、MOBA、卡牌、休闲 / 放置、塔防、自走棋 | 每玩家额外视野多于 8：RTS（每个单位一个视野）、大量召唤物 / 眼位 / 侦察单位 |
+
+| 游戏类型 | 每玩家视野（主视野之外） | 选 |
+| --- | --- | --- |
+| MMO / MMORPG | 队伍、公会、联盟关系视野，少量召唤物 | ApplySync |
+| MOBA | 阵营 / 队伍视野，少量眼位、召唤物 | ApplySync；眼位可能超过 8 个时 ApplyAsync |
+| 卡牌、休闲、放置、塔防、自走棋 | 很少或没有 | ApplySync |
+| SLG | 联盟关系视野 + 行军队列 / 侦察单位 | 合计不超过 8 用 ApplySync，否则 ApplyAsync |
+| RTS | 每个单位一个视野 | ApplyAsync |
+| 大量召唤物 / 眼位 / 侦察单位的玩法 | 十几个以上 | ApplyAsync |
+
+选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），同一实体按入队顺序生效，Leave / Hide 对排队事实的改写相同，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途事实全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Move` / `Apply`，不经提交门）不受模式影响，AOI 在调用方线程里算，但视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
 
 **视野参数**（D14 B1）。每个空间视野有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
 

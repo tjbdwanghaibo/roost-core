@@ -425,7 +425,7 @@ sequenceDiagram
 | 步骤 | 接法 | 要核对的事实 |
 | --- | --- | --- |
 | 生成 | `roost add mod remote_entity -service game`、`roost add entity AllianceAuthority`、`roost add dao AllianceAuthority --entity AllianceAuthority`；实体注解改为 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`，DAO 写 `db=main dbscope=global` | 三处一起改再 `roost generate`；`dbscope=sid` 会被生成器拒绝。Remote 托管实体不挂本地实体定时器 |
-| 装配 | `NewMongoCommitter` → `NewBackend` → `BindDatabaseMap` → `Assemble`；`MongoStore.SetRemoteProjection`；Runtime 与 Nest 注入同一个 Remote Manager | 自建装配必须把 DataEngine 的库名映射绑给 Remote 存储：直接构造的提交器未绑定时按逻辑名 `main` 写 DAO 文档（wiring 装配总会绑定，未绑定时拒绝写） |
+| 装配 | `NewMongoCommitter` → `NewBackend` → `BindDatabaseMap`（Remote 先于投影启动，所以提前绑）→ `Assemble`；`MongoStore.SetRemoteProjection`（再绑同一张表为无操作）；Runtime 与 Nest 注入同一个 Remote Manager | 自建装配必须让 Remote 存储与 DataEngine 投影用同一张库名映射：任一边没有表时读写带库名的 DAO 文档直接返回 `dataengine.ErrDatabaseMapNotBound`（与 wiring 装配同一规则，维护者 2026-10-21），不会再按逻辑名 `main` 写进共享环境里名为 `main` 的库 |
 | 读写 | 生成 Sender `Sync_AllianceRemoteRead` / `Sync_AllianceRemoteCAS`；联盟全部事实存为一个 DAO 字段 | 业务版本只管条件更新，不代替 Remote 的 marker / route / lock fence；只有明确的版本冲突才重读重算，其他错误直接返回，结果未知不盲目重执行 |
 | 首次拥有 | `ClaimRemoteOwnership`，返回的 lease 未共享时再 `EnterRemoteSharedMode` | 先看 Claim 返回的 `Shared`：接管可能继承共享状态，再进一次会被拒，这是接入用法不是框架故障 |
 | 交接 | owner 2000 调 `TransferRemoteOwnership(..., 2001)` | marker 与 route epoch 都上升；旧 Runtime 仍在运行时尝试写（撤销成员）被拒 |

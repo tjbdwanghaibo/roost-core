@@ -195,7 +195,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	}
 	defer client.Close(context.Background())
 	RegisterEntity()
-	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database})
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: fixtureDatabases(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,11 +10,26 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// newBoundMongoCommitter 直接构造提交器并绑定一张没有映射项的库名表（逻辑名即物理名），与 DataEngine 不配
+// dataengine.databases 时冻结的表等价；未绑定映射表的提交器拒绝写 DAO 文档（ErrDatabaseMapNotBound）。
+func newBoundMongoCommitter(mongo fmongo.IMongo, database string, serverID int32, transactionTTL time.Duration) *MongoCommitter {
+	store := NewMongoCommitter(mongo, database, serverID, transactionTTL)
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{})
+	if err == nil {
+		err = store.BindDatabaseMap(databases)
+	}
+	if err != nil {
+		panic(err)
+	}
+	return store
+}
 
 func authorityCommit(t *testing.T, id int64, tx byte, grant WriteGrant) entity.RemoteCommit {
 	t.Helper()
@@ -27,7 +42,7 @@ func authorityCommit(t *testing.T, id int64, tx byte, grant WriteGrant) entity.R
 func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	s := NewMongoCommitter(db, "control", 7, 0)
+	s := newBoundMongoCommitter(db, "control", 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, _ := entity.BuildEntityID(996, 198)
 	owner, err := s.ClaimOwnership(ctx, id, 7)
@@ -71,7 +86,7 @@ func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *
 		t.Fatalf("old owner admitted: %v", err)
 	}
 	// 新创建的 committer 同样必须严格比较，无需调用开关。
-	another := NewMongoCommitter(db, "control", 7, 0)
+	another := newBoundMongoCommitter(db, "control", 7, 0)
 	forged := authorityCommit(t, id, 4, grant)
 	forged.MarkerEpoch = 100
 	if _, err = another.CommitRemote(ctx, forged); !errors.Is(err, entity.ErrRemoteVersionConflict) {
@@ -81,7 +96,7 @@ func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *
 func TestMongoAuthoritySharedTransitionsAndOverflow(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	s := NewMongoCommitter(db, "control", 7, 0)
+	s := newBoundMongoCommitter(db, "control", 7, 0)
 	owner, err := s.ClaimOwnership(ctx, 101, 7)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +131,7 @@ func TestMongoAuthoritySharedTransitionsAndOverflow(t *testing.T) {
 func TestMongoAuthorityRejectsUnsupportedMetadata(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	store := NewMongoCommitter(db, "control", 7, 0)
+	store := newBoundMongoCommitter(db, "control", 7, 0)
 	if _, err := db.Collection("control", remoteMetaCollection).InsertOne(ctx, bson.M{"_id": 101, "_ver": int64(3)}); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +167,7 @@ func (c authorityLostReplyCollection) FindOneAndUpdate(ctx context.Context, filt
 func TestMongoAuthorityLostGrantReplyDoesNotAllocateTwice(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	s := NewMongoCommitter(authorityLostReplyMongo{db}, "control", 7, 0)
+	s := newBoundMongoCommitter(authorityLostReplyMongo{db}, "control", 7, 0)
 	if _, err := s.ClaimOwnership(ctx, 101, 7); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,7 @@ func TestOwnerRoutedAdmissionRechecksDurableOwnerDespiteHotCache(t *testing.T) {
 	ctx := context.Background()
 	const kind entity.EntityKind = 198
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	cfg := DefaultConfig()
 	cfg.MarkerCacheTTL = time.Minute
 	manager := NewManager(newMockVersionedLockFactory(), cfg, 1000)
@@ -219,7 +234,7 @@ func TestOwnerRoutedAdmissionRechecksDurableOwnerDespiteHotCache(t *testing.T) {
 func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	store := NewMongoCommitter(db, "control", 7, 0)
+	store := newBoundMongoCommitter(db, "control", 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	var commits []entity.RemoteCommit
 	for i := range 2 {
@@ -263,7 +278,7 @@ func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T)
 
 func TestMongoCommitterRejectsWriteWithoutGrantByDefault(t *testing.T) {
 	ctx := context.Background()
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, _ := entity.BuildEntityID(1099, 198)
 	commit := authorityCommit(t, id, 99, WriteGrant{Ownership: entity.RemoteEntityMarkerLease{OwnerSid: 7, MarkerEpoch: 1, RouteEpoch: 1}})
@@ -290,7 +305,7 @@ func TestSharedAdmissionUsesOwnershipFromDurableGrant(t *testing.T) {
 	ctx := context.Background()
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	db := newRemoteMongoFake()
-	store := NewMongoCommitter(db, "control", 7, 0)
+	store := newBoundMongoCommitter(db, "control", 7, 0)
 	live := newTestRemoteEntity(1100, 1, 198)
 	owner, err := store.ClaimOwnership(ctx, live.GUId(), 7)
 	if err != nil {
@@ -383,7 +398,7 @@ func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
 		Snapshots: []entity.RemoteSnapshotRecord{{Key: key, BaseVersion: 0, StateVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1, Full: true, Data: data, Checksum: entity.RemoteSnapshotChecksum(data)}},
 	}
 	mongo := newRemoteMongoFake()
-	store := NewMongoCommitter(mongo, "control", 7, 0)
+	store := newBoundMongoCommitter(mongo, "control", 7, 0)
 	if err := store.EnsureRemoteStorage(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +467,7 @@ func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
 func TestMongoPayloadBatchingPreservesDeletesAndTransactionRollback(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	store := NewMongoCommitter(db, "control", 7, 0)
+	store := newBoundMongoCommitter(db, "control", 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	var commits []entity.RemoteCommit
 	for i := range 2 {
@@ -503,7 +518,7 @@ func TestMongoPayloadBatchingPreservesDeletesAndTransactionRollback(t *testing.T
 }
 
 // Remote 写 DAO 文档经 DataEngine 绑定的同一张映射表：逻辑库 main → 物理库 planet_x，按 sid 分库再加 _<sid>；
-// 控制库（快照、事务）不经映射。wiring 装配（RequireDatabaseMap）未绑定时拒绝写，不按逻辑名写进名为 main 的库。
+// 控制库（快照、事务）不经映射。无论 wiring 装配还是直接构造，未绑定映射时都拒绝写，不按逻辑名写进名为 main 的库。
 func TestMongoCommitterWritesDAODocumentsIntoTheMappedDatabase(t *testing.T) {
 	const kind entity.EntityKind = 198
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
@@ -525,15 +540,38 @@ func TestMongoCommitterWritesDAODocumentsIntoTheMappedDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unbound := NewMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
-	unbound.requireDatabaseMap = true
-	if _, err := unbound.CommitRemote(context.Background(), commit(unbound, 1)); !errors.Is(err, ErrDatabaseMapNotBound) {
-		t.Fatalf("required but unbound map: CommitRemote = %v, want ErrDatabaseMapNotBound", err)
+	// 任何构造方式（这里是直接 NewMongoCommitter，不经 wiring）未绑定映射都拒绝写 DAO 文档，
+	// 不按逻辑名写进名为 main 的库（维护者 2026-10-21）。
+	unboundMongo := newRemoteMongoFake()
+	unbound := NewMongoCommitter(unboundMongo, "control", 7, 0)
+	if _, err := unbound.CommitRemote(context.Background(), commit(unbound, 1)); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Fatalf("directly constructed committer without a bound map: CommitRemote = %v, want ErrDatabaseMapNotBound", err)
+	}
+	for _, name := range []string{"main", "main_7"} {
+		if n := unboundMongo.Collection(name, "guild").Len(); n != 0 {
+			t.Fatalf("unbound committer wrote %d documents into %s.guild under the logical name", n, name)
+		}
+	}
+	// 只写控制库的提交（DAO 不写库名时落在控制库）不经映射，未绑定也照常提交。
+	controlOnly := commit(unbound, 3)
+	controlOnly.Mutations[0].Database, controlOnly.Mutations[0].DatabaseScope = "", 0
+	if _, err := unbound.CommitRemote(context.Background(), controlOnly); err != nil {
+		t.Fatalf("unbound map, DAO without a database name: %v", err)
+	}
+	if _, ok := unboundMongo.Collection("control", "guild").Lookup(id); !ok {
+		t.Fatal("a DAO document without a database name is not in the control database")
+	}
+	// 删除带库名的 DAO 文档同样要经映射：未绑定时拒绝。
+	deleting := commit(unbound, 4)
+	deleting.BaseVersion, deleting.NextVersion, deleting.LockFence = 1, 2, testWriteGrant(t, unbound, id).Fence
+	deleting.Delete, deleting.Mutations = true, nil
+	deleting.Deletes = []entity.RemoteDataDelete{{Database: "main", DatabaseScope: 1, Collection: "guild", ID: id}}
+	if _, err := unbound.CommitRemote(context.Background(), deleting); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Fatalf("unbound map, DAO delete: CommitRemote = %v, want ErrDatabaseMapNotBound", err)
 	}
 
 	mongo := newRemoteMongoFake()
 	store := NewMongoCommitter(mongo, "control", 7, 0)
-	store.requireDatabaseMap = true
 	backend, err := NewBackend(remoteLoaderStub{}, store)
 	if err != nil {
 		t.Fatal(err)
@@ -558,6 +596,108 @@ func TestMongoCommitterWritesDAODocumentsIntoTheMappedDatabase(t *testing.T) {
 		if n := mongo.Collection(name, "guild").Len(); n != 0 {
 			t.Fatalf("%s.guild holds %d documents; nothing may land outside the mapped physical database", name, n)
 		}
+	}
+}
+
+// remoteApplierStub 只为接上 Remote 投影（SetRemoteProjection 要求提交应用器非空）；本组用例不经它提交。
+type remoteApplierStub struct{}
+
+func (remoteApplierStub) ApplyRemoteCommits(context.Context, entity.RemoteTransactionID, []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
+	return nil, errors.New("remoteApplierStub: not used")
+}
+
+// 自建装配只给 DataEngine 一张表：MongoStore.SetRemoteProjection 把它绑给实现了 coredata.DatabaseMapBinder 的
+// Remote 存储（MongoCommitter，或转发给它的 Backend），Remote 写 DAO 文档与投影用同一张表。Remote 已绑了另一张
+// 表时接线报错、原绑定不被覆盖；MongoStore 没有表时不绑，两边都拒绝写带库名的 DAO 文档。
+func TestSetRemoteProjectionBindsTheDataEngineDatabaseMap(t *testing.T) {
+	const kind entity.EntityKind = 198
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(993, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(store *MongoCommitter, tx byte) entity.RemoteCommit {
+		return entity.RemoteCommit{
+			TransactionID: entity.RemoteTransactionID{15: tx}, EntityID: id, Kind: kind, BaseVersion: 0, NextVersion: 1,
+			MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1, LockFence: testWriteGrant(t, store, id).Fence,
+			Mutations: []entity.RemoteDataMutation{{Database: "main", DatabaseScope: 1, Collection: "guild", ID: id, Version: 1, Data: []byte("state")}},
+		}
+	}
+	mapping := func(physical string) *coredata.DatabaseMap {
+		databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+			Declared: []coredata.LogicalDatabase{{Name: "main", ServerScoped: true}}, Configured: map[string]string{"main": physical}, ServerID: 7,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return databases
+	}
+	newStore := func(mongo fmongo.IMongo, databases *coredata.DatabaseMap) *engine.MongoStore {
+		store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "control", Databases: databases, ServerID: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	databases := mapping("planet_x")
+
+	// 直接把 MongoCommitter 接给投影：接线后 Remote 提交落进 DataEngine 表里的 planet_x_7。
+	mongo := newRemoteMongoFake()
+	committer := NewMongoCommitter(mongo, "control", 7, 0)
+	if err := newStore(mongo, databases).SetRemoteProjection(committer, remoteApplierStub{}); err != nil {
+		t.Fatalf("SetRemoteProjection: %v", err)
+	}
+	if _, err := committer.CommitRemote(context.Background(), commit(committer, 1)); err != nil {
+		t.Errorf("Remote commit after SetRemoteProjection with the DataEngine map: %v", err)
+	}
+	if _, ok := mongo.Collection("planet_x_7", "guild").Lookup(id); !ok {
+		t.Error("the Remote DAO document is not in planet_x_7.guild; the DataEngine map was not bound to the Remote storage")
+	}
+	if err := committer.BindDatabaseMap(databases); err != nil {
+		t.Fatalf("binding the same map again after SetRemoteProjection: %v", err)
+	}
+
+	// 经 Backend 接线（wiring 的 remote_entity.atomic_store）同样绑到底层存储。
+	backendMongo := newRemoteMongoFake()
+	backendStorage := NewMongoCommitter(backendMongo, "control", 7, 0)
+	backend, err := NewBackend(remoteLoaderStub{}, backendStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := newStore(backendMongo, databases).SetRemoteProjection(backend, remoteApplierStub{}); err != nil {
+		t.Fatalf("SetRemoteProjection through Backend: %v", err)
+	}
+	if _, err := backendStorage.CommitRemote(context.Background(), commit(backendStorage, 2)); err != nil {
+		t.Errorf("Remote commit through Backend after SetRemoteProjection: %v", err)
+	}
+	if _, ok := backendMongo.Collection("planet_x_7", "guild").Lookup(id); !ok {
+		t.Error("the Remote DAO document committed under Backend is not in planet_x_7.guild")
+	}
+
+	// Remote 已绑另一张表：接线报错，不静默覆盖；原绑定仍生效。
+	conflictMongo := newRemoteMongoFake()
+	conflicting := NewMongoCommitter(conflictMongo, "control", 7, 0)
+	if err := conflicting.BindDatabaseMap(mapping("planet_y")); err != nil {
+		t.Fatal(err)
+	}
+	if err := newStore(conflictMongo, databases).SetRemoteProjection(conflicting, remoteApplierStub{}); err == nil {
+		t.Error("SetRemoteProjection over a Remote storage bound to a different map succeeded; want an error, not a silent overwrite")
+	}
+	if _, err := conflicting.CommitRemote(context.Background(), commit(conflicting, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := conflictMongo.Collection("planet_y_7", "guild").Lookup(id); !ok {
+		t.Fatal("the refused SetRemoteProjection replaced the Remote storage's original map")
+	}
+
+	// MongoStore 没有表：不绑，Remote 存储照旧拒绝写带库名的 DAO 文档。
+	bareMongo := newRemoteMongoFake()
+	unbound := NewMongoCommitter(bareMongo, "control", 7, 0)
+	if err := newStore(bareMongo, nil).SetRemoteProjection(unbound, remoteApplierStub{}); err != nil {
+		t.Fatalf("SetRemoteProjection from a store without a map: %v", err)
+	}
+	if _, err := unbound.CommitRemote(context.Background(), commit(unbound, 4)); !errors.Is(err, coredata.ErrDatabaseMapNotBound) {
+		t.Fatalf("Remote commit when neither side has a map = %v, want ErrDatabaseMapNotBound", err)
 	}
 }
 

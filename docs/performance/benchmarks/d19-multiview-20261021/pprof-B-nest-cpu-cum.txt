@@ -1,0 +1,68 @@
+File: sync-aoi-before
+Type: cpu
+Time: 2026-10-21 09:03:19 CST
+Duration: 10.27s, Total samples = 19.11s (185.99%)
+Showing nodes accounting for 12.16s, 63.63% of 19.11s total
+Dropped 294 nodes (cum <= 0.10s)
+Showing top 60 nodes out of 162
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     11.74s 61.43%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).endBatch.func2
+     0.55s  2.88%  2.88%     11.74s 61.43%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evaluateObserver
+         0     0%  2.88%     11.74s 61.43%  sync.(*WaitGroup).Go.func1
+     2.06s 10.78% 13.66%      4.55s 23.81%  runtime.mapaccess2_fast64
+     0.09s  0.47% 14.13%      4.32s 22.61%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0% 14.13%      4.26s 22.29%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run
+     0.03s  0.16% 14.29%      3.56s 18.63%  github.com/tjbdwanghaibo/roost-core/infra/base/spatial.(*BlockIndex).AppendBlockIDs
+         0     0% 14.29%      2.58s 13.50%  runtime.systemstack
+     1.89s  9.89% 24.18%      2.54s 13.29%  internal/runtime/maps.(*Iter).Next
+         0     0% 24.18%      2.40s 12.56%  slices.Sort[go.shape.[]int64,go.shape.int64] (inline)
+     0.14s  0.73% 24.91%      2.40s 12.56%  slices.pdqsortOrdered[go.shape.int64]
+     0.23s  1.20% 26.11%      2.31s 12.09%  runtime.mapIterNext
+         0     0% 26.11%      1.91s  9.99%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0% 26.11%      1.91s  9.99%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued
+     1.25s  6.54% 32.65%      1.25s  6.54%  slices.insertionSortOrdered[go.shape.int64]
+         0     0% 32.65%      1.22s  6.38%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).pushSessionFrames
+         0     0% 32.65%      1.20s  6.28%  runtime.gcBgMarkWorker
+         0     0% 32.65%      1.20s  6.28%  runtime.gcBgMarkWorker.func2
+     0.02s   0.1% 32.76%      1.20s  6.28%  runtime.gcDrain
+     0.66s  3.45% 36.21%      1.19s  6.23%  runtime.mapassign_fast64
+         0     0% 36.21%      1.07s  5.60%  internal/poll.(*FD).Writev
+         0     0% 36.21%      1.07s  5.60%  main.(*serverTransport).Push
+         0     0% 36.21%      1.07s  5.60%  main.writePacket
+         0     0% 36.21%      1.07s  5.60%  net.(*Buffers).WriteTo
+         0     0% 36.21%      1.07s  5.60%  net.(*conn).writeBuffers
+         0     0% 36.21%      1.07s  5.60%  net.(*netFD).writeBuffers
+     1.07s  5.60% 41.81%      1.07s  5.60%  syscall.rawsyscalln
+         0     0% 41.81%      1.07s  5.60%  syscall.syscallX
+         0     0% 41.81%      1.07s  5.60%  syscall.syscalln
+         0     0% 41.81%      1.07s  5.60%  syscall.writev
+     0.03s  0.16% 41.97%      0.98s  5.13%  runtime.mallocgc
+         0     0% 41.97%      0.92s  4.81%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyLocked
+     0.10s  0.52% 42.49%      0.91s  4.76%  runtime.scanSpan
+     0.17s  0.89% 43.38%      0.89s  4.66%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evictFarther
+         0     0% 43.38%      0.86s  4.50%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).MoveSubject
+     0.83s  4.34% 47.72%      0.83s  4.34%  slices.partitionOrdered[go.shape.int64]
+         0     0% 47.72%      0.82s  4.29%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).observersAt
+     0.39s  2.04% 49.76%      0.74s  3.87%  runtime.tryDeferToSpanScan
+     0.71s  3.72% 53.48%      0.71s  3.72%  internal/runtime/maps.probeSeq.next (inline)
+     0.71s  3.72% 57.20%      0.71s  3.72%  runtime.memclrNoHeapPointers
+         0     0% 57.20%      0.68s  3.56%  runtime.gcDrainMarkWorkerDedicated (inline)
+     0.05s  0.26% 57.46%      0.62s  3.24%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).settlePair
+         0     0% 57.46%      0.59s  3.09%  runtime.(*mcache).nextFree
+         0     0% 57.46%      0.59s  3.09%  runtime.(*mcache).refill
+         0     0% 57.46%      0.57s  2.98%  runtime.(*mheap).alloc.func1
+         0     0% 57.46%      0.57s  2.98%  runtime.(*mheap).allocSpan
+     0.01s 0.052% 57.51%      0.56s  2.93%  runtime.(*mcentral).cacheSpan
+     0.01s 0.052% 57.56%      0.56s  2.93%  runtime.mapIterStart
+         0     0% 57.56%      0.55s  2.88%  runtime.findRunnable
+     0.14s  0.73% 58.29%      0.55s  2.88%  runtime.scanObjectsSmall
+         0     0% 58.29%      0.55s  2.88%  runtime.schedule
+         0     0% 58.29%      0.53s  2.77%  runtime.(*mcentral).grow
+         0     0% 58.29%      0.52s  2.72%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 58.29%      0.51s  2.67%  slices.SortFunc[go.shape.[]github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.entryCandidate,go.shape.struct { github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.subject int64; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.at github.com/tjbdwanghaibo/roost-core/infra/base/spatial.Point; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.distance int64 }] (inline)
+     0.04s  0.21% 58.50%      0.51s  2.67%  slices.pdqsortCmpFunc[go.shape.struct { github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.subject int64; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.at github.com/tjbdwanghaibo/roost-core/infra/base/spatial.Point; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.distance int64 }]
+     0.49s  2.56% 61.07%      0.49s  2.56%  runtime.madvise
+         0     0% 61.07%      0.49s  2.56%  runtime.notewakeup
+     0.49s  2.56% 63.63%      0.49s  2.56%  runtime.pthread_cond_signal
+         0     0% 63.63%      0.49s  2.56%  runtime.semawakeup
+         0     0% 63.63%      0.49s  2.56%  runtime.startm

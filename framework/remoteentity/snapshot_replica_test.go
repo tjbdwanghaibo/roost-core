@@ -400,7 +400,7 @@ func TestASnapshotCommitsWhicheverHalfOfTheHashSpaceItLandsIn(t *testing.T) {
 					Schema: 1, Codec: 1, Full: true, Data: data, Checksum: checksum,
 				}},
 			}
-			store := NewMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
+			store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
 			if err = store.EnsureRemoteStorage(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -453,7 +453,7 @@ func TestACommitWhoseCountersCannotBeEncodedIsRefusedUpFront(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			commit := base.Clone()
 			mutate(&commit)
-			store := NewMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
+			store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
 			if err := store.EnsureRemoteStorage(context.Background()); err != nil {
 				t.Fatal(err)
 			}

@@ -1,0 +1,7 @@
+=== RUN   TestFullUpdateTimesOnlyThisTicksChange
+    client_test.go:195: full samples (ms) = [2000.2 0.2], delta samples (ms) = [0.3]
+    client_test.go:197: full updates timed an old value's age: full samples [2000.2 0.2] ms, want exactly this tick's change (one sample, well under 1000 ms)
+--- FAIL: TestFullUpdateTimesOnlyThisTicksChange (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/scripts/perf/sync-aoi	0.463s
+FAIL

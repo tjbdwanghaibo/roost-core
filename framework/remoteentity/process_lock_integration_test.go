@@ -78,7 +78,7 @@ func TestRemoteLeaseProcessHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer mongo.Close(context.Background())
-		store = NewMongoCommitter(mongo, database, 7, 0)
+		store = newBoundMongoCommitter(mongo, database, 7, 0)
 		lock.authority = store.WriteAuthority()
 		entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 		lock.id, err = entity.BuildEntityID(998, 198)
@@ -443,7 +443,7 @@ func TestRealRemoteDurableAuthorityProcessPartition(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	store := NewMongoCommitter(mongo, database, 7, 0)
+	store := newBoundMongoCommitter(mongo, database, 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, _ := entity.BuildEntityID(998, 198)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

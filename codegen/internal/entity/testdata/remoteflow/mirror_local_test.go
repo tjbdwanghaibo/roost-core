@@ -983,6 +983,10 @@ func runLocalOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	databases := fixtureDatabases(t)
+	if err := backend.BindDatabaseMap(databases); err != nil {
+		t.Fatal(err)
+	}
 	rcfg := remoteentity.DefaultConfig()
 	rcfg.LockTTL = localOwnerLockTTL
 	rcfg.LockKey = "{m6}"
@@ -997,7 +1001,7 @@ func runLocalOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = assembly.Stop(context.Background()) }()
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: cfg.database})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: cfg.database, Databases: databases})
 	if err != nil {
 		t.Fatal(err)
 	}

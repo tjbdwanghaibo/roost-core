@@ -68,6 +68,48 @@ func BenchmarkAOIBatchRecompute(b *testing.B) {
 	}
 }
 
+// 多视野密集场景的一个政策批次（sync-aoi -views-per-player 16 按 1/4 缩小）：2500 个目标、4250 个容量饱和的空间视野，
+// 每批 1% 的目标小步移动，其中跟随它们的视野（每个目标约 1.7 个）一起移动。只量 AOI 批次与事件收集，不含 Interest 与 Manager。
+func BenchmarkAOIBatchDenseViews(b *testing.B) {
+	for _, workers := range []int{1, 4} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			const side, observers, moves = 50, 4250, 25
+			a, positions := denseSaturatedAOI(b, side, observers)
+			followers := make(map[int][]int64)
+			for i := range observers {
+				followers[1+(i*7919)%(side*side)] = append(followers[1+(i*7919)%(side*side)], int64(100_000+i))
+			}
+			step, scans, dirtied := 0, a.fullScans, 0
+			b.ReportAllocs()
+			for b.Loop() {
+				a.beginBatch()
+				for k := range moves {
+					id := 1 + ((step*moves+k)*7919)%(side*side)
+					at := positions[id]
+					at.X += 3 - int64(step%2)*6
+					positions[id] = at
+					if err := a.MoveSubject(int64(id), at); err != nil {
+						b.Fatal(err)
+					}
+					for _, observer := range followers[id] {
+						if err := a.MoveObserver(observer, at); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				dirtied += len(a.dirty)
+				a.endBatch(workers)
+				a.Flush()
+				a.FlushBlocks()
+				step++
+			}
+			// 每批被波及的观察者数与其中完整重评的次数（其余只评估移动过的目标）。
+			b.ReportMetric(float64(dirtied)/float64(step), "dirtied/op")
+			b.ReportMetric(float64(a.fullScans-scans)/float64(step), "fullscans/op")
+		})
+	}
+}
+
 // 空闲与稀疏变化分别测量事件收集成本；不把地图初始化计入每轮成本。
 func BenchmarkAOIEventCollection(b *testing.B) {
 	for _, count := range []int{1000, 10000} {
@@ -114,7 +156,8 @@ func benchmarkInterest(b *testing.B) *Interest {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = manager.Close(context.Background()) })
-	in, err := NewInterest(InterestConfig{Manager: manager, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
+	// 基准只量登记表与扇出，视野数要到 64，所以用不受视野上限约束的异步模式。
+	in, err := NewInterest(InterestConfig{Manager: manager, ApplyMode: ApplyAsync, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
 		Bounds: spatial.Rect{Max: spatial.Point{X: 100_000, Y: 100_000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
 	}})
 	if err != nil {

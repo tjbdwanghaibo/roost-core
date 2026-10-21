@@ -1,11 +1,14 @@
 package policy
 
 // observerDirty 在同一批次中合并原因；距离变化不改变额外块覆盖关系。
+// dirtySpatial：观察者自己的位置、视野或订阅块变了，完整重评；dirtyMoved：只有附近的目标动了，
+// 移动的目标记在 interestObserver.moved，能证明与完整重评结果相同时只评估这些目标（见 evaluateMoved）。
 type observerDirty uint8
 
 const (
 	dirtySpatial observerDirty = 1 << iota
 	dirtyCoverage
+	dirtyMoved
 )
 
 // aoiWorkspace 只保存计算中的 ID 和值，不保存 observer 或对外返回的事件。
@@ -15,6 +18,8 @@ type aoiWorkspace struct {
 	candidates             []entryCandidate
 	seen                   map[int64]struct{}
 	seenPeak               int
+	// fullScans 计本工作区做过的完整候选遍历次数，屏障后由 collectScans 归入 AOI.fullScans。
+	fullScans int
 }
 
 const aoiWorkspaceLimit = 4096
@@ -56,5 +61,12 @@ func (m *AOI) refreshObserver(o *interestObserver, reason observerDirty) {
 		return
 	}
 	m.evaluateObserver(o, &m.serialWork, reason)
+	m.collectScans(&m.serialWork)
 	m.serialWork.release()
+}
+
+// collectScans 把工作区的完整遍历计数并入 AOI（只在串行阶段或并行屏障之后调用）。
+func (m *AOI) collectScans(w *aoiWorkspace) {
+	m.fullScans += uint64(w.fullScans)
+	w.fullScans = 0
 }

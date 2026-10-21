@@ -18,7 +18,7 @@ func (s *MongoCommitter) writeCommitPayloads(ctx context.Context, commits []enti
 		collection fmongo.ICollection
 		models     []fmongo.WriteModel
 	}
-	databases, err := s.boundDatabaseMap()
+	databases, err := s.boundDatabaseMap(commits)
 	if err != nil {
 		return err
 	}

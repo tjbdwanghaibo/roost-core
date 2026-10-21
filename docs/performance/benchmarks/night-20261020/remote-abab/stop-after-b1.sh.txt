@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 维护者 10-21 改为各 1 轮：B1 结束、post 核对写完后停止编排，不再跑 A2 / B2。
+until grep -q "end remab-b1-head" /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/remab/timeline.txt && grep -q "remote-acceptance.lock" /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/remab/remab-b1-head/post.txt 2>/dev/null; do sleep 2; done
+kids=$(pgrep -P 8074)
+kill 8074 $kids 2>/dev/null
+echo "$(date '+%F %T') chain stopped after B1 (maintainer: 1 round each)" >> /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/remab/timeline.txt

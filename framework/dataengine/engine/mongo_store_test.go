@@ -45,7 +45,7 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ e
 func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest.Collection) {
 	t.Helper()
 	client := mongotest.NewClient()
-	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: testDatabase, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
+	store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: testDatabase, ServerID: 3, TransactionReceiptTTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +961,7 @@ func TestStageEffectDuplicateAfterSnapshotMissIsRetryable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := mongotest.NewClient()
 			racing := &outboxInsertRace{Client: client}
-			store, err := NewMongoStore(racing, MongoStoreConfig{DefaultDatabase: testDatabase, ServerID: 3})
+			store, err := NewMongoStore(racing, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: testDatabase, ServerID: 3})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,0 +1,37 @@
+File: sync-aoi-after3
+Type: delay
+Time: 2026-10-21 10:03:31 CST
+Showing nodes accounting for 11.76ms, 100% of 11.76ms total
+Dropped 22 nodes (cum <= 0.06ms)
+Showing top 30 nodes out of 45
+      flat  flat%   sum%        cum   cum%
+   10.75ms 91.44% 91.44%    10.75ms 91.44%  sync.(*Mutex).Unlock
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Start.gowrap2
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued
+         0     0% 91.44%    10.73ms 91.30%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyQueued-fm
+    1.01ms  8.56%   100%     1.01ms  8.56%  runtime.unlock (partial-inline)
+         0     0%   100%     0.55ms  4.68%  runtime.mcall
+         0     0%   100%     0.53ms  4.53%  runtime.park_m
+         0     0%   100%     0.52ms  4.39%  runtime.schedule
+         0     0%   100%     0.43ms  3.68%  runtime.findRunnable
+         0     0%   100%     0.42ms  3.57%  runtime.(*timers).unlock (inline)
+         0     0%   100%     0.28ms  2.42%  runtime.selparkcommit
+         0     0%   100%     0.25ms  2.14%  runtime.gopreempt_m (inline)
+         0     0%   100%     0.25ms  2.14%  runtime.goschedImpl
+         0     0%   100%     0.25ms  2.14%  runtime.morestack
+         0     0%   100%     0.25ms  2.14%  runtime.newstack
+         0     0%   100%     0.24ms  2.03%  runtime.(*timers).check
+         0     0%   100%     0.18ms  1.54%  runtime.(*timer).maybeAdd
+         0     0%   100%     0.15ms  1.24%  runtime.stealWork
+         0     0%   100%     0.10ms  0.87%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Request
+         0     0%   100%     0.10ms  0.87%  main.main
+         0     0%   100%     0.10ms  0.87%  main.runServer
+         0     0%   100%     0.10ms  0.87%  main.runServer.func5
+         0     0%   100%     0.10ms  0.87%  runtime.main
+         0     0%   100%     0.10ms  0.86%  runtime.gcstopm
+         0     0%   100%     0.10ms  0.86%  runtime.stopm
+         0     0%   100%     0.09ms   0.8%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0%   100%     0.09ms   0.8%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work.func1

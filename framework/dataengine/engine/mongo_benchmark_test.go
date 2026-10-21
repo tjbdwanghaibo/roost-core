@@ -25,7 +25,7 @@ func BenchmarkMongoProjectionMatrix(b *testing.B) {
 	} {
 		b.Run(shape.name, func(b *testing.B) {
 			client := mongotest.NewClient()
-			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
+			store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(b), DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func BenchmarkMongoProjectionConflictMatrix(b *testing.B) {
 	for _, conflictPercent := range []int{1, 10} {
 		b.Run(fmt.Sprintf("conflict_%d_percent", conflictPercent), func(b *testing.B) {
 			client := mongotest.NewClient()
-			store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: "game"})
+			store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(b), DefaultDatabase: "game"})
 			if err != nil {
 				b.Fatal(err)
 			}

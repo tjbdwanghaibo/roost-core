@@ -1,0 +1,20 @@
+File: sync-aoi-cf
+Type: delay
+Time: 2026-10-21 11:11:44 CST
+Showing nodes accounting for 2189.09ms, 99.91% of 2191.09ms total
+Dropped 108 nodes (cum <= 10.96ms)
+      flat  flat%   sum%        cum   cum%
+ 2189.09ms 99.91% 99.91%  2189.09ms 99.91%  sync.(*Mutex).Unlock
+         0     0% 99.91%  1041.92ms 47.55%  main.main
+         0     0% 99.91%  1041.92ms 47.55%  main.runServer
+         0     0% 99.91%  1041.92ms 47.55%  runtime.main
+         0     0% 99.91%  1041.87ms 47.55%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).Apply
+         0     0% 99.91%   904.49ms 41.28%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyStep
+         0     0% 99.91%   904.49ms 41.28%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).runApplier
+         0     0% 99.91%   904.49ms 41.28%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).signalApplierLocked.gowrap1
+         0     0% 99.91%   243.71ms 11.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0% 99.91%   243.71ms 11.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Start.gowrap2
+         0     0% 99.91%   243.71ms 11.12%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).run
+         0     0% 99.91%   238.53ms 10.89%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).applyPolicies
+         0     0% 99.91%   238.53ms 10.89%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).settleQueued
+         0     0% 99.91%   238.53ms 10.89%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).settleQueued-fm

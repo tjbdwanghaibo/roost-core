@@ -167,6 +167,7 @@ func (m *AOI) endBatch(workers int) {
 			m.evaluateObserver(o, &m.serialWork, o.dirty)
 			o.dirty = 0
 		}
+		m.collectScans(&m.serialWork)
 		m.serialWork.release()
 		return
 	}
@@ -188,6 +189,7 @@ func (m *AOI) endBatch(workers int) {
 	wg.Wait()
 	m.parallelEvents = false
 	for i := range m.workerWork {
+		m.collectScans(&m.workerWork[i])
 		m.workerWork[i].release()
 	}
 	if len(m.workerWork) > aoiCachedWorkers {

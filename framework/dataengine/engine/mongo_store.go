@@ -42,7 +42,10 @@ var (
 type MongoStoreConfig struct {
 	DefaultDatabase string
 	// Databases 是启动时冻结的逻辑库 → 物理库表（D9 修订版 A）。DocumentKey.Database 是 DAO 的逻辑库名，
-	// 投影、冷加载与墓碑都经它换成物理库名；nil 表示没有映射，物理名就是逻辑名。
+	// 投影、冷加载与墓碑都经它换成物理库名；表里没有的逻辑库物理名就是逻辑名本身（identity）。
+	// nil 不等于 identity：带库名的 DAO 文档一律返回 coredata.ErrDatabaseMapNotBound（与 Remote 存储同一条规则），
+	// 进程里有声明的逻辑库时 NewMongoStore 直接拒绝。wiring 传 DataEngine Mod 冻结的表；自建装配用
+	// dataengine.NewDatabaseMap 合成（不配映射时 DatabaseMapConfig{Declared: dataengine.DeclaredDatabases()}）。
 	Databases             *coredata.DatabaseMap
 	ServerID              int32
 	TransactionReceiptTTL time.Duration
@@ -71,9 +74,19 @@ type RemoteProjectionStore interface {
 }
 
 // SetRemoteProjection 绑定 Remote 投影所需的远端存储与提交应用器；二者必须同时提供。
+//
+// 远端存储要写 DAO 文档（实现 coredata.DatabaseMapBinder，例如 remoteentity 的 MongoCommitter 与 Backend）时，
+// 在这里把本存储的映射表绑过去：自建装配只给 DataEngine 一张表，Remote 写 DAO 文档与投影就用同一张，wiring
+// 也只经这一处绑定。远端存储已绑了另一张表时返回错误，不静默覆盖，也不接上投影；本存储没有表时不绑，
+// 两边都拒绝写带库名的 DAO 文档（coredata.ErrDatabaseMapNotBound）。
 func (store *MongoStore) SetRemoteProjection(remoteStore RemoteProjectionStore, applier entity.RemoteCommitApplier) error {
 	if store == nil || remoteStore == nil || applier == nil {
 		return errors.New("dataengine mongo: remote store and applier are required")
+	}
+	if binder, ok := remoteStore.(coredata.DatabaseMapBinder); ok && store.cfg.Databases != nil {
+		if err := binder.BindDatabaseMap(store.cfg.Databases); err != nil {
+			return fmt.Errorf("dataengine mongo: bind the database map to the remote store: %w", err)
+		}
 	}
 	store.remoteStore, store.remoteApplier = remoteStore, applier
 	return nil
@@ -92,6 +105,19 @@ func NewMongoStore(client fmongo.IMongo, cfg MongoStoreConfig) (*MongoStore, err
 	}
 	if cfg.ReceiptTTL <= 0 {
 		cfg.ReceiptTTL = defaultReceiptTTL
+	}
+	// 规则在装配时强制一次：进程链接了声明逻辑库的 DAO（生成的 gen_databases.go 在 init 里登记）却没给表，
+	// 第一次投影必然失败，而那时记录已进 WAL、只能卡在投影上，所以在构造时就拒绝。没有声明的进程（手写 DAO、
+	// 只用控制库的工具）不在这里拦，由 collection 在访问时拒绝。
+	if cfg.Databases == nil {
+		if declared := coredata.DeclaredDatabases(); len(declared) > 0 {
+			names := make([]string, len(declared))
+			for i := range declared {
+				names[i] = declared[i].Name
+			}
+			return nil, fmt.Errorf("%w: this process declares logical databases %s but MongoStoreConfig.Databases is nil; %s",
+				coredata.ErrDatabaseMapNotBound, strings.Join(names, ", "), databaseMapHint)
+		}
 	}
 	return &MongoStore{client: client, cfg: cfg, now: time.Now}, nil
 }
@@ -137,7 +163,10 @@ func (store *MongoStore) applyMutation(ctx context.Context, txID string, mutatio
 	if mutation.Remote != nil {
 		return ErrRemoteProjection
 	}
-	coll := store.collection(mutation.Key)
+	coll, err := store.collection(mutation.Key)
+	if err != nil {
+		return err
+	}
 	switch mutation.Kind {
 	case coredata.MutationPut:
 		return store.applyPut(ctx, coll, txID, mutation, inTransaction)
@@ -270,25 +299,38 @@ func (store *MongoStore) classifyNoMatch(ctx context.Context, coll fmongo.IColle
 	if err != nil && !errors.Is(err, fmongo.ErrNotFound) {
 		return err
 	}
+	physical, _ := store.physicalDatabase(mutation.Key) // 已经解析过（coll 由它得来），这里只用于报错
 	return fmt.Errorf("%w: %s/%s/%d (physical database %s) expected=%d next=%d stored=%d", ErrProjectionConflict,
-		mutation.Key.Database, mutation.Key.Resource, mutation.Key.ID, store.physicalDatabase(mutation.Key), mutation.ExpectedVersion, mutation.NextVersion, meta.Version)
+		mutation.Key.Database, mutation.Key.Resource, mutation.Key.ID, physical, mutation.ExpectedVersion, mutation.NextVersion, meta.Version)
 }
+
+// databaseMapHint 说明怎么提供映射表，附在 ErrDatabaseMapNotBound 后面。
+const databaseMapHint = "pass the frozen map (wiring does this; a self-assembled store builds one with dataengine.NewDatabaseMap, " +
+	"DatabaseMapConfig{Declared: dataengine.DeclaredDatabases()} keeps logical names as physical names)"
 
 // physicalDatabase 是 key 所在的物理库名（不含 _<sid>）：逻辑库经映射表换算，空库名取 DataEngine 的默认库。
-// 本包访问业务文档的每条路径（单条与批量投影、冷加载、墓碑）都经 collection 走到这里。
-func (store *MongoStore) physicalDatabase(key coredata.DocumentKey) string {
+// 本包访问业务文档的每条路径（单条与批量投影、冷加载、墓碑）都经 collection 走到这里，是 DataEngine 侧的
+// 唯一强制点：带库名而没有映射表时返回 coredata.ErrDatabaseMapNotBound，不按逻辑名访问库（维护者 2026-10-21）。
+func (store *MongoStore) physicalDatabase(key coredata.DocumentKey) (string, error) {
 	if key.Database == "" {
-		return store.cfg.DefaultDatabase
+		return store.cfg.DefaultDatabase, nil
 	}
-	return store.cfg.Databases.Physical(key.Database)
+	if store.cfg.Databases == nil {
+		return "", fmt.Errorf("%w: logical database %q (%s); MongoStoreConfig.Databases is nil; %s",
+			coredata.ErrDatabaseMapNotBound, key.Database, key.Resource, databaseMapHint)
+	}
+	return store.cfg.Databases.Physical(key.Database), nil
 }
 
-func (store *MongoStore) collection(key coredata.DocumentKey) fmongo.ICollection {
-	database := store.physicalDatabase(key)
-	if key.Scope == coredata.DatabaseServer {
-		return store.client.DatabaseForSid(database, store.cfg.ServerID).Collection(key.Resource)
+func (store *MongoStore) collection(key coredata.DocumentKey) (fmongo.ICollection, error) {
+	database, err := store.physicalDatabase(key)
+	if err != nil {
+		return nil, err
 	}
-	return store.client.Database(database).Collection(key.Resource)
+	if key.Scope == coredata.DatabaseServer {
+		return store.client.DatabaseForSid(database, store.cfg.ServerID).Collection(key.Resource), nil
+	}
+	return store.client.Database(database).Collection(key.Resource), nil
 }
 
 type transactionDocument struct {

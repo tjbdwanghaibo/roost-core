@@ -31,9 +31,6 @@ type AssemblyDeps struct {
 type MongoBackendConfig struct {
 	Database       string
 	TransactionTTL time.Duration
-	// RequireDatabaseMap 要求写 DAO 文档前已由 DataEngine 绑定库名映射表（wiring 装配总是如此），
-	// 否则拒绝写入（ErrDatabaseMapNotBound）。
-	RequireDatabaseMap bool
 }
 
 // Assembly 负责 Manager 的构造、依赖封存、存储初始化、outbox 恢复与复制生命周期。wiring 的 Mod 只解析配置、发布三项
@@ -87,7 +84,6 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 			mongoCfg.Database = "remote_entity"
 		}
 		storage := NewMongoCommitter(deps.Mongo, mongoCfg.Database, localSid, mongoCfg.TransactionTTL)
-		storage.requireDatabaseMap = mongoCfg.RequireDatabaseMap
 		built, err := NewBackend(deps.Loader, storage)
 		if err != nil {
 			return nil, err

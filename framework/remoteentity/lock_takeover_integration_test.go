@@ -55,7 +55,7 @@ func newRealTakeoverEnv(t *testing.T) *realTakeoverEnv {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	env.store = NewMongoCommitter(mongo, env.database, takeoverSid, 0)
+	env.store = newBoundMongoCommitter(mongo, env.database, takeoverSid, 0)
 	if err := env.store.EnsureRemoteStorage(ctx); err != nil {
 		t.Fatal(err)
 	}

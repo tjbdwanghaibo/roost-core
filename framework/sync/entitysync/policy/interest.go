@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -44,7 +45,12 @@ type InterestConfig struct {
 	// SelfVisible 控制玩家是否通过 self 看见自己；空间视野不会订阅自己跟随的实体。
 	// nil 或 true 启用，只有显式 false 才关闭。
 	SelfVisible *bool
-	// MaxViewsPerPlayer 限制一个玩家同时挂接的视野数（含主视野），零值 64，超出 AttachView / Enter / Watch 返回 ErrViewLimit。
+	// ApplyMode 选排队事实（QueueMove / QueueSpatial / QueueObservedBlocks）的应用方式，由业务按游戏类型选，
+	// 见 ApplyMode 与 DESIGN-TODO D19“两种应用模式”。零值 ApplySync。
+	ApplyMode ApplyMode
+	// MaxViewsPerPlayer 限制一个玩家同时挂接的视野数（含主视野与关系视野），超出 AttachView / Enter / Watch 返回 ErrViewLimit。
+	// 零值：ApplySync 取 SyncApplyMaxViewsPerPlayer（9），ApplyAsync 取 DefaultMaxViewsPerPlayer（64）。
+	// ApplySync 下显式配置超过 SyncApplyMaxViewsPerPlayer 拒绝构造（ErrInterestConfig），报错提示改用 ApplyAsync。
 	MaxViewsPerPlayer int
 	// MaxPlayersPerView 限制一个视野同时挂接的玩家数（共享视野的扇出），零值 4096，超出 AttachView 返回 ErrViewLimit。
 	MaxPlayersPerView int
@@ -54,11 +60,64 @@ type InterestConfig struct {
 	MaxPlayerBlocks int
 }
 
-// Interest 的视野与挂接缺省上限。
+// Interest 的视野与挂接缺省上限。DefaultMaxViewsPerPlayer 是 ApplyAsync 的缺省；ApplySync 的缺省与上限是
+// SyncApplyMaxViewsPerPlayer。
 const (
 	DefaultMaxViewsPerPlayer = 64
 	DefaultMaxPlayersPerView = 4096
 )
+
+// ApplyMode 是排队事实的应用方式。两种模式的语义逐项相同——只有提交后的事实生效（回滚 / 拒绝的永远不被看见）、
+// 同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧（发布屏障到结算之后才释放）、
+// Drain 等到在途事实全部应用并结算、Close 释放全部屏障——只有“结果何时可见”和“线程模型”不同：
+//
+//   - ApplySync（缺省）：Manager Flush 的政策阶段在 Interest.mu 内应用一批（≤ BatchSize）已确认的事实，随即结算；
+//     不启动应用线程。提交之后的下一次 Flush 就能看到结果（BatchSize 以内）。AOI 计算在 Flush 的关键路径上，
+//     所以每个玩家的视野数有上限（SyncApplyMaxViewsPerPlayer）。适合每玩家额外视野不超过 8 个的游戏：
+//     MMO、MOBA、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
+//   - ApplyAsync：每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算。Flush 不随
+//     AOI 工作量增长、不会因 AOI 超过同步周期；代价是结果晚一点可见：提交后立即 Flush 不一定看得到，要看到全部
+//     结果用 Manager.Drain；periodic 下尾延迟约多一个同步周期。适合每玩家额外视野多于 8 个的游戏：RTS（每个单位
+//     一个视野）、大量召唤物 / 眼位。
+type ApplyMode uint8
+
+const (
+	ApplySync ApplyMode = iota
+	ApplyAsync
+)
+
+// SyncApplyMaxExtraViews 是 ApplySync 下每个玩家主视野之外最多的视野数；SyncApplyMaxViewsPerPlayer = 主视野 + 它。
+// 来源：维护者 2026-10-21 决定按“每玩家额外视野 8 个以内 / 以上”分两种模式、由业务选择。实测依据（本机 M5、
+// sync-aoi 原场景 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，2026-10-21 两轮对照）：ApplySync 的 Flush 均值
+// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；数据见 DESIGN-TODO
+// D19“两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
+// 关系视野（队伍、联盟）也计入 MaxViewsPerPlayer。
+const (
+	SyncApplyMaxExtraViews     = 8
+	SyncApplyMaxViewsPerPlayer = 1 + SyncApplyMaxExtraViews
+)
+
+// String 返回配置里用的名字：sync / async。
+func (m ApplyMode) String() string {
+	switch m {
+	case ApplySync:
+		return "sync"
+	case ApplyAsync:
+		return "async"
+	}
+	return fmt.Sprintf("ApplyMode(%d)", uint8(m))
+}
+
+// ParseApplyMode 解析 sync / async（配置与压测开关用）；空串是缺省 ApplySync。
+func ParseApplyMode(s string) (ApplyMode, error) {
+	switch s {
+	case "", "sync":
+		return ApplySync, nil
+	case "async":
+		return ApplyAsync, nil
+	}
+	return 0, fmt.Errorf("%w: apply mode %q (want sync or async)", ErrInterestConfig, s)
+}
 
 // Refusal is a subscribe the manager did not take. Observer 是玩家 ID（会话 ID），Subject 是实体 ID。 Interest keeps asking on
 // every Apply until it is taken or the pair is released; the caller only
@@ -100,6 +159,15 @@ type Interest struct {
 	maxQueuedFacts int
 	wake           func()
 	cancelQueue    func()
+	// applyMode 构造后不变（见 ApplyMode）。
+	applyMode ApplyMode
+	// 应用线程（interest_queue.go）：applierStarted 受 queueMu 保护；applierWake 容量 1，合并唤醒。
+	applierStarted bool
+	applierRunning atomic.Bool // 与 applierStarted 同值，供持 viewMu 的 wakeViews 无锁读取
+	applierWake    chan struct{}
+	applierStop    chan struct{}
+	applierDone    chan struct{}
+	applyGather    time.Duration
 
 	// 视野登记表，见 view.go；viewMu 保护。
 	registry viewRegistry
@@ -130,6 +198,11 @@ type Interest struct {
 	// retry holds the pairs whose subscribe the manager refused, waiting
 	// for the next Apply to say them again.
 	retry []pair
+	// applied 是应用线程已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批
+	// 应用完成的时刻；applyErr 是应用线程攒下的错误，由下一次结算返回。都受 mu 保护。
+	applied   []queuedInterestFact
+	appliedAt time.Time
+	applyErr  error
 	// refused counts consecutive refusals per held pair (with the first
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
@@ -180,7 +253,10 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 {
 		return nil, ErrInterestConfig
 	}
-	maxViews := cmp.Or(config.MaxViewsPerPlayer, DefaultMaxViewsPerPlayer)
+	maxViews, err := viewsPerPlayerFor(config.ApplyMode, config.MaxViewsPerPlayer)
+	if err != nil {
+		return nil, err
+	}
 	maxPlayers := cmp.Or(config.MaxPlayersPerView, DefaultMaxPlayersPerView)
 	playerBlocks := cmp.Or(config.MaxPlayerBlocks, DefaultMaxObserverBlocks*DefaultMaxViewsPerPlayer)
 	if config.AOI.BlockSize > 0 {
@@ -231,10 +307,32 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if in.batchSize == 0 {
 		in.batchSize = 1024
 	}
+	in.applyMode = config.ApplyMode
 	in.wake = config.Manager.WakeSync
-	in.registry.wake = in.wake
-	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.applyQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
+	in.applierWake = make(chan struct{}, 1)
+	in.applierStop = make(chan struct{})
+	in.applierDone = make(chan struct{})
+	in.applyGather = applyGatherFor(config.Manager)
+	in.registry.wake = in.wakeViews
+	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.settleQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
 	return in, nil
+}
+
+// viewsPerPlayerFor 按应用模式取每个玩家的视野上限，并在启动期挡住同步模式下过多的视野：同步模式的 AOI 计算在
+// Flush 的关键路径上，视野越多 Flush 越长，超过上限时直接拒绝构造，而不是运行中 Flush 超过同步周期。
+func viewsPerPlayerFor(mode ApplyMode, configured int) (int, error) {
+	switch mode {
+	case ApplySync:
+		if configured > SyncApplyMaxViewsPerPlayer {
+			return 0, fmt.Errorf("%w: ApplySync allows at most %d views per player (main view + %d extra), MaxViewsPerPlayer is %d; "+
+				"games with more views per player (RTS units, many summons / wards) should set ApplyMode: policy.ApplyAsync",
+				ErrInterestConfig, SyncApplyMaxViewsPerPlayer, SyncApplyMaxExtraViews, configured)
+		}
+		return cmp.Or(configured, SyncApplyMaxViewsPerPlayer), nil
+	case ApplyAsync:
+		return cmp.Or(configured, DefaultMaxViewsPerPlayer), nil
+	}
+	return 0, fmt.Errorf("%w: unknown apply mode %d", ErrInterestConfig, mode)
 }
 
 // DefaultViewChangeInterval 是 InterestConfig.ViewChangeInterval 的缺省值：同一玩家每秒至多改一次视野。
@@ -683,6 +781,7 @@ func (in *Interest) applyLocked() []Refusal {
 		}
 		in.subscribe(key, hold, true, &refusals)
 	}
+	in.releaseAppliedLocked()
 	return refusals
 }
 
@@ -765,12 +864,25 @@ func (in *Interest) Close() {
 	if in.cancelQueue != nil {
 		in.cancelQueue()
 	}
+	// 先关队列（不再有新事实、不再启动应用线程），再停应用线程并等它退出——它要拿 mu，所以不能持 mu 等。
+	in.queueMu.Lock()
+	alreadyClosed := in.queueClosed
+	in.queueClosed = true
+	started := in.applierStarted
+	in.queueMu.Unlock()
+	if started && !alreadyClosed {
+		close(in.applierStop)
+		<-in.applierDone
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
 	in.registry.close()
+	for _, fact := range in.applied {
+		fact.finish()
+	}
+	in.applied = nil
 	in.queueMu.Lock()
-	in.queueClosed = true
 	for _, fact := range in.facts {
 		fact.finish()
 	}

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# A-B-A-B 编排：A = v1.27.0 (a147877c) worktree，B = HEAD af904c76 worktree。
+set -uo pipefail
+SP=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad
+OUT=$SP/remab
+A=$SP/v127
+B=/Users/whb/roost/roost-core-wt-remab
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+unset ROOST_REMOTE_HEAP_PROFILE_MINUTES
+RH=${ROOST_DATAENGINE_IT_REDIS_ADDR%:*}; RP=${ROOST_DATAENGINE_IT_REDIS_ADDR##*:}
+sampler() { # $1 = log file
+  while :; do
+    { echo "=== $(date '+%F %T')"; uptime; sysctl vm.swapusage; ps -Ao pcpu,pid,comm -r | head -11;
+      ps -Ao pid,command | grep -E 'go (build|test|run|vet)' | grep -v grep | grep -v roost-remote-generated || true; } >> "$1"
+    sleep 15
+  done
+}
+run_one() { # label dir
+  local label=$1 dir=$2 d=$OUT/$1
+  mkdir -p "$d"
+  echo "$(date '+%F %T') start $label $(git -C "$dir" rev-parse HEAD)" | tee -a $OUT/timeline.txt
+  { echo "pre $(date '+%F %T')"; mongosh "$ROOST_DATAENGINE_IT_MONGO_URI" --quiet --eval 'db.adminCommand({listDatabases:1,nameOnly:true}).databases.map(d=>d.name).join(" ")'; redis-cli -h $RH -p $RP dbsize; } > "$d/pre.txt" 2>&1
+  sampler "$d/host.log" & local sp=$!
+  ( cd "$dir" && env GOFLAGS=-p=1 ROOST_REMOTE_LABEL=$label ROOST_REMOTE_CPU=4 ROOST_REMOTE_RATE=80 ROOST_REMOTE_POLICY=strict \
+      ROOST_REMOTE_SESSIONS=1000 ROOST_REMOTE_ENTITIES=10000 ROOST_REMOTE_WORKERS=8 ROOST_REMOTE_FAST_QUEUE=4096 \
+      ROOST_REMOTE_IO_WORKERS=1024 ROOST_REMOTE_SLOW_QUEUE=16 ROOST_REMOTE_WRITE_LIMIT=256 ROOST_REMOTE_WAL_LIMIT=512 \
+      ROOST_REMOTE_PROJECTION_WORKERS=8 ROOST_REMOTE_STAGE_METRICS=1 ROOST_REMOTE_DURATION=15m ROOST_REMOTE_TIMEOUT=1h \
+      bash scripts/perf/remote.sh ) > "$d/remote.out" 2>&1
+  local st=$?
+  kill $sp 2>/dev/null; wait $sp 2>/dev/null
+  echo "$(date '+%F %T') end $label exit=$st" | tee -a $OUT/timeline.txt
+  cp -R "$dir/artifacts/perf/remote/$label" "$d/out"
+  sleep 5
+  { echo "post $(date '+%F %T')"; mongosh "$ROOST_DATAENGINE_IT_MONGO_URI" --quiet --eval 'db.adminCommand({listDatabases:1,nameOnly:true}).databases.map(d=>d.name).join(" ")'; redis-cli -h $RH -p $RP dbsize;
+    ps -Ao pid,etime,command | grep -E 'remoteflow|roost-remote-generated|\.test' | grep -v grep || true; ls -d "$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock" 2>&1; } > "$d/post.txt" 2>&1
+  sleep 60
+}
+for spec in ${RUNS:-remab-a1-v127:A remab-b1-head:B remab-a2-v127:A remab-b2-head:B}; do
+  label=${spec%:*}; side=${spec##*:}
+  [[ $side == A ]] && dir=$A || dir=$B
+  [[ $side == A || $side == B ]] || dir=$side
+  run_one "$label" "$dir"
+done
+echo "$(date '+%F %T') chain done" | tee -a $OUT/timeline.txt

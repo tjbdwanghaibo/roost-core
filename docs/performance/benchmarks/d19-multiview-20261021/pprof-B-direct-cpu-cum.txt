@@ -1,0 +1,68 @@
+File: sync-aoi-before
+Type: cpu
+Time: 2026-10-21 09:03:43 CST
+Duration: 10.21s, Total samples = 9.78s (95.77%)
+Showing nodes accounting for 5.74s, 58.69% of 9.78s total
+Dropped 143 nodes (cum <= 0.05s)
+Showing top 60 nodes out of 176
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      6.25s 63.91%  main.main
+         0     0%     0%      6.25s 63.91%  main.runServer
+         0     0%     0%      6.25s 63.91%  runtime.main
+     0.07s  0.72%  0.72%      3.14s 32.11%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+         0     0%  0.72%      2.34s 23.93%  runtime.systemstack
+         0     0%  0.72%      1.92s 19.63%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).Move
+         0     0%  0.72%      1.92s 19.63%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).placeSubjectLocked
+         0     0%  0.72%      1.92s 19.63%  main.runServer.func5
+         0     0%  0.72%      1.90s 19.43%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).pushSessionFrames
+         0     0%  0.72%      1.82s 18.61%  internal/poll.(*FD).Writev
+         0     0%  0.72%      1.82s 18.61%  main.(*serverTransport).Push
+         0     0%  0.72%      1.82s 18.61%  main.writePacket
+         0     0%  0.72%      1.82s 18.61%  net.(*Buffers).WriteTo
+         0     0%  0.72%      1.82s 18.61%  net.(*conn).writeBuffers
+         0     0%  0.72%      1.82s 18.61%  net.(*netFD).writeBuffers
+         0     0%  0.72%      1.82s 18.61%  syscall.syscallX
+     0.01s   0.1%  0.82%      1.82s 18.61%  syscall.syscalln
+         0     0%  0.82%      1.82s 18.61%  syscall.writev
+     1.81s 18.51% 19.33%      1.81s 18.51%  syscall.rawsyscalln
+         0     0% 19.33%      1.78s 18.20%  runtime.gcBgMarkWorker.func2
+     0.03s  0.31% 19.63%      1.78s 18.20%  runtime.gcDrain
+         0     0% 19.63%      1.76s 18.00%  runtime.gcBgMarkWorker
+         0     0% 19.63%      1.49s 15.24%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).AddSubject
+         0     0% 19.63%      1.49s 15.24%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).MoveSubject
+     0.09s  0.92% 20.55%      1.36s 13.91%  runtime.scanSpan
+     0.79s  8.08% 28.63%      1.35s 13.80%  runtime.mapaccess2_fast64
+         0     0% 28.63%      1.19s 12.17%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).Apply
+     0.01s   0.1% 28.73%      1.19s 12.17%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).applyLocked
+         0     0% 28.73%      1.13s 11.55%  runtime.gcDrainMarkWorkerIdle (inline)
+     0.95s  9.71% 38.45%      0.95s  9.71%  runtime.kevent
+         0     0% 38.45%      0.92s  9.41%  runtime.mcall
+         0     0% 38.45%      0.89s  9.10%  runtime.park_m
+     0.30s  3.07% 41.51%      0.81s  8.28%  runtime.scanObjectsSmall
+     0.40s  4.09% 45.60%      0.80s  8.18%  runtime.tryDeferToSpanScan
+     0.03s  0.31% 45.91%      0.76s  7.77%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evaluatePair
+     0.01s   0.1% 46.01%      0.75s  7.67%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).observersAt
+         0     0% 46.01%      0.74s  7.57%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evaluateSubjectFor
+     0.59s  6.03% 52.04%      0.72s  7.36%  internal/runtime/maps.(*Iter).Next
+     0.06s  0.61% 52.66%      0.66s  6.75%  runtime.mapIterNext
+         0     0% 52.66%      0.65s  6.65%  runtime.gcDrainMarkWorkerDedicated (inline)
+     0.05s  0.51% 53.17%      0.58s  5.93%  runtime.mapaccess1_fast64
+     0.07s  0.72% 53.89%      0.56s  5.73%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).prepareSubscribersLocked
+         0     0% 53.89%      0.56s  5.73%  runtime.schedule
+     0.03s  0.31% 54.19%      0.55s  5.62%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).settlePair
+         0     0% 54.19%      0.55s  5.62%  runtime.findRunnable
+         0     0% 54.19%      0.52s  5.32%  runtime.mallocgc
+         0     0% 54.19%      0.50s  5.11%  runtime.netpoll
+         0     0% 54.19%      0.49s  5.01%  runtime.(*mheap).alloc.func1
+         0     0% 54.19%      0.49s  5.01%  runtime.(*mheap).allocSpan
+         0     0% 54.19%      0.48s  4.91%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*Interest).drainAOILocked
+         0     0% 54.19%      0.45s  4.60%  runtime.(*timer).maybeAdd
+         0     0% 54.19%      0.45s  4.60%  runtime.(*timer).modify
+         0     0% 54.19%      0.45s  4.60%  runtime.(*timer).reset (inline)
+         0     0% 54.19%      0.45s  4.60%  runtime.netpollBreak (inline)
+         0     0% 54.19%      0.45s  4.60%  runtime.resetForSleep
+         0     0% 54.19%      0.45s  4.60%  runtime.wakeNetPoller
+         0     0% 54.19%      0.45s  4.60%  runtime.wakeNetpoll
+     0.44s  4.50% 58.69%      0.44s  4.50%  runtime.madvise
+         0     0% 58.69%      0.44s  4.50%  runtime.sysUsed (inline)
+         0     0% 58.69%      0.44s  4.50%  runtime.sysUsedOS (inline)

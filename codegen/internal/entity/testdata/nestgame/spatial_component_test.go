@@ -103,7 +103,8 @@ func TestSpatialComponentNestCommitAndRollback(t *testing.T) {
 	if _, err := engine.Request(ctx, name, id, nest.NewParams(true)); !errors.Is(err, rejected) {
 		t.Fatalf("rollback=%v", err)
 	}
-	if err := syncer.Flush(ctx); err != nil {
+	// 排队事实由 Interest 的应用线程异步应用、Flush 只结算：用 Drain 等到在途事实全部应用并结算。
+	if err := syncer.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if unit.state.GetX() != 0 || len(interest.ObservedBlocks(id)) != 0 {
@@ -112,7 +113,7 @@ func TestSpatialComponentNestCommitAndRollback(t *testing.T) {
 	if _, err := engine.Request(ctx, name, id, nest.NewParams(false)); err != nil {
 		t.Fatal(err)
 	}
-	if err := syncer.Flush(ctx); err != nil {
+	if err := syncer.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if unit.state.GetX() != 600 || !slices.Contains(syncer.Subscribers(id), entitysync.SessionID(42)) {

@@ -119,7 +119,7 @@ func newTradeFixtureRegistering(t *testing.T, ctx context.Context, client fmongo
 func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, nestOptions []nest.NestOption, register func(*tradeFixture), configure ...func(*engine.ProjectorOptions)) *tradeFixture {
 	t.Helper()
 	h := &tradeFixture{ctx: ctx, client: client, database: NewWalletDao().DbName(), fatal: make(chan error, 1), ackFailed: make(chan struct{}, 1)}
-	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: h.database})
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: h.database, Databases: fixtureDatabases(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -309,7 +309,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	tx1, tx2 := remoteTestTxID(111), remoteTestTxID(112)
 	storage := &scriptedPublicationStorage{
 		MongoCommitter: committer, target: tx1,
@@ -334,7 +334,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 		_ = mgr.StopFinalizer(stop)
 	})
 
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: committer.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	tx1, tx2, tx3 := remoteTestTxID(131), remoteTestTxID(132), remoteTestTxID(133)
 	storage := &suffixReplayStorage{
 		MongoCommitter: committer, prefix: tx1, suffix: tx2,
@@ -510,7 +510,7 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 		_ = mgr.StopFinalizer(stop)
 	})
 
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: committer.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

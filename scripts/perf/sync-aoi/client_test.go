@@ -10,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // 验证测量客户端真的拒绝坏版本、坏字段与错误可见集合，而不是只数收到了几帧。
@@ -117,5 +118,85 @@ func TestClientValidatesContentVersionAndVisibility(t *testing.T) {
 				t.Fatal("client did not finish")
 			}
 		})
+	}
+}
+
+// 新订阅全量的计时口径：全量更新（新建对象，或已有对象的全量重建）里可能是本会话没计过时的旧改值，按改值时刻计时
+// 量到的是旧值的年龄而不是下发延迟。所以全量只计“本 tick 改的值”（Step 等于帧的 tick），增量照常计时。
+// 确定的小场景（手工编帧，不经 Manager）：
+//
+//	帧 1（tick 5）新建对象，Step 3（两秒前的旧改值）     → 不计时（Step ≠ tick）
+//	帧 2（tick 6）同一对象全量重建，仍是 Step 3          → 不计时（修前按 ObjectUpdate 计时，量到约 2000ms）
+//	帧 3（tick 7）全量重建，Step 7（本 tick 改的值）     → 计入全量
+//	帧 4（tick 9）增量，Step 8（晚一个 tick 到的新改值） → 计入增量
+func TestFullUpdateTimesOnlyThisTicksChange(t *testing.T) {
+	c := config{Players: 1, Entities: 10, Padding: 8}
+	const id = int64(1)
+	old := time.Now().Add(-2 * time.Second).UnixNano()
+	payload := func(step int64, changed int64) entity.FrozenSyncPayload {
+		at := position(id, int(step), c)
+		value := component{ID: id, Step: step, X: at.X, Y: at.Y, HP: 100 - (step+10000)%97, Planned: changed, Changed: changed, Extra: []byte{1, 1, 1, 1, 1, 1, 1, 1}}
+		raw, err := bson.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entity.TakeFrozenSyncPayload(1, raw)
+	}
+	encode := func(clock uint32, kind frame.Kind, op frame.ObjectOperation, version uint64, full bool, body entity.FrozenSyncPayload) []byte {
+		data, err := entitysync.EncodeSubjectUpdate(entity.SubjectSyncUpdate{SubjectID: id, Namespace: "test", Version: version, BaseVersion: version - 1, Full: full, Payload: body}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := clock - 1
+		object := frame.ObjectDelta{Operation: op, Ref: frame.ObjectRef{ID: 1, Generation: 1}, Components: []frame.ComponentDelta{{Operation: frame.ComponentSet, TypeID: 1, SchemaVersion: 1, Data: data}}}
+		if op == frame.ObjectCreate {
+			object.Archetype = 1
+		}
+		raw, err := frame.Encode(frame.Frame{SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: 1, Tick: clock, SchemaVersion: 1}, Kind: kind, BaseTick: base, Objects: []frame.ObjectDelta{object}}, frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	server, client := net.Pipe()
+	defer server.Close()
+	done := make(chan clientResult, 1)
+	go func() { defer client.Close(); done <- consume(client, c, func() {}) }()
+	now := time.Now().UnixNano()
+	frames := []struct {
+		tick int
+		raw  []byte
+	}{
+		{5, encode(1, frame.Full, frame.ObjectCreate, 1, true, payload(3, old))},
+		{6, encode(2, frame.Delta, frame.ObjectUpdate, 2, true, payload(3, old))},
+		{7, encode(3, frame.Delta, frame.ObjectUpdate, 3, true, payload(7, now))},
+		{9, encode(4, frame.Delta, frame.ObjectUpdate, 4, false, payload(8, now))},
+	}
+	for _, f := range frames {
+		_ = server.SetWriteDeadline(time.Now().Add(time.Second))
+		if err := writePacket(server, packetFrame, f.tick, now, f.raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	visible, _ := json.Marshal([]int64{id})
+	_ = server.SetWriteDeadline(time.Now().Add(time.Second))
+	if err := writePacket(server, packetFinish, 0, 0, visible); err != nil {
+		t.Fatal(err)
+	}
+	var result clientResult
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not finish")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	t.Logf("full samples (ms) = %.1f, delta samples (ms) = %.1f", result.full, result.live)
+	if len(result.full) != 1 || result.full[0] > 1000 {
+		t.Fatalf("full updates timed an old value's age: full samples %.1f ms, want exactly this tick's change (one sample, well under 1000 ms)", result.full)
+	}
+	if len(result.live) != 1 {
+		t.Fatalf("delta samples %.1f ms, want the late delta counted once", result.live)
 	}
 }

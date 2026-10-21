@@ -57,7 +57,7 @@ func isolatedRealMongo(t *testing.T) (context.Context, fmongo.IMongo, string) {
 // 承诺：两者至多一个生效——投影落库时接管不能成功拿到新 token。
 func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 	ctx, client, database := isolatedRealMongo(t)
-	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: database})
+	store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: database})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 // effect、操作状态文档、事务标记都恰好一次，fence 不被重新判定。
 func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.T) {
 	ctx, client, database := isolatedRealMongo(t)
-	store, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: database})
+	store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: database})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 	}
 
 	// 重启：重开 WAL、新 Store、新投影器，像启动恢复一样排空。
-	restarted, err := NewMongoStore(client, MongoStoreConfig{DefaultDatabase: database})
+	restarted, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: database})
 	if err != nil {
 		t.Fatal(err)
 	}

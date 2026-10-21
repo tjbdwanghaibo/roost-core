@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -21,6 +22,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// fixtureDatabases 是夹具自建装配用的库名表：DAO 的 db= 已由脚本换成本轮唯一库名，表里不配映射（逻辑名即物理名）。
+// MongoStore 没有表时拒绝读写带库名的 DAO 文档（dataengine.ErrDatabaseMapNotBound），声明了逻辑库时构造即拒绝。
+func fixtureDatabases(t testing.TB) *coredata.DatabaseMap {
+	t.Helper()
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return databases
+}
 
 // 本工作负载没有副作用消息；真实 Broker 故障由 kit/dataengine 集成测试覆盖。
 type noEffectsPublisher struct{}
@@ -63,7 +75,7 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 	for policyIndex, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
 		t.Run(policy.String(), func(t *testing.T) {
 			const entities, updates, workers = 100, 10, 8
-			store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database})
+			store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: database, Databases: fixtureDatabases(t)})
 			if err != nil {
 				t.Fatal(err)
 			}

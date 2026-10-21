@@ -1,0 +1,5 @@
+--- FAIL: TestFlushSettlesButDoesNotApplyQueuedFacts (0.00s)
+    interest_test.go:708: Flush applied a queued fact on its own path: position={20 10} queued=0
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.545s
+FAIL

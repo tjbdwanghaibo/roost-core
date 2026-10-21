@@ -614,7 +614,7 @@ func (s *signallingJetStream) Publish(_ context.Context, subject string, _ []byt
 func TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll(t *testing.T) {
 	js := &signallingJetStream{published: make(chan string, 16)}
 	cfg := AssemblyConfig{
-		Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1},
+		Mongo: MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: "game", ServerID: 1},
 		WAL:   nestwal.DefaultOptions(t.TempDir()), Projector: DefaultProjectorOptions(),
 		Outbox: OutboxWorkerOptions{Owner: "wake", PollInterval: time.Hour, Workers: 2},
 	}

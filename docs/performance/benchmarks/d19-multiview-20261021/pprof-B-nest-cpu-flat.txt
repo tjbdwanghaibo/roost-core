@@ -1,0 +1,48 @@
+File: sync-aoi-before
+Type: cpu
+Time: 2026-10-21 09:03:19 CST
+Duration: 10.27s, Total samples = 19.11s (185.99%)
+Showing nodes accounting for 16.12s, 84.35% of 19.11s total
+Dropped 294 nodes (cum <= 0.10s)
+Showing top 40 nodes out of 162
+      flat  flat%   sum%        cum   cum%
+     2.06s 10.78% 10.78%      4.55s 23.81%  runtime.mapaccess2_fast64
+     1.89s  9.89% 20.67%      2.54s 13.29%  internal/runtime/maps.(*Iter).Next
+     1.25s  6.54% 27.21%      1.25s  6.54%  slices.insertionSortOrdered[go.shape.int64]
+     1.07s  5.60% 32.81%      1.07s  5.60%  syscall.rawsyscalln
+     0.83s  4.34% 37.15%      0.83s  4.34%  slices.partitionOrdered[go.shape.int64]
+     0.71s  3.72% 40.87%      0.71s  3.72%  internal/runtime/maps.probeSeq.next (inline)
+     0.71s  3.72% 44.58%      0.71s  3.72%  runtime.memclrNoHeapPointers
+     0.66s  3.45% 48.04%      1.19s  6.23%  runtime.mapassign_fast64
+     0.55s  2.88% 50.92%     11.74s 61.43%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evaluateObserver
+     0.49s  2.56% 53.48%      0.49s  2.56%  runtime.madvise
+     0.49s  2.56% 56.04%      0.49s  2.56%  runtime.pthread_cond_signal
+     0.41s  2.15% 58.19%      0.41s  2.15%  internal/runtime/maps.(*groupReference).key (inline)
+     0.39s  2.04% 60.23%      0.74s  3.87%  runtime.tryDeferToSpanScan
+     0.38s  1.99% 62.22%      0.38s  1.99%  cmp.Compare[go.shape.int64] (inline)
+     0.38s  1.99% 64.21%      0.38s  1.99%  internal/runtime/maps.(*Map).directoryIndex (inline)
+     0.34s  1.78% 65.99%      0.34s  1.78%  internal/runtime/maps.memHash64AES
+     0.31s  1.62% 67.61%      0.31s  1.62%  internal/runtime/maps.ctrlGroupMatchEmpty (inline)
+     0.26s  1.36% 68.97%      0.26s  1.36%  runtime.(*spanInlineMarkBits).init
+     0.23s  1.20% 70.17%      2.31s 12.09%  runtime.mapIterNext
+     0.21s  1.10% 71.27%      0.21s  1.10%  github.com/tjbdwanghaibo/roost-core/infra/base/spatial.squaredDistance128
+     0.19s  0.99% 72.27%      0.19s  0.99%  runtime.kevent
+     0.18s  0.94% 73.21%      0.18s  0.94%  internal/runtime/maps.(*Map).Used (inline)
+     0.18s  0.94% 74.15%      0.18s  0.94%  internal/runtime/maps.bitset.removeFirst (inline)
+     0.17s  0.89% 75.04%      0.89s  4.66%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evictFarther
+     0.17s  0.89% 75.93%      0.17s  0.89%  runtime.(*spanScanOwnership).or (inline)
+     0.16s  0.84% 76.77%      0.16s  0.84%  runtime.pthread_cond_wait
+     0.14s  0.73% 77.50%      0.14s  0.73%  internal/runtime/maps.(*ctrlGroup).get (inline)
+     0.14s  0.73% 78.23%      0.55s  2.88%  runtime.scanObjectsSmall
+     0.14s  0.73% 78.96%      2.40s 12.56%  slices.pdqsortOrdered[go.shape.int64]
+     0.11s  0.58% 79.54%      0.21s  1.10%  runtime.findObject
+     0.11s  0.58% 80.12%      0.23s  1.20%  runtime.scanObjectSmall
+     0.10s  0.52% 80.64%      0.24s  1.26%  github.com/tjbdwanghaibo/roost-core/infra/base/spatial.WithinDistance
+     0.10s  0.52% 81.16%      0.10s  0.52%  internal/runtime/maps.(*Iter).nextDirIdx (inline)
+     0.10s  0.52% 81.68%      0.10s  0.52%  runtime.extractHeapBitsSmall
+     0.10s  0.52% 82.21%      0.91s  4.76%  runtime.scanSpan
+     0.09s  0.47% 82.68%      4.32s 22.61%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+     0.09s  0.47% 83.15%      0.30s  1.57%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.(*AOI).evaluateObserver.func1
+     0.09s  0.47% 83.62%      0.21s  1.10%  slices.insertionSortCmpFunc[go.shape.struct { github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.subject int64; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.at github.com/tjbdwanghaibo/roost-core/infra/base/spatial.Point; github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy.distance int64 }] (inline)
+     0.07s  0.37% 83.99%      0.24s  1.26%  runtime.(*spanInlineMarkBits).tryAcquire
+     0.07s  0.37% 84.35%      0.15s  0.78%  slices.medianOrdered[go.shape.int64]

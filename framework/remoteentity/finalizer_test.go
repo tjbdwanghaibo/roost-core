@@ -275,7 +275,7 @@ func newMidThawFixture(t *testing.T, id int64) (projectionOwnershipFixture, *mid
 	t.Helper()
 	const kind entity.EntityKind = 124
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	storage := &steppedStatusStorage{MongoCommitter: store, polled: make(chan struct{}), answer: make(chan bool)}
 	loader := newRemoteTestLoader()
 	live := &midThawRemoteEntity{
@@ -381,7 +381,7 @@ func TestRemoteAsyncFinalizerProjectionLoad(t *testing.T) {
 	defer cancel()
 
 	mongo := newRemoteMongoFake()
-	committer := NewMongoCommitter(mongo, "control", 1000, 0)
+	committer := newBoundMongoCommitter(mongo, "control", 1000, 0)
 	storage := &latencyCountingStorage{MongoCommitter: committer, latency: latency}
 	loader := newRemoteTestLoader()
 	lives := make([][]*testRemoteEntity, writers)
@@ -408,7 +408,7 @@ func TestRemoteAsyncFinalizerProjectionLoad(t *testing.T) {
 		defer cancel()
 		_ = mgr.StopFinalizer(stop)
 	})
-	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: committer.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +587,7 @@ func newProjectionOwnershipFixture(t *testing.T, id int64) projectionOwnershipFi
 	t.Helper()
 	const kind entity.EntityKind = 124
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := NewMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
+	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
 	storage := &steppedStatusStorage{MongoCommitter: store, polled: make(chan struct{}), answer: make(chan bool)}
 	loader := newRemoteTestLoader()
 	live := &pausingRemoteEntity{testRemoteEntity: newTestRemoteEntity(id, 1, kind), reached: make(chan struct{}), resume: make(chan struct{})}

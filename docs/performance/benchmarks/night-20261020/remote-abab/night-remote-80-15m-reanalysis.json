@@ -1,0 +1,171 @@
+{
+ "label": "night-remote-80-15m",
+ "commit": "69fb668f",
+ "duration_seconds": 900.1,
+ "Completed": 72000,
+ "CompletionTPS": 79.989,
+ "Errors": 0,
+ "Dropped": 0,
+ "ErrorsNotApplied": 0,
+ "ErrorsUncertain": 0,
+ "Verified": true,
+ "Mixed": {
+  "P50": 166,
+  "P95": 250,
+  "P99": 752,
+  "Max": 1472
+ },
+ "Server": {
+  "P50MS": 164,
+  "P95MS": 249,
+  "P99MS": 749,
+  "MaxMS": 1470,
+  "NegativeDurations": 0
+ },
+ "Harness": {
+  "AdmitLag": {
+   "P50MS": 0,
+   "P95MS": 1,
+   "P99MS": 2,
+   "MaxMS": 71,
+   "NegativeDurations": 0
+  },
+  "ClientQueue": {
+   "P50MS": 0,
+   "P95MS": 0,
+   "P99MS": 0,
+   "MaxMS": 21,
+   "NegativeDurations": 0
+  }
+ },
+ "WALUnackedPeak": 102,
+ "WALUnackedPeakAtS": 100,
+ "WALUnackedEnd": 0,
+ "ActiveTxPeak": 77,
+ "ActiveTxPeakAtS": 100,
+ "ActiveTxEnd": 0,
+ "WritesInFlightPeak": 82,
+ "TransactionsPeak": 64998,
+ "WriteRejectedEnd": 0,
+ "HeapMiB": [
+  83.3,
+  222.5,
+  162.2
+ ],
+ "Goroutines": [
+  1114,
+  2304,
+  1114
+ ],
+ "SamplesN": 92,
+ "Minutes": [
+  {
+   "minute": 0,
+   "wal_unacked_mean": 7.2,
+   "active_tx_mean": 7.2
+  },
+  {
+   "minute": 1,
+   "wal_unacked_mean": 24.7,
+   "active_tx_mean": 19.2
+  },
+  {
+   "minute": 2,
+   "wal_unacked_mean": 11.5,
+   "active_tx_mean": 10.2
+  },
+  {
+   "minute": 3,
+   "wal_unacked_mean": 9.8,
+   "active_tx_mean": 9.8
+  },
+  {
+   "minute": 4,
+   "wal_unacked_mean": 12.7,
+   "active_tx_mean": 11.3
+  },
+  {
+   "minute": 5,
+   "wal_unacked_mean": 9.2,
+   "active_tx_mean": 9.2
+  },
+  {
+   "minute": 6,
+   "wal_unacked_mean": 15,
+   "active_tx_mean": 12.3
+  },
+  {
+   "minute": 7,
+   "wal_unacked_mean": 11.7,
+   "active_tx_mean": 11.7
+  },
+  {
+   "minute": 8,
+   "wal_unacked_mean": 13.8,
+   "active_tx_mean": 13.8
+  },
+  {
+   "minute": 9,
+   "wal_unacked_mean": 10.7,
+   "active_tx_mean": 10.7
+  },
+  {
+   "minute": 10,
+   "wal_unacked_mean": 11.8,
+   "active_tx_mean": 11.8
+  },
+  {
+   "minute": 11,
+   "wal_unacked_mean": 11.3,
+   "active_tx_mean": 10
+  },
+  {
+   "minute": 12,
+   "wal_unacked_mean": 12.2,
+   "active_tx_mean": 12.2
+  },
+  {
+   "minute": 13,
+   "wal_unacked_mean": 11.8,
+   "active_tx_mean": 10.5
+  },
+  {
+   "minute": 14,
+   "wal_unacked_mean": 11.7,
+   "active_tx_mean": 11
+  },
+  {
+   "minute": 15,
+   "wal_unacked_mean": 5,
+   "active_tx_mean": 5
+  }
+ ],
+ "Host": {
+  "load1_min": 4.13,
+  "load1_max": 10.01,
+  "load1_mean": 6.43,
+  "samples": 65,
+  "swap_used_MiB": [
+   947.38,
+   955.38
+  ],
+  "non_test_ge20pct": {
+   "sysmond": {
+    "count": 41,
+    "peak": 79.3
+   },
+   "CorpLink Helper (Renderer)": {
+    "count": 2,
+    "peak": 41.0
+   },
+   "system_profiler": {
+    "count": 1,
+    "peak": 28.4
+   },
+   "ruby": {
+    "count": 1,
+    "peak": 99.5
+   }
+  }
+ }
+}
