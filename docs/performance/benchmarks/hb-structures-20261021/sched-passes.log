@@ -1,0 +1,36 @@
+12:15:46 pass=1 start load={ 3.54 5.37 6.30 }
+12:18:12 pass=1 end dirty
+12:18:43 pass=2 start load={ 4.17 4.78 5.88 }
+12:21:09 pass=2 end clean
+12:21:39 pass=3 start load={ 3.84 4.52 5.56 }
+12:24:10 pass=3 end dirty
+12:24:41 pass=4 start load={ 4.48 4.61 5.40 }
+12:27:12 pass=4 end dirty
+12:27:42 pass=5 start load={ 4.38 4.38 5.13 }
+12:30:13 pass=5 end dirty
+12:31:24 pass=6 start load={ 4.29 4.06 4.78 }
+12:34:01 pass=6 end dirty
+12:41:36 pass=7 start load={ 3.70 4.40 4.70 }
+12:44:02 pass=7 end dirty
+12:44:33 pass=8 start load={ 3.46 4.04 4.50 }
+12:46:59 pass=8 end dirty
+12:47:29 pass=9 start load={ 3.17 3.74 4.29 }
+12:49:55 pass=9 end clean
+12:50:25 pass=10 start load={ 3.42 3.68 4.15 }
+12:52:52 pass=10 end clean
+12:53:22 pass=11 start load={ 4.10 3.69 4.05 }
+12:55:48 pass=11 end clean
+12:56:18 pass=12 start load={ 3.24 3.31 3.81 }
+12:58:44 pass=12 end clean
+12:59:15 pass=13 start load={ 3.58 3.43 3.76 }
+13:01:41 pass=13 end dirty
+13:02:11 pass=14 start load={ 3.80 3.53 3.73 }
+13:04:38 pass=14 end clean
+13:05:08 pass=15 start load={ 3.52 3.46 3.66 }
+13:07:34 pass=15 end clean
+13:08:04 pass=16 start load={ 7.24 4.57 4.03 }
+13:10:30 pass=16 end clean
+13:51:41 pass=17 start load={ 4.55 4.12 3.97 }
+13:54:07 pass=17 end clean
+13:54:38 pass=18 start load={ 4.42 4.10 3.97 }
+13:57:04 pass=18 end clean
