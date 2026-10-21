@@ -1435,6 +1435,16 @@ roost 的取舍：
 4. ~~心跳频率~~：由上文方案给出（按登记、移动中才高频、空闲停），缺省值见 §9 第 6 条。
 5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起（与 §9 第 14 条一起定）。
 
+### 维护者 2026-10-21 晚：各期待拍板项的决定
+
+- **Remote（先不处理，记录方向）**：Remote 托管实体理论上不应挂 Move（`movement`）与心跳（`heartbeat`）组件。真实 Remote 共享模式验证提出的 `MapBasic.Sync` 不加；“运行中被停掉的动作暂停、回到独占后 `Sync` 接着走，共享期间新发起的才失败”维持现状。后续方向：Remote 托管实体禁止挂移动 / 心跳组件（装配或登记时拒绝），另行设计。
+- **其余按推荐（即现状）**：
+  - P5：① 技能心跳放 `combatcomponent`（`skill` 不依赖 Nest）；② Buff 心跳固定按 `Granularity` 取档；③ 超过追帧上限的部分一次跳过、计数并限频 Warn；④ `TickBuffs` 保留为导出原语。
+  - 选项 C：批大小 64、批量作业时间片 200µs（合批优化压测后再调）；`DispatchTryBatch` 对业务导出，文档注明目前只有心跳使用。
+  - P4：压测工具缺省仍是全局循环（`-move-driver=loop`、`ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`），v1.31 发版前对比后再定。
+  - 生成器：heartbeat Mod 按需装配（`roost add heartbeat|behavior` 时装）；`scripts/test-heartbeat-generated.sh` 不进 pretag，与其他 `test-*-generated.sh` 一样手工跑。
+  - P3：场景时间经关系视野下发、扇出上限 65536，超出只打 Warn；玩家位置在场景内每 10 秒落库一次（崩溃 / 卸载最多丢 10 秒），不在卸载前补 `LeaveScene`。
+
 ## D21 吸收 ssr 的优秀组件进 `gameplay`
 
 **状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”。维护者 2026-10-21 决定：调研一 13 条拍板项全部按推荐（A）实施，按 D21-1 → D21-5 分期进行，已实施（结果见“调研一 · 实施”）。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
