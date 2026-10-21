@@ -28,6 +28,13 @@
 - **测试**：每项先写回归，再用变异核对确认红（D1～D12、S1～S12、B1～B5、H1～H12、E1～E8，原文见 [DESIGN-TODO D21 实施](docs/maintenance/DESIGN-TODO.md#6-调研一--实施)）；涉及心跳的用例 `-race -count=30` 通过。
 - **限制**：见 [KNOWN-LIMITS“行为控制”](docs/maintenance/KNOWN-LIMITS.md#行为控制d21)。
 
+### 压测工具可由实体心跳驱动：sync-aoi `-move-driver`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER`（DESIGN-TODO D20 第 4 期；只交付代码，未测量）
+
+- **sync-aoi**（`3c5e41e3`）：`-move-driver=heartbeat`（只在 `-nest` 下）让每个实体自己的心跳 + `gameplay/movement` 巡逻驱动移动（`-move-period` / `-move-speed` / `-movers`，移动者数缺省按与全局循环相同的改值速率折算）；`server.json` 增 `move_driver` 与 `heartbeat` 一节。缺省 `loop`，旧命令得到原负载。
+- **nest-game**（`22b01614`）：`ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat` 让生成的 Unit 挂 `gameplay/heartbeat`（周期 `1s / ROOST_NEST_GAME_HZ`，须为档位），结果增 `Beats`；`nest-game.sh --check-heartbeat` 跑接线短测。缺省 `ticker`。
+- **§7 微基准**（`cf2bd7d2`，`gameplay/heartbeat/internal/bench`）：`BenchmarkDriverDispatch`、`TestDriverOpenLoop`（`HB_OPENLOOP=1`）、`TestBusyShortPoolSkipsBeatsAndResumes`。
+- **没有测量**：冒烟与正式对比 2026-10-21 因宿主资源占用推迟到 v1.31 发版前压测，命令见 [HB-DRIVEN-LOAD-20261021 §4](docs/performance/HB-DRIVEN-LOAD-20261021.md#4-待补测2026-10-21-因宿主资源占用推迟)；限制见 [KNOWN-LIMITS“压测工具的心跳驱动”](docs/maintenance/KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
+
 ### 移动与动作由实体心跳驱动：gameplay/movement（MapBasic / Move / MoveTo / Follow）与 actionflow.BeatRunner（DESIGN-TODO D20 第 2 期）
 
 - **维护者决定（2026-10-21）**：① 移动参考 ssr、由动作驱动——`Move` 是被动组件，`MoveTo` / `Follow` 动作由实体的 `ActionRunner` 驱动，runner 给动作所在的组挂心跳，每拍动作调 `Move.Advance`；② 所有控制实体行为的逻辑（移动、技能、AI 决策……）都经 `ActionRunner` 下发与收尾，不绕过动作直接驱动组件；③ runner 不随事务回滚由业务层保证、框架不处理：handler 先做完可能失败的校验与修改，最后一步才调用动作接口。

@@ -23,7 +23,7 @@
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
 
-- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P3（game-demo）、P4（压测改心跳驱动）、P5（迁移现有快池 tick）未做。
+- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo 未接。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P4（压测改心跳驱动）代码已实施、缺省仍是全局循环且没有测量，见“压测工具的心跳驱动”一节；P3（game-demo）、P5（迁移现有快池 tick）未做。
 - **投递是单目标 Dispatch**：压测 50 万次/秒约 4.25 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)），CPU 约六成是 worker 每条消息停放 / 唤醒。Nest 批量入队（方案 D）原型另行进行，达标后只换投递层（`deliverer`）。本轮只做 5 万实体 1s 档的功能冒烟（10 万拍全部执行、零跳拍），**没有正式性能测量**。
 - **卸载窗口**：投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
@@ -37,7 +37,7 @@
 
 `gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow`）与 `actionflow.BeatRunner`（[DESIGN-TODO D20 P2](DESIGN-TODO.md#p2-实施结果2026-10-21)）。用法见 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，契约见 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
 
-- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
+- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测的心跳驱动模式已有、但缺省仍是全局循环且未测（P4，见下一节），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
 - **runner 不随事务回滚：框架不处理，由业务保证**（维护者 2026-10-21）。`ActionRunner` / `MissionRunner` 是纯内存状态；handler 先做完全部可能失败的校验与修改，最后一步才调用 `Start` / `Enqueue` / `End` 等。违反时，回滚后 runner 里残留这次的变更：例如回滚的 handler 里启动的 MoveTo 仍是移动组的当前动作，而 `Move` 的设定与组的心跳都随回滚恢复——这个动作不被 tick，直到被取代、被结束，或业务调用 `BeatRunner.Sync` 后在下一拍以取消（`Replaced`）结束。心跳那一拍只在提交失败时回滚（拍回调不返回错误），此时动作对组件的修改回滚、runner 按 Tick 的结论的推进保留，同样不处理。
 - **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 取 Interest 的锁并 `Apply` 一次，在 Nest worker 上可能等一个 AOI 应用批次（进出场景是低频事件，未测）；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 生效，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）。
 - **`Published` 晚于同一拍里的事件**：快照在提交后、实体锁释放之后才发布；在拍的事务里观察到的事件（动作结束、OnEnded）早于它。要读到这一拍提交后的位置，等该实体的下一条消息（同实体消息要等前驱作业连同提交后回调整个结束）。
@@ -47,6 +47,16 @@
 - **一个实体多个组各自一个心跳登记**：参考 ssr，动作组之间不合并投递（决定 ③）；移动之外再有一个需要周期 tick 的组（例如技能），每拍就是两条消息。
 - **地形判定按 0.5 格采样**：每进一个新格问一次 `Terrain`，斜穿两个被挡格的夹缝可能漏判；一拍的位移不设上限（速度 × `Elapsed`，`Elapsed` 上限 `max(1s, 档位)`），速度极大时采样数随距离增长。
 - **`MemFields` 只给测试、示例与不持久的 NPC**：逆操作只在 `rollback=undo` 的 handler 里登记，`rollback=state` 不恢复；它不标同步脏（`OnChange` 由使用方接）。需要同步的实体用 DAO 字段实现 `Fields`。
+
+### 压测工具的心跳驱动（D20 第 4 期）
+
+sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat` 与 `gameplay/heartbeat/internal/bench` 的 §7 微基准（[HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，[DESIGN-TODO D20 P4](DESIGN-TODO.md#p4-实施结果2026-10-21)）。
+
+- **没有任何测量**（2026-10-21 维护者要求暂停压测，同日宿主资源占用、冒烟也推迟）：心跳驱动与全局循环的对比、D19 多视野 Nest 模式在心跳驱动下的复测、驱动微基准与 10 / 25 / 50 万拍每秒的开环投递都待 v1.31 发版前压测（命令在报告 §4）。nest-game `TestNestGameLoad` 的心跳路径只编译、没有运行过；sync-aoi 只有 16 实体 0.6 秒的端到端用例。
+- **缺省仍是全局循环**：两种工具不加开关时是原负载，已有报告的复跑命令不变；对比做完后由维护者定缺省。
+- **心跳模式没有计划时刻**：sync-aoi 的 `Planned` 取这一拍消息冻结的业务时间、nest-game 的 `Completion` 从回调开始算，都不含驱动与快池的迟到（看 `beat_interval_ms` / `Beats.Interval` 与跳拍计数），与全局循环的“计划 → 客户端”不是同一口径。
+- **sync-aoi 心跳模式的核对弱于全局循环**：位置取决于心跳时机，客户端只核对在实体的巡逻带上（全局循环逐项核对位置）；同一实体在一个 tick 里改两次时第二次不计时（照常核对）。
+- **负载形状不同**：心跳模式的移动者是固定集合、持续巡逻（改值速率按与全局循环相同折算），全局循环每 tick 换一批实体；两者 AOI 进出的空间分布不同。
 
 ### 行为控制（D21）
 
