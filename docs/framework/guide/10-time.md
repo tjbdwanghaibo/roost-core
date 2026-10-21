@@ -218,12 +218,12 @@ return err
 
 - 动作可选实现 `actionflow.TickIntervaler`：不实现按 `BeatConfig.Period`（缺省 100ms）；返回 0 表示不需要周期 tick（由别的动作或 handler 结束它），这个组不挂心跳；返回正数取不大于它的最长档。组的当前动作切换时按新动作的周期启停这个组的心跳；同一实体的多个组各自一个登记、各自投递（与 ssr 相同，决定 ③ 不合并）。移动中的实体只有移动组一个登记，每拍一条消息。
 - 一拍只 tick 这个组；`ActionContext.Elapsed` 是本拍的 `Beat.Elapsed`（不追帧），按时间推进的动作用它。
-- 组的心跳挂不上（Remote 托管实体处于共享模式，§4A）时，这个动作以失败结束（原因带 `ErrHeartbeatRemoteShared`）；运行中进入共享模式、框架停掉了心跳时，动作留在 runner 里不推进，回到独占后调用 `BeatRunner.Sync()` 重新挂上（共享期间它返回错误）。
+- 组的心跳挂不上（Remote 托管实体处于共享模式，§4A）时，这个动作以失败结束（原因带 `ErrHeartbeatRemoteShared`）；运行中进入共享模式、框架停掉了心跳时，动作留在 runner 里不推进，回到独占后调用 `BeatRunner.Sync()` 重新挂上（共享期间它返回错误）；`Behavior` 的 `Beat().Sync()` 同时重新挂上任务心跳。
 - 技能以后用同一个 runner：行为都是动作，由动作所在组的心跳 tick。AI 的**决策**有自己独立的心跳（`ai.NewBeatController`，§4C），它下发的动作仍由动作组的心跳推进。
 
 **MapBasic**：
 
-- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改。
+- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改；运行中进入共享模式被框架停掉的周期落库，回到独占后目前只能 `Leave` 再 `Enter` 恢复（见 KNOWN-LIMITS“移动与动作”）。
 - 位置变化 `SetPos` 先 `Space.QueueMove`（事务内只记事实、走提交门，提交确认后进 AOI、回滚丢弃），再写字段；`QueueMove` 被拒时什么都不写、返回错误。
 - 进出场景 `Enter` / `Leave` 在**事务提交、实体锁释放之后**调 `Space.Enter` / `Space.Leave`（回滚的进出不发生；同一事务里进场景后又移动，提交后的 Enter 直接用最新位置；先进后出互相抵消）。不在事务里（加载 / 新建的初始化阶段）立即调用。
 - `Space` 是接口，`InterestSpace` 把 `policy.Interest` 适配过来：`Player` 认出的实体按玩家进出（`Interest.Enter` / `Leave`），其余只被看（`Show` / `Hide`），进出后 `Apply` 一次。同步 subject 的登记、玩家会话由业务在进场景之前做；业务场景也可以自己实现 `Space`。
@@ -261,7 +261,7 @@ m.behavior, _ = actionflow.NewBehavior(m, actionflow.BehaviorConfig{
 - 任务回调运行期间（`Start` / `Tick` / `OnActionEnd`，含它们同步引出的回调）经 `CreateAction` / `EnqueueAction` 发起的动作**归属当前任务**，任务结束时一并取消；AI 或 handler 发起的不属于任何任务。
 - `Clear(reason)` 清场：先结束任务、再强制结束全部动作，之后什么都不在运行。
 - 和 runner 一样只在实体锁内调用、不随事务回滚（§4B 的业务约束照旧）。
-- **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Behavior 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束。
+- **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Behavior 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束；运行中被框架停掉的（进入共享模式），回到独占后由 `Beat().Sync()` 重新挂上，任务不被结束。
 
 **计划步骤的时限与重试**（`MissionStep.Timeout` / `Retry`，`MissionPlan.Period`）：
 
@@ -277,7 +277,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 - `Retry` 是失败（`Failed` / `Expired`）后原地重试的次数，每次重试重新计时，用完才走 `OnFail`；**被取消的不重试**（被别的动作取代、被业务结束），直接走 `OnFail`。次数按步计，进入下一步清零。
 - 更复杂的分支（按条件、按结果原因）用行为树，计划里不加表达式。
 
-**AI 心跳与定时冻结**（`gameplay/ai`，第 4 期）：`ai.NewBeatController(hooks, ai.BeatConfig{Host: m.host})` 让 `Controller` 用一个独立的心跳登记 `"ai"` 决策（不并进动作组的心跳：决策周期与动作推进周期不同，维护者决定 7）。
+**AI 心跳与定时冻结**（`gameplay/ai`，第 4 期）：`ai.NewBeatController(hooks, ai.BeatConfig{Host: m.host})` 让 `Controller` 用一个独立的心跳登记 `"ai"` 决策（不并进动作组的心跳：决策周期与动作推进周期不同，维护者决定 7）。Remote 共享模式下被框架停掉的 `"ai"`，回到独占后由业务重新设置当前策略恢复：`c.SetStrategy(c.Strategy())` 不是替换，只重新对齐心跳。
 
 - 周期由当前策略决定：策略可选实现 `TickInterval() time.Duration`（与 `actionflow.TickIntervaler` 同一个方法），不实现按 `BeatConfig.Period`（缺省 500ms），返回 0 表示不需要周期决策；每拍之后按策略重新取档，所以策略可以随自身状态改周期（战斗中 200ms、空闲 1s）。
 - 没有策略、或 `Freeze()`（无定时）时停心跳；`FreezeFor(d, interrupt)` 冻结 `d`，期间心跳照常跳但不决策，到期后的第一拍自动恢复并决策；`interrupt` 为真时同时经 `EndActions` 钩子结束在途动作。`Freeze` / `Recover` 清掉定时。

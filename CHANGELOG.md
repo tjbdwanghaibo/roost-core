@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Remote 共享模式切换下的心跳、移动、任务与 AI：真实 Manager 验证与两处恢复修复（DESIGN-TODO D20 / D21 补测）
+
+- **验证**：`gameplay/movement/shared_test.go` 经真实 `remoteentity.Manager` 跑独占 → 共享 → 独占（两轮）、共享模式下的所有权迁移、卸载重载三个场景（真实 Nest + 启动的心跳驱动，实体带移动组 / 工作组 / 任务 / AI / 周期落库 5 个登记）；`shared_integration_test.go`（`-tags integration`）以 `remoteentity.Assemble` 在真实 Redis + Mongo + NATS 下跑同一组，已列入 `dataengine-env.sh test`。结论：每登记停掉计数 +1、共享期间零推进、不自动恢复、迁移无双推进、卸载窗口里排队的拍不执行；详见 [DESIGN-TODO“真实 Remote 共享模式切换验证”](docs/maintenance/DESIGN-TODO.md#真实-remote-共享模式切换验证2026-10-21)。
+- **修复（`gameplay/actionflow`）**：`BeatRunner.Sync()` 对属于 `Behavior` 的 runner 同时重新挂上被框架停掉的任务心跳（`"<Name>/mission"`）；之前回到独占后任务心跳没有恢复入口，任务不再被 tick、步骤时限不检查。挂不上只返回错误、不结束任务。
+- **修复（`gameplay/ai`，行为变化）**：`Controller.SetStrategy(当前策略)` 不再先问 `CanStopByNext`，只重新对齐 AI 心跳；之前是静默的空操作（策略拒绝被替换时返回 `ErrStrategyRejected`），文档让业务“回到独占后重新 SetStrategy”恢复 `"ai"` 并不生效。
+- **限制**：周期落库 `"map.save"` 被停掉后 `MapBasic` 没有单独的恢复入口（`Leave` + `Enter`），待维护者决定；见 [KNOWN-LIMITS“移动与动作”](docs/maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)。
+
 ### 技能与 Buff 由实体心跳驱动（DESIGN-TODO D20 第 5 期：现有快池 tick 迁移）
 
 - **新增（`gameplay/skill`）**：`TickClock{Length, Origin}`（`TickAt` / `StartOf` / `Ticks` / `Validate`，`ErrTickClockInvalid`）——业务时间与技能 tick 的换算，`tick = floor((t − Origin) / Length)`，`Origin` 零值为 Unix 纪元（tick 绝对、可持久）；`Runtime.CurrentTick()`、`Runtime.Pending()`（还有要随 tick 推进的工作：活动施法、排程任务、衍生物、待重试的停止）。`combat.BuffContainer.NextDue()`。

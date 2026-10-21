@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”；spawner 一项归 P3）；P3 未做；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”；spawner 一项归 P3）；P3 未做；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
@@ -923,7 +923,36 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 修后五条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
 
-**未做**：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。
+**未做**（本节实施时）：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。2026-10-21 已补，见下一节。
+
+### 真实 Remote 共享模式切换验证（2026-10-21）
+
+**状态：已验证**（分支 `test/remote-heartbeat`，本地提交，由维护者推送）。补的是决定 ④、P2 第 6 条、D21 A6 / C4 留下的未验证项：之前“框架停掉心跳”只在单元用例里直接 `Stop` 登记或用模拟写准入的假 Manager。
+
+**怎么验**：`gameplay/movement/shared_test.go` 的三个场景经真实的 `remoteentity.Manager` 做所有权流转（第一次写认领、`EnterRemoteSharedMode` / `LeaveRemoteSharedMode` / `TransferRemoteOwnership`、写准入与共享模式的分布式锁、写门排空），每个进程是真实 Nest 引擎 + 实体管理器 + 启动的心跳驱动 + 自己的 Manager；实体 `remoteNPC` 装了 `MapBasic`（周期落库）、`Move`、`Behavior`（移动组 / 工作组心跳、任务心跳）与 AI 心跳，共 5 个登记。进程内用例的 Remote 权威（所有权记录与带 fence 的版本锁）是替身 `memRemoteAuthority`，状态机、准入与排空都是 Manager 自己的；`shared_integration_test.go`（`-tags integration`）用正式装配 `remoteentity.Assemble`（真实 Redis 版本锁与快照 L2、Mongo 持久写权威、NATS 复制）跑同一组场景，隔离库名 / 键前缀 / 主题前缀每次唯一、用完删除。
+
+| 场景 | 断言 |
+| --- | --- |
+| 独占 → 共享 → 独占（两轮） | 进入共享后 5 个登记全部停掉，`StoppedShared` 与 `heartbeat.stopped_total{reason="remote_shared"}` 各 +5（每登记 +1）；之后 500ms 窗口里没有任何周期推进、位置不变；共享期间 `Sync` 返回 `ErrHeartbeatRemoteShared`、动作 / 任务 / 策略都留着；回到独占不自动恢复；业务恢复后 5 个登记全部接着跳。第二轮共享期间业务发起新移动：旧移动（任务的那一步）被取代、任务失败结束，新移动挂不上心跳、以失败结束（原因带共享模式），通知顺序固定为 `mission action-end 取消` → `observer mission-end` → `observer action-end 取消` → `observer action-end 失败`，两次结束通知时 `Move.Moving()` 都已为假（`Cancel` 在通知之前） |
+| 所有权迁移（共享模式下转移，与生成工程的 Remote 流程相同） | A 进入共享（A1 停 5 个）→ 转给 B（A1 为 Fenced）→ B 第一条消息加载 B1（加载时恢复场景与 AI，`Unknown` 下登记合法），写准入转 `Shared`，第一拍停掉 B1 的 2 个 → B 回到独占不自动恢复，业务恢复后接着跳；A1 在进入共享之后、B1 在回到独占之前都没有任何周期推进（无双推进）；A 之后的写被 `ErrRemoteFenced` 拒绝 |
+| 卸载与重新加载 | 独占时卸载：唯一的快池 worker 被另一实体占住、A1 的拍经写准入后排队，卸载后放开，排队的拍不在旧实例也不在重载实例上执行（`DroppedStale` 3），A1 之后零推进、A2 的推进全在 A1 之后；共享时卸载：A2 停 5 个后卸载，下一次写加载 A3（`Unknown` 登记合法），转 `Shared` 后第一拍停 2 个，回到独占不自动恢复，恢复后接着跳 |
+
+**发现并修复的缺陷**（先红后绿，红在“回到独占后业务调用 Sync / 重新设置策略能接着走”这条承诺上）：
+
+1. **任务心跳没有恢复入口**：文档让业务回到独占后调用 `BeatRunner.Sync()`，但它只管动作组；`Behavior` 的 `"<Name>/mission"` 只在任务推进时对齐，被框架停掉后任务一直不被 tick（步骤时限不再检查），业务只能直接碰 `MissionReg()`（文档说启停由 Behavior 管理）。修法：`BeatRunner` 多一个由 `NewBehavior` 装上的 `syncExtra`，`Sync` 时调 `Behavior.resyncMissionBeat`：当前任务在运行、需要周期 tick 而心跳没在跳就按它的周期 `Start`，挂不上只返回错误、不结束任务（与组的 `Sync` 相同）。
+2. **重新设置当前策略是静默空操作**：KNOWN-LIMITS 让业务回到独占后“重新 `SetStrategy` / `Recover`”，但 `SetStrategy(同一个策略)` 走 `sameStrategy` 直接返回 nil，不对齐心跳；策略拒绝被替换（`CanStopByNext` 为假）时还返回 `ErrStrategyRejected`。修法：`SetStrategy` 先判 `sameStrategy`——设成当前策略不是替换，不问 `CanStopByNext`、不 Init / Stop，只 `syncBeat`。
+
+修前失败原文（进程内场景一，`53cc3f97` 上加入用例，两处都未修）：
+
+```
+shared_test.go:865: resumed after the first shared window: A1 is not running every heartbeat: active [actionflow/1 actionflow/2 map.save] (want [actionflow/1 actionflow/2 actionflow/mission ai map.save]), moved true, ai ticks 0, work ticks 600; driver {Delivered:949 Executed:944 ... StoppedShared:5 Registered:3}
+```
+
+只修 1 之后：`active [actionflow/1 actionflow/2 actionflow/mission map.save] … ai ticks 0`；两处都修后通过。变异核对：去掉 `syncExtra` 的装配 → 场景一 `active [actionflow/1 actionflow/2 ai map.save]`、`TestBeatSyncResumesAStoppedMissionHeartbeat` `after Sync: mission beat false group beat true registered 1`；还原 `SetStrategy` 的判断顺序 → `TestSettingTheCurrentStrategyAgainResumesAStoppedBeat` `setting the current strategy again: ai: current strategy rejects replacement`。用例里还修了一处测试自身的数据竞争（排队的旧拍经写准入触发加载时读 `onLoad`，改为在 `loadMu` 下读写），没有产品代码问题。
+
+**没有改的（待维护者决定）**：周期落库 `"map.save"` 被框架停掉后，`MapBasic` 没有单独的恢复入口，`Enter` 在场景里返回 `ErrAlreadyInScene`，业务只能 `Leave` 再 `Enter`（同一事务里，AOI 提交后收到一次离开再进入）。A（推荐）：给 `MapBasic` 加 `Sync() error`（在场景里且配了 `SaveEvery` 时重新 `Start` 周期落库），与 `BeatRunner.Sync` 对齐；B：维持现状，文档写明 `Leave` + `Enter`。代价：A 是 movement 的一个小 API，B 让 AOI 多一次进出。另：任务因动作结束而结束时，观察者先收到任务结束、再收到这个动作结束（`Behavior` 先交任务、任务在处理里结束），这个顺序由用例固定、写进 KNOWN-LIMITS，没有改。
+
+**复跑**：进程内 `GOWORK=off go test -race -count=1 -run '^TestRemote' ./gameplay/movement`；真实依赖 `source ~/.roost-it/roost-dataengine-it/env.sh` 并持 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`（`wiring/scripts/integration/lib/common.sh` 的 `acquire_acceptance_lock`）后 `GOWORK=off go test -race -tags=integration -run '^TestRealRemote' -count=1 ./gameplay/movement`，整套随 `wiring/scripts/integration/dataengine-env.sh test`（包已列入）。本轮结果：进程内 `-race -count=3` 通过；真实依赖 `-race -count=2` 通过（三个场景各约 4～6s），跑后隔离库与键为 0。没有覆盖：独占模式下不经共享的直接迁移（仍只有 `heartbeat/remote_test.go` 的模拟写准入用例）、真实依赖下的故障注入（Redis / Mongo 断开时的切换）。
 
 ### P2 实施结果（2026-10-21）
 
