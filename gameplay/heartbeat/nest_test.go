@@ -394,43 +394,45 @@ func TestFiftyThousandEntitiesSmoke(t *testing.T) {
 // D22-1：Beat.Now 是这一拍消息冻结的业务时间（fctx.Now），回调里再读 fctx.Now 得到同一个值。驱动用缺省时钟
 // （不 SetClock），进程业务时钟的来源每读一次走 1ms：现读第二次就会不同。
 func TestBeatNowIsTheMessagesFrozenBusinessTime(t *testing.T) {
-	f := newNestFixture(t, nil)
-	var mu sync.Mutex
-	tick := time.Unix(1_800_000_000, 0)
-	clock.SetSource(func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		tick = tick.Add(time.Millisecond)
-		return tick
-	})
-	t.Cleanup(func() { clock.SetSource(nil) })
-	d := NewDriver(Config{Name: "frozen", Logger: discard})
-	if err := d.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.manager.Get(id) }); err != nil {
-		t.Fatal(err)
-	}
-	e := newHBEntity(t, d, 40, kindShort)
-	f.manager.Add(e)
-	type reading struct{ beat, message time.Time }
-	got := make(chan reading, 4)
-	r, _ := e.host.Register("x", 50*time.Millisecond, func(b Beat) error {
-		got <- reading{beat: b.Now, message: fctx.Now()}
-		return nil
-	})
-	if err := r.Start(); err != nil {
-		t.Fatal(err)
-	}
-	for range 5 {
-		d.step(context.Background())
-	}
-	f.settle(r)
-	select {
-	case g := <-got:
-		if !g.beat.Equal(g.message) {
-			t.Fatalf("Beat.Now = %v, but the beat's message froze %v: the beat read the clock a second time", g.beat, g.message)
+	forEachDelivery(t, func(t *testing.T) {
+		f := newNestFixture(t, nil)
+		var mu sync.Mutex
+		tick := time.Unix(1_800_000_000, 0)
+		clock.SetSource(func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			tick = tick.Add(time.Millisecond)
+			return tick
+		})
+		t.Cleanup(func() { clock.SetSource(nil) })
+		d := NewDriver(Config{Name: "frozen", Logger: discard, Delivery: testDelivery})
+		if err := d.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.manager.Get(id) }); err != nil {
+			t.Fatal(err)
 		}
-	default:
-		t.Fatal("no beat ran")
-	}
+		e := newHBEntity(t, d, 40, kindShort)
+		f.manager.Add(e)
+		type reading struct{ beat, message time.Time }
+		got := make(chan reading, 4)
+		r, _ := e.host.Register("x", 50*time.Millisecond, func(b Beat) error {
+			got <- reading{beat: b.Now, message: fctx.Now()}
+			return nil
+		})
+		if err := r.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for range 5 {
+			d.step(context.Background())
+		}
+		f.settle(r)
+		select {
+		case g := <-got:
+			if !g.beat.Equal(g.message) {
+				t.Fatalf("Beat.Now = %v, but the beat's message froze %v: the beat read the clock a second time", g.beat, g.message)
+			}
+		default:
+			t.Fatal("no beat ran")
+		}
+	})
 }
 
 // tdFields 扮演场景实体上时间域的 DAO 字段（测试里不在事务中写，不登记回滚）。
@@ -442,79 +444,81 @@ func (f *tdFields) SetTimeDomain(s timedomain.State) { f.state = s }
 // D22 时间域：挂了时间域的登记，调度仍按真实时间（档位不缩放），Beat.Now 是这一拍消息的域时间、Elapsed 是域时间
 // 的经过；2 倍速时 Elapsed 是业务经过的两倍，时停时为 0、Now 不动；Elapsed 上限乘倍率。
 func TestBeatsOnATimeDomainFollowItsRate(t *testing.T) {
-	f := newNestFixture(t, nil)
-	clock.SetSource(f.clock.Now) // fctx 冻结的业务时间与驱动用同一个可控时钟
-	t.Cleanup(func() { clock.SetSource(nil) })
-	domain, err := timedomain.New(&tdFields{}, timedomain.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := domain.SetRate(2); err != nil { // 不在事务里：立即生效
-		t.Fatal(err)
-	}
-	e := newHBEntity(t, f.driver, 50, kindShort)
-	f.manager.Add(e)
-	type reading struct {
-		beat    Beat
-		message time.Time
-	}
-	got := make(chan reading, 8)
-	r, err := e.host.Register("scene", 100*time.Millisecond, func(b Beat) error {
-		got <- reading{beat: b, message: domain.Now()}
-		return nil
-	}, WithTimeDomain(domain))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Start(); err != nil {
-		t.Fatal(err)
-	}
-	beat := func() reading {
-		t.Helper()
-		before := f.driver.Stats().Delivered
-		for f.driver.Stats().Delivered == before {
-			f.step(1)
+	forEachDelivery(t, func(t *testing.T) {
+		f := newNestFixture(t, nil)
+		clock.SetSource(f.clock.Now) // fctx 冻结的业务时间与驱动用同一个可控时钟
+		t.Cleanup(func() { clock.SetSource(nil) })
+		domain, err := timedomain.New(&tdFields{}, timedomain.Config{})
+		if err != nil {
+			t.Fatal(err)
 		}
-		f.settle(r)
-		select {
-		case g := <-got:
-			if !g.beat.Now.Equal(g.message) {
-				t.Fatalf("Beat.Now = %v, but the beat's message reads the domain at %v", g.beat.Now, g.message)
+		if err := domain.SetRate(2); err != nil { // 不在事务里：立即生效
+			t.Fatal(err)
+		}
+		e := newHBEntity(t, f.driver, 50, kindShort)
+		f.manager.Add(e)
+		type reading struct {
+			beat    Beat
+			message time.Time
+		}
+		got := make(chan reading, 8)
+		r, err := e.host.Register("scene", 100*time.Millisecond, func(b Beat) error {
+			got <- reading{beat: b, message: domain.Now()}
+			return nil
+		}, WithTimeDomain(domain))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Start(); err != nil {
+			t.Fatal(err)
+		}
+		beat := func() reading {
+			t.Helper()
+			before := f.driver.Stats().Delivered
+			for f.driver.Stats().Delivered == before {
+				f.step(1)
 			}
-			return g
-		default:
-			t.Fatal("a delivered beat did not run")
-			return reading{}
+			f.settle(r)
+			select {
+			case g := <-got:
+				if !g.beat.Now.Equal(g.message) {
+					t.Fatalf("Beat.Now = %v, but the beat's message reads the domain at %v", g.beat.Now, g.message)
+				}
+				return g
+			default:
+				t.Fatal("a delivered beat did not run")
+				return reading{}
+			}
 		}
-	}
 
-	first := beat()
-	if !first.beat.First || first.beat.Elapsed <= 0 || first.beat.Elapsed%2 != 0 {
-		t.Fatalf("first beat %+v: want a positive Elapsed in 2x domain time", first.beat)
-	}
-	second := beat() // 下一拍：业务时间过了一个档位 100ms，域时间过了 200ms
-	if second.beat.Elapsed != 200*time.Millisecond || second.beat.Now.Sub(first.beat.Now) != 200*time.Millisecond {
-		t.Fatalf("at 2x one 100ms period moved the domain %v (Elapsed %v), want 200ms", second.beat.Now.Sub(first.beat.Now), second.beat.Elapsed)
-	}
+		first := beat()
+		if !first.beat.First || first.beat.Elapsed <= 0 || first.beat.Elapsed%2 != 0 {
+			t.Fatalf("first beat %+v: want a positive Elapsed in 2x domain time", first.beat)
+		}
+		second := beat() // 下一拍：业务时间过了一个档位 100ms，域时间过了 200ms
+		if second.beat.Elapsed != 200*time.Millisecond || second.beat.Now.Sub(first.beat.Now) != 200*time.Millisecond {
+			t.Fatalf("at 2x one 100ms period moved the domain %v (Elapsed %v), want 200ms", second.beat.Now.Sub(first.beat.Now), second.beat.Elapsed)
+		}
 
-	if err := domain.SetRate(0); err != nil {
-		t.Fatal(err)
-	}
-	stopped := beat()
-	after := beat()
-	if after.beat.Elapsed != 0 || !after.beat.Now.Equal(stopped.beat.Now) {
-		t.Fatalf("a stopped domain beat with Elapsed %v, Now %v -> %v; want 0 and no movement", after.beat.Elapsed, stopped.beat.Now, after.beat.Now)
-	}
+		if err := domain.SetRate(0); err != nil {
+			t.Fatal(err)
+		}
+		stopped := beat()
+		after := beat()
+		if after.beat.Elapsed != 0 || !after.beat.Now.Equal(stopped.beat.Now) {
+			t.Fatalf("a stopped domain beat with Elapsed %v, Now %v -> %v; want 0 and no movement", after.beat.Elapsed, stopped.beat.Now, after.beat.Now)
+		}
 
-	// 10 倍速、业务时间一下过了 2 秒（停顿）：Elapsed 的上限是 max(1s, 100ms) × 10 = 10s，不是 1s。
-	if err := domain.SetRate(10); err != nil {
-		t.Fatal(err)
-	}
-	beat()
-	f.clock.Advance(2 * time.Second)
-	if long := beat(); long.beat.Elapsed != 10*time.Second {
-		t.Fatalf("a 2s stall at 10x gave Elapsed %v, want the 10s cap (max(1s, period) x rate)", long.beat.Elapsed)
-	}
+		// 10 倍速、业务时间一下过了 2 秒（停顿）：Elapsed 的上限是 max(1s, 100ms) × 10 = 10s，不是 1s。
+		if err := domain.SetRate(10); err != nil {
+			t.Fatal(err)
+		}
+		beat()
+		f.clock.Advance(2 * time.Second)
+		if long := beat(); long.beat.Elapsed != 10*time.Second {
+			t.Fatalf("a 2s stall at 10x gave Elapsed %v, want the 10s cap (max(1s, period) x rate)", long.beat.Elapsed)
+		}
+	})
 }
 
 // 批量投递（Nest 批量作业）下的同 ID 顺序：业务消息已准入、尚未执行（它同时声明了另一个实体，排在那个实体正在执行的
@@ -685,4 +689,78 @@ func TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad(t *testing.T) {
 	if runs.Load() != 0 || st.DroppedNotLoaded != 1 || st.SkippedRejected+st.SkippedQueueFull != 0 || r.inflight.Load() {
 		t.Fatalf("runs %d stats %+v inflight=%v: an unloaded instance's beat is dropped as not_loaded", runs.Load(), st, r.inflight.Load())
 	}
+}
+
+// D22-1 在两种投递方式下都成立：同一格里同一实体的几拍（四个同档登记，两个挂场景时间域）各自冻结一次——Beat.Now
+// 等于回调里读到的 fctx.Now / 域时间，且各拍互不相同（进程业务时钟每读一次走 1ms）。批量方式下这几拍在同一个 Nest
+// 批量作业里依次执行，每个目标开始前重新冻结（Context.Refreeze），不是整批共用一个时刻。
+// 变异核对：批量作业逐目标不 Refreeze 时 batch 子测试里四拍的 Beat.Now 相同，本用例变红。
+func TestEveryBeatFreezesItsOwnBusinessTime(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		f := newNestFixture(t, nil)
+		var mu sync.Mutex
+		tick := time.Unix(1_800_000_000, 0)
+		clock.SetSource(func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			tick = tick.Add(time.Millisecond)
+			return tick
+		})
+		t.Cleanup(func() { clock.SetSource(nil) })
+		d := NewDriver(Config{Name: "frozen-each", Logger: discard, Delivery: testDelivery})
+		if err := d.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.manager.Get(id) }); err != nil {
+			t.Fatal(err)
+		}
+		domain, err := timedomain.New(&tdFields{}, timedomain.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := newHBEntity(t, d, 60, kindShort)
+		f.manager.Add(e)
+		type reading struct {
+			name          string
+			beat, message time.Time
+		}
+		got := make(chan reading, 8)
+		var regs []*Reg
+		for i := range 4 {
+			name := fmt.Sprint("r", i)
+			var opts []RegOption
+			read := fctx.Now
+			if i >= 2 {
+				opts = append(opts, WithTimeDomain(domain))
+				read = domain.Now
+			}
+			r, err := e.host.Register(name, 50*time.Millisecond, func(b Beat) error {
+				got <- reading{name: name, beat: b.Now, message: read()}
+				return nil
+			}, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Start(); err != nil {
+				t.Fatal(err)
+			}
+			regs = append(regs, r)
+		}
+		for d.Stats().Delivered < 4 {
+			d.step(context.Background())
+		}
+		f.settle(regs...)
+		seen := map[time.Time]string{}
+		for range 4 {
+			select {
+			case g := <-got:
+				if !g.beat.Equal(g.message) {
+					t.Fatalf("%s: Beat.Now = %v, but the beat's execution froze %v", g.name, g.beat, g.message)
+				}
+				if other, dup := seen[g.beat]; dup {
+					t.Fatalf("%s and %s share Beat.Now %v: each beat must freeze its own business time", other, g.name, g.beat)
+				}
+				seen[g.beat] = g.name
+			default:
+				t.Fatal("not every delivered beat ran")
+			}
+		}
+	})
 }

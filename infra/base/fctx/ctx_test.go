@@ -191,3 +191,37 @@ func TestNowIsFrozenPerExecution(t *testing.T) {
 		t.Fatalf("NowMilli = %d, want the frozen %d", NowMilli(), c.Now.UnixMilli())
 	}
 }
+
+// Refreeze 在同一个请求上下文里开始新的一次执行：Now / NowMilli 换成此刻的业务时钟，Frozen 的派生值重新计算；
+// 之后在这次执行里照样冻结。
+// 变异核对：Refreeze 不清 Frozen（去掉 clearFrozen）时第二次执行读到上一次的派生值，本用例变红。
+func TestRefreezeStartsANewExecutionInTheSameContext(t *testing.T) {
+	DeleteContext()
+	var mu sync.Mutex
+	tick := time.Unix(1_800_000_000, 0)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+	type key struct{}
+	calls := 0
+	compute := func() any { calls++; return calls }
+
+	c, release := NewContext()
+	defer release()
+	before, frozen := Now(), Frozen(key{}, compute)
+	c.Refreeze()
+	after := Now()
+	if !after.After(before) || NowMilli() != after.UnixMilli() {
+		t.Fatalf("Refreeze kept Now %v -> %v (NowMilli %d)", before, after, NowMilli())
+	}
+	if again := Now(); !again.Equal(after) {
+		t.Fatalf("Now moved inside the new execution: %v then %v", after, again)
+	}
+	if next := Frozen(key{}, compute); next == frozen {
+		t.Fatalf("Frozen after Refreeze = %v, the previous execution's value", next)
+	}
+}

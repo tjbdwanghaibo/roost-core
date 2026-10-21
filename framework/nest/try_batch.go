@@ -464,8 +464,8 @@ type tryBatchExec struct {
 	store      entityGroupStore
 	releaseCtx func()
 	releaseMsg func()
-	// ctx / ctxSnapshot：本段的请求上下文与它建立时的快照。每个目标开始前恢复快照，前一个目标写进上下文的 KV、
-	// Meta、Base 不带给下一个；请求时间 Now 不在快照里，整段共用（按批的时间快照）。
+	// ctx / ctxSnapshot：本段的请求上下文与它建立时的快照。每个目标开始前恢复快照（前一个目标写进上下文的 KV、
+	// Meta、Base 不带给下一个）并 Refreeze（业务时间与 Frozen 派生值按目标各冻结一次）。
 	ctx         *fctx.Context
 	ctxSnapshot fctx.ContextSnapshot
 	start       time.Time
@@ -527,7 +527,10 @@ func (mgr *NestMgr) beginTryBatch(b *tryBatchJob) *tryBatchExec {
 func (exec *tryBatchExec) resetMsg(item *tryBatchItem) {
 	*exec.msg = Msg{Type: MsgTypeTryBatch, getter: exec.getter, engine: exec.mgr}
 	if item != nil {
+		// 每个目标是一次独立执行：恢复请求上下文快照（前一个目标写的 KV、Meta、Base 不带过来），并重新冻结业务时间与
+		// Frozen 派生值（时间域的域时间），Beat.Now 是这一拍自己冻结的时刻（D22-1），不是整批共用一个。
 		exec.ctx.ApplySnapshot(exec.ctxSnapshot)
+		exec.ctx.Refreeze()
 		exec.msg.Name = item.target.Handler.String()
 		exec.msg.Tid = item.id
 		exec.msg.Params = item.target.Params
