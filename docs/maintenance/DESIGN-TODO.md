@@ -1028,6 +1028,8 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 **未做**：任何冒烟与正式测量（报告 §4）；`TestNestGameLoad` 心跳路径的运行；`heartbeat.delivery` 透传。
 
+**合入后补修（2026-10-21，协调方）**：`TestDriverOpenLoop` 的小档接线断言在 main 上偶发失败（`-race`、宿主 load 12～15 下 `-count=20` 失败 5 次），两处是用例口径错，不是产品缺陷：① “投递数 ≥ 执行数”用的是测量窗口内的差值，窗口起点取在拍子在途时，窗口前投递、窗口内执行的拍只进 Executed（失败样本 `Delivered:586 Executed:601`）——改为比较驱动的累计计数（结果新增 `driver_totals`）；② 在途跳拍与墙钟间隔 p50 量的是宿主调度（跳拍 100～184 次、p50 63～100ms，驱动本身被拖晚、不记为跳拍），不属于接线断言——跳拍只记日志（由 `TestBusyShortPoolSkipsBeatsAndResumes` 覆盖），周期改为断言每拍自带的 `Beat.Period` 等于登记周期（确定性；结果新增 `wrong_period_beats`，变异“比较 2×周期”变红：`beats carried a period other than the registered 50ms`）。墙钟间隔仍记在结果里，零跳拍与间隔分布是正式开环测量（`HB_OPENLOOP=1`）的结论。修后同负载 `-race -count=60` 通过。
+
 ### 现状（已核对源码，基线 `6e65ba12`）
 
 - `scripts/perf/sync-aoi`：压测端一个循环每 tick 挑 1% 实体、分 10 批改值并移动（direct 模式直接 `interest.Move`；Nest 模式对每个实体发 `engine.Request` 到 load handler，handler 里 `QueueMove`，见 [nest.go](../../scripts/perf/sync-aoi/nest.go) `newLoadNest`）。移动由全局控制器驱动，不是实体自己的心跳。
