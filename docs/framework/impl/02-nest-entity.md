@@ -184,7 +184,8 @@
 - [deferred_test.go](../../../gameplay/actionflow/deferred_test.go)：`TestCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDirectStartFailureEndsTheActionOnce`、`TestDeferredStartThatCanNoLongerRunStillEndsItsID`、`TestHookStartStillPrecedesQueuedActions`、`TestEndAllEndsEverythingBeforeCallbackMutationsRun`；其余 6 项见文件
 - [mission_test.go](../../../gameplay/actionflow/mission_test.go)：`TestMissionRunnerBuildFailurePreservesCurrent`、`TestMissionRunnerStartFailureCleansState`、`TestMissionCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDeferredMissionStartErrorsAreReported`、`TestMissionCallbacksThatKeepTriggeringEachOtherAreBounded`；其余 9 项见文件
 - [heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`、`TestAFrozenGroupStopsBeatingAndResumesOnRecover`（经真实 Nest 与心跳驱动的用例在 `gameplay/movement`）
-- [agent_test.go](../../../gameplay/actionflow/agent_test.go)：`TestAgentDeliversActionEndsToTheMissionBeforeTheObserver`、`TestAgentEndsAMissionsActionsWithTheMissionOnly`、`TestAgentClearLeavesNothingRunning`、`TestAgentFreezeAndRecoverThroughTheActionList`、`TestNewAgentRefusesABeatHostOfAnotherEntity`
+- [agent_test.go](../../../gameplay/actionflow/agent_test.go)：`TestAgentDeliversActionEndsToTheMissionBeforeTheObserver`、`TestAgentEndsAMissionsActionsWithTheMissionOnly`、`TestAgentClearLeavesNothingRunning`、`TestAgentFreezeAndRecoverThroughTheActionList`、`TestNewAgentRefusesABeatHostOfAnotherEntity`、`TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`、`TestTheMissionHeartbeatFollowsTheCurrentStep`、`TestPlanRetriesAreCountedPerStep`
+- [nest_test.go](../../../gameplay/actionflow/nest_test.go)：`TestPlanStepTimeoutsRunOnTheRealMissionHeartbeat`（真实 Nest + 心跳驱动）
 
 ### entity
 

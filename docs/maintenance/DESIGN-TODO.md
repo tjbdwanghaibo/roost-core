@@ -1631,6 +1631,58 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 **验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；`go run ./cmd/glsvet ./gameplay/skill/combatcomponent/` 无提示。退出码均为 0。
 
 
+##### D21-4 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `79138636`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 10～12 条。
+
+**API 最终形状**：
+
+```go
+// gameplay/actionflow
+func (a *Agent) MissionReg() *heartbeat.Reg                                // "<Beat.Name>/mission"
+type MissionStep struct{ …; Timeout time.Duration; Retry int }             // 每次尝试的时限；失败 / 过期原地重试次数
+type MissionPlan struct{ …; Period time.Duration }; const DefaultMissionPeriod = 100 * time.Millisecond
+func (m *PlanMission) TickInterval() time.Duration                         // 只在当前步有时限时非 0
+// gameplay/ai
+func NewBeatController(hooks ControllerHooks, beat BeatConfig{Host, Name, Period, Options}) (*Controller, error) // DefaultBeatName = "ai"，DefaultBeatPeriod = 500ms
+func (c *Controller) BeatReg() *heartbeat.Reg
+func (c *Controller) FreezeFor(d time.Duration, interrupt bool); FrozenUntil() time.Time
+// gameplay/heartbeat
+func PeriodAtMost(want time.Duration) time.Duration                        // 动作组、任务、AI 共用的取档
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **任务不实现 `TickIntervaler` 就不挂心跳**（动作不实现时按缺省周期）：任务历来由动作结束推进，缺省不 tick 才不会让每个有任务的实体多一条心跳。
+2. **对齐点是 `MissionRunner` 的 `OnState` + `OnChanged`**：任务的周期常取决于 Start 之后的内部状态（`PlanMission` 要看当前步），`OnState(true)` 发生在 Start 之前，所以每次任务推进（`OnChanged`）都重新对齐；对齐只比较登记状态，没有变化时不产生启停。
+3. **超时以 `EndAction(动作, force, 过期)` 结束这一步的动作**（方案“以 ActionStatusExpired 结束当前步的动作”）：动作照常 `Cancel`，结论经 `OnActionEnd` 回来，与其他失败同一条路径；每次重试重新计时。
+4. **取消不重试**：方案只写“失败后原地重试”；`Canceled` 意味着有人有意结束了它（被别的动作取代、业务结束、冻结打断），重试会和那一方抢，所以直接走 `OnFail`。列为待拍板 ③。
+5. **AI 心跳不经 `Agent`**：方案写“`ai.BeatController`（或 `Agent` 的选项）”；放在 `ai` 包（`NewBeatController`），因为 actionflow 不导入 ai，而 AI 的周期取决于策略、冻结——都是 `Controller` 自己的状态。
+6. **每拍之后重新对齐 AI 周期**：策略可以随自身状态改 `TickInterval`，不需要额外的通知入口。
+7. **`FreezeFor(d, interrupt)` 覆盖之前的冻结，`Freeze` / `Recover` 清定时**；定时冻结期间心跳照常跳（用来检查到期），无定时冻结时停。
+8. **取档规则提到 `heartbeat.PeriodAtMost`**：`BeatRunner`、任务心跳、AI 心跳原来各写一份同样的循环。
+
+**红绿证据**（变异核对，原文；`&{…}` 处原文是带指针地址的结构体，省略）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| H1 任务心跳从不挂 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`mission with a timed step: reg <nil> registered 1 (want the mission's and the action group's)` |
+| H2 `Tick` 不看时限 | 同上：`first timeout: cancels 0 starts 1 mission &{…}` |
+| H3 取消也重试 | `TestTheMissionHeartbeatFollowsTheCurrentStep`：`a canceled step was retried: starts 2 mission &{…} log [action 1 2 step 1 action 2 4 step 1]` |
+| H4 重试次数不按步清零 | `TestPlanRetriesAreCountedPerStep`：`mission {Status:3 CurrentStep:-1 CurrentAction:0 LastResult:{Status:3 Reason:flaky}}, starts 2 / 1 (want each step retried once, then success)` |
+| H5 任务结束 / 无时限的步不停心跳 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`after the mission failed: active true registered 1 info {Status:5 …}`；`TestTheMissionHeartbeatFollowsTheCurrentStep`：`untimed second step: mission beat active true current &{untimed …}` |
+| H6 重试不重新计时 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`observer saw [action 1 5 step 0], want [action 1 5 step 0 action 2 5 step 0 mission 1 5]` |
+| H7 冻结时 AI 照跳 | `TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`：`frozen: true 200ms registered 1`；`TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`Freeze after FreezeFor: frozen true beating true ended 1` |
+| H8 定时冻结不到期 | `TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`at the end: ticks 0 frozen true until 2027-01-15 16:00:01 +0800 CST` |
+| H9 周期不看策略 | `TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`：`300ms strategy: true 500ms (want the 200ms tier)` |
+| H10 每拍后不重新对齐 | 同上：`strategy slowed down: true 200ms ticks 1` |
+| H11 `FreezeFor` 不结束在途动作 | `TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`FreezeFor: frozen true until 2027-01-15 16:00:01 +0800 CST beating true ended 0` |
+| H12 定时冻结也停心跳 | 同上：`FreezeFor: frozen true until 2027-01-15 16:00:01 +0800 CST beating false ended 1` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例（`TestPlanStepTimeoutsRunOnTheRealMissionHeartbeat`、`TestTheAIDecidesOnItsOwnHeartbeat`，连同前几期的 `TestAFrozenGroupStops…`、`TestGate…`、`TestStatesFollow…`、`TestFreezingTheMoveGroup…`、`TestAMoveThatIsAlreadySettled…`）`-race -count=30` 全部通过；根包 `GOWORK=off go test -count=1 .`。退出码均为 0。
+
+**待拍板（先按推荐做了）**：③ 被取消的步骤是否重试——现按“不重试、直接 OnFail”（推荐：取消是有意的结束，重试会与发起取消的一方抢）；备选 B：取消也算失败，按 `Retry` 重试。
+
 ## D22 业务时间取自 ctx、支持变速
 
 **状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**

@@ -197,7 +197,7 @@ return err
 - 动作可选实现 `actionflow.TickIntervaler`：不实现按 `BeatConfig.Period`（缺省 100ms）；返回 0 表示不需要周期 tick（由别的动作或 handler 结束它），这个组不挂心跳；返回正数取不大于它的最长档。组的当前动作切换时按新动作的周期启停这个组的心跳；同一实体的多个组各自一个登记、各自投递（与 ssr 相同，决定 ③ 不合并）。移动中的实体只有移动组一个登记，每拍一条消息。
 - 一拍只 tick 这个组；`ActionContext.Elapsed` 是本拍的 `Beat.Elapsed`（不追帧），按时间推进的动作用它。
 - 组的心跳挂不上（Remote 托管实体处于共享模式，§4A）时，这个动作以失败结束（原因带 `ErrHeartbeatRemoteShared`）；运行中进入共享模式、框架停掉了心跳时，动作留在 runner 里不推进，回到独占后调用 `BeatRunner.Sync()` 重新挂上（共享期间它返回错误）。
-- AI（`gameplay/ai.Controller`）与技能以后用同一个 runner：它们的行为都是动作，由动作所在组的心跳 tick。
+- 技能以后用同一个 runner：行为都是动作，由动作所在组的心跳 tick。AI 的**决策**有自己独立的心跳（`ai.NewBeatController`，§4C），它下发的动作仍由动作组的心跳推进。
 
 **MapBasic**：
 
@@ -239,6 +239,27 @@ m.agent, _ = actionflow.NewAgent(m, actionflow.AgentConfig{
 - 任务回调运行期间（`Start` / `Tick` / `OnActionEnd`，含它们同步引出的回调）经 `CreateAction` / `EnqueueAction` 发起的动作**归属当前任务**，任务结束时一并取消；AI 或 handler 发起的不属于任何任务。
 - `Clear(reason)` 清场：先结束任务、再强制结束全部动作，之后什么都不在运行。
 - 和 runner 一样只在实体锁内调用、不随事务回滚（§4B 的业务约束照旧）。
+- **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Agent 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束。
+
+**计划步骤的时限与重试**（`MissionStep.Timeout` / `Retry`，`MissionPlan.Period`）：
+
+```go
+plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
+	{Action: ActChase, Param: chase, Timeout: 5 * time.Second, Retry: 2, OnFail: actionflow.NextMissionStep(2)},
+	{Action: ActAttack, Param: attack},
+	{Action: ActReturn, Param: home},
+}}
+```
+
+- `Timeout` 是这一步**每次尝试**的时限：到时任务把这一步的动作以过期（`ActionStatusExpired`）结束，按失败处理。需要任务心跳（Agent 配了 `Beat`），检查粒度是 `MissionPlan.Period`（缺省 100ms，取档）；`PlanMission` 只在当前步有时限时要心跳。
+- `Retry` 是失败（`Failed` / `Expired`）后原地重试的次数，每次重试重新计时，用完才走 `OnFail`；**被取消的不重试**（被别的动作取代、被业务结束），直接走 `OnFail`。次数按步计，进入下一步清零。
+- 更复杂的分支（按条件、按结果原因）用行为树，计划里不加表达式。
+
+**AI 心跳与定时冻结**（`gameplay/ai`，第 4 期）：`ai.NewBeatController(hooks, ai.BeatConfig{Host: m.host})` 让 `Controller` 用一个独立的心跳登记 `"ai"` 决策（不并进动作组的心跳：决策周期与动作推进周期不同，维护者决定 7）。
+
+- 周期由当前策略决定：策略可选实现 `TickInterval() time.Duration`（与 `actionflow.TickIntervaler` 同一个方法），不实现按 `BeatConfig.Period`（缺省 500ms），返回 0 表示不需要周期决策；每拍之后按策略重新取档，所以策略可以随自身状态改周期（战斗中 200ms、空闲 1s）。
+- 没有策略、或 `Freeze()`（无定时）时停心跳；`FreezeFor(d, interrupt)` 冻结 `d`，期间心跳照常跳但不决策，到期后的第一拍自动恢复并决策；`interrupt` 为真时同时经 `EndActions` 钩子结束在途动作。`Freeze` / `Recover` 清掉定时。
+- 动作 / 任务结束在冻结期间照常送达策略（原有规则）。
 
 **动作的 Start 可以“启动即完成”**（瞬时动作：传送、改朝向、已经在终点的移动）。`Action.Start(ctx) (done bool, result ActionResult, err error)`：`err` 非空是没能启动（以失败结束）；`done` 为真时 runner 不再 tick 它，立即以 `result` 结束（状态为空算成功），照常发 `OnEnded`、通知任务、推进本组队列，不挂心跳。`movement` 的 `MoveTo` / `Follow` 在 Start 时按 0 时长核对一次：已经在终点、目标已在 `Keep` 以内且 `StopWhenReached`、目标已消失或不在本场景，都在发起它的 handler 里结束。
 

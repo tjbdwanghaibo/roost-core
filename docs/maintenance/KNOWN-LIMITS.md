@@ -37,7 +37,7 @@
 
 `gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow`）与 `actionflow.BeatRunner`（[DESIGN-TODO D20 P2](DESIGN-TODO.md#p2-实施结果2026-10-21)）。用法见 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，契约见 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
 
-- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）；AI（`gameplay/ai.Controller`）没有接到 `BeatRunner`。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
+- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
 - **runner 不随事务回滚：框架不处理，由业务保证**（维护者 2026-10-21）。`ActionRunner` / `MissionRunner` 是纯内存状态；handler 先做完全部可能失败的校验与修改，最后一步才调用 `Start` / `Enqueue` / `End` 等。违反时，回滚后 runner 里残留这次的变更：例如回滚的 handler 里启动的 MoveTo 仍是移动组的当前动作，而 `Move` 的设定与组的心跳都随回滚恢复——这个动作不被 tick，直到被取代、被结束，或业务调用 `BeatRunner.Sync` 后在下一拍以取消（`Replaced`）结束。心跳那一拍只在提交失败时回滚（拍回调不返回错误），此时动作对组件的修改回滚、runner 按 Tick 的结论的推进保留，同样不处理。
 - **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 取 Interest 的锁并 `Apply` 一次，在 Nest worker 上可能等一个 AOI 应用批次（进出场景是低频事件，未测）；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 生效，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）。
 - **`Published` 晚于同一拍里的事件**：快照在提交后、实体锁释放之后才发布；在拍的事务里观察到的事件（动作结束、OnEnded）早于它。要读到这一拍提交后的位置，等该实体的下一条消息（同实体消息要等前驱作业连同提交后回调整个结束）。
@@ -52,10 +52,12 @@
 
 `actionflow.Agent`、`Replacer`、跨组 `Conflict`、`EndAction`、计数冻结与 Start 即完成（[DESIGN-TODO D21](DESIGN-TODO.md#6-调研一--实施)）。用法见 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结)，契约见 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)。
 
-- **还没有业务接入**：game-demo 与生成器都没有用 `Agent`（随 D20 P3 一起接）；仓库里实现 `Action` 的只有 `movement` 的两个动作与测试动作。
+- **还没有业务接入**：game-demo 与生成器都没有用 `Agent`、`state`、AI 心跳（随 D20 P3 一起接）；仓库里实现 `Action` 的只有 `movement` 的两个动作与测试动作。
 - **Agent 与 runner 一样不随事务回滚**（D20 决定 3）：冻结计数、取代与抢占的结果、任务的推进都是内存状态，handler 回滚后保留，由业务把这些调用放在 handler 最后一步。
 - **任务回调期间结束的动作，观察者可能先于任务收到**：动作结束经 `MissionRunner.OnActionEnd` 送任务，任务正在执行自己的回调时（例如任务 `Start` 里发起的动作启动即失败）这次送达延后到回调返回后，而观察者（AI）在当次就收到。“先任务后观察者”只在任务不处于自己的回调时成立。
 - **动作的归属任务按“任务 runner 是否正在执行”判定**：任务回调同步引出的其他回调（例如任务回调里启动的动作启动即失败、`OnEnded` 送到观察者、观察者又发起动作）发起的动作也会记在当前任务名下，随任务结束被取消。
+- **步骤时限的精度是任务心跳的周期**：到时最多晚一个 `MissionPlan.Period`（缺省 100ms，取档）才结束动作；超时的结束发生在任务自己的 Tick 回调里，所以观察者（AI）先收到这次动作结束、后收到可能随之而来的任务结束（上一条的例外）。没有配 `Beat` 的 Agent 不检查时限（任务不被 tick）。
+- **AI 心跳的错误只报告**：`"ai"` 登记挂不上（Remote 共享模式）时经 `OnError` 报告，AI 不再周期决策，回到独占后要业务重新 `SetStrategy` / `Recover` 触发对齐；动作 / 任务结束照常送达。
 - **`FreezeCancel` 只打断当前动作**：排队项保留，解冻后接着推进；要连排队一起丢弃，业务另调 `ClearQueue` / `EndAction`。
 - **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，回滚后的不一致在下一次状态通知时纠正（见下条）。
 - **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。

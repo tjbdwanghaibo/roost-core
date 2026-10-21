@@ -37,7 +37,8 @@
 | --- | --- |
 | [behavior_strategy.go](../../../gameplay/ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`、`TaskflowAction` |
 | [blackboard.go](../../../gameplay/ai/blackboard.go) | `Blackboard` |
-| [controller.go](../../../gameplay/ai/controller.go) | `ControllerHooks`、`Controller` |
+| [beat.go](../../../gameplay/ai/beat.go) | `BeatConfig`（`NewBeatController`、`DefaultBeatName`、`DefaultBeatPeriod`：AI 独立心跳，D21 第 4 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 12 条） |
+| [controller.go](../../../gameplay/ai/controller.go) | `ControllerHooks`、`Controller`（含 `FreezeFor` / `FrozenUntil`） |
 | [nodes.go](../../../gameplay/ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector` |
 | [strategy.go](../../../gameplay/ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy` |
 | [tree.go](../../../gameplay/ai/tree.go) | `Status`、`Node`、`FuncNode`、`Sequence`、`Selector`、`Inverter` |
@@ -184,6 +185,7 @@
 
 ### ai
 
+- [beat_test.go](../../../gameplay/ai/beat_test.go)：`TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`、`TestFreezeForRecoversOnTheFirstBeatAfterItEnds`、`TestTheAIDecidesOnItsOwnHeartbeat`
 - [behavior_test.go](../../../gameplay/ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestBehaviorStrategyDeterministicDecisions`；其余 6 项见文件
 - [controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`、`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`、`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`；其余 5 项见文件
 
