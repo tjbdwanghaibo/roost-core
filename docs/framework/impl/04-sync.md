@@ -15,7 +15,7 @@
 ## 2. 必须保持的契约
 
 1. 持久水位和 Guard 冻结共同约束状态可见性。
-2. 客户端状态缺口恢复全量，不在失效 base 上继续应用。
+2. 客户端状态缺口恢复全量，不在失效 base 上继续应用。Hold 换 epoch 后，新 epoch 的第一帧必须是 Full：有对象时由快照兼任，一个订阅都不剩时补一个空 Full（`session.owesEmptyFull` 判定；`ReadySession` 与 `removeSubscriptionLocked` 把会话登记进 `Manager.resets`，Flush 在捕获之后 `prepareResets` 复核“仍欠且没有订阅”才发；RetryLater 重新登记，Drain 把它算作未排空，诊断项 `session` / `empty_full`）。不能改回“没有对象就不出帧”，否则 held 期间撤掉最后一个订阅后接收端永远留着旧对象（`TestHoldThenReadyWithoutSubscriptionsClearsTheReceiver`、`TestEmptyFullAfterHoldIsRetriedUntilAdmitted`）。
 3. Lockstep 席位来自认证 session；历史默认按 `HistoryRetainFrames`（3600 帧）在 Tick 末尾自动裁剪。落后会话按 `MatchConfig.Recovery` 恢复：catchup（没配快照来源时的缺省）越界以 `ErrCatchupUnservable` 失败并发 C9 v2 通知、客户端终止；auto / snapshot 越界改发业务快照（CA 01 分块）再续帧，只有快照路线最终失败才通知终止。`Tick` 从不等快照来源，恢复中的会话钉住历史但有上限（§2D）。
 4. 有限投递、流保留与业务 ACK 语义不能等同 exactly-once。
 5. `Manager.Drain` 不放弃任何条目；ctx 结束时返回带卡住条目摘要的 `*DrainStalledError`，`errors.Is` ctx 错误不变。
@@ -309,7 +309,7 @@
 - [retirement_test.go](../../../framework/sync/entitysync/retirement_test.go)：`TestRetractSyncSubjectRemovesHeldObjectsBeforeRecreate`、`TestRetractSyncSubjectDoesNotRetireALaterRegistration`、`TestRegisterAfterRetirementCompletesOnceTheRemoveIsOut`、`TestRegisterAfterRetirementCompletesWhenTheLastSubscriberCloses`、`TestAQueuedRegistrationIsBoundedAndCancellable`；其余 11 项见文件
 - [snapshot_budget_test.go](../../../framework/sync/entitysync/snapshot_budget_test.go)：`TestProfileDowngradeReplacesClientFields`、`TestWholeEntityPacketsSplitAndRetainIndependentFrameState`、`TestWholeEntityTooLargeIsExplicitAndNeverTruncated`、`TestWholeEntitySplitRetryContinuesFrameAndContentBaselines`、`TestSnapshotBudgetRotatesAndDoesNotDelayLiveUpdates`；其余 14 项见文件
 - [snapshot_scheduling_test.go](../../../framework/sync/entitysync/snapshot_scheduling_test.go)：`TestLargeSnapshotFiniteBacklog`、`TestLargeSnapshotStarvedUnderChurn`、`TestLargeSnapshotSingleSession`、`TestByteBlockedWindowDoesNotRecaptureUntilNextWindow`、`TestByteBlockedSnapshotsAreNotRecapturedEveryWindow`；其余 9 项见文件
-- [subscription_test.go](../../../framework/sync/entitysync/subscription_test.go)：`TestSubscriptionIndexTracksAllRemovalPaths`、`TestSessionRecoveryDoesNotLockUnsubscribedSubjects`、`TestSubscriptionIndexConcurrentLifecycle`、`TestFlushDoesNotSendOldSubscriptionToReopenedSession`、`TestPendingSnapshotStillRemovesAnAlreadyDeliveredObject`；其余 5 项见文件
+- [subscription_test.go](../../../framework/sync/entitysync/subscription_test.go)：`TestSubscriptionIndexTracksAllRemovalPaths`、`TestSessionRecoveryDoesNotLockUnsubscribedSubjects`、`TestSubscriptionIndexConcurrentLifecycle`、`TestFlushDoesNotSendOldSubscriptionToReopenedSession`、`TestPendingSnapshotStillRemovesAnAlreadyDeliveredObject`、`TestHoldThenReadyWithoutSubscriptionsClearsTheReceiver`、`TestEmptyFullAfterHoldIsRetriedUntilAdmitted`；其余 5 项见文件
 
 ### sync/entitysync/policy
 

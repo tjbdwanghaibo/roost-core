@@ -105,6 +105,12 @@ func (m *Manager) OpenHeldSession(id SessionID) error {
 // subscription it holds goes back to "needs a snapshot" and the next frame it
 // gets (after ReadySession) opens a new epoch with a FrameFull. Use it when
 // the receiver has lost its state — a reconnect, a client-side reset.
+//
+// 契约：Ready 之后接收端的对象表等于那时仍在的订阅——新 epoch 的 Full 让上一 epoch 的对象全部作废，
+// held 期间撤掉的订阅因此不欠 remove。撤到一个订阅都不剩时，这一 lifetime 交付过帧的会话会收到一个
+// 不含对象的 Full（owesEmptyFull），接收端照样清空；从未收过帧的会话不发。所以“暂停发布、读权限、
+// Apply、Ready”也可以用它，代价是 Ready 后全部对象按全量重发。`frame.Receiver` 的接入方在收到 Full 时
+// 先清空旧对象（Receiver 文档的约定）。
 func (m *Manager) HoldSession(id SessionID) error {
 	if m == nil {
 		return ErrManagerClosed
@@ -172,10 +178,15 @@ func (m *Manager) ReadySession(id SessionID) error {
 	m.sessions[id] = next
 	m.heldSessions--
 	subjects := sessionSubjectsLocked(sess)
+	owes := next.owesEmptyFull()
 	m.mu.Unlock()
 	for _, subj := range subjects {
 		// 并发退订最多产生一次空检查；并发新增由 Subscribe 自行调度。
 		m.markPending(subj.id)
+	}
+	if owes {
+		// 有订阅时 Full 由它们的快照兼任，Flush 复核后丢掉这条登记。
+		m.markReset(id)
 	}
 	m.WakeSync()
 	return nil
@@ -520,7 +531,21 @@ func (m *Manager) removeSubscriptionLocked(subj *subject, sid SessionID) {
 	delete(subj.subscribers, sid)
 	m.changeSubscriptionKindLocked(subj, sid, sub, kindLeaving)
 	m.subscriptionCount.Add(-1)
+	// Ready 之后、新 epoch 的 Full 发出之前撤掉了最后一个订阅：再没有快照能兼任 Full，登记空 Full。
+	current := m.sessions[sid]
+	owes := current != nil && current.lifetime == sub.lifetime && current.owesEmptyFull() && len(sub.lifetime.subjects) == 0
 	m.mu.Unlock()
 	subj.profilesValid = false
 	m.clearSnapshotWaitLocked(subj)
+	if owes {
+		m.markReset(sid)
+		m.WakeSync()
+	}
+}
+
+// markReset 登记一个可能欠空 Full 的会话，由下一次 Flush 复核；pendingMu 是最内层锁，持任何锁时都可调用。
+func (m *Manager) markReset(id SessionID) {
+	m.pendingMu.Lock()
+	m.resets[id] = struct{}{}
+	m.pendingMu.Unlock()
 }

@@ -20,7 +20,7 @@ entitysync 维护 subject、session、subscription、profile 与每会话帧；p
 
 ## 2. 状态同步流程
 
-注册 subject → OpenSession（可 held）→ Subscribe → ReadySession → Flush/运行循环。held 会话可以建立订阅但不出帧；ready 后从新 epoch 全量开始。多个来源订阅同一 subject，各自持有引用，最后一个离开才真正取消。subject 保存订阅真相，session 保存其对象生命周期关系。
+注册 subject → OpenSession（可 held）→ Subscribe → ReadySession → Flush/运行循环。held 会话可以建立订阅但不出帧；ready 后从新 epoch 全量开始。对一个在收帧的会话 `HoldSession` 再 Ready，接收端的对象表等于 Ready 时仍在的订阅：一个都不剩时收到不含对象的 Full，同样清空旧对象（[ENTITY_SYNC §会话](../ENTITY_SYNC.md#会话)）。多个来源订阅同一 subject，各自持有引用，最后一个离开才真正取消。subject 保存订阅真相，session 保存其对象生命周期关系。
 
 PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确定顺序选择视图。视图必须限制字段可见范围，不能因空视图或缓存复用扩大权限。快照预算限制尚未持有对象的冷创建；增量、remove 和已持有对象的全量不能被当成同一种冷创建计费。
 

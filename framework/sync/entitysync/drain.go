@@ -33,7 +33,7 @@ func (m *Manager) Drain(ctx context.Context) error {
 			return err
 		}
 		m.pendingMu.Lock()
-		pending := len(m.pending) + len(m.waitingSnapshots)
+		pending := len(m.pending) + len(m.waitingSnapshots) + len(m.resets)
 		m.pendingMu.Unlock()
 		if pending == 0 && !m.policiesPending() {
 			metrics.SetGauge(metricDrainRemaining, nil, 0)
@@ -61,6 +61,7 @@ const DrainStallLimit = 8
 // DrainStall 是 Drain 结束时仍未排空的一项。
 type DrainStall struct {
 	// Source 是条目来源：subject（待捕获的 subject）、snapshot（等冷创建预算的快照）、
+	// session（Hold 之后欠接收端一个空 Full 的会话，Reason 为 empty_full）、
 	// policy（政策阶段：框架的释放 / 重新提交通知，或某个政策报告的待处理事实）。
 	Source string
 	// Subject / Session 是条目对应的 subject 与会话，0 表示不针对单个 subject / 会话。
@@ -181,6 +182,14 @@ func (m *Manager) drainStalls(limit int) ([]DrainStall, int) {
 			continue // 已作为 subject 条目列出
 		}
 		add(DrainStall{Source: "snapshot", Subject: id, Reason: "snapshot_budget", Waited: now.Sub(m.waitingSnapshots[id].since)})
+	}
+	sessions := make([]SessionID, 0, len(m.resets))
+	for id := range m.resets {
+		sessions = append(sessions, id)
+	}
+	slices.Sort(sessions)
+	for _, id := range sessions {
+		add(DrainStall{Source: "session", Session: id, Reason: "empty_full"})
 	}
 	m.pendingMu.Unlock()
 

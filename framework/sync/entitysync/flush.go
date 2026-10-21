@@ -27,8 +27,8 @@ func (m *Manager) markPendingLocked(subjectID int64) {
 	}
 }
 
-// takePending 取走全部待处理 subject，按 ID 升序返回，保证捕获顺序确定。
-func (m *Manager) takePending() []int64 {
+// takePending 取走全部待处理 subject（按 ID 升序，保证捕获顺序确定）与可能欠空 Full 的会话。
+func (m *Manager) takePending() ([]int64, []SessionID) {
 	m.pendingMu.Lock()
 	ids := make([]int64, 0, len(m.pending))
 	for id := range m.pending {
@@ -36,9 +36,42 @@ func (m *Manager) takePending() []int64 {
 	}
 	clear(m.pending)
 	m.pendingOverlap = 0
+	var resets []SessionID
+	if len(m.resets) > 0 {
+		resets = make([]SessionID, 0, len(m.resets))
+		for id := range m.resets {
+			resets = append(resets, id)
+		}
+		clear(m.resets)
+	}
 	m.pendingMu.Unlock()
 	slices.Sort(ids)
-	return ids
+	return ids, resets
+}
+
+// prepareResets 为仍欠空 Full、且已没有任何订阅的会话在 work 里准备一个空批次，返回这些会话。
+// 还有订阅的会话丢掉登记：新 epoch 的 Full 由它们的快照兼任；之后撤到一个不剩时 removeSubscriptionLocked 会重新登记。
+func (m *Manager) prepareResets(resets []SessionID, work map[SessionID]*flushSession) map[SessionID]bool {
+	var owed map[SessionID]bool
+	for _, sid := range resets {
+		m.mu.RLock()
+		sess := m.sessions[sid]
+		empty := sess != nil && sess.owesEmptyFull() && len(sess.lifetime.subjects) == 0
+		m.mu.RUnlock()
+		if !empty {
+			continue
+		}
+		if batch := work[sid]; batch == nil {
+			work[sid] = m.takeFlushSession(sess)
+		} else if batch.session != sess {
+			continue // 捕获之后会话又被 Hold 或重开，交给下一次 Ready 重新登记
+		}
+		if owed == nil {
+			owed = make(map[SessionID]bool)
+		}
+		owed[sid] = true
+	}
+	return owed
 }
 
 // ---- the tick ----
@@ -106,8 +139,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		return fmt.Errorf("sync policy: %w", err)
 	}
 	m.refreshSnapshotWindow()
-	ids := m.takePending()
-	if len(ids) == 0 {
+	ids, resets := m.takePending()
+	if len(ids) == 0 && len(resets) == 0 {
 		m.emptyFlushes.Add(1)
 		return nil
 	}
@@ -238,11 +271,13 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 
 	m.captureNanos.Add(uint64(time.Since(captureStarted)))
+	// 欠空 Full 的会话在捕获之后复核：本轮捕获里新增的订阅已经登记在 lifetime 上，不会被空 Full 抢先。
+	emptyFulls := m.prepareResets(resets, work)
 	// 准入：会话有序处理（冷创建计费会话按计划顺序在前，其余按 ID），
 	// 每帧成功后推进线协议状态，该会话全部帧成功后结算订阅。
 	sessionIDs := make([]SessionID, 0, len(work))
 	for sid, batch := range work {
-		if len(batch.entries) == 0 {
+		if len(batch.entries) == 0 && !emptyFulls[sid] {
 			continue
 		}
 		sessionIDs = append(sessionIDs, sid)
@@ -269,6 +304,9 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			m.requireSnapshotsAfterRetry(admittedSessions, work)
 			for _, id := range ids {
 				m.markPending(id)
+			}
+			for sid := range emptyFulls {
+				m.markReset(sid) // 已交付的会话下次复核时不再欠，自然丢掉
 			}
 			return fmt.Errorf("sync admission session %d: %w", sid, retryErr)
 		}

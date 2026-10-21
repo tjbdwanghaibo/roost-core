@@ -209,6 +209,8 @@ sequenceDiagram
 
 held 只停止后续发布，不收回客户端已经收到的信息；传输是内存捕获，不是 TCP 客户端。
 
+Hold → Ready 每次都开新 epoch、把仍在的对象按全量重发；最后一个据点被撤权、Ready 时一个订阅都不剩，客户端会收到一个不含对象的 Full 并清空（[ENTITY_SYNC §会话](ENTITY_SYNC.md#会话)，2026-10-21 起）。所以不需要为“最后一个对象撤销”另挂常驻的控制对象（学习分支 `fix/core-game-server-review` 曾用 subject 98 让每个新 epoch 至少有一个对象，那是这个缺口的绕法，main 上不要照抄）。周期刷新只在权限读取失败时才必须停发布；每次成功刷新都 Hold 会让每个对象每个周期全量重发一次，刷新频繁时把 Hold 留给读失败与重连。
+
 #### 7.6 示例：原服到账与联盟条件写
 
 下面的文件放进保留的生成工程（例如 `internal/slgalliance/flow.go`）可直接编译：

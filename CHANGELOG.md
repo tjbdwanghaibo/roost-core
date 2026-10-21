@@ -30,6 +30,11 @@
 - **升级**：线上未部署，不做兼容。直接调用 `StateDao.CaptureRollbackState` / `RestoreRollbackState` 的代码（仓库内没有）改用 Nest 的快照；rollback=state 下改状态的实体要把 `StateDao` 登记进 DaoManager。
 - **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)、[“行为控制”](docs/maintenance/KNOWN-LIMITS.md#行为控制d21)、[“慢派发 trace 的参数样本”](docs/maintenance/KNOWN-LIMITS.md#慢派发-trace-的参数样本)。
 
+### 学习分支审查第 8～10 条（2026-10-21 `learn/main-review-20261021` 登记）与两个时序敏感测试
+
+- **修复（`framework/sync/entitysync`，第 8 条）**：会话 held 期间（或 Ready 之后、新 epoch 的 Full 发出之前）撤掉最后一个订阅，Ready 之后接收端收不到任何帧、一直留着旧对象。现在这一 lifetime 交付过帧的会话会收到一个不含对象的 Full（新 epoch），接收端照常清空；还有订阅时 Full 照旧由快照兼任，从未收过帧的会话不发。`HoldSession` 的契约随之写成“Ready 后接收端的对象表等于那时仍在的订阅”，SLG §7.5 的“暂停发布 → 读权限 → Apply → Ready”不再需要常驻控制对象绕过。Drain 把欠着的空 Full 算作未排空（诊断项 `session` / `empty_full`）。修前 `TestHoldThenReadyWithoutSubscriptionsClearsTheReceiver` 三个子用例都报 `after hold, removal and ready the receiver got 0 frame(s), still holds 1 object(s), epoch 1 (was 1); want one empty Full in a newer epoch`。
+- **协议**：空 Full 是线格式 v2 里本来合法的帧（Full 可以不含对象），不改版本；接收端收到 Full 要先清空旧对象（`frame.Receiver` 原有约定）。
+- **升级**：线上未部署，不做兼容。
 
 ### 生成器接入实体心跳、行为组件与场景时间域（DESIGN-TODO D20～D22）
 

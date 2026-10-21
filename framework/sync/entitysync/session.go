@@ -77,6 +77,14 @@ type session struct {
 	referencesOwned bool
 }
 
+// owesEmptyFull 报告会话是否欠接收端一个空 Full：HoldSession 换了 epoch（tick 回到 0），而这一 lifetime
+// 之前已经交付过帧，接收端可能还持有上一 epoch 的对象，只有新 epoch 的 Full 才让它们作废。新 epoch 里
+// 有对象要发时由那一帧兼任；一个订阅都没有时 Flush 补一个不含对象的 Full（ReadySession 与撤掉订阅时登记）。
+// 从未交付过帧的会话（framesSent 为 0）没有旧状态可清，不欠。
+func (s *session) owesEmptyFull() bool {
+	return !s.held && s.tick == 0 && s.framesSent > 0
+}
+
 // clone 复制会话供编码使用；准入失败保留最后成功帧的状态，未交付的后缀不生效。
 func (s *session) clone() *session {
 	next := *s
@@ -138,6 +146,7 @@ func (s *session) release(subjectID int64) {
 // encode 按完整实体包边界组帧；对象数或字节容量不足就开启下一帧，
 // 不切开实体 payload。每帧独立推进会话时钟。会话收到的第一帧是 Full
 // （此时还没有活对象，只能包含 create），之后每帧都是基于上一 tick 的 Delta。
+// 没有对象可发时不出帧，只有欠空 Full（owesEmptyFull）的会话出一个不含对象的 Full。
 // work 是 Flush 串行借用的临时切片，返回的帧字节与逐帧会话状态不引用它。
 //
 // 编码失败可能是引用表不一致或单实体包超硬上限；关闭受影响会话，
@@ -190,7 +199,7 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorks
 	counts := encodedFrame{}
 	size := 32 // frame 协议头
 	finish := func() error {
-		if len(objects) == 0 {
+		if len(objects) == 0 && (len(frames) > 0 || !s.owesEmptyFull()) {
 			return nil
 		}
 		out := frame.Frame{
