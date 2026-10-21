@@ -247,6 +247,10 @@ func rewardChild(t *testing.T, mode string) {
 }
 
 func TestSLGAlliancePlayerDelivery(t *testing.T) {
+	if role := os.Getenv("SLG_REPORT_CHILD"); role != "" {
+		runCrossReportChild(t, role)
+		return
+	}
 	if mode := os.Getenv("SLG_REWARD_CHILD"); mode != "" {
 		rewardChild(t, mode)
 		return
@@ -275,6 +279,7 @@ func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 		runRewardProcess(t, "inbox-write", sid, prefix, root)
 		runRewardProcess(t, "inbox-recover", sid, prefix, root)
 		runRewardProcess(t, "inbox-verify", sid, prefix, root)
+		runCrossReport(t, sid, root)
 	}
 }
 
