@@ -12,7 +12,28 @@
 
 ## 1. 双时钟
 
-业务时间表达玩法活动、冷却和可测试的游戏期限；系统时间表达 lease、网络期限、重试、WAL、日志和停机。业务 Now 与 SystemNow 分别注入；默认业务 clock.Now，系统 time.Now。不能把加速玩法时间同时作用到 Redis 租约或写超时。
+业务时间表达玩法活动、冷却和可测试的游戏期限；系统时间表达 lease、网络期限、重试、WAL、日志和停机。业务 Now 与 SystemNow 分别注入；Nest 消息里的业务时间读 `fctx.Now()`（§1A），服务的缺省是 `app.BusinessClock`，系统 time.Now。不能把加速玩法时间同时作用到 Redis 租约或写超时。
+
+## 1A. 业务时间一律取自 ctx（D22-1）
+
+DESIGN-TODO D22（维护者 2026-10-21 决定，照 ssr：业务里的时间一律从 ctx 取）。**Nest 消息里的业务时间唯一入口是 `fctx.Now()`**（`fctx.NowMilli()`）：每条消息、每一拍在执行开始时冻结一次（进程业务时钟 = 真实时间 + `time.logic_offset`），同一条消息里读多少次都是同一个值。所以 handler、心跳的 `Beat.Now`、entitytimer 的 `Fire.Now`、actionflow / AI 的缺省时间、生成的分发包装填的 `nowUnix` 参数是同一时刻，同一事务里不会“前一行判定没过期、后一行按另一个时刻记账”。
+
+| 在哪里 | 业务时间从哪里来 |
+| --- | --- |
+| Nest handler、心跳回调、entitytimer 回调、actionflow / AI / 技能的回调 | `fctx.Now()`；不直接读 `app.BusinessClock` 或 `clock.Now()`（glsvet 对 Nest handler 里的这两种读法打 `hint:`，确属现读的写 `//glsvet:live-business-clock <理由>`） |
+| handler 参数 `nowUnix` / `nowUnixMilli`（`int64`） | 生成的 Nest 分发包装在 handler **执行时**从 `fctx` 填（`fctx.Now().Unix()` / `fctx.NowMilli()`）；不在消息里传，生成的 Sender 签名里没有它，endpoint 也不填。排队、冷加载、重试的耽搁不算进“之前”。handler 仍可在单测里直接传值 |
+| 心跳 `Beat.Now` / `Elapsed` | 这一拍消息冻结的 `fctx.Now()`（驱动缺省时钟就是 `fctx.Now`） |
+| entitytimer 的 Tick | Tick 消息不带时间；`Host.Tick()` 按这条消息冻结的业务时间触发，`Fire.Now` 与回调里读的 `fctx.Now()` 相同。handler 里增删改定时器的起点也是它 |
+| `actionflow` / `ai` / `timer.Scheduler` 没给时间时 | `fctx.Now()` |
+| 不在 Nest 消息里：服务 goroutine（活动协调器、匹配、spawner 的决策循环）、admin / GM 命令、启动阶段、驱动自己的循环 | 照旧读 `app.BusinessClock(registry)`（服务经 `Config.Now` 注入）；`fctx.Now()` 在这些地方现读进程业务时钟 |
+
+边界：
+
+- **冻结点**：请求上下文建立时（`fctx.NewContext`）。Nest 消息是逻辑阶段开始执行时；I/O 准备之后换池续行重新冻结（交接快照 `ContextSnapshot` 不带它）。实体锁等待的时间算在冻结之后：冻结的是“这条消息开始执行”的时刻，不是拿到锁的时刻。
+- **进程业务时钟与 Registry 业务时钟**：两者读同一份 `time.logic_offset`，App 启动时设进程级偏移（`clock.SetOffset`）。心跳、entitytimer 的进程装配因此不再 `SetClock`，驱动缺省读 `fctx.Now`；`SetClock` 只给测试。只建 Registry、不启动 App 的测试里两者可以不同，这时用 `clock.SetOffset` 或 `clock.SetSource`（测试用：换真实时间来源，可停住或单步）设进程业务时钟。
+- **一条消息里的派生值**：`fctx.Frozen(key, compute)` 让一次执行里第一次算出的值被冻结（与 `Now` 同生命期、不进快照）；时间域（§4D）用它保证一条消息读到同一个域时间。
+
+不兼容（项目未上线，不保留旧行为）：生成的 Sender 去掉业务时间参数；`roost add timer` 生成的 Tick handler 去掉 `nowUnixMilli` 参数、组件的 `Tick()` 无参数；`entitytimer.Host.Tick()` 无参数（要指定时刻用 `TickAt`）。game-demo 去掉了 `executionNowUnix`（取调用方时间与持锁后时钟的较大者）——现在 `nowUnix` 本身就是执行时刻。
 
 ## 2. 业务高水位
 
@@ -34,7 +55,7 @@ DESIGN-TODO D18（维护者 2026-10-20 决定 A，缺省 UTC）。存储与协�
 - `app.BusinessCalendar(registry)` 取日历（挂在 `app.BusinessClock(registry)` 上，`clock.CalendarOf(clock)` 同一份）；没有 Registry 的代码用进程级的 `clock.BusinessDay(t)` / `clock.DayStart(t)` / `clock.NextDayStart(t)`。
 - `BusinessDay(t)` 返回 `clock.Day`：业务日的日期，十进制 `YYYYMMDD`（`20261020`），可直接存进 DAO、按大小比较；零值表示“还没有过”。
 - `DayStart(t)` / `NextDayStart(t)`：`t` 所在业务日的起点（不晚于 `t`）与下一个起点（晚于 `t`），是业务时区里的时刻。重置时刻按墙上时间：夏令时切换那天是 23 或 25 小时，不按固定 24 小时推；重置时刻落在被跳过或重复的那一小时，那一天仍只有一个起点。
-- 时刻本身仍读业务时钟（带 `time.logic_offset`）：`cal.BusinessDay(app.BusinessClock(r).Now())`。
+- 时刻本身仍是业务时间（带 `time.logic_offset`）：Nest handler 里用本条消息冻结的 `cal.BusinessDay(fctx.Now())`（§1A），同一事务里判“今天领过没有”与记下的业务日是同一天；Nest 之外的服务用 `cal.BusinessDay(app.BusinessClock(r).Now())`。
 
 **每日重置的推荐写法**：DAO 里存上次重置的业务日；登录或当天第一次操作时 `BusinessDay(now)` 与存的不同就在同一个事务里惰性重置，不需要全服零点扫描。需要准点动作（零点推送、活动开门）时用按实体的持久定时器（§4），期限取 `NextDayStart(now)`，回调里再登记下一天。周重置由业务按 `Day` 推（例如取业务日起点的 `Weekday()`）。glsvet 对业务包（`game` 目录）里的 `time.Local`、`time.LoadLocation` 打印提示。
 
@@ -63,8 +84,8 @@ SLG 行军或建造可以用 typed 节点保存任务身份与期限；宿主须
 到点要做的事（Buff 到期、建造完成、行军到达）属于某个实体时，用 `roost add timer --entity <Entity>`（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B）。它把上面这套 Scheduler 接到实体上，分三处：
 
 - **期限在实体自己的 DAO 里**：节点 map 与 ID 种子两个持久字段，生成的组件每次调用从 DAO 现建一个 Scheduler、钩子写回 DAO、用完丢弃。增删改都在调用所在的 Nest 事务里，回滚就是 DAO 的回滚；持久走 DataEngine 正式链路，没有第二份存储。种子随 upsert 推进，重启后不复用 ID。
-- **触发在实体的 Nest 锁内**：生成的 Tick handler（`rollback=undo durability=strict`）调用组件的 `Tick(now)`，回调改的东西与节点的删除 / 续期是同一条 WAL 记录。回调只改 DAO、记 effect，不做 I/O、不阻塞。
-- **驱动在 core**（`framework/nest/entitytimer`，`wiring/entitytimer` 装配）：进程内按“已加载实例的最早期限”排的小堆。实例加载时报告存量的最早期限，事务提交后（`nest.AfterCommit`）报告新的最早期限，回滚的事务不改；卸载、删档、撤销新建时实例离开索引。只有最早期限到了才经 Nest 正式准入给那一个实体投递一次 Tick，不按在线人数轮询；投递前核对实例，已卸载 / 已删档 / 被同 ID 新实例取代的丢弃。时间取 App 业务时钟，按毫秒。
+- **触发在实体的 Nest 锁内**：生成的 Tick handler（`rollback=undo durability=strict`）调用组件的 `Tick()`，按这条消息冻结的业务时间（`fctx.Now`，§1A）触发；回调改的东西与节点的删除 / 续期是同一条 WAL 记录。回调只改 DAO、记 effect，不做 I/O、不阻塞。
+- **驱动在 core**（`framework/nest/entitytimer`，`wiring/entitytimer` 装配）：进程内按“已加载实例的最早期限”排的小堆。实例加载时报告存量的最早期限，事务提交后（`nest.AfterCommit`）报告新的最早期限，回滚的事务不改；卸载、删档、撤销新建时实例离开索引。只有最早期限到了才经 Nest 正式准入给那一个实体投递一次 Tick，不按在线人数轮询；投递前核对实例，已卸载 / 已删档 / 被同 ID 新实例取代的丢弃。时间取 `fctx.Now`（Nest 消息里是这条消息冻结的业务时间，驱动自己的循环现读进程业务时钟），按毫秒；Tick 消息不带时间。
 
 **离线语义（维护者 2026-10-17 决定）**：框架不追帧。实体不在内存期间（离线、停服）到期的节点，在实体加载起来之后只触发一次，不论错过多少个周期。回调参数 `entitytimer.Fire` 带足业务自己补算的信息：
 
@@ -131,6 +152,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Reg.Start` / `Stop` / `SetPeriod` | 启停、换档。在事务里调用时**提交后生效、回滚作废**；不在事务里（加载发布前）立即生效。回调里调用的随本拍事务。`Start` 返回 `error`：Remote 托管实体处于共享模式时返回 `ErrHeartbeatRemoteShared`、不启动，其余情况为 nil |
 | `Host.OnDestroy()` | 卸载、删档、撤销新建时由组件调用：实例永久离开驱动，之后的启停被忽略 |
 | `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒） |
+| `WithTimeDomain(d)` | 本登记按场景的时间域计时（§4D）：调度仍按真实时间，`Beat.Now` / `Elapsed` 是域时间 |
 
 **档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 100ms、AI 200ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
 
@@ -138,8 +160,8 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 
 | 字段 | 含义 |
 | --- | --- |
-| `Now` | 本拍业务时间（App 业务时钟） |
-| `Elapsed` | 距本登记上次执行（首拍：距启动生效）的业务时间，夹到 `[0, max(1s, 档位)]`：掉拍、停顿、业务时钟被调整时不让一拍走出几公里 |
+| `Now` | 本拍业务时间：这一拍消息冻结的 `fctx.Now`（§1A），回调里再读 `fctx.Now` 是同一个值；挂了时间域（§4D）时是域时间 |
+| `Elapsed` | 距本登记上次执行（首拍：距启动生效）的业务时间，夹到 `[0, max(1s, 档位)]`：掉拍、停顿、业务时钟被调整时不让一拍走出几公里。挂了时间域时是域时间的经过，上限再乘倍率，时停时为 0 |
 | `Period` | 本登记当前档位 |
 | `Skipped` | 上次执行以来跳过的拍数，只供观测 |
 | `First` | 本次启动后的第一拍（重载后重新启动、Stop 后再 Start 都算新的一次） |
@@ -321,6 +343,59 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
 
 边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
+
+## 4D. 场景时间域（变速）
+
+副本 2 倍速、出牌 / 瞄准慢放、技能时停这类“一个场景里的时间流速”用 `gameplay/timedomain`（DESIGN-TODO D22，维护者 2026-10-21 决定：**全局不做变速，只做场景级**；照 ssr 的场景时间）。部署级的业务时钟仍然只有偏移（`time.logic_offset`），没有倍率。
+
+**模型**：域时间是业务时间的分段线性映射 `D(B) = AnchorDomain + (B − AnchorBusiness) × Rate`，`B` 是本条消息冻结的业务时间（§1A）。`SetRate` 以生效时刻为新锚点（新 `AnchorDomain` 是旧映射在生效时刻的值），所以域时间连续、不跳变；倍率在 `[0, 100]`，0 是时停，所以单调不减。域可以在 `Config` 里收窄倍率范围。从未改过倍率时是恒等映射（域时间就是业务时间）。
+
+**场景本身是实体**（D20 决定 ⑬），域挂在场景实体上：
+
+```go
+// 场景实体：三个 DAO 字段（标 sync 下发给客户端；随进程结束的副本用 nopersist,sync），适配成 timedomain.Fields。
+type sceneTime struct{ dao *db.SceneDao }
+
+func (f sceneTime) TimeDomain() timedomain.State {
+	return timedomain.State{AnchorBusinessNano: f.dao.GetTimeAnchorBusiness(), AnchorDomainNano: f.dao.GetTimeAnchorDomain(), Rate: f.dao.GetTimeRate()}
+}
+func (f sceneTime) SetTimeDomain(s timedomain.State) {
+	f.dao.SetTimeAnchorBusiness(s.AnchorBusinessNano)
+	f.dao.SetTimeAnchorDomain(s.AnchorDomainNano)
+	f.dao.SetTimeRate(s.Rate)
+}
+
+// 场景组件 OnInitFinish（加载 / 新建）：构造域（读出存下的参数并发布）。
+scene.time, err = timedomain.New(sceneTime{dao}, timedomain.Config{MinRate: 0, MaxRate: 4})
+
+// 场景自己的 Nest handler 里：玩家请求战斗加速。
+if err := scene.time.SetRate(2); err != nil { // 越界返回 ErrRateOutOfRange，什么都不改
+	return err
+}
+
+// 场景里的成员（玩家、怪物）：动作 runner 的心跳挂上场景的域。
+flow, err := actionflow.NewBeatRunner(runnerConfig, actionflow.BeatConfig{
+	Host:    host,
+	Options: []heartbeat.RegOption{heartbeat.WithTimeDomain(scene.time)},
+})
+```
+
+| API | 说明 |
+| --- | --- |
+| `timedomain.New(fields, config)` | 所属实体初始化阶段构造；读出 `Fields` 里的参数并发布，存下的倍率越界返回 `ErrRateOutOfRange` |
+| `Domain.SetRate(rate)` | **只在所属实体（场景）的锁内**调用。从本条消息冻结的业务时间起生效；写 `Fields`（随事务回滚、随同步下发），事务提交后（`nest.AfterCommit`）才发布给成员，回滚的不发布；不在事务里立即发布 |
+| `Domain.Now()` / `Rate()` / `Read()` | 任意实体、任意 goroutine：本条消息的域时间与倍率，第一次读取时冻结（`fctx.Frozen`），同一条消息里读到同一个值，即使期间场景发布了新倍率 |
+| `Domain.State()` | 最近一次发布（已提交）的参数 |
+| `heartbeat.WithTimeDomain(d)` | 心跳登记按域计时：调度仍按真实时间（档位不缩放，CPU 不随倍率涨）；`Beat.Now` 是域时间，`Elapsed` 是域时间的经过，时停时为 0；`Elapsed` 上限乘倍率（`max(1s, 档位) × 倍率`），否则 10 倍速时 100ms 档每拍都被夹住。代价：高倍率下每拍步长变大，移动 / 碰撞精度下降 |
+
+- **成员读发布的快照，不读场景的 DAO**：成员在自己的锁里，不跨实体加锁。快照在场景事务提交后才发布，所以生效时刻之后、发布之前开始的成员消息仍按旧倍率算；为了让成员读到的域时间单调，域记下已经交出去的最大域时间，读数取两者较大者，改倍率时新锚点也不低于它。代价是改倍率前后成员与客户端可能差“发布延迟 × 倍率”（微秒到毫秒级），随后一致。
+- **actionflow**：`BeatRunner` 经 `BeatConfig.Options` 挂域后，动作每拍的 `ActionContext.Now` / `Elapsed` 是域时间，移动（`Move.Advance(ctx.Elapsed)`）随之加速、慢放、时停。心跳之外调用 runner（handler 里 `Start` / `End`）不带时间时是业务时间；要域时间时显式传 `scene.time.Now()`。
+- **技能 / Buff**：技能 `Runtime` 按 tick 推进，由业务在心跳里把它推进到域时间对应的 tick（`(beat.Now − 起点) / tick 间隔`），Buff 时长按技能 tick 计，随之变速；冷却等“到某个时刻”的判定读 `Domain.Now()`。框架没有替技能自动接域（KNOWN-LIMITS）。
+- **持久化的期限与 entitytimer 不接时间域**（维护者决定 ⑦）：持久定时器的离线补触发只对业务时间成立；域内的定时走心跳（按域时间判定到期）。存进 DAO 的业务期限（邮件过期、活动截止）仍是业务时间。
+- **持久与否**：`Fields` 是否持久由业务选。随进程结束的副本用 `nopersist,sync`（推荐）；要持久的场景用持久字段，重载后域时间按存下的锚点与倍率接着走（停服期间同样按倍率前进，时停的保持时停）。`Domain` 实例随场景实例：场景卸载重载后是新的 `Domain`，成员要换成新的。
+- **下发给客户端**：`Fields` 的三个字段标 `sync`，随 Entity Sync 下发；客户端按同一公式用自己估计的服务器业务时间外推域时间。
+
+实现契约见 [impl/10-time §2F](../impl/10-time.md#2f-场景时间域)。
 
 ## 5. 运维
 

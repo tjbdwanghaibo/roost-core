@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`infra/base/clock`（业务时钟与业务日历）、`infra/base/timer`，按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)），以及按实体的心跳 `gameplay/heartbeat`（`wiring/heartbeat` 装配，§2B）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`infra/base/clock`（业务时钟与业务日历）、`infra/base/fctx`（执行上下文里冻结的业务时间，§2E）、`infra/base/timer`，按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)），按实体的心跳 `gameplay/heartbeat`（`wiring/heartbeat` 装配，§2B），以及场景时间域 `gameplay/timedomain`（§2F）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -39,10 +39,10 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 1. **期限只在 DAO 里**：`Host` 每次最外层调用经 `Store`（生成组件把 DAO 的节点 map 与种子适配进来）现建 `timer.Scheduler`，钩子 `persist` 写回 DAO 并按 upsert 推进种子；`Host` 不持有任何事务会改的状态。Tick 回调里经同一组件的 `NewTimer` / `ChangeTimer` / `RemoveTimer` 复用这次 Tick 的调度器（`Host.active`，只在 `Tick` 调用栈内非空，返回或 panic 都清掉），按 `timer.Scheduler` 的 Tick 内规则生效：取消的同轮到期节点不再触发、改期的不按旧期限触发、新建的等收尾入堆。不能从中间 DAO 状态另建一个调度器：那份堆与外层不同步，外层会照旧触发已取消的节点，且外层最后的报告会覆盖内层登记的新期限（修前缺陷，回归 `TestHostCallbackOperationsShareTheCurrentTick`）。`Timer` / `Timers` 在 Tick 调用栈内（`active` 非空）读这份调度视图（`Lookup` / `LiveNodes`，见 §2 第 7 条），其余时候读 DAO：回调里新建、改期的节点要到最外层收尾才 upsert 回 DAO，读 DAO 会看不到自己刚写的，“没有就建一个”会在一次 Tick 内重复登记（13b9d9e0 引入、本条修复，回归同一矩阵的 `callback reads its own writes`）。正在触发的节点已在出堆时从 DAO 删除，但在自己的回调里可读（原定期限；显式改期后为新期限）：语义取“可读 ⇔ 可改期 / 取消”，避免周期回调查不到自己又登记一个。它的 `loadedAt`（发布前写一次）与 `seq`（实体锁内递增、不随回滚退回，只给报告排序）都不是事务状态。所有方法除 `OnDestroy` 外只在实体锁内调用。
 2. **索引只在提交后变**：每次最外层调用末尾 `settle`（`active` 非空的内层调用不报告、不推进 `seq`） 把调度器剩下的最早期限（有非法存量节点时报“现在”，让事务内 Tick 清理）报告给驱动；在事务里经 `nest.AfterCommit`，不在事务里（加载）立即报告。回滚、提交被拒、结果未知（abandon）都不执行提交后回调，索引保持事务前的值，与回滚后的 DAO 一致。强制点：`host.go` `settle`。
 3. **同一实例的报告按序号排定**：`AfterCommit` 在锁释放后执行，两个相继事务的回调可能乱序到达；驱动只接受序号更大的报告（`driver.go` `report`）。实例关闭（`OnDestroy`：卸载、删档、撤销新建）后永久丢弃它的报告，晚到的提交回调不会把它放回索引（`close`）。
-4. **只投递到期的那一个、只投一次**：`DeliverDue` 取出唤醒时刻已到的条目，投递后条目转为“待报告”、唤醒时刻换成 `Redeliver`（缺省 10s）之后；Tick handler 提交时的报告把它换回新的最早期限。没有报告就重投（幂等：Tick 只触发此刻已到期的节点）。准入失败（队列满、停止中）1s 后重试；出锁投递回来按 `gen` 判断期间有没有新报告。投递走 `nest.Client.Dispatch`（正式准入、单目标、参数为业务时间 UnixMilli），驱动的更新只持一把短锁、不做 I/O，可以在 Nest 业务池上调用。
+4. **只投递到期的那一个、只投一次**：`DeliverDue` 取出唤醒时刻已到的条目，投递后条目转为“待报告”、唤醒时刻换成 `Redeliver`（缺省 10s）之后；Tick handler 提交时的报告把它换回新的最早期限。没有报告就重投（幂等：Tick 只触发此刻已到期的节点）。准入失败（队列满、停止中）1s 后重试；出锁投递回来按 `gen` 判断期间有没有新报告。投递走 `nest.Client.Dispatch`（正式准入、单目标、没有参数：Tick 按 handler 执行时冻结的业务时间触发，§2E），驱动的更新只持一把短锁、不做 I/O，可以在 Nest 业务池上调用。
 5. **到期时核对实例**：`IsRemoved`（Destroy 在锁内先置位、`OnDestroy` 在解锁后）或查到同 ID 的另一个实例时丢弃条目、不投递——驱动不唤醒不在内存的实体。查不到任何实例时照常投递：那是实例刚构建、还没发布（加载中；Nest 冷加载会等这次加载完成）。剩余窗口：投递准入之后、消息执行之前实例被卸载，Nest 按“发给未加载实体的消息”冷加载它，于是加载后补触发一次（与任何发给该实体的消息相同；删档实体加载失败，不触发）。见 KNOWN-LIMITS“按实体的持久定时器”。
-6. **离线语义**：加载（`OnInitFinish(isCreate=false)`）记下 `loadedAt`；触发时 `Fire.Overdue = 原定期限不晚于 loadedAt`。Scheduler 对一个期限早已过去的节点只触发一次、按返回值从 now 续期，所以“错过多少个周期都只触发一次”不需要额外代码；框架不计算错过的次数、不循环补触发。期限按毫秒：`Driver.Now` 与 `Host.Tick` 都截到毫秒，与节点持久精度一致。
-7. **时钟**：缺省 `clock.Now`；`wiring/entitytimer` 在 Provide 时换成 `app.BusinessClock`（实体加载之前）。测试用 `SetClock` 换可控时钟、不启动循环直接调 `DeliverDue`。
+6. **离线语义**：加载（`OnInitFinish(isCreate=false)`）记下 `loadedAt`；触发时 `Fire.Overdue = 原定期限不晚于 loadedAt`。Scheduler 对一个期限早已过去的节点只触发一次、按返回值从 now 续期，所以“错过多少个周期都只触发一次”不需要额外代码；框架不计算错过的次数、不循环补触发。期限按毫秒：`Driver.Now` 与 `Host.Tick` / `TickAt` 都截到毫秒，与节点持久精度一致。
+7. **时钟**：缺省 `fctx.Now`（D22-1，§2E）：Nest 消息里（Tick、handler 里增删改、加载时的 `OnInitFinish`）是这次执行冻结的业务时间，同一条消息里的期限都从同一时刻算；驱动循环不在消息里，现读进程业务时钟。`wiring/entitytimer` 不再 `SetClock`（进程业务时钟由 App 启动时按同一份 `time.logic_offset` 设定）。测试用 `SetClock` 换可控时钟（之后驱动与 `Host` 一律读它）、不启动循环直接调 `DeliverDue`。`Host.Tick()` 用驱动时钟，`TickAt(now)` 给测试与手写 handler。
 
 验证：`framework/nest/entitytimer` 的 `driver_test.go`（只投到期的、待报告不重投、静默重投、旧报告丢弃、关闭后不投、核对实例、准入失败重试、同时刻按 ID、循环被更早期限叫醒、`-race` 下加载 / 卸载 / 期限变化 / 投递并发）、`host_test.go`（在线一次、周期续期、离线错过十个周期加载后只触发一次且参数正确、重建不复用 ID、多定时器最早期限、登记错误在初始化报出；回调内登记下一阶段、取消 / 改期同轮到期的另一阶段、显式改期自己、回调读到自己的写入、panic 清理、回滚后重试）、`nest_test.go`（真实 Nest 引擎：回滚不改索引、提交后才改、投递的 Tick 在锁内执行并清掉待报告）；变异核对（提交前立即报告、接受旧报告、不核对实例、关闭后仍接受报告、`Overdue` 恒假）各让对应用例变红，记录在 [D11 实施说明](../../maintenance/DESIGN-TODO.md#d11-按实体的持久定时器接入)。生成工程端到端见 `codegen/internal/roost/add_timer_test.go` 的 `TestEntityTimerGeneratedProjectEndToEnd`。
 
@@ -56,7 +56,7 @@ DESIGN-TODO D20 第 1 期（维护者 2026-10-21 定方案与压测后决定）�
 4. **至多一拍在途**：`Reg.inflight` 在投递前置位、在心跳 handler 返回时清掉（`defer`，panic 也清）；到期时仍在途就跳拍（`skipped` 计数交给下一拍的 `Beat.Skipped`）。准入失败（`ErrQueueFull` / 其他）立即清在途、计跳拍，不在本格重试；驱动停止时批里还没投的拍不再投、清在途（`deliverBatch` 看 `ctx`），`Stop` 返回后不再 `Dispatch`。没有水位让路与每格上限（维护者决定 ⑤）。
 5. **卡住兜底**：在途超过 `StallAfter`（缺省 10s）视为丢失、重投并计 `stalled`；同一登记连续卡住时阈值翻倍（最多 3 次，80s），看到不在途时复位。丢失只来自 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败）。重投后两份消息至多一份执行回调：handler 先看在途标志，没有在途按 `duplicate` 丢弃。翻倍是因为拍没丢只是排得久时重投会多压消息（2s 不翻倍时 -race 冒烟里重投与积压互相放大，见 D20 实施记录）。
 6. **事务内启停**（`host.go` `change`）：`Reg` 的 `active` / `tier` 是业务视角、只在实体锁内读写；变化时序号加一，在事务里登记 `DeferRollback`（恢复业务视角）与 `AfterCommit`（驱动生效），不在事务里立即生效。`Driver.apply` 只接受更大的序号（AfterCommit 在锁释放后执行、pipelined 下可能晚于后一个事务），实例 `OnDestroy` 后忽略。启动生效时先写 `startedAt` 再加 `startGen`，回调据此判 `First`。
-7. **心跳 handler**（`runBeat`，包级注册 `heartbeat.beat.{memory,async,strict,pipelined}`，回滚策略 undo，持久级别由登记选）：依次核对在途、实例（`es[0]` 必须是登记所属实例且未 `OnDestroy`，卸载重载窗口里旧实例的拍按 `stale` 丢弃）、业务视角的启停（锁序上更早提交的 Stop）、Remote 实例是 `LocalOwned`；通过后算 `Beat`：`Elapsed` 从上次执行（首拍从 `startedAt`）起算，夹到 `[0, max(DefaultMaxElapsed, 档位)]`。回调侧的 `lastRun` / `lastGen` 随本拍事务回滚恢复（`DeferRollback`），回滚的一拍不算执行过。
+7. **心跳 handler**（`runBeat`，包级注册 `heartbeat.beat.{memory,async,strict,pipelined}`，回滚策略 undo，持久级别由登记选）：依次核对在途、实例（`es[0]` 必须是登记所属实例且未 `OnDestroy`，卸载重载窗口里旧实例的拍按 `stale` 丢弃）、业务视角的启停（锁序上更早提交的 Stop）、Remote 实例是 `LocalOwned`；通过后算 `Beat`：`Now` 读一次驱动时钟（缺省 `fctx.Now`，即这一拍消息冻结的业务时间，§2E）；挂了时间域时改读 `Domain.Read()`（域时间与倍率同一次冻结，§2F）。`Elapsed` 从上次执行（首拍从 `startedAt`，挂域时 `startedAt` 也是域时间：`Reg.startClock`）起算，夹到 `[0, max(DefaultMaxElapsed, 档位)]`，挂域时上限再乘这一拍的倍率（时停为 0）。回调侧的 `lastRun` / `lastGen` 随本拍事务回滚恢复（`DeferRollback`），回滚的一拍不算执行过。
 8. **Remote 托管实体**：发给 Remote 托管 ID 的消息由 Nest 自动走 I/O 阶段的 Remote 写准入（`prepareRemoteWriteBatch`）：非拥有方被拒、`Unknown` 转 `LocalOwned`。旧拥有方转移时先排空已准入的写、实例转 `Draining` 再改权威，所以它最后一拍先于新拥有方的第一拍；驱动侧 `mayOwn` 与 handler 侧 `LocalOwned` 核对让非拥有方不投，并避免非拥有期间被拒的拍卡住新拥有方（变异核对 M6）。
 9. **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21，D20 P1 后决定 ④）：共享是运行期所有权状态（`remoteentity.Manager.EnterRemoteSharedMode` / `LeaveRemoteSharedMode` 按实体 ID 切换；实例加载时是 `Unknown`，共享权威下第一次写准入经 `newWriteLease` 的 marked 分支转 `Shared`）；`entity.RemotePolicy` 只有 None / Managed / Mirror，没有种类级的“共享”声明，登记时只能看到当时的状态。强制点三处：① `Host.Register` 与 `Reg.Start` 在实例处于 `Sharing` / `Shared` 时返回包裹 `ErrHeartbeatRemoteShared` 的错误（`host.go` `sharedErr`）；② 驱动 `mayOwn` 对 `Sharing` / `Shared` 照常投一拍（只为了进到实体锁内：业务视角的 `Active` 只在锁内改，不由驱动 goroutine 改）；③ `runBeat` 在 `Active` 核对之后、`LocalOwned` 核对之前遇到共享模式就 `change(false)` 停掉登记（随本拍事务 AfterCommit 生效；提交失败则下一拍再停），计 `stoppedShared`，不执行回调；驱动 `flush` 汇总增量、按 `WarnInterval` 限频打 Warn（`emitSharedWarn`，带间隔内停掉的个数、样本实体与登记名）。每个登记在共享模式下至多多投这一拍（共享模式写准入，取一次分布式锁），停掉后移出环、不再投。回到独占后不自动重启。检测点：Remote 没有所有权状态切换的回调（`entity.RemoteEntityBase.TransitionRemoteOwnership` 只做 CAS），心跳也不应依赖 `framework/remoteentity` 的内部实现，所以在心跳自己的两处读实例的所有权状态（`IThreadSafeRemoteEntity.RemoteOwnershipState`，只依赖 `framework/entity` 接口）：驱动到期时（原子读）与 handler 执行时（实体锁内）。保证：共享模式下任何一拍都不执行回调（handler 在锁内核对）；每个在共享期间到期的已启动登记都被停掉。限制：共享窗口短于登记的周期、期间没有到期的拍时，这个登记不会被停掉（期间也没有执行），回到独占后照常跳。变异核对：去掉 ① 的 Register 核对、去掉 ① 的 Start 核对、去掉 ② 的共享投递、去掉 ③ 的停止、Warn 不限频，各让 `remote_test.go` 对应用例变红。
 9. **计数与日志**：驱动内部按实体 ID 分片的原子计数（回调侧由全部 worker 并发写），`flush` 每秒把增量写进 metrics 注册表；跳拍 / 卡住汇总进 `warnState`，按 `WarnInterval`（缺省 10s）打一条 Warn，带一个样本实体与原因。
@@ -108,6 +108,34 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 
 验证（`GOWORK=off go test -race -count=1 ./gameplay/actionflow ./gameplay/movement`）：`action_runner_test.go`（Start 即完成并推进队列、延后的瞬时动作；Keep / Reject 与延后的 Reject、强制结束不问；Block / Preempt 与被挡的排队项、无规则互不影响；按 ID 结束当前与排队项、找不到；计数冻结、多撤销一次、暂停不 tick、打断保留队列、OnFreeze 只在 0↔1；回调里的打断延后）；`heartbeat_test.go`（冻结的组停心跳、迟到的拍不 tick、`Sync` 不重挂冻结的组、解冻重挂、打断后不再挂）；`behavior_test.go`（先任务后观察者、任务标签与随任务结束、Clear 后什么都不运行、经 ActionList 的计数冻结、拒绝别的实体的心跳宿主）；`movement/nest_test.go`（真实 Nest + 心跳：已经结束的移动在 handler 里结束且不挂心跳；暂停移动组时驱动上没有登记、位置不变，解冻后走到终点，打断模式取消在途移动）。`state/set_test.go`（声明校验、按来源不叠加与 RemoveSource、派生现算与只在变化时通知、观察者里的改动排下一轮与截停、查询与观察者包、事务外改持久状态被拒、持久文档只含 Persist 状态并跳过不认识 / 不再持久的）；`state/nest_test.go`（真实 Nest + 心跳：两种回滚策略下状态随回滚撤销、只有 Persist 状态进提交记录且 memory 持久级别下改 Persist 状态被拒、Sync 标同步脏；门控经 Behavior 打断移动组并停心跳、两个来源全撤才解冻、两个状态计数冻结施法组；回滚后的门控在下一次改动或 Refresh 时纠正且计数不累积；装上时对齐、Close 撤销）。涉及心跳的用例 `-race -count=30` 通过。`skill/combatcomponent/state_bridge_test.go`（真实 Nest：buff 标签驱动派生状态、不复制进 StateDao，回滚的 buff 当场不再生效、观察者在下一次通知跟上，到期与驱散通知，同步位；绑定的校验；OnInitFinish 通知加载出的 buff）。`actionflow/behavior_test.go`（第 4 期：时限到期以过期结束、重试重新计时、用完走 OnFail 且心跳停；心跳只跟有时限的步；取消不重试；重试按步计）；`actionflow/nest_test.go`（真实 Nest + 心跳：计划步骤的时限与重试经任务心跳生效，结束后没有登记）；`ai/beat_test.go`（周期按策略取档、冻结 / 无策略 / 策略要 0 时停、每拍后重新对齐、Shutdown 停；定时冻结期间照跳不决策、到期那拍恢复并决策、可选打断、Freeze 清定时；真实 Nest：决策在实体锁与事务内按策略周期执行、冻结时驱动上没有登记、定时冻结到期后自己恢复）。`ai/stage_test.go`（事件下一拍可读、冻结时丢弃、不接收事件的策略返回 false、缓冲上限丢最早；树里切阶段在本拍结束后生效、策略外切换立即生效并打断旧树、未知阶段、`Init` 回到起始阶段；`ParseStages` 的 stages / set_stage / event 与三种校验、`ParseTree` 拒绝 set_stage；`TraceNodes` 的每节点轨迹、不开时没有）；`actionflow/behavior_test.go`（指标：不开时不写，开时 started / ended / running 的计数）。变异核对 D1～D12、S1～S12、B1～B5、H1～H12、E1～E8 原文见 [D21 实施结果](../../maintenance/DESIGN-TODO.md#6-调研一--实施)。
 
+## 2E. 业务时间取自 ctx（D22-1）
+
+DESIGN-TODO D22-1（维护者 2026-10-21 决定 ①A、②A）。现行说明见 [guide §1A](../guide/10-time.md#1a-业务时间一律取自-ctxd22-1)。
+
+1. **冻结点只有一个**：`fctx.NewContext` → `init` 固定 `Now = clock.Now()`、`NowMilli`（`infra/base/fctx/context.go`）。Nest 消息在 `ensureNestContext`（逻辑阶段）建上下文；`ContextSnapshot` 不带 `Now`，换池续行重新冻结。`fctx.Now()` / `NowMilli()` 在请求上下文里返回冻结值，之外现读进程业务时钟。
+2. **一次执行里的派生值**：`fctx.Frozen(key, compute)` 存在 `Context.frozen`（切片，`init` / `Clear` 时清空、保留容量），不进 `Snapshot`、不进 `keyValue`（`keyValue` 会随快照交接，带着冻结值进入重新冻结 `Now` 的新执行就会不一致）。没有请求上下文时不缓存。
+3. **框架内的调用点**（全部在 Nest 消息里执行，改为 `fctx.Now`）：心跳驱动缺省时钟（`gameplay/heartbeat/driver.go` `NewDriver`，`Beat.Now` 与启动时刻）；entitytimer 驱动缺省时钟（`framework/nest/entitytimer/driver.go` `NewDriver`，`Host` 的增删改、`OnInitFinish`、`Tick()`）；`actionflow` `ActionRunner.acquireContext` 与 `MissionRunner.now`、`ai.Controller.now` 的缺省；`timer.Scheduler.now` 的缺省。`wiring/heartbeat`、`wiring/entitytimer` 不再 `SetClock(app.BusinessClock(r).Now)`：进程业务时钟（`clock.SetOffset`，`App.run` 启动时设）与 Registry 业务时钟读同一份 `time.logic_offset`，再接一份就是两个来源。`SetClock` 只给测试。
+4. **entitytimer 的 Tick 不带时间**：驱动 `DeliverDue` 以 `nil` 参数投递（原来带投递时刻的 UnixMilli），`Host.Tick()` = `TickAt(driver.Now())`。生成的 Tick handler（`codegen/internal/roost/add_timer.go` `renderTimerTick`）与组件 `Tick()`、game-demo 的 `handlerTickWorldTimers(target)` 随之改。用 `Driver.Now` 而不是直接 `fctx.Now`：测试经 `SetClock` 换掉驱动时钟时，判定到期与触发仍是同一个时钟。
+5. **业务时间参数由生成的分发包装填**（`codegen/internal/nest`）：`parse.go` 把参数名 `nowUnix` / `nowUnixMilli` 识别为业务时间参数（类型必须 `int64`，否则生成期报错），`NonEntityParam.BusinessTime` 是填入表达式、`WireIndex` 为 -1；`gen.go` 的分发包装按 `WireIndex` 从 `params` 取其余参数、参数个数只数 `wireParams`，业务时间参数写 `pN := fctx.Now().Unix()` / `fctx.NowMilli()`；Sender 的签名与 `nest.NewParams` 只用 `wireParams`。endpoint 骨架（`add_workflow.go` `endpointArguments`）跳过这两个参数，不取业务钟、不再要求 controller 有 `Registry()`。
+6. **静态提示**：`cmd/glsvet` `reportHandlerClockHints`：业务目录（`-businessdirs`，缺省 `game`）里 Nest handler 本身（文档有 `//roost:nest`，或以 `handler` 开头）的函数体内读 `app.BusinessClock` 或进程业务时钟 `clock.Now` / `clock.UnixMilli` 打印 `hint:`；`//glsvet:live-business-clock <理由>` 豁免（同一行、上一行或函数文档）。不跟进 helper、不认改名的变量或包装函数——提示只覆盖最直接的写法，约束本身写在 guide §1A 与生成文档里。做提示而不是失败：Nest 之外的代码读 `app.BusinessClock` 是正确的，handler 里确实要现读（量耗时）也合法。
+7. **测试的可控时钟**：`clock.SetSource(now)` 换进程业务时钟的真实时间来源（`logicClock.source`，原子指针，`nil` 恢复 `time.Now`；`Set` 也按来源算偏移）。用它让 `fctx` 冻结的时间可控或每读一次单步（证明“第二次现读会不同”）。只给测试：进程全局，用的包不能 `t.Parallel`。
+
+变异核对（修前失败文本）：心跳 `Beat.Now` 现读第二次（`TestBeatNowIsTheMessagesFrozenBusinessTime`：`Beat.Now = …00.004, but the beat's message froze …00.003`）；entitytimer 按投递时刻触发（`TestTickFiresAtTheMessagesFrozenBusinessTime`：`Fire.Now = …00.005, but the Tick message froze …00.007`）；分发包装由调用方传时间（awaitflow `TestGeneratedDispatchFillsTheBusinessTimeAtExecution`：`handler got business time 1800000000001, but its message froze 1800000000003`）；actionflow / AI 缺省现读（`ActionContext.Now = …00.002, want … frozen …00.001`）；glsvet 不接 `reportHandlerClockHints`（`hints = 0, want 3`）。
+
+## 2F. 场景时间域
+
+DESIGN-TODO D22 场景时间域（原 D22-3；维护者 2026-10-21 决定 ③⑤⑦，全局不做变速）。现行说明见 [guide §4D](../guide/10-time.md#4d-场景时间域变速)。
+
+1. **映射**（`gameplay/timedomain/timedomain.go` `State.At`）：`D = AnchorDomainNano + floor((B − AnchorBusinessNano) × Rate)`，按墙上时间的 UnixNano 算（域时间不带单调时钟读数）。`B` 早于锚点时停在锚点（不往回外推）。倍率 1 与 0 精确；其余 `float64` 乘法对非负倍率单调，所以 `At` 单调不减。零值 `State`（`AnchorBusinessNano == 0`）是恒等映射。
+2. **改倍率**（`SetRate`，所属实体锁内）：生效时刻 `T = fctx.Now()`；新锚点 `max(当前参数.At(T), 已交出的最大域时间)`——当前参数读 `Fields`（含本事务里之前的修改，不读已发布的），所以连续；不低于已交出的值，所以成员不回退。写 `Fields`（DAO，随事务回滚、随同步下发），`seq++`，`nest.AfterCommit` 发布，不在事务里立即发布。倍率先校验（有限、在域的 `[min, max]` 内、域范围在 `[0, 100]` 内），失败什么都不改。
+3. **发布按序号**（`publish`）：`atomic.Pointer[publication]` CAS，只接受更大的 `seq`；`seq` 只在所属实体锁内递增、不随回滚退回（只排序）。回滚的修改不发布：`Fields` 由 DAO 回滚，`AfterCommit` 不执行。
+4. **读取**（`Read`）：`fctx.Frozen(d, …)`，一条消息第一次读取时用冻结的 `B` 与当时发布的参数算出并冻结，`Now` / `Rate` 同一次冻结。`read` 把结果与 `high`（已交出的最大域时间，原子）取较大者并 CAS 推进。保证：同一条消息内一致；所有读者看到的域时间单调不减（包括改倍率发布前后）。限制：发布之前开始的成员消息按旧倍率算，之后的读数被 `high` 托住，与场景 / 客户端的公式值差“发布延迟 × 倍率”，直到公式值追上（时停时一直差这一点点）。
+5. **心跳接线**（`gameplay/heartbeat/host.go` `WithTimeDomain`、`runBeat`；`driver.go` `Reg.startClock`）：只改 `Beat.Now` 的来源、`Elapsed` 上限与启动时刻，调度、投递层不动。上限 `max(DefaultMaxElapsed, 档位) × 倍率`，时停为 0。
+6. **actionflow 只经心跳选项接**：`BeatConfig.Options` 里放 `heartbeat.WithTimeDomain`，动作 tick 的 `ActionContext.Now` 来自 `Beat.Now`、`Elapsed` 来自 `Beat.Elapsed`，actionflow 本身不改（D21 正在改 actionflow，按要求只做最小接线）。
+7. **不接的**：entitytimer（决定 ⑦）；技能 `Runtime`（业务在心跳里按域时间推进 tick）；`Domain` 不随场景卸载重载迁移（新实例新对象）。
+
+变异核对（`timedomain_test.go`、`heartbeat/nest_test.go`）：去掉 `high` 托底（成员在时停发布后读到 `…16:00:00`，早于之前的 `…16:00:02`）；去掉 `fctx.Frozen`（一条消息先后读到 `{…00 1}` 与 `{…01 5}`）；提交前发布（`a rate change was published before its transaction committed`）；去掉序号比较（晚到的旧发布覆盖新的）；新锚点不托底（`the new anchor … is earlier than a domain time members already read`）；新锚点取业务时间而非当前映射（`the stop instant reads …16 want …22`）；去掉范围检查（`SetRate(-0.1) = <nil>`）；心跳不读域（`Beat.Now … but the beat's message reads the domain at …`）；上限不乘倍率（`a 2s stall at 10x gave Elapsed 1s, want the 10s cap`）。
+
 ## 3. 并发、失败与恢复的修改检查
 
 持久化钩子是第三个调用位置（前两个是回调里直接调用、回调里重入 Tick）：钩子里取消、改期、新建和重入 Tick 都允许，钩子能看到回调里看不到的过渡状态（见 §2 第 6 条）。改动发变化的路径时，在 `TestHookOperationsOnEveryNodeStateItCanSee` 里补对应的状态行，而不是只加单点用例；2026-10-17 重构后第一处缺陷（收尾钩子重入 Tick 触发尚未通知的新节点，ID 未经 upsert）就出在这个维度，见[重构方案 §9](../../maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
@@ -149,6 +177,14 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 | [host.go](../../../framework/nest/entitytimer/host.go) | `Store`、`Fire`、`Handler`、`Handlers`、`Host` |
 | [wiring/entitytimer/entitytimer.go](../../../wiring/entitytimer/entitytimer.go) | `Mod` |
 
+### timedomain
+
+1 个实现文件、2 个测试文件（`scene_test.go` 经真实 Nest、心跳驱动与 `BeatRunner`）。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [timedomain.go](../../../gameplay/timedomain/timedomain.go) | `State`、`Fields`、`Config`、`Domain`、`Reading`（`New`、`ErrRateOutOfRange`、`MinRate`、`MaxRate`） |
+
 ### heartbeat
 
 3 个实现文件、6 个测试文件（另有 `internal/bench` 压测原型）。
@@ -157,7 +193,7 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 | --- | --- |
 | [tier.go](../../../gameplay/heartbeat/tier.go) | `Resolution`、`Periods`（`PeriodAtMost`：组件把想要的间隔换成档位，D21 第 4 期起 actionflow 与 ai 共用） |
 | [driver.go](../../../gameplay/heartbeat/driver.go) | `Config`、`Lookup`、`Driver`、`Stats` |
-| [host.go](../../../gameplay/heartbeat/host.go) | `Beat`、`Func`、`RegOption`、`Host`、`Reg` |
+| [host.go](../../../gameplay/heartbeat/host.go) | `Beat`、`Func`、`RegOption`（`WithDurability`、`WithTimeDomain`）、`Host`、`Reg` |
 | [wiring/heartbeat/heartbeat.go](../../../wiring/heartbeat/heartbeat.go) | `Mod` |
 
 ### movement
@@ -204,15 +240,23 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 
 - [driver_test.go](../../../framework/nest/entitytimer/driver_test.go)：`TestDriverDeliversOnlyDueEntitiesOnce`、`TestDriverReportClearsInflightAndRedeliversWhenSilent`、`TestDriverDropsStaleReports`、`TestDriverNeverDeliversToAClosedOwner`、`TestDriverValidatesTheOwnerBeforeDelivering`、`TestDriverRetriesRefusedAdmission`、`TestDriverDeliversSimultaneousDeadlinesInIDOrder`、`TestDriverLoopWakesForAnEarlierDeadline`、`TestDriverConcurrentReportsClosesAndDeliveries`
 - [host_test.go](../../../framework/nest/entitytimer/host_test.go)：`TestHostFiresAnOnlineDeadlineOnce`、`TestHostRearmsAPeriodicTimerByItsReturnValue`、`TestHostFiresAnOverdueTimerOnceAfterLoad`、`TestHostDoesNotReuseIDsAcrossReload`、`TestHostIndexesTheEarliestOfSeveralTimers`、`TestHostReportsBadHandlerRegistrationAtInit`
-- [nest_test.go](../../../framework/nest/entitytimer/nest_test.go)：`TestHostReportsThroughNestTransactions`
-- [wiring/entitytimer_test.go](../../../wiring/entitytimer/entitytimer_test.go)：`TestModBindsNestAndTheBusinessClock`、`TestModRefusesADriverInstalledTwice`
+- [nest_test.go](../../../framework/nest/entitytimer/nest_test.go)：`TestHostReportsThroughNestTransactions`、`TestTickFiresAtTheMessagesFrozenBusinessTime`
+- [wiring/entitytimer_test.go](../../../wiring/entitytimer/entitytimer_test.go)：`TestModBindsNestAndReadsTheFrozenBusinessTime`、`TestModRefusesADriverInstalledTwice`
 
 ### heartbeat
 
 - [driver_test.go](../../../gameplay/heartbeat/driver_test.go)：`TestTiersFireOnTheirPhaseOncePerPeriod`、`TestInflightBeatSkipsCountsAndWarnsAtALimitedRate`、`TestStalledBeatIsRedeliveredAndRunsOnce`、`TestSetPeriodMovesToTheNewTier`、`TestRegistrationsOfOneEntityAreDeliveredSeparately`、`TestInstanceChecksDropStaleBeats`、`TestStopWaitsForTheBatchAndDispatchesNothingAfter`、`TestConcurrentChangesStepsAndBeats`
-- [nest_test.go](../../../gameplay/heartbeat/nest_test.go)：`TestBeatRunsUnderTheEntityLockInsideATransaction`、`TestBeatRunsInTheEntitysPool`、`TestStartStopFollowTheTransaction`、`TestBeatOfAnUnloadedInstanceDoesNotRunOnItsReplacement`、`TestFiftyThousandEntitiesSmoke`
+- [nest_test.go](../../../gameplay/heartbeat/nest_test.go)：`TestBeatRunsUnderTheEntityLockInsideATransaction`、`TestBeatRunsInTheEntitysPool`、`TestStartStopFollowTheTransaction`、`TestBeatOfAnUnloadedInstanceDoesNotRunOnItsReplacement`、`TestFiftyThousandEntitiesSmoke`、`TestBeatNowIsTheMessagesFrozenBusinessTime`、`TestBeatsOnATimeDomainFollowItsRate`
 - [remote_test.go](../../../gameplay/heartbeat/remote_test.go)：`TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats`
-- [wiring/heartbeat_test.go](../../../wiring/heartbeat/heartbeat_test.go)：`TestModBindsNestAndTheBusinessClock`
+- [wiring/heartbeat_test.go](../../../wiring/heartbeat/heartbeat_test.go)：`TestModBindsNestAndReadsTheFrozenBusinessTime`
+
+### 业务时间取自 ctx 与时间域
+
+- [fctx/ctx_test.go](../../../infra/base/fctx/ctx_test.go)：`TestFrozenHoldsOneValuePerExecution`、`TestNowIsFrozenPerExecution`
+- [actionflow/action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestDefaultNowIsTheExecutionsFrozenBusinessTime`；[ai/controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerDefaultNowIsTheExecutionsFrozenBusinessTime`
+- [codegen/internal/nest/handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestBusinessTimeParametersAreFilledAtExecution`；生成链路实跑 [awaitflow/await_test.go](../../../codegen/internal/entity/testdata/awaitflow/await_test.go)：`TestGeneratedDispatchFillsTheBusinessTimeAtExecution`；endpoint 骨架 [roost_test.go](../../../codegen/internal/roost/roost_test.go)：`TestEndpointLeavesBusinessTimeToTheDispatch`
+- [cmd/glsvet/clockhints_test.go](../../../cmd/glsvet/clockhints_test.go)：`TestClockHintsFlagBusinessClockReadsInNestHandlers`
+- [timedomain_test.go](../../../gameplay/timedomain/timedomain_test.go)：`TestDomainTimeIsContinuousAcrossRateChanges`、`TestOneMessageReadsOneDomainTime`、`TestRateChangesFollowTheScenesTransaction`、`TestRateRange`、`TestMembersNeverSeeTheDomainGoBackwards`、`TestConcurrentRateChangesAndReads`；[scene_test.go](../../../gameplay/timedomain/scene_test.go)：`TestSceneMembersActOnTheSceneTimeDomain`
 
 ### movement
 

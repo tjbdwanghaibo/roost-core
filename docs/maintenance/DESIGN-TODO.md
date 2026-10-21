@@ -25,7 +25,7 @@
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
-| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**实施中** |
+| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”），actionflow 只做了心跳选项接线，`BeatConfig` 上的域字段等 D21 合入后再定 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -1762,6 +1762,31 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
   9. 先做 D22-1，再做时间域。
 
 下文 §1～§5 是决定前的调研与方案原文，其中 3.2、3.3 的部署级变速与 §5 第 4、6、8 条已被上面的决定取代。
+
+### 实施结果（2026-10-21）
+
+现行说明见 [guide/10-time §1A](../framework/guide/10-time.md#1a-业务时间一律取自-ctxd22-1)、[§4D](../framework/guide/10-time.md#4d-场景时间域变速)，契约与变异核对见 [impl/10-time §2E](../framework/impl/10-time.md#2e-业务时间取自-ctxd22-1)、[§2F](../framework/impl/10-time.md#2f-场景时间域)，限制见 [KNOWN-LIMITS](KNOWN-LIMITS.md#业务时间取自-ctx-与场景时间域d22)，变化见 CHANGELOG。
+
+**D22-1 业务时间一律取自 ctx**（决定 ①A、②A）：
+
+- 迁移的调用点（都在 Nest 消息里执行）：心跳驱动缺省时钟（`Beat.Now`、启动时刻）；entitytimer 驱动缺省时钟（`Host` 的增删改、`OnInitFinish`、Tick 的触发时刻——Tick 消息不再带投递时刻，`Host.Tick()` 无参数、新增 `TickAt`）；`actionflow.ActionRunner` / `MissionRunner`、`ai.Controller`、`timer.Scheduler` 没给时间时的缺省；`wiring/heartbeat`、`wiring/entitytimer` 去掉 `SetClock(app.BusinessClock(r).Now)`；Nest 生成器的业务时间参数（`nowUnix` / `nowUnixMilli`）改为分发包装执行时从 `fctx` 填、Sender 不再带；endpoint 骨架不再取业务钟；`roost add timer` 的 Tick handler 与组件 `Tick()`；game-demo 的调用方（领邮件奖励、副本领奖、建 / 入公会、GM 入会、活动开窗 / 结算）、`executionNowUnix` 与 `Controller.BusinessNow` 删除、World 定时器。
+- 不在 Nest 消息里的路径照旧读 `app.BusinessClock(registry)`：服务 goroutine（活动协调器、匹配、spawner、mail / rank / chat / account / session 服务经 `Config.Now` 注入）、admin / GM 命令的服务侧、业务时间高水位、启动阶段。边界写在 guide §1A。
+- 新增 `fctx.Frozen`（一次执行冻结的派生值）与 `clock.SetSource`（测试换真实时间来源）。
+- glsvet 提示（做了）：业务目录里 Nest handler 本身读 `app.BusinessClock` / `clock.Now` / `clock.UnixMilli` 打 `hint:`。理由：最常见的写法就是 handler 里直接读，提示成本低、误报可豁免（`//glsvet:live-business-clock`）；做成失败不对——Nest 之外读 `app.BusinessClock` 是正确的，handler 里量耗时也合法。不跟进 helper，约束本身靠文档。
+- 不兼容：生成的 Sender 签名、Tick handler 签名、`entitytimer.Host.Tick`；升级步骤写在 CHANGELOG。
+
+**场景时间域**（决定 ③⑤⑦⑨）：
+
+- 新包 `gameplay/timedomain`：`Domain`（锚点 + 倍率的分段线性映射，`SetRate` 以生效时刻为新锚点、连续；倍率 [0, 100]，0 时停；参数 `atomic.Pointer` 发布、按序号只接受更新的）。参数的权威在场景实体的 DAO 字段（`Fields`），随事务回滚、标 sync 下发客户端；提交后（`AfterCommit`）发布给成员。一条消息里第一次读取冻结（`fctx.Frozen`）。成员读数取“已交出的最大域时间”托底，保证单调。
+- 持久与否：由业务选，推荐随进程结束的副本用 `nopersist,sync`；要持久的场景用持久字段，重载后按存下的锚点与倍率接着走（停服期间同样按倍率前进）。理由：副本场景随进程结束，不需要持久；框架不替业务决定，`Fields` 就是 DAO 字段，持久只是字段标记。
+- `heartbeat.WithTimeDomain(d)`：调度不变，`Beat.Now` / `Elapsed` 用域时间，时停 `Elapsed = 0`，上限乘倍率。对 heartbeat 的改动只限 `Beat.Now` 的来源、上限与启动时刻，投递层不动。
+- actionflow：只经 `BeatConfig.Options` 接（不改 actionflow 代码），动作 tick 的 `ActionContext.Now` / `Elapsed` 随之；端到端用例经真实 Nest、运行中的心跳驱动与 `BeatRunner`。D21 正在大改 actionflow，`BeatConfig` 上加域字段、让 handler 里 `Start` 的缺省也取域时间，留到 D21 合入之后。
+- 技能 / Buff：没有自动接线，文档给出接法（业务在心跳里按域时间推进 `Runtime` 的 tick，Buff 按 tick 计）；`skill/combatcomponent` 没改，放不进本轮。
+- entitytimer 不接时间域（决定 ⑦）。
+
+**证据**：每项先在当前代码上变红（单步时钟让“第二次现读”一定不同）再改：心跳 `Beat.Now = …00.004, but the beat's message froze …00.003`；entitytimer `Fire.Now = …00.005, but the Tick message froze …00.007`；生成的分发包装 `handler got business time 1800000000001, but its message froze 1800000000003`；actionflow / AI `ActionContext.Now = …00.002, want … frozen …00.001`；glsvet `hints = 0, want 3`。时间域 9 个变异核对各让对应用例变红（失败文本在 impl §2F）。验证命令与结果见本轮汇报与 CHANGELOG。
+
+**未做 / 待定**：game-demo 的场景没有挂时间域、客户端（C#）没有外推域时间的接口；`scripts/testdata` 的持久化恢复消费夹具（需要真实 Mongo）本轮没有在真实依赖上跑。
 
 **读了什么**：ssr 只读 `ssr/kingdom/framework/kctx`、`framework/dispatcher`、`view/scene_time.go`、`entities/scene/internal/timer.go`、`modules/level`（变速入口）、`modules/heartbeat`、GM 改时间的入口，以及 ssr 依赖的 `watcher/misc/chrono`（下文 ssr 出处相对 `ssr/kingdom/`，chrono 相对 `watcher/misc/chrono/`）。roost 读 main（`3e7b4011`）的 `infra/base/clock`、`infra/base/fctx`、`framework/app`（业务时钟、高水位）、`framework/nest`（消息上下文）、`framework/nest/entitytimer`、`gameplay/heartbeat`、`gameplay/actionflow` / `gameplay/ai`、`infra/base/timer`、codegen 的 endpoint 业务时间参数，以及 [guide/10-time](../framework/guide/10-time.md)。
 
