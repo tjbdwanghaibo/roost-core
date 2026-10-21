@@ -265,6 +265,16 @@ func (container *BuffContainer) Tick(now int64) []BuffInstance {
 	return expired
 }
 
+// NextDue 返回生效中实例里最早的到期 tick；没有限时实例（全是永久的，或容器为空）时 ok 为 false。
+func (container *BuffContainer) NextDue() (due int64, ok bool) {
+	for _, instance := range container.active {
+		if instance.DueTick != 0 && (!ok || instance.DueTick < due) {
+			due, ok = instance.DueTick, true
+		}
+	}
+	return due, ok
+}
+
 // Active 按施加顺序返回生效中的实例。切片是副本；其中的实例是容器的值。
 func (container *BuffContainer) Active() []BuffInstance {
 	return append([]BuffInstance(nil), container.active...)

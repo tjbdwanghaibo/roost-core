@@ -212,6 +212,9 @@ type CombatComponent struct {
 	projection AttributeProjection
 	// buffStatesChanged 由 BindStates 安装：buff 集合变化后通知派生状态（D21 S6）。是接线，不是状态。
 	buffStatesChanged func()
+	// beat 由 AttachBeat 安装：buff 的心跳（D20 P5）。是装配期接线（构造时写一次、事务里不改），不是事务状态；
+	// 心跳启停的事务语义由 heartbeat.Reg 自己管理。glsvet 的字段写提示按语法认不出接线，用 roost:cache 豁免。
+	beat *buffBeat //roost:cache
 }
 
 // AttributeProjection 把属性当前值（base 加 buff / 属性修饰）写到伤害管线读的 Combatant
@@ -227,7 +230,7 @@ func NewCombatComponent(dao *CombatDao) *CombatComponent { return &CombatCompone
 func (component *CombatComponent) Name() string { return "combat" }
 
 // OnInitFinish 在实体建好（新建或从存储加载）后投影一次：存储里的 vitals 是上次提交时的投影结果，投影函数可能已随
-// 版本改变（“加载”触发点）。
+// 版本改变（“加载”触发点）。装了 buff 心跳（AttachBeat）时按加载出的 buff 启动它，停服期间到期的记录在第一拍清掉。
 func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	component.deriveProjection()
 	component.buffsChanged()
@@ -415,12 +418,14 @@ func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks
 	return instance, ok
 }
 
-// SetBuffDueTick 固定 buff 实例的到期 tick。到期时间不影响属性，不需要重新投影。
+// SetBuffDueTick 固定 buff 实例的到期 tick。到期时间不影响属性，不需要重新投影；集合不变，不通知派生状态，但
+// 限时与否可能变了（0 表示永久），要对齐 buff 心跳。
 func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTick int64) (combat.BuffInstance, bool) {
 	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetDueTick(id, dueTick)
 	if ok {
 		component.dao.markChanged(FieldBuffs)
+		component.alignBeat()
 	}
 	return instance, ok
 }
@@ -447,10 +452,13 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 	return removed
 }
 
-// TickBuffs 让到期的 buff 过期并返回它们。
-// 由业务的 Nest 心跳/定时 handler 在实体锁内调用，now 与 StatusBridge.CurrentTick 同源。
-// Runtime.Advance 不自动推进此 DAO 的 buff；重启后首次业务 tick 也需执行以清理过期记录。
+// TickBuffs 让到期 tick 不晚于 now 的 buff 过期并返回它们（推进一步的原语）。快池上的实体不要自己写周期消息调它：
+// 用 AttachBeat，由 buff 心跳每拍以本拍的 tick 调用（D20 P5）；直接调用只用于不在 Nest 快池上的驱动（例如 Lockstep
+// 房间自己的定步长循环）与测试。now 与 StatusBridge.CurrentTick 同源。没有到期的 buff 时什么都不登记、不改。
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
+	if due, ok := component.dao.buffs.NextDue(); !ok || due > now {
+		return nil
+	}
 	component.dao.beginChange(FieldBuffs)
 	expired := component.dao.buffs.Tick(now)
 	if len(expired) > 0 {
