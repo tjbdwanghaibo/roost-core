@@ -60,6 +60,9 @@ const (
 	// 的新实例取代，或实例已 OnDestroy）、not_loaded（实例还没发布）、stopped（停止生效后到达）、not_owner
 	// （Remote 托管实体本进程不是当前拥有方）、duplicate（同一次投递的另一份已执行）。不打日志。
 	DroppedMetric = "heartbeat.dropped_total"
+	// StoppedMetric 计框架自动停掉的登记，标签 reason：remote_shared（Remote 托管实体进入共享模式，不允许挂载心跳，
+	// 见 ErrHeartbeatRemoteShared）。同时汇总打 Warn。
+	StoppedMetric = "heartbeat.stopped_total"
 	// RegisteredMetric 是正在跳（已启动生效）的登记数（Gauge）。
 	RegisteredMetric = "heartbeat.registered"
 )
@@ -127,12 +130,19 @@ type Driver struct {
 	lastDone chan struct{}
 
 	stats driverStats
+	// sharedSample 是最近一个因共享模式被停掉的登记（回调侧写、flush 读后清），Warn 的样本。
+	sharedSample atomic.Pointer[Reg]
 
 	// 以下只由驱动 goroutine（循环或测试直接调用 step / flush）读写。
 	due     []*Reg
 	batch   []beat
 	flushed [numCounters]int64
 	warn    warnState
+	// sharedWarn 汇总上一条“共享模式停掉心跳”Warn 之后停掉的登记数，按 WarnInterval 限频。
+	sharedWarn struct {
+		last    time.Time
+		pending int64
+	}
 }
 
 // NewDriver 校验配置并返回一个未接线的驱动；配置错是接线错误，panic。
@@ -254,7 +264,8 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 //
 // 核对（不持有 Driver.mu，不阻塞）：
 //   - 实例已 OnDestroy、已卸载 / 删档，或查到的是同 ID 的另一个实例：丢弃，不唤醒不在内存的实体；还没发布也不投；
-//   - Remote 托管实体的实例处于共享 / 转移中 / 已隔离：本进程不是拥有方，不投；
+//   - Remote 托管实体的实例处于转移中 / 已隔离：本进程不是拥有方，不投；处于共享模式：照常投一拍，由 handler 在
+//     实体锁内停掉本登记（共享模式不允许挂载心跳，见 runBeat）；
 //   - 上一拍在途：跳拍（计数、限频 Warn）；在途超过 StallAfter（连续卡住时翻倍）：视为丢失，重投一次（计 stalled）。
 func (d *Driver) step(ctx context.Context) {
 	d.mu.Lock()
@@ -331,12 +342,15 @@ func (d *Driver) step(ctx context.Context) {
 	d.stats.delivered.addN(admitted)
 }
 
-// mayOwn 报告 Remote 托管实体的实例在这个所有权状态下能否由本进程跳：LocalOwned 是本进程独占；Unknown / Recovering
-// 是首次接触或待权威确认，交给 Nest 的 Remote 写准入判定（准入时取得写许可并转到 LocalOwned，否则拒绝、这拍不执行）。
-// 共享（Sharing / Shared）、转移中（Draining）、已隔离（Fenced / Quarantined）不投。
+// mayOwn 报告 Remote 托管实体的实例在这个所有权状态下是否投递：LocalOwned 是本进程独占；Unknown / Recovering
+// 是首次接触或待权威确认，交给 Nest 的 Remote 写准入判定（准入时取得写许可并转到 LocalOwned / Shared，否则拒绝、
+// 这拍不执行）。共享（Sharing / Shared）也投：共享模式不允许挂载心跳，这一拍到 handler 里在实体锁内停掉登记
+// （业务视角的 Active 与驱动一起变，不由驱动 goroutine 改）；每个登记至多一拍，停掉后移出环。转移中（Draining）、
+// 已隔离（Fenced / Quarantined）不投。
 func mayOwn(state entity.RemoteOwnershipState) bool {
 	switch state {
-	case entity.RemoteOwnershipLocalOwned, entity.RemoteOwnershipUnknown, entity.RemoteOwnershipRecovering:
+	case entity.RemoteOwnershipLocalOwned, entity.RemoteOwnershipUnknown, entity.RemoteOwnershipRecovering,
+		entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared:
 		return true
 	default:
 		return false
@@ -407,6 +421,7 @@ const (
 	cDropStopped
 	cDropNotOwner
 	cDropDuplicate
+	cStoppedShared
 	numCounters
 )
 
@@ -431,6 +446,7 @@ type driverStats struct {
 	stalled                                   stripedCounter
 	dropRemoved, dropStale, dropNotLoaded     stripedCounter
 	dropStopped, dropNotOwner, dropDuplicate  stripedCounter
+	stoppedShared                             stripedCounter
 }
 
 func (s *driverStats) counters() *[numCounters]*stripedCounter {
@@ -440,6 +456,7 @@ func (s *driverStats) counters() *[numCounters]*stripedCounter {
 		cStalled:     &s.stalled,
 		cDropRemoved: &s.dropRemoved, cDropStale: &s.dropStale, cDropNotLoaded: &s.dropNotLoaded,
 		cDropStopped: &s.dropStopped, cDropNotOwner: &s.dropNotOwner, cDropDuplicate: &s.dropDuplicate,
+		cStoppedShared: &s.stoppedShared,
 	}
 }
 
@@ -452,6 +469,7 @@ type Stats struct {
 	Stalled                                            int64
 	DroppedRemoved, DroppedStale, DroppedNotLoaded     int64
 	DroppedStopped, DroppedNotOwner, DroppedDuplicate  int64
+	StoppedShared                                      int64
 	Registered                                         int
 }
 
@@ -464,7 +482,8 @@ func (d *Driver) Stats() Stats {
 		Stalled:        s.stalled.load(),
 		DroppedRemoved: s.dropRemoved.load(), DroppedStale: s.dropStale.load(), DroppedNotLoaded: s.dropNotLoaded.load(),
 		DroppedStopped: s.dropStopped.load(), DroppedNotOwner: s.dropNotOwner.load(), DroppedDuplicate: s.dropDuplicate.load(),
-		Registered: d.Registered(),
+		StoppedShared: s.stoppedShared.load(),
+		Registered:    d.Registered(),
 	}
 }
 
@@ -490,8 +509,26 @@ func (d *Driver) flush(sysNow time.Time) {
 	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "stopped"}, delta[cDropStopped])
 	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "not_owner"}, delta[cDropNotOwner])
 	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "duplicate"}, delta[cDropDuplicate])
+	incCounter(StoppedMetric, metrics.Labels{"driver": name, "reason": "remote_shared"}, delta[cStoppedShared])
 	metrics.SetGauge(RegisteredMetric, metrics.Labels{"driver": name}, int64(d.Registered()))
 	d.warn.emit(d.config.Logger, name, d.config.WarnInterval, sysNow)
+	d.emitSharedWarn(delta[cStoppedShared], sysNow)
+}
+
+// emitSharedWarn 为共享模式停掉的登记打 Warn，按 WarnInterval 限频：间隔内只累计，下一条汇总个数并带一个样本。
+func (d *Driver) emitSharedWarn(stopped int64, now time.Time) {
+	w := &d.sharedWarn
+	w.pending += stopped
+	if w.pending == 0 || (!w.last.IsZero() && now.Sub(w.last) < d.config.WarnInterval) {
+		return
+	}
+	args := []any{"driver", d.config.Name, "stopped_since_last_warn", w.pending}
+	if r := d.sharedSample.Swap(nil); r != nil {
+		args = append(args, "sample_entity", r.host.id, "sample_registration", r.name)
+	}
+	d.config.Logger.Warn("heartbeat: registrations stopped because their Remote entity entered shared mode; "+
+		"heartbeats are not allowed in shared mode, drive the periodic logic from business code instead", args...)
+	w.last, w.pending = now, 0
 }
 
 // incCounter 只写非零增量（flush 每秒对每个原因各调一次，大多是零）。

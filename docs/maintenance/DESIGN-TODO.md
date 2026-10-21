@@ -23,7 +23,8 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P2～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；P2～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务，未排期 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -826,7 +827,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 **状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2～P5 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
-**P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21）。
+**P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
 **压测后维护者决定（2026-10-21）**：调度结构按档分环、10ms 分辨率；驱动 1 个；投递方式 P1 先用单目标 `Dispatch`（X），驱动接口按“一格到期的一批心跳一次交出”设计，内部先逐个 Dispatch；同时做方案 D（Nest 批量入队、逐个执行：一次取队列锁入队一批独立的单目标作业、每个 worker 只唤醒一次并连续取作业，作业语义与 X 相同）的原型与压测，达标（CPU 接近 Y、业务 p99 不差于 X、语义不变）则心跳切到 D，否则保留 X。E（搭便车）、F（按 worker 固定分片）不做。
 
@@ -860,7 +861,7 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 1. **`Elapsed` 上限是 `max(1s, 档位)`，不是一律 1 秒**：2s 及以上的档若夹到 1 秒，每拍都少算（5s 档的回复只算 1 秒）。只对 ≥ 2s 的档有差别。
 2. **保留了“卡住兜底”，缺省 10s 并按次翻倍（最多 80s）**：方案 §3 写的是 2s。没有它，Nest 在执行 handler 之前放弃的消息（Remote 写准入被拒、准入后卸载且重载失败）会让登记永远“在途”、再也不跳。实测 2s 不翻倍时有放大：-race 下 5 万实体 1s 档（每秒 5 万拍，超过 -race 吞吐约 2700 拍/秒），排队超过 2s 后每 2s 重投一份，`Stalled:66451`、`SkippedInflight:100446`，执行仍追不上；改成 10s 起翻倍后放大降为对数级，-race 冒烟降到 2000 实体。非 -race 的 5 万实体 1s 档：`Delivered:100000 Executed:100000`，跳拍、卡住、丢弃全为 0。
-3. **Remote 共享模式（Shared）P1 不跳**：方案只说“投到当前拥有方”。共享模式下各写者都经分布式锁写、实例都是 `Shared`，本地看不出谁是“拥有方”；P1 只在 `LocalOwned` 执行，避免两边同时跳。需要维护者决定（见下）。
+3. **Remote 共享模式（Shared）P1 不跳**：方案只说“投到当前拥有方”。共享模式下各写者都经分布式锁写、实例都是 `Shared`，本地看不出谁是“拥有方”；P1 只在 `LocalOwned` 执行，避免两边同时跳。维护者决定 ④ 后改为不允许挂载（见下文“决定 ④ 实施结果”）。
 4. **心跳 handler 按持久级别注册 4 个**（`heartbeat.beat.memory|async|strict|pipelined`），由登记选，缺省 async：落实 ⑧“由业务按自己的持久级别处理”，方案 §9 第 8 条原只写一个。
 5. **生成器未接入**：P1 没有消费方，`roost` 不装这个 Mod；`go test ./codegen/...` 本期不涉及。
 
@@ -894,6 +895,34 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 1. `Elapsed` 上限：A 维持 `max(1s, 档位)`（推荐，长档不少算）；B 按原话一律 1 秒。
 2. Remote 共享模式由谁跳：A P1 不跳（现状，安全）；B 共享模式下由权威记录的 OwnerSid 进程跳（需要把所有权记录的 OwnerSid 暴露到实例上，改 Remote，另行设计）。
 3. 卡住兜底：A 10s 起翻倍（现状，推荐）；B 去掉兜底（Remote 准入被拒等情况下登记永久停跳）；C 回到 2s。
+
+### 决定 ④ 实施结果：Remote 共享模式不允许挂载心跳（2026-10-21）
+
+**状态：已实施**（分支 `fix/heartbeat-remote-shared`，基于 `c299c4cc`；本地提交，由维护者推送）。
+
+**共享是运行期状态，不是静态声明**（已核对源码）：`entity.RemotePolicy` 只有 None / Managed / Mirror（`framework/entity/policy.go`），codegen 也只有 `remote=managed`；共享模式由 `remoteentity.Manager.EnterRemoteSharedMode` / `LeaveRemoteSharedMode`（`framework/remoteentity/ownership.go`）按实体 ID 在运行期切换（LocalOwned → Sharing → Shared；Shared → Draining → LocalOwned）。实例加载时是 `Unknown`（`LoadRemoteEntity` 不设所有权状态），共享权威下第一次写准入经 `newWriteLease` 的 marked 分支转 `Shared`（`framework/remoteentity/batch.go`）。所以组件在 `OnInitFinish` 登记时，第二个写者看到的是 `Unknown`，登记时判定不出来。
+
+**方案（选 a）**：已在共享模式时 `Register` / `Start` 返回 `ErrHeartbeatRemoteShared`；登记后才进入共享的，由下一拍在实体锁内停掉登记（回调不执行），计 `heartbeat.stopped_total{reason="remote_shared"}` 并打 Warn；回到独占后不自动重启，业务需要时再 `Start`。不选 b（“种类可能进入共享就在登记时拒绝”）：没有种类级的共享声明，任何 `remote=managed` 种类都可能被 `EnterRemoteSharedMode`，b 等于拒绝全部 Remote 托管实体，与决定 ⑩（Remote 托管实体投到当前拥有方）冲突；要做 b 得先给 Remote 加种类级声明，属于 Remote 的改动、不在本项。停掉放在实体锁内（handler）而不是驱动 goroutine：业务视角的 `Active` 只在锁内改，与启停的事务语义（AfterCommit / 回滚）一致；代价是每个登记在共享模式下多投一拍、走一次共享模式写准入（分布式锁）。维护者 2026-10-21 确认按 a（运行时切换检测），并要求 Warn 限频（按 `WarnInterval`，与跳拍 Warn 相同）。**维护者决定（2026-10-21）：从 Shared 回到 LocalOwned 不自动恢复**，被停掉的登记保持停止，由业务在回到独占时重新 `Start`（理由：避免意外重启——共享期间状态可能已被其他写者改过；自动恢复还要框架额外记住“被谁停的”，与业务自己的 Stop 区分）。由 `TestLeavingSharedModeDoesNotResumeTheHeartbeat` 固定。
+
+检测点：Remote 没有所有权状态切换的回调（`entity.RemoteEntityBase.TransitionRemoteOwnership` 只做 CAS），心跳也不应依赖 `framework/remoteentity` 的内部实现，所以在心跳自己的两处读实例的所有权状态（`IThreadSafeRemoteEntity.RemoteOwnershipState`，只依赖 `framework/entity` 接口）：驱动到期时（原子读）与 handler 执行时（实体锁内）。没有新增 Remote 侧的钩子：钩子会在 Remote 的 goroutine 里、不持实体锁时触发，仍然要投一条消息进实体锁才能改 `Active`，并不比到期时检测更可靠，还要改 `framework/entity`。保证与限制：共享模式下任何一拍都不执行回调；共享期间到期的已启动登记都被停掉；共享窗口短于周期、期间没有到期的拍时这个登记不被停（期间也没有执行）。
+
+**强制点**：`host.go` `sharedErr`（Register / Start）、`driver.go` `mayOwn`（Sharing / Shared 照常投）、`host.go` `runBeat`（共享模式 → `change(false)` + `stoppedShared`）、`driver.go` `flush`（Warn）。API 变化：`Reg.Start()` 返回 `error`；`Stats.StoppedShared`；指标 `heartbeat.stopped_total{reason}`。
+
+**红绿**（`remote_test.go`，修前在 `c299c4cc` 上）：
+
+| 用例 | 修前失败原文 |
+| --- | --- |
+| `TestRegisterOnASharedRemoteEntityIsRejected` | `Register on a Remote entity in shared succeeded (registration true), want a refusal` |
+| `TestEnteringRemoteSharedModeStopsTheHeartbeat` | `after entering shared mode: registration active=true, callbacks run 0 (want stopped, 0); stats {Delivered:4 Executed:4 ... DroppedNotOwner:20 DroppedDuplicate:0 Registered:1}`（静默停跳：登记仍算在跳） |
+| `TestFirstAdmissionIntoSharedModeStopsTheHeartbeat` | `after the first admission into shared mode: registration active=true, callbacks run 0 (want stopped, 0); stats {Delivered:1 Executed:0 ... DroppedNotOwner:20 DroppedDuplicate:0 Registered:1}` |
+
+另 `TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate`（两个实体、每个两个不同档位的登记，先后进入共享：全部停掉、`StoppedShared` 4、Warn 间隔内只一条）在 Warn 不限频的版本（`96724b6a`）上失败：`warns inside the interval = 2, want still 1`。
+
+`TestLeavingSharedModeDoesNotResumeTheHeartbeat`（回到独占后业务 Start 之前不跳、Start 后照常跳）在 `c299c4cc` 上失败（P1 是共享期间暂停、回到独占自动继续）：`back to local ownership without Start: active=true, callbacks run 10 (want stopped, 0); stats {Delivered:14 Executed:14 ... DroppedNotOwner:4 DroppedDuplicate:0 Registered:1}`。
+
+修后五条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
+
+**未做**：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
@@ -1125,3 +1154,19 @@ roost 的取舍：
 3. 位置是否每次心跳持久化：建议位置为 nopersist（只同步），按周期或离开场景时落库一次；还是每次心跳 strict 写入。
 4. ~~心跳频率~~：由上文方案给出（按登记、移动中才高频、空闲停），缺省值见 §9 第 6 条。
 5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起（与 §9 第 14 条一起定）。
+
+## D21 吸收 ssr 的优秀组件进 `gameplay`
+
+**状态：维护者 2026-10-21 登记为后续任务，未排期。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
+
+**原则**：按 roost 的模型重写，不复制 ssr 代码；只收“与具体游戏玩法无关、多数游戏都会用”的通用部件，玩法规则留给业务（demo 是参考，生成器只生成框架内容）；所有控制实体行为的逻辑走 actionflow（D20 维护者决定），周期推进走心跳（D20）；每个组件先写方案（与现有 roost 包的关系、事务 / 回滚 / 同步语义、持久化），维护者确认后再实施。
+
+**ssr 候选（待调研，按可能的通用性初排；`gameplay` 现有 actionflow / ai / attribute / heartbeat / skill，D20 P2 新增 movement）**：
+
+- 行为与调度：`action`、`action_list`、`mission`、`ai` / `ai_engine` / `bt_engine`（行为树）、`trigger_engine`、`eca_man`（事件-条件-动作）、`state`、`cooldown`、`timer`。
+- 空间与移动：`map_basic`、`move`、`follow_agent`、`rvo`（避让）、`dynamic_obstacle`、`hexagon` / `hexagon_map`、`search_entity`、`observe` / `radar`、`mist`（迷雾）。
+- 战斗与效果：`effect` / `effectid`、`damage`、`aggro`（仇恨）、`fight`、`skill_pool`、`power`。
+- 经济与道具：`bag` / `bag_light`、`currency`、`prop`、`drop`、`store`、`gacha`、`limit`（次数 / 频率限制）、`refresh`。
+- 社交与组织（多数已有 `service/*` 对应，主要是比对补缺）：`team`、`rank` / `top_list_*`、`task` / `taskcore`、`reddot`、`uniqname`。
+
+**下一步（排期后）**：逐项调研 ssr 实现与 roost 现状（是否已有、差距在哪），产出“收 / 不收 / 收哪部分”的清单与优先级，交维护者确认后分批实施。

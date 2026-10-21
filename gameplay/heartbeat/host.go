@@ -17,6 +17,13 @@ var (
 	ErrDuplicateName = errors.New("heartbeat: registration name already used on this entity")
 	// ErrHostClosed 表示实例已销毁（OnDestroy 之后），不能再登记。
 	ErrHostClosed = errors.New("heartbeat: host is closed")
+	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳（维护者 2026-10-21）：
+	// 共享模式下各写者进程的实例状态都是 Shared、都经分布式锁写，本地分不出谁该跳，心跳无法执行。Register 与 Start
+	// 在共享模式下返回它；运行期才进入共享模式的，已挂的心跳由下一拍在实体锁内停掉（计数 heartbeat.stopped_total、打
+	// Warn）。替代做法：共享实体的周期逻辑由业务层自己驱动，例如由负责它的服务按周期发 Nest 消息。
+	ErrHeartbeatRemoteShared = errors.New("heartbeat: Remote entity is in shared mode, heartbeats are not allowed " +
+		"(every writer's instance is shared, so no process can tell it is the one to beat); drive the periodic " +
+		"logic from business code instead, e.g. the owning service sends Nest messages on its own schedule")
 )
 
 // DefaultMaxElapsed 是 Beat.Elapsed 的上限（维护者 2026-10-21：“距上次执行，最多 1 秒”）。档位本身长于 1 秒时上限取
@@ -63,7 +70,7 @@ type Host struct {
 	owner  entity.IThreadSafeEntity
 	id     int64
 	hash   uint64
-	// remote 非 nil 表示 Remote 托管实体：只有本进程实例是当前拥有方（LocalOwned）时才跳。
+	// remote 非 nil 表示 Remote 托管实体：只有本进程实例是当前拥有方（LocalOwned）时才跳；共享模式不允许挂载。
 	remote entity.IThreadSafeRemoteEntity
 	closed atomic.Bool
 
@@ -86,11 +93,32 @@ func (d *Driver) NewHost(owner entity.IThreadSafeEntity) *Host {
 // Owner 返回宿主所属的实体实例。
 func (h *Host) Owner() entity.IThreadSafeEntity { return h.owner }
 
+// sharedErr 在 Remote 托管实体处于共享模式时返回包裹 ErrHeartbeatRemoteShared 的错误，否则 nil。实体锁内调用。
+func (h *Host) sharedErr(name string) error {
+	if h.remote == nil {
+		return nil
+	}
+	if state := h.remote.RemoteOwnershipState(); remoteShared(state) {
+		return fmt.Errorf("%w: registration %q on entity %d (ownership %s)", ErrHeartbeatRemoteShared, name, h.id, state)
+	}
+	return nil
+}
+
+// remoteShared 报告所有权状态是否是共享模式（含进入共享的过程 Sharing）。
+func remoteShared(state entity.RemoteOwnershipState) bool {
+	return state == entity.RemoteOwnershipSharing || state == entity.RemoteOwnershipShared
+}
+
 // Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并（维护者决定 ③）。
-// name 在实例内唯一（用于日志与诊断）；period 必须是 Periods 之一。
+// name 在实例内唯一（用于日志与诊断）；period 必须是 Periods 之一。Remote 托管实体处于共享模式时返回
+// ErrHeartbeatRemoteShared（不允许挂载）。共享与否是运行期所有权状态、不是实体种类的声明：刚加载的实例是 Unknown，
+// 第二个写者首次接触共享实体时这里看不出来，由第一拍停掉（见 runBeat）。
 func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegOption) (*Reg, error) {
 	if h.closed.Load() {
 		return nil, ErrHostClosed
+	}
+	if err := h.sharedErr(name); err != nil {
+		return nil, err
 	}
 	if fn == nil {
 		return nil, fmt.Errorf("heartbeat: registration %q has a nil callback", name)
@@ -175,7 +203,14 @@ func (r *Reg) Active() bool { return r.active }
 func (r *Reg) Period() time.Duration { return r.tier.period() }
 
 // Start 开始跳；已在跑时无操作。在事务里调用时提交后生效、回滚作废（nest.AfterCommit）；不在事务里立即生效。
-func (r *Reg) Start() { r.change(true, r.tier) }
+// Remote 托管实体处于共享模式时不启动，返回 ErrHeartbeatRemoteShared；回到独占（LeaveRemoteSharedMode）后可以再 Start。
+func (r *Reg) Start() error {
+	if err := r.host.sharedErr(r.name); err != nil {
+		return err
+	}
+	r.change(true, r.tier)
+	return nil
+}
 
 // Stop 停止；停止生效后到达的在途拍不执行。生效方式同 Start。
 func (r *Reg) Stop() { r.change(false, r.tier) }
@@ -266,7 +301,8 @@ func beatHandler(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerO
 //  1. 在途标志：没有在途（同一次投递的另一份已经执行过，见卡住兜底）就不执行；
 //  2. 实例：消息的目标必须是登记所属的那个实例、且没有 OnDestroy（卸载后同 ID 重载的新实例收到旧实例的拍，按过期丢弃）；
 //  3. 业务视角的启停：锁序上更早提交的 Stop 已经让它停了；
-//  4. Remote 托管实体：本进程实例必须是当前拥有方（LocalOwned）。
+//  4. Remote 托管实体：共享模式（Sharing / Shared）不允许挂载心跳，在这里停掉本登记（Stop 同样随本拍事务提交生效），
+//     计数并由驱动汇总打 Warn，回调不执行；其余状态要求本进程实例是当前拥有方（LocalOwned）。
 //
 // 在途标志在返回时清掉（panic 也清），所以“上一拍没执行完”就是 handler 还没返回。
 func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
@@ -284,9 +320,18 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 		d.count(&d.stats.dropStopped, h.id)
 		return nil
 	}
-	if h.remote != nil && h.remote.RemoteOwnershipState() != entity.RemoteOwnershipLocalOwned {
-		d.count(&d.stats.dropNotOwner, h.id)
-		return nil
+	if h.remote != nil {
+		switch state := h.remote.RemoteOwnershipState(); {
+		case remoteShared(state):
+			// 运行期进入共享模式（EnterRemoteSharedMode，或第二个写者的第一拍经准入转到 Shared）：不允许挂载，停掉。
+			r.change(false, r.tier)
+			d.count(&d.stats.stoppedShared, h.id)
+			d.sharedSample.Store(r)
+			return nil
+		case state != entity.RemoteOwnershipLocalOwned:
+			d.count(&d.stats.dropNotOwner, h.id)
+			return nil
+		}
 	}
 
 	now := d.Now()
