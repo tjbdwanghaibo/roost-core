@@ -55,6 +55,8 @@ type holder struct {
 	set      *Set
 	behavior *actionflow.Behavior
 	gate     *Gated
+	// unlisted 为 true 时 RangeDao 不交出 StateDao（接线时漏登记进 DaoManager）。
+	unlisted bool
 	mu       sync.Mutex
 	ended    []string
 	errors   []error
@@ -62,7 +64,7 @@ type holder struct {
 
 func (h *holder) Base() *entity.EntityBase { return h.EntityBase }
 func (h *holder) RangeDao(f func(entity.DaoInterface)) {
-	if f != nil {
+	if f != nil && !h.unlisted {
 		f(h.set.Dao())
 	}
 }
@@ -247,6 +249,38 @@ func TestStatesFollowTheTransaction(t *testing.T) {
 	m := records[len(records)-1].Mutations[0]
 	if m.Mask != FieldStates || m.Kind != dataengine.MutationPut || m.Key.Resource != CollectionName {
 		t.Fatalf("mutation %+v", m)
+	}
+}
+
+// rollback=state 靠 Nest 对实体 DaoManager 里的 DAO 拍快照恢复；StateDao 没登记进去时快照里没有它，回滚恢复不了
+// 状态。这时改状态必须当场失败（不改、返回错误），不能在 handler 失败后静默留下（定身之类的控制状态残留）。
+// rollback=undo 不依赖登记（逆操作挂在 DAO 上），照常回滚。
+func TestAnUnlistedStateDaoRefusesChangesUnderRollbackState(t *testing.T) {
+	f := newFixture(t)
+	h := f.add(2)
+	h.unlisted = true
+	var addErr error
+	err := f.run(runState, h, func(h *holder) error {
+		if addErr = h.set.Add(Rooted, buff1); addErr != nil {
+			return addErr
+		}
+		return errBusiness
+	})
+	if got := read(f, h, func(h *holder) []ID { return h.set.Active() }); !errors.Is(addErr, ErrRollbackNotCaptured) || len(got) != 0 {
+		t.Fatalf("rollback=state with an unlisted StateDao: Add = %v, handler = %v, states after the rollback %v "+
+			"(want ErrRollbackNotCaptured and nothing left)", addErr, err, got)
+	}
+	// rollback=undo 不依赖登记：照常改、照常回滚。
+	if err := f.run(runUndo, h, func(h *holder) error {
+		if err := h.set.Add(Rooted, buff1); err != nil {
+			return err
+		}
+		return errBusiness
+	}); !errors.Is(err, errBusiness) {
+		t.Fatalf("rollback=undo with an unlisted StateDao: %v", err)
+	}
+	if got := read(f, h, func(h *holder) []ID { return h.set.Active() }); len(got) != 0 {
+		t.Fatalf("rollback=undo left %v", got)
 	}
 }
 

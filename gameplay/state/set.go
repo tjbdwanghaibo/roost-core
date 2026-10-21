@@ -92,7 +92,8 @@ func (s *Set) Provide(id ID, fn func() bool) error {
 	return nil
 }
 
-// Add 给状态加一个来源（同一来源重复加不叠加）。声明了 Persist 的状态只能在 Nest 事务里改（ErrNotInTransaction）。
+// Add 给状态加一个来源（同一来源重复加不叠加）。声明了 Persist 的状态只能在 Nest 事务里改（ErrNotInTransaction）；
+// rollback=state 的事务没有对 StateDao 拍快照时返回 ErrRollbackNotCaptured（见 StateDao）。
 func (s *Set) Add(id ID, src Source) error { return s.change(id, src, true) }
 
 // Remove 撤掉状态的一个来源（不存在的来源无效）。

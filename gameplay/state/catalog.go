@@ -58,6 +58,10 @@ var (
 	ErrUnknownState = errors.New("state: unknown state")
 	// ErrNotInTransaction：在 Nest 事务外改声明了 Persist 的状态（改动无法落库，拒绝而不是静默丢失）。
 	ErrNotInTransaction = errors.New("state: persistent state changed outside a Nest transaction")
+	// ErrRollbackNotCaptured：在 rollback=state 的 handler 里改状态，而这个事务没有对 StateDao 拍快照（DAO 没登记进
+	// 实体的 DaoManager / RangeDao）。回滚恢复不了这次改动，所以拒绝、什么都不改；接线错误，修法是把 DAO 登记进去，
+	// 或让改状态的 handler 用 rollback=undo。
+	ErrRollbackNotCaptured = errors.New("state: rollback=state transaction did not capture this StateDao (register it in the entity's DaoManager)")
 	// ErrProviderInvalid：派生状态的提供函数有误（nil、重复登记、状态声明了 Persist）。
 	ErrProviderInvalid = errors.New("state: invalid provider")
 	// ErrNotifyRunaway：观察者互相触发，一次最外层调用里的通知轮数超过上限。
