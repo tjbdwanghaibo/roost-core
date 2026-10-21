@@ -39,6 +39,18 @@
 
 [dispatch_queue.go](../../../framework/nest/dispatch_queue.go) 使用一个 lanes 数组，每项聚合配置、等待/就绪链、运行数量、内部续行、唤醒条件和统计。短业务、I/O、长业务三条通道共用 mutex、tails、依赖链、pending；不能各建一套 ID 顺序。
 
+worker 循环（`work`）在循环顶部持锁：结束一项工作（`finishJobLocked`）后在同一次持锁里接着 `take` 下一项，没有工作才在通道的 `wake` 上停放。消息登记的出队后动作（`afterQueue`，await 的 I/O 启动）仍在本项结束、ID 尾撤下之后、不持锁、本 worker 执行下一项之前运行；执行本身在 `run` 里，请求上下文选项每个 worker 建一次。改前每条消息取两次锁；从 D20 方案 D 原型拆出（[实验记录](../../performance/NEST-DISPATCH-BATCH-20261021.md#6-对普通短-handler-的影响纯-nest-微基准不经心跳)）。
+
+Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNestDispatchMsgs`）两张按 goroutine 登记的表是 `goroutine.LocalMap`：按 goroutine ID 分 64 片、每片一把读写锁，与 fctx 的请求上下文表同一做法。不要换回 `sync.Map`：worker 的 goroutine ID 固定、每条消息先存后删，`sync.Map` 在同一内部节点上的 Store / Delete 争用会让空闲 P 偷活空转（方案 D 实验 §5）。
+
+**批量作业**（[try_batch.go](../../../framework/nest/try_batch.go)，`NestMgr.DispatchTryBatch`，D20 选项 C，设计 [FEATURE-2026-10-21-nest-batch-heartbeat](../../maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)）。Nest 侧入口与派发队列支持无条件存在（没有批量作业时，`take` 只多一次“批量链是否为空”的判断）；心跳是否用它由 `heartbeat.delivery` 决定，缺省不用（维护者 2026-10-21：先合入、缺省关闭）。上面的 worker 同锁取下一项与分片登记表对全部消息生效。必须保持：
+
+1. 准入（`admitTryBatch`）占一个名额、不写 `tails`；就绪后进通道的 `tryBatches`，`take` 在普通作业与批量作业之间交替（`preferOrdinary`），不与普通作业共用一条 FIFO。
+2. 同 ID 顺序在 `q.mu` 下逐组安排（`prepareTryBatchGroupLocked`，一组 `tryBatchGroup` = 8 个）：`tails[id]` 有登记（含已准入未执行）→ `convertTryBatchTargetLocked` 当场建一条与 `Dispatch` 相同的 `MsgTypeSingle` 消息、走 `admitLocked` 排在冲突作业之后；否则把 `claims[i]` 写进 `tails[id]` 认领，**认领先于 `TryRequireEntity`**。执行时实体锁 / 锁组取不到同样转单目标（先挂在认领后面）。一组结束在同一次持锁里转换取锁失败的目标、`releaseTryBatchClaimsLocked` 撤销认领（与作业结束共用 `releaseIDsLocked` 唤醒后继），再安排下一组。只有转单目标被 `admitLocked` 拒绝、目标不在内存、fence、取消、handler 不存在才交回调用方。
+3. 每个目标自己的 `entity.NewGuardScope` + `invokeTryBatchTransaction`（与 `invokeHandlerTransaction` 同样的 pipelined 白名单与结果未知 fence，不传提前放锁闭包、pipelined 锁内提交）；实体只从 `loadedGetter` 取、只 `TryRequire`。逐目标复用一个 `MsgTypeTryBatch` 消息对象（`resetMsg` 清零运行状态），当前消息只登记一次；每个目标开始前恢复请求上下文快照（`ctxSnapshot`），请求时间按批。`Await` 拒绝 `MsgTypeTryBatch`。
+4. 时间片 `tryBatchSlice` = 200µs：一组结束后检查，超出则 `yieldTryBatchLocked` 放回 `tryBatches` 尾；pending 不变，认领已撤销。Fence 逐组读 `NestMgr.fenced`（`Fence` 时置位的原子标志）。
+5. 交回在放锁后调用（`collectHandBacks` / `flushHandBacks`），回调 panic 只记日志。执行循环意外退出时剩余目标以 `errTryBatchAborted` 交回、残留认领撤销。
+
 [await.go](../../../framework/nest/await.go) 在当前 memory 段内预留 I/O 名额。pending 包含尚未启动的预留，保证 Shutdown 不会提前退出；普通 I/O 与 Await 共用容量，预算包含正在运行的 I/O。前段失败归还预留；成功则在队列释放 tail 后启动 work。resume 使用匿名 handlerEntry，复用正式加载、Guard、同步与回复链路，不把旧实体指针带到 I/O。
 
 新目标和旧目标没有跨段原子性。当前实现只允许无回滚 memory handler，动态目标错误、取消、停机及过载均有明确终态。具体用法、旧 Cast 迁移、验证命令和限制见 [三池与 Await](../NEST-AWAIT.md)。早期两通道字段聚合的性能样本保留在 [调度对照基准](../../performance/NEST-DISPATCH-BENCHMARK.md)，不能拿它证明三池或反射恢复的性能。
@@ -110,12 +122,13 @@
 
 ### goroutine
 
-6 个实现文件、3 个测试文件。
+7 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [goid_prod.go](../../../infra/base/goroutine/goid_prod.go) | 函数/方法或内部实现；见源码 |
 | [goid_race.go](../../../infra/base/goroutine/goid_race.go) | 函数/方法或内部实现；见源码 |
+| [local_map.go](../../../infra/base/goroutine/local_map.go) | `LocalMap` |
 | [mpsc_queue.go](../../../infra/base/goroutine/mpsc_queue.go) | `MPSCQueue` |
 | [parallel.go](../../../infra/base/goroutine/parallel.go) | `ParallelMapOption` |
 | [safe_func.go](../../../infra/base/goroutine/safe_func.go) | 函数/方法或内部实现；见源码 |
@@ -133,7 +146,7 @@
 
 ### nest
 
-23 个实现文件、34 个测试文件。
+24 个实现文件、35 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -158,6 +171,7 @@
 | [stats.go](../../../framework/nest/stats.go) | `DispatcherWorkStats`、`DispatchLaneStats`、`DispatchQueueStats`、`DispatcherStats` |
 | [ticker.go](../../../framework/nest/ticker.go) | `TickCallbackName`、`Ticker` |
 | [trace.go](../../../framework/nest/trace.go) | 函数/方法或内部实现；见源码 |
+| [try_batch.go](../../../framework/nest/try_batch.go) | `TryBatchTarget`、`TryBatchDispatcher` |
 | [transaction.go](../../../framework/nest/transaction.go) | `DurabilityPolicy`、`TransactionID`、`EntityMutation`、`Effect`、`CommitRecord`、`CommitFence`、`TransactionCommitter`、`TransactionReleaseNotifier`、`LocalExecutorBinder`、`CommitTicket`、`PipelinedTransactionCommitter`、`CommitParticipant` |
 
 ### worker
@@ -213,7 +227,7 @@
 
 ### goroutine
 
-- [goroutine_test.go](../../../infra/base/goroutine/goroutine_test.go)：`TestParallelSlice`、`TestParallelSliceCollect`、`TestSafeFuncWithTryCountWrapsLastError`、`TestSafeFuncWithTryCountRecoversPanic`、`TestSafeFuncWithTryCountZeroCountStillRunsOnce`
+- [goroutine_test.go](../../../infra/base/goroutine/goroutine_test.go)：`TestParallelSlice`、`TestParallelSliceCollect`、`TestSafeFuncWithTryCountWrapsLastError`、`TestSafeFuncWithTryCountRecoversPanic`、`TestSafeFuncWithTryCountZeroCountStillRunsOnce`、`TestLocalMapKeepsEachGoroutineEntrySeparate`
 - [mpsc_queue_test.go](../../../infra/base/goroutine/mpsc_queue_test.go)：`TestMPSCQueue_Basic`、`TestMPSCQueue_Full`、`TestMPSCQueue_MPSC`、`TestMPSCQueue_PowerOfTwo`
 - [task_pool_test.go](../../../infra/base/goroutine/task_pool_test.go)：`TestTaskPoolNormalizesZeroWorkerCount`、`TestSubmitRefusesAPoolThatIsNotRunningAndAClosedWorker`、`TestTaskPoolStartAfterShutdownIsRefused`、`TestTaskPoolShutdownBeforeStartStillStopsALaterStart`、`TestSubmitRacingShutdownNeverPanics`；其余 3 项见文件
 
@@ -239,7 +253,7 @@
 - [create_removal_window_test.go](../../../framework/nest/create_removal_window_test.go)：`TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict`、`TestHandlerCreateInsideRevokeWindowIsTreatedAsLockConflict`、`TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically`、`TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict`、`TestDestroyThenRecreateSameIDInHandlerLocksNewInstance`；其余 3 项见文件
 - [dispatch_compare_bench_test.go](../../../framework/nest/dispatch_compare_bench_test.go)：`TestDispatchComparisonSingleIDContract`、`TestDispatchComparisonIDsStayInShortPool`
 - [dispatch_metrics_test.go](../../../framework/nest/dispatch_metrics_test.go)：`TestDestroyedDispatchersLeaveNoSeries`、`TestADispatcherSharingItsNameKeepsTheSeries`、`TestADispatcherThatDidNotDrainKeepsItsSeriesUntilItDoes`、`TestTheIORerouteSeriesGoesWithItsDispatcher`、`TestNestStageMetricsFollowExecutionPaths`；其余 10 项见文件
-- [dispatch_queue_test.go](../../../framework/nest/dispatch_queue_test.go)：`TestTwoPoolsOrderAllTargetsWithoutOccupyingShortWorker`、`TestQueueSharedPredecessorsJoinAndSplit`、`TestIOPoolUsesSharedWorkersAndBoundedWaiting`、`TestIOLoadAndHandlerUseDifferentWorkers`、`TestQueueStatsSeparateDependencyAndWorkerWait`；其余 8 项见文件
+- [dispatch_queue_test.go](../../../framework/nest/dispatch_queue_test.go)：`TestTwoPoolsOrderAllTargetsWithoutOccupyingShortWorker`、`TestQueueSharedPredecessorsJoinAndSplit`、`TestIOPoolUsesSharedWorkersAndBoundedWaiting`、`TestIOLoadAndHandlerUseDifferentWorkers`、`TestQueueStatsSeparateDependencyAndWorkerWait`；其余 8 项见文件、`TestQueueWorkerRunsAfterQueueBetweenJobsWithoutLock`
 - [dispatch_test.go](../../../framework/nest/dispatch_test.go)：`TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`、`TestDispatchEntriesRequireGuardScope`、`TestBroadcastReleasePanicBalancesTouchesAndContinues`、`TestDispatchRoutesPreserveArgumentsAndReleaseOnEveryOutcome`；其余 7 项见文件
 - [short_stage_test.go](../../../framework/nest/short_stage_test.go)：`TestShortStageRejectsDirectColdAccessBeforeIO`、`TestShortContinuationRejectsSelfDispatchAndSavedIOExecutorRunsInline`、`TestShortBroadcastReportsColdTargetAndContinues`、`TestIOHandlerRunLocalDoesNotWaitForOwnPool`、`TestRunLocalExecutesOnTheShortPoolAndIsBoundToTheCommitter`；其余 2 项见文件
 - [fixtures_test.go](../../../framework/nest/fixtures_test.go)
@@ -259,6 +273,7 @@
 - [remote_dispatch_test.go](../../../framework/nest/remote_dispatch_test.go)：`TestRemoteStagesDoNotBlockCostLogicWorker`、`TestRemoteStagesPreserveOrderAndDrainBeforeShutdown`、`TestRemoteStagesCancelAndFenceAfterPrepareCloseBatch`、`TestRemoteStagesFullShortQueueReservesContinuation`、`TestRemoteStagesReturnContextAndConfirmAfterGuardRelease`；其余 8 项见文件
 - [sync_modes_test.go](../../../framework/nest/sync_modes_test.go)：`TestNestSyncModesShareCommitAndUnlockBoundaries`、`TestNestOnChangeRunsWithoutWaitingForInterval`、`TestNestSyncRollbackPreservesOlderPending`、`TestNestPipelinedSyncWaitsForConfirmationAndUnlock`、`TestNestSyncRejectedCommitDoesNotFreezeOrPublish`；其余 3 项见文件
 - [ticker_test.go](../../../framework/nest/ticker_test.go)：`TestTickerPanickingCallbackStopsNeitherTheTickerNorItsPeers`、`TestTickerStopBeforeStartIsSafeAndFinal`、`TestTickCallbacksRegisteredAfterStartTakeEffectInOrder`、`TestTickerConcurrentStartStopAlwaysClosesStartedRun`、`TestTickerStateIsInstanceScoped`
+- [try_batch_test.go](../../../framework/nest/try_batch_test.go)：`TestTryBatchConflictRunsAfterAdmittedSameIDJob`（约束 1：冲突转单目标、排在已准入消息之后）、`TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat`（约束 2：认领期间后来的同 ID 消息等在依赖队列）、`TestTryBatchLockBusyConvertsToSingleJob`、`TestTryBatchConversionRejectedIsHandedBack`、`TestTryBatchKeepsPerTargetTransactionSemantics`、`TestTryBatchYieldsWorkerAfterTimeSlice`、`TestTryBatchRefusesTargetsAfterFence`、`TestTryBatchDrainsOnShutdown`、`TestTryBatchHandBackReasonsAndPoolRouting`、`TestTryBatchAlternatesWithOrdinaryJobs`
 - [transaction_test.go](../../../framework/nest/transaction_test.go)：`TestCommitRunsEveryCallbackAndReportsAPanickingOne`、`TestCommitIsIdempotent`、`TestPreCommitRejectionsCarryErrCommitRejected`、`TestPrepareCommitRecordPreservesMutationIdentity`、`TestRollbackStateRestoresDaoAndDirty`；其余 8 项见文件
 
 ### worker

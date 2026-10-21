@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Nest 批量心跳作业 DispatchTryBatch 与心跳投递开关，缺省关闭（DESIGN-TODO D20 选项 C，维护者 2026-10-21 批准按推荐做）
+
+- **合入方式（维护者 2026-10-21 决定 A）**：代码先合入，心跳缺省仍走单目标 `Dispatch`；批量心跳作业做成开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。
+- **已经生效（对全部 Nest 消息，无开关）**：两张 goroutine 登记表改分片表（`goroutine.LocalMap`）；worker 结束一项后同一次持锁取下一项；`NestMgr.DispatchTryBatch` 入口与派发队列的批量作业支持（两条就绪链交替只在有批量作业时起作用）。
+- **在开关后面（缺省关闭）**：心跳按 64 拍一批走批量作业、冲突转单目标、交回队列（`gameplay/heartbeat` 的 `DeliveryBatch`）。
+- **维护者决定（2026-10-21）**：① 做 [HB-STRUCTURES §6](docs/performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C，先设计再原型，压测达标才合入；② 两张按 goroutine 登记的全局 `sync.Map` 改分片表、对全部 Nest 消息生效；③ 方案 D 分支不合入，只保留“worker 同锁取下一项”。同日追加同 ID 顺序硬约束：冲突的目标当场转成单目标作业排在冲突消息之后（不跳拍）；执行期间临时登记为该 ID 的尾作业。设计见 [FEATURE-2026-10-21-nest-batch-heartbeat](docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)。
+- **新增 API（`framework/nest`）**：`NestMgr.DispatchTryBatch(ctx, []TryBatchTarget, handBack)`、`TryBatchTarget`、`TryBatchDispatcher`（不在 `Client` 里）、`MaxTryBatchTargets`、`ErrTryBatchUnsupportedTarget`、`MsgTypeTryBatch`；`DispatchLaneStats` 加 `TryBatchJobs`、`TryBatchConverted`。一个作业带一批单目标投递（按业务池分 short / long），每个目标在自己的 Guard 作用域与事务里执行；Remote 托管目标不接受；批内 `Await` 返回 `ErrAwaitContext`。
+- **Nest 内部**：worker 结束一项后在同一次持锁里取下一项（从方案 D 拆出）；就绪的批量作业单独一条链、与普通作业交替取；`admit` 拆出 `admitLocked`、`finishJobLocked` 拆出 `releaseIDsLocked`；`NestMgr.fenced` 原子标志。
+- **分片登记表**：新增 `goroutine.LocalMap[T]`；`entity.guardScopes`、`nest.currentNestDispatchMsgs` 由 `sync.Map` 换成它（全部 Nest 消息生效，语义不变）。
+- **心跳（`gameplay/heartbeat`）**：新增 `Config.Delivery`、`Delivery`（`DeliveryDispatch` 缺省 / `DeliveryBatch`）、`ParseDelivery`、`Driver.SetDelivery`（只能在第一次 `Start` 之前）、`Driver.Delivery`；`wiring/heartbeat` 新增配置项 `heartbeat.delivery`（`dispatch` / `batch`，`ConfigSchema` 声明、Init 校验一次）。批量方式要求客户端实现 `nest.TryBatchDispatcher`（不静默退回）；按 64 拍一批走批量作业，Remote 托管实体总是单目标。同 ID 冲突不算跳拍；冲突转单目标被拒才计 `skipped{queue_full}`；准入后卸载、未重载的实例按 `dropped{not_loaded}` 丢弃、不冷加载。`heartbeat.delivered_total` 改为“交给 Nest 的拍”。
+- **新增指标**：`nest.dispatch.try_batch.cost`、`executed.total`、`failed.total`、`converted.total`（冲突转单目标次数）、`handed_back.total`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md)）。批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计慢的）。
+- **测试**：Nest 11 个、心跳 4 个、wiring 1 个新用例；现有心跳用例（驱动、真实 Nest、Remote 迁移与共享模式）在 `dispatch` / `batch` 两种方式下各跑一遍；20 条变异核对 19 红 1 绿（[性能报告 §5](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#5-语义变异核对)）。
+- **性能**：压测暂停，待补（维护者 2026-10-21 要求先完成代码；复跑步骤见 [NEST-BATCH-HEARTBEAT-20261021 §4](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#4-待补测复跑步骤)）。方案 D 的实验记录随仓保留在 [NEST-DISPATCH-BATCH-20261021](docs/performance/NEST-DISPATCH-BATCH-20261021.md)。
+- **升级**：无存储 / 协议变化。按日志文本匹配的使用方注意：批内目标失败仍打 `async handler failed`，不再打逐条的慢派发 trace。
+- **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)。
+
 ### 业务时间一律取自 ctx（D22-1）与场景时间域 gameplay/timedomain（DESIGN-TODO D22）
 
 - **维护者决定（2026-10-21）**：范围按 ssr 收窄——全局不做变速，只做场景级；部署级变速（原 D22-2）取消，`time.logic_offset` 保持现状，没有时间计划、没有 `time.speed_control`。实施 D22-1（业务时间唯一入口 `fctx.Now()`，每条消息 / 每一拍冻结一次）与场景时间域；时间域倍率 [0, 100]、允许 0（时停）；entitytimer 不接时间域，域内的定时走心跳。
@@ -50,7 +66,7 @@
 - **新增（`gameplay/heartbeat`）**：`Driver`（一个 Nest 引擎一个，`NewDriver(Config{Name})`、`SetClock`、`Bind`、`Start` / `Stop`、`NewHost`、`Stats`）、`Host`（`Register(name, period, fn, opts...)`、`OnDestroy`）、`Reg`（`Start` / `Stop` / `SetPeriod` / `Active` / `Period` / `Name`）、`Beat{Now, Elapsed, Period, Skipped, First}`、`Func func(Beat) error`、`WithDurability`、`Periods`（10 个固定档位 50ms～60s）、`Resolution`（10ms）。所有跑在 Nest 业务池上的实体周期逻辑以它为底层；用法见 [guide/10-time §4A](docs/framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](docs/framework/impl/10-time.md#2b-实体心跳)。
 - **语义**：按档分环、10ms 一格、1 个驱动 goroutine，相位 = hash(实体 ID)；每拍每个到期登记一条单目标 `Dispatch`（不合并，投递层按“一格一批”设计，以后可换 Nest 批量入队）；回调在实体自己的 worker 上、实体锁与事务内执行，快池 / 慢池按实体种类；每个登记至多一拍在途，上一拍没执行完或快池 `ErrQueueFull` 就跳拍，不累积不补发，计数并限频 Warn；不追帧，`Elapsed` 夹到 `max(1s, 档位)`；事务内启停提交后生效、回滚作废；卸载重载用实例核对 + 令牌丢弃旧实例的拍；Remote 托管实体只在独占拥有方（`LocalOwned`）跳，迁移时旧拥有方停、新拥有方重新登记。心跳本身不持久，entitytimer 不改。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21，D20 P1 后决定 ④；原先静默不跳）：新增哨兵 `ErrHeartbeatRemoteShared`；实例处于共享模式（`Sharing` / `Shared`）时 `Host.Register` 与 `Reg.Start` 返回它。共享是运行期所有权状态，登记后才进入共享的（`EnterRemoteSharedMode`，或第二个写者首拍准入转 `Shared`）由下一拍在实体锁内停掉登记、回调不执行，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn（`WarnInterval`）；回到独占后不自动恢复，由业务重新 `Start`（维护者 2026-10-21 决定）。**API 变化**：`Reg.Start()` 改为返回 `error`（共享模式之外恒为 nil）；`Stats` 新增 `StoppedShared`。替代做法：共享实体的周期逻辑由业务层驱动（负责它的服务按周期发 Nest 消息）。
-- **新增 Mod**：`wiring/heartbeat.NewMod(access, driver)`，名字 `heartbeat`（`mods.ModHeartbeat`，同名登记驱动），依赖 Nest、先于 Nest 停止，没有配置项。生成器本期不接入。
+- **新增 Mod**：`wiring/heartbeat.NewMod(access, driver)`，名字 `heartbeat`（`mods.ModHeartbeat`，同名登记驱动），依赖 Nest、先于 Nest 停止；唯一的配置项 `heartbeat.delivery` 见上面 D20 选项 C 一条。生成器本期不接入。
 - **新增指标**：`heartbeat.delivered_total`、`executed_total`、`skipped_total{reason}`、`stalled_total`、`dropped_total{reason}`、`stopped_total{reason}`、`registered`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)）；告警基线第 12 条。
 - **测试**：`gameplay/heartbeat` 的驱动 / 真实 Nest / Remote 迁移用例与 `wiring/heartbeat` Mod 用例，5 万实体冒烟；11 个变异核对各让对应用例变红（[D20 实施结果](docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)）。根包依赖门禁把 `gameplay/heartbeat` 归入 nest 块。
 - **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)。

@@ -1,0 +1,122 @@
+[
+ {
+  "name": "N1",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchConflictRunsAfterAdmittedSameIDJob",
+  "desc": "冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行",
+  "old": "\t\tcase tail != nil:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "new": "\t\tcase tail != nil && false:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "N2",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat",
+  "desc": "执行期间不认领：不把目标登记为该 ID 的尾作业（只标记已认领）",
+  "old": "\t\t\tq.tails[item.id] = claim\n",
+  "new": "",
+  "timeout": "150s"
+ },
+ {
+  "name": "N3",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchConversionRejectedIsHandedBack",
+  "desc": "转单目标作业被准入拒绝时当作转成功（不交回）",
+  "old": "\tif err := q.admitLocked(j); err != nil {\n\t\trecycleMsg(msg)\n\t\treturn err\n\t}",
+  "new": "\tif err := q.admitLocked(j); err != nil {\n\t\trecycleMsg(msg)\n\t\treturn nil\n\t}",
+  "timeout": "150s"
+ },
+ {
+  "name": "N4",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchKeepsPerTargetTransactionSemantics",
+  "desc": "各目标共用第一个目标的 Params",
+  "old": "\ttarget.Params = b.params[start:len(b.params):len(b.params)]",
+  "new": "\ttarget.Params = b.params[:len(target.Params)+0*start : len(target.Params)]",
+  "timeout": "150s"
+ },
+ {
+  "name": "N5",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchYieldsWorkerAfterTimeSlice",
+  "desc": "不检查时间片（tryBatchSlice 改成一小时）",
+  "old": "const tryBatchSlice = 200 * time.Microsecond",
+  "new": "const tryBatchSlice = time.Hour",
+  "timeout": "150s"
+ },
+ {
+  "name": "N6",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchRefusesTargetsAfterFence",
+  "desc": "执行前不检查 fence",
+  "old": "\t\tcase fenced:\n",
+  "new": "\t\tcase fenced && false:\n",
+  "timeout": "150s"
+ },
+ {
+  "name": "N7",
+  "file": "framework/nest/dispatch_queue.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchAlternatesWithOrdinaryJobs",
+  "desc": "批量作业与普通作业进同一条 FIFO（enqueueReady 不分 tryBatches）",
+  "old": "\tif j.tryBatch != nil {\n\t\tstate.tryBatches.push(j)\n\t} else {",
+  "new": "\tif false {\n\t\tstate.tryBatches.push(j)\n\t} else {",
+  "timeout": "150s"
+ },
+ {
+  "name": "N8",
+  "file": "framework/nest/dispatch_queue.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchAlternatesWithOrdinaryJobs",
+  "desc": "两类都有时总是先取普通作业（批量作业被普通积压饿住）",
+  "old": "\tif state.tryBatches.head != nil && (state.ready.head == nil || !state.preferOrdinary) {",
+  "new": "\tif state.tryBatches.head != nil && state.ready.head == nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H1",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatRunsRightAfterTheAdmittedMessage",
+  "desc": "冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行",
+  "old": "\t\tcase tail != nil:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "new": "\t\tcase tail != nil && false:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H2",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatRunsRightAfterTheAdmittedMessage",
+  "desc": "驱动不看在途标志照投（每个登记至多一拍在途被破坏）",
+  "old": "\t\tif !r.inflight.Load() {\n\t\t\tr.stalls = 0\n\t\t} else {",
+  "new": "\t\tif true {\n\t\t\tr.stalls = 0\n\t\t} else {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H3",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses",
+  "desc": "交回的拍只清在途、不计跳拍",
+  "old": "\t\tdefault:\n\t\t\td.skip(r, rb.err)\n",
+  "new": "\t\tdefault:\n",
+  "timeout": "150s"
+ },
+ {
+  "name": "H4",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats",
+  "desc": "Remote 托管实体的拍也走批量作业",
+  "old": "\t\tif b.reg.host.remote != nil {\n\t\t\tp.remote = append(p.remote, b)",
+  "new": "\t\tif false && b.reg.host.remote != nil {\n\t\t\tp.remote = append(p.remote, b)",
+  "timeout": "150s"
+ }
+]

@@ -1,0 +1,52 @@
+18:45:41 foreign seen, reset quiet counter
+18:46:01 foreign seen, reset quiet counter
+18:46:07 foreign seen, reset quiet counter
+18:46:22 foreign seen, reset quiet counter
+18:46:28 foreign seen, reset quiet counter
+18:46:37 foreign seen, reset quiet counter
+18:46:44 foreign seen, reset quiet counter
+18:46:50 foreign seen, reset quiet counter
+18:47:07 foreign seen, reset quiet counter
+18:47:11 foreign seen, reset quiet counter
+18:47:17 foreign seen, reset quiet counter
+18:47:32 foreign seen, reset quiet counter
+18:48:11 round=1 active=0.2 X start loadavg={ 10.24 9.54 7.68 }
+18:48:31 X r1 active=0.2 ok
+18:49:02 round=1 active=0.2 Y start loadavg={ 8.31 9.08 7.61 }
+18:49:22 Y r1 active=0.2 ok
+18:49:53 round=1 active=0.2 C start loadavg={ 8.14 8.74 7.56 }
+18:50:13 C r1 active=0.2 ok
+18:50:45 round=1 active=0.2 X0 start loadavg={ 6.01 8.08 7.38 }
+18:51:05 X0 r1 active=0.2 ok
+18:51:36 round=1 active=1 C start loadavg={ 5.93 7.77 7.31 }
+18:51:56 C r1 active=1 ok
+18:52:27 round=1 active=1 X0 start loadavg={ 6.59 7.73 7.32 }
+18:52:47 X0 r1 active=1 ok
+18:53:16 foreign seen, reset quiet counter
+18:53:27 foreign seen, reset quiet counter
+18:53:41 foreign seen, reset quiet counter
+18:54:14 round=1 active=1 X start loadavg={ 3.94 6.58 6.93 }
+18:54:34 X r1 active=1 ok
+18:55:05 round=1 active=1 Y start loadavg={ 3.81 6.16 6.76 }
+18:55:26 Y r1 active=1 ok
+18:55:48 foreign seen, reset quiet counter
+18:56:15 foreign seen, reset quiet counter
+18:56:21 foreign seen, reset quiet counter
+18:56:29 foreign seen, reset quiet counter
+18:56:35 foreign seen, reset quiet counter
+18:57:04 foreign seen, reset quiet counter
+18:57:33 foreign seen, reset quiet counter
+18:57:42 foreign seen, reset quiet counter
+18:57:46 foreign seen, reset quiet counter
+18:57:50 foreign seen, reset quiet counter
+18:58:23 round=1 active=0 none start loadavg={ 4.19 5.48 6.37 }
+18:58:43 none r1 active=0 DISCARDED: 9088 7.5 go  go build ./...;
+18:58:49 foreign seen, reset quiet counter
+18:59:10 foreign seen, reset quiet counter
+18:59:20 foreign seen, reset quiet counter
+18:59:26 foreign seen, reset quiet counter
+18:59:36 foreign seen, reset quiet counter
+18:59:41 foreign seen, reset quiet counter
+18:59:47 foreign seen, reset quiet counter
+19:00:01 foreign seen, reset quiet counter
+# 压测暂停（维护者 2026-10-21 18:55）：只采到第 1 轮，不作为结论
