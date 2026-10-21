@@ -558,3 +558,28 @@ func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
 		t.Fatalf("SetDelivery after the driver had started = %v, delivery %q", err, d.Delivery())
 	}
 }
+
+// 慢派发 trace 在 handler 执行期间用 %#v 打印消息参数（*Reg）：只能读构造后不变的字段，不能与回调对在途 / 跳拍计数的
+// 原子写竞争。红在 -race 下：去掉 Reg.GoString 时按反射打印，本用例报数据竞争。
+func TestRegFormatsWithoutReadingMutableState(t *testing.T) {
+	d, _, _, _ := newTestDriver(t, discard)
+	e := newHBEntity(t, d, 9100, kindShort)
+	r, err := e.host.Register("fmt", 50*time.Millisecond, func(Beat) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			r.inflight.Store(true)
+			r.skipped.Add(1)
+		}
+	}()
+	for range 1000 {
+		if got := fmt.Sprintf("%#v", r); !strings.Contains(got, `"fmt"`) {
+			t.Fatalf("%%#v of a registration = %s", got)
+		}
+	}
+	<-done
+}

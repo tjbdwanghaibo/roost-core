@@ -19,6 +19,10 @@
 - **game-demo 手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段绑时钟；demo 的 `startWorldTimers` 在 `Service.Init`、`EnsureWorld` 之前调用，“World 第一次加载在驱动接上之后”靠 demo 自己的启动顺序（写闸门 `require_write_gate: true` 在 `EnsureWorld` 之后才发布），不是框架保证；更早加载的 World 按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
 - **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader 代替 DataEngine + Mongo；循环的其余计时分支（MaxWait 重读时钟、准入失败重试、Redeliver）由它与 entitytimer 包测试覆盖。真实 WAL / Mongo 下的定时器往返由 7 个游戏夹具的 SIGKILL 崩溃恢复与 MMORPG 的正常停机夹具覆盖，全部经驱动投递循环（`Driver.Start`）、不手发 Tick，见 [游戏接入验收](#游戏接入验收)。
 
+### 慢派发 trace 与 handler 并发读消息参数（2026-10-21 发现，尚未修复）
+
+`framework/nest/trace.go` 的慢派发 trace（`startSlowDispatchTraceWatch`，执行超过 200ms 时由 `time.AfterFunc` 的 goroutine 触发）用 `fmt.Sprintf("%#v")` 打印消息参数（`nestParamSamples`），这时 handler 可能仍在执行、正在改同一个参数对象：参数是可变指针时，`-race` 报数据竞争，日志里可能是撕裂的值。发现于心跳 5 万实体冒烟 `-race -count=30`（`TestFiftyThousandEntitiesSmoke/dispatch`，单目标方式，与批量作业无关）。心跳这一侧已让 `*heartbeat.Reg` 实现 `GoString`、只打印构造后不变的字段（`TestRegFormatsWithoutReadingMutableState`，红在 `-race`）；Nest 侧对任意可变参数的同类竞争没有改（超出本轮范围），可选做法：trace 只打印 `%T`、或在准入时快照参数文本、或只在 handler 返回后打印。
+
 ### 实体心跳（D20 第 1 期）
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。

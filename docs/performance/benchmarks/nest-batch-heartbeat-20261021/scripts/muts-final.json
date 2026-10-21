@@ -1,0 +1,222 @@
+[
+ {
+  "name": "N1",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchConflictRunsAfterAdmittedSameIDJob",
+  "desc": "冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行",
+  "old": "\t\tcase tail != nil:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "new": "\t\tcase tail != nil && false:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "N2",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat",
+  "desc": "执行期间不认领：不把目标登记为该 ID 的尾作业（只标记已认领）",
+  "old": "\t\t\tq.tails[item.id] = claim\n",
+  "new": "",
+  "timeout": "150s"
+ },
+ {
+  "name": "N3",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchConversionRejectedIsHandedBack",
+  "desc": "转单目标作业被准入拒绝时当作转成功（不交回）",
+  "old": "\tif err := q.admitLocked(j); err != nil {\n\t\trecycleMsg(msg)\n\t\treturn err\n\t}",
+  "new": "\tif err := q.admitLocked(j); err != nil {\n\t\trecycleMsg(msg)\n\t\treturn nil\n\t}",
+  "timeout": "150s"
+ },
+ {
+  "name": "N4",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchKeepsPerTargetTransactionSemantics",
+  "desc": "各目标共用第一个目标的 Params",
+  "old": "\ttarget.Params = b.params[start:len(b.params):len(b.params)]",
+  "new": "\ttarget.Params = b.params[:len(target.Params)+0*start : len(target.Params)]",
+  "timeout": "150s"
+ },
+ {
+  "name": "N5",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchYieldsWorkerAfterTimeSlice",
+  "desc": "不检查时间片（tryBatchSlice 改成一小时）",
+  "old": "const tryBatchSlice = 200 * time.Microsecond",
+  "new": "const tryBatchSlice = time.Hour",
+  "timeout": "150s"
+ },
+ {
+  "name": "N6",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchRefusesTargetsAfterFence",
+  "desc": "执行前不检查 fence",
+  "old": "\t\tcase fenced:\n",
+  "new": "\t\tcase fenced && false:\n",
+  "timeout": "150s"
+ },
+ {
+  "name": "N7",
+  "file": "framework/nest/dispatch_queue.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchAlternatesWithOrdinaryJobs",
+  "desc": "批量作业与普通作业进同一条 FIFO（enqueueReady 不分 tryBatches）",
+  "old": "\tif j.tryBatch != nil {\n\t\tstate.tryBatches.push(j)\n\t} else {",
+  "new": "\tif false {\n\t\tstate.tryBatches.push(j)\n\t} else {",
+  "timeout": "150s"
+ },
+ {
+  "name": "N8",
+  "file": "framework/nest/dispatch_queue.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchAlternatesWithOrdinaryJobs",
+  "desc": "两类都有时总是先取普通作业（批量作业被普通积压饿住）",
+  "old": "\tif state.tryBatches.head != nil && (state.ready.head == nil || !state.preferOrdinary) {",
+  "new": "\tif state.tryBatches.head != nil && state.ready.head == nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H1",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatRunsRightAfterTheAdmittedMessage",
+  "desc": "冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行",
+  "old": "\t\tcase tail != nil:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "new": "\t\tcase tail != nil && false:\n\t\t\tif err := q.convertTryBatchTargetLocked(b, item); err != nil {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H2",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatRunsRightAfterTheAdmittedMessage",
+  "desc": "驱动不看在途标志照投（每个登记至多一拍在途被破坏）",
+  "old": "\t\tif !r.inflight.Load() {\n\t\t\tr.stalls = 0\n\t\t} else {",
+  "new": "\t\tif true {\n\t\t\tr.stalls = 0\n\t\t} else {",
+  "timeout": "150s"
+ },
+ {
+  "name": "H3",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses",
+  "desc": "交回的拍只清在途、不计跳拍",
+  "old": "\t\tdefault:\n\t\t\td.skip(r, rb.err)\n",
+  "new": "\t\tdefault:\n",
+  "timeout": "150s"
+ },
+ {
+  "name": "H4",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats",
+  "desc": "Remote 托管实体的拍也走批量作业",
+  "old": "\t\tif b.reg.host.remote != nil {\n\t\t\tp.remote = append(p.remote, b)",
+  "new": "\t\tif false && b.reg.host.remote != nil {\n\t\t\tp.remote = append(p.remote, b)",
+  "timeout": "150s"
+ },
+ {
+  "name": "N9",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchDrainsOnShutdown",
+  "timeout": "150s",
+  "desc": "批量作业准入不计入 pending（停机排空不等它）",
+  "old": "\tq.pending++\n\tstate.queued++\n\tstate.observation.TryBatchJobs++",
+  "new": "\tstate.queued++\n\tstate.observation.TryBatchJobs++"
+ },
+ {
+  "name": "N10",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchReadsOnlyLoadedTargets",
+  "timeout": "150s",
+  "desc": "执行器直接用引擎的 Getter（不包 loadedGetter，会冷加载）",
+  "old": "getter: loadedGetter{mgr.getter},",
+  "new": "getter: mgr.getter,"
+ },
+ {
+  "name": "N11",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchHandBackReasonsAndPoolRouting",
+  "timeout": "150s",
+  "desc": "慢池目标也进 short 通道",
+  "old": "\tif entity.EntityBusinessPoolOfKind(entity.ResolveEntityID(id).Kind) == entity.BusinessPoolLong {\n\t\treturn dispatchLongLane",
+  "new": "\tif false && entity.EntityBusinessPoolOfKind(entity.ResolveEntityID(id).Kind) == entity.BusinessPoolLong {\n\t\treturn dispatchLongLane"
+ },
+ {
+  "name": "N12",
+  "file": "framework/nest/await.go",
+  "pkg": "./framework/nest/",
+  "test": "TestTryBatchHandBackReasonsAndPoolRouting",
+  "timeout": "150s",
+  "desc": "Await 不拒绝批量作业（去掉 MsgTypeTryBatch 判断）",
+  "old": " || msg.Type == MsgTypeTryBatch",
+  "new": ""
+ },
+ {
+  "name": "H5",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad",
+  "timeout": "150s",
+  "desc": "交回的“不在内存”也按跳拍计",
+  "old": "\t\tcase errors.Is(rb.err, nest.ErrEntityNotFound):",
+  "new": "\t\tcase false && errors.Is(rb.err, nest.ErrEntityNotFound):"
+ },
+ {
+  "name": "S1",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestDeliveryIsChosenOnceBeforeStart",
+  "timeout": "150s",
+  "desc": "SetDelivery 不检查“已启动”",
+  "old": "\tif d.cancel != nil || d.lastDone != nil {\n\t\treturn fmt.Errorf(\"heartbeat: driver %s: delivery cannot change after the driver has started\", d.config.Name)\n\t}",
+  "new": ""
+ },
+ {
+  "name": "S2",
+  "file": "wiring/heartbeat/heartbeat.go",
+  "pkg": "./wiring/heartbeat/",
+  "test": "TestModReadsTheDeliveryOnce",
+  "timeout": "150s",
+  "desc": "Init 不把 heartbeat.delivery 交给驱动",
+  "old": "\tif err := m.driver.SetDelivery(delivery); err != nil {",
+  "new": "\tif err := m.driver.SetDelivery(coreheartbeat.DeliveryDispatch); err != nil || delivery == \"\" {"
+ },
+ {
+  "name": "S3",
+  "file": "gameplay/heartbeat/driver.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestDeliveryIsChosenOnceBeforeStart",
+  "timeout": "150s",
+  "desc": "批量方式下客户端不支持时静默退回单目标",
+  "old": "\t\treturn nil, fmt.Errorf(\"heartbeat: driver %s: delivery %q needs a nest client that implements nest.TryBatchDispatcher, got %T\", d.config.Name, DeliveryBatch, client)",
+  "new": "\t\treturn single, nil"
+ },
+ {
+  "name": "F1",
+  "file": "infra/base/fctx/context.go",
+  "pkg": "./infra/base/fctx/",
+  "test": "TestRefreezeStartsANewExecutionInTheSameContext",
+  "timeout": "150s",
+  "desc": "Refreeze 不清 Frozen",
+  "old": "\tc.NowMilli = c.Now.UnixMilli()\n\tc.clearFrozen()\n}",
+  "new": "\tc.NowMilli = c.Now.UnixMilli()\n}"
+ },
+ {
+  "name": "F2",
+  "file": "framework/nest/try_batch.go",
+  "pkg": "./gameplay/heartbeat/",
+  "test": "TestEveryBeatFreezesItsOwnBusinessTime",
+  "timeout": "150s",
+  "desc": "批量作业逐目标不 Refreeze（整批共用一个冻结时刻）",
+  "old": "\t\texec.ctx.Refreeze()\n",
+  "new": ""
+ }
+]

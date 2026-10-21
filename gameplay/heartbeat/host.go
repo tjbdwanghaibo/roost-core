@@ -210,6 +210,15 @@ type Reg struct {
 // Name 返回登记名。
 func (r *Reg) Name() string { return r.name }
 
+// GoString 只输出构造后不变的字段（登记名、实体 ID）。Nest 的慢派发 trace 用 %#v 打印消息参数，它在 handler 执行期间
+// 由另一个 goroutine 调用；按反射打印会读到回调正在原子写的在途 / 跳拍计数（-race 报数据竞争）。
+func (r *Reg) GoString() string {
+	if r == nil {
+		return "(*heartbeat.Reg)(nil)"
+	}
+	return fmt.Sprintf("&heartbeat.Reg{name:%q, entity:%d}", r.name, r.host.id)
+}
+
 // Active 返回业务视角的启停状态（实体锁内读；含本事务里尚未提交的启停）。
 func (r *Reg) Active() bool { return r.active }
 
