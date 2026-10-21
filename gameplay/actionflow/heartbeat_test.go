@@ -1,6 +1,7 @@
 package actionflow
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -181,5 +182,55 @@ func TestAFrozenGroupStopsBeatingAndResumesOnRecover(t *testing.T) {
 	}
 	if b.Runner().Current(1) != nil || b.Reg(1).Active() || d.Registered() != 0 {
 		t.Fatalf("after an interrupting freeze: current %v active %v registered %d", b.Runner().Current(1), b.Reg(1).Active(), d.Registered())
+	}
+}
+
+// 换场景（换时间域）：同一实体、同一心跳宿主上撤掉旧的 BeatRunner、按新的域重建一个（KNOWN-LIMITS“域要在构造时
+// 给”的做法）。新 runner 的组心跳用同样的登记名，必须挂得上、跟着动作跳；旧 runner 的登记离开驱动。
+func TestABeatRunnerCanBeRebuiltOnTheSameHost(t *testing.T) {
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "rebuild-test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	host := d.NewHost(&beatEntity{entity.NewEntityBase(1<<20, entity.EntityCategoryOther, true)})
+	build := func(errs *[]error) *BeatRunner {
+		registry := NewRegistry()
+		if err := registry.RegisterAction(1, func(param any) (Action, error) { return param.(Action), nil }); err != nil {
+			t.Fatal(err)
+		}
+		b, err := NewBeatRunner(ActionRunnerConfig{
+			Registry:     registry,
+			GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true },
+			Hooks:        ActionRunnerHooks{OnError: func(err error) { *errs = append(*errs, err) }},
+		}, BeatConfig{Host: host})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	var newErrs, log []string
+	var oldReported, newReported []error
+	old := build(&oldReported)
+	walking := &probeAction{name: "old walk", log: &log}
+	if _, err := old.Runner().Start(1, walking, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	oldReg := old.Reg(1)
+	old.Close(NewActionReason("scene change"))
+	if old.Runner().Current(1) != nil || !oldReg.Closed() || d.Registered() != 0 || len(oldReported) != 0 {
+		t.Fatalf("closed runner: current %v reg closed %v registered %d errors %v", old.Runner().Current(1), oldReg.Closed(), d.Registered(), oldReported)
+	}
+	rebuilt := build(&newReported)
+	if _, err := rebuilt.Runner().Start(1, &probeAction{name: "new walk", log: &log}, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range newReported {
+		newErrs = append(newErrs, err.Error())
+	}
+	if len(newErrs) != 0 || rebuilt.Reg(1) == nil || !rebuilt.Reg(1).Active() || d.Registered() != 1 {
+		t.Fatalf("rebuilt runner: errors %v active %v registered %d", newErrs, rebuilt.Reg(1) != nil && rebuilt.Reg(1).Active(), d.Registered())
+	}
+	// 关闭之后经旧 runner 启动的动作挂不上心跳，以失败结束（与共享模式下挂不上相同：Start 本身返回 nil，结束经
+	// OnEnded，错误经 OnError）。
+	if _, err := old.Runner().Start(1, &probeAction{name: "late", log: &log}, 0, time.Time{}); err != nil ||
+		old.Runner().Current(1) != nil || len(oldReported) != 1 || !errors.Is(oldReported[0], ErrBeatRunnerClosed) {
+		t.Fatalf("start on a closed runner: %v current %v reported %v", err, old.Runner().Current(1), oldReported)
 	}
 }

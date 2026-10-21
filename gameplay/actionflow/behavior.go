@@ -23,6 +23,12 @@ const (
 	MetricActionsRunning = "actionflow.actions.running"
 )
 
+// ErrBehaviorClosed 表示 Behavior 已 Close / OnDestroy：经它发起的动作与任务被拒绝。
+var ErrBehaviorClosed = errors.New("actionflow: behavior is closed")
+
+// ErrOwnerDestroyed 是 Behavior.OnDestroy 结束在途动作与任务的原因（实体卸载、删档或撤销新建）。
+var ErrOwnerDestroyed = errors.New("actionflow: owner entity destroyed")
+
 // Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（DESIGN-TODO D21 A1，对照 ssr 的
 // action_list 模块那一层，维护者 2026-10-21 由 Agent 更名为 Behavior，避免与 AI agent 混淆）。一个实体的
 // ActionRunner（可选由心跳驱动，见 BeatRunner）、MissionRunner 与上层观察者（通常是 ai.Controller）按固定顺序接好，
@@ -54,6 +60,9 @@ type Behavior struct {
 	beatName    string
 	beatOptions []heartbeat.RegOption
 	mission     *heartbeat.Reg
+
+	// closed 由 Close / OnDestroy 置位：经 Behavior 发起的动作与任务返回 ErrBehaviorClosed。
+	closed bool
 }
 
 // Observer 接收 Behavior 的动作结束与任务结束，在任务处理之后调用。ai.Controller 实现它（actionflow 不导入 ai）。
@@ -180,17 +189,56 @@ func (b *Behavior) Clear(reason ActionReason) {
 	b.report(b.runner.EndAll(true, reason))
 }
 
+// Close 撤销 Behavior：先拒绝新的动作与任务（观察者、任务在收尾通知里再发起的也被拒绝，返回 ErrBehaviorClosed），
+// 再清场（Clear：任务与动作以 reason 结束，OnEnded / 观察者照常送达，动作指标的 running 随之减回），最后撤销任务心跳与
+// 各组的心跳登记（heartbeat.Reg.Close：立即离开驱动、释放登记名）。成员换场景（换时间域）时用它撤掉旧的、在同一心跳
+// 宿主上按新的 BeatConfig.TimeDomain 重建（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain）。可重复调用；只能在
+// 实体锁内调用，在 runner 或任务的回调里调用时结束延后到回调返回后。直接经 Runner() 发起的动作不受 Behavior 的拒绝
+// 约束，但挂不上心跳（ErrBeatRunnerClosed）。
+func (b *Behavior) Close(reason ActionReason) {
+	if b.closed {
+		return
+	}
+	b.closed = true
+	b.Clear(reason)
+	if b.mission != nil {
+		b.mission.Close()
+		b.mission = nil
+	}
+	if b.beat != nil {
+		b.beat.closeRegs()
+	}
+}
+
+// OnDestroy 由实体的 OnDestroy 调用（卸载、删档、撤销新建；组件按装配顺序收尾，心跳宿主最后 Host.OnDestroy）：以
+// ErrOwnerDestroyed（取消状态）Close，在途动作与任务各收到一次结束，开了 Metrics 时 running 减回。不在事务里执行：
+// 动作的 Cancel 与观察者这时改的持久字段不落库（与卸载丢弃未提交的内存改动相同），只做内存收尾。实体移除之后不再
+// 有别的消息执行，所以这里虽在实体锁外也不与 handler 并发。
+func (b *Behavior) OnDestroy() {
+	b.Close(ActionReason{Message: "owner destroyed", Err: ErrOwnerDestroyed,
+		Result: ActionResult{Status: ActionStatusCanceled, Reason: "owner destroyed"}})
+}
+
+// Closed 报告是否已 Close / OnDestroy。
+func (b *Behavior) Closed() bool { return b.closed }
+
 // --- ActionList ---
 
 func (b *Behavior) Entity() entity.IThreadSafeEntity { return b.owner }
 
 // CreateAction 启动动作，取代同组当前动作（Replacer / Conflict 规则见 ActionRunner）。
 func (b *Behavior) CreateAction(kind ActionKind, param any) (int64, error) {
+	if b.closed {
+		return 0, ErrBehaviorClosed
+	}
 	return b.runner.Start(kind, param, b.missionTag(), b.now())
 }
 
 // EnqueueAction 把动作排到组队列末尾。
 func (b *Behavior) EnqueueAction(kind ActionKind, param any) (int64, error) {
+	if b.closed {
+		return 0, ErrBehaviorClosed
+	}
 	return b.runner.Enqueue(kind, param, b.missionTag())
 }
 
@@ -223,6 +271,9 @@ func (b *Behavior) Frozen(group ActionGroup) bool   { return b.runner.Frozen(gro
 func (b *Behavior) MissionManager() MissionManager { return b.missions }
 
 func (b *Behavior) SetMission(kind MissionKind, param any) error {
+	if b.closed {
+		return ErrBehaviorClosed
+	}
 	return b.missions.StartMission(kind, param)
 }
 
@@ -293,6 +344,11 @@ func (b *Behavior) syncMissionBeat() {
 		if b.mission != nil {
 			b.mission.Stop()
 		}
+		return
+	}
+	if b.closed {
+		// 已撤销（Close 前已排进任务 runner 延后队列的 StartMission）：没有心跳，任务不会被周期推进。
+		b.failMission(ErrBehaviorClosed)
 		return
 	}
 	if b.mission == nil {

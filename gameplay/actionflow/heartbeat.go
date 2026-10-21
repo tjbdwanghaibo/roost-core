@@ -25,6 +25,9 @@ import (
 // 动作 Tick 返回的结论（结束、下一个动作启动）同样不随这一拍的事务回滚；这一拍只有提交失败才会回滚（心跳回调
 // 本身不返回错误），框架不处理。
 
+// ErrBeatRunnerClosed 表示 BeatRunner（或它所属的 Behavior）已 Close / OnDestroy：之后启动的动作挂不上心跳，以失败结束。
+var ErrBeatRunnerClosed = errors.New("actionflow: beat runner is closed")
+
 // DefaultBeatName 是 BeatRunner 心跳登记名的前缀，每个组一个登记："actionflow/<组号>"。
 const DefaultBeatName = "actionflow"
 
@@ -72,6 +75,9 @@ type BeatRunner struct {
 	elapsed time.Duration
 	// ticking 在某个组的一拍 tick 期间为 true：拍里的时间已经是 Beat.Now（挂了域时是域时间），populate 不再换。
 	ticking bool
+
+	// closed 由 Close 置位：组的心跳登记已撤销，之后进入的动作以 ErrBeatRunnerClosed 失败结束。
+	closed bool
 
 	// syncExtra 由 Behavior 设置：Sync 时一并重新挂上同一宿主上由 Behavior 管理的任务心跳（"<Name>/mission"）。
 	syncExtra func() error
@@ -172,10 +178,48 @@ func (b *BeatRunner) Sync() error {
 	return errors.Join(errs...)
 }
 
+// Close 撤销 BeatRunner：先强制结束全部动作、丢弃排队项（reason，OnEnded 照常送达），再撤销各组的心跳登记
+// （heartbeat.Reg.Close：立即离开驱动、释放登记名）。用于成员换场景（换时间域）：在同一心跳宿主上按新的
+// BeatConfig.TimeDomain 重建一个 BeatRunner（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain，旧域里记下的时刻——
+// 上一拍的 Elapsed 基线、计划步骤的时限起点——不能拿到新域里比较）。之后经它启动的动作以 ErrBeatRunnerClosed 失败
+// 结束。可重复调用；只能在实体锁内调用。在 runner 的回调里调用时，动作的结束延后到回调返回后（与 EndAll 相同），
+// 登记的撤销立即生效。属于 Behavior 的 BeatRunner 用 Behavior.Close（连任务一起收尾）。
+func (b *BeatRunner) Close(reason ActionReason) {
+	if b.closed {
+		return
+	}
+	b.closed = true
+	b.report(b.runner.EndAll(true, reason))
+	b.closeRegs()
+}
+
+// closeRegs 撤销各组的心跳登记（Close 与 Behavior.Close 用）。
+func (b *BeatRunner) closeRegs() {
+	b.closed = true
+	for _, gb := range b.groups {
+		gb.reg.Close()
+	}
+	clear(b.groups)
+}
+
+// Closed 报告是否已 Close。
+func (b *BeatRunner) Closed() bool { return b.closed }
+
 // transition 在组的当前动作切换时启停这个组的心跳：进入需要周期 tick 的动作时换到它的档并启动，离开时停止。
-// 心跳挂不上（Remote 托管实体处于共享模式：heartbeat.ErrHeartbeatRemoteShared）时把这个动作以失败结束——需要周期
-// tick 的动作没有心跳就永远不会推进。结束经 runner 的延后队列，在本次切换的回调返回后执行。
+// 心跳挂不上（Remote 托管实体处于共享模式：heartbeat.ErrHeartbeatRemoteShared；已 Close：ErrBeatRunnerClosed）时把
+// 这个动作以失败结束——需要周期 tick 的动作没有心跳就永远不会推进。结束经 runner 的延后队列，在本次切换的回调返回后执行。
 func (b *BeatRunner) transition(s ActionSnapshot, entering bool) {
+	if b.closed {
+		// 登记已撤销：离开无事可做；进入的动作挂不上心跳，以失败结束。
+		if entering {
+			b.report(ErrBeatRunnerClosed)
+			b.failCurrent(s.Group, ErrBeatRunnerClosed)
+		}
+		if b.userTransition != nil {
+			b.userTransition(s, entering)
+		}
+		return
+	}
 	gb, err := b.group(s.Group)
 	switch {
 	case err != nil:
