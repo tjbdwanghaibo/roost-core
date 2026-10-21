@@ -68,6 +68,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 
 game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DESIGN-TODO D20 P3](DESIGN-TODO.md#p3-实施结果2026-10-21)，[WALKTHROUGH](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20)）。
 
+- **投递方式固定为缺省的单目标 `Dispatch`**：demo 手写接线、不装 `wiring/heartbeat` Mod，所以不读 `heartbeat.delivery`；要试批量作业，在 `game/actor` 的 `heartbeat.Config` 里设 `Delivery: heartbeat.DeliveryBatch`（只能在驱动第一次 `Start` 之前）。
 - **一个进程一张地图**：心跳驱动、`actor.WorldTime`（场景时间域）与 `actor.Ground`（地形）都是进程级的；成员在构造时绑定域（`BeatConfig.TimeDomain` 运行中不能换）。多场景的游戏要在成员进入场景时构造它的行为组件，或不挂域。
 - **玩家不经 `LeaveScene` 离开**：断线只走复制桥的 `settle`（不进 Nest 事务）、卸载不调 `Leave`，所以 `SaveOnLeave` 在 demo 里不会触发，存档位置只靠 10 秒一次的周期落库（`actor.SavePeriod`）：崩溃或卸载最多丢 10 秒的走动；仍在内存里的玩家重连时留在原处。
 - **寻路预算用完走直线**：`PathFind.Path` 最多访问 4096 个节点，开阔地上远处的斜向目标就会用完；用完时改走直线，`Move` 每进一格问一次地形，被挡停在最后一个可走的格（动作以 `Blocked` 失败），不绕路。证明不可达的目标直接拒绝。

@@ -1079,7 +1079,12 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 没变红、如实记录的两个：① 怪物 AI 心跳不挂时间域（`ai.BeatConfig.TimeDomain` 去掉）——没有用例变红：巡逻策略只看“移动组是否空闲”，不读时间，demo 里域时间只影响 AI 的 `FreezeFor` 等到期判断（demo 不用）；怪物走路的加速由 `Behavior` 的域保证（与 M3 同一路径）。② 巡逻里的 `Frozen` 判断是兜底：冻结的组本来就拒绝 `CreateAction`，去掉它行为不变。刷怪“提交后才交出”（`AfterCommit`）与“一次只建一批”（`busy`）没有确定的观察点（拍不会回滚、两批相隔 1 秒），没有变异用例，靠代码与注释。
 
-**验证**（生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`）：结果见下文“验证结果”。
+**验证**（rebase 到 main `6576b7fb` 之后重跑；生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`；退出码直接读）：
+
+- 生成工程：`gofmt -l .` 无输出；`go build ./...`、`go vet ./...` 0；`go test -race -count=1 ./...` 0（26 个包）；心跳相关用例（4 个端到端 + 巡逻单测）`-race -count=20` 0。另把 `actor.Heartbeat` 临时改成 `Delivery: heartbeat.DeliveryBatch`（选项 C 的批量作业，不提交）跑 4 个端到端用例 `-race -count=3`，0。
+- 仓库：`GOWORK=off go vet ./...` 0；根包 `go test -count=1 .` 0；`scripts/test-sync-modes-generated.sh` 0；`ROOST_DOTNET_GOLDEN_ONLY=1 scripts/test-client-dotnet.sh` 0；`go test -count=1 -run 'TestDemo|TestGameDemo' ./codegen/internal/roost/` 0。
+- 仓库 `go test -race -count=1 ./gameplay/...` 与全量 `go test -count=1 ./...` 各 1 个失败、都是同一个用例：`gameplay/heartbeat/internal/bench` 的 `TestBusyShortPoolSkipsBeatsAndResumes`（main 上 P4 新增，`cf2bd7d2`），原文 `driver_test.go:436: entity 2048010029 ran 1 beats after the pool was released, want it to resume`。本分支没有改 `gameplay/`，该包代码与 main 相同；单独 `-count=10` 全过，失败时宿主 load 12～13（全量并行）。判断：该用例在宿主负载下的时序敏感，**尚未确认**是否只是口径问题，留给 P4 一方，本轮不改。
+- 基线（rebase 之前、改动之前的 main `53cc3f97` 生成工程）`go test ./...` 有一次 `TestAStalledOldConnectionDoesNotResetTheLiveClient` 失败（`scene_connections_test.go:279: a push the live connection took was reported as failed: … outbound queue full`），之后各次运行都通过；与本轮改动无关，**尚未确认**，记在这里。
 
 **冒烟（待补测，2026-10-21 因宿主资源占用推迟）**：维护者 2026-10-21 要求本轮不跑 loadtest / robot 冒烟与任何压测，loadtest 只要求编译与单元测试通过（已通过）。复跑命令（生成工程目录里，依赖用 `scripts/mirror-local.sh` 起的私有环境或 README 的隔离环境，把配置改指向它）：
 
