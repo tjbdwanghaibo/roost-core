@@ -34,17 +34,22 @@ const driverKind entity.EntityKind = 203
 
 func init() {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: driverKind, Category: 1, BusinessPool: entity.BusinessPoolShort})
-	nest.MustRegisterMemoryHandler(busyHandler, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		// 只在测试里模拟“快池被业务占满”：占住 worker 一段时间（正式业务不得在快池里阻塞）。
-		until := time.Now().Add(params[0].(time.Duration))
-		for time.Now().Before(until) {
-			runtime.Gosched()
-		}
+	nest.MustRegisterMemoryHandler(gateHandler, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		// 只在测试里模拟“快池被业务占满”：占住 worker 直到测试放开（正式业务不得在快池里阻塞）。
+		gate := params[0].(*busyGate)
+		close(gate.started)
+		<-gate.release
 		return nil, nil
 	})
 }
 
-var busyHandler = nest.NewHandlerName("hb_bench_busy")
+// busyGate 让测试按事件控制快池被占住的区间：消息真正开始执行时关 started，测试关 release 才返回。
+type busyGate struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+var gateHandler = nest.NewHandlerName("hb_bench_gate")
 
 // driverEntity 只有实体基座：回调不碰业务状态，量的是驱动与投递本身。
 type driverEntity struct{ *entity.EntityBase }
@@ -344,10 +349,14 @@ func TestDriverOpenLoop(t *testing.T) {
 
 // TestBusyShortPoolSkipsBeatsAndResumes：快池被业务占满时心跳按规则跳拍（§7 最后一项；维护者决定 ④⑤：在途跳拍、
 // ErrQueueFull 跳拍，不累积、不补发，没有水位让路），业务放开后照常跳，第一拍报告跳过的拍数、Elapsed 覆盖这段
-// 时间（夹在上限内）。快池 1 个 worker、队列 8 格；20 个 50ms 登记；一条业务消息占住 worker 250ms（只在测试里这样
-// 模拟，正式业务不得在快池里阻塞）。
+// 时间（夹在上限内）。快池 1 个 worker、队列 8 格；20 个 50ms 登记；一条业务消息占住 worker（只在测试里这样模拟，
+// 正式业务不得在快池里阻塞）。
+//
+// 各阶段按事件推进，不按墙钟窗口划分：每个登记先跳过一拍 → 占位消息真正开始执行（busyGate.started）→ 驱动累计
+// 跳拍达到每个登记两拍 → 放开 → 每个登记在放开之后再跳两拍。宿主负载只拉长各阶段，不改变断言。
 func TestBusyShortPoolSkipsBeatsAndResumes(t *testing.T) {
-	const period, busy = 50 * time.Millisecond, 250 * time.Millisecond
+	const period = 50 * time.Millisecond
+	const resumeDeadline = 30 * time.Second // 只在驱动真的不再恢复时才会耗尽
 	byID, list := newDriverEntities(t, 2_000_000, 21)
 	getter := driverGetter(byID)
 	blocker, beaters := list[0], list[1:]
@@ -357,20 +366,19 @@ func TestBusyShortPoolSkipsBeatsAndResumes(t *testing.T) {
 	}
 	defer engine.Shutdown(context.Background())
 	d := heartbeat.NewDriver(heartbeat.Config{Name: "bench-busy"})
-	type observed struct {
-		at      time.Time
-		skipped int
-		elapsed time.Duration
-		first   bool
-	}
 	var mu sync.Mutex
-	beats := make(map[int64][]observed)
+	beats := make(map[int64][]heartbeat.Beat)
+	beaten := make(chan struct{}, 1) // 每执行一拍非阻塞地通知一次，等待方据此复查条件
 	for _, e := range beaters {
 		id := e.ID()
 		reg, err := d.NewHost(e).Register("bench", period, func(b heartbeat.Beat) error {
 			mu.Lock()
-			beats[id] = append(beats[id], observed{at: time.Now(), skipped: b.Skipped, elapsed: b.Elapsed, first: b.First})
+			beats[id] = append(beats[id], b)
 			mu.Unlock()
+			select {
+			case beaten <- struct{}{}:
+			default:
+			}
 			return nil
 		}, heartbeat.WithDurability(nest.DurabilityMemory))
 		if err != nil {
@@ -386,12 +394,69 @@ func TestBusyShortPoolSkipsBeatsAndResumes(t *testing.T) {
 	if err := d.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2 * period)
-	busyStart := time.Now()
-	if err := engine.Dispatch(context.Background(), busyHandler, blocker.ID(), nest.Params{busy}); err != nil {
+	counts := func() map[int64]int {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make(map[int64]int, len(beats))
+		for id, list := range beats {
+			out[id] = len(list)
+		}
+		return out
+	}
+	// everyBeater 等到每个登记的拍数都比 base 多至少 n；beaten 只是唤醒，条件每次重新数。
+	everyBeater := func(what string, base map[int64]int, n int) {
+		t.Helper()
+		deadline := time.After(resumeDeadline)
+		for {
+			now, short := counts(), 0
+			for _, e := range beaters {
+				if now[e.ID()]-base[e.ID()] < n {
+					short++
+				}
+			}
+			if short == 0 {
+				return
+			}
+			select {
+			case <-beaten:
+			case <-deadline:
+				t.Fatalf("%s: %d of %d entities ran fewer than %d beats within %v (driver %+v)", what, short, len(beaters), n, resumeDeadline, d.Stats())
+			}
+		}
+	}
+	everyBeater("before the pool is busy", nil, 1)
+
+	gate := &busyGate{started: make(chan struct{}), release: make(chan struct{})}
+	if err := engine.Dispatch(context.Background(), gateHandler, blocker.ID(), nest.Params{gate}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(busy + 4*period)
+	select {
+	case <-gate.started:
+	case <-time.After(resumeDeadline):
+		t.Fatal("the blocking message never started on the short pool")
+	}
+	whileBusy := counts()
+	// 唯一的快池 worker 被占住，期间不可能有拍执行；驱动每格对每个登记要么在途跳拍、要么队列满跳拍。
+	skips := func() int {
+		s := d.Stats()
+		return int(s.SkippedInflight + s.SkippedQueueFull)
+	}
+	skipDeadline := time.After(resumeDeadline)
+	for skips() < 2*len(beaters) {
+		select {
+		case <-skipDeadline:
+			t.Fatalf("a busy short pool skipped only %d beats within %v: %+v", skips(), resumeDeadline, d.Stats())
+		case <-time.After(period):
+		}
+	}
+	released := counts()
+	for id, n := range released {
+		if n != whileBusy[id] {
+			t.Fatalf("entity %d ran %d beats while the only short worker was busy", id, n-whileBusy[id])
+		}
+	}
+	close(gate.release)
+	everyBeater("after the pool was released", released, 2)
 	if err := d.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -400,40 +465,25 @@ func TestBusyShortPoolSkipsBeatsAndResumes(t *testing.T) {
 	}
 	s := d.Stats()
 	t.Logf("driver %+v", s)
-	if s.SkippedInflight+s.SkippedQueueFull == 0 {
-		t.Fatalf("a busy short pool skipped no beats: %+v", s)
-	}
 	if s.Stalled != 0 || s.SkippedRejected != 0 || s.Delivered != s.Executed {
 		t.Fatalf("busy short pool: stalled %d rejected %d delivered %d executed %d", s.Stalled, s.SkippedRejected, s.Delivered, s.Executed)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	busyEnd := busyStart.Add(busy)
 	resumedWithSkips := 0
 	for id, list := range beats {
-		var during, after int
-		for i, o := range list {
-			switch {
-			case o.at.After(busyStart.Add(10*time.Millisecond)) && o.at.Before(busyEnd):
-				during++
-			case o.at.After(busyEnd.Add(2 * period)):
-				after++
-			}
-			if !o.first && o.elapsed > time.Second {
-				t.Fatalf("entity %d beat %d: Elapsed %v over the 1s cap", id, i, o.elapsed)
-			}
-			if i > 0 && o.skipped > 0 && list[i-1].at.Before(busyEnd) && o.at.After(busyStart) {
-				resumedWithSkips++
-				if o.elapsed < time.Duration(o.skipped-1)*period {
-					t.Fatalf("entity %d: first beat after %d skips covers only %v", id, o.skipped, o.elapsed)
-				}
+		for i, b := range list {
+			if !b.First && b.Elapsed > heartbeat.DefaultMaxElapsed {
+				t.Fatalf("entity %d beat %d: Elapsed %v over the %v cap", id, i, b.Elapsed, heartbeat.DefaultMaxElapsed)
 			}
 		}
-		if during != 0 {
-			t.Fatalf("entity %d ran %d beats while the only short worker was busy", id, during)
-		}
-		if after < 2 {
-			t.Fatalf("entity %d ran %d beats after the pool was released, want it to resume", id, after)
+		// 放开后的第一拍报告占用期间跳过的拍数；Elapsed 覆盖这些拍，被上限夹住时等于上限。
+		first := list[released[id]]
+		if first.Skipped > 0 {
+			resumedWithSkips++
+			if want := min(time.Duration(first.Skipped-1)*period, heartbeat.DefaultMaxElapsed); first.Elapsed < want {
+				t.Fatalf("entity %d: first beat after %d skips covers only %v, want at least %v", id, first.Skipped, first.Elapsed, want)
+			}
 		}
 	}
 	if resumedWithSkips == 0 {

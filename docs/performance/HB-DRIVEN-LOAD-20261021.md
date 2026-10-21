@@ -61,7 +61,7 @@ D20 §7 列的六项与本包的对应（前两组是 HB-STRUCTURES 时的原型
 | `Dispatch` 与 `DispatchBroadcast` 对照 | `TestDeliveryRun HB_MODE=x / z` | 已有，HB-STRUCTURES §4 |
 | `BenchmarkDriverDispatch`（假客户端） | `driver_test.go` `BenchmarkDriverDispatch`：正式驱动 + 假客户端（handler 在驱动 goroutine 上直接执行，回调为空），报 `cpu-ns/beat`、`driver-cores`、`beats/s`；ns/op 只是 1 / 目标速率 | 新增，待测 |
 | 真实 Nest + 空 handler 开环投递（10 / 25 / 50 万拍每秒） | `TestDriverOpenLoop`（`HB_OPENLOOP=1`，一个进程一档，结果追加到 `HB_OUT`）：完成数、跳拍、卡住、快池等待峰值、最大 worker 等待、间隔 P50 / P99、进程核数。不设环境变量时跑 2000 拍/s × 0.3 秒的小档断言 | 新增，待测 |
-| 快池被业务占满时的跳拍 | `TestBusyShortPoolSkipsBeatsAndResumes`（常跑，约 0.55 秒）：1 个 worker、队列 8 格、一条业务消息占住 worker 250ms，20 个 50ms 登记。断言：占用期间不执行、有在途 / 队列满跳拍、没有卡住与其他准入失败、投递 = 执行、放开后每个登记都恢复、恢复后的第一拍报告跳过数且 `Elapsed` 覆盖这段时间（不超过 1 秒上限） | 新增，契约检查（不是性能数字） |
+| 快池被业务占满时的跳拍 | `TestBusyShortPoolSkipsBeatsAndResumes`（常跑，约 0.3 秒）：1 个 worker、队列 8 格、一条业务消息占住 worker，20 个 50ms 登记；各阶段按事件推进（每个登记先跳一拍 → 占位消息真正开始 → 驱动累计跳拍达到每个登记两拍 → 放开 → 每个登记再跳两拍），不按墙钟窗口划分（2026-10-21 起，原按“占住 250ms、放开后 100ms 窗口里至少两拍”计，宿主负载下偶发失败）。断言：占用期间不执行、有在途 / 队列满跳拍、没有卡住与其他准入失败、投递 = 执行、放开后每个登记都恢复、恢复后的第一拍报告跳过数且 `Elapsed` 覆盖这段时间（不超过 1 秒上限） | 新增，契约检查（不是性能数字） |
 
 HB-STRUCTURES §7 记的“跳拍路径没有被压出来”由最后一项在功能上覆盖（在途与 `ErrQueueFull` 两种跳拍都出现：一次运行 `SkippedInflight:34 SkippedQueueFull:60`，`Stalled:0`，投递 126 = 执行 126）；规模与延迟的影响仍待开环投递测。
 
