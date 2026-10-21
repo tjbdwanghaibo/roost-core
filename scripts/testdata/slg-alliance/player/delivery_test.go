@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +59,11 @@ func rewardChild(t *testing.T, mode string) {
 	key := activity.Key{GroupID: "alliance", ActivityID: "season-1-window-1", Phase: activity.PhaseSettle}
 	h, e := newHome(redisClient(t), prefix, sid)
 	check(t, e)
-	n := openRewardRuntime(t, sid, mode == "write")
+	n := openRewardRuntime(t, sid, mode == "write" || mode == "arrival-write")
+	if strings.HasPrefix(mode, "arrival-") {
+		runArrivalChild(t, n, mode)
+		return
+	}
 	s := sender.NewAllianceRewardsSender(n.nest)
 	ctx := context.Background()
 	name := "alice"
@@ -261,6 +266,9 @@ func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 		runRewardProcess(t, "write", sid, prefix, root)
 		runRewardProcess(t, "recover", sid, prefix, root)
 		runRewardProcess(t, "verify", sid, prefix, root)
+		runRewardProcess(t, "arrival-write", sid, prefix, root)
+		runRewardProcess(t, "arrival-recover", sid, prefix, root)
+		runRewardProcess(t, "arrival-verify", sid, prefix, root)
 	}
 }
 
@@ -285,7 +293,11 @@ func runRewardProcess(t *testing.T, mode string, sid int32, prefix, root string)
 		}
 	}()
 	fail := func(e error) { raw, _ := os.ReadFile(log.Name()); t.Fatalf("home %d %s: %v\n%s", sid, mode, e, raw) }
-	if mode == "write" {
+	if mode == "write" || mode == "arrival-write" {
+		marker := "ready.json"
+		if mode == "arrival-write" {
+			marker = "arrival-ready.json"
+		}
 		deadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(deadline) {
 			select {
@@ -294,7 +306,7 @@ func runRewardProcess(t *testing.T, mode string, sid int32, prefix, root string)
 				fail(fmt.Errorf("writer exited before kill: %v", e))
 			default:
 			}
-			if _, e := os.Stat(filepath.Join(root, "ready.json")); e == nil {
+			if _, e := os.Stat(filepath.Join(root, marker)); e == nil {
 				check(t, cmd.Process.Kill())
 				e := <-done
 				stopped = true

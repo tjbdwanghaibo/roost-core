@@ -159,18 +159,31 @@ type scoutMarchReceipt struct {
 	Expected, Revision uint64
 	Route              scout.Route
 }
+type scoutArrivalEvent struct {
+	Target    int64
+	Route     scout.Route
+	Delivered bool
+}
+type scoutArrivalReport struct {
+	Target      int64
+	At          int64
+	Destination spatial.Point
+}
 type scoutMapState struct {
-	Routes   map[int64]scout.Route
-	Marches  map[string]scoutMarchReceipt
-	Revision uint64
-	Targets  map[int64]spatial.Point
-	Moves    map[string]scoutMove
+	Arrivals    map[string]scoutArrivalEvent
+	Reports     map[string]scoutArrivalReport
+	ReportTotal uint64
+	Routes      map[int64]scout.Route
+	Marches     map[string]scoutMarchReceipt
+	Revision    uint64
+	Targets     map[int64]spatial.Point
+	Moves       map[string]scoutMove
 }
 
 func readScoutMap(m IAllianceMapEntity) (scoutMapState, error) {
 	var state scoutMapState
 	err := json.Unmarshal([]byte(m.Dao().GetState()), &state)
-	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil {
+	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil || state.Arrivals == nil || state.Reports == nil {
 		return state, errAllianceReward
 	}
 	return state, nil
@@ -191,7 +204,7 @@ func handlerAllianceMapInit(m IAllianceMapEntity) error {
 	}
 	return saveScoutMap(m, scoutMapState{Revision: 1, Targets: map[int64]spatial.Point{
 		501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700},
-	}, Moves: map[string]scoutMove{}, Routes: map[int64]scout.Route{}, Marches: map[string]scoutMarchReceipt{}})
+	}, Moves: map[string]scoutMove{}, Routes: map[int64]scout.Route{}, Marches: map[string]scoutMarchReceipt{}, Arrivals: map[string]scoutArrivalEvent{}, Reports: map[string]scoutArrivalReport{}})
 }
 
 // 坐标来自可信地图模拟。固定命令身份与原参数同持久写入，未知结果只重试原身份；
@@ -297,6 +310,7 @@ func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, tar
 	state.Targets[target] = from
 	state.Routes[target] = route
 	state.Marches[key] = scoutMarchReceipt{target, expected, state.Revision, route}
+	state.Arrivals[key] = scoutArrivalEvent{Target: target, Route: route}
 	if err = saveScoutMap(m, state); err != nil {
 		return 0, err
 	}
@@ -304,4 +318,86 @@ func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, tar
 		return 0, errors.New("injected march rollback")
 	}
 	return state.Revision, nil
+}
+
+// 在所属地图内按持久事件发现待办，不依赖进程内定时器或当前 Routes（可能已换新路线）。
+// 本服务只能传可信业务钟。一次最多枚举 128 个，返回身份后消费仍须重新验期限。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceDueArrivals(m IAllianceMapEntity, business clock.Business, limit int) ([]string, error) {
+	if business == nil || limit < 1 || limit > 128 {
+		return nil, errAllianceReward
+	}
+	state, err := readScoutMap(m)
+	if err != nil {
+		return nil, err
+	}
+	now := business.Now().UnixMilli()
+	keys := []string{}
+	for key, event := range state.Arrivals {
+		if !event.Delivered && event.Route.End <= now {
+			keys = append(keys, key)
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if state.Arrivals[a].Route.End < state.Arrivals[b].Route.End {
+			return -1
+		}
+		if state.Arrivals[a].Route.End > state.Arrivals[b].Route.End {
+			return 1
+		}
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	})
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+// 完成到达的本地业务效果：报告与已处理标记同一地图 strict 事务。
+// 报告时间取原计划 End，不取晚到的处理时间；未知提交只重试原事件身份。
+// 不发外部 RPC、不增 Player 金币，不把本地原子性扩展为跨服恰好一次。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, business clock.Business, reject bool) (bool, error) {
+	if business == nil {
+		return false, errAllianceReward
+	}
+	state, err := readScoutMap(m)
+	if err != nil {
+		return false, err
+	}
+	event, ok := state.Arrivals[key]
+	if !ok || event.Route.Validate() != nil {
+		return false, errAllianceReward
+	}
+	report := scoutArrivalReport{event.Target, event.Route.End, event.Route.To}
+	old, exists := state.Reports[key]
+	if event.Delivered {
+		if !exists || old != report {
+			return false, errAllianceReward
+		}
+		return false, nil
+	}
+	if exists || business.Now().UnixMilli() < event.Route.End || state.Revision == math.MaxUint64 || state.ReportTotal == math.MaxUint64 {
+		return false, errAllianceReward
+	}
+	event.Delivered = true
+	state.Arrivals[key] = event
+	state.Reports[key] = report
+	state.ReportTotal++
+	state.Revision++
+	if err = saveScoutMap(m, state); err != nil {
+		return false, err
+	}
+	if reject {
+		return false, errors.New("injected arrival rollback")
+	}
+	return true, nil
 }
