@@ -24,7 +24,7 @@
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
-| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，本地分支 `feat/d21-gameplay`，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；4 项实施中的小决定先按推荐做、待拍板；其余 ssr 候选未调研 |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；调研与方案已写，待拍板，代码未改 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
@@ -1739,6 +1739,7 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 - **提交**（分支 `feat/d21-gameplay`，本地，未推送）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
 - **全量验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例 `-race -count=30`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`。退出码均为 0。
 - **待拍板（都已先按推荐实施）**：① `FreezeCancel` 是否连排队项一起丢弃（现：保留）；② 门控在 handler 回滚后的一致性（现：下一次状态通知时纠正、不累积）；③ 被取消的计划步骤是否重试（现：不重试）；④ 动作指标是否缺省开启（现：关闭）。
+- **维护者 2026-10-21 决定：上述 4 项全部按推荐（即现状）**：① `FreezeCancel` 只打断当前动作、排队项保留，去留由业务决定；② 门控在 handler 回滚后不由框架补发，下一次状态通知或业务 `Refresh` 时纠正、每条规则至多持有一次冻结；③ 被取消的计划步骤不重试，直接走 OnFail；④ 动作指标缺省关闭，由 `BehaviorConfig.Metrics` 打开。
 - **没做 / 不在本轮**：game-demo 与生成器接入 `Behavior`、`state`、AI 心跳（随 D20 P3）；`TickBuffs` 挂心跳（D20 P5）；其余 ssr 候选（`trigger_engine`、`eca_man`、`cooldown`、`timer`、空间、战斗、经济、社交）的调研。
 
 ## D22 业务时间取自 ctx、支持变速
