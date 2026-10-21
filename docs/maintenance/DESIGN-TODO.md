@@ -1557,6 +1557,59 @@ type ActionList interface { …; EndAction(id, force, reason) error; Freeze(grou
 
 **待拍板（先按推荐做了）**：① `FreezeCancel` 是否连排队项一起丢弃——现按“只打断当前、保留排队”（推荐：排队计划的去留由业务决定）；备选 B：打断时丢弃本组排队项（各发一次取消的 OnEnded）。
 
+##### D21-2 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `849031fa`）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
+
+**API 最终形状**：
+
+```go
+// gameplay/state
+type ID uint16; type Source struct{ Kind uint8; ID int64 }
+type Def struct{ ID ID; Name string; Sync, Persist bool }
+func NewCatalog(defs ...Def) (*Catalog, error); (*Catalog).Def / Lookup / IDs
+func NewStateDao(id int64, dbName string, catalog *Catalog) *StateDao // DaoInterface + MutationParticipant + PersistedDaoLoader + 回滚快照；FieldStates、CollectionName = "entity_state"
+func NewSet(dao *StateDao, SetConfig{OnError}) *Set
+func (s *Set) Add / Remove(id, src) error; RemoveSource(src) ([]ID, error); Provide(id, func() bool) error; Changed(ids...); Refresh()
+func (s *Set) Has(id) bool; Any(ids...) bool; Satisfies(Requirement{All, None}) bool; Sources(id) []Source; Active() []ID; Synced() []ID
+func (s *Set) Watch(id, func(Change)) (Handle, error); Unwatch(Handle); NewWatcher() *Watcher // Watcher.Watch / Close
+type Freezer interface{ Freeze(actionflow.ActionGroup, actionflow.FreezeMode) error; Recover(actionflow.ActionGroup) error } // actionflow.Agent 实现
+func Gate(set *Set, target Freezer, onError func(error), rules ...Rule{State, Group, Mode}) (*Gated, error); (*Gated).Close()
+var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid, ErrNotifyRunaway
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **观察者里改状态：改动立即生效，通知排到下一轮**（方案 S4 写的是“改状态延后到外层调用返回后执行”）。延后改动会让观察者里的 `Add` 拿不到结果、`Has` 读到旧值；改为立即改、通知按轮次补发，同样做到“回调运行期间不嵌套通知、有界（64 轮）”，观察者看到的总是当前值。
+2. **通知按“观察者上次看到的值”算差、且每次比较全部被观察状态**：这是处理“状态随回滚、观察者副作用不随回滚”的办法——回滚期间不能调观察者（回滚中再改别的组件会被拒），回滚后观察者看到的旧值与实际不同，下一次任何改动或 `Refresh` 就按差补发。观察者因此总是收到交替的值，不会连收两次同一个值。
+3. **门控每条规则至多持有一次冻结**（不是“状态每生效一次就 Freeze 一次”）：结合第 2 条，回滚造成的多余冻结在下一次通知时撤销，计数不会累积、组不会永久冻结。方案没写回滚时门控怎么办；按 D20 决定 3 的口径（runner 不回滚、由业务保证），框架保证“最终一致、不累积”，立即一致由业务在回滚后调 `Refresh`。列为待拍板 ②。
+4. **持久状态只能在事务里改**：事务外改 `Persist` 状态返回 `ErrNotInTransaction`（无法落库，拒绝而不是静默丢失）；不持久的允许在加载 / 新建初始化阶段直接改（NPC 出生时的标记）。`CombatDao` 是一律 panic，这里改成返回错误，因为状态写入是常规业务调用。
+5. **持久文档的键是状态名**，`RestorePersisted` 跳过不认识的名字与不再声明 `Persist` 的状态（与 D13“旧键不加载、整文档写回即删除”一致，不报警）；只有一个字段位 `FieldStates`，持久写整个 `states` 子文档。
+6. **同一状态可以同时有来源与派生函数**（任一为真即生效）：例如“被定身”既来自 Buff 标签（派生），也可以由剧情直接加来源。
+7. **`Set.Synced` 给同步打包用**：框架的同步内容由业务的 packer 打包，`state` 不自带 packer；变化时标 `StateDao` 的同步位 `FieldStates`（与 `CombatDao` 相同的做法）。派生状态在 `Changed` 时标同步位。
+8. **`Gate` 的签名多一个 `onError`**（方案草案是 `Gate(set, rules...)`）：`Freeze` / `Recover` 的错误（例如 `FreezeCancel` 打断时动作 `Cancel` panic）需要有去处。
+
+**红绿证据**（新包，实现与测试同轮写成；变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| S1 通知不按差（每次改动都通知） | `TestADerivedStateIsComputedAndNotifiedOnlyWhenItChanges`：`watchers saw [first false second false first false second false …]`（同一值反复直到截停，原文过长，此处截取开头），`want [first true second true first false second false]` |
+| S2 同一来源重复加会叠加 | `TestASourcedStateHoldsWhileAnySourceRemains`：`rooted true sources [{1 1} {1 1}], want only buff1 left` |
+| S3 不登记逆操作 | `TestStatesFollowTheTransaction`：`state_test.undo: states survived the rollback: [1 3 5]` |
+| S4 不持久的状态也标持久 | 同上：`nest: transaction commit rejected`（memory 持久级别下改不持久的状态被拒） |
+| S5 事务外允许改持久状态 | `TestAPersistentStateCannotChangeOutsideATransaction`：`persistent add outside a transaction: <nil> has true` |
+| S6 不标同步脏 | `TestStatesFollowTheTransaction`：`a synced state change left no sync dirty bit` |
+| S7 持久文档含全部状态 | `TestTheDaoPersistsOnlyPersistentStatesByName`：`restore under a changed catalog: <nil> map[1:[{1 1}]]` |
+| S8 门控不按规则持有（每次通知都冻结） | `TestGateFreezesActionGroupsWhileStatesHold`：`stunned + silenced: freeze count 3 registered 0 ended [1 4 action group frozen]` |
+| S9 `Refresh` 什么都不做 | `TestGateRealignsAfterARolledBackStateChange`：`Refresh did not realign the gate` |
+| S10 `Close` 不撤销冻结 | `TestGateAlignsWhenInstalledAndReleasesOnClose`：`Close kept the freeze` |
+| S11 观察者里的改动嵌套通知 | `TestWatcherChangesAreNotifiedInTheNextRoundAndRunawayIsBounded`：`saw [rooted true manual false manual true manual set inside: true], want [rooted true manual false manual set inside: true manual true]` |
+| S12 装门控时不对齐 | `TestGateAlignsWhenInstalledAndReleasesOnClose`：`a gate installed while rooted did not freeze` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；`gameplay/state` 全部用例（含真实 Nest + 心跳的门控用例）`-race -count=30`；根包 `GOWORK=off go test -count=1 .`；`go run ./cmd/glsvet ./gameplay/state/` 无提示。退出码均为 0。
+
+**待拍板（先按推荐做了）**：② 门控在 handler 回滚后的一致性——现按“最终一致”：冻结保留到下一次状态通知（或业务调 `Refresh`），每条规则至多一次、不累积（推荐：与 runner 不回滚的口径一致，框架不在回滚路径上改别的组件）；备选 B：框架在回滚后自动补发（需要 Nest 提供“回滚完成后、实体锁释放前”的钩子，当前没有）。
+
 ## D22 业务时间取自 ctx、支持变速
 
 **状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**

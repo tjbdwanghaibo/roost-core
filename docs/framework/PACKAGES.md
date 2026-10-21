@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开176个包目录的职责映射</summary>
+<summary>展开177个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -81,6 +81,7 @@
 | [gameplay/skill](../../gameplay/skill) | [游戏技能、战斗与空间](impl/08-skill.md) | 155 | 110 |
 | [gameplay/skill/combat](../../gameplay/skill/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 5 | 2 |
 | [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 3 | 12 |
+| [gameplay/state](../../gameplay/state) | [时间与定时器](impl/10-time.md) | 4 | 2 |
 | [gameplay/skill/examples/combat](../../gameplay/skill/examples/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
 | [gameplay/skill/examples/fireball](../../gameplay/skill/examples/fireball) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
 | [gameplay/skill/examples/statusbridge](../../gameplay/skill/examples/statusbridge) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |

@@ -265,6 +265,31 @@ m.agent, _ = actionflow.NewAgent(m, actionflow.AgentConfig{
 
 计数立即生效（回调里也是），`FreezeCancel` 的打断有回调、在回调里调用时延后。
 
+**状态位：`gameplay/state`**（对照 ssr 的 state 模块；第 2 期）。一组各自独立的“是否生效”事实（定身、缴械、无敌、手动操作中、保护期……），不是状态机。启动时声明一次：
+
+```go
+catalog, _ := state.NewCatalog(
+	state.Def{ID: Rooted, Name: "rooted", Sync: true},       // 客户端可见
+	state.Def{ID: Protected, Name: "protected", Persist: true}, // 落库的长期标记
+	state.Def{ID: Manual, Name: "manual"},                   // 缺省：不同步、不持久
+)
+// 实体工厂里：
+m.stateDao = state.NewStateDao(id, "game", catalog) // 有 Persist 状态时登记进实体的 DaoManager
+m.states = state.NewSet(m.stateDao, state.SetConfig{OnError: logError})
+m.gate, _ = state.Gate(m.states, m.agent, logError,
+	state.Rule{State: Rooted, Group: GroupMove, Mode: actionflow.FreezeCancel}, // 定身打断移动
+	state.Rule{State: Disarmed, Group: GroupFight, Mode: actionflow.FreezePause},
+)
+```
+
+- **两种写入**：按来源 `Add(id, Source{Kind, ID})` / `Remove` / `RemoveSource`——有任一来源即生效，同一来源重复加不叠加、撤掉不存在的来源无效（`Source.Kind` 由业务定义：Buff、动作、GM……）；派生 `Provide(id, func() bool)`——查询时现算、不存储，拥有数据的组件在数据变化后调 `Changed(id)`。没有一次性事件（生命周期事件走实体回调或 AI 事件），没有通用参数槽。
+- **查询**：`Has`、`Any`、`Satisfies(Requirement{All, None})`（“能否做某个操作”）、`Sources`、`Active`、`Synced`（同步打包读它）。
+- **随事务回滚**：按来源的状态存在 `StateDao`，handler 回滚时一起撤销（两种回滚策略都支持；`rollback=state` 要求 DAO 登记在实体的 DaoManager 里）。声明了 `Sync` 的变化标同步脏（`FieldStates`，业务的同步打包读 `Set.Synced()`），声明了 `Persist` 的进持久文档（键是状态名；改名等于丢弃旧数据），缺省都不。持久状态只能在 Nest 事务里改（事务外返回 `ErrNotInTransaction`）；不持久的可以在加载 / 新建的初始化阶段直接改。
+- **观察者**：`Watch(id, fn)` / `Unwatch`，`NewWatcher()` 打包一次撤销。按“观察者上次看到的值”算差通知（总是交替的 true / false），顺序 = 注册顺序；观察者里改状态立即生效、引出的通知排到本轮之后。**回滚不通知**：观察者的副作用保留，下一次任何状态改动或 `Refresh()` 时按差补发。能用门控表达的不要写观察者。
+- **门控 `Gate`**：规则 `{State, Group, Mode}`，状态生效时对动作组计数冻结（`FreezeCancel` 在生效那一刻取消在途动作），失效时撤销；装上时按当前状态对齐，`Close` 撤销它持有的全部冻结。冻结计数不随事务回滚，所以 handler 回滚撤掉了一个门控状态时，组保持冻结直到下一次通知（每条规则至多持有一次冻结，不会累积）；需要立即一致就在回滚之后调 `Refresh`。
+- **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
+- **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
+
 边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)。
 
 ## 5. 运维

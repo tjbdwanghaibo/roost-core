@@ -92,7 +92,11 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 4. **计数冻结**（`actionGroupState.freezes`）：`Freeze` 立即加一（0→1 时调 `OnFreeze(group, true)`），`FreezeCancel` 再提交一条 `opInterrupt`（有回调，按 submit 规则延后），执行时组仍冻结且有当前动作才 `finish(cancel, startNext=false)`，原因 `action group frozen` / `ErrActionGroupFrozen`；`Recover` 是命令（`opRecover`）：计数为 0 返回 `ErrActionGroupNotFrozen`、不变负，减到 0 时 `OnFreeze(group, false)` 并在组空闲时推进队列。所有原来读 `frozen` 的地方改读 `freezes > 0`（Start 预检、Enqueue、Tick、finish 的推进、advance）。`BeatRunner.freeze` 包住 `OnFreeze`：冻结 `Stop` 组的心跳，解冻时当前动作需要周期 tick 就 `startGroup`（挂不上同 `transition`，以失败结束）；`transition` 进入与 `Sync` 都跳过冻结的组。强制点：`Freeze`、`opRecover`、`opInterrupt`、`BeatRunner.freeze`（D6、D7、D8）。
 5. **Agent 的接线**（`agent.go`）：`ActionRunnerHooks` 只用三个——`PopulateContext` 填 Owner / ActionList（Agent 自己）/ CurrentMission，`OnEnded` 先 `MissionRunner.OnActionEnd` 再 `Observer.OnActionEnd`，`OnError`；`MissionRunnerHooks` 的 `ClearActions` 接 `ActionRunner.ClearMission(id, cancel=true)`、`OnEnded` 接 `Observer.OnMissionEnd`、`Context` 给任务同一个 ActionList。动作的归属任务由 `missionTag` 决定：`MissionRunner.Deferring()`（任务 runner 正在执行，即在任务回调或它同步引出的回调里）时取当前任务 ID，否则 0。`Clear` 先 `EndCurMission` 再 `EndAll(force)`。`Beat` 非空时用 `NewBeatRunner`（宿主必须属于同一实体，`NewAgent` 检查）。`ai.Controller` 有编译期断言实现 `actionflow.Observer`。强制点：`actionEnded`、`missionTag`、`Clear`（D9、D10、D11）。
 
-验证（`GOWORK=off go test -race -count=1 ./gameplay/actionflow ./gameplay/movement`）：`action_runner_test.go`（Start 即完成并推进队列、延后的瞬时动作；Keep / Reject 与延后的 Reject、强制结束不问；Block / Preempt 与被挡的排队项、无规则互不影响；按 ID 结束当前与排队项、找不到；计数冻结、多撤销一次、暂停不 tick、打断保留队列、OnFreeze 只在 0↔1；回调里的打断延后）；`heartbeat_test.go`（冻结的组停心跳、迟到的拍不 tick、`Sync` 不重挂冻结的组、解冻重挂、打断后不再挂）；`agent_test.go`（先任务后观察者、任务标签与随任务结束、Clear 后什么都不运行、经 ActionList 的计数冻结、拒绝别的实体的心跳宿主）；`movement/nest_test.go`（真实 Nest + 心跳：已经结束的移动在 handler 里结束且不挂心跳；暂停移动组时驱动上没有登记、位置不变，解冻后走到终点，打断模式取消在途移动）。涉及心跳的用例 `-race -count=30` 通过。变异核对 D1～D12 原文见 [D21 实施结果](../../maintenance/DESIGN-TODO.md#6-调研一--实施)。
+6. **状态位**（`gameplay/state`，第 2 期）：`StateDao.sources` 是 `map[ID][]Source`，切片按 (Kind, ID) 升序、不重复、从不原地修改（`change` 总是换新切片），所以逆操作只浅拷贝 map。`change` 是唯一写入口：没有变化直接返回；事务外改 `Persist` 状态返回 `ErrNotInTransaction`；`rollback=undo` 下每个事务第一次改动前 `RecordUndo(dao, FieldStates)` 恢复整个来源集合，`rollback=state` 下靠 DAO 快照（`CaptureRollbackState` 含不持久的状态）；改完 `Persist` 的 `MarkPersist(FieldStates)`、`Sync` 的 `MarkSync(FieldStates)`。持久文档只含 `Persist` 状态，键是状态名；`RestorePersisted` 跳过不认识的名字与不再持久的状态（下次整文档写回时消失，同 D13），版本不等于 1 拒绝。派生状态不进 DAO。强制点：`change`、`snapshot(all)`、`apply`（变异 S2～S7）。
+7. **按差通知**（`Set.notify` / `diff`）：`seen` 记每个被观察状态上次交出的值（`//roost:cache`，不随回滚）；每次改动之后按编号升序比较全部被观察状态的当前值与 `seen`，不同的记下新值并按注册顺序调用观察者（分发前快照观察者列表）。`notifying` 防止嵌套：观察者里的改动立即生效，只由外层循环在下一轮补发；超过 64 轮报告 `ErrNotifyRunaway`。回滚不触发通知（回滚期间不能再改别的组件），之后任何一次改动都比较“全部”被观察状态，所以回滚造成的差在下一次通知时补上；`Refresh` 就是一次不带改动的通知。强制点：`diff` 的比较、`notifying`、`Refresh`（S1、S9、S11）。
+8. **门控**（`Gate` / `Gated.align`）：每条规则一个 `applied`（`//roost:cache`）：想要的值 = `Has(State)`，想要且未持有时 `Freeze(Group, Mode)`、不想要且持有时 `Recover(Group)`，所以每条规则至多持有一次冻结，回滚造成的不一致下一次 `align` 纠正、不累积。装上时 `align` 一次；`Close` 撤销观察并撤销持有的冻结。`Freezer` 是 `Freeze(group, mode) error` / `Recover(group) error`，`actionflow.Agent` 实现它。`state` import `actionflow`，反向不 import。强制点：`align`、`Gate` 末尾的对齐、`Close`（S8、S10、S12）。
+
+验证（`GOWORK=off go test -race -count=1 ./gameplay/actionflow ./gameplay/movement`）：`action_runner_test.go`（Start 即完成并推进队列、延后的瞬时动作；Keep / Reject 与延后的 Reject、强制结束不问；Block / Preempt 与被挡的排队项、无规则互不影响；按 ID 结束当前与排队项、找不到；计数冻结、多撤销一次、暂停不 tick、打断保留队列、OnFreeze 只在 0↔1；回调里的打断延后）；`heartbeat_test.go`（冻结的组停心跳、迟到的拍不 tick、`Sync` 不重挂冻结的组、解冻重挂、打断后不再挂）；`agent_test.go`（先任务后观察者、任务标签与随任务结束、Clear 后什么都不运行、经 ActionList 的计数冻结、拒绝别的实体的心跳宿主）；`movement/nest_test.go`（真实 Nest + 心跳：已经结束的移动在 handler 里结束且不挂心跳；暂停移动组时驱动上没有登记、位置不变，解冻后走到终点，打断模式取消在途移动）。`state/set_test.go`（声明校验、按来源不叠加与 RemoveSource、派生现算与只在变化时通知、观察者里的改动排下一轮与截停、查询与观察者包、事务外改持久状态被拒、持久文档只含 Persist 状态并跳过不认识 / 不再持久的）；`state/nest_test.go`（真实 Nest + 心跳：两种回滚策略下状态随回滚撤销、只有 Persist 状态进提交记录且 memory 持久级别下改 Persist 状态被拒、Sync 标同步脏；门控经 Agent 打断移动组并停心跳、两个来源全撤才解冻、两个状态计数冻结施法组；回滚后的门控在下一次改动或 Refresh 时纠正且计数不累积；装上时对齐、Close 撤销）。涉及心跳的用例 `-race -count=30` 通过。变异核对 D1～D12、S1～S12 原文见 [D21 实施结果](../../maintenance/DESIGN-TODO.md#6-调研一--实施)。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -156,6 +160,17 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 | [move.go](../../../gameplay/movement/move.go) | `StopReason`、`Result`、`Locator`、`MoveConfig`、`MoveOwner`、`Move` |
 | [action.go](../../../gameplay/movement/action.go) | `MoveToParam`、`FollowParam`（`RegisterActions`） |
 
+### state
+
+4 个实现文件、2 个测试文件（D21 第 2 期，契约见 §2D 第 6～8 条）。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [catalog.go](../../../gameplay/state/catalog.go) | `ID`、`Def`、`Source`、`Catalog`（包说明） |
+| [dao.go](../../../gameplay/state/dao.go) | `StateDao`（`FieldStates`、`CollectionName`） |
+| [set.go](../../../gameplay/state/set.go) | `Set`、`SetConfig`、`Change`、`Handle`、`Requirement`、`Watcher` |
+| [gate.go](../../../gameplay/state/gate.go) | `Freezer`、`Rule`、`Gated`（`Gate`） |
+
 </details>
 
 ## 5. 回归入口
@@ -198,6 +213,11 @@ DESIGN-TODO D21（维护者 2026-10-21 决定调研一 13 条全部按推荐）�
 - [example_test.go](../../../gameplay/movement/example_test.go)：`Example`
 - [actionflow/heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`、`TestAFrozenGroupStopsBeatingAndResumesOnRecover`
 - [movement/nest_test.go](../../../gameplay/movement/nest_test.go)（D21）：`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`、`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`
+
+### state
+
+- [set_test.go](../../../gameplay/state/set_test.go)：`TestCatalogRefusesBadDeclarations`、`TestASourcedStateHoldsWhileAnySourceRemains`、`TestADerivedStateIsComputedAndNotifiedOnlyWhenItChanges`、`TestWatcherChangesAreNotifiedInTheNextRoundAndRunawayIsBounded`、`TestQueriesAndWatcherBundles`、`TestAPersistentStateCannotChangeOutsideATransaction`、`TestTheDaoPersistsOnlyPersistentStatesByName`
+- [nest_test.go](../../../gameplay/state/nest_test.go)：`TestStatesFollowTheTransaction`、`TestGateFreezesActionGroupsWhileStatesHold`、`TestGateRealignsAfterARolledBackStateChange`、`TestGateAlignsWhenInstalledAndReleasesOnClose`
 
 </details>
 
