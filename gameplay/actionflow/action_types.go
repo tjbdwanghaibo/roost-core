@@ -155,7 +155,7 @@ type MissionStep struct {
 	OnSuccess MissionNext
 	OnFail    MissionNext
 	// Timeout 为正时是这一步每次尝试的时限（D21 A8）：到时还没结束，任务把这一步的动作以过期状态（ActionStatusExpired）
-	// 结束，按失败处理（重试或 OnFail）。需要任务心跳（Agent 配了 Beat），检查粒度是 MissionPlan.Period。
+	// 结束，按失败处理（重试或 OnFail）。需要任务心跳（Behavior 配了 Beat），检查粒度是 MissionPlan.Period。
 	Timeout time.Duration
 	// Retry 是这一步失败（Failed / Expired）后原地重试的次数，用完才走 OnFail；被取消（Canceled，例如被别的动作
 	// 取代、被业务结束）不重试，直接走 OnFail。

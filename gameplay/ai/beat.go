@@ -27,7 +27,7 @@ const DefaultBeatPeriod = 500 * time.Millisecond
 
 // BeatConfig 是 NewBeatController 的心跳部分。
 type BeatConfig struct {
-	// Host 是实体的心跳宿主（与 actionflow.Agent 等组件共用）。必填。
+	// Host 是实体的心跳宿主（与 actionflow.Behavior 等组件共用）。必填。
 	Host *heartbeat.Host
 	// Name 是登记名，同一实体上唯一；空取 DefaultBeatName。
 	Name string

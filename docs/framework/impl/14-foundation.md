@@ -37,7 +37,7 @@
 | --- | --- |
 | [behavior_strategy.go](../../../gameplay/ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`（含分阶段：`NewStagedStrategy`、`SetStage`、`Stage`、`ErrStageUnknown`、`DefaultMaxEvents`）、`TaskflowAction` |
 | [blackboard.go](../../../gameplay/ai/blackboard.go) | `Blackboard` |
-| [beat.go](../../../gameplay/ai/beat.go) | `BeatConfig`（`NewBeatController`、`DefaultBeatName`、`DefaultBeatPeriod`：AI 独立心跳，D21 第 4 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 12 条） |
+| [beat.go](../../../gameplay/ai/beat.go) | `BeatConfig`（`NewBeatController`、`DefaultBeatName`、`DefaultBeatPeriod`：AI 独立心跳，D21 第 4 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 12 条） |
 | [controller.go](../../../gameplay/ai/controller.go) | `ControllerHooks`、`Controller`（含 `FreezeFor` / `FrozenUntil`） |
 | [nodes.go](../../../gameplay/ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector`、`EventReceived`、`SetStage`、`Traced`（后三个 D21 第 5 期） |
 | [strategy.go](../../../gameplay/ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy`、`Event`、`EventStrategy` |

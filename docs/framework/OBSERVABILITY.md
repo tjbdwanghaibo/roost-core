@@ -204,13 +204,13 @@ D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`�
 
 ### 动作（gameplay/actionflow，可选）
 
-DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.AgentConfig.Metrics` 为 true 的 Agent 写（缺省关闭）：每个动作开始、结束各写一次注册表。标签 `kind` 是动作种类编号（uint8，有界），`status` 是 `idle` / `running` / `success` / `failed` / `canceled` / `expired`。
+DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` 为 true 的 Behavior 写（缺省关闭）：每个动作开始、结束各写一次注册表。标签 `kind` 是动作种类编号（uint8，有界），`status` 是 `idle` / `running` / `success` / `failed` / `canceled` / `expired`。
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `actionflow.actions.started_total{kind}` | Counter | 成为组的当前动作的次数（含 Start 即完成的瞬时动作） |
 | `actionflow.actions.ended_total{kind,status}` | Counter | 结束的动作，按结束状态；含从未启动就被丢弃的排队项与被拒绝的延后 Start，所以可以多于 `started_total` |
-| `actionflow.actions.running` | Gauge | 此刻是某组当前动作的动作数（全部打开指标的 Agent 合计）。只升不降说明有动作卡住（不结束、组被冻结后没有解冻） |
+| `actionflow.actions.running` | Gauge | 此刻是某组当前动作的动作数（全部打开指标的 Behavior 合计）。只升不降说明有动作卡住（不结束、组被冻结后没有解冻） |
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 
@@ -244,9 +244,9 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.AgentConfig.Metrics` 为 
 
 | 指标 | 类型 | 来源 |
 | --- | --- | --- |
-| `actionflow.actions.ended_total` | Counter | `gameplay/actionflow/agent.go:IncCounter` |
-| `actionflow.actions.running` | Gauge | `gameplay/actionflow/agent.go:AddGauge` |
-| `actionflow.actions.started_total` | Counter | `gameplay/actionflow/agent.go:IncCounter` |
+| `actionflow.actions.ended_total` | Counter | `gameplay/actionflow/behavior.go:IncCounter` |
+| `actionflow.actions.running` | Gauge | `gameplay/actionflow/behavior.go:AddGauge` |
+| `actionflow.actions.started_total` | Counter | `gameplay/actionflow/behavior.go:IncCounter` |
 | `admin.execute.total` | Counter | `admin/admin.go:IncCounter` |
 | `admin.http_refused.total` | Counter | [Ops接线与实现](impl/11-observability.md) |
 | `app.business_time.advance_failed.total` | Counter | `app/business_time.go:IncCounter` |

@@ -7,7 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 )
 
-// Freezer 是 Gate 要驱动的冻结入口；actionflow.Agent（ActionList）实现它。
+// Freezer 是 Gate 要驱动的冻结入口；actionflow.Behavior（ActionList）实现它。
 type Freezer interface {
 	Freeze(group actionflow.ActionGroup, mode actionflow.FreezeMode) error
 	Recover(group actionflow.ActionGroup) error

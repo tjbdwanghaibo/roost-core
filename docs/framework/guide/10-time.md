@@ -219,27 +219,27 @@ return err
 
 边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 
-## 4C. 行为控制：Agent、取代、冲突与冻结
+## 4C. 行为控制：Behavior、取代、冲突与冻结
 
 DESIGN-TODO D21（吸收 ssr 的 action / action_list / mission / ai / state，维护者 2026-10-21 决定调研一 13 条全部按推荐实施）。本节随分期补全；第 1 期是 actionflow 本身的扩展。
 
-**`actionflow.Agent`：框架的 ActionList 实现**（对照 ssr 的 action_list 模块）。一个实体一个，把 `ActionRunner`（配置 `Beat` 时由 `BeatRunner` 驱动）、`MissionRunner` 与上层观察者（通常是 `ai.Controller`）按固定顺序接好：
+**`actionflow.Behavior`：框架的 ActionList 实现**（对照 ssr 的 action_list 模块）。一个实体一个，把 `ActionRunner`（配置 `Beat` 时由 `BeatRunner` 驱动）、`MissionRunner` 与上层观察者（通常是 `ai.Controller`）按固定顺序接好：
 
 ```go
-m.agent, _ = actionflow.NewAgent(m, actionflow.AgentConfig{
+m.behavior, _ = actionflow.NewBehavior(m, actionflow.BehaviorConfig{
 	Registry: registry, GroupForKind: groups,
 	Beat:     &actionflow.BeatConfig{Host: m.host}, // 不配则不挂心跳（测试 / 手动 tick）
 	Observer: m.ai,                                 // *ai.Controller 实现 actionflow.Observer
 	OnError:  logError,
 })
-// handler 里最后一步：m.agent.CreateAction(ActMoveTo, param) / m.agent.SetMission(MissionPatrol, plan)
+// handler 里最后一步：m.behavior.CreateAction(ActMoveTo, param) / m.behavior.SetMission(MissionPatrol, plan)
 ```
 
 - 动作结束先交给当前任务，再交给观察者；任务结束先取消属于它的动作，再交给观察者。所以一个任务在处理动作结束时自己结束了，观察者先收到任务结束、再收到这次动作结束。
 - 任务回调运行期间（`Start` / `Tick` / `OnActionEnd`，含它们同步引出的回调）经 `CreateAction` / `EnqueueAction` 发起的动作**归属当前任务**，任务结束时一并取消；AI 或 handler 发起的不属于任何任务。
 - `Clear(reason)` 清场：先结束任务、再强制结束全部动作，之后什么都不在运行。
 - 和 runner 一样只在实体锁内调用、不随事务回滚（§4B 的业务约束照旧）。
-- **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Agent 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束。
+- **任务心跳**（第 4 期）：配了 `Beat` 时，当前任务实现 `actionflow.TickIntervaler` 且返回正数，Behavior 给它登记 `"<Beat.Name>/mission"`（周期取不大于它的最长档），每拍 `MissionRunner.Tick`；任务结束或不再需要时停。不实现的任务不被周期 tick（由动作结束推进）。挂不上（Remote 共享模式）时任务以失败结束。
 
 **计划步骤的时限与重试**（`MissionStep.Timeout` / `Retry`，`MissionPlan.Period`）：
 
@@ -251,7 +251,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 }}
 ```
 
-- `Timeout` 是这一步**每次尝试**的时限：到时任务把这一步的动作以过期（`ActionStatusExpired`）结束，按失败处理。需要任务心跳（Agent 配了 `Beat`），检查粒度是 `MissionPlan.Period`（缺省 100ms，取档）；`PlanMission` 只在当前步有时限时要心跳。
+- `Timeout` 是这一步**每次尝试**的时限：到时任务把这一步的动作以过期（`ActionStatusExpired`）结束，按失败处理。需要任务心跳（Behavior 配了 `Beat`），检查粒度是 `MissionPlan.Period`（缺省 100ms，取档）；`PlanMission` 只在当前步有时限时要心跳。
 - `Retry` 是失败（`Failed` / `Expired`）后原地重试的次数，每次重试重新计时，用完才走 `OnFail`；**被取消的不重试**（被别的动作取代、被业务结束），直接走 `OnFail`。次数按步计，进入下一步清零。
 - 更复杂的分支（按条件、按结果原因）用行为树，计划里不加表达式。
 
@@ -267,7 +267,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 - **分阶段**（boss 多阶段）：`ai.NewStagedStrategy(map[string]Node{...}, "calm", options)`——若干命名的树，同一时刻只跑当前阶段。树里的 `SetStage` 叶子（JSON `{"node": "set_stage", "stage": "enraged"}`）或 `BehaviorContext.SetStage` 在本拍求值结束后切换；策略外调用 `strategy.SetStage(name)` 立即切换。切换时 Reset 旧树（运行中的 `TaskflowAction` 经 `OnInterrupt` 收尾），`OnStage(from, to)` 报告。JSON 用 `ai.ParseStages`：`{"schema": "roost.ai/v1", "start": "calm", "stages": {"calm": …, "enraged": …}}`，起始阶段与每个 `set_stage` 的目标都要存在；`ParseTree` 不接受 `set_stage`。`NewBehaviorStrategy(root, …)` 是只有一个阶段的特例。
 - **决策轨迹**：`BehaviorStrategyOptions.Trace func(path string, status Status)`；`Registry.TraceNodes()` 之后解析的树每个节点都带轨迹（路径是 JSON 路径，例如 `$.stages["calm"].children[1]`），Go 写的树用 `ai.Traced{Path, Child}` 包。框架不在内存里留轨迹（ssr AIEditor 的日志无上限地追加），由业务按实体采样、写日志或调试命令。
 
-**动作指标**（可选，第 5 期）：`AgentConfig.Metrics: true` 时写 `actionflow.actions.started_total{kind}`、`ended_total{kind,status}` 与 `running`（[OBSERVABILITY](../OBSERVABILITY.md#动作gameplayactionflow可选)），缺省关闭。
+**动作指标**（可选，第 5 期）：`BehaviorConfig.Metrics: true` 时写 `actionflow.actions.started_total{kind}`、`ended_total{kind,status}` 与 `running`（[OBSERVABILITY](../OBSERVABILITY.md#动作gameplayactionflow可选)），缺省关闭。
 
 **动作的 Start 可以“启动即完成”**（瞬时动作：传送、改朝向、已经在终点的移动）。`Action.Start(ctx) (done bool, result ActionResult, err error)`：`err` 非空是没能启动（以失败结束）；`done` 为真时 runner 不再 tick 它，立即以 `result` 结束（状态为空算成功），照常发 `OnEnded`、通知任务、推进本组队列，不挂心跳。`movement` 的 `MoveTo` / `Follow` 在 Start 时按 0 时长核对一次：已经在终点、目标已在 `Keep` 以内且 `StopWhenReached`、目标已消失或不在本场景，都在发起它的 handler 里结束。
 
@@ -281,7 +281,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 
 强制结束（`End` / `EndAll` / `EndAction` / 冻结打断 / 跨组抢占）不问它。
 
-**跨组冲突：`ActionRunnerConfig.Conflict`（`AgentConfig.Conflict`）**（对照 ssr 的硬编码矩阵，改为业务给的函数）。动作要启动（`Start`，或排队项成为当前动作）时，对其他每个有当前动作的组（组号升序）调用 `Conflict(running, incoming)`：任一组 `BlockIncoming` 即拒绝新动作（`ErrBlockedByGroup`，什么都不改）；否则先取消全部 `PreemptRunning` 的组的当前动作（取消状态，不推进它们的队列），再按同组规则启动。缺省 nil：组之间互不影响。
+**跨组冲突：`ActionRunnerConfig.Conflict`（`BehaviorConfig.Conflict`）**（对照 ssr 的硬编码矩阵，改为业务给的函数）。动作要启动（`Start`，或排队项成为当前动作）时，对其他每个有当前动作的组（组号升序）调用 `Conflict(running, incoming)`：任一组 `BlockIncoming` 即拒绝新动作（`ErrBlockedByGroup`，什么都不改）；否则先取消全部 `PreemptRunning` 的组的当前动作（取消状态，不推进它们的队列），再按同组规则启动。缺省 nil：组之间互不影响。
 
 **按 ID 结束：`EndAction(id, force, reason)`**：结束某组的当前动作（并推进该组队列），或把排队中的动作移出队列（取消状态）；找不到返回 `ErrActionNotFound`（回调里延后执行时找不到不报告——动作可能已在这之前结束）。
 
@@ -305,7 +305,7 @@ catalog, _ := state.NewCatalog(
 // 实体工厂里：
 m.stateDao = state.NewStateDao(id, "game", catalog) // 有 Persist 状态时登记进实体的 DaoManager
 m.states = state.NewSet(m.stateDao, state.SetConfig{OnError: logError})
-m.gate, _ = state.Gate(m.states, m.agent, logError,
+m.gate, _ = state.Gate(m.states, m.behavior, logError,
 	state.Rule{State: Rooted, Group: GroupMove, Mode: actionflow.FreezeCancel}, // 定身打断移动
 	state.Rule{State: Disarmed, Group: GroupFight, Mode: actionflow.FreezePause},
 )
@@ -320,7 +320,7 @@ m.gate, _ = state.Gate(m.states, m.agent, logError,
 - **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期靠业务的 `TickBuffs`（D20 P5 计划挂 1Hz 心跳）。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
 
-边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)。
+边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
 
 ## 5. 运维
 

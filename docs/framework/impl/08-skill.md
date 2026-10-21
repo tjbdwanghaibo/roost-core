@@ -219,7 +219,7 @@
 | [adapter.go](../../../gameplay/skill/combatcomponent/adapter.go) | `Resolver`、`RevisionSource`、`EffectEvent`、`HostAdapter` |
 | [component.go](../../../gameplay/skill/combatcomponent/component.go) | `CombatDao`、`CombatComponent`、`AttributeProjection` |
 | [status_bridge.go](../../../gameplay/skill/combatcomponent/status_bridge.go) | `StatusBridge` |
-| [state_bridge.go](../../../gameplay/skill/combatcomponent/state_bridge.go) | `StateBinding`（`BindStates`、`HasBuffTag`：buff 标签 → `gameplay/state` 派生状态，D21 第 3 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 9 条） |
+| [state_bridge.go](../../../gameplay/skill/combatcomponent/state_bridge.go) | `StateBinding`（`BindStates`、`HasBuffTag`：buff 标签 → `gameplay/state` 派生状态，D21 第 3 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条） |
 
 ### skill/examples/combat
 

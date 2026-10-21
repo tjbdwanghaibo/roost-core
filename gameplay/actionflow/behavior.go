@@ -12,18 +12,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 动作指标（D21 A9，AgentConfig.Metrics 打开时写；缺省关闭）。标签 kind 是动作种类编号（uint8，有界），status 是
+// 动作指标（D21 A9，BehaviorConfig.Metrics 打开时写；缺省关闭）。标签 kind 是动作种类编号（uint8，有界），status 是
 // ActionStatus.String()。
 const (
 	// MetricActionsStarted：成为组的当前动作的次数（含 Start 即完成的）。
 	MetricActionsStarted = "actionflow.actions.started_total"
 	// MetricActionsEnded：结束的动作（含从未启动就被丢弃的排队项、被拒绝的延后 Start），按结束状态。
 	MetricActionsEnded = "actionflow.actions.ended_total"
-	// MetricActionsRunning：此刻是某组当前动作的动作数（全部打开指标的 Agent 合计）。
+	// MetricActionsRunning：此刻是某组当前动作的动作数（全部打开指标的 Behavior 合计）。
 	MetricActionsRunning = "actionflow.actions.running"
 )
 
-// Agent 是框架提供的 ActionList 默认装配（DESIGN-TODO D21 A1，对照 ssr 的 action_list 模块那一层）：一个实体的
+// Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（DESIGN-TODO D21 A1，对照 ssr 的
+// action_list 模块那一层，维护者 2026-10-21 由 Agent 更名为 Behavior，避免与 AI agent 混淆）。一个实体的
 // ActionRunner（可选由心跳驱动，见 BeatRunner）、MissionRunner 与上层观察者（通常是 ai.Controller）按固定顺序接好，
 // 业务不必各自再写一份胶水。接线规则：
 //
@@ -33,13 +34,13 @@ const (
 //   - 动作归属任务：任务回调运行期间（含它同步引出的回调）经 CreateAction / EnqueueAction 发起的动作记在当前任务
 //     名下（ssr HasOnProcessTag 的规则），任务结束时一并结束；其余调用方（AI、handler）发起的动作不属于任何任务；
 //   - 清场（Clear）：先结束当前任务，再结束全部动作（包说明“清场顺序”）；
-//   - 任务心跳（D21 A6，配置了 Beat 时）：当前任务实现 TickIntervaler 且返回正数时，Agent 给它登记
+//   - 任务心跳（D21 A6，配置了 Beat 时）：当前任务实现 TickIntervaler 且返回正数时，Behavior 给它登记
 //     "<Beat.Name>/mission"，周期取不大于它的最长档，每拍 MissionRunner.Tick(本拍时间)；任务结束或不再需要时停。
 //     挂不上（Remote 共享模式）时任务以失败结束。不实现 TickIntervaler 的任务不被周期 tick（由动作结束推进）。
 //
-// 方法与 ActionRunner 一样只能在实体锁内调用（Nest handler、心跳回调、加载 / 新建的初始化阶段）；Agent 本身无锁、
+// 方法与 ActionRunner 一样只能在实体锁内调用（Nest handler、心跳回调、加载 / 新建的初始化阶段）；Behavior 本身无锁、
 // 不随事务回滚（D20 决定 3：由业务保证，handler 最后一步才调用）。
-type Agent struct {
+type Behavior struct {
 	owner    entity.IThreadSafeEntity
 	runner   *ActionRunner
 	beat     *BeatRunner
@@ -55,14 +56,14 @@ type Agent struct {
 	mission     *heartbeat.Reg
 }
 
-// Observer 接收 Agent 的动作结束与任务结束，在任务处理之后调用。ai.Controller 实现它（actionflow 不导入 ai）。
+// Observer 接收 Behavior 的动作结束与任务结束，在任务处理之后调用。ai.Controller 实现它（actionflow 不导入 ai）。
 type Observer interface {
 	OnActionEnd(id int64, kind ActionKind, reason ActionReason)
 	OnMissionEnd(mission Mission, reason ActionReason)
 }
 
-// AgentConfig 是 NewAgent 的配置。
-type AgentConfig struct {
+// BehaviorConfig 是 NewBehavior 的配置。
+type BehaviorConfig struct {
 	// Registry 提供动作与任务构造器，GroupForKind 把动作种类映射到组；两者必填。
 	Registry     *Registry
 	GroupForKind func(ActionKind) (ActionGroup, bool)
@@ -87,32 +88,32 @@ type AgentConfig struct {
 	Metrics bool
 }
 
-// NewAgent 为 owner 构造并接好 ActionRunner（或 BeatRunner）与 MissionRunner。
-func NewAgent(owner entity.IThreadSafeEntity, config AgentConfig) (*Agent, error) {
+// NewBehavior 为 owner 构造并接好 ActionRunner（或 BeatRunner）与 MissionRunner。
+func NewBehavior(owner entity.IThreadSafeEntity, config BehaviorConfig) (*Behavior, error) {
 	if owner == nil {
-		return nil, errors.New("actionflow: agent needs an owner entity")
+		return nil, errors.New("actionflow: behavior needs an owner entity")
 	}
 	if config.Beat != nil && config.Beat.Host != nil && config.Beat.Host.Owner() != owner {
-		return nil, errors.New("actionflow: agent beat host belongs to another entity")
+		return nil, errors.New("actionflow: behavior beat host belongs to another entity")
 	}
-	a := &Agent{owner: owner, observer: config.Observer, now: config.Now, onError: config.OnError}
+	b := &Behavior{owner: owner, observer: config.Observer, now: config.Now, onError: config.OnError}
 	if config.Beat != nil {
-		a.host, a.beatName, a.beatOptions = config.Beat.Host, config.Beat.Name, config.Beat.Options
-		if a.beatName == "" {
-			a.beatName = DefaultBeatName
+		b.host, b.beatName, b.beatOptions = config.Beat.Host, config.Beat.Name, config.Beat.Options
+		if b.beatName == "" {
+			b.beatName = DefaultBeatName
 		}
 	}
-	if a.now == nil {
-		a.now = clock.Now
+	if b.now == nil {
+		b.now = clock.Now
 	}
 	runnerConfig := ActionRunnerConfig{
 		Registry:     config.Registry,
 		GroupForKind: config.GroupForKind,
 		Conflict:     config.Conflict,
 		Hooks: ActionRunnerHooks{
-			PopulateContext: a.populate,
-			OnEnded:         a.actionEnded,
-			OnError:         a.report,
+			PopulateContext: b.populate,
+			OnEnded:         b.actionEnded,
+			OnError:         b.report,
 		},
 		MaxDeferredCommands: config.MaxDeferredCommands,
 		MaxDeferredSteps:    config.MaxDeferredSteps,
@@ -122,32 +123,32 @@ func NewAgent(owner entity.IThreadSafeEntity, config AgentConfig) (*Agent, error
 		runnerConfig.Hooks.OnEnded = func(s ActionSnapshot, reason ActionReason) {
 			metrics.IncCounter(MetricActionsEnded, metrics.Labels{"kind": strconv.Itoa(int(s.Kind)),
 				"status": reason.ToActionResult(ActionStatusSuccess).Status.String()}, 1)
-			a.actionEnded(s, reason)
+			b.actionEnded(s, reason)
 		}
 	}
 	var err error
 	if config.Beat != nil {
-		a.beat, err = NewBeatRunner(runnerConfig, *config.Beat)
-		if a.beat != nil {
-			a.runner = a.beat.Runner()
+		b.beat, err = NewBeatRunner(runnerConfig, *config.Beat)
+		if b.beat != nil {
+			b.runner = b.beat.Runner()
 		}
 	} else {
-		a.runner, err = NewActionRunner(runnerConfig)
+		b.runner, err = NewActionRunner(runnerConfig)
 	}
 	if err != nil {
 		return nil, err
 	}
-	a.missions, err = NewMissionRunner(MissionRunnerConfig{
+	b.missions, err = NewMissionRunner(MissionRunnerConfig{
 		Registry:    config.Registry,
 		DefaultKind: config.DefaultMission,
 		Hooks: MissionRunnerHooks{
-			Now:          a.now,
-			Context:      a.missionContext,
-			ClearActions: a.clearMissionActions,
-			OnState:      func(bool) { a.syncMissionBeat() },
-			OnChanged:    func(MissionInfo) { a.syncMissionBeat() },
-			OnEnded:      a.missionEnded,
-			OnError:      a.report,
+			Now:          b.now,
+			Context:      b.missionContext,
+			ClearActions: b.clearMissionActions,
+			OnState:      func(bool) { b.syncMissionBeat() },
+			OnChanged:    func(MissionInfo) { b.syncMissionBeat() },
+			OnEnded:      b.missionEnded,
+			OnError:      b.report,
 		},
 		MaxDeferredCommands: config.MaxDeferredCommands,
 		MaxDeferredSteps:    config.MaxDeferredSteps,
@@ -155,70 +156,72 @@ func NewAgent(owner entity.IThreadSafeEntity, config AgentConfig) (*Agent, error
 	if err != nil {
 		return nil, err
 	}
-	return a, nil
+	return b, nil
 }
 
-// MissionReg 返回任务心跳的登记；从没有任务需要周期 tick、或没有配置 Beat 时为 nil（诊断、测试用，启停由 Agent 管理）。
-func (a *Agent) MissionReg() *heartbeat.Reg { return a.mission }
+// MissionReg 返回任务心跳的登记；从没有任务需要周期 tick、或没有配置 Beat 时为 nil（诊断、测试用，启停由 Behavior 管理）。
+func (b *Behavior) MissionReg() *heartbeat.Reg { return b.mission }
 
 // Runner 返回动作 runner；Beat 返回心跳驱动的宿主（未配置 Beat 时为 nil）；Missions 返回任务 runner。
-func (a *Agent) Runner() *ActionRunner    { return a.runner }
-func (a *Agent) Beat() *BeatRunner        { return a.beat }
-func (a *Agent) Missions() *MissionRunner { return a.missions }
+func (b *Behavior) Runner() *ActionRunner    { return b.runner }
+func (b *Behavior) Beat() *BeatRunner        { return b.beat }
+func (b *Behavior) Missions() *MissionRunner { return b.missions }
 
 // Clear 清场：先结束当前任务（之后送来的动作结束不再推进任务），再强制结束全部动作、丢弃排队项。
-func (a *Agent) Clear(reason ActionReason) {
-	a.missions.EndCurMission(reason)
-	a.report(a.runner.EndAll(true, reason))
+func (b *Behavior) Clear(reason ActionReason) {
+	b.missions.EndCurMission(reason)
+	b.report(b.runner.EndAll(true, reason))
 }
 
 // --- ActionList ---
 
-func (a *Agent) Entity() entity.IThreadSafeEntity { return a.owner }
+func (b *Behavior) Entity() entity.IThreadSafeEntity { return b.owner }
 
 // CreateAction 启动动作，取代同组当前动作（Replacer / Conflict 规则见 ActionRunner）。
-func (a *Agent) CreateAction(kind ActionKind, param any) (int64, error) {
-	return a.runner.Start(kind, param, a.missionTag(), a.now())
+func (b *Behavior) CreateAction(kind ActionKind, param any) (int64, error) {
+	return b.runner.Start(kind, param, b.missionTag(), b.now())
 }
 
 // EnqueueAction 把动作排到组队列末尾。
-func (a *Agent) EnqueueAction(kind ActionKind, param any) (int64, error) {
-	return a.runner.Enqueue(kind, param, a.missionTag())
+func (b *Behavior) EnqueueAction(kind ActionKind, param any) (int64, error) {
+	return b.runner.Enqueue(kind, param, b.missionTag())
 }
 
-func (a *Agent) CurAction(group ActionGroup) Action { return a.runner.Current(group) }
+func (b *Behavior) CurAction(group ActionGroup) Action { return b.runner.Current(group) }
 
-func (a *Agent) EndCurAction(group ActionGroup, force bool, reason ActionReason) {
-	a.report(a.runner.End(group, force, reason))
+func (b *Behavior) EndCurAction(group ActionGroup, force bool, reason ActionReason) {
+	b.report(b.runner.End(group, force, reason))
 }
 
-func (a *Agent) EndAction(id int64, force bool, reason ActionReason) error {
-	return a.runner.EndAction(id, force, reason)
+func (b *Behavior) EndAction(id int64, force bool, reason ActionReason) error {
+	return b.runner.EndAction(id, force, reason)
 }
 
-func (a *Agent) EndAllAction(force bool, reason ActionReason) {
-	a.report(a.runner.EndAll(force, reason))
+func (b *Behavior) EndAllAction(force bool, reason ActionReason) {
+	b.report(b.runner.EndAll(force, reason))
 }
 
-func (a *Agent) ClearNextActions() { a.runner.ClearQueue() }
+func (b *Behavior) ClearNextActions() { b.runner.ClearQueue() }
 
-func (a *Agent) UpdateAction(group ActionGroup, f func(Action) error) error {
-	return a.runner.Update(group, f)
+func (b *Behavior) UpdateAction(group ActionGroup, f func(Action) error) error {
+	return b.runner.Update(group, f)
 }
 
-func (a *Agent) Freeze(group ActionGroup, mode FreezeMode) error { return a.runner.Freeze(group, mode) }
-func (a *Agent) Recover(group ActionGroup) error                 { return a.runner.Recover(group, a.now()) }
-func (a *Agent) Frozen(group ActionGroup) bool                   { return a.runner.Frozen(group) }
+func (b *Behavior) Freeze(group ActionGroup, mode FreezeMode) error {
+	return b.runner.Freeze(group, mode)
+}
+func (b *Behavior) Recover(group ActionGroup) error { return b.runner.Recover(group, b.now()) }
+func (b *Behavior) Frozen(group ActionGroup) bool   { return b.runner.Frozen(group) }
 
-func (a *Agent) MissionManager() MissionManager { return a.missions }
+func (b *Behavior) MissionManager() MissionManager { return b.missions }
 
-func (a *Agent) SetMission(kind MissionKind, param any) error {
-	return a.missions.StartMission(kind, param)
+func (b *Behavior) SetMission(kind MissionKind, param any) error {
+	return b.missions.StartMission(kind, param)
 }
 
-func (a *Agent) CurMission() Mission { return a.missions.CurMission() }
+func (b *Behavior) CurMission() Mission { return b.missions.CurMission() }
 
-func (a *Agent) EndCurMission(reason ActionReason) { a.missions.EndCurMission(reason) }
+func (b *Behavior) EndCurMission(reason ActionReason) { b.missions.EndCurMission(reason) }
 
 // --- 接线 ---
 
@@ -233,89 +236,89 @@ func countTransition(s ActionSnapshot, entering bool) {
 }
 
 // missionTag 是新动作的归属任务：任务回调运行期间（MissionRunner 正在执行）发起的动作属于当前任务。
-func (a *Agent) missionTag() int64 {
-	if a.missions.Deferring() {
-		return a.missions.CurrentMissionID()
+func (b *Behavior) missionTag() int64 {
+	if b.missions.Deferring() {
+		return b.missions.CurrentMissionID()
 	}
 	return 0
 }
 
-func (a *Agent) populate(ctx *ActionContext, _ time.Time) {
-	ctx.Owner = a.owner
-	ctx.ActionList = a
-	ctx.CurrentMission = a.missions.CurMission()
+func (b *Behavior) populate(ctx *ActionContext, _ time.Time) {
+	ctx.Owner = b.owner
+	ctx.ActionList = b
+	ctx.CurrentMission = b.missions.CurMission()
 }
 
-func (a *Agent) missionContext(now time.Time) *MissionContext {
-	return &MissionContext{Owner: a.owner, ActionList: a, Now: now}
+func (b *Behavior) missionContext(now time.Time) *MissionContext {
+	return &MissionContext{Owner: b.owner, ActionList: b, Now: now}
 }
 
 // actionEnded：先任务、后观察者。
-func (a *Agent) actionEnded(s ActionSnapshot, reason ActionReason) {
-	a.missions.OnActionEnd(s.ID, s.Kind, reason)
-	if a.observer != nil {
-		a.observer.OnActionEnd(s.ID, s.Kind, reason)
+func (b *Behavior) actionEnded(s ActionSnapshot, reason ActionReason) {
+	b.missions.OnActionEnd(s.ID, s.Kind, reason)
+	if b.observer != nil {
+		b.observer.OnActionEnd(s.ID, s.Kind, reason)
 	}
 }
 
-func (a *Agent) clearMissionActions(missionID int64, reason ActionReason) error {
-	return a.runner.ClearMission(missionID, true, reason)
+func (b *Behavior) clearMissionActions(missionID int64, reason ActionReason) error {
+	return b.runner.ClearMission(missionID, true, reason)
 }
 
-func (a *Agent) missionEnded(m Mission, reason ActionReason) {
-	if a.observer != nil {
-		a.observer.OnMissionEnd(m, reason)
+func (b *Behavior) missionEnded(m Mission, reason ActionReason) {
+	if b.observer != nil {
+		b.observer.OnMissionEnd(m, reason)
 	}
 }
 
 // syncMissionBeat 让任务心跳与当前任务一致（MissionRunner 的 OnState / OnChanged 里调用：任务开始前后、每次推进、
 // 结束时）：有正在运行、要周期 tick 的任务就按它的周期启动，否则停。挂不上时以失败结束任务（在任务 runner 的回调里，
 // EndCurMission 延后到回调返回后执行）。
-func (a *Agent) syncMissionBeat() {
-	if a.host == nil {
+func (b *Behavior) syncMissionBeat() {
+	if b.host == nil {
 		return
 	}
 	interval := time.Duration(0)
-	if m := a.missions.CurMission(); m != nil && m.Status() == MissionStatusRunning {
+	if m := b.missions.CurMission(); m != nil && m.Status() == MissionStatusRunning {
 		interval = missionPeriod(m)
 	}
 	if interval == 0 {
-		if a.mission != nil {
-			a.mission.Stop()
+		if b.mission != nil {
+			b.mission.Stop()
 		}
 		return
 	}
-	if a.mission == nil {
-		reg, err := a.host.Register(a.beatName+"/mission", interval, a.missionBeat, a.beatOptions...)
+	if b.mission == nil {
+		reg, err := b.host.Register(b.beatName+"/mission", interval, b.missionBeat, b.beatOptions...)
 		if err != nil {
-			a.failMission(err)
+			b.failMission(err)
 			return
 		}
-		a.mission = reg
+		b.mission = reg
 	}
-	if a.mission.Period() != interval {
-		if err := a.mission.SetPeriod(interval); err != nil {
-			a.failMission(err)
+	if b.mission.Period() != interval {
+		if err := b.mission.SetPeriod(interval); err != nil {
+			b.failMission(err)
 			return
 		}
 	}
-	if err := a.mission.Start(); err != nil {
-		a.failMission(err)
+	if err := b.mission.Start(); err != nil {
+		b.failMission(err)
 	}
 }
 
-func (a *Agent) failMission(err error) {
+func (b *Behavior) failMission(err error) {
 	err = fmt.Errorf("actionflow: mission heartbeat: %w", err)
-	a.report(err)
-	a.missions.EndCurMission(NewActionErrorReason(err))
+	b.report(err)
+	b.missions.EndCurMission(NewActionErrorReason(err))
 }
 
 // missionBeat 是任务心跳的回调：tick 当前任务，时间取本拍的业务时间。
-func (a *Agent) missionBeat(beat heartbeat.Beat) error {
-	if a.missions.CurMission() == nil {
+func (b *Behavior) missionBeat(beat heartbeat.Beat) error {
+	if b.missions.CurMission() == nil {
 		return nil
 	}
-	a.missions.Tick(beat.Now)
+	b.missions.Tick(beat.Now)
 	return nil
 }
 
@@ -328,11 +331,11 @@ func missionPeriod(m Mission) time.Duration {
 	return heartbeat.PeriodAtMost(ti.TickInterval())
 }
 
-func (a *Agent) report(err error) {
-	if err != nil && a.onError != nil {
+func (b *Behavior) report(err error) {
+	if err != nil && b.onError != nil {
 		defer func() { _ = recover() }()
-		a.onError(err)
+		b.onError(err)
 	}
 }
 
-var _ ActionList = (*Agent)(nil)
+var _ ActionList = (*Behavior)(nil)

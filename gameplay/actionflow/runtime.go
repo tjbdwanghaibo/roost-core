@@ -62,14 +62,14 @@ type TickIntervaler interface {
 	TickInterval() time.Duration
 }
 
-// ActionList 是业务对 ActionRunner / MissionRunner 的接线，框架的实现是 Agent（D21 A1）。动作回调与 runner 钩子里
+// ActionList 是业务对 ActionRunner / MissionRunner 的接线，框架的实现是 Behavior（D21 A1）。动作回调与 runner 钩子里
 // 调用 CreateAction / EnqueueAction / EndCurAction / EndAction / EndAllAction / ClearNextActions 时，ActionRunner
 // 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID 送达（见 ActionRunner
 // 的说明）。任务回调与 MissionRunner 钩子里调用 SetMission / EndCurMission 同样延后（见 MissionRunner 的说明）：
 // SetMission 返回 nil，执行时的错误经 MissionRunner 的 OnError 报告。
 //
 // 清场：EndAllAction 期间回调发起的动作会在它返回后启动；要什么都不再运行，先 EndCurMission，再 EndAllAction
-// （Agent.Clear 按这个顺序）。
+// （Behavior.Clear 按这个顺序）。
 type ActionList interface {
 	Entity() entity.IThreadSafeEntity
 	CreateAction(kind ActionKind, param any) (int64, error)

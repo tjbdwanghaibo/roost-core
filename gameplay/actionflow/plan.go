@@ -90,7 +90,7 @@ func (m *PlanMission) Tick(ctx *MissionContext, now time.Time) {
 		Result: ActionResult{Status: ActionStatusExpired, Reason: stepTimedOut}})
 }
 
-// TickInterval 让 Agent 只在当前步有时限时给任务挂心跳（周期 MissionPlan.Period，缺省 DefaultMissionPeriod）。
+// TickInterval 让 Behavior 只在当前步有时限时给任务挂心跳（周期 MissionPlan.Period，缺省 DefaultMissionPeriod）。
 func (m *PlanMission) TickInterval() time.Duration {
 	if m == nil || m.status != MissionStatusRunning || m.currentStep < 0 || m.currentStep >= len(m.plan.Steps) ||
 		m.plan.Steps[m.currentStep].Timeout <= 0 {

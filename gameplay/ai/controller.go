@@ -55,7 +55,7 @@ type pendingSwitch struct {
 	reason   string
 }
 
-// Controller 是 actionflow.Agent 的观察者：Agent 先把动作 / 任务结束交给任务，再交给它（D21 A1）。
+// Controller 是 actionflow.Behavior 的观察者：Behavior 先把动作 / 任务结束交给任务，再交给它（D21 A1）。
 var _ coreflow.Observer = (*Controller)(nil)
 
 // NewController 构造一个尚无策略的 Controller。

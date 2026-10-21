@@ -16,7 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// 真实 Nest 引擎 + 启动的心跳驱动：状态随事务回滚（两种回滚策略），持久状态进提交记录、不持久的不进；Gate 经 Agent
+// 真实 Nest 引擎 + 启动的心跳驱动：状态随事务回滚（两种回滚策略），持久状态进提交记录、不持久的不进；Gate 经 Behavior
 // 计数冻结动作组，打断模式取消在途动作并停掉组的心跳。
 
 const kindHolder entity.EntityKind = 243
@@ -48,16 +48,16 @@ func init() {
 	nest.MustRegisterHandlerWithMeta(runMem, run, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 }
 
-// holder 是装了状态组件与 Agent 的实体；StateDao 登记为它的 DAO（rollback=state 的快照与持久都经它）。
+// holder 是装了状态组件与 Behavior 的实体；StateDao 登记为它的 DAO（rollback=state 的快照与持久都经它）。
 type holder struct {
 	*entity.EntityBase
-	host   *heartbeat.Host
-	set    *Set
-	agent  *actionflow.Agent
-	gate   *Gated
-	mu     sync.Mutex
-	ended  []string
-	errors []error
+	host     *heartbeat.Host
+	set      *Set
+	behavior *actionflow.Behavior
+	gate     *Gated
+	mu       sync.Mutex
+	ended    []string
+	errors   []error
 }
 
 func (h *holder) Base() *entity.EntityBase { return h.EntityBase }
@@ -146,7 +146,7 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{t: t, engine: engine, manager: manager, driver: driver, committer: committer, catalog: testCatalog(t), registry: registry}
 }
 
-// add 建实体：状态组件、Agent（心跳驱动）与门控 rooted → 移动组打断、stunned / silenced → 施法组暂停。
+// add 建实体：状态组件、Behavior（心跳驱动）与门控 rooted → 移动组打断、stunned / silenced → 施法组暂停。
 func (f *fixture) add(unique int64) *holder {
 	f.t.Helper()
 	id, err := entity.BuildEntityID(unique, kindHolder)
@@ -156,7 +156,7 @@ func (f *fixture) add(unique int64) *holder {
 	h := &holder{EntityBase: entity.NewEntityBase(id, entity.EntityCategoryOther, false, kindHolder)}
 	h.host = f.driver.NewHost(h)
 	h.set = NewSet(NewStateDao(id, "game", f.catalog), SetConfig{OnError: func(err error) { f.t.Errorf("state error: %v", err) }})
-	h.agent, err = actionflow.NewAgent(h, actionflow.AgentConfig{
+	h.behavior, err = actionflow.NewBehavior(h, actionflow.BehaviorConfig{
 		Registry: f.registry,
 		GroupForKind: func(kind actionflow.ActionKind) (actionflow.ActionGroup, bool) {
 			return map[actionflow.ActionKind]actionflow.ActionGroup{actWalk: groupMove, actCast: groupCast}[kind], true
@@ -168,7 +168,7 @@ func (f *fixture) add(unique int64) *holder {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	h.gate, err = Gate(h.set, h.agent, func(err error) { f.t.Errorf("gate error: %v", err) },
+	h.gate, err = Gate(h.set, h.behavior, func(err error) { f.t.Errorf("gate error: %v", err) },
 		Rule{State: Rooted, Group: groupMove, Mode: actionflow.FreezeCancel},
 		Rule{State: Stunned, Group: groupCast, Mode: actionflow.FreezePause},
 		Rule{State: Silenced, Group: groupCast, Mode: actionflow.FreezePause},
@@ -271,10 +271,10 @@ func TestGateFreezesActionGroupsWhileStatesHold(t *testing.T) {
 	f := newFixture(t)
 	h := f.add(2)
 	f.mustRun(runUndo, h, func(h *holder) error {
-		if _, err := h.agent.CreateAction(actWalk, nil); err != nil {
+		if _, err := h.behavior.CreateAction(actWalk, nil); err != nil {
 			return err
 		}
-		_, err := h.agent.CreateAction(actCast, nil)
+		_, err := h.behavior.CreateAction(actCast, nil)
 		return err
 	})
 	f.settle(h)
@@ -292,15 +292,15 @@ func TestGateFreezesActionGroupsWhileStatesHold(t *testing.T) {
 	if got := h.endedActions(); len(got) != 1 || got[0] != "1 4 action group frozen" || f.driver.Registered() != 1 {
 		t.Fatalf("rooted: ended %v registered %d", got, f.driver.Registered())
 	}
-	if err := f.run(runUndo, h, func(h *holder) error { _, err := h.agent.CreateAction(actWalk, nil); return err }); !errors.Is(err, actionflow.ErrActionGroupFrozen) {
+	if err := f.run(runUndo, h, func(h *holder) error { _, err := h.behavior.CreateAction(actWalk, nil); return err }); !errors.Is(err, actionflow.ErrActionGroupFrozen) {
 		t.Fatalf("walk while rooted: %v", err)
 	}
 	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Remove(Rooted, buff1) })
-	if frozen := read(f, h, func(h *holder) bool { return h.agent.Frozen(groupMove) }); !frozen {
+	if frozen := read(f, h, func(h *holder) bool { return h.behavior.Frozen(groupMove) }); !frozen {
 		t.Fatal("one of two rooting sources removed: the move group thawed")
 	}
 	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Remove(Rooted, buff2) })
-	if frozen := read(f, h, func(h *holder) bool { return h.agent.Frozen(groupMove) }); frozen {
+	if frozen := read(f, h, func(h *holder) bool { return h.behavior.Frozen(groupMove) }); frozen {
 		t.Fatal("all rooting sources removed: the move group is still frozen")
 	}
 
@@ -311,14 +311,14 @@ func TestGateFreezesActionGroupsWhileStatesHold(t *testing.T) {
 		return h.set.Add(Silenced, buff2)
 	})
 	f.settle(h)
-	count := read(f, h, func(h *holder) int { return h.agent.Runner().FreezeCount(groupCast) })
+	count := read(f, h, func(h *holder) int { return h.behavior.Runner().FreezeCount(groupCast) })
 	if count != 2 || f.driver.Registered() != 0 || len(h.endedActions()) != 1 {
 		t.Fatalf("stunned + silenced: freeze count %d registered %d ended %v", count, f.driver.Registered(), h.endedActions())
 	}
 	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Remove(Stunned, buff1) })
 	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Remove(Silenced, buff2) })
 	f.settle(h)
-	if count := read(f, h, func(h *holder) int { return h.agent.Runner().FreezeCount(groupCast) }); count != 0 || f.driver.Registered() != 1 {
+	if count := read(f, h, func(h *holder) int { return h.behavior.Runner().FreezeCount(groupCast) }); count != 0 || f.driver.Registered() != 1 {
 		t.Fatalf("thawed cast group: count %d registered %d (the paused cast resumes beating)", count, f.driver.Registered())
 	}
 }
@@ -352,20 +352,20 @@ func TestGateRealignsAfterARolledBackStateChange(t *testing.T) {
 	}
 	_ = f.run(runUndo, h, func(h *holder) error { _ = h.set.Add(Rooted, buff1); return errBusiness })
 	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Add(Rooted, buff2) })
-	if count := read(f, h, func(h *holder) int { return h.agent.Runner().FreezeCount(groupMove) }); count != 1 {
+	if count := read(f, h, func(h *holder) int { return h.behavior.Runner().FreezeCount(groupMove) }); count != 1 {
 		t.Fatalf("freeze count %d after a rolled-back and a committed rooting, want 1", count)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.errors) != 0 {
-		t.Fatalf("agent errors %v", h.errors)
+		t.Fatalf("behavior errors %v", h.errors)
 	}
 }
 
 func read2(f *fixture, h *holder) (rooted, frozen bool) {
 	f.t.Helper()
 	f.mustRun(runUndo, h, func(h *holder) error {
-		rooted, frozen = h.set.Has(Rooted), h.agent.Frozen(groupMove)
+		rooted, frozen = h.set.Has(Rooted), h.behavior.Frozen(groupMove)
 		return nil
 	})
 	return rooted, frozen
@@ -380,24 +380,24 @@ func TestGateAlignsWhenInstalledAndReleasesOnClose(t *testing.T) {
 		if err := h.set.Add(Rooted, buff1); err != nil {
 			return err
 		}
-		if h.agent.Frozen(groupMove) {
+		if h.behavior.Frozen(groupMove) {
 			return errors.New("a closed gate still froze the move group")
 		}
 		var err error
-		h.gate, err = Gate(h.set, h.agent, nil, Rule{State: Rooted, Group: groupMove})
+		h.gate, err = Gate(h.set, h.behavior, nil, Rule{State: Rooted, Group: groupMove})
 		if err != nil {
 			return err
 		}
-		if !h.agent.Frozen(groupMove) {
+		if !h.behavior.Frozen(groupMove) {
 			return errors.New("a gate installed while rooted did not freeze")
 		}
 		h.gate.Close()
-		if h.agent.Frozen(groupMove) {
+		if h.behavior.Frozen(groupMove) {
 			return errors.New("Close kept the freeze")
 		}
 		return nil
 	})
-	if _, err := Gate(h.set, h.agent, nil, Rule{State: 99}); !errors.Is(err, ErrUnknownState) {
+	if _, err := Gate(h.set, h.behavior, nil, Rule{State: 99}); !errors.Is(err, ErrUnknownState) {
 		t.Fatalf("gate on an unknown state: %v", err)
 	}
 }
