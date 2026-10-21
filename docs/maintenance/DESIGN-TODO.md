@@ -25,7 +25,7 @@
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
-| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”），actionflow 只做了心跳选项接线，`BeatConfig` 上的域字段等 D21 合入后再定 |
+| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -1780,7 +1780,8 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 - 新包 `gameplay/timedomain`：`Domain`（锚点 + 倍率的分段线性映射，`SetRate` 以生效时刻为新锚点、连续；倍率 [0, 100]，0 时停；参数 `atomic.Pointer` 发布、按序号只接受更新的）。参数的权威在场景实体的 DAO 字段（`Fields`），随事务回滚、标 sync 下发客户端；提交后（`AfterCommit`）发布给成员。一条消息里第一次读取冻结（`fctx.Frozen`）。成员读数取“已交出的最大域时间”托底，保证单调。
 - 持久与否：由业务选，推荐随进程结束的副本用 `nopersist,sync`；要持久的场景用持久字段，重载后按存下的锚点与倍率接着走（停服期间同样按倍率前进）。理由：副本场景随进程结束，不需要持久；框架不替业务决定，`Fields` 就是 DAO 字段，持久只是字段标记。
 - `heartbeat.WithTimeDomain(d)`：调度不变，`Beat.Now` / `Elapsed` 用域时间，时停 `Elapsed = 0`，上限乘倍率。对 heartbeat 的改动只限 `Beat.Now` 的来源、上限与启动时刻，投递层不动。
-- actionflow：只经 `BeatConfig.Options` 接（不改 actionflow 代码），动作 tick 的 `ActionContext.Now` / `Elapsed` 随之；端到端用例经真实 Nest、运行中的心跳驱动与 `BeatRunner`。D21 正在大改 actionflow，`BeatConfig` 上加域字段、让 handler 里 `Start` 的缺省也取域时间，留到 D21 合入之后。
+- actionflow / ai（D21 合入后补，推荐并实施：改动只是透传 `WithTimeDomain` 与缺省时间取域时间，不需要另行拍板）：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain`。动作组心跳、`Behavior` 的任务心跳、AI 心跳挂上域；心跳之外调用 runner 时 `ActionContext.Now` 也是域时间；`Behavior` 与 `ai.Controller` 没配 `Now` 时取域时间，所以计划步骤 `Timeout`、`FreezeFor` 与各自心跳的到期判断同一把尺子。端到端用例经真实 Nest、运行中的心跳驱动与 `BeatRunner`。
+- D21 新增的取时间处逐个核对（D22-1）：`Behavior.now` 原缺省 `clock.Now`，改为 `fctx.Now`（先红：`Behavior action context Now = …002, want … frozen …001`）；任务心跳、AI 心跳用 `Beat.Now`（驱动缺省 `fctx.Now`）；`ai.NewBeatController` 与 `FreezeFor` 经 `Controller.now`（D22-1 已改 `fctx.Now`）；计划步骤 `Timeout` 的起点是 `MissionContext.Now`（经 `Behavior.now`），到期判断是任务心跳的 `Beat.Now`。
 - 技能 / Buff：没有自动接线，文档给出接法（业务在心跳里按域时间推进 `Runtime` 的 tick，Buff 按 tick 计）；`skill/combatcomponent` 没改，放不进本轮。
 - entitytimer 不接时间域（决定 ⑦）。
 

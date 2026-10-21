@@ -9,6 +9,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -362,5 +364,69 @@ func TestBehaviorMetricsCountStartsEndsAndRunningActions(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("metrics %v, want %v", got, want)
+	}
+}
+
+// D22-1：没配 Now 时，Behavior 的业务时间（动作的 ActionContext.Now、任务的 MissionContext.Now，计划步骤 Timeout 的
+// 起点）是本次执行冻结的 fctx.Now，与 handler 里读的同一时刻。
+func TestBehaviorDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
+	steppingBusinessClock(t)
+	execution, release := fctx.NewContext()
+	defer release()
+	behavior, _, _ := newBehaviorForTest(t)
+	action := &ctxAction{runnerTestAction: runnerTestAction{label: "now"}}
+	if _, err := behavior.CreateAction(1, action); err != nil {
+		t.Fatal(err)
+	}
+	if !action.seen.Now.Equal(execution.Now) {
+		t.Fatalf("Behavior action context Now = %v, want the execution's frozen business time %v", action.seen.Now, execution.Now)
+	}
+}
+
+// fixedDomainFields 是一个早已改过倍率的场景时间域（域时间与业务时间差得很远），测试用。
+type fixedDomainFields struct{ state timedomain.State }
+
+func (f *fixedDomainFields) TimeDomain() timedomain.State     { return f.state }
+func (f *fixedDomainFields) SetTimeDomain(s timedomain.State) { f.state = s }
+
+// D22：Beat.TimeDomain 挂了场景的时间域时，Behavior 没配 Now 就取域时间（动作与任务的上下文、计划步骤 Timeout 的起点），
+// 心跳之外经 BeatRunner 直接 Start 的动作 ActionContext.Now 也是域时间。
+func TestBehaviorOnATimeDomainUsesDomainTime(t *testing.T) {
+	domain, err := timedomain.New(&fixedDomainFields{state: timedomain.State{AnchorBusinessNano: 1, AnchorDomainNano: 5e17, Rate: 1}}, timedomain.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, release := fctx.NewContext()
+	defer release()
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "behavior-domain-test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	owner := &beatEntity{entity.NewEntityBase(5<<20, entity.EntityCategoryOther, true)}
+	behavior, err := NewBehavior(owner, BehaviorConfig{
+		Registry:     newActionOnlyRegistry(t),
+		GroupForKind: func(kind ActionKind) (ActionGroup, bool) { return ActionGroup(kind), true },
+		Beat:         &BeatConfig{Host: d.NewHost(owner), TimeDomain: domain},
+		OnError:      func(err error) { t.Errorf("behavior error: %v", err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.Now()
+	if want.Equal(execution.Now) {
+		t.Fatal("premise: the domain time equals the business time")
+	}
+	viaBehavior := &ctxAction{runnerTestAction: runnerTestAction{label: "behavior"}}
+	if _, err := behavior.CreateAction(1, viaBehavior); err != nil {
+		t.Fatal(err)
+	}
+	viaRunner := &ctxAction{runnerTestAction: runnerTestAction{label: "runner"}}
+	if _, err := behavior.Beat().Runner().Start(2, viaRunner, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// 任务上下文的时间（计划步骤 Timeout 的起点）走 Behavior 自己的时钟，不经 BeatRunner。
+	if got := behavior.now(); !got.Equal(want) {
+		t.Fatalf("on a time domain the Behavior's clock (missions, step timeouts) reads %v, want the domain time %v", got, want)
+	}
+	if !viaBehavior.seen.Now.Equal(want) || !viaRunner.seen.Now.Equal(want) {
+		t.Fatalf("on a time domain: Behavior action Now %v, runner action Now %v; want the domain time %v (business %v)",
+			viaBehavior.seen.Now, viaRunner.seen.Now, want, execution.Now)
 	}
 }

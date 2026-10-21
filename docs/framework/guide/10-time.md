@@ -373,11 +373,12 @@ if err := scene.time.SetRate(2); err != nil { // 越界返回 ErrRateOutOfRange�
 	return err
 }
 
-// 场景里的成员（玩家、怪物）：动作 runner 的心跳挂上场景的域。
-flow, err := actionflow.NewBeatRunner(runnerConfig, actionflow.BeatConfig{
-	Host:    host,
-	Options: []heartbeat.RegOption{heartbeat.WithTimeDomain(scene.time)},
+// 场景里的成员（玩家、怪物）：行为组件与 AI 都挂上场景的域。
+behavior, err := actionflow.NewBehavior(member, actionflow.BehaviorConfig{
+	Registry: registry, GroupForKind: groups,
+	Beat: &actionflow.BeatConfig{Host: host, TimeDomain: scene.time},
 })
+brain, err := ai.NewBeatController(hooks, ai.BeatConfig{Host: host, TimeDomain: scene.time})
 ```
 
 | API | 说明 |
@@ -389,7 +390,7 @@ flow, err := actionflow.NewBeatRunner(runnerConfig, actionflow.BeatConfig{
 | `heartbeat.WithTimeDomain(d)` | 心跳登记按域计时：调度仍按真实时间（档位不缩放，CPU 不随倍率涨）；`Beat.Now` 是域时间，`Elapsed` 是域时间的经过，时停时为 0；`Elapsed` 上限乘倍率（`max(1s, 档位) × 倍率`），否则 10 倍速时 100ms 档每拍都被夹住。代价：高倍率下每拍步长变大，移动 / 碰撞精度下降 |
 
 - **成员读发布的快照，不读场景的 DAO**：成员在自己的锁里，不跨实体加锁。快照在场景事务提交后才发布，所以生效时刻之后、发布之前开始的成员消息仍按旧倍率算；为了让成员读到的域时间单调，域记下已经交出去的最大域时间，读数取两者较大者，改倍率时新锚点也不低于它。代价是改倍率前后成员与客户端可能差“发布延迟 × 倍率”（微秒到毫秒级），随后一致。
-- **actionflow**：`BeatRunner` 经 `BeatConfig.Options` 挂域后，动作每拍的 `ActionContext.Now` / `Elapsed` 是域时间，移动（`Move.Advance(ctx.Elapsed)`）随之加速、慢放、时停。心跳之外调用 runner（handler 里 `Start` / `End`）不带时间时是业务时间；要域时间时显式传 `scene.time.Now()`。
+- **actionflow / ai**：`actionflow.BeatConfig.TimeDomain`（`BeatRunner`、`Behavior` 的动作组心跳与任务心跳）与 `ai.BeatConfig.TimeDomain`（AI 心跳）挂上域：动作每拍的 `ActionContext.Now` / `Elapsed` 是域时间，移动（`Move.Advance(ctx.Elapsed)`）随之加速、慢放、时停；心跳之外调用 runner（handler 里 `Start` / `End`）时 `ActionContext.Now` 也是本条消息的域时间（不论调用方传没传时间）；`Behavior` 没配 `Now` 时取域时间，任务上下文与计划步骤 `Timeout` 的起点、任务心跳的到期判断同一把尺子；`ai.Controller` 没配 `Now` 钩子时取域时间，`FreezeFor` 的期限与 AI 心跳的到期判断同一把尺子。只想让某个登记按域计时，也可以直接把 `heartbeat.WithTimeDomain` 放进 `Options`。
 - **技能 / Buff**：技能 `Runtime` 按 tick 推进，由业务在心跳里把它推进到域时间对应的 tick（`(beat.Now − 起点) / tick 间隔`），Buff 时长按技能 tick 计，随之变速；冷却等“到某个时刻”的判定读 `Domain.Now()`。框架没有替技能自动接域（KNOWN-LIMITS）。
 - **持久化的期限与 entitytimer 不接时间域**（维护者决定 ⑦）：持久定时器的离线补触发只对业务时间成立；域内的定时走心跳（按域时间判定到期）。存进 DAO 的业务期限（邮件过期、活动截止）仍是业务时间。
 - **持久与否**：`Fields` 是否持久由业务选。随进程结束的副本用 `nopersist,sync`（推荐）；要持久的场景用持久字段，重载后域时间按存下的锚点与倍率接着走（停服期间同样按倍率前进，时停的保持时停）。`Domain` 实例随场景实例：场景卸载重载后是新的 `Domain`，成员要换成新的。

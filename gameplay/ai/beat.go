@@ -8,6 +8,7 @@ import (
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
 // AI 心跳（DESIGN-TODO D21 C4，维护者 2026-10-21 决定 7）：Controller 用实体心跳上一个独立的登记 "ai" 驱动决策，不并进
@@ -35,6 +36,9 @@ type BeatConfig struct {
 	Period time.Duration
 	// Options 传给 heartbeat.Host.Register。
 	Options []heartbeat.RegOption
+	// TimeDomain 非 nil 时实体在场景的时间域里（DESIGN-TODO D22）：AI 心跳挂上这个域（决策拍的时间是域时间），
+	// ControllerHooks.Now 为 nil 时 Controller 的时间也取域时间（Domain.Now），FreezeFor 的期限与到期判断同一把尺子。
+	TimeDomain *timedomain.Domain
 }
 
 type controllerBeat struct {
@@ -59,8 +63,15 @@ func NewBeatController(hooks ControllerHooks, beat BeatConfig) (*Controller, err
 	if !slices.Contains(heartbeat.Periods[:], beat.Period) {
 		return nil, fmt.Errorf("ai: beat period %v is not one of heartbeat.Periods", beat.Period)
 	}
+	options := beat.Options
+	if beat.TimeDomain != nil {
+		options = append(slices.Clone(beat.Options), heartbeat.WithTimeDomain(beat.TimeDomain))
+		if hooks.Now == nil {
+			hooks.Now = beat.TimeDomain.Now
+		}
+	}
 	c := NewController(hooks)
-	c.beat = &controllerBeat{host: beat.Host, name: beat.Name, period: beat.Period, options: beat.Options}
+	c.beat = &controllerBeat{host: beat.Host, name: beat.Name, period: beat.Period, options: options}
 	return c, nil
 }
 

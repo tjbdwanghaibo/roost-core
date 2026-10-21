@@ -14,6 +14,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coreflow "github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // AI 心跳（D21 C4）与定时冻结（C3）。
@@ -243,5 +245,30 @@ func TestTheAIDecidesOnItsOwnHeartbeat(t *testing.T) {
 	paced.mu.Unlock()
 	if frozen || driver.Registered() != 1 || outside != 0 {
 		t.Fatalf("after the timed freeze: frozen %v registered %d decisions outside a transaction %d", frozen, driver.Registered(), outside)
+	}
+}
+
+type fixedDomainFields struct{ state timedomain.State }
+
+func (f *fixedDomainFields) TimeDomain() timedomain.State     { return f.state }
+func (f *fixedDomainFields) SetTimeDomain(s timedomain.State) { f.state = s }
+
+// D22：BeatConfig.TimeDomain 挂了场景的时间域时，没配 Now 钩子的 Controller 取域时间：FreezeFor 的期限与 AI 心跳
+// （域时间的 Beat.Now）判断到期用同一把尺子。
+func TestABeatControllerOnATimeDomainUsesDomainTime(t *testing.T) {
+	domain, err := timedomain.New(&fixedDomainFields{state: timedomain.State{AnchorBusinessNano: 1, AnchorDomainNano: 5e17, Rate: 1}}, timedomain.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, release := fctx.NewContext()
+	defer release()
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "ai-domain-test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	owner := &beatTestEntity{entity.NewEntityBase(2<<20, entity.EntityCategoryOther, true)}
+	c, err := NewBeatController(ControllerHooks{}, BeatConfig{Host: d.NewHost(owner), TimeDomain: domain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.now(), domain.Now(); !got.Equal(want) || got.Equal(execution.Now) {
+		t.Fatalf("a beat controller on a time domain reads %v, want the domain time %v (business %v)", got, want, execution.Now)
 	}
 }

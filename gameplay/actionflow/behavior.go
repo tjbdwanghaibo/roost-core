@@ -8,7 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -76,7 +76,8 @@ type BehaviorConfig struct {
 	Beat *BeatConfig
 	// Observer 可空。
 	Observer Observer
-	// Now 是业务时钟，nil 取 clock.Now（D-L3）。
+	// Now 是业务时钟，nil 时取本次执行冻结的业务时间 fctx.Now（D22-1）；Beat.TimeDomain 非 nil 时取域时间
+	// （Domain.Now）。动作与任务的上下文时间、计划步骤 Timeout 的起点都按它。
 	Now func() time.Time
 	// OnError 接收 runner 与任务的错误（回调 panic、延后命令失败等），可空。
 	OnError func(error)
@@ -98,13 +99,16 @@ func NewBehavior(owner entity.IThreadSafeEntity, config BehaviorConfig) (*Behavi
 	}
 	b := &Behavior{owner: owner, observer: config.Observer, now: config.Now, onError: config.OnError}
 	if config.Beat != nil {
-		b.host, b.beatName, b.beatOptions = config.Beat.Host, config.Beat.Name, config.Beat.Options
+		b.host, b.beatName, b.beatOptions = config.Beat.Host, config.Beat.Name, config.Beat.registrationOptions()
 		if b.beatName == "" {
 			b.beatName = DefaultBeatName
 		}
 	}
 	if b.now == nil {
-		b.now = clock.Now
+		b.now = fctx.Now
+		if config.Beat != nil && config.Beat.TimeDomain != nil {
+			b.now = config.Beat.TimeDomain.Now
+		}
 	}
 	runnerConfig := ActionRunnerConfig{
 		Registry:     config.Registry,

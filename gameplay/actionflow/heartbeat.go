@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
 // 心跳驱动的 runner（DESIGN-TODO D20 第 2 期）：一个实体的 ActionRunner 由该实体自己的心跳 tick。所有控制实体行为的
@@ -40,6 +41,18 @@ type BeatConfig struct {
 	Period time.Duration
 	// Options 传给 heartbeat.Host.Register（例如 WithDurability；缺省 async）。
 	Options []heartbeat.RegOption
+	// TimeDomain 非 nil 时实体在场景的时间域里（DESIGN-TODO D22）：组心跳挂上这个域（heartbeat.WithTimeDomain，
+	// 拍里的 ActionContext.Now / Elapsed 是域时间），心跳之外调用 runner（handler 里 Start / End 等）时 ActionContext.Now
+	// 也取域时间（Domain.Now，本条消息冻结），不论调用方传没传时间。nil 时业务时间是 fctx.Now（D22-1）。
+	TimeDomain *timedomain.Domain
+}
+
+// registrationOptions 是交给 heartbeat.Host.Register 的选项：Options 加上时间域。
+func (c BeatConfig) registrationOptions() []heartbeat.RegOption {
+	if c.TimeDomain == nil {
+		return c.Options
+	}
+	return append(slices.Clone(c.Options), heartbeat.WithTimeDomain(c.TimeDomain))
 }
 
 // BeatRunner 是心跳驱动的 ActionRunner 宿主。它的方法与 ActionRunner 一样只能在实体锁内调用（Nest handler、心跳
@@ -50,12 +63,15 @@ type BeatRunner struct {
 	name    string
 	period  time.Duration
 	options []heartbeat.RegOption
+	domain  *timedomain.Domain
 	onError func(error)
 
 	// groups 是各组的心跳登记与当前动作，组第一次有动作时登记、之后保留。
 	groups map[ActionGroup]*groupBeat
 	// elapsed 只在某个组的一拍 tick 期间非零，经 PopulateContext 填进 ActionContext.Elapsed。
 	elapsed time.Duration
+	// ticking 在某个组的一拍 tick 期间为 true：拍里的时间已经是 Beat.Now（挂了域时是域时间），populate 不再换。
+	ticking bool
 
 	userTransition func(ActionSnapshot, bool)
 	userFreeze     func(ActionGroup, bool)
@@ -92,7 +108,8 @@ func NewBeatRunner(config ActionRunnerConfig, beat BeatConfig) (*BeatRunner, err
 		host:           beat.Host,
 		name:           beat.Name,
 		period:         beat.Period,
-		options:        beat.Options,
+		options:        beat.registrationOptions(),
+		domain:         beat.TimeDomain,
 		onError:        config.Hooks.OnError,
 		groups:         make(map[ActionGroup]*groupBeat),
 		userTransition: config.Hooks.OnTransition,
@@ -232,14 +249,19 @@ func (b *BeatRunner) beat(group ActionGroup, beat heartbeat.Beat) error {
 		// 锁序上更早提交的切换已经让它空闲（Stop 生效前到达的拍）。
 		return nil
 	}
-	b.elapsed = beat.Elapsed
-	defer func() { b.elapsed = 0 }()
+	b.elapsed, b.ticking = beat.Elapsed, true
+	defer func() { b.elapsed, b.ticking = 0, false }()
 	b.report(b.runner.Tick(group, beat.Now))
 	return nil
 }
 
-// populate 填 Owner（业务没填时取心跳宿主的实体）与本拍的 Elapsed，再交给业务的上下文钩子。
+// populate 填 Owner（业务没填时取心跳宿主的实体）与本拍的 Elapsed，再交给业务的上下文钩子。挂了时间域时，心跳
+// 之外的调用（handler 里 Start / End 等）把 Now 换成本条消息的域时间。
 func (b *BeatRunner) populate(ctx *ActionContext, now time.Time) {
+	if b.domain != nil && !b.ticking {
+		now = b.domain.Now()
+		ctx.Now = now
+	}
 	switch {
 	case b.userPopulate != nil:
 		b.userPopulate(ctx, now)

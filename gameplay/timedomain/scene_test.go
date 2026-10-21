@@ -50,9 +50,9 @@ type walkAction struct {
 }
 
 func (*walkAction) Kind() actionflow.ActionKind { return 1 }
-func (a *walkAction) Start(ctx *actionflow.ActionContext) error {
+func (a *walkAction) Start(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult, error) {
 	a.started = ctx.Now
-	return nil
+	return false, actionflow.ActionResult{}, nil
 }
 func (*walkAction) Cancel(*actionflow.ActionContext, string) {}
 func (a *walkAction) Tick(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult) {
@@ -112,14 +112,23 @@ func TestSceneMembersActOnTheSceneTimeDomain(t *testing.T) {
 		Registry:     registry,
 		GroupForKind: func(actionflow.ActionKind) (actionflow.ActionGroup, bool) { return 1, true },
 		Hooks:        actionflow.ActionRunnerHooks{OnError: func(err error) { t.Errorf("runner: %v", err) }},
-	}, actionflow.BeatConfig{Host: host, Options: []heartbeat.RegOption{heartbeat.WithTimeDomain(scene)}})
+	}, actionflow.BeatConfig{Host: host, TimeDomain: scene})
 	if err != nil {
 		t.Fatal(err)
 	}
 	walk := &walkAction{}
-	// 心跳之外调用 runner 时不带时间就是业务时间（fctx.Now）；在场景里要域时间，显式传 scene.Now()。
-	if _, err := runner.Runner().Start(1, walk, 0, scene.Now()); err != nil {
-		t.Fatal(err)
+	// 心跳之外调用 runner（这里像 handler 一样在一次执行里）：挂了域，ActionContext.Now 是这次执行的域时间。
+	var startedAt time.Time
+	func() {
+		_, release := fctx.NewContext()
+		defer release()
+		startedAt = scene.Now()
+		if _, err := runner.Runner().Start(1, walk, 0, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if !walk.started.Equal(startedAt) {
+		t.Fatalf("an action started outside a beat saw Now %v, want the scene's domain time %v", walk.started, startedAt)
 	}
 	manager.Add(m)
 

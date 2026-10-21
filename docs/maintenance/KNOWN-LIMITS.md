@@ -77,7 +77,7 @@
 - **进程业务时钟与 Registry 业务时钟同源但不是同一个对象**：心跳与 entitytimer 驱动、`fctx.Now` 读进程业务时钟（App 启动时 `clock.SetOffset`），服务读 `app.BusinessClock(r)`。同一进程里起多个 App 且 `time.logic_offset` 不同时，进程级偏移是最后启动的那个（与 D22 之前 `fctx.Now` 的行为相同）。
 - **时间域：成员看到改倍率比场景晚一个发布**：场景事务提交后（`AfterCommit`）才发布；之间开始的成员消息按旧倍率。域时间对读者单调（取已交出的最大值），代价是改倍率前后成员与客户端的域时间差“发布延迟 × 倍率”（微秒到毫秒级），时停期间一直差这一点。
 - **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
-- **actionflow 只经心跳选项接域**：动作 tick 的 `ActionContext.Now` / `Elapsed` 是域时间；handler 里 `Start` / `End` 不带时间时是业务时间，要域时间须显式传 `Domain.Now()`。D21 正在改 actionflow，合入后再评估是否在 `BeatConfig` 上加域字段统一默认值。
+- **域要在构造时给**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域（成员换场景要重建行为组件，或不挂域、由业务自己传时间）。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
 - **技能 / Buff 没有自动接域**：技能 `Runtime` 的 tick 由业务在心跳里按域时间换算推进（guide §4D）；框架没有“按域时间推进 Runtime”的组件，`skill/combatcomponent` 也没接。
 - **没有业务接入与客户端插值示例**：game-demo 的场景没有挂时间域；客户端按同步下发的三个字段外推域时间的写法只在文档里，C# 客户端没有现成接口。
 - **生成工程消费夹具未实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，本轮没有在真实依赖上跑。
