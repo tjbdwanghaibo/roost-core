@@ -578,3 +578,76 @@ func TestTryBatchHandBackReasonsAndPoolRouting(t *testing.T) {
 		t.Fatalf("hand-back for unknown handler: %v, want ErrHandlerNotFound", reasons[short])
 	}
 }
+
+// 公平：一格心跳一次准入的批量作业积压不会让之后准入的普通消息等整格跑完，普通消息积压也不会饿死批量作业——两类就绪
+// 作业交替取。
+// 变异核对：批量作业与普通作业进同一条 FIFO（enqueueReady 不分 tryBatches）时，普通消息排在 10 个批量作业之后，
+// 本用例变红。
+func TestTryBatchAlternatesWithOrdinaryJobs(t *testing.T) {
+	ResetHandlersForTest()
+	t.Cleanup(ResetHandlersForTest)
+	getter := newMockGetter()
+	ids := make([]int64, 24)
+	for i := range ids {
+		ids[i] = mustBuildCastID(t, int64(8620+i), 1, nestLocalKind)
+		getter.Add(newMockEntity(ids[i], 1))
+	}
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var log eventLog
+	MustRegisterMemoryHandler(NewHandlerName("tb_fair_block"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		close(entered)
+		<-gate
+		return nil, nil
+	})
+	MustRegisterMemoryHandler(NewHandlerName("tb_fair_beat"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		log.add("beat")
+		return nil, nil
+	})
+	MustRegisterMemoryHandler(NewHandlerName("tb_fair_biz"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		log.add("biz")
+		return nil, nil
+	})
+	engine := startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 1, QueueCap: 64})
+	openGate := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(func() { openGate() }) // 调用当时的 openGate：每轮换新的 gate
+	run := func(admit func()) []string {
+		t.Helper()
+		entered = make(chan struct{})
+		gate = make(chan struct{})
+		openGate = sync.OnceFunc(func() { close(gate) })
+		if err := engine.Dispatch(context.Background(), NewHandlerName("tb_fair_block"), ids[0], nil); err != nil {
+			t.Fatal(err)
+		}
+		stagedSignal(t, entered)
+		log.mu.Lock()
+		log.events = nil
+		log.mu.Unlock()
+		admit()
+		openGate()
+		waitFor(t, "11 events", func() bool { return len(log.snapshot()) == 11 })
+		return log.snapshot()
+	}
+	hb := newHandBackRecorder()
+	beats := func(from, to int) {
+		for i := from; i < to; i++ {
+			if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{{Handler: NewHandlerName("tb_fair_beat"), ID: ids[i]}}, hb.handBack); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	bizs := func(from, to int) {
+		for i := from; i < to; i++ {
+			if err := engine.Dispatch(context.Background(), NewHandlerName("tb_fair_biz"), ids[i], nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// 10 个批量作业积压后准入的普通消息，至多排在一个批量作业之后。
+	if got := run(func() { beats(1, 11); bizs(11, 12) }); slices.Index(got, "biz") > 1 {
+		t.Fatalf("ordinary message waited behind the batch backlog: %v", got)
+	}
+	// 10 条普通消息积压后准入的批量作业，至多排在一条普通消息之后。
+	if got := run(func() { bizs(12, 22); beats(22, 23) }); slices.Index(got, "beat") > 1 {
+		t.Fatalf("batch job starved behind the ordinary backlog: %v", got)
+	}
+}

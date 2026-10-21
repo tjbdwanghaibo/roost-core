@@ -81,11 +81,15 @@ type dispatchLane struct {
 	config                                 WorkerPoolConfig
 	handler                                func(*Msg)
 	ready                                  readyJobs
-	waiting                                readyWaiting
-	queued                                 int // 尚未开始执行的外部请求，包括 ID 前驱等待。
-	readyCount                             int // 其中已经满足 ID 依赖的请求。
-	running                                int // 正在执行的外部请求；内部延续单独预算。
-	observation                            DispatchLaneStats
+	// tryBatches 是就绪的批量作业（DispatchTryBatch，只在业务通道），与 ready 交替取（见 take）：一格心跳一次准入几十个
+	// 批量作业，放在同一条 FIFO 里会让之后准入的普通消息等整格跑完。preferOrdinary 为 true 表示两类都有时下一次先取普通作业。
+	tryBatches     readyJobs
+	preferOrdinary bool
+	waiting        readyWaiting
+	queued         int // 尚未开始执行的外部请求，包括 ID 前驱等待。
+	readyCount     int // 其中已经满足 ID 依赖的请求。
+	running        int // 正在执行的外部请求；内部延续单独预算。
+	observation    DispatchLaneStats
 }
 
 // dispatchQueue 先登记 ID 顺序，再交给三种执行资源。I/O 池没有 ID 分槽；
@@ -287,14 +291,24 @@ func (q *dispatchQueue) pushContinuationLocked(lane int, msg *Msg) {
 // 避免续行在持续的外部负载下饥饿。调用方持有 q.mu。
 func (q *dispatchQueue) take(lane int) *dispatchJob {
 	state := &q.lanes[lane]
-	if lane != dispatchIOLane && state.continuations.head != nil && (state.preferContinuation || state.ready.head == nil) {
+	hasExternal := state.ready.head != nil || state.tryBatches.head != nil
+	if lane != dispatchIOLane && state.continuations.head != nil && (state.preferContinuation || !hasExternal) {
 		state.preferContinuation = false
 		state.continuationCount--
 		state.continuationRunning++
 		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane, state))
 		return state.continuations.pop()
 	}
-	if j := state.ready.pop(); j != nil {
+	// 普通作业与批量作业交替：两类都有时，取过一个批量作业后下一次先取普通作业，反之亦然；只有一类时照取。
+	// 就绪链里的作业都已没有未完成的同 ID 前驱（批量作业不登记同 ID 顺序），换先后不影响同 ID 顺序。
+	var j *dispatchJob
+	if state.tryBatches.head != nil && (state.ready.head == nil || !state.preferOrdinary) {
+		j = state.tryBatches.pop()
+		state.preferOrdinary = true
+	} else if j = state.ready.pop(); j != nil {
+		state.preferOrdinary = false
+	}
+	if j != nil {
 		state.queued--
 		state.readyCount--
 		state.running++
@@ -517,7 +531,11 @@ func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 		state.observation.MaxDependencyWait = max(state.observation.MaxDependencyWait, waited)
 	}
 	state.readyCount++
-	state.ready.push(j)
+	if j.tryBatch != nil {
+		state.tryBatches.push(j)
+	} else {
+		state.ready.push(j)
+	}
 	state.wake.Signal()
 }
 

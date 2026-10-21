@@ -29,6 +29,11 @@ import (
 // MaxTryBatchTargets 是一次 DispatchTryBatch 的目标数上限。
 const MaxTryBatchTargets = 1024
 
+// tryBatchGroup 是一次持 q.mu 安排（认领 / 转单目标 / 交回）的目标数上限：一组执行完后在同一次持锁里撤销本组
+// 认领并安排下一组，把逐目标的队列锁摊到一组上。代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组
+// 其余目标的执行时间（等在依赖队列里，不占 worker）。
+const tryBatchGroup = 8
+
 // tryBatchSlice 是一个 worker 连续执行同一批量作业的时间片：每个目标结束后检查，超过且还有剩余目标时把作业放回
 // 就绪链尾，让链上的普通作业先走（见设计 §5）。
 const tryBatchSlice = 200 * time.Microsecond
@@ -145,10 +150,12 @@ type tryBatchItem struct {
 // tryBatchJob 是一个批量作业：作业本体、认领标记、目标与执行进度。准入后归派发队列所有，结束后归还池。
 type tryBatchJob struct {
 	job dispatchJob
-	// claim 是认领标记：执行某个目标时临时登记为该 ID 的尾作业（q.tails[id] = &claim），之后准入的同 ID 作业对它建
-	// 依赖边。同一时刻一个批量作业至多认领一个目标。claimed 由 q.mu 保护。
-	claim   dispatchJob
-	claimed bool
+	// group 是当前一组目标（b.next 起至多 tryBatchGroup 个）的安排；claims[i] 是 group[i] 的认领标记：执行期间临时
+	// 登记为该 ID 的尾作业（q.tails[id] = &claims[i]），之后准入的同 ID 作业对它建依赖边。由持有作业的 worker 在
+	// q.mu 下写入与撤销。
+	group  [tryBatchGroup]tryBatchPlan
+	claims [tryBatchGroup]dispatchJob
+	groupN int
 
 	mgr      *NestMgr
 	lane     int
@@ -181,9 +188,15 @@ func (b *tryBatchJob) add(target TryBatchTarget, id int64, category entity.Entit
 func (b *tryBatchJob) recycle() {
 	clear(b.items)
 	clear(b.params)
-	successors := b.claim.successors[:0]
-	*b = tryBatchJob{items: b.items[:0], params: b.params[:0]}
-	b.claim.successors = successors
+	items, params := b.items[:0], b.params[:0]
+	var successors [tryBatchGroup][]*dispatchJob
+	for i := range b.claims {
+		successors[i] = b.claims[i].successors[:0]
+	}
+	*b = tryBatchJob{items: items, params: params}
+	for i := range b.claims {
+		b.claims[i].successors = successors[i]
+	}
 	tryBatchPool.Put(b)
 }
 
@@ -244,7 +257,7 @@ func (q *dispatchQueue) admitTryBatch(b *tryBatchJob) error {
 	return nil
 }
 
-// tryBatchStep 是 q.mu 下对下一个目标做出的安排。
+// tryBatchStep 是 q.mu 下对一个目标做出的安排。
 type tryBatchStep int
 
 const (
@@ -253,37 +266,89 @@ const (
 	tryBatchHandBack                      // 不执行，交回
 )
 
-// prepareTryBatchTargetLocked 为 b.items[b.next] 做安排：引擎已 fence 则交回；该 ID 有已准入、尚未完成的作业则
-// 当场转成单目标作业排在它后面（约束 1）；否则认领为该 ID 的尾作业（约束 2）。调用方持有 q.mu。
-func (q *dispatchQueue) prepareTryBatchTargetLocked(b *tryBatchJob) (tryBatchStep, error) {
-	item := &b.items[b.next]
-	if b.mgr.fenced.Load() {
-		return tryBatchHandBack, errTryBatchFenced
-	}
-	if q.tails[item.id] != nil {
-		if err := q.convertTryBatchTargetLocked(b, item); err != nil {
-			return tryBatchHandBack, err
-		}
-		return tryBatchConverted, nil
-	}
-	claim := &b.claim
-	claim.inlineID[0] = item.id
-	claim.ids = claim.inlineID[:]
-	claim.lane = b.lane
-	q.tails[item.id] = claim
-	b.claimed = true
-	return tryBatchRun, nil
+// tryBatchPlan 是组内一个目标的安排与结果。claimed 由 q.mu 保护；busy / handBack 由执行它的 worker 写。
+type tryBatchPlan struct {
+	step     tryBatchStep
+	claimed  bool
+	busy     bool  // 执行时实体锁 / 锁组取不到：撤销认领前转成单目标作业
+	handBack error // 非 nil 时交回
 }
 
-// releaseTryBatchClaimLocked 撤销认领：撤下尾登记，认领期间挂上来的后继就绪（与作业结束相同的步骤）。调用方持有 q.mu。
-func (q *dispatchQueue) releaseTryBatchClaimLocked(b *tryBatchJob) {
-	if !b.claimed {
-		return
+// prepareTryBatchGroupLocked 为 b.next 起至多 tryBatchGroup 个目标做安排：引擎已 fence 则交回；该 ID 有已准入、尚未
+// 完成的作业（q.tails 有登记）则当场转成单目标作业排在它后面（约束 1）；否则认领为该 ID 的尾作业（约束 2）。
+// 遇到本组已认领的同一个 ID（同一实体的两个登记）时本组到此为止，留给下一组，免得它被当成冲突。调用方持有 q.mu。
+func (q *dispatchQueue) prepareTryBatchGroupLocked(b *tryBatchJob) {
+	fenced := b.mgr.fenced.Load()
+	n := 0
+	for ; n < tryBatchGroup && b.next+n < len(b.items); n++ {
+		item := &b.items[b.next+n]
+		plan := &b.group[n]
+		*plan = tryBatchPlan{}
+		switch tail := q.tails[item.id]; {
+		case fenced:
+			plan.step, plan.handBack = tryBatchHandBack, errTryBatchFenced
+		case tail != nil && b.ownsClaim(tail):
+			b.groupN = n
+			return
+		case tail != nil:
+			if err := q.convertTryBatchTargetLocked(b, item); err != nil {
+				plan.step, plan.handBack = tryBatchHandBack, err
+			} else {
+				plan.step = tryBatchConverted
+			}
+		default:
+			claim := &b.claims[n]
+			claim.inlineID[0] = item.id
+			claim.ids = claim.inlineID[:]
+			claim.lane = b.lane
+			q.tails[item.id] = claim
+			plan.step, plan.claimed = tryBatchRun, true
+		}
 	}
-	q.releaseIDsLocked(&b.claim)
-	clear(b.claim.successors)
-	b.claim.successors = b.claim.successors[:0]
-	b.claimed = false
+	b.groupN = n
+}
+
+// ownsClaim 报告 tail 是不是本作业当前组里的一个认领标记。
+func (b *tryBatchJob) ownsClaim(tail *dispatchJob) bool {
+	for i := range b.claims {
+		if tail == &b.claims[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseTryBatchClaimsLocked 撤销本组仍登记着的认领，认领期间挂上来的后继就绪（与作业结束相同的 releaseIDsLocked）。
+// 调用方持有 q.mu。
+func (q *dispatchQueue) releaseTryBatchClaimsLocked(b *tryBatchJob) {
+	for i := range b.groupN {
+		plan := &b.group[i]
+		if !plan.claimed {
+			continue
+		}
+		claim := &b.claims[i]
+		q.releaseIDsLocked(claim)
+		clear(claim.successors)
+		claim.successors = claim.successors[:0]
+		plan.claimed = false
+	}
+}
+
+// finishTryBatchGroupLocked 收尾一组：执行时取不到锁的目标转成单目标作业（先挂在自己的认领后面），再撤销本组全部
+// 认领，认领期间挂上来的后继就绪（与作业结束相同的 releaseIDsLocked）。调用方持有 q.mu。
+func (q *dispatchQueue) finishTryBatchGroupLocked(b *tryBatchJob, start int) (converted int) {
+	for i := range b.groupN {
+		plan := &b.group[i]
+		if plan.busy {
+			if err := q.convertTryBatchTargetLocked(b, &b.items[start+i]); err != nil {
+				plan.handBack = err
+			} else {
+				converted++
+			}
+		}
+	}
+	q.releaseTryBatchClaimsLocked(b)
+	return converted
 }
 
 // convertTryBatchTargetLocked 把冲突的目标准入成一条单目标作业：消息与 Dispatch 建的相同（MsgTypeSingle、同一
@@ -325,11 +390,11 @@ func (q *dispatchQueue) yieldTryBatchLocked(lane int, state *dispatchLane, j *di
 }
 
 // runTryBatchLocked 执行一个批量作业，从 b.next 接着。调用时与返回时都持有 q.mu；返回时作业已结束（finishJobLocked）
-// 或已放回就绪链。每个目标：q.mu 下安排（交回 / 转单目标 / 认领）→ 不持锁执行 → q.mu 下撤销认领（执行时发现实体锁
-// 或锁组取不到则先转成单目标作业）并安排下一个 → 不持锁交回。
+// 或已放回就绪链。按组推进：q.mu 下安排一组（交回 / 转单目标 / 认领）→ 不持锁逐个执行已认领的 → q.mu 下收尾本组
+// （取锁失败的转单目标、撤销认领）并安排下一组 → 不持锁交回。
 func (q *dispatchQueue) runTryBatchLocked(lane int, state *dispatchLane, j *dispatchJob, contextOptions []fctx.Option) {
 	b := j.tryBatch
-	step, reason := q.prepareTryBatchTargetLocked(b)
+	q.prepareTryBatchGroupLocked(b)
 	q.mu.Unlock()
 	yield := false
 	goroutine.SafeFunc(func() {
@@ -338,46 +403,38 @@ func (q *dispatchQueue) runTryBatchLocked(lane int, state *dispatchLane, j *disp
 		exec := b.mgr.beginTryBatch(b)
 		defer exec.end()
 		for {
-			item := &b.items[b.next]
-			var handBack error
-			busy := false
-			switch step {
-			case tryBatchRun:
-				busy, handBack = exec.run(item)
-			case tryBatchConverted:
-				exec.converted++
-			case tryBatchHandBack:
-				handBack = reason
-			}
-			b.next++
-			now := exec.markItemDone()
-			q.mu.Lock()
-			if busy {
-				// 认领后实体锁 / 锁组取不到（锁在 Nest 作业顺序之外的持有者手里，例如别的 handler 的 Cast）：同样转成
-				// 单目标作业。它先挂在本目标的认领后面，撤销认领时就绪，之后与普通 Dispatch 一样取锁。
-				if err := q.convertTryBatchTargetLocked(b, item); err != nil {
-					handBack = err
-				} else {
+			start, n := b.next, b.groupN
+			for i := range n {
+				plan := &b.group[i]
+				switch plan.step {
+				case tryBatchRun:
+					plan.busy, plan.handBack = exec.run(&b.items[start+i])
+					exec.markItemDone()
+				case tryBatchConverted:
 					exec.converted++
 				}
 			}
-			q.releaseTryBatchClaimLocked(b)
+			b.next += n
+			now := time.Now()
+			q.mu.Lock()
+			exec.converted += q.finishTryBatchGroupLocked(b, start)
 			done := b.next >= len(b.items)
 			if !done {
 				if now.Sub(exec.start) >= tryBatchSlice {
 					yield = true
 				} else {
-					step, reason = q.prepareTryBatchTargetLocked(b)
+					// 下一组的安排写进 b.group，先把本组的交回取出来。
+					exec.collectHandBacks(b, start, n)
+					q.prepareTryBatchGroupLocked(b)
+					q.mu.Unlock()
+					exec.flushHandBacks(b)
+					continue
 				}
 			}
+			exec.collectHandBacks(b, start, n)
 			q.mu.Unlock()
-			if handBack != nil {
-				exec.handedBack++
-				b.callHandBack(item.target, normalizeAdmissionError(handBack))
-			}
-			if done || yield {
-				return
-			}
+			exec.flushHandBacks(b)
+			return
 		}
 	})
 	if !yield {
@@ -388,7 +445,7 @@ func (q *dispatchQueue) runTryBatchLocked(lane int, state *dispatchLane, j *disp
 		}
 	}
 	q.mu.Lock()
-	q.releaseTryBatchClaimLocked(b)
+	q.releaseTryBatchClaimsLocked(b) // 正常退出时本组认领已撤销；只在执行循环意外退出时还有残留
 	if yield {
 		q.yieldTryBatchLocked(lane, state, j)
 		return
@@ -421,6 +478,32 @@ type tryBatchExec struct {
 	failed      int
 	converted   int
 	handedBack  int
+	// returned 是本组要交回的目标，持 q.mu 时收集、放锁后调用 handBack。
+	returned []tryBatchReturned
+}
+
+type tryBatchReturned struct {
+	target TryBatchTarget
+	reason error
+}
+
+// collectHandBacks 收集组内要交回的目标（持 q.mu 时调用）。
+func (exec *tryBatchExec) collectHandBacks(b *tryBatchJob, start, n int) {
+	for i := range n {
+		if err := b.group[i].handBack; err != nil {
+			exec.returned = append(exec.returned, tryBatchReturned{target: b.items[start+i].target, reason: normalizeAdmissionError(err)})
+		}
+	}
+}
+
+// flushHandBacks 不持 q.mu 调用收集到的交回。
+func (exec *tryBatchExec) flushHandBacks(b *tryBatchJob) {
+	for i, r := range exec.returned {
+		exec.handedBack++
+		b.callHandBack(r.target, r.reason)
+		exec.returned[i] = tryBatchReturned{}
+	}
+	exec.returned = exec.returned[:0]
 }
 
 // beginTryBatch 建立本段的请求上下文（批的上下文快照与当前帧号）并登记当前消息。
@@ -451,10 +534,9 @@ func (exec *tryBatchExec) resetMsg(item *tryBatchItem) {
 	}
 }
 
-// markItemDone 记下一个目标结束的时刻（也是下一个目标的开始），返回它。
-func (exec *tryBatchExec) markItemDone() time.Time {
+// markItemDone 记下一个执行过的目标结束的时刻（也是下一个目标的开始）。
+func (exec *tryBatchExec) markItemDone() {
 	exec.itemStart = time.Now()
-	return exec.itemStart
 }
 
 // end 撤销当前消息登记与请求上下文，按批记指标。
