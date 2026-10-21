@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：持久视点与三目标权限恢复
+
+- 跟随 main D19 迁移深化消费者，旧 RelationSource 改为逻辑关系视野 DefineRelationView / SetViewMembers / AttachView，SpatialComponent 使用当前无 observer 参数的签名。
+- Player DAO 增加私有持久 VisionMask，通过同一次生成 Sender / Nest 读取已提交位置与权限；三静态目标真实 TCP 验收覆盖移动／回滚、附近未授权目标不下发、撤权 undo 与错服拒绝、最终空场景。建档、两次移动、撤权、到账共五条 strict 未投影记录后 SIGKILL，冷事实先比较、再重建视野，第三进程不恢复旧授权或重复发奖。
+- 动态目标、行军轨迹、侦察期限、该 Player 读取适配器的常驻部署和跨服位置／权限版本协议仍未验收；接法与范围见 SLG 手册。业务规则留在消费者，未修改框架运行时。
+
 ### SLG 深化视野：授权交集与定期重读
 
 - 固定视点先计算空间范围与联盟／侦察授权交集，再交 Interest 发布派生关系；真实 TCP 验证有权但远离、附近但无权、scout 越界均不下发目标。

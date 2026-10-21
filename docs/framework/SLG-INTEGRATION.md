@@ -82,7 +82,7 @@ bash scripts/test-slg-alliance.sh
 
 **证据边界**：协调器是实际子进程，两个 sid 客户端使用不同 NATS 连接但位于同一父进程；服务发现为固定列表，未验收 etcd、singleton 或自动 HA。协调器执行正常排空重启；丢失的是测试注入的应用确认，协调器未注入网络分区、SIGKILL 或 Redis 故障。Redis 数据跨进程读取成功不证明节点断电持久性。视野已经真实回环 TCP 与正式帧 Receiver 重建对象表，NATS 失效提示验证重复／乱序后的权威重读；不证明跨机即时撤权、正式账号鉴权或消息不丢。基础入口的联盟权威用业务 Redis CAS；Remote 扩展改用正式生成实体并验证 owner 交接，见下文；基础入口的原服对象重建只验证持久义务回执；Player 扩展启动独立原服测试子进程做实际发奖和 SIGKILL，但不是带登录网关的完整 game 服务。
 
-**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。空间候选与授权交集、定期权限重读已由下文深化入口验证；下一步接持久行军视点与多目标迷雾规则；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
+**问题归属与下一步**：可靠贡献意图、退盟政策、冻结屏障和永久奖励回执属于业务设计，本轮没有据此认定框架缺陷。Player 金币与永久到账回执已由下一节扩展验证。Remote 联盟权威与原服有界待发扫描也已由扩展接入。空间候选与授权交集、定期权限重读已由下文深化入口验证；持久 Player 视点与三目标授权筛选已接入，下一步补侦察期限及动态目标规则；邮件附件、常驻投递调度和长期归档另行接入。MMO 跨服世界 Boss 可复用窗口 / 意图 / 回执思路，但需要自己的队伍与副本权限规则，不能复用本次结果声称 MMO 联合主线已完成。
 
 ### Player 到账扩展：义务已 ACK，金币仍能恢复补发
 
@@ -103,7 +103,7 @@ ROOST_DATAENGINE_IT_MONGO_URI='mongodb://127.0.0.1:27017/?replicaSet=rs0' \
 bash scripts/test-slg-alliance-player.sh
 ```
 
-实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“建档＋两次空间移动＋到账”的四条已确认 strict WAL，断点确认投影数为 0、未投影数为 4，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串（含 X/Y/Coverage），再重建空间索引，并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
+实跑：`TestSLGAlliancePlayerDelivery` race 通过、无 skip，生成消费者 build / vet / ID / generate --check 通过。两个原服**分别**执行“建档＋两次空间移动＋侦察撤权＋到账”的五条已确认 strict WAL，断点确认投影数为 0、未投影数为 5，且原服 Delivered 尚未写入，再由父进程 SIGKILL 自己启动的子进程。恢复进程先比较完整钱包字符串（含 X/Y/Coverage/VisionMask），再重建空间索引，并解出 HomeSID、10 金币和唯一永久回执；八路重放与重新读取同一 Redis 义务不增币；错服、改归属、同身份改金额被拒。正常关闭后第三个进程再次冷加载与重放，最终两人各 10 金币、各一个到账身份。成功清理本次唯一数据库，失败保留 WAL、数据库与子进程日志；`ROOST_SLG_REWARD_KEEP=1` 可保留成功工程。
 
 本例不改变 ACK 的含义。`home.deliverPending` 已实现一次有界扫描与补发：按窗口／玩家排序，最多处理调用方指定的 1～128 个窗口，先调用 Player，再持久记录 Delivered。Player 调用失败不标完成；Player 已到账而 Delivered 未写时，重启仍能发现并重投。测试在这个间隙 SIGKILL，恢复时发现一条工作，第三进程发现零条；独立重放 Player 身份仍返回原余额。尚未接常驻后台循环、最终义务归档或无限期账本。固定两个角色的映射需由生产账号／角色注册表替换；这是内部受信任调用，未开放公网领奖 API。原服子进程按 sid 依次验收，不证明两服网络并发、进程自动拉起、Redis 故障、磁盘断电或 strict 结果未知。Gold 与永久回执经真实 WAL / Mongo 恢复，**Remote owner/fence 要看下一节的专门扩展；邮件附件与 Saga 未因本项通过而自动获得验收**。
 
@@ -160,7 +160,7 @@ bash scripts/test-slg-alliance-player.sh
 | 移动与覆盖 | 正式生成 `Sync_AllianceMove` → Nest Guard / undo → 手写 `SpatialComponent.MoveWithObservedBlocks` → DAO setter / Coverage JSON → strict WAL | handler 内特意 Flush，未提交的订阅仍不改变；显式回滚与非法块均不改钱包里的位置／覆盖，也不产生对象 |
 | 多点观察同一目标 | main 新接口 `Watch(playerID, point, ObserverView{})`；`Show(entityID, point)`；两个观察点在不同块，目标真实位置固定为 700,700 | 两个实际 TCP 客户端各看到同一 subject，一份真实位置；覆盖不复制实体，也不移动位置 |
 | 来源交接 | 第二观察端另有 scout 关系；移动提交只保留第一个覆盖块 | 移除第二块后 scout 保留对象；清除 scout 后第二端收到 Remove，第一端仍可见 |
-| 崩溃 | 建档、两次移动、奖励共四条 strict 已确认但未投影记录后 SIGKILL | 新进程先比较完整钱包字节（包含 X/Y/Coverage），再建同步与空间索引；不是先发移动命令覆盖冷事实 |
+| 崩溃 | 建档、两次移动、侦察撤权、奖励共五条 strict 已确认但未投影记录后 SIGKILL | 新进程先比较完整钱包字节（包含 X/Y/Coverage/VisionMask），再建同步与空间索引；不是先发移动命令覆盖冷事实 |
 | 冷重建 | 在尚未启动移动驱动的装配阶段，读取已加载 DAO → EnableSync / Register → Show → QueueObservedBlocks → Watch → Flush | 恢复端与第三进程均重建“第一端有对象、第二端无对象”，位置仍为 700,700；随后奖励重投不增币 |
 
 冷重建的 `QueueObservedBlocks` 是已提交事实的索引恢复；在线改位置应统一走 SpatialComponent 与 Nest，不能把直接重建接口当作绕过提交门的写入口。示例地图／网格配置固定，Coverage 中的块号只属于本 Interest；正式产品地图配置升级需要版本或稳定业务坐标转换，不能直接沿用旧块号。
@@ -169,7 +169,7 @@ bash scripts/test-slg-alliance-player.sh
 
 ### 授权交集与自动重读：漏通知后也能撤权
 
-深化入口的 [视野投影](../../scripts/testdata/slg-alliance/runtime_test.go) 先计算 `inRange && (member.Active || scout)`，再分别发布已经筛过的 alliance / scout 关系；隐藏目标不登记到自动空间订阅源。固定教学地图 1000×1000、目标 (10,10)、范围半径 100，坐标越界或缺失即不可见。两个视点是测试中的服务器输入，尚未接到上一节持久 Player 位置，不能据此宣称多目标行军迷雾已经完成。
+深化入口的 [视野投影](../../scripts/testdata/slg-alliance/runtime_test.go) 先计算 `inRange && (member.Active || scout)`，再分别发布已经筛过的 alliance / scout 关系；隐藏目标不登记到自动空间订阅源。固定教学地图 1000×1000、目标 (10,10)、范围半径 100，坐标越界或缺失即不可见。此处两个视点仍是测试中的服务器输入；下面另有原服消费者把已提交 Player 位置与侦察位图接入三目标筛选。二者尚未统一为跨服位置／权限版本协议。
 
 [permissionLoop](../../scripts/testdata/slg-alliance/permission_loop.go) 串行执行初次读取、定时重读和通知唤醒；真实 NATS 回调只校验代际并 notify。最高代际用原子值保存，唤醒队列容量为 1；重复或旧通知不能降低下限，也不会堆积无限待办。每次刷新先 hold，再用有期限的 context 读取权威，成功才更新关系、Ready 和 Flush；失败保持 held，下一次 ticker 重试。读取实现必须遵守 context，循环本身不能强制终止不响应取消的 I/O。实例可由服务启动生命周期运行、关闭时 cancel 并等待返回；本例在测试主 goroutine 运行真实 ticker，没有自动部署常驻服务。
 
@@ -182,6 +182,29 @@ bash scripts/test-slg-alliance-player.sh
 **最后一个对象撤销的接入修正**：首次测试发现服务器订阅已清空，Bob 客户端仍保留目标。原因是 `HoldSession` 重置基线，语义是接收端需要重新建立状态；当前编码器没有对象时不发空 Full，不能把它单独当作“暂停然后继续发 Remove”。深化入口保留无敏感信息的控制 subject 98，每次新 epoch 的 Full 至少携带 `{"view":true}`；Receiver 先清空场景表，再忽略控制标记。因此最后目标撤销也能清掉旧对象，重连时同样重新订阅标记。此为业务接线修正，未修改框架或协议。
 
 每次 hold/ready 可能重发 Full，重读间隔与超时的毫秒值只是验收设置，不是容量或最大撤权延迟承诺。客户端已收到的信息无法撤回；失败期间只禁止新发布。跨机传播、常驻服务接线、持久侦察权限／期限、位置与权限的联合版本和多目标扇出仍需独立验收。
+
+### 持久视点与三目标筛选：移动和撤权共同恢复
+
+[newDurableVision](../../scripts/testdata/slg-alliance/player/vision_test.go) 通过正式生成 `Sync_AllianceWallet` 在同一次 Nest 读中取得 X/Y 和私有 VisionMask，再计算半径与授权交集。隐藏目标不 Show 到公共空间 Interest；筛选结果用逻辑关系视野 901 的 `SetViewMembers` 发布，只挂接到获准客户端。三个静态目标为 501=(700,700)、502=(710,700)、503=(800,800)，初始仅授权 501 和 503；半径 50 是教学规则。
+
+| 过程 | 实际 TCP 对象表 |
+| --- | --- |
+| Player 建档在 (800,800) | 只看到 503；远处获准的 501 不下发 |
+| 移动回滚或非法覆盖 | 持久位置不变，仍只有 503 |
+| 移动提交到 (700,700) | 503 移除、501 出现；附近未授权的 502 始终缺席 |
+| 撤销 501 的事务回滚／错误原服调用 | VisionMask 不变，仍可见 501 |
+| 原服提交撤权 | 第一个客户端收到带控制标记的新 Full，场景清空；第二客户端没有这份权限，全程无目标 |
+| SIGKILL 后恢复、第三进程复核 | 先比较包含位置／权限的完整冷事实，随后重新读取并筛选，501 不复活；钱包重投仍不重复到账 |
+
+`VisionMask` 只持久化、不参与同步；客户端对象载荷只有 `{"target":目标ID}`，逐包校验不带钱包、位图或未授权目标。常驻控制标记沿用上一节的空场景重建方式。生成 handler 的撤权注入失败点只供 undo 验收，正式业务应由受信任权限服务调用，不允许客户端设置位图。
+
+这条链验证了持久观察位置、有限多目标和永久撤权的联合恢复。目标位置仍为固定地图配置，未实现敌方目标 DAO、行军速度／轨迹、障碍遮挡、侦察过期或大量目标索引；刷新在事务后显式调用，尚未把此 Player 读取适配器装进常驻服务循环。移动提交到刷新之间存在窗口，不能据此承诺跨服即时隐身。
+
+### main 视野 API 迁移
+
+main 已删除 `RelationSource`：业务现在先 `DefineRelationView(viewID, profile)`，再 `AttachView(playerID, viewID)`，用 `SetViewMembers` 修改目标集合。深化联盟分别为每个玩家定义 alliance / scout 逻辑视野；多块空间验收的 scout 视野与空间视野仍按持有计数合并，删除一个来源不影响另一个。持久目标筛选使用独立关系视野，避免未授权对象从公共空间视野进入客户端。
+
+`NewSpatialComponent` 不再接 observer 布尔参数，跟随实体的空间视野由新政策统一推进；位置仍通过 Nest 提交门修改。本轮按 main 契约迁移并执行 policy 回归和真实消费者，没有保留旧 Relation API 兼容层。
 
 ### main 新契约接入：逻辑库与物理库分开
 
@@ -328,7 +351,7 @@ SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事�
 | 方向 | 框架已有（正式接口） | 业务要做 | 框架现在没有（不要假设） |
 | --- | --- | --- | --- |
 | 跨服联盟 / 国战权威 | Remote 托管实体的 owner / lease / fence：`ClaimRemoteOwnership`、`EnterRemoteSharedMode`、`TransferRemoteOwnership`，旧 owner 写入被拒（[Remote 指南](guide/05-remote-mirror.md)）；Mirror 只读快照；跨服务多步协作用 [Saga](guide/06-saga.md) / effect | 联盟成员、权限、贡献意图这些业务事实与它们的条件更新；名称唯一、成员上限等唯一性规则 | 自动选主后的业务续跑策略、玩家（Player）随联盟跨 sid 迁移；本例只演练显式交接，不覆盖 lease 中途过期、跨机分区 |
-| 战争迷雾 / 侦察 / 联盟视野 | Interest 的关系来源归并（`Relation(name).Set/Clear`，最后一个来源撤销才退订）、Block AOI 与 `SpatialComponent.MoveWithObservedBlocks`、Profile 字段白名单、Manager 的 `HoldSession` / `ReadySession`、`frame.Receiver` 拒绝旧 epoch 帧（[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md)） | 侦察 / 迷雾规则产生“谁对什么有权”的授权；权限读取失败时先停发布；不可见对象的敏感字段不下发 | 跨服撤权传播协议（每服 Interest 只管本服会话，权限变化怎样通知各服、允许多大延迟由业务定义）；已经下发给客户端的信息无法收回，held 只停止后续发布 |
+| 战争迷雾 / 侦察 / 联盟视野 | Interest 的关系来源归并（`DefineRelationView / SetViewMembers / AttachView`，最后一个来源撤销才退订）、Block AOI 与 `SpatialComponent.MoveWithObservedBlocks`、Profile 字段白名单、Manager 的 `HoldSession` / `ReadySession`、`frame.Receiver` 拒绝旧 epoch 帧（[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md)） | 侦察 / 迷雾规则产生“谁对什么有权”的授权；权限读取失败时先停发布；不可见对象的敏感字段不下发 | 跨服撤权传播协议（每服 Interest 只管本服会话，权限变化怎样通知各服、允许多大延迟由业务定义）；已经下发给客户端的信息无法收回，held 只停止后续发布 |
 | 赛季 / 联盟活动 / 跨服积分 | [activity 协调器](../../service/activity/)：`OpenActivity`、`NotifyPhase`、`ApplyProgress`（按请求身份去重，去重只在 `ReservationTTL` 内有效）、`OwedDispatches` / `AttemptDispatch` / `AckDispatch`；demo 的 [ActivityRunner](../../demo/internal/service/game/activity.go.tmpl) 是接线参考 | 窗口身份、参与服集合（从活动组与存活事实取得）、持久贡献意图与补报、结算前冻结、原服奖励义务账本与 Player 永久到账回执、补发与人工对账政策 | 贡献意图 / 补报的通用组件（要业务自己持久化）；Redis 义务账本与 Player DAO 之间的分布式原子事务（只能“先持久接收义务、再可重试到账”）；常驻的原服补发调度 |
 
 **活动学习顺序**（demo 的 `ActivityRunner`）：`openWindow` 调 `OpenActivity`，expected 集合按活动组与存活查询取得，路由分组不等于每个服此刻在线；本服 World 的持久期限到点后 `NotifyPhaseDue` 通知协调器，协调器不靠自己的时钟启动阶段，第一个服通知后才开始宽限窗口（[types.go](../../service/activity/types.go)）；业务成功事实形成稳定贡献身份经 `Contribute` 上报；`AttemptDispatch` 取得结算投递，`settle` 发奖后 `AckDispatch`。投递确认不等于玩家已领取。demo 的尽力贡献失败不补报是已接受取舍；赛季若要求不漏计，按下面的联合链路做持久意图与补报。
