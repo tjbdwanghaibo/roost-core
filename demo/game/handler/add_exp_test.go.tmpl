@@ -86,7 +86,7 @@ func TestWorldExperienceOverflowLeavesTheDungeonClaimUnpaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	level := subject.ProfileComp().Level()
-	_, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(context.Background(), subject.ID(), counters.ID(), "overflow-run", player.ExpPerLevel, now, now, clearsSeason)
+	_, err := syncsender.NewClaimDungeonSender(client).MultiSync_ClaimDungeon(context.Background(), subject.ID(), counters.ID(), "overflow-run", player.ExpPerLevel, now, clearsSeason)
 	if err == nil || subject.ProfileComp().DungeonRunClaimed("overflow-run") || subject.ProfileComp().DungeonClears(clearsSeason) != 0 || subject.ProfileComp().Level() != level || subject.Dao().GetExp() != 0 || counters.StatsComp().Snapshot().ExpGranted != math.MaxInt64 || len(committer.records) != 0 {
 		t.Fatalf("world overflow left a claim or reward committed: err=%v", err)
 	}

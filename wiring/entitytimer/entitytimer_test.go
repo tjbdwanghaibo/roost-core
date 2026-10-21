@@ -11,12 +11,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coretimer "github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// 正式 Mod 链路：Provide 把 Registry 里的 Nest 客户端与 App 业务时钟交给驱动，Start / Stop 管投递循环；
-// 没有 Nest 客户端时在 Provide 点名拒绝。
-func TestModBindsNestAndTheBusinessClock(t *testing.T) {
+// 正式 Mod 链路：Provide 把 Registry 里的 Nest 客户端交给驱动，业务时间是进程业务时钟（执行里冻结的 fctx.Now），
+// Start / Stop 管投递循环；没有 Nest 客户端时在 Provide 点名拒绝。
+func TestModBindsNestAndReadsTheFrozenBusinessTime(t *testing.T) {
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	driver := coretimer.NewDriver(coretimer.Config{Name: "wiring.timer", Handler: nest.NewHandlerName("handlerTickWiringTimer")})
 	mod := NewMod(access, driver)
@@ -33,9 +35,10 @@ func TestModBindsNestAndTheBusinessClock(t *testing.T) {
 		t.Fatalf("Provide without nest = %v", err)
 	}
 
-	// App 业务时钟 = 真实时间 + time.logic_offset；偏移一年，驱动的时间必须跟着走。
+	// 进程业务时钟 = 真实时间 + time.logic_offset（App 启动时设偏移，这里照做）；偏移一年，驱动的时间必须跟着走。
 	offset := 365 * 24 * time.Hour
-	cfg.Set("time.logic_offset", offset.String())
+	clock.SetOffset(offset)
+	t.Cleanup(clock.Reset)
 	r := app.NewRegistry(cfg)
 	engine := nest.NewEngine(nest.NestOptionWithGetter(access))
 	if err := r.Register(mods.ModNest, engine); err != nil {
@@ -44,9 +47,14 @@ func TestModBindsNestAndTheBusinessClock(t *testing.T) {
 	if err := mod.Provide(r); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driver.Now(), app.BusinessClock(r).Now(); got.Sub(want).Abs() > time.Second || time.Until(got) < offset-time.Minute {
-		t.Fatalf("driver clock = %v, want the app business clock %v (offset %v)", got, want, offset)
+	if got := driver.Now(); time.Until(got) < offset-time.Minute {
+		t.Fatalf("driver clock = %v, want the process business clock (offset %v)", got, offset)
 	}
+	message, release := fctx.NewContext()
+	if got, want := driver.Now(), time.UnixMilli(message.Now.UnixMilli()); !got.Equal(want) {
+		t.Fatalf("driver clock inside an execution = %v, want the execution's frozen business time %v", got, want)
+	}
+	release()
 	if err := mod.Start(); err != nil {
 		t.Fatal(err)
 	}

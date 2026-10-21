@@ -3,7 +3,7 @@ package actionflow
 import (
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"math"
 	"sort"
 	"sync"
@@ -14,6 +14,14 @@ var (
 	ErrActionGroupInvalid = errors.New("actionflow: action group is invalid")
 	ErrActionGroupFrozen  = errors.New("actionflow: action group is frozen")
 	ErrActionIDExhausted  = errors.New("actionflow: action id exhausted")
+	// ErrActionGroupNotFrozen：Recover 的组没有被冻结（Freeze / Recover 不成对，计数不会变成负数）。
+	ErrActionGroupNotFrozen = errors.New("actionflow: action group is not frozen")
+	// ErrActionNotFound：EndAction 的 ID 既不是某组的当前动作，也不在排队中（已经结束，或从未分配）。
+	ErrActionNotFound = errors.New("actionflow: action not found")
+	// ErrReplaceRejected：同组当前动作（Replacer）拒绝被新动作取代。
+	ErrReplaceRejected = errors.New("actionflow: current action rejects replacement")
+	// ErrBlockedByGroup：另一组的当前动作按 ActionRunnerConfig.Conflict 挡住了新动作。
+	ErrBlockedByGroup = errors.New("actionflow: blocked by another group's running action")
 	// ErrDeferredQueueFull：一次最外层调用里，回调发起的待执行命令超过
 	// ActionRunnerConfig.MaxDeferredCommands。被拒的 Start / Enqueue 不分配 ID。
 	ErrDeferredQueueFull = errors.New("actionflow: deferred command queue is full")
@@ -46,13 +54,34 @@ type ActionRunnerHooks struct {
 	OnTransition    func(ActionSnapshot, bool)
 	OnEnded         func(ActionSnapshot, ActionReason)
 	OnError         func(error)
+	// OnFreeze 在组的冻结状态切换时调用：计数从 0 变 1 时 frozen=true，回到 0 时 frozen=false（BeatRunner 据此停 /
+	// 恢复组的心跳）。只做记账，不要在里面改 runner。
+	OnFreeze func(group ActionGroup, frozen bool)
 }
+
+// Conflict 是跨组冲突规则的结论（D21 A3，对照 ssr 的 NeedCancelCurAction 矩阵，改为业务配置的函数）。
+type Conflict uint8
+
+const (
+	// NoConflict：两组互不影响（缺省）。
+	NoConflict Conflict = iota
+	// BlockIncoming：另一组正在运行的动作挡住新动作：直接调用时 Start 返回 ErrBlockedByGroup，回调里延后的 Start
+	// 与排队项以失败状态结束。
+	BlockIncoming
+	// PreemptRunning：先取消另一组正在运行的动作（取消状态的 OnEnded；不推进那一组的队列），再启动新动作。
+	PreemptRunning
+)
 
 // ActionRunnerConfig 是 ActionRunner 的注册表、种类到组的映射、钩子与延后队列上限。
 type ActionRunnerConfig struct {
 	Registry     *Registry
 	GroupForKind func(ActionKind) (ActionGroup, bool)
 	Hooks        ActionRunnerHooks
+	// Conflict 是可选的跨组冲突规则：一个动作要启动（Start，或排队项成为当前动作）时，对其他每个有当前动作的组
+	// （按组号升序）调用 Conflict(running, incoming)。任一组 BlockIncoming 即拒绝新动作，什么都不改；否则取消全部
+	// PreemptRunning 的组的当前动作，再按同组规则（Replacer）启动。nil 表示没有跨组规则。只做判断，panic 按
+	// NoConflict 处理并经 OnError 报告。
+	Conflict func(running, incoming ActionSnapshot) Conflict
 	// MaxDeferredCommands 限制一次最外层调用里同时待执行的延后命令数（回调发起的变更），
 	// 0 取默认 64。超出时变更方法返回 ErrDeferredQueueFull。
 	MaxDeferredCommands int
@@ -63,9 +92,10 @@ type ActionRunnerConfig struct {
 
 type actionEntry struct{ ActionSnapshot }
 type actionGroupState struct {
-	frozen bool
-	cur    *actionEntry
-	next   []*actionEntry
+	// freezes 是冻结计数（Freeze 加一、Recover 减一），大于 0 即冻结。
+	freezes int
+	cur     *actionEntry
+	next    []*actionEntry
 	// advancing 表示延后队列里已有一条“推进本组队列”的内部命令，避免重复登记。
 	advancing bool
 }
@@ -83,6 +113,9 @@ const (
 	opClearQueue
 	opClearMission
 	opRecover
+	opEndAction
+	// opInterrupt 是 Freeze(FreezeCancel) 引出的命令：取消组的当前动作（不推进队列，组已冻结）。
+	opInterrupt
 	// opAdvance 是内部命令：组空出来（结束、启动失败、Enqueue 到空闲组、Recover）后启动
 	// 队首。它也排在延后队列里，所以同一时刻回调里显式发起的 Start 先执行、排队项不会被
 	// “先启动再被替换”。
@@ -107,6 +140,10 @@ func (op commandOp) String() string {
 		return "clear mission"
 	case opRecover:
 		return "recover"
+	case opEndAction:
+		return "end action"
+	case opInterrupt:
+		return "freeze interrupt"
 	case opAdvance:
 		return "advance queue"
 	default:
@@ -122,6 +159,7 @@ type runnerCommand struct {
 	force     bool
 	reason    ActionReason
 	missionID int64
+	actionID  int64 // opEndAction
 	// outer 表示命令属于最外层调用自己（它本身，或它直接引出的队列推进）：错误返回给
 	// 最外层调用方。回调发起的命令及其引出的推进错误经 OnError 报告——发起它的回调早已
 	// 拿到 nil 返回。
@@ -132,7 +170,7 @@ type runnerCommand struct {
 //
 // 回调里的变更延后执行：动作的 Start / Tick / Cancel 和
 // OnQueued / OnTransition / OnEnded 钩子都在某次最外层调用“执行中”运行；这期间对本 runner
-// 的 Start、Enqueue、Tick、End、EndAll、ClearQueue、ClearMission、Recover 不立即生效，而是
+// 的 Start、Enqueue、Tick、End、EndAction、EndAll、ClearQueue、ClearMission、Recover 不立即生效，而是
 // 按发起顺序进延后队列，最外层调用做完自己那一步后依次执行（执行中引出的回调再发起的
 // 命令接着排在后面），全部执行完才返回。所以任一回调运行期间当前位、队列都不会被改，
 // 不需要在每个回调点之后事后比对。
@@ -142,13 +180,14 @@ type runnerCommand struct {
 //     启动（组已冻结、被截停）也发一次失败 / 取消状态的 OnEnded，ai.TaskflowAction 这类按 ID
 //     等结束的调用方不会挂住。
 //   - 延后命令按“组 / 任务”而非发起时的快照解释，等价于回调返回后立刻按序调用。
-//   - Freeze 只置标志、不触发回调，始终立即生效；Update 在回调里立即对当前动作调用 fn。
+//   - Freeze 的计数始终立即生效（FreezeCancel 的打断照常延后）；Update 在回调里立即对当前动作调用 fn。
 //     读方法（Current、QueueLength、Pending 等）在回调里读到的是尚未执行延后命令的状态。
 //   - 队列有界（MaxDeferredCommands → ErrDeferredQueueFull），一次最外层调用执行的命令
 //     总数有界（MaxDeferredSteps → ErrDeferredRunaway），回调互相触发不会无限执行。
 type ActionRunner struct {
 	registry     *Registry
 	groupForKind func(ActionKind) (ActionGroup, bool)
+	conflict     func(running, incoming ActionSnapshot) Conflict
 	hooks        ActionRunnerHooks
 	nextID       int64
 	groups       map[ActionGroup]*actionGroupState
@@ -175,6 +214,7 @@ func NewActionRunner(config ActionRunnerConfig) (*ActionRunner, error) {
 	runner := &ActionRunner{
 		registry:         config.Registry,
 		groupForKind:     config.GroupForKind,
+		conflict:         config.Conflict,
 		hooks:            config.Hooks,
 		groups:           make(map[ActionGroup]*actionGroupState),
 		maxDeferred:      config.MaxDeferredCommands,
@@ -203,7 +243,7 @@ func (r *ActionRunner) Start(kind ActionKind, param any, missionID int64, now ti
 	}
 	if !r.executing {
 		// 立即执行：冻结在构建前就拒绝，不消耗 ID（与延后前的行为一致）。
-		if unit := r.groups[group]; unit != nil && unit.frozen {
+		if unit := r.groups[group]; unit != nil && unit.freezes > 0 {
 			return 0, ErrActionGroupFrozen
 		}
 	}
@@ -327,16 +367,59 @@ func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionR
 	return r.submit(runnerCommand{op: opClearMission, missionID: missionID, force: cancel, reason: reason})
 }
 
-// Freeze 冻结组：之后的 Start 被拒绝，队列不再推进，直到 Recover。
-func (r *ActionRunner) Freeze(group ActionGroup) { r.group(group).frozen = true }
-
-// Frozen 报告组是否被冻结。
-func (r *ActionRunner) Frozen(group ActionGroup) bool {
-	unit := r.groups[group]
-	return unit != nil && unit.frozen
+// EndAction 按 ID 结束一个动作（D21 A4）：是某组的当前动作时按 force 结束（force 时调 Cancel、取消状态）并推进
+// 该组队列；在排队中时移出队列并发一次取消状态的 OnEnded。直接调用时找不到返回 ErrActionNotFound；在回调里调用时
+// 延后执行，执行时已经结束的动作被忽略（不报告）。
+func (r *ActionRunner) EndAction(id int64, force bool, reason ActionReason) error {
+	if id <= 0 {
+		return ErrActionNotFound
+	}
+	return r.submit(runnerCommand{op: opEndAction, actionID: id, force: force, reason: reason})
 }
 
-// Recover 解除组的冻结；组空闲时随即推进队列。在回调里调用时延后执行。
+// FreezeMode 是冻结对组的当前动作的处理（D21 A5）。
+type FreezeMode uint8
+
+const (
+	// FreezePause：暂停——当前动作留在组里但不被 tick，拒绝新动作，队列不推进；解冻后当前动作接着跑。
+	FreezePause FreezeMode = iota
+	// FreezeCancel：打断——取消当前动作（取消状态的 OnEnded，原因 "action group frozen"），其余同 FreezePause；
+	// 排队项保留，解冻后推进。对照 ssr 的 Frozen（定身打断移动）。
+	FreezeCancel
+)
+
+// Freeze 冻结组（D21 A5）：冻结是计数的，多个来源（定身、缴械、剧情……）可以同时冻结同一组，每次 Freeze 对应一次
+// Recover，计数归零才解冻。冻结期间 Start 被拒绝（ErrActionGroupFrozen）、当前动作不被 tick、队列不推进。计数
+// 立即生效（不延后）；mode 为 FreezeCancel 时还取消组的当前动作——这一步有回调，在回调里调用时延后执行。返回的
+// 错误只来自被打断动作的 Cancel。
+func (r *ActionRunner) Freeze(group ActionGroup, mode FreezeMode) error {
+	unit := r.group(group)
+	unit.freezes++
+	if unit.freezes == 1 {
+		r.freezeChanged(group, true)
+	}
+	if mode != FreezeCancel {
+		return nil
+	}
+	return r.submit(runnerCommand{op: opInterrupt, group: group})
+}
+
+// Frozen 报告组是否被冻结（计数大于 0）。
+func (r *ActionRunner) Frozen(group ActionGroup) bool {
+	unit := r.groups[group]
+	return unit != nil && unit.freezes > 0
+}
+
+// FreezeCount 返回组的冻结计数（诊断用）。
+func (r *ActionRunner) FreezeCount(group ActionGroup) int {
+	if unit := r.groups[group]; unit != nil {
+		return unit.freezes
+	}
+	return 0
+}
+
+// Recover 撤销一次 Freeze；计数归零时解冻，组空闲则随即推进队列。没有冻结时返回 ErrActionGroupNotFrozen（直接
+// 调用）或经 OnError 报告（回调里）。在回调里调用时延后执行。
 func (r *ActionRunner) Recover(group ActionGroup, now time.Time) error {
 	return r.submit(runnerCommand{op: opRecover, group: group, now: now})
 }
@@ -468,7 +551,7 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 		unit := r.group(cmd.group)
 		unit.next = append(unit.next, cmd.entry)
 		r.queued(cmd.entry)
-		if unit.cur == nil && !unit.frozen {
+		if unit.cur == nil && unit.freezes == 0 {
 			r.scheduleAdvance(unit, cmd.group, time.Time{})
 		}
 		return nil
@@ -505,11 +588,28 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 		return errors.Join(errs...)
 	case opRecover:
 		unit := r.group(cmd.group)
-		unit.frozen = false
+		if unit.freezes == 0 {
+			return ErrActionGroupNotFrozen
+		}
+		unit.freezes--
+		if unit.freezes > 0 {
+			return nil
+		}
+		r.freezeChanged(cmd.group, false)
 		if unit.cur == nil {
 			r.scheduleAdvance(unit, cmd.group, cmd.now)
 		}
 		return nil
+	case opEndAction:
+		return r.applyEndAction(cmd)
+	case opInterrupt:
+		unit := r.groups[cmd.group]
+		if unit == nil || unit.cur == nil || unit.freezes == 0 {
+			return nil
+		}
+		reason := ActionReason{Message: "action group frozen", Err: ErrActionGroupFrozen,
+			Result: ActionResult{Status: ActionStatusCanceled, Reason: "action group frozen"}}
+		return r.finish(unit, true, reason, false)
 	case opAdvance:
 		return r.applyAdvance(cmd)
 	default:
@@ -523,15 +623,37 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 // 被替换动作的 Cancel 失败（panic）只经 OnError 报告，不阻止新动作启动：finish 已经把旧动作结束（清当前位、发
 // OnEnded），若在这里整体返回，新动作既不启动也没有 OnEnded——回调里交出的 ID 永远没有结论，直接调用时组空着、
 // 队列也不推进。Start 的错误只表示请求的动作没有在运行。
+//
+// 判定顺序（D21 A2 / A3）：冻结 → 跨组冲突（任一 BlockIncoming 拒绝，什么都不改）→ 同组当前动作的 Replacer
+// （Keep：新动作以取消结束；Reject：拒绝）→ 取消要抢占的其他组的当前动作 → 取代本组当前动作 → 启动。被拒绝的
+// 新动作：直接调用时返回错误、不发 OnEnded（与冻结一致，调用方没拿到 ID）；延后的（ID 已交出）发一次失败状态的
+// OnEnded。
 func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 	unit := r.group(cmd.group)
 	entry := cmd.entry
-	if unit.frozen {
+	refuse := func(err error) error {
 		if !cmd.outer {
-			r.ended(entry, NewActionErrorReason(ErrActionGroupFrozen))
+			r.ended(entry, NewActionErrorReason(err))
 		}
-		return ErrActionGroupFrozen
+		return err
 	}
+	if unit.freezes > 0 {
+		return refuse(ErrActionGroupFrozen)
+	}
+	preempt, err := r.crossGroup(entry)
+	if err != nil {
+		return refuse(err)
+	}
+	if unit.cur != nil {
+		switch r.replaceDecision(unit.cur, entry, cmd.now) {
+		case ReplaceKeep:
+			r.ended(entry, ActionReason{Message: "kept current action", Result: ActionResult{Status: ActionStatusCanceled, Reason: "kept current action"}})
+			return nil
+		case ReplaceReject:
+			return refuse(ErrReplaceRejected)
+		}
+	}
+	r.preempt(preempt, entry)
 	if unit.cur != nil {
 		replaced := unit.cur.ID
 		if err := r.finish(unit, true, NewActionReason("replaced by next action"), false); err != nil {
@@ -541,9 +663,91 @@ func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 	return r.start(unit, entry, cmd.now)
 }
 
+// crossGroup 按 Conflict 判定其他组的当前动作（组号升序）：返回要抢占的组；任一组 BlockIncoming 时返回
+// ErrBlockedByGroup（不抢占任何组）。
+func (r *ActionRunner) crossGroup(incoming *actionEntry) ([]*actionGroupState, error) {
+	if r.conflict == nil {
+		return nil, nil
+	}
+	var preempt []*actionGroupState
+	for _, unit := range r.orderedGroups() {
+		if unit.cur == nil || unit.cur.Group == incoming.Group {
+			continue
+		}
+		switch r.callConflict(unit.cur.ActionSnapshot, incoming.ActionSnapshot) {
+		case BlockIncoming:
+			return nil, fmt.Errorf("%w: group %d action %d (kind %d)", ErrBlockedByGroup, unit.cur.Group, unit.cur.ID, unit.cur.Kind)
+		case PreemptRunning:
+			preempt = append(preempt, unit)
+		}
+	}
+	return preempt, nil
+}
+
+// preempt 取消被抢占的组的当前动作：取消状态，不推进那一组的队列（抢占方随后启动，被抢占组的队列等它下一次变更）。
+func (r *ActionRunner) preempt(units []*actionGroupState, by *actionEntry) {
+	for _, unit := range units {
+		if unit.cur == nil {
+			continue
+		}
+		victim := unit.cur.ID
+		reason := NewActionReason(fmt.Sprintf("preempted by action %d", by.ID))
+		if err := r.finish(unit, true, reason, false); err != nil {
+			r.report(fmt.Errorf("actionflow: preempted action %d: %w", victim, err))
+		}
+	}
+}
+
+func (r *ActionRunner) callConflict(running, incoming ActionSnapshot) (conflict Conflict) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.report(fmt.Errorf("actionflow: conflict rule panic: %v", recovered))
+			conflict = NoConflict
+		}
+	}()
+	return r.conflict(running, incoming)
+}
+
+// replaceDecision 问当前动作是否同意被 next 取代（未实现 Replacer 即同意）。
+func (r *ActionRunner) replaceDecision(cur, next *actionEntry, now time.Time) (decision ReplaceDecision) {
+	replacer, ok := cur.Action.(Replacer)
+	if !ok {
+		return ReplaceAllow
+	}
+	ctx := r.acquireContext(now)
+	defer r.releaseContext(ctx)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.report(fmt.Errorf("actionflow: action %d replace check panic: %v", cur.ID, recovered))
+			decision = ReplaceAllow
+		}
+	}()
+	return replacer.ReplaceBy(ctx, next.ActionSnapshot)
+}
+
+// applyEndAction 按 ID 结束当前或排队的动作。只有最外层调用自己的命令在找不到时返回错误：延后执行时动作可能已经
+// 在这之前结束，不是错误。
+func (r *ActionRunner) applyEndAction(cmd runnerCommand) error {
+	for _, unit := range r.orderedGroups() {
+		if unit.cur != nil && unit.cur.ID == cmd.actionID {
+			return r.finish(unit, cmd.force, cmd.reason, true)
+		}
+		for _, entry := range unit.next {
+			if entry != nil && entry.ID == cmd.actionID {
+				r.discardQueued(unit, func(e *actionEntry) bool { return e.ID == cmd.actionID }, cmd.reason)
+				return nil
+			}
+		}
+	}
+	if cmd.outer {
+		return fmt.Errorf("%w: %d", ErrActionNotFound, cmd.actionID)
+	}
+	return nil
+}
+
 func (r *ActionRunner) applyTick(group ActionGroup, now time.Time) error {
 	unit := r.groups[group]
-	if unit == nil || unit.frozen || unit.cur == nil || unit.cur.Action == nil {
+	if unit == nil || unit.freezes > 0 || unit.cur == nil || unit.cur.Action == nil {
 		return nil
 	}
 	done, result, err := r.callTick(unit.cur.Action, now)
@@ -569,14 +773,21 @@ func (r *ActionRunner) applyAdvance(cmd runnerCommand) error {
 		return nil
 	}
 	unit.advancing = false
-	if unit.cur != nil || unit.frozen || len(unit.next) == 0 {
+	if unit.cur != nil || unit.freezes > 0 || len(unit.next) == 0 {
 		return nil
 	}
 	next := unit.next[0]
 	copy(unit.next, unit.next[1:])
 	unit.next[len(unit.next)-1] = nil
 	unit.next = unit.next[:len(unit.next)-1]
-	err := r.start(unit, next, cmd.now)
+	// 排队项成为当前动作同样受跨组冲突约束（同组此时空闲，不涉及 Replacer）。
+	preempt, err := r.crossGroup(next)
+	if err == nil {
+		r.preempt(preempt, next)
+		err = r.start(unit, next, cmd.now)
+	} else {
+		r.ended(next, NewActionErrorReason(err))
+	}
 	if err == nil {
 		return nil
 	}
@@ -654,14 +865,21 @@ func (r *ActionRunner) resolveGroup(kind ActionKind) (group ActionGroup, ok bool
 
 // start 把 entry 装到当前位：进入切换 → 动作 Start。Start 失败时调 Cancel、离开切换、清当前
 // 位，并发一次失败状态的 OnEnded——进入切换的动作恰好一次离开、一次结束，直接 Start 与
-// 排队 / 延后启动一致。回调里的变更都在延后队列，这期间当前位一直是 entry。
+// 排队 / 延后启动一致。Start 报告启动即完成时按 Tick 结束同样收尾（不调 Cancel，结果为空算成功，推进队列）。
+// 回调里的变更都在延后队列，这期间当前位一直是 entry。
 func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now time.Time) error {
 	if unit == nil || entry == nil || entry.Action == nil {
 		return ErrBuilderNil
 	}
 	unit.cur = entry
 	r.transition(entry, true)
-	err := r.callStart(entry.Action, now)
+	done, result, err := r.callStart(entry.Action, now)
+	if err == nil && done {
+		if result.Status == ActionStatusIdle {
+			result.Status = ActionStatusSuccess
+		}
+		return r.finish(unit, false, NewActionResultReason(result), true)
+	}
 	if err == nil {
 		return nil
 	}
@@ -687,7 +905,7 @@ func (r *ActionRunner) finish(unit *actionGroupState, cancel bool, reason Action
 	unit.cur = nil
 	r.transition(entry, false)
 	r.ended(entry, reason)
-	if startNext && !unit.frozen {
+	if startNext && unit.freezes == 0 {
 		r.scheduleAdvance(unit, entry.Group, time.Time{})
 	}
 	return err
@@ -717,7 +935,7 @@ func (r *ActionRunner) orderedGroups() []*actionGroupState {
 
 func (r *ActionRunner) acquireContext(now time.Time) (ctx *ActionContext) {
 	if now.IsZero() {
-		now = clock.Now() // 行为流的游戏时间是业务时钟（D-L3）
+		now = fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
 	}
 	ctx = r.contextPool.Get().(*ActionContext)
 	*ctx = ActionContext{Now: now}
@@ -745,7 +963,7 @@ func (r *ActionRunner) releaseContext(ctx *ActionContext) {
 	r.contextPool.Put(ctx)
 }
 
-func (r *ActionRunner) callStart(action Action, now time.Time) error {
+func (r *ActionRunner) callStart(action Action, now time.Time) (bool, ActionResult, error) {
 	ctx := r.acquireContext(now)
 	defer r.releaseContext(ctx)
 	return callActionStart(action, ctx)
@@ -793,6 +1011,16 @@ func (r *ActionRunner) ended(entry *actionEntry, reason ActionReason) {
 		r.hooks.OnEnded(entry.ActionSnapshot, reason)
 	}
 }
+func (r *ActionRunner) freezeChanged(group ActionGroup, frozen bool) {
+	if r.hooks.OnFreeze != nil {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				r.report(fmt.Errorf("actionflow: freeze hook panic: %v", recovered))
+			}
+		}()
+		r.hooks.OnFreeze(group, frozen)
+	}
+}
 func (r *ActionRunner) report(err error) {
 	if err != nil && r.hooks.OnError != nil {
 		defer func() { _ = recover() }()
@@ -804,7 +1032,7 @@ func callUpdate(fn func(Action) error, action Action) (err error) {
 	defer recoverActionPanic("update", &err)
 	return fn(action)
 }
-func callActionStart(action Action, ctx *ActionContext) (err error) {
+func callActionStart(action Action, ctx *ActionContext) (done bool, result ActionResult, err error) {
 	defer recoverActionPanic("start", &err)
 	return action.Start(ctx)
 }

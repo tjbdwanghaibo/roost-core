@@ -296,9 +296,6 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 		return nil, err
 	} else if !bytes.Contains(raw, []byte("NestClient()")) {
 		return nil, fmt.Errorf("%s is not Nest-injected; create a new controller domain or add NestClient() before generating the endpoint", relativeSlash(root, controllerPath))
-	} else if signature.businessTime && !bytes.Contains(raw, []byte("Registry() *app.Registry")) {
-		// controller.go 归业务，生成一次后不改写；早于 Registry() 的 controller 取不到业务钟。
-		return nil, fmt.Errorf("%s has no Registry() accessor, which the business time comes from; keep the registry passed to FromRegistry and add `func (controller *Controller) Registry() *app.Registry`, then run this command again", relativeSlash(root, controllerPath))
 	}
 
 	callArgs := "entityID"
@@ -307,13 +304,8 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	}
 	// Sync_ 返回 handler 的全部非 error 结果再加 err；骨架必须全部接住才能编译，结果留给业务填进响应。
 	call := fmt.Sprintf("err = sender.Sync_%s(context.Context(), %s)", nestType, callArgs)
-	businessNow, appImport := "", ""
-	if signature.businessTime {
-		businessNow = "// The business time is the server's (real time + time.logic_offset), never the client's:\n" +
-			"\t// a request field would let a client stretch a timed effect or claim a cooldown early.\n" +
-			"\tbusinessNow := app.BusinessClock(controller.Registry()).Now()\n\t"
-		appImport = "\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n"
-	}
+	// 业务时间（nowUnix / nowUnixMilli）不在这里填：生成的分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间
+	// （D22-1），Sync_ 的签名里没有它。
 	useResults := ""
 	if signature.results > 0 {
 		results := []string{"result"}
@@ -336,7 +328,7 @@ import (
 	%s %q
 	playeraccess %q
 	%ssyncsender %q
-%s	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	%q
 )
@@ -360,7 +352,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		return nil, fmt.Errorf("%s endpoint: %%w", err)
 	}
 	sender := %ssyncsender.New%sSender(controller.NestClient())
-	%s%s
+	%s
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -374,11 +366,10 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		target.alias, target.importPath,
 		manifest.Project.Module+protocol.PlayerAccessImportSuffix,
 		nestSnake, manifest.Project.Module+"/game/handler/syncsender",
-		appImport,
 		manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, protocolType, protocolType, protocolType, protocolSnake,
 		target.alias, target.kind, protocolSnake,
-		nestSnake, nestType, businessNow, call,
+		nestSnake, nestType, call,
 		protocolSnake, protocolType,
 		useResults, protocolType)
 	formatted, err := format.Source([]byte(body))
@@ -583,21 +574,16 @@ type endpointEntity struct {
 }
 
 // endpointSignature 是骨架调用 Sync_ 需要的 handler 签名：按请求字段映射的实参、非 error 返回值个数与目标 Entity。
-// businessTime 为真时有参数由服务器的业务钟填入（serverBusinessTimeArguments），骨架先取 businessNow。
 type endpointSignature struct {
-	arguments    []string
-	results      int
-	entity       endpointEntity
-	businessTime bool
+	arguments []string
+	results   int
+	entity    endpointEntity
 }
 
-// serverBusinessTimeArguments 是 endpoint 骨架从服务器业务钟填、不从请求取的 handler 参数：业务时间由服务器决定，
-// 放进请求就等于让客户端决定（可以延长限时效果、提前领冷却奖励）。按约定名识别，类型必须是 int64；值来自
-// app.BusinessClock(controller.Registry()).Now()，即真实时间 + time.logic_offset，与 game-demo 的 BusinessNow 同一来源。
-var serverBusinessTimeArguments = map[string]string{
-	"nowUnix":      "businessNow.Unix()",
-	"nowUnixMilli": "businessNow.UnixMilli()",
-}
+// serverBusinessTimeArguments 是不从请求取的 handler 参数：业务时间由服务器决定，放进请求就等于让客户端决定（可以
+// 延长限时效果、提前领冷却奖励）。按约定名识别，类型必须是 int64；它们也不由 endpoint 填——Nest 生成器的分发包装在
+// handler 执行时从 fctx 填这条消息冻结的业务时间（D22-1），Sync_ 的签名里没有它们，骨架跳过。
+var serverBusinessTimeArguments = map[string]bool{"nowUnix": true, "nowUnixMilli": true}
 
 func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) (endpointSignature, error) {
 	var signature endpointSignature
@@ -634,19 +620,17 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 			}
 			for _, name := range field.Names {
 				parameter := name.Name
-				if argument, serverSupplied := serverBusinessTimeArguments[parameter]; serverSupplied {
+				if serverBusinessTimeArguments[parameter] {
 					if ident, ok := field.Type.(*ast.Ident); !ok || ident.Name != "int64" {
-						return signature, fmt.Errorf("Nest handler %s parameter %q is the business time the endpoint fills from the server's business clock; declare it int64", handlerType, parameter)
+						return signature, fmt.Errorf("Nest handler %s parameter %q is the business time the generated Nest dispatch fills when the handler runs; declare it int64", handlerType, parameter)
 					}
-					signature.arguments = append(signature.arguments, argument)
-					signature.businessTime = true
 					continue
 				}
 				requestField, exists := requestFields[toSnake(parameter)]
 				if !exists {
 					return signature, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q. Add the field to the request only if the client decides this value. "+
 						"A value the server decides must not come from the request: for the business time name the parameter nowUnix or nowUnixMilli (int64) "+
-						"and the endpoint fills it from the business clock (app.BusinessClock); anything else the server decides, compute inside the handler, not from the request",
+						"and the generated Nest dispatch fills it when the handler runs (the business time its message froze, fctx.Now); anything else the server decides, compute inside the handler, not from the request",
 						protocolType, parameter)
 				}
 				signature.arguments = append(signature.arguments, "request."+requestField)

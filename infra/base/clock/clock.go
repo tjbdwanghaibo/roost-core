@@ -94,6 +94,8 @@ type Clock interface {
 
 type logicClock struct {
 	offsetNanos atomic.Int64
+	// source 非 nil 时代替 time.Now 作为真实时间的来源（只给测试，见 SetSource）。
+	source atomic.Pointer[func() time.Time]
 }
 
 var global Clock = NewLogicClock()
@@ -131,8 +133,29 @@ func Reset() {
 	global.Reset()
 }
 
+// SetSource 把进程级业务时钟的真实时间来源换成 now（再加偏移），nil 恢复 time.Now。只给测试用：
+// fctx 在每条消息开始时冻结的业务时间（fctx.Now）、框架驱动的缺省时钟都读进程级业务时钟，
+// 测试要让它们读到可控、可单步的时间时换掉来源，结束时用 SetSource(nil) 恢复。
+func SetSource(now func() time.Time) {
+	if c, ok := global.(*logicClock); ok {
+		if now == nil {
+			c.source.Store(nil)
+			return
+		}
+		c.source.Store(&now)
+	}
+}
+
 func (c *logicClock) Now() time.Time {
-	return time.Now().Add(c.Offset())
+	return c.real().Add(c.Offset())
+}
+
+// real 是真实时间：time.Now，测试换过来源时读来源。
+func (c *logicClock) real() time.Time {
+	if source := c.source.Load(); source != nil {
+		return (*source)()
+	}
+	return time.Now()
 }
 
 func (c *logicClock) UnixMilli() int64 {
@@ -140,7 +163,7 @@ func (c *logicClock) UnixMilli() int64 {
 }
 
 func (c *logicClock) Set(now time.Time) {
-	c.SetOffset(now.Sub(time.Now()))
+	c.SetOffset(now.Sub(c.real()))
 }
 
 func (c *logicClock) SetOffset(offset time.Duration) {

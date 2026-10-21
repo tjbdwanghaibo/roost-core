@@ -23,8 +23,9 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；P2～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
-| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务，未排期 |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
+| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -825,7 +826,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2～P5 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P3～P5 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
 
@@ -923,6 +924,89 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 修后五条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
 
 **未做**：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。
+
+### P2 实施结果（2026-10-21）
+
+**状态：P2 已实施**（分支 `feat/d20-movement-p2`，本地提交，由维护者推送）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+
+**P2 中维护者决定（2026-10-21）**：
+
+1. **移动参考 ssr，由 action 驱动**：action 挂心跳，在心跳里调用 move 的接口。`Move` 是被动组件（设定、`Advance`、`Stop`、查询），自己不挂心跳；`MoveTo` / `Follow` 由实体的 ActionRunner 驱动，runner 挂心跳，每拍 runner tick 在途动作、动作调 `Move.Advance`。移动中的实体每拍只有一条心跳消息，不需要 Waker 绕路收尾。
+2. **所有控制实体行为的都走 action**：移动、技能、AI 决策等统一经 ActionRunner 下发与收尾，不允许绕过动作直接驱动组件。
+3. **runner 不随事务回滚：由业务层保证，框架不处理**（同日修正上一条“框架实现提交后生效”的要求）：handler 先做完全部可能失败的校验和修改，最后一步才调用动作的 Start / Enqueue 等；之后还可能失败的，回滚后 runner 里会残留这次的变更。心跳那一拍里动作对组件的修改随这一拍的事务提交或回滚，保持现状。
+
+**对照 ssr（只读 `kingdom/modules/action`、`action_list`、`move`、`map_basic`）**：`action_list.setCurAction` 在组的当前动作切换时给这个组登记心跳（周期 = 动作的 `LoopInterval`，同周期不换登记），`OnTick(group)` 调当前动作的 `Loop`；`ActionMove.DoLoop` 自己算 `elapsed = 本拍时刻 - 上次时刻`，调 `MovePathInfo.StepMove(elapsed)`，路径走完返回 `ErrReachEnd`，action_list 据此结束动作；move 模块写 map_basic 的位置。roost 照搬“组的当前动作挂组的心跳、动作在心跳里调 move、move 返回到达”的结构；不同点：`elapsed` 用心跳给的 `Beat.Elapsed`（夹取、随回滚恢复），move 的结论是返回值 `Result` 而不是错误，每次切换都重新启停（不比较周期）。与 Nest 事务模型没有冲突：心跳回调本来就在实体锁与事务内，动作对组件的修改随这一拍的事务；ssr 没有事务，“runner 不回滚”按决定 3 由业务保证。改动没有超出 actionflow 与 movement。
+
+**API 最终形状**：
+
+```go
+// gameplay/actionflow
+func NewBeatRunner(ActionRunnerConfig, BeatConfig{Host, Name, Period, Options}) (*BeatRunner, error)
+func (b *BeatRunner) Runner() *ActionRunner / Reg(group) *heartbeat.Reg / Ticking() bool / Sync() error
+type TickIntervaler interface{ TickInterval() time.Duration }   // 动作可选；0 = 不需要周期 tick
+// ActionContext 新增 Elapsed time.Duration（本组这一拍的 Beat.Elapsed）
+
+// gameplay/movement
+type Fields interface { SceneID() int64; SetSceneID(int64); Pos() spatial.Point; SetPos(spatial.Point); Facing() Facing; SetFacing(Facing) }
+type Space interface { Enter(e, at) error; QueueMove(e, at) error; Leave(e) error }
+type InterestSpace struct { Interest *policy.Interest; Player func(e) (playerID int64, view policy.ObserverView, ok bool) }
+func NewMapBasic(owner, host *heartbeat.Host, MapConfig{Fields, Save, SaveOnLeave, SaveEvery, SaveOptions, OnSpaceError}) (*MapBasic, error)
+func (m *MapBasic) Enter(sceneID, space, at) error / Leave() error / SetPos(at) error / SetFacing(Facing) / Save() error
+func (m *MapBasic) SceneID() / Pos() / Facing() / InScene() / Space() / Published() Snapshot / OnDestroy()
+func NewMove(mb *MapBasic, MoveConfig{Terrain, Locate}) (*Move, error)
+func (m *Move) MoveTo(path []spatial.Point, speed float64) (token uint64, err error)
+func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached bool) (uint64, error)
+func (m *Move) Advance(token uint64, elapsed time.Duration) Result   // Reason 0 = 还在移动；Arrived / Replaced / Blocked / LeftScene / TargetLost / TargetLeft / Refused
+func (m *Move) Stop(token uint64) bool / Moving() bool / Token() uint64
+type Locator func(id int64) (Snapshot, bool); func LocateIn(get func(int64) entity.IThreadSafeEntity) Locator
+func RegisterActions(registry *actionflow.Registry, moveTo, follow actionflow.ActionKind) error   // MoveToParam{Path, Speed, Period} / FollowParam{Target, Speed, Keep, StopWhenReached, Period}
+type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveComponent() *Move }; type MemFields struct{ OnChange func() }
+```
+
+**按要求逐条落实**：位置 `gameplay/movement`；`MapBasic` 有场景 ID、位置、朝向，位置 nopersist 只同步、`SaveOnLeave` / `SaveEvery` 由业务选落库，AOI 接线经 `Space` 接口注入：进场景 `Enter`、位置变化 `QueueMove`（事务内入队、走提交门）、离开 `Leave`。`Move` 有速度、路径 / 跟随目标、状态，被动；`MoveTo` / `Follow` 动作的组由 runner 挂心跳（缺省 100ms），每拍 `Advance(Beat.Elapsed)`、写 `MapBasic`、触发 `QueueMove`，不追帧；到达、打断、被阻挡、目标消失由 actionflow 收尾；组空闲时停心跳。`BeatRunner` 是通用的 runner 宿主，AI、技能以后用同一个 runner。回调只做内存计算与入队。
+
+**与方案的偏差（如实记录）**：
+
+1. **每组一个心跳登记**（参考 ssr），不是方案 §5.4 的“一个 `"actionflow"` 登记、周期取各组最小值”：一个登记按最短周期跳会让慢的动作被按快的节拍 tick、`Elapsed` 也对不上。多个组同时有需要 tick 的动作时各自投递（决定 ③ 不合并）。
+2. **状态存放在业务 DAO，`MapBasic` 不自带字段**：同步内容由生成 DAO 的字段打包，所以 `MapBasic` 经 `Fields` 读写业务 DAO（与 game-demo `MapComponent` 一致），`MemFields` 只给测试 / 示例 / 不持久的 NPC。
+3. **进出场景在提交之后**：`QueueMove` 有提交门，`Interest.Enter` / `Show` / `Leave` / `Hide` 没有；`MapBasic` 把它们放进 `nest.AfterCommit`（实体锁外），`InterestSpace` 进出后调一次 `Interest.Apply`。
+4. **AOI 排队满不结束移动**：`policy.ErrInterestQueueFull` 是背压，整拍作废、下一拍接着走；其他写位置错误以 `Refused` 结束。
+5. **整数格坐标**：`Move` 用亚格位置累积零头；朝向 `Facing` 取 1/100 度。
+6. **共享模式**（适配 main `96724b6a` / `d287031f`）：组的心跳挂不上时动作以失败结束；运行中被停掉后回到独占由业务 `BeatRunner.Sync` 重新挂上；带 `SaveEvery` 的 `Enter` 在共享模式下返回错误。
+7. **AI 没有接线**；`BeatConfig` 没有 MissionRunner（任务由动作结束推进，需要周期 tick 的任务另登记心跳）。
+8. **PACKAGES 里 actionflow 的测试文件数**由 12 改成实际的 4。
+
+**过程记录**：第一版（`93794491`、`345616ad`）是 Move 自己挂 `"move"` 心跳、移动动作经 Waker 由事件收尾；维护者决定 1 之后改为本节的结构（`382eb10c`），Waker、`Move.Resume`、Done 回调删除。
+
+**偶发失败（复核发现，已修，`1008ba58`）**：`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` 在 `-race -count=15` 下 2/15 失败，原文 `nest_test.go:300: ended {id:1 kind:1 status:2 reason:arrived} at {Present:true SceneID:1 Pos:{X:3 Y:1} Facing:1843}`（另一种：`nest_test.go:321: at {Present:true SceneID:1 Pos:{X:3 Y:5} Facing:9000} registered 1`）。判断：**测试时序问题，不是产品缺陷**。status:2 是成功、reason 是 arrived——第一条移动确实到了终点 (3,3)，但测试读到的 `Published` 还是上一拍的 (3,1)：动作结束在拍的事务里记下，`Published` 与心跳登记的停止都在提交后、实体锁释放之后才执行（契约就是“最近一次提交”），测试看到结束就读提交后状态。证据：在 `afterCommit` 前临时插 30ms 睡眠放大窗口，修前测试 2/2 失败（`... at {... Pos:{X:2 Y:0} ...}`）、修后 2/2 通过；Nest 同实体消息等前驱作业整个结束（`dispatchNest` → `runNestLogic` 的 defer 先释放 Guard 作用域、执行提交后回调，`finishJobLocked` 才放行后继）。修法：`nestFixture.settle(e)` 经同一实体发一条空消息再断言提交后状态（不 sleep、不放宽断言）。同包排查：凡是“从拍的事务里观察到事件之后断言 `Published` / `Registered`”的地方都加了 `settle`（runner tick 用例、MoveTo 用例两处、Follow 收尾、冒烟的终点断言）；经 `Request` 返回之后断言的用例不受影响（回复在提交后回调之后）。负载下的修前 / 修后失败率见下文“验证”。
+
+**红绿证据**：新代码，实现与测试同轮写成，红用变异核对给出（每个强制点改掉一处，对应用例在当前代码上变红，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| M1 推进不按 `elapsed`（固定 100ms） | `TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`：`a 300ms beat queued [move 0,1], want one move to 0,3` |
+| M2 组的动作离开时不停心跳 | `TestEachGroupBeatsAtItsCurrentActionsInterval`：`idle groups: true 100ms / true 500ms registered 2`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`idle runner keeps its heartbeat: active true registered 1` |
+| M3 每拍从格重新起算（丢零头） | `TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`：`positions at 0.3 cells per beat: [0 0 0 0 0], want [0 1 1 1 2]` |
+| M4 `Advance` 不核对编号 | `TestANewMoveReplacesTheOldOne`：`advancing the replaced move: arrived 2,3, pos {X:2 Y:3}` |
+| M5 事务里的进场景立即执行 | `TestEnterAndLeaveFollowTheTransaction`：`rolled-back enter: ops [enter 1,1] in scene false published {Present:true SceneID:0 ...}` |
+| M6 `SetPos` 不 `QueueMove` | `TestPositionChangesReachTheAOIOnlyWhenCommitted`：`a committed move far away did not take the entity out of the watcher's view` |
+| M7 MapBasic 不恢复回滚 | `TestEnterAndLeaveFollowTheTransaction`：`rolled-back enter: ops [] in scene true published {...}` |
+| M8 Move 不恢复回滚 | `TestRolledBackMoveToLeavesNothingRunning`：`rolled-back move: moving true registered 0` |
+| M9 跟随不判目标消失 | `TestFollowTracksTheTargetUntilItIsGone`：`target destroyed: target left the scene 13,0` |
+| M10 一拍 tick 全部组 | `TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`：`ticks [first tick 1 elapsed 300ms second tick 1 elapsed 300ms ...], want [second tick 1 elapsed 300ms first tick 1 elapsed 100ms ...]` |
+| M11 不填 `Elapsed` | 同上：`ticks [second tick 1 elapsed 0s ...]`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`tick outside a heartbeat beat: [{elapsed:0 inTx:true} ...]` |
+| M12 移动动作不要周期 tick | `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`：`moving entity: move group heartbeat active false, registrations 0 (want exactly the runner's one)` |
+| M13 AOI 排队满按拒绝处理 | `TestRefusedPositionHoldsOnBackpressureAndEndsOtherwise`：`backpressure: position refused 0,0 pos {X:0 Y:0} moving false` |
+| M14 同一事务进场景后又移动也入队 | `TestEnterAndLeaveFollowTheTransaction`：`space saw [move 2,2 enter 2,2 move 3,3 leave], want [enter 2,2 move 3,3 leave]` |
+| M15 位置没变也落库 | `TestEnterAndLeaveTheScene`：`saved [3@4,4 3@4,4 3@5,4], want one periodic save and one on leave` |
+| M16 共享模式下仍进场景 | `TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode`：`enter in shared mode: <nil> in scene true` |
+| M17 挂不上心跳的动作不结束 | 同上：`move started in shared mode: ended [{id:1 kind:1 status:4 reason:replaced by next action}] moving true` |
+| M18 `Sync` 吞掉错误 | 同上：`runner sync in shared mode: <nil> active false` |
+| M19 动作取消不停移动 | 同上：`move started in shared mode: ended [... {id:2 kind:1 status:3 reason:heartbeat: Remote entity is in shared mode ...}] moving true` |
+
+端到端冒烟（非性能测量）：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`，真实 Nest + 心跳驱动 + 同步 Manager + Interest（ApplySync），3000 实体各自进场景、随机 `MoveTo`（距离 ≤ 150 格的方框、150 格/秒），64 个观察者铺满 1280×1280 地图：`3000 entities, 3000 moved, 64 watchers, 53233 position payloads pushed; heartbeat {Delivered:25437 Executed:25437 ... StoppedShared:0 Registered:0}`（与第一版 Move 自挂心跳时的 25414 拍同一量级：每个移动实体每拍一条消息）；全部动作成功、位置等于终点、每个实体至少一个邻近观察者最后收到的就是终点位置，结束后驱动上没有登记。-race 下 300 实体。冒烟里每会话对象数超过同步帧缺省上限 100，测试把 `frame.Limits.MaxObjects` 调到 4096（缺省值未改）。
+
+**验证**：偶发失败的修前 / 修后失败率（`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` → 改名后的 `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`）：不加负载 `-race -count=100 -run <三个经心跳等事件的用例>`，修前（`345616ad`）24/100、修后 0/100；加负载（后台循环 `go test -race -count=5 ./framework/sync/entitysync/policy/`）`-race -count=50 ./gameplay/movement/ ./gameplay/actionflow/`，修前 1/50（该用例，2850 次顶层用例里 1 次失败），修后 0/50（2851 次全部通过，退出码 0）。负载复现时 nestbatch 的正式对比在跑，它的脚本在检测到外来 go 进程时作废并重跑那一轮，所以不影响它的数据、只会推迟。gofmt、`GOWORK=off go vet ./...`、`go test -race -count=1 ./gameplay/... ./framework/sync/... ./wiring/...`、根包 `go test -count=1 .`、全量 `go test -count=1 ./...` 的结果见本轮交付报告（全部退出码 0 才提交）。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
@@ -1157,16 +1241,657 @@ roost 的取舍：
 
 ## D21 吸收 ssr 的优秀组件进 `gameplay`
 
-**状态：维护者 2026-10-21 登记为后续任务，未排期。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
+**状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”。维护者 2026-10-21 决定：调研一 13 条拍板项全部按推荐（A）实施，按 D21-1 → D21-5 分期进行，已实施（结果见“调研一 · 实施”）。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
 
 **原则**：按 roost 的模型重写，不复制 ssr 代码；只收“与具体游戏玩法无关、多数游戏都会用”的通用部件，玩法规则留给业务（demo 是参考，生成器只生成框架内容）；所有控制实体行为的逻辑走 actionflow（D20 维护者决定），周期推进走心跳（D20）；每个组件先写方案（与现有 roost 包的关系、事务 / 回滚 / 同步语义、持久化），维护者确认后再实施。
 
-**ssr 候选（待调研，按可能的通用性初排；`gameplay` 现有 actionflow / ai / attribute / heartbeat / skill，D20 P2 新增 movement）**：
+**ssr 候选（按可能的通用性初排；`gameplay` 现有 actionflow / ai / attribute / heartbeat / skill，D20 P2 新增 movement）**：
 
-- 行为与调度：`action`、`action_list`、`mission`、`ai` / `ai_engine` / `bt_engine`（行为树）、`trigger_engine`、`eca_man`（事件-条件-动作）、`state`、`cooldown`、`timer`。
+- 行为与调度：`action`、`action_list`、`mission`、`ai` / `ai_engine` / `bt_engine`、`state` **已调研（下文“调研一”）**；`trigger_engine`、`eca_man`（事件-条件-动作）、`cooldown`、`timer` 待调研。
 - 空间与移动：`map_basic`、`move`、`follow_agent`、`rvo`（避让）、`dynamic_obstacle`、`hexagon` / `hexagon_map`、`search_entity`、`observe` / `radar`、`mist`（迷雾）。
 - 战斗与效果：`effect` / `effectid`、`damage`、`aggro`（仇恨）、`fight`、`skill_pool`、`power`。
 - 经济与道具：`bag` / `bag_light`、`currency`、`prop`、`drop`、`store`、`gacha`、`limit`（次数 / 频率限制）、`refresh`。
 - 社交与组织（多数已有 `service/*` 对应，主要是比对补缺）：`team`、`rank` / `top_list_*`、`task` / `taskcore`、`reddot`、`uniqname`。
 
-**下一步（排期后）**：逐项调研 ssr 实现与 roost 现状（是否已有、差距在哪），产出“收 / 不收 / 收哪部分”的清单与优先级，交维护者确认后分批实施。
+**下一步**：调研一待拍板；其余候选逐项调研 ssr 实现与 roost 现状，产出“收 / 不收 / 收哪部分”的清单与优先级，交维护者确认后分批实施。
+
+### 调研一：行为控制（action / action_list / mission / ai / state）
+
+**读了什么**：ssr 只读 `ssr/kingdom/modules/` 下 `action`、`action_list`、`mission`、`ai`、`ai_engine`、`bt_engine`、`state`，以及它们用到的 `heartbeat`、`move`、`map_basic` 接口和 `kingdom/view` 里的模块接口（下文 ssr 出处一律相对 `ssr/kingdom/modules/`，`view/…` 相对 `ssr/kingdom/`）。roost 读 main（`3e7b4011`）的 `gameplay/actionflow`、`gameplay/ai`、`gameplay/heartbeat`、`gameplay/skill/combat` / `combatcomponent`，以及 D20 P2 分支 `feat/d20-movement-p2`（未合入 main）的 `gameplay/actionflow/heartbeat.go`（BeatRunner）与 `gameplay/movement`。codebase-memory 图的根是主检出、generation 停在 2026-10-14，P2 文件不在图里，结构结论以源码为准。
+
+#### 1. ssr 的模型
+
+**总体**：一个实体的行为由三层组成，互相用回调连起来，全在实体所在的逻辑线程上串行执行（ssr 没有事务）：
+
+- **action_list**（实体模块）：按“组”放当前动作，组的当前动作挂自己的心跳，负责动作的开始、替换、打断、结束；同时内嵌 `AbilityManager`（按玩法列出的 `CreateMoveAction` / `SetMissionChaseAndAttack` 等门面）和 `MissionManager`（`view/mod_action_list.go:18-46`、`action_list/internal/action_list.go:53-62`、`action_list/internal/ability_manager.go:25-143`）。
+- **mission**（action_list 内的单任务槽）：用手写 Go 代码编排多个动作（追击后攻击、徘徊、回出生点……），有自己的心跳；动作结束时被回调决定下一步（`mission/mission.go:13-51`）。
+- **ai**（实体模块 AICtrl）：按优先级排列的若干 director（选策略层、策略层、喊话、避让）接收心跳与游戏事件，决定调用哪个 mission / action（`ai/internal/ai_ctrl.go:66-86`、`ai/internal/director_priority.go:3-16`）。
+- **state**（实体模块）：按状态类型存“是否生效 + 参数”的状态位，变化时通知观察者；action / mission / ai / 战斗都读写它（`state/internal/state.go:26-34`）。
+
+**action（单个动作）**
+
+| 方面 | ssr 的做法 | 出处 |
+| --- | --- | --- |
+| 接口 | `TryInit` → `Start(curTime) (wait bool, err)` → 每拍 `Loop(curTime) error` → `CanCancelByNext(next)` / `CanCancelByForce()` / `TryCancel(next, force)` → `OnEnd(reason)`；`Update(param)` 改在途参数；`LoopInterval()` 决定心跳档位；`FrozenAction` / `RecoverAction` | `view/mod_action_list.go:91-118` |
+| 结束方式 | `Loop` 返回错误即结束（正常结束也用哨兵错误，如 `ErrReachEnd`、`ErrRVOStop`）；`Start` 返回 `wait=false` 表示瞬时动作（例如 JumpTo），不进当前位、直接释放 | `action_list/internal/action_list.go:434-436`、`action/internal/action_rvo.go:134-142`、`action/internal/action_move.go:194-200` |
+| 取代否决 | 新动作要取代当前动作时先问当前动作 `CanCancelByNext(next)`，再 `TryCancel(next)`；返回 `ErrNoNeedCancel` 时**保留当前动作、丢弃新动作且对调用方返回 nil**（例如同目的地的移动、手动移动不被 AI 移动取代） | `action_list/internal/action_list.go:255-287`、`557-583`；`action/internal/action_move.go:1003-1022` |
+| 归属任务 | 动作创建时若当前任务正在自己的回调里（`HasOnProcessTag`），记下任务 ID；任务结束时按任务 ID 清掉它的动作 | `action/internal/base.go:9-22`、`mission/mission_manager/manager.go:119` |
+| 实现库 | 7 种动作（Move、Chase、Attack、EndAttack、CastSkill、Rvo、Interaction），全是玩法相关；`sync.Pool` 复用对象，每 10 秒打印各种类在途数量 | `action/action_mod/mod.go:14-38`、`action_list/action_list_mod/mod.go:17-19` |
+| 和组件的接法 | 动作在 `Loop` 里调组件接口：`ActionMove.DoLoop` 自算 `elapsed`，调 `MovePathInfo.StepMove(elapsed)`；动作在 Start / OnEnd 里置位 / 清除状态（Manual、BackToCity、BackToOrigin） | `action/internal/action_move.go:302-346`、`246-274`、`1024-1052` |
+
+**action_list（组、替换、排队、心跳）**
+
+- **组**：固定 3 组 Live / Fight / Move，动作种类到组的映射是硬编码函数 `GetActionGroup`（`view/mod_action_list.go:81-89`、`175-184`）。
+- **同组**：`HasActionList` 对三个组都返回 false，所以**排队实际关闭**：新动作总是尝试取代当前动作（`view/mod_action_list.go:166-173`、`action_list/internal/action_list.go:199-202`）。取代走“try → commit → afterCommit → cancel”的 `doTcc`：新动作 `TryInit` 成功、旧动作同意被取消才换上，`Start` 失败或 `wait=false` 时撤回（`action_list/internal/action_list.go:28-51`、`236-287`）。
+- **跨组**：新动作与**其他组**的当前动作按硬编码矩阵 `NeedCancelCurAction(cur, next)` 判定，命中就拒绝新动作（`ErrOtherActionBlock`）；启动后再按同一矩阵取消其他组的动作——按代码，第二段只有在 Start 期间其他组又换了动作时才可能命中（`action_list/internal/action_list.go:204-213`、`292-302`；矩阵 `view/mod_action_list.go:136-164`）。
+- **冻结**：`Frozen(group)` 置标志并**强制取消**当前动作；冻结期间创建动作返回 `ErrActionListFrozen`；`Recover` 只解冻，不重启任何东西（`action_list/internal/action_list.go:75-97`、`159-170`）。由状态驱动：定身（Immobile）冻结 Move 组、缴械（Disarm）冻结 Fight 组（`battle/internal/fight_state.go:78-93`）。
+- **结束**：`EndCurAction(group, force)`、`EndAllCurAction`、`EndAction(id)`（当前或排队的都可以按 ID 结束）、`ClearAllActionWithOption(force, filter...)`（按任务 ID 等过滤）（`action_list/internal/action_list.go:449-478`、`512-554`）。结束时依次调动作 `OnEnd` → 撤心跳 → 通知任务 `OnActionEnd` → 通知 AI `OnActionEnd` → 放回对象池（`action_list/internal/action_list.go:480-493`）。
+- **重入**：组在变更中（`changing`）时新的变更进 `deferF` 列表，变更结束后依次执行；超过 10 条或 10 轮直接**丢弃并打 Error 日志**（`action_list/internal/action_list.go:215-235`、`309-313`）。
+- **心跳**：组的当前动作切换时按动作的 `LoopInterval()` 给该组登记心跳（新旧周期相同则沿用旧登记）；动作 `Loop` 里核对心跳 ID 与当前动作是否一致，不一致就撤掉过期登记（`action_list/internal/action_list.go:375-401`、`action/internal/base.go:91-102`）。周期按场景选（副本 100ms、大世界 500ms）（`action/internal/action_move.go:145-152`）。时钟：大世界用墙钟，副本用场景时间（可暂停 / 变速）（`action_list/internal/action_list.go:428-433`）。
+
+**mission（任务）**
+
+- **一个实体同时只有一个任务**；`SetMission(type, param)` 结束旧任务再启动新任务；同类型且 `CanCancelBySameTypeMission` 为假时**静默不换**（返回 nil）；正在切换（`changing`）时再调 `SetMission` / `EndCurMission` **直接返回 nil、什么都不做**（`mission/mission_manager/manager.go:72-79`、`129-136`、`175-181`）。
+- **生命周期**：`Start(cur, param)`（返回 `ErrFinish` 表示启动即完成，照样通知 AI）→ 自己的心跳 `Loop`（100ms / 500ms，`mission/internal/base.go:60-67`、`mission/mission_manager/manager.go:144-173`）→ 动作结束回调 `OnActionEnd` → `End(reason)`；结束时清掉属于它的动作、通知 AI `OnMissionEnd`（`mission/mission_manager/manager.go:109-127`、`193-205`）。任务回调里的结束操作先进 `deferFList`，回调返回后执行，同样 10 条上限后丢弃（`mission/internal/base.go:77-149`）。
+- **内容**：9 种任务全是手写玩法流程（追击并攻击、追击并交互、移动并交互、徘徊、追击并放技能、选技能追击放技能、回出生点、避让），步骤、分支、失败处理都写在 Go 代码里。例如 ChaseAndAttack：Start 时建追击动作，已在范围内就直接攻击；每拍检查目标是否还可攻击、超距重新追；追击动作因不可达结束超过阈值次数则任务失败（`mission/internal/chase_and_attack.go:106-266`）。**没有数据驱动的计划**。
+- **入口**：移动请求按移动类型分流成“直接建移动动作”或“设一个任务”（`move/internal/move.go:349-374`）。
+
+**ai（决策）**
+
+- **AICtrl**：持有选策略层（`selectStrategy`）与策略层（`strategy`）两个策略，再加喊话、避让两个 director；director 按固定优先级排成数组，事件按优先级依次分发，分发期间对更高优先级位置的增删延后（`ai/internal/ai_ctrl.go:66-86`、`ai/internal/director.go:190-249`）。
+- **事件**：约 25 种具体事件（被攻击、死亡、动作结束、任务结束、状态变化、心跳、每秒心跳、Buff 生效、被嘲讽、施法、采集……）都是接口方法（`view/mod_ai.go:17-46`）。冻结、手动操作状态（Manual / ManualForceMove）、副本未开战时屏蔽决策（`ai/internal/ai_ctrl.go:439-456`、`486-547`）。
+- **策略替换**：`SetStrategy(next)`：旧策略 `CanStopByNextStrategy` 同意 → 新策略 `Init` → 卸旧装新；卸下的策略 `OnClear` 结束任务并清掉所有动作（`ai/internal/ai_ctrl.go:369-399`、`ai/internal/strategy_base.go:30-39`）。
+- **冻结**：`Frozen(opts)` 可带“多久后自动恢复”（`RecoverDuration`，在 AI 心跳里检查）和“是否打断在途动作”两个选项（`ai/internal/ai_ctrl.go:177-190`、`492-499`）。
+- **心跳**：选策略层与策略层各要一个周期，AICtrl 只登记两者中最短的一个心跳；另有一个每秒心跳（`ai/internal/ai_ctrl.go:51-59`、`284-329`）。
+- **策略的两种写法**：① 手写策略（SimpleNpc、SimpleServant、Trusteeship 等 8 种，玩法相关，例如 SimpleNpc 每拍按状态选“追击 / 徘徊 / 回出生点 / 避让”任务，`ai/internal/strategy_simple_npc.go:243-340`）；② **AIEditor**：用 `ai_engine` 跑编辑器导出的 JSON。
+- **ai_engine**（AIEditor 用）：不是经典行为树，而是**按阶段（stage）组织的事件触发图**：每个阶段一棵根，根下挂 Event 节点（监听某类事件、可一次性或重复）、Condition / Selector / Sequence 组合与 Action 叶子；Action 叶子是**瞬时函数**（可配延迟执行和最多执行次数），通常调用 `SetMission*` / `CreateMoveAction`；`SetNextStage` 切阶段并重开该阶段的事件；黑板是 int / string 两种值的键值表，分全局与每拍两级（`ai_engine/ai_engine.go:26-106`、`186-202`、`ai_engine/internal/engine.go:112-255`、`ai_engine/internal/action.go:63-104`、`ai/internal/editor_action.go:176-178`）。配置按版本热更（`ai/ai_mod/mod.go:27-44`），但运行中的引擎的版本检查回调是空函数，已在跑的实例不换树（`ai_engine/internal/engine.go:90-94`）。运行日志可留在内存、经调试命令查看（`ai/internal/strategy_ai_editor.go:169-208`、`ai/internal/debug_ai.go`）。
+- **bt_engine**：一套带 Running 状态、Parallel / Inverter / Repeater / Succeeder 的行为树引擎，但**ssr 里没有任何包导入它**，`InitRunData` 是 TODO 空实现（`bt_engine/bt_engine.go:61-80`、`bt_engine/internal/engine.go:83-86`）。
+
+**state（状态位）**
+
+- **不是状态机**：没有“当前状态 + 迁移规则”，也没有互斥组；是 **约 140 个状态类型各自独立的“是否生效 + 参数”**，状态类型按编号区间分成 4 种模式（`state/state.go:16-158`、`194-204`）：
+  - **Cover**（约 50 个，例如 Moving、Dying、BackToCity、InProtection）：最后一次 Set / Unset 为准，可重复设置、重复取消（`state/internal/config/config_cover.go:12-15`、`state/internal/node/node_cover.go:17-53`）；
+  - **RefCover**（例如 Immobile 定身、Disarm 缴械、Invincible、Manual）：匿名引用计数，Set 加一、Unset 减一，参数取最后一次 Set（`state/internal/node/node_ref_cover.go:16-49`）；
+  - **RefAcc**（例如 BeTaunted 嘲讽）：每次 Set 返回一个序号，Unset 必须带序号，生效参数取最早的一次（`state/internal/config/config_ref_acc.go:10-15`、`state/internal/node/node_ref_acc.go:22-78`）；
+  - **Once**（例如 EnterScene、LeaveScene、BeAttacked、Jump）：Set 时通知观察者、随即复位——实际是**按状态类型分发的事件**（`state/internal/state.go:123-126`）。
+- **观察者**：按状态类型、按变化类型（Set / UnSet / Update）注册，带优先级排序；`Agent` 把一组注册打包、一次全部注销（`state/internal/state.go:229-270`、`state/internal/node/node_base.go:20-40`、`state/internal/agent.go:20-49`）。SetState 的回调有 recover，ClrState 的没有（`state/internal/state.go:119-121`、`204-206`）。
+- **时长**：没有内建计时。`SetStateWithTimeout` 发一条延迟消息再清除（`state/internal/state.go:175-182`、`state/internal/handlers_matrix.go:79-90`）；`ExpireTimeFunc` 声明过期时间，但模块没有心跳，要实体自己在每秒心跳里调 `CheckExpireState`（源码注释“状态模块没有心跳机制，先暂时由上层调用吧”，`state/internal/state.go:295-316`、`entities/castle_brief/internal/castle_brief.go:261-263`）。
+- **同步与持久化**：状态节点只在内存；每个状态可配 `SyncWdsFunc`，把变化投影到实体的同步组件 `MapEntityState` 的字段上（该组件的字段带 bson 标签，随实体落库、同步给客户端）（`state/internal/config.go:10-31`、`wds/kingdomMap.pb.go:231-252`）。**加载后不自动恢复**：由实体在加载时读组件字段重新 Set（例如城堡的保护期，`entities/castle_brief/internal/castle_brief.go:199-207`）。
+- **操作检查**：`CheckOperation(op)` 按“必须全部生效 / 必须全部不生效”的状态列表判断能否做某个操作（只登记了 2 种操作）（`state/internal/checker.go:15-45`）。
+- **和行为的接法**：Immobile / Disarm → 冻结动作组（上文）；移动动作置 / 清 Manual 等状态；AI 监听 Dying / EnterScene / LeaveScene、读 Manual 状态屏蔽决策（`ai/internal/ai_ctrl.go:120-142`）；技能效果经战斗对象 `ModifyState` 改状态（`fight/object.go:107-111`）。
+
+**持久化与重连（整体）**：action / mission / ai 的运行状态全部只在内存（对象池），不落库、不随断线重连恢复；实体重新加载后由业务（AI 心跳、实体加载逻辑）重新决策。玩家断线重连对服务器侧行为没有影响（动作照常跑），客户端看到的是同步组件的结果（位置、状态位）。
+
+**测试**：action / action_list / mission / ai / state 都没有测试文件；ai_engine 有一个导出测试。
+
+#### 2. 能力对比
+
+| 维度 | ssr | roost 现状 | 差距 | 是否引入 |
+| --- | --- | --- | --- | --- |
+| 动作类型 | 7 种玩法动作（移动、追击、攻击、施法、避让、交互…），`sync.Pool` 复用 | 只有契约（`Action{Kind, Start, Tick, Cancel}`，`gameplay/actionflow/runtime.go:17-23`）与实例级注册表（`registry.go:23-135`）；P2 分支提供 MoveTo / Follow（`gameplay/movement/action.go`） | 缺“瞬时动作”（Start 即完成）：roost 的 Start 只能返回错误，要完成得等第一拍 Tick；ssr 的瞬时动作不通知任务（`wait=false` 走撤回分支，不调 `OnActionEnd`），是缺陷不是能力 | 框架只引入“Start 即完成”；具体玩法动作不引入（追击 / 交互可做成 movement 的组合，另行调研 follow_agent / rvo 时再定）；对象池不引入（无证据，需要时先压测） |
+| 动作组 / 互斥 / 优先级 | 3 个固定组；同组取代需当前动作同意（`CanCancelByNext` / `TryCancel`）；跨组硬编码矩阵（阻止或取消）；无数值优先级 | 组由业务的 `GroupForKind` 决定，数量不限（`action_runner.go:51-61`）；同组 `Start` 一律取代（旧动作被取消，`action_runner.go:526-542`）；无跨组规则 | 缺①取代否决 / 合并相同请求，②跨组冲突规则 | ①② 都引入，做成可选接口 / 配置函数，不硬编码矩阵（见 §3 A2、A3） |
+| 队列与取代策略 | 有链表队列但三组都关闭排队；`EndAction(id)` 可结束排队项；按过滤条件清除 | 每组 FIFO 队列（`Enqueue`），队首在组空闲时启动；`ClearQueue`、`ClearMission`；丢弃的排队项各发一次取消的 OnEnded（`action_runner.go:222-233`、`599-631`） | roost 更完整；缺按 ID 结束任意动作 | 引入 `EndAction(id)`（§3 A4） |
+| 打断与恢复 | `Frozen` 取消当前动作并拒绝新动作，`Recover` 只解冻；动作有 `FrozenAction` / `RecoverAction` 回调 | `Freeze` 只暂停（当前动作不 tick、拒绝 Start、队列不推进），`Recover` 继续当前动作并推进队列（`action_runner.go:331-342`、`544-547`） | 语义不同：ssr 冻结=打断，roost 冻结=暂停。定身打断移动是常见需求 | 引入冻结模式（暂停 / 打断两种，§3 A5） |
+| 任务（多步计划、分支、失败处理） | 单任务槽；9 种手写任务，步骤与失败处理写在 Go 里；同类型参数相同时静默不换；有自己的心跳 | 单任务槽 `MissionRunner`（`CanReplaceBy` 否决、`ClearActions` 钩子）；通用 `PlanMission`：数据描述的步骤，每步 `OnSuccess` / `OnFail` 跳转到任意步或结束（`plan.go:14-219`）；任务没有心跳驱动（P2 `BeatConfig` 不含 MissionRunner） | roost 的计划更通用；缺：任务周期 tick 的驱动、步骤超时与重试、“相同请求不换”的明确返回 | 引入任务心跳（§3 A6）、PlanMission 步骤超时 / 重试（§3 A8）；手写玩法任务不引入 |
+| AI 决策与动作的衔接 | 多 director 按优先级收事件；手写策略 + 编辑器事件触发图（ai_engine，分阶段、事件节点、瞬时 Action 叶子）；bt_engine 未使用；策略经 `SetMission*` / `Create*Action` 下发 | `Controller` 单策略、事务式替换、回调期间切换延后（`ai/controller.go:28-109`）；`BehaviorStrategy` 行为树（组合、并行、重复、守卫、冷却、限时、随机选择，`ai/nodes.go`）+ `TaskflowAction` 叶子按动作 ID 等结束（`ai/behavior_strategy.go:131-172`）；严格 JSON 树解析（`ai/tree_parser.go`） | roost 的行为树与动作衔接更完整（叶子能等动作结果，ssr 的编辑器 Action 是瞬时的）；缺：通用事件投递、阶段（boss 多阶段）、冻结定时恢复、心跳驱动（P2 未接 AI） | 引入事件投递、分阶段策略、`FreezeFor`、AI 心跳（§3 C1～C4）；ai_engine 编辑器格式、bt_engine、喊话 / 避让 director 不引入 |
+| 状态（state）机制 | 约 140 个独立状态位，4 种模式（覆盖 / 匿名计数 / 带序号计数 / 一次性事件），观察者 + 优先级，投影到同步组件 | 无。战斗容器的 buff 有标签（`gameplay/skill/combat/buffs.go:15-16`、`HasTag` 274），技能免疫检查靠业务注入的 `HasGameplayTag`（`combatcomponent/status_bridge.go:36-37`） | 缺一个“实体当前有哪些行为相关的状态”的统一入口，以及状态对动作组的门控 | 新包 `gameplay/state`（§4） |
+| 事件与回调 | 动作结束 → 任务 → AI 由 action_list 直接串好；状态变化 → 观察者；AI 事件接口约 25 个具体方法 | 回调都在：ActionRunner 的 `OnQueued` / `OnTransition` / `OnEnded` / `OnError`（`action_runner.go:40-49`），MissionRunner 的 `OnEnded` 等（`mission_runner.go:17-26`），Controller 的 `OnActionEnd` / `OnMissionEnd`；**但框架没有把三者接起来的实现**，`ActionList` 接口只有测试里的实现，业务要自己写胶水 | 缺默认装配（ssr 的 action_list 模块那一层） | 引入默认装配 `actionflow.Behavior`（§3 A1） |
+| 心跳驱动方式 | 每组当前动作一个登记、任务一个登记、AI 一个登记（取层间最短）+ 每秒一个；周期按场景选；按心跳 ID 核对丢弃过期拍 | P2：`BeatRunner` 每组一个登记，周期取动作的 `TickInterval`，组空闲停；`Elapsed` 来自心跳；Remote 共享模式挂不上时动作失败结束；任务、AI 未接 | 缺任务与 AI 的心跳接线 | 引入（§3 A6、C4） |
+| 持久化 / 重载后恢复 | 不持久；状态投影到同步组件字段随实体落库，加载时由实体逐个重设 | runner 纯内存、不随事务回滚（D20 决定 3，由业务保证）；不持久；buff 在 `CombatDao` 里持久、随事务回滚（`combatcomponent/component.go:40-74`） | 一致：都不持久行为状态。state 需要定：存哪里、回不回滚、持久不持久 | 行为状态保持不持久；state 见 §4 |
+| 配置化 | 动作 / 任务 / 策略在 Go 里注册；AI 编辑器 JSON（阶段、事件、条件、动作、延迟、次数），按版本热更（运行中实例不换） | 动作 / 任务 Go 注册、注册表可封存；`PlanMission` 计划是数据；行为树 JSON（严格解析、带路径诊断）；无热更，换配置需重新 `SetStrategy` | roost 的配置更严格；缺阶段与事件节点 | 阶段 / 事件引入为行为树能力（§3 C2）；不引入 ssr 编辑器格式与 stub 版本热更（配置热更走 configdata 的现有机制，另议） |
+| 可观测性 | 每 10 秒打印各类动作 / 任务在途数；AI 编辑器运行日志留内存、可经调试命令查看；按实体开关的动作日志 | 只有钩子（OnTransition / OnEnded / OnError），无指标 | 缺在途数 / 结束原因计数、AI 决策轨迹 | 引入可选指标与行为树轨迹钩子（§3 A9、C5） |
+| 测试性 | 无单元测试；行为依赖全局时钟、全局工厂与对象池 | ActionRunner / MissionRunner / Controller / 行为树有大量单测（延后队列、重入、panic 恢复、有界）；P2 有真实 Nest 与 `-race` 用例 | roost 明显更好 | 新能力按现有方式先红后绿 |
+
+#### 3. 引入方案
+
+**和 roost 约束的关系（对全部条目成立）**：runner、任务、策略、state 的方法都只在实体锁内调用（Nest handler、心跳回调、加载 / 新建初始化），不加锁；回调只做内存计算与入队，不阻塞、不 I/O，符合快池（short）不阻塞；周期推进只经 `gameplay/heartbeat` 登记；ActionRunner / MissionRunner / Controller 不随事务回滚（D20 决定 3：handler 最后一步才调用它们，框架不处理）；行为状态不持久。
+
+**A. 扩展 `gameplay/actionflow`**
+
+- **A1 默认装配 `Behavior`（ssr action_list 模块那一层）**。现在 `ActionList` 接口（`runtime.go:25-51`）没有框架实现，业务要自己把 ActionRunner、MissionRunner、AI 接起来，而接线顺序有坑（动作结束先送任务再送 AI；任务结束先清它的动作；清场先 `EndCurMission` 再 `EndAllAction`；任务回调里建的动作要带任务 ID）。草案：
+
+  ```go
+  // gameplay/actionflow/behavior.go
+  type Observer interface { // ai.Controller 实现它；actionflow 不导入 ai
+      OnActionEnd(id int64, kind ActionKind, reason ActionReason)
+      OnMissionEnd(m Mission, reason ActionReason)
+  }
+  type BehaviorConfig struct {
+      Registry     *Registry
+      GroupForKind func(ActionKind) (ActionGroup, bool)
+      Conflict     func(running, incoming ActionSnapshot) Conflict // A3，可空
+      Beat         *BeatConfig                                    // 为空则不挂心跳（测试 / 手动 tick）
+      Observer     Observer
+      OnError      func(error)
+  }
+  func NewBehavior(owner entity.IThreadSafeEntity, cfg BehaviorConfig) (*Behavior, error) // 实现 ActionList
+  func (a *Behavior) Runner() *ActionRunner
+  func (a *Behavior) Missions() *MissionRunner
+  func (a *Behavior) Clear(reason ActionReason) // EndCurMission 后 EndAllAction 的固定顺序
+  ```
+
+  影响：新增，不改现有类型；测试里的 `planActionList` 可改用它。工作量约 1 天（含按现有延后队列用例补“动作结束 → 任务 → 观察者”的顺序与重入测试）。
+
+- **A2 取代否决与合并（ssr `CanCancelByNext` / `TryCancel` 的 `ErrNoNeedCancel`）**。可选接口，不实现时行为不变（一律取代）：
+
+  ```go
+  type ReplaceDecision uint8
+  const ( Replace ReplaceDecision = iota; Keep /* 保留当前，新动作以取消结束 */; Reject /* 保留当前，Start 返回 ErrReplaceRejected */ )
+  type Replacer interface { ReplaceBy(ctx *ActionContext, next ActionSnapshot) ReplaceDecision }
+  ```
+
+  与 ssr 的区别：ssr 的“保留当前”对调用方返回 nil 且新动作无声消失；roost 的 `Keep` 照样给新动作一个 ID 并发一次取消状态的 OnEnded（与“拿到 ID 的动作一定有结论”一致，`action_runner.go:140-143`），`Reject` 返回明确错误。`End(group, force=true)` 不问 `Replacer`（ssr 的 `CanCancelByForce` 不引入：强制结束必须成功）。工作量 0.5 天。
+
+- **A3 跨组冲突规则（ssr 硬编码矩阵 → 配置函数）**：
+
+  ```go
+  type Conflict uint8
+  const ( NoConflict Conflict = iota; BlockIncoming /* 新动作返回 ErrBlockedByGroup */; PreemptRunning /* 取消对方组的当前动作再启动 */ )
+  // ActionRunnerConfig.Conflict func(running, incoming ActionSnapshot) Conflict
+  ```
+
+  在 `applyStart` 里先按其他组的当前动作逐个判定（组按编号排序，结果确定）；`PreemptRunning` 取消对方时不推进对方队列。默认 nil = 无跨组规则（现状）。工作量 0.5 天。
+
+- **A4 `EndAction(id, force, reason)`**：按 ID 结束当前或排队的动作（ssr `EndAction(id)`）。`ActionList` 接口加同名方法（不兼容：测试实现要补）。工作量 0.3 天。
+
+- **A5 冻结模式**：`Freeze(group, mode FreezeMode)`，`FreezePause`（现状：暂停当前、拒绝新动作）与 `FreezeCancel`（ssr：取消当前、拒绝新动作）；冻结是**计数的**（多个来源同时冻结同一组，全部解冻才恢复），由 §4 的 state 门控驱动时天然需要计数。`Freeze(group)` 改签名（不兼容，现有调用只在测试）。工作量 0.5 天。
+
+- **A6 任务心跳**：`BeatConfig` 增加任务登记（`"<Name>/mission"`），任务可选实现 `TickIntervaler`（复用 P2 的接口），有任务且需要周期 tick 时挂、任务结束时停；Remote 共享模式挂不上时任务以失败结束（与动作一致）。只在 `Behavior` 里接（BeatRunner 只管动作组不变）。工作量 0.5 天。
+
+- **A7 Start 即完成（瞬时动作）**：两种做法（拍板 3）：A 改 `Action.Start` 为 `Start(ctx) (done bool, result ActionResult, err error)`；B 可选接口 `Instant interface{ StartResult() (ActionResult, bool) }`，Start 返回后 runner 查询。两者都让 runner 在 Start 后立即走 `finish`、发 OnEnded、通知任务（修掉 ssr 瞬时动作不通知任务的问题）。A 影响 P2 的 `movement.moveAction` 与测试里的全部动作实现（约 20 处）；B 无影响。工作量 0.3 天（B）/ 0.5 天（A）。
+
+- **A8 PlanMission 步骤超时与重试**：`MissionStep.Timeout time.Duration`（依赖 A6 的任务 tick：超时以 `ActionStatusExpired` 结束当前步的动作，走 `OnFail`）、`MissionStep.Retry int`（失败后原地重试次数，用完才走 `OnFail`）。更复杂的分支（按条件、按结果原因）留给行为树，不在计划里加表达式。工作量 0.5 天。
+
+- **A9 可观测（可选）**：`Behavior` 提供指标钩子：`actionflow.actions_started_total{kind}`、`actionflow.actions_ended_total{kind,status}`、在途数 gauge；名字按 `metric_names_gate` 规则登记进 [OBSERVABILITY](../framework/OBSERVABILITY.md)。是否默认开启待定（每个动作两次计数器递增，量级同心跳）。工作量 0.5 天。
+
+**B. `gameplay/state`（新包，详见 §4）**：状态声明表 + 每实体状态集合 + 观察者 + 对动作组的门控 + 与 Buff 的桥。
+
+**C. 扩展 `gameplay/ai`**
+
+- **C1 事件投递**：ssr 的约 25 个具体事件是玩法词表，不照搬；给 `Controller` 加 `OnEvent(ev Event)`，`Event{Kind uint16; Data any}`，策略可选实现 `EventStrategy{ OnEvent(ctx *Context, ev Event) }`；`BehaviorStrategy` 像动作结束一样把事件缓冲到下一拍，新增条件叶子 `EventReceived(kind)` 与 `TakeEvent`。冻结期间事件丢弃（ssr 同样屏蔽），动作 / 任务结束照常送达（现有 `notifiable` 规则不变）。工作量 0.5 天。
+- **C2 分阶段策略（ssr ai_engine 的 stage）**：`StagedStrategy[C]`：若干命名的树、当前阶段、`SetStage(name)`（在回调里调用时延后到本拍结束，切换时 Reset 旧树、触发配了 `OnInterrupt` 的叶子收尾）；JSON 增加 `stages` 顶层与 `set_stage` 内置动作叶子。阶段切换常见于 boss 多阶段，与具体玩法无关。工作量 1 天。
+- **C3 `FreezeFor(d)`**：冻结并在 `d` 后的第一次 Tick 自动恢复（ssr `RecoverDuration`）；可选是否同时结束在途动作（ssr `NoInterruptAction`）。工作量 0.2 天。
+- **C4 AI 心跳**：`ai.BeatController`（或 `Behavior` 的选项）给 Controller 登记 `"ai"` 心跳，周期由策略可选实现 `TickInterval()` 决定，无策略或冻结且无定时恢复时停。用独立登记而不是并进 actionflow 的组心跳（拍板 7），理由同 P2 决定“每组一个心跳”：AI 决策周期（常见 200ms～1s）与动作推进周期不同。工作量 0.5 天。
+- **C5 决策轨迹钩子（可选）**：`BehaviorStrategyOptions.Trace func(path string, status Status)`，供调试命令或日志按实体采样；不内建内存日志环（ssr AIEditor 的 `logs` 无上限地追加，`ai/internal/strategy_ai_editor.go:190-193`）。工作量 0.3 天。
+
+**不引入（及理由）**
+
+| ssr 部件 | 理由 |
+| --- | --- |
+| 具体动作（攻击、追击、施法、交互、避让）与具体任务（追击攻击、徘徊、回出生点等）、`AbilityManager` 门面 | 玩法相关；业务按自己的动作 / 任务种类注册。追击 / 跟随类可在调研 follow_agent / rvo 时作为 movement 的组合再评估 |
+| `bt_engine` | ssr 自己没有使用、未完成；roost 行为树已覆盖并更完整 |
+| `ai_engine` 编辑器 JSON 格式、stub 版本热更 | 是 ssr 编辑器工具链的格式；roost 只取“阶段 + 事件”两个概念（C1、C2），格式沿用现有严格 JSON 树 |
+| 喊话、避让 director 与 director 优先级数组 | 玩法；roost 用单策略 + 事件，策略内部可组合多个子行为 |
+| 场景时间 / 墙钟按“大世界”切换 | 时钟由业务经 `PopulateContext` / `Now` 钩子注入，框架不认场景类型 |
+| 对象池 `sync.Pool` | 没有 roost 侧分配压力的证据；需要时先基准再做 |
+| 静默丢弃（`deferF` 超 10 条丢弃、切换中 `SetMission` 返回 nil、取代失败返回 nil） | 与 roost 的“有界 + 明确错误 / OnError 报告”冲突，后者已实现 |
+| state 的 Once 模式、匿名计数（RefCover） | 见 §4 |
+
+**对现有调用方的影响（项目未上线，可不兼容，逐项列出）**：仓库里 actionflow / ai 除各自测试外没有生产调用方（D20 现状核对），P2 分支的 `gameplay/movement` 是第一个。不兼容项：A4 `ActionList` 加 `EndAction`（测试实现 `planActionList` 等补方法）；A5 `Freeze` 改签名并改为计数（测试里的冻结用例改写）；A7 若选 A，`Action.Start` 改签名（movement 两个动作 + 测试动作）。其余为新增或可选接口，默认行为不变。
+
+**分期与工作量（前提：D20 P2 先合入 main，全部建立在 BeatRunner 上）**
+
+| 期 | 内容 | 估计 |
+| --- | --- | --- |
+| D21-1 | A1 `Behavior`、A2 取代否决、A3 跨组冲突、A4 `EndAction`、A5 冻结模式、A7 瞬时动作 | 3 天 |
+| D21-2 | `gameplay/state`（§4 S1～S4）与 actionflow 门控（S5） | 2.5 天 |
+| D21-3 | Buff → state 桥（`combatcomponent`，S6） | 1 天 |
+| D21-4 | A6 任务心跳、A8 计划超时 / 重试、C4 AI 心跳、C3 `FreezeFor` | 2 天 |
+| D21-5 | C1 事件、C2 分阶段策略、C5 / A9 可观测 | 2 天 |
+
+每期按 maintenance §7 先红后绿、`-race`、文档（guide / impl 的 actionflow 与 ai 章节、PACKAGES、KNOWN-LIMITS）同步；game-demo 接入随 D20 P3 一起，不单列。
+
+#### 4. state 单独一节
+
+**ssr 的 state 是什么**：一组**独立的状态位**（不是状态机，没有互斥组），每位带可选参数；4 种写入语义（覆盖、匿名计数、带序号计数、一次性事件）；变化通知按优先级送给观察者；时长靠延迟消息或实体心跳轮询；值只在内存，靠 `SyncWdsFunc` 投影到同步组件、随实体落库，加载时由实体逐个重设（§1）。用途三类：① **控制状态**（定身、缴械、无敌、嘲讽）——由技能 / Buff 设置，门控动作组与 AI；② **行为标记**（手动操作、回城、回出生点、移动中）——由动作设置，供 AI 与其他模块判断；③ **生命周期事件**（进 / 出场景、死亡、被攻击）——Once 模式，其实是事件总线。
+
+**roost 里谁已经覆盖了一部分**：Buff 的持续时间、叠层、驱散、免疫与标签在 `combat.BuffContainer`（持久、随事务回滚，`gameplay/skill/combat/buffs.go:31-49`、`combatcomponent/component.go:40-74`）；技能的免疫判断经业务注入的 `HasGameplayTag`（`combatcomponent/status_bridge.go:36-37`）；生命周期有实体的 `OnInitFinish` / `OnDestroy` 与业务事件。缺的是：①“这个实体此刻是否被定身”这类**跨来源汇总的布尔事实**的统一入口，②这些事实对**动作组的门控**，③行为标记的存放处。
+
+**方案：`gameplay/state`**
+
+- **S1 声明（启动时一次，之后封存）**：
+
+  ```go
+  package state
+  type ID uint16
+  type Def struct {
+      ID      ID
+      Name    string
+      Sync    bool // 进实体同步（客户端可见，例如“被定身”）
+      Persist bool // 落库；只用于业务直接设置的长期标记（例如保护期），缺省 false
+  }
+  type Catalog struct{ /* ... */ }
+  func NewCatalog(defs ...Def) (*Catalog, error) // 重复 ID / 名字报错；封存后只读
+  ```
+
+- **S2 两种写入语义**（取代 ssr 的 4 种）：
+  - **按来源（Sourced）**：`Add(id, src Source) bool` / `Remove(id, src) bool`，`Source{Kind uint8; ID int64}`（例如 Buff 实例、某个动作、GM）；有任一来源即生效。取代 ssr 的匿名计数与带序号计数：来源可识别，重复 Add 同一来源不叠加，Remove 不存在的来源无效——避免 ssr RefCover“多减一次就错位”的问题。
+  - **派生（Provider）**：`Provide(id, func() bool)`，查询时现算，不存储（例如“被定身” = Buff 容器里有 `stun` 标签）。拥有数据的组件在数据变化后调 `Changed(id)` 触发通知。派生状态天然随数据回滚、加载后自动正确，不需要持久与恢复。
+  - **不引入 Once**：生命周期事件走实体回调或 C1 的 AI 事件，不混进状态表；**不引入匿名计数**。**参数**：不提供通用参数槽（ssr 的 `StateParam` 是一个装所有状态参数的大结构）；需要参数的（嘲讽目标）由来源自带（`Source.ID`）或由业务组件自己存。
+- **S3 存储、回滚、同步、持久**：按来源的状态存在实体的一个 DAO 组件（`StateDao`）里：随 Nest 事务回滚（undo），`Sync` 位经现有实体同步下发，`Persist` 位落库、其余 nopersist。派生状态不存储。与 actionflow 不同，state 的值**随事务回滚**——它是数据，不是执行器；这样 handler 里“先加状态、后续步骤失败”回滚后状态也撤销，不需要业务额外保证。
+- **S4 查询与观察**：`Has(id)`、`Any(ids...)`、`Satisfies(Requirement{All, None []ID})`（ssr `CheckOperation`）；`Watch(id, func(Change)) Handle` / `Unwatch`、`Watcher` 打包注销（ssr `Behavior`）；不做观察者优先级（顺序 = 注册顺序，确定性即可；ssr 的优先级只用于“AI 先于别人收到死亡”这类排序，可由注册顺序表达）。观察者在实体锁内同步调用；观察者里改状态延后到外层调用返回后执行、有界（与 actionflow 的延后队列同一规则）。**观察者的副作用不随回滚**：观察者若调 actionflow（例如取消在途动作），回滚后状态撤销而动作已被取消——与 D20 决定 3 相同，由业务保证（改状态放在 handler 最后一步）；能用 S5 门控表达的不要用观察者。
+- **S5 与 actionflow 的门控（声明式，推荐）**：`state.Gate(set, rules...)` 生成 actionflow 用的冻结来源：规则 `Rule{State: Rooted, Group: Move, Mode: actionflow.FreezeCancel}`。状态生效时对组计数冻结（A5），失效时解冻；`FreezeCancel` 在生效那一刻取消在途动作。门控只依赖 state 与 actionflow 的公开接口，放在 `gameplay/state`（state 导入 actionflow，反向不导入）。
+- **S6 与技能 / Buff 的关系与边界**：
+  - **Buff（`combatcomponent`）**：负责数值、持续时间、叠层、驱散、免疫，是“控制效果”的唯一持有者；state 不重复存时长。桥接：`combatcomponent` 提供 `StateProvider(tag combat.Tag) func() bool` 与“容器变化后调用 `Changed`”的钩子（`ApplyBuff` / `RemoveBuff` / `DispelBuffs` / `TickBuffs` 之后），业务声明 `stun` 标签 → `Stunned` 状态。Buff 到期由 `TickBuffs`（D20 P5 挂 1Hz 心跳）驱动，state 跟着变。
+  - **技能（`gameplay/skill`）**：施法前的“能否施法”查 state（`Satisfies`）；`StatusBridge.HasGameplayTag` 可直接接到 `state.Has`（标签与状态的映射由业务声明）；技能运行时自身的状态（施法阶段、衍生物）不进 state。
+  - **actionflow**：动作可以 `Add` 行为标记（`Source{Kind: action, ID: 动作 ID}`），在 `Cancel` / 结束时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）；门控走 S5。
+  - **AI**：读 `Has` 做条件叶子；状态变化可经 C1 作为事件送给策略。
+- **S7 时长**：不内建（推荐）。有时长的控制效果走 Buff；离线也要准点的长期标记（保护期）走 entitytimer（D11）到期时 `Remove`；短时标记由设置它的动作或 Buff 负责撤销。不做 ssr 的“实体心跳里轮询过期”。
+- **工作量**：S1～S5 约 2.5 天，S6 约 1 天（见分期 D21-2、D21-3）。
+
+#### 5. 调研一 · 需要拍板
+
+1. **框架提供默认装配 `actionflow.Behavior`**：A 提供（推荐：ssr 的 action_list 就是这一层，接线顺序有坑，业务各写一份容易错，且 AI / 任务心跳要有统一挂载点）；B 维持现状，业务自己实现 `ActionList`。
+2. **同组取代与跨组冲突**：A 可选接口 `Replacer` + 配置函数 `Conflict`，默认行为不变（推荐）；B 照搬 ssr 的固定组与硬编码矩阵（玩法耦合）；C 不做。
+3. **Start 即完成**：A 改 `Action.Start` 签名（推荐：接口一处表达完整，项目未上线可不兼容，影响 movement 两个动作与测试）；B 可选接口（零影响，但多一个隐式约定）。
+4. **冻结语义**：A 暂停 / 打断两种模式 + 计数冻结（推荐：state 门控需要计数，定身打断移动需要打断模式）；B 只保留现在的暂停。
+5. **任务心跳与计划超时 / 重试**：A 在 `Behavior` 里给任务挂心跳，PlanMission 加 `Timeout` / `Retry`（推荐）；B 任务不 tick，超时由业务另挂心跳。
+6. **AI 的扩展范围**：A 事件投递 + 分阶段策略 + `FreezeFor` + 独立 `"ai"` 心跳（推荐）；B 只接心跳；C 另做事件触发引擎（与候选 `trigger_engine` / `eca_man` 一起调研）。
+7. **AI 心跳**：A 独立登记 `"ai"`，周期由策略决定（推荐）；B 并进 actionflow 的组心跳。
+8. **新增 `gameplay/state`**：A 新包（推荐）；B 不做，控制状态全由 Buff 标签直接查。
+9. **state 的写入语义**：A 按来源 + 派生两种，不要 Once、不要匿名计数（推荐）；B 照搬 ssr 四种。
+10. **state 的存储**：A DAO 组件、随事务回滚、按声明同步 / 持久（推荐：状态是数据，回滚一致，不需要加载后重设）；B 纯内存、与 runner 同规则不回滚（实现最少，但同步要另投影、加载要重设，与 ssr 一样）。
+11. **state 的时长**：A 不内建，时长归 Buff / entitytimer（推荐）；B 内建 `AddFor(d)`（需要 state 自己挂心跳或 entitytimer）。
+12. **Buff → state**：A 派生（查询时读 Buff 容器标签，推荐）；B 复制（Buff 施加 / 移除时写 state，两份数据要保持一致）。
+13. **分期顺序**：按上表 D21-1 → D21-5，前提 D20 P2 先合入（推荐）；或先做 state（D21-2/3）再做 actionflow 扩展。
+
+**维护者决定（2026-10-21）**：以上 13 条全部按推荐（A）：1 框架提供 `actionflow.Behavior`；2 可选 `Replacer` + 配置函数 `Conflict`，默认行为不变；3 改 `Action.Start` 签名支持 Start 即完成；4 暂停 / 打断两种冻结模式 + 计数冻结；5 `Behavior` 给任务挂心跳、`PlanMission` 加 `Timeout` / `Retry`；6 AI 事件投递 + 分阶段策略 + `FreezeFor` + 独立 `"ai"` 心跳；7 AI 心跳独立登记、周期由策略决定；8 新增 `gameplay/state`；9 按来源 + 派生两种写入语义；10 DAO 组件、随事务回滚、同步 / 持久按声明（缺省不持久）；11 不内建时长；12 Buff → state 用派生；13 按 D21-1 → D21-5 的顺序（D20 P2 已合入 main `382eb10c`）。
+
+#### 6. 调研一 · 实施
+
+**维护者 2026-10-21 决定：Agent 更名为 Behavior**（`actionflow.Agent` → `actionflow.Behavior`，`NewAgent` → `NewBehavior`，`AgentConfig` → `BehaviorConfig`）：Agent 容易和 AI agent 混淆；它是 action_list + mission + 接 AI 的融合，是实体的“行为组件”（运行时组件，不带 DAO）。`ActionList` 接口名与 `ai.Controller` 不变，Behavior 是 `ActionList` 的默认实现。改名在 D21-5 之后单独提交（refactor），下文与上文方案里的名字已统一改成 Behavior（ssr state 模块自己的 `Agent` 除外）。
+
+分期结果按完成顺序写在下面，最后是“调研一 · 收尾”。
+
+##### D21-1 实施结果（2026-10-21）
+
+**状态：已实施**（分支 `feat/d21-gameplay`，本地提交 `86c6dc1c`，由维护者推送）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
+
+**API 最终形状**：
+
+```go
+// gameplay/actionflow
+type Action interface { Kind() ActionKind; Start(*ActionContext) (done bool, result ActionResult, err error); Tick(*ActionContext) (bool, ActionResult); Cancel(*ActionContext, string) }
+type Replacer interface{ ReplaceBy(ctx *ActionContext, next ActionSnapshot) ReplaceDecision } // ReplaceAllow / ReplaceKeep / ReplaceReject
+type Conflict uint8                                                                            // NoConflict / BlockIncoming / PreemptRunning
+ActionRunnerConfig.Conflict func(running, incoming ActionSnapshot) Conflict
+ActionRunnerHooks.OnFreeze func(group ActionGroup, frozen bool)
+func (r *ActionRunner) EndAction(id int64, force bool, reason ActionReason) error
+func (r *ActionRunner) Freeze(group ActionGroup, mode FreezeMode) error // FreezePause / FreezeCancel，计数
+func (r *ActionRunner) Recover(group ActionGroup, now time.Time) error  // 计数归零才解冻
+func (r *ActionRunner) Frozen(group) bool / FreezeCount(group) int
+var ErrActionGroupNotFrozen, ErrActionNotFound, ErrReplaceRejected, ErrBlockedByGroup
+type Observer interface{ OnActionEnd(id int64, kind ActionKind, reason ActionReason); OnMissionEnd(Mission, ActionReason) }
+func NewBehavior(owner entity.IThreadSafeEntity, BehaviorConfig{Registry, GroupForKind, Conflict, DefaultMission, Beat *BeatConfig, Observer, Now, OnError, MaxDeferredCommands, MaxDeferredSteps}) (*Behavior, error)
+func (a *Behavior) Runner() / Beat() / Missions() / Clear(reason) + ActionList 全部方法
+type ActionList interface { …; EndAction(id, force, reason) error; Freeze(group, mode) error; Recover(group) error; Frozen(group) bool; … } // 去掉 Frozen(group) / Recover(group) / GetFrozen
+```
+
+**实施中的决定（方案没写死的细节，按“不引入”清单与 roost-coding 定）**：
+
+1. **被拒绝的新动作是否发 OnEnded**：与现有的“冻结”一致——最外层直接调用被拒（`ErrReplaceRejected` / `ErrBlockedByGroup`）时返回错误、不发 OnEnded（调用方没拿到 ID）；回调里延后的（ID 已交出）发一次失败状态的 OnEnded。`ReplaceKeep` 总是给 ID 并发一次取消状态的 OnEnded，`Start` 返回 nil（方案原文）。
+2. **跨组冲突也约束排队项**：排队项成为当前动作时同样过 `Conflict`，被挡以失败结束、报告、接着试下一个——否则一个被挡的 Start 可以经 Enqueue 绕过规则。此时同组空闲，不问 `Replacer`。
+3. **`FreezeCancel` 只打断当前动作，排队项保留**（ssr 的三组都关了排队，没有先例）：打断是“停下正在做的事”，排队的计划是否作废由业务决定（`ClearQueue` / `EndAction`）。列为待拍板 ①。
+4. **冻结的组停心跳**：新增 `ActionRunnerHooks.OnFreeze`（只在计数 0↔1 时调用），`BeatRunner` 用它停 / 重挂组的心跳；暂停期间不占调度，解冻后第一拍的 `Elapsed` 从重新启动算起（暂停的时间不计入移动）。
+5. **`EndAction` 的延后执行找不到时不报告**：回调里按 ID 结束一个随后在同一轮里已经结束的动作是正常时序，不算错误；最外层直接调用找不到返回 `ErrActionNotFound`。
+6. **`movement` 的 Start 即完成用 `Advance(token, 0)`**：不在动作里另写一套“是否已到达”的判断；为此 `walkPath` 让与当前位置重合的途经点在 0 时长下也越过（原来 `budget > 0` 才进循环，有剩余距离时行为不变）。
+7. **Behavior 的“先任务后观察者”在任务回调里有一处例外**（任务回调期间的送达延后、观察者当次收到），不为它在 Behavior 里另加一层延后队列（方案“不引入”的复杂调度层），写进 KNOWN-LIMITS。
+8. **测试里的 `planActionList` 保留**：它测的是“业务自己接线”的底层路径（`ActionRunner` + `MissionRunner` 直接接），`Behavior` 的同类行为在 `behavior_test.go` 另测。
+
+**红绿证据**：新功能，实现与测试同轮写成；红用变异核对给出（每个强制点改掉一处，对应用例在当前代码上变红，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| D1 `start` 忽略 `done` | `TestAnActionThatCompletesInStartEndsAtOnceAndTheQueueMoves`：`after an instant action: current &{instant ...} (want the queued one), instant starts 1 cancels 0, queued starts 0`；`TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`：`ended inside the handler after each start: [0 1 2]; registered 1` |
+| D2 不问 `Replacer` | `TestTheCurrentActionCanKeepItselfOrRejectAReplacement`：`keep: Start = 2, <nil>; current kept false; new starts 1; current cancels 1` |
+| D3 不认 `BlockIncoming` | `TestConflictRulesBlockOrPreemptOtherGroups`：`blocked start: <nil> starts 1` |
+| D4 抢占时推进对方队列 | 同上：`preempt: <nil> current3 true current1 &{later walk ...} walk cancels 1 later starts 1 queue 0` |
+| D5 `EndAction` 不找排队项 | `TestEndActionEndsTheCurrentOrAQueuedActionByID`：`actionflow: action not found: 3` |
+| D6 冻结不计数（Recover 清零） | `TestFreezingIsCountedAndCancelModeInterruptsTheCurrentAction`：`one of two sources recovered: <nil> frozen false` |
+| D7 `FreezeCancel` 不打断 | 同上：`cancel freeze: current &{moving ...} cancels 0 queue 1 next starts 0`；`TestCancelFreezeFromACallbackInterruptsAfterTheCallback`：`after the callback: current &{moving ...} cancels 0` |
+| D8 冻结不停组心跳 | `TestAFrozenGroupStopsBeatingAndResumesOnRecover`：`paused group: active true registered 1`；`TestFreezingTheMoveGroupPausesOrInterruptsTheMove`：`paused move: registered 1 ended []` |
+| D9 先观察者后任务 | `TestBehaviorDeliversActionEndsToTheMissionBeforeTheObserver`：`observer saw [action 1 2 step 0 action 2 2 step 1 mission 1 2], want [action 1 2 step 1 mission 1 2 action 2 2 step -1]` |
+| D10 不打任务标签 | `TestBehaviorEndsAMissionsActionsWithTheMissionOnly`：`mission tags: step 0 (mission 1) ai 0` |
+| D11 `Clear` 先动作后任务 | `TestBehaviorClearLeavesNothingRunning`：`after Clear: group 1 <nil> group 2 <nil> second starts 1 mission <nil>` |
+| D12 0 时长不越过重合的途经点 | `TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat`：`ended inside the handler after each start: [0 2 3]; registered 0` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳的用例（actionflow 的心跳用例、movement 的 nest 用例）`-race -count=30` 全部通过；根包 `GOWORK=off go test -count=1 .` 通过（退出码均为 0）。
+
+**待拍板（先按推荐做了）**：① `FreezeCancel` 是否连排队项一起丢弃——现按“只打断当前、保留排队”（推荐：排队计划的去留由业务决定）；备选 B：打断时丢弃本组排队项（各发一次取消的 OnEnded）。
+
+##### D21-2 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `849031fa`）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
+
+**API 最终形状**：
+
+```go
+// gameplay/state
+type ID uint16; type Source struct{ Kind uint8; ID int64 }
+type Def struct{ ID ID; Name string; Sync, Persist bool }
+func NewCatalog(defs ...Def) (*Catalog, error); (*Catalog).Def / Lookup / IDs
+func NewStateDao(id int64, dbName string, catalog *Catalog) *StateDao // DaoInterface + MutationParticipant + PersistedDaoLoader + 回滚快照；FieldStates、CollectionName = "entity_state"
+func NewSet(dao *StateDao, SetConfig{OnError}) *Set
+func (s *Set) Add / Remove(id, src) error; RemoveSource(src) ([]ID, error); Provide(id, func() bool) error; Changed(ids...); Refresh()
+func (s *Set) Has(id) bool; Any(ids...) bool; Satisfies(Requirement{All, None}) bool; Sources(id) []Source; Active() []ID; Synced() []ID
+func (s *Set) Watch(id, func(Change)) (Handle, error); Unwatch(Handle); NewWatcher() *Watcher // Watcher.Watch / Close
+type Freezer interface{ Freeze(actionflow.ActionGroup, actionflow.FreezeMode) error; Recover(actionflow.ActionGroup) error } // actionflow.Behavior 实现
+func Gate(set *Set, target Freezer, onError func(error), rules ...Rule{State, Group, Mode}) (*Gated, error); (*Gated).Close()
+var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid, ErrNotifyRunaway
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **观察者里改状态：改动立即生效，通知排到下一轮**（方案 S4 写的是“改状态延后到外层调用返回后执行”）。延后改动会让观察者里的 `Add` 拿不到结果、`Has` 读到旧值；改为立即改、通知按轮次补发，同样做到“回调运行期间不嵌套通知、有界（64 轮）”，观察者看到的总是当前值。
+2. **通知按“观察者上次看到的值”算差、且每次比较全部被观察状态**：这是处理“状态随回滚、观察者副作用不随回滚”的办法——回滚期间不能调观察者（回滚中再改别的组件会被拒），回滚后观察者看到的旧值与实际不同，下一次任何改动或 `Refresh` 就按差补发。观察者因此总是收到交替的值，不会连收两次同一个值。
+3. **门控每条规则至多持有一次冻结**（不是“状态每生效一次就 Freeze 一次”）：结合第 2 条，回滚造成的多余冻结在下一次通知时撤销，计数不会累积、组不会永久冻结。方案没写回滚时门控怎么办；按 D20 决定 3 的口径（runner 不回滚、由业务保证），框架保证“最终一致、不累积”，立即一致由业务在回滚后调 `Refresh`。列为待拍板 ②。
+4. **持久状态只能在事务里改**：事务外改 `Persist` 状态返回 `ErrNotInTransaction`（无法落库，拒绝而不是静默丢失）；不持久的允许在加载 / 新建初始化阶段直接改（NPC 出生时的标记）。`CombatDao` 是一律 panic，这里改成返回错误，因为状态写入是常规业务调用。
+5. **持久文档的键是状态名**，`RestorePersisted` 跳过不认识的名字与不再声明 `Persist` 的状态（与 D13“旧键不加载、整文档写回即删除”一致，不报警）；只有一个字段位 `FieldStates`，持久写整个 `states` 子文档。
+6. **同一状态可以同时有来源与派生函数**（任一为真即生效）：例如“被定身”既来自 Buff 标签（派生），也可以由剧情直接加来源。
+7. **`Set.Synced` 给同步打包用**：框架的同步内容由业务的 packer 打包，`state` 不自带 packer；变化时标 `StateDao` 的同步位 `FieldStates`（与 `CombatDao` 相同的做法）。派生状态在 `Changed` 时标同步位。
+8. **`Gate` 的签名多一个 `onError`**（方案草案是 `Gate(set, rules...)`）：`Freeze` / `Recover` 的错误（例如 `FreezeCancel` 打断时动作 `Cancel` panic）需要有去处。
+
+**红绿证据**（新包，实现与测试同轮写成；变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| S1 通知不按差（每次改动都通知） | `TestADerivedStateIsComputedAndNotifiedOnlyWhenItChanges`：`watchers saw [first false second false first false second false …]`（同一值反复直到截停，原文过长，此处截取开头），`want [first true second true first false second false]` |
+| S2 同一来源重复加会叠加 | `TestASourcedStateHoldsWhileAnySourceRemains`：`rooted true sources [{1 1} {1 1}], want only buff1 left` |
+| S3 不登记逆操作 | `TestStatesFollowTheTransaction`：`state_test.undo: states survived the rollback: [1 3 5]` |
+| S4 不持久的状态也标持久 | 同上：`nest: transaction commit rejected`（memory 持久级别下改不持久的状态被拒） |
+| S5 事务外允许改持久状态 | `TestAPersistentStateCannotChangeOutsideATransaction`：`persistent add outside a transaction: <nil> has true` |
+| S6 不标同步脏 | `TestStatesFollowTheTransaction`：`a synced state change left no sync dirty bit` |
+| S7 持久文档含全部状态 | `TestTheDaoPersistsOnlyPersistentStatesByName`：`restore under a changed catalog: <nil> map[1:[{1 1}]]` |
+| S8 门控不按规则持有（每次通知都冻结） | `TestGateFreezesActionGroupsWhileStatesHold`：`stunned + silenced: freeze count 3 registered 0 ended [1 4 action group frozen]` |
+| S9 `Refresh` 什么都不做 | `TestGateRealignsAfterARolledBackStateChange`：`Refresh did not realign the gate` |
+| S10 `Close` 不撤销冻结 | `TestGateAlignsWhenInstalledAndReleasesOnClose`：`Close kept the freeze` |
+| S11 观察者里的改动嵌套通知 | `TestWatcherChangesAreNotifiedInTheNextRoundAndRunawayIsBounded`：`saw [rooted true manual false manual true manual set inside: true], want [rooted true manual false manual set inside: true manual true]` |
+| S12 装门控时不对齐 | `TestGateAlignsWhenInstalledAndReleasesOnClose`：`a gate installed while rooted did not freeze` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；`gameplay/state` 全部用例（含真实 Nest + 心跳的门控用例）`-race -count=30`；根包 `GOWORK=off go test -count=1 .`；`go run ./cmd/glsvet ./gameplay/state/` 无提示。退出码均为 0。
+
+**待拍板（先按推荐做了）**：② 门控在 handler 回滚后的一致性——现按“最终一致”：冻结保留到下一次状态通知（或业务调 `Refresh`），每条规则至多一次、不累积（推荐：与 runner 不回滚的口径一致，框架不在回滚路径上改别的组件）；备选 B：框架在回滚后自动补发（需要 Nest 提供“回滚完成后、实体锁释放前”的钩子，当前没有）。
+
+##### D21-3 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `575f216a`）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条。
+
+**API**：`type StateBinding struct{ State state.ID; Tags []combat.Tag }`；`func (c *CombatComponent) BindStates(set *state.Set, bindings ...StateBinding) error`（构造时一次；每个状态一个提供函数，持久状态、空标签被拒）；`func (c *CombatComponent) HasBuffTag(tag combat.Tag) bool`。
+
+**实施中的决定**：① 一个状态绑多个标签（任一即生效），方案草案是“一个标签一个提供函数”（`StateProvider(tag)`），合成一个绑定避免同一状态登记多个提供函数；② 通知点是“改 buff 集合”的 mutator 加 `OnInitFinish`（加载出的 buff 在这里让已经装好的门控跟上），`SetBuffDueTick` 不改集合、不通知；③ 回滚后派生状态的 `Has` 当场就对（读的是回滚后的容器），观察者在下一次通知时跟上（与 D21-2 第 2 条同一规则）。
+
+**红绿证据**（变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| B1 `TickBuffs` 不通知 | `TestBuffTagsDriveDerivedStates`：`watchers saw [1 true 2 true 2 false 1 false], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B2 `DispelBuffs` 不通知 | 同上：`watchers saw [1 true 2 true 1 false 2 false 1 true], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B3 提供函数缓存容器（等于复制，回滚后不跟） | 同上：`a rolled-back root buff still roots` |
+| B4 `ApplyBuff` 不通知 | 同上：`watchers saw [], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B5 `OnInitFinish` 不通知 | `TestLoadedBuffsReachBoundStatesOnInitFinish`：`watcher saw [] after OnInitFinish, want [true]` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；`go run ./cmd/glsvet ./gameplay/skill/combatcomponent/` 无提示。退出码均为 0。
+
+
+##### D21-4 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `79138636`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 10～12 条。
+
+**API 最终形状**：
+
+```go
+// gameplay/actionflow
+func (a *Behavior) MissionReg() *heartbeat.Reg                                // "<Beat.Name>/mission"
+type MissionStep struct{ …; Timeout time.Duration; Retry int }             // 每次尝试的时限；失败 / 过期原地重试次数
+type MissionPlan struct{ …; Period time.Duration }; const DefaultMissionPeriod = 100 * time.Millisecond
+func (m *PlanMission) TickInterval() time.Duration                         // 只在当前步有时限时非 0
+// gameplay/ai
+func NewBeatController(hooks ControllerHooks, beat BeatConfig{Host, Name, Period, Options}) (*Controller, error) // DefaultBeatName = "ai"，DefaultBeatPeriod = 500ms
+func (c *Controller) BeatReg() *heartbeat.Reg
+func (c *Controller) FreezeFor(d time.Duration, interrupt bool); FrozenUntil() time.Time
+// gameplay/heartbeat
+func PeriodAtMost(want time.Duration) time.Duration                        // 动作组、任务、AI 共用的取档
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **任务不实现 `TickIntervaler` 就不挂心跳**（动作不实现时按缺省周期）：任务历来由动作结束推进，缺省不 tick 才不会让每个有任务的实体多一条心跳。
+2. **对齐点是 `MissionRunner` 的 `OnState` + `OnChanged`**：任务的周期常取决于 Start 之后的内部状态（`PlanMission` 要看当前步），`OnState(true)` 发生在 Start 之前，所以每次任务推进（`OnChanged`）都重新对齐；对齐只比较登记状态，没有变化时不产生启停。
+3. **超时以 `EndAction(动作, force, 过期)` 结束这一步的动作**（方案“以 ActionStatusExpired 结束当前步的动作”）：动作照常 `Cancel`，结论经 `OnActionEnd` 回来，与其他失败同一条路径；每次重试重新计时。
+4. **取消不重试**：方案只写“失败后原地重试”；`Canceled` 意味着有人有意结束了它（被别的动作取代、业务结束、冻结打断），重试会和那一方抢，所以直接走 `OnFail`。列为待拍板 ③。
+5. **AI 心跳不经 `Behavior`**：方案写“`ai.BeatController`（或 `Behavior` 的选项）”；放在 `ai` 包（`NewBeatController`），因为 actionflow 不导入 ai，而 AI 的周期取决于策略、冻结——都是 `Controller` 自己的状态。
+6. **每拍之后重新对齐 AI 周期**：策略可以随自身状态改 `TickInterval`，不需要额外的通知入口。
+7. **`FreezeFor(d, interrupt)` 覆盖之前的冻结，`Freeze` / `Recover` 清定时**；定时冻结期间心跳照常跳（用来检查到期），无定时冻结时停。
+8. **取档规则提到 `heartbeat.PeriodAtMost`**：`BeatRunner`、任务心跳、AI 心跳原来各写一份同样的循环。
+
+**红绿证据**（变异核对，原文；`&{…}` 处原文是带指针地址的结构体，省略）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| H1 任务心跳从不挂 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`mission with a timed step: reg <nil> registered 1 (want the mission's and the action group's)` |
+| H2 `Tick` 不看时限 | 同上：`first timeout: cancels 0 starts 1 mission &{…}` |
+| H3 取消也重试 | `TestTheMissionHeartbeatFollowsTheCurrentStep`：`a canceled step was retried: starts 2 mission &{…} log [action 1 2 step 1 action 2 4 step 1]` |
+| H4 重试次数不按步清零 | `TestPlanRetriesAreCountedPerStep`：`mission {Status:3 CurrentStep:-1 CurrentAction:0 LastResult:{Status:3 Reason:flaky}}, starts 2 / 1 (want each step retried once, then success)` |
+| H5 任务结束 / 无时限的步不停心跳 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`after the mission failed: active true registered 1 info {Status:5 …}`；`TestTheMissionHeartbeatFollowsTheCurrentStep`：`untimed second step: mission beat active true current &{untimed …}` |
+| H6 重试不重新计时 | `TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`：`observer saw [action 1 5 step 0], want [action 1 5 step 0 action 2 5 step 0 mission 1 5]` |
+| H7 冻结时 AI 照跳 | `TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`：`frozen: true 200ms registered 1`；`TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`Freeze after FreezeFor: frozen true beating true ended 1` |
+| H8 定时冻结不到期 | `TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`at the end: ticks 0 frozen true until 2027-01-15 16:00:01 +0800 CST` |
+| H9 周期不看策略 | `TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`：`300ms strategy: true 500ms (want the 200ms tier)` |
+| H10 每拍后不重新对齐 | 同上：`strategy slowed down: true 200ms ticks 1` |
+| H11 `FreezeFor` 不结束在途动作 | `TestFreezeForRecoversOnTheFirstBeatAfterItEnds`：`FreezeFor: frozen true until 2027-01-15 16:00:01 +0800 CST beating true ended 0` |
+| H12 定时冻结也停心跳 | 同上：`FreezeFor: frozen true until 2027-01-15 16:00:01 +0800 CST beating false ended 1` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例（`TestPlanStepTimeoutsRunOnTheRealMissionHeartbeat`、`TestTheAIDecidesOnItsOwnHeartbeat`，连同前几期的 `TestAFrozenGroupStops…`、`TestGate…`、`TestStatesFollow…`、`TestFreezingTheMoveGroup…`、`TestAMoveThatIsAlreadySettled…`）`-race -count=30` 全部通过；根包 `GOWORK=off go test -count=1 .`。退出码均为 0。
+
+**待拍板（先按推荐做了）**：③ 被取消的步骤是否重试——现按“不重试、直接 OnFail”（推荐：取消是有意的结束，重试会与发起取消的一方抢）；备选 B：取消也算失败，按 `Retry` 重试。
+
+##### D21-5 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `e95916f7`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
+
+**API 最终形状**：
+
+```go
+// gameplay/ai
+type Event struct{ Kind uint16; Data any }; type EventStrategy interface{ OnEvent(*Context, Event) }
+func (c *Controller) OnEvent(ev Event) bool
+func (b *BehaviorContext[C]) HasEvent(kind uint16) bool / TakeEvent(kind) (Event, bool) / Events() []Event / SetStage(name) error
+type EventReceived[C] struct{ Kind uint16; Take bool }; type SetStage[C] struct{ Stage string }; type Traced[C] struct{ Path string; Child Node[C] }
+func NewStagedStrategy[C](stages map[string]Node[BehaviorContext[C]], start string, options BehaviorStrategyOptions[C]) (*BehaviorStrategy[C], error)
+func (s *BehaviorStrategy[C]) SetStage(name string) error / Stage() string; var ErrStageUnknown; const DefaultMaxEvents = 64
+BehaviorStrategyOptions[C]{…, MaxEvents int, OnStage func(from, to string), Trace func(path string, status Status)}
+func ParseStages[C](data []byte, registry *Registry[C]) (Stages[C]{Roots, Start}, error); func (r *Registry[C]) TraceNodes()
+// JSON：{"node": "event", "kind": n, "take": bool}、{"node": "set_stage", "stage": "名字"}、文档顶层 {"start", "stages"}
+// gameplay/actionflow
+BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricActionsRunning; func (ActionStatus) String() string
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **`StagedStrategy` 不是单独的类型**：方案写 `StagedStrategy[C]`；实现上 `BehaviorStrategy` 本身支持阶段，`NewStagedStrategy` 返回 `*BehaviorStrategy[C]`，`NewBehaviorStrategy(root, …)` 是只有一个阶段（名字为空串）的特例——两者共用缓冲、Reset、结束通知的全部逻辑，不重复一份。
+2. **策略外的 `SetStage` 立即生效**（方案只写了“在回调里调用时延后到本拍结束”）：业务在事件回调或 handler 里切阶段时，没有“本拍”可等。
+3. **事件条件叶子默认不取走**：`EventReceived{Take: false}` 无状态、可以进守卫谓词（JSON 的 `event` 在守卫里只允许不取走）；要“一个事件只触发一次”用 `Take: true`。没有单独做方案里的 `TakeEvent` 叶子，取走是同一个叶子的选项。
+4. **事件缓冲满时丢最早的**、不报告：事件是“唤起决策”的提示，最新的更有用；可靠的事实应在 DAO / state 里。
+5. **轨迹按节点、由解析器包装**（方案 `Trace func(path, status)`）：路径用 JSON 路径，只有开了 `Registry.TraceNodes` 的解析才包，Go 写的树用 `Traced` 自己包；不开时零开销（不包）。
+6. **动作指标缺省关闭**（方案“是否默认开启待定”）：列为待拍板 ④。指标名按命名规范用点号分层（`actionflow.actions.*`）。
+
+**红绿证据**（变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| E1 冻结时仍投递事件 | `TestEventsReachTheTreeOnTheNextTickAndAreDroppedWhileFrozen`：`an event was delivered to a frozen controller` |
+| E2 事件缓冲不设上限 | 同上：`buffer kept [{7 <nil>} {8 <nil>} {6 <nil>}], want the newest two` |
+| E3 树里的切阶段立即生效 | `TestStagedStrategySwitchesAfterTheTickAndInterruptsTheOldTree`：`log [interrupt 101 calm -> enraged still calm after asking interrupt 202 enraged -> calm calm -> ] stage "", want [interrupt 101 still calm after asking calm -> enraged interrupt 202 enraged -> calm]` |
+| E4 切换不 Reset 旧树 | 同上：`log [interrupt 101 still calm after asking calm -> enraged enraged -> calm] stage "calm", want [interrupt 101 still calm after asking calm -> enraged interrupt 202 enraged -> calm]` |
+| E5 不核对 `set_stage` 目标 | `TestParseStagesBuildsStagedTreesWithEventAndSetStageLeaves`：`unknown target: <nil>` |
+| E6 取走事件的 `event` 可做守卫谓词 | 同上：`taking guard: <nil>` |
+| E7 `Traced` 不报告 | `TestTraceReportsEveryNodeWhenTheRegistryTracesNodes`：`trace [], want [$.root.children[0]=2 $.root.children[1]=3 $.root=3]` |
+| E8 `running` 不减 | `TestBehaviorMetricsCountStartsEndsAndRunningActions`：`metrics map[… actionflow.actions.running:3 …], want map[… actionflow.actions.running:1 …]` |
+
+另：E3 第一次的变异（只改策略外 `SetStage` 的入口）没有让任何用例变红——树里的切阶段走 `requestStage`、不经那个入口，变异没有打到强制点；改在 `requestStage` 上之后变红（上表）。
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`（含指标名门禁）；全量 `GOWORK=off go test -count=1 ./...`（见下文“调研一 · 收尾”）。退出码均为 0。
+
+**待拍板（先按推荐做了）**：④ 动作指标是否缺省开启——现按“缺省关闭、`BehaviorConfig.Metrics` 打开”（推荐：每个动作两次注册表写入，全服开销没有测量）；备选 B：缺省开启，按需关闭。
+
+##### 调研一 · 收尾（2026-10-21）
+
+- **提交**（分支 `feat/d21-gameplay`，本地，未推送）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
+- **全量验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例 `-race -count=30`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`。退出码均为 0。
+- **待拍板（都已先按推荐实施）**：① `FreezeCancel` 是否连排队项一起丢弃（现：保留）；② 门控在 handler 回滚后的一致性（现：下一次状态通知时纠正、不累积）；③ 被取消的计划步骤是否重试（现：不重试）；④ 动作指标是否缺省开启（现：关闭）。
+- **维护者 2026-10-21 决定：上述 4 项全部按推荐（即现状）**：① `FreezeCancel` 只打断当前动作、排队项保留，去留由业务决定；② 门控在 handler 回滚后不由框架补发，下一次状态通知或业务 `Refresh` 时纠正、每条规则至多持有一次冻结；③ 被取消的计划步骤不重试，直接走 OnFail；④ 动作指标缺省关闭，由 `BehaviorConfig.Metrics` 打开。
+- **没做 / 不在本轮**：game-demo 与生成器接入 `Behavior`、`state`、AI 心跳（随 D20 P3）；`TickBuffs` 挂心跳（D20 P5）；其余 ssr 候选（`trigger_engine`、`eca_man`、`cooldown`、`timer`、空间、战斗、经济、社交）的调研。
+
+## D22 业务时间取自 ctx、支持变速
+
+**状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。同日维护者决定范围（见下方“维护者决定”），实施中。**
+
+**维护者决定（2026-10-21）**：范围按 ssr 收窄——**全局不做变速，只做场景级**。
+
+- **D22-2（部署级变速）取消**：全局时钟仍然只有偏移，`time.logic_offset` 保持现状，不加协调存储里的时间计划，不加 `time.speed_control`。
+- 实施 **D22-1**（业务时间一律从 ctx 取）与**场景时间域**（原 D22-3）。
+- §5 的 9 条修订为：
+  1. A：业务时间唯一入口是 `fctx.Now()`，每条消息 / 每一拍冻结一次。
+  2. A：endpoint 的 `nowUnix` / `nowUnixMilli` 参数保留，改为执行时由生成的分发包装从 `fctx` 填。
+  3. 只对挂了时间域的心跳登记生效：调度仍按真实时间；`Beat.Now` / `Elapsed` 用域时间，时停时 `Elapsed = 0`；`Elapsed` 上限乘倍率。
+  4. 取消：场景在一个进程内，不需要跨进程协调。
+  5. 时间域倍率范围 [0, 100]，允许 0（时停）。
+  6. `logic_offset` 保持现状。
+  7. A：entitytimer 不接时间域，域内的定时走心跳。
+  8. 取消：只有场景时间域，生产可用。
+  9. 先做 D22-1，再做时间域。
+
+下文 §1～§5 是决定前的调研与方案原文，其中 3.2、3.3 的部署级变速与 §5 第 4、6、8 条已被上面的决定取代。
+
+### 实施结果（2026-10-21）
+
+现行说明见 [guide/10-time §1A](../framework/guide/10-time.md#1a-业务时间一律取自-ctxd22-1)、[§4D](../framework/guide/10-time.md#4d-场景时间域变速)，契约与变异核对见 [impl/10-time §2E](../framework/impl/10-time.md#2e-业务时间取自-ctxd22-1)、[§2F](../framework/impl/10-time.md#2f-场景时间域)，限制见 [KNOWN-LIMITS](KNOWN-LIMITS.md#业务时间取自-ctx-与场景时间域d22)，变化见 CHANGELOG。
+
+**D22-1 业务时间一律取自 ctx**（决定 ①A、②A）：
+
+- 迁移的调用点（都在 Nest 消息里执行）：心跳驱动缺省时钟（`Beat.Now`、启动时刻）；entitytimer 驱动缺省时钟（`Host` 的增删改、`OnInitFinish`、Tick 的触发时刻——Tick 消息不再带投递时刻，`Host.Tick()` 无参数、新增 `TickAt`）；`actionflow.ActionRunner` / `MissionRunner`、`ai.Controller`、`timer.Scheduler` 没给时间时的缺省；`wiring/heartbeat`、`wiring/entitytimer` 去掉 `SetClock(app.BusinessClock(r).Now)`；Nest 生成器的业务时间参数（`nowUnix` / `nowUnixMilli`）改为分发包装执行时从 `fctx` 填、Sender 不再带；endpoint 骨架不再取业务钟；`roost add timer` 的 Tick handler 与组件 `Tick()`；game-demo 的调用方（领邮件奖励、副本领奖、建 / 入公会、GM 入会、活动开窗 / 结算）、`executionNowUnix` 与 `Controller.BusinessNow` 删除、World 定时器。
+- 不在 Nest 消息里的路径照旧读 `app.BusinessClock(registry)`：服务 goroutine（活动协调器、匹配、spawner、mail / rank / chat / account / session 服务经 `Config.Now` 注入）、admin / GM 命令的服务侧、业务时间高水位、启动阶段。边界写在 guide §1A。
+- 新增 `fctx.Frozen`（一次执行冻结的派生值）与 `clock.SetSource`（测试换真实时间来源）。
+- glsvet 提示（做了）：业务目录里 Nest handler 本身读 `app.BusinessClock` / `clock.Now` / `clock.UnixMilli` 打 `hint:`。理由：最常见的写法就是 handler 里直接读，提示成本低、误报可豁免（`//glsvet:live-business-clock`）；做成失败不对——Nest 之外读 `app.BusinessClock` 是正确的，handler 里量耗时也合法。不跟进 helper，约束本身靠文档。
+- 不兼容：生成的 Sender 签名、Tick handler 签名、`entitytimer.Host.Tick`；升级步骤写在 CHANGELOG。
+
+**场景时间域**（决定 ③⑤⑦⑨）：
+
+- 新包 `gameplay/timedomain`：`Domain`（锚点 + 倍率的分段线性映射，`SetRate` 以生效时刻为新锚点、连续；倍率 [0, 100]，0 时停；参数 `atomic.Pointer` 发布、按序号只接受更新的）。参数的权威在场景实体的 DAO 字段（`Fields`），随事务回滚、标 sync 下发客户端；提交后（`AfterCommit`）发布给成员。一条消息里第一次读取冻结（`fctx.Frozen`）。成员读数取“已交出的最大域时间”托底，保证单调。
+- 持久与否：由业务选，推荐随进程结束的副本用 `nopersist,sync`；要持久的场景用持久字段，重载后按存下的锚点与倍率接着走（停服期间同样按倍率前进）。理由：副本场景随进程结束，不需要持久；框架不替业务决定，`Fields` 就是 DAO 字段，持久只是字段标记。
+- `heartbeat.WithTimeDomain(d)`：调度不变，`Beat.Now` / `Elapsed` 用域时间，时停 `Elapsed = 0`，上限乘倍率。对 heartbeat 的改动只限 `Beat.Now` 的来源、上限与启动时刻，投递层不动。
+- actionflow / ai（D21 合入后补，推荐并实施：改动只是透传 `WithTimeDomain` 与缺省时间取域时间，不需要另行拍板）：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain`。动作组心跳、`Behavior` 的任务心跳、AI 心跳挂上域；心跳之外调用 runner 时 `ActionContext.Now` 也是域时间；`Behavior` 与 `ai.Controller` 没配 `Now` 时取域时间，所以计划步骤 `Timeout`、`FreezeFor` 与各自心跳的到期判断同一把尺子。端到端用例经真实 Nest、运行中的心跳驱动与 `BeatRunner`。
+- D21 新增的取时间处逐个核对（D22-1）：`Behavior.now` 原缺省 `clock.Now`，改为 `fctx.Now`（先红：`Behavior action context Now = …002, want … frozen …001`）；任务心跳、AI 心跳用 `Beat.Now`（驱动缺省 `fctx.Now`）；`ai.NewBeatController` 与 `FreezeFor` 经 `Controller.now`（D22-1 已改 `fctx.Now`）；计划步骤 `Timeout` 的起点是 `MissionContext.Now`（经 `Behavior.now`），到期判断是任务心跳的 `Beat.Now`。
+- 技能 / Buff：没有自动接线，文档给出接法（业务在心跳里按域时间推进 `Runtime` 的 tick，Buff 按 tick 计）；`skill/combatcomponent` 没改，放不进本轮。
+- entitytimer 不接时间域（决定 ⑦）。
+
+**证据**：每项先在当前代码上变红（单步时钟让“第二次现读”一定不同）再改：心跳 `Beat.Now = …00.004, but the beat's message froze …00.003`；entitytimer `Fire.Now = …00.005, but the Tick message froze …00.007`；生成的分发包装 `handler got business time 1800000000001, but its message froze 1800000000003`；actionflow / AI `ActionContext.Now = …00.002, want … frozen …00.001`；glsvet `hints = 0, want 3`。时间域 9 个变异核对各让对应用例变红（失败文本在 impl §2F）。验证命令与结果见本轮汇报与 CHANGELOG。
+
+**未做 / 待定**：game-demo 的场景没有挂时间域、客户端（C#）没有外推域时间的接口；`scripts/testdata` 的持久化恢复消费夹具（需要真实 Mongo）本轮没有在真实依赖上跑。
+
+**读了什么**：ssr 只读 `ssr/kingdom/framework/kctx`、`framework/dispatcher`、`view/scene_time.go`、`entities/scene/internal/timer.go`、`modules/level`（变速入口）、`modules/heartbeat`、GM 改时间的入口，以及 ssr 依赖的 `watcher/misc/chrono`（下文 ssr 出处相对 `ssr/kingdom/`，chrono 相对 `watcher/misc/chrono/`）。roost 读 main（`3e7b4011`）的 `infra/base/clock`、`infra/base/fctx`、`framework/app`（业务时钟、高水位）、`framework/nest`（消息上下文）、`framework/nest/entitytimer`、`gameplay/heartbeat`、`gameplay/actionflow` / `gameplay/ai`、`infra/base/timer`、codegen 的 endpoint 业务时间参数，以及 [guide/10-time](../framework/guide/10-time.md)。
+
+### 1. ssr 的做法
+
+ssr 有**两层**时间，变速只在第二层：
+
+**第一层：进程业务时钟（chrono，只有偏移）**
+
+- chrono 是一个缓存的时钟：后台 goroutine 每 5ms 一拍，把 `real = time.Now()` 与 `shifted = real + shift` 存进两个原子量；`chrono.Now()` 读 `shifted`，`chrono.RealNow()` 读 `real`（`chrono.go:123-133`、`325-327`、`355-357`；拍间隔 `manager/boot_release_man/internal/system/chrono.go:14-16`）。所以 `chrono.Now()` 的精度是 5ms，同一拍内读到同一个值。
+- **只有偏移，没有倍率**：`UpdateTimeShift(shift)` 改偏移，入口是 GM / 调试命令（`http/httpcmd/http_post/timeShift.go:31-48`、`http/httpcmd/http_post/now.go:45-60`、`manager/system/system.go:87-91`、`modules/refresh/internal/refresh_debug.go:20-35`，最后一个只在 debug 模式可用）。偏移只在内存，不持久；可以往回调，没有单调保证。`System.SetNow` 把已偏移的 `chrono.Now()` 当真实时间算新偏移，第二次设置会把旧偏移叠错（`manager/system/system.go:87-91`）。
+- **ctx 时间**：每条消息开始时 `ctx.Init` 取一次 `ctx.Now = chrono.Now()`（`framework/dispatcher/prepare/prepare.go:48`、`framework/kctx/context.go:226-230`），同一条消息里读 `ctx.Now` 都是同一个值。心跳回调拿到的 `cur` 就是这条心跳消息的 `ctx.Now`（`modules/heartbeat/internal/auto_heartbeat.go:23-28`）。但业务里直接读 `chrono.Now()` 的地方与读 `ctx.Now` 的数量相当（modules / entities 下约 300 处对 350 处），“一律从 ctx 取”并没有被强制。
+
+**第二层：场景时间（变速在这里）**
+
+- **范围**：只有 SE 副本场景可以变速（`entities/scene/internal/limit.go:119-126`）；其他场景的场景时间就是 `chrono.Now()`（`entities/scene/internal/timer.go:149-152`）。
+- **实现**：每个场景一个 timer，挂在 chrono 上每 5ms 积分一次：`now += (real_now - lastBeat) × rate`（`entities/scene/internal/timer.go:172-191`），起点是场景创建时的 `chrono.Now()`（`timer.go:50-63`，源码注释说用时间戳起点是为了技能 CD）。倍率是若干“通道”的乘积（节奏 Rhythm、时停 SpeedBreaker），`ChangeTimeFlowRate(rate, Fast|Slow)` 设某个通道为 `rate` 或 `1/rate`，`FrozenTimeFlowRate` 设为 0（时间停止），每个通道可带“多久后自动恢复”（真实时间）（`timer.go:38-44`、`69-146`；接口 `view/scene_time.go:32-45`）。积分方式保证**倍率改变时连续不跳变**，倍率 ≥ 0 时单调不减。倍率改变后同步给客户端（场景组件 `SetTimeRate`、关卡 `OnTimeRateChange`，`timer.go:65-67`、`84-85`）。
+- **ctx 快照**：场景时间在一条消息里第一次读取时存进 `ctx.SceneNowNano`，之后同一条消息里都读这个值，消息结束清掉（`entities/scene/internal/timer.go:148-160`、`framework/kctx/context.go:66-79`、`framework/dispatcher/dispatcher.go:118`、`129`、`150`）。业务经 `view.CurTimeNano(entity)` 读实体所在场景的时间（约 190 处，`view/scene_time.go:79-129`）。
+- **用途（生产玩法）**：玩家请求战斗加速（FightFast）、出牌时慢放（ShowCardSlow）、捕宠瞄准时慢放并在上限时长后自动恢复（`modules/level/internal/level_handler.go:239-317`）；关卡脚本“除某人外全部时停”（`modules/level/internal/level_export.go:1735-1765`）与触发器改流速（`modules/level/internal/trigger/level_trigger_action.go:1283`）。倍率有上下限检查（`timeChangeRateLimit`）。
+- **对各子系统的影响**：
+  - **心跳**：调度按真实节拍（chrono 的拍、实体心跳的档位不缩放）；动作在 `Loop` 里用场景时间算 `elapsed`（`action_list/internal/action_list.go:428-433`），所以加速时每拍走得更远、时停时 `elapsed = 0`，原地不动。
+  - **技能冷却 / 战斗计时**：读场景时间（`CurTimeNano`），随倍率；`TransDuration` 只按当前倍率换算一段时长（接口注释“只能获取当前流速的转变”，`view/scene_time.go:41-42`），仓库里没有调用方。
+  - **延迟消息**（`g.Matrix.Delay`，如 `SetStateWithTimeout`）按真实时间，**不随倍率**（`modules/state/internal/state.go:175-182`）。
+  - **持久化的到期时间**：存 chrono 时间（例如城堡保护期，`entities/castle_brief/internal/castle_brief.go:199-207`），不受场景倍率影响；只受第一层偏移影响。
+  - **仍用真实时间**：消息发送时间戳（`framework/matrix/message.go:151`）、延迟队列、chrono 自身的拍。
+- **问题（不照搬的理由）**：倍率通道数组在 RPC / 关卡线程里写、在 chrono goroutine 的 `Beat` 里读（`timer.go:80-84` 对 `172-190`），`RecoverTimeFlowRate` 还会从 `Beat` 里被调用，数组不是原子的，是数据竞争；场景时间精度 5ms；第一层偏移可以往回走、不持久、`SetNow` 有叠加错误。
+
+**用在哪些场景**：第一层（偏移）——调试、测试、GM 把服务器时间拨到活动时间预演、跨日 / 跨周重置验证；第二层（场景倍率）——生产玩法：副本战斗 2 倍速、演出 / 瞄准慢放、技能时停。
+
+### 2. roost 现状
+
+- **业务时钟只有偏移**：`clock.Business` = 真实时间 + `time.logic_offset`（`infra/base/clock/clock.go:28-70`）；进程级时钟 `clock.Now()` 读原子偏移（`clock.go:95-155`），App 启动时 `SetOffset` 一次、运行期不改（`framework/app/app.go:218-220`）；生产强制为 0（[guide/10-time §2](../framework/guide/10-time.md#2-业务高水位)）。`app.BusinessClock(r)` 取 Registry 里的业务时钟，退回进程级（`framework/app/business_clock.go:15-26`）。业务时间有部署级高水位，只许前进，存在协调存储，启动时检查、运行中每 10 秒推进（`framework/app/business_time.go:15-50`）。
+- **D18 业务日历**：`time.business_timezone` / `time.business_day_start`，`BusinessDay(t)` 按业务时间算“哪一天”（`infra/base/clock/calendar.go`、`framework/app/business_clock.go:28-38`）。
+- **ctx 里已经有冻结的业务时间，但没人用**：每条 Nest 消息建一个 `fctx.Context`（`framework/nest/nest_dispatch.go:296-303`），`init` 时固定 `Now = clock.Now()`（`infra/base/fctx/context.go:118-123`），`fctx.Now()` / `fctx.NowMilli()` 读它，不在 ctx 里时现读（`context.go:132-144`）；快照交接不传 Now，每次执行重新固定（`context.go:27-29`）。但 framework / gameplay / service / demo / codegen 里**没有业务代码调用 `fctx.Now()`**：
+  - 服务与 demo 读 `app.BusinessClock(r).Now()`（现读，例如 `demo/internal/service/game/activity.go.tmpl:151`、`spawner.go.tmpl:64-78`）；
+  - endpoint 的 handler 参数 `nowUnix` / `nowUnixMilli` 由 endpoint 骨架在**收到请求时**用 `app.BusinessClock(controller.Registry()).Now()` 填（`codegen/internal/roost/add_workflow.go:593-600`），不是 handler 执行时；World 定时器 Tick 用同一参数（`demo/game/handler/tick_world_timers.go.tmpl:26-27`）。
+- **心跳**：驱动按系统单调时间调度（`gameplay/heartbeat/driver.go:239-260`），`Beat.Now` / `Elapsed` 在 handler 里**现读**驱动的业务时钟（`host.go:337-361`；进程装配 `SetClock(app.BusinessClock(r).Now)`，`wiring/heartbeat/heartbeat.go:56`），`Elapsed` 夹到 `max(1s, 档位)`（`host.go:29-39`、`346-347`）。
+- **entitytimer**：期限是业务时间、毫秒精度、存 DAO（`framework/nest/entitytimer/driver.go:1-17`、`128-135`）；驱动睡眠时长 = 期限 − 业务现在，按**系统时间**睡，上限 `MaxWait = 1s`（`driver.go:40-42`、`203-215`）；离线到期的节点加载后补触发一次（`driver.go:11-16`）。
+- **actionflow / ai / Scheduler**：没传时间时缺省 `clock.Now()`（进程业务时钟现读，`gameplay/actionflow/action_runner.go:718-721`、`mission_runner.go:449`、`gameplay/ai/controller.go:249`、`infra/base/timer/scheduler.go:170-185`）；P2 的 movement 用 `Beat.Elapsed`。
+- **系统时间**：租约、超时、重试、WAL、日志、指标、Lockstep 的帧推进与发送超时（`framework/sync/lockstep/match.go:819`、`snapshot.go:406`）直接用 `time` 包；glsvet 在业务包里对 `time.Now` 打提示（`cmd/glsvet/clockhints.go:19-27`）。
+- **测试的可控时钟**：`clock.Set` / `SetOffset` / `Reset`（只给测试，`clock.go:114-132`）、`clock.BusinessFunc`、心跳 `Driver.SetClock` 与不启动循环直接 `step`、entitytimer `SetClock` + `DeliverDue`。
+
+**差距**：①“一律从 ctx 取”没有落地——ctx 里有冻结时间，但业务现读时钟，同一事务里可能读到不同时刻（心跳的 `Beat.Now` 与 handler 里读的时钟就是两次读取）；endpoint 的业务时间是收到请求的时刻，不是执行时刻（排队延迟算进了“之前”）。②没有倍率，偏移也不能运行期改。③没有“场景 / 房间”级的时间域。
+
+### 3. 方案
+
+**3.1 业务时间放进执行上下文（一律从 ctx 取）**
+
+- 规则：Nest handler、心跳回调、entitytimer 回调、actionflow / ai / skill 的回调里，业务时间只从执行上下文取；每条消息 / 每一拍开始时冻结一次，同一事务里读到同一个值。
+- API：沿用已有的 `fctx.Now()` / `fctx.NowMilli()`（不新增入口）。增补：
+  - `fctx.Now()` 在 Nest 执行上下文之外（服务 goroutine、启动阶段）读进程业务时钟现值，行为不变；
+  - 心跳 `Beat.Now` 改为本条心跳消息的 `fctx.Now()`，`Elapsed` 用它算（不再现读第二次）；entitytimer `Fire` 的触发时刻同理；
+  - actionflow / ai / Scheduler 的缺省时间从 `clock.Now()` 改为 `fctx.Now()`；
+  - endpoint 的 `nowUnix` / `nowUnixMilli` 参数：改为在 handler **执行时**由生成的 Nest 分发包装从 `fctx` 填（参数仍在 handler 签名里，测试照样可以直接传值），请求里不带它（拍板 2）。
+- 与 `app.BusinessClock(r).Now()` 的关系：两者同源（进程业务时钟与 Registry 业务时钟都读同一份 `time` 配置）。`BusinessClock` 留给 Nest 之外的服务 goroutine（活动协调器、匹配、spawner 的决策循环）；在 Nest handler 包里调用它（或 `clock.Now()`）由 glsvet 提示改为 `fctx.Now()`，与现有的 `time.Now` 提示同一机制。
+- 迁移：框架内的调用点（心跳、entitytimer、actionflow、ai、Scheduler 缺省）一次改完；生成模板与 demo 的 Nest handler 改读 `fctx`；服务层不动。项目未上线，不保留旧行为开关。
+
+**3.2 变速：业务时钟加倍率（部署级，测试 / 预演环境）**
+
+- 时钟模型改为分段线性：`B(r) = anchorB + (r − anchorR) × rate`，`r` 是真实时间（墙钟），`anchorR` / `anchorB` / `rate` 合称“时间计划”。现在的偏移就是 `rate = 1` 的特例（`anchorB − anchorR = offset`）。
+- **单调、连续**：改倍率时以生效时刻 `T` 为新锚点（`anchorB' = B(T)`），之前之后在 `T` 处相等，不跳变；`rate` 取 `[0.1, 100]`（拍板 5，部署级不允许 0），因此单调递增。往前拨（跳到某天）仍只许前进，受现有高水位约束。
+- **运行期调整**：admin 命令 `time.rate set <rate> [--at <业务时间或 +延迟>]`、`time.advance <duration>`（一次性前拨）、`time.show`。计划存在协调存储里（与业务时间高水位同一个键空间），带版本号；各进程每秒（或订阅）读取，新计划带一个**未来的生效真实时刻**（缺省“现在 + 2 秒”），保证所有进程在同一真实时刻切换（拍板 4）。不同主机的墙钟偏差 `δ` 换算成业务时间偏差 `δ × rate`。
+- **重启连续**：计划持久，重启后按计划算出的业务时间接着走，不会因为“偏移是配置里的固定值”而回退被高水位拒绝；`time.logic_offset` 退化为“部署首次启动时的初始计划”，之后以协调存储里的计划为准（拍板 6）。进程停着的期间业务时间照计划前进（预演“离线一周”）。
+- **安全边界**：只在非生产环境、且配置 `time.speed_control = true` 时允许计划里 `rate ≠ 1` 或运行期前拨；生产环境启动检查拒绝（与 `logic_offset` 生产强制为 0 同一处）；每次修改写审计日志、导出 gauge `app.business_time.rate`；`time.show` 同时打印业务时间、真实时间、倍率与计划版本。
+
+**3.3 变速对各部分的影响与处理**
+
+| 部分 | 处理 |
+| --- | --- |
+| 心跳 | 驱动仍按真实时间调度，档位周期不缩放（CPU 不随倍率涨）；`Beat.Now` / `Elapsed` 是业务时间，倍率自动体现在 `Elapsed` 上（加速时每拍走得更远）。`Elapsed` 上限从 `max(1s, 档位)` 改为 `max(1s, 档位) × rate`，否则 10 倍速时 100ms 档每拍就被夹住。代价：高倍率下每拍步长变大，移动 / 碰撞的精度下降，预演场景可接受（拍板 3） |
+| entitytimer | 期限仍是业务时间、存 DAO。驱动的睡眠时长改为 `(期限 − 业务现在) / rate`（真实时间），计划切换时唤醒驱动重算；`MaxWait` 不变 |
+| 离线补触发 | 不变：加载后补一次，`Fire` 带原定期限与触发时刻（都是业务时间），错过多少周期由业务按业务时间算；进程停着的期间业务时间照计划前进，补算量按倍率放大，这正是预演要的 |
+| 持久化的到期时间 | 一律存业务时间（绝对时刻），与现在一致；租约、存储 TTL、锁等系统时间不受影响（[guide/10-time §1](../framework/guide/10-time.md#1-双时钟)）。不存“剩余时长”，倍率变化不需要改写存量数据 |
+| D18 业务日界 | 不变：`BusinessDay(业务时间)`，倍率 > 1 时“一天”在真实时间里变短，跨日重置随之提前到来；日历配置不变 |
+| 多进程 / 多服 | 同一部署（同一个协调存储、同一 `singleton.key_prefix`）读同一份计划，同一真实时刻切换；跨部署（合服前的两个服）各自一份。活动协调器、匹配等跨进程比较业务时间的服务读的是同一份计划，与现在“所有进程读同一个 `logic_offset`”同一约束（`framework/app/business_clock.go:11-13`） |
+| Lockstep / Sync | 不受影响：Lockstep 按帧号推进、帧间隔与输入超时是系统时间；实体同步的帧与刷新是系统时间。下发给客户端的业务时间戳（冷却结束、活动截止）仍一致；客户端要做本地插值时需要知道倍率，经 3.4 的时间域下发 |
+| 系统时间 | 不变：租约、超时、重试退避、WAL、日志、指标、Nest Await 截止、心跳调度、entitytimer 重投间隔都用 `time` 包 |
+
+**3.4 时间域（场景 / 房间级变速，ssr 第二层，生产玩法）**
+
+- ssr 真正在生产里用的变速是**场景时间**：副本 2 倍速、慢放、时停。roost 对应一个可选的**时间域**：场景 / 房间实体拥有一个 `timedomain.Domain`（建议放 `gameplay/timedomain`），域时间 `D = anchorD + (B − anchorB) × rate`，`B` 是本条消息的 `fctx.Now()`；倍率可为 0（时停）；倍率由若干命名通道相乘、每个通道可带自动恢复期限（照 ssr 的语义，但期限用域外的业务时间）。
+- **读法**：`timedomain.Now(d)` 在一条消息里第一次读取时算出并存进 fctx，之后同一消息读到同一值（照 ssr 的 `SceneNowNano`）。
+- **写法与事务**：倍率只在域所属实体（场景）的 Nest handler 里改；参数存在场景实体的 DAO（随事务回滚），提交后经 `nest.AfterCommit` 发布到域的原子快照，成员实体（在各自的锁里）读快照，不读场景实体的 DAO（不跨实体加锁）。不持久（副本随进程结束），需要时可选持久。
+- **接法**：心跳登记可选 `heartbeat.WithTimeDomain(d)`：调度仍是真实时间，`Beat.Now` / `Elapsed` 换成域时间（时停时 `Elapsed = 0`）；actionflow 的 `ActionContext.Now` / `Elapsed` 随之；技能 Runtime 的 tick 由业务从域时间换算；Buff 时长按技能 tick 计，随之变速。entitytimer 不接时间域（持久、离线语义只对业务时间成立，拍板 7）。倍率变化写进场景的同步组件下发给客户端（ssr 同样下发）。
+- **安全边界**：时间域是玩法能力，生产可用；只在声明了时间域的实体上有效，倍率上下限由域的配置声明（ssr 只允许 SE 副本）。
+
+### 4. 分期与工作量
+
+| 期 | 内容 | 估计 |
+| --- | --- | --- |
+| D22-1 | 一律从 ctx 取：心跳 / entitytimer / actionflow / ai / Scheduler 的缺省改读 `fctx`；endpoint 业务时间参数改为执行时填；glsvet 提示 Nest handler 包里的 `BusinessClock` / `clock.Now`；demo 与生成模板跟进。行为上只是“同一消息内取同一时刻” | 1.5 天 |
+| D22-2 | 部署级变速：时间计划（锚点 + 倍率）、协调存储持久与版本、定时切换、`time.speed_control` 与生产拒绝、admin 命令、心跳 `Elapsed` 上限按倍率、entitytimer 睡眠按倍率、指标与审计 | 2.5 天 |
+| D22-3 | 时间域：`gameplay/timedomain`、fctx 快照、`heartbeat.WithTimeDomain`、actionflow 接线、同步下发倍率 | 2.5 天 |
+
+每期先红后绿（可控时钟；倍率切换前后连续性、单调性、多进程同一时刻切换用假协调存储与两个时钟），D22-2 跑全量与根包门禁。D22-3 依赖 D20 P2（BeatRunner）合入。
+
+### 5. 需要拍板
+
+1. **业务时间的唯一入口**：A 沿用 `fctx.Now()`（每条消息 / 每一拍冻结一次，已有机制，推荐）；B 给 Nest handler 加显式 ctx 参数（生成器与全部 handler 签名都要改）。
+2. **endpoint 的 `nowUnix` / `nowUnixMilli`**：A 参数保留，改为执行时由生成的分发包装从 `fctx` 填（推荐：执行时刻才是事务的时刻，handler 仍可单测）；B 维持收到请求时填；C 删掉参数，handler 内读 `fctx.NowMilli()`。
+3. **心跳在变速下**：A 调度按真实时间、`Elapsed` 用业务时间、上限乘倍率（推荐：CPU 不随倍率涨，与 ssr 一致）；B 档位周期按倍率缩放（精度不变，CPU 随倍率线性涨）。
+4. **多进程一致**：A 计划存协调存储、带未来生效时刻同时切换（推荐）；B 每个进程各自配置倍率（同一部署内业务时间会分叉，活动 / 匹配会错）。
+5. **倍率范围**：A 部署级 `[0.1, 100]`、不允许 0，时间域允许 0（时停）（推荐）；B 部署级也允许暂停（全服 entitytimer / 活动停摆，测试价值低）。
+6. **`time.logic_offset` 的地位**：A 退化为首次启动的初始计划，之后以协调存储里的计划为准（推荐：变速后重启必须连续，否则高水位拒绝启动）；B 保留为启动时强制的偏移，变速只在进程生命期内有效（重启即回退，高水位会拒绝）。
+7. **entitytimer 与时间域**：A entitytimer 只用部署业务时间，域内定时走心跳（推荐）；B entitytimer 也支持域时间（离线补触发对“随进程结束的副本”没有意义）。
+8. **生产环境**：A 部署级变速与运行期前拨只在非生产且 `time.speed_control = true` 时可用，时间域生产可用（推荐）；B 部署级也允许生产（风险：活动、邮件、赛季全部提前）。
+9. **分期顺序**：D22-1 → D22-2 → D22-3（推荐：D22-1 没有行为风险，是后两期的前提）；或先做 D22-3（玩法价值高，但依赖 D22-1 的 fctx 快照）。

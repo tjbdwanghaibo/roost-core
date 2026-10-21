@@ -4,6 +4,7 @@ package awaitflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
@@ -51,4 +52,18 @@ func ClaimReward(player *Player, rank int) error {
 		player.reward = reward
 		return nil
 	})
+}
+
+// StampVisit 记下这次访问的业务时间。nowUnixMilli 是业务时间参数（D22-1）：生成的分发包装在执行时从 fctx 填入这条
+// 消息冻结的业务时间，Sender 的签名里没有它；handler 仍可以在单测里直接传值。
+//
+//roost:nest target=PlayerKind durability=memory
+func StampVisit(player *Player, note string, nowUnixMilli int64) (int64, error) {
+	if note == "" {
+		return 0, errors.New("empty note")
+	}
+	if frozen := fctx.NowMilli(); nowUnixMilli != frozen {
+		return nowUnixMilli, fmt.Errorf("handler got business time %d, but its message froze %d", nowUnixMilli, frozen)
+	}
+	return nowUnixMilli, nil
 }

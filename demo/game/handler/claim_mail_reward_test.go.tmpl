@@ -52,16 +52,21 @@ func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitR
 	return nil
 }
 
-// pinBusinessClock 把进程级业务时钟对到 unix 秒，测试结束时恢复。
+// pinBusinessClock 把进程级业务时钟停在 unix 秒，测试结束时恢复。
 //
-// 领奖 handler 在 Player 锁内自己读业务时钟（executionNowUnix），所以凡是写了固定 now 的用例都必须
-// 同时把时钟对上：不对的话，真实时间一越过用例里的 now，有效期内的发放就会按“已过期”被拒，生成工程
-// 的 go test 会在某天自己变红。时钟是进程全局的，本包用例不能 t.Parallel。
+// 领奖 handler 的 nowUnix 是生成的分发包装在执行时填的、这条消息冻结的业务时间（fctx.Now，D22-1），调用方
+// 不传时间；所以用例要哪个“现在”，就把时钟停在哪里。时钟停住不走，秒边界不会因为测试跑得慢而跳过。时钟是
+// 进程全局的，本包用例不能 t.Parallel。
 func pinBusinessClock(t *testing.T, unix int64) {
 	t.Helper()
+	at := time.Unix(unix, 0)
 	previous := clock.Offset()
-	t.Cleanup(func() { clock.SetOffset(previous) })
-	clock.Set(time.Unix(unix, 0))
+	clock.SetOffset(0)
+	clock.SetSource(func() time.Time { return at })
+	t.Cleanup(func() {
+		clock.SetSource(nil)
+		clock.SetOffset(previous)
+	})
 }
 
 func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommitter) {
@@ -118,7 +123,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	first, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
+	first, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -128,7 +133,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 
 	// The replay: the same mail again, exactly what a lost CommitClaim leads
 	// to. Without the ledger this is a second stack.
-	second, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
+	second, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600)
 	if err != nil {
 		t.Fatalf("replayed claim: %v", err)
 	}
@@ -143,7 +148,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	}
 
 	// A different mail is a different claim.
-	other, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "mail-2", manaPotion, 1, now+3600, now)
+	other, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "mail-2", manaPotion, 1, now+3600)
 	if err != nil {
 		t.Fatalf("second mail: %v", err)
 	}
@@ -174,7 +179,7 @@ func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 	// Grant while the mail is valid; an already-expired first grant is
 	// refused by the handler, so it cannot be the premise of this test.
 	const expires = now + 60
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, expires, now); err != nil {
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, expires); err != nil {
 		t.Fatalf("recording the soon-to-expire mail's claim: %v", err)
 	}
 	// A mail that is still claimable for another forty days — longer than any
@@ -182,16 +187,18 @@ func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 	stillLive := now + 40*24*60*60
 	// Past the expiry but one second inside the prune grace: the record
 	// stays, so a process whose clock is a little behind still finds it. The
-	// times are the caller's (the handler takes the later of the caller's and
-	// its own clock), which keeps the boundary exact while the clock ticks.
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, expires+rewards.LedgerPruneGraceSeconds-1); err != nil {
+	// handler's nowUnix is the business time its message froze, so the test
+	// pins the clock (pinBusinessClock holds it still: the boundary is exact).
+	pinBusinessClock(t, expires+rewards.LedgerPruneGraceSeconds-1)
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive); err != nil {
 		t.Fatalf("recording the live mail's claim: %v", err)
 	}
 	if !subject.BagComp().MailRewardClaimed("expired") {
 		t.Error("a claim was pruned inside the grace after its mail's expiry")
 	}
 	// At the end of the grace: the next write prunes it.
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live-2", 1002, 1, stillLive, expires+rewards.LedgerPruneGraceSeconds); err != nil {
+	pinBusinessClock(t, expires+rewards.LedgerPruneGraceSeconds)
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live-2", 1002, 1, stillLive); err != nil {
 		t.Fatalf("recording the second live mail's claim: %v", err)
 	}
 	if subject.BagComp().MailRewardClaimed("expired") {
@@ -203,7 +210,8 @@ func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 
 	// And the replay that the old bound would have allowed: the mail is still
 	// live, so the ledger still refuses.
-	replay, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now+39*24*60*60)
+	pinBusinessClock(t, now+39*24*60*60)
+	replay, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive)
 	if err != nil {
 		t.Fatalf("replaying the live mail: %v", err)
 	}
@@ -221,11 +229,12 @@ func TestAClaimWithNoExpiryIsNeverPruned(t *testing.T) {
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "no-expiry", 1002, 1, 0, now); err != nil {
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "no-expiry", 1002, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	later := now + 10*365*24*60*60
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, later+60, later); err != nil {
+	pinBusinessClock(t, later)
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, later+60); err != nil {
 		t.Fatal(err)
 	}
 	if !subject.BagComp().MailRewardClaimed("no-expiry") {

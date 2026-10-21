@@ -12,6 +12,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -362,5 +364,131 @@ func TestFiftyThousandEntitiesSmoke(t *testing.T) {
 	t.Logf("smoke (%d entities, %v): %+v", n, period, st)
 	if st.DroppedStale+st.DroppedStopped+st.DroppedRemoved+st.DroppedNotLoaded+st.DroppedDuplicate != 0 || st.Executed < int64(2*n) || st.Registered != n {
 		t.Fatalf("unexpected stats %+v", st)
+	}
+}
+
+// D22-1：Beat.Now 是这一拍消息冻结的业务时间（fctx.Now），回调里再读 fctx.Now 得到同一个值。驱动用缺省时钟
+// （不 SetClock），进程业务时钟的来源每读一次走 1ms：现读第二次就会不同。
+func TestBeatNowIsTheMessagesFrozenBusinessTime(t *testing.T) {
+	f := newNestFixture(t, nil)
+	var mu sync.Mutex
+	tick := time.Unix(1_800_000_000, 0)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+	d := NewDriver(Config{Name: "frozen", Logger: discard})
+	if err := d.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.manager.Get(id) }); err != nil {
+		t.Fatal(err)
+	}
+	e := newHBEntity(t, d, 40, kindShort)
+	f.manager.Add(e)
+	type reading struct{ beat, message time.Time }
+	got := make(chan reading, 4)
+	r, _ := e.host.Register("x", 50*time.Millisecond, func(b Beat) error {
+		got <- reading{beat: b.Now, message: fctx.Now()}
+		return nil
+	})
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		d.step(context.Background())
+	}
+	f.settle(r)
+	select {
+	case g := <-got:
+		if !g.beat.Equal(g.message) {
+			t.Fatalf("Beat.Now = %v, but the beat's message froze %v: the beat read the clock a second time", g.beat, g.message)
+		}
+	default:
+		t.Fatal("no beat ran")
+	}
+}
+
+// tdFields 扮演场景实体上时间域的 DAO 字段（测试里不在事务中写，不登记回滚）。
+type tdFields struct{ state timedomain.State }
+
+func (f *tdFields) TimeDomain() timedomain.State     { return f.state }
+func (f *tdFields) SetTimeDomain(s timedomain.State) { f.state = s }
+
+// D22 时间域：挂了时间域的登记，调度仍按真实时间（档位不缩放），Beat.Now 是这一拍消息的域时间、Elapsed 是域时间
+// 的经过；2 倍速时 Elapsed 是业务经过的两倍，时停时为 0、Now 不动；Elapsed 上限乘倍率。
+func TestBeatsOnATimeDomainFollowItsRate(t *testing.T) {
+	f := newNestFixture(t, nil)
+	clock.SetSource(f.clock.Now) // fctx 冻结的业务时间与驱动用同一个可控时钟
+	t.Cleanup(func() { clock.SetSource(nil) })
+	domain, err := timedomain.New(&tdFields{}, timedomain.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := domain.SetRate(2); err != nil { // 不在事务里：立即生效
+		t.Fatal(err)
+	}
+	e := newHBEntity(t, f.driver, 50, kindShort)
+	f.manager.Add(e)
+	type reading struct {
+		beat    Beat
+		message time.Time
+	}
+	got := make(chan reading, 8)
+	r, err := e.host.Register("scene", 100*time.Millisecond, func(b Beat) error {
+		got <- reading{beat: b, message: domain.Now()}
+		return nil
+	}, WithTimeDomain(domain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	beat := func() reading {
+		t.Helper()
+		before := f.driver.Stats().Delivered
+		for f.driver.Stats().Delivered == before {
+			f.step(1)
+		}
+		f.settle(r)
+		select {
+		case g := <-got:
+			if !g.beat.Now.Equal(g.message) {
+				t.Fatalf("Beat.Now = %v, but the beat's message reads the domain at %v", g.beat.Now, g.message)
+			}
+			return g
+		default:
+			t.Fatal("a delivered beat did not run")
+			return reading{}
+		}
+	}
+
+	first := beat()
+	if !first.beat.First || first.beat.Elapsed <= 0 || first.beat.Elapsed%2 != 0 {
+		t.Fatalf("first beat %+v: want a positive Elapsed in 2x domain time", first.beat)
+	}
+	second := beat() // 下一拍：业务时间过了一个档位 100ms，域时间过了 200ms
+	if second.beat.Elapsed != 200*time.Millisecond || second.beat.Now.Sub(first.beat.Now) != 200*time.Millisecond {
+		t.Fatalf("at 2x one 100ms period moved the domain %v (Elapsed %v), want 200ms", second.beat.Now.Sub(first.beat.Now), second.beat.Elapsed)
+	}
+
+	if err := domain.SetRate(0); err != nil {
+		t.Fatal(err)
+	}
+	stopped := beat()
+	after := beat()
+	if after.beat.Elapsed != 0 || !after.beat.Now.Equal(stopped.beat.Now) {
+		t.Fatalf("a stopped domain beat with Elapsed %v, Now %v -> %v; want 0 and no movement", after.beat.Elapsed, stopped.beat.Now, after.beat.Now)
+	}
+
+	// 10 倍速、业务时间一下过了 2 秒（停顿）：Elapsed 的上限是 max(1s, 100ms) × 10 = 10s，不是 1s。
+	if err := domain.SetRate(10); err != nil {
+		t.Fatal(err)
+	}
+	beat()
+	f.clock.Advance(2 * time.Second)
+	if long := beat(); long.beat.Elapsed != 10*time.Second {
+		t.Fatalf("a 2s stall at 10x gave Elapsed %v, want the 10s cap (max(1s, period) x rate)", long.beat.Elapsed)
 	}
 }

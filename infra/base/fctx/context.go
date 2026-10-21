@@ -19,9 +19,16 @@ type Context struct {
 	Trace       TraceMeta
 	SyncWait    time.Duration
 	keyValue    map[any]any
+	frozen      []frozenValue // 本次执行冻结的派生值（Frozen），与 Now 同生命期、不进 Snapshot
 	longWorker  bool
 	ioWorker    bool
 	shortWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
+}
+
+// frozenValue 是 Frozen 记下的一个值。
+type frozenValue struct {
+	key   any
+	value any
 }
 
 // ContextSnapshot 用于框架控制的同步交接。异步 Nest 只带 Meta/Trace，并在入队时
@@ -127,8 +134,16 @@ func (c *Context) init() {
 	c.Trace = TraceMeta{}
 	c.SyncWait = 0
 	c.keyValue = nil
+	c.clearFrozen()
 }
 
+// Now 是业务时间的唯一入口（DESIGN-TODO D22-1，维护者 2026-10-21）：在 Nest 消息、心跳拍、entitytimer 的 Tick
+// 等一次执行里，返回这次执行开始时冻结的进程业务时钟（真实时间 + time.logic_offset），同一次执行里读多少次都是
+// 同一个值，handler、心跳的 Beat.Now、生成分发包装填的 nowUnix / nowUnixMilli 因此是同一时刻。
+//
+// 冻结发生在请求上下文建立时（NewContext）：Nest 消息是业务执行开始时，交接（ContextSnapshot）不带它，换池续行
+// 重新冻结。不在请求上下文里（服务 goroutine、启动阶段、admin 命令、驱动自己的循环）时现读进程业务时钟；那些
+// 路径要的是 Registry 的业务时钟时照旧读 app.BusinessClock(registry)，两者在 App 里是同一份 time.logic_offset。
 func Now() time.Time {
 	if c := CurrentContext(); c != nil && !c.Now.IsZero() {
 		return c.Now
@@ -136,11 +151,37 @@ func Now() time.Time {
 	return clock.Now()
 }
 
+// NowMilli 是 Now 的 UnixMilli，同样在一次执行里冻结。
 func NowMilli() int64 {
 	if c := CurrentContext(); c != nil && c.NowMilli != 0 {
 		return c.NowMilli
 	}
 	return clock.UnixMilli()
+}
+
+// Frozen 返回本次执行为 key 冻结的值：第一次调用时用 compute 算出并记下，同一次执行（同一个请求上下文）里之后的
+// 调用都返回这个值，不再调用 compute。生命期与 Now 相同：每次执行开始时清空，不进 Snapshot（交接后的新执行重新
+// 冻结）。没有请求上下文时不缓存，每次都调用 compute。时间域（gameplay/timedomain）用它让一条消息里读到同一个
+// 域时间，即使这期间域的倍率被别的 goroutine 发布了新值。key 用包内私有类型的值或指针，避免与别的包冲突。
+func Frozen(key any, compute func() any) any {
+	c := CurrentContext()
+	if c == nil {
+		return compute()
+	}
+	for _, f := range c.frozen {
+		if f.key == key {
+			return f.value
+		}
+	}
+	value := compute()
+	c.frozen = append(c.frozen, frozenValue{key: key, value: value})
+	return value
+}
+
+// clearFrozen 清掉冻结值，保留底层数组给池里的下一次执行复用。
+func (c *Context) clearFrozen() {
+	clear(c.frozen)
+	c.frozen = c.frozen[:0]
 }
 
 // Clear clears request-scoped state before the context is returned to pool.
@@ -155,6 +196,7 @@ func (c *Context) Clear() {
 	c.Trace = TraceMeta{}
 	c.SyncWait = 0
 	c.keyValue = nil
+	c.clearFrozen()
 }
 
 func SetRuntimeConfig(config any) {

@@ -3,7 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"reflect"
 	"time"
 
@@ -34,9 +34,13 @@ type ControllerHooks struct {
 // 出错（旧策略拒绝、新策略 Init 失败）经 OnError 报告；同一轮回调里多次请求以最后一次
 // 为准。回调返回前 Strategy() 仍是旧策略。Freeze / Recover 只置标志，始终立即生效。
 type Controller struct {
-	hooks     ControllerHooks
-	strategy  Strategy
-	frozen    bool
+	hooks    ControllerHooks
+	strategy Strategy
+	frozen   bool
+	// frozenUntil 非零表示定时冻结（FreezeFor）：到这个业务时间后的第一次 Tick 自动恢复。
+	frozenUntil time.Time
+	// beat 非 nil 表示由实体心跳驱动（NewBeatController）。
+	beat      *controllerBeat
 	switching bool
 	// callbacks 是正在执行的策略回调层数（Tick 里同步送达的 OnActionEnd 会叠一层）。
 	callbacks int
@@ -50,6 +54,9 @@ type pendingSwitch struct {
 	shutdown bool
 	reason   string
 }
+
+// Controller 是 actionflow.Behavior 的观察者：Behavior 先把动作 / 任务结束交给任务，再交给它（D21 A1）。
+var _ coreflow.Observer = (*Controller)(nil)
 
 // NewController 构造一个尚无策略的 Controller。
 func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks: hooks} }
@@ -105,6 +112,7 @@ func (c *Controller) SetStrategy(next Strategy) error {
 	}
 	c.strategy = next
 	c.changed(previous, next)
+	c.syncBeat()
 	return nil
 }
 
@@ -116,30 +124,68 @@ func (c *Controller) Strategy() Strategy {
 	return c.strategy
 }
 
-// Freeze 冻结 Controller：之后的 Tick 不再驱动策略，动作 / 任务结束仍照常送达。
+// Freeze 冻结 Controller（直到 Recover）：之后的 Tick 不再驱动策略，动作 / 任务结束仍照常送达；心跳驱动时停掉 AI 的
+// 心跳。覆盖之前 FreezeFor 的定时。
 func (c *Controller) Freeze() {
 	if c != nil {
-		c.frozen = true
+		c.frozen, c.frozenUntil = true, time.Time{}
+		c.syncBeat()
 	}
 }
 
-// Recover 解除冻结。
+// FreezeFor 冻结 d，到时后的第一次 Tick 自动恢复（D21 C3，对照 ssr 的 RecoverDuration）；interrupt 为真时同时经
+// EndActions 钩子结束在途动作（ssr 的 NoInterruptAction 取反）。心跳驱动时冻结期间 AI 心跳照常跳（用来检查到期），
+// 到期那一拍恢复并照常决策。覆盖之前的 Freeze / FreezeFor；d <= 0 等于立即恢复。
+func (c *Controller) FreezeFor(d time.Duration, interrupt bool) {
+	if c == nil {
+		return
+	}
+	if d <= 0 {
+		c.Recover()
+		return
+	}
+	c.frozen, c.frozenUntil = true, c.now().Add(d)
+	if interrupt && c.hooks.EndActions != nil {
+		if err := c.endActions(coreflow.NewActionReason("ai frozen")); err != nil {
+			c.report(err)
+		}
+	}
+	c.syncBeat()
+}
+
+// FrozenUntil 返回定时冻结的到期时间；没有冻结或不是定时冻结时为零值。
+func (c *Controller) FrozenUntil() time.Time {
+	if c == nil || !c.frozen {
+		return time.Time{}
+	}
+	return c.frozenUntil
+}
+
+// Recover 解除冻结（含定时冻结）。
 func (c *Controller) Recover() {
 	if c != nil {
-		c.frozen = false
+		c.frozen, c.frozenUntil = false, time.Time{}
+		c.syncBeat()
 	}
 }
 
 // Frozen 报告是否被冻结。
 func (c *Controller) Frozen() bool { return c != nil && c.frozen }
 
-// Tick 驱动当前策略一拍；now 为零值时取 Now 钩子的时间。策略 panic 恢复成错误经 OnError 报告。
+// Tick 驱动当前策略一拍；now 为零值时取 Now 钩子的时间。定时冻结到期的那一拍先恢复再决策。策略 panic 恢复成错误
+// 经 OnError 报告。
 func (c *Controller) Tick(now time.Time) {
-	if !c.ready() {
+	if c == nil {
 		return
 	}
 	if now.IsZero() {
 		now = c.now()
+	}
+	if c.frozen && !c.frozenUntil.IsZero() && !now.Before(c.frozenUntil) {
+		c.Recover()
+	}
+	if !c.ready() {
+		return
 	}
 	strategy := c.strategy
 	c.enterCallback()
@@ -177,6 +223,25 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 	}
 }
 
+// OnEvent 把一个事件交给当前策略（实现了 EventStrategy 的），返回是否送达。冻结、切换中、没有策略时丢弃（对照 ssr：
+// 冻结与手动操作时屏蔽决策）；动作 / 任务结束不受影响，照常送达。策略在 OnEvent 里请求的切换同样延后到回调返回后。
+// 状态变化要让 AI 知道时，业务在 state 的观察者里调它（例如 Event{Kind: 状态变化, Data: state.Change}）。
+func (c *Controller) OnEvent(ev Event) bool {
+	if !c.ready() {
+		return false
+	}
+	receiver, ok := c.strategy.(EventStrategy)
+	if !ok {
+		return false
+	}
+	c.enterCallback()
+	defer c.leaveCallback()
+	if err := callStrategyEvent(receiver, c.context(c.now()), ev); err != nil {
+		c.report(err)
+	}
+	return true
+}
+
 // Shutdown 卸下当前策略：调它的 Stop（若实现了 StoppableStrategy）并发布“变为无策略”。
 // 与 SetStrategy 不同，它不调 EndActions，在途动作不会被结束——要结束的话见
 // StoppableStrategy 的说明。在策略回调里调用时延后到
@@ -199,6 +264,7 @@ func (c *Controller) Shutdown(reason string) {
 	if previous != nil {
 		c.changed(previous, nil)
 	}
+	c.syncBeat()
 }
 
 func (c *Controller) enterCallback() { c.callbacks++ }
@@ -246,7 +312,7 @@ func (c *Controller) now() time.Time {
 			return now
 		}
 	}
-	return clock.Now() // AI 的游戏时间是业务时钟（D-L3）
+	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
 }
 func (c *Controller) context(now time.Time) (ctx *Context) {
 	if now.IsZero() {
@@ -342,6 +408,11 @@ func callStrategyActionEnd(strategy Strategy, ctx *Context, id int64, kind coref
 func callStrategyMissionEnd(strategy Strategy, ctx *Context, mission coreflow.Mission, reason coreflow.ActionReason) (err error) {
 	defer recoverStrategyPanic("mission end", &err)
 	strategy.OnMissionEnd(ctx, mission, reason)
+	return nil
+}
+func callStrategyEvent(strategy EventStrategy, ctx *Context, ev Event) (err error) {
+	defer recoverStrategyPanic("event", &err)
+	strategy.OnEvent(ctx, ev)
 	return nil
 }
 func callStrategyStop(strategy Strategy, ctx *Context, reason string) (err error) {

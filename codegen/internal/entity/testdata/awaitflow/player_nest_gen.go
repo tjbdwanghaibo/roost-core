@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"sync"
 )
 
@@ -14,6 +15,7 @@ var (
 )
 var (
 	handlerNameClaimReward = nest.NewHandlerName("ClaimReward")
+	handlerNameStampVisit  = nest.NewHandlerName("StampVisit")
 )
 
 var registerPlayerNestHandlersOnce sync.Once
@@ -42,9 +44,36 @@ func invokeClaimReward(es []entity.IThreadSafeEntity, params []any, opts ...nest
 	return
 }
 
+// invokeStampVisit 校验目标分组和参数类型，再调用业务handler；实体锁由Nest持有。
+func invokeStampVisit(es []entity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (ret any, err error) {
+	if len(es) != 1 {
+		err = nest.NewEntityCountMismatchError(handlerNameStampVisit.String(), len(es), 1)
+		return
+	}
+	e0, ok := es[0].(*Player)
+	if !ok {
+		err = nest.ErrEntityTypeMismatch
+		return
+	}
+	if len(params) != 1 {
+		err = nest.NewParamCountMismatchError(handlerNameStampVisit.String(), len(params), 1)
+		return
+	}
+	p0, ok := params[0].(string)
+	if !ok {
+		err = nest.NewParamTypeMismatchError(handlerNameStampVisit.String(), 0, "string", params[0])
+		return
+	}
+	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传（D22-1）。
+	p1 := fctx.NowMilli()
+	ret, err = StampVisit(e0, p0, p1)
+	return
+}
+
 func RegisterPlayerNestHandlers() {
 
 	registerPlayerNestHandlersOnce.Do(func() {
 		nest.MustRegisterHandlerWithMeta(handlerNameClaimReward, invokeClaimReward, nest.HandlerMeta{})
+		nest.MustRegisterHandlerWithMeta(handlerNameStampVisit, invokeStampVisit, nest.HandlerMeta{})
 	})
 }

@@ -44,11 +44,10 @@ func handlerClaimDungeon(target player.IProfileEntity, stats world.IStatsEntity,
 	if runID == "" || season <= 0 {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonRun, nil, "run_id", runID, "season", season)
 	}
-	// The window is judged at the time this transaction executes, not the
-	// time the endpoint read before queueing (executionNowUnix): a claim that
-	// waited behind a long queue must not reopen a window its ledger record
-	// has already been pruned behind.
-	nowUnix = executionNowUnix(nowUnix)
+	// The window is judged at the time this transaction executes: nowUnix is
+	// the business time this message froze, filled by the generated dispatch
+	// (D22-1), so a claim that waited behind a long queue cannot reopen a
+	// window its ledger record has already been pruned behind.
 	if dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix) {
 		return dungeon.ClaimResult{}, errcode.Wrap(apperrors.ErrDungeonClaimWindow, nil, "run_id", runID, "resolved_at", resolvedAtUnix, "now", nowUnix)
 	}

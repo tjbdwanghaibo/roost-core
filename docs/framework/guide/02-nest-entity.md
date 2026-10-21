@@ -47,7 +47,7 @@ memory 且没有 effect 的事务不写 WAL：带事务的本地持久修改由 
 
 业务使用生成 Sender/Client 和声明的 handler，基础设施才使用 RunLocal、隔离事务等低层入口。异步消息准入捕获当前配置快照，排队后固定一代；同步链保持当前请求代际。观察短业务、长业务及 I/O 队列、冷加载、handler 时间、持久等待分别定位，不能把慢 Remote 确认误认为普通 handler 吞吐不足。
 
-actionflow 的 runner 回调期间产生修改先进入延后队列，在最外层返回前处理，避免迭代中改容器。
+actionflow 的 runner 回调期间产生修改先进入延后队列，在最外层返回前处理，避免迭代中改容器。runner 由实体自己的心跳 tick（`actionflow.BeatRunner`，见 [10-time §4B](10-time.md#4b-移动与动作心跳驱动)）。
 
 ## 6. 回复错误判别：是否可能已提交、能否重试
 

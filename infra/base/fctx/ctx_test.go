@@ -3,6 +3,9 @@ package fctx
 import (
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 func TestCurrentContext_NilWithoutStore(t *testing.T) {
@@ -137,5 +140,54 @@ func TestGoID(t *testing.T) {
 
 	if otherId == id {
 		t.Fatal("different goroutines should have different IDs")
+	}
+}
+
+// Frozen 在一次执行里只算一次；新的执行（新的请求上下文、交接后的执行）重新冻结；没有请求上下文时不缓存。
+func TestFrozenHoldsOneValuePerExecution(t *testing.T) {
+	DeleteContext()
+	type key struct{}
+	calls := 0
+	compute := func() any { calls++; return calls }
+
+	if Frozen(key{}, compute) != 1 || Frozen(key{}, compute) != 2 {
+		t.Fatal("without a request context every read must compute afresh")
+	}
+
+	c, release := NewContext()
+	first := Frozen(key{}, compute)
+	if again := Frozen(key{}, compute); again != first {
+		t.Fatalf("second read in one execution = %v, want the frozen %v", again, first)
+	}
+	snapshot := c.Snapshot()
+	release()
+
+	_, release = NewContext(WithSnapshot(snapshot))
+	defer release()
+	if next := Frozen(key{}, compute); next == first {
+		t.Fatalf("a new execution from a snapshot read the previous execution's frozen value %v", next)
+	}
+}
+
+// 同一次执行里 Now 冻结：真实时间来源每读一次走一步，执行里的 Now / NowMilli 仍是建立上下文时的那一刻。
+func TestNowIsFrozenPerExecution(t *testing.T) {
+	DeleteContext()
+	var mu sync.Mutex
+	tick := time.Unix(1_800_000_000, 0)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+
+	c, release := NewContext()
+	defer release()
+	if a, b := Now(), Now(); !a.Equal(b) || !a.Equal(c.Now) {
+		t.Fatalf("Now inside one execution moved: %v then %v (frozen %v)", a, b, c.Now)
+	}
+	if NowMilli() != c.Now.UnixMilli() {
+		t.Fatalf("NowMilli = %d, want the frozen %d", NowMilli(), c.Now.UnixMilli())
 	}
 }

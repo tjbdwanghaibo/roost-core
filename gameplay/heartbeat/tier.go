@@ -40,6 +40,21 @@ func init() {
 }
 
 // tierOf 返回周期对应的档位；不是固定档位之一时报错，并列出可选值。
+// PeriodAtMost 把组件想要的间隔换成档位：Periods 里不大于 want 的最长档，短于最短档时取最短档；want <= 0 返回 0
+// （表示不需要周期执行）。actionflow 的动作组 / 任务与 AI 的心跳都按它取档。
+func PeriodAtMost(want time.Duration) time.Duration {
+	if want <= 0 {
+		return 0
+	}
+	period := Periods[0]
+	for _, p := range Periods {
+		if p <= want {
+			period = p
+		}
+	}
+	return period
+}
+
 func tierOf(period time.Duration) (tier, error) {
 	for i, p := range Periods {
 		if p == period {

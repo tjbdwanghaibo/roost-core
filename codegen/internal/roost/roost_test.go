@@ -816,10 +816,10 @@ func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testin
 }
 
 // 业务时间是服务器决定的值，不能来自请求（客户端可以借此延长限时效果、提前领奖励）。handler 参数按约定名
-// nowUnix / nowUnixMilli（int64）声明业务时间时，endpoint 骨架从 app 的业务钟（app.BusinessClock，含
-// time.logic_offset）取值传给 Sender，不要求、也不读请求里的同名字段；其余请求里没有的参数照旧拒绝，报错不再只说
-// “请求缺字段”，而是写明服务器决定的值不放进请求（新用户试用第四轮登记项 2）。
-func TestEndpointFillsBusinessTimeFromTheServer(t *testing.T) {
+// nowUnix / nowUnixMilli（int64）声明业务时间时，endpoint 骨架既不读请求里的同名字段、也不自己取时间：Nest 生成器的
+// 分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间（D22-1），Sync_ 没有这个参数；其余请求里没有的参数
+// 照旧拒绝，报错写明服务器决定的值不放进请求（新用户试用第四轮登记项 2）。
+func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
@@ -865,13 +865,13 @@ func TestEndpointFillsBusinessTimeFromTheServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(raw)
-	for _, want := range []string{"app.BusinessClock(controller.Registry()).Now()", "request.CardID, businessNow.UnixMilli())"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("endpoint does not fill the business time from the server clock (missing %q):\n%s", want, body)
-		}
+	if !strings.Contains(body, "sender.Sync_UseDoubleCard(context.Context(), entityID, request.CardID)") {
+		t.Errorf("endpoint must pass only the request fields; the dispatch fills the business time:\n%s", body)
 	}
-	if strings.Contains(body, "request.NowUnixMilli") {
-		t.Errorf("endpoint reads the business time from the request:\n%s", body)
+	for _, unwanted := range []string{"request.NowUnixMilli", "BusinessClock", "businessNow"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("endpoint supplies the business time itself (%q):\n%s", unwanted, body)
+		}
 	}
 
 	// 请求里没有、也不是业务时间的参数：照旧拒绝，但报错写明服务器决定的值不放进请求、业务时间用约定名。
@@ -882,7 +882,7 @@ func TestEndpointFillsBusinessTimeFromTheServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("endpoint accepted a parameter that is neither a request field nor server-supplied")
 	}
-	for _, want := range []string{`"claimedAt"`, "nowUnix", "nowUnixMilli", "business clock", "not from the request"} {
+	for _, want := range []string{`"claimedAt"`, "nowUnix", "nowUnixMilli", "fctx.Now", "not from the request"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not steer away from client-supplied time (missing %q): %v", want, err)
 		}

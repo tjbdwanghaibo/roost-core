@@ -210,6 +210,8 @@ func (dao *CombatDao) applyState(state persistedCombatState) error {
 type CombatComponent struct {
 	dao        *CombatDao
 	projection AttributeProjection
+	// buffStatesChanged 由 BindStates 安装：buff 集合变化后通知派生状态（D21 S6）。是接线，不是状态。
+	buffStatesChanged func()
 }
 
 // AttributeProjection 把属性当前值（base 加 buff / 属性修饰）写到伤害管线读的 Combatant
@@ -228,6 +230,7 @@ func (component *CombatComponent) Name() string { return "combat" }
 // 版本改变（“加载”触发点）。
 func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	component.deriveProjection()
+	component.buffsChanged()
 	return nil
 }
 func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason) {}
@@ -383,6 +386,7 @@ func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source i
 	if outcome != combat.BuffBlockedImmune && outcome != combat.BuffIgnored {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
+		component.buffsChanged()
 	}
 	return id, outcome
 }
@@ -394,6 +398,7 @@ func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.B
 	if removed {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
+		component.buffsChanged()
 	}
 	return instance, removed
 }
@@ -405,6 +410,7 @@ func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks
 	if ok {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
+		component.buffsChanged()
 	}
 	return instance, ok
 }
@@ -425,6 +431,7 @@ func (component *CombatComponent) AdoptBuff(instance combat.BuffInstance) combat
 	id := component.dao.buffs.Adopt(instance)
 	component.dao.markChanged(FieldBuffs)
 	component.deriveProjection()
+	component.buffsChanged()
 	return id
 }
 
@@ -435,6 +442,7 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 	if len(removed) > 0 {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
+		component.buffsChanged()
 	}
 	return removed
 }
@@ -448,6 +456,7 @@ func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 	if len(expired) > 0 {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
+		component.buffsChanged()
 	}
 	return expired
 }

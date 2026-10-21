@@ -2,10 +2,15 @@ package actionflow
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type runnerTestAction struct {
@@ -13,14 +18,17 @@ type runnerTestAction struct {
 	done        bool
 	panicOnTick bool
 	startErr    error
-	starts      int
-	cancels     int
+	// instant 让 Start 报告启动即完成，结果是 instantResult（D21 A7）。
+	instant       bool
+	instantResult ActionResult
+	starts        int
+	cancels       int
 }
 
 func (*runnerTestAction) Kind() ActionKind { return 1 }
-func (a *runnerTestAction) Start(*ActionContext) error {
+func (a *runnerTestAction) Start(*ActionContext) (bool, ActionResult, error) {
 	a.starts++
-	return a.startErr
+	return a.instant, a.instantResult, a.startErr
 }
 func (a *runnerTestAction) Tick(*ActionContext) (bool, ActionResult) {
 	if a.panicOnTick {
@@ -114,7 +122,7 @@ func TestActionRunnerQueuedStartFailureContinuesQueue(t *testing.T) {
 	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
-	runner.Freeze(1)
+	runner.Freeze(1, FreezePause)
 	failed := &runnerTestAction{startErr: errors.New("start")}
 	next := &runnerTestAction{}
 	if _, err := runner.Enqueue(1, failed, 0); err != nil {
@@ -480,7 +488,7 @@ func TestActionRunnerRefusesToStartInAFrozenGroup(t *testing.T) {
 	var ended []ActionReason
 	var reported []error
 	runner := newRunnerForTest(t, &ended, &reported)
-	runner.Freeze(1)
+	runner.Freeze(1, FreezePause)
 	if !runner.Frozen(1) {
 		t.Fatal("group not frozen")
 	}
@@ -523,9 +531,410 @@ func TestErrorsArePrefixedWithThePackageName(t *testing.T) {
 		ErrActionIDExhausted, ErrBuilderNil, ErrDeferredQueueFull, ErrDeferredRunaway, ErrKindInvalid,
 		ErrMissionBuilderDuplicate, ErrMissionBuilderNotFound, ErrMissionIDExhausted, ErrMissionNotRunning,
 		ErrMissionPlanInvalid, ErrMissionRunning, ErrMissionStepInvalid, ErrRegistrySealed,
+		ErrActionGroupNotFrozen, ErrActionNotFound, ErrReplaceRejected, ErrBlockedByGroup,
 	} {
 		if !strings.HasPrefix(err.Error(), "actionflow: ") {
 			t.Errorf("error %q does not start with the package name", err)
 		}
+	}
+}
+
+// --- D21 第 1 期：Start 即完成、取代否决、跨组冲突、按 ID 结束、计数冻结 ---
+
+// groupLog 是多组 runner 的观察记录：每次结束的 “ID 状态 原因”、每次报告的错误、每次冻结切换。
+type groupLog struct {
+	ended    []string
+	reasons  map[int64]ActionReason
+	reported []error
+	freezes  []string
+}
+
+// newGroupsRunner 构造多组 runner：动作种类就是组号（kind k 在组 k），参数是 *runnerTestAction 或任意 Action。
+func newGroupsRunner(t *testing.T, log *groupLog, conflict func(running, incoming ActionSnapshot) Conflict) *ActionRunner {
+	t.Helper()
+	registry := NewRegistry()
+	for kind := ActionKind(1); kind <= 4; kind++ {
+		if err := registry.RegisterAction(kind, func(param any) (Action, error) { return param.(Action), nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log.reasons = make(map[int64]ActionReason)
+	runner, err := NewActionRunner(ActionRunnerConfig{
+		Registry:     registry,
+		GroupForKind: func(kind ActionKind) (ActionGroup, bool) { return ActionGroup(kind), kind >= 1 && kind <= 4 },
+		Conflict:     conflict,
+		Hooks: ActionRunnerHooks{
+			OnEnded: func(s ActionSnapshot, reason ActionReason) {
+				result := reason.ToActionResult(ActionStatusSuccess)
+				log.ended = append(log.ended, fmt.Sprintf("%d %d %s", s.ID, result.Status, result.Reason))
+				log.reasons[s.ID] = reason
+			},
+			OnError:  func(err error) { log.reported = append(log.reported, err) },
+			OnFreeze: func(g ActionGroup, frozen bool) { log.freezes = append(log.freezes, fmt.Sprintf("%d %v", g, frozen)) },
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner
+}
+
+// 启动即完成（A7）：Start 报告 done 的动作不进入运行、不被 Cancel，立即以它的结果结束（结果为空算成功），本组队列
+// 随即推进；回调里延后启动的瞬时动作同样以自己的 ID 结束一次。
+func TestAnActionThatCompletesInStartEndsAtOnceAndTheQueueMoves(t *testing.T) {
+	var log groupLog
+	runner := newGroupsRunner(t, &log, nil)
+	blocker := &runnerTestAction{label: "blocker"}
+	if _, err := runner.Start(1, blocker, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	queued := &runnerTestAction{label: "queued"}
+	if _, err := runner.Enqueue(1, queued, 0); err != nil {
+		t.Fatal(err)
+	}
+	instant := &runnerTestAction{label: "instant", instant: true}
+	id, err := runner.Start(1, instant, 0, time.Now())
+	if err != nil || id == 0 {
+		t.Fatalf("instant Start = %d, %v", id, err)
+	}
+	if runner.Current(1) != queued || instant.starts != 1 || instant.cancels != 0 || queued.starts != 1 {
+		t.Fatalf("after an instant action: current %v (want the queued one), instant starts %d cancels %d, queued starts %d",
+			runner.Current(1), instant.starts, instant.cancels, queued.starts)
+	}
+	want := []string{"1 4 replaced by next action", fmt.Sprintf("%d 2 action done", id)}
+	if fmt.Sprint(log.ended) != fmt.Sprint(want) {
+		t.Fatalf("ended %v, want %v", log.ended, want)
+	}
+
+	failed := &runnerTestAction{label: "instant failure", instant: true, instantResult: ActionResult{Status: ActionStatusFailed, Reason: "target gone"}}
+	id, err = runner.Start(2, failed, 0, time.Now())
+	if err != nil || runner.Current(2) != nil || log.ended[len(log.ended)-1] != fmt.Sprintf("%d 3 target gone", id) {
+		t.Fatalf("instant failure: err %v current %v ended %v", err, runner.Current(2), log.ended)
+	}
+
+	// 回调里延后的瞬时动作：拿到的 ID 在回调返回后结束一次。
+	inner := &runnerTestAction{label: "inner", instant: true}
+	starter := &callbackStarter{runner: runner, from: "tick", next: inner}
+	if _, err := runner.Start(1, starter, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Tick(1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if starter.innerErr != nil || starter.innerID == 0 || !strings.HasPrefix(log.ended[len(log.ended)-1], fmt.Sprintf("%d 2 ", starter.innerID)) || inner.starts != 1 {
+		t.Fatalf("deferred instant action: id %d err %v starts %d ended %v", starter.innerID, starter.innerErr, inner.starts, log.ended)
+	}
+	if len(log.reported) != 0 {
+		t.Fatalf("reported %v", log.reported)
+	}
+}
+
+// keepingAction 是实现了 Replacer 的动作：按 decide 回答，并记下被问到的新动作。
+type keepingAction struct {
+	runnerTestAction
+	decide func(next ActionSnapshot) ReplaceDecision
+	asked  []ActionKind
+}
+
+func (a *keepingAction) ReplaceBy(_ *ActionContext, next ActionSnapshot) ReplaceDecision {
+	a.asked = append(a.asked, next.Kind)
+	return a.decide(next)
+}
+
+// 取代否决（A2）：Keep 保留当前动作，新动作拿到 ID、不 Start、以取消结束一次，Start 返回 nil；Reject 保留当前动作，
+// 直接调用返回 ErrReplaceRejected，回调里延后的以失败结束；强制结束（End / EndAction）不问。
+func TestTheCurrentActionCanKeepItselfOrRejectAReplacement(t *testing.T) {
+	var log groupLog
+	runner := newGroupsRunner(t, &log, nil)
+	decision := ReplaceKeep
+	current := &keepingAction{decide: func(ActionSnapshot) ReplaceDecision { return decision }}
+	if _, err := runner.Start(1, current, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	same := &runnerTestAction{label: "same request"}
+	id, err := runner.Start(1, same, 0, time.Now())
+	if err != nil || id == 0 || runner.Current(1) != current || same.starts != 0 || current.cancels != 0 {
+		t.Fatalf("keep: Start = %d, %v; current kept %v; new starts %d; current cancels %d", id, err, runner.Current(1) == current, same.starts, current.cancels)
+	}
+	if got := log.ended; len(got) != 1 || got[0] != fmt.Sprintf("%d 4 kept current action", id) {
+		t.Fatalf("keep: ended %v", got)
+	}
+
+	decision = ReplaceReject
+	rejected := &runnerTestAction{label: "rejected"}
+	if _, err := runner.Start(1, rejected, 0, time.Now()); !errors.Is(err, ErrReplaceRejected) || runner.Current(1) != current || rejected.starts != 0 {
+		t.Fatalf("reject: Start = %v, current kept %v, starts %d", err, runner.Current(1) == current, rejected.starts)
+	}
+	// 回调里被拒：ID 已交出，以失败结束。
+	deferred := &runnerTestAction{label: "deferred"}
+	var deferredID int64
+	if err := runner.Update(1, func(Action) error {
+		deferredID, err = runner.Start(1, deferred, 0, time.Now())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if reason := log.reasons[deferredID]; deferredID == 0 || !errors.Is(reason.Err, ErrReplaceRejected) || reason.Result.Status != ActionStatusFailed {
+		t.Fatalf("deferred reject: id %d reason %+v", deferredID, reason)
+	}
+	if fmt.Sprint(current.asked) != "[1 1 1]" {
+		t.Fatalf("Replacer asked for %v", current.asked)
+	}
+	if err := runner.End(1, true, NewActionReason("forced")); err != nil || runner.Current(1) != nil || len(current.asked) != 3 {
+		t.Fatalf("forced end: %v current %v asked %v", err, runner.Current(1), current.asked)
+	}
+}
+
+// 跨组冲突（A3）：BlockIncoming 拒绝新动作、什么都不改（直接调用返回 ErrBlockedByGroup，排队项以失败结束）；
+// PreemptRunning 先取消对方组的当前动作（取消状态）、不推进对方的队列，再启动新动作；nil 规则下互不影响。
+func TestConflictRulesBlockOrPreemptOtherGroups(t *testing.T) {
+	var log groupLog
+	// 组 2 的动作挡住组 1；组 3 的动作抢占组 1；组 4 与谁都不冲突。
+	runner := newGroupsRunner(t, &log, func(running, incoming ActionSnapshot) Conflict {
+		switch {
+		case running.Group == 2 && incoming.Group == 1:
+			return BlockIncoming
+		case running.Group == 1 && incoming.Group == 3:
+			return PreemptRunning
+		}
+		return NoConflict
+	})
+	casting := &runnerTestAction{label: "cast"}
+	if _, err := runner.Start(2, casting, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	walk := &runnerTestAction{label: "walk"}
+	if _, err := runner.Start(1, walk, 0, time.Now()); !errors.Is(err, ErrBlockedByGroup) || walk.starts != 0 || runner.Current(2) != casting {
+		t.Fatalf("blocked start: %v starts %d", err, walk.starts)
+	}
+	// 排队项成为当前动作时同样受约束：以失败结束（经 OnError 报告），队列接着试下一个。
+	queuedWalk := &runnerTestAction{label: "queued walk"}
+	queuedID, err := runner.Enqueue(1, queuedWalk, 0)
+	if err == nil || !errors.Is(err, ErrBlockedByGroup) || queuedWalk.starts != 0 {
+		t.Fatalf("blocked queued head: %v starts %d", err, queuedWalk.starts)
+	}
+	if reason := log.reasons[queuedID]; !errors.Is(reason.Err, ErrBlockedByGroup) || reason.Result.Status != ActionStatusFailed {
+		t.Fatalf("blocked queued head reason %+v", reason)
+	}
+	if err := runner.End(2, true, NewActionReason("cast done")); err != nil {
+		t.Fatal(err)
+	}
+
+	walkID, err := runner.Start(1, walk, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := &runnerTestAction{label: "later walk"}
+	if _, err := runner.Enqueue(1, later, 0); err != nil {
+		t.Fatal(err)
+	}
+	other := &runnerTestAction{label: "unrelated"}
+	if _, err := runner.Start(4, other, 0, time.Now()); err != nil || runner.Current(1) != walk {
+		t.Fatalf("no conflict: %v walk still current %v", err, runner.Current(1) == walk)
+	}
+	stun := &runnerTestAction{label: "knockback"}
+	stunID, err := runner.Start(3, stun, 0, time.Now())
+	if err != nil || runner.Current(3) != stun || runner.Current(1) != nil || walk.cancels != 1 || later.starts != 0 || runner.QueueLength(1) != 1 {
+		t.Fatalf("preempt: %v current3 %v current1 %v walk cancels %d later starts %d queue %d",
+			err, runner.Current(3) == stun, runner.Current(1), walk.cancels, later.starts, runner.QueueLength(1))
+	}
+	if last := log.ended[len(log.ended)-1]; last != fmt.Sprintf("%d 4 preempted by action %d", walkID, stunID) {
+		t.Fatalf("preempted ended %q (log %v)", last, log.ended)
+	}
+	if len(log.reported) != 1 || !errors.Is(log.reported[0], ErrBlockedByGroup) {
+		t.Fatalf("reported %v", log.reported)
+	}
+}
+
+// 按 ID 结束（A4）：当前动作按 force 结束并推进队列；排队项移出队列、以取消结束；找不到时直接调用返回
+// ErrActionNotFound，回调里延后的找不到不报告。
+func TestEndActionEndsTheCurrentOrAQueuedActionByID(t *testing.T) {
+	var log groupLog
+	runner := newGroupsRunner(t, &log, nil)
+	first := &runnerTestAction{label: "first"}
+	firstID, _ := runner.Start(1, first, 0, time.Now())
+	second := &runnerTestAction{label: "second"}
+	secondID, _ := runner.Enqueue(1, second, 0)
+	third := &runnerTestAction{label: "third"}
+	thirdID, _ := runner.Enqueue(1, third, 0)
+
+	if err := runner.EndAction(thirdID, false, NewActionReason("not needed")); err != nil {
+		t.Fatal(err)
+	}
+	if runner.QueueLength(1) != 1 || third.starts != 0 || log.ended[0] != fmt.Sprintf("%d 4 not needed", thirdID) {
+		t.Fatalf("queued end: queue %d starts %d ended %v", runner.QueueLength(1), third.starts, log.ended)
+	}
+	if err := runner.EndAction(firstID, true, NewActionReason("stop")); err != nil {
+		t.Fatal(err)
+	}
+	if runner.Current(1) != second || first.cancels != 1 || log.ended[1] != fmt.Sprintf("%d 4 stop", firstID) {
+		t.Fatalf("current end: current second %v cancels %d ended %v", runner.Current(1) == second, first.cancels, log.ended)
+	}
+	if err := runner.EndAction(firstID, true, NewActionReason("again")); !errors.Is(err, ErrActionNotFound) {
+		t.Fatalf("ending an ended action = %v", err)
+	}
+	if err := runner.Update(1, func(Action) error { return runner.EndAction(firstID, true, NewActionReason("deferred")) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.EndAction(secondID, false, NewActionResultReason(ActionResult{Status: ActionStatusSuccess, Reason: "done early"})); err != nil {
+		t.Fatal(err)
+	}
+	if second.cancels != 0 || log.ended[2] != fmt.Sprintf("%d 2 done early", secondID) || len(log.reported) != 0 {
+		t.Fatalf("non-forced end: cancels %d ended %v reported %v", second.cancels, log.ended, log.reported)
+	}
+}
+
+// 计数冻结（A5）：两个来源各冻结一次，撤销一次仍冻结，全部撤销才解冻并推进队列；多撤销一次返回
+// ErrActionGroupNotFrozen、计数不变负；暂停模式不打断当前动作，冻结期间 Tick 不推进它；打断模式取消当前动作、
+// 保留排队项。OnFreeze 只在 0↔1 时调用。
+func TestFreezingIsCountedAndCancelModeInterruptsTheCurrentAction(t *testing.T) {
+	var log groupLog
+	runner := newGroupsRunner(t, &log, nil)
+	walking := &runnerTestAction{label: "walking", done: true}
+	if _, err := runner.Start(1, walking, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Freeze(1, FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Freeze(1, FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Tick(1, time.Now()); err != nil || runner.Current(1) != walking || runner.FreezeCount(1) != 2 {
+		t.Fatalf("paused group: tick %v current %v count %d", err, runner.Current(1), runner.FreezeCount(1))
+	}
+	if err := runner.Recover(1, time.Now()); err != nil || !runner.Frozen(1) {
+		t.Fatalf("one of two sources recovered: %v frozen %v", err, runner.Frozen(1))
+	}
+	if err := runner.Recover(1, time.Now()); err != nil || runner.Frozen(1) {
+		t.Fatalf("both recovered: %v frozen %v", err, runner.Frozen(1))
+	}
+	if err := runner.Recover(1, time.Now()); !errors.Is(err, ErrActionGroupNotFrozen) || runner.FreezeCount(1) != 0 {
+		t.Fatalf("unbalanced Recover = %v count %d", err, runner.FreezeCount(1))
+	}
+	if err := runner.Tick(1, time.Now()); err != nil || runner.Current(1) != nil || walking.cancels != 0 {
+		t.Fatalf("resumed action did not finish on its tick: %v current %v cancels %d", err, runner.Current(1), walking.cancels)
+	}
+
+	moving := &runnerTestAction{label: "moving"}
+	movingID, _ := runner.Start(1, moving, 0, time.Now())
+	next := &runnerTestAction{label: "next"}
+	if _, err := runner.Enqueue(1, next, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Freeze(1, FreezeCancel); err != nil {
+		t.Fatal(err)
+	}
+	if runner.Current(1) != nil || moving.cancels != 1 || runner.QueueLength(1) != 1 || next.starts != 0 {
+		t.Fatalf("cancel freeze: current %v cancels %d queue %d next starts %d", runner.Current(1), moving.cancels, runner.QueueLength(1), next.starts)
+	}
+	if reason := log.reasons[movingID]; !errors.Is(reason.Err, ErrActionGroupFrozen) || reason.Result.Status != ActionStatusCanceled {
+		t.Fatalf("interrupted reason %+v", reason)
+	}
+	if _, err := runner.Start(1, &runnerTestAction{}, 0, time.Now()); !errors.Is(err, ErrActionGroupFrozen) {
+		t.Fatalf("Start while frozen = %v", err)
+	}
+	if err := runner.Recover(1, time.Now()); err != nil || runner.Current(1) != next {
+		t.Fatalf("recover after cancel freeze: %v current %v", err, runner.Current(1))
+	}
+	if want := "[1 true 1 false 1 true 1 false]"; fmt.Sprint(log.freezes) != want {
+		t.Fatalf("OnFreeze %v, want %v", log.freezes, want)
+	}
+	if len(log.reported) != 0 {
+		t.Fatalf("reported %v", log.reported)
+	}
+}
+
+// 回调里的 FreezeCancel：计数立即生效（之后的 Start 被拒），打断延后到回调返回后执行。
+func TestCancelFreezeFromACallbackInterruptsAfterTheCallback(t *testing.T) {
+	var log groupLog
+	runner := newGroupsRunner(t, &log, nil)
+	moving := &runnerTestAction{label: "moving"}
+	if _, err := runner.Start(1, moving, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var inside struct {
+		frozen  bool
+		current Action
+		start   error
+	}
+	if err := runner.Update(2, func(Action) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	worker := &runnerTestAction{label: "worker"}
+	if _, err := runner.Start(2, worker, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Update(2, func(Action) error {
+		if err := runner.Freeze(1, FreezeCancel); err != nil {
+			return err
+		}
+		inside.frozen, inside.current = runner.Frozen(1), runner.Current(1)
+		_, inside.start = runner.Start(1, &runnerTestAction{}, 0, time.Now())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !inside.frozen || inside.current != moving || inside.start != nil {
+		t.Fatalf("inside the callback: frozen %v current moving %v deferred start %v", inside.frozen, inside.current == moving, inside.start)
+	}
+	if runner.Current(1) != nil || moving.cancels != 1 {
+		t.Fatalf("after the callback: current %v cancels %d", runner.Current(1), moving.cancels)
+	}
+	// 延后的 Start 在打断之后执行，组已冻结：以失败结束。
+	if last := log.ended[len(log.ended)-1]; !strings.Contains(last, " 3 ") {
+		t.Fatalf("deferred start into the frozen group ended %v", log.ended)
+	}
+}
+
+// nowRecordingAction 记下 Start 收到的 ActionContext.Now。
+type nowRecordingAction struct{ started time.Time }
+
+func (*nowRecordingAction) Kind() ActionKind { return 7 }
+func (a *nowRecordingAction) Start(ctx *ActionContext) (bool, ActionResult, error) {
+	a.started = ctx.Now
+	return false, ActionResult{}, nil
+}
+func (*nowRecordingAction) Tick(*ActionContext) (bool, ActionResult) { return false, ActionResult{} }
+func (*nowRecordingAction) Cancel(*ActionContext, string)            {}
+
+// steppingBusinessClock 让进程业务时钟每读一次走 1ms：现读第二次就与执行开始时冻结的值不同。
+func steppingBusinessClock(t *testing.T) {
+	t.Helper()
+	var mu sync.Mutex
+	tick := time.UnixMilli(1_800_000_000_000)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+}
+
+// D22-1：没给时间时，ActionContext.Now 与 MissionRunner 的缺省时间是本次执行冻结的业务时间（fctx.Now），
+// 与 handler 里读的同一时刻。
+func TestDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
+	steppingBusinessClock(t)
+	execution, release := fctx.NewContext()
+	defer release()
+
+	registry := NewRegistry()
+	if err := registry.RegisterAction(7, func(param any) (Action, error) { return param.(*nowRecordingAction), nil }); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewActionRunner(ActionRunnerConfig{Registry: registry, GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := &nowRecordingAction{}
+	if _, err := runner.Start(7, action, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if !action.started.Equal(execution.Now) {
+		t.Fatalf("ActionContext.Now = %v, want the execution's frozen business time %v", action.started, execution.Now)
+	}
+	if got := (&MissionRunner{}).now(); !got.Equal(execution.Now) {
+		t.Fatalf("MissionRunner default now = %v, want the execution's frozen business time %v", got, execution.Now)
 	}
 }

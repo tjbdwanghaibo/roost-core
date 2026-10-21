@@ -184,6 +184,7 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 		for _, file := range pkg.Files {
 			if checkClock {
 				hintCount += reportClockHints(fileSet, file)
+				hintCount += reportHandlerClockHints(fileSet, file)
 			}
 			findings += reportHandlerConcurrency(fileSet, file)
 			findings += reportIgnoredAdmission(fileSet, file, voidAdmissionMethods, returningAdmissionMethods)

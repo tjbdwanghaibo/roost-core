@@ -23,7 +23,7 @@
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
 
-- **还没有业务接入**：P1 只有框架与 Mod。生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环；P2（MapBasic / Move 组件、actionflow 适配）、P3（game-demo）、P4（压测改心跳驱动）未做。
+- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P3（game-demo）、P4（压测改心跳驱动）、P5（迁移现有快池 tick）未做。
 - **投递是单目标 Dispatch**：压测 50 万次/秒约 4.25 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)），CPU 约六成是 worker 每条消息停放 / 唤醒。Nest 批量入队（方案 D）原型另行进行，达标后只换投递层（`deliverer`）。本轮只做 5 万实体 1s 档的功能冒烟（10 万拍全部执行、零跳拍），**没有正式性能测量**。
 - **卸载窗口**：投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
@@ -32,6 +32,55 @@
 - **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。
 - **`Elapsed` 上限**：取 `max(1s, 档位)`，不是一律 1 秒（2s 及以上的档每拍都会少算），待维护者确认。
 - **装了心跳的服务多一个 Mod**：与 entitytimer 相同，`shutdown.total_timeout` 多 3s 保底。
+
+### 移动与动作（D20 第 2 期）
+
+`gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow`）与 `actionflow.BeatRunner`（[DESIGN-TODO D20 P2](DESIGN-TODO.md#p2-实施结果2026-10-21)）。用法见 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，契约见 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
+
+- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
+- **runner 不随事务回滚：框架不处理，由业务保证**（维护者 2026-10-21）。`ActionRunner` / `MissionRunner` 是纯内存状态；handler 先做完全部可能失败的校验与修改，最后一步才调用 `Start` / `Enqueue` / `End` 等。违反时，回滚后 runner 里残留这次的变更：例如回滚的 handler 里启动的 MoveTo 仍是移动组的当前动作，而 `Move` 的设定与组的心跳都随回滚恢复——这个动作不被 tick，直到被取代、被结束，或业务调用 `BeatRunner.Sync` 后在下一拍以取消（`Replaced`）结束。心跳那一拍只在提交失败时回滚（拍回调不返回错误），此时动作对组件的修改回滚、runner 按 Tick 的结论的推进保留，同样不处理。
+- **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 取 Interest 的锁并 `Apply` 一次，在 Nest worker 上可能等一个 AOI 应用批次（进出场景是低频事件，未测）；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 生效，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）。
+- **`Published` 晚于同一拍里的事件**：快照在提交后、实体锁释放之后才发布；在拍的事务里观察到的事件（动作结束、OnEnded）早于它。要读到这一拍提交后的位置，等该实体的下一条消息（同实体消息要等前驱作业连同提交后回调整个结束）。
+- **Remote 共享模式停心跳后组件不感知**：实体运行中进入共享模式时框架停掉动作组的心跳与 `"map.save"`，回到独占不自动恢复；心跳没有“被停掉”的回调，动作留在 runner 里不推进、周期落库停，直到业务在回到独占后调用 `BeatRunner.Sync` / 重新 `Enter`。共享期间启动需要周期 tick 的动作会以失败结束。只在单元用例里模拟了“框架停掉登记”的结果，没有经真实 Remote 共享模式切换的移动用例。
+- **不持久“在场景里”与“正在移动”**：实例重新加载后由业务按自己的 DAO 状态重新 `Enter`、重新发起移动动作；只从内存卸载不调用 `Leave`（`MapBasic.OnDestroy` 只发布“已不在”，跟随者以 `TargetLost` 收尾）。
+- **跟随只看本进程、只看提交后的位置**：`LocateIn` 经实体管理器的只读查找，目标不在本进程内存（另一个进程的 Remote 实体、已卸载）即 `TargetLost`；读的是目标最近一次提交的快照，最多落后目标一拍。
+- **一个实体多个组各自一个心跳登记**：参考 ssr，动作组之间不合并投递（决定 ③）；移动之外再有一个需要周期 tick 的组（例如技能），每拍就是两条消息。
+- **地形判定按 0.5 格采样**：每进一个新格问一次 `Terrain`，斜穿两个被挡格的夹缝可能漏判；一拍的位移不设上限（速度 × `Elapsed`，`Elapsed` 上限 `max(1s, 档位)`），速度极大时采样数随距离增长。
+- **`MemFields` 只给测试、示例与不持久的 NPC**：逆操作只在 `rollback=undo` 的 handler 里登记，`rollback=state` 不恢复；它不标同步脏（`OnChange` 由使用方接）。需要同步的实体用 DAO 字段实现 `Fields`。
+
+### 行为控制（D21）
+
+`actionflow.Behavior`、`Replacer`、跨组 `Conflict`、`EndAction`、计数冻结与 Start 即完成（[DESIGN-TODO D21](DESIGN-TODO.md#6-调研一--实施)）。用法见 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约见 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)。
+
+- **还没有业务接入**：game-demo 与生成器都没有用 `Behavior`、`state`、AI 心跳（随 D20 P3 一起接）；仓库里实现 `Action` 的只有 `movement` 的两个动作与测试动作。
+- **Behavior 与 runner 一样不随事务回滚**（D20 决定 3）：冻结计数、取代与抢占的结果、任务的推进都是内存状态，handler 回滚后保留，由业务把这些调用放在 handler 最后一步。
+- **任务回调期间结束的动作，观察者可能先于任务收到**：动作结束经 `MissionRunner.OnActionEnd` 送任务，任务正在执行自己的回调时（例如任务 `Start` 里发起的动作启动即失败）这次送达延后到回调返回后，而观察者（AI）在当次就收到。“先任务后观察者”只在任务不处于自己的回调时成立。
+- **动作的归属任务按“任务 runner 是否正在执行”判定**：任务回调同步引出的其他回调（例如任务回调里启动的动作启动即失败、`OnEnded` 送到观察者、观察者又发起动作）发起的动作也会记在当前任务名下，随任务结束被取消。
+- **步骤时限的精度是任务心跳的周期**：到时最多晚一个 `MissionPlan.Period`（缺省 100ms，取档）才结束动作；超时的结束发生在任务自己的 Tick 回调里，所以观察者（AI）先收到这次动作结束、后收到可能随之而来的任务结束（上一条的例外）。没有配 `Beat` 的 Behavior 不检查时限（任务不被 tick）。
+- **AI 心跳的错误只报告**：`"ai"` 登记挂不上（Remote 共享模式）时经 `OnError` 报告，AI 不再周期决策，回到独占后要业务重新 `SetStrategy` / `Recover` 触发对齐；动作 / 任务结束照常送达。
+- **AI 事件是“下一拍”的、会丢**：事件缓冲到策略的下一拍，冻结期间、切换中、没有策略时直接丢弃；两拍之间超过 `MaxEvents`（缺省 64）丢最早的，不报告。没被取走的事件在那一拍结束时丢弃。要可靠送达的业务事实放进 DAO / state，事件只用来唤起决策。
+- **决策轨迹不留存**：`Trace` 只是钩子，框架不保存轨迹；打开 `TraceNodes` 后每个节点每拍多一次接口调用，适合按实体采样，不要全服常开（没有测量）。
+- **动作指标缺省关闭**：`BehaviorConfig.Metrics` 打开后每个动作开始、结束各写一次注册表（拼标签有分配），全服量级的开销没有测量。
+- **`FreezeCancel` 只打断当前动作**：排队项保留，解冻后接着推进；要连排队一起丢弃，业务另调 `ClearQueue` / `EndAction`。
+- **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，回滚后的不一致在下一次状态通知时纠正（见下条）。
+- **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。
+- **Buff 到期才撤销派生状态**：`BindStates` 的状态随 `TickBuffs` 移除到期 buff 而失效；业务还没有把 `TickBuffs` 挂上心跳（D20 P5），到期时刻取决于业务调用它的频率。
+- **派生状态的变化要数据拥有者调 `Changed`**：派生函数查询时现算，`Has` 总是正确，但观察者与同步脏位只在 `Changed`（或任何其他改动 / `Refresh`）时才更新；漏调时门控与客户端看到的是旧值。
+- **持久状态改名等于丢弃旧数据**：持久文档的键是状态名，`RestorePersisted` 跳过不认识的名字（不报警），下一次整文档写回时消失；同步打包、game-demo 与生成器都还没有接 `state`。
+
+### 业务时间取自 ctx 与场景时间域（D22）
+
+业务时间一律取自 `fctx.Now()`（D22-1）与 `gameplay/timedomain`（场景时间域）。用法见 [guide/10-time §1A](../framework/guide/10-time.md#1a-业务时间一律取自-ctxd22-1)、[§4D](../framework/guide/10-time.md#4d-场景时间域变速)，契约见 [impl/10-time §2E](../framework/impl/10-time.md#2e-业务时间取自-ctxd22-1)、[§2F](../framework/impl/10-time.md#2f-场景时间域)。
+
+- **“一律从 ctx 取”只有提示，没有强制**：glsvet 只看业务目录里 Nest handler 函数体内的 `app.BusinessClock` / `clock.Now` / `clock.UnixMilli`，不跟进 helper、包装函数或改名的变量；组件方法、业务库里现读业务钟不会被提示。约束靠 guide §1A 与生成文档。
+- **冻结点在消息开始执行时，不在拿到实体锁时**：实体锁等待的时间算在冻结之后，热点实体上排队久的消息拿到的“现在”比实际执行早；同一条消息内一致，跨消息仍单调（按开始时刻）。
+- **进程业务时钟与 Registry 业务时钟同源但不是同一个对象**：心跳与 entitytimer 驱动、`fctx.Now` 读进程业务时钟（App 启动时 `clock.SetOffset`），服务读 `app.BusinessClock(r)`。同一进程里起多个 App 且 `time.logic_offset` 不同时，进程级偏移是最后启动的那个（与 D22 之前 `fctx.Now` 的行为相同）。
+- **时间域：成员看到改倍率比场景晚一个发布**：场景事务提交后（`AfterCommit`）才发布；之间开始的成员消息按旧倍率。域时间对读者单调（取已交出的最大值），代价是改倍率前后成员与客户端的域时间差“发布延迟 × 倍率”（微秒到毫秒级），时停期间一直差这一点。
+- **时间域实例随场景实例**：场景卸载重载后是新的 `Domain`，已经挂在旧 `Domain` 上的成员心跳不会自动换；场景（副本）在有成员时不应卸载，或由业务在重载后让成员重新登记。`SetRate` 是否在所属实体锁内调用不校验（契约写在 API 注释）。
+- **域要在构造时给**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域（成员换场景要重建行为组件，或不挂域、由业务自己传时间）。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
+- **技能 / Buff 没有自动接域**：技能 `Runtime` 的 tick 由业务在心跳里按域时间换算推进（guide §4D）；框架没有“按域时间推进 Runtime”的组件，`skill/combatcomponent` 也没接。
+- **没有业务接入与客户端插值示例**：game-demo 的场景没有挂时间域；客户端按同步下发的三个字段外推域时间的写法只在文档里，C# 客户端没有现成接口。
+- **生成工程消费夹具未实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，本轮没有在真实依赖上跑。
 
 ### Skill Runtime
 
@@ -130,7 +179,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **DAO 库名映射**（[D9](DESIGN-TODO.md#d9-dao-库名不随配置_id-是编码后的-entityid) 修订版 A）：`db=` 是逻辑库名，物理库由 `dataengine.databases` / `WithDatabaseResolver` 在启动时冻结。限制：①改映射等于搬数据，框架只在 WAL 还有未投影记录时拒绝启动（`ErrDatabaseMappingChanged`），不复制数据；排空后改了映射却没迁移，新库是空的，冷加载得到“从未创建”，GetOrCreate 会新建玩家——步骤见 [PLAYER-MIGRATION §5](../framework/PLAYER-MIGRATION.md#5-改-dao-库名映射)。②声明了却没有映射的逻辑库物理名就是逻辑名本身，只在启动日志告警（生成配置总写 `main` 的映射，手写配置删掉它会落到名为 `main` 的库）；这条回退只在有表时存在；根本没有表时 DataEngine 投影存储（`MongoStoreConfig.Databases` 为 nil）与 Remote 存储（没绑定）同一条规则：读写带库名的 DAO 文档返回 `dataengine.ErrDatabaseMapNotBound`，两边不再不对称（维护者 2026-10-21）；`SetRemoteProjection` 把 DataEngine 的表自动绑给 Remote 存储，自建装配只给 DataEngine 一张表。剩余边界：`NewMongoStore` 只在进程有声明的逻辑库时构造即拒绝，手写 DAO（没经生成器声明）缺表要到第一次投影才报错，那时记录已进 WAL，投影器反复重试这条记录（`ProjectionFailures` 增长、后面的记录不投影），补上表重启后照常投影（WAL 目录记下的上次映射为空，不触发 `ErrDatabaseMappingChanged`）。③不同进程（多个 sid、跨进程写 Remote 实体）的映射是否一致不校验。④二进制一个逻辑库都没声明（工程还没有 DAO）时，配置里的逻辑名无从做拼写检查，只告警。⑤工具经 `LoadDatabaseMapFile` 读同一份配置，但不会自动执行进程里注册的回调，用了回调的部署要给工具传同一个函数或用 `-db` 指定物理库。⑥根包守卫只看同一行里交给 `.Database(` 的参数，先赋给变量再传入的写法看不到，由各解析点的行为测试兜底。⑦回调与配置对同一逻辑库给出不同物理名时拒绝启动（同一逻辑库只能有一个来源，维护者 2026-10-20），但回调只在 Init 调用，`--check-config` / doctor 不执行回调，这类冲突要到进程启动才发现；工具传入回调时（⑤）按同一规则拒绝。
 - **doctor `config-sections`**：配置文件生成后归应用所有，`add` 命令只在让服务多出 Mod 的那一刻追加缺失段；在 add 命令之外手改 `roost.yaml` 增加 Mod 后 `project sync` 不补（维护者 2026-10-17 决定 B），由 doctor 只读检查 `config-sections:<service>` 报 WARN 并给出可追加的文本。限制：业务有意删掉的段同样报 WARN，没有豁免开关（可忽略或留空段如 `saga: {}`）；“有没有”只看行首 `<key>:`，段里缺键、值形态不对不报（归 `config-schema`）；Secret 示例结构认不出（没有恰好一个 `config.yaml: |` 块）时只报“未检查”。
 - **`roost project next` 的文件名约定**：first-business 修复提示按工程现状填名字，判断“缺协议 / 缺 endpoint”沿用 doctor 的文件名约定（`game/handler/<snake>.go` ↔ `protocol/def/<snake>.go` ↔ `game/controllers/<域>/<snake>.go`），协议名与 handler 名不同的工程仍会落到第一个可用名字或示例名。
-- **endpoint 服务器决定的参数**：只识别业务时间这一类约定名（`nowUnix` / `nowUnixMilli`，`int64`，由 `app.BusinessClock(controller.Registry()).Now()` 填入）；其他服务器决定的值（玩家状态、配置）在 handler 里读，没有 `--server-param` 一类的通用标记。
+- **endpoint 服务器决定的参数**：只识别业务时间这一类约定名（`nowUnix` / `nowUnixMilli`，`int64`，由生成的 Nest 分发包装在 handler 执行时从 `fctx` 填，D22-1）；其他服务器决定的值（玩家状态、配置）在 handler 里读，没有 `--server-param` 一类的通用标记。约定名是全局的：任何 `//roost:nest` handler 的参数叫这两个名字就不再从消息里取，要调用方传一个时间时换个名字（例如 `resolvedAtUnix`）。
 - **Saga / Remote / Skill 的 doctor 检查**：`remote-runtime` 在带 Nest 的服务部分缺 `remote_entity` 时只 WARN（实体由哪个服务写静态上看不出）；技能目录由生成的 `catalog_test.go` 与 doctor `skills:catalog` 检查，服务 Init 里调 `CompileAll` 归业务。
 - **configdata 重载内容未变也递增版本**（维护者 2026-10-18 决定 B）：照常发布、递增版本，回答 / 日志 / 指标标明 `changed=false`（`configdata.reload.total{result="unchanged"}`）；理由是监听者依赖每次重载都执行（如开关表用重载恢复表值）。版本号不是内容版本，内容是否变化看 `changed` / `hash`。
 - **文档提交号门禁**（`TestDocumentedCommitsAreReachableFromHEAD`）：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 HEAD 历史里”，不查是不是文档所说的改动。分支上的文档引用本分支提交时 rebase 后会红：引用本轮改动优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。

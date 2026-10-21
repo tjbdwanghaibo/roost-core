@@ -50,7 +50,7 @@
 
 ### actionflow
 
-6 个实现文件、3 个测试文件。
+7 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -59,7 +59,9 @@
 | [mission_runner.go](../../../gameplay/actionflow/mission_runner.go) | `MissionRunnerHooks`、`MissionRunnerConfig`、`MissionRunner` |
 | [plan.go](../../../gameplay/actionflow/plan.go) | `PlanMission` |
 | [registry.go](../../../gameplay/actionflow/registry.go) | `ActionBuilder`、`MissionBuilder`、`Registry` |
-| [runtime.go](../../../gameplay/actionflow/runtime.go) | `ActionContext`、`Action`、`ActionList`、`MissionContext`、`Mission`、`MissionManager`、`MissionRuntimeSetter` |
+| [runtime.go](../../../gameplay/actionflow/runtime.go) | `ActionContext`、`Action`、`TickIntervaler`、`ActionList`、`MissionContext`、`Mission`、`MissionManager`、`MissionRuntimeSetter` |
+| [heartbeat.go](../../../gameplay/actionflow/heartbeat.go) | `BeatConfig`、`BeatRunner`（心跳驱动的 runner，契约见 [impl/10-time §2C](10-time.md#2c-移动与动作的心跳驱动)） |
+| [behavior.go](../../../gameplay/actionflow/behavior.go) | `Behavior`、`BehaviorConfig`、`Observer`（ActionList 的默认装配，契约见 [impl/10-time §2D](10-time.md#2d-行为控制behavior取代冲突冻结与状态)） |
 
 ### entity
 
@@ -178,9 +180,12 @@
 
 ### actionflow
 
-- [action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestActionRunnerExplicitStartPrecedesQueue`、`TestActionRunnerEnqueueStartsIdleGroup`、`TestActionRunnerQueuedStartFailureContinuesQueue`、`TestActionRunnerRecoversTickPanic`、`TestRegistrySealAndBuilderPanic`；其余 9 项见文件
+- [action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestActionRunnerExplicitStartPrecedesQueue`、`TestActionRunnerEnqueueStartsIdleGroup`、`TestActionRunnerQueuedStartFailureContinuesQueue`、`TestActionRunnerRecoversTickPanic`、`TestRegistrySealAndBuilderPanic`、D21 的 `TestAnActionThatCompletesInStartEndsAtOnceAndTheQueueMoves`、`TestTheCurrentActionCanKeepItselfOrRejectAReplacement`、`TestConflictRulesBlockOrPreemptOtherGroups`、`TestEndActionEndsTheCurrentOrAQueuedActionByID`、`TestFreezingIsCountedAndCancelModeInterruptsTheCurrentAction`、`TestCancelFreezeFromACallbackInterruptsAfterTheCallback`；其余 9 项见文件
 - [deferred_test.go](../../../gameplay/actionflow/deferred_test.go)：`TestCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDirectStartFailureEndsTheActionOnce`、`TestDeferredStartThatCanNoLongerRunStillEndsItsID`、`TestHookStartStillPrecedesQueuedActions`、`TestEndAllEndsEverythingBeforeCallbackMutationsRun`；其余 6 项见文件
 - [mission_test.go](../../../gameplay/actionflow/mission_test.go)：`TestMissionRunnerBuildFailurePreservesCurrent`、`TestMissionRunnerStartFailureCleansState`、`TestMissionCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDeferredMissionStartErrorsAreReported`、`TestMissionCallbacksThatKeepTriggeringEachOtherAreBounded`；其余 9 项见文件
+- [heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`、`TestAFrozenGroupStopsBeatingAndResumesOnRecover`（经真实 Nest 与心跳驱动的用例在 `gameplay/movement`）
+- [behavior_test.go](../../../gameplay/actionflow/behavior_test.go)：`TestBehaviorDeliversActionEndsToTheMissionBeforeTheObserver`、`TestBehaviorEndsAMissionsActionsWithTheMissionOnly`、`TestBehaviorClearLeavesNothingRunning`、`TestBehaviorFreezeAndRecoverThroughTheActionList`、`TestNewBehaviorRefusesABeatHostOfAnotherEntity`、`TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat`、`TestTheMissionHeartbeatFollowsTheCurrentStep`、`TestPlanRetriesAreCountedPerStep`、`TestBehaviorMetricsCountStartsEndsAndRunningActions`
+- [nest_test.go](../../../gameplay/actionflow/nest_test.go)：`TestPlanStepTimeoutsRunOnTheRealMissionHeartbeat`（真实 Nest + 心跳驱动）
 
 ### entity
 

@@ -404,7 +404,8 @@ var pillarPackages = []struct{ pattern, pillar string }{
 	{"framework/nest/...", pillarNest},
 	{"framework/entity/...", pillarNest},
 	{"gameplay/actionflow/...", pillarNest},
-	{"gameplay/heartbeat/...", pillarNest}, // D20：心跳就是 Nest 消息，只依赖 nest / entity
+	{"gameplay/heartbeat/...", pillarNest},  // D20：心跳就是 Nest 消息，只依赖 nest / entity
+	{"gameplay/timedomain/...", pillarNest}, // D22：场景时间域，只依赖 nest（AfterCommit）与 fctx；心跳挂它
 	{"infra/base/lock/...", pillarNest},
 	{"framework/dataengine/...", pillarDataEngine},
 	{"framework/nestwal/...", pillarDataEngine},

@@ -187,8 +187,9 @@ func (component *TimerComponent) PendingActivityPhase(activityID string) (int64,
 }
 
 // Tick fires everything due at now and returns how many nodes remain. The
-// tick handler calls it with the business time the driver delivered.
-func (component *TimerComponent) Tick(now time.Time) int { return component.host.Tick(now) }
+// tick handler calls it with TimerDriver.Now, the business time its Nest
+// message froze; tests pass the instant they want.
+func (component *TimerComponent) Tick(now time.Time) int { return component.host.TickAt(now) }
 
 // onActivityPhase records the phase effect and retires the node.
 //

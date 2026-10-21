@@ -16,7 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -49,7 +49,7 @@ var testNow = time.Unix(1_800_000_000, 0)
 func newWorld(t *testing.T) *World {
 	t.Helper()
 	TimerDriver.SetClock(func() time.Time { return testNow })
-	t.Cleanup(func() { TimerDriver.SetClock(clock.Now) })
+	t.Cleanup(func() { TimerDriver.SetClock(fctx.Now) })
 	RegisterEntity()
 	id, err := entity.BuildEntityID(testWorldUniqueID, EntityKindWorld)
 	if err != nil {

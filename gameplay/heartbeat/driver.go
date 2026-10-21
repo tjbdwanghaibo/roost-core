@@ -25,7 +25,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -161,7 +161,7 @@ func NewDriver(config Config) *Driver {
 	}
 	d := &Driver{config: config, ring: newTierRing()}
 	d.stallAfter = max(int64(config.StallAfter/Resolution), 1)
-	now := clock.Now
+	now := fctx.Now
 	d.now.Store(&now)
 	return d
 }
@@ -169,8 +169,11 @@ func NewDriver(config Config) *Driver {
 // Name 返回 Config.Name。
 func (d *Driver) Name() string { return d.config.Name }
 
-// SetClock 换掉业务时钟（缺省 clock.Now）。进程装配传入 app.BusinessClock，测试传入可控时钟。Beat.Now / Elapsed
-// 按它计算；驱动何时醒来按系统单调时间，不受它影响。
+// SetClock 换掉业务时钟，只给测试（可控时钟）。缺省是 fctx.Now（D22-1）：在一拍的 Nest 消息里是这条消息冻结的
+// 业务时间，回调里读 fctx.Now 得到同一个值；不在消息里（启停经 AfterCommit 在提交后生效时）现读进程业务时钟。
+// 进程装配不调用它：进程业务时钟由 App 启动时按 time.logic_offset 设定，与 Registry 的业务时钟同源。
+// Beat.Now / Elapsed 与启动时刻按它计算；驱动何时醒来按系统单调时间，不受它影响。挂了时间域的登记
+// （WithTimeDomain）读域时间，不读这里。
 func (d *Driver) SetClock(now func() time.Time) {
 	if now != nil {
 		d.now.Store(&now)
@@ -179,6 +182,14 @@ func (d *Driver) SetClock(now func() time.Time) {
 
 // Now 是驱动的业务时间。
 func (d *Driver) Now() time.Time { return (*d.now.Load())() }
+
+// startClock 是登记启动生效时记下的时刻：挂了时间域时是域时间，与 Beat.Now 同一把尺子。
+func (r *Reg) startClock() time.Time {
+	if r.domain != nil {
+		return r.domain.Now()
+	}
+	return r.host.driver.Now()
+}
 
 // Bind 接上投递用的 Nest 客户端与只读实体查找。进程装配在 Nest 可用之后调用一次；可以重复调用（测试）。
 func (d *Driver) Bind(client nest.Client, lookup Lookup) error {
@@ -360,7 +371,7 @@ func mayOwn(state entity.RemoteOwnershipState) bool {
 // apply 让一次启停 / 改档在驱动上生效（Reg.change 经 AfterCommit 或立即调用）。序号不大于已生效序号的变化是晚到的旧变化，
 // 丢弃；实例已 OnDestroy 时忽略。
 func (d *Driver) apply(r *Reg, seq uint64, active bool, t tier) {
-	now := d.Now()
+	now := r.startClock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if r.host.closed.Load() || seq <= r.ring.seq {

@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开175个包目录的职责映射</summary>
+<summary>展开177个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -73,13 +73,15 @@
 | [framework/sync/syncbus/driver](../../framework/sync/syncbus/driver) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 2 | 13 |
 | [framework/sync/syncbus/mirror](../../framework/sync/syncbus/mirror) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 1 | 5 |
 | [framework/sync/syncstream](../../framework/sync/syncstream) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 8 | 13 |
-| [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 6 | 12 |
-| [gameplay/ai](../../gameplay/ai) | [其他包与公共基础设施](impl/14-foundation.md) | 7 | 8 |
+| [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 8 | 6 |
+| [gameplay/ai](../../gameplay/ai) | [其他包与公共基础设施](impl/14-foundation.md) | 8 | 10 |
 | [gameplay/attribute](../../gameplay/attribute) | [游戏技能、战斗与空间](impl/08-skill.md) | 2 | 2 |
 | [gameplay/heartbeat](../../gameplay/heartbeat) | [时间与定时器](impl/10-time.md) | 3 | 6 |
+| [gameplay/movement](../../gameplay/movement) | [时间与定时器](impl/10-time.md) | 3 | 8 |
 | [gameplay/skill](../../gameplay/skill) | [游戏技能、战斗与空间](impl/08-skill.md) | 155 | 110 |
 | [gameplay/skill/combat](../../gameplay/skill/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 5 | 2 |
-| [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 3 | 12 |
+| [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 4 | 13 |
+| [gameplay/state](../../gameplay/state) | [时间与定时器](impl/10-time.md) | 4 | 2 |
 | [gameplay/skill/examples/combat](../../gameplay/skill/examples/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
 | [gameplay/skill/examples/fireball](../../gameplay/skill/examples/fireball) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
 | [gameplay/skill/examples/statusbridge](../../gameplay/skill/examples/statusbridge) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |

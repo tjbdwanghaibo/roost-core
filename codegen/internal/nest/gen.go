@@ -58,6 +58,8 @@ func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool,
 		"remoteConsistencyExpr": remoteConsistencyExpr,
 		"remoteScopeExpr":       remoteScopeExpr,
 		"remoteTTLExpr":         remoteTTLExpr,
+		"wireParams":            wireParams,
+		"usesBusinessTime":      usesBusinessTime,
 	}).Parse(nestTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
@@ -185,6 +187,29 @@ func senderFunctions(funcs []*FuncInfo) []*FuncInfo {
 		out[i] = &copy
 	}
 	return out
+}
+
+// wireParams 是在消息里传的参数：Sender 的签名与 nest.NewParams 只有它们，分发包装按 WireIndex 取。
+func wireParams(params []NonEntityParam) []NonEntityParam {
+	out := make([]NonEntityParam, 0, len(params))
+	for _, p := range params {
+		if p.BusinessTime == "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// usesBusinessTime 报告是否有 handler 带业务时间参数（分发包装要导入 fctx）。
+func usesBusinessTime(funcs []*FuncInfo) bool {
+	for _, f := range funcs {
+		for _, p := range f.Params {
+			if p.BusinessTime != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func commonReceiverType(funcs []*FuncInfo) (string, error) {
@@ -551,6 +576,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"errors"
 	"sync"
+	{{- if usesBusinessTime .Funcs}}
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	{{- end}}
 	{{- end}}
 	{{- if .SenderOnly}}
 		"context"
@@ -666,16 +694,21 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 {{- end}}
 
 {{- if .Params}}
-	if len(params) != {{len .Params}} {
-		err = nest.NewParamCountMismatchError(handlerName{{trimHandler .Name}}.String(), len(params), {{len .Params}})
+	if len(params) != {{len (wireParams .Params)}} {
+		err = nest.NewParamCountMismatchError(handlerName{{trimHandler .Name}}.String(), len(params), {{len (wireParams .Params)}})
 		return
 	}
 {{- range $i, $p := .Params}}
-	p{{$p.Index}}, ok := params[{{$i}}].({{$p.Type}})
+{{- if $p.BusinessTime}}
+	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传（D22-1）。
+	p{{$p.Index}} := {{$p.BusinessTime}}
+{{- else}}
+	p{{$p.Index}}, ok := params[{{$p.WireIndex}}].({{$p.Type}})
 	if !ok {
-		err = nest.NewParamTypeMismatchError(handlerName{{$handlerName}}.String(), {{$i}}, {{quote $p.Type}}, params[{{$i}}])
+		err = nest.NewParamTypeMismatchError(handlerName{{$handlerName}}.String(), {{$p.WireIndex}}, {{quote $p.Type}}, params[{{$p.WireIndex}}])
 		return
 	}
+{{- end}}
 {{- end}}
 {{- end}}
 
@@ -705,30 +738,30 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
 	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
 	// handler: roost add timer --entity <Entity> (framework/nest/entitytimer).
-	func (s *{{$.SenderType}}) Delay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) Delay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, id int64{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
-	func (s *{{$.SenderType}}) Send_{{trimHandler .Name}}(ctx context.Context, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) Send_{{trimHandler .Name}}(ctx context.Context, id int64{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
-	func (s *{{$.SenderType}}) Broadcast_{{trimHandler .Name}}(ctx context.Context, ids []int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) Broadcast_{{trimHandler .Name}}(ctx context.Context, ids []int64{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.DispatchBroadcast(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.DispatchBroadcast(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
 	{{end}}
 	{{if and $.SyncSenderOnly (or (gt (len .Returns) 0) .Err.Have .Sync)}}
-	func (s *{{$.SenderType}}) Sync_{{trimHandler .Name}}(ctx context.Context, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
+	func (s *{{$.SenderType}}) Sync_{{trimHandler .Name}}(ctx context.Context, id int64{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.Request(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.Request(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}
@@ -757,27 +790,27 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
 	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
 	// handler: roost add timer --entity <Entity> (framework/nest/entitytimer).
-	func (s *{{$.SenderType}}) MultiDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) MultiDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
-	func (s *{{$.SenderType}}) MultiSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) MultiSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
 	{{end}}
 	{{if and $.SyncSenderOnly (or (gt (len .Returns) 0) .Err.Have .Sync)}}
-	func (s *{{$.SenderType}}) MultiSync_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
+	func (s *{{$.SenderType}}) MultiSync_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}
@@ -806,27 +839,27 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
 	// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
 	// handler: roost add timer --entity <Entity> (framework/nest/entitytimer).
-	func (s *{{$.SenderType}}) MultiGroupDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) MultiGroupDelay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
-	func (s *{{$.SenderType}}) MultiGroupSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
+	func (s *{{$.SenderType}}) MultiGroupSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 	}
 
 	{{end}}
 	{{if and $.SyncSenderOnly (or (gt (len .Returns) 0) .Err.Have .Sync)}}
-	func (s *{{$.SenderType}}) MultiGroupSync_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
+	func (s *{{$.SenderType}}) MultiGroupSync_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range wireParams .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := wireParams .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIO(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}
