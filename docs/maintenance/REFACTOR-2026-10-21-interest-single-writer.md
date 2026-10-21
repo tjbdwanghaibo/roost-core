@@ -132,6 +132,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
   2. `scripts/perf/sync-aoi` 原场景与小块场景，`-views-per-player` 0 / 4 / 8 / 16，`-apply-mode sync|async`，Nest 与 direct，看 P50 / P99、帧数、Flush 均值与政策阶段 P95（与 DESIGN-TODO D19“两种应用模式”的表同口径）；
   3. demo 登录风暴（enter_game + scene_view），看 handler 服务端 P99。
 - 预期：1 中登记侧入口与基线同量级或更快，AOI 基准不变；2 中 Nest 两种模式 P99 不高于改前，ApplySync 16 视野仍超周期（上限不变）；3 中 handler P99 不再有 AOI 批次长度的尾巴。不符合时记录，不改结论。
+- **结果（2026-10-22）**：见 [INTEREST-SINGLE-WRITER-20261022](../performance/INTEREST-SINGLE-WRITER-20261022.md)。1 成立（政策阶段在跑时直接调用均值与 p99 降一到两个数量级，AOI 基准 ±2%；视野登记表小操作每次多一条日志、慢几百纳秒）；2 成立（Nest ApplySync 0～8 视野 P50 低 6～11ms、P99 低 4～8ms，ApplyAsync 持平，ApplySync 16 视野仍超周期且政策阶段 P95 比改前高约 8ms）；3 未测。另修了 sync-aoi 的 Nest 模式每 tick 调 `Apply` 的夹具问题（`9ad54c3c`，重构后它让压测线程替政策阶段做 AOI），direct 基线按本节第 6 条注明不可与改前直接比。
 
 ## 7. 修前证据（基线 `494134ae`，`GOWORK=off go test -count=1 -run '<三条>' ./framework/sync/entitysync/policy/`）
 

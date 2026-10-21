@@ -1,0 +1,41 @@
+02:20:06 pass=1 base start loadavg={ 2.82 2.68 2.86 }
+02:20:52 pass=1 base ok
+02:21:02 pass=1 after start loadavg={ 2.44 2.64 2.84 }
+02:22:09 pass=1 after ok
+02:22:19 pass=2 after start loadavg={ 2.35 2.57 2.80 }
+02:23:38 pass=2 after ok
+02:23:49 pass=2 base start loadavg={ 2.47 2.61 2.79 }
+02:24:34 pass=2 base ok
+02:24:45 pass=3 base start loadavg={ 2.70 2.67 2.80 }
+02:25:30 pass=3 base ok
+02:25:41 pass=3 after start loadavg={ 3.48 2.98 2.91 }
+02:26:51 pass=3 after ok
+02:27:01 pass=4 after start loadavg={ 4.00 3.34 3.06 }
+02:28:11 pass=4 after ok
+02:28:22 pass=4 base start loadavg={ 3.14 3.19 3.02 }
+02:29:07 pass=4 base ok
+02:29:18 pass=5 base start loadavg={ 2.72 3.06 2.98 }
+02:30:03 pass=5 base ok
+02:30:14 pass=5 after start loadavg={ 2.53 2.97 2.95 }
+02:31:21 pass=5 after ok
+02:31:31 pass=6 after start loadavg={ 2.11 2.76 2.87 }
+02:32:41 pass=6 after ok
+02:32:51 pass=6 base start loadavg={ 2.22 2.70 2.84 }
+02:33:37 pass=6 base ok
+02:33:47 pass=7 base start loadavg={ 3.09 2.85 2.89 }
+02:34:33 pass=7 base ok
+02:34:43 pass=7 after start loadavg={ 2.49 2.75 2.84 }
+02:35:50 pass=7 after ok
+02:36:01 pass=8 after start loadavg={ 1.83 2.51 2.75 }
+02:37:20 pass=8 after ok
+02:37:30 pass=8 base start loadavg={ 2.05 2.46 2.71 }
+02:38:16 pass=8 base ok
+02:38:26 pass=9 base start loadavg={ 2.01 2.38 2.65 }
+02:39:12 pass=9 base ok
+02:39:22 pass=9 after start loadavg={ 1.78 2.25 2.59 }
+02:40:32 pass=9 after ok
+02:40:43 pass=10 after start loadavg={ 2.21 2.35 2.60 }
+02:41:59 pass=10 after ok
+02:42:09 pass=10 base start loadavg={ 2.27 2.41 2.60 }
+02:42:55 pass=10 base ok
+02:42:55 all done

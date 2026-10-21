@@ -1,0 +1,216 @@
+// 压测专用（未入库）：Interest 单写者重构方案 §6 第 1 项要求另加的两条基准，改前 494134ae 与改后用同一份源码编进
+// policy 包的测试二进制。只用两边都有的 API 与测试类型（sink、queuedEntity）。
+package policy
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+func xbState(id int64) *entity.SubjectSyncState {
+	return entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: "test",
+		Packer: entity.SubjectSyncPackFunc{
+			Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, []byte("snapshot")), nil
+			},
+			Delta: func(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, []byte("delta")), nil
+			},
+		},
+	})
+}
+
+func xbEntity(id int64) *queuedEntity {
+	e := &queuedEntity{entity.NewEntityBase(id, entity.EntityCategory(4), true)}
+	e.SetSyncState(xbState(id))
+	return e
+}
+
+func xbCommit(b *testing.B, m *entitysync.Manager, in *Interest, e *queuedEntity, to spatial.Point) {
+	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+	if err := in.QueueMove(e, to); err != nil {
+		mutation.Release()
+		b.Fatal(err)
+	}
+	mutation.Admit()
+	mutation.Confirm()
+	mutation.Release()
+}
+
+const (
+	xbPlayers = 1000
+	xbWorld   = 3000
+)
+
+func xbSetup(b *testing.B, mode ApplyMode) (*entitysync.Manager, *Interest, []*queuedEntity) {
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &sink{}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = m.Close(context.Background()) })
+	in, err := NewInterest(InterestConfig{Manager: m, ApplyMode: mode, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: xbWorld, Y: xbWorld}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(in.Close)
+	var ents []*queuedEntity
+	for id := int64(1); id <= xbPlayers; id++ {
+		if err := m.Register(xbState(id)); err != nil {
+			b.Fatal(err)
+		}
+		if err := m.OpenSession(entitysync.SessionID(id)); err != nil {
+			b.Fatal(err)
+		}
+		at := spatial.Point{X: (id % 30) * 100, Y: (id / 30) * 90}
+		if err := in.Enter(id, id, at, ObserverView{}); err != nil {
+			b.Fatal(err)
+		}
+		ents = append(ents, xbEntity(id))
+	}
+	if r := in.Apply(); len(r) > 0 {
+		b.Fatalf("apply refused: %+v", r)
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	return m, in, ents
+}
+
+// BenchmarkXDirectCallUnderPolicy：政策阶段一直在跑（后台每轮提交 200 条移动再 Flush）时，业务线程上的一次直接调用
+// （SetObserverView，或 Enter + Leave 一对）的耗时；ns/op 是均值，p99-ns / max-ns 是逐次计时。
+func BenchmarkXDirectCallUnderPolicy(b *testing.B) {
+	for _, mode := range []ApplyMode{ApplySync, ApplyAsync} {
+		for _, op := range []string{"SetObserverView", "EnterLeave"} {
+			name := "sync"
+			if mode == ApplyAsync {
+				name = "async"
+			}
+			b.Run(fmt.Sprintf("mode=%s/op=%s", name, op), func(b *testing.B) {
+				m, in, ents := xbSetup(b, mode)
+				const extra = int64(9001)
+				if err := m.Register(xbState(extra)); err != nil {
+					b.Fatal(err)
+				}
+				if err := m.OpenSession(entitysync.SessionID(extra)); err != nil {
+					b.Fatal(err)
+				}
+				stop := make(chan struct{})
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					rng := rand.New(rand.NewPCG(1, 2))
+					round := 0
+					for {
+						select {
+						case <-stop:
+							return
+						default:
+						}
+						for k := 0; k < 200; k++ {
+							e := ents[(round*200+k)%len(ents)]
+							xbCommit(b, m, in, e, spatial.Point{X: rng.Int64N(xbWorld), Y: rng.Int64N(xbWorld)})
+						}
+						if err := m.Flush(context.Background()); err != nil {
+							b.Error(err)
+							return
+						}
+						round++
+					}
+				}()
+				lat := make([]time.Duration, 0, 1<<16)
+				rng := rand.New(rand.NewPCG(3, 4))
+				radius := int64(120)
+				b.ResetTimer()
+				for b.Loop() {
+					start := time.Now()
+					switch op {
+					case "SetObserverView":
+						radius = 270 - radius // 120 / 150 交替
+						if _, err := in.SetObserverView(1+rng.Int64N(xbPlayers), ObserverView{Radius: radius}); err != nil {
+							b.Fatal(err)
+						}
+					default:
+						if err := in.Enter(extra, extra, spatial.Point{X: rng.Int64N(xbWorld), Y: rng.Int64N(xbWorld)}, ObserverView{}); err != nil {
+							b.Fatal(err)
+						}
+						if err := in.Leave(extra, extra); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if len(lat) < cap(lat) {
+						lat = append(lat, time.Since(start))
+					}
+				}
+				b.StopTimer()
+				close(stop)
+				wg.Wait()
+				slices.Sort(lat)
+				if n := len(lat); n > 0 {
+					b.ReportMetric(float64(lat[n*99/100]), "p99-ns")
+					b.ReportMetric(float64(lat[n-1]), "max-ns")
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkXSyncFlushBacklog：ApplySync 下积压 4×BatchSize（4096）条已确认移动时，第一次 Flush 的耗时
+// （first-flush-ns）与排空全部积压的总耗时（ns/op = 第一次 Flush + Drain）。改前一次 Flush 只应用一批。
+func BenchmarkXSyncFlushBacklog(b *testing.B) {
+	m, in, _ := xbSetup(b, ApplySync)
+	const movers = 4096
+	ents := make([]*queuedEntity, movers)
+	for i := range ents {
+		id := int64(100_000 + i)
+		if err := m.Register(xbState(id)); err != nil {
+			b.Fatal(err)
+		}
+		if err := in.Show(id, spatial.Point{X: int64(i%64) * 46, Y: int64(i/64) * 46}); err != nil {
+			b.Fatal(err)
+		}
+		ents[i] = xbEntity(id)
+	}
+	if r := in.Apply(); len(r) > 0 {
+		b.Fatalf("apply refused: %+v", r)
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	rng := rand.New(rand.NewPCG(5, 6))
+	var first time.Duration
+	n := 0
+	b.ResetTimer()
+	for b.Loop() {
+		b.StopTimer()
+		for _, e := range ents {
+			xbCommit(b, m, in, e, spatial.Point{X: rng.Int64N(xbWorld), Y: rng.Int64N(xbWorld)})
+		}
+		b.StartTimer()
+		start := time.Now()
+		if err := m.Flush(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+		first += time.Since(start)
+		if err := m.Drain(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+		n++
+	}
+	b.StopTimer()
+	if n > 0 {
+		b.ReportMetric(float64(first)/float64(n), "first-flush-ns")
+	}
+}
