@@ -3,7 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"reflect"
 	"time"
 
@@ -312,7 +312,7 @@ func (c *Controller) now() time.Time {
 			return now
 		}
 	}
-	return clock.Now() // AI 的游戏时间是业务时钟（D-L3）
+	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
 }
 func (c *Controller) context(now time.Time) (ctx *Context) {
 	if now.IsZero() {

@@ -12,6 +12,7 @@ var (
 )
 var (
 	handlerNameClaimReward = nest.NewHandlerName("ClaimReward")
+	handlerNameStampVisit  = nest.NewHandlerName("StampVisit")
 )
 
 // PlayerSender is an instance-scoped, strongly typed Nest client. Construct
@@ -31,6 +32,10 @@ func (s *PlayerSender) nestClient() (nest.Client, error) {
 	return s.client, nil
 }
 
+// Delay_ClaimReward runs the handler after delay. The delayed message lives only in this
+// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
+// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
+// handler: roost add timer --entity <Entity> (framework/nest/entitytimer).
 func (s *PlayerSender) Delay_ClaimReward(ctx context.Context, delay time.Duration, id int64, rank int) error {
 	client, err := s.nestClient()
 	if err != nil {
@@ -53,4 +58,32 @@ func (s *PlayerSender) Broadcast_ClaimReward(ctx context.Context, ids []int64, r
 		return err
 	}
 	return client.DispatchBroadcast(ctx, handlerNameClaimReward, ids, nest.NewParams(rank))
+}
+
+// Delay_StampVisit runs the handler after delay. The delayed message lives only in this
+// process's memory: it is dropped on shutdown and lost on a crash, and nothing is written to the WAL.
+// A deadline that must fire (a reward, the end of an event) belongs in a DAO field, fired by a
+// handler: roost add timer --entity <Entity> (framework/nest/entitytimer).
+func (s *PlayerSender) Delay_StampVisit(ctx context.Context, delay time.Duration, id int64, note string) error {
+	client, err := s.nestClient()
+	if err != nil {
+		return err
+	}
+	return client.Dispatch(ctx, handlerNameStampVisit, id, nest.NewParams(note), nest.SendOptionWithDelay(delay))
+}
+
+func (s *PlayerSender) Send_StampVisit(ctx context.Context, id int64, note string) error {
+	client, err := s.nestClient()
+	if err != nil {
+		return err
+	}
+	return client.Dispatch(ctx, handlerNameStampVisit, id, nest.NewParams(note))
+}
+
+func (s *PlayerSender) Broadcast_StampVisit(ctx context.Context, ids []int64, note string) error {
+	client, err := s.nestClient()
+	if err != nil {
+		return err
+	}
+	return client.DispatchBroadcast(ctx, handlerNameStampVisit, ids, nest.NewParams(note))
 }

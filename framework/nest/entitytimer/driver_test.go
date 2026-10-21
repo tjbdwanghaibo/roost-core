@@ -54,7 +54,7 @@ type recordingClient struct {
 type sentTick struct {
 	handler string
 	id      int64
-	now     int64
+	params  int // Tick 消息不带参数（D22-1：handler 按自己冻结的业务时间触发）
 }
 
 func (c *recordingClient) Dispatch(_ context.Context, name nest.HandlerName, id int64, params nest.Params, _ ...nest.SendOpt) error {
@@ -64,7 +64,7 @@ func (c *recordingClient) Dispatch(_ context.Context, name nest.HandlerName, id 
 	if c.fail != nil {
 		return c.fail
 	}
-	c.sent = append(c.sent, sentTick{handler: name.String(), id: id, now: params[0].(int64)})
+	c.sent = append(c.sent, sentTick{handler: name.String(), id: id, params: len(params)})
 	return nil
 }
 
@@ -168,8 +168,8 @@ func TestDriverDeliversOnlyDueEntitiesOnce(t *testing.T) {
 		t.Fatalf("delivered %d at the first deadline, want 1", n)
 	}
 	sent := client.take()
-	if len(sent) != 1 || sent[0].id != 1 || sent[0].handler != "handlerTickTestTimer" || sent[0].now != clk.Now().UnixMilli() {
-		t.Fatalf("sent = %+v, want one tick to entity 1 at %d", sent, clk.Now().UnixMilli())
+	if len(sent) != 1 || sent[0].id != 1 || sent[0].handler != "handlerTickTestTimer" || sent[0].params != 0 {
+		t.Fatalf("sent = %+v, want one tick to entity 1 without parameters", sent)
 	}
 	// 待报告期间不重复投递。
 	clk.Advance(time.Second)

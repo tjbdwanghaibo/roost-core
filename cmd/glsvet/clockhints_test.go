@@ -169,3 +169,35 @@ func Load(name string) (*time.Location, error) { return time.LoadLocation(name) 
 		t.Fatalf("hints = %d in a framework package, want 0", hints)
 	}
 }
+
+// D22-1：Nest handler 里现读业务时钟（app.BusinessClock、进程业务时钟 clock.Now / UnixMilli）打印提示，改读 fctx.Now；
+// 豁免指令、非 handler 函数、非业务目录不提示。
+func TestClockHintsFlagBusinessClockReadsInNestHandlers(t *testing.T) {
+	root := newModule(t)
+	dir := writeModuleFile(t, root, "game/handler/claim.go", `package handler
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	bizclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+var registry *app.Registry
+//roost:nest rollback=undo durability=strict
+func Claim(target any) int64 { return app.BusinessClock(registry).Now().Unix() }
+func handlerExpire(target any) int64 { return bizclock.Now().Unix() + bizclock.UnixMilli() }
+func handlerMeasure(target any) int64 {
+	return bizclock.Now().UnixNano() //glsvet:live-business-clock measuring the handler's own run time
+}
+func handlerFrozen(target any) int64 { return fctx.Now().Unix() }
+func helper() int64 { return bizclock.Now().Unix() }
+`)
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 3 {
+		t.Fatalf("hints = %d, want 3 (BusinessClock in a //roost:nest function, clock.Now and clock.UnixMilli in a handler)", hints)
+	}
+	framework := writeModuleFile(t, root, "framework/nest/x.go", `package nest
+import "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+func handlerInternal() int64 { return clock.Now().Unix() }
+`)
+	if hints := clockHintsForDirectory(token.NewFileSet(), framework); hints != 0 {
+		t.Fatalf("hints = %d in a framework package, want 0", hints)
+	}
+}

@@ -85,7 +85,7 @@ func (controller *Controller) HandleFinishDungeon(context *playeraccess.Context,
 		resolvedAt = run.StartedAtUnix
 	}
 	board := ranking.ClearsBoard()
-	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, controller.BusinessNow().Unix(), board.Season)
+	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, board.Season)
 	if err != nil {
 		// The run is resolved either way; the reward failing is its own
 		// coded answer so the client can tell the two apart.

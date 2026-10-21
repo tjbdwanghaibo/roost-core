@@ -66,7 +66,7 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		"//roost:component type=2000", "const TimerTickHandler = \"handlerTickPlayerTimer\"",
 		"var TimerDriver = entitytimer.NewDriver(entitytimer.Config{Name: \"player.timer\"",
 		"TimerDriver.NewHost(typed, playerTimerStore{owner: typed}, component.registerTimerHandlers)",
-		"func (component *TimerComponent) NewTimer(", "func (component *TimerComponent) NewTimerAt(", "func (component *TimerComponent) Tick(now time.Time) int",
+		"func (component *TimerComponent) NewTimer(", "func (component *TimerComponent) NewTimerAt(", "func (component *TimerComponent) Tick() int",
 		"dao.RangeTimers(", "Overdue",
 	} {
 		if !strings.Contains(component, fragment) {
@@ -74,7 +74,7 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		}
 	}
 	tick := readProjectFile(t, root, "game/handler/tick_player_timer_gen.go")
-	if !strings.Contains(tick, "//roost:nest rollback=undo durability=strict\nfunc handlerTickPlayerTimer(target player.ITimerEntity, nowUnixMilli int64) (int32, error)") {
+	if !strings.Contains(tick, "//roost:nest rollback=undo durability=strict\nfunc handlerTickPlayerTimer(target player.ITimerEntity) (int32, error)") {
 		t.Fatalf("tick handler:\n%s", tick)
 	}
 	dao := readProjectFile(t, root, "db/def/player.go")
@@ -413,7 +413,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	kitentitytimer "github.com/tjbdwanghaibo/roost-core/wiring/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
@@ -529,7 +529,7 @@ func TestEntityTimerEndToEnd(t *testing.T) {
 	}
 	business := &fakeBusinessClock{now: time.UnixMilli(1_900_000_000_000)}
 	player.TimerDriver.SetClock(business.Now)
-	t.Cleanup(func() { player.TimerDriver.SetClock(clock.Now) })
+	t.Cleanup(func() { player.TimerDriver.SetClock(fctx.Now) })
 	for _, mod := range all {
 		if err := mod.Start(); err != nil {
 			t.Fatalf("%s start: %v", mod.Name(), err)

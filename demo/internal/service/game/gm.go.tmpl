@@ -147,8 +147,6 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		return fmt.Errorf("gm: %w", err)
 	}
 	localSID := identity.Sid
-	// GM 命令里的时间是业务时间：关窗要算出与 runner 同一个窗口 id，入会时间是玩法时间。
-	business := app.BusinessClock(registry)
 	// player_id is whichever id the operator has at hand: the unique id the
 	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
 	// full entity id Mongo stores as the Player document's _id. The two
@@ -399,7 +397,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				info, err := syncsender.NewJoinGuildSender(nestClient).
-					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID, business.Now().Unix())
+					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID)
 				if err != nil {
 					return admin.Result{}, err
 				}

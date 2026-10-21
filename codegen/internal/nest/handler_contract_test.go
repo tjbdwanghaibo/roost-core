@@ -1,6 +1,7 @@
 package nest
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +166,50 @@ func (h *GuildHandler) handlerB(p IPlayerEntity, id int64) error { return nil }
 	}
 	if _, err := commonReceiverType(funcs); err == nil || !strings.Contains(err.Error(), "cannot mix receiver") {
 		t.Fatalf("two receivers in one file: err=%v", err)
+	}
+}
+
+// 业务时间参数（nowUnix / nowUnixMilli）不在消息里传：分发包装执行时从 fctx 填，Sender 签名里没有它；类型必须是 int64。
+func TestBusinessTimeParametersAreFilledAtExecution(t *testing.T) {
+	bad := writeTempGoFile(t, `package handler
+type IPlayerEntity interface{ ID() int64 }
+//roost:nest
+func handlerClaim(p IPlayerEntity, nowUnix int32) error { return nil }
+`)
+	if _, _, err := parseFile(bad); err == nil || !strings.Contains(err.Error(), "declare it int64") {
+		t.Fatalf("an int32 nowUnix = %v, want refused", err)
+	}
+
+	dir := t.TempDir()
+	source := `package handler
+
+import player "example.com/demo/game/entities/player"
+
+//roost:nest rollback=undo durability=strict
+func handlerClaim(target player.IBagEntity, nowUnix int64, mailID string, nowUnixMilli int64) (bool, error) {
+	return true, nil
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "claim.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := os.ReadFile(filepath.Join(dir, "claim_nest_gen.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"p0 := fctx.Now().Unix()", "p1, ok := params[0].(string)", "p2 := fctx.NowMilli()", "len(params) != 1"} {
+		if !strings.Contains(string(wrapper), want) {
+			t.Fatalf("dispatch wrapper misses %q:\n%s", want, wrapper)
+		}
+	}
+	syncSender, err := os.ReadFile(filepath.Join(dir, "syncsender", "claim_nest_gen.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(syncSender), "Sync_Claim(ctx context.Context, id int64, mailID string)") || strings.Contains(string(syncSender), "nowUnix") {
+		t.Fatalf("the sender must not take the business time:\n%s", syncSender)
 	}
 }

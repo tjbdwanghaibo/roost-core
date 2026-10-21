@@ -53,18 +53,17 @@ func (m *Mod) Init(*viper.Viper) error {
 	return nil
 }
 
-// Provide 把 Nest 客户端、只读实体查找与 App 业务时钟交给每个驱动。业务时钟必须在实体加载之前接上：
-// 加载时刻与补触发判断都按它计算。
+// Provide 把 Nest 客户端与只读实体查找交给每个驱动。业务时间不在这里接：驱动缺省读 fctx.Now（D22-1），Nest 消息
+// 里是这条消息冻结的业务时间，它来自进程业务时钟——App 启动时按 time.logic_offset 设定，与 app.BusinessClock(r)
+// 同一份配置。
 func (m *Mod) Provide(r *app.Registry) error {
 	client, ok := app.Lookup[nest.Client](r, mods.ModNest)
 	if !ok || client == nil {
 		return errors.New("entity timer mod: nest client is unavailable; install the nest mod in the same service")
 	}
-	business := app.BusinessClock(r)
 	manager := m.access.Manager()
 	lookup := func(id int64) entity.IThreadSafeEntity { return manager.Get(id) }
 	for _, driver := range m.drivers {
-		driver.SetClock(business.Now)
 		if err := driver.Bind(client, lookup); err != nil {
 			return err
 		}

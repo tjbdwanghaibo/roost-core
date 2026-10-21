@@ -72,6 +72,18 @@ type NonEntityParam struct {
 	Index int
 	Type  string
 	Name  string
+	// WireIndex 是它在消息参数（nest.Params）里的位置；业务时间参数不在消息里，为 -1。
+	WireIndex int
+	// BusinessTime 非空表示业务时间参数（参数名 nowUnix / nowUnixMilli，int64）：不在消息里传，由生成的分发包装在
+	// handler 执行时从 fctx 填（这条消息冻结的业务时间，D22-1），Sender 的签名里也没有它。值是填入的表达式。
+	BusinessTime string
+}
+
+// businessTimeParams 是按约定名识别的业务时间参数与分发包装填入它的表达式（D22-1，维护者 2026-10-21 决定 2A）：
+// 业务时间是执行时刻，不是调用方读的时间——排队、冷加载、重试的耽搁不能算进“之前”；也不从请求或调用方取。
+var businessTimeParams = map[string]string{
+	"nowUnix":      "fctx.Now().Unix()",
+	"nowUnixMilli": "fctx.NowMilli()",
 }
 
 type RetParam struct {
@@ -603,11 +615,19 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 				startNonEntity = true
 			}
 			if !isEntity || (startNonEntity && !isExplicitEntity && !isInferredEntity && !isInferredGroup) {
-				fi.Params = append(fi.Params, NonEntityParam{
-					Index: len(fi.Params),
-					Type:  typeName,
-					Name:  usableParamName(name.Name, len(fi.Params)),
-				})
+				param := NonEntityParam{
+					Index:     len(fi.Params),
+					Type:      typeName,
+					Name:      usableParamName(name.Name, len(fi.Params)),
+					WireIndex: wireParamCount(fi.Params),
+				}
+				if fill, ok := businessTimeParams[name.Name]; ok {
+					if typeName != "int64" {
+						return nil, fmt.Errorf("parameter %q is the business time the generated dispatch fills from fctx when the handler runs; declare it int64", name.Name)
+					}
+					param.BusinessTime, param.WireIndex = fill, -1
+				}
+				fi.Params = append(fi.Params, param)
 			} else {
 				baseType := strings.TrimPrefix(typeName, "[]")
 				param := EntityParam{
@@ -710,6 +730,17 @@ func isEntityGroupType(typeName string) bool {
 		return isEntityCategory(strings.TrimPrefix(typeName, "[]"))
 	}
 	return false
+}
+
+// wireParamCount 是 params 里在消息中传的参数个数（业务时间参数不传）。
+func wireParamCount(params []NonEntityParam) int {
+	count := 0
+	for _, p := range params {
+		if p.BusinessTime == "" {
+			count++
+		}
+	}
+	return count
 }
 
 // usableParamName is the name the generated code uses for one parameter.

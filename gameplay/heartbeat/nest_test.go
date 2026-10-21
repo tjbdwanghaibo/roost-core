@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -362,5 +363,47 @@ func TestFiftyThousandEntitiesSmoke(t *testing.T) {
 	t.Logf("smoke (%d entities, %v): %+v", n, period, st)
 	if st.DroppedStale+st.DroppedStopped+st.DroppedRemoved+st.DroppedNotLoaded+st.DroppedDuplicate != 0 || st.Executed < int64(2*n) || st.Registered != n {
 		t.Fatalf("unexpected stats %+v", st)
+	}
+}
+
+// D22-1：Beat.Now 是这一拍消息冻结的业务时间（fctx.Now），回调里再读 fctx.Now 得到同一个值。驱动用缺省时钟
+// （不 SetClock），进程业务时钟的来源每读一次走 1ms：现读第二次就会不同。
+func TestBeatNowIsTheMessagesFrozenBusinessTime(t *testing.T) {
+	f := newNestFixture(t, nil)
+	var mu sync.Mutex
+	tick := time.Unix(1_800_000_000, 0)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+	d := NewDriver(Config{Name: "frozen", Logger: discard})
+	if err := d.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.manager.Get(id) }); err != nil {
+		t.Fatal(err)
+	}
+	e := newHBEntity(t, d, 40, kindShort)
+	f.manager.Add(e)
+	type reading struct{ beat, message time.Time }
+	got := make(chan reading, 4)
+	r, _ := e.host.Register("x", 50*time.Millisecond, func(b Beat) error {
+		got <- reading{beat: b.Now, message: fctx.Now()}
+		return nil
+	})
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		d.step(context.Background())
+	}
+	f.settle(r)
+	select {
+	case g := <-got:
+		if !g.beat.Equal(g.message) {
+			t.Fatalf("Beat.Now = %v, but the beat's message froze %v: the beat read the clock a second time", g.beat, g.message)
+		}
+	default:
+		t.Fatal("no beat ran")
 	}
 }

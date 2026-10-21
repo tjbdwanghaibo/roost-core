@@ -33,7 +33,7 @@ func BenchmarkHostPeriodicTick(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				now = now.Add(time.Second)
-				host.Tick(now)
+				host.Tick()
 			}
 		})
 	}
@@ -101,7 +101,7 @@ func tickDelivered(t *testing.T, d *Driver, client *recordingClient, host *Host)
 		if tick.id != host.owner.ID() {
 			t.Fatalf("tick for %d delivered to the host of %d", tick.id, host.owner.ID())
 		}
-		host.Tick(time.UnixMilli(tick.now))
+		host.Tick()
 	}
 	return len(sent)
 }
@@ -356,13 +356,13 @@ func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
 		}
 		host.NewTimer(time.Second, typeBuff, 0, 0, nil)
 		clk.Advance(time.Second)
-		func() { defer func() { _ = recover() }(); host.Tick(clk.Now()) }()
+		func() { defer func() { _ = recover() }(); host.Tick() }()
 		id := host.NewTimer(time.Second, typeIncome, 0, 0, nil)
 		if _, ok := store.nodes[id]; !ok {
 			t.Fatal("new timer remained trapped in the failed tick")
 		}
 		clk.Advance(time.Second)
-		host.Tick(clk.Now())
+		host.Tick()
 		if fired != 1 {
 			t.Fatalf("new callback fired %d times", fired)
 		}
@@ -382,7 +382,7 @@ func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
 		}
 		id := host.NewTimer(time.Second, typeBuff, 0, 0, nil)
 		clk.Advance(time.Second)
-		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "reject-stage", func() (any, error) { host.Tick(clk.Now()); return nil, errBusiness }); err == nil {
+		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "reject-stage", func() (any, error) { host.Tick(); return nil, errBusiness }); err == nil {
 			t.Fatal("transaction did not reject")
 		}
 		if len(store.nodes) != 1 || store.nodes[id].Type != typeBuff || host.active != nil {
@@ -391,7 +391,7 @@ func TestHostCallbackOperationsShareTheCurrentTick(t *testing.T) {
 		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now()) {
 			t.Fatalf("rollback changed index: %v %v", due, ok)
 		}
-		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "retry-stage", func() (any, error) { host.Tick(clk.Now()); return nil, nil }); err != nil {
+		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "retry-stage", func() (any, error) { host.Tick(); return nil, nil }); err != nil {
 			t.Fatal(err)
 		}
 		if due, ok := d.DueOf(owner); !ok || !due.Equal(clk.Now().Add(time.Minute)) {

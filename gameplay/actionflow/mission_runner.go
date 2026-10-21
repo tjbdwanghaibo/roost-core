@@ -3,7 +3,7 @@ package actionflow
 import (
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"math"
 	"time"
 )
@@ -446,7 +446,7 @@ func (r *MissionRunner) now() time.Time {
 			return now
 		}
 	}
-	return clock.Now() // 行为流的游戏时间是业务时钟（D-L3）
+	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
 }
 func (r *MissionRunner) context(now time.Time) (ctx *MissionContext) {
 	if now.IsZero() {

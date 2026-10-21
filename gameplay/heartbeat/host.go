@@ -32,7 +32,8 @@ const DefaultMaxElapsed = time.Second
 
 // Beat 是交给回调的一拍。
 type Beat struct {
-	// Now 是本拍的业务时间（App 业务时钟），回调开始时读一次。
+	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now（D22-1），回调里再读 fctx.Now 是同一个值。
+	// 挂了时间域（WithTimeDomain）时是这条消息的域时间。
 	Now time.Time
 	// Elapsed 是距本登记上次执行的业务时间；首拍是距本次启动生效。夹到 [0, max(DefaultMaxElapsed, Period)]：
 	// 掉拍、进程停顿或业务时钟被调整时不让一拍走出几公里。框架不追帧，掉拍后下一拍按 Elapsed 算一次。

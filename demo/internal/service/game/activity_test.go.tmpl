@@ -468,7 +468,7 @@ func (n *recordingNest) Request(_ context.Context, _ corenest.HandlerName, _ int
 }
 
 // 活动窗口、关窗截止与 World 定时器读业务时钟（time.logic_offset）。
-// 业务时钟比真实时间快一天时，开的是业务时间所在的窗口，钉到 World 上的“现在”也是业务时间；
+// 业务时钟比真实时间快一天时，开的是业务时间所在的窗口，钉到 World 上的关窗时刻也按业务时间算；
 // 修前 openCurrentWindow 读 time.Now()，开的是真实时间所在的窗口，与协调器的业务时钟错开一天。
 func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 	featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: true})
@@ -488,8 +488,9 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 			coordinator.opened, want, gameactivity.Key("west", gameactivity.ID(time.Now().Unix())))
 	}
 	closeAt, _ := gameactivity.CloseAt(gameactivity.ID(business.Unix()))
-	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix(), business.Unix()}) {
-		t.Fatalf("the World was armed with %v, want the business window, its close time and the business now", nest.requests)
+	// 请求里不带“现在”：handlerArmActivity 的 nowUnix 由生成的分发包装在执行时填这条消息冻结的业务时间（D22-1）。
+	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix()}) {
+		t.Fatalf("the World was armed with %v, want the business window and its close time", nest.requests)
 	}
 }
 
@@ -515,13 +516,16 @@ type tickCommitter struct{}
 
 func (tickCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
-// World 定时器的驱动是框架的 entitytimer.Driver，由 startWorldTimers 手工接上 Nest 与业务时钟（demo 不用
-// roost add timer）。业务时钟比真实时间快一天时：到期的关窗节点经 Nest 投给 TimerTickHandler（就是
-// handlerTickWorldTimers 的名字），带的“现在”是业务时间，不是墙钟——World 的期限按业务时间登记，墙钟会让
-// 节点晚一天才到期。D11 迁到生成器时删掉的 TestTheWorldTickCarriesBusinessTime 守的是同一件事（那时是每秒循环）。
+// World 定时器的驱动是框架的 entitytimer.Driver，由 startWorldTimers 手工接上 Nest（demo 不用 roost add timer）；
+// 业务时间是驱动的缺省时钟 fctx.Now，即进程业务时钟（App 启动时按 time.logic_offset 设偏移，这里照做）。业务时钟
+// 比真实时间快一天时：到期的关窗节点经 Nest 投给 TimerTickHandler（就是 handlerTickWorldTimers 的名字）——World 的
+// 期限按业务时间登记，驱动若按墙钟判断，节点要晚一天才到期。Tick 消息不带时间（D22-1）：handler 按自己冻结的
+// 业务时间触发。D11 迁到生成器时删掉的 TestTheWorldTickCarriesBusinessTime 守的是同一件事（那时是每秒循环）。
 func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
 	config := viper.New()
 	config.Set("time.logic_offset", "24h")
+	clock.SetOffset(24 * time.Hour)
+	t.Cleanup(clock.Reset)
 	registry := app.NewRegistry(config)
 	nest := &dispatchingNest{ticks: make(chan dispatchedTick, 4)}
 	if err := registry.Register(mods.ModNest, corenest.Client(nest)); err != nil {
@@ -534,10 +538,7 @@ func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startWorldTimers: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = stop(context.Background())
-		world.TimerDriver.SetClock(clock.Now)
-	})
+	t.Cleanup(func() { _ = stop(context.Background()) })
 	business := app.BusinessClock(registry).Now()
 	if lag := business.Sub(time.Now()); lag < 23*time.Hour {
 		t.Fatalf("the registry's business clock is %v ahead of the wall clock, want the configured 24h", lag)
@@ -568,15 +569,8 @@ func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
 	}
 	select {
 	case tick := <-nest.ticks:
-		if tick.handler != world.TimerTickHandler || tick.id != subject.ID() || len(tick.params) != 1 {
-			t.Fatalf("the driver delivered %+v, want one %s tick for World %d", tick, world.TimerTickHandler, subject.ID())
-		}
-		at, ok := tick.params[0].(int64)
-		if !ok {
-			t.Fatalf("the tick carries %T, want the business time in UnixMilli", tick.params[0])
-		}
-		if delivered := time.UnixMilli(at); delivered.Before(business) || delivered.Sub(business) > time.Minute {
-			t.Fatalf("the tick carries %v, want the business time (%v), not the wall clock (%v)", delivered, business, time.Now())
+		if tick.handler != world.TimerTickHandler || tick.id != subject.ID() || len(tick.params) != 0 {
+			t.Fatalf("the driver delivered %+v, want one %s tick without parameters for World %d", tick, world.TimerTickHandler, subject.ID())
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the driver never delivered the due World tick")

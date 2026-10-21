@@ -8,6 +8,8 @@ import (
 	"time"
 
 	coreflow "github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type controllerTestStrategy struct {
@@ -460,4 +462,22 @@ func equalEvents(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// D22-1：没有 Now 钩子时，AI 的缺省时间是本次执行冻结的业务时间（fctx.Now）。
+func TestControllerDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
+	var mu sync.Mutex
+	tick := time.UnixMilli(1_800_000_000_000)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+	execution, release := fctx.NewContext()
+	defer release()
+	if got := NewController(ControllerHooks{}).now(); !got.Equal(execution.Now) {
+		t.Fatalf("AI default now = %v, want the execution's frozen business time %v", got, execution.Now)
+	}
 }

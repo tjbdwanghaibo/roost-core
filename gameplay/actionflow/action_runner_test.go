@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type runnerTestAction struct {
@@ -880,5 +884,57 @@ func TestCancelFreezeFromACallbackInterruptsAfterTheCallback(t *testing.T) {
 	// 延后的 Start 在打断之后执行，组已冻结：以失败结束。
 	if last := log.ended[len(log.ended)-1]; !strings.Contains(last, " 3 ") {
 		t.Fatalf("deferred start into the frozen group ended %v", log.ended)
+	}
+}
+
+// nowRecordingAction 记下 Start 收到的 ActionContext.Now。
+type nowRecordingAction struct{ started time.Time }
+
+func (*nowRecordingAction) Kind() ActionKind { return 7 }
+func (a *nowRecordingAction) Start(ctx *ActionContext) (bool, ActionResult, error) {
+	a.started = ctx.Now
+	return false, ActionResult{}, nil
+}
+func (*nowRecordingAction) Tick(*ActionContext) (bool, ActionResult) { return false, ActionResult{} }
+func (*nowRecordingAction) Cancel(*ActionContext, string)            {}
+
+// steppingBusinessClock 让进程业务时钟每读一次走 1ms：现读第二次就与执行开始时冻结的值不同。
+func steppingBusinessClock(t *testing.T) {
+	t.Helper()
+	var mu sync.Mutex
+	tick := time.UnixMilli(1_800_000_000_000)
+	clock.SetSource(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		tick = tick.Add(time.Millisecond)
+		return tick
+	})
+	t.Cleanup(func() { clock.SetSource(nil) })
+}
+
+// D22-1：没给时间时，ActionContext.Now 与 MissionRunner 的缺省时间是本次执行冻结的业务时间（fctx.Now），
+// 与 handler 里读的同一时刻。
+func TestDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
+	steppingBusinessClock(t)
+	execution, release := fctx.NewContext()
+	defer release()
+
+	registry := NewRegistry()
+	if err := registry.RegisterAction(7, func(param any) (Action, error) { return param.(*nowRecordingAction), nil }); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewActionRunner(ActionRunnerConfig{Registry: registry, GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := &nowRecordingAction{}
+	if _, err := runner.Start(7, action, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if !action.started.Equal(execution.Now) {
+		t.Fatalf("ActionContext.Now = %v, want the execution's frozen business time %v", action.started, execution.Now)
+	}
+	if got := (&MissionRunner{}).now(); !got.Equal(execution.Now) {
+		t.Fatalf("MissionRunner default now = %v, want the execution's frozen business time %v", got, execution.Now)
 	}
 }

@@ -28,7 +28,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -64,7 +64,7 @@ var ErrNotBound = errors.New("entitytimer: driver is not bound to a nest client"
 type Config struct {
 	// Name 用于日志与指标标签，例如 "player.timer"。必填。
 	Name string
-	// Handler 是到期时投递的 Nest handler：单目标、一个 int64 参数（业务时间 UnixMilli）。必填。
+	// Handler 是到期时投递的 Nest handler：单目标、没有参数，handler 里调 Host.Tick()（按消息冻结的业务时间触发）。必填。
 	Handler nest.HandlerName
 	// Redeliver 见 DefaultRedeliver；0 取缺省。
 	Redeliver time.Duration
@@ -106,7 +106,7 @@ func NewDriver(config Config) *Driver {
 	if config.MaxWait <= 0 {
 		config.MaxWait = DefaultMaxWait
 	}
-	return &Driver{config: config, now: clock.Now, kick: make(chan struct{}, 1)}
+	return &Driver{config: config, now: fctx.Now, kick: make(chan struct{}, 1)}
 }
 
 // Name 返回 Config.Name。
@@ -115,8 +115,10 @@ func (d *Driver) Name() string { return d.config.Name }
 // Handler 返回投递的 Nest handler 名。
 func (d *Driver) Handler() nest.HandlerName { return d.config.Handler }
 
-// SetClock 换掉业务时钟（缺省 clock.Now）。进程装配传入 app.BusinessClock，测试传入可控时钟。
-// 期限、触发时刻与加载时刻都按这一个时钟计算，所以必须在实体加载之前设置。
+// SetClock 换掉业务时钟，只给测试（可控时钟）；期限、触发时刻与加载时刻都按这一个时钟计算，所以必须在实体加载
+// 之前设置。缺省是 fctx.Now（D22-1）：在 Nest 消息里（Tick、业务 handler 里增删改定时器、加载时的 OnInitFinish）是
+// 这次执行冻结的业务时间，同一条消息里的期限都从同一时刻算起；驱动自己的循环不在消息里，现读进程业务时钟。进程
+// 装配不调用它：进程业务时钟由 App 启动时按 time.logic_offset 设定，与 app.BusinessClock(r) 同一份配置。
 func (d *Driver) SetClock(now func() time.Time) {
 	if now == nil {
 		return
@@ -279,9 +281,9 @@ func (d *Driver) DeliverDue(ctx context.Context) int {
 	metrics.SetGauge(PendingMetric, labels, int64(pending))
 
 	delivered := 0
-	params := nest.NewParams(now.UnixMilli())
+	// Tick 消息不带时间：handler 执行时按这条消息冻结的业务时间触发（Host.Tick），排队的时间不算进“之前”。
 	for _, item := range batch {
-		err := client.Dispatch(ctx, d.config.Handler, item.id, params)
+		err := client.Dispatch(ctx, d.config.Handler, item.id, nil)
 		if err == nil {
 			delivered++
 			continue

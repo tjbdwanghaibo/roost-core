@@ -15,7 +15,7 @@ package timer
 
 import (
 	"container/heap"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -166,8 +166,9 @@ func (s *Scheduler) Seed() int64 {
 }
 
 // SetClock replaces the time source used to stamp new timers' End. Game
-// timers run on the business clock, so the default is the process
-// business clock clock.Now (real time + time.logic_offset). A host that drives
+// timers run on the business clock, so the default is fctx.Now: inside a
+// Nest message the business time that message froze (D22-1), elsewhere the
+// process business clock (real time + time.logic_offset). A host that drives
 // Tick with its own time must inject the same source here — the World's
 // TimerComponent pins both to the tick's / transaction's time — otherwise
 // every new timer is shifted relative to the ticks.
@@ -182,7 +183,7 @@ func (s *Scheduler) now() time.Time {
 	if s != nil && s.clock != nil {
 		return s.clock()
 	}
-	return clock.Now()
+	return fctx.Now()
 }
 
 func (s *Scheduler) RegisterHandler(timerType int32, h Handler) {

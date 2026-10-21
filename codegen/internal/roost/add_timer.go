@@ -565,7 +565,8 @@ const CompType%[7]s entity.ComponentType = %[6]d
 const %[7]sTickHandler = %[10]q
 
 // %[7]sDriver 是 %[3]s 的定时器驱动：进程内按“已加载实例的最早期限”排的索引，到期才给那一个实体投递一次
-// Tick，不按在线人数轮询。生成的 bootstrap 用 wiring/entitytimer 把它接到 Nest 与 App 业务时钟上。
+// Tick，不按在线人数轮询。生成的 bootstrap 用 wiring/entitytimer 把它接到 Nest 上；业务时间缺省读 fctx.Now（Nest
+// 消息里冻结的进程业务时钟，App 启动时按 time.logic_offset 设定）。
 var %[7]sDriver = entitytimer.NewDriver(entitytimer.Config{Name: %[11]q, Handler: nest.NewHandlerName(%[7]sTickHandler)})
 
 // %[7]sComponent 是 %[3]s 的持久定时器。
@@ -646,8 +647,9 @@ func (component *%[7]sComponent) %[7]s(id int64) (timer.Node, bool) { return com
 // %[7]ss 返回全部节点，按触发顺序。
 func (component *%[7]sComponent) %[7]ss() []timer.Node { return component.host.Timers() }
 
-// Tick 触发 now 时已到期的节点，返回剩下的节点数（生成的 Tick handler 调用）。
-func (component *%[7]sComponent) Tick(now time.Time) int { return component.host.Tick(now) }
+// Tick 触发此刻已到期的节点，返回剩下的节点数（生成的 Tick handler 调用）。此刻是这条 Tick 消息冻结的业务时间
+// （fctx.Now，按毫秒），回调的 Fire.Now 与回调里读的 fctx.Now 是同一时刻。
+func (component *%[7]sComponent) Tick() int { return component.host.Tick() }
 
 // %[15]sStore 把 %[12]s 的两个字段适配成 entitytimer.Store；写入走生成的 mutator，随事务回滚。
 type %[15]sStore struct{ owner *%[3]s }
@@ -697,20 +699,18 @@ func renderTimerTick(n timerNames) string {
 package handler
 
 import (
-	"time"
-
 	%[2]s %[3]q
 )
 
 // %[4]s 触发 %[5]s 已到期的定时器（roost add timer 生成，project sync 重写）。
 //
 // 由 %[2]s.%[6]sDriver 在最早期限到了时投递（只投到期的那一个实体），在实体的 Nest 锁与事务内执行：
-// 回调改的东西与被触发节点的删除 / 续期是同一条 WAL 记录，提交后驱动才看到新的最早期限。nowUnixMilli 是
-// 驱动投递时的业务时间。返回剩下的节点数。
+// 回调改的东西与被触发节点的删除 / 续期是同一条 WAL 记录，提交后驱动才看到新的最早期限。触发时刻是这条消息
+// 冻结的业务时间（fctx.Now），不是投递时刻。返回剩下的节点数。
 //
 //roost:nest rollback=undo durability=strict
-func %[4]s(target %[2]s.I%[6]sEntity, nowUnixMilli int64) (int32, error) {
-	return int32(target.%[6]sComp().Tick(time.UnixMilli(nowUnixMilli))), nil
+func %[4]s(target %[2]s.I%[6]sEntity) (int32, error) {
+	return int32(target.%[6]sComp().Tick()), nil
 }
 `, generatedHeader, n.Entity, n.Module+"/game/entities/"+n.Entity, n.Handler, n.EntityType, n.CompType)
 }

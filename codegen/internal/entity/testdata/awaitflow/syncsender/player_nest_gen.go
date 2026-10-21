@@ -9,6 +9,7 @@ import (
 var ()
 var (
 	handlerNameClaimReward = nest.NewHandlerName("ClaimReward")
+	handlerNameStampVisit  = nest.NewHandlerName("StampVisit")
 )
 
 // PlayerSender is an instance-scoped, strongly typed Nest client. Construct
@@ -38,6 +39,28 @@ func (s *PlayerSender) Sync_ClaimReward(ctx context.Context, id int64, rank int)
 	err = errXXX
 	if err != nil {
 		return
+	}
+	return
+}
+
+func (s *PlayerSender) Sync_StampVisit(ctx context.Context, id int64, note string) (ret int64, err error) {
+	client, clientErr := s.nestClient()
+	if clientErr != nil {
+		err = clientErr
+		return
+	}
+	retXXX, errXXX := client.Request(ctx, handlerNameStampVisit, id, nest.NewParams(note))
+	err = errXXX
+	if err != nil {
+		return
+	}
+	if retXXX == nil {
+		return
+	}
+	var ok bool
+	ret, ok = retXXX.(int64)
+	if !ok {
+		err = nest.NewResultTypeMismatchError(handlerNameStampVisit.String(), "int64", retXXX)
 	}
 	return
 }

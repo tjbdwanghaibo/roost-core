@@ -172,12 +172,14 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 //
 // This is the hand-written form of what wiring/entitytimer's Mod does for a
 // project whose timers come from `roost add timer`: the demo keeps its World
-// timer code its own, so it makes the same three calls itself.
+// timer code its own, so it makes the same two calls itself.
 //
-//   - SetClock: the business clock (time.logic_offset), the clock every
-//     activity window and close deadline is dated in. It has to be set before
-//     the World loads: the load time and "was this deadline missed while the
-//     process was down" are read from it. Init calls this before EnsureWorld.
+// There is no clock to set: the driver reads fctx.Now, the business time the
+// current Nest message froze (inside a message) or the process business clock
+// (in its own loop). The App sets that clock's time.logic_offset at start-up,
+// the same value app.BusinessClock(registry) reads, so the World's deadlines,
+// its load time and the activity windows are all dated in one business time.
+//
 //   - Bind: the Nest client the driver delivers a due tick through (normal
 //     admission, the World's lock, one transaction), and a read-only lookup of
 //     the published entities, so a World that was unloaded is not woken up.
@@ -200,7 +202,6 @@ func startWorldTimers(registry *app.Registry) (func(context.Context) error, erro
 	}
 	manager := access.Manager()
 	driver := world.TimerDriver
-	driver.SetClock(app.BusinessClock(registry).Now)
 	if err := driver.Bind(client, func(id int64) coreentity.IThreadSafeEntity { return manager.Get(id) }); err != nil {
 		return nil, fmt.Errorf("world timers: %w", err)
 	}
@@ -305,7 +306,7 @@ func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
 		return
 	}
 	armed, err := syncsender.NewArmActivitySender(runner.nest).
-		Sync_ArmActivity(ctx, runner.worldID, activityID, closeAt.Unix(), now.Unix())
+		Sync_ArmActivity(ctx, runner.worldID, activityID, closeAt.Unix())
 	if err != nil {
 		slog.Warn("activity: close deadline not armed", "activity_id", activityID, "err", err)
 		return
@@ -551,7 +552,7 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 		}
 	}
 	recorded, err := syncsender.NewSettleActivitySender(runner.nest).
-		Sync_SettleActivity(ctx, runner.worldID, activityID, runner.clock().Unix())
+		Sync_SettleActivity(ctx, runner.worldID, activityID)
 	if err != nil {
 		return fmt.Errorf("record settlement: %w", err)
 	}
