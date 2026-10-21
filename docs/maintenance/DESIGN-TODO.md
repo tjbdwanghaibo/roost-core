@@ -820,6 +820,8 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 **实施后维护者决定（2026-10-21，均按推荐，保持现实现）**：①同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图，不在 Manager 里取并集；②块预算新增 `MaxPlayerBlocks`，`MaxObserverBlocks` 仍按单个视野计；③关系视野不排除挂接玩家自己的实体（按包含取高或取并集）。
 
+**两种应用模式的后续决定（维护者 2026-10-21）**：①缺省 `ApplySync`（保持）；②同步模式上限 9 计入关系视野（`MaxViewsPerPlayer` 含关系视野，保持现实现）；③“提交后立即 Flush 看不到排队事实、要用 Drain”只在 `ApplyAsync` 下出现，CHANGELOG 按此写，确认。
+
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
 **状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试；尚未实施。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
