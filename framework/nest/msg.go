@@ -329,6 +329,8 @@ const (
 	MsgTypeMultiGroup
 	MsgTypeBroadcast
 	MsgTypeGroupTransition
+	// MsgTypeTryBatch 是批量作业（DispatchTryBatch）逐目标复用的执行状态，不经准入、不进 runNestLogic 的分派。
+	MsgTypeTryBatch
 )
 
 func (t MsgType) String() string {
@@ -343,6 +345,8 @@ func (t MsgType) String() string {
 		return "Broadcast"
 	case MsgTypeGroupTransition:
 		return "GroupTransition"
+	case MsgTypeTryBatch:
+		return "TryBatch"
 	default:
 		return "Unknown"
 	}

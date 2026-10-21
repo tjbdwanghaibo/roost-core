@@ -36,10 +36,10 @@ type awaitPlan struct{ start, cancel func() }
 // Await 结束当前 memory handler 段，释放 Guard 和 tail 后在 I/O 池执行 work。
 // resume 形如 func(*Player, *Troop, T, error) error；实体由框架重新取得和保护。
 // 必须 return Await(...)，慢闭包不得访问捕获的实体。没有跨段事务、自动重试或持久恢复。
-// 默认继承当前声明目标；多组目标按参数顺序展开。首版拒绝广播与有事务/Remote 写批次的段。
+// 默认继承当前声明目标；多组目标按参数顺序展开。首版拒绝广播、批量作业（DispatchTryBatch）与有事务/Remote 写批次的段。
 func Await[T any](work func(context.Context) (T, error), resume any, options ...AwaitOption[T]) error {
 	msg := currentNestDispatchMsg()
-	if msg == nil || !fctx.InBusinessWorker() || !fctx.InNestHandler() || CurrentRollbackTx() != nil || !msg.txNoRollback || msg.RemoteWriteBatch != nil || msg.Type == MsgTypeBroadcast || len(msg.handlerEntities) == 0 {
+	if msg == nil || !fctx.InBusinessWorker() || !fctx.InNestHandler() || CurrentRollbackTx() != nil || !msg.txNoRollback || msg.RemoteWriteBatch != nil || msg.Type == MsgTypeBroadcast || msg.Type == MsgTypeTryBatch || len(msg.handlerEntities) == 0 {
 		return ErrAwaitContext
 	}
 	if msg.awaitPlan != nil {

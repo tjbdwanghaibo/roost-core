@@ -33,6 +33,7 @@ const (
 type dispatchJob struct {
 	waitingPrev, waitingNext *dispatchJob
 	msg                      *Msg
+	tryBatch                 *tryBatchJob // 非 nil 表示批量作业（DispatchTryBatch）：不登记同 ID 顺序，msg 为 nil。
 	ids                      []int64
 	successors               []*dispatchJob
 	next                     *dispatchJob
@@ -193,7 +194,6 @@ func (q *dispatchQueue) admit(msg *Msg, prepareIO bool) error {
 	if prepareIO {
 		lane = dispatchIOLane
 	}
-	state := &q.lanes[lane]
 	j := newDispatchJob(msg, prepareIO)
 	j.lane = lane
 	q.mu.Lock()
@@ -201,6 +201,14 @@ func (q *dispatchQueue) admit(msg *Msg, prepareIO bool) error {
 	if !q.started || q.stopping {
 		return worker.ErrWorkerClosed
 	}
+	return q.admitLocked(j)
+}
+
+// admitLocked 是 admit 在 q.mu 内的部分：登记同 ID 顺序、检查容量、计入等待并在没有前驱时就绪。调用方持有 q.mu、
+// 已确认队列在运行，并已选定 j.lane。批量作业把冲突目标转成单目标作业时（convertTryBatchTargetLocked）也走这里。
+func (q *dispatchQueue) admitLocked(j *dispatchJob) error {
+	lane := j.lane
+	state := &q.lanes[lane]
 	blocked := false
 	for _, id := range j.ids {
 		if q.tails[id] != nil {
@@ -331,6 +339,11 @@ func (q *dispatchQueue) work(lane int) {
 			q.mu.Unlock()
 			return
 		}
+		if j.tryBatch != nil {
+			// 批量作业在执行期间逐目标取放 q.mu，返回时仍持锁、作业已结束或已放回就绪链（try_batch.go）。
+			q.runTryBatchLocked(lane, state, j, contextOptions)
+			continue
+		}
 		q.mu.Unlock()
 		rerouted, after := q.run(lane, state, contextOptions, j)
 		q.mu.Lock()
@@ -377,6 +390,18 @@ func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
 	} else {
 		state.running--
 	}
+	q.releaseIDsLocked(j)
+	q.pending--
+	if q.stopping && q.pending == 0 {
+		for i := range q.lanes {
+			q.lanes[i].wake.Broadcast()
+		}
+	}
+}
+
+// releaseIDsLocked 撤下 j 在各 ID 上的尾登记，后继的前驱全部完成即进入就绪（并唤醒 worker）。作业结束与批量作业
+// 撤销对一个目标的认领（releaseTryBatchClaimLocked）共用这一步。调用方持有 q.mu。
+func (q *dispatchQueue) releaseIDsLocked(j *dispatchJob) {
 	for _, id := range j.ids {
 		if q.tails[id] == j {
 			delete(q.tails, id)
@@ -386,12 +411,6 @@ func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
 		next.predecessors--
 		if next.predecessors == 0 {
 			q.enqueueReady(next.lane, next)
-		}
-	}
-	q.pending--
-	if q.stopping && q.pending == 0 {
-		for i := range q.lanes {
-			q.lanes[i].wake.Broadcast()
 		}
 	}
 }
