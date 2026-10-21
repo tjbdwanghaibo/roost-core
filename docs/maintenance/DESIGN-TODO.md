@@ -24,7 +24,7 @@
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
-| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写，待拍板，代码未改 |
+| D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；**维护者 2026-10-21 决定调研一 13 条全部按推荐（A），实施中**（D21-1 → D21-5，见本节“调研一 · 实施”） |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；调研与方案已写，待拍板，代码未改 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
@@ -1241,7 +1241,7 @@ roost 的取舍：
 
 ## D21 吸收 ssr 的优秀组件进 `gameplay`
 
-**状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”，待维护者拍板（“调研一 · 需要拍板”），代码未改。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
+**状态：维护者 2026-10-21 登记为后续任务；同日要求先做第一项调研——ssr 控制实体行为的一套（`action`、`action_list`、`mission`、`ai`）与 roost `gameplay/actionflow` / `gameplay/ai` 的能力对比，以及 `state` 能否直接加进 `gameplay`。调研结果与方案见下文“调研一”。维护者 2026-10-21 决定：调研一 13 条拍板项全部按推荐（A）实施，按 D21-1 → D21-5 分期进行（实施中，结果见“调研一 · 实施”）。** 来源：D20 心跳与移动参考了 ssr 的 heartbeat / action / move / map_basic，维护者希望把 ssr 里好的组件（component / 模块）也加进框架的 `gameplay`，业务逻辑可以参考 ssr 的处理。
 
 **原则**：按 roost 的模型重写，不复制 ssr 代码；只收“与具体游戏玩法无关、多数游戏都会用”的通用部件，玩法规则留给业务（demo 是参考，生成器只生成框架内容）；所有控制实体行为的逻辑走 actionflow（D20 维护者决定），周期推进走心跳（D20）；每个组件先写方案（与现有 roost 包的关系、事务 / 回滚 / 同步语义、持久化），维护者确认后再实施。
 
@@ -1494,6 +1494,12 @@ roost 的取舍：
 11. **state 的时长**：A 不内建，时长归 Buff / entitytimer（推荐）；B 内建 `AddFor(d)`（需要 state 自己挂心跳或 entitytimer）。
 12. **Buff → state**：A 派生（查询时读 Buff 容器标签，推荐）；B 复制（Buff 施加 / 移除时写 state，两份数据要保持一致）。
 13. **分期顺序**：按上表 D21-1 → D21-5，前提 D20 P2 先合入（推荐）；或先做 state（D21-2/3）再做 actionflow 扩展。
+
+**维护者决定（2026-10-21）**：以上 13 条全部按推荐（A）：1 框架提供 `actionflow.Agent`；2 可选 `Replacer` + 配置函数 `Conflict`，默认行为不变；3 改 `Action.Start` 签名支持 Start 即完成；4 暂停 / 打断两种冻结模式 + 计数冻结；5 `Agent` 给任务挂心跳、`PlanMission` 加 `Timeout` / `Retry`；6 AI 事件投递 + 分阶段策略 + `FreezeFor` + 独立 `"ai"` 心跳；7 AI 心跳独立登记、周期由策略决定；8 新增 `gameplay/state`；9 按来源 + 派生两种写入语义；10 DAO 组件、随事务回滚、同步 / 持久按声明（缺省不持久）；11 不内建时长；12 Buff → state 用派生；13 按 D21-1 → D21-5 的顺序（D20 P2 已合入 main `382eb10c`）。
+
+#### 6. 调研一 · 实施
+
+实施中，分期结果按完成顺序写在下面。
 
 ## D22 业务时间取自 ctx、支持变速
 
