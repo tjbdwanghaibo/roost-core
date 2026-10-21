@@ -15,6 +15,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 )
@@ -26,6 +27,9 @@ type gameConfig struct {
 	// embedded（ROOST_NEST_GAME_EMBEDDED=1）。SceneSync / SelfSync 对应 ROOST_NEST_GAME_SYNC / _SELF_SYNC。
 	Frontend            string
 	SceneSync, SelfSync bool
+	// HeartbeatDriver 是心跳的驱动（ROOST_NEST_GAME_HEARTBEAT_DRIVER，见 heartbeat_driver_test.go）：ticker（缺省，
+	// 帧回调逐个 Dispatch）或 heartbeat（gameplay/heartbeat，每个 Unit 一个登记）。
+	HeartbeatDriver string
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -256,6 +260,8 @@ type gameResult struct {
 	EntityValuesVerified, CountsVerified, LatencyPassed bool
 	Samples                                             []gameSample
 	FinalNest                                           nest.DispatcherStats
+	// Beats 只在 heartbeat 驱动下有：驱动计数、心跳间隔、每个 Unit 的拍数与核对结论。
+	Beats *beatReport `json:",omitempty"`
 }
 
 // 用商和余数计算，避免长时间高频负载在纳秒乘法中溢出。
@@ -294,6 +300,20 @@ func TestNestGameLoad(t *testing.T) {
 		c.Frontend = "embedded"
 	}
 	c.SceneSync, c.SelfSync = os.Getenv("ROOST_NEST_GAME_SYNC") == "1", os.Getenv("ROOST_NEST_GAME_SELF_SYNC") == "1"
+	c.HeartbeatDriver = os.Getenv("ROOST_NEST_GAME_HEARTBEAT_DRIVER")
+	if c.HeartbeatDriver == "" {
+		c.HeartbeatDriver = heartbeatDriverTicker
+	}
+	var beatPeriod time.Duration
+	switch c.HeartbeatDriver {
+	case heartbeatDriverTicker:
+	case heartbeatDriverBeat:
+		if beatPeriod, err = beatPeriodFor(c.HeartbeatHz); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("ROOST_NEST_GAME_HEARTBEAT_DRIVER must be %s or %s, got %q", heartbeatDriverTicker, heartbeatDriverBeat, c.HeartbeatDriver)
+	}
 	switch {
 	case c.SceneSync && c.Frontend == "direct":
 		t.Fatal("Sync mixed load requires real Gate or embedded TCP")
@@ -394,11 +414,49 @@ func TestNestGameLoad(t *testing.T) {
 		})
 		return nil, nil
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
+	// heartbeat 驱动：每个 Unit 的心跳回调执行同一个 HeartbeatComponent.Tick，计数与 Sync 接线和 ticker 模式的
+	// handler 相同；没有计划时刻，Completion 从回调开始算（服务端：handler + 释放），驱动与快池的迟到看 Beats.Interval。
+	var beats *beatLoad
+	var beatSeq atomic.Uint64
+	if c.HeartbeatDriver == heartbeatDriverBeat {
+		beats, err = newBeatLoad(units, beatPeriod, c.DirtyPercent, func(u *Unit, change bool, _ heartbeat.Beat) error {
+			began := time.Now()
+			in := invocation{planned: began, admitted: began, sent: began, change: change, sample: beatSeq.Add(1)%16 == 0, heartbeat: true}
+			if change && stateSync != nil {
+				if err := stateSync.changed(u, in); err != nil {
+					return err
+				}
+			}
+			ended := time.Now()
+			entity.CurrentGuardScope().Guard().AppendPostRelease(func() {
+				completed := time.Now()
+				heartbeats.handler.add(ended.Sub(began), in.sample)
+				heartbeats.completion.add(completed.Sub(began), in.sample)
+				heartbeats.serverDone.add(completed.Sub(began), in.sample)
+				if c := tail.Load(); c != nil {
+					c.observe("heartbeat", completed.Sub(began), tailPart{"handler", ended.Sub(began)}, tailPart{"release", completed.Sub(ended)})
+				}
+				if change {
+					heartbeats.changedCompletion.add(completed.Sub(began), true)
+					heartbeats.changed.Add(1)
+				}
+				heartbeats.completed.Add(1)
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.Duration+30*time.Second)
 	defer cancel()
 	// 唯一正式 ticker 只负责投递；组件、DAO 与 Guard 全部由业务池处理。
 	// 各实体的到期相位均匀分散，用绝对计划时间计算应投数量，ticker 变慢不能偷偷降低输入率。
+	// heartbeat 驱动下 ticker 只投普通业务，心跳由驱动投。
 	rates := [2]int{c.Players * c.MessagesPerPlayer, c.Entities * c.HeartbeatHz}
+	if beats != nil {
+		rates[1] = 0
+	}
 	counters := [2]*loadCounters{&messages, &heartbeats}
 	expected := make([][2]int64, c.Entities)
 	var start, end time.Time
@@ -519,10 +577,27 @@ func TestNestGameLoad(t *testing.T) {
 		defer cancel()
 		_ = engine.Shutdown(stop)
 	})
+	var beatStarted time.Time
+	var beatRun time.Duration
+	if beats != nil {
+		time.Sleep(time.Until(start))
+		beatStarted = time.Now()
+		if err := beats.start(engine, access); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = beats.stop(context.Background()) })
+	}
 	select {
 	case <-done:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+	if beats != nil {
+		// 先停驱动（之后不再投递），已在队列里的拍随下面的 engine.Shutdown 执行完。
+		if err := beats.stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		beatRun = time.Since(beatStarted)
 	}
 	if embedded != nil {
 		embedded.GoroutinesAtEnd = countTCPGoroutines(t)
@@ -586,6 +661,18 @@ func TestNestGameLoad(t *testing.T) {
 			r.LatencyPassed = false
 		}
 	}
+	if beats != nil {
+		report := beats.verify(units, beatRun)
+		r.Beats = &report
+		if !report.Verified {
+			r.CountsVerified = false
+		}
+		for i := range units {
+			expected[i][1] = beatChanges(i, beats.beats[i], c.DirtyPercent)
+		}
+		r.Heartbeats.Planned, r.Heartbeats.Accepted = uint64(report.Driver.Delivered), uint64(report.Driver.Delivered)
+		r.Heartbeats.Rejected = uint64(report.Driver.SkippedInflight + report.Driver.SkippedQueueFull + report.Driver.SkippedRejected)
+	}
 	for i, u := range units {
 		if u.state.GetMessages() != expected[i][0] || u.state.GetHeartbeats() != expected[i][1] || u.state.GetX() != expected[i][0] || u.state.GetHP() != expected[i][1]%100 {
 			r.EntityValuesVerified = false
@@ -593,6 +680,11 @@ func TestNestGameLoad(t *testing.T) {
 	}
 	for k, stream := range []streamResult{r.Messages, r.Heartbeats} {
 		want := uint64(c.Duration/time.Second) * uint64(rates[k])
+		if k == 1 && beats != nil {
+			// heartbeat 驱动：拍数由相位与启停时刻决定，核对在 beats.verify（每个 Unit duration / 档位 ± 2、无跳拍）；
+			// 这里只要求投递的都执行了。
+			want = stream.Planned
+		}
 		if stream.Planned != want || stream.Accepted != want || stream.Completed != want || stream.Rejected != 0 {
 			r.CountsVerified = false
 		}
@@ -612,7 +704,10 @@ func TestNestGameLoad(t *testing.T) {
 	if err = os.WriteFile(output, append(raw, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("messages=%.1f/s heartbeat=%.1f/s changes=%.1f/s p99=%.3f/%.3fms server_p99=%.3f/%.3fms counts=%v values=%v latency=%v\n", r.Messages.CompletedPerSecond, r.Heartbeats.CompletedPerSecond, r.EntityChangesPerSecond, r.Messages.Completion.P99MS, r.Heartbeats.Completion.P99MS, r.Messages.Server.Completion.P99MS, r.Heartbeats.Server.Completion.P99MS, r.CountsVerified, r.EntityValuesVerified, r.LatencyPassed)
+	if r.Beats != nil {
+		fmt.Printf("heartbeat_driver=%s period=%.0fms beats/unit=%d..%d (want %.1f) interval_p99=%.3fms skipped=%d/%d/%d stalled=%d verified=%v %s\n", c.HeartbeatDriver, r.Beats.PeriodMS, r.Beats.BeatsMin, r.Beats.BeatsMax, r.Beats.ExpectedPerUnit, r.Beats.Interval.P99MS, r.Beats.Driver.SkippedInflight, r.Beats.Driver.SkippedQueueFull, r.Beats.Driver.SkippedRejected, r.Beats.Driver.Stalled, r.Beats.Verified, r.Beats.Problem)
+	}
+	fmt.Printf("heartbeat_driver=%s messages=%.1f/s heartbeat=%.1f/s changes=%.1f/s p99=%.3f/%.3fms server_p99=%.3f/%.3fms counts=%v values=%v latency=%v\n", c.HeartbeatDriver, r.Messages.CompletedPerSecond, r.Heartbeats.CompletedPerSecond, r.EntityChangesPerSecond, r.Messages.Completion.P99MS, r.Heartbeats.Completion.P99MS, r.Messages.Server.Completion.P99MS, r.Heartbeats.Server.Completion.P99MS, r.CountsVerified, r.EntityValuesVerified, r.LatencyPassed)
 	if e := r.Embedded; e != nil {
 		d := e.CountersDelta
 		fmt.Printf("embedded scene_sync=%v self_sync=%v roundtrip_p99=%.3fms budget_exhausted=%d push_refused=retried:%d/closed:%d overflow=%d push_closed=%d write_errors=%d write_loops=%d->%d outbound_clean=%v\n",
