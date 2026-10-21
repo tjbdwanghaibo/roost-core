@@ -1032,7 +1032,7 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 ### P5 实施结果（2026-10-21）
 
-**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `b6f61681`；本地提交，由维护者推送）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；本地提交，由维护者推送）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
 **API 最终形状**：
 
@@ -1072,6 +1072,8 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 5. **`gameplay/skill` 的 `TickClock` 测试与 `Pending` 测试放在 `scheduler_test.go`**（推进主题），combatcomponent 的两组新测试是新主题、新文件（`beat_test.go`、`runtime_beat_test.go`）。
 
 **红绿证据**：新代码，实现与测试同轮写成，红用变异核对给出（17 项各改一处强制点，对应用例在当前代码上变红；原文全文在 impl §2G 的表里）。摘要：R1 拍直接一次推到目标 → `every other tick seed 1: per-tick results differ`；R2 拍推进空闲的 Runtime → `a beat on an idle runtime moved it to 60 (<nil>)`；R3 推进不停在空闲点 → `after the cast: active false tick 40, want stopped at the idle point 8 (windup 3 + recovery 2 from tick 3)`；R5 没有追帧上限 → `100 ticks behind: {Steps:110 Idle:0 Jumps:0 JumpedTicks:0} at tick 110, want 20 more steps, one jump over 80 ticks, at tick 110`；B1 改 buff 不对齐心跳 → `a timed buff did not start the beat`；B3 拍的 tick 早一个 → `a beat 1ns before tick 1005 expired the buff`；B6 buff 心跳不挂域 → `paused scene: 1 expired, 0 active, want the buff to stay`；T1 换算向零截断 → `TickAt(origin-1ns) = 0, want -1`。实现过程中第一版有一个真缺陷被抖动测试抓到：handler 的追帧推进到空闲点就停（与拍同一规则），输入落在空闲点而不是输入的 tick——长间隔抖动下 `tick 31 applied at 18: cast 0 err skill: skill is on cooldown`；改为输入在空闲点之后照常一次跳到输入的 tick。
+
+**两种投递方式**：rebase 到选项 C（`heartbeat.delivery`）之后，走运行中驱动的 7 个用例（`TestTimedBuffsBeatUntilTheyExpire`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`）经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 下各跑一遍；用例只断言契约（启停、到期、空闲后停），不断言批量作业特有的计数，没有单独核对 batch 方式确实走了批量路径（驱动 `Stats` 没有批量计数，按配置选择）。
 
 **断言方式**：真实 Nest 用例经同一实体的一条空消息等前一拍收尾（`settle`）再读提交后状态，登记的 `Active` 与 buff 列表在实体锁内读，不 sleep 断言；等待拍里的事件用带期限的轮询（只观察，不作断言）。
 

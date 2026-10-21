@@ -324,7 +324,7 @@ D20 第 5 期，契约见 §2G。
 
 - [skill/scheduler_test.go](../../../gameplay/skill/scheduler_test.go)：`TestTickClockFloorsAndRoundTrips`、`TestRuntimePendingFollowsCastsAndTasks`
 - [combatcomponent/runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)：`TestRuntimeBeatResultsDoNotDependOnHeartbeatJitter`、`TestRuntimeBeatJumpsPastTheCatchUpLimit`、`TestRuntimeBeatRegistersWhileBusyAndStopsAtTheIdlePoint`
-- [combatcomponent/beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)（真实 Nest + 心跳驱动）：`TestTimedBuffsBeatUntilTheyExpire`、`TestBuffBeatExpiresExactlyAtTheDueTick`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestHandlerTicksFollowTheTimeDomain`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`
+- [combatcomponent/beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)（真实 Nest + 心跳驱动；走运行中驱动的用例经 `forEachBeatDelivery` 在 `dispatch` 与 `batch` 两种投递方式下各跑一遍）：`TestTimedBuffsBeatUntilTheyExpire`、`TestBuffBeatExpiresExactlyAtTheDueTick`、`TestARolledBackBuffDoesNotStartTheBeat`、`TestLoadedExpiredBuffsAreClearedOnTheFirstBeat`、`TestPeriodicWorkKeepsTheBuffBeat`、`TestBuffsStopExpiringWhileTheSceneIsPaused`、`TestHandlerTicksFollowTheTimeDomain`、`TestRuntimeBeatDrivesTheRuntimeOnTheRealHeartbeat`、`TestSetBuffDueTickAlignsTheBeat`
 
 ### state
 
