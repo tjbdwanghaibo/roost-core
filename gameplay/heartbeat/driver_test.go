@@ -559,8 +559,8 @@ func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
 	}
 }
 
-// 慢派发 trace 在 handler 执行期间用 %#v 打印消息参数（*Reg）：只能读构造后不变的字段，不能与回调对在途 / 跳拍计数的
-// 原子写竞争。红在 -race 下：去掉 Reg.GoString 时按反射打印，本用例报数据竞争。
+// 慢派发 trace 在 handler 执行期间对实现了 fmt.GoStringer 的参数（*Reg）调用 GoString：只能读构造后不变的字段，不能
+// 与回调对在途 / 跳拍计数的原子写竞争。红在 -race 下：去掉 Reg.GoString 时 %#v 按反射打印，本用例报数据竞争。
 func TestRegFormatsWithoutReadingMutableState(t *testing.T) {
 	d, _, _, _ := newTestDriver(t, discard)
 	e := newHBEntity(t, d, 9100, kindShort)
@@ -582,4 +582,46 @@ func TestRegFormatsWithoutReadingMutableState(t *testing.T) {
 		}
 	}
 	<-done
+}
+
+// 实例已移除（卸载 / 删档，IsRemoved）而组件没调 Host.OnDestroy：驱动在登记到期时发现就撤销整个宿主，环上不再有它的
+// 登记、驱动不再持有这个实例；每个登记只计一次 dropped{removed}，之后的启停与登记都被拒绝。
+func TestARemovedInstanceLeavesTheDriver(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := &hbEntity{EntityBase: entity.NewEntityBase(mustID(t, 40, kindShort), entity.EntityCategoryOther, true, kindShort)}
+		e.host = d.NewHost(e)
+		live.Store(e.ID(), e)
+		runs := 0
+		fast, _ := e.host.Register("fast", 50*time.Millisecond, func(Beat) error { runs++; return nil })
+		slow, _ := e.host.Register("slow", time.Second, func(Beat) error { runs++; return nil })
+		fast.Start()
+		slow.Start()
+		stepN(d, 5)
+		for _, b := range client.take() {
+			execute(t, b)
+		}
+		if runs == 0 || d.Registered() != 2 {
+			t.Fatalf("before removal: runs %d registered %d", runs, d.Registered())
+		}
+		// 卸载流程标记了移除，但组件漏调 OnDestroy（e.host 不被撤销）。
+		e.SetRemoved()
+		stepN(d, 200)
+		if got := client.take(); len(got) != 0 {
+			t.Fatalf("a removed instance got %d beats", len(got))
+		}
+		// 第一个到期的登记发现移除就撤销整个宿主：同一格里一起到期的登记各计一次，之后不再到期、不再计数。
+		st := d.Stats()
+		if st.Registered != 0 || st.DroppedRemoved < 1 || st.DroppedRemoved > 2 {
+			t.Fatalf("removed instance still on the driver: registered %d dropped removed %d (want 0 / at most one per registration)",
+				st.Registered, st.DroppedRemoved)
+		}
+		stepN(d, 200)
+		if again := d.Stats().DroppedRemoved; again != st.DroppedRemoved {
+			t.Fatalf("a removed instance kept being counted: %d then %d", st.DroppedRemoved, again)
+		}
+		if _, err := e.host.Register("late", time.Second, func(Beat) error { return nil }); !errors.Is(err, ErrHostClosed) {
+			t.Fatalf("register on a removed instance = %v, want ErrHostClosed", err)
+		}
+	})
 }

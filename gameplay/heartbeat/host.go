@@ -3,6 +3,7 @@ package heartbeat
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +17,10 @@ var (
 	ErrUnsupportedPeriod = errors.New("heartbeat: unsupported period")
 	// ErrDuplicateName 表示同一实体实例上同名登记了两次。
 	ErrDuplicateName = errors.New("heartbeat: registration name already used on this entity")
-	// ErrHostClosed 表示实例已销毁（OnDestroy 之后），不能再登记。
+	// ErrHostClosed 表示实例已销毁（OnDestroy 之后，或驱动发现实例已移除），不能再登记。
 	ErrHostClosed = errors.New("heartbeat: host is closed")
+	// ErrRegClosed 表示登记已撤销（Reg.Close 之后），不能再启动或换档。
+	ErrRegClosed = errors.New("heartbeat: registration is closed")
 	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳（维护者 2026-10-21）：
 	// 共享模式下各写者进程的实例状态都是 Shared、都经分布式锁写，本地分不出谁该跳，心跳无法执行。Register 与 Start
 	// 在共享模式下返回它；运行期才进入共享模式的，已挂的心跳由下一拍在实体锁内停掉（计数 heartbeat.stopped_total、打
@@ -76,7 +79,8 @@ func WithTimeDomain(d *timedomain.Domain) RegOption {
 }
 
 // Host 是一个实体实例的心跳宿主，由组件在构造或 OnInitFinish 里经 Driver.NewHost 取得。Register 与 Reg 的
-// Start / Stop / SetPeriod 只能在实体锁内（Nest handler 里，或加载 / 新建的初始化阶段）调用；OnDestroy 任意 goroutine。
+// Start / Stop / SetPeriod / Close 只能在实体锁内（Nest handler 里，或加载 / 新建的初始化阶段）调用；OnDestroy 任意
+// goroutine。
 type Host struct {
 	driver *Driver
 	owner  entity.IThreadSafeEntity
@@ -86,7 +90,7 @@ type Host struct {
 	remote entity.IThreadSafeRemoteEntity
 	closed atomic.Bool
 
-	// regs 在实体锁内且持 Driver.mu 时追加；实体锁内或 Driver.mu 下读。
+	// regs 在实体锁内且持 Driver.mu 时追加、删除（Reg.Close）；实体锁内或 Driver.mu 下读。
 	regs []*Reg
 }
 
@@ -122,7 +126,7 @@ func remoteShared(state entity.RemoteOwnershipState) bool {
 }
 
 // Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并（维护者决定 ③）。
-// name 在实例内唯一（用于日志与诊断）；period 必须是 Periods 之一。Remote 托管实体处于共享模式时返回
+// name 在实例内唯一（用于日志与诊断），Reg.Close 之后可以再用；period 必须是 Periods 之一。Remote 托管实体处于共享模式时返回
 // ErrHeartbeatRemoteShared（不允许挂载）。共享与否是运行期所有权状态、不是实体种类的声明：刚加载的实例是 Unknown，
 // 第二个写者首次接触共享实体时这里看不出来，由第一拍停掉（见 runBeat）。
 func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegOption) (*Reg, error) {
@@ -162,7 +166,8 @@ func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegO
 }
 
 // OnDestroy 让实例永久离开驱动：卸载、删档、撤销新建时由组件的 OnDestroy 调用，可重复。之后的启停一律忽略，
-// 已经在队列里的拍到达时不执行（按过期处理）。
+// 已经在队列里的拍到达时不执行（按过期处理）。组件漏调时，驱动在登记到期时发现实例已移除（IsRemoved）也会替它
+// 做同样的事（计 dropped{reason="removed"} 一次），环与驱动不再持有这个实例。
 func (h *Host) OnDestroy() {
 	if h == nil || h.closed.Swap(true) {
 		return
@@ -196,6 +201,9 @@ type Reg struct {
 		idx    int32
 	}
 
+	// closed 由 Close 置位（实体锁内），驱动 goroutine、提交后回调与执行侧都读。
+	closed atomic.Bool
+
 	// 原子：驱动与回调之间。
 	startGen  atomic.Uint64 // 每次启动生效加一；回调据此判断 First
 	startedAt atomic.Int64  // 最近一次启动生效的业务时间（挂了时间域时是域时间，UnixNano），先于 startGen 写
@@ -210,8 +218,9 @@ type Reg struct {
 // Name 返回登记名。
 func (r *Reg) Name() string { return r.name }
 
-// GoString 只输出构造后不变的字段（登记名、实体 ID）。Nest 的慢派发 trace 用 %#v 打印消息参数，它在 handler 执行期间
-// 由另一个 goroutine 调用；按反射打印会读到回调正在原子写的在途 / 跳拍计数（-race 报数据竞争）。
+// GoString 只输出构造后不变的字段（登记名、实体 ID）。Nest 的慢派发 trace 在 handler 执行期间由另一个 goroutine 取
+// 参数样本：实现了 fmt.GoStringer 的参数调用 GoString，其余非标量只给类型名（不按反射读可变字段）；所以这里不能读
+// 回调正在原子写的在途 / 跳拍计数，也是登记名能出现在 trace 里的方式。
 func (r *Reg) GoString() string {
 	if r == nil {
 		return "(*heartbeat.Reg)(nil)"
@@ -227,7 +236,11 @@ func (r *Reg) Period() time.Duration { return r.tier.period() }
 
 // Start 开始跳；已在跑时无操作。在事务里调用时提交后生效、回滚作废（nest.AfterCommit）；不在事务里立即生效。
 // Remote 托管实体处于共享模式时不启动，返回 ErrHeartbeatRemoteShared；回到独占（LeaveRemoteSharedMode）后可以再 Start。
+// 登记已 Close 时返回 ErrRegClosed。
 func (r *Reg) Start() error {
+	if r.closed.Load() {
+		return fmt.Errorf("%w: %q on entity %d", ErrRegClosed, r.name, r.host.id)
+	}
 	if err := r.host.sharedErr(r.name); err != nil {
 		return err
 	}
@@ -239,8 +252,11 @@ func (r *Reg) Start() error {
 func (r *Reg) Stop() { r.change(false, r.tier) }
 
 // SetPeriod 换档：下一拍按新档位所在的格触发，Elapsed 仍从本登记上次执行起算。period 必须是 Periods 之一。
-// 生效方式同 Start；停止状态下只记下档位，下次 Start 用它。
+// 生效方式同 Start；停止状态下只记下档位，下次 Start 用它。登记已 Close 时返回 ErrRegClosed。
 func (r *Reg) SetPeriod(period time.Duration) error {
+	if r.closed.Load() {
+		return fmt.Errorf("%w: %q on entity %d", ErrRegClosed, r.name, r.host.id)
+	}
 	t, err := tierOf(period)
 	if err != nil {
 		return err
@@ -249,10 +265,36 @@ func (r *Reg) SetPeriod(period time.Duration) error {
 	return nil
 }
 
+// Close 撤销本登记：立即移出驱动、释放名字（同一实例上可以马上用同名再 Register），之后 Start / SetPeriod 返回
+// ErrRegClosed、Stop 无操作，可重复调用。用于成员换场景（换时间域）时重建行为组件（actionflow.BeatRunner / Behavior、
+// ai.Controller 的 Close）。只能在实体锁内调用。
+//
+// 与 Register 一样是组件的生命周期操作，立即生效、不随事务回滚（事务回滚恢复的是启停，不恢复登记本身）；同一事务里
+// 更早的 Start / Stop 在提交后到达时被忽略。已经投出、还在队列里的拍到达时不执行回调（按过期丢弃，计
+// dropped{reason="stale"}）；所以按名字看，旧登记的在途拍与新登记的第一拍可能同时在队列里，但只有新登记的会执行，
+// “每个登记至多一拍在途”对新登记照常成立。
+func (r *Reg) Close() {
+	if r == nil || r.closed.Swap(true) {
+		return
+	}
+	h, d := r.host, r.host.driver
+	d.mu.Lock()
+	if r.ring.active {
+		d.ring.remove(r)
+		r.ring.active = false
+	}
+	h.regs = slices.DeleteFunc(h.regs, func(other *Reg) bool { return other == r })
+	d.mu.Unlock()
+	r.active = false
+}
+
+// Closed 报告登记是否已 Close。
+func (r *Reg) Closed() bool { return r.closed.Load() }
+
 // change 改业务视角的状态并安排驱动生效。事务里：登记回滚恢复（DeferRollback）与提交后生效（AfterCommit），
 // 生效带序号，晚到的旧变化被驱动丢弃；不在事务里（加载发布前、memory 快路径）：立即生效。
 func (r *Reg) change(active bool, t tier) {
-	if r.host.closed.Load() || (active == r.active && t == r.tier) {
+	if r.host.closed.Load() || r.closed.Load() || (active == r.active && t == r.tier) {
 		return
 	}
 	prevActive, prevTier := r.active, r.tier
@@ -322,7 +364,8 @@ func beatHandler(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerO
 
 // runBeat 在实体锁与事务内执行一拍。核对顺序：
 //  1. 在途标志：没有在途（同一次投递的另一份已经执行过，见卡住兜底）就不执行；
-//  2. 实例：消息的目标必须是登记所属的那个实例、且没有 OnDestroy（卸载后同 ID 重载的新实例收到旧实例的拍，按过期丢弃）；
+//  2. 实例：消息的目标必须是登记所属的那个实例、且没有 OnDestroy（卸载后同 ID 重载的新实例收到旧实例的拍，按过期丢弃），
+//     登记没有 Close（换场景重建后旧登记的在途拍，同样按过期丢弃）；
 //  3. 业务视角的启停：锁序上更早提交的 Stop 已经让它停了；
 //  4. Remote 托管实体：共享模式（Sharing / Shared）不允许挂载心跳，在这里停掉本登记（Stop 同样随本拍事务提交生效），
 //     计数并由驱动汇总打 Warn，回调不执行；其余状态要求本进程实例是当前拥有方（LocalOwned）。
@@ -335,7 +378,7 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 	}
 	defer r.inflight.Store(false)
 	h := r.host
-	if target != h.owner || h.closed.Load() {
+	if target != h.owner || h.closed.Load() || r.closed.Load() {
 		d.count(&d.stats.dropStale, h.id)
 		return nil
 	}

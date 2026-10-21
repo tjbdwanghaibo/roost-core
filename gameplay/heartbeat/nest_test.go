@@ -764,3 +764,100 @@ func TestEveryBeatFreezesItsOwnBusinessTime(t *testing.T) {
 		}
 	})
 }
+
+// Reg.Close（成员换场景重建行为组件）：名字立即释放、同名可以马上重新登记；旧登记已经投出、排在队里的拍到达时不执行
+// 回调（按过期丢弃），新登记照常跳——按名字看旧拍与新拍可能同时在队列里，但只有新登记的执行。
+func TestAClosedRegistrationFreesItsNameAndItsQueuedBeatDoesNotRun(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		block := nest.NewHandlerName("hb_test_block_close")
+		entered, release := make(chan struct{}), make(chan struct{})
+		f := newNestFixture(t, func(m *nest.NestMgr) {
+			m.MustRegisterHandlerWithMeta(block, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+				close(entered)
+				<-release
+				return nil, nil
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+		}, nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+		other := newHBEntity(t, f.driver, 50, kindShort)
+		f.manager.Add(other)
+		e := newHBEntity(t, f.driver, 51, kindShort)
+		f.manager.Add(e)
+		var oldRuns, newRuns atomic.Int32
+		oldReg, _ := e.host.Register("actionflow/1", 50*time.Millisecond, func(Beat) error { oldRuns.Add(1); return nil })
+		oldReg.Start()
+		// 唯一的快池 worker 被另一个实体的消息占住：旧登记的拍准入后排队。
+		if err := f.engine.Dispatch(context.Background(), block, other.ID(), nil); err != nil {
+			t.Fatal(err)
+		}
+		<-entered
+		f.step(5)
+		if f.driver.Stats().Delivered != 1 {
+			t.Fatalf("stats %+v", f.driver.Stats())
+		}
+		oldReg.Close()
+		newReg, err := e.host.Register("actionflow/1", 50*time.Millisecond, func(Beat) error { newRuns.Add(1); return nil })
+		if err != nil {
+			t.Fatalf("register the same name after Close: %v", err)
+		}
+		newReg.Start()
+		if err := oldReg.Start(); !errors.Is(err, ErrRegClosed) || f.driver.Registered() != 1 {
+			t.Fatalf("start after Close = %v, registered %d", err, f.driver.Registered())
+		}
+		close(release)
+		f.settle(oldReg)
+		if oldRuns.Load() != 0 || newRuns.Load() != 0 || f.driver.Stats().DroppedStale != 1 {
+			t.Fatalf("old %d new %d stats %+v", oldRuns.Load(), newRuns.Load(), f.driver.Stats())
+		}
+		f.stepUntilDelivered(2)
+		f.settle(newReg)
+		if newRuns.Load() != 1 || oldRuns.Load() != 0 || f.driver.Registered() != 1 {
+			t.Fatalf("after close: old %d new %d registered %d", oldRuns.Load(), newRuns.Load(), f.driver.Registered())
+		}
+	})
+}
+
+// Close 在事务里立即生效、不随回滚恢复（与 Register 一样是生命周期操作）；同一事务里更早的 Start 提交后到达也不会把
+// 已撤销的登记放回环上。
+func TestCloseInsideATransactionIsImmediateAndIgnoresEarlierStarts(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		rebuild := nest.NewHandlerName("hb_test_rebuild")
+		f := newNestFixture(t, func(m *nest.NestMgr) {
+			m.MustRegisterHandlerWithMeta(rebuild, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+				e := es[0].(*hbEntity)
+				old := params[0].(*Reg)
+				if err := old.Start(); err != nil {
+					return nil, err
+				}
+				old.Close()
+				next, err := e.host.Register(old.Name(), 100*time.Millisecond, func(Beat) error { return nil })
+				if err != nil {
+					return nil, err
+				}
+				if err := next.Start(); err != nil {
+					return nil, err
+				}
+				if params[1].(bool) {
+					return nil, errBusiness
+				}
+				return next, nil
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+		})
+		e := newHBEntity(t, f.driver, 52, kindShort)
+		f.manager.Add(e)
+		first, _ := e.host.Register("ai", 100*time.Millisecond, func(Beat) error { return nil })
+		if _, err := f.engine.Request(context.Background(), rebuild, e.ID(), nest.NewParams(first, true)); !errors.Is(err, errBusiness) {
+			t.Fatalf("failing rebuild = %v", err)
+		}
+		if !first.Closed() || first.Active() || f.driver.Registered() != 0 {
+			t.Fatalf("after a rolled-back rebuild: closed %v active %v registered %d", first.Closed(), first.Active(), f.driver.Registered())
+		}
+		second, _ := e.host.Register("ai/2", 100*time.Millisecond, func(Beat) error { return nil })
+		got, err := f.engine.Request(context.Background(), rebuild, e.ID(), nest.NewParams(second, false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next := got.(*Reg); !second.Closed() || !next.Active() || f.driver.Registered() != 1 {
+			t.Fatalf("after a committed rebuild: old closed %v new active %v registered %d", second.Closed(), next.Active(), f.driver.Registered())
+		}
+	})
+}

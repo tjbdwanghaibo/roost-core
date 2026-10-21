@@ -61,9 +61,10 @@ const (
 	SkippedMetric = "heartbeat.skipped_total"
 	// StalledMetric 计在途超过 StallAfter 视为丢失而重投的拍；同时打限频 Warn。基线应为零。
 	StalledMetric = "heartbeat.stalled_total"
-	// DroppedMetric 计到期或执行时按规则丢弃的拍，标签 reason：removed（实例已卸载 / 删档）、stale（目标已被同 ID
-	// 的新实例取代，或实例已 OnDestroy）、not_loaded（实例还没发布）、stopped（停止生效后到达）、not_owner
-	// （Remote 托管实体本进程不是当前拥有方）、duplicate（同一次投递的另一份已执行）。不打日志。
+	// DroppedMetric 计到期或执行时按规则丢弃的拍，标签 reason：removed（实例已卸载 / 删档；驱动随即撤销这个实例的
+	// 全部登记，之后不再计，同一格里一起到期的登记各计一次）、stale（目标已被同 ID 的新实例取代，实例已 OnDestroy，
+	// 或登记已 Close）、not_loaded（实例还没发布）、stopped（停止生效后到达）、not_owner（Remote 托管实体本进程不是
+	// 当前拥有方）、duplicate（同一次投递的另一份已执行）。不打日志。
 	DroppedMetric = "heartbeat.dropped_total"
 	// StoppedMetric 计框架自动停掉的登记，标签 reason：remote_shared（Remote 托管实体进入共享模式，不允许挂载心跳，
 	// 见 ErrHeartbeatRemoteShared）。同时汇总打 Warn。
@@ -476,7 +477,9 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 // step 推进一格：取出到期的登记，逐个核对，一批交给投递层。只由驱动 goroutine 调用（测试可以不启动循环直接调用）。
 //
 // 核对（不持有 Driver.mu，不阻塞）：
-//   - 实例已 OnDestroy、已卸载 / 删档，或查到的是同 ID 的另一个实例：丢弃，不唤醒不在内存的实体；还没发布也不投；
+//   - 实例已卸载 / 删档（IsRemoved）：丢弃，并撤销整个宿主（Host.OnDestroy，组件漏调时由这里补上）；
+//   - 实例已 OnDestroy、登记已 Close，或查到的是同 ID 的另一个实例：丢弃，不唤醒不在内存的实体；还没发布也不投
+//     （同 ID 另一个实例与还没发布都可能是暂时的，例如重载时新实例在旧实例离开之前构造，所以只丢这一拍、不撤销）；
 //   - Remote 托管实体的实例处于转移中 / 已隔离：本进程不是拥有方，不投；处于共享模式：照常投一拍，由 handler 在
 //     实体锁内停掉本登记（共享模式不允许挂载心跳，见 runBeat）；
 //   - 上一拍在途：跳拍（计数、限频 Warn）；在途超过 StallAfter（连续卡住时翻倍）：视为丢失，重投一次（计 stalled）。
@@ -493,11 +496,13 @@ func (d *Driver) step(ctx context.Context) {
 		d.due[i] = nil
 		h := r.host
 		switch {
-		case h.closed.Load():
-			d.stats.dropStale.add(h.id)
-			continue
 		case h.owner.IsRemoved():
+			// 移除是终态（卸载、删档）：组件没有调 Host.OnDestroy 时由驱动替它撤销，环不再持有这个实例。
 			d.stats.dropRemoved.add(h.id)
+			h.OnDestroy()
+			continue
+		case h.closed.Load() || r.closed.Load():
+			d.stats.dropStale.add(h.id)
 			continue
 		}
 		if lookup != nil {
@@ -571,7 +576,7 @@ func (d *Driver) apply(r *Reg, seq uint64, active bool, t tier) {
 	now := r.startClock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r.host.closed.Load() || seq <= r.ring.seq {
+	if r.host.closed.Load() || r.closed.Load() || seq <= r.ring.seq {
 		return
 	}
 	r.ring.seq = seq
