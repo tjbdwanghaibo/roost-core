@@ -120,8 +120,8 @@ var guardPool = sync.Pool{
 	},
 }
 
-// guardScopes 按 goroutine 记录当前 Guard 作用域。
-var guardScopes sync.Map // map[int64]*GuardScope
+// guardScopes 按 goroutine 记录当前 Guard 作用域（按 goroutine ID 分片的读写锁表，见 goroutine.LocalMap）。
+var guardScopes goroutine.LocalMap[*GuardScope]
 
 // NewGuardScope 在当前 goroutine 上开启一个新的 Guard 作用域，返回释放函数：释放全部锁、执行 post-release 回调、
 // 恢复上一层作用域并归还 Guard。I/O worker 上调用会 panic（I/O 池不得取实体锁）。
@@ -153,12 +153,8 @@ func WithGuardScope(name string, fn func(*GuardScope) error) error {
 
 // CurrentGuardScope 返回当前 goroutine 的 Guard 作用域；没有时为 nil。
 func CurrentGuardScope() *GuardScope {
-	if value, ok := guardScopes.Load(goroutine.GoID()); ok {
-		if scope, ok := value.(*GuardScope); ok {
-			return scope
-		}
-	}
-	return nil
+	scope, _ := guardScopes.Load(goroutine.GoID())
+	return scope
 }
 
 func (s *GuardScope) Name() string {
