@@ -6,7 +6,7 @@
 
 ## main 近期提交审查（游戏服务器专家视角，2026-10-21 登记，尚未修复）
 
-范围：`4eccd3b1..53cc3f97`（D14～D22 与零散修复，89 个提交），按当日 origin/main 核对（其后的 D20 P4 提交只动压测与文档，不影响下列结论）。D15 别名合服、D16 单实体卸载、D17 全服邮件、D18 业务日、AOI“只评估移动过的目标”、D22 业务时间冻结与时间域逐项核对成立，不在此列。下列各条按严重度排序，“已确认”的都有测试或代码路径证据；修法是建议，取舍由维护者定。
+范围：`4eccd3b1..53cc3f97`（D14～D22 与零散修复，89 个提交），按当日 origin/main 核对（其后的 D20 P4 提交只动压测与文档，不影响下列结论）。D15 别名合服、D16 单实体卸载、D17 全服邮件、D18 业务日、AOI“只评估移动过的目标”、D22 业务时间冻结与时间域逐项核对成立，不在此列。第 8～10 条为同日补充：学习分支 `fix/core-game-server-review` 审查中按当日晚 origin/main 确认的问题。下列前 7 条按严重度排序，“已确认”的都有测试或代码路径证据；修法是建议，取舍由维护者定。
 
 1. **P1（已确认，D19 回归）Leave→Enter / Hide→Show 窗口里的旧排队移动把新主视野拖回旧位置。**
    - 复现：玩家 2 `QueueMove` 到 (900,900) 并提交，事实应用之前 `Leave(2,2)` 再 `Enter(2,2,(30,10))`，`Drain` 三轮。ApplySync 与 ApplyAsync 两种模式都是：实体在 (30,10)，主视野在 (900,900)，邻居 1 未订阅（探针用例 `TestProbeRejoinBeforeQueuedMoveApplies`，`go test -overlay` 挂进 `framework/sync/entitysync/policy`）。
@@ -45,7 +45,24 @@
    - 动作指标：Behavior 没有 OnDestroy，实体卸载时在途动作不发结束，开了 Metrics 时 `actionflow.actions.running` 只升不降，而 OBSERVABILITY 把“只升不降”解释成有动作卡住。
    - 文档过时：本文件“`Elapsed` 上限……待维护者确认”维护者已在 `2b47c959` 选 A；DESIGN-TODO D21-1～D21-4 实施结果仍写“本地提交…由维护者推送 / 分支 feat/d21-gameplay”。
 
-8. **设计意见（非缺陷，供取舍）。**
+8. **P2（已确认，按当日晚 origin/main 核对）会话 held 期间撤掉最后一个订阅，Ready 之后接收端永远不知道。**
+   - 复现（`framework/sync/entitysync` 探针，`go test -overlay`）：订阅 3002 并 Flush（客户端收到 Full），`HoldSession(1)` → `Unsubscribe(1,3002)` → `ReadySession(1)` → Flush 三次：会话收到 0 帧，没有空 Full 也没有 Remove，客户端一直留着 3002。
+   - 根因：`subscriptions.go` `HoldSession` 的契约是“接收端已丢状态”（重连、客户端重置），所以把 `kindLeaving` 的订阅直接删掉、不欠 Remove；而 Ready 只调度仍有订阅的对象，没有对象就不开新 epoch，也不发空 Full。
+   - 冲突：main 的 SLG-INTEGRATION §7（`fog.reconcileFrom`）把 Hold → 读权限 → Apply → Ready 当作“权限刷新时暂停发布”的推荐写法，这时接收端并没有丢状态；最后一个据点被撤权时客户端不会删除它。学习分支 `fix/core-game-server-review` 实测撞到同一现象，用常驻控制对象（subject 98，`{"view":true}`）让每个新 epoch 至少有一个对象绕过，并归为“业务接线修正”。
+   - 建议：Ready 时若会话 epoch 已变而没有任何订阅，发一个空 Full；或另给一个“暂停不重置”的原语（只停发布、保留基线与待发 Remove），SLG 文档改用它。
+
+9. **P2（已确认）codegen 收集 handler 用到的 import 时漏掉被包装的外部类型，修复停在学习分支未进 main。**
+   - `codegen/internal/nest/parse.go` `collectUsedImports` 用 `strings.Index(type, ".")` 取包名：`*policy.Interest` 得到 `*policy`，`map[string][]*entitysync.Manager` 得到 `map[string][]*entitysync`，两个 import 都丢，生成校验拒绝合法 handler。
+   - 证据：`fix/core-game-server-review` 上的提交“fix(codegen): retain package imports inside wrapped Nest parameter types”改为复用 `generatedTypeRefs`（`packageRefs` 按标识符切分，覆盖参数 / 实体 / 返回 / RemoteAccess），并加 `TestCollectUsedImportsHandlesWrappedPackageTypes`；这个用例挂到 main 上红：`imports=[] want [{Path:example.com/policy} {Alias:entitysync Path:example.com/sync}]`。
+   - 建议：把该提交的改动与用例拣到 main。
+
+10. **P3（文档）学习分支 `fix/core-game-server-review` 的 SLG-INTEGRATION 改动合入 main 前要整理。** 分支 `go build ./...` 与根包门禁通过，与 main 只有 CHANGELOG 冲突；问题在文档组织：
+    - 约 420 行深化记录插在“第一部分：学习”与“§1 适合谁、先读什么”之间，新读者要翻过跨服报告、Managed Remote 地图等进阶内容才到入门；“专题优先级”表、“活动学习顺序”与 §7 现有内容重复。
+    - “main 视野 API 迁移”“main 新契约接入”以及多处“main 本轮合入的…已读源码并通过 race 回归”是分支同步日志，放在框架指南里会很快过时，宜移到维护文档或 CHANGELOG。
+    - “协调器的保留期为一小时”是夹具显式配置的 `ReservationTTL: time.Hour`，`DefaultReservationTTL` 是 30 分钟；夹具的自动补报截止又在 `alliance.go` 里写死一小时，与协调器配置无关。照抄默认配置的读者会在去重窗口过期后 30～60 分钟内补报，同一战果可能被计两次。宜让补报截止从协调器配置取值，并在文档写明二者必须一致。
+    - 深化入口（`test-slg-alliance-player.sh`）的实测结论本次未重跑（需要真实 Mongo / Redis / NATS，且会在共享环境建库），只核对了代码与文档一致性。
+
+11. **设计意见（非缺陷，供取舍）。**
    - 规模：每拍每个动作组一条 Nest 事务、不合并（D20 决定 ③）。5000 NPC × (2Hz AI + 10Hz 移动) 约 6 万事务/秒，原型数据 50 万拍/秒要 4.25 核、约六成花在 worker 停放唤醒。建议把批量入队（方案 D）与“无观察者降档 / 停跳”作为大规模 NPC 的前置条件，而不是可选项。
    - 行为控制：计划步骤的 Timeout 在定身（FreezePause）期间照样计时，定身长于 Timeout 就失败，护送 / 巡逻任务偏严；状态通知不等提交、回滚不补发（已登记），可考虑回滚后自动 Refresh 缩短窗口。控制等级 / 韧性 / 递减没有框架支持，宜在 guide 写明由业务在 buff 层做。
    - 视野：`MaxViewsPerPlayer` 数挂接，已定义未挂接的空间视野（每个都是 AOI 观察者）不受限，更合适的门槛是每个 Interest 的空间视野总数或政策阶段耗时预算。guide 表格让 MOBA 用 ApplySync，但阵营视野来自几十个友方单位，挂接数远超 9，建议改表或提供“一个视野多个视点”。可见性只看距离，没有隐身 / 反隐、相位、遮挡这类按观察者过滤；MaxVisible 按距离选，密集主城里当前目标、BOSS 可能被挤掉。
