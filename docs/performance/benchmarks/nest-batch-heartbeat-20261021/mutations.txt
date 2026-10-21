@@ -194,3 +194,24 @@ FAIL
 FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.470s
 FAIL
 
+## F1
+mutation: Refreeze 不清 Frozen
+test: TestRefreezeStartsANewExecutionInTheSameContext
+result: RED
+--- FAIL: TestRefreezeStartsANewExecutionInTheSameContext (0.00s)
+    ctx_test.go:225: Frozen after Refreeze = 1, the previous execution's value
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/fctx	0.452s
+FAIL
+
+## F2
+mutation: 批量作业逐目标不 Refreeze（整批共用一个冻结时刻）
+test: TestEveryBeatFreezesItsOwnBusinessTime
+result: RED
+--- FAIL: TestEveryBeatFreezesItsOwnBusinessTime (0.00s)
+    --- FAIL: TestEveryBeatFreezesItsOwnBusinessTime/batch (0.00s)
+        nest_test.go:758: r0 and r1 share Beat.Now 2027-01-15 16:00:00.006 +0800 CST: each beat must freeze its own business time
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.565s
+FAIL
+

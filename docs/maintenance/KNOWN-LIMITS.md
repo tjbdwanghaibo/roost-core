@@ -25,7 +25,7 @@
 
 - **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo 未接。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P4（压测改心跳驱动）代码已实施、缺省仍是全局循环且没有测量，见“压测工具的心跳驱动”一节；P3（game-demo）、P5（迁移现有快池 tick）未做。
 - **批量心跳投递未经正式压测，缺省关闭**（维护者 2026-10-21 决定：选项 C 先合入、缺省关闭）：缺省 `heartbeat.delivery: dispatch` 仍是每拍一条单目标 `Dispatch`，50 万次/秒约 4 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)）。`batch`（D20 选项 C，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)）64 拍一个 Nest 批量作业，每拍仍在实体自己的 Guard 作用域与事务里执行、Remote 托管实体仍单目标；正式压测暂停，只有 1 轮不作结论的数据与探索性运行（[NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)），Linux 上没有测。合批优化压测通过后再改为缺省开启。
-- **批量方式下的观测口径不同**：批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计超过慢阈值的），按批记 `nest.dispatch.try_batch.*`；请求时间（`fctx.Now`）整段共用一次快照。
+- **批量方式下的观测口径不同**：批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计超过慢阈值的），按批记 `nest.dispatch.try_batch.*`。业务时间与 Frozen 派生值仍按拍各冻结一次（与单目标方式相同）。
 - **（批量方式）冲突转单目标时可能有一次 worker 等锁**：同 ID 冲突的拍转成单目标作业排在冲突消息之后，执行时锁一定空闲；但若实体锁被 Nest 作业顺序之外的持有者占着（别的 handler 的 `Cast` 等），转成的单目标作业与普通 `Dispatch` 一样在 worker 上等这把锁，与 X 相同、不比 X 多。热点实体（同一实体高频业务消息）下的转换率没有测。
 - **卸载窗口**：缺省单目标方式下，投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。批量方式只读已加载的实体，卸载后没有重载的按 `not_loaded` 丢弃、不冷加载；Remote 托管实体与冲突转成的单目标作业仍走普通 `Dispatch`，同上。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。

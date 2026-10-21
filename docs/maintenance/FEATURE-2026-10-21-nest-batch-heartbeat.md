@@ -128,7 +128,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 | 当前消息登记（`currentNestDispatchMsgs`） | ✓：本批一个消息对象，逐目标重置运行状态后复用，登记只做一次 | |
 | Guard 作用域登记 | | ✓：每个目标自己的作用域（硬要求），登记表已改分片 |
 | 指标 | ✓：`nest.dispatch.total{type="TryBatch"}` 按批累加执行数、`nest.dispatch.cost` 观察整批耗时；`nest.dispatch.try_batch.handed_back.total{reason}` 按批累加 | 只有超过 `slowLockThreshold` 的目标单独计 `nest.handler.lock_hold.slow.total` 并告警 |
-| 时间 | 本批开始一次；每个目标结束读一次（同时用于时间片与持锁时长） | |
+| 时间 | 本段开始读一次（时间片起点）；每个目标结束读一次（同时用于时间片与持锁时长） | 业务时间（`fctx.Now` / `Beat.Now`）与 `fctx.Frozen` 派生值（场景时间域）每个目标 `Context.Refreeze` 一次：D22-1 要求每一拍冻结一次，不能整批共用（协调方 2026-10-21 要求，两种投递方式各有断言 `TestEveryBeatFreezesItsOwnBusinessTime`） |
 | Fence | 整批检查一次 + 每个目标读一个原子标志 | |
 | 派发队列锁 | 取作业、结束作业 | 按组：一次持锁安排 8 个目标（`tryBatchGroup`：认领 / 转单目标 / 交回），一组执行完在同一次持锁里收尾（取锁失败的转单目标、撤销认领）并安排下一组。初稿每个目标一次，探索性 profile 里这把锁的争用（`lockSlow` → 停放 → 调度器空转）约占进程 CPU 的 13%；代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组其余目标的执行时间（等在依赖队列里，不占 worker） |
 | 事务、Guard、实体锁、Sync 捕获、handler 查表 | | ✓（不能省） |
@@ -206,5 +206,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 2. 就绪链由一条改为两条交替（§5）：同一条 FIFO 时探索性运行业务 p99 2.1ms。
 3. 认领由逐目标改为 8 个一组（§11）：逐目标一次 `q.mu` 的争用在探索性 profile 里约占 13% CPU。
 4. 认领先于取锁（§4“认领在取锁之前”），比原话的顺序少一个窗口。
+5. 时间快照不按批付：任务书原本把“时间快照”列为按批付一次的开销；D22-1（业务时间一律取自 fctx、每条消息 / 每一拍冻结一次）合入后，协调方要求批量方式下 `Beat.Now` 取这一拍冻结的 fctx 时间、挂了时间域的登记取这一拍的域时间。实现为每个目标 `fctx.Context.Refreeze`（新增：重新冻结 Now / NowMilli、清 `Frozen`），代价是每个目标一次业务时钟读取。
+6. 投递方式做成开关、缺省关闭（维护者 2026-10-21 决定 A，§12）。
 
-**变异核对**：17 条，16 条变红；1 条（去掉执行器的 `loadedGetter`）仍绿，原因是“只读已加载实体”的强制点在 `entity.LoadedEntitiesOnly` 对业务 worker 身份的判断，执行器的包装只是防御，该用例按契约检查保留。失败文本原样见性能报告 §5 与样本目录的 `mutations.txt`。
+**变异核对**：22 条，21 条变红；1 条（去掉执行器的 `loadedGetter`）仍绿，原因是“只读已加载实体”的强制点在 `entity.LoadedEntitiesOnly` 对业务 worker 身份的判断，执行器的包装只是防御，该用例按契约检查保留。失败文本原样见性能报告 §5 与样本目录的 `mutations.txt`。

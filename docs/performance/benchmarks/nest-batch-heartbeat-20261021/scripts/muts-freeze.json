@@ -1,0 +1,4 @@
+[
+{"name":"F1","file":"infra/base/fctx/context.go","pkg":"./infra/base/fctx/","test":"TestRefreezeStartsANewExecutionInTheSameContext","timeout":"150s","desc":"Refreeze 不清 Frozen","old":"\tc.NowMilli = c.Now.UnixMilli()\n\tc.clearFrozen()\n}","new":"\tc.NowMilli = c.Now.UnixMilli()\n}"},
+{"name":"F2","file":"framework/nest/try_batch.go","pkg":"./gameplay/heartbeat/","test":"TestEveryBeatFreezesItsOwnBusinessTime","timeout":"150s","desc":"批量作业逐目标不 Refreeze（整批共用一个冻结时刻）","old":"\t\texec.ctx.Refreeze()\n","new":""}
+]

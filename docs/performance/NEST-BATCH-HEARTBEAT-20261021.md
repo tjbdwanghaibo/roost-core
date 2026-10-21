@@ -12,7 +12,7 @@
 | 业务 p99 不差于 X | 待补测 |
 | 跳拍 / 准入失败 / 快池拒绝 | 第 1 轮全部为 0（不作结论） |
 | 普通短 handler 不退化 | 待补测（`take` 多了一次“批量链是否为空”的判断，worker 同锁取下一项与分片登记表对短 handler 的影响也要在同一组里测） |
-| 语义 | 完成：17 条变异核对（§5） |
+| 语义 | 完成：22 条变异核对（§5） |
 
 ## 1. 被测与环境
 
@@ -74,7 +74,7 @@ go tool pprof -top -cum $S/bin-final.test $S/prof/C.cpu
 
 ## 5. 语义：变异核对
 
-新功能没有“修前”，红用变异核对：把实现改成一个具体的错误版本，确认对应用例变红，再改回（脚本 `scripts/mutate.py` + `muts-all.json` / `muts-more.json`，原文 [mutations.txt](benchmarks/nest-batch-heartbeat-20261021/mutations.txt)）。17 条，16 条变红：
+新功能没有“修前”，红用变异核对：把实现改成一个具体的错误版本，确认对应用例变红，再改回（脚本 `scripts/mutate.py` + `muts-all.json` / `muts-more.json` / `muts-switch.json` / `muts-freeze.json`，原文 [mutations.txt](benchmarks/nest-batch-heartbeat-20261021/mutations.txt)）。22 条，21 条变红：
 
 | 编号 | 变异 | 用例 | 修前（变异后）失败文本 |
 | --- | --- | --- | --- |
@@ -95,6 +95,11 @@ go tool pprof -top -cum $S/bin-final.test $S/prof/C.cpu
 | H3 | 交回只清在途不计跳拍 | `TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses` | `stats {... SkippedQueueFull:0 ...} inflight=false warns=0` |
 | H4 | Remote 托管实体也走批量 | `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` | `remote entity: invalid ownership transition: unknown -> draining` |
 | H5 | “不在内存”按跳拍计 | `TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad` | `runs 0 stats {... SkippedRejected:1 ... DroppedNotLoaded:0 ...}` |
+| S1 | `SetDelivery` 不检查已启动 | `TestDeliveryIsChosenOnceBeforeStart` | `SetDelivery changed the delivery of a running driver` |
+| S2 | Init 不把 `heartbeat.delivery` 交给驱动 | `TestModReadsTheDeliveryOnce` | `heartbeat.delivery="batch": driver delivery "dispatch", want "batch"` |
+| S3 | 批量方式下客户端不支持时静默退回单目标 | `TestDeliveryIsChosenOnceBeforeStart` | `Bind a client without try-batch support in batch delivery = <nil>` |
+| F1 | `Refreeze` 不清 `Frozen` | `TestRefreezeStartsANewExecutionInTheSameContext` | `Frozen after Refreeze = 1, the previous execution's value` |
+| F2 | 批量作业逐目标不 `Refreeze` | `TestEveryBeatFreezesItsOwnBusinessTime/batch` | `r0 and r1 share Beat.Now ...: each beat must freeze its own business time` |
 
 “worker 同锁取下一项”的两条变异（持锁调用出队后动作死锁、出队后动作早于结束作业）与分片登记表的一条变异（`Delete` 清空整片）记在各自的提交说明里。
 

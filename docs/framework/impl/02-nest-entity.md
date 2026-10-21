@@ -47,7 +47,7 @@ Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNe
 
 1. 准入（`admitTryBatch`）占一个名额、不写 `tails`；就绪后进通道的 `tryBatches`，`take` 在普通作业与批量作业之间交替（`preferOrdinary`），不与普通作业共用一条 FIFO。
 2. 同 ID 顺序在 `q.mu` 下逐组安排（`prepareTryBatchGroupLocked`，一组 `tryBatchGroup` = 8 个）：`tails[id]` 有登记（含已准入未执行）→ `convertTryBatchTargetLocked` 当场建一条与 `Dispatch` 相同的 `MsgTypeSingle` 消息、走 `admitLocked` 排在冲突作业之后；否则把 `claims[i]` 写进 `tails[id]` 认领，**认领先于 `TryRequireEntity`**。执行时实体锁 / 锁组取不到同样转单目标（先挂在认领后面）。一组结束在同一次持锁里转换取锁失败的目标、`releaseTryBatchClaimsLocked` 撤销认领（与作业结束共用 `releaseIDsLocked` 唤醒后继），再安排下一组。只有转单目标被 `admitLocked` 拒绝、目标不在内存、fence、取消、handler 不存在才交回调用方。
-3. 每个目标自己的 `entity.NewGuardScope` + `invokeTryBatchTransaction`（与 `invokeHandlerTransaction` 同样的 pipelined 白名单与结果未知 fence，不传提前放锁闭包、pipelined 锁内提交）；实体只从 `loadedGetter` 取、只 `TryRequire`。逐目标复用一个 `MsgTypeTryBatch` 消息对象（`resetMsg` 清零运行状态），当前消息只登记一次；每个目标开始前恢复请求上下文快照（`ctxSnapshot`），请求时间按批。`Await` 拒绝 `MsgTypeTryBatch`。
+3. 每个目标自己的 `entity.NewGuardScope` + `invokeTryBatchTransaction`（与 `invokeHandlerTransaction` 同样的 pipelined 白名单与结果未知 fence，不传提前放锁闭包、pipelined 锁内提交）；实体只从 `loadedGetter` 取、只 `TryRequire`。逐目标复用一个 `MsgTypeTryBatch` 消息对象（`resetMsg` 清零运行状态），当前消息只登记一次；每个目标开始前恢复请求上下文快照（`ctxSnapshot`）并 `fctx.Context.Refreeze`：业务时间（`fctx.Now`，心跳的 `Beat.Now`）与 `fctx.Frozen` 派生值（场景时间域的域时间）每个目标各冻结一次（D22-1），不是整批共用。`Await` 拒绝 `MsgTypeTryBatch`。
 4. 时间片 `tryBatchSlice` = 200µs：一组结束后检查，超出则 `yieldTryBatchLocked` 放回 `tryBatches` 尾；pending 不变，认领已撤销。Fence 逐组读 `NestMgr.fenced`（`Fence` 时置位的原子标志）。
 5. 交回在放锁后调用（`collectHandBacks` / `flushHandBacks`），回调 panic 只记日志。执行循环意外退出时剩余目标以 `errTryBatchAborted` 交回、残留认领撤销。
 
