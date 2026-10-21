@@ -25,7 +25,7 @@
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
 | D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；P3～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
-| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；调研与方案已写，待拍板，代码未改 |
+| D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**实施中** |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -1744,7 +1744,24 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 
 ## D22 业务时间取自 ctx、支持变速
 
-**状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**
+**状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。同日维护者决定范围（见下方“维护者决定”），实施中。**
+
+**维护者决定（2026-10-21）**：范围按 ssr 收窄——**全局不做变速，只做场景级**。
+
+- **D22-2（部署级变速）取消**：全局时钟仍然只有偏移，`time.logic_offset` 保持现状，不加协调存储里的时间计划，不加 `time.speed_control`。
+- 实施 **D22-1**（业务时间一律从 ctx 取）与**场景时间域**（原 D22-3）。
+- §5 的 9 条修订为：
+  1. A：业务时间唯一入口是 `fctx.Now()`，每条消息 / 每一拍冻结一次。
+  2. A：endpoint 的 `nowUnix` / `nowUnixMilli` 参数保留，改为执行时由生成的分发包装从 `fctx` 填。
+  3. 只对挂了时间域的心跳登记生效：调度仍按真实时间；`Beat.Now` / `Elapsed` 用域时间，时停时 `Elapsed = 0`；`Elapsed` 上限乘倍率。
+  4. 取消：场景在一个进程内，不需要跨进程协调。
+  5. 时间域倍率范围 [0, 100]，允许 0（时停）。
+  6. `logic_offset` 保持现状。
+  7. A：entitytimer 不接时间域，域内的定时走心跳。
+  8. 取消：只有场景时间域，生产可用。
+  9. 先做 D22-1，再做时间域。
+
+下文 §1～§5 是决定前的调研与方案原文，其中 3.2、3.3 的部署级变速与 §5 第 4、6、8 条已被上面的决定取代。
 
 **读了什么**：ssr 只读 `ssr/kingdom/framework/kctx`、`framework/dispatcher`、`view/scene_time.go`、`entities/scene/internal/timer.go`、`modules/level`（变速入口）、`modules/heartbeat`、GM 改时间的入口，以及 ssr 依赖的 `watcher/misc/chrono`（下文 ssr 出处相对 `ssr/kingdom/`，chrono 相对 `watcher/misc/chrono/`）。roost 读 main（`3e7b4011`）的 `infra/base/clock`、`infra/base/fctx`、`framework/app`（业务时钟、高水位）、`framework/nest`（消息上下文）、`framework/nest/entitytimer`、`gameplay/heartbeat`、`gameplay/actionflow` / `gameplay/ai`、`infra/base/timer`、codegen 的 endpoint 业务时间参数，以及 [guide/10-time](../framework/guide/10-time.md)。
 
