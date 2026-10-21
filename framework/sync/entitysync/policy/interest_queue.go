@@ -337,6 +337,9 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 		in.applied = append(in.applied, completed...)
 		progressed = true
 	}
+	if progressed {
+		in.unsettled = true
+	}
 	// 异步模式：on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。同步模式已在政策阶段里，随即结算。
 	if progressed && in.applyMode == ApplyAsync {
 		in.wake()
@@ -405,7 +408,8 @@ func (in *Interest) releaseAppliedLocked() {
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 }
 
-// queuedPending 告诉 Drain 政策还有没做完的事：日志里的条目、应用中与已应用未结算的事实，以及还没停滞的重试 pair。
+// queuedPending 告诉 Drain 政策还有没做完的事：日志里的条目、应用中与已应用未结算的事实、应用方已执行但还没结算的
+// 条目（unsettled），以及还没停滞的重试 pair。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -420,7 +424,7 @@ func (in *Interest) queuedPending() bool {
 	if !active {
 		return false
 	}
-	if pending {
+	if pending || in.unsettled {
 		return true
 	}
 	for _, key := range in.retry {
@@ -515,6 +519,9 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 		add(entitysync.DrainStall{Source: "interest", Reason: "facts_in_flight", Detail: fmt.Sprintf("%d fact(s) being applied", inflight)})
 	}
 	r.mu.Unlock()
+	if in.unsettled && r.facts == 0 {
+		add(entitysync.DrainStall{Source: "interest", Reason: "applied_unsettled", Detail: "applied commands wait for the next settle"})
+	}
 	now := time.Now()
 	for _, key := range in.retry {
 		record := in.refused[key]

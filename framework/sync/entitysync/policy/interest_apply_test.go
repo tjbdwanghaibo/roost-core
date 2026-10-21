@@ -390,3 +390,33 @@ func TestAnUnconfirmedMoveOvertakenByLeaveAndEnterIsDropped(t *testing.T) {
 		}
 	})
 }
+
+// Drain 的政策钩子（Pending）把“应用方已执行、还没结算”的条目算作没做完：异步模式下应用线程可能在 Manager 的
+// 某次 Flush 结算之后、Drain 检查 Pending 之前执行完命令，这时 held 里的变化还没说给 Manager，Drain 不能返回。
+// 用例让应用线程走一步（命令已执行、未结算），直接问 Pending，不依赖时序；随后一次 Flush 结算后 Pending 才为假。
+// 历史：单写者重构（e5b382a7）后 TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen/async 在负载下偶发失败。
+func TestPendingCountsAppliedButUnsettledCommands(t *testing.T) {
+	m := newManager(t)
+	in := newInterestMode(t, m, ApplyAsync)
+	manualApplier(in)
+	player(t, m, 1)
+	player(t, m, 2)
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
+	mustApply(t, in)
+	if in.queuedPending() {
+		t.Fatal("setup: an applied and settled interest still reports pending work")
+	}
+	// 关系视野让 1 看见远处的 2：应用线程执行命令，结算要等下一次 Flush。
+	setRelation(t, in, 1, 2)
+	stepApplier(t, in)
+	if !in.queuedPending() {
+		t.Fatalf("the applier executed the relation view but Pending is false: Drain would return before the subscribe is said (subscribers of 2: %v)", m.Subscribers(2))
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if in.queuedPending() || !slices.Contains(m.Subscribers(2), entitysync.SessionID(1)) {
+		t.Fatalf("after the settling Flush: pending=%v subscribers of 2=%v", in.queuedPending(), m.Subscribers(2))
+	}
+}

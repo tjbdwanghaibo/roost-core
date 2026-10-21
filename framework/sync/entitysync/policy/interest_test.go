@@ -758,11 +758,13 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 }
 
 // 异步模式：Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里（DESIGN-TODO D19
-// “排队事实异步应用”）。这里直接把一条已确认的事实放进队列，不经 queueFact，所以没有应用线程被唤醒；Flush 之后
-// 事实必须仍在队列里、AOI 里的位置不变、订阅没变。应用一步之后，下一次 Flush 才结算并下发。
+// “排队事实异步应用”）。后台应用线程停掉（单写者之后 Enter 等命令也会启动它，不停掉它就可能在断言之前把注入的
+// 事实应用掉），直接把一条已确认的事实放进日志；Flush 之后事实必须仍在日志里、AOI 里的位置不变、订阅没变。
+// 应用一步之后，下一次 Flush 才结算并下发。
 func TestFlushSettlesButDoesNotApplyQueuedFacts(t *testing.T) {
 	m := newManager(t)
 	in := newInterestMode(t, m, ApplyAsync)
+	manualApplier(in)
 	player(t, m, 1)
 	player(t, m, 2)
 	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})

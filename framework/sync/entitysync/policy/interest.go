@@ -208,6 +208,9 @@ type Interest struct {
 	applied   []queuedInterestFact
 	appliedAt time.Time
 	applyErr  error
+	// unsettled：应用方执行过条目（命令或事实）、还没结算——AOI 事件或 touched 里的变化还没说给 Manager。
+	// queuedPending 据此让 Drain 等到结算；异步模式下应用线程可能恰在某次 Flush 结算之后、Drain 检查之前执行完一步。
+	unsettled bool
 	// refused counts consecutive refusals per held pair (with the first
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
@@ -796,6 +799,7 @@ func (in *Interest) applyLocked() []Refusal {
 	// for the NEXT one, not for a second attempt a few lines further down.
 	queued := in.retry
 	in.retry = nil
+	in.unsettled = false
 	in.drainAOILocked()
 	keys := make([]pair, 0, len(in.touched))
 	for key := range in.touched {
