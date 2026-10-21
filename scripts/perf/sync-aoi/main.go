@@ -578,8 +578,12 @@ func runServer(c config) error {
 		if err := mutate(step, 0, count, now, now); err != nil {
 			return err
 		}
-		if r := interest.Apply(); len(r) > 0 {
-			return fmt.Errorf("warmup refusal: %v", r[0])
+		// Nest 模式不调 Apply：单写者重构（eed9c870）之后 Apply 会在调用方线程执行已确认的排队移动，压测线程就替
+		// 政策阶段 / 应用线程做了 AOI；业务路径本来也不调 Apply（254d61cf），结算交给 Flush。直接模式仍由调用方 Apply。
+		if !c.Nest {
+			if r := interest.Apply(); len(r) > 0 {
+				return fmt.Errorf("warmup refusal: %v", r[0])
+			}
 		}
 		transport.setMetadata(step, time.Now())
 		if err := manager.Flush(ctx); err != nil {
@@ -692,8 +696,10 @@ func runServer(c config) error {
 			active += time.Since(begin)
 		}
 		begin := time.Now()
-		if r := interest.Apply(); len(r) > 0 {
-			return fmt.Errorf("subscription refusal: %v", r[0])
+		if !c.Nest { // 理由见预热处：Nest 模式的结算在 Flush 的政策阶段
+			if r := interest.Apply(); len(r) > 0 {
+				return fmt.Errorf("subscription refusal: %v", r[0])
+			}
 		}
 		applied := time.Since(begin)
 		active += applied
