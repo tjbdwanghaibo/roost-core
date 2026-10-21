@@ -22,13 +22,12 @@ type probeAction struct {
 	finishAt int
 	log      *[]string
 	ticks    int
-	waker    Waker
 	owner    entity.IThreadSafeEntity
 }
 
 func (a *probeAction) Kind() ActionKind { return 1 }
 func (a *probeAction) Start(ctx *ActionContext) error {
-	a.waker, a.owner = ctx.Waker, ctx.Owner
+	a.owner = ctx.Owner
 	return nil
 }
 func (a *probeAction) Cancel(*ActionContext, string) {}
@@ -68,33 +67,36 @@ func newBeatRunnerForTest(t *testing.T, groups map[ActionKind]ActionGroup) (*Bea
 	return b, d, e
 }
 
-// 需要周期 tick 的动作在途时挂心跳，周期取最短的那个（按档向下取）；由事件推进的动作（TickInterval 0）不挂；
-// 一个都没有时停，驱动上不再有这个登记。
-func TestBeatRunnerHeartbeatFollowsTheActionsThatNeedTicks(t *testing.T) {
+// 每个组的当前动作按自己的周期挂这个组的心跳（参考 ssr：每个组一个登记），周期按档向下取；不需要周期 tick 的动作
+// （TickInterval 0）不挂；组空闲时停，驱动上不再有这个登记。
+func TestEachGroupBeatsAtItsCurrentActionsInterval(t *testing.T) {
 	b, d, _ := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1, 2: 2, 3: 3})
 	var log []string
-	state := func() string { return fmt.Sprintf("%v %v %d", b.Reg().Active(), b.Reg().Period(), d.Registered()) }
+	state := func(group ActionGroup) string {
+		reg := b.Reg(group)
+		if reg == nil {
+			return "none"
+		}
+		return fmt.Sprintf("%v %v", reg.Active(), reg.Period())
+	}
 
 	event := &intervalAction{probeAction{name: "event", interval: 0, log: &log}}
 	if _, err := b.Runner().Start(3, event, 0, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := state(); got != "false 100ms 0" {
-		t.Fatalf("event-driven action only: %s", got)
+	if got := state(3); got != "false 100ms" || d.Registered() != 0 {
+		t.Fatalf("action that needs no ticks: %s registered %d", got, d.Registered())
 	}
 	slow := &intervalAction{probeAction{name: "slow", interval: 700 * time.Millisecond, log: &log}}
 	if _, err := b.Runner().Start(2, slow, 0, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := state(); got != "true 500ms 1" {
-		t.Fatalf("700ms action: %s, want the 500ms tier", got)
-	}
 	plain := &probeAction{name: "plain", log: &log}
 	if _, err := b.Runner().Start(1, plain, 0, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := state(); got != "true 100ms 1" {
-		t.Fatalf("plus a default action: %s", got)
+	if got := fmt.Sprint(state(1), " / ", state(2)); got != "true 100ms / true 500ms" || d.Registered() != 2 || !b.Ticking() {
+		t.Fatalf("groups 1 / 2: %s registered %d, want the default tier and the 500ms tier", got, d.Registered())
 	}
 	if err := b.Runner().End(1, true, NewActionReason("done")); err != nil {
 		t.Fatal(err)
@@ -102,46 +104,44 @@ func TestBeatRunnerHeartbeatFollowsTheActionsThatNeedTicks(t *testing.T) {
 	if err := b.Runner().End(2, true, NewActionReason("done")); err != nil {
 		t.Fatal(err)
 	}
-	if got := state(); got != "false 500ms 0" || b.Ticking() {
-		t.Fatalf("only the event-driven action left: %s", got)
+	if got := fmt.Sprint(state(1), " / ", state(2)); got != "false 100ms / false 500ms" || d.Registered() != 0 || b.Ticking() {
+		t.Fatalf("idle groups: %s registered %d", got, d.Registered())
 	}
 }
 
-// 每拍按组号顺序 tick 需要周期 tick 的组，上下文带本拍 Elapsed、Waker 与实体；由事件推进的动作不被拍 tick，Wake
-// 马上 tick 它的组（Elapsed 为 0）；动作结束后心跳停。
-func TestBeatTicksTheGroupsInOrderAndWakeTicksAnEventDrivenAction(t *testing.T) {
-	b, d, e := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1, 2: 2, 3: 3})
+// 一个组的一拍只 tick 这个组，上下文带本拍 Elapsed 与实体；动作结束后这个组的心跳停，下一个排队动作启动时再挂。
+func TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed(t *testing.T) {
+	b, d, e := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1, 2: 2})
 	var log []string
-	second := &probeAction{name: "second", finishAt: 2, log: &log}
 	first := &probeAction{name: "first", finishAt: 1, log: &log}
-	event := &intervalAction{probeAction{name: "event", finishAt: 1, log: &log}}
-	for kind, a := range map[ActionKind]Action{2: second, 1: first, 3: event} {
-		if _, err := b.Runner().Start(kind, a, 0, time.Time{}); err != nil {
+	queued := &probeAction{name: "queued", finishAt: 1, log: &log}
+	second := &probeAction{name: "second", finishAt: 2, log: &log}
+	if _, err := b.Runner().Start(1, first, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Runner().Enqueue(1, queued, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Runner().Start(2, second, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if first.owner != e {
+		t.Fatalf("context owner %v", first.owner)
+	}
+	at := time.Unix(1_800_000_000, 0)
+	for _, step := range []struct {
+		group   ActionGroup
+		elapsed time.Duration
+	}{{2, 300 * time.Millisecond}, {1, 100 * time.Millisecond}, {1, 200 * time.Millisecond}, {2, 100 * time.Millisecond}} {
+		if err := b.beat(step.group, heartbeat.Beat{Now: at, Elapsed: step.elapsed}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if event.waker != b || first.owner != e {
-		t.Fatalf("context: waker %v owner %v", event.waker, first.owner)
-	}
-	for _, elapsed := range []time.Duration{100 * time.Millisecond, 300 * time.Millisecond} {
-		if err := b.beat(heartbeat.Beat{Now: time.Unix(1_800_000_000, 0), Elapsed: elapsed}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := []string{"first tick 1 elapsed 100ms", "second tick 1 elapsed 100ms", "second tick 2 elapsed 300ms"}
+	want := []string{"second tick 1 elapsed 300ms", "first tick 1 elapsed 100ms", "queued tick 1 elapsed 200ms", "second tick 2 elapsed 100ms"}
 	if !slices.Equal(log, want) {
 		t.Fatalf("ticks %v, want %v", log, want)
 	}
-	if b.Reg().Active() || d.Registered() != 0 {
-		t.Fatalf("all periodic actions ended but the heartbeat is active %v registered %d", b.Reg().Active(), d.Registered())
-	}
-	if err := event.waker.Wake(event); err != nil {
-		t.Fatal(err)
-	}
-	if last := log[len(log)-1]; last != "event tick 1 elapsed 0s" || b.Runner().Current(3) != nil {
-		t.Fatalf("wake: log %v current %v", log, b.Runner().Current(3))
-	}
-	if err := event.waker.Wake(event); err == nil {
-		t.Fatal("waking an action that is no longer current succeeded")
+	if b.Ticking() || d.Registered() != 0 {
+		t.Fatalf("all actions ended but registered %d", d.Registered())
 	}
 }

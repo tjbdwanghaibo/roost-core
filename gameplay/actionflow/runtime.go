@@ -12,12 +12,10 @@ type ActionContext struct {
 	ActionList     ActionList
 	CurrentMission Mission
 	Now            time.Time
-	// Elapsed 是心跳 tick 时本 runner 的心跳登记距上次执行的业务时间（heartbeat.Beat.Elapsed，不追帧：掉拍后一次
-	// 覆盖）。只有 BeatRunner 的心跳 tick 填它；直接调用、Wake 推进、Start / Cancel 时为 0。
+	// Elapsed 是心跳 tick 时本组心跳登记距上次执行的业务时间（heartbeat.Beat.Elapsed，不追帧：掉拍后一次覆盖）。
+	// 只有 BeatRunner 的心跳 tick 填它；直接调用 Tick、Start / Cancel 时为 0。按时间推进的动作（移动）用它算这一拍
+	// 走多远。
 	Elapsed time.Duration
-	// Waker 由 BeatRunner 填入：由事件推进、不需要周期 tick 的动作（TickInterval 返回 0）保存它，事件到达时调用
-	// Wake 让 runner 马上 tick 自己所在的组。不经 BeatRunner 时为 nil。
-	Waker Waker
 }
 
 // Action 是一个动作：Start 启动，Tick 推进并报告是否结束及结果，Cancel 取消。
@@ -28,19 +26,12 @@ type Action interface {
 	Cancel(ctx *ActionContext, reason string)
 }
 
-// TickIntervaler 由动作可选实现，告诉 BeatRunner 自己要多久 tick 一次：
+// TickIntervaler 由动作可选实现，告诉 BeatRunner 自己所在的组要多久 tick 一次（在动作成为当前动作时读一次）：
 //   - 不实现：按 BeatConfig.Period（缺省 100ms）；
-//   - 返回 0：动作由事件推进（例如移动由 Move 组件自己的心跳推进、到达时 Wake），runner 不为它挂心跳；
+//   - 返回 0：不需要周期 tick（由别的动作或 handler 结束它），这个组不挂心跳；
 //   - 返回 > 0：取 heartbeat.Periods 里不大于它的最长档（短于最短档时取最短档）。
-//
-// runner 的心跳周期是当前全部组里需要 tick 的动作中最短的那个；没有需要 tick 的动作时心跳停止。
 type TickIntervaler interface {
 	TickInterval() time.Duration
-}
-
-// Waker 让由事件推进的动作在事件到达时请求马上 tick 自己所在的组（BeatRunner 实现）。只在实体锁内调用。
-type Waker interface {
-	Wake(Action) error
 }
 
 // ActionList 是业务对 ActionRunner / MissionRunner 的接线。动作回调与 runner 钩子里调用

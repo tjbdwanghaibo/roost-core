@@ -20,7 +20,8 @@ const (
 	GroupMove actionflow.ActionGroup = 1
 )
 
-// Monster 是一个会移动的实体：一个心跳宿主，挂 MapBasic、Move 与心跳驱动的 runner。位置的权威是业务 DAO 的
+// Monster 是一个会移动的实体：一个心跳宿主，挂 MapBasic、Move（被动）与心跳驱动的 runner（移动由 MoveTo 动作在
+// runner 的心跳里推进）。位置的权威是业务 DAO 的
 // nopersist + sync 字段（这里用 MemFields 代替），组件不另存一份。
 type Monster struct {
 	*entity.EntityBase
@@ -50,7 +51,7 @@ func init() {
 	registry.Seal()
 }
 
-// newMonster 是实体工厂（实体锁内或发布之前）：组件在这里登记心跳，加载后都处于停止状态。
+// newMonster 是实体工厂（实体锁内或发布之前）：构造组件；runner 在组第一次有动作时登记那个组的心跳。
 func newMonster(e *entity.EntityBase, fields movement.Fields) (*Monster, error) {
 	m := &Monster{EntityBase: e}
 	m.host = driver.NewHost(m)
@@ -64,7 +65,7 @@ func newMonster(e *entity.EntityBase, fields movement.Fields) (*Monster, error) 
 	}); err != nil {
 		return nil, err
 	}
-	if m.move, err = movement.NewMove(m.host, m.mb, movement.MoveConfig{Locate: movement.LocateIn(lookup)}); err != nil {
+	if m.move, err = movement.NewMove(m.mb, movement.MoveConfig{Locate: movement.LocateIn(lookup)}); err != nil {
 		return nil, err
 	}
 	m.flow, err = actionflow.NewBeatRunner(actionflow.ActionRunnerConfig{
@@ -76,13 +77,18 @@ func newMonster(e *entity.EntityBase, fields movement.Fields) (*Monster, error) 
 	return m, err
 }
 
-// handleSpawn 和 handleMoveTo 是快池 handler 的业务部分（实体锁与事务内）：进场景、发起移动都只改内存与入队，
-// 提交后生效；之后由 Monster 自己的移动心跳推进，到达时 MoveTo 动作收尾。
+// handleSpawn 和 handleMoveTo 是快池 handler 的业务部分（实体锁与事务内）：进场景、发起移动都只改内存与入队。
+// 发起移动是 MoveTo 动作：runner 给移动组挂心跳，每拍动作调 Move.Advance，到达时动作收尾。runner 不随事务回滚，
+// 所以动作接口放在 handler 的最后一步：前面会失败的校验、修改都做完了再 Start。
 func handleSpawn(m *Monster, interest *policy.Interest, at spatial.Point) error {
 	return m.mb.Enter(1, movement.InterestSpace{Interest: interest}, at)
 }
 
 func handleMoveTo(m *Monster, goal spatial.Point) error {
+	if !m.mb.InScene() {
+		return movement.ErrNotInScene // 校验在前
+	}
+	// 动作在最后。
 	_, err := m.Runner().Start(ActMoveTo, movement.MoveToParam{Path: []spatial.Point{goal}, Speed: 6}, 0, time.Time{})
 	return err
 }

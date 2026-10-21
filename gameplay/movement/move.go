@@ -8,20 +8,19 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// DefaultMovePeriod 是移动心跳的缺省档位（10Hz）。
+// DefaultMovePeriod 是移动动作缺省的 tick 周期（10Hz）：MoveTo / Follow 由实体的 ActionRunner 按它挂心跳。
 const DefaultMovePeriod = 100 * time.Millisecond
 
-// StopReason 是一次移动自己结束的原因（调用方 Stop 的不算，不回调）。
+// StopReason 是一次移动结束的原因；0 表示还在移动。
 type StopReason uint8
 
 const (
-	// Arrived：走完路径；Follow 设了 StopWhenReached 时到达保持距离。
+	// Arrived：走完路径；Follow 设了 stopWhenReached 时到达保持距离。
 	Arrived StopReason = iota + 1
-	// Replaced：被同一 Move 上新的 MoveTo / Follow 取代。
+	// Replaced：调用方手里的编号已不是进行中的移动（被另一次 MoveTo / Follow 取代，或已 Stop）。
 	Replaced
 	// Blocked：下一格被地形挡住，停在最后一个可走的位置。
 	Blocked
@@ -31,12 +30,14 @@ const (
 	TargetLost
 	// TargetLeft：跟随目标不在自己的场景里。
 	TargetLeft
-	// Refused：写位置被拒（AOI 排队满、位置越界等），Result.Err 是原因；位置停在上一拍。
+	// Refused：写位置被拒（位置越界、AOI 不认识这个实体等），Result.Err 是原因；位置停在上一拍。
 	Refused
 )
 
 func (r StopReason) String() string {
 	switch r {
+	case 0:
+		return "moving"
 	case Arrived:
 		return "arrived"
 	case Replaced:
@@ -56,17 +57,16 @@ func (r StopReason) String() string {
 	}
 }
 
-// Result 是一次移动结束的结论。
+// Result 是一次 Advance 的结论：Reason 为 0 表示还在移动，否则移动已结束（Move 回到空闲）。
 type Result struct {
 	Reason StopReason
-	// At 是结束时的位置。
+	// At 是这一拍之后的位置。
 	At  spatial.Point
 	Err error
 }
 
-// Done 收到一次移动自己结束的结论（到达、被取代、被阻挡、离开场景、目标消失、被拒）。在实体锁与事务内调用（多半在
-// 移动心跳的回调里），只做内存计算与入队；token 是 MoveTo / Follow 返回的那个。
-type Done func(token uint64, result Result)
+// Done 报告移动是否已结束。
+func (r Result) Done() bool { return r.Reason != 0 }
 
 // Locator 返回实体 id 最近一次提交的位置（MapBasic.Published）；ok 为 false 表示目标不在内存。在跟随者的实体锁内
 // 调用，不能取目标的锁、不能阻塞。LocateIn 用实体查找构造它。
@@ -74,14 +74,10 @@ type Locator func(id int64) (Snapshot, bool)
 
 // MoveConfig 是 NewMove 的输入。
 type MoveConfig struct {
-	// Period 是移动心跳的档位，必须是 heartbeat.Periods 之一；0 取 DefaultMovePeriod。
-	Period time.Duration
 	// Terrain 非 nil 时每走进一个新格都问它：越界或被挡就以 Blocked 停下。
 	Terrain spatial.Terrain
 	// Locate 是 Follow 读目标位置的入口；nil 时 Follow 返回错误。
 	Locate Locator
-	// Options 传给 heartbeat.Host.Register（例如 WithDurability；缺省 async：只改 nopersist 字段时不写 WAL）。
-	Options []heartbeat.RegOption
 }
 
 // MoveOwner 由带 Move 的实体实现，MoveTo / Follow 动作据此找到组件。
@@ -101,7 +97,6 @@ const (
 type moveState struct {
 	mode    moveMode
 	token   uint64
-	done    Done
 	speed   float64 // 每秒格数
 	sceneID int64
 	// x, y 是亚格精度的位置：每拍的位移常常不足一格，只按格写进 MapBasic 会把零头丢光。
@@ -116,42 +111,33 @@ type moveState struct {
 	stopWhenReached bool
 }
 
-// Move 是实体的移动组件。它的方法只能在实体锁内调用。
+// Move 是实体的移动组件，被动：只提供设定与推进的接口，自己不挂心跳。推进由动作驱动（参考 ssr：action 挂心跳、
+// 在心跳里调 move）——MoveTo / Follow 动作在实体 ActionRunner 的心跳里每拍调一次 Advance（维护者 2026-10-21：所有
+// 控制实体行为的逻辑都经 action，不绕过动作直接驱动组件）。方法只能在实体锁内调用。
 type Move struct {
 	mb      *MapBasic
-	reg     *heartbeat.Reg
 	terrain spatial.Terrain
 	locate  Locator
 
-	st moveState
-	// beatStart 是本拍开始时的推进状态：AOI 排队满时整拍作废、回到这里（只在 beat 内有效）。
-	beatStart moveState
+	st        moveState
 	nextToken uint64 // 只增，不随回滚恢复：被回滚的移动用过的号不再发
 	rbTx      nest.TransactionID
+	// result 是本次 Advance 的结论（只在 Advance 内有效）。
+	result Result
+	// beatStart 是本次 Advance 开始时的推进状态：AOI 排队满时整拍作废、回到这里（只在 Advance 内有效）。
+	beatStart moveState
 }
 
-// NewMove 构造组件并在 host 上登记移动心跳 "move"（停止状态）；在实体工厂或 OnInitFinish 里调用。
-func NewMove(host *heartbeat.Host, mb *MapBasic, config MoveConfig) (*Move, error) {
-	if host == nil || mb == nil {
-		return nil, errors.New("movement: move needs a heartbeat host and a map basic")
+// NewMove 构造组件；在实体工厂或 OnInitFinish 里调用。
+func NewMove(mb *MapBasic, config MoveConfig) (*Move, error) {
+	if mb == nil {
+		return nil, errors.New("movement: move needs a map basic")
 	}
-	if config.Period == 0 {
-		config.Period = DefaultMovePeriod
-	}
-	m := &Move{mb: mb, terrain: config.Terrain, locate: config.Locate}
-	reg, err := host.Register("move", config.Period, m.beat, config.Options...)
-	if err != nil {
-		return nil, err
-	}
-	m.reg = reg
-	return m, nil
+	return &Move{mb: mb, terrain: config.Terrain, locate: config.Locate}, nil
 }
 
 // MapBasic 返回移动写入的位置组件。
 func (m *Move) MapBasic() *MapBasic { return m.mb }
-
-// Reg 返回移动心跳登记（诊断、测试用；启停由 Move 管理）。
-func (m *Move) Reg() *heartbeat.Reg { return m.reg }
 
 // Moving 报告是否有进行中的移动（含跟随）。
 func (m *Move) Moving() bool { return m.st.mode != modeIdle }
@@ -159,26 +145,25 @@ func (m *Move) Moving() bool { return m.st.mode != modeIdle }
 // Token 返回进行中移动的编号，没有时为 0。
 func (m *Move) Token() uint64 { return m.st.token }
 
-// MoveTo 沿路径移动：path 是途经点（不含当前位置），最后一个是终点；speed 是每秒格数。取代进行中的移动（旧的以
-// Replaced 回调）。返回本次移动的编号；之后每拍按 Elapsed 推进，到达等结论经 done 回调（done 可为 nil）。
-// Remote 托管实体处于共享模式时返回 heartbeat.ErrHeartbeatRemoteShared、不开始（进行中的移动照旧）。
-// 寻路这类重计算在调用之前做，不在每拍里做。
-func (m *Move) MoveTo(path []spatial.Point, speed float64, done Done) (uint64, error) {
+// MoveTo 设定沿路径移动：path 是途经点（不含当前位置），最后一个是终点；speed 是每秒格数。取代进行中的移动
+// （旧编号之后 Advance 得到 Replaced）。返回本次移动的编号，之后由调用方（MoveTo 动作）每拍 Advance。寻路这类
+// 重计算在调用之前做，不在每拍里做。
+func (m *Move) MoveTo(path []spatial.Point, speed float64) (uint64, error) {
 	if len(path) == 0 {
 		return 0, errors.New("movement: move to needs at least one point")
 	}
 	if err := m.checkStart(speed); err != nil {
 		return 0, err
 	}
-	st := m.startState(speed, done)
+	st := m.startState(speed)
 	st.mode, st.path = modePath, append([]spatial.Point(nil), path...)
-	return m.begin(st)
+	return m.begin(st), nil
 }
 
-// Follow 跟随实体 target：每拍经 MoveConfig.Locate 读它最近一次提交的位置，走到与它相距 keep 格以内；
+// Follow 设定跟随实体 target：每拍经 MoveConfig.Locate 读它最近一次提交的位置，走到与它相距 keep 格以内；
 // stopWhenReached 为 true 时到达即以 Arrived 结束，否则一直跟随直到目标消失（TargetLost）、离开本场景
 // （TargetLeft）或被 Stop / 取代。
-func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached bool, done Done) (uint64, error) {
+func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached bool) (uint64, error) {
 	if m.locate == nil {
 		return 0, errors.New("movement: follow needs MoveConfig.Locate")
 	}
@@ -191,20 +176,18 @@ func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached b
 	if err := m.checkStart(speed); err != nil {
 		return 0, err
 	}
-	st := m.startState(speed, done)
+	st := m.startState(speed)
 	st.mode, st.target, st.keep, st.stopWhenReached = modeFollow, target, keep, stopWhenReached
-	return m.begin(st)
+	return m.begin(st), nil
 }
 
-// Stop 停止编号为 token 的移动（0 表示不论哪个）；不是进行中的那个时什么也不做、返回 false。调用方主动停的不回调
-// Done。停下就停心跳。
+// Stop 停止编号为 token 的移动（0 表示不论哪个）；不是进行中的那个时什么也不做、返回 false。
 func (m *Move) Stop(token uint64) bool {
 	if m.st.mode == modeIdle || (token != 0 && token != m.st.token) {
 		return false
 	}
 	m.guard()
 	m.st = moveState{}
-	m.reg.Stop()
 	return true
 }
 
@@ -218,68 +201,49 @@ func (m *Move) checkStart(speed float64) error {
 	return nil
 }
 
-func (m *Move) startState(speed float64, done Done) moveState {
+func (m *Move) startState(speed float64) moveState {
 	at := m.mb.Pos()
 	m.nextToken++
-	return moveState{token: m.nextToken, done: done, speed: speed, sceneID: m.mb.SceneID(),
-		x: float64(at.X), y: float64(at.Y), cell: at}
+	return moveState{token: m.nextToken, speed: speed, sceneID: m.mb.SceneID(), x: float64(at.X), y: float64(at.Y), cell: at}
 }
 
-// begin 先挂心跳，再换上新的移动；进行中的旧移动以 Replaced 回调（在新状态生效之后，回调里读到的是新移动）。
-// 心跳挂不上（Remote 托管实体处于共享模式：heartbeat.ErrHeartbeatRemoteShared）时什么都不改、返回错误，进行中的移动
-// 照旧。
-func (m *Move) begin(st moveState) (uint64, error) {
-	if err := m.reg.Start(); err != nil {
-		return 0, err
-	}
+func (m *Move) begin(st moveState) uint64 {
 	m.guard()
-	old := m.st
 	m.st = st
-	if old.mode != modeIdle && old.done != nil {
-		at := m.mb.Pos()
-		old.done(old.token, Result{Reason: Replaced, At: at})
-	}
-	return st.token, nil
+	return st.token
 }
 
-// Resume 在有进行中的移动、移动心跳却没在跳时重新挂上心跳；没有进行中的移动或心跳在跳时什么也不做。
-//
-// 只有一种情况会这样：Remote 托管实体运行中进入共享模式，框架在下一拍把心跳停掉（共享模式不允许挂心跳，回到独占
-// 也不自动恢复，见 heartbeat.ErrHeartbeatRemoteShared）。这期间移动状态保留、位置不再推进，动作也不收尾；业务在
-// 实体回到独占后调用 Resume 接着走（共享期间调用返回 ErrHeartbeatRemoteShared），或 Stop 放弃这次移动。
-func (m *Move) Resume() error {
-	if m.st.mode == modeIdle || m.reg.Active() {
-		return nil
-	}
-	return m.reg.Start()
-}
-
-// beat 是移动心跳的回调：按 Elapsed 推进一次（不追帧：掉拍后 Elapsed 覆盖整段，一次走完），写 MapBasic（经
-// QueueMove 进 AOI），到达 / 被阻挡 / 离开场景 / 目标消失时停心跳并回调 Done。
-func (m *Move) beat(beat heartbeat.Beat) error {
-	if m.st.mode == modeIdle {
-		m.reg.Stop()
-		return nil
+// Advance 把编号为 token 的移动推进 elapsed（调用方传心跳这一拍的 Beat.Elapsed：不追帧，掉拍后一次走完整段），
+// 走到的格写进 MapBasic（经 QueueMove 进 AOI），返回结论；结论非 0 时移动已结束。token 不是进行中的移动时返回
+// Replaced、什么都不改。AOI 排队满（policy.ErrInterestQueueFull，背压）时整拍作废、停在原处，返回“还在移动”，
+// 下一拍接着走（这一拍的时间不补）。
+func (m *Move) Advance(token uint64, elapsed time.Duration) Result {
+	if m.st.mode == modeIdle || token != m.st.token {
+		return Result{Reason: Replaced, At: m.mb.Pos()}
 	}
 	m.guard()
+	m.result = Result{}
+	defer func() { m.result, m.beatStart = Result{}, moveState{} }()
 	if !m.mb.InScene() || m.mb.SceneID() != m.st.sceneID {
 		m.finish(Result{Reason: LeftScene, At: m.mb.Pos()})
-		return nil
+		return m.result
 	}
 	if at := m.mb.Pos(); at != m.st.cell {
 		// 位置被别处改了（瞬移、拉回）：从新位置接着走。
 		m.st.x, m.st.y, m.st.cell = float64(at.X), float64(at.Y), at
 	}
 	m.beatStart = m.st
-	defer func() { m.beatStart = moveState{} }()
-	budget := m.st.speed * beat.Elapsed.Seconds()
+	budget := m.st.speed * max(elapsed, 0).Seconds()
 	switch m.st.mode {
 	case modePath:
 		m.walkPath(budget)
 	case modeFollow:
 		m.follow(budget)
 	}
-	return nil
+	if !m.result.Done() {
+		m.result.At = m.mb.Pos()
+	}
+	return m.result
 }
 
 // walkPath 沿路径走 budget 格。
@@ -395,18 +359,14 @@ func (m *Move) commitStep(from spatial.Point, result Result) {
 	}
 }
 
-// finish 结束进行中的移动：停心跳，再回调 Done（回调在状态清空之后，回调里可以立刻开始新的移动）。
+// finish 结束进行中的移动：清状态，记下本次 Advance 的结论。
 func (m *Move) finish(result Result) {
-	done, token := m.st.done, m.st.token
 	m.st = moveState{}
-	m.reg.Stop()
-	if done != nil {
-		done(token, result)
-	}
+	m.result = result
 }
 
 // guard 在当前事务里第一次改 moveState 前登记回滚恢复（每个事务一次）：回滚的一拍不算走过，下一拍的 Elapsed
-// 覆盖它；回滚的 MoveTo / Stop 不生效。心跳登记的启停由 heartbeat 自己随事务处理。
+// 覆盖它；回滚的 MoveTo / Stop 不生效。
 func (m *Move) guard() {
 	tx := nest.CurrentRollbackTx()
 	if tx == nil || tx.ID() == m.rbTx {

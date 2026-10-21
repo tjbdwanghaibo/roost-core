@@ -6,6 +6,13 @@
 // 调用返回前按发起顺序执行；Deferring() 报告此刻是否会被延后。队列与执行步数有界
 // （ErrDeferredQueueFull / ErrDeferredRunaway），回调 panic 一律恢复成错误。
 //
+// 心跳驱动：实体的 runner 由 BeatRunner 接到实体自己的心跳上，每个组的当前动作按它的 TickInterval 被 tick（见
+// heartbeat.go）。所有控制实体行为的逻辑都经 runner 下发与收尾。
+//
+// 事务（业务约束，维护者 2026-10-21：由业务层保证，框架不处理）：runner 是纯内存状态，不随 Nest 事务回滚。handler
+// 先做完全部可能失败的校验与修改，最后一步才调用 Start / Enqueue / End 等；之后若还可能失败，回滚后 runner 里会
+// 残留这次的变更。
+//
 // 清场顺序：ActionRunner.EndAll 期间回调发起的动作（例如 PlanMission 在 OnFail 里推进到
 // 下一步）会在 EndAll 返回后启动，EndAll 本身不是清场。要让实体什么都不再运行，先结束当前
 // 任务（ActionList.EndCurMission / MissionRunner.EndCurMission——任务结束后送来的动作结束

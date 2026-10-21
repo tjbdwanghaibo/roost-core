@@ -243,26 +243,26 @@ func TestEnterAndLeaveFollowTheTransaction(t *testing.T) {
 	}
 }
 
-// 回滚的 MoveTo 不生效：移动状态与心跳登记都回到原处。
+// 回滚的 Move.MoveTo 不生效：移动状态回到原处（Move 的推进状态随事务回滚）。
 func TestRolledBackMoveToLeavesNothingRunning(t *testing.T) {
 	f := newNestFixture(t, 1000)
 	e := f.add(3, moverOptions{})
 	f.mustRun(e, func(m *mover) error { return m.mb.Enter(1, &spaceLog{}, spatial.Point{}) })
 	if err := f.run(e, func(m *mover) error {
-		if _, err := m.move.MoveTo([]spatial.Point{{X: 50}}, 10, nil); err != nil {
+		if _, err := m.move.MoveTo([]spatial.Point{{X: 50}}, 10); err != nil {
 			return err
 		}
 		return errBusiness
 	}); !errors.Is(err, errBusiness) {
 		t.Fatal(err)
 	}
-	if moving := read(f, e, func(m *mover) bool { return m.move.Moving() || m.move.Reg().Active() }); moving || f.driver.Registered() != 0 {
+	if moving := read(f, e, func(m *mover) bool { return m.move.Moving() }); moving || f.driver.Registered() != 0 {
 		t.Fatalf("rolled-back move: moving %v registered %d", moving, f.driver.Registered())
 	}
 }
 
-// runner 由心跳 tick：需要周期 tick 的动作在途时挂心跳，每拍在实体自己的 worker、事务里 tick，带本拍 Elapsed；
-// 动作结束后心跳停，空闲不占调度。
+// runner 由心跳 tick：组的当前动作需要周期 tick 时这个组挂心跳，每拍在实体自己的 worker、事务里 tick，带本拍
+// Elapsed；动作结束后心跳停，空闲不占调度。
 func TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle(t *testing.T) {
 	f := newNestFixture(t, 1000)
 	e := f.add(4, moverOptions{})
@@ -282,7 +282,7 @@ func TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle(t *testing.T) {
 			t.Fatalf("tick outside a heartbeat beat: %+v", ticks)
 		}
 	}
-	if active := read(f, e, func(m *mover) bool { return m.beat.Reg().Active() }); active || f.driver.Registered() != 0 {
+	if active := read(f, e, func(m *mover) bool { return m.beat.Reg(groupWork).Active() }); active || f.driver.Registered() != 0 {
 		t.Fatalf("idle runner keeps its heartbeat: active %v registered %d", active, f.driver.Registered())
 	}
 	if got := e.endedActions()[0]; got.status != actionflow.ActionStatusSuccess {
@@ -290,9 +290,10 @@ func TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle(t *testing.T) {
 	}
 }
 
-// MoveTo 动作走完整条链：Start 让 Move 挂心跳，Move 的心跳推进位置，到达时动作经 Waker 收尾为成功；runner 自己不为
-// 由事件推进的动作挂心跳；结束后什么都不跳。新的 MoveTo 取代旧的：旧的以取消结束、新的从当前位置走到新终点。
-func TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne(t *testing.T) {
+// MoveTo 动作由 runner 的心跳驱动（参考 ssr：action 挂心跳、在心跳里调 move）：移动组挂一个心跳，移动中实体只有
+// 这一个登记（每拍一条消息），每拍动作调 Move.Advance，到达时动作收尾为成功；结束后什么都不跳。新的 MoveTo 取代
+// 旧的：旧的以取消结束、新的从当前位置走到新终点。
+func TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne(t *testing.T) {
 	f := newNestFixture(t, 1000)
 	e := f.add(5, moverOptions{})
 	f.mustRun(e, func(m *mover) error {
@@ -302,8 +303,8 @@ func TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne(t *testing.
 		_, err := m.beat.Runner().Start(actMoveTo, MoveToParam{Path: []spatial.Point{{X: 3}, {X: 3, Y: 3}}, Speed: 40}, 0, time.Time{})
 		return err
 	})
-	if read(f, e, func(m *mover) bool { return m.beat.Reg().Active() }) {
-		t.Fatal("the runner put an event-driven move on its own heartbeat")
+	if active := read(f, e, func(m *mover) bool { return m.beat.Reg(groupMove).Active() }); !active || f.driver.Registered() != 1 {
+		t.Fatalf("moving entity: move group heartbeat active %v, registrations %d (want exactly the runner's one)", active, f.driver.Registered())
 	}
 	waitFor(t, "the move to arrive", func() bool { return len(e.endedActions()) == 1 })
 	f.settle(e)

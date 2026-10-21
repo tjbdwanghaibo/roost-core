@@ -2,6 +2,7 @@ package movement
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,9 +28,10 @@ func init() {
 
 type remoteMover struct {
 	*entity.RemoteEntityBase
-	mb   *MapBasic
-	move *Move
-	flow *actionflow.BeatRunner
+	mb    *MapBasic
+	move  *Move
+	flow  *actionflow.BeatRunner
+	ended []endedAction
 }
 
 func (e *remoteMover) Base() *entity.EntityBase { return &e.RemoteEntityBase.EntityBase }
@@ -44,10 +46,12 @@ func transition(t *testing.T, e *remoteMover, states ...entity.RemoteOwnershipSt
 	}
 }
 
-// Remote 托管实体进入共享模式（不允许挂心跳，维护者 2026-10-21）：共享期间开始移动、带周期落库的进场景、runner 需要
-// tick 时都返回 ErrHeartbeatRemoteShared 且什么都不改；运行中被框架停掉心跳后移动状态保留、不推进，回到独占后
-// Move.Resume / BeatRunner.Sync 重新挂上，接着走。（框架在下一拍停心跳由 gameplay/heartbeat 的用例覆盖，这里直接
-// Stop 登记模拟它的结果。）
+// Remote 托管实体的共享模式不允许挂心跳（维护者 2026-10-21）：
+//   - 共享期间带周期落库的进场景返回 ErrHeartbeatRemoteShared，什么都不改；
+//   - 共享期间启动需要周期 tick 的动作（MoveTo）：组的心跳挂不上，动作以失败结束、它的移动被停掉；
+//   - 运行中进入共享模式、框架停掉了心跳：动作留在 runner 里、移动不推进，Sync 在共享期间报错，回到独占后重新挂上。
+//
+// 框架在下一拍停心跳由 gameplay/heartbeat 的用例覆盖，这里直接 Stop 登记模拟它的结果；不经 Nest、不在事务里。
 func TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode(t *testing.T) {
 	d := newUnitDriver()
 	id, err := entity.BuildEntityID(1, kindRemoteMover)
@@ -60,13 +64,22 @@ func TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode(t *
 	if e.mb, err = NewMapBasic(e, host, MapConfig{Fields: &MemFields{}, Save: func(int64, spatial.Point, Facing) error { return nil }, SaveEvery: time.Second}); err != nil {
 		t.Fatal(err)
 	}
-	if e.move, err = NewMove(host, e.mb, MoveConfig{}); err != nil {
+	if e.move, err = NewMove(e.mb, MoveConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	registry := newRegistry(t)
-	if e.flow, err = actionflow.NewBeatRunner(actionflow.ActionRunnerConfig{Registry: registry, GroupForKind: groupForKind,
-		Hooks: actionflow.ActionRunnerHooks{OnError: func(error) {}}}, actionflow.BeatConfig{Host: host}); err != nil {
+	if e.flow, err = actionflow.NewBeatRunner(actionflow.ActionRunnerConfig{Registry: newRegistry(t), GroupForKind: groupForKind,
+		Hooks: actionflow.ActionRunnerHooks{
+			OnEnded: func(s actionflow.ActionSnapshot, reason actionflow.ActionReason) {
+				r := reason.ToActionResult(actionflow.ActionStatusSuccess)
+				e.ended = append(e.ended, endedAction{id: s.ID, kind: s.Kind, status: r.Status, reason: r.Reason})
+			},
+			OnError: func(error) {},
+		}}, actionflow.BeatConfig{Host: host}); err != nil {
 		t.Fatal(err)
+	}
+	moveTo := func(goal spatial.Point) error {
+		_, err := e.flow.Runner().Start(actMoveTo, MoveToParam{Path: []spatial.Point{goal}, Speed: 10}, 0, time.Time{})
+		return err
 	}
 
 	// 共享模式下进场景（带周期落库）被拒，什么都没改。
@@ -78,41 +91,36 @@ func TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode(t *
 	if err := e.mb.Enter(1, &spaceLog{}, spatial.Point{}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := e.move.MoveTo([]spatial.Point{{X: 10}}, 10, nil)
-	if err != nil {
+	if err := moveTo(spatial.Point{X: 10}); err != nil || !e.flow.Reg(groupMove).Active() {
+		t.Fatalf("move: %v active %v", err, e.flow.Reg(groupMove).Active())
+	}
+
+	// 运行中进入共享模式，框架停掉心跳（模拟）：动作与移动都还在，共享期间 Sync 报错，回到独占后重新挂上。
+	transition(t, e, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
+	e.flow.Reg(groupMove).Stop()
+	if err := e.flow.Sync(); !errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) || e.flow.Reg(groupMove).Active() {
+		t.Fatalf("runner sync in shared mode: %v active %v", err, e.flow.Reg(groupMove).Active())
+	}
+	if !e.move.Moving() || e.flow.Runner().Current(groupMove) == nil || len(e.ended) != 0 {
+		t.Fatalf("the move or the action was dropped while the heartbeat was stopped: moving %v ended %+v", e.move.Moving(), e.ended)
+	}
+
+	// 共享期间启动新的移动：取代旧的（取消），新的挂不上心跳、以失败结束，它的移动被停掉。
+	if err := moveTo(spatial.Point{X: 0, Y: 9}); err != nil {
 		t.Fatal(err)
 	}
-	tick := &tickAction{limit: 100}
-	if _, err := e.flow.Runner().Start(actTick, tick, 0, time.Time{}); err != nil || !e.flow.Reg().Active() {
-		t.Fatalf("tick action: %v active %v", err, e.flow.Reg().Active())
+	if len(e.ended) != 2 || e.ended[0].status != actionflow.ActionStatusCanceled || e.ended[1].status != actionflow.ActionStatusFailed ||
+		!strings.Contains(e.ended[1].reason, "shared mode") || e.move.Moving() || e.flow.Runner().Current(groupMove) != nil {
+		t.Fatalf("move started in shared mode: ended %+v moving %v", e.ended, e.move.Moving())
 	}
 
-	// 运行中进入共享模式，框架停掉全部心跳（模拟）。
-	transition(t, e, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
-	e.move.Reg().Stop()
-	e.flow.Reg().Stop()
-	if _, err := e.move.MoveTo([]spatial.Point{{X: 0, Y: 9}}, 10, nil); !errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) || e.move.Token() != first {
-		t.Fatalf("move in shared mode: %v token %d (want the first move %d kept)", err, e.move.Token(), first)
-	}
-	if err := e.move.Resume(); !errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) || e.move.Reg().Active() {
-		t.Fatalf("resume in shared mode: %v active %v", err, e.move.Reg().Active())
-	}
-	if err := e.flow.Sync(); !errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) || e.flow.Reg().Active() {
-		t.Fatalf("runner sync in shared mode: %v active %v", err, e.flow.Reg().Active())
-	}
-	if !e.move.Moving() || e.flow.Runner().Current(groupWork) == nil {
-		t.Fatal("the move or the action was dropped while the heartbeat was stopped")
-	}
-
+	// 回到独占：照常挂心跳；之前停掉的组由 Sync 重新挂上。
 	transition(t, e, entity.RemoteOwnershipDraining, entity.RemoteOwnershipLocalOwned)
-	if err := e.move.Resume(); err != nil || !e.move.Reg().Active() {
-		t.Fatalf("resume after leaving shared mode: %v active %v", err, e.move.Reg().Active())
+	if err := moveTo(spatial.Point{X: 5}); err != nil || !e.flow.Reg(groupMove).Active() || !e.move.Moving() {
+		t.Fatalf("move after leaving shared mode: %v active %v", err, e.flow.Reg(groupMove).Active())
 	}
-	if err := e.flow.Sync(); err != nil || !e.flow.Reg().Active() {
-		t.Fatalf("runner sync after leaving shared mode: %v active %v", err, e.flow.Reg().Active())
-	}
-	_ = e.move.beat(beatOf(time.Second))
-	if e.mb.Pos() != (spatial.Point{X: 10}) || e.move.Moving() {
-		t.Fatalf("after resuming: pos %+v moving %v", e.mb.Pos(), e.move.Moving())
+	e.flow.Reg(groupMove).Stop()
+	if err := e.flow.Sync(); err != nil || !e.flow.Reg(groupMove).Active() {
+		t.Fatalf("runner sync after leaving shared mode: %v active %v", err, e.flow.Reg(groupMove).Active())
 	}
 }

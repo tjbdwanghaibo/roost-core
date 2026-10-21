@@ -2,14 +2,16 @@
 //
 //   - MapBasic：所在场景、位置、朝向，以及与 AOI 的接线——进场景 Enter，位置变化 QueueMove（事务内入队、走提交门，
 //     回滚的移动不生效），离开 Leave；落库由业务选（周期 / 离开场景时，经 MapConfig.Save）。
-//   - Move：速度、路径或跟随目标、状态；移动中挂自己的心跳（缺省 100ms），每拍按 heartbeat.Beat.Elapsed 推进一次
-//     （不追帧），写 MapBasic，停下就停心跳。
-//   - MoveTo / Follow 两个 actionflow 动作：移动是动作，到达、被打断、被阻挡、目标消失由 actionflow 收尾
-//     （RegisterActions，配 actionflow.BeatRunner）。
+//   - Move：速度、路径或跟随目标、状态；被动组件，只提供设定与推进接口（MoveTo / Follow / Advance / Stop），
+//     自己不挂心跳。
+//   - MoveTo / Follow 两个 actionflow 动作：移动由动作驱动（参考 ssr：action 挂心跳、在心跳里调 move）。动作所在组
+//     由实体的 actionflow.BeatRunner 挂心跳（缺省 100ms），每拍 Tick 调 Move.Advance(Beat.Elapsed)（不追帧），
+//     到达、被打断、被阻挡、目标消失由 actionflow 收尾（RegisterActions）。所有控制实体行为的逻辑都经动作，不绕过
+//     动作直接驱动组件（维护者 2026-10-21）。
 //
 // 三者都只在实体锁内调用（Nest handler、心跳回调，或加载 / 新建的初始化阶段），只做内存计算与入队，不阻塞、不做
 // I/O。状态的权威在业务实体的 DAO（Fields）：组件不另存一份位置；Move 自己的推进状态（亚格精度的位置、路径进度）
-// 随事务回滚恢复。
+// 随事务回滚恢复。ActionRunner 不随事务回滚：handler 最后一步才调用动作接口（见 actionflow 包说明）。
 package movement
 
 import (
@@ -270,7 +272,7 @@ func (m *MapBasic) Enter(sceneID int64, space Space, at spatial.Point) error {
 }
 
 // Leave 离开场景：SaveOnLeave 时先落库，清场景 ID（位置保留，是回来时的位置），提交后 space.Leave，停周期落库。
-// 不在场景里时返回 ErrNotInScene。正在进行的移动在 Move 的下一拍以 LeftScene 收尾。
+// 不在场景里时返回 ErrNotInScene。正在进行的移动在下一次 Advance 以 LeftScene 收尾。
 func (m *MapBasic) Leave() error {
 	if m.st.space == nil {
 		return ErrNotInScene

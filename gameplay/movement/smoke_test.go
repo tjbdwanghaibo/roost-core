@@ -14,7 +14,7 @@ import (
 )
 
 // 端到端冒烟（不是性能测量）：真实 Nest + 心跳驱动 + 实体同步 Manager + Interest。几千个实体各自进场景、随机 MoveTo，
-// 由各自的移动心跳推进，位置经 QueueMove 进 AOI、经同步帧推给观察者。观察者铺满地图（任何位置都在某个观察者的
+// 由各自 runner 的移动组心跳推进（动作每拍调 Move.Advance），位置经 QueueMove 进 AOI、经同步帧推给观察者。观察者铺满地图（任何位置都在某个观察者的
 // 进入半径内），结束后每个实体：动作成功、位置是目标、至少一个观察者最后收到的位置就是它的终点；心跳全部停下。
 func TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats(t *testing.T) {
 	entities, bounds := 3000, int64(1280)
