@@ -148,7 +148,23 @@ SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事�
 | 战争迷雾 / 侦察 / 联盟视野 | Interest 的关系来源归并（`Relation(name).Set/Clear`，最后一个来源撤销才退订）、Block AOI 与 `SpatialComponent.MoveWithObservedBlocks`、Profile 字段白名单、Manager 的 `HoldSession` / `ReadySession`、`frame.Receiver` 拒绝旧 epoch 帧（[Block AOI](INTEREST-BLOCK-AOI.md)、[Sync](guide/04-sync.md)） | 侦察 / 迷雾规则产生“谁对什么有权”的授权；权限读取失败时先停发布；不可见对象的敏感字段不下发 | 跨服撤权传播协议（每服 Interest 只管本服会话，权限变化怎样通知各服、允许多大延迟由业务定义）；已经下发给客户端的信息无法收回，held 只停止后续发布 |
 | 赛季 / 联盟活动 / 跨服积分 | [activity 协调器](../../service/activity/)：`OpenActivity`、`NotifyPhase`、`ApplyProgress`（按请求身份去重，去重只在 `ReservationTTL` 内有效）、`OwedDispatches` / `AttemptDispatch` / `AckDispatch`；demo 的 [ActivityRunner](../../demo/internal/service/game/activity.go.tmpl) 是接线参考 | 窗口身份、参与服集合（从活动组与存活事实取得）、持久贡献意图与补报、结算前冻结、原服奖励义务账本与 Player 永久到账回执、补发与人工对账政策 | 贡献意图 / 补报的通用组件（要业务自己持久化）；Redis 义务账本与 Player DAO 之间的分布式原子事务（只能“先持久接收义务、再可重试到账”）；常驻的原服补发调度 |
 
-**活动学习顺序**（demo 的 `ActivityRunner`）：`openWindow` 调 `OpenActivity`，expected 集合按活动组与存活查询取得，路由分组不等于每个服此刻在线；本服 World 的持久期限到点后 `NotifyPhaseDue` 通知协调器，协调器不靠自己的时钟启动阶段，第一个服通知后才开始宽限窗口（[types.go](../../service/activity/types.go)）；业务成功事实形成稳定贡献身份经 `Contribute` 上报；`AttemptDispatch` 取得结算投递，`settle` 发奖后 `AckDispatch`。投递确认不等于玩家已领取。demo 的尽力贡献失败不补报是已接受取舍；赛季若要求不漏计，按下面的联合链路做持久意图与补报。
+**每个方向必须解释与验证的事**：
+
+- 跨服联盟 / 国战：哪个进程能写、旧 owner 怎样被 fence 拒绝；失败补偿与结果未知时按身份查询；Mirror 陈旧时不能据快照越权写；重复消息不重复扣兵 / 发奖。
+- 视野：空间候选不等于侦察权限；退盟只撤关系来源，别的来源仍命中时保留对象，最后一个来源撤销才退订；不可见单位的敏感字段不能先下发再让客户端隐藏。
+- 活动：窗口身份、参与服集合、阶段推进、贡献身份、累计榜乱序、结算确认、邮件与最终领奖各在何时完成；服离线、重启与人工补发怎样收口。
+
+**跨服学习顺序**：先标出每个状态的 owner sid，再读 Remote 正式写与 Mirror 读取，之后从 [gift_item](../../demo/saga/gift_item/) 学原服事务与跨服 Saga。`scripts/test-remote-generated.sh` 验证 Remote 路径，[MMO 双 sid 赠礼](MMORPG-INTEGRATION.md#13-双-sid-跨服赠礼)验证另一条多进程协作路径，两者不能互相代替。
+
+**视野学习顺序**：权威位置 / 权限 → 空间候选 → 各来源归并 → Profile 字段白名单 → 提交后发布 → 客户端 Full / 增量。`SpatialComponent.MoveWithObservedBlocks` 表达“位置唯一、额外多块被观察”，本身不实现战争迷雾。先读 [interest_test](../../framework/sync/entitysync/policy/interest_test.go) 的来源交接、回滚与发布屏障，再跑 `ROOST_NEST_GAME_RACE=1 bash scripts/perf/nest-game.sh --check-spatial` 学正式生成 DAO 的接法。
+
+**活动学习顺序**（demo 的 `ActivityRunner`）：
+
+1. `openWindow` 调 `OpenActivity`，expected 集合按活动组与存活查询取得；路由分组不等于每个服此刻在线。
+2. 本服 World 的持久期限到点后 `NotifyPhaseDue` 通知协调器；协调器不靠自己的时钟启动阶段，第一个服通知后才开始宽限窗口（[types.go](../../service/activity/types.go)）。
+3. 业务成功事实形成稳定贡献身份，经 `Contribute` 上报；核对活动窗口，榜单保留较大的累计值。demo 的尽力贡献失败不补报是已接受取舍；赛季若要求不漏计，按下面的联合链路做持久意图与补报，不能用重新执行领奖来补贡献。
+4. `AttemptDispatch` 取得结算投递，`settle` 发奖后 `AckDispatch`。投递确认不等于玩家已领取；永久到账要靠邮件 / Player 上的幂等事实，有限的服务去重窗口代替不了永久账本。
+5. 故障练习至少包括：重复与跨窗贡献、晚到的累计值、一个服未通知、结算投递中断、发邮件成功但确认丢失、玩家重复领取。重开投递、排除失联目标或补发要有明确的业务授权与审计，不能默认删账本重跑。
 
 #### 7.2 生成与阅读顺序
 
@@ -185,7 +201,7 @@ sequenceDiagram
 | 业务状态 | 拥有者与框架接法 | 调用与失败处理 |
 | --- | --- | --- |
 | 成员、静态原服、贡献意图 | 联盟权威：基础入口用 `versionstore.NewRedisStore`，Remote 入口用生成的 Remote 托管实体 | `contribute` 在同一次条件更新里校验成员并记录意图，`revoke` 与它经同一版本串行裁决；回调只算状态、不做 RPC。同身份重试查回旧事实，换玩家复用身份被拒 |
-| 贡献补报 | 联盟意图 + `activity.Coordinator.ApplyProgress` | `drain` 在条件更新之外调用 RPC，成功才标记已报；回复丢失时用原 `Key + 玩家 + 战果身份` 重试，协调器按请求身份去重。意图存在超过协调器的 `ReservationTTL`（本例 1 小时）即停止自动补报、转人工对账，不换身份重加 |
+| 贡献补报 | 联盟意图 + `activity.Coordinator.ApplyProgress` | `drain` 在条件更新之外调用 RPC，成功才标记已报；回复丢失时用原 `Key + 玩家 + 战果身份` 重试，协调器按请求身份去重。意图存在超过协调器的 `ReservationTTL` 即停止自动补报、转人工对账，不换身份重加：补报截止**必须**等于协调器配置的 `ReservationTTL`（去重只在这段时间内有效，晚于它补报会把同一战果计两次）。夹具里二者取同一个值——`newAlliance` 的 `reservationTTL` 参数传协调器配置用的 `coordinatorReservationTTL`（本例 1 小时），零值与 `activity.New` 一样按 `activity.DefaultReservationTTL`（30 分钟）；照抄默认配置时截止就是 30 分钟 |
 | 活动阶段 | 本服业务时间线 + 协调器 expected 集合 | `freeze` 后 `phase` 要求全部意图已报才 `NotifyPhase`，否则结算会截断未报的战果；一个服通知时活动仍是 collecting，两个服都通知后完成。本例 expected 固定为 1000 / 1001 |
 | 原服奖励义务 | 按 sid 分开的业务 `versionstore` 记录 | `receive` 核对投递的目标 sid、窗口、完成原因与冻结状态，从冻结的意图算出本服玩家积分，按窗口写不可变清单；写成功才 ACK。重投返回原记录、不提升版本；同窗口清单变化被拒 |
 | Player 金币与永久回执 | 原服 Player DAO，生成 Sender `Sync_AllianceCredit` → Nest strict | 金币与 `Receipts[窗口]` 同一事务；同窗口同金额返回原余额，错服、改金额被拒。义务账本与 Player 是两个存储，没有跨存储原子事务：`deliverPending` 先到账、再标记完成，中间崩溃时恢复会重投同一身份，由 Player 回执去重 |
@@ -246,7 +262,22 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 
 锁目标的能力接口按 `I...Entity` 命名（本例 `IAllianceRewardPlayerEntity`、`IAllianceAuthorityEntity`）或显式写 `target=`；两者都没有时 `roost generate` 报错，改业务声明，不手改生成的 Sender。
 
-可靠贡献意图、退盟政策、冻结屏障和永久奖励回执都是业务设计；这条链路没有据此发现框架缺陷。MMORPG 的跨服世界 Boss 可以复用“窗口 / 意图 / 回执”的思路，但队伍、副本权限和退队分奖规则要自己定义（[MMORPG §6](MMORPG-INTEGRATION.md#6-保持-player-归属的跨服协作)）。
+#### 7.7 进阶：深化联合链路的接法要点
+
+前面六节是 main 上可运行的基础链路。学习分支 `fix/core-game-server-review` 在同一条活动流程上做过更深的实践（真实 TCP 视野、权限代际与定期重读、持久位置与多块覆盖、持久视点、行军路线、到达事件、常驻 worker、报告投递与跨服 / Remote 地图交接）。那套夹具（`scripts/testdata/slg-alliance`、`scripts/test-slg-alliance-player.sh`）**没有合入 main**，main 上没有对应入口，实测结论以该分支为准、main 未复跑；下面只保留可以直接照做的接法与边界。
+
+| 主题 | 接法 | 边界与容易错的地方 |
+| --- | --- | --- |
+| 授权交集 | 先算 `在范围内 && (成员有效 \|\| 侦察授权)`，再把筛过的目标经关系视野发布：`DefineRelationView` → `AttachView` 给获准玩家 → `SetViewMembers` 改集合（[Block AOI](INTEREST-BLOCK-AOI.md)） | 空间来源会直接订阅命中者，再加一个侦察关系只是**并集**，不是“空间且已授权”的交集；隐藏目标不要 `Show` 进公共空间 Interest 再指望客户端隐藏 |
+| 权限刷新循环 | 一个视野分区只由一个循环串行刷新：Hold → 带期限的 context 读权威 → 校验代际 → Apply → Ready → Flush；读成功后再查一次 `ctx.Err()`，迟到的成功不发布；失败保持 held，下一轮 ticker 重试 | 失效通知只是“重读下限”：最高代际用原子值、唤醒队列容量 1，重复或旧通知不能降低下限、不能堆积；普通 NATS 会丢通知，所以必须定期重读。held 不收回已发信息；每次 Hold → Ready 全量重发，最后一个对象撤销由框架补空 Full（§7.5），不需要常驻控制对象 |
+| 期限与业务时间 | 侦察等期限在首次建档的 strict 事务里按 `fctx.Now()` 派生并持久化，同服重试直接返回、不按重试时刻重算；刷新时按注入的业务钟惰性判定到期 | 发布时惰性到期只管可见性，攻击等业务命令要自己再校验期限；测试用 `clock.SetSource` / `clock.BusinessFunc` 推进业务时间，不等真实时长、不改全局偏移 |
+| 行军路线 | 路线存起点、终点与绝对的 Start / End，与命令回执、地图 Revision 同一 strict 事务；`At(now)` 在两端钳制、中间有界整数插值；handler 的 `nowUnixMilli` 由生成包装从 fctx 填，Sender 不收时间参数 | 不按离线秒数补 tick、不逐帧写库；“读到终点”不等于一次到达事件，到达要有自己的持久事件 |
+| 到达事件 | 发起行军的事务同时写到达待办；`DueArrivals(limit 1～128)` 从持久事件按 End / key 发现，`CompleteArrival` 再确认原事件与服务器期限，效果（报告）与“已处理”同一事务 | 枚举与处理之间不是事务；重复或晚到处理返回“已存在”，不改原到达时间；不依赖进程内计时列表 |
+| 常驻 worker | 实现 `app.Service`：Init 装配、Serve 独占循环、Shutdown 取消并等待在途调用；每轮一个期限覆盖发现与消费，失败即结束本轮，下一轮从持久状态重新发现 | 不存游标、不换身份；停机期限不足如实返回 context 错误，不能把未结束的调用当已排空；返回错误可能是结果未知，靠原身份幂等接口收口 |
+| 跨实体 / 跨服投递 | 两步：接收方在自己的 strict 事务里存完整正文作永久回执（同身份同内容返回已有、改内容拒绝）；发送方收到明确的“已接收”后，再用独立事务记 ACK | 两笔写之间没有分布式事务，锁内不做外部 RPC；查询失败、取消后的迟到成功都不 ACK。`FromSid` 是受信任总线的路由声明，不是认证，生产要服务凭据与 subject ACL |
+| Remote 地图交接 | 地图换成 Remote 托管实体后，旧 owner 的 ACK 返回 `entity.ErrRemoteFenced`；接收方每次用 `GetRemoteOwnership` 重读所有权核对来源 | 路由代际不进永久身份；交接前已通过校验的请求可能在交接后完成——协议允许这份报告收件并靠永久回执防重，不提供“交接瞬间撤销所有已准入请求” |
+
+可靠贡献意图、退盟政策、冻结屏障和永久奖励回执都是业务设计；这条链路没有据此发现框架缺陷（学习分支撞到的“最后一个对象撤销后客户端不清空”是框架缺口，已在 Sync 里修掉，见 §7.5）。MMORPG 的跨服世界 Boss 可以复用“窗口 / 意图 / 回执”的思路，但队伍、副本权限和退队分奖规则要自己定义（[MMORPG §6](MMORPG-INTEGRATION.md#6-保持-player-归属的跨服协作)）。
 
 ### 8. 更多 SLG 路线：接法、源码与业务边界
 
@@ -295,7 +326,7 @@ bash scripts/test-slg-generated.sh
 
 脚本按 §3.1 的步骤生成工程（含联盟活动的 Remote 实体与业务文件），replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后对整个工程 build / vet，执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 DAO / 组件 / Sender / Nest / 实体定时器 / Remote 实体生成时手动跑。
 
-- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet（缺省模式不运行它们）。
+- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet；联盟的补报截止跟随协调器的 `ReservationTTL`（纯内存用例 `TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`，缺省模式就跑；其余联盟用例缺省模式只编译与 vet）。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；离线恢复用真实 DAO 的序列化 / 水合接口重建实体，再由用例手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递；单进程，无 Redis / NATS。[业务文件与测试](../../scripts/testdata/slg/)中的数值是样例。
 
 ### 12. 真实依赖与恢复验收
@@ -312,7 +343,7 @@ ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh
 
 | 用例 | 实际走过的流程 | 关键断言 |
 | --- | --- | --- |
-| `TestSLGAllianceActivity` | 业务 Redis CAS 联盟；正式 Activity RPC 经真实 NATS 调用协调器子进程（两个静态 sid 客户端各一条 NATS 连接，同在父进程）；协调器正常排空重启两次 | 八路并发同一战果只留一个意图；错服、换玩家复用身份、退盟后新贡献、冻结后新贡献被拒；退盟撤 `alliance` 来源而 `scout` 保留，最后来源撤销才消失；Receiver 解码的视野帧与权限一致，权限读取失败时不发布，重连收到新 Full、旧 epoch 帧被拒；注入“协调器已应用、本地未确认”后，冻结但有未报意图时阶段被拒；重启协调器后超过 1 小时的意图拒绝自动补报，正常补报每人 Score 10、Applies 1；一个服通知后仍 collecting；原服写义务后不 ACK、再重启协调器，`OwedDispatches` 找回原窗口，投递 token 不变、Attempts 为 2，重投不改义务记录版本，错 token 拒绝，重复 ACK 幂等 |
+| `TestSLGAllianceActivity` | 业务 Redis CAS 联盟；正式 Activity RPC 经真实 NATS 调用协调器子进程（两个静态 sid 客户端各一条 NATS 连接，同在父进程）；协调器正常排空重启两次 | 八路并发同一战果只留一个意图；错服、换玩家复用身份、退盟后新贡献、冻结后新贡献被拒；退盟撤 `alliance` 来源而 `scout` 保留，最后来源撤销才消失；Receiver 解码的视野帧与权限一致，权限读取失败时不发布，重连收到新 Full、旧 epoch 帧被拒；注入“协调器已应用、本地未确认”后，冻结但有未报意图时阶段被拒；重启协调器后超过协调器保留期（`coordinatorReservationTTL`，1 小时）的意图拒绝自动补报，正常补报每人 Score 10、Applies 1；一个服通知后仍 collecting；原服写义务后不 ACK、再重启协调器，`OwedDispatches` 找回原窗口，投递 token 不变、Attempts 为 2，重投不改义务记录版本，错 token 拒绝，重复 ACK 幂等 |
 | `TestSLGAlliancePlayerDelivery` | 上一行的同一条流程，ACK 之后继续：每个原服依次起 write / recover / verify 三个子进程，各用自己的 strict 文件 WAL 与真实 Mongo | write：注入 Player 不可用时义务不标完成、版本不变；建档与到账两条 strict 记录已确认、投影数 0、未投影 2、原服未标完成时被父进程 SIGKILL。recover：冷加载后完整钱包与崩溃前一致（HomeSID、10 金币、一个到账身份），再从义务账本发现 1 条待发并重投（余额不变）；八路并发重放、错服、改归属、同窗口改金额都不改钱包。verify：第三个进程发现 0 条待发，钱包不变 |
 | `TestSLGAllianceRemoteDelivery` | 联盟权威换成生成的 Remote 托管实体（sid 2000 首次拥有并进入共享）；冻结后、补报之前在同一父进程内 `TransferRemoteOwnership` 到 sid 2001，再继续补报、阶段、原服义务与两个原服的 Player 到账（同上一行） | 初始 lease 为 sid 2000 且共享；交接后 marker 与 route epoch 都上升；旧 Runtime 仍在运行时写入被拒；sid 2001 冷加载的联盟事实（成员、冻结状态、待报意图）与交接前序列化后一致；八路并发同一战果经业务版本冲突重试后全部成功、只计一次 |
 

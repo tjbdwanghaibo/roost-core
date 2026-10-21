@@ -57,13 +57,18 @@ func newBus(t *testing.T, prefix, kind string, sid int32) (*bus.Bus, *natsdriver
 	t.Cleanup(b.Stop)
 	return b, n
 }
+
+// coordinatorReservationTTL 是本例协调器的去重保留期；联盟按它停止自动补报（newAlliance 的同名参数）。
+const coordinatorReservationTTL = time.Hour
+
 func coordinatorProcess(t *testing.T, prefix string) {
 	r := redisClient(t)
-	s, e := activity.NewRedisStores(r, prefix, time.Hour)
+	// 存储 TTL 不能短于 ReservationTTL；联盟的补报截止也取同一个值（coordinatorReservationTTL）。
+	s, e := activity.NewRedisStores(r, prefix, coordinatorReservationTTL)
 	check(t, e)
 	groups, e := activity.ParseGroups([]byte("groups:\n  - id: alliance\n    game_sids: [1000, 1001]\n"), "fixture")
 	check(t, e)
-	svc, e := activity.New(activity.Config{Activities: s.Activities, Participants: s.Participants, Ledger: s.Ledger, Audits: s.Audits, Dispatches: s.Dispatches, Windows: s.Windows, Groups: &groups, ReservationTTL: time.Hour, DispatchBackoff: time.Second})
+	svc, e := activity.New(activity.Config{Activities: s.Activities, Participants: s.Participants, Ledger: s.Ledger, Audits: s.Audits, Dispatches: s.Dispatches, Windows: s.Windows, Groups: &groups, ReservationTTL: coordinatorReservationTTL, DispatchBackoff: time.Second})
 	check(t, e)
 	b, n := newBus(t, prefix, activity.ServiceType, 9000)
 	check(t, activity.RegisterHandlers(b, svc))
