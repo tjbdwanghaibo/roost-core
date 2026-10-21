@@ -58,6 +58,7 @@ type BeatRunner struct {
 	elapsed time.Duration
 
 	userTransition func(ActionSnapshot, bool)
+	userFreeze     func(ActionGroup, bool)
 	userPopulate   func(*ActionContext, time.Time)
 	userContext    func(time.Time) *ActionContext
 }
@@ -69,8 +70,10 @@ type groupBeat struct {
 	interval time.Duration
 }
 
-// NewBeatRunner 构造 ActionRunner 并把它接到实体心跳上。config 的 Hooks 照常生效：BeatRunner 只在 OnTransition 与
-// 上下文钩子外面包一层（先启停组的心跳 / 填 Owner 与 Elapsed，再调业务的钩子）。Context 钩子返回的上下文被复制后
+// NewBeatRunner 构造 ActionRunner 并把它接到实体心跳上。config 的 Hooks 照常生效：BeatRunner 只在 OnTransition、
+// OnFreeze 与上下文钩子外面包一层（先启停组的心跳 / 填 Owner 与 Elapsed，再调业务的钩子）。冻结的组停心跳（暂停的
+// 当前动作不被 tick，没必要占调度），解冻后按当前动作重新挂上；解冻后的第一拍 Elapsed 从重新启动算起，暂停期间的
+// 时间不计入。Context 钩子返回的上下文被复制后
 // 同样补上这两项。
 func NewBeatRunner(config ActionRunnerConfig, beat BeatConfig) (*BeatRunner, error) {
 	if beat.Host == nil {
@@ -93,10 +96,12 @@ func NewBeatRunner(config ActionRunnerConfig, beat BeatConfig) (*BeatRunner, err
 		onError:        config.Hooks.OnError,
 		groups:         make(map[ActionGroup]*groupBeat),
 		userTransition: config.Hooks.OnTransition,
+		userFreeze:     config.Hooks.OnFreeze,
 		userPopulate:   config.Hooks.PopulateContext,
 		userContext:    config.Hooks.Context,
 	}
 	config.Hooks.OnTransition = b.transition
+	config.Hooks.OnFreeze = b.freeze
 	config.Hooks.PopulateContext = b.populate
 	config.Hooks.Context = nil
 	runner, err := NewActionRunner(config)
@@ -135,7 +140,7 @@ func (b *BeatRunner) Sync() error {
 	var errs []error
 	for _, group := range b.sortedGroups() {
 		gb := b.groups[group]
-		if gb.current != 0 && gb.interval > 0 && !gb.reg.Active() {
+		if gb.current != 0 && gb.interval > 0 && !gb.reg.Active() && !b.runner.Frozen(group) {
 			errs = append(errs, b.startGroup(gb))
 		}
 	}
@@ -155,7 +160,7 @@ func (b *BeatRunner) transition(s ActionSnapshot, entering bool) {
 		}
 	case entering:
 		gb.current, gb.interval = s.ID, b.intervalOf(s.Action)
-		if gb.interval == 0 {
+		if gb.interval == 0 || b.runner.Frozen(s.Group) {
 			gb.reg.Stop()
 		} else if err := b.startGroup(gb); err != nil {
 			b.report(err)
@@ -167,6 +172,24 @@ func (b *BeatRunner) transition(s ActionSnapshot, entering bool) {
 	}
 	if b.userTransition != nil {
 		b.userTransition(s, entering)
+	}
+}
+
+// freeze 在组冻结时停这个组的心跳，解冻时按当前动作重新挂上（挂不上同 transition，以失败结束当前动作）。
+func (b *BeatRunner) freeze(group ActionGroup, frozen bool) {
+	if gb := b.groups[group]; gb != nil {
+		switch {
+		case frozen:
+			gb.reg.Stop()
+		case gb.current != 0 && gb.interval > 0:
+			if err := b.startGroup(gb); err != nil {
+				b.report(err)
+				b.failCurrent(group, err)
+			}
+		}
+	}
+	if b.userFreeze != nil {
+		b.userFreeze(group, frozen)
 	}
 }
 

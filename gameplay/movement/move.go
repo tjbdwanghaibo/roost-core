@@ -249,7 +249,8 @@ func (m *Move) Advance(token uint64, elapsed time.Duration) Result {
 // walkPath 沿路径走 budget 格。
 func (m *Move) walkPath(budget float64) {
 	from := m.st.cell
-	for budget > 0 && m.st.next < len(m.st.path) {
+	// 与当前位置重合的途经点不耗距离，0 时长（动作 Start 时的核对）也照样越过，已经在终点即到达。
+	for m.st.next < len(m.st.path) {
 		goal := m.st.path[m.st.next]
 		used, reached, blocked := m.advance(float64(goal.X), float64(goal.Y), budget, 0)
 		budget -= used

@@ -109,9 +109,9 @@ func TestBlackboardConcurrentAccessKeepsEveryWorkersWrite(t *testing.T) {
 type doneAction struct{ starts int }
 
 func (*doneAction) Kind() coreflow.ActionKind { return 1 }
-func (a *doneAction) Start(*coreflow.ActionContext) error {
+func (a *doneAction) Start(*coreflow.ActionContext) (bool, coreflow.ActionResult, error) {
 	a.starts++
-	return nil
+	return false, coreflow.ActionResult{}, nil
 }
 func (*doneAction) Tick(*coreflow.ActionContext) (bool, coreflow.ActionResult) {
 	return true, coreflow.ActionResult{Status: coreflow.ActionStatusSuccess}

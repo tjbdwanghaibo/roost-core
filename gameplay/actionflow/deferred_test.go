@@ -53,7 +53,7 @@ func (a *callbackStarter) fire(where string) {
 	}
 }
 
-func (a *callbackStarter) Start(ctx *ActionContext) error {
+func (a *callbackStarter) Start(ctx *ActionContext) (bool, ActionResult, error) {
 	a.fire("start")
 	return a.runnerTestAction.Start(ctx)
 }
@@ -178,7 +178,7 @@ func TestDeferredStartThatCanNoLongerRunStillEndsItsID(t *testing.T) {
 			ended[s.ID] = reason
 			if deferredID == 0 {
 				deferredID, _ = runner.Start(1, next, 0, time.Now())
-				runner.Freeze(1)
+				runner.Freeze(1, FreezePause)
 			}
 		},
 		OnError: func(err error) { reported = append(reported, err) },
@@ -370,9 +370,9 @@ type countingFailAction struct {
 	starts *int
 }
 
-func (a *countingFailAction) Start(*ActionContext) error {
+func (a *countingFailAction) Start(*ActionContext) (bool, ActionResult, error) {
 	*a.starts++
-	return errStartRefused
+	return false, ActionResult{}, errStartRefused
 }
 
 func newActionOnlyRegistry(t *testing.T) *Registry {
@@ -476,9 +476,9 @@ type cancelReentersAction struct {
 	innerErr  error
 }
 
-func (a *cancelReentersAction) Start(*ActionContext) error {
+func (a *cancelReentersAction) Start(*ActionContext) (bool, ActionResult, error) {
 	a.starts++
-	return errStartRefused
+	return false, ActionResult{}, errStartRefused
 }
 
 func (a *cancelReentersAction) Cancel(ctx *ActionContext, reason string) {
@@ -548,7 +548,7 @@ func TestQueuedStartFailureWhoseCancelStartsAnotherActionKeepsThatAction(t *test
 	next := &runnerTestAction{label: "next"}
 	after := &runnerTestAction{label: "after"}
 	failing := &cancelReentersAction{runner: runner, next: next}
-	runner.Freeze(1)
+	runner.Freeze(1, FreezePause)
 	failingID, err := runner.Enqueue(1, failing, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +592,7 @@ func (a *reentrantAction) reenter(where string) {
 	_, a.innerErr = a.runner.Start(1, a.next, 0, time.Now())
 }
 
-func (a *reentrantAction) Start(ctx *ActionContext) error {
+func (a *reentrantAction) Start(ctx *ActionContext) (bool, ActionResult, error) {
 	a.reenter("start")
 	return a.runnerTestAction.Start(ctx)
 }

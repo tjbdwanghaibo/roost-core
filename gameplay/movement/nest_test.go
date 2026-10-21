@@ -368,6 +368,100 @@ func TestFollowActionEndsWhenTheTargetIsUnloaded(t *testing.T) {
 	}
 }
 
+// Start 即完成（D21 A7）：已经在终点的 MoveTo、找不到目标的 Follow、目标已在 Keep 以内且 StopWhenReached 的 Follow，
+// 在发起它的 handler 里就结束（OnEnded 在同一事务里），不挂心跳、Move 不处于移动中。
+func TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat(t *testing.T) {
+	f := newNestFixture(t, 1000)
+	target := f.add(8, moverOptions{})
+	e := f.add(9, moverOptions{})
+	f.mustRun(target, func(m *mover) error { return m.mb.Enter(1, &spaceLog{}, spatial.Point{X: 4, Y: 3}) })
+	var inHandler []int
+	f.mustRun(e, func(m *mover) error {
+		if err := m.mb.Enter(1, &spaceLog{}, spatial.Point{X: 3, Y: 3}); err != nil {
+			return err
+		}
+		for _, start := range []struct {
+			kind  actionflow.ActionKind
+			param any
+		}{
+			{actMoveTo, MoveToParam{Path: []spatial.Point{{X: 3, Y: 3}, {X: 3, Y: 3}}, Speed: 10}},
+			{actFollow, FollowParam{Target: mustID(t, 404), Speed: 10}},
+			{actFollow, FollowParam{Target: target.ID(), Speed: 10, Keep: 2, StopWhenReached: true}},
+		} {
+			if _, err := m.beat.Runner().Start(start.kind, start.param, 0, time.Time{}); err != nil {
+				return err
+			}
+			inHandler = append(inHandler, len(m.endedActions()))
+		}
+		if m.move.Moving() {
+			return errors.New("a settled move left the Move component moving")
+		}
+		return nil
+	})
+	f.settle(e)
+	if fmt.Sprint(inHandler) != "[1 2 3]" || f.driver.Registered() != 0 {
+		t.Fatalf("ended inside the handler after each start: %v; registered %d", inHandler, f.driver.Registered())
+	}
+	got := e.endedActions()
+	want := []endedAction{
+		{id: 1, kind: actMoveTo, status: actionflow.ActionStatusSuccess, reason: Arrived.String()},
+		{id: 2, kind: actFollow, status: actionflow.ActionStatusFailed, reason: TargetLost.String()},
+		{id: 3, kind: actFollow, status: actionflow.ActionStatusSuccess, reason: Arrived.String()},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("ended %+v, want %+v", got, want)
+	}
+}
+
+// 冻结移动组（D21 A5，经真实心跳）：暂停时这个组的心跳停掉（驱动上没有登记）、位置不再变；解冻后重新挂上并走到
+// 终点；打断模式取消在途移动（取消状态、原因 action group frozen），Move 停下、心跳停掉。
+func TestFreezingTheMoveGroupPausesOrInterruptsTheMove(t *testing.T) {
+	f := newNestFixture(t, 1000)
+	e := f.add(10, moverOptions{})
+	f.mustRun(e, func(m *mover) error {
+		if err := m.mb.Enter(1, &spaceLog{}, spatial.Point{}); err != nil {
+			return err
+		}
+		_, err := m.beat.Runner().Start(actMoveTo, MoveToParam{Path: []spatial.Point{{X: 0, Y: 60}}, Speed: 40}, 0, time.Time{})
+		return err
+	})
+	waitFor(t, "the move to get going", func() bool { return e.mb.Published().Pos.Y >= 2 })
+	f.mustRun(e, func(m *mover) error { return m.beat.Runner().Freeze(groupMove, actionflow.FreezePause) })
+	f.settle(e)
+	paused := e.mb.Published().Pos
+	if f.driver.Registered() != 0 || len(e.endedActions()) != 0 {
+		t.Fatalf("paused move: registered %d ended %+v", f.driver.Registered(), e.endedActions())
+	}
+	// 心跳已停（上面断言了驱动上没有登记），再经一条消息读一次：位置没有变。
+	if at := read(f, e, func(m *mover) spatial.Point { return m.mb.Pos() }); at != paused || !e.move.Moving() {
+		t.Fatalf("paused at %+v, then %+v moving %v", paused, at, e.move.Moving())
+	}
+	f.mustRun(e, func(m *mover) error { return m.beat.Runner().Recover(groupMove, time.Time{}) })
+	waitFor(t, "the resumed move to arrive", func() bool { return len(e.endedActions()) == 1 })
+	f.settle(e)
+	if got := e.endedActions()[0]; got.status != actionflow.ActionStatusSuccess || e.mb.Published().Pos != (spatial.Point{X: 0, Y: 60}) || f.driver.Registered() != 0 {
+		t.Fatalf("resumed move ended %+v at %+v registered %d", got, e.mb.Published(), f.driver.Registered())
+	}
+
+	f.mustRun(e, func(m *mover) error {
+		_, err := m.beat.Runner().Start(actMoveTo, MoveToParam{Path: []spatial.Point{{X: 0, Y: 0}}, Speed: 40}, 0, time.Time{})
+		return err
+	})
+	waitFor(t, "the second move to get going", func() bool { return e.mb.Published().Pos.Y <= 58 })
+	f.mustRun(e, func(m *mover) error { return m.beat.Runner().Freeze(groupMove, actionflow.FreezeCancel) })
+	f.settle(e)
+	ended := e.endedActions()
+	if len(ended) != 2 || ended[1].status != actionflow.ActionStatusCanceled || ended[1].reason != "action group frozen" || e.move.Moving() || f.driver.Registered() != 0 {
+		t.Fatalf("interrupted move: ended %+v moving %v registered %d", ended, e.move.Moving(), f.driver.Registered())
+	}
+	if err := f.run(e, func(m *mover) error {
+		_, err := m.beat.Runner().Start(actMoveTo, MoveToParam{Path: []spatial.Point{{X: 0, Y: 0}}, Speed: 40}, 0, time.Time{})
+		return err
+	}); !errors.Is(err, actionflow.ErrActionGroupFrozen) {
+		t.Fatalf("move while frozen: %v", err)
+	}
+}
+
 // frameSink 解开推给会话的帧，记下每个会话看到的每个实体的最新位置（positionPacker 的载荷）。
 type frameSink struct {
 	mu   sync.Mutex

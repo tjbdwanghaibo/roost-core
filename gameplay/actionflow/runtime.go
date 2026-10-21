@@ -19,11 +19,39 @@ type ActionContext struct {
 }
 
 // Action 是一个动作：Start 启动，Tick 推进并报告是否结束及结果，Cancel 取消。
+//
+// Start 的三种结论（D21 A7，维护者 2026-10-21 决定改签名）：
+//   - err != nil：没能启动。runner 调 Cancel 收尾，以失败结束（OnEnded 失败状态），Start / Enqueue 的错误就是它；
+//   - done == true：启动即完成（瞬时动作，例如传送、改朝向）。runner 不再 tick 它，立即以 result 结束（状态为空
+//     时算成功），照常发 OnEnded、通知任务，再推进本组队列；不调 Cancel；
+//   - 否则：进入运行，之后由 Tick 报告结束。
 type Action interface {
 	Kind() ActionKind
-	Start(ctx *ActionContext) error
+	Start(ctx *ActionContext) (done bool, result ActionResult, err error)
 	Tick(ctx *ActionContext) (done bool, result ActionResult)
 	Cancel(ctx *ActionContext, reason string)
+}
+
+// ReplaceDecision 是当前动作对“被同组新动作取代”的答复（Replacer）。
+type ReplaceDecision uint8
+
+const (
+	// ReplaceAllow：取代（缺省，与不实现 Replacer 相同）。
+	ReplaceAllow ReplaceDecision = iota
+	// ReplaceKeep：保留当前动作，新动作不启动、以取消状态结束（拿到的 ID 照样有一次 OnEnded；Start 返回 nil）。
+	// 用于“同一个请求不必重来”，例如同目的地的移动。
+	ReplaceKeep
+	// ReplaceReject：保留当前动作，拒绝新动作：直接调用时 Start 返回 ErrReplaceRejected；回调里延后的 Start 以
+	// 失败状态结束。用于“手动操作不被 AI 的同类动作打断”。
+	ReplaceReject
+)
+
+// Replacer 由动作可选实现（D21 A2，对照 ssr 的 CanCancelByNext / TryCancel）：同组的新动作要取代它时先问它。
+// 只在 Start 取代当前动作时询问；End / EndAll / EndAction / 冻结打断 / 跨组抢占（Conflict 的 PreemptRunning）都是
+// 强制结束，不问。ReplaceBy 只做判断，不改 runner（回调期间的变更照常延后），panic 按 ReplaceAllow 处理并经 OnError
+// 报告。
+type Replacer interface {
+	ReplaceBy(ctx *ActionContext, next ActionSnapshot) ReplaceDecision
 }
 
 // TickIntervaler 由动作可选实现，告诉 BeatRunner 自己所在的组要多久 tick 一次（在动作成为当前动作时读一次）：
@@ -34,27 +62,29 @@ type TickIntervaler interface {
 	TickInterval() time.Duration
 }
 
-// ActionList 是业务对 ActionRunner / MissionRunner 的接线。动作回调与 runner 钩子里调用
-// CreateAction / EnqueueAction / EndCurAction / EndAllAction / ClearNextActions 时，ActionRunner
-// 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID
-// 送达（见 ActionRunner 的说明）。任务回调与 MissionRunner 钩子里调用 SetMission /
-// EndCurMission 同样延后（见 MissionRunner 的说明）：SetMission 返回 nil，执行时的错误经
-// MissionRunner 的 OnError 报告。
+// ActionList 是业务对 ActionRunner / MissionRunner 的接线，框架的实现是 Agent（D21 A1）。动作回调与 runner 钩子里
+// 调用 CreateAction / EnqueueAction / EndCurAction / EndAction / EndAllAction / ClearNextActions 时，ActionRunner
+// 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID 送达（见 ActionRunner
+// 的说明）。任务回调与 MissionRunner 钩子里调用 SetMission / EndCurMission 同样延后（见 MissionRunner 的说明）：
+// SetMission 返回 nil，执行时的错误经 MissionRunner 的 OnError 报告。
 //
-// 清场：EndAllAction 期间回调发起的动作会在它返回后启动；要什么都不再运行，先
-// EndCurMission，再 EndAllAction。
+// 清场：EndAllAction 期间回调发起的动作会在它返回后启动；要什么都不再运行，先 EndCurMission，再 EndAllAction
+// （Agent.Clear 按这个顺序）。
 type ActionList interface {
 	Entity() entity.IThreadSafeEntity
 	CreateAction(kind ActionKind, param any) (int64, error)
 	EnqueueAction(kind ActionKind, param any) (int64, error)
 	CurAction(group ActionGroup) Action
 	EndCurAction(group ActionGroup, force bool, reason ActionReason)
+	// EndAction 按 ID 结束当前或排队中的动作（D21 A4，对照 ssr EndAction）；找不到时返回 ErrActionNotFound。
+	EndAction(id int64, force bool, reason ActionReason) error
 	EndAllAction(force bool, reason ActionReason)
 	ClearNextActions()
 	UpdateAction(group ActionGroup, f func(Action) error) error
-	Frozen(group ActionGroup)
-	Recover(group ActionGroup)
-	GetFrozen(group ActionGroup) bool
+	// Freeze / Recover 是计数的冻结（D21 A5）：每次 Freeze 都要有一次 Recover，计数归零才解冻。
+	Freeze(group ActionGroup, mode FreezeMode) error
+	Recover(group ActionGroup) error
+	Frozen(group ActionGroup) bool
 
 	MissionManager() MissionManager
 	SetMission(kind MissionKind, param any) error

@@ -35,7 +35,8 @@ type FollowParam struct {
 // ActionRunnerConfig.GroupForKind 里（通常放进同一个“移动”组，新的移动动作取代旧的）。
 //
 // 移动由动作驱动（参考 ssr）：动作所在组由实体的 actionflow.BeatRunner 按 Period 挂心跳；Start 在实体的 Move 上
-// 设定这次移动，每拍 Tick 调 Move.Advance(ctx.Elapsed)，移动结束即动作结束——Arrived 为成功，Replaced 为取消，
+// 设定这次移动并按 0 时长核对一次（已经到达 / 目标已不在时启动即完成，不挂心跳），之后每拍 Tick 调
+// Move.Advance(ctx.Elapsed)，移动结束即动作结束——Arrived 为成功，Replaced 为取消，
 // 其余（被阻挡、离开场景、目标消失、写位置被拒）为失败，原因是 StopReason。动作被取消（含被同组新动作取代）时
 // 停掉自己那次移动。实体实现 MoveOwner。
 func RegisterActions(registry *actionflow.Registry, moveTo, follow actionflow.ActionKind) error {
@@ -78,10 +79,13 @@ func (a *moveAction) TickInterval() time.Duration {
 	return DefaultMovePeriod
 }
 
-func (a *moveAction) Start(ctx *actionflow.ActionContext) error {
+// Start 在实体的 Move 上设定这次移动，随即按 0 时长核对一次（D21 A7：Start 即完成）：已经在终点（路径上的点都是
+// 当前格）、跟随的目标已在 Keep 以内且 StopWhenReached、目标已消失或不在本场景时，动作不进入运行，直接以 Advance
+// 的结论结束，不占心跳。
+func (a *moveAction) Start(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult, error) {
 	owner, ok := ctx.Owner.(MoveOwner)
 	if !ok || owner.MoveComponent() == nil {
-		return fmt.Errorf("movement: action owner %T has no move component", ctx.Owner)
+		return false, actionflow.ActionResult{}, fmt.Errorf("movement: action owner %T has no move component", ctx.Owner)
 	}
 	a.move = owner.MoveComponent()
 	var err error
@@ -90,12 +94,20 @@ func (a *moveAction) Start(ctx *actionflow.ActionContext) error {
 	} else {
 		a.token, err = a.move.Follow(a.follow.Target, a.follow.Speed, a.follow.Keep, a.follow.StopWhenReached)
 	}
-	return err
+	if err != nil {
+		return false, actionflow.ActionResult{}, err
+	}
+	done, result := actionResult(a.move.Advance(a.token, 0))
+	return done, result, nil
 }
 
 // Tick 按这一拍的 Elapsed 推进移动；不是心跳 tick（Elapsed 为 0）时只核对移动是否还在。
 func (a *moveAction) Tick(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult) {
-	result := a.move.Advance(a.token, ctx.Elapsed)
+	return actionResult(a.move.Advance(a.token, ctx.Elapsed))
+}
+
+// actionResult 把 Move 的结论换成动作结论：Arrived 成功，Replaced 取消，其余失败（原因是 StopReason）。
+func actionResult(result Result) (bool, actionflow.ActionResult) {
 	switch result.Reason {
 	case 0:
 		return false, actionflow.ActionResult{}

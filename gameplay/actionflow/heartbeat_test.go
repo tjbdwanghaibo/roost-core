@@ -26,9 +26,9 @@ type probeAction struct {
 }
 
 func (a *probeAction) Kind() ActionKind { return 1 }
-func (a *probeAction) Start(ctx *ActionContext) error {
+func (a *probeAction) Start(ctx *ActionContext) (bool, ActionResult, error) {
 	a.owner = ctx.Owner
-	return nil
+	return false, ActionResult{}, nil
 }
 func (a *probeAction) Cancel(*ActionContext, string) {}
 func (a *probeAction) Tick(ctx *ActionContext) (bool, ActionResult) {
@@ -143,5 +143,43 @@ func TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed(t *testing.T) {
 	}
 	if b.Ticking() || d.Registered() != 0 {
 		t.Fatalf("all actions ended but registered %d", d.Registered())
+	}
+}
+
+// 冻结的组停心跳（D21 A5）：暂停期间驱动上没有这个组的登记，迟到的拍不 tick；解冻后按当前动作重新挂上；打断模式
+// 取消当前动作后组空闲，解冻也不再挂。
+func TestAFrozenGroupStopsBeatingAndResumesOnRecover(t *testing.T) {
+	b, d, _ := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1})
+	var log []string
+	walking := &probeAction{name: "walking", log: &log}
+	if _, err := b.Runner().Start(1, walking, 0, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Runner().Freeze(1, FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	if b.Reg(1).Active() || d.Registered() != 0 {
+		t.Fatalf("paused group: active %v registered %d", b.Reg(1).Active(), d.Registered())
+	}
+	if err := b.beat(1, heartbeat.Beat{Now: time.Unix(1_800_000_000, 0), Elapsed: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Sync(); err != nil || b.Reg(1).Active() {
+		t.Fatalf("Sync re-armed a frozen group: %v active %v", err, b.Reg(1).Active())
+	}
+	if err := b.Runner().Recover(1, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if !b.Reg(1).Active() || d.Registered() != 1 || len(log) != 0 {
+		t.Fatalf("recovered group: active %v registered %d ticks %v", b.Reg(1).Active(), d.Registered(), log)
+	}
+	if err := b.Runner().Freeze(1, FreezeCancel); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Runner().Recover(1, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if b.Runner().Current(1) != nil || b.Reg(1).Active() || d.Registered() != 0 {
+		t.Fatalf("after an interrupting freeze: current %v active %v registered %d", b.Runner().Current(1), b.Reg(1).Active(), d.Registered())
 	}
 }

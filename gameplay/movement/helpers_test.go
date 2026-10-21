@@ -177,8 +177,10 @@ type tickSeen struct {
 	inTx    bool
 }
 
-func (a *tickAction) Kind() actionflow.ActionKind              { return actTick }
-func (a *tickAction) Start(*actionflow.ActionContext) error    { return nil }
+func (a *tickAction) Kind() actionflow.ActionKind { return actTick }
+func (a *tickAction) Start(*actionflow.ActionContext) (bool, actionflow.ActionResult, error) {
+	return false, actionflow.ActionResult{}, nil
+}
 func (a *tickAction) Cancel(*actionflow.ActionContext, string) {}
 func (a *tickAction) Tick(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult) {
 	a.mu.Lock()
