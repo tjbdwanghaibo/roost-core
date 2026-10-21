@@ -470,6 +470,8 @@ type npcProc struct {
 	driver   *heartbeat.Driver
 	remote   *remoteentity.Manager
 	registry *actionflow.Registry
+	client   *recordingClient
+	control  *npcControl
 	loads    atomic.Int32
 	loadMu   sync.Mutex
 	// onLoad 是实例构造后、发布前的初始化（相当于 OnInitFinish 里按 DAO 恢复的部分）；nil 表示什么都不挂。
@@ -477,7 +479,7 @@ type npcProc struct {
 	onLoad func(*remoteNPC)
 }
 
-func newNPCProc(t *testing.T, name string, sid int32, log *npcLog, managers npcManagerFactory, shortWorkers int) *npcProc {
+func newNPCProc(t *testing.T, name string, sid int32, log *npcLog, managers npcManagerFactory, shortWorkers int, delivery heartbeat.Delivery) *npcProc {
 	t.Helper()
 	p := &npcProc{t: t, name: name, sid: sid, log: log, entities: entity.NewEntityManager(), registry: npcRegistry(t)}
 	p.remote = managers(t, sid, p)
@@ -491,16 +493,105 @@ func newNPCProc(t *testing.T, name string, sid int32, log *npcLog, managers npcM
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.engine.Shutdown(context.Background()) })
-	p.driver = heartbeat.NewDriver(heartbeat.Config{Name: fmt.Sprintf("npc-%s-%d", name, time.Now().UnixNano()), Logger: discard})
-	if err := p.driver.Bind(p.engine, p.entities.Get); err != nil {
+	p.driver = heartbeat.NewDriver(heartbeat.Config{Name: fmt.Sprintf("npc-%s-%d", name, time.Now().UnixNano()), Logger: discard, Delivery: delivery})
+	p.client = &recordingClient{NestMgr: p.engine}
+	if err := p.driver.Bind(p.client, p.entities.Get); err != nil {
 		t.Fatal(err)
 	}
+	p.control = newNPCControl(t, p)
 	if err := p.driver.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.driver.Stop(context.Background()) })
 	return p
 }
+
+// recordingClient 记下驱动经哪条路投递了哪个实体的拍：Remote 托管实体的拍必须走单目标 Dispatch（它的写要在 I/O 池
+// 取得 Remote 写批次，Nest 批量作业不接受），批量方式下其余实体走 DispatchTryBatch。
+type recordingClient struct {
+	*nest.NestMgr
+	mu      sync.Mutex
+	single  map[int64]int
+	batched map[int64]int
+}
+
+func (c *recordingClient) note(m *map[int64]int, id int64) {
+	c.mu.Lock()
+	if *m == nil {
+		*m = make(map[int64]int)
+	}
+	(*m)[id]++
+	c.mu.Unlock()
+}
+
+func (c *recordingClient) Dispatch(ctx context.Context, name nest.HandlerName, id int64, params nest.Params, opts ...nest.SendOpt) error {
+	c.note(&c.single, id)
+	return c.NestMgr.Dispatch(ctx, name, id, params, opts...)
+}
+
+func (c *recordingClient) DispatchTryBatch(ctx context.Context, targets []nest.TryBatchTarget, handBack func(nest.TryBatchTarget, error)) error {
+	for _, target := range targets {
+		c.note(&c.batched, target.ID)
+	}
+	return c.NestMgr.DispatchTryBatch(ctx, targets, handBack)
+}
+
+// counts 返回 id 的拍经单目标与批量各投了多少次。
+func (c *recordingClient) counts(id int64) (single, batched int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.single[id], c.batched[id]
+}
+
+// npcControl 是同一进程里的一个本地（非 Remote）实体，带一个 50ms 心跳：证明这个进程的投递方式真的生效（批量方式下
+// 它的拍走 DispatchTryBatch），与 Remote 实体的拍走单目标 Dispatch 对照。
+type npcControl struct {
+	*entity.EntityBase
+	host *heartbeat.Host
+	runs atomic.Int64
+}
+
+func (c *npcControl) Base() *entity.EntityBase             { return c.EntityBase }
+func (c *npcControl) OnDestroy(entity.EntityDestroyReason) { c.host.OnDestroy() }
+
+var npcControlSeq atomic.Int64
+
+func newNPCControl(t *testing.T, p *npcProc) *npcControl {
+	t.Helper()
+	c := &npcControl{EntityBase: entity.NewEntityBase(mustID(t, 900000+npcControlSeq.Add(1)), entity.EntityCategoryOther, true, kindMover)}
+	c.host = p.driver.NewHost(c)
+	r, err := c.host.Register("control", 50*time.Millisecond, func(heartbeat.Beat) error { c.runs.Add(1); return nil })
+	if err == nil {
+		err = r.Start()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.entities.Add(c)
+	return c
+}
+
+// expectDeliveryPaths 核对投递路径：Remote 实体 id 的拍全部单目标 Dispatch、没有一拍进批量作业；本地对照实体在批量
+// 方式下走批量作业、缺省方式下走单目标，并且一直在跳。
+func expectDeliveryPaths(t *testing.T, p *npcProc, delivery heartbeat.Delivery, ids ...int64) {
+	t.Helper()
+	for _, id := range ids {
+		single, batched := p.client.counts(id)
+		if batched != 0 || single == 0 {
+			t.Fatalf("%s: Remote entity %d beats: %d single-target, %d in batch jobs (want all single-target)", p.name, id, single, batched)
+		}
+	}
+	single, batched := p.client.counts(p.control.ID())
+	if delivery == heartbeat.DeliveryBatch && (batched == 0 || single != 0) || delivery != heartbeat.DeliveryBatch && (batched != 0 || single == 0) {
+		t.Fatalf("%s (%s): local control entity beats: %d single-target, %d in batch jobs", p.name, delivery, single, batched)
+	}
+	if p.control.runs.Load() == 0 {
+		t.Fatalf("%s: the local control entity never beat", p.name)
+	}
+}
+
+// npcDeliveries 是场景要跑的投递方式：缺省单目标与批量作业（D20 选项 C，heartbeat.delivery）。
+var npcDeliveries = []heartbeat.Delivery{heartbeat.DeliveryDispatch, heartbeat.DeliveryBatch}
 
 func (p *npcProc) LookupLocalRemoteEntity(id int64, _ entity.EntityKind) entity.IThreadSafeRemoteEntity {
 	if e, ok := p.entities.Get(id).(*remoteNPC); ok {
@@ -777,7 +868,7 @@ func expectRunning(t *testing.T, e *remoteNPC, stage string) {
 }
 
 // expectStoppedByShared 等进入共享模式之后框架停掉 e 上的 want 个登记：驱动的 StoppedShared 与指标各加 want、登记都
-// 不在跳、驱动上不剩这个实体的登记；随后 npcQuiet 窗口里 e 没有任何周期推进、位置不变。返回窗口结束时的位置。
+// 不在跳、驱动上只剩本地对照实体的 1 个登记；随后 npcQuiet 窗口里 e 没有任何周期推进、位置不变。返回窗口结束时的位置。
 func expectStoppedByShared(t *testing.T, p *npcProc, e *remoteNPC, statsBefore heartbeat.Stats, metricBefore int64, want int, sharedMark int64) {
 	t.Helper()
 	waitFor(t, fmt.Sprintf("%s: %d registrations stopped by shared mode", e.who, want), func() bool {
@@ -793,8 +884,8 @@ func expectStoppedByShared(t *testing.T, p *npcProc, e *remoteNPC, statsBefore h
 	if got := stoppedSharedMetric(p.driver) - metricBefore; got != int64(want) {
 		t.Fatalf("%s: heartbeat.stopped_total{reason=remote_shared} +%d, want +%d", e.who, got, want)
 	}
-	if active := e.activeRegs(); len(active) != 0 || st.Registered != 0 {
-		t.Fatalf("%s: still beating in shared mode: active %v, driver registered %d", e.who, active, st.Registered)
+	if active := e.activeRegs(); len(active) != 0 || st.Registered != 1 {
+		t.Fatalf("%s: still beating in shared mode: active %v, driver registered %d (want only the local control entity's)", e.who, active, st.Registered)
 	}
 	if n := e.log.ticks(e.who, sharedMark, 0); n != 0 {
 		t.Fatalf("%s advanced %d times after entering shared mode: %v", e.who, n, e.log.since(sharedMark, e.who))
@@ -829,13 +920,15 @@ func npcResume(e *remoteNPC) error {
 //   - 第二轮共享期间业务发起新的移动：取代任务的移动（取消，任务失败），新移动挂不上心跳、以失败结束，通知顺序为
 //     任务先于观察者、Cancel（停掉移动）先于结束通知。
 func TestRemoteSharedModeRoundTripStopsAndResumesEveryHeartbeat(t *testing.T) {
-	testSharedModeRoundTrip(t, newMemRemoteAuthority().memManagers(), 1)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testSharedModeRoundTrip(t, newMemRemoteAuthority().memManagers(), 1, delivery) })
+	}
 }
 
-func testSharedModeRoundTrip(t *testing.T, managers npcManagerFactory, unique int64) {
+func testSharedModeRoundTrip(t *testing.T, managers npcManagerFactory, unique int64, delivery heartbeat.Delivery) {
 	ctx := context.Background()
 	log := &npcLog{}
-	a := newNPCProc(t, "A", 1001, log, managers, 4)
+	a := newNPCProc(t, "A", 1001, log, managers, 4, delivery)
 	id := npcID(t, unique)
 	a.mustRun(id, npcStart) // 第一次写由 A 认领所有权（独占），并加载实例 A1
 	e := a.instance(id)
@@ -918,6 +1011,7 @@ func testSharedModeRoundTrip(t *testing.T, managers npcManagerFactory, unique in
 		return e.behavior.SetMission(missionGoto, npcPlan())
 	})
 	expectRunning(t, e, "resumed after the second shared window")
+	expectDeliveryPaths(t, a, delivery, id)
 }
 
 // npcRestore 是实例加载时按 DAO 恢复的部分（相当于生成实体的 OnInitFinish，在发布之前、不在事务里）：回到场景（周期
@@ -960,14 +1054,16 @@ func expectNoAutoResume(t *testing.T, e *remoteNPC, left int64) {
 // 实例是 Unknown、登记合法），写准入转为 Shared，B1 的 2 个登记由第一拍停掉 → B 回到独占，不自动恢复 → 业务恢复后
 // B1 接着跳。全程没有双推进：A1 在进入共享之后、B1 在回到独占之前都没有任何周期推进；A 之后的业务写被 fence 拒绝。
 func TestRemoteOwnershipTransferMovesTheHeartbeatsWithoutDoubleAdvance(t *testing.T) {
-	testOwnershipTransfer(t, newMemRemoteAuthority().memManagers(), 2)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testOwnershipTransfer(t, newMemRemoteAuthority().memManagers(), 2, delivery) })
+	}
 }
 
-func testOwnershipTransfer(t *testing.T, managers npcManagerFactory, unique int64) {
+func testOwnershipTransfer(t *testing.T, managers npcManagerFactory, unique int64, delivery heartbeat.Delivery) {
 	ctx := context.Background()
 	log := &npcLog{}
-	a := newNPCProc(t, "A", 1001, log, managers, 4)
-	b := newNPCProc(t, "B", 1002, log, managers, 4)
+	a := newNPCProc(t, "A", 1001, log, managers, 4, delivery)
+	b := newNPCProc(t, "B", 1002, log, managers, 4, delivery)
 	b.setOnLoad(npcRestore)
 	id := npcID(t, unique)
 	a.mustRun(id, npcStart)
@@ -1021,6 +1117,8 @@ func testOwnershipTransfer(t *testing.T, managers npcManagerFactory, unique int6
 	if n := log.ticks(eb.who, 0, left); n != 0 {
 		t.Fatalf("double advance: the new owner's instance advanced %d times before owning it exclusively: %v", n, log.since(0, eb.who))
 	}
+	expectDeliveryPaths(t, a, delivery, id)
+	expectDeliveryPaths(t, b, delivery, id)
 }
 
 // --- 场景三：卸载与重新加载 ---
@@ -1031,13 +1129,15 @@ func testOwnershipTransfer(t *testing.T, managers npcManagerFactory, unique int6
 //   - 共享时卸载：A2 进入共享（5 个登记停掉）后卸载，下一次写加载 A3（加载时恢复场景与 AI，Unknown、登记合法），
 //     写准入转为 Shared，A3 的 2 个登记由第一拍停掉；回到独占不自动恢复，业务恢复后 A3 接着跳。
 func TestRemoteUnloadAndReloadLeavesNoStrayBeat(t *testing.T) {
-	testUnloadAndReload(t, newMemRemoteAuthority().memManagers(), 3)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testUnloadAndReload(t, newMemRemoteAuthority().memManagers(), 3, delivery) })
+	}
 }
 
-func testUnloadAndReload(t *testing.T, managers npcManagerFactory, unique int64) {
+func testUnloadAndReload(t *testing.T, managers npcManagerFactory, unique int64, delivery heartbeat.Delivery) {
 	ctx := context.Background()
 	log := &npcLog{}
-	a := newNPCProc(t, "A", 1001, log, managers, 1)
+	a := newNPCProc(t, "A", 1001, log, managers, 1, delivery)
 	id, blocker := npcID(t, unique), npcID(t, unique+1000)
 	a.mustRun(id, npcStart)
 	a.mustRun(blocker, func(*remoteNPC) error { return nil })
@@ -1118,4 +1218,5 @@ func testUnloadAndReload(t *testing.T, managers npcManagerFactory, unique int64)
 	if n := log.ticks(e2.who, shared, 0) + log.ticks(e3.who, 0, left); n != 0 {
 		t.Fatalf("advanced in shared mode: %v %v", log.since(shared, e2.who), log.since(0, e3.who))
 	}
+	expectDeliveryPaths(t, a, delivery, id)
 }

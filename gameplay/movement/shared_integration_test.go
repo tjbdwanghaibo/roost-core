@@ -93,13 +93,19 @@ func realRemoteManagers(t *testing.T) npcManagerFactory {
 }
 
 func TestRealRemoteSharedModeRoundTripStopsAndResumesEveryHeartbeat(t *testing.T) {
-	testSharedModeRoundTrip(t, realRemoteManagers(t), 11)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testSharedModeRoundTrip(t, realRemoteManagers(t), 11, delivery) })
+	}
 }
 
 func TestRealRemoteOwnershipTransferMovesTheHeartbeatsWithoutDoubleAdvance(t *testing.T) {
-	testOwnershipTransfer(t, realRemoteManagers(t), 12)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testOwnershipTransfer(t, realRemoteManagers(t), 12, delivery) })
+	}
 }
 
 func TestRealRemoteUnloadAndReloadLeavesNoStrayBeat(t *testing.T) {
-	testUnloadAndReload(t, realRemoteManagers(t), 13)
+	for _, delivery := range npcDeliveries {
+		t.Run(string(delivery), func(t *testing.T) { testUnloadAndReload(t, realRemoteManagers(t), 13, delivery) })
+	}
 }
