@@ -35,14 +35,14 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [behavior_strategy.go](../../../gameplay/ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`、`TaskflowAction` |
+| [behavior_strategy.go](../../../gameplay/ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`（含分阶段：`NewStagedStrategy`、`SetStage`、`Stage`、`ErrStageUnknown`、`DefaultMaxEvents`）、`TaskflowAction` |
 | [blackboard.go](../../../gameplay/ai/blackboard.go) | `Blackboard` |
 | [beat.go](../../../gameplay/ai/beat.go) | `BeatConfig`（`NewBeatController`、`DefaultBeatName`、`DefaultBeatPeriod`：AI 独立心跳，D21 第 4 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 12 条） |
 | [controller.go](../../../gameplay/ai/controller.go) | `ControllerHooks`、`Controller`（含 `FreezeFor` / `FrozenUntil`） |
-| [nodes.go](../../../gameplay/ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector` |
-| [strategy.go](../../../gameplay/ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy` |
+| [nodes.go](../../../gameplay/ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector`、`EventReceived`、`SetStage`、`Traced`（后三个 D21 第 5 期） |
+| [strategy.go](../../../gameplay/ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy`、`Event`、`EventStrategy` |
 | [tree.go](../../../gameplay/ai/tree.go) | `Status`、`Node`、`FuncNode`、`Sequence`、`Selector`、`Inverter` |
-| [tree_parser.go](../../../gameplay/ai/tree_parser.go) | `Registry` |
+| [tree_parser.go](../../../gameplay/ai/tree_parser.go) | `Registry`（含 `TraceNodes`）、`Stages`（`ParseTree`、`ParseStages`） |
 
 ### container
 
@@ -186,6 +186,7 @@
 ### ai
 
 - [beat_test.go](../../../gameplay/ai/beat_test.go)：`TestTheAIBeatsAtTheStrategysIntervalAndStopsWhenIdleOrFrozen`、`TestFreezeForRecoversOnTheFirstBeatAfterItEnds`、`TestTheAIDecidesOnItsOwnHeartbeat`
+- [stage_test.go](../../../gameplay/ai/stage_test.go)：`TestEventsReachTheTreeOnTheNextTickAndAreDroppedWhileFrozen`、`TestStagedStrategySwitchesAfterTheTickAndInterruptsTheOldTree`、`TestParseStagesBuildsStagedTreesWithEventAndSetStageLeaves`、`TestTraceReportsEveryNodeWhenTheRegistryTracesNodes`
 - [behavior_test.go](../../../gameplay/ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestBehaviorStrategyDeterministicDecisions`；其余 6 项见文件
 - [controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`、`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`、`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`；其余 5 项见文件
 

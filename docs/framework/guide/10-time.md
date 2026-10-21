@@ -261,6 +261,14 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 - 没有策略、或 `Freeze()`（无定时）时停心跳；`FreezeFor(d, interrupt)` 冻结 `d`，期间心跳照常跳但不决策，到期后的第一拍自动恢复并决策；`interrupt` 为真时同时经 `EndActions` 钩子结束在途动作。`Freeze` / `Recover` 清掉定时。
 - 动作 / 任务结束在冻结期间照常送达策略（原有规则）。
 
+**AI 事件、分阶段与轨迹**（`gameplay/ai`，第 5 期）：
+
+- **事件**：`controller.OnEvent(ai.Event{Kind: EvAttacked, Data: attacker})` 把一个游戏事件交给当前策略（实现 `ai.EventStrategy` 的），返回是否送达；冻结、切换中、没有策略时丢弃（动作 / 任务结束不受影响）。事件词表由业务定义（`Kind uint16`），框架不定义具体事件。`BehaviorStrategy` 把事件缓冲到下一拍（`MaxEvents` 缺省 64，超出丢最早的），树里用 `EventReceived{Kind, Take}` 叶子（JSON `{"node": "event", "kind": 1}`，`"take": true` 取走）或 `BehaviorContext.HasEvent` / `TakeEvent` / `Events` 读；本拍没被取走的在拍结束时丢弃。状态变化要让 AI 知道，就在 `state` 的观察者里 `OnEvent`。
+- **分阶段**（boss 多阶段）：`ai.NewStagedStrategy(map[string]Node{...}, "calm", options)`——若干命名的树，同一时刻只跑当前阶段。树里的 `SetStage` 叶子（JSON `{"node": "set_stage", "stage": "enraged"}`）或 `BehaviorContext.SetStage` 在本拍求值结束后切换；策略外调用 `strategy.SetStage(name)` 立即切换。切换时 Reset 旧树（运行中的 `TaskflowAction` 经 `OnInterrupt` 收尾），`OnStage(from, to)` 报告。JSON 用 `ai.ParseStages`：`{"schema": "roost.ai/v1", "start": "calm", "stages": {"calm": …, "enraged": …}}`，起始阶段与每个 `set_stage` 的目标都要存在；`ParseTree` 不接受 `set_stage`。`NewBehaviorStrategy(root, …)` 是只有一个阶段的特例。
+- **决策轨迹**：`BehaviorStrategyOptions.Trace func(path string, status Status)`；`Registry.TraceNodes()` 之后解析的树每个节点都带轨迹（路径是 JSON 路径，例如 `$.stages["calm"].children[1]`），Go 写的树用 `ai.Traced{Path, Child}` 包。框架不在内存里留轨迹（ssr AIEditor 的日志无上限地追加），由业务按实体采样、写日志或调试命令。
+
+**动作指标**（可选，第 5 期）：`AgentConfig.Metrics: true` 时写 `actionflow.actions.started_total{kind}`、`ended_total{kind,status}` 与 `running`（[OBSERVABILITY](../OBSERVABILITY.md#动作gameplayactionflow可选)），缺省关闭。
+
 **动作的 Start 可以“启动即完成”**（瞬时动作：传送、改朝向、已经在终点的移动）。`Action.Start(ctx) (done bool, result ActionResult, err error)`：`err` 非空是没能启动（以失败结束）；`done` 为真时 runner 不再 tick 它，立即以 `result` 结束（状态为空算成功），照常发 `OnEnded`、通知任务、推进本组队列，不挂心跳。`movement` 的 `MoveTo` / `Follow` 在 Start 时按 0 时长核对一次：已经在终点、目标已在 `Keep` 以内且 `StopWhenReached`、目标已消失或不在本场景，都在发起它的 handler 里结束。
 
 **同组取代：`Replacer`**（对照 ssr 的 `CanCancelByNext`）。当前动作可选实现 `ReplaceBy(ctx, next ActionSnapshot) ReplaceDecision`：

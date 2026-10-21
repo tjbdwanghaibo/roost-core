@@ -1683,6 +1683,55 @@ func PeriodAtMost(want time.Duration) time.Duration                        // �
 
 **待拍板（先按推荐做了）**：③ 被取消的步骤是否重试——现按“不重试、直接 OnFail”（推荐：取消是有意的结束，重试会与发起取消的一方抢）；备选 B：取消也算失败，按 `Retry` 重试。
 
+##### D21-5 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `e95916f7`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
+
+**API 最终形状**：
+
+```go
+// gameplay/ai
+type Event struct{ Kind uint16; Data any }; type EventStrategy interface{ OnEvent(*Context, Event) }
+func (c *Controller) OnEvent(ev Event) bool
+func (b *BehaviorContext[C]) HasEvent(kind uint16) bool / TakeEvent(kind) (Event, bool) / Events() []Event / SetStage(name) error
+type EventReceived[C] struct{ Kind uint16; Take bool }; type SetStage[C] struct{ Stage string }; type Traced[C] struct{ Path string; Child Node[C] }
+func NewStagedStrategy[C](stages map[string]Node[BehaviorContext[C]], start string, options BehaviorStrategyOptions[C]) (*BehaviorStrategy[C], error)
+func (s *BehaviorStrategy[C]) SetStage(name string) error / Stage() string; var ErrStageUnknown; const DefaultMaxEvents = 64
+BehaviorStrategyOptions[C]{…, MaxEvents int, OnStage func(from, to string), Trace func(path string, status Status)}
+func ParseStages[C](data []byte, registry *Registry[C]) (Stages[C]{Roots, Start}, error); func (r *Registry[C]) TraceNodes()
+// JSON：{"node": "event", "kind": n, "take": bool}、{"node": "set_stage", "stage": "名字"}、文档顶层 {"start", "stages"}
+// gameplay/actionflow
+AgentConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricActionsRunning; func (ActionStatus) String() string
+```
+
+**实施中的决定 / 与方案的偏差**：
+
+1. **`StagedStrategy` 不是单独的类型**：方案写 `StagedStrategy[C]`；实现上 `BehaviorStrategy` 本身支持阶段，`NewStagedStrategy` 返回 `*BehaviorStrategy[C]`，`NewBehaviorStrategy(root, …)` 是只有一个阶段（名字为空串）的特例——两者共用缓冲、Reset、结束通知的全部逻辑，不重复一份。
+2. **策略外的 `SetStage` 立即生效**（方案只写了“在回调里调用时延后到本拍结束”）：业务在事件回调或 handler 里切阶段时，没有“本拍”可等。
+3. **事件条件叶子默认不取走**：`EventReceived{Take: false}` 无状态、可以进守卫谓词（JSON 的 `event` 在守卫里只允许不取走）；要“一个事件只触发一次”用 `Take: true`。没有单独做方案里的 `TakeEvent` 叶子，取走是同一个叶子的选项。
+4. **事件缓冲满时丢最早的**、不报告：事件是“唤起决策”的提示，最新的更有用；可靠的事实应在 DAO / state 里。
+5. **轨迹按节点、由解析器包装**（方案 `Trace func(path, status)`）：路径用 JSON 路径，只有开了 `Registry.TraceNodes` 的解析才包，Go 写的树用 `Traced` 自己包；不开时零开销（不包）。
+6. **动作指标缺省关闭**（方案“是否默认开启待定”）：列为待拍板 ④。指标名按命名规范用点号分层（`actionflow.actions.*`）。
+
+**红绿证据**（变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| E1 冻结时仍投递事件 | `TestEventsReachTheTreeOnTheNextTickAndAreDroppedWhileFrozen`：`an event was delivered to a frozen controller` |
+| E2 事件缓冲不设上限 | 同上：`buffer kept [{7 <nil>} {8 <nil>} {6 <nil>}], want the newest two` |
+| E3 树里的切阶段立即生效 | `TestStagedStrategySwitchesAfterTheTickAndInterruptsTheOldTree`：`log [interrupt 101 calm -> enraged still calm after asking interrupt 202 enraged -> calm calm -> ] stage "", want [interrupt 101 still calm after asking calm -> enraged interrupt 202 enraged -> calm]` |
+| E4 切换不 Reset 旧树 | 同上：`log [interrupt 101 still calm after asking calm -> enraged enraged -> calm] stage "calm", want [interrupt 101 still calm after asking calm -> enraged interrupt 202 enraged -> calm]` |
+| E5 不核对 `set_stage` 目标 | `TestParseStagesBuildsStagedTreesWithEventAndSetStageLeaves`：`unknown target: <nil>` |
+| E6 取走事件的 `event` 可做守卫谓词 | 同上：`taking guard: <nil>` |
+| E7 `Traced` 不报告 | `TestTraceReportsEveryNodeWhenTheRegistryTracesNodes`：`trace [], want [$.root.children[0]=2 $.root.children[1]=3 $.root=3]` |
+| E8 `running` 不减 | `TestAgentMetricsCountStartsEndsAndRunningActions`：`metrics map[… actionflow.actions.running:3 …], want map[… actionflow.actions.running:1 …]` |
+
+另：E3 第一次的变异（只改策略外 `SetStage` 的入口）没有让任何用例变红——树里的切阶段走 `requestStage`、不经那个入口，变异没有打到强制点；改在 `requestStage` 上之后变红（上表）。
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`（含指标名门禁）；全量 `GOWORK=off go test -count=1 ./...`（见下文“调研一 · 收尾”）。退出码均为 0。
+
+**待拍板（先按推荐做了）**：④ 动作指标是否缺省开启——现按“缺省关闭、`AgentConfig.Metrics` 打开”（推荐：每个动作两次注册表写入，全服开销没有测量）；备选 B：缺省开启，按需关闭。
+
 ## D22 业务时间取自 ctx、支持变速
 
 **状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**

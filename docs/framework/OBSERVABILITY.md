@@ -202,6 +202,16 @@ DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个
 
 D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`）没有自己的指标，都计在上面这组里：每个组的当前动作需要周期 tick 时有一个 `"actionflow/<组号>"` 登记（移动中的实体就是移动组这一个），配了周期落库的在场景里有一个 `"map.save"` 登记；`registered` 随动作开始 / 结束涨落，空闲实体不计。指标不带登记名标签（低基数），按登记名排查看限频 Warn 里的样本（`sample_registration`）。
 
+### 动作（gameplay/actionflow，可选）
+
+DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.AgentConfig.Metrics` 为 true 的 Agent 写（缺省关闭）：每个动作开始、结束各写一次注册表。标签 `kind` 是动作种类编号（uint8，有界），`status` 是 `idle` / `running` / `success` / `failed` / `canceled` / `expired`。
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `actionflow.actions.started_total{kind}` | Counter | 成为组的当前动作的次数（含 Start 即完成的瞬时动作） |
+| `actionflow.actions.ended_total{kind,status}` | Counter | 结束的动作，按结束状态；含从未启动就被丢弃的排队项与被拒绝的延后 Start，所以可以多于 `started_total` |
+| `actionflow.actions.running` | Gauge | 此刻是某组当前动作的动作数（全部打开指标的 Agent 合计）。只升不降说明有动作卡住（不结束、组被冻结后没有解冻） |
+
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 
 生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 Wiring 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
@@ -234,6 +244,9 @@ D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`�
 
 | 指标 | 类型 | 来源 |
 | --- | --- | --- |
+| `actionflow.actions.ended_total` | Counter | `gameplay/actionflow/agent.go:IncCounter` |
+| `actionflow.actions.running` | Gauge | `gameplay/actionflow/agent.go:AddGauge` |
+| `actionflow.actions.started_total` | Counter | `gameplay/actionflow/agent.go:IncCounter` |
 | `admin.execute.total` | Counter | `admin/admin.go:IncCounter` |
 | `admin.http_refused.total` | Counter | [Ops接线与实现](impl/11-observability.md) |
 | `app.business_time.advance_failed.total` | Counter | `app/business_time.go:IncCounter` |
