@@ -110,14 +110,27 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 	fact.releasePublication = e.Base().Sync().HoldSyncPublication()
 	in.queueActive = true
 	in.facts = append(in.facts, fact)
-	// 只通知应用线程，不在业务线程（Nest worker）上做任何 AOI 工作。
-	in.signalApplierLocked()
+	// 两种模式都不在业务线程（Nest worker）上做 AOI 工作：异步模式只通知应用线程；同步模式由 Manager 的政策阶段应用，
+	// 已确认时提醒 Manager（on_change 下尽快 Flush，periodic 下无效果）。
+	if in.applyMode == ApplyAsync {
+		in.signalApplierLocked()
+	} else if ready, _ := fact.condition(); ready {
+		in.wake()
+	}
 	return nil
 }
 
-// ---- 排队事实的应用线程（DESIGN-TODO D19“排队事实异步应用”）----
+// ---- 排队事实的应用（DESIGN-TODO D19“两种应用模式”）----
 //
-// 排队事实不在 Flush 里应用：每个 Interest 有一个应用线程（第一条排队事实时启动），一步取一批已确认的事实
+// 两种模式共用同一个取批与应用步骤（applyBatchLocked）和同一个结算入口（applyLocked → releaseAppliedLocked），
+// 只是谁、何时调用 applyBatchLocked 不同：
+//
+//   - ApplySync：settleQueued（Manager Flush 的政策阶段）先在 mu 内应用一批，再结算；没有应用线程。
+//   - ApplyAsync：应用线程调用（下文），settleQueued 只结算。
+//
+// 所以“只有提交后的事实生效、同实体按序、Leave / Hide 改写、屏障到结算之后才释放、Drain、Close”两种模式逐项相同。
+//
+// 异步模式：排队事实不在 Flush 里应用：每个 Interest 有一个应用线程（第一条排队事实时启动），一步取一批已确认的事实
 // （≤ BatchSize），在 mu 内做 AOI 写阶段与并行重评；AOI 事件留在 AOI 的事件缓冲里，应用完的事实记入 applied，
 // 发布屏障仍然持有。Manager Flush 的政策阶段（settleQueued）只做结算：把 AOI 事件归并进 held、说给 Manager，
 // 然后释放 applied 的屏障，同一 Flush 随后捕获内容——新位置与它带来的进出视野仍在同一帧。
@@ -223,9 +236,7 @@ func (in *Interest) runApplier() {
 	}
 }
 
-// applyStep 是应用线程的一步：取一批已确认的事实应用到 AOI。返回 applied（本步应用或丢弃了事实）、
-// more（还有已确认的事实没取完，应立即再走一步）、waiting（队里仍有事实，可能在等提交确认）。
-// 未确认事实留在原顺序，后来的同 ID 事实不能越过；其他 ID 可在本批继续。
+// applyStep 是应用线程的一步（异步模式）：取一批已确认的事实应用到 AOI，见 applyBatchLocked。
 func (in *Interest) applyStep() (applied, more, waiting bool) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -234,6 +245,14 @@ func (in *Interest) applyStep() (applied, more, waiting bool) {
 	}
 	// 视野登记表的变更先按顺序应用（批次写阶段之外），事实里的跟随移动才看得到新定义的视野。
 	in.syncViewsLocked()
+	return in.applyBatchLocked()
+}
+
+// applyBatchLocked 取一批（≤ BatchSize）已确认的事实应用到 AOI，应用完的事实记入 applied（发布屏障仍持有，
+// 由下一次结算释放）。返回 applied（本步应用或丢弃了事实）、more（还有已确认的事实没取完）、waiting（队里仍有
+// 事实，可能在等提交确认）。未确认事实留在原顺序，后来的同 ID 事实不能越过；其他 ID 可在本批继续。
+// 调用方持有 mu，且已先应用登记表的变更（syncViewsLocked）。
+func (in *Interest) applyBatchLocked() (applied, more, waiting bool) {
 	in.queueMu.Lock()
 	if len(in.facts) == 0 {
 		in.queueMu.Unlock()
@@ -315,16 +334,19 @@ func (in *Interest) applyStep() (applied, more, waiting bool) {
 		}
 		in.applied = append(in.applied, completed...)
 		applied = true
-		// on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。
-		in.wake()
+		// 异步模式：on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。同步模式已在政策阶段里，随即结算。
+		if in.applyMode == ApplyAsync {
+			in.wake()
+		}
 	}
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 	metrics.ObserveHistogram(applyDurationMetric, nil, time.Since(started))
 	return applied, more, waiting
 }
 
-// settleQueued 是 Manager Flush 的政策阶段：只结算，不应用排队事实（那是应用线程的事）。应用登记表剩余的变更，
-// 把 AOI 事件归并进 held 并说给 Manager，释放已应用事实的发布屏障（applyLocked），返回应用线程攒下的错误
+// settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里应用一批已确认的事实（还有剩余时提醒 Manager，
+// on_change 下尽快再来一轮，periodic 下等下一周期）；异步模式不应用（那是应用线程的事）。然后两种模式相同：应用登记表
+// 剩余的变更，把 AOI 事件归并进 held 并说给 Manager，释放已应用事实的发布屏障（applyLocked），返回应用时攒下的错误
 // （无法应用而丢弃的事实，只让一次 Flush 失败）。排过事实或记过业务视野变更之前（纯直接模式）由调用方的 Apply 驱动。
 func (in *Interest) settleQueued() error {
 	in.mu.Lock()
@@ -339,6 +361,11 @@ func (in *Interest) settleQueued() error {
 	in.queueMu.Unlock()
 	if !active && !viewsActive {
 		return nil
+	}
+	if in.applyMode == ApplySync {
+		if _, more, _ := in.applyBatchLocked(); more {
+			in.wake()
+		}
 	}
 	in.applyLocked()
 	err := in.applyErr

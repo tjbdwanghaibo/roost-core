@@ -303,8 +303,15 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	// player id. Bands are deliberately not configured: a band only means
 	// something once the packer can pack less for a far subject, and the
 	// demo's packer is mask-opaque.
+	//
+	// ApplyMode is the game-type choice for queued moves: ApplySync applies
+	// them in the tick's policy phase (seen by the very next tick) and allows a
+	// main view plus at most 8 extra views per player — this demo has the main
+	// view and a team view. A game giving each player more than 8 extra views
+	// (RTS units, many summons or wards) picks ApplyAsync.
 	interest, err := policy.NewInterest(policy.InterestConfig{
-		Manager: manager,
+		Manager:   manager,
+		ApplyMode: policy.ApplySync,
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,

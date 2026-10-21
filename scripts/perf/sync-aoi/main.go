@@ -33,6 +33,7 @@ type config struct {
 	TraceCapacity      int    `json:"trace_capacity"`
 	Nest               bool   `json:"nest_dispatch"`
 	Mode               string `json:"sync_mode"`
+	ApplyMode          string `json:"interest_apply_mode"`
 	SnapshotObjects    int    `json:"snapshot_objects_per_flush"`
 	SnapshotBytes      int    `json:"snapshot_bytes_per_flush"`
 	SnapshotPerSession int    `json:"snapshot_objects_per_session"`
@@ -66,6 +67,7 @@ func parseConfig() config {
 	flag.IntVar(&c.TraceCapacity, "trace-capacity", 0, "bounded diagnostic events; 0 disabled (diagnostic runs affect timing)")
 	flag.BoolVar(&c.Nest, "nest", true, "use formal Nest dispatch and sync commit boundary")
 	flag.StringVar(&c.Mode, "mode", "periodic", "periodic or on_change")
+	flag.StringVar(&c.ApplyMode, "apply-mode", "sync", "Interest queued-fact apply mode: sync (in the Flush policy phase, at most 8 extra views per player) or async (applier thread); direct mode (-nest=false) does not queue facts, only the view cap applies")
 	flag.IntVar(&c.SnapshotObjects, "snapshot-objects", 0, "cold object creation budget per flush (per interval in on_change mode); 0 unlimited")
 	flag.IntVar(&c.SnapshotBytes, "snapshot-bytes", 0, "cold object creation byte soft budget; 0 unlimited")
 	flag.IntVar(&c.SnapshotPerSession, "snapshot-per-session", 0, "cold object creation budget per session per flush (per interval in on_change mode); 0 unlimited")
@@ -102,6 +104,9 @@ func (c config) validate() error {
 	}
 	if !c.Nest && mode == entitysync.ModeOnChange {
 		return errors.New("on_change requires formal Nest producer")
+	}
+	if _, err := policy.ParseApplyMode(c.ApplyMode); err != nil {
+		return err
 	}
 	if c.Players < 1 || c.Entities < c.Players || c.Entities > 100000 || c.Ticks < 1 || c.Ticks > 10000 || c.Hz < 1 || c.Hz > 1000 || c.Dirty < 1 || c.Dirty > 100 || c.Padding < 0 || c.Padding > 4096 || c.Batches < 1 || c.Batches > 100 || c.Visible < 2 || c.Visible > 100 || c.ViewsPerPlayer < 0 || c.ViewsPerPlayer > 1000 || c.AllianceSize < 0 || c.AllianceSize > c.Players || c.Output == "" {
 		return errors.New("invalid workload: check counts, hz, dirty, padding, visible and output")
@@ -372,8 +377,18 @@ func runServer(c config) error {
 		_ = manager.Close(ctx)
 	}()
 	// 模拟玩家的玩家 ID 与实体 ID 取同一个数（会话也按它打开），主视野跟随玩家自己的实体。
-	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, AOI: policy.AOIConfig{Bounds: worldBounds(c), BlockSize: c.Block, EnterRadius: c.EnterRadius, LeaveRadius: c.LeaveRadius, MaxVisible: c.Visible - 1},
-		MaxViewsPerPlayer: max(policy.DefaultMaxViewsPerPlayer, c.ViewsPerPlayer+2), MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
+	// 每个玩家要挂的视野：主视野 + 额外空间视野 + 联盟（关系视野）。同步应用模式超过 SyncApplyMaxViewsPerPlayer 时
+	// NewInterest 拒绝构造（报错提示改用 -apply-mode=async）；异步模式按缺省 64 起。
+	applyMode, _ := policy.ParseApplyMode(c.ApplyMode)
+	views := 1 + c.ViewsPerPlayer
+	if c.AllianceSize > 0 {
+		views++
+	}
+	if applyMode == policy.ApplyAsync {
+		views = max(views, policy.DefaultMaxViewsPerPlayer)
+	}
+	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, ApplyMode: applyMode, AOI: policy.AOIConfig{Bounds: worldBounds(c), BlockSize: c.Block, EnterRadius: c.EnterRadius, LeaveRadius: c.LeaveRadius, MaxVisible: c.Visible - 1},
+		MaxViewsPerPlayer: views, MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
 	if err != nil {
 		return err
 	}

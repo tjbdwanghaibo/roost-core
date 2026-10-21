@@ -156,7 +156,8 @@ func benchmarkInterest(b *testing.B) *Interest {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = manager.Close(context.Background()) })
-	in, err := NewInterest(InterestConfig{Manager: manager, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
+	// 基准只量登记表与扇出，视野数要到 64，所以用不受视野上限约束的异步模式。
+	in, err := NewInterest(InterestConfig{Manager: manager, ApplyMode: ApplyAsync, MaxPlayersPerView: 1 << 20, AOI: AOIConfig{
 		Bounds: spatial.Rect{Max: spatial.Point{X: 100_000, Y: 100_000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
 	}})
 	if err != nil {

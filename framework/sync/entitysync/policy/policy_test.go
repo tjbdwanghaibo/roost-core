@@ -84,8 +84,14 @@ func subscribed(manager *entitysync.Manager, observer, subject int64) bool {
 // TestObserverAndSubjectIDSpacesStayApart。
 func newInterest(t *testing.T, manager *entitysync.Manager) *Interest {
 	t.Helper()
+	return newInterestMode(t, manager, ApplySync)
+}
+
+// newInterestMode 同 newInterest，指定排队事实的应用方式（语义用例对两种模式各跑一遍，见 forEachApplyMode）。
+func newInterestMode(t *testing.T, manager *entitysync.Manager, mode ApplyMode) *Interest {
+	t.Helper()
 	interest, err := NewInterest(InterestConfig{
-		Manager: manager,
+		Manager: manager, ApplyMode: mode,
 		AOI: AOIConfig{
 			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
 			EnterRadius: 120, LeaveRadius: 150,
@@ -881,75 +887,77 @@ func requireSessions(t *testing.T, manager *entitysync.Manager, subject int64, w
 }
 
 func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
-	manager := newManager(t)
-	interest, err := NewInterest(InterestConfig{
-		Manager: manager,
-		AOI: AOIConfig{
-			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
-			EnterRadius: 120, LeaveRadius: 150,
-		},
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		manager := newManager(t)
+		interest, err := NewInterest(InterestConfig{
+			Manager: manager, ApplyMode: mode,
+			AOI: AOIConfig{
+				Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
+				EnterRadius: 120, LeaveRadius: 150,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(interest.Close)
+		const playerA, playerB = int64(7), int64(8)
+		entityA, entityB := registerPlayer(t, manager, playerA), registerPlayer(t, manager, playerB)
+		// 数值上等于玩家 A 的 ID 的目标：观察者与目标编号混用时它会被误当成 A 自己。
+		monster := playerA
+		if err := manager.Register(subjectState(t, monster)); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.Enter(playerA, entityA, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.Enter(playerB, entityB, spatial.Point{X: 540, Y: 500}, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.Show(monster, spatial.Point{X: 520, Y: 500}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		requireSessions(t, manager, entityA, 7, 8)
+		requireSessions(t, manager, entityB, 7, 8)
+		requireSessions(t, manager, monster, 7, 8)
+		if got := interest.Visible(playerA); !slices.Equal(got, []int64{monster, entityB}) {
+			t.Fatalf("A sees %v through distance, want the monster and B (never itself)", got)
+		}
+
+		// 关系：A 把 B 当队友；B 走远后 A 仍看得见 B，B 看不见 A 与怪。
+		setRelation(t, interest, playerA, entityB)
+		mustApply(t, interest)
+		if err := interest.Move(entityB, spatial.Point{X: 900, Y: 900}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		requireSessions(t, manager, entityB, 7, 8)
+		requireSessions(t, manager, entityA, 7)
+		requireSessions(t, manager, monster, 7)
+
+		// 排队事实：B 的事务把 B 移回来（跟随 B 的主视野一起移动）；提交之后 A 把队友关系清空（视野操作直接调用）。
+		eA, eB := factEntity(t, entityA), factEntity(t, entityB)
+		mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eA, eB}, manager)
+		if err := interest.QueueMove(eB, spatial.Point{X: 540, Y: 500}); err != nil {
+			t.Fatal(err)
+		}
+		mutation.Admit()
+		mutation.Confirm()
+		mutation.Release()
+		setRelation(t, interest, playerA)
+		flushInterest(t, interest, manager)
+		requireSessions(t, manager, entityA, 7, 8)
+		requireSessions(t, manager, monster, 7, 8)
+
+		// 退场：B 双向退出，其他观察者对 B 的订阅、B 对别人的订阅、B 的 self 都释放。
+		if err := interest.Leave(playerB, entityB); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		requireSessions(t, manager, entityB)
+		requireSessions(t, manager, entityA, 7)
+		requireSessions(t, manager, monster, 7)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(interest.Close)
-	const playerA, playerB = int64(7), int64(8)
-	entityA, entityB := registerPlayer(t, manager, playerA), registerPlayer(t, manager, playerB)
-	// 数值上等于玩家 A 的 ID 的目标：观察者与目标编号混用时它会被误当成 A 自己。
-	monster := playerA
-	if err := manager.Register(subjectState(t, monster)); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Enter(playerA, entityA, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Enter(playerB, entityB, spatial.Point{X: 540, Y: 500}, ObserverView{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Show(monster, spatial.Point{X: 520, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	requireSessions(t, manager, entityA, 7, 8)
-	requireSessions(t, manager, entityB, 7, 8)
-	requireSessions(t, manager, monster, 7, 8)
-	if got := interest.Visible(playerA); !slices.Equal(got, []int64{monster, entityB}) {
-		t.Fatalf("A sees %v through distance, want the monster and B (never itself)", got)
-	}
-
-	// 关系：A 把 B 当队友；B 走远后 A 仍看得见 B，B 看不见 A 与怪。
-	setRelation(t, interest, playerA, entityB)
-	mustApply(t, interest)
-	if err := interest.Move(entityB, spatial.Point{X: 900, Y: 900}); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	requireSessions(t, manager, entityB, 7, 8)
-	requireSessions(t, manager, entityA, 7)
-	requireSessions(t, manager, monster, 7)
-
-	// 排队事实：B 的事务把 B 移回来（跟随 B 的主视野一起移动）；提交之后 A 把队友关系清空（视野操作直接调用）。
-	eA, eB := factEntity(t, entityA), factEntity(t, entityB)
-	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eA, eB}, manager)
-	if err := interest.QueueMove(eB, spatial.Point{X: 540, Y: 500}); err != nil {
-		t.Fatal(err)
-	}
-	mutation.Admit()
-	mutation.Confirm()
-	mutation.Release()
-	setRelation(t, interest, playerA)
-	flushInterest(t, interest, manager)
-	requireSessions(t, manager, entityA, 7, 8)
-	requireSessions(t, manager, monster, 7, 8)
-
-	// 退场：B 双向退出，其他观察者对 B 的订阅、B 对别人的订阅、B 的 self 都释放。
-	if err := interest.Leave(playerB, entityB); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	requireSessions(t, manager, entityB)
-	requireSessions(t, manager, entityA, 7)
-	requireSessions(t, manager, monster, 7)
 }
 
 // ---- D14：观察者是玩家、视野按观察者 ----
@@ -1127,41 +1135,43 @@ func TestWatchSeesWithoutBeingSeen(t *testing.T) {
 // 排队移动带着跟随实体的视野走：玩家以英雄（不是 Player 实体）进场，主视野跟随英雄；英雄的事务移动把视野一起带走，
 // 别的实体的事务移动只移动它自己。
 func TestQueuedMoveCarriesTheViewsThatFollowTheEntity(t *testing.T) {
-	manager := newManager(t)
-	const playerID, hero, other = int64(5), int64(500), int64(600)
-	interest := newInterest(t, manager)
-	if err := manager.OpenSession(entitysync.SessionID(playerID)); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []int64{hero, other} {
-		if err := manager.Register(subjectState(t, id)); err != nil {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		manager := newManager(t)
+		const playerID, hero, other = int64(5), int64(500), int64(600)
+		interest := newInterestMode(t, manager, mode)
+		if err := manager.OpenSession(entitysync.SessionID(playerID)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := interest.Enter(playerID, hero, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.Show(other, spatial.Point{X: 800, Y: 800}); err != nil {
-		t.Fatal(err)
-	}
-	mustApply(t, interest)
-	requireSessions(t, manager, other)
-	eHero, eOther := factEntity(t, hero), factEntity(t, other)
-	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eHero, eOther}, manager)
-	if err := interest.QueueMove(eHero, spatial.Point{X: 780, Y: 800}); err != nil {
-		t.Fatal(err)
-	}
-	if err := interest.QueueMove(eOther, spatial.Point{X: 790, Y: 800}); err != nil {
-		t.Fatal(err)
-	}
-	mutation.Admit()
-	mutation.Confirm()
-	mutation.Release()
-	flushInterest(t, interest, manager)
-	requireSessions(t, manager, other, entitysync.SessionID(playerID))
-	if got := interest.Visible(playerID); !slices.Equal(got, []int64{other}) {
-		t.Fatalf("the player's view did not follow the hero: %v", got)
-	}
+		for _, id := range []int64{hero, other} {
+			if err := manager.Register(subjectState(t, id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := interest.Enter(playerID, hero, spatial.Point{X: 100, Y: 100}, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.Show(other, spatial.Point{X: 800, Y: 800}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		requireSessions(t, manager, other)
+		eHero, eOther := factEntity(t, hero), factEntity(t, other)
+		mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eHero, eOther}, manager)
+		if err := interest.QueueMove(eHero, spatial.Point{X: 780, Y: 800}); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.QueueMove(eOther, spatial.Point{X: 790, Y: 800}); err != nil {
+			t.Fatal(err)
+		}
+		mutation.Admit()
+		mutation.Confirm()
+		mutation.Release()
+		flushInterest(t, interest, manager)
+		requireSessions(t, manager, other, entitysync.SessionID(playerID))
+		if got := interest.Visible(playerID); !slices.Equal(got, []int64{other}) {
+			t.Fatalf("the player's view did not follow the hero: %v", got)
+		}
+	})
 }
 
 // 多对一隐患消失：两个玩家各是一个会话，都看见同一目标；其中一个走远只退它自己的订阅。
