@@ -185,10 +185,10 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 | 提交 | 内容 |
 | --- | --- |
-| `1c602d33` | 本方案 + 三条修前红测试 |
-| `d75713e1` | 第 1、2 期合在一次提交：登记侧 + 有序日志 + 单应用方、代际号、撤除换代、ApplySync 预算排空、`OnRefusal`、`Resubscribe` 去返回值；包内测试跟随 |
-| `ca8a0ab9` | 代际号作废的独立用例 |
-| `6fefa5e0` | 第 3 期：调用方（game-demo 场景桥、`gameplay/movement`）与文档 |
+| `c78ff0ec` | 本方案 + 三条修前红测试 |
+| `eed9c870` | 第 1、2 期合在一次提交：登记侧 + 有序日志 + 单应用方、代际号、撤除换代、ApplySync 预算排空、`OnRefusal`、`Resubscribe` 去返回值；包内测试跟随 |
+| `3ffe605c` | 代际号作废的独立用例 |
+| `254d61cf` | 第 3 期：调用方（game-demo 场景桥、`gameplay/movement`）与文档 |
 
 ### 10.2 强制点（`framework/sync/entitysync/policy`）
 
@@ -210,7 +210,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 ### 10.4 与方案的偏差
 
-1. 第 1、2 期合在一次提交（`d75713e1`）：日志执行器重写时预算循环只是 `settleQueued` 里的几行，拆开反而要写一个过渡版本。两条红测试在提交前都已存在。
+1. 第 1、2 期合在一次提交（`eed9c870`）：日志执行器重写时预算循环只是 `settleQueued` 里的几行，拆开反而要写一个过渡版本。两条红测试在提交前都已存在。
 2. `TestDirectCallsDoNotWaitForTheAOIBatch` 的检查列表去掉了 `Apply`：按 §8 第 5 项 A，`Apply` 保留为“在调用方线程排空并结算”，按设计会等正在进行的一步，业务路径上的 `Apply` 调用全部删除；其余 9 个入口在修前红、修后绿，断言未放宽。同一文件因 `Resubscribe` 去掉返回值改了调用写法。
 3. 包内既有用例的调整（都是驱动方式，断言的承诺不变）：`TestBatchLimitRetainsLaterEntityPublication` 同步模式把预算设到最小，让政策阶段在第一批之后停；`TestPublicationHoldsReleaseOnDiscardAndClose` 的 hide / leave 在断言前结算一次（被作废事实的屏障在下一次结算、同一 Flush 的捕获之前释放）；`TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush`、`TestDrainTimeoutListsInterestStalls` 异步模式先让应用线程走一步（视野操作现在也由应用线程执行）；`TestQueuedFactThatCannotApplyFailsOneFlushOnly` 注入的事实改为“目标在场、位置越界”（旧注入的“目标不在场”现在按代际作废，不再是应用失败）；`TestResubscribeRestoresAReopenedObserversView` 改为数重试表；`manualApplier` 在应用线程已启动时先停掉它。
 4. 撤除换代（§3.3 第 3 条）用“本次结算内撤除过的玩家 / 目标集合”实现，而不是按 pair 打标记：AOI 的离开事件要到结算时才归并，按 pair 打标记会漏掉它们。
