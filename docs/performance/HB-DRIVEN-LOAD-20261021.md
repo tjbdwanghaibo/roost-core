@@ -125,7 +125,7 @@ done
 | 同上 `heartbeat`（`TestNestGameLoad` 的心跳驱动路径） | PASS：每 Unit 99～100 拍（期望 100）、间隔 p99 100.0ms、跳拍 0 / 0 / 0、停滞 0、`verified=true`；消息 999.5/s、心跳 9984.6/s，p99 11.50 / 0.040ms（心跳从回调开始计，口径见 §1） |
 | `scripts/perf/nest-game.sh --check-heartbeat` | PASS（`TestHeartbeatDriverTicksGeneratedUnits`：632 拍全部在事务里执行，跳拍 0） |
 
-sync-aoi 的 Nest 模式之前每 tick 调一次 `interest.Apply()`，Interest 单写者重构之后它会在压测线程执行排队移动，2026-10-22 已改为只在 direct 模式调用（`9ad54c3c`，见 [INTEREST-SINGLE-WRITER-20261022](INTEREST-SINGLE-WRITER-20261022.md)）；上表在改后的夹具上跑。原始产物在当次 worktree 的 `artifacts/perf/`（未入库）。
+sync-aoi 的 Nest 模式之前每 tick 调一次 `interest.Apply()`，Interest 单写者重构之后它会在压测线程执行排队移动，2026-10-22 已改为只在 direct 模式调用（`6cffbc03`，见 [INTEREST-SINGLE-WRITER-20261022](INTEREST-SINGLE-WRITER-20261022.md)）；上表在改后的夹具上跑。原始产物在当次 worktree 的 `artifacts/perf/`（未入库）。
 
 ## 5. 不能证明什么
 

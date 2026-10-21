@@ -13,14 +13,14 @@
 
 另有两项要维护者知道：
 
-1. **压测程序本身的问题，已修**（`9ad54c3c`，只改夹具）：sync-aoi 的 Nest 模式每个 tick 末尾调一次 `interest.Apply()`。重构后 `Apply` 会在调用方线程执行已确认的排队移动，于是压测线程替政策阶段做了 AOI，Nest ApplySync 的政策阶段与 Flush 看上去变短（0 视野 Flush 11.0 → 7.0ms、政策 4.6 → 0.8ms），压测线程每 tick 多出 5～17ms。第一遍对照就是这样跑的（原文 [aoi-o-harness-apply-summary.md](benchmarks/interest-single-writer-20261022/aoi-o-harness-apply-summary.md)），作废；改为 Nest 模式不调 `Apply`（业务路径本来也不调，`254d61cf`），两边用同一份改过的压测程序重跑，本页的数都是重跑的。
+1. **压测程序本身的问题，已修**（`6cffbc03`，只改夹具）：sync-aoi 的 Nest 模式每个 tick 末尾调一次 `interest.Apply()`。重构后 `Apply` 会在调用方线程执行已确认的排队移动，于是压测线程替政策阶段做了 AOI，Nest ApplySync 的政策阶段与 Flush 看上去变短（0 视野 Flush 11.0 → 7.0ms、政策 4.6 → 0.8ms），压测线程每 tick 多出 5～17ms。第一遍对照就是这样跑的（原文 [aoi-o-harness-apply-summary.md](benchmarks/interest-single-writer-20261022/aoi-o-harness-apply-summary.md)），作废；改为 Nest 模式不调 `Apply`（业务路径本来也不调，`254d61cf`），两边用同一份改过的压测程序重跑，本页的数都是重跑的。
 2. **direct 基线的语义变了**（方案 §5 第 6 条）：direct 模式下直接调用不再在压测线程当场算 AOI，而是进日志、在压测线程调 `Apply()` 时（ApplySync）或由应用线程（ApplyAsync）执行。原场景 direct ApplySync 8 / 16 视野 P99 50.6 → 59.6ms、63.5 → 79.9ms，ApplyAsync 16 视野 61.0 → 72.3ms；压测线程每 tick 耗时 ApplyAsync 下降（16 视野 20.5 → 8.8ms，AOI 去了应用线程）、ApplySync 下不变。**direct 不再是“AOI 全在压测线程”的下界，与改前和 D19 历史表的 direct 行不能直接比**。
 
 宿主负载：sync-aoi 原场景运行开始时 1 分钟 loadavg 1.84～4.73，小块场景 1.87～3.68，policy 基准 1.78～4.00（同时段维护者的其他程序在跑；门控只看得见外来 go 进程）。单机、每个配置 2 轮，P99 的轮间差 1～9ms（16 视野更大），小于这个量级的差异不下结论。
 
 ## 1. 被测与方法
 
-- 改前 `494134ae`（方案基线），改后 `11988df8`（main，含不稳定用例的修复 `d3a4486d`：异步模式已执行未结算的命令计入 Drain）。两边的 sync-aoi 是同一份源码（`494134ae..11988df8` 没有改 `scripts/perf/sync-aoi`），加上 `9ad54c3c` 的夹具修正；ApplySync 16 视野超过 `SyncApplyMaxExtraViews`（8），两边都用只把它改成 16 的诊断构建（与 D19 历史表同一做法），未入库。
+- 改前 `494134ae`（方案基线），改后 `11988df8`（main，含不稳定用例的修复 `d3a4486d`：异步模式已执行未结算的命令计入 Drain）。两边的 sync-aoi 是同一份源码（`494134ae..11988df8` 没有改 `scripts/perf/sync-aoi`），加上 `6cffbc03` 的夹具修正；ApplySync 16 视野超过 `SyncApplyMaxExtraViews`（8），两边都用只把它改成 16 的诊断构建（与 D19 历史表同一做法），未入库。
 - 机器：Apple M5（10 核）、32 GB、macOS / arm64、go1.27.2；sync-aoi 每个进程 GOMAXPROCS 4。
 - sync-aoi：原场景 `-players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50`，`-views-per-player` 0 / 4 / 8 / 16 × `-apply-mode sync|async` × Nest / direct（`-nest=false`）；小块场景另加 `-world=4000 -block=20 -enter-radius=30 -leave-radius=36 -move-amplitude=10 -entities=50000`，4 / 8 视野。每次 200 个测量 tick（约 15 秒）。每个配置 2 轮，轮内轮转、base / after 先后按轮交替；每次运行前等 10 秒没有外来 go 进程，运行中每 2 秒检查并采样服务端 / 客户端进程 CPU（`ps` 累计 CPU 时间，含预热），采到外来进程就作废重跑（本组没有作废）。脚本 [run-aoi.sh](benchmarks/interest-single-writer-20261022/run-aoi.sh)、汇总 [agg-aoi.py](benchmarks/interest-single-writer-20261022/agg-aoi.py)，口径与 [D19“两种应用模式”](../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定) 的表相同（改值→客户端 = `state_change_to_client_ms`；Flush 均值 = `FlushDuration / FlushCalls`；政策阶段每 tick P95；压测线程每 tick P50 = `interest.Move` + `Apply`）。
 - sync-aoi 进程以非零码退出是它自己的 50ms 延迟门槛（`50ms latency gate failed; reports retained`），报告完整，按正常样本处理；每次运行的 `manager_last_error` 都是停机时的 `sync admission ... context canceled`（两边相同）。

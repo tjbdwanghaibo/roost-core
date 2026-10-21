@@ -1,6 +1,6 @@
 # Interest 单写者重构前后对比样本（2026-10-22）
 
-报告：[INTEREST-SINGLE-WRITER-20261022](../../INTEREST-SINGLE-WRITER-20261022.md)。改前 `494134ae`，改后 `11988df8`；两边的 sync-aoi 都带 `9ad54c3c` 的夹具修正，ApplySync 16 视野两边都用只把 `SyncApplyMaxExtraViews` 改成 16 的诊断构建（未入库）。
+报告：[INTEREST-SINGLE-WRITER-20261022](../../INTEREST-SINGLE-WRITER-20261022.md)。改前 `494134ae`，改后 `11988df8`；两边的 sync-aoi 都带 `6cffbc03` 的夹具修正，ApplySync 16 视野两边都用只把 `SyncApplyMaxExtraViews` 改成 16 的诊断构建（未入库）。
 
 | 文件 | 内容 |
 | --- | --- |
