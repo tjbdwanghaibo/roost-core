@@ -1,0 +1,183 @@
+{
+ "label": "remab-b1-head",
+ "commit": "af904c76",
+ "duration_seconds": 900.1,
+ "Completed": 72000,
+ "CompletionTPS": 79.987,
+ "Errors": 0,
+ "Dropped": 0,
+ "ErrorsNotApplied": 0,
+ "ErrorsUncertain": 0,
+ "Verified": true,
+ "Mixed": {
+  "P50": 160,
+  "P95": 231,
+  "P99": 263,
+  "Max": 1280
+ },
+ "Server": {
+  "P50MS": 159,
+  "P95MS": 230,
+  "P99MS": 262,
+  "MaxMS": 1277,
+  "NegativeDurations": 0
+ },
+ "Harness": {
+  "AdmitLag": {
+   "P50MS": 0,
+   "P95MS": 1,
+   "P99MS": 2,
+   "MaxMS": 46,
+   "NegativeDurations": 0
+  },
+  "ClientQueue": {
+   "P50MS": 0,
+   "P95MS": 0,
+   "P99MS": 0,
+   "MaxMS": 28,
+   "NegativeDurations": 0
+  }
+ },
+ "WALUnackedPeak": 19,
+ "WALUnackedPeakAtS": 850,
+ "WALUnackedEnd": 0,
+ "ActiveTxPeak": 19,
+ "ActiveTxPeakAtS": 850,
+ "ActiveTxEnd": 0,
+ "WritesInFlightPeak": 21,
+ "TransactionsPeak": 64997,
+ "WriteRejectedEnd": 0,
+ "HeapMiB": [
+  71.4,
+  186.9,
+  186.9
+ ],
+ "Goroutines": [
+  1112,
+  2170,
+  1112
+ ],
+ "SamplesN": 92,
+ "Minutes": [
+  {
+   "minute": 0,
+   "wal_unacked_mean": 11.5,
+   "active_tx_mean": 10.2
+  },
+  {
+   "minute": 1,
+   "wal_unacked_mean": 9.3,
+   "active_tx_mean": 9.3
+  },
+  {
+   "minute": 2,
+   "wal_unacked_mean": 9.8,
+   "active_tx_mean": 9.8
+  },
+  {
+   "minute": 3,
+   "wal_unacked_mean": 8.8,
+   "active_tx_mean": 8.8
+  },
+  {
+   "minute": 4,
+   "wal_unacked_mean": 10.2,
+   "active_tx_mean": 10.2
+  },
+  {
+   "minute": 5,
+   "wal_unacked_mean": 10.7,
+   "active_tx_mean": 10.7
+  },
+  {
+   "minute": 6,
+   "wal_unacked_mean": 12,
+   "active_tx_mean": 10.5
+  },
+  {
+   "minute": 7,
+   "wal_unacked_mean": 9.8,
+   "active_tx_mean": 9.8
+  },
+  {
+   "minute": 8,
+   "wal_unacked_mean": 11.3,
+   "active_tx_mean": 11.3
+  },
+  {
+   "minute": 9,
+   "wal_unacked_mean": 9.7,
+   "active_tx_mean": 9.7
+  },
+  {
+   "minute": 10,
+   "wal_unacked_mean": 10.5,
+   "active_tx_mean": 10.5
+  },
+  {
+   "minute": 11,
+   "wal_unacked_mean": 11,
+   "active_tx_mean": 9.7
+  },
+  {
+   "minute": 12,
+   "wal_unacked_mean": 12.3,
+   "active_tx_mean": 12.3
+  },
+  {
+   "minute": 13,
+   "wal_unacked_mean": 12.2,
+   "active_tx_mean": 12.2
+  },
+  {
+   "minute": 14,
+   "wal_unacked_mean": 10,
+   "active_tx_mean": 10
+  },
+  {
+   "minute": 15,
+   "wal_unacked_mean": 8,
+   "active_tx_mean": 8
+  }
+ ],
+ "Host": {
+  "load1_min": 4.39,
+  "load1_max": 9.56,
+  "load1_mean": 6.94,
+  "samples": 65,
+  "swap_used_MiB": [
+   907.38,
+   907.38
+  ],
+  "non_test_ge20pct": {
+   "WindowServer": {
+    "count": 58,
+    "peak": 49.4
+   },
+   "Claude Helper": {
+    "count": 42,
+    "peak": 31.7
+   },
+   "sysmond": {
+    "count": 36,
+    "peak": 77.3
+   },
+   "ruby": {
+    "count": 1,
+    "peak": 40.8
+   },
+   "CorpLink Helper (Renderer)": {
+    "count": 1,
+    "peak": 27.0
+   },
+   "Lark Helper (Renderer)": {
+    "count": 1,
+    "peak": 57.0
+   },
+   "Google Chrome Helper (Aperitif Renderer)": {
+    "count": 1,
+    "peak": 147.4
+   }
+  }
+ }
+}

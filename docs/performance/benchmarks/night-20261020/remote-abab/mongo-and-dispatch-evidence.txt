@@ -1,0 +1,19 @@
+# 2026-10-21 Remote 80TPS 同机对照：Mongo 慢操作与 Nest 慢 dispatch 计数（只读统计，命令见 NIGHT-20261020.md §9.1）
+# 窗口按各次运行的计时段取整分钟：夜间 HEAD 03:05～03:19，A1 v1.27.0 07:59～08:14，B1 HEAD 08:17～08:31。
+# Mongo 慢操作 = 共享隔离环境 mongod.log 中 "Slow query"（默认 slowms=100）条数。
+
+## 主节点 mongo-1（28117）慢操作
+夜间 HEAD 03:05-03:19 : 640 条，最大 793ms
+  按命名空间：_remote_entity_meta findAndModify 494（p50 284 / max 556ms）、commitTransaction 61、_remote_entity_transactions find 28 / insert 14、update 26、isMaster 14
+  按分钟：03:05=9 03:07=25 03:09=33 03:11=45 03:12=5 03:13=71 03:14=100 03:15=56 03:16=51 03:17=58 03:18=64 03:19=123
+A1 v1.27.0 07:59-08:14 : 126 条，最大 392ms（含预热阶段的批量 insert）
+  _remote_entity_meta findAndModify 未进前 8；_remote_entity_transactions find 35 / insert 29、update 22、_remote_entity_meta insert 16
+B1 HEAD 08:17-08:31 : 79 条，最大 709ms（isMaster）
+  update 19、_remote_entity_meta findAndModify 18（p50 196 / max 272ms）、_remote_entity_transactions insert 13 / find 12
+  按分钟：最多 08:31=32，其余 ≤16
+## 从节点 mongo-2 / mongo-3 慢操作：夜间 3 / 2，A1 3 / 1，B1 1 / 2
+
+## Nest 慢 dispatch（run.log.gz 中 "WARN slow dispatch"，去掉 remote_warmup 与 result=running，cost_ms ≥ 200 记一条）
+夜间 HEAD : 16413 条；≥500ms 986 条，max 1469ms；≥500ms 按分钟 03:07=101 03:09=98 03:11=87 03:13=77 03:14=161 03:15=86 03:16=59 03:17=84 03:18=92 03:19=141
+A1 v1.27.0: 10802 条；≥500ms 26 条，max 602ms；08:00=11 08:11=15
+B1 HEAD   : 12483 条；≥500ms 122 条，max 1277ms；08:18=1 08:20=30 08:31=91

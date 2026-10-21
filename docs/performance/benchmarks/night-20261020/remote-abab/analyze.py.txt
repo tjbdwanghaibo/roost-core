@@ -1,0 +1,52 @@
+import json, sys, re, os, statistics
+# 用法：analyze.py <run dir (含 out/ 与 host.log)> <label> <commit>
+d, label, commit = sys.argv[1], sys.argv[2], sys.argv[3]
+r = json.load(open(os.path.join(d, 'out/result.json')))
+samples = [json.loads(l) for l in open(os.path.join(d, 'out/result.json.jsonl'))]
+def col(f): return [f(s) for s in samples]
+wal = col(lambda s: s['projection']['WALUnacked'])
+act = col(lambda s: s['remote']['ActiveTransactions'])
+txs = col(lambda s: s['remote']['Transactions'])
+wr = col(lambda s: s['remote']['WritesInFlight'])
+heap = col(lambda s: s['heap_bytes'] / 2**20)
+gor = col(lambda s: s['goroutines'])
+def peak_at(v):
+    i = max(range(len(v)), key=lambda k: v[k]); return round(samples[i]['seconds'])
+# 每分钟（6 个 10s 采样）的 WAL 未确认 / 在途事务均值，看是否增长。
+minutes = []
+for m in range(0, len(samples) - 1, 6):
+    seg = samples[m:m + 6]
+    minutes.append({'minute': m // 6, 'wal_unacked_mean': round(statistics.mean(s['projection']['WALUnacked'] for s in seg), 1),
+                    'active_tx_mean': round(statistics.mean(s['remote']['ActiveTransactions'] for s in seg), 1)})
+host = open(sys.argv[4] if len(sys.argv) > 4 else os.path.join(d, 'host.log')).read().split('=== ')[1:]
+loads, swaps, others = [], [], {}
+for blk in host:
+    m = re.search(r'load averages: ([\d.]+)', blk); loads.append(float(m.group(1)))
+    m = re.search(r'used = ([\d.]+)M', blk); swaps.append(float(m.group(1)))
+    for line in blk.splitlines():
+        m = re.match(r'\s*(\d+)\s+([\d.]+)\s+[\d.]+\s+(.+)$', line)  # 夜间格式：PID %CPU %MEM COMM
+        cpu = float(m.group(2)) if m else None
+        if not m:
+            m = re.match(r'\s*([\d.]+)\s+(\d+)\s+(.+)$', line)  # 本轮格式：%CPU PID COMM
+            cpu = float(m.group(1)) if m else None
+        if m and cpu >= 20:
+            name = os.path.basename(m.group(3).strip())
+            if name.endswith('.test') or name in ('mongod', 'nats-server', 'redis-server'): continue
+            o = others.setdefault(name, [0, 0.0]); o[0] += 1; o[1] = max(o[1], cpu)
+    gb = [l for l in blk.splitlines() if re.search(r'go (build|test|run|vet)', l)]
+out = {
+  'label': label, 'commit': commit,
+  'duration_seconds': round(r['duration_seconds'], 1), 'Completed': r['Completed'], 'CompletionTPS': round(r['CompletionTPS'], 3),
+  'Errors': r['Errors'], 'Dropped': r['Dropped'], 'ErrorsNotApplied': r['ErrorsNotApplied'], 'ErrorsUncertain': r['ErrorsUncertain'],
+  'Verified': os.path.exists(os.path.join(d, 'out/result.json.verified')),
+  'Mixed': {k: r['Latency%sMS' % k] for k in ('P50', 'P95', 'P99', 'Max')},
+  'Server': r.get('Server', {}).get('Completion'), 'Harness': r.get('Harness'),
+  'WALUnackedPeak': max(wal), 'WALUnackedPeakAtS': peak_at(wal), 'WALUnackedEnd': wal[-1],
+  'ActiveTxPeak': max(act), 'ActiveTxPeakAtS': peak_at(act), 'ActiveTxEnd': act[-1],
+  'WritesInFlightPeak': max(wr), 'TransactionsPeak': max(txs), 'WriteRejectedEnd': samples[-1]['remote']['WriteRejected'],
+  'HeapMiB': [round(min(heap), 1), round(max(heap), 1), round(heap[-1], 1)], 'Goroutines': [min(gor), max(gor), gor[-1]],
+  'SamplesN': len(samples), 'Minutes': minutes,
+  'Host': {'load1_min': min(loads), 'load1_max': max(loads), 'load1_mean': round(statistics.mean(loads), 2), 'samples': len(loads),
+           'swap_used_MiB': [min(swaps), max(swaps)], 'non_test_ge20pct': {k: {'count': v[0], 'peak': v[1]} for k, v in sorted(others.items(), key=lambda x: -x[1][0])}},
+}
+print(json.dumps(out, ensure_ascii=False, indent=1))

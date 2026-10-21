@@ -1,0 +1,190 @@
+{
+ "label": "remab-a1-v127",
+ "commit": "a147877c",
+ "duration_seconds": 900.1,
+ "Completed": 72000,
+ "CompletionTPS": 79.991,
+ "Errors": 0,
+ "Dropped": 0,
+ "ErrorsNotApplied": 0,
+ "ErrorsUncertain": 0,
+ "Verified": true,
+ "Mixed": {
+  "P50": 158,
+  "P95": 229,
+  "P99": 263,
+  "Max": 605
+ },
+ "Server": null,
+ "Harness": null,
+ "WALUnackedPeak": 17,
+ "WALUnackedPeakAtS": 390,
+ "WALUnackedEnd": 0,
+ "ActiveTxPeak": 16,
+ "ActiveTxPeakAtS": 390,
+ "ActiveTxEnd": 0,
+ "WritesInFlightPeak": 19,
+ "TransactionsPeak": 64999,
+ "WriteRejectedEnd": 0,
+ "HeapMiB": [
+  81.9,
+  217.8,
+  170.3
+ ],
+ "Goroutines": [
+  1112,
+  2174,
+  1112
+ ],
+ "SamplesN": 92,
+ "Minutes": [
+  {
+   "minute": 0,
+   "wal_unacked_mean": 7.8,
+   "active_tx_mean": 7.8
+  },
+  {
+   "minute": 1,
+   "wal_unacked_mean": 9.7,
+   "active_tx_mean": 9.7
+  },
+  {
+   "minute": 2,
+   "wal_unacked_mean": 7.5,
+   "active_tx_mean": 7.5
+  },
+  {
+   "minute": 3,
+   "wal_unacked_mean": 8.8,
+   "active_tx_mean": 8.8
+  },
+  {
+   "minute": 4,
+   "wal_unacked_mean": 9.7,
+   "active_tx_mean": 9.7
+  },
+  {
+   "minute": 5,
+   "wal_unacked_mean": 8.8,
+   "active_tx_mean": 8.8
+  },
+  {
+   "minute": 6,
+   "wal_unacked_mean": 10.7,
+   "active_tx_mean": 10.5
+  },
+  {
+   "minute": 7,
+   "wal_unacked_mean": 9.7,
+   "active_tx_mean": 9.7
+  },
+  {
+   "minute": 8,
+   "wal_unacked_mean": 12.3,
+   "active_tx_mean": 12.2
+  },
+  {
+   "minute": 9,
+   "wal_unacked_mean": 8.2,
+   "active_tx_mean": 8.2
+  },
+  {
+   "minute": 10,
+   "wal_unacked_mean": 10,
+   "active_tx_mean": 10.2
+  },
+  {
+   "minute": 11,
+   "wal_unacked_mean": 11.2,
+   "active_tx_mean": 11.2
+  },
+  {
+   "minute": 12,
+   "wal_unacked_mean": 9.3,
+   "active_tx_mean": 9.3
+  },
+  {
+   "minute": 13,
+   "wal_unacked_mean": 12.2,
+   "active_tx_mean": 12.2
+  },
+  {
+   "minute": 14,
+   "wal_unacked_mean": 10,
+   "active_tx_mean": 10
+  },
+  {
+   "minute": 15,
+   "wal_unacked_mean": 4,
+   "active_tx_mean": 4
+  }
+ ],
+ "Host": {
+  "load1_min": 3.31,
+  "load1_max": 16.01,
+  "load1_mean": 7.31,
+  "samples": 65,
+  "swap_used_MiB": [
+   907.38,
+   915.38
+  ],
+  "non_test_ge20pct": {
+   "WindowServer": {
+    "count": 64,
+    "peak": 49.8
+   },
+   "sysmond": {
+    "count": 33,
+    "peak": 96.6
+   },
+   "Claude Helper": {
+    "count": 26,
+    "peak": 29.8
+   },
+   "CorpLinkExtension": {
+    "count": 8,
+    "peak": 35.6
+   },
+   "launchd": {
+    "count": 3,
+    "peak": 31.5
+   },
+   "Slack Helper (Renderer)": {
+    "count": 2,
+    "peak": 78.8
+   },
+   "com.apple.WebKit.WebContent": {
+    "count": 1,
+    "peak": 36.0
+   },
+   "Code Helper (Renderer)": {
+    "count": 1,
+    "peak": 43.0
+   },
+   "puppet agent: applying configuration": {
+    "count": 1,
+    "peak": 86.2
+   },
+   "runningboardd": {
+    "count": 1,
+    "peak": 35.5
+   },
+   "PerfPowerServices": {
+    "count": 1,
+    "peak": 32.4
+   },
+   "ruby": {
+    "count": 1,
+    "peak": 99.1
+   },
+   "WeatherWidget": {
+    "count": 1,
+    "peak": 37.7
+   },
+   "knowledgeconstructiond": {
+    "count": 1,
+    "peak": 33.1
+   }
+  }
+ }
+}
