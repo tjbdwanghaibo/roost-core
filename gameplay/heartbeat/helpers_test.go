@@ -145,7 +145,7 @@ func (d *Driver) frame() int64 {
 // newTestDriver 返回接上 fakeClient 与按 map 查找的驱动（不启动循环；测试直接 step）。
 func newTestDriver(t testing.TB, logger *slog.Logger) (*Driver, *fakeClient, *fakeClock, *sync.Map) {
 	t.Helper()
-	d := NewDriver(Config{Name: "test", Logger: logger})
+	d := NewDriver(Config{Name: "test", Logger: logger, Delivery: testDelivery})
 	clk := newFakeClock()
 	d.SetClock(clk.Now)
 	client := &fakeClient{}
@@ -191,4 +191,52 @@ func (h *countingHandler) count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.warns)
+}
+
+// testDelivery 是本包测试构造驱动时用的投递方式（newTestDriver、newNestFixture 读它）。用例不并行，由 forEachDelivery /
+// useDelivery 设置。
+var testDelivery = DeliveryDispatch
+
+// forEachDelivery 把用例在两种投递方式下各跑一遍（子测试 dispatch / batch）：批量方式下 Nest 的语义（同 ID 顺序、
+// 跳拍计数、Remote 共享模式）必须与缺省方式一致（维护者 2026-10-21：批量方式先合入、缺省关闭）。
+func forEachDelivery(t *testing.T, fn func(t *testing.T)) {
+	t.Helper()
+	for _, delivery := range []Delivery{DeliveryDispatch, DeliveryBatch} {
+		t.Run(string(delivery), func(t *testing.T) {
+			useDelivery(t, delivery)
+			fn(t)
+		})
+	}
+}
+
+// useDelivery 让本用例（及其子测试）构造的驱动用 delivery，用例结束恢复。
+func useDelivery(t *testing.T, delivery Delivery) {
+	t.Helper()
+	previous := testDelivery
+	testDelivery = delivery
+	t.Cleanup(func() { testDelivery = previous })
+}
+
+// DispatchTryBatch 让替身客户端也能接批量投递：逐个目标照 Dispatch 记录（同一个 sentBeat 形状），整批与 Dispatch
+// 用同一个错误；第一次调用同样可以停在 entered 上直到驱动停止，之后 ctx 已取消，整批不准入（与 Nest 相同）。
+func (c *fakeClient) DispatchTryBatch(ctx context.Context, targets []nest.TryBatchTarget, _ func(nest.TryBatchTarget, error)) error {
+	if c.entered != nil {
+		c.once.Do(func() {
+			close(c.entered)
+			<-ctx.Done()
+		})
+	}
+	if err := ctx.Err(); err != nil {
+		return err // 与 nest.NestMgr 相同：ctx 已取消时整批不准入
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, target := range targets {
+		r := target.Params[0].(*Reg)
+		if r.host.id != target.ID {
+			panic("try-batch target id does not match the registration's entity")
+		}
+		c.sent = append(c.sent, sentBeat{frame: r.host.driver.frame(), reg: r, handler: target.Handler.String()})
+	}
+	return c.err
 }

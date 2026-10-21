@@ -2,13 +2,16 @@
 // Provide 时取 Nest 客户端、只读实体查找与 App 业务时钟交给驱动，并把驱动登记为 mods.ModHeartbeat；Start 启动驱动
 // goroutine，Stop 先于 Nest 停止（App 按依赖逆序停：先停 Service、再停本 Mod、最后停 Nest）。
 //
-// 驱动本身（调度、投递、跳拍规则）在 gameplay/heartbeat；这里只做接线，不持有运行状态，也没有配置项（档位、分辨率、
-// 驱动数都是固定的）。业务把驱动写成包级变量，组件经它 NewHost，进程装配用 NewMod 装上同一个驱动。
+// 驱动本身（调度、投递、跳拍规则）在 gameplay/heartbeat；这里只做接线，不持有运行状态。唯一的配置项是投递方式
+// heartbeat.delivery（dispatch 缺省 / batch，维护者 2026-10-21：Nest 批量心跳作业先合入、缺省关闭），Init 时校验并
+// 交给驱动一次，运行期不切换；档位、分辨率、驱动数都是固定的。业务把驱动写成包级变量，组件经它 NewHost，进程装配用
+// NewMod 装上同一个驱动。
 package heartbeat
 
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -32,15 +35,37 @@ func NewMod(access *entity.ManagerAccess, driver *coreheartbeat.Driver) *Mod {
 
 func (m *Mod) Name() app.ModName { return mods.ModHeartbeat }
 
+// config 是 heartbeat.* 的声明。
+type config struct {
+	Heartbeat struct {
+		Delivery string `config:"delivery" default:"dispatch" enum:"dispatch|batch" example:"dispatch" help:"心跳交给 Nest 的方式：dispatch 每拍一条单目标 Dispatch（缺省）；batch 按 64 拍一批走 Nest 批量心跳作业（DESIGN-TODO D20 选项 C，未经正式压测，缺省关闭）。启动时确定，运行期不切换"`
+	} `config:"heartbeat"`
+}
+
+// ConfigSchema 声明 heartbeat.delivery。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // DependsOn：投递走 Nest 客户端，Nest 先启动、后停止。
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModNest} }
 
-func (m *Mod) Init(*viper.Viper) error {
+// Init 校验依赖并把 heartbeat.delivery 交给驱动（驱动第一次 Start 之前；之后不能再改）。
+func (m *Mod) Init(cfg *viper.Viper) error {
 	if m.access == nil || m.access.Manager() == nil {
 		return errors.New("heartbeat mod: entity access is required")
 	}
 	if m.driver == nil {
 		return errors.New("heartbeat mod: driver is required")
+	}
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("heartbeat mod: %w", err)
+	}
+	delivery, err := coreheartbeat.ParseDelivery(settings.Heartbeat.Delivery)
+	if err != nil {
+		return fmt.Errorf("heartbeat mod: %w", err)
+	}
+	if err := m.driver.SetDelivery(delivery); err != nil {
+		return fmt.Errorf("heartbeat mod: %w", err)
 	}
 	return nil
 }
@@ -82,6 +107,7 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 
 var (
 	_ app.Mod                   = (*Mod)(nil)
+	_ app.ModConfigSchema       = (*Mod)(nil)
 	_ app.ModDependencyProvider = (*Mod)(nil)
 	_ app.ModStopperWithContext = (*Mod)(nil)
 )

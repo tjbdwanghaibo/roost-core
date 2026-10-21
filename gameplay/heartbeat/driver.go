@@ -6,11 +6,14 @@
 //   - 登记：组件在实体加载（OnInitFinish）时经 Host.Register 得到 Reg，按需要 Start / Stop / SetPeriod；
 //     卸载、删档时 Host.OnDestroy 撤销。心跳本身什么都不持久，加载后由组件重新登记。
 //   - 调度：Driver 一个 goroutine，按档分环、10ms 一格；档位固定（Periods），相位 = hash(实体 ID)。
-//   - 执行：到期的登记各投一条单目标 Nest 消息（P1 用 nest.Client.Dispatch，不合并），回调在实体自己的 worker 上、
-//     实体锁与事务内执行；快池实体在快池、慢池实体在慢池（Nest 按实体种类分流）。
+//   - 执行：缺省每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，Config.Delivery = DeliveryDispatch）；
+//     DeliveryBatch 时按 64 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，D20 选项 C，未经正式压测，
+//     维护者 2026-10-21 决定先缺省关闭），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在它后面，Remote
+//     托管实体仍单目标。两种方式都不合并；回调在实体自己的 worker 上、实体锁与事务内执行；快池实体在快池、慢池实体
+//     在慢池（Nest 按实体种类分流）。
 //
 // 每个登记至多一拍在途：上一拍没执行完就跳过这一拍，不累积、不补发，计数并限频打 Warn；准入失败（快池 ErrQueueFull、
-// 引擎停止中）同样按跳拍处理。框架不追帧，回调按 Beat.Elapsed 算一次。持久、准点、离线也要算的到期动作用
+// 引擎停止中，含批量作业里冲突转单目标被拒）同样按跳拍处理。框架不追帧，回调按 Beat.Elapsed 算一次。持久、准点、离线也要算的到期动作用
 // framework/nest/entitytimer，不用心跳。
 package heartbeat
 
@@ -19,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,11 +51,12 @@ const (
 )
 
 const (
-	// DeliveredMetric 计准入成功的心跳消息，标签 driver。
+	// DeliveredMetric 计交给 Nest 的拍（批量作业里的目标与单目标 Dispatch；准入被拒的不算），标签 driver。
 	DeliveredMetric = "heartbeat.delivered_total"
 	// ExecutedMetric 计执行了回调的拍。
 	ExecutedMetric = "heartbeat.executed_total"
-	// SkippedMetric 计跳过的拍，标签 reason：inflight（上一拍还没执行完）、queue_full（快池准入满）、
+	// SkippedMetric 计跳过的拍，标签 reason：inflight（上一拍还没执行完）、queue_full（快池准入满，含批量作业里冲突
+	// 转单目标被拒）、
 	// rejected（其他准入失败，例如引擎停止中）。持续增长说明实体的 worker 忙不过来或回调太慢；同时打限频 Warn。
 	SkippedMetric = "heartbeat.skipped_total"
 	// StalledMetric 计在途超过 StallAfter 视为丢失而重投的拍；同时打限频 Warn。基线应为零。
@@ -70,6 +75,29 @@ const (
 // ErrNotBound 表示驱动还没有接上 Nest（Bind）就被启动。
 var ErrNotBound = errors.New("heartbeat: driver is not bound to a nest client")
 
+// Delivery 是心跳交给 Nest 的方式（维护者 2026-10-21 决定：批量方式先合入、缺省关闭，合批优化压测通过后再改为缺省）。
+type Delivery string
+
+const (
+	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch（缺省，空值同此）。
+	DeliveryDispatch Delivery = "dispatch"
+	// DeliveryBatch 按 64 拍一批交给 Nest 批量作业（nest.TryBatchDispatcher；D20 选项 C，设计见
+	// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）。Remote 托管实体的拍仍单目标 Dispatch。
+	DeliveryBatch Delivery = "batch"
+)
+
+// ParseDelivery 解析配置值 dispatch / batch（大小写不敏感）；空串是缺省 DeliveryDispatch。
+func ParseDelivery(value string) (Delivery, error) {
+	switch d := Delivery(strings.ToLower(strings.TrimSpace(value))); d {
+	case "", DeliveryDispatch:
+		return DeliveryDispatch, nil
+	case DeliveryBatch:
+		return DeliveryBatch, nil
+	default:
+		return "", fmt.Errorf("heartbeat: unknown delivery %q (want dispatch or batch)", value)
+	}
+}
+
 // Config 是 NewDriver 的输入。
 type Config struct {
 	// Name 用于日志与指标标签。必填。
@@ -80,6 +108,9 @@ type Config struct {
 	WarnInterval time.Duration
 	// Logger 是跳拍 Warn 的输出；nil 用 slog.Default()。
 	Logger *slog.Logger
+	// Delivery 见 Delivery；空值是 DeliveryDispatch。也可在首次 Start 之前用 SetDelivery 改（wiring/heartbeat 按
+	// heartbeat.delivery 配置设）。
+	Delivery Delivery
 }
 
 // Lookup 只读内存里已发布的实体：不加载、不等待（ManagerAccess.Manager().Get）。
@@ -100,8 +131,8 @@ type deliverer interface {
 // docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
 const beatBatchSize = 64
 
-// dispatchDeliverer 是单目标投递：每拍一条 Dispatch，走 Nest 正式准入。客户端不支持批量作业（测试替身、包装客户端）
-// 时用它；batchDeliverer 用它投 Remote 托管实体的拍。
+// dispatchDeliverer 是单目标投递（DeliveryDispatch，缺省）：每拍一条 Dispatch，走 Nest 正式准入。batchDeliverer 用它投
+// Remote 托管实体的拍。
 type dispatchDeliverer struct{ client nest.Client }
 
 func (p dispatchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error)) {
@@ -119,7 +150,7 @@ func (p dispatchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejec
 	}
 }
 
-// batchDeliverer 按 beatBatchSize 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，设计见
+// batchDeliverer（DeliveryBatch）按 beatBatchSize 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，设计见
 // docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：每拍仍在实体自己的 Guard 作用域与事务里执行；
 // 同 ID 有已准入未完成的消息时 Nest 当场把这一拍转成单目标作业排在它后面（不跳拍），只有准入被拒、目标不在内存等
 // 才交回（Driver.handBack，下一格开头按跳拍 / 丢弃处理）。Remote 托管实体的拍逐个单目标 Dispatch：它的写要在
@@ -232,6 +263,7 @@ type Driver struct {
 
 	mu      sync.Mutex
 	ring    *tierRing
+	client  nest.Client // Bind 接上的客户端；SetDelivery 据此重建投递层
 	deliver deliverer
 	lookup  Lookup
 	cancel  context.CancelFunc
@@ -274,6 +306,11 @@ func NewDriver(config Config) *Driver {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
+	delivery, err := ParseDelivery(string(config.Delivery))
+	if err != nil {
+		panic(err)
+	}
+	config.Delivery = delivery
 	d := &Driver{config: config, ring: newTierRing()}
 	d.stallAfter = max(int64(config.StallAfter/Resolution), 1)
 	now := fctx.Now
@@ -311,15 +348,60 @@ func (d *Driver) Bind(client nest.Client, lookup Lookup) error {
 	if client == nil || lookup == nil {
 		return fmt.Errorf("heartbeat: driver %s: nest client and entity lookup are required", d.config.Name)
 	}
-	var deliver deliverer = dispatchDeliverer{client: client}
-	if batch, ok := client.(nest.TryBatchDispatcher); ok {
-		// 生产装配的客户端（*nest.NestMgr）都支持批量作业；不支持的（测试替身、包装客户端）退回单目标 Dispatch。
-		deliver = &batchDeliverer{single: dispatchDeliverer{client: client}, batch: batch, driver: d}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	deliver, err := d.newDelivererLocked(client)
+	if err != nil {
+		return err
+	}
+	d.client, d.deliver, d.lookup = client, deliver, lookup
+	return nil
+}
+
+// SetDelivery 改投递方式。只能在驱动第一次 Start 之前调用（进程装配读配置时）：运行期不切换，启动过的驱动返回错误。
+// 已经 Bind 过的按新方式重建投递层；DeliveryBatch 要求 Bind 的客户端实现 nest.TryBatchDispatcher。
+func (d *Driver) SetDelivery(delivery Delivery) error {
+	delivery, err := ParseDelivery(string(delivery))
+	if err != nil {
+		return err
 	}
 	d.mu.Lock()
-	d.deliver, d.lookup = deliver, lookup
-	d.mu.Unlock()
+	defer d.mu.Unlock()
+	if d.cancel != nil || d.lastDone != nil {
+		return fmt.Errorf("heartbeat: driver %s: delivery cannot change after the driver has started", d.config.Name)
+	}
+	previous := d.config.Delivery
+	d.config.Delivery = delivery
+	if d.client == nil {
+		return nil
+	}
+	deliver, err := d.newDelivererLocked(d.client)
+	if err != nil {
+		d.config.Delivery = previous
+		return err
+	}
+	d.deliver = deliver
 	return nil
+}
+
+// Delivery 返回当前的投递方式。
+func (d *Driver) Delivery() Delivery {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.config.Delivery
+}
+
+// newDelivererLocked 按配置的投递方式建投递层。调用方持有 d.mu。
+func (d *Driver) newDelivererLocked(client nest.Client) (deliverer, error) {
+	single := dispatchDeliverer{client: client}
+	if d.config.Delivery != DeliveryBatch {
+		return single, nil
+	}
+	batch, ok := client.(nest.TryBatchDispatcher)
+	if !ok {
+		return nil, fmt.Errorf("heartbeat: driver %s: delivery %q needs a nest client that implements nest.TryBatchDispatcher, got %T", d.config.Name, DeliveryBatch, client)
+	}
+	return &batchDeliverer{single: single, batch: batch, driver: d}, nil
 }
 
 // Start 启动驱动 goroutine。已经在运行时返回 nil。
