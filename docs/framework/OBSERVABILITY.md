@@ -200,7 +200,7 @@ DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个
 | `heartbeat.stopped_total{driver,reason}` | Counter | 框架自动停掉的登记：`remote_shared`（Remote 托管实体进入共享模式，共享模式不允许挂载心跳）。同时打 Warn `heartbeat: registrations stopped because their Remote entity entered shared mode`（按 `WarnInterval` 限频，缺省 10 秒一条，带间隔内停掉的个数与一个样本实体）。非零说明有组件给会进入共享模式的 Remote 实体挂了心跳，应改由业务层驱动 |
 | `heartbeat.registered{driver}` | Gauge | 正在跳（启动已生效）的登记数 |
 
-D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`）没有自己的指标，都计在上面这组里：移动中的实体有一个 `"move"` 登记，有需要周期 tick 的动作时有一个 `"actionflow"` 登记，配了周期落库的在场景里有一个 `"map.save"` 登记；`registered` 随移动开始 / 结束涨落，空闲实体不计。指标不带登记名标签（低基数），按登记名排查看限频 Warn 里的样本。
+D20 第 2 期的移动与动作（`gameplay/movement`、`actionflow.BeatRunner`）没有自己的指标，都计在上面这组里：每个组的当前动作需要周期 tick 时有一个 `"actionflow/<组号>"` 登记（移动中的实体就是移动组这一个），配了周期落库的在场景里有一个 `"map.save"` 登记；`registered` 随动作开始 / 结束涨落，空闲实体不计。指标不带登记名标签（低基数），按登记名排查看限频 Warn 里的样本（`sample_registration`）。
 
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 

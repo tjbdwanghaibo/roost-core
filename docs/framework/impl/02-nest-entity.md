@@ -59,7 +59,7 @@
 | [mission_runner.go](../../../gameplay/actionflow/mission_runner.go) | `MissionRunnerHooks`、`MissionRunnerConfig`、`MissionRunner` |
 | [plan.go](../../../gameplay/actionflow/plan.go) | `PlanMission` |
 | [registry.go](../../../gameplay/actionflow/registry.go) | `ActionBuilder`、`MissionBuilder`、`Registry` |
-| [runtime.go](../../../gameplay/actionflow/runtime.go) | `ActionContext`、`Action`、`TickIntervaler`、`Waker`、`ActionList`、`MissionContext`、`Mission`、`MissionManager`、`MissionRuntimeSetter` |
+| [runtime.go](../../../gameplay/actionflow/runtime.go) | `ActionContext`、`Action`、`TickIntervaler`、`ActionList`、`MissionContext`、`Mission`、`MissionManager`、`MissionRuntimeSetter` |
 | [heartbeat.go](../../../gameplay/actionflow/heartbeat.go) | `BeatConfig`、`BeatRunner`（心跳驱动的 runner，契约见 [impl/10-time §2C](10-time.md#2c-移动与动作的心跳驱动)） |
 
 ### entity
@@ -182,7 +182,7 @@
 - [action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestActionRunnerExplicitStartPrecedesQueue`、`TestActionRunnerEnqueueStartsIdleGroup`、`TestActionRunnerQueuedStartFailureContinuesQueue`、`TestActionRunnerRecoversTickPanic`、`TestRegistrySealAndBuilderPanic`；其余 9 项见文件
 - [deferred_test.go](../../../gameplay/actionflow/deferred_test.go)：`TestCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDirectStartFailureEndsTheActionOnce`、`TestDeferredStartThatCanNoLongerRunStillEndsItsID`、`TestHookStartStillPrecedesQueuedActions`、`TestEndAllEndsEverythingBeforeCallbackMutationsRun`；其余 6 项见文件
 - [mission_test.go](../../../gameplay/actionflow/mission_test.go)：`TestMissionRunnerBuildFailurePreservesCurrent`、`TestMissionRunnerStartFailureCleansState`、`TestMissionCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDeferredMissionStartErrorsAreReported`、`TestMissionCallbacksThatKeepTriggeringEachOtherAreBounded`；其余 9 项见文件
-- [heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestBeatRunnerHeartbeatFollowsTheActionsThatNeedTicks`、`TestBeatTicksTheGroupsInOrderAndWakeTicksAnEventDrivenAction`（经真实 Nest 与心跳驱动的用例在 `gameplay/movement`）
+- [heartbeat_test.go](../../../gameplay/actionflow/heartbeat_test.go)：`TestEachGroupBeatsAtItsCurrentActionsInterval`、`TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`（经真实 Nest 与心跳驱动的用例在 `gameplay/movement`）
 
 ### entity
 

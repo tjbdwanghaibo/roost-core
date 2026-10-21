@@ -94,14 +94,14 @@ SLG 行军或建造可以用 typed 节点保存任务身份与期限；宿主须
 // 业务包：一个驱动（与 Nest 引擎一一对应）。
 var Heartbeat = heartbeat.NewDriver(heartbeat.Config{Name: "game"})
 
-func (c *MoveComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+func (c *RegenComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	c.hb = Heartbeat.NewHost(c.owner)
-	reg, err := c.hb.Register("move", 100*time.Millisecond, c.onBeat)
+	reg, err := c.hb.Register("regen", time.Second, c.onBeat)
 	if err != nil {
 		return err
 	}
-	c.move = reg
-	if c.dao.Moving() { // 心跳不持久：加载后按自己的持久状态决定是否启动
+	c.regen = reg
+	if c.dao.Regenerating() { // 心跳不持久：加载后按自己的持久状态决定是否启动
 		if err := reg.Start(); err != nil { // 只在 Remote 共享模式下返回 ErrHeartbeatRemoteShared
 			return err
 		}
@@ -109,18 +109,20 @@ func (c *MoveComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error 
 	return nil
 }
 
-func (c *MoveComponent) OnDestroy(entity.EntityDestroyReason) { c.hb.OnDestroy() }
+func (c *RegenComponent) OnDestroy(entity.EntityDestroyReason) { c.hb.OnDestroy() }
 
-func (c *MoveComponent) onBeat(b heartbeat.Beat) error {
-	arrived := c.advance(b.Elapsed) // 按经过时间推进，不按“第几拍”
-	if arrived {
-		c.move.Stop()
+func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
+	full := c.regen(b.Elapsed) // 按经过时间推进，不按“第几拍”
+	if full {
+		c.regen.Stop()
 	}
 	return nil
 }
 
 // 进程装配（依赖 Nest Mod，先于 Nest 停止）：wiringheartbeat.NewMod(entityAccess, Heartbeat)
 ```
+
+控制实体行为的逻辑（移动、技能、AI 决策）不这样直接挂组件心跳，而是写成动作、由 `actionflow.BeatRunner` 挂心跳（维护者 2026-10-21，见 §4B）。
 
 | API | 说明 |
 | --- | --- |
@@ -156,57 +158,66 @@ func (c *MoveComponent) onBeat(b heartbeat.Beat) error {
 
 ## 4B. 移动与动作：心跳驱动
 
-移动与 actionflow 动作都跑在实体自己的心跳上（DESIGN-TODO D20 第 2 期）。框架给三件东西，完整接法见 [`gameplay/movement` 的 Example](../../../gameplay/movement/example_test.go)：
+移动与 actionflow 动作都跑在实体自己的心跳上（DESIGN-TODO D20 第 2 期）。两条维护者决定（2026-10-21）：
+
+- **移动由动作驱动**（参考 ssr：action 挂心跳、在心跳里调 move）：`Move` 是被动组件，只提供设定与推进接口；`MoveTo` / `Follow` 动作由实体的 `ActionRunner` 驱动，runner 给动作所在的组挂心跳，每拍动作调 `Move.Advance`。
+- **所有控制实体行为的逻辑都经动作**：移动、技能、AI 决策等统一经 `ActionRunner` 下发与收尾，不绕过动作直接驱动组件。
+
+框架给的东西，完整接法见 [`gameplay/movement` 的 Example](../../../gameplay/movement/example_test.go)：
 
 | 类型 | 包 | 做什么 |
 | --- | --- | --- |
+| `BeatRunner` | `gameplay/actionflow` | 让实体的 `ActionRunner` 由心跳 tick：每个组的当前动作挂这个组的心跳（`"actionflow/<组号>"`，周期取动作的 `TickInterval`），组空闲时停 |
 | `MapBasic` | `gameplay/movement` | 所在场景、位置、朝向，以及与 AOI 的接线：进场景 `Enter`、位置变化 `QueueMove`、离开 `Leave`；落库由业务选 |
-| `Move` | `gameplay/movement` | 速度、路径或跟随目标；移动中挂自己的心跳 `"move"`（缺省 100ms），每拍按 `Beat.Elapsed` 推进一次、写 `MapBasic`；停下就停心跳 |
-| `BeatRunner` | `gameplay/actionflow` | 让实体的 `ActionRunner` 由心跳 tick（登记 `"actionflow"`）：有需要周期 tick 的动作时挂心跳，空闲时停 |
+| `Move` | `gameplay/movement` | 被动：速度、路径或跟随目标、状态；`MoveTo` / `Follow` 设定、`Advance(token, elapsed)` 推进一次、`Stop`。自己不挂心跳 |
+| `MoveTo` / `Follow` 动作 | `gameplay/movement` | `RegisterActions` 以业务选定的种类注册；Start 设定移动，每拍 Tick 调 `Advance(ctx.Elapsed)`，移动结束即动作结束 |
 
-另有两个动作 `MoveTo` / `Follow`（`movement.RegisterActions` 以业务选定的种类注册）：移动是动作，到达、被打断、被阻挡、目标消失都由 actionflow 收尾。巡逻、寻路以后再做；寻路这类重计算在发起 `MoveTo` 之前做，路径作为参数。
+巡逻、寻路以后再做；寻路这类重计算在发起 `MoveTo` 之前做，路径作为参数。
 
-**接法**：实体一个心跳宿主，三个组件共用；实体实现 `movement.MapOwner`（被跟随时读位置）与 `movement.MoveOwner`（动作找组件），`OnDestroy` 里先 `MapBasic.OnDestroy` 再 `Host.OnDestroy`。
+**接法**：实体一个心跳宿主，组件共用；实体实现 `movement.MapOwner`（被跟随时读位置）与 `movement.MoveOwner`（动作找组件），`OnDestroy` 里先 `MapBasic.OnDestroy` 再 `Host.OnDestroy`。
 
 ```go
 m.host = driver.NewHost(m)
 m.mb, _ = movement.NewMapBasic(m, m.host, movement.MapConfig{Fields: daoFields, SaveOnLeave: true, Save: saveToDAO})
-m.move, _ = movement.NewMove(m.host, m.mb, movement.MoveConfig{Locate: movement.LocateIn(entityManager.Get)})
+m.move, _ = movement.NewMove(m.mb, movement.MoveConfig{Locate: movement.LocateIn(entityManager.Get)})
 m.flow, _ = actionflow.NewBeatRunner(actionflow.ActionRunnerConfig{Registry: registry, GroupForKind: groups}, actionflow.BeatConfig{Host: m.host})
 
-// handler 里（实体锁与事务内）：
-m.mb.Enter(sceneID, movement.InterestSpace{Interest: interest}, at)
-m.flow.Runner().Start(ActMoveTo, movement.MoveToParam{Path: path, Speed: 6}, 0, time.Time{})
+// handler 里（实体锁与事务内）：先做完会失败的校验与修改，最后一步才调用动作接口。
+if err := m.mb.Enter(sceneID, movement.InterestSpace{Interest: interest}, at); err != nil {
+	return err
+}
+_, err := m.flow.Runner().Start(ActMoveTo, movement.MoveToParam{Path: path, Speed: 6}, 0, time.Time{})
+return err
 ```
+
+**事务与 runner（业务约束，维护者 2026-10-21：由业务层保证，框架不处理）**：`ActionRunner` / `MissionRunner` 是纯内存状态，**不随 Nest 事务回滚**。handler 先做完全部可能失败的校验和修改，**最后一步**才调用 `Start` / `Enqueue` / `End` 等；之后若还可能失败，回滚后 runner 里会残留这次的变更（例如一个已启动的 MoveTo），而心跳登记与 `Move` 的状态随回滚恢复——残留的 MoveTo 下一拍 `Advance` 得到 `Replaced`，以取消结束。心跳那一拍里动作 Tick 对组件（DAO、`Move`）的修改随这一拍的事务提交或回滚；拍的回调不返回错误，所以这一拍只在提交失败时回滚，那时 runner 已经按 Tick 的结论推进，框架不处理。
+
+**BeatRunner**：
+
+- 动作可选实现 `actionflow.TickIntervaler`：不实现按 `BeatConfig.Period`（缺省 100ms）；返回 0 表示不需要周期 tick（由别的动作或 handler 结束它），这个组不挂心跳；返回正数取不大于它的最长档。组的当前动作切换时按新动作的周期启停这个组的心跳；同一实体的多个组各自一个登记、各自投递（与 ssr 相同，决定 ③ 不合并）。移动中的实体只有移动组一个登记，每拍一条消息。
+- 一拍只 tick 这个组；`ActionContext.Elapsed` 是本拍的 `Beat.Elapsed`（不追帧），按时间推进的动作用它。
+- 组的心跳挂不上（Remote 托管实体处于共享模式，§4A）时，这个动作以失败结束（原因带 `ErrHeartbeatRemoteShared`）；运行中进入共享模式、框架停掉了心跳时，动作留在 runner 里不推进，回到独占后调用 `BeatRunner.Sync()` 重新挂上（共享期间它返回错误）。
+- AI（`gameplay/ai.Controller`）与技能以后用同一个 runner：它们的行为都是动作，由动作所在组的心跳 tick。
 
 **MapBasic**：
 
-- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。
+- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改。
 - 位置变化 `SetPos` 先 `Space.QueueMove`（事务内只记事实、走提交门，提交确认后进 AOI、回滚丢弃），再写字段；`QueueMove` 被拒时什么都不写、返回错误。
 - 进出场景 `Enter` / `Leave` 在**事务提交、实体锁释放之后**调 `Space.Enter` / `Space.Leave`（回滚的进出不发生；同一事务里进场景后又移动，提交后的 Enter 直接用最新位置；先进后出互相抵消）。不在事务里（加载 / 新建的初始化阶段）立即调用。
 - `Space` 是接口，`InterestSpace` 把 `policy.Interest` 适配过来：`Player` 认出的实体按玩家进出（`Interest.Enter` / `Leave`），其余只被看（`Show` / `Hide`），进出后 `Apply` 一次。同步 subject 的登记、玩家会话由业务在进场景之前做；业务场景也可以自己实现 `Space`。
-- `Published()` 是最近一次**提交**的快照，任意 goroutine 无锁读取：跟随者读目标位置用它，不取目标的锁。
+- `Published()` 是最近一次**提交**的快照，任意 goroutine 无锁读取：跟随者读目标位置用它，不取目标的锁。它在提交后、实体锁释放之后才更新，所以在同一拍的事务里观察到的事件（例如动作结束）早于这次发布。
 - 心跳不持久、组件也不持久“在场景里”：实体重新加载后由业务重新 `Enter`。只从内存卸载不等于离开场景（`OnDestroy` 不调 `Leave`）。
 
 **Move**：
 
-- `MoveTo(path, speed, done)` 沿路径走、`Follow(target, speed, keep, stopWhenReached, done)` 跟随；新的取代进行中的（旧的以 `Replaced` 回调），`Stop(token)` 主动停（不回调）。
-- 每拍走 `速度 × Beat.Elapsed`：**不追帧**，掉拍后下一拍一次走完整段；不足一格的位移累积在亚格位置里，按格写 `MapBasic`，朝向取本拍位移方向。`Terrain` 非 nil 时每进一个新格问一次，被挡就停在最后一个可走的格（`Blocked`）。
+- `MoveTo(path, speed)` 沿路径走、`Follow(target, speed, keep, stopWhenReached)` 跟随，返回编号；新的取代进行中的（旧编号的 `Advance` 得到 `Replaced`），`Stop(token)` 停。
+- `Advance(token, elapsed)` 走 `速度 × elapsed`：**不追帧**，掉拍后下一拍一次走完整段；不足一格的位移累积在亚格位置里，按格写 `MapBasic`，朝向取本拍位移方向。`Terrain` 非 nil 时每进一个新格问一次，被挡就停在最后一个可走的格（`Blocked`）。返回 `Result`：`Reason` 为 0 表示还在移动。
 - `Follow` 每拍读目标的 `Published`：目标不在内存（卸载、删档）→ `TargetLost`，不在本场景 → `TargetLeft`；走到 `keep` 格以内停住，`stopWhenReached` 时以 `Arrived` 结束，否则继续跟随。
-- 自己离开场景 → `LeftScene`；AOI 排队满（`policy.ErrInterestQueueFull`，背压）时整拍作废、下一拍接着走；其他写位置错误 → `Refused`。结束时先停心跳再回调 `done`。
+- 自己离开场景 → `LeftScene`；AOI 排队满（`policy.ErrInterestQueueFull`，背压）时整拍作废、下一拍接着走；其他写位置错误 → `Refused`。
 - 推进状态（亚格位置、路径进度）随事务回滚恢复：回滚的一拍不算走过，回滚的 `MoveTo` 不生效。
-- **Remote 共享模式**（不允许挂心跳，见 §4A）：共享期间 `MoveTo` / `Follow`、带周期落库的 `MapBasic.Enter` 返回 `heartbeat.ErrHeartbeatRemoteShared`、什么都不改。运行中进入共享模式时框架在下一拍停掉心跳、回到独占不自动恢复：移动状态保留但不推进、动作不收尾；回到独占后调用 `Move.Resume()` 与 `BeatRunner.Sync()` 接着走，或 `Stop` / 结束动作放弃。
+- 动作结论：`Arrived` → 成功，`Replaced` → 取消，其余 → 失败（原因是 `StopReason`）；动作被取消（含被同组新动作取代）时停掉自己那次移动。
 
-**BeatRunner**：
-
-- 动作可选实现 `actionflow.TickIntervaler`：不实现按 `BeatConfig.Period`（缺省 100ms）tick；返回 0 表示由事件推进（`MoveTo` / `Follow` 就是，位置由 `Move` 自己的心跳推进），runner 不为它挂心跳；返回正数取不大于它的最长档。runner 心跳的周期是全部组里需要 tick 的动作中最短的那个，一个都没有时停。所以一个只在移动的实体每拍只有一条 `"move"` 消息。
-- 每拍按组号顺序 tick 需要周期 tick 的组，再 tick 任务（`BeatConfig.Missions`）；`ActionContext.Elapsed` 是本拍的 `Beat.Elapsed`，`ActionContext.Waker` 让事件推进的动作在事件到达时马上 tick 自己的组。
-- `BeatRunner.Sync()` 按当前动作重算心跳；动作切换与每拍结束时自动调用（错误经 `OnError`），业务只在回滚之后或回到独占之后手动调用，它返回挂心跳的错误。
-- AI（`gameplay/ai.Controller`）与技能以后都用同一个 runner：它们发起的动作在这个 runner 里、由这一个心跳 tick；控制器自己的决策节拍可以作为另一个登记（例如 `"ai"`、200ms）。
-
-**事务与 runner**：`ActionRunner` / `MissionRunner` 是纯内存状态，**不随事务回滚**（既有性质）；心跳登记的启停却随事务回滚。在一个随后回滚的 handler 里启停动作，两者可能不一致，直到下一次动作切换（`BeatRunner.Sync` 可手动重算）。所以改 runner 的 handler 先做完会失败的校验，再 `Start`。边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)。
-
-实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
+边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 
 ## 5. 运维
 

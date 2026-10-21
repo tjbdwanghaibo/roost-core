@@ -927,78 +927,86 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 ### P2 实施结果（2026-10-21）
 
-**状态：P2 已实施**（分支 `feat/d20-movement-p2`，基于 `2b47c959`、已 rebase 到 `d287031f`；本地提交，由维护者推送）。组件 `gameplay/movement`，runner 适配 `gameplay/actionflow`（`heartbeat.go`）。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P2 已实施**（分支 `feat/d20-movement-p2`，本地提交，由维护者推送）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+
+**P2 中维护者决定（2026-10-21）**：
+
+1. **移动参考 ssr，由 action 驱动**：action 挂心跳，在心跳里调用 move 的接口。`Move` 是被动组件（设定、`Advance`、`Stop`、查询），自己不挂心跳；`MoveTo` / `Follow` 由实体的 ActionRunner 驱动，runner 挂心跳，每拍 runner tick 在途动作、动作调 `Move.Advance`。移动中的实体每拍只有一条心跳消息，不需要 Waker 绕路收尾。
+2. **所有控制实体行为的都走 action**：移动、技能、AI 决策等统一经 ActionRunner 下发与收尾，不允许绕过动作直接驱动组件。
+3. **runner 不随事务回滚：由业务层保证，框架不处理**（同日修正上一条“框架实现提交后生效”的要求）：handler 先做完全部可能失败的校验和修改，最后一步才调用动作的 Start / Enqueue 等；之后还可能失败的，回滚后 runner 里会残留这次的变更。心跳那一拍里动作对组件的修改随这一拍的事务提交或回滚，保持现状。
+
+**对照 ssr（只读 `kingdom/modules/action`、`action_list`、`move`、`map_basic`）**：`action_list.setCurAction` 在组的当前动作切换时给这个组登记心跳（周期 = 动作的 `LoopInterval`，同周期不换登记），`OnTick(group)` 调当前动作的 `Loop`；`ActionMove.DoLoop` 自己算 `elapsed = 本拍时刻 - 上次时刻`，调 `MovePathInfo.StepMove(elapsed)`，路径走完返回 `ErrReachEnd`，action_list 据此结束动作；move 模块写 map_basic 的位置。roost 照搬“组的当前动作挂组的心跳、动作在心跳里调 move、move 返回到达”的结构；不同点：`elapsed` 用心跳给的 `Beat.Elapsed`（夹取、随回滚恢复），move 的结论是返回值 `Result` 而不是错误，每次切换都重新启停（不比较周期）。与 Nest 事务模型没有冲突：心跳回调本来就在实体锁与事务内，动作对组件的修改随这一拍的事务；ssr 没有事务，“runner 不回滚”按决定 3 由业务保证。改动没有超出 actionflow 与 movement。
 
 **API 最终形状**：
 
 ```go
+// gameplay/actionflow
+func NewBeatRunner(ActionRunnerConfig, BeatConfig{Host, Name, Period, Options}) (*BeatRunner, error)
+func (b *BeatRunner) Runner() *ActionRunner / Reg(group) *heartbeat.Reg / Ticking() bool / Sync() error
+type TickIntervaler interface{ TickInterval() time.Duration }   // 动作可选；0 = 不需要周期 tick
+// ActionContext 新增 Elapsed time.Duration（本组这一拍的 Beat.Elapsed）
+
 // gameplay/movement
 type Fields interface { SceneID() int64; SetSceneID(int64); Pos() spatial.Point; SetPos(spatial.Point); Facing() Facing; SetFacing(Facing) }
 type Space interface { Enter(e, at) error; QueueMove(e, at) error; Leave(e) error }
 type InterestSpace struct { Interest *policy.Interest; Player func(e) (playerID int64, view policy.ObserverView, ok bool) }
 func NewMapBasic(owner, host *heartbeat.Host, MapConfig{Fields, Save, SaveOnLeave, SaveEvery, SaveOptions, OnSpaceError}) (*MapBasic, error)
-func (m *MapBasic) Enter(sceneID int64, space Space, at spatial.Point) error / Leave() error / SetPos(at) error / SetFacing(Facing) / Save() error
+func (m *MapBasic) Enter(sceneID, space, at) error / Leave() error / SetPos(at) error / SetFacing(Facing) / Save() error
 func (m *MapBasic) SceneID() / Pos() / Facing() / InScene() / Space() / Published() Snapshot / OnDestroy()
-func NewMove(host, mb *MapBasic, MoveConfig{Period, Terrain, Locate, Options}) (*Move, error)
-func (m *Move) MoveTo(path []spatial.Point, speed float64, done Done) (token uint64, err error)
-func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached bool, done Done) (uint64, error)
-func (m *Move) Stop(token uint64) bool / Resume() error / Moving() bool / Token() uint64
-type Done func(token uint64, Result{Reason StopReason; At spatial.Point; Err error})  // Arrived / Replaced / Blocked / LeftScene / TargetLost / TargetLeft / Refused
+func NewMove(mb *MapBasic, MoveConfig{Terrain, Locate}) (*Move, error)
+func (m *Move) MoveTo(path []spatial.Point, speed float64) (token uint64, err error)
+func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached bool) (uint64, error)
+func (m *Move) Advance(token uint64, elapsed time.Duration) Result   // Reason 0 = 还在移动；Arrived / Replaced / Blocked / LeftScene / TargetLost / TargetLeft / Refused
+func (m *Move) Stop(token uint64) bool / Moving() bool / Token() uint64
 type Locator func(id int64) (Snapshot, bool); func LocateIn(get func(int64) entity.IThreadSafeEntity) Locator
-func RegisterActions(registry *actionflow.Registry, moveTo, follow actionflow.ActionKind) error   // MoveToParam{Path, Speed} / FollowParam{Target, Speed, Keep, StopWhenReached}
+func RegisterActions(registry *actionflow.Registry, moveTo, follow actionflow.ActionKind) error   // MoveToParam{Path, Speed, Period} / FollowParam{Target, Speed, Keep, StopWhenReached, Period}
 type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveComponent() *Move }; type MemFields struct{ OnChange func() }
-
-// gameplay/actionflow
-func NewBeatRunner(ActionRunnerConfig, BeatConfig{Host, Name, Period, Missions, Options}) (*BeatRunner, error)
-func (b *BeatRunner) Runner() *ActionRunner / Reg() / Ticking() bool / Wake(Action) error / Sync() error
-type TickIntervaler interface{ TickInterval() time.Duration }   // 动作可选；0 = 由事件推进
-type Waker interface{ Wake(Action) error }
-// ActionContext 新增 Elapsed time.Duration、Waker Waker
 ```
 
-**按要求逐条落实**：位置 `gameplay/movement`（框架，game-demo 与生成工程都能用）；`MapBasic` 有场景 ID、位置、朝向，位置 nopersist 只同步、`SaveOnLeave` / `SaveEvery` 由业务选落库；与 AOI 的接线经 `Space` 接口注入（不绑死场景实现）：进场景 `Enter`、位置变化 `QueueMove`（事务内入队、走提交门）、离开 `Leave`。`Move` 有速度、路径 / 跟随目标、状态，在自己的心跳 `"move"`（缺省 100ms）里按 `Beat.Elapsed` 推进、写 `MapBasic`、触发 `QueueMove`，停下就 `Stop` 心跳，不追帧。`MoveTo` / `Follow` 是 Action，到达、打断、被阻挡、目标消失由 actionflow 收尾；`BeatRunner` 是通用的 runner 宿主（AI、技能以后用同一个 runner 与心跳）。回调只做内存计算与入队。
+**按要求逐条落实**：位置 `gameplay/movement`；`MapBasic` 有场景 ID、位置、朝向，位置 nopersist 只同步、`SaveOnLeave` / `SaveEvery` 由业务选落库，AOI 接线经 `Space` 接口注入：进场景 `Enter`、位置变化 `QueueMove`（事务内入队、走提交门）、离开 `Leave`。`Move` 有速度、路径 / 跟随目标、状态，被动；`MoveTo` / `Follow` 动作的组由 runner 挂心跳（缺省 100ms），每拍 `Advance(Beat.Elapsed)`、写 `MapBasic`、触发 `QueueMove`，不追帧；到达、打断、被阻挡、目标消失由 actionflow 收尾；组空闲时停心跳。`BeatRunner` 是通用的 runner 宿主，AI、技能以后用同一个 runner。回调只做内存计算与入队。
 
-**与方案的偏差（如实记录，需要时请维护者改）**：
+**与方案的偏差（如实记录）**：
 
-1. **移动动作不让 runner 挂心跳**：要求写的是“runner 有在途动作时挂心跳”。照字面做，一个移动中的实体每 100ms 有两条消息（`"move"` 与 `"actionflow"`，决定 ③ 不合并）。实现为：动作可选实现 `TickIntervaler`，`MoveTo` / `Follow` 返回 0（由事件推进：`Move` 结束时经 `Waker` 让 runner 马上 tick 它的组收尾），runner 只在有需要周期 tick 的动作时挂心跳（不实现该接口的动作缺省 100ms）。方案 §5.4 的“周期取各组动作周期的最小值”照做。
-2. **状态存放在业务 DAO，`MapBasic` 不自带字段**：同步内容由生成 DAO 的字段打包，框架组件没有自己的同步字段；所以 `MapBasic` 经 `Fields` 接口读写业务 DAO 的字段（与 game-demo `MapComponent` “唯一入口、不另存位置”一致），`MemFields` 只给测试 / 示例 / 不持久的 NPC。
-3. **进出场景在提交之后**：`QueueMove` 有提交门，`Interest.Enter` / `Show` / `Leave` / `Hide` 没有；为了“回滚的进出不发生”，`MapBasic` 把它们放进 `nest.AfterCommit`（实体锁外）。代价见 KNOWN-LIMITS（提交后在 worker 上取 Interest 锁并 `Apply`；pipelined 下的窗口）。
-4. **AOI 排队满不结束移动**：`policy.ErrInterestQueueFull` 是背压，整拍作废、下一拍接着走（这一拍的时间不补）；其他写位置错误以 `Refused` 结束。
-5. **整数格坐标**：`spatial.Point` 是 int64 格，`Move` 用亚格位置累积零头、按格写入；朝向 `Facing` 取 1/100 度的 int32。
-6. **`ActionContext` 加了两个字段**（`Elapsed`、`Waker`），`BeatRunner.Sync` 返回 error（适配 main `d287031f` 的 `Reg.Start() error`）；`Move.Resume` 是为共享模式新加的。
-7. **`InterestSpace` 进出后调一次 `Interest.Apply`**：纯直接模式（还没有排队事实）下 Flush 不结算 Enter / Show 的贡献，需要调用方 Apply（与 game-demo `Scene.Join` 相同）。
-8. **AI 没有接线**：只写了接法（AI 发起的动作在同一个 runner、由同一个心跳 tick；控制器决策节拍另登记 `"ai"`）；`ai.Controller` 没改。
-9. **PACKAGES 的 actionflow 测试文件数**由 12 改成实际的 4（原数与目录不符）。
+1. **每组一个心跳登记**（参考 ssr），不是方案 §5.4 的“一个 `"actionflow"` 登记、周期取各组最小值”：一个登记按最短周期跳会让慢的动作被按快的节拍 tick、`Elapsed` 也对不上。多个组同时有需要 tick 的动作时各自投递（决定 ③ 不合并）。
+2. **状态存放在业务 DAO，`MapBasic` 不自带字段**：同步内容由生成 DAO 的字段打包，所以 `MapBasic` 经 `Fields` 读写业务 DAO（与 game-demo `MapComponent` 一致），`MemFields` 只给测试 / 示例 / 不持久的 NPC。
+3. **进出场景在提交之后**：`QueueMove` 有提交门，`Interest.Enter` / `Show` / `Leave` / `Hide` 没有；`MapBasic` 把它们放进 `nest.AfterCommit`（实体锁外），`InterestSpace` 进出后调一次 `Interest.Apply`。
+4. **AOI 排队满不结束移动**：`policy.ErrInterestQueueFull` 是背压，整拍作废、下一拍接着走；其他写位置错误以 `Refused` 结束。
+5. **整数格坐标**：`Move` 用亚格位置累积零头；朝向 `Facing` 取 1/100 度。
+6. **共享模式**（适配 main `96724b6a` / `d287031f`）：组的心跳挂不上时动作以失败结束；运行中被停掉后回到独占由业务 `BeatRunner.Sync` 重新挂上；带 `SaveEvery` 的 `Enter` 在共享模式下返回错误。
+7. **AI 没有接线**；`BeatConfig` 没有 MissionRunner（任务由动作结束推进，需要周期 tick 的任务另登记心跳）。
+8. **PACKAGES 里 actionflow 的测试文件数**由 12 改成实际的 4。
+
+**过程记录**：第一版（`93794491`、`345616ad`）是 Move 自己挂 `"move"` 心跳、移动动作经 Waker 由事件收尾；维护者决定 1 之后改为本节的结构（`382eb10c`），Waker、`Move.Resume`、Done 回调删除。
+
+**偶发失败（复核发现，已修，`1008ba58`）**：`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` 在 `-race -count=15` 下 2/15 失败，原文 `nest_test.go:300: ended {id:1 kind:1 status:2 reason:arrived} at {Present:true SceneID:1 Pos:{X:3 Y:1} Facing:1843}`（另一种：`nest_test.go:321: at {Present:true SceneID:1 Pos:{X:3 Y:5} Facing:9000} registered 1`）。判断：**测试时序问题，不是产品缺陷**。status:2 是成功、reason 是 arrived——第一条移动确实到了终点 (3,3)，但测试读到的 `Published` 还是上一拍的 (3,1)：动作结束在拍的事务里记下，`Published` 与心跳登记的停止都在提交后、实体锁释放之后才执行（契约就是“最近一次提交”），测试看到结束就读提交后状态。证据：在 `afterCommit` 前临时插 30ms 睡眠放大窗口，修前测试 2/2 失败（`... at {... Pos:{X:2 Y:0} ...}`）、修后 2/2 通过；Nest 同实体消息等前驱作业整个结束（`dispatchNest` → `runNestLogic` 的 defer 先释放 Guard 作用域、执行提交后回调，`finishJobLocked` 才放行后继）。修法：`nestFixture.settle(e)` 经同一实体发一条空消息再断言提交后状态（不 sleep、不放宽断言）。同包排查：凡是“从拍的事务里观察到事件之后断言 `Published` / `Registered`”的地方都加了 `settle`（runner tick 用例、MoveTo 用例两处、Follow 收尾、冒烟的终点断言）；经 `Request` 返回之后断言的用例不受影响（回复在提交后回调之后）。负载下的修前 / 修后失败率见下文“验证”。
 
 **红绿证据**：新代码，实现与测试同轮写成，红用变异核对给出（每个强制点改掉一处，对应用例在当前代码上变红，原文）：
 
 | 变异 | 变红的用例与原文 |
 | --- | --- |
-| M1 位移按 `Period` 不按 `Elapsed` | `TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`：`a 300ms beat queued [move 0,1], want one move to 0,3` |
-| M2 到达不停心跳 | `TestMoveToAdvancesBySpeedAndElapsedThenArrivesAndStopsTheHeartbeat`：`after arriving: moving false active true registered 1` |
+| M1 推进不按 `elapsed`（固定 100ms） | `TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`：`a 300ms beat queued [move 0,1], want one move to 0,3` |
+| M2 组的动作离开时不停心跳 | `TestEachGroupBeatsAtItsCurrentActionsInterval`：`idle groups: true 100ms / true 500ms registered 2`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`idle runner keeps its heartbeat: active true registered 1` |
 | M3 每拍从格重新起算（丢零头） | `TestSkippedBeatsAreCoveredByOneElapsedAndFractionsAccumulate`：`positions at 0.3 cells per beat: [0 0 0 0 0], want [0 1 1 1 2]` |
-| M4 取代时不回调旧移动 | `TestNewMoveToReplacesTheOldOne`：`replaced move: done []` |
+| M4 `Advance` 不核对编号 | `TestANewMoveReplacesTheOldOne`：`advancing the replaced move: arrived 2,3, pos {X:2 Y:3}` |
 | M5 事务里的进场景立即执行 | `TestEnterAndLeaveFollowTheTransaction`：`rolled-back enter: ops [enter 1,1] in scene false published {Present:true SceneID:0 ...}` |
 | M6 `SetPos` 不 `QueueMove` | `TestPositionChangesReachTheAOIOnlyWhenCommitted`：`a committed move far away did not take the entity out of the watcher's view` |
-| M7 `MapBasic` 不登记回滚恢复 | `TestEnterAndLeaveFollowTheTransaction`：`rolled-back enter: ops [] in scene true published {...}` |
-| M8 `Move` 不登记回滚恢复 | `TestRolledBackMoveToLeavesNothingRunning`：`rolled-back move: moving true registered 0` |
-| M9 跟随不判目标消失 | `TestFollowTracksTheTargetUntilItIsGone`：`target destroyed: done [1 target left the scene 13,0] active false` |
-| M10 runner 空闲不停心跳 | `TestBeatRunnerHeartbeatFollowsTheActionsThatNeedTicks`：`only the event-driven action left: true 500ms 1`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`idle runner keeps its heartbeat: active true registered 1` |
-| M11 不填 `Elapsed` | `TestBeatTicksTheGroupsInOrderAndWakeTicksAnEventDrivenAction`：`ticks [first tick 1 elapsed 0s ...], want [first tick 1 elapsed 100ms ...]`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`tick outside a heartbeat beat: [{elapsed:0 inTx:true} ...]` |
-| M12 移动动作要周期 tick | `TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne`：`the runner put an event-driven move on its own heartbeat` |
-| M13 AOI 排队满按拒绝结束 | `TestRefusedPositionHoldsOnBackpressureAndEndsOtherwise`：`backpressure: pos {X:0 Y:0} moving false done [1 position refused 0,0]` |
-| M14 进场景同一事务里再移动也入队 | `TestEnterAndLeaveFollowTheTransaction`：`space saw [move 2,2 enter 2,2 move 3,3 leave], want [enter 2,2 move 3,3 leave]` |
+| M7 MapBasic 不恢复回滚 | `TestEnterAndLeaveFollowTheTransaction`：`rolled-back enter: ops [] in scene true published {...}` |
+| M8 Move 不恢复回滚 | `TestRolledBackMoveToLeavesNothingRunning`：`rolled-back move: moving true registered 0` |
+| M9 跟随不判目标消失 | `TestFollowTracksTheTargetUntilItIsGone`：`target destroyed: target left the scene 13,0` |
+| M10 一拍 tick 全部组 | `TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed`：`ticks [first tick 1 elapsed 300ms second tick 1 elapsed 300ms ...], want [second tick 1 elapsed 300ms first tick 1 elapsed 100ms ...]` |
+| M11 不填 `Elapsed` | 同上：`ticks [second tick 1 elapsed 0s ...]`；`TestRunnerIsTickedByTheHeartbeatAndStopsWhenIdle`：`tick outside a heartbeat beat: [{elapsed:0 inTx:true} ...]` |
+| M12 移动动作不要周期 tick | `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`：`moving entity: move group heartbeat active false, registrations 0 (want exactly the runner's one)` |
+| M13 AOI 排队满按拒绝处理 | `TestRefusedPositionHoldsOnBackpressureAndEndsOtherwise`：`backpressure: position refused 0,0 pos {X:0 Y:0} moving false` |
+| M14 同一事务进场景后又移动也入队 | `TestEnterAndLeaveFollowTheTransaction`：`space saw [move 2,2 enter 2,2 move 3,3 leave], want [enter 2,2 move 3,3 leave]` |
 | M15 位置没变也落库 | `TestEnterAndLeaveTheScene`：`saved [3@4,4 3@4,4 3@5,4], want one periodic save and one on leave` |
-| M16 共享模式下仍换上新移动 | `TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode`：`move in shared mode: <nil> token 2 (want the first move 1 kept)` |
-| M17 共享模式下仍进场景 | 同上：`enter in shared mode: <nil> in scene true` |
-| M18 `Sync` 吞掉 `Start` 的错误 | 同上：`runner sync in shared mode: <nil> active false` |
+| M16 共享模式下仍进场景 | `TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode`：`enter in shared mode: <nil> in scene true` |
+| M17 挂不上心跳的动作不结束 | 同上：`move started in shared mode: ended [{id:1 kind:1 status:4 reason:replaced by next action}] moving true` |
+| M18 `Sync` 吞掉错误 | 同上：`runner sync in shared mode: <nil> active false` |
+| M19 动作取消不停移动 | 同上：`move started in shared mode: ended [... {id:2 kind:1 status:3 reason:heartbeat: Remote entity is in shared mode ...}] moving true` |
 
-端到端冒烟（非性能测量）：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`，真实 Nest + 心跳驱动 + 同步 Manager + Interest（ApplySync），3000 实体各自进场景、随机 `MoveTo`（距离 ≤ 150 格的方框、150 格/秒），64 个观察者铺满 1280×1280 地图：`3000 entities, 3000 moved, 64 watchers, 53172 position payloads pushed; heartbeat {Delivered:25414 Executed:25414 SkippedInflight:0 ... Registered:0}`；全部动作成功、位置等于终点、每个实体至少一个邻近观察者最后收到的就是终点位置，结束后驱动上没有登记。-race 下 300 实体。冒烟里每会话对象数超过同步帧缺省上限 100，测试把 `frame.Limits.MaxObjects` 调到 4096（缺省值未改）。
+端到端冒烟（非性能测量）：`TestSmokeThousandsOfEntitiesMoveOnTheirOwnHeartbeats`，真实 Nest + 心跳驱动 + 同步 Manager + Interest（ApplySync），3000 实体各自进场景、随机 `MoveTo`（距离 ≤ 150 格的方框、150 格/秒），64 个观察者铺满 1280×1280 地图：`3000 entities, 3000 moved, 64 watchers, 53233 position payloads pushed; heartbeat {Delivered:25437 Executed:25437 ... StoppedShared:0 Registered:0}`（与第一版 Move 自挂心跳时的 25414 拍同一量级：每个移动实体每拍一条消息）；全部动作成功、位置等于终点、每个实体至少一个邻近观察者最后收到的就是终点位置，结束后驱动上没有登记。-race 下 300 实体。冒烟里每会话对象数超过同步帧缺省上限 100，测试把 `frame.Limits.MaxObjects` 调到 4096（缺省值未改）。
 
-**需要维护者决定**：
-
-1. 移动动作是否让 runner 挂心跳：A 维持现状（推荐：移动中每拍一条消息，事件收尾）；B 照字面“有在途动作就挂”（移动中每拍两条消息）。
-2. 回滚与 runner：A 维持“runner 不随事务回滚”、写进边界（现状）；B 给 actionflow 加事务适配（启停动作随事务回滚，改 actionflow 契约，另行设计）。
+**验证**：偶发失败的修前 / 修后失败率（`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` → 改名后的 `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`）：不加负载 `-race -count=100 -run <三个经心跳等事件的用例>`，修前（`345616ad`）24/100、修后 0/100；加负载（后台循环 `go test -race -count=5 ./framework/sync/entitysync/policy/`）`-race -count=50 ./gameplay/movement/ ./gameplay/actionflow/`，修前 1/50（该用例，2850 次顶层用例里 1 次失败），修后 0/50（2851 次全部通过，退出码 0）。负载复现时 nestbatch 的正式对比在跑，它的脚本在检测到外来 go 进程时作废并重跑那一轮，所以不影响它的数据、只会推迟。gofmt、`GOWORK=off go vet ./...`、`go test -race -count=1 ./gameplay/... ./framework/sync/... ./wiring/...`、根包 `go test -count=1 .`、全量 `go test -count=1 ./...` 的结果见本轮交付报告（全部退出码 0 才提交）。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
