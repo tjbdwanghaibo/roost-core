@@ -68,7 +68,8 @@ const (
 	// BlockIncoming：另一组正在运行的动作挡住新动作：直接调用时 Start 返回 ErrBlockedByGroup，回调里延后的 Start
 	// 与排队项以失败状态结束。
 	BlockIncoming
-	// PreemptRunning：先取消另一组正在运行的动作（取消状态的 OnEnded；不推进那一组的队列），再启动新动作。
+	// PreemptRunning：先取消另一组正在运行的动作（取消状态的 OnEnded），再启动新动作。被抢占组的队列此时不推进
+	// （排队项不会先启动、再被正在启动的抢占方挡住），等抢占方结束时推进一次（见 ActionRunner.preempt）。
 	PreemptRunning
 )
 
@@ -90,7 +91,11 @@ type ActionRunnerConfig struct {
 	MaxDeferredSteps int
 }
 
-type actionEntry struct{ ActionSnapshot }
+type actionEntry struct {
+	ActionSnapshot
+	// preempted 表示它启动时抢占过别的组（那些组的 preemptedBy 记着它的 ID），结束时要推进它们的队列。
+	preempted bool
+}
 type actionGroupState struct {
 	// freezes 是冻结计数（Freeze 加一、Recover 减一），大于 0 即冻结。
 	freezes int
@@ -98,6 +103,8 @@ type actionGroupState struct {
 	next    []*actionEntry
 	// advancing 表示延后队列里已有一条“推进本组队列”的内部命令，避免重复登记。
 	advancing bool
+	// preemptedBy 是抢占了本组当前动作、还没结束的动作 ID（0 表示没有）：它结束时本组若仍空闲就推进队列。
+	preemptedBy int64
 }
 
 // commandOp 是 ActionRunner 的一种变更。公开的变更方法都先组成一条命令，再交给 submit：
@@ -684,12 +691,18 @@ func (r *ActionRunner) crossGroup(incoming *actionEntry) ([]*actionGroupState, e
 	return preempt, nil
 }
 
-// preempt 取消被抢占的组的当前动作：取消状态，不推进那一组的队列（抢占方随后启动，被抢占组的队列等它下一次变更）。
+// preempt 取消被抢占的组的当前动作：取消状态，此时不推进那一组的队列——抢占方随后启动，排队项若现在启动，跨组
+// 冲突会让它先启动再被挡住或互相抢占（变异 D4 锁定）。被抢占组记下抢占方，抢占方结束（任何方式：完成、被结束、被
+// 取代、启动失败）时由 resumePreempted 推进一次，排队项保留、照常成为当前动作，按 ID 等结果的调用方
+// （ai.TaskflowAction、PlanMission）不会永久挂住（维护者 2026-10-21 D21 决定 ① 的同一口径：打断只停下正在做的事，
+// 排队的计划去留由业务决定）。
 func (r *ActionRunner) preempt(units []*actionGroupState, by *actionEntry) {
 	for _, unit := range units {
 		if unit.cur == nil {
 			continue
 		}
+		unit.preemptedBy = by.ID
+		by.preempted = true
 		victim := unit.cur.ID
 		reason := NewActionReason(fmt.Sprintf("preempted by action %d", by.ID))
 		if err := r.finish(unit, true, reason, false); err != nil {
@@ -888,6 +901,7 @@ func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now tim
 	r.transition(entry, false)
 	err = errors.Join(err, cancelErr)
 	r.ended(entry, NewActionErrorReason(err))
+	r.resumePreempted(entry)
 	return err
 }
 
@@ -908,7 +922,28 @@ func (r *ActionRunner) finish(unit *actionGroupState, cancel bool, reason Action
 	if startNext && unit.freezes == 0 {
 		r.scheduleAdvance(unit, entry.Group, time.Time{})
 	}
+	r.resumePreempted(entry)
 	return err
+}
+
+// resumePreempted 在 entry 不再是当前动作时，推进被它抢占、仍记着它的组的队列（见 preempt）。推进排在延后队列末尾，
+// 在本次结束引出的命令之后执行，照常经冻结与跨组冲突判定：组此时被冻结的等 Recover 推进；业务已经在这组启动了别的
+// 动作的不动（applyAdvance 只推进空闲的组）；此刻另一组的动作挡住排队项时，排队项按现有规则以失败结束。
+func (r *ActionRunner) resumePreempted(entry *actionEntry) {
+	if !entry.preempted {
+		return
+	}
+	entry.preempted = false
+	for _, group := range r.sortedGroupKeys() {
+		unit := r.groups[group]
+		if unit.preemptedBy != entry.ID {
+			continue
+		}
+		unit.preemptedBy = 0
+		if unit.cur == nil && unit.freezes == 0 && len(unit.next) > 0 {
+			r.scheduleAdvance(unit, group, time.Time{})
+		}
+	}
 }
 
 func (r *ActionRunner) group(group ActionGroup) *actionGroupState {
@@ -920,12 +955,17 @@ func (r *ActionRunner) group(group ActionGroup) *actionGroupState {
 	return unit
 }
 
-func (r *ActionRunner) orderedGroups() []*actionGroupState {
+func (r *ActionRunner) sortedGroupKeys() []ActionGroup {
 	keys := make([]ActionGroup, 0, len(r.groups))
 	for group := range r.groups {
 		keys = append(keys, group)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func (r *ActionRunner) orderedGroups() []*actionGroupState {
+	keys := r.sortedGroupKeys()
 	groups := make([]*actionGroupState, 0, len(keys))
 	for _, group := range keys {
 		groups = append(groups, r.groups[group])

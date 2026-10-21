@@ -938,3 +938,95 @@ func TestDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
 		t.Fatalf("MissionRunner default now = %v, want the execution's frozen business time %v", got, execution.Now)
 	}
 }
+
+// 被抢占的组（D21 A3）：抢占时不推进它的队列（抢占方随后启动，排队项不会先启动再被挡住，变异 D4 锁定）；抢占方结束
+// 时推进一次（排队项保留，去留由业务决定，与 FreezeCancel 的决定 ① 一致），排队项照常成为当前动作，按 ID 等它的
+// 调用方不会永久挂住。抢占方期间组被冻结的，由 Recover 推进；组已经被业务重新用上的，不再推进。
+func TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds(t *testing.T) {
+	preemptRule := func(running, incoming ActionSnapshot) Conflict {
+		if running.Group == 1 && incoming.Group == 3 {
+			return PreemptRunning
+		}
+		return NoConflict
+	}
+	setup := func(t *testing.T) (*ActionRunner, *groupLog, *runnerTestAction, int64, *runnerTestAction) {
+		var log groupLog
+		runner := newGroupsRunner(t, &log, preemptRule)
+		walk := &runnerTestAction{label: "walk"}
+		if _, err := runner.Start(1, walk, 0, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		later := &runnerTestAction{label: "later"}
+		laterID, err := runner.Enqueue(1, later, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stun := &runnerTestAction{label: "knock"}
+		if _, err := runner.Start(3, stun, 0, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != nil || later.starts != 0 || runner.QueueLength(1) != 1 {
+			t.Fatalf("at preemption: current1 %v later starts %d queue %d (the queue must not move yet)",
+				runner.Current(1), later.starts, runner.QueueLength(1))
+		}
+		return runner, &log, later, laterID, stun
+	}
+	t.Run("ended", func(t *testing.T) {
+		runner, log, later, laterID, _ := setup(t)
+		if err := runner.End(3, false, NewActionReason("knock done")); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != later || later.starts != 1 || runner.QueueLength(1) != 0 {
+			t.Fatalf("after the preemptor ended: current1 %v queue %d later starts %d ended %v",
+				runner.Current(1), runner.QueueLength(1), later.starts, log.reasons[laterID])
+		}
+	})
+	t.Run("finished by its tick", func(t *testing.T) {
+		runner, _, later, _, stun := setup(t)
+		stun.done = true
+		if err := runner.Tick(3, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != later || later.starts != 1 {
+			t.Fatalf("after the preemptor finished: current1 %v later starts %d", runner.Current(1), later.starts)
+		}
+	})
+	t.Run("frozen meanwhile", func(t *testing.T) {
+		runner, _, later, _, _ := setup(t)
+		if err := runner.Freeze(1, FreezePause); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.End(3, false, NewActionReason("knock done")); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != nil || later.starts != 0 {
+			t.Fatalf("frozen group moved: current1 %v later starts %d", runner.Current(1), later.starts)
+		}
+		if err := runner.Recover(1, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != later || later.starts != 1 {
+			t.Fatalf("after recover: current1 %v later starts %d", runner.Current(1), later.starts)
+		}
+	})
+	t.Run("reused meanwhile", func(t *testing.T) {
+		runner, _, later, _, _ := setup(t)
+		other := &runnerTestAction{label: "other"}
+		if _, err := runner.Start(1, other, 0, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.End(3, false, NewActionReason("knock done")); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != other || later.starts != 0 || runner.QueueLength(1) != 1 {
+			t.Fatalf("the preemptor's end moved a busy group: current1 %v later starts %d queue %d",
+				runner.Current(1), later.starts, runner.QueueLength(1))
+		}
+		if err := runner.End(1, false, NewActionReason("other done")); err != nil {
+			t.Fatal(err)
+		}
+		if runner.Current(1) != later || later.starts != 1 {
+			t.Fatalf("after the group's own action ended: current1 %v later starts %d", runner.Current(1), later.starts)
+		}
+	})
+}
