@@ -147,7 +147,7 @@ func (c *MoveComponent) onBeat(b heartbeat.Beat) error {
 - **Remote 托管实体**：只在当前拥有方跳。本进程实例处于独占拥有（`LocalOwned`）时投递并执行；首次接触（`Unknown`）交给 Nest 的 Remote 写准入判定；转移中、已隔离不投。所有权迁移时旧拥有方在离开 `LocalOwned` 后不再执行任何一拍，新拥有方加载实例（组件重新登记）或实例回到 `LocalOwned` 后开始跳，两边不会同时跳。每拍要经过一次 Remote 写准入（I/O 阶段），比普通实体贵，档位选低一些。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式（`EnterRemoteSharedMode` 之后）各写者进程的实例都是 `Shared`、都经分布式锁写，本地分不出谁该跳，心跳无法执行。共享与否是**运行期**的所有权状态（同一种类的实体可以独占、也可以共享，`LeaveRemoteSharedMode` 回到独占），不是种类声明，所以分两处拦：
   - 实例已在共享模式（`Sharing` / `Shared`）时，`Register` 与 `Start` 返回 `ErrHeartbeatRemoteShared`，不登记 / 不启动；
-  - 登记时合法、之后才进入共享的（拥有方 `EnterRemoteSharedMode`；或第二个写者加载共享实体时实例是 `Unknown`，第一拍的写准入把它转到 `Shared`）：下一拍在实体锁内**停掉这个登记**（`Active()` 变为 false），回调不执行，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打 Warn。回到独占后框架不自动重启，业务需要时自己再 `Start`；
+  - 登记时合法、之后才进入共享的（拥有方 `EnterRemoteSharedMode`；或第二个写者加载共享实体时实例是 `Unknown`，第一拍的写准入把它转到 `Shared`）：下一拍在实体锁内**停掉这个登记**（`Active()` 变为 false），回调不执行，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn（与跳拍相同的 `WarnInterval`，缺省 10 秒一条，汇总个数）。实体上的每个已启动登记都在自己下一次到期时被停掉，所以全部停掉最多要一个最长档位的周期；这期间没有任何一拍会执行回调。**回到独占不自动恢复**（维护者 2026-10-21 决定）：`LeaveRemoteSharedMode` 之后被停掉的登记保持停止，业务调用 `Start` 之后才恢复，避免意外重启（共享期间业务状态可能已被其他写者改过，是否还要跳由业务判断）；
   - 共享实体的周期逻辑由业务层自己驱动，例如由负责它的服务按周期给它发 Nest 消息。
 
 **与按实体持久定时器（§4）的分工**：持久、准点、离线也要算的事走 entitytimer（Buff 到期写档、建造完成、行军到达、活动阶段、离线产出）；在线周期推进走心跳（移动、AI、周期效果、冷却、逻辑帧）。同一件事可以两者都用：行军到达是 entitytimer 期限，行军途中给 AOI 的位置是 1～2Hz 心跳。心跳不持久，加载后由组件重新启动；entitytimer 的驱动不改（维护者决定 ⑫）。房间、场景本身是实体，它们的逻辑帧就是自己的心跳登记，不提供“非实体心跳”（决定 ⑬）。

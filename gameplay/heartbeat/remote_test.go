@@ -345,3 +345,104 @@ func TestFirstAdmissionIntoSharedModeStopsTheHeartbeat(t *testing.T) {
 		t.Fatalf("stats: %+v, want one delivered beat that stopped the registration", st)
 	}
 }
+
+// 进入共享模式时停掉实体上全部已挂的心跳（多个登记、不同档位），每个计一次；Warn 按 WarnInterval 限频，间隔内只累计。
+func TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate(t *testing.T) {
+	f, _, e1 := newSharedTestProc(t, 81)
+	logs := &countingHandler{}
+	f.driver.config.Logger = slog.New(logs)
+	e2 := &remoteHBEntity{RemoteEntityBase: entity.NewRemoteEntityBase(mustID(t, 82, kindRemote), entity.EntityCategoryRemote, true, kindRemote)}
+	e2.host = f.driver.NewHost(e2)
+	f.manager.Add(e2)
+
+	var regs []*Reg
+	for _, e := range []*remoteHBEntity{e1, e2} {
+		lockedTransition(t, e, entity.RemoteOwnershipLocalOwned)
+		e.GetMutex().Lock()
+		for i, period := range []time.Duration{50 * time.Millisecond, time.Second} {
+			r, err := e.host.Register(fmt.Sprint("r", i), period, func(Beat) error { return nil })
+			if err == nil {
+				err = r.Start()
+			}
+			if err != nil {
+				e.GetMutex().Unlock()
+				t.Fatal(err)
+			}
+			regs = append(regs, r)
+		}
+		e.GetMutex().Unlock()
+	}
+	stepIdle(f, 10)
+
+	t0 := time.Unix(1_900_000_000, 0)
+	lockedTransition(t, e1, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
+	stepIdle(f, 110) // 覆盖 1s 档的一个周期
+	if st := f.driver.Stats(); st.StoppedShared != 2 || st.Registered != 2 {
+		t.Fatalf("after e1 entered shared mode: %+v, want both of its registrations stopped (StoppedShared 2, 2 left)", st)
+	}
+	f.driver.flush(t0)
+	if logs.count() != 1 {
+		t.Fatalf("warns after the first stops = %d, want 1", logs.count())
+	}
+
+	lockedTransition(t, e2, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
+	stepIdle(f, 110)
+	f.driver.flush(t0.Add(time.Second))
+	if logs.count() != 1 {
+		t.Fatalf("warns inside the interval = %d, want still 1", logs.count())
+	}
+	f.driver.flush(t0.Add(DefaultWarnInterval))
+	if logs.count() != 2 {
+		t.Fatalf("warns after the interval = %d, want 2", logs.count())
+	}
+	for _, r := range regs {
+		r.host.owner.GetMutex().Lock()
+		active := r.Active()
+		r.host.owner.GetMutex().Unlock()
+		if active {
+			t.Fatalf("registration %s on entity %d still active in shared mode", r.Name(), r.host.id)
+		}
+	}
+	if st := f.driver.Stats(); st.StoppedShared != 4 || st.Registered != 0 {
+		t.Fatalf("after both entities entered shared mode: %+v, want StoppedShared 4 and nothing registered", st)
+	}
+}
+
+// 维护者决定（2026-10-21）：从共享模式回到独占（LeaveRemoteSharedMode：Shared → Draining → LocalOwned）不自动恢复被停掉的
+// 心跳；业务调用 Start 之前保持停止、不跳，Start 之后照常跳。
+func TestLeavingSharedModeDoesNotResumeTheHeartbeat(t *testing.T) {
+	f, _, e := newSharedTestProc(t, 91)
+	lockedTransition(t, e, entity.RemoteOwnershipLocalOwned)
+	var runs atomic.Int32
+	e.GetMutex().Lock()
+	r, err := e.host.Register("x", 50*time.Millisecond, func(Beat) error { runs.Add(1); return nil })
+	if err != nil {
+		e.GetMutex().Unlock()
+		t.Fatal(err)
+	}
+	r.Start()
+	e.GetMutex().Unlock()
+	stepIdle(f, 20)
+
+	lockedTransition(t, e, entity.RemoteOwnershipSharing, entity.RemoteOwnershipShared)
+	stepIdle(f, 20)
+	lockedTransition(t, e, entity.RemoteOwnershipDraining, entity.RemoteOwnershipLocalOwned)
+	before := runs.Load()
+	stepIdle(f, 50)
+	e.GetMutex().Lock()
+	active := r.Active()
+	e.GetMutex().Unlock()
+	if active || runs.Load() != before {
+		t.Fatalf("back to local ownership without Start: active=%v, callbacks run %d (want stopped, 0); stats %+v",
+			active, runs.Load()-before, f.driver.Stats())
+	}
+
+	e.GetMutex().Lock()
+	r.Start()
+	active = r.Active()
+	e.GetMutex().Unlock()
+	stepIdle(f, 20)
+	if !active || runs.Load()-before < 3 {
+		t.Fatalf("after Start back in local ownership: active=%v, beats %d (want ≥ 3)", active, runs.Load()-before)
+	}
+}

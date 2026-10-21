@@ -901,7 +901,9 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 **共享是运行期状态，不是静态声明**（已核对源码）：`entity.RemotePolicy` 只有 None / Managed / Mirror（`framework/entity/policy.go`），codegen 也只有 `remote=managed`；共享模式由 `remoteentity.Manager.EnterRemoteSharedMode` / `LeaveRemoteSharedMode`（`framework/remoteentity/ownership.go`）按实体 ID 在运行期切换（LocalOwned → Sharing → Shared；Shared → Draining → LocalOwned）。实例加载时是 `Unknown`（`LoadRemoteEntity` 不设所有权状态），共享权威下第一次写准入经 `newWriteLease` 的 marked 分支转 `Shared`（`framework/remoteentity/batch.go`）。所以组件在 `OnInitFinish` 登记时，第二个写者看到的是 `Unknown`，登记时判定不出来。
 
-**方案（选 a）**：已在共享模式时 `Register` / `Start` 返回 `ErrHeartbeatRemoteShared`；登记后才进入共享的，由下一拍在实体锁内停掉登记（回调不执行），计 `heartbeat.stopped_total{reason="remote_shared"}` 并打 Warn；回到独占后不自动重启，业务需要时再 `Start`。不选 b（“种类可能进入共享就在登记时拒绝”）：没有种类级的共享声明，任何 `remote=managed` 种类都可能被 `EnterRemoteSharedMode`，b 等于拒绝全部 Remote 托管实体，与决定 ⑩（Remote 托管实体投到当前拥有方）冲突；要做 b 得先给 Remote 加种类级声明，属于 Remote 的改动、不在本项。停掉放在实体锁内（handler）而不是驱动 goroutine：业务视角的 `Active` 只在锁内改，与启停的事务语义（AfterCommit / 回滚）一致；代价是每个登记在共享模式下多投一拍、走一次共享模式写准入（分布式锁）。
+**方案（选 a）**：已在共享模式时 `Register` / `Start` 返回 `ErrHeartbeatRemoteShared`；登记后才进入共享的，由下一拍在实体锁内停掉登记（回调不执行），计 `heartbeat.stopped_total{reason="remote_shared"}` 并打 Warn；回到独占后不自动重启，业务需要时再 `Start`。不选 b（“种类可能进入共享就在登记时拒绝”）：没有种类级的共享声明，任何 `remote=managed` 种类都可能被 `EnterRemoteSharedMode`，b 等于拒绝全部 Remote 托管实体，与决定 ⑩（Remote 托管实体投到当前拥有方）冲突；要做 b 得先给 Remote 加种类级声明，属于 Remote 的改动、不在本项。停掉放在实体锁内（handler）而不是驱动 goroutine：业务视角的 `Active` 只在锁内改，与启停的事务语义（AfterCommit / 回滚）一致；代价是每个登记在共享模式下多投一拍、走一次共享模式写准入（分布式锁）。维护者 2026-10-21 确认按 a（运行时切换检测），并要求 Warn 限频（按 `WarnInterval`，与跳拍 Warn 相同）。**维护者决定（2026-10-21）：从 Shared 回到 LocalOwned 不自动恢复**，被停掉的登记保持停止，由业务在回到独占时重新 `Start`（理由：避免意外重启——共享期间状态可能已被其他写者改过；自动恢复还要框架额外记住“被谁停的”，与业务自己的 Stop 区分）。由 `TestLeavingSharedModeDoesNotResumeTheHeartbeat` 固定。
+
+检测点：Remote 没有所有权状态切换的回调（`entity.RemoteEntityBase.TransitionRemoteOwnership` 只做 CAS），心跳也不应依赖 `framework/remoteentity` 的内部实现，所以在心跳自己的两处读实例的所有权状态（`IThreadSafeRemoteEntity.RemoteOwnershipState`，只依赖 `framework/entity` 接口）：驱动到期时（原子读）与 handler 执行时（实体锁内）。没有新增 Remote 侧的钩子：钩子会在 Remote 的 goroutine 里、不持实体锁时触发，仍然要投一条消息进实体锁才能改 `Active`，并不比到期时检测更可靠，还要改 `framework/entity`。保证与限制：共享模式下任何一拍都不执行回调；共享期间到期的已启动登记都被停掉；共享窗口短于周期、期间没有到期的拍时这个登记不被停（期间也没有执行）。
 
 **强制点**：`host.go` `sharedErr`（Register / Start）、`driver.go` `mayOwn`（Sharing / Shared 照常投）、`host.go` `runBeat`（共享模式 → `change(false)` + `stoppedShared`）、`driver.go` `flush`（Warn）。API 变化：`Reg.Start()` 返回 `error`；`Stats.StoppedShared`；指标 `heartbeat.stopped_total{reason}`。
 
@@ -913,7 +915,11 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 | `TestEnteringRemoteSharedModeStopsTheHeartbeat` | `after entering shared mode: registration active=true, callbacks run 0 (want stopped, 0); stats {Delivered:4 Executed:4 ... DroppedNotOwner:20 DroppedDuplicate:0 Registered:1}`（静默停跳：登记仍算在跳） |
 | `TestFirstAdmissionIntoSharedModeStopsTheHeartbeat` | `after the first admission into shared mode: registration active=true, callbacks run 0 (want stopped, 0); stats {Delivered:1 Executed:0 ... DroppedNotOwner:20 DroppedDuplicate:0 Registered:1}` |
 
-修后三条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
+另 `TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate`（两个实体、每个两个不同档位的登记，先后进入共享：全部停掉、`StoppedShared` 4、Warn 间隔内只一条）在 Warn 不限频的版本（`96724b6a`）上失败：`warns inside the interval = 2, want still 1`。
+
+`TestLeavingSharedModeDoesNotResumeTheHeartbeat`（回到独占后业务 Start 之前不跳、Start 后照常跳）在 `c299c4cc` 上失败（P1 是共享期间暂停、回到独占自动继续）：`back to local ownership without Start: active=true, callbacks run 10 (want stopped, 0); stats {Delivered:14 Executed:14 ... DroppedNotOwner:4 DroppedDuplicate:0 Registered:1}`。
+
+修后五条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
 
 **未做**：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。
 

@@ -138,6 +138,11 @@ type Driver struct {
 	batch   []beat
 	flushed [numCounters]int64
 	warn    warnState
+	// sharedWarn 汇总上一条“共享模式停掉心跳”Warn 之后停掉的登记数，按 WarnInterval 限频。
+	sharedWarn struct {
+		last    time.Time
+		pending int64
+	}
 }
 
 // NewDriver 校验配置并返回一个未接线的驱动；配置错是接线错误，panic。
@@ -507,15 +512,23 @@ func (d *Driver) flush(sysNow time.Time) {
 	incCounter(StoppedMetric, metrics.Labels{"driver": name, "reason": "remote_shared"}, delta[cStoppedShared])
 	metrics.SetGauge(RegisteredMetric, metrics.Labels{"driver": name}, int64(d.Registered()))
 	d.warn.emit(d.config.Logger, name, d.config.WarnInterval, sysNow)
-	if delta[cStoppedShared] > 0 {
-		// 每个登记只停一次，不限频（至多每次 flush 一条，汇总本次的个数）。
-		args := []any{"driver", name, "stopped", delta[cStoppedShared]}
-		if r := d.sharedSample.Swap(nil); r != nil {
-			args = append(args, "sample_entity", r.host.id, "sample_registration", r.name)
-		}
-		d.config.Logger.Warn("heartbeat: registrations stopped because their Remote entity entered shared mode; "+
-			"heartbeats are not allowed in shared mode, drive the periodic logic from business code instead", args...)
+	d.emitSharedWarn(delta[cStoppedShared], sysNow)
+}
+
+// emitSharedWarn 为共享模式停掉的登记打 Warn，按 WarnInterval 限频：间隔内只累计，下一条汇总个数并带一个样本。
+func (d *Driver) emitSharedWarn(stopped int64, now time.Time) {
+	w := &d.sharedWarn
+	w.pending += stopped
+	if w.pending == 0 || (!w.last.IsZero() && now.Sub(w.last) < d.config.WarnInterval) {
+		return
 	}
+	args := []any{"driver", d.config.Name, "stopped_since_last_warn", w.pending}
+	if r := d.sharedSample.Swap(nil); r != nil {
+		args = append(args, "sample_entity", r.host.id, "sample_registration", r.name)
+	}
+	d.config.Logger.Warn("heartbeat: registrations stopped because their Remote entity entered shared mode; "+
+		"heartbeats are not allowed in shared mode, drive the periodic logic from business code instead", args...)
+	w.last, w.pending = now, 0
 }
 
 // incCounter 只写非零增量（flush 每秒对每个原因各调一次，大多是零）。
