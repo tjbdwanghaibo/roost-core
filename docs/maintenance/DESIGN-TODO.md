@@ -1081,7 +1081,7 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 没变红、如实记录的两个：① 怪物 AI 心跳不挂时间域（`ai.BeatConfig.TimeDomain` 去掉）——没有用例变红：巡逻策略只看“移动组是否空闲”，不读时间，demo 里域时间只影响 AI 的 `FreezeFor` 等到期判断（demo 不用）；怪物走路的加速由 `Behavior` 的域保证（与 M3 同一路径）。② 巡逻里的 `Frozen` 判断是兜底：冻结的组本来就拒绝 `CreateAction`，去掉它行为不变。刷怪“提交后才交出”（`AfterCommit`）与“一次只建一批”（`busy`）没有确定的观察点（拍不会回滚、两批相隔 1 秒），没有变异用例，靠代码与注释。
 
-**验证**（rebase 到 main `6576b7fb` 之后重跑；再 rebase 到 `ddeeffa3`（P5 技能 / Buff 心跳、Remote 共享模式验证）并给怪物接上 `AttachBeat` 之后，生成工程的 build / vet / `-race ./...` / 心跳用例 `-race -count=20` 与 codegen demo 用例重跑，退出码均为 0，仓库全量未再重跑；生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`；退出码直接读）：
+**验证**（rebase 到 main `6576b7fb` 之后重跑；再 rebase 到 `ddeeffa3`（P5 技能 / Buff 心跳、Remote 共享模式验证）并给怪物接上 `AttachBeat` 之后，生成工程的 build / vet / `-race ./...` / 心跳用例 `-race -count=20` 与 codegen demo 用例、仓库 `go vet ./...`、根包与全量 `go test -count=1 ./...` 重跑，退出码均为 0（这一次下文的 `TestBusyShortPoolSkipsBeatsAndResumes` 也通过）；生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`；退出码直接读）：
 
 - 生成工程：`gofmt -l .` 无输出；`go build ./...`、`go vet ./...` 0；`go test -race -count=1 ./...` 0（26 个包）；心跳相关用例（4 个端到端 + 巡逻单测）`-race -count=20` 0。另把 `actor.Heartbeat` 临时改成 `Delivery: heartbeat.DeliveryBatch`（选项 C 的批量作业，不提交）跑 4 个端到端用例 `-race -count=3`，0。
 - 仓库：`GOWORK=off go vet ./...` 0；根包 `go test -count=1 .` 0；`scripts/test-sync-modes-generated.sh` 0；`ROOST_DOTNET_GOLDEN_ONLY=1 scripts/test-client-dotnet.sh` 0；`go test -count=1 -run 'TestDemo|TestGameDemo' ./codegen/internal/roost/` 0。
