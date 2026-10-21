@@ -1,0 +1,40 @@
+File: bench.test
+Type: cpu
+Time: 2026-10-21 13:57:48 CST
+Duration: 12.21s, Total samples = 47.27s (387.27%)
+Showing nodes accounting for 33.38s, 70.62% of 47.27s total
+Dropped 365 nodes (cum <= 0.24s)
+Showing top 45 nodes out of 143
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     28.70s 60.72%  runtime.mcall
+         0     0%     0%     28.67s 60.65%  runtime.park_m
+     0.01s 0.021% 0.021%     28.52s 60.33%  runtime.schedule
+     0.01s 0.021% 0.042%     28.11s 59.47%  runtime.findRunnable
+    24.92s 52.72% 52.76%     24.92s 52.72%  runtime.usleep
+     0.10s  0.21% 52.97%     21.63s 45.76%  runtime.stealWork
+     0.01s 0.021% 52.99%     21.44s 45.36%  runtime.runqsteal
+     0.02s 0.042% 53.04%     21.43s 45.34%  runtime.runqgrab
+     0.01s 0.021% 53.06%     15.21s 32.18%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+     0.04s 0.085% 53.14%     10.35s 21.90%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work.func1
+         0     0% 53.14%     10.35s 21.90%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+         0     0% 53.14%      9.38s 19.84%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)
+         0     0% 53.14%      9.38s 19.84%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewEngine.func1
+     0.01s 0.021% 53.16%      9.38s 19.84%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest
+         0     0% 53.16%      6.52s 13.79%  runtime.semasleep
+     6.51s 13.77% 66.93%      6.51s 13.77%  runtime.pthread_cond_wait
+     0.11s  0.23% 67.17%      5.80s 12.27%  runtime.lock2
+         0     0% 67.17%      5.80s 12.27%  runtime.lockWithRank (inline)
+         0     0% 67.17%      4.59s  9.71%  github.com/tjbdwanghaibo/roost-core/framework/nest.runNestLogic
+     0.01s 0.021% 67.19%      4.55s  9.63%  runtime.stopm
+         0     0% 67.19%      4.39s  9.29%  runtime.mPark (inline)
+         0     0% 67.19%      4.39s  9.29%  runtime.notesleep
+     0.33s   0.7% 67.89%      3.61s  7.64%  internal/sync.(*Mutex).Unlock (partial-inline)
+         0     0% 67.89%      3.52s  7.45%  runtime.osyield (inline)
+     0.44s  0.93% 68.82%      3.47s  7.34%  internal/sync.(*Mutex).Lock (inline)
+     0.03s 0.063% 68.88%      3.28s  6.94%  internal/sync.(*Mutex).unlockSlow
+     0.01s 0.021% 68.90%      3.25s  6.88%  internal/sync.runtime_Semrelease
+     0.07s  0.15% 69.05%      3.24s  6.85%  runtime.semrelease1
+         0     0% 69.05%      3.14s  6.64%  sync.(*Mutex).Lock (partial-inline)
+     0.01s 0.021% 69.07%      3.08s  6.52%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest.func2
+     0.50s  1.06% 70.13%      3.03s  6.41%  internal/sync.(*Mutex).lockSlow
+         0     0% 70.13%      3.02s  6.39%  sync.(*Mutex).Unlock

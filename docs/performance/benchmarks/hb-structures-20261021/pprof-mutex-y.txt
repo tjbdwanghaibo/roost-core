@@ -1,0 +1,20 @@
+File: bench.test
+Type: delay
+Time: 2026-10-21 14:00:46 CST
+Showing nodes accounting for 586.92ms, 99.83% of 587.91ms total
+Dropped 30 nodes (cum <= 2.94ms)
+Showing top 15 nodes out of 30
+      flat  flat%   sum%        cum   cum%
+  486.08ms 82.68% 82.68%   486.08ms 82.68%  sync.(*Mutex).Unlock
+   92.75ms 15.78% 98.46%    92.75ms 15.78%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Swap
+    8.09ms  1.38% 99.83%     8.09ms  1.38%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).LoadAndDelete
+         0     0% 99.83%    85.12ms 14.48%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope
+         0     0% 99.83%    85.12ms 14.48%  github.com/tjbdwanghaibo/roost-core/framework/entity.storeGuardScope
+         0     0% 99.83%    10.61ms  1.81%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+         0     0% 99.83%    10.86ms  1.85%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0% 99.83%    10.61ms  1.81%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).admit
+         0     0% 99.83%    10.36ms  1.76%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0% 99.83%   576.54ms 98.07%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0% 99.83%   576.54ms 98.07%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0% 99.83%   101.33ms 17.24%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work.func1
+         0     0% 99.83%   101.10ms 17.20%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)

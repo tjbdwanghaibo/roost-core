@@ -1,0 +1,20 @@
+File: bench.test
+Type: delay
+Time: 2026-10-21 14:01:29 CST
+Showing nodes accounting for 4.07s, 99.93% of 4.07s total
+Dropped 58 nodes (cum <= 0.02s)
+Showing top 15 nodes out of 42
+      flat  flat%   sum%        cum   cum%
+     2.83s 69.33% 69.33%      2.83s 69.34%  sync.(*Mutex).Unlock
+     1.11s 27.20% 96.53%      1.14s 27.97%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Swap
+     0.10s  2.40% 98.93%      0.10s  2.40%  runtime.unlock (inline)
+     0.04s     1% 99.93%      0.04s  1.09%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).LoadAndDelete
+         0     0% 99.93%      0.64s 15.73%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope
+         0     0% 99.93%      0.54s 13.14%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope.func1
+         0     0% 99.93%      0.54s 13.14%  github.com/tjbdwanghaibo/roost-core/framework/entity.releaseGuardScope
+         0     0% 99.93%      1.14s 27.96%  github.com/tjbdwanghaibo/roost-core/framework/entity.storeGuardScope
+         0     0% 99.93%      0.98s 24.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).ForEachSpliceBatch
+         0     0% 99.93%      1.03s 25.23%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+         0     0% 99.93%      0.05s  1.14%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0% 99.93%      0.98s 24.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).DispatchBroadcast
+         0     0% 99.93%      0.98s 24.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).DispatchBroadcast.func1

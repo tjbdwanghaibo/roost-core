@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开173个包目录的职责映射</summary>
+<summary>展开175个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -76,6 +76,7 @@
 | [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 6 | 12 |
 | [gameplay/ai](../../gameplay/ai) | [其他包与公共基础设施](impl/14-foundation.md) | 7 | 8 |
 | [gameplay/attribute](../../gameplay/attribute) | [游戏技能、战斗与空间](impl/08-skill.md) | 2 | 2 |
+| [gameplay/heartbeat](../../gameplay/heartbeat) | [时间与定时器](impl/10-time.md) | 3 | 6 |
 | [gameplay/skill](../../gameplay/skill) | [游戏技能、战斗与空间](impl/08-skill.md) | 155 | 110 |
 | [gameplay/skill/combat](../../gameplay/skill/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 5 | 2 |
 | [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 3 | 12 |
@@ -161,6 +162,7 @@
 | [wiring/etcd](../../wiring/etcd) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/examples/split](../../wiring/examples/split) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |
 | [wiring/global](../../wiring/global) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 1 |
+| [wiring/heartbeat](../../wiring/heartbeat) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/integration](../../wiring/integration) | [次核心：Service 领域能力](impl/09-services.md) | 1 | 4 |
 | [wiring/internal/configschemagen](../../wiring/internal/configschemagen) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 0 |
 | [wiring/lock](../../wiring/lock) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |

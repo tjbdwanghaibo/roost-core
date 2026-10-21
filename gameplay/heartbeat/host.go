@@ -1,0 +1,317 @@
+package heartbeat
+
+import (
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+var (
+	// ErrUnsupportedPeriod 表示周期不是固定档位之一（Periods）。
+	ErrUnsupportedPeriod = errors.New("heartbeat: unsupported period")
+	// ErrDuplicateName 表示同一实体实例上同名登记了两次。
+	ErrDuplicateName = errors.New("heartbeat: registration name already used on this entity")
+	// ErrHostClosed 表示实例已销毁（OnDestroy 之后），不能再登记。
+	ErrHostClosed = errors.New("heartbeat: host is closed")
+)
+
+// DefaultMaxElapsed 是 Beat.Elapsed 的上限（维护者 2026-10-21：“距上次执行，最多 1 秒”）。档位本身长于 1 秒时上限取
+// 档位周期，否则 2s 及以上的档每拍都会少算（见 Beat.Elapsed）。
+const DefaultMaxElapsed = time.Second
+
+// Beat 是交给回调的一拍。
+type Beat struct {
+	// Now 是本拍的业务时间（App 业务时钟），回调开始时读一次。
+	Now time.Time
+	// Elapsed 是距本登记上次执行的业务时间；首拍是距本次启动生效。夹到 [0, max(DefaultMaxElapsed, Period)]：
+	// 掉拍、进程停顿或业务时钟被调整时不让一拍走出几公里。框架不追帧，掉拍后下一拍按 Elapsed 算一次。
+	Elapsed time.Duration
+	// Period 是本登记当前档位。
+	Period time.Duration
+	// Skipped 是上次执行以来因上一拍在途或准入失败被跳过的拍数；只供观测，不补投。
+	Skipped int
+	// First 为 true 表示本登记这次启动后的第一拍（实体重载后重新启动、Stop 后再 Start 都算新的一次）。
+	First bool
+}
+
+// Func 是登记的回调：在实体自己的 Nest worker 上、实体锁与事务内执行，与该实体的其他消息串行。只做内存计算与入队
+// （改 DAO、记 effect、QueueMove），不阻塞、不做 I/O、不 Dispatch / Request。返回错误时本拍事务回滚。
+type Func func(Beat) error
+
+// RegOption 调整一个登记。
+type RegOption func(*regOptions)
+
+type regOptions struct {
+	durability nest.DurabilityPolicy
+}
+
+// WithDurability 选本登记心跳 handler 的持久级别（缺省 nest.DurabilityAsync）。心跳本身什么都不持久；回调里改了持久
+// 字段时按这里的级别提交（维护者决定 ⑧：由业务按自己的持久级别处理）。DurabilityMemory 下改持久字段会在提交点被拒绝；
+// DurabilityPipelined 要求引擎装了 pipelined 提交器。回滚策略固定 undo。
+func WithDurability(policy nest.DurabilityPolicy) RegOption {
+	return func(o *regOptions) { o.durability = policy }
+}
+
+// Host 是一个实体实例的心跳宿主，由组件在构造或 OnInitFinish 里经 Driver.NewHost 取得。Register 与 Reg 的
+// Start / Stop / SetPeriod 只能在实体锁内（Nest handler 里，或加载 / 新建的初始化阶段）调用；OnDestroy 任意 goroutine。
+type Host struct {
+	driver *Driver
+	owner  entity.IThreadSafeEntity
+	id     int64
+	hash   uint64
+	// remote 非 nil 表示 Remote 托管实体：只有本进程实例是当前拥有方（LocalOwned）时才跳。
+	remote entity.IThreadSafeRemoteEntity
+	closed atomic.Bool
+
+	// regs 在实体锁内且持 Driver.mu 时追加；实体锁内或 Driver.mu 下读。
+	regs []*Reg
+}
+
+// NewHost 为一个实体实例构造宿主。owner 为 nil 时 panic（组件接线错误）。
+func (d *Driver) NewHost(owner entity.IThreadSafeEntity) *Host {
+	if owner == nil {
+		panic("heartbeat: NewHost needs an entity")
+	}
+	h := &Host{driver: d, owner: owner, id: owner.ID(), hash: phaseHash(owner.ID())}
+	if remote, ok := owner.(entity.IThreadSafeRemoteEntity); ok && entity.IsEntityKindRemoteManaged(owner.GetEntityKind()) {
+		h.remote = remote
+	}
+	return h
+}
+
+// Owner 返回宿主所属的实体实例。
+func (h *Host) Owner() entity.IThreadSafeEntity { return h.owner }
+
+// Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并（维护者决定 ③）。
+// name 在实例内唯一（用于日志与诊断）；period 必须是 Periods 之一。
+func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegOption) (*Reg, error) {
+	if h.closed.Load() {
+		return nil, ErrHostClosed
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("heartbeat: registration %q has a nil callback", name)
+	}
+	t, err := tierOf(period)
+	if err != nil {
+		return nil, fmt.Errorf("heartbeat: registration %q: %w", name, err)
+	}
+	for _, r := range h.regs {
+		if r.name == name {
+			return nil, fmt.Errorf("%w: %q on entity %d", ErrDuplicateName, name, h.id)
+		}
+	}
+	o := regOptions{durability: nest.DurabilityAsync}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	handler, ok := beatHandlerFor(o.durability)
+	if !ok {
+		return nil, fmt.Errorf("heartbeat: registration %q: unsupported durability %v", name, o.durability)
+	}
+	r := &Reg{host: h, name: name, fn: fn, handler: handler, tier: t}
+	r.params = nest.Params{r}
+	// 追加在实体锁内；同时持 Driver.mu，让 OnDestroy（卸载流程里解锁之后调用）读到完整的列表。
+	h.driver.mu.Lock()
+	h.regs = append(h.regs, r)
+	h.driver.mu.Unlock()
+	return r, nil
+}
+
+// OnDestroy 让实例永久离开驱动：卸载、删档、撤销新建时由组件的 OnDestroy 调用，可重复。之后的启停一律忽略，
+// 已经在队列里的拍到达时不执行（按过期处理）。
+func (h *Host) OnDestroy() {
+	if h == nil || h.closed.Swap(true) {
+		return
+	}
+	h.driver.close(h)
+}
+
+// Reg 是一个心跳登记。
+type Reg struct {
+	host    *Host
+	name    string
+	fn      Func
+	handler nest.HandlerName
+	params  nest.Params
+
+	// 以下只在实体锁内读写：业务看到的状态（随事务回滚恢复）与回调侧的上次执行记录。
+	active  bool
+	tier    tier
+	seq     uint64 // 每次启停 / 改档加一，驱动只接受更新的序号（AfterCommit 可能乱序到达）
+	lastRun time.Time
+	lastGen uint64
+
+	// 以下只在 Driver.mu 下读写：驱动已生效的状态与环上位置。
+	ring struct {
+		seq    uint64
+		active bool
+		tier   tier
+		cell   int32
+		idx    int32
+	}
+
+	// 原子：驱动与回调之间。
+	startGen  atomic.Uint64 // 每次启动生效加一；回调据此判断 First
+	startedAt atomic.Int64  // 最近一次启动生效的业务时间（UnixNano），先于 startGen 写
+	inflight  atomic.Bool   // 已投递、回调还没执行完
+	skipped   atomic.Int64  // 上次执行以来跳过的拍数
+
+	// 只由驱动 goroutine 读写。
+	deliveredFrame int64
+	stalls         uint // 连续视为丢失的次数，决定下次的卡住阈值；看到不在途时清零
+}
+
+// Name 返回登记名。
+func (r *Reg) Name() string { return r.name }
+
+// Active 返回业务视角的启停状态（实体锁内读；含本事务里尚未提交的启停）。
+func (r *Reg) Active() bool { return r.active }
+
+// Period 返回业务视角的档位。
+func (r *Reg) Period() time.Duration { return r.tier.period() }
+
+// Start 开始跳；已在跑时无操作。在事务里调用时提交后生效、回滚作废（nest.AfterCommit）；不在事务里立即生效。
+func (r *Reg) Start() { r.change(true, r.tier) }
+
+// Stop 停止；停止生效后到达的在途拍不执行。生效方式同 Start。
+func (r *Reg) Stop() { r.change(false, r.tier) }
+
+// SetPeriod 换档：下一拍按新档位所在的格触发，Elapsed 仍从本登记上次执行起算。period 必须是 Periods 之一。
+// 生效方式同 Start；停止状态下只记下档位，下次 Start 用它。
+func (r *Reg) SetPeriod(period time.Duration) error {
+	t, err := tierOf(period)
+	if err != nil {
+		return err
+	}
+	r.change(r.active, t)
+	return nil
+}
+
+// change 改业务视角的状态并安排驱动生效。事务里：登记回滚恢复（DeferRollback）与提交后生效（AfterCommit），
+// 生效带序号，晚到的旧变化被驱动丢弃；不在事务里（加载发布前、memory 快路径）：立即生效。
+func (r *Reg) change(active bool, t tier) {
+	if r.host.closed.Load() || (active == r.active && t == r.tier) {
+		return
+	}
+	prevActive, prevTier := r.active, r.tier
+	r.active, r.tier = active, t
+	r.seq++
+	seq, d := r.seq, r.host.driver
+	apply := func() { d.apply(r, seq, active, t) }
+	tx := nest.CurrentRollbackTx()
+	if tx == nil {
+		apply()
+		return
+	}
+	tx.DeferRollback(func() error {
+		r.active, r.tier = prevActive, prevTier
+		return nil
+	})
+	tx.AfterCommit(apply)
+}
+
+// --- 心跳 handler ---
+
+// 心跳 handler 按持久级别各注册一个（包级，进程内全部驱动共用）：参数是 *Reg，回滚策略 undo。
+var beatHandlers = [...]struct {
+	durability nest.DurabilityPolicy
+	name       nest.HandlerName
+}{
+	{nest.DurabilityMemory, nest.NewHandlerName("heartbeat.beat.memory")},
+	{nest.DurabilityAsync, nest.NewHandlerName("heartbeat.beat.async")},
+	{nest.DurabilityStrict, nest.NewHandlerName("heartbeat.beat.strict")},
+	{nest.DurabilityPipelined, nest.NewHandlerName("heartbeat.beat.pipelined")},
+}
+
+func init() {
+	for _, h := range beatHandlers {
+		nest.MustRegisterHandlerWithMeta(h.name, beatHandler, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: h.durability})
+	}
+}
+
+func beatHandlerFor(policy nest.DurabilityPolicy) (nest.HandlerName, bool) {
+	for _, h := range beatHandlers {
+		if h.durability == policy {
+			return h.name, true
+		}
+	}
+	return nest.HandlerName{}, false
+}
+
+// HandlerNames 返回心跳 handler 名（诊断、按 handler 统计时用）。
+func HandlerNames() []nest.HandlerName {
+	out := make([]nest.HandlerName, len(beatHandlers))
+	for i, h := range beatHandlers {
+		out[i] = h.name
+	}
+	return out
+}
+
+func beatHandler(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+	if len(es) != 1 || len(params) != 1 {
+		return nil, fmt.Errorf("heartbeat: beat handler wants one target and one parameter, got %d / %d", len(es), len(params))
+	}
+	r, ok := params[0].(*Reg)
+	if !ok || r == nil {
+		return nil, fmt.Errorf("heartbeat: beat handler parameter is %T, want *heartbeat.Reg", params[0])
+	}
+	return nil, r.host.driver.runBeat(es[0], r)
+}
+
+// runBeat 在实体锁与事务内执行一拍。核对顺序：
+//  1. 在途标志：没有在途（同一次投递的另一份已经执行过，见卡住兜底）就不执行；
+//  2. 实例：消息的目标必须是登记所属的那个实例、且没有 OnDestroy（卸载后同 ID 重载的新实例收到旧实例的拍，按过期丢弃）；
+//  3. 业务视角的启停：锁序上更早提交的 Stop 已经让它停了；
+//  4. Remote 托管实体：本进程实例必须是当前拥有方（LocalOwned）。
+//
+// 在途标志在返回时清掉（panic 也清），所以“上一拍没执行完”就是 handler 还没返回。
+func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
+	if !r.inflight.Load() {
+		d.count(&d.stats.dropDuplicate, r.host.id)
+		return nil
+	}
+	defer r.inflight.Store(false)
+	h := r.host
+	if target != h.owner || h.closed.Load() {
+		d.count(&d.stats.dropStale, h.id)
+		return nil
+	}
+	if !r.active {
+		d.count(&d.stats.dropStopped, h.id)
+		return nil
+	}
+	if h.remote != nil && h.remote.RemoteOwnershipState() != entity.RemoteOwnershipLocalOwned {
+		d.count(&d.stats.dropNotOwner, h.id)
+		return nil
+	}
+
+	now := d.Now()
+	period := r.tier.period()
+	gen := r.startGen.Load()
+	first := gen != r.lastGen
+	since := r.lastRun
+	if first {
+		since = time.Unix(0, r.startedAt.Load())
+	}
+	elapsed := now.Sub(since)
+	limit := max(DefaultMaxElapsed, period)
+	elapsed = min(max(elapsed, 0), limit)
+	skipped := r.skipped.Swap(0)
+
+	// 回调侧记录随本拍事务回滚：回滚的一拍不算执行过，下一拍的 Elapsed 覆盖它。
+	prevRun, prevGen := r.lastRun, r.lastGen
+	r.lastRun, r.lastGen = now, gen
+	if tx := nest.CurrentRollbackTx(); tx != nil {
+		tx.DeferRollback(func() error {
+			r.lastRun, r.lastGen = prevRun, prevGen
+			r.skipped.Add(skipped)
+			return nil
+		})
+	}
+	d.count(&d.stats.executed, h.id)
+	return r.fn(Beat{Now: now, Elapsed: elapsed, Period: period, Skipped: int(skipped), First: first})
+}

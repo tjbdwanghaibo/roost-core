@@ -186,6 +186,19 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitytimer.dropped_total{driver}` | Counter | 到期时发现实例已卸载 / 删档或已被同 ID 的新实例取代而丢弃、不投递的条目（驱动不唤醒不在内存的实体） |
 | `entitytimer.pending{driver}` | Gauge | 索引里等待到期（含已投递待报告）的实例数 |
 
+### 实体心跳（gameplay/heartbeat）
+
+DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个 Nest 引擎一个驱动）。驱动内部计数，每秒刷一次进注册表；拍率再高也不在热路径上写注册表。
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `heartbeat.delivered_total{driver}` | Counter | 准入成功的心跳消息（每拍每个到期登记一条，不合并） |
+| `heartbeat.executed_total{driver}` | Counter | 执行了回调的拍。与 `delivered_total` 的差是执行时按规则丢弃的（见 `dropped_total`）与还在队列里的 |
+| `heartbeat.skipped_total{driver,reason}` | Counter | 跳过的拍：`inflight`（上一拍还没执行完）、`queue_full`（快池准入满）、`rejected`（其他准入失败，例如引擎停止中）。**基线应为零**；持续增长说明实体所在的 worker 跟不上或回调太慢。同时打限频 Warn `heartbeat: beats skipped`（缺省 10s 一条，汇总间隔内的计数并带一个样本实体） |
+| `heartbeat.stalled_total{driver}` | Counter | 在途超过 `StallAfter`（缺省 10s，同一登记连续卡住时翻倍）视为丢失而重投的拍。**基线应为零**；非零说明 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败），或 worker 排队超过 10s。同样计入 Warn |
+| `heartbeat.dropped_total{driver,reason}` | Counter | 按规则丢弃、不执行回调的拍：`removed`（实例已卸载 / 删档）、`stale`（已被同 ID 新实例取代或已 OnDestroy；含卸载窗口里旧实例的拍到达新实例）、`not_loaded`（实例还没发布）、`stopped`（停止生效后才到达）、`not_owner`（Remote 托管实体本进程不是独占拥有方）、`duplicate`（卡住重投后同一次投递的另一份已执行）。不打日志 |
+| `heartbeat.registered{driver}` | Gauge | 正在跳（启动已生效）的登记数 |
+
 ### 服务事件（wiring/service 与 service，维护者决定 C6）
 
 生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 Wiring 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
@@ -273,6 +286,12 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitytimer.dropped_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.pending` | Gauge | `nest/entitytimer/driver.go:SetGauge` |
 | `entitytimer.redelivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `heartbeat.delivered_total` | Counter | `gameplay/heartbeat/driver.go:incCounter` |
+| `heartbeat.dropped_total` | Counter | `gameplay/heartbeat/driver.go:incCounter` |
+| `heartbeat.executed_total` | Counter | `gameplay/heartbeat/driver.go:incCounter` |
+| `heartbeat.registered` | Gauge | `gameplay/heartbeat/driver.go:SetGauge` |
+| `heartbeat.skipped_total` | Counter | `gameplay/heartbeat/driver.go:incCounter` |
+| `heartbeat.stalled_total` | Counter | `gameplay/heartbeat/driver.go:incCounter` |
 | `failurelog_append_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_degraded_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
@@ -504,6 +523,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
 10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接、会话打开被持续拒绝，或玩家实体的帧编码失败（日志 `self view:` / `entitysync`）。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
+12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

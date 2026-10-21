@@ -1,0 +1,40 @@
+File: bench.test
+Type: cpu
+Time: 2026-10-21 14:00:34 CST
+Duration: 12.21s, Total samples = 8.75s (71.65%)
+Showing nodes accounting for 6.14s, 70.17% of 8.75s total
+Dropped 183 nodes (cum <= 0.04s)
+Showing top 45 nodes out of 113
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      4.72s 53.94%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+     0.01s  0.11%  0.11%      4.68s 53.49%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+         0     0%  0.11%      4.67s 53.37%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work.func1
+         0     0%  0.11%      4.65s 53.14%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)
+         0     0%  0.11%      4.65s 53.14%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewEngine.func1
+         0     0%  0.11%      4.65s 53.14%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest
+         0     0%  0.11%      4.28s 48.91%  github.com/tjbdwanghaibo/roost-core/framework/nest.runNestLogic
+         0     0%  0.11%      4.21s 48.11%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).singleDispatch
+         0     0%  0.11%      4.17s 47.66%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities
+         0     0%  0.11%      4.07s 46.51%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).invokeHandlerTransaction
+         0     0%  0.11%      3.92s 44.80%  github.com/tjbdwanghaibo/roost-core/framework/nest.invokeWithTransaction (inline)
+         0     0%  0.11%      3.92s 44.80%  github.com/tjbdwanghaibo/roost-core/framework/nest.runTransaction
+         0     0%  0.11%      3.88s 44.34%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities.func4
+         0     0%  0.11%      3.88s 44.34%  github.com/tjbdwanghaibo/roost-core/framework/nest.invokeBusinessHandler
+         0     0%  0.11%      3.88s 44.34%  github.com/tjbdwanghaibo/roost-core/framework/nest.invokeMemoryHandler
+     0.25s  2.86%  2.97%      3.88s 44.34%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).carry
+         0     0%  2.97%      3.88s 44.34%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.init.0.func2
+         0     0%  2.97%      2.79s 31.89%  runtime.mcall
+         0     0%  2.97%      2.79s 31.89%  runtime.park_m
+     0.01s  0.11%  3.09%      2.77s 31.66%  runtime.schedule
+         0     0%  3.09%      2.60s 29.71%  runtime.findRunnable
+     0.10s  1.14%  4.23%      2.18s 24.91%  github.com/tjbdwanghaibo/roost-core/infra/base/lock.(*ReentrantMutex).TryLock
+     1.24s 14.17% 18.40%      2.09s 23.89%  runtime.chanrecv
+         0     0% 18.40%      2.07s 23.66%  runtime.selectnbrecv
+         0     0% 18.40%      1.90s 21.71%  runtime.stopm
+         0     0% 18.40%      1.89s 21.60%  runtime.mPark (inline)
+         0     0% 18.40%      1.89s 21.60%  runtime.notesleep
+         0     0% 18.40%      1.89s 21.60%  runtime.semasleep
+     1.88s 21.49% 39.89%      1.88s 21.49%  runtime.pthread_cond_wait
+     0.29s  3.31% 43.20%      1.21s 13.83%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).beat
+         0     0% 43.20%      0.99s 11.31%  runtime.systemstack
+         0     0% 43.20%      0.87s  9.94%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).now (inline)

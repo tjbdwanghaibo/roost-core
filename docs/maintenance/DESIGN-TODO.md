@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 提出方向并定了位置（组件与心跳框架在 `gameplay`、心跳在 Nest 快池上执行、快池业务周期逻辑统一以心跳为底层）；心跳（HB）方案已写，待确认后试做 |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P2～P5 未做，Nest 批量入队（方案 D）原型另行进行 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -824,9 +824,76 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试；尚未实施。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2～P5 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+
+**P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21）。
+
+**压测后维护者决定（2026-10-21）**：调度结构按档分环、10ms 分辨率；驱动 1 个；投递方式 P1 先用单目标 `Dispatch`（X），驱动接口按“一格到期的一批心跳一次交出”设计，内部先逐个 Dispatch；同时做方案 D（Nest 批量入队、逐个执行：一次取队列锁入队一批独立的单目标作业、每个 worker 只唤醒一次并连续取作业，作业语义与 X 相同）的原型与压测，达标（CPU 接近 Y、业务 p99 不差于 X、语义不变）则心跳切到 D，否则保留 X。E（搭便车）、F（按 worker 固定分片）不做。
 
 **维护者决定（2026-10-21，对方案 §需要拍板逐条）**：①包放 `gameplay`（`gameplay/heartbeat`、`gameplay/movement`，装配 `wiring/heartbeat`）；②投递方式由压测决定：单目标 `Dispatch` 与 ssr 式“每条消息带一批实体、worker 逐个 TryLock”对比（维护者经验 ssr 方式更好）；③**不合并**：同一实体的多个心跳登记各自投递；④**跳拍**：上一拍在途时跳过，不累积不补发，**跳拍打 Warn 日志**（限频）并计数；⑤快池很快、理论上不会满：去掉水位整格让路与每格上限，只保留“每实体至多一拍在途”与 `ErrQueueFull` 跳拍兜底；⑥频率采用 ssr 式**固定档位**（如 50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s），不支持任意周期；⑦驱动 goroutine 数参考 ssr；⑧HB 本身不持久化，心跳里改持久字段由业务按自己的持久级别处理；⑨卸载窗口接受（实例核对 + 令牌）；⑩**所有实体都支持**：心跳投到实体所在的池（快池 / 慢池）；Remote 托管实体投到当前拥有方，所有权迁移时旧拥有方停、新拥有方重新登记；⑪调度结构由压测决定：ssr 式固定档位环、时间轮、最小堆对比（维护者经验 ssr 方式更好）；⑫entitytimer 的驱动不改；⑬实体的 tick 都走 HB（房间 / 场景本身是实体，用自己的 HB）；⑭⑮按推荐：game-demo 移动改为客户端发目标、服务端心跳推进；位置不每拍落库（nopersist，按周期或离开场景落库）。回调只做内存计算与入队、不阻塞。
+
+### P1 实施结果（2026-10-21）
+
+**状态：P1 已实施**（分支 `feat/d20-heartbeat-p1`，基于 `be5a76f5`；本地提交，由维护者推送）。框架 `gameplay/heartbeat`，装配 `wiring/heartbeat`（Mod 名 `heartbeat`）。用法 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)，指标 [OBSERVABILITY“实体心跳”](../framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)，剩余边界 [KNOWN-LIMITS“实体心跳”](KNOWN-LIMITS.md#实体心跳d20-第-1-期)。读代码时 codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码核对为准。
+
+**API 最终形状**：
+
+```go
+var Periods [10]time.Duration       // 50ms 100ms 200ms 500ms 1s 2s 5s 10s 30s 60s
+const Resolution = 10 * time.Millisecond
+
+func NewDriver(Config{Name, StallAfter, WarnInterval, Logger}) *Driver
+func (d *Driver) SetClock(func() time.Time) / Bind(nest.Client, Lookup) error / Start() error / Stop(ctx) error
+func (d *Driver) NewHost(entity.IThreadSafeEntity) *Host
+func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegOption) (*Reg, error)
+func (h *Host) OnDestroy()
+func (r *Reg) Start() / Stop() / SetPeriod(time.Duration) error / Active() bool / Period() / Name()
+type Beat struct { Now time.Time; Elapsed, Period time.Duration; Skipped int; First bool }
+type Func func(Beat) error           // 返回错误 = 本拍事务回滚
+func WithDurability(nest.DurabilityPolicy) RegOption   // 缺省 async，回滚策略固定 undo
+func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
+```
+
+**按决定逐条落实**：位置 ①；按档分环 10ms、1 个驱动 goroutine、相位 = hash(实体 ID)（⑦⑪）；每拍每个到期登记一条单目标 `Dispatch`、不合并（②③），驱动内部投递接口 `deliverer.deliverBatch(ctx, []beat, rejected)` 一次交出一格的一批，P1 实现逐个 Dispatch，方案 D 落地后只换这一层；回调在实体自己的 worker、实体锁与事务内（handler 包级注册、回滚 undo），快池 / 慢池由 Nest 按种类分流（⑩）；每个登记至多一拍在途，在途跳拍、`ErrQueueFull` 跳拍，计数 + 限频 Warn，无水位让路、无每格上限（④⑤）；HB 不持久、`OnInitFinish` 登记、`OnDestroy` 撤销，持久级别按登记选（⑧）；不追帧，`Beat{Now, Elapsed, Skipped, First}`；事务内启停走 AfterCommit、回滚作废；卸载窗口用实例核对 + 令牌（⑨）；Remote 托管实体只在拥有方跳（⑩）；entitytimer 不改（⑫）。
+
+**与方案的偏差（如实记录，需要时请维护者改）**：
+
+1. **`Elapsed` 上限是 `max(1s, 档位)`，不是一律 1 秒**：2s 及以上的档若夹到 1 秒，每拍都少算（5s 档的回复只算 1 秒）。只对 ≥ 2s 的档有差别。
+2. **保留了“卡住兜底”，缺省 10s 并按次翻倍（最多 80s）**：方案 §3 写的是 2s。没有它，Nest 在执行 handler 之前放弃的消息（Remote 写准入被拒、准入后卸载且重载失败）会让登记永远“在途”、再也不跳。实测 2s 不翻倍时有放大：-race 下 5 万实体 1s 档（每秒 5 万拍，超过 -race 吞吐约 2700 拍/秒），排队超过 2s 后每 2s 重投一份，`Stalled:66451`、`SkippedInflight:100446`，执行仍追不上；改成 10s 起翻倍后放大降为对数级，-race 冒烟降到 2000 实体。非 -race 的 5 万实体 1s 档：`Delivered:100000 Executed:100000`，跳拍、卡住、丢弃全为 0。
+3. **Remote 共享模式（Shared）P1 不跳**：方案只说“投到当前拥有方”。共享模式下各写者都经分布式锁写、实例都是 `Shared`，本地看不出谁是“拥有方”；P1 只在 `LocalOwned` 执行，避免两边同时跳。需要维护者决定（见下）。
+4. **心跳 handler 按持久级别注册 4 个**（`heartbeat.beat.memory|async|strict|pipelined`），由登记选，缺省 async：落实 ⑧“由业务按自己的持久级别处理”，方案 §9 第 8 条原只写一个。
+5. **生成器未接入**：P1 没有消费方，`roost` 不装这个 Mod；`go test ./codegen/...` 本期不涉及。
+
+**Remote 所有权迁移设计**：不另建心跳侧的所有权状态，复用 Remote 已有的两道闸：
+
+- Nest：发给 Remote 托管 ID 的消息自动经 I/O 阶段 `PrepareRemoteWriteBatch` 取写许可（权威拥有方不是本进程 → fenced；实例 `Draining` / `Fenced` / `Quarantined` → 拒绝；`Unknown` / `Recovering` → 转 `LocalOwned`）。`TransferRemoteOwnership` 先排空已准入的本地写、把实例转 `Draining`，再改权威，所以旧拥有方的最后一拍先于新拥有方的第一拍。
+- 心跳：驱动投递前看实例所有权状态，`LocalOwned` / `Unknown` / `Recovering` 才投（`mayOwn`）；handler 执行前再要求 `LocalOwned`。作用是非拥有方与共享模式不投不跳，且非拥有期间被准入拒绝的拍不会卡住成为拥有方之后的心跳（变异核对 M6）。
+- 新拥有方“重新登记”就是正常加载：实例被路由来的第一条消息加载，组件 `OnInitFinish` 登记并按 DAO 状态启动；已有旧实例（`Fenced`）的进程在实例回到 `LocalOwned` 后恢复。
+- 测试 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats`：两个真实 Nest 引擎 + 按 `beginWrite` / `TransferRemoteOwnership` 写门与状态顺序模拟的 Remote Manager，驱动在转移期间并发推进；断言旧拥有方在转移标记之后执行 0 拍、新拥有方在标记之前执行 0 拍，各自的拍都经过 Remote 写准入，共享模式不投。没有真实 Mongo / Redis 下的迁移演练。
+
+**红绿证据**：实现与测试同轮写成，红用变异核对给出（每个强制点改掉一处，对应用例在当前代码上变红，下表是失败原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| M1 相位不按 hash（全进第 0 格） | `TestTiersFireOnTheirPhaseOncePerPeriod`：`100ms cell 0 holds 10000 of 10000 entities (want about 1000): [10000 0 0 0 0 0 0 0 0 0]` |
+| M2 不看在途、到期就投 | `TestInflightBeatSkipsCountsAndWarnsAtALimitedRate`：`delivered 5 beats while the first was still in flight, want 1` |
+| M3 Warn 不限频 | 同上：`warns inside the interval = 2, want still 1` |
+| M4 事务内启停立即生效 | `TestStartStopFollowTheTransaction`：`rolled-back start took effect: active true registered 1` |
+| M5 执行时不核对实例 | `TestBeatOfAnUnloadedInstanceDoesNotRunOnItsReplacement`：`old 1 new 0 stats {Delivered:1 Executed:1 ... DroppedStale:0 ...}` |
+| M6 Remote 不按所有权过滤 | `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats`：`owner beats: A 10 before the transfer, B 55 after (want ≥ 9 and ≥ 200)`（不双跳由 Remote 写准入保证；去掉过滤后新拥有方被非拥有期间的在途拍卡住 10s） |
+| M7 换档不移格 | `TestSetPeriodMovesToTheNewTier`：`1s beats in 3s = [40 50 60 ... 330]`（仍按 100ms 跳） |
+| M8 停止时批里剩下的不清在途 | `TestStopWaitsForTheBatchAndDispatchesNothingAfter`：`Stop during a batch: 1 dispatched, 50 left in flight; want the one in progress only` |
+| M9 卡住阈值不翻倍 | `TestStalledBeatIsRedeliveredAndRunsOnce`：`deliveries of a beat that never runs at seconds [1 11 21 31 41 51 61 71], want [1 11 31 71]` |
+| M10 心跳 handler 不开事务 | `TestBeatRunsUnderTheEntityLockInsideATransaction`：`beat ran in tx=false locked=true shortWorker=true` |
+| M11 回调侧记录不随回滚恢复 | `TestStartStopFollowTheTransaction`：第三拍 `Elapsed:100ms`（应为 200ms，覆盖回滚的那一拍） |
+
+“慢池实体投到慢池”与“多登记不合并”没有对应的强制点可变异（前者由 Nest 按种类分流，后者驱动本来就逐登记投递），用例是契约检查。
+
+**需要维护者决定**：
+
+1. `Elapsed` 上限：A 维持 `max(1s, 档位)`（推荐，长档不少算）；B 按原话一律 1 秒。
+2. Remote 共享模式由谁跳：A P1 不跳（现状，安全）；B 共享模式下由权威记录的 OwnerSid 进程跳（需要把所有权记录的 OwnerSid 暴露到实例上，改 Remote，另行设计）。
+3. 卡住兜底：A 10s 起翻倍（现状，推荐）；B 去掉兜底（Remote 准入被拒等情况下登记永久停跳）；C 回到 2s。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
@@ -1033,15 +1100,20 @@ roost 的取舍：
 
 1. **包名与位置**：`gameplay/heartbeat`（Driver / Host / 心跳 handler）+ `wiring/heartbeat`（Mod 装配）；移动组件放 `gameplay/movement`（`MapBasic` / `Move`）。推荐这样：心跳框架在 gameplay（维护者要求），装配与 entitytimer 一样放 wiring。
 2. **投递粒度**：A 每实体每拍一条单目标 `Dispatch`（推荐，已有 10 万/s 证据、无批内互等）；B `DispatchBroadcast` 32 个一批。推荐 A，P4 微基准证明准入开销成为瓶颈再评估 B。
+   - **压测结论（2026-10-21，[HB-STRUCTURES-20261021](../performance/HB-STRUCTURES-20261021.md) §4～§6，维护者决定 ②）**：5 万实体、100ms、10ms 分辨率、真实 Nest 引擎、回调只做内存计算，同时 5000 条/s 业务消息。100% 移动（50 万次/s）进程 CPU：X 单目标 `Dispatch` 4.25 核、Z `DispatchBroadcast` 1.90 核、Y ssr 式批量（64 个一批、承载 handler 逐个 `TryLock`）0.77 核；20% 移动（10 万次/s）1.37 / 0.64 / 0.30 核。业务消息 P99：无心跳 0.10ms，X 0.50～0.67、Y 0.12～0.25、Z 0.88～1.24ms（50ms 分辨率下 Z 8.3ms：批要等全部前驱，排在后面的业务消息等整批）。48 次运行跳拍 0、准入失败 0，回调间隔 P99 100.5～102.9ms。X 的 CPU 约六成是每条消息停放 / 唤醒 worker 的调度器自旋与派发队列锁。**Y 在 roost 里绕过目标实体的 Nest 事务与 Sync 捕获**：回调跑在承载实体的事务里，`QueueMove` 的提交门（`CurrentSyncMutation`）挂到承载事务、目标的位置变化不随之捕获，移动不能用；只作成本参照。与维护者经验对照：ssr 式批量在成本上确实最好，在 roost 语义上不成立。
+   - **推荐**：A（X）作为 P1；B（Z）不推荐（业务延迟变差、不支持 Remote）；CPU 成为瓶颈时评估 C——在 Nest 里加“批量心跳作业”（不登记同 ID 顺序、逐目标确认无在途作业且 `TryRequireEntity` 成功后在该目标自己的 Guard + 事务里执行，失败交回驱动重投），改 Nest 契约，需另行设计。
 3. **同一实体多个组件登记**：A 合并为一条投递，实体周期取最短、各登记按自己的周期与经过时间触发（推荐，示例分布省约 29%）；B 每个登记各自投递。
 4. **合并 / 跳拍**：至多一条在途，上一拍没执行完就跳过、只计 `Skipped`，不累积、不补投（推荐）；备选“累积到下一拍一起执行”会让慢实体越积越多，不推荐。
 5. **背压**：准入失败跳拍 + 快池等待超过 50% 容量时整格跳拍 + 每格上界 16384（推荐）。水位比例是否接受 50%。
 6. **时间参数**：分辨率 10ms、周期范围 [50ms, 60s]、`MaxElapsed` 1s；缺省频率建议移动 10Hz、AI 5Hz、Buff / 回复 / 冷却 1Hz（只作文档建议，由组件登记时给出）。推荐这一组。
 7. **驱动 goroutine**：缺省 1 个，`heartbeat.shards` 可调（推荐）。
+   - **压测结论（2026-10-21，同上 §2、§5，维护者决定 ⑦）**：ssr 的心跳收集与投递都在 1 个全局 50ms 帧 goroutine 上（另有 1 个 10ms 的消息队列节拍唤醒 worker），没有独立的心跳驱动。roost 1 个驱动在 50 万次/s 时占 0.70 核（X）；4 个分片时 X 变差（业务 P99 0.50 → 3.6ms、快池等待峰值 1403 → 6393、驱动合计 0.70 → 1.87 核，多驱动同时争派发队列锁），Y / Z 无收益。推荐 1 个、不提供 `heartbeat.shards`。
 8. **心跳 handler 的持久级别**：A `async`（推荐：只改 nopersist 时记录为空、不写 WAL；偶尔需要落档的结果，例如动作完成发奖，与普通快池 handler 一样提交）；B `memory`（回调里一切持久写被拒绝，持久结果只能走 entitytimer 或别的业务消息，最严格也最便宜）。
 9. **卸载窗口**：A 接受“准入后被卸载的实体可能被冷加载一次”，靠投递前核对实例 + 实例令牌保证不在新实例上误执行（推荐，与 D11 决定①一致）；B 给 Nest 加“只投已加载目标、冷目标直接丢弃”的发送选项（扩大 Nest 契约，三大块之一）。
 10. **种类限制**：长池种类与 Remote 托管实体在 P1 拒绝建 Host（推荐）。
 11. **调度结构**：单层时间轮（推荐），不用最小堆、不用 ssr 的固定档多环；不复用 Nest 帧 Ticker 的包级回调（推荐）。Nest 帧 Ticker 的包级回调目前没有生产调用方，是否另行清理不在本条范围。
+    - **压测结论（2026-10-21，[HB-STRUCTURES-20261021](../performance/HB-STRUCTURES-20261021.md) §3，维护者决定 ⑪；上面“单层时间轮（推荐）”由此改为按档分环）**：5 万 / 50 万登记、D20 §7 分布与全部 100ms 两种，benchstat 10 遍。ssr 的思路（固定档 + 相位 = hash(实体 ID) 分桶）最好，但 ssr 的写法（4 个跨度环、每格 map、一个登记插多格）不是：改写成“每档一个环、登记只进一格、格是切片 + 下标”后，50 万全部 100ms 每秒收集 2.8ms（50ms 帧）/ 3.9ms（10ms），ssr 写法 27.4ms、单层时间轮 14.4ms、最小堆 367ms；撤销 / 改档 11～17ns（ssr 写法 52～141ns、堆 46～74ns）；常驻约 50 B/登记（ssr 写法 62～91 B，ssr 生产“每格预分配 10000”另有固定约 420 MB；时间轮混合档位约 80 B）。相位打散每格最大 / 平均 ≤ 1.04。分辨率决定突发大小：50ms 帧一次投 2.5 万（5 万个 100ms 登记），10ms 每格 5000，对应 X 的迟到 P50 21.5 → 7.4ms、Z 的业务 P99 8.3 → 1.2ms。与维护者经验一致。
+    - **推荐**：按档分环，10ms 分辨率（相位 = hash mod 6000，再对本档格数取模），1 个驱动；不用最小堆与单层时间轮。原型见 `gameplay/heartbeat/internal/bench`（`TierRing`）。
 12. **entitytimer 驱动是否改成基于心跳**：不改（推荐，理由见 §5.3）。
 13. **房间 / 场景级 tick**：房间、场景都是实体，用自己的心跳；不提供非实体心跳（推荐）。
 14. **P3 范围**：game-demo 玩家移动是否改成“发目标点、服务器按心跳推进”（推荐，才能展示 MoveTo / actionflow；按点移动保留为对照或瞬移），连同原“需要确认”第 5 条（本期只做 MoveTo / Follow，还是连巡逻、寻路一起）一起定。
