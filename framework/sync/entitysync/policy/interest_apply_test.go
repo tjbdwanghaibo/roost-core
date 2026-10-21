@@ -354,3 +354,39 @@ func TestPolicyPhaseRefusalsReachOnRefusal(t *testing.T) {
 		t.Fatalf("the retry was not reported as a retry: %+v", got)
 	}
 }
+
+// 还没确认的排队移动被同一目标之后的 Leave → Enter 越过（撤除与放置不等提交）：它后来确认了也作废——目标与主视野
+// 留在 Enter 给的位置，不被拖到那条移动的目标。
+func TestAnUnconfirmedMoveOvertakenByLeaveAndEnterIsDropped(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		m := newManager(t)
+		in := newInterestMode(t, m, mode)
+		player(t, m, 1)
+		player(t, m, 2)
+		mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+		mustEnter(t, in, 2, spatial.Point{X: 20, Y: 10})
+		flushInterest(t, in, m)
+		e := factEntity(t, 2)
+		mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+		if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
+			t.Fatal(err)
+		}
+		mutation.Admit()
+		// 提交还没确认：Leave → Enter 先生效。
+		if err := in.Leave(2, 2); err != nil {
+			t.Fatal(err)
+		}
+		back := spatial.Point{X: 30, Y: 10}
+		mustEnter(t, in, 2, back)
+		flushInterest(t, in, m)
+		mutation.Confirm()
+		mutation.Release()
+		for round := 0; round < 3; round++ {
+			flushInterest(t, in, m)
+		}
+		if subjectAt(in, 2) != fmt.Sprintf("%v", back) || !slices.Contains(in.Visible(2), int64(1)) || queuedFacts(in) != 0 {
+			t.Fatalf("%s: entity 2 at %s, main view at %s, player 2 sees %v, facts left %d",
+				mode, subjectAt(in, 2), mainViewAt(in, 2), in.Visible(2), queuedFacts(in))
+		}
+	})
+}
