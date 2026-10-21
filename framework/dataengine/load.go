@@ -17,6 +17,14 @@ var (
 	ErrLoadCallback       = errors.New("dataengine loader: callback failed")
 )
 
+// ErrEntityUnloading 表示该实体正在被运维卸载（admin 命令 entity.unload，D16）：从卸载屏障登记到卸载完成（或失败
+// 撤销屏障）之间，写到它的事务在 WAL 准入处被拒绝。没有写 WAL，Nest 在 Guard 内整体回滚，调用方拿到的错误同时满足
+// errors.Is(err, nest.ErrCommitRejected)。
+//
+// 这是可重试错误，不是业务拒绝：屏障通常只持续一次投影（毫秒级），最长是命令的 timeout；卸载完成后再来的写入照常
+// 冷加载该实体再执行。原因：卸载要保证“内存 == 库”，屏障之后准入的修改在卸载时会随内存一起丢失。
+var ErrEntityUnloading = errors.New("dataengine: entity is being unloaded by an operator; retry later")
+
 // RawDocument is the storage-neutral representation returned by Data Engine.
 // Data contains the complete encoded document, including its identity fields.
 type RawDocument struct {

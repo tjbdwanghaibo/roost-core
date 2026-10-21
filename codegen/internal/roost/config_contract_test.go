@@ -443,6 +443,30 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 			t.Errorf("effect stream outliving the completion receipts: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
 		}
 	}
+	// 业务时区（D18）：拼错的 IANA 名在进程的 --check-config 里拒绝、点名键；合法的 Asia/Shanghai 在看不到系统
+	// zoneinfo 的环境里（模拟 distroless 运行镜像）仍能通过，靠的是生成的 main 内嵌的 time/tzdata。
+	zone := func(name string) {
+		t.Helper()
+		mutated := strings.Replace(string(raw), "\n  business_timezone: UTC\n", "\n  business_timezone: "+name+"\n", 1)
+		if mutated == string(raw) {
+			t.Fatal("config.game.yaml has no time.business_timezone: UTC; update this test")
+		}
+		if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	zone("Asia/Shanghia")
+	for _, item := range checkConfigRules(root, m, process) {
+		if item.Name == "config-check:game" && (item.Status != StatusFail || !strings.Contains(item.Detail, "time.business_timezone")) {
+			t.Errorf("misspelt business time zone: config-check:game = %s %q; want a FAIL naming time.business_timezone", item.Status, item.Detail)
+		}
+	}
+	zone("Asia/Shanghai")
+	requireZoneinfoHidden(t, ctx)
+	rel := filepath.Join("configs", "service", "config.game.yaml")
+	if out, err := withoutZoneinfo(t, ctx, root, process.binary, "game", "--check-config", "--config", rel).CombinedOutput(); err != nil {
+		t.Fatalf("the generated game binary with time.business_timezone: Asia/Shanghai and no zoneinfo on the host: %v\n%s", err, out)
+	}
 }
 
 // TestConfigCheckRunsCrossModRulesThroughTheProcess：`roost config check` 与进程 --check-config、doctor config-check
@@ -688,10 +712,17 @@ func setLogicOffset(t *testing.T, root, rel, value string) {
 		if at < 0 {
 			t.Fatalf("%s: no stringData config.yaml block", rel)
 		}
-		at += len(marker)
-		body = body[:at] + "    time:\n      logic_offset: " + value + "\n" + body[at:]
+		section := "\n    time:\n"
+		if !strings.Contains(body[at:], section) {
+			t.Fatalf("%s: the config block has no time: section", rel)
+		}
+		body = body[:at] + strings.Replace(body[at:], section, section+"      logic_offset: "+value+"\n", 1)
 	} else {
-		body += "time:\n  logic_offset: " + value + "\n"
+		// 生成的配置已有 time: 段（业务时区），偏移写进同一段；YAML 不允许同一个键出现两次。
+		if !strings.Contains(body, "\ntime:\n") {
+			t.Fatalf("%s: no time: section", rel)
+		}
+		body = strings.Replace(body, "\ntime:\n", "\ntime:\n  logic_offset: "+value+"\n", 1)
 	}
 	writeProjectFile(t, root, rel, body)
 }

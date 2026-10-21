@@ -1,6 +1,6 @@
 # 当前已知限制与验证边界
 
-适用版本：v1.29.0 与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（当前没有未解决的 RV 项，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“待核对”；v1.29 上没有证据的验证项写“v1.29 未验证”，补测入口汇总在文末 [v1.29 待补测](#v129-待补测)。
+适用版本：v1.29.0 与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（当前没有未解决的 RV 项，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“待核对”；v1.29 上没有证据的验证项写“v1.29 未验证”；2026-10-20 维护者批准的发版前补测已在 main `69fb668f`（v1.30.0 候选）上跑完（[夜间补测](../performance/NIGHT-20261020.md)），结论回填到各条与能力表，没跑或没结论的项留在文末 [v1.29 待补测](#v129-待补测)。
 
 需要维护者做设计选择的事项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
@@ -41,7 +41,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 ### 运行期改档与单实体运维（D16）
 
-框架没有针对单个实体 / 玩家的运维命令（admin 只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`），方向待维护者决定（[DESIGN-TODO D16](DESIGN-TODO.md#d16-单个实体--玩家的运维入口)）。运行期直接改权威集合的结果按设计是确定的：只改字段时下一次投影覆盖改动；改 `_version`（恢复旧备份）时投影 fatal、进程 fence、重启起不来，直到人工处理（[维护手册 §4](README.md#4-故障处理)）。在线改档写成业务 GM handler，整档恢复走停服排空后的离线写回（[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)）。
+框架只提供与业务字段无关的 `entity.kick`（踢下线）与 `entity.unload`（排空投影后卸载），**不提供改档与恢复**（维护者 2026-10-20 决定 C，[DESIGN-TODO D16](DESIGN-TODO.md#d16-单个实体--玩家的运维入口)，用法见 [guide/03 §6](../framework/guide/03-dataengine.md#单实体运维命令d16)）。`entity.unload` 之后任何访问都会立刻重新加载，不能当作改库的窗口。运行期直接改权威集合的结果按设计是确定的：只改字段时下一次投影覆盖改动；改 `_version`（恢复旧备份）时投影 fatal、进程 fence、重启起不来，直到人工处理（[维护手册 §4](README.md#4-故障处理)）。在线改档写成业务 GM handler，整档恢复走停服排空后的离线写回（[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)）。
 
 ### DAO 持久键（D13）
 
@@ -58,7 +58,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 ### Saga
 
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
-- **原生步骤单进程容量**：第一瓶颈是 DataEngine 投影器——带回执 / effect 的记录（`projector_replay.go` `isLocalBatchRecord`）逐条一次投影事务，checkpoint 已与普通记录按 `CheckpointRecords` / `CheckpointInterval` 合并；正向每笔 2 条、全补偿 3 条。等回执在后台（`StepConsumerConfig.ReceiptWaiters`），代价是同 durable 上同一实体的前后命令可能撞实体屏障（交还租约、退避 nak）。维护者 2026-10-18 决定 A（接受并文档化，量大按 sid 分片多进程、原生步骤加 `WithAdmit`）；第三档 B（合批带回执 / effect 的记录）与 C（分盘）不做；checkpoint 缺省间隔保持 20 ms（维护者 2026-10-19 方案 A），更高吞吐可调 `dataengine.projection.checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。容量数字见下方能力表（v1.29 未验证）与 [guide/06 §5](../framework/guide/06-saga.md#5-接入与运维)。
+- **原生步骤单进程容量**：第一瓶颈是 DataEngine 投影器——带回执 / effect 的记录（`projector_replay.go` `isLocalBatchRecord`）逐条一次投影事务，checkpoint 已与普通记录按 `CheckpointRecords` / `CheckpointInterval` 合并；正向每笔 2 条、全补偿 3 条。等回执在后台（`StepConsumerConfig.ReceiptWaiters`），代价是同 durable 上同一实体的前后命令可能撞实体屏障（交还租约、退避 nak）。维护者 2026-10-18 决定 A（接受并文档化，量大按 sid 分片多进程、原生步骤加 `WithAdmit`）；第三档 B（合批带回执 / effect 的记录）与 C（分盘）不做；checkpoint 缺省间隔保持 20 ms（维护者 2026-10-19 方案 A），更高吞吐可调 `dataengine.projection.checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。容量数字见下方能力表（2026-10-20 夜间 15 分钟复测）与 [guide/06 §5](../framework/guide/06-saga.md#5-接入与运维)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect（SAGA.md）。
 
 ## Sync、玩家接入与 Lockstep
@@ -73,7 +73,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 4. Game 进程出站驻留预算（Game Ingress `outbound.resident_bytes`）持续耗尽时 Sync 每轮在第一个被拒会话处整轮重试：排在后面的会话本轮不推送，已准入的会话下一轮改收全量（`requireSnapshotsAfterRetry`），带宽放大、延迟上升；发不出去的绑定在 `outbound.max_age` 到期时被关闭、释放预算；业务提交不受影响。嵌入 TCP 的进程预算同一规则，但没有 `max_age`（见下节）。按发送能力配预算并看 `player.sync.push_refused.total{outcome="retried"}`；需要时可让 Manager 在 RetryLater 时跳过被拒会话。
 5. Gate 侧自己的驻留预算耗尽仍关闭连接，没有 Game 侧的整轮重试例外；需要时 Gate 回 NotAdmitted、由 Game 侧按预算例外处理。
 6. 不提供 C# 的 subject 载荷解码样例。
-7. 只做了本机共享隔离环境的真实进程演练、真实 Gate + Game Ingress + NATS 的包内回归与生成工程回归，重档压测 v1.29 未验证（待补测）。
+7. 嵌入 TCP + self_sync 重档 15 分钟（2026-10-20 夜间，[夜间补测](../performance/NIGHT-20261020.md) §2）通过：1000 玩家每秒约 1000 帧自身视图，`push_refused` retried / closed 0、滞留玩家 0，提交→客户端 P99 1.43ms。第 4 条的整轮重试放大在该负载下没有被触发，**没有测到不等于不存在**（要测需把预算压到触发点）；独立 Gate + self_sync 的重档夹具没有。
 
 **self_sync 默认 packer 的代价**：开关打开且 marker 没写 `subjectPacker=` 时生成器生成 `player_sync_packer_gen.go`，标了 sync 的字段默认全部对玩家本人可见，需要裁剪的写自己的 packer；marker 写了生成名 `NewPlayerSyncPacker` 时按业务 packer 处理、不生成；默认 packer 只发一个 DAO，多 DAO 的 Player 仍要自己写（[PLAYER-ACCESS §7](../framework/PLAYER-ACCESS.md#7-玩家看自己的状态self_sync)）。
 
@@ -89,7 +89,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 剩余边界：
 
-- 缺省 256 MiB 是按 Gate 缺省 128 MiB / 4096 连接折算到 10000 连接取整，没有重档压测验证正常负载不触发（v1.29 未验证，待补测）。
+- 缺省 256 MiB 是按 Gate 缺省 128 MiB / 4096 连接折算到 10000 连接取整。2026-10-20 夜间嵌入 TCP 重档 15 分钟（1000 连接、场景 Sync 4198 万条 delta、每秒 1 万条回包，[夜间补测](../performance/NIGHT-20261020.md) §2）`player_tcp_outbound_budget_exhausted_total` 增量 0、溢出 / 推送关连接 / 写错误全 0，正常负载下不触发；停读客户端或更高推送量下是否够用仍未测（没有驻留 Gauge，峰值取不到）。上面“驻留字节 Gauge / 按帧龄关闭”的决定所等的数据就是这一份：本负载下拒绝为 0，不构成要做的证据。
 - 停读连接占着的预算要等它撞上每连接上限被关或 `write_timeout`（默认 5s）写超时才归还，期间健康连接的推送可能被拒（Sync 延迟上升，Lockstep 实时帧靠冗余补）；没有 Gate 那样的 `max_age`。
 - 只有拒绝计数，没有驻留字节 Gauge。
 - 推送入队多一次 payload 复制，每连接 goroutine 由 1 变 2（独立 Gate 模式下同样多一个通常空闲的写协程）。
@@ -97,8 +97,9 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 ### Lockstep
 
+- **已修复（2026-10-20）：`TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted` 在全仓 `go test ./...` 下偶发失败**（`tcp_test.go:513`：`Tick after the budget was returned = … frame of 16455 bytes, 261344 of 262144 resident`）。负载下（`-race -count=200 -cpu=1,2,8`，同时循环跑 nest / network / dataengine 的 race 测试）复现 97/600。根因是产品缺陷：嵌入 TCP 的 `serveConnection` 先发布会话关闭事件（`unregisterSession` 的 defer 在 `closeConnectionSession` 之前执行），再关闭 socket、等写协程退出，而连接占的出站驻留在写协程退出时才归还（`releaseOutbound`），与 [GATEWAY §4](../framework/GATEWAY.md#嵌入-tcp-的出站)“等写协程退出，再……发布关闭事件”不符；用例收到 filler 的关闭事件就 Tick，正好落在这个窗口里。修法与红绿见 CHANGELOG `[Unreleased]`“嵌入 TCP 会话关闭事件改在写协程退出之后发布”。同时把该用例与 `wiring/selfsync` 预算用例的“停一会儿再探”换成确定的占满方式（一帧 16 MiB、预算恰好一帧）。修后同一负载 `-count=500` 0/1500。
 - **Lockstep历史**：默认自动保留 3600 帧（60Hz 60 秒 / 30Hz 120 秒，D1 方案 C，`a6376934`）。越界按 `MatchConfig.Recovery` 区分（D1 方案 B，维护者 2026-10-20 批准，P1～P5 已实施，[设计](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)）：配了 `Snapshots.Provider`（零值即 auto）或显式 snapshot 时，越界改发业务快照、客户端恢复后续帧，只有快照路线最终失败（取不到、过大、钉住过期）才发 C9 v2 通知让客户端终止；catchup（没配快照来源时的缺省）仍是越界明确失败、通知客户端终止、不自动重同步。快照内容来自业务的服务器参考模拟，框架不提供默认模拟、不替业务持久化检查点。本地 20000 帧周期性快照恢复与默认窗口长局有界已验证；按业务帧率、断线时长与快照大小核对窗口和预算未做。见 [guide/04-sync §6](../framework/guide/04-sync.md#落后的会话怎样回来追帧快照或自动)、[SYNC-OPTIMIZATION](../framework/SYNC-OPTIMIZATION.md)。
-- **Lockstep TCP 追帧**（`640e9fac`，维护者 2026-10-16 方向 A）：`lockstep.TCPSender` 实时帧 `SendDatagram` 只准入，追帧页 `SendReliable` 经 `TCPRuntime.PushLockstepSessionWritten` 入队并等写出，追帧随链路放慢、积压只有在途一页，`CatchupSendTimeout` 生效。等写出只在 Match 的 `launchSend` goroutine 上；一个停读追帧会话最多让发起那一页的 Tick 晚 `CatchupSendWait`（默认 5ms）。限速链路上：快照分块与快照之后的续帧页经同一等写出机制在 toxiproxy 256 KB/s、64 KB/s 下演练过（2026-10-20，main 代码，1 MiB 与 4 MiB 都恢复、连接不断、耗时与“大小 / 速率”对应，[演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）；纯追帧页的限速演练与 v1.29 上的表现仍未做（待补测）。见 [guide/04-sync §6](../framework/guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
+- **Lockstep TCP 追帧**（`640e9fac`，维护者 2026-10-16 方向 A）：`lockstep.TCPSender` 实时帧 `SendDatagram` 只准入，追帧页 `SendReliable` 经 `TCPRuntime.PushLockstepSessionWritten` 入队并等写出，追帧随链路放慢、积压只有在途一页，`CatchupSendTimeout` 生效。等写出只在 Match 的 `launchSend` goroutine 上；一个停读追帧会话最多让发起那一页的 Tick 晚 `CatchupSendWait`（默认 5ms）。限速链路上：快照分块与快照之后的续帧页经同一等写出机制在 toxiproxy 256 KB/s、64 KB/s 下演练过（2026-10-20，main 代码，1 MiB 与 4 MiB 都恢复、连接不断、耗时与“大小 / 速率”对应，[演练](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）；纯追帧页 2026-10-20 夜间也在 toxiproxy 256 KB/s、64 KB/s 下演练过（[夜间补测](../performance/NIGHT-20261020.md) §10）：客户端回到头部的时间与“积压 /（链路 − 每秒新帧）”之比 1.02 / 1.03，连接不断，64 KB/s 下一页超过 2s 发送时限后重发一次；服务端追帧结束早于客户端收完（socket 发送缓冲），同快照演练。见 [guide/04-sync §6](../framework/guide/04-sync.md#经嵌入-tcp-追帧随链路放慢)。
 - **Lockstep 追帧链路背压（独立 Gate）**：维护者 2026-10-20 决定暂不做。独立 Gate 的 `wiring/gate.Transport` 两条通道都经 `GameIngress.PushBound`，nil 只表示 Game 本地准入：Game 侧队列满返回 `ErrReliableBackpressure`（每 Tick 计一次追帧失败，连续 `CatchupMaxFailures` 次放弃），Gate 侧队列满或积压超过 `outbound.max_age`（默认 250ms）时关闭连接；追帧与快照都不随链路放慢。快照按 `UnpacedBytesPerTick`（缺省 16 KiB/Tick，30Hz 约 492 KB/s）固定节流；2026-10-20 toxiproxy 实测（30Hz、缺省参数，[演练 §3](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md#3-独立-gate63-风险-1-实测成立)）：64 KB/s × 1 MiB、256 KB/s × 4 MiB 每次连接都在同一位置被 Gate 断开、重连后从头重传，三次都未恢复；256 KB/s × 1 MiB 恢复（低于预算的超出部分被缓冲吸收）。是否断开取决于快照大小、每 Tick 预算与链路速度三者；断开发生在 Gate 写 socket 的期限到期（`writev ... i/o timeout`，`gate.channel.failure_total{phase="socket"}`），不是 `max_age` 积压规则，具体是 5s `write_timeout` 还是单帧发送预算先到期**尚未确认**（按代码缺省配置下单帧预算 ≤ `outbound.send_timeout` 250ms 更早，日志未区分）。2026-10-20 起恢复中被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`，这个循环可见。配置建议见[设计 §6.3](FEATURE-2026-10-20-lockstep-snapshot-recovery.md#63-独立-gate只准入时的行为与风险)。纯追帧页在独立 Gate 慢链路上的影响未实测。要做到随链路放慢，Gate 需要在写出 socket 后回执给 Game，这是协议改动，等有具体游戏使用“Lockstep + 独立 Gate”时再做。生成 game-demo 在独立 Gate 部署（`accessplayertcp.NewIngressMod`）下拿不到 `TCPRuntime`，战斗的追帧页同样只准入（`battleLinks`）。
 - **Lockstep 快照恢复的剩余边界**（2026-10-20）：① MOBA 持久对局 `Room` 已接快照来源（2026-10-20，`RecoverRoomWithSnapshots` + 已提交门 `MatchConfig.CommittedFrame`，[MOBA §5.7](../framework/MOBA-INTEGRATION.md#57-重连宿主代际与交接)），替身权威下有 KCP 与 Nest 两条回归，真实 strict WAL / Mongo 下有 SIGKILL 冷加载后窗口外客户端经已提交检查点快照恢复的演练（`TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL`，下行是记录器、不经 KCP）；真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生、宿主与权威分属不同进程时的快照恢复未测；已提交门要求宿主提交落后切帧不超过 `RedundancyDepth - 1` 帧，否则恢复中的会话一直经可靠通道逐页跟随、不切回实时（Room 每 Tick 同步提交，不受影响）；② C# 的 `SHA256.Create` 与 restore 路径只在本机 .NET 10 测试过，Unity 编辑器 / IL2CPP 未实测；③ 服务端“写出”只到本机 socket 发送缓冲（嵌入 TCP）或 Game 本地准入（独立 Gate）：服务端认为恢复结束时慢链路客户端可能还差 1 MB 以上，之后的实时帧排在后面，恢复后头几秒延迟等于排空时间（演练推断，未单独测量缓冲）；④ 快照不续传：断开重连后从头重传，独立 Gate 慢链路上会循环（上条）；⑤ Provider 不响应 ctx 时 `FetchTimeout` 后可能再发起一次，“每局至多一次在途”不成立；⑥ 宿主手动 `TrimHistory` 越过钉住点时快照作废、按失败计，但不计 `failed` 指标；⑦ 真实移动网络、跨机与目标负载下的快照恢复、快照大小分布与窗口取值未测；⑧ 客户端上传快照（多数一致）、增量 / 压缩快照、检查点持久化与宿主崩溃续赛未做（设计 §13）；game-demo 战斗未接（§12 第 13 条）。
 - **game-demo 战斗经 `lockstep.TCPSender`**（维护者 2026-10-20 决定）：生成 demo 的战斗房间（`demo/internal/service/game/battle.go.tmpl`）两条通道改经 `TCPSender`，嵌入 TCP（生成默认）下追帧页经 `TCPRuntime.PushLockstepSessionWritten` 等写出，与上面嵌入 TCP 追帧同一规则；回归 `TestABattleCatchUpOverEmbeddedTCPFollowsTheLinkInsteadOfOverflowingIt`（生成工程 `go test ./internal/service/game`）。线格式随之变化：10102 推送的是 Lockstep 包本身（RS v2 Lockstep 标志、不带 PB 包装与 battle id），按连接（接入层 SessionID）寻址；座位在它第一条 BattleInput 到达的连接上加入，没说过话的座位收不到帧，晚加入的座位靠追帧补齐。一条连接同时只打一场战斗（帧不带 battle id）。限速链路与真实进程下的 demo 战斗未演练。
@@ -108,7 +109,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **SyncBus投递**：有限次数、保留期限及容量，不保证绝不丢；定位为默认可丢广播（维护者 2026-10-15）。需要最终一致的业务自建快照 / 对账闭环，不能仅测重试成功；兜底写法见 [guide/04-sync §5](../framework/guide/04-sync.md#syncbus-的定位与丢失兜底)；框架级对账为下一阶段候选。
 - **policy Drain**：等待 retry 和已承担事实；永久拒绝仍需修关系或 ctx 超时，Drain 不放弃条目，超时返回 `*DrainStalledError`（列出卡住条目、原因与等待时长）并计数（D3，维护者 2026-10-15 决定 A，`b86a1286`）。“放弃出口”（D3 方案 B）需先梳理永久拒绝的判定来源。
 - **AOICluster 容量抖动**：Cluster 的 `MaxVisible` 每次移动后严格等于候选内最近 N 个，容量层没有滞回，两个目标在第 N 名附近来回时每次移动都 Leave/Enter（`BenchmarkClusterFlushRandomWalkCapped` Enter +15.6%）。维护者 2026-10-17 决定不加滞回：抖动只在候选数超过 N 时出现，不设 `MaxVisible` 或把 N 设到常规候选数之上即可，容量只作人群聚集时的带宽保护阀。单区域 AOI 不受影响；Cluster 目前没有生产装配调用方。见 [INTEREST-BLOCK-AOI](../framework/INTEREST-BLOCK-AOI.md)。
-- **AOI 观察者与视野（D14，2026-10-20 实施）**：① 两个实体经 `ObserverOf` 换到同一玩家、各自排队 `observer=true` 的移动时，排队事实按实体（`fact.id`）保序，两个实体之间的先后不保证，视点停在哪一个的位置取决于政策批次内的顺序；需要视点跟随某个实体时只让那一个实体带 `observer=true`。② 视野变大时新进入范围的目标一次性订阅、各下发全量，峰值受 `MaxVisible`（全局）与 Manager 快照预算约束，没有按观察者单独的预算；`MaxVisible` 仍是全局一个。③ 改视野没有排队版（维护者决定），事务内想改视野的玩法须在提交后再调用 `SetObserverView`。④ D14 前后的性能对照（`policy` 包 AOI 基准、`scripts/perf/sync-aoi`）尚未跑，排在 2026-10-20 夜间性能测试（待补测）。见 [guide/04-sync](../framework/guide/04-sync.md#附近的人观察者是玩家视野按观察者d14)、[impl/04-sync §2E](../framework/impl/04-sync.md#2e-interest-的观察者编号与视野d14)。
+- **AOI 视野（D14 → D19，2026-10-20 实施）**：① 视野变大时新进入范围的目标一次性订阅、各下发全量，峰值受 `MaxVisible`（按视野计）与 Manager 快照预算约束，没有按玩家单独的预算。② 改视野、视野操作都没有排队版（维护者决定），事务内决定的视野变化（入盟、放眼、组队、Buff 改视野）由业务在提交之后调用。③ 一个玩家挂多个视野时，它持有的目标数受 Manager `Limits.MaxObjects`（缺省 100，也是每帧对象上限）约束，超出由 Manager 拒绝（重试表与 Drain 诊断可见），按玩法调大；`scripts/perf/sync-aoi` 的多视野场景按 `visible × (1 + views) + alliance` 放宽。④ 共享视野的扇出：一次变化的成本 = 变化量 × 挂接人数，由 `MaxPlayersPerView`（缺省 4096）约束；`BenchmarkRelationViewMemberChange` 冒烟（50 次，未正式测量）1024 人挂接时换一个成员约 0.2 到 1 ms（只含登记表与扇出，不含 Manager）；2026-10-20 夜间（[夜间补测](../performance/NIGHT-20261020.md) §14'）：`BenchmarkRelationViewMemberChange` 正式 10 样本 1024 人挂接、1024 成员时约 0.78ms；sync-aoi 共享关系视野 100 / 1000 人（可见约 143 / 1042）Nest 与 direct 都与单视野同量级；每玩家 4 个额外空间视野（可见约 244）Nest 模式改值→客户端 P99 78ms（direct 49.5ms）；**每玩家 16 个额外空间视野（1000 玩家共 1.7 万个空间观察者，可见约 827）Nest 模式失守**：P99 350～376ms、新订阅全量 P99 约 5s、服务端 tick 工作 P95 86～90ms（超过 50ms 的 tick 间隔）、帧数只有应发的 38%，同负载 direct 模式 58～62ms、帧数全满。差别只在 Nest 提交边界，**原因尚未确认**（候选：每次提交后的 Interest 事实应用与视图冻结随视野数线性增长；`BenchmarkSpatialViewsPerPlayer` 1 → 16 视野单次成本约 17 倍）。**剩余边界**（维护者 2026-10-21 决定先写边界、发版后再分析原因）：每玩家额外空间视野 4 个以内已测（1000 玩家时 Nest P99 78ms）；16 个时 Nest 模式失守、direct 模式正常；共享关系视野（联盟 1000 人、每人可见约 1042）正常；瓶颈是空间视野数量在 Nest 路径上的评估，不是下发实体数。已写进 [guide/04-sync](../framework/guide/04-sync.md#谁看见谁视野viewd19)“已测规模与边界”与 CHANGELOG。真正的大联盟（上千人互相可见、百万级 pair）与目标密度的多视野仍没有压测。⑤ 包含关系按 `ViewSets` 字段判断；不配 `ViewSets` 时不知道字段，不同层级一律取并集身份，手写 packer 若不经 `SyncViewSet.Lookup` 解析就要自己认 `SyncProfile.Layers()`。⑥ 层级并集只在一个 Interest 内部合并；同一 pair 同时被 Interest 与 Group / Direct / SelfView 等其他政策持有时，Manager 仍按优先级取一个视图（未改，见 [DESIGN-TODO D19](DESIGN-TODO.md#d19-视野view逻辑-id空间--关系两类玩家与视野多对多) 实施结果）。⑦ 关系视野不排除挂接玩家自己的实体（联盟成员里有自己时，自己经 self 与联盟两个层级看见自己，按包含取高或取并集）。⑧ D14 / D19 前后对照（2026-10-20 夜间，P0 `49897751` / P1 `08432d4e` / P2 `69fb668f` 同机交替 10 轮）：`ClusterFlushRandomWalk` +3.5%（D14 引入，D19 不变），其余 AOI / Cluster 基准与分配无差异，`Relation*` 旧基准在 P2 上已删除（不可比）；sync-aoi 单视野三点无差异。见 [guide/04-sync](../framework/guide/04-sync.md#谁看见谁视野viewd19)、[impl/04-sync §2E](../framework/impl/04-sync.md#2e-interest-的视野d19在-d14-上扩展)。
 
 ## 生成器、配置与工具
 
@@ -139,15 +140,30 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 ## 框架服务与 game-demo
 
-- **匹配队列状态**（维护者 2026-10-19 方案 A）：一个分区的全部状态整体读写；结束满 `match.retention`（缺省 10 分钟）的票、比赛与排队请求记录在下一次写入或 Sweep 时移除，重放与读历史只在保留期内有效（超期 Commit 重放报 `ErrTicketMissing`，不会成第二局）。状态上限 = 等待票（≤ `MaxQueueLength`）+ 保留期内的成局量；大队列按 `Partition` 分键是推荐用法，跨分区成局用 `CommitAcross`（键带 hash tag，一个逻辑队列的全部分区在 Redis Cluster 的同一节点）。规模建议见 [guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界)。目标负载下的吞吐与延迟、Redis Cluster 故障切换下的多键脚本 v1.29 未验证（待补测；Cluster 只在本机 3 主 0 从私有集群核对过跨分区成局与 `CLUSTER KEYSLOT`）。
+- **匹配队列状态**（维护者 2026-10-19 方案 A）：一个分区的全部状态整体读写；结束满 `match.retention`（缺省 10 分钟）的票、比赛与排队请求记录在下一次写入或 Sweep 时移除，重放与读历史只在保留期内有效（超期 Commit 重放报 `ErrTicketMissing`，不会成第二局）。状态上限 = 等待票（≤ `MaxQueueLength`）+ 保留期内的成局量；大队列按 `Partition` 分键是推荐用法，跨分区成局用 `CommitAcross`（键带 hash tag，一个逻辑队列的全部分区在 Redis Cluster 的同一节点）。规模建议见 [guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界)。2026-10-20 夜间容量测量（一次性夹具，本机 loopback 私有 Redis，[夜间补测](../performance/NIGHT-20261020.md) §11）：每个分区的状态按“每秒成局人数 × 已过时间”增长（每名已成局玩家约 510 B），单次操作耗时随状态线性上升；4 分区各每秒成局 10 人、保留期 10 分钟时第 8 分钟（每分区约 2.6 MB）CAS 冲突比例到 0.94、请求超时，同一 Redis 上无关命令的 PING P99 到 0.6s——这一档**不可持续**，持续上限约为每分区“每秒成局人数 × 保留期”≤ 约 4500 人（状态约 2.3 MB），超过时调小 `match.retention` 或加分区（2026-10-21 维护者批准写进 [guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界) 规模建议，注明单样本、非目标负载）；Redis 被拖慢会影响同实例的其他服务。`CommitAcross` 与相邻分区匹配器抢同一批票时冲突约 49%（夹具有意的高竞争形态）。私有 3 主 3 从 Cluster 上两次杀掉该逻辑队列槽位的主节点：只有约 1～2 秒的连接错误，多键脚本没有部分生效，590 场比赛核对全部一致；异步复制丢最近写、跨机分区与 Cluster 下的容量未测。夹具的后台 Sweep 因参数错误（limit 1000 超过上限 200）未生效，单样本。
 - **game-demo 公会名**（维护者 2026-10-17 决定：业务逻辑，框架不处理）：`guild.ValidateName` 只拒绝空、全空白、控制字符与非法 UTF-8；长度上限与全服重名 demo 不实现，名字只受协议帧上限约束、两个公会可以同名。需要时长度 / 敏感词加在 `ValidateName`，全服唯一参考 `service/directory`（先 Reserve 再创建、成功 Commit、失败 Cancel），见 [Service 篇 §4](../framework/guide/09-services.md#4-关键业务边界)。
 - **game-demo 副本排行**：排行准入就是奖励准入（领奖事务内的赛季通关数 + `UpdateMax`）。通关数按赛季计（维护者 2026-10-18），改 `ranking.CurrentSeason` 后新榜从 0 开始；`UpdateMax` 同分保留较早的 tie，补报的那一分在同分时按补报时间排序。
 - **game-demo 活动结算榜**：`ZADD GT` 原子保留较大累计值，需要 Redis 6.2 及以上；只修复成功回复乱序导致的回退。Redis 写失败只记日志，协调器与结算索引不是一个事务，没有自动对账；Redis Cluster、跨机延迟与长稳未验证。业务将来允许扣分时需改用版本化快照或其他明确的顺序方案。
 - **game-demo 活动贡献**（维护者 2026-10-18 决定 A：只在奖励首次付款时贡献）：**已接受的代价**——付款之后、贡献之前进程崩溃或协调器调用失败，这一分永久丢失，重放不补（端点打 Warn）。协调器只在同一窗口内去重，业务在别处直接调用 Contribute 须自己保证每局一次。
-- **全服邮件投递**：`AudienceBroadcast` 只经业务提供的 `mail.Deliverer` 投递，框架没有内置策略，生成骨架缺省 nil（拒绝广播）；离线与后来登录的玩家也要收到，由业务的策略保证。是否内置“存一份 + 懒合并”待维护者决定（[DESIGN-TODO D17](DESIGN-TODO.md#d17-全服邮件的内置投递策略)）。
-- **业务时区与每日重置**：业务时钟只有偏移，没有业务时区配置与业务日边界工具；生成的部署不设 `TZ`、`main` 不嵌入 `time/tzdata`，容器内 `time.Local` 是 UTC，与开发机本地时区的跨天时刻不同。业务需要显式 `time.LoadLocation`；distroless 运行镜像是否自带 zoneinfo 尚未确认。方向待维护者决定（[DESIGN-TODO D18](DESIGN-TODO.md#d18-业务时区与业务日边界)）。
+- **全服邮件 `mail.LazyBroadcast`**（[DESIGN-TODO D17](DESIGN-TODO.md#d17-全服邮件的内置投递策略)，用法见 [Service 篇 §1B](../framework/guide/09-services.md#1b-mail-全服邮件)）：生成骨架缺省仍为 nil（拒绝广播），启用要改 `Broadcast()` 一行。剩余边界：① **账本规模没有压测**：账本是一个文档（缺省至多 1000 条未过期记录，每条约 150 字节 JSON），每次发布 / 撤回整体读写、在 Redis Cluster 上落在一个节点；读路径按版本在进程内缓存，账本变化后每个 mail 进程各重读一次。上界附近的发布延迟、十万级在线同时登录时版本键的读压力、公会邮件频繁发送时的上界是否够用 v1.29 未验证。② **画像以最近一次 `PullBroadcasts` 为准**：入会 / 退会后业务不再拉一次，`List` / `Summary` 会按旧范围合并、水位越过新公会已发出的邮件（之后再拉也补不回）；在两次拉取之间入会、而公会邮件发于入会之前的，会被合并（需要“入会后才收”时把入会时间放进 `Attributes` 由 `Eligible` 判断）。③ **条件只判一次**：被内置条件或 `Eligible` 判为不满足的全局邮件，水位越过后不再重新判断（玩家之后满足了也收不到）。④ 没调用过 `PullBroadcasts` 的玩家（没有画像）`List` 不合并；game-demo 只放本服范围、不放公会范围。⑤ 撤回只挡未合并的，已合并的副本没有“强制收回”入口；撤回记录保留到过期。⑥ 内置条件按秒比较、严格早于：发送同一秒注册的角色收不到。⑦ 合并只在邮箱放得下时进行（全是未读的满邮箱等玩家腾位置），停住期间过期的全局邮件不会再补。
+- **业务时区与每日重置**（DESIGN-TODO D18 已实施，维护者 2026-10-20 决定 A）：业务日按 `time.business_timezone`（缺省 UTC）/ `time.business_day_start`（缺省 00:00）算，见 [guide/10-time §2A](../framework/guide/10-time.md#2a-业务时区与业务日)。剩余限制：① 时区数据库靠 `main.go` 导入 `time/tzdata`；`main.go` 归应用、sync 不改，旧工程或手写 main 在没有 zoneinfo 的镜像里，启动检查会拒绝非 UTC 时区（报错点名 `time/tzdata`，不会静默退回 UTC），要自己加一行导入。distroless 镜像本身是否带 zoneinfo 仍未在容器内实测，内嵌后不再依赖它。② “看不到 zoneinfo”的回归在 macOS 上用 `sandbox-exec` 模拟；自带 zoneinfo、没有这种隔离的 Linux 主机上 Skip（只设 `ZONEINFO` 为空目录模拟不了：Go 照样回落到系统目录）。③ macOS 文件系统不区分大小写，`asia/shanghai` 在开发机上能通过检查，在 Linux 镜像里加载失败（启动时拒绝）。④ 周重置、按周 / 月划分的活动窗口没有框架辅助，由业务按 `Day` 推。
 - **Session 运行服务**：保持现状、不改为可选（维护者 2026-10-14）；后续事项见 [ACCESS-SYNC-FOLLOWUPS](ACCESS-SYNC-FOLLOWUPS.md)。
 - **观测接线**：ExportMetrics / admin 元数据不是自动外部监控或审批系统；部署实际接线与鉴权审计归部署方。
+
+
+### 合服（D15）
+
+别名合服（[DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服) 已实施，设计与实施记录 [FEATURE-2026-10-20-server-merge-alias](FEATURE-2026-10-20-server-merge-alias.md)，runbook [PLAYER-MIGRATION §6](../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。当前边界：
+
+- **持久总线消息只列清单、不检查积压**：`wiring/sidmerge` 不连 NATS。按 sid 寻址的持久用法（`syncbus.transport: jetstream` 的每 sid durable、`nats.rpc.transport: jetstream` 的实例 durable、可靠总线的死信）由运维按清单人工确认（检查项 `bus` 为 `confirm`）。框架不把发往 A 的消息重投到 B。
+- **saga 终态检查是整个 saga 存储**：saga 记录不带“属于哪个 sid”，同一存储里其他仍在运行的服的非终态 saga 也会让检查不通过；只有全集群停服窗口里才自然满足。是否提供“按类型 / 按业务键过滤”的检查需要维护者决定（尚未决定）。
+- **“同一 Mongo”按 URI 比较**：主机列表（小写排序）+ 副本集名；同一集群换主机名或 IP 写会被判为不同而拒绝合服（偏保守，不会把两套 Mongo 当一套）。
+- **跨记录的 account 写不是原子的**：每条服务器记录按版本条件写；写入顺序保证中途停下不会出现两跳，结束复核，并发合服造成的两跳报 `ErrServerMergeCycle` 并给修复命令（unmerge 再 merge）。拍平之后“X 是经由 A 并入的”这一历史不保留：`UnmergeServer` 只恢复一条记录，经 A 改指的其他服仍指向承载服。`MergedFrom` 是辅助索引，可能多出并发留下的项，是否并入以对方的 `MergedInto` 为准。
+- **启动自检的范围**：`ServingGuardMod` 只在生成器装配的、承载玩家且接了 account 的服务里；手写装配要自己加。它排在 DataEngine 之前，但不排在 `syncbus`、`remote_entity` 等 Mod 之前：误启动的 A 在被拒之前这些 Mod 已经 Start 又随即停止（2026-10-20 演练：拒绝发生在启动后约 60ms）。account 不可达时 30 秒后拒绝启动（fail-closed），代价是 account 故障期间 game 起不来。
+- **按 sid 独占数据的迁移不拷贝索引**：B 启动时按 DAO 声明建；不拷贝 `_dataengine_*` 控制集合。Remote 托管（`remote=managed`）落在按 sid 分库里的集合只在报告里点名，所有权元数据按 Remote 规则另行处理。回退不动合服期间 B 新产生的按 sid 独占文档（只计数），归属由业务判断。
+- **源库保留为只读归档**：框架不加只读保护，靠启动自检与 runbook；删除由运维确认后手动做。
+- **消费者**：Gate 转交给 game 的绑定不带 Claims，game 侧需要原服标识时从自己的角色数据取；`OriginServerIDClaim` 只在认证器那一侧可见（嵌入 TCP 的 Principal 里两者都有）。CreateRole 被拒经总线时客户端看到的是 `ErrServerClosed` 的通用原因，“已并入 B”的详情只在 account 进程的错误里。 game-demo 拉全服邮件（D17）时，原服并入本服的角色另带原服范围 `ServerScope(A)`，合服前发给 A、还没拉到的全服邮件照样属于他——这是 demo 的业务选择，框架不规定。
+- **验证边界**：真实进程两服演练（私有环境，sid 1000 / 1001，[证据](../performance/benchmarks/d15-server-merge-20261020/README.md)）覆盖嵌入 TCP；独立 Gate 只有单元级（正式 account 服务 + `FixedGameResolver`）。演练里的 `dbscope=sid` 文档是直接写 Mongo 的（game-demo 没有用它的实体），B 的进程没有冷加载它们；玩家数据（共享库 main）经真实进程读写。
 
 ## 平台与外部验证
 
@@ -155,30 +171,30 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 - **客户端引擎**：有 Go / C# 及 Unity 适配源码与测试，未声明真实 Unity / Godot / Unreal 全矩阵；各引擎实机、线程、断线与跨平台确定性未验收。
 - **原生C++接入**：无完整 C++ / Unreal / GDExtension SDK 承诺，需独立设计和协议一致性验收。
 - **独立 Gate**：已实施 Gate / Game、广播与 Sync / Lockstep（[GATEWAY](../framework/GATEWAY.md)）；不用本机多实例代替多进程 / 跨机矩阵。容量结论见能力表。
-- **schema升级**：DAO 自动迁移已撤销，运行时只接受当前 schema；离线迁移按 [schema 变更操作手册](../framework/SCHEMA-MIGRATION.md)（停写→备份→转换→校验→切换→回退），game-demo 有执行器与 `cmd/schemamigrate`。在线双读与 `roost add migration` 骨架未实施，上线后重新决定；业务需明确离线转换和保留数据范围。v1.29 未演练（待补测）。
-- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid 无框架能力；合服（把一个服并入另一个服）无框架支持，别名合服提案待维护者评审（[DESIGN-TODO D15](DESIGN-TODO.md#d15-合服把一个服并入另一个服)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。v1.29 未演练（待补测）。
+- **schema升级**：DAO 自动迁移已撤销，运行时只接受当前 schema；离线迁移按 [schema 变更操作手册](../framework/SCHEMA-MIGRATION.md)（停写→备份→转换→校验→切换→回退），game-demo 有执行器与 `cmd/schemamigrate`。在线双读与 `roost add migration` 骨架未实施，上线后重新决定；业务需明确离线转换和保留数据范围。2026-10-20 夜间在 v1.30 候选生成的 game-demo 上重做真实进程演练（[夜间补测](../performance/NIGHT-20261020.md) §12），与 10-15 逐步一致。
+- **Player跨机**：以已落库数据为准，不要求本地 WAL 热迁移；搬的是 sid，按 [参考流程](../framework/PLAYER-MIGRATION.md) 停写→排空 WAL→释放单实例锁→切路由→新进程空 WAL 接管，game-demo 有检查工具 `cmd/sidmove`。单个玩家改绑 sid 无框架能力；合服用别名合服（D15 已实施，边界见下文[合服（D15）](#合服d15)）；真实跨机网络、卷迁移、客户端重连路径未演练；框架级迁移命令上线后评估。2026-10-20 夜间在 v1.30 候选上重做同机两进程演练（[夜间补测](../performance/NIGHT-20261020.md) §13：正常迁移、kill -9 后原 WAL 重启、Mongo 停顿时 kill -9 的未排空，302 次确认逐键 +1、最终 Mongo 等于最后确认），与 10-15 一致。
 - **Windows**：非框架保证平台，只保证编译与 CLI 兼容（维护者 2026-10-14）。CI `windows-compatibility` 只跑 build、vet、`go test -run '^$'` 和 roost CLI 生成工程冒烟；完整 `go test` 的既有失败来自平台差异（打开中的文件不能改名 / 删除：nestwal 损坏记录检查、日志轮转、statslog；checkout 的 CRLF 使 gofmt 门禁与 kitconfig schema 比对失真；run 38500440362 的 6 个失败）。本机结果不改变 macOS / Linux 支持范围，跨平台也成立的缺陷不归入此条。
 
 ## 能力与验证边界
 
-v1.29 口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版后补测 v1.29.0 同参数重档 30 分钟与 Saga 两档（[v1.29.0 发版后复测](../performance/V1290-HEAVY-30M-20261019.md)，附同日同机 v1.27.0 对照）。该重档走独立 Gate，不经嵌入 TCP `TCPRuntime`、self_sync、Lockstep 追帧、Remote、Saga 原生步骤与 DataEngine 投影器，这些路径的 v1.29 结论见各行。
+口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版后补测 v1.29.0 同参数重档 30 分钟与 Saga 两档（[v1.29.0 发版后复测](../performance/V1290-HEAVY-30M-20261019.md)，附同日同机 v1.27.0 对照）。2026-10-20 夜间在 main `69fb668f`（v1.30.0 候选）上按维护者批准的清单补测，每项 15 分钟（Saga Mongo 步骤夹具上限 10 分钟），服务端 / 压测端分开统计，宿主负载正常、全部作为基线（[夜间补测](../performance/NIGHT-20261020.md)）。下表“当前结论”取最新一次。
 
-| 项 | v1.29 结论 | 后续入口 |
+| 项 | 当前结论 | 后续入口 |
 | --- | --- | --- |
-| 重档总体 | 30 分钟通过：吞吐、计数、DAO 终值、AOI 可见集合、P99 门槛通过，消息 / HB 拒绝 0，堆不增长；goroutine 恒定比 v1.27.0 多 1000（每连接写协程）。业务 P99 13.09ms、HB 11.01ms（混合口径）；服务端口径业务 P99 4.37ms、HB 2.68ms（第一份未污染的 30 分钟服务端样本）。P99 比同日 v1.27.0 对照高 0.2～0.7ms，尚未确认、未归因 | A-B-A-B 同机交替多轮（待补测） |
-| Sync偶发长尾 | on_change 按 P99≤50ms 验收：Sync 提交→客户端 P99 15.43ms、最大 156.262ms、>50ms 0.0260%。>50ms 总量变多同日对照同样出现，按宿主条件处理；Sync >50ms 为同日对照 1.8 倍，单样本，尚未确认。长尾与宿主整分钟周期任务同秒的归因、非整分钟的簇在 v1.29 上未验证 | 维护者 2026-10-15 决定先接受现状，有独占服务器 / Linux 实机时再复测（方案 A）；待补测 |
-| 独立 Gate | 重档 30 分钟通过（short 8 / io 8，GOMAXPROCS=10，Gate 与 Sync 开）：Gate 往返 P99 6.78ms、最大 236.691ms；>50ms 为同日对照 2.6 倍，单样本，尚未确认 | 多进程 / 跨机矩阵；[Gate/AOI 性能报告](../performance/GATE-AOI.md) |
-| Block AOI | 已实施手写组件、多块覆盖、独立事实入口和并行 observer；v1.29 未验证 | [Block AOI](../framework/INTEREST-BLOCK-AOI.md)；首错定位、独立客户端、覆盖扇出及集中布局复验（待补测） |
-| 嵌入 TCP 出站 | v1.29 未验证：重档不经嵌入 TCP；`cf6ad085` 的全进程预算缺省 256 MiB 是推算值 | 待补测 |
-| 自身视图（self_sync） | v1.29 未验证：只有本机真实进程演练与回归，未做重档 | 待补测 |
-| Lockstep 追帧 / 快照恢复 | 嵌入 TCP 追帧随链路放慢由包内与 game-demo 生成工程的真实回环 TCP 回归覆盖；快照恢复（2026-10-20，未发版）由包内、MOBA 十客户端 KCP、生成工程 C# 真实 TCP 回归覆盖，toxiproxy 演练嵌入 TCP 256 / 64 KB/s 下 1～4 MiB 快照恢复、独立 Gate 慢链路上大快照被断开循环（只准入，需 Gate 写出回执的协议改动，维护者 2026-10-20 决定暂不做）；纯追帧页的限速表现 v1.29 未验证 | 待补测 |
-| Remote容量 | v1.29 未验证（最近一次 80TPS 在 v1.27 代码上测）；非跨机上限 | 跨机 RTT / 故障 / 24h；待补测 |
-| Saga补偿容量 | Mongo 步骤路径 v1.29 各 10 分钟：正向 20/s P99 0.62s、全补偿 10/s P99 0.61s（服务端口径 0.59 / 0.58s），十个分钟段无增长趋势，核对通过；不是上限测试，更高档位未测 | 真实步骤、混合负载与生产存储另测 |
-| Saga 原生步骤容量（单进程） | v1.29 未验证：现有容量指引（guide/06 §5、生成的 `steps.go` 注释、`roost help saga`）来自 v1.28.0 发布前 2026-10-18 的实测；限制与维护者决定见上文 [Saga](#saga) | [SAGA-CHECKPOINT](../performance/SAGA-CHECKPOINT-20261018.md) 复跑入口；待补测 |
-| 投影 checkpoint 与 outbox 唤醒同盘 | v1.29 未验证：2026-10-18 观测到投影后唤醒 outbox（`de8b6e97`）使 checkpoint 变慢，机制为推断（darwin 上 `WAL.Ack` 的 F_FULLFSYNC 与被唤醒 outbox 的 Mongo majority 写同时落盘），无逐次 fsync 证据，Linux 未测。唤醒的净收益为正，不回退；WAL 与 Mongo 分盘（第三档 C）不做 | 待补测 |
-| 匹配队列容量 | v1.29 未验证 | 待补测 |
-| 生成工程完整链路持久写入（嵌入 TCP + strict） | 2026-10-20 单样本、非独占宿主（[报告](../performance/GENERATED-TCP-STRICT-20261020.md)）：CLI 生成工程、strict handler 金币 +1、不经 Saga、无 self_sync，50 连接各自一个玩家**压测端** 1253 TPS、P50 38ms、P99 75ms，WAL 每批约 9.9 条；同一实体 108 TPS。上限约为 short 池 worker 数（缺省 GOMAXPROCS）/ 每笔持锁时间（strict 在锁内等所在批 fsync，本机约 8ms）。async 不比 strict 快（同机 1083 对 1257），原因尚未确认 | 独占宿主复测与 self_sync / pipelined 对照（待补测） |
-| schema 升级 / Player 跨机演练 | v1.29 未演练 | 待补测 |
+| 重档总体 | 30 分钟通过：吞吐、计数、DAO 终值、AOI 可见集合、P99 门槛通过，消息 / HB 拒绝 0，堆不增长；goroutine 恒定比 v1.27.0 多 1000（每连接写协程）。业务 P99 13.09ms、HB 11.01ms（混合口径）；服务端口径业务 P99 4.37ms、HB 2.68ms（第一份未污染的 30 分钟服务端样本）。2026-10-20 夜间 A-B-A-B（v1.27.0 / HEAD 各 2 次 × 15 分钟）：HEAD 的 Sync 提交→客户端 P99 稳定高 0.6～1.1ms（13.99 / 13.92 对 13.35 / 12.80），两对方向一致，判断为代码带来的小幅增加，具体来源未做单变量对照、尚未确认；业务 / HB 混合 P99 高 0.1～0.2ms、Gate 往返无差异；服务端业务 P99 3.37 / 3.38ms | 单变量对照（例如 B3 写协程交接）；独占服务器 / 跨机 |
+| Sync偶发长尾 | on_change 按 P99≤50ms 验收：Sync 提交→客户端 P99 15.43ms、最大 156.262ms、>50ms 0.0260%。>50ms 总量变多同日对照同样出现，按宿主条件处理；10-19 的“Sync >50ms 为同日对照 1.8 倍”在 2026-10-20 夜间 A-B-A-B 里不复现（四次服务端段 >50ms 都是 0），判断为宿主条件、不是代码。`TAIL=metrics` 15 分钟只出现 1 个长尾簇（284 个混合口径事件、最大 52.6ms），落在整分钟后第 1 秒、同秒调度延迟 21ms，相位与 10-15 一致但只有一簇，不足以确认；非整分钟的簇本次没有出现 | 维护者 2026-10-15 决定先接受现状，有独占服务器 / Linux 实机时再复测（方案 A） |
+| 独立 Gate | 重档 30 分钟通过（short 8 / io 8，GOMAXPROCS=10，Gate 与 Sync 开）：Gate 往返 P99 6.78ms、最大 236.691ms。2026-10-20 夜间 A-B-A-B：HEAD 5.30 / 5.26ms 对 v1.27.0 5.40 / 5.20ms，>50ms 四次都是 0，10-19 的“>50ms 为对照 2.6 倍”不复现 | 多进程 / 跨机矩阵；[Gate/AOI 性能报告](../performance/GATE-AOI.md) |
+| Block AOI | 已实施手写组件、多块覆盖、独立事实入口和并行 observer。2026-10-20 夜间 4 并行度重档 15 分钟通过（GOMAXPROCS 4、short 4）：服务端业务 P99 4.83ms、Gate 往返 P99 7.74ms、Sync 提交→客户端 P99 17.98ms，>50ms（服务端）0；不压额外 observedBlocks 扇出 | [Block AOI](../framework/INTEREST-BLOCK-AOI.md)；首错定位、独立客户端、覆盖扇出及集中布局复验（未做） |
+| 嵌入 TCP 出站 | 2026-10-20 夜间嵌入 TCP + 场景 Sync 重档 15 分钟通过：`budget_exhausted` 与全部出站拒绝 / 关闭计数 0，写协程 1000 → 1000；服务端业务 P99 1.57ms、往返 P99 1.98ms、Sync 提交→客户端 P99 10.14ms，>50ms 全 0；堆 208MB。每连接队列峰值与驻留字节取不到（没有 Gauge） | 停读客户端 / 更高推送量下的预算；驻留 Gauge 与按帧龄关闭由维护者决定 |
+| 自身视图（self_sync） | 2026-10-20 夜间嵌入 TCP + self_sync 重档 15 分钟通过：约每秒 1000 帧，`push_refused` 0、滞留 0，提交→客户端 P99 1.43ms，服务端业务 P99 2.07ms；整轮重试放大未被触发（未测到） | 独立 Gate + self_sync 夹具；预算压到触发点的放大测量 |
+| Lockstep 追帧 / 快照恢复 | 嵌入 TCP 追帧随链路放慢由包内与 game-demo 生成工程的真实回环 TCP 回归覆盖；快照恢复（2026-10-20，未发版）由包内、MOBA 十客户端 KCP、生成工程 C# 真实 TCP 回归覆盖，toxiproxy 演练嵌入 TCP 256 / 64 KB/s 下 1～4 MiB 快照恢复、独立 Gate 慢链路上大快照被断开循环（只准入，需 Gate 写出回执的协议改动，维护者 2026-10-20 决定暂不做）；纯追帧页 2026-10-20 夜间 toxiproxy 256 / 64 KB/s 演练：回到头部时间与“积压 /（链路 − 每秒新帧）”之比 1.02 / 1.03，连接不断 | 独立 Gate 慢链路上的纯追帧页；真实移动网络 |
+| Remote容量 | 2026-10-20 夜间 80TPS × 15 分钟通过（共享隔离环境）：72000 / 72000，零错误零丢弃，全量核验通过，服务端 p50 / p95 / p99 164 / 249 / 749ms；p99 比 10-15（v1.27 代码 30 分钟，278ms）高、WAL 未确认与在途事务峰值约 2 倍，单样本、时长不同，尚未确认；非跨机上限 | 同机 A-B 对照；跨机 RTT / 故障 / 24h |
+| Saga补偿容量 | Mongo 步骤路径 v1.29 各 10 分钟：正向 20/s P99 0.62s、全补偿 10/s P99 0.61s（服务端口径 0.59 / 0.58s），十个分钟段无增长趋势，核对通过。2026-10-20 夜间更高档位（10 分钟）：正向 30/s 完成率 28.4/s、P99 141.7s、17302 笔以补偿 / 失败结束，全补偿 15/s 完成率 14.0/s、P50 单调增长到 49.5s、866 笔 failed——两档都饱和（outbox / lease 排空、存储与发布零失败）。单进程上限在正向 20～30/s、全补偿 10～15/s 之间 | 中间档位（25、12）；真实步骤、混合负载与生产存储另测 |
+| Saga 原生步骤容量（单进程） | 2026-10-20 夜间 15 分钟：正向 8/s（两次）与全补偿 5/s 都 0 笔终态不对、核对通过；服务端 P50 559 / 549ms、713ms（P50 < 1s 成立），**P99 0.92～3.9s**，有分钟级尖峰（各段 Mongo 命令最大值同时到 750～900ms，接近投影器容量时积压放大）；两次正向 8/s 的 P99 差 4 倍。原先 guide/06 §5、生成的 `sagaCapacitySummary` / `steps.go` 注释与 `roost help saga` 里的“P99 0.8 / 1.2 s”来自 2 分钟单样本，15 分钟样本上不成立；2026-10-21 维护者批准，这几处与 CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK 已改为 15 分钟口径（P50 < 1s、P99 0.9～3.9s、WAL 放快盘、Mongo 步骤上限区间）；限制与维护者决定见上文 [Saga](#saga) | [SAGA-CHECKPOINT](../performance/SAGA-CHECKPOINT-20261018.md) 复跑入口；P99 尖峰的 Mongo 侧原因 |
+| 投影 checkpoint 与 outbox 唤醒同盘 | v1.29 未验证：2026-10-18 观测到投影后唤醒 outbox（`de8b6e97`）使 checkpoint 变慢，机制为推断（darwin 上 `WAL.Ack` 的 F_FULLFSYNC 与被唤醒 outbox 的 Mongo majority 写同时落盘），无逐次 fsync 证据，Linux 未测。唤醒的净收益为正，不回退；WAL 与 Mongo 分盘（第三档 C）不做。2026-10-20 夜间 RAM disk 对照（正向 8/s × 15 分钟，WAL 放 RAM disk）：checkpoint P50 56～58 → 1ms、WAL 追加 18 → 1ms、投影等待 62 → 0ms、服务端 P50 549～559 → 334ms，空载 checkpoint 约 8.8ms，说明负载下变慢主要来自同盘竞争；RAM disk 同时去掉设备 fsync 与同盘竞争，两者没有分开；P99 由 Mongo 侧停顿决定、两种盘都有。2026-10-21 维护者批准把“磁盘同步是主要成本，部署时 WAL 放快盘”写进 guide/06 §5 与生成的容量说明 | Linux 复测；逐次 fsync 计时 |
+| 匹配队列容量 | 2026-10-20 夜间（本机私有 Redis，一次性夹具）：每分区“每秒成局人数 × 保留期”持续上限约 4500 人（状态约 2.3 MB），4 分区各 10 人/s、保留期 10 分钟第 8 分钟崩溃（CAS 冲突 0.94、超时、同 Redis PING P99 0.6s）；CommitAcross 竞争冲突约 49%；Cluster 主节点 SIGKILL 切换两次无部分生效。见上文“匹配队列状态” | Cluster 下的容量；跨机 Redis（guide/09 §4 已补保留期的规模建议，2026-10-21） |
+| 生成工程完整链路持久写入（嵌入 TCP + strict） | 2026-10-20 单样本、非独占宿主（[报告](../performance/GENERATED-TCP-STRICT-20261020.md)）：CLI 生成工程、strict handler 金币 +1、不经 Saga、无 self_sync，50 连接各自一个玩家**压测端** 1253 TPS、P50 38ms、P99 75ms，WAL 每批约 9.9 条；同一实体 108 TPS。上限约为 short 池 worker 数（缺省 GOMAXPROCS）/ 每笔持锁时间（strict 在锁内等所在批 fsync，本机约 8ms）。async 不比 strict 快（同机 1083 对 1257），原因尚未确认 | 独占宿主复测与 self_sync / pipelined 对照（待补测第 14 项，维护者未批准，2026-10-20 夜间未跑） |
+| schema 升级 / Player 跨机演练 | 2026-10-20 夜间在 v1.30 候选生成的 game-demo 上真实进程演练通过（schema：拒绝旧 schema → plan / apply / verify → rollback 只恢复未被写过的一份；Player：正常迁移、kill -9 后原 WAL 重启、未排空被 `wal-drained` 拒绝，302 次确认逐键 +1），与 10-15 一致 | 真实跨机网络、卷迁移、客户端重连路径 |
 
 ## 游戏接入验收
 
@@ -198,19 +214,13 @@ v1.29 口径：v1.28.0 与 v1.29.0 发版时都没有压测；2026-10-19 发版�
 
 ## v1.29 待补测
 
-维护者 2026-10-20 已批准全部补测，结果出来后回填本文件与能力表。
+维护者 2026-10-20 批准的补测已于当晚在 main `69fb668f`（v1.30.0 候选）上跑完，第 1～13 项与 AOI 三点对照的结论已回填到上文各条与能力表，报告见 [夜间补测](../performance/NIGHT-20261020.md)。仍未完成或没有结论的：
 
-1. **嵌入 TCP 出站重档**：v1.28 改为每连接有界队列 + 写协程，`cf6ad085` 加全进程预算（缺省 256 MiB 为推算值）。核对推送路径 CPU、内存与 `player_tcp_outbound_budget_exhausted_total` 是否为 0，并据此决定是否做驻留 Gauge / 按帧龄关闭。入口：`scripts/perf/nest-game.sh` 的嵌入模式 `ROOST_NEST_GAME_EMBEDDED=1`（2026-10-20 夹具，玩家直连 Game 内 `TCPServer` + `TCPRuntime`，场景 Sync 经 `selfsync.PushPlayerFrame`；命令、预计时长与输出字段见 [性能 README](../performance/README.md#嵌入-tcp-重档)）；只做过缩小规模的冒烟，重档尚未跑。每连接出站队列峰值与驻留字节夹具取不到（没有 Gauge），只有拒绝 / 关闭计数与写协程数。
-2. **自身视图（self_sync）重档**：Game Ingress / 嵌入 TCP 预算耗尽时的整轮重试放大（上文 self_sync 第 4 条）。入口同第 1 项加 `ROOST_NEST_GAME_SELF_SYNC=1`（只在嵌入模式下；与场景 Sync 互斥，一个玩家实体只能登记在一个 Manager）；独立 Gate + self_sync 的夹具没有。
-3. **重档 P99 小幅上升与 Sync / Gate >50ms 条数**：v1.29 对同日 v1.27.0 对照的差异是否来自代码，需同机 A-B-A-B 交替多轮（`scripts/perf/nest-game.sh`，参数见 [V1290 复测 §2](../performance/V1290-HEAVY-30M-20261019.md#2-命令)）。
-4. **Sync 长尾的归因**：整分钟周期任务同秒的归因与不在整分钟的簇在 v1.29 上复核；入口 `ROOST_NEST_GAME_TAIL=metrics`（有开销，结果不与正式样本比较）与 `scripts/perf/tailtrace`；有独占服务器 / Linux 实机时按方案 A 复测。
-5. **Block AOI 重档**：v1.29 未跑；入口见 [Block AOI](../framework/INTEREST-BLOCK-AOI.md) 与 [Gate/AOI 性能报告](../performance/GATE-AOI.md)。
-6. **Saga 原生步骤容量与 checkpoint 合并**：测于 2026-10-18（v1.28.0 发布前）；入口 `TestRealNativeStepsPerformance`（`wiring/saga`，命令见 [SAGA-CHECKPOINT](../performance/SAGA-CHECKPOINT-20261018.md)），复核 guide/06 §5 与生成物里的容量指引。
-7. **投影 checkpoint 与 outbox 唤醒同盘**：WAL 目录放另一块盘 / tmpfs 做同样对照，或在 checkpoint 两次 `Sync` 前后单独计时；Linux 上复测。
-8. **Saga Mongo 步骤路径的上限档位**：v1.29 只测了正向 20/s、全补偿 10/s；更高档位用 `scripts/perf/saga.sh` 的 `ROOST_SAGA_PERF_RATE`。
-9. **Remote 80TPS**：最近一次测于 v1.27 代码；入口 `scripts/perf/remote.sh`（参数见 [2026-10-15 性能四项 §3](../performance/PERF-ROUND-20261015.md)），更高档位 `scripts/perf/remote-capacity.sh`。
-10. **Lockstep TCP 追帧在限速链路上**：用 toxiproxy 限速链路做一次纯追帧页的演练，核对追帧耗时与链路速度对应、连接不断。快照分块与续帧页已于 2026-10-20 演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)，夹具可改成只追帧复用）。
-11. **匹配队列**：目标负载下的容量（每秒成局人数 × 保留期对应的状态大小与 Redis 往返延迟，含 `CommitAcross` 与单分区操作的竞争比例）；Redis Cluster 故障切换下的多键脚本。
-12. **schema 迁移演练**：上次 2026-10-15（v1.27 代码）；入口 [SCHEMA-MIGRATION](../framework/SCHEMA-MIGRATION.md) 与 game-demo `cmd/schemamigrate`。
-13. **Player 跨机演练**：上次 2026-10-15（v1.27 代码，同机两进程，含崩溃与未排空场景）；入口 [PLAYER-MIGRATION](../framework/PLAYER-MIGRATION.md) 与 game-demo `cmd/sidmove`。
-14. **生成工程完整链路持久写入**（2026-10-20 审查新增，未经维护者批准）：2026-10-20 只有非独占宿主的单样本（上表）；在独占宿主上用同一夹具复测，并加 self_sync 开、pipelined 与 async 的对照，查明 async 不比 strict 快的原因。入口见[报告 §4](../performance/GENERATED-TCP-STRICT-20261020.md#4-复跑)。
+1. **Sync 长尾的归因**（原第 4 项）：`TAIL=metrics` 15 分钟只出现 1 个长尾簇（整分钟后第 1 秒），不足以确认或排除与宿主整分钟周期任务同秒；按方案 A 等独占服务器 / Linux 实机复测。
+2. **Sync 提交→客户端 P99 +0.6～1.1ms 的来源**（原第 3 项的后续）：A-B-A-B 判断为代码带来，但没有单变量对照，具体提交尚未确认。
+3. **Remote 80TPS p99 偏高**（原第 9 项的后续）：749ms 对 v1.27 代码的 278ms，单样本、时长不同，需要同机 A-B 对照才能判断。
+4. **D19 每玩家 16 个额外空间视野时 Nest 模式失守**（AOI 三点对照新发现）：原因尚未确认，维护者 2026-10-21 决定发版后再分析，v1.30 只写边界，见上文“AOI 视野”④。
+5. **投影 checkpoint 同盘**（原第 7 项）：RAM disk 对照已做，Linux 上复测与逐次 fsync 计时没做。
+6. **Saga Mongo 步骤中间档位**（原第 8 项的后续）：20 / 10 稳定、30 / 15 饱和，25 / 12 未测；`TestRealSagaPerformance` 限制单次 ≤10 分钟，本项只能跑 10 分钟。
+7. **匹配队列**（原第 11 项的后续）：Cluster 下的容量、跨机 Redis、异步复制丢写没有测；夹具的后台 Sweep 因参数错误未生效，要复测需改夹具。
+8. **生成工程完整链路持久写入**（原第 14 项，2026-10-20 审查新增）：维护者未批准，夜间补测没有跑。入口见[报告 §4](../performance/GENERATED-TCP-STRICT-20261020.md#4-复跑)。

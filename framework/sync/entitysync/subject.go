@@ -137,11 +137,7 @@ func (m *Manager) bestProfile(profiles map[*SubscriptionSource]entity.SyncProfil
 
 // ValidateViewPriority 检查 packer 视图与 Manager 的实际选择顺序是否使用同一配置。
 func (m *Manager) ValidateViewPriority(view entity.SyncView) error {
-	priority, ok := m.config.ProfilePriorities[view.Profile.Normalize()]
-	if !ok {
-		priority = int(view.Profile.LOD)
-	}
-	if priority != view.Priority {
+	if priority := m.profilePriority(view.Profile); priority != view.Priority {
 		return fmt.Errorf("entitysync: profile %+v priority is %d, view declares %d", view.Profile, priority, view.Priority)
 	}
 	return nil
@@ -160,14 +156,25 @@ func compareProfiles(a, b entity.SyncProfile) int {
 // CompareProfiles 将业务优先级与稳定平局规则集中在一处，Interest 与多政策来源共用。
 func (m *Manager) CompareProfiles(a, b entity.SyncProfile) int {
 	a, b = a.Normalize(), b.Normalize()
-	priority := func(p entity.SyncProfile) int {
-		if rank, ok := m.config.ProfilePriorities[p]; ok {
-			return rank
-		}
-		return int(p.LOD)
-	}
-	if order := cmp.Compare(priority(a), priority(b)); order != 0 {
+	if order := cmp.Compare(m.profilePriority(a), m.profilePriority(b)); order != 0 {
 		return order
 	}
 	return compareProfiles(a, b)
+}
+
+// profilePriority 是一个视图的业务优先级：配置了的按配置，未配置的按 LOD。层级并集（entity.UnionSyncProfiles）
+// 取各层级里最优（最小）的那个，与 entity.SyncViewSet.Lookup 给并集的 Priority 是同一条规则，ValidateViewPriority 才对得上。
+func (m *Manager) profilePriority(profile entity.SyncProfile) int {
+	layers := profile.Layers()
+	best := 0
+	for index, layer := range layers {
+		rank, ok := m.config.ProfilePriorities[layer]
+		if !ok {
+			rank = int(layer.LOD)
+		}
+		if index == 0 || rank < best {
+			best = rank
+		}
+	}
+	return best
 }

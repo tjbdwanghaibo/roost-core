@@ -24,3 +24,15 @@ func BusinessClock(r *Registry) clock.Business {
 	}
 	return clock.Process()
 }
+
+// BusinessCalendar 返回业务日历：业务时区 time.business_timezone（缺省 UTC）与每日重置时刻
+// time.business_day_start（缺省 00:00）。它挂在 Registry 的业务时钟上（clock.CalendarOf），日 / 周重置、
+// “今天领过没有”按它算：
+//
+//	cal := app.BusinessCalendar(r)
+//	today := cal.BusinessDay(app.BusinessClock(r).Now())
+//
+// 存储与协议里仍是绝对时刻（Unix 时间戳），“哪一天”只在这里算，不读 time.Local。
+func BusinessCalendar(r *Registry) clock.Calendar {
+	return clock.CalendarOf(BusinessClock(r))
+}

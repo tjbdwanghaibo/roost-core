@@ -42,6 +42,7 @@ const (
 	MethodValidateSession = "account.ValidateSession"
 	MethodUpdateProfile   = "account.UpdateProfile"
 	MethodMarkLogout      = "account.MarkLogout"
+	MethodGetServer       = "account.GetServer"
 )
 
 // Methods is every method on Accounts, in interface order.
@@ -55,6 +56,7 @@ var Methods = []string{
 	MethodValidateSession,
 	MethodUpdateProfile,
 	MethodMarkLogout,
+	MethodGetServer,
 }
 
 // rpcStatus is the envelope every response embeds.
@@ -187,6 +189,22 @@ type rpcMarkLogoutResponse struct {
 	rpcStatus
 }
 
+// rpcGetServerRequest is the GetServer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcGetServerRequest struct {
+	ServerID int32 `json:"server_id"`
+}
+
+// rpcGetServerResponse is the GetServer response on the wire.
+type rpcGetServerResponse struct {
+	rpcStatus
+	Server GameServer `json:"server"`
+}
+
 // --- server ---
 
 // RegisterHandlers publishes Accounts on a bus.
@@ -250,6 +268,14 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			err := service.MarkLogout(ctx.Context(), wire.AccountID, wire.PlayerID)
 			return rpcMarkLogoutResponse{rpcStatus: statusOf(err)}, nil
+		},
+		MethodGetServer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcGetServerRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcGetServerResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			server, err := service.GetServer(ctx.Context(), wire.ServerID)
+			return rpcGetServerResponse{rpcStatus: statusOf(err), Server: server}, nil
 		},
 	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -384,6 +410,20 @@ func (c *BusClient) MarkLogout(ctx context.Context, accountID string, playerID i
 	return err
 }
 
+// GetServer returns one game server's record, merge fields included
+// (ErrServerInvalid when there is none). It is read-only and the record is
+// public listing information, so it needs no caller identity. A game
+// process asks it at start-up whether its own server was merged away
+// (wiring/account ServingGuardMod).
+// GetServer implements Accounts.
+func (c *BusClient) GetServer(ctx context.Context, serverID int32) (GameServer, error) {
+	var resp rpcGetServerResponse
+	err := c.call(ctx, MethodGetServer, rpcGetServerRequest{
+		ServerID: serverID,
+	}, &resp)
+	return resp.Server, err
+}
+
 // --- capability ---
 
 // capability is what a Mod puts in the registry.
@@ -428,6 +468,10 @@ func (c capability) UpdateProfile(ctx context.Context, accountID string, playerI
 
 func (c capability) MarkLogout(ctx context.Context, accountID string, playerID int64) error {
 	return c.inner.MarkLogout(ctx, accountID, playerID)
+}
+
+func (c capability) GetServer(ctx context.Context, serverID int32) (GameServer, error) {
+	return c.inner.GetServer(ctx, serverID)
 }
 
 // Capability wraps a Accounts for registration. Both Mods use it, so the

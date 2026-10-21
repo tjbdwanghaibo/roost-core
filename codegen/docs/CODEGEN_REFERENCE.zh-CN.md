@@ -168,7 +168,7 @@ roost add rpc guild -service game
 
 `-native` 保序解析，必须是 `-steps` 的子集、不能重复；锁目标 `-entity` / `-component` 与 `add handler` 相同（工程只有一个 Entity 时 `-entity` 可省），跑步骤的服务要有 nest Mod，与已有 Nest handler 同名时拒绝。骨架默认拒绝（`... is not implemented`），写完业务前 saga 不报告成功。服务的 `Init` / `Shutdown` 不改写：next 提示给出 `steps, err := <name>.StartSteps(context.Background(), registry, <name>.StepDeps{})` 与 `steps.Drain(ctx)` 两行，doctor 的 `saga-steps:<name>` 在没有服务调用 `StartSteps` / `RegisterSteps`（或所在包没有 `Steps.Drain(ctx)`）时 WARN。
 
-容量（2026-10-18 实测，投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s）；正向 10/s 仍 0 笔终态不对，但积压、延迟升到秒级（P50 2.2 s）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（上限档各单样本）。量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [投影器合并 checkpoint 前后对照](../../docs/performance/SAGA-CHECKPOINT-20261018.md) §3、§5（优化过程见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)）。
+容量（投影 checkpoint 缺省间隔 20 ms）：步骤消费者的回调只做预留与 Nest 请求、等投影回执在后台；DataEngine 投影器逐条处理带回执 / effect 的记录，约 20 条/s（正向每笔 2 条、全补偿每笔 3 条）。单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内，P99 不稳定：2026-10-20 各 15 分钟实测（正向 8/s 两次各 7200 笔、全补偿 5/s 一次 4500 笔，全部 0 笔终态不对）服务端 P50 549～713 ms、P99 0.9～3.9 s，两次正向 8/s 的 P99 相差 4 倍（0.92 s 与 3.89 s）。WAL 放 RAM disk 时服务端 P50 从 555 ms 降到 334 ms、投影 checkpoint 从 57 ms 降到 1 ms，磁盘同步是主要成本，部署时 WAL 放快盘。正向 10/s 仍 0 笔终态不对，但积压、延迟升到秒级（P50 2.2 s，2026-10-18）；正向 12/s、全补偿 7/s 起步骤超时、重试放大而崩溃（上限档各单样本）。Mongo 步骤单进程上限在正向 20～30/s、全补偿 10～15/s 之间。量大时按 sid 分片多进程并给原生步骤加 `kitsaga.WithAdmit` 准入。数据见 [v1.30.0 候选夜间补测](../../docs/performance/NIGHT-20261020.md) §6～§8 与 [投影器合并 checkpoint 前后对照](../../docs/performance/SAGA-CHECKPOINT-20261018.md) §3、§5（优化过程见 [Saga 性能优化](../../docs/performance/SAGA-OPT-20261018.md)）。
 
 `add effect <topic> -consumer <service>`：`<topic>` 点分（`player.level_up`，`saga.*` 保留）。生成 `game/effects/<topic>.go`（载荷 struct、`Topic<Topic>`、`Emit<Topic>(key, event)`，只能在 Nest handler 里调用）与 `internal/service/<service>/<topic>_consumer.go`（`start<Topic>EffectConsumer(ctx, registry)`：`kitdataengine.SubscribeEffects`，durable `<service>-<topic>`，载荷解不开返回 `PoisonEffect`，骨架默认返回错误让 effect 重投）。载荷里的玩家号在组件里用 `Owner().UniqueID()` 取；`Owner().ID()` 是编码后的 EntityID（带实体类型位），不是玩家号，骨架注释写明了这一点。消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。服务里加 `subscription, err := start<Topic>EffectConsumer(context.Background(), registry)` 与 `subscription.Drain()`；doctor 的 `effect-consumer:<service>/<func>` 在没人调用时 WARN。`project new -services` 同样保留书写顺序，`-template` 把第一个写出的服务接到托管框架服务上。
 
@@ -185,6 +185,8 @@ roost add rpc guild -service game
 | `add endpoint <name> --lifecycle <entity>` | `--handler`、已有同名 protocol 与 `add lifecycle` | 登录 endpoint（调 lifecycle `GetOrCreate`，不走 Nest） | 客户端首条请求先发它 |
 | `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog 与 catalog_test.go（`go test ./game/skills/` 编译全部定义，doctor `skills:catalog` 运行它） | 配置 CompileEnvironment 与 Host；服务 Init 调 CompileAll |
 | `add timer --entity <entity>` | 实体已有 DAO、工程有 nest；多 Nest 服务时 `--service` | roost.yaml `timers`、DAO 定义加两个字段、实体加组件字段；生成组件 / 节点类型 / Tick handler / bootstrap 驱动；业务回调文件 | 在 `<component>_handlers.go` 写类型与回调，在 handler 里 `NewTimer` |
+
+**接 account 的玩家接入（别名合服，D15）**：应用的 `auth.go` 骨架默认拒绝，注释写明接 account 时的写法：经 `svcaccount.Accounts.ValidateSession` 校验票据，用返回的 `role.ServingServerID`（承载服：角色自己的服，或它已并入的那个服）填 `svcaccount.ServerIDClaim`，`role.ServerID`（原服，供显示）填 `svcaccount.OriginServerIDClaim`；按 `role.ServerID` 路由会把合服后原服的每个角色拒绝成 `player_elsewhere`（完整示例是 game-demo 的 `internal/access/player/tcp/auth.go`）。`access.player` 指向、且 `uses: account` 的服务，生成的 bootstrap 在 account 的 ClientMod 之后多装一个 `svcaccount.NewServingGuardMod()`：进程启动时问 account 本服是否已并入另一服，已并入就拒绝启动（DataEngine Mod 排在它之后，WAL 与 outbox 都还没打开）；它计入生成的 `shutdown.total_timeout`（多一个 3s 保底）。工程带 `cmd/sidmerge`（game-demo）时，`roost project doctor` 多一项只读的 `merge-readiness`（OK / WARN，不让 doctor 失败）：运行 `go run ./cmd/sidmerge checklist`，概括按 sid 分库（合服时要搬）与共享（两侧部署必须同一位置）的逻辑库、按 sid 寻址的持久总线用法、需要业务语义的合并项数；WAL / outbox / saga / 冲突只能在停服窗口里由 `sidmerge migrate -dry-run` 检查（[PLAYER-MIGRATION §6](../../docs/framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)）。
 
 endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
 `--nest-handler`。`add protocol --handler <域>` 之后跑过 `roost generate`，协议生成器会先写一个“未实现”占位
@@ -848,6 +850,8 @@ type Mail interface {
 
 拥有者进程：`mods.RegisterAll(r, OwnerCapabilities(service)...)` 加一个手写的 `func (s *Server) run(ctx context.Context) error`；调用方进程：`mail.NewClientMod()`。两者发布同一个 capability 名，同一进程放不下两份——registry 拒绝第二个，这是想要的行为。工程内的跨进程服务用 `roost add rpc`（见 [项目生成器 §6](PROJECT_GENERATOR.zh-CN.md#6-日常业务脚手架)）。
 
+托管框架服务的协作者骨架（`internal/service/<服务>/collaborators.go`）只生成一次、缺省拒绝。mail 的 `Broadcast()` 缺省 `nil`（拒绝 `AudienceBroadcast`）；注释给出内置的“存一份 + 拉取合并”接法：返回 `mail.NewLazyBroadcast(mail.LazyBroadcastConfig{})`（owner Mod 给它 `<mail.key_prefix>:bcast:` 下的 Redis 账本），登录端点调用一次 `Mail.PullBroadcasts(ctx, playerID, mail.BroadcastProfile{Scopes: …, RegisteredAtUnix: Role.CreatedAtUnix})`，公会变化时再调一次；业务条件写在 `LazyBroadcastConfig.Eligible`，撤回用 `Mail.RevokeBroadcast`。game-demo 的 `enter_game` 已经这样调用（没启用时是 no-op）。语义见 [Service 指南 · Mail 全服邮件](../../docs/framework/guide/09-services.md#1b-mail-全服邮件)。
+
 `-check` 用于 CI：先跑全部拒绝规则，再生成并逐字节比对磁盘上的文件，任何差异非零退出，并区分"缺失"（没人跑过生成器）与"不一致"（文件被改过或由另一版本生成器产出）。它不写文件。
 
 拒绝规则（每条都对应一个真实踩过的坑）：
@@ -884,11 +888,25 @@ roost format check
 键检查通过后再交给同一个编译出的进程跑 `--check-config`：跨键规则（`ValidateConfig`）与跨 Mod 规则（`app.ModConfigCrossChecker`，例如 `saga.start_effect_stream` 必须等于 `dataengine.effects.stream`），与 doctor 的 `config-check:<service>`、进程启动前的检查是同一处规则，三处结论相同；工程编译不过时打印 `cross-mod rules NOT checked` 并以 `config keys are valid (cross-mod rules not checked)`（`--all` 时 `config keys ok (cross-mod rules not checked)`）结束、退出码 5，不报 `config is valid`。业务独有段的拼写只由 doctor 检查。`--file` 按 `config.<service>[.<变体>].yaml` 认出服务，认不出时加 `--service`。`roost.yaml` 读不出来时检查直接失败。
 production 另外拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施拓扑探测和故障演练。
 
+**业务时区（`time:` 段，DESIGN-TODO D18）**：每个服务的开发配置与生产示例都写明
+
+```yaml
+time:
+  business_timezone: UTC     # IANA 名，例如 Asia/Shanghai；缺省 UTC
+  business_day_start: 00:00  # 每日重置时刻，业务时区的墙上时间 HH:MM；缺省 00:00
+```
+
+业务日、每日 / 每周重置、按日历划分的活动窗口按这两个键算（`app.BusinessCalendar(registry)`、`clock.BusinessDay` / `DayStart` / `NextDayStart`），
+不取机器的 `TZ` / `time.Local`；存储与协议里的时间仍是绝对时刻。生产上写游戏运营所在的时区（例如 `Asia/Shanghai`）。
+拼错的时区名、`Local`、不是两位 `HH:MM` 的重置时刻在进程的 `--check-config`（因而 `config check`、doctor `config-check:<service>`、启动前检查）里拒绝并点名键；
+两个键都标了 shared，`config check --all` / doctor `config-across-services` 要求各服务相同。生成的 `main.go` 导入 `time/tzdata`（约 450 KB），
+distroless 运行镜像里没有 zoneinfo 也能加载时区；手写或旧工程的 `main.go`（归应用，sync 不改）在这类镜像里要自己加 `_ "time/tzdata"`，否则启动检查报 `is not a time zone this process can load`。
+
 `--keys-only` 只做键检查：不编译工程、不跑跨 Mod 规则，每份文件以 `config keys ok, cross-mod rules not checked (--keys-only): <file>` 结束（适合没有 Go 工具链或只改了键的 CI 步骤）；键检查里发现可疑键时也不读业务声明复核，会在问题末尾注明。
 
 `--all` 在逐个文件之后比较**各服务之间**（`checkConfigAcrossServices`，doctor 的 `config-across-services` 是同一个实现）。规则来自配置声明的 tag，不在生成器里另列：
 
-- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`。按写法比较（只去掉首尾空白）。
+- 共享资源名（`shared:"<资源名>"`）：同一资源名的键在全部服务里取值必须相同——取值按进程读到的算（写了取写的，没写取声明缺省值，再没有按 `follows` 取另一个键，例如 `saga.start_effect_stream` 不写取 `dataengine.effects.stream`）。当前标了 shared 的：`nats.prefix`、`syncbus.prefix`、`etcd.service_prefix`、`dataengine.effects.stream` / `subject_prefix`（与 `saga.start_effect_stream` / `start_effect_prefix` 同组）、`saga.database` / `stream` / `subject_prefix`、`remote_entity.mongo.database` / `snapshot_l2_key_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start`。按写法比较（只去掉首尾空白）。
 - 同一主机上各不相同（`unique:"<组名>"`）：开发配置集里各服务的取值必须两两不同。当前只有 `etcd.advertise_addr`——它不是监听地址，是写进服务注册、别的进程据此连接本服务的地址，两个服务写同一个会把请求送错地方（生成器按端口块号给 `127.0.0.1:9000+N`，见[项目生成器](PROJECT_GENERATOR.zh-CN.md) §5“端口块”）。没写也没有缺省值的不比较；生产示例不比较。
 - 与端口块对照（WARN，不影响退出码）：开发配置里写的 `ops.addr` / `etcd.advertise_addr` 端口不是 `roost.yaml` 的 `services.<name>.port_block` 派生的 `9100+N` / `9000+N` 时，列在 `cross_service.warnings`（文本输出 `cross-service warnings`）；配置归应用、可以有意换端口，但 `deploy/dev/run.sh` 与 `second-game.sh` 按块号走。
 - 监听端口（`listen:"<开关键>"`）：开发配置集 `configs/service/config.<service>.yaml` 的服务在同一台机器上运行，开关打开的监听地址（`ops.addr`/`ops.enabled`、`web.addr`/`web.enabled`、`player_access.tcp.addr`/`player_access.tcp.enabled`）端口相同且主机重叠（相同，或任一方是 `0.0.0.0` / `::`）即冲突，同一服务内的两个地址同样比较；端口 0 不比较。生产示例每服务一个容器，doctor 只比较它们的共享资源名。

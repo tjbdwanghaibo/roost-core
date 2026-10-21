@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -246,6 +249,61 @@ func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 	}
 	if err := waiter.WaitEntityProjection(context.Background(), 1); err == nil {
 		t.Fatal("an unprovided Mod reported the entity's projections as landed")
+	}
+}
+
+// modUnloadKind 只给 TestModRegistersEntityUnloadAdminCommand 构造完整 EntityID；同包已用 239（remote_integration_test.go），
+// kind 注册表是进程级的，不能撞号。
+const modUnloadKind entity.EntityKind = 238
+
+var registerModUnloadKind sync.Once
+
+// D16：entity.unload 由 DataEngine Mod 在 Provide 时挂到 App 的 admin 注册表（与 configdata.* 相同的接线），
+// 所有装配了 DataEngine 的进程都带这条命令、走 ops /admin/execute 的同一套鉴权与审计。Runtime 启动前执行明确失败；
+// 启动后对没有常驻的实体回答 resident=false、什么也不做。
+func TestModRegistersEntityUnloadAdminCommand(t *testing.T) {
+	cfg := newModConfig(t)
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongotest.NewClient())); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModNatsJetStream, fnats.IJetStream(&modJetStream{})); err != nil {
+		t.Fatal(err)
+	}
+	registerModUnloadKind.Do(func() { entity.MustRegisterEntityKindCategory(modUnloadKind, 1) })
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
+	if !ok || !slices.Contains(commands.Names(), engine.AdminCommandEntityUnload) {
+		t.Fatalf("admin commands after Provide = %v, want %q", commands.Names(), engine.AdminCommandEntityUnload)
+	}
+	command := admin.Command{Name: engine.AdminCommandEntityUnload, Payload: []byte(`{"entity_id":1}`)}
+	if _, err := commands.Execute(context.Background(), command); err == nil || !strings.Contains(err.Error(), "not started") {
+		t.Fatalf("entity.unload before Start = %v, want a refusal naming the unstarted runtime", err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mod.Stop()
+	id, err := entity.BuildEntityID(77, modUnloadKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Payload = []byte(`{"entity_id":` + strconv.FormatInt(id, 10) + `}`)
+	result, err := commands.Execute(context.Background(), command)
+	if err != nil || result.Data["resident"] != false || result.Data["unloaded"] != false {
+		t.Fatalf("entity.unload of an entity that is not loaded = %+v, %v; want resident=false", result, err)
+	}
+	for _, payload := range []string{`{}`, `{"entity_id":1,"player_id":2}`, `{"entity_id":1,"timeout":"soon"}`, `not json`} {
+		command.Payload = []byte(payload)
+		if _, err := commands.Execute(context.Background(), command); !errors.Is(err, admin.ErrCommandInvalid) {
+			t.Errorf("entity.unload %s = %v, want ErrCommandInvalid", payload, err)
+		}
 	}
 }
 

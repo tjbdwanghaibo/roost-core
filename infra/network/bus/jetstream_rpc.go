@@ -50,6 +50,10 @@ type JetStreamRPCConfig struct {
 	SetupTimeout   time.Duration
 }
 
+// WithDefaults 返回补齐缺省值之后的配置（与 EnableJetStreamRPC 实际使用的相同），供只读配置的运维工具说出
+// 真实的流名与超时。
+func (c JetStreamRPCConfig) WithDefaults() JetStreamRPCConfig { return c.normalize() }
+
 func (c JetStreamRPCConfig) normalize() JetStreamRPCConfig {
 	if c.RequestStream == "" {
 		c.RequestStream = defaultJetStreamRPCRequestStream

@@ -1,0 +1,10 @@
+{
+  "dir": "data/walB/dataengine/1000",
+  "drained": true,
+  "records_retained": 149,
+  "checkpoint": "segment 1 offset 27431",
+  "last_record": "segment 1 offset 27431 (3cbdb42f52c918460000000000000026)",
+  "databases": {
+    "main": "nightdrill"
+  }
+}

@@ -8,7 +8,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 | --- | --- | --- |
 | 内容 | `framework/entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareViews` 一次锁内捕获 |
 | 机制 | `framework/sync/entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一到多帧，门槛，held/ready，两种失败 |
-| 组织 | `framework/sync/entitysync/policy` | 谁订谁：`Interest`（距离 + 关系源）、`Group`（成员全互见）、`Direct`（显式绑定）；各实例通过独立 `SubscriptionSource` 持有订阅 |
+| 组织 | `framework/sync/entitysync/policy` | 谁订谁：`Interest`（视野：空间视野按距离、关系视野按成员）、`Group`（成员全互见）、`Direct`（显式绑定）；各实例通过独立 `SubscriptionSource` 持有订阅 |
 | 应用 | 业务启动与接入层 | `Transport` 适配、会话生命周期（进场 held → ready → 离场）、地图尺寸 / 半径 / 关系这类只有游戏知道的事 |
 
 每层只知道下一层：entity 不知道 session，Manager 不知道为什么有人订阅，policy 不碰帧与传输，应用不写聚合规则。
@@ -59,7 +59,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 ## 组织方式（`framework/sync/entitysync/policy`）
 
-- `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）+ 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
+- `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）上的视野（D19）：空间视野（玩家主视野与业务的空间视野，一个视野是 AOI 的一个观察者）与关系视野（显式实体集合），玩家与视野多对多；按 (玩家, 目标) 聚合成一份订阅——第一个持有的视野订、最后一个释放的视野撤，层级包含取高、不包含取并集；
   band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
 - `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。

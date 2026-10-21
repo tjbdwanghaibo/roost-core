@@ -52,7 +52,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 移动、寻路与地图归属 | Scene runtime、Map 组件、Nest | [MovePlayer](../../demo/game/handler/move_player.go.tmpl)、[MapComponent](../../demo/game/entities/player/map_component.go.tmpl)：验证地形后写 DAO，再发布脏状态 | 移动速度、射程、视线与反作弊；AOI 距离不等于攻击授权 |
 | 同进程切图 | 多实体 Nest + DAO undo | [持久切图](../../scripts/testdata/mmorpg/tasks.go.txt)：版本、原地图、新地图人数与归属一起修改 | 副本准入、容量、出生点、过期请求识别 |
 | 切图后的视图切换 | 一个 Manager、每张地图一个 Interest、held / ready | [多地图接法](../../scripts/testdata/mmorpg/scene_runtime.go.txt)：按已提交归属重建索引，失败保持 held，成功 Ready 后发新 Full | 重试驱动与生命周期；持久提交与网络交付不是同一事务 |
-| 同屏观察与隐私 | Interest `SourceProfiles` + Player 同步 Profile | 自己看完整视图，空间来源用 `near`；[TCP 客户端场景](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)核对金币 / 经验 / 背包不外泄 | 队伍、敌我、隐身、观战等权限及对应字段集合 |
+| 同屏观察与隐私 | Interest `BandLayer` + Player 同步 Profile | 自己看完整视图，空间来源用 `near`；[TCP 客户端场景](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)核对金币 / 经验 / 背包不外泄 | 队伍、敌我、隐身、观战等权限及对应字段集合 |
 | 组队、退出与解散 | 多 Player Sender；demo Scene `SetTeam` 关系来源 | `MMORPGParty`（[tasks](../../scripts/testdata/mmorpg/tasks.go.txt)）、`MMORPGDisband`（[gameplay](../../scripts/testdata/mmorpg/gameplay.go.txt)） | 邀请、队长、人数、跨地图信息权限；样例是两人队伍，解散带预期队伍 ID |
 | 面对面交易 | 独立 Trade DAO + 三实体 Nest | `MMORPGOffer` 托管双方资产，`MMORPGResolveTrade` 处理确认 / 取消 / 到期；交易实体 ID 是幂等身份 | 物品唯一性、容量、报价、确认规则、掉线政策；样例掉线选择取消 |
 | 权威战斗与冷却 | 多实体 Nest、端点注入的业务时间、单调输入序号 | `MMORPGStrike` 校验存活、同地图、顺序、冷却，再改怪物血量与击杀归属 | 战斗公式、命中、距离和预测；样例不是完整即时战斗系统 |

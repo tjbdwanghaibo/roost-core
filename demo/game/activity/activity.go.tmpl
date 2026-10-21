@@ -38,6 +38,14 @@ const (
 )
 
 // WindowStart is the start of the window nowUnix falls in.
+//
+// Windows here are aligned on the Unix epoch, which is the same moment in
+// every time zone, so no business time zone is involved. A window that
+// follows the calendar — a daily or weekly event, a "today" reset — is cut by
+// the deployment's time.business_timezone / time.business_day_start instead:
+// app.BusinessCalendar(registry).DayStart(now) / NextDayStart(now), and
+// BusinessDay(now) as the id (never time.Local, which is UTC in the
+// container and local time on a developer's machine).
 func WindowStart(nowUnix int64) int64 { return nowUnix - nowUnix%WindowSeconds }
 
 // ID names the window nowUnix falls in.

@@ -205,6 +205,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
 | `dataengine.dao.unknown_stored_key.total{dao}` | Counter | 生成 DAO 冷加载时，库里文档有、持久文档结构体没有的键每出现一次计一次（标签只有 DAO 类型名；键名只在 WARN 日志里，每进程每 DAO 每键一次）。**基线应为零**；非零说明字段改了名没保留 `bson` 名、删了字段或改成 nopersist：这个键不再读取，下一次整文档写回会删除它；要保留数据，给字段写原 `bson` 名或先按 SCHEMA-MIGRATION 离线迁移（DESIGN-TODO D13） |
 | `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
+| `dataengine.entity_unload.total{result}` | Counter | 运维命令 `entity.unload`（D16）每次执行的结论：`unloaded`、`not_resident`（没有常驻，什么也没做）、`busy`（持有实体的事务在 timeout 内没结束、另一次卸载进行中、Remote 所有权不稳定）、`timeout`（在途投影没在 timeout 内完成）、`failed`（其他错误，例如非持久实体、Runtime 不可用）。只有运维手动触发，基线是零星几次 |
+| `dataengine.entity_unload.admission_rejected.total` | Counter | 卸载屏障在 WAL 准入处拒绝的写事务数（调用方拿到可重试的 `ErrEntityUnloading`）。卸载期间写到该实体的请求才会计入，正常只在 `entity.unload` 前后零星出现；持续增长说明卸载卡在投影上 |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
 ### 全部源码指标索引
@@ -235,6 +237,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
 | `dataengine.dao.unknown_stored_key.total` | Counter | `dataengine/stored_keys.go:IncCounter` |
 | `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
+| `dataengine.entity_unload.admission_rejected.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
+| `dataengine.entity_unload.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
 | `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
@@ -255,6 +259,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_frames_admitted_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_interest_view_limit_rejected_total` | Counter | `sync/entitysync/policy/view.go:IncCounter` |
 | `entitysync_interest_view_rejected_total` | Counter | `sync/entitysync/policy/interest.go:IncCounter` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
@@ -431,7 +436,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 
 `dataengine.projection.pending` 在准入与确认/撤销时更新；outbox.pending / oldest_age_ms 随既有后台采样和健康采样更新，单位分别是条、毫秒。正式装配每进程一个 Engine；自行创建多个 Engine 必须另行提供实例聚合，不能把进程 gauge 当多实例总和。
 
-`admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录鉴权拒绝。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。
+`admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录鉴权拒绝。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。`entity.kick` / `entity.unload`（D16）另各记一条 Info 日志，带 player_id / entity、reason、trace_id、operator 与结果，可按 trace_id 与审计日志对上；`entity.unload` 的 busy / timeout 是确定的“没有卸载”，不包裹 ctx 错误，outcome 记 `error` 而不是 `unknown`。
 
 `bus_rpc_pending_requests{transport}` 是 RPC 全部在途数量 Gauge；原来的 bus_rpc_pending_total 名称已移除，面板迁移到新名。按方法的 bus_rpc_pending 保持原样。
 

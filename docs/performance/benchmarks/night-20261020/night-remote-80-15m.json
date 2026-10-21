@@ -1,0 +1,45 @@
+{
+ "duration_seconds": 900.125350416,
+ "Entities": 10000,
+ "Sessions": 1000,
+ "TargetRate": 80,
+ "Completed": 72000,
+ "Errors": 0,
+ "Dropped": 0,
+ "ErrorsNotApplied": 0,
+ "ErrorsUncertain": 0,
+ "ErrorClasses": {},
+ "ErrorClassFirst": {},
+ "CompletionTPS": 79.98885929245814,
+ "LatencyP50MS": 166,
+ "LatencyP95MS": 250,
+ "LatencyP99MS": 752,
+ "LatencyMaxMS": 1472,
+ "Harness": {
+  "AdmitLag": {
+   "P50MS": 0,
+   "P95MS": 1,
+   "P99MS": 2,
+   "MaxMS": 71,
+   "NegativeDurations": 0
+  },
+  "ClientQueue": {
+   "P50MS": 0,
+   "P95MS": 0,
+   "P99MS": 0,
+   "MaxMS": 21,
+   "NegativeDurations": 0
+  }
+ },
+ "Server": {
+  "Completion": {
+   "P50MS": 164,
+   "P95MS": 249,
+   "P99MS": 749,
+   "MaxMS": 1470,
+   "NegativeDurations": 0
+  }
+ },
+ "FirstError": "",
+ "ErrorDetails": null
+}

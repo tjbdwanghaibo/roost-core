@@ -18,6 +18,7 @@ import (
 // （帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳），直接用 time 包。业务包里直接读
 // time.Now / time.Since / time.Until 多半是该用业务时钟的地方，这里打印 hint:；确实是系统时间的，
 // 在同一行或上一行写 `//glsvet:system-clock <理由>`，或写在函数的文档注释里豁免整个函数。
+// 读机器时区（time.Local、time.LoadLocation）同样提示：业务日按部署配置的 time.business_timezone 算（D18）。
 // 提示只打印、不计入违例、不改退出码；-clockhints=false 关闭。
 //
 // 哪些包算业务包：相对模块根（向上找 go.mod）的路径里有一段目录名在 -businessdirs 里（缺省 game，
@@ -32,6 +33,11 @@ const systemClockDirective = "glsvet:system-clock"
 
 // systemClockReads 是会被提示的 time 包函数：读当前时刻，或拿当前时刻做差。
 var systemClockReads = map[string]bool{"Now": true, "Since": true, "Until": true}
+
+// machineZoneReads 是会被提示的机器时区读取（DESIGN-TODO D18）：time.Local 取决于 TZ 与 /etc/localtime，
+// 开发机是本地时区、容器是 UTC；业务包自己 LoadLocation 会绕开部署配置的业务时区。业务日与每日重置按
+// time.business_timezone 算（app.BusinessCalendar(registry)、clock.BusinessDay）。同一个豁免指令。
+var machineZoneReads = map[string]bool{"Local": true, "LoadLocation": true}
 
 // isBusinessDirectory 报告 directory 是否属于业务包：模块根之下的路径里有一段在 names 里。
 func isBusinessDirectory(directory string, names []string) bool {
@@ -102,7 +108,7 @@ func reportClockHints(fileSet *token.FileSet, file *ast.File) int {
 		}
 		ast.Inspect(declaration, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
-			if !ok || !systemClockReads[selector.Sel.Name] {
+			if !ok || !systemClockReads[selector.Sel.Name] && !machineZoneReads[selector.Sel.Name] {
 				return true
 			}
 			if ident, ok := selector.X.(*ast.Ident); !ok || ident.Name != alias || ident.Obj != nil {
@@ -110,6 +116,12 @@ func reportClockHints(fileSet *token.FileSet, file *ast.File) int {
 			}
 			position := fileSet.Position(selector.Pos())
 			if exempt[position.Line] {
+				return true
+			}
+			if machineZoneReads[selector.Sel.Name] {
+				fmt.Printf("%s: hint: business package reads a machine time zone (time.%s); business days and daily resets follow the deployment's time.business_timezone — use app.BusinessCalendar(registry) or clock.BusinessDay / NextDayStart; a log or tool output in local time is not business time: mark it //%s <reason> (D18)\n",
+					position, selector.Sel.Name, systemClockDirective)
+				hints++
 				return true
 			}
 			fmt.Printf("%s: hint: business package reads the system clock (time.%s); business time — windows, timers, cooldowns, expiry, seasons — comes from the business clock (app.BusinessClock(registry) or an injected clock.Business); a lease, timeout, retry or storage TTL is system time: mark it //%s <reason> (D-L3)\n",

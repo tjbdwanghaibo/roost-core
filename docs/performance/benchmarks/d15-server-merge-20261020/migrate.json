@@ -1,0 +1,161 @@
+{
+  "from": 1001,
+  "into": 1000,
+  "ready": true,
+  "dry_run": false,
+  "checks": [
+    {
+      "name": "wal:1001",
+      "status": "ok",
+      "detail": "data/wal/dataengine/1001 drained (segment 1 offset 2112)"
+    },
+    {
+      "name": "wal:1000",
+      "status": "ok",
+      "detail": "data/wal/dataengine/1000 drained (segment 1 offset 2112)"
+    },
+    {
+      "name": "co-location:main",
+      "status": "ok",
+      "detail": "both map \"main\" to mergedrill on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it"
+    },
+    {
+      "name": "co-location:zone",
+      "status": "ok",
+      "detail": "sid 1001 maps \"zone\" to md_zone_a on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it, sid 1000 to md_zone_b on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it; A's base database holds no collection, so only its dbscope=sid part (migrated) has data"
+    },
+    {
+      "name": "outbox:1001",
+      "status": "ok",
+      "detail": "A and B share control database mergedrill on 127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it: B publishes what A left in the outbox"
+    },
+    {
+      "name": "saga:mergedrill_saga",
+      "status": "ok",
+      "detail": "every saga is terminal"
+    },
+    {
+      "name": "bus",
+      "status": "confirm",
+      "detail": "confirm by hand before the merge, as listed under bus: syncbus"
+    },
+    {
+      "name": "conflicts",
+      "status": "ok",
+      "detail": "no _id is present on both sides with different content"
+    }
+  ],
+  "server_scoped_databases": [
+    {
+      "logical": "zone",
+      "source_database": "md_zone_a_1001",
+      "target_database": "md_zone_b_1000",
+      "source_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it",
+      "target_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it",
+      "collections": [
+        {
+          "name": "zone_state",
+          "documents": 2,
+          "to_copy": 2,
+          "already_present": 0,
+          "conflicts": 0
+        }
+      ]
+    }
+  ],
+  "bus": [
+    {
+      "name": "dataengine effects stream",
+      "persistent": true,
+      "where": "JetStream stream MERGEDRILL_EFFECTS; durable consumers are named by the business (game-demo: game-level-up-mail, game-activity-phase) and by saga (roost-saga-start, roost-saga-start-result), shared by every game process",
+      "addressed_to_sid": false,
+      "after_merge": "effects already published are consumed by B (or any game process) through the same durables; effects A staged but never published stay in A's outbox",
+      "action": "none beyond the outbox check (outbox:\u003csid\u003e)",
+      "source": "wiring/dataengine SubscribeEffects; framework/dataengine/engine/runtime.go (outbox drains at the next start)"
+    },
+    {
+      "name": "saga stream",
+      "persistent": true,
+      "where": "JetStream stream MERGEDRILL_SAGA (subjects mergedrill.saga.\u003e); step consumers are shared durables (game-demo: game-gift-\u003cstep\u003e)",
+      "addressed_to_sid": false,
+      "after_merge": "a step command can carry the sender's bound sid in its payload (game-demo gift.State.FromSID) and is admitted only by that sid's process, which no longer exists",
+      "action": "every saga must be terminal before the merge (checked: saga:\u003cdatabase\u003e)",
+      "source": "demo/internal/service/game/gift_saga.go.tmpl (admitOwned, giftHandoffRouter)"
+    },
+    {
+      "name": "syncbus",
+      "persistent": true,
+      "where": "JetStream stream MERGEDRILL_SYNC; one durable per topic per sid: sync_\u003ctopic\u003e_1001_\u003chash\u003e (and \u003ctopic\u003e.live)",
+      "addressed_to_sid": true,
+      "after_merge": "A's durables keep receiving broadcast copies nobody consumes until the stream's max age drops them; B has its own durables, nothing addressed only to A is lost",
+      "action": "after the merge delete A's durables: nats consumer ls MERGEDRILL_SYNC | grep _1001_ ; nats consumer rm MERGEDRILL_SYNC \u003cname\u003e",
+      "source": "framework/sync/syncbus/driver/jetstream.go (durableSyncName)"
+    },
+    {
+      "name": "service rpc",
+      "persistent": false,
+      "where": "NATS request-reply (nats.rpc.transport: core)",
+      "addressed_to_sid": true,
+      "after_merge": "not persisted: a request to a retired sid fails at once with no responders",
+      "action": "none",
+      "source": "infra/network/bus/jetstream_rpc.go (subscribeJetStreamRPCMethod)"
+    },
+    {
+      "name": "reliable bus",
+      "persistent": false,
+      "where": "disabled (nats.reliable.enabled: false)",
+      "addressed_to_sid": true,
+      "after_merge": "not persisted",
+      "action": "none",
+      "source": "infra/network/bus/reliable.go (inbox / DLQ keyed by consumer \u003cservice\u003e:\u003csid\u003e)"
+    },
+    {
+      "name": "remote entity snapshot interests",
+      "persistent": true,
+      "where": "Redis interest table, consumer sid 1001",
+      "addressed_to_sid": true,
+      "after_merge": "A's interests expire after remote_entity.snapshot_interest_ttl; nothing to do",
+      "action": "none",
+      "source": "framework/remoteentity/snapshot_client.go"
+    }
+  ],
+  "business": [
+    {
+      "name": "World singleton",
+      "today": "UniqueID = sid; the World DAO is in a shared database, so after the merge only World(B) loads; World(A)'s document stays where it is",
+      "decision": "fold counters / progress into World(B), or drop them"
+    },
+    {
+      "name": "per-server leaderboards",
+      "today": "board names often contain the sid",
+      "decision": "keep A's board read-only beside B's, or recompute a merged board"
+    },
+    {
+      "name": "activity groups (activity.groups_file)",
+      "today": "groups list game sids; a member whose process is not live holds the activity back",
+      "decision": "remove A from its group; carry A's contribution over if needed"
+    },
+    {
+      "name": "cross-server global routing",
+      "today": "service/global RouteBinding binds game sids to global instances",
+      "decision": "unbind A"
+    },
+    {
+      "name": "server-scoped unique names",
+      "today": "no conflict when the name directory is global",
+      "decision": "a project with per-server unique names needs a rename rule"
+    },
+    {
+      "name": "mail, chat, pending purchases",
+      "today": "per-player data follows the PlayerID and is unaffected",
+      "decision": "per-server channels / broadcasts are the business's to merge"
+    },
+    {
+      "name": "sids stored in business data",
+      "today": "e.g. a saga state's sender sid, a document that records its origin server",
+      "decision": "terminal sagas are required (checked); any other stored sid is the business's to rewrite or keep"
+    }
+  ],
+  "copied": 2,
+  "already_present": 0
+}

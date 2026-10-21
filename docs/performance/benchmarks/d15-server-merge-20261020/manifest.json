@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "from": 1001,
+  "into": 1000,
+  "created_at": "2026-10-20T14:27:53.361865Z",
+  "databases": [
+    {
+      "logical": "zone",
+      "source_database": "md_zone_a_1001",
+      "target_database": "md_zone_b_1000",
+      "source_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it",
+      "target_mongo": "127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it"
+    }
+  ],
+  "documents": [
+    {
+      "logical": "zone",
+      "collection": "zone_state",
+      "_id": "{\"_id\":{\"$numberLong\":\"91001\"}}",
+      "_version": 2,
+      "digest": "513084930a6312a3217139b075e499e3",
+      "outcome": "copied"
+    },
+    {
+      "logical": "zone",
+      "collection": "zone_state",
+      "_id": "{\"_id\":\"season\"}",
+      "_version": 4,
+      "digest": "e987ae7f99c570f7189053967014a5b5",
+      "outcome": "copied"
+    }
+  ]
+}

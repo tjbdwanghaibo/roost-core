@@ -98,6 +98,10 @@ type ProjectorStats struct {
 	FencedEntities          uint64
 	FencedAdmissionRejected uint64
 	StaleEvictions          uint64
+	// UnloadingEntities 是当前处于运维卸载屏障（entity.unload）的实体数；UnloadAdmissionRejected 是因此以
+	// coredata.ErrEntityUnloading 拒绝的准入次数。
+	UnloadingEntities       uint64
+	UnloadAdmissionRejected uint64
 }
 
 // Projector 负责持久准入（WAL 前的额度与屏障检查、WAL 追加）和 WAL → Mongo 投影。
@@ -137,6 +141,9 @@ type Projector struct {
 	// fencedEntities：实体 → 持有屏障的原生步骤记录（fenced_step.go）。heldMu 保护，
 	// 与 pendingTransactions 中该记录的 entityProjection 同时登记、同时解除。
 	fencedEntities map[int64]coredata.TransactionID
+	// unloadingEntities：实体 → 运维卸载屏障的令牌（entity_unload.go）。heldMu 保护，与准入同一临界区检查。
+	unloadingEntities map[int64]uint64
+	unloadToken       uint64
 
 	// 被跳过的原生步骤的驱逐队列；evictEntities 由 Runtime 注入，localExecutor 由 Nest 绑定。
 	evictMu       sync.Mutex
@@ -154,6 +161,7 @@ type Projector struct {
 	admissionRejected atomic.Uint64
 	fencedRejected    atomic.Uint64
 	staleEvictions    atomic.Uint64
+	unloadRejected    atomic.Uint64
 }
 
 // NewProjector 校验并补齐选项后启动 WAL terminal 监视；ManualReplay 为假时同时启动后台回放循环。
@@ -490,9 +498,11 @@ func (projector *Projector) Stats() ProjectorStats {
 		AdmissionRejected:  projector.admissionRejected.Load(),
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
 		FencedAdmissionRejected: projector.fencedRejected.Load(), StaleEvictions: projector.staleEvictions.Load(),
+		UnloadAdmissionRejected: projector.unloadRejected.Load(),
 	}
 	projector.heldMu.RLock()
 	stats.FencedEntities = uint64(len(projector.fencedEntities))
+	stats.UnloadingEntities = uint64(len(projector.unloadingEntities))
 	projector.heldMu.RUnlock()
 	warning := projector.opts.WarnUnackedRecords
 	if warning == 0 {
@@ -579,6 +589,10 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 	if _, exists := projector.admitted[id]; !exists {
 		// 原生步骤的实体屏障：与下面的登记同一临界区，不用瞬时统计判断。
 		if err := projector.checkFencedEntitiesLocked(record); err != nil {
+			return err
+		}
+		// 运维卸载屏障（entity.unload）：同一临界区，登记之后不会再有写到该实体的记录准入。
+		if err := projector.checkUnloadingEntitiesLocked(record); err != nil {
 			return err
 		}
 		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {

@@ -18,10 +18,11 @@
 | D12 | Saga 原生实体步骤与事务性 effect 消费者的生成支持 | 维护者 2026-10-18 决定 A，已实施；四个未验证项已验证（修两处缺陷）；同日批准 B（生成器），已实施；原生步骤单进程容量按 A 接受并文档化 |
 | D13 | DAO 持久键的来源与水合时的键集合校验（改 Go 字段名静默丢老数据） | 维护者 2026-10-19 决定并已实施：定义里的 `bson` 名就是持久键（缺省 snake_case），生成持久文档结构体；改字段生成期 + 加载期 WARN、不拒绝；旧键不加载、整文档写回即删除，业务层约束写进文档（同日撤销方案 A 与清理入口） |
 | D14 | AOI 观察者改为 playerId、视野半径按观察者配置 | 维护者 2026-10-20 决定 A1 + B1（客户端请求 LOD 层级 + 视野大小，层级对应 Bands、视野大小服务端夹取量化），已实施（2026-10-20；前后 benchstat 由维护者夜间统一跑） |
-| D15 | 合服（把一个服并入另一个服） | 维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，实施中 |
-| D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），实施中 |
-| D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），实施中 |
-| D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐），实施中 |
+| D15 | 合服（把一个服并入另一个服） | 维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，已实施（P1～P4） |
+| D16 | 单个实体 / 玩家的运维入口（踢下线、卸载、改档与恢复） | 维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20：`entity.kick` / `entity.unload`） |
+| D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
+| D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
+| D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20），待压测与三项小决定 |
 
 已决定、不在本篇：Session 运行服务保持现状、不改为可选（2026-10-14）；玩家接入目录 `game/playeraccess` 改名已随 v1.27.0 发布。
 
@@ -507,7 +508,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D15 合服（把一个服并入另一个服）
 
-**状态：维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，实施中。** 登记：2026-10-20 新用户试用第八轮（游戏服务器专家视角）；源码基线 `8ca14004`。设计全文：[FEATURE-2026-10-20-server-merge-alias.md](FEATURE-2026-10-20-server-merge-alias.md)。
+**状态：维护者 2026-10-20 决定别名合服，设计 §10 八项均按推荐，已实施（P1～P4，实施记录见设计 §12）。** 现行说明：[PLAYER-MIGRATION §6](../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b)（runbook）、[guide/09-services §4](../framework/guide/09-services.md#4-关键业务边界)（account）；剩余边界见 [KNOWN-LIMITS](KNOWN-LIMITS.md#合服d15)。以下为决定前的登记。 登记：2026-10-20 新用户试用第八轮（游戏服务器专家视角）；源码基线 `8ca14004`。设计全文：[FEATURE-2026-10-20-server-merge-alias.md](FEATURE-2026-10-20-server-merge-alias.md)。
 
 **现状**：迁服（[PLAYER-MIGRATION](../framework/PLAYER-MIGRATION.md)、game-demo `cmd/sidmove`）搬的是同一个 sid，玩家绑定不变，只做 WAL 排空 / 单实例锁 / 玩家文档比对三项检查；玩家与服的绑定只在 account 的 `Role.ServerID` 与会话 sid，Gate 与 game 按会话 sid 静态判断。阻碍：slot 键 `(accountID, serverID)` insert-only，同账号两服各有角色时改绑必然冲突；没有改绑接口；一个进程只认一个 sid（会话比对、`dbscope=sid` 库名带本进程 sid、单实例锁、World UniqueID）。
 
@@ -526,7 +527,7 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 ## D16 单个实体 / 玩家的运维入口
 
-**状态：维护者 2026-10-20 决定 C（按推荐），实施中。** 决定：框架只做 `entity.kick` 与 `entity.unload`，命令走现有 admin 鉴权与审计接线（不另设审批）；改档 / 恢复按 B 的业务 GM handler 与离线流程。登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 C（按推荐），已实施（2026-10-20，结果见下文“实施结果”）。** 决定：框架只做 `entity.kick` 与 `entity.unload`，命令走现有 admin 鉴权与审计接线（不另设审批）；改档 / 恢复按 B 的业务 GM handler 与离线流程。登记：2026-10-20 新用户试用第八轮第 1 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：框架的 admin 命令只有 `configdata.*`、`hotcode.*`、`bus.dlq.*`，没有针对单个实体 / 玩家的命令；代码层只有 `ManagerAccess.Unload`。投影按版本条件写：`Put` / `Patch` 的过滤条件是 `_id` + `_version == expected`（`framework/dataengine/engine/mongo_store.go:222-224`），成功后写 `_version = next`、`_schema`、`_last_tx`。所以运行期直接改 Mongo 的结果是确定的、按设计的：
 - 只改字段、不动 `_version`：版本仍匹配，下一次投影按内存状态覆盖改动（改动静默丢失）。
@@ -543,9 +544,49 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 **需要拍板**：1）选 A / B / C；2）选 A 或 C 时命令走现有 admin 鉴权与审计接线，还是要求单独的审批（部署方）。
 
+### 实施结果（2026-10-20）
+
+**命令的最终形状**（使用说明在 [guide/03 §6](../framework/guide/03-dataengine.md#单实体运维命令d16)，实现契约在 [impl/03 §2 第 9 条](../framework/impl/03-dataengine.md#2-必须保持的契约)）：
+
+| 命令 | 注册位置 | 参数 | 回答 |
+| --- | --- | --- | --- |
+| `entity.kick` | `infra/network/gateway/admin.go` `RegisterAdminCommands`；经 `wiring/gate.RegisterPlayerAdminCommands` 由 `GameIngressMod.Provide`（独立 Gate）与生成的嵌入 TCP Mod `Provide`（`internal/access/player/tcp/server_gen.go`）调用 | `player_id`、`reason?` | `player_id`、`closed` |
+| `entity.unload` | `framework/dataengine/engine/admin.go` `RegisterAdminCommands`；`wiring/dataengine` Mod 在 Provide 时注册 | `entity_id`（完整 ID）或 `player_id` + `kind?`（EntityKind 数值）；`timeout?`（缺省 5s）、`reason?` | `entity_id`、`kind`、`resident`、`unloaded`、`drained` |
+
+两条都经 ops `/admin/execute`，鉴权与审计用现有接线，各另记一条带 reason / trace_id / operator 的 Info 日志；不另设审批。
+
+**`entity.unload` 的语义**（`Runtime.UnloadEntity`，`framework/dataengine/engine/entity_unload.go`）：①业务池取实体锁（持有实体的在途事务先照常结束、不被拒绝）后，在 Projector 准入临界区登记卸载屏障；②命令 goroutine 等该实体已准入的记录投影完（`WaitEntityProjection`）；③业务池 `ManagerAccess.Unload`；④撤销屏障。屏障期间写到该实体的事务在 WAL 前以可重试的 `dataengine.ErrEntityUnloading` 拒绝、Nest 回滚。下一次访问正常冷加载。
+
+| 情形 | 结果 |
+| --- | --- |
+| 未加载 | 成功，`resident=false`，什么也不做（不登记屏障） |
+| 在途事务持有实体超过 timeout | `ErrEntityUnloadBusy`，没有登记屏障，那笔事务照常提交 |
+| 已准入记录在 timeout 内没投影完 | `ErrEntityUnloadTimeout`，实体留在内存、屏障撤销，记录照常投影 |
+| 另一次卸载进行中 | `ErrEntityUnloadBusy` |
+| Remote 托管、所有权 local_owned / shared | 与本地实体同一流程（Remote 写同样经准入与投影；屏障在 WAL 前挡住 Remote 记录） |
+| Remote 托管、所有权 fenced / recovering / quarantined / sharing / draining / unknown | `ErrEntityUnloadBusy`（由 Remote 运行时收尾） |
+| `AutoPersist=false` | `ErrEntityUnloadNotPersistent`（库里没有它，卸载等于丢弃） |
+| 在业务 worker 上调用 | `fctx.ErrBlockingInBusinessWorker`，不做任何事 |
+
+失败都是确定的“没有卸载”，错误不包裹 ctx 错误（admin 审计 outcome 记 `error`，ops 回 500 + 原因，不是 504 的“结果未知”）。指标 `dataengine.entity_unload.total{result}`、`dataengine.entity_unload.admission_rejected.total`。
+
+**与草案的偏差**：
+1. `entity.kick` 的注册：独立 Gate 由框架 Mod（`GameIngressMod`）注册；嵌入 TCP 的 TCPRuntime 由生成的 player TCP Mod 创建，框架 Mod 拿不到它，所以由生成的 `Provide` 调一行框架函数 `gatewiring.RegisterPlayerAdminCommands`（命令实现与注册函数都在框架里）。
+2. “在途事务”落到两处：命令开始时持有实体的事务**先等它结束**、不拒绝（取锁受 timeout 约束，超时才 busy）；屏障之后才开始的写入被拒绝。这样一次运维操作不会把恰好在执行的玩家请求打回。
+3. `player_id` 不写 `kind` 时在本进程已注册的 kind 里找唯一号相同、已加载的实体：唯一一个就是它，没有就是“未加载”，多个则要求写 `kind`。`kind` 用 EntityKind 数值（框架里没有 kind 名注册表）。
+4. 卸载后若玩家在线、仍有 Sync 订阅，框架会立即为订阅者从库重载（既有 `nest.unload_resync`）；要实体真正离开内存先 `entity.kick`。不为 unload 关掉重载。
+5. 踢下线不封禁、不给客户端发原因（协议里没有踢下线消息）；reason 只进日志。
+
+**证据**：
+- 修前红：`TestModRegistersEntityUnloadAdminCommand`（`wiring/dataengine`）`admin commands after Provide = [], want "entity.unload"`；生成工程 `TestAdminEntityKickClosesThePlayersConnections`（`TestGeneratedPlayerTCPAdminKick` 运行）`server_gen_test.go:53: admin commands after Provide = [], want entity.kick`。
+- 行为回归（`framework/dataengine/engine/entity_unload_test.go`，正式 Nest + 文件 WAL + Mongo 替身）：排空后卸载、卸载期间写入被拒并回滚、冷加载与卸载前一致；投影超时；在途事务超时 busy / 期限内等它完成；未加载 / 非持久 / 并发 / 业务 worker；Remote 托管实体。变异：去掉 `reserve` 里的屏障检查 → `write during unload = <nil>`；去掉排空等待 → `unloading entities = 0, want 1` 与超时用例 `Unloaded:true, <nil>`；去掉第①步取锁 → `the transaction that held the entity when the unload began was refused: nest: transaction commit rejected`。
+- 真实依赖：生成工程 `TestGeneratedDataEngineAdminUnload`（strict / async / pipelined，真实 Mongo + 文件 WAL，`scripts/test-dataengine-generated.sh` 三阶段全通过）；`TestRealGateAdminKickClosesTheClientConnection`（独立 Gate + 真实 NATS，客户端连接被断开）；嵌入 TCP 见生成工程用例（真实 TCP 连接被关、可重新登录）。
+
+**实施后维护者决定（2026-10-20，均按推荐）**：①`entity.kick` 不做短时禁止重登（封禁属于账号 / 接入层的产品状态，另做）；②`entity.unload` 缺省 timeout 保持 5s（受 `ops.admin_timeout` 约束），不加配置键；③`kind` 只接受数值，不加 kind 名注册表（只给 `player_id` 时自动定位）；④命令开始时在途的事务按“等它结束、超过 timeout 报 busy”处理，不改为立即失败。
+
 ## D17 全服邮件的内置投递策略
 
-**状态：维护者 2026-10-20 决定 A，实施中。** 维护者原意：全局邮件是一个 ID，个人邮箱每次从全局拉取合并到个人邮箱。细则（按推荐）：①登录时拉一次，`List` / `Summary` 前再检查；②每玩家一个水位（已合并到的最大全局邮件 ID）；③合并生成带全局邮件 ID 的个人邮件，已读 / 已领 / 删除记在个人这份，按全局 ID 去重、附件只领一次；④全局邮件有有效期，过期后不再合并，已合并的按个人邮件有效期；⑤目标条件用业务谓词，框架内置“注册时间早于发送时间”；⑥可撤回，未合并的不再合并，已合并的默认不动；⑦范围与 `AudienceBroadcast` 一致（全服 / 单服 / 公会）。登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 A，已实施（2026-10-20）。** 维护者原意：全局邮件是一个 ID，个人邮箱每次从全局拉取合并到个人邮箱。细则（按推荐）：①登录时拉一次，`List` / `Summary` 前再检查；②每玩家一个水位（已合并到的最大全局邮件 ID）；③合并生成带全局邮件 ID 的个人邮件，已读 / 已领 / 删除记在个人这份，按全局 ID 去重、附件只领一次；④全局邮件有有效期，过期后不再合并，已合并的按个人邮件有效期；⑤目标条件用业务谓词，框架内置“注册时间早于发送时间”；⑥可撤回，未合并的不再合并，已合并的默认不动；⑦范围与 `AudienceBroadcast` 一致（全服 / 单服 / 公会）。登记：2026-10-20 新用户试用第八轮第 3 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：`AudienceBroadcast` 的范围是一个服 / 公会 / 全体（`service/mail/types.go:242-246`），投递只经业务提供的 `mail.Deliverer`（`service/mail/store.go:62-77`：没有缺省，“任务队列、首次读取时懒回填、夜间扫描”由部署选择；`Deliver` 按（邮箱、邮件）幂等）；`Broadcast` 为 nil 时拒绝广播（`service.go:167`）。`Service.Deliver`（`service.go:361`）导出给 Deliverer 使用，但 mail 没有“按 scope 列出广播信封”的入口，业务要做懒合并就得自己维护广播索引与每玩家水位。生成骨架原注释“投给每个在线玩家”与契约不符，会引向漏发离线玩家的实现，已修正（CHANGELOG `[Unreleased]`，`TestMailBroadcastSkeletonDescribesTheWholeAudience`）。
 
@@ -558,9 +599,23 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 **需要拍板**：1）选 A / B / C；2）选 A 时目标条件用业务谓词还是固定字段（注册时间、等级）。
 
+**实施结果（2026-10-20）**：
+- 形态：`service/mail/broadcast.go` 的 `LazyBroadcast`（`NewLazyBroadcast(LazyBroadcastConfig{Index, Eligible, MaxActive})`）实现 `Deliverer`，`Service.New` 按类型识别；骨架缺省仍为 nil，接入一行，`wiring/mail` 的 Mod 在策略没有自带账本时给它 `<key_prefix>:bcast:` 下的 Redis 账本。存储有 Redis（`NewRedisBroadcastIndex`）与内存（`NewMemoryBroadcastIndex`）两版，共用一份实现：账本是一个 versionstore 文档，旁边一个只增的版本提示键。
+- ①登录拉一次：新 RPC `Mail.PullBroadcasts(ctx, playerID, BroadcastProfile)`，接点是登录端点（game-demo `enter_game`，与付费补发同一位置；框架的实体加载钩子 `OnEntityLoaded` 不带画像、且可能在快池上，不适合阻塞 RPC）；`List` / `Summary` 前再检查，账本头不高于水位时只读一次版本键（O(1)），账本按版本在进程内缓存。
+- ②水位：`Mailbox.BroadcastWatermark`；全局邮件 ID 在账本文档的同一次 CAS 里分配并登记（不另用 id-gen：分开的计数器与记录会让读者先看到 8 再看到 7，水位越过 7）。
+- ③合并：条目键是广播信封 id，`Entry.GlobalID` 记全局邮件 ID，已读 / 已领 / 删除记在这条上；水位与条目同一次 CAS，删除后不重现。合并不另存个人信封（“存一份”），条目指向那一份信封。
+- ④有效期：过期的不再合并；已合并的按信封自身 `ExpiresAtUnix`（与全局邮件相同）消失。回收：过期记录在下一次发布 / 撤回时移除，未过期至多 `MaxActive`（缺省 1000），超过以 `ErrBroadcastFull`（590116）拒绝。
+- ⑤条件：内置“注册时间早于发送时间”，注册时间由登录端点放进画像（`RegisteredAtUnix`，取 account `Role.CreatedAtUnix`；game-demo 经认证器的 `svcaccount.RoleCreatedAtClaim`）；业务谓词 `Eligible(profile, mail)`，输入放 `Attributes`。
+- ⑥撤回：新 RPC `Mail.RevokeBroadcast`，未合并的不再合并，已合并的不动。
+- ⑦范围：`""` / `mail.ServerScope` / `mail.GuildScope`；公会成员关系由业务在画像里提供，变化后再拉一次。
+- 与细则的偏差：已合并副本的有效期没有单独配置（与全局邮件同一过期时刻）；“注册时间早于发送时间”取严格早于、按秒。
+- 证据与剩余边界：CHANGELOG `[Unreleased]` 与 [KNOWN-LIMITS](KNOWN-LIMITS.md) 的“全服邮件 `mail.LazyBroadcast`”。
+
+**实施后维护者决定（2026-10-20）**：合并进个人邮箱的那份**随全局邮件一起过期**（选 A，不另设个人有效期）——取代状态行细则④里“已合并的按个人邮件有效期”的说法；`RoleCreatedAtClaim` 放在 `service/account`、撤回只在 Mail RPC 上提供（均按推荐）。
+
 ## D18 业务时区与“业务日”边界
 
-**状态：维护者 2026-10-20 决定 A（按推荐），实施中。** 决定：`time.business_timezone` 缺省 UTC（启动日志打印，生产示例写明），`clock` 提供业务日辅助，生成的 `main` 内嵌 `time/tzdata`。登记：2026-10-20 新用户试用第八轮第 4 项；源码基线 `8ca14004`。
+**状态：维护者 2026-10-20 决定 A（按推荐），已实施。** 决定：`time.business_timezone` 缺省 UTC（启动日志打印，生产示例写明），`clock` 提供业务日辅助，生成的 `main` 内嵌 `time/tzdata`。登记：2026-10-20 新用户试用第八轮第 4 项；源码基线 `8ca14004`。
 
 **现状（已核对）**：`infra/base/clock` 的业务时钟只有偏移（`time.logic_offset`），包注释把“日 / 周重置”列为业务时钟的用途，但没有业务时区配置，也没有业务日边界工具；文档没有每日重置的推荐写法。业务只能用 `time.Local` 或自己 `LoadLocation`。生成的 Dockerfile 运行层是 `gcr.io/distroless/static-debian12:nonroot`（`codegen/internal/roost/render.go:1364`），生成的 k8s / compose 清单与 `main` 都不设 `TZ`、不嵌入 `time/tzdata`：容器内 `time.Local` 是 UTC，开发机通常是本地时区，同一份代码跨天时刻不同。distroless 镜像是否自带 zoneinfo 本次未在容器内实测（尚未确认），嵌入 `time/tzdata` 可消除这个依赖。
 
@@ -571,3 +626,93 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 **建议**：A。规则声明一次（配置 schema），运行期加载时强制一次，与业务时钟的单一来源一致；时区不应取决于容器环境变量。
 
 **需要拍板**：1）选 A / B；2）选 A 时缺省 UTC 还是必填。
+
+**实施结果**（2026-10-20）：
+
+- 配置：App 的声明 `timeConfig`（`framework/app/config_schema.go`）新增 `time.business_timezone`（缺省 `UTC`）与 `time.business_day_start`（每日重置时刻，`HH:MM`，缺省 `00:00`；草案的“可带每日重置时刻”做成第二个键）。两个键都带 `example`（生成器写进每个服务的开发配置与生产示例的 `time:` 段，`renderBusinessTimeConfig`）与 `shared`（`roost config check --all` / doctor `config-across-services` 要求各服务相同）。`timeConfig.ValidateConfig` 加载时拒绝拼错 / 非 IANA 的名字、`Local`、空名、非两位 `HH:MM`，各自点名键；启动前检查、`--check-config`、doctor `config-check` 同一处。启动日志 `starting server` 打印 `business_timezone` 与 `business_day_start`。
+- API（`infra/base/clock/calendar.go`）：`Calendar`（`Location`、`DayStartOffset`、`BusinessDay(t) Day`、`DayStart(t)`、`NextDayStart(t)`）与 `Day`（十进制 `YYYYMMDD`，可存 DAO、可比较）；`ParseCalendar` / `LoadTimezone` / `ParseDayStart` / `NewCalendar`；进程级 `SetCalendar` / `ProcessCalendar` 与包级 `BusinessDay` / `DayStart` / `NextDayStart`。业务时钟带日历：`clock.NewBusinessIn(offset, calendar)`、`clock.CalendarOf(business)`，`app.BusinessCalendar(registry)` = `CalendarOf(app.BusinessClock(registry))`。重置时刻按墙上时间，夏令时那天 23 / 25 小时。
+- tzdata：生成的 `main.go`（`renderMain`）导入 `time/tzdata`；game-demo 没有自己的 main 模板，同一个 `renderMain`。“distroless 是否带 zoneinfo（尚未确认）”不再相关：编译出的 game-demo 进程在看不到系统 zoneinfo 的环境里（macOS `sandbox-exec` 拒读 `/usr/share/zoneinfo`、`/var/db/timezone`、`GOROOT/lib/time`，`TZ` 清空、`ZONEINFO` 指向空目录）接受 `Asia/Shanghai`；镜像本身仍未在容器内实测。
+- glsvet：业务包（`game` 目录）里的 `time.Local`、`time.LoadLocation` 打印 hint（同一个 `//glsvet:system-clock` 豁免）。
+- 文档：[guide/10-time §2A](../framework/guide/10-time.md#2a-业务时区与业务日)（推荐写法：存上次重置的业务日、登录 / 首次操作惰性重置、准点用实体定时器取 `NextDayStart`）、[impl/10-time §1A](../framework/impl/10-time.md#1a-业务日历design-todo-d18)、CODEGEN_REFERENCE §14、PROJECT_GENERATOR §13 / §14 / §17、生成工程的 IMPLEMENTATION 文档；idle-sim / merge-casual 手册的 UTC 日界夹具不改，补一句正式业务按 `time.business_timezone`。game-demo 没有日界逻辑（活动窗口按 Unix 纪元对齐，与时区无关），只在 `game/activity` 的 `WindowStart` 注释写明按日历的窗口用业务日历。
+- 与草案的偏差：① 只设 `ZONEINFO` 为空目录模拟不了“没有 zoneinfo”（Go 在 `ZONEINFO` 里找不到时回落到系统目录，实测仍加载成功），回归改用 macOS `sandbox-exec`，并先用不内嵌 tzdata 的对照程序确认环境确实看不到 zoneinfo，看不到才断言，否则 Skip（自带 zoneinfo 的 Linux 主机）。② `Day` 不做日期运算，周重置由业务按 `Day` 推。
+- 修前红：`infra/base/clock` 编译失败 `undefined: Calendar` / `undefined: ParseCalendar` 等（没有业务日函数）；`TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock` 报 `App does not declare time.business_timezone`；`TestRunSetsTheProcessCalendarAndLogsIt` 报 `process calendar after start = UTC 00:00`；`TestGeneratedConfigsWriteTheBusinessTimeZone` 对每个服务配置报 `does not write time.business_timezone: UTC and time.business_day_start: 00:00`；`TestGeneratedMainEmbedsTheTimeZoneDatabase` 报 `with the generated main's imports [] and no zoneinfo on the host, loading Asia/Shanghai: exit status 1: operation not permitted`；`TestDoctorChecksCrossModConfigRulesThroughTheProcess`（main 不导入 tzdata 时）报编译出的 game 进程 `config: time.business_timezone: business time zone "Asia/Shanghai" is not a time zone this process can load (...): operation not permitted`。变异核对：业务日改成“减去重置时刻取日期、起点 + 24h”，夏令时用例与整年不变量用例变红。
+- 剩余限制在 KNOWN-LIMITS“业务时区与每日重置”一行。
+
+## D19 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多
+
+**状态：维护者 2026-10-20 决定实施，已实施（2026-10-20，见下文“实施结果”）；压测与三项小决定待维护者。** 决定：①按本节模型实施；②`ViewID` 用 **int64**，由业务层分配与解释；③**同步层级**：视野给出同步层级（数据分级，例如联盟视野只同步标记为联盟层级的字段），同一目标被多个视野看见时同步级别高的（数据多的）；层级之间不是包含关系时，各层级的数据都同步（取并集）；④`MaxVisible` **按每个视野**计；⑤视野操作**不进 Nest、不做排队版**：视野的增删改、成员变更、挂接都是直接调用，由视野自身的锁保护；⑥上限缺省按建议（`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096，启动期可配）；⑦按最干净的方式处理、不留历史包袱：`RelationSource` 与按来源名的旧关系 API 删除，全部改为关系视野。登记：2026-10-20；源码基线 `057513bb`（D14 已实施）。来源：维护者确认“一个玩家确实会有多个视野”；随后补充：联盟数据同步这类 relation 需求要能归到同一模型（例如 alliance view），`viewId` 应是**逻辑 ID**、不能写死为实体 ID（否则绑死一个实体），例如副本的阵营视野。
+
+### 实施结果（2026-10-20）
+
+按 roost-coding 纯重构流程分步提交：先在旧 API 上补关系与多来源合并的回归基线（关系进出与 Hide、关系先撤距离仍持有、分档换视图、self 与 Leave、队伍互见与离场双向清理；断言只看 Manager 订阅表与 packer 收到的视图），再提交同步层级并集（entity + Manager），再改 policy 的结构与 API 并迁移全部调用方（基线用例只改准备步骤），最后补新行为用例并逐项变异验证。提交见 CHANGELOG `[Unreleased]` 本条。
+
+| 决定 | 落点 |
+| --- | --- |
+| ① 模型 | 空间视野：`DefineSpatialView(id, at, sight, follow)` / `MoveSpatialView` / `SetSpatialView` / `SetViewFollow`；关系视野：`DefineRelationView(id, layer)` / `SetViewMembers` / `AddViewMembers` / `RemoveViewMembers`；多对多：`AttachView` / `DetachView`，`RemoveView` 自动从所有玩家解除；合并：`hold.layers` 的来源键从来源名改为视野内部编号（空间视野区分距离与块覆盖，0 为 self），任一挂接视野持有就保持订阅，最后一个释放才退订 |
+| ② ViewID | `policy.ViewID int64`，业务分配与解释；`MainView = 0` 保留给主视野（见下“主视野”），业务视野不能用 0。内部另有不复用的 `handle` 作 AOI 观察者编号与来源键，业务 ID 只用于登记表查找 |
+| ③ 同步层级 | 层级 = `SyncProfile`，字段沿用 `NamedSyncView` 按 DAO 字段名列出；`entity.UnionSyncProfiles` / `SyncProfile.Layers` 定义并集身份（Key 为各层级身份排序后用 `+` 连接），`SyncViewSet.Lookup` 解析为字段并集、`Covers` 判断包含；Interest `selectedProfile`：被包含的去掉、字段相同按优先级留一个、其余取并集，包含关系按 `ViewSets` 每个类型的字段判断；Manager `profilePriority` 对并集取各层级最优，与 `Lookup` 一致——Manager 的 profile 结构不用改，并集仍是一个 `SyncProfile` |
+| ④ MaxVisible | 每个空间视野是 AOI 的一个观察者，`MaxVisible` / `MaxObserverBlocks` 自然按视野计 |
+| ⑤ 不进 Nest | 视野操作只取视野登记表的锁（`viewMu`），改事实并记一条变更，由下一次 `Apply` / 政策阶段按调用顺序应用，不等待空间计算；不提供排队版。排队入口的处理见下 |
+| ⑥ 上限 | `MaxViewsPerPlayer`（缺省 64，含主视野）、`MaxPlayersPerView`（缺省 4096），超出 `ErrViewLimit` 并计 `entitysync_interest_view_limit_rejected_total{reason}`；启动期 `worstObserverBlocks × MaxViewsPerPlayer ≤ MaxPlayerBlocks`（新配置项，缺省 1024 × 64） |
+| ⑦ 不留包袱 | 删除 `RelationSource`、`Source`、`SourceSpatial/Self/Block`、`InterestConfig.Relations / SourceProfiles / Profile / ObserverOf`、`Interest.Relation`、`QueueRelation` / `QueueRelationDelta`、`MoveShown`、`DefaultObserverOf`；层级配置改为 `BandLayer` / `BlockLayer` / `SelfLayer` |
+
+**排队入口的处理**：位置是 DAO 驱动的事实，必须与提交一致——回滚的移动不能让视野先看见新位置——所以 `QueueMove` / `QueueSpatial` / `QueueObservedBlocks` 保留提交门。改的是“谁跟着动”：空间视野可以跟随实体，事实应用时移动目标并带上跟随它的全部视野（主视野跟随玩家实体），于是 `observer` 参数与 `ObserverOf`（从实体换算观察者）都不再需要，删除；关系事实（`QueueRelation*`）属于视野配置，按决定⑤改为直接调用，删除。只有一套：位置走提交门，视野配置直接调用。Leave / Hide 对排队事实的改写保持“与先应用、再 Leave / Hide 逐项相同”：目标那一半作废，跟随者那一半保留。
+
+**主视野 ID 方案**：主视野是玩家 `Enter` / `Watch` 时自带的空间视野，没有全局 ViewID，只在按玩家的入口里出现（D14 的 `Enter` / `Watch` / `MoveView` / `SetObserverView` / `ObserverView` / `Visible` / `Unwatch` / `Leave` 都作用于它），文档与代码里用 `policy.MainView`（0）指代；所以 0 对业务视野保留。它只挂给玩家自己、计入 `MaxViewsPerPlayer`，不能被别人挂接（观战用 `Watch`，或业务另定义一个跟随目标的空间视野）。
+
+与草案的偏差：① ViewID 用 int64（决定②），不是字符串。② `SetSpatialViewRadius` 改为 `SetSpatialView(id, ObserverView)`，LOD 与视野大小一起改、归一规则同主视野；另加 `SetViewFollow`。③ 跟随实体不只用于自排除，视点也随实体移动（因此删掉 `observer` 参数与 `ObserverOf`）；`SetViewFollow(id, 0)` 后视点留在当前位置。④ `Move(entityID, to)` 合并了 `Move(player, entity, to)` 与 `MoveShown`。⑤ 草案“分档取最近档”“MaxVisible 按玩家并集”“提供排队版”“保留 RelationSource 薄封装”按决定③④⑤⑦改。⑥ 草案 7 的“分档表随玩家的 LOD 层级”改为每个空间视野有自己的 `ObserverView`（LOD 与半径），客户端 LOD 请求只改主视野。⑦ 块预算新增 `MaxPlayerBlocks`，没有把 `MaxObserverBlocks` 改成按玩家（见下“需要决定”）。⑧ 记过业务视野变更之后 Manager 的政策阶段也结算与重试（与排过事实同一规则），Drain 计入未应用的视野变更。⑨ 新增 `Seen(playerID)`（玩家经任一视野持有的全部目标，诊断与 sync-aoi 核对用）、`ViewPlayers` / `ViewMembers` / `ViewVisible`、`AOI.FlushBlocks`。
+
+调用方：game-demo 队伍改为每队一个关系视野（`Scene.SetTeam`，空了就 `RemoveView`）；SLG 夹具联盟改为共享关系视野（联盟同步示例）、侦察为私有关系视野；MMORPG 夹具 `BandLayer`；codegen nestgame / dataengine 夹具与 `scripts/perf/sync-aoi` 去掉 `observer` / `ObserverOf`，sync-aoi 新增 `-views-per-player`（每个玩家额外的跟随视野）与 `-alliance-size`（共享关系视野）场景开关，两项为 0 时负载不变。
+
+**需要维护者决定**（都不阻塞使用）：
+
+1. 跨政策来源的层级：同一 pair 同时被 Interest 与 Group / Direct / SelfView 持有时，Manager 仍按优先级取一个视图（未改）。A 保持（推荐：不同政策一般不在同一 Manager 上同看一个目标，SelfView 的 `self` 通常已是全字段）；B 在 Manager 的 `bestProfile` 里也取并集——Manager 不知道字段，只能一律并集身份，会改变现有 SelfView / Group 的视图身份。
+2. 块预算形式：A 现状（推荐），`MaxObserverBlocks` 仍按单个视野，另加 `MaxPlayerBlocks` 核算 `worst × MaxViewsPerPlayer`，缺省下只有单视野已超预算才触发；B 把 `MaxObserverBlocks` 改成按玩家，缺省 1024 ÷ 64 = 每视野 16 块，game-demo（最大视野 300、块 100，每视野 64 块）等现有配置启动即被拒，须各自调大。
+3. 关系视野是否排除挂接玩家自己的实体：A 不排除（推荐，现状），自己经 self 与联盟两个层级看见自己，按包含取高或取并集；B 排除，需要知道每个玩家的自身实体，挂接、成员变化时多一层过滤。
+
+### 现状（已核对源码）
+
+- D14（A1）之后观察者 = playerId，空间视点每个玩家**一个**：`Interest.Enter(playerID, entityID, at, view)` / `Watch`、`MoveView(playerID, to)`、`SetObserverView`。
+- 关系源 `RelationSource.Set(playerID, entityIDs)`（`policy/source.go`）按**玩家**存成员集合，没有距离分档（band 0）。联盟“成员彼此同步”要对每个成员各 `Set` 一份相同集合：N 个成员 × M 个目标，成员变化要改 N 份。
+- `Interest` 已经有按 `(player, subject)` 跨来源合并的机制：`held map[pair]*hold`，`hold.bands` 按**来源名**记各来源给的档（`interest.go:116-140`），任一来源持有就保持订阅，全部释放才退订。缺的是：来源内部不能区分“同一玩家的多个视点”，也不能让一份来源被多个玩家共享。
+- D14 之前靠 `Session` 多对一表达多视野，因为订阅合并不计数会互相退订（D14 第 1 步回归复现），不能作为方案。
+
+### 方案（建议）
+
+1. **视野 = 逻辑 ID 的可见性来源**：`ViewID` 是业务给的逻辑键（建议字符串，例如 `"alliance:123"`、`"camp:dungeon42:red"`、`"ward:777"`、`"unit:9001"`），**不绑定实体**；空间视野可以选择“跟随某个实体”，但跟随关系可改、可为空。
+2. **两类视野**：
+   - **空间视野**：一个点 + `ObserverView`（LOD / 半径）+ 可选 `self`（跟随实体，用于自排除）。玩家主视野（镜头）就是一个空间视野，D14 的 `Enter` / `Watch` / `MoveView` / `SetObserverView` 作用于它（保留现有 API）。
+   - **关系视野**：一个显式的实体集合（联盟成员、队伍、好友、阵营全体单位），可配一个固定档（缺省 band 0）。现有 `RelationSource` 保留为“每个玩家私有的关系视野”的写法，或改为在其上的薄封装。
+3. **玩家与视野多对多（Attach / Detach）**：一个玩家可挂多个视野，一个视野可被多个玩家共享。
+   - 联盟：`alliance:123` 关系视野挂给全体成员；成员加入 / 退出只改这一份集合和挂接关系。
+   - 副本阵营视野：`camp:…:red` 下挂该阵营所有单位 / 眼位的空间视野（或阵营本身是一组空间视野），挂给阵营里每个玩家——任何一个单位看得见，全阵营都看得见。
+   - 玩家个人的多单位视野（RTS、召唤物）：每个单位一个空间视野，只挂给自己。
+4. **合并沿用现有 `held`**：把 `hold` 的来源键从“来源名”扩成“视野 ID”；`(player, subject)` 只要有任一挂接的视野持有就订阅，最后一个释放才退订（不会互相退订）；分档取各视野里**最近**（细节最多）的一档，关系视野按其固定档参与比较。
+5. **API（草案）**：`DefineSpatialView(viewID, at, view, self)` / `MoveSpatialView` / `SetSpatialViewRadius`；`DefineRelationView(viewID, band)` / `SetViewMembers(viewID, subjects)` / `AddViewMembers` / `RemoveViewMembers`；`AttachView(playerID, viewID)` / `DetachView`；`RemoveView(viewID)`（自动从所有玩家解除）。事务内入口提供排队版（放眼、召唤、入盟多在事务里，走提交门）。
+6. **预算与上限**：`MaxViewsPerPlayer`（挂接数）、`MaxPlayersPerView`（共享扇出）、空间视野半径仍夹到 `[MinViewRadius, MaxLeaveRadius]`；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算块预算；`MaxVisible` 按玩家并集计。
+7. **LOD 与半径**：客户端 LOD 请求只改玩家主视野；其他空间视野的半径由服务端设；分档表随玩家的 LOD 层级。
+8. **自排除**：空间视野排除自己跟随的实体；玩家自己的其他单位照常按距离或由关系视野（例如 `self`）保证可见。
+
+### 代价与风险
+
+- 共享视野的变化（关系成员增减、阵营单位移动）要扇出到挂接的所有玩家，成本 = 变化量 × 挂接人数，由 `MaxPlayersPerView` 约束；大联盟（上千人）挂接时要测。
+- 空间视野多的玩家 / 阵营（RTS 上百单位），目标移动时要评估相关块上的所有视野，评估量线性增长；需要 benchstat 与 sync-aoi 加多视野、共享视野场景。
+- 分档取最近档会增加切档次数；`AOICluster` 镜像要按视野登记。
+- 这是 D14 刚改的同一批代码（policy 包），公开 API 再改一次；建议在发版前一起完成，v1.30.0 只出现一次 AOI 接口变化。
+
+### 未采用
+
+- `viewID` 用实体 ID：绑死一个实体，阵营 / 联盟 / 眼位这类不是“一个实体”的视野表达不了（维护者 2026-10-20）。
+- 回到 `Session` 多对一：订阅合并不计数，互相退订。
+- 每个视野一个独立会话：客户端要处理多路订阅与去重，带宽翻倍。
+- 关系需求继续每成员各 `Set` 一份：N × M 存储与 N 倍更新。
+
+### 需要拍板
+
+1. 是否按“视野 = 逻辑 ID、空间 / 关系两类、玩家与视野多对多、合并沿用 held 计数”实施（建议是）。
+2. `ViewID` 类型：字符串（建议，可读、天然带命名空间）还是 int64。
+3. 多视野分档取最近档（建议）。
+4. `MaxVisible` 按玩家并集计（建议）。
+5. 视野增删改、成员变更、挂接是否提供排队版（建议提供）。
+6. 缺省上限：`MaxViewsPerPlayer` 64、`MaxPlayersPerView` 4096（建议，启动期可配，预算按它们算）。
+7. 现有 `RelationSource` 去留：保留为“玩家私有关系视野”的薄封装（建议，现有调用方不改），还是全部迁到关系视野 API。

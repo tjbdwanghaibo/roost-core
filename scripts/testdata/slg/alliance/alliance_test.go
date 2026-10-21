@@ -80,7 +80,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 		t.Fatal("phase advanced with open admission", e)
 	}
 	// 侦察是独立授权来源；退盟撤销共享视野，但仍有侦察权时不应隐藏据点。
-	f.interest.Relation("scout").Set(2, []int64{99})
+	check(t, f.interest.AttachView(2, scoutView))
 	if !f.visible(t, 2) {
 		t.Fatal("scout view missing")
 	}
@@ -91,7 +91,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 	if !f.visible(t, 2) {
 		t.Fatal("revoking alliance incorrectly removed scout")
 	}
-	f.interest.Relation("scout").Clear(2)
+	check(t, f.interest.DetachView(2, scoutView))
 	if f.visible(t, 2) || !f.visible(t, 1) {
 		t.Fatal("last source revocation incorrect")
 	}

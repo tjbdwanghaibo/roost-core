@@ -499,6 +499,50 @@ func TestEntityManagerDestroyCancelsWhileEntityLockIsHeld(t *testing.T) {
 	}
 }
 
+// WithLocked：持实体锁执行 fn（另一个 goroutine 拿不到锁）；锁被别人持有时按 ctx 截止返回、fn 不执行；
+// 已移除或已不是当前托管实例时返回 ErrEntityRemoved / ErrEntityNotManaged、fn 不执行。
+func TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance(t *testing.T) {
+	mgr := NewEntityManager()
+	value := newMgrTestEntity(1031, testEntityCategoryPlayer)
+	mgr.Add(value)
+	mu := value.GetMutex()
+	ran := false
+	if err := mgr.WithLocked(context.Background(), value, func() {
+		ran = true
+		taken := make(chan bool, 1)
+		go func() { taken <- mu.TryLock() }()
+		if <-taken {
+			t.Error("another goroutine took the entity lock while fn ran")
+		}
+	}); err != nil || !ran {
+		t.Fatalf("WithLocked = %v, ran=%v", err, ran)
+	}
+	if !mu.TryLock() {
+		t.Fatal("WithLocked kept the entity lock")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- mgr.WithLocked(ctx, value, func() { t.Error("fn ran while another goroutine held the lock") })
+	}()
+	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WithLocked with the lock held elsewhere = %v, want DeadlineExceeded", err)
+	}
+	mu.Unlock()
+
+	stale := newMgrTestEntity(1031, testEntityCategoryPlayer)
+	if err := mgr.WithLocked(context.Background(), stale, func() { t.Error("fn ran for an instance that is not managed") }); !errors.Is(err, ErrEntityNotManaged) {
+		t.Fatalf("WithLocked of an unmanaged instance = %v, want ErrEntityNotManaged", err)
+	}
+	if err := mgr.Destroy(context.Background(), value, testDestroyCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.WithLocked(context.Background(), value, func() { t.Error("fn ran for a removed instance") }); !errors.Is(err, ErrEntityRemoved) {
+		t.Fatalf("WithLocked of a removed instance = %v, want ErrEntityRemoved", err)
+	}
+}
+
 func TestEntityManagerDestroyCancellationAfterAdmissionStillFinalizes(t *testing.T) {
 	for _, admission := range []DeleteAdmission{DeleteAdmissionImmediate, DeleteAdmissionIndeterminate} {
 		mgr := NewEntityManager()

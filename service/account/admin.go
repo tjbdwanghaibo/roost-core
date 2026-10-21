@@ -60,6 +60,14 @@ type Admin interface {
 	// CreateRole and abandoning it would have to burn or release a committed
 	// name.
 	ResolvePendingCreation(ctx context.Context, accountID string, serverID int32, note string) (plan RoleCreation, err error)
+
+	// MergeServer records that one game server is merged into another (alias
+	// merge, merge.go): the source's roles keep their identity and are served
+	// by the target from then on. UnmergeServer removes the alias. Both are
+	// operator writes — they change which process every role of a server
+	// logs in to — so, like ResolvePendingCreation, they are not on the bus.
+	MergeServer(ctx context.Context, request MergeRequest) (MergeResult, error)
+	UnmergeServer(ctx context.Context, from int32, note string) (MergeResult, error)
 }
 
 // MaxAdminNoteBytes bounds an operator note. It is stored on the account and

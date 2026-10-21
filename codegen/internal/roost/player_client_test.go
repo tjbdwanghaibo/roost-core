@@ -243,6 +243,43 @@ func TestGeneratedPlayerTCPStopContract(t *testing.T) {
 	}
 }
 
+// D16：生成的嵌入 TCP Mod 在 Provide 时把 entity.kick 挂到 App 的 admin 注册表；生成测试经正式 TCP 连接验证踢下线
+// 真的关掉了客户端连接。只编译并运行这一个生成测试。
+func TestGeneratedPlayerTCPAdminKick(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles and runs the generated game-demo player TCP package")
+	}
+	t.Parallel()
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := copyOfNewProject(t, "game-demo")
+	goModPath := filepath.Join(root, "go.mod")
+	goMod, err := os.ReadFile(goModPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`)
+	goMod = replace.ReplaceAll(goMod, nil)
+	goMod = append(goMod, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
+	if err := os.WriteFile(goModPath, goMod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "test", "-mod=mod", "-race", "-count=1", "-v", "-run", "^TestAdminEntityKickClosesThePlayersConnections$", "./internal/access/player/tcp/")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated entity.kick: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "--- PASS: TestAdminEntityKickClosesThePlayersConnections") {
+		t.Fatalf("the generated entity.kick test did not run and pass:\n%s", out)
+	}
+}
+
 // 正式生成TCP+生成PB类型+真实C#客户端，不用mock连接替代协议消费。
 const clientSDKGeneratedTest = `package tcp
 import (

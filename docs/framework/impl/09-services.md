@@ -21,7 +21,7 @@
 
 ## 2A. 一个服务的两层实现
 
-以mail为例，[service.go](../../../service/mail/service.go)的New/Send/deliverAndRecord承担领域输入、请求身份、信封和投递结果；存储能力由store/redis_store提供。[mail_mod.go](../../../wiring/mail/mail_mod.go)从配置和Registry接线，生成mail_rpc_assembly_gen.go发布能力、注册Server/ClientMod，不能在Mod里另发一份绕过Send幂等的邮件。
+以mail为例，[service.go](../../../service/mail/service.go)的New/Send/deliverAndRecord承担领域输入、请求身份、信封和投递结果；存储能力由store/redis_store提供。[mail_mod.go](../../../wiring/mail/mail_mod.go)从配置和Registry接线，生成mail_rpc_assembly_gen.go发布能力、注册Server/ClientMod，不能在Mod里另发一份绕过Send幂等的邮件。全服邮件的内置策略 LazyBroadcast 在 [broadcast.go](../../../service/mail/broadcast.go)：账本是一个 versionstore 文档（分配全局邮件 ID 与登记同一次 CAS），旁边一个只增的版本提示键供读路径 O(1) 判断是否变化；合并（`Mailbox.mergeBroadcasts`）与水位在邮箱的同一次 CAS（`Service.refreshMailbox`）里移动。Mod 只在策略没有自带账本时给它 Redis 账本。
 
 account是当前分层例外：[account_mod.go](../../../wiring/account/account_mod.go)的NewMod要求IdentityVerifier、PlayerIDAllocator、NameValidator及Reporter；[service.go](../../../service/account/service.go)仍在同一kit包承担领域逻辑。prefix通过声明必填，不能静默共用所有项目的默认键。
 

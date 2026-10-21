@@ -1,0 +1,27 @@
+=== RUN   TestCatchupDrillEmbeddedTCP
+=== RUN   TestCatchupDrillEmbeddedTCP/rate0KBps
+    zz_night_catchup_drill_test.go:236: rate 0 KB/s: backlog 3000 frames, client read 1361529 B over 3248 frames (419 B/frame); server catch-up done 3.235s (client had 1287329 B); client at head 3.268s; expected backlog/(rate-live) 0s; ratio 0.00; Tick errors 0 (last <nil>); closed false; live after head true; client next 3249 head 3248
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.frames.total: [] -> [map[]=3097]
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.pages.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.failed.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.unservable.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.snapshot.total: [] -> []
+=== RUN   TestCatchupDrillEmbeddedTCP/rate256KBps
+    zz_night_catchup_drill_test.go:236: rate 256 KB/s: backlog 3000 frames, client read 1386849 B over 3308 frames (419 B/frame); server catch-up done 3.235s (client had 791122 B); client at head 5.267s; expected backlog/(rate-live) 5.167s; ratio 1.02; Tick errors 0 (last <nil>); closed false; live after head true; client next 3309 head 3308
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.frames.total: [map[]=3097] -> [map[]=6194]
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.pages.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.failed.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.unservable.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.snapshot.total: [] -> []
+=== RUN   TestCatchupDrillEmbeddedTCP/rate64KBps
+    zz_night_catchup_drill_test.go:236: rate 64 KB/s: backlog 3000 frames, client read 1654309 B over 3911 frames (423 B/frame); server catch-up done 8.036s (client had 496080 B); client at head 25.367s; expected backlog/(rate-live) 24.731s; ratio 1.03; Tick errors 1 (last catchup session 1: context deadline exceeded); closed false; live after head true; client next 3912 head 3911
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.frames.total: [map[]=6194] -> [map[]=9435]
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.pages.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.failed.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.catchup.unservable.total: [] -> []
+    zz_night_catchup_drill_test.go:239: metric lockstep.snapshot.total: [] -> []
+--- PASS: TestCatchupDrillEmbeddedTCP (50.45s)
+    --- PASS: TestCatchupDrillEmbeddedTCP/rate0KBps (8.78s)
+    --- PASS: TestCatchupDrillEmbeddedTCP/rate256KBps (10.79s)
+    --- PASS: TestCatchupDrillEmbeddedTCP/rate64KBps (30.88s)
+PASS

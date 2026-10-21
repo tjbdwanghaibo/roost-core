@@ -3,11 +3,13 @@ package persistflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -113,6 +115,105 @@ func TestGeneratedDataEngineReloadWaitsForProjection(t *testing.T) {
 			default:
 			}
 
+			h.close(t, nil)
+		})
+	}
+}
+
+// entity.unload（D16，Runtime.UnloadEntity）走正式生成 Entity / DAO、Nest 事务、文件 WAL 与真实 Mongo：
+//   - 已提交、投影卡在门上的修改先落库再卸载；卸载期间写到该实体的事务以可重试的 ErrEntityUnloading 拒绝并回滚，
+//     其他实体照常写；卸载后冷加载读回卸载前的内存状态，之后照常写、投影无冲突。
+//   - 投影在 timeout 内没完成：ErrEntityUnloadTimeout，实体留在内存、屏障撤销，之后的写入照常。
+//
+// strict / async / pipelined 各跑一次。
+func TestGeneratedDataEngineAdminUnload(t *testing.T) {
+	ctx, client := reloadTestClient(t)
+	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityStrict, nest.DurabilityAsync, nest.DurabilityPipelined} {
+		t.Run(policy.String(), func(t *testing.T) {
+			base := 34000 + int(policy)*10
+			clearTraderDocuments(t, ctx, client, base, 2)
+			h := newTradeFixture(t, ctx, client, t.TempDir(), "admin-unload", policy, false)
+			ids := h.seed(t, base, 2)
+			target, other := ids[0], ids[1]
+
+			// 超时：一笔转账卡在投影门上，短 timeout 的卸载失败，实体不受影响。
+			pause := h.gate.pause()
+			if err := h.request("trade_transfer", ids...); err != nil {
+				t.Fatal(err)
+			}
+			waitTradeRecord(t, ctx, pause, ids)
+			short, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+			_, err := h.runtime.UnloadEntity(short, target)
+			stop()
+			if !errors.Is(err, engine.ErrEntityUnloadTimeout) || h.access.Manager().Get(target) == nil {
+				t.Fatalf("unload with a pending projection = %v (resident=%v), want ErrEntityUnloadTimeout and the entity kept", err, h.access.Manager().Get(target) != nil)
+			}
+			if h.runtime.Projector.Stats().UnloadingEntities != 0 {
+				t.Fatal("the barrier outlived the timed-out unload")
+			}
+			pause.resume()
+			h.noFatal(t, h.runtime.Flush(ctx), "after the timed-out unload")
+
+			// 排空后卸载。
+			pause = h.gate.pause()
+			defer pause.resume()
+			if err := h.request("trade_transfer", ids...); err != nil {
+				t.Fatal(err)
+			}
+			waitTradeRecord(t, ctx, pause, ids)
+			before := h.memoryState(t, target)
+			unloaded := make(chan error, 1)
+			go func() {
+				bounded, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				result, err := h.runtime.UnloadEntity(bounded, target)
+				if err == nil && (!result.Resident || !result.Unloaded || result.Drained == 0) {
+					err = fmt.Errorf("unload result %+v", result)
+				}
+				unloaded <- err
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for h.runtime.Projector.Stats().UnloadingEntities != 1 {
+				if time.Now().After(deadline) {
+					t.Fatal("the unload barrier was not raised")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			err = h.request("trade_buy", target)
+			if !errors.Is(err, coredata.ErrEntityUnloading) || !errors.Is(err, nest.ErrCommitRejected) {
+				t.Fatalf("write during unload = %v, want ErrEntityUnloading", err)
+			}
+			if got := h.memoryState(t, target); got != before {
+				t.Fatalf("the refused write was not rolled back: %+v, was %+v", got, before)
+			}
+			if err := h.request("trade_buy", other); err != nil {
+				t.Fatalf("another entity during the unload: %v", err)
+			}
+			pause.resume()
+			if err := <-unloaded; err != nil {
+				t.Fatal(err)
+			}
+			if h.access.Manager().Get(target) != nil {
+				t.Fatal("the entity is still resident after entity.unload")
+			}
+			if got := h.mongoState(t, target); got != before {
+				t.Fatalf("Mongo after unload = %+v, memory before = %+v", got, before)
+			}
+			// 冷加载：读回卸载前的状态，写入照常。
+			if err := h.request("trade_buy", target); err != nil {
+				t.Fatalf("write after unload: %v", err)
+			}
+			after := h.memoryState(t, target)
+			if after.Coins != before.Coins-5 || after.Version != before.Version+1 {
+				t.Fatalf("after cold load and write = %+v, before = %+v", after, before)
+			}
+			h.noFatal(t, h.runtime.Flush(ctx), "after the unload")
+			if got := h.mongoState(t, target); got != after {
+				t.Fatalf("Mongo = %+v, memory = %+v", got, after)
+			}
+			if stats := h.runtime.Projector.Stats(); stats.UnloadingEntities != 0 || stats.UnloadAdmissionRejected != 1 {
+				t.Fatalf("barrier stats = %+v", stats)
+			}
 			h.close(t, nil)
 		})
 	}

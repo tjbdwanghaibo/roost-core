@@ -14,49 +14,51 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// Interest 内建距离、额外块覆盖与自身来源；业务关系通过 Relation 添加。
-const (
-	SourceSpatial = "spatial"
-	SourceSelf    = "self"
-	SourceBlock   = "block"
-)
-
 // InterestConfig shapes an Interest.
 type InterestConfig struct {
 	// MaxQueuedFacts 限制正式提交事实队列；零值为 65536。
 	MaxQueuedFacts int
 	// BatchSize 是每批就绪事实的软上限，零值1024；不切开同一Nest提交。
 	BatchSize int
-	// Workers 限制同一批次并行观察者计算数；零值取GOMAXPROCS。
+	// Workers 限制同一批次并行视野计算数；零值取GOMAXPROCS。
 	Workers int
 	// Manager receives the subscriptions. Required.
 	Manager *entitysync.Manager
 	// AOI 配置空间网格、缺省进入/离开半径、视野范围、LOD 层级与距离分档；由 NewAOI 校验。
+	// 每个空间视野（玩家主视野与业务的空间视野）各自是 AOI 的一个观察者，MaxVisible 与 MaxObserverBlocks 都按视野计。
 	AOI AOIConfig
-	// ObserverOf 把事务内入口（QueueMove / QueueSpatial 的 observer=true、QueueRelation / QueueRelationDelta）
-	// 的实体换成观察者的玩家 ID；ok 为 false 表示这个实体不代表任何观察者，入队即拒绝。
-	// nil 取 entity.GetUniqueIDFromEntityID（Player 实体的唯一号就是玩家 ID），结果为 0 视为不是观察者。
-	// 玩家控制英雄、载具时视点实体不是 Player，业务覆盖它。它在业务线程的 Entity 锁内调用，必须是纯函数、不阻塞。
-	ObserverOf func(entityID int64) (playerID int64, ok bool)
-	// ViewChangeInterval 是同一玩家两次视野修改（SetObserverView）之间的最小间隔，超频的请求拒绝并计数；
-	// 零值 1 秒，负数拒绝构造。
+	// ViewChangeInterval 是同一玩家两次主视野修改（SetObserverView）之间的最小间隔，超频的请求拒绝并计数；
+	// 零值 1 秒，负数拒绝构造。服务端改业务空间视野（SetSpatialView）不限速。
 	ViewChangeInterval time.Duration
-	// Profile turns a distance band into the profile a subscription asks
-	// for. Nil means band 0 → the default profile, band n → {Key: "bandN", LOD: n}.
-	Profile func(band int) entity.SyncProfile
-	// SourceProfiles 显式覆盖某来源、某距离档的视图；未配置的档继续使用 Profile。
-	// 例如 self→owner，spatial→near/far，team→team；构造时复制，来源名必须已声明。
-	SourceProfiles map[string]map[int]entity.SyncProfile
-	// ViewSets 非空时校验本 Interest 涉及的实体类型及其视图；构造时复制 map。
-	// 每个类型应支持可选来源视图，动态关系 band 在订阅前校验。
+	// BandLayer 把空间视野的距离档换成同步层级（订阅要的视图）。nil 取 DefaultBandProfile：
+	// 0 档 → 缺省视图，n 档 → {Key: "bandN", LOD: n}。
+	BandLayer func(band int) entity.SyncProfile
+	// BlockLayer 是额外块覆盖（QueueObservedBlocks）给的层级；零值跟随空间视野 0 档。
+	BlockLayer entity.SyncProfile
+	// SelfLayer 是玩家经 self 看自己的层级；零值是缺省视图（"default"）。
+	SelfLayer entity.SyncProfile
+	// ViewSets 非空时校验本 Interest 涉及的实体类型及其视图（每个类型都要声明用到的每个层级），并用各层级的字段
+	// 判断包含关系：同一目标被几个层级看见时，被别的层级包含的不再单独订阅，剩下的取并集（见 selectedProfile）。
+	// 不配置时不知道字段，几个不同的层级一律取并集身份（entity.UnionSyncProfiles）。构造时复制 map。
 	ViewSets map[string]*entity.SyncViewSet
-	// Relations are the named relation sources to create ("team",
-	// "friends", …); Relation(name) reaches them. SourceSelf is always there.
-	Relations []string
-	// SelfVisible 控制观察者是否通过 self 关系看见自己；空间来源不会建立自身订阅。
+	// SelfVisible 控制玩家是否通过 self 看见自己；空间视野不会订阅自己跟随的实体。
 	// nil 或 true 启用，只有显式 false 才关闭。
 	SelfVisible *bool
+	// MaxViewsPerPlayer 限制一个玩家同时挂接的视野数（含主视野），零值 64，超出 AttachView / Enter / Watch 返回 ErrViewLimit。
+	MaxViewsPerPlayer int
+	// MaxPlayersPerView 限制一个视野同时挂接的玩家数（共享视野的扇出），零值 4096，超出 AttachView 返回 ErrViewLimit。
+	MaxPlayersPerView int
+	// MaxPlayerBlocks 是一个玩家全部空间视野合计最多订阅的块数，启动期按 worstObserverBlocks × MaxViewsPerPlayer 核算，
+	// 超出即拒绝构造（ErrInterestBudget）。零值取 DefaultMaxObserverBlocks × DefaultMaxViewsPerPlayer，
+	// 即缺省配置下只有单个视野已经超预算时才会触发；调大 MaxViewsPerPlayer 或视野半径时由它把总成本挡在启动期。
+	MaxPlayerBlocks int
 }
+
+// Interest 的视野与挂接缺省上限。
+const (
+	DefaultMaxViewsPerPlayer = 64
+	DefaultMaxPlayersPerView = 4096
+)
 
 // Refusal is a subscribe the manager did not take. Observer 是玩家 ID（会话 ID），Subject 是实体 ID。 Interest keeps asking on
 // every Apply until it is taken or the pair is released; the caller only
@@ -69,53 +71,62 @@ type Refusal struct {
 	Err      error
 }
 
-// Interest is the area-of-interest policy: a spatial index plus any number of
-// relation sources, aggregated into one subscription per (observer, subject)
-// and said to the manager.
+// Interest 按视野组织订阅：视野（View）是可见性来源，分空间视野（一个点 + 视野大小与 LOD + 可选跟随实体）与
+// 关系视野（显式实体集合 + 一个同步层级）两类；玩家与视野多对多（AttachView / DetachView），玩家 Enter / Watch 时
+// 自带一个主视野。合并成每个 (玩家, 目标) 一份订阅说给 Manager。
 //
-// 编号：观察者是玩家 ID，也就是会话 ID；目标是实体 ID。所以合并键 (observer, subject) 就是 Manager 的
-// (session, subject)，一个会话只对应一个观察者，不会出现两个观察者合用一份订阅、其中一个退订把另一个也退掉的情况。
-// 关系源同样是“玩家关心哪些实体”：RelationSource.Set(playerID, entityIDs)。
+// 编号：玩家 ID 就是会话 ID；目标是实体 ID；视野 ID（ViewID）由业务分配，0 保留给主视野。合并键 (player, subject)
+// 就是 Manager 的 (session, subject)。
 //
-// Aggregation is the part worth reading. A pair can be held by more than one
-// source at once — a teammate standing next to you is both spatial and team —
-// so Interest retains each source: the FIRST source to claim a pair subscribes,
-// and only the LAST source to drop it unsubscribes. Without that, a teammate
-// walking out of view would take the team subscription with them.
+// 合并是要读懂的部分：一个 pair 可以同时被几个视野持有——站在身边的盟友既在主视野里又在联盟视野里，阵营的两个单位
+// 都看得见同一个敌人——held 按视野记各自给的层级：第一个持有的视野订阅，最后一个释放的视野才退订，所以一个视野
+// 看不见了不会把另一个视野还要的订阅退掉。层级按 selectedProfile 合并：包含关系取数据多的，不包含取并集。
 //
-// Interest.mu 串行化政策批次、生命周期和订阅归并；批次内按 observer 并行计算。
-// Queue* 只持独立 queueMu，不等待空间计算。两个锁仅按 mu→queueMu 获取。
+// 锁：mu 串行化政策批次、生命周期、AOI 与订阅归并；批次内按空间视野并行计算。Queue* 只持 queueMu，不等待空间计算；
+// 业务视野操作（Define* / Set* / Attach / Detach / Remove）只持 viewMu，在登记表里改事实并记一条变更，由下一次
+// Apply（或排队模式下 Manager 的政策阶段）按顺序应用，同样不等待空间计算。锁序 mu → queueMu、mu → viewMu，
+// queueMu 与 viewMu 不同时持有。
 type Interest struct {
 	// queueMu 只保护事实准入和角色登记；不能包住空间计算或订阅操作。
 	queueMu     sync.Mutex
 	queueClosed bool
-	// subjectRoles 按实体 ID、observerRoles 按玩家 ID 记录已登记的角色，供事实准入检查。
-	subjectRoles     map[int64]struct{}
-	observerRoles    map[int64]struct{}
-	inflight         int
-	batchSize        int
-	workers          int
-	queueActive      bool
-	facts            []queuedInterestFact
-	maxQueuedFacts   int
-	wake             func()
-	cancelQueue      func()
+	// subjectRoles 按实体 ID 记录已登记的目标，供事实准入检查。
+	subjectRoles   map[int64]struct{}
+	inflight       int
+	batchSize      int
+	workers        int
+	queueActive    bool
+	facts          []queuedInterestFact
+	maxQueuedFacts int
+	wake           func()
+	cancelQueue    func()
+
+	// 视野登记表，见 view.go；viewMu 保护。
+	registry viewRegistry
+
 	mu               sync.Mutex
 	subscriptions    *entitysync.SubscriptionSource
 	aoi              *AOI
-	self             *RelationSource
-	relations        map[string]*RelationSource
-	sources          []Source
-	observerOf       func(int64) (int64, bool)
-	profile          func(int) entity.SyncProfile
-	sourceProfiles   map[string]map[int]entity.SyncProfile
+	selfVisible      bool
+	bandLayer        func(int) entity.SyncProfile
+	blockLayer       entity.SyncProfile
+	selfLayer        entity.SyncProfile
 	compareProfiles  func(entity.SyncProfile, entity.SyncProfile) int
 	viewSets         map[string]*entity.SyncViewSet
 	validatePriority func(entity.SyncView) error
+	// covers 缓存层级之间的包含关系（ViewSets 不变），受 mu 保护。
+	covers map[[2]entity.SyncProfile]bool
 
-	// held maps a pair to the sources currently claiming it and to whether
-	// the manager has been told about it.
-	held map[pair]*hold
+	// 已应用的视野状态（mu 保护）：spatialPlayers 是每个空间视野（AOI 观察者编号）已生效的挂接玩家，AOI 事件按它扇出；
+	// followers 是实体 → 跟随它的空间视野，实体移动时一起移动；selfOf 是玩家 → 经 self 看见的自身实体。
+	spatialPlayers map[int64]map[int64]struct{}
+	followers      map[int64]map[int64]struct{}
+	selfOf         map[int64]int64
+
+	// held maps a pair to the views currently claiming it and to whether
+	// the manager has been told about it. touched 是自上次 Apply 以来贡献变过的 pair。
+	held    map[pair]*hold
+	touched map[pair]struct{}
 	// retry holds the pairs whose subscribe the manager refused, waiting
 	// for the next Apply to say them again.
 	retry []pair
@@ -133,8 +144,16 @@ type Interest struct {
 
 type pair struct{ observer, subject int64 }
 
+// contribution 是一个视野对一个 pair 的持有：view 是视野的内部编号（空间视野即 AOI 观察者编号），
+// block 区分空间视野的距离可见与额外块覆盖；view 为 0 是 self。
+type contribution struct {
+	view  int64
+	block bool
+}
+
+// hold 记各视野给这个 pair 的层级，以及 Manager 是否已被告知、告知的是哪个视图。
 type hold struct {
-	bands      map[string]int
+	layers     map[contribution]entity.SyncProfile
 	subscribed bool
 	profile    entity.SyncProfile
 }
@@ -147,10 +166,6 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if err != nil {
 		return nil, err
 	}
-	observerOf := config.ObserverOf
-	if observerOf == nil {
-		observerOf = DefaultObserverOf
-	}
 	if config.ViewChangeInterval < 0 {
 		return nil, fmt.Errorf("%w: negative view change interval", ErrInterestConfig)
 	}
@@ -158,20 +173,41 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if viewInterval == 0 {
 		viewInterval = DefaultViewChangeInterval
 	}
-	profile := config.Profile
-	if profile == nil {
-		profile = DefaultBandProfile
+	bandLayer := config.BandLayer
+	if bandLayer == nil {
+		bandLayer = DefaultBandProfile
 	}
-	if config.BatchSize < 0 || config.Workers < 0 {
+	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 {
 		return nil, ErrInterestConfig
 	}
-	in := &Interest{
-		subjectRoles: make(map[int64]struct{}), observerRoles: make(map[int64]struct{}),
-		batchSize: config.BatchSize, workers: config.Workers,
-		aoi: manager, observerOf: observerOf, profile: profile,
-		relations: make(map[string]*RelationSource), held: make(map[pair]*hold),
-		viewInterval: viewInterval, viewChanged: make(map[int64]time.Time), now: time.Now,
+	maxViews := cmp.Or(config.MaxViewsPerPlayer, DefaultMaxViewsPerPlayer)
+	maxPlayers := cmp.Or(config.MaxPlayersPerView, DefaultMaxPlayersPerView)
+	playerBlocks := cmp.Or(config.MaxPlayerBlocks, DefaultMaxObserverBlocks*DefaultMaxViewsPerPlayer)
+	if config.AOI.BlockSize > 0 {
+		if worst := manager.config.worstObserverBlocks(); worst > int64(playerBlocks)/int64(maxViews) {
+			return nil, fmt.Errorf("%w: %d views per player × %d blocks per view exceeds the per-player budget %d",
+				ErrInterestBudget, maxViews, worst, playerBlocks)
+		}
 	}
+	in := &Interest{
+		subjectRoles: make(map[int64]struct{}),
+		batchSize:    config.BatchSize, workers: config.Workers,
+		aoi: manager, bandLayer: bandLayer, selfVisible: config.SelfVisible == nil || *config.SelfVisible,
+		selfLayer:      config.SelfLayer.Normalize(),
+		held:           make(map[pair]*hold),
+		touched:        make(map[pair]struct{}),
+		spatialPlayers: make(map[int64]map[int64]struct{}),
+		followers:      make(map[int64]map[int64]struct{}),
+		selfOf:         make(map[int64]int64),
+		covers:         make(map[[2]entity.SyncProfile]bool),
+		viewInterval:   viewInterval, viewChanged: make(map[int64]time.Time), now: time.Now,
+	}
+	in.registry.init(maxViews, maxPlayers)
+	in.blockLayer = config.BlockLayer
+	if in.blockLayer == (entity.SyncProfile{}) {
+		in.blockLayer = bandLayer(0)
+	}
+	in.blockLayer = in.blockLayer.Normalize()
 	in.subscriptions = config.Manager.NewSubscriptionSourceWithResubmit(in.resubmit)
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
@@ -182,37 +218,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		}
 		in.viewSets[name] = views
 	}
-	in.sourceProfiles = make(map[string]map[int]entity.SyncProfile, len(config.SourceProfiles))
-	for source, bands := range config.SourceProfiles {
-		if source != SourceSpatial && source != SourceSelf && source != SourceBlock && !slices.Contains(config.Relations, source) {
-			return nil, fmt.Errorf("policy: unknown profile source %q", source)
-		}
-		copy := make(map[int]entity.SyncProfile, len(bands))
-		for band, profile := range bands {
-			if band < 0 {
-				return nil, fmt.Errorf("policy: invalid profile band %d", band)
-			}
-			copy[band] = profile.Normalize()
-		}
-		in.sourceProfiles[source] = copy
-	}
-	in.sources = []Source{aoiSource{manager: manager}, blockSource{manager: manager}}
-	if config.SelfVisible == nil || *config.SelfVisible {
-		in.self = NewRelationSource(SourceSelf)
-		in.sources = append(in.sources, in.self)
-	}
-	for _, name := range config.Relations {
-		if name == "" || name == SourceSpatial || name == SourceSelf || name == SourceBlock {
-			return nil, fmt.Errorf("policy: relation name %q is reserved or empty", name)
-		}
-		if _, dup := in.relations[name]; dup {
-			return nil, fmt.Errorf("policy: relation %q named twice", name)
-		}
-		relation := NewRelationSource(name)
-		in.relations[name] = relation
-		in.sources = append(in.sources, relation)
-	}
-	if err := in.validateConfiguredProfiles(config); err != nil {
+	if err := in.validateConfiguredLayers(); err != nil {
 		return nil, err
 	}
 	if config.MaxQueuedFacts < 0 {
@@ -226,6 +232,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		in.batchSize = 1024
 	}
 	in.wake = config.Manager.WakeSync
+	in.registry.wake = in.wake
 	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.applyQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
 	return in, nil
 }
@@ -233,16 +240,10 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 // DefaultViewChangeInterval 是 InterestConfig.ViewChangeInterval 的缺省值：同一玩家每秒至多改一次视野。
 const DefaultViewChangeInterval = time.Second
 
-// DefaultObserverOf 是 InterestConfig.ObserverOf 的缺省值：实体 ID 的唯一号就是玩家 ID（Player 实体），为 0 时不是观察者。
-func DefaultObserverOf(entityID int64) (int64, bool) {
-	playerID := entity.GetUniqueIDFromEntityID(entityID)
-	return playerID, playerID != 0
-}
-
 // sessionOf 是观察者到会话的换算：观察者就是玩家 ID，会话 ID 等于玩家 ID。
 func sessionOf(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) }
 
-// DefaultBandProfile is the profile mapping used when none is configured:
+// DefaultBandProfile is the layer mapping used when none is configured:
 // band 0 (nearest) is the default profile, band n asks for LOD n.
 func DefaultBandProfile(band int) entity.SyncProfile {
 	if band <= 0 {
@@ -251,27 +252,15 @@ func DefaultBandProfile(band int) entity.SyncProfile {
 	return entity.SyncProfile{Key: fmt.Sprintf("band%d", band), LOD: uint8(band)}
 }
 
-// aoiSource adapts the core manager to Source. Flush is called with
-// Interest's lock held, which is why it takes none of its own.
-type aoiSource struct{ manager *AOI }
+// ---- 玩家与主视野 ----
+//
+// 主视野是玩家自带的空间视野（镜头），只挂给玩家自己，在按玩家的入口里用 MainView（0）指代；业务视野的 ID 不能是 0。
+// Enter 建立的主视野跟随玩家自身实体（实体移动时一起移动，并排除自己）；Watch 建立的不跟随（只看不被看）。
 
-func (aoiSource) Name() string             { return SourceSpatial }
-func (s aoiSource) Flush() []InterestEvent { return s.manager.Flush() }
-
-// Relation returns a configured relation source by name, or nil.
-func (in *Interest) Relation(name string) *RelationSource {
-	if in == nil {
-		return nil
-	}
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return in.relations[name]
-}
-
-// Enter puts a player in: it both sees and is seen, and (when SelfVisible)
-// it sees itself. playerID 是观察者（会话）编号，entityID 是玩家自身实体；view 为零值时取缺省视野。
-// 已登记的玩家再次 Enter（重连）按这次的位置与视野重新登记，要保留原视野就传 ObserverView(playerID) 的结果。
-// Its subject must already be registered with the manager; its session must already be open.
+// Enter puts a player in: its entity is seen, its main view sees, and (when
+// SelfVisible) it sees itself. playerID 是观察者（会话）编号，entityID 是玩家自身实体；view 为零值时取缺省视野。
+// 已登记的玩家再次 Enter（重连）按这次的位置与视野重新登记主视野，要保留原视野就传 ObserverView(playerID) 的结果。
+// 主视野计入 MaxViewsPerPlayer。Its subject must already be registered with the manager; its session must already be open.
 func (in *Interest) Enter(playerID, entityID int64, at spatial.Point, view ObserverView) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -281,26 +270,36 @@ func (in *Interest) Enter(playerID, entityID int64, at spatial.Point, view Obser
 	if playerID == 0 || entityID == 0 {
 		return ErrInterestUnknown
 	}
-	if _, err := in.aoi.config.normalizeView(view); err != nil {
+	if !in.aoi.config.Bounds.Contains(at) {
+		return spatial.ErrInvalidBounds
+	}
+	normalized, err := in.aoi.config.normalizeView(view)
+	if err != nil {
 		return err
 	}
-	if err := in.aoi.AddSubject(entityID, at); err != nil {
+	in.syncViewsLocked()
+	main, err := in.registry.mainView(playerID)
+	if err != nil {
 		return err
 	}
-	if err := in.aoi.AddObserver(playerID, entityID, at, view); err != nil {
+	if err := in.placeSubjectLocked(entityID, at); err != nil {
 		return err
 	}
+	in.placeMainLocked(playerID, main, entityID, at, normalized)
 	in.queueMu.Lock()
 	in.subjectRoles[entityID] = struct{}{}
-	in.observerRoles[playerID] = struct{}{}
 	in.queueMu.Unlock()
-	if in.self != nil {
-		in.self.Set(playerID, []int64{entityID})
+	if in.selfVisible {
+		if old, ok := in.selfOf[playerID]; ok && old != entityID {
+			in.contribute(pair{observer: playerID, subject: old}, contribution{}, entity.SyncProfile{}, false)
+		}
+		in.selfOf[playerID] = entityID
+		in.contribute(pair{observer: playerID, subject: entityID}, contribution{}, in.selfLayer, true)
 	}
 	return nil
 }
 
-// Watch 登记一个只看、不被看的观察者（观战、GM 视角）：没有自身实体（self = 0），也没有 self 关系。
+// Watch 登记一个只看、不被看的玩家（观战、GM 视角）：主视野不跟随实体（self = 0），也没有 self。
 // 它与 Enter（既看又被看）、Show（只被看）并列；视点用 MoveView 移动，用 Unwatch 退出。会话须已打开。
 func (in *Interest) Watch(playerID int64, at spatial.Point, view ObserverView) error {
 	in.mu.Lock()
@@ -308,59 +307,89 @@ func (in *Interest) Watch(playerID int64, at spatial.Point, view ObserverView) e
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	if observer := in.aoi.observers[playerID]; observer != nil && observer.self != 0 {
-		// 改成只看会让玩家看见自己的实体，而它仍被别人看见；先 Leave 再 Watch。
-		return fmt.Errorf("%w: player %d is in with entity %d; Leave first", ErrInterestConfig, playerID, observer.self)
+	if playerID == 0 {
+		return ErrInterestUnknown
 	}
-	if err := in.aoi.AddObserver(playerID, 0, at, view); err != nil {
+	in.syncViewsLocked()
+	if main := in.registry.mainOf(playerID); main != nil {
+		if observer := in.aoi.observers[main.handle]; observer != nil && observer.self != 0 {
+			// 改成只看会让玩家看见自己的实体，而它仍被别人看见；先 Leave 再 Watch。
+			return fmt.Errorf("%w: player %d is in with entity %d; Leave first", ErrInterestConfig, playerID, observer.self)
+		}
+	}
+	if !in.aoi.config.Bounds.Contains(at) {
+		return spatial.ErrInvalidBounds
+	}
+	normalized, err := in.aoi.config.normalizeView(view)
+	if err != nil {
 		return err
 	}
-	in.queueMu.Lock()
-	in.observerRoles[playerID] = struct{}{}
-	in.queueMu.Unlock()
+	main, err := in.registry.mainView(playerID)
+	if err != nil {
+		return err
+	}
+	in.placeMainLocked(playerID, main, 0, at, normalized)
 	return nil
 }
 
-// Move is for something that both sees and is seen. Both tables, and in this
-// order: a subject that moved without its observer having moved would see the
-// world from where it used to be.
-func (in *Interest) Move(playerID, entityID int64, to spatial.Point) error {
+// placeMainLocked 放置（或重新放置）主视野，并把它挂给玩家自己。调用方持有 mu、已同步登记表。
+func (in *Interest) placeMainLocked(playerID int64, main *view, follow int64, at spatial.Point, normalized ObserverView) {
+	if in.spatialPlayers[main.handle] == nil {
+		in.spatialPlayers[main.handle] = map[int64]struct{}{playerID: {}}
+	}
+	in.placeViewLocked(main.handle, follow, at, normalized)
+}
+
+// Move 移动一个目标（实体 ID），跟随它的空间视野（例如玩家的主视野、单位的视野）一起移动：先移目标再移视野，
+// 视野没跟上的目标会从旧位置看世界。
+func (in *Interest) Move(entityID int64, to spatial.Point) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	if err := in.aoi.MoveSubject(entityID, to); err != nil {
-		return err
+	in.syncViewsLocked()
+	if _, exists := in.aoi.subjects[entityID]; !exists {
+		return ErrInterestUnknown
 	}
-	return in.aoi.MoveObserver(playerID, to)
+	return in.placeSubjectLocked(entityID, to)
 }
 
-// MoveView 只移动观察者的视点：Watch 登记的观察者用它移动；玩家控制英雄、载具时也可以让视点跟随被控制的实体。
+// MoveView 只移动玩家主视野的视点：Watch 登记的玩家用它移动。主视野跟随实体时，实体下一次移动会把它带回实体位置。
 func (in *Interest) MoveView(playerID int64, to spatial.Point) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	return in.aoi.MoveObserver(playerID, to)
+	in.syncViewsLocked()
+	main := in.registry.mainOf(playerID)
+	if main == nil {
+		return ErrInterestUnknown
+	}
+	return in.aoi.MoveObserver(main.handle, to)
 }
 
-// SetObserverView 按客户端的 LOD / 视野请求换这个玩家的视野，直接生效（不排队、不走提交门：它不改业务状态，没有回滚）：
+// SetObserverView 按客户端的 LOD / 视野请求换这个玩家主视野的视野，直接生效（不排队、不走提交门：它不改业务状态，没有回滚）：
 //   - 层级必须是配置里有的，否则返回 ErrObserverView；视野大小由服务端夹到允许范围并量化（AOIConfig）。
 //   - 归一后与当前视野相同的请求什么也不做，不占限速。
 //   - 同一玩家距上次生效不足 ViewChangeInterval 的请求返回 ErrObserverViewRate，计数后丢弃。
 //   - 生效后完整重评：视野变大时新进入的目标订阅（下发全量），变小时超出的退订；只换层级时按新分档重发视图，订阅块不变。
 //
-// 返回此后实际生效的视野（拒绝时是当前视野），接入层可以把它告诉客户端。与 Move 一样，订阅变化由下一次 Apply
-// （或排队模式下 Manager 的政策阶段）说给 Manager。
+// 返回此后实际生效的视野（拒绝时是当前视野），接入层可以把它告诉客户端。订阅变化由下一次 Apply
+// （或排队模式下 Manager 的政策阶段）说给 Manager。业务空间视野由服务端用 SetSpatialView 改，不限速。
 func (in *Interest) SetObserverView(playerID int64, view ObserverView) (ObserverView, error) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return ObserverView{}, errors.New("policy: interest is closed")
 	}
-	current, exists := in.aoi.ObserverViewOf(playerID)
+	in.syncViewsLocked()
+	main := in.registry.mainOf(playerID)
+	if main == nil {
+		return ObserverView{}, ErrInterestUnknown
+	}
+	current, exists := in.aoi.ObserverViewOf(main.handle)
 	if !exists {
 		return ObserverView{}, ErrInterestUnknown
 	}
@@ -377,7 +406,7 @@ func (in *Interest) SetObserverView(playerID int64, view ObserverView) (Observer
 		metrics.IncCounter(viewRejectedMetric, metrics.Labels{"reason": "rate"}, 1)
 		return current, ErrObserverViewRate
 	}
-	applied, err := in.aoi.SetObserverView(playerID, next)
+	applied, err := in.aoi.SetObserverView(main.handle, next)
 	if err != nil {
 		return current, err
 	}
@@ -385,18 +414,23 @@ func (in *Interest) SetObserverView(playerID int64, view ObserverView) (Observer
 	return applied, nil
 }
 
-// ObserverView 返回玩家当前生效的视野。
+// ObserverView 返回玩家主视野当前生效的视野。
 func (in *Interest) ObserverView(playerID int64) (ObserverView, bool) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return ObserverView{}, false
 	}
-	return in.aoi.ObserverViewOf(playerID)
+	in.syncViewsLocked()
+	main := in.registry.mainOf(playerID)
+	if main == nil {
+		return ObserverView{}, false
+	}
+	return in.aoi.ObserverViewOf(main.handle)
 }
 
-// Leave takes a player out in both directions and out of every relation:
-// playerID 作为观察者退出（关系 Clear），entityID 作为目标退出（关系 Forget）。
+// Leave takes a player out in both directions: 玩家（playerID）解除全部视野挂接、撤掉主视野与 self；
+// 实体（entityID）作为目标退出空间索引，并从所有关系视野的成员里去掉。业务视野本身保留，玩家重新进场后由业务重新挂接。
 func (in *Interest) Leave(playerID, entityID int64) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -406,7 +440,7 @@ func (in *Interest) Leave(playerID, entityID int64) error {
 	return in.leaveLocked(playerID, entityID)
 }
 
-// Unwatch 让 Watch 登记的观察者退出；它没有目标的一半。
+// Unwatch 让 Watch 登记的玩家退出；它没有目标的一半。
 func (in *Interest) Unwatch(playerID int64) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -416,44 +450,42 @@ func (in *Interest) Unwatch(playerID int64) error {
 	return in.leaveLocked(playerID, 0)
 }
 
-// leaveLocked：entityID 为 0 时只退出观察者。调用方持有 mu。
+// leaveLocked：entityID 为 0 时只退出玩家。调用方持有 mu。
 func (in *Interest) leaveLocked(playerID, entityID int64) error {
-	if in.self != nil {
-		in.self.Clear(playerID)
-	}
-	for _, relation := range in.relations {
-		relation.Clear(playerID)
-		if entityID != 0 {
-			relation.Forget(entityID)
-		}
+	in.syncViewsLocked()
+	main := in.registry.leave(playerID, entityID)
+	// 登记表里的解除（业务视野的挂接、关系成员）先按顺序应用，再撤主视野。
+	in.syncViewsLocked()
+	if self, ok := in.selfOf[playerID]; ok {
+		delete(in.selfOf, playerID)
+		in.contribute(pair{observer: playerID, subject: self}, contribution{}, entity.SyncProfile{}, false)
 	}
 	delete(in.viewChanged, playerID)
-	// 退出期间 Queue* 仍可入队；最后一次短队列锁统一作废退出前的关系事实。
-	// 空间事实按实际移除的角色分别作废，不把 Hide 当成观察者也退出。
-	defer in.supersedeQueuedRelationsLocked(playerID, entityID)
-	if err := in.aoi.RemoveObserver(playerID); err != nil {
-		return err
+	if main != nil {
+		in.removeSpatialLocked(main.handle)
 	}
-	in.supersedeQueuedMovesLocked(0, playerID)
-	if entityID == 0 {
-		return nil
+	if entityID != 0 {
+		if err := in.aoi.RemoveSubject(entityID); err != nil {
+			return err
+		}
+		in.supersedeQueuedMovesLocked(entityID)
 	}
-	if err := in.aoi.RemoveSubject(entityID); err != nil {
-		return err
+	if main == nil {
+		return ErrInterestUnknown
 	}
-	in.supersedeQueuedMovesLocked(entityID, 0)
 	return nil
 }
 
-// Show / MoveShown / Hide are for things that are seen but do not see: a
-// monster, a dropped item. 参数都是实体 ID。
+// Show / Hide are for things that are seen but do not see by themselves: a
+// monster, a dropped item. 参数都是实体 ID；移动用 Move。Show 时已有空间视野跟随它的，视野跳到它的位置。
 func (in *Interest) Show(id int64, at spatial.Point) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	if err := in.aoi.AddSubject(id, at); err != nil {
+	in.syncViewsLocked()
+	if err := in.placeSubjectLocked(id, at); err != nil {
 		return err
 	}
 	in.queueMu.Lock()
@@ -462,30 +494,46 @@ func (in *Interest) Show(id int64, at spatial.Point) error {
 	return nil
 }
 
-func (in *Interest) MoveShown(id int64, to spatial.Point) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return errors.New("policy: interest is closed")
-	}
-	return in.aoi.MoveSubject(id, to)
-}
-
+// Hide 让目标退出空间索引，并从所有关系视野的成员里去掉；跟随它的空间视野留在原地（跟随关系保留）。
 func (in *Interest) Hide(id int64) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	for _, relation := range in.relations {
-		relation.Forget(id)
-	}
-	defer in.supersedeQueuedRelationsLocked(0, id)
+	in.syncViewsLocked()
+	in.registry.forget(id)
+	in.syncViewsLocked()
 	if err := in.aoi.RemoveSubject(id); err != nil {
 		return err
 	}
-	in.supersedeQueuedMovesLocked(id, 0)
+	in.supersedeQueuedMovesLocked(id)
 	return nil
+}
+
+// placeSubjectLocked 登记或移动目标，并把跟随它的空间视野移到同一位置。调用方持有 mu。
+func (in *Interest) placeSubjectLocked(id int64, at spatial.Point) error {
+	if err := in.aoi.AddSubject(id, at); err != nil {
+		return err
+	}
+	in.moveFollowersLocked(id, at)
+	return nil
+}
+
+// moveFollowersLocked 把跟随实体 id 的空间视野移到 at（按视野编号顺序，结果确定）。
+func (in *Interest) moveFollowersLocked(id int64, at spatial.Point) {
+	handles := in.followers[id]
+	if len(handles) == 0 {
+		return
+	}
+	ordered := make([]int64, 0, len(handles))
+	for handle := range handles {
+		ordered = append(ordered, handle)
+	}
+	slices.Sort(ordered)
+	for _, handle := range ordered {
+		_ = in.aoi.MoveObserver(handle, at)
+	}
 }
 
 // Resubscribe says every pair this observer holds to the manager again on the
@@ -526,8 +574,8 @@ func (in *Interest) Resubscribe(observer int64) int {
 
 // resubmit 是 Interest 的重新提交入口：卸载后重载不了，框架退回 remove 撤销了本 Interest
 // 的订阅，同 ID 实体又重新登记后，Manager 在 Flush 的政策阶段把这些订阅交还这里。与 Resubscribe 同一种修补：
-// Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（来源视图选择、ViewSets 校验、
-// Manager 的优先级与字段白名单）；缺席期间已释放的 pair（观察者走远、关系解除、Hide）不在 held 里，不恢复。
+// Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（层级合并、ViewSets 校验、
+// Manager 的优先级与字段白名单）；缺席期间已释放的 pair（视野走远、解除挂接、Hide）不在 held 里，不恢复。
 // 被拒绝的 pair 进入重试表，下一次 Apply 以 Retry 报告并继续重说。
 func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	in.mu.Lock()
@@ -549,19 +597,44 @@ func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	}
 }
 
-// Visible lists what an observer (player id) currently sees through distance.
-func (in *Interest) Visible(observer int64) []int64 {
+// Visible lists what a player's main view currently sees through distance.
+func (in *Interest) Visible(playerID int64) []int64 {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return nil
 	}
-	return in.aoi.Visible(observer)
+	in.syncViewsLocked()
+	main := in.registry.mainOf(playerID)
+	if main == nil {
+		return nil
+	}
+	return in.aoi.Visible(main.handle)
 }
 
-// Apply drains every source, aggregates, and says the result to the manager:
-// subscribes for pairs a first source claimed, unsubscribes for pairs the
-// last source dropped, re-subscribes for pairs whose band changed. Subscribes
+// Seen 返回玩家经任一视野（含 self）持有的全部目标（升序），即本 Interest 要它订阅的集合。先应用登记表与 AOI 的变化；
+// 遍历全部 pair，供诊断与压测核对，不要放在热路径上。
+func (in *Interest) Seen(playerID int64) []int64 {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed {
+		return nil
+	}
+	in.syncViewsLocked()
+	in.drainAOILocked()
+	var seen []int64
+	for key, current := range in.held {
+		if key.observer == playerID && len(current.layers) > 0 {
+			seen = append(seen, key.subject)
+		}
+	}
+	slices.Sort(seen)
+	return seen
+}
+
+// Apply 把视野登记表里的变更与 AOI 的可见性变化合并进 held，再说给 Manager：
+// subscribes for pairs a first view claimed, unsubscribes for pairs the
+// last view dropped, re-subscribes for pairs whose layers changed. Subscribes
 // the manager refuses come back as Refusals and are said again on the next
 // Apply, for as long as the pair is held — a refusal is not a verdict on the
 // pair. Calling it is the caller's choice: Interest is a
@@ -581,35 +654,24 @@ func (in *Interest) applyLocked() []Refusal {
 	// for the NEXT one, not for a second attempt a few lines further down.
 	queued := in.retry
 	in.retry = nil
-	touched := make(map[pair]struct{})
-	for _, source := range in.sources {
-		name := source.Name()
-		events := source.Flush()
-		for _, event := range events {
-			key := pair{observer: event.Observer, subject: event.Subject}
-			touched[key] = struct{}{}
-			in.recordEvent(name, event)
-		}
-		// 仅内部 AOI 返回的本批事件由 Interest 独占；公开 Flush 的所有权不变。
-		if name == SourceSpatial && len(events) > 0 && cap(events) <= 4096 {
-			in.aoi.pending = events[:0]
-		}
-	}
-	keys := make([]pair, 0, len(touched))
-	for key := range touched {
+	in.syncViewsLocked()
+	in.drainAOILocked()
+	keys := make([]pair, 0, len(in.touched))
+	for key := range in.touched {
 		keys = append(keys, key)
 	}
+	clear(in.touched)
 	slices.SortFunc(keys, func(a, b pair) int {
 		if order := cmp.Compare(a.observer, b.observer); order != 0 {
 			return order
 		}
 		return cmp.Compare(a.subject, b.subject)
 	})
-
+	// 先收齐所有视野的最终贡献，再向 Manager 发布：空间转为块覆盖或关系可见时不能先退订后重建，否则会打断对象基线并产生闪烁。
 	for _, key := range keys {
 		in.settlePair(key, &refusals)
 	}
-	// Retries after the events, so that a pair a source event already spoke
+	// Retries after the events, so that a pair a view already spoke
 	// for in this Apply is not said twice.
 	for _, key := range queued {
 		hold := in.held[key]
@@ -624,23 +686,27 @@ func (in *Interest) applyLocked() []Refusal {
 	return refusals
 }
 
-// recordEvent 记录一个来源对 pair 的最新可见性与 band，不立即发布。
-// 先收齐所有来源的最终状态，再向 Manager 发布；spatial 转为 block/team
-// 可见时不能先退订后重建，否则会打断对象基线并产生闪烁。
-func (in *Interest) recordEvent(source string, event InterestEvent) {
-	key := pair{observer: event.Observer, subject: event.Subject}
+// contribute 记录一个视野对 pair 的持有（enter）或释放，不立即发布；pair 记进 touched，由下一次 Apply 结算。
+func (in *Interest) contribute(key pair, source contribution, layer entity.SyncProfile, enter bool) {
 	current := in.held[key]
-	if event.Kind == InterestLeave {
+	if !enter {
 		if current != nil {
-			delete(current.bands, source)
+			if _, held := current.layers[source]; held {
+				delete(current.layers, source)
+				in.touched[key] = struct{}{}
+			}
 		}
 		return
 	}
 	if current == nil {
-		current = &hold{bands: make(map[string]int, 2)}
+		current = &hold{layers: make(map[contribution]entity.SyncProfile, 2)}
 		in.held[key] = current
 	}
-	current.bands[source] = max(event.Band, 0)
+	if previous, held := current.layers[source]; held && previous == layer {
+		return
+	}
+	current.layers[source] = layer
+	in.touched[key] = struct{}{}
 }
 
 func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
@@ -648,7 +714,7 @@ func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 	if current == nil {
 		return
 	}
-	if len(current.bands) == 0 {
+	if len(current.layers) == 0 {
 		delete(in.held, key)
 		delete(in.refused, key)
 		err := in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
@@ -665,7 +731,7 @@ func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 }
 
 // subscribe says one pair to the manager. The pair counts as subscribed from
-// here — that is what makes the source counting work — and a refusal puts it
+// here — that is what makes the view counting work — and a refusal puts it
 // on the retry list instead.
 func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]Refusal) {
 	current.profile = in.selectedProfile(current)
@@ -691,21 +757,7 @@ func (in *Interest) reband(key pair, current *hold, refusals *[]Refusal) {
 	in.subscribe(key, current, false, refusals)
 }
 
-// selectedProfile 先解析每个来源的业务视图，再用 Manager 的同一规则选优。
-// 不先折叠成最小 band，避免丢失 self/team 等来源的字段语义。
-func (in *Interest) selectedProfile(current *hold) entity.SyncProfile {
-	var best entity.SyncProfile
-	first := true
-	for source, band := range current.bands {
-		profile := in.profileFor(source, band)
-		if first || in.compareProfiles(profile, best) < 0 {
-			best, first = profile, false
-		}
-	}
-	return best
-}
-
-// Close 释放本 Interest 来源持有的订阅；其他政策、会话和实体注册继续存在。
+// Close 释放本 Interest 持有的订阅；其他政策、会话和实体注册继续存在。之后的视野操作返回错误。
 func (in *Interest) Close() {
 	if in == nil {
 		return
@@ -716,6 +768,7 @@ func (in *Interest) Close() {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
+	in.registry.close()
 	in.queueMu.Lock()
 	in.queueClosed = true
 	for _, fact := range in.facts {
@@ -723,13 +776,13 @@ func (in *Interest) Close() {
 	}
 	in.facts = nil
 	clear(in.subjectRoles)
-	clear(in.observerRoles)
 	in.queueMu.Unlock()
 	for key := range in.held {
 		_ = in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
 	}
 	clear(in.viewChanged)
 	in.held = nil
+	in.touched = nil
 	in.retry = nil
 	in.refused = nil
 }

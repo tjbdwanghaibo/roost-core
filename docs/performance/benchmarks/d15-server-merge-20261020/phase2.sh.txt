@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 第二段：两服已停；检查、冲突、处置、迁移、account 合服记录；误启动 1001 被拒；1000 承载 1001 的角色。
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+merge_flags=(-from 1001 -into 1000 -from-config configs/service/config.game1001.yaml -into-config configs/service/config.game.yaml)
+go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1000 > $RUN/wal-1000.json
+go run ./cmd/sidmove wal-drained -dir data/wal/dataengine/1001 > $RUN/wal-1001.json
+log "WALs drained"
+if go run ./cmd/sidmerge migrate "${merge_flags[@]}" -dry-run > $RUN/dryrun-conflict.json 2> $RUN/dryrun-conflict.err; then
+  log "dry-run with a constant-id conflict passed"; exit 1
+fi
+grep -q '"_id": "{\\"_id\\":\\"season\\"}"' $RUN/dryrun-conflict.json || { log "conflict not reported"; cat $RUN/dryrun-conflict.json; exit 1; }
+log "dry-run refused: $(tail -1 $RUN/dryrun-conflict.err)"
+# 业务处置：B 的常量文档重新编号。
+mongosh_eval 'var b = db.getSiblingDB("md_zone_b_1000").zone_state; var d = b.findOne({_id: "season"}); b.deleteOne({_id: "season"}); d._id = "season-b"; b.insertOne(d);'
+go run ./cmd/sidmerge migrate "${merge_flags[@]}" -dry-run > $RUN/dryrun.json
+go run ./cmd/sidmerge migrate "${merge_flags[@]}" -manifest $RUN/manifest.json > $RUN/migrate.json
+grep -q '"copied": 2' $RUN/migrate.json || { log "migrate did not copy 2"; cat $RUN/migrate.json; exit 1; }
+go run ./cmd/sidmerge migrate "${merge_flags[@]}" -manifest $RUN/manifest-again.json > $RUN/migrate-again.json
+grep -q '"already_present": 2' $RUN/migrate-again.json || { log "re-run not idempotent"; exit 1; }
+log "migrated: $(grep -c '"outcome": "copied"' $RUN/manifest.json) documents"
+accountctl merge-server -from 1001 -into 1000 -note "D15 drill" -dry-run > $RUN/merge-dryrun.json
+accountctl merge-server -from 1001 -into 1000 -note "D15 drill" > $RUN/merge.json
+accountctl show-server -sid 1001 | tee $RUN/show-1001.json | grep -q '"merged_into": 1000'
+# 误启动 1001：启动自检拒绝，DataEngine 之前就退出。
+nohup bin/app game --sid 1001 --config configs/service/config.game1001.yaml > $RUN/game1001-refused.log 2>&1 &
+pid=$!
+i=0; while kill -0 $pid 2>/dev/null && [ $i -lt 90 ]; do i=$((i+1)); sleep 1; done
+if kill -0 $pid 2>/dev/null; then log "game 1001 still running after the merge"; kill $pid; exit 1; fi
+grep -q "merged into 1000" $RUN/game1001-refused.log || { log "refusal not logged"; tail -20 $RUN/game1001-refused.log; exit 1; }
+if grep -q "mod start (service-specific)\" mod=dataengine\|mod start (service-specific) mod=dataengine" $RUN/game1001-refused.log; then log "dataengine started before the guard"; exit 1; fi
+log "game 1001 refused to start: $(grep -o 'server 1001 was merged into 1000[^;]*' $RUN/game1001-refused.log | head -1)"
+start game1000 game configs/service/config.game.yaml 36100 1000
+drill login -who u1:1000 -expect-serving 1000 -add 1 -expect-count 11
+drill login -who u2:1001 -expect-serving 1000 -add 5 -expect-count 15
+drill login -who u3:1000 -expect-serving 1000 -add 1 -expect-count 11
+drill login -who u3:1001 -expect-serving 1000 -add 2 -expect-count 12
+drill create -sid 1001 -expect-refused
+drill create -sid 1000
+mongosh_eval 'printjson(db.getSiblingDB("md_zone_b_1000").zone_state.find().sort({_id:1}).toArray())' > $RUN/zone-b-after-merge.txt
+grep -q 91001 $RUN/zone-b-after-merge.txt
+log "phase2 done"

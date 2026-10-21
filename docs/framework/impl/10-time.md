@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`infra/base/clock`、`infra/base/timer`，以及按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`infra/base/clock`（业务时钟与业务日历）、`infra/base/timer`，以及按实体的持久定时器驱动 `framework/nest/entitytimer`（`wiring/entitytimer` 装配，生成器见 [impl/12-codegen](12-codegen.md#2c-roost-add-timer)）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -22,6 +22,15 @@
 6. **节点离开堆时按钩子视图标志发变化**（`emitLeave`，取消与到期出堆共用）：`announced` 为假先补一次 upsert（宿主据此推进持久 seed，ID 不复用），`persisted` 为真再发删除；出堆通知里被取消或改期的节点，回调不执行。原因是“先落定再回调”：收尾已把等待节点全部入堆、还没轮到它们的 upsert 时，钩子可以重入 Tick 或取消，此时堆里有从未通知（Tick 内新建）或钩子不持有（触发中显式改期、出堆时已删除）的节点。不要把“在堆里”当成“钩子持有”。
 7. **读视图与操作用同一个活节点集合**：`Lookup(id)` / `LiveNodes()` 读 `byID`（堆中、触发中、等收尾入堆），返回副本，`LiveNodes` 按触发顺序 `(End, Priority, ID)`（`firesBefore` 复用 `timerHeap.Less`，顺序只定义一次，堆的比较路径不变）。只读，不改状态、标志与 `queued`，§2.1 不变量与 §2.2 行为表不受影响。所以 Tick 内新建的立即可读、改期的立即是新期限、取消或已结束的立即读不到，`Lookup` 为 true 当且仅当此刻 `ChangeTimer` / `RemoveTimer` 会成功。正在触发的节点在出堆通知、回调及其中重入 Tick 期间可读，期限是原定期限（≤ 本次 Tick 时刻），显式改期后是新期限，回调按返回值续期之前不变。`Nodes()` 仍是只含堆中 typed 节点、不排序的持久化视图，Tick 内看不到等待收尾的节点，不能拿来回答“回调刚写的在不在”。两张组合表（见第 8 条）都在每次操作前后核对读视图与返回值一致（`checkLiveView`）：回调位置操作前读得到 ⇔ 改期 / 取消返回 true；钩子位置（出堆通知中、收尾已入堆未通知）目标都在 `byID`、都读得到；操作后立即读到新期限或读不到。变异核对：读视图隐去等收尾节点，回调位置表 42 组、钩子位置表 2 组变红；隐去触发中节点，分别 12 组、8 组变红。
 8. 修改这套状态时，用两张组合表核对行为表：`TestOperationsOnEveryNodeStateDuringTick`（操作 × 状态 × 返回值 × 回调里直接 / 重入 Tick 两种调用位置，82 组；在重构前的基线上同样全部通过）与 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置：出堆通知中、收尾已入堆未通知的新建 / 改期 / 自改期节点、补发首次 upsert 时 × 改期 / 取消 / 重入 Tick / 不操作，28 组）。两张表都断言钩子不收到不持有的删除、每个分配过的 ID 都经过 upsert。
+
+## 1A. 业务日历（DESIGN-TODO D18）
+
+1. **配置只读一次**：`framework/app/config_schema.go` 的 `timeConfig` 声明 `time.business_timezone`（缺省 `UTC`）与 `time.business_day_start`（缺省 `00:00`），都带 `example`（生成器写进每个服务配置，`renderBusinessTimeConfig`）与 `shared`（跨服务一致）。`timeConfig.ValidateConfig` 经 `clock.LoadTimezone` / `clock.ParseDayStart` 解析并填 `calendar`：非法名、`Local`、空名、非两位 `HH:MM` 各自点名键报错。`App.run` 读出后 `clock.SetCalendar` 设进程级日历、写进 `starting server` 日志；`NewRegistry` 用同一份配置构造 `clock.NewBusinessIn(offset, calendar)`。强制点只有这一处，没有运行期修改入口。
+2. **日历挂在业务时钟上**：`clock.CalendarOf(b)` 读时钟自带的日历（`NewBusinessIn`、`Process()`），没有的（`NewBusiness`、测试替换的 `BusinessFunc`、nil）取进程级日历。`app.BusinessCalendar(r)` = `CalendarOf(BusinessClock(r))`，所以注入了别的时钟的测试与 Registry 的日历不会分叉成两份来源。
+3. **业务日的算法**（`calendar.go` `bounds`）：取 `t` 在业务时区的当地日期 `d`，起点 `startOf(d)` = `time.Date(d, 重置时刻, loc)`；`t` 早于起点就退一天，`t` 不早于下一天起点就进一天。`startOf` 对日期单调（夏令时最多挪一两个小时，一天不短于 22 小时），所以两个循环各至多一步就收敛，不变量是 `DayStart(t) ≤ t < NextDayStart(t)`、起点属于同一业务日、下一个起点属于日历上的下一天。重置时刻落在夏令时跳过的那一小时里时 `time.Date` 取哪一侧不保证，不变量照样成立。不要改成“减去重置时刻再取日期”或“起点 + 24h”：夏令时那天会错一小时（变异核对：改成固定 24 小时，`TestDaylightSavingDaysAreShortAndLong` 与整年不变量用例变红）。
+4. **时区数据库**：`time.LoadLocation` 先找 `ZONEINFO`、再找系统目录，最后才用内嵌的 `time/tzdata`；只设 `ZONEINFO` 为空目录模拟不了“没有 zoneinfo”。生成的 `main.go`（`renderMain`）导入 `time/tzdata`；回归在 macOS 上用 `sandbox-exec` 拒绝读取系统 zoneinfo 与 `GOROOT/lib/time`，并先用不内嵌 tzdata 的对照程序确认环境确实看不到 zoneinfo（看得到就 Skip，例如自带 zoneinfo 的 Linux 主机）。
+
+验证：`infra/base/clock/calendar_test.go`（缺省 UTC、东八区 05:00 重置跨日 / 跨月 / 跨年、负偏移、纽约 23h / 25h、重置落在跳过或重复的一小时、八种日历一整年每 17 分钟的不变量、解析拒绝、时钟带日历）；`framework/app/business_clock_contract_test.go` 的 `TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock`、`TestRunSetsTheProcessCalendarAndLogsIt`；`codegen/internal/roost/business_time_test.go`（生成配置写明、生成的 main 在看不到 zoneinfo 时加载 Asia/Shanghai）与 `config_contract_test.go` 的 `TestDoctorChecksCrossModConfigRulesThroughTheProcess`（编译出的 game-demo 进程拒绝拼错的时区；在看不到 zoneinfo 的环境里接受 Asia/Shanghai）；`cmd/glsvet/clockhints_test.go` 的 `TestClockHintsFlagMachineTimeZoneReads`。
 
 ## 2A. 按实体的持久定时器驱动
 
@@ -53,11 +62,12 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 
 ### clock
 
-1 个实现文件、1 个测试文件。
+2 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [clock.go](../../../infra/base/clock/clock.go) | `Business`、`BusinessFunc`、`Clock` |
+| [calendar.go](../../../infra/base/clock/calendar.go) | `Day`、`Calendar` |
 
 ### timer
 
@@ -89,6 +99,7 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B 与离线语义）。`fram
 ### clock
 
 - [clock_test.go](../../../infra/base/clock/clock_test.go)：`TestLogicClockOffsetRoundTripsAtDurationResolution`、`TestLogicClockSetLandsWithinOneMillisecond`、`TestInjectedClocksAreIndependentOfTheGlobalOne`、`TestLogicClockIsSafeForConcurrentUse`、`TestProcessClockKeepsConfiguredSubmillisecondOffset`
+- [calendar_test.go](../../../infra/base/clock/calendar_test.go)：`TestZeroCalendarIsUTCMidnight`、`TestPositiveOffsetWithAMorningReset`、`TestNegativeOffset`、`TestDaylightSavingDaysAreShortAndLong`、`TestResetInsideTheDaylightSavingGapOrOverlap`、`TestInvariantsHoldThroughAWholeYear`、`TestDayFormatsAndSplitsItsDate`、`TestParseCalendarRejectsBadValues`、`TestBusinessClocksCarryTheirCalendar`
 
 ### timer
 

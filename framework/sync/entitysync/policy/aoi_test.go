@@ -642,7 +642,7 @@ func TestAOICandidatesMatchReference(t *testing.T) {
 					if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
 						t.Fatalf("spatial events differ:\n%v\n%v", a, r)
 					}
-					if a, r := (blockSource{actual}).Flush(), (blockSource{reference}).Flush(); !reflect.DeepEqual(a, r) {
+					if a, r := actual.FlushBlocks(), reference.FlushBlocks(); !reflect.DeepEqual(a, r) {
 						t.Fatalf("coverage events differ:\n%v\n%v", a, r)
 					}
 					for id := int64(1); id <= 24; id++ {
@@ -826,12 +826,12 @@ func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
 			check(a.AddObserver(id, id, at, ObserverView{}))
 		}
 		a.Flush()
-		(blockSource{a}).Flush()
+		a.FlushBlocks()
 		a.beginBatch()
 		check(a.MoveSubject(100, spatial.Point{X: 900, Y: 900}))
 		check(a.SetObservedBlocks(100, []int64{a.BlockAt(at)}))
 		a.endBatch(workers)
-		spatialEvents, blockEvents := a.Flush(), (blockSource{a}).Flush()
+		spatialEvents, blockEvents := a.Flush(), a.FlushBlocks()
 		if len(spatialEvents) != 8 || len(blockEvents) != 8 {
 			t.Fatalf("lost batch events: %v %v", spatialEvents, blockEvents)
 		}
@@ -842,11 +842,11 @@ func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
 		}
 		check(a.RemoveObserver(1))
 		check(a.AddObserver(1, 1, at, ObserverView{}))
-		lifecycle := (blockSource{a}).Flush()
+		lifecycle := a.FlushBlocks()
 		if len(lifecycle) != 2 || lifecycle[0].Kind != InterestLeave || lifecycle[1].Kind != InterestEnter {
 			t.Fatalf("reordered lifecycle: %v", lifecycle)
 		}
-		if len(a.Flush()) != 0 || len((blockSource{a}).Flush()) != 0 {
+		if len(a.Flush()) != 0 || len(a.FlushBlocks()) != 0 {
 			t.Fatal("events delivered twice")
 		}
 		return [][]InterestEvent{spatialEvents, blockEvents, lifecycle}
@@ -894,7 +894,7 @@ func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
 				if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
 					t.Fatalf("spatial events differ:\n%v\n%v", a, r)
 				}
-				if a, r := (blockSource{actual}).Flush(), (blockSource{reference}).Flush(); !reflect.DeepEqual(a, r) {
+				if a, r := actual.FlushBlocks(), reference.FlushBlocks(); !reflect.DeepEqual(a, r) {
 					t.Fatalf("coverage events differ:\n%v\n%v", a, r)
 				}
 				for id := int64(1); id <= 24; id++ {
@@ -967,7 +967,8 @@ func TestFarthestTieKeepsDeterministicEviction(t *testing.T) {
 	}
 }
 
-func TestInterestSelectsSourceViewsBeforeComparingPriority(t *testing.T) {
+// 同一目标被两个视野以不同层级看见、不知道字段（没有 ViewSets）时取并集，不再按优先级只留一个；关系视野解除后回到空间视野的层级。
+func TestInterestUnionsTheLayersOfDifferentViews(t *testing.T) {
 	near, team := entity.SyncProfile{Key: "near"}, entity.SyncProfile{Key: "team", LOD: 8}
 	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &sink{}, ProfilePriorities: map[entity.SyncProfile]int{team: -5}})
 	if err != nil {
@@ -983,36 +984,45 @@ func TestInterestSelectsSourceViewsBeforeComparingPriority(t *testing.T) {
 	if err := m.Register(s); err != nil {
 		t.Fatal(err)
 	}
-	profiles := map[string]map[int]entity.SyncProfile{SourceSpatial: {0: near}, "team": {0: team}}
-	in, err := NewInterest(InterestConfig{Manager: m, AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150}, Relations: []string{"team"}, SourceProfiles: profiles})
+	in, err := NewInterest(InterestConfig{Manager: m, AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150},
+		BandLayer: func(int) entity.SyncProfile { return near }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer in.Close()
-	profiles["team"][0] = near
+	if err := in.DefineRelationView(100, team); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.AttachView(1, 100); err != nil {
+		t.Fatal(err)
+	}
 	if err := in.Enter(1, 1, spatial.Point{X: 500, Y: 500}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := in.Show(2, spatial.Point{X: 510, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
-	in.Relation("team").Set(1, []int64{2})
+	if err := in.AddViewMembers(100, 2); err != nil {
+		t.Fatal(err)
+	}
 	if refusals := in.Apply(); len(refusals) != 0 {
 		t.Fatal(refusals)
 	}
 	if err := m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if captured != team.Normalize() {
-		t.Fatalf("source/priority lost: %+v", captured)
+	if want := entity.UnionSyncProfiles(near, team); captured != want {
+		t.Fatalf("layers not unioned: %+v, want %+v", captured, want)
 	}
-	in.Relation("team").Clear(1)
+	if err := in.DetachView(1, 100); err != nil {
+		t.Fatal(err)
+	}
 	in.Apply()
 	if err := m.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if captured != near.Normalize() {
-		t.Fatalf("source fallback lost: %+v", captured)
+		t.Fatalf("spatial layer lost: %+v", captured)
 	}
 }
 
@@ -1039,7 +1049,7 @@ func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireEvents(t, manager.Flush(), []InterestEvent{{Observer: 1, Subject: 2, Kind: InterestEnter, Band: 0}})
-	if events := (blockSource{manager: manager}).Flush(); len(events) != 0 {
+	if events := manager.FlushBlocks(); len(events) != 0 {
 		t.Fatalf("the observer saw its own coverage block: %+v", events)
 	}
 }
@@ -1299,5 +1309,5 @@ func TestAOICoverageExcludesSelfNotObserverID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	requireEvents(t, (blockSource{manager: manager}).Flush(), []InterestEvent{{Observer: 7, Subject: 7, Kind: InterestEnter}})
+	requireEvents(t, manager.FlushBlocks(), []InterestEvent{{Observer: 7, Subject: 7, Kind: InterestEnter}})
 }

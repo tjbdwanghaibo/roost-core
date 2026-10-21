@@ -411,11 +411,14 @@ func TestALiveBroadcastOverEmbeddedTCPNeverWaitsForAStalledConnection(t *testing
 // 嵌入 TCP 的全进程出站驻留预算耗尽时，实时帧按 Lockstep 已有的发送失败语义处理：这一帧对被拒的接收者算丢失
 // （Tick 返回带 gateway.ErrResidentBudgetExhausted 的错误），不等预算、不关闭任何连接；预算归还后实时帧继续，
 // 丢掉的帧由下一个广播包携带的冗余帧补上，客户端的 FrameAssembler 连续收齐，不需要追帧。
-// 预算由一条停读连接占满：推到它的帧卡在 socket 与出站队列里。
+// 预算由一条停读连接占满：推给它的一整帧卡在写协程里，客户端不读就永远写不完。
 func TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhausted(t *testing.T) {
+	const fillerBytes = 16 << 20 // 嵌入 TCP 的 max_payload_bytes 硬上限
 	tcp := newTCPLockstepServerWith(t, 30*time.Second, map[string]int64{"filler": 1, "live": 2}, func(config *gateway.TCPConfig) {
-		config.MaxPayloadBytes = 64 << 10
-		config.OutboundResidentBytes = 256 << 10 // 低于每连接 2 MiB 上限：占预算的连接不会先因自己的上限被关
+		config.MaxPayloadBytes = fillerBytes
+		// 预算恰好一帧（resident_bytes 允许的下限）：占预算的那一帧进队后剩余为 0。每连接字节上限是两帧，
+		// 占预算的连接不会先因自己的上限被关。
+		config.OutboundResidentBytes = fillerBytes + 16
 	})
 	filler := tcp.dial(t, "filler", 1, 4<<10)
 	live := tcp.dial(t, "live", 2, 64<<10)
@@ -463,35 +466,30 @@ func TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhaus
 	}
 	waitFrames(1)
 
-	// 占满预算：越来越小的帧（32 KiB → 1 KiB）把停读连接的 socket 缓冲与出站队列推满；停一会儿再探，
-	// 直到停下来之后连 1 KiB 也放不下。一个广播包约 16 KiB，必然被拒。
-	fill := func() {
-		for size := 32 << 10; size >= 1<<10; size /= 2 {
-			for attempt := 0; ; attempt++ {
-				err := tcp.runtime.PushLockstepSession(context.Background(), "filler", tcpLockstepMessageID, make([]byte, size))
-				if err == nil {
-					if attempt > 4096 {
-						t.Fatal("the filler connection never filled the process budget")
-					}
-					continue
-				}
-				if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
-					t.Fatalf("filler push refused with %v, want gateway.ErrResidentBudgetExhausted", err)
-				}
-				break
-			}
+	// 占满预算：给停读连接推一帧 16 MiB。这一帧的字节要整帧写进内核才扣减，而客户端接收缓冲 4 KiB、
+	// 单个 socket 缓冲有系统上限（macOS kern.ipc.maxsockbuf 8 MiB、自动调优上限 4 MiB；Linux tcp_wmem 缺省上限 4 MiB），
+	// 客户端不读就永远写不完：从它进队到 filler 关闭，剩余预算一直是 0，第 2 帧必然被拒，不靠“停一会儿再探”判断缓冲已满。
+	// 第 1 帧要等写协程写完才扣减，客户端读到它时可能还没扣：这时 filler 被拒，有界重试到第 1 帧归还。
+	filling := make([]byte, fillerBytes)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		err := tcp.runtime.PushLockstepSession(context.Background(), "filler", tcpLockstepMessageID, filling)
+		if err == nil {
+			break
 		}
-	}
-	for settled := false; !settled; {
-		fill()
-		time.Sleep(20 * time.Millisecond)
-		settled = tcp.runtime.PushLockstepSession(context.Background(), "filler", tcpLockstepMessageID, make([]byte, 1<<10)) != nil
+		if !errors.Is(err, gateway.ErrResidentBudgetExhausted) || time.Now().After(deadline) {
+			t.Fatalf("filler push = %v: frame 1 was never returned to the process budget", err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 
-	tickStart := time.Now()
-	err = tick() // 第 2 帧：live 被预算拒收
-	if elapsed := time.Since(tickStart); elapsed > 100*time.Millisecond {
-		t.Fatalf("a Tick with the budget exhausted took %v: it waited for the budget", elapsed)
+	// 第 2 帧：live 被预算拒收。预算在 filler 关闭之前不会归还，Tick 如果等预算就不会返回；有界等它返回，
+	// 返回且带着预算拒绝就证明它没有等。
+	ticked := make(chan error, 1)
+	go func() { ticked <- tick() }()
+	select {
+	case err = <-ticked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a Tick with the budget exhausted did not return: it waited for the budget")
 	}
 	if !errors.Is(err, gateway.ErrResidentBudgetExhausted) {
 		t.Fatalf("Tick with the budget exhausted = %v, want an error carrying gateway.ErrResidentBudgetExhausted", err)
@@ -502,6 +500,7 @@ func TestALiveBroadcastOverEmbeddedTCPDropsTheFrameWhenTheResidentBudgetIsExhaus
 	}
 
 	// 占预算的连接关闭后预算归还：第 3 帧的广播带着冗余的第 2 帧，客户端连续收齐。
+	// 关闭事件在这条连接的写协程退出、驻留归还之后才发布（gateway closeConnectionSession），收到它预算就已归还。
 	_ = filler.Close()
 	for deadline := time.Now().Add(5 * time.Second); !tcp.sessionClosed("filler", closed); {
 		if time.Now().After(deadline) {

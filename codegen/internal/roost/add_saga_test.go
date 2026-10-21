@@ -138,7 +138,7 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 		"entity.BuildEntityID(state.PlayerID, player.EntityKindPlayer)",
 		"kitsaga.WithAdmit",
 		// 容量决定写在骨架里：数字、分片、报告链接。
-		"5/s fully compensated", "DataEngine projector", "shard by sid", sagaCapacityDocURL,
+		"5/s fully compensated", "P99 is unsteady", "keep the WAL on a fast disk", "DataEngine projector", "shard by sid", sagaCapacityDocURL, sagaNightDocURL,
 	} {
 		if !strings.Contains(steps, want) {
 			t.Errorf("steps.go lacks %q:\n%s", want, steps)

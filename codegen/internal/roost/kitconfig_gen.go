@@ -48,6 +48,8 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "log.rotate_interval", Kind: "duration", Default: "24h", Min: "0"},
 		{Name: "log.rotate_time_format", Kind: "string"},
 		{Name: "time.logic_offset", Kind: "duration", Help: "业务时钟偏移（只给测试环境前拨业务时间用，生产必须为 0）"},
+		{Name: "time.business_timezone", Kind: "string", Default: "UTC", Help: "业务时区（IANA 名，例如 Asia/Shanghai）：业务日与每日重置按它划分，不取机器的 TZ / time.Local；存储与协议里的时间仍是绝对时刻", Shared: "time.business_timezone", Starter: true, Example: "UTC"},
+		{Name: "time.business_day_start", Kind: "string", Default: "00:00", Help: "每日重置时刻（业务时区的墙上时间 HH:MM）：业务日从这一刻开始", Shared: "time.business_day_start", Starter: true, Example: "00:00"},
 		{Name: "metrics.max_series_per_metric", Kind: "int", Min: "0", Help: "每个指标的序列数上限，0 取框架默认"},
 		{Name: "startup.timeout", Kind: "duration", Default: "2m", Min: "1ns", Help: "启动阶段总等待预算；较长的恢复需显式调大，超时但回调未退出时保留依赖直到进程退出"},
 		{Name: "shutdown.total_timeout", Kind: "duration", Default: "30s", Min: "1ns", Help: "停机总预算：全部 Mod 停完的时长上限"},

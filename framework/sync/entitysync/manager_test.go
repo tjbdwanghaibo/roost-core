@@ -884,3 +884,21 @@ func TestEncodeWorkspaceDoesNotMutateRetainedFrames(t *testing.T) {
 		}
 	}
 }
+
+// 层级并集的优先级取各层级里最优的那个：与 SyncViewSet.Lookup 给并集的 Priority 同一条规则，校验对得上。
+func TestUnionProfilePriorityIsItsBestLayer(t *testing.T) {
+	near, far, team := entity.SyncProfile{Key: "near"}, entity.SyncProfile{Key: "far", LOD: 1}, entity.SyncProfile{Key: "team", LOD: 8}
+	m := newTestManager(t, newRecordingTransport(), ManagerConfig{ProfilePriorities: map[entity.SyncProfile]int{team: -5}})
+	union := entity.UnionSyncProfiles(far, team)
+	if m.CompareProfiles(union, near) >= 0 || m.CompareProfiles(entity.UnionSyncProfiles(far, near), far) >= 0 {
+		t.Fatal("a union does not rank as its best layer")
+	}
+	views, err := entity.NewSyncViewSet(entity.SyncView{Profile: far, Priority: 1}, entity.SyncView{Profile: team, Priority: -5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := views.Lookup(union)
+	if err := m.ValidateViewPriority(view); err != nil {
+		t.Fatal(err)
+	}
+}

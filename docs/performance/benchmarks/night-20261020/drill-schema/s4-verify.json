@@ -1,0 +1,13 @@
+2026/10/21 04:18:34 INFO dataengine mod: database mapping logical=main physical=nightdrill source=config
+{
+  "mode": "verify",
+  "collection": "nightdrill.player",
+  "from": 1,
+  "to": 2,
+  "pending": 0,
+  "at_target": 3,
+  "tombstones": 0,
+  "converted": 0,
+  "written": 0,
+  "resumed": 0
+}

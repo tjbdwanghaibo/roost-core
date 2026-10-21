@@ -1,8 +1,19 @@
 // Command accountctl is the operator surface the account service deliberately
-// keeps off the bus: registering a game server, opening or closing it.
+// keeps off the bus: registering a game server, opening or closing it, and
+// recording a server merge.
 //
 //	go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000 -name game-1000 -status open
 //	go run ./cmd/accountctl -redis-cluster 10.0.0.1:7000,10.0.0.2:7000 upsert-server -sid 1000
+//	go run ./cmd/accountctl merge-server -from 1001 -into 1000 -note "merge window 10-20" [-dry-run]
+//	go run ./cmd/accountctl unmerge-server -from 1001 -note "revert: ..."
+//	go run ./cmd/accountctl show-server -sid 1001
+//
+// merge-server records that server -from is merged into -into (alias merge,
+// roost-core docs/framework/PLAYER-MIGRATION.md §6): the roles of -from keep
+// their identity and are served by -into's game process from then on; -from
+// is closed. Servers previously merged into -from are re-pointed at -into in
+// the same run, so an alias is always one hop. It is one step of the offline
+// runbook — the data that belongs to the sid is moved by cmd/sidmerge first.
 //
 // The account RPC interface has Login, CreateRole, SelectRole and friends —
 // player-facing operations any process may call — but not UpsertServer: that
@@ -39,21 +50,29 @@ func main() {
 	prefix := flag.String("prefix", "roost:{{PROJECT}}:account", "account.key_prefix from config.account.yaml; the store is shared with the running service through this prefix")
 	flag.Parse()
 	if flag.NArg() < 1 {
-		fail("usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-prefix key_prefix] upsert-server -sid N -name NAME [-status open|maintenance|full|closed] [-region R]")
+		fail("usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-prefix key_prefix] " +
+			"upsert-server -sid N -name NAME [-status open|maintenance|full|closed] [-region R] | " +
+			"merge-server -from A -into B -note TEXT [-dry-run] | unmerge-server -from A -note TEXT | show-server -sid N")
+	}
+	cfg := fredis.DefaultConfig(*redisAddr)
+	cfg.Password = *redisPassword
+	cfg.DB = *redisDB
+	for _, addr := range strings.Split(*redisCluster, ",") {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			cfg.ClusterAddrs = append(cfg.ClusterAddrs, addr)
+		}
 	}
 	switch flag.Arg(0) {
 	case "upsert-server":
-		cfg := fredis.DefaultConfig(*redisAddr)
-		cfg.Password = *redisPassword
-		cfg.DB = *redisDB
-		for _, addr := range strings.Split(*redisCluster, ",") {
-			if addr = strings.TrimSpace(addr); addr != "" {
-				cfg.ClusterAddrs = append(cfg.ClusterAddrs, addr)
-			}
-		}
 		upsertServer(cfg, *prefix, flag.Args()[1:])
+	case "merge-server":
+		mergeServer(cfg, *prefix, flag.Args()[1:])
+	case "unmerge-server":
+		unmergeServer(cfg, *prefix, flag.Args()[1:])
+	case "show-server":
+		showServer(cfg, *prefix, flag.Args()[1:])
 	default:
-		fail("unknown command %q (commands: upsert-server)", flag.Arg(0))
+		fail("unknown command %q (commands: upsert-server, merge-server, unmerge-server, show-server)", flag.Arg(0))
 	}
 }
 
@@ -82,7 +101,66 @@ func upsertServer(redisCfg *fredis.Config, prefix string, args []string) {
 	if err != nil {
 		fail("upsert server: %v", err)
 	}
-	out, _ := json.MarshalIndent(server, "", "  ")
+	printJSON(server)
+}
+
+// mergeServer records -from as merged into -into (svcaccount.Service.MergeServer):
+// the alias, -from closed, servers merged into -from re-pointed at -into. A
+// repeat of the same pair changes nothing; -dry-run prints what would change.
+func mergeServer(redisCfg *fredis.Config, prefix string, args []string) {
+	fs := flag.NewFlagSet("merge-server", flag.ExitOnError)
+	from := fs.Int("from", 0, "the server being merged away (its roles keep their identity)")
+	into := fs.Int("into", 0, "the server that serves them from now on")
+	note := fs.String("note", "", "why, recorded on the server record (required)")
+	dryRun := fs.Bool("dry-run", false, "print the records that would change and write nothing")
+	_ = fs.Parse(args)
+	service, closeStore := openService(redisCfg, prefix)
+	defer closeStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := service.MergeServer(ctx, svcaccount.MergeRequest{From: int32(*from), Into: int32(*into), Note: *note, DryRun: *dryRun})
+	printJSON(result)
+	if err != nil {
+		fail("merge server: %v", err)
+	}
+}
+
+// unmergeServer removes the alias of -from (svcaccount.Service.UnmergeServer).
+// The server stays closed: open it with upsert-server once it is deployed again.
+func unmergeServer(redisCfg *fredis.Config, prefix string, args []string) {
+	fs := flag.NewFlagSet("unmerge-server", flag.ExitOnError)
+	from := fs.Int("from", 0, "the merged server to restore")
+	note := fs.String("note", "", "why, recorded on the server record (required)")
+	_ = fs.Parse(args)
+	service, closeStore := openService(redisCfg, prefix)
+	defer closeStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := service.UnmergeServer(ctx, int32(*from), *note)
+	printJSON(result)
+	if err != nil {
+		fail("unmerge server: %v", err)
+	}
+}
+
+// showServer prints one server record, merge fields included.
+func showServer(redisCfg *fredis.Config, prefix string, args []string) {
+	fs := flag.NewFlagSet("show-server", flag.ExitOnError)
+	sid := fs.Int("sid", 0, "game server id")
+	_ = fs.Parse(args)
+	service, closeStore := openService(redisCfg, prefix)
+	defer closeStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	server, err := service.GetServer(ctx, int32(*sid))
+	if err != nil {
+		fail("show server: %v", err)
+	}
+	printJSON(server)
+}
+
+func printJSON(value any) {
+	out, _ := json.MarshalIndent(value, "", "  ")
 	fmt.Println(string(out))
 }
 

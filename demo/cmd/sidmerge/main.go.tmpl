@@ -1,0 +1,166 @@
+// Command sidmerge 是别名合服（把服 A 并入服 B）的离线数据工具，逻辑在 roost-core 的 wiring/sidmerge，步骤见
+// roost-core 的 docs/framework/PLAYER-MIGRATION.md §6。只在停服窗口里运行：A、B 的 game 进程都已正常停机。
+//
+//	go run ./cmd/sidmerge checklist [-config F] [-sid N]
+//	    只读配置的合服清单：哪些逻辑库按 sid 分库（要搬）、哪些共享（两侧必须同一位置）、持久总线消息、需要业务语义的合并。
+//	go run ./cmd/sidmerge migrate -from 1001 -into 1000 [-from-config F] [-into-config F] -dry-run
+//	    前置检查（两侧 WAL 已排空、非按 sid 的逻辑库同处、A 的 outbox 为空或共用控制库、saga 全部终态、持久总线清单）
+//	    与冲突扫描，什么也不写。
+//	go run ./cmd/sidmerge migrate -from 1001 -into 1000 -manifest merge-1001.json
+//	    检查全部通过才把 A 的按 sid 分库逐集合原样拷进 B 的（两侧各按自己的 dataengine.databases 换算），写清单；
+//	    源库保留为只读归档。重跑幂等。
+//	go run ./cmd/sidmerge revert -from 1001 -into 1000 -manifest merge-1001.json
+//	    回退：B 停机排空后，把清单上的文档按 B 的当前版本搬回 A、从 B 删掉。
+//
+// 每一侧的配置缺省都是 configs/service/config.{{GAME_SERVICE}}.yaml（-sid / -from / -into 覆盖其中的 sid）；两个服
+// 部署配置不同（库名映射、Mongo、WAL 目录）时用 -from-config / -into-config 给出各自那一份。WAL 不在本机时，在那台
+// 机器上跑 sidmove wal-drained，通过后在这里加 -from-wal-checked / -into-wal-checked。
+//
+// account 的“A 并入 B”不在这里：迁移通过后用 cmd/accountctl merge-server 记录。每个子命令打印一份 JSON 报告；
+// 检查不通过或出错时以非零码退出。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	db "{{MODULE}}/db"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/wiring/sidmerge"
+)
+
+const defaultConfig = "configs/service/config.{{GAME_SERVICE}}.yaml"
+
+// remoteManaged 是本工程 remote=managed 实体的集合（"<逻辑库>/<集合>"）：落在按 sid 分库里时报告会点名，所有权
+// 元数据按 Remote 规则另行处理。game-demo 的 Guild 在共享库 main 里，合服不搬它。
+var remoteManaged = []string{db.GuildDaoDBName + "/" + db.GuildDaoCollection}
+
+func main() {
+	if len(os.Args) < 2 {
+		fail("usage: sidmerge checklist|migrate|revert [flags]")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+	var (
+		result any
+		err    error
+	)
+	switch os.Args[1] {
+	case "checklist":
+		fs := flag.NewFlagSet("checklist", flag.ExitOnError)
+		config := fs.String("config", defaultConfig, "the game service config")
+		sid := fs.Int("sid", 0, "the sid to list for (0 keeps the config's sid)")
+		_ = fs.Parse(os.Args[2:])
+		cfg, loadErr := loadConfig(*config)
+		if loadErr != nil {
+			fail("%v", loadErr)
+		}
+		result, err = sidmerge.BuildChecklist(sidmerge.Server{SID: int32(*sid), Config: cfg}, nil)
+	case "migrate", "revert":
+		fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
+		plan := planFlags(fs)
+		dryRun := fs.Bool("dry-run", false, "migrate: check and scan only, write nothing")
+		manifestPath := fs.String("manifest", "", "migrate: write the manifest here (required unless -dry-run); revert: read it from here")
+		_ = fs.Parse(os.Args[2:])
+		merge, planErr := plan()
+		if planErr != nil {
+			fail("%v", planErr)
+		}
+		merge.RemoteManaged = remoteManaged
+		switch {
+		case os.Args[1] == "revert":
+			result, err = revert(ctx, merge, *manifestPath)
+		case *dryRun:
+			result, err = sidmerge.DryRun(ctx, merge)
+		default:
+			result, err = migrate(ctx, merge, *manifestPath)
+		}
+	default:
+		fail("unknown command %q (commands: checklist, migrate, revert)", os.Args[1])
+	}
+	encoded, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(encoded))
+	if err != nil {
+		fail("%s: %v", os.Args[1], err)
+	}
+}
+
+// planFlags 声明两侧的参数，返回解析之后构造 Plan 的函数。
+func planFlags(fs *flag.FlagSet) func() (sidmerge.Plan, error) {
+	from := fs.Int("from", 0, "the server being merged away (A)")
+	into := fs.Int("into", 0, "the server that serves A's roles from now on (B)")
+	fromConfig := fs.String("from-config", defaultConfig, "A's game service config (its dataengine.databases, mongo, WAL directory)")
+	intoConfig := fs.String("into-config", defaultConfig, "B's game service config")
+	fromMongo := fs.String("from-mongo", "", "A's Mongo URI; empty reads mongo.uri from -from-config")
+	intoMongo := fs.String("into-mongo", "", "B's Mongo URI; empty reads mongo.uri from -into-config")
+	fromWAL := fs.String("from-wal", "", "A's WAL directory; empty reads dataengine.wal.dir (data/wal/dataengine/<sid> when unset)")
+	intoWAL := fs.String("into-wal", "", "B's WAL directory")
+	fromWALChecked := fs.Bool("from-wal-checked", false, "A's WAL is on another machine and sidmove wal-drained passed there")
+	intoWALChecked := fs.Bool("into-wal-checked", false, "B's WAL is on another machine and sidmove wal-drained passed there")
+	return func() (sidmerge.Plan, error) {
+		if *from <= 0 || *into <= 0 {
+			return sidmerge.Plan{}, errors.New("-from and -into are required")
+		}
+		// 两侧各读一份（同一个文件也读两次）：sidmerge 把 sid 写进各自的配置。
+		fromCfg, err := loadConfig(*fromConfig)
+		if err != nil {
+			return sidmerge.Plan{}, err
+		}
+		intoCfg, err := loadConfig(*intoConfig)
+		if err != nil {
+			return sidmerge.Plan{}, err
+		}
+		return sidmerge.Plan{
+			From: sidmerge.Server{SID: int32(*from), Config: fromCfg, MongoURI: *fromMongo, WALDir: *fromWAL, WALCheckedElsewhere: *fromWALChecked},
+			Into: sidmerge.Server{SID: int32(*into), Config: intoCfg, MongoURI: *intoMongo, WALDir: *intoWAL, WALCheckedElsewhere: *intoWALChecked},
+		}, nil
+	}
+}
+
+func migrate(ctx context.Context, plan sidmerge.Plan, manifestPath string) (any, error) {
+	if manifestPath == "" {
+		return nil, errors.New("-manifest is required (or -dry-run)")
+	}
+	report, manifest, err := sidmerge.Migrate(ctx, plan)
+	if len(manifest.Documents) > 0 || err == nil {
+		encoded, _ := json.MarshalIndent(manifest, "", "  ")
+		if writeErr := os.WriteFile(manifestPath, encoded, 0o644); writeErr != nil {
+			return report, errors.Join(err, writeErr)
+		}
+	}
+	return report, err
+}
+
+func revert(ctx context.Context, plan sidmerge.Plan, manifestPath string) (any, error) {
+	if manifestPath == "" {
+		return nil, errors.New("-manifest is required")
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	var manifest sidmerge.Manifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, fmt.Errorf("manifest %s: %w", manifestPath, err)
+	}
+	return sidmerge.Revert(ctx, plan, manifest)
+}
+
+func loadConfig(path string) (*viper.Viper, error) {
+	cfg := viper.New()
+	cfg.SetConfigFile(path)
+	if err := cfg.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sidmerge: "+format+"\n", args...)
+	os.Exit(1)
+}

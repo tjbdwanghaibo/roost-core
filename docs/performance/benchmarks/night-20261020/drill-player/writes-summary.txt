@@ -1,0 +1,9 @@
+write attempts: ok 302 by ops port {'9100': 156, '9200': 146}
+player 2001 item 1001: confirms 75, first 5, last 79, non-+1 steps []
+player 2001 item 1002: confirms 76, first 1, last 76, non-+1 steps []
+player 2002 item 1001: confirms 75, first 5, last 79, non-+1 steps []
+player 2002 item 1002: confirms 76, first 1, last 76, non-+1 steps []
+errors 202 ('9200', 'connection refused/empty')
+errors 67 ('9100', 'connection refused/empty')
+errors 2 ('9200', 'nest: stopped')
+errors 1 ('9100', 'nest: stopped')

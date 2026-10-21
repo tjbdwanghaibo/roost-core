@@ -27,7 +27,7 @@ type AreaID int64
 // AOICluster stitches per-region AOI instances into one seamless
 // interest space over a SHARED world coordinate system: areas are
 // non-overlapping rectangles of the same plane, adjacency follows from the
-// geometry, and ids are cluster-global. 编号约定同 AOI：观察者按玩家 ID、目标按实体 ID，
+// geometry, and ids are cluster-global. 编号约定同 AOI：观察者是视野编号、目标按实体 ID，
 // 观察者带自身实体（self）与自己的视野；边界镜像按观察者自己的离开半径决定登记到哪些区域。
 //
 // Seamlessness rests on two mechanisms:
@@ -253,7 +253,7 @@ func (c *AOICluster) RemoveSubject(id int64) error {
 }
 
 // AddObserver registers an observer in its home area and mirrors it into
-// every neighboring area its leave radius touches. id 是玩家 ID，self 是其自身实体 ID（0 表示没有），
+// every neighboring area its leave radius touches. id 是视野编号，self 是它跟随的实体 ID（0 表示没有），
 // view 按配置归一。
 func (c *AOICluster) AddObserver(id, self int64, at spatial.Point, view ObserverView) error {
 	c.mu.Lock()

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
@@ -262,9 +263,9 @@ func TestRuntimePushPlayerEncodesOnceAndMarksServerPush(t *testing.T) {
 	defer remote.Close()
 	connectionCtx, cancel := context.WithCancelCause(context.Background())
 	current := newTCPSession(connectionCtx, cancel, client, Principal{PlayerID: 1, SessionID: "tcpSession"}, server.config, server.outbound)
-	defer server.closeConnectionSession(current)
+	defer server.closeConnectionSession(current, true)
 	server.registerSession(current)
-	defer server.unregisterSession(current)
+	defer server.forgetSession(current)
 	runtime := &TCPRuntime{encode: encode}
 	runtime.server.Store(server)
 	pushResult := make(chan error, 1)
@@ -1422,6 +1423,121 @@ func TestAPushAfterTheWriterExitedIsRefusedAndNotCounted(t *testing.T) {
 	_ = session.Close(ErrSessionClosed)
 }
 
+// stallingConn 是服务端一侧的连接：stall 之后的写一直卡住（像停读客户端的内核缓冲已满），直到 Close 打断它；
+// Close 时先调 atClose，让用例记下那一刻已经发布的关闭事件与进程驻留。
+type stallingConn struct {
+	net.Conn
+	stall     atomic.Bool
+	closeOnce sync.Once
+	closed    chan struct{}
+	atClose   func()
+}
+
+func (connection *stallingConn) Write(payload []byte) (int, error) {
+	if len(payload) == 0 {
+		return 0, nil // 空负载帧的第二段：net.Pipe 的零长度写也要等对端读，客户端不会为它读
+	}
+	if connection.stall.Load() {
+		<-connection.closed
+		return 0, net.ErrClosed
+	}
+	return connection.Conn.Write(payload)
+}
+
+func (connection *stallingConn) Close() error {
+	connection.closeOnce.Do(func() {
+		connection.atClose()
+		close(connection.closed)
+	})
+	return connection.Conn.Close()
+}
+
+// 关闭事件（OnSessionClosed）晚于连接的出站驻留归还（GATEWAY §4“连接返回时先关闭会话、等写协程退出，再……发布关闭事件”）：
+// 订阅方收到一条停读连接的关闭时，它排队与卡在写协程里的字节已经还给全进程预算，紧接着的推送不会再因为这条已关闭的连接被拒。
+// 写协程卡在写上直到 socket 被关闭，所以“Close 那一刻关闭事件是否已发布”确定地区分两种顺序；事件队列不开分发协程，
+// publishClosed 同步入队，Close 时看得见。
+func TestTheSessionClosedEventIsPublishedAfterTheConnectionReturnsItsResidentBytes(t *testing.T) {
+	config := DefaultTCPConfig()
+	config.MaxPayloadBytes = 64 << 10
+	config.OutboundResidentBytes = 1 << 20
+	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) {
+		return Principal{PlayerID: 7, SessionID: "stalled"}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewTCPRuntime(nil, config.LoginTimeout)
+	if err := server.ConnectRuntime(runtime); err != nil {
+		t.Fatal(err)
+	}
+	runtime.closedEvents = make(chan TCPSessionClosed, 4) // 不启动分发协程：事件留在队列里供检查
+	server.ctx, server.cancel = context.WithCancel(context.Background())
+	t.Cleanup(server.cancel)
+
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	publishedAtClose, residentAtClose := -1, int64(-1)
+	connection := &stallingConn{Conn: peer, closed: make(chan struct{})}
+	connection.atClose = func() {
+		publishedAtClose, residentAtClose = len(runtime.closedEvents), server.outbound.resident()
+	}
+	// acceptLoop 的登记：连接槽、连接表、wait。
+	server.connectionSlots <- struct{}{}
+	server.mu.Lock()
+	server.connections[connection] = struct{}{}
+	server.ipConnections[remoteHost(connection.RemoteAddr())]++
+	server.mu.Unlock()
+	server.wait.Add(1)
+	served := make(chan struct{})
+	go func() { defer close(served); server.serveConnection(connection) }()
+
+	handshake := &tcpSession{connection: client, writeTimeout: time.Second}
+	if err := handshake.writeFrame(context.Background(), 0, 0, 1, []byte("token")); err != nil {
+		t.Fatal(err)
+	}
+	if _, release, err := server.readFrame(client); err != nil {
+		t.Fatalf("authentication ack: %v", err)
+	} else {
+		release()
+	}
+	// 客户端拿到 ack 时服务端可能还没注册会话：等注册完成后再让写卡住。
+	registered := func() bool {
+		server.mu.RLock()
+		defer server.mu.RUnlock()
+		return server.sessions["stalled"] != nil
+	}
+	for deadline := time.Now().Add(2 * time.Second); !registered(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the authenticated connection was never registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	connection.stall.Store(true)
+	payload := make([]byte, 32<<10)
+	if err := server.pushPlayerKind(context.Background(), 7, pushTestMessageID, payload, flagSync); err != nil {
+		t.Fatalf("push to the registered connection = %v", err)
+	}
+	if got := server.outbound.resident(); got != int64(len(payload))+headerSize {
+		t.Fatalf("the stalled connection holds %d resident bytes, want %d", got, len(payload)+headerSize)
+	}
+
+	_ = client.Close() // 客户端走了：读循环读到 EOF 返回，连接收尾
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection did not finish after its client went away")
+	}
+	if publishedAtClose != 0 {
+		t.Fatalf("the close event was published before the socket was closed and the writer exited, while %d bytes of this connection were still resident", residentAtClose)
+	}
+	if got := len(runtime.closedEvents); got != 1 {
+		t.Fatalf("%d close events published, want 1", got)
+	}
+	if got := server.outbound.resident(); got != 0 {
+		t.Fatalf("after the connection finished the budget counts %d bytes, want 0", got)
+	}
+}
+
 // 读循环自己的回包与心跳 ACK 计入驻留但不因预算被拒：预算耗尽时正常读的客户端发请求仍得到回包，不被断开；
 // 业务异步 Session.Reply 与推送一样受预算拒绝。
 func TestReadLoopRepliesAreCountedButNotRefusedByTheResidentBudget(t *testing.T) {
@@ -1594,6 +1710,43 @@ func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	waitReleased(t, server, 0)
 	if got := runtime.CloseSessions(7, nil); got != 0 {
 		t.Errorf("CloseSessions for a player with no tcpSession reported %d, want 0", got)
+	}
+}
+
+// entity.kick（D16）经 admin 注册表执行 CloseSessions：玩家的两条连接都被关闭（客户端读到连接结束），回答 closed=2；
+// 再踢一次 closed=0；参数缺 player_id 或不是 JSON 按 ErrCommandInvalid 拒绝（ops 回 400）。
+func TestAdminEntityKickClosesThePlayersSessions(t *testing.T) {
+	server, runtime, closed := pushServer(t)
+	first := dialAuthenticated(t, server, "first")
+	second := dialAuthenticated(t, server, "second")
+	waitReleased(t, server, 2)
+	waitRegistered(t, runtime, 7, 2)
+	commands := admin.NewRegistry()
+	if err := RegisterAdminCommands(commands, runtime); err != nil {
+		t.Fatal(err)
+	}
+	kick := admin.Command{Name: AdminCommandEntityKick, Payload: []byte(`{"player_id":7,"reason":"unit test"}`)}
+	result, err := commands.Execute(context.Background(), kick)
+	if err != nil || result.Data["closed"] != 2 {
+		t.Fatalf("entity.kick = %+v, %v; want closed=2", result, err)
+	}
+	waitClosed(t, closed, "first", "second")
+	for _, connection := range []net.Conn{first, second} {
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := connection.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("a kicked connection is still open: read = %v", err)
+		}
+	}
+	if result, err = commands.Execute(context.Background(), kick); err != nil || result.Data["closed"] != 0 || result.Message == "" {
+		t.Fatalf("second entity.kick = %+v, %v; want closed=0 with a message", result, err)
+	}
+	for _, payload := range []string{`{}`, `{"player_id":-1}`, `not json`} {
+		if _, err := commands.Execute(context.Background(), admin.Command{Name: AdminCommandEntityKick, Payload: []byte(payload)}); !errors.Is(err, admin.ErrCommandInvalid) {
+			t.Errorf("entity.kick %s = %v, want ErrCommandInvalid", payload, err)
+		}
+	}
+	if err := RegisterAdminCommands(commands, nil); err == nil {
+		t.Fatal("entity.kick registered without a player runtime")
 	}
 }
 

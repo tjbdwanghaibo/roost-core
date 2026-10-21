@@ -76,7 +76,7 @@
 | [entity_group.go](../../../framework/entity/entity_group.go) | `EntityGroupTransitionState` |
 | [entity_guard.go](../../../framework/entity/entity_guard.go) | `EntityGuard`、`GuardScope` |
 | [entity_kind.go](../../../framework/entity/entity_kind.go) | `EntityCategory`、`EntityKind`、`EntityKindCategory`、`EntityKindDef`、`ComponentType`、`EntityDestroyReason` |
-| [entity_manager.go](../../../framework/entity/entity_manager.go) | `EntityManager`、`EntityManagerOption`、`DeleteAdmission`、`DeleteAdmitter` |
+| [entity_manager.go](../../../framework/entity/entity_manager.go) | `EntityManager`、`EntityManagerOption`、`DeleteAdmission`、`DeleteAdmitter`；`WithLocked`（持实体锁执行、只对当前托管实例，D16 卸载屏障用它） |
 | [entity_remote.go](../../../framework/entity/entity_remote.go) | `IThreadSafeRemoteEntity`、`RemoteEntityBase` |
 | [idgen.go](../../../framework/entity/idgen.go) | `IDGen` |
 | [local_executor.go](../../../framework/entity/local_executor.go) | 函数/方法或内部实现；见源码 |
@@ -188,7 +188,7 @@
 - [entity_contract_test.go](../../../framework/entity/entity_contract_test.go)：`TestGuardLocksNewInstanceWithDifferentMutex`、`TestGuardTreatsInstanceSharingTheHeldMutexAsHeld`、`TestGuardLockOrderCheckUsesInstance`、`TestGuardReleaseEntityKeepsSupersededLockAccounted`、`TestGuardUncomparableCustomMutexValueDoesNotPanic`；其余 5 项见文件
 - [entity_factory_test.go](../../../framework/entity/entity_factory_test.go)：`TestNewEntity_Create`、`TestEntityManagerCreateUsesInstanceDependencies`、`TestEntityManagerCreateInScopeLocksBeforePublication`、`TestInitEntitySyncInstallsContentState`、`TestBuildEntity_RemoteManagedRequiresRemoteInterface`；其余 3 项见文件
 - [entity_group_test.go](../../../framework/entity/entity_group_test.go)：`TestEntityGroupBaseDefaultsAndMutation`、`TestEntityGroupManagerIndexTracksAddUpdateRemove`、`TestEntityGroupManagerLifecycleEdges`
-- [entity_manager_test.go](../../../framework/entity/entity_manager_test.go)：`TestEntityManager_AddGet`、`TestEntityManager_GetWithCategory`、`TestEntityManager_DuplicatePanics`、`TestEntityManager_Remove`、`TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval`；其余 15 项见文件
+- [entity_manager_test.go](../../../framework/entity/entity_manager_test.go)：`TestEntityManager_AddGet`、`TestEntityManager_GetWithCategory`、`TestEntityManager_DuplicatePanics`、`TestEntityManager_Remove`、`TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval`、`TestEntityManagerWithLockedRunsUnderTheEntityLockOnlyForTheManagedInstance`；其余 15 项见文件
 - [entity_remote_test.go](../../../framework/entity/entity_remote_test.go)：`TestRemoteEntityBase_Interface`、`TestRemoteEntityBase_VersionVectorIsCoherent`、`TestRemoteEntityBase_IsRemoteCapable`、`TestRemoteEntityBase_GUId`、`TestRemoteSnapshotAllowStaleDoesNotBypassExpiry`；其余 7 项见文件
 - [example_gen_test.go](../../../framework/entity/example_gen_test.go)
 - [kind_contract_test.go](../../../framework/entity/kind_contract_test.go)：`TestRegisterEntityKindDefsLeavesNoHalfBatch`、`TestBuiltEntityPolicyUsesKindPolicy`、`TestBuilderDefaultLifetimeFollowsKindPolicy`、`TestLateKindPolicyUpgradeConflictingWithBuilderIsRefused`、`TestRegisterEntityKindCategoryRefusesEachInvalidPair`；其余 9 项见文件

@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/service/account"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -244,7 +245,24 @@ func (mod *GameIngressMod) Provide(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("game ingress wiring: %w", err)
 	}
-	return registry.RegisterBatch(app.Capability{Name: GameIngressName, Value: mod.runtime}, app.Capability{Name: PlayerRuntimeName, Value: gateway.PlayerRuntime(mod.runtime)})
+	if err := registry.RegisterBatch(app.Capability{Name: GameIngressName, Value: mod.runtime}, app.Capability{Name: PlayerRuntimeName, Value: gateway.PlayerRuntime(mod.runtime)}); err != nil {
+		return err
+	}
+	return RegisterPlayerAdminCommands(registry, mod.runtime)
+}
+
+// RegisterPlayerAdminCommands 把玩家接入层的运维命令（entity.kick，gateway.RegisterAdminCommands）挂到 App 的 admin
+// 注册表，经 ops 的 /admin/execute 调用（同一套 token 与审计）。一个进程只有一种玩家接入，由它在 Provide 时调用一次：
+// 独立 Gate 部署下是 GameIngressMod（上面），嵌入 TCP 是生成的 player TCP Mod（internal/access/player/tcp/server_gen.go）。
+func RegisterPlayerAdminCommands(registry *app.Registry, players gateway.PlayerRuntime) error {
+	commands, ok := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	if !ok || commands == nil {
+		return fmt.Errorf("gate wiring: capability %q not found", app.ModAdmin)
+	}
+	if err := gateway.RegisterAdminCommands(commands, players); err != nil {
+		return fmt.Errorf("gate wiring: %w", err)
+	}
+	return nil
 }
 func (mod *GameIngressMod) Start() error {
 	if mod.runtime == nil {

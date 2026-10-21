@@ -14,7 +14,8 @@ import (
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
 	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-CHECKPOINT-20261018.md"
-	sagaCapacitySummary = "in one process, two-step native sagas keep P50 under a second up to about 8/s forward and 5/s fully compensated; at 10/s forward every saga still ends correctly but the DataEngine projector (about 20 records/s, one record with a receipt or effect at a time) falls behind and latency grows to seconds, and from 12/s forward or 7/s fully compensated step timeouts retry and amplify the load"
+	sagaNightDocURL     = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/NIGHT-20261020.md"
+	sagaCapacitySummary = "in one process, two-step native sagas keep P50 under a second up to about 8/s forward and 5/s fully compensated, but P99 is unsteady (0.9-3.9 s over 15 minutes, measured 2026-10-20), and the WAL fsync is the main cost, so keep the WAL on a fast disk; at 10/s forward every saga still ends correctly but the DataEngine projector (about 20 records/s, one record with a receipt or effect at a time) falls behind and latency grows to seconds, and from 12/s forward or 7/s fully compensated step timeouts retry and amplify the load"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -392,23 +393,32 @@ import (
 //
 // roost project doctor warns (saga-steps:%[1]s) while nothing calls StartSteps.
 //
-// Capacity (measured 2026-10-18, default 20 ms projection checkpoint
-// interval): a step's durable is shared by every replica of the service; a
-// replica's callback runs one command's reservation and Nest call at a time and
-// waits for the projected receipt in the background. The DataEngine projector
-// handles each record carrying a receipt or effect on its own, about 20
-// records/s (2 per forward saga, 3 per fully compensated one). In one process,
-// two-step native sagas keep P50 under a second up to about 8/s forward and
-// 5/s fully compensated (P99 0.8 / 1.2 s); at 10/s forward every saga still
-// ends correctly but the projector falls behind and latency grows to seconds
-// (P50 2.2 s); from 12/s forward or 7/s fully compensated step timeouts retry
-// and amplify the load (each operation still takes effect exactly once, but
-// many sagas end failed / compensated). The top rates are single samples.
-// Mongo steps measured 20/s forward without saturating. More load needs more
-// processes: shard by sid (each process owns its sids' entities) and add an
-// admission check on the native steps (kitsaga.WithAdmit, below) so a command
-// runs on the process that owns its entity. Measurements:
+// Capacity (default 20 ms projection checkpoint interval): a step's durable is
+// shared by every replica of the service; a replica's callback runs one
+// command's reservation and Nest call at a time and waits for the projected
+// receipt in the background. The DataEngine projector handles each record
+// carrying a receipt or effect on its own, about 20 records/s (2 per forward
+// saga, 3 per fully compensated one). In one process, two-step native sagas
+// keep P50 under a second up to about 8/s forward and 5/s fully compensated,
+// but P99 is unsteady: 15-minute runs on 2026-10-20 (two at 8/s forward, 7200
+// sagas each, and one at 5/s fully compensated, 4500 sagas; none ended in a
+// wrong state) gave a server P50 of 549-713 ms and a P99 of 0.9-3.9 s, the two
+// 8/s forward runs 0.92 s and 3.89 s, four times apart (minute-long spikes:
+// Mongo stalls on top of a projector backlog). With the WAL on a RAM disk the
+// server P50 fell from 555 to 334 ms and a projection checkpoint from 57 to
+// 1 ms: the disk sync is the main cost, so keep the WAL on a fast disk. At
+// 10/s forward every saga still ends correctly but the projector falls behind
+// and latency grows to seconds (P50 2.2 s, 2026-10-18); from 12/s forward or
+// 7/s fully compensated step timeouts retry and amplify the load (each
+// operation still takes effect exactly once, but many sagas end failed /
+// compensated). The top rates are single samples. Mongo steps top out in one
+// process between 20 and 30/s forward and between 10 and 15/s fully
+// compensated. More load needs more processes: shard by sid (each process owns
+// its sids' entities) and add an admission check on the native steps
+// (kitsaga.WithAdmit, below) so a command runs on the process that owns its
+// entity. Measurements:
 // %[5]s
+// %[14]s
 // Guide: %[6]s §2.1
 
 // StepsGroup names the step consumers: each step's JetStream durable is
@@ -470,7 +480,7 @@ func RegisterSteps(steps *kitsaga.Steps, deps StepDeps) {
 %[11]s}
 
 %[13]stype stepBodies struct{ deps StepDeps }
-%[12]s`, snake, imports.String(), kinds.String(), sagaCapacitySummary, sagaCapacityDocURL, sagaGuideURL, service+"-"+snake, deps.String(), state.String(), lookup.String(), register.String(), bodies.String(), stepContract(anyNative, anyMongo))
+%[12]s`, snake, imports.String(), kinds.String(), sagaCapacitySummary, sagaCapacityDocURL, sagaGuideURL, service+"-"+snake, deps.String(), state.String(), lookup.String(), register.String(), bodies.String(), stepContract(anyNative, anyMongo), sagaNightDocURL)
 }
 
 // stepContract 是 stepBodies 上方的契约说明，只写本 saga 用到的步骤种类。

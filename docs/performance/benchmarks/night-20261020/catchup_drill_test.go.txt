@@ -1,0 +1,254 @@
+//go:build lsdrill
+
+package lockstep_test
+
+// 一次性功能演练（夜间补测第 10 项，不是性能基线、不提交为常驻用例）：嵌入 TCP 经 toxiproxy 限速链路的纯追帧页。
+// 与 2026-10-20 快照演练（benchmarks/lockstep-snapshot-p4-toxiproxy-20261020/embedded_drill_test.go.txt）同一套接线，
+// 只把“起点已裁掉、走快照”换成“起点在历史窗口内、只追帧”：不配快照来源（Recovery 缺省 = 追帧）。
+// 8 席、每席每帧 50 B 输入，一帧约 490 B；RedundancyDepth 1（TCP 可靠，实时广播只带本帧，便于按字节核算）；
+// 其余（CatchupBatchFrames 32、CatchupSendTimeout 2s、write_timeout 5s 等）取缺省。
+// 先无连接地切 LS_DRILL_FRAMES 帧（缺省 3000，< 窗口 3600），客户端从第 1 帧请求追帧，之后 30Hz Tick。
+// 期望：客户端回到头部的时间 ≈ 积压字节 /（链路速度 − 每秒新增帧字节）。
+//   LS_DRILL_RATES=0,256,64 GOWORK=off go test -tags lsdrill -count=1 -v -timeout 15m -run TestCatchupDrillEmbeddedTCP ./framework/sync/lockstep
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+)
+
+func catchupDrillProxy(t *testing.T, api, name, upstream string, rateKB int) string {
+	t.Helper()
+	call := func(method, path string, body any) []byte {
+		raw, _ := json.Marshal(body)
+		request, err := http.NewRequest(method, api+path, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var out bytes.Buffer
+		_, _ = out.ReadFrom(response.Body)
+		if response.StatusCode/100 != 2 {
+			t.Fatalf("toxiproxy %s %s: %d %s", method, path, response.StatusCode, out.String())
+		}
+		return out.Bytes()
+	}
+	created := call(http.MethodPost, "/proxies", map[string]any{"name": name, "listen": "127.0.0.1:0", "upstream": upstream, "enabled": true})
+	t.Cleanup(func() { call(http.MethodDelete, "/proxies/"+name, nil) })
+	var proxy struct{ Listen string }
+	if err := json.Unmarshal(created, &proxy); err != nil {
+		t.Fatal(err)
+	}
+	if rateKB > 0 {
+		call(http.MethodPost, "/proxies/"+name+"/toxics", map[string]any{"name": "bw", "type": "bandwidth", "stream": "downstream", "toxicity": 1, "attributes": map[string]int{"rate": rateKB}})
+	}
+	return proxy.Listen
+}
+
+func TestCatchupDrillEmbeddedTCP(t *testing.T) {
+	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
+	if api == "" || os.Getenv("LS_DRILL_RATES") == "" {
+		t.Skip("toxiproxy drill not configured")
+	}
+	for _, field := range strings.Split(os.Getenv("LS_DRILL_RATES"), ",") {
+		rate, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(fmt.Sprintf("rate%dKBps", rate), func(t *testing.T) { catchupDrill(t, api, rate) })
+	}
+}
+
+func catchupDrill(t *testing.T, api string, rateKB int) {
+	const tickPeriod = time.Second / 30
+	seats := []lockstep.PlayerID{1, 2, 3, 4, 5, 6, 7, 8}
+	frames := 3000
+	if n, err := strconv.Atoi(os.Getenv("LS_DRILL_FRAMES")); err == nil && n > 0 {
+		frames = n
+	}
+	input := bytes.Repeat([]byte{0x5a}, 50)
+	server := newTCPLockstepServer(t, gateway.DefaultTCPConfig().WriteTimeout, map[string]int64{"slow": 1})
+	sender := tcpLockstepSender(t, server.runtime, map[nettransport.SessionID]string{1: "slow"})
+	match, err := lockstep.NewMatch(lockstep.MatchConfig{
+		Sequencer:       lockstep.SequencerConfig{Players: seats, MaxInputBytes: 64},
+		RedundancyDepth: 1,
+		Datagrams:       sender, Reliable: sender,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer match.Close()
+	submit := func() {
+		for _, seat := range seats {
+			if _, err := match.SubmitInput(seat, match.NextFrame(), input); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for range frames {
+		submit()
+		if _, err := match.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := fmt.Sprintf("lsnight-catchup-%d-%d", os.Getpid(), rateKB)
+	listen := catchupDrillProxy(t, api, name, server.server.Addr().String(), rateKB)
+	connection, err := net.Dial("tcp", listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := wire.Write(connection, []*wire.Packet{{Seq: 1, Payload: []byte("slow")}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if ack, err := wire.Read(connection, 0); err != nil || ack.MsgID != 0 {
+		t.Fatalf("auth through proxy: %+v %v", ack, err)
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	for deadline := time.Now().Add(2 * time.Second); server.runtime.ActiveSessions(1) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("session never registered")
+		}
+	}
+	var next atomic.Uint64
+	var wireBytes atomic.Int64
+	var readErr atomic.Pointer[error]
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		assembler := lockstep.NewFrameAssembler(0)
+		for {
+			packet, err := wire.Read(connection, 0)
+			if err != nil {
+				readErr.Store(&err)
+				return
+			}
+			if packet.MsgID != tcpLockstepMessageID {
+				continue
+			}
+			wireBytes.Add(int64(len(packet.Payload)))
+			if _, err := assembler.Ingest(packet.Payload); err != nil {
+				readErr.Store(&err)
+				return
+			}
+			next.Store(uint64(assembler.Next()))
+		}
+	}()
+	if err := match.Attach(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	backlogFrames := match.History().Latest()
+	before := metrics.Snapshot()
+	start := time.Now()
+	if err := match.StartCatchup(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(tickPeriod)
+	defer ticker.Stop()
+	var serverDone, headAt time.Duration
+	var lastFrame lockstep.FrameID
+	tickErrors := 0
+	var lastTickErr error
+	seen := map[string]bool{}
+	closed := false
+	var bytesAtServerDone int64
+	for {
+		<-ticker.C
+		submit()
+		frame, err := match.Tick(context.Background())
+		lastFrame = frame.ID
+		if err != nil {
+			tickErrors++
+			lastTickErr = err
+		}
+		if serverDone == 0 && !match.CatchingUp(1) {
+			serverDone = time.Since(start)
+			bytesAtServerDone = wireBytes.Load()
+		}
+		if server.sessionClosed("slow", seen) {
+			closed = true
+			break
+		}
+		if serverDone != 0 && next.Load() >= uint64(frame.ID) {
+			headAt = time.Since(start)
+			break
+		}
+		if readErr.Load() != nil || time.Since(start) > 240*time.Second {
+			break
+		}
+	}
+	// 回到头部后再保持实时 5 秒，确认连接不断、帧流连续。
+	liveUntil := time.Now().Add(5 * time.Second)
+	for !closed && time.Now().Before(liveUntil) {
+		<-ticker.C
+		submit()
+		frame, err := match.Tick(context.Background())
+		lastFrame = frame.ID
+		if err != nil {
+			tickErrors++
+			lastTickErr = err
+		}
+		closed = server.sessionClosed("slow", seen)
+	}
+	time.Sleep(500 * time.Millisecond)
+	stillLive := !closed && readErr.Load() == nil && next.Load() >= uint64(lastFrame)
+	totalBytes := wireBytes.Load()
+	_ = connection.Close()
+	<-readerDone
+	after := metrics.Snapshot()
+	frameBytes := 0.0
+	if lastFrame > 0 {
+		frameBytes = float64(totalBytes) / float64(lastFrame)
+	}
+	var expect time.Duration
+	if rateKB > 0 {
+		perSecond := frameBytes * 30
+		netRate := float64(rateKB*1000) - perSecond
+		if netRate > 0 {
+			expect = time.Duration(frameBytes * float64(backlogFrames) / netRate * float64(time.Second))
+		}
+	}
+	ratio := 0.0
+	if expect > 0 && headAt > 0 {
+		ratio = float64(headAt) / float64(expect)
+	}
+	t.Logf("rate %d KB/s: backlog %d frames, client read %d B over %d frames (%.0f B/frame); server catch-up done %v (client had %d B); client at head %v; expected backlog/(rate-live) %v; ratio %.2f; Tick errors %d (last %v); closed %v; live after head %v; client next %d head %d",
+		rateKB, backlogFrames, totalBytes, lastFrame, frameBytes, serverDone.Round(time.Millisecond), bytesAtServerDone, headAt.Round(time.Millisecond), expect.Round(time.Millisecond), ratio, tickErrors, lastTickErr, closed, stillLive, next.Load(), lastFrame)
+	for _, name := range []string{"lockstep.catchup.frames.total", "lockstep.catchup.pages.total", "lockstep.catchup.failed.total", "lockstep.catchup.unservable.total", "lockstep.snapshot.total"} {
+		t.Logf("metric %s: %v -> %v", name, catchupDrillMetric(before, name), catchupDrillMetric(after, name))
+	}
+	if closed || headAt == 0 || !stillLive {
+		t.Errorf("catch-up drill did not return to live: closed %v headAt %v live %v", closed, headAt, stillLive)
+	}
+}
+
+func catchupDrillMetric(snapshot []metrics.Metric, name string) []string {
+	var out []string
+	for _, metric := range snapshot {
+		if metric.Name == name {
+			out = append(out, fmt.Sprintf("%v=%d", metric.Labels, metric.Value))
+		}
+	}
+	return out
+}

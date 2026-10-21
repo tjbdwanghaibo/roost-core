@@ -1,0 +1,314 @@
+// Command mergedrill 经生成 game-demo 的真实 account 与 TCP 端点验收别名合服（D15）：建角、按承载服登录、写入、读背包。
+// 只在私有隔离环境运行；状态文件含测试账号标识，不提交到版本库。
+//
+//	mergedrill setup  -state s.json                   # u1 on 1000, u2 on 1001, u3 on both; each adds -items of item 1001
+//	mergedrill login  -state s.json -who u2:1001 -expect-serving 1000 -add 5   # login, enter the serving server's endpoint, add items
+//	mergedrill create -state s.json -sid 1001 -expect-refused                   # a fresh account creating a role on sid
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"MMO_MODULE/loadtest/playertcp"
+	"MMO_MODULE/protocol/msgid"
+	"MMO_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+const itemID = int64(1001)
+
+type role struct {
+	SID      int32 `json:"sid"`
+	PlayerID int64 `json:"player_id"`
+}
+
+type user struct {
+	OpenID  string  `json:"open_id"`
+	Account string  `json:"account"`
+	Roles   []*role `json:"roles"`
+}
+
+type state struct {
+	Users map[string]*user `json:"users"`
+}
+
+var (
+	accountNATS   = flag.String("account-nats", "", "NATS url")
+	prefix        = flag.String("prefix", "mergedrill", "bus prefix")
+	endpoints     = flag.String("endpoints", "1000=127.0.0.1:37000,1001=127.0.0.1:37001", "sid=addr list")
+	statePath     = flag.String("state", "state.json", "drill state file")
+	who           = flag.String("who", "", "user:origin-sid")
+	expectServing = flag.Int("expect-serving", 0, "the serving server the session must name")
+	add           = flag.Int("add", 0, "items to add after entering")
+	expectCount   = flag.Int("expect-count", -1, "bag count the add must answer (after adding)")
+	sid           = flag.Int("sid", 0, "server for create")
+	expectRefused = flag.Bool("expect-refused", false, "create must be refused")
+	items         = flag.Int("items", 10, "items added at setup")
+)
+
+func main() {
+	command := os.Args[1]
+	playertcp.MustRegister()
+	if err := flag.CommandLine.Parse(os.Args[2:]); err != nil {
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var err error
+	switch command {
+	case "setup":
+		err = setup(ctx)
+	case "login":
+		err = login(ctx)
+	case "create":
+		err = create(ctx)
+	default:
+		err = fmt.Errorf("unknown command %q", command)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mergedrill %s: %v\n", command, err)
+		os.Exit(1)
+	}
+}
+
+func accounts() (*svcaccount.BusClient, func(), error) {
+	assembly, err := natsdriver.Assemble(fnats.DefaultConfig(*accountNATS), natsdriver.ClientOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{SvcType: "mergedrill", Prefix: *prefix, WorkerNum: 2, QueueCap: 64})
+	if err := b.Start(); err != nil {
+		return nil, nil, err
+	}
+	client, err := svcaccount.NewBusClient(b, "", 0)
+	if err != nil {
+		b.Stop()
+		return nil, nil, err
+	}
+	return client, b.Stop, nil
+}
+
+func endpointOf(sid int32) (string, error) {
+	for _, pair := range strings.Split(*endpoints, ",") {
+		key, value, _ := strings.Cut(pair, "=")
+		if key == strconv.Itoa(int(sid)) {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("no endpoint for sid %d", sid)
+}
+
+type conn struct {
+	raw transport.Conn
+	seq uint32
+	mu  sync.Mutex
+}
+
+func (c *conn) call(id uint32, payload []byte) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seq++
+	seq := c.seq
+	if err := c.raw.WritePackets([]*transport.Packet{{MsgID: id, Seq: seq, Payload: payload}}); err != nil {
+		return nil, err
+	}
+	for {
+		packet, err := c.raw.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+		if packet.Seq == seq {
+			return packet.Payload, nil
+		}
+	}
+}
+
+func mustMarshal(raw []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+// enter selects the role, dials the endpoint of the serving server the session names and enters the game.
+func enter(ctx context.Context, client *svcaccount.BusClient, accountID string, playerID int64) (*conn, svcaccount.Session, error) {
+	session, err := client.SelectRole(ctx, accountID, playerID)
+	if err != nil {
+		return nil, session, fmt.Errorf("select role %d: %w", playerID, err)
+	}
+	endpoint, err := endpointOf(session.ServingServerID)
+	if err != nil {
+		return nil, session, err
+	}
+	raw, err := transport.Dial(ctx, transport.Config{Type: playertcp.TransportType, Endpoint: endpoint, DialTimeout: 5 * time.Second})
+	if err != nil {
+		return nil, session, err
+	}
+	c := &conn{raw: raw}
+	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", playerID, session.Token))}); err != nil {
+		raw.Close()
+		return nil, session, err
+	}
+	resp, err := c.call(msgid.MsgEnterGame, mustMarshal(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{ClientVersion: "mergedrill"})))
+	if err != nil {
+		raw.Close()
+		return nil, session, err
+	}
+	entered, err := pb.UnmarshalEnterGameResponse(resp)
+	if err != nil {
+		raw.Close()
+		return nil, session, err
+	}
+	if entered.Code != 0 {
+		raw.Close()
+		return nil, session, fmt.Errorf("enter game %d on %s: code %d %s (owner sid %d)", playerID, endpoint, entered.Code, entered.Reason, entered.OwnerSID)
+	}
+	return c, session, nil
+}
+
+func addItems(c *conn, count int) (int32, error) {
+	resp, err := c.call(msgid.MsgAddItem, mustMarshal(pb.MarshalAddItemRequest(&pb.AddItemRequest{ItemID: itemID, Count: int32(count)})))
+	if err != nil {
+		return 0, err
+	}
+	added, err := pb.UnmarshalAddItemResponse(resp)
+	if err != nil {
+		return 0, err
+	}
+	if added.Code != 0 {
+		return 0, fmt.Errorf("add item: code %d %s", added.Code, added.Reason)
+	}
+	return added.Count, nil
+}
+
+func setup(ctx context.Context) error {
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	nonce := strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)
+	plan := map[string][]int32{"u1": {1000}, "u2": {1001}, "u3": {1000, 1001}}
+	s := &state{Users: map[string]*user{}}
+	for _, name := range []string{"u1", "u2", "u3"} {
+		u := &user{OpenID: "merge-" + nonce + "-" + name}
+		account, err := client.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: u.OpenID, Credential: "demo:" + u.OpenID})
+		if err != nil {
+			return fmt.Errorf("login %s: %w", name, err)
+		}
+		u.Account = account.ID
+		for _, server := range plan[name] {
+			created, err := client.CreateRole(ctx, account.ID, server, fmt.Sprintf("m%s%s%d", nonce, name, server))
+			if err != nil {
+				return fmt.Errorf("create role %s on %d: %w", name, server, err)
+			}
+			if created.ServerID != server || created.ServingServerID != server {
+				return fmt.Errorf("role of %s on %d: origin %d serving %d", name, server, created.ServerID, created.ServingServerID)
+			}
+			c, _, err := enter(ctx, client, account.ID, created.PlayerID)
+			if err != nil {
+				return err
+			}
+			count, err := addItems(c, *items)
+			c.raw.Close()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s role=%d origin=%d bag[%d]=%d\n", name, created.PlayerID, server, itemID, count)
+			u.Roles = append(u.Roles, &role{SID: server, PlayerID: created.PlayerID})
+		}
+		s.Users[name] = u
+	}
+	raw, _ := json.MarshalIndent(s, "", "  ")
+	return os.WriteFile(*statePath, raw, 0o644)
+}
+
+func login(ctx context.Context) error {
+	raw, err := os.ReadFile(*statePath)
+	if err != nil {
+		return err
+	}
+	var s state
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return err
+	}
+	name, origin, _ := strings.Cut(*who, ":")
+	u := s.Users[name]
+	if u == nil {
+		return fmt.Errorf("unknown user %q", name)
+	}
+	var target *role
+	for _, r := range u.Roles {
+		if strconv.Itoa(int(r.SID)) == origin {
+			target = r
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("%s has no role on %s", name, origin)
+	}
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	if _, err := client.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: u.OpenID, Credential: "demo:" + u.OpenID}); err != nil {
+		return err
+	}
+	c, session, err := enter(ctx, client, u.Account, target.PlayerID)
+	if err != nil {
+		return err
+	}
+	defer c.raw.Close()
+	if *expectServing != 0 && session.ServingServerID != int32(*expectServing) {
+		return fmt.Errorf("%s: session serving %d, want %d", *who, session.ServingServerID, *expectServing)
+	}
+	if session.ServerID != target.SID {
+		return fmt.Errorf("%s: session origin %d, want %d", *who, session.ServerID, target.SID)
+	}
+	count, err := addItems(c, *add)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s role=%d origin=%d serving=%d bag[%d]=%d\n", *who, target.PlayerID, session.ServerID, session.ServingServerID, itemID, count)
+	if *expectCount >= 0 && int(count) != *expectCount {
+		return fmt.Errorf("%s: bag %d, want %d", *who, count, *expectCount)
+	}
+	return nil
+}
+
+func create(ctx context.Context) error {
+	client, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	openID := "merge-fresh-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	account, err := client.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		return err
+	}
+	created, err := client.CreateRole(ctx, account.ID, int32(*sid), "f"+openID[len(openID)-8:])
+	switch {
+	case *expectRefused && err == nil:
+		return fmt.Errorf("create on %d was accepted: %+v", *sid, created)
+	case *expectRefused:
+		fmt.Printf("create on %d refused: %v\n", *sid, err)
+		return nil
+	case err != nil:
+		return err
+	}
+	fmt.Printf("create on %d: role=%d serving=%d\n", *sid, created.PlayerID, created.ServingServerID)
+	return nil
+}

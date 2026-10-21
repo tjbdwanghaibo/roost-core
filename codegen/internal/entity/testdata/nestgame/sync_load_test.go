@@ -100,9 +100,7 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.
 		}
 	}
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49},
-		// 观察者编号就是会话 ID：独立 Gate 下会话是连接号而不是玩家 ID，所以事务内入口从玩家 Unit 换算到它的会话。
-		ObserverOf: load.observerOf})
+	load.interest, err = policy.NewInterest(policy.InterestConfig{Manager: load.manager, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: side*30 + 500, Y: side*30 + 500}}, BlockSize: 150, EnterRadius: 150, LeaveRadius: 180, MaxVisible: 49}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +170,7 @@ func (load *syncGameLoad) openSession(index int, session entitysync.SessionID) e
 	return load.manager.OpenHeldSession(session)
 }
 
-// observerOf 是玩家 Unit 的观察者编号（会话 ID）；NPC 没有会话，不是观察者。
+// observerOf 是玩家 Unit 在 Interest 里的玩家编号（会话 ID）；NPC 没有会话，不是观察者。
 func (load *syncGameLoad) observerOf(entityID int64) (int64, bool) {
 	load.sessionsMu.RLock()
 	defer load.sessionsMu.RUnlock()
@@ -194,7 +192,8 @@ func (load *syncGameLoad) changed(unit *Unit, in invocation) error {
 	if load.self {
 		return nil
 	}
-	return load.interest.QueueMove(unit, load.position(unit), entity.GetUniqueIDFromEntityID(unit.ID()) <= int64(load.config.Players))
+	// 玩家 Unit 的主视野跟随它（Enter 时登记），事务移动把视野一起带走；NPC 只移动自己。
+	return load.interest.QueueMove(unit, load.position(unit))
 }
 func (load *syncGameLoad) start(t *testing.T, network loadFrontend) {
 	t.Helper()

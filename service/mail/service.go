@@ -26,6 +26,10 @@ type Config struct {
 	// Broadcast fans broadcast envelopes out. Required only if the caller
 	// sends broadcast mail; a nil Broadcast refuses AudienceBroadcast at send
 	// time rather than accepting it and delivering to nobody.
+	//
+	// A *LazyBroadcast is recognised by type: the Service then merges the
+	// ledger into a mailbox at PullBroadcasts and before List / Summary. Any
+	// other Deliverer is only called at send time.
 	Broadcast Deliverer
 
 	// ClaimLease is how long a reservation blocks a retry. Zero selects
@@ -73,6 +77,8 @@ const DefaultClaimLease = 30 * time.Second
 type Service struct {
 	cfg    Config
 	report servicemetrics.Sink
+	// lazy is cfg.Broadcast when it is the built-in store-once strategy.
+	lazy *LazyBroadcast
 }
 
 // New validates the configuration and returns a Service.
@@ -108,7 +114,14 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Now == nil {
 		cfg.Now = businessclock.Now
 	}
-	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
+	service := &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}
+	if lazy, ok := cfg.Broadcast.(*LazyBroadcast); ok && lazy != nil {
+		if err := lazy.bind(cfg.Now); err != nil {
+			return nil, err
+		}
+		service.lazy = lazy
+	}
+	return service, nil
 }
 
 func randomID() (string, error) {
@@ -475,6 +488,9 @@ type Item struct {
 	// client guessing from Status, which cannot express "held by an in-flight
 	// delivery".
 	Claimable bool
+	// GlobalID is the global mail id when this mail was merged from the
+	// lazy broadcast ledger, zero otherwise.
+	GlobalID uint64
 }
 
 // List returns one page of a player's mailbox, newest first.
@@ -508,19 +524,17 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 	}
 	mailbox := stored.Value.clone()
 	expiryNowUnix := s.cfg.Now().Unix()
-	if mailbox.expireEntries(expiryNowUnix) {
-		updated, _, err := s.cfg.Mailboxes.Update(ctx, playerID, func(current Mailbox, found bool) (Mailbox, bool, error) {
-			if !found {
-				return current, false, nil
-			}
-			next := current.clone()
-			changed := next.expireEntries(expiryNowUnix)
-			return next, changed, nil
-		})
+	// 拉取合并的第二个时机：List 前检查一次。账本头不高于水位时只花一次 O(1) 的版本读。
+	ledger, err := s.pendingBroadcasts(ctx, mailbox)
+	if err != nil {
+		return Page{}, err
+	}
+	if mailbox.expireEntries(expiryNowUnix) || ledger != nil {
+		updated, err := s.refreshMailbox(ctx, playerID, nil, ledger, expiryNowUnix)
 		if err != nil {
 			return Page{}, err
 		}
-		mailbox = updated.Value.clone()
+		mailbox = updated
 	}
 
 	// Order is decided here, from delivery time and then id, so it does not
@@ -583,6 +597,7 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 			Envelope:  envelope,
 			Status:    entry.Status,
 			Claimable: envelope.HasAttachment() && entry.claimable(nowUnix) == nil,
+			GlobalID:  entry.GlobalID,
 		})
 	}
 	if end < len(entries) {
@@ -772,9 +787,20 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 	}
 	// Authority: the envelope has to address this caller. The caller identity
 	// is an argument, not a request field.
+	//
+	// A broadcast merged by LazyBroadcast is addressed by its mailbox entry:
+	// the merge checked the scope against the player's profile and recorded
+	// the global mail id, so the caller does not have to restate the scope
+	// (and a guild change after the merge does not take the mail away).
 	if !envelope.Addresses(playerID, scope) {
-		s.report.Refused("reserve_claim", "not_recipient")
-		return Claim{}, fmt.Errorf("%w: mail %s does not address player %d", ErrNotRecipient, mailID, playerID)
+		merged, err := s.mergedBroadcast(ctx, playerID, envelope)
+		if err != nil {
+			return Claim{}, err
+		}
+		if !merged {
+			s.report.Refused("reserve_claim", "not_recipient")
+			return Claim{}, fmt.Errorf("%w: mail %s does not address player %d", ErrNotRecipient, mailID, playerID)
+		}
 	}
 	nowUnix := s.cfg.Now().Unix()
 	if envelope.Expired(nowUnix) {
@@ -1069,7 +1095,155 @@ func (s *Service) Summary(ctx context.Context, playerID int64) (Summary, error) 
 	if !found {
 		return Summary{PlayerID: playerID}, nil
 	}
-	return Summary{PlayerID: playerID, Unread: stored.Value.Unread, Evicted: stored.Value.Evicted}, nil
+	mailbox := stored.Value
+	// 拉取合并的第二个时机：Summary 前同样检查一次（红点不能落后于 List）。
+	ledger, err := s.pendingBroadcasts(ctx, mailbox)
+	if err != nil {
+		return Summary{}, err
+	}
+	if ledger != nil {
+		if mailbox, err = s.refreshMailbox(ctx, playerID, nil, ledger, s.cfg.Now().Unix()); err != nil {
+			return Summary{}, err
+		}
+	}
+	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted}, nil
+}
+
+// PullBroadcasts records the player's broadcast profile and merges every
+// global mail that is theirs into their mailbox. It is the login half of
+// LazyBroadcast: the login endpoint calls it once per login, and again when
+// the profile changes (the player joins or leaves a guild), because List and
+// Summary merge with the profile recorded here.
+//
+// Without a LazyBroadcast it does nothing but answer the summary, so a login
+// endpoint can call it unconditionally. Idempotent: a repeated or concurrent
+// pull merges each global mail once.
+func (s *Service) PullBroadcasts(ctx context.Context, playerID int64, profile BroadcastProfile) (Summary, error) {
+	if playerID <= 0 {
+		return Summary{}, fmt.Errorf("%w: player id must be positive", ErrRequestInvalid)
+	}
+	if s.lazy == nil {
+		return s.Summary(ctx, playerID)
+	}
+	if err := profile.Validate(); err != nil {
+		return Summary{}, err
+	}
+	ledger, err := s.lazy.index.Snapshot(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+	profile = profile.clone()
+	mailbox, err := s.refreshMailbox(ctx, playerID, &profile, &ledger, s.cfg.Now().Unix())
+	if err != nil {
+		return Summary{}, err
+	}
+	return Summary{PlayerID: playerID, Unread: mailbox.Unread, Evicted: mailbox.Evicted}, nil
+}
+
+// RevokeBroadcast stops a LazyBroadcast broadcast from being merged into any
+// mailbox that has not merged it yet. Copies already merged are left alone:
+// a player who already read or claimed a mail keeps it. It reports false for
+// a broadcast that was already revoked; a mail the ledger does not hold (never
+// a lazy broadcast, or already expired) is ErrMailMissing.
+func (s *Service) RevokeBroadcast(ctx context.Context, mailID string) (bool, error) {
+	if s.lazy == nil {
+		return false, fmt.Errorf("%w: revoking needs the lazy broadcast strategy", ErrRequestInvalid)
+	}
+	_, changed, err := s.lazy.index.Revoke(ctx, mailID, s.cfg.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	if changed {
+		s.report.Accepted("revoke_broadcast")
+	} else {
+		s.report.Replayed("revoke_broadcast")
+	}
+	return changed, nil
+}
+
+// pendingBroadcasts returns the ledger when it holds global mails above this
+// mailbox's watermark, and nil when there is nothing to merge: no lazy
+// strategy, no profile yet, or the watermark is current. The common case —
+// caught up — costs the index's version check, one O(1) read.
+func (s *Service) pendingBroadcasts(ctx context.Context, mailbox Mailbox) (*BroadcastLedger, error) {
+	if s.lazy == nil || mailbox.BroadcastProfile == nil {
+		return nil, nil
+	}
+	ledger, err := s.lazy.index.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ledger.Head <= mailbox.BroadcastWatermark {
+		return nil, nil
+	}
+	return &ledger, nil
+}
+
+// refreshMailbox is the one compare-and-set that expires entries, records a
+// new profile (profile != nil) and merges the ledger (ledger != nil), so the
+// watermark and the entries it accounts for always move together.
+func (s *Service) refreshMailbox(ctx context.Context, playerID int64, profile *BroadcastProfile, ledger *BroadcastLedger, nowUnix int64) (Mailbox, error) {
+	var (
+		merged  int
+		stopped bool
+	)
+	updated, _, err := s.cfg.Mailboxes.Update(ctx, playerID, func(current Mailbox, found bool) (Mailbox, bool, error) {
+		merged, stopped = 0, false
+		if !found && profile == nil {
+			return current, false, nil
+		}
+		next := current.clone()
+		next.init(playerID)
+		changed := next.expireEntries(nowUnix)
+		if profile != nil && (next.BroadcastProfile == nil || !next.BroadcastProfile.equal(*profile)) {
+			recorded := profile.clone()
+			next.BroadcastProfile = &recorded
+			next.UpdatedAtUnix = nowUnix
+			changed = true
+		}
+		if ledger != nil && s.lazy != nil && next.BroadcastProfile != nil {
+			before := next.BroadcastWatermark
+			recorded := *next.BroadcastProfile
+			merged, stopped = next.mergeBroadcasts(*ledger, func(mail GlobalMail) bool {
+				return s.lazy.admits(recorded, mail, nowUnix)
+			}, nowUnix)
+			changed = changed || merged > 0 || next.BroadcastWatermark != before
+		}
+		return next, changed, nil
+	})
+	if err != nil {
+		return Mailbox{}, err
+	}
+	if merged > 0 {
+		s.report.Accepted("merge_broadcast")
+	}
+	if stopped {
+		// 邮箱放不下（全是未读）：合并停在那封之前，等玩家读完 / 删掉再补；计数让运维看得见。
+		s.report.Refused("merge_broadcast", "mailbox_full")
+	}
+	return updated.Value.clone(), nil
+}
+
+// mergedBroadcast reports whether this player's mailbox holds the broadcast
+// as a LazyBroadcast merge (Entry.GlobalID set). Only a broadcast that does
+// not address the caller by scope reaches it, so it is one extra mailbox read
+// on an unusual path.
+func (s *Service) mergedBroadcast(ctx context.Context, playerID int64, envelope Envelope) (bool, error) {
+	if envelope.Audience != AudienceBroadcast {
+		return false, nil
+	}
+	stored, found, err := s.cfg.Mailboxes.Get(ctx, playerID)
+	if err != nil || !found {
+		return false, err
+	}
+	if entry, ok := stored.Value.entry(envelope.ID); ok {
+		return entry.GlobalID != 0, nil
+	}
+	// The entry was dropped by retention after a claim or deletion: the
+	// settled record proves it was delivered here, and the claim path answers
+	// already-claimed / deleted from it.
+	_, settled := stored.Value.settledClaim(envelope.ID)
+	return settled, nil
 }
 
 // Mailbox reads a player's whole mailbox state. Operator-facing.

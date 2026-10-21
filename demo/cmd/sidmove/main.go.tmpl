@@ -34,12 +34,12 @@ import (
 	db "{{MODULE}}/db"
 	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/sidmerge"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -94,81 +94,17 @@ func main() {
 	}
 }
 
-// WALReport 是 wal-drained 的结论。Drained 只在 WAL 完整、没有被进程持有、且 checkpoint 等于最后一条记录
-// （或根本没有记录）时为 true。
-type WALReport struct {
-	Dir        string `json:"dir"`
-	Drained    bool   `json:"drained"`
-	Records    uint64 `json:"records_retained"`
-	Checkpoint string `json:"checkpoint,omitempty"`
-	LastRecord string `json:"last_record,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	// Databases 是写下这些记录的进程的逻辑库 → 物理库映射（WAL 目录的 databases.json）：搬机后新进程
-	// 的 dataengine.databases 应与它一致，否则同一份数据会去不同的库里找。
-	Databases map[string]string `json:"databases,omitempty"`
-}
+// WALReport 是 wal-drained 的结论（与 cmd/sidmerge 的合服检查同一个判断，roost-core wiring/sidmerge）。Drained 只在
+// WAL 完整、没有被进程持有、且 checkpoint 等于最后一条记录（或根本没有记录）时为 true；Databases 是写下这些记录的
+// 进程的逻辑库 → 物理库映射，搬机后新进程的 dataengine.databases 应与它一致。
+type WALReport = sidmerge.WALReport
 
 // ErrNotDrained 表示旧 WAL 里还有没投影确认的记录：新机器用空 WAL 目录启动会丢掉它们。
-var ErrNotDrained = errors.New("the WAL still holds records that are not acknowledged as projected")
+var ErrNotDrained = sidmerge.ErrWALNotDrained
 
 // walDrained 只读检查一个已停止的 WAL 目录（nestwal.Inspect 先拿 writer.lock，进程还在跑就拒绝）。
 func walDrained(ctx context.Context, dir string) (WALReport, error) {
-	report := WALReport{Dir: dir}
-	if dir == "" {
-		return report, errors.New("-dir is required")
-	}
-	inspection, err := nestwal.Inspect(ctx, nestwal.InspectOptions{Dir: dir})
-	if err != nil {
-		report.Reason = err.Error()
-		if errors.Is(err, nestwal.ErrLocked) {
-			report.Reason = "a process still holds this WAL; stop it first"
-		}
-		return report, err
-	}
-	report.Databases = inspection.Databases
-	var checkpoint *nestwal.CheckpointInspection
-	for i := range inspection.Checkpoints {
-		entry := &inspection.Checkpoints[i]
-		if entry.Error == "" && (checkpoint == nil || entry.Generation > checkpoint.Generation) {
-			checkpoint = entry
-		}
-	}
-	var last *nestwal.SegmentInspection
-	for i := range inspection.Segments {
-		segment := &inspection.Segments[i]
-		report.Records += segment.Records
-		if segment.Records > 0 {
-			last = segment
-		}
-	}
-	if checkpoint != nil {
-		report.Checkpoint = fmt.Sprintf("segment %d offset %d", checkpoint.Fence.Segment, checkpoint.Fence.Offset)
-	}
-	if last == nil {
-		report.Drained = true
-		report.Reason = "no records retained"
-		return report, nil
-	}
-	lastSegment, err := segmentNumber(last.Name)
-	if err != nil {
-		return report, err
-	}
-	report.LastRecord = fmt.Sprintf("segment %d offset %d (%s)", lastSegment, last.LastGoodOffset, last.LastTransactionID)
-	if checkpoint != nil && checkpoint.Fence.Segment == lastSegment && checkpoint.Fence.Offset == last.LastGoodOffset {
-		report.Drained = true
-		return report, nil
-	}
-	report.Reason = "the checkpoint is behind the last record"
-	return report, ErrNotDrained
-}
-
-// segmentNumber 读出段文件名 segment-<20 位序号>.wal 里的序号（nestwal 的段命名）。
-func segmentNumber(name string) (uint64, error) {
-	digits, ok := strings.CutPrefix(strings.TrimSuffix(name, ".wal"), "segment-")
-	if !ok {
-		return 0, fmt.Errorf("unexpected segment name %q", name)
-	}
-	return strconv.ParseUint(digits, 10, 64)
+	return sidmerge.WALDrained(ctx, dir)
 }
 
 // SingletonReport 是 singleton 的结论；不打印锁值里的随机令牌。

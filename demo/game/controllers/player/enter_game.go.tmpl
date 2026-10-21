@@ -17,6 +17,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // HandleEnterGame makes sure the authenticated player has a Player Entity.
@@ -29,9 +30,9 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
 	// 先校验绑定，再装载实体，因为装载正是被把关的那件事。玩家建角时由 account 绑定到一个 game sid
-	// （Role.ServerID），之后不迁移；一个 Player 只能在他绑定的 sid 上驻留，同一 sid 只有一个进程（App
-	// 单实例锁）。所以“这次登录该不该在这里服务”是一个静态判断：会话 Claims 里认证器从 account 取来的
-	// server_id 是否等于本进程的 sid。
+	// （Role.ServerID），之后不迁移；原服并入另一服（别名合服）后由承载服服务（Role.ServingServerID）。一个
+	// Player 只能在承载他的 sid 上驻留，同一 sid 只有一个进程（App 单实例锁）。所以“这次登录该不该在这里
+	// 服务”是一个静态判断：会话 Claims 里认证器从 account 取来的 server_id（承载服）是否等于本进程的 sid。
 	//
 	// 不是本服的登录按名拒绝（player_elsewhere，带 owner_sid），客户端改连那个服的网关，不要在本服重试。
 	// Claims 里没有 server_id 说明认证器被换掉了、没有记下绑定：fail-closed，同样拒绝（owner_sid=0，
@@ -120,6 +121,23 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	} else if len(settled) > 0 {
 		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
 	}
+	// Server-wide mail (AudienceBroadcast) sent while this player was offline
+	// reaches the mailbox now: the login half of mail.LazyBroadcast. The mail
+	// service records the profile and merges every broadcast that is this
+	// player's — the server's, everyone's, and one sent after the role was
+	// created (the built-in condition) — exactly once; List and Summary top up
+	// from the same profile afterwards. Without LazyBroadcast configured
+	// (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
+	// A game with guild-wide broadcasts adds mail.GuildScope(guild) here and
+	// pulls again when the player joins or leaves a guild. Best effort — a
+	// failed pull is retried by the next List / Summary / login.
+	if mailer := controller.Mailer(); mailer != nil {
+		if profile, ok := BroadcastProfile(context.Session, boundSID); !ok {
+			slog.Warn("enter_game: the session carries no role creation time; server-wide mail not pulled", "player_id", context.PlayerID)
+		} else if _, pullErr := mailer.PullBroadcasts(context.Context(), context.PlayerID, profile); pullErr != nil {
+			slog.Warn("enter_game: server-wide mail not pulled", "player_id", context.PlayerID, "err", pullErr)
+		}
+	}
 	// From here on the player receives world-channel pushes.
 	controller.Presence().Add(context.PlayerID)
 	// The game announces the login on the world channel through the chat
@@ -168,9 +186,11 @@ func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameRespons
 	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
 }
 
-// BoundServerID 读会话里 account 给出的角色绑定 sid：认证器（internal/access/player/tcp/auth.go 的
-// newPrincipal）以 svcaccount.ServerIDClaim 为键写进 Principal.Claims 的那个值。没有会话、没有这个
-// claim、或值不是正整数都回答 false，由调用方 fail-closed。
+// BoundServerID 读会话里 account 给出的承载服：认证器（internal/access/player/tcp/auth.go 的
+// newPrincipal）以 svcaccount.ServerIDClaim 为键写进 Principal.Claims 的 Role.ServingServerID。没有合服时
+// 它就是角色建角时绑定的原服；原服并入本服（别名合服）之后，原服的角色在这里读到的是本服，登录照常通过，
+// 比较逻辑不变。原服另在 svcaccount.OriginServerIDClaim，路由与驻留不读它。没有会话、没有这个 claim、
+// 或值不是正整数都回答 false，由调用方 fail-closed。
 //
 // 导出是为了让认证器那一侧的测试（tcp/auth_test.go）用登录端点真正使用的读取函数核对自己写的
 // Principal：认证器归应用所有、可以被改写，两边对不上时登录会一律 fail-closed。
@@ -187,4 +207,31 @@ func BoundServerID(session gateway.Session) (int32, bool) {
 		return 0, false
 	}
 	return int32(sid), true
+}
+
+// BroadcastProfile 是登录端点拉全服邮件用的画像：本服范围加上认证器从 account 取来的角色建立时间
+// （svcaccount.RoleCreatedAtClaim）。没有这个 claim 或值不是正整数时回答 false：注册时间未知就无法
+// 判断“注册时间早于发送时间”，不拉取，而不是把玩家当成老玩家。
+//
+// 别名合服之后，原服并入本服的角色（svcaccount.OriginServerIDClaim 与本服不同）另带原服范围：合服前发给
+// 原服、这个角色还没拉到的全服邮件照样属于他。这是 game-demo 的业务选择，框架不规定。
+func BroadcastProfile(session gateway.Session, serverID int32) (svcmail.BroadcastProfile, bool) {
+	if session == nil {
+		return svcmail.BroadcastProfile{}, false
+	}
+	raw, ok := session.Principal().Claims[svcaccount.RoleCreatedAtClaim]
+	if !ok {
+		return svcmail.BroadcastProfile{}, false
+	}
+	createdAt, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || createdAt <= 0 {
+		return svcmail.BroadcastProfile{}, false
+	}
+	scopes := []string{svcmail.ServerScope(serverID)}
+	if raw, ok := session.Principal().Claims[svcaccount.OriginServerIDClaim]; ok {
+		if origin, err := strconv.ParseInt(raw, 10, 32); err == nil && origin > 0 && int32(origin) != serverID {
+			scopes = append(scopes, svcmail.ServerScope(int32(origin)))
+		}
+	}
+	return svcmail.BroadcastProfile{Scopes: scopes, RegisteredAtUnix: createdAt}, true
 }

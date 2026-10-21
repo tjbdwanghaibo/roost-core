@@ -235,12 +235,22 @@ func (s *Service) CreateRole(ctx context.Context, accountID string, serverID int
 	if !found {
 		return Role{}, fmt.Errorf("%w: server %d is unknown", ErrServerInvalid, serverID)
 	}
+	if into := server.Value.MergedInto; into != 0 {
+		// 已并入的服不再建角（与状态无关：并入以 MergedInto 为准）；新角色建在承载服上。
+		s.report.Refused("create_role", "server_merged")
+		return Role{}, fmt.Errorf("%w: server %d is merged into %d; create the role there", ErrServerClosed, serverID, into)
+	}
 	if !server.Value.Status.acceptsNewRoles() {
 		s.report.Refused("create_role", "server_closed")
 		return Role{}, fmt.Errorf("%w: server %d is %s", ErrServerClosed, serverID, server.Value.Status)
 	}
 
-	return s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
+	role, err := s.createRole(ctx, accountID, serverID, strings.TrimSpace(name))
+	if err != nil {
+		// 结果未知时 createRole 连同错误交回角色（恢复身份），原样转交。
+		return role, err
+	}
+	return s.withServing(ctx, role)
 }
 
 func sameVerifiedIdentity(account Account, identity Verified) bool {
@@ -279,6 +289,11 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	if err := s.roleReady(ctx, role.Value); err != nil {
 		return Session{}, err
 	}
+	// 承载服先于签发解析：解析不了（承载服缺失、两跳）就不发会话。
+	serving, err := s.servingServer(ctx, role.Value.ServerID)
+	if err != nil {
+		return Session{}, err
+	}
 	// The login stamp is business time; the token is system time.
 	now, issued := s.cfg.Now(), s.cfg.SystemNow()
 	token, err := security.SignSessionToken(playerID, s.cfg.SessionSecret, s.cfg.SessionTTL, issued)
@@ -298,7 +313,7 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 		return Session{}, err
 	}
 	return Session{
-		PlayerID: playerID, AccountID: accountID, ServerID: role.Value.ServerID,
+		PlayerID: playerID, AccountID: accountID, ServerID: role.Value.ServerID, ServingServerID: serving,
 		Token: token, ExpiresAtUnix: issued.Add(s.cfg.SessionTTL).Unix(),
 	}, nil
 }
@@ -319,7 +334,7 @@ func (s *Service) ValidateSession(ctx context.Context, playerID int64, token str
 	if err := s.roleReady(ctx, role.Value); err != nil {
 		return Role{}, err
 	}
-	return role.Value.clone(), nil
+	return s.withServing(ctx, role.Value)
 }
 
 // UpdateProfile replaces a role's opaque game profile.
@@ -364,7 +379,7 @@ func (s *Service) UpdateProfile(ctx context.Context, accountID string, playerID 
 	if err != nil {
 		return Role{}, err
 	}
-	return result, nil
+	return s.withServing(ctx, result)
 }
 
 // MarkLogout stamps the logout time.
@@ -384,7 +399,9 @@ func (s *Service) MarkLogout(ctx context.Context, accountID string, playerID int
 	return err
 }
 
-// UpsertServer records a server. Operator-facing.
+// UpsertServer records a server. Operator-facing. It never touches the merge
+// fields (MergedInto, MergedFrom, MergedAtUnix, MergeNote): those belong to
+// MergeServer and UnmergeServer, and a rename must not erase an alias.
 func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServer, error) {
 	if server.ID <= 0 {
 		return GameServer{}, fmt.Errorf("%w: id is zero or negative", ErrServerInvalid)
@@ -401,8 +418,11 @@ func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServ
 	var result GameServer
 	_, _, err := s.cfg.Servers.Update(ctx, server.ID, func(current GameServer, _ bool) (GameServer, bool, error) {
 		next := server
+		// 合服字段只由 MergeServer / UnmergeServer 写：改名、改状态不能把别名抹掉。
+		next.MergedInto, next.MergedFrom = current.MergedInto, append([]int32(nil), current.MergedFrom...)
+		next.MergedAtUnix, next.MergeNote = current.MergedAtUnix, current.MergeNote
 		next.UpdatedAtUnix = now.Unix()
-		result = next
+		result = next.clone()
 		return next, true, nil
 	})
 	if err != nil {

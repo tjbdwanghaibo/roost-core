@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                                      │ bench-p2-views.txt │
+                                                      │                                                            sec/op                                                             │
+RelationViewMemberChange/players=1/members=32-10                                                                                                                          424.3n ± 2%
+RelationViewMemberChange/players=1/members=1024-10                                                                                                                        508.7n ± 0%
+RelationViewMemberChange/players=64/members=32-10                                                                                                                         8.226µ ± 2%
+RelationViewMemberChange/players=64/members=1024-10                                                                                                                       19.47µ ± 1%
+RelationViewMemberChange/players=1024/members=32-10                                                                                                                       207.1µ ± 0%
+RelationViewMemberChange/players=1024/members=1024-10                                                                                                                     781.7µ ± 1%
+RelationViewAttach/members=32-10                                                                                                                                          2.849µ ± 1%
+RelationViewAttach/members=1024-10                                                                                                                                        141.5µ ± 3%
+RelationViewAttach/members=4096-10                                                                                                                                        667.0µ ± 1%
+SpatialViewsPerPlayer/views=1-10                                                                                                                                          2.075µ ± 0%
+SpatialViewsPerPlayer/views=16-10                                                                                                                                         35.49µ ± 1%
+SpatialViewsPerPlayer/views=64-10                                                                                                                                         107.7µ ± 2%
+SharedSpatialView/players=1-10                                                                                                                                            224.2n ± 0%
+SharedSpatialView/players=64-10                                                                                                                                           2.719µ ± 1%
+SharedSpatialView/players=1024-10                                                                                                                                         44.83µ ± 1%
+geomean                                                                                                                                                                   14.71µ
+
+                                                      │ bench-p2-views.txt │
+                                                      │                                                             B/op                                                              │
+RelationViewMemberChange/players=1/members=32-10                                                                                                                           704.0 ± 0%
+RelationViewMemberChange/players=1/members=1024-10                                                                                                                         704.0 ± 0%
+RelationViewMemberChange/players=64/members=32-10                                                                                                                        1.672Ki ± 0%
+RelationViewMemberChange/players=64/members=1024-10                                                                                                                      1.672Ki ± 0%
+RelationViewMemberChange/players=1024/members=32-10                                                                                                                      16.75Ki ± 0%
+RelationViewMemberChange/players=1024/members=1024-10                                                                                                                    16.97Ki ± 0%
+RelationViewAttach/members=32-10                                                                                                                                         1.016Ki ± 0%
+RelationViewAttach/members=1024-10                                                                                                                                       16.59Ki ± 0%
+RelationViewAttach/members=4096-10                                                                                                                                       66.00Ki ± 0%
+SpatialViewsPerPlayer/views=1-10                                                                                                                                           880.0 ± 0%
+SpatialViewsPerPlayer/views=16-10                                                                                                                                        13.47Ki ± 0%
+SpatialViewsPerPlayer/views=64-10                                                                                                                                        53.88Ki ± 0%
+SharedSpatialView/players=1-10                                                                                                                                             40.00 ± 0%
+SharedSpatialView/players=64-10                                                                                                                                            40.00 ± 0%
+SharedSpatialView/players=1024-10                                                                                                                                          40.00 ± 0%
+geomean                                                                                                                                                                  1.903Ki
+
+                                                      │ bench-p2-views.txt │
+                                                      │                                                           allocs/op                                                           │
+RelationViewMemberChange/players=1/members=32-10                                                                                                                           8.000 ± 0%
+RelationViewMemberChange/players=1/members=1024-10                                                                                                                         8.000 ± 0%
+RelationViewMemberChange/players=64/members=32-10                                                                                                                          8.000 ± 0%
+RelationViewMemberChange/players=64/members=1024-10                                                                                                                        8.000 ± 0%
+RelationViewMemberChange/players=1024/members=32-10                                                                                                                        8.000 ± 0%
+RelationViewMemberChange/players=1024/members=1024-10                                                                                                                      10.00 ± 0%
+RelationViewAttach/members=32-10                                                                                                                                           8.000 ± 0%
+RelationViewAttach/members=1024-10                                                                                                                                         8.000 ± 0%
+RelationViewAttach/members=4096-10                                                                                                                                         14.00 ± 7%
+SpatialViewsPerPlayer/views=1-10                                                                                                                                           7.000 ± 0%
+SpatialViewsPerPlayer/views=16-10                                                                                                                                          106.0 ± 0%
+SpatialViewsPerPlayer/views=64-10                                                                                                                                          424.0 ± 0%
+SharedSpatialView/players=1-10                                                                                                                                             2.000 ± 0%
+SharedSpatialView/players=64-10                                                                                                                                            2.000 ± 0%
+SharedSpatialView/players=1024-10                                                                                                                                          2.000 ± 0%
+geomean                                                                                                                                                                    9.800

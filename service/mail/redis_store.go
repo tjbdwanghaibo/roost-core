@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
-// RedisStores are the three stores this package needs, over Redis.
+// RedisStores are the stores this package needs, over Redis.
 //
 // Two of them are pure reuse: mailboxes and the send ledger are versioned
 // state, and versionstore.RedisStore already implements that contract.
@@ -25,6 +25,10 @@ type RedisStores struct {
 	Envelopes EnvelopeStore
 	Mailboxes MailboxStore
 	Sends     SendLedger
+	// Broadcasts is the LazyBroadcast ledger ("<prefix>:bcast:"). Building it
+	// writes nothing; it is used only when the deployment's Broadcast is a
+	// LazyBroadcast without an index of its own.
+	Broadcasts BroadcastIndex
 }
 
 // RedisConfig configures the three stores.
@@ -101,7 +105,11 @@ func NewRedisStores(client fredis.IRedis, cfg RedisConfig) (RedisStores, error) 
 	if err != nil {
 		return RedisStores{}, fmt.Errorf("mail: send ledger: %w", err)
 	}
-	return RedisStores{Envelopes: envelopes, Mailboxes: mailboxes, Sends: sends}, nil
+	broadcasts, err := NewRedisBroadcastIndex(client, cfg.Prefix, cfg.MaxAttempts, cfg.RetryBackoff)
+	if err != nil {
+		return RedisStores{}, err
+	}
+	return RedisStores{Envelopes: envelopes, Mailboxes: mailboxes, Sends: sends, Broadcasts: broadcasts}, nil
 }
 
 // envelopeClient is the slice of redis.IRedis the envelope store uses.

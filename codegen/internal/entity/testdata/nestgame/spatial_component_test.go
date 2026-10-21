@@ -66,7 +66,7 @@ func TestSpatialComponentNestCommitAndRollback(t *testing.T) {
 	if err := interest.Show(id, spatial.Point{X: 500, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
-	component, err := policy.NewSpatialComponent(unit, interest, false, func(at spatial.Point) { unit.state.SetX(at.X) })
+	component, err := policy.NewSpatialComponent(unit, interest, func(at spatial.Point) { unit.state.SetX(at.X) })
 	if err != nil {
 		t.Fatal(err)
 	}

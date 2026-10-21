@@ -23,12 +23,12 @@ setter仍只标脏。组件在业务线程中执行位置写入，handler必须�
 以下代码展示接入形状，`positionDAO` 和 `player` 是业务已有对象；X/Y使用业务对应的生成或手写setter。组件可以作为手写实体/业务组件的普通字段保存，不需要新增生成标记。
 
 ```go
-spatialComponent, err := policy.NewSpatialComponent(player, interest, true,
+spatialComponent, err := policy.NewSpatialComponent(player, interest,
     func(at spatial.Point) {
         positionDAO.SetX(at.X)
         positionDAO.SetY(at.Y)
     })
-// 初始化时处理 err；true 表示同时移动它的观察者（玩家 ID 由 InterestConfig.ObserverOf 从实体换算）。
+// 初始化时处理 err。跟随 player 的空间视野（玩家主视野、召唤物 / 单位的视野，D19）随事实一起移动，组件不区分观察者。
 
 // Nest handler 内：
 return spatialComponent.Move(next)
@@ -40,32 +40,33 @@ return spatialComponent.MoveWithObservedBlocks(next, observedBlocks)
 return spatialComponent.SetObservedBlocks(observedBlocks)
 ```
 
-保留低层 `Interest.QueueMove` / `QueueRelation`，新增 `QueueSpatial` / `QueueObservedBlocks`，便于业务已有组件接入。`QueueSpatial` 的空覆盖集合表示清空，普通 `QueueMove` 保留原覆盖。`BlockAt` 返回本Interest的块编号，越界为-1；块编号不能跨Interest混用。`ObservedBlocks` 返回覆盖副本。
+保留低层 `Interest.QueueMove(e, at)`，另有 `QueueSpatial(e, at, blocks)` / `QueueObservedBlocks`，便于业务已有组件接入。位置是 DAO 驱动的事实，走提交门；视野配置（定义、成员、挂接，D19）是直接调用，不排队。`QueueSpatial` 的空覆盖集合表示清空，普通 `QueueMove` 保留原覆盖。`BlockAt` 返回本Interest的块编号，越界为-1；块编号不能跨Interest混用。`ObservedBlocks` 返回覆盖副本。
 
 ## 3. Interest 的职责与锁
 
-Interest继续归并 `spatial/block/self/team/...` 来源，不新增入口服务、另一套ID调度器或常驻AOI线程池。
+Interest按视野归并（每个空间视野的距离与块覆盖、每个关系视野、self，D19），不新增入口服务、另一套ID调度器或常驻AOI线程池。
 
 - `queueMu` 只保护准入、角色登记、待处理事实与在途预算。Queue*不获取AOI计算锁。
-- `mu` 串行化政策批次、直接生命周期操作及订阅归并。Profile/ObserverOf 等业务回调维持串行调用（ObserverOf 在入队时于业务线程调用，须为纯函数），不要求业务突然改成并发安全。
-- 只允许 `mu → queueMu`，不能反向获取。生命周期退出的末尾在短队列锁内改写退出前的关系事实；Hide只撤销subject，仍保留合法observer事实。
+- `mu` 串行化政策批次、直接生命周期操作及订阅归并。`BandLayer` 等业务回调维持串行调用，不要求业务突然改成并发安全。
+- `viewMu`（视野登记表）只保护视野定义、挂接与关系成员；业务视野操作只取它，记下变更后由下一次政策阶段在 `mu` 下按顺序应用。
+- 只允许 `mu → queueMu`、`mu → viewMu`，不能反向获取，`queueMu` 与 `viewMu` 不同时持有。Leave / Hide 在短队列锁内改写退出前的位置事实：目标那一半作废，跟随它的视野那一半保留。
 - 已抽取事实与订阅归并中的事实仍占队列预算，不能用隐藏的第二条队列绕过容量。
 
 `BatchSize` 默认1024，是每轮就绪事实的软上限，同一Nest提交的多条事实不会被切开；事实总数由 `MaxQueuedFacts`（默认65536）限制。会检查待确认前缀后面的其他ID，避免一个未确认事务饿死无关实体；同ID后续事实不得越过前驱。批次剩余就绪工作在on_change下继续唤醒，不等待20Hz兜底。抽取时在同一个短队列锁内固定框架原子提交门的结果，避免业务刚补齐后半段并提交、政策却只处理已抽出的前半段。
 
-直接Enter/Watch/Show/Move/MoveView/Hide/Leave/Unwatch/SetObserverView与批次由同一协调锁串行。业务持Entity锁时使用Queue*或SpatialComponent，不同步等待直接生命周期操作或AOI计算。
+直接Enter/Watch/Show/Move/MoveView/Hide/Leave/Unwatch/SetObserverView与批次由同一协调锁串行。业务持Entity锁时使用Queue*、SpatialComponent或视野操作，不同步等待直接生命周期操作或AOI计算。
 
 ## 4. Block 与 Observer
 
 物理成员索引复用 `infra/base/spatial.BlockIndex`，已有每块RWMutex和按块编号加锁的跨块Move。新增同包 `aoiBlock` 保存observer反向索引及额外被观察实体ID，不复制Entity/DAO。唯一已应用位置由AOI的subject位置表保存，按位置计算唯一物理归属块。
 
-observer 的编号与视野（D14，维护者 2026-10-20 决定 A1 + B1）：observer 按玩家 ID（会话 ID）编号，subject 按实体 ID 编号，两张表互不相通；observer 登记时带自身实体 `self`（只看不被看的 `Watch` 为 0），`evaluatePair`、`evaluateObserver` 的入场候选与 `evaluateObserved` 的覆盖块都按 `self` 自排除。每个 observer 记自己的 `ObserverView`（LOD 层级 + 视野大小）推出的进入 / 离开半径与分档：`resubscribe` 的方框、进入 / 保持 / 分档、候选筛选都读它；`self` 变化时连同覆盖可见集一起重评。单个 observer 的块预算按 `AOIConfig.MaxLeaveRadius` 在构造时计算（`worstObserverBlocks`），所有视野先经 `normalizeView` 夹取量化，运行期不会超过启动期检查过的块数。用法见 [guide/04-sync](guide/04-sync.md#附近的人观察者是玩家视野按观察者d14)。
+observer 的编号与视野（D14 A1 + B1，D19 扩成多视野）：observer 是一个空间视野（Interest 给的内部编号；玩家主视野与业务空间视野都是），subject 按实体 ID 编号，两张表互不相通；observer 登记时带它跟随的实体 `self`（不跟随为 0），`evaluatePair`、`evaluateObserver` 的入场候选与 `evaluateObserved` 的覆盖块都按 `self` 自排除。每个 observer 记自己的 `ObserverView`（LOD 层级 + 视野大小）推出的进入 / 离开半径与分档：`resubscribe` 的方框、进入 / 保持 / 分档、候选筛选都读它；`self` 变化时连同覆盖可见集一起重评。单个 observer 的块预算按 `AOIConfig.MaxLeaveRadius` 在构造时计算（`worstObserverBlocks`），所有视野先经 `normalizeView` 夹取量化，运行期不会超过启动期检查过的块数；一个玩家的全部空间视野合计按 `worstObserverBlocks × MaxViewsPerPlayer` 对 `InterestConfig.MaxPlayerBlocks` 核算。AOI 事件按视野的挂接玩家扇出，一个共享视野的一次可见性变化 = 挂接人数次贡献变化。用法见 [guide/04-sync](guide/04-sync.md#谁看见谁视野viewd19)。
 
 当前政策批次分为：**串行短写入 → 并行Observer计算 → 串行订阅归并**。没有再实现并行写入的提交协调器，也没有读写同时进行的乐观重试。全部块写入完成后才开始读阶段，从而避免逐块读取时同一实体迁移造成漏读/重复。此选择缩短Nest入队路径，并把计算并行集中到较重的候选/距离工作，不能据此宣称空间写入吞吐随worker线性增长。
 
 每个observer独占可见集和事件缓冲。`Workers` 零值取GOMAXPROCS，批次内最多启动该数量的短计算任务；数量还受dirty observer数限制，不为每个块建立goroutine，也不把AOI计算放到Nest io 池。任务完成后才开始下一批写入。
 
-读锁用于短候选复制，精确距离、排序和订阅在块锁外。观察覆盖按该observer自己的leaveRadius实际求交，不写死九宫格。同块移动仍检查距离、滞回与档位。空间MaxVisible对observer跨块集合应用一次；保留现有距离并列与滞回契约。
+读锁用于短候选复制，精确距离、排序和订阅在块锁外。观察覆盖按该observer自己的leaveRadius实际求交，不写死九宫格。同块移动仍检查距离、滞回与档位。空间MaxVisible对每个observer（= 每个空间视野）跨块集合应用一次，不按玩家并集；保留现有距离并列与滞回契约。
 
 AOICluster继续复用相同AOI块基础，跨区域成员和边界镜像仍由Cluster协调锁串行，镜像方框按观察者自己的离开半径（`SetObserverView` 改视野时重建镜像）；本轮没有把它扩成并行区域写入系统，正式Interest入队不经过该锁。
 
@@ -87,7 +88,7 @@ AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，�
 
 可见条件为 `watchBlocks ∩ observedBlocks ≠ ∅`，不再用实体到观察者的普通进入半径过滤。实体真实位于A而覆盖B/C时，观察B/C的人仍可见；同时观察B和C，也只有一个对象和一份订阅。移除B但仍命中C，不退订。
 
-`block`是固定来源，命中的各个块不是独立订阅来源。与spatial/self/team收齐最终关系后再向Manager发布，来源切换不会先remove再create。支持 `SourceProfiles[SourceBlock][0]`，未配置时沿用现有Profile fallback；视图仍经过现有白名单和优先级校验，不因覆盖增多扩大权限。
+块覆盖是每个空间视野的一个固定来源，命中的各个块不是独立订阅来源。与距离、关系视野与 self 收齐最终关系后再向Manager发布，来源切换不会先remove再create。层级取 `InterestConfig.BlockLayer`，零值跟随空间视野 0 档；视图仍经过现有白名单和优先级校验，不因覆盖增多扩大权限。
 
 block来源不占普通spatial的MaxVisible，因此总可见数可以超过原来49+自己；仍受会话传输、快照预算与背压约束，后续负载必须单独统计额外扇出。
 
@@ -105,7 +106,7 @@ block来源不占普通spatial的MaxVisible，因此总可见数可以超过原�
 
 ## 7. 实现与验证
 
-主要源码：`policy/spatial_component.go`（手写接入）、`interest_queue.go`（事实/预算/提交）、`aoi_block.go`（扩展覆盖与批次）、`aoi.go`（空间/observer）、`interest.go`（多来源最终归并）、`entity/sync_commit.go` 与 `subject_sync.go`（内容发布屏障）。全部留在既有包内。
+主要源码：`policy/spatial_component.go`（手写接入）、`interest_queue.go`（事实/预算/提交）、`aoi_block.go`（扩展覆盖与批次）、`aoi.go`（空间/observer）、`interest.go` / `view.go`（视野登记表与按视野的最终归并）、`entity/sync_commit.go` 与 `subject_sync.go`（内容发布屏障）。全部留在既有包内。
 
 ```sh
 GOWORK=off go test -race ./framework/entity ./framework/sync/entitysync/... ./framework/nest ./wiring/nest

@@ -388,7 +388,7 @@ sequenceDiagram
 
 #### 7.5 视野：先停发布，再读权限
 
-`fog.reconcileFrom` 的顺序是：两个会话先 `HoldSession` → 读联盟权限 → 按成员是否有效 `Relation("alliance").Set/Clear` → `Interest.Apply` → `ReadySession` → `Flush`。权限读取失败时会话保持 held，Flush 不发新帧；不能拿旧缓存继续 Ready。`scout` 是独立来源：退出联盟只撤 `alliance`，仍有侦察时据点保留，最后一个来源撤销才产生删除。重连时 `CloseSession` → `OpenHeldSession` → `Resubscribe` → 重新 reconcile，客户端收到新的 Full；旧 epoch 的帧交给 Receiver 不会进入应用回调。每个对象载荷只有公开据点 `{"objective":99}`，没有成员名单、贡献意图或奖励账本。
+`fog.reconcileFrom` 的顺序是：两个会话先 `HoldSession` → 读联盟权限 → 按成员是否有效把联盟视野（一份共享关系视野，成员是联盟共有的据点）`AttachView` / `DetachView` 给该玩家 → `Interest.Apply` → `ReadySession` → `Flush`。权限读取失败时会话保持 held，Flush 不发新帧；不能拿旧缓存继续 Ready。`scout` 是独立来源：退出联盟只撤 `alliance`，仍有侦察时据点保留，最后一个来源撤销才产生删除。重连时 `CloseSession` → `OpenHeldSession` → `Resubscribe` → 重新 reconcile，客户端收到新的 Full；旧 epoch 的帧交给 Receiver 不会进入应用回调。每个对象载荷只有公开据点 `{"objective":99}`，没有成员名单、贡献意图或奖励账本。
 
 held 只停止后续发布，不收回客户端已经收到的信息；传输是内存捕获，不是 TCP 客户端。
 

@@ -21,7 +21,7 @@ import (
 const (
 	segmentFirst     = 560101
 	segmentLast      = 560199
-	segmentAllocated = 16
+	segmentAllocated = 17
 )
 
 // internalReason is what errcode.ClientError returns for anything it cannot
@@ -47,6 +47,8 @@ var codedSentinels = map[int32]error{
 	// The operator surface (RR-20261001-06).
 	CodeNotResolvable:     ErrNotResolvable,
 	CodeAdminNoteRequired: ErrAdminNoteRequired,
+	// Server merge (merge.go).
+	CodeServerMergeCycle: ErrServerMergeCycle,
 }
 
 // Every sentinel this package returns must carry its own code.

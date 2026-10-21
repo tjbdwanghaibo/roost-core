@@ -31,6 +31,16 @@ import (
 // login token here and return a stable, non-zero PlayerID and SessionID.
 // Keep the default fail-closed implementation in production until real auth is
 // wired; accepting an unverified player id from the socket is unsafe.
+//
+// With the account service (services.<game>.uses: account), validate the
+// session ticket through svcaccount.Accounts.ValidateSession and build the
+// Principal from the Role it returns, never from the id the socket claimed.
+// Record role.ServingServerID — the server that serves the role: its own
+// server, or the one it was merged into — under svcaccount.ServerIDClaim, and
+// role.ServerID (the origin, for display) under svcaccount.OriginServerIDClaim.
+// A login endpoint compares ServerIDClaim with this process's sid; routing on
+// role.ServerID would refuse every role of a merged server. The game-demo
+// template's internal/access/player/tcp/auth.go is a complete example.
 type applicationAuthenticator struct{}
 
 func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
@@ -306,6 +316,8 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	}
 	mod.runtime = runtime
 	mod.transportRuntime = NewRuntime(runtime.Protocols, mod.config.LoginTimeout)
+	// entity.kick（踢下线）挂到 App 的 admin 注册表，经 ops /admin/execute 调用；独立 Gate 部署由 Game Ingress 挂。
+	if err := gatewiring.RegisterPlayerAdminCommands(registry, mod.transportRuntime); err != nil { return err }
 	return registry.Register(Name, mod.transportRuntime)
 }
 
@@ -429,15 +441,48 @@ import (
  "errors"
  "log/slog"
  "net"
+ "os"
+ "slices"
  "strings"
  "testing"
  "time"
  "github.com/spf13/viper"
  "github.com/tjbdwanghaibo/roost-core/client/wire"
+ "github.com/tjbdwanghaibo/roost-core/framework/app"
  "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+ "github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
  accessplayer %q
  %q
 )
+// entity.kick（D16）：玩家接入层在 Provide 时把它挂到 App 的 admin 注册表（嵌入 TCP 是本 Mod，独立 Gate 是 Game Ingress），
+// 经 ops 的 /admin/execute 调用（同一套 token 与审计）。它关闭该玩家在本进程的全部连接、回答关闭的会话数，不改实体状态；
+// 玩家随后可以重新登录。
+func TestAdminEntityKickClosesThePlayersConnections(t *testing.T){
+ registry:=app.NewRegistry(viper.New())
+ if err:=registry.Register(accessplayer.Name,&accessplayer.Runtime{Protocols:playeraccess.NewProtocolRegistry()});err!=nil{t.Fatal(err)}
+ config:=defaultConfig();config.Enabled=true;config.Addr="127.0.0.1:0"
+ mod:=&Mod{config:config,authenticator:AuthenticatorFunc(func(_ context.Context,token string,_ net.Addr)(gateway.Principal,error){return gateway.Principal{PlayerID:7,SessionID:token},nil})}
+ if err:=mod.Provide(registry);err!=nil{t.Fatal(err)}
+ if err:=mod.Start();err!=nil{t.Fatal(err)}
+ t.Cleanup(func(){ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel();if err:=mod.StopWithContext(ctx);err!=nil{t.Error(err)}})
+ commands,ok:=app.Lookup[*admin.Registry](registry,app.ModAdmin)
+ if !ok||!slices.Contains(commands.Names(),"entity.kick"){t.Fatalf("admin commands after Provide = %%v, want entity.kick",commands.Names())}
+ first,second:=dialAuthenticated(t,mod.server,"first"),dialAuthenticated(t,mod.server,"second")
+ // 会话在鉴权 ACK 写出之后才登记：两个都登记了再踢，否则可能只看见一个。
+ deadline:=time.Now().Add(2*time.Second)
+ for mod.transportRuntime.ActiveSessions(7)!=2 {if time.Now().After(deadline){t.Fatalf("sessions registered = %%d, want 2",mod.transportRuntime.ActiveSessions(7))};time.Sleep(5*time.Millisecond)}
+ kick:=admin.Command{Name:"entity.kick",Payload:[]byte(`+"`"+`{"player_id":7,"reason":"generated test"}`+"`"+`)}
+ result,err:=commands.Execute(context.Background(),kick)
+ if err!=nil||result.Data["closed"]!=2{t.Fatalf("entity.kick = %%+v, %%v; want closed=2",result,err)}
+ for _,conn:=range []net.Conn{first,second}{
+  _=conn.SetReadDeadline(time.Now().Add(2*time.Second))
+  if _,err:=wire.Read(conn,wire.DefaultMaxPayload);err==nil||errors.Is(err,os.ErrDeadlineExceeded){t.Fatalf("a kicked connection is still open: read = %%v",err)}
+ }
+ // 没有连接的玩家：成功、closed=0（踢下线是幂等的运维动作）。
+ if result,err=commands.Execute(context.Background(),kick);err!=nil||result.Data["closed"]!=0{t.Fatalf("second entity.kick = %%+v, %%v; want closed=0",result,err)}
+ // 玩家可以重新登录：踢下线不封禁。
+ dialAuthenticated(t,mod.server,"again")
+}
 func TestHandlerPanicHasErrorLevelStack(t *testing.T){
  var logs bytes.Buffer;old:=slog.Default();slog.SetDefault(slog.New(slog.NewTextHandler(&logs,&slog.HandlerOptions{Level:slog.LevelInfo})));defer slog.SetDefault(old)
  wrapped:=playeraccess.RecoverMiddleware(func(*playeraccess.Context,any)(any,error){panic("b6 handler failure")})

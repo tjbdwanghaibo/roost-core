@@ -4,6 +4,7 @@ package gate_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 )
 
@@ -166,6 +170,36 @@ func TestRealGateTCPForwardAndUnifiedPush(t *testing.T) {
 	}
 	if h.calls.Load() != 1 {
 		t.Fatalf("dispatch calls=%d", h.calls.Load())
+	}
+}
+
+// entity.kick（D16）在独立 Gate 部署下：Game Ingress 关闭玩家的绑定，Gate 随即断开对应的客户端连接；回答 closed=1。
+// 命令经 RegisterPlayerAdminCommands 挂到 App 的 admin 注册表（GameIngressMod.Provide 的同一调用）。
+func TestRealGateAdminKickClosesTheClientConnection(t *testing.T) {
+	h := realGateHarness(t, nil)
+	conn := h.connect(t)
+	deadline := time.Now().Add(2 * time.Second)
+	for h.game.ActiveSessions(123) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("active sessions = %d, want 1", h.game.ActiveSessions(123))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	registry := app.NewRegistry(viper.New())
+	if err := gatewiring.RegisterPlayerAdminCommands(registry, h.game); err != nil {
+		t.Fatal(err)
+	}
+	commands, _ := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	result, err := commands.Execute(context.Background(), admin.Command{Name: gateway.AdminCommandEntityKick, Payload: []byte(`{"player_id":123,"reason":"real gate test"}`)})
+	if err != nil || result.Data["closed"] != 1 {
+		t.Fatalf("entity.kick = %+v, %v; want closed=1", result, err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if packet, err := wire.Read(conn, 1<<20); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the kicked client connection is still open: packet=%v err=%v", packet, err)
+	}
+	if h.game.ActiveSessions(123) != 0 {
+		t.Fatalf("active sessions after kick = %d", h.game.ActiveSessions(123))
 	}
 }
 func TestRealGateUnknownNeverReplaysAndDrainWaitsActualDispatch(t *testing.T) {

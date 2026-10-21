@@ -218,8 +218,9 @@ func renderSecondGame(m Manifest, gameService string) string {
 # Config is derived from configs/service/config.%[1]s.yaml the first time and
 # written to configs/service/config.%[1]s2.yaml; edit that file to keep changes.
 #
-# A player is served only by the sid their role is bound to (account's
-# Role.ServerID); a login anywhere else is refused as player_elsewhere. Robots
+# A player is served only by the sid serving their role (account's
+# Role.ServingServerID: the role's own server, or the one it was merged into);
+# a login anywhere else is refused as player_elsewhere. Robots
 # meant for this process create their roles on its sid: cmd/loadtest -server-id.
 set -eu
 

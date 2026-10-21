@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 )
 
 // SyncView 把视图身份、字段白名单和选择优先级分开。Fields 使用业务 DAO 的字段位；
@@ -36,6 +38,10 @@ func NewSyncViewSet(views ...SyncView) (*SyncViewSet, error) {
 	set := &SyncViewSet{views: make(map[SyncProfile]SyncView, len(views))}
 	for _, view := range views {
 		view.Profile = view.Profile.Normalize()
+		if strings.ContainsAny(view.Profile.Key, syncLayerReserved) {
+			// 并集身份由框架拼出（UnionSyncProfiles），业务声明的层级不能和它混淆。
+			return nil, fmt.Errorf("entity: sync view key %q uses a reserved character (%q)", view.Profile.Key, syncLayerReserved)
+		}
 		if _, exists := set.views[view.Profile]; exists {
 			return nil, fmt.Errorf("entity: duplicate sync view %+v", view.Profile)
 		}
@@ -44,12 +50,38 @@ func NewSyncViewSet(views ...SyncView) (*SyncViewSet, error) {
 	return set, nil
 }
 
+// Lookup 返回视图的字段白名单与优先级。并集身份（UnionSyncProfiles）解析为各层级字段的并集、优先级取其中最优（最小）的；
+// 任一层级未声明就是未知视图，绝不悄悄放宽。
 func (s *SyncViewSet) Lookup(profile SyncProfile) (SyncView, bool) {
 	if s == nil {
 		return SyncView{}, false
 	}
-	view, ok := s.views[profile.Normalize()]
-	return view, ok
+	profile = profile.Normalize()
+	layers := profile.Layers()
+	if len(layers) == 1 {
+		view, ok := s.views[profile]
+		return view, ok
+	}
+	union := SyncView{Profile: profile}
+	for index, layer := range layers {
+		view, ok := s.views[layer]
+		if !ok {
+			return SyncView{}, false
+		}
+		union.Fields |= view.Fields
+		if index == 0 || view.Priority < union.Priority {
+			union.Priority = view.Priority
+		}
+	}
+	return union, true
+}
+
+// Covers 报告层级 a 的字段是否包含层级 b 的全部字段（两者都须已声明）。同一目标被两个层级看见时，
+// 包含关系成立就只订阅数据多的那个，不成立才取并集。
+func (s *SyncViewSet) Covers(a, b SyncProfile) bool {
+	va, okA := s.Lookup(a)
+	vb, okB := s.Lookup(b)
+	return okA && okB && va.Fields&vb.Fields == vb.Fields
 }
 
 // Priorities 返回独立副本，供 Manager 配置使用；修改它不会改变 packer 的字段白名单。
@@ -132,4 +164,89 @@ func NormalizeSyncProfiles(profiles []SyncProfile) []SyncProfile {
 	}
 	slices.SortFunc(out, CompareSyncProfiles)
 	return slices.Compact(out)
+}
+
+// ---- 层级并集 ----
+//
+// 层级（layer）就是一个 SyncProfile：视野给出层级，层级的字段由 SyncViewSet 声明（NamedSyncView 按 DAO 字段名列出）。
+// 同一目标被几个彼此不包含的层级同时看见时，订阅的是它们的并集。并集仍是一个 SyncProfile，Manager、帧缓存与线上格式
+// 都不用认识第二种身份：Key 是各层级身份按 CompareSyncProfiles 排序后用 "+" 连接（层级 LOD、SchemaVersion 非零时
+// 写成 key@lod 或 key@lod@schema），LOD 取各层级里最小（最细）的。客户端按 "+" 拆开就知道这份数据由哪些层级组成。
+
+// syncLayerReserved 是并集身份占用的字符，业务声明的视图 Key 不能含有。
+const syncLayerReserved = "+@"
+
+// UnionSyncProfiles 返回几个层级的并集身份：去重后只剩一个层级时就是它本身，空输入是缺省视图。
+func UnionSyncProfiles(profiles ...SyncProfile) SyncProfile {
+	var layers []SyncProfile
+	for _, profile := range profiles {
+		layers = append(layers, profile.Normalize().Layers()...)
+	}
+	layers = NormalizeSyncProfiles(layers)
+	switch len(layers) {
+	case 0:
+		return SyncProfile{}.Normalize()
+	case 1:
+		return layers[0]
+	}
+	tokens := make([]string, len(layers))
+	lod := layers[0].LOD
+	for index, layer := range layers {
+		tokens[index] = layerToken(layer)
+		lod = min(lod, layer.LOD)
+	}
+	return SyncProfile{Key: strings.Join(tokens, "+"), LOD: lod}
+}
+
+// Layers 把并集身份拆回各层级（已规范化、有序）；普通视图返回它自己。
+func (p SyncProfile) Layers() []SyncProfile {
+	p = p.Normalize()
+	if !strings.Contains(p.Key, "+") {
+		return []SyncProfile{p}
+	}
+	tokens := strings.Split(p.Key, "+")
+	layers := make([]SyncProfile, 0, len(tokens))
+	for _, token := range tokens {
+		layer, ok := parseLayerToken(token)
+		if !ok {
+			// 不是框架拼出的并集（业务视图集不接受这种 Key）：按一个普通身份处理，查找时自然是未知视图。
+			return []SyncProfile{p}
+		}
+		layers = append(layers, layer)
+	}
+	return layers
+}
+
+func layerToken(layer SyncProfile) string {
+	switch {
+	case layer.SchemaVersion != 0:
+		return layer.Key + "@" + strconv.Itoa(int(layer.LOD)) + "@" + strconv.FormatUint(uint64(layer.SchemaVersion), 10)
+	case layer.LOD != 0:
+		return layer.Key + "@" + strconv.Itoa(int(layer.LOD))
+	default:
+		return layer.Key
+	}
+}
+
+func parseLayerToken(token string) (SyncProfile, bool) {
+	parts := strings.Split(token, "@")
+	if parts[0] == "" || len(parts) > 3 {
+		return SyncProfile{}, false
+	}
+	layer := SyncProfile{Key: parts[0]}
+	if len(parts) > 1 {
+		lod, err := strconv.ParseUint(parts[1], 10, 8)
+		if err != nil {
+			return SyncProfile{}, false
+		}
+		layer.LOD = uint8(lod)
+	}
+	if len(parts) > 2 {
+		schema, err := strconv.ParseUint(parts[2], 10, 32)
+		if err != nil {
+			return SyncProfile{}, false
+		}
+		layer.SchemaVersion = uint32(schema)
+	}
+	return layer, true
 }

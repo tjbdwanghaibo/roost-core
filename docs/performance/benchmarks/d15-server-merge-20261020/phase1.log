@@ -1,0 +1,20 @@
+[drill 22:26:15] start account
+[drill 22:26:29] start activity
+[drill 22:26:30] start chat
+[drill 22:26:31] start global
+[drill 22:26:32] start mail
+[drill 22:26:33] start match
+[drill 22:26:35] start platform
+[drill 22:26:36] start rank
+[drill 22:26:37] start session
+[drill 22:27:01] start game1000
+[drill 22:27:03] start game1001
+u1 role=100001 origin=1000 bag[1001]=10
+u2 role=100002 origin=1001 bag[1001]=10
+u3 role=100003 origin=1000 bag[1001]=10
+u3 role=100004 origin=1001 bag[1001]=10
+{ acknowledged: true, insertedId: 'season' }
+[drill 22:27:15] stopped game1001 (pid 33814)
+[drill 22:27:16] stopped game1000 (pid 33766)
+[drill 22:27:16] phase1 done
+exit=0

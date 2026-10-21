@@ -8,22 +8,28 @@ import (
 	controllerplayer "{{MODULE}}/game/controllers/player"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
-// sessionAccounts 是只认一张会话票据的 account 客户端：票据对得上就返回绑定在 serverID 的角色。
-// 其余方法不会被认证器调用，留给嵌入的 nil 接口。
+// sessionAccounts 是只认一张会话票据的 account 客户端：票据对得上就返回原服 originID、由 serverID 承载的
+// 角色（originID 为 0 表示没有合服，原服就是 serverID）。其余方法不会被认证器调用，留给嵌入的 nil 接口。
 type sessionAccounts struct {
 	svcaccount.Accounts
 	playerID int64
 	token    string
 	serverID int32
+	originID int32
 }
 
 func (accounts sessionAccounts) ValidateSession(_ context.Context, playerID int64, token string) (svcaccount.Role, error) {
 	if playerID != accounts.playerID || token != accounts.token {
 		return svcaccount.Role{}, errors.New("unknown session")
 	}
-	return svcaccount.Role{PlayerID: playerID, ServerID: accounts.serverID}, nil
+	origin := accounts.originID
+	if origin == 0 {
+		origin = accounts.serverID
+	}
+	return svcaccount.Role{PlayerID: playerID, ServerID: origin, ServingServerID: accounts.serverID, CreatedAtUnix: 1_700_000_000}, nil
 }
 
 // principalSession 把认证器产出的 Principal 装成登录端点拿到的会话。
@@ -49,5 +55,32 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
 	if !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v) from the authenticator's claims %v, want the role's server 1300", sid, bound, principal.Claims)
+	}
+	// 全服邮件拉取的画像（D17）：本服范围 + 角色建立时间，都从认证器写的 claims 读。
+	profile, ok := controllerplayer.BroadcastProfile(principalSession{principal: principal}, sid)
+	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 1 || profile.Scopes[0] != svcmail.ServerScope(1300) {
+		t.Fatalf("the login endpoint built the broadcast profile %+v (%v) from %v, want server 1300 registered at 1700000000", profile, ok, principal.Claims)
+	}
+}
+
+// 合服之后（原服 1301 并入 1300）：登录端点读到的是承载服 1300，原服记在 OriginServerIDClaim。
+func TestAMergedRolesPrincipalCarriesTheServingServer(t *testing.T) {
+	authenticator := &applicationAuthenticator{}
+	authenticator.accounts.Store(&accountsHandle{accounts: sessionAccounts{playerID: 42, token: "ticket", serverID: 1300, originID: 1301}})
+	principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
+	if err != nil {
+		t.Fatalf("a valid session ticket was refused: %v", err)
+	}
+	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
+	if !bound || sid != 1300 {
+		t.Fatalf("the login endpoint read (%d, %v), want the serving server 1300", sid, bound)
+	}
+	if origin := principal.Claims[svcaccount.OriginServerIDClaim]; origin != "1301" {
+		t.Fatalf("OriginServerIDClaim = %q, want the origin 1301", origin)
+	}
+	// 全服邮件：承载服的范围之外，合服前发给原服的也属于这个角色。
+	profile, ok := controllerplayer.BroadcastProfile(principalSession{principal: principal}, sid)
+	if !ok || len(profile.Scopes) != 2 || profile.Scopes[0] != svcmail.ServerScope(1300) || profile.Scopes[1] != svcmail.ServerScope(1301) {
+		t.Fatalf("broadcast profile of a merged role = %+v (%v), want the scopes of 1300 and 1301", profile, ok)
 	}
 }

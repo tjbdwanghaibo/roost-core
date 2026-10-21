@@ -148,7 +148,7 @@ func TestInterestResubmitsASubscriptionTheFrameworkRetracted(t *testing.T) {
 		t.Fatalf("an idle apply after the resubmit refused: %+v", refusals)
 	}
 	// 恢复的 pair 仍按政策自己的规则释放。
-	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -163,7 +163,7 @@ func TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway(t *testing
 	in := newInterest(t, manager)
 	state2 := sideBySide(t, manager, in)
 	retractUnloaded(t, manager, state2)
-	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	if refusals := in.Apply(); len(refusals) != 0 {
@@ -180,7 +180,7 @@ func TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway(t *testing
 	if got := log.take(1); len(got) != 0 {
 		t.Fatalf("observer 1 received %v for a subject it no longer sees", got)
 	}
-	if err := in.Move(1, 1, spatial.Point{X: 10, Y: 10}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 10, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -238,7 +238,7 @@ func TestEachPolicyResubmitsItsOwnRetractedSubscription(t *testing.T) {
 		t.Fatal("releasing the group's source took the Interest subscription with it")
 	}
 	// Interest 撤销：Direct 已解绑、Group 已撤销，最后一个来源离开，发 remove。
-	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -437,7 +437,7 @@ func TestInterestStillRecoversAfterASecondRetractionBeforeDelivery(t *testing.T)
 	if refusals := in.Apply(); len(refusals) != 0 {
 		t.Fatalf("an idle apply after the recovery refused: %+v", refusals)
 	}
-	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 900}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -482,7 +482,7 @@ func TestResubmitRacesLeaveAndFlush(t *testing.T) {
 				if walkAway {
 					target = spatial.Point{X: 900, Y: 900}
 				}
-				_ = in.Move(1, 1, target)
+				_ = in.Move(1, target)
 				_ = in.Apply()
 			}()
 			close(start)
@@ -521,14 +521,14 @@ func TestResubmitRacesLeaveAndFlush(t *testing.T) {
 
 func TestARetractedSubjectRebindBeforeTheRemovesComesBackToInterestObservers(t *testing.T) {
 	manager, log := newLoggedManager(t)
-	in := newInterest(t, manager, "team")
+	in := newInterest(t, manager)
 	state2 := sideBySide(t, manager, in) // 观察者 1 经距离看到 2；2 经 self 看到自己
 	const farID = int64(3)
 	player(t, manager, farID)
 	if err := in.Enter(farID, farID, spatial.Point{X: 900, Y: 900}, ObserverView{}); err != nil {
 		t.Fatal(err)
 	}
-	in.Relation("team").Set(farID, []int64{2})
+	setRelation(t, in, farID, 2)
 	mustApply(t, in)
 	if !subscribed(manager, farID, 2) {
 		t.Fatalf("setup: team observer 3 not subscribed to 2: %v", manager.Subscribers(2))
@@ -575,7 +575,7 @@ func TestARetractedSubjectRebindBeforeTheRemovesComesBackToInterestObservers(t *
 	}
 
 	// 恢复的订阅仍按政策自己的规则释放：走远只释放距离来源，team 仍持有。
-	if err := in.Move(1, 1, spatial.Point{X: 20, Y: 900}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 20, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)

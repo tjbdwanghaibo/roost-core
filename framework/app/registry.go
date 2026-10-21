@@ -39,8 +39,9 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 	r.store[ModAdminMetadata] = admin.NewMetadataRegistry()
 	r.store[ModLifecycle] = lifecycle.NewRegistry()
 	r.store[ModRuntimeFailure] = NewRuntimeFailure()
-	// 业务时钟：与 App.run 设进程级偏移读的是同一个键，同一份配置。
-	r.store[ModBusinessClock] = clock.NewBusiness(readTimeConfig(cfg).LogicOffset)
+	// 业务时钟：与 App.run 设进程级偏移、业务日历读的是同一组键，同一份配置。
+	timeSettings := readTimeConfig(cfg)
+	r.store[ModBusinessClock] = clock.NewBusinessIn(timeSettings.LogicOffset, timeSettings.calendar)
 	return r
 }
 

@@ -4,6 +4,7 @@ package mail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -271,5 +272,119 @@ func TestIntegrationTheServiceRunsEndToEndOnRedis(t *testing.T) {
 		t.Fatal(err)
 	} else if summary.Unread != 0 {
 		t.Fatalf("the unread count is %d after the claim, want 0", summary.Unread)
+	}
+}
+
+// D17：LazyBroadcast 的 Redis 账本。两个 Service 共用同一前缀，模拟两个 mail 进程：各自有进程内账本
+// 缓存，一边发布 / 撤回，另一边靠版本提示察觉变化；并发拉取同一玩家只合并一次。
+func TestIntegrationLazyBroadcastOverRedis(t *testing.T) {
+	client := integrationClient(t)
+	prefix := fmt.Sprintf("mailtest:%d", time.Now().UnixNano())
+	redistest.Cleanup(t, os.Getenv("REDIS_ADDR"), prefix)
+	newProcess := func() *Service {
+		stores, err := NewRedisStores(client, RedisConfig{Prefix: prefix, SendTTL: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		service, err := New(Config{
+			Envelopes: stores.Envelopes, Mailboxes: stores.Mailboxes, Sends: stores.Sends,
+			Broadcast: NewLazyBroadcast(LazyBroadcastConfig{Index: stores.Broadcasts}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+	sender, reader := newProcess(), newProcess()
+	ctx := context.Background()
+	registered := time.Now().Add(-time.Hour).Unix()
+	profile := BroadcastProfile{Scopes: []string{ServerScope(1)}, RegisteredAtUnix: registered}
+
+	// 读者先拉一次空账本，让它的缓存停在“没有邮件”。
+	if _, err := reader.PullBroadcasts(ctx, 1, profile); err != nil {
+		t.Fatal(err)
+	}
+	send := func(scope, requestID string) Envelope {
+		envelope, err := sender.Send(ctx, SendRequest{
+			Audience: AudienceBroadcast, Scope: scope, Subject: "compensation",
+			Attachment: []byte("gold:1"), ExpiresInSeconds: 3600, RequestID: requestID,
+		})
+		if err != nil {
+			t.Fatalf("send %s: %v", requestID, err)
+		}
+		return envelope
+	}
+	// 发送时间要严格晚于注册时间（内置条件按秒比较）。
+	first := send(ServerScope(1), "it-bcast-1")
+	other := send(ServerScope(2), "it-bcast-2")
+
+	page, err := reader.List(ctx, 1, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Envelope.ID != first.ID {
+		t.Fatalf("the other process listed %+v after a publish, want only %s (its cache must follow the version hint)", page.Items, first.ID)
+	}
+
+	// 并发拉取：两个进程、多个 goroutine 同时给一个新玩家拉取，只合并一次。
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(service *Service) {
+			defer wg.Done()
+			if _, err := service.PullBroadcasts(ctx, 2, profile); err != nil {
+				errs <- err
+			}
+		}([]*Service{sender, reader}[i%2])
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent pull: %v", err)
+	}
+	box, _, err := reader.Mailbox(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(box.Entries) != 1 || box.Unread != 1 || box.BroadcastWatermark != 2 {
+		t.Fatalf("after concurrent pulls the mailbox has %d entries, unread %d, watermark %d; want 1, 1, 2",
+			len(box.Entries), box.Unread, box.BroadcastWatermark)
+	}
+
+	// 附件只领一次（领取不需要再给 scope）。
+	claim, err := reader.ReserveClaim(ctx, 2, first.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.CommitClaim(ctx, 2, first.ID, claim.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReserveClaim(ctx, 2, first.ID, ""); !errors.Is(err, ErrAlreadyClaimed) {
+		t.Fatalf("second reserve = %v, want ErrAlreadyClaimed", err)
+	}
+
+	// 一个进程撤回，另一个进程立刻按新账本判断。
+	third := send(ServerScope(1), "it-bcast-3")
+	if revoked, err := sender.RevokeBroadcast(ctx, third.ID); err != nil || !revoked {
+		t.Fatalf("revoke = %v, %v", revoked, err)
+	}
+	if _, err := reader.PullBroadcasts(ctx, 3, profile); err != nil {
+		t.Fatal(err)
+	}
+	page, err = reader.List(ctx, 3, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Envelope.ID != first.ID {
+		t.Fatalf("after a revoke in another process, a new player listed %+v; want only %s", page.Items, first.ID)
+	}
+	_ = other
+
+	// 键空间：账本与版本提示都在 <prefix>:bcast: 下。
+	for _, key := range []string{prefix + ":bcast:ledger", prefix + ":bcast:version"} {
+		if n, err := client.Exists(ctx, key); err != nil || n != 1 {
+			t.Fatalf("key %s exists = %d, %v", key, n, err)
+		}
 	}
 }

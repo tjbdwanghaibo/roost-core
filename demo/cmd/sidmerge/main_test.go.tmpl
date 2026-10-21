@@ -1,0 +1,44 @@
+package main
+
+import (
+	"testing"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/wiring/sidmerge"
+)
+
+// 合服清单按本工程自己的配置与 DAO 声明给出：game-demo 的 DAO 都在共享逻辑库 main（不按 sid 分库），所以合服不搬
+// 任何数据，只要求两侧把 main 映射到同一位置；持久总线清单列出生成配置里的 JetStream 用法。
+func TestTheChecklistReadsThisProjectsConfigAndDAOs(t *testing.T) {
+	cfg, err := loadConfig("../../" + defaultConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := sidmerge.BuildChecklist(sidmerge.Server{Config: cfg}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.SID <= 0 {
+		t.Fatalf("checklist sid = %d, want the config's sid", list.SID)
+	}
+	var main *sidmerge.DatabaseItem
+	for i := range list.Databases {
+		if list.Databases[i].Logical == db.DatabaseMain {
+			main = &list.Databases[i]
+		}
+	}
+	if main == nil || main.ServerScoped {
+		t.Fatalf("databases = %+v, want the shared logical database %q", list.Databases, db.DatabaseMain)
+	}
+	persistent := map[string]bool{}
+	for _, item := range list.Bus {
+		persistent[item.Name] = item.Persistent
+	}
+	// 生成配置：syncbus 走 JetStream（每个 sid 一组 durable），RPC 走 core NATS。
+	if !persistent["syncbus"] || persistent["service rpc"] || !persistent["saga stream"] {
+		t.Fatalf("bus items = %+v", list.Bus)
+	}
+	if len(remoteManaged) == 0 || remoteManaged[0] != db.GuildDaoDBName+"/"+db.GuildDaoCollection {
+		t.Fatalf("remoteManaged = %v, want the Guild DAO's collection", remoteManaged)
+	}
+}

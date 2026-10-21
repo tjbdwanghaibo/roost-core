@@ -254,6 +254,7 @@ func TestIdentityIsAParameterOnEveryMethodThatNeedsOne(t *testing.T) {
 	perPlayer := map[string]bool{
 		"List": true, "Summary": true, "MarkRead": true, "Delete": true,
 		"ReserveClaim": true, "CommitClaim": true, "CancelClaim": true,
+		"PullBroadcasts": true,
 	}
 	seen := 0
 	for index := 0; index < iface.NumMethod(); index++ {
@@ -315,6 +316,46 @@ func TestAHandlerPassesTheIdentityThroughUnchanged(t *testing.T) {
 	if got := <-seen; got != 0 {
 		t.Fatalf("the handler substituted player %d for an absent id; the service's own "+
 			"identity check is then bypassed", got)
+	}
+}
+
+// 登录拉取与撤回跨总线和本地调用结果一致：画像（范围、注册时间、属性）原样到达服务端。
+func TestLazyBroadcastPullAndRevokeCrossTheBus(t *testing.T) {
+	h, _ := lazyHarness(t, LazyBroadcastConfig{
+		Eligible: func(profile BroadcastProfile, _ GlobalMail) bool { return profile.Attributes["level"] >= 10 },
+	})
+	fake := newFakeBus()
+	if err := RegisterHandlers(fake, h.service); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewBusClient(fake, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	guild := mustSend(t, h, broadcastTo(GuildScope(5), "g5"))
+	revoked := mustSend(t, h, broadcastTo("", "all"))
+	if ok, err := client.RevokeBroadcast(ctx, revoked.ID); err != nil || !ok {
+		t.Fatalf("revoke over the bus = %v, %v", ok, err)
+	}
+	profile := veteran(h)
+	profile.Attributes = map[string]int64{"level": 12}
+	summary, err := client.PullBroadcasts(ctx, 7, profile)
+	if err != nil {
+		t.Fatalf("pull over the bus: %v", err)
+	}
+	if summary.Unread != 1 {
+		t.Fatalf("pull over the bus merged %d, want only the guild mail", summary.Unread)
+	}
+	page, err := client.List(ctx, 7, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Envelope.ID != guild.ID || page.Items[0].GlobalID != 1 {
+		t.Fatalf("listed %+v over the bus, want the guild mail with global id 1", page.Items)
+	}
+	if _, err := client.PullBroadcasts(ctx, 7, BroadcastProfile{}); codeOfRemoteOrLocal(err) != CodeRequestInvalid {
+		t.Fatalf("a profile without a registration time over the bus = %v, want request_invalid", err)
 	}
 }
 
@@ -389,6 +430,12 @@ func (s *spyMail) CommitClaim(context.Context, int64, string, string) (Entry, er
 }
 func (s *spyMail) CancelClaim(context.Context, int64, string, string, int32) (bool, error) {
 	return false, errors.New("spyMail: CancelClaim not implemented")
+}
+func (s *spyMail) PullBroadcasts(context.Context, int64, BroadcastProfile) (Summary, error) {
+	return Summary{}, errors.New("spyMail: PullBroadcasts not implemented")
+}
+func (s *spyMail) RevokeBroadcast(context.Context, string) (bool, error) {
+	return false, errors.New("spyMail: RevokeBroadcast not implemented")
 }
 
 var _ Mail = (*spyMail)(nil)

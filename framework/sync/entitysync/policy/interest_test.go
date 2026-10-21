@@ -1,4 +1,4 @@
-// Interest 政策：块订阅与覆盖预算、排队事实的提交 / 回滚 / 拒绝、关系增量、事实准入不等政策锁。
+// Interest 政策：块订阅与覆盖预算、排队事实的提交 / 回滚 / 拒绝、事实准入不等政策锁。
 
 package policy
 
@@ -32,7 +32,7 @@ func flushInterest(t *testing.T, m *entitysync.Manager) {
 
 func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 	m := newManager(t)
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	for _, id := range []int64{1, 2} {
 		player(t, m, id)
 	}
@@ -71,7 +71,7 @@ func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 	if !subscribed(m, 1, 2) {
 		t.Fatal("one remaining block was ignored")
 	}
-	in.Relation("team").Set(1, []int64{2})
+	setRelation(t, in, 1, 2)
 	mustApply(t, in)
 	if err := in.QueueObservedBlocks(e, nil); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestObservedBlocksKeepOnePositionAndSubscription(t *testing.T) {
 	if !subscribed(m, 1, 2) {
 		t.Fatal("block removal dropped team subscription")
 	}
-	in.Relation("team").Clear(1)
+	setRelation(t, in, 1)
 	mustApply(t, in)
 	if subscribed(m, 1, 2) {
 		t.Fatal("last source not removed")
@@ -103,7 +103,7 @@ func TestSpatialAndBlockHandoverDoesNotRecreateBaseline(t *testing.T) {
 	flushInterest(t, m)
 	before := transport.count(1)
 	e := factEntity(t, 2)
-	if err := in.QueueSpatial(e, spatial.Point{X: 900, Y: 900}, true, []int64{in.BlockAt(spatial.Point{X: 10, Y: 10})}); err != nil {
+	if err := in.QueueSpatial(e, spatial.Point{X: 900, Y: 900}, []int64{in.BlockAt(spatial.Point{X: 10, Y: 10})}); err != nil {
 		t.Fatal(err)
 	}
 	flushInterest(t, m)
@@ -123,7 +123,7 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 	near := []int64{in.BlockAt(spatial.Point{X: 10, Y: 10})}
 	for _, outcome := range []string{"rollback", "reject", "commit"} {
 		mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
-		if err := in.QueueSpatial(e, spatial.Point{X: 800, Y: 800}, true, near); err != nil {
+		if err := in.QueueSpatial(e, spatial.Point{X: 800, Y: 800}, near); err != nil {
 			t.Fatal(err)
 		}
 		flushInterest(t, m)
@@ -167,7 +167,7 @@ func TestCoverageCommitRollbackRejectAndLifetime(t *testing.T) {
 
 func TestCoverageLateObserverBudgetAndVisibilityLimit(t *testing.T) {
 	m := newManager(t)
-	cfg := InterestConfig{Manager: m, AOI: interestConfig(), ObserverOf: sameIDObserver}
+	cfg := InterestConfig{Manager: m, AOI: interestConfig()}
 	cfg.AOI.MaxObservedBlocks = 1
 	cfg.AOI.MaxVisible = 1
 	in, err := NewInterest(cfg)
@@ -198,7 +198,7 @@ func TestCoverageLateObserverBudgetAndVisibilityLimit(t *testing.T) {
 	if !subscribed(m, 1, 2) || !subscribed(m, 1, 3) {
 		t.Fatal("late observer or spatial cap suppressed explicit coverage")
 	}
-	if err := in.Move(1, 1, spatial.Point{X: 900, Y: 100}); err != nil {
+	if err := in.Move(1, spatial.Point{X: 900, Y: 100}); err != nil {
 		t.Fatal(err)
 	}
 	mustApply(t, in)
@@ -214,7 +214,7 @@ func TestFactAdmissionDoesNotWaitForPolicyLock(t *testing.T) {
 	e := factEntity(t, 1)
 	in.mu.Lock()
 	done := make(chan error, 1)
-	go func() { done <- in.QueueMove(e, spatial.Point{X: 20, Y: 10}, true) }()
+	go func() { done <- in.QueueMove(e, spatial.Point{X: 20, Y: 10}) }()
 	select {
 	case err := <-done:
 		in.mu.Unlock()
@@ -236,7 +236,7 @@ func TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve(t *testing.T) {
 	in.maxQueuedFacts = 1
 	entered, release := make(chan struct{}), make(chan struct{})
 	player(t, m, 1)
-	in.profile = func(int) entity.SyncProfile {
+	in.bandLayer = func(int) entity.SyncProfile {
 		select {
 		case <-entered:
 		default:
@@ -245,13 +245,13 @@ func TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve(t *testing.T) {
 		<-release
 		return entity.SyncProfile{}
 	}
-	if err := in.QueueMove(factEntity(t, 1), spatial.Point{X: 30, Y: 10}, true); err != nil {
+	if err := in.QueueMove(factEntity(t, 1), spatial.Point{X: 30, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- in.applyQueued() }()
 	<-entered
-	err := in.QueueMove(factEntity(t, 2), spatial.Point{X: 40, Y: 10}, true)
+	err := in.QueueMove(factEntity(t, 2), spatial.Point{X: 40, Y: 10})
 	close(release)
 	if applyErr := <-done; applyErr != nil {
 		t.Fatal(applyErr)
@@ -264,10 +264,10 @@ func TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve(t *testing.T) {
 	e := factEntity(t, 1)
 	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
 	defer func() { mutation.Finish(false); mutation.Release() }()
-	if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}, true); err != nil {
+	if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}); err != nil {
 		t.Fatal(err)
 	}
-	if err := in.QueueMove(factEntity(t, 2), spatial.Point{X: 50, Y: 10}, true); err != nil {
+	if err := in.QueueMove(factEntity(t, 2), spatial.Point{X: 50, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if err := in.applyQueued(); err != nil {
@@ -341,7 +341,7 @@ func TestQueuedSpatialFactBlocksContentUntilPolicyApplied(t *testing.T) {
 	in := newInterest(t, m)
 	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
 	e := factEntity(t, 1)
-	if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}, true); err != nil {
+	if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
@@ -417,7 +417,7 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 		mustEnter(t, in, id, spatial.Point{X: 10 * id, Y: 10})
 		e := factEntity(t, id)
 		entities = append(entities, e)
-		if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}, true); err != nil {
+		if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -446,193 +446,13 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 	second.Abort()
 }
 
-func TestQueuedRelationDeltaCommitRollbackAndOrder(t *testing.T) {
-	m := newManager(t)
-	in := newInterest(t, m, "team")
-	in.batchSize = 1 // 同次提交的 Set 和 Delta 即使超过批次额度也必须整体应用。
-	for _, id := range []int64{1, 2, 3} {
-		player(t, m, id)
-	}
-	e := factEntity(t, 2)
-	es := []entity.IThreadSafeEntity{e}
-	check := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	first := entity.BeginSyncMutation(es, m)
-	check(in.QueueRelation(e, "team", []int64{1}))
-	added, removed := []int64{3}, []int64{1}
-	check(in.QueueRelationDelta(e, "team", added, removed))
-	added[0], removed[0] = 1, 3
-	first.Admit()
-	first.Release()
-	flushInterest(t, m)
-	if subscribed(m, 2, 1) || subscribed(m, 2, 3) {
-		t.Fatal("unconfirmed delta escaped")
-	}
-	first.Confirm()
-	flushInterest(t, m)
-	if subscribed(m, 2, 1) || !subscribed(m, 2, 3) {
-		t.Fatal("confirmed delta or input copy failed")
-	}
-	in.batchSize = 256
-	rollback := entity.BeginSyncMutation(es, m)
-	check(in.QueueRelationDelta(e, "team", []int64{1}, []int64{3}))
-	rollback.Finish(false)
-	rollback.Release()
-	flushInterest(t, m)
-	if subscribed(m, 2, 1) || !subscribed(m, 2, 3) {
-		t.Fatal("rollback changed relation")
-	}
-	head := entity.BeginSyncMutation(es, m)
-	check(in.QueueRelationDelta(e, "team", []int64{1}, nil))
-	head.Admit()
-	head.Release()
-	tail := entity.BeginSyncMutation(es, m)
-	check(in.QueueRelationDelta(e, "team", nil, []int64{1}))
-	tail.Admit()
-	tail.Confirm()
-	tail.Release()
-	flushInterest(t, m)
-	if len(in.facts) != 2 {
-		t.Fatal("later delta overtook unconfirmed head")
-	}
-	head.Confirm()
-	flushInterest(t, m)
-	if len(in.facts) != 0 || subscribed(m, 2, 1) || !subscribed(m, 2, 3) {
-		t.Fatal("ordered deltas failed")
-	}
-}
-
-func TestQueuedRelationDeltaPreservesOtherSources(t *testing.T) {
-	m := newManager(t)
-	in := newInterest(t, m, "team", "friends")
-	for _, id := range []int64{1, 2} {
-		player(t, m, id)
-	}
-	in.Relation("team").Set(2, []int64{1})
-	in.Relation("friends").Set(2, []int64{1})
-	mustApply(t, in)
-	e := factEntity(t, 2)
-	if err := in.QueueRelationDelta(e, "team", nil, []int64{1}); err != nil {
-		t.Fatal(err)
-	}
-	flushInterest(t, m)
-	if !subscribed(m, 2, 1) {
-		t.Fatal("removing team lost friends subscription")
-	}
-	if err := in.QueueRelationDelta(e, "friends", nil, []int64{1}); err != nil {
-		t.Fatal(err)
-	}
-	flushInterest(t, m)
-	if subscribed(m, 2, 1) {
-		t.Fatal("last source removal did not unsubscribe")
-	}
-}
-
-func TestQueuedRelationDeltaAdmissionAndClose(t *testing.T) {
-	m := newManager(t)
-	in := newInterest(t, m, "team")
-	e := factEntity(t, 2)
-	if err := in.QueueRelationDelta(nil, "team", nil, nil); err == nil {
-		t.Fatal("nil entity accepted")
-	}
-	for _, source := range []string{"", "unknown"} {
-		if err := in.QueueRelationDelta(e, source, nil, nil); err == nil {
-			t.Fatal("invalid source accepted")
-		}
-	}
-	in.maxQueuedFacts = 1
-	if err := in.QueueRelationDelta(e, "team", []int64{1}, nil); err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
-	if prepared != nil {
-		prepared.Abort()
-	}
-	if !errors.Is(err, entity.ErrSyncCommitPending) {
-		t.Fatalf("delta did not hold publication: %v", err)
-	}
-	if err := in.QueueRelationDelta(e, "team", nil, []int64{1}); !errors.Is(err, ErrInterestQueueFull) {
-		t.Fatalf("budget error %v", err)
-	}
-	in.Close()
-	prepared, err = e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
-	if err != nil {
-		t.Fatalf("close leaked publication hold: %v", err)
-	}
-	prepared.Abort()
-	if len(in.facts) != 0 {
-		t.Fatal("close retained delta")
-	}
-	if err := in.QueueRelationDelta(e, "team", nil, nil); err == nil {
-		t.Fatal("closed interest accepted delta")
-	}
-}
-
-func TestQueuedRelationDeltaExitAndReentry(t *testing.T) {
-	for _, action := range []string{"leave-observer", "hide-observer", "hide-added", "hide-removed"} {
-		t.Run(action, func(t *testing.T) {
-			m := newManager(t)
-			in := newInterest(t, m, "team")
-			for _, id := range []int64{1, 2, 3} {
-				player(t, m, id)
-			}
-			check := func(err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
-			check(in.Show(1, spatial.Point{X: 10, Y: 10}))
-			check(in.Show(3, spatial.Point{X: 400, Y: 400}))
-			in.Relation("team").Set(2, []int64{3})
-			mustApply(t, in)
-			e := factEntity(t, 2)
-			mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
-			check(in.QueueRelationDelta(e, "team", []int64{1}, []int64{3}))
-			mutation.Admit()
-			mutation.Confirm()
-			mutation.Release()
-			switch action {
-			case "leave-observer":
-				check(in.Leave(2, 2))
-				mustEnter(t, in, 2, spatial.Point{X: 900, Y: 900})
-			case "hide-observer":
-				check(in.Hide(2))
-			case "hide-added":
-				check(in.Hide(1))
-				check(in.Show(1, spatial.Point{X: 10, Y: 10}))
-			case "hide-removed":
-				check(in.Hide(3))
-				check(in.Show(3, spatial.Point{X: 400, Y: 400}))
-				in.Relation("team").Set(2, []int64{3})
-			}
-			flushInterest(t, m)
-			want1 := action == "hide-observer" || action == "hide-removed"
-			want3 := action == "hide-removed"
-			if subscribed(m, 2, 1) != want1 || subscribed(m, 2, 3) != want3 {
-				t.Fatalf("stale delta after %s: one=%v three=%v", action, subscribed(m, 2, 1), subscribed(m, 2, 3))
-			}
-			prepared, err := e.Sync().PrepareViews(nil, []entity.SyncProfile{{}})
-			if err != nil {
-				t.Fatalf("exit/application leaked publication: %v", err)
-			}
-			prepared.Abort()
-		})
-	}
-}
-
 type queuedEntity struct{ *entity.EntityBase }
 
 func (e *queuedEntity) Base() *entity.EntityBase { return e.EntityBase }
 
 func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 	m := newManager(t)
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	player(t, m, 1)
 	player(t, m, 2)
 	if err := in.Enter(1, 1, spatial.Point{X: 10, Y: 10}, ObserverView{}); err != nil {
@@ -646,7 +466,7 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 	e.SetSyncState(subjectState(t, 2))
 	es := []entity.IThreadSafeEntity{e}
 	first := entity.BeginSyncMutation(es, m)
-	if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}, true); err != nil {
+	if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	first.Admit()
@@ -665,10 +485,7 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 		t.Fatal("confirmed movement not applied")
 	}
 	second := entity.BeginSyncMutation(es, m)
-	if err := in.QueueMove(e, spatial.Point{X: 20, Y: 10}, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := in.QueueRelation(e, "team", []int64{1}); err != nil {
+	if err := in.QueueMove(e, spatial.Point{X: 20, Y: 10}); err != nil {
 		t.Fatal(err)
 	}
 	second.Finish(false)
@@ -680,7 +497,7 @@ func TestQueuedInterestFactsFollowCommitAndRollback(t *testing.T) {
 		t.Fatal("rolled back facts escaped or leaked")
 	}
 	if subscribed(m, 2, 1) {
-		t.Fatal("rolled back relation escaped")
+		t.Fatal("rolled back movement escaped")
 	}
 }
 
@@ -690,7 +507,7 @@ func TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	player(t, m, 1)
 	player(t, m, 2)
 	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
@@ -698,15 +515,8 @@ func TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen(t *testing.T) {
 	mustApply(t, in)
 	m.CloseSession(2)
 
-	e := &queuedEntity{entity.NewEntityBase(2, entity.EntityCategory(4), true)}
-	e.SetSyncState(subjectState(t, 2))
-	batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
-	if err := in.QueueRelation(e, "team", []int64{1}); err != nil {
-		t.Fatal(err)
-	}
-	batch.Admit()
-	batch.Confirm()
-	batch.Release()
+	// 会话 2 已关闭：挂给它的关系视野由政策阶段应用，订阅一直被拒。
+	setRelation(t, in, 2, 1)
 
 	stalledBefore := counterValue("entitysync_interest_retry_stalled_total")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -764,7 +574,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = m.Close(context.Background()) })
-		in := newInterest(t, m, "team")
+		in := newInterest(t, m)
 		player(t, m, 1)
 		player(t, m, 2)
 		player(t, m, 4)
@@ -774,15 +584,14 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 		e := &queuedEntity{entity.NewEntityBase(2, entity.EntityCategory(4), true)}
 		e.SetSyncState(subjectState(t, 2))
 		batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
-		if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}, true); err != nil {
-			t.Fatal(err)
-		}
-		if err := in.QueueRelation(e, "team", []int64{1}); err != nil {
+		if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
 			t.Fatal(err)
 		}
 		batch.Admit()
 		batch.Confirm()
 		batch.Release()
+		// 2 挂着一个看 1 的关系视野（尚未应用）。
+		setRelation(t, in, 2, 1)
 		// 事实已就绪、尚未应用：此刻业务让 2 离开。
 		if err := in.Leave(2, 2); err != nil {
 			t.Fatal(err)
@@ -793,7 +602,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 			}
 		}
 		if subscribed(m, 2, 1) {
-			t.Fatal("relation fact queued before Leave resurrected 2's interest in 1")
+			t.Fatal("a relation view attached before Leave resurrected 2's interest in 1")
 		}
 		// 其他 subject 照常出帧：4 走进 1 的视野，会话 1 要收到它的快照。
 		before := frames.count(1)
@@ -816,7 +625,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 
 	t.Run("hide", func(t *testing.T) {
 		m := newManager(t)
-		in := newInterest(t, m, "team")
+		in := newInterest(t, m)
 		player(t, m, 1)
 		player(t, m, 3)
 		mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
@@ -827,13 +636,11 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 		e := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
 		e.SetSyncState(subjectState(t, 3))
 		batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
-		if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}, false); err != nil {
+		if err := in.QueueMove(e, spatial.Point{X: 900, Y: 900}); err != nil {
 			t.Fatal(err)
 		}
-		// 3 作为观察者的关系事实：Hide 只把 3 从被观察方移走，这条不因 Hide 失效。
-		if err := in.QueueRelation(e, "team", []int64{1}); err != nil {
-			t.Fatal(err)
-		}
+		// 玩家 3 挂着一个看 1 的关系视野：Hide 只把实体 3 从被观察方移走，玩家 3 的挂接不因 Hide 失效。
+		setRelation(t, in, 3, 1)
 		batch.Admit()
 		batch.Confirm()
 		batch.Release()
@@ -846,7 +653,7 @@ func TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush(t *testing.T) {
 			}
 		}
 		if !subscribed(m, 3, 1) {
-			t.Fatal("relation fact Hide did not invalidate was lost")
+			t.Fatal("a relation view Hide did not touch was lost")
 		}
 		if err := m.Stop(ctx); err != nil {
 			t.Fatalf("Stop after Hide with a ready queued fact: %v", err)
@@ -893,7 +700,7 @@ func (s *sink) count(session entitysync.SessionID) int {
 // 历史：RR-20260926-58。
 func TestRemoteRejectKeepsCommittedLocalInterestFact(t *testing.T) {
 	m := newManager(t)
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	player(t, m, 1)
 	player(t, m, 2)
 	player(t, m, 3)
@@ -911,10 +718,10 @@ func TestRemoteRejectKeepsCommittedLocalInterestFact(t *testing.T) {
 	remote := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
 	remote.SetSyncState(subjectState(t, 3))
 	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{local, remote}, m)
-	if err := in.QueueMove(local, spatial.Point{X: 900, Y: 900}, true); err != nil {
+	if err := in.QueueMove(local, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
-	if err := in.QueueMove(remote, spatial.Point{X: 900, Y: 900}, true); err != nil {
+	if err := in.QueueMove(remote, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mutation.Admit()
@@ -969,7 +776,7 @@ func TestRejectEntitiesJudgesEntitiesWithoutSyncStateByID(t *testing.T) {
 // 纯 Remote 事务被拒绝（批次覆盖 mutation 的全部实体）：行为与 Reject 相同——门不再阻塞、本提交的事实全部丢弃。
 func TestPureRemoteRejectDiscardsItsInterestFacts(t *testing.T) {
 	m := newManager(t)
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	player(t, m, 1)
 	player(t, m, 3)
 	if err := in.Enter(1, 1, spatial.Point{X: 10, Y: 10}, ObserverView{}); err != nil {
@@ -982,7 +789,7 @@ func TestPureRemoteRejectDiscardsItsInterestFacts(t *testing.T) {
 	remote := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
 	remote.SetSyncState(subjectState(t, 3))
 	mutation := entity.BeginSyncMutation([]entity.IThreadSafeEntity{remote}, m)
-	if err := in.QueueMove(remote, spatial.Point{X: 900, Y: 900}, true); err != nil {
+	if err := in.QueueMove(remote, spatial.Point{X: 900, Y: 900}); err != nil {
 		t.Fatal(err)
 	}
 	mutation.Admit()
@@ -1007,7 +814,7 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
-	in := newInterest(t, m, "team")
+	in := newInterest(t, m)
 	player(t, m, 1)
 	player(t, m, 2)
 	player(t, m, 3)
@@ -1017,22 +824,14 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 	mustApply(t, in)
 	m.CloseSession(2)
 
-	// 观察者 2 的会话已关闭：关系事实应用后订阅被拒。
-	refusedEntity := &queuedEntity{entity.NewEntityBase(2, entity.EntityCategory(4), true)}
-	refusedEntity.SetSyncState(subjectState(t, 2))
-	confirmed := entity.BeginSyncMutation([]entity.IThreadSafeEntity{refusedEntity}, m)
-	if err := in.QueueRelation(refusedEntity, "team", []int64{1}); err != nil {
-		t.Fatal(err)
-	}
-	confirmed.Admit()
-	confirmed.Confirm()
-	confirmed.Release()
+	// 玩家 2 的会话已关闭：挂给它的关系视野应用后订阅被拒。
+	setRelation(t, in, 2, 1)
 
 	// 实体 3 的提交一直没确认：事实留在队列里。
 	pendingEntity := &queuedEntity{entity.NewEntityBase(3, entity.EntityCategory(4), true)}
 	pendingEntity.SetSyncState(subjectState(t, 3))
 	unconfirmed := entity.BeginSyncMutation([]entity.IThreadSafeEntity{pendingEntity}, m)
-	if err := in.QueueRelation(pendingEntity, "team", []int64{1}); err != nil {
+	if err := in.QueueMove(pendingEntity, spatial.Point{X: 500, Y: 510}); err != nil {
 		t.Fatal(err)
 	}
 	unconfirmed.Admit()

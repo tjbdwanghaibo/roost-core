@@ -8,6 +8,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -364,5 +367,96 @@ func TestAFailedHighWaterMarkAdvanceIsCounted(t *testing.T) {
 	}
 	if err := h.stop(t, result); err != nil {
 		t.Fatalf("run: %v", err)
+	}
+}
+
+// 业务时区与每日重置时刻（DESIGN-TODO D18）：time.business_timezone / time.business_day_start 在 App 的声明里，
+// 缺省 UTC 00:00，生成器把它们写进每个服务的配置（Starter），同一工程各服务必须相同（shared）；非法 IANA 名、
+// 依赖机器环境的 Local、不是 HH:MM 的重置时刻在加载时拒绝（ValidateServiceConfig 与 --check-config 同一处）；
+// Registry 的业务时钟带着这份日历。
+func TestBusinessTimezoneIsDeclaredCheckedAndCarriedByTheBusinessClock(t *testing.T) {
+	keys := map[string]configschema.Key{}
+	for _, key := range AppConfigSchema().Keys {
+		keys[key.Name] = key
+	}
+	for name, want := range map[string]string{"time.business_timezone": "UTC", "time.business_day_start": "00:00"} {
+		key, ok := keys[name]
+		if !ok {
+			t.Fatalf("App does not declare %s", name)
+		}
+		if key.Default != want || !key.Starter || key.Example != want || key.Shared != name {
+			t.Fatalf("%s = %+v; want default and example %q, written into generated configs, shared across services", name, key, want)
+		}
+	}
+
+	cfg := viper.New()
+	cal := BusinessCalendar(NewRegistry(cfg))
+	if cal.Location() != time.UTC || cal.DayStartOffset() != 0 {
+		t.Fatalf("default business calendar = %s, want UTC 00:00", cal)
+	}
+	cfg.Set("time.business_timezone", "Asia/Shanghai")
+	cfg.Set("time.business_day_start", "05:00")
+	cfg.Set("time.logic_offset", "1h")
+	r := NewRegistry(cfg)
+	cal = BusinessCalendar(r)
+	if cal.Location().String() != "Asia/Shanghai" || cal.DayStartOffset() != 5*time.Hour {
+		t.Fatalf("configured business calendar = %s, want Asia/Shanghai 05:00", cal)
+	}
+	if got := clock.CalendarOf(BusinessClock(r)); got.String() != "Asia/Shanghai 05:00" {
+		t.Fatalf("the registry's business clock carries %s", got)
+	}
+	if !within(BusinessClock(r).Now(), time.Now().Add(time.Hour), time.Second) {
+		t.Fatal("the business clock lost its offset when it gained a calendar")
+	}
+
+	for _, bad := range []struct{ key, value, want string }{
+		{"time.business_timezone", "Mars/Olympus_Mons", "time.business_timezone"},
+		{"time.business_timezone", "Local", "time.business_timezone"},
+		{"time.business_day_start", "5am", "time.business_day_start"},
+		{"time.business_day_start", "24:00", "time.business_day_start"},
+	} {
+		cfg := productionServiceConfig("game")
+		cfg.Set("env", "dev")
+		cfg.Set(bad.key, bad.value)
+		if err := ValidateServiceConfig(cfg); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%s = %q: ValidateServiceConfig error = %v, want a refusal naming %s", bad.key, bad.value, err, bad.want)
+		}
+	}
+	good := productionServiceConfig("game")
+	good.Set("time.business_timezone", "America/New_York")
+	good.Set("time.business_day_start", "04:00")
+	if err := ValidateServiceConfig(good); err != nil {
+		t.Fatalf("a valid business time zone was refused: %v", err)
+	}
+}
+
+// App 启动时把业务日历设成进程级日历（clock.BusinessDay 等全局函数读它），并把实际时区与重置时刻写进启动日志。
+func TestRunSetsTheProcessCalendarAndLogsIt(t *testing.T) {
+	saved := clock.ProcessCalendar()
+	t.Cleanup(func() { clock.SetCalendar(saved) })
+	dir := t.TempDir()
+	a := New("roost-test", "0.0.0")
+	a.Mods(exitReasonMod{})
+	a.RegisterServer("game", &errService{})
+	a.cfg.Set("log.file", true)
+	a.cfg.Set("log.stdout", false)
+	a.cfg.Set("log.dir", dir)
+	a.cfg.Set("log.rotate_interval", 0)
+	a.cfg.Set("time.business_timezone", "Asia/Shanghai")
+	a.cfg.Set("time.business_day_start", "05:00")
+	a.RootCmd().SetArgs([]string{"game"})
+
+	if err := a.Execute(); !errors.Is(err, errExitReasonForLog) {
+		t.Fatalf("Execute err = %v, want the mod init error", err)
+	}
+	if got := clock.ProcessCalendar().String(); got != "Asia/Shanghai 05:00" {
+		t.Fatalf("process calendar after start = %s", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "game-1000.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "business_timezone=Asia/Shanghai") || !strings.Contains(string(raw), "business_day_start=05:00") {
+		t.Fatalf("the start log does not name the business time zone and day start:\n%s", raw)
 	}
 }
