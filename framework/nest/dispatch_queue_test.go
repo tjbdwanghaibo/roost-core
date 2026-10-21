@@ -639,3 +639,51 @@ func TestDispatchGroupedTargetsKeepOrderAndBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// worker 结束一项工作后在同一次持锁里接着取下一项；出队后动作（await 的 I/O 启动）仍在不持锁时、在本项的 ID 尾
+// 撤下之后、在同一 worker 执行下一项之前运行。
+// 变异核对：持锁调用 after()（省掉解锁）时 after 内取锁死锁；在 finishJobLocked 之前调用 after() 时本项的 ID 尾仍在。
+// 两者都让本用例变红。
+func TestQueueWorkerRunsAfterQueueBetweenJobsWithoutLock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var q *dispatchQueue
+		var events []string
+		q = newDispatchQueue("after_queue", WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}, func(m *Msg) {
+			seq := m.Params[0].(int)
+			events = append(events, fmt.Sprint("run", seq))
+			if seq == 0 {
+				m.afterQueue = func() {
+					q.mu.Lock()
+					tail := q.tails[1]
+					q.mu.Unlock()
+					events = append(events, fmt.Sprint("after0 tail=", tail != nil))
+				}
+			}
+		}, nil)
+		q.start()
+		defer q.stop(context.Background())
+		gate := make(chan struct{})
+		// 先占住唯一的 worker，再准入两项，保证两项在 worker 回来之前都已就绪。
+		blocker := queueMessage(99)
+		blocker.Params = []any{-1}
+		blockerRan := make(chan struct{})
+		blocker.ioWork = func() { close(blockerRan); <-gate }
+		if err := q.admit(blocker, false); err != nil {
+			t.Fatal(err)
+		}
+		<-blockerRan
+		for seq, id := range []int64{1, 2} {
+			m := queueMessage(id)
+			m.Params = []any{seq}
+			if err := q.admit(m, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		close(gate)
+		synctest.Wait()
+		want := []string{"run0", "after0 tail=false", "run1"}
+		if !reflect.DeepEqual(events, want) {
+			t.Fatalf("events %v, want %v", events, want)
+		}
+	})
+}

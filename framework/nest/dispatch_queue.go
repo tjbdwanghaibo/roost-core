@@ -305,7 +305,9 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 }
 
 // work 是通道 worker 的主循环：取工作 → 在新的请求上下文中执行 → 结束作业（释放同 ID 顺序、唤醒后继）→
-// 执行消息登记的出队后动作。停止且全部 pending 排空后退出。
+// 执行消息登记的出队后动作。结束作业后在同一次持锁里接着取下一项，不先放锁再抢一次；没有工作时才在 wake 上
+// 停放。出队后动作（await 的 I/O 启动）总在本项结束之后、不持锁、在本 worker 执行下一项之前运行。
+// 停止且全部 pending 排空后退出。
 func (q *dispatchQueue) work(lane int) {
 	state := &q.lanes[lane]
 	phase := fctx.WithIOWorker()
@@ -316,48 +318,55 @@ func (q *dispatchQueue) work(lane int) {
 		}
 	}
 	defer q.wg.Done()
+	// 每项工作的请求上下文选项对本 worker 固定，建一次；在 run 里逐次构造会让选项闭包每条消息逃逸到堆上。
+	contextOptions := []fctx.Option{fctx.WithSource("worker"), fctx.WithHandler(q.name), phase}
+	q.mu.Lock()
 	for {
-		q.mu.Lock()
 		j := q.take(lane)
 		for j == nil && !(q.stopping && q.pending == 0) {
 			state.wake.Wait()
 			j = q.take(lane)
 		}
-		q.mu.Unlock()
 		if j == nil {
+			q.mu.Unlock()
 			return
 		}
-		rerouted := false
-		var after func()
-		goroutine.SafeFunc(func() {
-			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
-			defer release()
-			// 转 I/O 的作业仍归队列所有，消息引用留给 I/O 池那一次执行释放。
-			defer func() {
-				if !rerouted {
-					j.msg.OnRelease()
-				}
-			}()
-			if j.msg.ioWork != nil {
-				j.msg.ioWork()
-			} else if handler := state.handler; handler != nil {
-				handler(j.msg)
-			}
-			after = j.msg.afterQueue
-			rerouted = lane != dispatchIOLane && !j.continuation && j.msg.ioReroute
-		})
+		q.mu.Unlock()
+		rerouted, after := q.run(lane, state, contextOptions, j)
 		q.mu.Lock()
 		if rerouted {
 			q.rerouteToIO(j)
-			q.mu.Unlock()
 			continue
 		}
 		q.finishJobLocked(state, j)
-		q.mu.Unlock()
 		if after != nil {
+			q.mu.Unlock()
 			after()
+			q.mu.Lock()
 		}
 	}
+}
+
+// run 在新的请求上下文里执行一项工作，返回它是否需要原位转 I/O 准备、以及消息登记的出队后动作。
+// 转 I/O 的作业仍归队列所有，消息引用留给 I/O 池那一次执行释放。
+func (q *dispatchQueue) run(lane int, state *dispatchLane, contextOptions []fctx.Option, j *dispatchJob) (rerouted bool, after func()) {
+	goroutine.SafeFunc(func() {
+		_, release := fctx.NewContext(contextOptions...)
+		defer release()
+		defer func() {
+			if !rerouted {
+				j.msg.OnRelease()
+			}
+		}()
+		if j.msg.ioWork != nil {
+			j.msg.ioWork()
+		} else if handler := state.handler; handler != nil {
+			handler(j.msg)
+		}
+		after = j.msg.afterQueue
+		rerouted = lane != dispatchIOLane && !j.continuation && j.msg.ioReroute
+	})
+	return rerouted, after
 }
 
 // finishJobLocked 结束一项工作：归还执行额度，撤下它在各 ID 上的尾登记，后继的前驱全部完成即进入就绪；
