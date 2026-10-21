@@ -219,6 +219,7 @@
 | [adapter.go](../../../gameplay/skill/combatcomponent/adapter.go) | `Resolver`、`RevisionSource`、`EffectEvent`、`HostAdapter` |
 | [component.go](../../../gameplay/skill/combatcomponent/component.go) | `CombatDao`、`CombatComponent`、`AttributeProjection` |
 | [status_bridge.go](../../../gameplay/skill/combatcomponent/status_bridge.go) | `StatusBridge` |
+| [state_bridge.go](../../../gameplay/skill/combatcomponent/state_bridge.go) | `StateBinding`（`BindStates`、`HasBuffTag`：buff 标签 → `gameplay/state` 派生状态，D21 第 3 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 9 条） |
 
 ### skill/examples/combat
 
@@ -374,6 +375,7 @@
 - [benchmark_test.go](../../../gameplay/skill/combatcomponent/benchmark_test.go)
 - [component_test.go](../../../gameplay/skill/combatcomponent/component_test.go)：`TestNestUndoRollbackRestoresCombatStateExactly`、`TestCombatDaoPersistenceRoundTrip`、`TestNestUndoWorksThroughRealHandlers`、`TestCombatDaoProducesTransactionLocalMutationAndSyncMask`、`TestCombatMutationOutsideTransactionPanicsBeforeStateChange`；其余 6 项见文件
 - [refusals_test.go](../../../gameplay/skill/combatcomponent/refusals_test.go)：`TestDetachedTransactionFailuresAreReturnedNotDereferenced`、`TestReadsAndPaymentsRefuseUnknownEntitiesAndUnmappedResources`、`TestCombatDaoRefusesForeignPersistedStateAndEmptyPatches`、`TestStatusBridgeRefusesToModifyABuffWithoutACatalogPolicy`
+- [state_bridge_test.go](../../../gameplay/skill/combatcomponent/state_bridge_test.go)：`TestBuffTagsDriveDerivedStates`、`TestBindStatesRefusesBadBindings`、`TestLoadedBuffsReachBoundStatesOnInitFinish`
 - [status_bridge_test.go](../../../gameplay/skill/combatcomponent/status_bridge_test.go)：`TestStatusBridgeAppliesStacksAndModifiers`、`TestStatusBridgeImmunityTenacityAndReplace`、`TestStatusBridgeRemoveAndDispel`、`TestStatusBridgeAttributeModifierIsIndependent`、`TestHostAdapterResourceCommand`；其余 2 项见文件
 
 ### skill/integration/sync-e2e

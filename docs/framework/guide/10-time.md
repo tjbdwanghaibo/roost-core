@@ -288,6 +288,7 @@ m.gate, _ = state.Gate(m.states, m.agent, logError,
 - **观察者**：`Watch(id, fn)` / `Unwatch`，`NewWatcher()` 打包一次撤销。按“观察者上次看到的值”算差通知（总是交替的 true / false），顺序 = 注册顺序；观察者里改状态立即生效、引出的通知排到本轮之后。**回滚不通知**：观察者的副作用保留，下一次任何状态改动或 `Refresh()` 时按差补发。能用门控表达的不要写观察者。
 - **门控 `Gate`**：规则 `{State, Group, Mode}`，状态生效时对动作组计数冻结（`FreezeCancel` 在生效那一刻取消在途动作），失效时撤销；装上时按当前状态对齐，`Close` 撤销它持有的全部冻结。冻结计数不随事务回滚，所以 handler 回滚撤掉了一个门控状态时，组保持冻结直到下一次通知（每条规则至多持有一次冻结，不会累积）；需要立即一致就在回滚之后调 `Refresh`。
 - **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
+- **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期靠业务的 `TickBuffs`（D20 P5 计划挂 1Hz 心跳）。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
 
 边界见 [KNOWN-LIMITS“行为控制”](../../maintenance/KNOWN-LIMITS.md#行为控制d21)，实现契约见 [impl/10-time §2D](../impl/10-time.md#2d-行为控制agent取代冲突冻结与状态)。

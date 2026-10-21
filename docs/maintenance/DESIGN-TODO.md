@@ -1610,6 +1610,27 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 
 **待拍板（先按推荐做了）**：② 门控在 handler 回滚后的一致性——现按“最终一致”：冻结保留到下一次状态通知（或业务调 `Refresh`），每条规则至多一次、不累积（推荐：与 runner 不回滚的口径一致，框架不在回滚路径上改别的组件）；备选 B：框架在回滚后自动补发（需要 Nest 提供“回滚完成后、实体锁释放前”的钩子，当前没有）。
 
+##### D21-3 实施结果（2026-10-21）
+
+**状态：已实施**（本地提交 `575f216a`）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制agent取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制agent取代冲突冻结与状态) 第 9 条。
+
+**API**：`type StateBinding struct{ State state.ID; Tags []combat.Tag }`；`func (c *CombatComponent) BindStates(set *state.Set, bindings ...StateBinding) error`（构造时一次；每个状态一个提供函数，持久状态、空标签被拒）；`func (c *CombatComponent) HasBuffTag(tag combat.Tag) bool`。
+
+**实施中的决定**：① 一个状态绑多个标签（任一即生效），方案草案是“一个标签一个提供函数”（`StateProvider(tag)`），合成一个绑定避免同一状态登记多个提供函数；② 通知点是“改 buff 集合”的 mutator 加 `OnInitFinish`（加载出的 buff 在这里让已经装好的门控跟上），`SetBuffDueTick` 不改集合、不通知；③ 回滚后派生状态的 `Has` 当场就对（读的是回滚后的容器），观察者在下一次通知时跟上（与 D21-2 第 2 条同一规则）。
+
+**红绿证据**（变异核对，原文）：
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| B1 `TickBuffs` 不通知 | `TestBuffTagsDriveDerivedStates`：`watchers saw [1 true 2 true 2 false 1 false], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B2 `DispelBuffs` 不通知 | 同上：`watchers saw [1 true 2 true 1 false 2 false 1 true], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B3 提供函数缓存容器（等于复制，回滚后不跟） | 同上：`a rolled-back root buff still roots` |
+| B4 `ApplyBuff` 不通知 | 同上：`watchers saw [], want [1 true 2 true 1 false 2 false 1 true 1 false]` |
+| B5 `OnInitFinish` 不通知 | `TestLoadedBuffsReachBoundStatesOnInitFinish`：`watcher saw [] after OnInitFinish, want [true]` |
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；`go run ./cmd/glsvet ./gameplay/skill/combatcomponent/` 无提示。退出码均为 0。
+
+
 ## D22 业务时间取自 ctx、支持变速
 
 **状态：维护者 2026-10-21 提出（在 D21 调研中补充，单列，不并进 D21）：ssr 有个很好的设计——业务里的时间一律从 ctx 取，业务时间因此可以加速、减速。本节是调研与方案，待拍板，代码未改。**

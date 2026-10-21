@@ -80,7 +80,7 @@
 | [gameplay/movement](../../gameplay/movement) | [时间与定时器](impl/10-time.md) | 3 | 8 |
 | [gameplay/skill](../../gameplay/skill) | [游戏技能、战斗与空间](impl/08-skill.md) | 155 | 110 |
 | [gameplay/skill/combat](../../gameplay/skill/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 5 | 2 |
-| [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 3 | 12 |
+| [gameplay/skill/combatcomponent](../../gameplay/skill/combatcomponent) | [游戏技能、战斗与空间](impl/08-skill.md) | 4 | 13 |
 | [gameplay/state](../../gameplay/state) | [时间与定时器](impl/10-time.md) | 4 | 2 |
 | [gameplay/skill/examples/combat](../../gameplay/skill/examples/combat) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
 | [gameplay/skill/examples/fireball](../../gameplay/skill/examples/fireball) | [游戏技能、战斗与空间](impl/08-skill.md) | 1 | 0 |
