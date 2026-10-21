@@ -1,0 +1,15 @@
+# 压测专用（未入库）：登录风暴——每个机器人连接、登录进场景、装好解码器、ready，然后发一次客户端视野请求；
+# 最后等 4 秒让压测端的指标可以被抓取。
+scenarios:
+  - name: storm
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        - action: scene_watch
+        - action: scene_ready
+        - action: scene_view
+          param:
+            lod_level: 0
+            view_radius: 120
+        - wait: 4s

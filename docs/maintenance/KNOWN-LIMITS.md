@@ -80,7 +80,8 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **怪物只巡逻**：没有追击、回巢、占地与战斗伤害；巡逻走直线（出生点附近边长 12 的正方形），角按地形裁剪。
 - **刷怪一次一批**：上一批还在建时交来的批次丢弃，等下一拍；建一只要一次 `lifecycle.Create`、一次 `ShowSubject` 与一条场景 + 怪物的两实体 Nest 消息（场景实体是这一步的串行点，玩家的 `move_target` / `move` 也锁场景）。
 - **场景视野的扇出上限 65536**：每个成员都挂在场景视野上（`MaxPlayersPerView` 由缺省 4096 调到 `sceneMaxMembers`）；超过时 `AttachView` 失败、只打 Warn，那个玩家收不到场景时间。
-- **机器人冒烟没跑**：loadtest 场景已按新协议加 `move_target` / `move_arrive`，编译与单元测试通过；真实进程上的 `make dev-smoke` / `make loadtest` 因宿主资源占用推迟（2026-10-21），见 DESIGN-TODO P3。
+- **机器人冒烟只到冒烟规模**：2026-10-22 已在私有依赖环境里跑通 `make dev-run` / `make dev-smoke`（2 / 2）/ `make loadtest LOADTEST_COUNT=20`（20 / 20，`move_target` → `move_arrive` 都走完，心跳无跳拍），见 DESIGN-TODO P3“冒烟结果”；更大规模见下一条。
+- **出生点挤满时复制会话被关闭（2026-10-22 登录风暴观察，尚未定方案）**：demo 的空间视野不设 `MaxVisible`，所有玩家从同一出生点进场；同时在线并挤在出生点的玩家加上附近的怪超过 Manager `Limits.MaxObjects`（缺省 100，既是每帧对象上限也是一个会话能持有的对象数）时，下一帧编码分配引用失败，Manager 按既有契约关闭该会话（`frame: object limit exceeded`，game 日志 “scene: push to player failed, its replication session was closed”），之后对它的订阅反复被拒（“session is not open”）。实测 80 个机器人同时登录无此现象，100 个时 100 个会话全部被关闭，200 个时 128 个被关闭；机器人场景不做 `scene_expect` 时仍判成功，只有日志可见。同一次 200 个机器人里另有 72 个在 `connect` 失败（`auth send: robot session: closed`），原因尚未定位。可选：demo 给空间视野设 `MaxVisible`（推荐，与 sync-aoi 的做法一致），或调大 `MaxObjects`，或把出生点打散；这是 demo 配置的产品选择，交维护者决定。另：下文“广播与 AOI”一节“AOI 视野”一条说多视野持有超过 `MaxObjects`“由 Manager 拒绝（重试表与 Drain 诊断可见）”，与 `TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit`（超额时关闭会话）和本次观察不一致，措辞待核对。
 
 ### 行为控制（D21）
 

@@ -8,7 +8,7 @@
 | --- | --- |
 | 1. 登记侧入口与基线同量级或更快，AOI 基准不变 | **成立**。政策阶段一直在跑时业务线程上的一次直接调用：ApplySync 下 `Enter`+`Leave` 均值 23.4µs → 0.47µs、p99 55.9µs → 1.5µs、最大 4.1ms → 1.8ms；`SetObserverView` 最大 2.85ms → 17µs。AOI / Cluster 基准全部在 ±2% 内。视野登记表一类的小操作变慢（每次多一条日志、多 2～3 次分配，例如 `SharedSpatialView/players=1` 226 → 451ns），绝对值是纳秒级 |
 | 2. Nest 两种模式 P99 不高于改前；ApplySync 16 视野仍超周期 | **成立（ApplySync 有改善，ApplyAsync 持平）**。原场景 Nest ApplySync 0 / 4 / 8 视野 P50 低 6～11ms、P99 低 4～8ms、新订阅全量 P99 低 19～32ms；ApplyAsync 各项在噪声内。16 视野 ApplySync（诊断构建）P99 126 → 128ms、政策阶段每 tick P95 29.7 → 38.1ms、帧数 197000 → 194991，仍超周期，且比改前略差（见 §4） |
-| 3. demo 登录风暴 handler P99 不再有 AOI 批次长度的尾巴 | **未测**（§6） |
+| 3. demo 登录风暴 handler P99 不再有 AOI 批次长度的尾巴 | **规模受限，没有可分辨的差异**（§6）：80 个机器人同时登录（更多时 demo 的复制会话因 `MaxObjects` 被关闭），进场景 handler 改后 3 次均值 0.10～0.32ms、改前 0.02～8.28ms（改前一次 8.28ms、最大 18.9ms，另两次与改后同量级）；game 进程只有均值 / 最大，没有 handler 的 P99 直方图 |
 | 业务 p99 / CPU | 服务端 CPU 秒数前后相同（±0.7s / 次，单次约 15s）；`ErrInterestQueueFull` 0（夹具里任何 `QueueMove` 错误都会让运行失败，所有运行都正常结束）；队列峰值夹具不导出，没有数 |
 
 另有两项要维护者知道：
@@ -112,9 +112,26 @@ D19“两种应用模式”的历史表（2026-10-21，`b6ef5573`，同一夹具
 - ApplySync 积压时第一次 Flush 变长（一次排空，受“周期一半”预算约束；本基准的周期是 Manager 缺省值），但排空总耗时短得多——改前一次 Flush 只应用一批、剩下的要等后续 Flush（本基准里 `Drain` 在批之间等周期）。这就是方案 §6 说的“Flush 变长但不再丢吞吐”。
 - 视野登记表一类的小操作变慢：每次操作现在多一条日志条目（`B/op` +38～960%、`allocs/op` +2～3），在“只有 1 个挂接玩家”的场景相对变化大、绝对值是几百纳秒；挂接玩家多时被扇出成本淹没。
 
-## 6. 没做的与不能证明的
+## 6. demo 登录风暴与不能证明的
 
-- **demo 登录风暴没测**。方案 §6 第 3 项要的是 game-demo 的 handler 服务端 P99；demo 的 loadtest 没有 `scene_view` 动作、game 进程的 handler 延迟要从 ops 端口的指标里取，需要分别生成改前 / 改后两个工程并在私有依赖环境里各起十个进程，本轮没有做。业务线程不再等 AOI 批次这一点由 §5 的 `XDirectCallUnderPolicy` 直接测到。
-- 队列峰值：sync-aoi 不导出 Interest 的日志长度 / 队列峰值，没有数。
-- 只在 macOS / arm64、单机、每个配置 2 轮；P99 的轮间差 1～9ms（16 视野最大约 17ms）。
+**登录风暴**（方案 §6 第 3 项；样本 [storm/](benchmarks/interest-single-writer-20261022/storm/)）：改前 / 改后各生成一个 game-demo 工程（`roost project new … -template game-demo --skip-deps`，`replace` 指回 `494134ae` / 当前 worktree），依赖用私有隔离环境（`dataengine-env.sh`，端口偏移 26000），十个进程。demo 的 loadtest 没有 `scene_view` 动作，两边的生成工程里加了同一处补丁（[patch-loadtest.py](benchmarks/interest-single-writer-20261022/storm/patch-loadtest.py)，未入库到 demo 模板）和场景 [storm.yaml](benchmarks/interest-single-writer-20261022/storm/storm.yaml)：`connect` → `enter_game` → `scene_watch` → `scene_ready` → `scene_view` → 等 4 秒（让压测端指标能被抓到）。每次运行重启十个进程（指标从零开始）、80 个机器人同时开始、每次换一批新玩家 ID，3 轮、先后交替；loadavg 1.6～2.2。
+
+| 指标 | 改前（r1 / r2 / r3） | 改后（r1 / r2 / r3） |
+| --- | --- | --- |
+| 机器人成功 | 80 / 80 / 80 | 80 / 80 / 80 |
+| `handlerEnterScene`（进场景，Nest）均值 ms | 8.28 / 0.39 / 0.02 | 0.20 / 0.10 / 0.32 |
+| 同上 最大 ms | 18.88 / 12.10 / 0.32 | 8.78 / 6.09 / 11.92 |
+| `handlerRecordEnter` 均值 / 最大 ms | 8.79 / 18.86 · 7.72 / 14.87 · 8.52 / 20.09 | 8.54 / 18.75 · 8.24 / 18.49 · 8.09 / 13.26 |
+| 玩家 TCP 分发 均值 / 最大 ms（全部消息） | 106.5 / 658 · 89.4 / 561 · 97.9 / 630 | 100.3 / 634 · 98.4 / 615 · 92.0 / 593 |
+| 压测端 `scene_view` 往返 p99（2 的幂桶上界）ms | 8 / 2 / 1 | 1 / 1 / 1 |
+| 压测端 `enter_game` 往返 p50 / p99（桶上界）ms | 512 / 1024（三次相同） | 512 / 1024（三次相同） |
+
+读法：这个规模下 AOI 批次很小，改前只有第 1 次出现进场景 handler 均值 8ms（与改前“直接调用可能等一个 AOI 批次”一致），另两次与改后同量级，**不能据此下结论**。登录往返主要花在账号登录与建角色链路上（TCP 分发均值约 100ms，两边相同）。game 进程的 `nest_dispatch_cost` 只有计数 / 总和 / 最大，没有直方图，拿不到服务端 P99；压测端直方图是 2 的幂桶，只能看量级。
+
+**规模上限是 demo 的配置**：100 个机器人时 100 个复制会话全部因 `frame: object limit exceeded` 被关闭，200 个时 128 个被关闭、另有 72 个在 `connect` 失败（原因尚未定位）——所有玩家挤在同一出生点，加上附近的怪超过 Manager `Limits.MaxObjects`（缺省 100），demo 的空间视野又没有设 `MaxVisible`。两边都会这样（Manager 未改）。已记入 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](../maintenance/KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)，是 demo 配置的产品选择，交维护者决定。
+
+**不能证明的**：
+
+- 队列峰值：sync-aoi 不导出 Interest 的日志长度 / 队列峰值，没有数；game 进程的 `entitysync_interest_fact_backlog` 是瞬时值，风暴期间没有连续采样。
+- 只在 macOS / arm64、单机、每个配置 2 轮（风暴 3 轮）；P99 的轮间差 1～9ms（16 视野最大约 17ms）。
 - ApplySync 的 P50 / 新订阅全量改善原因尚未确认（§2）。

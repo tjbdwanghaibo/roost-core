@@ -1101,6 +1101,8 @@ make loadtest LOADTEST_COUNT=20    # 冒烟规模，不是压测
 make dev-stop
 ```
 
+**冒烟结果（2026-10-22，已补）**：生成工程 = main `11988df8`（+ 只改 sync-aoi 的夹具修正）上 `roost project new hbsmoke -template game-demo --skip-deps` + `replace` 指回 worktree；依赖用 `wiring/scripts/integration/dataengine-env.sh up` 起的私有环境（根目录在会话 scratchpad、端口偏移 26000），十份配置按 demo README 的 sed 改指向它。`make dev-run` 十个进程全部就绪、accountctl 登记 sid 1000；`make dev-smoke` 2 / 2 成功（场景耗时 p95 4.49s，阈值 16s）；`make loadtest LOADTEST_COUNT=20` 20 / 20 成功（场景耗时 p50 / p99 10.0 / 10.8s），场景里的 `move_target` → `move_arrive` 每个机器人都走完；game 进程 `heartbeat_delivered_total = heartbeat_executed_total = 1404`，没有跳拍计数，game 日志没有 WARN / ERROR；`make dev-stop` 正常。两点如实记录：① 生成配置里 game 连 `127.0.0.1:2379` 的 etcd（本机恰好有一个在跑，注册键带工程名前缀 `/hbsmoke/services/...`），README 的 sed 不改它；② 同一环境里另做的登录风暴（[INTEREST-SINGLE-WRITER-20261022 §6](../performance/INTEREST-SINGLE-WRITER-20261022.md#6-没做的与不能证明的)）发现 100 个以上玩家同时挤在出生点时，每个复制会话持有对象超过 Manager `Limits.MaxObjects`（缺省 100），会话被关闭（`frame: object limit exceeded`），见 KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”。
+
 ### P4 实施结果（2026-10-21）
 
 **状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；已合入 main）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
