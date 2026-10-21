@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：常驻到达 worker 与冻结业务时间
+
+- ArrivalWorker/ArrivalService 接真实周期发现与生成 Sender 消费，整轮期限、结果身份校验、顺序有界处理；读超时、已提交后丢响应均重新发现持久待办，不维护易丢游标。
+- 验证取消未提交消费保留事件、排空超时如实返回且可重试等待；恢复进程经正式 App game 启动 worker，已完成事件不重复消费。原报告未投影 SIGKILL／两个恢复进程与钱包防重链继续通过。
+- 合入 main D22，建档读 fctx.Now，行军／发现／消费由生成包装注入 nowUnixMilli，移除 Sender 的业务时钟参数；测试以独立子进程 clock.SetSource 冻结来源。文档与 skill 同步新契约；全局地图发现、跨实体效果和生产容量仍另验。
+
 ### SLG 深化：到达持久事件与本地侦察报告
 
 - 行军同事务保存 Arrivals 原路线待办；生成 Sender 按服务器业务时间有界发现，消费重新校验期限，侦察报告／ReportTotal／完成位在同一 ScoutMap strict 事务内写入。重复身份不重写、不改变原到达时间，不触碰 Player 奖励。

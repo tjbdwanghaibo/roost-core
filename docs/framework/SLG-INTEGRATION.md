@@ -200,7 +200,7 @@ bash scripts/test-slg-alliance-player.sh
 
 `VisionMask` 和 `ScoutUntil` 只持久化、不参与同步；客户端对象载荷只有 `{"target":目标ID,"x":当前X,"y":当前Y}`，逐包校验不带钱包、位图或未授权目标。常驻控制标记沿用上一节的空场景重建方式。生成 handler 的撤权注入失败点只供 undo 验收，正式业务应由受信任权限服务调用，不允许客户端设置位图。
 
-期限接法：`handlerAllianceHomeInit` 首次在 Player strict 事务内写入 `clock.Now().Add(time.Hour).UnixMilli()`，已有 HomeSID 的同服重试直接返回，不能按重试时刻重算。刷新读取已提交期限，并用注入的 `clock.Business` 判定 `now < ScoutUntil`；期限缺失或到期即排除 504，不靠删除持久位图表达过期。生产装配从 `app.BusinessClock(registry)` 获取业务钟，跨重启保持框架的业务时间不回退约束，客户端不得上传时间或授权期限。
+期限接法：`handlerAllianceHomeInit` 首次在 Player strict 事务内写入 `fctx.Now().Add(time.Hour).UnixMilli()`，已有 HomeSID 的同服重试直接返回，不能按重试时刻重算。刷新读取已提交期限，并用注入的 `clock.Business` 判定 `now < ScoutUntil`；期限缺失或到期即排除 504，不靠删除持久位图表达过期。生产装配从 `app.BusinessClock(registry)` 获取业务钟，跨重启保持框架的业务时间不回退约束，客户端不得上传时间或授权期限。
 
 验收用 `clock.BusinessFunc` 在服务端精确推进到期限前、等于期限、超过期限；没有等待真实一小时，也没有修改进程全局偏移。恢复进程先比较完整冷事实，再以超过期限的服务端测试时间首次发布；第三进程重复核对。到期过滤和重复建档不写新状态，Player 仍是建档／两次移动／撤权／到账五条未投影 WAL；地图另外建档一次、移动四次、发起行军一次，总计十一条。这是发布时惰性到期：通过下面的周期刷新清除在线客户端对象，未接独立实体 timer；攻击等业务命令仍需独立校验期限。
 
@@ -245,11 +245,11 @@ raw, err := s.MultiSync_AllianceVision(ctx, playerID, mapID)
 
 ### 连续行军：持久路线、时间求值与离线到达
 
-[scout.Route](../../scripts/testdata/slg-alliance/scout/route.go) 保存起点／终点与绝对毫秒 Start/End。教学规则是地图内十秒直线移动，整数坐标插值；服务器在生成 `Sync_AllianceMarch` handler 中从注入的 `clock.Business` 取出发时间，正常装配应传 `app.BusinessClock(registry)`，不能把客户端时钟作为输入。路线、命令参数回执和地图 Revision 同一 strict 事务提交，客户端只收到当前位置，不收到完整路线、期限或命令账本。
+[scout.Route](../../scripts/testdata/slg-alliance/scout/route.go) 保存起点／终点与绝对毫秒 Start/End。教学规则是地图内十秒直线移动，整数坐标插值；服务器在 `handlerAllianceMarch` 的 `nowUnixMilli` 参数中取得本条消息冻结时间；生成包装从 fctx 填入，`Sync_AllianceMarch` 不接受时钟或时间参数，客户端不能提供出发时间。路线、命令参数回执和地图 Revision 同一 strict 事务提交，客户端只收到当前位置，不收到完整路线、期限或命令账本。
 
 ```go
 revision, err := s.Sync_AllianceMarch(ctx, mapID, "march", 5, 503,
-    700, 700, app.BusinessClock(registry), false)
+    700, 700, false)
 ```
 
 原身份重试先查询回执，返回原 Revision，不重算出发时间；同身份改目的地拒绝。中途新路线拒绝，直移命令也不能绕过路线改变坐标。到达后允许新身份从上一终点起步；下一段失败时起点、路线、版本与回执一并回滚。移动与行军共用 128 条回执预算，满后拒新身份，不能靠清账本允许旧命令重放。
@@ -265,7 +265,7 @@ revision, err := s.Sync_AllianceMarch(ctx, mapID, "march", 5, 503,
 | 冷恢复时间超过 End，及第三进程复核 | 首个 Full 就发布终点 (700,700)，目标 503 可见，奖励仍只到账一次 |
 | 到达后申请下一段但注入失败 | 能进入下一段执行分支，随后完整回滚，原路线和终点不变 |
 
-纯函数回归另验出发前、精确出发、精确到达、极大／极小 now、无效期限和非法坐标；真实链使用服务端注入业务钟，不等待十秒，也不修改全局偏移。位置求值钳制到终点与事件消费是两件事；下一节已接本地侦察报告的持久事件消费，战斗／采集／发奖仍需自己的幂等协议，不能把每次读到终点都当一次到达通知。
+纯函数回归另验出发前、精确出发、精确到达、极大／极小 now、无效期限和非法坐标；真实链在独立子进程用测试专用 `clock.SetSource` 冻结／推进时间来源，消息从 fctx 取值；不等待十秒，也不修改全局偏移。位置求值钳制到终点与事件消费是两件事；下一节已接本地侦察报告的持久事件消费，战斗／采集／发奖仍需自己的幂等协议，不能把每次读到终点都当一次到达通知。
 
 main 新增的 `gameplay/heartbeat`／`wiring/heartbeat` P1 已合入并跑定向回归，但本消费者未挂载心跳。心跳只驱动在线已加载实体，不能替代持久路线或离线事件账本；Shared Remote 禁挂心跳的 main 契约保留。连续碰撞、多段寻路、取消与返程、跨服地图权威及生产容量仍需独立实践。
 
@@ -273,13 +273,12 @@ main 新增的 `gameplay/heartbeat`／`wiring/heartbeat` P1 已合入并跑定�
 
 行军事务现在同时写入 `Arrivals[marchKey]`，内含目标、原路线与未处理状态。事件身份是所属地图 ID 加行军命令 key，原路线不会因当前目标开启下一段而被覆盖。待办与路线共用一笔提交，所以第一组崩溃仍是十一条 WAL；视觉位置求值和只读快照不会生成报告。
 
-生成接口分两步接入，调用方传服务器业务钟：
+生成接口分两步接入，消息执行时由 fctx 冻结业务时间：
 
 ```go
-keys, err := s.Sync_AllianceDueArrivals(ctx, mapID, app.BusinessClock(registry), 128)
+keys, err := s.Sync_AllianceDueArrivals(ctx, mapID, 128)
 for _, key := range keys {
-    applied, err := s.Sync_AllianceCompleteArrival(ctx, mapID, key,
-        app.BusinessClock(registry), false)
+    applied, err := s.Sync_AllianceCompleteArrival(ctx, mapID, key, false)
     // 区分业务拒绝与提交结果未知；未知结果保留原身份查询／重试。
     // 成功且 applied=false 表示已存在同一报告。
 }
@@ -295,13 +294,27 @@ for _, key := range keys {
 | --- | --- |
 | 第一组在途崩溃及两次恢复后 | 原持久到达事件仍可枚举，报告为零；视野读取没有消费事件 |
 | 报告写进程 | End 前不可发现／处理；精确 End 能发现；非法 limit、未知身份拒绝；注入失败后整份地图字节不变 |
-| 八路并发重投 | 只一个调用返回 applied=true，报告数与 ReportTotal 都为 1，只有一条新增 strict WAL |
+| worker 提交后八路并发重投 | worker 只提交一次，后续重投均返回 applied=false，报告数与 ReportTotal 都为 1，只有一条新增 strict WAL |
 | 第二次 SIGKILL | 确认这条报告事务尚未投影，完整写入 arrival-ready 标记后父进程杀子进程 |
 | 报告恢复与再下一进程 | 先比较完整冷事实，再延迟重试原身份；报告不重复、At 不变、待办为空、钱包不变 |
 
 每个原服现在总共六个顺序子进程、两个 SIGKILL 断点；第一组验证在途事实与奖励，第二组验证到达本地效果。测试时间由服务端注入业务钟控制，没有等待真实行军时长。main 的 Shared Remote 心跳拒绝与限频更新已合入并通过 heartbeat race 回归，仍未据此宣称真实 Redis 下心跳交接已验收。
 
-本接口已经提供有界待办发现与原子消费，尚未安装常驻到达 worker 或全局离线唤醒服务。报告仍在地图权威内部，客户端通知／邮件、Player 资产、战斗或采集属于下一步；跨实体／跨服效果需明确 Outbox、Saga 或接收方永久回执，不能把本地图事务当成跨服务恰好一次。
+本接口已接入下述常驻到达 worker；全局地图发现／离线唤醒目录仍未接入。报告仍在地图权威内部，客户端通知／邮件、Player 资产、战斗或采集属于下一步；跨实体／跨服效果需明确 Outbox、Saga 或接收方永久回执，不能把本地图事务当成跨服务恰好一次。
+
+### 常驻到达 worker：失败重试、排空与重启
+
+[ArrivalWorker / ArrivalService](../../scripts/testdata/slg-alliance/arrival_service.go) 将持久待办枚举和生成 Sender 消费接入已有 Service 生命周期。`ArrivalService` 复用经过验证的 ticker／每轮 context 期限／Shutdown 排空能力；视野发布和到达消费各自独立，读视图不会产生报告。
+
+`ArrivalWorker.Tick` 每轮枚举最多 Limit 个事件，先验证数量和身份（非空、最多 64 字节、无重复），成功且 context 未取消才顺序消费。一个期限覆盖整轮发现与消费，不为每条重新续超时，也不另起后台 goroutine。失败即结束本轮，下一轮从持久状态重新发现；不保存游标、不换新身份。返回错误可能是明确业务拒绝，也可能是结果未知，恢复仍依赖原事件幂等接口，而不是把所有错误都当作未写入。
+
+生成消费者通过真实 ticker 跑三轮：第一次权威查询超时，第二次提交报告后模拟丢失成功响应，第三次重新枚举得到空待办并退出；之后八路直接重复调用都不再产生报告。报告仍只有一条未投影事务，随后原有第二次 SIGKILL／恢复链继续执行。
+
+停机验收另让消费停在未提交的在途调用：Shutdown 先取消，短期限耗尽时如实返回 DeadlineExceeded；服务仍未结束，持久待办仍保留。释放阻塞后再次 Shutdown 成功，重启的 worker 能重新发现并完成原事件。报告恢复与再次冷加载两个进程还通过正式 `App.RegisterServer("game", arrivalService).Execute()` 启动 worker，确认已完成事件不再进入消费，App 返回前服务已排空。配置仍显式关闭测试 singleton，基础设施由夹具预装配。
+
+main D22 的时间契约已同步：建档读 fctx.Now，行军／发现／消费 handler 的 `nowUnixMilli` 由生成包装注入，Sender 中没有业务钟参数；每条消息的时间分别在执行开始冻结。服务循环的等待、I/O 截止与停机仍用系统时间；视野这种 Nest 外的业务计算可以使用注入 Business。测试通过独立子进程中的 `clock.SetSource` 设置不可变时间来源并在清理时恢复，不把它当成生产动态改时接口。
+
+本次只为已知 mapID 装配一个有界 worker。全局地图目录、多个分区的公平调度与退避、跨服 owner 路由、生产部署／长稳、报告对外通知和跨实体效果仍需分别验收；错误通过 Observe 暴露，不宣称已具备完整运维指标和告警。
 
 ### main 视野 API 迁移
 
