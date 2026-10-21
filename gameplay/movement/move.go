@@ -161,6 +161,7 @@ func (m *Move) Token() uint64 { return m.st.token }
 
 // MoveTo 沿路径移动：path 是途经点（不含当前位置），最后一个是终点；speed 是每秒格数。取代进行中的移动（旧的以
 // Replaced 回调）。返回本次移动的编号；之后每拍按 Elapsed 推进，到达等结论经 done 回调（done 可为 nil）。
+// Remote 托管实体处于共享模式时返回 heartbeat.ErrHeartbeatRemoteShared、不开始（进行中的移动照旧）。
 // 寻路这类重计算在调用之前做，不在每拍里做。
 func (m *Move) MoveTo(path []spatial.Point, speed float64, done Done) (uint64, error) {
 	if len(path) == 0 {
@@ -171,7 +172,7 @@ func (m *Move) MoveTo(path []spatial.Point, speed float64, done Done) (uint64, e
 	}
 	st := m.startState(speed, done)
 	st.mode, st.path = modePath, append([]spatial.Point(nil), path...)
-	return m.begin(st), nil
+	return m.begin(st)
 }
 
 // Follow 跟随实体 target：每拍经 MoveConfig.Locate 读它最近一次提交的位置，走到与它相距 keep 格以内；
@@ -192,7 +193,7 @@ func (m *Move) Follow(target int64, speed float64, keep int64, stopWhenReached b
 	}
 	st := m.startState(speed, done)
 	st.mode, st.target, st.keep, st.stopWhenReached = modeFollow, target, keep, stopWhenReached
-	return m.begin(st), nil
+	return m.begin(st)
 }
 
 // Stop 停止编号为 token 的移动（0 表示不论哪个）；不是进行中的那个时什么也不做、返回 false。调用方主动停的不回调
@@ -224,17 +225,33 @@ func (m *Move) startState(speed float64, done Done) moveState {
 		x: float64(at.X), y: float64(at.Y), cell: at}
 }
 
-// begin 换上新的移动并挂心跳；进行中的旧移动以 Replaced 回调（在新状态生效之后，回调里读到的是新移动）。
-func (m *Move) begin(st moveState) uint64 {
+// begin 先挂心跳，再换上新的移动；进行中的旧移动以 Replaced 回调（在新状态生效之后，回调里读到的是新移动）。
+// 心跳挂不上（Remote 托管实体处于共享模式：heartbeat.ErrHeartbeatRemoteShared）时什么都不改、返回错误，进行中的移动
+// 照旧。
+func (m *Move) begin(st moveState) (uint64, error) {
+	if err := m.reg.Start(); err != nil {
+		return 0, err
+	}
 	m.guard()
 	old := m.st
 	m.st = st
-	m.reg.Start()
 	if old.mode != modeIdle && old.done != nil {
 		at := m.mb.Pos()
 		old.done(old.token, Result{Reason: Replaced, At: at})
 	}
-	return st.token
+	return st.token, nil
+}
+
+// Resume 在有进行中的移动、移动心跳却没在跳时重新挂上心跳；没有进行中的移动或心跳在跳时什么也不做。
+//
+// 只有一种情况会这样：Remote 托管实体运行中进入共享模式，框架在下一拍把心跳停掉（共享模式不允许挂心跳，回到独占
+// 也不自动恢复，见 heartbeat.ErrHeartbeatRemoteShared）。这期间移动状态保留、位置不再推进，动作也不收尾；业务在
+// 实体回到独占后调用 Resume 接着走（共享期间调用返回 ErrHeartbeatRemoteShared），或 Stop 放弃这次移动。
+func (m *Move) Resume() error {
+	if m.st.mode == modeIdle || m.reg.Active() {
+		return nil
+	}
+	return m.reg.Start()
 }
 
 // beat 是移动心跳的回调：按 Elapsed 推进一次（不追帧：掉拍后 Elapsed 覆盖整段，一次走完），写 MapBasic（经

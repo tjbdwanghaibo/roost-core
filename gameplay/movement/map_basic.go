@@ -247,7 +247,8 @@ func (m *MapBasic) InScene() bool { return m.st.space != nil }
 func (m *MapBasic) Space() Space { return m.st.space }
 
 // Enter 进入场景：写场景 ID 与位置，提交后 space.Enter（位置取本事务结束时的位置），配置了周期落库时开始周期落库。
-// 已在场景里时返回 ErrAlreadyInScene。
+// 已在场景里时返回 ErrAlreadyInScene；配置了周期落库而 Remote 托管实体处于共享模式时返回
+// heartbeat.ErrHeartbeatRemoteShared（共享模式不允许挂心跳），两者都什么都不改。
 func (m *MapBasic) Enter(sceneID int64, space Space, at spatial.Point) error {
 	if sceneID == 0 || space == nil {
 		return fmt.Errorf("movement: enter needs a scene id and a space (scene %d)", sceneID)
@@ -255,14 +256,16 @@ func (m *MapBasic) Enter(sceneID int64, space Space, at spatial.Point) error {
 	if m.st.space != nil {
 		return ErrAlreadyInScene
 	}
+	if m.saveReg != nil {
+		if err := m.saveReg.Start(); err != nil {
+			return err
+		}
+	}
 	m.guard()
 	m.st.space, m.st.dirty = space, true
 	m.fields.SetSceneID(sceneID)
 	m.fields.SetPos(at)
 	m.addOp(spaceOp{enter: true, space: space, at: at})
-	if m.saveReg != nil {
-		m.saveReg.Start()
-	}
 	return nil
 }
 

@@ -128,21 +128,24 @@ func (b *BeatRunner) Wake(a Action) error {
 	return errors.New("actionflow: woken action is not current in any group")
 }
 
-// Sync 按当前动作重算心跳的启停与档位。动作切换时自动调用；业务只在一种情况下需要手动调用：在一个随后回滚的事务里
-// 启停过动作——runner 的状态不随事务回滚（ActionRunner 是纯内存状态），心跳登记却随回滚恢复，两者可能不一致，
-// 直到下一次动作切换。
-func (b *BeatRunner) Sync() {
+// Sync 按当前动作重算心跳的启停与档位。动作切换与每拍结束时自动调用（错误经 OnError 报告）；业务在两种情况下手动
+// 调用：
+//   - 在一个随后回滚的事务里启停过动作：runner 的状态不随事务回滚（ActionRunner 是纯内存状态），心跳登记却随回滚
+//     恢复，两者可能不一致，直到下一次动作切换；
+//   - Remote 托管实体运行中进入共享模式，框架停掉了心跳（共享模式不允许挂心跳，回到独占不自动恢复）：回到独占后
+//     调用 Sync 重新挂上。共享期间需要 tick 时返回 heartbeat.ErrHeartbeatRemoteShared，动作留在 runner 里不推进。
+func (b *BeatRunner) Sync() error {
 	want := b.wantPeriod()
 	if want == 0 {
 		b.reg.Stop()
-		return
+		return nil
 	}
 	if b.reg.Period() != want {
 		if err := b.reg.SetPeriod(want); err != nil {
-			b.report(err)
+			return err
 		}
 	}
-	b.reg.Start()
+	return b.reg.Start()
 }
 
 // beat 是心跳回调：按组号顺序 tick 每个有需要周期 tick 的当前动作的组，再 tick 任务，最后按结果重算启停。
@@ -169,7 +172,7 @@ func (b *BeatRunner) beat(beat heartbeat.Beat) error {
 	if b.missions != nil && b.missions.InMission() {
 		b.missions.Tick(beat.Now)
 	}
-	b.Sync()
+	errs = append(errs, b.Sync())
 	b.report(errors.Join(errs...))
 	return nil
 }
@@ -181,7 +184,7 @@ func (b *BeatRunner) transition(s ActionSnapshot, entering bool) {
 	} else if current, ok := b.active[s.Group]; ok && current.id == s.ID {
 		delete(b.active, s.Group)
 	}
-	b.Sync()
+	b.report(b.Sync())
 	if b.userTransition != nil {
 		b.userTransition(s, entering)
 	}
