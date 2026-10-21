@@ -20,7 +20,7 @@ import (
 
 // 对比二：投递方式（经真实 Nest 引擎）。一次进程只跑一组参数，由脚本循环调用并交替顺序：
 //
-//	HB_DELIVERY=1 HB_MODE=x|y|z|none HB_ACTIVE=0.2 HB_RES=10ms HB_SHARDS=1 HB_OUT=<jsonl> \
+//	HB_DELIVERY=1 HB_MODE=x|y|z|c|none HB_ACTIVE=0.2 HB_RES=10ms HB_SHARDS=1 HB_OUT=<jsonl> \
 //	  go test -run TestDeliveryRun -count=1 -timeout 0 ./gameplay/heartbeat/internal/bench
 //
 // 模式：
@@ -31,6 +31,9 @@ import (
 //	      下一格重投（handler 内不能 Dispatch）。**绕过 Nest 对目标实体的准入顺序、Guard 与事务**，见报告风险一节
 //	z     nest.DispatchBroadcast：本格到期的全部实体一次调用，Nest 按锁组与 worker 散列拆成至多 32 个一批，
 //	      每批一个作业（等批内全部前驱），worker 上逐个加锁、每个目标各自一个事务
+//	c     D20 选项 C：nest.DispatchTryBatch，每 HB_BATCH（缺省 64）个到期登记一个 Nest 批量作业，worker 逐目标在
+//	      目标自己的 Guard 作用域与事务里执行；同 ID 冲突在 Nest 里当场转成单目标作业（计 c_converted_per_s），
+//	      交回的（转换被拒等）清在途、计 hb_queue_full_total
 //	none  不挂心跳，只有业务消息（基线）
 //
 // 负载：HB_ENTITIES（缺省 5 万）个实体，其中 HB_ACTIVE 比例各有一个 100ms 登记（移动）；另有一路业务消息
@@ -232,19 +235,21 @@ type deliveryRun struct {
 	interval, absDev, lateness, bizLatency *histogram
 	beats, skipped, queueFull, admitErr    counter
 	tryFail, admissions, bizSent, bizFail  counter
+	handedBack                             counter
 	driverBusy, genBusy                    atomic.Int64 // 纳秒，只计测量窗口
 	batchPool                              sync.Pool
 }
 
 type driverShard struct {
-	idx    int
-	sched  *TierRing
-	regs   []*hbReg // 下标 = 本片登记序号（Step 返回的 id）
-	retryM sync.Mutex
-	retry  []*hbReg // y 模式 TryLock 失败、等待重投的登记
-	ids    []int64
-	elig   []*hbReg
-	carry  int
+	idx     int
+	sched   *TierRing
+	regs    []*hbReg // 下标 = 本片登记序号（Step 返回的 id）
+	retryM  sync.Mutex
+	retry   []*hbReg // y 模式 TryLock 失败、等待重投的登记
+	ids     []int64
+	elig    []*hbReg
+	targets []nest.TryBatchTarget
+	carry   int
 }
 
 func (r *deliveryRun) now() int64 { return int64(time.Since(r.origin)) }
@@ -311,6 +316,15 @@ func (r *deliveryRun) carry(b *carrierBatch) {
 	r.batchPool.Put(b)
 }
 
+// handBack 是 c 模式的交回回调（Nest worker 上调用）：没有执行的拍清在途、计数。
+func (r *deliveryRun) handBack(target nest.TryBatchTarget, _ error) {
+	reg := target.Params[0].(*hbReg)
+	reg.inflight.Store(false)
+	if r.measuring.Load() {
+		r.handedBack.add(reg.index, 1)
+	}
+}
+
 func (r *deliveryRun) biz(e *hbEntity, sent int64) {
 	now := r.now()
 	if r.measuring.Load() {
@@ -368,6 +382,24 @@ func (r *deliveryRun) deliver(s *driverShard, due []int64, planned int64) {
 		}
 		if measuring {
 			r.admissions.add(s.idx, uint64((len(s.ids)+nest.MaxBroadcastIdNum-1)/nest.MaxBroadcastIdNum))
+		}
+	case "c":
+		for off := 0; off < len(s.elig); off += r.cfg.Batch {
+			end := min(off+r.cfg.Batch, len(s.elig))
+			s.targets = s.targets[:0]
+			for _, reg := range s.elig[off:end] {
+				s.targets = append(s.targets, nest.TryBatchTarget{Handler: hbHandler, ID: reg.id, Params: reg.params})
+			}
+			if err := r.mgr.DispatchTryBatch(ctx, s.targets, r.handBack); err != nil {
+				for _, reg := range s.elig[off:end] {
+					reg.inflight.Store(false)
+				}
+				if measuring {
+					r.admitErr.add(s.idx, 1)
+				}
+			} else if measuring {
+				r.admissions.add(s.idx, 1)
+			}
 		}
 	case "y":
 		for off := 0; off < len(s.elig); off += r.cfg.Batch {
@@ -598,10 +630,12 @@ func TestDeliveryRun(t *testing.T) {
 
 	time.Sleep(time.Duration(cfg.WarmS * float64(time.Second)))
 	cpu0, wall0 := cpuTime(), time.Now()
+	converted0 := r.mgr.Stats().Queue.Short.TryBatchConverted
 	r.measuring.Store(true)
 	time.Sleep(time.Duration(cfg.MeasureS * float64(time.Second)))
 	r.measuring.Store(false)
 	cpu1, wall := cpuTime(), time.Since(wall0)
+	converted1 := r.mgr.Stats().Queue.Short.TryBatchConverted
 	close(stop)
 	wg.Wait()
 	close(sampleStop)
@@ -626,6 +660,8 @@ func TestDeliveryRun(t *testing.T) {
 	out["hb_queue_full_total"] = r.queueFull.sum()
 	out["hb_admit_err_total"] = r.admitErr.sum()
 	out["y_trylock_fail_total"] = r.tryFail.sum()
+	out["c_handed_back_total"] = r.handedBack.sum()
+	out["c_converted_per_s"] = float64(converted1-converted0) / sec
 	out["interval_samples"] = nIv
 	out["interval_ms"] = map[string]float64{"p50": iv[0], "p99": iv[1], "p999": iv[2], "max": iv[3]}
 	out["absdev_ms"] = map[string]float64{"p50": dv[0], "p99": dv[1], "p999": dv[2]}

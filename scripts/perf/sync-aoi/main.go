@@ -25,6 +25,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -57,9 +58,15 @@ type config struct {
 	EnterRadius        int64  `json:"enter_radius"`
 	LeaveRadius        int64  `json:"leave_radius"`
 	MoveAmplitude      int64  `json:"move_amplitude"`
-	Role               string `json:"-"`
-	Address            string `json:"-"`
-	Output             string `json:"-"`
+	// MoveDriver 是 Nest 模式下谁驱动移动（D20 第 4 期）：loop 压测端全局循环每 tick 挑实体发改值请求（原负载）；
+	// heartbeat 每个实体自己的心跳 + movement 巡逻（见 heartbeat.go）。直接模式（-nest=false）只有 loop。
+	MoveDriver string        `json:"move_driver"`
+	MovePeriod time.Duration `json:"move_period"`
+	MoveSpeed  float64       `json:"move_speed_cells_per_second"`
+	Movers     int           `json:"movers_override"`
+	Role       string        `json:"-"`
+	Address    string        `json:"-"`
+	Output     string        `json:"-"`
 }
 
 func parseConfig() config {
@@ -91,6 +98,11 @@ func parseConfig() config {
 	flag.Int64Var(&c.EnterRadius, "enter-radius", 150, "AOI enter radius (default view radius)")
 	flag.Int64Var(&c.LeaveRadius, "leave-radius", 180, "AOI leave radius")
 	flag.Int64Var(&c.MoveAmplitude, "move-amplitude", 48, "X span of the per-entity back-and-forth movement (16 phases; 48 = the original 3 per phase)")
+	// 缺省仍是 loop：已有报告的复跑命令保持原负载；heartbeat 的正式对比放在 v1.31 发版前的压测，之后再定缺省。
+	flag.StringVar(&c.MoveDriver, "move-driver", moveDriverLoop, "who moves entities in Nest mode: loop (harness loop sends one change request per moved entity, the original load) or heartbeat (each entity's own heartbeat drives a movement patrol along the same band; requires -nest)")
+	flag.DurationVar(&c.MovePeriod, "move-period", 100*time.Millisecond, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods)")
+	flag.Float64Var(&c.MoveSpeed, "move-speed", 30, "heartbeat mode: patrol speed in cells per second (keep at least one cell per beat so every beat is a change)")
+	flag.IntVar(&c.Movers, "movers", 0, "heartbeat mode: patrolling entities; 0 derives the count from -dirty so the change rate equals the loop driver's (entities×dirty%×20/s ÷ beats per second)")
 	flag.StringVar(&c.Role, "role", "server", "server or client")
 	flag.StringVar(&c.Address, "address", "", "client connects to this loopback endpoint")
 	flag.StringVar(&c.Output, "output", "", "new result directory")
@@ -119,6 +131,18 @@ func (c config) validate() error {
 	}
 	if c.SnapshotObjects < 0 || c.SnapshotBytes < 0 || c.SnapshotPerSession < 0 || c.ReconnectTick < 0 || c.ReconnectTick > c.Ticks || c.ReconnectPlayers < 0 || c.ReconnectPlayers > c.Players {
 		return errors.New("invalid recovery workload")
+	}
+	switch c.MoveDriver {
+	case moveDriverLoop:
+	case moveDriverHeartbeat:
+		if !c.Nest {
+			return errors.New("-move-driver=heartbeat needs the formal Nest producer (-nest)")
+		}
+		if !slices.Contains(heartbeat.Periods[:], c.MovePeriod) || !(c.MoveSpeed > 0) || c.MoveSpeed > 10000 || c.MoveAmplitude < 2 || c.Movers < 0 || c.Movers > c.Entities {
+			return errors.New("invalid heartbeat movement: -move-period must be a heartbeat tier, -move-speed positive, -move-amplitude at least 2, -movers within entities")
+		}
+	default:
+		return errors.New("-move-driver must be loop or heartbeat")
 	}
 	if c.Role != "server" && c.Role != "client" {
 		return errors.New("role must be server or client")
@@ -161,6 +185,8 @@ type subject struct {
 	tracker dataengine.Tracker
 	data    component
 	state   *entity.SubjectSyncState
+	// mover 只在 -move-driver=heartbeat 时有（heartbeat.go）。
+	mover *loadMover
 }
 
 func (s *subject) pack() (entity.FrozenSyncPayload, error) {
@@ -179,22 +205,40 @@ func (s *subject) PackSubjectDelta(entity.SyncProfile, uint64) (entity.FrozenSyn
 // 基点：-world 为 0 时是间距 30 的方阵（原负载）；否则按实体序号做 splitmix64 散列，在 world × world 内近似均匀分布，
 // 两维都留出 MoveAmplitude 与 1 的边距。
 func position(id int64, step int, c config) spatial.Point {
-	id = workloadIndex(id, c)
-	phase := (step + int(id%31)) % 32
+	index := workloadIndex(id, c)
+	phase := (step + int(index%31)) % 32
 	if phase < 0 {
 		phase += 32
 	}
 	if phase > 16 {
 		phase = 32 - phase
 	}
-	offset := int64(phase) * c.MoveAmplitude / 16
+	at := patrolBase(id, c)
+	at.X += int64(phase) * c.MoveAmplitude / 16
+	return at
+}
+
+// patrolBase 是实体的基点（偏移 0）。全局循环在 [基点, 基点 + MoveAmplitude] 的 X 方向往返；心跳模式在同一条带里巡逻。
+func patrolBase(id int64, c config) spatial.Point {
+	id = workloadIndex(id, c)
 	if c.World > 0 {
 		span := uint64(c.World - c.MoveAmplitude - 2)
 		h := splitmix64(uint64(id))
-		return spatial.Point{X: 1 + int64(h%span) + offset, Y: 1 + int64((h>>32)%span)}
+		return spatial.Point{X: 1 + int64(h%span), Y: 1 + int64((h>>32)%span)}
 	}
 	side := int64(math.Ceil(math.Sqrt(float64(c.Entities))))
-	return spatial.Point{X: 200 + (id-1)%side*30 + offset, Y: 200 + (id-1)/side*30}
+	return spatial.Point{X: 200 + (id-1)%side*30, Y: 200 + (id-1)/side*30}
+}
+
+// verifyPatrol 是客户端对位置的核对：全局循环的位置由 Step 唯一确定；心跳模式的位置取决于心跳时机，只能核对
+// 它在本实体的巡逻带上（Y 等于基点、X 在 [基点, 基点 + MoveAmplitude]）。
+func verifyPatrol(value component, c config) bool {
+	if c.MoveDriver == moveDriverHeartbeat {
+		base := patrolBase(value.ID, c)
+		return value.Y == base.Y && value.X >= base.X && value.X <= base.X+c.MoveAmplitude
+	}
+	at := position(value.ID, int(value.Step), c)
+	return value.X == at.X && value.Y == at.Y
 }
 
 func splitmix64(x uint64) uint64 {
@@ -301,7 +345,7 @@ func runServer(c config) error {
 	if err != nil {
 		return err
 	}
-	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity), fmt.Sprintf("-visible=%d", c.Visible), fmt.Sprintf("-views-per-player=%d", c.ViewsPerPlayer), fmt.Sprintf("-alliance-size=%d", c.AllianceSize), fmt.Sprintf("-world=%d", c.World), fmt.Sprintf("-block=%d", c.Block), fmt.Sprintf("-enter-radius=%d", c.EnterRadius), fmt.Sprintf("-leave-radius=%d", c.LeaveRadius), fmt.Sprintf("-move-amplitude=%d", c.MoveAmplitude))
+	child := exec.Command(exe, "-role=client", "-address="+listener.Addr().String(), fmt.Sprintf("-players=%d", c.Players), fmt.Sprintf("-entities=%d", c.Entities), fmt.Sprintf("-padding=%d", c.Padding), "-output="+c.Output, fmt.Sprintf("-nest=%t", c.Nest), "-mode="+c.Mode, fmt.Sprintf("-trace-capacity=%d", c.TraceCapacity), fmt.Sprintf("-visible=%d", c.Visible), fmt.Sprintf("-views-per-player=%d", c.ViewsPerPlayer), fmt.Sprintf("-alliance-size=%d", c.AllianceSize), fmt.Sprintf("-world=%d", c.World), fmt.Sprintf("-block=%d", c.Block), fmt.Sprintf("-enter-radius=%d", c.EnterRadius), fmt.Sprintf("-leave-radius=%d", c.LeaveRadius), fmt.Sprintf("-move-amplitude=%d", c.MoveAmplitude), "-move-driver="+c.MoveDriver)
 	log, err := os.Create(filepath.Join(c.Output, "client.log"))
 	if err != nil {
 		return err
@@ -430,13 +474,21 @@ func runServer(c config) error {
 	}
 	ctx := context.Background()
 	var engine *nest.NestMgr
+	var getter loadGetter
 	split := &splitTimings{}
+	var moving *heartbeatLoad
+	if c.MoveDriver == moveDriverHeartbeat {
+		if moving, err = newHeartbeatLoad(states, c, interest); err != nil {
+			return err
+		}
+	}
 	if c.Nest {
-		engine, err = newLoadNest(states, c, manager, interest, split)
+		engine, getter, err = newLoadNest(states, c, manager, interest, split)
 		if err != nil {
 			return err
 		}
 		defer engine.Shutdown(context.Background())
+		defer func() { _ = moving.stop(context.Background()) }()
 	}
 	transport.setMetadata(0, time.Now())
 	startupStart := time.Now()
@@ -473,6 +525,9 @@ func runServer(c config) error {
 	// driverMove 累计直接模式下压测端线程里 interest.Move 的耗时（AOI 工作在这里），与政策阶段同口径对比。
 	var driverMove time.Duration
 	mutate := func(step, start, end int, planned, begin time.Time) error {
+		if moving != nil {
+			return nil // 心跳模式：实体自己的心跳在移动，压测端不发改值请求
+		}
 		for j := start; j < end; j++ {
 			index := ((step+10)*count + j) * stride % c.Entities
 			s := states[index]
@@ -507,7 +562,18 @@ func runServer(c config) error {
 		}
 		return nil
 	}
+	if moving != nil {
+		// 心跳模式：预热前让移动者开始巡逻；预热按 50ms 一个 tick 等心跳改值（Step 是负数或 0，不计入测量）。
+		loadTick.Store(-9)
+		if err := moving.start(ctx, engine, getter); err != nil {
+			return err
+		}
+	}
 	for step := -9; step <= 0; step++ {
+		loadTick.Store(int64(step))
+		if moving != nil {
+			time.Sleep(50 * time.Millisecond)
+		}
 		now := time.Now()
 		if err := mutate(step, 0, count, now, now); err != nil {
 			return err
@@ -592,6 +658,7 @@ func runServer(c config) error {
 	for tick := 1; tick <= c.Ticks; tick++ {
 		tickStart := start.Add(time.Duration(tick-1) * period)
 		due := tickStart.Add(period)
+		loadTick.Store(int64(tick))
 		transport.setMetadata(tick, due)
 		var active time.Duration
 		if tick == c.ReconnectTick {
@@ -691,6 +758,10 @@ func runServer(c config) error {
 	}
 	failuresBeforeStop := manager.Counters().FlushFailures
 	if c.Nest {
+		// 先停心跳驱动（之后不再投递），再停 Nest：已在队列里的拍随 Shutdown 执行完，最终可见集合与 Interest 一致。
+		if err := moving.stop(ctx); err != nil {
+			return err
+		}
 		if err := engine.Shutdown(ctx); err != nil {
 			return err
 		}
@@ -763,6 +834,10 @@ func runServer(c config) error {
 	}
 	report := map[string]any{"recovery_admission_caught_up_ms": milliseconds(recoveryCaughtUp), "recovery_samples": recoverySamples, "startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
 	report["flush_failures_before_stop"] = failuresBeforeStop
+	report["move_driver"] = c.MoveDriver
+	if moving != nil {
+		report["heartbeat"] = moving.report()
+	}
 	report["same_basis"] = map[string]any{"policy_phase_per_tick_ms": quantiles(policyPerTick), "driver_interest_per_tick_ms": quantiles(driverInterest)}
 	report["harness"], report["server"] = split.report()
 	if last := manager.LastError(); last != nil {
@@ -800,7 +875,12 @@ func runServer(c config) error {
 	if failuresBeforeStop != 0 {
 		return fmt.Errorf("%d flush failures before shutdown; reports retained", failuresBeforeStop)
 	}
-	fmt.Printf("players=%d entities=%d visible_mean=%.2f planned_p99=%.2fms change_p99=%.2fms above50ms=%d/%d\n", c.Players, c.Entities, report["visible_final"].(map[string]float64)["mean"], received.Planned["p99"], received.Changed["p99"], received.PlannedOver, received.Samples)
+	if moving != nil {
+		if err := moving.verdict(); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("move_driver=%s players=%d entities=%d visible_mean=%.2f planned_p99=%.2fms change_p99=%.2fms above50ms=%d/%d\n", c.MoveDriver, c.Players, c.Entities, report["visible_final"].(map[string]float64)["mean"], received.Planned["p99"], received.Changed["p99"], received.PlannedOver, received.Samples)
 	if received.PlannedOver > 0 || received.ChangedOver > 0 {
 		return errors.New("50ms latency gate failed; reports retained")
 	}

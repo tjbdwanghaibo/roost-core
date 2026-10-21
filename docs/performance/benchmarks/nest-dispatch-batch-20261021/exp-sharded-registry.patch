@@ -1,0 +1,133 @@
+diff --git a/framework/entity/entity_guard.go b/framework/entity/entity_guard.go
+index e0b5d8fe..7c054f12 100644
+--- a/framework/entity/entity_guard.go
++++ b/framework/entity/entity_guard.go
+@@ -120,8 +120,48 @@ var guardPool = sync.Pool{
+ 	},
+ }
+ 
+-// guardScopes 按 goroutine 记录当前 Guard 作用域。
+-var guardScopes sync.Map // map[int64]*GuardScope
++// guardScopes 按 goroutine 记录当前 Guard 作用域（实验：按 goroutine ID 分片的读写锁 map，代替 sync.Map）。
++var guardScopes = newGoroutineScopes()
++
++type goroutineScopeShard struct {
++	mu   sync.RWMutex
++	data map[int64]*GuardScope
++	_    [32]byte
++}
++
++type goroutineScopes struct{ shards [64]goroutineScopeShard }
++
++func newGoroutineScopes() *goroutineScopes {
++	g := &goroutineScopes{}
++	for i := range g.shards {
++		g.shards[i].data = make(map[int64]*GuardScope)
++	}
++	return g
++}
++
++func (g *goroutineScopes) shard(id int64) *goroutineScopeShard { return &g.shards[uint64(id)%64] }
++
++func (g *goroutineScopes) Load(id int64) (*GuardScope, bool) {
++	s := g.shard(id)
++	s.mu.RLock()
++	v, ok := s.data[id]
++	s.mu.RUnlock()
++	return v, ok
++}
++
++func (g *goroutineScopes) Store(id int64, v *GuardScope) {
++	s := g.shard(id)
++	s.mu.Lock()
++	s.data[id] = v
++	s.mu.Unlock()
++}
++
++func (g *goroutineScopes) Delete(id int64) {
++	s := g.shard(id)
++	s.mu.Lock()
++	delete(s.data, id)
++	s.mu.Unlock()
++}
+ 
+ // NewGuardScope 在当前 goroutine 上开启一个新的 Guard 作用域，返回释放函数：释放全部锁、执行 post-release 回调、
+ // 恢复上一层作用域并归还 Guard。I/O worker 上调用会 panic（I/O 池不得取实体锁）。
+@@ -153,10 +193,8 @@ func WithGuardScope(name string, fn func(*GuardScope) error) error {
+ 
+ // CurrentGuardScope 返回当前 goroutine 的 Guard 作用域；没有时为 nil。
+ func CurrentGuardScope() *GuardScope {
+-	if value, ok := guardScopes.Load(goroutine.GoID()); ok {
+-		if scope, ok := value.(*GuardScope); ok {
+-			return scope
+-		}
++	if scope, ok := guardScopes.Load(goroutine.GoID()); ok {
++		return scope
+ 	}
+ 	return nil
+ }
+diff --git a/framework/nest/group_transition.go b/framework/nest/group_transition.go
+index 90d1854b..6ae2baab 100644
+--- a/framework/nest/group_transition.go
++++ b/framework/nest/group_transition.go
+@@ -460,7 +460,47 @@ func entityGroupTransitionStateName(state entity.EntityGroupTransitionState) str
+ 
+ // currentNestDispatchMsgs 按 goroutine 记录正在派发的消息（map[int64]*Msg），供 handler 内的框架入口取得
+ // 所属消息的提交事实与 Remote 批次。
+-var currentNestDispatchMsgs sync.Map // map[int64]*Msg
++var currentNestDispatchMsgs = newGoroutineMsgs() // 实验：分片读写锁 map，代替 sync.Map
++
++type goroutineMsgShard struct {
++	mu   sync.RWMutex
++	data map[int64]*Msg
++	_    [32]byte
++}
++
++type goroutineMsgs struct{ shards [64]goroutineMsgShard }
++
++func newGoroutineMsgs() *goroutineMsgs {
++	g := &goroutineMsgs{}
++	for i := range g.shards {
++		g.shards[i].data = make(map[int64]*Msg)
++	}
++	return g
++}
++
++func (g *goroutineMsgs) shard(id int64) *goroutineMsgShard { return &g.shards[uint64(id)%64] }
++
++func (g *goroutineMsgs) Load(id int64) (*Msg, bool) {
++	s := g.shard(id)
++	s.mu.RLock()
++	v, ok := s.data[id]
++	s.mu.RUnlock()
++	return v, ok
++}
++
++func (g *goroutineMsgs) Store(id int64, v *Msg) {
++	s := g.shard(id)
++	s.mu.Lock()
++	s.data[id] = v
++	s.mu.Unlock()
++}
++
++func (g *goroutineMsgs) Delete(id int64) {
++	s := g.shard(id)
++	s.mu.Lock()
++	delete(s.data, id)
++	s.mu.Unlock()
++}
+ 
+ // pushCurrentNestDispatchMsg 把 msg 登记为当前 goroutine 的派发消息，返回恢复上一层登记的函数。
+ func pushCurrentNestDispatchMsg(msg *Msg) func() {
+@@ -486,10 +526,6 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
+ 
+ // currentNestDispatchMsg 返回当前 goroutine 正在派发的消息；不在派发中时为 nil。
+ func currentNestDispatchMsg() *Msg {
+-	value, ok := currentNestDispatchMsgs.Load(goroutine.GoID())
+-	if !ok {
+-		return nil
+-	}
+-	msg, _ := value.(*Msg)
++	msg, _ := currentNestDispatchMsgs.Load(goroutine.GoID())
+ 	return msg
+ }

@@ -97,12 +97,16 @@ func (s *splitTimings) report() (harness, server map[string]any) {
 
 var loadHandler = nest.NewHandlerName("sync_aoi_state_change")
 
-func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.Interest, split *splitTimings) (*nest.NestMgr, error) {
+// newLoadNest 起压测的 Nest 引擎，返回引擎与实体查找（心跳驱动用同一份查找）。
+func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.Interest, split *splitTimings) (*nest.NestMgr, loadGetter, error) {
 	getter := make(loadGetter, len(states))
 	for _, s := range states {
 		getter[s.ID()] = s
 	}
-	nest.MustRegisterMemoryHandler(loadHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithEntitySync(m), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	// 引擎实例级注册（memory 级别、不回滚，与原包级 MustRegisterMemoryHandler 相同的 meta）：同一进程里起第二个引擎
+	// （go test -count>1）不冲突。
+	engine.MustRegisterHandlerWithMeta(loadHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		change := params[0].(loadMutation)
 		s := es[0].(*subject)
 		at := position(s.data.ID, change.step, c)
@@ -116,10 +120,9 @@ func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.
 		}
 		s.tracker.MarkSync(1)
 		return nil, in.QueueMove(s, at)
-	})
-	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithEntitySync(m), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	}, nest.HandlerMeta{})
 	if err := engine.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return engine, nil
+	return engine, getter, nil
 }

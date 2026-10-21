@@ -1,0 +1,5 @@
+[
+{"name":"S1","file":"gameplay/heartbeat/driver.go","pkg":"./gameplay/heartbeat/","test":"TestDeliveryIsChosenOnceBeforeStart","timeout":"150s","desc":"SetDelivery 不检查“已启动”","old":"\tif d.cancel != nil || d.lastDone != nil {\n\t\treturn fmt.Errorf(\"heartbeat: driver %s: delivery cannot change after the driver has started\", d.config.Name)\n\t}","new":""},
+{"name":"S2","file":"wiring/heartbeat/heartbeat.go","pkg":"./wiring/heartbeat/","test":"TestModReadsTheDeliveryOnce","timeout":"150s","desc":"Init 不把 heartbeat.delivery 交给驱动","old":"\tif err := m.driver.SetDelivery(delivery); err != nil {","new":"\tif err := m.driver.SetDelivery(coreheartbeat.DeliveryDispatch); err != nil || delivery == \"\" {"},
+{"name":"S3","file":"gameplay/heartbeat/driver.go","pkg":"./gameplay/heartbeat/","test":"TestDeliveryIsChosenOnceBeforeStart","timeout":"150s","desc":"批量方式下客户端不支持时静默退回单目标","old":"\t\treturn nil, fmt.Errorf(\"heartbeat: driver %s: delivery %q needs a nest client that implements nest.TryBatchDispatcher, got %T\", d.config.Name, DeliveryBatch, client)","new":"\t\treturn single, nil"}
+]

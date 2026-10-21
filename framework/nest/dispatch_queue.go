@@ -33,6 +33,7 @@ const (
 type dispatchJob struct {
 	waitingPrev, waitingNext *dispatchJob
 	msg                      *Msg
+	tryBatch                 *tryBatchJob // 非 nil 表示批量作业（DispatchTryBatch）：不登记同 ID 顺序，msg 为 nil。
 	ids                      []int64
 	successors               []*dispatchJob
 	next                     *dispatchJob
@@ -80,11 +81,15 @@ type dispatchLane struct {
 	config                                 WorkerPoolConfig
 	handler                                func(*Msg)
 	ready                                  readyJobs
-	waiting                                readyWaiting
-	queued                                 int // 尚未开始执行的外部请求，包括 ID 前驱等待。
-	readyCount                             int // 其中已经满足 ID 依赖的请求。
-	running                                int // 正在执行的外部请求；内部延续单独预算。
-	observation                            DispatchLaneStats
+	// tryBatches 是就绪的批量作业（DispatchTryBatch，只在业务通道），与 ready 交替取（见 take）：一格心跳一次准入几十个
+	// 批量作业，放在同一条 FIFO 里会让之后准入的普通消息等整格跑完。preferOrdinary 为 true 表示两类都有时下一次先取普通作业。
+	tryBatches     readyJobs
+	preferOrdinary bool
+	waiting        readyWaiting
+	queued         int // 尚未开始执行的外部请求，包括 ID 前驱等待。
+	readyCount     int // 其中已经满足 ID 依赖的请求。
+	running        int // 正在执行的外部请求；内部延续单独预算。
+	observation    DispatchLaneStats
 }
 
 // dispatchQueue 先登记 ID 顺序，再交给三种执行资源。I/O 池没有 ID 分槽；
@@ -193,7 +198,6 @@ func (q *dispatchQueue) admit(msg *Msg, prepareIO bool) error {
 	if prepareIO {
 		lane = dispatchIOLane
 	}
-	state := &q.lanes[lane]
 	j := newDispatchJob(msg, prepareIO)
 	j.lane = lane
 	q.mu.Lock()
@@ -201,6 +205,14 @@ func (q *dispatchQueue) admit(msg *Msg, prepareIO bool) error {
 	if !q.started || q.stopping {
 		return worker.ErrWorkerClosed
 	}
+	return q.admitLocked(j)
+}
+
+// admitLocked 是 admit 在 q.mu 内的部分：登记同 ID 顺序、检查容量、计入等待并在没有前驱时就绪。调用方持有 q.mu、
+// 已确认队列在运行，并已选定 j.lane。批量作业把冲突目标转成单目标作业时（convertTryBatchTargetLocked）也走这里。
+func (q *dispatchQueue) admitLocked(j *dispatchJob) error {
+	lane := j.lane
+	state := &q.lanes[lane]
 	blocked := false
 	for _, id := range j.ids {
 		if q.tails[id] != nil {
@@ -279,14 +291,24 @@ func (q *dispatchQueue) pushContinuationLocked(lane int, msg *Msg) {
 // 避免续行在持续的外部负载下饥饿。调用方持有 q.mu。
 func (q *dispatchQueue) take(lane int) *dispatchJob {
 	state := &q.lanes[lane]
-	if lane != dispatchIOLane && state.continuations.head != nil && (state.preferContinuation || state.ready.head == nil) {
+	hasExternal := state.ready.head != nil || state.tryBatches.head != nil
+	if lane != dispatchIOLane && state.continuations.head != nil && (state.preferContinuation || !hasExternal) {
 		state.preferContinuation = false
 		state.continuationCount--
 		state.continuationRunning++
 		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane, state))
 		return state.continuations.pop()
 	}
-	if j := state.ready.pop(); j != nil {
+	// 普通作业与批量作业交替：两类都有时，取过一个批量作业后下一次先取普通作业，反之亦然；只有一类时照取。
+	// 就绪链里的作业都已没有未完成的同 ID 前驱（批量作业不登记同 ID 顺序），换先后不影响同 ID 顺序。
+	var j *dispatchJob
+	if state.tryBatches.head != nil && (state.ready.head == nil || !state.preferOrdinary) {
+		j = state.tryBatches.pop()
+		state.preferOrdinary = true
+	} else if j = state.ready.pop(); j != nil {
+		state.preferOrdinary = false
+	}
+	if j != nil {
 		state.queued--
 		state.readyCount--
 		state.running++
@@ -305,7 +327,9 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 }
 
 // work 是通道 worker 的主循环：取工作 → 在新的请求上下文中执行 → 结束作业（释放同 ID 顺序、唤醒后继）→
-// 执行消息登记的出队后动作。停止且全部 pending 排空后退出。
+// 执行消息登记的出队后动作。结束作业后在同一次持锁里接着取下一项，不先放锁再抢一次；没有工作时才在 wake 上
+// 停放。出队后动作（await 的 I/O 启动）总在本项结束之后、不持锁、在本 worker 执行下一项之前运行。
+// 停止且全部 pending 排空后退出。
 func (q *dispatchQueue) work(lane int) {
 	state := &q.lanes[lane]
 	phase := fctx.WithIOWorker()
@@ -316,48 +340,60 @@ func (q *dispatchQueue) work(lane int) {
 		}
 	}
 	defer q.wg.Done()
+	// 每项工作的请求上下文选项对本 worker 固定，建一次；在 run 里逐次构造会让选项闭包每条消息逃逸到堆上。
+	contextOptions := []fctx.Option{fctx.WithSource("worker"), fctx.WithHandler(q.name), phase}
+	q.mu.Lock()
 	for {
-		q.mu.Lock()
 		j := q.take(lane)
 		for j == nil && !(q.stopping && q.pending == 0) {
 			state.wake.Wait()
 			j = q.take(lane)
 		}
-		q.mu.Unlock()
 		if j == nil {
+			q.mu.Unlock()
 			return
 		}
-		rerouted := false
-		var after func()
-		goroutine.SafeFunc(func() {
-			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
-			defer release()
-			// 转 I/O 的作业仍归队列所有，消息引用留给 I/O 池那一次执行释放。
-			defer func() {
-				if !rerouted {
-					j.msg.OnRelease()
-				}
-			}()
-			if j.msg.ioWork != nil {
-				j.msg.ioWork()
-			} else if handler := state.handler; handler != nil {
-				handler(j.msg)
-			}
-			after = j.msg.afterQueue
-			rerouted = lane != dispatchIOLane && !j.continuation && j.msg.ioReroute
-		})
+		if j.tryBatch != nil {
+			// 批量作业在执行期间逐目标取放 q.mu，返回时仍持锁、作业已结束或已放回就绪链（try_batch.go）。
+			q.runTryBatchLocked(lane, state, j, contextOptions)
+			continue
+		}
+		q.mu.Unlock()
+		rerouted, after := q.run(lane, state, contextOptions, j)
 		q.mu.Lock()
 		if rerouted {
 			q.rerouteToIO(j)
-			q.mu.Unlock()
 			continue
 		}
 		q.finishJobLocked(state, j)
-		q.mu.Unlock()
 		if after != nil {
+			q.mu.Unlock()
 			after()
+			q.mu.Lock()
 		}
 	}
+}
+
+// run 在新的请求上下文里执行一项工作，返回它是否需要原位转 I/O 准备、以及消息登记的出队后动作。
+// 转 I/O 的作业仍归队列所有，消息引用留给 I/O 池那一次执行释放。
+func (q *dispatchQueue) run(lane int, state *dispatchLane, contextOptions []fctx.Option, j *dispatchJob) (rerouted bool, after func()) {
+	goroutine.SafeFunc(func() {
+		_, release := fctx.NewContext(contextOptions...)
+		defer release()
+		defer func() {
+			if !rerouted {
+				j.msg.OnRelease()
+			}
+		}()
+		if j.msg.ioWork != nil {
+			j.msg.ioWork()
+		} else if handler := state.handler; handler != nil {
+			handler(j.msg)
+		}
+		after = j.msg.afterQueue
+		rerouted = lane != dispatchIOLane && !j.continuation && j.msg.ioReroute
+	})
+	return rerouted, after
 }
 
 // finishJobLocked 结束一项工作：归还执行额度，撤下它在各 ID 上的尾登记，后继的前驱全部完成即进入就绪；
@@ -368,6 +404,18 @@ func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
 	} else {
 		state.running--
 	}
+	q.releaseIDsLocked(j)
+	q.pending--
+	if q.stopping && q.pending == 0 {
+		for i := range q.lanes {
+			q.lanes[i].wake.Broadcast()
+		}
+	}
+}
+
+// releaseIDsLocked 撤下 j 在各 ID 上的尾登记，后继的前驱全部完成即进入就绪（并唤醒 worker）。作业结束与批量作业
+// 撤销对一个目标的认领（releaseTryBatchClaimLocked）共用这一步。调用方持有 q.mu。
+func (q *dispatchQueue) releaseIDsLocked(j *dispatchJob) {
 	for _, id := range j.ids {
 		if q.tails[id] == j {
 			delete(q.tails, id)
@@ -377,12 +425,6 @@ func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
 		next.predecessors--
 		if next.predecessors == 0 {
 			q.enqueueReady(next.lane, next)
-		}
-	}
-	q.pending--
-	if q.stopping && q.pending == 0 {
-		for i := range q.lanes {
-			q.lanes[i].wake.Broadcast()
 		}
 	}
 }
@@ -489,7 +531,11 @@ func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 		state.observation.MaxDependencyWait = max(state.observation.MaxDependencyWait, waited)
 	}
 	state.readyCount++
-	state.ready.push(j)
+	if j.tryBatch != nil {
+		state.tryBatches.push(j)
+	} else {
+		state.ready.push(j)
+	}
 	state.wake.Signal()
 }
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -458,9 +457,9 @@ func entityGroupTransitionStateName(state entity.EntityGroupTransitionState) str
 	}
 }
 
-// currentNestDispatchMsgs 按 goroutine 记录正在派发的消息（map[int64]*Msg），供 handler 内的框架入口取得
-// 所属消息的提交事实与 Remote 批次。
-var currentNestDispatchMsgs sync.Map // map[int64]*Msg
+// currentNestDispatchMsgs 按 goroutine 记录正在派发的消息，供 handler 内的框架入口取得所属消息的提交事实与
+// Remote 批次（按 goroutine ID 分片的读写锁表，见 goroutine.LocalMap）。
+var currentNestDispatchMsgs goroutine.LocalMap[*Msg]
 
 // pushCurrentNestDispatchMsg 把 msg 登记为当前 goroutine 的派发消息，返回恢复上一层登记的函数。
 func pushCurrentNestDispatchMsg(msg *Msg) func() {
@@ -486,10 +485,6 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 
 // currentNestDispatchMsg 返回当前 goroutine 正在派发的消息；不在派发中时为 nil。
 func currentNestDispatchMsg() *Msg {
-	value, ok := currentNestDispatchMsgs.Load(goroutine.GoID())
-	if !ok {
-		return nil
-	}
-	msg, _ := value.(*Msg)
+	msg, _ := currentNestDispatchMsgs.Load(goroutine.GoID())
 	return msg
 }

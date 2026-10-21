@@ -6,6 +6,8 @@
 #   ROOST_NEST_GAME_EMBEDDED=1  TCP → Game 进程内 TCPServer + TCPRuntime → Nest（不需要 NATS，见 embedded_load_test.go）。
 # 叠加 Sync：ROOST_NEST_GAME_SYNC=1 场景 Sync（GATE 或 EMBEDDED）；ROOST_NEST_GAME_SELF_SYNC=1 自身视图（只 EMBEDDED，
 # 与 SYNC=1 互斥）。嵌入模式可选 ROOST_NEST_GAME_TCP_RESIDENT_BYTES 覆盖出站驻留预算。正式参数见 docs/performance/README.md。
+# 心跳的驱动：ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker（缺省，帧回调逐个投递）或 heartbeat（gameplay/heartbeat，
+# 每个 Unit 一个登记，周期 1s / ROOST_NEST_GAME_HZ，必须是心跳档位：1、2、5、10、20Hz）。
 set -euo pipefail
 # 复用同一正式生成流程，仅验证手写空间组件，不启动负载或外部服务。
 test_pattern='^TestNestGameLoad$'
@@ -13,7 +15,9 @@ label_prefix=game
 case "${1:-}" in
   "") ;;
   --check-spatial) test_pattern='^TestSpatialComponentNestCommitAndRollback$'; label_prefix=spatial-check ;;
-  *) echo "Usage: $0 [--check-spatial]" >&2; exit 2 ;;
+  # 心跳驱动接线短测（几百毫秒，D20 第 4 期）：生成的 Unit 由 gameplay/heartbeat 驱动，拍数与 DAO 一致、无跳拍。
+  --check-heartbeat) test_pattern='^TestHeartbeatDriverTicksGeneratedUnits$'; label_prefix=heartbeat-check ;;
+  *) echo "Usage: $0 [--check-spatial|--check-heartbeat]" >&2; exit 2 ;;
 esac
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 label="${ROOST_PERF_LABEL:-$label_prefix-$(date +%Y%m%d-%H%M%S)}"
@@ -21,7 +25,7 @@ label="${ROOST_PERF_LABEL:-$label_prefix-$(date +%Y%m%d-%H%M%S)}"
 output="$repo/artifacts/perf/nest/$label"
 [[ ! -e "$output" ]] || { echo "Output exists: $output" >&2; exit 2; }
 repeats="${ROOST_PERF_COUNT:-3}"
-if [[ "$label_prefix" == spatial-check ]]; then repeats=1; fi
+if [[ "$label_prefix" == *-check ]]; then repeats=1; fi
 [[ "$repeats" =~ ^[1-9][0-9]*$ ]] || exit 2
 export GOWORK=off GOMAXPROCS="${ROOST_PERF_CPU:-4}"
 work="$(mktemp -d "${TMPDIR:-/tmp}/roost-nest-game.XXXXXX")"

@@ -4,6 +4,9 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [D20 第 4 期：压测工具改为心跳驱动（2026-10-21）](HB-DRIVEN-LOAD-20261021.md) | 只交付代码、没有性能结论：sync-aoi `-move-driver=heartbeat`（实体心跳 + movement 巡逻）、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat`（生成 Unit 挂 `gameplay/heartbeat`），缺省仍是原全局循环；§7 微基准补正式驱动的假客户端基准、真实 Nest 开环投递与快池占满跳拍；冒烟与正式对比 2026-10-21 因宿主资源占用推迟到 v1.31 发版前压测，命令见该页 §4 |
+| [D20 选项 C：Nest 批量心跳作业（2026-10-21）](NEST-BATCH-HEARTBEAT-20261021.md) | **压测暂停，待补**（维护者 2026-10-21 要求先完成代码）：实现与 23 条变异核对完成；正式对比只跑完第 1 轮（每组 1 次、不作结论），复跑脚本与步骤在报告 §4。探索性运行据以改了两处设计：批量与普通作业两条就绪链交替（同一条 FIFO 时业务 p99 2.1ms）、8 个一组认领（逐目标取派发队列锁约占 13% CPU） |
+| [D20 方案 D：Nest 批量入队原型（2026-10-21，实验记录）](NEST-DISPATCH-BATCH-20261021.md) | 原型 + 对比，判据未达标、分支不合入：`DispatchBatch` 批量入队、逐个执行；5 万实体 100ms 心跳 100% 移动时进程 CPU X 3.80 / D 3.38 / ssr 式批量 0.71 核；X 的成本主要是逐作业的 Nest 执行开销（含两个按 goroutine 登记的 `sync.Map` 争用）与 macOS 上的调度器空转。只保留 worker“结束后同锁取下一项”（短 handler 几何平均 −7.7%、完成 p99 −13.8%），随选项 C 合入 |
 | [D20 心跳调度结构与投递方式（2026-10-21）](HB-STRUCTURES-20261021.md) | 原型 + 基准，不是正式实现：ssr 思路（固定档 + 相位分桶）改写为按档分环后收集 / 撤销 / 内存全面领先（ssr 的 map 多环写法慢 6～10 倍，最小堆慢约 100 倍）；5 万实体 100ms 经真实 Nest，50 万次/s 时单目标 Dispatch 4.25 核、DispatchBroadcast 1.90 核、ssr 式批量 0.77 核，后者绕过目标实体的事务与 Sync 捕获、不能原样采用；推荐按档分环 10ms、单目标 Dispatch、1 个驱动 |
 | [生成工程完整链路的 strict 写入吞吐（2026-10-20）](GENERATED-TCP-STRICT-20261020.md) | 定位新用户试用第八轮“约 125 TPS”、不是容量基线：CLI 生成工程 + strict handler + 嵌入 TCP，50 连接各自一个玩家压测端 1253 TPS（WAL 每批约 9.9 条，上限约 short 池 worker 数 / 每笔持锁），同一实体 108 TPS；试用报告的形态与“请求落在同一实体”一致，单样本、非独占宿主 |
 | [Lockstep 快照恢复限速链路演练（2026-10-20）](LOCKSTEP-SNAPSHOT-DRILL-20261020.md) | 功能演练、不是性能基线：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB / 4 MiB 快照都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate（只准入，缺省约 492 KB/s）在 64 KB/s（1 MiB）、256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连后从头再传，三次都未恢复（设计 §6.3 风险 1 成立） |
@@ -101,6 +104,8 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 
 ### nest-game.sh（新拆分，2026-10-15 `44896aa4`）
 
+**心跳由谁驱动**（D20 第 4 期，2026-10-21）：`ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`（缺省，帧回调逐个投递，原负载）或 `heartbeat`（每个 Unit 挂 `gameplay/heartbeat` 登记，周期 `1s / ROOST_NEST_GAME_HZ`，须为 1、2、5、10、20Hz）；`--check-heartbeat` 跑接线短测。heartbeat 驱动下 `Heartbeats.Completion` 从回调开始算、`Harness.*` 为空，另有 `Beats`，见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。
+
 `Messages` / `Heartbeats` 的 `Completion` 从计划时刻、`QueueWait` 从投递时刻起算，混有压测端等待（P99≤50ms 门槛仍按 `Completion`，偏保守）：
 
 | 字段 | 区间 | 归属 |
@@ -159,6 +164,8 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 `Server.TerminalMissing` 非零说明终态有别的写出口、拆分不完整；各段带 `NegativeDurations`，非零说明时刻先后假设不成立（例如 `Find` 先于 `Apply` 返回读到提交）。
 
 ### sync-aoi.sh / sync-recovery.sh（新拆分）
+
+**移动由谁驱动**（D20 第 4 期，2026-10-21）：`-move-driver=loop`（缺省，原负载：压测端循环发改值请求）或 `heartbeat`（只在 `-nest` 下：实体自己的心跳 + `gameplay/movement` 巡逻，另有 `-move-period` / `-move-speed` / `-movers`）。心跳模式 `planned_event_to_client` 的起点是这一拍消息的业务时间、不含驱动迟到，下表 `harness.*` 与 `server.request_to_change_ms` 只在 loop 模式有值；`server.json` 的 `heartbeat` 一节与口径差异见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。不加开关的旧命令得到原负载。
 
 服务端与模拟客户端是两个进程；`planned_event_to_client` / `state_change_to_client` / `commit_to_client` 的终点是客户端解码校验完该对象。`server.json`（服务端进程，只计正式测量 tick，样本是每次状态变化）：
 

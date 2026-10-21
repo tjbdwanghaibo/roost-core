@@ -29,6 +29,10 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复详细慢日志，无实体 ID 标签 |
 | `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列和 worker 为 dispatcher/pool，delayed_messages 只有 dispatcher；派发器排空停止后删除，同名派发器还有活着的不删（RR-20261006-18） |
 | `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
+| `nest.dispatch.try_batch.cost{dispatcher}` | Duration | 批量作业（`DispatchTryBatch`，心跳投递用）一个 worker 连续执行的一段（至多一个 200µs 时间片）的耗时。批内目标不逐条记 `nest.dispatch.total` / `cost` / 慢派发 trace，也不逐条记 `nest.handler.lock_hold`（只记超过慢阈值的） |
+| `nest.dispatch.try_batch.executed.total` / `failed.total{dispatcher}` | Counter | 批量作业里执行了 handler 的目标数 / 其中 handler 返回错误（已回滚并记 Warn `async handler failed`）的数 |
+| `nest.dispatch.try_batch.converted.total{dispatcher}` | Counter | 批量作业里同 ID 冲突（有已准入未完成的作业，或实体锁取不到）当场转成单目标作业、排在冲突作业之后执行的目标数。同 ID 业务消息与心跳碰撞的频度；转换后的执行计入普通 `nest.dispatch.*` |
+| `nest.dispatch.try_batch.handed_back.total{dispatcher}` | Counter | 批量作业执行期交回调用方、没有执行的目标数（转单目标被准入拒绝、目标不在内存、fence、取消、handler 不存在）。心跳侧对应 `heartbeat.skipped_total` / `dropped_total{reason="not_loaded"}` |
 | `nest.handler.lock_hold` | Duration | 从进入事务执行到调用 release 前或事务返回；不含等锁及完整 release hook 成本，保留旧口径 |
 | `nest.handler.lock_hold.slow.total` | Counter | 超阈值持锁（默认 100ms，`NestOptionWithSlowLockThreshold`） |
 | `nest.pipelined.durable_wait` | Duration | 内联时为 ticket 等待；异步时从建立完成任务至解锁/前序完成后，不能当成纯 fsync 耗时 |
@@ -192,9 +196,9 @@ DESIGN-TODO D20 第 1 期。标签 `driver` 是 `heartbeat.Config.Name`（一个
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
-| `heartbeat.delivered_total{driver}` | Counter | 准入成功的心跳消息（每拍每个到期登记一条，不合并） |
+| `heartbeat.delivered_total{driver}` | Counter | 交给 Nest 的拍（每拍每个到期登记一个目标，不合并；批量作业里的目标与单目标 `Dispatch` 都算，准入被拒的不算）。批量作业里冲突转单目标的拍不另计 |
 | `heartbeat.executed_total{driver}` | Counter | 执行了回调的拍。与 `delivered_total` 的差是执行时按规则丢弃的（见 `dropped_total`）与还在队列里的 |
-| `heartbeat.skipped_total{driver,reason}` | Counter | 跳过的拍：`inflight`（上一拍还没执行完）、`queue_full`（快池准入满）、`rejected`（其他准入失败，例如引擎停止中）。**基线应为零**；持续增长说明实体所在的 worker 跟不上或回调太慢。同时打限频 Warn `heartbeat: beats skipped`（缺省 10s 一条，汇总间隔内的计数并带一个样本实体） |
+| `heartbeat.skipped_total{driver,reason}` | Counter | 跳过的拍：`inflight`（上一拍还没执行完）、`queue_full`（快池准入满，含 Nest 批量作业里同 ID 冲突转单目标作业被拒）、`rejected`（其他准入失败，例如引擎停止中）。**基线应为零**；持续增长说明实体所在的 worker 跟不上或回调太慢。同时打限频 Warn `heartbeat: beats skipped`（缺省 10s 一条，汇总间隔内的计数并带一个样本实体） |
 | `heartbeat.stalled_total{driver}` | Counter | 在途超过 `StallAfter`（缺省 10s，同一登记连续卡住时翻倍）视为丢失而重投的拍。**基线应为零**；非零说明 Nest 在执行 handler 之前放弃了消息（Remote 写准入被拒、准入后卸载且重载失败），或 worker 排队超过 10s。同样计入 Warn |
 | `heartbeat.dropped_total{driver,reason}` | Counter | 按规则丢弃、不执行回调的拍：`removed`（实例已卸载 / 删档）、`stale`（已被同 ID 新实例取代或已 OnDestroy；含卸载窗口里旧实例的拍到达新实例）、`not_loaded`（实例还没发布）、`stopped`（停止生效后才到达）、`not_owner`（Remote 托管实体本进程不是独占拥有方）、`duplicate`（卡住重投后同一次投递的另一份已执行）。不打日志 |
 | `heartbeat.stopped_total{driver,reason}` | Counter | 框架自动停掉的登记：`remote_shared`（Remote 托管实体进入共享模式，共享模式不允许挂载心跳）。同时打 Warn `heartbeat: registrations stopped because their Remote entity entered shared mode`（按 `WarnInterval` 限频，缺省 10 秒一条，带间隔内停掉的个数与一个样本实体）。非零说明有组件给会进入共享模式的 Remote 实体挂了心跳，应改由业务层驱动 |
@@ -343,6 +347,11 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `nest.dispatch.requeue.total` | Counter | `nest/group_transition.go:IncCounter` |
 | `nest.dispatch.io_reroute.total` | Counter | `nest/dispatch_queue.go:IncCounter` |
 | `nest.dispatch.slow_trace_suppressed` | Counter | `nest/trace.go:IncCounter` |
+| `nest.dispatch.try_batch.converted.total` | Counter | `nest/try_batch.go:IncCounter` |
+| `nest.dispatch.try_batch.cost` | Duration | `nest/try_batch.go:ObserveDuration` |
+| `nest.dispatch.try_batch.executed.total` | Counter | `nest/try_batch.go:IncCounter` |
+| `nest.dispatch.try_batch.failed.total` | Counter | `nest/try_batch.go:IncCounter` |
+| `nest.dispatch.try_batch.handed_back.total` | Counter | `nest/try_batch.go:IncCounter` |
 | `nest.dispatch.total` | Counter | `nest/trace.go:IncCounter` |
 | `nest.dispatch.worker_num` | Gauge | `nest/dispatcher.go:SetGauge` |
 | `nest.entity_group.transition.total` | Counter | `nest/group_transition.go:IncCounter` |

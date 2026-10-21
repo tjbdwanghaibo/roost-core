@@ -19,13 +19,19 @@
 - **game-demo 手写驱动在 `Service.Init` 才接上业务时钟**：生成工程的 Mod 在 Provide 阶段绑时钟；demo 的 `startWorldTimers` 在 `Service.Init`、`EnsureWorld` 之前调用，“World 第一次加载在驱动接上之后”靠 demo 自己的启动顺序（写闸门 `require_write_gate: true` 在 `EnsureWorld` 之后才发布），不是框架保证；更早加载的 World 按系统时钟记加载时刻（`time.logic_offset` 为 0 时两者相同）。
 - **端到端用例用的是内存权威**：`TestEntityTimerGeneratedProjectEndToEnd` 以不落库 committer + 内存 loader 代替 DataEngine + Mongo；循环的其余计时分支（MaxWait 重读时钟、准入失败重试、Redeliver）由它与 entitytimer 包测试覆盖。真实 WAL / Mongo 下的定时器往返由 7 个游戏夹具的 SIGKILL 崩溃恢复与 MMORPG 的正常停机夹具覆盖，全部经驱动投递循环（`Driver.Start`）、不手发 Tick，见 [游戏接入验收](#游戏接入验收)。
 
+### 慢派发 trace 与 handler 并发读消息参数（2026-10-21 发现，尚未修复）
+
+`framework/nest/trace.go` 的慢派发 trace（`startSlowDispatchTraceWatch`，执行超过 200ms 时由 `time.AfterFunc` 的 goroutine 触发）用 `fmt.Sprintf("%#v")` 打印消息参数（`nestParamSamples`），这时 handler 可能仍在执行、正在改同一个参数对象：参数是可变指针时，`-race` 报数据竞争，日志里可能是撕裂的值。发现于心跳 5 万实体冒烟 `-race -count=30`（`TestFiftyThousandEntitiesSmoke/dispatch`，单目标方式，与批量作业无关）。心跳这一侧已让 `*heartbeat.Reg` 实现 `GoString`、只打印构造后不变的字段（`TestRegFormatsWithoutReadingMutableState`，红在 `-race`）；Nest 侧对任意可变参数的同类竞争没有改（超出本轮范围），可选做法：trace 只打印 `%T`、或在准入时快照参数文本、或只在 handler 返回后打印。
+
 ### 实体心跳（D20 第 1 期）
 
 `gameplay/heartbeat` + `wiring/heartbeat`（[DESIGN-TODO D20](DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制)，维护者 2026-10-21 定方案）。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约见 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)。
 
-- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo、sync-aoi / nest-game 压测仍是全局循环。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P3（game-demo）、P4（压测改心跳驱动）、P5（迁移现有快池 tick）未做。
-- **投递是单目标 Dispatch**：压测 50 万次/秒约 4.25 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)），CPU 约六成是 worker 每条消息停放 / 唤醒。Nest 批量入队（方案 D）原型另行进行，达标后只换投递层（`deliverer`）。本轮只做 5 万实体 1s 档的功能冒烟（10 万拍全部执行、零跳拍），**没有正式性能测量**。
-- **卸载窗口**：投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。
+- **还没有业务接入**：生成器不装 `wiring/heartbeat`、没有 `roost add` 命令，game-demo 未接。P2（MapBasic / Move 组件、actionflow 适配）已实施，见下一节；P4（压测改心跳驱动）代码已实施、缺省仍是全局循环且没有测量，见“压测工具的心跳驱动”一节；P3（game-demo）、P5（迁移现有快池 tick）未做。
+- **批量心跳投递未经正式压测，缺省关闭**（维护者 2026-10-21 决定：选项 C 先合入、缺省关闭）：缺省 `heartbeat.delivery: dispatch` 仍是每拍一条单目标 `Dispatch`，50 万次/秒约 4 核（[HB-STRUCTURES](../performance/HB-STRUCTURES-20261021.md)）。`batch`（D20 选项 C，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)）64 拍一个 Nest 批量作业，每拍仍在实体自己的 Guard 作用域与事务里执行、Remote 托管实体仍单目标；正式压测暂停，只有 1 轮不作结论的数据与探索性运行（[NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)），Linux 上没有测。合批优化压测通过后再改为缺省开启。
+- **批量方式下的观测口径不同**：批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计超过慢阈值的），按批记 `nest.dispatch.try_batch.*`。业务时间与 Frozen 派生值仍按拍各冻结一次（与单目标方式相同）。
+- **（批量方式）冲突转单目标时可能有一次 worker 等锁**：同 ID 冲突的拍转成单目标作业排在冲突消息之后，执行时锁一定空闲；但若实体锁被 Nest 作业顺序之外的持有者占着（别的 handler 的 `Cast` 等），转成的单目标作业与普通 `Dispatch` 一样在 worker 上等这把锁，与 X 相同、不比 X 多。热点实体（同一实体高频业务消息）下的转换率没有测。
+- **卸载窗口**：缺省单目标方式下，投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。批量方式只读已加载的实体，卸载后没有重载的按 `not_loaded` 丢弃、不冷加载；Remote 托管实体与冲突转成的单目标作业仍走普通 `Dispatch`，同上。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
 - **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。只有独占拥有（`LocalOwned`）才执行。所有权迁移的测试用的是模拟 Remote 写准入的假 Manager（按 `remoteentity.Manager.beginWrite` 与 `TransferRemoteOwnership` 的写门 / 状态顺序），没有真实 Mongo / Redis 下的迁移演练。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式下各写者实例都是 `Shared`，分不出谁该跳。共享是运行期状态、不是种类声明，所以登记时只拦得住“当时已在共享”的实例（`Register` / `Start` 返回 `ErrHeartbeatRemoteShared`）；登记后才进入共享的（拥有方 `EnterRemoteSharedMode`，或第二个写者加载时是 `Unknown`、第一拍准入才转 `Shared`），由下一拍在实体锁内停掉，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn。Remote 没有所有权切换回调，检测靠心跳自己读实例状态（驱动到期时、handler 执行时）。边界：① 这一拍要走一次共享模式写准入（分布式锁），回调不执行；② 共享窗口短于登记的周期、期间没有到期的拍时，这个登记不会被停掉（期间也没有执行），回到独占后照常跳；全部登记停掉最多要一个最长档位的周期；③ 回到独占（`LeaveRemoteSharedMode`）后不自动恢复，业务需要时自己 `Start`（维护者 2026-10-21 决定）；④ 测试用的是模拟写准入的假 Manager，没有真实 Redis 分布式锁下的演练。共享实体的周期逻辑由业务层驱动（例如负责它的服务按周期发 Nest 消息）。
@@ -37,7 +43,7 @@
 
 `gameplay/movement`（`MapBasic`、`Move`、`MoveTo` / `Follow`）与 `actionflow.BeatRunner`（[DESIGN-TODO D20 P2](DESIGN-TODO.md#p2-实施结果2026-10-21)）。用法见 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，契约见 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)。
 
-- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测仍是全局循环（P4），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
+- **还没有业务接入**：game-demo 仍是“客户端发一个点、端点写位置后 `Scene.Moved`”（P3），压测的心跳驱动模式已有、但缺省仍是全局循环且未测（P4，见下一节），现有快池 tick 未迁移（P5）；巡逻、寻路未做（寻路在发起 `MoveTo` 之前由业务做，路径作参数）。AI 已有自己的心跳（`ai.NewBeatController`，D21 第 4 期），业务还没有接。只做了 3000 实体的端到端功能冒烟，**没有正式性能测量**；每拍的分配（`Move` 与 `MapBasic` 的回滚闭包、提交后记录、`MemFields` 的逆操作）未量。
 - **runner 不随事务回滚：框架不处理，由业务保证**（维护者 2026-10-21）。`ActionRunner` / `MissionRunner` 是纯内存状态；handler 先做完全部可能失败的校验与修改，最后一步才调用 `Start` / `Enqueue` / `End` 等。违反时，回滚后 runner 里残留这次的变更：例如回滚的 handler 里启动的 MoveTo 仍是移动组的当前动作，而 `Move` 的设定与组的心跳都随回滚恢复——这个动作不被 tick，直到被取代、被结束，或业务调用 `BeatRunner.Sync` 后在下一拍以取消（`Replaced`）结束。心跳那一拍只在提交失败时回滚（拍回调不返回错误），此时动作对组件的修改回滚、runner 按 Tick 的结论的推进保留，同样不处理。
 - **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 取 Interest 的锁并 `Apply` 一次，在 Nest worker 上可能等一个 AOI 应用批次（进出场景是低频事件，未测）；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 生效，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）。
 - **`Published` 晚于同一拍里的事件**：快照在提交后、实体锁释放之后才发布；在拍的事务里观察到的事件（动作结束、OnEnded）早于它。要读到这一拍提交后的位置，等该实体的下一条消息（同实体消息要等前驱作业连同提交后回调整个结束）。
@@ -47,6 +53,16 @@
 - **一个实体多个组各自一个心跳登记**：参考 ssr，动作组之间不合并投递（决定 ③）；移动之外再有一个需要周期 tick 的组（例如技能），每拍就是两条消息。
 - **地形判定按 0.5 格采样**：每进一个新格问一次 `Terrain`，斜穿两个被挡格的夹缝可能漏判；一拍的位移不设上限（速度 × `Elapsed`，`Elapsed` 上限 `max(1s, 档位)`），速度极大时采样数随距离增长。
 - **`MemFields` 只给测试、示例与不持久的 NPC**：逆操作只在 `rollback=undo` 的 handler 里登记，`rollback=state` 不恢复；它不标同步脏（`OnChange` 由使用方接）。需要同步的实体用 DAO 字段实现 `Fields`。
+
+### 压测工具的心跳驱动（D20 第 4 期）
+
+sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat` 与 `gameplay/heartbeat/internal/bench` 的 §7 微基准（[HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，[DESIGN-TODO D20 P4](DESIGN-TODO.md#p4-实施结果2026-10-21)）。
+
+- **没有任何测量**（2026-10-21 维护者要求暂停压测，同日宿主资源占用、冒烟也推迟）：心跳驱动与全局循环的对比、D19 多视野 Nest 模式在心跳驱动下的复测、驱动微基准与 10 / 25 / 50 万拍每秒的开环投递都待 v1.31 发版前压测（命令在报告 §4）。nest-game `TestNestGameLoad` 的心跳路径只编译、没有运行过；sync-aoi 只有 16 实体 0.6 秒的端到端用例。
+- **缺省仍是全局循环**：两种工具不加开关时是原负载，已有报告的复跑命令不变；对比做完后由维护者定缺省。
+- **心跳模式没有计划时刻**：sync-aoi 的 `Planned` 取这一拍消息冻结的业务时间、nest-game 的 `Completion` 从回调开始算，都不含驱动与快池的迟到（看 `beat_interval_ms` / `Beats.Interval` 与跳拍计数），与全局循环的“计划 → 客户端”不是同一口径。
+- **sync-aoi 心跳模式的核对弱于全局循环**：位置取决于心跳时机，客户端只核对在实体的巡逻带上（全局循环逐项核对位置）；同一实体在一个 tick 里改两次时第二次不计时（照常核对）。
+- **负载形状不同**：心跳模式的移动者是固定集合、持续巡逻（改值速率按与全局循环相同折算），全局循环每 tick 换一批实体；两者 AOI 进出的空间分布不同。
 
 ### 行为控制（D21）
 

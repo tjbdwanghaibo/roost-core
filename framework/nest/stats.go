@@ -16,10 +16,13 @@ type DispatcherWorkStats struct {
 // Ready 包含已预留执行额度但 goroutine 尚未取走的工作。
 // Rejected 只累计容量拒绝，不包含尚未启动或已经关闭的请求。
 // PeakWaiting / OldestWaiting 合并两种等待；DependencyWait / WorkerWait 分阶段累计。
+// TryBatchJobs 累计准入的批量作业数（DispatchTryBatch，每通道每次调用至多一个）；TryBatchConverted 累计批量作业里
+// 因同 ID 冲突（有已准入未完成的作业，或实体锁取不到）当场转成单目标作业的目标数。
 type DispatchLaneStats struct {
 	Running, Ready, BlockedOnPredecessor, WaitingForWorker int
 	PeakWaiting                                            int
 	Started, Rejected                                      uint64
+	TryBatchJobs, TryBatchConverted                        uint64
 	DependencyWait, WorkerWait                             time.Duration
 	MaxDependencyWait, MaxWorkerWait, OldestWaiting        time.Duration
 }

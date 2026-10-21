@@ -178,6 +178,18 @@ func Frozen(key any, compute func() any) any {
 	return value
 }
 
+// Refreeze 在同一个请求上下文里开始新的一次执行：重新冻结业务时间（Now / NowMilli 取此刻的进程业务时钟）、清掉
+// Frozen 记下的派生值。给在一个请求上下文里依次执行多个互相独立的业务单元的框架路径用（Nest 批量作业逐个目标，
+// 每个目标是一拍、各自冻结一次，DESIGN-TODO D22-1）；业务代码不调用。
+func (c *Context) Refreeze() {
+	if c == nil {
+		return
+	}
+	c.Now = clock.Now()
+	c.NowMilli = c.Now.UnixMilli()
+	c.clearFrozen()
+}
+
 // clearFrozen 清掉冻结值，保留底层数组给池里的下一次执行复用。
 func (c *Context) clearFrozen() {
 	clear(c.frozen)

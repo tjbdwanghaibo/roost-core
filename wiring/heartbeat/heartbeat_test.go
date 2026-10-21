@@ -75,3 +75,31 @@ func TestModBindsNestAndReadsTheFrozenBusinessTime(t *testing.T) {
 		t.Fatalf("second stop = %v", err)
 	}
 }
+
+// heartbeat.delivery：缺省 dispatch；batch 在 Init 时交给驱动（Provide 时按它接 Nest 批量作业）；未知值在声明解码时
+// 拒绝（enum），不进驱动。
+// 变异核对：Init 不把配置交给驱动（去掉 SetDelivery）时 batch 配置下驱动仍是 dispatch，本用例变红。
+func TestModReadsTheDeliveryOnce(t *testing.T) {
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	for _, tc := range []struct {
+		value string
+		want  coreheartbeat.Delivery
+	}{{"", coreheartbeat.DeliveryDispatch}, {"batch", coreheartbeat.DeliveryBatch}} {
+		cfg := viper.New()
+		if tc.value != "" {
+			cfg.Set("heartbeat.delivery", tc.value)
+		}
+		driver := coreheartbeat.NewDriver(coreheartbeat.Config{Name: "wiring.delivery." + tc.value})
+		if err := NewMod(access, driver).Init(cfg); err != nil {
+			t.Fatalf("Init(heartbeat.delivery=%q) = %v", tc.value, err)
+		}
+		if driver.Delivery() != tc.want {
+			t.Fatalf("heartbeat.delivery=%q: driver delivery %q, want %q", tc.value, driver.Delivery(), tc.want)
+		}
+	}
+	cfg := viper.New()
+	cfg.Set("heartbeat.delivery", "broadcast")
+	if err := NewMod(access, coreheartbeat.NewDriver(coreheartbeat.Config{Name: "wiring.bad"})).Init(cfg); err == nil {
+		t.Fatal("Init accepted an unknown heartbeat.delivery")
+	}
+}

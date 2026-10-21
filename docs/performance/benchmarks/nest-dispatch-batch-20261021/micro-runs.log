@@ -1,0 +1,25 @@
+16:58:58 pass=1 base start loadavg={ 3.88 5.85 6.40 }
+16:59:29 pass=1 base ok
+17:00:00 pass=1 final2 start loadavg={ 4.25 5.60 6.26 }
+17:00:40 pass=1 final2 ok
+17:01:11 pass=2 final2 start loadavg={ 3.82 5.31 6.10 }
+17:01:47 pass=2 final2 ok
+17:02:18 pass=2 base start loadavg={ 3.90 5.10 5.97 }
+17:02:48 pass=2 base ok
+17:03:19 pass=3 base start loadavg={ 4.48 5.06 5.89 }
+17:03:49 pass=3 base ok
+17:04:21 pass=3 final2 start loadavg={ 8.15 6.31 6.31 }
+17:04:56 pass=3 final2 ok
+17:05:27 pass=4 final2 start loadavg={ 9.00 7.27 6.70 }
+17:06:02 pass=4 final2 ok
+17:06:34 pass=4 base start loadavg={ 9.04 7.91 6.99 }
+17:07:04 pass=4 base ok
+17:07:35 pass=5 base start loadavg={ 6.33 7.36 6.85 }
+17:08:10 pass=5 base ok
+17:08:41 pass=5 final2 start loadavg={ 5.31 6.96 6.75 }
+17:09:17 pass=5 final2 ok
+17:09:48 pass=6 final2 start loadavg={ 4.73 6.54 6.61 }
+17:10:23 pass=6 final2 ok
+17:10:54 pass=6 base start loadavg={ 4.81 6.22 6.48 }
+17:11:30 pass=6 base ok
+17:11:30 all done

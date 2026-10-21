@@ -1,0 +1,7 @@
+[
+{"name":"N9","file":"framework/nest/try_batch.go","pkg":"./framework/nest/","test":"TestTryBatchDrainsOnShutdown","timeout":"150s","desc":"批量作业准入不计入 pending（停机排空不等它）","old":"\tq.pending++\n\tstate.queued++\n\tstate.observation.TryBatchJobs++","new":"\tstate.queued++\n\tstate.observation.TryBatchJobs++"},
+{"name":"N10","file":"framework/nest/try_batch.go","pkg":"./framework/nest/","test":"TestTryBatchReadsOnlyLoadedTargets","timeout":"150s","desc":"执行器直接用引擎的 Getter（不包 loadedGetter，会冷加载）","old":"getter: loadedGetter{mgr.getter},","new":"getter: mgr.getter,"},
+{"name":"N11","file":"framework/nest/try_batch.go","pkg":"./framework/nest/","test":"TestTryBatchHandBackReasonsAndPoolRouting","timeout":"150s","desc":"慢池目标也进 short 通道","old":"\tif entity.EntityBusinessPoolOfKind(entity.ResolveEntityID(id).Kind) == entity.BusinessPoolLong {\n\t\treturn dispatchLongLane","new":"\tif false && entity.EntityBusinessPoolOfKind(entity.ResolveEntityID(id).Kind) == entity.BusinessPoolLong {\n\t\treturn dispatchLongLane"},
+{"name":"N12","file":"framework/nest/await.go","pkg":"./framework/nest/","test":"TestTryBatchHandBackReasonsAndPoolRouting","timeout":"150s","desc":"Await 不拒绝批量作业（去掉 MsgTypeTryBatch 判断）","old":" || msg.Type == MsgTypeTryBatch","new":""},
+{"name":"H5","file":"gameplay/heartbeat/driver.go","pkg":"./gameplay/heartbeat/","test":"TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad","timeout":"150s","desc":"交回的“不在内存”也按跳拍计","old":"\t\tcase errors.Is(rb.err, nest.ErrEntityNotFound):","new":"\t\tcase false && errors.Is(rb.err, nest.ErrEntityNotFound):"}
+]

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -196,8 +197,11 @@ type NestMgr struct {
 	stopDone          chan struct{}
 	stopErr           error
 	fenceErr          error
-	groupLocks        *entityLockGroupLockManager
-	handlers          map[HandlerName]handlerEntry
+	// fenced 在 Fence 时与 fenceErr 一起置位、不再复位：批量作业逐目标读它判断“引擎已 fence”，不必每个目标取一次
+	// lifecycleMu；错误本身仍从 FenceError 取。
+	fenced     atomic.Bool
+	groupLocks *entityLockGroupLockManager
+	handlers   map[HandlerName]handlerEntry
 	// pipelinedAllow 非 nil 时是允许使用 DurabilityPipelined 的 handler 名单；nil 允许全部（开发默认）。
 	// 生产部署应固定名单，避免 handler 未经评审就采用提前放锁。
 	pipelinedAllow map[string]struct{}
@@ -228,6 +232,7 @@ func (mgr *NestMgr) Fence(cause error) {
 	mgr.lifecycleMu.Lock()
 	if mgr.fenceErr == nil {
 		mgr.fenceErr = errors.Join(ErrNestFenced, cause)
+		mgr.fenced.Store(true)
 	}
 	fenced := mgr.fenceErr
 	mgr.lifecycleMu.Unlock()

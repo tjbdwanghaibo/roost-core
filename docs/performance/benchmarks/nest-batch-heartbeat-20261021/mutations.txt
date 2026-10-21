@@ -1,0 +1,225 @@
+## N1
+mutation: 冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行
+test: TestTryBatchConflictRunsAfterAdmittedSameIDJob
+result: RED
+--- FAIL: TestTryBatchConflictRunsAfterAdmittedSameIDJob (0.00s)
+    try_batch_test.go:160: beat on A ran before the admitted same-ID jobs: [beat:A beat:C]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.740s
+FAIL
+
+## N2
+mutation: 执行期间不认领：不把目标登记为该 ID 的尾作业（只标记已认领）
+test: TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat
+result: RED
+--- FAIL: TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat (0.02s)
+    try_batch_test.go:212: while the beat runs: running=2 blocked-on-predecessor=0, want 1 and 1 (the later same-ID message must wait in the dependency queue, not on the entity lock)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.552s
+FAIL
+
+## N3
+mutation: 转单目标作业被准入拒绝时当作转成功（不交回）
+test: TestTryBatchConversionRejectedIsHandedBack
+result: RED
+--- FAIL: TestTryBatchConversionRejectedIsHandedBack (2.00s)
+    try_batch_test.go:283: timed out waiting for hand-back
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	2.541s
+FAIL
+
+## N4
+mutation: 各目标共用第一个目标的 Params
+test: TestTryBatchKeepsPerTargetTransactionSemantics
+result: RED
+--- FAIL: TestTryBatchKeepsPerTargetTransactionSemantics (0.00s)
+    try_batch_test.go:363: values e1=12 e2=11 e3=11, want 12 10 11 (e2 rolled back alone)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.548s
+FAIL
+
+## N5
+mutation: 不检查时间片（tryBatchSlice 改成一小时）
+test: TestTryBatchYieldsWorkerAfterTimeSlice
+result: RED
+--- FAIL: TestTryBatchYieldsWorkerAfterTimeSlice (0.00s)
+    try_batch_test.go:426: ordinary message ran at position 20 behind the batch backlog (want < 10 with a 1h0m0s slice and 100µs callbacks)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.565s
+FAIL
+
+## N6
+mutation: 执行前不检查 fence
+test: TestTryBatchRefusesTargetsAfterFence
+result: RED
+--- FAIL: TestTryBatchRefusesTargetsAfterFence (2.00s)
+    try_batch_test.go:465: timed out waiting for hand-back
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	2.531s
+FAIL
+
+## N7
+mutation: 批量作业与普通作业进同一条 FIFO（enqueueReady 不分 tryBatches）
+test: TestTryBatchAlternatesWithOrdinaryJobs
+result: RED
+--- FAIL: TestTryBatchAlternatesWithOrdinaryJobs (0.00s)
+    try_batch_test.go:647: ordinary message waited behind the batch backlog: [beat beat beat beat beat beat beat beat beat beat biz]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.589s
+FAIL
+
+## N8
+mutation: 两类都有时总是先取普通作业（批量作业被普通积压饿住）
+test: TestTryBatchAlternatesWithOrdinaryJobs
+result: RED
+--- FAIL: TestTryBatchAlternatesWithOrdinaryJobs (0.00s)
+    try_batch_test.go:651: batch job starved behind the ordinary backlog: [biz biz biz biz biz biz biz biz biz biz beat]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.710s
+FAIL
+
+## H1
+mutation: 冲突时直接执行而不排队：tails 有登记的目标不转单目标作业，照常认领执行
+test: TestConflictingBeatRunsRightAfterTheAdmittedMessage
+result: RED
+--- FAIL: TestConflictingBeatRunsRightAfterTheAdmittedMessage (0.00s)
+    nest_test.go:577: events [beat]: the beat ran before the already admitted message
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.538s
+FAIL
+
+## H2
+mutation: 驱动不看在途标志照投（每个登记至多一拍在途被破坏）
+test: TestConflictingBeatRunsRightAfterTheAdmittedMessage
+result: RED
+--- FAIL: TestConflictingBeatRunsRightAfterTheAdmittedMessage (0.00s)
+    nest_test.go:588: stats {Delivered:3 Executed:1 SkippedInflight:0 SkippedQueueFull:0 SkippedRejected:0 Stalled:0 DroppedRemoved:0 DroppedStale:0 DroppedNotLoaded:0 DroppedStopped:0 DroppedNotOwner:0 DroppedDuplicate:2 StoppedShared:0 Registered:1}: want one delivered and executed beat, no admission skips, and the next due beat skipped as in flight
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.552s
+FAIL
+
+## H3
+mutation: 交回的拍只清在途、不计跳拍
+test: TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses
+result: RED
+--- FAIL: TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses (0.00s)
+    nest_test.go:638: stats {Delivered:1 Executed:0 SkippedInflight:0 SkippedQueueFull:0 SkippedRejected:0 Stalled:0 DroppedRemoved:0 DroppedStale:0 DroppedNotLoaded:0 DroppedStopped:0 DroppedNotOwner:0 DroppedDuplicate:0 StoppedShared:0 Registered:1} inflight=false warns=0: a refused conversion is a skipped beat (queue_full, Warn)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.548s
+FAIL
+
+## H4
+mutation: Remote 托管实体的拍也走批量作业
+test: TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats
+result: RED
+--- FAIL: TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats (0.30s)
+    --- FAIL: TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats/batch (0.00s)
+        remote_test.go:172: remote entity: invalid ownership transition: unknown -> draining
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.845s
+FAIL
+
+## N9
+mutation: 批量作业准入不计入 pending（停机排空不等它）
+test: TestTryBatchDrainsOnShutdown
+result: RED
+--- FAIL: TestTryBatchDrainsOnShutdown (2.01s)
+    try_batch_test.go:517: shutdown did not drain
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	2.579s
+FAIL
+
+## N10
+mutation: 执行器直接用引擎的 Getter（不包 loadedGetter，会冷加载）
+test: TestTryBatchReadsOnlyLoadedTargets
+result: GREEN(!)
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	0.559s
+
+## N11
+mutation: 慢池目标也进 short 通道
+test: TestTryBatchHandBackReasonsAndPoolRouting
+result: RED
+--- FAIL: TestTryBatchHandBackReasonsAndPoolRouting (0.00s)
+    try_batch_test.go:567: pools [long-entity on short await=rejected short-entity on short await=rejected], want [long-entity on long await=rejected short-entity on short await=rejected]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.582s
+FAIL
+
+## N12
+mutation: Await 不拒绝批量作业（去掉 MsgTypeTryBatch 判断）
+test: TestTryBatchHandBackReasonsAndPoolRouting
+result: RED
+--- FAIL: TestTryBatchHandBackReasonsAndPoolRouting (0.00s)
+    try_batch_test.go:567: pools [long-entity on long await=allowed short-entity on short await=allowed], want [long-entity on long await=rejected short-entity on short await=rejected]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.587s
+FAIL
+
+## H5
+mutation: 交回的“不在内存”也按跳拍计
+test: TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad
+result: RED
+--- FAIL: TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad (0.00s)
+    nest_test.go:690: runs 0 stats {Delivered:1 Executed:0 SkippedInflight:0 SkippedQueueFull:0 SkippedRejected:1 Stalled:0 DroppedRemoved:0 DroppedStale:0 DroppedNotLoaded:0 DroppedStopped:0 DroppedNotOwner:0 DroppedDuplicate:0 StoppedShared:0 Registered:0} inflight=false: an unloaded instance's beat is dropped as not_loaded
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.574s
+FAIL
+
+## S1
+mutation: SetDelivery 不检查“已启动”
+test: TestDeliveryIsChosenOnceBeforeStart
+result: RED
+--- FAIL: TestDeliveryIsChosenOnceBeforeStart (0.00s)
+    driver_test.go:552: SetDelivery changed the delivery of a running driver
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.529s
+FAIL
+
+## S2
+mutation: Init 不把 heartbeat.delivery 交给驱动
+test: TestModReadsTheDeliveryOnce
+result: RED
+--- FAIL: TestModReadsTheDeliveryOnce (0.00s)
+    heartbeat_test.go:97: heartbeat.delivery="batch": driver delivery "dispatch", want "batch"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/heartbeat	0.602s
+FAIL
+
+## S3
+mutation: 批量方式下客户端不支持时静默退回单目标
+test: TestDeliveryIsChosenOnceBeforeStart
+result: RED
+--- FAIL: TestDeliveryIsChosenOnceBeforeStart (0.00s)
+    driver_test.go:530: Bind a client without try-batch support in batch delivery = <nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.562s
+FAIL
+
+## F1
+mutation: Refreeze 不清 Frozen
+test: TestRefreezeStartsANewExecutionInTheSameContext
+result: RED
+--- FAIL: TestRefreezeStartsANewExecutionInTheSameContext (0.00s)
+    ctx_test.go:225: Frozen after Refreeze = 1, the previous execution's value
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/base/fctx	0.593s
+FAIL
+
+## F2
+mutation: 批量作业逐目标不 Refreeze（整批共用一个冻结时刻）
+test: TestEveryBeatFreezesItsOwnBusinessTime
+result: RED
+--- FAIL: TestEveryBeatFreezesItsOwnBusinessTime (0.00s)
+    --- FAIL: TestEveryBeatFreezesItsOwnBusinessTime/batch (0.00s)
+        nest_test.go:758: r0 and r1 share Beat.Now 2027-01-15 16:00:00.006 +0800 CST: each beat must freeze its own business time
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.605s
+FAIL
+
+## G1
+mutation: 去掉 Reg.GoString（慢派发 trace 按反射打印参数）
+test: TestRegFormatsWithoutReadingMutableState
+result: RED
+WARNING: DATA RACE
+WARNING: DATA RACE
+

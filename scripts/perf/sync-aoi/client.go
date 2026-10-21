@@ -348,12 +348,11 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 				r.err = err
 				return
 			}
-			at := position(value.ID, int(value.Step), c)
 			hp := int64(100)
 			if value.Changed != 0 {
 				hp -= int64((int(value.Step) + 10000) % 97)
 			}
-			if value.ID != update.SubjectID || workloadIndex(value.ID, c) < 1 || workloadIndex(value.ID, c) > int64(c.Entities) || value.X != at.X || value.Y != at.Y || value.HP != hp || len(value.Extra) != c.Padding {
+			if value.ID != update.SubjectID || workloadIndex(value.ID, c) < 1 || workloadIndex(value.ID, c) > int64(c.Entities) || !verifyPatrol(value, c) || value.HP != hp || len(value.Extra) != c.Padding {
 				r.err = fmt.Errorf("component mismatch for %d step %d", value.ID, value.Step)
 				return
 			}

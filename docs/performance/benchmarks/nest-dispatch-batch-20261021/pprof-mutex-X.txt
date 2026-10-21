@@ -1,0 +1,32 @@
+File: bin-final.test
+Type: delay
+Time: 2026-10-21 15:34:45 CST
+Showing nodes accounting for 7066.91ms, 100% of 7067.94ms total
+Dropped 137 nodes (cum <= 35.34ms)
+Showing top 25 nodes out of 58
+      flat  flat%   sum%        cum   cum%
+ 4469.24ms 63.23% 63.23%  4538.07ms 64.21%  sync.(*Mutex).Unlock (partial-inline)
+ 1251.58ms 17.71% 80.94%  1273.12ms 18.01%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Swap
+  894.28ms 12.65% 93.59%  1021.40ms 14.45%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).LoadAndDelete
+  339.19ms  4.80% 98.39%   339.19ms  4.80%  runtime.unlock (inline)
+  112.62ms  1.59%   100%   120.58ms  1.71%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).find
+         0     0%   100%   612.30ms  8.66%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope
+         0     0%   100%   481.68ms  6.82%  github.com/tjbdwanghaibo/roost-core/framework/entity.NewGuardScope.func1
+         0     0%   100%   481.68ms  6.82%  github.com/tjbdwanghaibo/roost-core/framework/entity.releaseGuardScope
+         0     0%   100%   612.28ms  8.66%  github.com/tjbdwanghaibo/roost-core/framework/entity.storeGuardScope
+         0     0%   100%  1239.63ms 17.54%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+         0     0%   100%  1347.57ms 19.07%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0%   100%   509.94ms  7.21%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).FenceError
+         0     0%   100%  1239.63ms 17.54%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).admit
+         0     0%   100%    92.66ms  1.31%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities
+         0     0%   100%    92.54ms  1.31%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).groupLockManager
+         0     0%   100%    92.68ms  1.31%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).singleDispatch
+         0     0%   100%  1235.67ms 17.48%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0%   100%  2805.63ms 39.70%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).run (inline)
+         0     0%   100%  2805.63ms 39.70%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).run.func1
+         0     0%   100%  5418.49ms 76.66%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0%   100%  5542.86ms 78.42%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0%   100%  2805.39ms 39.69%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)
+         0     0%   100%  2805.39ms 39.69%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewEngine.func1
+         0     0%   100%  2805.39ms 39.69%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest
+         0     0%   100%   541.73ms  7.66%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest.func2
