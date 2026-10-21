@@ -104,7 +104,12 @@ func rewardChild(t *testing.T, mode string) {
 			if stats.Projected != 0 || stats.WALUnacked != 2 {
 				return fmt.Errorf("want two unprojected strict records: %+v", stats)
 			}
-			if e = os.WriteFile(filepath.Join(root, "ready.json"), []byte(raw), 0600); e != nil {
+			// 先写临时文件再改名：父进程一看到 ready.json 就 SIGKILL，直接 WriteFile 可能被杀在“已创建、未写完”之间，
+			// 恢复子进程读到空的期望值。
+			if e = os.WriteFile(filepath.Join(root, "ready.json.tmp"), []byte(raw), 0600); e != nil {
+				return e
+			}
+			if e = os.Rename(filepath.Join(root, "ready.json.tmp"), filepath.Join(root, "ready.json")); e != nil {
 				return e
 			}
 			select {} // Player 已到账、原服 Delivered 尚未写入；父进程此时 SIGKILL。
