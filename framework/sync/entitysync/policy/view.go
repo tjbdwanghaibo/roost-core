@@ -32,9 +32,11 @@ var (
 	ErrViewKind = errors.New("policy: operation does not fit the view's kind")
 	// ErrViewLimit：挂接超过 MaxViewsPerPlayer 或 MaxPlayersPerView。
 	ErrViewLimit = errors.New("policy: view attachment limit reached")
+	// ErrSpatialViewLimit：本 Interest 定义的空间视野已达 MaxSpatialViews，DefineSpatialView 被拒绝（先 RemoveView 不用的）。
+	ErrSpatialViewLimit = errors.New("policy: spatial view limit reached")
 )
 
-// viewLimitMetric 计数被上限拒绝的挂接，reason 为 views_per_player 或 players_per_view。
+// viewLimitMetric 计数被上限拒绝的挂接与定义，reason 为 views_per_player、players_per_view 或 spatial_views。
 const viewLimitMetric = "entitysync_interest_view_limit_rejected_total"
 
 // view 是登记表里的一个视野。登记表是视野、挂接与成员的唯一事实，由登记侧锁保护；应用侧（Interest.mu）只保存
@@ -119,18 +121,21 @@ type viewRegistry struct {
 	active     bool
 	maxViews   int
 	maxPlayers int
+	// spatialViews 是 DefineSpatialView 定义、尚未 RemoveView 的空间视野数（不含主视野），上限 maxSpatial。
+	spatialViews int
+	maxSpatial   int
 	// push 追加一条命令之后的唤醒（Interest.pushedLocked），持 mu 调用、不阻塞。
 	push func()
 }
 
-func (r *viewRegistry) init(maxViews, maxPlayers int) {
+func (r *viewRegistry) init(maxViews, maxPlayers, maxSpatial int) {
 	r.subjects = make(map[int64]uint64)
 	r.viewChanged = make(map[int64]time.Time)
 	r.views = make(map[ViewID]*view)
 	r.mains = make(map[int64]*view)
 	r.attached = make(map[int64]map[*view]struct{})
 	r.memberOf = make(map[int64]map[*view]struct{})
-	r.maxViews, r.maxPlayers = maxViews, maxPlayers
+	r.maxViews, r.maxPlayers, r.maxSpatial = maxViews, maxPlayers, maxSpatial
 }
 
 // record 追加一条命令并唤醒应用方（同步模式提醒 Manager 的政策阶段，异步模式通知应用线程）。调用方持有 r.mu。
@@ -269,6 +274,14 @@ func (r *viewRegistry) define(v *view) error {
 	}
 	if r.views[v.id] != nil {
 		return fmt.Errorf("%w: %d", ErrViewExists, v.id)
+	}
+	if v.spatial {
+		// 空间视野总数只在登记侧计（维护者 2026-10-22）：定义即占名额，RemoveView 归还；不涉及应用侧的执行与预算。
+		if r.spatialViews >= r.maxSpatial {
+			metrics.IncCounter(viewLimitMetric, metrics.Labels{"reason": "spatial_views"}, 1)
+			return fmt.Errorf("%w: view %d, the interest already has %d spatial views (MaxSpatialViews)", ErrSpatialViewLimit, v.id, r.maxSpatial)
+		}
+		r.spatialViews++
 	}
 	v.handle = r.newHandle()
 	v.players = make(map[int64]struct{})
@@ -561,6 +574,7 @@ func (in *Interest) RemoveView(id ViewID) error {
 		}
 	}
 	if v.spatial {
+		r.spatialViews--
 		r.record(viewOp{kind: opSpatialRemove, handle: v.handle})
 		return nil
 	}

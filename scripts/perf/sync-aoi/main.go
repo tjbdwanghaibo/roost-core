@@ -435,7 +435,8 @@ func runServer(c config) error {
 		views = max(views, policy.DefaultMaxViewsPerPlayer)
 	}
 	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, ApplyMode: applyMode, AOI: policy.AOIConfig{Bounds: worldBounds(c), BlockSize: c.Block, EnterRadius: c.EnterRadius, LeaveRadius: c.LeaveRadius, MaxVisible: c.Visible - 1},
-		MaxViewsPerPlayer: views, MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
+		MaxViewsPerPlayer: views, MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize),
+		MaxSpatialViews: max(policy.DefaultMaxSpatialViews, c.Players*c.ViewsPerPlayer)})
 	if err != nil {
 		return err
 	}

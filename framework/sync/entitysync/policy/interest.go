@@ -58,6 +58,11 @@ type InterestConfig struct {
 	// 超出即拒绝构造（ErrInterestBudget）。零值取 DefaultMaxObserverBlocks × DefaultMaxViewsPerPlayer，
 	// 即缺省配置下只有单个视野已经超预算时才会触发；调大 MaxViewsPerPlayer 或视野半径时由它把总成本挡在启动期。
 	MaxPlayerBlocks int
+	// MaxSpatialViews 限制本 Interest 经 DefineSpatialView 定义的空间视野总数（挂没挂接都算，不含玩家主视野），超出
+	// DefineSpatialView 返回 ErrSpatialViewLimit 并计数。每个空间视野都是一个 AOI 观察者，定义了没挂接的照样参与每次
+	// 移动的 AOI 计算，MaxViewsPerPlayer 只数挂接、管不到它们（维护者 2026-10-22）。零值取 DefaultMaxSpatialViews，负数
+	// 拒绝构造。RemoveView 释放名额。
+	MaxSpatialViews int
 	// OnRefusal 收到 Manager 政策阶段里结算时被拒绝的订阅（显式 Apply 的拒绝由它的返回值给出，不再重复）：
 	// 在政策阶段、持 Interest 的应用侧锁调用，不得阻塞、不得调用本 Interest。nil 不报告（指标与 Drain 诊断照旧）。
 	OnRefusal func(Refusal)
@@ -69,6 +74,13 @@ const (
 	DefaultMaxViewsPerPlayer = 64
 	DefaultMaxPlayersPerView = 4096
 )
+
+// DefaultMaxSpatialViews 是 MaxSpatialViews 的缺省：8192。依据 D19“两种应用模式”的实测（1000 玩家、每视野可见约 50、
+// 50ms 同步周期）：ApplySync 下 1000 玩家各 8 个额外空间视野（共 8000 个）时 Flush 约半个周期，正是阈值
+// SyncApplyMaxExtraViews（8）取的“Flush 不超过半个周期”的位置；16000 个时 Flush 贴着周期、开始丢 tick。所以缺省放下
+// “1000 玩家各挂满 8 个空间视野”，再多（眼位泄漏、单位视野没有 RemoveView）在定义时就拒绝，而不是拖慢整个场景的
+// 政策阶段。视野更多的玩法（RTS，ApplyAsync）按自己的密度压测后显式调大。
+const DefaultMaxSpatialViews = 8192
 
 // ApplyMode 是排队事实的应用方式。两种模式的语义逐项相同——只有提交后的事实生效（回滚 / 拒绝的永远不被看见）、
 // 同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧（发布屏障到结算之后才释放）、
@@ -261,7 +273,8 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if bandLayer == nil {
 		bandLayer = DefaultBandProfile
 	}
-	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 {
+	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 ||
+		config.MaxSpatialViews < 0 {
 		return nil, ErrInterestConfig
 	}
 	maxViews, err := viewsPerPlayerFor(config.ApplyMode, config.MaxViewsPerPlayer)
@@ -291,7 +304,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		viewInterval: viewInterval, now: time.Now,
 		onRefusal: config.OnRefusal,
 	}
-	in.registry.init(maxViews, maxPlayers)
+	in.registry.init(maxViews, maxPlayers, cmp.Or(config.MaxSpatialViews, DefaultMaxSpatialViews))
 	in.blockLayer = config.BlockLayer
 	if in.blockLayer == (entity.SyncProfile{}) {
 		in.blockLayer = bandLayer(0)
