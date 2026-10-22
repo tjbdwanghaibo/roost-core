@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：多进程 Managed Remote 地图交接与故障恢复
+
+- Remote 地图模式追加独立 owner 3100→3101→3102 和原服 1001：旧 owner 存活时写入被 fence；新 owner 投递后遇原服真实 RPC 超时，分别 SIGKILL 新 owner 和原服，恢复前比完整冷事实，八路重投不重复收件，再交接保留 ACK。
+- 六次子进程执行、两次 SIGKILL，Remote 地图恢复读权威存储，原服从未投影 WAL 恢复；不搬旧 owner WAL，不扩大为自动选主／跨机 HA。
+- 深化活动夹具同步 main 的 ReservationTTL 接法与默认／自定义期限回归；文档和 skill 同步空 Full、Interest 单写者、trace 与技能驱动契约。
+
 ### SLG 深化：Managed Remote 地图报告交接
 
 - 新增 `ROOST_SLG_REMOTE_MAP=1` 独立消费者模式，同一地图 handler 经 CLI 生成 managed/global ScoutMap；真实 Mongo/Redis/NATS 上验证 owner 3000→3001→3002、完整冷事实、旧 owner 写入 fence、未 ACK 报告重投与 ACK 回滚。

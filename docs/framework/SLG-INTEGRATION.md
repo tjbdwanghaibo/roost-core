@@ -179,7 +179,7 @@ bash scripts/test-slg-alliance-player.sh
 - 实际 NATS 通知到达循环入口；一千次重复提示只保留一个唤醒和最高代际。
 - Alice 持久撤权后故意不发通知，下一轮权威读超时且没有新帧，再下一轮定期读取恢复，客户端对象清空；取消后循环退出。同一活动的已获准贡献与原服奖励仍继续完成。
 
-**最后一个对象撤销的接入修正**：首次测试发现服务器订阅已清空，Bob 客户端仍保留目标。原因是 `HoldSession` 重置基线，语义是接收端需要重新建立状态；当前编码器没有对象时不发空 Full，不能把它单独当作“暂停然后继续发 Remove”。深化入口保留无敏感信息的控制 subject 98，每次新 epoch 的 Full 至少携带 `{"view":true}`；Receiver 先清空场景表，再忽略控制标记。因此最后目标撤销也能清掉旧对象，重连时同样重新订阅标记。此为业务接线修正，未修改框架或协议。
+**最后一个对象撤销的现行接法**：早期测试发现 HoldSession 重置基线后，订阅清空却没有空 Full，客户端仍保留旧目标。main 已修复空订阅 Hold→Ready 的清场行为，Sync 回归验证通过。深化夹具仍保留无敏感信息的控制 subject 98，Receiver 忽略其载荷；它现在只是已有测试对象，生产接入不再需要用控制对象绕过空 Full 缺口。
 
 每次 hold/ready 可能重发 Full，重读间隔与超时的毫秒值只是验收设置，不是容量或最大撤权延迟承诺。客户端已收到的信息无法撤回；失败期间只禁止新发布。跨机传播、常驻服务接线、跨服位置与权限的联合版本和多目标扇出仍需独立验收；持久 Player 权限与期限见下节。
 
@@ -386,7 +386,7 @@ sequenceDiagram
 
 每个原服在本服九进程之后追加三组地图／原服进程，共十五次子进程执行、五次 SIGKILL；两个原服都执行。Player 与 Remote 联盟模式均执行该链，但 Remote 模式只是沿用已有联盟权威，**本节 ScoutMap 仍是固定 sid 权威，尚未接 Managed Remote 地图交接**。测试在同机多进程、真实 NATS 与 Mongo 上完成，不证明跨机 HA、网络分区、生产 ACL、自动地图目录或容量。
 
-main 本轮合入的批量作业按目标重新冻结业务时间、心跳 Reg 安全格式化已读源码并通过 fctx／Nest／heartbeat race 回归；本消费者继续走普通生成 Sender，不声称已接批量心跳或测过其性能。通用慢派发 trace 的可变参数竞争仍按 [已知限制](../maintenance/KNOWN-LIMITS.md) 保留。
+main 本轮合入的批量作业按目标重新冻结业务时间、心跳 Reg 安全格式化已读源码并通过 fctx／Nest／heartbeat race 回归；本消费者继续走普通生成 Sender，不声称已接批量心跳或测过其性能。main 已改为只打印慢派发参数类型，不再反射读取可变参数；本轮 Nest race 回归通过。
 
 ### Managed Remote 地图：报告未确认时交接 owner
 
@@ -396,7 +396,7 @@ main 本轮合入的批量作业按目标重新冻结业务时间、心跳 Reg �
 ROOST_SLG_REMOTE_MAP=1 bash scripts/test-slg-alliance-player.sh
 ```
 
-仍需显式配置隔离 Redis、NATS、Mongo 副本集。此开关自动启用 Remote 装配，把本次新生成工程的 ScoutMap 定义改为 `category=Remote remote=managed`、DAO 改为 `dbscope=global`；继续使用同一份行军／到达／报告业务 handler，由 CLI 重新生成 DAO 与 Sender。该模式只执行 `TestSLGRemoteMapReports`，不执行本服 MultiSync 视野或固定地图 SIGKILL 链，避免用一份结果替代另一种契约。
+仍需显式配置隔离 Redis、NATS、Mongo 副本集。此开关自动启用 Remote 装配，把本次新生成工程的 ScoutMap 定义改为 `category=Remote remote=managed`、DAO 改为 `dbscope=global`；继续使用同一份行军／到达／报告业务 handler，由 CLI 重新生成 DAO 与 Sender。该模式执行 `TestSLGRemoteMapReports` 的同进程交接和下述多进程联合子场景，不执行本服 MultiSync 视野或固定地图 SIGKILL 链，避免用一份结果替代另一种契约。
 
 [装配](../../scripts/testdata/slg-alliance/remote/runtime_test.go) 复用 Remote MongoCommitter、Redis 锁／L2、Manager、DataEngine 与 Nest；各 Runtime 使用独立 WAL，所有 DAO 通过同一 DatabaseMap 指向本次唯一物理库。Claim 后先检查 Shared，只在需要时 EnterShared。地图待办和报告使用 Remote 正式写，不把旧固定权威的本地 WAL 搬给新 owner。
 
@@ -414,9 +414,30 @@ ROOST_SLG_REMOTE_MAP=1 bash scripts/test-slg-alliance-player.sh
 
 **准入边界**：读取权威路由与 Player 提交是两次独立操作。交接前已经通过校验的请求，可能在交接后完成；本协议允许这份已固定报告收件，并用永久回执防重。它不提供“交接瞬间撤销所有已准入报告”的保证。需要撤回报告、取消奖励或改变收件归属的玩法须另设业务协议，不能仅增加一个 epoch 字段便宣称实现分布式 fence。
 
-**证据范围**：三个 Remote Runtime 与原服 Runtime 在同一测试进程中，连接真实 Mongo／Redis／NATS；本轮没有杀进程，也未测锁续期失败／租约中途过期、网络分区或跨机故障。上节已验证固定地图多进程 SIGKILL，本节验证 Managed Remote 交接，二者尚未联合成“多进程 Managed Remote 地图交接＋崩溃”的单条验收。普通 NATS SyncBus 不确认快照推送订阅，Mirror 推送另验。成功关闭全部运行时后清理唯一库，失败保留证据。
+**本子场景范围**：上述三个 Remote Runtime 与原服 Runtime 在同一测试进程中，连接真实 Mongo／Redis／NATS；本子场景不杀进程。下节另外验证多进程 Managed Remote 交接与 SIGKILL 的联合路径；锁续期失败／租约中途过期、网络分区或跨机故障仍未验收。普通 NATS SyncBus 不确认快照推送订阅，Mirror 推送另验。成功关闭全部运行时后清理唯一库，失败保留证据。
 
 main 新增的技能／Buff 心跳接入已核对并通过 `go test -race ./gameplay/skill/...`；Shared Remote 禁挂心跳的约束保持。本模式仍靠持久到达待办与有界工作轮次，不挂技能心跳、不宣称完成技能 Host 或战斗接入。
+
+### 多进程 Managed Remote 地图交接与崩溃恢复
+
+同一入口 `ROOST_SLG_REMOTE_MAP=1 bash scripts/test-slg-alliance-player.sh` 自动继续运行 `process_handoff_crash` 子场景。代码见 [map_process_test.go](../../scripts/testdata/slg-alliance/remote/map_process_test.go)：三个地图 owner sid 3100／3101／3102 与静态原服 1001 分别运行在独立进程；3101 与原服各恢复一次，共六次子进程执行、两次 SIGKILL。数据库使用本次唯一名称，WAL 各进程独立路径，恢复 3101 时只打开它自己的原路径。
+
+| 阶段 | 业务事实与验收断言 |
+| --- | --- |
+| 3100 建图并交接到 3101 | 行军、报告和未 ACK 义务已由正式 Remote 写提交；MarkerEpoch、RouteEpoch 增加。3100 保持存活，原报告 ACK 返回 ErrRemoteFenced；携带旧路由的投递被原服拒绝 |
+| 3101 开放服务前 | 先逐字比较整份地图冷状态，包括原路线、报告、收件归属、版本和未确认位；对齐后才注册 RPC |
+| 原服收件成功但无成功回复 | 原服建档与 Inbox 收件两条 strict WAL 均未投影，保存完整 Inbox／钱包快照后等 RPC context 真正到期；3101 的工作轮次失败，地图仍保留原待办 |
+| 新 owner 与原服分别 SIGKILL | 3100 继续存活。地图从 Remote Mongo 权威恢复，原服通过自己的 WAL 恢复；没有把 3100 的 WAL 搬给 3101，也没有宣称 Remote 写尚未落权威 |
+| 恢复 3101 与原服 | 开放 RPC 前分别比较完整冷状态。3100 仍被 fence，拿当前代际也不能伪装当前来源。八路工作轮次重投原身份，Player 正文／钱包不变，地图 ACK 一次后待办为空 |
+| 再交接到 3102 | 3101 保持存活且重复 ACK 被 fence；3102 在开放服务前比较确认后的完整地图，再跑空待办不改状态。最后先排空 Bus，再关闭各 Runtime |
+
+原服通过公开 `MongoCommitter.GetOwnership` 只读权威所有权元数据，不 Claim、不加载地图实体；同进程子场景则通过 Manager 的公开查询入口读取相同权威。两者都不拿进程缓存或请求自报的代际当授权。路由校验与 Player 提交不原子的边界继续保持：交接前已经准入的不可变报告允许完成，永久回执负责防重。
+
+本次联合证据仍是同一机器的独立进程，显式调用 Transfer、固定可用的 Mongo／Redis／NATS；没有验证故障检测后自动选主、锁续期失败、网络分区、Mongo failover、生产凭据／ACL 或跨机 HA。下一步优先验证所有权查询暂时失败后的恢复与交接在途请求，再推进部署级故障；不要把显式交接当自动接管。
+
+本轮同步 main 的相关修正：Interest 写入口由登记日志交给应用方，异步 Drain 计入已执行未结算命令；空订阅 Hold→Ready 补空 Full；慢派发 trace 只打印参数类型；技能推进与具体驱动分离。已跑 Sync／policy、Nest、skill 的 race 回归和原有真实依赖链。深化夹具仍保留旧控制标记作为测试对象，当前框架已不需要依靠它实现空场景清空。
+
+活动补报也沿用 main 的修正：联盟接入显式接收协调器 ReservationTTL，零值使用框架默认，Redis 与 Remote 联盟采用同一配置；超出保留期停止自动补报交业务对账，不再写死一小时。默认期限和自定义两小时以内／超期的回归在活动链入口执行。
 
 ### main 视野 API 迁移
 
@@ -688,7 +709,7 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 
 #### 7.7 进阶：深化联合链路的接法要点
 
-前面六节是 main 上可运行的基础链路。学习分支 `fix/core-game-server-review` 在同一条活动流程上做过更深的实践（真实 TCP 视野、权限代际与定期重读、持久位置与多块覆盖、持久视点、行军路线、到达事件、常驻 worker、报告投递与跨服 / Remote 地图交接）。那套夹具（`scripts/testdata/slg-alliance`、`scripts/test-slg-alliance-player.sh`）**没有合入 main**，main 上没有对应入口，实测结论以该分支为准、main 未复跑；下面只保留可以直接照做的接法与边界。
+前面六节是 main 上可运行的基础链路。学习分支 `fix/core-game-server-review` 在同一条活动流程上做过更深的实践（真实 TCP 视野、权限代际与定期重读、持久位置与多块覆盖、持久视点、行军路线、到达事件、常驻 worker、报告投递与跨服 / Remote 地图交接）。本固定分支已包含那套夹具（`scripts/testdata/slg-alliance`、`scripts/test-slg-alliance-player.sh`），详见前文；它们尚未合入 main，main 的基础入口和本分支深化入口证据分别记录。下面概括接法与边界。
 
 | 主题 | 接法 | 边界与容易错的地方 |
 | --- | --- | --- |
