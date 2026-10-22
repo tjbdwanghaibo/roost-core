@@ -152,7 +152,7 @@ func TestGeneratorConstantsMatchTheDeclaredExamples(t *testing.T) {
 // --config configs/service/config.game.yaml），两个进程的 DataEngine 必须各有自己的 WAL 目录：nestwal 对目录加
 // 独占锁，共用一个目录的第二个进程启动即失败。dataengine.wal.dir 不写时运行期取 data/wal/dataengine/<sid>，
 // 按 sid 分开（两个真实进程的验证在 wiring/dataengine 的 TestDataEngineModWALDirectoryIsPerSid；生成器不得
-// import 运行时，那一半放不进这里）；生成的开发配置以前显式写了不带 sid 的 data/wal/dataengine，绕过了这条缺省。
+// import 运行时，那一半放不进这里）；所以生成的开发配置不能显式写不带 sid 的 data/wal/dataengine，否则会绕过这条缺省。
 // 生产示例与 k8s Secret 示例写每个实例独占的持久卷 /var/lib/roost/wal。
 func TestGeneratedDevConfigGivesEachSidItsOwnWAL(t *testing.T) {
 	plan, err := renderProject(gameTemplateManifest(t))
