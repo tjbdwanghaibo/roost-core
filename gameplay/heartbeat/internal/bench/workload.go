@@ -34,18 +34,5 @@ func (m Mix) TierAt(i, n int) Tier {
 	return Tier(NumTiers - 1)
 }
 
-// FiresPerSecond 是 n 个登记按该分布每秒触发的总次数。
-func (m Mix) FiresPerSecond(n int) float64 {
-	total := 0
-	for _, w := range m.Weights {
-		total += w
-	}
-	sum := 0.0
-	for t, w := range m.Weights {
-		sum += float64(w) / float64(total) * float64(n) / Periods[t].Seconds()
-	}
-	return sum
-}
-
 // EntityID 构造一个形状与正式 EntityID 相同的 ID（[unique][kind 8 位][category 2 位]），只用于散列与键。
 func EntityID(unique int64) int64 { return unique<<10 | 201<<2 | 1 }

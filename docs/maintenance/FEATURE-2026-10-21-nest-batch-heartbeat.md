@@ -1,6 +1,6 @@
 # 功能设计：Nest 批量心跳作业（选项 C，2026-10-21）
 
-**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论（2026-10-22 补测）：不达标，建议暂不改缺省，待维护者决定。维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4（时间片 200µs、批 64 不变），合并参数当晚补测（性能报告 §3F）。** 业务 p99 同时段 X 0.078 / C 0.235ms，进程 CPU C 比 X 省 42%～73%、只在一半时段接近 Y；批大小 64 不用改，时间片 100µs 或组 4 各把 p99 降约 20%（见性能报告 §3～§3E）。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
+**状态：已实施，随 v1.31.0 交付（未发版）。** 维护者 2026-10-21 批准按推荐做 HB-STRUCTURES §6 的选项 C（同日批准两张按 goroutine 登记的全局 `sync.Map` 改分片表、方案 D 只保留“worker 同锁取下一项”，并追加同 ID 顺序硬约束：冲突的目标当场转单目标作业排在冲突消息之后、不跳拍），代码先合入、心跳投递做成开关 `heartbeat.delivery`；**维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4（时间片 200µs、批 64 不变），合并参数当晚补测**（[性能报告 §3F](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3f-维护者-2026-10-22-决定-b-与参数测量)）。代价：同时段进程 CPU 比单目标少约 42%～73%，同一快池上普通业务消息 p99 约 0.08 → 0.19ms。现行契约见 [impl/02 “批量作业”](../framework/impl/02-nest-entity.md) 与 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)；以下 §1～§15 保留为设计与实施时的记录。
 
 范围：三大块里的 Nest（`framework/nest`）与心跳投递层（`gameplay/heartbeat` 的 `deliverer`）。遵守 roost-coding 的执行契约：快池不阻塞等待；同 ID 顺序在统一准入处建立；内部续行使用既有准入资格。仓库里没有 `docs/feature/` 与 `docs/agent-skills/`（开发过程资料 2026-10-09 已移入 Git 历史，见 [DOCUMENTS](DOCUMENTS.md)），本篇按现行命名惯例放在 `docs/maintenance/FEATURE-*`，执行契约以本机 roost-coding skill 为准。
 
@@ -8,7 +8,7 @@
 
 ## 1. 为什么要做
 
-[方案 D 报告](../performance/NEST-DISPATCH-BATCH-20261021.md) 的结论：心跳每拍一条单目标 `Dispatch`（X）在 50 万次/s 时约 3.8～4.3 核，ssr 式批量（Y）0.7 核；D 把派发队列锁与 worker 停放降了约 8 倍，CPU 只少 11%。贵的是**每条消息在 Nest 里的固定开销**：
+[方案 D 的实验](../performance/NEST-BATCH-HEARTBEAT-20261021.md#7-前置实验方案-d批量入队逐个执行不合入) 的结论：心跳每拍一条单目标 `Dispatch`（X）在 50 万次/s 时约 3.8～4.3 核，ssr 式批量（Y）0.7 核；D 把派发队列锁与 worker 停放降了约 8 倍，CPU 只少 11%。贵的是**每条消息在 Nest 里的固定开销**：
 
 | 每条消息都付一次的开销（X 的路径） | 位置 |
 | --- | --- |

@@ -73,6 +73,14 @@
 ## docs/performance
 
 - [README.md](../performance/README.md)：性能验证与复跑入口
+- [V1310-PRERELEASE-20261022.md](../performance/V1310-PRERELEASE-20261022.md)：v1.31.0 发版前整体压测清单（2026-10-22 晚：选项 C 参数、Interest 预算、demo 100 / 200 人、夜间 13 项 + 第 14 项、AOI、心跳负载；200ms 口径与 Linux 可选）
+- [INTEREST-SINGLE-WRITER-20261022.md](../performance/INTEREST-SINGLE-WRITER-20261022.md)：Interest 单写者重构前后对比与 ApplySync 预算的待补测
+- [NEST-BATCH-HEARTBEAT-20261021.md](../performance/NEST-BATCH-HEARTBEAT-20261021.md)：D20 选项 C 批量心跳作业的压测、参数对照、变异核对，§7 并入方案 D 的前置实验
+- [HB-STRUCTURES-20261021.md](../performance/HB-STRUCTURES-20261021.md)：心跳调度结构与投递方式的原型基准（D20 决定 ② ⑦ ⑪ 的依据）
+- [HB-DRIVEN-LOAD-20261021.md](../performance/HB-DRIVEN-LOAD-20261021.md)：压测工具的心跳驱动开关、口径与复跑命令（D20 P4）
+- [NIGHT-20261020.md](../performance/NIGHT-20261020.md)：2026-10-20 夜间补测（v1.30.0 候选，13 项 + AOI 三点）
+- [GENERATED-TCP-STRICT-20261020.md](../performance/GENERATED-TCP-STRICT-20261020.md)：生成工程嵌入 TCP + strict 写入吞吐（单样本）
+- [LOCKSTEP-SNAPSHOT-DRILL-20261020.md](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)：Lockstep 快照恢复限速链路演练
 - [SAGA-CHECKPOINT-20261018.md](../performance/SAGA-CHECKPOINT-20261018.md)：投影器对特殊记录合并 checkpoint 的前后对照（真实 WAL 微基准、夹具 B 持续档与上限档、真实 Mongo 崩溃注入回归）
 - [STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
@@ -91,13 +99,15 @@
 - [REVIEW-COMMITS-20261014.csv](REVIEW-COMMITS-20261014.csv)：固定范围内 249 个非合并提交的路径与审查状态
 
 - [README.md](README.md)：维护手册（版本与兼容、升级回退、日常验证、故障、发版、文档规则、测试与生成代码、可读性要求）
-- [DESIGN-TODO.md](DESIGN-TODO.md)：待维护者决定的设计事项（Lockstep 历史保留、SyncBus 兜底、Drain 放弃出口、schema 迁移流程、Player 跨机迁移）
-- [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置，只写当前（最新版本 + main）仍有效的限制；末尾“v1.29 待补测”汇总待复测项，已修复问题的经过见 CHANGELOG / docs/release
+- [DESIGN-TODO.md](DESIGN-TODO.md)：设计事项——D1～D22 的维护者决定与结果（每项一段，链接到发布说明 / 实现篇）、“待维护者决定（不急）”、“优化项（下一阶段）”与后续候选；2026-10-22 收尾前的过程记录按固定提交追溯
+- [KNOWN-LIMITS.md](KNOWN-LIMITS.md)：未解决问题与验证边界的唯一位置，只写当前（最新版本 + main）仍有效的限制；末尾“待补测（v1.31 发版前）”汇总要补的验证，已修复问题的经过见 CHANGELOG / docs/release
 - [EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：需要外部环境的验证清单
 - [CONSISTENCY.md](CONSISTENCY.md)：v1.24.1 文档整理时的文档—代码一致性核对（按当时源码固定）
 - [REFACTOR-2026-10-17-timer-scheduler.md](REFACTOR-2026-10-17-timer-scheduler.md)：timer.Scheduler 用节点状态替代 Tick 期间推迟闭包的重构方案（状态表、操作 × 状态矩阵、语义对照、panic 语义、性能预期）
-- [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)：Lockstep 可追帧也可全量快照恢复的功能设计（D1 方案 B，评审中、未实施：catchup / snapshot / auto 判定、`SnapshotProvider` 接口、CA 分块与 C9 v2 协议、嵌入 TCP 与独立 Gate 下的发送节奏、Go / C# SDK 接口、测试与分期、待决定清单）
+- [FEATURE-2026-10-20-lockstep-snapshot-recovery.md](FEATURE-2026-10-20-lockstep-snapshot-recovery.md)：Lockstep 可追帧也可全量快照恢复的功能设计与实施记录（D1 方案 B，已实施、随 v1.31.0 交付：恢复方式判定、`SnapshotProvider`、CA 分块与 C9 v2、发送节奏、Go / C# SDK、已提交门与 Room 接入）
 - [FEATURE-2026-10-20-server-merge-alias.md](FEATURE-2026-10-20-server-merge-alias.md)：别名合服的功能设计与实施记录（DESIGN-TODO D15，维护者 2026-10-20 决定、已实施：account 的 `MergedInto` 与承载服解析、`ServingServerID` / `OriginServerIDClaim`、accountctl merge-server、`cmd/sidmerge` 离线迁移按 sid 独占数据、复用 sidmove 检查、审查补充的 D9 映射 / outbox / 持久 sid 约束、回退）
+- [FEATURE-2026-10-21-nest-batch-heartbeat.md](FEATURE-2026-10-21-nest-batch-heartbeat.md)：Nest 批量心跳作业（D20 选项 C）的设计与实施记录（已实施、随 v1.31.0 交付：`DispatchTryBatch`、同 ID 顺序、两条就绪链、分片登记表；10-22 起心跳缺省批量投递）
+- [REFACTOR-2026-10-21-interest-single-writer.md](REFACTOR-2026-10-21-interest-single-writer.md)：Interest 单写者重构方案与实施记录（已实施、随 v1.31.0 交付：有序日志、代际号、两种应用模式的执行者、ApplySync 预算计入结算、纯前缀切开、执行器约束与用例对照表）
 - [FEATURE-2026-10-22-ai-idle-without-observers.md](FEATURE-2026-10-22-ai-idle-without-observers.md)：附近没有玩家观察时 AI 暂停的功能方案（DESIGN-TODO 优化项第 1 组方向二，待优化阶段实施、缺省不启用：Interest 观察者计数只读快照、扫描者 + Nest 广播暂停、实体心跳探测恢复、与 Freeze / Remote / 卸载 / 时间域 / 投递方式的关系、指标、测试与工作量、待拍板）
 - [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
@@ -105,6 +115,8 @@
 
 ## docs/release
 
+- [v1.31.0-NOTES.md](../release/v1.31.0-NOTES.md)：v1.31.0 说明（**未发版**，待 2026-10-22 晚整体压测与发版验证；维护者决定一览、升级清单、不兼容变化、按主题的新能力、边界、待补测）
+- [v1.31.0-IMPLEMENTATION.md](../release/v1.31.0-IMPLEMENTATION.md)：v1.31.0 实现与文件索引（与说明篇同编号：提交、源码位置、不变量与强制点、回归用例、review 重点、本轮清理）
 - [v1.29.0-NOTES.md](../release/v1.29.0-NOTES.md)：v1.29.0 发布说明（行为变化与升级清单：端口块、advertise 地址、config check 退出码、web 错误响应、Nest 生成器报错；新能力；最低 core v1.29.0）
 - [v1.29.0-IMPLEMENTATION.md](../release/v1.29.0-IMPLEMENTATION.md)：v1.29.0 实现要点与文件索引（与说明篇同编号：提交、源码位置、测试、review 检查点）
 - [v1.29.0-VALIDATION.md](../release/v1.29.0-VALIDATION.md)：v1.29.0 发布验收

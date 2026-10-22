@@ -439,7 +439,7 @@ func TestSelfSyncOverTCPClosesAStalledReaderAndTheReconnectGetsAFull(t *testing.
 // 超过接入层上限的帧被拒收、连接被关，客户端重连后的全量同样超限，反复断线重连。现在一帧的上限在 Nest Mod Init
 // 时从同一个键取：上限以内照常交付；单个玩家实体超过它时帧在 Manager 内编码失败，不会推出一帧被接入层拒收的帧。
 //
-// 编码失败丢掉的会话（维护者 2026-10-22 决定 A，取代 10-17 的 B“不关连接、靠滞留指标”）：连接没有拒收任何东西，
+// 编码失败丢掉的会话（维护者 2026-10-22：编码失败就关闭连接）：连接没有拒收任何东西，
 // 但同步会话已经没了，所以由 SessionLost 断开这名玩家（DisconnectLostPlayer，计 reason=too_large），不计推送拒收；
 // 客户端重连后从新 epoch 的全量开始。
 func TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit(t *testing.T) {

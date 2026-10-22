@@ -1,6 +1,6 @@
 # D20 选项 C：Nest 批量心跳作业（2026-10-21）
 
-设计见 [FEATURE-2026-10-21-nest-batch-heartbeat](../maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)。随仓样本在 [benchmarks/nest-batch-heartbeat-20261021](benchmarks/nest-batch-heartbeat-20261021/)。方案 D 的实验记录（含本分支带过来的“worker 同锁取下一项”的微基准证据）见 [NEST-DISPATCH-BATCH-20261021](NEST-DISPATCH-BATCH-20261021.md)。
+设计见 [FEATURE-2026-10-21-nest-batch-heartbeat](../maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)。随仓样本在 [benchmarks/nest-batch-heartbeat-20261021](benchmarks/nest-batch-heartbeat-20261021/)。方案 D（批量入队、逐个执行）的前置实验压缩在本篇 [§7](#7-前置实验方案-d批量入队逐个执行不合入)（含随选项 C 合入的“worker 同锁取下一项”的微基准证据）。
 
 ## 结论
 
@@ -247,3 +247,13 @@ go tool pprof -top -cum $S/bin-final.test $S/prof/C.cpu
 - 2026-10-22 的结论只对本机、本夹具成立；宿主在测量中途换了一个“时段”（见结论），两个时段的绝对值不能互比，原因尚未确认。§2 未门控、§3' 只有 1 轮，都不作结论。
 - 只在 macOS / arm64 上跑过；回调是几十纳秒的内存计算、handler 是 memory 元信息，真实移动回调（5～20µs、带事务）下 C 与 X 的差距会缩小。
 - 冲突转单目标在补测里每秒 0.4～4.2 次（第 1 轮 0.1～3.7 次）（5000 条/s 业务消息打到 5 万实体），热点实体（同一实体高频业务消息）下的转换率与业务延迟没有测。
+
+## 7. 前置实验：方案 D（批量入队、逐个执行，不合入）
+
+2026-10-22 收尾时由原实验记录 `NEST-DISPATCH-BATCH-20261021.md` 压缩而来（原文与大部分样本已删除；原文、jsonl、profile、trace 与脚本见[固定提交](https://github.com/tjbdwanghaibo/roost-core/tree/603ec537068a672ba5806d058e154526dd38a3a4/docs/performance/benchmarks/nest-dispatch-batch-20261021)与[原报告](https://github.com/tjbdwanghaibo/roost-core/blob/603ec537068a672ba5806d058e154526dd38a3a4/docs/performance/NEST-DISPATCH-BATCH-20261021.md)）。原型代码在分支 `perf/nest-dispatch-batch`，不在 main。
+
+- **做法**：`NestMgr.DispatchBatch` 批量准入（每项仍走单条的 `admitLocked`，64 项一块持一次锁，解锁后每条通道 Signal min(新就绪数, worker 数) 次）、批量作业单独一条就绪链与普通作业交替取、普通作业等在批量作业后面时“提升”、worker 结束一项后同一次持锁取下一项并按份额一次多取。语义不变：14 个语义用例、13 条变异核对全部变红。
+- **结论：不达标**（判据：CPU 接近 Y、业务 p99 不差于 X、语义不变）。5 万实体 100ms、100% 移动时进程 CPU X 3.80 / **D 3.38** / Y 0.71 核，20% 移动 1.25 / **1.11** / 0.29 核；D 只省下 X 与 Y 差距的 11～17%（驱动 CPU 0.73 → 0.15 核，worker 侧几乎没省）；业务 p99 与 X 同量级（不“提升”时 2.2～2.6ms）。摘要见 [dispatch-d/delivery-summary.md](benchmarks/nest-batch-heartbeat-20261021/dispatch-d/delivery-summary.md)。
+- **原因**（profile 与执行追踪各一次）：D 把派发队列锁争用与每条消息一次的 worker 停放 / 唤醒降了约 8 倍（阻塞事件 X 约 24.6 万次 → D 约 3.1 万次），但 X 的大头是逐作业的 Nest 执行开销（新 fctx 上下文、Guard 作用域与“当前消息”两个按 goroutine 登记的全局 `sync.Map`、事务、指标标签拼接）以及由此引起的调度器空转（macOS 上 `runqgrab` 的 `usleep(3)` 计入 CPU，约占 X 的 52%，Linux 上不应这么多）。两个 `sync.Map` 换成分片表的实验让 X 3.80 → 3.28 核（−14%）——这就是随选项 C 合入的分片登记表（`goroutine.LocalMap`）的由来。
+- **保留的一项**：worker 结束一项后同一次持锁取下一项，对普通短 handler 是净收益：纯 Nest 微基准几何平均 sec/op −7.7%、完成 p99 −13.8%（空 handler −6%～−17%，10µs 以上无可测影响，同步 Request 无变化），B/op、allocs/op 不变；benchstat 见 [dispatch-d/micro-benchstat.txt](benchmarks/nest-batch-heartbeat-20261021/dispatch-d/micro-benchstat.txt)（改前 `be5a76f5` 与原型分支交替 6 遍）。
+- **维护者 2026-10-21 决定 A**：分支不合入，只保留“worker 同锁取下一项”；`DispatchBatch`、批量就绪链、提升、一次多取都不进 main；下一步做 HB-STRUCTURES §6 的选项 C（即本篇）。

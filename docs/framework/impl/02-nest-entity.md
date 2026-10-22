@@ -39,7 +39,7 @@
 
 [dispatch_queue.go](../../../framework/nest/dispatch_queue.go) 使用一个 lanes 数组，每项聚合配置、等待/就绪链、运行数量、内部续行、唤醒条件和统计。短业务、I/O、长业务三条通道共用 mutex、tails、依赖链、pending；不能各建一套 ID 顺序。
 
-worker 循环（`work`）在循环顶部持锁：结束一项工作（`finishJobLocked`）后在同一次持锁里接着 `take` 下一项，没有工作才在通道的 `wake` 上停放。消息登记的出队后动作（`afterQueue`，await 的 I/O 启动）仍在本项结束、ID 尾撤下之后、不持锁、本 worker 执行下一项之前运行；执行本身在 `run` 里，请求上下文选项每个 worker 建一次。改前每条消息取两次锁；从 D20 方案 D 原型拆出（[实验记录](../../performance/NEST-DISPATCH-BATCH-20261021.md#6-对普通短-handler-的影响纯-nest-微基准不经心跳)）。
+worker 循环（`work`）在循环顶部持锁：结束一项工作（`finishJobLocked`）后在同一次持锁里接着 `take` 下一项，没有工作才在通道的 `wake` 上停放。消息登记的出队后动作（`afterQueue`，await 的 I/O 启动）仍在本项结束、ID 尾撤下之后、不持锁、本 worker 执行下一项之前运行；执行本身在 `run` 里，请求上下文选项每个 worker 建一次。改前每条消息取两次锁；从 D20 方案 D 原型拆出（[实验记录](../../performance/NEST-BATCH-HEARTBEAT-20261021.md#7-前置实验方案-d批量入队逐个执行不合入)）。
 
 Guard 作用域（`entity.guardScopes`）与当前派发消息（`nest.currentNestDispatchMsgs`）两张按 goroutine 登记的表是 `goroutine.LocalMap`：按 goroutine ID 分 64 片、每片一把读写锁，与 fctx 的请求上下文表同一做法。不要换回 `sync.Map`：worker 的 goroutine ID 固定、每条消息先存后删，`sync.Map` 在同一内部节点上的 Store / Delete 争用会让空闲 P 偷活空转（方案 D 实验 §5）。
 

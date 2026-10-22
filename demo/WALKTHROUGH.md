@@ -319,7 +319,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。场景帧走 `PushSyncPlayer`：RS v2 Sync 标志、原始帧字节、
   不包 `EntitySyncPush` PB，robot session 对 Sync 包不做 PB 解码，`scene_watch` 直接读包体（没有 Sync 标志的 `MsgEntitySync` 推送
   让 watch 失败）；回归见生成的 `cmd/loadtest/scene_watch_test.go`。场景最后一步 `scene_alive` 自己 `add_exp 1`，等这次改动作为帧落到自己的
-  subject 上：服务端因编码失败（例如持有对象超过 `MaxObjects`）关掉的复制会话以前**不断开连接**，请求照常应答、只是不再有帧，没有这一步时整轮仍判成功；2026-10-22 起这种情况会断开连接（见上“编不出帧也断开”），`scene_alive` 仍作“帧还在来”的端到端判据。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
+  subject 上：服务端因编码失败（例如持有对象超过 `MaxObjects`）关掉的复制会话会断开连接（见上“编不出帧也断开”），`scene_alive` 是“帧还在来”的端到端判据。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
 
 ## 刷新：场景该有多少东西活着
 
