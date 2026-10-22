@@ -96,16 +96,18 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 | 结果何时可见 | 提交 / 调用后的下一次 Flush；**重负载下积压超过预算时顺延，AOI 的变化晚一两个周期可见**（全服同步节奏不受影响，on_change 下立即再来一轮） | 应用线程走到之后的那次 Flush；提交后立即 Flush 不一定看得到，测试与停机用 `Drain` |
 | 每玩家视野上限 | 主视野 + 8 个额外视野（`SyncApplyMaxViewsPerPlayer` = 9，关系视野也计入）；`MaxViewsPerPlayer` 显式超过即拒绝构造，报错提示改用 ApplyAsync | 不受此限（`MaxViewsPerPlayer` 缺省 64） |
 | 代价 | AOI 计算在 Flush 关键路径上，视野越多 Flush 越长 | periodic 下尾延迟约多一个同步周期（截止前到达的事实等下一周期结算）；多一个常驻线程 |
-| 适合 | 每玩家额外视野不超过 8：MMO、MOBA、卡牌、休闲 / 放置、塔防、自走棋 | 每玩家额外视野多于 8：RTS（每个单位一个视野）、大量召唤物 / 眼位 / 侦察单位 |
+| 适合 | 每玩家额外视野不超过 8：MMO、卡牌、休闲 / 放置、塔防、自走棋 | 每玩家额外视野多于 8：RTS（每个单位一个视野）、状态同步的 MOBA 阵营视野、大量召唤物 / 眼位 / 侦察单位 |
 
 | 游戏类型 | 每玩家视野（主视野之外） | 选 |
 | --- | --- | --- |
 | MMO / MMORPG | 队伍、公会、联盟关系视野，少量召唤物 | ApplySync |
-| MOBA | 阵营 / 队伍视野，少量眼位、召唤物 | ApplySync；眼位可能超过 8 个时 ApplyAsync |
+| MOBA（状态同步） | 阵营视野：每个友方单位（英雄、小兵、防御塔、眼位）一个跟随它的空间视野，全部挂给阵营里的每个玩家，挂接数几十个 | ApplyAsync（以后若提供“一个视野多个视点”，阵营视野可以合成一个，再回到 ApplySync）；帧同步的 MOBA 走 Lockstep（§6），不经 Interest |
 | 卡牌、休闲、放置、塔防、自走棋 | 很少或没有 | ApplySync |
 | SLG | 联盟关系视野 + 行军队列 / 侦察单位 | 合计不超过 8 用 ApplySync，否则 ApplyAsync |
 | RTS | 每个单位一个视野 | ApplyAsync |
 | 大量召唤物 / 眼位 / 侦察单位的玩法 | 十几个以上 | ApplyAsync |
+
+MOBA 一行 2026-10-22 改正（原写 ApplySync，见学习分支 `learn/main-review-20261021` KNOWN-LIMITS 第 11 条）：阵营共享视野的写法（`TestCampViewsShareEveryUnitsSightWithTheWholeCamp`）是每个单位一个空间视野、挂给全阵营，一个玩家的挂接数 = 阵营单位数，远超 ApplySync 的 9；同一 Interest 的空间视野总数还受 `MaxSpatialViews`（缺省 8192）约束。确定性玩法（帧同步、回放逐帧一致）本来就不该用心跳移动 + 状态同步，见 [guide/10-time §4B“逐拍移动适合谁”](10-time.md#4b-移动与动作心跳驱动)。
 
 选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），全部入口按调用顺序生效，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途条目全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Enter` / `Move` / `SetObserverView`……，不经提交门）与排队事实进同一条日志，由所选模式的应用方执行，视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，ApplySync 的预算看 `entitysync.interest.policy_duration` / `settle_duration` / `log_backlog` / `budget_stop.total`（`log_backlog` 持续不为 0、`budget_stop` 与 Flush 次数同阶 = 每个周期都排不完，可见性在滞后，考虑减少视野或改用 ApplyAsync；规则见 [单写者方案 §12](../../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)），队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
 

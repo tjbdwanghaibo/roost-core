@@ -245,6 +245,11 @@ return err
 - 动作结论：`Arrived` → 成功，`Replaced` → 取消，其余 → 失败（原因是 `StopReason`）；动作被取消（含被同组新动作取代）时停掉自己那次移动。
 - **频率**：`MoveToParam.Period` / `FollowParam.Period` 不给时取 `movement.DefaultMovePeriod` = 200ms（5Hz，维护者 2026-10-22 由 100ms 改；MMO / SLG 的移动一般 2～5Hz）。每拍走 `速度 × Elapsed`，频率只决定位置更新的粒度与每秒消息数，不改变走完一段的时间；客户端按复制下来的位置插值。要更细（动作游戏、近战贴身）就显式给 `Period: 100 * time.Millisecond`。
 
+**逐拍移动适合谁、不适合谁**（维护者 2026-10-22）：
+
+- **SLG 行军不要逐拍移动**。行军是“起点 + 速度 + 出发时刻”（加路径）就能算出任意时刻位置的直线 / 折线运动：位置按需现算（谁问谁算，客户端也按同一公式插值），到达用按实体的持久定时器（[§4](#4-按实体的持久定时器)，离线也准点、可持久），不挂移动心跳。只有大地图 AOI 需要服务端位置（谁的视野看得见这支部队）时，才给行军加一个 1～2Hz 的心跳，每拍按公式算出位置写 `QueueMove`，而不是用 `MoveTo` 每拍推进。成千上万支行军逐拍移动，消息数与 AOI 计算都白白翻几倍。
+- **心跳的 `Elapsed` 是可变步长**：它是本拍与上一拍之间实际经过的业务时间，随驱动迟到、掉拍、快池排队而变（不追帧，掉拍后下一拍一次走完），同一输入在两次运行里的中间位置不同。MMO / SLG 的状态同步只要结果大致一致，这没有问题；需要确定性（帧同步、回放逐帧一致、客户端预测与服务端逐帧对账）的玩法——MOBA、格斗、RTS 帧同步——不要用心跳移动，走 Lockstep（[guide/04-sync §6](04-sync.md#6-lockstep)）：按固定帧号推进，模拟只取决于输入序列。技能推进的确定性另见 §4E（按 tick 推进、与驱动节奏无关）。
+
 边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 
 ## 4C. 行为控制：Behavior、取代、冲突与冻结
@@ -349,6 +354,7 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 - **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
 - **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期由 buff 心跳推进（`CombatComponent.AttachBeat`，§4E），派生状态随之失效。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
+- **控制等级、韧性、递减由业务在 Buff 层做，框架不提供**（维护者 2026-10-22）。状态位只回答“此刻是否被定身”，门控只按它冻结动作组；“霸体免疫低等级控制”“韧性缩短控制时长”“同类控制连续施加时长递减（DR）”都是施加控制之前的规则：业务在施加 Buff 的地方（技能效果、`ApplyBuff` 之前）按目标的等级 / 韧性 / 最近被控记录决定加不加、加多长，记录本身放在业务的 Buff 或 DAO 字段里。状态与门控照常只看最终的 Buff。
 
 **生成工程的入口**：`roost add behavior --entity <Entity> [--ai] [--state]` 生成 `BehaviorComponent`：在 `OnInitFinish` 用实体的心跳宿主构造 `Behavior`（`--ai` 时先构造 `ai.NewBeatController` 作 `Observer`，`Context` 钩子给出 `ActionList`）。业务文件只建一次：`behavior_actions.go`（动作种类、组、注册表、跨组冲突、`timeDomain()`、`onBehaviorReady`、示例动作 `ExampleAction`）、`--ai` 的 `behavior_strategy.go`（示例策略）、`--state` 的 `states.go`（`state.NewCatalog` 声明；Set / Gate 接线由业务写）与 `game/handler/<entity>_behavior.go`（发起示例动作 / 设定示例策略的 Nest handler）。没有心跳宿主时一并加上（同 §4A）。AI 不设策略不跳，示例策略要在 `onBehaviorReady` 或 handler 里 `SetStrategy`。
 

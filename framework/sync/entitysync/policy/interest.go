@@ -90,11 +90,11 @@ const DefaultMaxSpatialViews = 8192
 //     一半（预计超出时剩余的留到之后的 Flush，见 planSyncStep）；不启动应用线程。提交之后的下一次 Flush 就能看到
 //     结果，重负载下晚一两个周期。AOI 计算在 Flush 的关键路径上，
 //     所以每个玩家的视野数有上限（SyncApplyMaxViewsPerPlayer）。适合每玩家额外视野不超过 8 个的游戏：
-//     MMO、MOBA、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
+//     MMO、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
 //   - ApplyAsync：每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算。Flush 不随
 //     AOI 工作量增长、不会因 AOI 超过同步周期；代价是结果晚一点可见：提交后立即 Flush 不一定看得到，要看到全部
 //     结果用 Manager.Drain；periodic 下尾延迟约多一个同步周期。适合每玩家额外视野多于 8 个的游戏：RTS（每个单位
-//     一个视野）、大量召唤物 / 眼位。
+//     一个视野）、状态同步 MOBA 的阵营视野（每个友方单位一个空间视野挂给全阵营）、大量召唤物 / 眼位。
 type ApplyMode uint8
 
 const (
