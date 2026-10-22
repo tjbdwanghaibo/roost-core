@@ -386,6 +386,35 @@ func TestABroadcastSkipsMissingEntitiesAndKeepsGoing(t *testing.T) {
 	}
 }
 
+// 广播在一个作业里逐目标执行：前一个目标的 handler fence 了引擎（或它的提交结果未知）之后，还没开始的目标不再执行业务
+// （广播没有交回，跳过即可）。与批量作业共用逐目标的开始检查 checkHandlerStart（RV-20261022-01）。
+// 变异核对：broadcastDispatch 不逐目标调用 checkHandlerStart 时第二、三个目标照常执行，本用例变红。
+func TestBroadcastSkipsUnstartedTargetsAfterFence(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	ids := make([]int64, 3)
+	for i := range ids {
+		ids[i] = mustBuildCastID(t, int64(7311+i), entity.EntityCategory(1), nestLocalKind)
+		getter.Add(newMockEntity(ids[i], entity.EntityCategory(1)))
+	}
+	mgr := &NestMgr{getter: getter}
+	var ran []int64
+	name := NewHandlerName("test_broadcast_fence")
+	MustRegisterMemoryHandler(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		ran = append(ran, es[0].ID())
+		if es[0].ID() == ids[0] {
+			mgr.Fence(errors.New("test: persistence result unknown"))
+		}
+		return nil, nil
+	})
+	mgr.broadcastDispatch(name.String(), ids, nil)
+	if !slices.Equal(ran, ids[:1]) {
+		t.Fatalf("broadcast ran %v after the first target fenced the engine, want only %v", ran, ids[:1])
+	}
+}
+
 func TestMultiDispatchRequiresFirstEntity(t *testing.T) {
 	ResetHandlersForTest()
 	defer ResetHandlersForTest()

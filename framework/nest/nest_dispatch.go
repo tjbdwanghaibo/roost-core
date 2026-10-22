@@ -84,17 +84,10 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	}()
 
 	emitNestTraceEvent(msg, "dispatch_start", "ok", 0)
-	if fenced := mgr.FenceError(); fenced != nil {
-		err = fenced
+	// 阶段开始前先过同一道开始检查：已 fence / 已取消时不做 Remote 获取与冷加载。业务池上 runNestLogic 在 handler
+	// 开始前还会再查一次（I/O 准备期间可能已 fence）。
+	if err = mgr.checkHandlerStart(); err != nil {
 		return
-	}
-	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
-		select {
-		case <-current.Base.Done():
-			err = errors.Join(ErrNestCanceled, current.Base.Err())
-			return
-		default:
-		}
 	}
 
 	if remoteStage {
@@ -259,11 +252,8 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 		msg.runAfterUnlock()
 		observeNestStage(msg.Name, "cleanup", cleanupStart)
 	}()
-	if fenced := mgr.FenceError(); fenced != nil {
-		return nil, fenced
-	}
-	if cause := nestBaseContext().Err(); cause != nil {
-		return nil, errors.Join(ErrNestCanceled, cause)
+	if err := mgr.checkHandlerStart(); err != nil {
+		return nil, err
 	}
 	if msg.resumeEntry != nil {
 		return mgr.dispatchMany(*msg.resumeEntry, msg.Name, msg.Tids, nil)
@@ -304,6 +294,31 @@ func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
 	c.MergeMeta(meta)
 	c.Frame = frame
 	return release
+}
+
+// checkHandlerStart 是每个 handler 开始执行业务之前必须通过的检查。普通派发（dispatchNest 与 runNestLogic）、广播的
+// 每个目标、批量作业的每个目标共用这一个入口：
+//   - fail-stop：引擎已 Fence 时返回 FenceError（包裹 ErrNestFenced）。Fence 允许已经开始的 handler 收尾，不允许还没
+//     开始的目标执行业务。一个作业里有多个目标时（广播、批量作业），前一个目标可以在执行中途 fence 引擎（handler
+//     主动调用 Fence、提交结果未知），所以每个目标开始前都要调用，不能拿作业或一组开始时读到的状态代替；
+//   - 取消：请求上下文的 Base 已取消时返回 ErrNestCanceled。
+//
+// 实体有效性依赖取到的实体，不在这里，但每条路径对每个目标都按同样两步做：取实体只读已加载的（loadedGetter /
+// LoadedEntitiesOnly）并 Touch 持引用；取锁时 RequireEntity / TryRequireEntity 拒绝已清理、已摘除的实例，有锁组时
+// validateDispatchGroupSnapshots 核对锁组没变。失败后的回答按路径不同：普通派发可原位转 I/O 准备，批量作业交回，
+// 广播跳过。
+//
+// 只读一个原子量与 ctx.Err，不加锁、不分配。它是开始前的一次性检查，不是临界区：检查之后才被别的 goroutine fence 的，
+// 由事务交给 committer 之前的 refuseCommitAfterFence 与 WAL terminal 兜底；同一 worker 上前一个目标造成的 fence
+// 时序确定，必然在下一个目标开始前看到。
+func (mgr *NestMgr) checkHandlerStart() error {
+	if mgr.fenced.Load() {
+		return mgr.FenceError()
+	}
+	if cause := nestBaseContext().Err(); cause != nil {
+		return errors.Join(ErrNestCanceled, cause)
+	}
+	return nil
 }
 
 // nestBaseContext 返回当前请求上下文的 Base ctx；没有时为 Background。
@@ -574,6 +589,11 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 
 	oneEntity := make([]entity.IThreadSafeEntity, 1)
 	for _, id := range ids {
+		// 每个目标开始前的检查：前一个目标 fence 了引擎（或取消了请求）后，其余目标不再执行（广播没有交回）。
+		if err := mgr.checkHandlerStart(); err != nil {
+			slog.Debug("nest broadcast stopped before remaining targets", "handler", name, "err", err)
+			return
+		}
 		fullID, err := entity.NormalizeFullID(id, entity.EntityKindNone)
 		if err != nil {
 			continue

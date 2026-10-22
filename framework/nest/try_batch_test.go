@@ -115,7 +115,7 @@ func startTryBatchEngine(t *testing.T, getter entity.Getter, short WorkerPoolCon
 // 约束 1：业务消息已准入、尚未执行（排在同 ID 的 I/O 准备之后，不在执行、也不持实体锁）时，批量作业里的同 ID 目标
 // 不在本批执行，而是当场转成单目标作业排在这条消息之后：执行顺序是 I/O 那条 → 业务消息 → 心跳，心跳没有被交回
 // （不算跳拍），转单目标计数为 1。
-// 变异核对：① 冲突判断只看实体锁（不看 tails）；② 冲突时直接执行而不排队（prepareTryBatchTargetLocked 对已有
+// 变异核对：① 冲突判断只看实体锁（不看 tails）；② 冲突时直接执行而不排队（prepareTryBatchGroupLocked 对已有
 // tails 的目标照样认领执行）——两者都让心跳插到业务消息之前，本用例变红。
 func TestTryBatchConflictRunsAfterAdmittedSameIDJob(t *testing.T) {
 	ResetHandlersForTest()
@@ -175,7 +175,7 @@ func TestTryBatchConflictRunsAfterAdmittedSameIDJob(t *testing.T) {
 
 // 约束 2：心跳回调执行期间准入的同 ID 消息排在它后面——留在依赖队列里，没有 worker 取走它去阻塞等实体锁；心跳提交
 // （AfterCommit 已执行）之后它才执行。
-// 变异核对：不认领（prepareTryBatchTargetLocked 不写 tails）时业务消息直接就绪，第二个 worker 取走它阻塞在实体锁上，
+// 变异核对：不认领（prepareTryBatchGroupLocked 不写 tails）时业务消息直接就绪，第二个 worker 取走它阻塞在实体锁上，
 // Running 变成 2、BlockedOnPredecessor 为 0，本用例变红。
 func TestTryBatchClaimQueuesLaterSameIDJobBehindTheBeat(t *testing.T) {
 	ResetHandlersForTest()
@@ -439,7 +439,8 @@ func TestTryBatchYieldsWorkerAfterTimeSlice(t *testing.T) {
 
 // Fence：已排队的批量作业在引擎 fence 后不再执行 handler，每个目标交回 ErrNestFenced；fence 之后的 DispatchTryBatch
 // 直接返回错误。
-// 变异核对：prepareTryBatchTargetLocked 不检查 fence 时 handler 照常执行，本用例变红。
+// 变异核对：prepareTryBatchGroupLocked 与 tryBatchExec.run（checkHandlerStart）都不检查 fence 时 handler 照常执行，本用例
+// 变红；只去掉其中一处时另一处仍拦下（组内 fence 见下一个用例）。
 func TestTryBatchRefusesTargetsAfterFence(t *testing.T) {
 	ResetHandlersForTest()
 	t.Cleanup(ResetHandlersForTest)
@@ -479,6 +480,134 @@ func TestTryBatchRefusesTargetsAfterFence(t *testing.T) {
 	}
 	if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{{Handler: NewHandlerName("tb_fence_beat"), ID: idB}}, hb.handBack); !errors.Is(err, ErrNestFenced) {
 		t.Fatalf("DispatchTryBatch after fence: %v, want ErrNestFenced", err)
+	}
+}
+
+// Fence 发生在一组执行中途（RV-20261022-01）：已经开始的 handler 收尾，同一批里还没开始的目标——同组其余的与之后
+// 各组的——一律不执行业务，各自交回 ErrNestFenced 恰好一次。两种触发：handler 主动调用 NestMgr.Fence；真实 committer
+// 返回结果未知（invokeTryBatchTransaction 按 ErrCommitIndeterminate fence 引擎）。6 个目标跨两组（组大小 4）：后 3 个
+// 在发生 fence 的那一组里（只能靠逐目标的开始检查拦下），最后 2 个在下一组准备时拦下。
+// 变异核对：tryBatchExec.run 不调用 checkHandlerStart（只剩准备组时读一次 fence）时同组后 3 个目标照常执行，本用例变红。
+func TestTryBatchStopsUnstartedTargetsAfterFenceInsideGroup(t *testing.T) {
+	for i, tc := range []struct {
+		name      string
+		meta      HandlerMeta
+		committer TransactionCommitter
+		fence     bool // handler 自己调用 Fence；否则由提交结果未知触发
+	}{
+		{name: "handler_fence", fence: true},
+		{name: "commit_indeterminate", meta: HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, committer: &indeterminateCommitter{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetHandlersForTest()
+			t.Cleanup(ResetHandlersForTest)
+			getter := newMockGetter()
+			ids := make([]int64, 6)
+			var targets []TryBatchTarget
+			name := NewHandlerName("tb_fence_mid_group")
+			for k := range ids {
+				id, e := newAsyncPilotEntity(t, int64(8661+10*i+k), 1)
+				ids[k] = id
+				getter.Add(e)
+				targets = append(targets, TryBatchTarget{Handler: name, ID: id})
+			}
+			var engine *NestMgr
+			var mu sync.Mutex
+			ran := map[int64]int{}
+			MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+				e := es[0].(*rollbackTestEntity)
+				mu.Lock()
+				ran[e.ID()]++
+				mu.Unlock()
+				if tc.fence {
+					engine.Fence(errors.New("test: persistence result unknown"))
+					return nil, nil
+				}
+				old := e.dao.Value
+				RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
+				e.dao.Value++
+				return nil, MarkPersist(e.dao, 1)
+			}, tc.meta)
+			var opts []NestOption
+			if tc.committer != nil {
+				opts = append(opts, NestOptionWithTransactionCommitter(tc.committer))
+			}
+			engine = startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 1, QueueCap: 16}, opts...)
+			hb := newHandBackRecorder()
+			if err := engine.DispatchTryBatch(context.Background(), targets, hb.handBack); err != nil {
+				t.Fatal(err)
+			}
+			// Shutdown 等批量作业连同交回全部结束（Fence 不阻止已准入作业的排空）。
+			if err := engine.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(engine.FenceError(), ErrNestFenced) {
+				t.Fatalf("engine not fenced: %v", engine.FenceError())
+			}
+			mu.Lock()
+			gotRan := maps.Clone(ran)
+			mu.Unlock()
+			got, seen := hb.snapshot()
+			var ranAfter []int64
+			for _, id := range ids[1:] {
+				if gotRan[id] != 0 {
+					ranAfter = append(ranAfter, id)
+				}
+				if !errors.Is(got[id], ErrNestFenced) {
+					t.Errorf("target %d hand-back %v, want ErrNestFenced", id, got[id])
+				}
+			}
+			if gotRan[ids[0]] != 1 || len(ranAfter) != 0 || seen != len(ids)-1 {
+				t.Fatalf("first target ran %d (want 1); unstarted targets that still ran after the fence %d %v (want 0); hand-backs %d (want %d exactly once each)",
+					gotRan[ids[0]], len(ranAfter), ranAfter, seen, len(ids)-1)
+			}
+		})
+	}
+}
+
+// 同组里先执行、取不到实体锁（busy）的目标，本来在收尾时转成单目标作业；若同组后面的目标 fence 了引擎，转成的作业
+// 只会被开始检查拒绝、不执行，所以收尾时直接交回 ErrNestFenced（不转、不计转单目标）。
+// 变异核对：convertTryBatchTargetLocked 不检查 fence 时目标被转走、没有交回，本用例变红。
+func TestTryBatchBusyTargetIsHandedBackAfterFenceInsideGroup(t *testing.T) {
+	ResetHandlersForTest()
+	t.Cleanup(ResetHandlersForTest)
+	getter := newMockGetter()
+	busyID := mustBuildCastID(t, 8681, 1, nestLocalKind)
+	fenceID := mustBuildCastID(t, 8682, 1, nestLocalKind)
+	busy := newMockEntity(busyID, 1)
+	getter.Add(busy)
+	getter.Add(newMockEntity(fenceID, 1))
+	var engine *NestMgr
+	var ran atomic.Int32
+	name := NewHandlerName("tb_fence_busy")
+	MustRegisterMemoryHandler(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		ran.Add(1)
+		if es[0].ID() == fenceID {
+			engine.Fence(errors.New("test: persistence result unknown"))
+		}
+		return nil, nil
+	})
+	engine = startTryBatchEngine(t, getter, WorkerPoolConfig{Workers: 1, QueueCap: 16})
+	busy.GetMutex().Lock() // Nest 作业顺序之外的持有者：批量作业 Try 取不到
+	unlock := sync.OnceFunc(func() { busy.GetMutex().Unlock() })
+	t.Cleanup(unlock)
+	hb := newHandBackRecorder()
+	if err := engine.DispatchTryBatch(context.Background(), []TryBatchTarget{{Handler: name, ID: busyID}, {Handler: name, ID: fenceID}}, hb.handBack); err != nil {
+		t.Fatal(err)
+	}
+	// 等这一组收尾（交回或转走）再停机：停机中的转单目标会被准入以 ErrNestStopped 拒绝，不能让停机替代 fence 的判定。
+	waitFor(t, "group finished", func() bool {
+		_, n := hb.snapshot()
+		return n > 0 || engine.Stats().Queue.Short.TryBatchConverted > 0
+	})
+	if err := engine.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	got, seen := hb.snapshot()
+	if !errors.Is(got[busyID], ErrNestFenced) || seen != 1 || ran.Load() != 1 {
+		t.Fatalf("busy target hand-back %v (hand-backs %d), handler ran %d; want ErrNestFenced once and only the fencing target ran (converted %d)",
+			got[busyID], seen, ran.Load(), engine.Stats().Queue.Short.TryBatchConverted)
 	}
 }
 
@@ -708,5 +837,66 @@ func TestTryBatchReadsOnlyLoadedTargets(t *testing.T) {
 	}
 	if n := getter.coldCalls.Load(); n != 0 {
 		t.Fatalf("%d Get calls without LoadedEntitiesOnly: a try-batch must not cold-load", n)
+	}
+}
+
+// BenchmarkTryBatch：批量作业的执行开销，每 op 一个目标。64 个目标一批、空内存 handler、short 池 1 个 worker、4 批在途；
+// 计时包含最终排空。改批量执行路径（runTryBatchLocked、tryBatchExec.run、逐目标开始检查）的函数体时与改前同机交替对比
+// （维护手册：-count 至少 10，benchstat）。
+//
+// 命令：go test -run '^$' -bench 'BenchmarkTryBatch$' -benchtime 2000000x -count 10 ./framework/nest
+func BenchmarkTryBatch(b *testing.B) {
+	entity.MustRegisterEntityKindCategory(nestLocalKind, entity.EntityCategory(1))
+	const batch, window = 64, 4
+	getter := newMockGetter()
+	name := NewHandlerName("bench_try_batch")
+	targets := make([][]TryBatchTarget, window)
+	for slot := range targets {
+		for i := range batch {
+			id, err := entity.BuildEntityID(int64(200000+slot*batch+i), nestLocalKind)
+			if err != nil {
+				b.Fatal(err)
+			}
+			getter.Add(newMockEntity(id, entity.EntityCategory(1)))
+			targets[slot] = append(targets[slot], TryBatchTarget{Handler: name, ID: id, Params: Params{slot}})
+		}
+	}
+	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}), NestOptionWithStageMetrics(false))
+	slots := make(chan int, window)
+	for slot := range window {
+		slots <- slot
+	}
+	var remaining [window]atomic.Int64
+	var completed atomic.Int64
+	engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
+		completed.Add(1)
+		if slot := params[0].(int); remaining[slot].Add(-1) == 0 {
+			slots <- slot
+		}
+		return nil, nil
+	}, HandlerMeta{})
+	if err := engine.Start(); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	ctx := context.Background()
+	handBack := func(target TryBatchTarget, err error) { b.Errorf("target %d handed back: %v", target.ID, err) }
+	b.ReportAllocs()
+	b.ResetTimer()
+	for sent := 0; sent < b.N; {
+		slot := <-slots
+		n := min(batch, b.N-sent)
+		remaining[slot].Store(int64(n))
+		if err := engine.DispatchTryBatch(ctx, targets[slot][:n], handBack); err != nil {
+			b.Fatal(err)
+		}
+		sent += n
+	}
+	if err := engine.Shutdown(ctx); err != nil {
+		b.Fatal(err)
+	}
+	b.StopTimer()
+	if completed.Load() != int64(b.N) {
+		b.Fatalf("completed=%d want=%d", completed.Load(), b.N)
 	}
 }
