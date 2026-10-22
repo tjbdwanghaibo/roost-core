@@ -22,6 +22,10 @@ import (
 
 // 三个真实 Remote Runtime 同进程；真实 Mongo/Redis/NATS，不冒充多机交接或进程崩溃验收。
 func TestSLGRemoteMapReports(t *testing.T) {
+	if role := os.Getenv("SLG_MANAGED_CHILD"); role != "" {
+		runManagedMapChild(t, role)
+		return
+	}
 	if os.Getenv("ROOST_SLG_REMOTE_MAP") != "1" {
 		t.Skip("run ROOST_SLG_REMOTE_MAP=1 scripts/test-slg-alliance-player.sh")
 	}
@@ -212,5 +216,6 @@ func TestSLGRemoteMapReports(t *testing.T) {
 	first.close()
 	second.close()
 	third.close()
+	t.Run("process_handoff_crash", runManagedMapProcesses)
 	t.Log("Managed Remote ScoutMap 3000 -> 3001 -> 3002: cold facts identical, stale writes/routes rejected, pending report retried and ACK durable, Player receipt unchanged")
 }

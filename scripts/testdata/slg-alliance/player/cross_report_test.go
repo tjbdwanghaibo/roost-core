@@ -236,12 +236,17 @@ type reportProcess struct {
 
 func startReportProcess(t *testing.T, role string, home int32, root string) *reportProcess {
 	t.Helper()
+	return startReportProcessEntry(t, role, home, root, "TestSLGAlliancePlayerDelivery", "SLG_REPORT_CHILD")
+}
+
+func startReportProcessEntry(t *testing.T, role string, home int32, root, testName, childEnv string) *reportProcess {
+	t.Helper()
 	check(t, os.MkdirAll(root, 0700))
 	log, err := os.Create(filepath.Join(root, "cross-"+role+".log"))
 	check(t, err)
 	t.Cleanup(func() { _ = log.Close() })
-	cmd := exec.Command(os.Args[0], "-test.run=^TestSLGAlliancePlayerDelivery$", "-test.timeout=55s")
-	cmd.Env = append(os.Environ(), "SLG_REPORT_CHILD="+role, "SLG_REPORT_HOME="+fmt.Sprint(home), "ROOST_SLG_REWARD_WAL="+root)
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$", "-test.timeout=55s")
+	cmd.Env = append(os.Environ(), childEnv+"="+role, "SLG_REPORT_HOME="+fmt.Sprint(home), "ROOST_SLG_REWARD_WAL="+root)
 	cmd.Stdout = log
 	cmd.Stderr = log
 	p := &reportProcess{cmd: cmd, done: make(chan error, 1), log: log.Name()}

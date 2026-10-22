@@ -64,7 +64,7 @@ s=p.read_text().replace('category=entity.EntityCategoryOther','category=entity.E
 p=root/'db/def/alliance_authority.go';s=p.read_text().replace('type AllianceAuthorityDao struct {','type AllianceAuthorityDao struct {\n State string `bson:"state" dao:"persist"`').replace('db=main','db=main dbscope=global');p.write_text(s)
 REMOTE
  cp "$repo_root/scripts/testdata/slg-alliance/remote/handlers.go.txt" game/handler/alliance_authority.go
- for name in runtime store remote map; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
+ for name in runtime store remote map map_process; do cp "$repo_root/scripts/testdata/slg-alliance/remote/${name}_test.go" "game/alliance/remote_${name}_test.go"; done
 fi
 if [[ "${ROOST_SLG_REMOTE_MAP:-0}" == 1 ]]; then
  python3 - "$project_root" <<'REMOTEMAP'
