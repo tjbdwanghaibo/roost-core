@@ -243,7 +243,7 @@ func TestGeneratedPlayerTCPStopContract(t *testing.T) {
 	}
 }
 
-// D16：生成的嵌入 TCP Mod 在 Provide 时把 entity.kick 挂到 App 的 admin 注册表；生成测试经正式 TCP 连接验证踢下线
+// 生成的嵌入 TCP Mod 在 Provide 时把 entity.kick 挂到 App 的 admin 注册表；生成测试经正式 TCP 连接验证踢下线
 // 真的关掉了客户端连接。只编译并运行这一个生成测试。
 func TestGeneratedPlayerTCPAdminKick(t *testing.T) {
 	if testing.Short() {

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// 业务时区（DESIGN-TODO D18）在生成工程里的三处：每个服务配置写明 time.business_timezone / time.business_day_start，
+// 业务时区在生成工程里的三处：每个服务配置写明 time.business_timezone / time.business_day_start，
 // 生成的 main 内嵌 time/tzdata，运行镜像里没有 zoneinfo 时也能加载 Asia/Shanghai。
 
 func TestGeneratedConfigsWriteTheBusinessTimeZone(t *testing.T) {

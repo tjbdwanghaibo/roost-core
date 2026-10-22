@@ -54,7 +54,7 @@ func ClaimReward(player *Player, rank int) error {
 	})
 }
 
-// StampVisit 记下这次访问的业务时间。nowUnixMilli 是业务时间参数（D22-1）：生成的分发包装在执行时从 fctx 填入这条
+// StampVisit 记下这次访问的业务时间。nowUnixMilli 是业务时间参数：生成的分发包装在执行时从 fctx 填入这条
 // 消息冻结的业务时间，Sender 的签名里没有它；handler 仍可以在单测里直接传值。
 //
 //roost:nest target=PlayerKind durability=memory

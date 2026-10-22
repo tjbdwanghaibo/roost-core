@@ -18,7 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entity"
 )
 
-// roost add heartbeat / roost add behavior / roost add timedomain（DESIGN-TODO D20～D22）：实体心跳、行为组件与场景时间域。
+// roost add heartbeat / roost add behavior / roost add timedomain：实体心跳、行为组件与场景时间域。
 //
 //	roost add heartbeat --entity <Entity> [--service <service>] [--id <component-id>]
 //	roost add behavior  --entity <Entity> [--ai] [--state] [--service <service>] [--id <component-id>]

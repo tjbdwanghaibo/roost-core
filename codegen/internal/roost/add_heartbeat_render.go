@@ -213,7 +213,7 @@ const CompTypeBehavior entity.ComponentType = @BehaviorID@
 // AI 决策）都经动作下发与收尾。
 //
 //   - 只在实体锁内调用（Nest handler、心跳回调、加载 / 新建的初始化阶段）；
-//   - runner 是纯内存状态，不随 Nest 事务回滚（D20 决定 3，由业务保证）：handler 先做完全部可能失败的校验与修改，
+//   - runner 是纯内存状态，不随 Nest 事务回滚（由业务保证）：handler 先做完全部可能失败的校验与修改，
 //     最后一步才 CreateAction / EnqueueAction / EndAction；
 //   - 不持久：实例重新加载后由业务按自己的 DAO 状态重新发起动作（onBehaviorReady）。
 type BehaviorComponent struct {

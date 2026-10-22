@@ -51,13 +51,13 @@ func Add(root string, options AddOptions) ([]string, error) {
 	}
 	switch options.Kind {
 	case "heartbeat":
-		// roost add heartbeat --entity Monster：实体的心跳宿主（D20）。
+		// roost add heartbeat --entity Monster：实体的心跳宿主。
 		return addHeartbeat(root, m, options, false)
 	case "behavior":
-		// roost add behavior --entity Monster [--ai] [--state]：行为组件（D21），没有心跳宿主时一并加上。
+		// roost add behavior --entity Monster [--ai] [--state]：行为组件，没有心跳宿主时一并加上。
 		return addHeartbeat(root, m, options, true)
 	case "timedomain":
-		// roost add timedomain --entity Scene：场景时间域（D22）。
+		// roost add timedomain --entity Scene：场景时间域。
 		return addTimeDomain(root, m, options)
 	}
 	if options.Kind == "effect" {

@@ -47,10 +47,10 @@ type Manifest struct {
 	Sagas      []string               `yaml:"sagas,omitempty"`
 	// Timers 是按实体的持久定时器（roost add timer --entity <Entity>，D11），键为实体名（snake）。
 	Timers map[string]TimerSpec `yaml:"timers,omitempty"`
-	// Heartbeats 是按实体的心跳宿主与行为组件（roost add heartbeat / roost add behavior --entity <Entity>，D20～D22），
+	// Heartbeats 是按实体的心跳宿主与行为组件（roost add heartbeat / roost add behavior --entity <Entity>），
 	// 键为实体名（snake）。
 	Heartbeats map[string]HeartbeatSpec `yaml:"heartbeats,omitempty"`
-	// TimeDomains 是场景时间域（roost add timedomain --entity <Scene>，D22），键为实体名（snake）。
+	// TimeDomains 是场景时间域（roost add timedomain --entity <Scene>），键为实体名（snake）。
 	TimeDomains map[string]TimeDomainSpec `yaml:"time_domains,omitempty"`
 	IDs         map[string]IDSpace        `yaml:"ids,omitempty"`
 

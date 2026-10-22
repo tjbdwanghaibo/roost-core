@@ -817,8 +817,8 @@ func TestEndpointScaffoldTakesTheHandlerResultAndAnswersBusinessErrors(t *testin
 
 // 业务时间是服务器决定的值，不能来自请求（客户端可以借此延长限时效果、提前领奖励）。handler 参数按约定名
 // nowUnix / nowUnixMilli（int64）声明业务时间时，endpoint 骨架既不读请求里的同名字段、也不自己取时间：Nest 生成器的
-// 分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间（D22-1），Sync_ 没有这个参数；其余请求里没有的参数
-// 照旧拒绝，报错写明服务器决定的值不放进请求（新用户试用第四轮登记项 2）。
+// 分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间，Sync_ 没有这个参数；其余请求里没有的参数
+// 照旧拒绝，报错写明服务器决定的值不放进请求。
 func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")

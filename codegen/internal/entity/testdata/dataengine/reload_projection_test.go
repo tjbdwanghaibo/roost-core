@@ -120,7 +120,7 @@ func TestGeneratedDataEngineReloadWaitsForProjection(t *testing.T) {
 	}
 }
 
-// entity.unload（D16，Runtime.UnloadEntity）走正式生成 Entity / DAO、Nest 事务、文件 WAL 与真实 Mongo：
+// entity.unload（Runtime.UnloadEntity）走正式生成 Entity / DAO、Nest 事务、文件 WAL 与真实 Mongo：
 //   - 已提交、投影卡在门上的修改先落库再卸载；卸载期间写到该实体的事务以可重试的 ErrEntityUnloading 拒绝并回滚，
 //     其他实体照常写；卸载后冷加载读回卸载前的内存状态，之后照常写、投影无冲突。
 //   - 投影在 timeout 内没完成：ErrEntityUnloadTimeout，实体留在内存、屏障撤销，之后的写入照常。

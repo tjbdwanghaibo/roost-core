@@ -324,7 +324,7 @@ type ServiceMetrics = servicemetrics.Reporter
 
 // renderMain 是工程的 main.go（新建时写一次，之后归应用）。它导入 time/tzdata（约 450 KB）：业务时区
 // time.business_timezone 在启动检查里加载，生成的运行镜像（distroless static）与很多最小镜像没有 zoneinfo，
-// 不内嵌时 Asia/Shanghai 这类名字加载失败、进程拒绝启动（DESIGN-TODO D18）。
+// 不内嵌时 Asia/Shanghai 这类名字加载失败、进程拒绝启动。
 func renderMain(m Manifest) string {
 	return fmt.Sprintf(`package main
 
@@ -729,7 +729,7 @@ func renderSingletonConfig(project string, enabled bool) string {
 }
 
 // renderBusinessTimeConfig 是服务配置里的 time: 段：App 声明里标了 example 的业务时区与每日重置时刻
-// （time.business_timezone / time.business_day_start，DESIGN-TODO D18），注释取声明的 help。开发配置与生产示例
+// （time.business_timezone / time.business_day_start），注释取声明的 help。开发配置与生产示例
 // 都写明，缺省 UTC 00:00；同一工程各服务必须相同（shared，config check --all 检查）。
 func renderBusinessTimeConfig() string {
 	var keys []configschema.Key

@@ -16,7 +16,7 @@ type TimerHost struct {
 }
 
 // InspectComponentHost 读 dir 包里名为 name 的实体，返回它的 DAO 与组件字段，不做任何拒绝（roost add heartbeat /
-// behavior / timedomain 用：心跳与时间域支持全部实体，决定 ⑩）。
+// behavior / timedomain 用：心跳与时间域支持全部实体）。
 func InspectComponentHost(dir, name string) (TimerHost, error) {
 	defs, _, err := parsePackage(dir)
 	if err != nil {

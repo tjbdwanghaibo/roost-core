@@ -443,7 +443,7 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 			t.Errorf("effect stream outliving the completion receipts: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
 		}
 	}
-	// 业务时区（D18）：拼错的 IANA 名在进程的 --check-config 里拒绝、点名键；合法的 Asia/Shanghai 在看不到系统
+	// 业务时区：拼错的 IANA 名在进程的 --check-config 里拒绝、点名键；合法的 Asia/Shanghai 在看不到系统
 	// zoneinfo 的环境里（模拟 distroless 运行镜像）仍能通过，靠的是生成的 main 内嵌的 time/tzdata。
 	zone := func(name string) {
 		t.Helper()

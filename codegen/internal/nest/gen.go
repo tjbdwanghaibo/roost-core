@@ -700,7 +700,7 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	}
 {{- range $i, $p := .Params}}
 {{- if $p.BusinessTime}}
-	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传（D22-1）。
+	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传。
 	p{{$p.Index}} := {{$p.BusinessTime}}
 {{- else}}
 	p{{$p.Index}}, ok := params[{{$p.WireIndex}}].({{$p.Type}})
