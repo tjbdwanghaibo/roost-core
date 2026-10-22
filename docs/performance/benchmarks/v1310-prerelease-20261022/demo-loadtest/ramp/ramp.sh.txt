@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# demo loadtest 按秒爬坡（维护者 2026-10-22 晚决定 A）：<人数>:<每秒人数>，两轮之间等 70 秒（duel 票 TTL 60s）。
+set -u
+P=<scratch>; cd $P/lt1022; O=$P/ramp
+for spec in 100:10 100:20 200:10 200:20; do
+  n=${spec%%:*}; s=${spec#*:}; lab=r$n-$s
+  curl -s 127.0.0.1:9100/metrics > $O/$lab.metrics-before
+  l0=$(wc -l < .dev/game.log)
+  echo "$(date +%H:%M:%S) $lab start loadavg=$(sysctl -n vm.loadavg)" | tee -a $O/run.log
+  $P/bin/lt-loadtest -endpoint 127.0.0.1:7000 -count $n -ramp-step $s -ramp-interval 1s -metrics-addr 127.0.0.1:9300 -account-nats nats://127.0.0.1:40222 > $O/$lab.log 2>&1
+  echo "$(date +%H:%M:%S) $lab rc=$? loadavg_end=$(sysctl -n vm.loadavg)" | tee -a $O/run.log
+  sleep 3; curl -s 127.0.0.1:9100/metrics > $O/$lab.metrics-after
+  tail -n +$((l0+1)) .dev/game.log > $O/$lab.game.log
+  sleep 70
+done
+echo done >> $O/run.log

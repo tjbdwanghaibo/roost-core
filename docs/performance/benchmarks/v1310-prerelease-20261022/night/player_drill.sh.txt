@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# 第 13 项（2026-10-22 发版候选复跑，改自 night-20261020/drill-player/player_drill.sh.txt：私有环境偏移 26000、工程 dr1022、GM 调用内联）：Player 跨机演练（同机两个 game 进程 A / B，同 sid 1000）。按 docs/framework/PLAYER-MIGRATION.md §2 的步骤，
+# 写入负载是 ops GM add_item 循环（玩家 2001 / 2002 × 物品 1001 / 1002 轮流加 1），路由切换 = 改循环的目标端口。
+set -uo pipefail
+N=<scratch>
+D=<scratch>/dr1022
+R=<scratch>/drill/player
+M="mongodb://127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it"
+mkdir -p "$R"
+cd "$D"
+gm() { curl -s -X POST -H "X-Admin-Token: dev-gm-token" -H "Content-Type: application/json" -d "{\"name\":\"gm.player.add_item\",\"payload\":{\"player_id\":$2,\"item_id\":$3,\"count\":1}}" "http://127.0.0.1:$1/admin/execute"; }
+log() { echo "[drill $(date +%H:%M:%S)] $*" | tee -a "$R/drill.log"; }
+ready() { # ready <port> <pid> <secs>
+  local i=0
+  while (( i < $3 * 10 )); do
+    curl -fsS -o /dev/null "http://127.0.0.1:$1/readyz" 2>/dev/null && return 0
+    kill -0 "$2" 2>/dev/null || { log "pid $2 exited before ready"; return 1; }
+    i=$((i+1)); sleep 0.1
+  done
+  return 1
+}
+start_game() { # start_game <name> <config> <port>
+  nohup bin/app game --sid 1000 --config "$2" > "$R/$1.$(date +%H%M%S).log" 2>&1 &
+  echo $! > "$R/$1.pid"
+  log "started $1 pid $(cat "$R/$1.pid") config $2"
+}
+wait_exit() { local i=0; while kill -0 "$1" 2>/dev/null && (( i < 1500 )); do i=$((i+1)); sleep 0.1; done; ! kill -0 "$1" 2>/dev/null; }
+sigterm() { local pid; pid=$(cat "$R/$1.pid"); kill "$pid"; if wait_exit "$pid"; then log "$1 pid $pid exited after SIGTERM"; else log "$1 pid $pid still running"; return 1; fi; }
+sigkill() { local pid; pid=$(cat "$R/$1.pid"); kill -9 "$pid"; wait_exit "$pid"; log "$1 pid $pid killed -9"; }
+drained() { bin/sidmove wal-drained -dir "$1" > "$R/$2.json" 2>&1; local rc=$?; log "wal-drained $1 rc=$rc $(tr -d '\n ' < "$R/$2.json" | cut -c1-220)"; return $rc; }
+holder() { bin/sidmove singleton -redis 127.0.0.1:42379 -key roost:dr1022:singleton:game:1000 | tr -d '\n '; }
+snapshot() { bin/sidmove players -mongo "$M" -config configs/service/config.game.yaml -ids 2001,2002 "$@"; }
+
+# 写入循环：每 50ms 一次，目标端口读 $R/target；每次确认记一行 “时刻 端口 玩家 物品 结果”。
+writer() {
+  local keys=("2001 1001" "2002 1001" "2001 1002" "2002 1002") i=0
+  while [[ ! -f "$R/stop-writer" ]]; do
+    local port; port=$(cat "$R/target")
+    set -- ${keys[$((i % 4))]}
+    local out; out=$(gm "$port" "$1" "$2" 2>&1)
+    local count; count=$(printf '%s' "$out" | sed -n 's/.*"count":\([0-9]*\).*/\1/p')
+    if [[ -n "$count" ]]; then echo "$(date +%s) $port $1 $2 ok $count"; else echo "$(date +%s) $port $1 $2 err $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)"; fi
+    i=$((i+1)); sleep 0.05
+  done >> "$R/writes.log"
+}
+
+rm -f "$R/stop-writer"
+: > "$R/writes.log"
+log "== baseline: Mongo before"; snapshot -out "$R/mongo-start.json" >/dev/null; cat "$R/mongo-start.json" >> "$R/drill.log"
+
+log "== 正常迁移 A → B"
+rm -rf data/walB
+start_game A configs/service/config.game.yaml
+ready 9100 "$(cat "$R/A.pid")" 60 || exit 1
+log "A ready; holder $(holder)"
+echo 9100 > "$R/target"; writer & WPID=$!
+sleep 4
+start_game B configs/service/config.gameB.yaml
+sleep 3
+curl -fsS -o /dev/null http://127.0.0.1:9200/readyz 2>/dev/null && log "B READY while A holds the lock (unexpected)" || log "B not ready while A runs"
+grep -m1 "singleton: waiting" "$R"/B.*.log | cut -c1-260 | tee -a "$R/drill.log"
+[[ -d data/walB ]] && log "B created its WAL dir before acquiring the lock" || log "B has not created data/walB"
+bin/accountctl -redis 127.0.0.1:42379 -prefix roost:dr1022:account upsert-server -sid 1000 -status maintenance > "$R/maintenance.json" 2>&1; log "account maintenance: $(grep -o '"status": "[a-z]*"' "$R/maintenance.json")"
+sigterm A
+drained data/wal/dataengine/1000 a-drained-1
+snapshot -out "$R/before-b.json" >/dev/null
+ready 9200 "$(cat "$R/B.pid")" 40 && log "B ready; holder $(holder)" || { log "B not ready"; exit 1; }
+grep -m1 "singleton: acquired" "$R"/B.*.log | cut -c1-200 | tee -a "$R/drill.log"
+grep -m1 "singleton: released" "$R"/A.*.log | cut -c1-200 | tee -a "$R/drill.log"
+snapshot -compare "$R/before-b.json" > "$R/compare-b.txt" 2>&1; log "players -compare before B writes rc=$? $(tr '\n' ' ' < "$R/compare-b.txt" | cut -c1-200)"
+echo 9200 > "$R/target"; log "route -> B"
+sleep 6
+sigterm B
+drained data/walB/dataengine/1000 b-drained-1
+
+log "== B 崩溃（kill -9）后在原 WAL 目录重启"
+start_game B configs/service/config.gameB.yaml
+ready 9200 "$(cat "$R/B.pid")" 60 || exit 1
+sleep 3
+sigkill B
+drained data/walB/dataengine/1000 b-drained-after-kill
+start_game B configs/service/config.gameB.yaml
+t0=$(date +%s); ready 9200 "$(cat "$R/B.pid")" 60 && log "B restarted on its WAL, ready after $(( $(date +%s) - t0 ))s"
+sleep 3
+sigterm B
+drained data/walB/dataengine/1000 b-drained-2
+log "迁回 A（A 的 WAL 已全部确认）"
+start_game A configs/service/config.game.yaml
+ready 9100 "$(cat "$R/A.pid")" 60 || exit 1
+echo 9100 > "$R/target"; log "route -> A"
+sleep 4
+
+log "== 未排空：Mongo SIGSTOP 2s 期间 kill -9 A"
+MPIDS=$(cat "$N"/env/roost-dataengine-it/mongo-*/mongod.pid | tr '\n' ' ')
+kill -STOP $MPIDS; log "mongod SIGSTOP ($MPIDS)"
+sleep 2
+sigkill A
+kill -CONT $MPIDS; log "mongod SIGCONT"
+sleep 2
+drained data/wal/dataengine/1000 a-drained-after-stall-kill
+snapshot -out "$R/mongo-after-stall-kill.json" >/dev/null
+log "Mongo after stall+kill: $(tr -d '\n ' < "$R/mongo-after-stall-kill.json" | cut -c1-400)"
+touch "$R/stop-writer"; wait $WPID
+start_game A configs/service/config.game.yaml
+ready 9100 "$(cat "$R/A.pid")" 60 && log "A restarted on its WAL"
+sleep 3
+sigterm A
+drained data/wal/dataengine/1000 a-drained-final
+snapshot -out "$R/mongo-final.json" >/dev/null
+log "Mongo final: $(tr -d '\n ' < "$R/mongo-final.json" | cut -c1-400)"
+bin/accountctl -redis 127.0.0.1:42379 -prefix roost:dr1022:account upsert-server -sid 1000 -status open > /dev/null 2>&1
+log "DONE"

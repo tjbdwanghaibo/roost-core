@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 第 10、11 项（私有 mirror-local，偏移 26000）：Lockstep 纯追帧页限速演练；匹配队列单机 15 分钟 + Cluster 故障切换 5 分钟。
+set -u
+P=<scratch>; O=$P/night; W=<worktree>
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$O/run.log"; }
+wait_quiet() { local q=0; while [ $q -lt 30 ]; do if [ -n "$("$P/cdefault/foreign-ext.sh" "$P")" ]; then q=0; else q=$((q+2)); fi; sleep 2; done; }
+hostload() { while true; do echo "$(date +%H:%M:%S) $(sysctl -n vm.loadavg) swap=$(sysctl -n vm.swapusage | awk '{print $6}') | $(ps -Ao pcpu=,comm= -r | head -6 | awk '{printf "%s %s; ", $1, $2}')" >> "$O/host-load.txt"; sleep 15; done; }
+hostload & HL=$!; trap 'kill $HL 2>/dev/null' EXIT
+curl -s http://127.0.0.1:44474/proxies | python3 -c 'import sys,json;print("proxies before:",sorted(json.load(sys.stdin)))' | tee -a "$O/run.log"
+wait_quiet; log "lsdrill start loadavg=$(sysctl -n vm.loadavg)"
+(cd $P/wt-fix/framework/sync/lockstep && ROOST_DATAENGINE_IT_TOXIPROXY_URL=http://127.0.0.1:44474 LS_DRILL_RATES=0,256,64 $P/bin/lsdrill.test -test.run TestCatchupDrillEmbeddedTCP -test.count=1 -test.v -test.timeout 15m > $O/lockstep-catchup.log 2>&1); log "lsdrill rc=$?"
+curl -s http://127.0.0.1:44474/proxies | python3 -c 'import sys,json;print("proxies after:",sorted(json.load(sys.stdin)))' | tee -a "$O/run.log"
+wait_quiet; log "match single start loadavg=$(sysctl -n vm.loadavg)"
+(cd $P/wt-fix/service/match && MATCHPERF_ADDRS=127.0.0.1:42379 MATCHPERF_DURATION=15m MATCHPERF_OUTPUT=$O/match-single-15m.json $P/bin/matchperf.test -test.run TestMatchQueueCapacity -test.count=1 -test.v -test.timeout 0 > $O/match-single.log 2>&1); log "match single rc=$? loadavg_end=$(sysctl -n vm.loadavg)"
+F="cd $W && ROOST_MIRROR_LOCAL_HOME=$P/env ROOST_MIRROR_LOCAL_OFFSET=26000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'; sleep 60; ROOST_MIRROR_LOCAL_HOME=$P/env ROOST_MIRROR_LOCAL_OFFSET=26000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'"
+wait_quiet; log "match cluster start loadavg=$(sysctl -n vm.loadavg)"
+(cd $P/wt-fix/service/match && MATCHPERF_ADDRS=127.0.0.1:43400,127.0.0.1:43401,127.0.0.1:43402,127.0.0.1:43403,127.0.0.1:43404,127.0.0.1:43405 MATCHPERF_CLUSTER=1 MATCHPERF_DURATION=5m MATCHPERF_RATE=5 MATCHPERF_ACROSS_PCT=30 MATCHPERF_FAULT_AT=90s MATCHPERF_FAULT_CMD="$F" MATCHPERF_OUTPUT=$O/match-cluster-5m.json $P/bin/matchperf.test -test.run TestMatchQueueCapacity -test.count=1 -test.v -test.timeout 0 > $O/match-cluster.log 2>&1); log "match cluster rc=$? loadavg_end=$(sysctl -n vm.loadavg)"
+redis-cli -p 43400 cluster info | head -1 | tee -a "$O/run.log"
+log "nightC done"; touch $P/nightC.done

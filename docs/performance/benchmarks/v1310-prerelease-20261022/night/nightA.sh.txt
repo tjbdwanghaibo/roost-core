@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# 第 4 项（夜间补测）nest-game 各档：#2 嵌入 self_sync；#3 A-B-A-B（A = v1.29.0 tag worktree，B = 发版候选），
+# 每次独立私有 NATS；#4 TAIL=metrics；#5 Block AOI 4 并行度。每档 15 分钟，串行；宿主每 15 秒采样。
+set -u
+P=<scratch>
+W=<worktree>; A=$P/wt-v129; O=$P/night
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$O/run.log"; }
+wait_quiet() { local q=0; while [ $q -lt 30 ]; do if [ -n "$("$P/cdefault/foreign-ext.sh" "$P")" ]; then q=0; else q=$((q+2)); fi; sleep 2; done; }
+hostload() { while true; do echo "$(date +%H:%M:%S) $(sysctl -n vm.loadavg) swap=$(sysctl -n vm.swapusage | awk '{print $6}') | $(ps -Ao pcpu=,comm= -r | head -6 | awk '{printf "%s %s; ", $1, $2}')" >> "$O/host-load.txt"; sleep 15; done; }
+hostload & HL=$!
+trap 'kill $HL 2>/dev/null; [ -n "${NP:-}" ] && kill $NP 2>/dev/null' EXIT
+COMMON="ROOST_PERF_COUNT=1 ROOST_NEST_GAME_DIRTY=5 ROOST_NEST_GAME_DURATION=15m ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_HZ=10 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_PROFILE=0 ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536"
+start_nats() { # 私有 NATS（JetStream，空闲端口），返回 URL 到 NATS_URL
+  local port; port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+  rm -rf "$O/nats-$1"; mkdir -p "$O/nats-$1"
+  nats-server -a 127.0.0.1 -p $port -js -sd "$O/nats-$1" -l "$O/nats-$1.log" & NP=$!
+  sleep 2; NATS_URL="nats://127.0.0.1:$port"; log "nats $1 pid=$NP $NATS_URL"
+}
+stop_nats() { kill $NP; wait $NP 2>/dev/null; NP=""; grep -ci 'slow consumer' "$O/nats-$1.log" | xargs -I{} echo "slow consumer lines {}" | tee -a "$O/run.log"; rm -rf "$O/nats-$1"; }
+run() { # run <标签> <检出> <额外 env...>
+  local label=$1 dir=$2; shift 2
+  wait_quiet; log "$label start loadavg=$(sysctl -n vm.loadavg) swap=$(sysctl -n vm.swapusage | awk '{print $6}')"
+  (cd "$dir" && env $COMMON ROOST_PERF_LABEL=$label "$@" bash scripts/perf/nest-game.sh > "$O/$label.out" 2>&1); local rc=$?
+  log "$label rc=$rc loadavg_end=$(sysctl -n vm.loadavg)"; tail -5 "$O/$label.out" | cut -c1-300 >> "$O/run.log"
+}
+STEP="${1:-all}"
+if [[ $STEP == all || $STEP == 2 ]]; then
+  run n1022-embedded-self-15m $W ROOST_PERF_CPU=0 ROOST_NEST_GAME_EMBEDDED=1 ROOST_NEST_GAME_SELF_SYNC=1 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_WORKERS=8
+fi
+if [[ $STEP == all || $STEP == 3 ]]; then
+  for x in a1:$A b1:$W a2:$A b2:$W; do n=${x%%:*}; d=${x#*:}
+    start_nats $n
+    run n1022-abab-$n $d ROOST_PERF_CPU=0 ROOST_DATAENGINE_IT_NATS_URL=$NATS_URL ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_WORKERS=8
+    stop_nats $n
+  done
+fi
+if [[ $STEP == all || $STEP == 4 ]]; then
+  start_nats tail
+  run n1022-tail-metrics-15m $W ROOST_PERF_CPU=0 ROOST_DATAENGINE_IT_NATS_URL=$NATS_URL ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_IO_WORKERS=8 ROOST_NEST_GAME_SHORT_WORKERS=8 ROOST_NEST_GAME_TAIL=metrics
+  stop_nats tail
+fi
+if [[ $STEP == all || $STEP == 5 ]]; then
+  start_nats aoi
+  run n1022-aoi-cpu4-15m $W ROOST_PERF_CPU=4 ROOST_DATAENGINE_IT_NATS_URL=$NATS_URL ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_SHORT_WORKERS=4
+  stop_nats aoi
+fi
+log "nightA $STEP done"
+touch "$P/nightA.done"

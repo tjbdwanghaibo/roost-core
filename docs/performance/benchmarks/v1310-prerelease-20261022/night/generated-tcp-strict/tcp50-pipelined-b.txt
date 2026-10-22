@@ -1,0 +1,10 @@
+seeded r8tcp6360_dao.player count=50
+conns=50 same=false ok=12172 bad=0 elapsed=10.034s TPS=1213 P50=40.76725ms P99=62.4355ms
+nest_handler_lock_hold_count{handler="handlerTap"} 12172
+nest_handler_lock_hold_sum_nanos{handler="handlerTap"} 839136877
+nestwal_append_total 12172
+nestwal_batch_total 1226
+nestwal_fsync_duration_count 1226
+nestwal_fsync_duration_sum_nanos 7191245907
+player_tcp_dispatch_duration_count 12172
+player_tcp_dispatch_duration_sum_nanos 495185632421

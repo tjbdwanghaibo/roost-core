@@ -1,0 +1,13 @@
+2026/10/23 02:37:31 INFO dataengine mod: database mapping logical=main physical=dr1022 source=config
+{
+  "mode": "apply",
+  "collection": "dr1022.player",
+  "from": 1,
+  "to": 2,
+  "pending": 0,
+  "at_target": 3,
+  "tombstones": 0,
+  "converted": 3,
+  "written": 3,
+  "resumed": 0
+}

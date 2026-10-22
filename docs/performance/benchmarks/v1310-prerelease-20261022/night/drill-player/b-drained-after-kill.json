@@ -1,0 +1,10 @@
+{
+  "dir": "data/walB/dataengine/1000",
+  "drained": true,
+  "records_retained": 113,
+  "checkpoint": "segment 1 offset 20566",
+  "last_record": "segment 1 offset 20566 (419f12e5182168720000000000000061)",
+  "databases": {
+    "main": "dr1022"
+  }
+}

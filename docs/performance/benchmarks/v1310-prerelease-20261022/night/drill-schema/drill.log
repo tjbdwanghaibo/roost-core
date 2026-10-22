@@ -1,0 +1,47 @@
+[schema 02:37:28] == 0. 停 make dev-run 起的 game，只留九个支撑服务
+[schema 02:37:28] dev-run game stopped
+[schema 02:37:28] == 1. 种入 3 份 schema 1 的 Player（2001、2002 带 weapon_id 7001）
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+seeded 3
+[schema 02:37:29] game ready pid 92194
+[schema 02:37:29] 新程序（schema 2）add_item 2001: {"name":"gm.player.add_item","trace_id":"2QBC6CD5LFMAOQMTBHXKFUEQSK","ok":false,"message":"dataengine: persisted schema does not match runtime schema: resource=player entity=2049028 stored_schema=1 target_schema=2","started_at":1792694249405,"ended_at":1792694249414}
+[schema 02:37:29] == 2. 停写
+[schema 02:37:29] game pid 92194 exited
+[schema 02:37:30] wal-drained rc=0 {"dir":"data/wal/dataengine/1000","drained":true,"records_retained":1,"checkpoint":"segment1offset466","last_record":"segment1offset466(62c7a63e73ab75150000000000000002)","databases":{"main":"dr1022"}
+[schema 02:37:30] singleton rc=0 {"key":"roost:dr1022:singleton:game:1000","held":false}
+[schema 02:37:30] == 3. plan / apply / verify
+[schema 02:37:31] plan rc=0 2026/10/2302:37:31INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"plan","collection":"dr1022.player","from":1,"to":2,"pending":3,"at_target":0,"tombstones":0,"converted":3,"written":0,"resumed":0}
+[schema 02:37:31] apply rc=0 2026/10/2302:37:31INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"apply","collection":"dr1022.player","from":1,"to":2,"pending":0,"at_target":3,"tombstones":0,"converted":3,"written":3,"resumed":0}
+[schema 02:37:31] verify rc=0 2026/10/2302:37:31INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"verify","collection":"dr1022.player","from":1,"to":2,"pending":0,"at_target":3,"tombstones":0,"converted":0,"written":0,"resumed":0}
+[schema 02:37:31] == 4. 新程序启动，2001 / 2002 写入
+[schema 02:37:31] game ready pid 92271
+[schema 02:37:31] add_item 2001: {"name":"gm.player.add_item","trace_id":"KKWB2HS4YXLLUOJFE7KP3ZQLMO","ok":true,"data":{"count":4,"entity_id":2049028,"item_id":1001,"player_id":2001},"started_at":1792694251554,"ended_at":1792694251568}
+[schema 02:37:31] add_item 2002: {"name":"gm.player.add_item","trace_id":"JJNUHYICJMY2RPTBSUG3OOLZ2T","ok":true,"data":{"count":4,"entity_id":2050052,"item_id":1001,"player_id":2002},"started_at":1792694251586,"ended_at":1792694251605}
+[schema 02:37:31] game pid 92271 exited
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+{"_id":{"high":0,"low":2049028,"unsigned":false},"level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"item_id":{"high":0,"low":7001,"unsigned":false},"level":1}}},"_version":{"high":0,"low":4,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000007","name":"p2001"}
+{"_id":{"high":0,"low":2050052,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000008","name":"p2002","level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"level":1,"item_id":{"high":0,"low":7001,"unsigned":false}}}},"_version":{"high":0,"low":4,"unsigned":false}}
+{"_id":{"high":0,"low":2051076,"unsigned":false},"name":"p2003","level":7,"items":{"1001":3},"_version":{"high":0,"low":3,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"schema-migration:player_weapon_to_equipment"}
+[schema 02:37:32] == 5. rollback（只恢复未被写过的 2003）→ 再 apply / verify
+[schema 02:37:32] rollback rc=1 2026/10/2302:37:32INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"rollback","collection":"dr1022.player","from":1,"to":2,"pending":0,"at_target":0,"tombstones":0,"converted":0,"written":0,"resumed":0,"rolled_back":1,"refused":["_id=2049028_version=4_last_tx=388b4d1c
+[schema 02:37:32] apply rc=0 2026/10/2302:37:32INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"apply","collection":"dr1022.player","from":1,"to":2,"pending":0,"at_target":3,"tombstones":0,"converted":1,"written":1,"resumed":0}
+[schema 02:37:32] verify rc=0 2026/10/2302:37:32INFOdataenginemod:databasemappinglogical=mainphysical=dr1022source=config{"mode":"verify","collection":"dr1022.player","from":1,"to":2,"pending":0,"at_target":3,"tombstones":0,"converted":0,"written":0,"resumed":0}
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+{"_id":{"high":0,"low":2049028,"unsigned":false},"level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"item_id":{"high":0,"low":7001,"unsigned":false},"level":1}}},"_version":{"high":0,"low":4,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000007","name":"p2001"}
+{"_id":{"high":0,"low":2050052,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000008","name":"p2002","level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"level":1,"item_id":{"high":0,"low":7001,"unsigned":false}}}},"_version":{"high":0,"low":4,"unsigned":false}}
+{"_id":{"high":0,"low":2051076,"unsigned":false},"level":7,"items":{"1001":3},"_version":{"high":0,"low":3,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"schema-migration:player_weapon_to_equipment","name":"p2003"}
+[schema 02:37:32] DONE

@@ -1,0 +1,36 @@
+--- <scratch>/lt-orig-main.go	2026-10-23 02:57:44
++++ <scratch>/lt1022/cmd/loadtest/main.go	2026-10-22 23:10:26
+@@ -59,6 +59,8 @@
+ func main() {
+ 	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
+ 	count := flag.Int("count", 10, "robot population")
++	rampStep := flag.Int("ramp-step", 0, "launch robots in batches of this many (0 = all at once); scratch measurement patch")
++	rampInterval := flag.Duration("ramp-interval", time.Second, "interval between ramp batches")
+ 	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
+ 	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
+ 	scenarioName := flag.String("scenario", "demo", "scenario to run")
+@@ -85,12 +87,16 @@
+ 	}
+ 	defer login.Close()
+ 
++	rampStepValue, rampIntervalValue = *rampStep, *rampInterval
+ 	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95, login); err != nil {
+ 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+ 		os.Exit(1)
+ 	}
+ }
+ 
++var rampStepValue int
++var rampIntervalValue time.Duration
++
+ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64, login *accountLogin) error {
+ 	playertcp.MustRegister()
+ 
+@@ -109,6 +115,7 @@
+ 				Run: runner.Config{
+ 					Executor: runner.ExecutorPool,
+ 					Count:    count,
++					Ramp:     runner.Ramp{Step: rampStepValue, Interval: rampIntervalValue},
+ 					Scenario: scenarioName,
+ 					Duration: duration,
+ 					Transport: transport.Config{

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 第 4 项（夜间补测）共享隔离环境各档：#6 原生步骤正向 8/s、全补偿 5/s（15m）；#7 正向 8/s WAL 放 RAM disk（15m）；
+# #8 Saga Mongo 步骤正向 30/s、全补偿 15/s（10m，saga.sh 自己持锁）；#9 Remote 80TPS 15m（remote.sh 自己持锁）。
+# env.sh 只 source 不打印；#6/#7 由本脚本持 remote-acceptance.lock（mkdir），#8/#9 之前先释放。
+set -u
+P=<scratch>
+W=<worktree>; O=$P/night; BIN=$P/bin
+source ~/.roost-it/roost-dataengine-it/env.sh >/dev/null 2>&1
+LOCK="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$O/run.log"; }
+wait_quiet() { local q=0; while [ $q -lt 30 ]; do if [ -n "$("$P/cdefault/foreign-ext.sh" "$P")" ]; then q=0; else q=$((q+2)); fi; sleep 2; done; }
+hostload() { while true; do echo "$(date +%H:%M:%S) $(sysctl -n vm.loadavg) swap=$(sysctl -n vm.swapusage | awk '{print $6}') | $(ps -Ao pcpu=,comm= -r | head -6 | awk '{printf "%s %s; ", $1, $2}')" >> "$O/host-load.txt"; sleep 15; done; }
+slowops() { # slowops <起 ISO> <止 ISO>：三个共享 mongod 日志里 Slow query 条数
+  for n in 1 2 3; do f="$ROOST_DATAENGINE_IT_ROOT/mongo-$n/mongod.log"; printf 'mongo-%s=%s ' $n "$(awk -v a="$1" -v b="$2" 'index($0,"Slow query")>0 { if (match($0,/"\$date":"[^"]*"/)) { t=substr($0,RSTART+9,19); if (t>=a && t<=b) c++ } } END{print c+0}' "$f")"; done; echo
+}
+hostload & HL=$!
+cleanup() { kill $HL 2>/dev/null; [ -d "$LOCK" ] && [ "${HOLD:-0}" = 1 ] && rmdir "$LOCK"; }
+trap cleanup EXIT
+steps() { # steps <标签> <mode> <rate> [TMPDIR]
+  local label=$1 mode=$2 rate=$3 tmp=${4:-}
+  wait_quiet; local t0; t0=$(date -u +%Y-%m-%dT%H:%M:%S)
+  log "$label start loadavg=$(sysctl -n vm.loadavg) tmp=${tmp:-default}"
+  (cd $W/wiring/saga && env ${tmp:+TMPDIR=$tmp} ROOST_STEPS_PERF_HOPS=1 ROOST_STEPS_PERF_OUTPUT=$O/$label.json ROOST_STEPS_PERF_VARIANT=steps ROOST_STEPS_PERF_MODE=$mode \
+    ROOST_STEPS_PERF_RATE=$rate ROOST_STEPS_PERF_DURATION=15m ROOST_DATAENGINE_IT=1 GOMAXPROCS=4 GOWORK=off \
+    $BIN/saga-steps.test -test.run '^TestRealNativeStepsPerformance$' -test.count=1 -test.timeout 0 -test.v > $O/$label.log 2>&1); local rc=$?
+  log "$label rc=$rc loadavg_end=$(sysctl -n vm.loadavg) slowops: $(slowops "$t0" "$(date -u +%Y-%m-%dT%H:%M:%S)")"
+}
+STEP="${1:-all}"
+if [[ $STEP == all || $STEP == 6 ]]; then
+  until mkdir "$LOCK" 2>/dev/null; do log "lock busy, waiting"; sleep 60; done; HOLD=1; log "lock acquired"
+  steps n1022-native-forward8-15m forward 8
+  steps n1022-native-compensate5-15m compensate 5
+  # RAM disk（2 GiB）：WAL 目录随 TMPDIR 放到内存盘
+  dev=$(hdiutil attach -nomount ram://4194304 | awk '{print $1}'); diskutil erasevolume HFS+ N1022WAL "$dev" >/dev/null && mkdir -p /Volumes/N1022WAL/tmp
+  log "ramdisk $dev mounted at /Volumes/N1022WAL"
+  steps n1022-native-forward8-ramdisk-15m forward 8 /Volumes/N1022WAL/tmp
+  du -sh /Volumes/N1022WAL 2>/dev/null | tee -a "$O/run.log"; hdiutil detach "$dev" >/dev/null && log "ramdisk detached"
+  rmdir "$LOCK"; HOLD=0; log "lock released"
+fi
+if [[ $STEP == all || $STEP == 8 ]]; then
+  for x in forward:30 compensate:15; do m=${x%%:*}; r=${x#*:}; wait_quiet; t0=$(date -u +%Y-%m-%dT%H:%M:%S); log "saga $m $r start loadavg=$(sysctl -n vm.loadavg)"
+    (cd $W && GOFLAGS=-p=1 ROOST_PERF_LABEL=n1022-saga-$m-$r-10m ROOST_SAGA_PERF_MODE=$m ROOST_SAGA_PERF_RATE=$r ROOST_SAGA_PERF_DURATION=10m bash scripts/perf/saga.sh > $O/saga-$m-$r.out 2>&1); rc=$?
+    log "saga $m $r rc=$rc loadavg_end=$(sysctl -n vm.loadavg) slowops: $(slowops "$t0" "$(date -u +%Y-%m-%dT%H:%M:%S)")"; done
+fi
+if [[ $STEP == all || $STEP == 9 ]]; then
+  wait_quiet; t0=$(date -u +%Y-%m-%dT%H:%M:%S); log "remote 80 start loadavg=$(sysctl -n vm.loadavg)"
+  (cd $W && GOFLAGS=-p=1 ROOST_REMOTE_LABEL=n1022-remote-80-15m ROOST_REMOTE_CPU=4 ROOST_REMOTE_RATE=80 ROOST_REMOTE_POLICY=strict ROOST_REMOTE_SESSIONS=1000 ROOST_REMOTE_ENTITIES=10000 \
+    ROOST_REMOTE_WORKERS=8 ROOST_REMOTE_FAST_QUEUE=4096 ROOST_REMOTE_IO_WORKERS=1024 ROOST_REMOTE_SLOW_QUEUE=16 ROOST_REMOTE_WRITE_LIMIT=256 ROOST_REMOTE_WAL_LIMIT=512 \
+    ROOST_REMOTE_PROJECTION_WORKERS=8 ROOST_REMOTE_STAGE_METRICS=1 ROOST_REMOTE_DURATION=15m ROOST_REMOTE_TIMEOUT=1h bash scripts/perf/remote.sh > $O/remote-80.out 2>&1); rc=$?
+  log "remote 80 rc=$rc loadavg_end=$(sysctl -n vm.loadavg) slowops: $(slowops "$t0" "$(date -u +%Y-%m-%dT%H:%M:%S)")"
+fi
+log "nightB $STEP done"; touch "$P/nightB.done"

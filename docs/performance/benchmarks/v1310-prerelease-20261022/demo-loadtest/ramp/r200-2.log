@@ -1,0 +1,49 @@
+2026/10/23 02:55:04 INFO nats: connected url=nats://127.0.0.1:40222
+2026/10/23 02:55:04 INFO bus: subscribed subject=lt1022.srv.0
+2026/10/23 02:55:04 INFO bus: subscribed subject=lt1022.svc.loadtest.0
+2026/10/23 02:55:04 INFO bus: subscribed subject=lt1022.svc.loadtest.all
+2026/10/23 02:55:04 INFO bus: subscribed subject=lt1022.srv.all
+2026/10/23 02:55:04 INFO robot loadtest: run start accepted run_id=robot-demo-20261023-025504-001 profile=demo scenario=demo count=200 endpoint=127.0.0.1:7000
+2026/10/23 02:55:04 INFO robot runner: start executor=pool count=200 rate=1 scenario=demo transport=player-tcp endpoint=127.0.0.1:7000
+2026/10/23 02:56:51 INFO robot runner: stop started=200 success=200 failure=0 canceled=0
+2026/10/23 02:56:51 INFO robot loadtest: run done run_id=robot-demo-20261023-025504-001 profile=demo state=finished stop_reason=completed started=200 success=200 failure=0 canceled=0 elapsed=1m47.059343167s err=<nil>
+{
+  "run_id": "robot-demo-20261023-025504-001",
+  "profile": "demo",
+  "state": "finished",
+  "stop_reason": "completed",
+  "started_at_ms": 1792695304458,
+  "ended_at_ms": 1792695411517,
+  "count": 200,
+  "scenario": "demo",
+  "stats": {
+    "started": 200,
+    "online": 0,
+    "success": 200,
+    "failure": 0,
+    "canceled": 0,
+    "failure_rate": 0
+  },
+  "thresholds": [
+    {
+      "metric": "error_rate",
+      "max": 0,
+      "actual": 0,
+      "violated": false,
+      "samples": 200
+    },
+    {
+      "metric": "p95",
+      "max": 16,
+      "actual": 11.248,
+      "violated": false,
+      "samples": 200
+    }
+  ],
+  "quantiles_ms": {
+    "p50": 8856,
+    "p90": 10982,
+    "p95": 11248,
+    "p99": 11461
+  }
+}
