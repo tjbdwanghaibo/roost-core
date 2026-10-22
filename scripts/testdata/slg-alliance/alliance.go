@@ -43,13 +43,15 @@ type allianceStore interface {
 }
 
 type alliance struct {
-	store allianceStore
-	key   activity.Key
+	// 自动补报截止与协调器的请求身份保留期保持一致；零值沿用框架默认。
+	reservationTTL time.Duration
+	store          allianceStore
+	key            activity.Key
 }
 
-func newAlliance(r versionstore.RedisClient, prefix string, key activity.Key) (*alliance, error) {
+func newAlliance(r versionstore.RedisClient, prefix string, key activity.Key, reservationTTL time.Duration) (*alliance, error) {
 	s, e := versionstore.NewRedisStore(r, versionstore.RedisConfig[string, state]{Prefix: prefix + ":alliance:", KeyOf: func(k string) string { return k }, Codec: versionstore.JSONCodec[state]{}})
-	return &alliance{store: s, key: key}, e
+	return &alliance{store: s, key: key, reservationTTL: reservationTTL}, e
 }
 func (a *alliance) open(ctx context.Context) error {
 	_, _, e := a.store.Create(ctx, a.key.String(), state{PermissionGeneration: 1, Key: a.key, Members: map[string]member{"alice": {1000, true}, "bob": {1001, true}}, Intents: map[string]intent{}})
@@ -136,7 +138,7 @@ func (a *alliance) drain(ctx context.Context, c activity.Coordinator, now time.T
 		if v.Sent {
 			continue
 		}
-		if now.Unix()-v.CreatedAt >= int64(time.Hour/time.Second) {
+		if now.Unix()-v.CreatedAt >= int64(a.reportDeadline()/time.Second) {
 			return fmt.Errorf("contribution %s requires reconciliation", id)
 		}
 		if _, e = c.ApplyProgress(ctx, s.Key, v.Player, id, activity.ProgressDelta{Score: 10, Progress: 1}); e != nil {
@@ -300,4 +302,11 @@ func (h *home) deliverPending(ctx context.Context, limit int, grant func(context
 		done++
 	}
 	return done, nil
+}
+
+func (a *alliance) reportDeadline() time.Duration {
+	if a.reservationTTL == 0 {
+		return activity.DefaultReservationTTL
+	}
+	return a.reservationTTL
 }

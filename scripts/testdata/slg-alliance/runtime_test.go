@@ -64,7 +64,7 @@ func coordinatorProcess(t *testing.T, prefix string) {
 	check(t, e)
 	groups, e := activity.ParseGroups([]byte("groups:\n  - id: alliance\n    game_sids: [1000, 1001]\n"), "fixture")
 	check(t, e)
-	svc, e := activity.New(activity.Config{Activities: s.Activities, Participants: s.Participants, Ledger: s.Ledger, Audits: s.Audits, Dispatches: s.Dispatches, Windows: s.Windows, Groups: &groups, ReservationTTL: time.Hour, DispatchBackoff: time.Second})
+	svc, e := activity.New(activity.Config{Activities: s.Activities, Participants: s.Participants, Ledger: s.Ledger, Audits: s.Audits, Dispatches: s.Dispatches, Windows: s.Windows, Groups: &groups, ReservationTTL: coordinatorReservationTTL, DispatchBackoff: time.Second})
 	check(t, e)
 	b, n := newBus(t, prefix, activity.ServiceType, 9000)
 	check(t, activity.RegisterHandlers(b, svc))
@@ -265,3 +265,5 @@ func (f *fog) inRange(id int64) bool {
 	x, y := p.X-10, p.Y-10
 	return x*x+y*y <= 100*100
 }
+
+const coordinatorReservationTTL = time.Hour

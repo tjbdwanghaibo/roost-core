@@ -9,8 +9,51 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"github.com/tjbdwanghaibo/roost-core/service/activity"
 )
+
+// countingProgress 只记补报次数，不连协调器；其余方法不会被 drain 调到。
+type countingProgress struct {
+	activity.Coordinator
+	applied []string
+}
+
+func (c *countingProgress) ApplyProgress(_ context.Context, _ activity.Key, _ string, request string, _ activity.ProgressDelta) (activity.Participant, error) {
+	c.applied = append(c.applied, request)
+	return activity.Participant{}, nil
+}
+
+// 自动补报的截止就是协调器的去重保留期（activity.Config.ReservationTTL）：协调器只在这段时间内按请求身份去重，
+// 过了还补报，同一战果会被计两次。联盟零值按协调器同样的缺省 activity.DefaultReservationTTL；
+// 配了别的值（本例协调器是 1 小时）就按那个值。不需要外部依赖。
+func verifyAllianceReportWindow(t *testing.T) {
+	ctx := context.Background()
+	key := activity.Key{GroupID: "alliance", ActivityID: "window", Phase: activity.PhaseSettle}
+	now := time.Unix(1_800_000_000, 0)
+	for _, tc := range []struct {
+		name     string
+		ttl      time.Duration // 协调器配置的 ReservationTTL，0 表示用缺省
+		age      time.Duration // 待报意图已存在多久
+		replayed bool
+	}{
+		{name: "default_expired", ttl: 0, age: activity.DefaultReservationTTL + 15*time.Minute, replayed: false},
+		{name: "default_within", ttl: 0, age: activity.DefaultReservationTTL - time.Minute, replayed: true},
+		{name: "configured_within", ttl: 2 * time.Hour, age: 90 * time.Minute, replayed: true},
+		{name: "configured_expired", ttl: 2 * time.Hour, age: 2*time.Hour + time.Minute, replayed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &alliance{store: versionstore.NewMemoryStore[string, state](), key: key, reservationTTL: tc.ttl}
+			check(t, a.open(ctx))
+			check(t, a.contribute(ctx, 1000, "alice", "battle-a", now.Add(-tc.age)))
+			c := &countingProgress{}
+			e := a.drain(ctx, c, now)
+			if replayed := len(c.applied) > 0; replayed != tc.replayed || (e == nil) != tc.replayed {
+				t.Fatalf("intent %v old, coordinator ReservationTTL %v: replayed=%v err=%v, want replayed=%v", tc.age, tc.ttl, replayed, e, tc.replayed)
+			}
+		})
+	}
+}
 
 func TestSLGAllianceActivity(t *testing.T) {
 	if prefix := os.Getenv("SLG_ALLIANCE_CHILD"); prefix != "" {
@@ -29,6 +72,7 @@ func TestSLGAllianceActivity(t *testing.T) {
 
 // deliver 用于扩展同一条活动链路；基础入口只验收原服义务，生成 Player 入口继续实际到账。
 func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity.Key), factories ...func(*testing.T, string, activity.Key) *alliance) {
+	t.Run("coordinator_reservation_ttl", verifyAllianceReportWindow)
 	addr := os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -42,7 +86,7 @@ func runAllianceActivity(t *testing.T, deliver func(*testing.T, string, activity
 		if len(factories) > 0 {
 			return factories[0](t, prefix, key)
 		}
-		a, e := newAlliance(r, prefix, key)
+		a, e := newAlliance(r, prefix, key, coordinatorReservationTTL)
 		check(t, e)
 		return a
 	}
