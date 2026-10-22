@@ -128,7 +128,7 @@ D19“两种应用模式”的历史表（2026-10-21，`b6ef5573`，同一夹具
 
 读法：这个规模下 AOI 批次很小，改前只有第 1 次出现进场景 handler 均值 8ms（与改前“直接调用可能等一个 AOI 批次”一致），另两次与改后同量级，**不能据此下结论**。登录往返主要花在账号登录与建角色链路上（TCP 分发均值约 100ms，两边相同）。game 进程的 `nest_dispatch_cost` 只有计数 / 总和 / 最大，没有直方图，拿不到服务端 P99；压测端直方图是 2 的幂桶，只能看量级。
 
-**规模上限是 demo 的配置**：100 个机器人时 100 个复制会话全部因 `frame: object limit exceeded` 被关闭，200 个时 128 个被关闭、另有 72 个在 `connect` 失败（原因尚未定位）——所有玩家挤在同一出生点，加上附近的怪超过 Manager `Limits.MaxObjects`（缺省 100），demo 的空间视野又没有设 `MaxVisible`。两边都会这样（Manager 未改）。已记入 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](../maintenance/KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)，是 demo 配置的产品选择，交维护者决定。
+**规模上限是 demo 的配置**：100 个机器人时 100 个复制会话全部因 `frame: object limit exceeded` 被关闭，200 个时 128 个被关闭、另有 72 个在 `connect` 失败（2026-10-22 后补：当次 game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`，是单 IP 连接上限 128，见 KNOWN-LIMITS）——所有玩家挤在同一出生点，加上附近的怪超过 Manager `Limits.MaxObjects`（缺省 100），demo 的空间视野又没有设 `MaxVisible`。两边都会这样（Manager 未改）。已记入 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](../maintenance/KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)，是 demo 配置的产品选择；维护者 2026-10-22 按推荐给主视野设了 `MaxVisible` 64。
 
 **不能证明的**：
 

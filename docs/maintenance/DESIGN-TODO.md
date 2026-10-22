@@ -1103,6 +1103,34 @@ make dev-stop
 
 **冒烟结果（2026-10-22，已补）**：生成工程 = main `11988df8`（+ 只改 sync-aoi 的夹具修正）上 `roost project new hbsmoke -template game-demo --skip-deps` + `replace` 指回 worktree；依赖用 `wiring/scripts/integration/dataengine-env.sh up` 起的私有环境（根目录在会话 scratchpad、端口偏移 26000），十份配置按 demo README 的 sed 改指向它。`make dev-run` 十个进程全部就绪、accountctl 登记 sid 1000；`make dev-smoke` 2 / 2 成功（场景耗时 p95 4.49s，阈值 16s）；`make loadtest LOADTEST_COUNT=20` 20 / 20 成功（场景耗时 p50 / p99 10.0 / 10.8s），场景里的 `move_target` → `move_arrive` 每个机器人都走完；game 进程 `heartbeat_delivered_total = heartbeat_executed_total = 1404`，没有跳拍计数，game 日志没有 WARN / ERROR；`make dev-stop` 正常。两点如实记录：① 生成配置里 game 连 `127.0.0.1:2379` 的 etcd（本机恰好有一个在跑，注册键带工程名前缀 `/hbsmoke/services/...`），README 的 sed 不改它；② 同一环境里另做的登录风暴（[INTEREST-SINGLE-WRITER-20261022 §6](../performance/INTEREST-SINGLE-WRITER-20261022.md#6-没做的与不能证明的)）发现 100 个以上玩家同时挤在出生点时，每个复制会话持有对象超过 Manager `Limits.MaxObjects`（缺省 100），会话被关闭（`frame: object limit exceeded`），见 KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”。
 
+**冒烟结果的后续（2026-10-22，维护者按推荐处理）**：
+
+- **出生点挤满 → 主视野 `MaxVisible` 64**：`internal/service/game/scene.go` 的 `sceneMaxVisible = 64`、`sceneReservedObjects = 3`（自身、场景实体、对局队友；GroupSize 2、同时只在一个队里），`newSceneOn` 启动时核对 64 + 3 ≤ `frame.DefaultLimits().MaxObjects`（100），其余 33 留给以后加的关系视野。红测试 `TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（生成工程 `internal/service/game`，100 个玩家 + 3 只怪挤在出生点，内存里约 0.03s）：修前 `scene_test.go:496: 100 of 100 replication sessions were closed at a crowded spawn point (0 still open)`，日志 100 条 `frame: object limit exceeded`，与风暴 100 人全部被关一致；修后每个会话都开着、每人恰好持有 64 个其他目标。
+- **机器人判“复制会话没被关”**：会话因编码失败被关时连接不断、请求照常应答，客户端收不到关闭帧，所以不能“断言没收到关闭帧”；改为场景最后一步 `scene_alive`：自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败。单测 `TestSceneAliveFailsWhenTheServerStopsReplicating`（帧不来时失败、来了通过；把等待去掉的变异让它红：`帧不再到达，scene_alive 应当失败并说明复制已停：<nil>`）。
+- **200 人里 72 个 `connect` 失败 = 单 IP 连接上限**：当次 game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`（scratchpad 里留存的 storm-trial 产物），机器人全从 127.0.0.1 来，`player_access.tcp.max_connections_per_ip` 缺省 128，200 − 128 = 72；README“常见问题”与 WALKTHROUGH 原本已写，不是缺陷，不改缺省。
+- **“超出 `MaxObjects` 由 Manager 拒绝”的措辞**已按代码改正（超出时关闭整个会话），见 KNOWN-LIMITS“广播与 AOI”③、[guide/04-sync](../framework/guide/04-sync.md)、[ENTITY_SYNC](../framework/ENTITY_SYNC.md#容量与观测)。
+- **game 连本机 etcd**：生成配置 `etcd.endpoints: [127.0.0.1:2379]`，用于服务注册（键前缀 `/<工程名>/services/`）；README 的 sed 不改它，已写进 README“常见问题”。不修。
+- 留给维护者：编码失败关掉的复制会话不断开连接（A 断开让客户端重连 / B 保持），见 KNOWN-LIMITS 同节。
+
+**待补测（今晚）**：维护者 2026-10-22 08:25 定 100 / 200 个机器人的 loadtest 属压测，放到当晚。复跑（私有依赖环境，端口偏移按当时空闲选，下例 26000；十份配置的 sed 见 demo README，偏移 26000 时 Mongo 53117–53119、NATS 40222、Redis 42379）：
+
+```bash
+ROOST_IT_HOME=<scratch>/env ROOST_IT_PORT_OFFSET=26000 bash wiring/scripts/integration/dataengine-env.sh up
+GOWORK=off go run ./codegen/cmd/roost project new <唯一名> -module example.com/<唯一名> -template game-demo --skip-deps -out <scratch>/<唯一名>
+cd <scratch>/<唯一名> && go mod edit -replace github.com/tjbdwanghaibo/roost-core=<worktree>
+# 按 README 改十份配置；200 个机器人要放开单 IP 上限：
+sed -i '' 's#max_connections_per_ip: 128#max_connections_per_ip: 512#' configs/service/config.game.yaml
+GOFLAGS=-mod=mod make dev-run
+GOFLAGS=-mod=mod make loadtest LOADTEST_COUNT=100 LOADTEST_ACCOUNT_NATS=nats://127.0.0.1:40222; echo rc=$?
+GOFLAGS=-mod=mod make loadtest LOADTEST_COUNT=200 LOADTEST_ACCOUNT_NATS=nats://127.0.0.1:40222; echo rc=$?   # 两轮间隔 ≥ 60s（duel 票 TTL）
+grep -c 'object limit exceeded' .dev/game.log                 # 期望 0
+curl -s 127.0.0.1:9100/metrics | grep -E 'player_tcp_connection_rejected_total|entitysync_sessions_lost_total'
+make dev-stop
+ROOST_IT_HOME=<scratch>/env ROOST_IT_PORT_OFFSET=26000 bash wiring/scripts/integration/dataengine-env.sh reset
+```
+
+判据：两轮 rc=0（`scene_alive` 全过），game 日志没有 `object limit exceeded`，`per_ip` 拒绝为 0。只是冒烟，不下性能结论。要看改前的样子，把生成工程 `scene.go` 里 `MaxVisible: sceneMaxVisible,` 一行删掉再跑 100 人：期望 `scene_alive` 失败、日志出现 `object limit exceeded`（本轮没跑）。
+
 ### P4 实施结果（2026-10-21）
 
 **状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；已合入 main）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。

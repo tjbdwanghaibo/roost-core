@@ -315,7 +315,8 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   `OnEntityLoaded` 上的钩子把场景的 subject `Rebind` 到新实例，稍后进入视野的观察者照常收到它；`Scene.Close` 停重载后解钩。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。场景帧走 `PushSyncPlayer`：RS v2 Sync 标志、原始帧字节、
   不包 `EntitySyncPush` PB，robot session 对 Sync 包不做 PB 解码，`scene_watch` 直接读包体（没有 Sync 标志的 `MsgEntitySync` 推送
-  让 watch 失败）；回归见生成的 `cmd/loadtest/scene_watch_test.go`。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
+  让 watch 失败）；回归见生成的 `cmd/loadtest/scene_watch_test.go`。场景最后一步 `scene_alive` 自己 `add_exp 1`，等这次改动作为帧落到自己的
+  subject 上：服务端因编码失败（例如持有对象超过 `MaxObjects`）关掉的复制会话**不断开连接**，请求照常应答、只是不再有帧，没有这一步时整轮仍判成功。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
 
 ## 刷新：场景该有多少东西活着
 
@@ -373,6 +374,12 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **被看的用 entity id，看的人用 player id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id
   只在 kind 内唯一，拿它索引目标会让 Player 42 和 Monster 42 相撞。观察者是玩家，就是 player id，也是 Manager 的会话 id；
   `Enter(playerID, entityID, …)` 两个都给，玩家实体到 player id 的换算只在 `playerOf` 一处。
+- **主视野最多看 64 个（`sceneMaxVisible`）**：范围内多于 64 个时只留最近的 64 个（AOI 的 `MaxVisible`，近的进来挤掉最远的）。
+  所有玩家从同一出生点进场，不设上限时挤在出生点的人加上旁边的怪会让每个玩家的复制会话持有超过 Manager 的 `Limits.MaxObjects`
+  （缺省 100，也是一个会话能持有的对象数）；超出时下一帧编不出来，Manager 关掉这个会话（`frame: object limit exceeded`）——
+  2026-10-22 的登录风暴里 100 个机器人的会话全部因此被关。取值：会话除主视野外还持有自己、场景实体、对局队友（GroupSize 2，同时只在一个队里）
+  共 3 个（`sceneReservedObjects`），64 + 3 离 100 还留 33 个，给以后加的关系视野（公会、多人队伍）；`newSceneOn` 启动时核对两者之和不超过上限。
+  回归：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点，会话都不关、每人恰好看到 64 个）。
 - **滞回**：进圈 120、出圈 150。在边界上来回微动不产生 Enter/Leave 抖动——每一次抖动都会重发一次快照。
 - **格边长约等于视野半径**：一个观察者订阅的格数是 `(⌈2·出圈半径/格边长⌉+1)²`，格子远小于视野不会让 AOI 更准
   （半径判定本来就是精确的），只会让观察者每动一步的簿记成倍增加。框架不强制这个比值，所以它写在 `scene.go` 的注释里。
@@ -548,6 +555,10 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
 **`-count` 不要超过 `player_access.tcp.max_connections_per_ip`（默认 128）**：机器人全从一个 IP 来，超出的连接在握手前就被
 server 关掉，机器人报 `connect: auth send: robot session: closed`，server 侧计入 `player_tcp_connection_rejected_total{reason}`。
 600 个机器人的实跑正好 128 成功、472 这样失败——这是上限在工作，不是缺陷；要压更大就在 game 配置里调高它。
+2026-10-22 登录风暴 200 个机器人里 72 个这样失败，game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`，同一原因。
+
+最后一步 `scene_alive` 判“服务端还在给这个客户端复制”：自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败
+（`scene_alive: … the server stopped replicating to it`），原因在 game 日志的 `scene: push to player failed, its replication session was closed`。
 
 - **runner / 场景树 / 动作注册 / 阈值门**全是框架的 `robot` 包，`cmd/loadtest/main.go` 只做三件事：注册本工程的消息
   （`action.MustRegisterCall` + 一个把泛型 Marshal 路由到生成的 pb 函数的 codec）、加载 `loadtest/scenarios/*.yaml`、

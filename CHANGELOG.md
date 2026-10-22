@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### game-demo：出生点挤满时复制会话被关闭（DESIGN-TODO D20 P3 冒烟后续，维护者 2026-10-22 按推荐）
+
+- **原因**：2026-10-22 登录风暴里所有玩家挤在同一出生点，demo 的空间视野不设 `MaxVisible`，每个复制会话持有的对象超过 Manager `Limits.MaxObjects`（缺省 100）后下一帧编码失败，Manager 关闭该会话（`frame: object limit exceeded`）：100 个机器人 100 个会话全部被关、200 个时 128 个；机器人场景不检查复制，照样判成功。
+- **修复（game-demo 模板，行为变化）**：主视野只留最近的 `sceneMaxVisible = 64` 个；会话另持有自身、场景实体、对局队友共 `sceneReservedObjects = 3` 个，`newSceneOn` 启动时核对两者之和不超过 `frame.DefaultLimits().MaxObjects`，余下 33 个留给以后加的关系视野。范围内多于 64 个时近的挤掉远的，没入选的目标要等下一次移动才重新参评。
+- **新增（loadtest）**：场景最后一步 `scene_alive`——自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败。复制会话因编码失败被关时连接不断、请求照常应答，只有这一步能在冒烟里看到。
+- **测试**：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点；修前 `100 of 100 replication sessions were closed at a crowded spawn point (0 still open)`）、`TestSceneAliveFailsWhenTheServerStopsReplicating`。
+- **文档**：“超出 `MaxObjects` 由 Manager 拒绝”的说法改正为“下一次 Flush 编码失败、关闭整个会话”（guide/04-sync、ENTITY_SYNC、KNOWN-LIMITS）；同一次 200 人风暴里 72 个 `connect` 失败查明是单 IP 连接上限 `player_access.tcp.max_connections_per_ip`（缺省 128，`player_tcp_connection_rejected_total{reason="per_ip"} 72`），不是缺陷；生成配置的 game 连本机 `127.0.0.1:2379` 的 etcd 写进 demo README。
+- **升级**：demo 文件只在 `project new` 时写出、归应用所有，`project sync` / `project upgrade` 不改写它们，已生成的工程要手工照模板改 `scene.go` 的 `AOIConfig.MaxVisible` 并在场景末尾加 `scene_alive`。存储格式与协议不变。
+- **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）。
+
 ### 技能与 Buff 的推进与驱动方式分开：心跳只是驱动之一（DESIGN-TODO D20，维护者 2026-10-21 决定）
 
 - **维护者决定（2026-10-21）**：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只使用接口。技能与 Buff 两边都改。
