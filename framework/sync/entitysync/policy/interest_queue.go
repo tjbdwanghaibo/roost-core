@@ -60,8 +60,8 @@ func (in *Interest) QueueMove(e entity.IThreadSafeEntity, at spatial.Point) erro
 	return in.queueFact(e, queuedInterestFact{at: at})
 }
 
-// queueFact 只取登记侧短锁：检查边界、目标是否登记与预算，记下目标当前的代际，持有发布屏障并追加到日志。
-// 不做 AOI 工作，不等应用方。
+// queueFact 是“登记侧记录事实”一段，只取登记侧短锁（registry.mu）：检查边界、目标是否登记与预算，记下目标当前的
+// 代际，持有发布屏障并追加到日志。不做 AOI 工作，不等应用方，不读写应用侧（Interest.mu 保护的）状态。
 func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFact) error {
 	if e == nil || e.Base() == nil {
 		return errors.New("policy: entity required")
@@ -99,6 +99,112 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 	return nil
 }
 
+// ---- 登记侧的锁内读写（应用方经这些函数跨锁，拿回值快照）----
+//
+// registry.log / facts / active 受 registry.mu 保护：登记侧（queueFact、视野命令）在锁内写；应用方与诊断读（持
+// Interest.mu）只经下面的函数在 registry.mu 内读写，带回的是值，锁外不再回读这些字段。锁序 Interest.mu → registry.mu。
+
+// registryBacklog 是登记侧积压的快照：日志条目数（事实 + 命令）、门控事实的预算占用（日志里的、应用中的与已应用
+// 未结算的）与是否登记过任何条目。
+type registryBacklog struct {
+	entries, facts int
+	active         bool
+}
+
+// backlog 在 registry.mu 内取积压快照。
+func (r *viewRegistry) backlog() registryBacklog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return registryBacklog{entries: len(r.log), facts: r.facts, active: r.active}
+}
+
+// takeLog 取走整条日志交给应用方执行（日志置空，新登记的条目从头追加）；日志为空时返回 nil 且不动 r.log——
+// 上一步 requeue 留下的空切片带着容量，下一批登记直接复用它，不重新分配。
+//
+// 提交条件只读取框架原子门，不调用业务。必须在取日志的同一短锁内固定：若锁外才读 ready，producer 可能刚追加
+// 同一 handler 的后半段并提交，导致本步只应用前半段。这里 ready 意味着该提交的全部事实已经在日志里——提交在
+// 全部事实登记之后才 Release，读到 ready 时它的登记都在本快照里，所以一笔可取用提交的结束位置就在快照之内。
+func (r *viewRegistry) takeLog() []logEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.log) == 0 {
+		return nil
+	}
+	batch := r.log
+	r.log = nil
+	for i := range batch {
+		if batch[i].op == nil {
+			batch[i].fact.ready, batch[i].fact.discarded = batch[i].fact.condition()
+		}
+	}
+	return batch
+}
+
+// requeued 是 requeue 带回的快照：执行期间新登记的条目数、日志里是否仍有事实（可能在等提交确认），以及预算占用。
+type requeued struct {
+	arrived int
+	waiting bool
+	facts   int
+}
+
+// requeue 把留下的条目放回日志：它们必须仍在执行期间新登记的条目之前（等着的事实与切点之后的部分）。
+func (r *viewRegistry) requeue(pending []logEntry) requeued {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	after := requeued{arrived: len(r.log), facts: r.facts}
+	r.log = append(pending, r.log...)
+	for _, entry := range r.log {
+		if entry.op == nil {
+			after.waiting = true
+			break
+		}
+	}
+	return after
+}
+
+// releaseFacts 把结算释放的 n 条事实移出预算，返回剩下的预算占用。
+func (r *viewRegistry) releaseFacts(n int) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.facts -= n
+	return r.facts
+}
+
+// registryDrainSnapshot 是 Drain 诊断在 registry.mu 内取的快照：日志里的门控事实（按登记顺序，同一 ID 只取第一条，
+// commitPending 表示它的提交还没确认），日志里的事实数与命令数，以及预算占用。诊断的其余部分在锁外只用这些值。
+type registryDrainSnapshot struct {
+	facts            []drainFact
+	queued, commands int
+	budget           int
+}
+
+type drainFact struct {
+	id            int64
+	commitPending bool
+}
+
+func (r *viewRegistry) drainSnapshot() registryDrainSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snapshot := registryDrainSnapshot{budget: r.facts}
+	seen := make(map[int64]bool)
+	for _, entry := range r.log {
+		if entry.op != nil {
+			snapshot.commands++
+			continue
+		}
+		snapshot.queued++
+		fact := entry.fact
+		if seen[fact.id] {
+			continue
+		}
+		seen[fact.id] = true
+		ready, discarded := fact.condition()
+		snapshot.facts = append(snapshot.facts, drainFact{id: fact.id, commitPending: !ready && !discarded})
+	}
+	return snapshot
+}
+
 // ---- 日志的执行（单写者，REFACTOR-2026-10-21-interest-single-writer）----
 //
 // 全部写入口只在登记侧追加日志；应用方（同步模式：Manager Flush 的政策阶段；异步模式：应用线程；以及显式 Apply 与
@@ -116,6 +222,11 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 //     的移动、再 Leave → Enter”与“先应用移动、再 Leave → Enter”逐项相同），命令不被它后面的事实越过，提交不切开。
 //     代价：一步可以比上限多出交错进来的条目（已取用提交的后续事实之前、别的线程登记的命令与别的提交的事实，以及
 //     为了让这些提交也结束而再往后取的条目），上界是这一步取到的日志快照。
+//
+// 阶段与锁边界：登记侧记录事实与命令（queueFact、视野入口，只持 registry.mu）→ 应用器更新空间（runLogLocked：
+// takeLog / executeLogLocked（含 recordStepLocked）/ requeue，持 mu）→ 结算生成关系（applyLocked → releaseAppliedLocked，
+// 持 mu）→ Drain 读诊断（queuedPending / drainStalls，持 mu）。后三段需要登记侧的数据时只经“登记侧的锁内读写”
+// 一节的函数在 registry.mu 内取值快照，锁外只用快照，不回读 registry 字段。
 //
 // 异步模式的唤醒：登记时非阻塞通知应用线程；periodic 模式下提交确认没有通知（Manager.WakeSync 只在 on_change
 // 生效），所以日志里有未确认事实时按 applierPollMin 起、最长 applierPollMax 的退避轮询提交门。
@@ -295,27 +406,27 @@ func (in *Interest) drainLogLocked() {
 // 由下一次结算释放）。到了上限——取用的事实到达 BatchSize，或 unitLimit > 0 时执行的单位（命令与取用的事实）到达
 // unitLimit——之后，在第一个前缀边界切开（见上文规则；0 不限单位，应用线程与显式 Apply 用）。执行的单位数累加到
 // unsettledUnits。返回 progressed（执行了命令或完成了事实）、more（还有可执行的条目没取完）、waiting（日志里仍有
-// 事实，可能在等提交确认）。调用方持有 mu。
+// 事实，可能在等提交确认）。调用方持有 mu、不持 registry.mu。
+//
+// 一步分三段，锁边界在段之间：takeLog（登记侧锁内取走日志）→ executeLogLocked（只持 mu，更新空间，末尾经
+// recordStepLocked 记下待结算的状态）→ requeue（登记侧锁内放回留下的条目，带回计数快照）。
 func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool) {
-	r := &in.registry
-	r.mu.Lock()
-	if len(r.log) == 0 {
-		r.mu.Unlock()
+	batch := in.registry.takeLog()
+	if len(batch) == 0 {
 		return false, false, false
 	}
 	started := time.Now()
-	batch := r.log
-	r.log = nil
-	// 提交条件只读取框架原子门，不调用业务。必须在取日志的同一短锁内固定：若锁外才读 ready，producer 可能刚追加
-	// 同一 handler 的后半段并提交，导致本步只应用前半段。这里 ready 意味着该提交的全部事实已经在日志里——提交在
-	// 全部事实登记之后才 Release，读到 ready 时它的登记都在本快照里，所以一笔可取用提交的结束位置就在快照之内。
-	for i := range batch {
-		if batch[i].op == nil {
-			batch[i].fact.ready, batch[i].fact.discarded = batch[i].fact.condition()
-		}
-	}
-	r.mu.Unlock()
+	pending, progressed, more := in.executeLogLocked(batch, unitLimit)
+	after := in.registry.requeue(pending)
+	metrics.SetGauge(factBacklogMetric, nil, int64(after.facts))
+	metrics.ObserveHistogram(applyDurationMetric, nil, time.Since(started))
+	return progressed, more || after.arrived > 0, after.waiting
+}
 
+// executeLogLocked 是“应用器更新空间”一段：按切点规则执行 batch（takeLog 的快照），命令改应用侧状态，就绪事实
+// 进 AOI 批次，完成的事实交给 recordStepLocked。只读写应用侧状态（持 mu），不碰登记侧字段。返回留在日志里的条目
+// （等着的事实与切点之后的部分，按原顺序，由调用方 requeue）、progressed 与 more（含义同 runLogLocked）。
+func (in *Interest) executeLogLocked(batch []logEntry, unitLimit int) (pending []logEntry, progressed, more bool) {
 	wait := waitingFacts(batch)
 	// lastOf：每笔可取用提交在快照里最后一条事实的位置。取用了它的一条事实，切点就不能早于这里。
 	lastOf := make(map[*entity.SyncMutation]int)
@@ -325,7 +436,7 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 		}
 	}
 	failedKeys := make(map[subjectGen]bool)
-	pending := make([]logEntry, 0, len(batch))
+	pending = make([]logEntry, 0, len(batch))
 	completed := make([]queuedInterestFact, 0, len(batch))
 	var failed error
 	// reach：已取用提交里最靠后的那条事实的位置；位置大于它的地方才是前缀边界。
@@ -393,27 +504,23 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 		}
 	}
 	endBatch()
-	r.mu.Lock()
-	// 留下的条目必须仍在新登记的条目之前（等着的事实与切点之后的部分）。
-	arrived := len(r.log)
-	r.log = append(pending, r.log...)
-	waiting = false
-	for _, entry := range r.log {
-		if entry.op == nil {
-			waiting = true
-			break
-		}
+	if len(completed) > 0 {
+		progressed = true
 	}
-	backlog := r.facts
-	r.mu.Unlock()
-	more = more || arrived > 0
+	in.recordStepLocked(completed, units, failed, progressed)
+	return pending, progressed, more
+}
+
+// recordStepLocked 记下一步执行之后待结算的应用侧状态：完成的事实（应用了的、作废的与被丢弃的）进 applied（屏障
+// 由下一次结算释放），执行过条目就标记 unsettled，单位数计入预算，无法应用的错误留给下一次政策阶段。只读写应用侧
+// 状态（持 mu）。completed 只复制元素、不保留切片本身（它分配在 executeLogLocked 的栈上）。
+func (in *Interest) recordStepLocked(completed []queuedInterestFact, units int, failed error, progressed bool) {
 	in.applyErr = errors.Join(in.applyErr, failed)
 	if len(completed) > 0 {
 		if len(in.applied) == 0 {
 			in.appliedAt = time.Now()
 		}
 		in.applied = append(in.applied, completed...)
-		progressed = true
 	}
 	if progressed {
 		in.unsettled = true
@@ -423,9 +530,6 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 	if progressed && in.applyMode == ApplyAsync {
 		in.wake()
 	}
-	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
-	metrics.ObserveHistogram(applyDurationMetric, nil, time.Since(started))
-	return progressed, more, waiting
 }
 
 // waitingFacts 标出这一步留在原位等的事实（与 batch 一一对应）：
@@ -475,10 +579,7 @@ func (in *Interest) settleQueued() error {
 	if in.closed {
 		return nil
 	}
-	in.registry.mu.Lock()
-	active := in.registry.active
-	in.registry.mu.Unlock()
-	if !active {
+	if !in.registry.backlog().active {
 		return nil
 	}
 	started := in.now()
@@ -525,10 +626,7 @@ func (in *Interest) runSyncStepsLocked(started time.Time) time.Time {
 			break
 		}
 	}
-	in.registry.mu.Lock()
-	left := len(in.registry.log)
-	in.registry.mu.Unlock()
-	metrics.SetGauge(logBacklogMetric, nil, int64(left))
+	metrics.SetGauge(logBacklogMetric, nil, int64(in.registry.backlog().entries))
 	return now
 }
 
@@ -542,32 +640,25 @@ func (in *Interest) releaseAppliedLocked() {
 	for _, fact := range in.applied {
 		fact.finish()
 	}
-	in.registry.mu.Lock()
-	in.registry.facts -= len(in.applied)
-	backlog := in.registry.facts
-	in.registry.mu.Unlock()
+	backlog := in.registry.releaseFacts(len(in.applied))
 	clear(in.applied)
 	in.applied = in.applied[:0]
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 }
 
 // queuedPending 告诉 Drain 政策还有没做完的事：日志里的条目、应用中与已应用未结算的事实、应用方已执行但还没结算的
-// 条目（unsettled），以及还没停滞的重试 pair。
+// 条目（unsettled），以及还没停滞的重试 pair。登记侧的计数取 backlog 快照，unsettled / retry 是应用侧状态（持 mu）。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return false
 	}
-	r := &in.registry
-	r.mu.Lock()
-	pending := len(r.log) > 0 || r.facts > 0
-	active := r.active
-	r.mu.Unlock()
-	if !active {
+	backlog := in.registry.backlog()
+	if !backlog.active {
 		return false
 	}
-	if pending || in.unsettled {
+	if backlog.entries > 0 || backlog.facts > 0 || in.unsettled {
 		return true
 	}
 	for _, key := range in.retry {
@@ -620,6 +711,10 @@ func (in *Interest) noteRefusedLocked(key pair, err error) {
 // drainStalls 是 Drain 超时诊断（entitysync.PolicyHooks.Stalls）：列出仍让 queuedPending 为真的条目——
 // 日志里的事实（按登记顺序，同一 ID 只列一次）与命令，以及拒绝次数未到 retryStallAfter 的重试 pair。
 // 排队事实不记录入队时间（入队在 Entity 锁内，不为诊断多读一次时钟），Waited 为 0。
+//
+// 登记侧的事实与计数只取一次 drainSnapshot（registry.mu 内），之后全部判断都用这份快照：QueueMove 只持
+// registry.mu 改 facts，锁外回读会与它竞争，且同一次诊断里的两次读取可能互相矛盾（RV-20261022-03）。
+// unsettled、retry、refused 是应用侧状态，由这里持有的 mu 保护。
 func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -634,35 +729,21 @@ func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 			stalls = append(stalls, stall)
 		}
 	}
-	r := &in.registry
-	r.mu.Lock()
-	seen := make(map[int64]bool)
-	queued, commands := 0, 0
-	for _, entry := range r.log {
-		if entry.op != nil {
-			commands++
-			continue
-		}
-		queued++
-		fact := entry.fact
-		if seen[fact.id] {
-			continue
-		}
-		seen[fact.id] = true
+	registry := in.registry.drainSnapshot()
+	for _, fact := range registry.facts {
 		reason := "queued_fact"
-		if ready, discarded := fact.condition(); !ready && !discarded {
+		if fact.commitPending {
 			reason = "commit_pending"
 		}
 		add(entitysync.DrainStall{Source: "interest", Subject: fact.id, Reason: reason})
 	}
-	if commands > 0 {
-		add(entitysync.DrainStall{Source: "interest", Reason: "queued_commands", Detail: fmt.Sprintf("%d command(s) not yet applied", commands)})
+	if registry.commands > 0 {
+		add(entitysync.DrainStall{Source: "interest", Reason: "queued_commands", Detail: fmt.Sprintf("%d command(s) not yet applied", registry.commands)})
 	}
-	if inflight := r.facts - queued; inflight > 0 && queued == 0 {
+	if inflight := registry.budget - registry.queued; inflight > 0 && registry.queued == 0 {
 		add(entitysync.DrainStall{Source: "interest", Reason: "facts_in_flight", Detail: fmt.Sprintf("%d fact(s) being applied", inflight)})
 	}
-	r.mu.Unlock()
-	if in.unsettled && r.facts == 0 {
+	if in.unsettled && registry.budget == 0 {
 		add(entitysync.DrainStall{Source: "interest", Reason: "applied_unsettled", Detail: "applied commands wait for the next settle"})
 	}
 	now := time.Now()

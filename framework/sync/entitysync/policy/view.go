@@ -115,6 +115,8 @@ type viewRegistry struct {
 	// viewChanged：SetObserverView 的限速，按玩家记最近一次生效的时间。
 	viewChanged map[int64]time.Time
 	// log：有序日志；facts：门控事实的预算占用（日志里的、应用中的与已应用未结算的）。
+	// log / facts / active 与上面的字段一样受 mu 保护；应用方（持 Interest.mu）只经 takeLog / requeue / releaseFacts /
+	// backlog / drainSnapshot（interest_queue.go）在 mu 内读写并带回值快照，锁外不回读。
 	log   []logEntry
 	facts int
 	// active：登记过任何条目之后为真，此后 Manager 的政策阶段结算并重试本 Interest。

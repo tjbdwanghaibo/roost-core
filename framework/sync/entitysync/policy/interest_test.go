@@ -980,6 +980,53 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 	})
 }
 
+// Drain 诊断与登记并发：诊断用的事实计数只在登记侧锁内读取（RV-20261022-03）。用例先走到“已应用、未结算、
+// 没有排队事实”的状态（applied-unsettled）——只有这个状态下诊断才会去比较事实计数，已结算的状态会短路那次读取，
+// 在那里跑通不能说明没有竞争。随后一边 QueueMove 一边取诊断，-race 下锁外读取会报数据竞争。
+// 两种应用模式都走手动应用（不启动后台应用线程），事实只登记、不被应用，诊断看到的是确定的两种状态之一。
+func TestDrainStallsReadsFactCountUnderTheRegistryLock(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		m := newManager(t)
+		in := newInterestMode(t, m, mode)
+		manualApplier(in)
+		e := factEntity(t, 2)
+		if err := in.Show(e.ID(), spatial.Point{X: 10, Y: 10}); err != nil {
+			t.Fatal(err)
+		}
+		in.applyStep()
+		if stalls, _ := in.drainStalls(8); len(stalls) != 1 || stalls[0].Reason != "applied_unsettled" {
+			t.Fatalf("applied but unsettled: stalls = %+v", stalls)
+		}
+		in.maxQueuedFacts = 10000
+		const moves = 2000
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for range moves {
+				if err := in.QueueMove(e, spatial.Point{X: 20, Y: 20}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+		for range moves {
+			stalls, total := in.drainStalls(8)
+			// 每次诊断取的是一个一致的快照：要么还没有排队事实（applied_unsettled），要么有（queued_fact，且不再报
+			// applied_unsettled）。
+			if total != len(stalls) || len(stalls) != 1 {
+				t.Fatalf("stalls = %+v (total %d)", stalls, total)
+			}
+			if reason := stalls[0].Reason; reason != "applied_unsettled" && reason != "queued_fact" {
+				t.Fatalf("stall reason = %q", reason)
+			}
+		}
+		<-done
+		if stalls, _ := in.drainStalls(8); len(stalls) != 1 || stalls[0].Reason != "queued_fact" || stalls[0].Subject != e.ID() {
+			t.Fatalf("after %d queued moves: stalls = %+v", moves, stalls)
+		}
+	})
+}
+
 // stepApplier 让应用线程走一步（与后台应用线程互斥于 Interest.mu，可以同时存在）。同步模式没有应用线程，
 // 事实由下一次 Flush 的政策阶段应用，这里什么也不做。
 func stepApplier(t *testing.T, in *Interest) {

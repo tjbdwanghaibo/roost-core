@@ -186,7 +186,7 @@ type Interest struct {
 	viewInterval time.Duration
 	now          func() time.Time
 
-	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写 ----
+	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写（登记侧不持 mu，从不读写它们）----
 	mu               sync.Mutex
 	subscriptions    *entitysync.SubscriptionSource
 	aoi              *AOI
