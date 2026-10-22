@@ -77,7 +77,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
    - 门控事实：被丢弃（回滚 / 拒绝）的完成并释放屏障；**代际号不等于目标当前的代际**（期间被 Leave / Hide / 再次放置）的同样丢弃；未确认的留在原位，同一 (目标, 代际) 后面的事实不能越过它，其他目标可以越过（同现在）；就绪的进入 AOI 批次。
    - 其他命令不等未确认的事实：它们不依赖提交，今天的直接调用也是在未确认事实之前就生效，这一点不变。与该事实同一目标的撤除 / 再次放置会换代际号，被越过的旧事实确认后作废，不会再把目标或跟随视野拖回去；与“先应用它、再执行命令”相比只差 Hide 之后跟随视野停在哪里（见 §4 行为变化 3）。
    - 命令在 AOI 批次之外串行执行（与今天直接调用相同的计算），连续的门控事实组成一个批次（同今天的写阶段 / 并行重评）。
-   - 一步取到 `BatchSize` 个就绪事实即在这里切开：之后的命令与事实留到下一步（同一提交不切开，同现在），保证已就绪的事实不会被它后面的命令越过。
+   - 一步取到 `BatchSize` 个就绪事实即在这里切开：之后的命令与事实留到下一步（同一提交不切开，同现在），保证已就绪的事实不会被它后面的命令越过。**2026-10-22 改为纯前缀切开**（维护者决定 A，§11.2）：原写法在切点之后仍取用同一提交的事实，会越过留下的命令；现在切点只落在已取用的提交全部结束之后，部分就绪的提交整笔等。
 3. 撤除命令（Leave / Unwatch / Hide）执行时，把因此释放到零的 pair 标记“换代”：同一次结算里它又被持有时，先退订再订阅，让 Manager 看到一次离开和一次进入（业务可能在两次调用之间注销 / 重新登记了目标或关闭 / 重开了会话）。
 
 ### 3.4 谁来执行（两种应用模式只差这一点）
@@ -249,12 +249,129 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 - **同时修正的用例口径**：`TestFlushSettlesButDoesNotApplyQueuedFacts` 假设“不经 queueFact 就没有应用线程”，重构后 Enter 等命令也会启动应用线程，它可能在断言前把注入的事实应用掉（`-race -count=50` 时出现 1 次 `Flush applied a queued fact on its own path: position={20 10} queued=0`）。改为先停掉后台应用线程（`manualApplier`），断言不变。
 - **验证**（rebase 到 `b86c4fa4` 之后）：`-race -count=50 ./framework/sync/entitysync/policy/` 通过；负载下（两份 `entitysync` 包 `-race -count=6` 并行，`policy` 包 `-race -count=20 -cpu=1,2,8`）通过；`glsvet ./framework/sync/entitysync/...` 退出 0；根包、`scripts/test-sync-modes-generated.sh` 通过。
 
-### 11.2 批次切点之后，同一提交的后续事实越过排在它前面的命令（2026-10-22，产品缺陷，本重构引入，**未修，待维护者决定**）
+### 11.2 批次切点之后，同一提交的后续事实越过排在它前面的命令（2026-10-22，产品缺陷，本重构引入，**已修：维护者 2026-10-22 决定 A，纯前缀切开**）
 
 - **现象**（做 §12 时读 `runLogLocked` 发现，探针确认）：一步取满 `BatchSize` 在某条事实处切开后，之后的命令留到下一步，但与已取用事实同一提交的后续事实仍被取用（“同一提交不切开”）。于是这条事实越过了排在它前面、被留下的命令。命令是同一目标的 `Hide` → `Show`（换代际）时，这条事实的代际号是新的、而应用侧仍是旧代际，按代际规则被作废：移动丢失，目标停在 `Show` 的位置。
 - **探针**（`main` `8428c75a`，未入库）：提交 X 在 Nest 守卫作用域里依次排 a 的移动、（另一提交 Y 排 d 的移动、业务线程 `Hide(b)` / `Show(b, {500 500})`）、b 的移动到 `{40 10}`，`BatchSize = 1`，`Apply()`：`b at {500 500} after log order [move a (X), move d (Y), Hide b, Show b, move b (X)], want {40 10}`；`BatchSize = 1024`（不切开）时 b 在 `{40 10}`。
-- **范围**：要求同一提交的两条事实之间有别的提交的就绪事实（让切点落在两者之间）与同目标的撤除 / 再放置命令；Nest 里提交 X 持有 b 的实体锁，`Hide` / `Show` 来自不经实体锁的直接调用（接入层、别的实体的提交后回调）。§12 的预算让同步模式下的切点更多（单位上限比 `BatchSize` 小），暴露面随之变大；切点规则本身没有变。
-- **可选修法**：A 切点只落在已取用提交全部结束之后（纯前缀切开：切点之前全部执行、之后全部留下；已取用提交的后续事实之前的命令与别的提交的事实一并执行），三条顺序规则（就绪事实不被后面的命令越过、命令不被后面的事实越过、同一提交不切开）同时成立，代价是一步可能比 `BatchSize` / 单位上限多出交错进来的条目（推荐）；B 允许在这种情况下把提交切开（提交的 AOI 效果分两次结算可见）；C 不改，KNOWN-LIMITS 写明。
+- **范围**：要求同一提交的两条事实之间有别的提交的就绪事实或命令（让切点落在两者之间）与同目标的撤除 / 再放置命令；Nest 里提交 X 持有 b 的实体锁，`Hide` / `Show` 来自不经实体锁的直接调用（接入层、别的实体的提交后回调）。§12 的预算让同步模式下的切点更多（单位上限比 `BatchSize` 小），暴露面随之变大。
+- **当时的选项**：A 切点只落在已取用提交全部结束之后（纯前缀切开）（推荐）；B 允许在这种情况下把提交切开（提交的 AOI 效果分两次结算可见）；C 不改，KNOWN-LIMITS 写明。
+
+#### 11.2.1 决定与规则（维护者 2026-10-22 选 A）
+
+维护者把四条约束收成一条规则——**一步只在日志的前缀边界停**：
+
+1. 就绪事实不被越过；
+2. 命令不被越过；
+3. 提交不切开；
+4. 预算 / `BatchSize` 只决定在哪个前缀边界停。
+
+实施后的执行规则（`runLogLocked`，ApplySync 政策阶段、ApplyAsync 应用线程、显式 `Apply()` 与诊断读共用）：
+
+- **一步的形状**：取出日志快照，从头按序处理；到了上限（取用的事实到达 `BatchSize`，或同步模式的单位数到达 `planSyncStep` 给的 n）之后，在第一个“已取用的提交全部结束”的位置切开——切点之前的条目全部处理过，之后的全部留下。“全部结束”按快照里的位置算：取用一笔提交的事实时，切点不能早于这笔提交在快照里的最后一条事实（`reach`）。
+- **留在原位的事实**（切点之前也不执行，同重构前）：未确认的；同一 `(目标, 代际)` 前面有留下的事实的；以及下面这一条新规则。其余条目（命令、别的事实）越过它们不违反上面四条：命令本来就不等未确认的事实（§3.3），被越过的事实确认后按代际规则处理。
+- **提交整笔取用**（新）：一笔提交在快照里只要有一条事实留在原位，它的事实这一步一条都不取用，整笔留在原位等（`waitingFacts`）。留下的事实又会挡住后面同一目标的事实，那些事实所属的提交也整笔等（连带），重复到没有新的提交被挡住为止。
+- **命令也是切点的候选位置**：单位上限到了以后，切点可以落在命令之前（重构后 §12 写的“命令不触发切开”只是为了不让旧切点产生新的越过关系，纯前缀之下不再需要）。所以只有命令的一段日志在同步模式下也按预算分到几步执行，§12.4 原来的这条例外不再成立。
+
+#### 11.2.2 未就绪的提交：整笔不取用（不选“整体等待”）
+
+一笔提交的事实分属几个实体时，各条的就绪由各自实体的提交门链决定（`syncCommitGate.ready` 沿 `previous` 走，前序提交没确认就不就绪），所以同一笔提交可能一条就绪、一条还在等。两种处理：
+
+- **整笔不取用（采用）**：这一步不取用它的任何事实，留在原位；后面的命令与别的提交照常执行。
+- **整体等待（不采用）**：一步停在这笔提交的第一条事实前面。后果是一笔慢提交（WAL 等待、Remote 确认）挡住它后面的全部命令与无关提交，退回到“命令等未确认事实”，违反 §3.3；也让一步的前进量取决于最慢的提交。
+
+为什么不会无限延长、不会饿死、不会死锁：
+
+- **一步有界**：提交在全部事实登记之后才 Release，而就绪要求 Release；提交条件与日志快照在登记侧同一把锁里读，所以任何一笔可取用（全部就绪）的提交的全部事实都在这一步的快照里，`reach` 不超过快照末尾。切点不等快照之外的条目，一步不会因“提交还没结束”而等待或越过快照。
+- **连带的计算有界**：`waitingFacts` 每多一轮至少多挡住一笔提交，轮数不超过快照里的提交数加一（通常一轮，有连带时两轮），单轮线性。
+- **不死锁**：事实是否就绪只取决于提交门（确认 / 放行 / 拒绝 / 丢弃），提交门从不等 Interest 应用（`HoldSyncPublication` 不阻止 Admit，`queueFact` 满了返回 `ErrInterestQueueFull` 而不是等）。
+- **不饿死**：就绪是单调的；前序提交确认（或拒绝、丢弃）之后，被挡住的提交在之后的一步里整笔可取用。按位置的连带只从前往后，等待集合由真实未通过的提交门决定，提交门全部通过后等待集合为空。前序提交结果不确定、永远不确认时（`Finish(indeterminate)`），它连带挡住的提交与重构前一样一直等（重构前只挡同一实体），积压由 `MaxQueuedFacts` 背压与 Drain 诊断（`commit_pending`）给出信号，等进程 fencing / recovery。
+- **代价**：同一笔提交里已就绪的实体（上例的 a）要等另一个实体（b）的前序提交确认，可见性晚于重构前（重构前 a 先应用、b 后应用，提交被切成两半）；连带时，同一目标后续提交也跟着等。
+
+#### 11.2.3 一步可能多出的量（上界）
+
+到了上限之后、切点之前多处理的条目 = 从到达上限的位置到“已取用提交（含为了让它们结束而再取用的提交）最后一条事实”之间的条目：已取用提交在 handler 期间别的线程登记进来的命令与别的提交的事实，以及这些提交又跨过的部分。上界是这一步取到的日志快照（门控事实不超过 `MaxQueuedFacts`，命令不受这个上限约束，见 KNOWN-LIMITS ④）。所以：
+
+- `BatchSize` 是一步取用就绪事实的软上限，AOI 一批可能多出交错进来的事实；
+- 同步模式的单位上限同样可能被超过，超出部分计入这一步的耗时，下一步的估计照常跟上（§12.4 新增一条例外）；
+- 交错只来自并发的 handler 与直接调用：单线程驱动（测试、离线工具）下提交是连续的，没有超出。
+
+#### 11.2.4 实施（`framework/sync/entitysync/policy`）
+
+- `interest_queue.go:299` `runLogLocked`：`:319` `waitingFacts` 标出留在原位的事实，`:321` `lastOf` 记每笔可取用提交在快照里最后一条事实的位置，`:340` 切点条件（到了上限且位置大于 `reach`），`:368` 取用事实时推进 `reach`，`:392` 应用失败的 `(目标, 代际)` 后续事实留到下一步；
+- `interest_queue.go:440` `waitingFacts`（`:453` 三条留下的条件，重复到不变）；
+- `interest_queue.go:113` 执行规则的注释、`interest.go:21` `BatchSize` 的说明。
+- 例外（错误路径）：一条事实应用失败（例如位置越界）时同一 `(目标, 代际)` 后面的事实这一步不再应用，它所属的提交因此分两步应用；失败本身让一次 Flush 返回错误（`TestQueuedFactThatCannotApplyFailsOneFlushOnly`）。
+
+#### 11.2.5 红 → 绿
+
+修前（`a766a285`，`GOWORK=off go test -count=1 -run 'TestACutStep|TestACommitWithAWaiting|TestUnitLimitStops' ./framework/sync/entitysync/policy/`，用例已改写进 `interest_apply_test.go`）：
+
+```
+--- FAIL: TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands/batch_size/sync (0.00s)
+    interest_apply_test.go:808: sync, BatchSize 1: b at {500 500} after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want {40 10}
+--- FAIL: TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands/batch_size/async (0.00s)
+    interest_apply_test.go:808: async, BatchSize 1: b at {500 500} after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want {40 10}
+--- FAIL: TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands/explicit_apply/sync (0.00s)
+    interest_apply_test.go:824: sync, Apply with BatchSize 1: b at {500 500} after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want {40 10}
+--- FAIL: TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands/explicit_apply/async (0.00s)
+    interest_apply_test.go:824: async, Apply with BatchSize 1: b at {500 500} after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want {40 10}
+--- FAIL: TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands/budget (0.00s)
+    interest_apply_test.go:842: ApplySync, budget of one unit: b at {500 500} after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want {40 10}
+--- FAIL: TestACommitWithAWaitingFactIsNotTakenInPart/sync (0.00s)
+    interest_apply_test.go:910: sync: while X's move of b waits for W: a at {25 10}, b at {900 900}, g at {60 10} (want X and Z held back whole at {900 900}); the later Show put c at {50 10} (want {50 10})
+--- FAIL: TestACommitWithAWaitingFactIsNotTakenInPart/async (0.00s)
+    （同上，async）
+--- FAIL: TestUnitLimitStopsBeforeACommandToo (0.00s)
+    interest_apply_test.go:927: a step limited to one unit over [Show 2, Show 3, Show 4] placed [{200 10} {300 10} {400 10}] (more false), want only 2 placed and more to run
+```
+
+- `TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands`：探针改写的正式回归，日志 `[move a (X), move d, Hide b, Show b, move b (X), move e]`；三种切点来源——`BatchSize 1`（两种模式，先单走一步再排空）、显式 `Apply()`（两种模式）、ApplySync 预算只够一个单位（每条事实 30ms、预算 25ms、`BatchSize` 64，注入时钟）。红落在承诺本身（b 的最终位置），另检查第一次切开的位置：X 整笔在这一步（b 已在 `{40 10}`），e 还没取（切点落在 X 结束之后的第一个边界）。
+- `TestACommitWithAWaitingFactIsNotTakenInPart`：`[move b (W，未确认)] [move a、move b (X)] [move g、move a (Z)] [Show c]`，一步之后 X、Z 整笔留下（Z 是连带），`Show c` 照常执行；W 确认后一步里按日志顺序全部应用。修前 a 被 X、Z 先移到 `{25 10}`，X 被切成两半。
+- `TestUnitLimitStopsBeforeACommandToo`：单位上限 1 时只执行一条命令，`more` 为真（行为变化：命令也触发切开）。修前三条命令一步执行完。
+- 修后全绿；包内既有用例 `TestPlanSyncStepRules` 与 4 条 `TestSyncApplyBudget*` 不改、照旧通过（`planSyncStep` 未改）。
+
+变异核对（在修后的代码上各改一处，用例全部在修后代码上运行）：
+
+| 变异 | 变红的用例与文本 |
+| --- | --- |
+| 恢复旧切点（只在就绪事实处切开、切点之后的命令留下，但仍取用已取用提交的后续事实） | `TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands` 五个子用例：`b at {500 500} after log order [...], want {40 10}`；`TestUnitLimitStopsBeforeACommandToo`：`placed [{200 10} {300 10} {400 10}] (more false)` |
+| 切点不等已取用提交结束（到了上限就切） | `.../batch_size/{sync,async}`、`.../budget`：`the first step left b at {900 900}: commit X was cut after its move of a, want its move of b {40 10} in the same step`（显式 `Apply` 排空到底，结果相同，不变红） |
+| 去掉“提交整笔取用”（只看未确认与同目标） | `TestACommitWithAWaitingFactIsNotTakenInPart`：`a at {25 10}, b at {900 900}, g at {60 10} (want X and Z held back whole ...)` |
+| 连带只算一轮（先按未确认标提交，再单遍标记） | `TestACommitWithAWaitingFactIsNotTakenInPart`：`a at {900 900}, b at {900 900}, g at {60 10}`（Z 的 g 先走，Z 被切开） |
+
+#### 11.2.6 既有用例的调整
+
+- `TestBatchLimitRetainsLaterEntityPublication`（同步模式预算 1ns）：两条 `Enter` 移到两条事实之前。原顺序 `[Enter 1, 事实 1, Enter 2, 事实 2]` 下，第二次政策阶段的单位上限是 1，按新规则只执行 `Enter 2` 就停（命令计入单位），断言“第二条事实在下一次应用后放行”要再走一次；断言不变，只改驱动顺序。修前修后都绿。
+
+#### 11.2.7 验证
+
+以下退出码均为 0（rebase 到合入“编码失败断开会话”之后的 main 上运行）：gofmt、`go vet ./framework/sync/... ./gameplay/movement/...`、`go run ./cmd/glsvet ./framework/sync/entitysync/...`、`-race -count=10 ./framework/sync/entitysync/policy/`、`-race ./framework/sync/... ./gameplay/movement/...`、根包、`scripts/test-sync-modes-generated.sh`、全量 `GOWORK=off go test -count=1 ./...`。没有跑压测：每步多一遍预扫描（`waitingFacts` 与 `lastOf`，线性，有连带时两遍）与两张小表，开销没有测。
+
+### 11.3 执行器“批次与结算”这一层剩下的约束，以及钉住它们的用例（2026-10-22）
+
+§10.7 的方向判断说过：日志收成一条之后，再出问题该看应用侧的批次与结算。这一层在重构后连续出了三处（§11.1 已执行未结算不计入 Drain，`d3a4486d`；§12 预算不计结算，`be49684b`；§11.2 切点越过命令，本节）。三处都不是入口的问题，而是“一步做多少、什么时候算做完”的规则各自写成了局部例外（“同一提交不切开”是切点的例外，“命令不触发切开”是预算的例外），例外之间互相打架。**方向判断**：是细节问题叠在一个缺少统一表述的前提上，不是单写者方向本身的问题；把切点收成“一步 = 日志的一个前缀减去整笔等待的提交”之后，一步的形状只剩两个自由度：哪些事实留在原位（只由提交门与同目标顺序决定），在哪个前缀边界停（只由上限决定）。之后若这一层再出问题，先看是不是又在这两条之外加了例外。
+
+剩下的约束与钉住它们的用例（`framework/sync/entitysync/policy`，“两种模式”指用例经 `forEachApplyMode` 各跑一遍）：
+
+| # | 约束 | 用例 |
+| --- | --- | --- |
+| 1 | 命令按登记顺序执行，已提交的移动不被之后的放置拖回 | `TestPlacementAfterAQueuedMoveIsNotDraggedBack`（两种模式） |
+| 2 | 一步只在前缀边界停：已取用提交的后续事实不越过留下的命令，切点落在第一个边界（`BatchSize` / 显式 `Apply` / 预算三种来源） | `TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands`、`TestUnitLimitStopsBeforeACommandToo`、`TestBatchLimitRetainsLaterEntityPublication` |
+| 3 | 提交整笔取用：部分就绪的提交整笔等，连带挡住同目标后续提交；命令不等它们 | `TestACommitWithAWaitingFactIsNotTakenInPart`（两种模式） |
+| 4 | 提交门：回滚 / 拒绝的事实不生效、释放屏障；Remote 拒绝只丢自己的事实 | `TestApplierNeverAppliesRolledBackFactsAndKeepsOrder`、`TestQueuedInterestFactsFollowCommitAndRollback`、`TestRemoteRejectKeepsCommittedLocalInterestFact`、`TestPureRemoteRejectDiscardsItsInterestFacts` |
+| 5 | 同一 `(目标, 代际)` 不越过未确认的前驱，其他目标可以越过（不饿死无关实体） | `TestApplierKeepsPerEntityOrderAcrossOutOfOrderConfirms`、`TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve` |
+| 6 | 被撤除 / 再放置越过的旧代际事实作废 | `TestAnUnconfirmedMoveOvertakenByLeaveAndEnterIsDropped`、`TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush` |
+| 7 | 撤除换代：同一次结算里撤除后又持有的 pair 先退订再订阅 | `TestLeaveAndEnterInOneSettleSubscribeTheReopenedSessionAgain` |
+| 8 | 发布屏障在结算之后才释放（内容与它带来的进出视野同一帧） | `TestAppliedFactHoldsContentUntilSettled`、`TestQueuedSpatialFactBlocksContentUntilPolicyApplied`、`TestPublicationHoldsReleaseOnDiscardAndClose` |
+| 9 | 应用中、已应用未结算的事实仍占 `MaxQueuedFacts` | `TestAppliedButUnsettledFactsKeepTheQueueBudget`、`TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve` |
+| 10 | Drain：日志、未结算的事实与已执行未结算的命令都算没做完；永远不被接受的重试停滞后不再挡 Drain | `TestPendingCountsAppliedButUnsettledCommands`、`TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen` |
+| 11 | ApplySync 一次政策阶段（执行 + 结算）按预算停，至少前进一个单位，积压在之后的 Flush 按序做完 | `TestSyncApplyBudgetFinishesWhatFitsInOnePolicyPhase`、`TestSyncApplyBudgetStopsWithinBudgetAndKeepsOrder`、`TestSyncApplyBudgetStillProgressesWhenOneStepExceedsIt`、`TestSyncApplyBudgetCountsTheSettle`、`TestPlanSyncStepRules`、`TestSyncApplyOneFlushDrainsTheCommittedBacklog` |
+| 12 | 无法应用的事实丢弃并只让一次 Flush 失败 | `TestQueuedFactThatCannotApplyFailsOneFlushOnly` |
+| 13 | 业务线程上的入口不等 AOI 批次 | `TestDirectCallsDoNotWaitForTheAOIBatch`（两种模式） |
+| 14 | 谁、何时执行日志：ApplySync 在政策阶段，ApplyAsync 在应用线程、Flush 只结算 | `TestApplyModeDecidesWhenACommittedMoveIsVisible`、`TestFlushSettlesButDoesNotApplyQueuedFacts` |
+| 15 | 政策阶段的拒绝交给 `OnRefusal` | `TestPolicyPhaseRefusalsReachOnRefusal` |
+
+没有用例钉住的：一步多出的量的上界（§11.2.3，只检查了“切点落在第一个边界”，没有对交错量做数值断言）；应用失败把同一提交分两步应用（错误路径，§11.2.4）；`waitingFacts` 连带的轮数上界（只有两轮的用例）。
 
 ## 12. ApplySync 预算把结算也算进去（2026-10-22，维护者决定 A）
 
@@ -278,7 +395,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
   - n < 1：停止（记 `budget_stop`，提醒 Manager，on_change 下立即再来一轮），剩下的留给下一次 Flush；
   - **本次政策阶段的第一步总要执行**，n 至少取 1；
   - c + σ 都还没测到（启动后的第一步）：不限单位数，只受 `BatchSize` 限制。
-- **切点**：单位数到达 n 后，在下一条就绪事实处切开，与 `BatchSize` 的切点是同一个位置、同一套规则（同一提交不切开，切点之后的命令与事实留到下一步）。命令本身不触发切开，所以不引入新的越过关系（已有的切点问题见 §11.2）。应用线程（ApplyAsync）与显式 `Apply` 不限单位数，行为不变。
+- **切点**：单位数到达 n 后，在第一个前缀边界切开，与 `BatchSize` 是同一条规则（2026-10-22 起为纯前缀切开，§11.2：切点之前全部执行、之后全部留下，切点只落在已取用的提交全部结束之后；命令也计入单位，切点可以落在命令之前）。应用线程（ApplyAsync）与显式 `Apply` 不限单位数，只受 `BatchSize` 限制。
 
 ### 12.3 为什么这样定
 
@@ -294,17 +411,19 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 - 每单位成本在相邻两步 / 两次结算之间稳定时，政策阶段不超过 B。以下情形可以超出：
   - **启动后（或成本还没测到时）的第一次**：没有估计，只受 `BatchSize` 与预留下限 B/10 约束；
   - **一个单位（或一个提交）本身超预算**：超出量为这一步加结算；
-  - **只有命令的一段日志**：命令不触发切开，整段在一步里执行（登录风暴这类命令密集的负载）；
+  - **已取用的提交跨过了切点**：切点要等已取用的提交全部结束，一步多执行其间交错进来的条目（§11.2 的上界）；
+  - （原有一条“只有命令的一段日志整段在一步里执行”，2026-10-22 纯前缀切开之后命令也触发切开，不再成立。）
   - **成本突变**：估计晚一步（执行）或一次结算（结算）跟上。
 - **可见性**：积压超过预算时，排在后面的事实与命令晚一个或几个 Flush 生效（全服同步节奏不变）。门控事实的发布屏障在应用并结算之后才释放，所以实体内容与它带来的进出视野仍在同一帧；被留下的事实仍计入 `MaxQueuedFacts`。
 - 同一 Interest 内单写者不变；成本估计只在应用侧（持 `mu`）读写。
 
 ### 12.5 强制点（`framework/sync/entitysync/policy`）
 
-- `interest_queue.go:172` `planSyncStep`（规则），`:163` `applyCosts`，`:168` 预留下限；
-- `interest_queue.go:463` `runSyncStepsLocked`（每步之前规划、步后更新 c、预算停止计数、剩余积压），`:425` `settleQueued`（结算计时、更新 σ、两个耗时指标）；
-- `interest_queue.go:293` `runLogLocked(unitLimit)`，`:318` 切点条件（`BatchSize` 或单位上限）；
-- `interest.go:810` 结算时清零已执行未结算的单位数；时钟是 `Interest.now`（测试可替换）。
+- `interest_queue.go:179` `planSyncStep`（规则），`:170` `applyCosts`，`:175` 预留下限；
+- `interest_queue.go:510` `runSyncStepsLocked`（每步之前规划、步后更新 c、预算停止计数、剩余积压），`:472` `settleQueued`（结算计时、更新 σ、两个耗时指标）；
+- `interest_queue.go:299` `runLogLocked(unitLimit)`，`:340` 切点条件（`BatchSize` 或单位上限，且已取用的提交都已结束，§11.2）；
+- `interest.go:811` 结算时清零已执行未结算的单位数；时钟是 `Interest.now`（测试可替换）。
+（行号为 2026-10-22 纯前缀切开之后。）
 
 ### 12.6 红 → 绿
 

@@ -36,6 +36,15 @@
 - **升级**：demo 文件只在 `project new` 时写出、归应用所有，`project sync` / `project upgrade` 不改写它们，已生成的工程要手工照模板改 `scene.go` 的 `AOIConfig.MaxVisible` 并在场景末尾加 `scene_alive`。存储格式与协议不变。
 - **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）——维护者 2026-10-22 决定 A，见本节上方“Sync：编码失败丢掉的复制会话断开该玩家”。
 
+### Interest：一步只在日志的前缀边界停，部分就绪的提交整笔等（维护者 2026-10-22 决定 A）
+
+- **原因**：一步取满 `BatchSize`（或 ApplySync 的预算单位）在某条事实处切开后，之后的命令留到下一步，但与已取用事实同一提交的后续事实仍被取用（“同一提交不切开”），越过了留下的命令；命令是同一目标的 `Hide` → `Show` 时这条移动按代际作废、丢失（单写者重构 `eed9c870` 引入，预算让切点更多）。
+- **维护者决定（2026-10-22）**：选 A，纯前缀切开——就绪事实不被越过、命令不被越过、提交不切开、预算 / `BatchSize` 只决定在哪个前缀边界停，四条收成一条规则；ApplySync、ApplyAsync 与显式 `Apply()` 同一条规则。
+- **改动（`framework/sync/entitysync/policy` `runLogLocked`）**：到了上限之后，切点落在第一个“已取用的提交全部结束”的位置，之前的条目全部处理、之后的全部留下。新增 `waitingFacts`：一笔提交在本步快照里只要有一条事实还在等（未确认，或被同一 `(目标, 代际)` 前面留下的事实挡住），整笔不取用，连带挡住同目标后续的提交（选“整笔不取用”而不是“整体等待”：后者让一笔慢提交挡住后面全部命令与无关提交）。一步不会越过快照：提交在全部事实登记之后才放行，可取用提交的全部事实都在快照里；就绪只取决于提交门，提交门不等 Interest，不死锁；就绪单调，不饿死。规则、论证与上界见 [单写者方案 §11.2](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#112-批次切点之后同一提交的后续事实越过排在它前面的命令2026-10-22产品缺陷本重构引入已修维护者-2026-10-22-决定-a纯前缀切开)。
+- **行为变化**：① 一步可能比 `BatchSize` / 预算单位多出交错进来的条目（已取用提交在 handler 期间别的线程登记的命令与别的提交的事实），上界是这一步取到的日志快照（KNOWN-LIMITS）；② 部分就绪的提交整笔等：同一笔里已就绪的实体要等另一实体的前序提交确认，可见性晚于修前（修前先应用就绪的一半、提交被切成两半）；③ 命令也计入切点：ApplySync 单位上限到了以后切点可以落在命令之前，只有命令的一段日志也按预算分步（原 KNOWN-LIMITS 的这条例外取消）。无 API 变化，无需清数据。
+- **测试**：`interest_apply_test.go` 新增 `TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands`（探针改写：`BatchSize 1` 两种模式、显式 `Apply` 两种模式、ApplySync 预算只够一个单位）、`TestACommitWithAWaitingFactIsNotTakenInPart`（两种模式，含连带）、`TestUnitLimitStopsBeforeACommandToo`；修前全部红（`b at {500 500} ... want {40 10}` 等），恢复旧切点 / 切点不等提交结束 / 去掉整笔取用 / 连带只算一轮四种变异各自变红。`TestBatchLimitRetainsLaterEntityPublication` 把两条 `Enter` 移到事实之前（命令计入单位后原驱动顺序要多走一次，断言不变）。方案 §11.3 列出执行器这一层剩下的约束与钉住它们的用例。
+- **未做**：压测（每步多一遍线性预扫描，开销没有测）。
+
 ### Interest：ApplySync 政策阶段的预算把结算也算进去（维护者 2026-10-22 决定 A）
 
 - **原因**：单写者重构后 ApplySync 的预算只在两步之间检查，检查通过后还会再执行一整步，之后的结算不计入；16 视野（诊断构建）政策阶段每 tick P95 38ms，Flush 超过一个周期，P99 128ms（[Interest 报告 §4](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#4-16-视野与-d19-历史数字)）。
@@ -43,7 +52,7 @@
 - **行为变化**：重负载下 ApplySync 的 AOI 变化晚一两个周期可见（换来 Flush 时长有上界、全服同步节奏不变）。不是硬上界：启动后第一次、一个单位或一个提交本身超预算、只有命令的一段日志、成本突变时可以超出（KNOWN-LIMITS）。无 API 变化，无需清数据。
 - **新指标**：`entitysync.interest.policy_duration`、`entitysync.interest.settle_duration`（Histogram）、`entitysync.interest.log_backlog`（Gauge，ApplySync 每次政策阶段结束时日志里剩下的条目）、`entitysync.interest.budget_stop.total`（Counter），已登记进 OBSERVABILITY。
 - **测试**：`interest_apply_test.go` 用注入的时钟（每条事实、每个进入事件的耗时）做确定性用例：预算内一次做完、预计超出时停在预算内且最终全部按序应用、单步超预算仍前进（切到一条）、结算计入预算，另有规则表 `TestPlanSyncStepRules`；修前三条红，去掉结算预留 / 去掉“第一步至少一个单位” / 切点忽略单位上限各自变红。
-- **发现（未修，待维护者决定）**：批次切点之后，同一提交的后续事实会越过排在它前面、被留下的命令，命令是同一目标的 `Hide` → `Show` 时这条移动按代际作废（探针已确认，单写者重构引入，预算让切点更多），见方案 §11.2。
+- **发现**：批次切点之后，同一提交的后续事实会越过排在它前面、被留下的命令，命令是同一目标的 `Hide` → `Show` 时这条移动按代际作废（探针已确认，单写者重构引入，预算让切点更多），见方案 §11.2；已按维护者 2026-10-22 决定 A 修复（上一条）。
 - **压测待补**（维护者 2026-10-22：先处理代码，压测放到今晚）：16 / 0 / 8 视野 ApplySync 前后对比的复跑命令见 [Interest 报告 §7](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#7-applysync-预算计入结算待补测今晚)。
 
 ### 技能与 Buff 的推进与驱动方式分开：心跳只是驱动之一（DESIGN-TODO D20，维护者 2026-10-21 决定）

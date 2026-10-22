@@ -54,7 +54,7 @@ Interest按视野归并（每个空间视野的距离与块覆盖、每个关系
 - 只允许 `mu → registry.mu`，不能反向获取。Leave / Hide / 再次放置给目标换代际号：被它们越过的未确认位置事实确认后作废；已就绪的事实在日志里排在前面，先应用。
 - 已抽取、已应用未结算的事实仍占队列预算（`MaxQueuedFacts`），不能用隐藏的第二条队列绕过容量；Flush 停摆（两种模式）或应用线程落后（ApplyAsync）时 `Queue*` 返回 `ErrInterestQueueFull`。积压量、应用耗时、结算等待见指标 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`。
 
-`BatchSize` 默认1024，是每轮就绪事实的软上限，同一Nest提交的多条事实不会被切开；事实总数由 `MaxQueuedFacts`（默认65536）限制。会检查待确认前缀后面的其他ID，避免一个未确认事务饿死无关实体；同ID后续事实不得越过前驱。批次剩余就绪工作：ApplySync 留给下一次政策阶段（调 `Manager.WakeSync`，on_change 下尽快再来一轮）；ApplyAsync 由应用线程立即继续，队里有未确认事实时按 1ms 起、最长 8ms 退避轮询提交门（periodic 下提交确认没有通知），应用完一批调 `Manager.WakeSync`，on_change 下尽快结算。抽取时在同一个短队列锁内固定框架原子提交门的结果，避免业务刚补齐后半段并提交、政策却只处理已抽出的前半段。
+`BatchSize` 默认1024，是每轮就绪事实的软上限：到了上限之后在第一个前缀边界停（已取用的 Nest 提交全部结束之后），同一提交的多条事实不会被切开，一步因此可能多出交错进来的条目；部分就绪的提交整笔等（[单写者方案 §11.2](../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#112-批次切点之后同一提交的后续事实越过排在它前面的命令2026-10-22产品缺陷本重构引入已修维护者-2026-10-22-决定-a纯前缀切开)）；事实总数由 `MaxQueuedFacts`（默认65536）限制。会检查待确认前缀后面的其他ID，避免一个未确认事务饿死无关实体；同ID后续事实不得越过前驱。批次剩余就绪工作：ApplySync 留给下一次政策阶段（调 `Manager.WakeSync`，on_change 下尽快再来一轮）；ApplyAsync 由应用线程立即继续，队里有未确认事实时按 1ms 起、最长 8ms 退避轮询提交门（periodic 下提交确认没有通知），应用完一批调 `Manager.WakeSync`，on_change 下尽快结算。抽取时在同一个短队列锁内固定框架原子提交门的结果，避免业务刚补齐后半段并提交、政策却只处理已抽出的前半段。
 
 直接Enter/Watch/Show/Move/MoveView/Hide/Leave/Unwatch/SetObserverView与批次由同一协调锁串行。业务持Entity锁时使用Queue*、SpatialComponent或视野操作，不同步等待直接生命周期操作或AOI计算。
 
