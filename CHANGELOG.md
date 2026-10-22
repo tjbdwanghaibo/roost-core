@@ -111,6 +111,7 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 - **actionflow / state / heartbeat**：被跨组抢占的组的排队项在抢占方结束时推进（修前永远不推进）；`Behavior` 在实体卸载时结束在途动作（`actionflow.actions.running` 减回）；同一心跳宿主上 `BeatRunner` / `Behavior` / `ai.Controller` 可以 Close 后重建（修前 `ErrDuplicateName`）；`StateDao` 在 rollback=state 下未快照时 fail-fast（修前静默不回滚）；驱动摘除已移除实例；`BeatRunner.Sync` 恢复任务心跳；`SetStrategy(当前策略)` 恢复 AI 心跳。
 - **Sync / 接入**：会话 Hold 后撤到一个订阅都不剩时接收端不再留着旧对象；第二个 Manager 登记同一实体不再静默抢走脏通知；自身视图帧上限大于接入层上限时不再反复断线重连；嵌入 TCP 关闭事件不再早于驻留预算归还（Lockstep 预算用例偶发失败的根因）。
 - **Nest**：慢派发 trace 不再与 handler 并发读写参数（`-race` 报告）。
+- **Nest 批量作业 / 广播（RV-20261022-01，P1，心跳缺省路径）**：一组里前一个目标 fence 了引擎（handler 主动 `Fence`，或提交结果未知）之后，同组还没开始的目标不再执行业务，交回 `ErrNestFenced`；修前只在准备一组时读一次 fence，同组后续 handler 照常执行。广播同样逐目标停止（修前只在作业开始时查一次）。新增统一的开始检查 `NestMgr.checkHandlerStart`（fence + 取消），普通派发、广播、批量作业每个目标开始前共用；同组先取锁失败、收尾时才转单目标的目标在 fence 后也直接交回 `ErrNestFenced`。见 [v1.31.0 说明 H2](docs/release/v1.31.0-NOTES.md#h2)。
 - **生成器**：`collectUsedImports` 保留被指针 / 切片 / map 包装的外部类型 import（`TestCollectUsedImportsHandlesWrappedPackageTypes`）；开发配置的 WAL 目录按 sid 分开。
 - **夹具与用例**：SLG 任务夹具按 D22-1 的签名不再传时间；`TestBusyShortPoolSkipsBeatsAndResumes`、`TestAStalledOldConnectionDoesNotResetTheLiveClient`、`TestDriverOpenLoop` 由按墙钟窗口改为按事件推进（用例口径问题，不是产品缺陷）；sync-aoi 的新订阅全量只按本 tick 改的值计时、Nest 模式压测线程不再调 `Apply`。
 - **文档**：“超出 `MaxObjects` 由 Manager 拒绝”改正为“下一次 Flush 编码失败、关闭整个会话”；生成的 mail `Broadcast` 骨架注释写明完整受众。
