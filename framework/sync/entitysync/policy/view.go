@@ -278,7 +278,7 @@ func (r *viewRegistry) define(v *view) error {
 		return fmt.Errorf("%w: %d", ErrViewExists, v.id)
 	}
 	if v.spatial {
-		// 空间视野总数只在登记侧计（维护者 2026-10-22）：定义即占名额，RemoveView 归还；不涉及应用侧的执行与预算。
+		// 空间视野总数只在登记侧计：定义即占名额，RemoveView 归还；不涉及应用侧的执行与预算。
 		if r.spatialViews >= r.maxSpatial {
 			metrics.IncCounter(viewLimitMetric, metrics.Labels{"reason": "spatial_views"}, 1)
 			return fmt.Errorf("%w: view %d, the interest already has %d spatial views (MaxSpatialViews)", ErrSpatialViewLimit, v.id, r.maxSpatial)

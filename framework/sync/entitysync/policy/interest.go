@@ -46,7 +46,7 @@ type InterestConfig struct {
 	// nil 或 true 启用，只有显式 false 才关闭。
 	SelfVisible *bool
 	// ApplyMode 选排队事实（QueueMove / QueueSpatial / QueueObservedBlocks）的应用方式，由业务按游戏类型选，
-	// 见 ApplyMode 与 DESIGN-TODO D19“两种应用模式”。零值 ApplySync。
+	// 见 ApplyMode 与 guide/04-sync“排队事实的两种应用模式”。零值 ApplySync。
 	ApplyMode ApplyMode
 	// MaxViewsPerPlayer 限制一个玩家同时挂接的视野数（含主视野与关系视野），超出 AttachView / Enter / Watch 返回 ErrViewLimit。
 	// 零值：ApplySync 取 SyncApplyMaxViewsPerPlayer（9），ApplyAsync 取 DefaultMaxViewsPerPlayer（64）。
@@ -60,7 +60,7 @@ type InterestConfig struct {
 	MaxPlayerBlocks int
 	// MaxSpatialViews 限制本 Interest 经 DefineSpatialView 定义的空间视野总数（挂没挂接都算，不含玩家主视野），超出
 	// DefineSpatialView 返回 ErrSpatialViewLimit 并计数。每个空间视野都是一个 AOI 观察者，定义了没挂接的照样参与每次
-	// 移动的 AOI 计算，MaxViewsPerPlayer 只数挂接、管不到它们（维护者 2026-10-22）。零值取 DefaultMaxSpatialViews，负数
+	// 移动的 AOI 计算，MaxViewsPerPlayer 只数挂接、管不到它们。零值取 DefaultMaxSpatialViews，负数
 	// 拒绝构造。RemoveView 释放名额。
 	MaxSpatialViews int
 	// OnRefusal 收到 Manager 政策阶段里结算时被拒绝的订阅（显式 Apply 的拒绝由它的返回值给出，不再重复）：
@@ -75,7 +75,7 @@ const (
 	DefaultMaxPlayersPerView = 4096
 )
 
-// DefaultMaxSpatialViews 是 MaxSpatialViews 的缺省：8192。依据 D19“两种应用模式”的实测（1000 玩家、每视野可见约 50、
+// DefaultMaxSpatialViews 是 MaxSpatialViews 的缺省：8192。依据两种应用模式的实测（1000 玩家、每视野可见约 50、
 // 50ms 同步周期）：ApplySync 下 1000 玩家各 8 个额外空间视野（共 8000 个）时 Flush 约半个周期，正是阈值
 // SyncApplyMaxExtraViews（8）取的“Flush 不超过半个周期”的位置；16000 个时 Flush 贴着周期、开始丢 tick。所以缺省放下
 // “1000 玩家各挂满 8 个空间视野”，再多（眼位泄漏、单位视野没有 RemoveView）在定义时就拒绝，而不是拖慢整个场景的
@@ -103,10 +103,10 @@ const (
 )
 
 // SyncApplyMaxExtraViews 是 ApplySync 下每个玩家主视野之外最多的视野数；SyncApplyMaxViewsPerPlayer = 主视野 + 它。
-// 来源：维护者 2026-10-21 决定按“每玩家额外视野 8 个以内 / 以上”分两种模式、由业务选择。实测依据（本机 M5、
-// sync-aoi 原场景 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，2026-10-21 两轮对照）：ApplySync 的 Flush 均值
-// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；数据见 DESIGN-TODO
-// D19“两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
+// 两种模式按“每玩家额外视野 8 个以内 / 以上”划分、由业务选择。实测依据（M5 单机、sync-aoi 原场景
+// 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，两轮对照）：ApplySync 的 Flush 均值
+// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；选择指引与样本见
+// guide/04-sync“排队事实的两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
 // 关系视野（队伍、联盟）也计入 MaxViewsPerPlayer。
 const (
 	SyncApplyMaxExtraViews     = 8
@@ -157,7 +157,7 @@ type Refusal struct {
 // 都看得见同一个敌人——held 按视野记各自给的层级：第一个持有的视野订阅，最后一个释放的视野才退订，所以一个视野
 // 看不见了不会把另一个视野还要的订阅退掉。层级按 selectedProfile 合并：包含关系取数据多的，不包含取并集。
 //
-// 单写者（REFACTOR-2026-10-21-interest-single-writer）：全部写入口——Enter / Leave / Show / Hide / Move / 视野操作 /
+// 单写者（设计见 impl/04-sync §2E 第 3、4 条）：全部写入口——Enter / Leave / Show / Hide / Move / 视野操作 /
 // QueueMove 等——只取登记侧短锁（registry.mu）：校验参数、改登记事实、追加一条有序日志，错误当场返回，不等待空间
 // 计算。只有应用方持 mu 按日志顺序执行：同步模式在 Manager Flush 的政策阶段，异步模式在应用线程，另有显式 Apply 与
 // 诊断读。所以业务线程（Nest worker、提交后回调）上的调用不会等 AOI 批次，且“先调用的先生效”对全部入口成立。

@@ -57,8 +57,6 @@ func subjectAt(in *Interest, id int64) string {
 
 // 一条已提交、还没应用的移动早于之后的 Leave → Enter / Hide → Show / 再次 Enter：结果必须与“先应用这条移动，
 // 再做之后的操作”相同——之后的放置决定实体与跟随它的视野在哪里，旧移动不能把它们拖回旧目标。
-// 历史：D19（d2c2cdce）把 Leave / Hide 对排队事实的改写改成“保留跟随者那一半”后，Enter / Show 之后才应用的旧事实
-// 仍按旧目标移动新的跟随视野（学习分支 learn/main-review-20261021 KNOWN-LIMITS“main 近期提交审查”第 1 条）。
 func TestPlacementAfterAQueuedMoveIsNotDraggedBack(t *testing.T) {
 	far := spatial.Point{X: 900, Y: 900}
 	back := spatial.Point{X: 30, Y: 10}
@@ -143,7 +141,6 @@ func TestPlacementAfterAQueuedMoveIsNotDraggedBack(t *testing.T) {
 
 // 同步应用模式下，一次 Flush（periodic 的一个周期）把此前已确认的事实全部应用并结算，积压超过 BatchSize 也一样：
 // BatchSize 是一批的大小，不是每个周期的吞吐上限。（耗时预算用完时可以留到下一周期，这里的积压远小于预算。）
-// 历史：学习分支 learn/main-review-20261021 KNOWN-LIMITS“main 近期提交审查”第 5 条。
 func TestSyncApplyOneFlushDrainsTheCommittedBacklog(t *testing.T) {
 	m := newManager(t)
 	in := newInterestMode(t, m, ApplySync)
@@ -179,7 +176,6 @@ func TestSyncApplyOneFlushDrainsTheCommittedBacklog(t *testing.T) {
 // 业务线程（Nest 快池 worker、提交后回调）上调用的 Interest 入口不等 AOI 批次：政策阶段持有应用侧状态做空间计算与
 // 订阅结算时，Enter / Leave / Show / Hide / Move / MoveView / SetObserverView / Resubscribe / ObserverView 与视野
 // 操作都立即返回。（显式 Apply 是“在调用方线程排空并结算”，按设计会等这一步，不在快池上调用，不在此列。）批次用 BandLayer（政策阶段结算时按距离档取层级的业务回调）钉住，不靠时序。
-// 历史：学习分支 learn/main-review-20261021 KNOWN-LIMITS“main 近期提交审查”第 6 条（实测阻塞 15～46ms）。
 func TestDirectCallsDoNotWaitForTheAOIBatch(t *testing.T) {
 	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
 		type pin struct{ entered, release chan struct{} }
@@ -421,7 +417,7 @@ func TestPendingCountsAppliedButUnsettledCommands(t *testing.T) {
 	}
 }
 
-// ---- ApplySync 政策阶段的耗时预算：执行日志 + 结算一起计入（方案 §12，维护者 2026-10-22 决定 A）----
+// ---- ApplySync 政策阶段的耗时预算：执行日志 + 结算一起计入（单写者方案 §12）----
 
 // budgetHarness 给同步模式的政策阶段装一套可控的耗时，不靠真实 sleep：Interest 的时钟 = 起点 + 每条已应用事实
 // perFact + 每个进入事件 perEvent。进入事件在结算里按距离档取层级（BandLayer）时计数，所以 perEvent 是结算的耗时。
@@ -509,7 +505,7 @@ func (h *budgetHarness) flush(t *testing.T) time.Duration {
 	return h.spent() - before
 }
 
-// warmUp 让政策阶段先测到一步与一次结算的耗时（估计来自之前的步与结算；启动后的第一次没有估计，见方案 §12）。
+// warmUp 让政策阶段先测到一步与一次结算的耗时（估计来自之前的步与结算；启动后的第一次没有估计，见单写者方案 §12）。
 func (h *budgetHarness) warmUp(t *testing.T, ids ...int64) {
 	t.Helper()
 	h.show(t, ids...)
@@ -685,7 +681,7 @@ func TestPlanSyncStepRules(t *testing.T) {
 	}
 }
 
-// ---- 一步的切点：纯前缀（方案 §11.2，维护者 2026-10-22 决定 A）----
+// ---- 一步的切点：纯前缀（单写者方案 §11.2）----
 
 // 切点用例里的目标与位置：a、d、b、e 先放在远处；b 被直接 Show 到 shownB，再由提交 X 移到 movedB。
 const (
@@ -872,7 +868,7 @@ func commitInScope(t *testing.T, m *entitysync.Manager, in *Interest, es []*queu
 // 一笔提交只要有一条事实还在等（它的实体前面还有没确认的提交），这一步就一条也不取用它的事实，整笔留在原位等，
 // 不切成两半；它留下的事实又挡住后面同一目标的事实，那些事实所属的提交也整笔等（连带）。排在后面的命令照常执行，
 // 不等它们。前面的提交确认之后，等着的提交在同一步里一起应用，按日志顺序。
-// （纯前缀切开要求切点落在已取用提交全部结束之后；取用部分就绪的提交会把它切开，见方案 §11.2。）
+// （纯前缀切开要求切点落在已取用提交全部结束之后；取用部分就绪的提交会把它切开，见单写者方案 §11.2。）
 //
 // 日志：[move b (W，未确认)] [move a、move b (X，已确认)] [move g、move a (Z，已确认)] [Show c]。X 的 b 排在 W 之后，
 // 所以 X 整笔等；Z 的 a 排在 X 的 a 之后，不能越过它，所以 Z 也整笔等（g 也不动）。

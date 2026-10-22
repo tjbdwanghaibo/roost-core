@@ -760,8 +760,8 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 	})
 }
 
-// 异步模式：Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里（DESIGN-TODO D19
-// “排队事实异步应用”）。后台应用线程停掉（单写者之后 Enter 等命令也会启动它，不停掉它就可能在断言之前把注入的
+// 异步模式：Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里。
+// 后台应用线程停掉（Enter 等命令也会启动它，不停掉它就可能在断言之前把注入的
 // 事实应用掉），直接把一条已确认的事实放进日志；Flush 之后事实必须仍在日志里、AOI 里的位置不变、订阅没变。
 // 应用一步之后，下一次 Flush 才结算并下发。
 func TestFlushSettlesButDoesNotApplyQueuedFacts(t *testing.T) {
@@ -980,7 +980,7 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 	})
 }
 
-// Drain 诊断与登记并发：诊断用的事实计数只在登记侧锁内读取（RV-20261022-03）。用例先走到“已应用、未结算、
+// Drain 诊断与登记并发：诊断用的事实计数只在登记侧锁内读取。用例先走到“已应用、未结算、
 // 没有排队事实”的状态（applied-unsettled）——只有这个状态下诊断才会去比较事实计数，已结算的状态会短路那次读取，
 // 在那里跑通不能说明没有竞争。随后一边 QueueMove 一边取诊断，-race 下锁外读取会报数据竞争。
 // 两种应用模式都走手动应用（不启动后台应用线程），事实只登记、不被应用，诊断看到的是确定的两种状态之一。
@@ -1241,7 +1241,7 @@ func TestAppliedFactHoldsContentUntilSettled(t *testing.T) {
 	prepared.Abort()
 }
 
-// ---- 两种应用模式（DESIGN-TODO D19“两种应用模式”）----
+// ---- 两种应用模式 ----
 
 // 同步模式的视野上限在构造时检查：显式超过主视野 + SyncApplyMaxExtraViews 拒绝构造并提示改用 ApplyAsync；零值取这个上限
 // （主视野 + 8 个额外视野可以，第 9 个额外视野 ErrViewLimit）。异步模式不受此限（零值 64）。未知模式拒绝构造。

@@ -968,7 +968,7 @@ func denseSaturatedAOI(t testing.TB, side, observers int) (*AOI, []spatial.Point
 }
 
 // 一批里只有目标移动、观察者没动时，只需要评估移动了的那些 (观察者, 目标)；不能因为目标落在观察者订阅的块里，
-// 就对每个这样的观察者重新遍历全部候选（多视野时几乎所有观察者每批都被波及，D19 sync-aoi 16 视野 Nest 失守的原因）。
+// 就对每个这样的观察者重新遍历全部候选（多视野时几乎所有观察者每批都被波及，AOI 成本随视野数放大）。
 // 这里移动的目标要么在观察者进入半径之外，要么远于已满的可见集里最远的成员，结果不变，所以一次完整遍历都不应发生。
 func TestAOIBatchSubjectMovesDoNotRescanSettledObservers(t *testing.T) {
 	for _, workers := range []int{1, 4} {
@@ -1215,7 +1215,7 @@ func TestInterestUnionsTheLayersOfDifferentViews(t *testing.T) {
 	}
 }
 
-// 观察者不看见自己的实体：距离入场、整体重评与额外覆盖块三条路径都排除自身（D14 改签名前后的回归基线）。
+// 观察者不看见自己的实体：距离入场、整体重评与额外覆盖块三条路径都排除自身。
 func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
 	manager := interestFixture(t, AOIConfig{})
 	at := spatial.Point{X: 5000, Y: 5000}
@@ -1243,7 +1243,7 @@ func TestAOIObserverNeverSeesItsOwnSubject(t *testing.T) {
 	}
 }
 
-// ---- 按观察者配置的视野（D14 B1） ----
+// ---- 按观察者配置的视野 ----
 
 // viewConfig：缺省视野 100/130（滞回 30），视野大小可在 [50, 300] 内按 50 取整，两层 LOD。
 func viewConfig() AOIConfig {

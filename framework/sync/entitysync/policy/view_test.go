@@ -1,4 +1,4 @@
-// 视野（D19）：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按视野的 MaxVisible、
+// 视野：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按视野的 MaxVisible、
 // 挂接上限、跟随实体、移除视野。断言看 Manager 的订阅表与 packer 实际打包的字段。
 
 package policy
@@ -308,7 +308,7 @@ func TestViewAttachmentLimitsRefuse(t *testing.T) {
 	}
 }
 
-// 空间视野总数（维护者 2026-10-22）：每个 Interest 经 DefineSpatialView 定义的空间视野不超过 MaxSpatialViews，挂没挂接
+// 空间视野总数：每个 Interest 经 DefineSpatialView 定义的空间视野不超过 MaxSpatialViews，挂没挂接
 // 都算（定义了没挂接的也是 AOI 观察者，MaxViewsPerPlayer 管不到）；超出返回 ErrSpatialViewLimit 并计数，什么都不定义。
 // 主视野与关系视野不计；RemoveView 释放名额；重复 ID 仍报 ErrViewExists。零值取 DefaultMaxSpatialViews，负数拒绝构造。
 func TestSpatialViewsPerInterestAreLimited(t *testing.T) {

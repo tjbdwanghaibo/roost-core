@@ -205,7 +205,7 @@ func (r *viewRegistry) drainSnapshot() registryDrainSnapshot {
 	return snapshot
 }
 
-// ---- 日志的执行（单写者，REFACTOR-2026-10-21-interest-single-writer）----
+// ---- 日志的执行（单写者）----
 //
 // 全部写入口只在登记侧追加日志；应用方（同步模式：Manager Flush 的政策阶段；异步模式：应用线程；以及显式 Apply 与
 // 诊断读）持 mu 按日志顺序执行，两种模式共用 runLogLocked 与同一个结算入口（applyLocked → releaseAppliedLocked）。
@@ -216,7 +216,7 @@ func (r *viewRegistry) drainSnapshot() registryDrainSnapshot {
 //   - 其他命令不等未确认的事实（它们不依赖提交）；在 AOI 批次之外串行执行。
 //   - 提交整笔取用：一笔提交在这一步的快照里只要有一条事实还在等（未确认，或被同一 (目标, 代际) 前面留下的事实
 //     挡住），它的事实一条也不取用，整笔留在原位（waitingFacts）。
-//   - 切点（纯前缀，方案 §11.2，维护者 2026-10-22 决定 A）：一步只在前缀边界停——切点之前的条目全部执行过（等着的
+//   - 切点（纯前缀）：一步只在前缀边界停——切点之前的条目全部执行过（等着的
 //     事实留在原位，同上），之后的全部留下。BatchSize 与同步模式的预算单位只决定在哪个边界停：到了上限之后，切点
 //     落在第一个“已取用的提交全部结束”的位置。于是三条顺序规则同时成立：就绪事实不被它后面的命令越过（所以“已提交
 //     的移动、再 Leave → Enter”与“先应用移动、再 Leave → Enter”逐项相同），命令不被它后面的事实越过，提交不切开。
@@ -261,7 +261,7 @@ func syncApplyBudgetFor(m *entitysync.Manager) time.Duration {
 	return max(m.Interval()/2, time.Millisecond)
 }
 
-// ---- 同步模式政策阶段的预算（REFACTOR-2026-10-21-interest-single-writer §12，维护者 2026-10-22 决定 A）----
+// ---- 同步模式政策阶段的预算（执行与结算一起计入）----
 //
 // 一次政策阶段 = 若干步执行日志 + 一次结算，两者一起不超过预算。成本按“单位”估计：一个单位是一步里执行的一条命令
 // 或取用的一条事实（被丢弃的事实不算）。
@@ -713,7 +713,7 @@ func (in *Interest) noteRefusedLocked(key pair, err error) {
 // 排队事实不记录入队时间（入队在 Entity 锁内，不为诊断多读一次时钟），Waited 为 0。
 //
 // 登记侧的事实与计数只取一次 drainSnapshot（registry.mu 内），之后全部判断都用这份快照：QueueMove 只持
-// registry.mu 改 facts，锁外回读会与它竞争，且同一次诊断里的两次读取可能互相矛盾（RV-20261022-03）。
+// registry.mu 改 facts，锁外回读会与它竞争，且同一次诊断里的两次读取可能互相矛盾。
 // unsettled、retry、refused 是应用侧状态，由这里持有的 mu 保护。
 func (in *Interest) drainStalls(limit int) ([]entitysync.DrainStall, int) {
 	in.mu.Lock()

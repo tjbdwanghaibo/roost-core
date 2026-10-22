@@ -147,7 +147,7 @@ func BenchmarkAOIEventCollection(b *testing.B) {
 	}
 }
 
-// ---- 视野（D19）：只测登记表与应用侧扇出（drainLogLocked / drainAOILocked 写进 held），不含 Manager 订阅与打包 ----
+// ---- 视野：只测登记表与应用侧扇出（drainLogLocked / drainAOILocked 写进 held），不含 Manager 订阅与打包 ----
 
 func benchmarkInterest(b *testing.B) *Interest {
 	b.Helper()
