@@ -54,7 +54,7 @@ type recordingClient struct {
 type sentTick struct {
 	handler string
 	id      int64
-	params  int // Tick 消息不带参数（D22-1：handler 按自己冻结的业务时间触发）
+	params  int // Tick 消息不带参数（handler 按自己冻结的业务时间触发）
 }
 
 func (c *recordingClient) Dispatch(_ context.Context, name nest.HandlerName, id int64, params nest.Params, _ ...nest.SendOpt) error {

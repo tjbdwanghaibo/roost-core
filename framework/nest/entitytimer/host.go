@@ -255,7 +255,7 @@ func (host *Host) Timers() []timer.Node {
 }
 
 // Tick 触发此刻已到期的节点（生成的 Tick handler 调用），返回剩下的节点数。此刻是驱动的业务时间：Tick 消息里就是
-// 这条消息冻结的 fctx.Now（按毫秒），回调的 Fire.Now 与回调里读的 fctx.Now 是同一时刻（D22-1）。
+// 这条消息冻结的 fctx.Now（按毫秒），回调的 Fire.Now 与回调里读的 fctx.Now 是同一时刻。
 // 每个到期节点只触发一次：离线错过多个周期的周期定时器也只触发这一次，回调按返回值从此刻起续期。
 func (host *Host) Tick() int { return host.TickAt(host.driver.Now()) }
 

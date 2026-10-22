@@ -387,7 +387,7 @@ func TestABroadcastSkipsMissingEntitiesAndKeepsGoing(t *testing.T) {
 }
 
 // 广播在一个作业里逐目标执行：前一个目标的 handler fence 了引擎（或它的提交结果未知）之后，还没开始的目标不再执行业务
-// （广播没有交回，跳过即可）。与批量作业共用逐目标的开始检查 checkHandlerStart（RV-20261022-01）。
+// （广播没有交回，跳过即可）。与批量作业共用逐目标的开始检查 checkHandlerStart。
 // 变异核对：broadcastDispatch 不逐目标调用 checkHandlerStart 时第二、三个目标照常执行，本用例变红。
 func TestBroadcastSkipsUnstartedTargetsAfterFence(t *testing.T) {
 	ResetHandlersForTest()

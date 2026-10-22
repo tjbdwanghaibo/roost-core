@@ -388,10 +388,10 @@ func TestTryBatchKeepsPerTargetTransactionSemantics(t *testing.T) {
 	}
 }
 
-// 批量作业的组大小与时间片是按压测选的缺省（心跳缺省走批量作业，维护者 2026-10-22 决定 B）：它们决定一个 worker
+// 批量作业的组大小与时间片是按压测选的缺省（心跳缺省走批量作业）：它们决定一个 worker
 // 一次被批量作业占住多久，即普通业务消息的 p99（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md §3A、§3B、§3F）。
 // 改它们要先补同一套夹具的对照并更新报告，再改这里。
-// 变异核对：tryBatchGroup 改回 8 时本用例变红。
+// 变异核对：tryBatchGroup 改成 8 时本用例变红。
 func TestTryBatchParametersAreTheMeasuredDefaults(t *testing.T) {
 	if tryBatchGroup != 4 || tryBatchSlice != 200*time.Microsecond {
 		t.Fatalf("try-batch group %d slice %v, want group 4 slice 200µs (the measured default; re-measure before changing)", tryBatchGroup, tryBatchSlice)
@@ -483,7 +483,7 @@ func TestTryBatchRefusesTargetsAfterFence(t *testing.T) {
 	}
 }
 
-// Fence 发生在一组执行中途（RV-20261022-01）：已经开始的 handler 收尾，同一批里还没开始的目标——同组其余的与之后
+// Fence 发生在一组执行中途：已经开始的 handler 收尾，同一批里还没开始的目标——同组其余的与之后
 // 各组的——一律不执行业务，各自交回 ErrNestFenced 恰好一次。两种触发：handler 主动调用 NestMgr.Fence；真实 committer
 // 返回结果未知（invokeTryBatchTransaction 按 ErrCommitIndeterminate fence 引擎）。6 个目标跨两组（组大小 4）：后 3 个
 // 在发生 fence 的那一组里（只能靠逐目标的开始检查拦下），最后 2 个在下一组准备时拦下。

@@ -15,11 +15,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 批量作业（DESIGN-TODO D20 选项 C，设计见 docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：一个 Nest
+// 批量作业（设计见 docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：一个 Nest
 // 作业带一批互不相干的单目标投递，worker 逐个目标在该目标自己的 Guard 作用域与事务里执行。为心跳设计：按批付请求
 // 上下文、当前消息登记、准入与指标，逐目标付事务与实体锁。
 //
-// 同 ID 顺序（维护者 2026-10-21 的硬约束）：
+// 同 ID 顺序（硬约束，与单目标 Dispatch 相同）：
 //   - 准入时不登记同 ID 顺序；执行到某个目标时，若该 ID 有任何已准入、尚未完成的作业（q.tails 有登记，含尚未开始的），
 //     或实体锁 / 锁组取不到，就在当场把这个目标准入成一条单目标作业（与 Dispatch 相同的 admitLocked），排在那条
 //     冲突作业之后执行——不交回调用方等下一轮，也不在 worker 上等；
@@ -32,9 +32,9 @@ const MaxTryBatchTargets = 1024
 // tryBatchGroup 是一次持 q.mu 安排（认领 / 转单目标 / 交回）的目标数上限：一组执行完后在同一次持锁里撤销本组
 // 认领并安排下一组，把逐目标的队列锁摊到一组上。代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组
 // 其余目标的执行时间（等在依赖队列里，不占 worker）；时间片只在一组结束后检查，组越大，一个 worker 一次被批量作业
-// 占住的时间越长。2026-10-22 起取 4（原 8）：维护者决定心跳缺省走批量作业时要求压低普通业务消息 p99，同时段对照
+// 占住的时间越长。取 4：心跳缺省走批量作业，普通业务消息的 p99 随组变大而升高，同时段对照
 // 组 4 / 8 / 16 的业务 p99 0.187 / 0.235 / 0.316ms、进程 CPU 不升（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md
-// §3A、§3F）；“时间片 100µs + 组 4”待补测。
+// §3A、§3F）；“时间片 100µs + 组 4”的组合尚未测量。
 const tryBatchGroup = 4
 
 // tryBatchSlice 是一个 worker 连续执行同一批量作业的时间片：每组目标结束后检查，超过且还有剩余目标时把作业放回
@@ -538,7 +538,7 @@ func (exec *tryBatchExec) resetMsg(item *tryBatchItem) {
 	*exec.msg = Msg{Type: MsgTypeTryBatch, getter: exec.getter, engine: exec.mgr}
 	if item != nil {
 		// 每个目标是一次独立执行：恢复请求上下文快照（前一个目标写的 KV、Meta、Base 不带过来），并重新冻结业务时间与
-		// Frozen 派生值（时间域的域时间），Beat.Now 是这一拍自己冻结的时刻（D22-1），不是整批共用一个。
+		// Frozen 派生值（时间域的域时间），Beat.Now 是这一拍自己冻结的时刻，不是整批共用一个。
 		exec.ctx.ApplySnapshot(exec.ctxSnapshot)
 		exec.ctx.Refreeze()
 		exec.msg.Name = item.target.Handler.String()
@@ -599,7 +599,7 @@ func (exec *tryBatchExec) entry(name HandlerName) (handlerEntry, bool) {
 func (exec *tryBatchExec) run(item *tryBatchItem) (busy bool, handBack error) {
 	exec.resetMsg(item)
 	defer exec.resetMsg(nil)
-	// 每个目标开始前都检查（RV-20261022-01）：组准备时读到的 fence 状态不代表执行时，同组前一个目标可能已经 fence 了
+	// 每个目标开始前都检查：组准备时读到的 fence 状态不代表执行时，同组前一个目标可能已经 fence 了
 	// 引擎（handler 主动 Fence，或 invokeTryBatchTransaction 遇到提交结果未知）。没开始的目标交回 ErrNestFenced。
 	if err := exec.mgr.checkHandlerStart(); err != nil {
 		return false, err
