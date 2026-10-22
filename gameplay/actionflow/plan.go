@@ -24,9 +24,12 @@ type PlanMission struct {
 	currentAction   ActionKind
 	currentActionID int64
 	lastResult      ActionResult
-	// attempts 是当前步已经重试的次数；deadline 是当前尝试的时限（零值表示没有）。
-	attempts int
-	deadline time.Time
+	// attempts 是当前步已经重试的次数。当前尝试的时限：timeout 为 0 表示没有；started 是尝试开始的时间，
+	// frozenAtStart 是那时动作所在组已累计的冻结时长（FrozenTimer）——之后再冻结的时间不计入时限（维护者 2026-10-22）。
+	attempts      int
+	timeout       time.Duration
+	started       time.Time
+	frozenAtStart time.Duration
 }
 
 // NewPlanMission 构造一个尚未开始的计划任务。
@@ -76,15 +79,16 @@ func (m *PlanMission) Start(ctx *MissionContext, param any) error {
 // stepTimedOut 是步骤超时时结束动作用的原因（过期状态）。
 const stepTimedOut = "mission step timed out"
 
-// Tick 检查当前尝试的时限：到时以过期状态结束这一步的动作（结论经 OnActionEnd 回来，按失败处理）。
+// Tick 检查当前尝试的时限：尝试开始以来、扣掉动作所在组被冻结的时间（定身期间不计时，解冻后按剩余时长继续），
+// 用满时以过期状态结束这一步的动作（结论经 OnActionEnd 回来，按失败处理）。
 func (m *PlanMission) Tick(ctx *MissionContext, now time.Time) {
-	if m == nil || m.status != MissionStatusRunning || m.currentActionID == 0 || m.deadline.IsZero() || now.Before(m.deadline) {
+	if m == nil || m.status != MissionStatusRunning || m.currentActionID == 0 || m.timeout <= 0 || ctx == nil || ctx.ActionList == nil {
 		return
 	}
-	m.deadline = time.Time{}
-	if ctx == nil || ctx.ActionList == nil {
+	if used := now.Sub(m.started) - (frozenFor(ctx, m.currentAction, now) - m.frozenAtStart); used < m.timeout {
 		return
 	}
+	m.timeout = 0
 	// 找不到说明动作已经结束、结论还在路上（延后送达），不是错误。
 	_ = ctx.ActionList.EndAction(m.currentActionID, true, ActionReason{Message: stepTimedOut,
 		Result: ActionResult{Status: ActionStatusExpired, Reason: stepTimedOut}})
@@ -141,7 +145,7 @@ func (m *PlanMission) End(_ *MissionContext, reason ActionReason) {
 		}
 	}
 	m.currentStep, m.currentAction, m.currentActionID = -1, 0, 0
-	m.attempts, m.deadline = 0, time.Time{}
+	m.attempts, m.timeout = 0, 0
 }
 func (m *PlanMission) CanReplaceBy(MissionKind, any) bool { return true }
 func (m *PlanMission) MissionInfo() MissionInfo {
@@ -165,22 +169,31 @@ func (m *PlanMission) startStep(ctx *MissionContext, step int) error {
 	return m.launch(ctx, step)
 }
 
-// launch 发起一步的一次尝试：创建动作，按 Timeout 记下这次尝试的时限（起点是任务上下文的时间）。
+// launch 发起一步的一次尝试：创建动作，按 Timeout 记下这次尝试的时限（起点是任务上下文的时间，连同动作所在组那时
+// 已累计的冻结时长）。
 func (m *PlanMission) launch(ctx *MissionContext, step int) error {
 	if step < 0 || step >= len(m.plan.Steps) {
 		return fmt.Errorf("%w: index %d", ErrMissionStepInvalid, step)
 	}
 	item := m.plan.Steps[step]
-	m.deadline = time.Time{}
+	m.timeout = 0
 	actionID, err := ctx.ActionList.CreateAction(item.Action, item.Param)
 	if err != nil {
 		return err
 	}
 	m.currentStep, m.currentAction, m.currentActionID = step, item.Action, actionID
 	if item.Timeout > 0 {
-		m.deadline = ctx.Now.Add(item.Timeout)
+		m.timeout, m.started, m.frozenAtStart = item.Timeout, ctx.Now, frozenFor(ctx, item.Action, ctx.Now)
 	}
 	return nil
+}
+
+// frozenFor 是动作种类所在组截至 now 累计的冻结时长；ActionList 没实现 FrozenTimer 时为 0（时限照常计时）。
+func frozenFor(ctx *MissionContext, kind ActionKind, now time.Time) time.Duration {
+	if timer, ok := ctx.ActionList.(FrozenTimer); ok {
+		return timer.FrozenFor(kind, now)
+	}
+	return 0
 }
 func (m *PlanMission) apply(ctx *MissionContext, result ActionResult) error {
 	step := m.plan.Steps[m.currentStep]
@@ -191,7 +204,7 @@ func (m *PlanMission) apply(ctx *MissionContext, result ActionResult) error {
 	if next.Mode == MissionNextUnset {
 		next = defaultNext(m.currentStep, len(m.plan.Steps), result.Status)
 	}
-	m.currentAction, m.currentActionID, m.deadline = 0, 0, time.Time{}
+	m.currentAction, m.currentActionID, m.timeout = 0, 0, 0
 	switch next.Mode {
 	case MissionNextStep:
 		return m.startStep(ctx, next.Step)

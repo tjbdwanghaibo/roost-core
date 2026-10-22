@@ -280,6 +280,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 ```
 
 - `Timeout` 是这一步**每次尝试**的时限：到时任务把这一步的动作以过期（`ActionStatusExpired`）结束，按失败处理。需要任务心跳（Behavior 配了 `Beat`），检查粒度是 `MissionPlan.Period`（缺省 100ms，取档）；`PlanMission` 只在当前步有时限时要心跳。
+- **定身期间不计时**（维护者 2026-10-22）：这一步的动作所在的组被冻结（`Freeze`，含门控 `Gate` 施加的）期间，时限暂停，解冻后按剩余时长继续，多次冻结累加；时间按 Behavior 的时钟（`fctx.Now`，挂了时间域时是域时间）。所以定身长于时限时护送 / 巡逻不会直接失败。`FreezeCancel`（打断）照旧：动作以取消结束，这一步不重试、走 `OnFail`。自己实现 `ActionList` 的，实现 `actionflow.FrozenTimer` 才有这条，否则时限照常计时。
 - `Retry` 是失败（`Failed` / `Expired`）后原地重试的次数，每次重试重新计时，用完才走 `OnFail`；**被取消的不重试**（被别的动作取代、被业务结束），直接走 `OnFail`。次数按步计，进入下一步清零。
 - 更复杂的分支（按条件、按结果原因）用行为树，计划里不加表达式。
 

@@ -63,6 +63,16 @@ type Behavior struct {
 
 	// closed 由 Close / OnDestroy 置位：经 Behavior 发起的动作与任务返回 ErrBehaviorClosed。
 	closed bool
+
+	// frozen 是各组按 Behavior 时钟累计的冻结时长（FrozenFor），在 runner 的 OnFreeze 里更新；只有冻结过的组有条目。
+	frozen map[ActionGroup]*frozenClock
+}
+
+// frozenClock 是一个组的冻结计时：total 是已结束的冻结累计，since 是本次冻结的起点（frozen 为真时有效）。
+type frozenClock struct {
+	total  time.Duration
+	since  time.Time
+	frozen bool
 }
 
 // Observer 接收 Behavior 的动作结束与任务结束，在任务处理之后调用。ai.Controller 实现它（actionflow 不导入 ai）。
@@ -126,6 +136,7 @@ func NewBehavior(owner entity.IThreadSafeEntity, config BehaviorConfig) (*Behavi
 		Hooks: ActionRunnerHooks{
 			PopulateContext: b.populate,
 			OnEnded:         b.actionEnded,
+			OnFreeze:        b.freezeChanged,
 			OnError:         b.report,
 		},
 		MaxDeferredCommands: config.MaxDeferredCommands,
@@ -270,6 +281,23 @@ func (b *Behavior) Frozen(group ActionGroup) bool   { return b.runner.Frozen(gro
 
 func (b *Behavior) MissionManager() MissionManager { return b.missions }
 
+// FrozenFor 实现 FrozenTimer：kind 所在的组截至 now（Behavior 的时钟）累计被冻结的时长。种类不属于任何组时为 0。
+func (b *Behavior) FrozenFor(kind ActionKind, now time.Time) time.Duration {
+	group, ok, err := b.runner.resolveGroup(kind)
+	if err != nil || !ok {
+		return 0
+	}
+	c := b.frozen[group]
+	if c == nil {
+		return 0
+	}
+	total := c.total
+	if c.frozen && now.After(c.since) {
+		total += now.Sub(c.since)
+	}
+	return total
+}
+
 func (b *Behavior) SetMission(kind MissionKind, param any) error {
 	if b.closed {
 		return ErrBehaviorClosed
@@ -282,6 +310,29 @@ func (b *Behavior) CurMission() Mission { return b.missions.CurMission() }
 func (b *Behavior) EndCurMission(reason ActionReason) { b.missions.EndCurMission(reason) }
 
 // --- 接线 ---
+
+// freezeChanged 是 runner 的 OnFreeze（冻结计数 0→1、→0 时调用）：按 Behavior 的时钟记下冻结的起止，供 FrozenFor。
+// Freeze 的计数立即生效、钩子当场调用；Recover 在回调里延后时，钩子在延后命令执行时调用，时钟仍是同一次执行的时间。
+func (b *Behavior) freezeChanged(group ActionGroup, frozen bool) {
+	if b.frozen == nil {
+		b.frozen = make(map[ActionGroup]*frozenClock)
+	}
+	c := b.frozen[group]
+	if c == nil {
+		c = &frozenClock{}
+		b.frozen[group] = c
+	}
+	now := b.now()
+	switch {
+	case frozen && !c.frozen:
+		c.since, c.frozen = now, true
+	case !frozen && c.frozen:
+		if now.After(c.since) {
+			c.total += now.Sub(c.since)
+		}
+		c.frozen = false
+	}
+}
 
 // countTransition 记动作成为 / 不再是组的当前动作（打开指标时的 OnTransition）。
 func countTransition(s ActionSnapshot, entering bool) {
@@ -425,4 +476,7 @@ func (b *Behavior) report(err error) {
 	}
 }
 
-var _ ActionList = (*Behavior)(nil)
+var (
+	_ ActionList  = (*Behavior)(nil)
+	_ FrozenTimer = (*Behavior)(nil)
+)

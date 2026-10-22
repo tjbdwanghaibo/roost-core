@@ -92,6 +92,13 @@ type ActionList interface {
 	EndCurMission(reason ActionReason)
 }
 
+// FrozenTimer 由 ActionList 可选实现（Behavior 实现；维护者 2026-10-22 决定定身期间步骤时限不计时）：FrozenFor
+// 报告动作种类所在的组截至 now 累计被冻结了多久（实现者自己的时钟；冻结计数从 0 变 1 起算、归零止，FreezePause 与
+// FreezeCancel 都算）。PlanMission 把步骤开始之后累计的冻结时长从时限里扣掉；ActionList 没实现它时时限照常计时。
+type FrozenTimer interface {
+	FrozenFor(kind ActionKind, now time.Time) time.Duration
+}
+
 // MissionContext 是任务回调的上下文。
 type MissionContext struct {
 	Owner      entity.IThreadSafeEntity

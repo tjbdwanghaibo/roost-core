@@ -155,7 +155,9 @@ type MissionStep struct {
 	OnSuccess MissionNext
 	OnFail    MissionNext
 	// Timeout 为正时是这一步每次尝试的时限（D21 A8）：到时还没结束，任务把这一步的动作以过期状态（ActionStatusExpired）
-	// 结束，按失败处理（重试或 OnFail）。需要任务心跳（Behavior 配了 Beat），检查粒度是 MissionPlan.Period。
+	// 结束，按失败处理（重试或 OnFail）。需要任务心跳（Behavior 配了 Beat），检查粒度是 MissionPlan.Period。动作所在的
+	// 组被冻结期间不计时（定身时护送 / 巡逻不因此失败，解冻后按剩余时长继续；维护者 2026-10-22），按 Behavior 的时钟算；
+	// FreezeCancel 打断时动作以取消结束，这一步照常走 OnFail。
 	Timeout time.Duration
 	// Retry 是这一步失败（Failed / Expired）后原地重试的次数，用完才走 OnFail；被取消（Canceled，例如被别的动作
 	// 取代、被业务结束）不重试，直接走 OnFail。

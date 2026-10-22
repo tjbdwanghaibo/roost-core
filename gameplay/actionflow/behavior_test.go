@@ -303,6 +303,69 @@ func TestTheMissionHeartbeatFollowsTheCurrentStep(t *testing.T) {
 	}
 }
 
+// 维护者 2026-10-22：步骤动作所在的组被冻结期间，这一步的时限不计时（定身长于时限时护送 / 巡逻不再直接失败），解冻后
+// 按剩余时长继续；多次冻结累加。计时按 Behavior 的时钟。FreezeCancel 打断时这一步照现有规则结束（取消、不重试、走
+// OnFail），不受影响。
+func TestAFrozenGroupPausesItsStepTimeout(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	now := start
+	behavior, observer, _ := newBeatBehaviorForTest(t, &now)
+	escort := &runnerTestAction{label: "escort"}
+	if err := behavior.SetMission(1, MissionPlan{Steps: []MissionStep{{Action: 1, Param: escort, Timeout: time.Second}}}); err != nil {
+		t.Fatal(err)
+	}
+	at := func(d time.Duration) { now = start.Add(d) }
+	beat := func(d time.Duration) {
+		at(d)
+		if err := behavior.missionBeat(heartbeat.Beat{Now: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := func(when string) {
+		t.Helper()
+		if escort.cancels != 0 || behavior.CurMission() == nil {
+			t.Fatalf("%s: cancels %d mission %v log %v (the step timed out while its group was frozen)", when, escort.cancels, behavior.CurMission(), observer.log)
+		}
+	}
+	at(400 * time.Millisecond) // 已用 400ms
+	if err := behavior.Freeze(1, FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	beat(3 * time.Second) // 定身 2.6s，长于时限
+	running("frozen 2.6s after 400ms of a 1s timeout")
+	if err := behavior.Recover(1); err != nil {
+		t.Fatal(err)
+	}
+	beat(3300 * time.Millisecond) // 已用 700ms
+	running("700ms used")
+	if err := behavior.Freeze(1, FreezePause); err != nil { // 第二次定身：累加
+		t.Fatal(err)
+	}
+	beat(5 * time.Second)
+	running("frozen again")
+	if err := behavior.Recover(1); err != nil {
+		t.Fatal(err)
+	}
+	beat(5200 * time.Millisecond) // 已用 900ms
+	running("900ms used")
+	beat(5300 * time.Millisecond) // 已用 1s：到时
+	if escort.cancels != 1 || behavior.CurMission() != nil || behavior.Missions().MissionInfo().LastResult.Reason != stepTimedOut {
+		t.Fatalf("1s of unfrozen time: cancels %d mission %v info %+v", escort.cancels, behavior.CurMission(), behavior.Missions().MissionInfo())
+	}
+
+	// FreezeCancel：打断即结束这一步（取消不重试），任务按 OnFail 结束，与时限无关。
+	interrupted := &runnerTestAction{label: "patrol"}
+	if err := behavior.SetMission(1, MissionPlan{Steps: []MissionStep{{Action: 1, Param: interrupted, Timeout: time.Second, Retry: 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := behavior.Freeze(1, FreezeCancel); err != nil {
+		t.Fatal(err)
+	}
+	if info := behavior.Missions().MissionInfo(); interrupted.starts != 1 || interrupted.cancels != 1 || behavior.CurMission() != nil || info.Status != MissionStatusCanceled {
+		t.Fatalf("FreezeCancel: starts %d cancels %d mission %v info %+v", interrupted.starts, interrupted.cancels, behavior.CurMission(), info)
+	}
+}
+
 // flakyAction 第一次 Start 即失败、之后即成功（计划的重试测试用）。
 type flakyAction struct{ starts int }
 
