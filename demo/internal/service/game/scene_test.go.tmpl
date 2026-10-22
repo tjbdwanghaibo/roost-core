@@ -1185,8 +1185,11 @@ func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *te
 	// 2. The manager dropped the session after a failed push; the player logs
 	// in again before the settle runs. The new Join opens a new session and
 	// gets the player's view back by itself; the late settle changes nothing.
+	// The cause is what the manager reports for a refused push (the lane has
+	// already closed the connection that refused it, so sessionLost closes
+	// nothing more).
 	scene.manager.CloseSession(entitysync.SessionID(playerOf(re.ID())))
-	scene.sessionLost(entitysync.SessionID(playerOf(re.ID())), errors.New("old socket: write timeout"))
+	scene.sessionLost(entitysync.SessionID(playerOf(re.ID())), &entitysync.SessionLoss{Reason: entitysync.SessionLossPushRefused, Err: errors.New("old socket: write timeout")})
 	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
 	runPending()
 	if members := scene.Members(); members != 2 {
