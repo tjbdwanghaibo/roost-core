@@ -46,6 +46,7 @@ Push 期间若换 profile、撤订或退役，旧捕获只结算匹配的订阅 
 
 `OpenSession(id)` 之后才能订阅；`OpenHeldSession(id)` 开一个 **held** 的会话——可订阅、不出帧——`ReadySession(id)` 之后第一帧是新 epoch 的 FrameFull。
 客户端在登录应答之后才装解码器的部署用它消掉首帧竞态（demo：`enter_game` held，客户端发 `scene_ready`）。`HoldSession(id)` 让一个在收帧的会话重新开始（重连、客户端重置）。
+Hold → Ready 的结果是：接收端的对象表等于 Ready 时仍在的订阅。新 epoch 的 Full 让上一 epoch 的对象全部作废，所以 held 期间（或 Ready 之后、新 Full 之前）撤掉的订阅不欠 remove；撤到一个订阅都不剩时，这一 lifetime 交付过帧的会话会收到一个不含对象的 Full（`session.owesEmptyFull`），接收端照样清空，从未收过帧的会话不发。因此“暂停发布 → 读权限 → Apply → Ready”也可以用 Hold，代价是 Ready 后全部对象按全量重发；接收端收到 Full 时要先清空旧对象（`frame.Receiver` 的约定）。2026-10-21 之前没有对象时不发帧，接收端会一直留着最后撤掉的对象。
 `CloseSession(id)` 丢会话状态并从每个 subject 删掉它的订阅，不欠任何帧。会话 id 由政策定义
 （demo 用 player id，接入层对该玩家的全部连接扇出），只要求稳定、唯一。`Transport` 可选实现 `SessionLifecycle` 以跟随开关。
 旧 Push 仅可采纳到仍匹配的会话状态；Hold/重开后旧帧不覆盖新状态，旧错误也不能关闭新会话。Transport 必须把已开始的 Push 固定到原连接，已准入字节不能撤回。
@@ -60,7 +61,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 ## 组织方式（`framework/sync/entitysync/policy`）
 
 - `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）上的视野（D19）：空间视野（玩家主视野与业务的空间视野，一个视野是 AOI 的一个观察者）与关系视野（显式实体集合），玩家与视野多对多；按 (玩家, 目标) 聚合成一份订阅——第一个持有的视野订、最后一个释放的视野撤，层级包含取高、不包含取并集；
-  band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
+  band → profile；全部写入口只登记一条有序日志（不做 AOI 计算、不等批次），由 Manager 的政策阶段（ApplySync）或 Interest 的应用线程（ApplyAsync）按调用顺序执行并说给 Manager，被拒的 subscribe 每次结算再说，直到被接受或 pair 释放（政策阶段的拒绝交给 `InterestConfig.OnRefusal`；测试与工具可用 `Apply()` 在调用方线程排空并结算，返回 `Refusal`，`Retry` 供调用方分日志级别）。
 - `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。

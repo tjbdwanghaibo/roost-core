@@ -372,6 +372,140 @@ func TestRetirementCannotBeUndoneByReleasingOneSource(t *testing.T) {
 	}
 }
 
+// HoldSession 开新 epoch 后，接收端要靠新 epoch 的 Full 才知道旧对象作废。held 期间（或 Ready 之后、Full 之前）
+// 撤掉最后一个订阅时没有对象可放进 Full，Ready 之后必须补一个空 Full；否则接收端永远留着旧对象。
+// 从未收过帧的会话没有旧状态可清，Ready 后不发空帧。
+func TestHoldThenReadyWithoutSubscriptionsClearsTheReceiver(t *testing.T) {
+	for _, removal := range []string{"unsubscribe_while_held", "unsubscribe_after_ready", "unregister_while_held"} {
+		t.Run(removal, func(t *testing.T) {
+			transport := newRecordingTransport()
+			manager := newTestManager(t, transport, ManagerConfig{})
+			packs := 0
+			state := testSubject(t, 3002, &packs)
+			if err := manager.Register(state); err != nil {
+				t.Fatal(err)
+			}
+			open(t, manager, 1)
+			if err := manager.OpenHeldSession(2); err != nil {
+				t.Fatal(err)
+			}
+			mustSubscribe(t, manager, 1, 3002, entity.SyncProfile{})
+			mustFlush(t, manager)
+			receiver := frame.NewReceiver(frame.DefaultLimits())
+			held := map[frame.ObjectRef]bool{}
+			var epoch uint32
+			consume := func() int {
+				frames := transport.take(1)
+				for _, raw := range frames {
+					applied, err := receiver.Receive(raw, func(f frame.Frame) error {
+						if f.Kind == frame.Full {
+							clear(held)
+						}
+						for _, object := range f.Objects {
+							if object.Operation == frame.ObjectRemove {
+								delete(held, object.Ref)
+							} else {
+								held[object.Ref] = true
+							}
+						}
+						epoch = f.Epoch
+						return nil
+					})
+					if err != nil || !applied {
+						t.Fatalf("receiver refused a fresh frame: applied=%v err=%v", applied, err)
+					}
+				}
+				return len(frames)
+			}
+			if consume() != 1 || len(held) != 1 {
+				t.Fatalf("the first snapshot did not reach the receiver: %v", held)
+			}
+			firstEpoch := epoch
+
+			if err := manager.HoldSession(1); err != nil {
+				t.Fatal(err)
+			}
+			switch removal {
+			case "unsubscribe_while_held":
+				if err := manager.Unsubscribe(1, 3002); err != nil {
+					t.Fatal(err)
+				}
+			case "unregister_while_held":
+				if err := manager.Unregister(3002); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := manager.ReadySession(1); err != nil {
+				t.Fatal(err)
+			}
+			if removal == "unsubscribe_after_ready" {
+				if err := manager.Unsubscribe(1, 3002); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := manager.ReadySession(2); err != nil {
+				t.Fatal(err)
+			}
+			for range 3 {
+				mustFlush(t, manager)
+			}
+			if got := consume(); got != 1 || len(held) != 0 || epoch <= firstEpoch {
+				t.Fatalf("after hold, removal and ready the receiver got %d frame(s), still holds %d object(s), epoch %d (was %d); want one empty Full in a newer epoch", got, len(held), epoch, firstEpoch)
+			}
+			if got := transport.take(2); len(got) != 0 {
+				t.Fatalf("a session that never received a frame got %d frame(s) after ready", len(got))
+			}
+			mustFlush(t, manager)
+			if got := transport.take(1); len(got) != 0 {
+				t.Fatalf("the empty Full was sent again: %d frame(s)", len(got))
+			}
+			// 空 Full 之后的新订阅是同一 epoch 里的增量 create。
+			if removal != "unregister_while_held" {
+				mustSubscribe(t, manager, 1, 3002, entity.SyncProfile{})
+				mustFlush(t, manager)
+				if consume() != 1 || len(held) != 1 {
+					t.Fatalf("a subscription after the empty Full did not arrive: %v", held)
+				}
+			}
+		})
+	}
+}
+
+// 空 Full 和普通帧一样经传输准入：RetryLater 时这一轮不算交付，下一次 Flush 重发；Drain 等它发出才返回。
+func TestEmptyFullAfterHoldIsRetriedUntilAdmitted(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{})
+	packs := 0
+	if err := manager.Register(testSubject(t, 3003, &packs)); err != nil {
+		t.Fatal(err)
+	}
+	open(t, manager, 1)
+	mustSubscribe(t, manager, 1, 3003, entity.SyncProfile{})
+	mustFlush(t, manager)
+	first := oneFrame(t, transport, 1)
+	if err := manager.HoldSession(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Unsubscribe(1, 3003); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ReadySession(1); err != nil {
+		t.Fatal(err)
+	}
+	transport.setRetry(ErrRetryLater)
+	if err := manager.Flush(context.Background()); !errors.Is(err, ErrRetryLater) {
+		t.Fatalf("flush with a refusing transport: %v, want ErrRetryLater", err)
+	}
+	transport.setRetry(nil)
+	if err := manager.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := oneFrame(t, transport, 1)
+	if got.wire.Kind != frame.Full || len(got.wire.Objects) != 0 || got.wire.Epoch <= first.wire.Epoch {
+		t.Fatalf("after the retry the session got kind=%v objects=%d epoch=%d (was %d), want an empty Full in a newer epoch", got.wire.Kind, len(got.wire.Objects), got.wire.Epoch, first.wire.Epoch)
+	}
+}
+
 // 后一个会话拒绝后，全局内容版本尚未提交，但前一个客户端已应用增量。
 // 重试必须恢复成可应用的全量，不能再次交付以旧版本为基线的增量。
 func TestPartialTickRetryRestoresAnApplicableSubjectBaseline(t *testing.T) {

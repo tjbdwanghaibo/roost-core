@@ -28,6 +28,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/directory"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	"github.com/tjbdwanghaibo/roost-core/wiring/global"
+	kitheartbeat "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
@@ -63,7 +64,9 @@ func groups() map[string][]app.ConfigSchema {
 		"remote_entity": {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
 		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
 		"saga":          {kitsaga.NewMod().ConfigSchema()},
-		"web":           {kitweb.NewMod().ConfigSchema()},
+		// heartbeat：roost add heartbeat / behavior 装在实体所在服务（catalog Mod，依赖 nest）；NewMod 的参数只在 Init 用。
+		"heartbeat": {kitheartbeat.NewMod(nil, nil).ConfigSchema()},
+		"web":       {kitweb.NewMod().ConfigSchema()},
 		// access.player.self_sync 时并入 Nest Mod 的声明；读的是生成的 player TCP Mod 的键，
 		// TestPlayerTCPDeclarationAgreesWithKit 按这份快照检查两边逐字相同。
 		"selfsync": {selfsync.ConfigSchema()},

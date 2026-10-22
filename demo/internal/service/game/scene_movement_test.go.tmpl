@@ -1,0 +1,743 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/flags"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/runtimeid"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// DESIGN-TODO D20 P3, end to end: the client sends a goal, the player's own
+// heartbeat walks it there, and a watcher sees the steps; monsters patrol on
+// their own heartbeats, a root buff stops them through the state gate, the
+// scene's own 1 Hz beat refills the population, and a 2× scene walks twice as
+// far.
+//
+// Everything is the real thing except the socket and the WAL: a real Nest
+// engine with the generated handlers, the game's heartbeat driver bound to
+// it and running, the scene's replication bridge (manager + interest), the
+// scene and monster lifecycles over an entity runtime.
+//
+// Time is the business clock replaced by a hand-moved one (clock.SetSource):
+// every Nest message freezes it (fctx.Now), the heartbeat's Beat.Now and
+// Elapsed come from it, and the scene's time domain maps it. The driver still
+// wakes on real time, so beats keep arriving; with the clock standing still
+// each of them advances nothing, and a step of the clock is spent by exactly
+// the next beat of each registration. That makes "how far did it walk" an
+// exact number instead of a timing guess, and "it did not move" something a
+// test can assert without sleeping for it. The tests in this package do not
+// run in parallel, which a process-wide clock requires.
+//
+// Waiting is only for asynchronous work to happen (eventually); a state that
+// was committed is read after a settle — an empty message through the same
+// entity, which runs after the previous message's after-commit work
+// (published position, heartbeat starts and stops).
+
+// businessTime is the hand-moved business clock.
+type businessTime struct{ nanos atomic.Int64 }
+
+func (b *businessTime) now() time.Time { return time.Unix(0, b.nanos.Load()) }
+
+func (b *businessTime) advance(d time.Duration) { b.nanos.Add(int64(d)) }
+
+// moveWorld is the harness.
+type moveWorld struct {
+	t        *testing.T
+	ctx      context.Context
+	clock    *businessTime
+	recorder *sceneRecorder
+	bridge   *Scene
+	entities *entity.EntityManager
+	engine   *nest.NestMgr
+	area     *sceneentity.Scene
+	views    map[int64]map[int64]bson.M
+}
+
+func newMoveWorld(t *testing.T) *moveWorld {
+	t.Helper()
+	ctx := context.Background()
+	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}}
+	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
+	clock.SetSource(w.clock.now)
+	t.Cleanup(func() { clock.SetSource(nil) })
+
+	for _, register := range []func(){
+		handler.RegisterEnterSceneNestHandlers, handler.RegisterMoveTargetNestHandlers, handler.RegisterMovePlayerNestHandlers,
+		handler.RegisterPlayerPositionNestHandlers, handler.RegisterSpawnMonsterNestHandlers, handler.RegisterRootMonsterNestHandlers,
+		handler.RegisterSetSceneTimeRateNestHandlers,
+	} {
+		register()
+	}
+	player.RegisterEntity()
+	monster.RegisterEntity()
+	sceneentity.RegisterEntity()
+
+	w.entities = entity.NewEntityManager()
+	access := entity.NewManagerAccess(w.entities)
+	w.engine = nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 1024}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}),
+	)
+	if err := w.engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = w.engine.Shutdown(context.Background()) })
+
+	w.recorder = newSceneRecorder()
+	bridge, err := newScene(w.recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	if err := bridge.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = bridge.Close(closeCtx)
+	})
+	w.bridge = bridge
+
+	// The heartbeat driver, as startHeartbeat binds it. Stopped before the
+	// engine (cleanups run last-in first-out).
+	lookup := func(id int64) entity.IThreadSafeEntity { return w.entities.Get(id) }
+	if err := actor.Heartbeat.Bind(w.engine, lookup); err != nil {
+		t.Fatal(err)
+	}
+	actor.SetLookup(lookup)
+	if err := actor.Heartbeat.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = actor.Heartbeat.Stop(context.Background())
+		actor.SetLookup(nil)
+	})
+
+	// The scene, as EnsureWorldScene builds it, wired as Init wires it.
+	scenes, err := lifecycle.NewSceneLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	area, _, err := scenes.GetOrCreate(ctx, lifecycle.WorldSceneUniqueID)
+	if err != nil {
+		t.Fatalf("scene: %v", err)
+	}
+	t.Cleanup(func() { _ = scenes.Destroy(context.Background(), area, entity.DestroyReasonCommon, false) })
+	w.area = area
+	area.SetSpace(bridge.MoveSpace())
+	if err := bridge.ShowScene(area); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// join builds a player, places it through the enter-scene transaction and
+// joins it to the replicated scene, as EnterGame does.
+func (w *moveWorld) join(uniqueID int64, at spatial.Point) *player.Player {
+	w.t.Helper()
+	value := newScenePlayer(w.t, uniqueID)
+	w.entities.Add(value)
+	placed, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, value.ID(), w.area.ID(), at.X, at.Y)
+	if err != nil {
+		w.t.Fatalf("enter scene %d: %v", uniqueID, err)
+	}
+	if placed != at {
+		w.t.Fatalf("player %d placed at %v, want %v", uniqueID, placed, at)
+	}
+	joinReady(w.t, w.bridge, w.ctx, value, placed)
+	return value
+}
+
+// settle runs an empty message through the entity: it executes after the
+// previous message's after-commit work, so committed state reads true.
+func (w *moveWorld) settle(id int64) {
+	w.t.Helper()
+	if _, err := w.engine.Request(w.ctx, settleHandler, id, nest.NewParams()); err != nil {
+		w.t.Fatalf("settle %d: %v", id, err)
+	}
+}
+
+var settleHandler = nest.NewHandlerName("scene_movement_test.settle")
+
+// lockedHandler runs its parameter in the entity's lock: component state
+// (a walk, a frozen group, a registration) is the entity's, and reading it
+// from the test goroutine without that lock is a data race even after a
+// settle.
+var lockedHandler = nest.NewHandlerName("scene_movement_test.locked")
+
+func init() {
+	nest.MustRegisterHandlerWithMeta(settleHandler, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	nest.MustRegisterHandlerWithMeta(lockedHandler, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		params[0].(func())()
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+}
+
+// locked reads fn's answer in the entity's lock.
+func locked[T any](w *moveWorld, id int64, fn func() T) T {
+	w.t.Helper()
+	var out T
+	if _, err := w.engine.Request(w.ctx, lockedHandler, id, nest.NewParams(func() { out = fn() })); err != nil {
+		w.t.Fatalf("read %d: %v", id, err)
+	}
+	return out
+}
+
+// eventually waits for an asynchronous condition (a beat that has not come
+// yet), failing with what the last look saw.
+func eventually(t *testing.T, what string, cond func() (bool, string)) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		ok, saw := cond()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: never happened; last saw %s", what, saw)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// positionsSeen decodes the frames the watcher received since the last call
+// and returns, per subject, the positions it was told in order, and what the
+// watcher knows of each subject (every field merged, across calls: a delta
+// only carries what changed).
+func (w *moveWorld) positionsSeen(watcher int64) (map[int64][]spatial.Point, map[int64]bson.M) {
+	w.t.Helper()
+	if w.views == nil {
+		w.views = make(map[int64]map[int64]bson.M)
+	}
+	known := w.views[watcher]
+	if known == nil {
+		known = make(map[int64]bson.M)
+		w.views[watcher] = known
+	}
+	seen := make(map[int64][]spatial.Point)
+	for _, push := range w.recorder.take(watcher) {
+		for subject, document := range decodeSceneFrames(w.t, watcher, []*pb.EntitySyncPush{push}) {
+			merged := known[subject]
+			if merged == nil {
+				merged = bson.M{}
+				known[subject] = merged
+			}
+			for key, value := range document {
+				merged[key] = value
+			}
+			_, movedX := document["pos_x"]
+			_, movedY := document["pos_y"]
+			if movedX || movedY {
+				seen[subject] = append(seen[subject], spatial.Point{X: asInt64(merged["pos_x"]), Y: asInt64(merged["pos_y"])})
+			}
+		}
+	}
+	return seen, known
+}
+
+func asInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int32:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	}
+	return 0
+}
+
+// The client sends a goal; the player's own move heartbeat walks it there one
+// step per beat; the watcher sees the steps and the arrival; the walk ends
+// and its heartbeat stops. A second goal replaces a walk in progress, and the
+// teleport (the reference path) ends one.
+func TestAPlayerWalksToItsGoalOnItsOwnHeartbeatAndTheWatcherSeesTheSteps(t *testing.T) {
+	w := newMoveWorld(t)
+	const watcherID, walkerID = int64(9701), int64(9702)
+	w.join(watcherID, spatial.Point{X: 500, Y: 500})
+	walker := w.join(walkerID, spatial.Point{X: 510, Y: 500})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := w.positionsSeen(watcherID); known[walker.ID()] == nil {
+		t.Fatal("setup: the watcher has no snapshot of the walker")
+	}
+
+	goal := spatial.Point{X: 540, Y: 500}
+	actionID, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), goal.X, goal.Y, 0)
+	if err != nil || actionID == 0 {
+		t.Fatalf("move target: action %d err %v", actionID, err)
+	}
+	w.settle(walker.ID())
+	moveReg := locked(w, walker.ID(), func() *heartbeat.Reg { return walker.MapComp().Behavior().Beat().Reg(actor.GroupMove) })
+	if moveReg == nil || !locked(w, walker.ID(), moveReg.Active) {
+		t.Fatalf("walking player: move heartbeat %v, want the move group's registration active", moveReg)
+	}
+	// The clock has not moved: every beat so far advanced nothing.
+	if at := walker.MapBasic().Published().Pos; at != (spatial.Point{X: 510, Y: 500}) {
+		t.Fatalf("before any business time passed the player is at %v", at)
+	}
+	// 30 cells at actor.PlayerSpeed (60/s) is half a second. Spend it in
+	// three steps of 0.2s, 0.2s and 0.1s: 12, 12 and 6 cells.
+	var steps []spatial.Point
+	for _, step := range []struct {
+		d    time.Duration
+		want spatial.Point
+	}{{200 * time.Millisecond, spatial.Point{X: 522, Y: 500}}, {200 * time.Millisecond, spatial.Point{X: 534, Y: 500}}, {100 * time.Millisecond, goal}} {
+		w.clock.advance(step.d)
+		want := step.want
+		eventually(t, fmt.Sprintf("a beat spends %v", step.d), func() (bool, string) {
+			at := walker.MapBasic().Published().Pos
+			return at == want, fmt.Sprint(at)
+		})
+		w.settle(walker.ID())
+		steps = append(steps, walker.MapBasic().Published().Pos)
+	}
+	if walking, active := locked(w, walker.ID(), walker.MapComp().Walking), locked(w, walker.ID(), moveReg.Active); walking || active {
+		t.Fatalf("arrived: walking %v, move heartbeat active %v; the walk did not end", walking, active)
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	seen, last := w.positionsSeen(watcherID)
+	if got := seen[walker.ID()]; len(got) < 3 || got[len(got)-1] != goal {
+		t.Fatalf("the watcher saw the walker at %v, want the three steps ending at %v (server steps %v)", got, goal, steps)
+	}
+	if facing := asInt64(last[walker.ID()]["facing"]); facing != 0 {
+		t.Fatalf("walking along +X: facing %d, want 0", facing)
+	}
+
+	// The AOI follows the walk: a player 190 cells away does not see the
+	// walker; once the walk brings it within the enter radius (120) it does.
+	// Only the committed steps queued for the interest policy
+	// (MapBasic.SetPos → QueueMove) can make that happen.
+	const farID = int64(9703)
+	w.join(farID, spatial.Point{X: 700, Y: 500})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := w.positionsSeen(farID); known[walker.ID()] != nil {
+		t.Fatalf("setup: a player 190 cells away already sees the walker: %v", known[walker.ID()])
+	}
+	near := spatial.Point{X: 600, Y: 500}
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), near.X, near.Y, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.advance(time.Second)
+	eventually(t, "the walk into view arrives", func() (bool, string) {
+		at := walker.MapBasic().Published().Pos
+		return at == near, fmt.Sprint(at)
+	})
+	w.settle(walker.ID())
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := w.positionsSeen(farID); known[walker.ID()] == nil || asInt64(known[walker.ID()]["pos_x"]) != near.X {
+		t.Fatalf("the walk brought the walker within 100 cells of player %d, which still does not see it at %v: %v", farID, near, known[walker.ID()])
+	}
+
+	// A new goal replaces the walk in progress.
+	far := spatial.Point{X: 660, Y: 500}
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), far.X, far.Y, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.advance(100 * time.Millisecond)
+	eventually(t, "the far walk starts", func() (bool, string) {
+		at := walker.MapBasic().Published().Pos
+		return at == spatial.Point{X: 606, Y: 500}, fmt.Sprint(at)
+	})
+	back := spatial.Point{X: 600, Y: 520}
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), back.X, back.Y, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.advance(time.Second)
+	eventually(t, "the replacing walk arrives", func() (bool, string) {
+		at := walker.MapBasic().Published().Pos
+		return at == back, fmt.Sprint(at)
+	})
+	w.settle(walker.ID())
+	if locked(w, walker.ID(), walker.MapComp().Walking) {
+		t.Fatal("the replaced walk is still going")
+	}
+
+	// The teleport ends a walk: the player stays on the teleport point while
+	// business time passes, and its move heartbeat is stopped.
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), 700, 700, 0); err != nil {
+		t.Fatal(err)
+	}
+	blink := spatial.Point{X: 450, Y: 450}
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, walker.ID(), w.area.ID(), blink.X, blink.Y); err != nil {
+		t.Fatalf("teleport: %v", err)
+	}
+	w.settle(walker.ID())
+	w.clock.advance(time.Second)
+	w.settle(walker.ID())
+	if at, walking, active := walker.MapBasic().Published().Pos, locked(w, walker.ID(), walker.MapComp().Walking), locked(w, walker.ID(), moveReg.Active); at != blink || walking || active {
+		t.Fatalf("after a teleport: at %v walking %v heartbeat %v, want %v and no walk", at, walking, active, blink)
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	seen, _ = w.positionsSeen(watcherID)
+	if got := seen[walker.ID()]; len(got) == 0 || got[len(got)-1] != blink {
+		t.Fatalf("the watcher last saw the walker at %v, want the teleport point %v", got, blink)
+	}
+
+	// A goal too far for the search's budget is walked in a straight line,
+	// and the ground still holds: a blocked cell on the way stops the walk on
+	// the last walkable one (the Move checks every cell against actor.Ground).
+	wall := spatial.Point{X: 460, Y: 460}
+	if err := w.area.Terrain().Occupy(wall); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.area.Terrain().Release(wall) })
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), 750, 750, 0); err != nil {
+		t.Fatalf("a goal beyond the route budget was refused: %v", err)
+	}
+	w.clock.advance(time.Second)
+	eventually(t, "the straight walk stops at the wall", func() (bool, string) {
+		return !locked(w, walker.ID(), walker.MapComp().Walking), fmt.Sprint(walker.MapBasic().Published().Pos)
+	})
+	if at := walker.MapBasic().Published().Pos; at.X >= wall.X || at.Y >= wall.Y || at.X < wall.X-2 || at.Y < wall.Y-2 {
+		t.Fatalf("the straight walk ended at %v, want it stopped just short of the blocked cell %v", at, wall)
+	}
+}
+
+// The scene's own subject (its time domain) reaches every member, and a 2×
+// scene walks twice as far for the same business time: the member's beats
+// carry domain time (BeatConfig.TimeDomain).
+func TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers(t *testing.T) {
+	w := newMoveWorld(t)
+	const walkerID = int64(9711)
+	walker := w.join(walkerID, spatial.Point{X: 300, Y: 300})
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), 300, 600, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.settle(walker.ID())
+	// 1×: 0.5s of business time is 30 cells.
+	w.clock.advance(500 * time.Millisecond)
+	eventually(t, "the 1x step", func() (bool, string) {
+		at := walker.MapBasic().Published().Pos
+		return at == spatial.Point{X: 300, Y: 330}, fmt.Sprint(at)
+	})
+	rate, err := syncsender.NewSetSceneTimeRateSender(w.engine).Sync_SetSceneTimeRate(w.ctx, w.area.ID(), 2)
+	if err != nil || rate != 2 {
+		t.Fatalf("set rate: %v %v", rate, err)
+	}
+	// 2×: the same 0.5s is 60 cells.
+	w.clock.advance(500 * time.Millisecond)
+	eventually(t, "the 2x step", func() (bool, string) {
+		at := walker.MapBasic().Published().Pos
+		return at == spatial.Point{X: 300, Y: 390}, fmt.Sprint(at)
+	})
+	w.settle(walker.ID())
+	if at := walker.MapBasic().Published().Pos; at != (spatial.Point{X: 300, Y: 390}) {
+		t.Fatalf("2x: the player walked to %v, want 60 cells for half a second", at)
+	}
+	// Out of range is refused and changes nothing.
+	if _, err := syncsender.NewSetSceneTimeRateSender(w.engine).Sync_SetSceneTimeRate(w.ctx, w.area.ID(), sceneentity.MaxTimeRate+1); err == nil {
+		t.Fatal("a rate above the scene's maximum was accepted")
+	}
+	if got := w.area.TimeDomain().State().EffectiveRate(); got != 2 {
+		t.Fatalf("after a refused change the rate is %v, want 2", got)
+	}
+	// The member was told: the scene subject's replicated state carries the
+	// rate.
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, last := w.positionsSeen(walkerID)
+	sceneState, ok := last[w.area.ID()]
+	if !ok {
+		t.Fatalf("the member never received the scene's own subject; got subjects %v", keysOf(last))
+	}
+	if got, _ := sceneState["time_rate"].(float64); got != 2 {
+		t.Fatalf("the member was told rate %v, want 2 (%v)", sceneState["time_rate"], sceneState)
+	}
+	if asInt64(sceneState["time_anchor_business"]) == 0 {
+		t.Fatalf("the member was not told the domain's anchor: %v", sceneState)
+	}
+}
+
+func keysOf(m map[int64]bson.M) []int64 {
+	out := make([]int64, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	return out
+}
+
+// loadSpawnData loads the project's config data (the spawn table) and turns
+// the respawn switch on.
+func loadSpawnData(t *testing.T) {
+	t.Helper()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	configdata.SetDefaultStore(store)
+	featureflag.Set(featureflag.Flag{Name: flags.MonsterSpawn, Enabled: true})
+	t.Cleanup(func() { featureflag.Set(featureflag.Flag{Name: flags.MonsterSpawn, Enabled: false}) })
+}
+
+// startTestSpawner is startSpawner over the harness.
+func (w *moveWorld) startTestSpawner() *spawner {
+	w.t.Helper()
+	lives, err := lifecycle.NewMonsterLifecycle(entity.NewManagerAccess(w.entities))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ids, err := runtimeid.New(1000)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	instance := newSpawner(w.area, w.bridge, lives, ids, w.engine, clock.Process())
+	stop := instance.start(w.ctx)
+	w.t.Cleanup(stop)
+	return instance
+}
+
+func (s *spawner) monster(id int64) *monster.Monster {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.monsters[id]
+}
+
+// The scene's own 1 Hz beat decides the population and the spawner builds it
+// (the table's three); a killed monster's slot is refilled by a later beat
+// once the table's respawn delay has passed in business time, not before.
+// Each one patrols on its own heartbeat — corner after corner — and is seen
+// by a player nearby.
+func TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols(t *testing.T) {
+	loadSpawnData(t)
+	w := newMoveWorld(t)
+	const watcherID = int64(9721)
+	w.join(watcherID, spatial.Point{X: 520, Y: 500})
+	spawn := w.startTestSpawner()
+	eventually(t, "the scene's beat fills the table's population", func() (bool, string) {
+		return spawn.Count() == 3, fmt.Sprint(spawn.Count())
+	})
+	ids := spawn.IDs()
+	for _, id := range ids {
+		w.settle(id)
+		if value := spawn.monster(id); value == nil || !locked(w, id, value.ActorComp().InScene) {
+			t.Fatalf("monster %d is counted but not on the map", id)
+		}
+	}
+
+	// Patrol: the AI starts a walk to the first corner (12 cells +X at
+	// actor.MonsterSpeed 20/s), and business time carries it there.
+	first := spawn.monster(ids[0])
+	home := first.MapBasic().Published().Pos
+	eventually(t, "the patrol starts walking", func() (bool, string) {
+		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+	})
+	w.clock.advance(time.Second)
+	corner := spatial.Point{X: home.X + 12, Y: home.Y}
+	eventually(t, "the first corner", func() (bool, string) {
+		at := first.MapBasic().Published().Pos
+		return at == corner, fmt.Sprint(at)
+	})
+	// ... and the next decision walks to the second corner (+Y).
+	eventually(t, "the patrol starts the second corner", func() (bool, string) {
+		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+	})
+	w.clock.advance(time.Second)
+	second := spatial.Point{X: home.X + 12, Y: home.Y + 12}
+	eventually(t, "the second corner", func() (bool, string) {
+		at := first.MapBasic().Published().Pos
+		return at == second, fmt.Sprint(at)
+	})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	seen, last := w.positionsSeen(watcherID)
+	if got := seen[first.ID()]; len(got) == 0 || got[len(got)-1] != second {
+		t.Fatalf("the watcher saw the monster at %v, want it at the second corner %v", got, second)
+	}
+	for _, id := range ids {
+		if _, ok := last[id]; !ok {
+			t.Fatalf("the watcher never received monster %d", id)
+		}
+	}
+
+	// Kill one: the slot waits for the respawn delay (20s in the table) of
+	// business time, then the scene's beat asks for it again.
+	if err := spawn.Kill(w.ctx, ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if spawn.Count() != 2 {
+		t.Fatalf("after a kill %d alive", spawn.Count())
+	}
+	offered := spawn.offered.Load()
+	w.clock.advance(10 * time.Second)
+	// Two beats of the scene's population heartbeat later — at least one of
+	// them froze the advanced time — nothing was asked for.
+	waitSceneBeats(t, w, 2)
+	if spawn.Count() != 2 || spawn.offered.Load() != offered {
+		t.Fatalf("the slot was asked for before its respawn delay: %d alive, %d offers (was %d)", spawn.Count(), spawn.offered.Load(), offered)
+	}
+	w.clock.advance(11 * time.Second)
+	eventually(t, "the slot is refilled after the delay", func() (bool, string) {
+		return spawn.Count() == 3, fmt.Sprint(spawn.Count())
+	})
+	row, _ := generated.SpawnByID(1)
+	if row.RespawnSeconds != 20 {
+		t.Fatalf("the test assumes the table's 20s respawn; the row is %+v", row)
+	}
+}
+
+// waitSceneBeats waits until the scene's population beat has executed n more
+// times.
+func waitSceneBeats(t *testing.T, w *moveWorld, n int64) {
+	t.Helper()
+	before := w.area.SpawnBeats()
+	eventually(t, "scene beats", func() (bool, string) {
+		got := w.area.SpawnBeats()
+		return got >= before+n, fmt.Sprint(got - before)
+	})
+}
+
+// waitBuffBeats waits until the monster's buff heartbeat has run twice more:
+// at least one of those beats froze the business time set before the call.
+func waitBuffBeats(t *testing.T, w *moveWorld, value *monster.Monster) {
+	t.Helper()
+	before := value.ActorComp().CombatBeats()
+	eventually(t, "two buff beats", func() (bool, string) {
+		got := value.ActorComp().CombatBeats()
+		return got >= before+2, fmt.Sprint(got - before)
+	})
+	w.settle(value.ID())
+}
+
+// Rooted: the root buff derives the Rooted state (BindStates), the gate
+// freezes the move group — the walk in progress pauses where it is and its
+// heartbeat stops, so business time passing moves nothing — and the client
+// is told (MonsterDao.Rooted). Freed, the walk resumes from where it paused.
+func TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed(t *testing.T) {
+	loadSpawnData(t)
+	w := newMoveWorld(t)
+	const watcherID = int64(9731)
+	w.join(watcherID, spatial.Point{X: 520, Y: 500})
+	spawn := w.startTestSpawner()
+	eventually(t, "the population", func() (bool, string) { return spawn.Count() == 3, fmt.Sprint(spawn.Count()) })
+	target := spawn.monster(spawn.IDs()[0])
+	home := target.MapBasic().Published().Pos
+	eventually(t, "the patrol starts walking", func() (bool, string) {
+		return locked(w, target.ID(), target.ActorComp().Moving), "idle"
+	})
+	// Half way to the first corner: 6 of 12 cells.
+	w.clock.advance(300 * time.Millisecond)
+	halfway := spatial.Point{X: home.X + 6, Y: home.Y}
+	eventually(t, "half way", func() (bool, string) {
+		at := target.MapBasic().Published().Pos
+		return at == halfway, fmt.Sprint(at)
+	})
+
+	rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true, 0)
+	if err != nil || !rooted {
+		t.Fatalf("root: %v %v", rooted, err)
+	}
+	w.settle(target.ID())
+	moveReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.ActorComp().Behavior().Beat().Reg(actor.GroupMove) })
+	frozen := locked(w, target.ID(), func() bool { return target.ActorComp().Behavior().Frozen(actor.GroupMove) })
+	if active := locked(w, target.ID(), moveReg.Active); !frozen || active {
+		t.Fatalf("rooted: move group frozen %v, heartbeat active %v; want frozen and not beating", frozen, active)
+	}
+	if !locked(w, target.ID(), target.ActorComp().Moving) {
+		t.Fatal("rooted with FreezePause: the walk was dropped instead of paused")
+	}
+	w.clock.advance(5 * time.Second)
+	w.settle(target.ID())
+	w.settle(target.ID())
+	if at := target.MapBasic().Published().Pos; at != halfway {
+		t.Fatalf("a rooted monster moved to %v while business time passed, want it held at %v", at, halfway)
+	}
+	if !locked(w, target.ID(), target.Dao().GetRooted) {
+		t.Fatal("the client's mirror of the state is not set")
+	}
+
+	// Freed: the walk resumes from where it paused and reaches the corner.
+	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), false, 0); err != nil || rooted {
+		t.Fatalf("free: %v %v", rooted, err)
+	}
+	w.settle(target.ID())
+	if !locked(w, target.ID(), moveReg.Active) {
+		t.Fatal("freed: the move heartbeat did not come back")
+	}
+	w.clock.advance(time.Second)
+	corner := spatial.Point{X: home.X + 12, Y: home.Y}
+	eventually(t, "the paused walk resumes to the corner", func() (bool, string) {
+		at := target.MapBasic().Published().Pos
+		return at == corner, fmt.Sprint(at)
+	})
+	// A timed root (2s) wears off on the monster's own buff heartbeat: held
+	// while less than 2s of business time has passed, walking again after.
+	eventually(t, "the patrol walks on to the next corner", func() (bool, string) {
+		return locked(w, target.ID(), target.ActorComp().Moving), "idle"
+	})
+	if rooted, err := syncsender.NewRootMonsterSender(w.engine).Sync_RootMonster(w.ctx, target.ID(), true, 2); err != nil || !rooted {
+		t.Fatalf("timed root: %v %v", rooted, err)
+	}
+	w.settle(target.ID())
+	combatReg := locked(w, target.ID(), func() *heartbeat.Reg { return target.ActorComp().CombatBeat() })
+	if combatReg == nil || !locked(w, target.ID(), combatReg.Active) {
+		t.Fatal("a timed buff is on but the monster's buff heartbeat is not running")
+	}
+	held := target.MapBasic().Published().Pos
+	w.clock.advance(1500 * time.Millisecond)
+	waitBuffBeats(t, w, target)
+	if !locked(w, target.ID(), target.ActorComp().Rooted) || target.MapBasic().Published().Pos != held {
+		t.Fatalf("1.5s into a 2s root: rooted %v at %v, want still held at %v", locked(w, target.ID(), target.ActorComp().Rooted), target.MapBasic().Published().Pos, held)
+	}
+	w.clock.advance(time.Second)
+	eventually(t, "the timed root wears off", func() (bool, string) {
+		return !locked(w, target.ID(), target.ActorComp().Rooted), "rooted"
+	})
+	eventually(t, "the buff heartbeat stops with no timed buff left", func() (bool, string) {
+		return !locked(w, target.ID(), combatReg.Active), "active"
+	})
+	eventually(t, "it walks again", func() (bool, string) {
+		w.clock.advance(100 * time.Millisecond)
+		at := target.MapBasic().Published().Pos
+		return at != held, fmt.Sprint(at)
+	})
+
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, last := w.positionsSeen(watcherID)
+	if state, ok := last[target.ID()]; !ok || state["rooted"] != false {
+		t.Fatalf("the watcher's view of the monster: %v, want it freed (rooted false)", state)
+	}
+}

@@ -1,0 +1,42 @@
+package scene
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// SceneSyncCodec names the scene's payload on the wire (the Player's is 1,
+// the Monster's 2).
+const SceneSyncCodec uint16 = 3
+
+// NewSceneSyncPacker packs the scene's subject: its time domain, every field,
+// one view. Every member of the scene sees it through the scene's relation
+// view (internal/service/game/scene.go), wherever they stand — it is a fact
+// about the whole map, not about a point on it.
+func NewSceneSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Scene)
+	return sceneSyncPacker{scene: owner}
+}
+
+type sceneSyncPacker struct{ scene *Scene }
+
+func (packer sceneSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, dataengine.AllFields)
+}
+
+func (packer sceneSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, mask)
+}
+
+func (packer sceneSyncPacker) pack(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	if packer.scene == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("scene sync packer: no entity")
+	}
+	raw := packer.scene.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(SceneSyncCodec, raw), nil
+}

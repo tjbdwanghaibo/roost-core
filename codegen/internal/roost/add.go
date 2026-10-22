@@ -27,7 +27,10 @@ type AddOptions struct {
 	// Consumer is the service that consumes an effect: roost add effect
 	// player.level_up -consumer game.
 	Consumer string
-	ID       int64
+	// AI / State are roost add behavior options: build an AI heartbeat
+	// controller next to the Behavior, and scaffold a gameplay/state Catalog.
+	AI, State bool
+	ID        int64
 	// Warnings receives what the command could not do but did not fail for,
 	// such as a k8s Secret example it cannot recognise.
 	// nil means os.Stderr, so nothing is skipped silently.
@@ -45,6 +48,17 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if options.Kind == "timer" {
 		// roost add timer --entity <Entity>：名字就是实体，可以只写 --entity。
 		return addTimer(root, m, options)
+	}
+	switch options.Kind {
+	case "heartbeat":
+		// roost add heartbeat --entity Monster：实体的心跳宿主（D20）。
+		return addHeartbeat(root, m, options, false)
+	case "behavior":
+		// roost add behavior --entity Monster [--ai] [--state]：行为组件（D21），没有心跳宿主时一并加上。
+		return addHeartbeat(root, m, options, true)
+	case "timedomain":
+		// roost add timedomain --entity Scene：场景时间域（D22）。
+		return addTimeDomain(root, m, options)
 	}
 	if options.Kind == "effect" {
 		// roost add effect player.level_up：名字是点分的 effect 主题，按自己的规则校验。

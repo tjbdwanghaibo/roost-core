@@ -168,6 +168,9 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "global.service_type", Kind: "string", Default: "global", Help: "bus service type the calls are addressed to"},
 		{Name: "global.call_timeout", Kind: "duration", Min: "0", Help: "timeout of one call; 0 keeps DefaultCallTimeout (3s)"},
 	}},
+	"heartbeat": {Keys: []configschema.Key{
+		{Name: "heartbeat.delivery", Kind: "string", Default: "dispatch", Help: "心跳交给 Nest 的方式：dispatch 每拍一条单目标 Dispatch（缺省）；batch 按 64 拍一批走 Nest 批量心跳作业（DESIGN-TODO D20 选项 C，未经正式压测，缺省关闭）。启动时确定，运行期不切换", Starter: true, Example: "dispatch", Enum: []string{"dispatch", "batch"}},
+	}},
 	"mail": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "mail.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:mail", Required: true},

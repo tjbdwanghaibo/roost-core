@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -63,6 +64,23 @@ func newBeatControllerForTest(t *testing.T, hooks ControllerHooks) (*Controller,
 		t.Fatal(err)
 	}
 	return c, d
+}
+
+// 重新设置当前策略不是替换（不问 CanStopByNext、不 Init / Stop），只按当前状态重新对齐心跳：Remote 托管实体回到独占之后，
+// 共享期间被框架停掉的 "ai" 心跳由业务这样恢复（这里直接 Stop 模拟框架停掉；真实 Remote 见 movement 的 shared_test.go）。
+func TestSettingTheCurrentStrategyAgainResumesAStoppedBeat(t *testing.T) {
+	c, d := newBeatControllerForTest(t, ControllerHooks{})
+	strategy := &refusingStrategy{controllerTestStrategy{name: "keep"}} // 拒绝被替换，也照样能重新设置自己
+	if err := c.SetStrategy(strategy); err != nil {
+		t.Fatal(err)
+	}
+	c.BeatReg().Stop()
+	if err := c.SetStrategy(strategy); err != nil {
+		t.Fatalf("setting the current strategy again: %v", err)
+	}
+	if !c.BeatReg().Active() || d.Registered() != 1 || c.Strategy() != strategy {
+		t.Fatalf("after setting the current strategy again: beat %v registered %d", c.BeatReg().Active(), d.Registered())
+	}
 }
 
 // 周期由策略决定（不实现取 BeatConfig.Period，返回 0 停），没有策略或无定时的冻结时停；每拍之后按策略重新取档。
@@ -270,5 +288,40 @@ func TestABeatControllerOnATimeDomainUsesDomainTime(t *testing.T) {
 	}
 	if got, want := c.now(), domain.Now(); !got.Equal(want) || got.Equal(execution.Now) {
 		t.Fatalf("a beat controller on a time domain reads %v, want the domain time %v (business %v)", got, want, execution.Now)
+	}
+}
+
+// 换场景（换时间域）重建 AI：撤掉旧的心跳驱动 Controller（Close 卸下策略、撤销 "ai" 登记），在同一心跳宿主上按新的域
+// 再建一个；新 Controller 的 "ai" 登记挂得上、跟着策略跳，旧的离开驱动；关闭后的 Controller 拒绝新策略。
+func TestABeatControllerCanBeRebuiltOnTheSameHost(t *testing.T) {
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "ai-rebuild", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	host := d.NewHost(&beatTestEntity{entity.NewEntityBase(2<<20, entity.EntityCategoryOther, true)})
+	var reported []error
+	hooks := ControllerHooks{OnError: func(err error) { reported = append(reported, err) }}
+	old, err := NewBeatController(hooks, BeatConfig{Host: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.SetStrategy(&pacedStrategy{controllerTestStrategy: controllerTestStrategy{name: "old"}, interval: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	oldReg := old.BeatReg()
+	old.Close("scene change")
+	if old.Strategy() != nil || !oldReg.Closed() || d.Registered() != 0 {
+		t.Fatalf("closed controller: strategy %v reg closed %v registered %d", old.Strategy(), oldReg.Closed(), d.Registered())
+	}
+	if err := old.SetStrategy(&pacedStrategy{controllerTestStrategy: controllerTestStrategy{name: "late"}}); !errors.Is(err, ErrControllerClosed) {
+		t.Fatalf("SetStrategy on a closed controller = %v", err)
+	}
+	rebuilt, err := NewBeatController(hooks, BeatConfig{Host: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuilt.SetStrategy(&pacedStrategy{controllerTestStrategy: controllerTestStrategy{name: "new"}, interval: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if len(reported) != 0 || rebuilt.BeatReg() == nil || !rebuilt.BeatReg().Active() || d.Registered() != 1 {
+		t.Fatalf("rebuilt controller: reported %v active %v registered %d", reported,
+			rebuilt.BeatReg() != nil && rebuilt.BeatReg().Active(), d.Registered())
 	}
 }

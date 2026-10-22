@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/lifecycle"
 	gamescene "{{MODULE}}/game/scene"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
@@ -18,6 +21,7 @@ import (
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -88,6 +92,14 @@ const (
 	// stays in the scene without its own view until its next login; a warning
 	// per player was the only trace.
 	sceneOpenFailedMetric = "scene_session_open_failed_total"
+
+	// sceneView is the relation view every member is attached to: its one
+	// member is the scene's own subject (SceneDao: the time domain), which
+	// everyone on the map sees wherever they stand. Team views count up from
+	// 1, so this id cannot collide with one.
+	sceneView policy.ViewID = 1 << 40
+	// sceneMaxMembers bounds the scene view's fan-out (MaxPlayersPerView).
+	sceneMaxMembers = 1 << 16
 )
 
 // SceneCapability is the name the scene is published under, so an endpoint
@@ -129,6 +141,9 @@ type Scene struct {
 	teamMu   sync.Mutex
 	teams    map[int64]policy.ViewID // player id → the team view it is attached to
 	lastTeam policy.ViewID
+
+	// sceneShown says ShowScene defined the scene view; Join attaches to it.
+	sceneShown atomic.Bool
 
 	mu      sync.Mutex
 	members map[int64]sceneMember // subject (entity) id → the Join it is in the scene under
@@ -309,9 +324,19 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	// main view plus at most 8 extra views per player — this demo has the main
 	// view and a team view. A game giving each player more than 8 extra views
 	// (RTS units, many summons or wards) picks ApplyAsync.
+	//
+	// Every Interest call below only records the change (a short lock, no
+	// AOI work), so handlers on the Nest workers call it directly; the tick's
+	// policy phase applies the record in call order and tells the manager.
+	// What the manager refused comes back through OnRefusal.
 	interest, err := policy.NewInterest(policy.InterestConfig{
 		Manager:   manager,
 		ApplyMode: policy.ApplySync,
+		OnRefusal: logRefusal,
+		// Every member is attached to the scene view (the scene's own subject,
+		// its time domain), so one view fans out to everyone on the map; the
+		// framework's default of 4096 players per view would cap the map.
+		MaxPlayersPerView: sceneMaxMembers,
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
@@ -541,10 +566,18 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	if err := bridge.interest.Enter(playerID, subjectID, at, view); err != nil {
 		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
 	}
+	// The scene's own subject (its time domain), wherever the player stands.
+	// Leave detaches every view of the player, so a rejoin attaches again.
+	// A scene that was never shown (a test without one) has no view: the
+	// player just does not receive scene facts.
+	if bridge.sceneShown.Load() {
+		if err := bridge.interest.AttachView(playerID, sceneView); err != nil {
+			slog.Warn("scene: member not attached to the scene view", "player_id", playerID, "err", err)
+		}
+	}
 	if reopened {
 		bridge.interest.Resubscribe(playerID)
 	}
-	bridge.apply()
 	if opening {
 		bridge.openLater(subjectID, generation, 2) // this Join made attempt 1
 	}
@@ -553,8 +586,9 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 
 // registeredLater is the done of a registration queued behind a retirement.
 // Pairs the policy said while the subject was retiring were refused and wait
-// on its retry list; once the subject is registered they are said again. It
-// runs on the manager's goroutine, so the work goes to its own.
+// on its retry list; the policy says them again on every tick, so once the
+// subject is registered they are taken. This only reports a registration
+// that failed. It runs on the manager's goroutine, so the work goes to its own.
 func (bridge *Scene) registeredLater(subjectID int64, generation uint64) func(error) {
 	return func(err error) {
 		bridge.runLater(func() {
@@ -565,9 +599,7 @@ func (bridge *Scene) registeredLater(subjectID int64, generation uint64) func(er
 			}
 			if err != nil {
 				slog.Warn("scene: a rejoined player's subject was not registered", "subject_id", subjectID, "err", err)
-				return
 			}
-			bridge.apply()
 		})
 	}
 }
@@ -611,24 +643,45 @@ func (bridge *Scene) Ready(playerID int64) error {
 	return nil
 }
 
-// Moved tells the policy where a player is now. It is called after the move
-// transaction committed — the DAO is the authority and the index follows it,
-// never the other way round.
-func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point) {
-	if bridge == nil {
-		return
+// MoveSpace is the movement.Space players and monsters are entered with
+// (Scene entity SetSpace): their steps are queued in this scene's interest
+// policy inside the step's transaction (commit-gated) and applied in the
+// manager's next flush, together with the content they produced. Membership —
+// Join / Leave, ShowSubject / HideSubject — stays here; see actor.InterestMoves.
+func (bridge *Scene) MoveSpace() movement.Space {
+	if bridge == nil || bridge.interest == nil {
+		return actor.Nowhere{}
 	}
-	if err := bridge.interest.Move(subjectID, to); err != nil {
-		slog.Debug("scene: interest did not follow a move", "subject_id", subjectID, "err", err)
-		return
-	}
-	bridge.apply()
+	return actor.InterestMoves{Interest: bridge.interest}
 }
 
-// SetView applies a client's LOD / view-radius request (scene_view). It is
-// handled like a move: straight into the policy and applied, no queue and no
-// commit gate — it changes no business state, so there is nothing to roll
-// back. The policy clamps and quantizes the radius, refuses a level that is
+// ShowScene replicates the scene's own subject — SceneDao, its time domain —
+// to every member: the subject is registered with the manager and made the
+// one member of the scene view, which each Join attaches the player to. It is
+// not a spatial subject (not Shown in the AOI): a scene's rate is not a fact
+// about a point on the map. Called once, after Start and before anyone joins.
+func (bridge *Scene) ShowScene(area *sceneentity.Scene) error {
+	if bridge == nil || bridge.manager == nil || area == nil {
+		return errors.New("scene: not started")
+	}
+	if err := bridge.manager.Register(area.Sync()); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		return fmt.Errorf("scene: register the scene subject %d: %w", area.ID(), err)
+	}
+	if err := bridge.interest.DefineRelationView(sceneView, coreentity.SyncProfile{}); err != nil {
+		return fmt.Errorf("scene: scene view: %w", err)
+	}
+	if err := bridge.interest.SetViewMembers(sceneView, []int64{area.ID()}); err != nil {
+		return fmt.Errorf("scene: scene view: %w", err)
+	}
+	bridge.sceneShown.Store(true)
+	return nil
+}
+
+// SetView takes a client's LOD / view-radius request (scene_view). It goes
+// straight to the policy without the commit gate — it changes no business
+// state, so there is nothing to roll back — and the next tick applies it;
+// the call itself only records it, so the handler never waits for AOI work.
+// The policy clamps and quantizes the radius, refuses a level that is
 // not configured (policy.ErrObserverView) and a player asking more often
 // than once a second (policy.ErrObserverViewRate, counted); a request equal
 // to the current view after quantizing does nothing. A wider view
@@ -639,28 +692,21 @@ func (bridge *Scene) SetView(playerID int64, view policy.ObserverView) (policy.O
 	if bridge == nil || bridge.interest == nil {
 		return policy.ObserverView{}, errors.New("scene: not started")
 	}
-	applied, err := bridge.interest.SetObserverView(playerID, view)
-	if err != nil {
-		return applied, err
-	}
-	bridge.apply()
-	return applied, nil
+	return bridge.interest.SetObserverView(playerID, view)
 }
 
-// apply lets the policy say its changes to the manager and logs what the
-// manager refused. The first refusal of a pair is the one worth reading (a
-// subject that has not joined yet, a session that is gone); the repeats are
-// the policy trying again, and would bury that line if logged at the same
-// level.
-func (bridge *Scene) apply() {
-	for _, refusal := range bridge.interest.Apply() {
-		// A subject still retiring from a leave is a rejoin whose registration
-		// is queued (Join): the pair is said again once it is registered.
-		if refusal.Retry || errors.Is(refusal.Err, entitysync.ErrSubjectRetiring) {
-			slog.Debug("scene: subscribe still refused", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
-		} else {
-			slog.Warn("scene: subscribe", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
-		}
+// logRefusal logs a subscribe the manager refused in the tick's policy phase
+// (InterestConfig.OnRefusal: it runs inside the policy phase, so it only
+// logs). The first refusal of a pair is the one worth reading (a subject that
+// has not joined yet, a session that is gone); the repeats are the policy
+// trying again, and would bury that line if logged at the same level.
+func logRefusal(refusal policy.Refusal) {
+	// A subject still retiring from a leave is a rejoin whose registration
+	// is queued (Join): the pair is said again once it is registered.
+	if refusal.Retry || errors.Is(refusal.Err, entitysync.ErrSubjectRetiring) {
+		slog.Debug("scene: subscribe still refused", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
+	} else {
+		slog.Warn("scene: subscribe", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
 	}
 }
 
@@ -700,7 +746,9 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 	bridge.teamMu.Lock()
 	bridge.leaveTeamLocked(playerOf(subjectID))
 	bridge.teamMu.Unlock()
-	bridge.apply()
+	// The leave is applied at the next tick, after Unregister below: the
+	// retirement already tells everyone the object is gone, and a rejoin before
+	// that tick is said to the manager as a fresh subscribe.
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
 	}
@@ -721,7 +769,6 @@ func (bridge *Scene) ShowSubject(_ context.Context, state *coreentity.SubjectSyn
 	if err := bridge.interest.Show(subjectID, at); err != nil {
 		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
 	}
-	bridge.apply()
 	return nil
 }
 
@@ -734,7 +781,6 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 	if err := bridge.interest.Hide(subjectID); err != nil {
 		slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
 	}
-	bridge.apply()
 	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
 	}
@@ -781,7 +827,6 @@ func (bridge *Scene) SetTeam(members []int64) {
 	if err != nil {
 		slog.Warn("scene: team view", "team", team, "err", err)
 	}
-	bridge.apply()
 }
 
 // leaveTeamLocked detaches a player from its team view and removes the view
@@ -915,9 +960,8 @@ func (bridge *Scene) openLocked(subjectID int64, member sceneMember, attempt int
 		slog.Warn("scene: replication session not opened", "subject_id", subjectID, "attempts", attempt, "reason", reason, "err", err)
 		return
 	}
-	queued := bridge.interest.Resubscribe(playerOf(subjectID))
-	bridge.apply()
-	slog.Info("scene: replication session opened after a retry", "subject_id", subjectID, "pairs", queued, "attempts", attempt)
+	bridge.interest.Resubscribe(playerOf(subjectID))
+	slog.Info("scene: replication session opened after a retry", "subject_id", subjectID, "attempts", attempt)
 }
 
 // openLater schedules attempt number attempt of openLocked. The retry is

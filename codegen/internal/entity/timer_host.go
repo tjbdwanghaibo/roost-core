@@ -15,6 +15,27 @@ type TimerHost struct {
 	ComponentFields []ComponentField
 }
 
+// InspectComponentHost 读 dir 包里名为 name 的实体，返回它的 DAO 与组件字段，不做任何拒绝（roost add heartbeat /
+// behavior / timedomain 用：心跳与时间域支持全部实体，决定 ⑩）。
+func InspectComponentHost(dir, name string) (TimerHost, error) {
+	defs, _, err := parsePackage(dir)
+	if err != nil {
+		return TimerHost{}, err
+	}
+	for _, ent := range defs.Entities {
+		if ent.Name != name {
+			continue
+		}
+		host := TimerHost{Daos: append([]DaoField(nil), ent.Daos...)}
+		for _, comp := range ent.Components {
+			host.Components = append(host.Components, comp.CompType)
+		}
+		host.ComponentFields = append([]ComponentField(nil), ent.Components...)
+		return host, nil
+	}
+	return TimerHost{}, fmt.Errorf("%s: no //roost:entity struct named %s", filepath.ToSlash(dir), name)
+}
+
 // InspectTimerHost 读 dir 包里名为 name 的实体，拒绝不能装持久定时器的实体：
 //   - remote=managed：实例的所有权在进程间迁移，驱动的期限索引只覆盖本进程加载的实例，迁移中的到期语义没有定义；
 //   - noPersist=true：节点随实体 DAO 持久，不落库的实体重启后没有期限可以补触发。

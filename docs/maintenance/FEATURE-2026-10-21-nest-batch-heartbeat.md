@@ -1,6 +1,6 @@
 # 功能设计：Nest 批量心跳作业（选项 C，2026-10-21）
 
-**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论：压测暂停，待补。** 维护者 2026-10-21 18:55 要求先暂停压测、优先把代码做完；正式对比只采到第 1 轮，不作为结论，复跑步骤见性能报告“待补测”。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
+**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论（2026-10-22 补测）：不达标，建议暂不改缺省，待维护者决定。** 业务 p99 同时段 X 0.078 / C 0.235ms，进程 CPU C 比 X 省 42%～73%、只在一半时段接近 Y；批大小 64 不用改，时间片 100µs 或组 4 各把 p99 降约 20%（见性能报告 §3～§3E）。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
 
 范围：三大块里的 Nest（`framework/nest`）与心跳投递层（`gameplay/heartbeat` 的 `deliverer`）。遵守 roost-coding 的执行契约：快池不阻塞等待；同 ID 顺序在统一准入处建立；内部续行使用既有准入资格。仓库里没有 `docs/feature/` 与 `docs/agent-skills/`（开发过程资料 2026-10-09 已移入 Git 历史，见 [DOCUMENTS](DOCUMENTS.md)），本篇按现行命名惯例放在 `docs/maintenance/FEATURE-*`，执行契约以本机 roost-coding skill 为准。
 
@@ -175,10 +175,10 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 
 ## 15. 待拍板（附推荐）
 
-1. **批大小**：推荐 64（与 ssr 一致；按压测结果定，见性能报告）。
+1. **批大小**：推荐 64（与 ssr 一致；按压测结果定，见性能报告）。 2026-10-22 对照（性能报告 §3B）：32 / 64 / 128 进程 CPU 相同，p99 0.195 / 0.254 / 0.282ms，32 的驱动 CPU +30%；64 不用改。
 2. ~~单目标 `Dispatch` 回退~~：维护者 2026-10-21 已定——加配置开关 `heartbeat.delivery: dispatch | batch`，缺省 `dispatch`（§12）。
 3. **`DispatchTryBatch` 是否导出给业务**：A 导出但只在 PACKAGES / impl 里说明“目前只有心跳用；冲突的目标转单目标作业”（推荐，接口本身是通用的，内部化反而要在 heartbeat 里绕）；B 改成 `internal` 只给 `gameplay/heartbeat`。
-4. **时间片 200µs**：推荐先用 200µs，按慢回调场景再调。
+4. **时间片 200µs**：推荐先用 200µs，按慢回调场景再调。 2026-10-22 对照（性能报告 §3A、§3B）：100 / 200 / 400µs 的业务 p99 0.19～0.22 / 0.24～0.25 / 0.33ms，CPU 不变；组大小 4 / 8 / 16 的 p99 0.187 / 0.235 / 0.316ms。改 100µs（或组 4）各降约 20%，两项合起来未测。
 
 ## 16. 实施结果
 

@@ -83,10 +83,10 @@ func (c *Controller) BeatReg() *heartbeat.Reg {
 	return c.beat.reg
 }
 
-// syncBeat 让 AI 心跳与当前策略、冻结状态一致。挂不上（Remote 共享模式）经 OnError 报告，AI 不再周期决策（结束通知
+// syncBeat 让 AI 心跳与当前策略、冻结状态一致（已 Close 时什么都不做）。挂不上（Remote 共享模式）经 OnError 报告，AI 不再周期决策（结束通知
 // 照常送达）。
 func (c *Controller) syncBeat() {
-	if c == nil || c.beat == nil {
+	if c == nil || c.beat == nil || c.closed {
 		return
 	}
 	interval := c.beatInterval()

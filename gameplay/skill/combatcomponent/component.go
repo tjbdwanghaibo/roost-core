@@ -212,9 +212,10 @@ type CombatComponent struct {
 	projection AttributeProjection
 	// buffStatesChanged 由 BindStates 安装：buff 集合变化后通知派生状态（D21 S6）。是接线，不是状态。
 	buffStatesChanged func()
-	// beat 由 AttachBeat 安装：buff 的心跳（D20 P5）。是装配期接线（构造时写一次、事务里不改），不是事务状态；
-	// 心跳启停的事务语义由 heartbeat.Reg 自己管理。glsvet 的字段写提示按语法认不出接线，用 roost:cache 豁免。
-	beat *buffBeat //roost:cache
+	// drive 由 DriveBuffs（或心跳驱动的 AttachBeat）安装：buff 推进的驱动接线（D20 P5，buff_stepper.go）。是装配期
+	// 接线（构造时写一次、事务里不改），不是事务状态；驱动启停的状态归驱动自己（心跳登记的事务语义由 heartbeat.Reg
+	// 管理）。glsvet 的字段写提示按语法认不出接线，用 roost:cache 豁免。
+	drive *buffDrive //roost:cache
 }
 
 // AttributeProjection 把属性当前值（base 加 buff / 属性修饰）写到伤害管线读的 Combatant
@@ -230,14 +231,20 @@ func NewCombatComponent(dao *CombatDao) *CombatComponent { return &CombatCompone
 func (component *CombatComponent) Name() string { return "combat" }
 
 // OnInitFinish 在实体建好（新建或从存储加载）后投影一次：存储里的 vitals 是上次提交时的投影结果，投影函数可能已随
-// 版本改变（“加载”触发点）。装了 buff 心跳（AttachBeat）时按加载出的 buff 启动它，停服期间到期的记录在第一拍清掉。
+// 版本改变（“加载”触发点）。装了 buff 驱动（DriveBuffs / AttachBeat）时按加载出的 buff 通知它（心跳驱动下启动心跳），
+// 停服期间到期的记录在驱动的第一步清掉。
 func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	component.deriveProjection()
 	component.buffsChanged()
 	return nil
 }
-func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason) {}
-func (component *CombatComponent) Dao() *CombatDao                        { return component.dao }
+
+// OnDestroy 在实体离开内存（卸载、删档、撤销新建）时卸下 buff 的驱动（CloseBuffDriver：心跳驱动撤销登记、释放名字）。
+// 组件由别的组件持有、不直接挂在实体上时（例如 game-demo 怪物的 ActorComponent），由持有者的 OnDestroy 转调。
+func (component *CombatComponent) OnDestroy(_ entity.EntityDestroyReason) {
+	component.CloseBuffDriver()
+}
+func (component *CombatComponent) Dao() *CombatDao { return component.dao }
 
 // ProjectAttributes 安装属性投影并立刻投影一次。在实体工厂里构造组件后调用一次即可；
 // 之后组件在每个改属性来源的 mutator（InitCombatant、SetAttributeBase / Bounds、
@@ -419,13 +426,13 @@ func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks
 }
 
 // SetBuffDueTick 固定 buff 实例的到期 tick。到期时间不影响属性，不需要重新投影；集合不变，不通知派生状态，但
-// 限时与否可能变了（0 表示永久），要对齐 buff 心跳。
+// 限时与否可能变了（0 表示永久），要通知 buff 的驱动。
 func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTick int64) (combat.BuffInstance, bool) {
 	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetDueTick(id, dueTick)
 	if ok {
 		component.dao.markChanged(FieldBuffs)
-		component.alignBeat()
+		component.alignBuffDriver()
 	}
 	return instance, ok
 }
@@ -452,9 +459,10 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 	return removed
 }
 
-// TickBuffs 让到期 tick 不晚于 now 的 buff 过期并返回它们（推进一步的原语）。快池上的实体不要自己写周期消息调它：
-// 用 AttachBeat，由 buff 心跳每拍以本拍的 tick 调用（D20 P5）；直接调用只用于不在 Nest 快池上的驱动（例如 Lockstep
-// 房间自己的定步长循环）与测试。now 与 StatusBridge.CurrentTick 同源。没有到期的 buff 时什么都不登记、不改。
+// TickBuffs 让到期 tick 不晚于 now 的 buff 过期并返回它们（推进一步的原语）。驱动不直接调它：驱动的一步是
+// StepBuffs / StepBuffsToTick（buff_stepper.go：TickBuffs、OnStep、通知驱动），快池上的实体用心跳驱动 AttachBeat
+// （D20 P5），定步长循环（Lockstep 房间）用 DriveBuffs。直接调用只用于原语本身的测试。now 与 StatusBridge.CurrentTick
+// 同源。没有到期的 buff 时什么都不登记、不改。
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 	if due, ok := component.dao.buffs.NextDue(); !ok || due > now {
 		return nil

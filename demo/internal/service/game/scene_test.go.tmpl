@@ -625,6 +625,10 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	const uniqueID = int64(9401)
 	subject := newScenePlayer(t, uniqueID)
 	joinReady(t, scene, ctx, subject, spatial.Point{X: 500, Y: 500})
+	// Join only records the player in the policy; the tick applies it.
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
 
 	// The subject the manager holds is the entity id, not the unique id.
 	if subject.ID() == uniqueID {
@@ -791,6 +795,9 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	// The teammate arrives. This is the tick that has to make good on the
 	// subscribe the room refused a moment ago.
 	joinReady(t, scene, ctx, later, spatial.Point{X: 900, Y: 900})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
 
 	subscribed := false
 	for _, session := range scene.manager.Subscribers(later.ID()) {

@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”；spawner 一项归 P3）；P3 未做；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测暂停待补（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)） |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”）；**维护者 2026-10-21 决定心跳只是技能 / Buff 的驱动方式之一、skill 只用接口，已实施**（`skill.Driver` / `skill.Stepper` + `CombatComponent.DriveBuffs`，心跳驱动改为薄包装，见下文“驱动接口实施结果”）；**P3 game-demo 接入已实施**（见下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）；**生成器接入已实施**（`roost add heartbeat` / `behavior` / `timedomain`，见下文“生成器接入实施结果”）；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测 2026-10-22 补测不达标（业务 p99 高于 X），建议暂不改缺省，待维护者决定（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)、[性能](../performance/NEST-BATCH-HEARTBEAT-20261021.md)） |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
@@ -723,6 +723,8 @@ A1 + B1，一次做完：两部分改的是同一批函数（观察者登记、`
 
 两种模式共用取批与应用步骤 `applyBatchLocked`（提交门、同 ID 不越过、`BatchSize` 不切开同一提交）和结算入口（`applyLocked` → `releaseAppliedLocked`，结算之后才释放发布屏障），所以语义逐项相同：只有提交后的事实生效、同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧、Drain 等到在途事实全部应用并结算、Close 释放全部屏障。只有“结果何时可见”和“线程模型”不同。直接调用（`Move` / `Apply`）不经队列，不受模式影响，但视野上限照样按模式检查。
 
+**2026-10-21 单写者重构之后**（[REFACTOR-2026-10-21-interest-single-writer](REFACTOR-2026-10-21-interest-single-writer.md)）：上面的 `applyBatchLocked` 与“Leave / Hide 对排队事实的改写”已由统一日志的 `runLogLocked` 与目标代际号取代；直接调用（`Enter` / `Move` / `SetObserverView`……）不再在调用方线程算 AOI，而是与排队事实进同一条日志、由所选模式的应用方按调用顺序执行；ApplySync 一次政策阶段执行到没有可执行条目或用完同步周期一半的预算（不再是一批）。阈值、选择指引与本节实测不变（实测是重构前的数字）。重构后 2026-10-22 复测（[INTEREST-SINGLE-WRITER-20261022](../performance/INTEREST-SINGLE-WRITER-20261022.md)）：原场景 Nest ApplySync 0～8 视野 P50 低 6～11ms、P99 低 4～8ms，ApplyAsync 持平；ApplySync 16 视野（诊断构建）仍超周期，8 的阈值依据不变；direct 基线语义变了，不再与本节 direct 行直接比。
+
 **阈值**：`SyncApplyMaxExtraViews = 8`、`SyncApplyMaxViewsPerPlayer = 1 + 8`（主视野 + 8），写在 `interest.go` 并注明来源（维护者决定 + 下表实测）。`MaxViewsPerPlayer` 本来就含主视野与关系视野，所以队伍、公会、联盟等关系视野也计入这 9 个。构造时 `ApplySync` 且 `MaxViewsPerPlayer > 9` 返回 `ErrInterestConfig`，报错原文：“ApplySync allows at most 9 views per player (main view + 8 extra), MaxViewsPerPlayer is N; games with more views per player (RTS units, many summons / wards) should set ApplyMode: policy.ApplyAsync”。未知模式同样拒绝构造。Interest 配置由业务代码构造，不经 wiring 或生成配置暴露，所以没有加配置键；game-demo 模板显式写 `ApplyMode: policy.ApplySync` 并说明怎么选。
 
 **适用游戏类型与选择指引**：
@@ -826,9 +828,11 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
-**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”；spawner 一项归 P3），P3 未做。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
+**状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”），生成器接入已实施（下文“生成器接入实施结果”），P3 game-demo 接入已实施（下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
 
 **P1 实施后维护者决定（2026-10-21）**：①`Elapsed` 上限取 `max(1s, 档位)`（选 A）；②Remote 共享模式（Shared）下框架不跳，由业务层自己处理（选 A）；③卡住兜底按推荐：10s 起、同一登记连续卡住翻倍、80s 封顶、执行后复位（维护者 2026-10-21 确认）；④Remote 共享模式下心跳不能执行，因此**不允许挂载心跳**：登记时拒绝并给出明确错误（维护者 2026-10-21；**已实施**，共享是运行期状态，运行期进入共享的由下一拍停掉，见下文“决定 ④ 实施结果”）。
+
+**审查修复（2026-10-21）**：心跳登记可以撤销（`Reg.Close`，换场景重建行为组件）、驱动摘除已移除实例、被抢占组的排队项在抢占方结束时推进、`StateDao` 在 rollback=state 下未登记时 fail-fast、`Behavior.OnDestroy`、Nest 慢派发 trace 不再反射打印参数，见 D21 节末“[D20 与 D21 审查修复](#d20-与-d21-审查修复2026-10-21)”。
 
 **压测后维护者决定（2026-10-21）**：调度结构按档分环、10ms 分辨率；驱动 1 个；投递方式 P1 先用单目标 `Dispatch`（X），驱动接口按“一格到期的一批心跳一次交出”设计，内部先逐个 Dispatch；同时做方案 D（Nest 批量入队、逐个执行：一次取队列锁入队一批独立的单目标作业、每个 worker 只唤醒一次并连续取作业，作业语义与 X 相同）的原型与压测，达标（CPU 接近 Y、业务 p99 不差于 X、语义不变）则心跳切到 D，否则保留 X。E（搭便车）、F（按 worker 固定分片）不做。
 
@@ -836,7 +840,7 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 ### P1 实施结果（2026-10-21）
 
-**状态：P1 已实施**（分支 `feat/d20-heartbeat-p1`，基于 `be5a76f5`；本地提交，由维护者推送）。框架 `gameplay/heartbeat`，装配 `wiring/heartbeat`（Mod 名 `heartbeat`）。用法 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)，指标 [OBSERVABILITY“实体心跳”](../framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)，剩余边界 [KNOWN-LIMITS“实体心跳”](KNOWN-LIMITS.md#实体心跳d20-第-1-期)。读代码时 codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码核对为准。
+**状态：P1 已实施**（分支 `feat/d20-heartbeat-p1`，基于 `be5a76f5`；已合入 main）。框架 `gameplay/heartbeat`，装配 `wiring/heartbeat`（Mod 名 `heartbeat`）。用法 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)，契约 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)，指标 [OBSERVABILITY“实体心跳”](../framework/OBSERVABILITY.md#实体心跳gameplayheartbeat)，剩余边界 [KNOWN-LIMITS“实体心跳”](KNOWN-LIMITS.md#实体心跳d20-第-1-期)。读代码时 codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码核对为准。
 
 **API 最终形状**：
 
@@ -899,7 +903,7 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 ### 决定 ④ 实施结果：Remote 共享模式不允许挂载心跳（2026-10-21）
 
-**状态：已实施**（分支 `fix/heartbeat-remote-shared`，基于 `c299c4cc`；本地提交，由维护者推送）。
+**状态：已实施**（分支 `fix/heartbeat-remote-shared`，基于 `c299c4cc`；已合入 main）。
 
 **共享是运行期状态，不是静态声明**（已核对源码）：`entity.RemotePolicy` 只有 None / Managed / Mirror（`framework/entity/policy.go`），codegen 也只有 `remote=managed`；共享模式由 `remoteentity.Manager.EnterRemoteSharedMode` / `LeaveRemoteSharedMode`（`framework/remoteentity/ownership.go`）按实体 ID 在运行期切换（LocalOwned → Sharing → Shared；Shared → Draining → LocalOwned）。实例加载时是 `Unknown`（`LoadRemoteEntity` 不设所有权状态），共享权威下第一次写准入经 `newWriteLease` 的 marked 分支转 `Shared`（`framework/remoteentity/batch.go`）。所以组件在 `OnInitFinish` 登记时，第二个写者看到的是 `Unknown`，登记时判定不出来。
 
@@ -923,11 +927,40 @@ func wiringheartbeat.NewMod(*entity.ManagerAccess, *Driver) *Mod
 
 修后五条通过；变异核对：去掉 Register 核对 → 第一条红；去掉 Start 核对 → 第二条 `Start in shared mode: err <nil> active true`；共享不投 → 第二条红（`StoppedShared:0 Registered:1`）；handler 不停 → 第二、三条红（`StoppedShared:20 Registered:1`）。原 `TestRemoteHeartbeatFollowsOwnershipWithoutDoubleBeats` 末尾“共享模式不投”的断言删除（语义已改为投一拍并停掉，由上面三条覆盖）。
 
-**未做**：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。
+**未做**（本节实施时）：真实 Redis 分布式锁 / Mongo 下的共享模式演练（测试用模拟写准入的假 Manager）。2026-10-21 已补，见下一节。
+
+### 真实 Remote 共享模式切换验证（2026-10-21）
+
+**状态：已验证**（分支 `test/remote-heartbeat`，已合入 main）。补的是决定 ④、P2 第 6 条、D21 A6 / C4 留下的未验证项：之前“框架停掉心跳”只在单元用例里直接 `Stop` 登记或用模拟写准入的假 Manager。
+
+**怎么验**：`gameplay/movement/shared_test.go` 的三个场景经真实的 `remoteentity.Manager` 做所有权流转（第一次写认领、`EnterRemoteSharedMode` / `LeaveRemoteSharedMode` / `TransferRemoteOwnership`、写准入与共享模式的分布式锁、写门排空），每个进程是真实 Nest 引擎 + 实体管理器 + 启动的心跳驱动 + 自己的 Manager；实体 `remoteNPC` 装了 `MapBasic`（周期落库）、`Move`、`Behavior`（移动组 / 工作组心跳、任务心跳）与 AI 心跳，共 5 个登记。进程内用例的 Remote 权威（所有权记录与带 fence 的版本锁）是替身 `memRemoteAuthority`，状态机、准入与排空都是 Manager 自己的；`shared_integration_test.go`（`-tags integration`）用正式装配 `remoteentity.Assemble`（真实 Redis 版本锁与快照 L2、Mongo 持久写权威、NATS 复制）跑同一组场景，隔离库名 / 键前缀 / 主题前缀每次唯一、用完删除。每个场景在两种心跳投递方式下各跑一遍（`heartbeat.delivery` 的 `dispatch` 缺省 / `batch`，D20 选项 C）：驱动绑定的客户端包了一层记录，核对 Remote 实体的每一拍都走单目标 `Dispatch`、没有一拍进 `DispatchTryBatch`，同进程里一个本地对照实体在 `batch` 下走批量作业、在 `dispatch` 下走单目标（证明投递方式确实生效）；所有权检查（共享模式停掉、非拥有方不跳、迁移无双推进）两种方式结论相同。变异核对：让 Remote 的拍进批量作业 → `batch` 子测试红（Nest 不接受 Remote 目标、拍交回，`first start: A1 is not running every heartbeat … ai ticks 0, work ticks 0`），`dispatch` 子测试不受影响。
+
+| 场景 | 断言 |
+| --- | --- |
+| 独占 → 共享 → 独占（两轮） | 进入共享后 5 个登记全部停掉，`StoppedShared` 与 `heartbeat.stopped_total{reason="remote_shared"}` 各 +5（每登记 +1）；之后 500ms 窗口里没有任何周期推进、位置不变；共享期间 `Sync` 返回 `ErrHeartbeatRemoteShared`、动作 / 任务 / 策略都留着；回到独占不自动恢复；业务恢复后 5 个登记全部接着跳。第二轮共享期间业务发起新移动：旧移动（任务的那一步）被取代、任务失败结束，新移动挂不上心跳、以失败结束（原因带共享模式），通知顺序固定为 `mission action-end 取消` → `observer mission-end` → `observer action-end 取消` → `observer action-end 失败`，两次结束通知时 `Move.Moving()` 都已为假（`Cancel` 在通知之前） |
+| 所有权迁移（共享模式下转移，与生成工程的 Remote 流程相同） | A 进入共享（A1 停 5 个）→ 转给 B（A1 为 Fenced）→ B 第一条消息加载 B1（加载时恢复场景与 AI，`Unknown` 下登记合法），写准入转 `Shared`，第一拍停掉 B1 的 2 个 → B 回到独占不自动恢复，业务恢复后接着跳；A1 在进入共享之后、B1 在回到独占之前都没有任何周期推进（无双推进）；A 之后的写被 `ErrRemoteFenced` 拒绝 |
+| 卸载与重新加载 | 独占时卸载：唯一的快池 worker 被另一实体占住、A1 的拍经写准入后排队，卸载后放开，排队的拍不在旧实例也不在重载实例上执行（`DroppedStale` 3），A1 之后零推进、A2 的推进全在 A1 之后；共享时卸载：A2 停 5 个后卸载，下一次写加载 A3（`Unknown` 登记合法），转 `Shared` 后第一拍停 2 个，回到独占不自动恢复，恢复后接着跳 |
+
+**发现并修复的缺陷**（先红后绿，红在“回到独占后业务调用 Sync / 重新设置策略能接着走”这条承诺上）：
+
+1. **任务心跳没有恢复入口**：文档让业务回到独占后调用 `BeatRunner.Sync()`，但它只管动作组；`Behavior` 的 `"<Name>/mission"` 只在任务推进时对齐，被框架停掉后任务一直不被 tick（步骤时限不再检查），业务只能直接碰 `MissionReg()`（文档说启停由 Behavior 管理）。修法：`BeatRunner` 多一个由 `NewBehavior` 装上的 `syncExtra`，`Sync` 时调 `Behavior.resyncMissionBeat`：当前任务在运行、需要周期 tick 而心跳没在跳就按它的周期 `Start`，挂不上只返回错误、不结束任务（与组的 `Sync` 相同）。
+2. **重新设置当前策略是静默空操作**：KNOWN-LIMITS 让业务回到独占后“重新 `SetStrategy` / `Recover`”，但 `SetStrategy(同一个策略)` 走 `sameStrategy` 直接返回 nil，不对齐心跳；策略拒绝被替换（`CanStopByNext` 为假）时还返回 `ErrStrategyRejected`。修法：`SetStrategy` 先判 `sameStrategy`——设成当前策略不是替换，不问 `CanStopByNext`、不 Init / Stop，只 `syncBeat`。
+
+修前失败原文（进程内场景一，`53cc3f97` 上加入用例，两处都未修）：
+
+```
+shared_test.go:865: resumed after the first shared window: A1 is not running every heartbeat: active [actionflow/1 actionflow/2 map.save] (want [actionflow/1 actionflow/2 actionflow/mission ai map.save]), moved true, ai ticks 0, work ticks 600; driver {Delivered:949 Executed:944 ... StoppedShared:5 Registered:3}
+```
+
+只修 1 之后：`active [actionflow/1 actionflow/2 actionflow/mission map.save] … ai ticks 0`；两处都修后通过。变异核对：去掉 `syncExtra` 的装配 → 场景一 `active [actionflow/1 actionflow/2 ai map.save]`、`TestBeatSyncResumesAStoppedMissionHeartbeat` `after Sync: mission beat false group beat true registered 1`；还原 `SetStrategy` 的判断顺序 → `TestSettingTheCurrentStrategyAgainResumesAStoppedBeat` `setting the current strategy again: ai: current strategy rejects replacement`。用例里还修了一处测试自身的数据竞争（排队的旧拍经写准入触发加载时读 `onLoad`，改为在 `loadMu` 下读写）。真实依赖的卸载场景（worker 被占住、拍排队超过 200ms）在 `-race` 下还报出过 Nest 慢派发追踪 `%#v` 反射读 `*heartbeat.Reg` 的数据竞争，与 main `18c2fdbe`（`Reg.GoString`）修的是同一处，rebase 后不再出现。
+
+**没有改的（待维护者决定）**：周期落库 `"map.save"` 被框架停掉后，`MapBasic` 没有单独的恢复入口，`Enter` 在场景里返回 `ErrAlreadyInScene`，业务只能 `Leave` 再 `Enter`（同一事务里，AOI 提交后收到一次离开再进入）。A（推荐）：给 `MapBasic` 加 `Sync() error`（在场景里且配了 `SaveEvery` 时重新 `Start` 周期落库），与 `BeatRunner.Sync` 对齐；B：维持现状，文档写明 `Leave` + `Enter`。代价：A 是 movement 的一个小 API，B 让 AOI 多一次进出。另：任务因动作结束而结束时，观察者先收到任务结束、再收到这个动作结束（`Behavior` 先交任务、任务在处理里结束），这个顺序由用例固定、写进 KNOWN-LIMITS，没有改。
+
+**复跑**：进程内 `GOWORK=off go test -race -count=1 -run '^TestRemote' ./gameplay/movement`；真实依赖 `source ~/.roost-it/roost-dataengine-it/env.sh` 并持 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`（`wiring/scripts/integration/lib/common.sh` 的 `acquire_acceptance_lock`）后 `GOWORK=off go test -race -tags=integration -run '^TestRealRemote' -count=1 ./gameplay/movement`，整套随 `wiring/scripts/integration/dataengine-env.sh test`（包已列入）。本轮结果（rebase 到 `6576b7fb` 之后，两种投递方式）：进程内 `-race -count=2` 通过；真实依赖 `-race` 通过（每个子测试约 4～6s），跑后隔离库与键为 0。没有覆盖：独占模式下不经共享的直接迁移（仍只有 `heartbeat/remote_test.go` 的模拟写准入用例）、真实依赖下的故障注入（Redis / Mongo 断开时的切换）。
 
 ### P2 实施结果（2026-10-21）
 
-**状态：P2 已实施**（分支 `feat/d20-movement-p2`，本地提交，由维护者推送）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P2 已实施**（分支 `feat/d20-movement-p2`，已合入 main）。runner 适配在 `gameplay/actionflow`（`heartbeat.go`），组件在 `gameplay/movement`。用法 [guide/10-time §4B](../framework/guide/10-time.md#4b-移动与动作心跳驱动) 与包内 [Example](../../gameplay/movement/example_test.go)，契约 [impl/10-time §2C](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，剩余边界 [KNOWN-LIMITS“移动与动作”](KNOWN-LIMITS.md#移动与动作d20-第-2-期)。没有新指标（沿用 `heartbeat.*`）。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
 **P2 中维护者决定（2026-10-21）**：
 
@@ -1008,9 +1041,71 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 **验证**：偶发失败的修前 / 修后失败率（`TestMoveToActionRunsOnTheMoveHeartbeatAndIsReplacedByTheNextOne` → 改名后的 `TestMoveToActionIsDrivenByTheRunnerHeartbeatAndReplacedByTheNextOne`）：不加负载 `-race -count=100 -run <三个经心跳等事件的用例>`，修前（`345616ad`）24/100、修后 0/100；加负载（后台循环 `go test -race -count=5 ./framework/sync/entitysync/policy/`）`-race -count=50 ./gameplay/movement/ ./gameplay/actionflow/`，修前 1/50（该用例，2850 次顶层用例里 1 次失败），修后 0/50（2851 次全部通过，退出码 0）。负载复现时 nestbatch 的正式对比在跑，它的脚本在检测到外来 go 进程时作废并重跑那一轮，所以不影响它的数据、只会推迟。gofmt、`GOWORK=off go vet ./...`、`go test -race -count=1 ./gameplay/... ./framework/sync/... ./wiring/...`、根包 `go test -count=1 .`、全量 `go test -count=1 ./...` 的结果见本轮交付报告（全部退出码 0 才提交）。
 
+### P3 实施结果（2026-10-21）
+
+**状态：P3 已实施**（分支 `feat/d20-p3-demo`，基于 main `53cc3f97`，已合入 main）。改动只在 `demo/`（手写参考实现，不迁到生成器）、`codegen/internal/roost/demo.go`（demo 的写文件步骤表，新模板必须登记）与 C# 客户端 `client/dotnet`；**没有改框架包**。说明见 [WALKTHROUGH“移动”“怪物”“场景时间”“刷新”](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20) 与 [guide/10-time §4B“参考接法”](../framework/guide/10-time.md#4b-移动与动作心跳驱动)，剩余边界 [KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](KNOWN-LIMITS.md#game-demo-的移动怪物与场景时间d20-第-3-期)。codebase-memory 图的根是主检出、generation 早于 D21 / D22，demo 是 `.tmpl` 不进图，结构结论以 worktree 源码与生成工程为准。
+
+**按要求逐条落实**：
+
+1. **心跳接线**：`game/actor.Heartbeat`（包级驱动）在 `internal/service/<game>/heartbeat.go` 手写 `Bind`（Nest 客户端 + 只读实体查找）并 `Start`，`Service.Init` 里早于 World 与场景，`Shutdown` 一开始就停（Nest 仍在）；与 World 定时器驱动同一种写法，不装 `wiring/heartbeat` Mod。
+2. **玩家移动（决定 ⑭）**：新协议 `MoveTarget`（msg 10026，`{X, Y, Follow}` → `{Code, Reason, ActionID, X, Y}`），handler `handlerMoveTarget`（场景 + 玩家）：找一次路，最后一步 `Behavior.CreateAction(MoveTo / Follow)`；每拍由玩家自己的移动组心跳 `Move.Advance(Elapsed)` → `MapBasic.SetPos` → DAO + `QueueMove`，观察者经 Entity Sync 看到每一步。寻路预算（4096 节点）用完时走直线，`Move` 按 `actor.Ground` 每格检查、被挡停下。原按点移动（msg 10017）保留为瞬移：`MapComponent.Teleport` 校验地形、`SetPos`、最后结束正在走的路；端点不再调 `Scene.Moved`（删除）。
+3. **位置不每拍落库（决定 ⑮）**：`PlayerDao.PosX/PosY/SceneID/Facing` 改 `nopersist,sync`，新增持久的 `SavedSceneID/SavedPosX/SavedPosY`，由 `MapBasic` 的 `SaveOnLeave` 与 `SaveEvery: 10s`（`"map.save"`）写，进场景以它为首选点。未上线、不兼容：旧文档的 `pos_x/pos_y/scene_id` 不再读。
+4. **怪物**：`ActorComponent`（新组件 2101）挂 `MapBasic` / `Move` / `Behavior` / `ai.NewBeatController`（策略 `actor.Patrol`：移动组空闲时走向下一个角）/ `state.Set` + `state.Gate`（`Rooted` → 移动组 `FreezePause`）/ `CombatComponent.BindStates`（`root` 标签派生 `Rooted`）；`Rooted` 经状态观察者镜像进 `MonsterDao.Rooted`（`nopersist,sync`）给客户端；GM `gm.scene.root`（`seconds` 给了是限时定身）。Buff 用 P5 的 `combatcomponent.AttachBeat` 挂心跳（`"combat"`，1Hz，`actor.SkillClock` 100ms 一 tick，跟随场景时间域），限时定身到点由怪物自己的心跳移除（协调方 2026-10-21 要求：有 Buff / 技能就用 `AttachBeat` / `NewRuntimeBeat`；demo 实体上没有技能 Runtime，所以没有 `NewRuntimeBeat`）。没做追击 / 回巢（可选项，未做）。
+5. **刷怪（P5 可选项）**：见上表“已做”一行。先后顺序写在 `spawner.go` 类型注释与 WALKTHROUGH“刷新”：① `lifecycle.Create`（AI 无策略、不跑）→ ② 放身体（可见前唯一一次写）→ ③ `ShowSubject`（先 Register 再 Show）→ ④ `handlerSpawnMonster`（`MapBasic.Enter` + 开始巡逻，提交后心跳才开始，所以第一步在可见之后）→ ⑤ `Refresh.Spawned`；任何一步失败逆序撤销、下一拍重来。一次只建一批（`busy`），否则还没 `Spawned` 的请求会被下一拍再交一次。
+6. **场景时间域**：场景实体新增 `SceneDao`（`nocoll`，三个字段 `nopersist,sync`）与 `timedomain.Domain`（倍率 [0, 4]）；玩家、怪物的 `Behavior` 与 AI 以 `BeatConfig.TimeDomain: actor.WorldTime()` 构造。GM `gm.scene.time_rate` → `handlerSetSceneTimeRate`（场景锁内 `SetRate`）。场景自己是复制主体（`sync=true`），复制桥把它放进关系视野 `sceneView`，每个 `Join` 挂上；`MaxPlayersPerView` 调到 65536。C# 客户端新增 `Roost.Client.SceneTimeDomain`（`Update` / `At` / `Now`，与服务端 `State.At` 同一公式、单调托底）与自测。
+7. **loadtest**：新动作 `move_target`、`move_arrive`（等自己的复制位置到达目标），场景脚本在 `move_out_of_bounds` 之后走 30 格。
+
+**与要求的偏差（如实记录）**：
+
+1. **“副本场景”是 demo 唯一的世界场景**：demo 没有副本场景实体（副本是 session 服务的 run），时间域挂在世界场景上；`actor.WorldTime` / `actor.Ground` 是进程级的，成员构造时绑定（多场景的写法见 KNOWN-LIMITS）。
+2. **场景时间下发走关系视野**：场景不是空间主体，没有 `Show` 进 AOI；每个成员挂场景视野。代价是一个视野扇出到全场景（上限 65536）。
+3. **`actor.InterestMoves` 的 `Enter` / `Leave` 是空操作**：进出场景（复制主体、会话、Show / Hide）仍由复制桥负责（它处理重连代际、退役中的主体），`MapBasic` 只报告移动；对兴趣政策还不认识的实体（`Join` 之前）忽略 `ErrInterestUnknown`。
+4. **demo 的玩家不调 `LeaveScene`**：断线 / 卸载不经 Nest 离开场景，`SaveOnLeave` 不触发，存档位置靠 10 秒周期落库（KNOWN-LIMITS）。
+5. **改了 `codegen/internal/roost/demo.go`**：只是 demo 的写文件步骤表（新模板必须有一步写它，`TestDemoTemplateStepsAndShippedFilesAgree` 钉住），另加 `Scene` 的 DAO 与怪物 `Actor` 组件两个 `add` 步骤；不涉及生成器心跳装配。
+6. **测试的组件状态在实体锁里读**：第一版在测试 goroutine 里直接读 `Move.Moving()` 等，`-race -count=20` 报 4 处 data race（测试读法问题，产品代码在锁内）；改为经一个测试 handler 在实体锁里读（`locked`）后 `-race -count=20` 全过。
+
+**红绿证据**：新功能，实现与测试同轮写成，红用变异核对给出（每个强制点改掉一处，在生成工程里重新生成后跑对应用例，原文）。端到端用例在 `internal/service/<game>/scene_movement_test.go`：真实 Nest 引擎 + 生成的 handler + 运行中的心跳驱动 + 复制桥（Manager + Interest），业务时钟换成手动推进的（`clock.SetSource`）——驱动仍按真实时间醒来，时钟不动时每拍推进 0，推进一步时恰好由下一拍走完，所以“走了几格”是确定的数、“不动”可以不靠 sleep 断言；提交后的状态先 `settle`（同实体一条空消息）、组件状态在实体锁里读。
+
+| 变异 | 变红的用例与原文 |
+| --- | --- |
+| M1 `InterestMoves.QueueMove` 不排进兴趣政策 | `TestAPlayerWalksToItsGoalOnItsOwnHeartbeatAndTheWatcherSeesTheSteps`：`the walk brought the walker within 100 cells of player 9703, which still does not see it at {600 500}: {}`（第一版用例只看近处观察者，这个变异没变红——近处观察者本来就订着，位置靠同步增量到达；补了“走进远处玩家视野”这一段之后变红） |
+| M2 瞬移不结束正在走的路 | 同上：`after a teleport: at {450 450} walking true heartbeat true, want {450 450} and no walk` |
+| M3 玩家 `Behavior` 不挂场景时间域 | `TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers`：`the 2x step: never happened; last saw {300 360}`（1 倍速只走了 30 格） |
+| M4 门控不加 `Rooted` → 移动组规则 | `TestARootedMonsterStopsWhereItIsAndWalksOnWhenFreed`：`rooted: move group frozen false, heartbeat active true; want frozen and not beating` |
+| M5 场景的刷怪心跳不启动 | `TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols`：`the scene's beat fills the table's population: never happened; last saw 0` |
+| M6 `Spawn` 不进场景的移动（`MapBasic.Enter`） | 同上：`monster 2323435195258110993 is counted but not on the map` |
+| M7 玩家的 `Move` 不带地形 | `TestAPlayerWalks…`：`the straight walk stops at the wall: never happened; last saw {492 492}`（穿墙继续走） |
+| M8 寻路预算用完不改走直线 | 同上：`scene_position: invalid scene position [reason=no route to_x=700 to_y=700]: spatial: path search budget exhausted` |
+| M9 `Join` 不挂场景视野 | `TestATwiceAsFast…`：`the member never received the scene's own subject; got subjects [9944068]` |
+| M10 巡逻不看移动组是否有当前动作 | `TestPatrolStartsTheNextCornerOnlyWhenTheMoveGroupIsIdle`：`a walk in progress was replaced: next 2` |
+| M11 刷怪心跳用墙钟而不是 `Beat.Now` 判重生 | `TestTheScenes…`：`the slot is refilled after the delay: never happened; last saw 2` |
+| M12 限时定身不带时长（按永久施加） | `TestARootedMonster…`：`a timed buff is on but the monster's buff heartbeat is not running` |
+| M13 施加定身用 tick 0 而不是 `CurrentTick()` | 同上：`two buff beats: never happened; last saw 1`（buff 第一拍就过期、心跳随之停） |
+| C1 C# `SceneTimeDomain.At` 不乘倍率 | `scripts/test-client-dotnet.sh`（`ROOST_DOTNET_GOLDEN_ONLY=1`）：`Unhandled exception. System.Exception: 2x doubles the business time after the anchor` |
+
+没变红、如实记录的两个：① 怪物 AI 心跳不挂时间域（`ai.BeatConfig.TimeDomain` 去掉）——没有用例变红：巡逻策略只看“移动组是否空闲”，不读时间，demo 里域时间只影响 AI 的 `FreezeFor` 等到期判断（demo 不用）；怪物走路的加速由 `Behavior` 的域保证（与 M3 同一路径）。② 巡逻里的 `Frozen` 判断是兜底：冻结的组本来就拒绝 `CreateAction`，去掉它行为不变。刷怪“提交后才交出”（`AfterCommit`）与“一次只建一批”（`busy`）没有确定的观察点（拍不会回滚、两批相隔 1 秒），没有变异用例，靠代码与注释。
+
+**验证**（rebase 到 main `6576b7fb` 之后重跑；再 rebase 到 `ddeeffa3`（P5 技能 / Buff 心跳、Remote 共享模式验证）并给怪物接上 `AttachBeat` 之后，生成工程的 build / vet / `-race ./...` / 心跳用例 `-race -count=20` 与 codegen demo 用例、仓库 `go vet ./...`、根包与全量 `go test -count=1 ./...` 重跑，退出码均为 0（这一次下文的 `TestBusyShortPoolSkipsBeatsAndResumes` 也通过）；生成工程 = `go run ./codegen/cmd/roost project new planet -module example.com/planet -template game-demo --skip-deps` + `replace` 指回 worktree，`GOWORK=off GOFLAGS=-mod=mod`；退出码直接读）：
+
+- 生成工程：`gofmt -l .` 无输出；`go build ./...`、`go vet ./...` 0；`go test -race -count=1 ./...` 0（26 个包）；心跳相关用例（4 个端到端 + 巡逻单测）`-race -count=20` 0。另把 `actor.Heartbeat` 临时改成 `Delivery: heartbeat.DeliveryBatch`（选项 C 的批量作业，不提交）跑 4 个端到端用例 `-race -count=3`，0。
+- 仓库：`GOWORK=off go vet ./...` 0；根包 `go test -count=1 .` 0；`scripts/test-sync-modes-generated.sh` 0；`ROOST_DOTNET_GOLDEN_ONLY=1 scripts/test-client-dotnet.sh` 0；`go test -count=1 -run 'TestDemo|TestGameDemo' ./codegen/internal/roost/` 0。
+- 仓库 `go test -race -count=1 ./gameplay/...` 与全量 `go test -count=1 ./...` 各 1 个失败、都是同一个用例：`gameplay/heartbeat/internal/bench` 的 `TestBusyShortPoolSkipsBeatsAndResumes`（main 上 P4 新增，`cf2bd7d2`），原文 `driver_test.go:436: entity 2048010029 ran 1 beats after the pool was released, want it to resume`。本分支没有改 `gameplay/`，该包代码与 main 相同；单独 `-count=10` 全过，失败时宿主 load 12～13（全量并行）。判断：该用例在宿主负载下的时序敏感，**尚未确认**是否只是口径问题，留给 P4 一方，本轮不改。
+- 基线（rebase 之前、改动之前的 main `53cc3f97` 生成工程）`go test ./...` 有一次 `TestAStalledOldConnectionDoesNotResetTheLiveClient` 失败（`scene_connections_test.go:279: a push the live connection took was reported as failed: … outbound queue full`），之后各次运行都通过；与本轮改动无关，**尚未确认**，记在这里。
+
+**冒烟（待补测，2026-10-21 因宿主资源占用推迟）**：维护者 2026-10-21 要求本轮不跑 loadtest / robot 冒烟与任何压测，loadtest 只要求编译与单元测试通过（已通过）。复跑命令（生成工程目录里，依赖用 `scripts/mirror-local.sh` 起的私有环境或 README 的隔离环境，把配置改指向它）：
+
+```bash
+make dev-run                       # 十个进程 + accountctl 登记 sid 1000
+make dev-smoke                     # 两个机器人走完整条链，含 move_target → move_arrive
+make loadtest LOADTEST_COUNT=20    # 冒烟规模，不是压测
+make dev-stop
+```
+
+**冒烟结果（2026-10-22，已补）**：生成工程 = main `11988df8`（+ 只改 sync-aoi 的夹具修正）上 `roost project new hbsmoke -template game-demo --skip-deps` + `replace` 指回 worktree；依赖用 `wiring/scripts/integration/dataengine-env.sh up` 起的私有环境（根目录在会话 scratchpad、端口偏移 26000），十份配置按 demo README 的 sed 改指向它。`make dev-run` 十个进程全部就绪、accountctl 登记 sid 1000；`make dev-smoke` 2 / 2 成功（场景耗时 p95 4.49s，阈值 16s）；`make loadtest LOADTEST_COUNT=20` 20 / 20 成功（场景耗时 p50 / p99 10.0 / 10.8s），场景里的 `move_target` → `move_arrive` 每个机器人都走完；game 进程 `heartbeat_delivered_total = heartbeat_executed_total = 1404`，没有跳拍计数，game 日志没有 WARN / ERROR；`make dev-stop` 正常。两点如实记录：① 生成配置里 game 连 `127.0.0.1:2379` 的 etcd（本机恰好有一个在跑，注册键带工程名前缀 `/hbsmoke/services/...`），README 的 sed 不改它；② 同一环境里另做的登录风暴（[INTEREST-SINGLE-WRITER-20261022 §6](../performance/INTEREST-SINGLE-WRITER-20261022.md#6-没做的与不能证明的)）发现 100 个以上玩家同时挤在出生点时，每个复制会话持有对象超过 Manager `Limits.MaxObjects`（缺省 100），会话被关闭（`frame: object limit exceeded`），见 KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”。
+
 ### P4 实施结果（2026-10-21）
 
-**状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；本地提交，由维护者推送）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
+**状态：代码已实施，没有测量**（分支 `feat/d20-p4-perf`，基于 `53cc3f97`；已合入 main）。维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑，只做单元测试与编译检查。开关、口径、已做验证与复跑命令见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)，剩余边界见 [KNOWN-LIMITS“压测工具的心跳驱动”](KNOWN-LIMITS.md#压测工具的心跳驱动d20-第-4-期)。
 
 **落实**：
 
@@ -1032,9 +1127,9 @@ type MapOwner interface{ MapBasic() *MapBasic }; type MoveOwner interface{ MoveC
 
 ### P5 实施结果（2026-10-21）
 
-**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；本地提交，由维护者推送）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff心跳驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的心跳)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的心跳d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+**状态：P5 的技能与 Buff 两项已实施**（分支 `feat/d20-p5-tick`，代码 `a7fe9328`；已合入 main）。spawner 一项归 P3，不在这里。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)，契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)，剩余边界 [KNOWN-LIMITS“技能与 Buff 的心跳”](KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。没有新指标。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
 
-**API 最终形状**：
+**API 最终形状**（P5 当时的形状；同日改为驱动接口后 `SyncBeat` 改名 `SyncBuffDriver`、`RuntimeBeatStats` 改为 `skill.StepperStats`、推进规则移到 `skill.Stepper`，见下文“驱动接口实施结果”）：
 
 ```go
 // gameplay/skill（纯运行时，不依赖 Nest）
@@ -1080,6 +1175,83 @@ func (b *RuntimeBeat) Start(program, input) / Input(cast, port, input) / Do(func
 **验证**：gofmt；`GOWORK=off go vet ./gameplay/... ./wiring/...`；`GOWORK=off go test -race -count=30 ./gameplay/skill/combatcomponent/`（心跳相关用例，35s，退出码 0）；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；`go run ./cmd/glsvet ./gameplay/skill/ ./gameplay/skill/combatcomponent/` 无提示。退出码见本轮交付报告（全部为 0 才提交文档）。没有改生成工程用到的东西，没跑 `scripts/test-*-generated.sh`。
 
 **待拍板**（先按推荐做了）：① 技能心跳的位置：A 放 `combatcomponent`（现状，推荐：`skill` 保持不依赖 Nest）；B 新子包 `gameplay/skill/skillbeat`。② Buff 粒度：A 固定 `Granularity`（现状，推荐：简单、可预期）；B 按下一个到期自适应换档。③ 超过追帧上限：A 剩余一次跳过、计数 + Warn（现状，推荐：落后有界）；B 留到下一拍继续逐 tick 补（确定性完全保住，过载时落后无界）。④ `TickBuffs` 保留为导出的原语（现状，推荐）；B 改为未导出、测试经钩子调用。
+
+### 驱动接口实施结果（2026-10-21）
+
+**维护者 2026-10-21 决定：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只用接口。** 技能与 Buff 两边都改（维护者确认）。P5 的 4 项拍板（技能心跳放 `combatcomponent`、Buff 固定粒度、超过追帧上限一次跳过、`TickBuffs` 保留导出）不变，这一轮只把推进规则与驱动方式分开。
+
+**状态：已实施**（分支 `refactor/skill-driver`，代码提交 `35120c86`（推进器与心跳适配）、`fc8981a2`（结构守卫）、`ee646614`（撤销与 OnDestroy）；本地提交，由维护者推送）。用法 [guide/10-time §4E](../framework/guide/10-time.md#4e-技能与-buff推进与驱动d20-第-5-期)，分层、契约与变异核对 [impl/10-time §2G](../framework/impl/10-time.md#2g-技能与-buff-的推进与驱动)，边界 [KNOWN-LIMITS“技能与 Buff 的推进与驱动”](KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。codebase-memory 图的根是主检出、不是本 worktree，结构结论以 worktree 源码为准。
+
+**API**：
+
+```go
+// gameplay/skill（不依赖 Nest / heartbeat / timedomain / fctx）
+type Driver interface{ Wake() error; Sleep() }                     // 电平式通知，驱动幂等
+func NewStepper(*Runtime, StepperConfig{Clock, Now, Rate, Driver, MaxCatchUp, Name}) (*Stepper, error)
+func (s *Stepper) StepTo(now time.Time, rate float64) error / StepToTick(Tick, rate float64) error   // 驱动的一步
+func (s *Stepper) Start / Input / Do / CatchUp / Sync / Tick / Runtime / Clock / Stats             // 输入与查询
+// gameplay/skill/combatcomponent（与驱动无关的 buff 推进，不 import heartbeat）
+func (c *CombatComponent) DriveBuffs(BuffDriveConfig{Clock, Now, Driver, Periodic, OnStep, OnError, Name}) error
+func (c *CombatComponent) StepBuffs(time.Time) error / StepBuffsToTick(int64) error / BuffsPending() bool / NextBuffDue() (int64, bool) / SyncBuffDriver() error / CurrentTick() int64
+type BuffStep struct{ Tick int64; Expired []combat.BuffInstance }
+// 心跳驱动（同包，只有这两个文件 import heartbeat）
+func NewRuntimeBeat(*skill.Runtime, RuntimeBeatConfig) (*RuntimeBeat, error)   // RuntimeBeat 嵌入 *skill.Stepper，多 Reg() / Close() / Closed()
+func (c *CombatComponent) AttachBeat(BeatConfig) error / BeatReg() *heartbeat.Reg  // BuffBeat{heartbeat.Beat; BuffStep}
+func (c *CombatComponent) CloseBuffDriver() / OnDestroy(reason)                    // 撤销：心跳驱动 Reg.Close，其他驱动 Sleep
+```
+
+**依赖方向**：`combat`（纯数据：`BuffContainer.NextDue` / `Tick`）← `skill`（`Driver`、`TickClock`、`Stepper`）← `combatcomponent`（`buff_stepper.go` 把组件的事务修改与 `skill.Driver` 接在一起；`beat.go` / `runtime_beat.go` 是心跳适配）。Buff 的推进不放 `combat`：`combat` 不能 import `skill`（反向已有），推进又要调组件的事务修改（`beginChange` / `markChanged`、投影、派生状态），本来就在组件里；放在 `combatcomponent` 并复用 `skill.Driver`，两边同一个接口，`combat` 不依赖 heartbeat。
+
+**按要求逐条落实**：
+
+1. **skill 定义驱动接口**：`Driver{Wake() error; Sleep()}` 与 `Stepper`；原 `runtime_beat.go` 文件头第 1～6 条规则（逐 tick、空闲停、输入跳、追帧上限、时刻倒退不动、跳跃计数与 Warn、`Stats`）全部搬到 `skill/stepper.go`（`advanceTo` 仍是唯一实现）。“本条消息冻结的时刻”由适配层经 `StepperConfig.Now` / `Rate` 给出。
+2. **Buff 同样的形状**：`DriveBuffs` 给出“有没有工作”（`BuffsPending`）与“下一个到期 tick”（`NextBuffDue`），按 Wake / Sleep 通知驱动，`TickBuffs` 仍是原语；`Periodic` / `OnBeat` 的钩子语义不变（`OnBeat` 在 `TickBuffs` 之后、同一事务里，返回错误让本拍回滚）。
+3. **心跳适配在 `combatcomponent`**：`heartbeatDriver`（`Wake` → `Reg.Start`、`Sleep` → `Reg.Stop`）两边共用；每拍 `StepTo(Beat.Now, 域倍率)`；时间域、两种投递方式、Remote 共享模式时 `Start` 报错保持现状。`NewRuntimeBeat` / `AttachBeat` 保留名字、改为薄包装。按协调方要求与 heartbeat / actionflow / ai 审查修复（`Reg.Close`、`Close(reason)`、`Behavior.OnDestroy`）保持一致：新增 `CombatComponent.CloseBuffDriver`（心跳驱动 `Reg.Close`、其他驱动一次 `Sleep`）并接进 `CombatComponent.OnDestroy`，`RuntimeBeat.Close` / `Closed`；game-demo 怪物的 `OnDestroy` 转调 `combat.OnDestroy`。
+4. **非心跳驱动的示例与测试**：定步长循环 `ExampleStepper_fixedStepLoop`（只推进醒着的 Runtime）、`TestStepperOnAFixedStepLoopMatchesTheJitteredDriver`（与抖动的手动驱动逐 tick 相同）、`TestBuffsOnAFixedStepLoop`；手动驱动 `TestStepper*`（`manualDriver`）、`TestBuffsSteppedByHand`。没有迁移现有 Lockstep / 夹具代码（按要求）。
+5. **使用方**：`rg` 全仓——game-demo 怪物只用 `AttachBeat` / `BuffBeat` / `BeatReg` / `CurrentTick`，名字与语义都不变，不用改；生成器的技能指南与 CODEGEN_REFERENCE 改了说明；其余引用都在文档里（已改）。`gameplay/actionflow` / `ai` 的同名 `BeatConfig` / `DefaultBeatName` 与本轮无关。
+
+**与要求的偏差（如实记录）**：
+
+1. **`Wake` 返回 `error`**：要求举例是 `Wake()`；心跳的 `Reg.Start` 在 Remote 共享模式下返回 `ErrHeartbeatRemoteShared`，原来 `Start` / `Input` / `Do` / `Sync` 会把它交给调用方，去掉返回值就要换成回调，行为会变。
+2. **通知是电平式的，不只在边沿**：要求写的是“从空闲变成有工作时调 Wake、推进到空闲时调 Sleep”。推进器若自己记“已叫醒”，心跳的启动随回滚作废、Remote 共享模式停掉心跳之后就再也不会叫醒（原来 `Sync` 读 `Reg.Active` 才补得上）；所以推进器每次推进 / 输入后按状态通知、驱动去重（心跳驱动按 `Reg.Active`，与原来相同，不多事务登记）。变异 S1（改成边沿式）让 `TestStepperNotifiesTheDriverByLevel` 变红。
+3. **`StepToTick` 也带倍率参数**：追帧上限乘 max(倍率, 1)，给 tick 的驱动同样可能在变速里；定步长循环传 1。
+4. **demo 只改了收尾**：心跳驱动保留了原名与语义，怪物的接线不用改；只在 `ActorComponent.OnDestroy` 加 `combat.OnDestroy`（上一条）。按要求生成 game-demo 工程跑了 build / vet / `test -race`。
+5. **Buff 的不走心跳驱动不随事务**：心跳的启停随事务；一般驱动不是事务的一部分，施加限时 buff 的事务回滚后驱动仍醒着，下一步没有工作才睡（多醒一步，`TestARolledBackBuffCostsANonTransactionalDriverOneStep`），写进 KNOWN-LIMITS。
+
+**红绿证据**：纯重构，原用例在重构后照常通过（行为不变的证据）；新结构的强制点用变异核对给出：原 17 项按新位置重做，另加 R6b / R6c（适配层的拍与输入各自传域倍率）、S1（电平式通知）、D1 / D2（心跳驱动的 Wake / Sleep）、B3b（手动一步的 tick），加撤销 C1～C5（`CloseBuffDriver` 不撤销登记 / 不清接线 / 非心跳驱动不 Sleep、`OnDestroy` 不卸下、`RuntimeBeat.Close` 不撤销），共 28 项，每项对应用例在当前代码上变红，原文全文在 impl §2G 的表里。摘要：R1 → `every other tick seed 1: per-tick results differ`、`fixed-step loop: per-tick results differ from the jittered driver`；R7 → `the loop stepped 158 times over 161 frames with 1 still awake, …`；S1 → `Sync after the driver lost its state: awake false (<nil>), want woken again`；B4 → `periodic work from frame 20 to 25: steps [{Tick:20 …} … {Tick:30 Expired:[]}], want frames 20..25`。
+
+**验证**：见本轮交付报告（gofmt、vet、glsvet、`-race ./gameplay/... ./wiring/...`、`-race -count=20 ./gameplay/skill/...`、codegen、根包、全量、生成 game-demo 工程 build / vet / `test -race`；全部为 0 才提交文档）。
+
+### 生成器接入实施结果（2026-10-21）
+
+**状态：已实施**（分支 `feat/codegen-heartbeat`，开工基于 `53cc3f97`、交回前 rebase 到 `ddeeffa3`（含 P4、选项 C、P5、Remote 验证）；提交 `237d9cd2` 命令与装配、`33ffecb4` 配置段、`ce7bae9e` 端到端两种投递方式、`c7064b47` 技能 / Buff 心跳入口的文档；已合入 main）。维护者 2026-10-21 要求生成工程开箱就能用 D20～D22 的能力、尽早收尾。用法 [CODEGEN_REFERENCE“roost add heartbeat / behavior / timedomain”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)，实现 [impl/12-codegen §2E](../framework/impl/12-codegen.md#2e-roost-add-heartbeat--behavior--timedomain)，边界 [KNOWN-LIMITS“生成器接入心跳、行为与时间域”](KNOWN-LIMITS.md#生成器接入心跳行为与时间域)。只改了 `codegen/`、`scripts/`（新脚本与夹具）和文档，没有改框架包。
+
+**命令与生成结构**（生成部分 project sync 重写，业务文件只在缺失时创建）：
+
+| 命令 | 生成部分 | 业务文件 |
+| --- | --- | --- |
+| `roost add heartbeat --entity E` | `game/heartbeat/driver_gen.go`（工程唯一的 `Driver`）、`E/heartbeat_component_gen.go`（宿主、`Register` / `Beat`）、bootstrap 的 `kitheartbeat.NewMod` | `heartbeat_beats.go`（`onHeartbeatInit`，示例登记停止状态） |
+| `roost add behavior --entity E [--ai] [--state]` | `E/behavior_component_gen.go`（`Behavior` 接宿主；`--ai` 时 `ai.NewBeatController` 作 Observer） | `behavior_actions.go`（种类 / 组 / 注册表 / 冲突 / `timeDomain()` / `onBehaviorReady` / 示例 `ExampleAction`）、`--ai` 的 `behavior_strategy.go`、`--state` 的 `states.go`（Catalog）、`game/handler/E_behavior.go`（示例 handler） |
+| `roost add timedomain --entity S` | `S/timedomain_component_gen.go`（`timedomain.New` + DAO 适配） | `timedomain_config.go`（倍率范围）；DAO 定义 add 时加三个 `nopersist,sync` 字段 |
+
+**装配决定：按需装配**（与 entitytimer 相同）。依据“开箱可用、不用的实体零开销”：实体侧本来就零开销（没有登记、登记都停着的实例不占调度；生成的示例登记是停止状态，AI 不设策略不跳），所以“开箱可用”由 add 命令保证——它把 `heartbeat` 加进实体所在服务的 `mods`，bootstrap 随之装上，不需要手工接线。不缺省装进新工程，因为进程侧有固定开销：驱动 goroutine 空转也每 10ms 走一格，多一个 Mod 让 `shutdown.total_timeout` 多 3s 保底（实测新工程 game 服务 74s → 77s、k8s 宽限期 79 → 82s）。`heartbeat` 做成 catalog Mod（依赖 nest），配置段、doctor 的配置检查、停机预算与 `roost add mod heartbeat` 都走 Mod 的现成路径。
+
+**配置**：生成配置的 `heartbeat:` 段来自 `kitconfig_gen.go` 里 Mod 的配置声明（`modConfigSection`）。rebase 到 `6576b7fb`（选项 C 已合入）后在 `wiring/internal/configschemagen` 加了 `heartbeat` 组，生成配置（开发、生产示例、k8s Secret 示例）写 `heartbeat:\n  delivery: dispatch`；add 命令给已有服务配置补这一段（`appendModConfigSections`），重复 add 不重复写。红：快照里去掉 `heartbeat` 组时 `TestAddBehaviorGeneratesOwnedPartsAndBusinessFiles` 变红（返回的路径里没有三份配置文件）。
+
+**红绿证据**：修前（`53cc3f97` 的 `roost`，新工程加 Monster 实体后）原文：`roost add heartbeat --entity Monster` → `unexpected arguments ["Monster"]`；`roost add behavior --entity Monster --ai` → `unexpected arguments ["Monster" "--ai"]`；`roost add timedomain --entity Monster` → `unexpected arguments ["Monster"]`；`roost add mod heartbeat -service game` → `unknown wiring mod "heartbeat"`。修后 `add_heartbeat_test.go` 六条用例通过，生成工程端到端通过（`TestGeneratedHeartbeatBehaviorEndToEnd`：`example action: last progress "running ticks=5 waited=470 started=0", executed beats 6`）。变异核对：把生成的 `BehaviorConfig.Beat` 改成 nil（行为组件不挂心跳），端到端变红，原文 `timed out waiting for the heartbeat to tick the example action (driver {Delivered:0 Executed:0 ... Registered:0})`。
+
+**与任务书的偏差**：①时间域是单独的命令 `roost add timedomain`，不是 behavior 的选项——挂域的是场景实体，用域的是成员实体，两者通常不是同一个；②`--state` 只生成 Catalog 声明，不接 `Set` / `Gate` / `StateDao`（持久状态要登记进 DaoManager，接法因实体而异）；③生成了一个业务 Nest handler 文件（`game/handler/<entity>_behavior.go`），用来发起示例动作、设定示例策略，端到端经它验证“示例动作被心跳推进”；④端到端用例放在脚本夹具（`scripts/testdata/heartbeat`），不在 `go test ./codegen/...` 里（避免再加一个要编译整个生成工程的用例）。
+
+**需要维护者决定**：
+
+1. heartbeat Mod 的装配方式：A 按需（现状，推荐：进程侧固定开销只在用到时付）；B 新工程里装了 nest 的服务缺省装（新手不必跑 add 也能直接用 `game/heartbeat.Driver`；代价是每个 game 进程多一个空转 goroutine 与 3s 停机预算）。
+2. 生成工程端到端脚本是否进 pretag：A 不进（现状，与其他 `test-*-generated.sh` 相同，手工运行）；B 进 pretag（发版前多约 3 分钟）。
+
+**与并行任务的衔接**：选项 C（`heartbeat.delivery`）已在 rebase 时接入（见上文“配置”）；P3（game-demo）不用这个生成器（demo 是手写参考实现，维护者 2026-10-18）。
+
+**验证**（rebase 到 `ddeeffa3` 之后的 `c7064b47` 的树，退出码直接读；rebase 前在 `cc24027f` 上同样跑过一遍、结果相同）：gofmt 无输出；`GOWORK=off go build ./...`、`go vet ./...` 通过；`GOWORK=off go test -count=1 ./...` 通过（153 个包 ok，其中 `codegen/internal/roost` 276s、根包 12s）；`bash scripts/test-heartbeat-generated.sh` 通过（生成工程 build / vet / `test -race ./...` 全过，端到端 dispatch 一遍 `0 Nest batch jobs`、batch 一遍 `21 Nest batch jobs`，`roost id check`、`roost generate --check` 通过）；`bash scripts/test-sync-modes-generated.sh` 通过；`go generate ./codegen/... ./wiring/...` 后 porcelain 干净。生成工程放在会话 scratchpad，脚本结束时删除。
+
+**未验证**：真实 DataEngine / Mongo 下的生成工程心跳（卸载重载后重新登记）、Remote 托管实体上的生成组件、`roost project doctor` 只在 rebase 前（`53cc3f97` 基线）的生成工程上跑过一次（退出码 0），rebase 后没有重跑。
 
 ### 现状（已核对源码，基线 `6e65ba12`）
 
@@ -1273,7 +1445,7 @@ roost 的取舍：
 | `gameplay/actionflow`、`gameplay/ai` 的 `Tick` | 是（应当在实体锁内调用） | P2 由心跳驱动 |
 | `combatcomponent.TickBuffs` 与周期性 Buff 效果、冷却、回复 | 是 | **已实施（P5，`AttachBeat`，见“P5 实施结果”）**。原计划：有到期 buff 或周期效果时挂 1Hz（或按 buff 粒度）登记，全部清空时停；加载后的第一拍顺带清理过期记录（注释里“重启后首次业务 tick”）。需要离线也准点、且结果要落档的长时 buff 仍用 entitytimer。风险中（战斗数值的时间粒度要与技能 tick 对齐） |
 | Skill `Runtime.Advance(tick)` | 是（挂在实体组件上时） | **已实施（P5，`NewRuntimeBeat`，见“P5 实施结果”）**。原计划：有在途施法 / 衍生物时挂登记，每拍把 Runtime 推进到 `beat.Now` 对应的 tick，空闲停。风险中（技能确定性依赖整数 tick 与回放，换算规则要测） |
-| game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | P5 可选：改成场景实体 1Hz 心跳里决定缺额、提交后由进程侧建实体。风险中（建实体与同步登记的先后要拆清），不是必须 |
+| game-demo 怪物刷新（`spawner` 每秒 ticker） | 部分（服务 goroutine 在 Nest 外决定、再建实体和登记同步） | **已做（随 P3，2026-10-21）**：场景实体的 1Hz 心跳 `"scene.spawn"` 在场景锁里决定缺额，提交后（`AfterCommit`）交给进程侧按“建实体 → 放身体 → 登记同步并进 AOI → Nest 事务进场景并启动 AI → 计数”的顺序建，ticker 删除；见“P3 实施结果” |
 | SLG 行军、建造、研究、收入（夹具） | 到期部分不是周期 | 继续用 entitytimer；行军途中如果大地图 AOI 需要服务端位置，加 1～2Hz 心跳插值位置 + `QueueMove`。风险低 |
 | tower-defense / auto-chess / survival / idle 夹具的 `Advance(now)` | 不是周期（按下一个期限推进） | 继续用 entitytimer；某个玩法需要连续模拟（例如塔防里怪物连续移动）时，房间实体挂心跳 |
 | 活动阶段（World 期限 + 服务 `runActivity` 5s 循环） | 期限是持久定时器；循环是服务后台工作（跨服务协调、经总线） | 不迁：期限留在 entitytimer，服务循环不在范围内 |
@@ -1290,7 +1462,7 @@ roost 的取舍：
    - **推荐**：A（X）作为 P1；B（Z）不推荐（业务延迟变差、不支持 Remote）；CPU 成为瓶颈时评估 C——在 Nest 里加“批量心跳作业”（不登记同 ID 顺序、逐目标确认无在途作业且 `TryRequireEntity` 成功后在该目标自己的 Guard + 事务里执行，失败交回驱动重投），改 Nest 契约，需另行设计。
    - **方案 D 原型（2026-10-21，[实验记录](../performance/NEST-DISPATCH-BATCH-20261021.md)，分支 `perf/nest-dispatch-batch`）不达标**：CPU 只比 X 少 10～12%；维护者 2026-10-21 按推荐 A 决定分支不合入，只保留 worker“结束后同一次持锁取下一项”，随选项 C 合入。
    - **维护者 2026-10-21 决定：选项 C 先合入、缺省关闭，合批优化压测通过后再改为缺省开启**（开关 `heartbeat.delivery: dispatch | batch`，缺省 `dispatch`；Nest 侧的分片登记表、同锁取下一项、`DispatchTryBatch` 入口无条件生效）。
-   - **选项 C 已实施（2026-10-21，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)，分支 `perf/nest-batch-heartbeat`，未合入 main）**：维护者 2026-10-21 批准按推荐做（C + 两张 goroutine 登记表改分片表 + 只保留 D 的同锁取下一项），并追加同 ID 顺序硬约束：tails 有登记（含已准入未执行）的目标当场转单目标作业排在冲突消息之后（不跳拍，对应 ssr 的 MoveCopy 但只投一次），执行期间认领为该 ID 的尾作业。`heartbeat.delivery: batch` 时心跳按 64 个一批走 `nest.NestMgr.DispatchTryBatch`（Remote 托管实体仍单目标 `Dispatch`）。23 条变异核对 22 红 1 绿（绿的一条是防御性包装，见设计 §16）。**性能结论：压测暂停，待补**（维护者 2026-10-21 18:55 要求先完成代码；复跑步骤见 [NEST-BATCH-HEARTBEAT-20261021 §4](../performance/NEST-BATCH-HEARTBEAT-20261021.md#4-待补测复跑步骤)）。待拍板 4 项见设计 §15。
+   - **选项 C 已实施（2026-10-21，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)，分支 `perf/nest-batch-heartbeat`，未合入 main）**：维护者 2026-10-21 批准按推荐做（C + 两张 goroutine 登记表改分片表 + 只保留 D 的同锁取下一项），并追加同 ID 顺序硬约束：tails 有登记（含已准入未执行）的目标当场转单目标作业排在冲突消息之后（不跳拍，对应 ssr 的 MoveCopy 但只投一次），执行期间认领为该 ID 的尾作业。`heartbeat.delivery: batch` 时心跳按 64 个一批走 `nest.NestMgr.DispatchTryBatch`（Remote 托管实体仍单目标 `Dispatch`）。23 条变异核对 22 红 1 绿（绿的一条是防御性包装，见设计 §16）。**性能结论（2026-10-22 补测：不达标，建议暂不改缺省——同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核（另一时段 3.42 / 0.91 / 0.33），业务 p99 X 0.078 / C 0.235ms；跳拍 / 准入失败 / 快池拒绝 0；普通短 handler 不退化（−9.9%））**：见 [NEST-BATCH-HEARTBEAT-20261021 §3](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3-2026-10-22-补测正式对比3-轮中位数-最小最大)，是否改缺省待维护者决定（§3E）。待拍板 4 项见设计 §15。
 3. **同一实体多个组件登记**：A 合并为一条投递，实体周期取最短、各登记按自己的周期与经过时间触发（推荐，示例分布省约 29%）；B 每个登记各自投递。
 4. **合并 / 跳拍**：至多一条在途，上一拍没执行完就跳过、只计 `Skipped`，不累积、不补投（推荐）；备选“累积到下一拍一起执行”会让慢实体越积越多，不推荐。
 5. **背压**：准入失败跳拍 + 快池等待超过 50% 容量时整格跳拍 + 每格上界 16384（推荐）。水位比例是否接受 50%。
@@ -1314,6 +1486,17 @@ roost 的取舍：
 3. 位置是否每次心跳持久化：建议位置为 nopersist（只同步），按周期或离开场景时落库一次；还是每次心跳 strict 写入。
 4. ~~心跳频率~~：由上文方案给出（按登记、移动中才高频、空闲停），缺省值见 §9 第 6 条。
 5. 范围：本期只做移动（MoveTo / Follow），还是连巡逻、寻路一起（与 §9 第 14 条一起定）。
+
+### 维护者 2026-10-21 晚：各期待拍板项的决定
+
+- **Remote（先不处理，记录方向）**：Remote 托管实体理论上不应挂 Move（`movement`）与心跳（`heartbeat`）组件。真实 Remote 共享模式验证提出的 `MapBasic.Sync` 不加；“运行中被停掉的动作暂停、回到独占后 `Sync` 接着走，共享期间新发起的才失败”维持现状。后续方向：Remote 托管实体禁止挂移动 / 心跳组件（装配或登记时拒绝），另行设计。
+- **技能 / Buff 的驱动方式**：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只使用接口。技能与 Buff 两边都改。已实施，见上文“驱动接口实施结果”。
+- **其余按推荐（即现状）**：
+  - P5：① 技能心跳放 `combatcomponent`（`skill` 不依赖 Nest）；② Buff 心跳固定按 `Granularity` 取档；③ 超过追帧上限的部分一次跳过、计数并限频 Warn；④ `TickBuffs` 保留为导出原语。
+  - 选项 C：批大小 64、批量作业时间片 200µs（合批优化压测后再调）；`DispatchTryBatch` 对业务导出，文档注明目前只有心跳使用。
+  - P4：压测工具缺省仍是全局循环（`-move-driver=loop`、`ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`），v1.31 发版前对比后再定。
+  - 生成器：heartbeat Mod 按需装配（`roost add heartbeat|behavior` 时装）；`scripts/test-heartbeat-generated.sh` 不进 pretag，与其他 `test-*-generated.sh` 一样手工跑。
+  - P3：场景时间经关系视野下发、扇出上限 65536，超出只打 Warn；玩家位置在场景内每 10 秒落库一次（崩溃 / 卸载最多丢 10 秒），不在卸载前补 `LeaveScene`。
 
 ## D21 吸收 ssr 的优秀组件进 `gameplay`
 
@@ -1581,7 +1764,7 @@ roost 的取舍：
 
 ##### D21-1 实施结果（2026-10-21）
 
-**状态：已实施**（分支 `feat/d21-gameplay`，本地提交 `86c6dc1c`，由维护者推送）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
+**状态：已实施**（提交 `86c6dc1c`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结)，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态)，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。codebase-memory 图的 generation 早于本轮，D21 新文件不在图里，结构结论以 worktree 源码为准。
 
 **API 最终形状**：
 
@@ -1637,7 +1820,7 @@ type ActionList interface { …; EndAction(id, force, reason) error; Freeze(grou
 
 ##### D21-2 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `849031fa`）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
+**状态：已实施**（提交 `849031fa`，已合入 main）。新包 `gameplay/state`，用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“状态位”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 6～8 条，边界 [KNOWN-LIMITS“行为控制”](KNOWN-LIMITS.md#行为控制d21)。
 
 **API 最终形状**：
 
@@ -1690,7 +1873,7 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 
 ##### D21-3 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `575f216a`）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条。
+**状态：已实施**（提交 `575f216a`，已合入 main）。位置按方案 S6 放在 `gameplay/skill/combatcomponent`（`state_bridge.go`）：`combatcomponent` import `state`，`state` 不认识 combat。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“Buff → 状态”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条。
 
 **API**：`type StateBinding struct{ State state.ID; Tags []combat.Tag }`；`func (c *CombatComponent) BindStates(set *state.Set, bindings ...StateBinding) error`（构造时一次；每个状态一个提供函数，持久状态、空标签被拒）；`func (c *CombatComponent) HasBuffTag(tag combat.Tag) bool`。
 
@@ -1711,7 +1894,7 @@ var ErrCatalogInvalid, ErrUnknownState, ErrNotInTransaction, ErrProviderInvalid,
 
 ##### D21-4 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `79138636`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 10～12 条。
+**状态：已实施**（提交 `79138636`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“任务心跳”“计划步骤的时限与重试”“AI 心跳与定时冻结”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 10～12 条。
 
 **API 最终形状**：
 
@@ -1763,7 +1946,7 @@ func PeriodAtMost(want time.Duration) time.Duration                        // �
 
 ##### D21-5 实施结果（2026-10-21）
 
-**状态：已实施**（本地提交 `e95916f7`）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
+**状态：已实施**（提交 `e95916f7`，已合入 main）。用法 [guide/10-time §4C](../framework/guide/10-time.md#4c-行为控制behavior取代冲突与冻结) 的“AI 事件、分阶段与轨迹”“动作指标”，契约 [impl/10-time §2D](../framework/impl/10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 13～15 条，指标 [OBSERVABILITY“动作”](../framework/OBSERVABILITY.md#动作gameplayactionflow可选)。
 
 **API 最终形状**：
 
@@ -1812,11 +1995,37 @@ BehaviorConfig.Metrics bool; MetricActionsStarted / MetricActionsEnded / MetricA
 
 ##### 调研一 · 收尾（2026-10-21）
 
-- **提交**（分支 `feat/d21-gameplay`，本地，未推送）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
+- **提交**（已合入 main）：决定记录 `78350b9e`；D21-1 `86c6dc1c` + `bc2bc568`；D21-2 `849031fa` + `f31b2cde`；D21-3 `575f216a` + `24403bcd`；D21-4 `79138636` + `e42e4841`；D21-5 `e95916f7` + `87139cb1`；更名 `08c734b1`。
 - **全量验证**：gofmt；`GOWORK=off go vet ./...`；`GOWORK=off go test -race -count=1 ./gameplay/... ./wiring/...`；涉及心跳调度的用例 `-race -count=30`；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`。退出码均为 0。
 - **待拍板（都已先按推荐实施）**：① `FreezeCancel` 是否连排队项一起丢弃（现：保留）；② 门控在 handler 回滚后的一致性（现：下一次状态通知时纠正、不累积）；③ 被取消的计划步骤是否重试（现：不重试）；④ 动作指标是否缺省开启（现：关闭）。
 - **维护者 2026-10-21 决定：上述 4 项全部按推荐（即现状）**：① `FreezeCancel` 只打断当前动作、排队项保留，去留由业务决定；② 门控在 handler 回滚后不由框架补发，下一次状态通知或业务 `Refresh` 时纠正、每条规则至多持有一次冻结；③ 被取消的计划步骤不重试，直接走 OnFail；④ 动作指标缺省关闭，由 `BehaviorConfig.Metrics` 打开。
 - **没做 / 不在本轮**：game-demo 与生成器接入 `Behavior`、`state`、AI 心跳（随 D20 P3）；`TickBuffs` 挂心跳（D20 P5）；其余 ssr 候选（`trigger_engine`、`eca_man`、`cooldown`、`timer`、空间、战斗、经济、社交）的调研。
+
+##### D20 与 D21 审查修复（2026-10-21）
+
+**状态：已修复**（分支 `fix/main-review-20261021`，基于 `5464dd6d`）。来源：学习分支 `learn/main-review-20261021` 的“main 近期提交审查”第 2、3、4、7 条，与 KNOWN-LIMITS 原“慢派发 trace 与 handler 并发读消息参数”一条（选项 C 与 Remote 验证两轮都撞到）；维护者 2026-10-21 要求解决别的 agent 提的问题。逐条先在当前 main 上写出变红的回归，再修。
+
+| # | 问题 | 修法 | 修前红（原文） |
+| --- | --- | --- | --- |
+| 1 | `heartbeat.Host` 没有注销，换场景重建 `BeatRunner` / `Behavior` / `ai.Controller` 报 `ErrDuplicateName` | `heartbeat.Reg.Close`（立即离开驱动、释放名字、不随回滚；在途拍按 `stale` 丢弃）；上层 `BeatRunner.Close(reason)`、`Behavior.Close(reason)`、`ai.Controller.Close(reason)`。不做 `SetTimeDomain`（理由见下） | `TestABeatRunnerCanBeRebuiltOnTheSameHost`：`rebuilt runner: errors [heartbeat: registration name already used on this entity: "actionflow/1" on entity 1048576 …] active false registered 0`；`TestABeatControllerCanBeRebuiltOnTheSameHost`（修前用 `Shutdown` 代替 Close）：`rebuilt controller: reported [ai: heartbeat: heartbeat: registration name already used on this entity: "ai" on entity 2097152] active false registered 0` |
+| 2 | 被抢占组的排队项永远不推进、不发 OnEnded | 抢占时被抢占组记下抢占方（`preemptedBy`），抢占方离开当前位时 `resumePreempted` 推进一次；保留排队，抢占那一刻仍不推进（变异 D4 锁定） | `TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds/ended`：`after the preemptor ended: current1 <nil> queue 1 later starts 0 ended { <nil> {idle }}`；`/finished_by_its_tick`：`after the preemptor finished: current1 <nil> later starts 0` |
+| 3 | `StateDao` 在 rollback=state 下没登记进 DaoManager 时静默不回滚，注释自相矛盾 | `StateDao` 改为实现 `nest.RollbackParticipant`（`CaptureRollback` 拍快照并记下事务），`change` 在 rollback=state 下发现本事务没对它拍快照就返回 `ErrRollbackNotCaptured`、不改；改正类型注释 | `TestAnUnlistedStateDaoRefusesChangesUnderRollbackState`：`rollback=state with an unlisted StateDao: Add = <nil>, handler = business refused, states after the rollback [1] (want Add to fail and nothing left)` |
+| 4a | 实体已 `IsRemoved` 而组件没调 `Host.OnDestroy` 时，驱动只计数、登记留在环上 | `step` 遇到 `IsRemoved` 即 `Host.OnDestroy`（计一次 `dropped{removed}`） | `TestARemovedInstanceLeavesTheDriver`（dispatch / batch 两种都红）：`removed instance still on the driver: registered 2 dropped removed 42 (want 0 / 2, one per registration)`（修后按“同一格一起到期的登记各计一次”把计数断言改为 1～2，摘除的断言不变） |
+| 4b | guide 没有写 `WithDurability(Strict)` 每拍在实体 worker 上等落盘 | guide §4A 表格与 KNOWN-LIMITS“实体心跳”写明 | 文档项，无测试 |
+| 4c | `RemoveBuff` 里的 `buffsChanged()` 变异不被捕获，`SetBuffStacks` / `AdoptBuff` 没有用例 | `TestEveryBuffMutatorNotifiesBoundStates`：逐个 mutator 断言观察者当场看到变化 | 变异（新用例在 main 上是绿的，缺的是覆盖）：去掉 `RemoveBuff` 的 `buffsChanged()`：`remove: watcher saw [], want [false]`；去掉 `SetBuffStacks` 的：`set stacks to 0: watcher saw [], want [false]`；去掉 `AdoptBuff` 的：`adopt: watcher saw [], want [true]` |
+| 4d | Behavior 没有 OnDestroy，卸载时在途动作不结束，`actionflow.actions.running` 只升不降 | `Behavior.OnDestroy()` 即 `Close(ErrOwnerDestroyed，取消状态)`；生成的 `BehaviorComponent.OnDestroy` 与 game-demo 的玩家 / 怪物组件接上（AI 先 `Close`） | `TestBehaviorOnDestroyEndsWhatIsRunning`（修前只能 `Host.OnDestroy`）：`after destroy: running 1 observer [] (want [action 1 4 step -1 action 2 4 step -1]) walk cancels 0 registered 0` |
+| 4e | 文档过时：KNOWN-LIMITS“`Elapsed` 上限……待维护者确认”（维护者已在 `2b47c959` 选 A）；D20 / D21 各期实施结果写“本地提交 / 由维护者推送 / 分支 feat/d21-gameplay” | 删去前者；状态行改为“已合入 main”（所引提交都已核对是 HEAD 的祖先） | 文档项 |
+| 5 | Nest 慢派发 trace 用 `%#v` 打印消息参数，handler 执行期间与可变字段数据竞争 | `nestParamSamples` 只打印按值装箱的标量与实现了 `fmt.GoStringer` 的参数，其余只给类型名 | `TestSlowDispatchTraceDoesNotFormatParamsTheHandlerMayMutate`：普通运行 `the running trace formatted a parameter the handler was mutating: … param_samples:[&nest.mutableTraceParam{n:7211729, items:[]int{7211765}} stable:reg 7 "tick"] …`；`-race` 下另报 2 处 `WARNING: DATA RACE`（trace 的 `reflect.Value.Int` 读与 handler 的写同一地址）、`race detected during execution of test` |
+
+**第 1 条为什么是 Close + 重建、不做 `SetTimeDomain`**：域时刻散在多处——心跳登记的 `lastRun` / `startedAt`（`Elapsed` 基线）、计划步骤的 `deadline`、`ai.Controller.frozenUntil`、`Behavior.now` 绑定的时钟——原地换域要把每一处都换算或作废，漏一处就是一次错误的 `Elapsed` 或时限；而成员换场景本来就要结束旧场景里的动作（`MoveTo` 的目标点、跟随目标都属于旧场景）。Close + 重建只需要“名字能释放”这一个新能力，其余沿用构造路径。结合 D20 的契约：① 每个登记至多一拍在途按 `*Reg` 成立，同名重建后旧登记的在途拍到达即按 `stale` 丢弃（`runBeat` 在实体锁内看 `closed`），不执行回调，同一实体的回调仍由实体锁串行；② 卸载窗口不变（Close 不涉及实例替换；卸载由 `Host.OnDestroy` 处理，Close 之后再 OnDestroy 无害）；③ Remote 共享模式：Close 不经准入，共享期间也能撤销；重建时 `Register` 照常在共享模式下返回 `ErrHeartbeatRemoteShared`，动作以失败结束（与原规则相同）。`Close` 与 `Register` 一样不随事务回滚：换场景的调用放在 handler 最后一步（D20 决定 3 的口径）。
+
+**第 2 条为什么保留排队、不丢弃**：维护者 2026-10-21 定 D21 待拍板 ①“`FreezeCancel` 只打断当前动作、排队项保留、去留由业务决定”，抢占是同一类“打断正在做的事”。抢占那一刻不推进（排队项若这时启动，会被正在启动的抢占方按跨组规则挡住或互相抢占，变异 D4 锁的就是这一点），推进点放在抢占方离开当前位时（完成、被结束、被取代、启动失败，`finish` 与 `start` 的失败路径共用 `resumePreempted`）。推进照常过冻结与跨组规则：冻结中的由 `Recover` 推进；业务已在这组启动了别的动作的不动；抢占方被同组的另一个动作取代时，若新动作同样挡住排队项，排队项按现有规则以失败结束（写进 KNOWN-LIMITS“行为控制”）。没有需要待拍板的丢弃语义。
+
+**第 3 条为什么返回错误、不 panic**：检查在改动之前，返回错误时什么都没改，handler 返回它即整条回滚；与同一个 `change` 里的 `ErrNotInTransaction` 一致（D21-2 决定 4：状态写入是常规业务调用，返回错误，而不是像 `CombatDao` 那样 panic）。`MarkPersist` 失败仍 panic，那是改动已经做了之后的内部不变量。`StateDao` 记最近 4 个快照事务的 ID：handler 里嵌套的隔离事务对同一实体再拍一次快照之后，外层事务的那次仍要认。
+
+**第 5 条的范围**：只改 `framework/nest/trace.go` 的参数取样，trace 的触发、限频、字段都不变。`*heartbeat.Reg` 的 `GoString` 保留（它就是登记名能出现在 trace 里的方式）。按值传的结构体是副本、本身没有竞争，也只给类型名：为了不在 trace 里判断“副本里有没有引用”（切片、map 字段的内容 `%#v` 会跟进去读）。
+
+**验证**：gofmt；`GOWORK=off go vet ./...`；glsvet（`./framework/nest ./gameplay/... ./wiring/heartbeat`）；`GOWORK=off go test -race -count=1 ./framework/nest/... ./gameplay/... ./wiring/...`；心跳相关用例 `-race -count=20`（`gameplay/heartbeat` 的新用例与实例核对用例在两种投递方式下各跑，`gameplay/actionflow`、`gameplay/ai`、`gameplay/state` 全包）；根包 `GOWORK=off go test -count=1 .`；全量 `GOWORK=off go test -count=1 ./...`；生成模板改动之后用 game-demo 生成工程（本地 replace 到本分支）跑 `go build ./... && go vet ./... && go test ./...`，并在其中 `roost add entity npc` + `roost add behavior --entity Npc --ai --state` 之后 build / vet / `go test ./game/...`。
 
 ## D22 业务时间取自 ctx、支持变速
 

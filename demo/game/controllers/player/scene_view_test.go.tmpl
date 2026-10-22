@@ -25,7 +25,6 @@ type sceneViewStub struct {
 
 func (*sceneViewStub) Join(context.Context, *player.Player, spatial.Point) error { return nil }
 func (*sceneViewStub) Ready(int64) error                                       { return nil }
-func (*sceneViewStub) Moved(context.Context, int64, spatial.Point)             {}
 func (*sceneViewStub) Leave(context.Context, int64)                            {}
 func (stub *sceneViewStub) SetView(_ int64, view policy.ObserverView) (policy.ObserverView, error) {
 	stub.asked = view

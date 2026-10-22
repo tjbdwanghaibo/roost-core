@@ -91,13 +91,19 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 联盟测试缺省模式也复制并 vet；补报截止跟随协调器保留期的用例是纯内存的，缺省模式就跑。
+cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/alliance/
+gofmt -w game/alliance/*_test.go
+go vet -mod=mod -p 2 ./game/alliance
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$' ./game/alliance | tee "$review_root/alliance-unit.log"
+if [[ "$(grep -c '^--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL ' "$review_root/alliance-unit.log" || true)" != 1 ]]; then
+  echo "alliance report-window test did not pass" >&2
+  exit 1
+fi
 if [[ "${ROOST_SLG_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
   : "${ROOST_DATAENGINE_IT_REDIS_ADDR:?isolated Redis address required}"
   : "${ROOST_DATAENGINE_IT_NATS_URL:?isolated NATS URL required}"
-  cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/alliance/
-  gofmt -w game/alliance/*_test.go
-  go vet -mod=mod -p 2 ./game/alliance
   # 本次运行的物理库名前缀；写 Mongo 的两条用例各用 _player / _remote 一个库和一份 WAL 根，互不复用。
   slg_db="roost_slg_it_${PPID}_$$"
   # 基础活动链路（业务 Redis CAS 联盟、原服奖励义务回执与 ACK 重投），不写 Mongo。

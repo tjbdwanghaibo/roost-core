@@ -106,6 +106,29 @@ Nest handler（`game/handler/tick_player_timer_gen.go`）和 bootstrap 里的驱
 
 生成项目内的 workbook 第 3.6 节有可复制的完整示例；规则见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)。
 
+### 3.2 在线周期推进与行为（心跳、动作、AI、场景变速）
+
+回复、冷却、怪物移动与 AI 决策这类在线时一直推进的事用实体自己的心跳（DESIGN-TODO D20～D22），不要写“服务 goroutine
+每 N 秒给实体发消息”的循环：
+
+```bash
+roost add behavior --entity Monster --ai --state   # 心跳宿主 + 行为组件 + AI 心跳 + 状态目录
+roost add heartbeat --entity Scene                 # 只要周期逻辑（场景逻辑帧）
+roost add timedomain --entity Scene                # 场景倍速 / 慢放 / 时停
+roost generate
+```
+
+- 生成的是胶水：`HeartbeatComponent`、`BehaviorComponent`、`TimeDomainComponent`（`*_component_gen.go`）、工程唯一的
+  心跳驱动 `game/heartbeat/driver_gen.go` 与 bootstrap 里的 `wiring/heartbeat`；服务的 `mods` 自动加 `heartbeat`。服务的
+  Init / Shutdown 不用改。
+- 你写的是业务文件（只建一次）：`behavior_actions.go`（动作种类、组、示例动作）、`behavior_strategy.go`（示例 AI 策略）、
+  `states.go`（状态目录）、`heartbeat_beats.go`（实体自己的心跳登记）、`timedomain_config.go`（倍率范围）、
+  `game/handler/<entity>_behavior.go`（发起示例动作的 Nest handler）。
+- 动作在 handler 的最后一步发起（runner 不随事务回滚），由动作组的心跳推进，按 `ctx.Elapsed` 算；心跳不持久，加载后
+  按 DAO 状态重新登记、发起；离线也要准点的事仍用 3.1 的定时器。
+
+生成项目内的 workbook 第 3.7 节有示例；规则见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)。
+
 ## 4. 接入 TCP
 
 第一条业务完成后，如果不使用独立网关：

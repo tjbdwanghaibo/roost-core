@@ -72,8 +72,8 @@ type Fields interface {
 // （例如同时登记同步 subject、处理玩家会话）。
 //
 // QueueMove 在实体锁与事务内调用：只记事实、走提交门，提交确认后才生效、回滚丢弃（policy.Interest.QueueMove）。
-// Enter / Leave 在事务提交、实体锁释放之后调用（nest.AfterCommit），回滚的进出场景不发生；它们可以取 AOI 的锁，
-// 但不能做 I/O。不在事务里（加载 / 新建的初始化阶段）三者都立即调用。
+// Enter / Leave 在事务提交、实体锁释放之后调用（nest.AfterCommit），回滚的进出场景不发生；它们在 worker 上执行，
+// 不能阻塞、不能做 I/O。不在事务里（加载 / 新建的初始化阶段）三者都立即调用。
 type Space interface {
 	Enter(e entity.IThreadSafeEntity, at spatial.Point) error
 	QueueMove(e entity.IThreadSafeEntity, at spatial.Point) error
@@ -81,8 +81,9 @@ type Space interface {
 }
 
 // InterestSpace 把 policy.Interest 适配成 Space：Player 认出的实体按玩家进出（Interest.Enter / Leave：既看又被看），
-// 其余实体只被看（Interest.Show / Hide）。进出之后 Apply 一次，把订阅变化说给 Manager（被拒的 pair 由 Interest 自己
-// 重说，这里只记 Debug）。实体的同步 subject 与玩家会话由业务在进场景之前登记 / 打开。
+// 其余实体只被看（Interest.Show / Hide）。Interest 的这些入口只登记（短锁、不做 AOI），由 Manager 的政策阶段或
+// Interest 的应用线程按调用顺序应用并说给 Manager；被拒的订阅由 Interest 自己重说（要记日志用 InterestConfig.OnRefusal）。
+// 实体的同步 subject 与玩家会话由业务在进场景之前登记 / 打开。
 type InterestSpace struct {
 	Interest *policy.Interest
 	// Player 返回实体对应的玩家（观察者）ID 与主视野；ok 为 false 时实体只被看。nil 表示全部只被看。
@@ -95,9 +96,6 @@ func (s InterestSpace) Enter(e entity.IThreadSafeEntity, at spatial.Point) error
 		err = s.Interest.Enter(playerID, e.ID(), at, view)
 	} else {
 		err = s.Interest.Show(e.ID(), at)
-	}
-	if err == nil {
-		s.apply()
 	}
 	return err
 }
@@ -113,7 +111,6 @@ func (s InterestSpace) Leave(e entity.IThreadSafeEntity) error {
 	} else {
 		err = s.Interest.Hide(e.ID())
 	}
-	s.apply()
 	return err
 }
 
@@ -122,12 +119,6 @@ func (s InterestSpace) player(e entity.IThreadSafeEntity) (int64, policy.Observe
 		return 0, policy.ObserverView{}, false
 	}
 	return s.Player(e)
-}
-
-func (s InterestSpace) apply() {
-	for _, refusal := range s.Interest.Apply() {
-		slog.Debug("movement: interest subscribe refused", "observer", refusal.Observer, "subject", refusal.Subject, "err", refusal.Err)
-	}
 }
 
 // Snapshot 是 MapBasic 最近一次提交的状态，供其他实体（Follow 的跟随者）在任意 goroutine 无锁读取。

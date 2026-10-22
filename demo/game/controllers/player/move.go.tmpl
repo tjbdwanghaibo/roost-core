@@ -10,10 +10,12 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// HandleMove moves the player one point.
+// HandleMove puts the player on a point in one step — a teleport. It is the
+// demo's first movement path, kept next to the server-driven walk
+// (HandleMoveTarget, msg 10026) as the reference to compare it against and
+// as what a blink or a GM jump uses; it ends the walk in progress.
 //
 // The endpoint resolves WHICH scene and the transaction does the rest: the
 // position the client asked for is checked against the map inside the
@@ -45,11 +47,8 @@ func (controller *Controller) HandleMove(context *playeraccess.Context, request 
 		}
 		return &pb.MoveResponse{Code: code, Reason: reason, X: position.X, Y: position.Y}, nil
 	}
-	// The map moved; tell the replication side so interest follows. It is
-	// after the transaction on purpose: the DAO is the authority and the
-	// interest index follows it, never the other way round.
-	if scene, err := controller.Scene(); err == nil {
-		scene.Moved(context.Context(), playerEntityID, spatial.Point{X: request.X, Y: request.Y})
-	}
+	// Nothing to tell the scene: the transaction queued the new position for
+	// the AOI (MapBasic.SetPos → QueueMove, commit-gated), so the interest
+	// index follows the DAO from the same write.
 	return &pb.MoveResponse{X: request.X, Y: request.Y}, nil
 }

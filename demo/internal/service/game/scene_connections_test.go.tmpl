@@ -104,6 +104,8 @@ type sceneClient struct {
 	kinds      []frame.Kind
 	removes    int
 	creates    int
+	fillers    int           // filler pushes (not Sync frames) read so far
+	filled     chan struct{} // signalled, without blocking, after each filler is read
 }
 
 func dialScenePlayer(t *testing.T, addr string, playerID int64, reading bool) *sceneClient {
@@ -126,7 +128,7 @@ func dialScenePlayer(t *testing.T, addr string, playerID int64, reading bool) *s
 		t.Fatalf("player %d authentication: %v", playerID, err)
 	}
 	_ = connection.SetReadDeadline(time.Time{})
-	client := &sceneClient{connection: connection}
+	client := &sceneClient{connection: connection, filled: make(chan struct{}, 1)}
 	if reading {
 		go client.read()
 	}
@@ -144,7 +146,15 @@ func (client *sceneClient) read() {
 		}
 		decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
 		if err != nil {
-			continue // the filler the test uses to stall a connection
+			// the filler the test uses to stall a connection
+			client.mu.Lock()
+			client.fillers++
+			client.mu.Unlock()
+			select {
+			case client.filled <- struct{}{}:
+			default:
+			}
+			continue
 		}
 		client.mu.Lock()
 		client.kinds = append(client.kinds, decoded.Kind)
@@ -217,20 +227,47 @@ func waitActiveSessions(t *testing.T, transport *accessplayertcp.Runtime, player
 // stallPlayer pushes filler to a player until a push to one of its
 // connections has failed. Before the fix that shows up as the push failing;
 // after it, as the stalled connection being gone.
-func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int64) error {
+//
+// Each push waits until the live connection has read it, so only the stalled
+// connection ever builds a backlog. Pushing in a tight loop instead let the
+// live connection's outbound queue (a few 512KiB frames) fill too whenever its
+// writer and reader were scheduled late on a loaded host; both connections
+// then overflowed on the same push and the push failed as a whole — correct
+// for a player with no connection keeping up, but not what this test checks.
+func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int64, live *sceneClient) error {
 	t.Helper()
 	before := transport.ActiveSessions(playerID)
 	filler := &pb.EntitySyncPush{Payload: bytes.Repeat([]byte{0xFF}, 512<<10)}
-	for range 128 {
+	for pushed := 1; pushed <= 128; pushed++ {
 		if err := transport.PushSyncPlayer(context.Background(), playerID, msgid.MsgEntitySync, filler.Payload); err != nil {
 			return err
 		}
 		if transport.ActiveSessions(playerID) < before {
 			return nil
 		}
+		live.waitFillers(t, pushed)
 	}
 	t.Fatalf("64MiB of pushes never stalled player %d's connection", playerID)
 	return nil
+}
+
+// waitFillers waits, bounded, until the client has read want filler pushes.
+func (client *sceneClient) waitFillers(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		client.mu.Lock()
+		got := client.fillers
+		client.mu.Unlock()
+		if got >= want {
+			return
+		}
+		select {
+		case <-client.filled:
+		case <-deadline:
+			t.Fatalf("the live connection read %d filler pushes, want %d", got, want)
+		}
+	}
 }
 
 // a player who
@@ -273,7 +310,7 @@ func TestAStalledOldConnectionDoesNotResetTheLiveClient(t *testing.T) {
 	waitActiveSessions(t, transport, reconnectID, 2)
 	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
 	_ = scene.Flush(ctx)
-	if err := stallPlayer(t, transport, reconnectID); err != nil {
+	if err := stallPlayer(t, transport, reconnectID, live); err != nil {
 		t.Errorf("a push the live connection took was reported as failed: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)

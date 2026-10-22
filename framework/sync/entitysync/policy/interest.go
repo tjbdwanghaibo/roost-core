@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -58,6 +57,9 @@ type InterestConfig struct {
 	// 超出即拒绝构造（ErrInterestBudget）。零值取 DefaultMaxObserverBlocks × DefaultMaxViewsPerPlayer，
 	// 即缺省配置下只有单个视野已经超预算时才会触发；调大 MaxViewsPerPlayer 或视野半径时由它把总成本挡在启动期。
 	MaxPlayerBlocks int
+	// OnRefusal 收到 Manager 政策阶段里结算时被拒绝的订阅（显式 Apply 的拒绝由它的返回值给出，不再重复）：
+	// 在政策阶段、持 Interest 的应用侧锁调用，不得阻塞、不得调用本 Interest。nil 不报告（指标与 Drain 诊断照旧）。
+	OnRefusal func(Refusal)
 }
 
 // Interest 的视野与挂接缺省上限。DefaultMaxViewsPerPlayer 是 ApplyAsync 的缺省；ApplySync 的缺省与上限是
@@ -141,37 +143,34 @@ type Refusal struct {
 // 都看得见同一个敌人——held 按视野记各自给的层级：第一个持有的视野订阅，最后一个释放的视野才退订，所以一个视野
 // 看不见了不会把另一个视野还要的订阅退掉。层级按 selectedProfile 合并：包含关系取数据多的，不包含取并集。
 //
-// 锁：mu 串行化政策批次、生命周期、AOI 与订阅归并；批次内按空间视野并行计算。Queue* 只持 queueMu，不等待空间计算；
-// 业务视野操作（Define* / Set* / Attach / Detach / Remove）只持 viewMu，在登记表里改事实并记一条变更，由下一次
-// Apply（或排队模式下 Manager 的政策阶段）按顺序应用，同样不等待空间计算。锁序 mu → queueMu、mu → viewMu，
-// queueMu 与 viewMu 不同时持有。
+// 单写者（REFACTOR-2026-10-21-interest-single-writer）：全部写入口——Enter / Leave / Show / Hide / Move / 视野操作 /
+// QueueMove 等——只取登记侧短锁（registry.mu）：校验参数、改登记事实、追加一条有序日志，错误当场返回，不等待空间
+// 计算。只有应用方持 mu 按日志顺序执行：同步模式在 Manager Flush 的政策阶段，异步模式在应用线程，另有显式 Apply 与
+// 诊断读。所以业务线程（Nest worker、提交后回调）上的调用不会等 AOI 批次，且“先调用的先生效”对全部入口成立。
+// 锁序 mu → registry.mu。
 type Interest struct {
-	// queueMu 只保护事实准入和角色登记；不能包住空间计算或订阅操作。
-	queueMu     sync.Mutex
-	queueClosed bool
-	// subjectRoles 按实体 ID 记录已登记的目标，供事实准入检查。
-	subjectRoles   map[int64]struct{}
-	inflight       int
-	batchSize      int
-	workers        int
-	queueActive    bool
-	facts          []queuedInterestFact
+	// registry 是登记侧（视野登记表、已登记目标与代际、主视野限速、有序日志），见 view.go。
+	registry  viewRegistry
+	batchSize int
+	workers   int
+	// maxQueuedFacts / applyMode / syncBudget / onRefusal 构造后不变。
 	maxQueuedFacts int
+	applyMode      ApplyMode
+	syncBudget     time.Duration
+	onRefusal      func(Refusal)
 	wake           func()
 	cancelQueue    func()
-	// applyMode 构造后不变（见 ApplyMode）。
-	applyMode ApplyMode
-	// 应用线程（interest_queue.go）：applierStarted 受 queueMu 保护；applierWake 容量 1，合并唤醒。
+	// 应用线程（interest_queue.go）：applierStarted 受 registry.mu 保护；applierWake 容量 1，合并唤醒。
 	applierStarted bool
-	applierRunning atomic.Bool // 与 applierStarted 同值，供持 viewMu 的 wakeViews 无锁读取
 	applierWake    chan struct{}
 	applierStop    chan struct{}
 	applierDone    chan struct{}
 	applyGather    time.Duration
+	// viewInterval / now：SetObserverView 的限速间隔与时钟（构造后不变；测试可替换 now）。
+	viewInterval time.Duration
+	now          func() time.Time
 
-	// 视野登记表，见 view.go；viewMu 保护。
-	registry viewRegistry
-
+	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写 ----
 	mu               sync.Mutex
 	subscriptions    *entitysync.SubscriptionSource
 	aoi              *AOI
@@ -182,37 +181,41 @@ type Interest struct {
 	compareProfiles  func(entity.SyncProfile, entity.SyncProfile) int
 	viewSets         map[string]*entity.SyncViewSet
 	validatePriority func(entity.SyncView) error
-	// covers 缓存层级之间的包含关系（ViewSets 不变），受 mu 保护。
+	// covers 缓存层级之间的包含关系（ViewSets 不变）。
 	covers map[[2]entity.SyncProfile]bool
 
-	// 已应用的视野状态（mu 保护）：spatialPlayers 是每个空间视野（AOI 观察者编号）已生效的挂接玩家，AOI 事件按它扇出；
-	// followers 是实体 → 跟随它的空间视野，实体移动时一起移动；selfOf 是玩家 → 经 self 看见的自身实体。
+	// 已应用的视野状态：spatialPlayers 是每个空间视野（AOI 观察者编号）已生效的挂接玩家，AOI 事件按它扇出；
+	// followers 是实体 → 跟随它的空间视野，实体移动时一起移动；selfOf 是玩家 → 经 self 看见的自身实体；
+	// placed 是已应用的目标 → 代际号（门控事实按它判断是否作废）。
 	spatialPlayers map[int64]map[int64]struct{}
 	followers      map[int64]map[int64]struct{}
 	selfOf         map[int64]int64
+	placed         map[int64]uint64
+	// departedPlayers / departedSubjects：自上次结算以来被 Leave / Unwatch / Hide 撤除的玩家与目标。同一次结算里
+	// 它们的 pair 又被持有时，先退订再订阅（业务可能在两次调用之间注销 / 重新登记了目标、关闭 / 重开了会话）。
+	departedPlayers  map[int64]struct{}
+	departedSubjects map[int64]struct{}
 
 	// held maps a pair to the views currently claiming it and to whether
-	// the manager has been told about it. touched 是自上次 Apply 以来贡献变过的 pair。
+	// the manager has been told about it. touched 是自上次结算以来贡献变过的 pair。
 	held    map[pair]*hold
 	touched map[pair]struct{}
 	// retry holds the pairs whose subscribe the manager refused, waiting
-	// for the next Apply to say them again.
+	// for the next settle to say them again.
 	retry []pair
-	// applied 是应用线程已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批
-	// 应用完成的时刻；applyErr 是应用线程攒下的错误，由下一次结算返回。都受 mu 保护。
+	// applied 是已应用到 AOI、还没结算的事实（发布屏障仍持有，计入预算）；appliedAt 是其中最早一批应用完成的时刻；
+	// applyErr 是应用时攒下的错误，由下一次政策阶段返回。
 	applied   []queuedInterestFact
 	appliedAt time.Time
 	applyErr  error
+	// unsettled：应用方执行过条目（命令或事实）、还没结算——AOI 事件或 touched 里的变化还没说给 Manager。
+	// queuedPending 据此让 Drain 等到结算；异步模式下应用线程可能恰在某次 Flush 结算之后、Drain 检查之前执行完一步。
+	unsettled bool
 	// refused counts consecutive refusals per held pair (with the first
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
 	refused map[pair]refusal
 	closed  bool
-
-	// viewInterval / viewChanged：SetObserverView 的限速，按玩家记最近一次生效的时间；受 mu 保护。
-	viewInterval time.Duration
-	viewChanged  map[int64]time.Time
-	now          func() time.Time
 }
 
 type pair struct{ observer, subject int64 }
@@ -266,17 +269,19 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		}
 	}
 	in := &Interest{
-		subjectRoles: make(map[int64]struct{}),
-		batchSize:    config.BatchSize, workers: config.Workers,
+		batchSize: config.BatchSize, workers: config.Workers,
 		aoi: manager, bandLayer: bandLayer, selfVisible: config.SelfVisible == nil || *config.SelfVisible,
-		selfLayer:      config.SelfLayer.Normalize(),
-		held:           make(map[pair]*hold),
-		touched:        make(map[pair]struct{}),
-		spatialPlayers: make(map[int64]map[int64]struct{}),
-		followers:      make(map[int64]map[int64]struct{}),
-		selfOf:         make(map[int64]int64),
-		covers:         make(map[[2]entity.SyncProfile]bool),
-		viewInterval:   viewInterval, viewChanged: make(map[int64]time.Time), now: time.Now,
+		selfLayer:       config.SelfLayer.Normalize(),
+		held:            make(map[pair]*hold),
+		touched:         make(map[pair]struct{}),
+		spatialPlayers:  make(map[int64]map[int64]struct{}),
+		followers:       make(map[int64]map[int64]struct{}),
+		selfOf:          make(map[int64]int64),
+		placed:          make(map[int64]uint64),
+		departedPlayers: make(map[int64]struct{}), departedSubjects: make(map[int64]struct{}),
+		covers:       make(map[[2]entity.SyncProfile]bool),
+		viewInterval: viewInterval, now: time.Now,
+		onRefusal: config.OnRefusal,
 	}
 	in.registry.init(maxViews, maxPlayers)
 	in.blockLayer = config.BlockLayer
@@ -313,7 +318,8 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	in.applierStop = make(chan struct{})
 	in.applierDone = make(chan struct{})
 	in.applyGather = applyGatherFor(config.Manager)
-	in.registry.wake = in.wakeViews
+	in.syncBudget = syncApplyBudgetFor(config.Manager)
+	in.registry.push = in.pushedLocked
 	in.cancelQueue = config.Manager.RegisterPolicy(entitysync.PolicyHooks{Apply: in.settleQueued, Pending: in.queuedPending, Stalls: in.drainStalls})
 	return in, nil
 }
@@ -350,21 +356,29 @@ func DefaultBandProfile(band int) entity.SyncProfile {
 	return entity.SyncProfile{Key: fmt.Sprintf("band%d", band), LOD: uint8(band)}
 }
 
-// ---- 玩家与主视野 ----
+// ---- 玩家与主视野（登记侧：只取 registry.mu，记一条命令，见 runOpLocked） ----
 //
 // 主视野是玩家自带的空间视野（镜头），只挂给玩家自己，在按玩家的入口里用 MainView（0）指代；业务视野的 ID 不能是 0。
 // Enter 建立的主视野跟随玩家自身实体（实体移动时一起移动，并排除自己）；Watch 建立的不跟随（只看不被看）。
+// 这些入口都不等待空间计算：返回时参数已校验、登记事实已改、命令已进日志，效果由应用方按调用顺序执行，下一次结算
+// （同步模式：下一次 Flush；异步模式：应用线程走到之后的 Flush）或显式 Apply 之后可见。
+
+// pushedLocked 是追加一条命令之后的唤醒：异步模式通知应用线程，同步模式提醒 Manager（on_change 下尽快进入政策阶段）。
+// 持 registry.mu 调用，不阻塞。
+func (in *Interest) pushedLocked() {
+	if in.applyMode == ApplyAsync {
+		in.signalApplierLocked()
+		return
+	}
+	in.wake()
+}
 
 // Enter puts a player in: its entity is seen, its main view sees, and (when
 // SelfVisible) it sees itself. playerID 是观察者（会话）编号，entityID 是玩家自身实体；view 为零值时取缺省视野。
 // 已登记的玩家再次 Enter（重连）按这次的位置与视野重新登记主视野，要保留原视野就传 ObserverView(playerID) 的结果。
-// 主视野计入 MaxViewsPerPlayer。Its subject must already be registered with the manager; its session must already be open.
+// 主视野计入 MaxViewsPerPlayer。实体换一个新代际：之前还没确认的排队事实确认后作废。
+// Its subject must already be registered with the manager; its session must already be open（订阅在结算时说给 Manager）。
 func (in *Interest) Enter(playerID, entityID int64, at spatial.Point, view ObserverView) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return errors.New("policy: interest is closed")
-	}
 	if playerID == 0 || entityID == 0 {
 		return ErrInterestUnknown
 	}
@@ -375,45 +389,38 @@ func (in *Interest) Enter(playerID, entityID int64, at spatial.Point, view Obser
 	if err != nil {
 		return err
 	}
-	in.syncViewsLocked()
-	main, err := in.registry.mainView(playerID)
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("policy: interest is closed")
+	}
+	main, err := r.mainView(playerID)
 	if err != nil {
 		return err
 	}
-	if err := in.placeSubjectLocked(entityID, at); err != nil {
-		return err
-	}
-	in.placeMainLocked(playerID, main, entityID, at, normalized)
-	in.queueMu.Lock()
-	in.subjectRoles[entityID] = struct{}{}
-	in.queueMu.Unlock()
-	if in.selfVisible {
-		if old, ok := in.selfOf[playerID]; ok && old != entityID {
-			in.contribute(pair{observer: playerID, subject: old}, contribution{}, entity.SyncProfile{}, false)
-		}
-		in.selfOf[playerID] = entityID
-		in.contribute(pair{observer: playerID, subject: entityID}, contribution{}, in.selfLayer, true)
-	}
+	main.at, main.sight, main.follow = at, normalized, entityID
+	gen := r.newGen()
+	r.subjects[entityID] = gen
+	r.record(viewOp{kind: opEnter, player: playerID, handle: main.handle, subject: entityID, at: at, sight: normalized, gen: gen})
 	return nil
 }
 
 // Watch 登记一个只看、不被看的玩家（观战、GM 视角）：主视野不跟随实体（self = 0），也没有 self。
 // 它与 Enter（既看又被看）、Show（只被看）并列；视点用 MoveView 移动，用 Unwatch 退出。会话须已打开。
 func (in *Interest) Watch(playerID int64, at spatial.Point, view ObserverView) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return errors.New("policy: interest is closed")
-	}
 	if playerID == 0 {
 		return ErrInterestUnknown
 	}
-	in.syncViewsLocked()
-	if main := in.registry.mainOf(playerID); main != nil {
-		if observer := in.aoi.observers[main.handle]; observer != nil && observer.self != 0 {
-			// 改成只看会让玩家看见自己的实体，而它仍被别人看见；先 Leave 再 Watch。
-			return fmt.Errorf("%w: player %d is in with entity %d; Leave first", ErrInterestConfig, playerID, observer.self)
-		}
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("policy: interest is closed")
+	}
+	if main := r.mains[playerID]; main != nil && main.follow != 0 {
+		// 改成只看会让玩家看见自己的实体，而它仍被别人看见；先 Leave 再 Watch。
+		return fmt.Errorf("%w: player %d is in with entity %d; Leave first", ErrInterestConfig, playerID, main.follow)
 	}
 	if !in.aoi.config.Bounds.Contains(at) {
 		return spatial.ErrInvalidBounds
@@ -422,75 +429,76 @@ func (in *Interest) Watch(playerID int64, at spatial.Point, view ObserverView) e
 	if err != nil {
 		return err
 	}
-	main, err := in.registry.mainView(playerID)
+	main, err := r.mainView(playerID)
 	if err != nil {
 		return err
 	}
-	in.placeMainLocked(playerID, main, 0, at, normalized)
+	main.at, main.sight, main.follow = at, normalized, 0
+	r.record(viewOp{kind: opWatch, player: playerID, handle: main.handle, at: at, sight: normalized})
 	return nil
 }
 
-// placeMainLocked 放置（或重新放置）主视野，并把它挂给玩家自己。调用方持有 mu、已同步登记表。
-func (in *Interest) placeMainLocked(playerID int64, main *view, follow int64, at spatial.Point, normalized ObserverView) {
-	if in.spatialPlayers[main.handle] == nil {
-		in.spatialPlayers[main.handle] = map[int64]struct{}{playerID: {}}
-	}
-	in.placeViewLocked(main.handle, follow, at, normalized)
-}
-
-// Move 移动一个目标（实体 ID），跟随它的空间视野（例如玩家的主视野、单位的视野）一起移动：先移目标再移视野，
-// 视野没跟上的目标会从旧位置看世界。
+// Move 直接移动一个目标（实体 ID），跟随它的空间视野（例如玩家的主视野、单位的视野）一起移动：先移目标再移视野，
+// 视野没跟上的目标会从旧位置看世界。不走提交门（事务里的移动用 QueueMove）；目标换一个新代际。
 func (in *Interest) Move(entityID int64, to spatial.Point) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	if !in.aoi.config.Bounds.Contains(to) {
+		return spatial.ErrInvalidBounds
+	}
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("policy: interest is closed")
 	}
-	in.syncViewsLocked()
-	if _, exists := in.aoi.subjects[entityID]; !exists {
+	if _, exists := r.subjects[entityID]; !exists {
 		return ErrInterestUnknown
 	}
-	return in.placeSubjectLocked(entityID, to)
+	gen := r.newGen()
+	r.subjects[entityID] = gen
+	r.record(viewOp{kind: opMove, subject: entityID, at: to, gen: gen})
+	return nil
 }
 
 // MoveView 只移动玩家主视野的视点：Watch 登记的玩家用它移动。主视野跟随实体时，实体下一次移动会把它带回实体位置。
 func (in *Interest) MoveView(playerID int64, to spatial.Point) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("policy: interest is closed")
 	}
-	in.syncViewsLocked()
-	main := in.registry.mainOf(playerID)
+	main := r.mains[playerID]
 	if main == nil {
 		return ErrInterestUnknown
 	}
-	return in.aoi.MoveObserver(main.handle, to)
+	if !in.aoi.config.Bounds.Contains(to) {
+		return spatial.ErrInvalidBounds
+	}
+	main.at = to
+	r.record(viewOp{kind: opMoveView, handle: main.handle, at: to})
+	return nil
 }
 
-// SetObserverView 按客户端的 LOD / 视野请求换这个玩家主视野的视野，直接生效（不排队、不走提交门：它不改业务状态，没有回滚）：
+// SetObserverView 按客户端的 LOD / 视野请求换这个玩家主视野的视野（不走提交门：它不改业务状态，没有回滚）：
 //   - 层级必须是配置里有的，否则返回 ErrObserverView；视野大小由服务端夹到允许范围并量化（AOIConfig）。
 //   - 归一后与当前视野相同的请求什么也不做，不占限速。
 //   - 同一玩家距上次生效不足 ViewChangeInterval 的请求返回 ErrObserverViewRate，计数后丢弃。
 //   - 生效后完整重评：视野变大时新进入的目标订阅（下发全量），变小时超出的退订；只换层级时按新分档重发视图，订阅块不变。
 //
-// 返回此后实际生效的视野（拒绝时是当前视野），接入层可以把它告诉客户端。订阅变化由下一次 Apply
-// （或排队模式下 Manager 的政策阶段）说给 Manager。业务空间视野由服务端用 SetSpatialView 改，不限速。
+// 判断都在登记侧完成，返回此后实际生效的视野（拒绝时是当前视野），接入层可以把它告诉客户端；重评由应用方执行，
+// 订阅变化在下一次结算说给 Manager。业务空间视野由服务端用 SetSpatialView 改，不限速。
 func (in *Interest) SetObserverView(playerID int64, view ObserverView) (ObserverView, error) {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return ObserverView{}, errors.New("policy: interest is closed")
 	}
-	in.syncViewsLocked()
-	main := in.registry.mainOf(playerID)
+	main := r.mains[playerID]
 	if main == nil {
 		return ObserverView{}, ErrInterestUnknown
 	}
-	current, exists := in.aoi.ObserverViewOf(main.handle)
-	if !exists {
-		return ObserverView{}, ErrInterestUnknown
-	}
+	current := main.sight
 	next, err := in.aoi.config.normalizeView(view)
 	if err != nil {
 		metrics.IncCounter(viewRejectedMetric, metrics.Labels{"reason": "lod"}, 1)
@@ -500,122 +508,180 @@ func (in *Interest) SetObserverView(playerID int64, view ObserverView) (Observer
 		return current, nil
 	}
 	now := in.now()
-	if last, limited := in.viewChanged[playerID]; limited && now.Sub(last) < in.viewInterval {
+	if last, limited := r.viewChanged[playerID]; limited && now.Sub(last) < in.viewInterval {
 		metrics.IncCounter(viewRejectedMetric, metrics.Labels{"reason": "rate"}, 1)
 		return current, ErrObserverViewRate
 	}
-	applied, err := in.aoi.SetObserverView(main.handle, next)
-	if err != nil {
-		return current, err
-	}
-	in.viewChanged[playerID] = now
-	return applied, nil
+	main.sight = next
+	r.viewChanged[playerID] = now
+	r.record(viewOp{kind: opMainView, handle: main.handle, sight: next})
+	return next, nil
 }
 
-// ObserverView 返回玩家主视野当前生效的视野。
+// ObserverView 返回玩家主视野当前的视野（登记侧的值：最近一次 Enter / Watch / SetObserverView 给的、归一后的视野）。
 func (in *Interest) ObserverView(playerID int64) (ObserverView, bool) {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return ObserverView{}, false
 	}
-	in.syncViewsLocked()
-	main := in.registry.mainOf(playerID)
+	main := r.mains[playerID]
 	if main == nil {
 		return ObserverView{}, false
 	}
-	return in.aoi.ObserverViewOf(main.handle)
+	return main.sight, true
 }
 
 // Leave takes a player out in both directions: 玩家（playerID）解除全部视野挂接、撤掉主视野与 self；
 // 实体（entityID）作为目标退出空间索引，并从所有关系视野的成员里去掉。业务视野本身保留，玩家重新进场后由业务重新挂接。
+// 玩家没有主视野时返回 ErrInterestUnknown（实体那一半照做）；实体没登记时同样返回 ErrInterestUnknown。
 func (in *Interest) Leave(playerID, entityID int64) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return errors.New("policy: interest is closed")
-	}
-	return in.leaveLocked(playerID, entityID)
+	return in.leave(playerID, entityID)
 }
 
 // Unwatch 让 Watch 登记的玩家退出；它没有目标的一半。
 func (in *Interest) Unwatch(playerID int64) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return errors.New("policy: interest is closed")
-	}
-	return in.leaveLocked(playerID, 0)
+	return in.leave(playerID, 0)
 }
 
-// leaveLocked：entityID 为 0 时只退出玩家。调用方持有 mu。
-func (in *Interest) leaveLocked(playerID, entityID int64) error {
-	in.syncViewsLocked()
-	main := in.registry.leave(playerID, entityID)
-	// 登记表里的解除（业务视野的挂接、关系成员）先按顺序应用，再撤主视野。
-	in.syncViewsLocked()
-	if self, ok := in.selfOf[playerID]; ok {
-		delete(in.selfOf, playerID)
-		in.contribute(pair{observer: playerID, subject: self}, contribution{}, entity.SyncProfile{}, false)
+func (in *Interest) leave(playerID, entityID int64) error {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("policy: interest is closed")
 	}
-	delete(in.viewChanged, playerID)
+	// 登记表里的解除（业务视野的挂接、关系成员）先进日志，再撤主视野与目标。
+	main := r.leave(playerID, entityID)
+	delete(r.viewChanged, playerID)
+	op := viewOp{kind: opLeave, player: playerID}
 	if main != nil {
-		in.removeSpatialLocked(main.handle)
+		op.handle = main.handle
 	}
+	var err error
 	if entityID != 0 {
-		if err := in.aoi.RemoveSubject(entityID); err != nil {
-			return err
+		if _, known := r.subjects[entityID]; known {
+			delete(r.subjects, entityID)
+			op.subject = entityID
+		} else {
+			err = ErrInterestUnknown
 		}
-		in.supersedeQueuedMovesLocked(entityID)
 	}
+	r.record(op)
 	if main == nil {
 		return ErrInterestUnknown
 	}
-	return nil
+	return err
 }
 
 // Show / Hide are for things that are seen but do not see by themselves: a
 // monster, a dropped item. 参数都是实体 ID；移动用 Move。Show 时已有空间视野跟随它的，视野跳到它的位置。
+// 目标换一个新代际。
 func (in *Interest) Show(id int64, at spatial.Point) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	if id == 0 {
+		return ErrInterestUnknown
+	}
+	if !in.aoi.config.Bounds.Contains(at) {
+		return spatial.ErrInvalidBounds
+	}
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("policy: interest is closed")
 	}
-	in.syncViewsLocked()
-	if err := in.placeSubjectLocked(id, at); err != nil {
-		return err
-	}
-	in.queueMu.Lock()
-	in.subjectRoles[id] = struct{}{}
-	in.queueMu.Unlock()
+	gen := r.newGen()
+	r.subjects[id] = gen
+	r.record(viewOp{kind: opShow, subject: id, at: at, gen: gen})
 	return nil
 }
 
 // Hide 让目标退出空间索引，并从所有关系视野的成员里去掉；跟随它的空间视野留在原地（跟随关系保留）。
+// 之前还没确认的排队事实确认后作废。目标没登记时只做关系视野那一半，返回 ErrInterestUnknown。
 func (in *Interest) Hide(id int64) error {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("policy: interest is closed")
 	}
-	in.syncViewsLocked()
-	in.registry.forget(id)
-	in.syncViewsLocked()
-	if err := in.aoi.RemoveSubject(id); err != nil {
-		return err
+	r.forgetLocked(id)
+	if _, known := r.subjects[id]; !known {
+		return ErrInterestUnknown
 	}
-	in.supersedeQueuedMovesLocked(id)
+	delete(r.subjects, id)
+	r.record(viewOp{kind: opHide, subject: id})
 	return nil
 }
 
-// placeSubjectLocked 登记或移动目标，并把跟随它的空间视野移到同一位置。调用方持有 mu。
-func (in *Interest) placeSubjectLocked(id int64, at spatial.Point) error {
-	if err := in.aoi.AddSubject(id, at); err != nil {
-		return err
+// Resubscribe says every pair this observer holds to the manager again on the
+// next settle. It is for an observer whose session the manager dropped on its
+// own — a transport failure it reported through ManagerConfig.SessionLost —
+// while the observer stays in the policy (it still has a live connection) and
+// its session has been opened again: the manager forgot the subscriptions, the
+// policy did not, and without this the reopened session would receive nothing
+// until the pairs changed. Pairs other observers hold on this subject are
+// untouched; they never left.
+//
+// The re-said pairs go through the retry list, so a manager that still
+// refuses one (the session is not open yet) is asked again on every settle.
+//
+// 实体被框架退回 remove（卸载后重载不了）之后重新登记的情形不需要调用它：Manager 把被撤销的订阅
+// 交还 Interest，由 resubmit 自动重新提交。observer 是玩家 ID。它只登记一条命令，按调用顺序生效。
+func (in *Interest) Resubscribe(observer int64) {
+	if in == nil {
+		return
 	}
+	r := &in.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.record(viewOp{kind: opResubscribe, player: observer})
+}
+
+// ---- 应用侧的命令实现（持 mu，在 AOI 批次写阶段之外） ----
+
+// placeSubjectLocked 登记或移动目标并记下它的代际，把跟随它的空间视野移到同一位置。
+func (in *Interest) placeSubjectLocked(id int64, at spatial.Point, gen uint64) {
+	if err := in.aoi.AddSubject(id, at); err != nil {
+		in.applyErr = errors.Join(in.applyErr, fmt.Errorf("policy: place subject %d: %w", id, err))
+		return
+	}
+	in.placed[id] = gen
 	in.moveFollowersLocked(id, at)
-	return nil
+}
+
+// placeMainLocked 放置（或重新放置）主视野，并把它挂给玩家自己。
+func (in *Interest) placeMainLocked(playerID, handle, follow int64, at spatial.Point, sight ObserverView) {
+	if in.spatialPlayers[handle] == nil {
+		in.spatialPlayers[handle] = map[int64]struct{}{playerID: {}}
+	}
+	in.placeViewLocked(handle, follow, at, sight)
+}
+
+// leaveLocked 撤掉玩家的 self 与主视野（handle 为 0 时没有），subject 非 0 时让目标退出空间索引。
+func (in *Interest) leaveLocked(playerID, handle, subject int64) {
+	in.departedPlayers[playerID] = struct{}{}
+	if self, ok := in.selfOf[playerID]; ok {
+		delete(in.selfOf, playerID)
+		in.contribute(pair{observer: playerID, subject: self}, contribution{}, entity.SyncProfile{}, false)
+	}
+	if handle != 0 {
+		in.removeSpatialLocked(handle)
+	}
+	if subject != 0 {
+		in.removeSubjectLocked(subject)
+	}
+}
+
+// removeSubjectLocked 让目标退出空间索引（Leave / Hide）。它之前还没确认的排队事实随 placed 的删除作废。
+func (in *Interest) removeSubjectLocked(id int64) {
+	in.departedSubjects[id] = struct{}{}
+	delete(in.placed, id)
+	_ = in.aoi.RemoveSubject(id)
 }
 
 // moveFollowersLocked 把跟随实体 id 的空间视野移到 at（按视野编号顺序，结果确定）。
@@ -634,47 +700,21 @@ func (in *Interest) moveFollowersLocked(id int64, at spatial.Point) {
 	}
 }
 
-// Resubscribe says every pair this observer holds to the manager again on the
-// next Apply, and reports how many it queued. It is for an observer whose
-// session the manager dropped on its own — a transport failure it reported
-// through ManagerConfig.SessionLost — while the observer stays in the policy
-// (it still has a live connection) and its session has been opened again: the
-// manager forgot the subscriptions, the policy did not, and without this the
-// reopened session would receive nothing until the pairs changed. Pairs other
-// observers hold on this subject are untouched; they never left.
-//
-// The re-said pairs go through the retry list, so a manager that still
-// refuses one (the session is not open yet) is asked again on every Apply.
-//
-// 实体被框架退回 remove（卸载后重载不了）之后重新登记的情形不需要调用它：Manager 把被撤销的订阅
-// 交还 Interest，由 resubmit 自动重新提交。
-// observer 是玩家 ID。
-func (in *Interest) Resubscribe(observer int64) int {
-	if in == nil {
-		return 0
-	}
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		return 0
-	}
-	queued := 0
+func (in *Interest) resubscribeLocked(observer int64) {
 	for key, current := range in.held {
 		if key.observer != observer || !current.subscribed {
 			continue
 		}
 		current.subscribed = false
 		in.retry = append(in.retry, key)
-		queued++
 	}
-	return queued
 }
 
 // resubmit 是 Interest 的重新提交入口：卸载后重载不了，框架退回 remove 撤销了本 Interest
 // 的订阅，同 ID 实体又重新登记后，Manager 在 Flush 的政策阶段把这些订阅交还这里。与 Resubscribe 同一种修补：
 // Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（层级合并、ViewSets 校验、
 // Manager 的优先级与字段白名单）；缺席期间已释放的 pair（视野走远、解除挂接、Hide）不在 held 里，不恢复。
-// 被拒绝的 pair 进入重试表，下一次 Apply 以 Retry 报告并继续重说。
+// 被拒绝的 pair 进入重试表，下一次结算以 Retry 报告并继续重说。
 func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -685,7 +725,7 @@ func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	for _, subscription := range retracted {
 		wanted[subscription.Subject] = append(wanted[subscription.Subject], subscription.Session)
 	}
-	var refusals []Refusal // 已记入重试表，由下一次 Apply 报告
+	var refusals []Refusal // 已记入重试表，由下一次结算报告
 	for key, current := range in.held {
 		sessions, retractedSubject := wanted[key.subject]
 		if !retractedSubject || !current.subscribed || !slices.Contains(sessions, sessionOf(key.observer)) {
@@ -695,6 +735,8 @@ func (in *Interest) resubmit(retracted []entitysync.RetractedSubscription) {
 	}
 }
 
+// ---- 诊断读（取应用侧锁，先执行已登记的条目再读；不在 Nest 快池上调用） ----
+
 // Visible lists what a player's main view currently sees through distance.
 func (in *Interest) Visible(playerID int64) []int64 {
 	in.mu.Lock()
@@ -702,7 +744,7 @@ func (in *Interest) Visible(playerID int64) []int64 {
 	if in.closed {
 		return nil
 	}
-	in.syncViewsLocked()
+	in.drainLogLocked()
 	main := in.registry.mainOf(playerID)
 	if main == nil {
 		return nil
@@ -710,15 +752,15 @@ func (in *Interest) Visible(playerID int64) []int64 {
 	return in.aoi.Visible(main.handle)
 }
 
-// Seen 返回玩家经任一视野（含 self）持有的全部目标（升序），即本 Interest 要它订阅的集合。先应用登记表与 AOI 的变化；
-// 遍历全部 pair，供诊断与压测核对，不要放在热路径上。
+// Seen 返回玩家经任一视野（含 self）持有的全部目标（升序），即本 Interest 要它订阅的集合。先执行已登记的条目并
+// 归并 AOI 的变化；遍历全部 pair，供诊断与压测核对，不要放在热路径上。
 func (in *Interest) Seen(playerID int64) []int64 {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.closed {
 		return nil
 	}
-	in.syncViewsLocked()
+	in.drainLogLocked()
 	in.drainAOILocked()
 	var seen []int64
 	for key, current := range in.held {
@@ -730,29 +772,34 @@ func (in *Interest) Seen(playerID int64) []int64 {
 	return seen
 }
 
-// Apply 把视野登记表里的变更与 AOI 的可见性变化合并进 held，再说给 Manager：
-// subscribes for pairs a first view claimed, unsubscribes for pairs the
-// last view dropped, re-subscribes for pairs whose layers changed. Subscribes
-// the manager refuses come back as Refusals and are said again on the next
-// Apply, for as long as the pair is held — a refusal is not a verdict on the
-// pair. Calling it is the caller's choice: Interest is a
-// state machine, not a goroutine.
+// Apply 在调用方线程执行全部已登记、可执行的条目（未确认的排队事实除外），把视野与 AOI 的变化合并进 held，
+// 再说给 Manager：subscribes for pairs a first view claimed, unsubscribes for pairs the last view dropped,
+// re-subscribes for pairs whose layers changed. Subscribes the manager refuses come back as Refusals and are
+// said again on the next settle, for as long as the pair is held — a refusal is not a verdict on the pair.
+//
+// 正常运行不需要调用它：Manager Flush 的政策阶段（同步模式）或应用线程 + 政策阶段（异步模式）会做同样的事。
+// 它给测试、工具与离线驱动用；它取应用侧锁、会等正在进行的一步，不能在 Nest 快池上调用。
 func (in *Interest) Apply() []Refusal {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	if in.closed {
+		return nil
+	}
+	in.drainLogLocked()
 	return in.applyLocked()
 }
 
+// applyLocked 是结算：把 AOI 事件与关系变更归并进 held 并说给 Manager，然后释放已应用事实的发布屏障。调用方持有 mu。
 func (in *Interest) applyLocked() []Refusal {
 	if in.closed {
 		return nil
 	}
 	var refusals []Refusal
-	// Take the retry list first: a refusal during this Apply goes on the list
+	// Take the retry list first: a refusal during this settle goes on the list
 	// for the NEXT one, not for a second attempt a few lines further down.
 	queued := in.retry
 	in.retry = nil
-	in.syncViewsLocked()
+	in.unsettled = false
 	in.drainAOILocked()
 	keys := make([]pair, 0, len(in.touched))
 	for key := range in.touched {
@@ -769,8 +816,10 @@ func (in *Interest) applyLocked() []Refusal {
 	for _, key := range keys {
 		in.settlePair(key, &refusals)
 	}
+	clear(in.departedPlayers)
+	clear(in.departedSubjects)
 	// Retries after the events, so that a pair a view already spoke
-	// for in this Apply is not said twice.
+	// for in this settle is not said twice.
 	for _, key := range queued {
 		hold := in.held[key]
 		if hold == nil || hold.subscribed {
@@ -785,7 +834,7 @@ func (in *Interest) applyLocked() []Refusal {
 	return refusals
 }
 
-// contribute 记录一个视野对 pair 的持有（enter）或释放，不立即发布；pair 记进 touched，由下一次 Apply 结算。
+// contribute 记录一个视野对 pair 的持有（enter）或释放，不立即发布；pair 记进 touched，由下一次结算处理。
 func (in *Interest) contribute(key pair, source contribution, layer entity.SyncProfile, enter bool) {
 	current := in.held[key]
 	if !enter {
@@ -822,11 +871,24 @@ func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 		}
 		return
 	}
-	if !current.subscribed {
+	switch {
+	case !current.subscribed:
 		in.subscribe(key, current, false, refusals)
-	} else {
+	case in.departedLocked(key):
+		// 撤除后又在同一次结算里被持有：让 Manager 看到一次离开和一次进入（目标可能已重新登记、会话可能已重开）。
+		_ = in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
+		in.subscribe(key, current, false, refusals)
+	default:
 		in.reband(key, current, refusals)
 	}
+}
+
+func (in *Interest) departedLocked(key pair) bool {
+	if _, gone := in.departedPlayers[key.observer]; gone {
+		return true
+	}
+	_, gone := in.departedSubjects[key.subject]
+	return gone
 }
 
 // subscribe says one pair to the manager. The pair counts as subscribed from
@@ -864,12 +926,13 @@ func (in *Interest) Close() {
 	if in.cancelQueue != nil {
 		in.cancelQueue()
 	}
-	// 先关队列（不再有新事实、不再启动应用线程），再停应用线程并等它退出——它要拿 mu，所以不能持 mu 等。
-	in.queueMu.Lock()
-	alreadyClosed := in.queueClosed
-	in.queueClosed = true
+	// 先关登记侧（不再有新条目、不再启动应用线程），再停应用线程并等它退出——它要拿 mu，所以不能持 mu 等。
+	r := &in.registry
+	r.mu.Lock()
+	alreadyClosed := r.closed
+	r.closed = true
 	started := in.applierStarted
-	in.queueMu.Unlock()
+	r.mu.Unlock()
 	if started && !alreadyClosed {
 		close(in.applierStop)
 		<-in.applierDone
@@ -877,22 +940,23 @@ func (in *Interest) Close() {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
-	in.registry.close()
 	for _, fact := range in.applied {
 		fact.finish()
 	}
 	in.applied = nil
-	in.queueMu.Lock()
-	for _, fact := range in.facts {
-		fact.finish()
+	r.mu.Lock()
+	for _, entry := range r.log {
+		if entry.op == nil {
+			entry.fact.finish()
+		}
 	}
-	in.facts = nil
-	clear(in.subjectRoles)
-	in.queueMu.Unlock()
+	r.log = nil
+	r.facts = 0
+	clear(r.subjects)
+	r.mu.Unlock()
 	for key := range in.held {
 		_ = in.subscriptions.Unsubscribe(sessionOf(key.observer), key.subject)
 	}
-	clear(in.viewChanged)
 	in.held = nil
 	in.touched = nil
 	in.retry = nil

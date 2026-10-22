@@ -1,0 +1,40 @@
+{
+ "run_id": "robot-demo-20261022-031955-001",
+ "profile": "demo",
+ "state": "finished",
+ "stop_reason": "completed",
+ "started_at_ms": 1792610395879,
+ "ended_at_ms": 1792610400567,
+ "count": 80,
+ "scenario": "storm",
+ "stats": {
+  "started": 80,
+  "online": 0,
+  "success": 80,
+  "failure": 0,
+  "canceled": 0,
+  "failure_rate": 0
+ },
+ "thresholds": [
+  {
+   "metric": "error_rate",
+   "max": 0,
+   "actual": 0,
+   "violated": false,
+   "samples": 80
+  },
+  {
+   "metric": "p95",
+   "max": 60,
+   "actual": 4.653,
+   "violated": false,
+   "samples": 80
+  }
+ ],
+ "quantiles_ms": {
+  "p50": 4349,
+  "p90": 4619,
+  "p95": 4653,
+  "p99": 4678
+ }
+}

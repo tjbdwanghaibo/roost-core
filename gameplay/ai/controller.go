@@ -14,6 +14,8 @@ var (
 	ErrStrategyRejected = errors.New("ai: current strategy rejects replacement")
 	ErrStrategyInit     = errors.New("ai: strategy initialization failed")
 	ErrReentrantSwitch  = errors.New("ai: reentrant strategy switch")
+	// ErrControllerClosed 表示 Controller 已 Close：不再接受策略。
+	ErrControllerClosed = errors.New("ai: controller is closed")
 )
 
 // ControllerHooks 是 Controller 的时钟、上下文构造、结束在途动作、策略变化与错误报告钩子。
@@ -46,6 +48,8 @@ type Controller struct {
 	callbacks int
 	// pending 是回调里请求、等最外层回调返回后执行的切换；nil 表示没有。
 	pending *pendingSwitch
+	// closed 由 Close 置位：之后 SetStrategy 返回 ErrControllerClosed，心跳不再登记。
+	closed bool
 }
 
 // pendingSwitch 是一次延后的切换：shutdown 为真时执行 Shutdown(reason)，否则 SetStrategy(next)。
@@ -75,11 +79,20 @@ func (c *Controller) SetStrategy(next Strategy) error {
 	if c == nil {
 		return ErrStrategyInit
 	}
+	if c.closed {
+		return ErrControllerClosed
+	}
 	if c.switching {
 		return ErrReentrantSwitch
 	}
 	if c.callbacks > 0 {
 		c.pending = &pendingSwitch{next: next}
+		return nil
+	}
+	if sameStrategy(next, c.strategy) {
+		// 设成当前策略不是替换（不问 CanStopByNext、不 Init / Stop），只按当前状态重新对齐 AI 心跳：Remote 托管实体
+		// 运行中进入共享模式时框架停掉了 "ai" 心跳，回到独占不自动恢复，业务重新设置当前策略来恢复（挂不上经 OnError）。
+		c.syncBeat()
 		return nil
 	}
 	canStop, err := callStrategyCanStop(c.strategy, next)
@@ -88,9 +101,6 @@ func (c *Controller) SetStrategy(next Strategy) error {
 	}
 	if c.strategy != nil && !canStop {
 		return ErrStrategyRejected
-	}
-	if sameStrategy(next, c.strategy) {
-		return nil
 	}
 	c.switching = true
 	defer func() { c.switching = false }()
@@ -266,6 +276,27 @@ func (c *Controller) Shutdown(reason string) {
 	}
 	c.syncBeat()
 }
+
+// Close 撤销 Controller：卸下当前策略（Shutdown(reason)：调策略的 Stop，不结束在途动作——动作归 Behavior，换场景时
+// 由 Behavior.Close 结束），撤销 AI 心跳登记（heartbeat.Reg.Close：立即离开驱动、释放 "ai" 这个名字），之后
+// SetStrategy 返回 ErrControllerClosed。成员换场景（换时间域）时用它撤掉旧的、在同一心跳宿主上按新的
+// BeatConfig.TimeDomain 重建（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain，FreezeFor 的期限是旧域时间）。
+// 实体卸载时同样调用（组件 OnDestroy），先于 Behavior.OnDestroy：之后送来的动作 / 任务结束不再交给策略。
+// 可重复调用；只能在实体锁内调用，在策略回调里调用时卸下策略延后到回调返回后，登记的撤销立即生效。
+func (c *Controller) Close(reason string) {
+	if c == nil || c.closed {
+		return
+	}
+	c.Shutdown(reason)
+	c.closed = true
+	if c.beat != nil && c.beat.reg != nil {
+		c.beat.reg.Close()
+		c.beat.reg = nil
+	}
+}
+
+// Closed 报告是否已 Close。
+func (c *Controller) Closed() bool { return c != nil && c.closed }
 
 func (c *Controller) enterCallback() { c.callbacks++ }
 

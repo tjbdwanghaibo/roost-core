@@ -427,6 +427,18 @@ Nest handler）与 bootstrap 里该服务的 `kitentitytimer.NewMod(EntityAccess
 最早期限到了的那一个已加载实体投递 Tick，离线期间到期的在加载后只触发一次（框架不追帧，回调参数带原定期限、触发时刻与补触发
 标志）。Remote 托管与 noPersist 实体拒绝。细则见[参考“roost add timer”](CODEGEN_REFERENCE.zh-CN.md#roost-add-timer按实体的持久定时器)。
 
+### 6.z 实体心跳、行为与场景时间域：`roost add heartbeat` / `behavior` / `timedomain`
+
+    roost add behavior --entity Monster --ai --state   # 心跳宿主 + 行为组件（+ AI 心跳、状态目录）
+    roost add heartbeat --entity Scene                 # 只要心跳宿主（场景逻辑帧、回复、冷却）
+    roost add timedomain --entity Scene                # 场景倍速 / 慢放 / 时停
+
+在线周期推进用实体自己的心跳，不写“服务 goroutine 每 N 秒发消息”的循环。清单写 `heartbeats.<entity>` / `time_domains.<entity>`，
+服务的 `mods` 自动加 `heartbeat`（依赖 nest），bootstrap 装 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`。`make sync`
+重写生成部分（`game/heartbeat/driver_gen.go` 与各实体的 `*_component_gen.go`）；业务文件只在缺失时创建：`heartbeat_beats.go`、
+`behavior_actions.go`（示例动作）、`behavior_strategy.go`、`states.go`、`timedomain_config.go`、`game/handler/<entity>_behavior.go`。
+服务 Init / Shutdown 不用改。细则见[参考“roost add heartbeat / behavior / timedomain”](CODEGEN_REFERENCE.zh-CN.md#roost-add-heartbeat--behavior--timedomain实体心跳行为与时间域)。
+
 ## 7. ID 管理
 
 查询下一个 ID：

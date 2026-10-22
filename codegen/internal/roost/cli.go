@@ -269,12 +269,12 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 }
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "timer" && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
+	if len(args) >= 1 && (args[0] == "timer" || args[0] == "heartbeat" || args[0] == "behavior" || args[0] == "timedomain") && (len(args) == 1 || strings.HasPrefix(args[1], "-")) {
 		// roost add timer --entity Player：实体用 --entity 给出时不需要名字。
 		args = append([]string{args[0], ""}, args[1:]...)
 	}
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|attribute> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|effect|rpc|timer|heartbeat|behavior|timedomain|attribute> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -292,6 +292,8 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	nestHandler := fs.String("nest-handler", "", "Nest handler name for an endpoint")
 	lifecycleEntity := fs.String("lifecycle", "", "Entity whose lifecycle GetOrCreate a login endpoint calls")
 	id := fs.Int64("id", 0, "explicit numeric ID")
+	withAI := fs.Bool("ai", false, "behavior: also build an AI heartbeat controller and an example strategy")
+	withState := fs.Bool("state", false, "behavior: also scaffold a gameplay/state Catalog")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -308,7 +310,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
 		"effect": {"root", "consumer"},
 		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
-		"attribute": {"root"},
+		"heartbeat": {"root", "entity", "service", "id"}, "behavior": {"root", "entity", "service", "id", "ai", "state"},
+		"timedomain": {"root", "entity", "id"},
+		"attribute":  {"root"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
@@ -317,7 +321,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}
@@ -333,6 +337,9 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if args[0] == "timer" {
 		fmt.Fprintln(stdout, "next: define the timer types and callbacks in the generated *_handlers.go, arm them with <Component>Comp().NewTimer(...) inside a Nest handler, then roost generate")
 		fmt.Fprintln(stdout, "guide: "+entityTimerDocURL)
+	}
+	if args[0] == "heartbeat" || args[0] == "behavior" || args[0] == "timedomain" {
+		printHeartbeatNext(stdout, args[0], *withAI)
 	}
 	if args[0] == "saga" {
 		printSagaNext(stdout, args[1], *native != "")

@@ -21,7 +21,7 @@ func TestSLGAllianceRemoteDelivery(t *testing.T) {
 	factory := func(t *testing.T, prefix string, key activity.Key) *alliance {
 		if first == nil {
 			first = openAllianceOwner(t, prefix, 2000, true)
-			original = &alliance{store: &remoteAllianceStore{first, key.String()}, key: key}
+			original = newAllianceWithStore(&remoteAllianceStore{first, key.String()}, key, coordinatorReservationTTL)
 			return original
 		}
 		before, e := original.read(ctx)
@@ -45,7 +45,7 @@ func TestSLGAllianceRemoteDelivery(t *testing.T) {
 			t.Logf("old owner rejected after transfer: %v", e)
 		}
 		second = openAllianceOwner(t, prefix, 2001, false)
-		a := &alliance{store: &remoteAllianceStore{second, key.String()}, key: key}
+		a := newAllianceWithStore(&remoteAllianceStore{second, key.String()}, key, coordinatorReservationTTL)
 		after, e := a.read(ctx)
 		check(t, e)
 		rawAfter, e := json.Marshal(after)

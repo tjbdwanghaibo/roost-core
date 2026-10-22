@@ -167,3 +167,80 @@ func TestLoadedBuffsReachBoundStatesOnInitFinish(t *testing.T) {
 		t.Fatalf("watcher saw %v after OnInitFinish, want [true]", seen)
 	}
 }
+
+// 每个改 buff 集合的 mutator 都在同一事务里通知绑定的派生状态（BindStates 的契约）：派生值查询时总是对的，观察者
+// （门控、AI）只能靠这次通知跟上，漏掉的 mutator 会让门控停在旧值，直到下一次别的改动。逐个 mutator 断言观察者
+// 当场看到变化：RemoveBuff、SetBuffStacks（改层数不变集合、改成 0 移除）、AdoptBuff。
+func TestEveryBuffMutatorNotifiesBoundStates(t *testing.T) {
+	nest.ResetHandlersForTest()
+	t.Cleanup(nest.ResetHandlersForTest)
+	getter := newTestGetter()
+	target, targetID := newCombatTestEntity(t, 9104)
+	getter.Add(target)
+	set := state.NewSet(state.NewStateDao(targetID, "game", stateTestCatalog(t)), state.SetConfig{OnError: func(err error) { t.Errorf("state: %v", err) }})
+	if err := target.component.BindStates(set, StateBinding{State: stateStunned, Tags: []combat.Tag{"stun"}}); err != nil {
+		t.Fatal(err)
+	}
+	var seen []bool
+	if _, err := set.Watch(stateStunned, func(c state.Change) { seen = append(seen, c.Active) }); err != nil {
+		t.Fatal(err)
+	}
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(getter),
+		nest.NestOptionWithTransactionCommitter(acceptingCombatCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+		nest.NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Shutdown(context.Background()) }()
+	name := nest.NewHandlerName("combat_state_mutators")
+	nest.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, params[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	c := target.component
+	step := func(what string, fn func() error, want string) {
+		t.Helper()
+		seen = nil
+		if _, err := engine.Request(context.Background(), name, targetID, nest.NewParams(fn)); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if fmt.Sprint(seen) != want {
+			t.Fatalf("%s: watcher saw %v, want %s", what, seen, want)
+		}
+	}
+	var stun combat.BuffInstanceID
+	step("apply", func() error {
+		stun, _ = c.ApplyBuff(combat.BuffSpec{ID: 1, Tags: []combat.Tag{"stun"}, MaxStacks: 5}, 0, 0)
+		return nil
+	}, "[true]")
+	var removed combat.BuffInstance
+	step("remove", func() error {
+		var ok bool
+		if removed, ok = c.RemoveBuff(stun); !ok {
+			return errors.New("stun not removed")
+		}
+		return nil
+	}, "[false]")
+	step("apply again", func() error {
+		stun, _ = c.ApplyBuff(combat.BuffSpec{ID: 1, Tags: []combat.Tag{"stun"}, MaxStacks: 5}, 1, 0)
+		return nil
+	}, "[true]")
+	step("set stacks to 0", func() error {
+		if _, ok := c.SetBuffStacks(stun, 0); !ok {
+			return errors.New("stacks not set")
+		}
+		return nil
+	}, "[false]")
+	step("adopt", func() error {
+		stun = c.AdoptBuff(removed) // 例如从另一个实体转移来的实例
+		return nil
+	}, "[true]")
+	step("set stacks to 3", func() error {
+		if _, ok := c.SetBuffStacks(stun, 3); !ok {
+			return errors.New("stacks not set")
+		}
+		return nil
+	}, "[]")
+}

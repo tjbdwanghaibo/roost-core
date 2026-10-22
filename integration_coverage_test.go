@@ -502,6 +502,7 @@ var generatedRealDependencyEntries = []struct {
 var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
+	{"TestAllianceReportWindowFollowsTheCoordinatorReservationTTL", "scripts/test-slg-generated.sh", "'^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$'", "缺省模式就跑，不需要真实依赖：内存版本存储 + 只记次数的协调器替身，补报截止跟随协调器的 ReservationTTL（零值按 DefaultReservationTTL）；夹具与真实依赖用例同包，所以登记在这张表"},
 	{"TestSLGAllianceActivity", "scripts/test-slg-generated.sh", "'^TestSLGAllianceActivity$'", "ROOST_SLG_REAL=1，隔离 Redis / NATS：业务 Redis CAS 联盟，两个静态 sid 客户端经正式 Activity RPC 调用协调器子进程（正常排空重启两次）；成员撤权与 Interest alliance / scout 来源归并、Receiver 解码视野帧（权限读取失败不发布、重连新 Full、旧 epoch 被拒）；协调器已应用而本地未确认的贡献在重启后补报只计一次，超过 ReservationTTL 拒绝自动补报；冻结与两服阶段屏障；原服奖励义务写入未 ACK 时重启协调器，OwedDispatches 找回原窗口、原 token 重投不改记录；不含 Player 到账、Remote 联盟权威或 TCP 客户端"},
 	{"TestSLGAlliancePlayerDelivery", "scripts/test-slg-generated.sh", "'^TestSLGAlliancePlayerDelivery$'", "ROOST_SLG_REAL=1，同一条活动流程 ACK 后继续：每个原服依次起 write / recover / verify 子进程，各用 strict 文件 WAL 与真实 Mongo 的唯一库；建档与到账两条记录未投影、原服未标记完成时被 SIGKILL，冷加载后钱包与崩溃前一致，从原服义务账本发现 1 条待发并重投不增币，第三进程发现 0 条；并发重放、错服、改金额被拒；不含实体定时器、两服并发或结果未知"},
 	{"TestSLGRemoteMapReports", "scripts/test-slg-alliance-player.sh", "'^TestSLGRemoteMapReports$'", "ROOST_SLG_REMOTE_MAP=1，独立托管 ScoutMap 模式；同进程三个真实 Remote Runtime 交接、旧写者 fence、NATS 原服权威路由准入、未 ACK 报告重投与永久回执，非多进程崩溃验收"},

@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"sync"
 	"testing"
 	"time"
@@ -51,7 +52,10 @@ type slgFixture struct {
 func newSLGFixture(t *testing.T) *slgFixture {
 	t.Helper()
 	f := &slgFixture{now: time.Unix(1_800_000_000, 0), getter: slgGetter{}}
+	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处停在同一时刻。
 	player.TimerDriver.SetClock(func() time.Time { return f.now })
+	clock.SetSource(func() time.Time { return f.now })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	player.RegisterEntity()
 	RegisterSlgTasksNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
@@ -90,7 +94,7 @@ func newSLGFixture(t *testing.T) *slgFixture {
 func (f *slgFixture) tick(t *testing.T, after time.Duration) {
 	t.Helper()
 	f.now = f.now.Add(after)
-	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.subject.ID(), f.now.UnixMilli()); err != nil {
+	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.subject.ID()); err != nil {
 		t.Fatal(err)
 	}
 }

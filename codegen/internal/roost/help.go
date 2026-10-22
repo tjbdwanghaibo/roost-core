@@ -189,6 +189,33 @@ roost add endpoint EnterGame --handler player --lifecycle Player`,
 roost generate`,
 	},
 	{
+		Name: "heartbeat", Aliases: []string{"heartbeats", "entity-heartbeat"},
+		Summary:       "给实体加心跳宿主：在线周期推进（回复、冷却、场景逻辑帧）跑在实体自己的 Nest 锁内",
+		Usage:         `roost add heartbeat --entity <Entity> [--service <service>] [--id <component-id>]`,
+		Configuration: `要求工程有 entity 与 nest；全部实体都支持（Remote 托管实体只在拥有方跳，共享模式下不允许挂载）。写入 roost.yaml heartbeats.<entity>，服务的 mods 加 heartbeat（依赖 nest；按需装配：空转的驱动也每 10ms 走一格、多一个 Mod 让 shutdown.total_timeout 多 3s），实体加组件字段（之后归业务）；生成部分 game/heartbeat/driver_gen.go（工程唯一的驱动）、game/entities/<entity>/heartbeat_component_gen.go 与 bootstrap 里的 wiring/heartbeat 由 project sync 重写；本实体自己的心跳登记写在 heartbeat_beats.go（业务文件，只建一次，示例登记是停止状态）。档位只有 50ms～60s 十个；每个登记至多一拍在途，不追帧，回调按 Beat.Elapsed 推进，只做内存计算与入队。心跳不持久，加载后按 DAO 状态重新登记 / 启动。服务 Init / Shutdown 不用改。说明见 ` + heartbeatDocURL + `。`,
+		Example: `roost add heartbeat --entity Scene
+# game/entities/scene/heartbeat_beats.go：component.Register("frame", 100*time.Millisecond, component.onFrame)
+# Nest handler 里：target.HeartbeatComp().Beat("frame").Start()
+roost generate`,
+	},
+	{
+		Name: "behavior", Aliases: []string{"behaviors", "actionflow", "ai"},
+		Summary:       "给实体加行为组件：actionflow.Behavior 挂在心跳上，可选 AI 心跳与 gameplay/state 目录",
+		Usage:         `roost add behavior --entity <Entity> [--ai] [--state] [--service <service>] [--id <component-id>]`,
+		Configuration: `没有心跳宿主时一并加上（同 roost add heartbeat）。写入 roost.yaml heartbeats.<entity>.behavior；生成部分 behavior_component_gen.go（Behavior 接实体的心跳宿主，--ai 时再构造 ai.NewBeatController 作观察者）由 project sync 重写；业务文件只建一次：behavior_actions.go（动作种类、组、注册表、跨组冲突、时间域钩子 timeDomain、onBehaviorReady、示例动作 ExampleAction）、game/handler/<entity>_behavior.go（发起示例动作、--ai 时设定示例策略的 Nest handler）、--ai 的 behavior_strategy.go（示例策略）、--state 的 states.go（Catalog 声明；Set / Gate 接线由业务写）。所有控制实体行为的逻辑都经动作；runner 不随事务回滚，handler 最后一步才发起动作。服务 Init / Shutdown 不用改。说明见 ` + behaviorDocURL + `。`,
+		Example: `roost add behavior --entity Monster --ai --state
+roost generate
+# Nest：handlerStartExampleMonsterAction(monsterID, 500) 发起 500ms 的示例动作，主组心跳 100ms 一拍推进`,
+	},
+	{
+		Name: "timedomain", Aliases: []string{"time-domain", "time_domains"},
+		Summary:       "给场景实体加时间域：倍速、慢放、时停（D22，只做场景级）",
+		Usage:         `roost add timedomain --entity <Scene> [--id <component-id>]`,
+		Configuration: `要求实体有 DAO。在 DAO 定义里加 TimeAnchorBusiness / TimeAnchorDomain / TimeRate 三个 nopersist,sync 字段（随同步下发、不落库；要持久的场景改成 persist），实体加组件字段（两处之后归业务）；生成部分 timedomain_component_gen.go（加载时 timedomain.New 并发布、DAO 适配）由 project sync 重写；倍率范围写在 timedomain_config.go（业务文件，只建一次，缺省 [0, 4]）。SetRate 只在场景自己的锁内调用，提交后才发布给成员；成员的行为组件在 behavior_actions.go 的 timeDomain 里返回场景的域。说明见 ` + timeDomainDocURL + `。`,
+		Example: `roost add timedomain --entity Scene
+# 场景的 Nest handler：target.TimeDomainComp().Domain().SetRate(2)`,
+	},
+	{
 		Name: "skill", Aliases: []string{"skills", "ability"},
 		Summary:       "生成稳定 roost-core/skill JSON 骨架和启动期编译目录",
 		Usage:         `roost add skill <name>`,
@@ -203,7 +230,7 @@ go test ./game/skills/          # TestSkillCatalogCompiles 编译全部定义
 		Summary: "配置并自动补齐 Wiring Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
 roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
-		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、nest、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
+		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、nest、heartbeat、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
 		Example: `roost add mod saga -service game
 # roost.yaml
 services:

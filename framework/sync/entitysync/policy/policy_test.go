@@ -412,8 +412,13 @@ func TestResubscribeRestoresAReopenedObserversView(t *testing.T) {
 	if subscribed(manager, watcherID, moverID) {
 		t.Fatal("setup: the reopened session kept a subscription the manager dropped")
 	}
-	if got := interest.Resubscribe(watcherID); got != 2 {
-		t.Fatalf("Resubscribe queued %d pairs, want 2 (self and the mover)", got)
+	interest.Resubscribe(watcherID)
+	interest.mu.Lock()
+	interest.drainLogLocked()
+	queued := len(interest.retry)
+	interest.mu.Unlock()
+	if queued != 2 {
+		t.Fatalf("Resubscribe queued %d pairs, want 2 (self and the mover)", queued)
 	}
 	mustApply(t, interest)
 	if !subscribed(manager, watcherID, moverID) || !subscribed(manager, watcherID, watcherID) {

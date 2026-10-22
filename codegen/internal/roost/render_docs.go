@@ -343,6 +343,8 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | features | 否 | 项目级代码生成能力开关 | 决定目录、生成器和 bootstrap 接线 |
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
 | timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
+| heartbeats | 否 | 按实体的心跳宿主与行为组件（roost add heartbeat / behavior）：组件类型号、服务、行为选项（ai / state） | sync 重写宿主 / 行为组件与心跳驱动，服务装 heartbeat Mod |
+| time_domains | 否 | 场景时间域（roost add timedomain）：组件类型号、存三个字段的 DAO | sync 重写时间域组件 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
 | services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
@@ -429,6 +431,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | remote_entity | 跨服 Remote Entity | redis、mongo、syncbus |
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
+| heartbeat | 实体心跳驱动（gameplay/heartbeat）：game/heartbeat.Driver 接到本服务的 Nest；roost add heartbeat / behavior 自动加上 | nest |
 | saga | 跨服务 Saga 编排 | dataengine、mongo、nats |
 | web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
@@ -507,6 +510,26 @@ timers 是 roost add timer --entity <Entity> 写下的按实体持久定时器�
 
 不要只手工添加条目；使用 roost add timer，让 DAO 字段、实体组件字段与生成部分一起更新。定时器类型与
 回调写在 game/entities/<entity>/<component>_handlers.go（业务文件）。去掉条目后生成部分不会自动删除。
+
+## 8.2 heartbeats 与 time_domains
+
+heartbeats 是 roost add heartbeat / roost add behavior 写下的按实体心跳，键为实体名：
+
+    heartbeats:
+      monster:
+        id: 2000           # HeartbeatComponent 的组件类型号：game/entities/monster/heartbeat_component_gen.go
+        service: game      # 运行该实体 Nest 的服务，它的 mods 里有 heartbeat
+        behavior:          # roost add behavior 才有：game/entities/monster/behavior_component_gen.go
+          id: 2001
+          ai: true         # --ai：同时构造 AI 心跳控制器，生成示例策略
+          state: true      # --state：生成 gameplay/state 的 Catalog 声明（states.go）
+    time_domains:
+      scene:
+        id: 2002           # TimeDomainComponent 的组件类型号
+        dao: SceneDao      # 存 TimeAnchorBusiness / TimeAnchorDomain / TimeRate 的 DAO
+
+不要只手工添加条目；使用 add 命令，让实体组件字段、DAO 字段、服务的 heartbeat Mod 与生成部分一起更新。动作、
+策略、状态、心跳登记与倍率范围写在各自的业务文件里（只建一次）。去掉条目后生成部分不会自动删除。
 
 ## 9. ids
 

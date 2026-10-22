@@ -1,0 +1,34 @@
+package handler
+
+import (
+	"fmt"
+
+	monster "example.com/planet/game/entities/monster"
+	scene "example.com/planet/game/entities/scene"
+)
+
+// 端到端用例（scripts/test-heartbeat-generated.sh）读状态用的 handler：只读，不改 DAO。
+
+//roost:nest rollback=undo durability=memory
+func handlerMonsterExampleProgress(target monster.IBehaviorEntity) (string, error) {
+	component := target.BehaviorComp()
+	started := 0
+	if strategy, ok := component.AI().Strategy().(*monster.ExampleStrategy); ok {
+		started = strategy.Started()
+	}
+	action, ok := component.Behavior().CurAction(monster.GroupMain).(*monster.ExampleAction)
+	if !ok {
+		return fmt.Sprintf("idle started=%d", started), nil
+	}
+	return fmt.Sprintf("running ticks=%d waited=%d started=%d", action.Ticks(), action.Waited().Milliseconds(), started), nil
+}
+
+//roost:nest rollback=undo durability=memory
+func handlerSceneSetRate(target scene.ITimeDomainEntity, rate float64) error {
+	return target.TimeDomainComp().Domain().SetRate(rate)
+}
+
+//roost:nest rollback=undo durability=memory
+func handlerSceneStartExampleBeat(target scene.IHeartbeatEntity) error {
+	return target.HeartbeatComp().Beat("example").Start()
+}

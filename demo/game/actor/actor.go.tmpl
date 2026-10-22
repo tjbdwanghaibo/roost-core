@@ -1,0 +1,286 @@
+// Package actor is what every thing that ACTS on the map shares: the
+// process's heartbeat driver, the action vocabulary, the state catalog, and
+// the narrow seam between a moving entity and the scene's interest policy.
+//
+// It exists because the Player and the Monster are different entities in
+// different packages, but a move is one thing: the client (or the monster's
+// AI) names a goal, a MoveTo / Follow action on the entity's own
+// actionflow.Behavior carries it out, and the action is advanced on the
+// entity's own heartbeat — never by a loop somewhere that walks every
+// position. That is DESIGN-TODO D20: movement is driven by the entity's own
+// heartbeat (gameplay/heartbeat), which spreads the work by entity id and
+// keeps each step inside that entity's lock and transaction.
+//
+// What lives here and why:
+//
+//   - Heartbeat: one driver per Nest engine, a package variable as
+//     gameplay/heartbeat asks. The game service binds it to the process's
+//     Nest client and starts it (internal/service/game/heartbeat.go); the
+//     demo hand-wires it the way it hand-wires the World's timer driver.
+//   - Registry, the kinds and Groups: the action vocabulary. One move group,
+//     so a new move replaces the one in progress.
+//   - Catalog and Rooted: the state bits (gameplay/state). Rooted is derived
+//     from a buff tag (TagRoot) and gated onto the move group.
+//   - Lookup / Locate: a read-only view of the published entities, for Follow
+//     to read its target's last committed position without taking its lock.
+//   - WorldTime: the scene time domain of the one map this process runs
+//     (gameplay/timedomain), so members' actions, missions and AI follow it.
+//   - InterestMoves: the movement.Space every entity is entered with.
+package actor
+
+import (
+	"errors"
+	"sync/atomic"
+	"time"
+
+	gamescene "{{MODULE}}/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// Heartbeat is the process's heartbeat driver. Every heartbeat host in the
+// game (a player's, a monster's, the scene's) comes from it.
+var Heartbeat = heartbeat.NewDriver(heartbeat.Config{Name: "game"})
+
+// The action vocabulary. The numbers are the game's; the framework only asks
+// that they are unique in Registry.
+const (
+	ActMoveTo actionflow.ActionKind = 1
+	ActFollow actionflow.ActionKind = 2
+
+	// GroupMove is the one group every move lands in: a new MoveTo or Follow
+	// replaces the move in progress (actionflow's same-group rule), which is
+	// what a client clicking somewhere else expects.
+	GroupMove actionflow.ActionGroup = 1
+)
+
+// Speeds are in cells (world units) per second of the entity's time — scene
+// time when the scene has a time domain, so a 2× scene walks twice as far per
+// real second. They are game numbers, not the framework's.
+const (
+	PlayerSpeed  = 60.0
+	MonsterSpeed = 20.0
+	// FollowKeep is how close a follower stops to its target.
+	FollowKeep int64 = 3
+)
+
+// Registry is the sealed action registry every Behavior in the game uses.
+var Registry = newRegistry()
+
+func newRegistry() *actionflow.Registry {
+	registry := actionflow.NewRegistry()
+	if err := movement.RegisterActions(registry, ActMoveTo, ActFollow); err != nil {
+		panic(err)
+	}
+	registry.Seal()
+	return registry
+}
+
+// Groups maps an action kind to its group (actionflow.BehaviorConfig.GroupForKind).
+func Groups(kind actionflow.ActionKind) (actionflow.ActionGroup, bool) {
+	switch kind {
+	case ActMoveTo, ActFollow:
+		return GroupMove, true
+	}
+	return 0, false
+}
+
+// State bits. Rooted is derived from a buff (combatcomponent.BindStates):
+// the buff is the one holder of the effect — its duration, its dispel — and
+// the state only says "some buff with this tag is on". It is not synced as a
+// state bit: the monster mirrors it into its own DAO (MonsterDao.Rooted),
+// which is what its packer already ships.
+const (
+	Rooted state.ID = 1
+)
+
+// TagRoot is the buff tag that roots.
+const TagRoot combat.Tag = "root"
+
+// SkillClock turns time into skill ticks (100ms each) for every combat
+// component: buff durations are counted in these ticks, and the buff
+// heartbeat (combatcomponent.AttachBeat) expires them by the same clock —
+// scene time when the scene has a time domain, so a 2× scene's roots wear off
+// twice as fast.
+var SkillClock = skill.TickClock{Length: 100 * time.Millisecond}
+
+// RootBuff is the buff the GM command applies for the given number of
+// seconds (0: until dispelled). A timed one is expired by the monster's buff
+// heartbeat, never by a loop that walks every monster.
+func RootBuff(seconds int64) combat.BuffSpec {
+	spec := combat.BuffSpec{ID: 9001, Tags: []combat.Tag{TagRoot}}
+	if seconds > 0 {
+		spec.DurationTicks = seconds * int64(time.Second/SkillClock.Length)
+	}
+	return spec
+}
+
+// Catalog declares the game's state bits once.
+var Catalog = mustCatalog()
+
+func mustCatalog() *state.Catalog {
+	catalog, err := state.NewCatalog(state.Def{ID: Rooted, Name: "rooted"})
+	if err != nil {
+		panic(err)
+	}
+	return catalog
+}
+
+// lookup is the read-only entity view (EntityManager.Get: no load, no wait).
+var lookup atomic.Pointer[func(int64) entity.IThreadSafeEntity]
+
+// SetLookup installs the entity view. The game service does it with the
+// driver's Bind; a test does it with its own manager.
+func SetLookup(get func(int64) entity.IThreadSafeEntity) {
+	if get == nil {
+		lookup.Store(nil)
+		return
+	}
+	lookup.Store(&get)
+}
+
+// Get is a published entity by id, nil when there is none (or no view yet).
+func Get(id int64) entity.IThreadSafeEntity {
+	if get := lookup.Load(); get != nil {
+		return (*get)(id)
+	}
+	return nil
+}
+
+// Locate is Follow's way to read a target: its last committed position, off
+// the target's lock (movement.MapBasic.Published).
+var Locate = movement.LocateIn(Get)
+
+var worldTime atomic.Pointer[timedomain.Domain]
+
+// SetWorldTime publishes the time domain of the map this process runs. The
+// Scene entity does it when it is built; members built after that follow the
+// domain (their Behavior and AI are constructed with it).
+//
+// One map, one domain: the demo runs a single scene per process. A game with
+// many scenes builds a member's Behavior when it enters a scene (or rebuilds
+// it on a scene change), because a Behavior's beats are bound to one domain
+// for its lifetime — see KNOWN-LIMITS.
+func SetWorldTime(domain *timedomain.Domain) { worldTime.Store(domain) }
+
+// ReleaseWorldTime takes the domain down when the scene that published it is
+// destroyed (and only that one: a newer scene's domain is left alone).
+func ReleaseWorldTime(domain *timedomain.Domain) {
+	if domain != nil {
+		worldTime.CompareAndSwap(domain, nil)
+	}
+}
+
+// WorldTime is the published domain, nil before the scene exists (a test that
+// builds no scene, or an entity built before it).
+func WorldTime() *timedomain.Domain { return worldTime.Load() }
+
+// ground is the terrain of the map this process runs, published by the Scene
+// entity like WorldTime.
+var ground atomic.Pointer[groundBox]
+
+type groundBox struct{ terrain gamescene.Terrain }
+
+// SetWorldGround publishes the map's terrain for Ground.
+func SetWorldGround(terrain gamescene.Terrain) {
+	if terrain == nil {
+		ground.Store(nil)
+		return
+	}
+	ground.Store(&groundBox{terrain: terrain})
+}
+
+// ReleaseWorldGround takes it down when that scene is destroyed.
+func ReleaseWorldGround(terrain gamescene.Terrain) {
+	if box := ground.Load(); box != nil && box.terrain == terrain {
+		ground.CompareAndSwap(box, nil)
+	}
+}
+
+// Ground is the spatial.Terrain every Move is built with
+// (movement.MoveConfig.Terrain): each new cell a walk enters is asked, and a
+// walk that reaches a blocked cell or the edge stops on the last walkable one
+// (movement.Blocked). It reads the published map, so it can be handed out
+// before the scene exists; with no map published everything is walkable.
+//
+// It is what makes a straight-line walk safe: the scene's A* has a bounded
+// budget (a long open-field route exhausts it), and a goal it cannot route
+// to within the budget is walked in a straight line instead
+// (handlerMoveTarget) — a wall on the way stops the walk rather than letting
+// it through.
+type Ground struct{}
+
+func (Ground) InBounds(p spatial.Point) bool {
+	box := ground.Load()
+	return box == nil || box.terrain.Bounds().Contains(p)
+}
+
+func (Ground) Blocked(p spatial.Point) bool {
+	box := ground.Load()
+	return box != nil && !box.terrain.Walkable(p)
+}
+
+// InterestMoves is the movement.Space every Player and Monster is entered
+// with. It reports MOVES and nothing else:
+//
+//   - QueueMove records the position in the interest policy inside the
+//     entity's transaction (policy.Interest.QueueMove: a commit-gated fact, so
+//     a rolled-back step never reaches the AOI and a committed one is applied
+//     in the same flush that captures the new position).
+//   - Enter and Leave do nothing: who is IN the scene — the replication
+//     subject, the player's session, the monster's Show / Hide — is owned by
+//     the replication bridge (internal/service/game/scene.go Join / Leave /
+//     ShowSubject / HideSubject), which also deals with reconnects and retired
+//     subjects. MapBasic owning membership as well would be a second door.
+//
+// An entity the policy does not know yet (a player placed on the map whose
+// Join has not happened, or failed — "the player can play, they just do not
+// see the others") moves without the AOI following: ErrInterestUnknown is not
+// a reason to refuse a step. The Join reads the position it is given; a move
+// in that window is picked up by the next one.
+type InterestMoves struct {
+	Interest *policy.Interest
+}
+
+func (s InterestMoves) Enter(entity.IThreadSafeEntity, spatial.Point) error { return nil }
+
+func (s InterestMoves) Leave(entity.IThreadSafeEntity) error { return nil }
+
+func (s InterestMoves) QueueMove(e entity.IThreadSafeEntity, at spatial.Point) error {
+	if s.Interest == nil {
+		return nil
+	}
+	if err := s.Interest.QueueMove(e, at); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
+		return err
+	}
+	return nil
+}
+
+// Nowhere is the Space of a scene that has no replication bridge (a test, or
+// a scene built before the bridge is installed): moves are not reported to
+// anyone.
+type Nowhere struct{}
+
+func (Nowhere) Enter(entity.IThreadSafeEntity, spatial.Point) error   { return nil }
+func (Nowhere) Leave(entity.IThreadSafeEntity) error                  { return nil }
+func (Nowhere) QueueMove(entity.IThreadSafeEntity, spatial.Point) error { return nil }
+
+// SavePeriod is how often a player's position is written to its persistent
+// fields while it is on the map (movement.MapConfig.SaveEvery): the live
+// position is nopersist (D20 decision 15), so this bounds how much walking a
+// crash or an unload without a leave can lose.
+const SavePeriod = 10 * time.Second
+
+var (
+	_ spatial.Terrain = Ground{}
+	_ movement.Space = InterestMoves{}
+	_ movement.Space = Nowhere{}
+)

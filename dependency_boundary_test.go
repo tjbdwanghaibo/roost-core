@@ -40,7 +40,50 @@ func TestCombatAndSkillDependencyBoundary(t *testing.T) {
 					}
 				} else if name == modulePath+"/infra/base/spatial" || strings.HasPrefix(name, modulePath+"/infra/base/spatial/") {
 					t.Errorf("%s: skill delegates spatial queries to Host: %s", path, name)
+				} else if driver := skillDriverImport(name); driver != "" {
+					t.Errorf("%s: skill only uses the Driver interface; %s belongs to a driver adapter (combatcomponent): %s", path, driver, name)
 				}
+			}
+		}
+	}
+}
+
+// skillDriverImport 报告 name 是否是某种驱动方式的实现依赖（维护者 2026-10-21：心跳只是技能 / Buff 的驱动方式之一，
+// skill 只用 Driver 接口）。skill 包不能 import 它们；心跳适配在 combatcomponent。
+func skillDriverImport(name string) string {
+	for _, prefix := range []string{"/framework/nest", "/gameplay/heartbeat", "/gameplay/timedomain", "/infra/base/fctx"} {
+		if name == modulePath+prefix || strings.HasPrefix(name, modulePath+prefix+"/") {
+			return prefix[strings.LastIndex(prefix, "/")+1:]
+		}
+	}
+	return ""
+}
+
+// Buff 与技能 Runtime 的推进规则与驱动无关：combatcomponent 里只有心跳适配文件（beat.go、runtime_beat.go）可以
+// import heartbeat / timedomain，buff_stepper.go 等只经 skill.Driver 通知驱动。
+func TestCombatComponentHeartbeatStaysInTheAdapters(t *testing.T) {
+	const dir = "gameplay/skill/combatcomponent"
+	adapters := map[string]bool{"beat.go": true, "runtime_beat.go": true}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") || adapters[entry.Name()] {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, spec := range file.Imports {
+			name, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if driver := skillDriverImport(name); driver == "heartbeat" || driver == "timedomain" {
+				t.Errorf("%s: only the heartbeat adapters (beat.go, runtime_beat.go) import %s: %s", path, driver, name)
 			}
 		}
 	}

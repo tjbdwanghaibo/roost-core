@@ -1,0 +1,26 @@
+File: bin-final.test
+Type: delay
+Time: 2026-10-22 01:00:14 CST
+Showing nodes accounting for 8.59s, 100% of 8.59s total
+Dropped 115 nodes (cum <= 0.04s)
+      flat  flat%   sum%        cum   cum%
+     8.53s 99.25% 99.25%      8.55s 99.49%  sync.(*Mutex).Unlock (partial-inline)
+     0.06s  0.74%   100%      0.06s  0.74%  runtime.unlock (inline)
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+         0     0%   100%      0.41s  4.80%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).trySendTryBatch
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0%   100%      0.41s  4.80%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).DispatchTryBatch
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).admit
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0%   100%      0.41s  4.79%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admitTryBatch
+         0     0%   100%      7.83s 91.11%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).runTryBatchLocked
+         0     0%   100%      6.49s 75.55%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).runTryBatchLocked.func1
+         0     0%   100%         8s 93.12%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0%   100%      8.03s 93.43%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).bizLoop
+         0     0%   100%      0.41s  4.80%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).deliver
+         0     0%   100%      0.41s  4.80%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).driverLoop
+         0     0%   100%      0.41s  4.78%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.TestDeliveryRun.gowrap1
+         0     0%   100%      0.10s  1.12%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.TestDeliveryRun.gowrap2
+         0     0%   100%      6.49s 75.55%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+         0     0%   100%      0.05s  0.63%  sync.(*Cond).Wait

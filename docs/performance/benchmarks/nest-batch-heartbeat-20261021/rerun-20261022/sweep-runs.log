@@ -1,0 +1,31 @@
+01:03:22 round=1 b64 start loadavg={ 4.23 4.87 5.10 }
+01:03:42 b64 r1 ok
+01:04:13 round=1 b128 start loadavg={ 3.26 4.55 4.97 }
+01:04:34 b128 r1 ok
+01:05:05 round=1 s100 start loadavg={ 4.55 4.71 5.00 }
+01:05:25 s100 r1 ok
+01:05:56 round=1 s400 start loadavg={ 3.60 4.44 4.89 }
+01:06:17 s400 r1 ok
+01:06:48 round=1 b32 start loadavg={ 3.43 4.32 4.82 }
+01:07:08 b32 r1 ok
+01:07:39 round=2 b128 start loadavg={ 2.90 4.09 4.71 }
+01:07:59 b128 r2 ok
+01:08:30 round=2 s100 start loadavg={ 2.66 3.87 4.59 }
+01:08:51 s100 r2 ok
+01:09:22 round=2 s400 start loadavg={ 2.68 3.69 4.48 }
+01:09:42 s400 r2 ok
+01:10:13 round=2 b32 start loadavg={ 2.76 3.59 4.40 }
+01:10:34 b32 r2 ok
+01:11:05 round=2 b64 start loadavg={ 2.71 3.47 4.31 }
+01:11:25 b64 r2 ok
+01:11:56 round=3 s100 start loadavg={ 2.56 3.35 4.21 }
+01:12:16 s100 r3 ok
+01:12:47 round=3 s400 start loadavg={ 3.10 3.36 4.16 }
+01:13:08 s400 r3 ok
+01:13:39 round=3 b32 start loadavg={ 3.38 3.44 4.15 }
+01:13:59 b32 r3 ok
+01:14:30 round=3 b64 start loadavg={ 3.06 3.42 4.10 }
+01:14:51 b64 r3 ok
+01:15:22 round=3 b128 start loadavg={ 3.21 3.40 4.05 }
+01:15:42 b128 r3 ok
+01:15:42 all done

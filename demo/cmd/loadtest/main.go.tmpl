@@ -425,6 +425,23 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// move_target: send a goal and let the server walk there (D20: the
+	// client sends intent, the player's own heartbeat moves it). The answer
+	// only says the walk started and where it starts; the walk itself
+	// arrives as replicated positions, which move_arrive waits for.
+	action.MustRegisterCall[pb.MoveTargetRequest, pb.MoveTargetResponse](actions, protocols, "move_target", msgid.MsgMoveTarget,
+		action.OnResp(func(rb *robot.Context, resp *pb.MoveTargetResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.ActionID == 0 {
+				return fmt.Errorf("move_target started no walk (the robot already stands on the goal at %d,%d?)", resp.X, resp.Y)
+			}
+			return nil
+		}))
+	// move_arrive: the walk is the server's, so the robot judges it by what
+	// it was replicated — its own subject's pos_x / pos_y reaching the goal.
+	actions.MustRegister(action.Func{ActionName: "move_arrive", Handle: expectArrival})
 	// equip: wear the sword the scenario granted. The response says which
 	// slot it went in — the client does not choose, because a slot is a
 	// property of the item.
@@ -818,6 +835,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalRankTopRequest(message)
 	case *pb.MoveRequest:
 		return pb.MarshalMoveRequest(message)
+	case *pb.MoveTargetRequest:
+		return pb.MarshalMoveTargetRequest(message)
 	case *pb.EquipRequest:
 		return pb.MarshalEquipRequest(message)
 	case *pb.PurchaseRequest:
@@ -947,6 +966,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.MoveResponse:
 		decoded, err := pb.UnmarshalMoveResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.MoveTargetResponse:
+		decoded, err := pb.UnmarshalMoveTargetResponse(data)
 		if err != nil {
 			return err
 		}
@@ -1226,6 +1251,62 @@ func (watcher *sceneWatcher) capture(message *session.Message) {
 		return
 	}
 	watcher.consume(message.Packet.Payload)
+}
+
+// expectArrival waits until this client's own replicated position is the
+// goal. Params: "x", "y", "timeout". scene_watch must run first.
+func expectArrival(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	timeout := params.Duration("timeout", 10*time.Second)
+	goalX, goalY := params.Int64("x", 0), params.Int64("y", 0)
+	raw, _ := rb.Blackboard.Get("scene_watcher")
+	watcher, ok := raw.(*sceneWatcher)
+	if !ok || watcher == nil {
+		return errors.New("move_arrive: no watcher on the blackboard; scene_watch must run first")
+	}
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	deadline := time.After(timeout)
+	for {
+		watcher.mu.Lock()
+		failure := watcher.failure
+		var x, y int64
+		found := false
+		for subjectID, document := range watcher.subjects {
+			if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
+				x, y, found = bsonInt64(document["pos_x"]), bsonInt64(document["pos_y"]), true
+				break
+			}
+		}
+		watcher.mu.Unlock()
+		if failure != nil {
+			return failure
+		}
+		if found && x == goalX && y == goalY {
+			rb.Blackboard.Set("pos_x", x)
+			rb.Blackboard.Set("pos_y", y)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("move_arrive: after %s this client was last replicated at (%d,%d) (known %v), want the goal (%d,%d)", timeout, x, y, found, goalX, goalY)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func bsonInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int32:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	}
+	return 0
 }
 
 // expectScene judges what arrived. Params: "fields" (comma separated, each

@@ -1,0 +1,257 @@
+01:40:07 o-v4-sync-direct-base-r1 start loadavg={ 3.14 2.65 2.79 }
+01:40:21 o-v4-sync-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.53ms change_p99=49.53ms above50ms=89888/535174
+50ms latency gate failed; reports retained
+01:40:31 o-v4-sync-direct-after-r1 start loadavg={ 2.59 2.56 2.75 }
+01:40:46 o-v4-sync-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=61.64ms change_p99=50.44ms above50ms=122972/535174
+50ms latency gate failed; reports retained
+01:40:56 o-v4-async-nest-after-r1 start loadavg={ 2.74 2.61 2.76 }
+01:41:11 o-v4-async-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=64.60ms change_p99=63.74ms above50ms=112547/449975
+50ms latency gate failed; reports retained
+01:41:21 o-v4-async-nest-base-r1 start loadavg={ 3.57 2.82 2.83 }
+01:41:36 o-v4-async-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=65.01ms change_p99=64.14ms above50ms=112865/450087
+50ms latency gate failed; reports retained
+01:41:46 o-v4-async-direct-base-r1 start loadavg={ 3.61 2.89 2.86 }
+01:42:01 o-v4-async-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.62ms change_p99=49.54ms above50ms=90863/535174
+50ms latency gate failed; reports retained
+01:42:11 o-v4-async-direct-after-r1 start loadavg={ 3.40 2.90 2.86 }
+01:42:26 o-v4-async-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.76ms change_p99=50.08ms above50ms=91897/535174
+50ms latency gate failed; reports retained
+01:42:36 o-v8-sync-nest-after-r1 start loadavg={ 2.46 2.71 2.79 }
+01:42:53 o-v8-sync-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=76.86ms change_p99=70.62ms above50ms=211545/820669
+50ms latency gate failed; reports retained
+01:43:03 o-v8-sync-nest-base-r1 start loadavg={ 2.09 2.61 2.75 }
+01:43:19 o-v8-sync-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=79.41ms change_p99=78.21ms above50ms=362552/807391
+50ms latency gate failed; reports retained
+01:43:30 o-v8-sync-direct-base-r1 start loadavg={ 2.59 2.70 2.78 }
+01:43:46 o-v8-sync-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=63.38ms change_p99=50.11ms above50ms=227806/961304
+50ms latency gate failed; reports retained
+01:43:57 o-v8-sync-direct-after-r1 start loadavg={ 2.55 2.68 2.77 }
+01:44:13 o-v8-sync-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=75.17ms change_p99=60.16ms above50ms=358943/961304
+50ms latency gate failed; reports retained
+01:44:24 o-v8-async-nest-after-r1 start loadavg={ 2.53 2.67 2.76 }
+01:44:40 o-v8-async-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=71.73ms change_p99=70.33ms above50ms=285034/807708
+50ms latency gate failed; reports retained
+01:44:51 o-v8-async-nest-base-r1 start loadavg={ 2.83 2.74 2.78 }
+01:45:07 o-v8-async-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=73.65ms change_p99=71.21ms above50ms=285324/807582
+50ms latency gate failed; reports retained
+01:45:18 o-v8-async-direct-base-r1 start loadavg={ 3.19 2.83 2.81 }
+01:45:34 o-v8-async-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=63.08ms change_p99=49.91ms above50ms=225936/961304
+50ms latency gate failed; reports retained
+01:45:45 o-v8-async-direct-after-r1 start loadavg={ 3.12 2.84 2.82 }
+01:46:01 o-v8-async-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=64.01ms change_p99=53.27ms above50ms=228987/961304
+50ms latency gate failed; reports retained
+01:46:11 o-v16-sync-nest-after-r1 start loadavg={ 2.78 2.79 2.80 }
+01:46:32 o-v16-sync-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=140.65ms change_p99=132.54ms above50ms=725807/1556004
+50ms latency gate failed; reports retained
+01:46:43 o-v16-sync-nest-base-r1 start loadavg={ 3.04 2.88 2.83 }
+01:47:03 o-v16-sync-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=129.40ms change_p99=122.17ms above50ms=1056261/1523831
+50ms latency gate failed; reports retained
+01:47:14 o-v16-sync-direct-base-r1 start loadavg={ 3.38 2.98 2.87 }
+01:47:32 o-v16-sync-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=97.06ms change_p99=64.02ms above50ms=754517/1814137
+50ms latency gate failed; reports retained
+01:47:43 o-v16-sync-direct-after-r1 start loadavg={ 3.61 3.05 2.90 }
+01:48:01 o-v16-sync-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=112.98ms change_p99=82.64ms above50ms=1185519/1814137
+50ms latency gate failed; reports retained
+01:48:12 o-v16-async-nest-after-r1 start loadavg={ 3.26 3.04 2.90 }
+01:48:30 o-v16-async-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=123.61ms change_p99=116.62ms above50ms=820582/1525389
+50ms latency gate failed; reports retained
+01:48:41 o-v16-async-nest-base-r1 start loadavg={ 2.85 2.97 2.88 }
+01:48:59 o-v16-async-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=135.27ms change_p99=128.51ms above50ms=799413/1525462
+50ms latency gate failed; reports retained
+01:49:10 o-v16-async-direct-base-r1 start loadavg={ 2.91 2.98 2.89 }
+01:49:28 o-v16-async-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=98.44ms change_p99=60.90ms above50ms=769785/1814137
+50ms latency gate failed; reports retained
+01:49:39 o-v16-async-direct-after-r1 start loadavg={ 3.33 3.07 2.92 }
+01:49:57 o-v16-async-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=95.67ms change_p99=69.96ms above50ms=767926/1814137
+50ms latency gate failed; reports retained
+01:50:08 o-v0-sync-nest-after-r1 start loadavg={ 2.89 2.99 2.90 }
+01:50:20 o-v0-sync-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.01ms change_p99=57.24ms above50ms=11569/92291
+50ms latency gate failed; reports retained
+01:50:31 o-v0-sync-nest-base-r1 start loadavg={ 2.44 2.88 2.86 }
+01:50:43 o-v0-sync-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=63.13ms change_p99=62.17ms above50ms=21744/91491
+50ms latency gate failed; reports retained
+01:50:54 o-v0-sync-direct-base-r1 start loadavg={ 2.92 2.97 2.89 }
+01:51:06 o-v0-sync-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.18ms change_p99=50.90ms above50ms=17384/108139
+50ms latency gate failed; reports retained
+01:51:17 o-v0-sync-direct-after-r1 start loadavg={ 2.69 2.92 2.87 }
+01:51:29 o-v0-sync-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.47ms change_p99=51.19ms above50ms=17595/108139
+50ms latency gate failed; reports retained
+01:51:39 o-v0-async-nest-after-r1 start loadavg={ 2.44 2.84 2.85 }
+01:51:52 o-v0-async-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=61.49ms change_p99=60.75ms above50ms=18919/91528
+50ms latency gate failed; reports retained
+01:52:02 o-v0-async-nest-base-r1 start loadavg={ 2.42 2.81 2.83 }
+01:52:15 o-v0-async-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=62.16ms change_p99=61.40ms above50ms=19586/91512
+50ms latency gate failed; reports retained
+01:52:25 o-v0-async-direct-base-r1 start loadavg={ 2.48 2.79 2.82 }
+01:52:38 o-v0-async-direct-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.06ms change_p99=50.46ms above50ms=17314/108139
+50ms latency gate failed; reports retained
+01:52:48 o-v0-async-direct-after-r1 start loadavg={ 2.37 2.75 2.81 }
+01:53:01 o-v0-async-direct-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.17ms change_p99=50.58ms above50ms=17649/108139
+50ms latency gate failed; reports retained
+01:53:11 o-v4-sync-nest-after-r1 start loadavg={ 1.84 2.59 2.75 }
+01:53:26 o-v4-sync-nest-after-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=59.22ms change_p99=58.34ms above50ms=66369/456214
+50ms latency gate failed; reports retained
+01:53:36 o-v4-sync-nest-base-r1 start loadavg={ 2.04 2.58 2.74 }
+01:53:50 o-v4-sync-nest-base-r1 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=66.70ms change_p99=65.64ms above50ms=142692/449746
+50ms latency gate failed; reports retained
+01:54:01 o-v8-async-nest-after-r2 start loadavg={ 2.06 2.53 2.72 }
+01:54:17 o-v8-async-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=71.53ms change_p99=70.11ms above50ms=276260/807654
+50ms latency gate failed; reports retained
+01:54:28 o-v8-async-nest-base-r2 start loadavg={ 2.37 2.59 2.73 }
+01:54:44 o-v8-async-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=75.11ms change_p99=72.97ms above50ms=263941/807859
+50ms latency gate failed; reports retained
+01:54:55 o-v8-async-direct-base-r2 start loadavg={ 2.57 2.62 2.74 }
+01:55:11 o-v8-async-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=64.29ms change_p99=52.28ms above50ms=229949/961304
+50ms latency gate failed; reports retained
+01:55:22 o-v8-async-direct-after-r2 start loadavg={ 2.58 2.62 2.74 }
+01:55:38 o-v8-async-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=63.71ms change_p99=52.75ms above50ms=228466/961304
+50ms latency gate failed; reports retained
+01:55:49 o-v16-sync-nest-after-r2 start loadavg={ 2.60 2.63 2.74 }
+01:56:07 o-v16-sync-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=131.36ms change_p99=123.62ms above50ms=698523/1557190
+50ms latency gate failed; reports retained
+01:56:18 o-v16-sync-nest-base-r2 start loadavg={ 3.45 2.88 2.83 }
+01:56:36 o-v16-sync-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=137.53ms change_p99=130.57ms above50ms=1065570/1523719
+50ms latency gate failed; reports retained
+01:56:47 o-v16-sync-direct-base-r2 start loadavg={ 2.80 2.78 2.79 }
+01:57:05 o-v16-sync-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=108.13ms change_p99=63.06ms above50ms=768698/1814137
+50ms latency gate failed; reports retained
+01:57:16 o-v16-sync-direct-after-r2 start loadavg={ 2.66 2.75 2.78 }
+01:57:34 o-v16-sync-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=111.77ms change_p99=77.20ms above50ms=1205410/1814137
+50ms latency gate failed; reports retained
+01:57:45 o-v16-async-nest-after-r2 start loadavg={ 2.45 2.70 2.76 }
+01:58:03 o-v16-async-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=119.16ms change_p99=110.48ms above50ms=808991/1524662
+50ms latency gate failed; reports retained
+01:58:14 o-v16-async-nest-base-r2 start loadavg={ 3.01 2.82 2.80 }
+01:58:32 o-v16-async-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.40 planned_p99=120.90ms change_p99=111.85ms above50ms=822769/1525879
+50ms latency gate failed; reports retained
+01:58:43 o-v16-async-direct-base-r2 start loadavg={ 3.18 2.90 2.83 }
+01:59:01 o-v16-async-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=106.41ms change_p99=61.03ms above50ms=1007062/1814137
+50ms latency gate failed; reports retained
+01:59:12 o-v16-async-direct-after-r2 start loadavg={ 3.07 2.92 2.84 }
+01:59:30 o-v16-async-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=827.39 planned_p99=100.46ms change_p99=74.58ms above50ms=855756/1814137
+50ms latency gate failed; reports retained
+01:59:41 o-v0-sync-nest-after-r2 start loadavg={ 2.37 2.76 2.79 }
+01:59:53 o-v0-sync-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.71ms change_p99=57.57ms above50ms=12248/92322
+50ms latency gate failed; reports retained
+02:00:04 o-v0-sync-nest-base-r2 start loadavg={ 3.34 2.97 2.86 }
+02:00:16 o-v0-sync-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=63.37ms change_p99=62.46ms above50ms=22508/91481
+50ms latency gate failed; reports retained
+02:00:27 o-v0-sync-direct-base-r2 start loadavg={ 3.66 3.06 2.89 }
+02:00:39 o-v0-sync-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.34ms change_p99=50.68ms above50ms=17478/108139
+50ms latency gate failed; reports retained
+02:00:50 o-v0-sync-direct-after-r2 start loadavg={ 3.83 3.13 2.92 }
+02:01:02 o-v0-sync-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.83ms change_p99=51.27ms above50ms=18244/108139
+50ms latency gate failed; reports retained
+02:01:12 o-v0-async-nest-after-r2 start loadavg={ 3.27 3.06 2.90 }
+02:01:25 o-v0-async-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=62.07ms change_p99=61.27ms above50ms=19925/91505
+50ms latency gate failed; reports retained
+02:01:35 o-v0-async-nest-base-r2 start loadavg={ 3.90 3.20 2.95 }
+02:01:48 o-v0-async-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=62.21ms change_p99=61.35ms above50ms=19008/91515
+50ms latency gate failed; reports retained
+02:01:58 o-v0-async-direct-base-r2 start loadavg={ 4.03 3.31 3.00 }
+02:02:11 o-v0-async-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.29ms change_p99=50.24ms above50ms=17561/108139
+50ms latency gate failed; reports retained
+02:02:21 o-v0-async-direct-after-r2 start loadavg={ 3.45 3.23 2.98 }
+02:02:34 o-v0-async-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=49.59 planned_p99=58.19ms change_p99=50.67ms above50ms=17634/108139
+50ms latency gate failed; reports retained
+02:02:44 o-v4-sync-nest-after-r2 start loadavg={ 3.70 3.31 3.02 }
+02:02:59 o-v4-sync-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=59.07ms change_p99=58.12ms above50ms=66018/456255
+50ms latency gate failed; reports retained
+02:03:09 o-v4-sync-nest-base-r2 start loadavg={ 4.26 3.48 3.08 }
+02:03:24 o-v4-sync-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=67.04ms change_p99=65.97ms above50ms=143710/449730
+50ms latency gate failed; reports retained
+02:03:34 o-v4-sync-direct-base-r2 start loadavg={ 4.09 3.49 3.10 }
+02:03:49 o-v4-sync-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.81ms change_p99=49.61ms above50ms=92195/535174
+50ms latency gate failed; reports retained
+02:03:59 o-v4-sync-direct-after-r2 start loadavg={ 3.85 3.48 3.11 }
+02:04:14 o-v4-sync-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=61.68ms change_p99=50.59ms above50ms=122942/535174
+50ms latency gate failed; reports retained
+02:04:24 o-v4-async-nest-after-r2 start loadavg={ 4.73 3.71 3.20 }
+02:04:38 o-v4-async-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=65.71ms change_p99=64.84ms above50ms=114290/450038
+50ms latency gate failed; reports retained
+02:04:49 o-v4-async-nest-base-r2 start loadavg={ 4.26 3.67 3.20 }
+02:05:03 o-v4-async-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=64.42ms change_p99=63.64ms above50ms=113897/450042
+50ms latency gate failed; reports retained
+02:05:14 o-v4-async-direct-base-r2 start loadavg={ 3.41 3.52 3.16 }
+02:05:28 o-v4-async-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.84ms change_p99=49.71ms above50ms=92651/535174
+50ms latency gate failed; reports retained
+02:05:39 o-v4-async-direct-after-r2 start loadavg={ 4.17 3.69 3.23 }
+02:05:53 o-v4-async-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=244.26 planned_p99=58.60ms change_p99=49.92ms above50ms=90699/535174
+50ms latency gate failed; reports retained
+02:06:04 o-v8-sync-nest-after-r2 start loadavg={ 3.80 3.63 3.22 }
+02:06:20 o-v8-sync-nest-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=76.47ms change_p99=73.47ms above50ms=210214/820660
+50ms latency gate failed; reports retained
+02:06:30 o-v8-sync-nest-base-r2 start loadavg={ 3.73 3.64 3.23 }
+02:06:47 o-v8-sync-nest-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.49 planned_p99=77.97ms change_p99=74.91ms above50ms=370215/807367
+50ms latency gate failed; reports retained
+02:06:57 o-v8-sync-direct-base-r2 start loadavg={ 3.83 3.70 3.27 }
+02:07:14 o-v8-sync-direct-base-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=64.30ms change_p99=51.11ms above50ms=232038/961304
+50ms latency gate failed; reports retained
+02:07:24 o-v8-sync-direct-after-r2 start loadavg={ 3.49 3.63 3.25 }
+02:07:41 o-v8-sync-direct-after-r2 FAILED rc=1
+move_driver=loop players=1000 entities=10000 visible_mean=438.51 planned_p99=70.78ms change_p99=59.11ms above50ms=352928/961304
+50ms latency gate failed; reports retained
+02:07:41 all done

@@ -1,0 +1,50 @@
+File: bin-final.test
+Type: delay
+Time: 2026-10-22 00:59:28 CST
+Showing nodes accounting for 4.18s, 100% of 4.18s total
+Dropped 145 nodes (cum <= 0.02s)
+      flat  flat%   sum%        cum   cum%
+     3.86s 92.43% 92.43%      3.96s 94.71%  sync.(*Mutex).Unlock (partial-inline)
+     0.32s  7.57%   100%      0.32s  7.57%  runtime.unlock (partial-inline)
+         0     0%   100%      1.07s 25.62%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*Dispatcher).TrySendMsg
+         0     0%   100%      1.13s 27.05%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).Dispatch
+         0     0%   100%      0.22s  5.20%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).FenceError
+         0     0%   100%      1.07s 25.62%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).admit
+         0     0%   100%      0.05s  1.20%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities
+         0     0%   100%      0.05s  1.20%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).groupLockManager
+         0     0%   100%      0.05s  1.20%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).singleDispatch
+         0     0%   100%      1.07s 25.57%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0%   100%      0.22s  5.26%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).run (inline)
+         0     0%   100%      0.22s  5.26%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).run.func1
+         0     0%   100%      2.76s 66.09%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0%   100%      2.88s 68.94%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0%   100%      0.22s  5.25%  github.com/tjbdwanghaibo/roost-core/framework/nest.NestDispatch (inline)
+         0     0%   100%      0.22s  5.25%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewEngine.func1
+         0     0%   100%      0.22s  5.25%  github.com/tjbdwanghaibo/roost-core/framework/nest.dispatchNest
+         0     0%   100%      0.10s  2.50%  github.com/tjbdwanghaibo/roost-core/framework/nest.runNestLogic
+         0     0%   100%      0.06s  1.43%  github.com/tjbdwanghaibo/roost-core/framework/nest.validateClientDispatch
+         0     0%   100%      0.03s  0.75%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).bizLoop
+         0     0%   100%      1.10s 26.31%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).deliver
+         0     0%   100%      1.10s 26.31%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.(*deliveryRun).driverLoop
+         0     0%   100%      1.05s 25.19%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.TestDeliveryRun.gowrap1
+         0     0%   100%      0.03s   0.7%  github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench.TestDeliveryRun.gowrap2
+         0     0%   100%      0.22s  5.26%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+         0     0%   100%      0.05s  1.15%  internal/sync.(*Mutex).Lock (inline)
+         0     0%   100%      0.10s  2.28%  internal/sync.(*Mutex).Unlock (inline)
+         0     0%   100%      0.05s  1.15%  internal/sync.(*Mutex).lockSlow
+         0     0%   100%      0.10s  2.28%  internal/sync.(*Mutex).unlockSlow
+         0     0%   100%      0.05s  1.15%  internal/sync.runtime_SemacquireMutex
+         0     0%   100%      0.10s  2.28%  internal/sync.runtime_Semrelease
+         0     0%   100%      0.06s  1.46%  runtime.findRunnable
+         0     0%   100%      0.05s  1.22%  runtime.gopreempt_m (inline)
+         0     0%   100%      0.05s  1.22%  runtime.goschedImpl
+         0     0%   100%      0.09s  2.10%  runtime.mcall
+         0     0%   100%      0.05s  1.22%  runtime.morestack
+         0     0%   100%      0.05s  1.22%  runtime.newstack
+         0     0%   100%      0.09s  2.10%  runtime.park_m
+         0     0%   100%      0.05s  1.09%  runtime.parkunlock_c
+         0     0%   100%      0.07s  1.62%  runtime.schedule
+         0     0%   100%      0.05s  1.15%  runtime.semacquire1
+         0     0%   100%      0.10s  2.28%  runtime.semrelease1
+         0     0%   100%      0.95s 22.80%  sync.(*Cond).Wait
+         0     0%   100%      0.05s  1.15%  sync.(*Mutex).Lock (partial-inline)

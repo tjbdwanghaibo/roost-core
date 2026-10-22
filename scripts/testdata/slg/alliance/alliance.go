@@ -44,11 +44,29 @@ type allianceStore interface {
 type alliance struct {
 	store allianceStore
 	key   activity.Key
+	// reservationTTL 是协调器配置的 activity.Config.ReservationTTL，也是自动补报的截止：协调器只在这段时间内
+	// 按请求身份去重，过了还补报，同一战果会被计两次。两处必须是同一个值；零值与 activity.New 一样按
+	// activity.DefaultReservationTTL。
+	reservationTTL time.Duration
 }
 
-func newAlliance(r versionstore.RedisClient, prefix string, key activity.Key) (*alliance, error) {
+// newAlliance 的 reservationTTL 传协调器配置里的同一个 ReservationTTL。
+func newAlliance(r versionstore.RedisClient, prefix string, key activity.Key, reservationTTL time.Duration) (*alliance, error) {
 	s, e := versionstore.NewRedisStore(r, versionstore.RedisConfig[string, state]{Prefix: prefix + ":alliance:", KeyOf: func(k string) string { return k }, Codec: versionstore.JSONCodec[state]{}})
-	return &alliance{store: s, key: key}, e
+	return newAllianceWithStore(s, key, reservationTTL), e
+}
+
+// newAllianceWithStore 让 Remote 托管实体等别的存储承载同一套联盟规则。
+func newAllianceWithStore(store allianceStore, key activity.Key, reservationTTL time.Duration) *alliance {
+	return &alliance{store: store, key: key, reservationTTL: reservationTTL}
+}
+
+// reportDeadline 是待报意图停止自动补报的时长，按 activity.New 的同一规则补缺省。
+func (a *alliance) reportDeadline() time.Duration {
+	if a.reservationTTL == 0 {
+		return activity.DefaultReservationTTL
+	}
+	return a.reservationTTL
 }
 func (a *alliance) open(ctx context.Context) error {
 	_, _, e := a.store.Create(ctx, a.key.String(), state{Key: a.key, Members: map[string]member{"alice": {1000, true}, "bob": {1001, true}}, Intents: map[string]intent{}})
@@ -118,7 +136,7 @@ func (a *alliance) freeze(ctx context.Context) error {
 }
 
 // drain 在 CAS 外调用 RPC。回复丢失时保留原窗口、玩家和战果身份重试；只有
-// RPC 成功才确认意图。超过协调器保留期则停止自动补报，交给业务对账，不能再加分。
+// RPC 成功才确认意图。超过协调器保留期（reportDeadline）则停止自动补报，交给业务对账，不能再加分。
 func (a *alliance) drain(ctx context.Context, c activity.Coordinator, now time.Time) error {
 	s, e := a.read(ctx)
 	if e != nil {
@@ -128,7 +146,7 @@ func (a *alliance) drain(ctx context.Context, c activity.Coordinator, now time.T
 		if v.Sent {
 			continue
 		}
-		if now.Unix()-v.CreatedAt >= int64(time.Hour/time.Second) {
+		if now.Sub(time.Unix(v.CreatedAt, 0)) >= a.reportDeadline() {
 			return fmt.Errorf("contribution %s requires reconciliation", id)
 		}
 		if _, e = c.ApplyProgress(ctx, s.Key, v.Player, id, activity.ProgressDelta{Score: 10, Progress: 1}); e != nil {

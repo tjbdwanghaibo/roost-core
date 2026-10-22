@@ -40,7 +40,7 @@
 
 ### skill
 
-155 个实现文件、54 个测试文件。
+157 个实现文件、56 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -181,6 +181,8 @@
 | [spawn_numeric.go](../../../gameplay/skill/spawn_numeric.go) | 函数/方法或内部实现；见源码 |
 | [spawn_owned.go](../../../gameplay/skill/spawn_owned.go) | `OwnedSpawnSnapshot` |
 | [spawn_table.go](../../../gameplay/skill/spawn_table.go) | 函数/方法或内部实现；见源码 |
+| [stepper.go](../../../gameplay/skill/stepper.go) | `Driver`、`Stepper`、`StepperConfig`、`StepperStats`（`NewStepper`：与驱动无关的 Runtime 推进，契约见 [impl/10-time §2G](10-time.md#2g-技能与-buff-的推进与驱动)） |
+| [tick_clock.go](../../../gameplay/skill/tick_clock.go) | `TickClock`（`ErrTickClockInvalid`：时刻与技能 tick 的换算） |
 | [trace.go](../../../gameplay/skill/trace.go) | `TraceSink`、`TraceLimits`、`TraceEvent`、`TraceEventKind` |
 | [value.go](../../../gameplay/skill/value.go) | `Value`、`ValueDefinition`、`NullValueDefinition`、`IntValueDefinition`、`BoolValueDefinition`、`StringValueDefinition`、`ReferenceValueDefinition`、`ExpressionValueDefinition`、`AttributeReadValueDefinition`、`StateReadValueDefinition`、`AbilityStateReadValueDefinition` |
 | [value_optional.go](../../../gameplay/skill/value_optional.go) | 函数/方法或内部实现；见源码 |
@@ -212,12 +214,15 @@
 
 ### skill/combatcomponent
 
-3 个实现文件、5 个测试文件。
+7 个实现文件、9 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [adapter.go](../../../gameplay/skill/combatcomponent/adapter.go) | `Resolver`、`RevisionSource`、`EffectEvent`、`HostAdapter` |
+| [beat.go](../../../gameplay/skill/combatcomponent/beat.go) | `BeatConfig`、`BuffBeat`（`AttachBeat` / `BeatReg`：buff 的心跳驱动，契约见 [impl/10-time §2G](10-time.md#2g-技能与-buff-的推进与驱动)） |
+| [buff_stepper.go](../../../gameplay/skill/combatcomponent/buff_stepper.go) | `BuffDriveConfig`、`BuffStep`（`DriveBuffs` / `StepBuffs` / `StepBuffsToTick` / `BuffsPending` / `NextBuffDue` / `SyncBuffDriver` / `CloseBuffDriver` / `CurrentTick`：与驱动无关的 buff 推进） |
 | [component.go](../../../gameplay/skill/combatcomponent/component.go) | `CombatDao`、`CombatComponent`、`AttributeProjection` |
+| [runtime_beat.go](../../../gameplay/skill/combatcomponent/runtime_beat.go) | `RuntimeBeatConfig`、`RuntimeBeat`（`NewRuntimeBeat`、`Close`：`skill.Stepper` 的心跳驱动） |
 | [status_bridge.go](../../../gameplay/skill/combatcomponent/status_bridge.go) | `StatusBridge` |
 | [state_bridge.go](../../../gameplay/skill/combatcomponent/state_bridge.go) | `StateBinding`（`BindStates`、`HasBuffTag`：buff 标签 → `gameplay/state` 派生状态，D21 第 3 期，契约见 [impl/10-time §2D](10-time.md#2d-行为控制behavior取代冲突冻结与状态) 第 9 条） |
 
@@ -372,7 +377,7 @@
 ### skill/combatcomponent
 
 - [adapter_test.go](../../../gameplay/skill/combatcomponent/adapter_test.go)：`TestHostAdapterAppliesDamageWithEvents`、`TestHostAdapterHealShieldAndReads`、`TestHostAdapterShieldReportsEffectiveDeltaAndSkipsNoOpCommit`、`TestHostAdapterPayCostsIsAtomic`、`TestResourceCommandRefusesEachIllegalOperation`；其余 10 项见文件
-- [beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)、[runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)：buff 与 Runtime 的心跳（D20 P5），目录见 [impl/10-time §5](10-time.md#5-回归入口)
+- [beat_test.go](../../../gameplay/skill/combatcomponent/beat_test.go)、[runtime_beat_test.go](../../../gameplay/skill/combatcomponent/runtime_beat_test.go)、[buff_stepper_test.go](../../../gameplay/skill/combatcomponent/buff_stepper_test.go)：buff 与 Runtime 的心跳驱动、不走心跳的 buff 驱动（D20 P5），目录见 [impl/10-time §5](10-time.md#5-回归入口)
 - [benchmark_test.go](../../../gameplay/skill/combatcomponent/benchmark_test.go)
 - [component_test.go](../../../gameplay/skill/combatcomponent/component_test.go)：`TestNestUndoRollbackRestoresCombatStateExactly`、`TestCombatDaoPersistenceRoundTrip`、`TestNestUndoWorksThroughRealHandlers`、`TestCombatDaoProducesTransactionLocalMutationAndSyncMask`、`TestCombatMutationOutsideTransactionPanicsBeforeStateChange`；其余 6 项见文件
 - [refusals_test.go](../../../gameplay/skill/combatcomponent/refusals_test.go)：`TestDetachedTransactionFailuresAreReturnedNotDereferenced`、`TestReadsAndPaymentsRefuseUnknownEntitiesAndUnmappedResources`、`TestCombatDaoRefusesForeignPersistedStateAndEmptyPatches`、`TestStatusBridgeRefusesToModifyABuffWithoutACatalogPolicy`

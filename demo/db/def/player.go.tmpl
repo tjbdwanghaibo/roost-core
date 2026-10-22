@@ -12,18 +12,35 @@ type PlayerDao struct {
 	// run here and pays only when it is the one that recorded it. Entries
 	// are pruned by the same window that decides whether a claim is still
 	// admissible; see game/dungeon for why those have to be one number.
-	// PosX / PosY are where the player is, and this is the ONLY place that
-	// answers that. The scene's AOI keeps an index of positions so it can
-	// answer "who is near whom" without walking every player, but an index is
-	// not a second authority: it is written from the one path that writes
-	// these fields (MapComponent.MoveTo) and never read as the answer to
-	// "where is X". Persisted, so a player logs back in where they left; and
-	// synced, so moving is replicated by the same pipeline as everything else
-	// — no separate movement broadcast.
-	PosX int64 `bson:"pos_x" dao:"persist,sync"`
-	PosY int64 `bson:"pos_y" dao:"persist,sync"`
+	// PosX / PosY / SceneID / Facing are where the player is right now, and
+	// this is the ONLY place that answers that. The scene's AOI keeps an
+	// index of positions so it can answer "who is near whom" without walking
+	// every player, but an index is not a second authority: it is written
+	// from the one path that writes these fields (movement.MapBasic, reached
+	// through MapComponent) and never read as the answer to "where is X".
+	//
+	// They are `nopersist,sync` (DESIGN-TODO D20 decision 15): a moving
+	// player changes them on every heartbeat (10 a second), and writing that
+	// to the WAL and Mongo buys nothing — what a restart needs is where the
+	// player was, give or take a few steps. Synced, so moving is replicated
+	// by the same pipeline as everything else, no separate movement
+	// broadcast. Being DAO fields is also what rolls them back: a step whose
+	// transaction failed puts the player back where it was.
+	PosX int64 `bson:"pos_x" dao:"nopersist,sync"`
+	PosY int64 `bson:"pos_y" dao:"nopersist,sync"`
 	// SceneID is which scene the player is in, 0 for nowhere.
-	SceneID int64 `bson:"scene_id" dao:"persist,sync"`
+	SceneID int64 `bson:"scene_id" dao:"nopersist,sync"`
+	// Facing is the direction of the last step, 1/100 degree (movement.Facing).
+	Facing int32 `bson:"facing" dao:"nopersist,sync"`
+	// SavedSceneID / SavedPosX / SavedPosY are the stored copy of the above:
+	// written when the player leaves the scene and every actor.SavePeriod
+	// while it is on it (movement.MapConfig Save / SaveOnLeave / SaveEvery),
+	// only when the position changed since the last write, and read back as
+	// the preferred point when the player is placed on the map again.
+	// Persisted and not synced: nobody draws them.
+	SavedSceneID int64 `bson:"saved_scene_id" dao:"persist"`
+	SavedPosX    int64 `bson:"saved_pos_x" dao:"persist"`
+	SavedPosY    int64 `bson:"saved_pos_y" dao:"persist"`
 	// Equipment is what the player is wearing. It is the demo's one NESTED
 	// struct — a struct inside the DAO, holding a map of pointers to another
 	// struct — and it is here on purpose: real defects

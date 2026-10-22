@@ -1,0 +1,27 @@
+package handler
+
+import (
+	monster "{{MODULE}}/game/entities/monster"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// handlerSpawnMonster puts a monster the spawner just built on the map and
+// starts its AI, in a transaction that holds the Scene and the Monster.
+//
+// It is the third of the spawner's four steps (internal/service/game
+// spawner.go): the monster already exists (built, its body placed), and it is
+// already a replicated subject shown at that point; this transaction enters
+// it into the scene's movement (MapBasic.Enter with the scene's Space) and
+// gives it its patrol, clipped to the walkable ground. Its AI heartbeat
+// starts when this commits, so the first decision — and with it the first
+// step — comes after the monster is visible, never before.
+//
+//roost:nest rollback=undo durability=async
+func handlerSpawnMonster(target monster.IActorEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
+	var walkable func(spatial.Point) bool
+	if terrain := area.Terrain(); terrain != nil {
+		walkable = terrain.Walkable
+	}
+	return target.ActorComp().Spawn(area.ID(), area.Space(), spatial.Point{X: x, Y: y}, walkable)
+}

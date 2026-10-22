@@ -61,7 +61,7 @@ D20 §7 列的六项与本包的对应（前两组是 HB-STRUCTURES 时的原型
 | `Dispatch` 与 `DispatchBroadcast` 对照 | `TestDeliveryRun HB_MODE=x / z` | 已有，HB-STRUCTURES §4 |
 | `BenchmarkDriverDispatch`（假客户端） | `driver_test.go` `BenchmarkDriverDispatch`：正式驱动 + 假客户端（handler 在驱动 goroutine 上直接执行，回调为空），报 `cpu-ns/beat`、`driver-cores`、`beats/s`；ns/op 只是 1 / 目标速率 | 新增，待测 |
 | 真实 Nest + 空 handler 开环投递（10 / 25 / 50 万拍每秒） | `TestDriverOpenLoop`（`HB_OPENLOOP=1`，一个进程一档，结果追加到 `HB_OUT`）：完成数、跳拍、卡住、快池等待峰值、最大 worker 等待、间隔 P50 / P99、进程核数。不设环境变量时跑 2000 拍/s × 0.3 秒的小档断言 | 新增，待测 |
-| 快池被业务占满时的跳拍 | `TestBusyShortPoolSkipsBeatsAndResumes`（常跑，约 0.55 秒）：1 个 worker、队列 8 格、一条业务消息占住 worker 250ms，20 个 50ms 登记。断言：占用期间不执行、有在途 / 队列满跳拍、没有卡住与其他准入失败、投递 = 执行、放开后每个登记都恢复、恢复后的第一拍报告跳过数且 `Elapsed` 覆盖这段时间（不超过 1 秒上限） | 新增，契约检查（不是性能数字） |
+| 快池被业务占满时的跳拍 | `TestBusyShortPoolSkipsBeatsAndResumes`（常跑，约 0.3 秒）：1 个 worker、队列 8 格、一条业务消息占住 worker，20 个 50ms 登记；各阶段按事件推进（每个登记先跳一拍 → 占位消息真正开始 → 驱动累计跳拍达到每个登记两拍 → 放开 → 每个登记再跳两拍），不按墙钟窗口划分（2026-10-21 起，原按“占住 250ms、放开后 100ms 窗口里至少两拍”计，宿主负载下偶发失败）。断言：占用期间不执行、有在途 / 队列满跳拍、没有卡住与其他准入失败、投递 = 执行、放开后每个登记都恢复、恢复后的第一拍报告跳过数且 `Elapsed` 覆盖这段时间（不超过 1 秒上限） | 新增，契约检查（不是性能数字） |
 
 HB-STRUCTURES §7 记的“跳拍路径没有被压出来”由最后一项在功能上覆盖（在途与 `ErrQueueFull` 两种跳拍都出现：一次运行 `SkippedInflight:34 SkippedQueueFull:60`，`Stalled:0`，投递 126 = 执行 126）；规模与延迟的影响仍待开环投递测。
 
@@ -113,6 +113,19 @@ done
 ```
 
 冒烟（缩小规模，只证明能跑通、指标有数）可用 `-players=100 -entities=1000 -ticks=100` 与 `ROOST_NEST_GAME_ENTITIES=1000 ROOST_NEST_GAME_PLAYERS=100 ROOST_NEST_GAME_DURATION=10s`，结论栏写“正式对比待 v1.31 发版前压测”。
+
+**冒烟结果（2026-10-22，main `11988df8` + 夹具修正，宿主 1 分钟 loadavg 约 2～3，只证明能跑通，正式对比仍待 v1.31 发版前压测）**：
+
+| 命令（缩小规模） | 结果 |
+| --- | --- |
+| sync-aoi `-players=100 -entities=1000 -ticks=100 -move-driver=loop` | 跑通，帧 4177、改值→客户端 P50 / P99 26.2 / 49.0ms；进程以非零码退出是夹具自己的 50ms 延迟门槛（33 / 4570 个样本超 50ms），报告完整 |
+| 同上 `-move-driver=heartbeat` | 跑通，门槛内（0 / 4768 超 50ms），帧 4033、P50 / P99 11.8 / 42.0ms；移动者 20、`Delivered = Executed = 1109`、跳拍 / 停滞 / 动作失败 0、巡逻段 181；`beat_interval_ms` P50 100.0 / P99 200.1（946 个间隔里 29 个超过周期 + 50ms：间隔按“位置真的变了”的两次 `SetPos` 计，换段那一拍不动，所以出现 200ms，属口径，不是跳拍） |
+| 同上 + `-views-per-player=4 -apply-mode=sync` / `async` 心跳驱动 | 都跑通；sync 门槛内（P99 45.0ms），async 超门槛（P99 52.5ms，2220 / 19743 超 50ms，与 ApplyAsync 多约一个周期一致） |
+| nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`，`ENTITIES=1000 PLAYERS=100 DURATION=10s`，其余按本节第 3 条（EMBEDDED、SYNC、HZ=10） | `TestNestGameLoad` PASS：消息 999.4/s、心跳 9993.9/s，消息 / 心跳 p99 11.96 / 11.40ms，计数、终值、延迟检查都为 true |
+| 同上 `heartbeat`（`TestNestGameLoad` 的心跳驱动路径） | PASS：每 Unit 99～100 拍（期望 100）、间隔 p99 100.0ms、跳拍 0 / 0 / 0、停滞 0、`verified=true`；消息 999.5/s、心跳 9984.6/s，p99 11.50 / 0.040ms（心跳从回调开始计，口径见 §1） |
+| `scripts/perf/nest-game.sh --check-heartbeat` | PASS（`TestHeartbeatDriverTicksGeneratedUnits`：632 拍全部在事务里执行，跳拍 0） |
+
+sync-aoi 的 Nest 模式之前每 tick 调一次 `interest.Apply()`，Interest 单写者重构之后它会在压测线程执行排队移动，2026-10-22 已改为只在 direct 模式调用（`6cffbc03`，见 [INTEREST-SINGLE-WRITER-20261022](INTEREST-SINGLE-WRITER-20261022.md)）；上表在改后的夹具上跑。原始产物在当次 worktree 的 `artifacts/perf/`（未入库）。
 
 ## 5. 不能证明什么
 

@@ -1,6 +1,7 @@
 package actionflow
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,8 @@ import (
 type behaviorObserver struct {
 	behavior *Behavior
 	log      []string
+	// reasons 非 nil 时按动作 ID 记下结束原因。
+	reasons map[int64]ActionReason
 }
 
 func (o *behaviorObserver) OnActionEnd(id int64, _ ActionKind, reason ActionReason) {
@@ -29,6 +32,9 @@ func (o *behaviorObserver) OnActionEnd(id int64, _ ActionKind, reason ActionReas
 		step = m.MissionInfo().CurrentStep
 	}
 	o.log = append(o.log, fmt.Sprintf("action %d %d step %d", id, reason.ToActionResult(ActionStatusSuccess).Status, step))
+	if o.reasons != nil {
+		o.reasons[id] = reason
+	}
 }
 
 func (o *behaviorObserver) OnMissionEnd(m Mission, _ ActionReason) {
@@ -247,6 +253,26 @@ func TestAMissionStepTimesOutRetriesAndFailsOnTheMissionHeartbeat(t *testing.T) 
 	}
 }
 
+// Remote 托管实体运行中进入共享模式时框架停掉任务心跳（这里直接 Stop 模拟），回到独占后业务经 Beat().Sync() 恢复：
+// 动作组与任务心跳一起重新挂上，任务没有被结束（真实 Remote 下的同一流程见 movement 的 shared_test.go）。
+func TestBeatSyncResumesAStoppedMissionHeartbeat(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	behavior, _, d := newBeatBehaviorForTest(t, &now)
+	plan := MissionPlan{Steps: []MissionStep{{Action: 1, Param: &runnerTestAction{label: "never ends"}, Timeout: time.Minute}}}
+	if err := behavior.SetMission(1, plan); err != nil {
+		t.Fatal(err)
+	}
+	behavior.MissionReg().Stop()
+	behavior.Beat().Reg(1).Stop()
+	if err := behavior.Beat().Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if !behavior.MissionReg().Active() || !behavior.Beat().Reg(1).Active() || d.Registered() != 2 || behavior.CurMission() == nil {
+		t.Fatalf("after Sync: mission beat %v group beat %v registered %d mission %v",
+			behavior.MissionReg().Active(), behavior.Beat().Reg(1).Active(), d.Registered(), behavior.CurMission())
+	}
+}
+
 // 没有时限的步不挂任务心跳；从有时限的步走到没有时限的步，心跳停。取消的步不重试。
 func TestTheMissionHeartbeatFollowsTheCurrentStep(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -428,5 +454,111 @@ func TestBehaviorOnATimeDomainUsesDomainTime(t *testing.T) {
 	if !viaBehavior.seen.Now.Equal(want) || !viaRunner.seen.Now.Equal(want) {
 		t.Fatalf("on a time domain: Behavior action Now %v, runner action Now %v; want the domain time %v (business %v)",
 			viaBehavior.seen.Now, viaRunner.seen.Now, want, execution.Now)
+	}
+}
+
+// 实体卸载（删档、撤销新建同样）：组件在实体的 OnDestroy 里调 Behavior.OnDestroy，在途动作以“实体已销毁”结束（取消
+// 状态，观察者收到），排队项丢弃，任务结束，动作指标的 running 减回；之后经 Behavior 发起的动作被拒绝。
+func TestBehaviorOnDestroyEndsWhatIsRunning(t *testing.T) {
+	registry := metrics.NewRegistry()
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+
+	d := heartbeat.NewDriver(heartbeat.Config{Name: "destroy-test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	owner := &beatEntity{entity.NewEntityBase(5<<20, entity.EntityCategoryOther, true)}
+	host := d.NewHost(owner)
+	observer := &behaviorObserver{reasons: map[int64]ActionReason{}}
+	behavior, err := NewBehavior(owner, BehaviorConfig{
+		Registry:     newActionOnlyRegistry(t),
+		GroupForKind: func(kind ActionKind) (ActionGroup, bool) { return ActionGroup(kind), true },
+		Beat:         &BeatConfig{Host: host},
+		Observer:     observer,
+		Metrics:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.behavior = behavior
+	walk := &runnerTestAction{label: "walk"}
+	walkID, err := behavior.CreateAction(1, walk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuedID, err := behavior.EnqueueAction(1, &runnerTestAction{label: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := func() int64 {
+		for _, m := range registry.Snapshot() {
+			if m.Name == MetricActionsRunning {
+				return m.Value
+			}
+		}
+		return 0
+	}
+	if running() != 1 || d.Registered() != 1 {
+		t.Fatalf("before destroy: running %d registered %d", running(), d.Registered())
+	}
+	// 实体的 OnDestroy：组件依次收尾，最后撤销心跳宿主。
+	behavior.OnDestroy()
+	host.OnDestroy()
+	want := fmt.Sprintf("[action %d %d step -1 action %d %d step -1]", walkID, ActionStatusCanceled, queuedID, ActionStatusCanceled)
+	if running() != 0 || fmt.Sprint(observer.log) != want || walk.cancels != 1 || d.Registered() != 0 {
+		t.Fatalf("after destroy: running %d observer %v (want %s) walk cancels %d registered %d",
+			running(), observer.log, want, walk.cancels, d.Registered())
+	}
+	if reason := observer.reasons[walkID]; !errors.Is(reason.Err, ErrOwnerDestroyed) {
+		t.Fatalf("walk ended with %+v, want ErrOwnerDestroyed", reason)
+	}
+	if _, err := behavior.CreateAction(1, &runnerTestAction{}); !errors.Is(err, ErrBehaviorClosed) {
+		t.Fatalf("CreateAction after OnDestroy = %v", err)
+	}
+	if err := behavior.SetMission(1, MissionPlan{}); !errors.Is(err, ErrBehaviorClosed) {
+		t.Fatalf("SetMission after OnDestroy = %v", err)
+	}
+}
+
+// 换场景（换时间域）：Close 旧 Behavior（任务与动作以给定原因结束，任务心跳与组心跳离开驱动、释放名字），在同一心跳
+// 宿主上按新的域重建一个；新 Behavior 的组心跳与 "<Name>/mission" 都挂得上。
+func TestABehaviorCanBeRebuiltOnTheSameHostAfterClose(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	old, observer, d := newBeatBehaviorForTest(t, &now)
+	plan := func() MissionPlan {
+		return MissionPlan{Steps: []MissionStep{{Action: 1, Param: &runnerTestAction{label: "patrol"}, Timeout: time.Minute}}}
+	}
+	if err := old.SetMission(1, plan()); err != nil {
+		t.Fatal(err)
+	}
+	if d.Registered() != 2 {
+		t.Fatalf("before close: registered %d", d.Registered())
+	}
+	host := old.Beat().host
+	old.Close(NewActionReason("scene change"))
+	if d.Registered() != 0 || old.CurMission() != nil || old.CurAction(1) != nil || len(observer.log) != 2 {
+		t.Fatalf("after close: registered %d mission %v action %v observer %v", d.Registered(), old.CurMission(), old.CurAction(1), observer.log)
+	}
+	registry := newActionOnlyRegistry(t)
+	if err := registry.RegisterMission(1, func() Mission { return NewPlanMission(1) }); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := NewBehavior(host.Owner(), BehaviorConfig{
+		Registry:     registry,
+		GroupForKind: func(kind ActionKind) (ActionGroup, bool) { return ActionGroup(kind), true },
+		Beat:         &BeatConfig{Host: host},
+		Now:          func() time.Time { return now },
+		OnError:      func(err error) { t.Errorf("rebuilt behavior error: %v", err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuilt.SetMission(1, plan()); err != nil {
+		t.Fatal(err)
+	}
+	if d.Registered() != 2 || !rebuilt.MissionReg().Active() || !rebuilt.Beat().Reg(1).Active() {
+		t.Fatalf("rebuilt behavior: registered %d", d.Registered())
+	}
+	if _, err := old.CreateAction(1, &runnerTestAction{}); !errors.Is(err, ErrBehaviorClosed) {
+		t.Fatalf("CreateAction on a closed behavior = %v", err)
 	}
 }

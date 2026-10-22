@@ -3,41 +3,100 @@ package scene
 import (
 	"fmt"
 	"sync/atomic"
+	"time"
 
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/flags"
 	gamescene "{{MODULE}}/game/scene"
 	sceneruntime "{{MODULE}}/game/scene/runtime"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
 const EntityKindScene entity.EntityKind = 3
 
+// SyncNamespaceScene is the routing key every update of the replicated scene
+// (its time domain) carries on the wire.
+const SyncNamespaceScene = "scene"
+
+// SpawnPeriod is the scene's population heartbeat: how often it asks its
+// Refresh system what is missing. It is a latency budget for respawns, not a
+// simulation rate — a monster that should come back at t comes back within
+// one beat of it.
+const SpawnPeriod = time.Second
+
+// MaxTimeRate is how fast an operator may run this map (the GM's
+// scene_time_rate). The framework allows [0, 100]; the demo narrows it, since
+// at high rates every beat is a long step and movement gets coarse.
+const MaxTimeRate = 4
+
 // Scene is the map as an Entity: it has an id, a lifecycle the framework
 // drives, and it is addressable by GM commands and (later) by another
-// process. What it does NOT have is a DAO — a scene is rebuilt from
-// configuration on every start, so `noPersist=true lifetime=runtime_rebuild`
-// says exactly that and no storage is touched.
+// process. A scene is rebuilt from configuration on every start, so
+// `noPersist=true lifetime=runtime_rebuild` says exactly that and no storage
+// is touched; its one DAO (SceneDao, `nocoll`, all `nopersist,sync`) carries
+// what it replicates.
 //
 // The Entity owns a runtime made of systems and hands them out by interface
 // (Terrain, PathFind, …). The systems carry their own locks, so these
-// accessors are safe to call from anywhere: an endpoint, the spawner's timer,
-// the AOI tick. The Entity's own lock orders transactions over entity STATE,
+// accessors are safe to call from anywhere: an endpoint, a member's beat, the
+// AOI tick. The Entity's own lock orders transactions over entity STATE,
 // which is a different question from "can I stand here".
+//
+// Two things the scene does itself, on its own heartbeat and in its own lock
+// (DESIGN-TODO D20 decision 13: a room or a scene is an entity, its logical
+// frame is its own heartbeat registration):
+//
+//   - Population: every SpawnPeriod the "scene.spawn" beat asks Refresh what
+//     is missing. Deciding is all it does — building a Monster needs the
+//     lifecycle, the lifecycle needs the entity packages, and creating
+//     entities and registering replication subjects is not work for a
+//     business worker. The decision is handed over AFTER the beat's
+//     transaction commits (nest.AfterCommit), to the spawner installed by
+//     the game service, which creates, places, replicates and only then
+//     counts each one (internal/service/game/spawner.go has the order).
+//   - Time: the scene's time domain (gameplay/timedomain). Its parameters
+//     live in SceneDao, change only in this entity's lock (SetTimeRate), and
+//     are published to the members after the change commits; the members'
+//     Behaviors and AI are built on it (actor.WorldTime).
 //
 // Category: rank 2, the same rank as World — a scene is world-scoped and is
 // locked before any Player in a transaction that touches both.
 //
-//roost:entity id=3 entityKind=EntityKindScene category=entity.EntityCategoryWorld noPersist=true lifetime=runtime_rebuild
+//roost:entity id=3 entityKind=EntityKindScene category=entity.EntityCategoryWorld noPersist=true lifetime=runtime_rebuild sync=true syncNamespace="scene" subjectPacker=NewSceneSyncPacker
 type Scene struct {
 	*entity.EntityBase
 	entity.ComponentManager
+	entity.DaoManager
+	dao *db.SceneDao `dao:"scene"`
 
 	runtime   atomic.Pointer[sceneruntime.Runtime]
 	destroyed atomic.Bool
+
+	host     *heartbeat.Host
+	spawnReg *heartbeat.Reg
+	time     *timedomain.Domain
+
+	// space is what members are entered with (actor.InterestMoves once the
+	// replication bridge is up); spawns is who builds what the population
+	// beat decided. Both are installed by the game service after the scene
+	// exists, and read from the members' and the scene's own beats.
+	space  atomic.Pointer[spaceBox]
+	spawns atomic.Pointer[func([]gamescene.SpawnRequest)]
+	// spawnBeats counts the population beats that ran (tests, diagnostics).
+	spawnBeats atomic.Int64
 }
 
-// OnInitFinish builds the runtime. A scene that cannot build its map is not a
-// scene: the error stops the Entity from being created rather than producing
-// one whose Terrain() answers nil.
+type spaceBox struct{ space movement.Space }
+
+// OnInitFinish builds the runtime, the time domain and the population beat.
+// A scene that cannot build its map is not a scene: the error stops the
+// Entity from being created rather than producing one whose Terrain()
+// answers nil.
 func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
 	config := gamescene.DefaultConfig()
 	if param != nil {
@@ -52,17 +111,45 @@ func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
 	if err := runtime.Start(); err != nil {
 		return fmt.Errorf("scene %d: %w", s.ID(), err)
 	}
+	domain, err := timedomain.New(sceneTime{scene: s}, timedomain.Config{MinRate: 0, MaxRate: MaxTimeRate})
+	if err != nil {
+		runtime.Stop(entity.DestroyReasonCommon)
+		return fmt.Errorf("scene %d: time domain: %w", s.ID(), err)
+	}
+	s.host = actor.Heartbeat.NewHost(s)
+	reg, err := s.host.Register("scene.spawn", SpawnPeriod, s.spawnBeat)
+	if err != nil {
+		runtime.Stop(entity.DestroyReasonCommon)
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	// Not in a transaction (initialization): starts at once. The first beat
+	// is within one period; nothing is decided until a spawner is installed.
+	if err := reg.Start(); err != nil {
+		runtime.Stop(entity.DestroyReasonCommon)
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	s.spawnReg, s.time = reg, domain
 	s.runtime.Store(runtime)
+	// One map per process in this demo: its domain is the members' domain,
+	// and its terrain is what their walks are checked against.
+	actor.SetWorldTime(domain)
+	actor.SetWorldGround(runtime.Terrain())
 	return nil
 }
 
-// OnDestroy stops the systems in reverse order. It is idempotent: the
-// framework can destroy an entity from more than one path.
+// OnDestroy stops the population beat and the systems in reverse order. It
+// is idempotent: the framework can destroy an entity from more than one
+// path.
 func (s *Scene) OnDestroy(reason entity.EntityDestroyReason) {
 	if !s.destroyed.CompareAndSwap(false, true) {
 		return
 	}
+	if s.host != nil {
+		s.host.OnDestroy()
+	}
+	actor.ReleaseWorldTime(s.time)
 	if runtime := s.runtime.Swap(nil); runtime != nil {
+		actor.ReleaseWorldGround(runtime.Terrain())
 		runtime.Stop(reason)
 	}
 }
@@ -91,6 +178,127 @@ func (s *Scene) Refresh() gamescene.Refresh {
 	return nil
 }
 
+// Space is what a member is entered with (movement.MapBasic.Enter): the
+// installed one, or actor.Nowhere when nothing is installed (a scene with no
+// replication bridge — moves are reported to nobody).
+func (s *Scene) Space() movement.Space {
+	if box := s.space.Load(); box != nil {
+		return box.space
+	}
+	return actor.Nowhere{}
+}
+
+// SetSpace installs the members' Space. The game service does it once, after
+// the replication bridge is built and before anyone can be placed.
+func (s *Scene) SetSpace(space movement.Space) {
+	if space == nil {
+		s.space.Store(nil)
+		return
+	}
+	s.space.Store(&spaceBox{space: space})
+}
+
+// SetSpawner installs who builds what the population beat decides. The
+// function runs after the beat's transaction committed, on the Nest worker,
+// outside the scene's lock: it must only hand the requests over (a
+// non-blocking send), never build entities itself.
+func (s *Scene) SetSpawner(spawn func([]gamescene.SpawnRequest)) {
+	if spawn == nil {
+		s.spawns.Store(nil)
+		return
+	}
+	s.spawns.Store(&spawn)
+}
+
+// SpawnReg is the population beat's registration (tests).
+func (s *Scene) SpawnReg() *heartbeat.Reg { return s.spawnReg }
+
+// SpawnBeats is how many population beats have run.
+func (s *Scene) SpawnBeats() int64 { return s.spawnBeats.Load() }
+
+// TimeDomain is the scene's time domain. Members read it from any goroutine
+// (Now / Rate / Read: frozen once per message); only this entity's handlers
+// change it (SetTimeRate).
+func (s *Scene) TimeDomain() *timedomain.Domain { return s.time }
+
+// SetTimeRate changes how fast this map runs, from the business time of the
+// current message on. Only under this scene's lock (its own Nest handler):
+// it writes SceneDao (rolled back with the transaction, replicated to every
+// member) and publishes to the members after the commit. A rate outside
+// [0, MaxTimeRate] is refused and nothing changes.
+func (s *Scene) SetTimeRate(rate float64) error {
+	if s.time == nil {
+		return fmt.Errorf("scene %d: no time domain", s.ID())
+	}
+	return s.time.SetRate(rate)
+}
+
+// spawnBeat is the population heartbeat: decide what is missing, and hand it
+// over once the decision is committed.
+//
+// Two rules make "decide here, build elsewhere" safe:
+//
+//   - Refresh counts what it has been TOLD exists (Spawned), not what it has
+//     been asked for, so a request handed over and not yet built is asked for
+//     again by the next beat. The spawner drops a batch while it is still
+//     building the previous one; a duplicate can therefore not be built.
+//   - The hand-over is AfterCommit: a beat whose transaction did not commit
+//     decided nothing. The scene's own state is not changed here at all, so
+//     there is nothing to roll back — the commit is only the "this beat
+//     happened" gate.
+//
+// The kill switch is read here, before deciding: off means the population
+// drains as monsters are killed, not that anything alive disappears.
+func (s *Scene) spawnBeat(beat heartbeat.Beat) error {
+	s.spawnBeats.Add(1)
+	spawn := s.spawns.Load()
+	if spawn == nil || !flags.Enabled(flags.MonsterSpawn) {
+		return nil
+	}
+	refresh := s.Refresh()
+	if refresh == nil {
+		return nil
+	}
+	due := refresh.Due(beat.Now)
+	if len(due) == 0 {
+		return nil
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil {
+		tx.AfterCommit(func() { (*spawn)(due) })
+		return nil
+	}
+	(*spawn)(due)
+	return nil
+}
+
+// sceneTime is timedomain.Fields over SceneDao. The generated setters record
+// their undo in the transaction and the sync mark; PublishSyncDirty hands the
+// mark to the replicated subject.
+type sceneTime struct{ scene *Scene }
+
+func (f sceneTime) TimeDomain() timedomain.State {
+	dao := f.scene.Dao()
+	return timedomain.State{AnchorBusinessNano: dao.GetTimeAnchorBusiness(), AnchorDomainNano: dao.GetTimeAnchorDomain(), Rate: dao.GetTimeRate()}
+}
+
+func (f sceneTime) SetTimeDomain(state timedomain.State) {
+	dao := f.scene.Dao()
+	dao.SetTimeAnchorBusiness(state.AnchorBusinessNano)
+	dao.SetTimeAnchorDomain(state.AnchorDomainNano)
+	dao.SetTimeRate(state.Rate)
+	f.scene.PublishSyncDirty()
+}
+
+// PublishSyncDirty hands the DAO's accumulated sync mask to the subject.
+func (s *Scene) PublishSyncDirty() {
+	if s == nil {
+		return
+	}
+	if mask := s.Dao().DirtyTracker().TakeSyncDirty(); mask != 0 {
+		s.MarkSyncDirty(mask)
+	}
+}
+
 // ISceneEntity is the lock-safe business view for Nest handlers that address
 // a Scene.
 type ISceneEntity interface {
@@ -98,4 +306,7 @@ type ISceneEntity interface {
 	Terrain() gamescene.Terrain
 	PathFind() gamescene.PathFind
 	Refresh() gamescene.Refresh
+	Space() movement.Space
+	TimeDomain() *timedomain.Domain
+	SetTimeRate(rate float64) error
 }

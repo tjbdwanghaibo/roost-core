@@ -147,7 +147,7 @@ func BenchmarkAOIEventCollection(b *testing.B) {
 	}
 }
 
-// ---- 视野（D19）：只测登记表与应用侧扇出（syncViewsLocked / drainAOILocked 写进 held），不含 Manager 订阅与打包 ----
+// ---- 视野（D19）：只测登记表与应用侧扇出（drainLogLocked / drainAOILocked 写进 held），不含 Manager 订阅与打包 ----
 
 func benchmarkInterest(b *testing.B) *Interest {
 	b.Helper()
@@ -170,7 +170,7 @@ func benchmarkInterest(b *testing.B) *Interest {
 // settleViews 把登记表的变更与 AOI 事件写进 held，再丢掉结算标记：基准只量扇出，不量 Manager。
 func settleViews(in *Interest) {
 	in.mu.Lock()
-	in.syncViewsLocked()
+	in.drainLogLocked()
 	in.drainAOILocked()
 	clear(in.touched)
 	in.mu.Unlock()

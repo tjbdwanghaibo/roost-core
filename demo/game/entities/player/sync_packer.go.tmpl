@@ -29,7 +29,7 @@ type playerSyncPacker struct{ player *Player }
 
 var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID"}, Priority: 0},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID"}, Priority: 10},
 )
 

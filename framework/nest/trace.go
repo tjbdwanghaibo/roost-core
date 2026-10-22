@@ -3,6 +3,7 @@ package nest
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -277,15 +278,37 @@ func nestParamTypes(params []any) []string {
 	return ret
 }
 
+// nestParamSamples 给慢派发 trace 取参数样本。它可能在 handler 还在执行时由计时 goroutine 调用（result=running），
+// 不能按反射读任意参数：handler 正在改写的指针、切片、map 或含引用的值会与它发生数据竞争（-race 报告，日志里是撕裂
+// 的值）。所以只打印两类：按值装箱的标量（布尔、数字、字符串：装进 interface 时已复制，之后不会变），以及实现了
+// fmt.GoStringer 的参数——实现它即表示作者保证 GoString 可以在 handler 执行期间从另一个 goroutine 调用（只读构造后
+// 不变的字段，例如 *heartbeat.Reg）。其余只给类型名，内容要进 trace 就让参数类型实现 GoString。
 func nestParamSamples(params []any) []string {
 	if len(params) == 0 {
 		return nil
 	}
 	ret := make([]string, len(params))
 	for i, param := range params {
-		ret[i] = truncateNestDebugText(fmt.Sprintf("%#v", param), 256)
+		ret[i] = truncateNestDebugText(nestParamSample(param), 256)
 	}
 	return ret
+}
+
+func nestParamSample(param any) string {
+	if param == nil {
+		return "nil"
+	}
+	if stringer, ok := param.(fmt.GoStringer); ok {
+		return stringer.GoString()
+	}
+	switch reflect.TypeOf(param).Kind() {
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128, reflect.String:
+		return fmt.Sprintf("%#v", param)
+	default:
+		return fmt.Sprintf("<%T>", param)
+	}
 }
 
 func truncateNestDebugText(text string, limit int) string {

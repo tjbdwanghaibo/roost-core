@@ -31,7 +31,8 @@ type Monster struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
-	body *BodyComponent  `comp:"CompTypeBody"`
+	body  *BodyComponent  `comp:"CompTypeBody"`
+	act   *ActorComponent `comp:"CompTypeActor"`
 	dao  *db.MonsterDao  `dao:"monster"`
 }
 

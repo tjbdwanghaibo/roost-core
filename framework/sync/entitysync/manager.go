@@ -158,6 +158,9 @@ type Manager struct {
 	pendingOverlap   int                    // 同时在 pending 与 waitingSnapshots 中的 subject 数，pendingMu
 	waitingSnapshots map[int64]snapshotWait // pendingMu；仅保存重查请求，不保存旧订阅意图
 	deferrals        map[int64]deferral     // pendingMu；被 Flush 暂缓的原因与起点，只供 Drain 诊断
+	// resets 是可能欠空 Full 的会话（见 session.owesEmptyFull），pendingMu；Flush 取走后逐个复核，
+	// 仍欠且已没有任何订阅才发。
+	resets map[SessionID]struct{}
 
 	// flushGate 串行化捕获与关闭，等待者可随 context 取消退出。
 	flushGate chan struct{}
@@ -264,6 +267,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		sessions:         make(map[SessionID]*session),
 		opening:          make(map[SessionID]struct{}),
 		pending:          make(map[int64]struct{}),
+		resets:           make(map[SessionID]struct{}),
 		waitingSnapshots: make(map[int64]snapshotWait),
 		flushGate:        make(chan struct{}, 1),
 	}, nil
@@ -922,6 +926,7 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.clearRetracted()
 	m.pendingMu.Lock()
 	clear(m.pending)
+	clear(m.resets)
 	clear(m.waitingSnapshots)
 	clear(m.deferrals)
 	m.waitingOrder.Init()

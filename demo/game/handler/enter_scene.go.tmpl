@@ -6,8 +6,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// handlerEnterScene puts a player on the map, at the position they left from
-// when that point is still usable and at the nearest free one when it is not.
+// handlerEnterScene puts a player on the map, at the position it was last
+// saved at when that point is still usable and at the nearest free one when
+// it is not.
 //
 // Resolving the point is the scene's job (PathFind.Place searches outward in
 // rings), writing it is the player's: a remembered position can become
@@ -15,9 +16,23 @@ import (
 // on every start — and a login that failed because the ground changed would
 // be a login nobody can fix.
 //
+// The remembered position is the SAVED one (PlayerDao.SavedPosX/Y): the live
+// position is `nopersist` (D20 decision 15) and is zero in a freshly loaded
+// player. A player that is still on this map (a reconnect while it stayed
+// loaded) keeps where it is.
+//
+// The player is entered with the scene's Space (actor.InterestMoves): from
+// here on every step it takes is queued for the AOI in the step's own
+// transaction. Joining the replication — the subject, the session — is the
+// endpoint's next call (Scene.Join), after this commits.
+//
 //roost:nest rollback=undo durability=async
 func handlerEnterScene(target player.IMapEntity, area sceneentity.ISceneEntity, spawnX int64, spawnY int64) (spatial.Point, error) {
-	preferred := target.MapComp().Pos()
+	component := target.MapComp()
+	if component.InScene() && component.SceneID() == area.ID() {
+		return component.Pos(), nil
+	}
+	preferred := component.SavedPos()
 	if preferred.X == 0 && preferred.Y == 0 {
 		preferred = spatial.Point{X: spawnX, Y: spawnY}
 	}
@@ -25,8 +40,5 @@ func handlerEnterScene(target player.IMapEntity, area sceneentity.ISceneEntity, 
 	if err != nil {
 		return spatial.Point{}, err
 	}
-	if err := target.MapComp().EnterScene(area.ID(), at); err != nil {
-		return spatial.Point{}, err
-	}
-	return at, nil
+	return component.EnterScene(area.ID(), area.Space(), at)
 }

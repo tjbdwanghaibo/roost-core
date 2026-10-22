@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -36,13 +37,14 @@ var (
 // viewLimitMetric 计数被上限拒绝的挂接，reason 为 views_per_player 或 players_per_view。
 const viewLimitMetric = "entitysync_interest_view_limit_rejected_total"
 
-// view 是登记表里的一个视野。登记表是视野、挂接与成员的唯一事实，由 viewMu 保护；应用侧（mu）只保存 AOI 状态与
-// 已生效的空间视野挂接（spatialPlayers）。
+// view 是登记表里的一个视野。登记表是视野、挂接与成员的唯一事实，由登记侧锁保护；应用侧（Interest.mu）只保存
+// AOI 状态与已生效的空间视野挂接（spatialPlayers）。
 type view struct {
 	id     ViewID
-	handle int64 // 内部编号：空间视野是 AOI 观察者编号，也是 held 里的来源键
+	handle int64 // 内部编号：空间视野是 AOI 观察者编号，也是 held 里的来源键；不复用，所以视野这一侧天然有代际
 	owner  int64 // 主视野所属玩家；业务视野为 0
 	// 空间视野：最近一次显式给的视点、归一后的视野与跟随实体（0 为不跟随）。跟随实体在场时视点取实体位置。
+	// 主视野的 sight / follow 也记在这里，供登记侧判断（SetObserverView 的同值与限速、Watch 的“先 Leave”、ObserverView）。
 	spatial bool
 	at      spatial.Point
 	sight   ObserverView
@@ -64,6 +66,16 @@ const (
 	opSpatialAttach
 	opSpatialDetach
 	opSpatialRemove
+	// 以下是玩家与目标的命令（原直接调用，见 interest.go）。subject / gen：目标实体与它这次的代际号。
+	opEnter       // player 的主视野（handle）跟随 subject 放在 at（sight），subject 登记在 at，self
+	opWatch       // player 的主视野（handle）放在 at（sight），不跟随
+	opShow        // subject 登记 / 移到 at
+	opMove        // subject 直接放到 at（跟随它的视野一起移动）
+	opLeave       // 撤掉 player 的 self 与主视野（handle，0 为没有）；subject 非 0 时撤出空间索引
+	opHide        // subject 撤出空间索引
+	opMoveView    // 主视野（handle）的视点移到 at
+	opMainView    // 主视野（handle）换视野 sight
+	opResubscribe // player 持有的 pair 下一次结算重新说给 Manager
 )
 
 type viewOp struct {
@@ -77,13 +89,16 @@ type viewOp struct {
 	at       spatial.Point
 	sight    ObserverView
 	follow   int64
+	subject  int64
+	gen      uint64
 	// positioned：at 是这次显式给的视点（定义、MoveSpatialView）；为假时（换视野、换跟随）视点留在 AOI 里的当前位置，
 	// 例如不再跟随时停在跟随到的地方，而不是回到很久以前的显式位置。
 	positioned bool
 }
 
-// viewRegistry 是视野登记表：业务的视野操作只取 mu（viewMu），改事实、记一条 viewOp，不等待空间计算与 Manager；
-// Interest 在下一次 Apply / 政策阶段（持 Interest.mu）按顺序应用 ops。
+// viewRegistry 是登记侧：Interest 全部写入口的唯一入口状态，一把短锁（mu）。它保存视野登记表、已登记的目标与代际号、
+// 主视野限速，以及有序日志（门控事实与命令）。业务线程只取这把锁：校验、改登记事实、追加一条日志，不等待空间计算
+// 与 Manager；Interest 的应用方（持 Interest.mu）按顺序执行日志。锁序 Interest.mu → viewRegistry.mu。
 type viewRegistry struct {
 	mu         sync.Mutex
 	closed     bool
@@ -92,15 +107,25 @@ type viewRegistry struct {
 	attached   map[int64]map[*view]struct{} // 玩家 → 挂接的视野（含主视野）
 	memberOf   map[int64]map[*view]struct{} // 实体 → 含它的关系视野
 	nextHandle int64
-	ops        []viewOp
-	// active：记过业务视野变更之后为真，此后 Manager 的政策阶段结算并重试本 Interest（与排队事实同一条规则）。
+	// subjects：已登记的目标 → 当前代际号（Enter / Show / Move 换新代际，Leave / Hide 删除）。nextGen 全 Interest 递增。
+	subjects map[int64]uint64
+	nextGen  uint64
+	// viewChanged：SetObserverView 的限速，按玩家记最近一次生效的时间。
+	viewChanged map[int64]time.Time
+	// log：有序日志；facts：门控事实的预算占用（日志里的、应用中的与已应用未结算的）。
+	log   []logEntry
+	facts int
+	// active：登记过任何条目之后为真，此后 Manager 的政策阶段结算并重试本 Interest。
 	active     bool
 	maxViews   int
 	maxPlayers int
-	wake       func()
+	// push 追加一条命令之后的唤醒（Interest.pushedLocked），持 mu 调用、不阻塞。
+	push func()
 }
 
 func (r *viewRegistry) init(maxViews, maxPlayers int) {
+	r.subjects = make(map[int64]uint64)
+	r.viewChanged = make(map[int64]time.Time)
 	r.views = make(map[ViewID]*view)
 	r.mains = make(map[int64]*view)
 	r.attached = make(map[int64]map[*view]struct{})
@@ -108,35 +133,19 @@ func (r *viewRegistry) init(maxViews, maxPlayers int) {
 	r.maxViews, r.maxPlayers = maxViews, maxPlayers
 }
 
-func (r *viewRegistry) close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.closed = true
-	r.ops = nil
-}
-
-// record 追加一条变更；唤醒 Manager 的政策阶段，排队模式下视野变化与事实同一批说给 Manager。调用方持有 r.mu。
+// record 追加一条命令并唤醒应用方（同步模式提醒 Manager 的政策阶段，异步模式通知应用线程）。调用方持有 r.mu。
 func (r *viewRegistry) record(op viewOp) {
 	r.active = true
-	r.ops = append(r.ops, op)
-	if len(r.ops) == 1 && r.wake != nil {
-		r.wake()
+	r.log = append(r.log, logEntry{op: &op})
+	if r.push != nil {
+		r.push()
 	}
 }
 
-// state 报告是否有未应用的变更，以及是否记过业务视野变更。
-func (r *viewRegistry) state() (pending, active bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.ops) > 0, r.active
-}
-
-func (r *viewRegistry) take() []viewOp {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ops := r.ops
-	r.ops = nil
-	return ops
+// newGen 给目标分配一个新的代际号。调用方持有 r.mu。
+func (r *viewRegistry) newGen() uint64 {
+	r.nextGen++
+	return r.nextGen
 }
 
 func (r *viewRegistry) newHandle() int64 {
@@ -150,10 +159,9 @@ func (r *viewRegistry) mainOf(playerID int64) *view {
 	return r.mains[playerID]
 }
 
-// mainView 返回玩家的主视野，没有就建一个（计入 MaxViewsPerPlayer）。主视野的放置由调用方（持 Interest.mu）直接做，不记 op。
+// mainView 返回玩家的主视野，没有就建一个（计入 MaxViewsPerPlayer）。放置由调用方记一条 opEnter / opWatch。
+// 调用方持有 r.mu。
 func (r *viewRegistry) mainView(playerID int64) (*view, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
 		return nil, errors.New("policy: interest is closed")
 	}
@@ -195,10 +203,9 @@ func (r *viewRegistry) detachLocked(playerID int64, v *view) {
 	}
 }
 
-// leave 解除玩家的全部挂接、删掉主视野（返回它，由调用方撤出 AOI），并把实体从所有关系视野里去掉。
+// leave 解除玩家的全部挂接、删掉主视野（返回它，由调用方记 opLeave 撤出 AOI），并把实体从所有关系视野里去掉。
+// 调用方持有 r.mu。
 func (r *viewRegistry) leave(playerID, entityID int64) *view {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	main := r.mains[playerID]
 	delete(r.mains, playerID)
 	views := make([]*view, 0, len(r.attached[playerID]))
@@ -219,12 +226,6 @@ func (r *viewRegistry) leave(playerID, entityID int64) *view {
 		r.forgetLocked(entityID)
 	}
 	return main
-}
-
-func (r *viewRegistry) forget(entityID int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.forgetLocked(entityID)
 }
 
 // forgetLocked 把实体从所有关系视野的成员里去掉（Hide / Leave）：关系视野本身保留。
@@ -279,10 +280,10 @@ func (r *viewRegistry) recordPlace(v *view, positioned bool) {
 	r.record(viewOp{kind: opSpatialPlace, handle: v.handle, at: v.at, sight: v.sight, follow: v.follow, positioned: positioned})
 }
 
-// ---- 业务视野 API（只取 viewMu，不进 Nest、不排队、不等待空间计算） ----
+// ---- 业务视野 API（只取登记侧锁，不进 Nest、不走提交门、不等待空间计算） ----
 //
-// 视野的增删改、成员变更与挂接都是直接调用：参数在调用时校验并写进登记表，效果由下一次 Apply（或排队模式下 Manager 的
-// 政策阶段）按调用顺序应用。它们不走提交门：事务里决定的视野变化（入盟、放眼）由业务在提交之后调用。
+// 视野的增删改、成员变更与挂接都是直接调用：参数在调用时校验并写进登记表，记一条命令，由应用方按调用顺序执行
+// （与 Enter / QueueMove 等同一条日志）。它们不走提交门：事务里决定的视野变化（入盟、放眼）由业务在提交之后调用。
 
 // DefineSpatialView 定义一个空间视野：视点 at、视野 sight（LOD 层级与视野大小，归一规则同 SetObserverView，零值是缺省视野）、
 // 可选跟随实体 follow（0 为不跟随）。跟随的实体在场时视点取它的位置并随它移动，它自己不进这个视野的可见集。
@@ -608,7 +609,7 @@ func (in *Interest) ViewVisible(id ViewID) []int64 {
 	if in.closed {
 		return nil
 	}
-	in.syncViewsLocked()
+	in.drainLogLocked()
 	r := &in.registry
 	r.mu.Lock()
 	v := r.views[id]
@@ -630,45 +631,66 @@ func sortedIDs(set map[int64]struct{}) []int64 {
 
 // ---- 应用侧（持 Interest.mu） ----
 
-// syncViewsLocked 按调用顺序应用登记表里的变更。每个持 mu 的入口先调用它，保证直接操作（Enter、Move……）看到的
-// 视野与调用顺序一致；它不在 AOI 的批次写阶段内调用。
-func (in *Interest) syncViewsLocked() {
-	ops := in.registry.take()
-	for _, op := range ops {
-		switch op.kind {
-		case opRelation:
-			source := contribution{view: op.handle}
-			for _, playerID := range op.players {
-				for _, subject := range op.subjects {
-					in.contribute(pair{observer: playerID, subject: subject}, source, op.layer, op.enter)
-				}
+// runOpLocked 执行日志里的一条命令（应用侧，持 mu，在 AOI 批次写阶段之外）。命令在登记时已经校验过参数，这里只按
+// 当时的事实执行；它们引用的视野或目标若已被更早的命令撤掉，什么也不做。
+func (in *Interest) runOpLocked(op *viewOp) {
+	switch op.kind {
+	case opRelation:
+		source := contribution{view: op.handle}
+		for _, playerID := range op.players {
+			for _, subject := range op.subjects {
+				in.contribute(pair{observer: playerID, subject: subject}, source, op.layer, op.enter)
 			}
-		case opSpatialPlace:
-			if in.spatialPlayers[op.handle] == nil {
-				in.spatialPlayers[op.handle] = make(map[int64]struct{})
-			}
-			at := op.at
-			if observer := in.aoi.observers[op.handle]; !op.positioned && observer != nil {
-				at = observer.at
-			}
-			in.placeViewLocked(op.handle, op.follow, at, op.sight)
-		case opSpatialAttach:
-			in.drainAOILocked()
-			players := in.spatialPlayers[op.handle]
-			if players == nil {
-				continue
-			}
-			players[op.player] = struct{}{}
-			in.seedSpatialLocked(op.player, op.handle, true)
-		case opSpatialDetach:
-			in.drainAOILocked()
-			if players := in.spatialPlayers[op.handle]; players != nil {
-				delete(players, op.player)
-				in.seedSpatialLocked(op.player, op.handle, false)
-			}
-		case opSpatialRemove:
-			in.removeSpatialLocked(op.handle)
 		}
+	case opSpatialPlace:
+		if in.spatialPlayers[op.handle] == nil {
+			in.spatialPlayers[op.handle] = make(map[int64]struct{})
+		}
+		at := op.at
+		if observer := in.aoi.observers[op.handle]; !op.positioned && observer != nil {
+			at = observer.at
+		}
+		in.placeViewLocked(op.handle, op.follow, at, op.sight)
+	case opSpatialAttach:
+		in.drainAOILocked()
+		players := in.spatialPlayers[op.handle]
+		if players == nil {
+			return
+		}
+		players[op.player] = struct{}{}
+		in.seedSpatialLocked(op.player, op.handle, true)
+	case opSpatialDetach:
+		in.drainAOILocked()
+		if players := in.spatialPlayers[op.handle]; players != nil {
+			delete(players, op.player)
+			in.seedSpatialLocked(op.player, op.handle, false)
+		}
+	case opSpatialRemove:
+		in.removeSpatialLocked(op.handle)
+	case opEnter:
+		in.placeSubjectLocked(op.subject, op.at, op.gen)
+		in.placeMainLocked(op.player, op.handle, op.subject, op.at, op.sight)
+		if in.selfVisible {
+			if old, ok := in.selfOf[op.player]; ok && old != op.subject {
+				in.contribute(pair{observer: op.player, subject: old}, contribution{}, entity.SyncProfile{}, false)
+			}
+			in.selfOf[op.player] = op.subject
+			in.contribute(pair{observer: op.player, subject: op.subject}, contribution{}, in.selfLayer, true)
+		}
+	case opWatch:
+		in.placeMainLocked(op.player, op.handle, 0, op.at, op.sight)
+	case opShow, opMove:
+		in.placeSubjectLocked(op.subject, op.at, op.gen)
+	case opLeave:
+		in.leaveLocked(op.player, op.handle, op.subject)
+	case opHide:
+		in.removeSubjectLocked(op.subject)
+	case opMoveView:
+		_ = in.aoi.MoveObserver(op.handle, op.at)
+	case opMainView:
+		_, _ = in.aoi.SetObserverView(op.handle, op.sight)
+	case opResubscribe:
+		in.resubscribeLocked(op.player)
 	}
 }
 

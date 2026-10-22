@@ -1,0 +1,13 @@
+03:17:42 after r1 start loadavg={ 1.61 2.66 2.83 }
+03:17:47 after r1 done loadtest rc=0 object_limit=0
+03:18:29 base r1 start loadavg={ 1.71 2.55 2.78 }
+03:18:35 base r1 done loadtest rc=0 object_limit=0
+03:19:13 base r2 start loadavg={ 1.80 2.43 2.72 }
+03:19:18 base r2 done loadtest rc=0 object_limit=0
+03:19:55 after r2 start loadavg={ 2.24 2.45 2.71 }
+03:20:00 after r2 done loadtest rc=0 object_limit=0
+03:20:38 after r3 start loadavg={ 1.83 2.31 2.65 }
+03:20:43 after r3 done loadtest rc=0 object_limit=0
+03:21:21 base r3 start loadavg={ 1.76 2.22 2.60 }
+03:21:26 base r3 done loadtest rc=0 object_limit=0
+03:21:39 all done

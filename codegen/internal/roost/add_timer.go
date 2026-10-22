@@ -291,6 +291,11 @@ func addTimer(root string, m Manifest, options AddOptions) ([]string, error) {
 
 // timerService 选运行该实体 Nest 的服务：--service，或工程里唯一一个装了 nest 的业务服务。
 func timerService(m Manifest, requested string) (string, error) {
+	return nestService(m, requested, "roost add timer", "the timer driver delivers ticks through Nest")
+}
+
+// nestService 选运行实体 Nest 的业务服务：requested，或工程里唯一一个装了 nest 的业务服务。command / why 只用于报错。
+func nestService(m Manifest, requested, command, why string) (string, error) {
 	var candidates []string
 	for _, name := range sortedServiceNames(m) {
 		if m.isFrameworkService(name) {
@@ -305,7 +310,7 @@ func timerService(m Manifest, requested string) (string, error) {
 			return "", fmt.Errorf("unknown service %q", requested)
 		}
 		if !contains(candidates, requested) {
-			return "", fmt.Errorf("service %q does not run Nest; the timer driver delivers ticks through Nest (roost add mod nest -service %s)", requested, requested)
+			return "", fmt.Errorf("service %q does not run Nest; %s (roost add mod nest -service %s)", requested, why, requested)
 		}
 		return requested, nil
 	}
@@ -313,7 +318,7 @@ func timerService(m Manifest, requested string) (string, error) {
 	case 1:
 		return candidates[0], nil
 	case 0:
-		return "", errors.New("roost add timer needs a service with the nest mod; run: roost add mod nest -service <service>")
+		return "", errors.New(command + " needs a service with the nest mod; run: roost add mod nest -service <service>")
 	default:
 		return "", fmt.Errorf("services %s all run Nest; choose the one that loads this entity with --service", strings.Join(candidates, ", "))
 	}
