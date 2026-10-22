@@ -84,7 +84,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 | | ApplySync（缺省） | ApplyAsync |
 | --- | --- | --- |
-| 执行 | Flush 的政策阶段：一步接一步，直到没有可应用的条目或耗时预算用完（预算 = 同步周期的一半），然后结算 | 应用线程连续排空（同现在）；政策阶段只结算 |
+| 执行 | Flush 的政策阶段：一步接一步，直到没有可应用的条目或预计下一步加结算会超出耗时预算（预算 = 同步周期的一半，执行与结算一起计；2026-10-22 起，见 §12），然后结算 | 应用线程连续排空（同现在）；政策阶段只结算 |
 | 结果何时可见 | 提交 / 调用之后的下一次 Flush（积压超过预算时顺延，on_change 下立即再来一轮） | 应用线程走到之后的那次 Flush |
 | 显式 `Apply()` | 两种模式相同：在调用方线程排空并结算，返回本次的拒绝；会等正在进行的一步。**不能在 Nest 快池上调用**（测试、工具、离线驱动用） |
 
@@ -195,7 +195,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 - 登记侧：`view.go:102` `viewRegistry`（日志、目标代际、限速、预算），`view.go:137` `record`；写入口 `interest.go:378` `Enter`、`:487` `SetObserverView`、`:545` `leave`、`:599` `Hide` 等，`interest_queue.go:65` `queueFact`——都只取 `registry.mu`。
 - 单应用方：`interest_queue.go:229` `runLogLocked`（`:283` 切开处之后的命令与事实留到下一步，`:294` 代际号不符的事实作废），`view.go:636` `runOpLocked`；撤除换代 `interest.go:663` `leaveLocked` / `:678` `removeSubjectLocked` 记 `departed*`，`:873` `settlePair` 先退订再订阅。
-- 吞吐：`interest_queue.go:353` `settleQueued`，`:366` 预算循环，`:137` `syncApplyBudgetFor`。
+- 吞吐：`interest_queue.go:353` `settleQueued`，`:366` 预算循环，`:137` `syncApplyBudgetFor`。（2026-10-22 起预算循环改为 §12 的规则，强制点见 §12.5。）
 - `Apply`：`interest.go:779`（取 `mu`，给测试 / 工具）。
 
 ### 10.3 红 → 绿
@@ -248,3 +248,95 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 - **红 → 绿**：确定性用例 `TestPendingCountsAppliedButUnsettledCommands`（手动让应用线程走一步后直接问 Pending，不依赖时序），修前 `the applier executed the relation view but Pending is false: Drain would return before the subscribe is said (subscribers of 2: [2])`，修后通过；原偶发用例 `-count=50 -run` 0 失败。
 - **同时修正的用例口径**：`TestFlushSettlesButDoesNotApplyQueuedFacts` 假设“不经 queueFact 就没有应用线程”，重构后 Enter 等命令也会启动应用线程，它可能在断言前把注入的事实应用掉（`-race -count=50` 时出现 1 次 `Flush applied a queued fact on its own path: position={20 10} queued=0`）。改为先停掉后台应用线程（`manualApplier`），断言不变。
 - **验证**（rebase 到 `b86c4fa4` 之后）：`-race -count=50 ./framework/sync/entitysync/policy/` 通过；负载下（两份 `entitysync` 包 `-race -count=6` 并行，`policy` 包 `-race -count=20 -cpu=1,2,8`）通过；`glsvet ./framework/sync/entitysync/...` 退出 0；根包、`scripts/test-sync-modes-generated.sh` 通过。
+
+### 11.2 批次切点之后，同一提交的后续事实越过排在它前面的命令（2026-10-22，产品缺陷，本重构引入，**未修，待维护者决定**）
+
+- **现象**（做 §12 时读 `runLogLocked` 发现，探针确认）：一步取满 `BatchSize` 在某条事实处切开后，之后的命令留到下一步，但与已取用事实同一提交的后续事实仍被取用（“同一提交不切开”）。于是这条事实越过了排在它前面、被留下的命令。命令是同一目标的 `Hide` → `Show`（换代际）时，这条事实的代际号是新的、而应用侧仍是旧代际，按代际规则被作废：移动丢失，目标停在 `Show` 的位置。
+- **探针**（`main` `8428c75a`，未入库）：提交 X 在 Nest 守卫作用域里依次排 a 的移动、（另一提交 Y 排 d 的移动、业务线程 `Hide(b)` / `Show(b, {500 500})`）、b 的移动到 `{40 10}`，`BatchSize = 1`，`Apply()`：`b at {500 500} after log order [move a (X), move d (Y), Hide b, Show b, move b (X)], want {40 10}`；`BatchSize = 1024`（不切开）时 b 在 `{40 10}`。
+- **范围**：要求同一提交的两条事实之间有别的提交的就绪事实（让切点落在两者之间）与同目标的撤除 / 再放置命令；Nest 里提交 X 持有 b 的实体锁，`Hide` / `Show` 来自不经实体锁的直接调用（接入层、别的实体的提交后回调）。§12 的预算让同步模式下的切点更多（单位上限比 `BatchSize` 小），暴露面随之变大；切点规则本身没有变。
+- **可选修法**：A 切点只落在已取用提交全部结束之后（纯前缀切开：切点之前全部执行、之后全部留下；已取用提交的后续事实之前的命令与别的提交的事实一并执行），三条顺序规则（就绪事实不被后面的命令越过、命令不被后面的事实越过、同一提交不切开）同时成立，代价是一步可能比 `BatchSize` / 单位上限多出交错进来的条目（推荐）；B 允许在这种情况下把提交切开（提交的 AOI 效果分两次结算可见）；C 不改，KNOWN-LIMITS 写明。
+
+## 12. ApplySync 预算把结算也算进去（2026-10-22，维护者决定 A）
+
+### 12.1 问题与决定
+
+§10 的预算只在两步之间检查：检查通过后还会再执行一整步（最多 `BatchSize` 条事实），之后的结算（AOI 事件归并、订阅说给 Manager、释放发布屏障）不计入预算。16 视野（诊断构建）时政策阶段每 tick P95 38ms、Flush 超过一个周期、P99 128ms（[INTEREST-SINGLE-WRITER-20261022 §4](../performance/INTEREST-SINGLE-WRITER-20261022.md#4-16-视野与-d19-历史数字)）。
+
+维护者 2026-10-22 选 A：**预算要把结算也算进去；检查时为结算预留时间，并按上一步的耗时估算下一步，预计会超就停，剩下的留到下一个周期。** 取舍：Flush 时长有上界，全服同步节奏不受影响；代价是重负载下 AOI 的变化会晚一两个周期可见。已提交的排队事实不丢、不乱序，代际号作废规则不变，`MaxQueuedFacts` 背压照常。
+
+### 12.2 规则（`planSyncStep`）
+
+- **预算** B = 同步周期的一半（至少 1ms），不变；现在覆盖一次政策阶段的“执行日志 + 结算”（含 `OnRefusal` 回调）。
+- **单位**：一步里执行的一条命令或取用的一条事实（被丢弃的事实不算）。
+- **成本估计**（应用侧状态，跨政策阶段保留）：
+  - 每单位执行耗时 c = 最近一步的耗时 / 它的单位数；
+  - 每单位结算耗时 σ = 最近一次结算的耗时 / 它结算的单位数（自上次结算以来执行的全部单位，含显式 `Apply` 与诊断读执行的）；
+  - 没有单位的步 / 结算不更新估计；还没测到时为 0。
+- **结算预留** R = max(B / 10, σ × 已执行未结算的单位数)。
+- **每一步之前**：n = ⌊(B − 已用 − R) / (c + σ)⌋。
+  - n ≥ 1：这一步最多执行 n 个单位；
+  - n < 1：停止（记 `budget_stop`，提醒 Manager，on_change 下立即再来一轮），剩下的留给下一次 Flush；
+  - **本次政策阶段的第一步总要执行**，n 至少取 1；
+  - c + σ 都还没测到（启动后的第一步）：不限单位数，只受 `BatchSize` 限制。
+- **切点**：单位数到达 n 后，在下一条就绪事实处切开，与 `BatchSize` 的切点是同一个位置、同一套规则（同一提交不切开，切点之后的命令与事实留到下一步）。命令本身不触发切开，所以不引入新的越过关系（已有的切点问题见 §11.2）。应用线程（ApplyAsync）与显式 `Apply` 不限单位数，行为不变。
+
+### 12.3 为什么这样定
+
+1. **结算按单位摊，不按一次结算的绝对值预留**。结算的工作（AOI 事件、touched 的 pair、要释放的屏障）由本次政策阶段执行的单位产生，与执行量成正比。按最近几次结算的绝对值（滑动最大值或 EWMA）预留，预留量和这次要做的量脱钩，负载变化时会振荡。推演（c = σ = 1ms/单位，B = 25ms，下限 2.5ms）：
+   - 滑动最大值（最近 4 次）：第 1 轮只留 2.5ms，执行 22 个单位，结算 22ms，政策阶段 44ms；之后 4 轮预留 22ms，每轮只做 3 个单位；窗口滑过去又回到 22 个单位、44ms。平均每轮约 6.8 个单位（理想 12.5），每 5 轮超一次周期。
+   - EWMA（R ← R + α(S − R)）：不动点斜率 1 − α(1 + σ/c)，σ/c > 2/α − 1（α = 1/4 时为 7）时发散振荡。
+   - 按单位摊：带固定成本 F 时，u ← B / (c + σ + F/u)，不动点 u* = (B − F) / (c + σ)，导数 F / B < 1，单调收敛；F ≥ B（只结算就超预算）时收敛到每轮一个单位，这时系统已经过载，由 `MaxQueuedFacts` 背压给出信号。
+2. **执行耗时取最近一步**，不取 EWMA：规则只有一条、确定、可测。噪声的影响有界：低估时多出一步的误差（今天的粒度是一整个 `BatchSize`），高估时只是多走几步。
+3. **“至少执行一步”和“不超预算”冲突时，先保证前进**。优先级：结算必须做（屏障要释放）> 每次政策阶段至少前进一个单位 > 预算。超出量不超过一个单位（同一提交不切开时是一个提交）加结算。同时把批切到 n（最少 1）而不是整个 `BatchSize`，一个单位本身超预算时每个 Flush 前进一条，不会饿死，也不会因一步过大把 Flush 拉长。
+
+### 12.4 上界与边界
+
+- 每单位成本在相邻两步 / 两次结算之间稳定时，政策阶段不超过 B。以下情形可以超出：
+  - **启动后（或成本还没测到时）的第一次**：没有估计，只受 `BatchSize` 与预留下限 B/10 约束；
+  - **一个单位（或一个提交）本身超预算**：超出量为这一步加结算；
+  - **只有命令的一段日志**：命令不触发切开，整段在一步里执行（登录风暴这类命令密集的负载）；
+  - **成本突变**：估计晚一步（执行）或一次结算（结算）跟上。
+- **可见性**：积压超过预算时，排在后面的事实与命令晚一个或几个 Flush 生效（全服同步节奏不变）。门控事实的发布屏障在应用并结算之后才释放，所以实体内容与它带来的进出视野仍在同一帧；被留下的事实仍计入 `MaxQueuedFacts`。
+- 同一 Interest 内单写者不变；成本估计只在应用侧（持 `mu`）读写。
+
+### 12.5 强制点（`framework/sync/entitysync/policy`）
+
+- `interest_queue.go:172` `planSyncStep`（规则），`:163` `applyCosts`，`:168` 预留下限；
+- `interest_queue.go:463` `runSyncStepsLocked`（每步之前规划、步后更新 c、预算停止计数、剩余积压），`:425` `settleQueued`（结算计时、更新 σ、两个耗时指标）；
+- `interest_queue.go:293` `runLogLocked(unitLimit)`，`:318` 切点条件（`BatchSize` 或单位上限）；
+- `interest.go:810` 结算时清零已执行未结算的单位数；时钟是 `Interest.now`（测试可替换）。
+
+### 12.6 红 → 绿
+
+确定性用例（`interest_apply_test.go`，`budgetHarness`）：Interest 的时钟 = 起点 + 每条已应用事实 perFact + 每个进入事件 perEvent（结算里按距离档取层级时计数，即结算耗时），不靠 sleep。估计来自之前的步与结算，用例先走一次小的 Flush 让政策阶段测到成本。
+
+修前（`8428c75a`，`GOWORK=off go test -count=1 -run 'TestSyncApplyBudget' ./framework/sync/entitysync/policy/`，用例里引用的指标名在修前用一个临时测试文件定义）：
+
+```
+--- FAIL: TestSyncApplyBudgetStopsWithinBudgetAndKeepsOrder (0.00s)
+    interest_apply_test.go:578: Flush 1: the policy phase spent 90ms (steps + settle), over the budget 25ms; 0 facts left
+--- FAIL: TestSyncApplyBudgetStillProgressesWhenOneStepExceedsIt (0.00s)
+    interest_apply_test.go:622: Flush 1 applied 6 facts at 30ms each (budget 25ms, BatchSize 4): want the step cut to exactly one
+--- FAIL: TestSyncApplyBudgetCountsTheSettle (0.00s)
+    interest_apply_test.go:650: Flush 1 applied 40 facts and spent 84ms with the settle (budget 25ms): the settle was not reserved
+```
+
+修前代码用真实时钟计预算、不读 `Interest.now`，所以注入的耗时对它不起作用，三条红在“按注入耗时计，一次政策阶段不超过预算 / 单步超预算时切到一条”这一承诺上。规则本身由下面的变异钉住。`TestSyncApplyBudgetFinishesWhatFitsInOnePolicyPhase`（预算内一次做完、不记预算停止）修前修后都绿，是与原行为一致的对照。修后全绿，另有规则表 `TestPlanSyncStepRules`。
+
+| 变异 | 变红的用例与文本 |
+| --- | --- |
+| 去掉结算预留（预留为 0，n 只除以 c） | `TestSyncApplyBudgetStopsWithinBudgetAndKeepsOrder`：`Flush 1: the policy phase spent 50ms (steps + settle), over the budget 25ms; 35 facts left`；`TestSyncApplyBudgetCountsTheSettle`：`Flush 1 applied 40 facts and spent 84ms with the settle (budget 25ms): the settle was not reserved` |
+| 去掉“第一步至少一个单位” | `TestSyncApplyBudgetStillProgressesWhenOneStepExceedsIt`：`Flush 1 applied 0 facts at 30ms each (budget 25ms, BatchSize 4): want the step cut to exactly one` |
+| 切点忽略单位上限（只看 `BatchSize`） | `TestSyncApplyBudgetStillProgressesWhenOneStepExceedsIt`：`Flush 1 applied 4 facts ...`；`TestSyncApplyBudgetCountsTheSettle`：`Flush 1 applied 40 facts and spent 84ms ...` |
+
+### 12.7 指标
+
+`entitysync.interest.policy_duration`（政策阶段整次）、`entitysync.interest.settle_duration`（其中结算）、`entitysync.interest.log_backlog`（ApplySync 每次政策阶段结束时日志里剩下的条目）、`entitysync.interest.budget_stop.total`（因预算停下、仍留有可执行条目的次数），说明见 [OBSERVABILITY](../framework/OBSERVABILITY.md)。新指标按命名规范用点号分层（导出后与既有 `entitysync_interest_*` 同前缀）。
+
+### 12.8 验证
+
+见 CHANGELOG 与本轮汇报：gofmt、`go vet ./framework/sync/... ./gameplay/movement/...`、`go run ./cmd/glsvet ./framework/sync/entitysync/...`、`-race -count=10 ./framework/sync/entitysync/policy/`、`-race ./framework/sync/... ./gameplay/movement/...`、根包（含指标门禁）、`scripts/test-sync-modes-generated.sh`、全量 `GOWORK=off go test -count=1 ./...`，退出码均为 0。
+
+### 12.9 压测（待补测，维护者 2026-10-22：先处理代码，压测放到今晚）
+
+16 / 0 / 8 视野 ApplySync 的前后对比还没跑，计划与复跑命令见 [INTEREST-SINGLE-WRITER-20261022 §7](../performance/INTEREST-SINGLE-WRITER-20261022.md#7-applysync-预算计入结算待补测今晚)。代码提交 `be49684b`。

@@ -87,7 +87,7 @@ D19“两种应用模式”的历史表（2026-10-21，`b6ef5573`，同一夹具
 | direct P99 ms | 68.5 / 90.0 | 61.0～64.0 | 70.0～82.6（语义变化，不可直接比） |
 
 - 结论不变：**ApplySync 16 视野仍超周期**（Flush 约 40ms、政策阶段 P95 约 38ms 贴着 50ms 周期，帧数与 Flush 次数不满），8 视野的阈值依据仍成立；ApplyAsync 16 视野前后持平。
-- 改后 ApplySync 16 视野比改前略差（政策阶段 P95 +8ms、Flush +1.8ms、两轮都少 1～3 次 Flush）。改后的政策阶段“按预算排空”：预算是同步周期一半（25ms），只在两步之间检查（`settleQueued`，`framework/sync/entitysync/policy/interest_queue.go`），检查之后还有一步与结算，所以 16 视野时一次政策阶段可以到 38ms。改前每次政策阶段最多一批。16 视野超出 ApplySync 的上限（9），属于诊断构建，不影响缺省配置；是否给预算加上“结算也计入”交维护者决定。
+- 改后 ApplySync 16 视野比改前略差（政策阶段 P95 +8ms、Flush +1.8ms、两轮都少 1～3 次 Flush）。改后的政策阶段“按预算排空”：预算是同步周期一半（25ms），只在两步之间检查（`settleQueued`，`framework/sync/entitysync/policy/interest_queue.go`），检查之后还有一步与结算，所以 16 视野时一次政策阶段可以到 38ms。改前每次政策阶段最多一批。16 视野超出 ApplySync 的上限（9），属于诊断构建，不影响缺省配置；是否给预算加上“结算也计入”交维护者决定——维护者 2026-10-22 决定 A，已实施，压测待补（§7）。
 - 今天两边都比历史数低约 10～20ms（Flush 与 P99），历史数是另一时段、另一份代码（`b6ef5573` 之后还有 D19 / D20 的改动），只看趋势。
 
 ## 5. policy 基准（benchstat，base / after 交替 10 遍）
@@ -135,3 +135,35 @@ D19“两种应用模式”的历史表（2026-10-21，`b6ef5573`，同一夹具
 - 队列峰值：sync-aoi 不导出 Interest 的日志长度 / 队列峰值，没有数；game 进程的 `entitysync_interest_fact_backlog` 是瞬时值，风暴期间没有连续采样。
 - 只在 macOS / arm64、单机、每个配置 2 轮（风暴 3 轮）；P99 的轮间差 1～9ms（16 视野最大约 17ms）。
 - ApplySync 的 P50 / 新订阅全量改善原因尚未确认（§2）。
+
+## 7. ApplySync 预算计入结算（待补测：今晚）
+
+§4 发现 16 视野 ApplySync 的政策阶段 P95 38ms：预算只在两步之间检查，检查后还有一整步与结算。维护者 2026-10-22 决定 A（预算把结算也算进去，按单位估计下一步，预计超出就停），实现与规则见 [REFACTOR §12](../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)，代码提交 `be49684b`（改前 `bb7a734f`）。维护者同日要求先处理代码、压测放到今晚，**本节的数还没有测**。
+
+**预期**（不符合时如实记录，不改结论）：16 视野 ApplySync 政策阶段 P95 与 Flush 均值落到预算（25ms）附近、帧数与 Flush 次数接近满额；`entitysync.interest.log_backlog` 与 `budget_stop` 不为 0（AOI 可见性滞后一两个周期，改值→客户端 P99 可能不降反升）；0 / 8 视野不退化（预算内本来就做得完，`budget_stop` 应为 0 或零星）。
+
+**要记录**：每次运行开始时的 `sysctl -n vm.loadavg`、改值→客户端 P50 / P99、帧数、Flush 均值与次数、政策阶段每 tick P95、`entitysync.interest.log_backlog`（运行末的值；sync-aoi 若不导出，在报告里注明并从 `metrics.Snapshot()` 补）、`entitysync.interest.budget_stop.total`、`entitysync.interest.policy_duration` / `settle_duration` 的 P95。
+
+**复跑命令**（同机同时段、改前 / 改后交替各 2 轮；门控同 §1：每次运行前等 10 秒没有外来 go 进程，运行中采到就作废重跑——宿主上同时有 demo loadtest 与选项 C 参数压测，会互相等待）：
+
+```sh
+# 两份检出：改前 bb7a734f、改后 be49684b（各自 git worktree add --detach）
+for w in base after; do
+  (cd "$WT_$w" && GOWORK=off go build -o "$BIN/aoi-$w" ./scripts/perf/sync-aoi)
+  # 16 视野诊断构建：只把 SyncApplyMaxExtraViews 改成 16，不入库
+  (cd "$WT_$w" && sed -i '' 's/SyncApplyMaxExtraViews     = 8/SyncApplyMaxExtraViews     = 16/' framework/sync/entitysync/policy/interest.go \
+     && GOWORK=off go build -o "$BIN/aoi-$w-d16" ./scripts/perf/sync-aoi && git checkout framework/sync/entitysync/policy/interest.go)
+done
+ARGS="-players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -apply-mode=sync -nest=true"
+export GOMAXPROCS=4 GOWORK=off
+for r in 1 2; do
+  order="base after"; [ $r -eq 2 ] && order="after base"
+  for v in 16 0 8; do for w in $order; do
+    bin="$BIN/aoi-$w"; [ $v = 16 ] && bin="$BIN/aoi-$w-d16"
+    echo "$w v$v r$r loadavg=$(sysctl -n vm.loadavg)" >> "$OUT/run.log"
+    "$bin" $ARGS -views-per-player=$v -output="$OUT/runs/o-v$v-sync-nest-$w-r$r" > "$OUT/runs/o-v$v-$w-r$r.log" 2>&1
+  done; done
+done
+```
+
+汇总沿用 [agg-aoi.py](benchmarks/interest-single-writer-20261022/agg-aoi.py)（同一口径），结果写进本节，样本放 `benchmarks/interest-applysync-budget-20261022/`。

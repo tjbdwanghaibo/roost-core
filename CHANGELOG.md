@@ -25,6 +25,15 @@
 - **升级**：demo 文件只在 `project new` 时写出、归应用所有，`project sync` / `project upgrade` 不改写它们，已生成的工程要手工照模板改 `scene.go` 的 `AOIConfig.MaxVisible` 并在场景末尾加 `scene_alive`。存储格式与协议不变。
 - **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）。
 
+### Interest：ApplySync 政策阶段的预算把结算也算进去（维护者 2026-10-22 决定 A）
+
+- **原因**：单写者重构后 ApplySync 的预算只在两步之间检查，检查通过后还会再执行一整步，之后的结算不计入；16 视野（诊断构建）政策阶段每 tick P95 38ms，Flush 超过一个周期，P99 128ms（[Interest 报告 §4](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#4-16-视野与-d19-历史数字)）。
+- **改动（`framework/sync/entitysync/policy`）**：一次政策阶段的“执行日志 + 结算”一起不超过同步周期的一半。按单位（一条命令或取用的一条事实）估计成本：每单位执行耗时取最近一步，每单位结算耗时取最近一次结算平摊；每一步之前算下一步最多能执行的单位数，结算预留 = max(预算/10, 每单位结算 × 已执行未结算的单位)，预计超出就停，剩下的留到之后的 Flush（on_change 下立即再来一轮）。每次政策阶段的第一步至少执行一个单位（不饿死），一个单位本身超预算时批切到一条。切点仍只落在就绪事实处、同一提交不切开；日志顺序、代际作废、`MaxQueuedFacts` 背压不变；ApplyAsync 与显式 `Apply()` 不受影响。规则与理由见 [单写者方案 §12](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)。
+- **行为变化**：重负载下 ApplySync 的 AOI 变化晚一两个周期可见（换来 Flush 时长有上界、全服同步节奏不变）。不是硬上界：启动后第一次、一个单位或一个提交本身超预算、只有命令的一段日志、成本突变时可以超出（KNOWN-LIMITS）。无 API 变化，无需清数据。
+- **新指标**：`entitysync.interest.policy_duration`、`entitysync.interest.settle_duration`（Histogram）、`entitysync.interest.log_backlog`（Gauge，ApplySync 每次政策阶段结束时日志里剩下的条目）、`entitysync.interest.budget_stop.total`（Counter），已登记进 OBSERVABILITY。
+- **测试**：`interest_apply_test.go` 用注入的时钟（每条事实、每个进入事件的耗时）做确定性用例：预算内一次做完、预计超出时停在预算内且最终全部按序应用、单步超预算仍前进（切到一条）、结算计入预算，另有规则表 `TestPlanSyncStepRules`；修前三条红，去掉结算预留 / 去掉“第一步至少一个单位” / 切点忽略单位上限各自变红。
+- **发现（未修，待维护者决定）**：批次切点之后，同一提交的后续事实会越过排在它前面、被留下的命令，命令是同一目标的 `Hide` → `Show` 时这条移动按代际作废（探针已确认，单写者重构引入，预算让切点更多），见方案 §11.2。
+- **压测待补**（维护者 2026-10-22：先处理代码，压测放到今晚）：16 / 0 / 8 视野 ApplySync 前后对比的复跑命令见 [Interest 报告 §7](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#7-applysync-预算计入结算待补测今晚)。
 
 ### 技能与 Buff 的推进与驱动方式分开：心跳只是驱动之一（DESIGN-TODO D20，维护者 2026-10-21 决定）
 
