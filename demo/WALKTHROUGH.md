@@ -302,10 +302,13 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   加一种关系（好友、同盟）= 定义一个关系视野（`DefineRelationView`，视野 ID 由业务分配，例如联盟号）、维护成员（`SetViewMembers` / `AddViewMembers`），再挂给该看的玩家（`AttachView`）。
 - **跟不上就断开**：lane 用框架的 `selfsync.PushPlayerFrame`（自身视图同一条规则）。活着的连接收不下一帧时先关闭该玩家的全部连接，Manager 再关会话并回调 `SessionLost`；
   接入层整体不可用或进程出站驻留预算耗尽是 `ErrRetryLater`，tick 重来、不踢人；玩家没有连接时只关会话。
+- **编不出帧也断开**（维护者 2026-10-22 决定 A）：Manager 因编码失败关掉会话（持有对象超过 `MaxObjects`、单个实体超过帧上限）时没有连接拒收任何东西，
+  `sessionLost` 调框架的 `selfsync.DisconnectLostPlayer` 断开该玩家（原因是推送拒收时什么都不做，lane 已经断过），计 `player.sync.session_lost_disconnect.total{reason}`、打限频 Warn（带玩家 ID 与原因）；
+  客户端重连、`Join` 从全量开始。原因一直在（例如还挤在超员的人堆里）时会反复被踢、重连，靠这个计数与 Warn 发现。
   会话关闭事件（`OnSessionClosed`）是主路径，入场时按 `ActiveSessions` 的 sweep 是兜底。
 - **断线按 Join 代际判定**：每次 Join（首次登录或重连）有新代际；`SessionLost` 与会话关闭事件只登记“当时的代际”，
   在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。嵌入 TCP 推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接收下时
-  接入层只关旧连接、推送算成功，玩家留在场景、会话不动；复制会话被丢之后 scene 不在原连接上重开，还连着的只会是之后的新登录，由它的 Join 重新打开。
+  接入层只关旧连接、推送算成功，玩家留在场景、会话不动；复制会话被丢之后（推送拒收由 lane、其他原因由 `sessionLost` 断开当时的全部连接）scene 不在原连接上重开，还连着的只会是之后的新登录，由它的 Join 重新打开。
   Join 打开会话时上一次的会话还在关闭（`SessionOpenRetryable`）会有界退避重试；用尽或被拒绝时玩家留在场景、自己的视图等下次登录，除 Warn 外计 `scene_session_open_failed_total{reason=exhausted|refused}`。
 - **仅内存卸载后重载**：礼物扣除等原生步骤投影时被 lease fence 跳过，DataEngine 会把含其效果的 Player 从内存卸载
   （`ManagerAccess.Unload`）。scene 的 Manager 是自建的，wiring 的 Nest Mod 不替它接线，所以 `Scene.Start` 自己调
@@ -316,7 +319,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。场景帧走 `PushSyncPlayer`：RS v2 Sync 标志、原始帧字节、
   不包 `EntitySyncPush` PB，robot session 对 Sync 包不做 PB 解码，`scene_watch` 直接读包体（没有 Sync 标志的 `MsgEntitySync` 推送
   让 watch 失败）；回归见生成的 `cmd/loadtest/scene_watch_test.go`。场景最后一步 `scene_alive` 自己 `add_exp 1`，等这次改动作为帧落到自己的
-  subject 上：服务端因编码失败（例如持有对象超过 `MaxObjects`）关掉的复制会话**不断开连接**，请求照常应答、只是不再有帧，没有这一步时整轮仍判成功。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
+  subject 上：服务端因编码失败（例如持有对象超过 `MaxObjects`）关掉的复制会话以前**不断开连接**，请求照常应答、只是不再有帧，没有这一步时整轮仍判成功；2026-10-22 起这种情况会断开连接（见上“编不出帧也断开”），`scene_alive` 仍作“帧还在来”的端到端判据。**PB 推送消息必须在 loadtest 注册解码器**，否则推送到了也解不出来、静默丢弃。
 
 ## 刷新：场景该有多少东西活着
 
@@ -380,6 +383,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   2026-10-22 的登录风暴里 100 个机器人的会话全部因此被关。取值：会话除主视野外还持有自己、场景实体、对局队友（GroupSize 2，同时只在一个队里）
   共 3 个（`sceneReservedObjects`），64 + 3 离 100 还留 33 个，给以后加的关系视野（公会、多人队伍）；`newSceneOn` 启动时核对两者之和不超过上限。
   回归：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点，会话都不关、每人恰好看到 64 个）。
+  反过来去掉上限（`TestACrowdOverflowingASessionDisconnectsThePlayers`，101 个玩家）时每个会话都因对象超限被关、每个玩家都被断开一次，而不是连着却静默停发。
 - **滞回**：进圈 120、出圈 150。在边界上来回微动不产生 Enter/Leave 抖动——每一次抖动都会重发一次快照。
 - **格边长约等于视野半径**：一个观察者订阅的格数是 `(⌈2·出圈半径/格边长⌉+1)²`，格子远小于视野不会让 AOI 更准
   （半径判定本来就是精确的），只会让观察者每动一步的簿记成倍增加。框架不强制这个比值，所以它写在 `scene.go` 的注释里。

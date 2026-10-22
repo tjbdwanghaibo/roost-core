@@ -1112,7 +1112,7 @@ make dev-stop
 - **200 人里 72 个 `connect` 失败 = 单 IP 连接上限**：当次 game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`（scratchpad 里留存的 storm-trial 产物），机器人全从 127.0.0.1 来，`player_access.tcp.max_connections_per_ip` 缺省 128，200 − 128 = 72；README“常见问题”与 WALKTHROUGH 原本已写，不是缺陷，不改缺省。
 - **“超出 `MaxObjects` 由 Manager 拒绝”的措辞**已按代码改正（超出时关闭整个会话），见 KNOWN-LIMITS“广播与 AOI”③、[guide/04-sync](../framework/guide/04-sync.md)、[ENTITY_SYNC](../framework/ENTITY_SYNC.md#容量与观测)。
 - **game 连本机 etcd**：生成配置 `etcd.endpoints: [127.0.0.1:2379]`，用于服务注册（键前缀 `/<工程名>/services/`）；README 的 sed 不改它，已写进 README“常见问题”。不修。
-- 留给维护者：编码失败关掉的复制会话不断开连接（A 断开让客户端重连 / B 保持），见 KNOWN-LIMITS 同节。
+- ~~留给维护者：编码失败关掉的复制会话不断开连接（A 断开让客户端重连 / B 保持），见 KNOWN-LIMITS 同节。~~ **维护者 2026-10-22 决定 A，已实施**：框架统一做一次——Manager 交给 `SessionLost` 的原因带分类（`entitysync.SessionLoss` / `LossReason`：`push_refused` / `object_limit` / `too_large` / `encode_failed`），原因不是推送拒收时 `wiring/selfsync.DisconnectLostPlayer` 断开该玩家（自身视图经 `EntitySyncSetup` 自动接上，game-demo 场景 `sessionLost` 调用同一个函数，生成工程与 demo 一条路径），计 `player.sync.session_lost_disconnect.total{reason}`、打限频 Warn（带玩家 ID 与原因）；`settle` 注释与不变量已改正。同时取代 2026-10-17 对自身视图编码失败的决定 B（不关连接、靠 `stranded_players`）。接受的代价：玩家被踢一次，原因持续时反复重连；防风暴论证后不加（理由与剩余边界见 KNOWN-LIMITS 同节）。回归 `TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused`、`TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit`、生成工程 `TestACrowdOverflowingASessionDisconnectsThePlayers`，变异“去掉断开那一步”三者都变红（修前文本见 [impl/04-sync](../framework/impl/04-sync.md) “编码失败丢会话即断开”）。
 
 **待补测（今晚）**：维护者 2026-10-22 08:25 定 100 / 200 个机器人的 loadtest 属压测，放到当晚。复跑（私有依赖环境，端口偏移按当时空闲选，下例 26000；十份配置的 sed 见 demo README，偏移 26000 时 Mongo 53117–53119、NATS 40222、Redis 42379）：
 

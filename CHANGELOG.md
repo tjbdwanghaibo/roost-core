@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Sync：编码失败丢掉的复制会话断开该玩家（维护者 2026-10-22 决定 A）
+
+- **原因**：Manager 编码一个会话的帧失败（持有对象超过 `Limits.MaxObjects` 的 `frame.ErrObjectLimit`、单实体超过 `MaxFrameBytes` 等）时关掉这个会话、回调 `SessionLost`，但接入层只在“连接拒收一帧”时断开连接：玩家连接还在、请求照常应答，却在下次登录之前收不到任何帧（game-demo 场景与自身视图都是）。game-demo `settle` 注释“会话被丢之后还连着的只会是新登录”对这条路径不成立。
+- **维护者决定（2026-10-22）**：A——原因不是推送拒收时也断开该玩家，客户端重连、重开会话；接受代价：玩家被踢一次，原因一直存在时会反复重连。取代 2026-10-17 对自身视图的决定 B（“不关连接、靠 `stranded_players` 告警”）。
+- **新增 API**：`entitysync.SessionLoss`（`SessionLost` 回调的原因现在总是它，`Unwrap` 保留原错误）、`entitysync.SessionLossReason` 与常量 `SessionLossPushRefused` / `SessionLossObjectLimit` / `SessionLossTooLarge` / `SessionLossEncodeFailed`、`entitysync.LossReason`；`wiring/selfsync.DisconnectLostPlayer`、`selfsync.ErrSyncSessionLost`、`selfsync.SessionLostDisconnectMetric`。
+- **行为变化**：自身视图（`EntitySyncSetup` 自动接上）与 game-demo 场景（`sessionLost` 调用）在编码失败丢会话时关闭该玩家的全部连接，原因 `ErrSyncSessionLost` 包着 `SessionLoss`；推送拒收的旧路径不变（`PushPlayerFrame` 断开，不再断第二次）。`SessionLost` 回调里 `errors.Is(cause, frame.ErrObjectLimit)` 等照常成立；比较原因相等（`cause == err`）的代码要改用 `errors.Is` / `LossReason`。
+- **观测**：新增 `player.sync.session_lost_disconnect.total{reason}`（`object_limit` / `too_large` / `encode_failed` / `unknown`，正常为 0）与限频 Warn `selfsync: a player's sync session was lost …`（10 秒一条，带 `player_id`、`reason`、省略次数）；`entitysync.self_view.stranded_players` 不再因编码失败上升。game-demo 场景的 Info 日志改为 `scene: replication session was closed by the manager`（带 `reason`）。
+- **测试**：`TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused`（新）、`TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit`（断言由“连接不关”改为“断开、重连收新 epoch 全量”）、生成工程 `TestACrowdOverflowingASessionDisconnectsThePlayers`（新，主视野不设上限的 101 人），entitysync 三个用例补分类断言；去掉断开一步的变异全部变红。
+- **升级**：无存储 / 协议变化。客户端要把“连接被服务端关闭”当普通断线：重连、重新登录、等第一份全量（原有约定）。已生成的 game-demo 工程归应用所有，要手工照模板在 `scene.go` 的 `sessionLost` 里加 `selfsync.DisconnectLostPlayer(bridge.sessions, int64(session), cause)`；自身视图随框架升级生效。
+- **限制**：原因持续时反复踢、反复重连，框架不做防风暴；只覆盖会话 ID 就是玩家 ID 的 Manager（[KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”](docs/maintenance/KNOWN-LIMITS.md)）。
+
 ### 心跳投递缺省改为 Nest 批量作业，批量作业组大小 8 → 4（DESIGN-TODO D20 选项 C，维护者 2026-10-22 决定 B）
 
 - **维护者决定（2026-10-22）**：选项 C 采用 B——把心跳投递缺省改为 `batch`，同时调参压低普通业务消息的 p99。同日补充：先处理代码、参数补测放到当晚；缺省先用已测数据里 p99 最好的单项（组大小 4、时间片保持 200µs），合并组合当晚测完更好再改。
@@ -23,7 +34,7 @@
 - **测试**：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点；修前 `100 of 100 replication sessions were closed at a crowded spawn point (0 still open)`）、`TestSceneAliveFailsWhenTheServerStopsReplicating`。
 - **文档**：“超出 `MaxObjects` 由 Manager 拒绝”的说法改正为“下一次 Flush 编码失败、关闭整个会话”（guide/04-sync、ENTITY_SYNC、KNOWN-LIMITS）；同一次 200 人风暴里 72 个 `connect` 失败查明是单 IP 连接上限 `player_access.tcp.max_connections_per_ip`（缺省 128，`player_tcp_connection_rejected_total{reason="per_ip"} 72`），不是缺陷；生成配置的 game 连本机 `127.0.0.1:2379` 的 etcd 写进 demo README。
 - **升级**：demo 文件只在 `project new` 时写出、归应用所有，`project sync` / `project upgrade` 不改写它们，已生成的工程要手工照模板改 `scene.go` 的 `AOIConfig.MaxVisible` 并在场景末尾加 `scene_alive`。存储格式与协议不变。
-- **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）。
+- **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）——维护者 2026-10-22 决定 A，见本节上方“Sync：编码失败丢掉的复制会话断开该玩家”。
 
 ### Interest：ApplySync 政策阶段的预算把结算也算进去（维护者 2026-10-22 决定 A）
 

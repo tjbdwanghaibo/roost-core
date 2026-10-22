@@ -108,9 +108,10 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 - **`connect: auth send: robot session: closed`**：`-count` 超过了 `player_access.tcp.max_connections_per_ip`（默认 128）。机器人全从一个 IP 来，超出的连接在握手前被关掉，
   计入 `player_tcp_connection_rejected_total{reason}`（2026-10-22 登录风暴 200 人里 72 个即此，`reason="per_ip"` 72）；要压更大就调高这个配置，
   例如 `sed -i '' 's#max_connections_per_ip: 128#max_connections_per_ip: 512#' configs/service/config.game.yaml`。
-- **`scene_alive: … the server stopped replicating to it`**：这个机器人的复制会话被服务端关了（连接没断，只是不再有帧），
-  game 日志 `scene: push to player failed, its replication session was closed` 给出原因；`frame: object limit exceeded` 是它持有的对象超过了
-  Manager 的 `MaxObjects`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
+- **`scene_alive: … the server stopped replicating to it`，或机器人中途报连接被关**：这个机器人的复制会话被服务端关了。
+  game 日志 `scene: replication session was closed by the manager` 给出原因（`reason`）；编码失败（`reason=object_limit` / `too_large`）时服务端
+  还会断开这个玩家（2026-10-22 起，`selfsync: a player's sync session was lost …` 限频 Warn 与 `player.sync.session_lost_disconnect.total{reason}`），
+  机器人看到的是连接被关。`frame: object limit exceeded` 是它持有的对象超过了 Manager 的 `MaxObjects`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
 - **game 连本机 `127.0.0.1:2379` 的 etcd**：`configs/service/config.game.yaml` 的 `etcd.endpoints` 缺省指向本机，上面的 sed 不改它；
   game 用它做服务注册（`etcd.service_prefix`，键带工程名前缀 `/<工程名>/services/...`，租约 10 秒），与别的工程不冲突；
   2026-10-22 冒烟时本机恰好有一个在跑。本机没有、或要用隔离环境之外的 etcd 时改这一项。
