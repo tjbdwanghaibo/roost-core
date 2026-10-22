@@ -169,7 +169,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "global.call_timeout", Kind: "duration", Min: "0", Help: "timeout of one call; 0 keeps DefaultCallTimeout (3s)"},
 	}},
 	"heartbeat": {Keys: []configschema.Key{
-		{Name: "heartbeat.delivery", Kind: "string", Default: "dispatch", Help: "心跳交给 Nest 的方式：dispatch 每拍一条单目标 Dispatch（缺省）；batch 按 64 拍一批走 Nest 批量心跳作业（DESIGN-TODO D20 选项 C，未经正式压测，缺省关闭）。启动时确定，运行期不切换", Starter: true, Example: "dispatch", Enum: []string{"dispatch", "batch"}},
+		{Name: "heartbeat.delivery", Kind: "string", Default: "batch", Help: "心跳交给 Nest 的方式：batch 按 64 拍一批走 Nest 批量心跳作业（缺省，DESIGN-TODO D20 选项 C：进程 CPU 低，普通业务消息 p99 略高）；dispatch 每拍一条单目标 Dispatch（2026-10-22 之前的缺省）。启动时确定，运行期不切换", Starter: true, Example: "batch", Enum: []string{"dispatch", "batch"}},
 	}},
 	"mail": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},

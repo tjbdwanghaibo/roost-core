@@ -6,11 +6,11 @@
 //   - 登记：组件在实体加载（OnInitFinish）时经 Host.Register 得到 Reg，按需要 Start / Stop / SetPeriod；
 //     卸载、删档时 Host.OnDestroy 撤销。心跳本身什么都不持久，加载后由组件重新登记。
 //   - 调度：Driver 一个 goroutine，按档分环、10ms 一格；档位固定（Periods），相位 = hash(实体 ID)。
-//   - 执行：缺省每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，Config.Delivery = DeliveryDispatch）；
-//     DeliveryBatch 时按 64 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，D20 选项 C，未经正式压测，
-//     维护者 2026-10-21 决定先缺省关闭），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在它后面，Remote
-//     托管实体仍单目标。两种方式都不合并；回调在实体自己的 worker 上、实体锁与事务内执行；快池实体在快池、慢池实体
-//     在慢池（Nest 按实体种类分流）。
+//   - 执行：缺省（DefaultDelivery = DeliveryBatch，维护者 2026-10-22 决定）按 64 个一批交给 Nest 批量作业
+//     （nest.NestMgr.DispatchTryBatch，D20 选项 C），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在它
+//     后面，Remote 托管实体仍单目标；DeliveryDispatch 时每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，
+//     2026-10-22 之前的缺省，保留为可选项）。两种方式都不合并；回调在实体自己的 worker 上、实体锁与事务内执行；快池
+//     实体在快池、慢池实体在慢池（Nest 按实体种类分流）。
 //
 // 每个登记至多一拍在途：上一拍没执行完就跳过这一拍，不累积、不补发，计数并限频打 Warn；准入失败（快池 ErrQueueFull、
 // 引擎停止中，含批量作业里冲突转单目标被拒）同样按跳拍处理。框架不追帧，回调按 Beat.Elapsed 算一次。持久、准点、离线也要算的到期动作用
@@ -76,21 +76,29 @@ const (
 // ErrNotBound 表示驱动还没有接上 Nest（Bind）就被启动。
 var ErrNotBound = errors.New("heartbeat: driver is not bound to a nest client")
 
-// Delivery 是心跳交给 Nest 的方式（维护者 2026-10-21 决定：批量方式先合入、缺省关闭，合批优化压测通过后再改为缺省）。
+// Delivery 是心跳交给 Nest 的方式。维护者 2026-10-21 决定批量方式先合入、缺省关闭；2026-10-22 看过压测（进程 CPU
+// 约 −40%～−70%，普通业务消息 p99 约 0.08 → 0.2ms，见 docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）后决定
+// 缺省改为批量（DefaultDelivery），单目标保留为可选项。
 type Delivery string
 
 const (
-	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch（缺省，空值同此）。
+	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch（2026-10-22 之前的缺省）。
 	DeliveryDispatch Delivery = "dispatch"
 	// DeliveryBatch 按 64 拍一批交给 Nest 批量作业（nest.TryBatchDispatcher；D20 选项 C，设计见
-	// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）。Remote 托管实体的拍仍单目标 Dispatch。
+	// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）。Remote 托管实体的拍仍单目标 Dispatch。缺省。
 	DeliveryBatch Delivery = "batch"
+	// DefaultDelivery 是空值（Config.Delivery 未设、配置值为空串）对应的投递方式；wiring/heartbeat 的
+	// heartbeat.delivery 声明缺省与它相同。批量方式要求 Bind 的客户端实现 nest.TryBatchDispatcher（*nest.NestMgr 实现；
+	// 只实现 nest.Client 的包装要显式设 DeliveryDispatch）。
+	DefaultDelivery = DeliveryBatch
 )
 
-// ParseDelivery 解析配置值 dispatch / batch（大小写不敏感）；空串是缺省 DeliveryDispatch。
+// ParseDelivery 解析配置值 dispatch / batch（大小写不敏感）；空串是缺省 DefaultDelivery。
 func ParseDelivery(value string) (Delivery, error) {
 	switch d := Delivery(strings.ToLower(strings.TrimSpace(value))); d {
-	case "", DeliveryDispatch:
+	case "":
+		return DefaultDelivery, nil
+	case DeliveryDispatch:
 		return DeliveryDispatch, nil
 	case DeliveryBatch:
 		return DeliveryBatch, nil
@@ -109,7 +117,7 @@ type Config struct {
 	WarnInterval time.Duration
 	// Logger 是跳拍 Warn 的输出；nil 用 slog.Default()。
 	Logger *slog.Logger
-	// Delivery 见 Delivery；空值是 DeliveryDispatch。也可在首次 Start 之前用 SetDelivery 改（wiring/heartbeat 按
+	// Delivery 见 Delivery；空值是 DefaultDelivery（批量）。也可在首次 Start 之前用 SetDelivery 改（wiring/heartbeat 按
 	// heartbeat.delivery 配置设）。
 	Delivery Delivery
 }
@@ -132,7 +140,7 @@ type deliverer interface {
 // docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
 const beatBatchSize = 64
 
-// dispatchDeliverer 是单目标投递（DeliveryDispatch，缺省）：每拍一条 Dispatch，走 Nest 正式准入。batchDeliverer 用它投
+// dispatchDeliverer 是单目标投递（DeliveryDispatch）：每拍一条 Dispatch，走 Nest 正式准入。batchDeliverer 用它投
 // Remote 托管实体的拍。
 type dispatchDeliverer struct{ client nest.Client }
 

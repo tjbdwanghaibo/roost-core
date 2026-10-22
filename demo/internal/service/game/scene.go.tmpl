@@ -21,6 +21,7 @@ import (
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -73,6 +74,27 @@ const (
 	sceneMinViewRadius  = 60
 	sceneMaxLeaveRadius = 300
 	sceneViewRadiusStep = 30
+
+	// sceneMaxVisible caps how many subjects a player's main (spatial) view
+	// holds: when more are in range, the nearest ones win. Without it a
+	// crowded spot — every player starts at the same spawn point — puts
+	// everyone nearby into every view, and once a player's replication
+	// session holds more objects than the manager's Limits.MaxObjects
+	// (frame.DefaultLimits, 100: it is also how many objects one session may
+	// hold) the next frame cannot be encoded and the manager closes that
+	// session (frame.ErrObjectLimit). The 2026-10-22 login storm closed all
+	// 100 sessions with 100 robots at the spawn point.
+	//
+	// The session holds the main view's subjects plus what reaches the player
+	// outside it: its own entity (self), the scene's subject (the scene view)
+	// and the other member of its duel / ranked team (GroupSize 2, one team
+	// at a time) — sceneReservedObjects. 64 leaves another 33 below the
+	// limit for relation views a game adds later (a guild, a party of more
+	// than two) without revisiting this number, and it is the usual order of
+	// "players drawn around you" for an MMO client. newSceneOn refuses a
+	// configuration in which the two no longer fit.
+	sceneMaxVisible      = 64
+	sceneReservedObjects = 3
 
 	// A Join's replication session the transport could not open yet — it is
 	// still closing the player's previous one, which a quick reconnect over a
@@ -292,6 +314,12 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 // scene through here.
 func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
 	config = config.Normalize()
+	// A player's session holds its main view (at most sceneMaxVisible) plus
+	// sceneReservedObjects from outside it; together they must fit what the
+	// manager lets one session hold, or a crowd closes sessions again.
+	if limit := frame.DefaultLimits().MaxObjects; sceneMaxVisible+sceneReservedObjects > limit {
+		return nil, fmt.Errorf("scene: a main view of %d plus %d reserved objects exceeds the %d objects one replication session may hold", sceneMaxVisible, sceneReservedObjects, limit)
+	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
 	// before its WAL record is durable, so content can be newer than what
@@ -342,6 +370,9 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 			BlockSize:   config.BlockSize,
 			EnterRadius: sceneEnterRadius,
 			LeaveRadius: sceneLeaveRadius,
+			// The nearest sceneMaxVisible in range, not everyone in range:
+			// see sceneMaxVisible for why and for how the number was chosen.
+			MaxVisible: sceneMaxVisible,
 
 			MinViewRadius:  sceneMinViewRadius,
 			MaxLeaveRadius: sceneMaxLeaveRadius,

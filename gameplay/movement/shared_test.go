@@ -590,7 +590,7 @@ func expectDeliveryPaths(t *testing.T, p *npcProc, delivery heartbeat.Delivery, 
 	}
 }
 
-// npcDeliveries 是场景要跑的投递方式：缺省单目标与批量作业（D20 选项 C，heartbeat.delivery）。
+// npcDeliveries 是场景要跑的投递方式：单目标与缺省的批量作业（D20 选项 C，heartbeat.delivery）。
 var npcDeliveries = []heartbeat.Delivery{heartbeat.DeliveryDispatch, heartbeat.DeliveryBatch}
 
 func (p *npcProc) LookupLocalRemoteEntity(id int64, _ entity.EntityKind) entity.IThreadSafeRemoteEntity {

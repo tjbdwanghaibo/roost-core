@@ -4,6 +4,8 @@
 
 ## 结论
 
+**维护者 2026-10-22 决定 B：心跳投递缺省改为 `batch`，同时调参压低普通业务消息 p99（§3F）。** 缺省参数先取已测数据里 p99 最好的单项：批量作业组大小 8 → 4、时间片保持 200µs、批 64 不改（同时段组 4 业务 p99 0.187ms、进程 CPU 1.67 核，组 8 0.235ms / 1.76 核）；“时间片 100µs + 组 4”等合并组合放到当晚补测（§3F 附复跑命令），合并组更好再改缺省。下面原结论保留为决定前的判断。
+
 **2026-10-22 补测完成：不达标，不建议现在把 `heartbeat.delivery` 缺省改为 `batch`。** 维护者 2026-10-22 同意开始压测，按 §4 的步骤在 main `b86c4fa4` 上跑完正式对比（3 轮 + 1 次补跑）、普通 Nest 微基准（交替 10 遍）、profile，另加批大小 / 时间片 / 组大小对照与一组同时段补充轮（§3、§3A～§3D）。进程 CPU 有明显下降但只在一半测量时段里“接近 Y”；业务 p99 在宿主较稳定的时段里是 X 的约 3 倍（0.08 → 0.24ms）；跳拍 / 准入失败 / 快池拒绝全部为 0；普通短 handler 不退化（反而快约 10%）。是否接受“业务 p99 从约 0.08ms 到约 0.2ms”换“进程 CPU 约 −40%～−70%”是产品选择，交维护者决定（§3E 的 A / B）。合入方式不变（维护者 2026-10-21 决定 A：缺省 `dispatch`，`heartbeat.delivery: batch` 开启）。
 
 | 判据 | 状态 | 依据 |
@@ -119,7 +121,47 @@ C 把调度器空转从 X 的大头降下来了（CPU 的主要收益来源）�
 ### 3E. 是否把缺省改为 `batch`（需要维护者决定）
 
 - **A（推荐）：暂不改，缺省仍 `dispatch`**。判据“业务 p99 不差于 X”不成立（同时段 0.08 → 0.24ms），CPU 判据只在一半时段成立。下一步可做：时间片 100µs + 组 4 合起来测一次；逐目标开销（guard scope、fctx 查表）与按组取锁的优化；Linux 上复测（macOS 的 `usleep` 计入 CPU，可能高估 X 的调度器成本，也就高估了 C 的收益）；真实移动回调（5～20µs、带事务）下复测。代价：心跳仍多花约 1.3～2.5 核（5 万实体 100ms、100% 移动的规模）。
-- **B：改缺省为 `batch`，同时把时间片调到 100µs（或组调到 4）**。进程 CPU 约 −40%（时段 B）～ −70%（时段 A），代价是普通业务消息 p99 从约 0.08ms 升到约 0.19ms（p99.9 0.33 → 0.4～0.5ms），都在亚毫秒；Remote 托管实体照旧单目标。需要先补测“两项参数合起来”的一组。
+- **B：改缺省为 `batch`，同时把时间片调到 100µs（或组调到 4）**（**维护者 2026-10-22 选 B**，见 §3F）。进程 CPU 约 −40%（时段 B）～ −70%（时段 A），代价是普通业务消息 p99 从约 0.08ms 升到约 0.19ms（p99.9 0.33 → 0.4～0.5ms），都在亚毫秒；Remote 托管实体照旧单目标。需要先补测“两项参数合起来”的一组。
+
+### 3F. 维护者 2026-10-22 决定 B 与参数测量
+
+**决定**（维护者 2026-10-22）：选项 C 采用 §3E 的 B——`heartbeat.delivery` 缺省改为 `batch`，同时调参压低普通业务消息的 p99。随后（08:25）补充：先处理代码，参数补测放到当晚；缺省先用已测数据里 p99 最好的单项，即**组大小 4、时间片保持 200µs**；“时间片 100µs + 组 4”等组合当晚测完，若合并组更好再改缺省。
+
+**改了什么**（代码见 CHANGELOG“心跳投递缺省改为 Nest 批量作业”一条）：
+
+| 项 | 改前 | 改后 | 依据 |
+| --- | --- | --- | --- |
+| `heartbeat.delivery`（`wiring/heartbeat` 声明、生成配置） | `dispatch` | `batch` | 决定 B |
+| `heartbeat.DefaultDelivery`（`Config.Delivery` 空值、`ParseDelivery("")`；手写接线的 game-demo 也随之走批量） | `DeliveryDispatch` | `DeliveryBatch` | 同上：两处“缺省”保持一致 |
+| `tryBatchGroup`（`framework/nest/try_batch.go`） | 8 | 4 | §3A 同时段 3 轮：组 4 / 8 / 16 业务 p99 0.187 / 0.235 / 0.316ms，进程 CPU 1.67 / 1.76 / 1.77 核，驱动 CPU 0.153 / 0.243 / 0.299 核 |
+| `tryBatchSlice` | 200µs | 200µs（不变） | 100µs 单项 p99 −15%～−20%（§3A 0.189、§3B 0.215ms），与组 4 合起来没有测，按维护者要求先不动 |
+| `beatBatchSize`（`gameplay/heartbeat`） | 64 | 64（不变） | §3B：批 32 驱动 CPU +30%，128 两头都不好 |
+
+**参数测量（当晚补测，尚未完成）**：上午按任务书开始了一组同时段对照（`cdefault-20261022/run-cdefault.sh`），08:25 按维护者要求停下；停下前只完成第 1 轮的 4 次（组 8 / 100µs、组 4 / 200µs、组 4 / 100µs、无心跳），没有 X 与组 8 / 200µs 的同时段对照，**不作结论**，原样留在 [stopped-round1.jsonl](benchmarks/nest-batch-heartbeat-20261021/cdefault-20261022/stopped-round1.jsonl)（运行开始时 1 分钟 loadavg 3.9～4.9，作废 2 次：别的 agent 的 `roost project new` 与一次 `link`）：
+
+| 组（旧标签） | 进程 CPU 核 | 业务 p99 ms | 迟到 p99 ms | 跳拍 / 准入失败 |
+| --- | --- | --- | --- | --- |
+| 组 8、100µs（`Cs100`） | 1.35 | 0.124 | 7.32 | 0 / 0 |
+| 组 4、200µs（`Cg4`） | 1.44 | 0.183 | 9.18 | 0 / 0 |
+| 组 4、100µs（`Cs100g4`） | 1.52 | 0.103 | 6.64 | 0 / 0 |
+| 无心跳 | 0.14 | 0.075 | — | — |
+
+**待补测（今晚）**：100% 移动，3 轮、轮内轮转、同一时段，门控同 §3（另加 `foreign-ext.sh` 的一条，见样本 README），记录 loadavg、进程 CPU、业务 p99、迟到 p99、跳拍与准入失败。组合：X（单目标 `Dispatch` 对照）、组 4 / 200µs（新缺省）、组 8 / 200µs（2026-10-22 之前）、组 4 / 100µs（合并）、组 8 / 100µs（单独时间片）、无心跳。选法：进程 CPU 不明显回升的前提下取业务 p99 最低的组合；若不是组 4 / 200µs，改 `tryBatchGroup` / `tryBatchSlice` 与 `TestTryBatchParametersAreTheMeasuredDefaults`，并在本节补结果。
+
+```sh
+S=<scratch>/cdefault; mkdir -p $S/meas
+cp docs/performance/benchmarks/nest-batch-heartbeat-20261021/cdefault-20261022/{run-cdefault.sh,foreign-ext.sh} \
+   docs/performance/benchmarks/nest-batch-heartbeat-20261021/scripts/agg.py $S/
+F=framework/nest/try_batch.go
+b() { GOWORK=off go test -c -o $S/$1 ./gameplay/heartbeat/internal/bench; }
+b bin-final.test                                                        # 组 4、200µs（缺省）
+sed -i '' 's/^const tryBatchGroup = 4/const tryBatchGroup = 8/' $F; b bin-g8.test
+sed -i '' 's/^const tryBatchSlice = 200 \* time.Microsecond/const tryBatchSlice = 100 * time.Microsecond/' $F; b bin-s100g8.test
+sed -i '' 's/^const tryBatchGroup = 8/const tryBatchGroup = 4/' $F; b bin-s100.test
+git checkout $F && git status --porcelain                              # 必须干净；编完再起压测，压测期间不要在本机编译
+nohup caffeinate -i $S/run-cdefault.sh $S $S/meas 3 > $S/meas/nohup.out 2>&1 &
+python3 $S/agg.py $S/meas/delivery.jsonl
+```
 
 ## 3'. 暂停前采到的第 1 轮（2026-10-21，每组 1 次，不作结论，保留对照）
 

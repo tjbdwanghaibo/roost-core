@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 
+	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -66,5 +70,77 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 	stray.capture(&session.Message{Packet: &transport.Packet{Flags: wire.FlagPush, MsgID: msgid.MsgEntitySync, Payload: payload}})
 	if stray.failure == nil {
 		t.Fatal("没有 Sync 标志的场景帧被静默接受或跳过，scene_expect 只会在超时后报 0 frames")
+	}
+}
+
+// syncFrame 编出一帧：一个 subject 的完整更新，字段取 document。
+func syncFrame(t *testing.T, subjectID int64, document bson.M) []byte {
+	t.Helper()
+	raw, err := bson.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	component, err := entitysync.EncodeSubjectUpdate(entity.SubjectSyncUpdate{
+		SubjectID: subjectID,
+		Namespace: "player",
+		Full:      true,
+		Payload:   entity.CopyFrozenSyncPayload(0, raw),
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := frame.Encode(frame.Frame{
+		SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1},
+		Kind:         frame.Full,
+		Objects: []frame.ObjectDelta{{
+			Operation:  frame.ObjectCreate,
+			Ref:        frame.ObjectRef{ID: 1, Generation: 1},
+			Archetype:  1,
+			Components: []frame.ComponentDelta{{Operation: frame.ComponentSet, TypeID: 1, SchemaVersion: 1, Data: component}},
+		}},
+	}, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// scene_alive 是冒烟里“复制会话没被关”的判据：服务端因对象数超限（frame.ErrObjectLimit）关掉复制会话时
+// 不断开连接，请求照常应答、只是不再有帧。它自己 add_exp 1，等这次改动作为帧落到自己的 subject 上；
+// 帧不再来时必须失败，而不是像改前那样整轮判成功。
+func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
+	const playerID int64 = 7
+	player.RegisterEntity()
+	subjectID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, live := range []bool{true, false} {
+		watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
+		watcher.consume(syncFrame(t, subjectID, bson.M{"exp": int64(10), "level": int64(2)}))
+		rb := robot.NewContext(robot.Config{PlayerID: playerID})
+		rb.Blackboard.Set("scene_watcher", watcher)
+		rb.Blackboard.Set("player_id", playerID)
+		asked := 0
+		rb.RunAction = func(_ context.Context, _ *robot.Context, name string, _ any) error {
+			if name != "add_exp" {
+				t.Fatalf("scene_alive ran %q, want add_exp", name)
+			}
+			asked++
+			if live {
+				go watcher.consume(syncFrame(t, subjectID, bson.M{"exp": int64(11)}))
+			}
+			return nil
+		}
+		err := expectSceneAlive(context.Background(), rb, map[string]any{"timeout": "300ms"})
+		if asked != 1 {
+			t.Fatalf("live=%v: add_exp ran %d times, want once", live, asked)
+		}
+		switch {
+		case live && err != nil:
+			t.Fatalf("复制仍在进行，scene_alive 却失败：%v", err)
+		case !live && (err == nil || !strings.Contains(err.Error(), "stopped replicating")):
+			t.Fatalf("帧不再到达，scene_alive 应当失败并说明复制已停：%v", err)
+		}
 	}
 }

@@ -317,7 +317,7 @@ roost add timedomain --entity <Scene> [--id <component-id>]
 
 **装配（按需，不缺省装配）**：实体侧本来就零开销——没有登记、或登记都停着的实例不占调度，示例登记也是停止状态，AI 没有策略
 不跳；但驱动 goroutine 空转时也每 10ms 走一格，每多一个 Mod `shutdown.total_timeout` 多 3s 保底，所以与 `wiring/entitytimer`
-一样，只在有心跳实体的服务上装（add 命令自动加进 `mods`）。`heartbeat.*` 配置段按 Mod 的配置声明写（`kitconfig_gen.go`；现在是 `heartbeat.delivery: dispatch`，`batch` 是未经正式压测的 Nest 批量心跳作业），
+一样，只在有心跳实体的服务上装（add 命令自动加进 `mods`）。`heartbeat.*` 配置段按 Mod 的配置声明写（`kitconfig_gen.go`；现在是 `heartbeat.delivery: batch`，即 Nest 批量心跳作业，维护者 2026-10-22 决定改为缺省；`dispatch` 是每拍一条单目标消息的可选项），
 doctor 与 `--check-config` 用同一份声明。服务 Init / Shutdown 不用改。
 
 **技能与 Buff**：生成器不生成战斗组件骨架；战斗单位要 buff 到期、场景要推进技能 Runtime 时，用 `HeartbeatComponent.Host()`

@@ -77,6 +77,10 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_interest_fact_backlog` | Gauge | Interest 排队事实的积压：排队 + 应用中 + 已应用未结算（同一进程多个 Interest 时是最近写入者的值）。持续逼近 `MaxQueuedFacts`（缺省 65536）= 应用线程跟不上（ApplyAsync）或 Flush 停摆，`Queue*` 将返回 `ErrInterestQueueFull` |
 | `entitysync_interest_apply_duration` | Histogram | Interest 每一批排队事实的应用（取一批已确认事实、AOI 写阶段与并行重评）耗时：ApplyAsync 是应用线程每一步，Flush 撞上正在算的一批时最多等这么久；ApplySync 是 Flush 政策阶段里的应用部分 |
 | `entitysync_interest_settle_delay` | Histogram | 一批事实从应用完成到被结算（Flush 政策阶段或直接 `Apply`）的等待；ApplyAsync 在 periodic 下通常不超过一个同步周期，ApplySync 应用后随即结算、接近 0 |
+| `entitysync.interest.policy_duration` | Histogram | Interest 一次 Flush 政策阶段的耗时（两种模式）：ApplySync 是执行日志 + 结算，受“同步周期一半”的预算约束（预计超出时停下，只有一个单位本身超预算时会超出，见 [单写者方案 §12](../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)）；ApplyAsync 只有结算 |
+| `entitysync.interest.settle_duration` | Histogram | 政策阶段里结算（AOI 事件归并、订阅说给 Manager、释放发布屏障、`OnRefusal`）的耗时。ApplySync 按它摊到每个执行单位，为结算预留预算 |
+| `entitysync.interest.log_backlog` | Gauge | ApplySync 每次政策阶段结束时日志里剩下的条目数（门控事实 + 命令，含等提交确认的事实；同一进程多个 Interest 时是最近写入者的值）。持续不为 0 且增长 = 政策阶段的预算排不完积压，AOI 可见性在滞后；与 `entitysync_interest_fact_backlog` 一起看是否逼近 `MaxQueuedFacts` |
+| `entitysync.interest.budget_stop.total` | Counter | ApplySync 政策阶段因预算停下、仍留有可执行条目的次数（剩下的留到之后的 Flush，on_change 下立即再来一轮）。偶发是正常的削峰；与 Flush 次数同阶 = 每个周期都排不完，考虑减少每玩家视野或改用 ApplyAsync |
 
 ### 缓存与总线（core）
 
@@ -287,6 +291,10 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `entity.count_by_category` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.count_by_kind` | Gauge | `framework/statslog/statslog.go:publishCounts` |
 | `entity.unload_resync.backlog` | Gauge | `entity/unload_resync.go:SetGauge` |
+| `entitysync.interest.budget_stop.total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync.interest.log_backlog` | Gauge | `sync/entitysync/policy/interest_queue.go:SetGauge` |
+| `entitysync.interest.policy_duration` | Histogram | `sync/entitysync/policy/interest_queue.go:ObserveHistogram` |
+| `entitysync.interest.settle_duration` | Histogram | `sync/entitysync/policy/interest_queue.go:ObserveHistogram` |
 | `entitysync.self_view.stranded_players` | Gauge | `wiring/selfsync/selfsync.go:SetGauge` |
 | `entitysync_drain_remaining_entries` | Gauge | `sync/entitysync/drain.go:SetGauge` |
 | `entitysync_drain_timeout_total` | Counter | `sync/entitysync/drain.go:IncCounter` |

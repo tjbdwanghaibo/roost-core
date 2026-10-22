@@ -106,7 +106,14 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
 - **连续两次压测间隔不到 60s 时某个机器人 `poll_match: ticket still waiting`**：上一轮失败机器人的 duel 票还在队列里（TicketTTL 60s），被这一轮配走，剩下奇数个。
   等 sweep 清掉过期票再跑，或起偶数个再加一个。
 - **`connect: auth send: robot session: closed`**：`-count` 超过了 `player_access.tcp.max_connections_per_ip`（默认 128）。机器人全从一个 IP 来，超出的连接在握手前被关掉，
-  计入 `player_tcp_connection_rejected_total{reason}`；要压更大就调高这个配置。
+  计入 `player_tcp_connection_rejected_total{reason}`（2026-10-22 登录风暴 200 人里 72 个即此，`reason="per_ip"` 72）；要压更大就调高这个配置，
+  例如 `sed -i '' 's#max_connections_per_ip: 128#max_connections_per_ip: 512#' configs/service/config.game.yaml`。
+- **`scene_alive: … the server stopped replicating to it`**：这个机器人的复制会话被服务端关了（连接没断，只是不再有帧），
+  game 日志 `scene: push to player failed, its replication session was closed` 给出原因；`frame: object limit exceeded` 是它持有的对象超过了
+  Manager 的 `MaxObjects`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
+- **game 连本机 `127.0.0.1:2379` 的 etcd**：`configs/service/config.game.yaml` 的 `etcd.endpoints` 缺省指向本机，上面的 sed 不改它；
+  game 用它做服务注册（`etcd.service_prefix`，键带工程名前缀 `/<工程名>/services/...`，租约 10 秒），与别的工程不冲突；
+  2026-10-22 冒烟时本机恰好有一个在跑。本机没有、或要用隔离环境之外的 etcd 时改这一项。
 - **`CreateRole` 拒绝**：account 还不知道这台服。环境准备时跑一次 `go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`
   （Redis Cluster 用 `-redis-cluster <种子,…>`；`make dev-run` 已代为执行）。
 - **`player:<id>` 凭据与 demo 渠道不是认证**：只为了让裸客户端跑通 demo，上线前按[功能逐项说明 · auth.go](WALKTHROUGH.md#authgo两种凭据)替换。

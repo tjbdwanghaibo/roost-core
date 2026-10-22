@@ -121,6 +121,12 @@ const (
 	factBacklogMetric   = "entitysync_interest_fact_backlog"
 	applyDurationMetric = "entitysync_interest_apply_duration"
 	settleDelayMetric   = "entitysync_interest_settle_delay"
+	// 政策阶段（两种模式）：整次耗时、其中结算的耗时；同步模式：每次政策阶段结束时日志里剩下的条目数（事实 + 命令），
+	// 因预算停下、留下可执行条目的次数。
+	policyDurationMetric = "entitysync.interest.policy_duration"
+	settleDurationMetric = "entitysync.interest.settle_duration"
+	logBacklogMetric     = "entitysync.interest.log_backlog"
+	budgetStopMetric     = "entitysync.interest.budget_stop.total"
 )
 
 // applyGatherFor 是应用线程两步之间的最短间隔：periodic 模式取同步周期的 1/10（20Hz 时 5ms），结算只在 Flush 里
@@ -132,10 +138,65 @@ func applyGatherFor(m *entitysync.Manager) time.Duration {
 	return m.Interval() / 10
 }
 
-// syncApplyBudgetFor 是同步模式一次政策阶段排空日志的耗时预算：同步周期的一半（至少 1ms）。超出时剩余的留到下一次
-// 政策阶段（on_change 下立即再来一轮），Flush 不会因为积压而无界变长。
+// syncApplyBudgetFor 是同步模式一次政策阶段（执行日志 + 结算）的耗时预算：同步周期的一半（至少 1ms）。预计超出时
+// 剩余的留到下一次政策阶段（on_change 下立即再来一轮），Flush 不会因为积压而无界变长。规则见 planSyncStep。
 func syncApplyBudgetFor(m *entitysync.Manager) time.Duration {
 	return max(m.Interval()/2, time.Millisecond)
+}
+
+// ---- 同步模式政策阶段的预算（REFACTOR-2026-10-21-interest-single-writer §12，维护者 2026-10-22 决定 A）----
+//
+// 一次政策阶段 = 若干步执行日志 + 一次结算，两者一起不超过预算。成本按“单位”估计：一个单位是一步里执行的一条命令
+// 或取用的一条事实（被丢弃的事实不算）。
+//   - 执行：每单位耗时 costs.unit = 最近一步的耗时 / 它的单位数；
+//   - 结算：每单位耗时 costs.settle = 最近一次结算的耗时 / 它结算的单位数。结算的工作（AOI 事件归并、pair 说给
+//     Manager、释放屏障）由这些单位产生，所以按单位摊而不是按一次结算的绝对值预留：绝对值预留在负载变化时会
+//     在“多做一轮—留很大预留—只做很少”之间振荡（§12 的推演）。
+//   - 结算预留 = max(预算 / 10, costs.settle × 已执行未结算的单位数)：下限覆盖结算的固定部分与还没测到时。
+//
+// 每一步之前：下一步最多 n = (预算 − 已用 − 结算预留) / (costs.unit + costs.settle) 个单位（只在就绪事实处切开，
+// 同一提交不切开，事实另受 BatchSize 限制；见 runLogLocked）。n ≥ 1 就执行这么多；n < 1 时停止，留给下一次——但每次政策阶段的第一步总要执行（n 至少取 1）：
+// 不能饿死，代价是一个单位本身超预算时这一步会超出，超出量不超过一个单位（或一个提交）加结算。还没有任何估计时
+// （启动后的第一步）不限单位数，只受 BatchSize 限制。
+
+// applyCosts 是同步模式政策阶段的成本估计（每单位执行 / 结算的耗时；0 表示还没测到）。只在应用侧（持 mu）读写。
+type applyCosts struct {
+	unit, settle time.Duration
+}
+
+// syncReserveFloorDivisor：结算预留的下限是预算的 1/10。
+const syncReserveFloorDivisor = 10
+
+// planSyncStep 决定政策阶段的下一步：run 为假时停止；limit 是这一步最多执行的单位数，0 表示不限（只受 BatchSize
+// 限制）。elapsed 是本次政策阶段已用的时间，unsettled 是已执行未结算的单位数，first 表示本次政策阶段还没执行过。
+func planSyncStep(budget, elapsed time.Duration, unsettled int, first bool, costs applyCosts) (limit int, run bool) {
+	reserve := max(budget/syncReserveFloorDivisor, costs.settle*time.Duration(unsettled))
+	remaining := budget - elapsed - reserve
+	per := costs.unit + costs.settle
+	if per <= 0 {
+		return 0, first || remaining > 0
+	}
+	if remaining >= per {
+		return int(remaining / per), true
+	}
+	if first {
+		return 1, true
+	}
+	return 0, false
+}
+
+// stepTook / settleTook 用一步或一次结算的耗时更新每单位成本；没有执行单位（只完成了被丢弃的事实、只重试了
+// 被拒的订阅）的不更新。
+func (c *applyCosts) stepTook(took time.Duration, units int) {
+	if units > 0 {
+		c.unit = took / time.Duration(units)
+	}
+}
+
+func (c *applyCosts) settleTook(took time.Duration, units int) {
+	if units > 0 {
+		c.settle = took / time.Duration(units)
+	}
 }
 
 // signalApplierLocked 非阻塞地唤醒应用线程（第一次调用时启动它）。调用方持有登记侧锁，且登记侧未关闭。
@@ -210,23 +271,26 @@ func (in *Interest) applyStep() (applied, more, waiting bool) {
 	if in.closed {
 		return false, false, false
 	}
-	return in.runLogLocked()
+	return in.runLogLocked(0)
 }
 
 // drainLogLocked 一步接一步执行日志，直到没有可执行的条目（只剩未确认事实或日志空）。显式 Apply 与诊断读用它；
 // 同步模式的政策阶段另有耗时预算（settleQueued）。调用方持有 mu。
 func (in *Interest) drainLogLocked() {
 	for {
-		if _, more, _ := in.runLogLocked(); !more {
+		if _, more, _ := in.runLogLocked(0); !more {
 			return
 		}
 	}
 }
 
 // runLogLocked 执行一步：取出日志，按序执行命令、把就绪事实应用到 AOI（≤ BatchSize，见上文规则），应用完的事实
-// 记入 applied（发布屏障仍持有，由下一次结算释放）。返回 progressed（执行了命令或完成了事实）、more（还有可执行的
-// 条目没取完）、waiting（日志里仍有事实，可能在等提交确认）。调用方持有 mu。
-func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
+// 记入 applied（发布屏障仍持有，由下一次结算释放）。unitLimit > 0 时这一步执行的单位（命令与取用的事实）到达
+// unitLimit 后，在下一条就绪事实处切开——与 BatchSize 的切开是同一个切点、同一套规则（同一提交不切开，之后的命令
+// 与事实留到下一步）；命令本身不触发切开，切点不会落到新的位置，不引入新的越过关系。0 不限（应用线程、显式 Apply）。
+// 执行的单位数累加到 unsettledUnits。返回 progressed（执行了命令或完成了事实）、more（还有可执行的条目没取完）、
+// waiting（日志里仍有事实，可能在等提交确认）。调用方持有 mu。
+func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool) {
 	r := &in.registry
 	r.mu.Lock()
 	if len(r.log) == 0 {
@@ -250,7 +314,8 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 	completed := make([]queuedInterestFact, 0, len(batch))
 	appliedCommits := make(map[*entity.SyncMutation]bool)
 	var failed error
-	taken, cut, batching := 0, false, false
+	taken, units, cut, batching := 0, 0, false, false
+	full := func() bool { return taken >= in.batchSize || (unitLimit > 0 && units >= unitLimit) }
 	endBatch := func() {
 		if batching {
 			in.aoi.endBatch(in.workers)
@@ -265,6 +330,7 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 			}
 			endBatch()
 			in.runOpLocked(entry.op)
+			units++
 			progressed = true
 			continue
 		}
@@ -280,13 +346,14 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 			continue
 		}
 		sameCommit := fact.commit != nil && appliedCommits[fact.commit]
-		if (cut || taken >= in.batchSize) && !sameCommit {
+		if (cut || full()) && !sameCommit {
 			cut, more = true, true
 			blocked[key] = true
 			pending = append(pending, entry)
 			continue
 		}
 		taken++
+		units++
 		if fact.commit != nil {
 			appliedCommits[fact.commit] = true
 		}
@@ -340,6 +407,7 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 	if progressed {
 		in.unsettled = true
 	}
+	in.unsettledUnits += units
 	// 异步模式：on_change 下让 Manager 尽快结算；periodic 下由下一个周期结算。同步模式已在政策阶段里，随即结算。
 	if progressed && in.applyMode == ApplyAsync {
 		in.wake()
@@ -349,8 +417,9 @@ func (in *Interest) runLogLocked() (progressed, more, waiting bool) {
 	return progressed, more, waiting
 }
 
-// settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里执行日志（一步接一步，直到没有可执行的条目或耗时预算
-// 用完；剩余的留给下一次，on_change 下尽快再来一轮）；异步模式不执行（那是应用线程的事）。然后两种模式相同：把 AOI
+// settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里执行日志（一步接一步，直到没有可执行的条目或预计执行
+// 下一步加上结算会超出预算，见 planSyncStep；剩余的留给下一次，on_change 下尽快再来一轮）；异步模式不执行（那是
+// 应用线程的事）。然后两种模式相同：把 AOI
 // 事件与关系变更归并进 held 并说给 Manager，释放已应用事实的发布屏障（applyLocked），拒绝交给 OnRefusal，返回
 // 应用时攒下的错误（无法应用而丢弃的事实，只让一次 Flush 失败）。从未登记过任何条目的 Interest 什么也不做。
 func (in *Interest) settleQueued() error {
@@ -365,28 +434,55 @@ func (in *Interest) settleQueued() error {
 	if !active {
 		return nil
 	}
+	started := in.now()
+	settleFrom := started
 	if in.applyMode == ApplySync {
-		deadline := time.Now().Add(in.syncBudget)
-		for {
-			_, more, _ := in.runLogLocked()
-			if !more {
-				break
-			}
-			if !time.Now().Before(deadline) {
-				in.wake()
-				break
-			}
-		}
+		settleFrom = in.runSyncStepsLocked(started)
 	}
+	units := in.unsettledUnits
 	refusals := in.applyLocked()
 	if in.onRefusal != nil {
 		for _, refusal := range refusals {
 			in.onRefusal(refusal)
 		}
 	}
+	finished := in.now()
+	if in.applyMode == ApplySync {
+		in.costs.settleTook(finished.Sub(settleFrom), units)
+	}
+	metrics.ObserveHistogram(settleDurationMetric, nil, finished.Sub(settleFrom))
+	metrics.ObserveHistogram(policyDurationMetric, nil, finished.Sub(started))
 	err := in.applyErr
 	in.applyErr = nil
 	return err
+}
+
+// runSyncStepsLocked 是同步模式政策阶段的执行部分：按 planSyncStep 一步接一步执行日志，直到没有可执行的条目或
+// 预计执行下一步 + 结算会超出预算。预算停止时记 budgetStopMetric 并提醒 Manager（on_change 下尽快再来一轮）；
+// 结束时记下日志里剩下的条目数。返回执行部分结束的时刻（结算从这里开始计时）。调用方持有 mu、不持 registry.mu。
+func (in *Interest) runSyncStepsLocked(started time.Time) time.Time {
+	now := started
+	for first := true; ; first = false {
+		limit, run := planSyncStep(in.syncBudget, now.Sub(started), in.unsettledUnits, first, in.costs)
+		if !run {
+			metrics.IncCounter(budgetStopMetric, nil, 1)
+			in.wake()
+			break
+		}
+		before := in.unsettledUnits
+		_, more, _ := in.runLogLocked(limit)
+		stepEnd := in.now()
+		in.costs.stepTook(stepEnd.Sub(now), in.unsettledUnits-before)
+		now = stepEnd
+		if !more {
+			break
+		}
+	}
+	in.registry.mu.Lock()
+	left := len(in.registry.log)
+	in.registry.mu.Unlock()
+	metrics.SetGauge(logBacklogMetric, nil, int64(left))
+	return now
 }
 
 // releaseAppliedLocked 在结算之后释放已应用事实的发布屏障，并把它们移出预算。任何结算入口（Flush 的政策阶段、

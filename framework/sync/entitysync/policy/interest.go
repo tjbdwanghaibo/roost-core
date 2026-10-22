@@ -73,8 +73,9 @@ const (
 // 同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧（发布屏障到结算之后才释放）、
 // Drain 等到在途事实全部应用并结算、Close 释放全部屏障——只有“结果何时可见”和“线程模型”不同：
 //
-//   - ApplySync（缺省）：Manager Flush 的政策阶段在 Interest.mu 内应用一批（≤ BatchSize）已确认的事实，随即结算；
-//     不启动应用线程。提交之后的下一次 Flush 就能看到结果（BatchSize 以内）。AOI 计算在 Flush 的关键路径上，
+//   - ApplySync（缺省）：Manager Flush 的政策阶段在 Interest.mu 内执行日志、随即结算，执行 + 结算不超过同步周期的
+//     一半（预计超出时剩余的留到之后的 Flush，见 planSyncStep）；不启动应用线程。提交之后的下一次 Flush 就能看到
+//     结果，重负载下晚一两个周期。AOI 计算在 Flush 的关键路径上，
 //     所以每个玩家的视野数有上限（SyncApplyMaxViewsPerPlayer）。适合每玩家额外视野不超过 8 个的游戏：
 //     MMO、MOBA、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
 //   - ApplyAsync：每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算。Flush 不随
@@ -153,7 +154,8 @@ type Interest struct {
 	registry  viewRegistry
 	batchSize int
 	workers   int
-	// maxQueuedFacts / applyMode / syncBudget / onRefusal 构造后不变。
+	// maxQueuedFacts / applyMode / syncBudget / onRefusal 构造后不变。syncBudget 是同步模式一次政策阶段（执行日志 +
+	// 结算）的耗时预算，见 settleQueued。
 	maxQueuedFacts int
 	applyMode      ApplyMode
 	syncBudget     time.Duration
@@ -166,7 +168,8 @@ type Interest struct {
 	applierStop    chan struct{}
 	applierDone    chan struct{}
 	applyGather    time.Duration
-	// viewInterval / now：SetObserverView 的限速间隔与时钟（构造后不变；测试可替换 now）。
+	// viewInterval / now：SetObserverView 的限速间隔与 Interest 的时钟（构造后不变；测试可替换 now）。now 也给同步模式
+	// 政策阶段的预算计时（只在 settleQueued 里、持 mu 且不持 registry.mu 时读）。
 	viewInterval time.Duration
 	now          func() time.Time
 
@@ -211,6 +214,10 @@ type Interest struct {
 	// unsettled：应用方执行过条目（命令或事实）、还没结算——AOI 事件或 touched 里的变化还没说给 Manager。
 	// queuedPending 据此让 Drain 等到结算；异步模式下应用线程可能恰在某次 Flush 结算之后、Drain 检查之前执行完一步。
 	unsettled bool
+	// unsettledUnits 是自上次结算以来应用方执行的单位数（一条命令或一条取用的事实），costs 是同步模式政策阶段的
+	// 成本估计（每单位执行 / 结算的耗时），两者都只给预算用，见 planSyncStep。
+	unsettledUnits int
+	costs          applyCosts
 	// refused counts consecutive refusals per held pair (with the first
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
@@ -800,6 +807,7 @@ func (in *Interest) applyLocked() []Refusal {
 	queued := in.retry
 	in.retry = nil
 	in.unsettled = false
+	in.unsettledUnits = 0
 	in.drainAOILocked()
 	keys := make([]pair, 0, len(in.touched))
 	for key := range in.touched {

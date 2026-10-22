@@ -651,6 +651,9 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			return coded(resp.Code, resp.Reason)
 		}))
 	actions.MustRegister(action.Func{ActionName: "scene_expect", Handle: expectScene})
+	// scene_alive: this client's replication session is still open at the
+	// end of the run (see expectSceneAlive).
+	actions.MustRegister(action.Func{ActionName: "scene_alive", Handle: expectSceneAlive})
 	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
 		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -1292,6 +1295,64 @@ func expectArrival(ctx context.Context, rb *robot.Context, param any) error {
 			return ctx.Err()
 		case <-deadline:
 			return fmt.Errorf("move_arrive: after %s this client was last replicated at (%d,%d) (known %v), want the goal (%d,%d)", timeout, x, y, found, goalX, goalY)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// expectSceneAlive judges that the server still replicates to this client.
+// A replication session the server closed without disconnecting — one that
+// came to hold more objects than the manager allows (frame.ErrObjectLimit),
+// which is what a crowded spawn point did before the scene capped the main
+// view — does not show anywhere else: every request still answers, only the
+// frames stop, and a run that checks nothing later went green. So the robot
+// makes one replicated change of its own (add_exp 1) and waits for it to
+// arrive on its own subject. Run it last: a session the server closes is
+// never reopened while the connection stays up, so this one check covers
+// everything before it. Params: "timeout". scene_watch must run first.
+func expectSceneAlive(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	timeout := params.Duration("timeout", 10*time.Second)
+	raw, _ := rb.Blackboard.Get("scene_watcher")
+	watcher, ok := raw.(*sceneWatcher)
+	if !ok || watcher == nil {
+		return errors.New("scene_alive: no watcher on the blackboard; scene_watch must run first")
+	}
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	// own reports this client's own exp and level as last replicated.
+	own := func() (exp, level int64, frames int, failure error) {
+		watcher.mu.Lock()
+		defer watcher.mu.Unlock()
+		for subjectID, document := range watcher.subjects {
+			if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
+				exp, level = bsonInt64(document["exp"]), bsonInt64(document["level"])
+				break
+			}
+		}
+		return exp, level, watcher.frames, watcher.failure
+	}
+	exp, level, frames, failure := own()
+	if failure != nil {
+		return failure
+	}
+	if err := rb.Do(ctx, "add_exp", map[string]any{"amount": 1}); err != nil {
+		return fmt.Errorf("scene_alive: add_exp: %w", err)
+	}
+	deadline := time.After(timeout)
+	for {
+		nowExp, nowLevel, nowFrames, failure := own()
+		if failure != nil {
+			return failure
+		}
+		if nowFrames > frames && (nowExp != exp || nowLevel != level) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("scene_alive: after %s this client's own exp is still %d (level %d) and %d frames arrived since add_exp: the server stopped replicating to it (a closed replication session; the game log says why)", timeout, nowExp, nowLevel, nowFrames-frames)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}

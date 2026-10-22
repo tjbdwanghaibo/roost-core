@@ -76,20 +76,26 @@ func TestModBindsNestAndReadsTheFrozenBusinessTime(t *testing.T) {
 	}
 }
 
-// heartbeat.delivery：缺省 dispatch；batch 在 Init 时交给驱动（Provide 时按它接 Nest 批量作业）；未知值在声明解码时
-// 拒绝（enum），不进驱动。
-// 变异核对：Init 不把配置交给驱动（去掉 SetDelivery）时 batch 配置下驱动仍是 dispatch，本用例变红。
+// heartbeat.delivery：缺省 batch（维护者 2026-10-22 决定）；配置值在 Init 时交给驱动（Provide 时按它接 Nest 批量作业
+// 或单目标 Dispatch）；未知值在声明解码时拒绝（enum），不进驱动。驱动构造时先设成与缺省相反的 dispatch，确认“不配”
+// 时是声明的缺省把它改成 batch，而不是驱动自己的空值缺省。
+// 变异核对：Init 不把配置交给驱动（去掉 SetDelivery）时不配与配 batch 两种情况下驱动都仍是 dispatch，本用例变红；
+// 声明缺省改回 default:"dispatch" 时“不配”一项变红。
 func TestModReadsTheDeliveryOnce(t *testing.T) {
 	access := entity.NewManagerAccess(entity.NewEntityManager())
 	for _, tc := range []struct {
 		value string
 		want  coreheartbeat.Delivery
-	}{{"", coreheartbeat.DeliveryDispatch}, {"batch", coreheartbeat.DeliveryBatch}} {
+	}{{"", coreheartbeat.DeliveryBatch}, {"batch", coreheartbeat.DeliveryBatch}, {"dispatch", coreheartbeat.DeliveryDispatch}} {
 		cfg := viper.New()
 		if tc.value != "" {
 			cfg.Set("heartbeat.delivery", tc.value)
 		}
-		driver := coreheartbeat.NewDriver(coreheartbeat.Config{Name: "wiring.delivery." + tc.value})
+		initial := coreheartbeat.DeliveryDispatch
+		if tc.want == coreheartbeat.DeliveryDispatch {
+			initial = coreheartbeat.DeliveryBatch
+		}
+		driver := coreheartbeat.NewDriver(coreheartbeat.Config{Name: "wiring.delivery." + tc.value, Delivery: initial})
 		if err := NewMod(access, driver).Init(cfg); err != nil {
 			t.Fatalf("Init(heartbeat.delivery=%q) = %v", tc.value, err)
 		}

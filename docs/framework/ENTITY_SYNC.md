@@ -82,6 +82,9 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 ## 容量与观测
 
 `ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`，`Limits.MaxObjects` 同时是一个会话可持有的 subject 数；
+`Subscribe` 不按它拒绝，超出发生在下一次 Flush 给该会话编码、为新对象分配引用时（`frame.ErrObjectLimit`）：Manager 不截断、不只丢超出的那几个，
+而是关闭整个会话（`SessionsLost` +1、回调 `SessionLost`，不断开传输连接），之后政策对它的订阅以会话不存在被拒、进重试表，直到业务重新打开会话；
+持有量由业务用政策的上限（`AOIConfig.MaxVisible` 等）保证（`TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit`）；
 `Stats()` 与 `CheckHealth()`（80% 降级、满或关闭为 Fail）；指标 `entitysync_frames_admitted_total`、`entitysync_sessions_lost_total`、
 `entitysync_durability_gate_deferred_total`。
 

@@ -23,7 +23,7 @@
 | D17 | 全服邮件的内置投递策略 | 维护者 2026-10-20 决定 A（全局邮件一个 ID，个人邮箱拉取合并），已实施（`mail.NewLazyBroadcast`） |
 | D18 | 业务时区与“业务日”边界 | 维护者 2026-10-20 决定 A（按推荐，缺省 UTC），已实施 |
 | D19 | 视野（View）：逻辑 ID、空间 / 关系两类、玩家与视野多对多 | 维护者 2026-10-20 决定实施（int64 视野 ID、同步层级取高或并集、MaxVisible 按视野、不进 Nest、删除旧 RelationSource），已实施（2026-10-20）；多视野修复后排队事实分两种应用模式（ApplySync 缺省 / ApplyAsync，维护者 2026-10-21 决定，已实施）；三项小决定按推荐保留 |
-| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”）；**维护者 2026-10-21 决定心跳只是技能 / Buff 的驱动方式之一、skill 只用接口，已实施**（`skill.Driver` / `skill.Stepper` + `CombatComponent.DriveBuffs`，心跳驱动改为薄包装，见下文“驱动接口实施结果”）；**P3 game-demo 接入已实施**（见下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）；**生成器接入已实施**（`roost add heartbeat` / `behavior` / `timedomain`，见下文“生成器接入实施结果”）；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测 2026-10-22 补测不达标（业务 p99 高于 X），建议暂不改缺省，待维护者决定（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)、[性能](../performance/NEST-BATCH-HEARTBEAT-20261021.md)） |
+| D20 | 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制 | 维护者 2026-10-21 定方案（①～⑮ 与压测后决定）；**P1 心跳框架已实施**（`gameplay/heartbeat` + `wiring/heartbeat`，见下文“P1 实施结果”）；P1 后决定 ④（Remote 共享模式不允许挂载心跳）已实施；**P2 组件与 actionflow 适配已实施**（`gameplay/movement` + `actionflow.BeatRunner`，见下文“P2 实施结果”）；真实 Remote 共享模式切换下的心跳、移动、任务与 AI 已验证并修了两处恢复缺陷（见下文“真实 Remote 共享模式切换验证”）；**P4 压测工具心跳驱动代码已实施、未测量**（见下文“P4 实施结果”，测量待 v1.31 发版前压测）；**P5 技能与 Buff 的快池 tick 迁移已实施**（`combatcomponent.AttachBeat` / `NewRuntimeBeat` + `skill.TickClock`，见下文“P5 实施结果”）；**维护者 2026-10-21 决定心跳只是技能 / Buff 的驱动方式之一、skill 只用接口，已实施**（`skill.Driver` / `skill.Stepper` + `CombatComponent.DriveBuffs`，心跳驱动改为薄包装，见下文“驱动接口实施结果”）；**P3 game-demo 接入已实施**（见下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）；**生成器接入已实施**（`roost add heartbeat` / `behavior` / `timedomain`，见下文“生成器接入实施结果”）；Nest 批量心跳作业（选项 C）已实施，维护者 2026-10-21 决定先合入、缺省关闭（`heartbeat.delivery: batch` 开启），合批优化压测 2026-10-22 补测不达标（业务 p99 高于 X）；**维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4 压低业务 p99，合并参数当晚补测**（[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)、[性能](../performance/NEST-BATCH-HEARTBEAT-20261021.md)） |
 | D21 | 吸收 ssr 的优秀组件进 `gameplay` | 维护者 2026-10-21 登记为后续任务；调研一（action / action_list / mission / ai / state 对比与引入方案）已写；维护者 2026-10-21 决定调研一 13 条全部按推荐（A），**已实施**（D21-1～D21-5，已合入 main，见本节“调研一 · 实施”；同日 `actionflow.Agent` 更名为 `Behavior`）；实施中的 4 项小决定维护者 2026-10-21 确认按推荐；其余 ssr 候选未调研 |
 | D22 | 业务时间取自 ctx、支持变速 | 维护者 2026-10-21 提出（D21 调研中补充、单列）；同日决定范围按 ssr 收窄：全局不做变速（D22-2 取消），只做 D22-1 与场景时间域；**D22-1 与场景时间域已实施**（见下文“实施结果”；D21 合入后补了 `Behavior` 缺省时间与 actionflow / ai 的 `BeatConfig.TimeDomain`） |
 
@@ -826,6 +826,8 @@ Flush 均值 = `ManagerCounters.FlushDuration / FlushCalls`（含启动与预热
 
 **两种应用模式的后续决定（维护者 2026-10-21）**：①缺省 `ApplySync`（保持）；②同步模式上限 9 计入关系视野（`MaxViewsPerPlayer` 含关系视野，保持现实现）；③“提交后立即 Flush 看不到排队事实、要用 Drain”只在 `ApplyAsync` 下出现，CHANGELOG 按此写，确认。
 
+**ApplySync 预算把结算也算进去（维护者 2026-10-22 决定 A）**：单写者重构后 16 视野（诊断构建）政策阶段 P95 38ms——预算只在两步之间检查，检查后还有一整步与结算。选项：A 预算把结算也算进去，按上一步估算下一步、预计超出就停，剩下的留到下一个周期（Flush 时长有上界、同步节奏不变，代价是重负载下 AOI 变化晚一两个周期可见）；维护者选 A。已实施（规则：按单位估计执行与结算成本，结算预留 = max(预算/10, 每单位结算 × 已执行未结算单位)，每次政策阶段至少前进一个单位，批切小），见 [单写者方案 §12](REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)；压测待补（[Interest 报告 §7](../performance/INTEREST-SINGLE-WRITER-20261022.md#7-applysync-预算计入结算待补测今晚)）。
+
 ## D20 移动由实体自己的心跳驱动：MapBasic / Move 组件 + actionflow 控制
 
 **状态：维护者 2026-10-21 提出方向；同日定了四点：移动组件放 `gameplay`；心跳处理本质也是 Nest，“hb 就在 nest 的快线程”；心跳框架写进 `gameplay`；以后跑在 Nest 快池（short）里的业务周期逻辑都以心跳为底层。要求先给心跳（HB）方案（下文“心跳（HB）方案”），确认后再试。2026-10-21 方案确认，P1 心跳框架已实施（下文“P1 实施结果”），P2 组件与 actionflow 适配已实施（下文“P2 实施结果”），P4 压测工具心跳驱动的代码已实施、测量待补（下文“P4 实施结果”），P5 的技能与 Buff 两项已实施（下文“P5 实施结果”），生成器接入已实施（下文“生成器接入实施结果”），P3 game-demo 接入已实施（下文“P3 实施结果”，连同 P5 的 game-demo 刷怪）。** 来源：分析 D19 多视野“Nest 模式失守”时，维护者指出压测里的移动由一个全局循环驱动、不像真实游戏；移动应在**实体自己的心跳（HB）**里做，心跳天然打散；加 `MapBasic` 与 `Move` 两个组件，在 game-demo 统一使用，由 `gameplay/actionflow` 控制移动，逻辑统一且性能高。设计参考 ssr 的 heartbeat 模块（自动心跳 autotick 与按实体的心跳组件），下文 §6 说明哪些思路照搬、哪些不适合 roost。
@@ -1102,6 +1104,34 @@ make dev-stop
 ```
 
 **冒烟结果（2026-10-22，已补）**：生成工程 = main `11988df8`（+ 只改 sync-aoi 的夹具修正）上 `roost project new hbsmoke -template game-demo --skip-deps` + `replace` 指回 worktree；依赖用 `wiring/scripts/integration/dataengine-env.sh up` 起的私有环境（根目录在会话 scratchpad、端口偏移 26000），十份配置按 demo README 的 sed 改指向它。`make dev-run` 十个进程全部就绪、accountctl 登记 sid 1000；`make dev-smoke` 2 / 2 成功（场景耗时 p95 4.49s，阈值 16s）；`make loadtest LOADTEST_COUNT=20` 20 / 20 成功（场景耗时 p50 / p99 10.0 / 10.8s），场景里的 `move_target` → `move_arrive` 每个机器人都走完；game 进程 `heartbeat_delivered_total = heartbeat_executed_total = 1404`，没有跳拍计数，game 日志没有 WARN / ERROR；`make dev-stop` 正常。两点如实记录：① 生成配置里 game 连 `127.0.0.1:2379` 的 etcd（本机恰好有一个在跑，注册键带工程名前缀 `/hbsmoke/services/...`），README 的 sed 不改它；② 同一环境里另做的登录风暴（[INTEREST-SINGLE-WRITER-20261022 §6](../performance/INTEREST-SINGLE-WRITER-20261022.md#6-没做的与不能证明的)）发现 100 个以上玩家同时挤在出生点时，每个复制会话持有对象超过 Manager `Limits.MaxObjects`（缺省 100），会话被关闭（`frame: object limit exceeded`），见 KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”。
+
+**冒烟结果的后续（2026-10-22，维护者按推荐处理）**：
+
+- **出生点挤满 → 主视野 `MaxVisible` 64**：`internal/service/game/scene.go` 的 `sceneMaxVisible = 64`、`sceneReservedObjects = 3`（自身、场景实体、对局队友；GroupSize 2、同时只在一个队里），`newSceneOn` 启动时核对 64 + 3 ≤ `frame.DefaultLimits().MaxObjects`（100），其余 33 留给以后加的关系视野。红测试 `TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（生成工程 `internal/service/game`，100 个玩家 + 3 只怪挤在出生点，内存里约 0.03s）：修前 `scene_test.go:496: 100 of 100 replication sessions were closed at a crowded spawn point (0 still open)`，日志 100 条 `frame: object limit exceeded`，与风暴 100 人全部被关一致；修后每个会话都开着、每人恰好持有 64 个其他目标。
+- **机器人判“复制会话没被关”**：会话因编码失败被关时连接不断、请求照常应答，客户端收不到关闭帧，所以不能“断言没收到关闭帧”；改为场景最后一步 `scene_alive`：自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败。单测 `TestSceneAliveFailsWhenTheServerStopsReplicating`（帧不来时失败、来了通过；把等待去掉的变异让它红：`帧不再到达，scene_alive 应当失败并说明复制已停：<nil>`）。
+- **200 人里 72 个 `connect` 失败 = 单 IP 连接上限**：当次 game 指标 `player_tcp_connection_rejected_total{reason="per_ip"} 72`（scratchpad 里留存的 storm-trial 产物），机器人全从 127.0.0.1 来，`player_access.tcp.max_connections_per_ip` 缺省 128，200 − 128 = 72；README“常见问题”与 WALKTHROUGH 原本已写，不是缺陷，不改缺省。
+- **“超出 `MaxObjects` 由 Manager 拒绝”的措辞**已按代码改正（超出时关闭整个会话），见 KNOWN-LIMITS“广播与 AOI”③、[guide/04-sync](../framework/guide/04-sync.md)、[ENTITY_SYNC](../framework/ENTITY_SYNC.md#容量与观测)。
+- **game 连本机 etcd**：生成配置 `etcd.endpoints: [127.0.0.1:2379]`，用于服务注册（键前缀 `/<工程名>/services/`）；README 的 sed 不改它，已写进 README“常见问题”。不修。
+- 留给维护者：编码失败关掉的复制会话不断开连接（A 断开让客户端重连 / B 保持），见 KNOWN-LIMITS 同节。
+
+**待补测（今晚）**：维护者 2026-10-22 08:25 定 100 / 200 个机器人的 loadtest 属压测，放到当晚。复跑（私有依赖环境，端口偏移按当时空闲选，下例 26000；十份配置的 sed 见 demo README，偏移 26000 时 Mongo 53117–53119、NATS 40222、Redis 42379）：
+
+```bash
+ROOST_IT_HOME=<scratch>/env ROOST_IT_PORT_OFFSET=26000 bash wiring/scripts/integration/dataengine-env.sh up
+GOWORK=off go run ./codegen/cmd/roost project new <唯一名> -module example.com/<唯一名> -template game-demo --skip-deps -out <scratch>/<唯一名>
+cd <scratch>/<唯一名> && go mod edit -replace github.com/tjbdwanghaibo/roost-core=<worktree>
+# 按 README 改十份配置；200 个机器人要放开单 IP 上限：
+sed -i '' 's#max_connections_per_ip: 128#max_connections_per_ip: 512#' configs/service/config.game.yaml
+GOFLAGS=-mod=mod make dev-run
+GOFLAGS=-mod=mod make loadtest LOADTEST_COUNT=100 LOADTEST_ACCOUNT_NATS=nats://127.0.0.1:40222; echo rc=$?
+GOFLAGS=-mod=mod make loadtest LOADTEST_COUNT=200 LOADTEST_ACCOUNT_NATS=nats://127.0.0.1:40222; echo rc=$?   # 两轮间隔 ≥ 60s（duel 票 TTL）
+grep -c 'object limit exceeded' .dev/game.log                 # 期望 0
+curl -s 127.0.0.1:9100/metrics | grep -E 'player_tcp_connection_rejected_total|entitysync_sessions_lost_total'
+make dev-stop
+ROOST_IT_HOME=<scratch>/env ROOST_IT_PORT_OFFSET=26000 bash wiring/scripts/integration/dataengine-env.sh reset
+```
+
+判据：两轮 rc=0（`scene_alive` 全过），game 日志没有 `object limit exceeded`，`per_ip` 拒绝为 0。只是冒烟，不下性能结论。要看改前的样子，把生成工程 `scene.go` 里 `MaxVisible: sceneMaxVisible,` 一行删掉再跑 100 人：期望 `scene_alive` 失败、日志出现 `object limit exceeded`（本轮没跑）。
 
 ### P4 实施结果（2026-10-21）
 
@@ -1463,6 +1493,7 @@ roost 的取舍：
    - **方案 D 原型（2026-10-21，[实验记录](../performance/NEST-DISPATCH-BATCH-20261021.md)，分支 `perf/nest-dispatch-batch`）不达标**：CPU 只比 X 少 10～12%；维护者 2026-10-21 按推荐 A 决定分支不合入，只保留 worker“结束后同一次持锁取下一项”，随选项 C 合入。
    - **维护者 2026-10-21 决定：选项 C 先合入、缺省关闭，合批优化压测通过后再改为缺省开启**（开关 `heartbeat.delivery: dispatch | batch`，缺省 `dispatch`；Nest 侧的分片登记表、同锁取下一项、`DispatchTryBatch` 入口无条件生效）。
    - **选项 C 已实施（2026-10-21，[设计](FEATURE-2026-10-21-nest-batch-heartbeat.md)，分支 `perf/nest-batch-heartbeat`，未合入 main）**：维护者 2026-10-21 批准按推荐做（C + 两张 goroutine 登记表改分片表 + 只保留 D 的同锁取下一项），并追加同 ID 顺序硬约束：tails 有登记（含已准入未执行）的目标当场转单目标作业排在冲突消息之后（不跳拍，对应 ssr 的 MoveCopy 但只投一次），执行期间认领为该 ID 的尾作业。`heartbeat.delivery: batch` 时心跳按 64 个一批走 `nest.NestMgr.DispatchTryBatch`（Remote 托管实体仍单目标 `Dispatch`）。23 条变异核对 22 红 1 绿（绿的一条是防御性包装，见设计 §16）。**性能结论（2026-10-22 补测：不达标，建议暂不改缺省——同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核（另一时段 3.42 / 0.91 / 0.33），业务 p99 X 0.078 / C 0.235ms；跳拍 / 准入失败 / 快池拒绝 0；普通短 handler 不退化（−9.9%））**：见 [NEST-BATCH-HEARTBEAT-20261021 §3](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3-2026-10-22-补测正式对比3-轮中位数-最小最大)，是否改缺省待维护者决定（§3E）。待拍板 4 项见设计 §15。
+   - **维护者 2026-10-22 决定 B：心跳投递缺省改为 `batch`，同时调参压低普通业务消息的 p99**（接受“进程 CPU 约 −40%～−70%、业务 p99 约 0.08 → 0.2ms”）。同日 08:25 补充：先处理代码、参数补测放到当晚；缺省先用已测数据里 p99 最好的单项——批量作业组大小 `tryBatchGroup` 8 → 4（同时段业务 p99 0.235 → 0.187ms、进程 CPU 1.76 → 1.67 核），时间片 200µs、批 64 不变；“时间片 100µs + 组 4”等组合当晚测，合并组更好再改缺省（[性能报告 §3F](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3f-维护者-2026-10-22-决定-b-与参数测量)，附复跑命令）。已实施：`heartbeat.delivery` 声明缺省与生成配置为 `batch`，`heartbeat.DefaultDelivery = DeliveryBatch`（`Config.Delivery` 空值同此，手写接线的 game-demo 随之走批量），`dispatch` 保留为可选项；两种方式的用例都继续跑。
 3. **同一实体多个组件登记**：A 合并为一条投递，实体周期取最短、各登记按自己的周期与经过时间触发（推荐，示例分布省约 29%）；B 每个登记各自投递。
 4. **合并 / 跳拍**：至多一条在途，上一拍没执行完就跳过、只计 `Skipped`，不累积、不补投（推荐）；备选“累积到下一拍一起执行”会让慢实体越积越多，不推荐。
 5. **背压**：准入失败跳拍 + 快池等待超过 50% 容量时整格跳拍 + 每格上界 16384（推荐）。水位比例是否接受 50%。

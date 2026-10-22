@@ -42,7 +42,7 @@ var beatTestRun = nest.NewHandlerName("combatcomponent_test.beat_run")
 
 // testBeatDelivery 是 newBeatFixture 的心跳投递方式；走真实驱动的用例经 forEachBeatDelivery 在单目标 Dispatch 与
 // Nest 批量作业（D20 选项 C，heartbeat.delivery: batch）两种方式下各跑一遍。
-var testBeatDelivery = heartbeat.DeliveryDispatch
+var testBeatDelivery = heartbeat.DefaultDelivery
 
 func forEachBeatDelivery(t *testing.T, fn func(t *testing.T)) {
 	t.Helper()

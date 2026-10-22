@@ -47,7 +47,7 @@ func TestGeneratedHeartbeatBehaviorEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := viper.New()
-	// 投递方式（heartbeat.delivery）：缺省 dispatch；脚本另用 batch（Nest 批量心跳作业）再跑一遍。
+	// 投递方式（heartbeat.delivery）：缺省 batch（Nest 批量心跳作业）；脚本另用 dispatch / batch 显式各跑一遍。
 	if delivery := os.Getenv("ROOST_HEARTBEAT_DELIVERY"); delivery != "" {
 		cfg.Set("heartbeat.delivery", delivery)
 	}
@@ -86,7 +86,7 @@ func TestGeneratedHeartbeatBehaviorEndToEnd(t *testing.T) {
 	}
 	wantDelivery := os.Getenv("ROOST_HEARTBEAT_DELIVERY")
 	if wantDelivery == "" {
-		wantDelivery = "dispatch"
+		wantDelivery = "batch"
 	}
 	if got := string(gameheartbeat.Driver.Delivery()); got != wantDelivery {
 		t.Fatalf("heartbeat.delivery = %q, want %q", got, wantDelivery)

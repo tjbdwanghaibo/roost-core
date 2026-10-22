@@ -420,3 +420,267 @@ func TestPendingCountsAppliedButUnsettledCommands(t *testing.T) {
 		t.Fatalf("after the settling Flush: pending=%v subscribers of 2=%v", in.queuedPending(), m.Subscribers(2))
 	}
 }
+
+// ---- ApplySync 政策阶段的耗时预算：执行日志 + 结算一起计入（方案 §12，维护者 2026-10-22 决定 A）----
+
+// budgetHarness 给同步模式的政策阶段装一套可控的耗时，不靠真实 sleep：Interest 的时钟 = 起点 + 每条已应用事实
+// perFact + 每个进入事件 perEvent。进入事件在结算里按距离档取层级（BandLayer）时计数，所以 perEvent 是结算的耗时。
+// 时钟只在政策阶段（持 mu 的 Flush goroutine）里读，直接读应用侧状态；用例在两次 Flush 之间用 spent 读。
+type budgetHarness struct {
+	in                *Interest
+	m                 *entitysync.Manager
+	perFact, perEvent time.Duration
+	queued            int
+	events            atomic.Int64
+	base              time.Time
+}
+
+func newBudgetHarness(t *testing.T, batchSize int, perFact, perEvent time.Duration) *budgetHarness {
+	t.Helper()
+	h := &budgetHarness{m: newManager(t), perFact: perFact, perEvent: perEvent, base: time.Unix(1_700_000_000, 0)}
+	in, err := NewInterest(InterestConfig{
+		Manager: h.m, ApplyMode: ApplySync, BatchSize: batchSize,
+		AOI: AOIConfig{
+			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
+			EnterRadius: 120, LeaveRadius: 150,
+		},
+		BandLayer: func(band int) entity.SyncProfile {
+			h.events.Add(1)
+			return DefaultBandProfile(band)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.Close)
+	h.in = in
+	player(t, h.m, 1)
+	mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+	mustApply(t, in)
+	h.events.Store(0)
+	in.now = func() time.Time { return h.base.Add(h.costLocked()) }
+	return h
+}
+
+// costLocked 是到目前为止的累计耗时：已应用的事实（登记过的 − 还在日志 / 应用中 / 已应用未结算的 + 已应用未结算的）
+// 与已结算的进入事件。调用方持有 mu。
+func (h *budgetHarness) costLocked() time.Duration {
+	h.in.registry.mu.Lock()
+	facts := h.in.registry.facts
+	h.in.registry.mu.Unlock()
+	applied := h.queued - facts + len(h.in.applied)
+	return time.Duration(applied)*h.perFact + time.Duration(h.events.Load())*h.perEvent
+}
+
+func (h *budgetHarness) spent() time.Duration {
+	h.in.mu.Lock()
+	defer h.in.mu.Unlock()
+	return h.costLocked()
+}
+
+// show 在 Manager 登记目标并把它放在远处（观察者 1 看不见），结算一次。
+func (h *budgetHarness) show(t *testing.T, ids ...int64) {
+	t.Helper()
+	for _, id := range ids {
+		if err := h.m.Register(subjectState(t, id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.in.Show(id, spatial.Point{X: 900, Y: 900}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustApply(t, h.in)
+	h.events.Store(0)
+}
+
+func (h *budgetHarness) move(t *testing.T, id int64, to spatial.Point) {
+	t.Helper()
+	commitQueuedMove(t, h.m, h.in, factEntity(t, id), to)
+	h.queued++
+}
+
+// flush 走一次 Flush，返回这次政策阶段按注入耗时花掉的时间。
+func (h *budgetHarness) flush(t *testing.T) time.Duration {
+	t.Helper()
+	before := h.spent()
+	if err := h.m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return h.spent() - before
+}
+
+// warmUp 让政策阶段先测到一步与一次结算的耗时（估计来自之前的步与结算；启动后的第一次没有估计，见方案 §12）。
+func (h *budgetHarness) warmUp(t *testing.T, ids ...int64) {
+	t.Helper()
+	h.show(t, ids...)
+	for i, id := range ids {
+		h.move(t, id, spatial.Point{X: 20 + int64(i), Y: 60})
+	}
+	h.flush(t)
+	if left := queuedFacts(h.in); left != 0 {
+		t.Fatalf("warm-up left %d facts", left)
+	}
+}
+
+func near(i int) spatial.Point { return spatial.Point{X: 20 + int64(i), Y: 10} }
+
+// 预算内做得完的积压，一次政策阶段全部做完（与没有预算时相同），不记预算停止。
+func TestSyncApplyBudgetFinishesWhatFitsInOnePolicyPhase(t *testing.T) {
+	h := newBudgetHarness(t, 2, time.Millisecond, time.Millisecond)
+	movers := []int64{11, 12, 13, 14, 15}
+	h.show(t, movers...)
+	for i, id := range movers {
+		h.move(t, id, near(i))
+	}
+	stops := counterValue(budgetStopMetric)
+	spent := h.flush(t)
+	if left := queuedFacts(h.in); left != 0 || spent > h.in.syncBudget {
+		t.Fatalf("one Flush left %d of %d facts and spent %v (budget %v)", left, len(movers), spent, h.in.syncBudget)
+	}
+	for i, id := range movers {
+		if got := subjectAt(h.in, id); got != fmt.Sprintf("%v", near(i)) {
+			t.Fatalf("entity %d at %s, want %v", id, got, near(i))
+		}
+	}
+	if got := counterValue(budgetStopMetric) - stops; got != 0 {
+		t.Fatalf("budget stops = %d, want 0", got)
+	}
+}
+
+// 预计超预算时政策阶段停在预算内（执行 + 结算 ≤ 预算），剩下的留给后面的 Flush；最终全部应用，同一目标的两次移动
+// 按提交顺序生效，任何一次 Flush 之后都不会退回更早的位置。
+func TestSyncApplyBudgetStopsWithinBudgetAndKeepsOrder(t *testing.T) {
+	h := newBudgetHarness(t, 4, time.Millisecond, time.Millisecond)
+	h.warmUp(t, 901, 902)
+	const n = 30
+	movers := make([]int64, n)
+	for i := range movers {
+		movers[i] = int64(100 + i)
+	}
+	h.show(t, movers...)
+	second := func(i int) spatial.Point { return spatial.Point{X: 20 + int64(i), Y: 40} }
+	for i, id := range movers {
+		h.move(t, id, near(i))
+	}
+	for i, id := range movers {
+		h.move(t, id, second(i))
+	}
+	stage := make([]int, n) // 0 远处，1 第一次移动，2 第二次移动
+	stops := counterValue(budgetStopMetric)
+	flushes := 0
+	for queuedFacts(h.in) > 0 {
+		flushes++
+		if flushes > 20 {
+			t.Fatalf("no progress: %d facts left after %d Flushes", queuedFacts(h.in), flushes-1)
+		}
+		spent := h.flush(t)
+		if spent > h.in.syncBudget {
+			t.Fatalf("Flush %d: the policy phase spent %v (steps + settle), over the budget %v; %d facts left",
+				flushes, spent, h.in.syncBudget, queuedFacts(h.in))
+		}
+		for i, id := range movers {
+			now := 0
+			switch subjectAt(h.in, id) {
+			case fmt.Sprintf("%v", near(i)):
+				now = 1
+			case fmt.Sprintf("%v", second(i)):
+				now = 2
+			}
+			if now < stage[i] {
+				t.Fatalf("Flush %d: entity %d went back from stage %d to %d", flushes, id, stage[i], now)
+			}
+			stage[i] = now
+		}
+	}
+	if flushes < 2 {
+		t.Fatalf("%d facts at 2ms each (step + settle) fit in one Flush with a %v budget: the budget did not stop", 2*n, h.in.syncBudget)
+	}
+	if got := counterValue(budgetStopMetric) - stops; got == 0 {
+		t.Fatal("the policy phase stopped on budget but budget stops did not count it")
+	}
+	for i, id := range movers {
+		if stage[i] != 2 {
+			t.Fatalf("entity %d ended at %s, want the second move %v", id, subjectAt(h.in, id), second(i))
+		}
+	}
+}
+
+// 一条事实本身就超过预算时仍然前进：每次政策阶段至少执行一个单位，批切到一条（BatchSize 是 4），只有这一步可以
+// 超出预算；之后的留给下一次 Flush。
+func TestSyncApplyBudgetStillProgressesWhenOneStepExceedsIt(t *testing.T) {
+	h := newBudgetHarness(t, 4, 30*time.Millisecond, 0)
+	h.warmUp(t, 901)
+	movers := []int64{11, 12, 13, 14, 15, 16}
+	h.show(t, movers...)
+	for i, id := range movers {
+		h.move(t, id, near(i))
+	}
+	for flush := 1; flush <= len(movers); flush++ {
+		before := queuedFacts(h.in)
+		h.flush(t)
+		if applied := before - queuedFacts(h.in); applied != 1 {
+			t.Fatalf("Flush %d applied %d facts at 30ms each (budget %v, BatchSize 4): want the step cut to exactly one",
+				flush, applied, h.in.syncBudget)
+		}
+	}
+	if left := queuedFacts(h.in); left != 0 {
+		t.Fatalf("%d facts left after %d Flushes", left, len(movers))
+	}
+}
+
+// 结算的耗时计入预算：执行很便宜、结算很贵（每个进入事件 2ms）时，执行部分必须给结算留出时间，不能先把预算
+// 用在执行上、再在预算之外结算。
+func TestSyncApplyBudgetCountsTheSettle(t *testing.T) {
+	h := newBudgetHarness(t, 64, 100*time.Microsecond, 2*time.Millisecond)
+	h.warmUp(t, 901, 902)
+	movers := make([]int64, 40)
+	for i := range movers {
+		movers[i] = int64(100 + i)
+	}
+	h.show(t, movers...)
+	for i, id := range movers {
+		h.move(t, id, near(i))
+	}
+	for flush := 1; queuedFacts(h.in) > 0; flush++ {
+		if flush > 20 {
+			t.Fatalf("no progress: %d facts left", queuedFacts(h.in))
+		}
+		before := queuedFacts(h.in)
+		if spent := h.flush(t); spent > h.in.syncBudget {
+			t.Fatalf("Flush %d applied %d facts and spent %v with the settle (budget %v): the settle was not reserved",
+				flush, before-queuedFacts(h.in), spent, h.in.syncBudget)
+		}
+	}
+}
+
+// planSyncStep 的规则逐条：没有估计时不限单位数；放得下就按“剩余 /（执行 + 结算）每单位”取；放不下时第一步仍执行
+// 一个单位、之后停止；结算预留随已执行未结算的单位数增长，下限是预算的 1/10。
+func TestPlanSyncStepRules(t *testing.T) {
+	const ms = time.Millisecond
+	budget := 25 * ms
+	cases := []struct {
+		name      string
+		elapsed   time.Duration
+		unsettled int
+		first     bool
+		costs     applyCosts
+		limit     int
+		run       bool
+	}{
+		{"no estimate yet, first step", 0, 0, true, applyCosts{}, 0, true},
+		{"no estimate yet, room left", 5 * ms, 3, false, applyCosts{}, 0, true},
+		{"no estimate yet, only the reserve left", 23 * ms, 3, false, applyCosts{}, 0, false},
+		{"fits: (25 - 0 - 2.5) / 2", 0, 0, true, applyCosts{unit: ms, settle: ms}, 11, true},
+		{"reserve grows with unsettled units: (25 - 8 - 8) / 2", 8 * ms, 8, false, applyCosts{unit: ms, settle: ms}, 4, true},
+		{"next unit plus its settle does not fit: stop", 12 * ms, 12, false, applyCosts{unit: ms, settle: ms}, 0, false},
+		{"one unit exceeds the budget: first step still runs one", 0, 0, true, applyCosts{unit: 30 * ms}, 1, true},
+		{"one unit exceeds the budget: no second step", 30 * ms, 1, false, applyCosts{unit: 30 * ms}, 0, false},
+		{"settle alone exceeds the budget: first step runs one", 0, 40, true, applyCosts{unit: ms, settle: ms}, 1, true},
+	}
+	for _, c := range cases {
+		limit, run := planSyncStep(budget, c.elapsed, c.unsettled, c.first, c.costs)
+		if limit != c.limit || run != c.run {
+			t.Errorf("%s: planSyncStep = (%d, %v), want (%d, %v)", c.name, limit, run, c.limit, c.run)
+		}
+	}
+}

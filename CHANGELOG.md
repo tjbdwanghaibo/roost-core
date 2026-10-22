@@ -109,6 +109,37 @@
 
 - 新增 `scripts/test-slg-alliance.sh`：业务 CAS 成员授权与贡献意图、Interest 联盟／侦察来源归并、真实 NATS 生成 RPC 连协调器子进程、冻结窗口与阶段屏障、原服持久奖励义务和 ACK 重投；真实 Redis / NATS race 场景覆盖协调器正常重启与应用确认丢失。
 - 整理 [SLG 学习手册](docs/framework/SLG-INTEGRATION.md) 的状态归属、调用流程、运行方式与证据边界，并同步 skill。业务规则不进入框架；Remote 联盟权威、空间迷雾／客户端、Player 实际到账与跨机故障仍待联合接入。
+### 心跳投递缺省改为 Nest 批量作业，批量作业组大小 8 → 4（DESIGN-TODO D20 选项 C，维护者 2026-10-22 决定 B）
+
+- **维护者决定（2026-10-22）**：选项 C 采用 B——把心跳投递缺省改为 `batch`，同时调参压低普通业务消息的 p99。同日补充：先处理代码、参数补测放到当晚；缺省先用已测数据里 p99 最好的单项（组大小 4、时间片保持 200µs），合并组合当晚测完更好再改。
+- **缺省值变化**：`wiring/heartbeat` 的 `heartbeat.delivery` 声明缺省 `dispatch` → `batch`（生成器快照 `codegen/internal/roost/kitconfig_gen.go` 已重新生成，生成工程的服务配置写 `heartbeat.delivery: batch`）；新增 `heartbeat.DefaultDelivery`（= `DeliveryBatch`），`Config.Delivery` 空值与 `ParseDelivery("")` 由 `DeliveryDispatch` 改为它。`dispatch` 保留为可选项。
+- **Nest 参数**：批量作业一次持锁安排的组大小 `tryBatchGroup` 8 → 4（同时段对照业务 p99 0.235 → 0.187ms、进程 CPU 1.76 → 1.67 核）；时间片 `tryBatchSlice` 200µs 与心跳批大小 64 不变。只影响批量作业，普通 `Dispatch` 不变。
+- **行为变化**：没有设 `Config.Delivery`、直接 `Bind` 的驱动（手写接线，例如 game-demo 的 `actor.Heartbeat`）也改走批量作业；`Bind` 的客户端必须实现 `nest.TryBatchDispatcher`（`*nest.NestMgr` 实现），只实现 `nest.Client` 的包装在缺省下 `Bind` 报错（不静默退回），要显式设 `Delivery: heartbeat.DeliveryDispatch`。批量方式下批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold`，按批记 `nest.dispatch.try_batch.*`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md)）。
+- **代价**：2026-10-22 补测（5 万实体 100ms、100% 移动、macOS）同时段进程 CPU 比单目标约 −42%～−73%，同一快池上普通业务消息 p99 约 0.08 → 0.19ms（[NEST-BATCH-HEARTBEAT-20261021 §3F](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#3f-维护者-2026-10-22-决定-b-与参数测量)）。Linux 未复测，参数待当晚补测确认。
+- **测试**：缺省值由 `TestDeliveryIsChosenOnceBeforeStart`（`DefaultDelivery`、`NewDriver` 空值、`ParseDelivery("")`、缺省下客户端不支持批量时 `Bind` 报错）、`TestModReadsTheDeliveryOnce`（不配 / batch / dispatch 三种，驱动先设成相反的值）与 `TestTryBatchParametersAreTheMeasuredDefaults` 钉住；6 条变异核对全部变红（`DefaultDelivery` 改回、空串分支改回、声明缺省改回、Init 不交给驱动、组大小改回 8、快照与声明不一致）。两种投递方式的现有用例照旧各跑一遍（心跳包 `forEachDelivery`、movement 的 `npcDeliveries`、combatcomponent 的 `forEachBeatDelivery`、生成工程脚本的 dispatch / batch 两遍）；不经它们的用例改为跟缺省走。
+- **升级**：无存储 / 协议变化。已有生成工程的服务配置里 `heartbeat.delivery: dispatch` 不被改写（配置归应用所有），要用新缺省就改成 `batch` 或删掉这一行；想保留单目标就不用动。
+- **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)（业务 p99 的代价、参数待补测、Linux 未复测）。
+
+### game-demo：出生点挤满时复制会话被关闭（DESIGN-TODO D20 P3 冒烟后续，维护者 2026-10-22 按推荐）
+
+- **原因**：2026-10-22 登录风暴里所有玩家挤在同一出生点，demo 的空间视野不设 `MaxVisible`，每个复制会话持有的对象超过 Manager `Limits.MaxObjects`（缺省 100）后下一帧编码失败，Manager 关闭该会话（`frame: object limit exceeded`）：100 个机器人 100 个会话全部被关、200 个时 128 个；机器人场景不检查复制，照样判成功。
+- **修复（game-demo 模板，行为变化）**：主视野只留最近的 `sceneMaxVisible = 64` 个；会话另持有自身、场景实体、对局队友共 `sceneReservedObjects = 3` 个，`newSceneOn` 启动时核对两者之和不超过 `frame.DefaultLimits().MaxObjects`，余下 33 个留给以后加的关系视野。范围内多于 64 个时近的挤掉远的，没入选的目标要等下一次移动才重新参评。
+- **新增（loadtest）**：场景最后一步 `scene_alive`——自己 `add_exp 1`，10 秒内这次改动没有作为帧回到自己的 subject 上就失败。复制会话因编码失败被关时连接不断、请求照常应答，只有这一步能在冒烟里看到。
+- **测试**：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点；修前 `100 of 100 replication sessions were closed at a crowded spawn point (0 still open)`）、`TestSceneAliveFailsWhenTheServerStopsReplicating`。
+- **文档**：“超出 `MaxObjects` 由 Manager 拒绝”的说法改正为“下一次 Flush 编码失败、关闭整个会话”（guide/04-sync、ENTITY_SYNC、KNOWN-LIMITS）；同一次 200 人风暴里 72 个 `connect` 失败查明是单 IP 连接上限 `player_access.tcp.max_connections_per_ip`（缺省 128，`player_tcp_connection_rejected_total{reason="per_ip"} 72`），不是缺陷；生成配置的 game 连本机 `127.0.0.1:2379` 的 etcd 写进 demo README。
+- **升级**：demo 文件只在 `project new` 时写出、归应用所有，`project sync` / `project upgrade` 不改写它们，已生成的工程要手工照模板改 `scene.go` 的 `AOIConfig.MaxVisible` 并在场景末尾加 `scene_alive`。存储格式与协议不变。
+- **未做**：100 / 200 个机器人的 loadtest 维护者定为压测、放到当晚（DESIGN-TODO P3“待补测（今晚）”）；编码失败关掉的复制会话不断开连接，交维护者决定（KNOWN-LIMITS“game-demo 的移动、怪物与场景时间”）。
+
+### Interest：ApplySync 政策阶段的预算把结算也算进去（维护者 2026-10-22 决定 A）
+
+- **原因**：单写者重构后 ApplySync 的预算只在两步之间检查，检查通过后还会再执行一整步，之后的结算不计入；16 视野（诊断构建）政策阶段每 tick P95 38ms，Flush 超过一个周期，P99 128ms（[Interest 报告 §4](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#4-16-视野与-d19-历史数字)）。
+- **改动（`framework/sync/entitysync/policy`）**：一次政策阶段的“执行日志 + 结算”一起不超过同步周期的一半。按单位（一条命令或取用的一条事实）估计成本：每单位执行耗时取最近一步，每单位结算耗时取最近一次结算平摊；每一步之前算下一步最多能执行的单位数，结算预留 = max(预算/10, 每单位结算 × 已执行未结算的单位)，预计超出就停，剩下的留到之后的 Flush（on_change 下立即再来一轮）。每次政策阶段的第一步至少执行一个单位（不饿死），一个单位本身超预算时批切到一条。切点仍只落在就绪事实处、同一提交不切开；日志顺序、代际作废、`MaxQueuedFacts` 背压不变；ApplyAsync 与显式 `Apply()` 不受影响。规则与理由见 [单写者方案 §12](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)。
+- **行为变化**：重负载下 ApplySync 的 AOI 变化晚一两个周期可见（换来 Flush 时长有上界、全服同步节奏不变）。不是硬上界：启动后第一次、一个单位或一个提交本身超预算、只有命令的一段日志、成本突变时可以超出（KNOWN-LIMITS）。无 API 变化，无需清数据。
+- **新指标**：`entitysync.interest.policy_duration`、`entitysync.interest.settle_duration`（Histogram）、`entitysync.interest.log_backlog`（Gauge，ApplySync 每次政策阶段结束时日志里剩下的条目）、`entitysync.interest.budget_stop.total`（Counter），已登记进 OBSERVABILITY。
+- **测试**：`interest_apply_test.go` 用注入的时钟（每条事实、每个进入事件的耗时）做确定性用例：预算内一次做完、预计超出时停在预算内且最终全部按序应用、单步超预算仍前进（切到一条）、结算计入预算，另有规则表 `TestPlanSyncStepRules`；修前三条红，去掉结算预留 / 去掉“第一步至少一个单位” / 切点忽略单位上限各自变红。
+- **发现（未修，待维护者决定）**：批次切点之后，同一提交的后续事实会越过排在它前面、被留下的命令，命令是同一目标的 `Hide` → `Show` 时这条移动按代际作废（探针已确认，单写者重构引入，预算让切点更多），见方案 §11.2。
+- **压测待补**（维护者 2026-10-22：先处理代码，压测放到今晚）：16 / 0 / 8 视野 ApplySync 前后对比的复跑命令见 [Interest 报告 §7](docs/performance/INTEREST-SINGLE-WRITER-20261022.md#7-applysync-预算计入结算待补测今晚)。
+
 ### 技能与 Buff 的推进与驱动方式分开：心跳只是驱动之一（DESIGN-TODO D20，维护者 2026-10-21 决定）
 
 - **维护者决定（2026-10-21）**：心跳只是技能 / Buff 的驱动方式之一，可以由 HB component 驱动，也可以用别的驱动；skill 只使用接口。技能与 Buff 两边都改。
@@ -162,7 +193,7 @@
 ### 生成器接入实体心跳、行为组件与场景时间域（DESIGN-TODO D20～D22）
 
 - **新增命令**：`roost add heartbeat --entity <Entity>`（实体的心跳宿主 `HeartbeatComponent`：`Host()`、`Register(name, period, fn, opts...)` / `Beat(name)`，业务在 `heartbeat_beats.go` 的 `onHeartbeatInit` 里登记）；`roost add behavior --entity <Entity> [--ai] [--state]`（`BehaviorComponent`：`actionflow.Behavior` 挂实体的心跳宿主，`--ai` 时 `ai.NewBeatController` 作观察者；业务文件 `behavior_actions.go` 带示例动作 `ExampleAction`、`--ai` 的 `behavior_strategy.go` 带示例策略、`--state` 的 `states.go` 是 `gameplay/state` 的 Catalog 声明、`game/handler/<entity>_behavior.go` 是发起示例动作 / 设定示例策略的 Nest handler；没有心跳宿主时一并加上）；`roost add timedomain --entity <Scene>`（主 DAO 定义加 `TimeAnchorBusiness` / `TimeAnchorDomain` / `TimeRate` 三个 `nopersist,sync` 字段，`TimeDomainComponent` 加载时 `timedomain.New`，倍率范围在 `timedomain_config.go`）。生成部分（`*_component_gen.go`、`game/heartbeat/driver_gen.go`）由 project sync 重写，业务文件只在缺失时创建；服务 Init / Shutdown 不用改。
-- **装配**：catalog 新增 `heartbeat` Mod（`wiring/heartbeat`，依赖 nest），bootstrap 写 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`（工程唯一的驱动 `game/heartbeat.Driver`）。**按需装配**：add 命令把 Mod 加进实体所在服务的 `mods`（也可 `roost add mod heartbeat -service <s>`），不进新工程的缺省 Mod 集——实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 让 `shutdown.total_timeout` 多 3s。服务配置补 `heartbeat:` 段（`delivery: dispatch`，来自 Mod 的配置声明；`wiring/internal/configschemagen` 新增 `heartbeat` 组）。
+- **装配**：catalog 新增 `heartbeat` Mod（`wiring/heartbeat`，依赖 nest），bootstrap 写 `kitheartbeat.NewMod(EntityAccess, gameheartbeat.Driver)`（工程唯一的驱动 `game/heartbeat.Driver`）。**按需装配**：add 命令把 Mod 加进实体所在服务的 `mods`（也可 `roost add mod heartbeat -service <s>`），不进新工程的缺省 Mod 集——实体侧零开销，但驱动空转也每 10ms 走一格、多一个 Mod 让 `shutdown.total_timeout` 多 3s。服务配置补 `heartbeat:` 段（`delivery: dispatch`，2026-10-22 起为 `batch`，来自 Mod 的配置声明；`wiring/internal/configschemagen` 新增 `heartbeat` 组）。
 - **roost.yaml**：新增 `heartbeats.<entity>`（`id`、`service`、`behavior.{id, ai, state}`）与 `time_domains.<entity>`（`id`、`dao`），加载时校验（服务要有 heartbeat Mod、工程要有 entity / nest 或 entity / dao feature、组件号为正）。
 - **文档**：CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK、生成工程的 BEGINNER_WORKBOOK §3.7 与 ROOST_YAML、`roost help heartbeat|behavior|timedomain`、guide/10-time §4A / §4C / §4D 的“生成工程的入口”、impl/12-codegen §2E。
 - **测试**：`codegen/internal/roost/add_heartbeat_test.go`；生成工程端到端 `scripts/test-heartbeat-generated.sh`（`roost project new --skip-deps` + 本地 replace，三个 add 命令后 build / vet / `test -race` 全过，示例动作被心跳推进到结束、示例 AI 策略经 AI 心跳反复发起动作、场景示例心跳执行、时间域改倍率后发布）。修前三个命令报 `unexpected arguments`，`roost add mod heartbeat` 报 `unknown wiring mod "heartbeat"`。
@@ -187,6 +218,8 @@
 - **限制**：见 [KNOWN-LIMITS“技能与 Buff 的心跳”](docs/maintenance/KNOWN-LIMITS.md#技能与-buff-的推进与驱动d20-第-5-期)。
 
 ### Nest 批量心跳作业 DispatchTryBatch 与心跳投递开关，缺省关闭（DESIGN-TODO D20 选项 C，维护者 2026-10-21 批准按推荐做）
+
+> 2026-10-22 起缺省改为批量作业、组大小改为 4，见本节之上“心跳投递缺省改为 Nest 批量作业”；下面保留合入时的记录。
 
 - **合入方式（维护者 2026-10-21 决定 A）**：代码先合入，心跳缺省仍走单目标 `Dispatch`；批量心跳作业做成开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。
 - **已经生效（对全部 Nest 消息，无开关）**：两张 goroutine 登记表改分片表（`goroutine.LocalMap`）；worker 结束一项后同一次持锁取下一项；`NestMgr.DispatchTryBatch` 入口与派发队列的批量作业支持（两条就绪链交替只在有批量作业时起作用）。
