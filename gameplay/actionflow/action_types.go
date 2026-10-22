@@ -9,7 +9,7 @@
 // 心跳驱动：实体的 runner 由 BeatRunner 接到实体自己的心跳上，每个组的当前动作按它的 TickInterval 被 tick（见
 // heartbeat.go）。所有控制实体行为的逻辑都经 runner 下发与收尾。
 //
-// 事务（业务约束，维护者 2026-10-21：由业务层保证，框架不处理）：runner 是纯内存状态，不随 Nest 事务回滚。handler
+// 事务（业务约束，由业务层保证，框架不处理）：runner 是纯内存状态，不随 Nest 事务回滚。handler
 // 先做完全部可能失败的校验与修改，最后一步才调用 Start / Enqueue / End 等；之后若还可能失败，回滚后 runner 里会
 // 残留这次的变更。
 //
@@ -154,9 +154,9 @@ type MissionStep struct {
 	Param     any
 	OnSuccess MissionNext
 	OnFail    MissionNext
-	// Timeout 为正时是这一步每次尝试的时限（D21 A8）：到时还没结束，任务把这一步的动作以过期状态（ActionStatusExpired）
+	// Timeout 为正时是这一步每次尝试的时限：到时还没结束，任务把这一步的动作以过期状态（ActionStatusExpired）
 	// 结束，按失败处理（重试或 OnFail）。需要任务心跳（Behavior 配了 Beat），检查粒度是 MissionPlan.Period。动作所在的
-	// 组被冻结期间不计时（定身时护送 / 巡逻不因此失败，解冻后按剩余时长继续；维护者 2026-10-22），按 Behavior 的时钟算；
+	// 组被冻结期间不计时（定身时护送 / 巡逻不因此失败，解冻后按剩余时长继续），按 Behavior 的时钟算；
 	// FreezeCancel 打断时动作以取消结束，这一步照常走 OnFail。
 	Timeout time.Duration
 	// Retry 是这一步失败（Failed / Expired）后原地重试的次数，用完才走 OnFail；被取消（Canceled，例如被别的动作

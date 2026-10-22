@@ -59,7 +59,7 @@ type ActionRunnerHooks struct {
 	OnFreeze func(group ActionGroup, frozen bool)
 }
 
-// Conflict 是跨组冲突规则的结论（D21 A3，对照 ssr 的 NeedCancelCurAction 矩阵，改为业务配置的函数）。
+// Conflict 是跨组冲突规则的结论（对照 ssr 的 NeedCancelCurAction 矩阵，这里是业务配置的函数）。
 type Conflict uint8
 
 const (
@@ -374,7 +374,7 @@ func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionR
 	return r.submit(runnerCommand{op: opClearMission, missionID: missionID, force: cancel, reason: reason})
 }
 
-// EndAction 按 ID 结束一个动作（D21 A4）：是某组的当前动作时按 force 结束（force 时调 Cancel、取消状态）并推进
+// EndAction 按 ID 结束一个动作：是某组的当前动作时按 force 结束（force 时调 Cancel、取消状态）并推进
 // 该组队列；在排队中时移出队列并发一次取消状态的 OnEnded。直接调用时找不到返回 ErrActionNotFound；在回调里调用时
 // 延后执行，执行时已经结束的动作被忽略（不报告）。
 func (r *ActionRunner) EndAction(id int64, force bool, reason ActionReason) error {
@@ -384,7 +384,7 @@ func (r *ActionRunner) EndAction(id int64, force bool, reason ActionReason) erro
 	return r.submit(runnerCommand{op: opEndAction, actionID: id, force: force, reason: reason})
 }
 
-// FreezeMode 是冻结对组的当前动作的处理（D21 A5）。
+// FreezeMode 是冻结对组的当前动作的处理。
 type FreezeMode uint8
 
 const (
@@ -395,7 +395,7 @@ const (
 	FreezeCancel
 )
 
-// Freeze 冻结组（D21 A5）：冻结是计数的，多个来源（定身、缴械、剧情……）可以同时冻结同一组，每次 Freeze 对应一次
+// Freeze 冻结组：冻结是计数的，多个来源（定身、缴械、剧情……）可以同时冻结同一组，每次 Freeze 对应一次
 // Recover，计数归零才解冻。冻结期间 Start 被拒绝（ErrActionGroupFrozen）、当前动作不被 tick、队列不推进。计数
 // 立即生效（不延后）；mode 为 FreezeCancel 时还取消组的当前动作——这一步有回调，在回调里调用时延后执行。返回的
 // 错误只来自被打断动作的 Cancel。
@@ -631,7 +631,7 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 // OnEnded），若在这里整体返回，新动作既不启动也没有 OnEnded——回调里交出的 ID 永远没有结论，直接调用时组空着、
 // 队列也不推进。Start 的错误只表示请求的动作没有在运行。
 //
-// 判定顺序（D21 A2 / A3）：冻结 → 跨组冲突（任一 BlockIncoming 拒绝，什么都不改）→ 同组当前动作的 Replacer
+// 判定顺序：冻结 → 跨组冲突（任一 BlockIncoming 拒绝，什么都不改）→ 同组当前动作的 Replacer
 // （Keep：新动作以取消结束；Reject：拒绝）→ 取消要抢占的其他组的当前动作 → 取代本组当前动作 → 启动。被拒绝的
 // 新动作：直接调用时返回错误、不发 OnEnded（与冻结一致，调用方没拿到 ID）；延后的（ID 已交出）发一次失败状态的
 // OnEnded。
@@ -692,10 +692,9 @@ func (r *ActionRunner) crossGroup(incoming *actionEntry) ([]*actionGroupState, e
 }
 
 // preempt 取消被抢占的组的当前动作：取消状态，此时不推进那一组的队列——抢占方随后启动，排队项若现在启动，跨组
-// 冲突会让它先启动再被挡住或互相抢占（变异 D4 锁定）。被抢占组记下抢占方，抢占方结束（任何方式：完成、被结束、被
+// 冲突会让它先启动再被挡住或互相抢占。被抢占组记下抢占方，抢占方结束（任何方式：完成、被结束、被
 // 取代、启动失败）时由 resumePreempted 推进一次，排队项保留、照常成为当前动作，按 ID 等结果的调用方
-// （ai.TaskflowAction、PlanMission）不会永久挂住（维护者 2026-10-21 D21 决定 ① 的同一口径：打断只停下正在做的事，
-// 排队的计划去留由业务决定）。
+// （ai.TaskflowAction、PlanMission）不会永久挂住（打断只停下正在做的事，排队的计划去留由业务决定）。
 func (r *ActionRunner) preempt(units []*actionGroupState, by *actionEntry) {
 	for _, unit := range units {
 		if unit.cur == nil {
@@ -975,7 +974,7 @@ func (r *ActionRunner) orderedGroups() []*actionGroupState {
 
 func (r *ActionRunner) acquireContext(now time.Time) (ctx *ActionContext) {
 	if now.IsZero() {
-		now = fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
+		now = fctx.Now() // 业务时间：本次执行冻结的 fctx.Now
 	}
 	ctx = r.contextPool.Get().(*ActionContext)
 	*ctx = ActionContext{Now: now}

@@ -11,7 +11,7 @@ var (
 	ErrMissionStepInvalid = errors.New("actionflow: mission step is invalid")
 )
 
-// PlanMission 按 MissionPlan 逐步执行动作的通用任务。每步可以有时限（Timeout）与重试次数（Retry，D21 A8）：时限
+// PlanMission 按 MissionPlan 逐步执行动作的通用任务。每步可以有时限（Timeout）与重试次数（Retry）：时限
 // 由任务心跳检查（实现 TickIntervaler，只在当前步有时限时要 tick），到时把这一步的动作以过期结束；失败或过期且还有
 // 重试次数时原地再发起这一步，否则按 OnFail 走。更复杂的分支（按条件、按结果原因）留给行为树，计划里不加表达式。
 type PlanMission struct {
@@ -25,7 +25,7 @@ type PlanMission struct {
 	currentActionID int64
 	lastResult      ActionResult
 	// attempts 是当前步已经重试的次数。当前尝试的时限：timeout 为 0 表示没有；started 是尝试开始的时间，
-	// frozenAtStart 是那时动作所在组已累计的冻结时长（FrozenTimer）——之后再冻结的时间不计入时限（维护者 2026-10-22）。
+	// frozenAtStart 是那时动作所在组已累计的冻结时长（FrozenTimer）——之后再冻结的时间不计入时限。
 	attempts      int
 	timeout       time.Duration
 	started       time.Time

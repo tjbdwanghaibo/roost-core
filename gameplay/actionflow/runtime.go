@@ -20,7 +20,7 @@ type ActionContext struct {
 
 // Action 是一个动作：Start 启动，Tick 推进并报告是否结束及结果，Cancel 取消。
 //
-// Start 的三种结论（D21 A7，维护者 2026-10-21 决定改签名）：
+// Start 的三种结论：
 //   - err != nil：没能启动。runner 调 Cancel 收尾，以失败结束（OnEnded 失败状态），Start / Enqueue 的错误就是它；
 //   - done == true：启动即完成（瞬时动作，例如传送、改朝向）。runner 不再 tick 它，立即以 result 结束（状态为空
 //     时算成功），照常发 OnEnded、通知任务，再推进本组队列；不调 Cancel；
@@ -46,7 +46,7 @@ const (
 	ReplaceReject
 )
 
-// Replacer 由动作可选实现（D21 A2，对照 ssr 的 CanCancelByNext / TryCancel）：同组的新动作要取代它时先问它。
+// Replacer 由动作可选实现（对照 ssr 的 CanCancelByNext / TryCancel）：同组的新动作要取代它时先问它。
 // 只在 Start 取代当前动作时询问；End / EndAll / EndAction / 冻结打断 / 跨组抢占（Conflict 的 PreemptRunning）都是
 // 强制结束，不问。ReplaceBy 只做判断，不改 runner（回调期间的变更照常延后），panic 按 ReplaceAllow 处理并经 OnError
 // 报告。
@@ -62,7 +62,7 @@ type TickIntervaler interface {
 	TickInterval() time.Duration
 }
 
-// ActionList 是业务对 ActionRunner / MissionRunner 的接线，框架的实现是 Behavior（D21 A1）。动作回调与 runner 钩子里
+// ActionList 是业务对 ActionRunner / MissionRunner 的接线，框架的实现是 Behavior。动作回调与 runner 钩子里
 // 调用 CreateAction / EnqueueAction / EndCurAction / EndAction / EndAllAction / ClearNextActions 时，ActionRunner
 // 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID 送达（见 ActionRunner
 // 的说明）。任务回调与 MissionRunner 钩子里调用 SetMission / EndCurMission 同样延后（见 MissionRunner 的说明）：
@@ -76,12 +76,12 @@ type ActionList interface {
 	EnqueueAction(kind ActionKind, param any) (int64, error)
 	CurAction(group ActionGroup) Action
 	EndCurAction(group ActionGroup, force bool, reason ActionReason)
-	// EndAction 按 ID 结束当前或排队中的动作（D21 A4，对照 ssr EndAction）；找不到时返回 ErrActionNotFound。
+	// EndAction 按 ID 结束当前或排队中的动作（对照 ssr EndAction）；找不到时返回 ErrActionNotFound。
 	EndAction(id int64, force bool, reason ActionReason) error
 	EndAllAction(force bool, reason ActionReason)
 	ClearNextActions()
 	UpdateAction(group ActionGroup, f func(Action) error) error
-	// Freeze / Recover 是计数的冻结（D21 A5）：每次 Freeze 都要有一次 Recover，计数归零才解冻。
+	// Freeze / Recover 是计数的冻结：每次 Freeze 都要有一次 Recover，计数归零才解冻。
 	Freeze(group ActionGroup, mode FreezeMode) error
 	Recover(group ActionGroup) error
 	Frozen(group ActionGroup) bool
@@ -92,7 +92,7 @@ type ActionList interface {
 	EndCurMission(reason ActionReason)
 }
 
-// FrozenTimer 由 ActionList 可选实现（Behavior 实现；维护者 2026-10-22 决定定身期间步骤时限不计时）：FrozenFor
+// FrozenTimer 由 ActionList 可选实现（Behavior 实现；定身期间步骤时限不计时）：FrozenFor
 // 报告动作种类所在的组截至 now 累计被冻结了多久（实现者自己的时钟；冻结计数从 0 变 1 起算、归零止，FreezePause 与
 // FreezeCancel 都算）。PlanMission 把步骤开始之后累计的冻结时长从时限里扣掉；ActionList 没实现它时时限照常计时。
 type FrozenTimer interface {

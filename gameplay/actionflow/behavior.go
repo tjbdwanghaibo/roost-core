@@ -12,7 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 动作指标（D21 A9，BehaviorConfig.Metrics 打开时写；缺省关闭）。标签 kind 是动作种类编号（uint8，有界），status 是
+// 动作指标（BehaviorConfig.Metrics 打开时写；缺省关闭）。标签 kind 是动作种类编号（uint8，有界），status 是
 // ActionStatus.String()。
 const (
 	// MetricActionsStarted：成为组的当前动作的次数（含 Start 即完成的）。
@@ -29,8 +29,8 @@ var ErrBehaviorClosed = errors.New("actionflow: behavior is closed")
 // ErrOwnerDestroyed 是 Behavior.OnDestroy 结束在途动作与任务的原因（实体卸载、删档或撤销新建）。
 var ErrOwnerDestroyed = errors.New("actionflow: owner entity destroyed")
 
-// Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（DESIGN-TODO D21 A1，对照 ssr 的
-// action_list 模块那一层，维护者 2026-10-21 由 Agent 更名为 Behavior，避免与 AI agent 混淆）。一个实体的
+// Behavior 是实体的行为组件（运行时组件，不带 DAO）：框架提供的 ActionList 默认实现（对照 ssr 的
+// action_list 模块那一层；不叫 Agent，避免与 AI agent 混淆）。一个实体的
 // ActionRunner（可选由心跳驱动，见 BeatRunner）、MissionRunner 与上层观察者（通常是 ai.Controller）按固定顺序接好，
 // 业务不必各自再写一份胶水。接线规则：
 //
@@ -40,12 +40,12 @@ var ErrOwnerDestroyed = errors.New("actionflow: owner entity destroyed")
 //   - 动作归属任务：任务回调运行期间（含它同步引出的回调）经 CreateAction / EnqueueAction 发起的动作记在当前任务
 //     名下（ssr HasOnProcessTag 的规则），任务结束时一并结束；其余调用方（AI、handler）发起的动作不属于任何任务；
 //   - 清场（Clear）：先结束当前任务，再结束全部动作（包说明“清场顺序”）；
-//   - 任务心跳（D21 A6，配置了 Beat 时）：当前任务实现 TickIntervaler 且返回正数时，Behavior 给它登记
+//   - 任务心跳（配置了 Beat 时）：当前任务实现 TickIntervaler 且返回正数时，Behavior 给它登记
 //     "<Beat.Name>/mission"，周期取不大于它的最长档，每拍 MissionRunner.Tick(本拍时间)；任务结束或不再需要时停。
 //     挂不上（Remote 共享模式）时任务以失败结束。不实现 TickIntervaler 的任务不被周期 tick（由动作结束推进）。
 //
 // 方法与 ActionRunner 一样只能在实体锁内调用（Nest handler、心跳回调、加载 / 新建的初始化阶段）；Behavior 本身无锁、
-// 不随事务回滚（D20 决定 3：由业务保证，handler 最后一步才调用）。
+// 不随事务回滚（由业务保证：handler 最后一步才调用）。
 type Behavior struct {
 	owner    entity.IThreadSafeEntity
 	runner   *ActionRunner
@@ -95,7 +95,7 @@ type BehaviorConfig struct {
 	Beat *BeatConfig
 	// Observer 可空。
 	Observer Observer
-	// Now 是业务时钟，nil 时取本次执行冻结的业务时间 fctx.Now（D22-1）；Beat.TimeDomain 非 nil 时取域时间
+	// Now 是业务时钟，nil 时取本次执行冻结的业务时间 fctx.Now；Beat.TimeDomain 非 nil 时取域时间
 	// （Domain.Now）。动作与任务的上下文时间、计划步骤 Timeout 的起点都按它。
 	Now func() time.Time
 	// OnError 接收 runner 与任务的错误（回调 panic、延后命令失败等），可空。
@@ -104,7 +104,7 @@ type BehaviorConfig struct {
 	MaxDeferredCommands int
 	MaxDeferredSteps    int
 	// Metrics 为 true 时写动作指标（MetricActionsStarted / Ended / Running）。每个动作开始、结束各写一次注册表，
-	// 缺省关闭（D21 A9，是否默认开启待维护者决定）。
+	// 缺省关闭。
 	Metrics bool
 }
 
@@ -203,7 +203,7 @@ func (b *Behavior) Clear(reason ActionReason) {
 // Close 撤销 Behavior：先拒绝新的动作与任务（观察者、任务在收尾通知里再发起的也被拒绝，返回 ErrBehaviorClosed），
 // 再清场（Clear：任务与动作以 reason 结束，OnEnded / 观察者照常送达，动作指标的 running 随之减回），最后撤销任务心跳与
 // 各组的心跳登记（heartbeat.Reg.Close：立即离开驱动、释放登记名）。成员换场景（换时间域）时用它撤掉旧的、在同一心跳
-// 宿主上按新的 BeatConfig.TimeDomain 重建（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain）。可重复调用；只能在
+// 宿主上按新的 BeatConfig.TimeDomain 重建（重建而不是 SetTimeDomain，见 BeatRunner.Close）。可重复调用；只能在
 // 实体锁内调用，在 runner 或任务的回调里调用时结束延后到回调返回后。直接经 Runner() 发起的动作不受 Behavior 的拒绝
 // 约束，但挂不上心跳（ErrBeatRunnerClosed）。
 func (b *Behavior) Close(reason ActionReason) {

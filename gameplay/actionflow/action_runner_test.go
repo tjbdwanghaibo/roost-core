@@ -18,7 +18,7 @@ type runnerTestAction struct {
 	done        bool
 	panicOnTick bool
 	startErr    error
-	// instant 让 Start 报告启动即完成，结果是 instantResult（D21 A7）。
+	// instant 让 Start 报告启动即完成，结果是 instantResult。
 	instant       bool
 	instantResult ActionResult
 	starts        int
@@ -539,7 +539,7 @@ func TestErrorsArePrefixedWithThePackageName(t *testing.T) {
 	}
 }
 
-// --- D21 第 1 期：Start 即完成、取代否决、跨组冲突、按 ID 结束、计数冻结 ---
+// --- Start 即完成、取代否决、跨组冲突、按 ID 结束、计数冻结 ---
 
 // groupLog 是多组 runner 的观察记录：每次结束的 “ID 状态 原因”、每次报告的错误、每次冻结切换。
 type groupLog struct {
@@ -912,7 +912,7 @@ func steppingBusinessClock(t *testing.T) {
 	t.Cleanup(func() { clock.SetSource(nil) })
 }
 
-// D22-1：没给时间时，ActionContext.Now 与 MissionRunner 的缺省时间是本次执行冻结的业务时间（fctx.Now），
+// 没给时间时，ActionContext.Now 与 MissionRunner 的缺省时间是本次执行冻结的业务时间（fctx.Now），
 // 与 handler 里读的同一时刻。
 func TestDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
 	steppingBusinessClock(t)
@@ -939,8 +939,8 @@ func TestDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
 	}
 }
 
-// 被抢占的组（D21 A3）：抢占时不推进它的队列（抢占方随后启动，排队项不会先启动再被挡住，变异 D4 锁定）；抢占方结束
-// 时推进一次（排队项保留，去留由业务决定，与 FreezeCancel 的决定 ① 一致），排队项照常成为当前动作，按 ID 等它的
+// 被抢占的组：抢占时不推进它的队列（抢占方随后启动，排队项不会先启动再被挡住）；抢占方结束
+// 时推进一次（排队项保留，去留由业务决定，与 FreezeCancel 保留排队一致），排队项照常成为当前动作，按 ID 等它的
 // 调用方不会永久挂住。抢占方期间组被冻结的，由 Recover 推进；组已经被业务重新用上的，不再推进。
 func TestThePreemptedGroupsQueueMovesWhenThePreemptorEnds(t *testing.T) {
 	preemptRule := func(running, incoming ActionSnapshot) Conflict {
