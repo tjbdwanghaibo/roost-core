@@ -1,0 +1,110 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    499907 beats/s	       286.2 cpu-ns/beat	         0.1431 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	       999.6 ns/op	   1000412 beats/s	       296.5 cpu-ns/beat	         0.2966 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50001 beats/s	       566.2 cpu-ns/beat	         0.02831 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      1999 ns/op	    500231 beats/s	       293.9 cpu-ns/beat	         0.1470 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	       999.1 ns/op	   1000899 beats/s	       278.6 cpu-ns/beat	         0.2789 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20001 ns/op	     49998 beats/s	       477.4 cpu-ns/beat	         0.02387 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    500049 beats/s	       266.5 cpu-ns/beat	         0.1333 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1000 ns/op	    999661 beats/s	       257.5 cpu-ns/beat	         0.2575 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       454.4 cpu-ns/beat	         0.02272 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      1999 ns/op	    500213 beats/s	       272.0 cpu-ns/beat	         0.1360 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	      1000 ns/op	   1000035 beats/s	       285.3 cpu-ns/beat	         0.2853 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     50000 beats/s	       809.7 cpu-ns/beat	         0.04048 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2001 ns/op	    499706 beats/s	       269.2 cpu-ns/beat	         0.1345 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1000 ns/op	    999525 beats/s	       260.8 cpu-ns/beat	         0.2607 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       587.5 cpu-ns/beat	         0.02937 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2000 ns/op	    499882 beats/s	       496.6 cpu-ns/beat	         0.2482 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	      1012 ns/op	    991131 beats/s	       423.2 cpu-ns/beat	         0.4194 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     19994 ns/op	     50015 beats/s	       694.8 cpu-ns/beat	         0.03475 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    500071 beats/s	       327.7 cpu-ns/beat	         0.1639 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1000 ns/op	   1000013 beats/s	       298.2 cpu-ns/beat	         0.2982 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50001 beats/s	      1190 cpu-ns/beat	         0.05951 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2000 ns/op	    500070 beats/s	       441.8 cpu-ns/beat	         0.2209 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	      1001 ns/op	    999013 beats/s	       317.9 cpu-ns/beat	         0.3176 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     19999 ns/op	     50003 beats/s	      1114 cpu-ns/beat	         0.05571 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    500008 beats/s	       300.6 cpu-ns/beat	         0.1503 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	       996.9 ns/op	   1003136 beats/s	       286.3 cpu-ns/beat	         0.2872 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       737.8 cpu-ns/beat	         0.03689 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      1999 ns/op	    500150 beats/s	       340.1 cpu-ns/beat	         0.1701 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	      1001 ns/op	    999260 beats/s	       315.1 cpu-ns/beat	         0.3149 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     50000 beats/s	       685.6 cpu-ns/beat	         0.03428 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2001 ns/op	    499860 beats/s	       275.8 cpu-ns/beat	         0.1379 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1000 ns/op	   1000050 beats/s	       289.7 cpu-ns/beat	         0.2897 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       489.6 cpu-ns/beat	         0.02448 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2000 ns/op	    499890 beats/s	       258.4 cpu-ns/beat	         0.1292 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	       999.5 ns/op	   1000467 beats/s	       251.6 cpu-ns/beat	         0.2517 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     19999 ns/op	     50001 beats/s	       548.8 cpu-ns/beat	         0.02744 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      1999 ns/op	    500321 beats/s	       309.7 cpu-ns/beat	         0.1550 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1000 ns/op	    999930 beats/s	       310.9 cpu-ns/beat	         0.3109 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20001 ns/op	     49998 beats/s	      1718 cpu-ns/beat	         0.08588 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2001 ns/op	    499779 beats/s	       702.2 cpu-ns/beat	         0.3509 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	       999.6 ns/op	   1000443 beats/s	       405.8 cpu-ns/beat	         0.4060 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     50000 beats/s	      1935 cpu-ns/beat	         0.09676 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2003 ns/op	    499203 beats/s	       680.6 cpu-ns/beat	         0.3397 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	       999.6 ns/op	   1000419 beats/s	       407.8 cpu-ns/beat	         0.4080 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     19999 ns/op	     50002 beats/s	       938.6 cpu-ns/beat	         0.04693 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2000 ns/op	    500109 beats/s	       301.9 cpu-ns/beat	         0.1510 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	      1000 ns/op	    999932 beats/s	       332.4 cpu-ns/beat	         0.3323 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     50000 beats/s	      1817 cpu-ns/beat	         0.09084 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    499903 beats/s	       322.4 cpu-ns/beat	         0.1612 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1001 ns/op	    999326 beats/s	       348.0 cpu-ns/beat	         0.3477 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       710.5 cpu-ns/beat	         0.03553 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      1999 ns/op	    500272 beats/s	       409.4 cpu-ns/beat	         0.2048 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	       999.9 ns/op	   1000071 beats/s	       361.1 cpu-ns/beat	         0.3611 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     49999 beats/s	       955.6 cpu-ns/beat	         0.04778 driver-cores	      64 B/op	       2 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 1000000	      2000 ns/op	    499958 beats/s	       401.2 cpu-ns/beat	         0.2006 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 1000000	      1001 ns/op	    999383 beats/s	       397.2 cpu-ns/beat	         0.3970 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 1000000	     20000 ns/op	     50000 beats/s	       937.1 cpu-ns/beat	         0.04685 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 1000000	      2001 ns/op	    499852 beats/s	       381.8 cpu-ns/beat	         0.1908 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 1000000	       999.8 ns/op	   1000188 beats/s	       343.5 cpu-ns/beat	         0.3435 driver-cores	      64 B/op	       2 allocs/op
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 1000000	     20000 ns/op	     50001 beats/s	       741.5 cpu-ns/beat	         0.03707 driver-cores	      64 B/op	       2 allocs/op
+PASS

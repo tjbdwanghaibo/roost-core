@@ -169,7 +169,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Skipped` | 上次执行以来跳过的拍数，只供观测 |
 | `First` | 本次启动后的第一拍（重载后重新启动、Stop 后再 Start 都算新的一次） |
 
-- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是组件自己的推进，不是框架追帧（`combatcomponent.RuntimeBeat`，§4E）。
+- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；在途按投递代际识别，卡住 10s 起（翻倍，上限 80s）的兜底重投沿用原拍的代际，原拍执行后才到的旧重投或旧交回按 `heartbeat.dropped_total{reason="duplicate"}` 丢弃，不执行回调，也不会让下一拍被当成重复；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是组件自己的推进，不是框架追帧（`combatcomponent.RuntimeBeat`，§4E）。
 - **卸载窗口**：驱动投递前核对实例（已卸载、已被同 ID 新实例取代、还没发布的不投，不唤醒不在内存的实体）；执行时再核对实例与令牌，卸载后同 ID 重载的新实例收到旧实例的拍时按过期丢弃，不会在新实例上跑旧登记的回调（维护者决定 ⑨）。投递之后、执行之前被卸载的实体可能因这条消息被 Nest 冷加载一次，与发给它的任何消息相同。
 - **Remote 托管实体**：只在当前拥有方跳。本进程实例处于独占拥有（`LocalOwned`）时投递并执行；首次接触（`Unknown`）交给 Nest 的 Remote 写准入判定；转移中、已隔离不投。所有权迁移时旧拥有方在离开 `LocalOwned` 后不再执行任何一拍，新拥有方加载实例（组件重新登记）或实例回到 `LocalOwned` 后开始跳，两边不会同时跳。每拍要经过一次 Remote 写准入（I/O 阶段），比普通实体贵，档位选低一些。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式（`EnterRemoteSharedMode` 之后）各写者进程的实例都是 `Shared`、都经分布式锁写，本地分不出谁该跳，心跳无法执行。共享与否是**运行期**的所有权状态（同一种类的实体可以独占、也可以共享，`LeaveRemoteSharedMode` 回到独占），不是种类声明，所以分两处拦：

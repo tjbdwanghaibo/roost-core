@@ -1,13 +1,12 @@
 # 当前已知限制与验证边界
 
-适用版本：v1.29.0 与 main 上未发版的改动（v1.31.0 候选，CHANGELOG `[Unreleased]`，[v1.31.0 说明](../release/v1.31.0-NOTES.md)）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（当前有 1 项已复现、未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
+适用版本：v1.29.0 与 main 上未发版的改动（v1.31.0 候选，CHANGELOG `[Unreleased]`，[v1.31.0 说明](../release/v1.31.0-NOTES.md)）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22 审查的三项均已修复，没有未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
 ## 本轮审查待修复（2026-10-22）
 
-基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。RV-20261022-01 已修复（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)），RV-20261022-03 已修复（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)），以下为仍未修复的项。
-- **RV-20261022-02 / P2：旧心跳重投误消费下一拍。** 原始拍完成、下一拍置为在途后，队列中的旧重投只按同一个 `inflight` 布尔值识别，执行回调并清掉新拍标志。需要区分登记身份与投递代际，重试沿用原代际，执行及交回只能结算自己的拍。
+基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。三项均已修复：RV-20261022-01（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)）、RV-20261022-02（`47691000`，见 [v1.31.0 实现篇 R2](../release/v1.31.0-IMPLEMENTATION.md#r2)）、RV-20261022-03（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)）。本节没有仍未修复的项。
 
 ## Nest 与实体定时器
 
@@ -26,7 +25,7 @@
 
 ### 慢派发 trace 的参数样本
 
-慢派发 trace（handler 执行超过 200ms，可能在 handler 还在跑时由计时 goroutine 打印）的 `param_samples` 只打印按值装箱的标量（布尔、数字、字符串）与实现了 `fmt.GoStringer` 的参数，其余参数只给类型名（`<*pkg.T>`）：不按反射读 handler 可能正在改写的对象（[DESIGN-TODO“D20 与 D21 审查修复”](DESIGN-TODO.md#d20-与-d21-审查修复2026-10-21)）。要在 trace 里看到某个参数的内容，让它的类型实现 `GoString`，并保证只读构造后不变的字段（例如 `*heartbeat.Reg`）；按值传的结构体（是副本、没有竞争）也只给类型名，这是为了不在 trace 里区分“副本里有没有引用”。
+慢派发 trace（handler 执行超过 200ms，可能在 handler 还在跑时由计时 goroutine 打印）的 `param_samples` 只打印按值装箱的标量（布尔、数字、字符串）与实现了 `fmt.GoStringer` 的参数，其余参数只给类型名（`<*pkg.T>`）：不按反射读 handler 可能正在改写的对象（[DESIGN-TODO“D20 与 D21 审查修复”](DESIGN-TODO.md#d20-与-d21-审查修复2026-10-21)）。要在 trace 里看到某个参数的内容，让它的类型实现 `GoString`，并保证只读构造后不变的字段（例如心跳的投递凭据 `heartbeat.beatTicket`、`*heartbeat.Reg`）；按值传的结构体（是副本、没有竞争）也只给类型名，这是为了不在 trace 里区分“副本里有没有引用”。
 
 ### 实体心跳（D20 第 1 期）
 
@@ -37,7 +36,7 @@
 - **批量方式下的观测口径不同**：批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计超过慢阈值的），按批记 `nest.dispatch.try_batch.*`。业务时间与 Frozen 派生值仍按拍各冻结一次（与单目标方式相同）。
 - **（批量方式）冲突转单目标时可能有一次 worker 等锁**：同 ID 冲突的拍转成单目标作业排在冲突消息之后，执行时锁一定空闲；但若实体锁被 Nest 作业顺序之外的持有者占着（别的 handler 的 `Cast` 等），转成的单目标作业与普通 `Dispatch` 一样在 worker 上等这把锁，与 X 相同、不比 X 多。热点实体（同一实体高频业务消息）下的转换率没有测。
 - **卸载窗口**：单目标方式（`dispatch`）下，投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。批量方式只读已加载的实体，卸载后没有重载的按 `not_loaded` 丢弃、不冷加载；Remote 托管实体与冲突转成的单目标作业仍走普通 `Dispatch`，同上。
-- **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（只有一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
+- **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（同一代至多一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
 - **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。只有独占拥有（`LocalOwned`）才执行。共享模式下的所有权迁移已在真实 `remoteentity.Manager` 下验证没有双推进（进程内权威替身与真实 Redis + Mongo 两套）；独占模式下不经共享的直接迁移只有模拟 Remote 写准入的用例（`heartbeat/remote_test.go`），真实依赖下的故障注入（Redis / Mongo 断开时切换）没有做。维护者 2026-10-21 晚定的方向是 Remote 托管实体不挂心跳 / 移动组件，禁止挂载另行设计（[DESIGN-TODO](DESIGN-TODO.md#待维护者决定不急)第 6 项）。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享是运行期状态、不是种类声明，登记时只拦得住“当时已在共享”的实例（`Register` / `Start` 返回 `ErrHeartbeatRemoteShared`）；登记后才进入共享的，由下一拍在实体锁内停掉，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn。边界：① 这一拍要走一次共享模式写准入（分布式锁），回调不执行；② 共享窗口短于登记的周期、期间没有到期的拍时，这个登记不会被停掉（期间也没有执行）；全部登记停掉最多要一个最长档位的周期；③ 回到独占（`LeaveRemoteSharedMode`）后不自动恢复，业务需要时自己 `Start`。共享实体的周期逻辑由业务层驱动（例如负责它的服务按周期发 Nest 消息）。
 - **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。

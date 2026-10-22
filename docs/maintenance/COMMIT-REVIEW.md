@@ -4,7 +4,7 @@
 
 ## 确认缺陷
 
-三个问题均通过临时探针复现，已登记到 [KNOWN-LIMITS](KNOWN-LIMITS.md)。状态：RV-20261022-01 **已修复**（`6edebb13`）；RV-20261022-03 **已修复**（`b7b52486`）；RV-20261022-02 **未修复**。探针调用产品代码；运行后从包内删除，不提交一次性测试。后续修复应把行为回归并入现有测试文件。
+三个问题均通过临时探针复现，已登记到 [KNOWN-LIMITS](KNOWN-LIMITS.md)。状态：RV-20261022-01 **已修复**（`6edebb13`）；RV-20261022-03 **已修复**（`b7b52486`）；RV-20261022-02 **已修复**（`47691000`）。探针调用产品代码；运行后从包内删除，不提交一次性测试。后续修复应把行为回归并入现有测试文件。
 
 ### RV-20261022-01 / P1：批量执行绕过组内新增 Fence
 
@@ -21,6 +21,8 @@ handler after fence=1, second target handback=<nil>; want 0 and ErrNestFenced
 Fence 允许已经执行的 handler 收尾，不允许尚未开始的目标继续执行业务。现有 `TestTryBatchRefusesTargetsAfterFence` 覆盖组准备前 Fence，没有覆盖组内变化。修复验收应包括组内主动 Fence 和真实 committer 返回结果未知两种触发；本轮探针只执行前者，后者是源码调用链判定。
 
 ### RV-20261022-02 / P2：旧重投被当成新一拍
+
+状态：**已修复**（`47691000`）。按审查建议 2 把登记状态、投递代际、重试次数、正在执行分开表达：每次投递分配代际、凭据随消息交给 Nest，重投沿用原代际，执行与交回只结算自己那一代，其余按 `duplicate` 丢弃；旧重投落在下一拍之后、停止后重启、批量异步交回（下一拍投出后、执行期间）与 `Reg.Close` 的交错在两种投递方式下有回归，修前红文本与变异核对见 [v1.31.0 实现篇 R2](../release/v1.31.0-IMPLEMENTATION.md#r2)，现行契约见 [impl/10-time §2B 第 4A 条](../framework/impl/10-time.md#2b-实体心跳)。
 
 位置：`gameplay/heartbeat/host.go:374` 的 `runBeat` 与 `driver.go` 的 `step`。重投和新拍携带相同的 `*Reg`；runBeat 只检查 `inflight` 并在返回时清零。
 
