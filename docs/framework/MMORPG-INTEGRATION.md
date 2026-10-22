@@ -325,3 +325,5 @@ SLG 报告投递新增的学习参照见 [地图义务与 Player 永久回执](S
 Managed Remote 地图的补充接法见 [SLG owner 交接](SLG-INTEGRATION.md#managed-remote-地图报告未确认时交接-owner)：地图交接保留原报告身份，原服按权威路由与代际准入，重复收件使用永久回执。路由校验不与 Player 提交原子；交接前已准入的报告允许完成。该验收为同进程多个 Runtime，不能代替 MMO 多进程世界 Boss 交接与崩溃验收。
 
 补充实测：[多进程 Managed Remote 地图交接与恢复](SLG-INTEGRATION.md#多进程-managed-remote-地图交接与崩溃恢复) 已把独立 owner 交接、旧进程 fence、新 owner／原服 SIGKILL 与永久回执防重接成一条链。仍是同机显式交接，不能外推为 MMO 自动选主、世界 Boss 完整玩法或跨机 HA。
+
+交接并不自动取消已准入的战报／奖励请求。[SLG 准入屏障与接收端预算](SLG-INTEGRATION.md#交接在途请求接收端期限与准入屏障) 已用独立进程验证这一窗口：Player 提交允许完成，旧 owner 的地图 ACK 仍被 fence，新 owner 重投由永久回执去重。普通 NATS Bus 的调用方 deadline 不传播到接收端，需为接收业务显式设置自己的期限。

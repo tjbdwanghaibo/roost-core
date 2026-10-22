@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：交接在途请求与接收端期限
+
+- RoutedReportReceiver 增加接收端 Timeout，覆盖权威查询和 Player 收件，并拒绝期限后的迟到成功；普通 Bus 调用方 deadline 不传播到接收端，修正此前接法与说明。
+- 保留多进程崩溃链，追加独立准入屏障场景：权威读取失败／迟到成功不写 Player，路由通过后未提交时交接，放行原报告后旧 owner ACK 被 fence，再经双进程 SIGKILL／恢复／重投／第三 owner 核对。
+- 两组共十二次子进程执行、四次 SIGKILL；测试控制 dispatcher 与业务队列分离，故障为回调注入，不扩大为真实网络分区或自动选主。
+
 ### SLG 深化：多进程 Managed Remote 地图交接与故障恢复
 
 - Remote 地图模式追加独立 owner 3100→3101→3102 和原服 1001：旧 owner 存活时写入被 fence；新 owner 投递后遇原服真实 RPC 超时，分别 SIGKILL 新 owner 和原服，恢复前比完整冷事实，八路重投不重复收件，再交接保留 ACK。
