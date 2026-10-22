@@ -290,3 +290,13 @@ scenarios:
                       param:
                         mode: ranked
         - action: world_stats
+        # Last: the server still replicates to this client. A replication
+        # session the server closed (too many objects in view, say) leaves the
+        # connection up and every request answering — only the frames stop —
+        # so no step after scene_expect would notice, and such a session is
+        # not reopened while the connection stays up: checking once at the
+        # end covers the whole run. One change of the robot's own state has
+        # to arrive as a frame.
+        - action: scene_alive
+          param:
+            timeout: 10s

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"{{MODULE}}/game/chatroom"
+	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	gamescene "{{MODULE}}/game/scene"
 	world "{{MODULE}}/game/entities/world"
@@ -430,6 +431,118 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	if removesIn(t, recorder.take(9101)) != 1 {
 		t.Error("the watcher was not told the leaver's object is gone")
 	}
+}
+
+// Every player starts at the same spawn point, and the spawn table puts the
+// first monsters right next to it. With more players and monsters in range
+// than one replication session may hold (the manager's Limits.MaxObjects,
+// 100), the main view's cap (sceneMaxVisible) is what keeps the session open:
+// each player is sent the nearest sceneMaxVisible subjects, not everyone, and
+// no session is closed for holding too many objects. The 2026-10-22 login
+// storm without the cap: 100 robots at the spawn point, all 100 sessions
+// closed with "frame: object limit exceeded".
+func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
+	recorder := newSceneRecorder()
+	config := gamescene.DefaultConfig()
+	scene, err := newScene(recorder, nil, config)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	// Three monsters by the spawn point, as the spawn table puts them.
+	monster.RegisterEntity()
+	for i := range int64(3) {
+		id, err := entity.BuildEntityID(7100+i, monster.EntityKindMonster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: monster.EntityKindMonster, Id: id})
+		if err != nil {
+			t.Fatalf("build monster: %v", err)
+		}
+		value := built.(*monster.Monster)
+		if err := scene.ShowSubject(ctx, value.Sync(), value.ID(), spatial.Point{X: config.Spawn.X + 20 + i, Y: config.Spawn.Y}); err != nil {
+			t.Fatalf("show monster: %v", err)
+		}
+	}
+	// Just past what a session may hold: each player would hold itself, the
+	// 99 others and the 3 monsters (103 > 100), all within a few units of the
+	// spawn point, so everyone is in everyone's enter radius. In memory, a
+	// few hundredths of a second: not a load test.
+	const players = 100
+	ids := make([]int64, 0, players)
+	subjects := make(map[int64]int64, players)
+	for i := range int64(players) {
+		playerID := 20000 + i
+		subject := newScenePlayer(t, playerID)
+		joinReady(t, scene, ctx, subject, spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12})
+		ids = append(ids, playerID)
+		subjects[playerID] = subject.ID()
+	}
+	for range 3 {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+	}
+	if stats := scene.manager.Stats(); stats.SessionsLost != 0 || stats.Sessions != players {
+		t.Fatalf("%d of %d replication sessions were closed at a crowded spawn point (%d still open)", stats.SessionsLost, players, stats.Sessions)
+	}
+	for _, playerID := range ids {
+		if closed := recorder.closuresOf(playerID); closed != 0 {
+			t.Fatalf("player %d was disconnected %d times", playerID, closed)
+		}
+		held := heldSubjects(t, recorder.take(playerID))
+		if !held[subjects[playerID]] {
+			t.Fatalf("player %d does not hold its own entity", playerID)
+		}
+		// Everything but itself came through the main view (no team, no
+		// scene view in this harness): exactly the cap, since more than that
+		// stand in range.
+		if seen := len(held) - 1; seen != sceneMaxVisible {
+			t.Fatalf("player %d holds %d other subjects, want the main view's cap %d", playerID, seen, sceneMaxVisible)
+		}
+	}
+}
+
+// heldSubjects replays what one client received and returns the subjects it
+// holds at the end: a create adds the object's subject, a remove drops it.
+func heldSubjects(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bool {
+	t.Helper()
+	byRef := make(map[uint16]int64)
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range decoded.Objects {
+			switch object.Operation {
+			case frame.ObjectRemove:
+				delete(byRef, object.Ref.ID)
+			case frame.ObjectCreate:
+				for _, component := range object.Components {
+					update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+					if err != nil {
+						t.Fatalf("decode subject update: %v", err)
+					}
+					byRef[object.Ref.ID] = update.SubjectID
+				}
+			}
+		}
+	}
+	held := make(map[int64]bool, len(byRef))
+	for _, subjectID := range byRef {
+		held[subjectID] = true
+	}
+	return held
 }
 
 // A player who disconnects while nothing else is happening must leave the
