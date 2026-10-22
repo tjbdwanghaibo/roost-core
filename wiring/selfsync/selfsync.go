@@ -9,7 +9,7 @@
 //     OnActive / OnClosed，都转成 SelfView.Activate / Deactivate。
 //   - Nest Mod 装配：EntitySyncSetup 把 Transport、SessionLost、SelfView 的安装与实体加载通知交给
 //     wiring/nest.NewModWithEntitySync，Manager 的启停仍归 Nest Mod。SessionLost 里按 DisconnectLostPlayer 的规则
-//     断开编码失败丢掉会话的玩家（维护者 2026-10-22 决定 A）。
+//     断开编码失败丢掉会话的玩家。
 //
 // 生成工程在 roost.yaml 的 access.player 上写 self_sync: true 时，生成器在 *_gen.go 里产出全部调用。
 package selfsync
@@ -338,7 +338,7 @@ func takeSessionLostWarn(now time.Time) (bool, uint64) {
 //   - 原因是推送拒收（entitysync.SessionLossPushRefused）：什么都不做。PushPlayerFrame 在拒收时已经关闭了该玩家
 //     的全部连接，或玩家本来就没有连接（之后来的连接是新登录，自己会打开会话）。
 //   - 其余原因（编码失败：对象超过 MaxObjects、单个实体超过帧上限等；以及不是 Manager 给出的原因）：连接没有拒收
-//     任何东西、还活着，Manager 却再也不会往这个会话推帧，政策也不在原连接上重开。维护者 2026-10-22 决定 A：
+//     任何东西、还活着，Manager 却再也不会往这个会话推帧，政策也不在原连接上重开，所以
 //     关闭这名玩家的全部连接（CloseSessions，原因是 ErrSyncSessionLost 包着 cause），客户端照常重连、重开会话、
 //     从新 epoch 的全量开始。代价：玩家被踢一次；原因一直存在（例如一个实体始终超过帧上限）时会反复断开、重连，
 //     由 SessionLostDisconnectMetric 与限频 Warn（带玩家 ID 与原因）发现，框架不另做防风暴。

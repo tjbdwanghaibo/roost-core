@@ -81,7 +81,7 @@ func SessionOpenRetryable(err error) bool {
 //   - 其余都是“连接没有拒收任何东西”的原因——Manager 在编码这一轮的帧时就失败了，帧没有交给传输：
 //     SessionLossObjectLimit（会话持有的对象超过 Limits.MaxObjects，frame.ErrObjectLimit）、
 //     SessionLossTooLarge（单个实体包超过 MaxFrameBytes / MaxComponentBytes）、SessionLossEncodeFailed（其他编码错误）。
-//     连接仍然活着，同步会话已经没了；维护者 2026-10-22 决定 A：接入层断开该玩家（wiring/selfsync.DisconnectLostPlayer），
+//     连接仍然活着，同步会话已经没了，所以接入层断开该玩家（wiring/selfsync.DisconnectLostPlayer），
 //     客户端重连、重开会话、从新 epoch 的全量开始。
 type SessionLossReason string
 

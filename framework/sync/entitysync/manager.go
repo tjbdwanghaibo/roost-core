@@ -68,8 +68,8 @@ type ManagerConfig struct {
 	// policy-layer membership.
 	//
 	// cause 总是 *SessionLoss：Reason 区分推送拒收与编码失败（LossReason），Err 是原错误。会话 ID 就是玩家 ID 的
-	// Manager 在原因不是推送拒收时要断开该玩家的连接（wiring/selfsync.DisconnectLostPlayer，维护者 2026-10-22
-	// 决定 A），否则连接活着却再也收不到帧。回调在 Flush 的推送阶段调用，不得阻塞、不得调用 Flush。
+	// Manager 在原因不是推送拒收时要断开该玩家的连接（wiring/selfsync.DisconnectLostPlayer），否则连接活着
+	// 却再也收不到帧。回调在 Flush 的推送阶段调用，不得阻塞、不得调用 Flush。
 	SessionLost func(session SessionID, cause error)
 }
 
