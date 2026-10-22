@@ -20,7 +20,7 @@ import (
 
 // 对比二：投递方式（经真实 Nest 引擎）。一次进程只跑一组参数，由脚本循环调用并交替顺序：
 //
-//	HB_DELIVERY=1 HB_MODE=x|y|z|c|none HB_ACTIVE=0.2 HB_RES=10ms HB_SHARDS=1 HB_OUT=<jsonl> \
+//	HB_DELIVERY=1 HB_MODE=x|y|z|c|none HB_ACTIVE=0.2 HB_RES=10ms HB_PERIOD=100ms HB_SHARDS=1 HB_OUT=<jsonl> \
 //	  go test -run TestDeliveryRun -count=1 -timeout 0 ./gameplay/heartbeat/internal/bench
 //
 // 模式：
@@ -36,7 +36,8 @@ import (
 //	      交回的（转换被拒等）清在途、计 hb_queue_full_total
 //	none  不挂心跳，只有业务消息（基线）
 //
-// 负载：HB_ENTITIES（缺省 5 万）个实体，其中 HB_ACTIVE 比例各有一个 100ms 登记（移动）；另有一路业务消息
+// 负载：HB_ENTITIES（缺省 5 万）个实体，其中 HB_ACTIVE 比例各有一个 HB_PERIOD（缺省 100ms，取 Periods 的档位之一）
+// 登记（移动）；另有一路业务消息
 // HB_BIZ_RATE 条/秒（缺省 5000）随机打到全部实体（单目标 Dispatch），测它从发出到 handler 开始执行的延迟。
 // 回调只做少量内存计算（按经过时间推进位置并在边界反弹）。
 
@@ -209,6 +210,7 @@ type deliveryConfig struct {
 	Entities  int     `json:"entities"`
 	Active    float64 `json:"active"`
 	Res       string  `json:"res"`
+	Period    string  `json:"period"`
 	Shards    int     `json:"shards"`
 	Workers   int     `json:"workers"`
 	Batch     int     `json:"batch"`
@@ -518,6 +520,20 @@ func cpuTime() time.Duration {
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
+// deliveryTier 把 HB_PERIOD 换成固定档位下标；不是档位之一时报错（驱动只支持固定档位）。
+func deliveryTier(period string) (Tier, error) {
+	d, err := time.ParseDuration(period)
+	if err != nil {
+		return 0, err
+	}
+	for i, p := range Periods {
+		if p == d {
+			return Tier(i), nil
+		}
+	}
+	return 0, fmt.Errorf("HB_PERIOD %s is not one of the fixed tiers %v", period, Periods)
+}
+
 func TestDeliveryRun(t *testing.T) {
 	if os.Getenv("HB_DELIVERY") == "" {
 		t.Skip("set HB_DELIVERY=1 to run the delivery benchmark (see file comment)")
@@ -527,6 +543,7 @@ func TestDeliveryRun(t *testing.T) {
 		Entities:  envInt(t, "HB_ENTITIES", 50_000),
 		Active:    envFloat(t, "HB_ACTIVE", 0.2),
 		Res:       envOr("HB_RES", "10ms"),
+		Period:    envOr("HB_PERIOD", "100ms"),
 		Shards:    envInt(t, "HB_SHARDS", 1),
 		Workers:   envInt(t, "HB_WORKERS", 8),
 		Batch:     envInt(t, "HB_BATCH", 64),
@@ -541,8 +558,13 @@ func TestDeliveryRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 登记档位：HB_PERIOD 必须是固定档位之一（与驱动一致），缺省 100ms 即 2026-10-22 之前全部结果的口径。
+	tier, err := deliveryTier(cfg.Period)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &deliveryRun{
-		cfg: cfg, res: res, period: int64(Periods[Tier100ms]),
+		cfg: cfg, res: res, period: int64(Periods[tier]),
 		interval: newHistogram(), absDev: newHistogram(), lateness: newHistogram(), bizLatency: newHistogram(),
 	}
 	r.batchPool.New = func() any { return &carrierBatch{regs: make([]*hbReg, 0, cfg.Batch)} }
@@ -590,7 +612,7 @@ func TestDeliveryRun(t *testing.T) {
 			reg := &hbReg{ent: e, id: e.ID(), index: i}
 			reg.params = nest.Params{reg}
 			e.reg = reg
-			s.sched.Add(int64(len(s.regs)), PhaseHash(e.ID()), Tier100ms)
+			s.sched.Add(int64(len(s.regs)), PhaseHash(e.ID()), tier)
 			s.regs = append(s.regs, reg)
 			r.regs = append(r.regs, reg)
 		}
