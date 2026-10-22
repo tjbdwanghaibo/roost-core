@@ -51,7 +51,7 @@ cp "$repo_root/scripts/testdata/slg-alliance/player/handlers.go.txt" game/handle
 mkdir -p game/alliance game/scout
 cp "$repo_root"/scripts/testdata/slg-alliance/scout/*.go game/scout/
 cp "$repo_root"/scripts/testdata/slg-alliance/*.go game/alliance/
-for name in runtime delivery spatial vision service arrival inbox cross_report; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
+for name in runtime delivery spatial vision service arrival inbox cross_report report_view; do cp "$repo_root/scripts/testdata/slg-alliance/player/${name}_test.go" "game/alliance/player_${name}_test.go"; done
 if [[ "${ROOST_SLG_REMOTE:-0}" == 1 ]]; then
  "$review_root/roost" add mod remote_entity -service game >> "$review_root/generate.log" 2>&1
  "$review_root/roost" add entity AllianceAuthority >> "$review_root/generate.log" 2>&1

@@ -118,6 +118,7 @@ func runInboxChild(t *testing.T, n *rewardRuntime, sid int32, mode string) {
 		snapshot("inbox-ready.json")
 		select {} // 父进程在完整标记出现后 SIGKILL。
 	}
+	verifyReportClient(t, n, sid, inbox, report)
 	// 多个投递者重试已落地回执，只能得到相同正文，无新增收件效果。
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
