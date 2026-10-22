@@ -217,5 +217,6 @@ func TestSLGRemoteMapReports(t *testing.T) {
 	second.close()
 	third.close()
 	t.Run("process_handoff_crash", runManagedMapProcesses)
+	t.Run("process_admission_handoff", func(t *testing.T) { t.Setenv("SLG_MANAGED_ADMISSION", "1"); runManagedMapProcesses(t) })
 	t.Log("Managed Remote ScoutMap 3000 -> 3001 -> 3002: cold facts identical, stale writes/routes rejected, pending report retried and ACK durable, Player receipt unchanged")
 }

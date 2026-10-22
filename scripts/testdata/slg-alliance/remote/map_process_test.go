@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,9 +53,14 @@ func runManagedMapChild(t *testing.T, role string) {
 	}
 	scoutmap.RegisterEntity()
 	player.RegisterEntity()
-	mapID, err := entity.BuildEntityID(99235, scoutmap.EntityKindScoutMap)
+	admission := os.Getenv("SLG_MANAGED_ADMISSION") == "1"
+	mapSequence, playerSequence := int64(99235), int64(100100)
+	if admission {
+		mapSequence, playerSequence = 99236, 100200
+	}
+	mapID, err := entity.BuildEntityID(mapSequence, scoutmap.EntityKindScoutMap)
 	check(t, err)
-	recipient, err := entity.BuildEntityID(100100, player.EntityKindPlayer)
+	recipient, err := entity.BuildEntityID(playerSequence, player.EntityKindPlayer)
 	check(t, err)
 	var sid int32
 	isHome := strings.HasPrefix(role, "home-")
@@ -152,8 +158,14 @@ func runManagedMapChild(t *testing.T, role string) {
 		kind = "managedprocesshome"
 	}
 	b := crossReportBus(t, sid, kind)
+	// 测试控制独立于业务 dispatcher；不能让释放屏障的命令排在被屏障阻塞的请求后面。
+	control := crossReportBus(t, sid, kind+"control")
 	admin := func(method string, fn bus.RpcHandlerFunc) {
-		check(t, b.HandleRpc(method, func(c *bus.RpcContext) (any, error) {
+		target := control
+		if method == "tick" || method == "tick-held" || method == "probe" {
+			target = b
+		}
+		check(t, target.HandleRpc(method, func(c *bus.RpcContext) (any, error) {
 			if c.FromSid != reportAdminSID {
 				return nil, errors.New("admin required")
 			}
@@ -161,7 +173,50 @@ func runManagedMapChild(t *testing.T, role string) {
 		}))
 	}
 	if isHome {
-		receiver := scout.RoutedReportReceiver{HomeSID: sid, MapID: mapID, Recipient: recipient, Resolve: resolve, Receive: func(ctx context.Context, r scout.Report) error {
+		// 故障入口仅存在于测试进程。模式切换原子化，屏障在路由通过后、Player Sender 前。
+		var fault atomic.Int32
+		var entered atomic.Bool
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		admin("fault", func(c *bus.RpcContext) (any, error) {
+			var mode int32
+			if err := c.Decode(&mode); err != nil {
+				return nil, err
+			}
+			if mode < 0 || mode > 3 {
+				return nil, errors.New("invalid test fault")
+			}
+			fault.Store(mode)
+			return true, nil
+		})
+		admin("admitted", func(c *bus.RpcContext) (any, error) { return entered.Load(), nil })
+		admin("release", func(c *bus.RpcContext) (any, error) { releaseOnce.Do(func() { close(release) }); return true, nil })
+		authoritativeResolve := resolve
+		resolve = func(ctx context.Context, id int64) (scout.OwnerRoute, error) {
+			switch fault.Load() {
+			case 1:
+				return scout.OwnerRoute{}, errors.New("injected authority query failure")
+			case 2:
+				route, err := authoritativeResolve(ctx, id)
+				if err != nil {
+					return route, err
+				}
+				<-ctx.Done()
+				return route, nil
+			default:
+				return authoritativeResolve(ctx, id)
+			}
+		}
+		receiver := scout.RoutedReportReceiver{Timeout: 10 * time.Second, HomeSID: sid, MapID: mapID, Recipient: recipient, Resolve: resolve, Receive: func(ctx context.Context, r scout.Report) error {
+			if fault.Load() == 3 {
+				entered.Store(true)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 			applied, err := sender.NewAllianceRewardsSender(home.nest).Sync_AllianceReceiveReport(ctx, recipient, sid, r, false)
 			if err != nil {
 				return err
@@ -180,12 +235,21 @@ func runManagedMapChild(t *testing.T, role string) {
 				if err = saveReportFacts(filepath.Join(root, "home-durable.json"), f); err != nil {
 					return err
 				}
+				if admission {
+					return nil
+				} // 交接前已准入的请求正常回执，旧 owner 的后续 ACK 仍应被 fence。
 				<-ctx.Done()
 				return ctx.Err()
 			}
 			return nil
 		}}
-		check(t, b.HandleRpc("receive", receiver.Handle))
+		check(t, b.HandleRpc("receive", func(c *bus.RpcContext) (any, error) {
+			scoped := receiver
+			if fault.Load() == 2 {
+				scoped.Timeout = 100 * time.Millisecond
+			}
+			return scoped.Handle(c)
+		}))
 	} else {
 		ms := sender.NewAllianceRewardsSender(owner.nest)
 		call := func(ctx context.Context, req scout.RoutedReport) error {
@@ -209,14 +273,16 @@ func runManagedMapChild(t *testing.T, role string) {
 		}, Ack: func(ctx context.Context, r scout.Report) error {
 			return ms.Sync_AllianceAckReport(ctx, mapID, r, false)
 		}}
-		admin("tick", func(c *bus.RpcContext) (any, error) {
-			tickCtx, cancel := context.WithTimeout(c.Context(), time.Second)
+		tick := func(c *bus.RpcContext, budget time.Duration) (any, error) {
+			tickCtx, cancel := context.WithTimeout(c.Context(), budget)
 			defer cancel()
 			worker := ArrivalWorker{Limit: 1, Discover: func(ctx context.Context, limit int) ([]string, error) {
 				return ms.Sync_AlliancePendingReports(ctx, mapID, limit)
 			}, Consume: d.Deliver}
 			return true, worker.Tick(tickCtx)
-		})
+		}
+		admin("tick", func(c *bus.RpcContext) (any, error) { return tick(c, time.Second) })
+		admin("tick-held", func(c *bus.RpcContext) (any, error) { return tick(c, 10*time.Second) })
 		admin("transfer", func(c *bus.RpcContext) (any, error) {
 			var next int32
 			if err := c.Decode(&next); err != nil {
@@ -245,6 +311,7 @@ func runManagedMapChild(t *testing.T, role string) {
 	var once sync.Once
 	admin("stop", func(c *bus.RpcContext) (any, error) { once.Do(func() { close(stop) }); return true, nil })
 	check(t, b.Start())
+	check(t, control.Start())
 	check(t, saveReportFacts(filepath.Join(os.Getenv("ROOST_SLG_REWARD_WAL"), "ready-"+role+".json"), initial))
 	select {
 	case <-stop:
@@ -254,10 +321,16 @@ func runManagedMapChild(t *testing.T, role string) {
 	drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	check(t, b.StopWithContext(drain))
+	check(t, control.StopWithContext(drain))
 }
 
 func runManagedMapProcesses(t *testing.T) {
-	root := filepath.Join(os.Getenv("ROOST_SLG_REWARD_WAL"), "managed-process")
+	admission := os.Getenv("SLG_MANAGED_ADMISSION") == "1"
+	directory := "managed-process"
+	if admission {
+		directory = "managed-admission"
+	}
+	root := filepath.Join(os.Getenv("ROOST_SLG_REWARD_WAL"), directory)
 	check(t, os.MkdirAll(root, 0700))
 	t.Setenv("SLG_MANAGED_ROOT", root)
 	start := func(role, dir string) *reportProcess {
@@ -272,6 +345,9 @@ func runManagedMapProcesses(t *testing.T) {
 		if sid == 1001 {
 			kind = "managedprocesshome"
 		}
+		if method != "tick" && method != "tick-held" && method != "probe" {
+			kind += "control"
+		}
 		return reportCall(admin, sid, kind, method, req, resp)
 	}
 	facts := func(sid int32) reportFacts { var f reportFacts; check(t, call(sid, "facts", true, &f)); return f }
@@ -280,6 +356,55 @@ func runManagedMapProcesses(t *testing.T) {
 	check(t, saveReportFacts(filepath.Join(root, "map-before.json"), before))
 	var original, next scout.OwnerRoute
 	check(t, call(3100, "route", true, &original))
+	var heldDone chan error
+	var accepted bool
+	if admission {
+		// 错误和超时后的迟到成功都不能进入收件；恢复不换事件身份。
+		for _, mode := range []int32{1, 2} {
+			check(t, call(1001, "fault", mode, &accepted))
+			if err := call(3100, "tick", true, &accepted); err == nil {
+				t.Fatal("authority fault allowed delivery")
+			}
+			current := facts(1001)
+			if current.Inbox != homeBefore.Inbox || current.Wallet != homeBefore.Wallet {
+				t.Fatal("failed authority check changed Player")
+			}
+			current = facts(3100)
+			if current.Map != before.Map {
+				t.Fatal("failed authority check acknowledged report")
+			}
+		}
+		check(t, call(1001, "fault", int32(3), &accepted))
+		heldDone = make(chan error, 1)
+		heldCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		go func() {
+			var ok bool
+			heldDone <- admin.CallTo(heldCtx, "managedprocessmap", 3100, "tick-held", true, &ok)
+		}()
+		wait, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelWait()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var admitted bool
+			check(t, call(1001, "admitted", true, &admitted))
+			if admitted {
+				break
+			}
+			select {
+			case err := <-heldDone:
+				t.Fatalf("request exited before admission barrier: %v", err)
+			case <-wait.Done():
+				t.Fatal("admission barrier timeout")
+			case <-ticker.C:
+			}
+		}
+		current := facts(1001)
+		if current.Inbox != homeBefore.Inbox {
+			t.Fatal("barrier must precede Player commit")
+		}
+	}
 	check(t, call(3100, "transfer", int32(3101), &next))
 	if next.SID != 3101 || next.Marker <= original.Marker || next.Route <= original.Route {
 		t.Fatal("first handoff generations invalid")
@@ -289,13 +414,26 @@ func runManagedMapProcesses(t *testing.T) {
 	if !fenced {
 		t.Fatal("live old process not fenced")
 	}
-	var accepted bool
+	if admission {
+		check(t, call(1001, "release", true, &accepted))
+		select {
+		case err := <-heldDone:
+			if err == nil {
+				t.Fatal("old owner acknowledged admitted report after transfer")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("admitted request did not drain")
+		}
+		check(t, call(1001, "fault", int32(0), &accepted))
+	}
 	if err := call(3100, "probe", scout.RoutedReport{Report: before.Report, Owner: original}, &accepted); err == nil {
 		t.Fatal("old process delivered after transfer")
 	}
 	b := start("owner-b", "owner-b")
-	if err := call(3101, "tick", true, &accepted); err == nil {
-		t.Fatal("lost receive response acknowledged")
+	if !admission {
+		if err := call(3101, "tick", true, &accepted); err == nil {
+			t.Fatal("lost receive response acknowledged")
+		}
 	}
 	raw, err := os.ReadFile(filepath.Join(root, "home-durable.json"))
 	check(t, err)
@@ -362,5 +500,8 @@ func runManagedMapProcesses(t *testing.T) {
 		p.p.wait(t)
 	}
 	check(t, admin.StopWithContext(context.Background()))
+	if admission {
+		t.Log("admission barrier verified: authority errors/late success do not write; admitted report commits across handoff but old owner cannot ACK")
+	}
 	t.Log(fmt.Sprintf("independent owner processes 3100 -> 3101 -> 3102: old owner alive/fenced, owner 3101 and home SIGKILL, original WAL/authority recovery, eight duplicate ticks, final ACK survives handoff"))
 }
