@@ -60,10 +60,16 @@ type ManagerConfig struct {
 	ComponentTypeID        uint16
 	ComponentSchemaVersion uint16
 
-	// SessionLost is told when a session was closed by the manager because
-	// its transport refused a frame (not on CloseSession). The policy that
-	// subscribed the session uses it to forget the session on its side —
-	// the manager's subscription index does not own policy-layer membership.
+	// SessionLost is told when a session was closed by the manager itself
+	// (not on CloseSession): its transport refused a frame, or the session's
+	// frame could not be encoded (too many objects, an entity over the frame
+	// limit). The policy that subscribed the session uses it to forget the
+	// session on its side — the manager's subscription index does not own
+	// policy-layer membership.
+	//
+	// cause 总是 *SessionLoss：Reason 区分推送拒收与编码失败（LossReason），Err 是原错误。会话 ID 就是玩家 ID 的
+	// Manager 在原因不是推送拒收时要断开该玩家的连接（wiring/selfsync.DisconnectLostPlayer，维护者 2026-10-22
+	// 决定 A），否则连接活着却再也收不到帧。回调在 Flush 的推送阶段调用，不得阻塞、不得调用 Flush。
 	SessionLost func(session SessionID, cause error)
 }
 

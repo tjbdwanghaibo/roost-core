@@ -12,7 +12,11 @@
 // 的对象是三个不同事实，失败重试和退订时不能互相代替。
 package entitysync
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+)
 
 var (
 	ErrManagerStopping      = errors.New("entitysync: manager is stopping")
@@ -67,4 +71,60 @@ var (
 // 重试的等待由调用方安排在业务池之外。
 func SessionOpenRetryable(err error) bool {
 	return errors.Is(err, ErrSessionClosing) || errors.Is(err, ErrSessionOpening)
+}
+
+// SessionLossReason 是 Manager 自己关闭一个会话（ManagerConfig.SessionLost）的原因分类，取值固定、低基数，
+// 可以直接作指标标签。接入层据此决定连接怎么办：
+//
+//   - SessionLossPushRefused：传输拒收了这一帧（Transport.Push 返回非 ErrRetryLater 的错误）。玩家接入层的
+//     传输在拒收时已经关闭了该玩家的连接，或玩家本来就没有连接（wiring/selfsync.PushPlayerFrame）。
+//   - 其余都是“连接没有拒收任何东西”的原因——Manager 在编码这一轮的帧时就失败了，帧没有交给传输：
+//     SessionLossObjectLimit（会话持有的对象超过 Limits.MaxObjects，frame.ErrObjectLimit）、
+//     SessionLossTooLarge（单个实体包超过 MaxFrameBytes / MaxComponentBytes）、SessionLossEncodeFailed（其他编码错误）。
+//     连接仍然活着，同步会话已经没了；维护者 2026-10-22 决定 A：接入层断开该玩家（wiring/selfsync.DisconnectLostPlayer），
+//     客户端重连、重开会话、从新 epoch 的全量开始。
+type SessionLossReason string
+
+const (
+	SessionLossPushRefused  SessionLossReason = "push_refused"
+	SessionLossObjectLimit  SessionLossReason = "object_limit"
+	SessionLossTooLarge     SessionLossReason = "too_large"
+	SessionLossEncodeFailed SessionLossReason = "encode_failed"
+)
+
+// SessionLoss 是 Manager 交给 SessionLost 回调的原因：Reason 是分类，Err 是原错误（errors.Is / As 经 Unwrap
+// 照常看得到传输或 frame 包的错误）。
+type SessionLoss struct {
+	Reason SessionLossReason
+	Err    error
+}
+
+func (l *SessionLoss) Error() string {
+	if l.Err == nil {
+		return "entitysync: session lost (" + string(l.Reason) + ")"
+	}
+	return "entitysync: session lost (" + string(l.Reason) + "): " + l.Err.Error()
+}
+
+func (l *SessionLoss) Unwrap() error { return l.Err }
+
+// LossReason 取 SessionLost 回调原因里的分类；cause 不是 Manager 给出的 SessionLoss 时返回空串。
+func LossReason(cause error) SessionLossReason {
+	var loss *SessionLoss
+	if errors.As(cause, &loss) {
+		return loss.Reason
+	}
+	return ""
+}
+
+// encodeLoss 把一次编码失败归类：分类只看 frame 包的哨兵错误，不看错误文本。
+func encodeLoss(err error) *SessionLoss {
+	reason := SessionLossEncodeFailed
+	switch {
+	case errors.Is(err, frame.ErrObjectLimit):
+		reason = SessionLossObjectLimit
+	case errors.Is(err, frame.ErrFrameTooLarge), errors.Is(err, frame.ErrComponentTooLarge):
+		reason = SessionLossTooLarge
+	}
+	return &SessionLoss{Reason: reason, Err: err}
 }

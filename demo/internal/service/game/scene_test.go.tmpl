@@ -27,6 +27,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -511,6 +512,76 @@ func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
 			t.Fatalf("player %d holds %d other subjects, want the main view's cap %d", playerID, seen, sceneMaxVisible)
 		}
 	}
+}
+
+// The other side of the main view's cap: a crowd that overflows a
+// session (frame.ErrObjectLimit, here by taking the cap off) disconnects its
+// players instead of silently stopping their frames. The manager closes the
+// session without pushing anything, so no connection refused a frame; the
+// framework's selfsync.DisconnectLostPlayer, called from sessionLost, closes
+// the player's connections (the maintainer's 2026-10-22 decision A) and
+// counts it by reason. The client reconnects and its Join starts over from a
+// full snapshot; with the crowd still there it is kicked again, which is the
+// accepted cost. Before, the connection stayed up, requests were still
+// answered and the player received nothing until it logged in again.
+func TestACrowdOverflowingASessionDisconnectsThePlayers(t *testing.T) {
+	recorder := newSceneRecorder()
+	config := gamescene.DefaultConfig()
+	scene, err := newSceneWithMainView(sceneLane{transport: recorder}, recorder, nil, config, 0)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.watchSessions(recorder)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	disconnectsBefore := sessionLostDisconnects()
+	// One more than a session may hold: each player would hold itself and
+	// the 100 others (101 > 100). In memory, a few hundredths of a second.
+	const players = 101
+	ids := make([]int64, 0, players)
+	for i := range int64(players) {
+		playerID := 21000 + i
+		joinReady(t, scene, ctx, newScenePlayer(t, playerID), spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12})
+		ids = append(ids, playerID)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	stats := scene.manager.Stats()
+	if stats.SessionsLost != players {
+		t.Fatalf("%d of %d sessions were lost to the overflowing crowd, want all of them (the test's premise)", stats.SessionsLost, players)
+	}
+	silent := 0
+	for _, playerID := range ids {
+		if recorder.closuresOf(playerID) != 1 {
+			silent++
+		}
+	}
+	if silent != 0 {
+		t.Fatalf("%d of %d players whose replication session was closed for holding too many objects were not disconnected: "+
+			"their connection stays up and receives nothing until they log in again", silent, players)
+	}
+	if got := sessionLostDisconnects() - disconnectsBefore; got != players {
+		t.Fatalf("%s{reason=object_limit} grew by %d, want %d", selfsync.SessionLostDisconnectMetric, got, players)
+	}
+}
+
+// sessionLostDisconnects reads the framework's count of players disconnected
+// because their session was lost to too many objects.
+func sessionLostDisconnects() int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == selfsync.SessionLostDisconnectMetric && metric.Labels["reason"] == string(entitysync.SessionLossObjectLimit) {
+			return metric.Value
+		}
+	}
+	return 0
 }
 
 // heldSubjects replays what one client received and returns the subjects it

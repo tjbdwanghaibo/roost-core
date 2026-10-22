@@ -8,7 +8,8 @@
 //   - 连接生命周期：嵌入 TCP 用 gateway.TCPHandshake 的 AfterACK / Closed，独立 Gate 用 GameIngress 的
 //     OnActive / OnClosed，都转成 SelfView.Activate / Deactivate。
 //   - Nest Mod 装配：EntitySyncSetup 把 Transport、SessionLost、SelfView 的安装与实体加载通知交给
-//     wiring/nest.NewModWithEntitySync，Manager 的启停仍归 Nest Mod。
+//     wiring/nest.NewModWithEntitySync，Manager 的启停仍归 Nest Mod。SessionLost 里按 DisconnectLostPlayer 的规则
+//     断开编码失败丢掉会话的玩家（维护者 2026-10-22 决定 A）。
 //
 // 生成工程在 roost.yaml 的 access.player 上写 self_sync: true 时，生成器在 *_gen.go 里产出全部调用。
 package selfsync
@@ -17,9 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -109,6 +113,10 @@ func (s *SelfSync) EntitySyncSetup() wiringnest.EntitySyncSetup {
 			config.SessionLost = func(session entitysync.SessionID, cause error) {
 				if previous != nil {
 					previous(session, cause)
+				}
+				// 编码失败丢掉的会话：连接没拒收任何东西、还活着，断开它（推送拒收时传输已经断开过）。
+				if players := s.players.Load(); players != nil {
+					DisconnectLostPlayer(players, int64(session), cause)
 				}
 				s.view.Load().SessionLost(session, cause)
 			}
@@ -289,6 +297,73 @@ func PushPlayerFrame(ctx context.Context, players PlayerConnections, playerID in
 // SyncPushRefusedMetric 计 PushPlayerFrame 处理的拒收（Counter）。标签 outcome：closed（活着的连接拒收，
 // 关闭了该玩家的连接）、retried（整个进程的驻留预算耗尽，整轮重试）。接入层未就绪与玩家没有连接不计。
 const SyncPushRefusedMetric = "player.sync.push_refused.total"
+
+// ErrSyncSessionLost 是 DisconnectLostPlayer 关闭玩家连接时给出的关闭原因（包着 Manager 的 *entitysync.SessionLoss）。
+var ErrSyncSessionLost = errors.New("selfsync: the player's sync session was lost without a refused push")
+
+// SessionLostDisconnectMetric 计 DisconnectLostPlayer 因同步会话丢失而断开玩家的次数（Counter，每名玩家每次丢会话
+// 至多一次，只计确实关掉了连接的）。标签 reason 取 entitysync.SessionLossReason 中推送拒收以外的值：
+// object_limit / too_large / encode_failed，原因不是 Manager 给出的计 unknown。推送拒收的断开计在
+// SyncPushRefusedMetric{outcome="closed"}。
+const SessionLostDisconnectMetric = "player.sync.session_lost_disconnect.total"
+
+// sessionLostWarnInterval 是“因丢会话断开玩家”Warn 的间隔：间隔内只累计，下一条带上被省略的次数。
+const sessionLostWarnInterval = 10 * time.Second
+
+// sessionLostWarn 是进程级的限频闸门（自身视图与 game-demo 场景共用）：原因持续存在时玩家会反复被断开、重连，
+// 每次都打一条会刷屏；限频后的样本仍带玩家 ID 与原因，同一个玩家 ID 反复出现就是“反复重连”。
+var sessionLostWarn struct {
+	mu         sync.Mutex
+	next       time.Time
+	suppressed uint64
+}
+
+// takeSessionLostWarn 报告这一次是否打 Warn，以及上一条之后被省略的次数。
+func takeSessionLostWarn(now time.Time) (bool, uint64) {
+	sessionLostWarn.mu.Lock()
+	defer sessionLostWarn.mu.Unlock()
+	if now.Before(sessionLostWarn.next) {
+		sessionLostWarn.suppressed++
+		return false, 0
+	}
+	suppressed := sessionLostWarn.suppressed
+	sessionLostWarn.suppressed, sessionLostWarn.next = 0, now.Add(sessionLostWarnInterval)
+	return true, suppressed
+}
+
+// DisconnectLostPlayer 是 PushPlayerFrame 的另一半，接 ManagerConfig.SessionLost：会话 ID 就是玩家 ID 的 Manager
+// （自身视图由 EntitySyncSetup 自动接上，game-demo 场景在自己的 sessionLost 里调用）丢掉一名玩家的同步会话之后，
+// 保证不留下“连接活着、同步会话已死”的玩家。
+//
+//   - 原因是推送拒收（entitysync.SessionLossPushRefused）：什么都不做。PushPlayerFrame 在拒收时已经关闭了该玩家
+//     的全部连接，或玩家本来就没有连接（之后来的连接是新登录，自己会打开会话）。
+//   - 其余原因（编码失败：对象超过 MaxObjects、单个实体超过帧上限等；以及不是 Manager 给出的原因）：连接没有拒收
+//     任何东西、还活着，Manager 却再也不会往这个会话推帧，政策也不在原连接上重开。维护者 2026-10-22 决定 A：
+//     关闭这名玩家的全部连接（CloseSessions，原因是 ErrSyncSessionLost 包着 cause），客户端照常重连、重开会话、
+//     从新 epoch 的全量开始。代价：玩家被踢一次；原因一直存在（例如一个实体始终超过帧上限）时会反复断开、重连，
+//     由 SessionLostDisconnectMetric 与限频 Warn（带玩家 ID 与原因）发现，框架不另做防风暴。
+//
+// 返回关掉的连接数。关连接不阻塞（同 PushPlayerFrame），可以在 Flush 的推送阶段调用。
+func DisconnectLostPlayer(players PlayerConnections, playerID int64, cause error) int {
+	reason := entitysync.LossReason(cause)
+	if reason == entitysync.SessionLossPushRefused || players == nil {
+		return 0
+	}
+	if reason == "" {
+		reason = "unknown" // 不是 Manager 给出的原因（业务自己调用）：照样断开，标签单列
+	}
+	closed := players.CloseSessions(playerID, fmt.Errorf("%w: %w", ErrSyncSessionLost, cause))
+	if closed == 0 {
+		// 玩家此刻没有连接：没有要断开的，也不是“反复重连”的信号。
+		return 0
+	}
+	metrics.IncCounter(SessionLostDisconnectMetric, metrics.Labels{"reason": string(reason)}, 1)
+	if allowed, suppressed := takeSessionLostWarn(time.Now()); allowed {
+		slog.Warn("selfsync: a player's sync session was lost without a refused push; disconnected the player so the client reconnects with a full snapshot",
+			"player_id", playerID, "reason", string(reason), "connections", closed, "suppressed_since_last_warn", suppressed, "err", cause)
+	}
+	return closed
+}
 
 // refusalsOf 拆开接入层按连接汇总的错误（errors.Join，每条连接一个）；单个错误就是一条。
 func refusalsOf(err error) []error {

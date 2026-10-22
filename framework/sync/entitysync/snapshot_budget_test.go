@@ -126,6 +126,10 @@ func TestWholeEntityTooLargeIsExplicitAndNeverTruncated(t *testing.T) {
 	if !errors.Is(cause, frame.ErrFrameTooLarge) || len(r.take(1)) != 0 {
 		t.Fatalf("cause=%v", cause)
 	}
+	// 帧没有交给传输：原因归为编码失败的 too_large，接入层据此断开仍活着的连接（不是推送拒收）。
+	if got := LossReason(cause); got != SessionLossTooLarge {
+		t.Fatalf("loss reason = %q, want %q", got, SessionLossTooLarge)
+	}
 }
 
 func TestWholeEntitySplitRetryContinuesFrameAndContentBaselines(t *testing.T) {

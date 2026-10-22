@@ -200,9 +200,10 @@ func (m *Manager) CloseSession(id SessionID) {
 	m.dropSession(id, nil, nil, false)
 }
 
-// loseSession is CloseSession for a session the transport refused: counted,
-// and reported to the policy through SessionLost.
-func (m *Manager) loseSession(expected *session, cause error) {
+// loseSession is CloseSession for a session the manager gave up on — the
+// transport refused a frame, or the frame could not be encoded: counted, and
+// reported through SessionLost with the classified cause.
+func (m *Manager) loseSession(expected *session, cause *SessionLoss) {
 	m.dropSession(expected.id, expected, cause, true)
 }
 

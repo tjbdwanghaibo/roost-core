@@ -193,6 +193,7 @@ func (h *harness) flush(t testing.TB) {
 type client struct {
 	connection net.Conn
 	receiver   *frame.Receiver
+	epoch      uint32 // 最近一帧的 epoch（state 记下）
 }
 
 func dial(t testing.TB, h *harness, playerID int64) *client {
@@ -236,7 +237,7 @@ func (c *client) state(t testing.TB) (frame.Kind, string) {
 	var kind frame.Kind
 	var payload string
 	applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-		kind = decoded.Kind
+		kind, c.epoch = decoded.Kind, decoded.Epoch
 		for _, object := range decoded.Objects {
 			for _, component := range object.Components {
 				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
@@ -436,8 +437,11 @@ func TestSelfSyncOverTCPClosesAStalledReaderAndTheReconnectGetsAFull(t *testing.
 
 // 部署调小 player_access.tcp.max_payload_bytes、不改别的：以前自身视图一帧的上限仍是 gateway 默认的 1MiB，
 // 超过接入层上限的帧被拒收、连接被关，客户端重连后的全量同样超限，反复断线重连。现在一帧的上限在 Nest Mod Init
-// 时从同一个键取：上限以内照常交付；单个玩家实体超过它时帧在 Manager 内编码失败（KNOWN-LIMITS 第③条，
-// 连接不关、靠滞留指标告警），不会推出一帧被接入层拒收的帧，连接不被关。
+// 时从同一个键取：上限以内照常交付；单个玩家实体超过它时帧在 Manager 内编码失败，不会推出一帧被接入层拒收的帧。
+//
+// 编码失败丢掉的会话（维护者 2026-10-22 决定 A，取代 10-17 的 B“不关连接、靠滞留指标”）：连接没有拒收任何东西，
+// 但同步会话已经没了，所以由 SessionLost 断开这名玩家（DisconnectLostPlayer，计 reason=too_large），不计推送拒收；
+// 客户端重连后从新 epoch 的全量开始。
 func TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit(t *testing.T) {
 	const limit = 16 << 10
 	h := newHarnessWithPayloadLimit(t, limit, nil)
@@ -454,23 +458,43 @@ func TestSelfSyncFrameLimitFollowsTheTCPPayloadLimit(t *testing.T) {
 	if kind, _ := c.state(t); kind != frame.Full {
 		t.Fatalf("first state = %v, want Full", kind)
 	}
+	firstEpoch := c.epoch
 	refusedBefore := counterValue(SyncPushRefusedMetric, "closed")
+	disconnectsBefore := labeledCounter(SessionLostDisconnectMetric, "reason", "too_large")
 	// 一次改动的帧超过接入层上限（仍在组件上限 64KiB 之内）。
 	player.pad.Store(24 << 10)
 	player.setGold(1)
 	h.flush(t)
-	_ = c.connection.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if packet, err := wire.Read(c.connection, wire.DefaultMaxPayload); err == nil {
+	_ = c.connection.SetReadDeadline(time.Now().Add(3 * time.Second))
+	packet, err := wire.Read(c.connection, wire.DefaultMaxPayload)
+	if err == nil {
 		t.Fatalf("a %d-byte frame was pushed over a %d-byte access limit", len(packet.Payload), limit)
-	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("the connection was closed after a frame over player_access.tcp.max_payload_bytes (refused pushes %d → %d): %v; the reconnect's full would be refused the same way",
-			refusedBefore, counterValue(SyncPushRefusedMetric, "closed"), err)
 	}
-	if got := h.runtime.ActiveSessions(7); got != 1 {
-		t.Fatalf("player connections = %d, want 1: the access layer refused a frame and the connection was closed", got)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the player's sync session was lost to an encode failure (sessions lost %d) and its connection was left up: "+
+			"connections=%d, %s{reason=too_large} %d → %d; the client would never receive another frame",
+			h.manager.Stats().SessionsLost, h.runtime.ActiveSessions(7), SessionLostDisconnectMetric, disconnectsBefore,
+			labeledCounter(SessionLostDisconnectMetric, "reason", "too_large"))
+	}
+	if got := labeledCounter(SessionLostDisconnectMetric, "reason", "too_large"); got != disconnectsBefore+1 {
+		t.Fatalf("%s{reason=too_large} %d → %d, want one disconnect", SessionLostDisconnectMetric, disconnectsBefore, got)
 	}
 	if got := counterValue(SyncPushRefusedMetric, "closed"); got != refusedBefore {
 		t.Fatalf("%s{outcome=closed} %d → %d: a frame over the access limit reached the transport", SyncPushRefusedMetric, refusedBefore, got)
+	}
+	waitOnline(t, h, 0)
+	h.flush(t)
+	// 原因消失之后（实体变小）重连：新会话、新 epoch 的全量。
+	player.pad.Store(0)
+	again := dial(t, h, 7)
+	again.ack(t)
+	waitOnline(t, h, 1)
+	h.flush(t)
+	if kind, state := again.state(t); kind != frame.Full || state != "gold=1" {
+		t.Fatalf("after reconnect = %v %q, want a Full with gold=1", kind, state)
+	}
+	if again.epoch == firstEpoch {
+		t.Fatalf("the reconnect's Full carries the lost session's epoch %d, want a new one", firstEpoch)
 	}
 }
 
@@ -642,7 +666,7 @@ func TestTransportRetriesTheTickUntilPlayersAreBound(t *testing.T) {
 	}
 }
 
-// fakePlayers 是只实现推送、连接计数与关连接的接入层替身：PushSyncPlayer 返回 refuse 给出的错误，
+// fakePlayers 是只实现推送、连接计数与关连接的接入层替身：PushSyncPlayer 返回 refuse 给出的错误（为 nil 时记下帧），
 // CloseSessions 记录被关的玩家与原因。其余方法不会被 Transport 调用（嵌入的 nil 接口调用会 panic）。
 type fakePlayers struct {
 	gateway.PlayerRuntime
@@ -650,10 +674,16 @@ type fakePlayers struct {
 	connections int
 	closed      []int64
 	cause       error
+	frames      [][]byte // 准入的帧（refuse 为 nil 时）
 }
 
-func (f *fakePlayers) PushSyncPlayer(context.Context, int64, uint32, []byte) error { return f.refuse }
-func (f *fakePlayers) ActiveSessions(int64) int                                    { return f.connections }
+func (f *fakePlayers) PushSyncPlayer(_ context.Context, _ int64, _ uint32, payload []byte) error {
+	if f.refuse == nil {
+		f.frames = append(f.frames, append([]byte(nil), payload...))
+	}
+	return f.refuse
+}
+func (f *fakePlayers) ActiveSessions(int64) int { return f.connections }
 func (f *fakePlayers) CloseSessions(player int64, cause error) int {
 	f.closed, f.cause = append(f.closed, player), cause
 	closed := f.connections
@@ -748,6 +778,16 @@ func counterValue(name, outcome string) int64 {
 	return 0
 }
 
+// labeledCounter 读带一个标签的计数（进程级累计，用前后差值）。
+func labeledCounter(name, label, value string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name && metric.Labels[label] == value {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
 func gaugeValue(name string) int64 {
 	for _, metric := range metrics.Snapshot() {
 		if metric.Name == name && len(metric.Labels) == 0 {
@@ -802,4 +842,127 @@ func TestSelfSyncReportsPlayersOnlineWithoutASession(t *testing.T) {
 			t.Fatalf("%s after the connection closed = %d, want 0", StrandedPlayersMetric, got)
 		}
 	})
+}
+
+// 会话 ID 就是玩家 ID 的 Manager（自身视图、game-demo 场景）丢会话之后不留下“连接活着、同步会话已死”的玩家：
+// 会话持有的对象超过 Limits.MaxObjects（frame.ErrObjectLimit）时帧编不出来、没有交给传输，连接没拒收任何东西；
+// DisconnectLostPlayer 断开该玩家（计 reason=object_limit）。客户端重连、重开会话，收到新 epoch 的全量。
+// 推送拒收的旧路径不变：PushPlayerFrame 关连接（计 push_refused closed），SessionLost 不再关第二次。
+func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
+	playerKind(t)
+	const playerID = 7
+	players := &fakePlayers{connections: 1}
+	var lost []error
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+		Name:     "lane",
+		Interval: time.Hour,
+		Limits:   frame.Limits{MaxObjects: 2},
+		Transport: entitysync.TransportFunc(func(ctx context.Context, session entitysync.SessionID, payload []byte) error {
+			return PushPlayerFrame(ctx, players, int64(session), testMessageID, payload)
+		}),
+		SessionLost: func(session entitysync.SessionID, cause error) {
+			lost = append(lost, cause)
+			DisconnectLostPlayer(players, int64(session), cause)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	flush := func() {
+		t.Helper()
+		if err := manager.Flush(context.Background()); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+	}
+	wallets := []*wallet{newWallet(t, 101, 1), newWallet(t, 102, 2), newWallet(t, 103, 3)}
+	for _, w := range wallets {
+		if err := manager.Register(w.Sync()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subscribe := func(ws ...*wallet) {
+		t.Helper()
+		for _, w := range ws {
+			if err := manager.Subscribe(playerID, w.ID(), policy.SelfProfile); err != nil {
+				t.Fatalf("subscribe %d: %v", w.ID(), err)
+			}
+		}
+	}
+	firstEpoch := func() uint32 {
+		t.Helper()
+		if len(players.frames) == 0 {
+			t.Fatal("no frame was admitted")
+		}
+		decoded, err := entitysync.DecodeFrame(players.frames[0], frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Kind != frame.Full {
+			t.Fatalf("first frame of the session is %v, want Full", decoded.Kind)
+		}
+		return decoded.Epoch
+	}
+
+	// 1. 两个对象：会话照常收到全量。
+	if err := manager.OpenSession(playerID); err != nil {
+		t.Fatal(err)
+	}
+	subscribe(wallets[0], wallets[1])
+	flush()
+	epoch := firstEpoch()
+	players.frames = nil
+
+	// 2. 第三个对象超过 MaxObjects：编码失败，会话被丢，连接被断开。
+	disconnectsBefore := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit")
+	refusedBefore := counterValue(SyncPushRefusedMetric, "closed")
+	subscribe(wallets[2])
+	flush()
+	if len(lost) != 1 || entitysync.LossReason(lost[0]) != entitysync.SessionLossObjectLimit || !errors.Is(lost[0], frame.ErrObjectLimit) {
+		t.Fatalf("SessionLost causes %v, want one object_limit loss wrapping frame.ErrObjectLimit", lost)
+	}
+	if len(players.closed) != 1 || players.closed[0] != playerID {
+		t.Fatalf("connections closed for %v after the session was lost to %v, want player %d once: "+
+			"its connection stays up and receives nothing until the player logs in again", players.closed, lost[0], playerID)
+	}
+	if !errors.Is(players.cause, ErrSyncSessionLost) || !errors.Is(players.cause, frame.ErrObjectLimit) {
+		t.Fatalf("close cause %v, want ErrSyncSessionLost carrying frame.ErrObjectLimit", players.cause)
+	}
+	if got := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit"); got != disconnectsBefore+1 {
+		t.Fatalf("%s{reason=object_limit} %d → %d, want +1", SessionLostDisconnectMetric, disconnectsBefore, got)
+	}
+	if got := counterValue(SyncPushRefusedMetric, "closed"); got != refusedBefore {
+		t.Fatalf("%s{outcome=closed} %d → %d: an encode failure is not a refused push", SyncPushRefusedMetric, refusedBefore, got)
+	}
+
+	// 3. 客户端重连、重开会话（视野回到两个对象之内）：新 epoch 的全量。
+	players.connections = 1
+	if err := manager.OpenSession(playerID); err != nil {
+		t.Fatalf("reopen after the disconnect: %v", err)
+	}
+	subscribe(wallets[0], wallets[1])
+	flush()
+	if again := firstEpoch(); again == epoch {
+		t.Fatalf("the reopened session's Full carries the lost session's epoch %d, want a new one", epoch)
+	}
+	players.frames = nil
+
+	// 4. 推送拒收：PushPlayerFrame 关连接一次，SessionLost 不再关第二次、不计会话丢失断开。
+	pushDisconnectsBefore := labeledCounter(SessionLostDisconnectMetric, "reason", string(entitysync.SessionLossPushRefused))
+	refusedBefore = counterValue(SyncPushRefusedMetric, "closed")
+	players.refuse = errors.Join(nettransport.ErrReliableBackpressure)
+	wallets[0].setGold(10)
+	flush()
+	if len(lost) != 2 || entitysync.LossReason(lost[1]) != entitysync.SessionLossPushRefused || !errors.Is(lost[1], nettransport.ErrReliableBackpressure) {
+		t.Fatalf("SessionLost causes %v, want a push_refused loss carrying the refusal", lost)
+	}
+	if len(players.closed) != 2 || !errors.Is(players.cause, ErrSyncPushRefused) {
+		t.Fatalf("connections closed %v (last cause %v), want one more close by the push rule", players.closed, players.cause)
+	}
+	if got := counterValue(SyncPushRefusedMetric, "closed"); got != refusedBefore+1 {
+		t.Fatalf("%s{outcome=closed} %d → %d, want +1", SyncPushRefusedMetric, refusedBefore, got)
+	}
+	if got := labeledCounter(SessionLostDisconnectMetric, "reason", string(entitysync.SessionLossPushRefused)); got != pushDisconnectsBefore {
+		t.Fatalf("a refused push was counted as a session-lost disconnect: %d → %d", pushDisconnectsBefore, got)
+	}
 }

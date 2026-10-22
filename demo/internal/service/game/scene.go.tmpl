@@ -83,7 +83,10 @@ const (
 	// (frame.DefaultLimits, 100: it is also how many objects one session may
 	// hold) the next frame cannot be encoded and the manager closes that
 	// session (frame.ErrObjectLimit). The 2026-10-22 login storm closed all
-	// 100 sessions with 100 robots at the spawn point.
+	// 100 sessions with 100 robots at the spawn point. A session closed that
+	// way now disconnects the player too (sessionLost), so without the cap a
+	// crowd would keep kicking its players and they would keep reconnecting
+	// into the same crowd.
 	//
 	// The session holds the main view's subjects plus what reaches the player
 	// outside it: its own entity (self), the scene's subject (the scene view)
@@ -152,7 +155,9 @@ type Scene struct {
 	// Ready, Leave and the disconnect-driven settle — so a removal decided for
 	// an old connection cannot interleave with the Join of a new one.
 	// It is held across manager and policy calls; none of
-	// them calls back into the scene (SessionLost only schedules a settle).
+	// them calls back into the scene (SessionLost only disconnects the player
+	// — the access layer's close notice arrives on its own goroutine — and
+	// schedules a settle).
 	transitions sync.Mutex
 
 	// teamMu guards the team views. A formed match is the demo's one social
@@ -313,13 +318,21 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 // the player's TCP push; a test puts a SessionLifecycle transport under the
 // scene through here.
 func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
-	config = config.Normalize()
 	// A player's session holds its main view (at most sceneMaxVisible) plus
 	// sceneReservedObjects from outside it; together they must fit what the
 	// manager lets one session hold, or a crowd closes sessions again.
 	if limit := frame.DefaultLimits().MaxObjects; sceneMaxVisible+sceneReservedObjects > limit {
 		return nil, fmt.Errorf("scene: a main view of %d plus %d reserved objects exceeds the %d objects one replication session may hold", sceneMaxVisible, sceneReservedObjects, limit)
 	}
+	return newSceneWithMainView(lane, transport, watermark, config, sceneMaxVisible)
+}
+
+// newSceneWithMainView is newSceneOn with the main view's cap given and not
+// checked against what a session may hold: a test oversizes it to have a
+// crowd overflow a session (frame.ErrObjectLimit) and see what the scene does
+// then. 0 means no cap.
+func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int) (*Scene, error) {
+	config = config.Normalize()
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
 	// before its WAL record is durable, so content can be newer than what
@@ -372,7 +385,7 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 			LeaveRadius: sceneLeaveRadius,
 			// The nearest sceneMaxVisible in range, not everyone in range:
 			// see sceneMaxVisible for why and for how the number was chosen.
-			MaxVisible: sceneMaxVisible,
+			MaxVisible: maxVisible,
 
 			MinViewRadius:  sceneMinViewRadius,
 			MaxLeaveRadius: sceneMaxLeaveRadius,
@@ -891,15 +904,24 @@ func (bridge *Scene) sweepLocked() {
 	}
 }
 
-// sessionLost is the manager telling us a push to a player failed and their
-// session was closed. A leaver is ordinary churn, not an error, but a scene
-// that silently loses members hides real failures — so one Info line. A
+// sessionLost is the manager telling us it closed a player's replication
+// session: a push to the player failed, or the player's frame could not be
+// encoded (more objects than a session may hold, an entity over the frame
+// limit). A leaver is ordinary churn, not an error, but a scene that silently
+// loses members hides real failures — so one Info line.
+//
+// Either way no connection of the player is left up without its session: a
 // connection that refused the frame was closed by the lane (Push) before the
-// manager dropped the session, so the player is either gone or has logged in
-// again since; settle tells the two apart. It runs inside the manager's tick,
-// so the settle goes to its own goroutine.
+// manager dropped the session, and for any other cause the framework's
+// selfsync.DisconnectLostPlayer closes them here (the maintainer's
+// 2026-10-22 decision A; it counts and logs the disconnect). The client
+// reconnects and its Join opens a new session from a full snapshot. So the
+// player is either gone or has logged in again since; settle tells the two
+// apart. It runs inside the manager's tick, so the settle goes to its own
+// goroutine.
 func (bridge *Scene) sessionLost(session entitysync.SessionID, cause error) {
-	slog.Info("scene: push to player failed, its replication session was closed", "player_id", int64(session), "err", cause)
+	slog.Info("scene: replication session was closed by the manager", "player_id", int64(session), "reason", string(entitysync.LossReason(cause)), "err", cause)
+	selfsync.DisconnectLostPlayer(bridge.sessions, int64(session), cause)
 	bridge.settleLater(int64(session))
 }
 
@@ -938,10 +960,13 @@ func (bridge *Scene) runLater(fn func()) {
 //     that no longer represents this player, and is dropped;
 //   - the player still has an active connection: it stays. If the manager
 //     dropped its replication session, that connection came up after the
-//     refused push (the lane closes every connection of a player whose live
-//     connection refused a frame): it is a new login, and its Join opens the
-//     session again — nothing is reopened here. Nobody else is told
-//     anything — the player never left;
+//     drop — every connection the player had then was closed (by the lane
+//     when a live connection refused a frame, by sessionLost for any other
+//     cause, an encode failure included): it is a new login, and its Join
+//     opens the session again — nothing is reopened here. Nobody else is
+//     told anything — the player never left. (A connection the access layer
+//     has not yet unregistered when this runs is counted too; its close
+//     event settles the player again.);
 //   - otherwise the player is gone and leaves.
 func (bridge *Scene) settle(subjectID int64, generation uint64) {
 	bridge.transitions.Lock()
