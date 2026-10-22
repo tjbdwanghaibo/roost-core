@@ -351,7 +351,7 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 
 §10.7 的方向判断说过：日志收成一条之后，再出问题该看应用侧的批次与结算。这一层在重构后连续出了三处（§11.1 已执行未结算不计入 Drain，`d3a4486d`；§12 预算不计结算，`be49684b`；§11.2 切点越过命令，本节）。三处都不是入口的问题，而是“一步做多少、什么时候算做完”的规则各自写成了局部例外（“同一提交不切开”是切点的例外，“命令不触发切开”是预算的例外），例外之间互相打架。**方向判断**：是细节问题叠在一个缺少统一表述的前提上，不是单写者方向本身的问题；把切点收成“一步 = 日志的一个前缀减去整笔等待的提交”之后，一步的形状只剩两个自由度：哪些事实留在原位（只由提交门与同目标顺序决定），在哪个前缀边界停（只由上限决定）。之后若这一层再出问题，先看是不是又在这两条之外加了例外。
 
-剩下的约束与钉住它们的用例（`framework/sync/entitysync/policy`，“两种模式”指用例经 `forEachApplyMode` 各跑一遍）：
+剩下的约束与钉住它们的用例（`framework/sync/entitysync/policy`，“两种模式”指用例经 `forEachApplyMode` 各跑一遍；第 16 条为 2026-10-22 审查后补）：
 
 | # | 约束 | 用例 |
 | --- | --- | --- |
@@ -370,6 +370,9 @@ KNOWN-LIMITS 里还有两条同根的窗口：“进出场景在提交后、实�
 | 13 | 业务线程上的入口不等 AOI 批次 | `TestDirectCallsDoNotWaitForTheAOIBatch`（两种模式） |
 | 14 | 谁、何时执行日志：ApplySync 在政策阶段，ApplyAsync 在应用线程、Flush 只结算 | `TestApplyModeDecidesWhenACommittedMoveIsVisible`、`TestFlushSettlesButDoesNotApplyQueuedFacts` |
 | 15 | 政策阶段的拒绝交给 `OnRefusal` | `TestPolicyPhaseRefusalsReachOnRefusal` |
+| 16 | 跨锁边界只传值：`registry.log` / `facts` / `active` 只在 `registry.mu` 内读写，应用方与诊断读（持 `Interest.mu`）经 `takeLog` / `requeue` / `releaseFacts` / `backlog` / `drainSnapshot` 在锁内取值快照，锁外不回读；Drain 诊断的全部判断用同一份快照（RV-20261022-03） | `TestDrainStallsReadsFactCountUnderTheRegistryLock`（两种模式，`-race`；状态必须是“已应用、未结算、没有排队事实”，已结算的状态会短路那次读取） |
+
+约束 16 的来源与阶段划分：2026-10-22 审查 RV-20261022-03 发现 `drainStalls` 释放 `registry.mu` 之后又读 `r.facts`，与只持 `registry.mu` 的 `QueueMove` 写入竞争（只读诊断，未发现影响 AOI 位置或订阅）。修复时把应用方的一步拆成 `takeLog`（登记侧锁内取走日志并固定提交条件）→ `executeLogLocked`（只持 `mu`，更新空间，末尾经 `recordStepLocked` 记待结算状态；完成事实的切片作参数传入而不是作为返回值，保持在栈上）→ `requeue`（登记侧锁内放回留下的条目、带回计数快照），结算与 Drain 诊断同样只经快照函数跨锁；切点、预算、执行顺序与锁序 `mu → registry.mu` 不变。这一条是静态约束，`-race` 用例只覆盖 Drain 诊断与 `QueueMove` 的交错；新增跨锁读取时以“只经快照函数”这条规则复核，不能只靠这一条用例。
 
 没有用例钉住的：一步多出的量的上界（§11.2.3，只检查了“切点落在第一个边界”，没有对交错量做数值断言）；应用失败把同一提交分两步应用（错误路径，§11.2.4）；`waitingFacts` 连带的轮数上界（只有两轮的用例）。
 

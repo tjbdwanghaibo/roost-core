@@ -4,7 +4,7 @@
 
 ## 确认缺陷
 
-三个问题均通过临时探针复现，已登记到 [KNOWN-LIMITS](KNOWN-LIMITS.md)。状态：RV-20261022-01 **已修复**（`6edebb13`）；RV-20261022-02、RV-20261022-03 **未修复**。探针调用产品代码；运行后从包内删除，不提交一次性测试。后续修复应把行为回归并入现有测试文件。
+三个问题均通过临时探针复现，已登记到 [KNOWN-LIMITS](KNOWN-LIMITS.md)。状态：RV-20261022-01 **已修复**（`6edebb13`）；RV-20261022-03 **已修复**（`b7b52486`）；RV-20261022-02 **未修复**。探针调用产品代码；运行后从包内删除，不提交一次性测试。后续修复应把行为回归并入现有测试文件。
 
 ### RV-20261022-01 / P1：批量执行绕过组内新增 Fence
 
@@ -39,6 +39,8 @@ stale retry executed: calls=2 new beat inflight=false; want 1,true
 复现：ApplySync 模式，Show 后执行一次 applyStep 形成 applied-unsettled 状态，并发 QueueMove 与 drainStalls。`go test -race` 明确报告 665 行读和 90 行写冲突。普通已 settle 状态会短路该读取，不能用那个状态下的 race 通过否定问题。
 
 影响是诊断数据竞争及不一致读取；没有证据证明此读会破坏 AOI 位置或订阅。修复在 registry 锁内捕获计数，再生成诊断，保持锁顺序。
+
+**状态：已修复**（`b7b52486`）。`drainStalls` 改为在 `registry.mu` 内取一次 `drainSnapshot`（日志里的事实与提交状态、事实数、命令数、预算占用），锁外只用这份快照；同时按可读性建议 3 把应用方一步拆成 `takeLog` → `executeLogLocked`（含 `recordStepLocked`）→ `requeue`，结算与 `queuedPending` 也只经 `releaseFacts` / `backlog` 跨锁，锁序与切点 / 预算规则不变。回归 `TestDrainStallsReadsFactCountUnderTheRegistryLock`（`interest_test.go`，两种模式，applied-unsettled 状态下并发 `QueueMove` 与 `drainStalls`）在修前 `-race` 报 `interest_queue.go:665` 读与 `:90` 写，修后 `-race -count=50` 通过；policy 基准同机交替 12 轮无显著差异（[样本](../performance/benchmarks/interest-rv03-20261022/)）。同类扫描：policy 包内其他 registry 字段的锁外读取没有发现（`view.handle` 构造后不变，`aoi.config` / 块几何构造后不变）。约束记入[单写者方案 §11.3 第 16 条](REFACTOR-2026-10-21-interest-single-writer.md#113-执行器批次与结算这一层剩下的约束以及钉住它们的用例2026-10-22)。
 
 ## 可读性与设计建议
 

@@ -1,14 +1,13 @@
 # 当前已知限制与验证边界
 
-适用版本：v1.29.0 与 main 上未发版的改动（v1.31.0 候选，CHANGELOG `[Unreleased]`，[v1.31.0 说明](../release/v1.31.0-NOTES.md)）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（当前有 2 项已复现、未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
+适用版本：v1.29.0 与 main 上未发版的改动（v1.31.0 候选，CHANGELOG `[Unreleased]`，[v1.31.0 说明](../release/v1.31.0-NOTES.md)）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（当前有 1 项已复现、未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
 ## 本轮审查待修复（2026-10-22）
 
-基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。RV-20261022-01 已修复（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)），以下为仍未修复的项。
+基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。RV-20261022-01 已修复（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)），RV-20261022-03 已修复（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)），以下为仍未修复的项。
 - **RV-20261022-02 / P2：旧心跳重投误消费下一拍。** 原始拍完成、下一拍置为在途后，队列中的旧重投只按同一个 `inflight` 布尔值识别，执行回调并清掉新拍标志。需要区分登记身份与投递代际，重试沿用原代际，执行及交回只能结算自己的拍。
-- **RV-20261022-03 / P2：Interest Drain 诊断读取事实计数存在 race。** `drainStalls` 释放 registry 锁后读取 `r.facts`，与仅持 registry 锁的 `QueueMove` 写入并发；已在 applied-unsettled 状态下通过 race 检测复现。需要在锁内取诊断快照；本轮未发现该读取会修改 AOI 业务状态。
 
 ## Nest 与实体定时器
 

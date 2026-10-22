@@ -107,7 +107,7 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 
 ### 修复
 
-- **Interest**：已提交未应用的移动之后的 Leave→Enter、Hide→Show、再次 Enter 不再把实体或跟随视野拖回旧目标；Leave 后同一次结算里重新 Enter（会话重开）的 pair 重新说给 Manager；异步模式下已执行、未结算的命令计入 Drain 的 Pending；一步切开后同一提交的后续事实不再越过留下的命令（纯前缀切开）。
+- **Interest**：已提交未应用的移动之后的 Leave→Enter、Hide→Show、再次 Enter 不再把实体或跟随视野拖回旧目标；Leave 后同一次结算里重新 Enter（会话重开）的 pair 重新说给 Manager；异步模式下已执行、未结算的命令计入 Drain 的 Pending；一步切开后同一提交的后续事实不再越过留下的命令（纯前缀切开）；Drain 超时诊断不再在登记侧锁外读事实计数（审查 RV-20261022-03，`-race` 报告与 `QueueMove` 竞争；应用方与诊断读跨锁只经锁内值快照，见[单写者方案 §11.3 第 16 条](docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#113-执行器批次与结算这一层剩下的约束以及钉住它们的用例2026-10-22)）。
 - **actionflow / state / heartbeat**：被跨组抢占的组的排队项在抢占方结束时推进（修前永远不推进）；`Behavior` 在实体卸载时结束在途动作（`actionflow.actions.running` 减回）；同一心跳宿主上 `BeatRunner` / `Behavior` / `ai.Controller` 可以 Close 后重建（修前 `ErrDuplicateName`）；`StateDao` 在 rollback=state 下未快照时 fail-fast（修前静默不回滚）；驱动摘除已移除实例；`BeatRunner.Sync` 恢复任务心跳；`SetStrategy(当前策略)` 恢复 AI 心跳。
 - **Sync / 接入**：会话 Hold 后撤到一个订阅都不剩时接收端不再留着旧对象；第二个 Manager 登记同一实体不再静默抢走脏通知；自身视图帧上限大于接入层上限时不再反复断线重连；嵌入 TCP 关闭事件不再早于驻留预算归还（Lockstep 预算用例偶发失败的根因）。
 - **Nest**：慢派发 trace 不再与 handler 并发读写参数（`-race` 报告）。
