@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
 )
 
-// Buff → state（D21 S6，维护者决定 12：派生）：buff 标签经 BindStates 成为派生状态，查询时读容器，不另存；buff 的
+// Buff → state（派生）：buff 标签经 BindStates 成为派生状态，查询时读容器，不另存；buff 的
 // 每个改集合的 mutator 通知观察者；buff 随事务回滚，状态当场跟着对，观察者在下一次通知时跟上。
 
 const (

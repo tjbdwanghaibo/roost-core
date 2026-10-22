@@ -11,7 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 
-// Buff 的推进与驱动无关（维护者 2026-10-21：心跳只是驱动方式之一）：同一份 DriveBuffs 规则由不走心跳的驱动推进——
+// Buff 的推进与驱动无关（心跳只是驱动方式之一）：同一份 DriveBuffs 规则由不走心跳的驱动推进——
 // 房间自己的定步长循环（每帧一个 tick、只推进醒着的战斗单位）与测试里手动调用。心跳驱动（AttachBeat）的用例见
 // beat_test.go。
 

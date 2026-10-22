@@ -16,7 +16,7 @@ type StateBinding struct {
 	Tags  []combat.Tag
 }
 
-// BindStates 把 buff 标签接到实体的状态组件上（DESIGN-TODO D21 S6；维护者 2026-10-21 决定 12：派生，不复制）。每个
+// BindStates 把 buff 标签接到实体的状态组件上（派生，不复制）。每个
 // 绑定在 set 上登记一个派生状态（state.Set.Provide），查询时读 buff 容器的标签——Buff 是控制效果的唯一持有者，
 // 时长、叠层、驱散、免疫都在容器里，state 不另存一份，buff 随事务回滚、随实体加载，状态自然跟着对。之后组件在每个
 // 改 buff 集合的 mutator（ApplyBuff、RemoveBuff、SetBuffStacks、AdoptBuff、DispelBuffs、TickBuffs）末尾、同一事务里
@@ -53,7 +53,7 @@ func (component *CombatComponent) hasAnyBuffTag(tags []combat.Tag) bool {
 	return slices.ContainsFunc(tags, component.dao.buffs.HasTag)
 }
 
-// buffsChanged 在 buff 集合变化后通知绑定的派生状态（没有绑定时什么都不做），并通知 buff 的驱动（DriveBuffs / AttachBeat，D20 P5）。
+// buffsChanged 在 buff 集合变化后通知绑定的派生状态（没有绑定时什么都不做），并通知 buff 的驱动（DriveBuffs / AttachBeat）。
 func (component *CombatComponent) buffsChanged() {
 	if component.buffStatesChanged != nil {
 		component.buffStatesChanged()

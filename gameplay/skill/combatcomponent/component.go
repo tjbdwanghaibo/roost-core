@@ -210,9 +210,9 @@ func (dao *CombatDao) applyState(state persistedCombatState) error {
 type CombatComponent struct {
 	dao        *CombatDao
 	projection AttributeProjection
-	// buffStatesChanged 由 BindStates 安装：buff 集合变化后通知派生状态（D21 S6）。是接线，不是状态。
+	// buffStatesChanged 由 BindStates 安装：buff 集合变化后通知派生状态。是接线，不是状态。
 	buffStatesChanged func()
-	// drive 由 DriveBuffs（或心跳驱动的 AttachBeat）安装：buff 推进的驱动接线（D20 P5，buff_stepper.go）。是装配期
+	// drive 由 DriveBuffs（或心跳驱动的 AttachBeat）安装：buff 推进的驱动接线（buff_stepper.go）。是装配期
 	// 接线（构造时写一次、事务里不改），不是事务状态；驱动启停的状态归驱动自己（心跳登记的事务语义由 heartbeat.Reg
 	// 管理）。glsvet 的字段写提示按语法认不出接线，用 roost:cache 豁免。
 	drive *buffDrive //roost:cache
@@ -460,8 +460,8 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 }
 
 // TickBuffs 让到期 tick 不晚于 now 的 buff 过期并返回它们（推进一步的原语）。驱动不直接调它：驱动的一步是
-// StepBuffs / StepBuffsToTick（buff_stepper.go：TickBuffs、OnStep、通知驱动），快池上的实体用心跳驱动 AttachBeat
-// （D20 P5），定步长循环（Lockstep 房间）用 DriveBuffs。直接调用只用于原语本身的测试。now 与 StatusBridge.CurrentTick
+// StepBuffs / StepBuffsToTick（buff_stepper.go：TickBuffs、OnStep、通知驱动），快池上的实体用心跳驱动
+// AttachBeat，定步长循环（Lockstep 房间）用 DriveBuffs。直接调用只用于原语本身的测试。now 与 StatusBridge.CurrentTick
 // 同源。没有到期的 buff 时什么都不登记、不改。
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 	if due, ok := component.dao.buffs.NextDue(); !ok || due > now {

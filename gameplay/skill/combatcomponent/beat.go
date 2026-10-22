@@ -12,7 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// Buff 的心跳驱动（DESIGN-TODO D20 P5；维护者 2026-10-21 决定：心跳只是驱动方式之一）：推进规则在 buff_stepper.go
+// Buff 的心跳驱动（心跳只是驱动方式之一，实现说明见 impl/10-time §2G）：推进规则在 buff_stepper.go
 // （DriveBuffs，与驱动无关），这里只做心跳的接线——Wake / Sleep 换成心跳登记的 Start / Stop（heartbeatDriver，与
 // 技能 Runtime 共用），每拍调一步（TickBuffs 到本拍时刻对应的 tick，再 OnBeat）。空闲的战斗单位不占调度。
 //
@@ -45,7 +45,7 @@ type BeatConfig struct {
 	Granularity time.Duration
 	// Options 传给 heartbeat.Host.Register（例如 WithDurability；缺省 async）。
 	Options []heartbeat.RegOption
-	// TimeDomain 非 nil 时实体在场景的时间域里（DESIGN-TODO D22）：心跳挂上这个域（heartbeat.WithTimeDomain），
+	// TimeDomain 非 nil 时实体在场景的时间域里：心跳挂上这个域（heartbeat.WithTimeDomain），
 	// 拍里的 tick 按域时间换算，CurrentTick 也取域时间——buff 时长随场景变速，时停时不过期。
 	TimeDomain *timedomain.Domain
 	// Periodic 是 BuffDriveConfig.Periodic：为 true 时即使没有限时 buff 也保持心跳；业务改了答案之后调
