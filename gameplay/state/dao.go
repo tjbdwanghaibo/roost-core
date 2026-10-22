@@ -27,12 +27,12 @@ const (
 // StateDao 持有一个实体按来源记下的状态（派生状态不存储），是手写 DAO，形状与生成 DAO 相同：实现
 // entity.DaoInterface、nest 的持久与回滚契约与 entity.PersistedDaoLoader。
 //
-// 回滚（维护者 2026-10-21 决定 10：状态是数据，随事务回滚）：rollback=undo 下第一次改动前登记一次逆操作，恢复到事务
+// 回滚（状态是数据，随事务回滚）：rollback=undo 下第一次改动前登记一次逆操作，恢复到事务
 // 开始时的来源集合，不依赖登记；rollback=state 下由 Nest 在准入时对实体 DaoManager（RangeDao）里的 DAO 拍快照
 // （CaptureRollback）恢复，所以 DAO 必须登记在那里——没登记时快照里没有它，这时改状态返回 ErrRollbackNotCaptured、
 // 什么都不改（fail-fast，不在 handler 失败后静默留下定身之类的控制状态）。持久：只有声明了 Persist 的状态进持久文档，
 // 文档键是状态名（{_id, states: {名字: [{k, i}…]}}）；加载时不认识的名字与不再声明 Persist 的状态被跳过，下一次整文档
-// 写回时消失（与 D13 对改名字段的处理一致）。同步不依赖登记（标的是 DAO 自己的 tracker，由业务的 packer 打包）。
+// 写回时消失（与生成 DAO 对改名字段的处理一致）。同步不依赖登记（标的是 DAO 自己的 tracker，由业务的 packer 打包）。
 type StateDao struct {
 	id      int64
 	dbName  string

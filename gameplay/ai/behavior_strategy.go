@@ -28,7 +28,7 @@ type BehaviorContext[C any] struct {
 	NowTick int64
 	// actionEnds 保存自上一拍以来送达的动作结束；TaskflowAction 叶子按 ID 取走。
 	actionEnds []ActionEnd
-	// events 保存自上一拍以来投递的事件（D21 C1）；本拍没被取走的在拍结束时丢弃。
+	// events 保存自上一拍以来投递的事件；本拍没被取走的在拍结束时丢弃。
 	events   []Event
 	strategy behaviorHost
 }
@@ -69,7 +69,7 @@ func (b *BehaviorContext[C]) TakeEvent(kind uint16) (Event, bool) {
 // Events 返回本拍尚未取走的事件（副本，按投递顺序）。
 func (b *BehaviorContext[C]) Events() []Event { return slices.Clone(b.events) }
 
-// SetStage 请求切到另一个阶段（D21 C2）：在这一拍的树求值结束后生效（当前树先 Reset，配了 OnInterrupt 的叶子收尾），
+// SetStage 请求切到另一个阶段：在这一拍的树求值结束后生效（当前树先 Reset，配了 OnInterrupt 的叶子收尾），
 // 同一拍里多次请求以最后一次为准。阶段不存在时返回 ErrStageUnknown。
 func (b *BehaviorContext[C]) SetStage(name string) error {
 	if b.strategy == nil {
@@ -101,7 +101,7 @@ type BehaviorStrategyOptions[C any] struct {
 	MaxEvents int
 	// OnStage 在阶段切换生效后调用（from 是旧阶段名）。
 	OnStage func(from, to string)
-	// Trace 是决策轨迹钩子（D21 C5）：带轨迹的节点（Traced，或注册表开了 TraceNodes 时 ParseTree 包上的每个节点）每次
+	// Trace 是决策轨迹钩子：带轨迹的节点（Traced，或注册表开了 TraceNodes 时 ParseTree 包上的每个节点）每次
 	// Tick 后以节点路径与结果调用它，供调试命令或日志按实体采样。框架不在内存里留轨迹。
 	Trace func(path string, status Status)
 }
@@ -109,7 +109,7 @@ type BehaviorStrategyOptions[C any] struct {
 // BehaviorStrategy 把行为树作为 Strategy 运行，连接树骨架与 Controller / actionflow 执行流程：Tick 驱动当前阶段的树，
 // 动作结束与事件先缓冲、交给下一拍的上下文，树完成后重置，下一拍从根重新求值。
 //
-// 阶段（D21 C2，对照 ssr ai_engine 的 stage）：一个策略可以有若干命名的树（NewStagedStrategy），同一时刻只有当前阶段
+// 阶段（对照 ssr ai_engine 的 stage）：一个策略可以有若干命名的树（NewStagedStrategy），同一时刻只有当前阶段
 // 的树在跑；树里的 SetStage（或 JSON 的 set_stage 叶子）在本拍求值结束后切换，策略外调用 SetStage 立即切换。切换时
 // Reset 旧树（运行中的 TaskflowAction 叶子经 OnInterrupt 收尾）。NewBehaviorStrategy 是只有一个阶段的特例。
 type BehaviorStrategy[C any] struct {
@@ -231,7 +231,7 @@ func (s *BehaviorStrategy[C]) OnActionEnd(_ *Context, actionID int64, kind coref
 func (s *BehaviorStrategy[C]) OnMissionEnd(*Context, coreflow.Mission, coreflow.ActionReason) {
 }
 
-// OnEvent 缓冲一个事件，交给下一拍的上下文（D21 C1）；超过 MaxEvents 时丢弃最早的。
+// OnEvent 缓冲一个事件，交给下一拍的上下文；超过 MaxEvents 时丢弃最早的。
 func (s *BehaviorStrategy[C]) OnEvent(_ *Context, ev Event) {
 	if len(s.events) >= s.options.MaxEvents {
 		s.events = slices.Delete(s.events, 0, len(s.events)-s.options.MaxEvents+1)

@@ -63,7 +63,7 @@ func TestCatalogRefusesBadDeclarations(t *testing.T) {
 	}
 }
 
-// 按来源（D21 S2）：有任一来源即生效；同一来源重复加不叠加，撤掉不存在的来源无效——不会出现匿名计数“多减一次就
+// 按来源：有任一来源即生效；同一来源重复加不叠加，撤掉不存在的来源无效——不会出现匿名计数“多减一次就
 // 错位”；RemoveSource 从全部状态撤掉一个来源。
 func TestASourcedStateHoldsWhileAnySourceRemains(t *testing.T) {
 	s := newTestSet(t, nil)
@@ -91,7 +91,7 @@ func TestASourcedStateHoldsWhileAnySourceRemains(t *testing.T) {
 	}
 }
 
-// 派生（D21 S2）：查询时现算、不存储；Changed 只在值真的变了时通知；同一状态也可以同时有来源（任一为真即生效）。
+// 派生：查询时现算、不存储；Changed 只在值真的变了时通知；同一状态也可以同时有来源（任一为真即生效）。
 func TestADerivedStateIsComputedAndNotifiedOnlyWhenItChanges(t *testing.T) {
 	s := newTestSet(t, nil)
 	stunTag := false

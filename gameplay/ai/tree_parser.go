@@ -41,8 +41,8 @@ func NewRegistry[C any](now func(*C) int64) *Registry[C] {
 	}
 }
 
-// TraceNodes 让之后解析的树每个节点都带轨迹（Traced，路径是 JSON 路径），配合 BehaviorStrategyOptions.Trace 使用
-// （D21 C5）。只影响之后的解析。
+// TraceNodes 让之后解析的树每个节点都带轨迹（Traced，路径是 JSON 路径），配合 BehaviorStrategyOptions.Trace 使用。
+// 只影响之后的解析。
 func (r *Registry[C]) TraceNodes() { r.traceNodes = true }
 
 // RegisterCondition 注册条件叶子工厂；名字为空、工厂为 nil 或重复注册时返回包装 ErrTreeInvalid 的错误。
@@ -108,7 +108,7 @@ type Stages[C any] struct {
 	Start string
 }
 
-// ParseStages 解析分阶段的 JSON 文档（D21 C2）：{"schema": "roost.ai/v1", "start": "<阶段>", "stages": {"<阶段>": <节点>, …}}。
+// ParseStages 解析分阶段的 JSON 文档：{"schema": "roost.ai/v1", "start": "<阶段>", "stages": {"<阶段>": <节点>, …}}。
 // 规则与 ParseTree 相同，另外校验起始阶段与每个 set_stage 叶子指向的阶段都存在。C 是节点的上下文类型（通常是
 // BehaviorContext[D]），用到 set_stage 时它必须能切阶段。
 func ParseStages[C any](data []byte, registry *Registry[C]) (Stages[C], error) {

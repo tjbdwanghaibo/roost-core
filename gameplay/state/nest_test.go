@@ -209,7 +209,7 @@ func (f *fixture) settle(h *holder) { f.mustRun(runUndo, h, func(*holder) error 
 
 var errBusiness = errors.New("business refused")
 
-// 状态随事务回滚（D21 S3，决定 10），两种回滚策略都一样；提交的改动里只有声明了 Persist 的状态进提交记录（不持久的
+// 状态随事务回滚，两种回滚策略都一样；提交的改动里只有声明了 Persist 的状态进提交记录（不持久的
 // 在 memory 持久级别下也能提交），声明了 Sync 的标同步脏。
 func TestStatesFollowTheTransaction(t *testing.T) {
 	f := newFixture(t)
@@ -299,7 +299,7 @@ func read[T any](f *fixture, h *holder, fn func(*holder) T) T {
 	return out
 }
 
-// 门控（D21 S5，经真实 Nest 与心跳）：rooted 生效时打断移动组的在途动作、停掉组的心跳，拒绝新的移动；两个来源都撤掉
+// 门控（经真实 Nest 与心跳）：rooted 生效时打断移动组的在途动作、停掉组的心跳，拒绝新的移动；两个来源都撤掉
 // 才解冻。stunned 与 silenced 各自冻结施法组（暂停），计数：撤掉一个仍冻结。
 func TestGateFreezesActionGroupsWhileStatesHold(t *testing.T) {
 	f := newFixture(t)

@@ -59,7 +59,7 @@ type pendingSwitch struct {
 	reason   string
 }
 
-// Controller 是 actionflow.Behavior 的观察者：Behavior 先把动作 / 任务结束交给任务，再交给它（D21 A1）。
+// Controller 是 actionflow.Behavior 的观察者：Behavior 先把动作 / 任务结束交给任务，再交给它。
 var _ coreflow.Observer = (*Controller)(nil)
 
 // NewController 构造一个尚无策略的 Controller。
@@ -143,7 +143,7 @@ func (c *Controller) Freeze() {
 	}
 }
 
-// FreezeFor 冻结 d，到时后的第一次 Tick 自动恢复（D21 C3，对照 ssr 的 RecoverDuration）；interrupt 为真时同时经
+// FreezeFor 冻结 d，到时后的第一次 Tick 自动恢复（对照 ssr 的 RecoverDuration）；interrupt 为真时同时经
 // EndActions 钩子结束在途动作（ssr 的 NoInterruptAction 取反）。心跳驱动时冻结期间 AI 心跳照常跳（用来检查到期），
 // 到期那一拍恢复并照常决策。覆盖之前的 Freeze / FreezeFor；d <= 0 等于立即恢复。
 func (c *Controller) FreezeFor(d time.Duration, interrupt bool) {
@@ -280,7 +280,7 @@ func (c *Controller) Shutdown(reason string) {
 // Close 撤销 Controller：卸下当前策略（Shutdown(reason)：调策略的 Stop，不结束在途动作——动作归 Behavior，换场景时
 // 由 Behavior.Close 结束），撤销 AI 心跳登记（heartbeat.Reg.Close：立即离开驱动、释放 "ai" 这个名字），之后
 // SetStrategy 返回 ErrControllerClosed。成员换场景（换时间域）时用它撤掉旧的、在同一心跳宿主上按新的
-// BeatConfig.TimeDomain 重建（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain，FreezeFor 的期限是旧域时间）。
+// BeatConfig.TimeDomain 重建（重建而不是 SetTimeDomain：FreezeFor 的期限是旧域时间，不能拿到新域里比较）。
 // 实体卸载时同样调用（组件 OnDestroy），先于 Behavior.OnDestroy：之后送来的动作 / 任务结束不再交给策略。
 // 可重复调用；只能在实体锁内调用，在策略回调里调用时卸下策略延后到回调返回后，登记的撤销立即生效。
 func (c *Controller) Close(reason string) {
@@ -343,7 +343,7 @@ func (c *Controller) now() time.Time {
 			return now
 		}
 	}
-	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
+	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now
 }
 func (c *Controller) context(now time.Time) (ctx *Context) {
 	if now.IsZero() {

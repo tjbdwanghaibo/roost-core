@@ -196,7 +196,7 @@ func TestRateChangesFollowTheScenesTransaction(t *testing.T) {
 	}
 }
 
-// 倍率范围 [0, 100]（维护者决定 ⑤），可由 Config 收窄；越界、NaN、Inf 拒绝且什么都不改。存下的越界倍率在 New 拒绝。
+// 倍率范围 [0, 100]，可由 Config 收窄；越界、NaN、Inf 拒绝且什么都不改。存下的越界倍率在 New 拒绝。
 func TestRateRange(t *testing.T) {
 	pinClock(t)
 	fields := &memFields{}

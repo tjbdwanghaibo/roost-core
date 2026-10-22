@@ -41,7 +41,7 @@ type StoppableStrategy interface {
 	Stop(ctx *Context, reason string)
 }
 
-// Event 是投给 AI 的一个游戏事件（D21 C1）：Kind 由业务定义（被攻击、看见敌人、状态变化、Buff 生效……），Data 是事件
+// Event 是投给 AI 的一个游戏事件：Kind 由业务定义（被攻击、看见敌人、状态变化、Buff 生效……），Data 是事件
 // 内容。框架不定义事件词表（ssr 的约 25 个具体事件是玩法词表，不照搬）。
 type Event struct {
 	Kind uint16
