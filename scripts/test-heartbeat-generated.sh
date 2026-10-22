@@ -40,7 +40,8 @@ cp "$repo_dir/scripts/testdata/heartbeat/heartbeat_e2e_test.go.txt" internal/boo
 go build -mod=mod ./...
 go vet -mod=mod ./...
 go test -mod=mod -race -count=1 -timeout 10m ./...
-# 两种投递方式各跑一遍（heartbeat.delivery：dispatch 缺省；batch 是 Nest 批量心跳作业，缺省关闭）。
+# 两种投递方式各跑一遍（heartbeat.delivery：batch 是缺省的 Nest 批量心跳作业，维护者 2026-10-22 决定；dispatch 是单目标
+# 可选项）。上面不设环境变量的 go test ./... 跑的是缺省（用例断言驱动是 batch）。
 for delivery in dispatch batch; do
 	ROOST_HEARTBEAT_DELIVERY="$delivery" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestGeneratedHeartbeatBehaviorEndToEnd$' ./internal/bootstrap | tee "$work_dir/e2e-$delivery.log"
 	# 用例必须实际执行并通过：-run 写错或被跳过时 go test 仍会 ok。

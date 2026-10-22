@@ -506,14 +506,19 @@ func TestConcurrentChangesStepsAndBeats(t *testing.T) {
 	})
 }
 
-// 投递方式开关（维护者 2026-10-21：批量方式先合入、缺省关闭）：缺省是单目标 Dispatch；配置值只认 dispatch / batch；
-// 批量方式要求客户端实现 nest.TryBatchDispatcher（不静默退回）；第一次 Start 之后不能再改。
-// 变异核对：SetDelivery 不检查“已启动”时 Start 之后改方式成功，本用例变红。
+// 投递方式开关：缺省是 Nest 批量作业（维护者 2026-10-22 决定 B：DefaultDelivery = DeliveryBatch，空值与空串同此），
+// 单目标 Dispatch 是可选项；配置值只认 dispatch / batch；批量方式要求客户端实现 nest.TryBatchDispatcher（不静默
+// 退回）；第一次 Start 之后不能再改。
+// 变异核对：SetDelivery 不检查“已启动”时 Start 之后改方式成功，本用例变红；DefaultDelivery 改回 DeliveryDispatch
+// （或 ParseDelivery 的空串分支返回 DeliveryDispatch）时第一处断言变红。
 func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
-	if d := NewDriver(Config{Name: "default"}); d.Delivery() != DeliveryDispatch {
-		t.Fatalf("default delivery %q, want dispatch", d.Delivery())
+	if DefaultDelivery != DeliveryBatch {
+		t.Fatalf("DefaultDelivery = %q, want batch (maintainer decision 2026-10-22)", DefaultDelivery)
 	}
-	for in, want := range map[string]Delivery{"": DeliveryDispatch, "dispatch": DeliveryDispatch, " Batch ": DeliveryBatch} {
+	if d := NewDriver(Config{Name: "default"}); d.Delivery() != DeliveryBatch {
+		t.Fatalf("default delivery %q, want batch", d.Delivery())
+	}
+	for in, want := range map[string]Delivery{"": DeliveryBatch, " ": DeliveryBatch, "dispatch": DeliveryDispatch, " Batch ": DeliveryBatch} {
 		if got, err := ParseDelivery(in); err != nil || got != want {
 			t.Fatalf("ParseDelivery(%q) = %q, %v; want %q", in, got, err, want)
 		}
@@ -522,14 +527,16 @@ func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
 		t.Fatal("ParseDelivery accepted an unknown delivery")
 	}
 
-	// 只实现 Client 的客户端：批量方式在 Bind / SetDelivery 时报错，不静默退回单目标。
+	// 只实现 Client 的客户端：批量方式（显式或缺省）在 Bind / SetDelivery 时报错，不静默退回单目标。
 	type clientOnly struct{ nest.Client }
-	batch := NewDriver(Config{Name: "batch", Delivery: DeliveryBatch})
 	lookup := func(int64) entity.IThreadSafeEntity { return nil }
-	if err := batch.Bind(clientOnly{&fakeClient{}}, lookup); err == nil || !strings.Contains(err.Error(), "TryBatchDispatcher") {
-		t.Fatalf("Bind a client without try-batch support in batch delivery = %v", err)
+	for _, delivery := range []Delivery{DeliveryBatch, ""} {
+		batch := NewDriver(Config{Name: "batch", Delivery: delivery})
+		if err := batch.Bind(clientOnly{&fakeClient{}}, lookup); err == nil || !strings.Contains(err.Error(), "TryBatchDispatcher") {
+			t.Fatalf("Bind a client without try-batch support in delivery %q = %v", delivery, err)
+		}
 	}
-	d := NewDriver(Config{Name: "switch"})
+	d := NewDriver(Config{Name: "switch", Delivery: DeliveryDispatch})
 	if err := d.Bind(clientOnly{&fakeClient{}}, lookup); err != nil {
 		t.Fatal(err)
 	}

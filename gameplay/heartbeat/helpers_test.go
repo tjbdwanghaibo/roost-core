@@ -194,11 +194,11 @@ func (h *countingHandler) count() int {
 }
 
 // testDelivery 是本包测试构造驱动时用的投递方式（newTestDriver、newNestFixture 读它）。用例不并行，由 forEachDelivery /
-// useDelivery 设置。
-var testDelivery = DeliveryDispatch
+// useDelivery 设置；不经它们的用例跟缺省（DefaultDelivery）走。
+var testDelivery = DefaultDelivery
 
 // forEachDelivery 把用例在两种投递方式下各跑一遍（子测试 dispatch / batch）：批量方式下 Nest 的语义（同 ID 顺序、
-// 跳拍计数、Remote 共享模式）必须与缺省方式一致（维护者 2026-10-21：批量方式先合入、缺省关闭）。
+// 跳拍计数、Remote 共享模式）必须与单目标方式一致（维护者 2026-10-22 决定缺省改为批量，单目标保留为可选项，两种都要覆盖）。
 func forEachDelivery(t *testing.T, fn func(t *testing.T)) {
 	t.Helper()
 	for _, delivery := range []Delivery{DeliveryDispatch, DeliveryBatch} {
