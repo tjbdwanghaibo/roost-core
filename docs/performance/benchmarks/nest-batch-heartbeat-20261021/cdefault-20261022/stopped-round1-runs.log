@@ -1,0 +1,13 @@
+08:18:24 round=1 Cs100 start loadavg={ 4.87 4.50 3.26 }
+08:18:45 Cs100 r1 ok loadavg_end={ 4.14 4.36 3.24 }
+08:19:16 round=1 Cg4 start loadavg={ 4.35 4.37 3.28 }
+08:19:36 Cg4 r1 ok loadavg_end={ 3.76 4.23 3.26 }
+08:20:07 round=1 Cs100g4 start loadavg={ 3.93 4.24 3.30 }
+08:20:28 Cs100g4 r1 DISCARDED: 71718 22.8   /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/go-build3207169817/b001/exe/roost project new planet -module example.c
+08:21:32 round=1 Cs100g4 start loadavg={ 4.65 4.64 3.56 }
+08:21:50 Cs100g4 r1 ok loadavg_end={ 4.86 4.69 3.59 }
+08:22:50 round=1 none start loadavg={ 4.24 4.49 3.59 }
+08:23:11 none r1 ok loadavg_end={ 4.15 4.46 3.60 }
+08:23:42 round=1 X start loadavg={ 4.25 4.44 3.62 }
+08:24:00 X r1 DISCARDED: 73544 53.9 pk  /Users/whb/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.darwin-arm64/pkg/tool/darwin_arm64/link -o /var/folders/xs/z
+stopped 08:24:09 by request

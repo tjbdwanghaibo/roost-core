@@ -1,6 +1,6 @@
 # 功能设计：Nest 批量心跳作业（选项 C，2026-10-21）
 
-**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论（2026-10-22 补测）：不达标，建议暂不改缺省，待维护者决定。** 业务 p99 同时段 X 0.078 / C 0.235ms，进程 CPU C 比 X 省 42%～73%、只在一半时段接近 Y；批大小 64 不用改，时间片 100µs 或组 4 各把 p99 降约 20%（见性能报告 §3～§3E）。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
+**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论（2026-10-22 补测）：不达标，建议暂不改缺省，待维护者决定。维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4（时间片 200µs、批 64 不变），合并参数当晚补测（性能报告 §3F）。** 业务 p99 同时段 X 0.078 / C 0.235ms，进程 CPU C 比 X 省 42%～73%、只在一半时段接近 Y；批大小 64 不用改，时间片 100µs 或组 4 各把 p99 降约 20%（见性能报告 §3～§3E）。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
 
 范围：三大块里的 Nest（`framework/nest`）与心跳投递层（`gameplay/heartbeat` 的 `deliverer`）。遵守 roost-coding 的执行契约：快池不阻塞等待；同 ID 顺序在统一准入处建立；内部续行使用既有准入资格。仓库里没有 `docs/feature/` 与 `docs/agent-skills/`（开发过程资料 2026-10-09 已移入 Git 历史，见 [DOCUMENTS](DOCUMENTS.md)），本篇按现行命名惯例放在 `docs/maintenance/FEATURE-*`，执行契约以本机 roost-coding skill 为准。
 
@@ -90,7 +90,7 @@ for 每个目标:
 | 同 ID 顺序怎么来 | 每项在准入时登记 `tails`，与单条 `Dispatch` 完全相同：心跳与业务消息按准入先后排成一条链 | 准入时不登记；执行时认领。已有在途作业就跳过（约束 1），执行中准入的排在它后面（约束 2） |
 | 心跳遇到同 ID 的业务消息 | 排队等它执行完，心跳不丢，但业务消息若排在心跳后面要等心跳（D 为此加了“提升”） | 心跳当场转成单目标作业排在它后面，同一格内执行、不跳拍；业务消息从不排在一个还没开始的心跳后面 |
 | 心跳之间 | 同一登记两拍按准入先后（每个登记至多一拍在途，本来就不会有两拍） | 同上，至多一拍在途由驱动保证；批内两个同 ID 目标（同一实体的两个登记）按批内顺序依次认领，第二个在第一个撤销后才认领 |
-| 代价 | 每拍一次 `tails` 登记 + 依赖边 + 一次就绪唤醒（准入侧按块摊，但执行侧每项一个作业） | 每个目标一次认领 / 撤销，按 8 个一组在一次持锁里做（§11）；只有冲突的目标付一次单目标作业的成本 |
+| 代价 | 每拍一次 `tails` 登记 + 依赖边 + 一次就绪唤醒（准入侧按块摊，但执行侧每项一个作业） | 每个目标一次认领 / 撤销，按 4 个一组（2026-10-22 前为 8）在一次持锁里做（§11）；只有冲突的目标付一次单目标作业的成本 |
 
 ## 5. 普通消息的公平性
 
@@ -130,7 +130,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 | 指标 | ✓：`nest.dispatch.total{type="TryBatch"}` 按批累加执行数、`nest.dispatch.cost` 观察整批耗时；`nest.dispatch.try_batch.handed_back.total{reason}` 按批累加 | 只有超过 `slowLockThreshold` 的目标单独计 `nest.handler.lock_hold.slow.total` 并告警 |
 | 时间 | 本段开始读一次（时间片起点）；每个目标结束读一次（同时用于时间片与持锁时长） | 业务时间（`fctx.Now` / `Beat.Now`）与 `fctx.Frozen` 派生值（场景时间域）每个目标 `Context.Refreeze` 一次：D22-1 要求每一拍冻结一次，不能整批共用（协调方 2026-10-21 要求，两种投递方式各有断言 `TestEveryBeatFreezesItsOwnBusinessTime`） |
 | Fence | 整批检查一次 + 每个目标读一个原子标志 | |
-| 派发队列锁 | 取作业、结束作业 | 按组：一次持锁安排 8 个目标（`tryBatchGroup`：认领 / 转单目标 / 交回），一组执行完在同一次持锁里收尾（取锁失败的转单目标、撤销认领）并安排下一组。初稿每个目标一次，探索性 profile 里这把锁的争用（`lockSlow` → 停放 → 调度器空转）约占进程 CPU 的 13%；代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组其余目标的执行时间（等在依赖队列里，不占 worker） |
+| 派发队列锁 | 取作业、结束作业 | 按组：一次持锁安排 4 个目标（2026-10-22 前为 8）（`tryBatchGroup`：认领 / 转单目标 / 交回），一组执行完在同一次持锁里收尾（取锁失败的转单目标、撤销认领）并安排下一组。初稿每个目标一次，探索性 profile 里这把锁的争用（`lockSlow` → 停放 → 调度器空转）约占进程 CPU 的 13%；代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组其余目标的执行时间（等在依赖队列里，不占 worker） |
 | 事务、Guard、实体锁、Sync 捕获、handler 查表 | | ✓（不能省） |
 
 不做的：慢派发 trace（`startSlowDispatchTraceWatch`）与按消息的 trace 事件不对批内目标发出；按 handler 的 `nest.handler.lock_hold` 直方图不逐目标观察（只计慢的）。这是观测口径的变化，写进 [OBSERVABILITY](../framework/OBSERVABILITY.md) 与 CHANGELOG。
@@ -139,7 +139,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 
 `gameplay/heartbeat` 的 `deliverer` 增加 `batchDeliverer`：
 
-- 投递方式是配置开关（维护者 2026-10-21 决定，原待拍板 ②）：`heartbeat.Config.Delivery` / `Driver.SetDelivery`，`wiring/heartbeat` 的配置项 `heartbeat.delivery: dispatch | batch`（`ConfigSchema` 声明，缺省 `dispatch`），Init 时交给驱动一次，第一次 `Start` 之后不能改。`batch` 要求 `Bind` 的客户端实现 `nest.TryBatchDispatcher`，否则 `Bind` / `SetDelivery` 报错，不静默退回单目标。
+- 投递方式是配置开关（维护者 2026-10-21 决定，原待拍板 ②）：`heartbeat.Config.Delivery` / `Driver.SetDelivery`，`wiring/heartbeat` 的配置项 `heartbeat.delivery: dispatch | batch`（`ConfigSchema` 声明；缺省 2026-10-21 为 `dispatch`，维护者 2026-10-22 决定 B 后为 `batch`，驱动空值 `DefaultDelivery` 同此），Init 时交给驱动一次，第一次 `Start` 之后不能改。`batch` 要求 `Bind` 的客户端实现 `nest.TryBatchDispatcher`，否则 `Bind` / `SetDelivery` 报错，不静默退回单目标。
 - 一格的拍分两路：Remote 托管实体的拍逐个单目标 `Dispatch`（§8）；其余按 64 个一批 `DispatchTryBatch`（批大小 `beatBatchSize`，由压测定，§14）。
 - 同 ID 冲突由 Nest 当场转成单目标作业（§4），驱动看不到，也不计跳拍；次数看 Nest 的 `nest.dispatch.try_batch.converted.total` / `Stats().Queue.Short.TryBatchConverted`。
 - `handBack` 在 worker 上只把（登记, 原因）放进驱动的交回队列（一把短锁的追加），不改驱动状态；驱动在下一格开头（以及本格投递之后，处理同步交回）取走：`ErrEntityNotFound` 清在途、计 `dropped_total{reason="not_loaded"}`；其余原因（`ErrQueueFull` 即转单目标被拒、fence、停止、handler 不存在）清在途、按原规则计 `skipped_total{reason="queue_full"|"rejected"}`、`Beat.Skipped` 加一并限频 Warn。驱动停止中只清在途。
@@ -176,9 +176,9 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 ## 15. 待拍板（附推荐）
 
 1. **批大小**：推荐 64（与 ssr 一致；按压测结果定，见性能报告）。 2026-10-22 对照（性能报告 §3B）：32 / 64 / 128 进程 CPU 相同，p99 0.195 / 0.254 / 0.282ms，32 的驱动 CPU +30%；64 不用改。
-2. ~~单目标 `Dispatch` 回退~~：维护者 2026-10-21 已定——加配置开关 `heartbeat.delivery: dispatch | batch`，缺省 `dispatch`（§12）。
+2. ~~单目标 `Dispatch` 回退~~：维护者 2026-10-21 已定——加配置开关 `heartbeat.delivery: dispatch | batch`，缺省 `dispatch`（§12）；2026-10-22 决定 B 改为缺省 `batch`，`dispatch` 保留为可选项。
 3. **`DispatchTryBatch` 是否导出给业务**：A 导出但只在 PACKAGES / impl 里说明“目前只有心跳用；冲突的目标转单目标作业”（推荐，接口本身是通用的，内部化反而要在 heartbeat 里绕）；B 改成 `internal` 只给 `gameplay/heartbeat`。
-4. **时间片 200µs**：推荐先用 200µs，按慢回调场景再调。 2026-10-22 对照（性能报告 §3A、§3B）：100 / 200 / 400µs 的业务 p99 0.19～0.22 / 0.24～0.25 / 0.33ms，CPU 不变；组大小 4 / 8 / 16 的 p99 0.187 / 0.235 / 0.316ms。改 100µs（或组 4）各降约 20%，两项合起来未测。
+4. **时间片 200µs**：推荐先用 200µs，按慢回调场景再调。 2026-10-22 对照（性能报告 §3A、§3B）：100 / 200 / 400µs 的业务 p99 0.19～0.22 / 0.24～0.25 / 0.33ms，CPU 不变；组大小 4 / 8 / 16 的 p99 0.187 / 0.235 / 0.316ms。改 100µs（或组 4）各降约 20%，两项合起来未测。维护者 2026-10-22：先用组 4、时间片保持 200µs（`tryBatchGroup` 8 → 4），合并组当晚补测（性能报告 §3F）。
 
 ## 16. 实施结果
 
@@ -207,6 +207,6 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 3. 认领由逐目标改为 8 个一组（§11）：逐目标一次 `q.mu` 的争用在探索性 profile 里约占 13% CPU。
 4. 认领先于取锁（§4“认领在取锁之前”），比原话的顺序少一个窗口。
 5. 时间快照不按批付：任务书原本把“时间快照”列为按批付一次的开销；D22-1（业务时间一律取自 fctx、每条消息 / 每一拍冻结一次）合入后，协调方要求批量方式下 `Beat.Now` 取这一拍冻结的 fctx 时间、挂了时间域的登记取这一拍的域时间。实现为每个目标 `fctx.Context.Refreeze`（新增：重新冻结 Now / NowMilli、清 `Frozen`），代价是每个目标一次业务时钟读取。
-6. 投递方式做成开关、缺省关闭（维护者 2026-10-21 决定 A，§12）。
+6. 投递方式做成开关、缺省关闭（维护者 2026-10-21 决定 A，§12）；2026-10-22 决定 B 改为缺省开启，组大小 8 → 4（§4、§11 已改）。
 
 **变异核对**：23 条，22 条变红；1 条（去掉执行器的 `loadedGetter`）仍绿，原因是“只读已加载实体”的强制点在 `entity.LoadedEntitiesOnly` 对业务 worker 身份的判断，执行器的包装只是防御，该用例按契约检查保留。失败文本原样见性能报告 §5 与样本目录的 `mutations.txt`。
