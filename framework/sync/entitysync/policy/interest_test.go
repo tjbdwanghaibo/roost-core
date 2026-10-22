@@ -455,9 +455,12 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 		// 同步模式一次政策阶段在预算内排空日志，只有预算用完才停在批次边界：预算设到最小，让它在第一批之后停。
 		in.syncBudget = time.Nanosecond
 		manualApplier(in)
-		var entities []*queuedEntity
+		// 两条 Enter 排在事实前面：切点只落在前缀边界，预算只够一个单位时 Enter 也占一个单位（命令计入单位）。
 		for id := int64(1); id <= 2; id++ {
 			mustEnter(t, in, id, spatial.Point{X: 10 * id, Y: 10})
+		}
+		var entities []*queuedEntity
+		for id := int64(1); id <= 2; id++ {
 			e := factEntity(t, id)
 			entities = append(entities, e)
 			if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}); err != nil {

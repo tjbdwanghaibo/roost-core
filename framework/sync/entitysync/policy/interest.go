@@ -18,7 +18,8 @@ import (
 type InterestConfig struct {
 	// MaxQueuedFacts 限制正式提交事实队列；零值为 65536。
 	MaxQueuedFacts int
-	// BatchSize 是每批就绪事实的软上限，零值1024；不切开同一Nest提交。
+	// BatchSize 是一步取用就绪事实的软上限，零值1024：到了上限之后在第一个前缀边界停（已取用的提交全部结束之后），
+	// 不切开同一 Nest 提交，所以一步可以多出交错进来的条目（见 runLogLocked）。
 	BatchSize int
 	// Workers 限制同一批次并行视野计算数；零值取GOMAXPROCS。
 	Workers int

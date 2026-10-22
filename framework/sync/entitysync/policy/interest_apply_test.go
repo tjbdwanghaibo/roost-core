@@ -684,3 +684,260 @@ func TestPlanSyncStepRules(t *testing.T) {
 		}
 	}
 }
+
+// ---- 一步的切点：纯前缀（方案 §11.2，维护者 2026-10-22 决定 A）----
+
+// 切点用例里的目标与位置：a、d、b、e 先放在远处；b 被直接 Show 到 shownB，再由提交 X 移到 movedB。
+const (
+	cutA, cutD, cutB, cutE = int64(2), int64(3), int64(4), int64(5)
+)
+
+var (
+	cutFar = spatial.Point{X: 900, Y: 900}
+	shownB = spatial.Point{X: 500, Y: 500}
+	cutTo  = map[int64]spatial.Point{cutA: {X: 20, Y: 10}, cutD: {X: 30, Y: 10}, cutB: {X: 40, Y: 10}, cutE: {X: 50, Y: 10}}
+)
+
+// queueAcrossHideShow 排出日志 [move a (X), move d, Hide b, Show b, move b (X), move e]：提交 X（守卫作用域里同时
+// 持 a、b）先排 a 的移动；X 还在 handler 里时，另一笔提交排 d 的移动，业务线程直接 Hide(b) → Show(b, shownB)
+// （接入层、别的实体的提交后回调都不经 b 的实体锁）；X 再排 b 的移动并确认；最后另一笔提交排 e 的移动。
+// 全部事实已确认、还没应用。返回排下的事实数。
+func queueAcrossHideShow(t *testing.T, m *entitysync.Manager, in *Interest) int {
+	t.Helper()
+	a, b := factEntity(t, cutA), factEntity(t, cutB)
+	queuedA, queueB, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_, closeScope := entity.NewGuardScope("commit-x")
+		defer closeScope()
+		x := entity.BeginSyncMutation([]entity.IThreadSafeEntity{a, b}, m)
+		if err := in.QueueMove(a, cutTo[cutA]); err != nil {
+			t.Error(err)
+		}
+		if entity.CurrentSyncMutation() == nil {
+			t.Error("setup: commit X has no current sync mutation, its facts would not share a commit")
+		}
+		close(queuedA)
+		<-queueB
+		if err := in.QueueMove(b, cutTo[cutB]); err != nil {
+			t.Error(err)
+		}
+		x.Admit()
+		x.Confirm()
+		x.Release()
+	}()
+	<-queuedA
+	commitQueuedMove(t, m, in, factEntity(t, cutD), cutTo[cutD])
+	if err := in.Hide(cutB); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Show(cutB, shownB); err != nil {
+		t.Fatal(err)
+	}
+	close(queueB)
+	<-done
+	commitQueuedMove(t, m, in, factEntity(t, cutE), cutTo[cutE])
+	return 4
+}
+
+// showCutSubjects 在 Manager 登记 a、d、b、e，把它们放在远处并结算（观察者 1 看不见它们）。
+func showCutSubjects(t *testing.T, m *entitysync.Manager, in *Interest) {
+	t.Helper()
+	for _, id := range []int64{cutA, cutD, cutB, cutE} {
+		if err := m.Register(subjectState(t, id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := in.Show(id, cutFar); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustApply(t, in)
+}
+
+// checkCutResult 检查全部条目执行完之后的位置：b 在 X 的移动目标（不是 Show 的位置），其余在各自的目标。
+func checkCutResult(t *testing.T, in *Interest, how string) {
+	t.Helper()
+	if got := subjectAt(in, cutB); got != fmt.Sprintf("%v", cutTo[cutB]) {
+		t.Fatalf("%s: b at %s after log order [move a (X), move d, Hide b, Show b, move b (X), move e], want %v",
+			how, got, cutTo[cutB])
+	}
+	for _, id := range []int64{cutA, cutD, cutE} {
+		if got := subjectAt(in, id); got != fmt.Sprintf("%v", cutTo[id]) {
+			t.Fatalf("%s: entity %d at %s, want %v", how, id, got, cutTo[id])
+		}
+	}
+	if left := queuedFacts(in); left != 0 {
+		t.Fatalf("%s: %d facts left", how, left)
+	}
+}
+
+// checkFirstCut 检查第一次切开的位置：X 整笔在这一步里（b 已在 X 的移动目标，提交没被切开），e 还没取（切点落在
+// X 结束之后的第一个边界，而不是更远）。
+func checkFirstCut(t *testing.T, what, b, e string) {
+	t.Helper()
+	if b != fmt.Sprintf("%v", cutTo[cutB]) {
+		t.Fatalf("%s left b at %s: commit X was cut after its move of a, want its move of b %v in the same step", what, b, cutTo[cutB])
+	}
+	if e != fmt.Sprintf("%v", cutFar) {
+		t.Fatalf("%s reached e (at %s): the cut must land at the first boundary after X ends", what, e)
+	}
+}
+
+// 一步到了上限（BatchSize 或 ApplySync 的预算单位）之后，切点只落在已取用的提交全部结束之后：切点之前全部执行、
+// 之后全部留下（纯前缀）。日志 [move a (X), move d, Hide b, Show b, move b (X), move e] 在第一条之后就到了上限，
+// X 还没结束，所以 move d、Hide b、Show b、move b 都在这一步里按序执行，切点落在 move e 之前。
+// 历史：旧规则在 move d 处切开、却仍取用同一提交的 move b（“同一提交不切开”），它越过留下的 Hide / Show，按代际
+// 作废，b 停在 Show 的位置（单写者重构 eed9c870 引入；§12 的预算让同步模式的切点更多）。
+func TestACutStepKeepsLaterFactsOfATakenCommitBehindCommands(t *testing.T) {
+	// BatchSize 1：先单走一步（切点规则与模式无关），再按模式排空。
+	t.Run("batch_size", func(t *testing.T) {
+		forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+			m := newManager(t)
+			in := newInterestMode(t, m, mode)
+			manualApplier(in)
+			in.batchSize = 1
+			player(t, m, 1)
+			mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+			showCutSubjects(t, m, in)
+			queueAcrossHideShow(t, m, in)
+			in.applyStep()
+			bAfterStep, eAfterStep := subjectAt(in, cutB), subjectAt(in, cutE)
+			for round := 0; round < 4; round++ {
+				flushInterest(t, in, m)
+			}
+			checkCutResult(t, in, fmt.Sprintf("%s, BatchSize 1", mode))
+			checkFirstCut(t, fmt.Sprintf("%s, BatchSize 1: the first step", mode), bAfterStep, eAfterStep)
+		})
+	})
+	// 显式 Apply 在调用方线程排空，同一条规则。
+	t.Run("explicit_apply", func(t *testing.T) {
+		forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+			m := newManager(t)
+			in := newInterestMode(t, m, mode)
+			manualApplier(in)
+			in.batchSize = 1
+			player(t, m, 1)
+			mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+			showCutSubjects(t, m, in)
+			queueAcrossHideShow(t, m, in)
+			mustApply(t, in)
+			checkCutResult(t, in, fmt.Sprintf("%s, Apply with BatchSize 1", mode))
+		})
+	})
+	// ApplySync 的预算只够一个单位（每条事实 30ms，预算 25ms），BatchSize 不限：切点来自预算。异步模式与显式 Apply
+	// 不按预算切开。
+	t.Run("budget", func(t *testing.T) {
+		h := newBudgetHarness(t, 64, 30*time.Millisecond, 0)
+		h.warmUp(t, 901)
+		h.show(t, cutA, cutD, cutB, cutE)
+		h.queued += queueAcrossHideShow(t, h.m, h.in)
+		h.flush(t)
+		bAfterFirst, eAfterFirst := subjectAt(h.in, cutB), subjectAt(h.in, cutE)
+		for flush := 2; queuedFacts(h.in) > 0; flush++ {
+			if flush > 10 {
+				t.Fatalf("no progress: %d facts left", queuedFacts(h.in))
+			}
+			h.flush(t)
+		}
+		checkCutResult(t, h.in, "ApplySync, budget of one unit")
+		checkFirstCut(t, "ApplySync, budget of one unit: the first Flush", bAfterFirst, eAfterFirst)
+	})
+}
+
+// commitInScope 在一个 Nest 守卫作用域里（一笔有身份的提交）依次排 es[i] 到 to[i] 的移动并确认、放行。
+func commitInScope(t *testing.T, m *entitysync.Manager, in *Interest, es []*queuedEntity, to []spatial.Point) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, closeScope := entity.NewGuardScope("commit")
+		defer closeScope()
+		locked := make([]entity.IThreadSafeEntity, len(es))
+		for i, e := range es {
+			locked[i] = e
+		}
+		mutation := entity.BeginSyncMutation(locked, m)
+		for i, e := range es {
+			if err := in.QueueMove(e, to[i]); err != nil {
+				t.Error(err)
+			}
+		}
+		mutation.Admit()
+		mutation.Confirm()
+		mutation.Release()
+	}()
+	<-done
+}
+
+// 一笔提交只要有一条事实还在等（它的实体前面还有没确认的提交），这一步就一条也不取用它的事实，整笔留在原位等，
+// 不切成两半；它留下的事实又挡住后面同一目标的事实，那些事实所属的提交也整笔等（连带）。排在后面的命令照常执行，
+// 不等它们。前面的提交确认之后，等着的提交在同一步里一起应用，按日志顺序。
+// （纯前缀切开要求切点落在已取用提交全部结束之后；取用部分就绪的提交会把它切开，见方案 §11.2。）
+//
+// 日志：[move b (W，未确认)] [move a、move b (X，已确认)] [move g、move a (Z，已确认)] [Show c]。X 的 b 排在 W 之后，
+// 所以 X 整笔等；Z 的 a 排在 X 的 a 之后，不能越过它，所以 Z 也整笔等（g 也不动）。
+func TestACommitWithAWaitingFactIsNotTakenInPart(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		m := newManager(t)
+		in := newInterestMode(t, m, mode)
+		manualApplier(in)
+		player(t, m, 1)
+		mustEnter(t, in, 1, spatial.Point{X: 10, Y: 10})
+		const a, b, c, g = int64(2), int64(4), int64(6), int64(8)
+		for _, id := range []int64{a, b, c, g} {
+			if err := m.Register(subjectState(t, id)); err != nil {
+				t.Fatal(err)
+			}
+			if err := in.Show(id, cutFar); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mustApply(t, in)
+		ea, eb, eg := factEntity(t, a), factEntity(t, b), factEntity(t, g)
+		w := entity.BeginSyncMutation([]entity.IThreadSafeEntity{eb}, m)
+		if err := in.QueueMove(eb, spatial.Point{X: 35, Y: 10}); err != nil {
+			t.Fatal(err)
+		}
+		w.Admit()
+		commitInScope(t, m, in, []*queuedEntity{ea, eb}, []spatial.Point{{X: 20, Y: 10}, {X: 40, Y: 10}})
+		commitInScope(t, m, in, []*queuedEntity{eg, ea}, []spatial.Point{{X: 60, Y: 10}, {X: 25, Y: 10}})
+		if err := in.Show(c, spatial.Point{X: 50, Y: 10}); err != nil {
+			t.Fatal(err)
+		}
+		in.applyStep()
+		if gotA, gotB, gotG, gotC := subjectAt(in, a), subjectAt(in, b), subjectAt(in, g), subjectAt(in, c); gotA != fmt.Sprintf("%v", cutFar) ||
+			gotB != fmt.Sprintf("%v", cutFar) || gotG != fmt.Sprintf("%v", cutFar) || gotC != "{50 10}" {
+			t.Fatalf("%s: while X's move of b waits for W: a at %s, b at %s, g at %s (want X and Z held back whole at %v); the later Show put c at %s (want {50 10})",
+				mode, gotA, gotB, gotG, cutFar, gotC)
+		}
+		w.Confirm()
+		w.Release()
+		in.applyStep()
+		if gotA, gotB, gotG := subjectAt(in, a), subjectAt(in, b), subjectAt(in, g); gotA != "{25 10}" || gotB != "{40 10}" || gotG != "{60 10}" {
+			t.Fatalf("%s: after W confirmed, one step left a at %s, b at %s, g at %s; want W, X, Z in log order: a {25 10}, b {40 10}, g {60 10}",
+				mode, gotA, gotB, gotG)
+		}
+		flushInterest(t, in, m)
+		if left := queuedFacts(in); left != 0 {
+			t.Fatalf("%s: %d facts left", mode, left)
+		}
+	})
+}
+
+// 命令也计入同步模式的预算单位：单位上限到了以后，切点同样可以落在命令之前（纯前缀的任何边界），只有命令的一段
+// 日志也按预算分到几步，不再整段在一步里执行。
+func TestUnitLimitStopsBeforeACommandToo(t *testing.T) {
+	m := newManager(t)
+	in := newInterestMode(t, m, ApplySync)
+	for _, id := range []int64{2, 3, 4} {
+		if err := in.Show(id, spatial.Point{X: 100 * id, Y: 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in.mu.Lock()
+	_, more, _ := in.runLogLocked(1)
+	in.mu.Unlock()
+	if got := []string{subjectAt(in, 2), subjectAt(in, 3), subjectAt(in, 4)}; got[0] != "{200 10}" || got[1] != "absent" || got[2] != "absent" || !more {
+		t.Fatalf("a step limited to one unit over [Show 2, Show 3, Show 4] placed %v (more %v), want only 2 placed and more to run", got, more)
+	}
+}

@@ -108,8 +108,14 @@ func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFac
 //   - 门控事实：回滚 / 拒绝的完成并释放屏障；代际号不是目标当前代际的（期间被 Leave / Hide / 再次放置）作废；
 //     未确认的留在原位，同一 (目标, 代际) 后面的事实不能越过，其他目标可以；就绪的进入 AOI 批次。
 //   - 其他命令不等未确认的事实（它们不依赖提交）；在 AOI 批次之外串行执行。
-//   - 一步取到 BatchSize 个就绪事实即在此切开：之后的命令与事实留到下一步（同一提交不切开），已就绪的事实不会被
-//     它后面的命令越过——所以“已提交的移动、再 Leave → Enter”与“先应用移动、再 Leave → Enter”逐项相同。
+//   - 提交整笔取用：一笔提交在这一步的快照里只要有一条事实还在等（未确认，或被同一 (目标, 代际) 前面留下的事实
+//     挡住），它的事实一条也不取用，整笔留在原位（waitingFacts）。
+//   - 切点（纯前缀，方案 §11.2，维护者 2026-10-22 决定 A）：一步只在前缀边界停——切点之前的条目全部执行过（等着的
+//     事实留在原位，同上），之后的全部留下。BatchSize 与同步模式的预算单位只决定在哪个边界停：到了上限之后，切点
+//     落在第一个“已取用的提交全部结束”的位置。于是三条顺序规则同时成立：就绪事实不被它后面的命令越过（所以“已提交
+//     的移动、再 Leave → Enter”与“先应用移动、再 Leave → Enter”逐项相同），命令不被它后面的事实越过，提交不切开。
+//     代价：一步可以比上限多出交错进来的条目（已取用提交的后续事实之前、别的线程登记的命令与别的提交的事实，以及
+//     为了让这些提交也结束而再往后取的条目），上界是这一步取到的日志快照。
 //
 // 异步模式的唤醒：登记时非阻塞通知应用线程；periodic 模式下提交确认没有通知（Manager.WakeSync 只在 on_change
 // 生效），所以日志里有未确认事实时按 applierPollMin 起、最长 applierPollMax 的退避轮询提交门。
@@ -154,10 +160,11 @@ func syncApplyBudgetFor(m *entitysync.Manager) time.Duration {
 //     在“多做一轮—留很大预留—只做很少”之间振荡（§12 的推演）。
 //   - 结算预留 = max(预算 / 10, costs.settle × 已执行未结算的单位数)：下限覆盖结算的固定部分与还没测到时。
 //
-// 每一步之前：下一步最多 n = (预算 − 已用 − 结算预留) / (costs.unit + costs.settle) 个单位（只在就绪事实处切开，
-// 同一提交不切开，事实另受 BatchSize 限制；见 runLogLocked）。n ≥ 1 就执行这么多；n < 1 时停止，留给下一次——但每次政策阶段的第一步总要执行（n 至少取 1）：
-// 不能饿死，代价是一个单位本身超预算时这一步会超出，超出量不超过一个单位（或一个提交）加结算。还没有任何估计时
-// （启动后的第一步）不限单位数，只受 BatchSize 限制。
+// 每一步之前：下一步最多 n = (预算 − 已用 − 结算预留) / (costs.unit + costs.settle) 个单位（到了 n 之后在第一个
+// 前缀边界停，与 BatchSize 同一条切点规则，见 runLogLocked）。n ≥ 1 就执行这么多；n < 1 时停止，留给下一次——但
+// 每次政策阶段的第一步总要执行（n 至少取 1）：不能饿死，代价是一个单位本身超预算时这一步会超出，超出量不超过一个
+// 单位加上为了停在前缀边界而多执行的交错条目，再加结算。还没有任何估计时（启动后的第一步）不限单位数，只受
+// BatchSize 限制。
 
 // applyCosts 是同步模式政策阶段的成本估计（每单位执行 / 结算的耗时；0 表示还没测到）。只在应用侧（持 mu）读写。
 type applyCosts struct {
@@ -284,12 +291,11 @@ func (in *Interest) drainLogLocked() {
 	}
 }
 
-// runLogLocked 执行一步：取出日志，按序执行命令、把就绪事实应用到 AOI（≤ BatchSize，见上文规则），应用完的事实
-// 记入 applied（发布屏障仍持有，由下一次结算释放）。unitLimit > 0 时这一步执行的单位（命令与取用的事实）到达
-// unitLimit 后，在下一条就绪事实处切开——与 BatchSize 的切开是同一个切点、同一套规则（同一提交不切开，之后的命令
-// 与事实留到下一步）；命令本身不触发切开，切点不会落到新的位置，不引入新的越过关系。0 不限（应用线程、显式 Apply）。
-// 执行的单位数累加到 unsettledUnits。返回 progressed（执行了命令或完成了事实）、more（还有可执行的条目没取完）、
-// waiting（日志里仍有事实，可能在等提交确认）。调用方持有 mu。
+// runLogLocked 执行一步：取出日志，按序执行命令、把就绪事实应用到 AOI，应用完的事实记入 applied（发布屏障仍持有，
+// 由下一次结算释放）。到了上限——取用的事实到达 BatchSize，或 unitLimit > 0 时执行的单位（命令与取用的事实）到达
+// unitLimit——之后，在第一个前缀边界切开（见上文规则；0 不限单位，应用线程与显式 Apply 用）。执行的单位数累加到
+// unsettledUnits。返回 progressed（执行了命令或完成了事实）、more（还有可执行的条目没取完）、waiting（日志里仍有
+// 事实，可能在等提交确认）。调用方持有 mu。
 func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool) {
 	r := &in.registry
 	r.mu.Lock()
@@ -301,7 +307,8 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 	batch := r.log
 	r.log = nil
 	// 提交条件只读取框架原子门，不调用业务。必须在取日志的同一短锁内固定：若锁外才读 ready，producer 可能刚追加
-	// 同一 handler 的后半段并提交，导致本步只应用前半段。这里 ready 意味着该提交的全部事实已经在日志里。
+	// 同一 handler 的后半段并提交，导致本步只应用前半段。这里 ready 意味着该提交的全部事实已经在日志里——提交在
+	// 全部事实登记之后才 Release，读到 ready 时它的登记都在本快照里，所以一笔可取用提交的结束位置就在快照之内。
 	for i := range batch {
 		if batch[i].op == nil {
 			batch[i].fact.ready, batch[i].fact.discarded = batch[i].fact.condition()
@@ -309,25 +316,36 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 	}
 	r.mu.Unlock()
 
-	blocked := make(map[subjectGen]bool)
+	wait := waitingFacts(batch)
+	// lastOf：每笔可取用提交在快照里最后一条事实的位置。取用了它的一条事实，切点就不能早于这里。
+	lastOf := make(map[*entity.SyncMutation]int)
+	for i := range batch {
+		if fact := &batch[i].fact; batch[i].op == nil && fact.commit != nil && !fact.discarded && !wait[i] {
+			lastOf[fact.commit] = i
+		}
+	}
+	failedKeys := make(map[subjectGen]bool)
 	pending := make([]logEntry, 0, len(batch))
 	completed := make([]queuedInterestFact, 0, len(batch))
-	appliedCommits := make(map[*entity.SyncMutation]bool)
 	var failed error
-	taken, units, cut, batching := 0, 0, false, false
-	full := func() bool { return taken >= in.batchSize || (unitLimit > 0 && units >= unitLimit) }
+	// reach：已取用提交里最靠后的那条事实的位置；位置大于它的地方才是前缀边界。
+	taken, units, reach, batching := 0, 0, -1, false
 	endBatch := func() {
 		if batching {
 			in.aoi.endBatch(in.workers)
 			batching = false
 		}
 	}
-	for _, entry := range batch {
-		if entry.op != nil {
-			if cut {
-				pending = append(pending, entry)
-				continue
+	for i, entry := range batch {
+		if i > reach && (taken >= in.batchSize || (unitLimit > 0 && units >= unitLimit)) {
+			// 纯前缀切开：之前的条目全部执行过，从这里起全部留下。
+			pending = append(pending, batch[i:]...)
+			for j := i; j < len(batch) && !more; j++ {
+				more = batch[j].op != nil || batch[j].fact.discarded || !wait[j]
 			}
+			break
+		}
+		if entry.op != nil {
 			endBatch()
 			in.runOpLocked(entry.op)
 			units++
@@ -340,22 +358,14 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 			completed = append(completed, fact)
 			continue
 		}
-		if !fact.ready || blocked[key] {
-			blocked[key] = true
-			pending = append(pending, entry)
-			continue
-		}
-		sameCommit := fact.commit != nil && appliedCommits[fact.commit]
-		if (cut || full()) && !sameCommit {
-			cut, more = true, true
-			blocked[key] = true
+		if wait[i] || failedKeys[key] {
 			pending = append(pending, entry)
 			continue
 		}
 		taken++
 		units++
 		if fact.commit != nil {
-			appliedCommits[fact.commit] = true
+			reach = max(reach, lastOf[fact.commit])
 		}
 		completed = append(completed, fact)
 		if gen, placed := in.placed[fact.id]; !placed || gen != fact.gen {
@@ -377,13 +387,14 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 			}
 		}
 		if err != nil {
+			// 同一 (目标, 代际) 后面的事实这一步不再应用，留到下一步（错误路径：它所属的提交因此分两步应用）。
 			failed = errors.Join(failed, fmt.Errorf("policy: dropped queued fact for %d: %w", fact.id, err))
-			blocked[key] = true
+			failedKeys[key] = true
 		}
 	}
 	endBatch()
 	r.mu.Lock()
-	// 留下的条目必须仍在新登记的条目之前（未确认的前缀与切开处之后的部分）。
+	// 留下的条目必须仍在新登记的条目之前（等着的事实与切点之后的部分）。
 	arrived := len(r.log)
 	r.log = append(pending, r.log...)
 	waiting = false
@@ -415,6 +426,42 @@ func (in *Interest) runLogLocked(unitLimit int) (progressed, more, waiting bool)
 	metrics.SetGauge(factBacklogMetric, nil, int64(backlog))
 	metrics.ObserveHistogram(applyDurationMetric, nil, time.Since(started))
 	return progressed, more, waiting
+}
+
+// waitingFacts 标出这一步留在原位等的事实（与 batch 一一对应）：
+//   - 未确认的；
+//   - 同一 (目标, 代际) 前面有留下的事实的（不越过它）；
+//   - 所属提交在快照里有一条这样的事实的：部分就绪的提交整笔不取用，不切成两半。
+//
+// 第三条会让同一提交更早的事实也留下，进而挡住别的提交排在后面的同一目标的事实，所以重复到没有新的提交被挡住为止：
+// 每多一轮至少多挡住一笔提交，轮数不超过快照里的提交数加一（通常一轮，有连带时两轮）。被丢弃的事实不算（随时完成）。
+// 不会因此等成死锁：事实就绪只取决于提交门（提交确认 / 拒绝），提交门从不等 Interest 应用；就绪是单调的，前面的
+// 提交确认之后，被它连带挡住的提交在之后的一步里整笔可取用。
+func waitingFacts(batch []logEntry) []bool {
+	wait := make([]bool, len(batch))
+	held := make(map[*entity.SyncMutation]bool)
+	keys := make(map[subjectGen]bool)
+	for changed := true; changed; {
+		changed = false
+		clear(keys)
+		for i := range batch {
+			fact := &batch[i].fact
+			if batch[i].op != nil || fact.discarded {
+				continue
+			}
+			key := subjectGen{id: fact.id, gen: fact.gen}
+			wait[i] = !fact.ready || keys[key] || (fact.commit != nil && held[fact.commit])
+			if !wait[i] {
+				continue
+			}
+			keys[key] = true
+			if fact.commit != nil && !held[fact.commit] {
+				held[fact.commit] = true
+				changed = true
+			}
+		}
+	}
+	return wait
 }
 
 // settleQueued 是 Manager Flush 的政策阶段。同步模式先在这里执行日志（一步接一步，直到没有可执行的条目或预计执行
