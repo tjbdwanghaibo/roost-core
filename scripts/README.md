@@ -123,3 +123,5 @@ Managed Remote 地图独立验收：`ROOST_SLG_REMOTE_MAP=1 bash scripts/test-sl
 
 
 SLG 联盟 Remote 模式：`ROOST_SLG_REMOTE=1 bash scripts/test-slg-alliance-player.sh`，沿用 Redis/NATS/Mongo 参数。生成 Managed Remote 实体与 Sender，两个独立 Runtime 显式交接 owner、拒绝旧写者、冷加载后继续同一活动和两服 Player 恢复。所有联盟模式经真实回环 TCP 与 Receiver 检查撤权／held／重连，NATS 权限代际提示覆盖重复与乱序，固定视点先取空间／权限交集，真实 ticker 在漏通知／读取超时后重读撤权，常驻控制标记保证空场景 Full 到达；生成 DAO 保持逻辑 main、Runtime 映射唯一物理库，Player 模式增加原服待发义务有界扫描。范围见 [SLG 手册](../docs/framework/SLG-INTEGRATION.md)。
+
+SLG 报告客户端恢复：`test-slg-alliance-player.sh` 默认与 `ROOST_SLG_REMOTE=1` 模式在 Inbox 两次冷恢复中运行私有 DTO / TCP 重连验收；`scout/report_view.go` 校验永久收件归属，`player/report_view_test.go` 由周期读补漏通知，检查失败保持 held、非所属会话零报告、重复刷新不写回执、旧 epoch 拒绝。Managed 地图模式仍走独立交接链，不运行此客户端恢复子场景。

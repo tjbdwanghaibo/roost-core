@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### SLG 深化：报告私有视图与客户端重连
+
+- 教学消费者增加 ProjectInbox 白名单 DTO 与归属／容量校验；永久回执保留，客户端刷新不产生新收件。
+- Inbox 冷恢复链接真实 TCP Sync：周期读补漏通知，失败／迟到／损坏／串号保持 held，重复刷新、非所属会话隔离、断线重连 Full 和旧 epoch 拒绝。
+- 学习文档与 skill 明确地图 ACK、持久收件和客户端已读的区别，以及初始空会话与撤空 Full 的契约；生产认证、附件与长期归档仍另验。
+
 ### SLG 深化：交接在途请求与接收端期限
 
 - RoutedReportReceiver 增加接收端 Timeout，覆盖权威查询和 Player 收件，并拒绝期限后的迟到成功；普通 Bus 调用方 deadline 不传播到接收端，修正此前接法与说明。

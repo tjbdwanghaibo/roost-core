@@ -212,3 +212,5 @@ MOBA 的现行入口是 `docs/framework/MOBA-INTEGRATION.md`，正式消费者�
 明确哪些已验证、哪些是推断、哪些仍被环境或资源阻塞。给出一个最有价值的下一步实践。涉及 ssr 时说明借鉴的业务思想及与 core 契约的差异，始终回到 core 的正式接入方式。
 
 main 维护者修复同步：深化联盟自动补报期限与协调器 ReservationTTL 共用配置，零值取 activity.DefaultReservationTTL；Redis 与 Remote 接法一致，默认／自定义期限的边界在活动链回归。不按旧 skill 写死一小时。Interest 单写者、空 Full 清场、trace 参数类型打印与技能 Driver 抽象以当前 main 契约为准。
+
+报告客户端学习规则：永久 Inbox 是恢复源，通知只是加速信号；地图 ACK 与客户端已读分开，不因 Sync 发送成功清掉永久回执。ProjectInbox 只裁剪白名单 DTO，Player/home 来自服务端认证绑定；读失败、迟到成功、坏快照或串号先 held，成功重读后 Ready/Flush。周期刷新和重连均不写 Inbox。默认／Remote 联盟消费者在 Inbox 冷事实比较后验证实际 TCP 私有视图与旧 epoch 拒绝；不把它扩大为 Managed 地图交接与客户端重连同时发生的证据。从未收过帧的零订阅会话不发空 Full；同 lifetime 已交付对象后撤空才欠清场 Full。生产认证、已读/附件、长期归档和带宽另验。main 当前 ApplySync 预算计入结算但不是硬实时上限；日志切点越过命令问题遵循现行 KNOWN-LIMITS，不用本业务通过掩盖该边界。
