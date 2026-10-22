@@ -34,12 +34,15 @@ const MaxTryBatchTargets = 1024
 // 其余目标的执行时间（等在依赖队列里，不占 worker）；时间片只在一组结束后检查，组越大，一个 worker 一次被批量作业
 // 占住的时间越长。取 4：心跳缺省走批量作业，普通业务消息的 p99 随组变大而升高，同时段对照
 // 组 4 / 8 / 16 的业务 p99 0.187 / 0.235 / 0.316ms、进程 CPU 不升（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md
-// §3A、§3F）；“时间片 100µs + 组 4”的组合尚未测量。
+// §3A、§3F）；与时间片 100µs 合起来的对照见 tryBatchSlice。
 const tryBatchGroup = 4
 
 // tryBatchSlice 是一个 worker 连续执行同一批量作业的时间片：每组目标结束后检查，超过且还有剩余目标时把作业放回
-// 就绪链尾，让链上的普通作业先走（见设计 §5）。100µs 单项对照见性能报告 §3A、§3B（p99 约 −15%～−20%），与组 4 合起来待补测。
-const tryBatchSlice = 200 * time.Microsecond
+// 就绪链尾，让链上的普通作业先走（见设计 §5）。一个 worker 一次被批量作业占住的时长约为“时间片 + 一组的执行时间”，
+// 这是同一业务池上普通消息 p99 的主要来源；时间片越短，批量作业放回就绪链的次数越多，心跳迟到略升。取 100µs：
+// 同时段 3 轮对照（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md §3G），组 4 下 100µs / 200µs 的业务 p99
+// 0.104 / 0.149ms（单目标 Dispatch 0.095ms），进程 CPU 1.52 / 1.48 核（差在噪声内），心跳迟到 p99 8.23 / 7.14ms。
+const tryBatchSlice = 100 * time.Microsecond
 
 var (
 	// ErrTryBatchUnsupportedTarget 表示目标不能放进批量作业：Remote 托管实体每次写都要在 I/O 池取得带 fence 的写批次，

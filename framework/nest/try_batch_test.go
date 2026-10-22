@@ -389,12 +389,12 @@ func TestTryBatchKeepsPerTargetTransactionSemantics(t *testing.T) {
 }
 
 // 批量作业的组大小与时间片是按压测选的缺省（心跳缺省走批量作业）：它们决定一个 worker
-// 一次被批量作业占住多久，即普通业务消息的 p99（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md §3A、§3B、§3F）。
+// 一次被批量作业占住多久，即普通业务消息的 p99（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md §3A、§3B、§3F、§3G）。
 // 改它们要先补同一套夹具的对照并更新报告，再改这里。
-// 变异核对：tryBatchGroup 改成 8 时本用例变红。
+// 变异核对：tryBatchGroup 改成 8、tryBatchSlice 改回 200µs 时本用例各自变红。
 func TestTryBatchParametersAreTheMeasuredDefaults(t *testing.T) {
-	if tryBatchGroup != 4 || tryBatchSlice != 200*time.Microsecond {
-		t.Fatalf("try-batch group %d slice %v, want group 4 slice 200µs (the measured default; re-measure before changing)", tryBatchGroup, tryBatchSlice)
+	if tryBatchGroup != 4 || tryBatchSlice != 100*time.Microsecond {
+		t.Fatalf("try-batch group %d slice %v, want group 4 slice 100µs (the measured default; re-measure before changing)", tryBatchGroup, tryBatchSlice)
 	}
 }
 

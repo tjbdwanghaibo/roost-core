@@ -29,7 +29,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复详细慢日志，无实体 ID 标签 |
 | `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列和 worker 为 dispatcher/pool，delayed_messages 只有 dispatcher；派发器排空停止后删除，同名派发器还有活着的不删（RR-20261006-18） |
 | `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
-| `nest.dispatch.try_batch.cost{dispatcher}` | Duration | 批量作业（`DispatchTryBatch`，心跳投递用）一个 worker 连续执行的一段（至多一个 200µs 时间片）的耗时。批内目标不逐条记 `nest.dispatch.total` / `cost` / 慢派发 trace，也不逐条记 `nest.handler.lock_hold`（只记超过慢阈值的） |
+| `nest.dispatch.try_batch.cost{dispatcher}` | Duration | 批量作业（`DispatchTryBatch`，心跳投递用）一个 worker 连续执行的一段（至多一个 100µs 时间片加一组的执行时间）的耗时。批内目标不逐条记 `nest.dispatch.total` / `cost` / 慢派发 trace，也不逐条记 `nest.handler.lock_hold`（只记超过慢阈值的） |
 | `nest.dispatch.try_batch.executed.total` / `failed.total{dispatcher}` | Counter | 批量作业里执行了 handler 的目标数 / 其中 handler 返回错误（已回滚并记 Warn `async handler failed`）的数 |
 | `nest.dispatch.try_batch.converted.total{dispatcher}` | Counter | 批量作业里同 ID 冲突（有已准入未完成的作业，或实体锁取不到）当场转成单目标作业、排在冲突作业之后执行的目标数。同 ID 业务消息与心跳碰撞的频度；转换后的执行计入普通 `nest.dispatch.*` |
 | `nest.dispatch.try_batch.handed_back.total{dispatcher}` | Counter | 批量作业执行期交回调用方、没有执行的目标数（转单目标被准入拒绝、目标不在内存、fence、取消、handler 不存在）。心跳侧对应 `heartbeat.skipped_total` / `dropped_total{reason="not_loaded"}` |
