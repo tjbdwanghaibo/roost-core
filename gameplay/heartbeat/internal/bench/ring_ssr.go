@@ -11,7 +11,7 @@ import "time"
 //   - 每帧把 4 个环当前格里的 ID 全部取出。
 //
 // 与 ssr 的差异：ssr 的格里放的是实体 ID（实体频率 = 最短登记档，同一实体只有一个调度项）；
-// roost 决定 ③ 不合并，所以这里格里放的是登记 ID。ssr 每格预分配 map 容量 10000，MapHint 可设同样的值，
+// roost 同一实体的多个登记不合并，所以这里格里放的是登记 ID。ssr 每格预分配 map 容量 10000，MapHint 可设同样的值，
 // 微基准缺省 0，并单独报告预分配 10000 时的固定内存。
 type SSRRing struct {
 	rings   [4]ssrRing

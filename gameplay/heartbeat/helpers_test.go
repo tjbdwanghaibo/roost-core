@@ -210,7 +210,7 @@ func (h *countingHandler) count() int {
 var testDelivery = DefaultDelivery
 
 // forEachDelivery 把用例在两种投递方式下各跑一遍（子测试 dispatch / batch）：批量方式下 Nest 的语义（同 ID 顺序、
-// 跳拍计数、Remote 共享模式）必须与单目标方式一致（维护者 2026-10-22 决定缺省改为批量，单目标保留为可选项，两种都要覆盖）。
+// 跳拍计数、Remote 共享模式）必须与单目标方式一致（缺省是批量，单目标是可选项，两种都要覆盖）。
 func forEachDelivery(t *testing.T, fn func(t *testing.T)) {
 	t.Helper()
 	for _, delivery := range []Delivery{DeliveryDispatch, DeliveryBatch} {

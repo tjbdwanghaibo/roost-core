@@ -232,7 +232,7 @@ func newSharedTestProc(t *testing.T, unique int64) (*nestFixture, *fakeRemoteMan
 	return f, remote, e
 }
 
-// Remote 共享模式（Sharing / Shared）下不允许挂载心跳（维护者 2026-10-21）：各写者实例都是 Shared，分不出谁该跳。
+// Remote 共享模式（Sharing / Shared）下不允许挂载心跳：各写者实例都是 Shared，分不出谁该跳。
 // 实例已在共享模式时登记直接拒绝。
 func TestRegisterOnASharedRemoteEntityIsRejected(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
@@ -418,7 +418,7 @@ func TestSharedModeStopsEveryRegistrationAndWarnsAtALimitedRate(t *testing.T) {
 	})
 }
 
-// 维护者决定（2026-10-21）：从共享模式回到独占（LeaveRemoteSharedMode：Shared → Draining → LocalOwned）不自动恢复被停掉的
+// 从共享模式回到独占（LeaveRemoteSharedMode：Shared → Draining → LocalOwned）不自动恢复被停掉的
 // 心跳；业务调用 Start 之前保持停止、不跳，Start 之后照常跳。
 func TestLeavingSharedModeDoesNotResumeTheHeartbeat(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {

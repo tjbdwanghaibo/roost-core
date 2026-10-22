@@ -9,15 +9,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// Delivery 是心跳交给 Nest 的方式。维护者 2026-10-21 决定批量方式先合入、缺省关闭；2026-10-22 看过压测（进程 CPU
-// 约 −40%～−70%，普通业务消息 p99 约 0.08 → 0.2ms，见 docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）后决定
-// 缺省改为批量（DefaultDelivery），单目标保留为可选项。
+// Delivery 是心跳交给 Nest 的方式。缺省批量（DefaultDelivery）：进程 CPU 低于单目标，代价是同一快池上普通业务消息的
+// 尾延迟略高（测量见 docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）；单目标保留为可选项。
 type Delivery string
 
 const (
-	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch（2026-10-22 之前的缺省）。
+	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch。
 	DeliveryDispatch Delivery = "dispatch"
-	// DeliveryBatch 按 64 拍一批交给 Nest 批量作业（nest.TryBatchDispatcher；D20 选项 C，设计见
+	// DeliveryBatch 按 64 拍一批交给 Nest 批量作业（nest.TryBatchDispatcher，设计见
 	// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）。Remote 托管实体的拍仍单目标 Dispatch。缺省。
 	DeliveryBatch Delivery = "batch"
 	// DefaultDelivery 是空值（Config.Delivery 未设、配置值为空串）对应的投递方式；wiring/heartbeat 的
@@ -63,7 +62,7 @@ func ParseDelivery(value string) (Delivery, error) {
 //     CAS 已投出(g)→空闲 结算。每一代至多结算一次。
 //   - 认领或结算失败的消息（槽里不是已投出(g)：这一代已经执行、被拒或交回，下一代可能已经投出；或这一代正在执行）
 //     是同一代的另一份：丢弃并计 dropped{reason="duplicate"}，不执行回调，不改槽。所以晚到的旧重投、旧交回不会
-//     执行回调，也不会结算下一代（RV-20261022-02）。
+//     执行回调，也不会结算下一代。
 
 // 投递槽的取值：0 空闲；gen<<1 第 gen 代已投出（等执行或交回）；gen<<1|1 第 gen 代正在执行。
 const deliveryIdle uint64 = 0
@@ -132,8 +131,7 @@ type deliverer interface {
 	deliverBatch(ctx context.Context, batch []*beatTicket, rejected func(*beatTicket, error))
 }
 
-// beatBatchSize 是一个 Nest 批量作业带的拍数（ssr 同为 64；按 D20 选项 C 压测定，见
-// docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
+// beatBatchSize 是一个 Nest 批量作业带的拍数（取值依据见 docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
 const beatBatchSize = 64
 
 // dispatchDeliverer 是单目标投递（DeliveryDispatch）：每拍一条 Dispatch，走 Nest 正式准入。batchDeliverer 用它投

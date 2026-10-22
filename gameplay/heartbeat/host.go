@@ -21,7 +21,7 @@ var (
 	ErrHostClosed = errors.New("heartbeat: host is closed")
 	// ErrRegClosed 表示登记已撤销（Reg.Close 之后），不能再启动或换档。
 	ErrRegClosed = errors.New("heartbeat: registration is closed")
-	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳（维护者 2026-10-21）：
+	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳：
 	// 共享模式下各写者进程的实例状态都是 Shared、都经分布式锁写，本地分不出谁该跳，心跳无法执行。Register 与 Start
 	// 在共享模式下返回它；运行期才进入共享模式的，已挂的心跳由下一拍在实体锁内停掉（计数 heartbeat.stopped_total、打
 	// Warn）。替代做法：共享实体的周期逻辑由业务层自己驱动，例如由负责它的服务按周期发 Nest 消息。
@@ -30,13 +30,13 @@ var (
 		"logic from business code instead, e.g. the owning service sends Nest messages on its own schedule")
 )
 
-// DefaultMaxElapsed 是 Beat.Elapsed 的上限（维护者 2026-10-21：“距上次执行，最多 1 秒”）。档位本身长于 1 秒时上限取
+// DefaultMaxElapsed 是 Beat.Elapsed 的上限：距上次执行最多算 1 秒。档位本身长于 1 秒时上限取
 // 档位周期，否则 2s 及以上的档每拍都会少算（见 Beat.Elapsed）。
 const DefaultMaxElapsed = time.Second
 
 // Beat 是交给回调的一拍。
 type Beat struct {
-	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now（D22-1），回调里再读 fctx.Now 是同一个值。
+	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now，回调里再读 fctx.Now 是同一个值。
 	// 挂了时间域（WithTimeDomain）时是这条消息的域时间。
 	Now time.Time
 	// Elapsed 是距本登记上次执行的业务时间（挂了时间域时是域时间，上限再乘倍率）；首拍是距本次启动生效。
@@ -64,13 +64,13 @@ type regOptions struct {
 }
 
 // WithDurability 选本登记心跳 handler 的持久级别（缺省 nest.DurabilityAsync）。心跳本身什么都不持久；回调里改了持久
-// 字段时按这里的级别提交（维护者决定 ⑧：由业务按自己的持久级别处理）。DurabilityMemory 下改持久字段会在提交点被拒绝；
+// 字段时按这里的级别提交，持久级别由业务自己选。DurabilityMemory 下改持久字段会在提交点被拒绝；
 // DurabilityPipelined 要求引擎装了 pipelined 提交器。回滚策略固定 undo。
 func WithDurability(policy nest.DurabilityPolicy) RegOption {
 	return func(o *regOptions) { o.durability = policy }
 }
 
-// WithTimeDomain 让本登记按场景的时间域计时（DESIGN-TODO D22，维护者 2026-10-21 决定 ③）：调度仍按真实时间（档位
+// WithTimeDomain 让本登记按场景的时间域计时（见 impl/10-time §2F）：调度仍按真实时间（档位
 // 不缩放，CPU 不随倍率涨）；Beat.Now 是这一拍消息的域时间（timedomain.Domain.Now），Elapsed 是距上次执行的域时间，
 // 时停时为 0；Elapsed 的上限乘这一拍的倍率（max(DefaultMaxElapsed, 档位) × 倍率），否则 10 倍速时 100ms 档每拍
 // 都被夹住。d 为 nil 时不挂。
@@ -125,7 +125,7 @@ func remoteShared(state entity.RemoteOwnershipState) bool {
 	return state == entity.RemoteOwnershipSharing || state == entity.RemoteOwnershipShared
 }
 
-// Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并（维护者决定 ③）。
+// Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并。
 // name 在实例内唯一（用于日志与诊断），Reg.Close 之后可以再用；period 必须是 Periods 之一。Remote 托管实体处于共享模式时返回
 // ErrHeartbeatRemoteShared（不允许挂载）。共享与否是运行期所有权状态、不是实体种类的声明：刚加载的实例是 Unknown，
 // 第二个写者首次接触共享实体时这里看不出来，由第一拍停掉（见 runBeat）。

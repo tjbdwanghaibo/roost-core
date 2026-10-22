@@ -1,9 +1,9 @@
-// Package heartbeat 把按实体的心跳驱动（gameplay/heartbeat.Driver，DESIGN-TODO D20）接进 App：依赖 Nest Mod，
+// Package heartbeat 把按实体的心跳驱动（gameplay/heartbeat.Driver）接进 App：依赖 Nest Mod，
 // Provide 时取 Nest 客户端、只读实体查找与 App 业务时钟交给驱动，并把驱动登记为 mods.ModHeartbeat；Start 启动驱动
 // goroutine，Stop 先于 Nest 停止（App 按依赖逆序停：先停 Service、再停本 Mod、最后停 Nest）。
 //
 // 驱动本身（调度、投递、跳拍规则）在 gameplay/heartbeat；这里只做接线，不持有运行状态。唯一的配置项是投递方式
-// heartbeat.delivery（batch 缺省 / dispatch，维护者 2026-10-22 决定缺省改为 Nest 批量心跳作业），Init 时校验并
+// heartbeat.delivery（batch 缺省，走 Nest 批量心跳作业 / dispatch），Init 时校验并
 // 交给驱动一次，运行期不切换；档位、分辨率、驱动数都是固定的。业务把驱动写成包级变量，组件经它 NewHost，进程装配用
 // NewMod 装上同一个驱动。
 package heartbeat
@@ -38,7 +38,7 @@ func (m *Mod) Name() app.ModName { return mods.ModHeartbeat }
 // config 是 heartbeat.* 的声明。
 type config struct {
 	Heartbeat struct {
-		Delivery string `config:"delivery" default:"batch" enum:"dispatch|batch" example:"batch" help:"心跳交给 Nest 的方式：batch 按 64 拍一批走 Nest 批量心跳作业（缺省，DESIGN-TODO D20 选项 C：进程 CPU 低，普通业务消息 p99 略高）；dispatch 每拍一条单目标 Dispatch（2026-10-22 之前的缺省）。启动时确定，运行期不切换"`
+		Delivery string `config:"delivery" default:"batch" enum:"dispatch|batch" example:"batch" help:"心跳交给 Nest 的方式：batch 按 64 拍一批走 Nest 批量心跳作业（缺省：进程 CPU 低，普通业务消息 p99 略高）；dispatch 每拍一条单目标 Dispatch。启动时确定，运行期不切换"`
 	} `config:"heartbeat"`
 }
 
@@ -70,7 +70,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	return nil
 }
 
-// Provide 把 Nest 客户端与只读实体查找交给驱动，并登记驱动。业务时间不在这里接：驱动缺省读 fctx.Now（D22-1），
+// Provide 把 Nest 客户端与只读实体查找交给驱动，并登记驱动。业务时间不在这里接：驱动缺省读 fctx.Now，
 // 一拍的 Nest 消息里是这条消息冻结的业务时间，它来自进程业务时钟——App 启动时按 time.logic_offset 设定，与
 // app.BusinessClock(r) 同一份配置。
 func (m *Mod) Provide(r *app.Registry) error {

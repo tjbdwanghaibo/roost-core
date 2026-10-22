@@ -1,6 +1,6 @@
-// Package bench 是 D20 心跳（HB）压测用的**原型**，不是正式框架，不被任何生产代码引用。
+// Package bench 是心跳（HB）压测用的**原型**，不是正式框架，不被任何生产代码引用。
 //
-// 维护者 2026-10-21 决定 ②⑪：投递方式与调度结构由压测决定。本包实现四种调度结构供微基准对照
+// 投递方式与调度结构由压测决定：本包实现四种调度结构供微基准对照
 // （sched_bench_test.go），并在测试里用真实 Nest 引擎对照三种投递方式（delivery_test.go）。
 // 结论见 docs/performance/HB-STRUCTURES-20261021.md。原型只追求“各结构按各自思路写得合理、可比”，
 // 不含正式实现必须有的实例核对、令牌、事务内启停延后、指标等。
@@ -20,7 +20,7 @@ type Tier uint8
 // NumTiers 是固定档位数。
 const NumTiers = 10
 
-// Periods 是维护者决定 ⑥ 的固定档位：50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s。
+// Periods 是正式实现采用的固定档位：50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s。
 // 都是 50ms 的整数倍，也都整除 60s，ssr 的多环结构依赖这两条。
 var Periods = [NumTiers]time.Duration{
 	50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 500 * time.Millisecond,

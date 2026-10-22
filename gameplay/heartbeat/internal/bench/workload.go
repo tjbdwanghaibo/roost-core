@@ -6,7 +6,7 @@ type Mix struct {
 	Weights [NumTiers]int // 各档登记数的相对权重
 }
 
-// MixD20 取自 DESIGN-TODO D20 §7 的示例分布（5 万实体中 32% 挂心跳，不合并时共 3.4 万个登记）：
+// MixD20 是设计里的示例分布（5 万实体中 32% 挂心跳，不合并时共 3.4 万个登记）：
 // 移动 100ms 8000 个（玩家 2000 + 怪物 6000）、AI 200ms 1 万个（怪物 6000 + 4000）、
 // Buff / 回复 1s 1.6 万个（玩家 2000 + 4000、怪物 6000 + 4000）。按这个比例放大到 N 个登记。
 var MixD20 = Mix{Name: "d20mix", Weights: [NumTiers]int{Tier100ms: 8000, Tier200ms: 10000, Tier1s: 16000}}

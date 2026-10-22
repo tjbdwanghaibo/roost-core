@@ -1,16 +1,15 @@
-// Package heartbeat 是按实体的心跳（DESIGN-TODO D20 第 1 期，维护者 2026-10-21 定方案）：所有跑在 Nest 业务池上的
-// 实体周期逻辑（移动、actionflow / AI、周期效果、实体自己的逻辑帧）的底层。
+// Package heartbeat 是按实体的心跳：所有跑在 Nest 业务池上的实体周期逻辑（移动、actionflow / AI、周期效果、
+// 实体自己的逻辑帧）的底层。设计与实现说明见 docs/framework/impl/10-time.md §2B。
 //
 // 职责按文件分：
 //
 //   - 登记（host.go）：组件在实体加载（OnInitFinish）时经 Host.Register 得到 Reg，按需要 Start / Stop / SetPeriod；
 //     卸载、删档时 Host.OnDestroy 撤销。心跳本身什么都不持久，加载后由组件重新登记。
 //   - 调度（driver.go、tier.go）：Driver 一个 goroutine，按档分环、10ms 一格；档位固定（Periods），相位 = hash(实体 ID)。
-//   - 投递（delivery.go）：缺省（DefaultDelivery = DeliveryBatch，维护者 2026-10-22 决定）按 64 个一批交给 Nest 批量
-//     作业（nest.NestMgr.DispatchTryBatch，D20 选项 C），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在
-//     它后面，Remote 托管实体仍单目标；DeliveryDispatch 时每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，
-//     2026-10-22 之前的缺省，保留为可选项）。两种方式都不合并。每次投递分配一个代际，凭据随消息交给 Nest，执行、
-//     准入被拒与交回都只结算自己那一代。
+//   - 投递（delivery.go）：缺省（DefaultDelivery = DeliveryBatch）按 64 个一批交给 Nest 批量作业
+//     （nest.NestMgr.DispatchTryBatch），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在它后面，
+//     Remote 托管实体仍单目标；DeliveryDispatch 时每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch）。
+//     两种方式都不合并。每次投递分配一个代际，凭据随消息交给 Nest，执行、准入被拒与交回都只结算自己那一代。
 //   - 执行（host.go 的 runBeat）：回调在实体自己的 worker 上、实体锁与事务内执行；快池实体在快池、慢池实体在慢池
 //     （Nest 按实体种类分流）。
 //   - 观测（observe.go）：计数、指标与限频 Warn。
@@ -41,8 +40,8 @@ const (
 	// 原拍的代际，两份消息至多一份执行回调（执行侧按代际认领，见 delivery.go）。
 	//
 	// 拍没丢、只是排得久（worker 跟不上）时重投会多压一份消息：同一登记连续卡住时阈值逐次翻倍（10s、20s、40s，
-	// 上限 maxStallBackoff 次），一拍执行后复位，所以积压时每个登记多出的消息是对数级的。-race 下 5 万实体 1s 档的
-	// 冒烟里，2s 阈值不翻倍时重投与积压互相放大（2026-10-21 实测，见 D20 实施记录）。
+	// 上限 maxStallBackoff 次），一拍执行后复位，所以积压时每个登记多出的消息是对数级的；阈值不翻倍时重投与积压会
+	// 互相放大（测量见 impl/10-time §2B 第 5 条）。
 	DefaultStallAfter = 10 * time.Second
 	// maxStallBackoff 是阈值翻倍的次数上限（10s × 2^3 = 80s）。
 	maxStallBackoff = 3
@@ -139,7 +138,7 @@ func NewDriver(config Config) *Driver {
 // Name 返回 Config.Name。
 func (d *Driver) Name() string { return d.config.Name }
 
-// SetClock 换掉业务时钟，只给测试（可控时钟）。缺省是 fctx.Now（D22-1）：在一拍的 Nest 消息里是这条消息冻结的
+// SetClock 换掉业务时钟，只给测试（可控时钟）。缺省是 fctx.Now：在一拍的 Nest 消息里是这条消息冻结的
 // 业务时间，回调里读 fctx.Now 得到同一个值；不在消息里（启停经 AfterCommit 在提交后生效时）现读进程业务时钟。
 // 进程装配不调用它：进程业务时钟由 App 启动时按 time.logic_offset 设定，与 Registry 的业务时钟同源。
 // Beat.Now / Elapsed 与启动时刻按它计算；驱动何时醒来按系统单调时间，不受它影响。挂了时间域的登记

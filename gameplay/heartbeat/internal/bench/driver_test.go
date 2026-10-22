@@ -18,8 +18,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// 对比三（DESIGN-TODO D20 §7 后续微基准，第 4 期补）：上面两组对比用的是原型结构与原型驱动，这里用正式的
-// gameplay/heartbeat.Driver。§7 列的六项与本包的对应：
+// 对比三：上面两组对比用的是原型结构与原型驱动，这里用正式的 gameplay/heartbeat.Driver。设计列出的六项微基准
+// 与本包的对应：
 //
 //	BenchmarkWheelAdvance（只测出入环）        → BenchmarkSched op=step / add / remove / settier（原型 TierRing 与正式环同一写法）
 //	时间轮与最小堆对照                          → BenchmarkSched impl=wheel10 / heap10 / tier10
@@ -364,8 +364,8 @@ func TestDriverOpenLoop(t *testing.T) {
 	}
 }
 
-// TestBusyShortPoolSkipsBeatsAndResumes：快池被业务占满时心跳按规则跳拍（§7 最后一项；维护者决定 ④⑤：在途跳拍、
-// ErrQueueFull 跳拍，不累积、不补发，没有水位让路），业务放开后照常跳，第一拍报告跳过的拍数、Elapsed 覆盖这段
+// TestBusyShortPoolSkipsBeatsAndResumes：快池被业务占满时心跳按规则跳拍（在途跳拍、ErrQueueFull 跳拍，
+// 不累积、不补发，没有水位让路），业务放开后照常跳，第一拍报告跳过的拍数、Elapsed 覆盖这段
 // 时间（夹在上限内）。快池 1 个 worker、队列 8 格；20 个 50ms 登记；一条业务消息占住 worker（只在测试里这样模拟，
 // 正式业务不得在快池里阻塞）。
 //

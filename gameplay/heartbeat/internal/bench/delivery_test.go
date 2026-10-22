@@ -31,7 +31,7 @@ import (
 //	      下一格重投（handler 内不能 Dispatch）。**绕过 Nest 对目标实体的准入顺序、Guard 与事务**，见报告风险一节
 //	z     nest.DispatchBroadcast：本格到期的全部实体一次调用，Nest 按锁组与 worker 散列拆成至多 32 个一批，
 //	      每批一个作业（等批内全部前驱），worker 上逐个加锁、每个目标各自一个事务
-//	c     D20 选项 C：nest.DispatchTryBatch，每 HB_BATCH（缺省 64）个到期登记一个 Nest 批量作业，worker 逐目标在
+//	c     nest.DispatchTryBatch（正式实现采用）：每 HB_BATCH（缺省 64）个到期登记一个 Nest 批量作业，worker 逐目标在
 //	      目标自己的 Guard 作用域与事务里执行；同 ID 冲突在 Nest 里当场转成单目标作业（计 c_converted_per_s），
 //	      交回的（转换被拒等）清在途、计 hb_queue_full_total
 //	none  不挂心跳，只有业务消息（基线）

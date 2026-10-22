@@ -227,7 +227,7 @@ func staleCopy(t *testing.T, d *Driver, client *fakeClient, r *Reg) (retry sentB
 	return copies[0]
 }
 
-// 旧重投落在下一拍之后（RV-20261022-02）：驱动投出原拍 → 超过兜底阈值重投 → 原拍执行 → 驱动投出下一拍 → 队列里的旧
+// 旧重投落在下一拍之后：驱动投出原拍 → 超过兜底阈值重投 → 原拍执行 → 驱动投出下一拍 → 队列里的旧
 // 重投执行。旧重投属于已经结算的那一次投递，必须按过期丢弃：不执行回调，也不能结算下一拍（下一拍仍在途、之后照常执行）。
 func TestAStaleRedeliveryDoesNotConsumeTheNextBeat(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
@@ -332,7 +332,7 @@ func TestAStaleHandBackDoesNotSettleAnotherBeat(t *testing.T) {
 			t.Fatalf("runs %d in flight %v after the next beat ran", runs, inFlight(r))
 		}
 	})
-	// Nest 在组内 Fence 之后把尚未开始的目标以 ErrNestFenced 交回（RV-20261022-01 修复后）：交回只结算它自己那一代，
+	// Nest 在组内 Fence 之后把尚未开始的目标以 ErrNestFenced 交回：交回只结算它自己那一代，
 	// 计 rejected；同一代已被执行结算后才到的 Fence 交回什么都不改。
 	t.Run("fenced hand-back", func(t *testing.T) {
 		d, client, _, live := newTestDriver(t, discard)
@@ -410,8 +410,8 @@ func TestAStaleHandBackDoesNotSettleAnotherBeat(t *testing.T) {
 	})
 }
 
-// Reg.Close：旧登记投出的拍（原拍与重投）晚到时按过期丢弃，不碰同名新登记的在途与 First。守护用例：当前实现下
-// Close 后的旧拍走“登记已 Close”分支，修复前也是绿的。
+// Reg.Close：旧登记投出的拍（原拍与重投）晚到时按过期丢弃，不碰同名新登记的在途与 First。Close 后的旧拍走
+// “登记已 Close”分支，与投递代际的核对互相独立。
 func TestQueuedBeatsOfAClosedRegistrationDoNotTouchItsSuccessor(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
 		d, client, _, live := newTestDriver(t, discard)
@@ -754,14 +754,14 @@ func TestConcurrentChangesStepsAndBeats(t *testing.T) {
 	})
 }
 
-// 投递方式开关：缺省是 Nest 批量作业（维护者 2026-10-22 决定 B：DefaultDelivery = DeliveryBatch，空值与空串同此），
+// 投递方式开关：缺省是 Nest 批量作业（DefaultDelivery = DeliveryBatch，空值与空串同此），
 // 单目标 Dispatch 是可选项；配置值只认 dispatch / batch；批量方式要求客户端实现 nest.TryBatchDispatcher（不静默
 // 退回）；第一次 Start 之后不能再改。
 // 变异核对：SetDelivery 不检查“已启动”时 Start 之后改方式成功，本用例变红；DefaultDelivery 改回 DeliveryDispatch
 // （或 ParseDelivery 的空串分支返回 DeliveryDispatch）时第一处断言变红。
 func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
 	if DefaultDelivery != DeliveryBatch {
-		t.Fatalf("DefaultDelivery = %q, want batch (maintainer decision 2026-10-22)", DefaultDelivery)
+		t.Fatalf("DefaultDelivery = %q, want batch", DefaultDelivery)
 	}
 	if d := NewDriver(Config{Name: "default"}); d.Delivery() != DeliveryBatch {
 		t.Fatalf("default delivery %q, want batch", d.Delivery())
