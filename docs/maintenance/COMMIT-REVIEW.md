@@ -50,7 +50,7 @@ stale retry executed: calls=2 new beat inflight=false; want 1,true
 2. **Heartbeat 显式表达投递身份。** 登记状态、投递代际、重试次数和正在执行状态含义不同；单一 inflight 不能表达全部。先明确状态转换和归还所有权，再整理调度、投递、观测职责到同包文件。
 3. **Interest 显式区分锁内状态与锁外快照。** registry 记录事实、应用器更新空间、结算生成关系、Drain 读取诊断，各阶段用小函数表达；跨锁边界传值，不依赖读者记住某字段究竟由哪把锁保护。维持现有分层，不额外增加入口包装。
 4. **源码注释描述现行规则。** movement、heartbeat 等新代码仍有 D20、决定编号、日期与过程叙述，应迁入设计文档；保留中文锁边界、失败语义、事务发布顺序。长函数按准备、执行、收尾拆分，不按历史优化轮次组织。
-5. **MapBasic 的保存语义需更直观。** 单独 SetFacing 后 Save 不调用保存回调，探针已复现；但 Save、dirty 与使用文档明确限定为位置/场景变化，所以本轮不登记为确定 bug。建议明确“原地转向是否必须持久化”：若需要，dirty 应包含朝向并支持事务回滚；否则文档明确朝向仅随位置保存，避免 Save 回调包含 facing 造成误解。
+5. **MapBasic 的保存语义需更直观。** 单独 SetFacing 后 Save 不调用保存回调，探针已复现；但 Save、dirty 与使用文档明确限定为位置/场景变化，所以本轮不登记为确定 bug。建议明确“原地转向是否必须持久化”：若需要，dirty 应包含朝向并支持事务回滚；否则文档明确朝向仅随位置保存，避免 Save 回调包含 facing 造成误解。**维护者 2026-10-22 决定：朝向作为 DAO 数据，已实施**（`169a7865`）：`MapBasic.SetFacing` 与 `SetPos` 同一机制——`guard` 登记 `mapState` 回滚、标 dirty、写 `Fields`（DAO 字段的逆操作回滚朝向值）、提交后发布；`Save` / `SaveOnLeave` / `SaveEvery` 在只改朝向时也调保存回调，朝向和位置一样不每拍落库。game-demo `PlayerDao` 新增持久 `saved_facing`，保存回调写它、进场景时恢复。回归 `TestFacingIsSavedAndRolledBackLikeThePosition`（`gameplay/movement/nest_test.go`），修前红：`Save after SetFacing alone: saved [], want [1@7,7/9000]`；三处变异（去掉 dirty、去掉 `guard`、`MemFields.SetFacing` 不登记逆操作）各让它变红。契约见 [impl/10-time §2C 第 12 条](../framework/impl/10-time.md#2c-移动与动作的心跳驱动)，说明见 [v1.31.0 说明 R5](../release/v1.31.0-NOTES.md#r5)。
 
 方向判断：本轮两个执行时序缺陷都来自状态含义不够明确：批组已准备不等于每个 handler 已开始，登记在途不等于当前投递属于哪一拍。优先修正这些状态和检查边界，不继续增加时间阈值或重试分支。热路径可读性改函数体仍需遵守维护手册的同机交替至少 10 次 benchmark/benchstat 要求；本轮没有做性能改动或宣称性能收益。
 

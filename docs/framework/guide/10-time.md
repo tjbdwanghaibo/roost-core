@@ -228,7 +228,7 @@ return err
 
 **MapBasic**：
 
-- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改；运行中进入共享模式被框架停掉的周期落库，回到独占后目前只能 `Leave` 再 `Enter` 恢复（见 KNOWN-LIMITS“移动与动作”）。
+- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置与朝向**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段（回调参数是场景、位置、朝向），场景、位置、朝向都没变过不写。朝向和位置是同一份数据（维护者 2026-10-22）：只调 `SetFacing` 原地转向也算变过，`Save` 会写；朝向的修改与“变过”都随事务回滚。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改；运行中进入共享模式被框架停掉的周期落库，回到独占后目前只能 `Leave` 再 `Enter` 恢复（见 KNOWN-LIMITS“移动与动作”）。
 - 位置变化 `SetPos` 先 `Space.QueueMove`（事务内只记事实、走提交门，提交确认后进 AOI、回滚丢弃），再写字段；`QueueMove` 被拒时什么都不写、返回错误。
 - 进出场景 `Enter` / `Leave` 在**事务提交、实体锁释放之后**调 `Space.Enter` / `Space.Leave`（回滚的进出不发生；同一事务里进场景后又移动，提交后的 Enter 直接用最新位置；先进后出互相抵消）。不在事务里（加载 / 新建的初始化阶段）立即调用。
 - `Space` 是接口，`InterestSpace` 把 `policy.Interest` 适配过来：`Player` 认出的实体按玩家进出（`Interest.Enter` / `Leave`），其余只被看（`Show` / `Hide`），进出后 `Apply` 一次。同步 subject 的登记、玩家会话由业务在进场景之前做；业务场景也可以自己实现 `Space`。
