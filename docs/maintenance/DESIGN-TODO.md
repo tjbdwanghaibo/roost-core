@@ -45,7 +45,7 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 6. **Remote 托管实体禁止挂移动 / 心跳组件**：维护者 2026-10-21 晚已定方向（理论上不应挂，`MapBasic.Sync` 不加），现状是登记时只拦“当时已在共享模式”的实例、运行中进入共享的由下一拍停掉。要在装配或登记时一律拒绝需要 Remote 的种类级声明（Remote 的改动），**另行设计**，未排期。
 7. **学习分支 `learn/main-review-20261021` 第 11 条的设计意见**：已分类登记在下文 [优化项（下一阶段）](#优化项下一阶段) 第 2～4 组；第 2、3 组与第 1 组方向一已实施（维护者 2026-10-22），第 4 组逐项待维护者排期。
 8. **合服的 saga 终态检查是否支持按类型 / 业务键过滤**（D15）。现状：检查整个 saga 存储（维护者 2026-10-21 确认严格），同一存储里其他服仍在运行的 saga 也会让检查不通过。可选：按类型 / 业务键过滤。推荐保持严格，有真实多服共用 saga 存储的部署再定。
-9. **压测工具的缺省驱动**（D20 P4）。现状：sync-aoi `-move-driver=loop`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`（旧复跑命令得到原负载）。维护者 2026-10-21 晚：v1.31 发版前对比后再定；对比在今晚压测清单里。
+9. **压测工具的缺省驱动**（D20 P4）。现状：sync-aoi `-move-driver=loop`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`（旧复跑命令得到原负载）。维护者 2026-10-21 晚：v1.31 发版前对比后再定；对比在今晚压测清单里。**2026-10-22 晚对比已做**（[HB-DRIVEN-LOAD §4A](../performance/HB-DRIVEN-LOAD-20261021.md#4a-2026-10-22-晚正式测量v1310-发版前压测第-6-项)）：心跳驱动进程 CPU 约 −19%（nest-game）/ −11%（sync-aoi）、Sync 延迟更低、多视野不失守，但负载形状与历史报告不同（固定移动者），普通业务消息服务端 P99 0.87 → 2.13ms；选 A（缺省改心跳，旧报告复跑显式加 `loop` / `ticker`）还是 B（维持全局循环，心跳作为对照档）仍待维护者决定。
 10. **编码失败断开的防风暴**（S5）。现状：原因持续时客户端反复重连，靠 `player.sync.session_lost_disconnect.total` 与 Warn 发现。可选：按玩家冷却（冷却期间要么连着收不到帧，要么拒绝登录，都是新的产品行为）。**推荐不做**，根治在业务侧（`MaxVisible`、实体大小）。
 11. **嵌入 TCP 驻留字节 Gauge 与按帧龄提前关闭停读连接**：维护者 2026-10-20 决定等重档数据再定；2026-10-20 夜间重档拒绝为 0，不构成要做的证据。
 12. **独立 Gate 下的 Lockstep 追帧背压与 Game / Gate 帧上限跨进程检查**：维护者 2026-10-20 决定暂不做（都要协议改动：Gate 写出回执、握手互报上限），等有具体游戏使用“Lockstep + 独立 Gate”时再做。
@@ -249,11 +249,11 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 
 ### P3 实施结果（2026-10-21）
 
-game-demo 接入（[WALKTHROUGH](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20)）；2026-10-22 冒烟（dev-smoke 2 / 2、loadtest 20 / 20）后续：主视野 `MaxVisible` 64、`scene_alive`、200 人里 72 个 connect 失败是单 IP 上限；**维护者 2026-10-22 决定编码失败就关闭连接**（[v1.31.0 S5](../release/v1.31.0-NOTES.md#s5)）。100 / 200 人 loadtest 在今晚压测清单里。
+game-demo 接入（[WALKTHROUGH](../../demo/WALKTHROUGH.md#移动客户端发目标服务端在实体自己的心跳里走d20)）；2026-10-22 冒烟（dev-smoke 2 / 2、loadtest 20 / 20）后续：主视野 `MaxVisible` 64、`scene_alive`、200 人里 72 个 connect 失败是单 IP 上限；**维护者 2026-10-22 决定编码失败就关闭连接**（[v1.31.0 S5](../release/v1.31.0-NOTES.md#s5)）。100 / 200 人 loadtest 在今晚压测清单里。**2026-10-22 晚结果**（[清单 §3](../performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：单 IP 上限 512 后 connect 全部成功、`object limit exceeded` 0（`MaxVisible` 64 的目的达成）；两轮 rc≠0（成功 24 / 100、30 / 200），失败来自同秒起跑打在 World / 场景实体、公会目录与 gift saga 上，尚未确认，下一步建议按秒爬坡复测。
 
 ### P4 实施结果（2026-10-21）
 
-压测工具的心跳驱动（sync-aoi `-move-driver`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER`、§7 微基准），只交付代码；对比与缺省的选择在今晚压测清单与“待维护者决定”第 9 项。见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)。
+压测工具的心跳驱动（sync-aoi `-move-driver`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER`、§7 微基准），只交付代码；对比与缺省的选择在今晚压测清单与“待维护者决定”第 9 项。见 [HB-DRIVEN-LOAD-20261021](../performance/HB-DRIVEN-LOAD-20261021.md)。2026-10-22 晚正式对比已做（§4A）：心跳模式零跳拍、投递 = 执行，nest-game 心跳路径 `verified=true`；缺省仍待第 9 项决定。
 
 ### P5 实施结果（2026-10-21）
 

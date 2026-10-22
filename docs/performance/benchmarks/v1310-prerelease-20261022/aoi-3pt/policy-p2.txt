@@ -1,0 +1,360 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    5762	    190974 ns/op	   49483 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     100	  10142064 ns/op	 3591638 B/op	   14490 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  245508	      4866 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  143100	      8365 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   57386	     20252 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38610	     31051 ns/op	   21554 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     950	   1255302 ns/op	   61251 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2461	    478629 ns/op	   99891 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2271	    529838 ns/op	  884675 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2173	    546700 ns/op	 1058869 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     514	   2013437 ns/op	      4227 dirtied/op	        63.09 fullscans/op	   87778 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1101	    999668 ns/op	      4226 dirtied/op	        62.19 fullscans/op	   92969 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	347532488	         3.430 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7636014	       156.4 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	336359281	         3.611 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7546672	       157.6 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1780335	       672.8 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1592166	       753.4 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  137773	      8672 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57080	     20915 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5569	    212119 ns/op	   17443 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1401	    849670 ns/op	   17719 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  354723	      3326 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8163	    143995 ns/op	   17465 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1748	    675881 ns/op	   68106 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  477186	      2393 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31508	     37961 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	   10000	    113884 ns/op	   79826 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2478289	       484.0 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  391294	      3065 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   25916	     46260 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6322	    188918 ns/op	   49492 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     121	   9817022 ns/op	 3553163 B/op	   14364 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  246840	      4878 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  139221	      8567 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59229	     20231 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38941	     30617 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     942	   1263296 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2480	    495592 ns/op	   99887 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2211	    536297 ns/op	  884677 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2209	    536417 ns/op	 1058862 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     518	   2043959 ns/op	      4227 dirtied/op	        63.42 fullscans/op	   87947 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1010	   1046500 ns/op	      4227 dirtied/op	        61.93 fullscans/op	   92405 B/op	     287 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	347553668	         3.446 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7673925	       155.1 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	344761910	         3.487 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7581979	       154.1 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1791204	       670.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1594000	       751.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  138540	      8529 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57172	     20694 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5712	    209204 ns/op	   17441 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1420	    828990 ns/op	   17717 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  356576	      3334 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8204	    143357 ns/op	   17464 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1762	    677135 ns/op	   68096 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  479350	      2394 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31251	     38084 ns/op	   20212 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	   10000	    112734 ns/op	   79834 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2502288	       479.1 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  395142	      3050 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   25953	     46241 ns/op	     426 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6326	    188816 ns/op	   49487 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     100	  10059238 ns/op	 3591541 B/op	   14489 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  244336	      4894 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  143449	      8424 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59703	     20120 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38928	     30830 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     934	   1264269 ns/op	   61253 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2466	    476847 ns/op	   99893 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2235	    533514 ns/op	  884677 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2226	    541114 ns/op	 1058800 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     516	   2017338 ns/op	      4227 dirtied/op	        63.28 fullscans/op	   87864 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1098	   1007747 ns/op	      4226 dirtied/op	        62.24 fullscans/op	   93024 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	355251793	         3.419 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7602619	       157.4 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	344921992	         3.484 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7442269	       159.0 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1795628	       670.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1599410	       749.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  138705	      8568 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57339	     20812 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5719	    209745 ns/op	   17442 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1392	    851654 ns/op	   17719 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  354822	      3355 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8112	    144603 ns/op	   17465 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1766	    675458 ns/op	   68090 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  477916	      2417 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31358	     38116 ns/op	   20212 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	    9709	    114996 ns/op	   79827 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2466942	       484.4 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  390064	      3077 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26064	     46119 ns/op	     426 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6366	    188719 ns/op	   49484 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     120	   9854161 ns/op	 3560127 B/op	   14387 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  247946	      4850 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  140509	      8570 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59299	     20242 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   39160	     30567 ns/op	   21554 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     942	   1262479 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2331	    483521 ns/op	   99893 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2242	    530107 ns/op	  884620 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2214	    536851 ns/op	 1058811 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     519	   2018089 ns/op	      4227 dirtied/op	        63.52 fullscans/op	   87998 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1101	    999861 ns/op	      4226 dirtied/op	        62.19 fullscans/op	   92974 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	347969770	         3.438 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7549561	       155.2 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	344097902	         3.481 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7695631	       153.0 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1765498	       678.7 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1590544	       753.4 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  136866	      8649 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57361	     20784 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5640	    210829 ns/op	   17443 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1396	    830929 ns/op	   17718 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  350066	      3371 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8193	    143528 ns/op	   17464 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1741	    672944 ns/op	   68113 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  480945	      2376 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31044	     38401 ns/op	   20210 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	   10000	    113400 ns/op	   79835 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2484189	       481.8 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  401652	      2993 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   25920	     46315 ns/op	     426 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6372	    187269 ns/op	   49489 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     100	  10107786 ns/op	 3591666 B/op	   14490 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  243986	      4900 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  140024	      8441 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59641	     20132 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   39408	     30525 ns/op	   21554 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     942	   1268464 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2486	    477942 ns/op	   99892 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2199	    527157 ns/op	  884678 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2226	    541954 ns/op	 1058802 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     516	   2022134 ns/op	      4227 dirtied/op	        63.28 fullscans/op	   87879 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1094	   1006863 ns/op	      4226 dirtied/op	        62.37 fullscans/op	   93114 B/op	     290 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	345513483	         3.476 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7600544	       155.8 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	345144670	         3.483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7495447	       157.8 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1785804	       672.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1595328	       751.5 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  138750	      8545 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57650	     20714 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5708	    209965 ns/op	   17441 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1380	    841064 ns/op	   17722 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  361978	      3291 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8264	    142018 ns/op	   17464 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1753	    670294 ns/op	   68103 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  477090	      2412 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31377	     38041 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	    9697	    114259 ns/op	   79831 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2475884	       484.6 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  392308	      3021 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26782	     44832 ns/op	     426 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6366	    189118 ns/op	   49484 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     120	   9760812 ns/op	 3560215 B/op	   14387 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  247882	      4834 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  140979	      8532 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59046	     20232 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38197	     31294 ns/op	   21554 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     948	   1258550 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2530	    479736 ns/op	   99889 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2227	    532997 ns/op	  884677 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2229	    538807 ns/op	 1058859 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     522	   2011974 ns/op	      4227 dirtied/op	        63.66 fullscans/op	   88056 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1110	    995244 ns/op	      4226 dirtied/op	        62.32 fullscans/op	   93004 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	342958110	         3.507 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7732506	       154.5 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	346209314	         3.459 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7271931	       158.2 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1785860	       671.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1591278	       752.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  137782	      8608 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57234	     20762 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5469	    211979 ns/op	   17445 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1430	    802842 ns/op	   17707 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  346135	      3429 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8133	    144147 ns/op	   17465 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1764	    674430 ns/op	   68091 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  470446	      2408 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31550	     37958 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	    9783	    112931 ns/op	   79830 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2495618	       478.5 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  391164	      3053 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   25832	     46439 ns/op	     426 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6375	    188259 ns/op	   49484 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     100	  10058210 ns/op	 3591605 B/op	   14489 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  246729	      4831 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  143058	      8340 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59827	     20022 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38456	     31244 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     942	   1262426 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2460	    479046 ns/op	   99891 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2257	    529638 ns/op	  884676 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2185	    546121 ns/op	 1058864 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     514	   2019797 ns/op	      4227 dirtied/op	        63.09 fullscans/op	   87785 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1112	   1002877 ns/op	      4226 dirtied/op	        62.35 fullscans/op	   93021 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	346507516	         3.448 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7786795	       154.0 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	344874286	         3.491 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7699507	       153.3 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1791331	       669.2 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1599066	       749.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  137288	      8578 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57394	     20744 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5631	    209348 ns/op	   17442 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1464	    799198 ns/op	   17700 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  352460	      3362 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8192	    143350 ns/op	   17465 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1771	    672345 ns/op	   68086 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  477244	      2394 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31299	     38232 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	    9680	    114045 ns/op	   79828 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2487111	       482.2 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  396362	      3038 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26264	     45976 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6366	    188405 ns/op	   49484 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     120	   9730357 ns/op	 3560157 B/op	   14387 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  247238	      4866 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  139284	      8548 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59716	     20140 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   38683	     30774 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     949	   1252498 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2458	    484840 ns/op	   99888 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2222	    540036 ns/op	  884621 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2260	    538947 ns/op	 1058803 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     519	   2018024 ns/op	      4227 dirtied/op	        63.52 fullscans/op	   87998 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1100	    993969 ns/op	      4226 dirtied/op	        62.18 fullscans/op	   92965 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	343481296	         3.502 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7544740	       156.8 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	340925151	         3.545 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7562176	       157.3 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1792980	       668.9 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1594854	       750.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  138668	      8513 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57915	     20629 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5692	    208949 ns/op	   17441 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1471	    790305 ns/op	   17698 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  355377	      3338 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8232	    142384 ns/op	   17464 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1789	    665658 ns/op	   68070 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  480362	      2387 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   30938	     38552 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	   10000	    113425 ns/op	   79838 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2488380	       481.7 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  398781	      3005 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26414	     45511 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6384	    188204 ns/op	   49486 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     100	  10090873 ns/op	 3591642 B/op	   14489 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  248083	      4831 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  143788	      8338 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59598	     20086 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   39088	     30672 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     944	   1261941 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2514	    471743 ns/op	   99887 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2155	    532910 ns/op	  884678 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2209	    539750 ns/op	 1058861 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     522	   2010272 ns/op	      4227 dirtied/op	        63.66 fullscans/op	   88054 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1102	    997925 ns/op	      4226 dirtied/op	        62.20 fullscans/op	   92975 B/op	     289 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	351610614	         3.388 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7560025	       157.1 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	349119853	         3.495 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7574653	       155.5 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1780826	       675.3 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1589787	       754.0 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  136893	      8682 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   56871	     20978 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5659	    210355 ns/op	   17443 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1485	    804694 ns/op	   17696 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  347899	      3427 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8073	    144415 ns/op	   17466 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1754	    674628 ns/op	   68102 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  479239	      2385 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31568	     37944 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	    9782	    113348 ns/op	   79829 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2473664	       483.8 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  391856	      3070 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26133	     45939 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkClusterFlushRandomWalk-10          	    6210	    189313 ns/op	   49498 B/op	    1400 allocs/op
+BenchmarkClusterFlushRandomWalkCapped-10    	     120	   9955656 ns/op	 3560204 B/op	   14387 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-10         	  246697	      4860 ns/op	    1216 B/op	       8 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-10         	  139438	      8554 ns/op	    2704 B/op	      32 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-10          	   59421	     20142 ns/op	   11520 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-10          	   39096	     30809 ns/op	   21554 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-10          	     940	   1264858 ns/op	   61252 B/op	      14 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-10          	    2457	    482958 ns/op	   99888 B/op	     223 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-10           	    2229	    534014 ns/op	  884677 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-10           	    2268	    537763 ns/op	 1058804 B/op	    1743 allocs/op
+BenchmarkAOIBatchDenseViews/workers=1-10                                   	     517	   2028704 ns/op	      4227 dirtied/op	        63.38 fullscans/op	   87933 B/op	     212 allocs/op
+BenchmarkAOIBatchDenseViews/workers=4-10                                   	    1092	   1001937 ns/op	      4226 dirtied/op	        62.44 fullscans/op	   93134 B/op	     290 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-10                   	346212226	         3.477 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-10                    	 7524096	       158.8 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-10                  	345336618	         3.476 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-10                   	 7496656	       158.3 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=32-10                  	 1784067	       671.6 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1/members=1024-10                	 1595757	       751.1 ns/op	     984 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=32-10                 	  137205	      8619 ns/op	    1992 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=64/members=1024-10               	   57802	     20492 ns/op	    1993 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=32-10               	    5532	    210489 ns/op	   17444 B/op	      11 allocs/op
+BenchmarkRelationViewMemberChange/players=1024/members=1024-10             	    1502	    797712 ns/op	   17690 B/op	      13 allocs/op
+BenchmarkRelationViewAttach/members=32-10                                  	  352167	      3373 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10                                	    8216	    142871 ns/op	   17464 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=4096-10                                	    1770	    673089 ns/op	   68089 B/op	      21 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10                                  	  474369	      2411 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10                                 	   31048	     38394 ns/op	   20211 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10                                 	   10000	    113488 ns/op	   79838 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10                                    	 2491327	       481.1 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10                                   	  398151	      3000 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10                                 	   26302	     45625 ns/op	     427 B/op	       6 allocs/op
+PASS

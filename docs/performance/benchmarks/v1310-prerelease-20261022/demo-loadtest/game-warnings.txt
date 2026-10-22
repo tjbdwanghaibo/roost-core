@@ -1,0 +1,128 @@
+== 100 人 22:22:31 22:24:00
+41 INFO|saga: step command expired before it ran; acknowledged without executing||
+27 WARN|slow dispatch|handlerFoundGuild|
+9 WARN|async handler failed|heartbeat.beat.async|nest: transaction commit rejected
+3 ERROR|found_guild failed||nest: sync canceled
+2 WARN|slow dispatch trace|handlerFoundGuild|
+== 200 人 22:24:54 22:26:00
+110 WARN|enter_game: player not placed on the map||nest: sync canceled
+110 WARN|enter_game: server-wide mail not pulled||nats: request timeout: context deadline exceeded
+110 WARN|enter_game: login not announced on the world channel||nats: request timeout: context deadline exceeded
+110 WARN|scene_ready: session not released||entitysync: session is not open
+106 WARN|enter_game: world did not record the login||nest: sync canceled
+36 WARN|slow dispatch|handlerFoundGuild|
+36 INFO|saga: step command expired before it ran; acknowledged without executing||
+13 WARN|async handler failed|heartbeat.beat.async|nest: transaction commit rejected
+6 ERROR|found_guild failed||nest: sync canceled
+3 ERROR|add_exp failed||nest: sync timeout
+2 WARN|slow dispatch trace|handlerFoundGuild|
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100187: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100203: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100240: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100278: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100288: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100188: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100194: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100202: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100281: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100210: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100184: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100186: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100189: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100190: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100191: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100195: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100196: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100197: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100199: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100204: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100205: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100209: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100207: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100212: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100213: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100185: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100211: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100215: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100214: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100216: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100218: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100217: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100219: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100220: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100221: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100222: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100223: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100224: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100225: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100226: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100228: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100227: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100229: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100230: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100233: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100231: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100234: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100232: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100235: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100236: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100237: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100238: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100239: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100241: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100244: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100245: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100243: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100246: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100247: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100248: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100251: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100252: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100254: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100253: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100257: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100256: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100258: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100259: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100255: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100260: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100261: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100262: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100263: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100265: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100264: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100266: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100267: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100268: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100269: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100271: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100270: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100272: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100274: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100275: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100276: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100273: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100277: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100279: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100280: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100283: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100282: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100285: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100286: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100287: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100289: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100292: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100291: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100293: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100294: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100296: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100298: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100295: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100299: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100297: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100300: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100242: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100250: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100249: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100284: context deadline exceeded
+1 WARN|enter_game: paid orders not settled||purchase drain: read grants of player 100290: context deadline exceeded

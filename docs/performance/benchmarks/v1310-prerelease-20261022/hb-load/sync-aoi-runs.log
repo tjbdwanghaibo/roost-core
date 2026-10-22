@@ -1,0 +1,71 @@
+21:00:43 g1-loop-r1 start loadavg={ 3.97 3.78 4.02 }
+21:00:56 g1-loop-r1 ok rc=1 loadavg_end={ 3.77 3.75 4.00 }
+21:01:06 g1-hb100-r1 start loadavg={ 3.65 3.72 3.99 }
+21:01:19 g1-hb100-r1 ok rc=1 loadavg_end={ 3.56 3.70 3.97 }
+21:01:30 g1-hb200-r1 start loadavg={ 3.40 3.66 3.96 }
+21:01:42 g1-hb200-r1 DISCARDED: 14137 23.3 Libra  /Users/whb/Library/Application Support/Claude/claude-code/2.1.308/a93ded4b1b47/claude.app/Contents/MacOS/claude --outpu
+21:01:53 g1-hb200-r1 start loadavg={ 3.19 3.57 3.92 }
+21:02:05 g1-hb200-r1 ok rc=1 loadavg_end={ 3.55 3.64 3.93 }
+21:02:16 g1-hb100-r2 start loadavg={ 3.54 3.63 3.93 }
+21:02:28 g1-hb100-r2 ok rc=1 loadavg_end={ 3.20 3.55 3.89 }
+21:02:39 g1-hb200-r2 start loadavg={ 3.33 3.57 3.90 }
+21:02:51 g1-hb200-r2 ok rc=1 loadavg_end={ 3.17 3.52 3.87 }
+21:03:02 g1-loop-r2 start loadavg={ 2.84 3.44 3.84 }
+21:03:14 g1-loop-r2 ok rc=1 loadavg_end={ 2.63 3.37 3.81 }
+21:03:25 g1-hb200-r3 start loadavg={ 3.15 3.46 3.84 }
+21:03:37 g1-hb200-r3 ok rc=1 loadavg_end={ 2.87 3.39 3.80 }
+21:03:48 g1-loop-r3 start loadavg={ 2.65 3.32 3.78 }
+21:04:00 g1-loop-r3 ok rc=1 loadavg_end={ 2.80 3.33 3.77 }
+21:04:11 g1-hb100-r3 start loadavg={ 2.59 3.27 3.74 }
+21:04:23 g1-hb100-r3 ok rc=1 loadavg_end={ 2.63 3.24 3.73 }
+21:04:34 g2-v4-sync-loop-r1 start loadavg={ 2.76 3.25 3.72 }
+21:04:48 g2-v4-sync-loop-r1 ok rc=1 loadavg_end={ 3.03 3.28 3.73 }
+21:04:59 g2-v4-sync-hb100-r1 start loadavg={ 3.02 3.27 3.72 }
+21:05:13 g2-v4-sync-hb100-r1 ok rc=1 loadavg_end={ 3.01 3.26 3.71 }
+21:05:24 g2-v4-async-loop-r1 start loadavg={ 2.84 3.22 3.68 }
+21:05:38 g2-v4-async-loop-r1 ok rc=1 loadavg_end={ 2.64 3.16 3.65 }
+21:05:49 g2-v4-async-hb100-r1 start loadavg={ 3.00 3.22 3.67 }
+21:06:04 g2-v4-async-hb100-r1 ok rc=1 loadavg_end={ 3.12 3.24 3.67 }
+21:06:14 g2-v8-sync-loop-r1 start loadavg={ 3.19 3.24 3.67 }
+21:06:31 g2-v8-sync-loop-r1 ok rc=1 loadavg_end={ 3.15 3.23 3.65 }
+21:06:41 g2-v8-sync-hb100-r1 start loadavg={ 3.85 3.37 3.70 }
+21:06:58 g2-v8-sync-hb100-r1 ok rc=1 loadavg_end={ 5.00 3.66 3.79 }
+21:07:08 g2-v8-async-loop-r1 start loadavg={ 4.84 3.67 3.79 }
+21:07:25 g2-v8-async-loop-r1 ok rc=1 loadavg_end={ 4.94 3.75 3.82 }
+21:07:35 g2-v8-async-hb100-r1 start loadavg={ 4.81 3.76 3.82 }
+21:07:52 g2-v8-async-hb100-r1 ok rc=1 loadavg_end={ 4.12 3.67 3.79 }
+21:08:02 g2-v16-sync-loop-r1 start loadavg={ 3.87 3.63 3.77 }
+21:08:21 g2-v16-sync-loop-r1 ok rc=1 loadavg_end={ 3.88 3.65 3.78 }
+21:08:31 g2-v16-sync-hb100-r1 start loadavg={ 3.81 3.65 3.77 }
+21:08:50 g2-v16-sync-hb100-r1 ok rc=1 loadavg_end={ 4.64 3.85 3.84 }
+21:09:00 g2-v16-async-loop-r1 start loadavg={ 4.69 3.88 3.85 }
+21:09:19 g2-v16-async-loop-r1 ok rc=1 loadavg_end={ 4.82 3.97 3.89 }
+21:09:29 g2-v16-async-hb100-r1 start loadavg={ 4.39 3.90 3.86 }
+21:09:48 g2-v16-async-hb100-r1 ok rc=1 loadavg_end={ 4.64 3.99 3.89 }
+21:09:59 g2-v4-sync-hb100-r2 start loadavg={ 4.77 4.04 3.91 }
+21:10:13 g2-v4-sync-hb100-r2 DISCARDED: 14137 22.7 Libra  /Users/whb/Library/Application Support/Claude/claude-code/2.1.308/a93ded4b1b47/claude.app/Contents/MacOS/claude --outpu
+21:10:24 g2-v4-sync-hb100-r2 start loadavg={ 4.95 4.15 3.96 }
+21:10:38 g2-v4-sync-hb100-r2 ok rc=1 loadavg_end={ 4.57 4.10 3.94 }
+21:10:49 g2-v4-sync-loop-r2 start loadavg={ 4.01 4.00 3.91 }
+21:11:03 g2-v4-sync-loop-r2 ok rc=1 loadavg_end={ 4.03 4.00 3.91 }
+21:11:14 g2-v4-async-hb100-r2 start loadavg={ 4.34 4.07 3.93 }
+21:11:28 g2-v4-async-hb100-r2 ok rc=1 loadavg_end={ 4.19 4.05 3.93 }
+21:11:39 g2-v4-async-loop-r2 start loadavg={ 3.85 3.98 3.91 }
+21:11:53 g2-v4-async-loop-r2 ok rc=1 loadavg_end={ 3.86 3.98 3.91 }
+21:12:04 g2-v8-sync-hb100-r2 start loadavg={ 3.78 3.96 3.90 }
+21:12:18 g2-v8-sync-hb100-r2 ok rc=1 loadavg_end={ 3.73 3.95 3.90 }
+21:12:29 g2-v8-sync-loop-r2 start loadavg={ 3.84 3.96 3.90 }
+21:12:45 g2-v8-sync-loop-r2 ok rc=1 loadavg_end={ 3.64 3.91 3.89 }
+21:12:56 g2-v8-async-hb100-r2 start loadavg={ 3.24 3.82 3.85 }
+21:13:10 g2-v8-async-hb100-r2 ok rc=1 loadavg_end={ 4.36 4.04 3.93 }
+21:13:21 g2-v8-async-loop-r2 start loadavg={ 4.14 4.00 3.92 }
+21:13:37 g2-v8-async-loop-r2 ok rc=1 loadavg_end={ 4.09 4.00 3.92 }
+21:13:48 g2-v16-sync-hb100-r2 start loadavg={ 4.13 4.02 3.92 }
+21:14:07 g2-v16-sync-hb100-r2 ok rc=1 loadavg_end={ 4.61 4.13 3.97 }
+21:14:17 g2-v16-sync-loop-r2 start loadavg={ 4.91 4.22 4.00 }
+21:14:36 g2-v16-sync-loop-r2 ok rc=1 loadavg_end={ 4.87 4.24 4.01 }
+21:14:46 g2-v16-async-hb100-r2 start loadavg={ 5.71 4.43 4.08 }
+21:15:05 g2-v16-async-hb100-r2 ok rc=1 loadavg_end={ 5.12 4.37 4.07 }
+21:15:15 g2-v16-async-loop-r2 start loadavg={ 5.10 4.39 4.08 }
+21:15:34 g2-v16-async-loop-r2 ok rc=1 loadavg_end={ 5.94 4.63 4.17 }
+21:15:34 all done
