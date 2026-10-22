@@ -1,20 +1,24 @@
 // Package heartbeat 是按实体的心跳（DESIGN-TODO D20 第 1 期，维护者 2026-10-21 定方案）：所有跑在 Nest 业务池上的
 // 实体周期逻辑（移动、actionflow / AI、周期效果、实体自己的逻辑帧）的底层。
 //
-// 三件事分在三处：
+// 职责按文件分：
 //
-//   - 登记：组件在实体加载（OnInitFinish）时经 Host.Register 得到 Reg，按需要 Start / Stop / SetPeriod；
+//   - 登记（host.go）：组件在实体加载（OnInitFinish）时经 Host.Register 得到 Reg，按需要 Start / Stop / SetPeriod；
 //     卸载、删档时 Host.OnDestroy 撤销。心跳本身什么都不持久，加载后由组件重新登记。
-//   - 调度：Driver 一个 goroutine，按档分环、10ms 一格；档位固定（Periods），相位 = hash(实体 ID)。
-//   - 执行：缺省（DefaultDelivery = DeliveryBatch，维护者 2026-10-22 决定）按 64 个一批交给 Nest 批量作业
-//     （nest.NestMgr.DispatchTryBatch，D20 选项 C），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在它
-//     后面，Remote 托管实体仍单目标；DeliveryDispatch 时每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，
-//     2026-10-22 之前的缺省，保留为可选项）。两种方式都不合并；回调在实体自己的 worker 上、实体锁与事务内执行；快池
-//     实体在快池、慢池实体在慢池（Nest 按实体种类分流）。
+//   - 调度（driver.go、tier.go）：Driver 一个 goroutine，按档分环、10ms 一格；档位固定（Periods），相位 = hash(实体 ID)。
+//   - 投递（delivery.go）：缺省（DefaultDelivery = DeliveryBatch，维护者 2026-10-22 决定）按 64 个一批交给 Nest 批量
+//     作业（nest.NestMgr.DispatchTryBatch，D20 选项 C），同 ID 有已准入未完成的消息时 Nest 把这一拍转成单目标作业排在
+//     它后面，Remote 托管实体仍单目标；DeliveryDispatch 时每个到期登记一条单目标 Nest 消息（nest.Client.Dispatch，
+//     2026-10-22 之前的缺省，保留为可选项）。两种方式都不合并。每次投递分配一个代际，凭据随消息交给 Nest，执行、
+//     准入被拒与交回都只结算自己那一代。
+//   - 执行（host.go 的 runBeat）：回调在实体自己的 worker 上、实体锁与事务内执行；快池实体在快池、慢池实体在慢池
+//     （Nest 按实体种类分流）。
+//   - 观测（observe.go）：计数、指标与限频 Warn。
 //
 // 每个登记至多一拍在途：上一拍没执行完就跳过这一拍，不累积、不补发，计数并限频打 Warn；准入失败（快池 ErrQueueFull、
-// 引擎停止中，含批量作业里冲突转单目标被拒）同样按跳拍处理。框架不追帧，回调按 Beat.Elapsed 算一次。持久、准点、离线也要算的到期动作用
-// framework/nest/entitytimer，不用心跳。
+// 引擎停止中，含批量作业里冲突转单目标被拒）同样按跳拍处理。在途按投递代际识别：卡住兜底的重投沿用原代际，晚到的
+// 旧消息（这一代的另一份已执行、已被拒或已交回）按 dropped{duplicate} 丢弃，不执行回调、不结算下一拍。框架不追帧，
+// 回调按 Beat.Elapsed 算一次。持久、准点、离线也要算的到期动作用 framework/nest/entitytimer，不用心跳。
 package heartbeat
 
 import (
@@ -22,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,13 +33,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 const (
 	// DefaultStallAfter 是在途的拍多久没有执行就视为丢失、重新投递。正常情况下在途的拍都会执行（快池不阻塞）；丢失只来自
-	// Nest 在执行 handler 之前放弃了消息，例如 Remote 托管实体的写准入被拒、目标在准入后被卸载且重载失败。重投后
-	// 两份消息至多一份执行回调（在途标志在执行时核对）。
+	// Nest 在执行 handler 之前放弃了消息，例如 Remote 托管实体的写准入被拒、目标在准入后被卸载且重载失败。重投沿用
+	// 原拍的代际，两份消息至多一份执行回调（执行侧按代际认领，见 delivery.go）。
 	//
 	// 拍没丢、只是排得久（worker 跟不上）时重投会多压一份消息：同一登记连续卡住时阈值逐次翻倍（10s、20s、40s，
 	// 上限 maxStallBackoff 次），一拍执行后复位，所以积压时每个登记多出的消息是对数级的。-race 下 5 万实体 1s 档的
@@ -50,62 +52,8 @@ const (
 	flushFrames = int64(time.Second / Resolution)
 )
 
-const (
-	// DeliveredMetric 计交给 Nest 的拍（批量作业里的目标与单目标 Dispatch；准入被拒的不算），标签 driver。
-	DeliveredMetric = "heartbeat.delivered_total"
-	// ExecutedMetric 计执行了回调的拍。
-	ExecutedMetric = "heartbeat.executed_total"
-	// SkippedMetric 计跳过的拍，标签 reason：inflight（上一拍还没执行完）、queue_full（快池准入满，含批量作业里冲突
-	// 转单目标被拒）、
-	// rejected（其他准入失败，例如引擎停止中）。持续增长说明实体的 worker 忙不过来或回调太慢；同时打限频 Warn。
-	SkippedMetric = "heartbeat.skipped_total"
-	// StalledMetric 计在途超过 StallAfter 视为丢失而重投的拍；同时打限频 Warn。基线应为零。
-	StalledMetric = "heartbeat.stalled_total"
-	// DroppedMetric 计到期或执行时按规则丢弃的拍，标签 reason：removed（实例已卸载 / 删档；驱动随即撤销这个实例的
-	// 全部登记，之后不再计，同一格里一起到期的登记各计一次）、stale（目标已被同 ID 的新实例取代，实例已 OnDestroy，
-	// 或登记已 Close）、not_loaded（实例还没发布）、stopped（停止生效后到达）、not_owner（Remote 托管实体本进程不是
-	// 当前拥有方）、duplicate（同一次投递的另一份已执行）。不打日志。
-	DroppedMetric = "heartbeat.dropped_total"
-	// StoppedMetric 计框架自动停掉的登记，标签 reason：remote_shared（Remote 托管实体进入共享模式，不允许挂载心跳，
-	// 见 ErrHeartbeatRemoteShared）。同时汇总打 Warn。
-	StoppedMetric = "heartbeat.stopped_total"
-	// RegisteredMetric 是正在跳（已启动生效）的登记数（Gauge）。
-	RegisteredMetric = "heartbeat.registered"
-)
-
 // ErrNotBound 表示驱动还没有接上 Nest（Bind）就被启动。
 var ErrNotBound = errors.New("heartbeat: driver is not bound to a nest client")
-
-// Delivery 是心跳交给 Nest 的方式。维护者 2026-10-21 决定批量方式先合入、缺省关闭；2026-10-22 看过压测（进程 CPU
-// 约 −40%～−70%，普通业务消息 p99 约 0.08 → 0.2ms，见 docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）后决定
-// 缺省改为批量（DefaultDelivery），单目标保留为可选项。
-type Delivery string
-
-const (
-	// DeliveryDispatch 每拍一条单目标 nest.Client.Dispatch（2026-10-22 之前的缺省）。
-	DeliveryDispatch Delivery = "dispatch"
-	// DeliveryBatch 按 64 拍一批交给 Nest 批量作业（nest.TryBatchDispatcher；D20 选项 C，设计见
-	// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）。Remote 托管实体的拍仍单目标 Dispatch。缺省。
-	DeliveryBatch Delivery = "batch"
-	// DefaultDelivery 是空值（Config.Delivery 未设、配置值为空串）对应的投递方式；wiring/heartbeat 的
-	// heartbeat.delivery 声明缺省与它相同。批量方式要求 Bind 的客户端实现 nest.TryBatchDispatcher（*nest.NestMgr 实现；
-	// 只实现 nest.Client 的包装要显式设 DeliveryDispatch）。
-	DefaultDelivery = DeliveryBatch
-)
-
-// ParseDelivery 解析配置值 dispatch / batch（大小写不敏感）；空串是缺省 DefaultDelivery。
-func ParseDelivery(value string) (Delivery, error) {
-	switch d := Delivery(strings.ToLower(strings.TrimSpace(value))); d {
-	case "":
-		return DefaultDelivery, nil
-	case DeliveryDispatch:
-		return DeliveryDispatch, nil
-	case DeliveryBatch:
-		return DeliveryBatch, nil
-	default:
-		return "", fmt.Errorf("heartbeat: unknown delivery %q (want dispatch or batch)", value)
-	}
-}
 
 // Config 是 NewDriver 的输入。
 type Config struct {
@@ -124,145 +72,6 @@ type Config struct {
 
 // Lookup 只读内存里已发布的实体：不加载、不等待（ManagerAccess.Manager().Get）。
 type Lookup func(id int64) entity.IThreadSafeEntity
-
-// beat 是一格到期、核对通过、准备交给 Nest 的一拍。
-type beat struct {
-	reg *Reg
-}
-
-// deliverer 把一格到期的一批心跳一次交出。rejected 对每个没有准入的拍在驱动 goroutine 上同步调用一次（驱动按跳拍
-// 处理）；准入之后 Nest 才发现不能执行的拍经 Driver.handBack 交回（见 batchDeliverer）。
-type deliverer interface {
-	deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error))
-}
-
-// beatBatchSize 是一个 Nest 批量作业带的拍数（ssr 同为 64；按 D20 选项 C 压测定，见
-// docs/performance/NEST-BATCH-HEARTBEAT-20261021.md）。
-const beatBatchSize = 64
-
-// dispatchDeliverer 是单目标投递（DeliveryDispatch）：每拍一条 Dispatch，走 Nest 正式准入。batchDeliverer 用它投
-// Remote 托管实体的拍。
-type dispatchDeliverer struct{ client nest.Client }
-
-func (p dispatchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error)) {
-	for i, b := range batch {
-		if err := ctx.Err(); err != nil {
-			// 停止中：剩下的不再投，按准入失败处理（清在途）。
-			for _, rest := range batch[i:] {
-				rejected(rest, err)
-			}
-			return
-		}
-		if err := p.client.Dispatch(ctx, b.reg.handler, b.reg.host.id, b.reg.params); err != nil {
-			rejected(b, err)
-		}
-	}
-}
-
-// batchDeliverer（DeliveryBatch）按 beatBatchSize 个一批交给 Nest 批量作业（nest.NestMgr.DispatchTryBatch，设计见
-// docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：每拍仍在实体自己的 Guard 作用域与事务里执行；
-// 同 ID 有已准入未完成的消息时 Nest 当场把这一拍转成单目标作业排在它后面（不跳拍），只有准入被拒、目标不在内存等
-// 才交回（Driver.handBack，下一格开头按跳拍 / 丢弃处理）。Remote 托管实体的拍逐个单目标 Dispatch：它的写要在
-// I/O 池取得 Remote 写批次，批量作业不接受。只由驱动 goroutine 调用。
-type batchDeliverer struct {
-	single  dispatchDeliverer
-	batch   nest.TryBatchDispatcher
-	driver  *Driver
-	targets []nest.TryBatchTarget
-	pending []beat // 与 targets 一一对应，整批准入失败时逐拍 rejected
-	remote  []beat
-}
-
-func (p *batchDeliverer) deliverBatch(ctx context.Context, batch []beat, rejected func(beat, error)) {
-	p.targets, p.pending, p.remote = p.targets[:0], p.pending[:0], p.remote[:0]
-	flush := func() {
-		if len(p.targets) == 0 {
-			return
-		}
-		if err := ctx.Err(); err != nil {
-			for _, b := range p.pending {
-				rejected(b, err)
-			}
-		} else if err := p.batch.DispatchTryBatch(ctx, p.targets, p.driver.handBack); err != nil {
-			// 整批没有准入（引擎停止 / fence、ctx 取消）：逐拍按准入失败处理。
-			for _, b := range p.pending {
-				rejected(b, err)
-			}
-		}
-		clear(p.targets)
-		p.targets, p.pending = p.targets[:0], p.pending[:0]
-	}
-	for _, b := range batch {
-		if b.reg.host.remote != nil {
-			p.remote = append(p.remote, b)
-			continue
-		}
-		p.targets = append(p.targets, nest.TryBatchTarget{Handler: b.reg.handler, ID: b.reg.host.id, Params: b.reg.params})
-		p.pending = append(p.pending, b)
-		if len(p.targets) == beatBatchSize {
-			flush()
-		}
-	}
-	flush()
-	if len(p.remote) > 0 {
-		p.single.deliverBatch(ctx, p.remote, rejected)
-	}
-	clear(p.pending)
-	clear(p.remote)
-}
-
-// returnedBeat 是 Nest 批量作业交回的一拍（没有执行）与原因。
-type returnedBeat struct {
-	reg *Reg
-	err error
-}
-
-// handBack 是批量作业的交回回调：可能在 Nest worker 上调用，只把拍放进交回队列（一把短锁的追加），不改驱动状态；
-// 驱动在下一格开头处理（drainReturned）。在途标志保持到那时，这期间到期的同一登记照常按 inflight 跳拍。
-func (d *Driver) handBack(target nest.TryBatchTarget, err error) {
-	r, ok := target.Params[0].(*Reg)
-	if !ok || r == nil {
-		return
-	}
-	d.returnedMu.Lock()
-	d.returned = append(d.returned, returnedBeat{reg: r, err: err})
-	d.returnedMu.Unlock()
-}
-
-// drainReturned 处理交回队列：清在途；目标不在内存计 dropped{not_loaded}；其余按跳拍计数（queue_full / rejected）并
-// 限频 Warn。驱动停止中（ctx 已取消）只清在途。只由驱动 goroutine 调用。
-func (d *Driver) drainReturned(ctx context.Context) {
-	d.returnedMu.Lock()
-	returned := d.returned
-	d.returned = d.drained[:0]
-	d.returnedMu.Unlock()
-	for i, rb := range returned {
-		returned[i] = returnedBeat{}
-		r := rb.reg
-		r.inflight.Store(false)
-		switch {
-		case errors.Is(rb.err, nest.ErrEntityNotFound):
-			d.stats.dropNotLoaded.add(r.host.id)
-		case ctx.Err() != nil:
-		default:
-			d.skip(r, rb.err)
-		}
-	}
-	d.drained = returned[:0]
-}
-
-// skip 记一次因准入失败（含批量作业交回）跳过的拍：计数、限频 Warn。只由驱动 goroutine 调用。
-func (d *Driver) skip(r *Reg, err error) {
-	r.skipped.Add(1)
-	reason := "rejected"
-	if errors.Is(err, nest.ErrQueueFull) {
-		reason = "queue_full"
-		d.stats.skipQueueFull.add(r.host.id)
-	} else {
-		d.stats.skipRejected.add(r.host.id)
-	}
-	d.warn.noteErr(r, reason, err)
-}
 
 // Driver 是一个 Nest 引擎上的心跳驱动（进程里每个引擎一个），由 wiring/heartbeat 装配。
 type Driver struct {
@@ -291,7 +100,7 @@ type Driver struct {
 
 	// 以下只由驱动 goroutine（循环或测试直接调用 step / flush）读写。
 	due     []*Reg
-	batch   []beat
+	batch   []*beatTicket
 	flushed [numCounters]int64
 	warn    warnState
 	// sharedWarn 汇总上一条“共享模式停掉心跳”Warn 之后停掉的登记数，按 WarnInterval 限频。
@@ -400,19 +209,6 @@ func (d *Driver) Delivery() Delivery {
 	return d.config.Delivery
 }
 
-// newDelivererLocked 按配置的投递方式建投递层。调用方持有 d.mu。
-func (d *Driver) newDelivererLocked(client nest.Client) (deliverer, error) {
-	single := dispatchDeliverer{client: client}
-	if d.config.Delivery != DeliveryBatch {
-		return single, nil
-	}
-	batch, ok := client.(nest.TryBatchDispatcher)
-	if !ok {
-		return nil, fmt.Errorf("heartbeat: driver %s: delivery %q needs a nest client that implements nest.TryBatchDispatcher, got %T", d.config.Name, DeliveryBatch, client)
-	}
-	return &batchDeliverer{single: single, batch: batch, driver: d}, nil
-}
-
 // Start 启动驱动 goroutine。已经在运行时返回 nil。
 func (d *Driver) Start() error {
 	d.mu.Lock()
@@ -490,7 +286,8 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 //     （同 ID 另一个实例与还没发布都可能是暂时的，例如重载时新实例在旧实例离开之前构造，所以只丢这一拍、不撤销）；
 //   - Remote 托管实体的实例处于转移中 / 已隔离：本进程不是拥有方，不投；处于共享模式：照常投一拍，由 handler 在
 //     实体锁内停掉本登记（共享模式不允许挂载心跳，见 runBeat）；
-//   - 上一拍在途：跳拍（计数、限频 Warn）；在途超过 StallAfter（连续卡住时翻倍）：视为丢失，重投一次（计 stalled）。
+//   - 上一拍在途（投递槽不空闲，见 delivery.go）：跳拍（计数、限频 Warn）；在途超过 StallAfter（连续卡住时翻倍）：
+//     视为丢失，按同一代际重投一次（计 stalled）。槽空闲时分配新一代投出。
 func (d *Driver) step(ctx context.Context) {
 	d.mu.Lock()
 	d.due = d.ring.step(d.due[:0])
@@ -526,8 +323,10 @@ func (d *Driver) step(ctx context.Context) {
 			d.stats.dropNotOwner.add(h.id)
 			continue
 		}
-		if !r.inflight.Load() {
+		var ticket *beatTicket
+		if gen, inFlight := r.inFlight(); !inFlight {
 			r.stalls = 0
+			ticket = r.issue()
 		} else {
 			if frame-r.deliveredFrame < d.stallAfter<<r.stalls {
 				r.skipped.Add(1)
@@ -538,26 +337,24 @@ func (d *Driver) step(ctx context.Context) {
 			d.stats.stalled.add(h.id)
 			d.warn.note(r, "stalled")
 			r.stalls = min(r.stalls+1, maxStallBackoff)
+			ticket = newBeatTicket(r, gen) // 重投：同一代，与原拍至多一份执行
 		}
-		r.inflight.Store(true)
 		r.deliveredFrame = frame
-		d.batch = append(d.batch, beat{reg: r})
+		d.batch = append(d.batch, ticket)
 	}
 	if len(d.batch) == 0 || deliver == nil {
-		for _, b := range d.batch {
-			b.reg.inflight.Store(false)
+		for _, t := range d.batch {
+			t.reg.settle(t.gen)
 		}
+		clear(d.batch)
 		return
 	}
 	admitted := int64(len(d.batch))
-	deliver.deliverBatch(ctx, d.batch, func(b beat, err error) {
+	deliver.deliverBatch(ctx, d.batch, func(t *beatTicket, err error) {
 		admitted--
-		b.reg.inflight.Store(false)
-		if ctx.Err() != nil {
-			return // 驱动停止中：不算跳拍
-		}
-		d.skip(b.reg, err)
+		d.refused(ctx, t, err) // 驱动停止中只结算、不算跳拍
 	})
+	clear(d.batch)
 	d.stats.delivered.addN(admitted)
 	// 准入前就能判定的交回（例如 ID 非法）在 DispatchTryBatch 里同步发生，本格处理掉。
 	d.drainReturned(ctx)
@@ -625,173 +422,4 @@ func (d *Driver) Registered() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.ring.count
-}
-
-// --- 计数、指标与限频 Warn ---
-
-const (
-	cDelivered = iota
-	cExecuted
-	cSkipInflight
-	cSkipQueueFull
-	cSkipRejected
-	cStalled
-	cDropRemoved
-	cDropStale
-	cDropNotLoaded
-	cDropStopped
-	cDropNotOwner
-	cDropDuplicate
-	cStoppedShared
-	numCounters
-)
-
-// stripedCounter 按实体 ID 分 16 片累加：回调侧计数由全部 worker 并发写，一个原子量会成为热点。
-type stripedCounter [16]struct {
-	n atomic.Int64
-	_ [56]byte
-}
-
-func (c *stripedCounter) add(id int64) { c[uint64(id)%16].n.Add(1) }
-func (c *stripedCounter) addN(n int64) { c[0].n.Add(n) }
-func (c *stripedCounter) load() (sum int64) {
-	for i := range c {
-		sum += c[i].n.Load()
-	}
-	return sum
-}
-
-type driverStats struct {
-	delivered, executed                       stripedCounter
-	skipInflight, skipQueueFull, skipRejected stripedCounter
-	stalled                                   stripedCounter
-	dropRemoved, dropStale, dropNotLoaded     stripedCounter
-	dropStopped, dropNotOwner, dropDuplicate  stripedCounter
-	stoppedShared                             stripedCounter
-}
-
-func (s *driverStats) counters() *[numCounters]*stripedCounter {
-	return &[numCounters]*stripedCounter{
-		cDelivered: &s.delivered, cExecuted: &s.executed,
-		cSkipInflight: &s.skipInflight, cSkipQueueFull: &s.skipQueueFull, cSkipRejected: &s.skipRejected,
-		cStalled:     &s.stalled,
-		cDropRemoved: &s.dropRemoved, cDropStale: &s.dropStale, cDropNotLoaded: &s.dropNotLoaded,
-		cDropStopped: &s.dropStopped, cDropNotOwner: &s.dropNotOwner, cDropDuplicate: &s.dropDuplicate,
-		cStoppedShared: &s.stoppedShared,
-	}
-}
-
-func (d *Driver) count(c *stripedCounter, id int64) { c.add(id) }
-
-// Stats 是驱动计数的快照（测试与诊断用；运维看 metrics）。
-type Stats struct {
-	Delivered, Executed                                int64
-	SkippedInflight, SkippedQueueFull, SkippedRejected int64
-	Stalled                                            int64
-	DroppedRemoved, DroppedStale, DroppedNotLoaded     int64
-	DroppedStopped, DroppedNotOwner, DroppedDuplicate  int64
-	StoppedShared                                      int64
-	Registered                                         int
-}
-
-// Stats 返回计数快照。
-func (d *Driver) Stats() Stats {
-	s := &d.stats
-	return Stats{
-		Delivered: s.delivered.load(), Executed: s.executed.load(),
-		SkippedInflight: s.skipInflight.load(), SkippedQueueFull: s.skipQueueFull.load(), SkippedRejected: s.skipRejected.load(),
-		Stalled:        s.stalled.load(),
-		DroppedRemoved: s.dropRemoved.load(), DroppedStale: s.dropStale.load(), DroppedNotLoaded: s.dropNotLoaded.load(),
-		DroppedStopped: s.dropStopped.load(), DroppedNotOwner: s.dropNotOwner.load(), DroppedDuplicate: s.dropDuplicate.load(),
-		StoppedShared: s.stoppedShared.load(),
-		Registered:    d.Registered(),
-	}
-}
-
-// flush 把计数增量写进 metrics 注册表，并按 WarnInterval 打一条汇总 Warn。只由驱动 goroutine 调用；sysNow 是系统时间。
-func (d *Driver) flush(sysNow time.Time) {
-	counters := d.stats.counters()
-	var delta [numCounters]int64
-	for i, c := range counters {
-		v := c.load()
-		delta[i] = v - d.flushed[i]
-		d.flushed[i] = v
-	}
-	name := d.config.Name
-	incCounter(DeliveredMetric, metrics.Labels{"driver": name}, delta[cDelivered])
-	incCounter(ExecutedMetric, metrics.Labels{"driver": name}, delta[cExecuted])
-	incCounter(SkippedMetric, metrics.Labels{"driver": name, "reason": "inflight"}, delta[cSkipInflight])
-	incCounter(SkippedMetric, metrics.Labels{"driver": name, "reason": "queue_full"}, delta[cSkipQueueFull])
-	incCounter(SkippedMetric, metrics.Labels{"driver": name, "reason": "rejected"}, delta[cSkipRejected])
-	incCounter(StalledMetric, metrics.Labels{"driver": name}, delta[cStalled])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "removed"}, delta[cDropRemoved])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "stale"}, delta[cDropStale])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "not_loaded"}, delta[cDropNotLoaded])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "stopped"}, delta[cDropStopped])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "not_owner"}, delta[cDropNotOwner])
-	incCounter(DroppedMetric, metrics.Labels{"driver": name, "reason": "duplicate"}, delta[cDropDuplicate])
-	incCounter(StoppedMetric, metrics.Labels{"driver": name, "reason": "remote_shared"}, delta[cStoppedShared])
-	metrics.SetGauge(RegisteredMetric, metrics.Labels{"driver": name}, int64(d.Registered()))
-	d.warn.emit(d.config.Logger, name, d.config.WarnInterval, sysNow)
-	d.emitSharedWarn(delta[cStoppedShared], sysNow)
-}
-
-// emitSharedWarn 为共享模式停掉的登记打 Warn，按 WarnInterval 限频：间隔内只累计，下一条汇总个数并带一个样本。
-func (d *Driver) emitSharedWarn(stopped int64, now time.Time) {
-	w := &d.sharedWarn
-	w.pending += stopped
-	if w.pending == 0 || (!w.last.IsZero() && now.Sub(w.last) < d.config.WarnInterval) {
-		return
-	}
-	args := []any{"driver", d.config.Name, "stopped_since_last_warn", w.pending}
-	if r := d.sharedSample.Swap(nil); r != nil {
-		args = append(args, "sample_entity", r.host.id, "sample_registration", r.name)
-	}
-	d.config.Logger.Warn("heartbeat: registrations stopped because their Remote entity entered shared mode; "+
-		"heartbeats are not allowed in shared mode, drive the periodic logic from business code instead", args...)
-	w.last, w.pending = now, 0
-}
-
-// incCounter 只写非零增量（flush 每秒对每个原因各调一次，大多是零）。
-func incCounter(name string, labels metrics.Labels, delta int64) {
-	if delta > 0 {
-		metrics.IncCounter(name, labels, delta)
-	}
-}
-
-// warnState 汇总上一条 Warn 之后的跳拍 / 卡住，按间隔打一条。只由驱动 goroutine 读写。
-type warnState struct {
-	last    time.Time
-	pending map[string]int64
-	sample  *Reg
-	reason  string
-	err     error
-}
-
-func (w *warnState) note(r *Reg, reason string) {
-	if w.pending == nil {
-		w.pending = make(map[string]int64)
-	}
-	w.pending[reason]++
-	w.sample, w.reason = r, reason
-}
-
-func (w *warnState) noteErr(r *Reg, reason string, err error) {
-	w.note(r, reason)
-	w.err = err
-}
-
-func (w *warnState) emit(logger *slog.Logger, driver string, interval time.Duration, now time.Time) {
-	if len(w.pending) == 0 || (!w.last.IsZero() && now.Sub(w.last) < interval) {
-		return
-	}
-	args := []any{"driver", driver, "since_last_warn", w.pending, "sample_entity", w.sample.host.id,
-		"sample_registration", w.sample.name, "sample_reason", w.reason}
-	if w.err != nil {
-		args = append(args, "sample_err", w.err)
-	}
-	logger.Warn("heartbeat: beats skipped (previous beat still in flight, admission refused, or presumed lost); "+
-		"the entity's worker is falling behind or a callback is slow", args...)
-	w.last = now
-	w.pending, w.sample, w.err = nil, nil, nil
 }

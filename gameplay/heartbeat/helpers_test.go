@@ -107,6 +107,7 @@ type fakeClient struct {
 type sentBeat struct {
 	frame   int64
 	reg     *Reg
+	params  nest.Params // 消息参数原样保留：执行、交回都用它，像 Nest 一样只认消息里带的投递身份
 	handler string
 }
 
@@ -120,11 +121,11 @@ func (c *fakeClient) Dispatch(ctx context.Context, name nest.HandlerName, id int
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r := params[0].(*Reg)
+	r := params[0].(*beatTicket).reg
 	if r.host.id != id {
 		panic("dispatch id does not match the registration's entity")
 	}
-	c.sent = append(c.sent, sentBeat{frame: r.host.driver.frame(), reg: r, handler: name.String()})
+	c.sent = append(c.sent, sentBeat{frame: r.host.driver.frame(), reg: r, params: params, handler: name.String()})
 	return c.err
 }
 
@@ -165,9 +166,20 @@ func newTestDriver(t testing.TB, logger *slog.Logger) (*Driver, *fakeClient, *fa
 // execute 像 Nest 一样在“实体锁”内执行一拍（不经 Nest：无事务，回调侧记录不随回滚）。
 func execute(t testing.TB, b sentBeat) {
 	t.Helper()
-	if err := b.reg.host.driver.runBeat(b.reg.host.owner, b.reg); err != nil {
+	if err := b.reg.host.driver.runBeat(b.reg.host.owner, b.params[0].(*beatTicket)); err != nil {
 		t.Fatalf("beat: %v", err)
 	}
+}
+
+// handBackBeat 像 Nest 批量作业那样把一拍交回（没有执行）：只进交回队列，驱动在下一格开头处理。
+func handBackBeat(b sentBeat, err error) {
+	b.reg.host.driver.handBack(nest.TryBatchTarget{ID: b.reg.host.id, Params: b.params}, err)
+}
+
+// inFlight 报告登记是否有一拍在途（已投出、还没执行完或交回）。
+func inFlight(r *Reg) bool {
+	_, ok := r.inFlight()
+	return ok
 }
 
 // countingHandler 数 Warn 记录。
@@ -232,11 +244,11 @@ func (c *fakeClient) DispatchTryBatch(ctx context.Context, targets []nest.TryBat
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, target := range targets {
-		r := target.Params[0].(*Reg)
+		r := target.Params[0].(*beatTicket).reg
 		if r.host.id != target.ID {
 			panic("try-batch target id does not match the registration's entity")
 		}
-		c.sent = append(c.sent, sentBeat{frame: r.host.driver.frame(), reg: r, handler: target.Handler.String()})
+		c.sent = append(c.sent, sentBeat{frame: r.host.driver.frame(), reg: r, params: target.Params, handler: target.Handler.String()})
 	}
 	return c.err
 }

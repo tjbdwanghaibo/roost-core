@@ -136,8 +136,9 @@ func TestInflightBeatSkipsCountsAndWarnsAtALimitedRate(t *testing.T) {
 		}
 		// 执行完之后下一个到期格照常投递一次。
 		stepN(d, 5)
-		if got := client.take(); len(got) != 1 {
-			t.Fatalf("delivered %d after the in-flight beat ran, want 1", len(got))
+		pending := client.take()
+		if len(pending) != 1 {
+			t.Fatalf("delivered %d after the in-flight beat ran, want 1", len(pending))
 		}
 
 		// 准入失败：清在途、计 queue_full，每个周期至多投一次、不在本格重试。
@@ -147,13 +148,13 @@ func TestInflightBeatSkipsCountsAndWarnsAtALimitedRate(t *testing.T) {
 			// 上一拍还在途（上面投出的没执行）：先执行掉它。
 			t.Fatalf("unexpected deliveries %d while a beat is in flight", len(got))
 		}
-		r.inflight.Store(false)
+		execute(t, pending[0])
 		stepN(d, 5*4)
 		if got := client.take(); len(got) != 4 {
 			t.Fatalf("refused admissions per 4 periods = %d, want 4 (one per period, no retries)", len(got))
 		}
-		if st := d.Stats(); st.SkippedQueueFull != 4 || r.inflight.Load() {
-			t.Fatalf("after refused admissions: stats %+v inflight %v", st, r.inflight.Load())
+		if st := d.Stats(); st.SkippedQueueFull != 4 || inFlight(r) {
+			t.Fatalf("after refused admissions: stats %+v inflight %v", st, inFlight(r))
 		}
 	})
 }
@@ -169,10 +170,12 @@ func TestStalledBeatIsRedeliveredAndRunsOnce(t *testing.T) {
 		r.Start()
 		// 每秒一个到期格；记下每次投递发生在第几秒。
 		var at []int
+		var copies []sentBeat
 		for sec := 1; sec <= 80; sec++ {
 			stepN(d, 100)
-			for range client.take() {
+			for _, b := range client.take() {
 				at = append(at, sec)
+				copies = append(copies, b)
 			}
 		}
 		// 首投在第 1 秒；一直不执行：10s 后重投，之后 20s、40s（翻倍），再之后上限 80s。
@@ -183,8 +186,8 @@ func TestStalledBeatIsRedeliveredAndRunsOnce(t *testing.T) {
 			t.Fatalf("stats %+v", st)
 		}
 		// 积压的几份消息先后执行：只有第一份执行回调。
-		for range at {
-			_ = d.runBeat(e, r)
+		for _, b := range copies {
+			execute(t, b)
 		}
 		if runs != 1 || d.Stats().DroppedDuplicate != int64(len(at)-1) {
 			t.Fatalf("callback ran %d times (stats %+v), want once", runs, d.Stats())
@@ -199,6 +202,251 @@ func TestStalledBeatIsRedeliveredAndRunsOnce(t *testing.T) {
 		}
 		if fmt.Sprint(at) != "[1 11]" {
 			t.Fatalf("after a beat ran, deliveries at %v, want [1 11]", at)
+		}
+	})
+}
+
+// staleCopy 构造“同一拍有两份消息”的局面：首投 original 一直不执行，超过卡住阈值后重投 retry（同一拍的第二份），
+// 然后 original 执行。返回时 retry 仍在“队列”里，登记没有在途的拍。周期 100ms（10 格），阈值 10s（1000 格）。
+func staleCopy(t *testing.T, d *Driver, client *fakeClient, r *Reg) (retry sentBeat) {
+	t.Helper()
+	stepN(d, 10)
+	original := client.take()
+	if len(original) != 1 {
+		t.Fatalf("first delivery: %d beats, want 1", len(original))
+	}
+	stepN(d, 1000)
+	copies := client.take()
+	if len(copies) != 1 || d.Stats().Stalled != 1 {
+		t.Fatalf("redelivery after the stall threshold: %d beats, stats %+v; want 1 stalled", len(copies), d.Stats())
+	}
+	execute(t, original[0])
+	if inFlight(r) {
+		t.Fatal("a registration whose beat ran still has a beat in flight")
+	}
+	return copies[0]
+}
+
+// 旧重投落在下一拍之后（RV-20261022-02）：驱动投出原拍 → 超过兜底阈值重投 → 原拍执行 → 驱动投出下一拍 → 队列里的旧
+// 重投执行。旧重投属于已经结算的那一次投递，必须按过期丢弃：不执行回调，也不能结算下一拍（下一拍仍在途、之后照常执行）。
+func TestAStaleRedeliveryDoesNotConsumeTheNextBeat(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9901, kindShort)
+		live.Store(e.ID(), e)
+		var beats []Beat
+		r, err := e.host.Register("move", 100*time.Millisecond, func(b Beat) error { beats = append(beats, b); return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Start(); err != nil {
+			t.Fatal(err)
+		}
+		retry := staleCopy(t, d, client, r)
+		stepN(d, 10)
+		next := client.take()
+		if len(next) != 1 {
+			t.Fatalf("next beat: %d deliveries, want 1", len(next))
+		}
+		execute(t, retry)
+		if len(beats) != 1 || !inFlight(r) {
+			t.Fatalf("stale redelivery executed: callbacks=%d, next beat in flight=%v; want 1, true", len(beats), inFlight(r))
+		}
+		if st := d.Stats(); st.DroppedDuplicate != 1 || st.Executed != 1 {
+			t.Fatalf("stats %+v: the stale copy is dropped as duplicate", st)
+		}
+		// 下一拍还在途：到期的格照常按 inflight 跳过，不会投出第二拍。
+		stepN(d, 10)
+		if got := client.take(); len(got) != 0 {
+			t.Fatalf("%d more beats delivered while the next beat was in flight", len(got))
+		}
+		execute(t, next[0])
+		if len(beats) != 2 || beats[1].First || beats[1].Skipped != 1 || inFlight(r) {
+			t.Fatalf("next beat = %+v, in flight %v; want the second callback, not first, one skip", beats, inFlight(r))
+		}
+	})
+}
+
+// 停止后重启：原拍执行后 Stop、Start，重启后的第一拍已投出；之前那次投递的旧重投晚到，不能冒充重启后的第一拍
+// （First 属于重启后真正的第一拍），也不能结算它。
+func TestAStaleRedeliveryAfterARestartDoesNotTakeTheFirstBeat(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9902, kindShort)
+		live.Store(e.ID(), e)
+		var beats []Beat
+		r, _ := e.host.Register("move", 100*time.Millisecond, func(b Beat) error { beats = append(beats, b); return nil })
+		r.Start()
+		retry := staleCopy(t, d, client, r)
+		r.Stop()
+		stepN(d, 10)
+		if got := client.take(); len(got) != 0 {
+			t.Fatalf("%d beats delivered while stopped", len(got))
+		}
+		if err := r.Start(); err != nil {
+			t.Fatal(err)
+		}
+		stepN(d, 10)
+		first := client.take()
+		if len(first) != 1 {
+			t.Fatalf("first beat after the restart: %d deliveries, want 1", len(first))
+		}
+		execute(t, retry)
+		if len(beats) != 1 || !inFlight(r) {
+			t.Fatalf("stale redelivery executed after a restart: callbacks=%d (%+v), first beat in flight=%v; want 1, true", len(beats), beats, inFlight(r))
+		}
+		execute(t, first[0])
+		if len(beats) != 2 || !beats[1].First || inFlight(r) {
+			t.Fatalf("beats %+v, in flight %v: the restart's own first beat must run as First", beats, inFlight(r))
+		}
+	})
+}
+
+// 批量投递的异步交回（HandBack）：交回只结算它自己那一次投递。旧重投在下一拍投出之后才被交回时，不能清掉下一拍的
+// 在途、不能计跳拍；旧重投在原拍正在执行时被交回，同样不能让驱动在执行期间投出第二拍。
+func TestAStaleHandBackDoesNotSettleAnotherBeat(t *testing.T) {
+	useDelivery(t, DeliveryBatch)
+	t.Run("after the next beat", func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9903, kindShort)
+		live.Store(e.ID(), e)
+		runs := 0
+		r, _ := e.host.Register("move", 100*time.Millisecond, func(Beat) error { runs++; return nil })
+		r.Start()
+		retry := staleCopy(t, d, client, r)
+		stepN(d, 10)
+		next := client.take()
+		if len(next) != 1 {
+			t.Fatalf("next beat: %d deliveries, want 1", len(next))
+		}
+		handBackBeat(retry, nest.ErrQueueFull)
+		stepN(d, 10)
+		if got := client.take(); len(got) != 0 || !inFlight(r) {
+			t.Fatalf("after a stale hand-back: %d more beats delivered, next beat in flight=%v; want 0, true", len(got), inFlight(r))
+		}
+		if st := d.Stats(); st.SkippedQueueFull != 0 || st.DroppedDuplicate != 1 {
+			t.Fatalf("stats %+v: a stale hand-back is not a skipped beat", st)
+		}
+		execute(t, next[0])
+		if runs != 2 || inFlight(r) {
+			t.Fatalf("runs %d in flight %v after the next beat ran", runs, inFlight(r))
+		}
+	})
+	// Nest 在组内 Fence 之后把尚未开始的目标以 ErrNestFenced 交回（RV-20261022-01 修复后）：交回只结算它自己那一代，
+	// 计 rejected；同一代已被执行结算后才到的 Fence 交回什么都不改。
+	t.Run("fenced hand-back", func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9906, kindShort)
+		live.Store(e.ID(), e)
+		runs := 0
+		r, _ := e.host.Register("move", 100*time.Millisecond, func(Beat) error { runs++; return nil })
+		r.Start()
+		stepN(d, 10)
+		first := client.take()
+		if len(first) != 1 {
+			t.Fatalf("first beat: %d deliveries, want 1", len(first))
+		}
+		handBackBeat(first[0], nest.ErrNestFenced)
+		stepN(d, 1)
+		if st := d.Stats(); st.SkippedRejected != 1 || inFlight(r) {
+			t.Fatalf("stats %+v in flight %v: a fenced hand-back of the beat in flight settles it as rejected", st, inFlight(r))
+		}
+		stepN(d, 9)
+		second := client.take()
+		if len(second) != 1 {
+			t.Fatalf("beat after the fenced hand-back: %d deliveries, want 1", len(second))
+		}
+		execute(t, second[0])
+		stepN(d, 10)
+		third := client.take()
+		if len(third) != 1 {
+			t.Fatalf("third beat: %d deliveries, want 1", len(third))
+		}
+		handBackBeat(second[0], nest.ErrNestFenced) // 已执行那一代的迟到交回
+		stepN(d, 1)
+		if st := d.Stats(); st.SkippedRejected != 1 || st.DroppedDuplicate != 1 || !inFlight(r) {
+			t.Fatalf("stats %+v in flight %v: a late fenced hand-back of a settled generation changes nothing", st, inFlight(r))
+		}
+		execute(t, third[0])
+		if runs != 2 || inFlight(r) {
+			t.Fatalf("runs %d in flight %v", runs, inFlight(r))
+		}
+	})
+	t.Run("while the beat runs", func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9904, kindShort)
+		live.Store(e.ID(), e)
+		var during func()
+		runs := 0
+		r, _ := e.host.Register("move", 100*time.Millisecond, func(Beat) error {
+			runs++
+			if during != nil {
+				during()
+			}
+			return nil
+		})
+		r.Start()
+		stepN(d, 10)
+		original := client.take()
+		stepN(d, 1000)
+		retry := client.take()
+		if len(original) != 1 || len(retry) != 1 {
+			t.Fatalf("deliveries %d / %d, want 1 / 1", len(original), len(retry))
+		}
+		delivered := -1
+		during = func() {
+			// 原拍正在执行（实体锁内）时，同一拍的重投被 Nest 交回，驱动推进一个周期。
+			handBackBeat(retry[0], nest.ErrQueueFull)
+			stepN(d, 10)
+			delivered = len(client.take())
+		}
+		execute(t, original[0])
+		if runs != 1 || delivered != 0 {
+			t.Fatalf("runs %d, %d beats delivered while the beat was running; want 1, 0", runs, delivered)
+		}
+		if st := d.Stats(); st.SkippedQueueFull != 0 || inFlight(r) {
+			t.Fatalf("stats %+v in flight %v: the hand-back of a copy whose beat is running settles nothing", st, inFlight(r))
+		}
+	})
+}
+
+// Reg.Close：旧登记投出的拍（原拍与重投）晚到时按过期丢弃，不碰同名新登记的在途与 First。守护用例：当前实现下
+// Close 后的旧拍走“登记已 Close”分支，修复前也是绿的。
+func TestQueuedBeatsOfAClosedRegistrationDoNotTouchItsSuccessor(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 9905, kindShort)
+		live.Store(e.ID(), e)
+		oldRuns := 0
+		old, _ := e.host.Register("ai", 100*time.Millisecond, func(Beat) error { oldRuns++; return nil })
+		old.Start()
+		stepN(d, 10)
+		original := client.take()
+		stepN(d, 1000)
+		retry := client.take()
+		if len(original) != 1 || len(retry) != 1 {
+			t.Fatalf("deliveries %d / %d, want 1 / 1", len(original), len(retry))
+		}
+		old.Close()
+		var beats []Beat
+		succ, err := e.host.Register("ai", 100*time.Millisecond, func(b Beat) error { beats = append(beats, b); return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		succ.Start()
+		stepN(d, 10)
+		first := client.take()
+		if len(first) != 1 || first[0].reg != succ {
+			t.Fatalf("successor's first beat: %d deliveries", len(first))
+		}
+		execute(t, original[0])
+		execute(t, retry[0])
+		if oldRuns != 0 || len(beats) != 0 || !inFlight(succ) {
+			t.Fatalf("closed registration ran %d times, successor %d, successor in flight %v; want 0, 0, true", oldRuns, len(beats), inFlight(succ))
+		}
+		execute(t, first[0])
+		if len(beats) != 1 || !beats[0].First || inFlight(succ) {
+			t.Fatalf("successor beats %+v in flight %v", beats, inFlight(succ))
 		}
 	})
 }
@@ -346,7 +594,7 @@ func TestInstanceChecksDropStaleBeats(t *testing.T) {
 		nr, _ := newE.host.Register("x", 50*time.Millisecond, func(Beat) error { newRuns++; return nil })
 		nr.Start()
 		// 旧实例的在途拍到达新实例：不执行任何回调。
-		if err := d.runBeat(newE, inFlight[0].reg); err != nil {
+		if err := d.runBeat(newE, inFlight[0].params[0].(*beatTicket)); err != nil {
 			t.Fatal(err)
 		}
 		if oldRuns != 0 || newRuns != 0 || d.Stats().DroppedStale != 1 {
@@ -410,7 +658,7 @@ func TestStopWaitsForTheBatchAndDispatchesNothingAfter(t *testing.T) {
 		after := len(client.take())
 		inflight := 0
 		for _, r := range regs {
-			if r.inflight.Load() {
+			if inFlight(r) {
 				inflight++
 			}
 		}
@@ -566,8 +814,9 @@ func TestDeliveryIsChosenOnceBeforeStart(t *testing.T) {
 	}
 }
 
-// 慢派发 trace 在 handler 执行期间对实现了 fmt.GoStringer 的参数（*Reg）调用 GoString：只能读构造后不变的字段，不能
-// 与回调对在途 / 跳拍计数的原子写竞争。红在 -race 下：去掉 Reg.GoString 时 %#v 按反射打印，本用例报数据竞争。
+// 慢派发 trace 在 handler 执行期间对实现了 fmt.GoStringer 的参数（拍的投递凭据）调用 GoString：凭据与登记都只能读
+// 构造后不变的字段，不能与回调、驱动对投递槽 / 跳拍计数的原子写竞争。红在 -race 下：去掉 GoString 时 %#v 按反射
+// 打印，本用例报数据竞争。
 func TestRegFormatsWithoutReadingMutableState(t *testing.T) {
 	d, _, _, _ := newTestDriver(t, discard)
 	e := newHBEntity(t, d, 9100, kindShort)
@@ -575,17 +824,23 @@ func TestRegFormatsWithoutReadingMutableState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ticket := newBeatTicket(r, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for range 1000 {
-			r.inflight.Store(true)
+			r.delivery.Store(deliveredState(1))
+			r.claim(1)
+			r.finish(1)
 			r.skipped.Add(1)
 		}
 	}()
 	for range 1000 {
 		if got := fmt.Sprintf("%#v", r); !strings.Contains(got, `"fmt"`) {
 			t.Fatalf("%%#v of a registration = %s", got)
+		}
+		if got := fmt.Sprintf("%#v", ticket.nestParams()[0]); !strings.Contains(got, `"fmt"`) || !strings.Contains(got, "generation:1") {
+			t.Fatalf("%%#v of a beat ticket = %s", got)
 		}
 	}
 	<-done

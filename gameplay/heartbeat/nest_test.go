@@ -77,7 +77,7 @@ func (f *nestFixture) settle(regs ...*Reg) {
 	f.t.Helper()
 	waitFor(f.t, "delivered beats to run", func() bool {
 		for _, r := range regs {
-			if r.inflight.Load() {
+			if inFlight(r) {
 				return false
 			}
 		}
@@ -634,8 +634,8 @@ func TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses(t *testing.T) {
 	f.step(1) // 下一格开头处理交回
 	f.driver.flush(time.Now())
 	st := f.driver.Stats()
-	if st.SkippedQueueFull != 1 || r.inflight.Load() || logs.count() == 0 {
-		t.Fatalf("stats %+v inflight=%v warns=%d: a refused conversion is a skipped beat (queue_full, Warn)", st, r.inflight.Load(), logs.count())
+	if st.SkippedQueueFull != 1 || inFlight(r) || logs.count() == 0 {
+		t.Fatalf("stats %+v inflight=%v warns=%d: a refused conversion is a skipped beat (queue_full, Warn)", st, inFlight(r), logs.count())
 	}
 	release()
 	f.idle()
@@ -686,8 +686,8 @@ func TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad(t *testing.T) {
 	})
 	f.step(1)
 	st := f.driver.Stats()
-	if runs.Load() != 0 || st.DroppedNotLoaded != 1 || st.SkippedRejected+st.SkippedQueueFull != 0 || r.inflight.Load() {
-		t.Fatalf("runs %d stats %+v inflight=%v: an unloaded instance's beat is dropped as not_loaded", runs.Load(), st, r.inflight.Load())
+	if runs.Load() != 0 || st.DroppedNotLoaded != 1 || st.SkippedRejected+st.SkippedQueueFull != 0 || inFlight(r) {
+		t.Fatalf("runs %d stats %+v inflight=%v: an unloaded instance's beat is dropped as not_loaded", runs.Load(), st, inFlight(r))
 	}
 }
 
