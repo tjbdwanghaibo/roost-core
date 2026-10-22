@@ -243,7 +243,7 @@ func TestEnterAndLeaveFollowTheTransaction(t *testing.T) {
 	}
 }
 
-// 朝向和位置一样是 MapBasic 的数据（维护者 2026-10-22）：只改朝向也算变过，Save 与周期落库把新朝向交给保存回调；
+// 朝向和位置一样是 MapBasic 的数据：只改朝向也算变过，Save 与周期落库把新朝向交给保存回调；
 // 回滚的朝向修改连同“变过”一起撤销——朝向回到原值、不发布，之后的 Save 没有可写的东西。
 func TestFacingIsSavedAndRolledBackLikeThePosition(t *testing.T) {
 	f := newNestFixture(t, 1000)
@@ -438,7 +438,7 @@ func TestFollowActionEndsWhenTheTargetIsUnloaded(t *testing.T) {
 	}
 }
 
-// Start 即完成（D21 A7）：已经在终点的 MoveTo、找不到目标的 Follow、目标已在 Keep 以内且 StopWhenReached 的 Follow，
+// Start 即完成：已经在终点的 MoveTo、找不到目标的 Follow、目标已在 Keep 以内且 StopWhenReached 的 Follow，
 // 在发起它的 handler 里就结束（OnEnded 在同一事务里），不挂心跳、Move 不处于移动中。
 func TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat(t *testing.T) {
 	f := newNestFixture(t, 1000)
@@ -483,7 +483,7 @@ func TestAMoveThatIsAlreadySettledEndsInStartWithoutAHeartbeat(t *testing.T) {
 	}
 }
 
-// 冻结移动组（D21 A5，经真实心跳）：暂停时这个组的心跳停掉（驱动上没有登记）、位置不再变；解冻后重新挂上并走到
+// 冻结移动组（经真实心跳）：暂停时这个组的心跳停掉（驱动上没有登记）、位置不再变；解冻后重新挂上并走到
 // 终点；打断模式取消在途移动（取消状态、原因 action group frozen），Move 停下、心跳停掉。
 func TestFreezingTheMoveGroupPausesOrInterruptsTheMove(t *testing.T) {
 	f := newNestFixture(t, 1000)

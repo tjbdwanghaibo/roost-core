@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultMovePeriod 是移动动作缺省的 tick 周期（5Hz）：MoveTo / Follow 由实体的 ActionRunner 按它挂心跳。取 MMO / SLG
-// 常见的 2～5Hz 的上端（维护者 2026-10-22；原 100ms）；要更细的（动作游戏）在 MoveToParam / FollowParam.Period 里给。
+// 常见的 2～5Hz 的上端；要更细的（动作游戏）在 MoveToParam / FollowParam.Period 里给。
 const DefaultMovePeriod = 200 * time.Millisecond
 
 // StopReason 是一次移动结束的原因；0 表示还在移动。
@@ -113,7 +113,7 @@ type moveState struct {
 }
 
 // Move 是实体的移动组件，被动：只提供设定与推进的接口，自己不挂心跳。推进由动作驱动（参考 ssr：action 挂心跳、
-// 在心跳里调 move）——MoveTo / Follow 动作在实体 ActionRunner 的心跳里每拍调一次 Advance（维护者 2026-10-21：所有
+// 在心跳里调 move）——MoveTo / Follow 动作在实体 ActionRunner 的心跳里每拍调一次 Advance（所有
 // 控制实体行为的逻辑都经 action，不绕过动作直接驱动组件）。方法只能在实体锁内调用。
 type Move struct {
 	mb      *MapBasic

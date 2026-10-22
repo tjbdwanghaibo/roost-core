@@ -1,13 +1,13 @@
-// Package movement 是实体在地图上的位置与移动（DESIGN-TODO D20 第 2 期）：
+// Package movement 是实体在地图上的位置与移动（实现说明见 impl/10-time §2C）：
 //
 //   - MapBasic：所在场景、位置、朝向，以及与 AOI 的接线——进场景 Enter，位置变化 QueueMove（事务内入队、走提交门，
 //     回滚的移动不生效），离开 Leave；落库由业务选（周期 / 离开场景时，经 MapConfig.Save）。
 //   - Move：速度、路径或跟随目标、状态；被动组件，只提供设定与推进接口（MoveTo / Follow / Advance / Stop），
 //     自己不挂心跳。
 //   - MoveTo / Follow 两个 actionflow 动作：移动由动作驱动（参考 ssr：action 挂心跳、在心跳里调 move）。动作所在组
-//     由实体的 actionflow.BeatRunner 挂心跳（缺省 100ms），每拍 Tick 调 Move.Advance(Beat.Elapsed)（不追帧），
-//     到达、被打断、被阻挡、目标消失由 actionflow 收尾（RegisterActions）。所有控制实体行为的逻辑都经动作，不绕过
-//     动作直接驱动组件（维护者 2026-10-21）。
+//     由实体的 actionflow.BeatRunner 挂心跳（周期取动作的 TickInterval，缺省 DefaultMovePeriod），每拍 Tick 调
+//     Move.Advance(Beat.Elapsed)（不追帧），到达、被打断、被阻挡、目标消失由 actionflow 收尾（RegisterActions）。
+//     所有控制实体行为的逻辑都经动作，不绕过动作直接驱动组件。
 //
 // 三者都只在实体锁内调用（Nest handler、心跳回调，或加载 / 新建的初始化阶段），只做内存计算与入队，不阻塞、不做
 // I/O。状态的权威在业务实体的 DAO（Fields）：组件不另存一份位置；Move 自己的推进状态（亚格精度的位置、路径进度）
@@ -56,7 +56,7 @@ func FacingOf(dx, dy float64) Facing {
 }
 
 // Fields 是 MapBasic 的状态所在：业务实体 DAO 的字段。场景 ID 是否持久由业务定；位置与朝向应声明为 nopersist、
-// 参与同步（D20 决定 ⑮：位置不每拍落库，按周期或离开场景时经 MapConfig.Save 落库一次；朝向同一规则）。
+// 参与同步（位置不每拍落库，按周期或离开场景时经 MapConfig.Save 落库一次；朝向同一规则）。
 //
 // 实现写 DAO 并标同步脏；生成的 setter 在事务里登记逆操作，回滚随 DAO 恢复。只在实体锁内调用。
 type Fields interface {

@@ -55,7 +55,7 @@ func transition(t *testing.T, e *remoteMover, states ...entity.RemoteOwnershipSt
 	}
 }
 
-// Remote 托管实体的共享模式不允许挂心跳（维护者 2026-10-21）：
+// Remote 托管实体的共享模式不允许挂心跳：
 //   - 共享期间带周期落库的进场景返回 ErrHeartbeatRemoteShared，什么都不改；
 //   - 共享期间启动需要周期 tick 的动作（MoveTo）：组的心跳挂不上，动作以失败结束、它的移动被停掉；
 //   - 运行中进入共享模式、框架停掉了心跳：动作留在 runner 里、移动不推进，Sync 在共享期间报错，回到独占后重新挂上。
@@ -135,7 +135,7 @@ func TestSharedRemoteEntityRefusesHeartbeatsAndResumesAfterLeavingSharedMode(t *
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// 真实 remoteentity.Manager 下的所有权流转（D20 决定 ④、P2 第 6 条、D21 A6 / C4 的端到端验证）
+// 真实 remoteentity.Manager 下的所有权流转（共享模式停心跳、任务心跳与 AI 心跳的端到端验证）
 //
 // 上面的用例直接 Stop 登记模拟“框架停掉心跳”；下面的用例经真实的 remoteentity.Manager 做所有权流转：第一次写认领、
 // EnterRemoteSharedMode / LeaveRemoteSharedMode / TransferRemoteOwnership、写准入（共享模式取分布式锁）与写门排空。
@@ -590,7 +590,7 @@ func expectDeliveryPaths(t *testing.T, p *npcProc, delivery heartbeat.Delivery, 
 	}
 }
 
-// npcDeliveries 是场景要跑的投递方式：单目标与缺省的批量作业（D20 选项 C，heartbeat.delivery）。
+// npcDeliveries 是场景要跑的投递方式：单目标与缺省的批量作业（heartbeat.delivery）。
 var npcDeliveries = []heartbeat.Delivery{heartbeat.DeliveryDispatch, heartbeat.DeliveryBatch}
 
 func (p *npcProc) LookupLocalRemoteEntity(id int64, _ entity.EntityKind) entity.IThreadSafeRemoteEntity {
@@ -741,7 +741,7 @@ func npcPlan() actionflow.MissionPlan {
 }
 
 // npcStart 是业务让 NPC 跑起来（在 handler 里）：进场景（周期落库）、换上 AI 策略、下发任务（任务发起移动）、再发起
-// 工作动作。runner 的调用放在最后（D20 决定 3）。
+// 工作动作。runner 不随事务回滚，所以调用放在最后。
 func npcStart(e *remoteNPC) error {
 	if !e.mb.InScene() {
 		if err := e.mb.Enter(1, &spaceLog{}, spatial.Point{}); err != nil {
