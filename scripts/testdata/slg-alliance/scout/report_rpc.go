@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"time"
 )
 
 // ReportReceiver 固定本原服、收件人和可信地图路由；FromSid 必须来自受保护的服务总线。
@@ -49,6 +50,9 @@ type RoutedReport struct {
 // 路由校验与 Player 提交不是一个分布式事务：校验通过的在途请求可跨越交接完成，
 // 安全性来自已固定的报告正文与永久回执；需要撤销已准入报告的业务必须另设协议。
 type RoutedReportReceiver struct {
+	// 普通 Bus RPC 不传播调用方 deadline；接收端必须自己限定整个处理预算。
+	// 零值采用 5 秒，负值拒绝。超时不能强杀忽略 context 的回调，停机仍需真实排空。
+	Timeout          time.Duration
 	HomeSID          int32
 	MapID, Recipient int64
 	Resolve          func(context.Context, int64) (OwnerRoute, error)
@@ -56,9 +60,15 @@ type RoutedReportReceiver struct {
 }
 
 func (r RoutedReportReceiver) Handle(c *bus.RpcContext) (any, error) {
-	if c == nil || r.Resolve == nil || r.Receive == nil || r.HomeSID <= 0 || r.MapID <= 0 || r.Recipient <= 0 {
+	if c == nil || r.Resolve == nil || r.Receive == nil || r.HomeSID <= 0 || r.MapID <= 0 || r.Recipient <= 0 || r.Timeout < 0 {
 		return nil, errors.New("invalid routed report receiver")
 	}
+	budget := r.Timeout
+	if budget == 0 {
+		budget = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), budget)
+	defer cancel()
 	var req RoutedReport
 	if err := c.Decode(&req); err != nil {
 		return nil, err
@@ -67,17 +77,20 @@ func (r RoutedReportReceiver) Handle(c *bus.RpcContext) (any, error) {
 	if !report.Valid() || report.MapID != r.MapID || report.HomeSID != r.HomeSID || report.Recipient != r.Recipient {
 		return nil, errors.New("report destination mismatch")
 	}
-	current, err := r.Resolve(c.Context(), report.MapID)
+	current, err := r.Resolve(ctx, report.MapID)
 	if err != nil {
 		return nil, err
 	}
 	if current.SID <= 0 || current.Marker == 0 || current.Route == 0 || current != req.Owner || current.SID != c.FromSid {
 		return nil, errors.New("stale report owner route")
 	}
-	if err = c.Context().Err(); err != nil {
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err = r.Receive(c.Context(), report); err != nil {
+	if err = r.Receive(ctx, report); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	return true, nil
