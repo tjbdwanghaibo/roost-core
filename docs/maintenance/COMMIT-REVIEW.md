@@ -1,88 +1,59 @@
 # 新增提交审查
 
-审查日期：2026-10-14。范围为上次本 agent 提交 `a9fa95d9` 之后到 `9a2d3a8f`：**266 个非合并提交、2 个合并提交**。同步时 main 与 origin/main 一致；审查与文档修改在独立 worktree 完成。完整 SHA 与路径见[提交清单](REVIEW-COMMITS-20261014.csv)。此范围替代此前 `cc635481..4370e6b3` 的阶段清单及最近 28 个提交的局部结论。
+审查日期：2026-10-22。同步时 main 与 origin/main 均为 `13bc939e`；范围为上一轮审查提交 `a73c75cf..13bc939e`，413 个提交、无合并提交，净变化 1335 个文件，其中 Go / Go 模板 651 个路径。在独立 worktree 审查最终代码状态，没有逐个运行历史中间版本。上一轮报告见 [固定提交](https://github.com/tjbdwanghaibo/roost-core/blob/a73c75cf/docs/maintenance/COMMIT-REVIEW.md)。
 
-本轮按最终合并代码的净变化分组审查，未确认新增运行时缺陷。没有逐个检出、运行 266 个历史中间版本，也不声称全部测试断言和外部依赖组合穷尽覆盖。CSV 的 `net-state-reviewed` 表示纳入最终状态审查，不表示该提交单独通过验收。
+## 确认缺陷
 
-## 结论与范围
+三个问题均通过临时探针复现，状态为**未修复**，已登记到 [KNOWN-LIMITS](KNOWN-LIMITS.md)。探针调用产品代码；运行后从包内删除，不提交一次性测试。后续修复应把行为回归并入现有测试文件。
 
-| 范围 | 核对内容与结论 |
-| --- | --- |
-| Nest / Entity | ID tail 前驱、完成收尾、延时循环、组锁、资源归还、错误归一化与 short/long/io 接线；未发现拆函数改变完成顺序。Entity 批量加载、Destroy 锁和引用收尾、组件拓扑顺序保持契约 |
-| DataEngine / WAL | schema 先校验后水合、投影分段、连续成功前缀、回放退出、WAL 预算/批写/fsync/关闭；Remote+lease 历史组合仍明确拒绝并保留 WAL，未跳过失败记录推进 checkpoint |
-| Remote | beginWrite 的 ownership/gate/grant/共享锁及失败出口；WAL 级 Rejected 精简保留内存确定拒绝与回滚，等待失败仍结果不确定，自定义 Store 后续拒绝仍由 finalizer 收尾；发布时刻/删除版本/TTL 的旧形态拒绝与当前发布端一致 |
-| Sync / Lockstep | Flush 准备、会话帧前缀结算、失败后重同步、生命周期检查与编码工作区；setter 标脏与提交边界未改变；Lockstep 命名迁移及消费者编译通过 |
-| App / Gate / Bus / etcd | 启停依赖与 singleton 释放边界、TCP 握手和消息预算、Forward 的 admission 归还、广播结算、RPC 上下文和选主会话收尾；未发现提取 helper 改变所有权或退出顺序 |
-| Service | Account/Activity/Rank/Mail 的旧数据拒绝；对照现行写入端与正常数据路径。移除已明确放弃的兼容本身不算缺陷。计数器前缀冲突 RV-20261014-01 已由 `23c7a997` 修复并随 v1.26.1 发布 |
-| Gameplay | Skill 启动、operation 执行、运动阶段、checkpoint 恢复及 effect 解码；20 个新提取解码 helper 的函数体与原 switch 分支去空白后相同，其他阶段对照错误与状态更新顺序；attribute selector 包装保持相同返回值 |
-| Codegen / Wiring / Demo | manifest 严格解码、旧 feature/mod/tag 拒绝、API 删除与使用方、playeraccess 改名、配置声明快照、部署回退脚本。实际生成 game-demo 并 build/vet/test；既有业务代码仍需遵循升级说明手工迁移 |
-| 脚本 / CI / 文档 | 旧目录路径、生成器版本、私有环境入口、Redis 清理与跳过守卫、Windows 编译边界。修正维护文档中仍称 v1.26.0 为当前版本、已发布修复仍称未发版的状态；不改业务行为 |
-| 合并 | `8da1e771`、`eade0fb3` 的 `git show --remerge-diff` 均无冲突解决差异 |
+### RV-20261022-01 / P1：批量执行绕过组内新增 Fence
 
-## 测试整理核对
+位置：`framework/nest/try_batch.go:398` 的 `runTryBatchLocked`，逐目标执行在 410–415 行。`prepareTryBatchGroupLocked` 在准备一组时读取 Fence；随后每个 `tryBatchExec.run` 没有再次核对。`invokeTryBatchTransaction` 可以因提交结果未知触发 Fence，因此该状态能在一组执行期间变化。
 
-使用 Go AST 的非 import 声明与去注释 token 摘要区分搬文件、改名和行为变化，再针对运行时变化及关键测试删改读源码。摘要只是定位手段，不作为语义等价证明；模板和被索引排除的脚本直接检查。未重新做全仓逐函数覆盖率前后对照，不将本轮描述为每个被删断言的穷尽审计。
+复现：单 worker、两个不同 ID 的内存 handler；第一个调用公开的 `NestMgr.Fence`，第二个记录调用次数。Shutdown 等待收尾后断言第二个没有执行且通过 HandBack 返回 `ErrNestFenced`。实际：
 
-已核对的易误判删除包括：
-
-| 原测试 | 当前保留的行为覆盖 |
-| --- | --- |
-| `TestFirstLoadFailureLeavesNoTypedNilInRuntimeConfig` | `framework/configdata/reload_commit_test.go` 的 `TestFirstLoadFailureSkipsRollbackCallbacks` 保留 typed-nil、Current 与 rollback 断言 |
-| `TestRuntimeFailureFirstReportWakesShutdown` | `framework/app/singleton_test.go` 保留首错、Done 唤醒、hook 顺序及后注册 hook；App 退出测试另外覆盖错误仅返回一次 |
-| `TestEtcdLifetimeWatcherReadinessAndTerminalCauses` | `infra/network/etcd/driver/watcher_test.go` 分别验证 Ready、compacted 与 closed |
-| `TestMalformedEnvelopeIsAnError` | `infra/storage/versionstore/write_token_test.go` 的 `TestAnUnreadableRecordIsReportedAsMalformed` 含分隔符缺失、零版本及旧无 token 记录，并区分传输故障 |
-| `TestTemporalRestoreRejectedEmitsTemporalEvent` | `gameplay/skill/temporal_test.go` 的 `TestTemporalEventsNormalizeSnapshotTarget` 覆盖 capture/restore/rejected 三种事件及 target |
-| `TestCancelRefusesBlankAndUnknownTickets` | `service/match/guards_test.go` 保留空 ticket、未知 ticket 与错误内容断言 |
-
-## 实际验证
-
-以下均在 macOS、`9a2d3a8f` 的隔离检出上运行，`GOWORK=off`，退出码 0；不使用缓存测试结果。
-
-```sh
-go test ./... -count=1 -timeout=8m
-
-go test -race ./framework/nest ./framework/entity ./framework/nestwal ./framework/dataengine/... ./framework/sync/... ./framework/app ./infra/network/gateway ./infra/network/bus ./infra/network/etcd/driver ./gameplay/skill -count=1 -timeout=6m
-
-go test -race ./framework/remoteentity -run 'Test.*(WAL|Rejected|Reject|Finaliz|Pipelined|WriteGate|Shared|Reload|Reply)' -count=2 -timeout=180s
+```text
+handler after fence=1, second target handback=<nil>; want 0 and ErrNestFenced
 ```
 
-生成工程验证：正式生成 game-demo，将 core replace 到审查检出后，执行 `go build ./...`、`go vet ./...`，另运行 `go test -count=1 -timeout=180s ./...`；全量生成工程测试探针通过（37.31s），临时探针已删除。此前单独跑过 Remote、DataEngine、Nest、protocol、redistest、根包与 etcd，以及生成工程 SceneWatcher / PlayerID 行为测试，均通过。
+Fence 允许已经执行的 handler 收尾，不允许尚未开始的目标继续执行业务。现有 `TestTryBatchRefusesTargetsAfterFence` 覆盖组准备前 Fence，没有覆盖组内变化。修复验收应包括组内主动 Fence 和真实 committer 返回结果未知两种触发；本轮探针只执行前者，后者是源码调用链判定。
 
-原始输出保留在本地 `artifacts/review/20261014-full/`，不当作性能报告。真实资源测试的 opt-in 环境未开启；包通过不表示 Redis/Mongo/NATS/etcd 集成用例执行。未重跑真实资源故障矩阵、跨机、Linux、长期压力或性能对照；发布文档中的 30 分钟数据是已有记录，不是本轮测量。
+### RV-20261022-02 / P2：旧重投被当成新一拍
 
-CBM 项目 `Users-whb-roost-roost-core`，代际 `2026-10-14T14:59:51Z`，24,550 节点、245,349 边。已对范围内 1,914 个变更 Go/模板路径及项目范围检查 coverage；图谱有 6 个模板局部解析缺口、无 skipped，相关缺口读源码并用实际生成工程补证。docs/scripts/testdata 等按配置排除，直接读文件。无记录缺口不等于图谱完整。
+位置：`gameplay/heartbeat/host.go:374` 的 `runBeat` 与 `driver.go` 的 `step`。重投和新拍携带相同的 `*Reg`；runBeat 只检查 `inflight` 并在返回时清零。
 
-## 已修复问题的历史证据
+确定顺序：驱动投递原始拍 → 等待超过兜底阈值再投递旧拍 → 执行原始拍 → 驱动投递新拍 → 执行队列中的旧重投。实际：
 
-RV-20261014-01：`1ffb644f` 引入的 allocator 保留键冲突，首次探针在该版本失败、父提交通过。修复 `23c7a997` 在任何 Redis 写入前拒绝冲突前缀，保留正常前缀重启和第二副本递增测试。本轮已复核；已修复、无剩余限制，KNOWN-LIMITS 不再登记，经过见 [CHANGELOG](../../CHANGELOG.md) v1.26.1。以下仅保留历史复现入口，不是当前版本应当通过的测试。
-
-## 复现入口
-
-在隔离检出的根目录新建 `_reviewprobe/account`，将 Demo 的两份 collaborators 模板原样复制为 `collaborators.go`、`collaborators_test.go`，加入下面的测试，运行 `GOWORK=off go test ./_reviewprobe/account -run '^TestReviewFreshCounterSurvivesRestart$' -count=1`。对照旧版时只更换这两份模板为 `1ffb644f^` 的内容，保留相同探针。
-
-```go
-package Account
-
-import (
-    "context"
-    "testing"
-)
-
-func TestReviewFreshCounterSurvivesRestart(t *testing.T) {
-    client := newCounterRedis(nil)
-    first := boundAllocator(t, client, "roost:demo")
-    if got := allocate(t, first); got != firstPlayerID+1 {
-        t.Fatal(got)
-    }
-    restarted := boundAllocator(t, client, "roost:demo")
-    got, err := restarted.Allocate(context.Background(), 1000)
-    if err != nil {
-        t.Fatalf("fresh deployment restart cannot allocate: %v", err)
-    }
-    if got != firstPlayerID+2 {
-        t.Fatalf("got=%d", got)
-    }
-}
+```text
+stale retry executed: calls=2 new beat inflight=false; want 1,true
 ```
 
-“绑定时拒绝冲突前缀”的修复已由 `23c7a997` 采用（随 v1.26.1 发布）：正式回归断言 `roost:demo` 在 BindRegistry 即失败且 Redis 零调用，并保留正常前缀的重启与第二副本递增测试；修复后该探针在 `roost:demo` 前缀下预期在绑定处失败，只用于对照旧版。
+旧重投执行额外回调并消费新拍的在途状态，新拍随后被当成 duplicate。探针使用包内 fake dispatch 控制交付顺序，但调度 step 与 runBeat 均为产品实现；没有声称跑了真实 Nest 排队压力。修复需按投递代际识别执行和交回，补旧重投、下一拍、停止重启以及异步 HandBack 的交错验证。
+
+### RV-20261022-03 / P2：Drain 诊断越过锁边界读事实计数
+
+位置：`framework/sync/entitysync/policy/interest_queue.go:665`。`drainStalls` 在 664 行释放 registry 锁后读取 `r.facts`；`queueFact` 在 90 行持 registry 锁更新该字段，不持 Interest 应用锁。
+
+复现：ApplySync 模式，Show 后执行一次 applyStep 形成 applied-unsettled 状态，并发 QueueMove 与 drainStalls。`go test -race` 明确报告 665 行读和 90 行写冲突。普通已 settle 状态会短路该读取，不能用那个状态下的 race 通过否定问题。
+
+影响是诊断数据竞争及不一致读取；没有证据证明此读会破坏 AOI 位置或订阅。修复在 registry 锁内捕获计数，再生成诊断，保持锁顺序。
+
+## 可读性与设计建议
+
+1. **Nest 批量执行的契约入口统一。** 批量与普通派发可以保留各自调度方式，但每个 handler 开始前的 Fence、取消、实体有效性检查应有明确统一的职责，避免准备阶段检查被误认为覆盖执行阶段。不为统一而添加新包或额外分配。
+2. **Heartbeat 显式表达投递身份。** 登记状态、投递代际、重试次数和正在执行状态含义不同；单一 inflight 不能表达全部。先明确状态转换和归还所有权，再整理调度、投递、观测职责到同包文件。
+3. **Interest 显式区分锁内状态与锁外快照。** registry 记录事实、应用器更新空间、结算生成关系、Drain 读取诊断，各阶段用小函数表达；跨锁边界传值，不依赖读者记住某字段究竟由哪把锁保护。维持现有分层，不额外增加入口包装。
+4. **源码注释描述现行规则。** movement、heartbeat 等新代码仍有 D20、决定编号、日期与过程叙述，应迁入设计文档；保留中文锁边界、失败语义、事务发布顺序。长函数按准备、执行、收尾拆分，不按历史优化轮次组织。
+5. **MapBasic 的保存语义需更直观。** 单独 SetFacing 后 Save 不调用保存回调，探针已复现；但 Save、dirty 与使用文档明确限定为位置/场景变化，所以本轮不登记为确定 bug。建议明确“原地转向是否必须持久化”：若需要，dirty 应包含朝向并支持事务回滚；否则文档明确朝向仅随位置保存，避免 Save 回调包含 facing 造成误解。
+
+方向判断：本轮两个执行时序缺陷都来自状态含义不够明确：批组已准备不等于每个 handler 已开始，登记在途不等于当前投递属于哪一拍。优先修正这些状态和检查边界，不继续增加时间阈值或重试分支。热路径可读性改函数体仍需遵守维护手册的同机交替至少 10 次 benchmark/benchstat 要求；本轮没有做性能改动或宣称性能收益。
+
+## 验证与范围限制
+
+已运行 `GOWORK=off go test ./... -count=1 -timeout=10m`，退出码 0（临时探针加入前启动，日志中没有探针测试）。受影响包现有 race 回归 `go test -race ./framework/nest ./gameplay/heartbeat ./framework/sync/entitysync/policy ./gameplay/movement -count=1 -timeout=4m` 退出码 0。三个新增探针分别按预期失败，说明现有全仓通过不能覆盖上述交错。
+
+重点检查了 Nest TryBatch/Fence、Heartbeat 调度重投、Interest 单写应用/多视野/Drain、Sync 会话版本与交付结算、Movement 事务发布和保存，以及 DataEngine 投影/回放/checkpoint、Remote 数据库作用域、Saga 延迟确认相关改动。没有对全部 413 个提交逐个背书，也未逐个审计所有新增 service 功能、生成模板和 C# 客户端；没有执行真实 Mongo/Redis/NATS 故障矩阵、长稳压测、Linux 验证或性能 AB 对比。
+
+CBM 项目为 `Users-whb-roost-roost-core`，当前可用索引代际落后于 HEAD。主动刷新被共享后台协调状态阻塞（worker exit=1），未重启共享服务。对 651 个变动 Go/模板路径做 coverage 检查后以当前源码与 diff 补证；没有把“无记录缺口”视为新代码完整索引。
+
+本地原始日志、提交清单和探针源码备份保留在 `artifacts/review/20261022-main/`（忽略目录，探针后缀为 .txt，不参与 Go 包枚举）。文档记录结论与复现条件，不将本机证据路径当作其他环境已经完成的验证。
