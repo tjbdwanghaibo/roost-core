@@ -56,7 +56,7 @@ func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
 	if !bound || sid != 1300 {
 		t.Fatalf("the login endpoint read (%d, %v) from the authenticator's claims %v, want the role's server 1300", sid, bound, principal.Claims)
 	}
-	// 全服邮件拉取的画像（D17）：本服范围 + 角色建立时间，都从认证器写的 claims 读。
+	// 全服邮件拉取的画像：本服范围 + 角色建立时间，都从认证器写的 claims 读。
 	profile, ok := controllerplayer.BroadcastProfile(principalSession{principal: principal}, sid)
 	if !ok || profile.RegisteredAtUnix != 1_700_000_000 || len(profile.Scopes) != 1 || profile.Scopes[0] != svcmail.ServerScope(1300) {
 		t.Fatalf("the login endpoint built the broadcast profile %+v (%v) from %v, want server 1300 registered at 1700000000", profile, ok, principal.Claims)

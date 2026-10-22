@@ -32,11 +32,11 @@ import (
 // the entity packages hold the scene runtime. A system that created its own
 // Entities would be an import cycle.
 //
-// WHEN it decides is the scene's own heartbeat (D20 P5): the Scene entity's
+// WHEN it decides is the scene's own heartbeat: the Scene entity's
 // "scene.spawn" beat, 1 Hz, in the scene's lock, asks Refresh what is due and
 // hands the answer over after its transaction commits (Scene.SetSpawner →
-// offer). There is no ticker here any more — the service goroutine that used
-// to wake every second and ask is the pattern the heartbeat replaces.
+// offer). There is no ticker here: a service goroutine that wakes every
+// second and asks is the pattern the heartbeat replaces.
 //
 // Building a monster is four steps, in this order, on this goroutine (never
 // on the business worker that ran the beat):

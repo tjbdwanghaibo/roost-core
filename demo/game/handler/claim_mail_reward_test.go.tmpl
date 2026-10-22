@@ -54,7 +54,7 @@ func (c *recordingCommitter) Commit(_ context.Context, record dataengine.CommitR
 
 // pinBusinessClock 把进程级业务时钟停在 unix 秒，测试结束时恢复。
 //
-// 领奖 handler 的 nowUnix 是生成的分发包装在执行时填的、这条消息冻结的业务时间（fctx.Now，D22-1），调用方
+// 领奖 handler 的 nowUnix 是生成的分发包装在执行时填的、这条消息冻结的业务时间（fctx.Now），调用方
 // 不传时间；所以用例要哪个“现在”，就把时钟停在哪里。时钟停住不走，秒边界不会因为测试跑得慢而跳过。时钟是
 // 进程全局的，本包用例不能 t.Parallel。
 func pinBusinessClock(t *testing.T, unix int64) {

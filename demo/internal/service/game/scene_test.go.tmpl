@@ -439,9 +439,9 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 // than one replication session may hold (the manager's Limits.MaxObjects,
 // 100), the main view's cap (sceneMaxVisible) is what keeps the session open:
 // each player is sent the nearest sceneMaxVisible subjects, not everyone, and
-// no session is closed for holding too many objects. The 2026-10-22 login
-// storm without the cap: 100 robots at the spawn point, all 100 sessions
-// closed with "frame: object limit exceeded".
+// no session is closed for holding too many objects. Without the cap, 100
+// robots at the spawn point would have all 100 sessions closed with
+// "frame: object limit exceeded".
 func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()
@@ -519,11 +519,11 @@ func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
 // players instead of silently stopping their frames. The manager closes the
 // session without pushing anything, so no connection refused a frame; the
 // framework's selfsync.DisconnectLostPlayer, called from sessionLost, closes
-// the player's connections (the maintainer's 2026-10-22 decision A) and
-// counts it by reason. The client reconnects and its Join starts over from a
-// full snapshot; with the crowd still there it is kicked again, which is the
-// accepted cost. Before, the connection stayed up, requests were still
-// answered and the player received nothing until it logged in again.
+// the player's connections and counts it by reason. The client reconnects and
+// its Join starts over from a full snapshot; with the crowd still there it is
+// kicked again, which is the accepted cost. Leaving the connection up would
+// keep answering requests while the player received nothing until it logged
+// in again.
 func TestACrowdOverflowingASessionDisconnectsThePlayers(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()

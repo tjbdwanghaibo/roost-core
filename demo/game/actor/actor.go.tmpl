@@ -7,7 +7,7 @@
 // AI) names a goal, a MoveTo / Follow action on the entity's own
 // actionflow.Behavior carries it out, and the action is advanced on the
 // entity's own heartbeat — never by a loop somewhere that walks every
-// position. That is DESIGN-TODO D20: movement is driven by the entity's own
+// position. Movement is driven by the entity's own
 // heartbeat (gameplay/heartbeat), which spreads the work by entity id and
 // keeps each step inside that entity's lock and transaction.
 //
@@ -275,7 +275,7 @@ func (Nowhere) QueueMove(entity.IThreadSafeEntity, spatial.Point) error { return
 
 // SavePeriod is how often a player's position is written to its persistent
 // fields while it is on the map (movement.MapConfig.SaveEvery): the live
-// position is nopersist (D20 decision 15), so this bounds how much walking a
+// position is nopersist, so this bounds how much walking a
 // crash or an unload without a leave can lose.
 const SavePeriod = 10 * time.Second
 

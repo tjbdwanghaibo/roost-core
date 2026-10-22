@@ -34,7 +34,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `game/controllers/player/` | 端点：协议 → Controller → 生成的 Sender，错误在这里换成 `(code, reason)` |
 | `game/handler/` | Nest handler（背包、经验、领奖、送礼开始等） |
 | `game/entities/`、`db/def/` | Player / World / Scene / Monster 实体与 DAO 定义 |
-| `game/`（其余子目录） | 玩法与策略：`matchmaking`、`chatroom`、`dungeon`、`ranking`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线（D20） |
+| `game/`（其余子目录） | 玩法与策略：`matchmaking`、`chatroom`、`dungeon`、`ranking`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线 |
 | `saga/gift_item/` | 送礼 saga 定义 |
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |

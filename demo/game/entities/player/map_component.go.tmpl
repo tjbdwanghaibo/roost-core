@@ -30,7 +30,7 @@ const CompTypeMap entity.ComponentType = 2004
 // written from here (MapBasic.SetPos → Space.QueueMove, commit-gated) and
 // never read back as authority.
 //
-// Movement is server-driven (DESIGN-TODO D20 decision 14): the client names a
+// Movement is server-driven: the client names a
 // goal — a point, or someone to follow — and the server walks there. The goal
 // becomes a MoveTo / Follow action on the player's actionflow.Behavior; the
 // Behavior hangs the move group on the player's own heartbeat, and each beat
@@ -200,8 +200,8 @@ func (component *MapComponent) LeaveScene() error {
 	if err := component.mb.Leave(); err != nil {
 		return err
 	}
-	// The action list does not roll back with the transaction (D20 P2
-	// decision 3), so it is the last step.
+	// The action list does not roll back with the transaction, so it is the
+	// last step.
 	component.behavior.EndAllAction(true, actionflow.NewActionReason("left the scene"))
 	return nil
 }

@@ -181,7 +181,7 @@ func (monster *Monster) MoveComponent() *movement.Move { return monster.act.move
 // Spawn puts the monster on the map at the point its body was placed and
 // starts its AI. The patrol corners are clipped to what the scene's terrain
 // says is walkable. The AI goes last: the action list and the AI do not roll
-// back with the transaction (D20 P2 decision 3), so everything that can fail
+// back with the transaction, so everything that can fail
 // comes first.
 func (component *ActorComponent) Spawn(sceneID int64, space movement.Space, at spatial.Point, walkable func(spatial.Point) bool) error {
 	if err := component.mb.Enter(sceneID, space, at); err != nil {

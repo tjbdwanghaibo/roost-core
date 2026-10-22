@@ -82,9 +82,9 @@ const (
 	// session holds more objects than the manager's Limits.MaxObjects
 	// (frame.DefaultLimits, 100: it is also how many objects one session may
 	// hold) the next frame cannot be encoded and the manager closes that
-	// session (frame.ErrObjectLimit). The 2026-10-22 login storm closed all
-	// 100 sessions with 100 robots at the spawn point. A session closed that
-	// way now disconnects the player too (sessionLost), so without the cap a
+	// session (frame.ErrObjectLimit): 100 robots logging in at the spawn point
+	// without the cap close all 100 sessions. A session closed that
+	// way also disconnects the player (sessionLost), so without the cap a
 	// crowd would keep kicking its players and they would keep reconnecting
 	// into the same crowd.
 	//
@@ -913,8 +913,8 @@ func (bridge *Scene) sweepLocked() {
 // Either way no connection of the player is left up without its session: a
 // connection that refused the frame was closed by the lane (Push) before the
 // manager dropped the session, and for any other cause the framework's
-// selfsync.DisconnectLostPlayer closes them here (the maintainer's
-// 2026-10-22 decision A; it counts and logs the disconnect). The client
+// selfsync.DisconnectLostPlayer closes them here (it counts and logs the
+// disconnect). The client
 // reconnects and its Join opens a new session from a full snapshot. So the
 // player is either gone or has logged in again since; settle tells the two
 // apart. It runs inside the manager's tick, so the settle goes to its own

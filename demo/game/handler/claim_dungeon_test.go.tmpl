@@ -208,7 +208,7 @@ func TestAPrunedRunIsRefusedInsteadOfPaidAgain(t *testing.T) {
 		t.Fatal("replaying a run whose record was pruned was accepted; it pays a third time")
 	}
 	// A delayed replay cannot carry an old "now" either: nowUnix is the
-	// business time the handler's own message froze (D22-1), filled by the
+	// business time the handler's own message froze, filled by the
 	// generated dispatch, not a value the endpoint read before queueing.
 	// The World's counter is the total actually paid out; the Player's own
 	// exp is consumed by level-ups and cannot be summed.

@@ -3,7 +3,7 @@
 package protocoldef
 
 // MoveTargetRequest names where the player wants to go and lets the server
-// walk it there (DESIGN-TODO D20 decision 14): a point (X, Y), or another
+// walk it there: a point (X, Y), or another
 // player to follow (Follow, a player id; when non-zero X and Y are ignored).
 // The client sends intent, not positions — the server finds the route,
 // advances the walk on the player's own heartbeat and replicates every cell

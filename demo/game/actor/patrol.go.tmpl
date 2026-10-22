@@ -27,7 +27,7 @@ const PatrolInterval = 500 * time.Millisecond
 // place that rule lives.
 //
 // Like every runner-side state, the strategy's own index is not rolled back
-// with a transaction (D20 P2 decision 3); the AI beat never fails, so the
+// with a transaction; the AI beat never fails, so the
 // index only moves when the start it records did happen.
 type Patrol struct {
 	Waypoints []spatial.Point

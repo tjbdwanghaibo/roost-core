@@ -425,8 +425,8 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
-	// move_target: send a goal and let the server walk there (D20: the
-	// client sends intent, the player's own heartbeat moves it). The answer
+	// move_target: send a goal and let the server walk there (the client
+	// sends intent, the player's own heartbeat moves it). The answer
 	// only says the walk started and where it starts; the walk itself
 	// arrives as replicated positions, which move_arrive waits for.
 	action.MustRegisterCall[pb.MoveTargetRequest, pb.MoveTargetResponse](actions, protocols, "move_target", msgid.MsgMoveTarget,
@@ -1303,13 +1303,12 @@ func expectArrival(ctx context.Context, rb *robot.Context, param any) error {
 // expectSceneAlive judges that the server still replicates to this client.
 // A replication session the server closed without disconnecting — one that
 // came to hold more objects than the manager allows (frame.ErrObjectLimit),
-// which is what a crowded spawn point did before the scene capped the main
-// view — did not show anywhere else: every request still answered, only the
-// frames stopped, and a run that checked nothing later went green. Since
-// 2026-10-22 (decision A) the server disconnects a player whose session it
-// closed for such a cause, so that case now also fails the robot's next
-// request; this check stays as the end-to-end judge of "frames still come"
-// for any cause. The robot makes one replicated change of its own (add_exp 1)
+// as a crowded spawn point does without the main view's cap — would not show
+// anywhere else if the connection stayed up: every request still answered,
+// only the frames stopped. The server disconnects a player whose session it
+// closed for such a cause, so that case also fails the robot's next request;
+// this check stays as the end-to-end judge of "frames still come" for any
+// cause. The robot makes one replicated change of its own (add_exp 1)
 // and waits for it to arrive on its own subject. Run it last: a session the
 // server closes is never reopened while the connection stays up, so this one
 // check covers everything before it. Params: "timeout". scene_watch must run

@@ -48,8 +48,8 @@ const MaxTimeRate = 4
 // which is a different question from "can I stand here".
 //
 // Two things the scene does itself, on its own heartbeat and in its own lock
-// (DESIGN-TODO D20 decision 13: a room or a scene is an entity, its logical
-// frame is its own heartbeat registration):
+// (a room or a scene is an entity, its logical frame is its own heartbeat
+// registration):
 //
 //   - Population: every SpawnPeriod the "scene.spawn" beat asks Refresh what
 //     is missing. Deciding is all it does — building a Monster needs the

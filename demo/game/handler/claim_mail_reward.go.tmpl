@@ -32,7 +32,7 @@ func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int6
 	// 邮件服务只拒绝过期后的新预留，挡不住过期前取得、晚到这里的旧请求；账本过期后又会被清理。
 	// 所以首次发放在这里按执行时间再判一次过期：已在账本里的只确认、不再发；不在账本里且已过期的拒绝，
 	// 错误与 ReserveClaim 拒绝过期邮件是同一个码。判断在任何 DAO 写入之前。nowUnix 就是执行时间：生成的分发
-	// 包装填这条消息冻结的业务时间（D22-1），不是端点排队之前读的。
+	// 包装填这条消息冻结的业务时间，不是端点排队之前读的。
 	if !bag.MailRewardClaimed(mailID) && rewards.ClaimWindowClosed(expiresAtUnix, nowUnix) {
 		return rewards.ClaimResult{}, errcode.Wrap(svcmail.ErrExpired, nil, "mail_id", mailID, "expires_at", expiresAtUnix, "now", nowUnix)
 	}

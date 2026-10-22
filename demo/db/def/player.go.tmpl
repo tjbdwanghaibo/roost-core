@@ -19,8 +19,8 @@ type PlayerDao struct {
 	// from the one path that writes these fields (movement.MapBasic, reached
 	// through MapComponent) and never read as the answer to "where is X".
 	//
-	// They are `nopersist,sync` (DESIGN-TODO D20 decision 15): a moving
-	// player changes them on every heartbeat (10 a second), and writing that
+	// They are `nopersist,sync`: a moving player changes them on every
+	// movement beat (5 a second at the default move period), and writing that
 	// to the WAL and Mongo buys nothing — what a restart needs is where the
 	// player was, give or take a few steps. Synced, so moving is replicated
 	// by the same pipeline as everything else, no separate movement
