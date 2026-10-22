@@ -43,7 +43,7 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 4. **entitysync“暂停不重置”原语（Hold / Ready 方案 B）**：只停发布、保留基线与待发 Remove。现状：每次 Hold → Ready 都开新 epoch、按全量重发仍在的对象（2026-10-21 起一个订阅都不剩时补空 Full）。**推荐先不做**：SLG 文档已建议只在权限读失败与重连时 Hold；按周期每轮都 Hold 的业务代价是每周期一次全量（KNOWN-LIMITS“会话 Hold / Ready”）。
 5. **Interest 一步的切点是否让命令也触发切开**。现状：触发——2026-10-22 纯前缀切开之后命令也计入单位上限，只有命令的一段日志同样按 ApplySync 预算分步。可选：不触发（命令不计单位，只有命令的长日志一次做完，政策阶段可能超出预算）。**推荐保持现状**（规则只有一条：预算 / `BatchSize` 只决定停在哪个前缀边界），维护者可以选不触发。
 6. **Remote 托管实体禁止挂移动 / 心跳组件**：维护者 2026-10-21 晚已定方向（理论上不应挂，`MapBasic.Sync` 不加），现状是登记时只拦“当时已在共享模式”的实例、运行中进入共享的由下一拍停掉。要在装配或登记时一律拒绝需要 Remote 的种类级声明（Remote 的改动），**另行设计**，未排期。
-7. **学习分支 `learn/main-review-20261021` 第 11 条的设计意见**：已分类登记在下文 [优化项（下一阶段）](#优化项下一阶段) 第 2～4 组，逐项待维护者排期。
+7. **学习分支 `learn/main-review-20261021` 第 11 条的设计意见**：已分类登记在下文 [优化项（下一阶段）](#优化项下一阶段) 第 2～4 组；第 2、3 组与第 1 组方向一已实施（维护者 2026-10-22），第 4 组逐项待维护者排期。
 8. **合服的 saga 终态检查是否支持按类型 / 业务键过滤**（D15）。现状：检查整个 saga 存储（维护者 2026-10-21 确认严格），同一存储里其他服仍在运行的 saga 也会让检查不通过。可选：按类型 / 业务键过滤。推荐保持严格，有真实多服共用 saga 存储的部署再定。
 9. **压测工具的缺省驱动**（D20 P4）。现状：sync-aoi `-move-driver=loop`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`（旧复跑命令得到原负载）。维护者 2026-10-21 晚：v1.31 发版前对比后再定；对比在今晚压测清单里。
 10. **编码失败断开的防风暴**（S5）。现状：原因持续时客户端反复重连，靠 `player.sync.session_lost_disconnect.total` 与 Warn 发现。可选：按玩家冷却（冷却期间要么连着收不到帧，要么拒绝登录，都是新的产品行为）。**推荐不做**，根治在业务侧（`MaxVisible`、实体大小）。
@@ -59,14 +59,14 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 
 ## 优化项（下一阶段）
 
-登记于 2026-10-22，现在不实施。
+登记于 2026-10-22。**维护者 2026-10-22：“如果这些优化项不复杂的话，可以直接做了”**：第 1 组方向一、第 2 组、第 3 组已实施（下文各条标“已实施”，提交见 [v1.31.0 实现篇 O1～O4](../release/v1.31.0-IMPLEMENTATION.md#o1)）；第 1 组方向二（AI 停止）另行实施；其余待排期。
 
 ### 1. 移动心跳的缺省档位与无观察者降档
 
 **维护者 2026-10-22**：MMO / SLG 的移动频率一般是 2～5Hz；附近没有玩家观察时，降低心跳档位或停跳。
 
 - **现状**：`gameplay/movement.DefaultMovePeriod` = 100ms（10Hz）；sync-aoi `-move-period` 缺省 100ms；D20 的规模估算与多数心跳压测（HB-STRUCTURES、NEST-BATCH-HEARTBEAT、HB-DRIVEN-LOAD）都按 100ms 档做。
-- **方向一：缺省移动档位改到 200ms 或 500ms**（5Hz / 2Hz）。要同时核对 game-demo、生成器示例与压测缺省，压测报告按新口径补一组。
+- **方向一：缺省移动档位改到 200ms 或 500ms**（5Hz / 2Hz）。**已实施（维护者 2026-10-22，`fde5c7ab`，[O1](../release/v1.31.0-NOTES.md#o1)）**：`DefaultMovePeriod` 100ms → 200ms；game-demo 的玩家移动与怪物巡逻用缺省、随之 5Hz；生成器示例动作 `ExampleAction` 不是移动、仍 100ms 档，`actionflow.DefaultBeatPeriod` / `DefaultMissionPeriod` 不变；sync-aoi `-move-period` 缺省跟 `DefaultMovePeriod`，[HB-DRIVEN-LOAD §4](../performance/HB-DRIVEN-LOAD-20261021.md#4-待补测2026-10-21-因宿主资源占用推迟) 的复跑命令显式加 `-move-period=100ms` 与历史数据同口径。
 - **方向二：附近没有玩家观察时 AI 停止。状态：方案已写，待实施**（[FEATURE-2026-10-22-ai-idle-without-observers](FEATURE-2026-10-22-ai-idle-without-observers.md)，留到优化阶段做）。
   - 维护者 2026-10-22 原话：“一般是没有 AOI 计数时候是 AI 停止”；“我之前的处理是单开一个 running 处理这个事，发现可以停的就使用 nest 的广播信息，通知暂时停止”；“恢复的话一般是 entity 自己心跳恢复”。
   - 维护者补充：这是 feature，使用者自己选择用不用，**缺省不启用**（生成器 `roost add behavior --ai` 缺省也不启用，只在注释里写怎么打开）。
@@ -75,6 +75,8 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 
 ### 2. 只需改文档（学习分支 `learn/main-review-20261021` 第 11 条）
 
+**已实施（维护者 2026-10-22，`8ead3dd1`，[O4](../release/v1.31.0-NOTES.md#o4)）**：guide/10-time §4B“逐拍移动适合谁”（SLG 行军、`Elapsed` 可变步长与 Lockstep）、§4C 控制等级 / 韧性 / 递减由业务在 Buff 层做；guide/04-sync 应用模式表的 MOBA 一行改为 ApplyAsync（或等“一个视野多个视点”），帧同步 MOBA 走 Lockstep，`policy.ApplyMode` 注释同步。下面是登记时的原建议。
+
 - **SLG 行军**：现状 guide 没写边界，读者可能把行军做成逐拍移动。建议在 guide/10-time §4B 写明：行军按“起点 + 速度 + 出发时刻”按需算位置，到达用 entitytimer，不逐拍移动。
 - **可变步长不适合确定性玩法**：`Beat.Elapsed` 是可变步长；MOBA / 帧同步走 Lockstep。建议在 §4A / §4B 写明。
 - **控制等级 / 韧性 / 递减**：框架没有，建议在 guide 写明由业务在 Buff 层做（`BindStates` 只做派生状态）。
@@ -82,8 +84,8 @@ v1.31.0 尚未发版（待 2026-10-22 晚整体压测与发版验证）。已决
 
 ### 3. 小改动（同一出处）
 
-- **定身期间计划步骤的 Timeout 暂停计时**：现状 `PlanMission` 的步骤时限从发起时刻算、`FreezePause` 期间照样计时，定身长于 Timeout 就失败（护送 / 巡逻偏严）。建议冻结期间暂停时限（解冻时顺延）。
-- **限制每个 Interest 的空间视野总数，或给政策阶段加耗时预算**：现状 `MaxViewsPerPlayer` 只数挂接，已定义未挂接的空间视野（每个都是 AOI 观察者）不受限。ApplySync 已有政策阶段预算（10-22）；ApplyAsync 与空间视野总数仍没有上限。建议加 `MaxSpatialViews`（每个 Interest）。
+- **定身期间计划步骤的 Timeout 暂停计时**：现状 `PlanMission` 的步骤时限从发起时刻算、`FreezePause` 期间照样计时，定身长于 Timeout 就失败（护送 / 巡逻偏严）。建议冻结期间暂停时限（解冻时顺延）。**已实施（维护者 2026-10-22，`a0a71a4a`，[O2](../release/v1.31.0-NOTES.md#o2)）**：`Behavior` 按自己的时钟记各组冻结起止（可选接口 `actionflow.FrozenTimer`），`PlanMission` 从已用时长里扣掉冻结时间；`FreezeCancel` 照旧按取消走 `OnFail`。
+- **限制每个 Interest 的空间视野总数，或给政策阶段加耗时预算**：现状 `MaxViewsPerPlayer` 只数挂接，已定义未挂接的空间视野（每个都是 AOI 观察者）不受限。ApplySync 已有政策阶段预算（10-22）；ApplyAsync 与空间视野总数仍没有上限。建议加 `MaxSpatialViews`（每个 Interest）。**已实施空间视野总数（维护者 2026-10-22，`da937be2`，[O3](../release/v1.31.0-NOTES.md#o3)）**：`InterestConfig.MaxSpatialViews`，缺省 8192（D19 实测：1000 玩家各 8 个空间视野时 ApplySync 的 Flush 约半个周期），只在登记侧计数，超出 `DefineSpatialView` 返回 `ErrSpatialViewLimit`；ApplyAsync 的政策阶段耗时预算没有做。
 
 ### 4. 功能 / 优化（同一出处）
 

@@ -16,6 +16,7 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 - **线格式**：Lockstep 恢复失败通知 C9 升 v2（v1 删除）、新增快照分块 CA 01，服务端、Go `robot` / `FrameAssembler` 与 C# SDK 一起升级。game-demo：10102 推送是 Lockstep 包本身、按连接寻址；新增 10025 `scene_view`、10026 `MoveTarget`；`PlayerDao.pos_x / pos_y / scene_id` 改 `nopersist,sync`，新增持久 `saved_scene_id / saved_pos_x / saved_pos_y`（旧文档的位置不再读）。
 - **服务**：`Mail` 接口多 `PullBroadcasts` / `RevokeBroadcast`（自己实现 `Mail` 的替身要补）；account `ServerIDClaim` 的含义改为承载服、新增 `OriginServerIDClaim`，已有工程的 `auth.go` 改写 `ServingServerID`；account 与调用它的进程同版本部署（`GetServer` 是新方法）。
 - **配置**：开发配置删掉 `dataengine.wal.dir: data/wal/dataengine`；各服务配置加 `time.business_timezone` / `time.business_day_start`（各服务相同），`main.go` 导入 `_ "time/tzdata"`；装了 heartbeat Mod 的服务 `heartbeat.delivery` 缺省 `batch`（已写死 `dispatch` 的配置不被改写）；嵌入 TCP 新键 `player_access.tcp.outbound.resident_bytes`，重新生成 `internal/access/player/tcp/`。
+- **缺省值（维护者 2026-10-22 优化项）**：`movement.DefaultMovePeriod` 100ms → 200ms（不给 `Period` 的 `MoveTo` / `Follow` 改为 5Hz，每拍位移翻倍、走完一段的时间不变；要 10Hz 就显式给 `Period: 100 * time.Millisecond`）；`InterestConfig.MaxSpatialViews` 零值取 8192，原来定义超过 8192 个空间视野的业务要显式调大；sync-aoi `-move-period` 缺省 200ms，与之前的心跳模式结果对照显式加 `-move-period=100ms`。
 - **已生成工程的 write-once 文件要手工照模板改**：game-demo `scene.go` 的 `MaxVisible` 与 `sessionLost` 里的 `selfsync.DisconnectLostPlayer`、loadtest 场景末尾的 `scene_alive`、`auth.go` 的 `ServingServerID`、`guild_ids_test.go` 的映射表绑定（`SetRemoteProjection` 之后可删）。
 
 ### 心跳与移动（DESIGN-TODO D20）
@@ -26,6 +27,11 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 - **技能与 Buff 的推进与驱动**：`gameplay/skill` 定义 `Driver{Wake() error; Sleep()}`（电平式通知，实现幂等）、`Stepper`（忙时逐 tick 推进、推进到空闲点停、输入跳到输入的 tick、追帧上限 `MaxCatchUp` 外一次跳过并计 `Jumps`、时刻倒退不动）、`TickClock`、`Runtime.CurrentTick` / `Pending`；`skill` 不依赖 nest / heartbeat / timedomain / fctx（根包守卫）。`combatcomponent.DriveBuffs` 是与驱动无关的 buff 推进（`StepBuffs` / `BuffsPending` / `NextBuffDue` / `SyncBuffDriver`），心跳驱动是薄包装 `NewRuntimeBeat` / `AttachBeat`（缺省 1Hz、按 `Granularity` 取档，有限时 buff 或 `Periodic` 时挂心跳、清空后停、启停随事务，加载后第一拍清掉停服期间到期的记录）；`CloseBuffDriver` / `RuntimeBeat.Close` 撤销，`CombatComponent.OnDestroy` 调它。`TickBuffs` 保留为导出原语，没有到期 buff 时直接返回。同一输入序列（每个输入落在同一 tick）在任何驱动节奏下逐 tick 相同。维护者 2026-10-21：心跳只是驱动方式之一、skill 只用接口。
 - **Remote 共享模式切换**：经真实 `remoteentity.Manager`（进程内权威替身与真实 Redis + Mongo + NATS）验证独占 → 共享 → 独占、共享模式下迁移、卸载重载在两种投递方式下都无双推进、不自动恢复。`BeatRunner.Sync()` 同时重新挂上任务心跳；`ai.Controller.SetStrategy(当前策略)` 只重新对齐 AI 心跳（不问 `CanStopByNext`）。
 
+### 心跳与移动：优化项（维护者 2026-10-22）
+
+- **缺省移动频率 5Hz**：`movement.DefaultMovePeriod` 100ms → 200ms（MMO / SLG 的移动一般 2～5Hz）。game-demo 的玩家移动与怪物巡逻用缺省、随之 5Hz；生成器示例动作 `ExampleAction`、`actionflow.DefaultBeatPeriod` / `DefaultMissionPeriod` 不变（不是移动）；guide 档位建议改为移动 200ms。
+- **guide/10-time §4B“逐拍移动适合谁”**：SLG 行军按“起点 + 速度 + 出发时刻”按需算位置、到达用 entitytimer，只有大地图 AOI 需要服务端位置时加 1～2Hz 心跳；心跳的 `Elapsed` 是可变步长，确定性玩法（MOBA / 帧同步）走 Lockstep。§4C：控制等级 / 韧性 / 递减由业务在 Buff 层做，框架不提供。
+
 ### 行为控制（DESIGN-TODO D21 调研一）
 
 - **`actionflow.Behavior`**：action_list + mission + 接 AI 的默认装配（`NewBehavior(owner, BehaviorConfig{…})`，实现 `ActionList`）；动作结束先送任务再送观察者，任务回调里发起的动作归属任务；`Close(reason)` / `OnDestroy()`（卸载时结束在途动作与任务，`ErrOwnerDestroyed`）。`Replacer`（`ReplaceAllow` / `ReplaceKeep` / `ReplaceReject`）、`ActionRunnerConfig.Conflict`（`NoConflict` / `BlockIncoming` / `PreemptRunning`）、`EndAction`、`FreezePause` / `FreezeCancel` 计数冻结、Start 即完成。被抢占组的排队项在抢占方结束时推进一次。`MoveTo` / `Follow` 已在终点时 Start 即完成。动作指标 `BehaviorConfig.Metrics`（缺省关闭）：`actionflow.actions.started_total{kind}` / `ended_total{kind,status}` / `running`。
@@ -33,6 +39,8 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 - **Buff → state**：`CombatComponent.BindStates(set, StateBinding{State, Tags}...)`（派生，不复制），每个改 buff 集合的方法都通知观察者；`HasBuffTag`。
 - **任务与 AI 心跳**：`Behavior` 给需要 tick 的任务挂 `"<Name>/mission"` 心跳；`MissionStep.Timeout` / `Retry`、`MissionPlan.Period`（取消的步骤不重试）；`ai.NewBeatController(hooks, BeatConfig{…})` 独立 `"ai"` 心跳（周期由策略的 `TickInterval` 决定，缺省 500ms）、`FreezeFor(d, interrupt)`、`Close(reason)`。
 - **AI 事件与分阶段**：`ai.Event` / `EventStrategy` / `Controller.OnEvent`（缓冲到下一拍，冻结、切换中、无策略时丢弃，超过 `MaxEvents` 丢最早的）；`NewStagedStrategy`、`SetStage`、JSON `stages` / `set_stage` / `event`；决策轨迹钩子 `Trace` / `Registry.TraceNodes`。
+
+- **定身期间计划步骤的时限不计时**（维护者 2026-10-22）：步骤动作所在组被冻结（`Freeze`，含 `state.Gate`）期间 `MissionStep.Timeout` 暂停，解冻后按剩余时长继续，多次冻结累加，按 Behavior 的时钟算；`FreezeCancel` 照旧（取消、不重试、走 `OnFail`）。新增可选接口 `actionflow.FrozenTimer`（`Behavior.FrozenFor`），自己实现 `ActionList` 而不实现它的照常计时。
 
 ### 业务时间
 
@@ -50,6 +58,8 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 - **会话 Hold 后撤到一个订阅都不剩，Ready 后补发空 Full**：这一 lifetime 交付过帧的会话收到一个不含对象的 Full（新 epoch），接收端照常清空；Drain 把欠着的空 Full 算作未排空（诊断 `session` / `empty_full`）。空 Full 是线格式 v2 本来合法的帧。
 - **一个 Player 一个 Manager、自身视图帧上限取接入层上限**：`SubjectSyncState.ClaimSyncOwner` / `ReleaseSyncOwner`、`ManagerConfig.Name` / `Manager.String()`；`wiring/selfsync` 一帧上限在 Manager 创建前取接入层上限（嵌入 TCP `player_access.tcp.max_payload_bytes`，独立 Gate `SelfSync.LimitFrameBytes(Config.MaxPayloadBytes)`），`selfsync.Config.MaxFrameBytes` 只能再收紧，`SelfSync.FrameLimit()`；单个玩家实体超限时在 Manager 内编码失败（随后按上条断开）。
 - **嵌入 TCP 出站全进程驻留预算**：`player_access.tcp.outbound.resident_bytes`（缺省 256 MiB，范围 `[max_payload_bytes + 16, 1 TiB]`），放不下的一帧当场被拒（`gateway.ErrResidentBudgetExhausted`，`player_tcp_outbound_budget_exhausted_total`），不关连接、不等预算；`selfsync.PushPlayerFrame` 当整轮重试，Lockstep 实时帧按丢包、追帧页计一次追帧失败，PB 推送返回错误。读循环回包与心跳 ACK 计入但不拒。会话关闭事件在写协程退出、驻留预算归还之后发布。
+
+- **每个 Interest 的空间视野总数上限**（维护者 2026-10-22）：`InterestConfig.MaxSpatialViews`（零值 `DefaultMaxSpatialViews` = 8192，负数拒绝构造）限制 `DefineSpatialView` 定义的空间视野总数（挂没挂接都算，不含主视野与关系视野），超出返回 `ErrSpatialViewLimit`、计 `entitysync_interest_view_limit_rejected_total{reason="spatial_views"}`，`RemoveView` 归还；只在登记侧计数。guide/04-sync 应用模式表改正 MOBA 一行：状态同步 MOBA 的阵营视野挂接数远超 9，选 ApplyAsync（或等“一个视野多个视点”），帧同步 MOBA 走 Lockstep。
 
 ### Lockstep
 
@@ -109,6 +119,7 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 
 - **压测工具**：nest-game `ROOST_NEST_GAME_EMBEDDED=1`（嵌入 TCPRuntime，`SYNC=1` 场景 Sync / `SELF_SYNC=1` 自身视图，输出 `Embedded`、`Minutes`）、`ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker|heartbeat`、`--check-heartbeat`；sync-aoi `-move-driver=loop|heartbeat`（`-move-period` / `-move-speed` / `-movers`）、`-apply-mode`、`-views-per-player`、`-alliance-size`、`-world` / `-block` / `-enter-radius` / `-leave-radius` / `-move-amplitude`；心跳投递对比夹具 `HB_MODE=x|y|z|c`、`BenchmarkDriverDispatch`、`TestDriverOpenLoop`（`HB_OPENLOOP=1`）。工具缺省仍是全局循环 / 帧回调（发版前对比后再定）。
 - **已有的数字**：心跳调度结构与投递方式（[HB-STRUCTURES-20261021](docs/performance/HB-STRUCTURES-20261021.md)）、选项 C 与方案 D（[NEST-BATCH-HEARTBEAT-20261021](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md)）、Interest 单写者前后（[INTEREST-SINGLE-WRITER-20261022](docs/performance/INTEREST-SINGLE-WRITER-20261022.md)）、2026-10-20 夜间补测（[NIGHT-20261020](docs/performance/NIGHT-20261020.md)）、Lockstep 快照演练、生成工程 strict 吞吐（[GENERATED-TCP-STRICT-20261020](docs/performance/GENERATED-TCP-STRICT-20261020.md)）。Flush 空 Full 改动前后 `BenchmarkManagerFlush` / `BenchmarkSessionRecovery` 无差异；Lockstep 已提交门没有恢复中会话时热路径无差异。
+- **sync-aoi `-move-period` 缺省 200ms**（跟 `movement.DefaultMovePeriod`，2026-10-22）：[HB-DRIVEN-LOAD §4](docs/performance/HB-DRIVEN-LOAD-20261021.md#4-待补测2026-10-21-因宿主资源占用推迟) 的心跳驱动复跑命令显式加 `-move-period=100ms`，与之前的结果同口径；`MaxSpatialViews` 按 `玩家数 × -views-per-player` 放宽。
 - **没有测量的**：心跳、移动、行为、技能 / Buff 的正式负载；ApplySync 预算与纯前缀切开之后的对比；选项 C 的组合参数；Linux。今晚清单见 [V1310-PRERELEASE-20261022](docs/performance/V1310-PRERELEASE-20261022.md)。
 
 ## [v1.29.0] - 2026-10-19
