@@ -157,7 +157,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒）。**`strict` 每一拍都在实体 worker 上、持实体锁等提交落盘**（改了持久字段的拍要等一次 WAL 持久化才释放 worker），快池实体的高频心跳不要用；要“这一拍的结果一定落盘才算”的少数登记才用，并选低档位 |
 | `WithTimeDomain(d)` | 本登记按场景的时间域计时（§4D）：调度仍按真实时间，`Beat.Now` / `Elapsed` 是域时间 |
 
-**档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 100ms、AI 200ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
+**档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 200ms（MMO / SLG 常见 2～5Hz，`movement.DefaultMovePeriod`；动作游戏要更细时在动作参数里给 100ms）、AI 200ms～500ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
 
 **`Beat` 与跳拍语义**：
 
@@ -243,6 +243,7 @@ return err
 - 自己离开场景 → `LeftScene`；AOI 排队满（`policy.ErrInterestQueueFull`，背压）时整拍作废、下一拍接着走；其他写位置错误 → `Refused`。
 - 推进状态（亚格位置、路径进度）随事务回滚恢复：回滚的一拍不算走过，回滚的 `MoveTo` 不生效。
 - 动作结论：`Arrived` → 成功，`Replaced` → 取消，其余 → 失败（原因是 `StopReason`）；动作被取消（含被同组新动作取代）时停掉自己那次移动。
+- **频率**：`MoveToParam.Period` / `FollowParam.Period` 不给时取 `movement.DefaultMovePeriod` = 200ms（5Hz，维护者 2026-10-22 由 100ms 改；MMO / SLG 的移动一般 2～5Hz）。每拍走 `速度 × Elapsed`，频率只决定位置更新的粒度与每秒消息数，不改变走完一段的时间；客户端按复制下来的位置插值。要更细（动作游戏、近战贴身）就显式给 `Period: 100 * time.Millisecond`。
 
 边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 

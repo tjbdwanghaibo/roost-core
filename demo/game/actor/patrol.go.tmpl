@@ -11,8 +11,8 @@ import (
 
 // PatrolInterval is how often a patrolling monster decides (its AI
 // heartbeat). Walking is not decided at this rate: the MoveTo it starts is
-// advanced on the move group's own heartbeat (100ms), and the AI only looks
-// again for "am I idle".
+// advanced on the move group's own heartbeat (movement.DefaultMovePeriod,
+// 200ms), and the AI only looks again for "am I idle".
 const PatrolInterval = 500 * time.Millisecond
 
 // Patrol is the monster's AI: walk the waypoints in order, forever.

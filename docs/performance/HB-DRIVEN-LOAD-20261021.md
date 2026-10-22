@@ -11,9 +11,9 @@
 | 开关 | 缺省 | 含义 |
 | --- | --- | --- |
 | `-move-driver=loop\|heartbeat` | `loop` | Nest 模式下谁驱动移动。`loop` 是原负载：压测端循环每 50ms tick 挑 `-dirty`% 实体、分 `-batches` 批发 `Request`，handler 里 `QueueMove`。`heartbeat`：每个实体装 `gameplay/heartbeat` 宿主、`gameplay/movement` 的 `MapBasic` / `Move` 与 `actionflow.BeatRunner`，被选中的移动者在原往返带上 `MoveTo` 随机目标巡逻，到达后在 `OnEnded` 里接下一段，runner 的移动组心跳每拍 `Move.Advance(Beat.Elapsed)` → `MapBasic.SetPos` → `QueueMove`。只支持 `-nest`（直接模式只有 loop） |
-| `-move-period` | `100ms` | 心跳模式移动组心跳的档位（`heartbeat.Periods` 之一） |
-| `-move-speed` | `30` | 巡逻速度（格/秒）。缺省每拍 3 格，与全局循环每次改值走的 3 格相同，保证每拍都换格、每拍一次改值 |
-| `-movers` | `0` | 巡逻的实体数；0 按与全局循环相同的改值速率折算：`ceil(每 tick 改值数 × 20/s × move-period)`。缺省参数（1 万实体、1%）是 200 个，每秒 2000 次改值 |
+| `-move-period` | `200ms`（2026-10-22 起，跟 `movement.DefaultMovePeriod`；之前是 `100ms`） | 心跳模式移动组心跳的档位（`heartbeat.Periods` 之一）。**与 2026-10-22 之前的心跳模式结果对照时显式加 `-move-period=100ms`**，见 §4 |
+| `-move-speed` | `30` | 巡逻速度（格/秒）。100ms 档每拍 3 格（与全局循环每次改值走的 3 格相同），200ms 档每拍 6 格；都保证每拍换格、每拍一次改值 |
+| `-movers` | `0` | 巡逻的实体数；0 按与全局循环相同的改值速率折算：`ceil(每 tick 改值数 × 20/s × move-period)`。缺省参数（1 万实体、1%）在 100ms 档是 200 个、200ms 档是 400 个，都是每秒 2000 次改值 |
 
 几何不变：基点与全局循环相同（`patrolBase`，原 `position` 的偏移 0），X 在 `[基点, 基点 + -move-amplitude]`，Y 不变；移动者用与全局循环相同的互素步长散在整张地图上。心跳 handler 用 memory 级别（与全局循环的 memory handler 一致）。
 
@@ -81,16 +81,18 @@ HB-STRUCTURES §7 记的“跳拍路径没有被压出来”由最后一项在�
 
 原计划在交付前跑的几秒到几十秒冒烟、以及 D20 P4 要求的正式对比，全部推迟到 v1.31 发版前的压测，按同机交替、多轮、benchstat 的口径跑。命令（标签自取、唯一；不与 race、profile、索引重建并跑）：
 
+**口径（2026-10-22 起）**：sync-aoi 的 `-move-period` 缺省由 `100ms` 改为 `200ms`（跟 `movement.DefaultMovePeriod`，维护者 2026-10-22：MMO / SLG 的移动一般 2～5Hz）。下面的心跳驱动命令显式写 `-move-period=100ms`，与本页 §4 冒烟及之前的心跳模式结果同一口径（移动者数、每拍位移、每秒消息数都相同）；想看新缺省就另跑一组 `-move-period=200ms`（移动者数按改值速率折算翻倍、每秒改值数不变，每秒心跳消息数减半——每个移动者每秒 5 拍）。全局循环（`-move-driver=loop`）不受这个开关影响。
+
 ```sh
 # 1. sync-aoi：全局循环与心跳驱动对照（原场景；各 3 轮，交替跑）
 ROOST_PERF_LABEL=p4-aoi-loop      bash scripts/perf/sync-aoi.sh -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=loop
-ROOST_PERF_LABEL=p4-aoi-heartbeat bash scripts/perf/sync-aoi.sh -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat
+ROOST_PERF_LABEL=p4-aoi-heartbeat bash scripts/perf/sync-aoi.sh -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=100ms
 
 # 2. D19 多视野 Nest 模式复测（每玩家 4 / 8 / 16 个额外视野，两种 apply 模式，两种驱动）
 for views in 4 8 16; do for apply in sync async; do for driver in loop heartbeat; do
   ROOST_PERF_LABEL=p4-aoi-v$views-$apply-$driver ROOST_PERF_COUNT=2 \
     bash scripts/perf/sync-aoi.sh -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 \
-      -views-per-player=$views -apply-mode=$apply -move-driver=$driver
+      -views-per-player=$views -apply-mode=$apply -move-driver=$driver -move-period=100ms
 done; done; done
 # ApplySync 的 16 视野超过 SyncApplyMaxExtraViews（8）时 NewInterest 拒绝，按 D19 记录用诊断构建或只跑 async。
 
@@ -112,14 +114,14 @@ for rate in 100000 250000 500000; do
 done
 ```
 
-冒烟（缩小规模，只证明能跑通、指标有数）可用 `-players=100 -entities=1000 -ticks=100` 与 `ROOST_NEST_GAME_ENTITIES=1000 ROOST_NEST_GAME_PLAYERS=100 ROOST_NEST_GAME_DURATION=10s`，结论栏写“正式对比待 v1.31 发版前压测”。
+冒烟（缩小规模，只证明能跑通、指标有数；心跳驱动同样加 `-move-period=100ms` 才与下表同口径）可用 `-players=100 -entities=1000 -ticks=100` 与 `ROOST_NEST_GAME_ENTITIES=1000 ROOST_NEST_GAME_PLAYERS=100 ROOST_NEST_GAME_DURATION=10s`，结论栏写“正式对比待 v1.31 发版前压测”。
 
 **冒烟结果（2026-10-22，main `11988df8` + 夹具修正，宿主 1 分钟 loadavg 约 2～3，只证明能跑通，正式对比仍待 v1.31 发版前压测）**：
 
 | 命令（缩小规模） | 结果 |
 | --- | --- |
 | sync-aoi `-players=100 -entities=1000 -ticks=100 -move-driver=loop` | 跑通，帧 4177、改值→客户端 P50 / P99 26.2 / 49.0ms；进程以非零码退出是夹具自己的 50ms 延迟门槛（33 / 4570 个样本超 50ms），报告完整 |
-| 同上 `-move-driver=heartbeat` | 跑通，门槛内（0 / 4768 超 50ms），帧 4033、P50 / P99 11.8 / 42.0ms；移动者 20、`Delivered = Executed = 1109`、跳拍 / 停滞 / 动作失败 0、巡逻段 181；`beat_interval_ms` P50 100.0 / P99 200.1（946 个间隔里 29 个超过周期 + 50ms：间隔按“位置真的变了”的两次 `SetPos` 计，换段那一拍不动，所以出现 200ms，属口径，不是跳拍） |
+| 同上 `-move-driver=heartbeat`（当时缺省 `-move-period=100ms`） | 跑通，门槛内（0 / 4768 超 50ms），帧 4033、P50 / P99 11.8 / 42.0ms；移动者 20、`Delivered = Executed = 1109`、跳拍 / 停滞 / 动作失败 0、巡逻段 181；`beat_interval_ms` P50 100.0 / P99 200.1（946 个间隔里 29 个超过周期 + 50ms：间隔按“位置真的变了”的两次 `SetPos` 计，换段那一拍不动，所以出现 200ms，属口径，不是跳拍） |
 | 同上 + `-views-per-player=4 -apply-mode=sync` / `async` 心跳驱动 | 都跑通；sync 门槛内（P99 45.0ms），async 超门槛（P99 52.5ms，2220 / 19743 超 50ms，与 ApplyAsync 多约一个周期一致） |
 | nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker`，`ENTITIES=1000 PLAYERS=100 DURATION=10s`，其余按本节第 3 条（EMBEDDED、SYNC、HZ=10） | `TestNestGameLoad` PASS：消息 999.4/s、心跳 9993.9/s，消息 / 心跳 p99 11.96 / 11.40ms，计数、终值、延迟检查都为 true |
 | 同上 `heartbeat`（`TestNestGameLoad` 的心跳驱动路径） | PASS：每 Unit 99～100 拍（期望 100）、间隔 p99 100.0ms、跳拍 0 / 0 / 0、停滞 0、`verified=true`；消息 999.5/s、心跳 9984.6/s，p99 11.50 / 0.040ms（心跳从回调开始计，口径见 §1） |

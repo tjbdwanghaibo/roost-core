@@ -166,7 +166,7 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 
 ### sync-aoi.sh / sync-recovery.sh（新拆分）
 
-**移动由谁驱动**（D20 第 4 期，2026-10-21）：`-move-driver=loop`（缺省，原负载：压测端循环发改值请求）或 `heartbeat`（只在 `-nest` 下：实体自己的心跳 + `gameplay/movement` 巡逻，另有 `-move-period` / `-move-speed` / `-movers`）。心跳模式 `planned_event_to_client` 的起点是这一拍消息的业务时间、不含驱动迟到，下表 `harness.*` 与 `server.request_to_change_ms` 只在 loop 模式有值；`server.json` 的 `heartbeat` 一节与口径差异见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。不加开关的旧命令得到原负载。
+**移动由谁驱动**（D20 第 4 期，2026-10-21）：`-move-driver=loop`（缺省，原负载：压测端循环发改值请求）或 `heartbeat`（只在 `-nest` 下：实体自己的心跳 + `gameplay/movement` 巡逻，另有 `-move-period` / `-move-speed` / `-movers`；`-move-period` 缺省 2026-10-22 起由 100ms 改为 200ms，与之前的心跳模式结果对照时显式加 `-move-period=100ms`）。心跳模式 `planned_event_to_client` 的起点是这一拍消息的业务时间、不含驱动迟到，下表 `harness.*` 与 `server.request_to_change_ms` 只在 loop 模式有值；`server.json` 的 `heartbeat` 一节与口径差异见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。不加开关的旧命令得到原负载。
 
 服务端与模拟客户端是两个进程；`planned_event_to_client` / `state_change_to_client` / `commit_to_client` 的终点是客户端解码校验完该对象。`server.json`（服务端进程，只计正式测量 tick，样本是每次状态变化）：
 

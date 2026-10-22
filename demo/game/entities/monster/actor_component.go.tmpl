@@ -31,7 +31,7 @@ const PatrolHalf int64 = 12
 // heartbeat — nothing outside the monster walks it:
 //
 //	ai.Controller (heartbeat "ai", 500ms)      decides: Patrol starts a MoveTo when the move group is idle
-//	actionflow.Behavior (heartbeat "actionflow/1", 100ms while moving)
+//	actionflow.Behavior (heartbeat "actionflow/1", 200ms while moving)
 //	                                            runs the MoveTo: each beat Move.Advance(elapsed)
 //	movement.Move / MapBasic                    the walk, and the position written to MonsterDao + queued for the AOI
 //	state.Set + state.Gate                      Rooted → the move group is frozen (FreezePause)

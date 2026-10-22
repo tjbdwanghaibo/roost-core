@@ -26,8 +26,9 @@ import (
 //     the map, or it goes away.
 //
 // Either way the walk replaces the one in progress, and it is advanced on the
-// player's own move heartbeat (100ms): each beat moves speed × elapsed,
-// writes the cell reached through MapBasic and queues it for the AOI. This
+// player's own move heartbeat (movement.DefaultMovePeriod, 200ms; MMO / SLG
+// movement is typically 2-5Hz): each beat moves speed × elapsed, writes the
+// cell reached through MapBasic and queues it for the AOI. This
 // handler returns before the first step; the client sees the walk in the
 // replicated position (pos_x / pos_y / facing) frame by frame.
 //

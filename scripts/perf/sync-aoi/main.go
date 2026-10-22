@@ -26,6 +26,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -100,7 +101,9 @@ func parseConfig() config {
 	flag.Int64Var(&c.MoveAmplitude, "move-amplitude", 48, "X span of the per-entity back-and-forth movement (16 phases; 48 = the original 3 per phase)")
 	// 缺省仍是 loop：已有报告的复跑命令保持原负载；heartbeat 的正式对比放在 v1.31 发版前的压测，之后再定缺省。
 	flag.StringVar(&c.MoveDriver, "move-driver", moveDriverLoop, "who moves entities in Nest mode: loop (harness loop sends one change request per moved entity, the original load) or heartbeat (each entity's own heartbeat drives a movement patrol along the same band; requires -nest)")
-	flag.DurationVar(&c.MovePeriod, "move-period", 100*time.Millisecond, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods)")
+	// 缺省跟 movement.DefaultMovePeriod（2026-10-22 起 200ms，MMO / SLG 一般 2～5Hz）；与 2026-10-22 之前的心跳模式
+	// 结果对照时显式加 -move-period=100ms（docs/performance/HB-DRIVEN-LOAD-20261021.md §4）。
+	flag.DurationVar(&c.MovePeriod, "move-period", movement.DefaultMovePeriod, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods); default movement.DefaultMovePeriod (200ms); add -move-period=100ms to compare with runs before 2026-10-22")
 	flag.Float64Var(&c.MoveSpeed, "move-speed", 30, "heartbeat mode: patrol speed in cells per second (keep at least one cell per beat so every beat is a change)")
 	flag.IntVar(&c.Movers, "movers", 0, "heartbeat mode: patrolling entities; 0 derives the count from -dirty so the change rate equals the loop driver's (entities×dirty%×20/s ÷ beats per second)")
 	flag.StringVar(&c.Role, "role", "server", "server or client")

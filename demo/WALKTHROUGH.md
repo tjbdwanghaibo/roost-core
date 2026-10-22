@@ -223,7 +223,7 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, r
 ```
 move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体事务）
         PathFind.Path 找路（只此一次）─▶ Behavior.CreateAction(MoveTo{path, 60 格/秒})   ← 最后一步
-                                                │  BeatRunner 给移动组挂心跳 "actionflow/1"（100ms）
+                                                │  BeatRunner 给移动组挂心跳 "actionflow/1"（200ms）
 每一拍（玩家自己的 Nest worker、实体锁与事务内）：
         Move.Advance(Beat.Elapsed) ─▶ MapBasic.SetPos ─▶ DAO PosX/PosY/Facing + Space.QueueMove ─▶ 提交 ─▶ AOI ─▶ 帧
 到达 / 被新目标取代 / 被瞬移结束 / 被挡 ─▶ 动作结束，移动组的心跳停
@@ -232,7 +232,7 @@ move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体�
 - **客户端只发意图**（`MoveTargetRequest{X, Y, Follow}`，msg 10026）：回复只说动作开始了、从哪里开始；路上的每一格都作为
   复制的 `pos_x / pos_y / facing` 到达客户端，客户端渲染复制下来的位置即可。`Follow` 跟随另一个玩家（玩家 id），走到 3 格以内结束。
 - **不追帧**：每拍走“速度 × 本拍经过的时间”，掉拍后下一拍一次走完；空闲的玩家没有任何心跳登记，走路的玩家一个。
-  一个进程里成千上万人走路时，心跳按实体 ID 的哈希打散在周期里，没有“全服每 100ms 一起走一步”的尖峰。
+  一个进程里成千上万人走路时，心跳按实体 ID 的哈希打散在周期里，没有“全服每 200ms 一起走一步”的尖峰。移动频率取 `movement.DefaultMovePeriod`（200ms，5Hz；MMO / SLG 一般 2～5Hz），走完一段的时间只由速度决定。
 - **寻路只做一次**：`PathFind.Path` 有 4096 节点的预算（开阔地上远处的斜向目标会用完它）；用完时改走直线，`Move` 每进一格
   问一次地形（`actor.Ground`），被挡就停在最后一个可走的格（动作以 `Blocked` 失败结束）。证明到不了的目标直接拒绝。
 - **按点移动保留为瞬移**（`move`，msg 10017）：一次校验过的写位置，结束正在走的路；它是服务端驱动之前的写法，留作对照与闪现 / GM 用。

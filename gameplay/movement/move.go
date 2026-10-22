@@ -11,8 +11,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// DefaultMovePeriod 是移动动作缺省的 tick 周期（10Hz）：MoveTo / Follow 由实体的 ActionRunner 按它挂心跳。
-const DefaultMovePeriod = 100 * time.Millisecond
+// DefaultMovePeriod 是移动动作缺省的 tick 周期（5Hz）：MoveTo / Follow 由实体的 ActionRunner 按它挂心跳。取 MMO / SLG
+// 常见的 2～5Hz 的上端（维护者 2026-10-22；原 100ms）；要更细的（动作游戏）在 MoveToParam / FollowParam.Period 里给。
+const DefaultMovePeriod = 200 * time.Millisecond
 
 // StopReason 是一次移动结束的原因；0 表示还在移动。
 type StopReason uint8
