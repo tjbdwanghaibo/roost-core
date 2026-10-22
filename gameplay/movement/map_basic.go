@@ -56,7 +56,7 @@ func FacingOf(dx, dy float64) Facing {
 }
 
 // Fields 是 MapBasic 的状态所在：业务实体 DAO 的字段。场景 ID 是否持久由业务定；位置与朝向应声明为 nopersist、
-// 参与同步（D20 决定 ⑮：位置不每拍落库，按周期或离开场景时经 MapConfig.Save 落库一次）。
+// 参与同步（D20 决定 ⑮：位置不每拍落库，按周期或离开场景时经 MapConfig.Save 落库一次；朝向同一规则）。
 //
 // 实现写 DAO 并标同步脏；生成的 setter 在事务里登记逆操作，回滚随 DAO 恢复。只在实体锁内调用。
 type Fields interface {
@@ -137,9 +137,9 @@ type MapConfig struct {
 	// Save 把当前场景、位置与朝向写进业务 DAO 的持久字段，在实体锁与事务内调用（离开场景时、周期落库时）。
 	// nil 表示不落库（位置只同步）。
 	Save func(sceneID int64, at spatial.Point, facing Facing) error
-	// SaveOnLeave 为 true 时 Leave 先 Save 一次（位置变过才写）。
+	// SaveOnLeave 为 true 时 Leave 先 Save 一次（场景、位置或朝向变过才写）。
 	SaveOnLeave bool
-	// SaveEvery 非 0 时在场景里每隔这么久 Save 一次（位置变过才写），必须是 heartbeat.Periods 之一。周期落库是心跳
+	// SaveEvery 非 0 时在场景里每隔这么久 Save 一次（场景、位置或朝向变过才写），必须是 heartbeat.Periods 之一。周期落库是心跳
 	// 登记 "map.save"，持久级别按 SaveOptions（缺省 async）。
 	SaveEvery   time.Duration
 	SaveOptions []heartbeat.RegOption
@@ -169,7 +169,7 @@ type MapBasic struct {
 type mapState struct {
 	// space 非 nil 表示业务视角在场景里。
 	space Space
-	// dirty 表示位置或场景自上次 Save 以来变过。
+	// dirty 表示场景、位置或朝向自上次 Save 以来变过。
 	dirty bool
 }
 
@@ -307,17 +307,20 @@ func (m *MapBasic) SetPos(at spatial.Point) error {
 	return nil
 }
 
-// SetFacing 写朝向（同步给客户端；AOI 不关心朝向）。
+// SetFacing 写朝向。朝向和位置一样是 MapBasic 的数据：写 Fields（同步规则同位置，回滚随 DAO 字段的逆操作）、
+// 算作变过（Save 与周期落库会写它，“变过”随事务回滚），提交后发布。AOI 不关心朝向，不入队。
 func (m *MapBasic) SetFacing(f Facing) {
 	if f == m.fields.Facing() {
 		return
 	}
+	m.guard()
+	m.st.dirty = true
 	m.fields.SetFacing(f)
 	m.stage()
 }
 
-// Save 位置或场景变过时调 MapConfig.Save 落库一次；没配 Save 或没变过时什么也不做。在实体锁与事务内调用，持久级别
-// 是调用它的 handler 的级别。
+// Save 场景、位置或朝向变过时调 MapConfig.Save 落库一次；没配 Save 或没变过时什么也不做。在实体锁与事务内调用，
+// 持久级别是调用它的 handler 的级别。
 func (m *MapBasic) Save() error {
 	if m.config.Save == nil || !m.st.dirty {
 		return nil

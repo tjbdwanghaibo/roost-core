@@ -210,8 +210,9 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find, r
 - **位置的权威在 DAO，别处不缓存**。读位置 → `MapComponent.Pos()` → DAO；写位置只经 `movement.MapBasic`（`MapComponent` 持有）→ DAO，
   同一次写在事务里把新位置排进 AOI（`Space.QueueMove`，走提交门：回滚的一步不进 AOI）。AOI 的 id→坐标索引是索引不是第二个真相，
   永远不被当作"X 在哪"的答案读出来。两个可写的真相就是重连之后玩家出现在别处的那种 bug。
-- **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY`，
-  由 `MapBasic` 在离开场景时与在场景里每 10 秒（`actor.SavePeriod`，心跳 `"map.save"`）写一次、位置没变不写；进场景时以它为首选点。
+- **位置不每拍落库**（D20 决定 ⑮）：`PosX/PosY/SceneID/Facing` 是 `nopersist,sync`；落库的是 `SavedSceneID/SavedPosX/SavedPosY/SavedFacing`，
+  由 `MapBasic` 在离开场景时与在场景里每 10 秒（`actor.SavePeriod`，心跳 `"map.save"`）写一次、场景 / 位置 / 朝向都没变不写；进场景时
+  以保存的位置为首选点、恢复保存的朝向。朝向和位置是同一份 MapBasic 数据（维护者 2026-10-22）：只转向也算变过，回滚随 DAO。
 - **玩家不占地**（`Walkable` 而不是 `Occupy`）：两个玩家可以站在同一点，于是断线也没有残留占位要回收。占位留给真正会挡路的东西
   （地图里的墙、将来判定为实心的怪）。
 - **落点用 `Place` 向外一圈圈找**：地图每次重建，玩家记住的位置可能不再可用；返回最近的可站点，而不是"某个"可站点。

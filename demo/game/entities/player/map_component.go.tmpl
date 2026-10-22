@@ -161,12 +161,20 @@ func (component *MapComponent) SavedPos() spatial.Point {
 	return spatial.Point{X: dao.GetSavedPosX(), Y: dao.GetSavedPosY()}
 }
 
+// SavedFacing is the stored facing, written together with SavedPos.
+func (component *MapComponent) SavedFacing() movement.Facing {
+	return movement.Facing(component.owner.Dao().GetSavedFacing())
+}
+
 // EnterScene places the player. The caller resolves the point first (through
 // the scene's PathFind.Place, so a remembered position that is now blocked
 // becomes the nearest free one) — this component does not know about scenes,
 // only about what it was told to write. A player already on this map (a
 // reconnect while still loaded) stays where it is and the answer is that
 // point: the client starts from what the server has, not from a respawn.
+// A player that is placed faces the way it was saved facing: the live facing
+// is nopersist like the position, so a reloaded player would otherwise face
+// +X.
 func (component *MapComponent) EnterScene(sceneID int64, space movement.Space, at spatial.Point) (spatial.Point, error) {
 	if sceneID == 0 {
 		return spatial.Point{}, errcode.Wrap(apperrors.ErrScenePosition, nil, "scene_id", sceneID)
@@ -182,6 +190,7 @@ func (component *MapComponent) EnterScene(sceneID int64, space movement.Space, a
 	if err := component.mb.Enter(sceneID, space, at); err != nil {
 		return spatial.Point{}, err
 	}
+	component.mb.SetFacing(component.SavedFacing())
 	return at, nil
 }
 
@@ -261,13 +270,15 @@ func (component *MapComponent) Follow(target int64) (int64, error) {
 // Walking reports whether a walk is in progress.
 func (component *MapComponent) Walking() bool { return component.move.Moving() }
 
-// save writes the stored copy of the position (MapConfig.Save): inside the
-// transaction that leaves the scene, or the periodic save's beat.
-func (component *MapComponent) save(sceneID int64, at spatial.Point, _ movement.Facing) error {
+// save writes the stored copy of the scene, position and facing
+// (MapConfig.Save): inside the transaction that leaves the scene, or the
+// periodic save's beat.
+func (component *MapComponent) save(sceneID int64, at spatial.Point, facing movement.Facing) error {
 	dao := component.owner.Dao()
 	dao.SetSavedSceneID(sceneID)
 	dao.SetSavedPosX(at.X)
 	dao.SetSavedPosY(at.Y)
+	dao.SetSavedFacing(int32(facing))
 	return nil
 }
 

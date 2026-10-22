@@ -32,15 +32,18 @@ type PlayerDao struct {
 	SceneID int64 `bson:"scene_id" dao:"nopersist,sync"`
 	// Facing is the direction of the last step, 1/100 degree (movement.Facing).
 	Facing int32 `bson:"facing" dao:"nopersist,sync"`
-	// SavedSceneID / SavedPosX / SavedPosY are the stored copy of the above:
-	// written when the player leaves the scene and every actor.SavePeriod
-	// while it is on it (movement.MapConfig Save / SaveOnLeave / SaveEvery),
-	// only when the position changed since the last write, and read back as
-	// the preferred point when the player is placed on the map again.
-	// Persisted and not synced: nobody draws them.
+	// SavedSceneID / SavedPosX / SavedPosY / SavedFacing are the stored copy
+	// of the above: written when the player leaves the scene and every
+	// actor.SavePeriod while it is on it (movement.MapConfig Save /
+	// SaveOnLeave / SaveEvery), only when the scene, position or facing
+	// changed since the last write, and read back when the player is placed
+	// on the map again (the position as the preferred point, the facing as
+	// is). Facing follows the position's rule: it is MapBasic data like the
+	// position. Persisted and not synced: nobody draws them.
 	SavedSceneID int64 `bson:"saved_scene_id" dao:"persist"`
 	SavedPosX    int64 `bson:"saved_pos_x" dao:"persist"`
 	SavedPosY    int64 `bson:"saved_pos_y" dao:"persist"`
+	SavedFacing  int32 `bson:"saved_facing" dao:"persist"`
 	// Equipment is what the player is wearing. It is the demo's one NESTED
 	// struct — a struct inside the DAO, holding a map of pointers to another
 	// struct — and it is here on purpose: real defects

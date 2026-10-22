@@ -243,6 +243,76 @@ func TestEnterAndLeaveFollowTheTransaction(t *testing.T) {
 	}
 }
 
+// 朝向和位置一样是 MapBasic 的数据（维护者 2026-10-22）：只改朝向也算变过，Save 与周期落库把新朝向交给保存回调；
+// 回滚的朝向修改连同“变过”一起撤销——朝向回到原值、不发布，之后的 Save 没有可写的东西。
+func TestFacingIsSavedAndRolledBackLikeThePosition(t *testing.T) {
+	f := newNestFixture(t, 1000)
+	var mu sync.Mutex
+	var saved []string
+	save := func(scene int64, at spatial.Point, facing Facing) error {
+		mu.Lock()
+		defer mu.Unlock()
+		saved = append(saved, fmt.Sprintf("%d@%d,%d/%d", scene, at.X, at.Y, facing))
+		return nil
+	}
+	takeSaved := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := saved
+		saved = nil
+		return out
+	}
+	e := f.add(4, moverOptions{save: save, every: 5 * time.Second})
+	f.mustRun(e, func(m *mover) error {
+		if err := m.mb.Enter(1, &spaceLog{}, spatial.Point{X: 7, Y: 7}); err != nil {
+			return err
+		}
+		return m.mb.Save()
+	})
+	if got := takeSaved(); !slices.Equal(got, []string{"1@7,7/0"}) {
+		t.Fatalf("save on enter: %v", got)
+	}
+
+	// 回滚的朝向修改：值、发布与“变过”都回到原处。
+	if err := f.run(e, func(m *mover) error {
+		m.mb.SetFacing(9000)
+		return errBusiness
+	}); !errors.Is(err, errBusiness) {
+		t.Fatal(err)
+	}
+	if facing := read(f, e, func(m *mover) Facing { return m.mb.Facing() }); facing != 0 || e.mb.Published().Facing != 0 {
+		t.Fatalf("after rollback: facing %d published %+v", facing, e.mb.Published())
+	}
+	f.mustRun(e, func(m *mover) error { return m.mb.Save() })
+	if got := takeSaved(); len(got) != 0 {
+		t.Fatalf("a rolled-back facing change was saved: %v", got)
+	}
+
+	// 只改朝向再 Save：保存回调收到新朝向。
+	f.mustRun(e, func(m *mover) error {
+		m.mb.SetFacing(9000)
+		return m.mb.Save()
+	})
+	if got := takeSaved(); !slices.Equal(got, []string{"1@7,7/9000"}) {
+		t.Fatalf("Save after SetFacing alone: saved %v, want [1@7,7/9000]", got)
+	}
+
+	// 周期落库同样包含只改了朝向的变化；没变过的一拍不写。
+	f.mustRun(e, func(m *mover) error {
+		m.mb.SetFacing(18000)
+		return nil
+	})
+	f.mustRun(e, func(m *mover) error { return m.mb.saveBeat(beatOf(5 * time.Second)) })
+	f.mustRun(e, func(m *mover) error { return m.mb.saveBeat(beatOf(5 * time.Second)) })
+	if got := takeSaved(); !slices.Equal(got, []string{"1@7,7/18000"}) {
+		t.Fatalf("periodic save after SetFacing alone: saved %v, want [1@7,7/18000]", got)
+	}
+	f.settle(e)
+	if e.mb.Published().Facing != 18000 {
+		t.Fatalf("published %+v", e.mb.Published())
+	}
+}
+
 // 回滚的 Move.MoveTo 不生效：移动状态回到原处（Move 的推进状态随事务回滚）。
 func TestRolledBackMoveToLeavesNothingRunning(t *testing.T) {
 	f := newNestFixture(t, 1000)
