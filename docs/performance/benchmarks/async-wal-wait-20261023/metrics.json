@@ -1,0 +1,822 @@
+{
+  "after": [
+    {
+      "Name": "dataengine.outbox.oldest_age_ms",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.189395+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "dataengine.outbox.pending",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.189394+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "dataengine.projection.pending",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 100,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.133774+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.cost",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "result": "ok",
+        "type": "Single"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 151270568832,
+      "MaxNanos": 47269958,
+      "LastNanos": 12172792,
+      "LastUpdated": "2026-10-23T09:23:19.145934+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.delayed_messages",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest"
+      },
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913604+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.queue_len",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "io"
+      },
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913601+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.queue_len",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "long"
+      },
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913602+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.queue_len",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "short"
+      },
+      "Value": 40,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913599+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.short_continuations",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest"
+      },
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913603+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.total",
+      "Kind": "counter",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "result": "ok",
+        "type": "Single"
+      },
+      "Value": 23833,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.145933+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.worker_num",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "io"
+      },
+      "Value": 40,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913602+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.worker_num",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "long"
+      },
+      "Value": 10,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.913602+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.worker_num",
+      "Kind": "gauge",
+      "Labels": {
+        "dispatcher": "nest",
+        "pool": "short"
+      },
+      "Value": 10,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:18.9136+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.handler.lock_hold",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 149333091008,
+      "MaxNanos": 24025833,
+      "LastNanos": 12157167,
+      "LastUpdated": "2026-10-23T09:23:19.14592+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "admission"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 6702239,
+      "MaxNanos": 119375,
+      "LastNanos": 209,
+      "LastUpdated": "2026-10-23T09:23:19.145918+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "capture"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 48281549,
+      "MaxNanos": 701875,
+      "LastNanos": 1458,
+      "LastUpdated": "2026-10-23T09:23:19.133764+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "cleanup"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 232911321,
+      "MaxNanos": 1697917,
+      "LastNanos": 959,
+      "LastUpdated": "2026-10-23T09:23:19.145926+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "durable_commit"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 148426770910,
+      "MaxNanos": 23993541,
+      "LastNanos": 12140375,
+      "LastUpdated": "2026-10-23T09:23:19.145914+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "handler"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 130234232,
+      "MaxNanos": 15070542,
+      "LastNanos": 1375,
+      "LastUpdated": "2026-10-23T09:23:19.133767+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "load"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 56050234,
+      "MaxNanos": 14938791,
+      "LastNanos": 1083,
+      "LastUpdated": "2026-10-23T09:23:19.133761+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "lock"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 54654375,
+      "MaxNanos": 1688875,
+      "LastNanos": 583,
+      "LastUpdated": "2026-10-23T09:23:19.133762+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "logic_queue"
+      },
+      "Value": 0,
+      "Count": 100,
+      "TotalNanos": 1621128,
+      "MaxNanos": 106417,
+      "LastNanos": 9833,
+      "LastUpdated": "2026-10-23T09:23:04.099842+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "prepare"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 297052112,
+      "MaxNanos": 15163958,
+      "LastNanos": 4625,
+      "LastUpdated": "2026-10-23T09:23:19.133772+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "queue"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 599549819476,
+      "MaxNanos": 63045125,
+      "LastNanos": 24685875,
+      "LastUpdated": "2026-10-23T09:23:19.133758+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "release"
+      },
+      "Value": 0,
+      "Count": 23833,
+      "TotalNanos": 55460389,
+      "MaxNanos": 699083,
+      "LastNanos": 2334,
+      "LastUpdated": "2026-10-23T09:23:19.145923+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "remote_prepare"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 67673,
+      "MaxNanos": 36667,
+      "LastNanos": 750,
+      "LastUpdated": "2026-10-23T09:23:04.080535+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.append.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 23833,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.145491+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.batch.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 2430,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.14549+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.bytes.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 4313773,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.145491+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.disk.bytes",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 4313773,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:19.145493+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.fsync.duration",
+      "Kind": "timer",
+      "Labels": null,
+      "Value": 0,
+      "Count": 2043,
+      "TotalNanos": 11272130712,
+      "MaxNanos": 16289125,
+      "LastNanos": 7424583,
+      "LastUpdated": "2026-10-23T09:23:19.140999+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    }
+  ],
+  "before": [
+    {
+      "Name": "dataengine.outbox.oldest_age_ms",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:03.287992+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "dataengine.outbox.pending",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 0,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:03.287991+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "dataengine.projection.pending",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 4,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.099919+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.cost",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "result": "ok",
+        "type": "Single"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 1309754627,
+      "MaxNanos": 47269958,
+      "LastNanos": 22746667,
+      "LastUpdated": "2026-10-23T09:23:04.103278+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.dispatch.total",
+      "Kind": "counter",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "result": "ok",
+        "type": "Single"
+      },
+      "Value": 50,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.103276+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.handler.lock_hold",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 169757833,
+      "MaxNanos": 5548541,
+      "LastNanos": 3377667,
+      "LastUpdated": "2026-10-23T09:23:04.10324+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "admission"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 52459,
+      "MaxNanos": 2666,
+      "LastNanos": 1417,
+      "LastUpdated": "2026-10-23T09:23:04.103234+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "capture"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 255586,
+      "MaxNanos": 12458,
+      "LastNanos": 4583,
+      "LastUpdated": "2026-10-23T09:23:04.099868+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "cleanup"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 210541,
+      "MaxNanos": 44625,
+      "LastNanos": 3292,
+      "LastUpdated": "2026-10-23T09:23:04.103254+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "durable_commit"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 165195668,
+      "MaxNanos": 5467125,
+      "LastNanos": 3304917,
+      "LastUpdated": "2026-10-23T09:23:04.103223+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "handler"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 468377,
+      "MaxNanos": 38667,
+      "LastNanos": 7750,
+      "LastUpdated": "2026-10-23T09:23:04.099879+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "load"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 59583,
+      "MaxNanos": 2417,
+      "LastNanos": 1458,
+      "LastUpdated": "2026-10-23T09:23:04.099853+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "lock"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 190330,
+      "MaxNanos": 45417,
+      "LastNanos": 2500,
+      "LastUpdated": "2026-10-23T09:23:04.099859+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "logic_queue"
+      },
+      "Value": 0,
+      "Count": 100,
+      "TotalNanos": 1621128,
+      "MaxNanos": 106417,
+      "LastNanos": 9833,
+      "LastUpdated": "2026-10-23T09:23:04.099842+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "prepare"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 1926960,
+      "MaxNanos": 100500,
+      "LastNanos": 28583,
+      "LastUpdated": "2026-10-23T09:23:04.09991+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "queue"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 1392914,
+      "MaxNanos": 237166,
+      "LastNanos": 28000,
+      "LastUpdated": "2026-10-23T09:23:04.080523+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "release"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 245538,
+      "MaxNanos": 19833,
+      "LastNanos": 5125,
+      "LastUpdated": "2026-10-23T09:23:04.103248+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nest.stage.duration",
+      "Kind": "timer",
+      "Labels": {
+        "handler": "handlerTapAsync",
+        "stage": "remote_prepare"
+      },
+      "Value": 0,
+      "Count": 50,
+      "TotalNanos": 67673,
+      "MaxNanos": 36667,
+      "LastNanos": 750,
+      "LastUpdated": "2026-10-23T09:23:04.080535+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.append.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 50,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.103108+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.batch.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 50,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.103107+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.bytes.total",
+      "Kind": "counter",
+      "Labels": null,
+      "Value": 9050,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.103108+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.disk.bytes",
+      "Kind": "gauge",
+      "Labels": null,
+      "Value": 9050,
+      "Count": 0,
+      "TotalNanos": 0,
+      "MaxNanos": 0,
+      "LastNanos": 0,
+      "LastUpdated": "2026-10-23T09:23:04.103108+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    },
+    {
+      "Name": "nestwal.fsync.duration",
+      "Kind": "timer",
+      "Labels": null,
+      "Value": 0,
+      "Count": 49,
+      "TotalNanos": 318032830,
+      "MaxNanos": 11916916,
+      "LastNanos": 4709959,
+      "LastUpdated": "2026-10-23T09:23:04.085034+08:00",
+      "Buckets": null,
+      "Overflow": 0
+    }
+  ]
+}

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **Saga Mongo 认领与消费容量**：到期 Saga / outbox 改为带排序的原子 `FindOneAndUpdate` 认领，避免并发 worker 扫到同一候选而空领；Mongo collection 增加 `FindOneAndUpdateOption.Sort`。Mongo 步骤与完成结果可分别配置 `MongoWorkers` / `Workers`，默认仍串行，通过现有延迟结算保证在途有界、Drain 等到真实完成。本机两消费 worker、30/s × 10 分钟 18,000 笔全部成功，业务核验通过，P99 576ms；不改变超时 / 重试次数。见 [诊断与证据](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
+- **Redis Cluster 重定向预算耗尽后安全重试**：MOVED / ASK 纳入既有有界的“确定未执行”重试；执行后丢响应仍不重放，WAIT 不变。永久重定向仍有总预算，历史八次实际路由未恢复，见 [回归证据](docs/performance/benchmarks/redis-redirect-20261023/README.md)。
+
+
 v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：待 2026-10-22 晚整体压测与发版验证**。按主题写最终行为；维护者决定与逐项说明见 [v1.31.0 说明](docs/release/v1.31.0-NOTES.md)，提交、强制点与回归用例见 [实现篇](docs/release/v1.31.0-IMPLEMENTATION.md)，剩余边界见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)，今晚压测见 [V1310-PRERELEASE-20261022](docs/performance/V1310-PRERELEASE-20261022.md)。线上尚未部署：存储、协议与 API 变化一律不做兼容。发版时生成物最低 core 要升到 v1.31.0（生成物用到本版才有的 API）。
 
 ### 验收诊断修正

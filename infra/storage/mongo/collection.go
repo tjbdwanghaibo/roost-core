@@ -50,6 +50,8 @@ type FindOption struct {
 
 // FindOneAndUpdateOption configures FindOneAndUpdate operations.
 type FindOneAndUpdateOption struct {
+	// Sort 在匹配多个文档时选择第一个；使用有序字段列表保证优先级。
+	Sort        any
 	Upsert      bool
 	ReturnAfter bool // return document after modification
 }

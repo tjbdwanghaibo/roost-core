@@ -19,6 +19,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -56,6 +57,22 @@ func TestRealSagaPerformance(t *testing.T) {
 	if natsURL == "" || os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI") == "" {
 		t.Fatal("private Mongo/NATS environment required")
 	}
+	if os.Getenv("ROOST_SAGA_PERF_HOPS") == "1" {
+		recorder := &sagaCommandTimings{values: make(map[string]sagaCommandTiming)}
+		hoptrace.Install(recorder)
+		t.Cleanup(func() {
+			hoptrace.Install(nil)
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+			raw, err := json.MarshalIndent(recorder.values, "", "  ")
+			if err == nil {
+				err = os.WriteFile(output+".hops.json", append(raw, '\n'), 0600)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	}
 	client, database := realRevn06s5Mongo(t)
 	// 最先登记，晚于下面的消费者和引擎停止执行、早于 realRevn06s5Mongo 清库执行。
 	// 即使主测试提前失败，也保留实际终态、步骤回执和效果，不能只留下聚合计数。
@@ -76,8 +93,17 @@ func TestRealSagaPerformance(t *testing.T) {
 		{Name: "reserve", ForwardTopic: prefix + ".reserve", CompensateTopic: prefix + ".reserve.cancel"},
 		{Name: "ship", ForwardTopic: prefix + ".ship", CompensateTopic: prefix + ".ship.cancel"},
 	}}
+	consumerWorkers := 1
+	if value := os.Getenv("ROOST_SAGA_PERF_WORKERS"); value != "" {
+		var err error
+		consumerWorkers, err = strconv.Atoi(value)
+		if err != nil || consumerWorkers < 1 || consumerWorkers > 32 {
+			t.Fatal("workers must be between 1 and 32")
+		}
+	}
 	cfg := crossProcessAssembly(database, stream, prefix, "perf")
 	cfg.Engine = DefaultOptions()
+	cfg.Completions.Workers = consumerWorkers
 	cfg.Engine.Owner = "perf"
 	cfg.Stream.Replicas = 3 // 容量测量保留三副本发布确认，不借故障夹具的单副本降低持久成本。
 	asm, err := Assemble(client, js, cfg, def)
@@ -131,13 +157,24 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 		return Completion{Success: true}, nil
 	}
-	for _, step := range def.Steps {
-		for _, topic := range []string{step.ForwardTopic, step.CompensateTopic} {
-			sub, err := SubscribeMongoStep(ctx, js, asm.Transport, inbox, StepConsumerConfig{Stream: stream, Durable: strings.ReplaceAll(topic, ".", "-"), Topic: topic}, handler)
-			if err != nil {
-				t.Fatal(err)
+	stepConsumers := 1
+	if value := os.Getenv("ROOST_SAGA_PERF_STEP_CONSUMERS"); value != "" {
+		var err error
+		stepConsumers, err = strconv.Atoi(value)
+		if err != nil || stepConsumers < 1 || stepConsumers > 32 {
+			t.Fatal("step consumers must be between 1 and 32")
+		}
+	}
+	// 同一 durable 的多个正式订阅共享消费进度，模拟多个服务实例；不复制步骤或改重试预算。
+	for range stepConsumers {
+		for _, step := range def.Steps {
+			for _, topic := range []string{step.ForwardTopic, step.CompensateTopic} {
+				sub, err := SubscribeMongoStep(ctx, js, asm.Transport, inbox, StepConsumerConfig{MongoWorkers: consumerWorkers, Stream: stream, Durable: strings.ReplaceAll(topic, ".", "-"), Topic: topic}, handler)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(sub.Drain)
 			}
-			t.Cleanup(sub.Drain)
 		}
 	}
 	type job struct {
@@ -162,6 +199,8 @@ func TestRealSagaPerformance(t *testing.T) {
 	type result struct {
 		Mode                                                      string
 		Rate, Planned, Started, Completed, WrongTerminal          int
+		ConsumerWorkers, StepConsumers                            int
+		DiagnosticHops                                            bool
 		StartErrors                                               uint64
 		FirstError                                                string
 		DurationSeconds, ElapsedSeconds, CompletionTPS            float64
@@ -182,7 +221,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		Server  sagaServer
 	}
 	total := int(duration/time.Second) * rate
-	r := result{Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
+	r := result{Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
 	var mu sync.Mutex
 	pending := make(map[string]startedSaga)
 	var observations []observation
@@ -474,3 +513,27 @@ func (s *terminalClock) Apply(ctx context.Context, request ApplyRequest) (ApplyO
 	}
 	return outcome, err
 }
+
+// sagaCommandTimings 仅用于显式诊断：固定跳名累计次数、总耗时和最大值，不保留逐请求数据。
+// 不关联跨跳 ID；该模式含 Mongo 命令监视器开销，不能与无监视器容量样本直接比较。
+type sagaCommandTiming struct {
+	Count          int64
+	TotalMS, MaxMS float64
+}
+type sagaCommandTimings struct {
+	mu     sync.Mutex
+	values map[string]sagaCommandTiming
+}
+
+func (r *sagaCommandTimings) Observe(name string, elapsed time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v := r.values[name]
+	v.Count++
+	ms := float64(elapsed) / float64(time.Millisecond)
+	v.TotalMS += ms
+	v.MaxMS = max(v.MaxMS, ms)
+	r.values[name] = v
+}
+func (*sagaCommandTimings) Mark(string, time.Time)        {}
+func (*sagaCommandTimings) Take(string) (time.Time, bool) { return time.Time{}, false }

@@ -1,0 +1,132 @@
+{
+  "h00.start.create": {
+    "Count": 1800,
+    "TotalMS": 30478.13715300004,
+    "MaxMS": 49.868209
+  },
+  "h01.coord.claim": {
+    "Count": 3793,
+    "TotalMS": 175390.4715789997,
+    "MaxMS": 101.4235
+  },
+  "h01.coord.wake": {
+    "Count": 3553,
+    "TotalMS": 19407603.82099997,
+    "MaxMS": 13773.181
+  },
+  "h02.dispatch.apply": {
+    "Count": 3553,
+    "TotalMS": 65291.81464199995,
+    "MaxMS": 111.061125
+  },
+  "h03.outbox.ack": {
+    "Count": 3533,
+    "TotalMS": 59711.38353699989,
+    "MaxMS": 122.71675
+  },
+  "h03.outbox.publish": {
+    "Count": 3533,
+    "TotalMS": 43666.9420269999,
+    "MaxMS": 48.603875
+  },
+  "h11.complete.apply": {
+    "Count": 2640,
+    "TotalMS": 45992.45001899997,
+    "MaxMS": 57.185667
+  },
+  "h11.complete.get": {
+    "Count": 2640,
+    "TotalMS": 1118.6310880000005,
+    "MaxMS": 31.7285
+  },
+  "mongo.abortTransaction": {
+    "Count": 66,
+    "TotalMS": 875.8642889999999,
+    "MaxMS": 41.05525
+  },
+  "mongo.abortTransaction.failed": {
+    "Count": 648,
+    "TotalMS": 8280.498020000003,
+    "MaxMS": 29.191292
+  },
+  "mongo.aggregate": {
+    "Count": 2,
+    "TotalMS": 1.570833,
+    "MaxMS": 1.020875
+  },
+  "mongo.commitTransaction": {
+    "Count": 11817,
+    "TotalMS": 192092.2899590004,
+    "MaxMS": 44.81525
+  },
+  "mongo.commitTransaction.failed": {
+    "Count": 632,
+    "TotalMS": 6015.693973,
+    "MaxMS": 30.844125
+  },
+  "mongo.createIndexes": {
+    "Count": 18,
+    "TotalMS": 733.6391689999999,
+    "MaxMS": 91.637083
+  },
+  "mongo.delete": {
+    "Count": 10228,
+    "TotalMS": 61077.20461999976,
+    "MaxMS": 122.67375
+  },
+  "mongo.dropDatabase": {
+    "Count": 1,
+    "TotalMS": 50069.608625,
+    "MaxMS": 50069.608625
+  },
+  "mongo.endSessions": {
+    "Count": 1,
+    "TotalMS": 0.093667,
+    "MaxMS": 0.093667
+  },
+  "mongo.find": {
+    "Count": 32410,
+    "TotalMS": 22837.19651000014,
+    "MaxMS": 46.145334
+  },
+  "mongo.find.failed": {
+    "Count": 17,
+    "TotalMS": 6.294458,
+    "MaxMS": 0.7485
+  },
+  "mongo.findAndModify": {
+    "Count": 27375,
+    "TotalMS": 354398.7367810021,
+    "MaxMS": 47.778209
+  },
+  "mongo.findAndModify.failed": {
+    "Count": 18,
+    "TotalMS": 9.938041,
+    "MaxMS": 1.636667
+  },
+  "mongo.getMore": {
+    "Count": 11160,
+    "TotalMS": 2170.969597,
+    "MaxMS": 10.96675
+  },
+  "mongo.insert": {
+    "Count": 16743,
+    "TotalMS": 33603.159260999986,
+    "MaxMS": 94.052167
+  },
+  "mongo.insert.failed": {
+    "Count": 9,
+    "TotalMS": 82.37554200000001,
+    "MaxMS": 48.621916
+  },
+  "mongo.update": {
+    "Count": 10889,
+    "TotalMS": 26855.68768199999,
+    "MaxMS": 49.66375
+  },
+  "mongo.update.failed": {
+    "Count": 10,
+    "TotalMS": 2.77175,
+    "MaxMS": 0.360292
+  }
+}

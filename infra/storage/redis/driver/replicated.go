@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -130,8 +129,9 @@ func isRedirect(err error) bool {
 	if err == nil {
 		return false
 	}
-	text := err.Error()
-	return strings.HasPrefix(text, "MOVED ") || strings.HasPrefix(text, "ASK ")
+	_, moved := goredis.IsMovedError(err)
+	_, ask := goredis.IsAskError(err)
+	return moved || ask
 }
 
 var _ fredis.ReplicatedEvaler = (*Client)(nil)

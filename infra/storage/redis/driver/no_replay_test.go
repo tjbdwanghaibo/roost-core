@@ -96,11 +96,11 @@ func TestScriptFollowsClusterRedirectsWithoutReplayingUnknownWrites(t *testing.T
 	}
 }
 
-// 槽位视图反复指回同一节点时，驱动必须有界退出；返回 MOVED 不代表一次都没有跟随。
+// 槽位视图反复指回同一节点时，每轮最多四次发送；配置一次安全重发后仍须在八次拒绝后退出。
 func TestClusterRedirectBudgetReturnsTheLastRedirect(t *testing.T) {
 	origin := newRESPStandIn(t, nil)
 	origin.mu.Lock()
-	origin.plans = map[string][]standInAction{"eval": make([]standInAction, 4)}
+	origin.plans = map[string][]standInAction{"eval": make([]standInAction, 8)}
 	for i := range origin.plans["eval"] {
 		origin.plans["eval"][i].reject = "MOVED 42 " + origin.listener.Addr().String()
 	}
@@ -112,7 +112,7 @@ func TestClusterRedirectBudgetReturnsTheLastRedirect(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { _ = cluster.Close() })
-	client := &Client{rdb: cluster, resends: 3}
+	client := &Client{rdb: cluster, resends: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := client.Eval(ctx, "return 1", []string{"k"})
@@ -124,6 +124,47 @@ func TestClusterRedirectBudgetReturnsTheLastRedirect(t *testing.T) {
 	origin.mu.Unlock()
 	if remaining != 0 || executed != 0 {
 		t.Fatalf("redirects remaining=%d executed=%d, want 0/0", remaining, executed)
+	}
+}
+
+// Cluster 单轮重定向耗尽仍证明命令没执行，应使用 Roost 已配置的重发预算。
+// 拓扑恢复后执行一次；若执行后的回复丢失，不能再重发。
+func TestClusterRedirectExhaustionUsesSafeResendBudget(t *testing.T) {
+	for _, dropReply := range []bool{false, true} {
+		t.Run(fmt.Sprint("drop=", dropReply), func(t *testing.T) {
+			server := newRESPStandIn(t, nil)
+			server.mu.Lock()
+			plans := make([]standInAction, 4)
+			for i := range plans {
+				plans[i].reject = "MOVED 7629 " + server.listener.Addr().String()
+			}
+			if dropReply {
+				plans = append(plans, standInAction{drop: true})
+			}
+			server.plans = map[string][]standInAction{"eval": plans}
+			server.mu.Unlock()
+			cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+				Addrs: []string{server.listener.Addr().String()},
+				ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+					return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: server.listener.Addr().String()}}}}, nil
+				},
+			})
+			t.Cleanup(func() { _ = cluster.Close() })
+			client := &Client{rdb: cluster, resends: 1}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := client.Eval(ctx, "return 1", []string{"k"})
+			if got := server.executions("eval"); got != 1 {
+				t.Fatalf("executions=%d want 1, err=%v", got, err)
+			}
+			if dropReply {
+				if err == nil || IsDefinitelyNotExecuted(err) {
+					t.Fatalf("lost reply must remain unknown: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -390,6 +431,8 @@ func TestIsDefinitelyNotExecuted(t *testing.T) {
 		resend bool
 	}{
 		{"nil", nil, false, false},
+		{"MOVED", errors.New("MOVED 7629 127.0.0.1:6379"), true, true},
+		{"ASK", errors.New("ASK 7629 127.0.0.1:6379"), true, true},
 		{"dial refused", dial, true, true},
 		{"dial timeout", fmt.Errorf("redis: %w", dialTimeout), true, true},
 		{"pool timeout", fmt.Errorf("get conn: %w", goredis.ErrPoolTimeout), true, true},

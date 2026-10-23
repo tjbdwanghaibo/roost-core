@@ -352,9 +352,24 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 3. 重开不改变业务结论：`Failed` 被重开后最终是 `Compensated`（第 s 步确实生效过、又被撤销），`Compensated` 被重开后仍回到 `Compensated`。
    按终态做的业务动作只要按 saga id 幂等，第二次到达终态时重做一次即可；不要假设 `Failed` 的 saga 一定没有任何一步生效过——迟到生效的那一步由协调器补偿掉。
 
+## Mongo 步骤消费并发
+
+`StepConsumerConfig.MongoWorkers` 控制每个 Mongo 步骤订阅的并发处理数，`CompletionConsumerConfig.Workers` 控制普通结果订阅的并发数；0 / 1 保持串行，负数或超过 `MaxAckPending` 拒绝启动。直接装配可设置：
+
+```go
+assemblyConfig.Completions.Workers = 2
+stepConfig.MongoWorkers = 2
+```
+
+这两个字段是 Go 装配 API，不是现成的 YAML 键。启用后，业务 handler 必须允许不同命令并发，不能依赖订阅回调顺序。正式 JetStream 延迟结算保证处理完才 ack / nak；在途任务数有界，满了回压，不建立额外无界等待队列。Stop 的 context 取消传入业务，Drain 等所有延迟结算；panic 转成失败结算。传输不支持 `DeferSettle` 时退回同步处理。
+
+同一操作的至多一次效果仍由 Mongo 事务、收件箱租约与回执保证。原生步骤走 Nest 调度，`MongoWorkers` 不作用于原生步骤；原生回执等待仍使用 `ReceiptWaiters`。不要靠延长命令截止或取消尝试上限来补消费能力。
+
+默认串行下的历史容量不能外推到并发设置，反之亦然。本机 30/s 的定位与配置对照见 [候选诊断](../performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
+
 ## 性能原则
 
-- `ClaimDue` 与 `ClaimOutbox` 必须按 `NextRunAt` 使用索引并限制 batch；
+- `ClaimDue` / `ClaimOutbox` 在一次带排序的 `FindOneAndUpdate` 中选择并领取：按到期时间、ID 排序，原子检查到期与租约、递增 lease token；每轮最多 batch 次。并发 worker 领取不同记录，不先扫描同一批候选再争抢；
 - 不允许全表扫描或全局 Saga 锁；
 - 网络发布不能发生在数据库事务中；
 - payload 应保持紧凑，建议小于 64 KiB；

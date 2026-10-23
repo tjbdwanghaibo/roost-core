@@ -1,0 +1,16 @@
+=== RUN   TestTapThroughput
+2026/10/23 09:23:45 INFO dataengine mod: database mapping logical=main physical=r8tap_dao_59767_369149000 source=config
+2026/10/23 09:23:45 INFO mongo mod: connected uri="mongodb://127.0.0.1:28117,127.0.0.1:28118,127.0.0.1:28119/?replicaSet=roost-it"
+2026/10/23 09:23:45 INFO nats: connected url=nats://127.0.0.1:15222,nats://127.0.0.1:15223,nats://127.0.0.1:15224
+2026/10/23 09:23:45 INFO bus: subscribed subject=r8tap59767x369149000.srv.904
+2026/10/23 09:23:45 INFO bus: subscribed subject=r8tap59767x369149000.svc.game.904
+2026/10/23 09:23:45 INFO bus: subscribed subject=r8tap59767x369149000.svc.game.all
+2026/10/23 09:23:45 INFO bus: subscribed subject=r8tap59767x369149000.srv.all
+2026/10/23 09:23:45 INFO nats mod: started
+    tap_diag_test.go:203: mode="async" workers=50 players=50 gci="2ms": ok=22698 err=0 elapsed=15.031s TPS=1510 P50=33.843917ms P99=48.18225ms walAppended=22698 walSyncs=1963
+2026/10/23 09:24:02 INFO nats: disconnected err=<nil>
+2026/10/23 09:24:02 INFO nats: connection closed
+2026/10/23 09:24:02 INFO nats mod: stopped
+2026/10/23 09:24:03 INFO mongo mod: closed
+--- PASS: TestTapThroughput (17.70s)
+PASS

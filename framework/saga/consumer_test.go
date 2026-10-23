@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
@@ -338,6 +340,8 @@ func TestSubscribeMongoStepRefusesEachUnsafeConfig(t *testing.T) {
 		mutate func(*StepConsumerConfig)
 		want   string
 	}{
+		{"negative workers", func(c *StepConsumerConfig) { c.MongoWorkers = -1 }, "unsafe step consumer limits"},
+		{"workers above pending", func(c *StepConsumerConfig) { c.MongoWorkers = 3; c.MaxAckPending = 2 }, "unsafe step consumer limits"},
 		{"blank stream", func(c *StepConsumerConfig) { c.Stream = "" }, "invalid step consumer configuration"},
 		{"blank durable", func(c *StepConsumerConfig) { c.Durable = "" }, "invalid step consumer configuration"},
 		{"topic with wildcard", func(c *StepConsumerConfig) { c.Topic = "reserve.>" }, "invalid step consumer configuration"},
@@ -735,4 +739,60 @@ func expiredUnexecuted() int64 {
 		}
 	}
 	return 0
+}
+
+// 工作槽在结算前不能复用；回调必须能释放订阅线程，取消排队者不能启动业务。
+func TestConsumerWorkersBoundExecutionAndDeferSettlement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
+		entered, returned, settled := make(chan struct{}, 3), make(chan error, 3), make(chan error, 3)
+		handler := withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { entered <- struct{}{}; <-release; return nil })
+		message := func() *fnats.JetStreamMsg {
+			return &fnats.JetStreamMsg{DeferSettle: func() func(error) { return func(err error) { settled <- err } }}
+		}
+		for range 2 {
+			go func() { returned <- handler(context.Background(), message()) }()
+		}
+		synctest.Wait()
+		if len(entered) != 2 || len(returned) != 2 || len(settled) != 0 {
+			t.Errorf("before release: entered=%d returned=%d settled=%d want 2/2/0", len(entered), len(returned), len(settled))
+			return
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- handler(ctx, message()) }()
+		synctest.Wait()
+		if len(entered) != 2 {
+			t.Fatal("worker budget exceeded")
+		}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("queued cancellation: %v", err)
+		}
+		unblock()
+		synctest.Wait()
+		if len(settled) != 2 {
+			t.Fatalf("settled=%d want 2", len(settled))
+		}
+	})
+}
+
+func TestConsumerWorkersSettlePanicAndFallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		settled := make(chan error, 1)
+		handler := withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { panic("business panic") })
+		if err := handler(context.Background(), &fnats.JetStreamMsg{DeferSettle: func() func(error) { return func(err error) { settled <- err } }}); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-settled; err == nil || !strings.Contains(err.Error(), "business panic") {
+			t.Fatalf("panic settlement: %v", err)
+		}
+		expected := errors.New("business error")
+		handler = withConsumerWorkers(2, func(context.Context, *fnats.JetStreamMsg) error { return expected })
+		if err := handler(context.Background(), &fnats.JetStreamMsg{}); err != expected {
+			t.Fatalf("synchronous fallback: %v", err)
+		}
+	})
 }

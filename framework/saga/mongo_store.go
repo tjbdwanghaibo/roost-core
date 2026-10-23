@@ -225,18 +225,15 @@ func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Reco
 		return nil, err
 	}
 	filter := bson.M{"status": bson.M{"$in": []Status{StatusPending, StatusWaiting, StatusCompensating}}, "next_run_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
-	var candidates []recordDoc
-	if err := s.sagas().Find(ctx, filter, &candidates, fmongo.FindOption{Sort: bson.D{{Key: "next_run_at", Value: 1}, {Key: "_id", Value: 1}}, Limit: int64(request.Limit), BatchSize: int32(request.Limit)}); err != nil {
-		return nil, err
-	}
-	out := make([]Record, 0, len(candidates))
-	for i := range candidates {
-		claimFilter := bson.M{"_id": candidates[i].ID, "version": candidates[i].Version, "lease_until": bson.M{"$lte": request.Now}}
-		update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
+	// 在一次原子操作里按到期顺序选择并领取，避免多个 worker 扫描同一候选后相互争抢。
+	update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
+	option := fmongo.FindOneAndUpdateOption{ReturnAfter: true, Sort: bson.D{{Key: "next_run_at", Value: 1}, {Key: "_id", Value: 1}}}
+	out := make([]Record, 0, request.Limit)
+	for range request.Limit {
 		var claimed recordDoc
-		err := s.sagas().FindOneAndUpdate(ctx, claimFilter, update, &claimed, fmongo.FindOneAndUpdateOption{ReturnAfter: true})
+		err := s.sagas().FindOneAndUpdate(ctx, filter, update, &claimed, option)
 		if errors.Is(err, fmongo.ErrNotFound) {
-			continue
+			break
 		}
 		if err != nil {
 			return out, err
@@ -378,19 +375,15 @@ func (s *MongoStore) ClaimOutbox(ctx context.Context, request ClaimRequest) ([]O
 		return nil, err
 	}
 	filter := bson.M{"next_attempt_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
-	var candidates []outboxDoc
-	if err := s.outbox().Find(ctx, filter, &candidates, fmongo.FindOption{Sort: bson.D{{Key: "next_attempt_at", Value: 1}, {Key: "_id", Value: 1}}, Limit: int64(request.Limit), BatchSize: int32(request.Limit)}); err != nil {
-		return nil, err
-	}
-	out := make([]OutboxRecord, 0, len(candidates))
-	for i := range candidates {
-		// Find 之后另一发布者可能 Nack 并延后重试；领取时复查期限。
-		claimFilter := bson.M{"_id": candidates[i].ID, "next_attempt_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
-		update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
+	// 到期与租约条件和更新一起裁决；并发发布者直接领取下一条，不共享过期的候选快照。
+	update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
+	option := fmongo.FindOneAndUpdateOption{ReturnAfter: true, Sort: bson.D{{Key: "next_attempt_at", Value: 1}, {Key: "_id", Value: 1}}}
+	out := make([]OutboxRecord, 0, request.Limit)
+	for range request.Limit {
 		var claimed outboxDoc
-		err := s.outbox().FindOneAndUpdate(ctx, claimFilter, update, &claimed, fmongo.FindOneAndUpdateOption{ReturnAfter: true})
+		err := s.outbox().FindOneAndUpdate(ctx, filter, update, &claimed, option)
 		if errors.Is(err, fmongo.ErrNotFound) {
-			continue
+			break
 		}
 		if err != nil {
 			return out, err

@@ -223,6 +223,9 @@ const DefaultStepAckWait = 30 * time.Second
 
 // StepConsumerConfig 配置步骤命令的 JetStream 持久消费者。
 type StepConsumerConfig struct {
+	// MongoWorkers 是 Mongo 步骤的并发上限；0/1 串行，不能超过 MaxAckPending。
+	// 启用后业务 handler 必须允许不同命令并发；原生步骤仍由 Nest 调度，此字段不用于原生步骤。
+	MongoWorkers           int
 	Stream, Durable, Topic string
 	// AckWait 不写取 DefaultStepAckWait。必须长于路由到这个主题的每个步骤的 Timeout；saga Mod 的启动校验按
 	// DefaultStepAckWait 判，自己写更短的 AckWait 时要相应缩短步骤 Timeout。
@@ -276,14 +279,14 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 	if config.NakBackoffMax < config.NakBackoffMin {
 		config.NakBackoffMax = 30 * time.Second
 	}
-	if !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
+	if config.MongoWorkers < 0 || config.MongoWorkers > config.MaxAckPending || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
 		return nil, fmt.Errorf("saga: unsafe step consumer limits")
 	}
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, err
 	}
 	subject := transport.prefix + ".command." + strings.Trim(config.Topic, ".")
-	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		command, err := decodeStepCommand(message)
 		if err != nil {
 			logConsumerError("step decode", message, err)
@@ -338,7 +341,8 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 			logConsumerError("step completion publish", message, err)
 		}
 		return err
-	})
+	}
+	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, withConsumerWorkers(config.MongoWorkers, consume))
 }
 
 // ackUnexecutedAttempt 处理一次不会执行的 Mongo 步骤投递：先把同一操作实例已生效的成功经 saga 结果流重发，

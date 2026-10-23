@@ -1,0 +1,97 @@
+{
+  "h00.start.create": {
+    "Count": 1800,
+    "TotalMS": 30659.559896999977,
+    "MaxMS": 34.504834
+  },
+  "h01.coord.claim": {
+    "Count": 3516,
+    "TotalMS": 112450.12976000019,
+    "MaxMS": 74.934542
+  },
+  "h01.coord.wake": {
+    "Count": 3600,
+    "TotalMS": 154018.59100000007,
+    "MaxMS": 109.061
+  },
+  "h02.dispatch.apply": {
+    "Count": 3600,
+    "TotalMS": 66433.52699099995,
+    "MaxMS": 57.667333
+  },
+  "h03.outbox.ack": {
+    "Count": 3600,
+    "TotalMS": 61403.1099459999,
+    "MaxMS": 42.332792
+  },
+  "h03.outbox.publish": {
+    "Count": 3600,
+    "TotalMS": 44894.732612000036,
+    "MaxMS": 64.718292
+  },
+  "h11.complete.apply": {
+    "Count": 3600,
+    "TotalMS": 62610.51129200005,
+    "MaxMS": 69.544417
+  },
+  "h11.complete.get": {
+    "Count": 3600,
+    "TotalMS": 1316.3264740000025,
+    "MaxMS": 14.963333
+  },
+  "mongo.aggregate": {
+    "Count": 2,
+    "TotalMS": 2.745166,
+    "MaxMS": 1.60775
+  },
+  "mongo.commitTransaction": {
+    "Count": 14400,
+    "TotalMS": 238060.06676300088,
+    "MaxMS": 45.17125
+  },
+  "mongo.createIndexes": {
+    "Count": 18,
+    "TotalMS": 758.1946230000001,
+    "MaxMS": 100.073291
+  },
+  "mongo.delete": {
+    "Count": 10802,
+    "TotalMS": 62768.32576100003,
+    "MaxMS": 42.261042
+  },
+  "mongo.dropDatabase": {
+    "Count": 1,
+    "TotalMS": 134.483708,
+    "MaxMS": 134.483708
+  },
+  "mongo.endSessions": {
+    "Count": 1,
+    "TotalMS": 0.655875,
+    "MaxMS": 0.655875
+  },
+  "mongo.find": {
+    "Count": 19196,
+    "TotalMS": 3966.885788000005,
+    "MaxMS": 22.926417
+  },
+  "mongo.findAndModify": {
+    "Count": 23932,
+    "TotalMS": 265279.43689799914,
+    "MaxMS": 53.159792
+  },
+  "mongo.getMore": {
+    "Count": 8,
+    "TotalMS": 13.298625,
+    "MaxMS": 2.678625
+  },
+  "mongo.insert": {
+    "Count": 19802,
+    "TotalMS": 33972.414701999915,
+    "MaxMS": 60.32325
+  },
+  "mongo.update": {
+    "Count": 10800,
+    "TotalMS": 4614.256828999994,
+    "MaxMS": 48.073792
+  }
+}

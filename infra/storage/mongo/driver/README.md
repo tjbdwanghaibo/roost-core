@@ -56,3 +56,7 @@
 1. `WithTransaction` 返回 `ErrCommitResultUnknown` 时，按持久回执裁决，不要重做业务。
 2. 事务外的多文档写出错后结果未知，与 Redis 写命令一样处理。
 3. 需要在调用方 ctx 之外收尾的操作（abort、释放），参照 §3：用 `WithoutCancel` 并加上限，不要直接用 `context.Background()` 无限等待。
+
+## 有序原子领取
+
+`FindOneAndUpdateOption.Sort` 传递 Mongo 的排序选项，在多条匹配文档中选择第一条并原子更新；需要稳定顺序时使用 `bson.D` 并以 `_id` 收尾。Saga 的到期 / outbox 领取使用它，选择条件与租约更新在同一条命令中裁决。`mongotest` 同样在一把锁内排序、选择、按选中身份更新，返回该身份的前像或后像。

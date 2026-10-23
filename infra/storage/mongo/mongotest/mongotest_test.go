@@ -645,3 +645,27 @@ func TestPaginationBoundaryPromises(t *testing.T) {
 		}
 	}
 }
+
+func TestFindOneAndUpdateSortSelectsAndUpdatesTheSameDocument(t *testing.T) {
+	ctx := context.Background()
+	coll := newColl(t)
+	for _, doc := range []bson.M{{"_id": "a", "due": 3, "leased": false}, {"_id": "c", "due": 1, "leased": false}, {"_id": "b", "due": 1, "leased": false}} {
+		if _, err := coll.InsertOne(ctx, doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	option := fmongo.FindOneAndUpdateOption{ReturnAfter: true, Sort: bson.D{{Key: "due", Value: 1}, {Key: "_id", Value: 1}}}
+	for _, id := range []string{"b", "c", "a"} {
+		var got bson.M
+		if err := coll.FindOneAndUpdate(ctx, bson.M{"leased": false}, bson.M{"$set": bson.M{"leased": true}}, &got, option); err != nil {
+			t.Fatal(err)
+		}
+		if got["_id"] != id || got["leased"] != true {
+			t.Fatalf("want updated %s, got %v", id, got)
+		}
+	}
+	var got bson.M
+	if err := coll.FindOneAndUpdate(ctx, bson.M{"leased": false}, bson.M{"$set": bson.M{"leased": true}}, &got, option); !errors.Is(err, fmongo.ErrNotFound) {
+		t.Fatalf("empty: %v", err)
+	}
+}
