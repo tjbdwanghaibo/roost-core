@@ -4,6 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [Saga 单笔逐跳诊断（2026-10-23）](benchmarks/saga-timeline-20261023/README.md) | 1800笔正向全成功且时间线完整；平均397ms中持久处理158ms、交付138ms、协调/outbox84ms、业务写入1.65ms；不把各跳P99相加，不将交付当纯网络RTT |
 | [候选问题诊断（2026-10-23）](PRERELEASE-DIAGNOSTICS-20261023.md) | WAL 刷盘指标修复并定位 async 等 writer；Saga 原子认领 + 两消费 worker 通过 30/s × 10 分钟（18,000 笔全成功）；Redis 有界重定向修复与六节点计划切换通过；历史失败证据保留，整体停顿与 heartbeat 波动未全部关闭 |
 | [v1.31.0 发版前整体压测清单（2026-10-22 晚）](V1310-PRERELEASE-20261022.md) | 计划、不是结果：选项 C 参数、Interest ApplySync 预算、game-demo 100 / 200 人、夜间补测 13 项 + 第 14 项在发版候选上重跑、AOI 三点与两种应用模式、心跳负载；200ms（5Hz）移动口径与 Linux 复测可选 |
 | [Interest 单写者重构前后对比（2026-10-22）](INTEREST-SINGLE-WRITER-20261022.md) | 改前 `494134ae` / 改后 `11988df8` 同机交替：政策阶段在跑时业务线程上的直接调用均值与 p99 降一到两个数量级（`Enter`+`Leave` 23.4µs → 0.47µs），AOI 基准 ±2%；sync-aoi Nest ApplySync 0～8 视野 P50 低 6～11ms、P99 低 4～8ms，ApplyAsync 持平，ApplySync 16 视野仍超周期；修了 sync-aoi Nest 模式每 tick 调 `Apply` 的夹具问题（`6cffbc03`）；direct 基线语义变化不可直接比；demo 登录风暴 80 人规模下没有可分辨差异（更多人时 demo 的复制会话因 `MaxObjects` 被关闭） |

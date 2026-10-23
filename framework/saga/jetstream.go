@@ -9,6 +9,7 @@ import (
 
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 const maxWireEnvelopeBytes = 8 << 20
@@ -140,7 +141,17 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 		}
 		return err
 	}
-	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, withConsumerWorkers(config.Workers, consume))
+	worker := withConsumerWorkers(config.Workers, consume)
+	arrival := func(ctx context.Context, message *fnats.JetStreamMsg) error {
+		if hoptrace.Enabled() {
+			if completion, err := decodeCompletionMessage(message); err == nil {
+				hoptrace.Mark("timeline/result.received/", completion.CommandID)
+			}
+		}
+		return worker(ctx, message)
+	}
+
+	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, arrival)
 }
 
 // decodeCompletionMessage 解开普通结果流上的一条消息；错误都是坏信封（rejectEnvelope）。

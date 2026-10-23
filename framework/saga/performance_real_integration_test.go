@@ -58,12 +58,22 @@ func TestRealSagaPerformance(t *testing.T) {
 		t.Fatal("private Mongo/NATS environment required")
 	}
 	if os.Getenv("ROOST_SAGA_PERF_HOPS") == "1" {
-		recorder := &sagaCommandTimings{values: make(map[string]sagaCommandTiming)}
+		recorder := &sagaCommandTimings{values: make(map[string]sagaCommandTiming), marks: make(map[string]time.Time), epoch: time.Now()}
 		hoptrace.Install(recorder)
 		t.Cleanup(func() {
 			hoptrace.Install(nil)
 			recorder.mu.Lock()
 			defer recorder.mu.Unlock()
+			timeline, timelineErr := json.Marshal(struct {
+				Events  []sagaTimelineEvent
+				Dropped int
+			}{recorder.events, recorder.dropped})
+			if timelineErr == nil {
+				timelineErr = os.WriteFile(output+".timeline.json", timeline, 0600)
+			}
+			if timelineErr != nil {
+				t.Error(timelineErr)
+			}
 			raw, err := json.MarshalIndent(recorder.values, "", "  ")
 			if err == nil {
 				err = os.WriteFile(output+".hops.json", append(raw, '\n'), 0600)
@@ -514,15 +524,19 @@ func (s *terminalClock) Apply(ctx context.Context, request ApplyRequest) (ApplyO
 	return outcome, err
 }
 
-// sagaCommandTimings 仅用于显式诊断：固定跳名累计次数、总耗时和最大值，不保留逐请求数据。
-// 不关联跨跳 ID；该模式含 Mongo 命令监视器开销，不能与无监视器容量样本直接比较。
+// sagaCommandTimings 只用于显式诊断。单进程单调时钟关联交易与命令，事件与未取标记各有上限。
+// 含 Mongo 命令监视器与记录开销；重复事件原样保留，分析方不能把重试错当一次正常执行。
 type sagaCommandTiming struct {
 	Count          int64
 	TotalMS, MaxMS float64
 }
 type sagaCommandTimings struct {
-	mu     sync.Mutex
-	values map[string]sagaCommandTiming
+	mu      sync.Mutex
+	values  map[string]sagaCommandTiming
+	marks   map[string]time.Time
+	epoch   time.Time
+	events  []sagaTimelineEvent
+	dropped int
 }
 
 func (r *sagaCommandTimings) Observe(name string, elapsed time.Duration) {
@@ -535,5 +549,54 @@ func (r *sagaCommandTimings) Observe(name string, elapsed time.Duration) {
 	v.MaxMS = max(v.MaxMS, ms)
 	r.values[name] = v
 }
-func (*sagaCommandTimings) Mark(string, time.Time)        {}
-func (*sagaCommandTimings) Take(string) (time.Time, bool) { return time.Time{}, false }
+
+// 10 分钟、30/s 的正常链路约 60 万事件；超限明确报丢弃，不能静默给出完整覆盖结论。
+const sagaTimelineLimit = 1_000_000
+
+type sagaTimelineEvent struct {
+	Key  string
+	AtNS int64
+}
+
+func (r *sagaCommandTimings) Mark(key string, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.HasPrefix(key, "timeline/") {
+		if len(r.events) >= sagaTimelineLimit {
+			r.dropped++
+			return
+		}
+		r.events = append(r.events, sagaTimelineEvent{key, at.Sub(r.epoch).Nanoseconds()})
+		return
+	}
+	if len(r.marks) >= sagaTimelineLimit {
+		r.dropped++
+		return
+	}
+	r.marks[key] = at
+}
+func (r *sagaCommandTimings) Take(key string) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	at, ok := r.marks[key]
+	delete(r.marks, key)
+	return at, ok
+}
+
+// 同一个命令的重复事件不能被覆盖；关联标记取走即删，缺失标记不伪造时间。
+func TestSagaTimelineRecorder(t *testing.T) {
+	epoch := time.Unix(100, 0)
+	r := &sagaCommandTimings{epoch: epoch, marks: make(map[string]time.Time)}
+	r.Mark("timeline/step.begin/cmd", epoch.Add(time.Millisecond))
+	r.Mark("timeline/step.begin/cmd", epoch.Add(2*time.Millisecond))
+	if len(r.events) != 2 || r.events[0].AtNS != int64(time.Millisecond) || r.events[1].AtNS != int64(2*time.Millisecond) {
+		t.Fatalf("events lost or clock changed: %v", r.events)
+	}
+	r.Mark("published/cmd", epoch)
+	if at, ok := r.Take("published/cmd"); !ok || !at.Equal(epoch) {
+		t.Fatal("missing mark")
+	}
+	if _, ok := r.Take("published/cmd"); ok {
+		t.Fatal("mark was not consumed")
+	}
+}

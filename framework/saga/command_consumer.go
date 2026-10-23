@@ -111,7 +111,9 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 	if err != nil {
 		return Completion{}, false, err
 	}
+	hoptrace.Mark("timeline/reserve.begin/", command.ID)
 	reservation, err := i.reserve(ctx, command, digest)
+	hoptrace.Mark("timeline/reserve.end/", command.ID)
 	if err != nil {
 		return Completion{}, false, err
 	}
@@ -122,7 +124,9 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 		// 同一命令的另一次投递持有有效租约：它会自己发布结果；这次投递 nak，重投时读回执。
 		return Completion{}, false, errOperationAttemptInFlight
 	}
+	hoptrace.Mark("timeline/execute.begin/", command.ID)
 	completion, err := i.execute(ctx, command, digest, reservation, handler)
+	hoptrace.Mark("timeline/execute.end/", command.ID)
 	if errors.Is(err, fmongo.ErrDuplicateKey) {
 		// 同一 CommandID 的回执已被别人先提交：本次事务已中止，回放那份回执。正常不可达（同一命令的两次投递由租约
 		// 串行，后一次在 Reserve 第 1 步就读到回执），留作纵深防御。这里不交还租约：读状态文档的每条路径都先看回执
@@ -153,7 +157,9 @@ func (i *MongoCommandInbox) execute(ctx context.Context, command Command, digest
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
 		var handlerErr error
 		// command 已归本次投递私有，按值传递，步骤热路径上不再多一次载荷大小的分配。
+		hoptrace.Mark("timeline/handler.begin/", command.ID)
 		completion, handlerErr = handler(txCtx, command)
+		hoptrace.Mark("timeline/handler.end/", command.ID)
 		if handlerErr != nil {
 			return handlerErr
 		}
@@ -292,6 +298,7 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 			logConsumerError("step decode", message, err)
 			return rejectEnvelope("mongo_step", err)
 		}
+		hoptrace.Mark("timeline/step.begin/", command.ID)
 		if !time.Now().Before(command.DeadlineAt) {
 			// 超时与重试归协调器。不再开始新的业务，但要回放此前已提交、只是发布失败的 completion，免得它作为新尝试
 			// 被无谓地重新执行。没有自己的回执时，同一操作实例另一次尝试已生效的成功可能没有送达协调器，而这条可能是
@@ -336,13 +343,26 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 			return err
 		}
 		// completion 可能是同一操作实例另一次尝试的结果（回放，CommandID 是那次的）：原样发布，协调器按它去重、核对代际。
+		hoptrace.Mark("timeline/result.publish.begin/", command.ID)
 		err = transport.PublishCompletion(processCtx, completion)
+		hoptrace.Mark("timeline/result.publish.end/", command.ID)
 		if err != nil {
 			logConsumerError("step completion publish", message, err)
 		}
 		return err
 	}
-	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, withConsumerWorkers(config.MongoWorkers, consume))
+	worker := withConsumerWorkers(config.MongoWorkers, consume)
+	arrival := func(ctx context.Context, message *fnats.JetStreamMsg) error {
+		// 诊断才解码一次身份，区分传输到达与等待消费槽；不改变正式解码 / 错误处理。
+		if hoptrace.Enabled() {
+			if command, err := decodeStepCommand(message); err == nil {
+				hoptrace.Mark("timeline/step.received/", command.ID)
+			}
+		}
+		return worker(ctx, message)
+	}
+
+	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, arrival)
 }
 
 // ackUnexecutedAttempt 处理一次不会执行的 Mongo 步骤投递：先把同一操作实例已生效的成功经 saga 结果流重发，
