@@ -10,7 +10,7 @@
 
 ## 10-23 候选诊断边界
 
-[诊断续报](../performance/PRERELEASE-DIAGNOSTICS-20261023.md)：WAL 刷盘指标漏记已修复，生成工程 async 复现持锁 6.272ms，其中提交阶段 6.234ms，主要等 WAL writer（后台 fsync 均值 5.494ms）；不精确回填旧样本；Redis MOVED / ASK 已加入既有有界安全重试，持续重定向仍可耗尽预算，另建六节点计划切换验证 7383 次写无错，历史八次实际路由未恢复。Saga 修复原子认领并显式启用两个消费 worker 后，正向 30/s × 10 分钟 18,000 笔全部成功、ManualRequired=0、P99 576ms，默认仍串行。全局停顿与 200ms 心跳档抖动仍未确定根因，不能把这五项标为全部收尾。
+[诊断续报](../performance/PRERELEASE-DIAGNOSTICS-20261023.md)：WAL 刷盘指标漏记已修复，生成工程 async 复现持锁 6.272ms，其中提交阶段 6.234ms，主要等 WAL writer（后台 fsync 均值 5.494ms）；不精确回填旧样本；Redis MOVED / ASK 已加入既有有界安全重试，持续重定向仍可耗尽预算，另建六节点计划切换验证 7383 次写无错，历史八次实际路由未恢复。Saga 修复原子认领并显式启用两个消费 worker 后，正向 30/s × 10 分钟 18,000 笔全部成功、ManualRequired=0、P99 576ms，默认仍串行。全局停顿与 200ms 心跳档抖动仍未确定根因，不能把这五项标为全部收尾。 后续[混合负载诊断](../performance/benchmarks/jetstream-isolation-20261023/README.md)观察到Mongo journal同步与NATS文件写入相互影响；维护者决定保留事务、majority+j:true及生产默认配置，暂不继续压测，实际Mongo服务容量留待目标环境验证。
 
 ## Nest 与实体定时器
 

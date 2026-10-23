@@ -46,6 +46,11 @@ def analyze(result, timeline):
             times[identity][name] = event["AtNS"]
     if duplicates:
         raise ValueError(f"retries / duplicate events require separate analysis: {duplicates[:5]}")
+    # overlay 收包诊断必须完整覆盖，不能把缺少收包点的命令混成旧口径。
+    command_ids = [command for commands in links.values() for command in commands]
+    wire_count = sum("step.wire" in times[c] or "result.wire" in times[c] for c in command_ids)
+    if wire_count and not all("step.wire" in times[c] and "result.wire" in times[c] for c in command_ids):
+        raise ValueError("incomplete parser-level event coverage")
     rows = []
     for saga_id, commands in links.items():
         if len(commands) != len(set(commands)):
@@ -70,7 +75,12 @@ def analyze(result, timeline):
             t = times[command]
             add("coordinator_wait_and_claim", previous, t["dispatch.begin"])
             for stage, begin, end in STAGES:
-                add(stage, t[begin], t[end])
+                wire = {"command_transport": "step.wire", "result_transport": "result.wire"}.get(stage)
+                if wire and wire in t:
+                    add(stage + "_to_parser", t[begin], t[wire])
+                    add(stage + "_client_queue", t[wire], t[end])
+                else:
+                    add(stage, t[begin], t[end])
             previous = t["complete.end"]
         total = (previous - start["start.begin"]) / 1e6
         if abs(sum(parts.values()) - total) > 1e-6:

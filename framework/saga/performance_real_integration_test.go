@@ -113,6 +113,13 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	cfg := crossProcessAssembly(database, stream, prefix, "perf")
 	cfg.Engine = DefaultOptions()
+	if value := os.Getenv("ROOST_SAGA_PERF_COORDINATOR_BATCH"); value != "" {
+		batch, parseErr := strconv.Atoi(value)
+		if parseErr != nil || batch < 1 || batch > 3 {
+			t.Fatal("coordinator batch must be between 1 and 3 for this comparison")
+		}
+		cfg.Engine.CoordinatorBatch = batch
+	}
 	cfg.Completions.Workers = consumerWorkers
 	cfg.Engine.Owner = "perf"
 	cfg.Stream.Replicas = 3 // 容量测量保留三副本发布确认，不借故障夹具的单副本降低持久成本。
@@ -210,6 +217,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		Mode                                                      string
 		Rate, Planned, Started, Completed, WrongTerminal          int
 		ConsumerWorkers, StepConsumers                            int
+		CoordinatorBatch                                          int
 		DiagnosticHops                                            bool
 		StartErrors                                               uint64
 		FirstError                                                string
@@ -231,7 +239,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		Server  sagaServer
 	}
 	total := int(duration/time.Second) * rate
-	r := result{Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
+	r := result{CoordinatorBatch: cfg.Engine.CoordinatorBatch, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
 	var mu sync.Mutex
 	pending := make(map[string]startedSaga)
 	var observations []observation

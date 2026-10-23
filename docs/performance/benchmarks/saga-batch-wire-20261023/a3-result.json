@@ -1,0 +1,91 @@
+{
+  "Mode": "forward",
+  "Rate": 30,
+  "Planned": 1800,
+  "Started": 1800,
+  "Completed": 1800,
+  "WrongTerminal": 0,
+  "ConsumerWorkers": 2,
+  "StepConsumers": 1,
+  "CoordinatorBatch": 3,
+  "DiagnosticHops": true,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 60.289236084,
+  "CompletionTPS": 29.85607575939575,
+  "ExpectedTerminalTPS": 29.85607575939575,
+  "P50MS": 380.568792,
+  "P95MS": 466.854959,
+  "P99MS": 518.882418,
+  "MaxMS": 575.534334,
+  "FinalStats": {
+    "Started": 1800,
+    "Dispatched": 3600,
+    "Completed": 1800,
+    "Compensated": 0,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 0,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 1800,
+  "EffectDocuments": 3600,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 1800,
+      "P50MS": 380.568792,
+      "P99MS": 518.882418,
+      "MaxMS": 575.534334,
+      "ServerP99MS": 489.155375
+    }
+  ],
+  "Harness": {
+    "AdmitLag": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 0.173042,
+      "P95MS": 0.634709,
+      "P99MS": 0.897792,
+      "MaxMS": 1.314001
+    },
+    "ObserveLag": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 24.9365,
+      "P95MS": 47.626209,
+      "P99MS": 50.222292,
+      "MaxMS": 88.763792
+    }
+  },
+  "Server": {
+    "Start": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 16.277375,
+      "P95MS": 23.734709,
+      "P99MS": 28.72175,
+      "MaxMS": 79.947
+    },
+    "Completion": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 355.302125,
+      "P95MS": 437.071958,
+      "P99MS": 489.155375,
+      "MaxMS": 548.2005
+    },
+    "TerminalMissing": 0
+  }
+}

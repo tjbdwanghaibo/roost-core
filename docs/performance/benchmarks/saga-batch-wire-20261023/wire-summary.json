@@ -1,0 +1,168 @@
+{
+  "NestedPublish": {
+    "command_puback": {
+      "Samples": 3600,
+      "MeanPerCommandMS": 14.3540390694444,
+      "P99PerCommandMS": 38.797167
+    },
+    "result_puback": {
+      "Samples": 3600,
+      "MeanPerCommandMS": 14.09643482222225,
+      "P99PerCommandMS": 38.7845
+    }
+  },
+  "Transactions": 1800,
+  "P50MS": 380.373375,
+  "P99MS": 598.708292,
+  "MaxMS": 674.093708,
+  "Stages": {
+    "handoff_overlap": {
+      "MeanMS": -0.000618286111111111,
+      "P99MS": 0.0,
+      "Slowest1PercentMeanMS": 0.0
+    },
+    "start_commit": {
+      "MeanMS": 17.339144511111122,
+      "P99MS": 29.738208,
+      "Slowest1PercentMeanMS": 17.620087736842105
+    },
+    "coordinator_wait_and_claim": {
+      "MeanMS": 52.92046102333337,
+      "P99MS": 118.338083,
+      "Slowest1PercentMeanMS": 74.62697136842107
+    },
+    "dispatch_commit": {
+      "MeanMS": 37.53019160166671,
+      "P99MS": 57.514916,
+      "Slowest1PercentMeanMS": 40.075033000000005
+    },
+    "outbox_wait": {
+      "MeanMS": 29.168092821111134,
+      "P99MS": 72.948958,
+      "Slowest1PercentMeanMS": 43.68003057894737
+    },
+    "command_transport_to_parser": {
+      "MeanMS": 61.9126046627778,
+      "P99MS": 136.151208,
+      "Slowest1PercentMeanMS": 83.92666436842106
+    },
+    "command_transport_client_queue": {
+      "MeanMS": 2.851732131666664,
+      "P99MS": 51.926458000000004,
+      "Slowest1PercentMeanMS": 12.91179636842105
+    },
+    "command_consumer_slot": {
+      "MeanMS": 10.470522215555572,
+      "P99MS": 71.93700000000001,
+      "Slowest1PercentMeanMS": 42.67529578947369
+    },
+    "step_decode": {
+      "MeanMS": 0.02674549999999996,
+      "P99MS": 0.075208,
+      "Slowest1PercentMeanMS": 0.02021947368421053
+    },
+    "step_reserve": {
+      "MeanMS": 34.95094212055557,
+      "P99MS": 55.051417,
+      "Slowest1PercentMeanMS": 40.42399994736842
+    },
+    "step_prepare": {
+      "MeanMS": 0.002511643888888885,
+      "P99MS": 0.033208,
+      "Slowest1PercentMeanMS": 0.0009406315789473686
+    },
+    "transaction_prepare": {
+      "MeanMS": 0.018713158888888887,
+      "P99MS": 0.152667,
+      "Slowest1PercentMeanMS": 0.009160263157894736
+    },
+    "business_writes": {
+      "MeanMS": 1.6647232349999992,
+      "P99MS": 3.9617910000000003,
+      "Slowest1PercentMeanMS": 2.2916646842105264
+    },
+    "receipt_and_commit": {
+      "MeanMS": 35.016603136666625,
+      "P99MS": 52.960415999999995,
+      "Slowest1PercentMeanMS": 37.72339678947369
+    },
+    "result_prepare": {
+      "MeanMS": 0.003823827222222218,
+      "P99MS": 0.058917000000000004,
+      "Slowest1PercentMeanMS": 0.002328789473684211
+    },
+    "result_transport_to_parser": {
+      "MeanMS": 64.2495705266667,
+      "P99MS": 139.20779199999998,
+      "Slowest1PercentMeanMS": 134.13549563157895
+    },
+    "result_transport_client_queue": {
+      "MeanMS": 2.207392072777781,
+      "P99MS": 37.345623999999994,
+      "Slowest1PercentMeanMS": 44.27960963157894
+    },
+    "result_consumer_slot": {
+      "MeanMS": 4.779257547777783,
+      "P99MS": 28.988333,
+      "Slowest1PercentMeanMS": 14.33799994736842
+    },
+    "completion_apply": {
+      "MeanMS": 36.019655159444405,
+      "P99MS": 55.422124,
+      "Slowest1PercentMeanMS": 36.69140810526316
+    }
+  },
+  "P99Transaction": {
+    "SagaID": "perf-244",
+    "TotalMS": 598.708292,
+    "Steps": 2,
+    "PartsMS": {
+      "handoff_overlap": 0.0,
+      "start_commit": 13.752583,
+      "coordinator_wait_and_claim": 47.0135,
+      "dispatch_commit": 48.328041,
+      "outbox_wait": 48.446167,
+      "command_transport_to_parser": 89.251833,
+      "command_transport_client_queue": 0.095959,
+      "command_consumer_slot": 0.035333,
+      "step_decode": 0.012958,
+      "step_reserve": 41.775959,
+      "step_prepare": 0.000459,
+      "transaction_prepare": 0.004958000000000001,
+      "business_writes": 3.4912080000000003,
+      "receipt_and_commit": 39.536917,
+      "result_prepare": 0.001416,
+      "result_transport_to_parser": 172.38745799999998,
+      "result_transport_client_queue": 60.413375,
+      "result_consumer_slot": 0.034625,
+      "completion_apply": 34.125543
+    }
+  },
+  "SlowestTransaction": {
+    "SagaID": "perf-240",
+    "TotalMS": 674.093708,
+    "Steps": 2,
+    "PartsMS": {
+      "handoff_overlap": 0.0,
+      "start_commit": 16.021292,
+      "coordinator_wait_and_claim": 67.694625,
+      "dispatch_commit": 34.224209,
+      "outbox_wait": 36.106874,
+      "command_transport_to_parser": 98.432208,
+      "command_transport_client_queue": 0.080751,
+      "command_consumer_slot": 29.439415999999998,
+      "step_decode": 0.0155,
+      "step_reserve": 37.621584,
+      "step_prepare": 0.001042,
+      "transaction_prepare": 0.011916,
+      "business_writes": 6.222625,
+      "receipt_and_commit": 51.019666,
+      "result_prepare": 0.001209,
+      "result_transport_to_parser": 256.558459,
+      "result_transport_client_queue": 0.115874,
+      "result_consumer_slot": 0.039875999999999995,
+      "completion_apply": 40.486582
+    }
+  },
+  "SlowCohortCount": 19
+}

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **Saga性能诊断**：补充协调batch对照、JetStream解析器/交付拆分、独立吞吐与Mongo混合负载、macOS资源及journal/pwrite采样的复跑入口和结果；拒绝睡眠造成的时间线缺口，保留无效样本。维护者决定保留Mongo事务和majority+j:true，生产默认不变；[结论与未完成边界](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md#本轮收口与维护者决定2026-10-23)。
+
 - **Saga Mongo 认领与消费容量**：到期 Saga / outbox 改为带排序的原子 `FindOneAndUpdate` 认领，避免并发 worker 扫到同一候选而空领；Mongo collection 增加 `FindOneAndUpdateOption.Sort`。Mongo 步骤与完成结果可分别配置 `MongoWorkers` / `Workers`，默认仍串行，通过现有延迟结算保证在途有界、Drain 等到真实完成。本机两消费 worker、30/s × 10 分钟 18,000 笔全部成功，业务核验通过，P99 576ms；不改变超时 / 重试次数。见 [诊断与证据](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
 - **Redis Cluster 重定向预算耗尽后安全重试**：MOVED / ASK 纳入既有有界的“确定未执行”重试；执行后丢响应仍不重放，WAIT 不变。永久重定向仍有总预算，历史八次实际路由未恢复，见 [回归证据](docs/performance/benchmarks/redis-redirect-20261023/README.md)。
 

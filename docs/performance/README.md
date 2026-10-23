@@ -4,6 +4,8 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [JetStream独立与Mongo混合资源对照](benchmarks/jetstream-isolation-20261023/README.md) | 独立约1.4ms、已测6.5万消息/s；Mongo同机负载复现约43ms；CPU/内存/网络未耗尽；采样确认Mongo journal同步与NATS pwrite驻留，保留睡眠无效样本 |
+| [Saga batch 与 JetStream 交付验证](benchmarks/saga-batch-wire-20261023/README.md) | ABBA 共7200笔成功；batch=1减少约30ms协调等待；解析后回调排队约占平均交付4%，生产默认不变 |
 | [Saga 单笔逐跳诊断（2026-10-23）](benchmarks/saga-timeline-20261023/README.md) | 1800笔正向全成功且时间线完整；平均397ms中持久处理158ms、交付138ms、协调/outbox84ms、业务写入1.65ms；不把各跳P99相加，不将交付当纯网络RTT |
 | [候选问题诊断（2026-10-23）](PRERELEASE-DIAGNOSTICS-20261023.md) | WAL 刷盘指标修复并定位 async 等 writer；Saga 原子认领 + 两消费 worker 通过 30/s × 10 分钟（18,000 笔全成功）；Redis 有界重定向修复与六节点计划切换通过；历史失败证据保留，整体停顿与 heartbeat 波动未全部关闭 |
 | [v1.31.0 发版前整体压测清单（2026-10-22 晚）](V1310-PRERELEASE-20261022.md) | 计划、不是结果：选项 C 参数、Interest ApplySync 预算、game-demo 100 / 200 人、夜间补测 13 项 + 第 14 项在发版候选上重跑、AOI 三点与两种应用模式、心跳负载；200ms（5Hz）移动口径与 Linux 复测可选 |

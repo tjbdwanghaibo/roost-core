@@ -395,7 +395,7 @@ stepConfig.MongoWorkers = 2
 - **准入与观察**：在业务接纳新交易前按资源容量控制流量；已持久接纳的交易继续恢复，不能因过载丢掉。分别监控接纳率、正向成功率、补偿 / 失败 / 人工状态、端到端 P99、最老未完成交易、outbox 积压和重投。不要只看终态 TPS，也不要只看最终队列为0。
 - **上线验收**：在目标跨机拓扑、真实交易步骤、热点分布下同时验证正常与补偿负载、长尾、积压恢复和故障切换；receipt / tombstone 保留期覆盖消息重投和业务对账窗口。当前本机30/s成功不代替这些验收。
 
-本轮已补充 [单笔逐跳诊断](../performance/benchmarks/saga-timeline-20261023/README.md)：完整覆盖1800笔，主要耗时是持久处理、命令/结果交付及协调认领；业务写入平均约1.65ms。诊断只定位等待，没有实施下面的调度优化。
+本轮已补充 [单笔逐跳诊断](../performance/benchmarks/saga-timeline-20261023/README.md)：完整覆盖1800笔，主要耗时是持久处理、命令/结果交付及协调认领；业务写入平均约1.65ms。随后完成 [batch与交付拆分验证](../performance/benchmarks/saga-batch-wire-20261023/README.md)：batch=1 在30/s对照中减少约30ms协调等待；解析后回调排队不是平均交付延迟的主要来源。生产默认尚未修改。 [独立JetStream与Mongo混合对照](../performance/benchmarks/jetstream-isolation-20261023/README.md)进一步确认：同机Mongo持久负载足以使独立进程/连接/流的交付从约1.4ms升至约43ms，停止后恢复；未见CPU、网络、内存饱和；进一步采样观察到Mongo journal线程持续同步、NATS线程驻留pwrite，定位重点为同机持久化I/O相互影响，具体文件系统/设备等待仍待细分。
 
 ### 仍可优化的环节（第1项已补单进程诊断，其余未实施）
 
