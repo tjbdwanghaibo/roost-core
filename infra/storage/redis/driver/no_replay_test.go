@@ -67,6 +67,66 @@ func (s *respStandIn) executions(name string) int {
 	return s.executed[name]
 }
 
+// 重定向是服务端拒绝执行后的换节点，不能与回复丢失后的危险重放混为一谈。
+// 固定初始槽表、用 RESP 回复控制切换窗口，验证生产 Eval 的 NoRetry 标记仍能跟随 MOVED / ASK。
+func TestScriptFollowsClusterRedirectsWithoutReplayingUnknownWrites(t *testing.T) {
+	for _, redirect := range []string{"MOVED", "ASK"} {
+		t.Run(redirect, func(t *testing.T) {
+			destination := newRESPStandIn(t, nil)
+			origin := newRESPStandIn(t, map[string][]standInAction{
+				"eval": {{reject: redirect + " 42 " + destination.listener.Addr().String()}},
+			})
+			cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+				Addrs: []string{origin.listener.Addr().String()},
+				ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+					return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: origin.listener.Addr().String()}}}}, nil
+				},
+			})
+			t.Cleanup(func() { _ = cluster.Close() })
+			client := &Client{rdb: cluster, resends: 3}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := client.Eval(ctx, "return 1", []string{"k"}); err != nil {
+				t.Fatal(err)
+			}
+			if origin.executions("eval") != 0 || destination.executions("eval") != 1 {
+				t.Fatalf("script executions: origin=%d destination=%d", origin.executions("eval"), destination.executions("eval"))
+			}
+		})
+	}
+}
+
+// 槽位视图反复指回同一节点时，驱动必须有界退出；返回 MOVED 不代表一次都没有跟随。
+func TestClusterRedirectBudgetReturnsTheLastRedirect(t *testing.T) {
+	origin := newRESPStandIn(t, nil)
+	origin.mu.Lock()
+	origin.plans = map[string][]standInAction{"eval": make([]standInAction, 4)}
+	for i := range origin.plans["eval"] {
+		origin.plans["eval"][i].reject = "MOVED 42 " + origin.listener.Addr().String()
+	}
+	origin.mu.Unlock()
+	cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+		Addrs: []string{origin.listener.Addr().String()},
+		ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+			return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: origin.listener.Addr().String()}}}}, nil
+		},
+	})
+	t.Cleanup(func() { _ = cluster.Close() })
+	client := &Client{rdb: cluster, resends: 3}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := client.Eval(ctx, "return 1", []string{"k"})
+	if err == nil || !strings.HasPrefix(err.Error(), "MOVED ") {
+		t.Fatalf("want last redirect, got %v", err)
+	}
+	origin.mu.Lock()
+	remaining, executed := len(origin.plans["eval"]), origin.executed["eval"]
+	origin.mu.Unlock()
+	if remaining != 0 || executed != 0 {
+		t.Fatalf("redirects remaining=%d executed=%d, want 0/0", remaining, executed)
+	}
+}
+
 // next 取出这次调用的处理方式，并在执行时计数。
 func (s *respStandIn) next(name string) (standInAction, int) {
 	s.mu.Lock()

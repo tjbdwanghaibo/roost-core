@@ -63,7 +63,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | --- | --- | --- |
 | `nestwal.batch.total` / `nestwal.append.total` | Counter | 组提交批数 / 记录数（比值 = 合批放大率） |
 | `nestwal.bytes.total` | Counter | 写入字节 |
-| `nestwal.fsync.duration` | Duration | 每批 fsync 时延（strict 锁内成本的直接来源） |
+| `nestwal.fsync.duration` | Duration | 物理 WAL 段刷盘尝试的时延（含失败）：覆盖 strict 写批、后台 ticker、Ack、轮转和关闭；不含 checkpoint / 目录刷盘。async 不等待自己的 durable barrier，但可能等待正在刷段的 writer / stateMu；不能因本事务没有 strict 刷盘就排除间接等待 |
 | `nestwal.pending.tickets` | Gauge | 未 durable 的 pipelined ticket 数（durable lag 的实体侧读数） |
 | `nestwal.disk.bytes` | Gauge | 段文件占用（回收压力） |
 | `nestwal.reject.total` | Counter | 容量拒绝（labels.reason: queue_full/disk_cap） |

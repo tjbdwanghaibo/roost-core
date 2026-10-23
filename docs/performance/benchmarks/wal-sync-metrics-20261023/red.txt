@@ -1,0 +1,8 @@
+--- FAIL: TestSegmentSyncMetricsIncludeAsyncFlushAndAck (0.03s)
+    --- FAIL: TestSegmentSyncMetricsIncludeAsyncFlushAndAck/ack=false (0.01s)
+        wal_test.go:95: physical segment syncs=1 recorded=0, want 1/1
+    --- FAIL: TestSegmentSyncMetricsIncludeAsyncFlushAndAck/ack=true (0.02s)
+        wal_test.go:95: physical segment syncs=1 recorded=0, want 1/1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nestwal	0.783s
+FAIL

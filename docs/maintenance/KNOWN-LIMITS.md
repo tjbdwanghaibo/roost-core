@@ -8,6 +8,10 @@
 
 基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。三项均已修复：RV-20261022-01（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)）、RV-20261022-02（`47691000`，见 [v1.31.0 实现篇 R2](../release/v1.31.0-IMPLEMENTATION.md#r2)）、RV-20261022-03（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)）。本节没有仍未修复的项。
 
+## 10-23 候选诊断边界
+
+[诊断续报](../performance/PRERELEASE-DIAGNOSTICS-20261023.md)：WAL 刷盘指标漏记已修复，原 async 6.8ms 的具体组成仍待剖析；Redis 受控 MOVED / ASK 跟随正常，历史八次外泄仍缺实际切换路由证据；Saga 正向 30/s 复测失败、两笔补偿耗尽后进入 ManualRequired，不能以终态 TPS 代表成功容量。全局停顿与 200ms 心跳档抖动仍未确定根因，不能把这五项标为全部收尾。
+
 ## Nest 与实体定时器
 
 ### 按实体的持久定时器（D11）

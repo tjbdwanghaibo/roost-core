@@ -57,6 +57,9 @@ func TestRealSagaPerformance(t *testing.T) {
 		t.Fatal("private Mongo/NATS environment required")
 	}
 	client, database := realRevn06s5Mongo(t)
+	// 最先登记，晚于下面的消费者和引擎停止执行、早于 realRevn06s5Mongo 清库执行。
+	// 即使主测试提前失败，也保留实际终态、步骤回执和效果，不能只留下聚合计数。
+	t.Cleanup(func() { retainSagaPerformanceEvidence(t, client, database, output) })
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
 	stream, prefix := "ROOST_PERF_SAGA_"+suffix, "perfsaga"+strings.ReplaceAll(suffix, "_", "x")
 	t.Cleanup(func() { deleteRevn06s5Stream(t, natsURL, stream) })
@@ -162,6 +165,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		StartErrors                                               uint64
 		FirstError                                                string
 		DurationSeconds, ElapsedSeconds, CompletionTPS            float64
+		ExpectedTerminalTPS                                       float64
 		P50MS, P95MS, P99MS, MaxMS                                float64
 		FinalStats                                                Stats
 		OutboxPending, Leases, BusinessDocuments, EffectDocuments int64
@@ -287,6 +291,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	r.Started = int(started.Load())
 	r.StartErrors = failures.Load()
 	r.CompletionTPS = float64(r.Completed) / r.ElapsedSeconds
+	r.ExpectedTerminalTPS = float64(r.Completed-r.WrongTerminal) / r.ElapsedSeconds
 	quantile := func(sorted []time.Duration, p float64) float64 {
 		if len(sorted) == 0 {
 			return 0
@@ -400,6 +405,28 @@ func TestRealSagaPerformance(t *testing.T) {
 	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms server_p99=%.1fms admit_p99=%.1fms observe_p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.Server.Completion.P99MS, r.Harness.AdmitLag.P99MS, r.Harness.ObserveLag.P99MS, r.StartErrors, r.BusinessVerified)
 	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
 		t.Fatal("Saga load verification failed; result retained")
+	}
+}
+
+// retainSagaPerformanceEvidence 在计时结束并停止后台处理后保存测试库快照。
+// 仅显式压测入口使用；原始 BSON JSON 便于按 saga ID 核对终态、重试和一次性效果。
+func retainSagaPerformanceEvidence(t *testing.T, client fmongo.IMongo, database, output string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, name := range []string{defaultSagaCollection, defaultOperationCollection, defaultCompletionCollection, defaultOutboxCollection, "perf_steps", "business", "effects"} {
+		var docs []bson.M
+		if err := client.Database(database).Collection(name).Find(ctx, bson.M{}, &docs); err != nil {
+			t.Errorf("retain %s evidence: %v", name, err)
+			continue
+		}
+		raw, err := json.Marshal(docs)
+		if err == nil {
+			err = os.WriteFile(output+"."+name+".json", append(raw, '\n'), 0600)
+		}
+		if err != nil {
+			t.Errorf("retain %s evidence: %v", name, err)
+		}
 	}
 }
 

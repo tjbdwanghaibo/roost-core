@@ -6,6 +6,10 @@
 
 v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：待 2026-10-22 晚整体压测与发版验证**。按主题写最终行为；维护者决定与逐项说明见 [v1.31.0 说明](docs/release/v1.31.0-NOTES.md)，提交、强制点与回归用例见 [实现篇](docs/release/v1.31.0-IMPLEMENTATION.md)，剩余边界见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)，今晚压测见 [V1310-PRERELEASE-20261022](docs/performance/V1310-PRERELEASE-20261022.md)。线上尚未部署：存储、协议与 API 变化一律不做兼容。发版时生成物最低 core 要升到 v1.31.0（生成物用到本版才有的 API）。
 
+### 验收诊断修正
+
+- **WAL 刷盘观测**：`nestwal.fsync.duration` 改在物理段刷盘入口计时，补齐 async 后台刷盘和 Ack 路径；持久化与加锁语义不变。Saga 压测在清理数据库前导出终态、操作与业务证据，另报预期终态 TPS，避免把失败终态当作成功吞吐。复测结果及尚未确认项见 [10-23 诊断](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
+
 ### 不兼容变更（升级必读）
 
 - **Interest / 视野（`framework/sync/entitysync/policy`）**：删除 `RelationSource`、`Source`、`SourceSpatial` / `SourceSelf` / `SourceBlock`、`InterestConfig.Session` / `Relations` / `SourceProfiles` / `Profile` / `ObserverOf`、`DefaultObserverOf`、`Interest.Relation`、`QueueRelation` / `QueueRelationDelta`、`MoveShown`。观察者按玩家 ID 编号：`Enter(playerID, entityID, at, view)`、`Leave(playerID, entityID)`、`Move(entityID, to)`；`AOI.AddObserver(playerID, self, at, view)`；`QueueMove(e, at)`、`QueueSpatial(e, at, blocks)`、`NewSpatialComponent(owner, interest, write)`；`Resubscribe` 不再返回 pair 数。直接调用的效果在下一次结算可见，不在业务 handler 里调 `Apply()`；在 Flush 之后断言排队结果的测试改用 `Drain`。缺省 `ApplySync` 下每玩家视野（含主视野与关系视野）显式超过 9 拒绝构造，按报错改 `ApplyMode: policy.ApplyAsync`。`SourceProfiles` / `Profile` 改为 `BandLayer` / `BlockLayer` / `SelfLayer`；`NewSyncViewSet` 拒绝含 `+`、`@` 的视图 Key；`ManagerCounters` 新增 `PolicyDuration`。

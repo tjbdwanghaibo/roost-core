@@ -4,6 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [候选问题诊断（2026-10-23）](PRERELEASE-DIAGNOSTICS-20261023.md) | WAL 后台 / Ack 刷盘指标漏记修复；Saga 30/s 仍失败、保留两笔人工终态证据；Redis 受控重定向验证通过；heartbeat 时间片交叉补测，200ms 档改善不一致，五项未全部关闭 |
 | [v1.31.0 发版前整体压测清单（2026-10-22 晚）](V1310-PRERELEASE-20261022.md) | 计划、不是结果：选项 C 参数、Interest ApplySync 预算、game-demo 100 / 200 人、夜间补测 13 项 + 第 14 项在发版候选上重跑、AOI 三点与两种应用模式、心跳负载；200ms（5Hz）移动口径与 Linux 复测可选 |
 | [Interest 单写者重构前后对比（2026-10-22）](INTEREST-SINGLE-WRITER-20261022.md) | 改前 `494134ae` / 改后 `11988df8` 同机交替：政策阶段在跑时业务线程上的直接调用均值与 p99 降一到两个数量级（`Enter`+`Leave` 23.4µs → 0.47µs），AOI 基准 ±2%；sync-aoi Nest ApplySync 0～8 视野 P50 低 6～11ms、P99 低 4～8ms，ApplyAsync 持平，ApplySync 16 视野仍超周期；修了 sync-aoi Nest 模式每 tick 调 `Apply` 的夹具问题（`6cffbc03`）；direct 基线语义变化不可直接比；demo 登录风暴 80 人规模下没有可分辨差异（更多人时 demo 的复制会话因 `MaxObjects` 被关闭） |
 | [D20 第 4 期：压测工具改为心跳驱动（2026-10-21）](HB-DRIVEN-LOAD-20261021.md) | 只交付代码、没有性能结论：sync-aoi `-move-driver=heartbeat`（实体心跳 + movement 巡逻）、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat`（生成 Unit 挂 `gameplay/heartbeat`），缺省仍是原全局循环；§7 微基准补正式驱动的假客户端基准、真实 Nest 开环投递与快池占满跳拍；冒烟与正式对比 2026-10-21 因宿主资源占用推迟到 v1.31 发版前压测，命令见该页 §4 |

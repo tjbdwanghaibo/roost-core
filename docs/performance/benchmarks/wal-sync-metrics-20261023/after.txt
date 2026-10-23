@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	    9981	    124509 ns/op	   14956 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2304	    467362 ns/op	   34866 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	   10000	    122899 ns/op	   20387 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2509	    472580 ns/op	   20772 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	    9172	    126901 ns/op	   13942 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2450	    459941 ns/op	   14283 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	   10000	    123788 ns/op	   19129 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2396	    450262 ns/op	   21488 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	   10000	    124110 ns/op	   17875 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2401	    464702 ns/op	   21465 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	    9980	    120338 ns/op	    9908 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2509	    482645 ns/op	   42504 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	    9922	    127193 ns/op	   17547 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2499	    466509 ns/op	   25867 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	    9954	    123357 ns/op	   12873 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2359	    493735 ns/op	   21729 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	   10000	    125401 ns/op	   24581 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2614	    457091 ns/op	   29802 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nestwal
+cpu: Apple M5
+BenchmarkWALAppendAsyncParallel-10     	   10000	    123094 ns/op	   17032 B/op	       6 allocs/op
+BenchmarkWALAppendStrictParallel-10    	    2401	    483504 ns/op	   24957 B/op	       6 allocs/op
+PASS
