@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **物理房间 service**：新增 `service/physicsroom` 与 `wiring/physicsroom`，支持独立 owner 下的建房/成员/输入/Chunk 取帧确认/销毁、进程及房间代际、容量限制和停机排空；生成 Core NATS RPC、Nest 结果提交适配与 Gate 绑定转发。新增固定 SID 的 RPC 选项，禁止房间调用随机漂移；Nest 增加 `RequestSettled`，供资源执行器等待已准入 handler 真实完成，普通 Request 行为不变。macOS 定向、真实 NATS/Gate/TCP 验证通过；Linux 和多房间容量压测未执行。见 [使用与边界](docs/framework/PHYSICS-ROOM-SERVICE.md)。
+
 - **物理多房间生命周期修复**：将共享 PxPhysics 的创建和释放纳入同一临界区，修复并发开关世界后 SDK 引用计数竞争导致后续世界创建失败；独立 Scene 模拟保持并发。增加多世界隔离、取消/失败隔离和 Chunk 截断原子性验证，见 [补验记录](docs/performance/benchmarks/physics-rooms-20261025/README.md)。
 
 - **20 人立体物理场景**：Crowd 改为 20 个玩家球＋50 个胶囊＋1 个大球，20Hz 同步；增加共享 JSON 定义的平台、坡道、阶梯、桥梁和障碍，原生刚体支持旋转姿态，AOI 精筛改为 XYZ 距离。需同时重建原生动态库与 Go 宿主并同步 Unity 资源；旧 Crowd 人数/桥接 ABI 不兼容。见 [验证报告](docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。

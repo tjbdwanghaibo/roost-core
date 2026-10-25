@@ -1,6 +1,7 @@
 package roostcore_test
 
 import (
+	"go/build/constraint"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -54,6 +55,10 @@ func integrationTestPackages(t *testing.T) (redisOnly, fullEnv, cluster []string
 		// A build constraint is the file's first line; the same string inside
 		// a string literal (this file has one) is not a constraint.
 		if !strings.HasPrefix(strings.TrimLeft(text, "\n"), "//go:build integration") {
+			return nil
+		}
+		// 同时要求 physx 的原生套件由专用 runner 执行；下方独立门禁验证入口与用例名。
+		if requiresPhysics(text) {
 			return nil
 		}
 		dir := filepath.ToSlash(filepath.Dir(path))
@@ -724,5 +729,74 @@ func TestGeneratedProjectRealDependencyTestsHaveAnEntry(t *testing.T) {
 		for _, test := range discovered {
 			t.Logf("discovered: %s %s", test.source, test.name)
 		}
+	}
+}
+
+// requiresPhysics 依据构建表达式区分原生测试，不能只调整 tag 顺序绕过覆盖。
+func requiresPhysics(text string) bool {
+	line := strings.SplitN(strings.TrimLeft(text, "\n"), "\n", 2)[0]
+	expr, err := constraint.Parse(line)
+	if err != nil {
+		return false
+	}
+	enabled := func(integration, native bool) bool {
+		return expr.Eval(func(tag string) bool {
+			switch tag {
+			case "integration":
+				return integration
+			case "cgo":
+				return true
+			case "physx":
+				return native
+			default:
+				return false
+			}
+		})
+	}
+	return enabled(true, true) && !enabled(true, false) && !enabled(false, true)
+}
+
+func TestPhysicsServiceRunnerCoversNativeIntegration(t *testing.T) {
+	raw, err := os.ReadFile("scripts/physics/verify-service.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	args := goTestPackageArgs(script)
+	testNames := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
+	count := 0
+	for _, root := range []string{"service", "wiring"} {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			text := string(content)
+			if !requiresPhysics(text) {
+				return nil
+			}
+			count++
+			if !covers(args, filepath.ToSlash(filepath.Dir(path))) {
+				t.Errorf("native integration suite missing from physics runner: %s", path)
+			}
+			for _, name := range testNames.FindAllStringSubmatch(text, -1) {
+				if !strings.Contains(script, name[1]) {
+					t.Errorf("physics runner -run does not name %s", name[1])
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count == 0 {
+		t.Fatal("physics integration suites were not discovered")
 	}
 }

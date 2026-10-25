@@ -186,3 +186,7 @@ AOI 继续用 XZ Block 作为候选粗筛，精筛改为 XYZ 欧氏距离；楼�
 - 生产 Gate 装配、Raycast、碰撞业务事件和运行期增删尚未实现，不能作为“已验证”交付。Linux 实跑按维护者要求暂缓。
 
 补验发现并修复了并发开关房间时 PxPhysics 单例引用计数竞争。此前单房间验收没有覆盖此问题；这次以 8 个并发房间反复创建、模拟、销毁，重复使用 body ID 并校验不同房间轨迹，另验证房间提交失败隔离、取消退出，以及 Chunk 任意截断位置不产生半帧状态。证据见 [多房间补验](../performance/benchmarks/physics-rooms-20261025/README.md)。这属于底层多世界能力验证，并不意味着房间 service 已经实现。
+
+### 物理房间服务已实施（2026-10-25）
+
+上述“后续 service”现已落地为 service/physicsroom 和 wiring/physicsroom，包含固定 owner RPC、进程/房间/成员代际、预算、Nest 提交适配与 Gate Relay。现行接口和验证边界以 [物理房间 service](PHYSICS-ROOM-SERVICE.md) 为准；此前单房间/多世界报告保留为各自阶段证据，不等同于多房间服务容量验证。Linux、Raycast、碰撞事件与运行期增删仍未实施。

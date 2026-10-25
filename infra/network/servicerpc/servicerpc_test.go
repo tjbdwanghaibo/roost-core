@@ -283,3 +283,32 @@ func TestBusinessWorkersRefuseRPCBeforeTransportAndDiscovery(t *testing.T) {
 		t.Fatalf("I/O rejected before transport: %v", err)
 	}
 }
+
+func TestPinnedOwnerNeverUsesQueueGroup(t *testing.T) {
+	b := &recordingBus{}
+	c := NewBusClient(b, "physicsroom", time.Second, WithServerID(42))
+	if err := c.Call(context.Background(), 0, "Poll", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b.lastSid != 42 || b.calls[0] != "callTo:physicsroom:Poll" {
+		t.Fatalf("routing=%v sid=%d", b.calls, b.lastSid)
+	}
+	bad := NewBusClient(b, "physicsroom", time.Second, WithServerID(0))
+	if err := bad.Call(context.Background(), 0, "Poll", nil, nil); err == nil {
+		t.Fatal("invalid owner fell back to random routing")
+	}
+	if len(b.calls) != 1 {
+		t.Fatal("invalid owner touched bus")
+	}
+}
+
+func TestPinnedOwnerDoesNotDriftThroughDiscovery(t *testing.T) {
+	b := &recordingBus{}
+	c := NewDiscoveredBusClient(b, "physicsroom", time.Second, &fakeDiscovery{err: errors.New("discovery must not be used")}, WithServerID(42))
+	if err := c.CallDiscoveredChecked(context.Background(), "Poll", nil, statusResponse{}, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if b.lastSid != 42 {
+		t.Fatalf("owner drifted to %d", b.lastSid)
+	}
+}

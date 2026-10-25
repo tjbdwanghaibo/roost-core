@@ -28,6 +28,7 @@ var ErrResponseStatusMissing = errors.New("servicerpc: response status missing")
 
 type BusClient struct {
 	bus         bus.IBus
+	ownerID     int32
 	serviceType string
 	timeout     time.Duration
 	discovery   fetcd.IDiscovery
@@ -64,6 +65,18 @@ type ResponseStatusProvider interface {
 }
 
 type RoundRobinPicker struct{}
+
+// WithServerID 将未显式指定 SID 的调用固定到一个 owner；瞬态房间不能随服务发现漂移。
+// 非正数在 Call 时拒绝，避免配置错误退化为随机路由。
+func WithServerID(id int32) Option {
+	return func(c *BusClient) {
+		if id <= 0 {
+			c.ownerID = -1
+		} else {
+			c.ownerID = id
+		}
+	}
+}
 
 func WithTransport(transport Transport) Option {
 	return func(c *BusClient) {
@@ -124,6 +137,12 @@ func (c *BusClient) Call(ctx context.Context, serverID int32, method string, req
 	}
 	if c == nil || c.bus == nil {
 		return ErrBusNil
+	}
+	if c.ownerID < 0 {
+		return fmt.Errorf("servicerpc: invalid owner SID")
+	}
+	if serverID == 0 {
+		serverID = c.ownerID
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -189,6 +208,12 @@ func (c *BusClient) CallDiscoveredChecked(ctx context.Context, method string, re
 func (c *BusClient) PickServer(ctx context.Context) (int32, error) {
 	if err := fctx.BlockingError("servicerpc.PickServer"); err != nil {
 		return 0, err
+	}
+	if c != nil && c.ownerID != 0 {
+		if c.ownerID < 0 {
+			return 0, fmt.Errorf("servicerpc: invalid owner SID")
+		}
+		return c.ownerID, nil
 	}
 	if c == nil || c.discovery == nil {
 		return 0, nil

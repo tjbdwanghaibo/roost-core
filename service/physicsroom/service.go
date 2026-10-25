@@ -1,0 +1,471 @@
+package physicsroom
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"log/slog"
+	"math"
+	"reflect"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
+	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
+)
+
+type Service struct {
+	instance string
+	mu       sync.Mutex
+	cfg      Config
+	rooms    map[string]*room
+	retired  map[string]retiredRoom
+	stopping bool
+	metrics  servicemetrics.Sink
+}
+type retiredRoom struct {
+	ref   Ref
+	until time.Time
+}
+
+type room struct {
+	mu      sync.Mutex
+	ref     Ref
+	spec    Spec
+	world   *physx.World
+	cancel  context.CancelFunc
+	done    chan struct{}
+	stopped bool
+	members map[int64]*memberState
+	latest  *gamephysics.SpatialFrame
+}
+type memberState struct {
+	member                  Member
+	binding                 gateway.Binding
+	body                    uint64
+	input                   Input
+	inputAt, seenAt, sentAt time.Time
+	cursor                  chunksync.Cursor
+	pending                 *chunksync.Plan
+	sequence                uint64
+	visible, nextVisible    map[uint64]bool
+}
+
+func New(cfg Config) (*Service, error) {
+	// 所有资源上限在启动时检查，0 不代表无限容量。
+	switch {
+	case cfg.MaxRooms < 1 || cfg.MaxRooms > 1024,
+		cfg.MaxPlayers < 1 || cfg.MaxPlayers > 1024,
+		cfg.MaxBodies < 1 || cfg.MaxBodies > 4096:
+		return nil, ErrRequestInvalid
+	case cfg.MaxFrameBytes < 256 || cfg.MaxFrameBytes > chunksync.MaxPayload:
+		return nil, ErrRequestInvalid
+	case cfg.Commit == nil,
+		cfg.InputTTL <= 0 || cfg.InputTTL > time.Second,
+		cfg.MemberTTL < cfg.InputTTL || cfg.MemberTTL > time.Minute,
+		cfg.MaxLifetime < time.Second || cfg.MaxLifetime > 24*time.Hour:
+		return nil, ErrRequestInvalid
+	case cfg.Radius <= 0 || cfg.Margin < 0,
+		math.IsNaN(cfg.Radius+cfg.Margin) || math.IsInf(cfg.Radius+cfg.Margin, 0),
+		cfg.Radius+cfg.Margin > 100:
+		return nil, ErrRequestInvalid
+	}
+
+	if physx.Version() == "unavailable" {
+		return nil, physx.ErrUnavailable
+	}
+	return &Service{instance: token(), cfg: cfg, rooms: make(map[string]*room), retired: make(map[string]retiredRoom), metrics: servicemetrics.Wrap(cfg.Metrics)}, nil
+}
+
+// Describe 返回 owner 进程代际，调用方保留在 Create 请求中，超时重试不重新获取。
+func (s *Service) Describe(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return "", ErrStopping
+	}
+	return s.instance, nil
+}
+
+func epoch() uint64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return binary.LittleEndian.Uint64(b[:]) | 1
+}
+func token() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
+
+// 创建在准入锁内完成：并发开房不能越过容量，失败释放已分配资源。模拟不占此锁。
+func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
+	if err := fctx.BlockingError("physicsroom.Create"); err != nil {
+		return Ref{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Ref{}, err
+	}
+	if spec.Instance != s.instance || spec.ID == "" || len(spec.ID) > 128 || len(spec.Bodies) == 0 || len(spec.Bodies) > s.cfg.MaxBodies || spec.LifetimeSeconds <= 0 || spec.LifetimeSeconds > int64(s.cfg.MaxLifetime/time.Second) {
+		return Ref{}, ErrRequestInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return Ref{}, ErrStopping
+	}
+	if r := s.rooms[spec.ID]; r != nil {
+		if !reflect.DeepEqual(r.spec, spec) {
+			return Ref{}, ErrRequestInvalid
+		}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.stopped {
+			return Ref{}, ErrStopping
+		}
+		s.metrics.Replayed("create")
+		return r.ref, nil
+	}
+	now := time.Now()
+	for id, until := range s.retired {
+		if now.After(until.until) {
+			delete(s.retired, id)
+		}
+	}
+	if _, exists := s.retired[spec.ID]; exists {
+		return Ref{}, ErrMissing
+	}
+	if len(s.retired) >= s.cfg.MaxRooms*16 {
+		return Ref{}, ErrCapacity
+	}
+	if len(s.rooms) >= s.cfg.MaxRooms {
+		s.metrics.Refused("create", "capacity")
+		return Ref{}, ErrCapacity
+	}
+	w, err := physx.New(-9.81, 1)
+	if err != nil {
+		return Ref{}, err
+	}
+	for _, b := range spec.Bodies {
+		if err = w.Add(b); err != nil {
+			w.Close()
+			return Ref{}, err
+		}
+	}
+	dynamic := 0
+	for _, b := range spec.Bodies {
+		if b.Shape != physx.Box {
+			dynamic++
+		}
+	}
+	if 36+dynamic*75 > s.cfg.MaxFrameBytes {
+		w.Close()
+		return Ref{}, ErrCapacity
+	}
+	ref := Ref{ID: spec.ID, Epoch: epoch()}
+	initial, err := gamephysics.NewSpatialFrame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies), 25, 10)
+	if err != nil {
+		w.Close()
+		return Ref{}, err
+	}
+	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(spec.LifetimeSeconds)*time.Second)
+	spec.Bodies = slices.Clone(spec.Bodies)
+	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial}
+	s.rooms[ref.ID] = r
+	s.metrics.Accepted("create")
+	s.metrics.Depth("rooms", int64(len(s.rooms)))
+	go s.run(runCtx, r)
+	return ref, nil
+}
+func (s *Service) lookup(ref Ref) (*room, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return nil, ErrStopping
+	}
+	r := s.rooms[ref.ID]
+	if r == nil || r.ref != ref {
+		return nil, ErrMissing
+	}
+	return r, nil
+}
+func (s *Service) run(ctx context.Context, r *room) {
+	defer func() {
+		r.mu.Lock()
+		r.stopped = true
+		r.members = nil
+		r.mu.Unlock()
+		r.world.Close()
+		s.mu.Lock()
+		if s.rooms[r.ref.ID] == r {
+			delete(s.rooms, r.ref.ID)
+			s.retired[r.ref.ID] = retiredRoom{ref: r.ref, until: time.Now().Add(s.cfg.MaxLifetime)}
+		}
+		s.metrics.Depth("rooms", int64(len(s.rooms)))
+		s.mu.Unlock()
+		close(r.done)
+	}()
+	defer r.cancel()
+	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, Input: func(uint64) []physx.Command {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		now := time.Now()
+		out := make([]physx.Command, 0, len(r.members))
+		for player, m := range r.members {
+			if now.Sub(m.seenAt) > s.cfg.MemberTTL {
+				delete(r.members, player)
+				s.metrics.Dropped("member_expired", 1)
+				continue
+			}
+			if !m.inputAt.IsZero() && now.Sub(m.inputAt) <= s.cfg.InputTTL {
+				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration})
+			}
+		}
+		// 稳定输入次序，不能让 map 遍历顺序成为物理重复运行的随机源。
+		slices.SortFunc(out, func(a, b physx.Command) int {
+			if a.ID < b.ID {
+				return -1
+			}
+			if a.ID > b.ID {
+				return 1
+			}
+			return 0
+		})
+		return out
+	}}, func(ctx context.Context, f gamephysics.Frame) error {
+		if err := s.cfg.Commit(ctx, r.ref, f); err != nil {
+			return err
+		}
+		frame, err := gamephysics.NewSpatialFrame(f, 25, 10)
+		if err != nil {
+			return err
+		}
+		r.mu.Lock()
+		r.latest = frame
+		r.mu.Unlock()
+		return nil
+	})
+	if err != nil && ctx.Err() == nil {
+		s.metrics.Dropped("room_failed", 1)
+		slog.Error("physicsroom: simulation or commit failed", "room", r.ref.ID, "epoch", r.ref.Epoch, "error", err)
+	}
+}
+func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bodyID uint64) (Member, error) {
+	if err := ctx.Err(); err != nil {
+		return Member{}, err
+	}
+	if binding.Validate() != nil {
+		return Member{}, ErrRequestInvalid
+	}
+	r, err := s.lookup(ref)
+	if err != nil {
+		return Member{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return Member{}, ErrStopping
+	}
+	if old := r.members[binding.PlayerID]; old != nil {
+		if old.binding != binding || old.body != bodyID {
+			return Member{}, ErrMember
+		}
+		old.seenAt = time.Now()
+		return old.member, nil
+	}
+	valid := false
+	for _, b := range r.spec.Bodies {
+		if b.ID == bodyID && b.Shape != physx.Box {
+			valid = true
+		}
+	}
+	if !valid {
+		return Member{}, ErrRequestInvalid
+	}
+	for _, m := range r.members {
+		if m.body == bodyID {
+			return Member{}, ErrMember
+		}
+	}
+	if len(r.members) >= s.cfg.MaxPlayers {
+		return Member{}, ErrCapacity
+	}
+	m := Member{Room: ref, PlayerID: binding.PlayerID, Token: token()}
+	r.members[m.PlayerID] = &memberState{member: m, binding: binding, body: bodyID, seenAt: time.Now()}
+	s.metrics.Accepted("join")
+	return m, nil
+}
+func (r *room) member(m Member) (*memberState, error) {
+	if r.stopped {
+		return nil, ErrStopping
+	}
+	v := r.members[m.PlayerID]
+	if v == nil || v.member != m {
+		return nil, ErrMember
+	}
+	return v, nil
+}
+func (s *Service) Submit(ctx context.Context, m Member, in Input) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	norm := float64(0)
+	for _, v := range in.Acceleration {
+		norm += float64(v) * float64(v)
+	}
+	if in.Sequence == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) || norm > 400 {
+		return ErrRequestInvalid
+	}
+	r, err := s.lookup(m.Room)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v, err := r.member(m)
+	if err != nil {
+		return err
+	}
+	if in.Sequence == v.input.Sequence {
+		if in != v.input {
+			return ErrSequence
+		}
+		return nil
+	}
+	if in.Sequence < v.input.Sequence {
+		return ErrSequence
+	}
+	v.input = in
+	v.inputAt = time.Now()
+	v.seenAt = v.inputAt
+	s.metrics.Accepted("input")
+	return nil
+}
+
+// Poll 仅以 ack 推进游标；响应丢失会重发同一 pending。每人最多一帧、最多 20Hz 新帧。
+func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, error) {
+	if err := ctx.Err(); err != nil {
+		return Delivery{}, err
+	}
+	r, err := s.lookup(m.Room)
+	if err != nil {
+		return Delivery{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v, err := r.member(m)
+	if err != nil {
+		return Delivery{}, err
+	}
+	if v.pending != nil && ack == v.sequence+1 {
+		if err = v.cursor.Commit(v.pending); err != nil {
+			return Delivery{}, err
+		}
+		v.pending = nil
+		v.sequence = ack
+		v.visible = v.nextVisible
+	} else if ack != v.sequence {
+		return Delivery{}, ErrSequence
+	}
+	v.seenAt = time.Now()
+	if v.pending == nil {
+		if time.Since(v.sentAt) < 50*time.Millisecond {
+			return Delivery{Room: r.ref, Sequence: v.sequence}, nil
+		}
+		snapshot, visible, err := r.latest.Visible(v.body, s.cfg.Radius, s.cfg.Margin, v.visible)
+		if err != nil {
+			return Delivery{}, err
+		}
+		p, err := v.cursor.Plan(snapshot)
+		if err != nil {
+			return Delivery{}, err
+		}
+		v.pending = p
+		v.nextVisible = visible
+		v.sentAt = time.Now()
+	}
+	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pending.Data)}, nil
+}
+func (s *Service) Leave(ctx context.Context, m Member) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r, err := s.lookup(m.Room)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.members[m.PlayerID] == nil {
+		return nil
+	}
+	if _, err = r.member(m); err != nil {
+		return err
+	}
+	delete(r.members, m.PlayerID)
+	return nil
+}
+func (s *Service) Destroy(ctx context.Context, ref Ref) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fctx.BlockingError("physicsroom.Destroy"); err != nil {
+		return err
+	}
+	r, err := s.lookup(ref)
+	if err != nil {
+		if errors.Is(err, ErrMissing) {
+			s.mu.Lock()
+			old, ok := s.retired[ref.ID]
+			s.mu.Unlock()
+			if ok && old.ref == ref {
+				return nil
+			}
+		}
+		return err
+	}
+	r.mu.Lock()
+	r.stopped = true
+	r.cancel()
+	r.mu.Unlock()
+	select {
+	case <-r.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Shutdown 超时只返回错误，后台仍等待真实提交退出后释放资源，不提前 Close。
+func (s *Service) Shutdown(ctx context.Context) error {
+	if err := fctx.BlockingError("physicsroom.Shutdown"); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.stopping = true
+	rooms := make([]*room, 0, len(s.rooms))
+	for _, r := range s.rooms {
+		rooms = append(rooms, r)
+	}
+	s.mu.Unlock()
+	for _, r := range rooms {
+		r.mu.Lock()
+		r.stopped = true
+		r.cancel()
+		r.mu.Unlock()
+	}
+	for _, r := range rooms {
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}

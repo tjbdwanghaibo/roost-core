@@ -1,0 +1,218 @@
+//go:build physx && cgo
+
+package physicsroom
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
+	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
+)
+
+func testConfig() Config {
+	return Config{MaxRooms: 2, MaxPlayers: 2, MaxBodies: 10, MaxFrameBytes: 4096, InputTTL: 250 * time.Millisecond, MemberTTL: time.Second, MaxLifetime: time.Minute, Radius: 12, Margin: 2, Commit: func(context.Context, Ref, gamephysics.Frame) error { return nil }}
+}
+func testSpec(id string, s *Service) Spec {
+	return Spec{ID: id, Instance: s.instance, LifetimeSeconds: 30, Bodies: []physx.Body{{ID: 100, Shape: physx.Box, Position: physx.Vec3{0, -.5, 0}, Dimensions: physx.Vec3{25, .5, 25}}, {ID: 1, Shape: physx.Sphere, Position: physx.Vec3{0, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1}}}
+}
+func testBinding() Binding {
+	return Binding{PlayerID: 1, SessionID: "session", ConnectionNonce: "0123456789abcdef0123456789abcdef", BindID: "1123456789abcdef0123456789abcdef", Gate: gateway.ProcessIdentity{ServerID: 1, Incarnation: "0123456789abcdef"}, Game: gateway.ProcessIdentity{ServerID: 2, Incarnation: "1123456789abcdef"}}
+}
+func newTestService(t *testing.T, cfg Config) *Service {
+	t.Helper()
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := s.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return s
+}
+func TestMembershipAndDelivery(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig()
+	metrics := servicemetrics.NewRecorder()
+	cfg.Metrics = metrics
+	s := newTestService(t, cfg)
+	ref, err := s.Create(ctx, testSpec("room", s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := s.Create(ctx, testSpec("room", s))
+	if err != nil || same != ref {
+		t.Fatalf("create replay: %+v %v", same, err)
+	}
+	m, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := m
+	bad.Token = "stale"
+	if err = s.Submit(ctx, bad, Input{Sequence: 1}); !errors.Is(err, ErrMember) {
+		t.Fatal(err)
+	}
+	input := Input{Sequence: 1, Acceleration: physx.Vec3{10, 0, 0}}
+	if err = s.Submit(ctx, m, input); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Submit(ctx, m, input); err != nil {
+		t.Fatal(err)
+	}
+	input.Acceleration[0] = 11
+	if err = s.Submit(ctx, m, input); !errors.Is(err, ErrSequence) {
+		t.Fatal(err)
+	}
+	frame, err := s.Poll(ctx, m, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := s.Poll(ctx, m, 0)
+	if err != nil || !bytes.Equal(frame.Payload, retry.Payload) || frame.Sequence != retry.Sequence {
+		t.Fatalf("lost reply changed baseline: %v", err)
+	}
+	var replica chunksync.Replica
+	if err = replica.Apply(frame.Payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Poll(ctx, m, 99); !errors.Is(err, ErrSequence) {
+		t.Fatal(err)
+	}
+	if _, err = s.Poll(ctx, m, frame.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Leave(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil || replacement.Token == m.Token {
+		t.Fatal(err)
+	}
+	if err = s.Leave(ctx, m); !errors.Is(err, ErrMember) {
+		t.Fatal(err)
+	}
+	if err = s.Destroy(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Create(ctx, testSpec("room", s)); !errors.Is(err, ErrMissing) {
+		t.Fatalf("destroyed create replay reopened room: %v", err)
+	}
+	if metrics.Count("accepted:create") != 1 || metrics.Count("replayed:create") != 1 {
+		t.Fatal(metrics.Events())
+	}
+}
+func TestConcurrentCreateHonorsCapacity(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxRooms = 1
+	s := newTestService(t, cfg)
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, id := range []string{"one", "two"} {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := s.Create(context.Background(), testSpec(id, s)); results <- err }()
+	}
+	wg.Wait()
+	close(results)
+	success, refused := 0, 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if errors.Is(err, ErrCapacity) {
+			refused++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if success != 1 || refused != 1 {
+		t.Fatalf("success=%d refused=%d", success, refused)
+	}
+}
+func TestShutdownWaitsForCommit(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cfg := testConfig()
+	cfg.Commit = func(context.Context, Ref, gamephysics.Frame) error {
+		close(entered)
+		<-release
+		return errors.New("commit failed")
+	}
+	s := newTestService(t, cfg)
+	ref, err := s.Create(context.Background(), testSpec("blocked", s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("commit not entered")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err = s.Shutdown(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	r := s.rooms[ref.ID]
+	s.mu.Unlock()
+	select {
+	case <-r.done:
+		t.Fatal("freed active native world")
+	default:
+	}
+	close(release)
+	if err = s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Create(context.Background(), testSpec("new", s)); !errors.Is(err, ErrStopping) {
+		t.Fatal(err)
+	}
+}
+
+func TestFrameBudgetAndStaleEpoch(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxFrameBytes = 256
+	s := newTestService(t, cfg)
+	spec := testSpec("large", s)
+	for _, id := range []uint64{2, 3} {
+		spec.Bodies = append(spec.Bodies, physx.Body{ID: id, Shape: physx.Sphere, Position: physx.Vec3{float32(id) * 2, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1})
+	}
+	if _, err := s.Create(context.Background(), spec); !errors.Is(err, ErrCapacity) {
+		t.Fatal(err)
+	}
+	ref, err := s.Create(context.Background(), testSpec("small", s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := ref
+	wrong.Epoch++
+	if _, err = s.Join(context.Background(), wrong, testBinding(), 1); !errors.Is(err, ErrMissing) {
+		t.Fatal(err)
+	}
+	if err = s.Destroy(context.Background(), wrong); !errors.Is(err, ErrMissing) {
+		t.Fatal(err)
+	}
+	if _, err = s.Join(context.Background(), ref, testBinding(), 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreviousOwnerCreateIsRejected(t *testing.T) {
+	old := newTestService(t, testConfig())
+	spec := testSpec("old-request", old)
+	next := newTestService(t, testConfig())
+	if _, err := next.Create(context.Background(), spec); !errors.Is(err, ErrRequestInvalid) {
+		t.Fatalf("old process request recreated a room: %v", err)
+	}
+}

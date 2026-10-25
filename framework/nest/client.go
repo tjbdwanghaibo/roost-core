@@ -71,12 +71,37 @@ func (mgr *NestMgr) Dispatch(ctx context.Context, name HandlerName, id int64, pa
 
 // Request 投递单目标消息并等待回复，超时取请求上下文的 SyncWait，其次引擎的同步超时。
 func (mgr *NestMgr) Request(ctx context.Context, name HandlerName, id int64, params Params, opts ...SendOpt) (any, error) {
-	if err := validateClientDispatch(mgr, ctx, "Request", name, ErrSyncInHandler); err != nil {
+	ch, timeout, err := mgr.beginRequest(ctx, name, id, params, opts...)
+	if err != nil {
 		return nil, err
+	}
+	return mgr.waitResult(ctx, ch, timeout)
+}
+
+// RequestSettled 等待已准入请求的真实完成回复，取消和 SyncWait 不提前结束等待。
+// 用于需要排空的外部资源执行器；禁止在 Nest handler/业务 worker 内调用。
+// ctx 仍随请求传入业务，可取消尚未执行的工作，但已在执行的 handler 必须真正返回。
+// 调用方停机超时应保留执行器及其资源，不能把此方法换成普通 Request 掩盖未完成工作。
+func (mgr *NestMgr) RequestSettled(ctx context.Context, name HandlerName, id int64, params Params, opts ...SendOpt) (any, error) {
+	ch, _, err := mgr.beginRequest(ctx, name, id, params, opts...)
+	if err != nil {
+		return nil, err
+	}
+	ret := <-ch
+	if err, ok := ret.(error); ok {
+		return nil, err
+	}
+	return ret, nil
+}
+
+// beginRequest 统一单目标同步请求的校验、消息所有权和准入；两种等待方式只在准入后分开。
+func (mgr *NestMgr) beginRequest(ctx context.Context, name HandlerName, id int64, params Params, opts ...SendOpt) (<-chan any, time.Duration, error) {
+	if err := validateClientDispatch(mgr, ctx, "Request", name, ErrSyncInHandler); err != nil {
+		return nil, 0, err
 	}
 	fullID, err := normalizeClientID(id)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	msg, ch := GenSyncMsg(MsgTypeSingle)
 	msg.Tid = fullID
@@ -84,9 +109,9 @@ func (mgr *NestMgr) Request(ctx context.Context, name HandlerName, id int64, par
 	checkRemoteId(msg, fullID)
 	requestTimeout := msg.Context.SyncWait
 	if err := mgr.admit(msg, opts...); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return mgr.waitResult(ctx, ch, requestTimeout)
+	return ch, requestTimeout, nil
 }
 
 // DispatchMulti 异步投递多目标消息：全部目标在同一事务中按锁序加锁执行。
