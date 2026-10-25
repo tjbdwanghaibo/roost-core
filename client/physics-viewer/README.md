@@ -85,3 +85,9 @@ GOWORK=off go run -tags physx ./cmd/physics-viewer -scenario room -listen 127.0.
 ```
 
 不要加 `-quit` 或 `-nographics`。验证检查至少 200 帧、水平位移超过 2m、离地高度超过 0.8m，并截图到 `Artifacts/room.png`。手动场景不会启用自动输入。旧本地工程需同步 CrowdViewer.cs、Editor/ViewerProject.cs，无需额外输入包。批处理截图使用相机渲染，不含 IMGUI 按钮；按钮在交互 Play 模式显示。
+
+### GoLand 直接 Debug
+
+core 工程已提供 `.run/Physics Room.run.xml`。首次使用先构建 `infra/physics/physx/lib` 原生库（当前本机已就绪），然后在运行配置中选择 **Physics Room → Debug**。配置自动设置 `CGO_ENABLED=1`、`GOWORK=off` 和 `-tags=physx`，入口为 `cmd/physics-viewer` 的 room 场景，监听 `127.0.0.1:19093`，运行期限 1h。Unity 打开 `Room.unity` 后 Play 即可连接，无需另外启动 shell server。
+
+这是 Go 调试器，可在房间输入、Nest 提交、Chunk 编码等 Go 代码打断点；C++ PhysX 的内部单步需要原生调试器。断点暂停整个进程较久时，Unity 的网络读超时可能断开，恢复服务后重新 Play 即可。
