@@ -1,0 +1,4 @@
+=== RUN   TestCrowdTerrainContainsMinuteOfMotion
+--- PASS: TestCrowdTerrainContainsMinuteOfMotion (0.17s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/physics	0.448s

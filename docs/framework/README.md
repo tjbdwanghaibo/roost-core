@@ -32,6 +32,8 @@
 
 [Nest 消息热路径优化设计](NEST-OPTIMIZATION.md)：分组预分配、上下文、临时存储和前驱边六项局部优化已实施；目标视图缓存与指标预绑定延期，包含同机证据及验证边界。
 
+[Chunk 同步与原生 PhysX](CHUNK-PHYSICS.md)：可选原生 CPU 后端、Nest 瞬态物理结果提交、区域基线/增量，以及本地 Unity 双视图验收。当前为本机验证应用，生产 Gate 接线与 Linux 运行尚未验收。
+
 ## 次核心模块
 
 [玩家协议处理教程](PLAYER-ACCESS.md)：用 demo 穿戴装备说明协议定义、Controller、生成 Sender 和 Nest handler，区分网络会话与 Session 运行服务。

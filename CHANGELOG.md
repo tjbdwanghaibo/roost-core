@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+- **20 人立体物理场景**：Crowd 改为 20 个玩家球＋50 个胶囊＋1 个大球，20Hz 同步；增加共享 JSON 定义的平台、坡道、阶梯、桥梁和障碍，原生刚体支持旋转姿态，AOI 精筛改为 XYZ 距离。需同时重建原生动态库与 Go 宿主并同步 Unity 资源；旧 Crowd 人数/桥接 ABI 不兼容。见 [验证报告](docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。
+
+- **物理 Crowd AOI**：控制客户端默认按自己小球的权威位置使用 12m 进入/14m 离开视野；每个已提交帧共享只读 10m Block 索引，保留 Chunk 基线、删除、重入与成功发送后结算。`-aoi-radius 0` 可复跑全场，Unity 旁观仍显示全场。见 [AOI 实测](docs/performance/benchmarks/chunk-physx-aoi-20261025/README.md)。
+
+- **Crowd 历史负载验证**：曾以 50 条独立控制连接、50 个胶囊和 1 个大球进行验证（当前配置已收敛为上文的 20 人）；验证输入槽位所有权、过期和断线释放，Unity 增加权威状态旁观场景。两档 60 秒 CPU/带宽与逐客户端结果见 [报告](docs/performance/benchmarks/chunk-physx-crowd-20261025/README.md)。
+
+- **原生物理对照修正**：禁转胶囊以无限转动惯量参与接触求解，修复接地摩擦偏弱；补全 CCD 接触对检测，防止高速刚体穿薄墙。固定输入重复验收、Unity 同 Tick 偏差及服务器 CPU/流量测量见 [本轮证据](docs/performance/benchmarks/chunk-physx-20261025/README.md)。
+
+- **Chunk 与原生物理接入**：新增可选 `-tags physx` CPU 后端、RC v1 区域对象基线/增量、可回滚的瞬态物理结果 DAO，以及本地 Unity 双视图工程创建入口。50Hz 固定物理步长，20/50Hz 发送选项；macOS arm64 已运行，Linux 未运行；独立模拟存在偏差，生产 Gate/UGC 持久化不在本轮实现范围。见 [设计与验收](docs/framework/CHUNK-PHYSICS.md)。
+
 - **Saga性能诊断**：补充协调batch对照、JetStream解析器/交付拆分、独立吞吐与Mongo混合负载、macOS资源及journal/pwrite采样的复跑入口和结果；拒绝睡眠造成的时间线缺口，保留无效样本。维护者决定保留Mongo事务和majority+j:true，生产默认不变；[结论与未完成边界](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md#本轮收口与维护者决定2026-10-23)。
 
 - **Saga Mongo 认领与消费容量**：到期 Saga / outbox 改为带排序的原子 `FindOneAndUpdate` 认领，避免并发 worker 扫到同一候选而空领；Mongo collection 增加 `FindOneAndUpdateOption.Sort`。Mongo 步骤与完成结果可分别配置 `MongoWorkers` / `Workers`，默认仍串行，通过现有延迟结算保证在途有界、Drain 等到真实完成。本机两消费 worker、30/s × 10 分钟 18,000 笔全部成功，业务核验通过，P99 576ms；不改变超时 / 重试次数。见 [诊断与证据](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。

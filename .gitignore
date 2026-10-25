@@ -17,3 +17,6 @@ gapmap-report.md
 # Client SDK compiler output.
 /client/**/bin/
 /client/**/obj/
+
+# Optional native PhysX build output (rebuild with scripts/physics/build-native.sh).
+/infra/physics/physx/lib/

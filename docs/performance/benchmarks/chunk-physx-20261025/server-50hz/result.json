@@ -1,0 +1,21 @@
+{
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "logical_cpus": 10,
+  "physics_hz": 50,
+  "send_hz": 50,
+  "bodies": 21,
+  "clients": 1,
+  "wall_seconds": 60.012013791,
+  "stream_seconds": 59.940030834000005,
+  "cpu_user_seconds": 1.7899479999999999,
+  "cpu_system_seconds": 0.940502,
+  "cpu_one_core_percent": 4.549838986422224,
+  "max_rss_mib": 19.703125,
+  "packets": 2997,
+  "last_tick": 2996,
+  "received_bytes": 4091544,
+  "application_bytes_per_second": 68260.62554641094,
+  "peak_one_second_bytes": 72573,
+  "application_mbit_per_second": 0.5460850043712875
+}
