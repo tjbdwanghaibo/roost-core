@@ -1,0 +1,38 @@
+CMake Deprecation Warning at /Users/whb/roost/.physics-deps/PhysX-4.1/physx/source/compiler/cmake/CMakeLists.txt:28 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+PHYSX ROOT /Users/whb/roost/.physics-deps/PhysX-4.1/physx
+PhysX Build Platform: mac
+Using CXX Compiler: /Library/Developer/CommandLineTools/usr/bin/c++
+Added PhysX
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/whb/roost/.physics-deps/build
+[1/2] Building CXX object CMakeFiles/roost_physx.dir/bridge.cpp.o
+[2/2] Linking CXX shared library /Users/whb/roost/roost-core-review-v127/infra/physics/physx/lib/libroost_physx.dylib
+ld: warning: ignoring duplicate libraries: 'lib/bin/mac.x86_64/release/libPhysXFoundation_static.a'
+CMake Deprecation Warning at /Users/whb/roost/.physics-deps/PhysX-4.1/physx/source/compiler/cmake/CMakeLists.txt:28 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+PHYSX ROOT /Users/whb/roost/.physics-deps/PhysX-4.1/physx
+PhysX Build Platform: mac
+Using CXX Compiler: /Library/Developer/CommandLineTools/usr/bin/c++
+Added PhysX
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/whb/roost/.physics-deps/build
+[1/2] Building CXX object CMakeFiles/roost_physx.dir/bridge.cpp.o
+[2/2] Linking CXX shared library /Users/whb/roost/roost-core-review-v127/infra/physics/physx/lib/libroost_physx.dylib
+ld: warning: ignoring duplicate libraries: 'lib/bin/mac.x86_64/release/libPhysXFoundation_static.a'

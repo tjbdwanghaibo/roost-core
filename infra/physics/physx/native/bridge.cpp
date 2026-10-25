@@ -79,10 +79,12 @@ extern "C" void rp_destroy(rp_world *w) {
         w->material->release();
     if (w->dispatcher)
         w->dispatcher->release();
+    // PxCreatePhysics 复用进程单例，其引用计数不是原子的。创建和释放必须共用锁，
+    // 但各 Scene 的模拟仍然独立并发，不把 Step 放进此临界区。
+    std::lock_guard<std::mutex> guard(foundationMutex);
     if (w->physics)
         w->physics->release();
     delete w;
-    std::lock_guard<std::mutex> guard(foundationMutex);
     if (--users == 0) {
         foundation->release();
         foundation = nullptr;

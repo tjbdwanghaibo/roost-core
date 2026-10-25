@@ -107,3 +107,43 @@ func TestCrowdTerrainContainsMinuteOfMotion(t *testing.T) {
 		}
 	}
 }
+
+// 一个房间提交失败不能停止另一个房间；取消后先等 Run 退出再关闭原生世界。
+func TestRoomFailureAndCancellationAreIsolated(t *testing.T) {
+	failedWorld, err := physx.New(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer failedWorld.Close()
+	healthyWorld, err := physx.New(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer healthyWorld.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	healthyCtx, stopHealthy := context.WithCancel(ctx)
+	defer stopHealthy()
+	failed := make(chan error, 1)
+	healthy := make(chan error, 1)
+	rejected := errors.New("room commit rejected")
+	go func() {
+		failed <- Run(ctx, failedWorld, RunConfig{Epoch: 1, Step: time.Millisecond}, func(context.Context, Frame) error { return rejected })
+	}()
+	ticks := 0
+	go func() {
+		healthy <- Run(healthyCtx, healthyWorld, RunConfig{Epoch: 2, Step: time.Millisecond}, func(_ context.Context, f Frame) error {
+			ticks++
+			if ticks == 10 {
+				stopHealthy()
+			}
+			return nil
+		})
+	}()
+	if err := <-failed; !errors.Is(err, rejected) {
+		t.Fatalf("failed room: %v", err)
+	}
+	if err := <-healthy; !errors.Is(err, context.Canceled) || ticks < 10 {
+		t.Fatalf("healthy room ticks=%d err=%v", ticks, err)
+	}
+}

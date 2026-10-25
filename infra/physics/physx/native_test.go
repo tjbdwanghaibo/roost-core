@@ -4,8 +4,10 @@ package physx
 
 import (
 	"errors"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"math"
+	"sync"
 	"testing"
 )
 
@@ -179,4 +181,61 @@ func TestRotatedRampDeflectsFallingBall(t *testing.T) {
 	if states[0].Position[0] > -1 || states[0].Position[1] < .45 {
 		t.Fatalf("ramp did not deflect ball: %+v", states[0])
 	}
+}
+
+// 多房间复用同一进程级 SDK；房间使用相同 body ID，也不能共享位置、输入或关闭状态。
+func TestConcurrentRoomLifecycles(t *testing.T) {
+	const rooms, generations = 8, 20
+	var wg sync.WaitGroup
+	failures := make(chan error, rooms)
+	start := make(chan struct{})
+	for room := range rooms {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for generation := range generations {
+				if err := exerciseRoom(room); err != nil {
+					failures <- fmt.Errorf("room=%d generation=%d: %w", room, generation, err)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		t.Error(err)
+	}
+}
+
+func exerciseRoom(room int) error {
+	w, err := New(0, 1)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	origin := float32(room * 100)
+	if err = w.Add(Body{ID: 1, Shape: Sphere, Position: Vec3{origin, 5, 0}, Dimensions: Vec3{.5}, Mass: 1}); err != nil {
+		return err
+	}
+	acceleration := float32(room + 1)
+	var states []State
+	for range 50 {
+		states, err = w.Step(.02, []Command{{ID: 1, Acceleration: Vec3{acceleration, 0, 0}}})
+		if err != nil {
+			return err
+		}
+	}
+	// 50 次半隐式积分：x = a * dt² * (1+...+50)，无重力、碰撞或线性阻尼。
+	expected := origin + acceleration*.0004*1275
+	if len(states) != 1 || states[0].ID != 1 || math.Abs(float64(states[0].Position[0]-expected)) > .01 || states[0].Position[1] != 5 {
+		return fmt.Errorf("world state leaked or input lost: got=%+v expected x=%f", states, expected)
+	}
+	w.Close()
+	if _, err = w.Step(.02, nil); !errors.Is(err, ErrClosed) {
+		return fmt.Errorf("closed room accepted step: %v", err)
+	}
+	return nil
 }

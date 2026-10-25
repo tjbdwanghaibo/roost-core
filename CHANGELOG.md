@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **物理多房间生命周期修复**：将共享 PxPhysics 的创建和释放纳入同一临界区，修复并发开关世界后 SDK 引用计数竞争导致后续世界创建失败；独立 Scene 模拟保持并发。增加多世界隔离、取消/失败隔离和 Chunk 截断原子性验证，见 [补验记录](docs/performance/benchmarks/physics-rooms-20261025/README.md)。
+
 - **20 人立体物理场景**：Crowd 改为 20 个玩家球＋50 个胶囊＋1 个大球，20Hz 同步；增加共享 JSON 定义的平台、坡道、阶梯、桥梁和障碍，原生刚体支持旋转姿态，AOI 精筛改为 XYZ 距离。需同时重建原生动态库与 Go 宿主并同步 Unity 资源；旧 Crowd 人数/桥接 ABI 不兼容。见 [验证报告](docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。
 
 - **物理 Crowd AOI**：控制客户端默认按自己小球的权威位置使用 12m 进入/14m 离开视野；每个已提交帧共享只读 10m Block 索引，保留 Chunk 基线、删除、重入与成功发送后结算。`-aoi-radius 0` 可复跑全场，Unity 旁观仍显示全场。见 [AOI 实测](docs/performance/benchmarks/chunk-physx-aoi-20261025/README.md)。

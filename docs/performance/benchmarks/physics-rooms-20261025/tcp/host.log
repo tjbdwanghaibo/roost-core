@@ -1,0 +1,3 @@
+2026/10/25 14:11:56 physics viewer 127.0.0.1:19092; PhysX 4.1.2 / a2c0428acab643e60618c681b501e86f7fd558cc; scene=1 physics=50Hz send=20Hz
+control_accepted=8000 control_rejected=0
+ticks=998 physics_mean_us=498.81 physics_max_us=3358.00
