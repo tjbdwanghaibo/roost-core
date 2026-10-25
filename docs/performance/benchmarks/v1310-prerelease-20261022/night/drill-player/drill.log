@@ -1,0 +1,58 @@
+[drill 02:37:41] == baseline: Mongo before
+[
+  {
+    "_id": 2049028,
+    "found": true,
+    "_version": 4,
+    "_schema": 2,
+    "_last_tx": "388b4d1c5a9e273c0000000000000007",
+    "digest": "c089600d33b19386"
+  },
+  {
+    "_id": 2050052,
+    "found": true,
+    "_version": 4,
+    "_schema": 2,
+    "_last_tx": "388b4d1c5a9e273c0000000000000008",
+    "digest": "6ccbba9dda4bb19e"
+  }
+][drill 02:37:41] == 正常迁移 A → B
+[drill 02:37:41] started A pid 92362 config configs/service/config.game.yaml
+[drill 02:37:41] A ready; holder {"key":"roost:dr1022:singleton:game:1000","held":true,"hostname":"Mac","pid":"92362","started":"2026-10-22T18:37:41.22Z"}
+[drill 02:37:45] started B pid 92789 config configs/service/config.gameB.yaml
+[drill 02:37:48] B not ready while A runs
+{"time":"2026-10-23T02:37:45.375691+08:00","level":"INFO","msg":"singleton: waiting for the current holder to release or expire","goId":1,"frame":0,"server_time_ms":1792694265375,"key":"roost:dr1022:singleton:game:1000","holder":"0779fc00f5998c3e|Mac|92362|179
+[drill 02:37:48] B has not created data/walB
+[drill 02:37:48] account maintenance: "status": "maintenance"
+[drill 02:37:49] A pid 92362 exited after SIGTERM
+[drill 02:37:49] wal-drained data/wal/dataengine/1000 rc=0 {"dir":"data/wal/dataengine/1000","drained":true,"records_retained":99,"checkpoint":"segment1offset18302","last_record":"segment1offset18302(28ee9fefc7feec8700000000000000f0)","databases":{"main":"dr1022"}}
+[drill 02:37:51] B ready; holder {"key":"roost:dr1022:singleton:game:1000","held":true,"hostname":"Mac","pid":"92789","started":"2026-10-22T18:37:45.371Z"}
+{"time":"2026-10-23T02:37:51.37872+08:00","level":"INFO","msg":"singleton: acquired","goId":1,"frame":0,"server_time_ms":1792694271378,"key":"roost:dr1022:singleton:game:1000","value":"ce467a1140dc657
+{"time":"2026-10-23T02:37:49.056353+08:00","level":"INFO","msg":"singleton: released","goId":1,"frame":154,"server_time_ms":1792694269056,"key":"roost:dr1022:singleton:game:1000"}
+[drill 02:37:51] players -compare before B writes rc=0 2026/10/23 02:37:51 INFO dataengine mod: database mapping logical=main physical=dr1022 source=config [   {     "_id": 2049028,     "found": true,     "_version": 52,     "_schema": 2,     "_last_tx": 
+[drill 02:37:51] route -> B
+[drill 02:37:57] B pid 92789 exited after SIGTERM
+[drill 02:37:57] wal-drained data/walB/dataengine/1000 rc=0 {"dir":"data/walB/dataengine/1000","drained":true,"records_retained":74,"checkpoint":"segment1offset13468","last_record":"segment1offset13468(74de46670488716700000000000000bc)","databases":{"main":"dr1022"}}
+[drill 02:37:57] == B 崩溃（kill -9）后在原 WAL 目录重启
+[drill 02:37:57] started B pid 94327 config configs/service/config.gameB.yaml
+[drill 02:38:00] B pid 94327 killed -9
+[drill 02:38:00] wal-drained data/walB/dataengine/1000 rc=0 {"dir":"data/walB/dataengine/1000","drained":true,"records_retained":113,"checkpoint":"segment1offset20566","last_record":"segment1offset20566(419f12e5182168720000000000000061)","databases":{"main":"dr1022"}}
+[drill 02:38:00] started B pid 94691 config configs/service/config.gameB.yaml
+[drill 02:38:16] B restarted on its WAL, ready after 16s
+[drill 02:38:19] B pid 94691 exited after SIGTERM
+[drill 02:38:19] wal-drained data/walB/dataengine/1000 rc=0 {"dir":"data/walB/dataengine/1000","drained":true,"records_retained":151,"checkpoint":"segment1offset27482","last_record":"segment1offset27482(bcfa6c2afba22dec000000000000005e)","databases":{"main":"dr1022"}}
+[drill 02:38:19] 迁回 A（A 的 WAL 已全部确认）
+[drill 02:38:19] started A pid 97760 config configs/service/config.game.yaml
+[drill 02:38:19] route -> A
+[drill 02:38:23] == 未排空：Mongo SIGSTOP 2s 期间 kill -9 A
+[drill 02:38:23] mongod SIGSTOP (41474 41490 41501 )
+[drill 02:38:25] A pid 97760 killed -9
+[drill 02:38:25] mongod SIGCONT
+[drill 02:38:27] wal-drained data/wal/dataengine/1000 rc=1 {"dir":"data/wal/dataengine/1000","drained":false,"records_retained":173,"checkpoint":"segment1offset27402","last_record":"segment1offset31770(78789a05b58506b400000000000000bb)","reason":"thecheckpointisbehindthelastreco
+[drill 02:38:27] Mongo after stall+kill: [{"_id":2049028,"found":true,"_version":154,"_schema":2,"_last_tx":"78789a05b58506b4000000000000007f","digest":"d8ab1fc639103f4e"},{"_id":2050052,"found":true,"_version":152,"_schema":2,"_last_tx":"78789a05b58506b4000000000000007e","digest":"b187d25732d728cc"}]
+[drill 02:38:27] started A pid 98786 config configs/service/config.game.yaml
+[drill 02:38:43] A restarted on its WAL
+[drill 02:38:46] A pid 98786 exited after SIGTERM
+[drill 02:38:46] wal-drained data/wal/dataengine/1000 rc=0 {"dir":"data/wal/dataengine/1000","drained":true,"records_retained":173,"checkpoint":"segment1offset31770","last_record":"segment1offset31770(78789a05b58506b400000000000000bb)","databases":{"main":"dr1022"}}
+[drill 02:38:46] Mongo final: [{"_id":2049028,"found":true,"_version":165,"_schema":2,"_last_tx":"78789a05b58506b400000000000000b8","digest":"66af6d0ca42aaa8c"},{"_id":2050052,"found":true,"_version":164,"_schema":2,"_last_tx":"78789a05b58506b400000000000000bb","digest":"6910984a94690741"}]
+[drill 02:38:46] DONE

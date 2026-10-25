@@ -130,7 +130,7 @@ func registerNestTestKind() {
 	})
 }
 
-// D22-1：Tick 的触发时刻（Fire.Now）是 Tick 这条 Nest 消息冻结的业务时间（fctx.Now，按毫秒），不是驱动投递时读的
+// Tick 的触发时刻（Fire.Now）是 Tick 这条 Nest 消息冻结的业务时间（fctx.Now，按毫秒），不是驱动投递时读的
 // 时间；回调里读 fctx 得到同一个时刻。驱动用缺省时钟（不 SetClock），进程业务时钟的来源每读一次走 1ms。
 func TestTickFiresAtTheMessagesFrozenBusinessTime(t *testing.T) {
 	registerNestTestKind()

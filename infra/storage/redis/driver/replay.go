@@ -26,6 +26,7 @@ import (
 //   - 取连接失败，请求还没写出：dial 失败（*net.OpError Op=="dial"，含拨号超时）、
 //     ErrPoolTimeout、ErrPoolExhausted、ErrClosed（客户端已关闭）。池里的坏连接在取出时由
 //     go-redis 的健康检查丢弃并换新连接，不会以错误出现；换新连接时的拨号失败落在上一条。
+//   - MOVED / ASK：服务端拒绝在当前节点执行；Cluster 单轮重定向预算耗尽后仍可按本包有限预算退避重发。
 //   - 服务端在执行之前拒绝：LOADING、MASTERDOWN、TRYAGAIN、CLUSTERDOWN、max number of clients、
 //     READONLY、NOREPLICAS（判定沿用 go-redis 的 IsXxxError：类型化错误，或错误文本以该前缀开头）。脚本里的写命令遇到 READONLY / NOREPLICAS 时也是第一条写就被拒、
 //     之前没有写入；框架的脚本不会自己返回带这些前缀的错误回复。
@@ -44,7 +45,8 @@ func IsDefinitelyNotExecuted(err error) bool {
 	if errors.Is(err, goredis.ErrPoolTimeout) || errors.Is(err, goredis.ErrPoolExhausted) || errors.Is(err, goredis.ErrClosed) {
 		return true
 	}
-	return goredis.IsLoadingError(err) ||
+	return isRedirect(err) ||
+		goredis.IsLoadingError(err) ||
 		goredis.IsMasterDownError(err) ||
 		goredis.IsTryAgainError(err) ||
 		goredis.IsClusterDownError(err) ||

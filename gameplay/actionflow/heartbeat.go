@@ -10,8 +10,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
-// 心跳驱动的 runner（DESIGN-TODO D20 第 2 期）：一个实体的 ActionRunner 由该实体自己的心跳 tick。所有控制实体行为的
-// 逻辑（移动、技能、AI 决策……）都经 ActionRunner 下发与收尾，不绕过动作直接驱动组件（维护者 2026-10-21）：组件
+// 心跳驱动的 runner（实现说明见 impl/10-time §2C）：一个实体的 ActionRunner 由该实体自己的心跳 tick。所有控制实体行为的
+// 逻辑（移动、技能、AI 决策……）都经 ActionRunner 下发与收尾，不绕过动作直接驱动组件：组件
 // 只提供推进接口（例如 movement.Move.Advance），由动作在自己的 Tick 里调用。
 //
 // 模型参考 ssr 的 action_list：每个组的当前动作有自己的心跳登记（"actionflow/<组号>"），周期取动作的 TickInterval；
@@ -19,7 +19,7 @@ import (
 // 回调在实体自己的 Nest worker 上、实体锁与事务内执行，所以 runner 仍然只被持实体锁的一方调用（ActionRunner 刻意
 // 无锁的前提不变），动作在 Tick 里对组件（DAO）的修改随这一拍的事务提交或回滚。
 //
-// 事务与 runner（维护者 2026-10-21 决定：由业务层保证，框架不处理）：ActionRunner / MissionRunner 是纯内存状态，
+// 事务与 runner（由业务层保证，框架不处理）：ActionRunner / MissionRunner 是纯内存状态，
 // 不随 Nest 事务回滚。handler 先做完全部可能失败的校验与修改，最后一步才调用 Start / Enqueue / End 等；之后若还可能
 // 失败，回滚后 runner 里会残留这次的变更（例如一个已启动的动作），而心跳登记的启停随回滚恢复。心跳那一拍里，
 // 动作 Tick 返回的结论（结束、下一个动作启动）同样不随这一拍的事务回滚；这一拍只有提交失败才会回滚（心跳回调
@@ -44,9 +44,9 @@ type BeatConfig struct {
 	Period time.Duration
 	// Options 传给 heartbeat.Host.Register（例如 WithDurability；缺省 async）。
 	Options []heartbeat.RegOption
-	// TimeDomain 非 nil 时实体在场景的时间域里（DESIGN-TODO D22）：组心跳挂上这个域（heartbeat.WithTimeDomain，
+	// TimeDomain 非 nil 时实体在场景的时间域里：组心跳挂上这个域（heartbeat.WithTimeDomain，
 	// 拍里的 ActionContext.Now / Elapsed 是域时间），心跳之外调用 runner（handler 里 Start / End 等）时 ActionContext.Now
-	// 也取域时间（Domain.Now，本条消息冻结），不论调用方传没传时间。nil 时业务时间是 fctx.Now（D22-1）。
+	// 也取域时间（Domain.Now，本条消息冻结），不论调用方传没传时间。nil 时业务时间是 fctx.Now。
 	TimeDomain *timedomain.Domain
 }
 
@@ -180,7 +180,7 @@ func (b *BeatRunner) Sync() error {
 
 // Close 撤销 BeatRunner：先强制结束全部动作、丢弃排队项（reason，OnEnded 照常送达），再撤销各组的心跳登记
 // （heartbeat.Reg.Close：立即离开驱动、释放登记名）。用于成员换场景（换时间域）：在同一心跳宿主上按新的
-// BeatConfig.TimeDomain 重建一个 BeatRunner（DESIGN-TODO“D20 与 D21 审查修复”：重建而不是 SetTimeDomain，旧域里记下的时刻——
+// BeatConfig.TimeDomain 重建一个 BeatRunner（重建而不是 SetTimeDomain：旧域里记下的时刻——
 // 上一拍的 Elapsed 基线、计划步骤的时限起点——不能拿到新域里比较）。之后经它启动的动作以 ErrBeatRunnerClosed 失败
 // 结束。可重复调用；只能在实体锁内调用。在 runner 的回调里调用时，动作的结束延后到回调返回后（与 EndAll 相同），
 // 登记的撤销立即生效。属于 Behavior 的 BeatRunner 用 Behavior.Close（连任务一起收尾）。

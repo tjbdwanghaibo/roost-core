@@ -317,7 +317,7 @@ func (runtime *Runtime) CurrentTick() Tick {
 
 // Pending 报告 Runtime 是否还有要随 tick 推进的工作：活动中的施法、排程任务（施法的后续步骤、冷却外的弹药回充、
 // 能力覆盖到期、排队的被动激活与外部事件）、逐 tick 推进的衍生物（施放中与已移交），以及还要按退避重试的待停止衍生物。
-// 为 false 时继续 Advance 不会执行任何技能工作（只推进 Host 的 tick），驱动方可以停下（D20 P5：空闲时停心跳）。
+// 为 false 时继续 Advance 不会执行任何技能工作（只推进 Host 的 tick），驱动方可以停下（例如空闲时停心跳）。
 // 冷却本身不是工作：它是“到某个 tick 之前不能再放”的记录，下一次施法前把 Runtime 推进到当时的 tick 即可判定。
 func (runtime *Runtime) Pending() bool {
 	runtime.mutex.Lock()

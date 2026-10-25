@@ -717,6 +717,12 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 	if err != nil {
 		return err
 	}
+	if option.Sort != nil {
+		matched, err = c.sortLocked(matched, option.Sort)
+		if err != nil {
+			return err
+		}
+	}
 	if len(matched) == 0 && !option.Upsert {
 		return fmongo.ErrNotFound
 	}
@@ -726,7 +732,12 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 		selectedKey = matched[0]
 		before = cloneDoc(c.docs[selectedKey])
 	}
-	updated, err := c.updateLocked(filter, update, option.Upsert, false)
+	// 排序选择与更新处于同一把锁内；按选中身份更新，不能再次按原谓词选回另一条。
+	updateFilter := filter
+	if before != nil && option.Sort != nil {
+		updateFilter = bson.M{"_id": before["_id"]}
+	}
+	updated, err := c.updateLocked(updateFilter, update, option.Upsert, false)
 	if err != nil {
 		return err
 	}

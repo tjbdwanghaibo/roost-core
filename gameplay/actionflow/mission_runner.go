@@ -446,7 +446,7 @@ func (r *MissionRunner) now() time.Time {
 			return now
 		}
 	}
-	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now（D22-1）
+	return fctx.Now() // 业务时间：本次执行冻结的 fctx.Now
 }
 func (r *MissionRunner) context(now time.Time) (ctx *MissionContext) {
 	if now.IsZero() {

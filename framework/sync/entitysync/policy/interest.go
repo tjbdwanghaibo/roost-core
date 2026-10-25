@@ -18,7 +18,8 @@ import (
 type InterestConfig struct {
 	// MaxQueuedFacts 限制正式提交事实队列；零值为 65536。
 	MaxQueuedFacts int
-	// BatchSize 是每批就绪事实的软上限，零值1024；不切开同一Nest提交。
+	// BatchSize 是一步取用就绪事实的软上限，零值1024：到了上限之后在第一个前缀边界停（已取用的提交全部结束之后），
+	// 不切开同一 Nest 提交，所以一步可以多出交错进来的条目（见 runLogLocked）。
 	BatchSize int
 	// Workers 限制同一批次并行视野计算数；零值取GOMAXPROCS。
 	Workers int
@@ -45,7 +46,7 @@ type InterestConfig struct {
 	// nil 或 true 启用，只有显式 false 才关闭。
 	SelfVisible *bool
 	// ApplyMode 选排队事实（QueueMove / QueueSpatial / QueueObservedBlocks）的应用方式，由业务按游戏类型选，
-	// 见 ApplyMode 与 DESIGN-TODO D19“两种应用模式”。零值 ApplySync。
+	// 见 ApplyMode 与 guide/04-sync“排队事实的两种应用模式”。零值 ApplySync。
 	ApplyMode ApplyMode
 	// MaxViewsPerPlayer 限制一个玩家同时挂接的视野数（含主视野与关系视野），超出 AttachView / Enter / Watch 返回 ErrViewLimit。
 	// 零值：ApplySync 取 SyncApplyMaxViewsPerPlayer（9），ApplyAsync 取 DefaultMaxViewsPerPlayer（64）。
@@ -57,6 +58,11 @@ type InterestConfig struct {
 	// 超出即拒绝构造（ErrInterestBudget）。零值取 DefaultMaxObserverBlocks × DefaultMaxViewsPerPlayer，
 	// 即缺省配置下只有单个视野已经超预算时才会触发；调大 MaxViewsPerPlayer 或视野半径时由它把总成本挡在启动期。
 	MaxPlayerBlocks int
+	// MaxSpatialViews 限制本 Interest 经 DefineSpatialView 定义的空间视野总数（挂没挂接都算，不含玩家主视野），超出
+	// DefineSpatialView 返回 ErrSpatialViewLimit 并计数。每个空间视野都是一个 AOI 观察者，定义了没挂接的照样参与每次
+	// 移动的 AOI 计算，MaxViewsPerPlayer 只数挂接、管不到它们。零值取 DefaultMaxSpatialViews，负数
+	// 拒绝构造。RemoveView 释放名额。
+	MaxSpatialViews int
 	// OnRefusal 收到 Manager 政策阶段里结算时被拒绝的订阅（显式 Apply 的拒绝由它的返回值给出，不再重复）：
 	// 在政策阶段、持 Interest 的应用侧锁调用，不得阻塞、不得调用本 Interest。nil 不报告（指标与 Drain 诊断照旧）。
 	OnRefusal func(Refusal)
@@ -69,6 +75,13 @@ const (
 	DefaultMaxPlayersPerView = 4096
 )
 
+// DefaultMaxSpatialViews 是 MaxSpatialViews 的缺省：8192。依据两种应用模式的实测（1000 玩家、每视野可见约 50、
+// 50ms 同步周期）：ApplySync 下 1000 玩家各 8 个额外空间视野（共 8000 个）时 Flush 约半个周期，正是阈值
+// SyncApplyMaxExtraViews（8）取的“Flush 不超过半个周期”的位置；16000 个时 Flush 贴着周期、开始丢 tick。所以缺省放下
+// “1000 玩家各挂满 8 个空间视野”，再多（眼位泄漏、单位视野没有 RemoveView）在定义时就拒绝，而不是拖慢整个场景的
+// 政策阶段。视野更多的玩法（RTS，ApplyAsync）按自己的密度压测后显式调大。
+const DefaultMaxSpatialViews = 8192
+
 // ApplyMode 是排队事实的应用方式。两种模式的语义逐项相同——只有提交后的事实生效（回滚 / 拒绝的永远不被看见）、
 // 同一实体按入队顺序生效、Leave / Hide 对排队事实的改写、内容与它带来的进出视野在同一帧（发布屏障到结算之后才释放）、
 // Drain 等到在途事实全部应用并结算、Close 释放全部屏障——只有“结果何时可见”和“线程模型”不同：
@@ -77,11 +90,11 @@ const (
 //     一半（预计超出时剩余的留到之后的 Flush，见 planSyncStep）；不启动应用线程。提交之后的下一次 Flush 就能看到
 //     结果，重负载下晚一两个周期。AOI 计算在 Flush 的关键路径上，
 //     所以每个玩家的视野数有上限（SyncApplyMaxViewsPerPlayer）。适合每玩家额外视野不超过 8 个的游戏：
-//     MMO、MOBA、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
+//     MMO、卡牌、休闲等（主视野 + 队伍 / 公会 / 联盟关系视野 + 少量召唤物）。
 //   - ApplyAsync：每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算。Flush 不随
 //     AOI 工作量增长、不会因 AOI 超过同步周期；代价是结果晚一点可见：提交后立即 Flush 不一定看得到，要看到全部
 //     结果用 Manager.Drain；periodic 下尾延迟约多一个同步周期。适合每玩家额外视野多于 8 个的游戏：RTS（每个单位
-//     一个视野）、大量召唤物 / 眼位。
+//     一个视野）、状态同步 MOBA 的阵营视野（每个友方单位一个空间视野挂给全阵营）、大量召唤物 / 眼位。
 type ApplyMode uint8
 
 const (
@@ -90,10 +103,10 @@ const (
 )
 
 // SyncApplyMaxExtraViews 是 ApplySync 下每个玩家主视野之外最多的视野数；SyncApplyMaxViewsPerPlayer = 主视野 + 它。
-// 来源：维护者 2026-10-21 决定按“每玩家额外视野 8 个以内 / 以上”分两种模式、由业务选择。实测依据（本机 M5、
-// sync-aoi 原场景 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，2026-10-21 两轮对照）：ApplySync 的 Flush 均值
-// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；数据见 DESIGN-TODO
-// D19“两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
+// 两种模式按“每玩家额外视野 8 个以内 / 以上”划分、由业务选择。实测依据（M5 单机、sync-aoi 原场景
+// 1000 玩家 / 1 万实体 / 20Hz、每视野可见约 50，两轮对照）：ApplySync 的 Flush 均值
+// 4 / 8 / 16 个额外视野时约 15 / 26 / 46ms，8 个约半个 50ms 周期、帧数满，16 个贴着周期开始丢 tick；选择指引与样本见
+// guide/04-sync“排队事实的两种应用模式”。Flush 还与玩家数、可见数、移动比例成正比，这个上限只是按每玩家视野数的近似。
 // 关系视野（队伍、联盟）也计入 MaxViewsPerPlayer。
 const (
 	SyncApplyMaxExtraViews     = 8
@@ -144,7 +157,7 @@ type Refusal struct {
 // 都看得见同一个敌人——held 按视野记各自给的层级：第一个持有的视野订阅，最后一个释放的视野才退订，所以一个视野
 // 看不见了不会把另一个视野还要的订阅退掉。层级按 selectedProfile 合并：包含关系取数据多的，不包含取并集。
 //
-// 单写者（REFACTOR-2026-10-21-interest-single-writer）：全部写入口——Enter / Leave / Show / Hide / Move / 视野操作 /
+// 单写者（设计见 impl/04-sync §2E 第 3、4 条）：全部写入口——Enter / Leave / Show / Hide / Move / 视野操作 /
 // QueueMove 等——只取登记侧短锁（registry.mu）：校验参数、改登记事实、追加一条有序日志，错误当场返回，不等待空间
 // 计算。只有应用方持 mu 按日志顺序执行：同步模式在 Manager Flush 的政策阶段，异步模式在应用线程，另有显式 Apply 与
 // 诊断读。所以业务线程（Nest worker、提交后回调）上的调用不会等 AOI 批次，且“先调用的先生效”对全部入口成立。
@@ -173,7 +186,7 @@ type Interest struct {
 	viewInterval time.Duration
 	now          func() time.Time
 
-	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写 ----
+	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写（登记侧不持 mu，从不读写它们）----
 	mu               sync.Mutex
 	subscriptions    *entitysync.SubscriptionSource
 	aoi              *AOI
@@ -260,7 +273,8 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if bandLayer == nil {
 		bandLayer = DefaultBandProfile
 	}
-	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 {
+	if config.BatchSize < 0 || config.Workers < 0 || config.MaxViewsPerPlayer < 0 || config.MaxPlayersPerView < 0 || config.MaxPlayerBlocks < 0 ||
+		config.MaxSpatialViews < 0 {
 		return nil, ErrInterestConfig
 	}
 	maxViews, err := viewsPerPlayerFor(config.ApplyMode, config.MaxViewsPerPlayer)
@@ -290,7 +304,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		viewInterval: viewInterval, now: time.Now,
 		onRefusal: config.OnRefusal,
 	}
-	in.registry.init(maxViews, maxPlayers)
+	in.registry.init(maxViews, maxPlayers, cmp.Or(config.MaxSpatialViews, DefaultMaxSpatialViews))
 	in.blockLayer = config.BlockLayer
 	if in.blockLayer == (entity.SyncProfile{}) {
 		in.blockLayer = bandLayer(0)

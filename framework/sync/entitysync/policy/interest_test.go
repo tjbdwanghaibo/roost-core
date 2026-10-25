@@ -455,9 +455,12 @@ func TestBatchLimitRetainsLaterEntityPublication(t *testing.T) {
 		// 同步模式一次政策阶段在预算内排空日志，只有预算用完才停在批次边界：预算设到最小，让它在第一批之后停。
 		in.syncBudget = time.Nanosecond
 		manualApplier(in)
-		var entities []*queuedEntity
+		// 两条 Enter 排在事实前面：切点只落在前缀边界，预算只够一个单位时 Enter 也占一个单位（命令计入单位）。
 		for id := int64(1); id <= 2; id++ {
 			mustEnter(t, in, id, spatial.Point{X: 10 * id, Y: 10})
+		}
+		var entities []*queuedEntity
+		for id := int64(1); id <= 2; id++ {
 			e := factEntity(t, id)
 			entities = append(entities, e)
 			if err := in.QueueMove(e, spatial.Point{X: 800, Y: 800}); err != nil {
@@ -757,8 +760,8 @@ func TestQueuedFactThatCannotApplyFailsOneFlushOnly(t *testing.T) {
 	})
 }
 
-// 异步模式：Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里（DESIGN-TODO D19
-// “排队事实异步应用”）。后台应用线程停掉（单写者之后 Enter 等命令也会启动它，不停掉它就可能在断言之前把注入的
+// 异步模式：Flush 只结算已经应用好的结果：排队事实的 AOI 应用由应用线程做，不在 Manager 的 Flush 里。
+// 后台应用线程停掉（Enter 等命令也会启动它，不停掉它就可能在断言之前把注入的
 // 事实应用掉），直接把一条已确认的事实放进日志；Flush 之后事实必须仍在日志里、AOI 里的位置不变、订阅没变。
 // 应用一步之后，下一次 Flush 才结算并下发。
 func TestFlushSettlesButDoesNotApplyQueuedFacts(t *testing.T) {
@@ -977,6 +980,53 @@ func TestDrainTimeoutListsInterestStalls(t *testing.T) {
 	})
 }
 
+// Drain 诊断与登记并发：诊断用的事实计数只在登记侧锁内读取。用例先走到“已应用、未结算、
+// 没有排队事实”的状态（applied-unsettled）——只有这个状态下诊断才会去比较事实计数，已结算的状态会短路那次读取，
+// 在那里跑通不能说明没有竞争。随后一边 QueueMove 一边取诊断，-race 下锁外读取会报数据竞争。
+// 两种应用模式都走手动应用（不启动后台应用线程），事实只登记、不被应用，诊断看到的是确定的两种状态之一。
+func TestDrainStallsReadsFactCountUnderTheRegistryLock(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		m := newManager(t)
+		in := newInterestMode(t, m, mode)
+		manualApplier(in)
+		e := factEntity(t, 2)
+		if err := in.Show(e.ID(), spatial.Point{X: 10, Y: 10}); err != nil {
+			t.Fatal(err)
+		}
+		in.applyStep()
+		if stalls, _ := in.drainStalls(8); len(stalls) != 1 || stalls[0].Reason != "applied_unsettled" {
+			t.Fatalf("applied but unsettled: stalls = %+v", stalls)
+		}
+		in.maxQueuedFacts = 10000
+		const moves = 2000
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for range moves {
+				if err := in.QueueMove(e, spatial.Point{X: 20, Y: 20}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+		for range moves {
+			stalls, total := in.drainStalls(8)
+			// 每次诊断取的是一个一致的快照：要么还没有排队事实（applied_unsettled），要么有（queued_fact，且不再报
+			// applied_unsettled）。
+			if total != len(stalls) || len(stalls) != 1 {
+				t.Fatalf("stalls = %+v (total %d)", stalls, total)
+			}
+			if reason := stalls[0].Reason; reason != "applied_unsettled" && reason != "queued_fact" {
+				t.Fatalf("stall reason = %q", reason)
+			}
+		}
+		<-done
+		if stalls, _ := in.drainStalls(8); len(stalls) != 1 || stalls[0].Reason != "queued_fact" || stalls[0].Subject != e.ID() {
+			t.Fatalf("after %d queued moves: stalls = %+v", moves, stalls)
+		}
+	})
+}
+
 // stepApplier 让应用线程走一步（与后台应用线程互斥于 Interest.mu，可以同时存在）。同步模式没有应用线程，
 // 事实由下一次 Flush 的政策阶段应用，这里什么也不做。
 func stepApplier(t *testing.T, in *Interest) {
@@ -1191,7 +1241,7 @@ func TestAppliedFactHoldsContentUntilSettled(t *testing.T) {
 	prepared.Abort()
 }
 
-// ---- 两种应用模式（DESIGN-TODO D19“两种应用模式”）----
+// ---- 两种应用模式 ----
 
 // 同步模式的视野上限在构造时检查：显式超过主视野 + SyncApplyMaxExtraViews 拒绝构造并提示改用 ApplyAsync；零值取这个上限
 // （主视野 + 8 个额外视野可以，第 9 个额外视野 ErrViewLimit）。异步模式不受此限（零值 64）。未知模式拒绝构造。

@@ -9,6 +9,7 @@ import (
 
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 )
 
 const maxWireEnvelopeBytes = 8 << 20
@@ -29,6 +30,8 @@ func (p *JetStreamPublisher) Client() fnats.IJetStream {
 
 // CompletionConsumerConfig 配置普通结果流的持久消费者。
 type CompletionConsumerConfig struct {
+	// Workers 是本订阅的并发处理上限；0/1 串行，不能超过 MaxAckPending。启用后不保证回调顺序。
+	Workers                        int
 	Stream, Durable, SubjectPrefix string
 	AckWait                        time.Duration
 	ProcessTimeout                 time.Duration
@@ -116,10 +119,10 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 	if config.NakBackoffMax < config.NakBackoffMin {
 		config.NakBackoffMax = 30 * time.Second
 	}
-	if config.ProcessTimeout >= config.AckWait || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
+	if config.Workers < 0 || config.Workers > config.MaxAckPending || config.ProcessTimeout >= config.AckWait || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
 		return nil, fmt.Errorf("saga: unsafe completion consumer limits")
 	}
-	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	consume := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		completion, err := decodeCompletionMessage(message)
 		if err != nil {
 			logConsumerError("completion decode", message, err)
@@ -137,7 +140,18 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 			return kitnats.Permanent(err)
 		}
 		return err
-	})
+	}
+	worker := withConsumerWorkers(config.Workers, consume)
+	arrival := func(ctx context.Context, message *fnats.JetStreamMsg) error {
+		if hoptrace.Enabled() {
+			if completion, err := decodeCompletionMessage(message); err == nil {
+				hoptrace.Mark("timeline/result.received/", completion.CommandID)
+			}
+		}
+		return worker(ctx, message)
+	}
+
+	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, arrival)
 }
 
 // decodeCompletionMessage 解开普通结果流上的一条消息；错误都是坏信封（rejectEnvelope）。
@@ -174,4 +188,47 @@ func validSubjectPath(subject string) bool {
 
 func validDeliveryLimits(maxDeliver, maxAckPending int, nakMin, nakMax time.Duration) bool {
 	return maxDeliver > 0 && maxDeliver <= 1_000_000 && maxAckPending > 0 && maxAckPending <= 65_536 && nakMin > 0 && nakMax >= nakMin && nakMax <= 24*time.Hour
+}
+
+// withConsumerWorkers 把处理放进有界的在途槽；结算仍由原订阅负责，Drain 等待所有延迟结算。
+// 同一操作的并发由收件箱租约 / Mongo 事务裁决，不在这里另建按 ID 的锁或重试队列。
+func withConsumerWorkers(workers int, handler fnats.JetStreamHandler) fnats.JetStreamHandler {
+	if workers <= 1 {
+		return handler
+	}
+	slots := make(chan struct{}, workers)
+	return func(ctx context.Context, message *fnats.JetStreamMsg) error {
+		if message == nil || message.DeferSettle == nil {
+			return handler(ctx, message)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			<-slots
+			return err
+		}
+		settle := message.DeferSettle()
+		if settle == nil {
+			defer func() { <-slots }()
+			return handler(ctx, message)
+		}
+		go func() {
+			var err error
+			defer func() {
+				if value := recover(); value != nil {
+					err = fmt.Errorf("saga: consumer handler panic: %v", value)
+				}
+				settle(err)
+				<-slots
+			}()
+			err = handler(ctx, message)
+		}()
+		return nil
+	}
 }

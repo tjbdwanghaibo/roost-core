@@ -209,7 +209,7 @@ roost generate
 	},
 	{
 		Name: "timedomain", Aliases: []string{"time-domain", "time_domains"},
-		Summary:       "给场景实体加时间域：倍速、慢放、时停（D22，只做场景级）",
+		Summary:       "给场景实体加时间域：倍速、慢放、时停（只做场景级）",
 		Usage:         `roost add timedomain --entity <Scene> [--id <component-id>]`,
 		Configuration: `要求实体有 DAO。在 DAO 定义里加 TimeAnchorBusiness / TimeAnchorDomain / TimeRate 三个 nopersist,sync 字段（随同步下发、不落库；要持久的场景改成 persist），实体加组件字段（两处之后归业务）；生成部分 timedomain_component_gen.go（加载时 timedomain.New 并发布、DAO 适配）由 project sync 重写；倍率范围写在 timedomain_config.go（业务文件，只建一次，缺省 [0, 4]）。SetRate 只在场景自己的锁内调用，提交后才发布给成员；成员的行为组件在 behavior_actions.go 的 timeDomain 里返回场景的域。说明见 ` + timeDomainDocURL + `。`,
 		Example: `roost add timedomain --entity Scene

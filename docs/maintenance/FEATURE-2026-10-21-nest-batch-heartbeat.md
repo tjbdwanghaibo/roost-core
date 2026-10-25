@@ -1,6 +1,6 @@
 # 功能设计：Nest 批量心跳作业（选项 C，2026-10-21）
 
-**状态：设计 + 实现完成（分支 `perf/nest-batch-heartbeat`）；合入方式按维护者 2026-10-21 决定 A：代码先合入，心跳缺省仍走单目标 `Dispatch`，批量心跳作业是开关 `heartbeat.delivery: dispatch | batch`（缺省 `dispatch`），合批优化压测通过后另起一笔改为缺省开启。Nest 侧的分片登记表、worker 同锁取下一项、`DispatchTryBatch` 入口无条件生效。性能结论（2026-10-22 补测）：不达标，建议暂不改缺省，待维护者决定。维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4（时间片 200µs、批 64 不变），合并参数当晚补测（性能报告 §3F）。** 业务 p99 同时段 X 0.078 / C 0.235ms，进程 CPU C 比 X 省 42%～73%、只在一半时段接近 Y；批大小 64 不用改，时间片 100µs 或组 4 各把 p99 降约 20%（见性能报告 §3～§3E）。 维护者 2026-10-21 批准按推荐做 [HB-STRUCTURES §6](../performance/HB-STRUCTURES-20261021.md#6-推荐与需要维护者决定的选项) 的选项 C：先出本设计，再出原型，用同一套 X / Y / D 夹具对比，达标才合入。同日批准的另两条随本功能一起做：两张按 goroutine 登记的全局 `sync.Map`（Guard 作用域、当前派发消息）改成分片表，对全部 Nest 消息生效；方案 D 的分支不合入，只保留“worker 结束一项后，在同一次持锁里取下一项”。同日维护者追加两条同 ID 顺序的硬约束（§4），随后把第 1 条修正为“冲突的目标立即转成单目标作业排在冲突消息后面，不等下一格、不算跳拍”（与 ssr 一样立即重投），要求各有变异核对。压测结果与是否合入见 §15 与 [NEST-BATCH-HEARTBEAT-20261021](../performance/NEST-BATCH-HEARTBEAT-20261021.md)。
+**状态：已实施，随 v1.31.0 交付（未发版）。** 维护者 2026-10-21 批准按推荐做 HB-STRUCTURES §6 的选项 C（同日批准两张按 goroutine 登记的全局 `sync.Map` 改分片表、方案 D 只保留“worker 同锁取下一项”，并追加同 ID 顺序硬约束：冲突的目标当场转单目标作业排在冲突消息之后、不跳拍），代码先合入、心跳投递做成开关 `heartbeat.delivery`；**维护者 2026-10-22 决定 B：缺省改为 `batch`，组大小 8 → 4（时间片 200µs、批 64 不变），合并参数当晚补测**（[性能报告 §3F](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3f-维护者-2026-10-22-决定-b-与参数测量)）。代价：同时段进程 CPU 比单目标少约 42%～73%，同一快池上普通业务消息 p99 约 0.08 → 0.19ms。现行契约见 [impl/02 “批量作业”](../framework/impl/02-nest-entity.md) 与 [impl/10-time §2B](../framework/impl/10-time.md#2b-实体心跳)；以下 §1～§15 保留为设计与实施时的记录。
 
 范围：三大块里的 Nest（`framework/nest`）与心跳投递层（`gameplay/heartbeat` 的 `deliverer`）。遵守 roost-coding 的执行契约：快池不阻塞等待；同 ID 顺序在统一准入处建立；内部续行使用既有准入资格。仓库里没有 `docs/feature/` 与 `docs/agent-skills/`（开发过程资料 2026-10-09 已移入 Git 历史，见 [DOCUMENTS](DOCUMENTS.md)），本篇按现行命名惯例放在 `docs/maintenance/FEATURE-*`，执行契约以本机 roost-coding skill 为准。
 
@@ -8,7 +8,7 @@
 
 ## 1. 为什么要做
 
-[方案 D 报告](../performance/NEST-DISPATCH-BATCH-20261021.md) 的结论：心跳每拍一条单目标 `Dispatch`（X）在 50 万次/s 时约 3.8～4.3 核，ssr 式批量（Y）0.7 核；D 把派发队列锁与 worker 停放降了约 8 倍，CPU 只少 11%。贵的是**每条消息在 Nest 里的固定开销**：
+[方案 D 的实验](../performance/NEST-BATCH-HEARTBEAT-20261021.md#7-前置实验方案-d批量入队逐个执行不合入) 的结论：心跳每拍一条单目标 `Dispatch`（X）在 50 万次/s 时约 3.8～4.3 核，ssr 式批量（Y）0.7 核；D 把派发队列锁与 worker 停放降了约 8 倍，CPU 只少 11%。贵的是**每条消息在 Nest 里的固定开销**：
 
 | 每条消息都付一次的开销（X 的路径） | 位置 |
 | --- | --- |
@@ -81,7 +81,7 @@ for 每个目标:
 
 - 转成的单目标作业是普通作业：计入 `pending`，停机排空等它；停止开始后（`q.stopping`）不再转换，这一拍交回 `ErrNestStopped`。
 - 认领标记不计入 `pending`，它只在所属批量作业执行期间存在；批量作业本身计入 `pending`（准入时 +1，结束时 −1）。认领一定在作业结束之前撤销（每个目标的收尾步骤，panic 也撤销），所以停机排空（`stop` 等 `pending == 0`，`dispatch_queue.go:392`）等到的时刻不会留下认领，挂在认领后面的后继已就绪并计入 `pending`，排空照常等它们执行完。
-- Fence 后：批内每个目标执行前检查引擎 fence 状态（§7），已 fence 的目标不认领、直接交回；认领期间发生 fence（本目标提交结果未知）时，认领仍在收尾时撤销，后继照常就绪，由 `dispatchNest` 开头的 fence 检查拒绝（`nest_dispatch.go:87`），与 fence 时队列里的其他作业一样。
+- Fence 后：准备一组时已 fence 的目标不认领、不转、直接交回；组内每个目标开始执行前再过一次开始检查（§7），所以同组里前一个目标 fence 了引擎后，后面已认领的目标同样交回。认领期间发生 fence（本目标提交结果未知）时，认领仍在收尾时撤销，后继照常就绪，由 `dispatchNest` 开头的开始检查拒绝，与 fence 时队列里的其他作业一样。
 
 **方案 D 与选项 C 在这一点上的区别**：
 
@@ -105,7 +105,14 @@ for 每个目标:
 
 ## 7. Fence
 
-整批前置检查拒绝已 fence 的引擎（`ErrNestFenced`）。已排队的批量作业：每个目标在认领之前读一次引擎的 fence 状态（`NestMgr.fenced`，`Fence` 时置位的原子标志，避免每个目标取一次 `lifecycleMu`），已 fence 的目标交回 `FenceError()`，不加载、不取锁、不修改实体——与 `dispatchNest` 对已排队消息的处理相同（`nest_dispatch.go:87`）。某个目标的提交结果未知时 `invokeHandlerTransaction` 立即 fence 引擎，同一批里之后的目标都被拒绝。
+**契约**：Fence 允许已经开始执行的 handler 收尾，不允许还没开始的目标执行业务；没执行的目标交回，原因 `ErrNestFenced`（`FenceError()`，`errors.Is` 成立）。
+
+整批前置检查拒绝已 fence 的引擎（`ErrNestFenced`）。已排队的批量作业有两处检查，读同一个原子标志（`NestMgr.fenced`，`Fence` 时置位，不取 `lifecycleMu`）：
+
+1. 准备一组时（`prepareTryBatchGroupLocked`，持 `q.mu`）：已 fence 的目标不认领、不转单目标，交回。这一处只决定本组的安排。
+2. 每个目标开始执行前（`tryBatchExec.run` 调用 `NestMgr.checkHandlerStart`，与普通派发的 `dispatchNest` / `runNestLogic`、广播的每个目标共用同一个入口，同时检查取消）：已 fence 的目标不加载、不取锁、不修改实体，交回。**一组执行期间 fence 状态会变**：同组前一个目标的 handler 可以主动 `Fence`，`invokeTryBatchTransaction` 遇到提交结果未知（`ErrCommitIndeterminate`）也会立即 fence 引擎，所以第 1 处读到的状态不能代表执行时。RV-20261022-01（2026-10-22 审查）就是只有第 1 处时，同组后续目标在 fence 之后照常执行。
+
+另外，同组里先执行、取不到实体锁的目标在收尾时才转单目标；此时若同组后面的目标已经 fence 了引擎，`convertTryBatchTargetLocked` 不转、交回 `ErrNestFenced`（转成的作业只会被开始检查拒绝）。开始检查是一次性的、不是临界区：检查之后才被别的 goroutine fence 的，由事务交给 committer 之前的 `refuseCommitAfterFence` 与 WAL terminal 兜底，与普通派发相同。
 
 ## 8. Remote
 
@@ -129,7 +136,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 | Guard 作用域登记 | | ✓：每个目标自己的作用域（硬要求），登记表已改分片 |
 | 指标 | ✓：`nest.dispatch.total{type="TryBatch"}` 按批累加执行数、`nest.dispatch.cost` 观察整批耗时；`nest.dispatch.try_batch.handed_back.total{reason}` 按批累加 | 只有超过 `slowLockThreshold` 的目标单独计 `nest.handler.lock_hold.slow.total` 并告警 |
 | 时间 | 本段开始读一次（时间片起点）；每个目标结束读一次（同时用于时间片与持锁时长） | 业务时间（`fctx.Now` / `Beat.Now`）与 `fctx.Frozen` 派生值（场景时间域）每个目标 `Context.Refreeze` 一次：D22-1 要求每一拍冻结一次，不能整批共用（协调方 2026-10-21 要求，两种投递方式各有断言 `TestEveryBeatFreezesItsOwnBusinessTime`） |
-| Fence | 整批检查一次 + 每个目标读一个原子标志 | |
+| Fence | 整批检查一次 + 准备每组时读一个原子标志 | ✓：每个目标开始前 `checkHandlerStart`（一个原子标志 + `ctx.Err`，不加锁、不分配） |
 | 派发队列锁 | 取作业、结束作业 | 按组：一次持锁安排 4 个目标（2026-10-22 前为 8）（`tryBatchGroup`：认领 / 转单目标 / 交回），一组执行完在同一次持锁里收尾（取锁失败的转单目标、撤销认领）并安排下一组。初稿每个目标一次，探索性 profile 里这把锁的争用（`lockSlow` → 停放 → 调度器空转）约占进程 CPU 的 13%；代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组其余目标的执行时间（等在依赖队列里，不占 worker） |
 | 事务、Guard、实体锁、Sync 捕获、handler 查表 | | ✓（不能省） |
 
@@ -157,7 +164,9 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 | `TestTryBatchConversionRejectedIsHandedBack`：转单目标被准入拒绝时才交回 `ErrQueueFull` | §2 | 准入拒绝当作转成功 |
 | `TestTryBatchKeepsPerTargetTransactionSemantics`：一项回滚不影响其他、AfterCommit 只对提交项、同实体两目标按批内先后、Sync 捕获到值 | §3 | 各目标共用第一项 Params |
 | `TestTryBatchYieldsWorkerAfterTimeSlice`：慢回调的批量作业让出 worker | §5 | 不检查时间片 |
-| `TestTryBatchRefusesTargetsAfterFence`：Fence 后排队中的目标交回 `ErrNestFenced`、不执行 | §7 | 不检查 fence |
+| `TestTryBatchRefusesTargetsAfterFence`：Fence 后排队中的目标交回 `ErrNestFenced`、不执行 | §7 | 准备组与开始检查都不检查 fence |
+| `TestTryBatchStopsUnstartedTargetsAfterFenceInsideGroup`（RV-20261022-01 修复时补）：6 个目标跨两组，第一个目标 handler 主动 Fence / committer 返回结果未知，其余 5 个不执行、各交回一次 `ErrNestFenced` | §7 第 2 处 | 每个目标开始前不调用 `checkHandlerStart` |
+| `TestTryBatchBusyTargetIsHandedBackAfterFenceInsideGroup`（同上）：同组先取锁失败的目标，在后面的目标 fence 之后交回 `ErrNestFenced`、不转单目标 | §7 收尾转换 | `convertTryBatchTargetLocked` 不检查 fence |
 | `TestTryBatchDrainsOnShutdown`：停机排空执行已准入的批量作业，之后拒绝 | §6 | 批量作业不计入 pending |
 | `TestTryBatchHandBackReasonsAndPoolRouting`：非法 ID / 空 handler / Remote / 不在内存 / handler 不存在各交回一次；慢池目标在 long 通道；批内 Await 被拒 | §2 §8 §10 | 慢池目标进 short；Await 不拒绝批量作业 |
 | `TestTryBatchAlternatesWithOrdinaryJobs`：批量作业积压后准入的普通消息至多排在一个批量作业之后，反之亦然 | §5 | 同一条 FIFO；两类都有时总先取普通作业 |
@@ -194,7 +203,7 @@ Remote 托管实体的每次写都要在 I/O 池取得带 fence 的写批次（`
 | 两条就绪链交替 | `dispatch_queue.go` `take`（`tryBatches` / `preferOrdinary`）、`enqueueReady` |
 | 同 ID 顺序（约束 1 / 2） | `try_batch.go` `prepareTryBatchGroupLocked`（fence → 冲突转单目标 → 认领）、`convertTryBatchTargetLocked`（`admitLocked`）、`finishTryBatchGroupLocked` / `releaseTryBatchClaimsLocked`；`dispatch_queue.go` `finishJobLocked` 拆出 `releaseIDsLocked` |
 | 执行 | `try_batch.go` `runTryBatchLocked`（按组、时间片 `yieldTryBatchLocked`）、`tryBatchExec`（`beginTryBatch` / `resetMsg` / `run` / `runLocked` / `end`）、`invokeTryBatchTransaction`、`tryLockTryBatchTarget` |
-| Fence 原子标志 | `framework/nest/nest.go` `NestMgr.fenced`（`Fence` 置位） |
+| Fence 原子标志与开始检查 | `framework/nest/nest.go` `NestMgr.fenced`（`Fence` 置位）；`nest_dispatch.go` `checkHandlerStart`（RV-20261022-01 修复时加，普通派发、广播、批量作业逐目标共用） |
 | Await 拒绝 | `framework/nest/await.go`（`MsgTypeTryBatch`） |
 | 统计 | `framework/nest/stats.go` `DispatchLaneStats.TryBatchJobs` / `TryBatchConverted` |
 | 心跳投递层 | `gameplay/heartbeat/driver.go` `batchDeliverer`、`Driver.handBack` / `drainReturned` / `skip`，`Bind` 的选择 |

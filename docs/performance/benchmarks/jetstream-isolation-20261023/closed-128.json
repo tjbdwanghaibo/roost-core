@@ -1,0 +1,83 @@
+{
+  "Workers": 128,
+  "Rate": 0,
+  "Seconds": 15,
+  "PayloadBytes": 1024,
+  "Published": 971961,
+  "Received": 971961,
+  "PublishErrors": 0,
+  "Duplicates": 0,
+  "Invalid": 0,
+  "PublishTPS": 64792.74896050379,
+  "DrainInclusiveTPS": 64738.195840933535,
+  "PubAck": {
+    "MeanMS": 1.9424642197114945,
+    "P50MS": 1.575125,
+    "P99MS": 9.129125,
+    "MaxMS": 26.56875
+  },
+  "Delivery": {
+    "MeanMS": 2.665527413344756,
+    "P50MS": 2.130458,
+    "P99MS": 11.597292,
+    "MaxMS": 31.548709
+  },
+  "Consumer": {
+    "stream_name": "ROOST_JS_PROBE_73669_1792724046937533000",
+    "name": "probe",
+    "created": "2026-10-23T02:54:07.031709Z",
+    "config": {
+      "name": "probe",
+      "durable_name": "probe",
+      "deliver_policy": "all",
+      "ack_policy": "explicit",
+      "ack_wait": 30000000000,
+      "max_deliver": 25000,
+      "filter_subject": "ROOST_JS_PROBE_73669_1792724046937533000.command",
+      "replay_policy": "instant",
+      "max_waiting": 512,
+      "max_ack_pending": 256,
+      "num_replicas": 0,
+      "metadata": {
+        "_nats.level": "4",
+        "_nats.req.level": "0",
+        "_nats.ver": "2.14.5"
+      }
+    },
+    "delivered": {
+      "consumer_seq": 971961,
+      "stream_seq": 971961,
+      "last_active": "2026-10-23T02:54:22.13786Z"
+    },
+    "ack_floor": {
+      "consumer_seq": 971875,
+      "stream_seq": 971875,
+      "last_active": "2026-10-23T02:54:22.138115Z"
+    },
+    "num_ack_pending": 0,
+    "num_redelivered": 0,
+    "num_waiting": 3,
+    "num_pending": 0,
+    "cluster": {
+      "name": "roost-it",
+      "raft_group": "C-R3F-5Wak2pFN",
+      "leader": "nats-3",
+      "leader_since": "2026-10-23T02:54:07.135725Z",
+      "system_account": true,
+      "traffic_account": "$SYS",
+      "replicas": [
+        {
+          "name": "nats-1",
+          "current": true,
+          "active": 2692583
+        },
+        {
+          "name": "nats-2",
+          "current": true,
+          "active": 2724250
+        }
+      ]
+    },
+    "ts": "2026-10-23T02:54:22.138181Z"
+  }
+}

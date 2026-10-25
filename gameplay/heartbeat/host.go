@@ -21,7 +21,7 @@ var (
 	ErrHostClosed = errors.New("heartbeat: host is closed")
 	// ErrRegClosed 表示登记已撤销（Reg.Close 之后），不能再启动或换档。
 	ErrRegClosed = errors.New("heartbeat: registration is closed")
-	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳（维护者 2026-10-21）：
+	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳：
 	// 共享模式下各写者进程的实例状态都是 Shared、都经分布式锁写，本地分不出谁该跳，心跳无法执行。Register 与 Start
 	// 在共享模式下返回它；运行期才进入共享模式的，已挂的心跳由下一拍在实体锁内停掉（计数 heartbeat.stopped_total、打
 	// Warn）。替代做法：共享实体的周期逻辑由业务层自己驱动，例如由负责它的服务按周期发 Nest 消息。
@@ -30,13 +30,13 @@ var (
 		"logic from business code instead, e.g. the owning service sends Nest messages on its own schedule")
 )
 
-// DefaultMaxElapsed 是 Beat.Elapsed 的上限（维护者 2026-10-21：“距上次执行，最多 1 秒”）。档位本身长于 1 秒时上限取
+// DefaultMaxElapsed 是 Beat.Elapsed 的上限：距上次执行最多算 1 秒。档位本身长于 1 秒时上限取
 // 档位周期，否则 2s 及以上的档每拍都会少算（见 Beat.Elapsed）。
 const DefaultMaxElapsed = time.Second
 
 // Beat 是交给回调的一拍。
 type Beat struct {
-	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now（D22-1），回调里再读 fctx.Now 是同一个值。
+	// Now 是本拍的业务时间：这一拍的 Nest 消息冻结的 fctx.Now，回调里再读 fctx.Now 是同一个值。
 	// 挂了时间域（WithTimeDomain）时是这条消息的域时间。
 	Now time.Time
 	// Elapsed 是距本登记上次执行的业务时间（挂了时间域时是域时间，上限再乘倍率）；首拍是距本次启动生效。
@@ -64,13 +64,13 @@ type regOptions struct {
 }
 
 // WithDurability 选本登记心跳 handler 的持久级别（缺省 nest.DurabilityAsync）。心跳本身什么都不持久；回调里改了持久
-// 字段时按这里的级别提交（维护者决定 ⑧：由业务按自己的持久级别处理）。DurabilityMemory 下改持久字段会在提交点被拒绝；
+// 字段时按这里的级别提交，持久级别由业务自己选。DurabilityMemory 下改持久字段会在提交点被拒绝；
 // DurabilityPipelined 要求引擎装了 pipelined 提交器。回滚策略固定 undo。
 func WithDurability(policy nest.DurabilityPolicy) RegOption {
 	return func(o *regOptions) { o.durability = policy }
 }
 
-// WithTimeDomain 让本登记按场景的时间域计时（DESIGN-TODO D22，维护者 2026-10-21 决定 ③）：调度仍按真实时间（档位
+// WithTimeDomain 让本登记按场景的时间域计时（见 impl/10-time §2F）：调度仍按真实时间（档位
 // 不缩放，CPU 不随倍率涨）；Beat.Now 是这一拍消息的域时间（timedomain.Domain.Now），Elapsed 是距上次执行的域时间，
 // 时停时为 0；Elapsed 的上限乘这一拍的倍率（max(DefaultMaxElapsed, 档位) × 倍率），否则 10 倍速时 100ms 档每拍
 // 都被夹住。d 为 nil 时不挂。
@@ -125,7 +125,7 @@ func remoteShared(state entity.RemoteOwnershipState) bool {
 	return state == entity.RemoteOwnershipSharing || state == entity.RemoteOwnershipShared
 }
 
-// Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并（维护者决定 ③）。
+// Register 登记一个心跳，返回停止状态的 Reg；之后 Start 才开始跳。同一实例上的多个登记各自投递、互不合并。
 // name 在实例内唯一（用于日志与诊断），Reg.Close 之后可以再用；period 必须是 Periods 之一。Remote 托管实体处于共享模式时返回
 // ErrHeartbeatRemoteShared（不允许挂载）。共享与否是运行期所有权状态、不是实体种类的声明：刚加载的实例是 Unknown，
 // 第二个写者首次接触共享实体时这里看不出来，由第一拍停掉（见 runBeat）。
@@ -157,7 +157,6 @@ func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegO
 		return nil, fmt.Errorf("heartbeat: registration %q: unsupported durability %v", name, o.durability)
 	}
 	r := &Reg{host: h, name: name, fn: fn, handler: handler, tier: t, domain: o.domain}
-	r.params = nest.Params{r}
 	// 追加在实体锁内；同时持 Driver.mu，让 OnDestroy（卸载流程里解锁之后调用）读到完整的列表。
 	h.driver.mu.Lock()
 	h.regs = append(h.regs, r)
@@ -181,16 +180,15 @@ type Reg struct {
 	name    string
 	fn      Func
 	handler nest.HandlerName
-	params  nest.Params
 	// domain 非 nil 时本登记按时间域计时（WithTimeDomain）：Beat.Now / Elapsed 与启动时刻都是域时间。
 	domain *timedomain.Domain
 
 	// 以下只在实体锁内读写：业务看到的状态（随事务回滚恢复）与回调侧的上次执行记录。
-	active  bool
-	tier    tier
-	seq     uint64 // 每次启停 / 改档加一，驱动只接受更新的序号（AfterCommit 可能乱序到达）
-	lastRun time.Time
-	lastGen uint64
+	active       bool
+	tier         tier
+	seq          uint64 // 每次启停 / 改档加一，驱动只接受更新的序号（AfterCommit 可能乱序到达）
+	lastRun      time.Time
+	lastStartGen uint64 // 上次执行时的 startGen，不同即本次启动的第一拍
 
 	// 以下只在 Driver.mu 下读写：驱动已生效的状态与环上位置。
 	ring struct {
@@ -207,20 +205,23 @@ type Reg struct {
 	// 原子：驱动与回调之间。
 	startGen  atomic.Uint64 // 每次启动生效加一；回调据此判断 First
 	startedAt atomic.Int64  // 最近一次启动生效的业务时间（挂了时间域时是域时间，UnixNano），先于 startGen 写
-	inflight  atomic.Bool   // 已投递、回调还没执行完
 	skipped   atomic.Int64  // 上次执行以来跳过的拍数
 
+	// 投递身份（状态转换与归属见 delivery.go）。delivery 是投递槽：哪一代在途、是否正在执行；驱动、执行侧与交回
+	// 结算之间按 CAS 转换。
+	delivery atomic.Uint64
+
 	// 只由驱动 goroutine 读写。
-	deliveredFrame int64
-	stalls         uint // 连续视为丢失的次数，决定下次的卡住阈值；看到不在途时清零
+	issued         uint64 // 最近分配的代际
+	deliveredFrame int64  // 最近一次投出（含重投）的格
+	stalls         uint   // 当前这一代连续重投的次数，决定下次的卡住阈值；分配新一代时清零
 }
 
 // Name 返回登记名。
 func (r *Reg) Name() string { return r.name }
 
-// GoString 只输出构造后不变的字段（登记名、实体 ID）。Nest 的慢派发 trace 在 handler 执行期间由另一个 goroutine 取
-// 参数样本：实现了 fmt.GoStringer 的参数调用 GoString，其余非标量只给类型名（不按反射读可变字段）；所以这里不能读
-// 回调正在原子写的在途 / 跳拍计数，也是登记名能出现在 trace 里的方式。
+// GoString 只输出构造后不变的字段（登记名、实体 ID）：%#v 打印登记（日志、诊断）时不按反射读回调与驱动正在原子写的
+// 投递槽 / 跳拍计数。拍的消息参数是投递凭据，它在慢派发 trace 里的输出见 beatTicket.GoString。
 func (r *Reg) GoString() string {
 	if r == nil {
 		return "(*heartbeat.Reg)(nil)"
@@ -316,7 +317,8 @@ func (r *Reg) change(active bool, t tier) {
 
 // --- 心跳 handler ---
 
-// 心跳 handler 按持久级别各注册一个（包级，进程内全部驱动共用）：参数是 *Reg，回滚策略 undo。
+// 心跳 handler 按持久级别各注册一个（包级，进程内全部驱动共用）：参数是这一次投递的凭据（*beatTicket，见
+// delivery.go），回滚策略 undo。
 var beatHandlers = [...]struct {
 	durability nest.DurabilityPolicy
 	name       nest.HandlerName
@@ -355,28 +357,31 @@ func beatHandler(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerO
 	if len(es) != 1 || len(params) != 1 {
 		return nil, fmt.Errorf("heartbeat: beat handler wants one target and one parameter, got %d / %d", len(es), len(params))
 	}
-	r, ok := params[0].(*Reg)
-	if !ok || r == nil {
-		return nil, fmt.Errorf("heartbeat: beat handler parameter is %T, want *heartbeat.Reg", params[0])
+	t, ok := params[0].(*beatTicket)
+	if !ok || t == nil {
+		return nil, fmt.Errorf("heartbeat: beat handler parameter is %T, want a heartbeat beat ticket", params[0])
 	}
-	return nil, r.host.driver.runBeat(es[0], r)
+	return nil, t.reg.host.driver.runBeat(es[0], t)
 }
 
-// runBeat 在实体锁与事务内执行一拍。核对顺序：
-//  1. 在途标志：没有在途（同一次投递的另一份已经执行过，见卡住兜底）就不执行；
+// runBeat 在实体锁与事务内执行凭据 t 那一代的一拍。核对顺序：
+//  1. 认领这一代（delivery.go）：槽里不是“第 t.gen 代已投出”就不执行、不改槽（这一代的另一份已经执行、被拒或交回，
+//     下一代可能已经投出），计 duplicate；
 //  2. 实例：消息的目标必须是登记所属的那个实例、且没有 OnDestroy（卸载后同 ID 重载的新实例收到旧实例的拍，按过期丢弃），
 //     登记没有 Close（换场景重建后旧登记的在途拍，同样按过期丢弃）；
 //  3. 业务视角的启停：锁序上更早提交的 Stop 已经让它停了；
 //  4. Remote 托管实体：共享模式（Sharing / Shared）不允许挂载心跳，在这里停掉本登记（Stop 同样随本拍事务提交生效），
 //     计数并由驱动汇总打 Warn，回调不执行；其余状态要求本进程实例是当前拥有方（LocalOwned）。
 //
-// 在途标志在返回时清掉（panic 也清），所以“上一拍没执行完”就是 handler 还没返回。
-func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
-	if !r.inflight.Load() {
+// 认领成功后，返回时（panic 也是）这一代结算、槽回到空闲，所以“上一拍没执行完”就是 handler 还没返回；2～4 丢弃的
+// 拍同样结算。
+func (d *Driver) runBeat(target entity.IThreadSafeEntity, t *beatTicket) error {
+	r := t.reg
+	if !r.claim(t.gen) {
 		d.count(&d.stats.dropDuplicate, r.host.id)
 		return nil
 	}
-	defer r.inflight.Store(false)
+	defer r.finish(t.gen)
 	h := r.host
 	if target != h.owner || h.closed.Load() || r.closed.Load() {
 		d.count(&d.stats.dropStale, h.id)
@@ -407,7 +412,7 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 	}
 	period := r.tier.period()
 	gen := r.startGen.Load()
-	first := gen != r.lastGen
+	first := gen != r.lastStartGen
 	since := r.lastRun
 	if first {
 		since = time.Unix(0, r.startedAt.Load())
@@ -421,11 +426,11 @@ func (d *Driver) runBeat(target entity.IThreadSafeEntity, r *Reg) error {
 	skipped := r.skipped.Swap(0)
 
 	// 回调侧记录随本拍事务回滚：回滚的一拍不算执行过，下一拍的 Elapsed 覆盖它。
-	prevRun, prevGen := r.lastRun, r.lastGen
-	r.lastRun, r.lastGen = now, gen
+	prevRun, prevStartGen := r.lastRun, r.lastStartGen
+	r.lastRun, r.lastStartGen = now, gen
 	if tx := nest.CurrentRollbackTx(); tx != nil {
 		tx.DeferRollback(func() error {
-			r.lastRun, r.lastGen = prevRun, prevGen
+			r.lastRun, r.lastStartGen = prevRun, prevStartGen
 			r.skipped.Add(skipped)
 			return nil
 		})

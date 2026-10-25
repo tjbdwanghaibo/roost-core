@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// 技能 Runtime 的心跳驱动（DESIGN-TODO D20 P5；维护者 2026-10-21 决定：心跳只是驱动方式之一）：推进规则全部在
+// 技能 Runtime 的心跳驱动（心跳只是驱动方式之一）：推进规则全部在
 // skill.Stepper（gameplay/skill/stepper.go，不依赖 Nest / 心跳），这里只做心跳的接线——
 //
 //   - skill.Driver 的 Wake / Sleep 换成心跳登记的 Start / Stop（heartbeatDriver，buff 心跳共用）；
@@ -44,7 +44,7 @@ type RuntimeBeatConfig struct {
 	MaxCatchUp time.Duration
 	// Options 传给 heartbeat.Host.Register（例如 WithDurability；缺省 async）。
 	Options []heartbeat.RegOption
-	// TimeDomain 非 nil 时 Runtime 在场景的时间域里（DESIGN-TODO D22）：心跳挂上这个域，tick 按域时间换算，handler
+	// TimeDomain 非 nil 时 Runtime 在场景的时间域里：心跳挂上这个域，tick 按域时间换算，handler
 	// 里的输入也取域时间——时停时 tick 不前进，2 倍速时 tick 走两倍。
 	TimeDomain *timedomain.Domain
 	// OnError 接收拍里推进的错误与挂不上心跳的错误；nil 时打 Warn 日志。

@@ -83,7 +83,11 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 
 `ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`，`Limits.MaxObjects` 同时是一个会话可持有的 subject 数；
 `Subscribe` 不按它拒绝，超出发生在下一次 Flush 给该会话编码、为新对象分配引用时（`frame.ErrObjectLimit`）：Manager 不截断、不只丢超出的那几个，
-而是关闭整个会话（`SessionsLost` +1、回调 `SessionLost`，不断开传输连接），之后政策对它的订阅以会话不存在被拒、进重试表，直到业务重新打开会话；
+而是关闭整个会话（`SessionsLost` +1、回调 `SessionLost`），之后政策对它的订阅以会话不存在被拒、进重试表，直到业务重新打开会话；
+`SessionLost` 的原因总是 `*SessionLoss`：`LossReason(cause)` 是低基数分类——`push_refused`（传输拒收这一帧）、`object_limit`（`frame.ErrObjectLimit`）、
+`too_large`（单实体包超过 `MaxFrameBytes` / `MaxComponentBytes`）、`encode_failed`（其他编码错误），`Err` 是原错误。后三种没有帧交给传输，连接没有拒收任何东西：
+会话 ID 就是玩家 ID 的 Manager 用 `wiring/selfsync.DisconnectLostPlayer` 断开该玩家（自身视图自动接上，game-demo 场景同样调用；维护者 2026-10-22 决定 A），
+客户端重连、从新 epoch 的全量开始，计 `player.sync.session_lost_disconnect.total{reason}`；推送拒收时 `PushPlayerFrame` 已在传输里断开过，不再断第二次；
 持有量由业务用政策的上限（`AOIConfig.MaxVisible` 等）保证（`TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit`）；
 `Stats()` 与 `CheckHealth()`（80% 降级、满或关闭为 Fail）；指标 `entitysync_frames_admitted_total`、`entitysync_sessions_lost_total`、
 `entitysync_durability_gate_deferred_total`。

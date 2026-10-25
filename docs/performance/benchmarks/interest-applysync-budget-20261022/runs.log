@@ -1,0 +1,37 @@
+20:47:51 o-v16-sync-nest-base-r1 start loadavg={ 4.82 4.73 4.41 }
+20:48:12 o-v16-sync-nest-base-r1 ok rc=1 loadavg_end={ 4.98 4.78 4.44 }
+20:48:28 o-v16-sync-nest-be49-r1 start loadavg={ 4.67 4.72 4.42 }
+20:48:49 o-v16-sync-nest-be49-r1 ok rc=1 loadavg_end={ 5.24 4.85 4.47 }
+20:48:59 o-v16-sync-nest-after-r1 start loadavg={ 5.51 4.92 4.50 }
+20:49:20 o-v16-sync-nest-after-r1 ok rc=1 loadavg_end={ 4.60 4.75 4.45 }
+20:49:31 o-v0-sync-nest-base-r1 start loadavg={ 4.33 4.68 4.43 }
+20:49:43 o-v0-sync-nest-base-r1 ok rc=1 loadavg_end={ 4.36 4.67 4.43 }
+20:49:54 o-v0-sync-nest-be49-r1 start loadavg={ 4.31 4.65 4.42 }
+20:50:06 o-v0-sync-nest-be49-r1 ok rc=1 loadavg_end={ 4.61 4.70 4.44 }
+20:50:17 o-v0-sync-nest-after-r1 start loadavg={ 4.35 4.64 4.43 }
+20:50:29 o-v0-sync-nest-after-r1 ok rc=1 loadavg_end={ 4.38 4.64 4.43 }
+20:50:40 o-v8-sync-nest-base-r1 start loadavg={ 4.33 4.62 4.42 }
+20:50:56 o-v8-sync-nest-base-r1 ok rc=1 loadavg_end={ 4.31 4.61 4.42 }
+20:51:07 o-v8-sync-nest-be49-r1 start loadavg={ 4.04 4.54 4.40 }
+20:51:23 o-v8-sync-nest-be49-r1 ok rc=1 loadavg_end={ 4.40 4.59 4.42 }
+20:51:34 o-v8-sync-nest-after-r1 start loadavg={ 4.40 4.59 4.42 }
+20:51:50 o-v8-sync-nest-after-r1 ok rc=1 loadavg_end={ 4.86 4.69 4.46 }
+20:52:01 o-v16-sync-nest-after-r2 start loadavg={ 4.60 4.64 4.44 }
+20:52:19 o-v16-sync-nest-after-r2 ok rc=1 loadavg_end={ 4.01 4.50 4.40 }
+20:52:30 o-v16-sync-nest-be49-r2 start loadavg={ 4.08 4.50 4.40 }
+20:52:48 o-v16-sync-nest-be49-r2 ok rc=1 loadavg_end={ 3.98 4.45 4.38 }
+20:52:59 o-v16-sync-nest-base-r2 start loadavg={ 3.98 4.44 4.38 }
+20:53:18 o-v16-sync-nest-base-r2 ok rc=1 loadavg_end={ 3.83 4.38 4.36 }
+20:53:28 o-v0-sync-nest-after-r2 start loadavg={ 4.03 4.40 4.36 }
+20:53:41 o-v0-sync-nest-after-r2 ok rc=1 loadavg_end={ 3.86 4.35 4.35 }
+20:53:51 o-v0-sync-nest-be49-r2 start loadavg={ 3.74 4.30 4.33 }
+20:54:03 o-v0-sync-nest-be49-r2 ok rc=1 loadavg_end={ 3.63 4.26 4.31 }
+20:54:14 o-v0-sync-nest-base-r2 start loadavg={ 3.70 4.25 4.31 }
+20:54:26 o-v0-sync-nest-base-r2 ok rc=1 loadavg_end={ 3.26 4.12 4.26 }
+20:54:37 o-v8-sync-nest-after-r2 start loadavg={ 3.22 4.08 4.25 }
+20:54:53 o-v8-sync-nest-after-r2 ok rc=1 loadavg_end={ 3.18 4.03 4.23 }
+20:55:04 o-v8-sync-nest-be49-r2 start loadavg={ 3.08 3.98 4.20 }
+20:55:20 o-v8-sync-nest-be49-r2 ok rc=1 loadavg_end={ 3.35 4.00 4.21 }
+20:55:31 o-v8-sync-nest-base-r2 start loadavg={ 3.46 4.00 4.20 }
+20:55:47 o-v8-sync-nest-base-r2 ok rc=1 loadavg_end={ 3.21 3.91 4.17 }
+20:55:47 all done

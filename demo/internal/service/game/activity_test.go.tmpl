@@ -488,7 +488,7 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 			coordinator.opened, want, gameactivity.Key("west", gameactivity.ID(time.Now().Unix())))
 	}
 	closeAt, _ := gameactivity.CloseAt(gameactivity.ID(business.Unix()))
-	// 请求里不带“现在”：handlerArmActivity 的 nowUnix 由生成的分发包装在执行时填这条消息冻结的业务时间（D22-1）。
+	// 请求里不带“现在”：handlerArmActivity 的 nowUnix 由生成的分发包装在执行时填这条消息冻结的业务时间。
 	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix()}) {
 		t.Fatalf("the World was armed with %v, want the business window and its close time", nest.requests)
 	}
@@ -519,8 +519,8 @@ func (tickCommitter) Commit(context.Context, dataengine.CommitRecord) error { re
 // World 定时器的驱动是框架的 entitytimer.Driver，由 startWorldTimers 手工接上 Nest（demo 不用 roost add timer）；
 // 业务时间是驱动的缺省时钟 fctx.Now，即进程业务时钟（App 启动时按 time.logic_offset 设偏移，这里照做）。业务时钟
 // 比真实时间快一天时：到期的关窗节点经 Nest 投给 TimerTickHandler（就是 handlerTickWorldTimers 的名字）——World 的
-// 期限按业务时间登记，驱动若按墙钟判断，节点要晚一天才到期。Tick 消息不带时间（D22-1）：handler 按自己冻结的
-// 业务时间触发。D11 迁到生成器时删掉的 TestTheWorldTickCarriesBusinessTime 守的是同一件事（那时是每秒循环）。
+// 期限按业务时间登记，驱动若按墙钟判断，节点要晚一天才到期。Tick 消息不带时间：handler 按自己冻结的
+// 业务时间触发。
 func TestTheWorldTimersRunOnTheBusinessClock(t *testing.T) {
 	config := viper.New()
 	config.Set("time.logic_offset", "24h")

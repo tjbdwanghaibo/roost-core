@@ -353,7 +353,7 @@ type eventSource interface {
 	TakeEvent(kind uint16) (Event, bool)
 }
 
-// EventReceived 是事件条件叶子（D21 C1）：本拍收到过 Kind 类事件时成功。Take 为真时同时取走一个（同一拍里别的叶子
+// EventReceived 是事件条件叶子：本拍收到过 Kind 类事件时成功。Take 为真时同时取走一个（同一拍里别的叶子
 // 就看不到它了）；Take 为假时不取走、无状态，可以用在 Guard 的谓词里。上下文不带事件（不是 BehaviorContext）时失败。
 type EventReceived[C any] struct {
 	Kind uint16
@@ -381,7 +381,7 @@ func (*EventReceived[C]) Reset() {}
 // stageSwitcher 是能切阶段的上下文（BehaviorContext 实现）。
 type stageSwitcher interface{ SetStage(name string) error }
 
-// SetStage 是切阶段的动作叶子（D21 C2，JSON 的 set_stage）：请求切到 Stage（本拍求值结束后生效）并成功；阶段不存在、
+// SetStage 是切阶段的动作叶子（JSON 的 set_stage）：请求切到 Stage（本拍求值结束后生效）并成功；阶段不存在、
 // 上下文不能切阶段时失败。
 type SetStage[C any] struct{ Stage string }
 
@@ -399,7 +399,7 @@ type tracer interface {
 	trace(path string, status Status)
 }
 
-// Traced 在子节点每次 Tick 之后把 (Path, 结果) 报给策略的 Trace 钩子（D21 C5）；没有钩子时只多一次接口判断。
+// Traced 在子节点每次 Tick 之后把 (Path, 结果) 报给策略的 Trace 钩子；没有钩子时只多一次接口判断。
 // Registry.TraceNodes 打开后 ParseTree 用它包住每个节点，Path 是 JSON 路径。
 type Traced[C any] struct {
 	Path  string

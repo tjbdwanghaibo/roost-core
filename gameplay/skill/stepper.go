@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// 技能 Runtime 的推进器（DESIGN-TODO D20；维护者 2026-10-21 决定：心跳只是技能 / Buff 的驱动方式之一，skill 只用
-// 接口）。Stepper 持有推进规则，驱动方式经 Driver 接进来：实体心跳（combatcomponent.NewRuntimeBeat）、Lockstep 房间
+// 技能 Runtime 的推进器（心跳只是技能 / Buff 的驱动方式之一，skill 只用接口；实现说明见 impl/10-time §2G）。
+// Stepper 持有推进规则，驱动方式经 Driver 接进来：实体心跳（combatcomponent.NewRuntimeBeat）、Lockstep 房间
 // 的定步长循环、测试里手动调用，规则都是这一份。本文件不依赖 Nest、心跳、时间域：时刻由驱动（StepTo 的参数）与
 // 输入侧的 StepperConfig.Now 给出，“本条消息冻结的时刻”是适配层的事。
 //

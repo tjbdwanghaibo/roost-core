@@ -116,7 +116,7 @@ func (d *Driver) Name() string { return d.config.Name }
 func (d *Driver) Handler() nest.HandlerName { return d.config.Handler }
 
 // SetClock 换掉业务时钟，只给测试（可控时钟）；期限、触发时刻与加载时刻都按这一个时钟计算，所以必须在实体加载
-// 之前设置。缺省是 fctx.Now（D22-1）：在 Nest 消息里（Tick、业务 handler 里增删改定时器、加载时的 OnInitFinish）是
+// 之前设置。缺省是 fctx.Now：在 Nest 消息里（Tick、业务 handler 里增删改定时器、加载时的 OnInitFinish）是
 // 这次执行冻结的业务时间，同一条消息里的期限都从同一时刻算起；驱动自己的循环不在消息里，现读进程业务时钟。进程
 // 装配不调用它：进程业务时钟由 App 启动时按 time.logic_offset 设定，与 app.BusinessClock(r) 同一份配置。
 func (d *Driver) SetClock(now func() time.Time) {

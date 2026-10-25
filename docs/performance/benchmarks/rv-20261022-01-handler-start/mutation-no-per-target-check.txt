@@ -1,0 +1,16 @@
+--- FAIL: TestBroadcastSkipsUnstartedTargetsAfterFence (0.00s)
+    dispatch_test.go:414: broadcast ran [7487457 7488481 7489505] after the first target fenced the engine, want only [7487457]
+--- FAIL: TestTryBatchStopsUnstartedTargetsAfterFenceInsideGroup (0.00s)
+    --- FAIL: TestTryBatchStopsUnstartedTargetsAfterFenceInsideGroup/handler_fence (0.00s)
+        try_batch_test.go:556: target 8870881 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:556: target 8871905 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:556: target 8872929 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:560: first target ran 1 (want 1); unstarted targets that still ran after the fence 3 [8870881 8871905 8872929] (want 0); hand-backs 2 (want 5 exactly once each)
+    --- FAIL: TestTryBatchStopsUnstartedTargetsAfterFenceInsideGroup/commit_indeterminate (0.00s)
+        try_batch_test.go:556: target 8881121 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:556: target 8882145 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:556: target 8883169 hand-back <nil>, want ErrNestFenced
+        try_batch_test.go:560: first target ran 1 (want 1); unstarted targets that still ran after the fence 3 [8881121 8882145 8883169] (want 0); hand-backs 2 (want 5 exactly once each)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.496s
+FAIL

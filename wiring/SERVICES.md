@@ -272,3 +272,7 @@ keyspace，断言每个声明的命名空间都恰好收到了写。十条"故�
 真正需要写后端的只有两处，都不是 versionstore 能表达的：`rank` 的 sorted set，和
 `mail` 的 `EnvelopeStore`——信封写一次不再改，且读路径是**批量**（一次
 `IRedis.MGet`），这正是那个契约有 `GetMany` 的全部理由。
+
+## 瞬态物理房间
+
+`service/physicsroom` / `wiring/physicsroom` 是物理世界的进程内权威，不模拟持久化存储。一个房间固定 owner SID，进程重启结束房间；不得采用普通服务的随机路由装配。领域 RPC 由接口生成，装配显式使用 NewOwnerClient/NewClientMod(ownerSID, timeout)。见 [物理房间 service](../docs/framework/PHYSICS-ROOM-SERVICE.md)。

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Stepper（D20；维护者 2026-10-21：心跳只是驱动方式之一）：推进规则在推进器层直接测——不经 Nest、不经心跳，驱动
+// Stepper（心跳只是驱动方式之一）：推进规则在推进器层直接测——不经 Nest、不经心跳，驱动
 // 由测试扮演：手动驱动按给定的时刻调 StepTo（模拟心跳的拍间隔、跳拍、重复、晚到），定步长循环按帧号调 StepToTick。
 // 心跳适配层（combatcomponent.NewRuntimeBeat）的用例在 combatcomponent。
 

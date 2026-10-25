@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TickClock 是业务时间与技能 tick 的换算规则（DESIGN-TODO D20 P5）：tick 是离散的整数时刻，Runtime、buff 的到期
+// TickClock 是业务时间与技能 tick 的换算规则：tick 是离散的整数时刻，Runtime、buff 的到期
 // （combat.BuffInstance.DueTick）、冷却、衍生物都按它计；心跳与 handler 把各自冻结的“现在”（fctx.Now，挂了场景时间域
 // 时是域时间）经它换成 tick 再推进。
 //

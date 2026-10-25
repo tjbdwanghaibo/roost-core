@@ -1,0 +1,9 @@
+=== RUN   TestRealSagaPerformance
+2026/10/23 10:23:59 INFO nats: connected url=nats://127.0.0.1:15222,nats://127.0.0.1:15223,nats://127.0.0.1:15224
+    performance_real_integration_test.go:401: minute=0 count=1800 p50=416.9ms p99=549.5ms max=614.1ms server_p99=520.4ms
+    performance_real_integration_test.go:454: mode=forward completed=1800/1800 rate=29.84/s p99=549.5ms server_p99=520.4ms admit_p99=0.9ms observe_p99=50.2ms start_errors=0 business_verified=true
+2026/10/23 10:25:01 INFO nats: disconnected err=<nil>
+2026/10/23 10:25:01 INFO nats: connection closed
+--- PASS: TestRealSagaPerformance (62.48s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	62.807s

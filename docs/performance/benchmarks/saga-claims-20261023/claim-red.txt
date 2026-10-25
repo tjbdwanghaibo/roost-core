@@ -1,0 +1,8 @@
+--- FAIL: TestConcurrentMongoClaimsFillAvailableSlots (0.00s)
+    --- FAIL: TestConcurrentMongoClaimsFillAvailableSlots/outbox=false (0.00s)
+        mongo_store_test.go:1232: available=2 claimed=[claim-0] / []; each worker should receive one
+    --- FAIL: TestConcurrentMongoClaimsFillAvailableSlots/outbox=true (0.00s)
+        mongo_store_test.go:1232: available=2 claimed=[claim-0:1:0:1] / []; each worker should receive one
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	0.692s
+FAIL

@@ -252,6 +252,7 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	if err := record.Validate(); err != nil {
 		return Record{}, err
 	}
+	hoptrace.Mark("timeline/start.begin/", record.ID)
 	createStart := hoptrace.Now()
 	err = e.store.Create(ctx, record)
 	hoptrace.Since("h00.start.create", createStart)
@@ -273,6 +274,7 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 		}
 		return Record{}, err
 	}
+	hoptrace.Mark("timeline/start.end/", record.ID)
 	e.started.Add(1)
 	e.signal(e.dueKick)
 	return record.Clone(), nil
@@ -446,6 +448,7 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	for attempts := 0; attempts < 8; attempts++ {
 		// 这次读不是可省的预读：判定（judgeCompletion）与目标状态（applyCompletion）都从它算出，写入按它的版本做条件
 		// 替换（乐观并发，冲突即重读重试）。Store.Apply 的事务不再读记录，只核对版本，所以它是唯一的那次读。
+		hoptrace.Mark("timeline/complete.begin/", completion.CommandID)
 		getStart := hoptrace.Now()
 		record, err := e.store.Get(ctx, completion.SagaID)
 		hoptrace.Since("h11.complete.get", getStart)
@@ -491,6 +494,7 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			slog.Info("saga: compensated the step that took effect after the coordinator abandoned it",
 				"saga_id", record.ID, "saga_type", record.Type, "late_step", record.Step, "status", after.Status.String(), "version", after.Version)
 		}
+		hoptrace.Mark("timeline/complete.end/", completion.CommandID)
 		e.countTerminal(after.Status)
 		e.signal(e.dueKick)
 		return after.Clone(), nil
@@ -881,11 +885,13 @@ func (e *Engine) publisherLoop(ctx context.Context) {
 		for i := range items {
 			// 逐跳计时：派发事务提交 → 发布器开始发布（outbox 排队与领取），发布本身（同步等 PubAck）。
 			hoptrace.SinceMark("h03.outbox.wait", "dispatched/", items[i].Command.ID)
+			hoptrace.Mark("timeline/publish.begin/", items[i].Command.ID)
 			publishStart := hoptrace.Now()
 			publishCtx, cancel := context.WithTimeout(ctx, e.opts.PublishTimeout)
 			err := e.publisher.PublishSagaCommand(publishCtx, items[i].Command.Clone())
 			cancel()
 			hoptrace.Since("h03.outbox.publish", publishStart)
+			hoptrace.Mark("timeline/publish.end/", items[i].Command.ID)
 			if err != nil {
 				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 					continue
@@ -998,10 +1004,16 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		// 逐跳计时：记录到期（启动、上一步结果接收、重试退避结束）→ 协调器领取并开始派发。
 		hoptrace.Observe("h01.coord.wake", time.Since(record.NextRunAt))
 	}
+	// 只在诊断时关联交易与命令；不把高基数身份写入生产指标。
+	if hoptrace.Enabled() {
+		hoptrace.Mark("timeline/link/"+record.ID+"/", command.ID)
+	}
+	hoptrace.Mark("timeline/dispatch.begin/", command.ID)
 	dispatchStart := hoptrace.Now()
 	_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox})
 	hoptrace.Since("h02.dispatch.apply", dispatchStart)
 	if err == nil {
+		hoptrace.Mark("timeline/dispatch.end/", command.ID)
 		hoptrace.Mark("dispatched/", command.ID)
 		e.dispatched.Add(1)
 		e.signal(e.outboxKick)

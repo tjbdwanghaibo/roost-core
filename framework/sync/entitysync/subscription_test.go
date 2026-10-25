@@ -74,7 +74,7 @@ func TestSubscriptionIndexTracksAllRemovalPaths(t *testing.T) {
 			case "close":
 				m.CloseSession(1)
 			case "transport_loss":
-				m.loseSession(m.session(1), errors.New("lost"))
+				m.loseSession(m.session(1), &SessionLoss{Reason: SessionLossPushRefused, Err: errors.New("lost")})
 			}
 			mustFlush(t, m)
 			assertSubscriptionIndex(t, m)

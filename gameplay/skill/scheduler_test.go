@@ -121,7 +121,7 @@ func asyncSkillJSON(id, input, flow string) string {
 	return `{"schema":"roost.skill/v2","id":"skill.test.runtime.` + id + `","name":"Async","description":"Async runtime.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":` + input + `,"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 }
 
-// TickClock（D20 P5）：tick 向下取整，同一时刻换算出同一个 tick；走完一整个 Length 才进下一个 tick；负数同样向下。
+// TickClock：tick 向下取整，同一时刻换算出同一个 tick；走完一整个 Length 才进下一个 tick；负数同样向下。
 func TestTickClockFloorsAndRoundTrips(t *testing.T) {
 	origin := time.Unix(1_800_000_000, 0)
 	clock := TickClock{Length: 50 * time.Millisecond, Origin: origin}
@@ -159,7 +159,7 @@ func TestTickClockFloorsAndRoundTrips(t *testing.T) {
 	}
 }
 
-// Pending 与 CurrentTick（D20 P5 的空闲判定）：等待中的施法、它的排程任务算工作；施法结束、只剩冷却记录时空闲。
+// Pending 与 CurrentTick（空闲判定）：等待中的施法、它的排程任务算工作；施法结束、只剩冷却记录时空闲。
 func TestRuntimePendingFollowsCastsAndTasks(t *testing.T) {
 	flow := `{"flow":"wait","ticks":3,"then":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":3,"damage_type":"physical"}},{"flow":"finish"}]}}`
 	input := asyncSkillJSON("pending", `{"type":"entity"}`, flow)

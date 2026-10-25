@@ -77,7 +77,7 @@ func (f *nestFixture) settle(regs ...*Reg) {
 	f.t.Helper()
 	waitFor(f.t, "delivered beats to run", func() bool {
 		for _, r := range regs {
-			if r.inflight.Load() {
+			if inFlight(r) {
 				return false
 			}
 		}
@@ -344,7 +344,7 @@ func TestFiftyThousandEntitiesSmoke(t *testing.T) {
 		}
 		n := 50_000 // 1s 档，5 万次/秒
 		if raceEnabled {
-			// -race 下本机 4 个快池 worker 约 2700 次/秒（2026-10-21 实测：5000 次/秒时排队 15s），
+			// -race 下 4 个快池 worker 约 2700 次/秒（5000 次/秒时排队约 15s），
 			// 降到 2000 实体，只验证功能；5 万实体由非 -race 运行覆盖。
 			n = 2_000
 		}
@@ -391,7 +391,7 @@ func TestFiftyThousandEntitiesSmoke(t *testing.T) {
 	})
 }
 
-// D22-1：Beat.Now 是这一拍消息冻结的业务时间（fctx.Now），回调里再读 fctx.Now 得到同一个值。驱动用缺省时钟
+// Beat.Now 是这一拍消息冻结的业务时间（fctx.Now），回调里再读 fctx.Now 得到同一个值。驱动用缺省时钟
 // （不 SetClock），进程业务时钟的来源每读一次走 1ms：现读第二次就会不同。
 func TestBeatNowIsTheMessagesFrozenBusinessTime(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
@@ -441,7 +441,7 @@ type tdFields struct{ state timedomain.State }
 func (f *tdFields) TimeDomain() timedomain.State     { return f.state }
 func (f *tdFields) SetTimeDomain(s timedomain.State) { f.state = s }
 
-// D22 时间域：挂了时间域的登记，调度仍按真实时间（档位不缩放），Beat.Now 是这一拍消息的域时间、Elapsed 是域时间
+// 时间域：挂了时间域的登记，调度仍按真实时间（档位不缩放），Beat.Now 是这一拍消息的域时间、Elapsed 是域时间
 // 的经过；2 倍速时 Elapsed 是业务经过的两倍，时停时为 0、Now 不动；Elapsed 上限乘倍率。
 func TestBeatsOnATimeDomainFollowItsRate(t *testing.T) {
 	forEachDelivery(t, func(t *testing.T) {
@@ -634,8 +634,8 @@ func TestConflictingBeatIsSkippedOnlyWhenAdmissionRefuses(t *testing.T) {
 	f.step(1) // 下一格开头处理交回
 	f.driver.flush(time.Now())
 	st := f.driver.Stats()
-	if st.SkippedQueueFull != 1 || r.inflight.Load() || logs.count() == 0 {
-		t.Fatalf("stats %+v inflight=%v warns=%d: a refused conversion is a skipped beat (queue_full, Warn)", st, r.inflight.Load(), logs.count())
+	if st.SkippedQueueFull != 1 || inFlight(r) || logs.count() == 0 {
+		t.Fatalf("stats %+v inflight=%v warns=%d: a refused conversion is a skipped beat (queue_full, Warn)", st, inFlight(r), logs.count())
 	}
 	release()
 	f.idle()
@@ -686,12 +686,12 @@ func TestBeatOfAnUnloadedInstanceIsDroppedWithoutColdLoad(t *testing.T) {
 	})
 	f.step(1)
 	st := f.driver.Stats()
-	if runs.Load() != 0 || st.DroppedNotLoaded != 1 || st.SkippedRejected+st.SkippedQueueFull != 0 || r.inflight.Load() {
-		t.Fatalf("runs %d stats %+v inflight=%v: an unloaded instance's beat is dropped as not_loaded", runs.Load(), st, r.inflight.Load())
+	if runs.Load() != 0 || st.DroppedNotLoaded != 1 || st.SkippedRejected+st.SkippedQueueFull != 0 || inFlight(r) {
+		t.Fatalf("runs %d stats %+v inflight=%v: an unloaded instance's beat is dropped as not_loaded", runs.Load(), st, inFlight(r))
 	}
 }
 
-// D22-1 在两种投递方式下都成立：同一格里同一实体的几拍（四个同档登记，两个挂场景时间域）各自冻结一次——Beat.Now
+// 两种投递方式下，同一格里同一实体的几拍（四个同档登记，两个挂场景时间域）都各自冻结一次业务时间——Beat.Now
 // 等于回调里读到的 fctx.Now / 域时间，且各拍互不相同（进程业务时钟每读一次走 1ms）。批量方式下这几拍在同一个 Nest
 // 批量作业里依次执行，每个目标开始前重新冻结（Context.Refreeze），不是整批共用一个时刻。
 // 变异核对：批量作业逐目标不 Refreeze 时 batch 子测试里四拍的 Beat.Now 相同，本用例变红。

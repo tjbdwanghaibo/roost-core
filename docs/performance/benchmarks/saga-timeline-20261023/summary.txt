@@ -1,0 +1,18 @@
+transactions=1800 P50=391.97ms P99=520.41ms max=574.23ms
+result_transport               mean=   72.18ms slowest1% mean=   90.97ms
+command_transport              mean=   65.72ms slowest1% mean=  121.96ms
+coordinator_wait_and_claim     mean=   54.21ms slowest1% mean=   62.70ms
+dispatch_commit                mean=   36.59ms slowest1% mean=   41.14ms
+completion_apply               mean=   35.40ms slowest1% mean=   40.98ms
+receipt_and_commit             mean=   34.50ms slowest1% mean=   40.44ms
+step_reserve                   mean=   34.40ms slowest1% mean=   37.17ms
+outbox_wait                    mean=   29.54ms slowest1% mean=   46.31ms
+start_commit                   mean=   16.94ms slowest1% mean=   20.10ms
+command_consumer_slot          mean=   10.61ms slowest1% mean=   22.64ms
+result_consumer_slot           mean=    4.98ms slowest1% mean=    9.04ms
+business_writes                mean=    1.65ms slowest1% mean=    3.72ms
+step_decode                    mean=    0.03ms slowest1% mean=    0.02ms
+transaction_prepare            mean=    0.02ms slowest1% mean=    0.02ms
+result_prepare                 mean=    0.00ms slowest1% mean=    0.00ms
+step_prepare                   mean=    0.00ms slowest1% mean=    0.00ms
+handoff_overlap                mean=   -0.00ms slowest1% mean=    0.00ms

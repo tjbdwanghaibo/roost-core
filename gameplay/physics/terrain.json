@@ -1,0 +1,610 @@
+{
+  "version": 1,
+  "players": 20,
+  "capsules": 50,
+  "big_ball_id": 71,
+  "boxes": [
+    {
+      "name": "Ground",
+      "position": [
+        0,
+        -0.5,
+        0
+      ],
+      "half_extents": [
+        25,
+        0.5,
+        25
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "West wall",
+      "position": [
+        -25,
+        6,
+        0
+      ],
+      "half_extents": [
+        0.5,
+        6,
+        25
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "East wall",
+      "position": [
+        25,
+        6,
+        0
+      ],
+      "half_extents": [
+        0.5,
+        6,
+        25
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "South wall",
+      "position": [
+        0,
+        6,
+        -25
+      ],
+      "half_extents": [
+        25,
+        6,
+        0.5
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "North wall",
+      "position": [
+        0,
+        6,
+        25
+      ],
+      "half_extents": [
+        25,
+        6,
+        0.5
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Lower platform",
+      "position": [
+        -12,
+        3.75,
+        -8
+      ],
+      "half_extents": [
+        5,
+        0.25,
+        4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Platform pillar",
+      "position": [
+        -16,
+        1.75,
+        -11
+      ],
+      "half_extents": [
+        0.4,
+        1.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Platform pillar",
+      "position": [
+        -16,
+        1.75,
+        -5
+      ],
+      "half_extents": [
+        0.4,
+        1.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Platform pillar",
+      "position": [
+        -8,
+        1.75,
+        -11
+      ],
+      "half_extents": [
+        0.4,
+        1.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Platform pillar",
+      "position": [
+        -8,
+        1.75,
+        -5
+      ],
+      "half_extents": [
+        0.4,
+        1.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Ascending ramp",
+      "position": [
+        -2,
+        2,
+        -8
+      ],
+      "half_extents": [
+        5.385164807134504,
+        0.2,
+        2.5
+      ],
+      "tilt_degrees": -21.80140948635181
+    },
+    {
+      "name": "Upper platform",
+      "position": [
+        12,
+        5.75,
+        8
+      ],
+      "half_extents": [
+        5,
+        0.25,
+        4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Upper pillar",
+      "position": [
+        8,
+        2.75,
+        5
+      ],
+      "half_extents": [
+        0.4,
+        2.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Upper pillar",
+      "position": [
+        8,
+        2.75,
+        11
+      ],
+      "half_extents": [
+        0.4,
+        2.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Upper pillar",
+      "position": [
+        16,
+        2.75,
+        5
+      ],
+      "half_extents": [
+        0.4,
+        2.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Upper pillar",
+      "position": [
+        16,
+        2.75,
+        11
+      ],
+      "half_extents": [
+        0.4,
+        2.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 1",
+      "position": [
+        12,
+        0.25,
+        -10.0
+      ],
+      "half_extents": [
+        2,
+        0.25,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 2",
+      "position": [
+        12,
+        0.5,
+        -8.8
+      ],
+      "half_extents": [
+        2,
+        0.5,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 3",
+      "position": [
+        12,
+        0.75,
+        -7.6
+      ],
+      "half_extents": [
+        2,
+        0.75,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 4",
+      "position": [
+        12,
+        1.0,
+        -6.4
+      ],
+      "half_extents": [
+        2,
+        1.0,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 5",
+      "position": [
+        12,
+        1.25,
+        -5.2
+      ],
+      "half_extents": [
+        2,
+        1.25,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 6",
+      "position": [
+        12,
+        1.5,
+        -4.0
+      ],
+      "half_extents": [
+        2,
+        1.5,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 7",
+      "position": [
+        12,
+        1.75,
+        -2.8000000000000007
+      ],
+      "half_extents": [
+        2,
+        1.75,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 8",
+      "position": [
+        12,
+        2.0,
+        -1.5999999999999996
+      ],
+      "half_extents": [
+        2,
+        2.0,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 9",
+      "position": [
+        12,
+        2.25,
+        -0.40000000000000036
+      ],
+      "half_extents": [
+        2,
+        2.25,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 10",
+      "position": [
+        12,
+        2.5,
+        0.7999999999999989
+      ],
+      "half_extents": [
+        2,
+        2.5,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 11",
+      "position": [
+        12,
+        2.75,
+        2.0
+      ],
+      "half_extents": [
+        2,
+        2.75,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stair 12",
+      "position": [
+        12,
+        3.0,
+        3.1999999999999993
+      ],
+      "half_extents": [
+        2,
+        3.0,
+        0.6
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "High bridge",
+      "position": [
+        2,
+        5.75,
+        8
+      ],
+      "half_extents": [
+        5,
+        0.25,
+        1.2
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Bridge rail",
+      "position": [
+        2,
+        6.5,
+        6.7
+      ],
+      "half_extents": [
+        5,
+        0.5,
+        0.1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Bridge rail",
+      "position": [
+        2,
+        6.5,
+        9.3
+      ],
+      "half_extents": [
+        5,
+        0.5,
+        0.1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Bridge support",
+      "position": [
+        -2,
+        2.75,
+        8
+      ],
+      "half_extents": [
+        0.4,
+        2.75,
+        0.4
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Low tunnel roof",
+      "position": [
+        0,
+        2.5,
+        16
+      ],
+      "half_extents": [
+        4,
+        0.25,
+        2
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Tunnel side",
+      "position": [
+        -4,
+        1.125,
+        16
+      ],
+      "half_extents": [
+        0.25,
+        1.125,
+        2
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Tunnel side",
+      "position": [
+        4,
+        1.125,
+        16
+      ],
+      "half_extents": [
+        0.25,
+        1.125,
+        2
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stepped obstacle",
+      "position": [
+        -16,
+        0.3,
+        8
+      ],
+      "half_extents": [
+        1,
+        0.3,
+        1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stepped obstacle",
+      "position": [
+        -10,
+        0.5,
+        8
+      ],
+      "half_extents": [
+        1,
+        0.5,
+        1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stepped obstacle",
+      "position": [
+        -16,
+        0.7,
+        14
+      ],
+      "half_extents": [
+        1,
+        0.7,
+        1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Stepped obstacle",
+      "position": [
+        -10,
+        0.9000000000000001,
+        14
+      ],
+      "half_extents": [
+        1,
+        0.9000000000000001,
+        1
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Banked slope",
+      "position": [
+        12,
+        1.6,
+        -17
+      ],
+      "half_extents": [
+        5,
+        0.25,
+        3
+      ],
+      "tilt_degrees": 15
+    },
+    {
+      "name": "Column",
+      "position": [
+        18,
+        2,
+        -3
+      ],
+      "half_extents": [
+        0.75,
+        2,
+        0.75
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Column",
+      "position": [
+        20,
+        2,
+        3
+      ],
+      "half_extents": [
+        0.75,
+        2,
+        0.75
+      ],
+      "tilt_degrees": 0
+    },
+    {
+      "name": "Column",
+      "position": [
+        -20,
+        2,
+        0
+      ],
+      "half_extents": [
+        0.75,
+        2,
+        0.75
+      ],
+      "tilt_degrees": 0
+    }
+  ]
+}

@@ -6,7 +6,7 @@ type Mix struct {
 	Weights [NumTiers]int // 各档登记数的相对权重
 }
 
-// MixD20 取自 DESIGN-TODO D20 §7 的示例分布（5 万实体中 32% 挂心跳，不合并时共 3.4 万个登记）：
+// MixD20 是设计里的示例分布（5 万实体中 32% 挂心跳，不合并时共 3.4 万个登记）：
 // 移动 100ms 8000 个（玩家 2000 + 怪物 6000）、AI 200ms 1 万个（怪物 6000 + 4000）、
 // Buff / 回复 1s 1.6 万个（玩家 2000 + 4000、怪物 6000 + 4000）。按这个比例放大到 N 个登记。
 var MixD20 = Mix{Name: "d20mix", Weights: [NumTiers]int{Tier100ms: 8000, Tier200ms: 10000, Tier1s: 16000}}
@@ -32,19 +32,6 @@ func (m Mix) TierAt(i, n int) Tier {
 		x -= w
 	}
 	return Tier(NumTiers - 1)
-}
-
-// FiresPerSecond 是 n 个登记按该分布每秒触发的总次数。
-func (m Mix) FiresPerSecond(n int) float64 {
-	total := 0
-	for _, w := range m.Weights {
-		total += w
-	}
-	sum := 0.0
-	for t, w := range m.Weights {
-		sum += float64(w) / float64(total) * float64(n) / Periods[t].Seconds()
-	}
-	return sum
 }
 
 // EntityID 构造一个形状与正式 EntityID 相同的 ID（[unique][kind 8 位][category 2 位]），只用于散列与键。

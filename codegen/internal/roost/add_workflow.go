@@ -304,8 +304,8 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	}
 	// Sync_ 返回 handler 的全部非 error 结果再加 err；骨架必须全部接住才能编译，结果留给业务填进响应。
 	call := fmt.Sprintf("err = sender.Sync_%s(context.Context(), %s)", nestType, callArgs)
-	// 业务时间（nowUnix / nowUnixMilli）不在这里填：生成的分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间
-	// （D22-1），Sync_ 的签名里没有它。
+	// 业务时间（nowUnix / nowUnixMilli）不在这里填：生成的分发包装在 handler 执行时从 fctx 填这条消息冻结的业务时间，
+	// Sync_ 的签名里没有它。
 	useResults := ""
 	if signature.results > 0 {
 		results := []string{"result"}
@@ -582,7 +582,7 @@ type endpointSignature struct {
 
 // serverBusinessTimeArguments 是不从请求取的 handler 参数：业务时间由服务器决定，放进请求就等于让客户端决定（可以
 // 延长限时效果、提前领冷却奖励）。按约定名识别，类型必须是 int64；它们也不由 endpoint 填——Nest 生成器的分发包装在
-// handler 执行时从 fctx 填这条消息冻结的业务时间（D22-1），Sync_ 的签名里没有它们，骨架跳过。
+// handler 执行时从 fctx 填这条消息冻结的业务时间，Sync_ 的签名里没有它们，骨架跳过。
 var serverBusinessTimeArguments = map[string]bool{"nowUnix": true, "nowUnixMilli": true}
 
 func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) (endpointSignature, error) {

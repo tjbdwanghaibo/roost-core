@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
-// 技能 Runtime 的心跳适配（D20 P5）：推进规则本身在 skill.Stepper，推进器层的用例在 gameplay/skill/stepper_test.go；
+// 技能 Runtime 的心跳适配：推进规则本身在 skill.Stepper，推进器层的用例在 gameplay/skill/stepper_test.go；
 // 这里经心跳适配层（拍回调、Reg 的启停、输入侧取 fctx.Now）跑同样的抖动——不经 Nest，直接按给定的时刻调用拍回调，
 // 输入的时刻经可控的业务时钟给出。真实心跳驱动下的启停见 beat_test.go。
 

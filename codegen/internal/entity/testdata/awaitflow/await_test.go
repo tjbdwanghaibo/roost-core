@@ -47,7 +47,7 @@ func TestGeneratedPlayerAwaitsAndResumesOnLongPool(t *testing.T) {
 	}
 }
 
-// D22-1：业务时间参数（nowUnixMilli）是 handler 执行时这条消息冻结的业务时间，不是调用方发送前读的时间。
+// 业务时间参数（nowUnixMilli）是 handler 执行时这条消息冻结的业务时间，不是调用方发送前读的时间。
 // 进程业务时钟的来源每读一次走 1ms：调用方读的时间与消息冻结的时间一定不同。
 func TestGeneratedDispatchFillsTheBusinessTimeAtExecution(t *testing.T) {
 	flow.RegisterEntity()

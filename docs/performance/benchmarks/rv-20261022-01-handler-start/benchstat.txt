@@ -1,0 +1,22 @@
+                                                                       │ before.txt  │             after.txt              │
+                                                                       │   sec/op    │   sec/op     vs base               │
+NestHotPath/cpu=false/workers=1/independent=true/single/async=false-10   2.743µ ± 5%   2.725µ ± 6%       ~ (p=0.971 n=10)
+NestHotPath/cpu=false/workers=1/independent=true/single/async=true-10    2.286µ ± 6%   2.263µ ± 8%       ~ (p=0.393 n=10)
+TryBatch-10                                                              463.9n ± 6%   461.0n ± 4%       ~ (p=0.810 n=10)
+geomean                                                                  1.427µ        1.417µ       -0.76%
+
+                                                                       │  before.txt  │               after.txt               │
+                                                                       │     B/op     │     B/op      vs base                 │
+NestHotPath/cpu=false/workers=1/independent=true/single/async=false-10   1.344Ki ± 0%   1.344Ki ± 0%       ~ (p=1.000 n=10)
+NestHotPath/cpu=false/workers=1/independent=true/single/async=true-10      997.0 ± 0%     997.5 ± 0%       ~ (p=1.000 n=10)
+TryBatch-10                                                                157.0 ± 0%     157.0 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                    599.4          599.5       +0.02%
+¹ all samples are equal
+
+                                                                       │ before.txt │              after.txt              │
+                                                                       │ allocs/op  │ allocs/op   vs base                 │
+NestHotPath/cpu=false/workers=1/independent=true/single/async=false-10   34.00 ± 0%   34.00 ± 0%       ~ (p=1.000 n=10) ¹
+NestHotPath/cpu=false/workers=1/independent=true/single/async=true-10    29.00 ± 0%   29.00 ± 0%       ~ (p=1.000 n=10) ¹
+TryBatch-10                                                              5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                  17.02        17.02       +0.00%
+¹ all samples are equal

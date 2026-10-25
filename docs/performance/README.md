@@ -4,10 +4,14 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [JetStream独立与Mongo混合资源对照](benchmarks/jetstream-isolation-20261023/README.md) | 独立约1.4ms、已测6.5万消息/s；Mongo同机负载复现约43ms；CPU/内存/网络未耗尽；采样确认Mongo journal同步与NATS pwrite驻留，保留睡眠无效样本 |
+| [Saga batch 与 JetStream 交付验证](benchmarks/saga-batch-wire-20261023/README.md) | ABBA 共7200笔成功；batch=1减少约30ms协调等待；解析后回调排队约占平均交付4%，生产默认不变 |
+| [Saga 单笔逐跳诊断（2026-10-23）](benchmarks/saga-timeline-20261023/README.md) | 1800笔正向全成功且时间线完整；平均397ms中持久处理158ms、交付138ms、协调/outbox84ms、业务写入1.65ms；不把各跳P99相加，不将交付当纯网络RTT |
+| [候选问题诊断（2026-10-23）](PRERELEASE-DIAGNOSTICS-20261023.md) | WAL 刷盘指标修复并定位 async 等 writer；Saga 原子认领 + 两消费 worker 通过 30/s × 10 分钟（18,000 笔全成功）；Redis 有界重定向修复与六节点计划切换通过；历史失败证据保留，整体停顿与 heartbeat 波动未全部关闭 |
+| [v1.31.0 发版前整体压测清单（2026-10-22 晚）](V1310-PRERELEASE-20261022.md) | 计划、不是结果：选项 C 参数、Interest ApplySync 预算、game-demo 100 / 200 人、夜间补测 13 项 + 第 14 项在发版候选上重跑、AOI 三点与两种应用模式、心跳负载；200ms（5Hz）移动口径与 Linux 复测可选 |
 | [Interest 单写者重构前后对比（2026-10-22）](INTEREST-SINGLE-WRITER-20261022.md) | 改前 `494134ae` / 改后 `11988df8` 同机交替：政策阶段在跑时业务线程上的直接调用均值与 p99 降一到两个数量级（`Enter`+`Leave` 23.4µs → 0.47µs），AOI 基准 ±2%；sync-aoi Nest ApplySync 0～8 视野 P50 低 6～11ms、P99 低 4～8ms，ApplyAsync 持平，ApplySync 16 视野仍超周期；修了 sync-aoi Nest 模式每 tick 调 `Apply` 的夹具问题（`6cffbc03`）；direct 基线语义变化不可直接比；demo 登录风暴 80 人规模下没有可分辨差异（更多人时 demo 的复制会话因 `MaxObjects` 被关闭） |
 | [D20 第 4 期：压测工具改为心跳驱动（2026-10-21）](HB-DRIVEN-LOAD-20261021.md) | 只交付代码、没有性能结论：sync-aoi `-move-driver=heartbeat`（实体心跳 + movement 巡逻）、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=heartbeat`（生成 Unit 挂 `gameplay/heartbeat`），缺省仍是原全局循环；§7 微基准补正式驱动的假客户端基准、真实 Nest 开环投递与快池占满跳拍；冒烟与正式对比 2026-10-21 因宿主资源占用推迟到 v1.31 发版前压测，命令见该页 §4 |
-| [D20 选项 C：Nest 批量心跳作业（2026-10-21）](NEST-BATCH-HEARTBEAT-20261021.md) | **2026-10-22 补测：不达标，建议暂不改缺省**：同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核，业务 p99 X 0.078 / C 0.235ms（由批量作业的时间片决定，100µs 时 0.19ms）；跳拍 / 准入失败 / 快池拒绝 0；普通 Nest 微基准 −9.9%；宿主中途换过一次时段（轻负载组 CPU 翻倍，原因尚未确认）。探索性运行据以改了两处设计：批量与普通作业两条就绪链交替（同一条 FIFO 时业务 p99 2.1ms）、8 个一组认领（逐目标取派发队列锁约占 13% CPU） |
-| [D20 方案 D：Nest 批量入队原型（2026-10-21，实验记录）](NEST-DISPATCH-BATCH-20261021.md) | 原型 + 对比，判据未达标、分支不合入：`DispatchBatch` 批量入队、逐个执行；5 万实体 100ms 心跳 100% 移动时进程 CPU X 3.80 / D 3.38 / ssr 式批量 0.71 核；X 的成本主要是逐作业的 Nest 执行开销（含两个按 goroutine 登记的 `sync.Map` 争用）与 macOS 上的调度器空转。只保留 worker“结束后同锁取下一项”（短 handler 几何平均 −7.7%、完成 p99 −13.8%），随选项 C 合入 |
+| [D20 选项 C：Nest 批量心跳作业（2026-10-21）](NEST-BATCH-HEARTBEAT-20261021.md) | **维护者 2026-10-22 决定 B：心跳投递缺省改为批量作业、组 8 → 4**（组合参数当晚补测，§3F）：同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核，业务 p99 X 0.078 / C 0.235ms（组 4 时 0.187ms）；跳拍 / 准入失败 / 快池拒绝 0；普通 Nest 微基准 −9.9%；两条就绪链交替、8 个一组认领由探索性运行定；§7 并入方案 D（批量入队、逐个执行）的前置实验：不达标、不合入，只保留 worker 同锁取下一项（短 handler −7.7%） |
 | [D20 心跳调度结构与投递方式（2026-10-21）](HB-STRUCTURES-20261021.md) | 原型 + 基准，不是正式实现：ssr 思路（固定档 + 相位分桶）改写为按档分环后收集 / 撤销 / 内存全面领先（ssr 的 map 多环写法慢 6～10 倍，最小堆慢约 100 倍）；5 万实体 100ms 经真实 Nest，50 万次/s 时单目标 Dispatch 4.25 核、DispatchBroadcast 1.90 核、ssr 式批量 0.77 核，后者绕过目标实体的事务与 Sync 捕获、不能原样采用；推荐按档分环 10ms、单目标 Dispatch、1 个驱动 |
 | [生成工程完整链路的 strict 写入吞吐（2026-10-20）](GENERATED-TCP-STRICT-20261020.md) | 定位新用户试用第八轮“约 125 TPS”、不是容量基线：CLI 生成工程 + strict handler + 嵌入 TCP，50 连接各自一个玩家压测端 1253 TPS（WAL 每批约 9.9 条，上限约 short 池 worker 数 / 每笔持锁），同一实体 108 TPS；试用报告的形态与“请求落在同一实体”一致，单样本、非独占宿主 |
 | [Lockstep 快照恢复限速链路演练（2026-10-20）](LOCKSTEP-SNAPSHOT-DRILL-20261020.md) | 功能演练、不是性能基线：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB / 4 MiB 快照都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate（只准入，缺省约 492 KB/s）在 64 KB/s（1 MiB）、256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连后从头再传，三次都未恢复（设计 §6.3 风险 1 成立） |
@@ -166,7 +170,7 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 
 ### sync-aoi.sh / sync-recovery.sh（新拆分）
 
-**移动由谁驱动**（D20 第 4 期，2026-10-21）：`-move-driver=loop`（缺省，原负载：压测端循环发改值请求）或 `heartbeat`（只在 `-nest` 下：实体自己的心跳 + `gameplay/movement` 巡逻，另有 `-move-period` / `-move-speed` / `-movers`）。心跳模式 `planned_event_to_client` 的起点是这一拍消息的业务时间、不含驱动迟到，下表 `harness.*` 与 `server.request_to_change_ms` 只在 loop 模式有值；`server.json` 的 `heartbeat` 一节与口径差异见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。不加开关的旧命令得到原负载。
+**移动由谁驱动**（D20 第 4 期，2026-10-21）：`-move-driver=loop`（缺省，原负载：压测端循环发改值请求）或 `heartbeat`（只在 `-nest` 下：实体自己的心跳 + `gameplay/movement` 巡逻，另有 `-move-period` / `-move-speed` / `-movers`；`-move-period` 缺省 2026-10-22 起由 100ms 改为 200ms，与之前的心跳模式结果对照时显式加 `-move-period=100ms`）。心跳模式 `planned_event_to_client` 的起点是这一拍消息的业务时间、不含驱动迟到，下表 `harness.*` 与 `server.request_to_change_ms` 只在 loop 模式有值；`server.json` 的 `heartbeat` 一节与口径差异见 [HB-DRIVEN-LOAD-20261021](HB-DRIVEN-LOAD-20261021.md#1-新增开关)。不加开关的旧命令得到原负载。
 
 服务端与模拟客户端是两个进程；`planned_event_to_client` / `state_change_to_client` / `commit_to_client` 的终点是客户端解码校验完该对象。`server.json`（服务端进程，只计正式测量 tick，样本是每次状态变化）：
 

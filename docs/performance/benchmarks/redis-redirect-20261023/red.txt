@@ -1,0 +1,21 @@
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":1"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":3"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":5"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":7"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":1"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":3"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":5"
+redis: 2026/10/23 08:52:51 osscluster.go:2852: getting command info: redis: can't parse array/set/push reply: ":7"
+--- FAIL: TestClusterRedirectExhaustionUsesSafeResendBudget (0.01s)
+    --- FAIL: TestClusterRedirectExhaustionUsesSafeResendBudget/drop=false (0.01s)
+        no_replay_test.go:158: executions=0 want 1, err=MOVED 7629 127.0.0.1:51471
+    --- FAIL: TestClusterRedirectExhaustionUsesSafeResendBudget/drop=true (0.00s)
+        no_replay_test.go:158: executions=0 want 1, err=MOVED 7629 127.0.0.1:51484
+--- FAIL: TestIsDefinitelyNotExecuted (0.00s)
+    --- FAIL: TestIsDefinitelyNotExecuted/MOVED (0.00s)
+        no_replay_test.go:451: IsDefinitelyNotExecuted(MOVED 7629 127.0.0.1:6379) = false, want true
+    --- FAIL: TestIsDefinitelyNotExecuted/ASK (0.00s)
+        no_replay_test.go:451: IsDefinitelyNotExecuted(ASK 7629 127.0.0.1:6379) = false, want true
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver	0.692s
+FAIL

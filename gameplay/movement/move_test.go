@@ -200,7 +200,7 @@ func TestFollowTracksTheTargetUntilItIsGone(t *testing.T) {
 }
 
 // 进出场景：进场景 Enter（位置取当时的位置），离开 Leave；离开后进行中的移动在下一次推进时以 LeftScene 结束；不在
-// 场景里不能开始移动。离开时按配置落库一次，周期落库只在位置变过时写。
+// 场景里不能开始移动。离开时按配置落库一次，周期落库只在场景、位置或朝向变过时写。
 func TestEnterAndLeaveTheScene(t *testing.T) {
 	d := newUnitDriver()
 	var saved []string

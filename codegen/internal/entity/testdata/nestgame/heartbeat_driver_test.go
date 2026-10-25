@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// 心跳的两种驱动（DESIGN-TODO D20 第 4 期，ROOST_NEST_GAME_HEARTBEAT_DRIVER）：
+// 心跳的两种驱动（ROOST_NEST_GAME_HEARTBEAT_DRIVER）：
 //
 //	ticker     原负载：唯一的 Nest 帧回调按 HeartbeatHz × 实体数的速率逐个 Dispatch 一条“心跳”业务消息（保留作对照）；
 //	heartbeat  每个 Unit 在 gameplay/heartbeat 上登记一个周期 1s / HeartbeatHz 的心跳（必须是固定档位之一），

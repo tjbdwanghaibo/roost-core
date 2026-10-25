@@ -1,0 +1,65 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2000 ns/op	    500011 beats/s	       757.8 cpu-ns/beat	         0.3789 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499853 beats/s	       758.4 cpu-ns/beat	         0.3791 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499858 beats/s	       787.9 cpu-ns/beat	         0.3938 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499821 beats/s	       794.8 cpu-ns/beat	         0.3973 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499705 beats/s	       769.8 cpu-ns/beat	         0.3847 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499765 beats/s	       779.5 cpu-ns/beat	         0.3896 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499871 beats/s	       787.8 cpu-ns/beat	         0.3938 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2000 ns/op	    500024 beats/s	       774.1 cpu-ns/beat	         0.3871 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499837 beats/s	       775.2 cpu-ns/beat	         0.3875 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=100ms-10         	 2000000	      2001 ns/op	    499835 beats/s	       790.3 cpu-ns/beat	         0.3950 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1001 ns/op	    999334 beats/s	       491.5 cpu-ns/beat	         0.4912 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	       999.7 ns/op	   1000320 beats/s	       499.0 cpu-ns/beat	         0.4991 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	       999.9 ns/op	   1000149 beats/s	       486.0 cpu-ns/beat	         0.4861 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1000 ns/op	    999917 beats/s	       501.2 cpu-ns/beat	         0.5012 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1000 ns/op	    999977 beats/s	       505.6 cpu-ns/beat	         0.5056 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1000 ns/op	    999913 beats/s	       488.3 cpu-ns/beat	         0.4882 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1000 ns/op	   1000023 beats/s	       500.3 cpu-ns/beat	         0.5004 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1001 ns/op	    999491 beats/s	       491.4 cpu-ns/beat	         0.4911 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	       999.7 ns/op	   1000309 beats/s	       538.6 cpu-ns/beat	         0.5387 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=100000/period=100ms-10        	 2000000	      1001 ns/op	    999414 beats/s	       485.1 cpu-ns/beat	         0.4848 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2242 cpu-ns/beat	         0.1121 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2301 cpu-ns/beat	         0.1150 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2374 cpu-ns/beat	         0.1187 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2431 cpu-ns/beat	         0.1216 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50000 beats/s	      2419 cpu-ns/beat	         0.1210 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50000 beats/s	      2407 cpu-ns/beat	         0.1203 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2445 cpu-ns/beat	         0.1222 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50000 beats/s	      2440 cpu-ns/beat	         0.1220 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50000 beats/s	      2425 cpu-ns/beat	         0.1212 driver-cores
+BenchmarkDriverDispatch/delivery=dispatch/regs=50000/period=1s-10            	 2000000	     20000 ns/op	     50001 beats/s	      2365 cpu-ns/beat	         0.1182 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499714 beats/s	       868.7 cpu-ns/beat	         0.4341 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499715 beats/s	       877.4 cpu-ns/beat	         0.4385 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2000 ns/op	    500025 beats/s	       881.0 cpu-ns/beat	         0.4405 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499696 beats/s	       841.5 cpu-ns/beat	         0.4205 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499828 beats/s	       852.7 cpu-ns/beat	         0.4262 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499704 beats/s	       885.7 cpu-ns/beat	         0.4426 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2000 ns/op	    499977 beats/s	       850.5 cpu-ns/beat	         0.4252 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2000 ns/op	    500045 beats/s	       869.9 cpu-ns/beat	         0.4350 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499692 beats/s	       875.9 cpu-ns/beat	         0.4377 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10            	 2000000	      2001 ns/op	    499689 beats/s	       862.8 cpu-ns/beat	         0.4311 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999389 beats/s	       498.5 cpu-ns/beat	         0.4982 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999411 beats/s	       515.1 cpu-ns/beat	         0.5148 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999416 beats/s	       487.5 cpu-ns/beat	         0.4872 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999318 beats/s	       523.8 cpu-ns/beat	         0.5235 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	       999.8 ns/op	   1000239 beats/s	       513.7 cpu-ns/beat	         0.5138 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1000 ns/op	   1000021 beats/s	       514.4 cpu-ns/beat	         0.5144 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999403 beats/s	       512.2 cpu-ns/beat	         0.5119 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999369 beats/s	       491.5 cpu-ns/beat	         0.4912 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999416 beats/s	       520.4 cpu-ns/beat	         0.5201 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=100000/period=100ms-10           	 2000000	      1001 ns/op	    999392 beats/s	       509.3 cpu-ns/beat	         0.5090 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2372 cpu-ns/beat	         0.1186 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50001 beats/s	      2412 cpu-ns/beat	         0.1206 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     49999 beats/s	      2400 cpu-ns/beat	         0.1200 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2381 cpu-ns/beat	         0.1191 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2395 cpu-ns/beat	         0.1197 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2413 cpu-ns/beat	         0.1207 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2426 cpu-ns/beat	         0.1213 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2379 cpu-ns/beat	         0.1190 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50000 beats/s	      2409 cpu-ns/beat	         0.1205 driver-cores
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=1s-10               	 2000000	     20000 ns/op	     50001 beats/s	      2384 cpu-ns/beat	         0.1192 driver-cores
+PASS

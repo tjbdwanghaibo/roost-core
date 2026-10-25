@@ -1,0 +1,6 @@
+=== RUN   TestCrowdTerrainContainsMinuteOfMotion
+    runner_native_test.go:105: escaped terrain: tick=88 body={ID:59 Position:[25.104715 4.922041 -0.39619344] Rotation:[0.4861968 0.15019542 0.8538422 0.109579265] Velocity:[8.638413 4.5461807 -6.6856837] AngularVelocity:[-13.115361 -2.7857802 -19.403915] Sleeping:false}
+--- FAIL: TestCrowdTerrainContainsMinuteOfMotion (0.01s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/physics	0.535s
+FAIL

@@ -147,7 +147,7 @@ func TestAGroupsBeatTicksOnlyThatGroupWithItsElapsed(t *testing.T) {
 	}
 }
 
-// 冻结的组停心跳（D21 A5）：暂停期间驱动上没有这个组的登记，迟到的拍不 tick；解冻后按当前动作重新挂上；打断模式
+// 冻结的组停心跳：暂停期间驱动上没有这个组的登记，迟到的拍不 tick；解冻后按当前动作重新挂上；打断模式
 // 取消当前动作后组空闲，解冻也不再挂。
 func TestAFrozenGroupStopsBeatingAndResumesOnRecover(t *testing.T) {
 	b, d, _ := newBeatRunnerForTest(t, map[ActionKind]ActionGroup{1: 1})

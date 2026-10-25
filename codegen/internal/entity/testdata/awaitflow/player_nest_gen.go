@@ -64,7 +64,7 @@ func invokeStampVisit(es []entity.IThreadSafeEntity, params []any, opts ...nest.
 		err = nest.NewParamTypeMismatchError(handlerNameStampVisit.String(), 0, "string", params[0])
 		return
 	}
-	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传（D22-1）。
+	// 业务时间：这条消息冻结的 fctx.Now，执行时填，不在消息里传。
 	p1 := fctx.NowMilli()
 	ret, err = StampVisit(e0, p0, p1)
 	return

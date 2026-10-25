@@ -67,6 +67,107 @@ func (s *respStandIn) executions(name string) int {
 	return s.executed[name]
 }
 
+// 重定向是服务端拒绝执行后的换节点，不能与回复丢失后的危险重放混为一谈。
+// 固定初始槽表、用 RESP 回复控制切换窗口，验证生产 Eval 的 NoRetry 标记仍能跟随 MOVED / ASK。
+func TestScriptFollowsClusterRedirectsWithoutReplayingUnknownWrites(t *testing.T) {
+	for _, redirect := range []string{"MOVED", "ASK"} {
+		t.Run(redirect, func(t *testing.T) {
+			destination := newRESPStandIn(t, nil)
+			origin := newRESPStandIn(t, map[string][]standInAction{
+				"eval": {{reject: redirect + " 42 " + destination.listener.Addr().String()}},
+			})
+			cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+				Addrs: []string{origin.listener.Addr().String()},
+				ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+					return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: origin.listener.Addr().String()}}}}, nil
+				},
+			})
+			t.Cleanup(func() { _ = cluster.Close() })
+			client := &Client{rdb: cluster, resends: 3}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := client.Eval(ctx, "return 1", []string{"k"}); err != nil {
+				t.Fatal(err)
+			}
+			if origin.executions("eval") != 0 || destination.executions("eval") != 1 {
+				t.Fatalf("script executions: origin=%d destination=%d", origin.executions("eval"), destination.executions("eval"))
+			}
+		})
+	}
+}
+
+// 槽位视图反复指回同一节点时，每轮最多四次发送；配置一次安全重发后仍须在八次拒绝后退出。
+func TestClusterRedirectBudgetReturnsTheLastRedirect(t *testing.T) {
+	origin := newRESPStandIn(t, nil)
+	origin.mu.Lock()
+	origin.plans = map[string][]standInAction{"eval": make([]standInAction, 8)}
+	for i := range origin.plans["eval"] {
+		origin.plans["eval"][i].reject = "MOVED 42 " + origin.listener.Addr().String()
+	}
+	origin.mu.Unlock()
+	cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+		Addrs: []string{origin.listener.Addr().String()},
+		ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+			return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: origin.listener.Addr().String()}}}}, nil
+		},
+	})
+	t.Cleanup(func() { _ = cluster.Close() })
+	client := &Client{rdb: cluster, resends: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := client.Eval(ctx, "return 1", []string{"k"})
+	if err == nil || !strings.HasPrefix(err.Error(), "MOVED ") {
+		t.Fatalf("want last redirect, got %v", err)
+	}
+	origin.mu.Lock()
+	remaining, executed := len(origin.plans["eval"]), origin.executed["eval"]
+	origin.mu.Unlock()
+	if remaining != 0 || executed != 0 {
+		t.Fatalf("redirects remaining=%d executed=%d, want 0/0", remaining, executed)
+	}
+}
+
+// Cluster 单轮重定向耗尽仍证明命令没执行，应使用 Roost 已配置的重发预算。
+// 拓扑恢复后执行一次；若执行后的回复丢失，不能再重发。
+func TestClusterRedirectExhaustionUsesSafeResendBudget(t *testing.T) {
+	for _, dropReply := range []bool{false, true} {
+		t.Run(fmt.Sprint("drop=", dropReply), func(t *testing.T) {
+			server := newRESPStandIn(t, nil)
+			server.mu.Lock()
+			plans := make([]standInAction, 4)
+			for i := range plans {
+				plans[i].reject = "MOVED 7629 " + server.listener.Addr().String()
+			}
+			if dropReply {
+				plans = append(plans, standInAction{drop: true})
+			}
+			server.plans = map[string][]standInAction{"eval": plans}
+			server.mu.Unlock()
+			cluster := goredis.NewClusterClient(&goredis.ClusterOptions{
+				Addrs: []string{server.listener.Addr().String()},
+				ClusterSlots: func(context.Context) ([]goredis.ClusterSlot, error) {
+					return []goredis.ClusterSlot{{Start: 0, End: 16383, Nodes: []goredis.ClusterNode{{Addr: server.listener.Addr().String()}}}}, nil
+				},
+			})
+			t.Cleanup(func() { _ = cluster.Close() })
+			client := &Client{rdb: cluster, resends: 1}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := client.Eval(ctx, "return 1", []string{"k"})
+			if got := server.executions("eval"); got != 1 {
+				t.Fatalf("executions=%d want 1, err=%v", got, err)
+			}
+			if dropReply {
+				if err == nil || IsDefinitelyNotExecuted(err) {
+					t.Fatalf("lost reply must remain unknown: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // next 取出这次调用的处理方式，并在执行时计数。
 func (s *respStandIn) next(name string) (standInAction, int) {
 	s.mu.Lock()
@@ -330,6 +431,8 @@ func TestIsDefinitelyNotExecuted(t *testing.T) {
 		resend bool
 	}{
 		{"nil", nil, false, false},
+		{"MOVED", errors.New("MOVED 7629 127.0.0.1:6379"), true, true},
+		{"ASK", errors.New("ASK 7629 127.0.0.1:6379"), true, true},
 		{"dial refused", dial, true, true},
 		{"dial timeout", fmt.Errorf("redis: %w", dialTimeout), true, true},
 		{"pool timeout", fmt.Errorf("get conn: %w", goredis.ErrPoolTimeout), true, true},

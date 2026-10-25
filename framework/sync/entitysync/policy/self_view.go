@@ -55,9 +55,10 @@ type SelfViewConfig struct {
 // Direct 重新提交；会话被关闭 / 丢掉或玩家实体被注销（事务内新建被回滚）时 Direct 删除绑定并告诉
 // SelfView（forgotten），会话仍开着的在线玩家在下一个政策阶段重新 Bind。
 //
-// Manager 因推送被拒丢掉会话（SessionLost）之后不在原连接上重开：传输的约定是“推送在活着的连接上被拒就关闭
-// 该玩家的连接”（wiring/selfsync.PushPlayerFrame），所以丢会话之后等连接关闭（Deactivate）收尾；期间有新连接
-// 激活就按正常激活开新会话（新 epoch、全量）。在线却超过 selfStrandedPeriods 个周期没有打开的会话的玩家数由
+// Manager 丢掉会话（SessionLost：推送被拒，或这一轮的帧编码失败，原因见 entitysync.SessionLossReason）之后不在
+// 原连接上重开：两种情况连接都会关闭——推送在活着的连接上被拒时由传输关闭该玩家的连接
+// （wiring/selfsync.PushPlayerFrame），编码失败时由接入层断开该玩家（wiring/selfsync.DisconnectLostPlayer），
+// 所以丢会话之后等连接关闭（Deactivate）收尾；期间有新连接激活就按正常激活开新会话（新 epoch、全量）。在线却超过 selfStrandedPeriods 个周期没有打开的会话的玩家数由
 // Stranded 报告，正常为 0。
 //
 // 首个全量排在登录回包之后：会话在激活回调里只登记事实，真正的打开与第一次推送发生在之后的政策阶段；
@@ -92,7 +93,7 @@ type selfFacts struct {
 	subjectID   int64
 	connections map[string]struct{}
 	reset       bool // 有连接新激活：它的客户端需要从全量开始
-	lost        bool // Manager 丢掉了会话（推送被拒）
+	lost        bool // Manager 丢掉了会话（推送被拒或编码失败）
 	loaded      bool // 实体刚从权威加载发布
 }
 
@@ -175,9 +176,10 @@ func (v *SelfView) Deactivate(playerID int64, connection string) {
 	v.pending[playerID] = struct{}{}
 }
 
-// SessionLost 接 ManagerConfig.SessionLost：Manager 因推送被拒丢掉了玩家会话。SelfView 不在原连接上重开：
-// 传输拒收时已经关闭了这名玩家的连接（或玩家本来就没有连接），关闭通知随后到达，由 Deactivate 收尾；
-// 在那之前有新连接激活，就按正常激活开新会话。它在 Flush 的推送阶段被调用，这里只记事实。
+// SessionLost 接 ManagerConfig.SessionLost：Manager 丢掉了玩家会话（推送被拒或编码失败，见
+// entitysync.SessionLossReason）。SelfView 不在原连接上重开：推送被拒时传输已经关闭了这名玩家的连接（或玩家本来
+// 就没有连接），编码失败时接入层断开它（wiring/selfsync.DisconnectLostPlayer，在调用本方法之前），关闭通知随后
+// 到达，由 Deactivate 收尾；在那之前有新连接激活，就按正常激活开新会话。它在 Flush 的推送阶段被调用，这里只记事实。
 //
 // “连接活着、同步会话已死”不是由政策自己恢复的状态：跟不上的连接由传输断开（慢消费者规则只在传输一处），
 // 恢复走客户端重连与新激活这一条正常路径。

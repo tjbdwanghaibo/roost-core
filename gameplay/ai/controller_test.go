@@ -464,7 +464,7 @@ func equalEvents(got, want []string) bool {
 	return true
 }
 
-// D22-1：没有 Now 钩子时，AI 的缺省时间是本次执行冻结的业务时间（fctx.Now）。
+// 没有 Now 钩子时，AI 的缺省时间是本次执行冻结的业务时间（fctx.Now）。
 func TestControllerDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
 	var mu sync.Mutex
 	tick := time.UnixMilli(1_800_000_000_000)

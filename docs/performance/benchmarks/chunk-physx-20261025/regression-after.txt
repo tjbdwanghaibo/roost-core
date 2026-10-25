@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	3.162s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/physics	3.185s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync	1.903s
+?   	github.com/tjbdwanghaibo/roost-core/cmd/physics-viewer	[no test files]

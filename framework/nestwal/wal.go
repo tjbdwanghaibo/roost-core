@@ -979,9 +979,7 @@ func (w *WAL) writeBatch(batch []appendRequest, fences []corenest.CommitFence) e
 		start = end
 	}
 	if err == nil && requireSync {
-		syncStart := time.Now()
 		err = w.syncActiveLocked()
-		metrics.ObserveDuration("nestwal.fsync.duration", nil, time.Since(syncStart))
 	}
 	w.stateMu.Unlock()
 	if cap(buffer) <= w.opts.BatchMaxBytes*2 {
@@ -1230,6 +1228,10 @@ func (w *WAL) syncActiveLocked() error {
 
 // fsyncSegment 刷段文件；测试缝 syncFile 仅在包内测试设置。
 func (w *WAL) fsyncSegment(file *os.File) error {
+	// 在物理刷段入口计时，覆盖写批、ticker、Ack、轮转与关闭；不把未刷盘的空操作算进去。
+	// async 追加可能等后台刷盘释放 writer / stateMu，不能只统计 strict 批次。
+	start := time.Now()
+	defer func() { metrics.ObserveDuration("nestwal.fsync.duration", nil, time.Since(start)) }()
 	if w.opts.syncFile != nil {
 		return w.opts.syncFile(file)
 	}

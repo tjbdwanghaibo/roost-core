@@ -157,7 +157,7 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 	target := newGameDemo(t)
 	counts, declares := bootstrapModCounts(t, target)
 	// The real game service of the demo: 22 service Mods (etcd among them, for the
-	// match / activity clients that route by key, RR-20261006-59; the account serving guard) + lock, ops, statslog.
+	// match / activity clients that route by key; the account serving guard) + lock, ops, statslog.
 	if counts["game"] != 25 || !declares["game"].dataengine || !declares["game"].playerTCP {
 		t.Fatalf("game registers %d Mods (declaring: %+v), want 25 with dataengine and the player TCP Mod", counts["game"], declares["game"])
 	}

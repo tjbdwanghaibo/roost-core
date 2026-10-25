@@ -197,8 +197,8 @@ type NestMgr struct {
 	stopDone          chan struct{}
 	stopErr           error
 	fenceErr          error
-	// fenced 在 Fence 时与 fenceErr 一起置位、不再复位：批量作业逐目标读它判断“引擎已 fence”，不必每个目标取一次
-	// lifecycleMu；错误本身仍从 FenceError 取。
+	// fenced 在 Fence 时与 fenceErr 一起置位、不再复位：每个 handler 开始前的检查（checkHandlerStart，普通派发、广播与
+	// 批量作业逐目标共用）读它判断“引擎已 fence”，不必每次取 lifecycleMu；错误本身仍从 FenceError 取。
 	fenced     atomic.Bool
 	groupLocks *entityLockGroupLockManager
 	handlers   map[HandlerName]handlerEntry

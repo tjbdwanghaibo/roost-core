@@ -1,0 +1,9 @@
+syntax = "proto3";
+package roost.physicsviewer;
+// Gate 业务消息 0x50485902；响应为空消息。
+message RoomInput {
+  uint64 sequence = 1;
+  float acceleration_x = 2;
+  float acceleration_z = 3;
+  bool jump = 4;
+}

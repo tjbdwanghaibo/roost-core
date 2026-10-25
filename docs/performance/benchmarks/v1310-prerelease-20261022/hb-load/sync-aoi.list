@@ -1,0 +1,33 @@
+g1-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=loop
+g1-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=100ms
+g1-hb200-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=200ms
+g1-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=100ms
+g1-hb200-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=200ms
+g1-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=loop
+g1-hb200-r3 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=200ms
+g1-loop-r3 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=loop
+g1-hb100-r3 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -move-driver=heartbeat -move-period=100ms
+g2-v4-sync-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=sync -move-driver=loop
+g2-v4-sync-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v4-async-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=async -move-driver=loop
+g2-v4-async-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v8-sync-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=sync -move-driver=loop
+g2-v8-sync-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v8-async-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=async -move-driver=loop
+g2-v8-async-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v16-sync-loop-r1 <scratch>/bin/aoi-after-d16 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=sync -move-driver=loop
+g2-v16-sync-hb100-r1 <scratch>/bin/aoi-after-d16 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v16-async-loop-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=async -move-driver=loop
+g2-v16-async-hb100-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v4-sync-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v4-sync-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=sync -move-driver=loop
+g2-v4-async-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v4-async-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=4 -apply-mode=async -move-driver=loop
+g2-v8-sync-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v8-sync-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=sync -move-driver=loop
+g2-v8-async-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v8-async-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=8 -apply-mode=async -move-driver=loop
+g2-v16-sync-hb100-r2 <scratch>/bin/aoi-after-d16 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=sync -move-driver=heartbeat -move-period=100ms
+g2-v16-sync-loop-r2 <scratch>/bin/aoi-after-d16 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=sync -move-driver=loop
+g2-v16-async-hb100-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=async -move-driver=heartbeat -move-period=100ms
+g2-v16-async-loop-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -views-per-player=16 -apply-mode=async -move-driver=loop

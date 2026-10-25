@@ -1,0 +1,6 @@
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+Warning: NumberLong: specifying a number as argument is deprecated and may lead to loss of precision, pass a string instead
+{"_id":{"high":0,"low":2049028,"unsigned":false},"level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"item_id":{"high":0,"low":7001,"unsigned":false},"level":1}}},"_version":{"high":0,"low":4,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000007","name":"p2001"}
+{"_id":{"high":0,"low":2050052,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"388b4d1c5a9e273c0000000000000008","name":"p2002","level":7,"items":{"1001":4},"equipment":{"slots":{"1":{"level":1,"item_id":{"high":0,"low":7001,"unsigned":false}}}},"_version":{"high":0,"low":4,"unsigned":false}}
+{"_id":{"high":0,"low":2051076,"unsigned":false},"level":7,"items":{"1001":3},"_version":{"high":0,"low":3,"unsigned":false},"_schema":{"high":0,"low":2,"unsigned":false},"_last_tx":"schema-migration:player_weapon_to_equipment","name":"p2003"}

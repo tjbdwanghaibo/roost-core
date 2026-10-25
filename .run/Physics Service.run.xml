@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Physics Service" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="roost-core" />
+    <working_directory value="$PROJECT_DIR$" />
+    <envs>
+      <env name="CGO_ENABLED" value="1" />
+      <env name="GOWORK" value="off" />
+    </envs>
+    <go_parameters value="-tags=physx" />
+    <parameters value="-scenario physics-service -log-level debug" />
+    <kind value="PACKAGE" />
+    <package value="github.com/tjbdwanghaibo/roost-core/cmd/physics-viewer" />
+    <directory value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>

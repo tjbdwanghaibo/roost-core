@@ -1,0 +1,30 @@
+{
+  "baseline": "ee3aa6d15dee53b96a33556ae993e444119b8060",
+  "uncommitted": true,
+  "static_boxes": 43,
+  "sha256": {
+    "gameplay/physics/runner_native_test.go": "1060c8f7bc8a406df1ed793a89b066e59451565cc16576dc46dafe350f9e59ae",
+    "gameplay/physics/scene.go": "b9ac673c5c9c19dcddbc41a9614dfdac169d3db1e56a00e61735539df15b0f77",
+    "gameplay/physics/terrain.go": "d4487704bc294edbec2cb26c4e5d58e8a379c68dea9e8c0e30e6aff40379b9bc",
+    "gameplay/physics/interest_test.go": "1d5a2cd7935edf6bd30951f05c3492aba795473e4192f74271fe740abf019902",
+    "gameplay/physics/interest.go": "2410c6641db9d3425fb72ce7525041503d702830ebb3c96c486e609cc0636f07",
+    "gameplay/physics/crowd.go": "88bfc07ab868e56eb3a309eedde335f6e6e1f31d2dad65c3f0221ef1154048c7",
+    "gameplay/physics/terrain_test.go": "f7cac705799934aa358dcf571362464c6bf9754688dd13b3e1ed265ad2051486",
+    "gameplay/physics/state_test.go": "ca049d4d412f71c3399fa3b4cb916840dcc2a8f140fc174ed48f0feab517d151",
+    "gameplay/physics/state.go": "e8b1f319e84865cab43fa62bde5c70fdc6a0c2da4e589bb105b6ab273e39740e",
+    "infra/physics/physx/native_test.go": "afe303e31fb9fb77a5c5b8297bf5f0aed910c1d29216469e2ab843b92e3caf3a",
+    "infra/physics/physx/disabled.go": "73d27eab448de0661675ae0b22588dd92097c9492eacd57c436c2f0612525f8b",
+    "infra/physics/physx/types.go": "08bd054f0384d0f9902fece09997421313b5c9c22386ce7397237cbda58ae2d0",
+    "infra/physics/physx/native.go": "ef53e8d5dfb4a00f68e8ef5311754656ec12349056bf17c65910a78584559bd6",
+    "cmd/physics-viewer/controls.go": "83f5dd5f30aeabd0b07462c2e7bbbb461ab07dc98bdf638a9062fa4e97410841",
+    "cmd/physics-viewer/controls_test.go": "41f39eec93007d035692ffa9381c1c9a018d462b6b464dd095a214f9dd710dc8",
+    "cmd/physics-viewer/main.go": "a04f0a237f65d669580e725cc24ed4a3ec96c3100d883ea43994fd96b163ec0e",
+    "client/physics-viewer/CrowdViewer.cs": "dde1ea1858ca7f137da84f377ef8899be1dc7e5edf092f4047df30116d182364",
+    "client/physics-viewer/PhysicsComparison.cs": "cdb9442fea0eacc46f4b8e30d28b7fff72f1904bf0639e7ed472dff56c9346d3",
+    "client/physics-viewer/ChunkReplica.cs": "1ea6c10ab1da6c9b7a5cb7c86da6c8cd795d6a77373712f2f4a50744fc5466ed",
+    "gameplay/physics/terrain.json": "5bc1bd0c1fa6463c549aaffed9ac48e6fa1ea3117c8f6ef43233d90328484c8d",
+    "scripts/physics/measure-crowd.py": "ce013e2c032d301b4b0cb17c152551004dc8eda8f5851e53b8a00a8810e383d9",
+    "artifacts/physics-viewer": "ab3779ed12a33cd85370cae0b6aeb82168f74377126ecdbcca1f962a5db71adf",
+    "infra/physics/physx/lib/libroost_physx.dylib": "bfff85741dc3f70d7ac0d840b1bc2f9061fa218ba1d4b980b81d38f0d738fcc8"
+  }
+}

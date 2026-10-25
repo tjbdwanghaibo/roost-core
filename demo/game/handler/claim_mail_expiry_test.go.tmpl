@@ -39,7 +39,7 @@ func TestAnInFlightMailClaimCannotReplayAfterItsLedgerWasPruned(t *testing.T) {
 		t.Fatal("premise: the expired ledger entry was not pruned")
 	}
 	before := len(committer.records)
-	// 调用方在邮件过期前取得预留，随后延迟进入 Nest：handler 的 nowUnix 是执行时这条消息冻结的业务时间（D22-1），
+	// 调用方在邮件过期前取得预留，随后延迟进入 Nest：handler 的 nowUnix 是执行时这条消息冻结的业务时间，
 	// 调用方读过的旧时间带不进来。
 	result, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "old", 1002, 1, expires)
 	if err == nil {

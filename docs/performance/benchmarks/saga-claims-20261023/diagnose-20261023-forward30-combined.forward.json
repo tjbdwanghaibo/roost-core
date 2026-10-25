@@ -1,0 +1,87 @@
+{
+  "Mode": "forward",
+  "Rate": 30,
+  "Planned": 1800,
+  "Started": 1800,
+  "Completed": 1800,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 60.3397685,
+  "CompletionTPS": 29.831072354876536,
+  "ExpectedTerminalTPS": 29.831072354876536,
+  "P50MS": 375.774625,
+  "P95MS": 454.965459,
+  "P99MS": 502.800709,
+  "MaxMS": 598.111084,
+  "FinalStats": {
+    "Started": 1800,
+    "Dispatched": 3600,
+    "Completed": 1800,
+    "Compensated": 0,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 0,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 1800,
+  "EffectDocuments": 3600,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 1800,
+      "P50MS": 375.774625,
+      "P99MS": 502.800709,
+      "MaxMS": 598.111084,
+      "ServerP99MS": 468.978458
+    }
+  ],
+  "Harness": {
+    "AdmitLag": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 0.241917,
+      "P95MS": 1.01375,
+      "P99MS": 1.444001,
+      "MaxMS": 11.738042
+    },
+    "ObserveLag": {
+      "Samples": 1800,
+      "NegativeDurations": 1,
+      "P50MS": 25.180167,
+      "P95MS": 47.697333,
+      "P99MS": 50.189541,
+      "MaxMS": 51.164542
+    }
+  },
+  "Server": {
+    "Start": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 16.522917,
+      "P95MS": 23.231958,
+      "P99MS": 27.295292,
+      "MaxMS": 34.519625
+    },
+    "Completion": {
+      "Samples": 1800,
+      "NegativeDurations": 0,
+      "P50MS": 349.477083,
+      "P95MS": 425.092292,
+      "P99MS": 468.978458,
+      "MaxMS": 569.971625
+    },
+    "TerminalMissing": 0
+  }
+}

@@ -1,0 +1,11 @@
+o-v0-p0-r1 <scratch>/bin/aoi-p0 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p1-r1 <scratch>/bin/aoi-p1 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p2-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p1-r2 <scratch>/bin/aoi-p1 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p2-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p0-r2 <scratch>/bin/aoi-p0 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p2-r3 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p0-r3 <scratch>/bin/aoi-p0 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-v0-p1-r3 <scratch>/bin/aoi-p1 -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50
+o-alliance1000-p2-r1 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -alliance-size=1000
+o-alliance1000-p2-r2 <scratch>/bin/aoi-after -players=1000 -entities=10000 -hz=20 -dirty=1 -visible=50 -alliance-size=1000

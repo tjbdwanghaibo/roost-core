@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -237,7 +238,8 @@ func TestEachSessionGetsASnapshotThenDeltasAndOnePackServesThemAll(t *testing.T)
 func TestAFailingSessionIsClosedAloneAndTheOthersStillReceive(t *testing.T) {
 	transport := newRecordingTransport()
 	var lost []SessionID
-	manager := newTestManager(t, transport, ManagerConfig{SessionLost: func(session SessionID, _ error) { lost = append(lost, session) }})
+	var cause error
+	manager := newTestManager(t, transport, ManagerConfig{SessionLost: func(session SessionID, err error) { lost, cause = append(lost, session), err }})
 	packs := 0
 	state := testSubject(t, 1002, &packs)
 	if err := manager.Register(state); err != nil {
@@ -266,6 +268,10 @@ func TestAFailingSessionIsClosedAloneAndTheOthersStillReceive(t *testing.T) {
 	}
 	if len(lost) != 1 || lost[0] != 2 {
 		t.Fatalf("SessionLost reported %v, want [2]", lost)
+	}
+	// 传输拒收：原因归为 push_refused，原错误照常看得到；接入层在拒收时已断开连接，不再断第二次。
+	if LossReason(cause) != SessionLossPushRefused || cause == nil || !strings.Contains(cause.Error(), "session not found") {
+		t.Fatalf("SessionLost cause %v (reason %q), want a push_refused loss carrying the transport error", cause, LossReason(cause))
 	}
 	if manager.Stats().SessionsLost != 1 || manager.Stats().Sessions != 2 {
 		t.Fatalf("stats after a lost session: %+v", manager.Stats())
@@ -455,7 +461,8 @@ func TestChangingTheProfileResendsAFullSnapshotOnTheSameObject(t *testing.T) {
 // 一个会话一 tick 一帧，帧里装它订阅的所有变化；超过对象上限才分成多帧。
 func TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit(t *testing.T) {
 	transport := newRecordingTransport()
-	manager := newTestManager(t, transport, ManagerConfig{Limits: frame.Limits{MaxObjects: 2}})
+	var cause error
+	manager := newTestManager(t, transport, ManagerConfig{Limits: frame.Limits{MaxObjects: 2}, SessionLost: func(_ SessionID, err error) { cause = err }})
 	packs := 0
 	states := []*entity.SubjectSyncState{testSubject(t, 2001, &packs), testSubject(t, 2002, &packs), testSubject(t, 2003, &packs)}
 	open(t, manager, 1)
@@ -482,6 +489,10 @@ func TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit(t *testing.T) {
 	// rather than sent a frame it could not apply.
 	if manager.Stats().Sessions != 0 || manager.Stats().SessionsLost != 1 {
 		t.Fatalf("a session over its object budget was not closed: %+v", manager.Stats())
+	}
+	// 没有帧交给传输：原因是 object_limit，不是推送拒收（接入层据此断开仍活着的连接）。
+	if LossReason(cause) != SessionLossObjectLimit || !errors.Is(cause, frame.ErrObjectLimit) || len(transport.take(1)) != 0 {
+		t.Fatalf("SessionLost cause %v (reason %q), want an object_limit loss wrapping frame.ErrObjectLimit and no frame pushed", cause, LossReason(cause))
 	}
 }
 

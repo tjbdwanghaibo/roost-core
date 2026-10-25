@@ -66,7 +66,7 @@ HB_DELIVERY=1 HB_MODE=x|y|z|none HB_RES=10ms|50ms HB_ACTIVE=0.2|1 HB_SHARDS=1|4 
 | `wheel10` | **B：单层时间轮**，10ms 一格、6000 格；取出当前格全部条目放回“当前格 + 周期”；取空的格把切片还给空闲池 | D20 原方案（[wheel.go](../../gameplay/heartbeat/internal/bench/wheel.go)）。第一版每格保留扩容后的数组，5 万个 100ms 登记常驻约 5.9 KB/登记，改为空闲池后约 51 B |
 | `heap10` | **C：二叉最小堆**，按到期格号排序，句柄记堆下标；每格反复取堆顶、加周期后下沉 | [heap.go](../../gameplay/heartbeat/internal/bench/heap.go)，10ms 分辨率与时间轮相同 |
 
-负载：5 万 / 50 万登记；`d20mix` 按 [D20 §7](../maintenance/DESIGN-TODO.md#7-性能估算推算未实测) 示例的不合并登记比例（100ms 8000 : 200ms 10000 : 1s 16000，即 23.5% / 29.4% / 47.1%），每秒触发 4.3 次 / 登记；`all100` 全部 100ms。实体 ID 形状与正式 EntityID 相同。
+负载：5 万 / 50 万登记；`d20mix` 按 [D20 §7](https://github.com/tjbdwanghaibo/roost-core/blob/603ec537068a672ba5806d058e154526dd38a3a4/docs/maintenance/DESIGN-TODO.md#7-性能估算推算未实测) 示例的不合并登记比例（100ms 8000 : 200ms 10000 : 1s 16000，即 23.5% / 29.4% / 47.1%），每秒触发 4.3 次 / 登记；`all100` 全部 100ms。实体 ID 形状与正式 EntityID 相同。
 
 ### 3.2 登记 / 撤销 / 改档（ns/op，10 遍中位数 ± 95% 置信区间）
 

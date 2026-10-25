@@ -18,8 +18,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-// 对比三（DESIGN-TODO D20 §7 后续微基准，第 4 期补）：上面两组对比用的是原型结构与原型驱动，这里用正式的
-// gameplay/heartbeat.Driver。§7 列的六项与本包的对应：
+// 对比三：上面两组对比用的是原型结构与原型驱动，这里用正式的 gameplay/heartbeat.Driver。设计列出的六项微基准
+// 与本包的对应：
 //
 //	BenchmarkWheelAdvance（只测出入环）        → BenchmarkSched op=step / add / remove / settier（原型 TierRing 与正式环同一写法）
 //	时间轮与最小堆对照                          → BenchmarkSched impl=wheel10 / heap10 / tier10
@@ -99,8 +99,9 @@ func (g driverGetter) lookup(id int64) entity.IThreadSafeEntity {
 	return nil
 }
 
-// inlineClient 是 BenchmarkDriverDispatch 的假客户端：Dispatch 在驱动 goroutine 上直接调用心跳 handler（不经 Nest
-// 的队列与 worker，不开事务），所以驱动 goroutine 的耗时 = 环推进 + 核对 + 一次 handler 调用。其他方法不用。
+// inlineClient 是 BenchmarkDriverDispatch 的假客户端：Dispatch 与 DispatchTryBatch 在驱动 goroutine 上直接调用心跳
+// handler（不经 Nest 的队列与 worker，不开事务），所以驱动 goroutine 的耗时 = 环推进 + 核对 + 一次 handler 调用。
+// 其他方法不用。
 type inlineClient struct {
 	lookup func(int64) entity.IThreadSafeEntity
 }
@@ -108,6 +109,16 @@ type inlineClient struct {
 func (c inlineClient) Dispatch(_ context.Context, name nest.HandlerName, id int64, params nest.Params, _ ...nest.SendOpt) error {
 	_, err := nest.GetHandler(name)([]entity.IThreadSafeEntity{c.lookup(id)}, params)
 	return err
+}
+
+// DispatchTryBatch 逐个目标直接执行（批量投递方式的驱动侧开销：凭据、目标切片、整批交出）；不交回。
+func (c inlineClient) DispatchTryBatch(_ context.Context, targets []nest.TryBatchTarget, _ func(nest.TryBatchTarget, error)) error {
+	for _, target := range targets {
+		if _, err := nest.GetHandler(target.Handler)([]entity.IThreadSafeEntity{c.lookup(target.ID)}, target.Params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var errUnused = errors.New("bench: not used by the heartbeat driver")
@@ -145,8 +156,8 @@ func registerAll(t testing.TB, d *heartbeat.Driver, list []*driverEntity, period
 	}
 }
 
-// BenchmarkDriverDispatch：正式驱动 + 假客户端（handler 在驱动 goroutine 上直接执行，回调为空）。驱动按真实时间
-// 每 10ms 推进一格，所以 ns/op 只是 1 / 目标速率，看的是附加指标：
+// BenchmarkDriverDispatch：正式驱动 + 假客户端（handler 在驱动 goroutine 上直接执行，回调为空），两种投递方式
+// （delivery=dispatch / batch）各一组。驱动按真实时间每 10ms 推进一格，所以 ns/op 只是 1 / 目标速率，看的是附加指标：
 //
 //	cpu-ns/beat   进程 CPU / 拍（≈ 驱动 goroutine：环推进、核对、一次 handler 调用；含 GC）
 //	driver-cores  进程 CPU / 墙钟（§7：超过约 0.25 核才考虑 heartbeat.shards）
@@ -154,49 +165,55 @@ func registerAll(t testing.TB, d *heartbeat.Driver, list []*driverEntity, period
 //
 // 命令：go test -run '^$' -bench BenchmarkDriverDispatch -benchtime 2000000x -count 10 ./gameplay/heartbeat/internal/bench
 func BenchmarkDriverDispatch(b *testing.B) {
-	for _, tc := range []struct {
-		regs   int
-		period time.Duration
-	}{
-		{50_000, 100 * time.Millisecond},  // 50 万拍/s（§7 的 5 万实体 10Hz）
-		{100_000, 100 * time.Millisecond}, // 100 万拍/s
-		{50_000, time.Second},             // 5 万拍/s
-	} {
-		b.Run(fmt.Sprintf("regs=%d/period=%v", tc.regs, tc.period), func(b *testing.B) {
-			byID, list := newDriverEntities(b, 1, tc.regs)
-			getter := driverGetter(byID)
-			d := heartbeat.NewDriver(heartbeat.Config{Name: "bench-inline"})
-			var executed atomic.Int64
-			registerAll(b, d, list, tc.period, func(heartbeat.Beat) error {
-				executed.Add(1)
-				return nil
-			})
-			if err := d.Bind(inlineClient{lookup: getter.lookup}, getter.lookup); err != nil {
-				b.Fatal(err)
-			}
-			if err := d.Start(); err != nil {
-				b.Fatal(err)
-			}
-			defer func() { _ = d.Stop(context.Background()) }()
-			// 预热一个周期：每格切片容量进入稳态。
-			for executed.Load() < int64(tc.regs) {
-				time.Sleep(time.Millisecond)
-			}
-			b.ResetTimer()
-			base, cpu0, wall0 := executed.Load(), cpuTime(), time.Now()
-			for executed.Load()-base < int64(b.N) {
-				time.Sleep(time.Millisecond)
-			}
-			wall, cpu, beats := time.Since(wall0), cpuTime()-cpu0, executed.Load()-base
-			b.StopTimer()
-			b.ReportMetric(float64(cpu)/float64(beats), "cpu-ns/beat")
-			b.ReportMetric(float64(cpu)/float64(wall), "driver-cores")
-			b.ReportMetric(float64(beats)/wall.Seconds(), "beats/s")
-			if s := d.Stats(); s.SkippedInflight+s.SkippedQueueFull+s.SkippedRejected+s.Stalled > 0 {
-				b.Fatalf("inline delivery skipped beats: %+v", s)
-			}
-		})
+	for _, delivery := range []heartbeat.Delivery{heartbeat.DeliveryDispatch, heartbeat.DeliveryBatch} {
+		for _, tc := range []struct {
+			regs   int
+			period time.Duration
+		}{
+			{50_000, 100 * time.Millisecond},  // 50 万拍/s（§7 的 5 万实体 10Hz）
+			{100_000, 100 * time.Millisecond}, // 100 万拍/s
+			{50_000, time.Second},             // 5 万拍/s
+		} {
+			benchDriverDispatch(b, delivery, tc.regs, tc.period)
+		}
 	}
+}
+
+func benchDriverDispatch(b *testing.B, delivery heartbeat.Delivery, regs int, period time.Duration) {
+	b.Run(fmt.Sprintf("delivery=%s/regs=%d/period=%v", delivery, regs, period), func(b *testing.B) {
+		byID, list := newDriverEntities(b, 1, regs)
+		getter := driverGetter(byID)
+		d := heartbeat.NewDriver(heartbeat.Config{Name: "bench-inline", Delivery: delivery})
+		var executed atomic.Int64
+		registerAll(b, d, list, period, func(heartbeat.Beat) error {
+			executed.Add(1)
+			return nil
+		})
+		if err := d.Bind(inlineClient{lookup: getter.lookup}, getter.lookup); err != nil {
+			b.Fatal(err)
+		}
+		if err := d.Start(); err != nil {
+			b.Fatal(err)
+		}
+		defer func() { _ = d.Stop(context.Background()) }()
+		// 预热一个周期：每格切片容量进入稳态。
+		for executed.Load() < int64(regs) {
+			time.Sleep(time.Millisecond)
+		}
+		b.ResetTimer()
+		base, cpu0, wall0 := executed.Load(), cpuTime(), time.Now()
+		for executed.Load()-base < int64(b.N) {
+			time.Sleep(time.Millisecond)
+		}
+		wall, cpu, beats := time.Since(wall0), cpuTime()-cpu0, executed.Load()-base
+		b.StopTimer()
+		b.ReportMetric(float64(cpu)/float64(beats), "cpu-ns/beat")
+		b.ReportMetric(float64(cpu)/float64(wall), "driver-cores")
+		b.ReportMetric(float64(beats)/wall.Seconds(), "beats/s")
+		if s := d.Stats(); s.SkippedInflight+s.SkippedQueueFull+s.SkippedRejected+s.Stalled > 0 {
+			b.Fatalf("inline delivery skipped beats: %+v", s)
+		}
+	})
 }
 
 // openLoopResult 是一次开环投递的结果（HB_OUT 时追加一行 JSON）。
@@ -347,8 +364,8 @@ func TestDriverOpenLoop(t *testing.T) {
 	}
 }
 
-// TestBusyShortPoolSkipsBeatsAndResumes：快池被业务占满时心跳按规则跳拍（§7 最后一项；维护者决定 ④⑤：在途跳拍、
-// ErrQueueFull 跳拍，不累积、不补发，没有水位让路），业务放开后照常跳，第一拍报告跳过的拍数、Elapsed 覆盖这段
+// TestBusyShortPoolSkipsBeatsAndResumes：快池被业务占满时心跳按规则跳拍（在途跳拍、ErrQueueFull 跳拍，
+// 不累积、不补发，没有水位让路），业务放开后照常跳，第一拍报告跳过的拍数、Elapsed 覆盖这段
 // 时间（夹在上限内）。快池 1 个 worker、队列 8 格；20 个 50ms 登记；一条业务消息占住 worker（只在测试里这样模拟，
 // 正式业务不得在快池里阻塞）。
 //

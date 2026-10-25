@@ -1,0 +1,10 @@
+seeded r8tcp6405_dao.player count=2
+conns=2 same=true ok=1082 bad=0 elapsed=10.008s TPS=108 P50=17.244ms P99=29.571666ms
+nest_handler_lock_hold_count{handler="handlerTap"} 1082
+nest_handler_lock_hold_sum_nanos{handler="handlerTap"} 138655059
+nestwal_append_total 1082
+nestwal_batch_total 1082
+nestwal_fsync_duration_count 1082
+nestwal_fsync_duration_sum_nanos 6907666936
+player_tcp_dispatch_duration_count 1082
+player_tcp_dispatch_duration_sum_nanos 19721702284

@@ -6,17 +6,20 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 func testRecord(sequence byte, durability corenest.DurabilityPolicy) corenest.CommitRecord {
@@ -51,6 +54,102 @@ func testOptions(dir string) Options {
 	opts.GroupCommitInterval = time.Millisecond
 	opts.RetainSegments = 8
 	return opts
+}
+
+// fsync 观测应覆盖 async 的后台与 Ack 刷盘，不能只统计 strict 写批。
+func TestSegmentSyncMetricsIncludeAsyncFlushAndAck(t *testing.T) {
+	for _, viaAck := range []bool{false, true} {
+		t.Run(fmt.Sprint("ack=", viaAck), func(t *testing.T) {
+			opts := testOptions(t.TempDir())
+			opts.GroupCommitInterval = time.Hour
+			calls := int64(0)
+			opts.syncFile = func(*os.File) error { calls++; return nil }
+			w, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close(context.Background())
+			beforeCalls := calls
+			count := func() int64 {
+				for _, m := range metrics.Snapshot() {
+					if m.Name == "nestwal.fsync.duration" {
+						return m.Count
+					}
+				}
+				return 0
+			}
+			before := count()
+			fence, err := w.Append(context.Background(), testRecord(1, corenest.DurabilityAsync))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if viaAck {
+				err = w.Ack(context.Background(), fence)
+			} else {
+				err = w.syncActive()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls-beforeCalls != 1 || count()-before != 1 {
+				t.Fatalf("physical segment syncs=%d recorded=%d, want 1/1", calls-beforeCalls, count()-before)
+			}
+		})
+	}
+}
+
+// async 不要求自己的记录立即持久，但追加仍可能等正在刷盘的 stateMu。
+// 用屏障控制已有刷盘与下一批写入的交错，不用睡眠猜测是否发生等待。
+func TestAsyncAppendWaitsForAnOngoingSegmentSync(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.GroupCommitInterval = time.Hour
+	var block atomic.Bool
+	syncEntered, batchEntered, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	opts.syncFile = func(*os.File) error {
+		if block.Load() {
+			close(syncEntered)
+			<-release
+		}
+		return nil
+	}
+	opts.beforeProcessBatch = func() {
+		if block.Load() {
+			close(batchEntered)
+		}
+	}
+	w, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { unblock(); block.Store(false); _ = w.Close(context.Background()) }()
+	if _, err := w.Append(context.Background(), testRecord(1, corenest.DurabilityAsync)); err != nil {
+		t.Fatal(err)
+	}
+	block.Store(true)
+	synced := make(chan error, 1)
+	go func() { synced <- w.syncActive() }()
+	<-syncEntered
+	appended := make(chan error, 1)
+	go func() {
+		_, err := w.Append(context.Background(), testRecord(2, corenest.DurabilityAsync))
+		appended <- err
+	}()
+	<-batchEntered
+	select {
+	case err := <-appended:
+		t.Fatalf("append returned before segment sync released: %v", err)
+	default:
+	}
+	unblock()
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-appended; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWALReplayAckAndReopen(t *testing.T) {

@@ -1,0 +1,13 @@
+{
+  "attempted": 7383,
+  "duplicateEffects": 0,
+  "effects": 7383,
+  "errors": {},
+  "failovers": [
+    "45404: OK \u003cnil\u003e",
+    "45405: OK \u003cnil\u003e",
+    "45403: OK \u003cnil\u003e"
+  ],
+  "missingSuccessfulEffects": 0,
+  "successful": 7383
+}

@@ -76,7 +76,7 @@ func TestModBindsNestAndReadsTheFrozenBusinessTime(t *testing.T) {
 	}
 }
 
-// heartbeat.delivery：缺省 batch（维护者 2026-10-22 决定）；配置值在 Init 时交给驱动（Provide 时按它接 Nest 批量作业
+// heartbeat.delivery：缺省 batch；配置值在 Init 时交给驱动（Provide 时按它接 Nest 批量作业
 // 或单目标 Dispatch）；未知值在声明解码时拒绝（enum），不进驱动。驱动构造时先设成与缺省相反的 dispatch，确认“不配”
 // 时是声明的缺省把它改成 batch，而不是驱动自己的空值缺省。
 // 变异核对：Init 不把配置交给驱动（去掉 SetDelivery）时不配与配 batch 两种情况下驱动都仍是 dispatch，本用例变红；

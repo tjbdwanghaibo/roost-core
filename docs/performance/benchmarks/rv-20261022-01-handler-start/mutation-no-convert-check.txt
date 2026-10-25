@@ -1,0 +1,5 @@
+--- FAIL: TestTryBatchBusyTargetIsHandedBackAfterFenceInsideGroup (0.00s)
+    try_batch_test.go:608: busy target hand-back <nil> (hand-backs 0), handler ran 1; want ErrNestFenced once and only the fencing target ran (converted 1)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.542s
+FAIL

@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 
-// Buff 的推进（DESIGN-TODO D20 P5；维护者 2026-10-21 决定：心跳只是驱动方式之一，推进只用接口）：与驱动无关的部分
+// Buff 的推进（心跳只是驱动方式之一，推进只用接口）：与驱动无关的部分
 // 在这里，驱动方式经 skill.Driver 接进来——实体心跳（AttachBeat，beat.go）、Lockstep 房间的定步长循环、测试里手动
 // 调用都是这一份规则。本文件不依赖心跳与时间域：驱动给时刻（StepBuffs）或 tick（StepBuffsToTick），输入侧的“现在”
 // 由 BuffDriveConfig.Now 给出。

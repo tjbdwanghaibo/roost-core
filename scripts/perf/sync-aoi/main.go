@@ -26,6 +26,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -100,7 +101,9 @@ func parseConfig() config {
 	flag.Int64Var(&c.MoveAmplitude, "move-amplitude", 48, "X span of the per-entity back-and-forth movement (16 phases; 48 = the original 3 per phase)")
 	// 缺省仍是 loop：已有报告的复跑命令保持原负载；heartbeat 的正式对比放在 v1.31 发版前的压测，之后再定缺省。
 	flag.StringVar(&c.MoveDriver, "move-driver", moveDriverLoop, "who moves entities in Nest mode: loop (harness loop sends one change request per moved entity, the original load) or heartbeat (each entity's own heartbeat drives a movement patrol along the same band; requires -nest)")
-	flag.DurationVar(&c.MovePeriod, "move-period", 100*time.Millisecond, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods)")
+	// 缺省跟 movement.DefaultMovePeriod（2026-10-22 起 200ms，MMO / SLG 一般 2～5Hz）；与 2026-10-22 之前的心跳模式
+	// 结果对照时显式加 -move-period=100ms（docs/performance/HB-DRIVEN-LOAD-20261021.md §4）。
+	flag.DurationVar(&c.MovePeriod, "move-period", movement.DefaultMovePeriod, "heartbeat mode: movement heartbeat tier (one of gameplay/heartbeat.Periods); default movement.DefaultMovePeriod (200ms); add -move-period=100ms to compare with runs before 2026-10-22")
 	flag.Float64Var(&c.MoveSpeed, "move-speed", 30, "heartbeat mode: patrol speed in cells per second (keep at least one cell per beat so every beat is a change)")
 	flag.IntVar(&c.Movers, "movers", 0, "heartbeat mode: patrolling entities; 0 derives the count from -dirty so the change rate equals the loop driver's (entities×dirty%×20/s ÷ beats per second)")
 	flag.StringVar(&c.Role, "role", "server", "server or client")
@@ -432,7 +435,8 @@ func runServer(c config) error {
 		views = max(views, policy.DefaultMaxViewsPerPlayer)
 	}
 	interest, err := policy.NewInterest(policy.InterestConfig{Manager: manager, ApplyMode: applyMode, AOI: policy.AOIConfig{Bounds: worldBounds(c), BlockSize: c.Block, EnterRadius: c.EnterRadius, LeaveRadius: c.LeaveRadius, MaxVisible: c.Visible - 1},
-		MaxViewsPerPlayer: views, MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize)})
+		MaxViewsPerPlayer: views, MaxPlayersPerView: max(policy.DefaultMaxPlayersPerView, c.AllianceSize),
+		MaxSpatialViews: max(policy.DefaultMaxSpatialViews, c.Players*c.ViewsPerPlayer)})
 	if err != nil {
 		return err
 	}
@@ -841,6 +845,7 @@ func runServer(c config) error {
 	report := map[string]any{"recovery_admission_caught_up_ms": milliseconds(recoveryCaughtUp), "recovery_samples": recoverySamples, "startup_ticks": startupTicks, "startup_ms": milliseconds(startupDuration), "recovery_setup_ms": milliseconds(recoverySetup), "config": c, "server_gomaxprocs": runtime.GOMAXPROCS(0), "elapsed_seconds": duration.Seconds(), "server_active_work_ms": quantiles(work), "flush_ms": quantiles(flush), "flush_start_lag_ms": quantiles(lag), "server_work_over_50ms_ticks": overWork, "slow_ticks": slow, "visible_final": quantiles(visible), "manager_stats": stats, "manager_counters": manager.Counters(), "frames": transport.frames, "sync_bytes": transport.bytes, "server_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "server_gc_cycles": after.NumGC - before.NumGC, "server_gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6, "server_heap_alloc_end": after.HeapAlloc, "go_version": runtime.Version(), "goos": runtime.GOOS, "goarch": runtime.GOARCH}
 	report["flush_failures_before_stop"] = failuresBeforeStop
 	report["move_driver"] = c.MoveDriver
+	report["interest_metrics"] = interestMetrics()
 	if moving != nil {
 		report["heartbeat"] = moving.report()
 	}

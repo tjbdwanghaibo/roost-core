@@ -1,0 +1,9 @@
+# RV-20261022-02 心跳投递代际：BenchmarkDriverDispatch 同机交替 10 轮（Apple M5，macOS，机器有后台负载）
+# old = 1df1fdb8 + 本次的基准文件（gameplay/heartbeat/internal/bench/driver_test.go，补两种投递方式）
+# new = 修复提交
+GOWORK=off go test -c -o bench-old ./gameplay/heartbeat/internal/bench   # 在 1df1fdb8 的 worktree 里
+GOWORK=off go test -c -o bench-new ./gameplay/heartbeat/internal/bench   # 在修复 worktree 里
+for i in {1..10}; do for v in old new; do
+  ./bench-$v -test.run '^$' -test.bench BenchmarkDriverDispatch -test.benchtime 1000000x -test.benchmem -test.count 1 -test.timeout 0 >> $v.txt
+done; done
+benchstat old.txt new.txt > benchstat.txt

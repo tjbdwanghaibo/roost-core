@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/saga
+cpu: Apple M5
+                           │ /tmp/roost-saga-timeline-bench/before.txt │ /tmp/roost-saga-timeline-bench/after.txt │
+                           │                  sec/op                   │         sec/op          vs base          │
+MongoCommandInboxHandle-10                                114.7µ ± 13%             114.7µ ± 30%  ~ (p=0.739 n=10)
+
+                           │ /tmp/roost-saga-timeline-bench/before.txt │ /tmp/roost-saga-timeline-bench/after.txt │
+                           │                   B/op                    │          B/op           vs base          │
+MongoCommandInboxHandle-10                                288.8Ki ± 0%             288.8Ki ± 0%  ~ (p=0.315 n=10)
+
+                           │ /tmp/roost-saga-timeline-bench/before.txt │ /tmp/roost-saga-timeline-bench/after.txt │
+                           │                 allocs/op                 │       allocs/op         vs base          │
+MongoCommandInboxHandle-10                                 2.006k ± 0%              2.006k ± 0%  ~ (p=0.861 n=10)

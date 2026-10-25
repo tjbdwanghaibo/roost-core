@@ -15,11 +15,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 批量作业（DESIGN-TODO D20 选项 C，设计见 docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：一个 Nest
+// 批量作业（设计见 docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md）：一个 Nest
 // 作业带一批互不相干的单目标投递，worker 逐个目标在该目标自己的 Guard 作用域与事务里执行。为心跳设计：按批付请求
 // 上下文、当前消息登记、准入与指标，逐目标付事务与实体锁。
 //
-// 同 ID 顺序（维护者 2026-10-21 的硬约束）：
+// 同 ID 顺序（硬约束，与单目标 Dispatch 相同）：
 //   - 准入时不登记同 ID 顺序；执行到某个目标时，若该 ID 有任何已准入、尚未完成的作业（q.tails 有登记，含尚未开始的），
 //     或实体锁 / 锁组取不到，就在当场把这个目标准入成一条单目标作业（与 Dispatch 相同的 admitLocked），排在那条
 //     冲突作业之后执行——不交回调用方等下一轮，也不在 worker 上等；
@@ -32,9 +32,9 @@ const MaxTryBatchTargets = 1024
 // tryBatchGroup 是一次持 q.mu 安排（认领 / 转单目标 / 交回）的目标数上限：一组执行完后在同一次持锁里撤销本组
 // 认领并安排下一组，把逐目标的队列锁摊到一组上。代价是认领了还没轮到执行的目标上，新准入的同 ID 消息最多多等本组
 // 其余目标的执行时间（等在依赖队列里，不占 worker）；时间片只在一组结束后检查，组越大，一个 worker 一次被批量作业
-// 占住的时间越长。2026-10-22 起取 4（原 8）：维护者决定心跳缺省走批量作业时要求压低普通业务消息 p99，同时段对照
+// 占住的时间越长。取 4：心跳缺省走批量作业，普通业务消息的 p99 随组变大而升高，同时段对照
 // 组 4 / 8 / 16 的业务 p99 0.187 / 0.235 / 0.316ms、进程 CPU 不升（docs/performance/NEST-BATCH-HEARTBEAT-20261021.md
-// §3A、§3F）；“时间片 100µs + 组 4”待补测。
+// §3A、§3F）；“时间片 100µs + 组 4”的组合尚未测量。
 const tryBatchGroup = 4
 
 // tryBatchSlice 是一个 worker 连续执行同一批量作业的时间片：每组目标结束后检查，超过且还有剩余目标时把作业放回
@@ -280,6 +280,8 @@ type tryBatchPlan struct {
 // prepareTryBatchGroupLocked 为 b.next 起至多 tryBatchGroup 个目标做安排：引擎已 fence 则交回；该 ID 有已准入、尚未
 // 完成的作业（q.tails 有登记）则当场转成单目标作业排在它后面（约束 1）；否则认领为该 ID 的尾作业（约束 2）。
 // 遇到本组已认领的同一个 ID（同一实体的两个登记）时本组到此为止，留给下一组，免得它被当成冲突。调用方持有 q.mu。
+// 这里读的 fence 只决定本组的安排（已 fence 时不认领、不转），不代表执行时：组内每个目标开始前由 tryBatchExec.run
+// 调用 checkHandlerStart 再查一次。
 func (q *dispatchQueue) prepareTryBatchGroupLocked(b *tryBatchJob) {
 	fenced := b.mgr.fenced.Load()
 	n := 0
@@ -356,11 +358,16 @@ func (q *dispatchQueue) finishTryBatchGroupLocked(b *tryBatchJob, start int) (co
 
 // convertTryBatchTargetLocked 把冲突的目标准入成一条单目标作业：消息与 Dispatch 建的相同（MsgTypeSingle、同一
 // handler 与参数、批的上下文快照），走 admitLocked 登记到该 ID 的 tails 后面，所以紧跟在冲突作业之后执行。
-// 不阻塞：容量不足返回 ErrWorkerQueueFull，队列停止中返回 ErrWorkerClosed，调用方据此交回（算跳拍）。
+// 不阻塞：容量不足返回 ErrWorkerQueueFull，队列停止中返回 ErrWorkerClosed，引擎已 fence 返回 errTryBatchFenced（转成的
+// 作业只会被 checkHandlerStart 拒绝、不执行，所以直接交回 ErrNestFenced；同组前面取锁失败的目标在收尾时才转，此时同组
+// 后面的目标可能已经 fence 了引擎），调用方据此交回（算跳拍）。
 // 调用方持有 q.mu。
 func (q *dispatchQueue) convertTryBatchTargetLocked(b *tryBatchJob, item *tryBatchItem) error {
 	if q.stopping {
 		return worker.ErrWorkerClosed
+	}
+	if b.mgr.fenced.Load() {
+		return errTryBatchFenced
 	}
 	msg := GenMsg(MsgTypeSingle)
 	msg.Tid = item.id
@@ -531,7 +538,7 @@ func (exec *tryBatchExec) resetMsg(item *tryBatchItem) {
 	*exec.msg = Msg{Type: MsgTypeTryBatch, getter: exec.getter, engine: exec.mgr}
 	if item != nil {
 		// 每个目标是一次独立执行：恢复请求上下文快照（前一个目标写的 KV、Meta、Base 不带过来），并重新冻结业务时间与
-		// Frozen 派生值（时间域的域时间），Beat.Now 是这一拍自己冻结的时刻（D22-1），不是整批共用一个。
+		// Frozen 派生值（时间域的域时间），Beat.Now 是这一拍自己冻结的时刻，不是整批共用一个。
 		exec.ctx.ApplySnapshot(exec.ctxSnapshot)
 		exec.ctx.Refreeze()
 		exec.msg.Name = item.target.Handler.String()
@@ -592,8 +599,10 @@ func (exec *tryBatchExec) entry(name HandlerName) (handlerEntry, bool) {
 func (exec *tryBatchExec) run(item *tryBatchItem) (busy bool, handBack error) {
 	exec.resetMsg(item)
 	defer exec.resetMsg(nil)
-	if cause := nestBaseContext().Err(); cause != nil {
-		return false, errors.Join(ErrNestCanceled, cause)
+	// 每个目标开始前都检查：组准备时读到的 fence 状态不代表执行时，同组前一个目标可能已经 fence 了
+	// 引擎（handler 主动 Fence，或 invokeTryBatchTransaction 遇到提交结果未知）。没开始的目标交回 ErrNestFenced。
+	if err := exec.mgr.checkHandlerStart(); err != nil {
+		return false, err
 	}
 	entry, ok := exec.entry(item.target.Handler)
 	if !ok {

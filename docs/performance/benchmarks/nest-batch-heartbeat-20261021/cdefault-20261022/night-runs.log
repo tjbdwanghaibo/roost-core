@@ -1,0 +1,41 @@
+20:31:16 round=1 Cg8s200 start loadavg={ 5.25 4.79 4.19 }
+20:31:36 Cg8s200 r1 DISCARDED: 16111 17 go  go build -o /Users/whb/ai-game-blackbox-server/dist/.linux-amd64-prod.tmp-3968815228/ai-game-blackbox-server ./server
+20:32:08 round=1 Cg8s200 start loadavg={ 5.33 5.00 4.31 }
+20:32:26 Cg8s200 r1 ok loadavg_end={ 5.00 4.95 4.30 }
+20:32:57 round=1 Cg4s100 start loadavg={ 3.90 4.68 4.23 }
+20:33:18 Cg4s100 r1 ok loadavg_end={ 3.95 4.65 4.23 }
+20:33:49 round=1 Cg8s100 start loadavg={ 3.38 4.44 4.17 }
+20:34:10 Cg8s100 r1 ok loadavg_end={ 4.10 4.53 4.20 }
+20:34:41 round=1 none start loadavg={ 3.30 4.28 4.12 }
+20:35:02 none r1 DISCARDED: 14137 21.7 Libra  /Users/whb/Library/Application Support/Claude/claude-code/2.1.308/a93ded4b1b47/claude.app/Contents/MacOS/claude --outpu
+20:35:33 round=1 none start loadavg={ 3.85 4.30 4.14 }
+20:35:52 none r1 ok loadavg_end={ 3.94 4.30 4.15 }
+20:36:23 round=1 X start loadavg={ 5.23 4.56 4.24 }
+20:36:41 X r1 ok loadavg_end={ 5.48 4.67 4.29 }
+20:37:12 round=1 Cg4s200 start loadavg={ 4.12 4.41 4.21 }
+20:37:31 Cg4s200 r1 ok loadavg_end={ 3.80 4.32 4.18 }
+20:38:02 round=2 Cg8s100 start loadavg={ 3.50 4.20 4.14 }
+20:38:21 Cg8s100 r2 ok loadavg_end={ 3.44 4.14 4.12 }
+20:38:52 round=2 none start loadavg={ 4.20 4.25 4.16 }
+20:39:11 none r2 ok loadavg_end={ 4.41 4.30 4.18 }
+20:39:42 round=2 X start loadavg={ 3.67 4.13 4.12 }
+20:40:00 X r2 ok loadavg_end={ 4.34 4.26 4.17 }
+20:40:31 round=2 Cg4s200 start loadavg={ 4.54 4.33 4.20 }
+20:40:50 Cg4s200 r2 ok loadavg_end={ 4.59 4.36 4.21 }
+20:41:21 round=2 Cg8s200 start loadavg={ 3.53 4.11 4.12 }
+20:41:40 Cg8s200 r2 ok loadavg_end={ 3.36 4.04 4.10 }
+20:42:11 round=2 Cg4s100 start loadavg={ 4.05 4.17 4.14 }
+20:42:30 Cg4s100 r2 ok loadavg_end={ 4.79 4.33 4.20 }
+20:43:01 round=3 X start loadavg={ 4.23 4.23 4.16 }
+20:43:19 X r3 ok loadavg_end={ 5.10 4.41 4.23 }
+20:43:50 round=3 Cg4s200 start loadavg={ 4.43 4.32 4.20 }
+20:44:09 Cg4s200 r3 ok loadavg_end={ 5.09 4.47 4.26 }
+20:44:40 round=3 Cg8s200 start loadavg={ 4.91 4.51 4.28 }
+20:44:59 Cg8s200 r3 ok loadavg_end={ 4.13 4.36 4.23 }
+20:45:30 round=3 Cg4s100 start loadavg={ 3.38 4.15 4.16 }
+20:45:49 Cg4s100 r3 ok loadavg_end={ 3.71 4.19 4.17 }
+20:46:20 round=3 Cg8s100 start loadavg={ 6.78 4.92 4.44 }
+20:46:38 Cg8s100 r3 ok loadavg_end={ 6.00 4.86 4.43 }
+20:47:10 round=3 none start loadavg={ 5.58 4.85 4.44 }
+20:47:28 none r3 ok loadavg_end={ 4.96 4.76 4.41 }
+20:47:28 all done

@@ -79,7 +79,7 @@ func (a *moveAction) TickInterval() time.Duration {
 	return DefaultMovePeriod
 }
 
-// Start 在实体的 Move 上设定这次移动，随即按 0 时长核对一次（D21 A7：Start 即完成）：已经在终点（路径上的点都是
+// Start 在实体的 Move 上设定这次移动，随即按 0 时长核对一次（Start 即完成）：已经在终点（路径上的点都是
 // 当前格）、跟随的目标已在 Keep 以内且 StopWhenReached、目标已消失或不在本场景时，动作不进入运行，直接以 Advance
 // 的结论结束，不占心跳。
 func (a *moveAction) Start(ctx *actionflow.ActionContext) (bool, actionflow.ActionResult, error) {

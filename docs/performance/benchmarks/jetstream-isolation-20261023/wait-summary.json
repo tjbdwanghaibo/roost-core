@@ -1,0 +1,185 @@
+{
+  "Windows": {
+    "before": [
+      1792725307.630724,
+      1792725314.0
+    ],
+    "mixed": [
+      1792725321.0,
+      1792725371.0
+    ],
+    "after": [
+      1792725381.0,
+      1792725412.630724
+    ]
+  },
+  "Stages": {
+    "before": {
+      "MongoElapsedSeconds": 5.003999948501587,
+      "Nodes": [
+        {
+          "host": "127.0.0.1:28117",
+          "pid": 33879,
+          "SyncOperations": 1,
+          "SyncPerSecond": 0.19984012995432646,
+          "SyncMeanMS": 5.409,
+          "SyncSecondsPerWallSecond": 0.0010809352629229517,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28118",
+          "pid": 30150,
+          "SyncOperations": 4,
+          "SyncPerSecond": 0.7993605198173058,
+          "SyncMeanMS": 6.3555,
+          "SyncSecondsPerWallSecond": 0.005080335783698887,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28119",
+          "pid": 75886,
+          "SyncOperations": 1,
+          "SyncPerSecond": 0.19984012995432646,
+          "SyncMeanMS": 5.098,
+          "SyncSecondsPerWallSecond": 0.0010187849825071564,
+          "FlowControlMicros": 0
+        }
+      ],
+      "MessageCount": 720,
+      "DeliveryMeanMS": 1.8392664986111114,
+      "PubAckMeanMS": 1.4443575694444444
+    },
+    "mixed": {
+      "MongoElapsedSeconds": 49.037999868392944,
+      "Nodes": [
+        {
+          "host": "127.0.0.1:28117",
+          "pid": 33879,
+          "SyncOperations": 4651,
+          "SyncPerSecond": 94.84481448024485,
+          "SyncMeanMS": 10.066478606751236,
+          "SyncSecondsPerWallSecond": 0.9547532959266747,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28118",
+          "pid": 30150,
+          "SyncOperations": 4732,
+          "SyncPerSecond": 96.49659473672729,
+          "SyncMeanMS": 9.984823119188505,
+          "SyncSecondsPerWallSecond": 0.9635014300502383,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28119",
+          "pid": 75886,
+          "SyncOperations": 5175,
+          "SyncPerSecond": 105.53040527526706,
+          "SyncMeanMS": 9.181704347826088,
+          "SyncSecondsPerWallSecond": 0.9689489809437686,
+          "FlowControlMicros": 0
+        }
+      ],
+      "MessageCount": 5880,
+      "DeliveryMeanMS": 46.73656004183673,
+      "PubAckMeanMS": 20.826373335714283
+    },
+    "after": {
+      "MongoElapsedSeconds": 31.028000116348267,
+      "Nodes": [
+        {
+          "host": "127.0.0.1:28117",
+          "pid": 33879,
+          "SyncOperations": 4,
+          "SyncPerSecond": 0.12891581748745867,
+          "SyncMeanMS": 6.43525,
+          "SyncSecondsPerWallSecond": 0.0008296055144861685,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28118",
+          "pid": 30150,
+          "SyncOperations": 4,
+          "SyncPerSecond": 0.12891581748745867,
+          "SyncMeanMS": 10.61625,
+          "SyncSecondsPerWallSecond": 0.0013686025474012333,
+          "FlowControlMicros": 0
+        },
+        {
+          "host": "127.0.0.1:28119",
+          "pid": 75886,
+          "SyncOperations": 7,
+          "SyncPerSecond": 0.2256026806030527,
+          "SyncMeanMS": 6.558714285714285,
+          "SyncSecondsPerWallSecond": 0.001479663524166679,
+          "FlowControlMicros": 0
+        }
+      ],
+      "MessageCount": 3720,
+      "DeliveryMeanMS": 1.4156007190860214,
+      "PubAckMeanMS": 1.0683097857526882
+    }
+  },
+  "Stacks": {
+    "baseline-nats-1": {
+      "SampleTicks": 171,
+      "PwriteThreadSamples": 1,
+      "MeanThreadsInPwrite": 0.005847953216374269
+    },
+    "baseline-nats-2": {
+      "SampleTicks": 172,
+      "PwriteThreadSamples": 8,
+      "MeanThreadsInPwrite": 0.046511627906976744
+    },
+    "baseline-nats-3": {
+      "SampleTicks": 169,
+      "PwriteThreadSamples": 9,
+      "MeanThreadsInPwrite": 0.05325443786982249
+    },
+    "baseline-mongo-1": {
+      "JournalThreadSamples": 165,
+      "FcntlSamples": 0,
+      "FcntlFraction": 0.0
+    },
+    "baseline-mongo-2": {
+      "JournalThreadSamples": 166,
+      "FcntlSamples": 1,
+      "FcntlFraction": 0.006024096385542169
+    },
+    "baseline-mongo-3": {
+      "JournalThreadSamples": 155,
+      "FcntlSamples": 0,
+      "FcntlFraction": 0.0
+    },
+    "mixed-nats-1": {
+      "SampleTicks": 176,
+      "PwriteThreadSamples": 382,
+      "MeanThreadsInPwrite": 2.1704545454545454
+    },
+    "mixed-nats-2": {
+      "SampleTicks": 176,
+      "PwriteThreadSamples": 404,
+      "MeanThreadsInPwrite": 2.2954545454545454
+    },
+    "mixed-nats-3": {
+      "SampleTicks": 174,
+      "PwriteThreadSamples": 413,
+      "MeanThreadsInPwrite": 2.3735632183908044
+    },
+    "mixed-mongo-1": {
+      "JournalThreadSamples": 168,
+      "FcntlSamples": 161,
+      "FcntlFraction": 0.9583333333333334
+    },
+    "mixed-mongo-2": {
+      "JournalThreadSamples": 161,
+      "FcntlSamples": 154,
+      "FcntlFraction": 0.9565217391304348
+    },
+    "mixed-mongo-3": {
+      "JournalThreadSamples": 152,
+      "FcntlSamples": 144,
+      "FcntlFraction": 0.9473684210526315
+    }
+  }
+}

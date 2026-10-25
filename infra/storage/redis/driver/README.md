@@ -80,3 +80,9 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 2. 写命令的返回值（SETNX 的 bool、DEL / HSET / SADD 的计数、INCR 的新值、LPOP 弹出的元素）只在 `err == nil` 时可信。
 3. 多步写，例如先写再 EXPIRE：第一步结果未知时，仍要补上后面那步保护，例如照样补发 EXPIRE，不要留下永不过期的键。`cache.RedisJSONHashStore.Set` 和 `cache.RedisRawSortedSetStore.SetScore` 都是这样做的。
 4. 吞掉错误的路径（best effort）要写明：结果未知时会留下什么状态，留多久。
+
+## 重定向预算与安全重发
+
+MOVED / ASK 表示该次命令未在回复节点执行。Cluster 先在自身 `MaxRedirects` 预算内跟随；预算耗尽仍返回重定向时，Roost 将它归为 `IsDefinitelyNotExecuted`，使用既有 `MaxRetries` 安全重发预算和退避。没有增加或取消任何预算：默认最多四轮，每轮最多四次发送；调用方 context 可更早终止。拓扑持续异常时仍会返回最后错误，不能承诺永不外泄 MOVED。
+
+一旦某次发送执行后丢回复，EOF / 读超时仍属结果未知，立即停止重发。多命令业务不能仅凭最后一条的 MOVED 判断前面的写都没执行；pipeline 仍要求每条都证明未执行。`EvalReplicated` 的 WAIT 仍不换连接重放。

@@ -1,0 +1,6215 @@
+{
+  "Config": {
+    "AcrossPct": 30,
+    "Addrs": "127.0.0.1:43400,127.0.0.1:43401,127.0.0.1:43402,127.0.0.1:43403,127.0.0.1:43404,127.0.0.1:43405",
+    "Cluster": true,
+    "Duration": "5m0s",
+    "FaultAt": "1m30s",
+    "FaultCmd": "cd /Users/whb/roost/roost-core-wt-perf1022 \u0026\u0026 ROOST_MIRROR_LOCAL_HOME=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/perf1022/env ROOST_MIRROR_LOCAL_OFFSET=26000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'; sleep 60; ROOST_MIRROR_LOCAL_HOME=/private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/perf1022/env ROOST_MIRROR_LOCAL_OFFSET=26000 bash scripts/mirror-local.sh fault redis-cluster-kill-master 'x:{ranked:10}:p0'",
+    "GroupSize": 10,
+    "InflightCap": 32,
+    "Partitions": 4,
+    "RatePerPartition": 5,
+    "Retention": "10m0s"
+  },
+  "Fault": "fault at 1m30s took 1m15.799s err=\u003cnil\u003e output=killed cluster master 1 (port 43400); new master 5\nkilled cluster master 5 (port 43404); new master 1",
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Enqueue": {
+        "N": 1196,
+        "P50MS": 8.436125,
+        "P99MS": 15.763208,
+        "MaxMS": 41.0395
+      },
+      "EnqueueLag": {
+        "N": 1196,
+        "P50MS": 1.741,
+        "P99MS": 2.419792,
+        "MaxMS": 6.226
+      },
+      "Candidates": {
+        "N": 1233,
+        "P50MS": 2.967,
+        "P99MS": 7.147084,
+        "MaxMS": 12.247917
+      },
+      "Commit": {
+        "N": 96,
+        "P50MS": 8.519084,
+        "P99MS": 40.114917,
+        "MaxMS": 41.040625
+      },
+      "Across": {
+        "N": 20,
+        "P50MS": 5.38775,
+        "P99MS": 12.247666,
+        "MaxMS": 17.853459
+      },
+      "Sweep": {
+        "N": 236,
+        "P50MS": 3.814458,
+        "P99MS": 8.505625,
+        "MaxMS": 10.093333
+      },
+      "Errors": {
+        "across": {
+          "conflict": 13
+        },
+        "commit": {
+          "conflict": 4
+        }
+      },
+      "StateBytesMax": 154702,
+      "StateBytesAvg": 77376.53813559322,
+      "WaitingAvg": 7.266949152542373,
+      "PingP50MS": 0.073584,
+      "PingP99MS": 0.192292,
+      "CASLostRatio": 0.08002883922134102,
+      "CASExhausted": 0
+    },
+    {
+      "Minute": 1,
+      "Enqueue": {
+        "N": 1158,
+        "P50MS": 17.822209,
+        "P99MS": 38.23425,
+        "MaxMS": 451.792125
+      },
+      "EnqueueLag": {
+        "N": 1200,
+        "P50MS": 2.078084,
+        "P99MS": 2.539584,
+        "MaxMS": 3.353125
+      },
+      "Candidates": {
+        "N": 1197,
+        "P50MS": 6.275208,
+        "P99MS": 11.514041,
+        "MaxMS": 344.964458
+      },
+      "Commit": {
+        "N": 90,
+        "P50MS": 17.997291,
+        "P99MS": 27.812916,
+        "MaxMS": 28.969583
+      },
+      "Across": {
+        "N": 27,
+        "P50MS": 21.332125,
+        "P99MS": 30.303,
+        "MaxMS": 31.086208
+      },
+      "Sweep": {
+        "N": 232,
+        "P50MS": 7.931667,
+        "P99MS": 13.880291,
+        "MaxMS": 15.672875
+      },
+      "Errors": {
+        "across": {
+          "conflict": 10
+        },
+        "candidates": {
+          "other: MOVED 4548 127.0.0.1:43404": 1,
+          "other: dial tcp 127.0.0.1:43400: connect: connection refused": 13
+        },
+        "commit": {
+          "conflict": 2
+        },
+        "enqueue": {
+          "other: MOVED 4548 127.0.0.1:43404": 2,
+          "other: dial tcp 127.0.0.1:43400: connect: connection refused": 40
+        },
+        "sweep": {
+          "other: dial tcp 127.0.0.1:43400: connect: connection refused": 8
+        }
+      },
+      "StateBytesMax": 310254,
+      "StateBytesAvg": 228790.1375,
+      "WaitingAvg": 7.183333333333334,
+      "PingP50MS": 0.091541,
+      "PingP99MS": 0.114167,
+      "CASLostRatio": 0.08473338203067933,
+      "CASExhausted": 0
+    },
+    {
+      "Minute": 2,
+      "Enqueue": {
+        "N": 1157,
+        "P50MS": 27.035834,
+        "P99MS": 50.261708,
+        "MaxMS": 474.533792
+      },
+      "EnqueueLag": {
+        "N": 1200,
+        "P50MS": 2.1195,
+        "P99MS": 2.493084,
+        "MaxMS": 2.667792
+      },
+      "Candidates": {
+        "N": 1190,
+        "P50MS": 8.460792,
+        "P99MS": 15.625125,
+        "MaxMS": 133.274041
+      },
+      "Commit": {
+        "N": 106,
+        "P50MS": 28.647583,
+        "P99MS": 38.525541,
+        "MaxMS": 43.955625
+      },
+      "Across": {
+        "N": 11,
+        "P50MS": 24.384458,
+        "P99MS": 38.051292,
+        "MaxMS": 38.669666
+      },
+      "Sweep": {
+        "N": 232,
+        "P50MS": 10.930875,
+        "P99MS": 254.6655,
+        "MaxMS": 267.468833
+      },
+      "Errors": {
+        "across": {
+          "conflict": 17
+        },
+        "candidates": {
+          "other: MOVED 4548 127.0.0.1:43400": 2,
+          "other: dial tcp 127.0.0.1:43404: connect: connection refused": 13
+        },
+        "commit": {
+          "conflict": 2
+        },
+        "enqueue": {
+          "other: MOVED 4548 127.0.0.1:43400": 3,
+          "other: dial tcp 127.0.0.1:43404: connect: connection refused": 40
+        },
+        "sweep": {
+          "other: dial tcp 127.0.0.1:43404: connect: connection refused": 8
+        }
+      },
+      "StateBytesMax": 460196,
+      "StateBytesAvg": 377734.27118644066,
+      "WaitingAvg": 6.487288135593221,
+      "PingP50MS": 0.090583,
+      "PingP99MS": 0.194708,
+      "CASLostRatio": 0.09485879797248371,
+      "CASExhausted": 0
+    },
+    {
+      "Minute": 3,
+      "Enqueue": {
+        "N": 1200,
+        "P50MS": 36.17375,
+        "P99MS": 51.556667,
+        "MaxMS": 55.305833
+      },
+      "EnqueueLag": {
+        "N": 1200,
+        "P50MS": 2.09625,
+        "P99MS": 2.451167,
+        "MaxMS": 4.01075
+      },
+      "Candidates": {
+        "N": 1250,
+        "P50MS": 9.979542,
+        "P99MS": 19.368083,
+        "MaxMS": 27.660125
+      },
+      "Commit": {
+        "N": 85,
+        "P50MS": 35.038084,
+        "P99MS": 45.229833,
+        "MaxMS": 47.65975
+      },
+      "Across": {
+        "N": 34,
+        "P50MS": 40.181583,
+        "P99MS": 48.726875,
+        "MaxMS": 51.027959
+      },
+      "Sweep": {
+        "N": 240,
+        "P50MS": 13.88225,
+        "P99MS": 22.07725,
+        "MaxMS": 22.97375
+      },
+      "Errors": {
+        "across": {
+          "conflict": 7
+        },
+        "commit": {
+          "conflict": 2
+        }
+      },
+      "StateBytesMax": 617791,
+      "StateBytesAvg": 534258.5208333334,
+      "WaitingAvg": 6.025,
+      "PingP50MS": 0.078084,
+      "PingP99MS": 0.094292,
+      "CASLostRatio": 0.08209483368719038,
+      "CASExhausted": 0
+    },
+    {
+      "Minute": 4,
+      "Enqueue": {
+        "N": 1200,
+        "P50MS": 42.379083,
+        "P99MS": 59.508166,
+        "MaxMS": 75.183792
+      },
+      "EnqueueLag": {
+        "N": 1200,
+        "P50MS": 2.096209,
+        "P99MS": 2.407709,
+        "MaxMS": 3.055875
+      },
+      "Candidates": {
+        "N": 1236,
+        "P50MS": 11.366125,
+        "P99MS": 22.911167,
+        "MaxMS": 27.210083
+      },
+      "Commit": {
+        "N": 95,
+        "P50MS": 40.819541,
+        "P99MS": 66.011542,
+        "MaxMS": 66.034541
+      },
+      "Across": {
+        "N": 25,
+        "P50MS": 47.733667,
+        "P99MS": 56.839541,
+        "MaxMS": 61.055208
+      },
+      "Sweep": {
+        "N": 240,
+        "P50MS": 17.108333,
+        "P99MS": 25.871125,
+        "MaxMS": 27.242166
+      },
+      "Errors": {
+        "across": {
+          "conflict": 5
+        },
+        "commit": {
+          "conflict": 1
+        }
+      },
+      "StateBytesMax": 776487,
+      "StateBytesAvg": 694360.925,
+      "WaitingAvg": 6.0375,
+      "PingP50MS": 0.076708,
+      "PingP99MS": 0.117791,
+      "CASLostRatio": 0.08203677510608204,
+      "CASExhausted": 0
+    },
+    {
+      "Minute": 5,
+      "Enqueue": {
+        "N": 4,
+        "P50MS": 42.93825,
+        "P99MS": 46.230417,
+        "MaxMS": 49.104459
+      },
+      "EnqueueLag": {
+        "N": 4,
+        "P50MS": 2.035166,
+        "P99MS": 2.0535,
+        "MaxMS": 2.106375
+      },
+      "Candidates": {
+        "N": 104,
+        "P50MS": 9.5385,
+        "P99MS": 19.7215,
+        "MaxMS": 22.096959
+      },
+      "Commit": {
+        "N": 0,
+        "P50MS": 0,
+        "P99MS": 0,
+        "MaxMS": 0
+      },
+      "Across": {
+        "N": 0,
+        "P50MS": 0,
+        "P99MS": 0,
+        "MaxMS": 0
+      },
+      "Sweep": {
+        "N": 24,
+        "P50MS": 14.306,
+        "P99MS": 18.0105,
+        "MaxMS": 19.04925
+      },
+      "Errors": {},
+      "StateBytesMax": 779439,
+      "StateBytesAvg": 774878.0833333334,
+      "WaitingAvg": 6.166666666666667,
+      "PingP50MS": 0.091875,
+      "PingP99MS": 0.097708,
+      "CASLostRatio": 0,
+      "CASExhausted": 0
+    }
+  ],
+  "Samples": [
+    {
+      "Second": 1,
+      "StateBytes": [
+        1742,
+        2167,
+        2168,
+        2169
+      ],
+      "Waiting": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.098292,
+      "CASApplied": 20,
+      "CASLost": 0,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 2,
+      "StateBytes": [
+        3834,
+        4249,
+        4245,
+        4249
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.192292,
+      "CASApplied": 40,
+      "CASLost": 0,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 3,
+      "StateBytes": [
+        6743,
+        7160,
+        7152,
+        7160
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.503917,
+      "CASApplied": 64,
+      "CASLost": 1,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 4,
+      "StateBytes": [
+        9197,
+        9204,
+        9196,
+        9204
+      ],
+      "Waiting": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.069125,
+      "CASApplied": 84,
+      "CASLost": 1,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 5,
+      "StateBytes": [
+        11701,
+        11709,
+        12211,
+        12221
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.088375,
+      "CASApplied": 107,
+      "CASLost": 3,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 6,
+      "StateBytes": [
+        13759,
+        13769,
+        15147,
+        15153
+      ],
+      "Waiting": [
+        9,
+        9,
+        5,
+        5
+      ],
+      "PingMS": 0.094875,
+      "CASApplied": 129,
+      "CASLost": 5,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 7,
+      "StateBytes": [
+        16691,
+        17114,
+        17210,
+        17216
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.060667,
+      "CASApplied": 151,
+      "CASLost": 7,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 8,
+      "StateBytes": [
+        19732,
+        18764,
+        20143,
+        20257
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.085833,
+      "CASApplied": 173,
+      "CASLost": 9,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 9,
+      "StateBytes": [
+        22766,
+        21692,
+        22206,
+        23295
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.06925,
+      "CASApplied": 195,
+      "CASLost": 10,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 10,
+      "StateBytes": [
+        24829,
+        23755,
+        25246,
+        26334
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.051958,
+      "CASApplied": 216,
+      "CASLost": 11,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 11,
+      "StateBytes": [
+        27863,
+        26686,
+        28177,
+        29369
+      ],
+      "Waiting": [
+        9,
+        4,
+        5,
+        10
+      ],
+      "PingMS": 0.084375,
+      "CASApplied": 239,
+      "CASLost": 14,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 12,
+      "StateBytes": [
+        30795,
+        28751,
+        30239,
+        32301
+      ],
+      "Waiting": [
+        4,
+        10,
+        10,
+        5
+      ],
+      "PingMS": 0.086333,
+      "CASApplied": 261,
+      "CASLost": 15,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 13,
+      "StateBytes": [
+        32857,
+        31686,
+        33168,
+        34366
+      ],
+      "Waiting": [
+        10,
+        5,
+        5,
+        10
+      ],
+      "PingMS": 0.057958,
+      "CASApplied": 283,
+      "CASLost": 16,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 14,
+      "StateBytes": [
+        35895,
+        35137,
+        35231,
+        37299
+      ],
+      "Waiting": [
+        9,
+        5,
+        10,
+        5
+      ],
+      "PingMS": 0.082292,
+      "CASApplied": 305,
+      "CASLost": 17,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 15,
+      "StateBytes": [
+        38825,
+        37202,
+        38268,
+        40339
+      ],
+      "Waiting": [
+        4,
+        10,
+        10,
+        5
+      ],
+      "PingMS": 0.084375,
+      "CASApplied": 327,
+      "CASLost": 18,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 16,
+      "StateBytes": [
+        40889,
+        39723,
+        41198,
+        42400
+      ],
+      "Waiting": [
+        9,
+        5,
+        5,
+        10
+      ],
+      "PingMS": 0.068875,
+      "CASApplied": 349,
+      "CASLost": 20,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 17,
+      "StateBytes": [
+        43926,
+        42760,
+        43263,
+        45328
+      ],
+      "Waiting": [
+        9,
+        5,
+        10,
+        5
+      ],
+      "PingMS": 0.085333,
+      "CASApplied": 371,
+      "CASLost": 21,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 18,
+      "StateBytes": [
+        46862,
+        44823,
+        45785,
+        47392
+      ],
+      "Waiting": [
+        4,
+        9,
+        5,
+        10
+      ],
+      "PingMS": 0.085542,
+      "CASApplied": 393,
+      "CASLost": 23,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 19,
+      "StateBytes": [
+        49898,
+        47754,
+        48260,
+        50430
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.072042,
+      "CASApplied": 415,
+      "CASLost": 25,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 20,
+      "StateBytes": [
+        51963,
+        50230,
+        51192,
+        53362
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.092042,
+      "CASApplied": 437,
+      "CASLost": 28,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 21,
+      "StateBytes": [
+        54897,
+        52749,
+        53255,
+        55427
+      ],
+      "Waiting": [
+        4,
+        4,
+        10,
+        10
+      ],
+      "PingMS": 0.081959,
+      "CASApplied": 459,
+      "CASLost": 30,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 22,
+      "StateBytes": [
+        56962,
+        55224,
+        56188,
+        58359
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.047791,
+      "CASApplied": 481,
+      "CASLost": 32,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 23,
+      "StateBytes": [
+        59895,
+        57742,
+        58251,
+        60419
+      ],
+      "Waiting": [
+        4,
+        4,
+        10,
+        10
+      ],
+      "PingMS": 0.0755,
+      "CASApplied": 503,
+      "CASLost": 35,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 24,
+      "StateBytes": [
+        62934,
+        59805,
+        61184,
+        63456
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.0915,
+      "CASApplied": 525,
+      "CASLost": 37,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 25,
+      "StateBytes": [
+        64996,
+        62737,
+        62835,
+        66383
+      ],
+      "Waiting": [
+        9,
+        4,
+        10,
+        5
+      ],
+      "PingMS": 0.056959,
+      "CASApplied": 547,
+      "CASLost": 38,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 26,
+      "StateBytes": [
+        68037,
+        66191,
+        66287,
+        69421
+      ],
+      "Waiting": [
+        9,
+        5,
+        10,
+        5
+      ],
+      "PingMS": 0.073834,
+      "CASApplied": 569,
+      "CASLost": 39,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 27,
+      "StateBytes": [
+        70968,
+        67842,
+        69221,
+        71485
+      ],
+      "Waiting": [
+        4,
+        9,
+        5,
+        10
+      ],
+      "PingMS": 0.075917,
+      "CASApplied": 591,
+      "CASLost": 41,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 28,
+      "StateBytes": [
+        74005,
+        70777,
+        71284,
+        74522
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.064042,
+      "CASApplied": 613,
+      "CASLost": 42,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 29,
+      "StateBytes": [
+        76067,
+        72839,
+        74218,
+        77455
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.124708,
+      "CASApplied": 635,
+      "CASLost": 44,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 30,
+      "StateBytes": [
+        78996,
+        76185,
+        76283,
+        79517
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.066291,
+      "CASApplied": 657,
+      "CASLost": 46,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 31,
+      "StateBytes": [
+        82034,
+        77836,
+        79217,
+        82555
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.05075,
+      "CASApplied": 679,
+      "CASLost": 47,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 32,
+      "StateBytes": [
+        85072,
+        80767,
+        81281,
+        85592
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.06525,
+      "CASApplied": 701,
+      "CASLost": 49,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 33,
+      "StateBytes": [
+        87134,
+        82831,
+        84211,
+        88520
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.070041,
+      "CASApplied": 723,
+      "CASLost": 51,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 34,
+      "StateBytes": [
+        90065,
+        85867,
+        87248,
+        90581
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.049833,
+      "CASApplied": 745,
+      "CASLost": 52,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 35,
+      "StateBytes": [
+        93104,
+        89210,
+        89311,
+        93619
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.072542,
+      "CASApplied": 767,
+      "CASLost": 54,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 36,
+      "StateBytes": [
+        95169,
+        90860,
+        92244,
+        96548
+      ],
+      "Waiting": [
+        9,
+        9,
+        5,
+        5
+      ],
+      "PingMS": 0.075333,
+      "CASApplied": 789,
+      "CASLost": 56,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 37,
+      "StateBytes": [
+        98103,
+        94204,
+        94306,
+        98612
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.050125,
+      "CASApplied": 811,
+      "CASLost": 58,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 38,
+      "StateBytes": [
+        100165,
+        95854,
+        96932,
+        101649
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.073584,
+      "CASApplied": 832,
+      "CASLost": 59,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 39,
+      "StateBytes": [
+        103093,
+        98785,
+        99865,
+        104581
+      ],
+      "Waiting": [
+        4,
+        4,
+        5,
+        5
+      ],
+      "PingMS": 0.072833,
+      "CASApplied": 856,
+      "CASLost": 63,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 40,
+      "StateBytes": [
+        105158,
+        100848,
+        101928,
+        106644
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.043458,
+      "CASApplied": 876,
+      "CASLost": 63,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 41,
+      "StateBytes": [
+        108090,
+        104193,
+        105274,
+        109575
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.070333,
+      "CASApplied": 900,
+      "CASLost": 67,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 42,
+      "StateBytes": [
+        110154,
+        105843,
+        106925,
+        111639
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.073708,
+      "CASApplied": 920,
+      "CASLost": 67,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 43,
+      "StateBytes": [
+        113086,
+        109185,
+        110269,
+        114571
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.058583,
+      "CASApplied": 944,
+      "CASLost": 71,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 44,
+      "StateBytes": [
+        115151,
+        110836,
+        112331,
+        116636
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.068417,
+      "CASApplied": 964,
+      "CASLost": 71,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 45,
+      "StateBytes": [
+        118077,
+        113769,
+        115261,
+        119570
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.065084,
+      "CASApplied": 988,
+      "CASLost": 76,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 46,
+      "StateBytes": [
+        120140,
+        115833,
+        117324,
+        121632
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.046709,
+      "CASApplied": 1008,
+      "CASLost": 76,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 47,
+      "StateBytes": [
+        123070,
+        118767,
+        120258,
+        124561
+      ],
+      "Waiting": [
+        4,
+        4,
+        5,
+        5
+      ],
+      "PingMS": 0.070125,
+      "CASApplied": 1032,
+      "CASLost": 82,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 48,
+      "StateBytes": [
+        125131,
+        120831,
+        121910,
+        126624
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.077667,
+      "CASApplied": 1052,
+      "CASLost": 82,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 49,
+      "StateBytes": [
+        128062,
+        123763,
+        125259,
+        129553
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.0795,
+      "CASApplied": 1076,
+      "CASLost": 89,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 50,
+      "StateBytes": [
+        130124,
+        125826,
+        126909,
+        131616
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.09575,
+      "CASApplied": 1096,
+      "CASLost": 89,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 51,
+      "StateBytes": [
+        133072,
+        128772,
+        130275,
+        134563
+      ],
+      "Waiting": [
+        4,
+        4,
+        5,
+        5
+      ],
+      "PingMS": 0.081708,
+      "CASApplied": 1120,
+      "CASLost": 93,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 52,
+      "StateBytes": [
+        135156,
+        130856,
+        132357,
+        136647
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.050959,
+      "CASApplied": 1140,
+      "CASLost": 93,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 53,
+      "StateBytes": [
+        138110,
+        133809,
+        134892,
+        139598
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.078875,
+      "CASApplied": 1164,
+      "CASLost": 97,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 54,
+      "StateBytes": [
+        140194,
+        135894,
+        137391,
+        141681
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.081125,
+      "CASApplied": 1184,
+      "CASLost": 97,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 55,
+      "StateBytes": [
+        143148,
+        138960,
+        140454,
+        144632
+      ],
+      "Waiting": [
+        4,
+        9,
+        10,
+        5
+      ],
+      "PingMS": 0.046166,
+      "CASApplied": 1207,
+      "CASLost": 101,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 56,
+      "StateBytes": [
+        145232,
+        141911,
+        143403,
+        146714
+      ],
+      "Waiting": [
+        9,
+        5,
+        5,
+        10
+      ],
+      "PingMS": 0.066583,
+      "CASApplied": 1229,
+      "CASLost": 103,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 57,
+      "StateBytes": [
+        148187,
+        143993,
+        145069,
+        149667
+      ],
+      "Waiting": [
+        4,
+        10,
+        10,
+        5
+      ],
+      "PingMS": 0.073875,
+      "CASApplied": 1251,
+      "CASLost": 105,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 58,
+      "StateBytes": [
+        150269,
+        147055,
+        148548,
+        151750
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.052542,
+      "CASApplied": 1272,
+      "CASLost": 107,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 59,
+      "StateBytes": [
+        153219,
+        150006,
+        151497,
+        154702
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.094125,
+      "CASApplied": 1296,
+      "CASLost": 111,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 60,
+      "StateBytes": [
+        155304,
+        152089,
+        153580,
+        156785
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.069334,
+      "CASApplied": 1316,
+      "CASLost": 111,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 61,
+      "StateBytes": [
+        158257,
+        155041,
+        156642,
+        159847
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.0645,
+      "CASApplied": 1339,
+      "CASLost": 114,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 62,
+      "StateBytes": [
+        161319,
+        157124,
+        159595,
+        162910
+      ],
+      "Waiting": [
+        4,
+        9,
+        5,
+        10
+      ],
+      "PingMS": 0.084916,
+      "CASApplied": 1361,
+      "CASLost": 116,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 63,
+      "StateBytes": [
+        164382,
+        160605,
+        162660,
+        165973
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.073792,
+      "CASApplied": 1383,
+      "CASLost": 118,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 64,
+      "StateBytes": [
+        167447,
+        163556,
+        164743,
+        169038
+      ],
+      "Waiting": [
+        5,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.07575,
+      "CASApplied": 1405,
+      "CASLost": 119,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 65,
+      "StateBytes": [
+        170513,
+        165224,
+        167695,
+        172105
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.060667,
+      "CASApplied": 1427,
+      "CASLost": 120,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 66,
+      "StateBytes": [
+        172595,
+        168173,
+        169778,
+        175061
+      ],
+      "Waiting": [
+        9,
+        4,
+        10,
+        5
+      ],
+      "PingMS": 0.078875,
+      "CASApplied": 1449,
+      "CASLost": 122,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 67,
+      "StateBytes": [
+        175543,
+        170255,
+        172731,
+        177145
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.057708,
+      "CASApplied": 1471,
+      "CASLost": 124,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 68,
+      "StateBytes": [
+        177627,
+        173621,
+        174816,
+        180098
+      ],
+      "Waiting": [
+        9,
+        5,
+        10,
+        5
+      ],
+      "PingMS": 0.098375,
+      "CASApplied": 1493,
+      "CASLost": 126,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 69,
+      "StateBytes": [
+        180579,
+        175286,
+        177768,
+        182181
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.096208,
+      "CASApplied": 1515,
+      "CASLost": 128,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 70,
+      "StateBytes": [
+        183641,
+        178656,
+        179852,
+        185244
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.077875,
+      "CASApplied": 1537,
+      "CASLost": 129,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 71,
+      "StateBytes": [
+        186703,
+        180323,
+        182802,
+        188306
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.0665,
+      "CASApplied": 1559,
+      "CASLost": 131,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 72,
+      "StateBytes": [
+        189767,
+        183691,
+        184887,
+        191370
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.092833,
+      "CASApplied": 1581,
+      "CASLost": 133,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 73,
+      "StateBytes": [
+        191852,
+        185356,
+        187841,
+        194322
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.056167,
+      "CASApplied": 1603,
+      "CASLost": 135,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 74,
+      "StateBytes": [
+        194806,
+        188723,
+        189925,
+        196407
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.077667,
+      "CASApplied": 1625,
+      "CASLost": 137,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 75,
+      "StateBytes": [
+        197867,
+        190806,
+        192879,
+        199470
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.114167,
+      "CASApplied": 1647,
+      "CASLost": 139,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 76,
+      "StateBytes": [
+        200931,
+        193761,
+        194962,
+        202533
+      ],
+      "Waiting": [
+        4,
+        5,
+        10,
+        10
+      ],
+      "PingMS": 0.052458,
+      "CASApplied": 1669,
+      "CASLost": 140,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 77,
+      "StateBytes": [
+        203994,
+        195845,
+        197914,
+        205597
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.124625,
+      "CASApplied": 1691,
+      "CASLost": 142,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 78,
+      "StateBytes": [
+        206078,
+        198799,
+        199994,
+        208547
+      ],
+      "Waiting": [
+        10,
+        5,
+        10,
+        5
+      ],
+      "PingMS": 0.081166,
+      "CASApplied": 1713,
+      "CASLost": 144,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 79,
+      "StateBytes": [
+        209031,
+        200467,
+        203056,
+        211609
+      ],
+      "Waiting": [
+        4,
+        10,
+        10,
+        5
+      ],
+      "PingMS": 0.063,
+      "CASApplied": 1735,
+      "CASLost": 146,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 80,
+      "StateBytes": [
+        211115,
+        203419,
+        206116,
+        214668
+      ],
+      "Waiting": [
+        9,
+        4,
+        10,
+        5
+      ],
+      "PingMS": 0.068875,
+      "CASApplied": 1757,
+      "CASLost": 147,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 81,
+      "StateBytes": [
+        214068,
+        205918,
+        209067,
+        216753
+      ],
+      "Waiting": [
+        4,
+        10,
+        5,
+        10
+      ],
+      "PingMS": 0.107166,
+      "CASApplied": 1779,
+      "CASLost": 149,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 82,
+      "StateBytes": [
+        216150,
+        208981,
+        212130,
+        219706
+      ],
+      "Waiting": [
+        9,
+        10,
+        5,
+        5
+      ],
+      "PingMS": 0.1015,
+      "CASApplied": 1801,
+      "CASLost": 151,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 83,
+      "StateBytes": [
+        219102,
+        211512,
+        213798,
+        221790
+      ],
+      "Waiting": [
+        4,
+        4,
+        10,
+        10
+      ],
+      "PingMS": 0.100875,
+      "CASApplied": 1823,
+      "CASLost": 153,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 84,
+      "StateBytes": [
+        221186,
+        213595,
+        216863,
+        224854
+      ],
+      "Waiting": [
+        9,
+        9,
+        9,
+        10
+      ],
+      "PingMS": 0.078458,
+      "CASApplied": 1844,
+      "CASLost": 154,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 85,
+      "StateBytes": [
+        224136,
+        216961,
+        220237,
+        227806
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.080666,
+      "CASApplied": 1868,
+      "CASLost": 160,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 86,
+      "StateBytes": [
+        226218,
+        219043,
+        222321,
+        229889
+      ],
+      "Waiting": [
+        9,
+        10,
+        10,
+        10
+      ],
+      "PingMS": 0.102167,
+      "CASApplied": 1888,
+      "CASLost": 160,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 87,
+      "StateBytes": [
+        229167,
+        221574,
+        225276,
+        232839
+      ],
+      "Waiting": [
+        4,
+        4,
+        5,
+        5
+      ],
+      "PingMS": 0.108458,
+      "CASApplied": 1912,
+      "CASLost": 165,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 88,
+      "StateBytes": [
+        231249,
+        223658,
+        227360,
+        234921
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.0895,
+      "CASApplied": 1932,
+      "CASLost": 165,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 89,
+      "StateBytes": [
+        234198,
+        226610,
+        230312,
+        237873
+      ],
+      "Waiting": [
+        4,
+        5,
+        5,
+        5
+      ],
+      "PingMS": 0.087458,
+      "CASApplied": 1956,
+      "CASLost": 170,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 90,
+      "StateBytes": [
+        236282,
+        228692,
+        231980,
+        239956
+      ],
+      "Waiting": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "PingMS": 0.11325,
+      "CASApplied": 1976,
+      "CASLost": 170,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 91,
+      "StateBytes": [
+        0,
+        0,
+        232814,
+        241773
+      ],
+      "Waiting": [
+        0,
+        12,
+        11,
+        7
+      ],
+      "PingMS": 0.098333,
+      "CASApplied": 1985,
+      "CASLost": 175,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 92,
+      "StateBytes": [
+        238099,
+        230807,
+        233231,
+        241773
+      ],
+      "Waiting": [
+        6,
+        2,
+        12,
+        7
+      ],
+      "PingMS": 0.0755,
+      "CASApplied": 1985,
+      "CASLost": 175,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 93,
+      "StateBytes": [
+        239349,
+        231639,
+        234933,
+        242607
+      ],
+      "Waiting": [
+        9,
+        4,
+        4,
+        9
+      ],
+      "PingMS": 0.091042,
+      "CASApplied": 1997,
+      "CASLost": 175,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 94,
+      "StateBytes": [
+        242304,
+        234140,
+        237014,
+        245562
+      ],
+      "Waiting": [
+        4,
+        10,
+        9,
+        4
+      ],
+      "PingMS": 0.101292,
+      "CASApplied": 2019,
+      "CASLost": 177,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 95,
+      "StateBytes": [
+        244386,
+        237089,
+        240079,
+        248627
+      ],
+      "Waiting": [
+        9,
+        5,
+        9,
+        4
+      ],
+      "PingMS": 0.07025,
+      "CASApplied": 2041,
+      "CASLost": 179,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 96,
+      "StateBytes": [
+        247338,
+        238755,
+        243029,
+        250711
+      ],
+      "Waiting": [
+        4,
+        10,
+        4,
+        9
+      ],
+      "PingMS": 0.0915,
+      "CASApplied": 2063,
+      "CASLost": 180,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 97,
+      "StateBytes": [
+        249422,
+        241703,
+        245112,
+        253666
+      ],
+      "Waiting": [
+        9,
+        5,
+        9,
+        4
+      ],
+      "PingMS": 0.087416,
+      "CASApplied": 2085,
+      "CASLost": 182,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 98,
+      "StateBytes": [
+        252373,
+        243787,
+        247759,
+        256732
+      ],
+      "Waiting": [
+        4,
+        9,
+        8,
+        4
+      ],
+      "PingMS": 0.07775,
+      "CASApplied": 2107,
+      "CASLost": 184,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 99,
+      "StateBytes": [
+        254453,
+        246848,
+        251238,
+        258816
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.092833,
+      "CASApplied": 2128,
+      "CASLost": 185,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 100,
+      "StateBytes": [
+        257516,
+        249798,
+        254190,
+        261879
+      ],
+      "Waiting": [
+        9,
+        5,
+        4,
+        9
+      ],
+      "PingMS": 0.0835,
+      "CASApplied": 2151,
+      "CASLost": 190,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 101,
+      "StateBytes": [
+        260466,
+        252294,
+        255857,
+        264831
+      ],
+      "Waiting": [
+        4,
+        10,
+        9,
+        4
+      ],
+      "PingMS": 0.095208,
+      "CASApplied": 2173,
+      "CASLost": 191,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 102,
+      "StateBytes": [
+        262551,
+        254823,
+        259226,
+        266913
+      ],
+      "Waiting": [
+        9,
+        4,
+        4,
+        9
+      ],
+      "PingMS": 0.098375,
+      "CASApplied": 2195,
+      "CASLost": 193,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 103,
+      "StateBytes": [
+        265506,
+        256907,
+        261308,
+        269866
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        4
+      ],
+      "PingMS": 0.093042,
+      "CASApplied": 2217,
+      "CASLost": 195,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 104,
+      "StateBytes": [
+        267591,
+        260382,
+        264369,
+        271948
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.091541,
+      "CASApplied": 2238,
+      "CASLost": 196,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 105,
+      "StateBytes": [
+        270542,
+        263328,
+        267318,
+        274901
+      ],
+      "Waiting": [
+        4,
+        5,
+        4,
+        4
+      ],
+      "PingMS": 0.099708,
+      "CASApplied": 2262,
+      "CASLost": 200,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 106,
+      "StateBytes": [
+        272627,
+        265412,
+        269401,
+        276984
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.09325,
+      "CASApplied": 2282,
+      "CASLost": 200,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 107,
+      "StateBytes": [
+        275690,
+        267946,
+        271936,
+        280045
+      ],
+      "Waiting": [
+        9,
+        4,
+        3,
+        9
+      ],
+      "PingMS": 0.113917,
+      "CASApplied": 2305,
+      "CASLost": 207,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 108,
+      "StateBytes": [
+        279062,
+        270444,
+        274435,
+        282997
+      ],
+      "Waiting": [
+        5,
+        10,
+        9,
+        4
+      ],
+      "PingMS": 0.103958,
+      "CASApplied": 2327,
+      "CASLost": 208,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 109,
+      "StateBytes": [
+        280728,
+        272978,
+        277387,
+        285078
+      ],
+      "Waiting": [
+        9,
+        5,
+        4,
+        9
+      ],
+      "PingMS": 0.102,
+      "CASApplied": 2349,
+      "CASLost": 210,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 110,
+      "StateBytes": [
+        283677,
+        275060,
+        279470,
+        288028
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        4
+      ],
+      "PingMS": 0.091083,
+      "CASApplied": 2371,
+      "CASLost": 212,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 111,
+      "StateBytes": [
+        285762,
+        278013,
+        282005,
+        290112
+      ],
+      "Waiting": [
+        9,
+        4,
+        4,
+        9
+      ],
+      "PingMS": 0.093625,
+      "CASApplied": 2393,
+      "CASLost": 214,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 112,
+      "StateBytes": [
+        288715,
+        280095,
+        284502,
+        293066
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        4
+      ],
+      "PingMS": 0.09775,
+      "CASApplied": 2415,
+      "CASLost": 215,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 113,
+      "StateBytes": [
+        290800,
+        283162,
+        287152,
+        295148
+      ],
+      "Waiting": [
+        9,
+        9,
+        8,
+        9
+      ],
+      "PingMS": 0.113792,
+      "CASApplied": 2436,
+      "CASLost": 215,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 114,
+      "StateBytes": [
+        293753,
+        286115,
+        290103,
+        298097
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.104625,
+      "CASApplied": 2460,
+      "CASLost": 218,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 115,
+      "StateBytes": [
+        295838,
+        288198,
+        292603,
+        300182
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.10275,
+      "CASApplied": 2480,
+      "CASLost": 218,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 116,
+      "StateBytes": [
+        298792,
+        291683,
+        295669,
+        303135
+      ],
+      "Waiting": [
+        4,
+        10,
+        9,
+        4
+      ],
+      "PingMS": 0.102417,
+      "CASApplied": 2503,
+      "CASLost": 220,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 117,
+      "StateBytes": [
+        300876,
+        294746,
+        298733,
+        305220
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.091667,
+      "CASApplied": 2524,
+      "CASLost": 220,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 118,
+      "StateBytes": [
+        303943,
+        297394,
+        301683,
+        308172
+      ],
+      "Waiting": [
+        9,
+        10,
+        4,
+        4
+      ],
+      "PingMS": 0.080166,
+      "CASApplied": 2547,
+      "CASLost": 225,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 119,
+      "StateBytes": [
+        306897,
+        300348,
+        303350,
+        310254
+      ],
+      "Waiting": [
+        4,
+        4,
+        9,
+        9
+      ],
+      "PingMS": 0.0955,
+      "CASApplied": 2569,
+      "CASLost": 227,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 120,
+      "StateBytes": [
+        308979,
+        302431,
+        306721,
+        313203
+      ],
+      "Waiting": [
+        9,
+        9,
+        4,
+        4
+      ],
+      "PingMS": 0.071417,
+      "CASApplied": 2591,
+      "CASLost": 229,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 121,
+      "StateBytes": [
+        311926,
+        305386,
+        308388,
+        315288
+      ],
+      "Waiting": [
+        4,
+        4,
+        9,
+        9
+      ],
+      "PingMS": 0.092125,
+      "CASApplied": 2613,
+      "CASLost": 231,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 122,
+      "StateBytes": [
+        314009,
+        307887,
+        311754,
+        318240
+      ],
+      "Waiting": [
+        9,
+        10,
+        4,
+        4
+      ],
+      "PingMS": 0.096542,
+      "CASApplied": 2635,
+      "CASLost": 234,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 123,
+      "StateBytes": [
+        316959,
+        310425,
+        313837,
+        320323
+      ],
+      "Waiting": [
+        4,
+        5,
+        9,
+        9
+      ],
+      "PingMS": 0.078125,
+      "CASApplied": 2657,
+      "CASLost": 236,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 124,
+      "StateBytes": [
+        319043,
+        312506,
+        316789,
+        323278
+      ],
+      "Waiting": [
+        9,
+        9,
+        4,
+        4
+      ],
+      "PingMS": 0.093125,
+      "CASApplied": 2679,
+      "CASLost": 238,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 125,
+      "StateBytes": [
+        321996,
+        315453,
+        318874,
+        325358
+      ],
+      "Waiting": [
+        4,
+        5,
+        9,
+        9
+      ],
+      "PingMS": 0.096958,
+      "CASApplied": 2701,
+      "CASLost": 240,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 126,
+      "StateBytes": [
+        324081,
+        317954,
+        321828,
+        328305
+      ],
+      "Waiting": [
+        9,
+        10,
+        4,
+        4
+      ],
+      "PingMS": 0.095625,
+      "CASApplied": 2723,
+      "CASLost": 242,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 127,
+      "StateBytes": [
+        327037,
+        320487,
+        323910,
+        330390
+      ],
+      "Waiting": [
+        4,
+        4,
+        9,
+        9
+      ],
+      "PingMS": 0.047375,
+      "CASApplied": 2745,
+      "CASLost": 245,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 128,
+      "StateBytes": [
+        329120,
+        322987,
+        326857,
+        333342
+      ],
+      "Waiting": [
+        9,
+        10,
+        4,
+        4
+      ],
+      "PingMS": 0.0925,
+      "CASApplied": 2767,
+      "CASLost": 248,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 129,
+      "StateBytes": [
+        332071,
+        325523,
+        328523,
+        335425
+      ],
+      "Waiting": [
+        4,
+        4,
+        8,
+        9
+      ],
+      "PingMS": 0.221334,
+      "CASApplied": 2789,
+      "CASLost": 250,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 130,
+      "StateBytes": [
+        334155,
+        327606,
+        331891,
+        338378
+      ],
+      "Waiting": [
+        9,
+        9,
+        4,
+        4
+      ],
+      "PingMS": 0.096209,
+      "CASApplied": 2811,
+      "CASLost": 254,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 131,
+      "StateBytes": [
+        337108,
+        330971,
+        333975,
+        340461
+      ],
+      "Waiting": [
+        4,
+        5,
+        9,
+        9
+      ],
+      "PingMS": 0.076667,
+      "CASApplied": 2833,
+      "CASLost": 256,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 132,
+      "StateBytes": [
+        339190,
+        333054,
+        337040,
+        343524
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.0855,
+      "CASApplied": 2854,
+      "CASLost": 258,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 133,
+      "StateBytes": [
+        342143,
+        335589,
+        339992,
+        346477
+      ],
+      "Waiting": [
+        4,
+        5,
+        4,
+        4
+      ],
+      "PingMS": 0.09225,
+      "CASApplied": 2878,
+      "CASLost": 263,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 134,
+      "StateBytes": [
+        344228,
+        337674,
+        342074,
+        348559
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.0775,
+      "CASApplied": 2898,
+      "CASLost": 263,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 135,
+      "StateBytes": [
+        347184,
+        341044,
+        345022,
+        351513
+      ],
+      "Waiting": [
+        4,
+        5,
+        4,
+        4
+      ],
+      "PingMS": 0.092458,
+      "CASApplied": 2922,
+      "CASLost": 267,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 136,
+      "StateBytes": [
+        349269,
+        343127,
+        347107,
+        353595
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.089125,
+      "CASApplied": 2942,
+      "CASLost": 267,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 137,
+      "StateBytes": [
+        352331,
+        345773,
+        349642,
+        356544
+      ],
+      "Waiting": [
+        9,
+        9,
+        4,
+        4
+      ],
+      "PingMS": 0.096291,
+      "CASApplied": 2965,
+      "CASLost": 270,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 138,
+      "StateBytes": [
+        355283,
+        348726,
+        352142,
+        358626
+      ],
+      "Waiting": [
+        4,
+        5,
+        9,
+        9
+      ],
+      "PingMS": 0.164459,
+      "CASApplied": 2987,
+      "CASLost": 272,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 139,
+      "StateBytes": [
+        357367,
+        350811,
+        355094,
+        361571
+      ],
+      "Waiting": [
+        9,
+        9,
+        4,
+        4
+      ],
+      "PingMS": 0.097958,
+      "CASApplied": 3009,
+      "CASLost": 275,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 140,
+      "StateBytes": [
+        360319,
+        354183,
+        357178,
+        363653
+      ],
+      "Waiting": [
+        4,
+        5,
+        9,
+        9
+      ],
+      "PingMS": 0.085959,
+      "CASApplied": 3031,
+      "CASLost": 277,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 141,
+      "StateBytes": [
+        362402,
+        355849,
+        360241,
+        366716
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.092792,
+      "CASApplied": 3052,
+      "CASLost": 279,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 142,
+      "StateBytes": [
+        365352,
+        358798,
+        363190,
+        369663
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.088125,
+      "CASApplied": 3076,
+      "CASLost": 284,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 143,
+      "StateBytes": [
+        367433,
+        361298,
+        365274,
+        371745
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.116,
+      "CASApplied": 3096,
+      "CASLost": 284,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 144,
+      "StateBytes": [
+        370383,
+        363830,
+        368229,
+        374696
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.071167,
+      "CASApplied": 3120,
+      "CASLost": 288,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 145,
+      "StateBytes": [
+        372467,
+        365914,
+        370314,
+        376779
+      ],
+      "Waiting": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "PingMS": 0.09825,
+      "CASApplied": 3140,
+      "CASLost": 288,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 146,
+      "StateBytes": [
+        375421,
+        368868,
+        373269,
+        379732
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.095791,
+      "CASApplied": 3164,
+      "CASLost": 293,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 147,
+      "StateBytes": [
+        377504,
+        371367,
+        375353,
+        381816
+      ],
+      "Waiting": [
+        9,
+        10,
+        9,
+        9
+      ],
+      "PingMS": 0.10125,
+      "CASApplied": 3184,
+      "CASLost": 293,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 148,
+      "StateBytes": [
+        380457,
+        374018,
+        378420,
+        384769
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        4
+      ],
+      "PingMS": 0.072,
+      "CASApplied": 3207,
+      "CASLost": 295,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 149,
+      "StateBytes": [
+        382541,
+        376972,
+        381063,
+        387833
+      ],
+      "Waiting": [
+        9,
+        4,
+        9,
+        4
+      ],
+      "PingMS": 0.091792,
+      "CASApplied": 3229,
+      "CASLost": 296,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 150,
+      "StateBytes": [
+        385493,
+        379055,
+        384430,
+        389915
+      ],
+      "Waiting": [
+        4,
+        9,
+        4,
+        9
+      ],
+      "PingMS": 0.103625,
+      "CASApplied": 3251,
+      "CASLost": 298,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 151,
+      "StateBytes": [
+        387575,
+        382009,
+        386514,
+        392866
+      ],
+      "Waiting": [
+        9,
+        4,
+        9,
+        4
+      ],
+      "PingMS": 0.090583,
+      "CASApplied": 3273,
+      "CASLost": 300,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 152,
+      "StateBytes": [
+        390527,
+        384511,
+        389578,
+        395929
+      ],
+      "Waiting": [
+        4,
+        10,
+        9,
+        4
+      ],
+      "PingMS": 0.100042,
+      "CASApplied": 3295,
+      "CASLost": 301,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 153,
+      "StateBytes": [
+        392612,
+        387162,
+        392227,
+        398012
+      ],
+      "Waiting": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "PingMS": 0.194708,
+      "CASApplied": 3316,
+      "CASLost": 301,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 154,
+      "StateBytes": [
+        395568,
+        390116,
+        395597,
+        400965
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.099792,
+      "CASApplied": 3340,
+      "CASLost": 306,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 155,
+      "StateBytes": [
+        397653,
+        392200,
+        397679,
+        403047
+      ],
+      "Waiting": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "PingMS": 0.074917,
+      "CASApplied": 3360,
+      "CASLost": 306,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 156,
+      "StateBytes": [
+        400605,
+        395151,
+        400214,
+        405992
+      ],
+      "Waiting": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "PingMS": 0.086083,
+      "CASApplied": 3384,
+      "CASLost": 311,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 157,
+      "StateBytes": [
+        402690,
+        397234,
+        402713,
+        408076
+      ],
+      "Waiting": [
+        9,
+        9,
+        9,
+        9
+      ],
+      "PingMS": 0.076959,
+      "CASApplied": 3404,
+      "CASLost": 311,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 158,
+      "StateBytes": [
+        0,
+        0,
+        404831,
+        410613
+      ],
+      "Waiting": [
+        0,
+        0,
+        2,
+        3
+      ],
+      "PingMS": 0.04325,
+      "CASApplied": 3424,
+      "CASLost": 318,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 160,
+      "StateBytes": [
+        405645,
+        400601,
+        405663,
+        411029
+      ],
+      "Waiting": [
+        4,
+        5,
+        4,
+        4
+      ],
+      "PingMS": 0.086375,
+      "CASApplied": 3428,
+      "CASLost": 322,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 161,
+      "StateBytes": [
+        407311,
+        401852,
+        407746,
+        412697
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.078958,
+      "CASApplied": 3445,
+      "CASLost": 322,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 162,
+      "StateBytes": [
+        410262,
+        404807,
+        410695,
+        415651
+      ],
+      "Waiting": [
+        3,
+        4,
+        4,
+        3
+      ],
+      "PingMS": 0.081542,
+      "CASApplied": 3469,
+      "CASLost": 326,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 163,
+      "StateBytes": [
+        412345,
+        406889,
+        412777,
+        417735
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.090625,
+      "CASApplied": 3489,
+      "CASLost": 326,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 164,
+      "StateBytes": [
+        415297,
+        409839,
+        415725,
+        420687
+      ],
+      "Waiting": [
+        3,
+        4,
+        4,
+        3
+      ],
+      "PingMS": 0.084875,
+      "CASApplied": 3513,
+      "CASLost": 330,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 165,
+      "StateBytes": [
+        417382,
+        412338,
+        417808,
+        422771
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.095208,
+      "CASApplied": 3533,
+      "CASLost": 330,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 166,
+      "StateBytes": [
+        420335,
+        415290,
+        420874,
+        425837
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.0835,
+      "CASApplied": 3556,
+      "CASLost": 333,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 167,
+      "StateBytes": [
+        422420,
+        416956,
+        423406,
+        428374
+      ],
+      "Waiting": [
+        8,
+        8,
+        3,
+        2
+      ],
+      "PingMS": 0.089875,
+      "CASApplied": 3578,
+      "CASLost": 335,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 168,
+      "StateBytes": [
+        425370,
+        419907,
+        425488,
+        430876
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.094875,
+      "CASApplied": 3600,
+      "CASLost": 337,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 169,
+      "StateBytes": [
+        427453,
+        421989,
+        428966,
+        433938
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.092792,
+      "CASApplied": 3621,
+      "CASLost": 338,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 170,
+      "StateBytes": [
+        430400,
+        424939,
+        431498,
+        436892
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.09125,
+      "CASApplied": 3645,
+      "CASLost": 342,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 171,
+      "StateBytes": [
+        432484,
+        427439,
+        433998,
+        438976
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.076458,
+      "CASApplied": 3665,
+      "CASLost": 342,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 172,
+      "StateBytes": [
+        435435,
+        429972,
+        436950,
+        441927
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.06525,
+      "CASApplied": 3689,
+      "CASLost": 348,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 173,
+      "StateBytes": [
+        437519,
+        432054,
+        439033,
+        444011
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.121125,
+      "CASApplied": 3709,
+      "CASLost": 348,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 174,
+      "StateBytes": [
+        440472,
+        435006,
+        442096,
+        447073
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.055958,
+      "CASApplied": 3732,
+      "CASLost": 351,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 175,
+      "StateBytes": [
+        442555,
+        437086,
+        445049,
+        450021
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.075041,
+      "CASApplied": 3754,
+      "CASLost": 353,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 176,
+      "StateBytes": [
+        445509,
+        440038,
+        447134,
+        452104
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.085083,
+      "CASApplied": 3776,
+      "CASLost": 355,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 177,
+      "StateBytes": [
+        447593,
+        442122,
+        450195,
+        455164
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.088583,
+      "CASApplied": 3797,
+      "CASLost": 356,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 178,
+      "StateBytes": [
+        450545,
+        445077,
+        453145,
+        458113
+      ],
+      "Waiting": [
+        3,
+        4,
+        4,
+        3
+      ],
+      "PingMS": 0.082875,
+      "CASApplied": 3821,
+      "CASLost": 360,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 179,
+      "StateBytes": [
+        452627,
+        447160,
+        455229,
+        460196
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.070875,
+      "CASApplied": 3841,
+      "CASLost": 360,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 180,
+      "StateBytes": [
+        455575,
+        450109,
+        457763,
+        462730
+      ],
+      "Waiting": [
+        3,
+        3,
+        3,
+        3
+      ],
+      "PingMS": 0.0705,
+      "CASApplied": 3865,
+      "CASLost": 366,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 181,
+      "StateBytes": [
+        457656,
+        452193,
+        460261,
+        465231
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.078084,
+      "CASApplied": 3885,
+      "CASLost": 366,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 182,
+      "StateBytes": [
+        460601,
+        455254,
+        463322,
+        468184
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.084417,
+      "CASApplied": 3908,
+      "CASLost": 370,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 183,
+      "StateBytes": [
+        462686,
+        458207,
+        465856,
+        470269
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.062042,
+      "CASApplied": 3930,
+      "CASLost": 373,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 184,
+      "StateBytes": [
+        466731,
+        461268,
+        468358,
+        473333
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.078792,
+      "CASApplied": 3952,
+      "CASLost": 375,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 185,
+      "StateBytes": [
+        468816,
+        463767,
+        471309,
+        476286
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.077417,
+      "CASApplied": 3974,
+      "CASLost": 377,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 186,
+      "StateBytes": [
+        471879,
+        466414,
+        472975,
+        478369
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.089042,
+      "CASApplied": 3995,
+      "CASLost": 378,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 187,
+      "StateBytes": [
+        474830,
+        469362,
+        476340,
+        481323
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.062584,
+      "CASApplied": 4019,
+      "CASLost": 382,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 188,
+      "StateBytes": [
+        476914,
+        471861,
+        478424,
+        483406
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.088917,
+      "CASApplied": 4039,
+      "CASLost": 382,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 189,
+      "StateBytes": [
+        479865,
+        474396,
+        481379,
+        486357
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.0825,
+      "CASApplied": 4063,
+      "CASLost": 386,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 190,
+      "StateBytes": [
+        481947,
+        476479,
+        483462,
+        488440
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.082208,
+      "CASApplied": 4083,
+      "CASLost": 386,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 191,
+      "StateBytes": [
+        484894,
+        479431,
+        486415,
+        491392
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.065125,
+      "CASApplied": 4107,
+      "CASLost": 390,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 192,
+      "StateBytes": [
+        486978,
+        481515,
+        488496,
+        493476
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.052375,
+      "CASApplied": 4127,
+      "CASLost": 390,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 193,
+      "StateBytes": [
+        489929,
+        484574,
+        491556,
+        496429
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.082375,
+      "CASApplied": 4150,
+      "CASLost": 395,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 194,
+      "StateBytes": [
+        492012,
+        487526,
+        494506,
+        498513
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.07475,
+      "CASApplied": 4172,
+      "CASLost": 397,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 195,
+      "StateBytes": [
+        494963,
+        489608,
+        496589,
+        501465
+      ],
+      "Waiting": [
+        3,
+        8,
+        9,
+        3
+      ],
+      "PingMS": 0.076083,
+      "CASApplied": 4194,
+      "CASLost": 399,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 196,
+      "StateBytes": [
+        497045,
+        492560,
+        499538,
+        503546
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.077042,
+      "CASApplied": 4216,
+      "CASLost": 401,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 197,
+      "StateBytes": [
+        499996,
+        494644,
+        501622,
+        506495
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.077458,
+      "CASApplied": 4238,
+      "CASLost": 403,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 198,
+      "StateBytes": [
+        502080,
+        498014,
+        504575,
+        508578
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.0775,
+      "CASApplied": 4260,
+      "CASLost": 405,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 199,
+      "StateBytes": [
+        505146,
+        500661,
+        506660,
+        511530
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.088292,
+      "CASApplied": 4282,
+      "CASLost": 407,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 200,
+      "StateBytes": [
+        508210,
+        503725,
+        509611,
+        513613
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.056417,
+      "CASApplied": 4304,
+      "CASLost": 409,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 201,
+      "StateBytes": [
+        511164,
+        506224,
+        511694,
+        516563
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.081667,
+      "CASApplied": 4326,
+      "CASLost": 411,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 202,
+      "StateBytes": [
+        513247,
+        508758,
+        514227,
+        518646
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.087417,
+      "CASApplied": 4348,
+      "CASLost": 413,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 203,
+      "StateBytes": [
+        516312,
+        511823,
+        516310,
+        521596
+      ],
+      "Waiting": [
+        8,
+        3,
+        9,
+        3
+      ],
+      "PingMS": 0.079708,
+      "CASApplied": 4370,
+      "CASLost": 415,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 204,
+      "StateBytes": [
+        519378,
+        514885,
+        519679,
+        523680
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.083875,
+      "CASApplied": 4392,
+      "CASLost": 416,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 205,
+      "StateBytes": [
+        522439,
+        517945,
+        521764,
+        526630
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.081542,
+      "CASApplied": 4414,
+      "CASLost": 417,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 206,
+      "StateBytes": [
+        525390,
+        520027,
+        524719,
+        528714
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.077958,
+      "CASApplied": 4436,
+      "CASLost": 419,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 207,
+      "StateBytes": [
+        527472,
+        522975,
+        526801,
+        531668
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.075875,
+      "CASApplied": 4458,
+      "CASLost": 421,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 208,
+      "StateBytes": [
+        530424,
+        525058,
+        529337,
+        533752
+      ],
+      "Waiting": [
+        3,
+        8,
+        3,
+        8
+      ],
+      "PingMS": 0.083709,
+      "CASApplied": 4480,
+      "CASLost": 423,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 209,
+      "StateBytes": [
+        532507,
+        528006,
+        531421,
+        536703
+      ],
+      "Waiting": [
+        8,
+        3,
+        8,
+        3
+      ],
+      "PingMS": 0.216459,
+      "CASApplied": 4502,
+      "CASLost": 425,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 210,
+      "StateBytes": [
+        535459,
+        530507,
+        534793,
+        538786
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.082042,
+      "CASApplied": 4524,
+      "CASLost": 426,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 211,
+      "StateBytes": [
+        538521,
+        533043,
+        536878,
+        541845
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.079292,
+      "CASApplied": 4546,
+      "CASLost": 428,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 212,
+      "StateBytes": [
+        540605,
+        535543,
+        539944,
+        544911
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.073125,
+      "CASApplied": 4567,
+      "CASLost": 429,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 213,
+      "StateBytes": [
+        543558,
+        538190,
+        543007,
+        547862
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.089792,
+      "CASApplied": 4590,
+      "CASLost": 434,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 214,
+      "StateBytes": [
+        545642,
+        541559,
+        545958,
+        549945
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.050375,
+      "CASApplied": 4612,
+      "CASLost": 437,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 215,
+      "StateBytes": [
+        548706,
+        544209,
+        547624,
+        552898
+      ],
+      "Waiting": [
+        8,
+        3,
+        9,
+        3
+      ],
+      "PingMS": 0.081584,
+      "CASApplied": 4634,
+      "CASLost": 439,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 216,
+      "StateBytes": [
+        551657,
+        546290,
+        550994,
+        554980
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.084333,
+      "CASApplied": 4656,
+      "CASLost": 441,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 217,
+      "StateBytes": [
+        553742,
+        549654,
+        553077,
+        557933
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.077,
+      "CASApplied": 4678,
+      "CASLost": 443,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 218,
+      "StateBytes": [
+        556694,
+        551321,
+        556030,
+        560015
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.069167,
+      "CASApplied": 4700,
+      "CASLost": 444,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 219,
+      "StateBytes": [
+        559755,
+        554384,
+        558677,
+        563077
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.083875,
+      "CASApplied": 4722,
+      "CASLost": 446,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 220,
+      "StateBytes": [
+        562814,
+        557332,
+        561177,
+        566139
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.082291,
+      "CASApplied": 4744,
+      "CASLost": 447,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 221,
+      "StateBytes": [
+        565876,
+        559415,
+        563714,
+        569200
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.075541,
+      "CASApplied": 4766,
+      "CASLost": 448,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 222,
+      "StateBytes": [
+        567959,
+        562366,
+        566213,
+        572150
+      ],
+      "Waiting": [
+        8,
+        3,
+        9,
+        3
+      ],
+      "PingMS": 0.080583,
+      "CASApplied": 4788,
+      "CASLost": 450,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 223,
+      "StateBytes": [
+        570910,
+        564450,
+        569164,
+        574234
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.079791,
+      "CASApplied": 4810,
+      "CASLost": 452,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 224,
+      "StateBytes": [
+        573970,
+        567399,
+        571245,
+        577297
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.073875,
+      "CASApplied": 4832,
+      "CASLost": 453,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 225,
+      "StateBytes": [
+        576055,
+        569484,
+        573893,
+        580361
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.051125,
+      "CASApplied": 4853,
+      "CASLost": 454,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 226,
+      "StateBytes": [
+        579118,
+        572547,
+        576955,
+        583424
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.081625,
+      "CASApplied": 4875,
+      "CASLost": 456,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 227,
+      "StateBytes": [
+        582069,
+        575612,
+        580435,
+        586375
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.068625,
+      "CASApplied": 4898,
+      "CASLost": 460,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 228,
+      "StateBytes": [
+        584153,
+        578975,
+        583383,
+        588459
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.077791,
+      "CASApplied": 4920,
+      "CASLost": 462,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 229,
+      "StateBytes": [
+        587217,
+        581622,
+        585049,
+        591413
+      ],
+      "Waiting": [
+        8,
+        3,
+        8,
+        3
+      ],
+      "PingMS": 0.056666,
+      "CASApplied": 4942,
+      "CASLost": 463,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 230,
+      "StateBytes": [
+        590284,
+        585106,
+        588416,
+        593495
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.074417,
+      "CASApplied": 4964,
+      "CASLost": 465,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 231,
+      "StateBytes": [
+        593236,
+        587189,
+        590501,
+        596446
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.083417,
+      "CASApplied": 4986,
+      "CASLost": 467,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 232,
+      "StateBytes": [
+        595319,
+        589723,
+        593455,
+        598530
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.070041,
+      "CASApplied": 5008,
+      "CASLost": 469,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 233,
+      "StateBytes": [
+        598379,
+        593201,
+        595539,
+        601481
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.09075,
+      "CASApplied": 5030,
+      "CASLost": 471,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 234,
+      "StateBytes": [
+        601441,
+        595846,
+        598073,
+        603564
+      ],
+      "Waiting": [
+        8,
+        3,
+        3,
+        8
+      ],
+      "PingMS": 0.086667,
+      "CASApplied": 5052,
+      "CASLost": 473,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 235,
+      "StateBytes": [
+        604394,
+        597930,
+        600158,
+        606513
+      ],
+      "Waiting": [
+        3,
+        8,
+        9,
+        3
+      ],
+      "PingMS": 0.086542,
+      "CASApplied": 5074,
+      "CASLost": 475,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 236,
+      "StateBytes": [
+        606478,
+        600880,
+        603529,
+        608597
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.069959,
+      "CASApplied": 5096,
+      "CASLost": 477,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 237,
+      "StateBytes": [
+        610522,
+        603940,
+        605614,
+        611662
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.094292,
+      "CASApplied": 5118,
+      "CASLost": 479,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 238,
+      "StateBytes": [
+        613585,
+        606022,
+        608565,
+        614725
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.056792,
+      "CASApplied": 5140,
+      "CASLost": 481,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 239,
+      "StateBytes": [
+        616651,
+        609500,
+        611628,
+        617791
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.076792,
+      "CASApplied": 5162,
+      "CASLost": 482,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 240,
+      "StateBytes": [
+        619715,
+        612145,
+        614692,
+        620854
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.117791,
+      "CASApplied": 5184,
+      "CASLost": 482,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 241,
+      "StateBytes": [
+        621800,
+        615095,
+        616774,
+        623803
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.086,
+      "CASApplied": 5206,
+      "CASLost": 484,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 242,
+      "StateBytes": [
+        624753,
+        617176,
+        619725,
+        625885
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.077334,
+      "CASApplied": 5228,
+      "CASLost": 485,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 243,
+      "StateBytes": [
+        626835,
+        620121,
+        621808,
+        628836
+      ],
+      "Waiting": [
+        8,
+        3,
+        9,
+        3
+      ],
+      "PingMS": 0.090792,
+      "CASApplied": 5250,
+      "CASLost": 487,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 244,
+      "StateBytes": [
+        629784,
+        622204,
+        624757,
+        630919
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.078708,
+      "CASApplied": 5272,
+      "CASLost": 489,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 245,
+      "StateBytes": [
+        631868,
+        625152,
+        626841,
+        633874
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.135083,
+      "CASApplied": 5294,
+      "CASLost": 491,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 246,
+      "StateBytes": [
+        634821,
+        627235,
+        629791,
+        635958
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.082667,
+      "CASApplied": 5316,
+      "CASLost": 493,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 247,
+      "StateBytes": [
+        637887,
+        630184,
+        631874,
+        639023
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.11375,
+      "CASApplied": 5338,
+      "CASLost": 494,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 248,
+      "StateBytes": [
+        639971,
+        632264,
+        634825,
+        641974
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.081875,
+      "CASApplied": 5360,
+      "CASLost": 496,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 249,
+      "StateBytes": [
+        642923,
+        635326,
+        637471,
+        644059
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.07475,
+      "CASApplied": 5382,
+      "CASLost": 498,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 250,
+      "StateBytes": [
+        645985,
+        638279,
+        639972,
+        647119
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.077833,
+      "CASApplied": 5404,
+      "CASLost": 500,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 251,
+      "StateBytes": [
+        648067,
+        640359,
+        642621,
+        650185
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.081,
+      "CASApplied": 5425,
+      "CASLost": 501,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 252,
+      "StateBytes": [
+        651017,
+        643310,
+        645574,
+        653135
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.07625,
+      "CASApplied": 5449,
+      "CASLost": 507,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 253,
+      "StateBytes": [
+        653100,
+        645393,
+        648074,
+        655220
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.068834,
+      "CASApplied": 5469,
+      "CASLost": 507,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 254,
+      "StateBytes": [
+        656048,
+        648340,
+        651140,
+        658287
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.076084,
+      "CASApplied": 5492,
+      "CASLost": 510,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 255,
+      "StateBytes": [
+        658131,
+        650423,
+        654094,
+        661241
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.053542,
+      "CASApplied": 5514,
+      "CASLost": 512,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 256,
+      "StateBytes": [
+        661079,
+        653373,
+        656176,
+        663326
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.054083,
+      "CASApplied": 5536,
+      "CASLost": 514,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 257,
+      "StateBytes": [
+        663162,
+        655457,
+        659241,
+        666391
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.069208,
+      "CASApplied": 5557,
+      "CASLost": 515,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 258,
+      "StateBytes": [
+        666223,
+        658521,
+        662304,
+        669457
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.07725,
+      "CASApplied": 5579,
+      "CASLost": 517,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 259,
+      "StateBytes": [
+        669170,
+        661470,
+        664833,
+        672411
+      ],
+      "Waiting": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "PingMS": 0.084166,
+      "CASApplied": 5603,
+      "CASLost": 521,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 260,
+      "StateBytes": [
+        671252,
+        663970,
+        667335,
+        674495
+      ],
+      "Waiting": [
+        8,
+        9,
+        9,
+        8
+      ],
+      "PingMS": 0.075208,
+      "CASApplied": 5623,
+      "CASLost": 521,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 261,
+      "StateBytes": [
+        674316,
+        666619,
+        670290,
+        677448
+      ],
+      "Waiting": [
+        8,
+        8,
+        4,
+        3
+      ],
+      "PingMS": 0.070167,
+      "CASApplied": 5646,
+      "CASLost": 524,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 262,
+      "StateBytes": [
+        677263,
+        669570,
+        671956,
+        679532
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.077833,
+      "CASApplied": 5668,
+      "CASLost": 526,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 263,
+      "StateBytes": [
+        679347,
+        671654,
+        674911,
+        682485
+      ],
+      "Waiting": [
+        8,
+        8,
+        4,
+        3
+      ],
+      "PingMS": 0.078416,
+      "CASApplied": 5690,
+      "CASLost": 528,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 264,
+      "StateBytes": [
+        682414,
+        675701,
+        678392,
+        684567
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.054417,
+      "CASApplied": 5712,
+      "CASLost": 530,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 265,
+      "StateBytes": [
+        685368,
+        677784,
+        680476,
+        687517
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.074541,
+      "CASApplied": 5734,
+      "CASLost": 532,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 266,
+      "StateBytes": [
+        687452,
+        680739,
+        683013,
+        689602
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.078334,
+      "CASApplied": 5756,
+      "CASLost": 534,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 267,
+      "StateBytes": [
+        690404,
+        683237,
+        685514,
+        692552
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.085042,
+      "CASApplied": 5778,
+      "CASLost": 536,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 268,
+      "StateBytes": [
+        692489,
+        685771,
+        688469,
+        694636
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.085667,
+      "CASApplied": 5800,
+      "CASLost": 538,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 269,
+      "StateBytes": [
+        695441,
+        687853,
+        690137,
+        697585
+      ],
+      "Waiting": [
+        3,
+        8,
+        9,
+        3
+      ],
+      "PingMS": 0.076708,
+      "CASApplied": 5822,
+      "CASLost": 540,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 270,
+      "StateBytes": [
+        697526,
+        690802,
+        693509,
+        699668
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.080167,
+      "CASApplied": 5844,
+      "CASLost": 541,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 271,
+      "StateBytes": [
+        700589,
+        694281,
+        695175,
+        702616
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.092125,
+      "CASApplied": 5866,
+      "CASLost": 543,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 272,
+      "StateBytes": [
+        703538,
+        695946,
+        698540,
+        704697
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.079667,
+      "CASApplied": 5888,
+      "CASLost": 545,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 273,
+      "StateBytes": [
+        706599,
+        698894,
+        700623,
+        707756
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.080292,
+      "CASApplied": 5910,
+      "CASLost": 547,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 274,
+      "StateBytes": [
+        709659,
+        700977,
+        703571,
+        710818
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.064833,
+      "CASApplied": 5932,
+      "CASLost": 549,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 275,
+      "StateBytes": [
+        711743,
+        703925,
+        705239,
+        713767
+      ],
+      "Waiting": [
+        8,
+        3,
+        9,
+        3
+      ],
+      "PingMS": 0.070958,
+      "CASApplied": 5954,
+      "CASLost": 551,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 276,
+      "StateBytes": [
+        714695,
+        706425,
+        708607,
+        715850
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.067917,
+      "CASApplied": 5976,
+      "CASLost": 553,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 277,
+      "StateBytes": [
+        717759,
+        709070,
+        711252,
+        718914
+      ],
+      "Waiting": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "PingMS": 0.079,
+      "CASApplied": 5998,
+      "CASLost": 555,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 278,
+      "StateBytes": [
+        719842,
+        712134,
+        714732,
+        721865
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.067083,
+      "CASApplied": 6020,
+      "CASLost": 557,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 279,
+      "StateBytes": [
+        722792,
+        715087,
+        716398,
+        723948
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.083083,
+      "CASApplied": 6042,
+      "CASLost": 559,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 280,
+      "StateBytes": [
+        724876,
+        717168,
+        719770,
+        726897
+      ],
+      "Waiting": [
+        8,
+        8,
+        4,
+        3
+      ],
+      "PingMS": 0.076083,
+      "CASApplied": 6064,
+      "CASLost": 561,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 281,
+      "StateBytes": [
+        727827,
+        720116,
+        721855,
+        728982
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.061917,
+      "CASApplied": 6086,
+      "CASLost": 563,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 282,
+      "StateBytes": [
+        730890,
+        722615,
+        724809,
+        732046
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.075458,
+      "CASApplied": 6108,
+      "CASLost": 565,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 283,
+      "StateBytes": [
+        733948,
+        725151,
+        726893,
+        735108
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.085542,
+      "CASApplied": 6130,
+      "CASLost": 566,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 284,
+      "StateBytes": [
+        736031,
+        727652,
+        729845,
+        738064
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.070125,
+      "CASApplied": 6152,
+      "CASLost": 568,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 285,
+      "StateBytes": [
+        738978,
+        730717,
+        732912,
+        740146
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.069167,
+      "CASApplied": 6174,
+      "CASLost": 570,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 286,
+      "StateBytes": [
+        741059,
+        733252,
+        734996,
+        743096
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.050583,
+      "CASApplied": 6196,
+      "CASLost": 572,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 287,
+      "StateBytes": [
+        744119,
+        736314,
+        737951,
+        745180
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.11,
+      "CASApplied": 6218,
+      "CASLost": 574,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 288,
+      "StateBytes": [
+        747067,
+        738396,
+        740036,
+        748130
+      ],
+      "Waiting": [
+        3,
+        8,
+        9,
+        3
+      ],
+      "PingMS": 0.083209,
+      "CASApplied": 6240,
+      "CASLost": 576,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 289,
+      "StateBytes": [
+        749148,
+        741342,
+        742990,
+        750214
+      ],
+      "Waiting": [
+        8,
+        3,
+        4,
+        8
+      ],
+      "PingMS": 0.0845,
+      "CASApplied": 6262,
+      "CASLost": 578,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 290,
+      "StateBytes": [
+        752093,
+        743426,
+        745074,
+        753166
+      ],
+      "Waiting": [
+        3,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.070791,
+      "CASApplied": 6284,
+      "CASLost": 580,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 291,
+      "StateBytes": [
+        754174,
+        746491,
+        747722,
+        755250
+      ],
+      "Waiting": [
+        8,
+        8,
+        9,
+        8
+      ],
+      "PingMS": 0.073209,
+      "CASApplied": 6305,
+      "CASLost": 582,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 292,
+      "StateBytes": [
+        757120,
+        749444,
+        751203,
+        758314
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.054542,
+      "CASApplied": 6328,
+      "CASLost": 585,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 293,
+      "StateBytes": [
+        759203,
+        751528,
+        753741,
+        761266
+      ],
+      "Waiting": [
+        8,
+        8,
+        4,
+        3
+      ],
+      "PingMS": 0.076666,
+      "CASApplied": 6350,
+      "CASLost": 587,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 294,
+      "StateBytes": [
+        762155,
+        754477,
+        756242,
+        763350
+      ],
+      "Waiting": [
+        3,
+        3,
+        9,
+        8
+      ],
+      "PingMS": 0.081875,
+      "CASApplied": 6372,
+      "CASLost": 589,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 295,
+      "StateBytes": [
+        764239,
+        756558,
+        759190,
+        766302
+      ],
+      "Waiting": [
+        8,
+        9,
+        4,
+        3
+      ],
+      "PingMS": 0.086375,
+      "CASApplied": 6394,
+      "CASLost": 591,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 296,
+      "StateBytes": [
+        767194,
+        759507,
+        761274,
+        768386
+      ],
+      "Waiting": [
+        3,
+        4,
+        9,
+        8
+      ],
+      "PingMS": 0.075333,
+      "CASApplied": 6416,
+      "CASLost": 593,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 297,
+      "StateBytes": [
+        770258,
+        761588,
+        764222,
+        771451
+      ],
+      "Waiting": [
+        3,
+        9,
+        4,
+        8
+      ],
+      "PingMS": 0.072,
+      "CASApplied": 6438,
+      "CASLost": 595,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 298,
+      "StateBytes": [
+        772339,
+        764540,
+        766304,
+        774402
+      ],
+      "Waiting": [
+        8,
+        4,
+        9,
+        3
+      ],
+      "PingMS": 0.072708,
+      "CASApplied": 6460,
+      "CASLost": 597,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 299,
+      "StateBytes": [
+        775403,
+        767604,
+        769255,
+        776487
+      ],
+      "Waiting": [
+        8,
+        4,
+        4,
+        8
+      ],
+      "PingMS": 0.068625,
+      "CASApplied": 6482,
+      "CASLost": 598,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 300,
+      "StateBytes": [
+        778354,
+        769687,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        3,
+        8,
+        9,
+        3
+      ],
+      "PingMS": 0.083042,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 301,
+      "StateBytes": [
+        778770,
+        770103,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.096917,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 302,
+      "StateBytes": [
+        778770,
+        770103,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.091875,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 303,
+      "StateBytes": [
+        778770,
+        770103,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.089708,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 304,
+      "StateBytes": [
+        778770,
+        770103,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.097708,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    },
+    {
+      "Second": 305,
+      "StateBytes": [
+        778770,
+        770103,
+        771339,
+        779439
+      ],
+      "Waiting": [
+        4,
+        9,
+        9,
+        3
+      ],
+      "PingMS": 0.107083,
+      "CASApplied": 6504,
+      "CASLost": 600,
+      "CASExhausted": 0
+    }
+  ],
+  "Totals": {
+    "Across": {
+      "N": 117,
+      "P50MS": 28.86475,
+      "P99MS": 53.214875,
+      "MaxMS": 61.055208
+    },
+    "Candidates": {
+      "N": 6210,
+      "P50MS": 7.862875,
+      "P99MS": 20.40875,
+      "MaxMS": 344.964458
+    },
+    "Commit": {
+      "N": 472,
+      "P50MS": 27.194042,
+      "P99MS": 62.061334,
+      "MaxMS": 66.034541
+    },
+    "EnqueueLag": {
+      "N": 6000,
+      "P50MS": 2.087625,
+      "P99MS": 2.473375,
+      "MaxMS": 6.226
+    },
+    "EnqueueOK": {
+      "N": 5915,
+      "P50MS": 26.940166,
+      "P99MS": 51.495625,
+      "MaxMS": 474.533792
+    },
+    "Errors": {
+      "across": {
+        "conflict": 52
+      },
+      "candidates": {
+        "other: MOVED 4548 127.0.0.1:43400": 2,
+        "other: MOVED 4548 127.0.0.1:43404": 1,
+        "other: dial tcp 127.0.0.1:43400: connect: connection refused": 13,
+        "other: dial tcp 127.0.0.1:43404: connect: connection refused": 13
+      },
+      "commit": {
+        "conflict": 11
+      },
+      "enqueue": {
+        "other: MOVED 4548 127.0.0.1:43400": 3,
+        "other: MOVED 4548 127.0.0.1:43404": 2,
+        "other: dial tcp 127.0.0.1:43400: connect: connection refused": 40,
+        "other: dial tcp 127.0.0.1:43404: connect: connection refused": 40
+      },
+      "sweep": {
+        "other: dial tcp 127.0.0.1:43400: connect: connection refused": 8,
+        "other: dial tcp 127.0.0.1:43404: connect: connection refused": 8
+      }
+    },
+    "Matches": 589,
+    "ResolvedUnknownMatches": 0,
+    "SkippedAdmissions": 0,
+    "Sweep": {
+      "N": 1204,
+      "P50MS": 10.472666,
+      "P99MS": 24.255709,
+      "MaxMS": 267.468833
+    },
+    "TicketsKnown": 5915,
+    "UnknownCommitErrors": 0,
+    "WaitingAtEnd": [
+      4,
+      9,
+      9,
+      3
+    ]
+  },
+  "Verify": {
+    "CheckedMatches": 589,
+    "DoubleSubject": 0,
+    "DoubleTicket": 0,
+    "MatchUnreadableInPartition": 0,
+    "MemberTicketNotPointingToMatch": 0
+  }
+}

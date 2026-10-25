@@ -454,7 +454,7 @@ import (
  accessplayer %q
  %q
 )
-// entity.kick（D16）：玩家接入层在 Provide 时把它挂到 App 的 admin 注册表（嵌入 TCP 是本 Mod，独立 Gate 是 Game Ingress），
+// entity.kick：玩家接入层在 Provide 时把它挂到 App 的 admin 注册表（嵌入 TCP 是本 Mod，独立 Gate 是 Game Ingress），
 // 经 ops 的 /admin/execute 调用（同一套 token 与审计）。它关闭该玩家在本进程的全部连接、回答关闭的会话数，不改实体状态；
 // 玩家随后可以重新登录。
 func TestAdminEntityKickClosesThePlayersConnections(t *testing.T){

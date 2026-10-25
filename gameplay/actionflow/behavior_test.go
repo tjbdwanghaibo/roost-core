@@ -15,7 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// Behavior 的接线（D21 A1）：动作结束先送任务、再送观察者；任务回调里发起的动作归属任务、随任务结束；Clear 先结束
+// Behavior 的接线：动作结束先送任务、再送观察者；任务回调里发起的动作归属任务、随任务结束；Clear 先结束
 // 任务再结束动作；上下文带实体、ActionList 与当前任务。
 
 // behaviorObserver 记录观察者收到的通知；seenStep 是收到动作结束那一刻任务所在的步（验证“先任务后观察者”）。
@@ -185,7 +185,7 @@ func TestNewBehaviorRefusesABeatHostOfAnotherEntity(t *testing.T) {
 	}
 }
 
-// --- D21 第 4 期：任务心跳与计划步骤的时限 / 重试 ---
+// --- 任务心跳与计划步骤的时限 / 重试 ---
 
 // newBeatBehaviorForTest 构造配了心跳的 Behavior（驱动不启动：启停立即生效，拍由测试直接调回调），时钟可控。
 func newBeatBehaviorForTest(t *testing.T, now *time.Time) (*Behavior, *behaviorObserver, *heartbeat.Driver) {
@@ -303,6 +303,69 @@ func TestTheMissionHeartbeatFollowsTheCurrentStep(t *testing.T) {
 	}
 }
 
+// 步骤动作所在的组被冻结期间，这一步的时限不计时（定身长于时限时护送 / 巡逻不会直接失败），解冻后
+// 按剩余时长继续；多次冻结累加。计时按 Behavior 的时钟。FreezeCancel 打断时这一步照现有规则结束（取消、不重试、走
+// OnFail），不受影响。
+func TestAFrozenGroupPausesItsStepTimeout(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	now := start
+	behavior, observer, _ := newBeatBehaviorForTest(t, &now)
+	escort := &runnerTestAction{label: "escort"}
+	if err := behavior.SetMission(1, MissionPlan{Steps: []MissionStep{{Action: 1, Param: escort, Timeout: time.Second}}}); err != nil {
+		t.Fatal(err)
+	}
+	at := func(d time.Duration) { now = start.Add(d) }
+	beat := func(d time.Duration) {
+		at(d)
+		if err := behavior.missionBeat(heartbeat.Beat{Now: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := func(when string) {
+		t.Helper()
+		if escort.cancels != 0 || behavior.CurMission() == nil {
+			t.Fatalf("%s: cancels %d mission %v log %v (the step timed out while its group was frozen)", when, escort.cancels, behavior.CurMission(), observer.log)
+		}
+	}
+	at(400 * time.Millisecond) // 已用 400ms
+	if err := behavior.Freeze(1, FreezePause); err != nil {
+		t.Fatal(err)
+	}
+	beat(3 * time.Second) // 定身 2.6s，长于时限
+	running("frozen 2.6s after 400ms of a 1s timeout")
+	if err := behavior.Recover(1); err != nil {
+		t.Fatal(err)
+	}
+	beat(3300 * time.Millisecond) // 已用 700ms
+	running("700ms used")
+	if err := behavior.Freeze(1, FreezePause); err != nil { // 第二次定身：累加
+		t.Fatal(err)
+	}
+	beat(5 * time.Second)
+	running("frozen again")
+	if err := behavior.Recover(1); err != nil {
+		t.Fatal(err)
+	}
+	beat(5200 * time.Millisecond) // 已用 900ms
+	running("900ms used")
+	beat(5300 * time.Millisecond) // 已用 1s：到时
+	if escort.cancels != 1 || behavior.CurMission() != nil || behavior.Missions().MissionInfo().LastResult.Reason != stepTimedOut {
+		t.Fatalf("1s of unfrozen time: cancels %d mission %v info %+v", escort.cancels, behavior.CurMission(), behavior.Missions().MissionInfo())
+	}
+
+	// FreezeCancel：打断即结束这一步（取消不重试），任务按 OnFail 结束，与时限无关。
+	interrupted := &runnerTestAction{label: "patrol"}
+	if err := behavior.SetMission(1, MissionPlan{Steps: []MissionStep{{Action: 1, Param: interrupted, Timeout: time.Second, Retry: 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := behavior.Freeze(1, FreezeCancel); err != nil {
+		t.Fatal(err)
+	}
+	if info := behavior.Missions().MissionInfo(); interrupted.starts != 1 || interrupted.cancels != 1 || behavior.CurMission() != nil || info.Status != MissionStatusCanceled {
+		t.Fatalf("FreezeCancel: starts %d cancels %d mission %v info %+v", interrupted.starts, interrupted.cancels, behavior.CurMission(), info)
+	}
+}
+
 // flakyAction 第一次 Start 即失败、之后即成功（计划的重试测试用）。
 type flakyAction struct{ starts int }
 
@@ -329,7 +392,7 @@ func TestPlanRetriesAreCountedPerStep(t *testing.T) {
 	}
 }
 
-// --- D21 第 5 期：动作指标（可选） ---
+// --- 动作指标（可选） ---
 
 // 打开 Metrics 时：动作成为当前动作记一次 started（按种类）、结束记一次 ended（按种类与结束状态，含从未启动就被丢弃的
 // 排队项），running 是此刻的当前动作数；不打开时什么都不写。
@@ -393,7 +456,7 @@ func TestBehaviorMetricsCountStartsEndsAndRunningActions(t *testing.T) {
 	}
 }
 
-// D22-1：没配 Now 时，Behavior 的业务时间（动作的 ActionContext.Now、任务的 MissionContext.Now，计划步骤 Timeout 的
+// 没配 Now 时，Behavior 的业务时间（动作的 ActionContext.Now、任务的 MissionContext.Now，计划步骤 Timeout 的
 // 起点）是本次执行冻结的 fctx.Now，与 handler 里读的同一时刻。
 func TestBehaviorDefaultNowIsTheExecutionsFrozenBusinessTime(t *testing.T) {
 	steppingBusinessClock(t)
@@ -415,7 +478,7 @@ type fixedDomainFields struct{ state timedomain.State }
 func (f *fixedDomainFields) TimeDomain() timedomain.State     { return f.state }
 func (f *fixedDomainFields) SetTimeDomain(s timedomain.State) { f.state = s }
 
-// D22：Beat.TimeDomain 挂了场景的时间域时，Behavior 没配 Now 就取域时间（动作与任务的上下文、计划步骤 Timeout 的起点），
+// Beat.TimeDomain 挂了场景的时间域时，Behavior 没配 Now 就取域时间（动作与任务的上下文、计划步骤 Timeout 的起点），
 // 心跳之外经 BeatRunner 直接 Start 的动作 ActionContext.Now 也是域时间。
 func TestBehaviorOnATimeDomainUsesDomainTime(t *testing.T) {
 	domain, err := timedomain.New(&fixedDomainFields{state: timedomain.State{AnchorBusinessNano: 1, AnchorDomainNano: 5e17, Rate: 1}}, timedomain.Config{})

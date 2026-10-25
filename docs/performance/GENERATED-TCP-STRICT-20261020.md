@@ -35,6 +35,8 @@
 
 ## 4. 复跑
 
+**2026-10-22 已在 v1.31.0 发版候选上复跑**（[NIGHT-20261022 §13](NIGHT-20261022.md#13-第-14-项生成工程完整链路持久写入嵌入-tcp--strict)）：strict 50 连接 1241～1314 TPS（4 次）、同一实体 113 TPS，与本页一致；另做了 pipelined / async 对照，self_sync 对照未做。命令用的就是下面的步骤（第 2 步的具体命令写在那一节）。
+
 1. 在本仓 `codegen/internal/roost` 放入 `prepare_test.go.txt`（改名为 `_test.go`），`R8_OUT=<目录> GOWORK=off go test -run '^TestR8PrepareTapProject$' ./codegen/internal/roost/` 生成工程（指向本检出）。
 2. 在生成工程里按 §1 依次运行 `roost add protocol / endpoint / lifecycle / transport tcp`、`config enable player-tcp`，替换 `internal/access/player/tcp/auth.go`，放入 `cmd/tapload/main.go`，`roost generate`，build 出 game 与 tapload。
 3. `run_tcp.sh.txt`（嵌入 TCP）与 `run_tap.sh.txt` + `tap_perf_test.go.txt`（进程内）在持锁、source 隔离环境后运行；参数见脚本头。

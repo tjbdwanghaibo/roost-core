@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Physics Room" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="roost-core" />
+    <working_directory value="$PROJECT_DIR$" />
+    <envs>
+      <env name="CGO_ENABLED" value="1" />
+      <env name="GOWORK" value="off" />
+    </envs>
+    <go_parameters value="-tags=physx" />
+    <parameters value="-scenario room -listen 127.0.0.1:19093 -send-hz 20 -duration 1h" />
+    <kind value="PACKAGE" />
+    <package value="github.com/tjbdwanghaibo/roost-core/cmd/physics-viewer" />
+    <directory value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>

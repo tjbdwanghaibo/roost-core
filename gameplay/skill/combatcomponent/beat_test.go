@@ -22,7 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// Buff 与技能 Runtime 的心跳（D20 P5），经真实 Nest 引擎与运行中的心跳驱动：有限时 buff / 在途施法时挂登记，
+// Buff 与技能 Runtime 的心跳，经真实 Nest 引擎与运行中的心跳驱动：有限时 buff / 在途施法时挂登记，
 // 每拍推进，清空或空闲后停；事务回滚不启动；加载出的过期记录在第一拍清掉；时间域时停时不前进。
 // 断言提交后的状态之前经同一实体的一条空消息等前一拍收尾（settle），不 sleep。
 
@@ -41,7 +41,7 @@ var heartbeatDurabilities = []nest.DurabilityPolicy{nest.DurabilityMemory, nest.
 var beatTestRun = nest.NewHandlerName("combatcomponent_test.beat_run")
 
 // testBeatDelivery 是 newBeatFixture 的心跳投递方式；走真实驱动的用例经 forEachBeatDelivery 在单目标 Dispatch 与
-// Nest 批量作业（D20 选项 C，heartbeat.delivery: batch）两种方式下各跑一遍。
+// Nest 批量作业（heartbeat.delivery: batch）两种方式下各跑一遍。
 var testBeatDelivery = heartbeat.DefaultDelivery
 
 func forEachBeatDelivery(t *testing.T, fn func(t *testing.T)) {

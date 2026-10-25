@@ -1,0 +1,12 @@
+{
+  "dir": "data/wal/dataengine/1000",
+  "drained": false,
+  "records_retained": 173,
+  "checkpoint": "segment 1 offset 27402",
+  "last_record": "segment 1 offset 31770 (78789a05b58506b400000000000000bb)",
+  "reason": "the checkpoint is behind the last record",
+  "databases": {
+    "main": "dr1022"
+  }
+}
+sidmove: wal-drained: the WAL still holds records that are not acknowledged as projected

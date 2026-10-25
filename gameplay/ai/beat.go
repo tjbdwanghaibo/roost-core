@@ -11,8 +11,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 )
 
-// AI 心跳（DESIGN-TODO D21 C4，维护者 2026-10-21 决定 7）：Controller 用实体心跳上一个独立的登记 "ai" 驱动决策，不并进
-// actionflow 的组心跳——AI 的决策周期（常见 200ms～1s）与动作推进周期不同，理由同 D20 P2 的“每组一个心跳”。
+// AI 心跳：Controller 用实体心跳上一个独立的登记 "ai" 驱动决策，不并进 actionflow 的组心跳——AI 的决策周期
+// （常见 200ms～1s）与动作推进周期不同，理由同 actionflow 的“每组一个心跳”。
 //
 // 周期由当前策略决定：策略可选实现 actionflow.TickIntervaler（TickInterval() time.Duration），不实现按
 // BeatConfig.Period；返回 0 表示不需要周期决策（只靠动作 / 任务结束驱动），停心跳。没有策略、或冻结且不是定时冻结
@@ -36,7 +36,7 @@ type BeatConfig struct {
 	Period time.Duration
 	// Options 传给 heartbeat.Host.Register。
 	Options []heartbeat.RegOption
-	// TimeDomain 非 nil 时实体在场景的时间域里（DESIGN-TODO D22）：AI 心跳挂上这个域（决策拍的时间是域时间），
+	// TimeDomain 非 nil 时实体在场景的时间域里：AI 心跳挂上这个域（决策拍的时间是域时间），
 	// ControllerHooks.Now 为 nil 时 Controller 的时间也取域时间（Domain.Now），FreezeFor 的期限与到期判断同一把尺子。
 	TimeDomain *timedomain.Domain
 }

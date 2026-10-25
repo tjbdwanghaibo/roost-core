@@ -19,7 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// AI 心跳（D21 C4）与定时冻结（C3）。
+// AI 心跳与定时冻结。
 
 // pacedStrategy 是带 TickInterval 的测试策略（interval 可在运行中改：策略随自身状态改周期）。
 type pacedStrategy struct {
@@ -271,7 +271,7 @@ type fixedDomainFields struct{ state timedomain.State }
 func (f *fixedDomainFields) TimeDomain() timedomain.State     { return f.state }
 func (f *fixedDomainFields) SetTimeDomain(s timedomain.State) { f.state = s }
 
-// D22：BeatConfig.TimeDomain 挂了场景的时间域时，没配 Now 钩子的 Controller 取域时间：FreezeFor 的期限与 AI 心跳
+// BeatConfig.TimeDomain 挂了场景的时间域时，没配 Now 钩子的 Controller 取域时间：FreezeFor 的期限与 AI 心跳
 // （域时间的 Beat.Now）判断到期用同一把尺子。
 func TestABeatControllerOnATimeDomainUsesDomainTime(t *testing.T) {
 	domain, err := timedomain.New(&fixedDomainFields{state: timedomain.State{AnchorBusinessNano: 1, AnchorDomainNano: 5e17, Rate: 1}}, timedomain.Config{})

@@ -1,0 +1,252 @@
+2026/10/23 02:45:11 INFO nats: connected url=nats://127.0.0.1:40222
+2026/10/23 02:45:11 INFO bus: subscribed subject=lt1022.srv.0
+2026/10/23 02:45:11 INFO bus: subscribed subject=lt1022.svc.loadtest.0
+2026/10/23 02:45:11 INFO bus: subscribed subject=lt1022.svc.loadtest.all
+2026/10/23 02:45:11 INFO bus: subscribed subject=lt1022.srv.all
+2026/10/23 02:45:11 INFO robot loadtest: run start accepted run_id=robot-demo-20261023-024511-001 profile=demo scenario=demo count=200 endpoint=127.0.0.1:7000
+2026/10/23 02:45:11 INFO robot runner: start executor=pool count=200 rate=1 scenario=demo transport=player-tcp endpoint=127.0.0.1:7000
+2026/10/23 02:45:21 WARN robot runner: scenario failed robot=98 player=900098 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:21 WARN robot runner: scenario failed robot=82 player=900082 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:21 WARN robot runner: scenario failed robot=86 player=900086 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:21 WARN robot runner: scenario failed robot=89 player=900089 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:21 WARN robot runner: scenario failed robot=88 player=900088 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=90 player=900090 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=87 player=900087 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=100 player=900100 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=99 player=900099 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=83 player=900083 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=95 player=900095 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=94 player=900094 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:22 WARN robot runner: scenario failed robot=106 player=900106 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=109 player=900109 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=114 player=900114 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=118 player=900118 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=115 player=900115 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=112 player=900112 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=102 player=900102 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=113 player=900113 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=116 player=900116 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=110 player=900110 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=108 player=900108 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=119 player=900119 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=111 player=900111 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=103 player=900103 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=120 player=900120 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=104 player=900104 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:23 WARN robot runner: scenario failed robot=107 player=900107 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=105 player=900105 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=117 player=900117 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=20 player=900020 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=101 player=900101 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=136 player=900136 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=122 player=900122 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=125 player=900125 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=132 player=900132 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=40 player=900040 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=36 player=900036 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=130 player=900130 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=1 player=900001 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=135 player=900135 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=13 player=900013 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=133 player=900133 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=138 player=900138 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=131 player=900131 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=139 player=900139 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=129 player=900129 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=128 player=900128 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=23 player=900023 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=38 player=900038 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=33 player=900033 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=7 player=900007 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=16 player=900016 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=140 player=900140 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=34 player=900034 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=15 player=900015 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:24 WARN robot runner: scenario failed robot=134 player=900134 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=137 player=900137 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=30 player=900030 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=121 player=900121 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=28 player=900028 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=32 player=900032 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=126 player=900126 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=17 player=900017 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=123 player=900123 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=22 player=900022 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=124 player=900124 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=37 player=900037 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=127 player=900127 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=31 player=900031 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=3 player=900003 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=35 player=900035 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=25 player=900025 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=24 player=900024 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=29 player=900029 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=21 player=900021 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=146 player=900146 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=6 player=900006 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=151 player=900151 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=156 player=900156 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=147 player=900147 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=27 player=900027 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=26 player=900026 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=145 player=900145 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:25 WARN robot runner: scenario failed robot=154 player=900154 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=148 player=900148 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=39 player=900039 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=150 player=900150 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=11 player=900011 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=153 player=900153 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=14 player=900014 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=159 player=900159 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=160 player=900160 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=142 player=900142 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=45 player=900045 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=157 player=900157 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=158 player=900158 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=155 player=900155 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=10 player=900010 scenario=demo err="robot action gift_status: gift saga still pending (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=12 player=900012 scenario=demo err="robot action gift_status: gift saga still pending (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=9 player=900009 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=51 player=900051 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=141 player=900141 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=42 player=900042 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=5 player=900005 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=149 player=900149 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=19 player=900019 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=143 player=900143 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=56 player=900056 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=44 player=900044 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=152 player=900152 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=47 player=900047 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=144 player=900144 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=8 player=900008 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:26 WARN robot runner: scenario failed robot=177 player=900177 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=176 player=900176 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=175 player=900175 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=18 player=900018 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=163 player=900163 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=54 player=900054 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=172 player=900172 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=165 player=900165 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=43 player=900043 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=173 player=900173 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=161 player=900161 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=60 player=900060 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=166 player=900166 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=59 player=900059 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=167 player=900167 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=41 player=900041 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=180 player=900180 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=46 player=900046 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=162 player=900162 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=58 player=900058 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=164 player=900164 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=170 player=900170 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=174 player=900174 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=169 player=900169 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=171 player=900171 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=168 player=900168 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=179 player=900179 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=178 player=900178 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=57 player=900057 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=182 player=900182 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=2 player=900002 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=193 player=900193 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=52 player=900052 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=187 player=900187 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=192 player=900192 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=186 player=900186 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=53 player=900053 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=190 player=900190 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=194 player=900194 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=48 player=900048 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=191 player=900191 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=55 player=900055 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=50 player=900050 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=196 player=900196 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=184 player=900184 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=181 player=900181 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=183 player=900183 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=197 player=900197 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=200 player=900200 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=188 player=900188 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=185 player=900185 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=189 player=900189 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=199 player=900199 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=195 player=900195 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=49 player=900049 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:27 WARN robot runner: scenario failed robot=198 player=900198 scenario=demo err="robot action list_mail: no claimable mail yet (0 in the box)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=67 player=900067 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=64 player=900064 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=66 player=900066 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=4 player=900004 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=65 player=900065 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=73 player=900073 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=68 player=900068 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:28 WARN robot runner: scenario failed robot=80 player=900080 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=61 player=900061 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=78 player=900078 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=76 player=900076 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=62 player=900062 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=63 player=900063 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=71 player=900071 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=74 player=900074 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=75 player=900075 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=70 player=900070 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:29 WARN robot runner: scenario failed robot=69 player=900069 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:30 WARN robot runner: scenario failed robot=77 player=900077 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:30 WARN robot runner: scenario failed robot=79 player=900079 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:30 WARN robot runner: scenario failed robot=72 player=900072 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:30 WARN robot runner: scenario failed robot=81 player=900081 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=96 player=900096 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=97 player=900097 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=84 player=900084 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=93 player=900093 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=85 player=900085 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=91 player=900091 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 WARN robot runner: scenario failed robot=92 player=900092 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:45:31 INFO robot runner: stop started=200 success=0 failure=200 canceled=0
+2026/10/23 02:45:31 INFO robot loadtest: run done run_id=robot-demo-20261023-024511-001 profile=demo state=failed stop_reason=threshold started=200 success=0 failure=200 canceled=0 elapsed=20.476352917s err=<nil> verdict="threshold violated: error_rate = 1 > max 0 (200 samples); p95: no samples to judge (max 16s)"
+{
+  "run_id": "robot-demo-20261023-024511-001",
+  "profile": "demo",
+  "state": "failed",
+  "stop_reason": "threshold",
+  "started_at_ms": 1792694711231,
+  "ended_at_ms": 1792694731708,
+  "count": 200,
+  "scenario": "demo",
+  "stats": {
+    "started": 200,
+    "online": 0,
+    "success": 0,
+    "failure": 200,
+    "canceled": 0,
+    "failure_rate": 1
+  },
+  "thresholds": [
+    {
+      "metric": "error_rate",
+      "max": 0,
+      "actual": 1,
+      "violated": true,
+      "samples": 200
+    },
+    {
+      "metric": "p95",
+      "max": 16,
+      "actual": 0,
+      "violated": true,
+      "samples": 0,
+      "reason": "no_samples"
+    }
+  ],
+  "quantiles_ms": {
+    "p50": 0,
+    "p90": 0,
+    "p95": 0,
+    "p99": 0
+  },
+  "error": "threshold violated: error_rate = 1 \u003e max 0 (200 samples); p95: no samples to judge (max 16s)"
+}
+loadtest: run robot-demo-20261023-024511-001 ended failed (threshold): threshold violated: error_rate = 1 > max 0 (200 samples); p95: no samples to judge (max 16s)

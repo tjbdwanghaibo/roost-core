@@ -1,0 +1,63 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+                                                             │   old.txt    │              new.txt               │
+                                                             │    sec/op    │   sec/op     vs base               │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10     2.000µ ± 0%   1.999µ ± 0%       ~ (p=0.103 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10    1.000µ ± 0%   1.000µ ± 0%       ~ (p=0.952 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10        20.00µ ± 0%   20.00µ ± 0%       ~ (p=0.232 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10        2.000µ ± 0%   2.000µ ± 0%       ~ (p=0.978 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10      1000.0n ± 0%   999.9n ± 0%       ~ (p=0.839 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10           20.00µ ± 0%   20.00µ ± 0%       ~ (p=0.541 n=10)
+geomean                                                         3.420µ        3.420µ       -0.01%
+
+                                                             │   old.txt    │              new.txt               │
+                                                             │   beats/s    │   beats/s    vs base               │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10     499.9k ± 0%   500.2k ± 0%       ~ (p=0.143 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10   1000.0k ± 0%   999.9k ± 0%       ~ (p=1.000 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10        50.00k ± 0%   50.00k ± 0%       ~ (p=0.264 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10        500.1k ± 0%   500.1k ± 0%       ~ (p=0.684 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10       1.000M ± 0%   1.000M ± 0%       ~ (p=0.971 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10           50.00k ± 0%   50.00k ± 0%       ~ (p=0.328 n=10)
+geomean                                                         292.4k        292.4k       +0.01%
+
+                                                             │    old.txt    │                new.txt                │
+                                                             │ cpu-sec/beat  │ cpu-sec/beat   vs base                │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10    305.2n ±  31%   441.4n ±  46%  +44.65% (p=0.019 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10   297.3n ±  34%   375.1n ±  14%  +26.15% (p=0.029 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10       724.1n ±  64%   837.9n ±  96%        ~ (p=0.393 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10       360.9n ±  38%   349.4n ±  83%        ~ (p=0.579 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10      325.1n ±  25%   356.4n ±  28%        ~ (p=0.123 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10          775.6n ± 134%   615.9n ± 132%        ~ (p=0.280 n=10)
+geomean                                                        426.1n          469.0n         +10.08%
+
+                                                             │    old.txt    │                new.txt                │
+                                                             │ driver-cores  │ driver-cores   vs base                │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10    152.7m ±  31%   220.8m ±  46%  +44.64% (p=0.019 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10   297.4m ±  33%   375.1m ±  14%  +26.11% (p=0.029 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10       36.21m ±  64%   41.90m ±  96%        ~ (p=0.393 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10       180.4m ±  38%   174.8m ±  83%        ~ (p=0.579 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10      324.9m ±  25%   356.2m ±  20%        ~ (p=0.165 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10          38.78m ± 134%   30.79m ± 132%        ~ (p=0.280 n=10)
+geomean                                                        124.6m          137.1m         +10.08%
+
+                                                             │  old.txt   │              new.txt               │
+                                                             │    B/op    │    B/op     vs base                │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10    64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10   64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10       64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10       64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10      64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10          64.00 ± 0%   96.00 ± 0%  +50.00% (p=0.000 n=10)
+geomean                                                        64.00        96.00       +50.00%
+
+                                                             │  old.txt   │              new.txt               │
+                                                             │ allocs/op  │ allocs/op   vs base                │
+DriverDispatch/delivery=dispatch/regs=50000/period=100ms-10    2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=dispatch/regs=100000/period=100ms-10   2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=dispatch/regs=50000/period=1s-10       2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10       2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=100000/period=100ms-10      2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+DriverDispatch/delivery=batch/regs=50000/period=1s-10          2.000 ± 0%   3.000 ± 0%  +50.00% (p=0.000 n=10)
+geomean                                                        2.000        3.000       +50.00%

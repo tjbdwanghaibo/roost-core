@@ -1,4 +1,4 @@
-// 视野（D19）：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按视野的 MaxVisible、
+// 视野：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按视野的 MaxVisible、
 // 挂接上限、跟随实体、移除视野。断言看 Manager 的订阅表与 packer 实际打包的字段。
 
 package policy
@@ -305,6 +305,54 @@ func TestViewAttachmentLimitsRefuse(t *testing.T) {
 	mustView(t, manager.OpenSession(3))
 	if err := interest.Watch(3, spatial.Point{X: 100, Y: 100}, ObserverView{}); !errors.Is(err, ErrViewLimit) {
 		t.Fatalf("a main view past the limit was created: %v", err)
+	}
+}
+
+// 空间视野总数：每个 Interest 经 DefineSpatialView 定义的空间视野不超过 MaxSpatialViews，挂没挂接
+// 都算（定义了没挂接的也是 AOI 观察者，MaxViewsPerPlayer 管不到）；超出返回 ErrSpatialViewLimit 并计数，什么都不定义。
+// 主视野与关系视野不计；RemoveView 释放名额；重复 ID 仍报 ErrViewExists。零值取 DefaultMaxSpatialViews，负数拒绝构造。
+func TestSpatialViewsPerInterestAreLimited(t *testing.T) {
+	manager := newManager(t)
+	config := InterestConfig{Manager: manager, MaxSpatialViews: 2, AOI: AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+	}}
+	interest, err := NewInterest(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(interest.Close)
+	player(t, manager, 1)
+	mustView(t, interest.Enter(1, 1, spatial.Point{X: 500, Y: 500}, ObserverView{}))
+	mustView(t, interest.DefineRelationView(5, entity.SyncProfile{}))
+	at := spatial.Point{X: 100, Y: 100}
+	mustView(t, interest.DefineSpatialView(10, at, ObserverView{}, 0))
+	mustView(t, interest.DefineSpatialView(11, at, ObserverView{}, 0)) // 没挂接给任何人，照样占名额
+	before := counterValueWith(viewLimitMetric, "reason", "spatial_views")
+	if err := interest.DefineSpatialView(12, at, ObserverView{}, 0); !errors.Is(err, ErrSpatialViewLimit) {
+		t.Fatalf("a third spatial view was defined past MaxSpatialViews 2: %v", err)
+	}
+	if got := counterValueWith(viewLimitMetric, "reason", "spatial_views") - before; got != 1 {
+		t.Fatalf("spatial view refusals counted %d, want 1", got)
+	}
+	if _, ok := interest.ViewPlayers(12); ok {
+		t.Fatal("the refused spatial view was defined")
+	}
+	if err := interest.DefineSpatialView(10, at, ObserverView{}, 0); !errors.Is(err, ErrViewExists) {
+		t.Fatalf("a duplicate id at the limit: %v, want ErrViewExists", err)
+	}
+	mustView(t, interest.DefineRelationView(6, entity.SyncProfile{})) // 关系视野不计
+	mustView(t, interest.RemoveView(10))
+	mustView(t, interest.DefineSpatialView(12, at, ObserverView{}, 0))
+
+	config.MaxSpatialViews = 0
+	if in, err := NewInterest(config); err != nil || in.registry.maxSpatial != DefaultMaxSpatialViews {
+		t.Fatalf("zero MaxSpatialViews: err %v", err)
+	} else {
+		in.Close()
+	}
+	config.MaxSpatialViews = -1
+	if _, err := NewInterest(config); !errors.Is(err, ErrInterestConfig) {
+		t.Fatalf("negative MaxSpatialViews: %v", err)
 	}
 }
 

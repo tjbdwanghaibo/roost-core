@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -704,39 +705,38 @@ func TestOutboxSupersedeAndUnknownAckOnMongoStore(t *testing.T) {
 	})
 }
 
-// 候选扫描不授予发布权：另一个发布者 Nack 延后消息之后，原扫描者必须在原子领取处复查 NextAttemptAt，不能绕过退避。
-// 正式 MongoStore、后端 mongotest；钩子在 Find 返回后同步执行另一个 Store，确定交错而不靠 sleep。
-type outboxScanClient struct {
+// 另一个发布者 Nack 延后消息之后，领取必须复查 NextAttemptAt，不能绕过退避。
+// 正式 MongoStore、后端 mongotest；钩子在原子领取前同步执行另一个 Store，不靠 sleep。
+type outboxClaimClient struct {
 	fmongo.IMongo
-	afterScan func()
+	beforeClaim func()
 }
 
-func (c *outboxScanClient) Database(name string) fmongo.IDatabase {
-	return outboxScanDatabase{IDatabase: c.IMongo.Database(name), client: c}
+func (c *outboxClaimClient) Database(name string) fmongo.IDatabase {
+	return outboxClaimDatabase{IDatabase: c.IMongo.Database(name), client: c}
 }
 
-type outboxScanDatabase struct {
+type outboxClaimDatabase struct {
 	fmongo.IDatabase
-	client *outboxScanClient
+	client *outboxClaimClient
 }
 
-func (d outboxScanDatabase) Collection(name string) fmongo.ICollection {
-	return outboxScanCollection{ICollection: d.IDatabase.Collection(name), client: d.client}
+func (d outboxClaimDatabase) Collection(name string) fmongo.ICollection {
+	return outboxClaimCollection{ICollection: d.IDatabase.Collection(name), client: d.client}
 }
 
-type outboxScanCollection struct {
+type outboxClaimCollection struct {
 	fmongo.ICollection
-	client *outboxScanClient
+	client *outboxClaimClient
 }
 
-func (c outboxScanCollection) Find(ctx context.Context, filter, result any, options ...fmongo.FindOption) error {
-	err := c.ICollection.Find(ctx, filter, result, options...)
-	if _, ok := result.(*[]outboxDoc); ok && err == nil && c.client.afterScan != nil {
-		hook := c.client.afterScan
-		c.client.afterScan = nil
+func (c outboxClaimCollection) FindOneAndUpdate(ctx context.Context, filter, update, result any, options ...fmongo.FindOneAndUpdateOption) error {
+	if _, ok := result.(*outboxDoc); ok && c.client.beforeClaim != nil {
+		hook := c.client.beforeClaim
+		c.client.beforeClaim = nil
 		hook()
 	}
-	return err
+	return c.ICollection.FindOneAndUpdate(ctx, filter, update, result, options...)
 }
 
 func TestOutboxClaimRechecksDueAfterAnotherPublisher(t *testing.T) {
@@ -744,7 +744,7 @@ func TestOutboxClaimRechecksDueAfterAnotherPublisher(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			backend := mongotest.NewClient()
-			client := &outboxScanClient{IMongo: backend}
+			client := &outboxClaimClient{IMongo: backend}
 			opts := MongoStoreOptions{Database: "outbox_due_review"}
 			stale, err := NewMongoStore(client, opts)
 			if err != nil {
@@ -775,7 +775,7 @@ func TestOutboxClaimRechecksDueAfterAnotherPublisher(t *testing.T) {
 			query := ClaimRequest{Owner: "stale", Now: now, LeaseDuration: time.Minute, Limit: 1}
 			var claimed OutboxRecord
 			fired := false
-			client.afterScan = func() {
+			client.beforeClaim = func() {
 				fired = true
 				other := query
 				other.Owner = "fresh"
@@ -796,7 +796,7 @@ func TestOutboxClaimRechecksDueAfterAnotherPublisher(t *testing.T) {
 			}
 			items, err := stale.ClaimOutbox(ctx, query)
 			if !fired {
-				t.Fatal("scan hook did not execute")
+				t.Fatal("claim hook did not execute")
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -1133,5 +1133,129 @@ func TestMongoApplyClosingAnOperationReadsItsTombstoneOnce(t *testing.T) {
 				t.Fatalf("closure = %q, want %q", tombstone.Closure, tc.want)
 			}
 		})
+	}
+}
+
+// 并发领取不能因为扫描了同一个候选就把另一个可领取记录留给下一轮。
+// 屏障固定旧扫描路径的交错；原子领取不经过扫描，也不需要此屏障。
+type claimBarrierClient struct {
+	fmongo.IMongo
+	scanned atomic.Int32
+	ready   chan struct{}
+}
+type claimBarrierDatabase struct {
+	fmongo.IDatabase
+	owner *claimBarrierClient
+}
+type claimBarrierCollection struct {
+	fmongo.ICollection
+	owner *claimBarrierClient
+}
+
+func (c *claimBarrierClient) Database(name string) fmongo.IDatabase {
+	return claimBarrierDatabase{c.IMongo.Database(name), c}
+}
+func (d claimBarrierDatabase) Collection(name string) fmongo.ICollection {
+	return claimBarrierCollection{d.IDatabase.Collection(name), d.owner}
+}
+func (c claimBarrierCollection) Find(ctx context.Context, filter, result any, options ...fmongo.FindOption) error {
+	err := c.ICollection.Find(ctx, filter, result, options...)
+	if err == nil {
+		if c.owner.scanned.Add(1) == 2 {
+			close(c.owner.ready)
+		}
+		<-c.owner.ready
+	}
+	return err
+}
+func TestConcurrentMongoClaimsFillAvailableSlots(t *testing.T) {
+	for _, outbox := range []bool{false, true} {
+		t.Run(fmt.Sprint("outbox=", outbox), func(t *testing.T) {
+			ctx := context.Background()
+			backend := mongotest.NewClient()
+			store, err := NewMongoStore(backend, MongoStoreOptions{Database: "claims"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.EnsureInfrastructure(ctx); err != nil {
+				t.Fatal(err)
+			}
+			engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Register(testDefinition()); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			for i := range 2 {
+				id := fmt.Sprint("claim-", i)
+				r, err := engine.StartSaga(ctx, StartRequest{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: id, Now: now})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outbox {
+					if err := engine.processClaimed(ctx, r, now); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			store.client = &claimBarrierClient{IMongo: backend, ready: make(chan struct{})}
+			results := make(chan []string, 2)
+			for i := range 2 {
+				go func() {
+					q := ClaimRequest{Owner: fmt.Sprint("worker-", i), Now: now, LeaseDuration: time.Minute, Limit: 1}
+					var ids []string
+					if outbox {
+						rows, err := store.ClaimOutbox(ctx, q)
+						if err != nil {
+							t.Error(err)
+						}
+						for _, r := range rows {
+							ids = append(ids, r.Command.ID)
+						}
+					} else {
+						rows, err := store.ClaimDue(ctx, q)
+						if err != nil {
+							t.Error(err)
+						}
+						for _, r := range rows {
+							ids = append(ids, r.ID)
+						}
+					}
+					results <- ids
+				}()
+			}
+			first, second := <-results, <-results
+			if len(first) != 1 || len(second) != 1 {
+				t.Fatalf("available=2 claimed=%v / %v; each worker should receive one", first, second)
+			}
+			if first[0] == second[0] {
+				t.Fatalf("duplicate claim %s", first[0])
+			}
+		})
+	}
+}
+
+func BenchmarkMongoClaimDue(b *testing.B) {
+	ctx := context.Background()
+	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "claim_bench"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for i := range 100 {
+		id := fmt.Sprint("claim-", i)
+		if err := store.Create(ctx, Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: id, Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		now = now.Add(time.Minute)
+		rows, err := store.ClaimDue(ctx, ClaimRequest{Owner: "bench", Now: now, LeaseDuration: time.Second, Limit: 3})
+		if err != nil || len(rows) != 3 {
+			b.Fatalf("claim %d: %v", len(rows), err)
+		}
 	}
 }

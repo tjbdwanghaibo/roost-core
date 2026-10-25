@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# 夜间段的编译准备（在两次 nest-game 运行之间做，压测脚本的门控会等这些编译结束）：
+# mirror-local（私有根目录 $P/env、偏移 26000，接管已在跑的 dataengine-env 并补 Redis 副本与 Cluster）、
+# 演练工程 dr1022、#10 / #11 一次性夹具测试二进制、#7 投递夹具二进制。
+set -euo pipefail
+P=<scratch>
+W=<worktree>
+export GOWORK=off
+echo "prep start $(date +%T)"
+(cd $W && ROOST_MIRROR_LOCAL_HOME=$P/env ROOST_MIRROR_LOCAL_OFFSET=26000 bash scripts/mirror-local.sh up) > $P/mirror-up.log 2>&1 && echo "mirror-local up ok" || { echo "mirror-local up FAILED"; tail -20 $P/mirror-up.log; }
+# 演练工程
+if [ ! -d $P/dr1022 ]; then
+  (cd $W && go run ./codegen/cmd/roost project new dr1022 -module example.com/dr1022 -template game-demo --skip-deps -out $P/dr1022) > $P/dr1022-new.log 2>&1
+  cd $P/dr1022 && go mod edit -replace github.com/tjbdwanghaibo/roost-core=$W
+  for f in configs/service/config.*.yaml; do case $f in *prod*) continue;; esac; sed -i '' \
+    -e 's#mongodb://127.0.0.1:27017/?replicaSet=rs0#mongodb://127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it#' \
+    -e 's#nats://127.0.0.1:4222#nats://127.0.0.1:40222#' -e 's#^  addr: 127.0.0.1:6379#  addr: 127.0.0.1:42379#' \
+    -e 's#max_bytes: 8589934592#max_bytes: 67108864#' "$f"; done
+  # B：同 sid 第二个 game 进程，只改 ops、玩家 TCP、etcd 广播地址与显式 WAL 目录
+  sed -e 's#addr: 127.0.0.1:9100#addr: 127.0.0.1:9200#' -e 's#addr: 0.0.0.0:7000#addr: 0.0.0.0:7100#' -e 's#advertise_addr: 127.0.0.1:9000#advertise_addr: 127.0.0.1:9010#' \
+      configs/service/config.game.yaml | awk '{print} /^  wal:$/{print "    dir: data/walB/dataengine/1000"}' > configs/service/config.gameB.yaml
+  diff configs/service/config.game.yaml configs/service/config.gameB.yaml || true
+  GOFLAGS=-mod=mod go build -o bin/app . 
+  for c in sidmove schemamigrate accountctl; do GOFLAGS=-mod=mod go build -o bin/$c ./cmd/$c; done
+  ls bin
+fi
+# #10 / #11 一次性夹具（不提交，放在 wt-fix）
+cd $P/wt-fix
+go test -c -tags lsdrill -o $P/bin/lsdrill.test ./framework/sync/lockstep && echo "lsdrill built"
+go test -c -tags matchperf -o $P/bin/matchperf.test ./service/match && echo "matchperf built"
+# #7 投递夹具（HB_PERIOD 参数，在本 worktree）
+cd $W && go test -c -o $P/cdefault/bin-period.test ./gameplay/heartbeat/internal/bench && echo "bin-period built"
+echo "prep done $(date +%T)"

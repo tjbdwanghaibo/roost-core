@@ -157,7 +157,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒）。**`strict` 每一拍都在实体 worker 上、持实体锁等提交落盘**（改了持久字段的拍要等一次 WAL 持久化才释放 worker），快池实体的高频心跳不要用；要“这一拍的结果一定落盘才算”的少数登记才用，并选低档位 |
 | `WithTimeDomain(d)` | 本登记按场景的时间域计时（§4D）：调度仍按真实时间，`Beat.Now` / `Elapsed` 是域时间 |
 
-**档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 100ms、AI 200ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
+**档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 200ms（MMO / SLG 常见 2～5Hz，`movement.DefaultMovePeriod`；动作游戏要更细时在动作参数里给 100ms）、AI 200ms～500ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。
 
 **`Beat` 与跳拍语义**：
 
@@ -169,7 +169,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Skipped` | 上次执行以来跳过的拍数，只供观测 |
 | `First` | 本次启动后的第一拍（重载后重新启动、Stop 后再 Start 都算新的一次） |
 
-- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是组件自己的推进，不是框架追帧（`combatcomponent.RuntimeBeat`，§4E）。
+- **不追帧**：每个登记至多一拍在途。上一拍还没执行完（还在排队或执行中）时到期的拍**跳过**，不累积、不补发；在途按投递代际识别，卡住 10s 起（翻倍，上限 80s）的兜底重投沿用原拍的代际，原拍执行后才到的旧重投或旧交回按 `heartbeat.dropped_total{reason="duplicate"}` 丢弃，不执行回调，也不会让下一拍被当成重复；快池准入满（`ErrQueueFull`）同样按跳拍处理。跳拍计 `heartbeat.skipped_total{reason}` 并打限频 Warn（缺省 10 秒一条，汇总这段时间的计数）。回调按 `Elapsed` 算一次：移动 = 速度 × Elapsed。需要逐 tick 确定性的逻辑（技能 Runtime）在回调里把自己推进到 `Now` 对应的 tick，那是组件自己的推进，不是框架追帧（`combatcomponent.RuntimeBeat`，§4E）。
 - **卸载窗口**：驱动投递前核对实例（已卸载、已被同 ID 新实例取代、还没发布的不投，不唤醒不在内存的实体）；执行时再核对实例与令牌，卸载后同 ID 重载的新实例收到旧实例的拍时按过期丢弃，不会在新实例上跑旧登记的回调（维护者决定 ⑨）。投递之后、执行之前被卸载的实体可能因这条消息被 Nest 冷加载一次，与发给它的任何消息相同。
 - **Remote 托管实体**：只在当前拥有方跳。本进程实例处于独占拥有（`LocalOwned`）时投递并执行；首次接触（`Unknown`）交给 Nest 的 Remote 写准入判定；转移中、已隔离不投。所有权迁移时旧拥有方在离开 `LocalOwned` 后不再执行任何一拍，新拥有方加载实例（组件重新登记）或实例回到 `LocalOwned` 后开始跳，两边不会同时跳。每拍要经过一次 Remote 写准入（I/O 阶段），比普通实体贵，档位选低一些。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享模式（`EnterRemoteSharedMode` 之后）各写者进程的实例都是 `Shared`、都经分布式锁写，本地分不出谁该跳，心跳无法执行。共享与否是**运行期**的所有权状态（同一种类的实体可以独占、也可以共享，`LeaveRemoteSharedMode` 回到独占），不是种类声明，所以分两处拦：
@@ -228,7 +228,7 @@ return err
 
 **MapBasic**：
 
-- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段，位置没变过不写。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改；运行中进入共享模式被框架停掉的周期落库，回到独占后目前只能 `Leave` 再 `Enter` 恢复（见 KNOWN-LIMITS“移动与动作”）。
+- 状态的权威是业务 DAO 的字段（`movement.Fields`：场景 ID、位置、朝向）；位置与朝向声明为 nopersist、参与同步，组件不另存一份。位置与朝向**不每拍落库**：`SaveOnLeave` 离开场景时、`SaveEvery`（心跳 `"map.save"`）周期性地调 `Save` 写业务的持久字段（回调参数是场景、位置、朝向），场景、位置、朝向都没变过不写。朝向和位置是同一份数据（维护者 2026-10-22）：只调 `SetFacing` 原地转向也算变过，`Save` 会写；朝向的修改与“变过”都随事务回滚。共享模式下带 `SaveEvery` 的 `Enter` 返回 `ErrHeartbeatRemoteShared`、什么都不改；运行中进入共享模式被框架停掉的周期落库，回到独占后目前只能 `Leave` 再 `Enter` 恢复（见 KNOWN-LIMITS“移动与动作”）。
 - 位置变化 `SetPos` 先 `Space.QueueMove`（事务内只记事实、走提交门，提交确认后进 AOI、回滚丢弃），再写字段；`QueueMove` 被拒时什么都不写、返回错误。
 - 进出场景 `Enter` / `Leave` 在**事务提交、实体锁释放之后**调 `Space.Enter` / `Space.Leave`（回滚的进出不发生；同一事务里进场景后又移动，提交后的 Enter 直接用最新位置；先进后出互相抵消）。不在事务里（加载 / 新建的初始化阶段）立即调用。
 - `Space` 是接口，`InterestSpace` 把 `policy.Interest` 适配过来：`Player` 认出的实体按玩家进出（`Interest.Enter` / `Leave`），其余只被看（`Show` / `Hide`），进出后 `Apply` 一次。同步 subject 的登记、玩家会话由业务在进场景之前做；业务场景也可以自己实现 `Space`。
@@ -243,6 +243,12 @@ return err
 - 自己离开场景 → `LeftScene`；AOI 排队满（`policy.ErrInterestQueueFull`，背压）时整拍作废、下一拍接着走；其他写位置错误 → `Refused`。
 - 推进状态（亚格位置、路径进度）随事务回滚恢复：回滚的一拍不算走过，回滚的 `MoveTo` 不生效。
 - 动作结论：`Arrived` → 成功，`Replaced` → 取消，其余 → 失败（原因是 `StopReason`）；动作被取消（含被同组新动作取代）时停掉自己那次移动。
+- **频率**：`MoveToParam.Period` / `FollowParam.Period` 不给时取 `movement.DefaultMovePeriod` = 200ms（5Hz，维护者 2026-10-22 由 100ms 改；MMO / SLG 的移动一般 2～5Hz）。每拍走 `速度 × Elapsed`，频率只决定位置更新的粒度与每秒消息数，不改变走完一段的时间；客户端按复制下来的位置插值。要更细（动作游戏、近战贴身）就显式给 `Period: 100 * time.Millisecond`。
+
+**逐拍移动适合谁、不适合谁**（维护者 2026-10-22）：
+
+- **SLG 行军不要逐拍移动**。行军是“起点 + 速度 + 出发时刻”（加路径）就能算出任意时刻位置的直线 / 折线运动：位置按需现算（谁问谁算，客户端也按同一公式插值），到达用按实体的持久定时器（[§4](#4-按实体的持久定时器)，离线也准点、可持久），不挂移动心跳。只有大地图 AOI 需要服务端位置（谁的视野看得见这支部队）时，才给行军加一个 1～2Hz 的心跳，每拍按公式算出位置写 `QueueMove`，而不是用 `MoveTo` 每拍推进。成千上万支行军逐拍移动，消息数与 AOI 计算都白白翻几倍。
+- **心跳的 `Elapsed` 是可变步长**：它是本拍与上一拍之间实际经过的业务时间，随驱动迟到、掉拍、快池排队而变（不追帧，掉拍后下一拍一次走完），同一输入在两次运行里的中间位置不同。MMO / SLG 的状态同步只要结果大致一致，这没有问题；需要确定性（帧同步、回放逐帧一致、客户端预测与服务端逐帧对账）的玩法——MOBA、格斗、RTS 帧同步——不要用心跳移动，走 Lockstep（[guide/04-sync §6](04-sync.md#6-lockstep)）：按固定帧号推进，模拟只取决于输入序列。技能推进的确定性另见 §4E（按 tick 推进、与驱动节奏无关）。
 
 边界见 [KNOWN-LIMITS“移动与动作”](../../maintenance/KNOWN-LIMITS.md#移动与动作d20-第-2-期)，实现契约见 [impl/10-time §2C](../impl/10-time.md#2c-移动与动作的心跳驱动)。
 
@@ -280,6 +286,7 @@ plan := actionflow.MissionPlan{Steps: []actionflow.MissionStep{
 ```
 
 - `Timeout` 是这一步**每次尝试**的时限：到时任务把这一步的动作以过期（`ActionStatusExpired`）结束，按失败处理。需要任务心跳（Behavior 配了 `Beat`），检查粒度是 `MissionPlan.Period`（缺省 100ms，取档）；`PlanMission` 只在当前步有时限时要心跳。
+- **定身期间不计时**（维护者 2026-10-22）：这一步的动作所在的组被冻结（`Freeze`，含门控 `Gate` 施加的）期间，时限暂停，解冻后按剩余时长继续，多次冻结累加；时间按 Behavior 的时钟（`fctx.Now`，挂了时间域时是域时间）。所以定身长于时限时护送 / 巡逻不会直接失败。`FreezeCancel`（打断）照旧：动作以取消结束，这一步不重试、走 `OnFail`。自己实现 `ActionList` 的，实现 `actionflow.FrozenTimer` 才有这条，否则时限照常计时。
 - `Retry` 是失败（`Failed` / `Expired`）后原地重试的次数，每次重试重新计时，用完才走 `OnFail`；**被取消的不重试**（被别的动作取代、被业务结束），直接走 `OnFail`。次数按步计，进入下一步清零。
 - 更复杂的分支（按条件、按结果原因）用行为树，计划里不加表达式。
 
@@ -347,6 +354,7 @@ m.gate, _ = state.Gate(m.states, m.behavior, logError,
 - **不内建时长**：有时长的控制效果走 Buff（到期移除 → 状态跟着变），离线也要准点的长期标记（保护期）走 entitytimer（[§4](#4-按实体的持久定时器)）到期时 `Remove`，短时标记由设置它的动作或 Buff 负责撤销。
 - **Buff → 状态（第 3 期）**：控制效果的唯一持有者是 Buff（时长、叠层、驱散、免疫都在 `combat.BuffContainer` 里），状态不复制它，而是派生：`combatComponent.BindStates(set, combatcomponent.StateBinding{State: Stunned, Tags: []combat.Tag{"stun", "freeze"}})`——任一生效中的 buff 带其中一个标签，状态即生效。组件在每个改 buff 集合的方法（`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`）末尾与 `OnInitFinish` 里调 `Changed`，门控与 AI 跟着变；buff 随事务回滚、随实体加载，`Has` 当场就对。Buff 到期由 buff 心跳推进（`CombatComponent.AttachBeat`，§4E），派生状态随之失效。技能的免疫标签判断 `StatusBridge.HasGameplayTag` 可以接到 `Set.Has` 或 `CombatComponent.HasBuffTag`。
 - **和动作的关系**：动作可以在 Start 里 `Add(id, Source{Kind: 动作种类, ID: 动作 ID})`、在结束（Tick 报告结束 / Cancel）时 `Remove`（ssr 移动动作置 / 清 Manual 的做法）。
+- **控制等级、韧性、递减由业务在 Buff 层做，框架不提供**（维护者 2026-10-22）。状态位只回答“此刻是否被定身”，门控只按它冻结动作组；“霸体免疫低等级控制”“韧性缩短控制时长”“同类控制连续施加时长递减（DR）”都是施加控制之前的规则：业务在施加 Buff 的地方（技能效果、`ApplyBuff` 之前）按目标的等级 / 韧性 / 最近被控记录决定加不加、加多长，记录本身放在业务的 Buff 或 DAO 字段里。状态与门控照常只看最终的 Buff。
 
 **生成工程的入口**：`roost add behavior --entity <Entity> [--ai] [--state]` 生成 `BehaviorComponent`：在 `OnInitFinish` 用实体的心跳宿主构造 `Behavior`（`--ai` 时先构造 `ai.NewBeatController` 作 `Observer`，`Context` 钩子给出 `ActionList`）。业务文件只建一次：`behavior_actions.go`（动作种类、组、注册表、跨组冲突、`timeDomain()`、`onBehaviorReady`、示例动作 `ExampleAction`）、`--ai` 的 `behavior_strategy.go`（示例策略）、`--state` 的 `states.go`（`state.NewCatalog` 声明；Set / Gate 接线由业务写）与 `game/handler/<entity>_behavior.go`（发起示例动作 / 设定示例策略的 Nest handler）。没有心跳宿主时一并加上（同 §4A）。AI 不设策略不跳，示例策略要在 `onBehaviorReady` 或 handler 里 `SetStrategy`。
 

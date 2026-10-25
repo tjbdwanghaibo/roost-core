@@ -390,7 +390,8 @@ func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[Session
 
 // pushSessionFrames 编码一个会话本轮的内容并逐帧交付：每帧准入后立即采纳该帧的会话时钟与引用表，
 // 全部帧成功（且会话状态未被替换）后结算订阅。delivered 表示至少一帧已准入。retryErr 非 nil 表示
-// 整轮需要重试（ErrRetryLater 或 ctx 结束），由调用方作废捕获；其他编码或交付错误只关闭本会话。
+// 整轮需要重试（ErrRetryLater 或 ctx 结束），由调用方作废捕获；其他编码或交付错误只关闭本会话，
+// 经 SessionLost 交出带分类的原因（SessionLoss：推送拒收 / 编码失败的几类）。
 func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *flushSession) (delivered bool, retryErr error) {
 	sess := batch.session
 	encodeStarted := time.Now()
@@ -412,7 +413,8 @@ func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *f
 	}
 	m.encodeNanos.Add(uint64(time.Since(encodeStarted)))
 	if err != nil {
-		m.loseSession(sess, err)
+		// 帧没有交给传输：连接没有拒收任何东西，原因按编码错误归类（SessionLossReason），由接入层决定断开连接。
+		m.loseSession(sess, encodeLoss(err))
 		return false, nil
 	}
 	var pushErr error
@@ -462,7 +464,7 @@ func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *f
 		return delivered, pushErr
 	}
 	if pushErr != nil {
-		m.loseSession(sess, pushErr)
+		m.loseSession(sess, &SessionLoss{Reason: SessionLossPushRefused, Err: pushErr})
 		return delivered, nil
 	}
 	if !stale {

@@ -1,0 +1,32 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+                                           │  dispatch   │                batch                 │
+                                           │   sec/op    │   sec/op     vs base                 │
+DriverDispatch/regs=50000/period=100ms-10    2.001µ ± 0%   2.001µ ± 0%       ~ (p=1.000 n=10)
+DriverDispatch/regs=100000/period=100ms-10   1.000µ ± 0%   1.001µ ± 0%  +0.10% (p=0.041 n=10)
+DriverDispatch/regs=50000/period=1s-10       20.00µ ± 0%   20.00µ ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                      3.421µ        3.422µ       +0.03%
+¹ all samples are equal
+
+                                           │  dispatch   │               batch                │
+                                           │   beats/s   │   beats/s    vs base               │
+DriverDispatch/regs=50000/period=100ms-10    499.8k ± 0%   499.7k ± 0%       ~ (p=0.218 n=10)
+DriverDispatch/regs=100000/period=100ms-10   999.9k ± 0%   999.4k ± 0%  -0.05% (p=0.041 n=10)
+DriverDispatch/regs=50000/period=1s-10       50.00k ± 0%   50.00k ± 0%       ~ (p=0.120 n=10)
+geomean                                      292.4k        292.3k       -0.03%
+
+                                           │   dispatch   │                batch                 │
+                                           │ cpu-sec/beat │ cpu-sec/beat  vs base                │
+DriverDispatch/regs=50000/period=100ms-10     777.4n ± 2%    869.3n ± 2%  +11.83% (p=0.000 n=10)
+DriverDispatch/regs=100000/period=100ms-10    495.2n ± 2%    513.0n ± 4%        ~ (p=0.066 n=10)
+DriverDispatch/regs=50000/period=1s-10        2.413µ ± 5%    2.398µ ± 1%        ~ (p=0.739 n=10)
+geomean                                       975.7n         1.023µ        +4.79%
+
+                                           │   dispatch   │                batch                 │
+                                           │ driver-cores │ driver-cores  vs base                │
+DriverDispatch/regs=50000/period=100ms-10     388.6m ± 2%    434.5m ± 2%  +11.84% (p=0.000 n=10)
+DriverDispatch/regs=100000/period=100ms-10    495.1m ± 2%    512.9m ± 4%        ~ (p=0.066 n=10)
+DriverDispatch/regs=50000/period=1s-10        120.7m ± 5%    119.8m ± 1%        ~ (p=0.739 n=10)
+geomean                                       285.3m         298.9m        +4.79%

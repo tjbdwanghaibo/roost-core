@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# 第 12 项：schema 迁移演练（docs/framework/SCHEMA-MIGRATION.md §2/§4），在发版候选生成的 game-demo（dr1022）上做真实进程演练。
+# 依赖：私有 dataengine-env（偏移 26000：Mongo 53117-53119、NATS 40222、Redis 42379），本机 etcd；九个支撑服务由 make dev-run 起，
+# 本脚本只控制 game 进程。停写以 PID 退出为准，再用 sidmove wal-drained / singleton 核对。
+set -uo pipefail
+D=<scratch>/dr1022
+R=<scratch>/drill/schema
+M="mongodb://127.0.0.1:53117,127.0.0.1:53118,127.0.0.1:53119/?replicaSet=roost-it"
+mkdir -p "$R"; cd "$D"
+log() { echo "[schema $(date +%H:%M:%S)] $*" | tee -a "$R/drill.log"; }
+gm() { curl -s -X POST -H 'X-Admin-Token: dev-gm-token' -H 'Content-Type: application/json' \
+  -d "{\"name\":\"gm.player.add_item\",\"payload\":{\"player_id\":$1,\"item_id\":1001,\"count\":1}}" http://127.0.0.1:9100/admin/execute; }
+ready() { local i=0; while (( i < 600 )); do curl -fsS -o /dev/null http://127.0.0.1:9100/readyz 2>/dev/null && return 0; kill -0 "$1" 2>/dev/null || return 1; i=$((i+1)); sleep 0.1; done; return 1; }
+start_game() { nohup bin/app game --sid 1000 --config configs/service/config.game.yaml > "$R/game.$(date +%H%M%S).log" 2>&1 & echo $! > "$R/game.pid"; ready "$(cat "$R/game.pid")" && log "game ready pid $(cat "$R/game.pid")" || { log "game not ready"; exit 1; }; }
+stop_game() { local pid; pid=$(cat "$R/game.pid"); kill "$pid"; local i=0; while kill -0 "$pid" 2>/dev/null && (( i < 1500 )); do i=$((i+1)); sleep 0.1; done
+  kill -0 "$pid" 2>/dev/null && { log "game pid $pid still running"; exit 1; }; log "game pid $pid exited"; }
+docs() { mongosh --quiet "$M" --eval 'db.getSiblingDB("dr1022").getCollection("player").find({_id:{$in:[NumberLong(2049028),NumberLong(2050052),NumberLong(2051076)]}}).sort({_id:1}).forEach(d=>print(JSON.stringify(d)))'; }
+
+log "== 0. 停 make dev-run 起的 game，只留九个支撑服务"
+kill "$(cat .dev/game.pid)"; while kill -0 "$(cat .dev/game.pid)" 2>/dev/null; do sleep 0.2; done; log "dev-run game stopped"
+log "== 1. 种入 3 份 schema 1 的 Player（2001、2002 带 weapon_id 7001）"
+mongosh --quiet "$M" --eval '
+const c=db.getSiblingDB("dr1022").getCollection("player");
+const mk=(id,pid,w)=>{const d={_id:NumberLong(id),_version:NumberLong(2),_schema:NumberLong(1),_last_tx:"seed-"+pid,name:"p"+pid,level:NumberInt(7),items:{"1001":NumberInt(3)}}; if(w) d.weapon_id=NumberLong(7001); return d;};
+c.insertMany([mk(2049028,2001,true),mk(2050052,2002,true),mk(2051076,2003,false)]); print("seeded", c.countDocuments({_schema:1}));' | tee -a "$R/drill.log"
+start_game
+log "新程序（schema 2）add_item 2001: $(gm 2001 | tr -d '\n' | cut -c1-400)"
+log "== 2. 停写"
+stop_game
+bin/sidmove wal-drained -dir data/wal/dataengine/1000 > "$R/s1-wal-drained.json" 2>&1; log "wal-drained rc=$? $(tr -d '\n ' < "$R/s1-wal-drained.json" | cut -c1-200)"
+bin/sidmove singleton -redis 127.0.0.1:42379 -key roost:dr1022:singleton:game:1000 > "$R/s1-singleton.json" 2>&1; log "singleton rc=$? $(tr -d '\n ' < "$R/s1-singleton.json" | cut -c1-200)"
+log "== 3. plan / apply / verify"
+bin/schemamigrate -mongo "$M" plan > "$R/s2-plan.json" 2>&1; log "plan rc=$? $(tr -d '\n ' < "$R/s2-plan.json" | cut -c1-300)"
+bin/schemamigrate -mongo "$M" apply > "$R/s2-apply.json" 2>&1; log "apply rc=$? $(tr -d '\n ' < "$R/s2-apply.json" | cut -c1-300)"
+bin/schemamigrate -mongo "$M" verify > "$R/s2-verify.json" 2>&1; log "verify rc=$? $(tr -d '\n ' < "$R/s2-verify.json" | cut -c1-300)"
+log "== 4. 新程序启动，2001 / 2002 写入"
+start_game
+log "add_item 2001: $(gm 2001 | tr -d '\n' | cut -c1-300)"
+log "add_item 2002: $(gm 2002 | tr -d '\n' | cut -c1-300)"
+stop_game
+docs > "$R/s3-docs.txt"; cat "$R/s3-docs.txt" >> "$R/drill.log"
+log "== 5. rollback（只恢复未被写过的 2003）→ 再 apply / verify"
+bin/schemamigrate -mongo "$M" rollback > "$R/s4-rollback.json" 2>&1; log "rollback rc=$? $(tr -d '\n ' < "$R/s4-rollback.json" | cut -c1-300)"
+bin/schemamigrate -mongo "$M" apply > "$R/s4-apply.json" 2>&1; log "apply rc=$? $(tr -d '\n ' < "$R/s4-apply.json" | cut -c1-300)"
+bin/schemamigrate -mongo "$M" verify > "$R/s4-verify.json" 2>&1; log "verify rc=$? $(tr -d '\n ' < "$R/s4-verify.json" | cut -c1-300)"
+docs > "$R/s4-docs.txt"; cat "$R/s4-docs.txt" >> "$R/drill.log"
+log "DONE"

@@ -1,0 +1,168 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  105154	      3335 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2451	    145497 ns/op	   17660 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     522	    687704 ns/op	   71754 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  141993	      2428 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9331	     38360 ns/op	   20213 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    3072	    115477 ns/op	   79849 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  747288	       470.1 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  117501	      3131 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7543	     51397 ns/op	     428 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  105198	      3416 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2442	    147152 ns/op	   17661 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     484	    712294 ns/op	   72181 B/op	      40 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  140850	      2507 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    8965	     40806 ns/op	   20214 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2538	    127126 ns/op	   79845 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  732476	       514.3 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  106224	      3241 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7869	     51558 ns/op	     428 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   98022	      4082 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2029	    162123 ns/op	   17718 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     487	    694187 ns/op	   72132 B/op	      39 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  143707	      2463 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9206	     40719 ns/op	   20215 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2886	    115666 ns/op	   79849 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  730252	       490.0 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  105030	      4688 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7756	     49582 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  104679	      3501 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2390	    150955 ns/op	   17669 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     511	    704660 ns/op	   71866 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  137289	      2464 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9302	     40489 ns/op	   20214 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2984	    121566 ns/op	   79840 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  699135	       488.8 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  115220	      3150 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7893	     50651 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   95326	      3628 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2359	    148180 ns/op	   17671 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     504	    695416 ns/op	   71941 B/op	      39 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  140863	      3133 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    7747	     45247 ns/op	   20214 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2902	    118959 ns/op	   79864 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  651003	       524.7 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  105164	      3508 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    6927	     51779 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   97760	      3735 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2138	    164740 ns/op	   17702 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     457	    769938 ns/op	   72499 B/op	      41 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  125937	      2892 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    8451	     42022 ns/op	   20214 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2701	    131273 ns/op	   79857 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  654237	       513.9 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  115743	      3362 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7353	     49147 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   96547	      3703 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2119	    159555 ns/op	   17705 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     507	    693237 ns/op	   71908 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  142693	      2439 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9210	     39385 ns/op	   20213 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2881	    122024 ns/op	   79870 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  735405	       512.8 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  116581	      3092 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7879	     48653 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  103090	      3523 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2301	    149362 ns/op	   17680 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     480	    717655 ns/op	   72215 B/op	      40 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  134634	      2581 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9169	     39695 ns/op	   20213 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2946	    118195 ns/op	   79840 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  718275	       496.1 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  113858	      3307 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7656	     48065 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   91630	      3788 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2168	    162185 ns/op	   17698 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     471	    815956 ns/op	   72334 B/op	      40 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  126918	      2847 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    7323	     43591 ns/op	   20215 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2612	    180122 ns/op	   79874 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  650376	       651.8 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	   98722	      3800 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    6810	     51557 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	   98954	      3608 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2290	    152358 ns/op	   17681 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     512	    700230 ns/op	   71857 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  135003	      2469 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9241	     39400 ns/op	   20213 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2787	    120556 ns/op	   79850 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  708486	       486.1 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  112016	      3161 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7767	     46768 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  102726	      3697 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2350	    149425 ns/op	   17673 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     513	    698850 ns/op	   71849 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  140736	      2520 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    8817	     39558 ns/op	   20214 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2572	    117722 ns/op	   79871 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  740175	       511.0 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  100914	      3404 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7440	     48090 ns/op	     427 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkRelationViewAttach/members=32-10         	  104690	      3434 ns/op	    1504 B/op	      14 allocs/op
+BenchmarkRelationViewAttach/members=1024-10       	    2276	    148930 ns/op	   17682 B/op	      15 allocs/op
+BenchmarkRelationViewAttach/members=4096-10       	     516	    693008 ns/op	   71811 B/op	      38 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=1-10         	  142288	      2508 ns/op	    1265 B/op	      11 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=16-10        	    9166	     39942 ns/op	   20213 B/op	     125 allocs/op
+BenchmarkSpatialViewsPerPlayer/views=64-10        	    2818	    120289 ns/op	   79848 B/op	     491 allocs/op
+BenchmarkSharedSpatialView/players=1-10           	  706592	       514.7 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=64-10          	  114436	      3097 ns/op	     425 B/op	       6 allocs/op
+BenchmarkSharedSpatialView/players=1024-10        	    7534	     46524 ns/op	     428 B/op	       6 allocs/op
+PASS

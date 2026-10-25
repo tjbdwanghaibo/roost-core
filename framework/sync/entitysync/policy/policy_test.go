@@ -844,12 +844,11 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 	}
 }
 
-// ---- 观察者编号与实体编号分开时的订阅结果（D14 改签名前后的回归基线） ----
+// ---- 观察者编号与实体编号分开时的订阅结果（回归基线） ----
 //
 // 玩家 ID（会话）与实体 ID 是两种编号：订阅表里会话用玩家 ID，被订阅的目标用实体 ID。用例只对 Manager 的订阅表断言，
-// 不读 Interest 内部的键。D14 之前它以“观察者按实体 ID 编号、经 Session 换算”的写法在 D14 第一笔提交（改签名前的回归）上通过；D14 之后观察者直接是
-// 玩家 ID、事务内入口经缺省 ObserverOf 换算（D19 起主视野跟随实体、ObserverOf 删除），断言一字未改：自己只经 self 关系看见自己、距离双向、数值等于玩家 ID 的实体不被
-// 误当成自己、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
+// 不读 Interest 内部的键，所以观察者的编号方式变化时断言不必改。钉住：自己只经 self 关系看见自己、距离双向、数值等于
+// 玩家 ID 的实体不被误当成自己、关系比距离活得久、退场双向清理、排队移动与排队关系按玩家生效。
 
 // playerEntity 拼一个能被 entity.GetUniqueIDFromEntityID 还原成 playerID 的实体 ID（低位填一个非零标记），
 // 让实体 ID 与玩家 ID 数值不同。
@@ -965,7 +964,7 @@ func TestObserverAndSubjectIDSpacesStayApart(t *testing.T) {
 	})
 }
 
-// ---- D14：观察者是玩家、视野按观察者 ----
+// ---- 观察者是玩家、视野按观察者 ----
 
 // viewInterest：缺省视野 120/150，视野大小 [60, 270] 按 30 取整，一层 LOD。
 func viewInterest(t *testing.T, manager *entitysync.Manager) *Interest {
@@ -1179,8 +1178,7 @@ func TestQueuedMoveCarriesTheViewsThatFollowTheEntity(t *testing.T) {
 	})
 }
 
-// 多对一隐患消失：两个玩家各是一个会话，都看见同一目标；其中一个走远只退它自己的订阅。
-// D14 之前同样的场景经 Session 映射到同一会话时，订阅被一起退掉（D14 第一笔提交里的 TestSessionManyToOneDropsASharedSubscription，随 Session 删除）。
+// 两个玩家各是一个会话，都看见同一目标；其中一个走远只退它自己的订阅，不会把另一个玩家的订阅一起退掉。
 func TestTwoObserversDoNotReleaseEachOthersSubscription(t *testing.T) {
 	manager := newManager(t)
 	interest := newInterest(t, manager)
@@ -1207,7 +1205,7 @@ func TestTwoObserversDoNotReleaseEachOthersSubscription(t *testing.T) {
 	requireSessions(t, manager, 20, 11)
 }
 
-// ---- 关系与多来源合并的回归基线（D19 改结构前在旧 API 上写下，断言只看 Manager 的订阅表与 packer 收到的视图） ----
+// ---- 关系与多来源合并的回归基线（断言只看 Manager 的订阅表与 packer 收到的视图） ----
 
 // profileRecorder 是记录最近一次全量视图的 subject：只有一个会话订阅它时，记录的就是这个会话拿到的视图。
 type profileRecorder struct {

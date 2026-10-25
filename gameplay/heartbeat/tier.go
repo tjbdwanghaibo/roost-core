@@ -7,10 +7,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/misc"
 )
 
-// Resolution 是驱动的一格：每 10ms 推进一格，每格把到期的登记一次交出（维护者 2026-10-21 压测后决定）。
+// Resolution 是驱动的一格：每 10ms 推进一格，每格把到期的登记一次交出（取值依据见 docs/performance/HB-STRUCTURES-20261021.md）。
 const Resolution = 10 * time.Millisecond
 
-// Periods 是全部固定档位（维护者决定 ⑥）：50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s。
+// Periods 是全部固定档位：50ms / 100ms / 200ms / 500ms / 1s / 2s / 5s / 10s / 30s / 60s。
 // 不支持任意周期；都是 Resolution 的整数倍，也都整除最长档。
 var Periods = [numTiers]time.Duration{
 	50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 500 * time.Millisecond,

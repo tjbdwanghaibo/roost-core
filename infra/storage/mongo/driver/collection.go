@@ -164,6 +164,9 @@ func (c *collection) DeleteMany(ctx context.Context, filter any) (int64, error) 
 func (c *collection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) error {
 	foOpts := options.FindOneAndUpdate()
 	for _, opt := range opts {
+		if opt.Sort != nil {
+			foOpts.SetSort(opt.Sort)
+		}
 		if opt.Upsert {
 			foOpts.SetUpsert(true)
 		}

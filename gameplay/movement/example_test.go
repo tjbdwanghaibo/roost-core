@@ -59,8 +59,8 @@ func newMonster(e *entity.EntityBase, fields movement.Fields) (*Monster, error) 
 	if m.mb, err = movement.NewMapBasic(m, m.host, movement.MapConfig{
 		Fields:      fields,
 		SaveOnLeave: true,
-		Save: func(sceneID int64, at spatial.Point, _ movement.Facing) error {
-			return nil // 写业务 DAO 的持久字段（上次所在场景与位置）
+		Save: func(sceneID int64, at spatial.Point, facing movement.Facing) error {
+			return nil // 写业务 DAO 的持久字段（上次所在场景、位置与朝向）
 		},
 	}); err != nil {
 		return nil, err

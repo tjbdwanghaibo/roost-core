@@ -13,7 +13,7 @@ type Freezer interface {
 	Recover(group actionflow.ActionGroup) error
 }
 
-// Rule 是一条门控规则：State 生效时按 Mode 冻结 Group，失效时撤销这次冻结（D21 S5，对照 ssr“定身冻结移动组、缴械
+// Rule 是一条门控规则：State 生效时按 Mode 冻结 Group，失效时撤销这次冻结（对照 ssr“定身冻结移动组、缴械
 // 冻结战斗组”）。
 type Rule struct {
 	State ID
@@ -38,7 +38,7 @@ type Gated struct {
 // 失效时 Recover。冻结是计数的，多条规则、多个来源冻结同一组，全部失效才解冻。onError 接收 Freeze / Recover 的错误，
 // 可空。
 //
-// 事务：状态随事务回滚，冻结计数与被打断的动作不回滚（actionflow 的 runner 不随事务回滚，D20 决定 3）。handler 里
+// 事务：状态随事务回滚，冻结计数与被打断的动作不回滚（actionflow 的 runner 不随事务回滚）。handler 里
 // 先加了一个门控状态、随后失败回滚时，组仍处于冻结，直到这个 Set 下一次通知（任何状态改动或 Refresh）把它解开；
 // 需要立即一致就在回滚后调 Set.Refresh。
 func Gate(set *Set, target Freezer, onError func(error), rules ...Rule) (*Gated, error) {

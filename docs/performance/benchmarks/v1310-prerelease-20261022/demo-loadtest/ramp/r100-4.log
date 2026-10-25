@@ -1,0 +1,95 @@
+2026/10/23 02:50:46 INFO nats: connected url=nats://127.0.0.1:40222
+2026/10/23 02:50:46 INFO bus: subscribed subject=lt1022.srv.0
+2026/10/23 02:50:46 INFO bus: subscribed subject=lt1022.svc.loadtest.0
+2026/10/23 02:50:46 INFO bus: subscribed subject=lt1022.svc.loadtest.all
+2026/10/23 02:50:46 INFO bus: subscribed subject=lt1022.srv.all
+2026/10/23 02:50:47 INFO robot loadtest: run start accepted run_id=robot-demo-20261023-025047-001 profile=demo scenario=demo count=100 endpoint=127.0.0.1:7000
+2026/10/23 02:50:47 INFO robot runner: start executor=pool count=100 rate=1 scenario=demo transport=player-tcp endpoint=127.0.0.1:7000
+2026/10/23 02:51:06 WARN robot runner: scenario failed robot=24 player=900024 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:06 WARN robot runner: scenario failed robot=22 player=900022 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:07 WARN robot runner: scenario failed robot=21 player=900021 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:08 WARN robot runner: scenario failed robot=23 player=900023 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:08 WARN robot runner: scenario failed robot=25 player=900025 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:09 WARN robot runner: scenario failed robot=26 player=900026 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:09 WARN robot runner: scenario failed robot=28 player=900028 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:10 WARN robot runner: scenario failed robot=27 player=900027 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:11 WARN robot runner: scenario failed robot=30 player=900030 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:11 WARN robot runner: scenario failed robot=31 player=900031 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:12 WARN robot runner: scenario failed robot=32 player=900032 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:12 WARN robot runner: scenario failed robot=33 player=900033 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:13 WARN robot runner: scenario failed robot=37 player=900037 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:13 WARN robot runner: scenario failed robot=29 player=900029 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:13 WARN robot runner: scenario failed robot=39 player=900039 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:13 WARN robot runner: scenario failed robot=40 player=900040 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:14 WARN robot runner: scenario failed robot=38 player=900038 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:14 WARN robot runner: scenario failed robot=36 player=900036 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:14 WARN robot runner: scenario failed robot=35 player=900035 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:14 WARN robot runner: scenario failed robot=43 player=900043 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:15 WARN robot runner: scenario failed robot=41 player=900041 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:15 WARN robot runner: scenario failed robot=34 player=900034 scenario=demo err="robot action found_guild: response code 1: server error"
+2026/10/23 02:51:15 WARN robot runner: scenario failed robot=44 player=900044 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:15 WARN robot runner: scenario failed robot=42 player=900042 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:16 WARN robot runner: scenario failed robot=47 player=900047 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:16 WARN robot runner: scenario failed robot=46 player=900046 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:17 WARN robot runner: scenario failed robot=48 player=900048 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:17 WARN robot runner: scenario failed robot=45 player=900045 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:18 WARN robot runner: scenario failed robot=51 player=900051 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:18 WARN robot runner: scenario failed robot=49 player=900049 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:18 WARN robot runner: scenario failed robot=52 player=900052 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:19 WARN robot runner: scenario failed robot=50 player=900050 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:19 WARN robot runner: scenario failed robot=53 player=900053 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:19 WARN robot runner: scenario failed robot=55 player=900055 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:19 WARN robot runner: scenario failed robot=56 player=900056 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:20 WARN robot runner: scenario failed robot=54 player=900054 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:21 WARN robot runner: scenario failed robot=59 player=900059 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:21 WARN robot runner: scenario failed robot=60 player=900060 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:21 WARN robot runner: scenario failed robot=57 player=900057 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:21 WARN robot runner: scenario failed robot=58 player=900058 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:22 WARN robot runner: scenario failed robot=63 player=900063 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:22 WARN robot runner: scenario failed robot=64 player=900064 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:22 WARN robot runner: scenario failed robot=61 player=900061 scenario=demo err="robot action gift_status: gift saga still waiting (step 0)"
+2026/10/23 02:51:46 WARN robot runner: scenario failed robot=97 player=900097 scenario=demo err="robot action poll_match: ticket still waiting"
+2026/10/23 02:51:46 INFO robot runner: stop started=100 success=56 failure=44 canceled=0
+2026/10/23 02:51:46 INFO robot loadtest: run done run_id=robot-demo-20261023-025047-001 profile=demo state=failed stop_reason=threshold started=100 success=56 failure=44 canceled=0 elapsed=59.62075525s err=<nil> verdict="threshold violated: error_rate = 0.44 > max 0 (100 samples); p95 = 25.746s > max 16s (56 samples)"
+{
+  "run_id": "robot-demo-20261023-025047-001",
+  "profile": "demo",
+  "state": "failed",
+  "stop_reason": "threshold",
+  "started_at_ms": 1792695047000,
+  "ended_at_ms": 1792695106621,
+  "count": 100,
+  "scenario": "demo",
+  "stats": {
+    "started": 100,
+    "online": 0,
+    "success": 56,
+    "failure": 44,
+    "canceled": 0,
+    "failure_rate": 0.44
+  },
+  "thresholds": [
+    {
+      "metric": "error_rate",
+      "max": 0,
+      "actual": 0.44,
+      "violated": true,
+      "samples": 100
+    },
+    {
+      "metric": "p95",
+      "max": 16,
+      "actual": 25.746,
+      "violated": true,
+      "samples": 56
+    }
+  ],
+  "quantiles_ms": {
+    "p50": 19058,
+    "p90": 24943,
+    "p95": 25746,
+    "p99": 26281
+  },
+  "error": "threshold violated: error_rate = 0.44 \u003e max 0 (100 samples); p95 = 25.746s \u003e max 16s (56 samples)"
+}
+loadtest: run robot-demo-20261023-025047-001 ended failed (threshold): threshold violated: error_rate = 0.44 > max 0 (100 samples); p95 = 25.746s > max 16s (56 samples)

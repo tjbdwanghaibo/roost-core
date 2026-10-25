@@ -1,0 +1,9 @@
+=== RUN   TestCCDStopsFastBallAtThinWall
+    native_test.go:121: ball crossed wall: {ID:1 Position:[2 0 0] Rotation:[0 0 0 1] Velocity:[200 0 0] AngularVelocity:[0 0 0] Sleeping:false}
+--- FAIL: TestCCDStopsFastBallAtThinWall (0.00s)
+=== RUN   TestLockedCapsuleContactFriction
+    native_test.go:151: locked-body friction: velocity=[-0.86419725 -0.7038367 0] expected vx=-0.718262
+--- FAIL: TestLockedCapsuleContactFriction (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	0.674s
+FAIL
