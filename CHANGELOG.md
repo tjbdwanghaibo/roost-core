@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Physics 本地调试：GoLand 分离 Gate 与 Physics Service 进程，Unity 默认经过正式 Gate/NATS/RPC 链路；增加 Protobuf 控制输入与可配置 Debug 日志。
+
 - PhysicsRoom：接入可复用 RoomEntity / EntityHost，Nest Guard 提交和关闭回收；新增服务器落地跳跃与一次性输入语义。Unity Room 场景增加方向/跳跃按钮及键盘控制，保持 20Hz AOI Chunk 同步。需要重建 native 库。
 
 

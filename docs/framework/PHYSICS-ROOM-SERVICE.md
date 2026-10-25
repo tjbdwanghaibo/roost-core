@@ -100,3 +100,8 @@ Input 新增 Jump，Acceleration 只允许 X/Z（Y 必须为零）。同序号�
 Unity `Room.unity` 复用上述 Host / Service，通过既有 loopback 验证入口测试移动跳跃与 Chunk 显示；业务登录与开房 UI 留给使用方。具体操作与协议见 [客户端说明](../../client/physics-viewer/README.md)。
 
 本轮 Room Entity / Unity 功能验证结果见 [验证记录](../performance/benchmarks/physics-room-input-20261025/README.md)。
+
+
+## 本地双进程调试
+
+GoLand 的 Physics Service 与 Physics Gate 配置分别启动 owner 与接入进程；后者承载最小 GameIngress，通过真实 NATS Gateway 通道和 MessagePack RPC 访问 owner，不直接调用内存中的房间 Service。Unity 默认走 Gate 握手及 Protobuf 控制输入；业务认证仍由部署方实现，本地 slot 票据只用于 loopback。配置、日志采样和实测记录见 [客户端说明](../../client/physics-viewer/README.md#gate--physics-service当前默认)。本地两个进程中的 SID / namespace 固定，不能同时再起第二套相同配置。

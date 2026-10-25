@@ -2,6 +2,7 @@ package physicsroom
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -50,5 +51,8 @@ func Relay(ctx context.Context, rooms domain.Rooms, game *gateway.GameIngress, b
 			return err
 		}
 		ack = frame.Sequence
+		if ack == 1 || ack%20 == 0 {
+			slog.Debug("physics room chunk queued to gate", "player", binding.PlayerID, "sequence", ack, "bytes", len(frame.Payload))
+		}
 	}
 }

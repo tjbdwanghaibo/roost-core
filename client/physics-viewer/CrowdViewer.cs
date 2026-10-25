@@ -16,6 +16,7 @@ namespace Roost.PhysicsViewer
         public int Port = 19091;
         public bool Interpolate = true;
         public bool ControlRoom;
+        public bool UseGate = true;
         public int PlayerSlot = 13;
         public bool VerifyControls;
         public float HorizontalTravel { get; private set; }
@@ -130,6 +131,38 @@ namespace Roost.PhysicsViewer
             }
             return data;
         }
+        static Packet ReadPacket(Stream stream)
+        {
+            byte[] header = ReadExactly(stream, PacketCodec.HeaderSize);
+            uint length = (uint)header[12] << 24 | (uint)header[13] << 16 | (uint)header[14] << 8 | header[15];
+            if (length > PacketCodec.DefaultMaxPayload) throw new InvalidDataException("Packet limit");
+            byte[] payload = ReadExactly(stream, (int)length);
+            byte[] packet = new byte[header.Length + payload.Length];
+            Buffer.BlockCopy(header, 0, packet, 0, header.Length);
+            Buffer.BlockCopy(payload, 0, packet, header.Length, payload.Length);
+            return PacketCodec.Decode(packet);
+        }
+        // 与 room_input.proto 一致；这里只编码四个标量，不引入第二套网络客户端。
+        static byte[] GateInput(ulong sequence, float x, float z, bool jump)
+        {
+            using (var payload = new MemoryStream())
+            {
+                payload.WriteByte(8);
+                ulong remaining = sequence;
+                while (remaining >= 128) { payload.WriteByte((byte)(remaining | 128)); remaining >>= 7; }
+                payload.WriteByte((byte)remaining);
+                foreach (var field in new[] { Tuple.Create((byte)21, x), Tuple.Create((byte)29, z) })
+                {
+                    payload.WriteByte(field.Item1);
+                    byte[] value = BitConverter.GetBytes(field.Item2);
+                    if (!BitConverter.IsLittleEndian) Array.Reverse(value);
+                    payload.Write(value, 0, value.Length);
+                }
+                payload.WriteByte(32);
+                payload.WriteByte((byte)(jump ? 1 : 0));
+                return PacketCodec.Encode(new Packet(0x50485902, checked((uint)sequence + 1), payload.ToArray()));
+            }
+        }
         void ReadLoop()
         {
             try
@@ -143,25 +176,33 @@ namespace Roost.PhysicsViewer
                 {
                     if (PlayerSlot < 1 || PlayerSlot > 20) throw new InvalidDataException("PlayerSlot must be 1..20");
                     byte[] hello = new byte[] { (byte)'P', (byte)'R', (byte)'0', (byte)'1', 0, 0, 0, (byte)PlayerSlot };
-                    stream.Write(hello, 0, hello.Length);
+                    if (UseGate)
+                    {
+                        hello = PacketCodec.Encode(new Packet(0, 1, System.Text.Encoding.UTF8.GetBytes("physics-slot-" + PlayerSlot)));
+                        stream.Write(hello, 0, hello.Length);
+                        var ack = ReadPacket(stream);
+                        if (ack.MessageId != 0 || ack.Sequence != 1 || ack.IsPush || ack.Kind != PayloadKind.Protobuf)
+                            throw new InvalidDataException("Gate authentication failed");
+                    }
+                    else stream.Write(hello, 0, hello.Length);
                     sender = new Thread(() => SendInputs(stream)) { IsBackground = true, Name = "Roost Room Input" };
                     sender.Start();
                 }
                 else stream.Write(new byte[4], 0, 4); // 槽号 0 只观察。
                 while (!stopping)
                 {
-                    byte[] header = ReadExactly(stream, 16);
-                    uint length = (uint)header[12] << 24 | (uint)header[13] << 16 | (uint)header[14] << 8 | header[15];
-                    if (length > 1048576) throw new InvalidDataException("Packet limit");
-                    byte[] payload = ReadExactly(stream, (int)length);
-                    byte[] packet = new byte[16 + payload.Length];
-                    Buffer.BlockCopy(header, 0, packet, 0, 16);
-                    Buffer.BlockCopy(payload, 0, packet, 16, payload.Length);
-                    var decoded = PacketCodec.Decode(packet);
+                    var decoded = ReadPacket(stream);
+                    if (ControlRoom && UseGate && decoded.MessageId == 0x50485902)
+                    {
+                        if (decoded.IsPush || decoded.Kind != PayloadKind.Protobuf || decoded.Payload.Length != 0)
+                            throw new InvalidDataException("Gate input rejected");
+                        continue;
+                    }
+                    byte[] payload = decoded.Payload.ToArray();
                     if (decoded.MessageId != 0x50485901 || decoded.Kind != PayloadKind.Sync || !decoded.IsPush)
                         throw new InvalidDataException("Unexpected crowd packet");
                     if (Interlocked.Increment(ref pending) > 128) throw new InvalidDataException("Observer queue full");
-                    Interlocked.Add(ref bytes, packet.Length);
+                    Interlocked.Add(ref bytes, payload.Length + PacketCodec.HeaderSize);
                     packets.Enqueue(payload);
                 }
             }
@@ -278,6 +319,7 @@ namespace Roost.PhysicsViewer
                     PutUInt(data,0,(uint)(sequence>>32));PutUInt(data,4,(uint)sequence);
                     PutUInt(data,8,BitConverter.ToUInt32(BitConverter.GetBytes(x),0));
                     PutUInt(data,12,BitConverter.ToUInt32(BitConverter.GetBytes(z),0));data[16]=(byte)(jump?1:0);
+                    if (UseGate) data = GateInput(sequence, x, z, jump);
                     stream.Write(data,0,data.Length);
                     Thread.Sleep(50);
                 }

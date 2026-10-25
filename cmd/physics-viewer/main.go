@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -65,9 +66,16 @@ func run() error {
 	hz := flag.Int("send-hz", 20, "state send rate, 20 or 50")
 	aoiRadius := flag.Float64("aoi-radius", 12, "crowd AOI enter radius in meters; 0 sends full scene")
 	aoiMargin := flag.Float64("aoi-margin", 2, "crowd AOI exit hysteresis in meters")
-	scenario := flag.String("scenario", "comparison", "comparison, crowd (20 controlling clients), or room (interactive room service)")
+	scenario := flag.String("scenario", "comparison", "comparison, crowd, room (direct TCP), physics-service, gate-room")
 	duration := flag.Duration("duration", 0, "optional run duration")
+	natsURL := flag.String("nats", "nats://127.0.0.1:4222", "local NATS URL")
+	logLevel := flag.String("log-level", "info", "debug, info, warn, error")
 	flag.Parse()
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		return err
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 	if *hz != 20 && *hz != 50 {
 		return errors.New("send-hz must be 20 or 50")
 	}
@@ -88,6 +96,12 @@ func run() error {
 		var stop context.CancelFunc
 		ctx, stop = context.WithTimeout(ctx, *duration)
 		defer stop()
+	}
+	if *scenario == "physics-service" {
+		return runPhysicsService(ctx, *natsURL)
+	}
+	if *scenario == "gate-room" {
+		return runPhysicsGate(ctx, *addr, *natsURL)
 	}
 	if *scenario == "room" {
 		if *hz != 20 {

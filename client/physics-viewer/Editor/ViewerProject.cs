@@ -68,7 +68,7 @@ public static class ViewerProject
     {
         EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
         var viewer=new GameObject("Roost Room Controller").AddComponent<CrowdViewer>();
-        viewer.ControlRoom=true;viewer.Port=19093;viewer.PlayerSlot=13;
+        viewer.ControlRoom=true;viewer.UseGate=true;viewer.Port=19093;viewer.PlayerSlot=13;
         Directory.CreateDirectory("Assets/Scenes");
         EditorSceneManager.SaveScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene(), "Assets/Scenes/Room.unity");
         AssetDatabase.SaveAssets();
