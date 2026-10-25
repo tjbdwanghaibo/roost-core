@@ -43,6 +43,7 @@ type Member struct {
 type Input struct {
 	Sequence     uint64
 	Acceleration physx.Vec3
+	Jump         bool // 单次跳跃意图，服务器校验落地，不接受持续向上的加速度。
 }
 type Delivery struct {
 	Room     Ref
@@ -60,6 +61,7 @@ type Config struct {
 	InputTTL, MemberTTL, MaxLifetime time.Duration
 	Radius, Margin                   float64
 	Commit                           Commit
+	Closed                           func(Ref) // Run 与 native 资源已结束后调用，用于释放房间 Entity。
 	Metrics                          servicemetrics.Reporter
 }
 

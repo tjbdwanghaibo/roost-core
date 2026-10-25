@@ -79,3 +79,24 @@ Nest 适配使用新增的 `NestMgr.RequestSettled`：准入前遵守取消与 w
 
 
 提交前验证结果：默认 `go build ./...` 通过；service/physicsroom、wiring/physicsroom、servicerpc、Nest 的 race 三轮通过；专用 verify-service.sh 实跑通过（含真实 NATS/Gate/TCP 三轮）；root、wiring、servicerpc 生成器验收通过；相关包 vet 通过；再次生成 RPC 无漂移。固定 owner 在带服务发现的调用路径也不会重新选址，另有针对性 race 回归。原生验证脚本拒绝 CGO_ENABLED=0，避免所有 native 用例被构建条件排除后误报成功。
+
+## 房间 Entity 接入（2026-10-25）
+
+`wiring/physicsroom.NewEntityHost(kind, category, maxRooms, nestOptions...)` 提供可复用的瞬态 RoomEntity 宿主，部署方先注册 kind/category。Host 检查注册分类一致，专用 Nest 引擎只负责 Guard 中的帧提交和快照读取；原生 Step 仍在房间执行器中。每个 Ref 首次提交创建一个 Entity，后续帧必须同 Epoch、连续 Tick；StateDAO 不落库，读写快照均拷贝 slice。
+
+```go
+host, err := roomwiring.NewEntityHost(roomKind, roomCategory, maxRooms, nestOptions...)
+// 检查 err，且 roomKind/category 已在业务注册。
+cfg := physicsroom.DefaultConfig(host.Commit)
+cfg.MaxRooms = maxRooms
+cfg.Closed = host.Forget
+rooms, err := physicsroom.New(cfg)
+```
+
+`Closed` 在模拟与在途提交结束、native world 释放后调用，Host.Forget 移除对应 Entity；不要从其他业务路径提前 Forget。关闭顺序为 Service.Shutdown 成功后再 Host.Close；Shutdown 超时时保持 Host 存活。业务自行决定开房、玩家权限和结算，不在 Host 中实现这些规则。
+
+Input 新增 Jump，Acceleration 只允许 X/Z（Y 必须为零）。同序号重放不重新触发跳跃，也不延长旧输入 TTL；新移动输入不会覆盖尚未消费的跳跃，过期跳跃不被后续输入复活。服务器用排除自身的向下射线检查支撑面与竖直速度，确认落地后加 7m/s 速度增量；该判定不是通用 CharacterController API。native command 布局变化，必须重建 native 静态库及 Go 程序，旧库会因新桥接符号缺失而链接失败。
+
+Unity `Room.unity` 复用上述 Host / Service，通过既有 loopback 验证入口测试移动跳跃与 Chunk 显示；业务登录与开房 UI 留给使用方。具体操作与协议见 [客户端说明](../../client/physics-viewer/README.md)。
+
+本轮 Room Entity / Unity 功能验证结果见 [验证记录](../performance/benchmarks/physics-room-input-20261025/README.md)。

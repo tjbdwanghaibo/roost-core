@@ -9,12 +9,25 @@ using Roost.Client;
 
 namespace Roost.PhysicsViewer
 {
-    // 旁观 20 个网络控制小球的权威状态。这里不另造一套本地输入，避免伪称同输入物理对照。
+    // 显示服务器权威刚体；Room 模式只发送输入，不运行第二套本地物理。
     public sealed class CrowdViewer : MonoBehaviour
     {
         public string Host = "127.0.0.1";
         public int Port = 19091;
         public bool Interpolate = true;
+        public bool ControlRoom;
+        public int PlayerSlot = 13;
+        public bool VerifyControls;
+        public float HorizontalTravel { get; private set; }
+        public float VerticalRise { get; private set; }
+        public int JumpRequests { get; private set; }
+        readonly object inputLock = new object();
+        float inputX, inputZ, uiX, uiZ;
+        bool jumpPending, firstJump, secondJump, hasOrigin;
+        Vector3 origin;
+        float startedAt;
+        Camera roomCamera;
+        Thread sender;
         readonly ChunkReplica replica = new ChunkReplica();
         readonly ConcurrentQueue<byte[]> packets = new ConcurrentQueue<byte[]>();
         readonly Dictionary<ulong, Transform> bodies = new Dictionary<ulong, Transform>();
@@ -54,6 +67,7 @@ namespace Roost.PhysicsViewer
         void Start()
         {
             Application.runInBackground = true;
+            startedAt = Time.unscaledTime;
             var resource = Resources.Load<TextAsset>("PhysicsTerrain");
             if (resource == null) throw new InvalidDataException("PhysicsTerrain resource missing");
             var terrain = JsonUtility.FromJson<Terrain>(resource.text);
@@ -77,6 +91,7 @@ namespace Roost.PhysicsViewer
                 body.gameObject.SetActive(false);
             }
             var camera = new GameObject("Crowd Camera").AddComponent<Camera>();
+            roomCamera = camera;
             camera.transform.position = new Vector3(40, 43, -48);
             camera.transform.LookAt(new Vector3(0, 2, 0));
             camera.fieldOfView = 55;
@@ -122,8 +137,17 @@ namespace Roost.PhysicsViewer
                 socket = new TcpClient();
                 socket.Connect(Host, Port);
                 socket.ReceiveTimeout = 5000;
+                socket.SendTimeout = 1000;
                 var stream = socket.GetStream();
-                stream.Write(new byte[4], 0, 4); // 槽号 0 只观察，不占任何控制小球。
+                if (ControlRoom)
+                {
+                    if (PlayerSlot < 1 || PlayerSlot > 20) throw new InvalidDataException("PlayerSlot must be 1..20");
+                    byte[] hello = new byte[] { (byte)'P', (byte)'R', (byte)'0', (byte)'1', 0, 0, 0, (byte)PlayerSlot };
+                    stream.Write(hello, 0, hello.Length);
+                    sender = new Thread(() => SendInputs(stream)) { IsBackground = true, Name = "Roost Room Input" };
+                    sender.Start();
+                }
+                else stream.Write(new byte[4], 0, 4); // 槽号 0 只观察。
                 while (!stopping)
                 {
                     byte[] header = ReadExactly(stream, 16);
@@ -142,12 +166,13 @@ namespace Roost.PhysicsViewer
                 }
             }
             catch (Exception e) { if (!stopping) failure = e.Message; }
-            finally { socket?.Close(); }
+            finally { stopping = true; socket?.Close(); }
         }
         void Update()
         {
             try
             {
+                if (ControlRoom) ReadControls();
                 for (int i = 0; i < 8 && packets.TryDequeue(out var data); i++)
                 {
                     Interlocked.Decrement(ref pending);
@@ -155,13 +180,15 @@ namespace Roost.PhysicsViewer
                     foreach (var pair in replica.Bodies) previous[pair.Key] = pair.Value;
                     ulong old = replica.Tick;
                     replica.Apply(data);
-                    if (replica.Bodies.Count != 71) throw new InvalidDataException("Expected 71 bodies");
+                    if (!ControlRoom && replica.Bodies.Count != 71) throw new InvalidDataException("Expected 71 bodies");
                     foreach (var id in replica.Bodies.Keys)
                         if (!bodies.ContainsKey(id)) throw new InvalidDataException("Unknown crowd body");
                     interval = Mathf.Max(.02f, (replica.Tick - old) * .02f);
                     receivedAt = Time.unscaledTime;
                     Frames++;
                 }
+                if (ControlRoom)
+                    foreach (var pair in bodies) pair.Value.gameObject.SetActive(replica.Bodies.ContainsKey(pair.Key));
                 float alpha = Interpolate ? Mathf.Clamp01((Time.unscaledTime - receivedAt) / interval) : 1;
                 foreach (var pair in replica.Bodies)
                 {
@@ -174,21 +201,100 @@ namespace Roost.PhysicsViewer
                         target.rotation = Quaternion.Slerp(old.Rotation, state.Rotation, alpha);
                     }
                     else { target.position = state.Position; target.rotation = state.Rotation; }
+                    if (ControlRoom && pair.Key == (ulong)(50 + PlayerSlot))
+                    {
+                        if (!hasOrigin) { origin = state.Position; hasOrigin = true; startedAt = Time.unscaledTime; }
+                        HorizontalTravel = Mathf.Max(HorizontalTravel, new Vector2(state.Position.x-origin.x,state.Position.z-origin.z).magnitude);
+                        VerticalRise = Mathf.Max(VerticalRise, state.Position.y-origin.y);
+                        roomCamera.transform.position = target.position + new Vector3(0, 12, -16);
+                        roomCamera.transform.LookAt(target.position + Vector3.up);
+                    }
                 }
             }
             catch (Exception e) { failure = e.Message; stopping = true; socket?.Close(); }
         }
         void OnGUI()
         {
+            if (ControlRoom)
+            {
+                GUI.Box(new Rect(12, 12, Screen.width-24, 85), "Roost Room Entity / server-authoritative physics");
+                GUI.Label(new Rect(24, 38, Screen.width-48, 25), $"{Status} | player {PlayerSlot} | {Summary} | sync 20Hz");
+                GUI.Label(new Rect(24, 62, Screen.width-48, 25), $"WASD / arrows: move   Space: jump   travel={HorizontalTravel:F1}m rise={VerticalRise:F1}m");
+                float y = Screen.height - 170;
+                bool up=GUI.RepeatButton(new Rect(92,y,70,60), "Forward");
+                bool left=GUI.RepeatButton(new Rect(16,y+66,70,60), "Left");
+                bool down=GUI.RepeatButton(new Rect(92,y+66,70,60), "Back");
+                bool right=GUI.RepeatButton(new Rect(168,y+66,70,60), "Right");
+                uiX=(right?1:0)-(left?1:0); uiZ=(up?1:0)-(down?1:0);
+                if (GUI.Button(new Rect(Screen.width-160,Screen.height-110,140,85), "JUMP")) QueueJump();
+                return;
+            }
             GUI.Box(new Rect(12, 12, Screen.width - 24, 80), "");
             GUI.Label(new Rect(24, 20, Screen.width - 48, 25), "20 clients / small balls + 50 orange NPC capsules + 1 yellow free ball | Server authoritative");
             GUI.Label(new Rect(24, 45, Screen.width - 48, 25), $"{Status}   {Summary}   Physics 50Hz; controls 20Hz/client; interpolated Chunk state");
+        }
+        void QueueJump()
+        {
+            lock (inputLock) jumpPending = true;
+            JumpRequests++;
+        }
+        void ReadControls()
+        {
+            float x = uiX + (Input.GetKey(KeyCode.D)||Input.GetKey(KeyCode.RightArrow)?1:0) - (Input.GetKey(KeyCode.A)||Input.GetKey(KeyCode.LeftArrow)?1:0);
+            float z = uiZ + (Input.GetKey(KeyCode.W)||Input.GetKey(KeyCode.UpArrow)?1:0) - (Input.GetKey(KeyCode.S)||Input.GetKey(KeyCode.DownArrow)?1:0);
+            if (Input.GetKeyDown(KeyCode.Space)) QueueJump();
+            if (VerifyControls && hasOrigin)
+            {
+                float elapsed=Time.unscaledTime-startedAt;
+                x=elapsed<3?1:0; z=0;
+                if (elapsed>1.5f&&!firstJump) {firstJump=true;QueueJump();}
+                if (elapsed>7&&!secondJump) {secondJump=true;QueueJump();}
+            }
+            Vector2 direction=Vector2.ClampMagnitude(new Vector2(x,z),1)*10;
+            lock (inputLock) {inputX=direction.x;inputZ=direction.y;}
+        }
+        static void PutUInt(byte[] data, int offset, uint value)
+        {
+            for(int i=0;i<4;i++) data[offset+i]=(byte)(value>>(24-i*8));
+        }
+        void SendInputs(Stream stream)
+        {
+            try
+            {
+                ulong sequence=0;
+                while(!stopping)
+                {
+                    float x, z;
+                    bool jump;
+                    lock (inputLock)
+                    {
+                        x = inputX;
+                        z = inputZ;
+                        jump = jumpPending;
+                        jumpPending = false;
+                    }
+                    byte[] data = new byte[17];
+                    sequence++;
+                    PutUInt(data,0,(uint)(sequence>>32));PutUInt(data,4,(uint)sequence);
+                    PutUInt(data,8,BitConverter.ToUInt32(BitConverter.GetBytes(x),0));
+                    PutUInt(data,12,BitConverter.ToUInt32(BitConverter.GetBytes(z),0));data[16]=(byte)(jump?1:0);
+                    stream.Write(data,0,data.Length);
+                    Thread.Sleep(50);
+                }
+            }
+            catch (Exception e)
+            {
+                if (!stopping) failure = e.Message;
+                stopping = true;
+                socket?.Close();
+            }
         }
         void OnDestroy()
         {
             stopping = true;
             socket?.Close();
             receiver?.Join(1000);
+            sender?.Join(1000);
         }
     }
 }

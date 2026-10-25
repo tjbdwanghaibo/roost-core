@@ -62,3 +62,26 @@ python3 scripts/physics/measure-crowd.py --seconds 3600 --port 19091 --hz 20 --o
 当前控制连接使用 XYZ 球形 AOI（12m 进入、14m 离开），Unity 旁观仍显示整个场地。`Crowd.unity` 场景名保持不变，原来的平地双端 `PhysicsComparison.unity` 不变。本页的运行命令启动当前 20 人立体场景。
 
 现有工程升级 3D 地形时，在 Packages/manifest.json 的 dependencies 中加入 `"com.unity.modules.jsonserialize": "1.0.0"`，并同步地形资源。新建脚本已包含。当前截图与验收见 [20 人 3D 报告](../../docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。
+
+## Room 场景：按钮控制房间中的球
+
+先构建 native 库，然后在 core 中运行：
+
+```sh
+GOWORK=off go run -tags physx ./cmd/physics-viewer -scenario room -listen 127.0.0.1:19093 -send-hz 20 -duration 1h
+```
+
+打开本地项目 `Assets/Scenes/Room.unity` 并 Play。方向按钮按住移动，JUMP 点击跳跃；也支持 WASD、方向键和空格。默认控制第 13 个小球，摄像机跟随；可在 Inspector 修改 PlayerSlot（1～20），不同客户端不能占用同一槽。场景仍为 50×50 米复杂地形、20 球、50 胶囊和一个大球；本入口不运行自动 NPC 移动，后续由业务增加。松开方向键停止施加加速度，刚体仍按惯性和摩擦运动。
+
+链路为 Unity 输入 → 本地 TCP 适配 → physicsroom.Submit → 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；客户端只插值服务器位置，不运行本地预测。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
+
+本地输入握手 `PR01 + slot:u32BE`；每次输入 `sequence:u64BE + ax:f32BE + az:f32BE + jump:u8` 共 17 字节。只开放 loopback，不替代生产 Gate 登录或开房鉴权。正式 service 的 Input 同样带 Jump 字段。
+
+自动验证共用输入队列与发送路径，驱动水平移动和两次跳跃请求；它不是自动鼠标点击测试：
+
+```sh
+"$UNITY_EDITOR" -batchmode -projectPath /绝对路径/项目 \
+  -executeMethod ViewerProject.VerifyRoom -logFile /绝对路径/room.log
+```
+
+不要加 `-quit` 或 `-nographics`。验证检查至少 200 帧、水平位移超过 2m、离地高度超过 0.8m，并截图到 `Artifacts/room.png`。手动场景不会启用自动输入。旧本地工程需同步 CrowdViewer.cs、Editor/ViewerProject.cs，无需额外输入包。批处理截图使用相机渲染，不含 IMGUI 按钮；按钮在交互 Play 模式显示。

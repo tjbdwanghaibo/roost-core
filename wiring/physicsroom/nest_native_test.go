@@ -118,3 +118,49 @@ func TestRoomCommitsThroughNest(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRoomEntityReleasedAfterDestroy(t *testing.T) {
+	hostKindOnce.Do(func() {
+		if err := entity.RegisterEntityKindCategory(241, 1); err != nil {
+			panic(err)
+		}
+	})
+	host, err := NewEntityHost(241, 1, 1, nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	defer host.Close(ctx)
+	cfg := domain.DefaultConfig(host.Commit)
+	cfg.Closed = host.Forget
+	svc, err := domain.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Shutdown(ctx)
+	instance, err := svc.Describe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := svc.Create(ctx, domain.Spec{Instance: instance, ID: "owned", LifetimeSeconds: 5, Bodies: []physx.Body{{ID: 1, Shape: physx.Sphere, Position: physx.Vec3{0, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		f, e := host.Snapshot(ctx, ref)
+		if e == nil && f.Tick > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no committed entity: %v", e)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err = svc.Destroy(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = host.Snapshot(ctx, ref); !errors.Is(err, domain.ErrMissing) {
+		t.Fatalf("room entity retained: %v", err)
+	}
+}

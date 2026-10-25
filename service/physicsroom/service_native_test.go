@@ -216,3 +216,49 @@ func TestPreviousOwnerCreateIsRejected(t *testing.T) {
 		t.Fatalf("old process request recreated a room: %v", err)
 	}
 }
+
+func TestJumpConsumedOnceAndReplayDoesNotRearm(t *testing.T) {
+	ctx := context.Background()
+	frames := make(chan gamephysics.Frame, 256)
+	cfg := testConfig()
+	cfg.MemberTTL = 5 * time.Second
+	cfg.Commit = func(_ context.Context, _ Ref, f gamephysics.Frame) error { frames <- f; return nil }
+	s := newTestService(t, cfg)
+	spec := testSpec("jump", s)
+	spec.Bodies[1].Position[1] = .5
+	ref, err := s.Create(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Submit(ctx, m, Input{Sequence: 1, Acceleration: physx.Vec3{0, 1, 0}}); !errors.Is(err, ErrRequestInvalid) {
+		t.Fatalf("vertical input: %v", err)
+	}
+	in := Input{Sequence: 1, Jump: true}
+	if err = s.Submit(ctx, m, in); err != nil {
+		t.Fatal(err)
+	}
+	peak := float32(0)
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case f := <-frames:
+			peak = max(peak, f.States[0].Position[1])
+			// 每拍重发相同 seq，不能重置 TTL，也不能在落地后再次触发。
+			if err = s.Submit(ctx, m, in); err != nil {
+				t.Fatal(err)
+			}
+			if f.Tick >= 100 {
+				if peak < 2 || f.States[0].Position[1] > .6 {
+					t.Fatalf("jump replay: peak=%f final=%+v", peak, f.States[0])
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("jump verification timed out")
+		}
+	}
+}

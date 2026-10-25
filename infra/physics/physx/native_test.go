@@ -239,3 +239,41 @@ func exerciseRoom(room int) error {
 	}
 	return nil
 }
+
+// 跳跃只能由落地判定放行；空中重复请求不能再次增加竖直速度。
+func TestJumpRequiresGround(t *testing.T) {
+	w, err := New(-9.81, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, b := range []Body{{ID: 100, Shape: Box, Position: Vec3{0, -.5, 0}, Dimensions: Vec3{10, .5, 10}}, {ID: 1, Shape: Sphere, Position: Vec3{0, .5, 0}, Dimensions: Vec3{.5}, Mass: 1}} {
+		if err := w.Add(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 50 {
+		if _, err = w.Step(.02, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states, err := w.Step(.02, []Command{{ID: 1, Jump: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states[0].Velocity[1] < 6 {
+		t.Fatalf("ground jump rejected: %+v", states)
+	}
+	peak := states[0].Position[1]
+	// 空中包括接近最高点的低速阶段，持续请求也不得二段跳。
+	for range 45 {
+		states, err = w.Step(.02, []Command{{ID: 1, Jump: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		peak = max(peak, states[0].Position[1])
+	}
+	if peak < 2 || peak > 3.2 || states[0].Velocity[1] >= 0 {
+		t.Fatalf("air jump or no jump: peak=%f state=%+v", peak, states)
+	}
+}

@@ -51,6 +51,7 @@ type memberState struct {
 	binding                 gateway.Binding
 	body                    uint64
 	input                   Input
+	jumpPending             bool
 	inputAt, seenAt, sentAt time.Time
 	cursor                  chunksync.Cursor
 	pending                 *chunksync.Plan
@@ -202,6 +203,9 @@ func (s *Service) run(ctx context.Context, r *room) {
 		r.members = nil
 		r.mu.Unlock()
 		r.world.Close()
+		if s.cfg.Closed != nil {
+			s.cfg.Closed(r.ref)
+		}
 		s.mu.Lock()
 		if s.rooms[r.ref.ID] == r {
 			delete(s.rooms, r.ref.ID)
@@ -224,7 +228,8 @@ func (s *Service) run(ctx context.Context, r *room) {
 				continue
 			}
 			if !m.inputAt.IsZero() && now.Sub(m.inputAt) <= s.cfg.InputTTL {
-				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration})
+				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration, Jump: m.jumpPending})
+				m.jumpPending = false
 			}
 		}
 		// 稳定输入次序，不能让 map 遍历顺序成为物理重复运行的随机源。
@@ -319,7 +324,7 @@ func (s *Service) Submit(ctx context.Context, m Member, in Input) error {
 	for _, v := range in.Acceleration {
 		norm += float64(v) * float64(v)
 	}
-	if in.Sequence == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) || norm > 400 {
+	if in.Acceleration[1] != 0 || in.Sequence == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) || norm > 400 {
 		return ErrRequestInvalid
 	}
 	r, err := s.lookup(m.Room)
@@ -341,7 +346,11 @@ func (s *Service) Submit(ctx context.Context, m Member, in Input) error {
 	if in.Sequence < v.input.Sequence {
 		return ErrSequence
 	}
+	if time.Since(v.inputAt) > s.cfg.InputTTL {
+		v.jumpPending = false
+	}
 	v.input = in
+	v.jumpPending = v.jumpPending || in.Jump
 	v.inputAt = time.Now()
 	v.seenAt = v.inputAt
 	s.metrics.Accepted("input")

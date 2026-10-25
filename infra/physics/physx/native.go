@@ -89,6 +89,9 @@ func (w *World) Step(dt float32, commands []Command) ([]State, error) {
 		}
 		seen[c.ID] = true
 		input[i].id = C.uint64_t(c.ID)
+		if c.Jump {
+			input[i].jump = 1
+		}
 		for j := range 3 {
 			input[i].acceleration[j] = C.float(c.Acceleration[j])
 		}
@@ -97,7 +100,7 @@ func (w *World) Step(dt float32, commands []Command) ([]State, error) {
 	if len(input) > 0 {
 		p = &input[0]
 	}
-	if C.rp_step(w.native, C.float(dt), p, C.uint(len(input))) == 0 {
+	if C.rp_step_control(w.native, C.float(dt), p, C.uint(len(input))) == 0 {
 		return nil, errors.New("physx: simulation failed")
 	}
 	if w.dynamic == 0 {

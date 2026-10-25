@@ -146,7 +146,34 @@ extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float 
     w->bodies[id] = body;
     return 1;
 }
-extern "C" int rp_step(rp_world *w, float dt, const rp_command *commands, unsigned count) {
+// 查询只用于单次跳跃的支撑判定；排除自身，允许站在静态平台或其他动态刚体上。
+class GroundFilter : public PxQueryFilterCallback {
+    const PxRigidActor *self;
+public:
+    explicit GroundFilter(const PxRigidActor *body) : self(body) {}
+    PxQueryHitType::Enum preFilter(const PxFilterData &, const PxShape *, const PxRigidActor *actor, PxHitFlags &) override {
+        return actor == self ? PxQueryHitType::eNONE : PxQueryHitType::eBLOCK;
+    }
+    PxQueryHitType::Enum postFilter(const PxFilterData &, const PxQueryHit &) override { return PxQueryHitType::eBLOCK; }
+};
+static void tryJump(rp_world *world, PxRigidDynamic *body) {
+    if (PxAbs(body->getLinearVelocity().y) > 1.0f) return;
+    PxShape *shape = nullptr;
+    if (body->getShapes(&shape, 1) != 1) return;
+    PxReal height = 0;
+    PxSphereGeometry sphere;
+    PxCapsuleGeometry capsule;
+    if (shape->getSphereGeometry(sphere)) height = sphere.radius;
+    else if (shape->getCapsuleGeometry(capsule)) height = capsule.radius + capsule.halfHeight;
+    else return;
+    GroundFilter filter(body);
+    PxRaycastBuffer hit;
+    PxQueryFilterData data(PxQueryFlag::eSTATIC | PxQueryFlag::eDYNAMIC | PxQueryFlag::ePREFILTER);
+    if (world->scene->raycast(body->getGlobalPose().p, PxVec3(0,-1,0), height + 0.1f, hit,
+                              PxHitFlag::eDEFAULT, data, &filter) && hit.hasBlock && hit.block.normal.y >= 0.5f)
+        body->addForce(PxVec3(0,7,0), PxForceMode::eVELOCITY_CHANGE);
+}
+extern "C" int rp_step_control(rp_world *w, float dt, const rp_command *commands, unsigned count) {
     if (!w || !w->scene)
         return 0;
     for (unsigned i = 0; i < count; ++i)
@@ -154,6 +181,7 @@ extern "C" int rp_step(rp_world *w, float dt, const rp_command *commands, unsign
             return 0;
     for (unsigned i = 0; i < count; ++i) {
         const auto &c = commands[i];
+        if (c.jump) tryJump(w, w->bodies[c.id]);
         w->bodies[c.id]->addForce(PxVec3(c.acceleration[0], c.acceleration[1], c.acceleration[2]),
                                   PxForceMode::eACCELERATION);
     }

@@ -31,6 +31,7 @@ type Body struct {
 type Command struct {
 	ID           uint64
 	Acceleration Vec3
+	Jump         bool
 }
 type State struct {
 	ID                        uint64

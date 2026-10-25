@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- PhysicsRoom：接入可复用 RoomEntity / EntityHost，Nest Guard 提交和关闭回收；新增服务器落地跳跃与一次性输入语义。Unity Room 场景增加方向/跳跃按钮及键盘控制，保持 20Hz AOI Chunk 同步。需要重建 native 库。
+
+
 - **物理房间 service**：新增 `service/physicsroom` 与 `wiring/physicsroom`，支持独立 owner 下的建房/成员/输入/Chunk 取帧确认/销毁、进程及房间代际、容量限制和停机排空；生成 Core NATS RPC、Nest 结果提交适配与 Gate 绑定转发。新增固定 SID 的 RPC 选项，禁止房间调用随机漂移；Nest 增加 `RequestSettled`，供资源执行器等待已准入 handler 真实完成，普通 Request 行为不变。macOS 定向、真实 NATS/Gate/TCP 验证通过；Linux 和多房间容量压测未执行。见 [使用与边界](docs/framework/PHYSICS-ROOM-SERVICE.md)。
 
 - **物理多房间生命周期修复**：将共享 PxPhysics 的创建和释放纳入同一临界区，修复并发开关世界后 SDK 引用计数竞争导致后续世界创建失败；独立 Scene 模拟保持并发。增加多世界隔离、取消/失败隔离和 Chunk 截断原子性验证，见 [补验记录](docs/performance/benchmarks/physics-rooms-20261025/README.md)。

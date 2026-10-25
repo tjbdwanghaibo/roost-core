@@ -65,7 +65,7 @@ func run() error {
 	hz := flag.Int("send-hz", 20, "state send rate, 20 or 50")
 	aoiRadius := flag.Float64("aoi-radius", 12, "crowd AOI enter radius in meters; 0 sends full scene")
 	aoiMargin := flag.Float64("aoi-margin", 2, "crowd AOI exit hysteresis in meters")
-	scenario := flag.String("scenario", "comparison", "comparison or crowd (20 controlling clients)")
+	scenario := flag.String("scenario", "comparison", "comparison, crowd (20 controlling clients), or room (interactive room service)")
 	duration := flag.Duration("duration", 0, "optional run duration")
 	flag.Parse()
 	if *hz != 20 && *hz != 50 {
@@ -88,6 +88,12 @@ func run() error {
 		var stop context.CancelFunc
 		ctx, stop = context.WithTimeout(ctx, *duration)
 		defer stop()
+	}
+	if *scenario == "room" {
+		if *hz != 20 {
+			return errors.New("room sync is fixed at 20Hz")
+		}
+		return runRoom(ctx, *addr)
 	}
 	bodies := gamephysics.ComparisonScene()
 	input := gamephysics.Commands
