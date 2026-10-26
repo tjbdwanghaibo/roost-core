@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1223,5 +1224,117 @@ func TestConcurrentClaimsFillAvailableSlots(t *testing.T) {
 				t.Fatalf("duplicate claim %s", first[0])
 			}
 		})
+	}
+}
+
+// countingScripts 数每个脚本被调用的次数（按 SHA 对回脚本名），空领取（claim_* 没领到任何东西）单独计。
+type countingScripts struct {
+	*redisdriver.Client
+	names map[string]string
+
+	mu     sync.Mutex
+	calls  map[string]int
+	empty  map[string]int
+	hmgets int
+}
+
+func (c *countingScripts) DurableScriptBatch(ctx context.Context, calls []fredis.ScriptCall, numLocal, numReplicas int, timeout time.Duration) ([]fredis.ScriptResult, int64, int64, error) {
+	results, local, replicas, err := c.Client.DurableScriptBatch(ctx, calls, numLocal, numReplicas, timeout)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, call := range calls {
+		name := c.names[call.SHA]
+		if err == nil && (name == "claim_due" || name == "claim_outbox") {
+			if items, ok := results[i].Value.([]any); ok && len(items) == 1 {
+				c.empty[name]++
+				continue
+			}
+		}
+		c.calls[name]++
+	}
+	return results, local, replicas, err
+}
+
+func (c *countingScripts) HMGet(ctx context.Context, key string, fields ...string) ([][]byte, error) {
+	c.mu.Lock()
+	c.hmgets++
+	c.mu.Unlock()
+	return c.Client.HMGet(ctx, key, fields...)
+}
+
+// TestRedisRoundTripsPerTwoStepSaga 核对 v2 §3.2 第 2 步 2a / 2b 的协调器往返数：一笔两步正向 saga = 启动 1 个脚本 + 每步
+// （领取 1、派发 1、outbox 领取 1、确认 1、接收结果 1）5 个脚本，共 11 个脚本；接收结果前的 Get 是只读 HMGET，每步 1 次。
+// 空领取（协调 / 发布循环被唤醒却没领到东西）不算在内，单独报告。
+func TestRedisRoundTripsPerTwoStepSaga(t *testing.T) {
+	ctx := context.Background()
+	env := newRedisTestEnv(t)
+	base := env.open(t)
+	counter := &countingScripts{Client: env.client.(*redisdriver.Client), names: map[string]string{}, calls: map[string]int{}, empty: map[string]int{}}
+	for name, script := range base.lua {
+		counter.names[script.SHA] = name
+	}
+	store, err := NewRedisStore(counter, base.copy, nil, base.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := make(chan Command, 64)
+	options := DefaultOptions()
+	options.CoordinatorWorkers, options.PublisherWorkers = 1, 1
+	options.PollInterval = time.Hour // 只靠唤醒，不做定时空领取
+	engine, err := NewEngine(store, PublishFunc(func(_ context.Context, c Command) error { commands <- c; return nil }), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Register(testDefinition()); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = engine.Run(runCtx) }()
+	const sagas = 20
+	for i := range sagas {
+		started, err := engine.StartSaga(ctx, StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "trip-" + string(rune('a'+i))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for step := 0; step < 2; step++ {
+			select {
+			case command := <-commands:
+				if _, err := engine.Complete(ctx, Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: started.ID, Success: true}); err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("saga %d step %d was not dispatched", i, step)
+			}
+		}
+	}
+	// 等最后一条命令的确认写完。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		counter.mu.Lock()
+		acks := counter.calls["ack_outbox"]
+		counter.mu.Unlock()
+		if acks >= 2*sagas || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	scripts := 0
+	for name, n := range counter.calls {
+		if name != "meta" {
+			scripts += n
+		}
+	}
+	t.Logf("per saga: scripts %.2f %v; HMGET %.2f; empty claims %v", float64(scripts)/sagas, counter.calls, float64(counter.hmgets)/sagas, counter.empty)
+	want := map[string]int{"create": sagas, "claim_due": 2 * sagas, "apply": 4 * sagas, "claim_outbox": 2 * sagas, "ack_outbox": 2 * sagas}
+	for name, n := range want {
+		if counter.calls[name] != n {
+			t.Errorf("%s = %d calls for %d two-step sagas, want %d", name, counter.calls[name], sagas, n)
+		}
+	}
+	if scripts != 11*sagas {
+		t.Errorf("scripts = %d, want 11 per saga (%d)", scripts, 11*sagas)
 	}
 }
