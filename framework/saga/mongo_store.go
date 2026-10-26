@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -187,14 +188,27 @@ func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completio
 	return CompletionHistory{Recorded: true, Receipt: true}, nil
 }
 
-// tombstoneExists 报告冷副本里这笔 saga 的这个操作是否有 tombstone。
-func (s *MongoStore) tombstoneExists(ctx context.Context, operation, sagaID string) (bool, error) {
-	var doc operationDoc
-	err := s.operations().FindOne(ctx, bson.M{"_id": operation, "saga_id": sagaID}, &doc)
-	if errors.Is(err, fmongo.ErrNotFound) {
-		return false, nil
+// loadForReload 读一条记录在冷副本里的全部可装回状态：记录本身，以及它的 tombstone（字段 o:<操作> = 关闭方式|毫秒）与迟到告警
+// 标记（字段 a:<操作>:<代际> = 毫秒），形状与 RedisStore 驻留记录上的字段相同。记录不在时返回 ErrNotFound。
+func (s *MongoStore) loadForReload(ctx context.Context, id string) (Record, map[string]string, error) {
+	record, err := s.Get(ctx, id)
+	if err != nil {
+		return Record{}, nil, err
 	}
-	return err == nil, err
+	var operations []operationDoc
+	if err := s.operations().Find(ctx, bson.M{"_id": bson.M{"$regex": "^" + regexp.QuoteMeta(id) + ":"}, "saga_id": id}, &operations); err != nil {
+		return Record{}, nil, err
+	}
+	fields := make(map[string]string)
+	for _, operation := range operations {
+		fields["o:"+operation.ID] = operation.Closure + "|" + strconv.FormatInt(millis(operation.CreatedAt), 10)
+		for key, at := range operation.LateAlarms {
+			if incarnation, ok := strings.CutPrefix(key, "r"); ok {
+				fields["a:"+operation.ID+":"+incarnation] = strconv.FormatInt(millis(at), 10)
+			}
+		}
+	}
+	return record, fields, nil
 }
 
 func lateAlarmField(incarnation uint32) string {

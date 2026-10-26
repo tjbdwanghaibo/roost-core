@@ -176,8 +176,8 @@ func effectStreams(settings *config, effects kitdataengine.EffectsConfig) (start
 // CheckConfigAcrossMods 是 saga 读别的 Mod 配置键的规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
 // --check-config 与 doctor 的 config-check 同一处）：
 //
-//   - checkAuthorityPool：同一进程注册了权威 Redis Mod 时，redis_authority.pool_size 不小于本 Mod 的并发之和（不够时
-//     并发的消费者、循环排队等连接，存储超时被等连接吃掉）。
+//   - checkAuthorityPool：同一进程注册了权威 Redis Mod 时，redis_authority.pool_size 不小于本 Mod 的并发之和（同进程有
+//     Store Service 时由它加上分区循环一起检查）；不够时并发的消费者、循环排队等连接，存储超时被等连接吃掉。
 //   - checkEffectRetention：完成回执要比效果流里的结果活得久。不看本进程是否注册了 DataEngine——只跑协调器的进程
 //     读的仍是按 dataengine.effects 解析的那条流，它的保留期由别的进程的 DataEngine 按同一份配置建。
 //   - 同一进程注册了 DataEngine 时，saga.start_effect_* 写了就必须与 dataengine.effects 相同：Nest 的 saga start 由
@@ -194,7 +194,7 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 		return err
 	}
 	errs := []error{checkEffectRetention(&settings, effects)}
-	if registered(mods.ModRedisAuthority) {
+	if registered(mods.ModRedisAuthority) && !registered(mods.ModStoreService) {
 		errs = append(errs, checkAuthorityPool(cfg, &settings))
 	}
 	if !registered(mods.ModDataEngine) {
@@ -209,7 +209,8 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 	return errors.Join(errs...)
 }
 
-// checkAuthorityPool：权威 Redis 连接池要容得下本进程同时在用的连接（saga 的并发，见 concurrency）。
+// checkAuthorityPool：权威 Redis 连接池要容得下本进程同时在用的连接（saga 的并发，见 concurrency）。同进程注册了 Store Service
+// 时由它的 Mod 把两者加在一起检查（store_service 的键归它声明），这里不重复。
 func checkAuthorityPool(cfg *viper.Viper, settings *config) error {
 	authority, err := kitredis.LoadAuthorityConfig(cfg)
 	if err != nil {
@@ -220,6 +221,16 @@ func checkAuthorityPool(cfg *viper.Viper, settings *config) error {
 			"result_workers + result_effect_workers + start_effect_workers); raise the pool or lower the workers", authority.PoolSize, need)
 	}
 	return nil
+}
+
+// Concurrency 按 saga Mod 的声明返回它在权威 Redis 连接池上的并发（协调与发布循环、三类消费者的在途处理）：Store Service
+// 与它同进程时把两者加在一起检查连接池。
+func Concurrency(cfg *viper.Viper) (int, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return 0, fmt.Errorf("saga: %w", err)
+	}
+	return settings.concurrency(), nil
 }
 
 func effectKeyMismatch(sagaKey, sagaValue, effectKey, effectValue string) error {

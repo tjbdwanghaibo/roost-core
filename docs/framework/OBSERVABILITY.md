@@ -150,6 +150,16 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.redis.script_partial_total{script}` | Counter | 脚本在校验之后的写里出错（可能只写了一部分）：**非零要人核对**，进程 fail-stop |
 | `saga.redis.cold_read_total{op}` | Counter | Redis 里没有、回查 Mongo 冷副本的读（`get`、`business_key`、`history`、`alarm`） |
 | `saga.redis.backpressure_total` | Counter | 投影积压超过 `saga.redis.max_projection_backlog`，新 saga 被拒（可重试）；持续增长说明 Store Service 跟不上或停了 |
+| `saga.redis.reload_total{result}` | Counter | 已驱逐的记录要写时从 Mongo 冷副本装回：`reloaded`、`exists`（别人先装回了）、`missing`（冷副本里也没有） |
+| `saga.redis.resident_records{state}` | Gauge | 权威 Redis 上驻留的记录：`active` = 非终态（领取索引里）、`terminal` = 已终态、等保留期过后驱逐。容量按它与投影积压估算（每条约 1～2KB） |
+| `store_service.backlog_entries{projection,partition}` | Gauge | 一个分区还没投影进 Mongo 的日志条目数（XLEN），每秒采样 |
+| `store_service.lag_seconds{projection}` | Gauge | 最老未投影条目的年龄（各分区取最大）；持续增长说明投影跟不上或 Mongo 不可用 |
+| `store_service.projected_entries_total{projection}` / `store_service.batches_total{projection}` | Counter | 投影过的条目与批数，相除是平均批大小 |
+| `store_service.batch_seconds{projection}` | Histogram | 每批交给领域投影（写 Mongo）的耗时 |
+| `store_service.mongo_ops_total{projection,collection}` | Counter | 投影发出的 BulkWrite 次数（saga：`sagas`、`completions`、`operations` 各至多一次 / 批） |
+| `store_service.paused_partitions{projection}` | Gauge | 因非暂时错误（唯一业务键冲突、文档校验失败）暂停的分区数；**非零健康 Fail**，按 ERROR 日志修好冲突后删除暂停键 `<前缀>:paused:<分区>` |
+| `store_service.evicted_total{projection}` | Counter | 驱逐的终态记录（已投影、过了 `saga.redis.terminal_retention`） |
+| `store_service.lease_lost_total{projection}` | Counter | 放手的分区租约（续约失败或推进时发现租约已换人）；多实例时偶发是正常的 |
 
 ### 技能运行时（core/skill）
 
@@ -473,6 +483,8 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.redis.script_seconds` | Histogram | `saga/redis_store.go:ObserveHistogram` |
 | `saga.redis.script_total` | Counter | `saga/redis_store.go:IncCounter` |
 | `saga.redis.waitaof_unconfirmed_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.reload_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.resident_records` | Gauge | `saga/redis_projection.go:SetGauge` |
 | `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
@@ -480,6 +492,15 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.step.expired_unexecuted_total` | Counter | `saga/command_consumer.go:IncCounter` |
 | `saga.step.run_duration` | Histogram | `wiring/saga/steps.go:ObserveHistogram` |
 | `saga.step.run_total` | Counter | `wiring/saga/steps.go:IncCounter` |
+| `store_service.backlog_entries` | Gauge | `framework/storeservice/runner.go:SetGauge` |
+| `store_service.batch_seconds` | Histogram | `framework/storeservice/runner.go:ObserveHistogram` |
+| `store_service.batches_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
+| `store_service.evicted_total` | Counter | `saga/redis_projection.go:IncCounter` |
+| `store_service.lag_seconds` | Gauge | `framework/storeservice/runner.go:SetGauge` |
+| `store_service.lease_lost_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
+| `store_service.mongo_ops_total` | Counter | `saga/redis_projection.go:IncCounter` |
+| `store_service.paused_partitions` | Gauge | `framework/storeservice/runner.go:SetGauge` |
+| `store_service.projected_entries_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
 | `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
 | `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |
@@ -572,6 +593,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
 13. `saga.redis.waitaof_unconfirmed_total` 或 `saga.redis.script_partial_total` 非零 —— 立即告警：前者是权威 Redis 的部署违反持久契约（AOF 关闭、`appendfsync` 不是 always），后者是脚本校验之后写失败；两者都会让协调器 fail-stop，按 ERROR 日志点名的脚本与键核对。
+14. `store_service.paused_partitions` 非零或 `store_service.lag_seconds` 持续增长 —— 告警：投影停了（非暂时错误暂停）或跟不上；积压超过 `saga.redis.max_projection_backlog` 后新 saga 会被拒（`saga.redis.backpressure_total`）。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

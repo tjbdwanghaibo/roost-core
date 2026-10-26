@@ -21,7 +21,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	corestore "github.com/tjbdwanghaibo/roost-core/framework/storeservice"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
@@ -176,7 +178,9 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 	if withNest {
 		all = append(all, kitnest.NewMod(access))
 	}
-	all = append(all, env.sagaMod)
+	// Store Service 与协调器同进程（生成工程的部署形状）：把日志投影进 Mongo 冷副本、驱逐终态记录。wiring/storeservice 依赖
+	// 本包，测试里不能导入它，这里按它的装配直接用 core 的投影与运行器。
+	all = append(all, env.sagaMod, &fixtureStoreService{saga: env.sagaMod})
 	checked := make([]app.Mod, 0, len(all))
 	for _, mod := range all {
 		checked = append(checked, mod)
@@ -514,4 +518,32 @@ func perfResourceName(t *testing.T, variable, required string) string {
 		t.Fatalf("%s must start with %s and contain only letters, digits and underscores (at most 40)", variable, required)
 	}
 	return value
+}
+
+// fixtureStoreService 是夹具里的 Store Service：与 wiring/storeservice.Mod 同样的装配（saga 投影 + 投影运行器），用 saga Mod 的
+// 权威存储与冷副本。
+type fixtureStoreService struct {
+	saga   *Mod
+	runner *corestore.Runner
+}
+
+func (f *fixtureStoreService) Name() app.ModName       { return mods.ModStoreService }
+func (f *fixtureStoreService) Init(*viper.Viper) error { return nil }
+func (f *fixtureStoreService) Provide(registry *app.Registry) error {
+	authority := app.MustLookup[fredis.IRedis](registry, mods.ModRedisAuthority)
+	store := f.saga.Store()
+	projection, err := coresaga.NewRedisProjection(authority, store.Copy(), store.Options())
+	if err != nil {
+		return err
+	}
+	f.runner, err = corestore.NewRunner(authority, corestore.Options{Owner: "fixture-store-" + coresaga.NewID()}, projection)
+	return err
+}
+func (f *fixtureStoreService) Start() error { return f.runner.Start(context.Background()) }
+func (f *fixtureStoreService) Stop()        { _ = f.StopWithContext(context.Background()) }
+func (f *fixtureStoreService) StopWithContext(ctx context.Context) error {
+	if f.runner == nil {
+		return nil
+	}
+	return f.runner.Stop(ctx)
 }

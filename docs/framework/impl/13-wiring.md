@@ -40,7 +40,9 @@ Service 与基础设施 Mod 共用这些生命周期规则。领域 Server/run �
 | [nest](../../../wiring/nest) | [framework/nest](../../../framework/nest) | EntityAccess、执行器、配置与生命周期 |
 | [selfsync](../../../wiring/selfsync) | [framework/sync/entitysync/policy.SelfView](../../../framework/sync/entitysync/policy/self_view.go) | 玩家看自己状态：PushSyncPlayer 包成 Transport、嵌入 TCP 握手钩子 / Game Ingress 回调转成连接激活与关闭、经 `EntitySyncSetup.Attach` 装到 Nest Mod 的 Manager |
 | [dataengine](../../../wiring/dataengine) | [framework/dataengine](../../../framework/dataengine) | WAL、恢复、投影、持久依赖；业务 effect 消费者 `SubscribeEffects`（[effects.go](../../../wiring/dataengine/effects.go)，按 `dataengine.effects.*` / `dataengine.database` 组装 Mongo effect inbox 与 durable，毒消息 Term） |
-| [saga](../../../wiring/saga) | [framework/saga](../../../framework/saga) | 协调器装配与跨 Mod 配置规则；业务步骤运行时 `Steps`（[steps.go](../../../wiring/saga/steps.go)，按名字登记原生 / Mongo 步骤体，组装收件箱、发布器、durable，Drain / Stop 与指标） |
+| [saga](../../../wiring/saga) | [framework/saga](../../../framework/saga) | 协调器装配（Mongo 冷副本 + 权威 Redis，`DependsOn` 含 `redis.authority`）与跨 Mod 配置规则（含权威 Redis 连接池不小于并发之和）；业务步骤运行时 `Steps`（[steps.go](../../../wiring/saga/steps.go)，按名字登记原生 / Mongo 步骤体，组装收件箱、发布器、durable，Drain / Stop 与指标） |
+| [redis（权威 Redis）](../../../wiring/redis/authority.go) | [infra/storage/redis](../../../infra/storage/redis) | `AuthorityMod`：`redis_authority.*`、发布 `mods.ModRedisAuthority`、Start 跑部署契约探针 `CheckAuthority` |
+| [storeservice](../../../wiring/storeservice) | [framework/storeservice](../../../framework/storeservice) | Store Service：`store_service.*`，saga 投影 + 投影运行器，暂停分区时健康 Fail；与 saga 同进程时连接池按两者之和检查 |
 | [remoteentity](../../../wiring/remoteentity) | [framework/remoteentity](../../../framework/remoteentity) | 权威存储、总线、Mirror |
 | [ops](../../../wiring/ops) | [infra/observe/ops](../../../infra/observe/ops) | 管理命令、探针、统计查找与身份 |
 | [statslog](../../../wiring/statslog) | [framework/statslog](../../../framework/statslog) | 配置、指标、Nest/Entity 的采样依赖 |

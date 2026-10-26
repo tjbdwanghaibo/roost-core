@@ -117,7 +117,12 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat", Alias: "kitheartbeat", Depends: []string{"nest"},
 	},
 	"saga": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "redis_authority", "nats"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "redis_authority", "nats", "store_service"},
+	},
+	// store_service 把权威 Redis 上的 saga 日志投影进 Mongo 冷副本并驱逐已投影的终态记录；生成的工程与协调器同进程注册
+	// （saga 依赖它），也可以拆到单独的进程，多个实例靠分区租约分摊。
+	"store_service": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/storeservice", Alias: "kitstoreservice", Constructor: "kitstoreservice.NewMod()", Depends: []string{"mongo", "redis_authority"},
 	},
 	// web 监听 roost add webroute 生成的业务 HTTP 路由；服务在 Init 里 kitweb.RegisterRoutes(registry, &web.Service{})。
 	"web": {

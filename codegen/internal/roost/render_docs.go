@@ -433,7 +433,8 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | heartbeat | 实体心跳驱动（gameplay/heartbeat）：game/heartbeat.Driver 接到本服务的 Nest；roost add heartbeat / behavior 自动加上 | nest |
-| saga | 跨服务 Saga 编排 | dataengine、mongo、redis_authority、nats |
+| saga | 跨服务 Saga 编排 | dataengine、mongo、redis_authority、nats、store_service |
+| store_service | Store Service：把权威 Redis 上的 saga 日志投影进 Mongo 冷副本、驱逐已投影的终态记录（store_service.*） | mongo、redis_authority |
 | web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
 ## 7. features

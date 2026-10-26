@@ -33,6 +33,7 @@ import (
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
+	kitstoreservice "github.com/tjbdwanghaibo/roost-core/wiring/storeservice"
 )
 
 // 生成器产物在真实依赖上端到端（D12 方向 B）：roost add saga -native 与 roost add effect 的骨架填上最小业务后，
@@ -91,7 +92,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		Start() error
 		StopWithContext(context.Context) error
 	}
-	all := []lifecycle{mongoMod, kitnats.NewNatsMod(nil), kitredis.NewAuthorityMod(), kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess)), kitnest.NewMod(EntityAccess), sagaMod}
+	all := []lifecycle{mongoMod, kitnats.NewNatsMod(nil), kitredis.NewAuthorityMod(), kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess)), kitnest.NewMod(EntityAccess), sagaMod, kitstoreservice.NewMod()}
 	checked := make([]app.Mod, 0, len(all))
 	for _, mod := range all {
 		checked = append(checked, mod)

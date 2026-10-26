@@ -1225,22 +1225,3 @@ func TestConcurrentClaimsFillAvailableSlots(t *testing.T) {
 		})
 	}
 }
-
-// 记录不在 Redis、只在冷副本里（带 tombstone）时，迟到告警按冷副本判断：脚本报“需要装回”，不把它当成“没有 tombstone”。
-func TestRedisLateAlarmOnARecordOnlyInTheCopy(t *testing.T) {
-	ctx := context.Background()
-	store := newTestRedisStore(t)
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	operation := operationKey("cold", PhaseForward, 0)
-	if _, err := store.copy.operations().InsertOne(ctx, operationDoc{ID: operation, SagaID: "cold", Closure: operationClosureAbandoned, CreatedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	late := Completion{CommandID: operation + ":1", IdempotencyKey: operation, SagaID: "cold", Success: true}
-	if marked, err := store.MarkLateSuccessAlarm(ctx, late, 0); err != nil || !marked {
-		t.Fatalf("alarm on a record only in the mongo copy = %v, %v; want true (alarm rather than lose it)", marked, err)
-	}
-	other := Completion{CommandID: operationKey("cold", PhaseForward, 1) + ":1", IdempotencyKey: operationKey("cold", PhaseForward, 1), SagaID: "cold", Success: true}
-	if marked, err := store.MarkLateSuccessAlarm(ctx, other, 0); err != nil || marked {
-		t.Fatalf("alarm without any tombstone = %v, %v; want false", marked, err)
-	}
-}

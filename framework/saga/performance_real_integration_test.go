@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/storeservice"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
@@ -159,6 +160,25 @@ func TestRealSagaPerformance(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	// 进程内 Store Service（生成工程的部署形状：与协调器同进程）：把日志投影进 Mongo 冷副本、驱逐终态记录。
+	projection, err := NewRedisProjection(authority, asm.Copy, asm.Store.Options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeService, err := storeservice.NewRunner(authority, storeservice.Options{Owner: "perf-store"}, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storeService.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stop, c := context.WithTimeout(context.Background(), 20*time.Second)
+		defer c()
+		if err := storeService.Stop(stop); err != nil {
+			t.Error(err)
+		}
+	})
 	inbox, err := NewMongoCommandInbox(client, database, "perf_steps", CommandInboxOptions{ReceiptTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
@@ -269,6 +289,15 @@ func TestRealSagaPerformance(t *testing.T) {
 		// FinalWrongTerminal 是最终不是期望终态的笔数。
 		FinalStatuses      map[string]int
 		FinalWrongTerminal int
+		// StoreService* 是进程内 Store Service 的观察：窗口内的 Mongo bulkWrite 次数（已含在 MongoCommands 里，单列）、
+		// 投影积压峰值（每秒采样各分区 XLEN 之和）、停止加压后积压归零用的秒数。
+		StoreServiceMongoOps    int64
+		StoreServiceBacklogMax  int64
+		StoreServiceDrainSecond float64
+		// ColdHotMismatches 是积压归零后 Redis 读到的版本与 Mongo 冷副本版本不同的笔数（驱逐了的按冷副本读，必然相同）；
+		// MongoTerminal 是冷副本里到达期望终态的笔数。
+		ColdHotMismatches int
+		MongoTerminal     int
 	}
 	total := int(duration/time.Second) * rate
 	r := result{CoordinatorBatch: cfg.Engine.CoordinatorBatch, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
@@ -308,6 +337,8 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	mongoURI := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	commandsBefore := perfMongoCommands(ctx, mongoURI)
+	storeOpsBefore := counterValue("store_service.mongo_ops_total")
+	backlogSampled := time.Now()
 	var harnessMongo atomic.Int64
 	begin := time.Now()
 	cpuBegin := processCPU()
@@ -418,6 +449,12 @@ func TestRealSagaPerformance(t *testing.T) {
 				}
 			}
 			mu.Unlock()
+		}
+		if time.Since(backlogSampled) >= time.Second {
+			backlogSampled = time.Now()
+			if backlog, err := asm.Store.ProjectionBacklog(ctx); err == nil && backlog > r.StoreServiceBacklogMax {
+				r.StoreServiceBacklogMax = backlog
+			}
 		}
 		mu.Lock()
 		remaining := len(pending)
@@ -550,6 +587,38 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	r.FinalStats = asm.Engine.Stats()
 	r.MongoCommands, r.HarnessMongoCommands = perfCommandDelta(commandsBefore, perfMongoCommands(ctx, mongoURI)), harnessMongo.Load()
+	r.StoreServiceMongoOps = counterValue("store_service.mongo_ops_total") - storeOpsBefore
+	// 冷热核对：等投影积压归零（记下用时），再逐笔比较 Redis 与 Mongo 冷副本的版本。
+	drainStart := time.Now()
+	for {
+		backlog, err := asm.Store.ProjectionBacklog(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if backlog == 0 {
+			break
+		}
+		if time.Since(drainStart) > time.Minute {
+			t.Fatalf("projection backlog still %d a minute after the load stopped", backlog)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.StoreServiceDrainSecond = time.Since(drainStart).Seconds()
+	for i := range total {
+		id := fmt.Sprintf("perf-%d", i)
+		hot, err := asm.Store.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("hot read %s: %v", id, err)
+		}
+		cold, err := asm.Copy.Get(ctx, id)
+		if err != nil || cold.Version != hot.Version {
+			r.ColdHotMismatches++
+			continue
+		}
+		if cold.Status == terminal {
+			r.MongoTerminal++
+		}
+	}
 	// 终态复读在命令计数之后：逐笔读一次，不计入被测链路。
 	r.FinalStatuses = map[string]int{}
 	for i := range total {
@@ -574,7 +643,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms server_p99=%.1fms admit_p99=%.1fms observe_p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.Server.Completion.P99MS, r.Harness.AdmitLag.P99MS, r.Harness.ObserveLag.P99MS, r.StartErrors, r.BusinessVerified)
-	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
+	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || r.ColdHotMismatches != 0 || r.MongoTerminal != total-r.FinalWrongTerminal || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
 		t.Fatal("Saga load verification failed; result retained")
 	}
 }

@@ -62,7 +62,8 @@
 | [framework/nest/entitytimer](../../framework/nest/entitytimer) | [时间与定时器](impl/10-time.md) | 2 | 3 |
 | [framework/nestwal](../../framework/nestwal) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 11 | 22 |
 | [framework/remoteentity](../../framework/remoteentity) | [Remote Entity 与 Mirror](impl/05-remote-mirror.md) | 26 | 108 |
-| [framework/saga](../../framework/saga) | [Saga 长事务](impl/06-saga.md) | 14 | 62 |
+| [framework/saga](../../framework/saga) | [Saga 长事务](impl/06-saga.md) | 20 | 37 |
+| [framework/storeservice](../../framework/storeservice) | [Saga 长事务](impl/06-saga.md) | 2 | 1 |
 | [framework/statslog](../../framework/statslog) | [观测、安全与运维](impl/11-observability.md) | 1 | 6 |
 | [framework/sync/entitysync](../../framework/sync/entitysync) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 16 | 36 |
 | [framework/sync/entitysync/policy](../../framework/sync/entitysync/policy) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 12 | 7 |
@@ -178,9 +179,10 @@
 | [wiring/ops](../../wiring/ops) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 7 |
 | [wiring/platform](../../wiring/platform) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 6 |
 | [wiring/rank](../../wiring/rank) | [次核心：Service 领域能力](impl/09-services.md) | 3 | 2 |
-| [wiring/redis](../../wiring/redis) | [次核心：Wiring 装配](impl/13-wiring.md) | 2 | 6 |
+| [wiring/redis](../../wiring/redis) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 7 |
 | [wiring/remoteentity](../../wiring/remoteentity) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 11 |
 | [wiring/saga](../../wiring/saga) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 7 |
+| [wiring/storeservice](../../wiring/storeservice) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/selfsync](../../wiring/selfsync) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 2 |
 | [wiring/session](../../wiring/session) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |
 | [wiring/statslog](../../wiring/statslog) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |

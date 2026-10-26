@@ -2,6 +2,8 @@
 
 跨服交易的延迟口径、预留 / 补偿 / 幂等约束及当前容量边界见 [Saga：跨服交易](../SAGA.md#跨服交易性能口径与使用约束)。本机两个 Mongo 步骤、显式两个消费 worker 的30/s×10分钟验收为18,000笔全成功、整笔P99约576ms；该数字不适用于下面原生 Entity 步骤，也不是Sync的50ms指标。
 
+**部署依赖**：协调器的权威存储是单主 Redis（Mod `redis.authority`，配置 `redis_authority.*`；实例必须 `appendonly yes`、`appendfsync always`、`maxmemory-policy noeviction`，启动探针检查），Mongo 是它的冷副本（Store Service 投影，Mod `store_service`），命令与结果走 NATS JetStream。生成工程加 saga 时自动带上 `redis_authority` 与 `store_service`，配置里必须写 `saga.redis.key_prefix`。契约与运维见 [SAGA.md「协调器存储：Redis 权威」](../SAGA.md#协调器存储redis-权威)。
+
 
 适用版本：v1.29.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/06-saga.md) · [模块总目录](../README.md)
 

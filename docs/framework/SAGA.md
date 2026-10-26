@@ -9,7 +9,7 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 补偿不是内存状态回滚。推荐把资源状态设计为 `available -> reserved -> consumed`
 或 `reserved -> released`，并以 `Command.IdempotencyKey` 作为业务唯一键。
 
-协调器持久化以下边界：
+协调器持久化以下边界（存储是单主权威 Redis，见下文「协调器存储：Redis 权威」；一次“存储事务”是一个 Lua 脚本加同连接 WAITAOF）：
 
 - Saga 状态与待发布 command 在一个存储事务中提交；
 - command 通过 durable outbox 至少一次发布；
@@ -27,6 +27,60 @@ Nest 启动）一律 Term，计 `saga.consumer.rejected_total{consumer}` 并记 
 Nest 启动消费者对 `StartSaga` 的确定性拒绝（`Data` 超过 `saga.max_payload_bytes` 等 `ErrInvalidRecord`、同一业务键另一份意图的
 `ErrIdentityConflict`）同样 Term，计 `saga.start.rejected_total{saga_type,reason}` 并记点名 saga 的 ERROR（RR-20261006-43）；
 `ErrDefinitionMissing` 仍按可重试错误 nak（滚动发布中定义会随新进程上线）。
+
+## 协调器存储：Redis 权威
+
+协调器的全部状态——记录、领取租约、命令 outbox、completion 回执、操作 tombstone、迟到告警标记——在单主权威 Redis 上
+（`framework/saga.RedisStore`，配置 `redis_authority.*` 与 `saga.redis.*`）；Mongo 是冷副本（`MongoStore`，只读），由 Store Service
+（`framework/storeservice` + `wiring/storeservice`）按分区把日志投影进去。设计与取舍见
+[DESIGN-2026-10-26-redis-authority-v2](../maintenance/DESIGN-2026-10-26-redis-authority-v2.md)（实施结果 §13）。
+
+**部署契约**（启动探针 `fredis.CheckAuthority` 强制，不满足拒绝启动）：Redis ≥ 7.2、非 Cluster、`role:master`；`appendonly yes`、
+`appendfsync always`、`no-appendfsync-on-rewrite no`、`maxmemory-policy noeviction`。只支持单主，**不支持 Sentinel / Cluster 自动切主**
+（切主可能让已确认的写回退，框架发现不了）。副本只做灾备。推荐独立实例；`redis_authority.addr` 可以与 `redis.addr` 相同，只要该实例满足契约。
+托管 Redis 禁用 `CONFIG` 时跳过配置核对，靠探针写的 WAITAOF 兜底。
+
+**一笔事务一个脚本**：每次状态变化（Create、领取、Apply、outbox 领取 / 确认 / 退避、迟到告警标记）是一个 Lua 脚本，与同连接的
+`WAITAOF 1 0` 一起在一次往返里提交（`DurableScriptBatch`）。脚本**先做完全部校验再写**（键类型、版本、租约、回执摘要、tombstone、
+积压），业务结论用返回码表达，记录不改。`appendfsync always` 下脚本回复时已 fsync，任何读者都看不到未落盘的状态。
+
+| 结果 | 含义与处理 |
+| --- | --- |
+| 业务结论（`CONFLICT`、`DUPLICATE`、`IDENTITY_CONFLICT`、`NEED_RELOAD`、`BACKPRESSURE`） | 映射为 `ErrConflict`、`ApplyDuplicate`、`ErrIdentityConflict`、装回后重跑、`ErrBackpressure`；没有写入 |
+| 连接中断、超时、ctx 到期 | 结果未知，原样返回、不在存储里重试：`Complete` 由 JetStream 重投后重算（回执去重），派发靠租约过期后重新领取，发布靠 outbox 租约过期重发 |
+| `WAITAOF` local=0 或被服务端拒绝 | 已执行、持久未确认：返回 `ErrDurabilityUnconfirmed`（不回滚、不报成功），计 `saga.redis.waitaof_unconfirmed_total`，经 `RuntimeFailure` fail-stop |
+| 脚本错误回复（校验之后的写出错） | 可能部分写入：计 `saga.redis.script_partial_total`、ERROR、fail-stop |
+| Redis 内存满（`OOM`，脚本不声明 `allow-oom`） | 执行前被拒、确定没执行：返回 `ErrBackpressure` |
+
+**回执与重试**：`apply.lua` 先查回执（同一 CommandID 摘要相同 → 重复，不同 → 身份冲突），再查请求摘要（`la`：不带回执的请求在回复丢失后
+原样重试 → 已应用），再查版本与租约。带回执的请求一律按回执去重：两次送达算出逐字节相同的请求时，只有第一个算“已应用”。
+
+**热与冷**：非终态与刚结束的 saga 驻留 Redis；终态记录在投影之后、过了 `saga.redis.terminal_retention`（15m）由 Store Service 驱逐，
+之后 Mongo 冷副本就是它的权威。读（`Get`、`GetByBusinessKey`、完成历史）Redis 没有时读冷副本；**冷记录要写，先装回**（`reload.lua`，
+带 tombstone 与告警标记，回执留在 Mongo）。驱逐只在“最新版本已投影”（记录的 `ls` 不晚于分区进度）之后发生，所以冷副本就是驱逐时的最新版本。
+`List` 的终态部分是最终一致的（落后于投影积压）。
+
+**业务键永久唯一**：Mongo 的 `uniq_type_business` 是永久的，Redis 的业务键守卫在驱逐后只保留 `saga.redis.business_key_guard`（10m）。
+`Create` 先读一次 Mongo 冷副本（同 id 或同业务键已有记录 → `ErrAlreadyExists`），再执行脚本；脚本要求从 Mongo 读开始到执行不超过守卫的
+一半，超过就重做（三次后 `ErrConflict`）。`business_key_guard` 必须不小于 10 × `saga.store_timeout`。
+
+**积压背压**：每个投影分区未投影的日志超过 `saga.redis.max_projection_backlog`（20000）时，`Create` 返回可重试的 `ErrBackpressure`
+（启动消费者 nak 退避）；已存在的 saga 照常推进，否则积压永远消不掉。
+
+**Store Service**：每个（投影，分区）一个循环——取分区租约、从进度之后读一批（≤ `store_service.batch_size`，256）、写 Mongo（saga：每批最多
+三次 BulkWrite，记录版本只升不降、回执首次写入、tombstone 的 closure 只升不降）、用脚本推进进度并裁剪已投影的日志、驱逐。正确性不依赖租约
+排他（Mongo 写单调、进度只能由持有租约者推进），多个实例靠租约分摊。唯一业务键冲突、文档校验失败是非暂时错误：**该分区暂停、不跳过**
+（写暂停键 `<前缀>:paused:<分区>`、健康 Fail、`store_service.paused_partitions`），运维修好冲突后删除暂停键继续。生成工程与协调器同进程注册。
+
+**启动守卫**（先恢复再服务）：Mongo 的 saga 元数据（`_saga_meta` 集合 `_id: "redis"`）与 Redis `<前缀>:meta` 的实例 ID 必须一致。两边都没有是
+首次初始化（Mongo 里不能有旧版本留下的非终态 saga）；Mongo 有、Redis 没有是“权威 Redis 被清空或换了库”，拒绝——**空 Redis 不自动当权威**；
+键格式版本或分区数不符同样拒绝（分区数只在全部分区日志已投影为空时可改）。
+
+**连接池**：`redis_authority.pool_size`（64）必须不小于本进程同时在用的连接：协调与发布循环、三类消费者（`saga.result_workers` 8、
+`saga.result_effect_workers` 8、`saga.start_effect_workers` 4）的在途处理，同进程 Store Service 的分区循环。配置检查在任何 Mod Init 之前强制。
+
+**灾备**：主机或磁盘损毁不在框架承诺内（RPO = 复制 / 备份滞后）。手册：停所有协调器与 Store Service → 恢复 Redis → 逐分区比较冷副本与 Redis
+的版本（冷副本更高的以它为准装回，其后的 Redis 未投影尾部人工核对）→ 核对 JetStream 上未完成的命令 / completion → 再启动。
 
 ## 定义
 

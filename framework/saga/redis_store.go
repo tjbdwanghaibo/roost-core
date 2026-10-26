@@ -55,7 +55,7 @@ type RedisStore struct {
 	failure *app.RuntimeFailure
 	opts    RedisStoreOptions
 	keys    redisKeys
-	lua     map[string]*redisScript
+	lua     map[string]*fredis.LuaScript
 }
 
 // NewRedisStore 校验能力与配置并构造存储，不访问 Redis 与 Mongo；EnsureInfrastructure 做启动探针与元数据守卫。
@@ -141,7 +141,7 @@ func (s *RedisStore) Ping(ctx context.Context) error {
 func (s *RedisStore) run(ctx context.Context, name string, keys []string, args ...any) (string, []any, error) {
 	script := s.lua[name]
 	start := time.Now()
-	results, local, _, err := s.scripts.DurableScriptBatch(ctx, []fredis.ScriptCall{{SHA: script.SHA, Source: script.Source, Keys: keys, Args: args}}, 1, 0, s.opts.WaitAOFTimeout)
+	results, local, _, err := s.scripts.DurableScriptBatch(ctx, []fredis.ScriptCall{script.Call(keys, args...)}, 1, 0, s.opts.WaitAOFTimeout)
 	metrics.ObserveHistogram("saga.redis.script_seconds", metrics.Labels{"script": name}, time.Since(start))
 	if err != nil && !errors.Is(err, fredis.ErrWaitAOFFailed) {
 		metrics.IncCounter("saga.redis.script_total", metrics.Labels{"script": name, "result": "unknown"}, 1)
@@ -408,7 +408,8 @@ func (s *RedisStore) CompletionHistory(ctx context.Context, completion Completio
 	return s.copy.CompletionHistory(ctx, completion)
 }
 
-// MarkLateSuccessAlarm 在 tombstone 上原子地记下（操作，代际）的迟到告警；没有 tombstone 返回 false。
+// MarkLateSuccessAlarm 在 tombstone 上原子地记下（操作，代际）的迟到告警；没有 tombstone 返回 false。记录已驱逐时先从冷副本装回
+// （冷记录要写，先装回），再记一次。
 func (s *RedisStore) MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
 	if err := completion.Validate(); err != nil {
 		return false, ErrInvalidRecord
@@ -417,23 +418,76 @@ func (s *RedisStore) MarkLateSuccessAlarm(ctx context.Context, completion Comple
 		return false, nil
 	}
 	partition := s.keys.partition(completion.SagaID)
-	code, _, err := s.run(ctx, "mark_alarm", []string{s.keys.record(completion.SagaID), s.keys.log(partition)},
-		completion.IdempotencyKey, incarnation, time.Now().UnixMilli(), completion.SagaID)
+	for reloaded := false; ; reloaded = true {
+		code, _, err := s.run(ctx, "mark_alarm", []string{s.keys.record(completion.SagaID), s.keys.log(partition)},
+			completion.IdempotencyKey, incarnation, time.Now().UnixMilli(), completion.SagaID)
+		if err != nil {
+			return false, err
+		}
+		switch code {
+		case "MARKED":
+			return true, nil
+		case "NONE":
+			return false, nil
+		case "NEED_RELOAD":
+			if reloaded {
+				return false, ErrConflict
+			}
+			found, err := s.reload(ctx, completion.SagaID)
+			if err != nil || !found {
+				return false, err
+			}
+		default:
+			return false, fmt.Errorf("saga redis: mark_alarm returned %q", code)
+		}
+	}
+}
+
+// reload 把一条已驱逐的记录从 Mongo 冷副本装回 Redis（reload.lua）：记录主体、tombstone 与告警标记；回执不装回（历史回查
+// 时读冷副本）。别人先装回了（EXISTS）也算成功；冷副本里也没有时 found=false。驱逐只在“最新版本已投影”之后发生、驱逐之后
+// 不会再有写（写都先装回），所以冷副本就是驱逐时的最新版本。
+func (s *RedisStore) reload(ctx context.Context, id string) (bool, error) {
+	record, fields, err := s.copy.loadForReload(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		metrics.IncCounter("saga.redis.reload_total", metrics.Labels{"result": "missing"}, 1)
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	record.Lease = Lease{}
+	doc, err := encodeRecordDoc(record)
+	if err != nil {
+		return false, err
+	}
+	terminalAt := int64(0)
+	if record.Status.Terminal() {
+		terminalAt = millis(record.UpdatedAt)
+	}
+	partition := s.keys.partition(id)
+	bk := s.keys.businessKey(record.Type, record.BusinessKey)
+	args := []any{id, record.Version, int(record.Status), millis(record.NextRunAt), terminalAt, doc, bk, partition, s.opts.TerminalRetention.Milliseconds(), len(fields)}
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		args = append(args, name, fields[name])
+	}
+	code, _, err := s.run(ctx, "reload", []string{s.keys.record(id), bk, s.keys.due(), s.keys.evict(partition)}, args...)
 	if err != nil {
 		return false, err
 	}
 	switch code {
-	case "MARKED":
-		return true, nil
-	case "NONE":
-		return false, nil
-	case "NEED_RELOAD":
-		// 记录不在 Redis：只有冷副本可能有它的 tombstone。有就告警（不能原子去重，宁可重复，不丢告警）。
-		metrics.IncCounter("saga.redis.cold_read_total", metrics.Labels{"op": "alarm"}, 1)
-		return s.copy.tombstoneExists(ctx, completion.IdempotencyKey, completion.SagaID)
+	case "OK":
+		metrics.IncCounter("saga.redis.reload_total", metrics.Labels{"result": "reloaded"}, 1)
+	case "EXISTS":
+		metrics.IncCounter("saga.redis.reload_total", metrics.Labels{"result": "exists"}, 1)
 	default:
-		return false, fmt.Errorf("saga redis: mark_alarm returned %q", code)
+		return false, fmt.Errorf("saga redis: reload returned %q", code)
 	}
+	return true, nil
 }
 
 // ClaimDue 原子领取到期且租约过期的记录（claim_due.lua，O(log N + limit)）。校验不过的记录只跳过那一条并告警。
@@ -523,26 +577,38 @@ func (s *RedisStore) applyScript(ctx context.Context, request ApplyRequest) (App
 	}
 	partition := s.keys.partition(after.ID)
 	keys := []string{s.keys.record(after.ID), s.keys.due(), s.keys.evict(partition), s.keys.log(partition), s.keys.outbox()}
-	code, _, err := s.run(ctx, "apply", keys, s.keys.prefix, after.ID, request.ExpectedVersion, request.ExpectedLease.Owner, request.ExpectedLease.Token,
-		after.Version, int(after.Status), millis(after.NextRunAt), after.Lease.Owner, after.Lease.Token, millis(after.Lease.Until), terminalAt, doc, digest,
-		s.opts.TerminalRetention.Milliseconds(), receiptID, receiptDigest, receiptAt, request.CloseOperation, closure, millis(after.UpdatedAt),
-		commandID, commandOp, command, commandNext, commandAttempt, commandCreated, commandLeaseOwner, commandLeaseToken, commandLeaseUntil)
-	if err != nil {
-		return 0, err
-	}
-	switch code {
-	case "APPLIED", "APPLIED_BEFORE":
-		return ApplyApplied, nil
-	case "DUPLICATE":
-		return ApplyDuplicate, nil
-	case "CONFLICT":
-		return 0, ErrConflict
-	case "IDENTITY_CONFLICT":
-		return 0, ErrIdentityConflict
-	case "NEED_RELOAD":
-		return 0, ErrNotFound
-	default:
-		return 0, fmt.Errorf("saga redis: apply returned %q", code)
+	for reloaded := false; ; reloaded = true {
+		code, _, err := s.run(ctx, "apply", keys, s.keys.prefix, after.ID, request.ExpectedVersion, request.ExpectedLease.Owner, request.ExpectedLease.Token,
+			after.Version, int(after.Status), millis(after.NextRunAt), after.Lease.Owner, after.Lease.Token, millis(after.Lease.Until), terminalAt, doc, digest,
+			s.opts.TerminalRetention.Milliseconds(), receiptID, receiptDigest, receiptAt, request.CloseOperation, closure, millis(after.UpdatedAt),
+			commandID, commandOp, command, commandNext, commandAttempt, commandCreated, commandLeaseOwner, commandLeaseToken, commandLeaseUntil)
+		if err != nil {
+			return 0, err
+		}
+		switch code {
+		case "APPLIED", "APPLIED_BEFORE":
+			return ApplyApplied, nil
+		case "DUPLICATE":
+			return ApplyDuplicate, nil
+		case "CONFLICT":
+			return 0, ErrConflict
+		case "IDENTITY_CONFLICT":
+			return 0, ErrIdentityConflict
+		case "NEED_RELOAD":
+			// 记录已驱逐（只在冷副本里）：冷记录要写，先装回再重跑一次；装回之后仍不在说明刚被驱逐或从未存在。
+			if reloaded {
+				return 0, ErrConflict
+			}
+			found, err := s.reload(ctx, after.ID)
+			if err != nil {
+				return 0, err
+			}
+			if !found {
+				return 0, ErrNotFound
+			}
+		default:
+			return 0, fmt.Errorf("saga redis: apply returned %q", code)
+		}
 	}
 }
 

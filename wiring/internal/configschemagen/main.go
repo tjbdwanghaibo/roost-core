@@ -43,6 +43,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/wiring/statslog"
+	kitstoreservice "github.com/tjbdwanghaibo/roost-core/wiring/storeservice"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 	kitweb "github.com/tjbdwanghaibo/roost-core/wiring/web"
 )
@@ -66,6 +67,8 @@ func groups() map[string][]app.ConfigSchema {
 		"remote_entity":   {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
 		"dataengine":      {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
 		"saga":            {kitsaga.NewMod().ConfigSchema()},
+		// store_service：把权威 Redis 的 saga 日志投影进 Mongo 冷副本（saga 依赖它，同进程注册）。
+		"store_service": {kitstoreservice.NewMod().ConfigSchema()},
 		// heartbeat：roost add heartbeat / behavior 装在实体所在服务（catalog Mod，依赖 nest）；NewMod 的参数只在 Init 用。
 		"heartbeat": {kitheartbeat.NewMod(nil, nil).ConfigSchema()},
 		"web":       {kitweb.NewMod().ConfigSchema()},

@@ -415,6 +415,15 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "stats_log.filename", Kind: "string", Help: "文件名，不写取 <server_type>-<sid>.stats.log"},
 		{Name: "stats_log.interval", Kind: "duration", Default: "1m", Min: "1ns", Starter: true, Example: "1m"},
 	}},
+	"store_service": {Keys: []configschema.Key{
+		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
+		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},
+		{Name: "store_service.owner", Kind: "string", Help: "分区租约的持有者名，不写取 store-<sid>-<随机>"},
+		{Name: "store_service.batch_size", Kind: "int", Default: "256", Min: "1", Max: "10000", Help: "每批最多投影的日志条目数", Starter: true, Example: "256"},
+		{Name: "store_service.lease_duration", Kind: "duration", Default: "10s", Min: "1s", Help: "分区租约时长，每三分之一续约一次", Starter: true, Example: "10s"},
+		{Name: "store_service.block", Kind: "duration", Default: "100ms", Min: "1ms", Help: "没有新条目时阻塞读的等待上限", Starter: true, Example: "100ms"},
+		{Name: "store_service.max_partitions", Kind: "int", Default: "0", Min: "0", Help: "本进程最多同时处理的分区数，0 = 不限", Starter: true, Example: "0"},
+	}},
 	"syncbus": {Keys: []configschema.Key{
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
 		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},

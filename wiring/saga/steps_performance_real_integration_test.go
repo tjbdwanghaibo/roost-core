@@ -24,6 +24,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -349,6 +350,14 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		// FinalWrongTerminal 是最终不是期望终态的笔数。
 		FinalStatuses      map[string]int
 		FinalWrongTerminal int
+		// StoreService* 是同进程 Store Service 的观察：窗口内的 Mongo bulkWrite 次数（已含在 MongoCommands 里，单列）、
+		// 投影积压峰值（每秒采样各分区 XLEN 之和）、停止加压后积压归零用的秒数。
+		StoreServiceMongoOps    int64
+		StoreServiceBacklogMax  int64
+		StoreServiceDrainSecond float64
+		// ColdHotMismatches 是积压归零后 Redis 读到的版本与 Mongo 冷副本版本不同的笔数；MongoTerminal 是冷副本里到达期望终态的笔数。
+		ColdHotMismatches int
+		MongoTerminal     int
 	}
 	total := int(duration/time.Second) * rate
 	r := result{Pairs: pairs, Variant: variantName, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds()}
@@ -396,6 +405,8 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	}
 	mongoURI := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	commandsBefore := perfMongoCommands(ctx, mongoURI)
+	storeOpsBefore := metricCounter("store_service.mongo_ops_total")
+	backlogSampled := time.Now()
 	var harnessMongo atomic.Int64
 	begin := time.Now()
 	cpuBegin := processCPU()
@@ -525,6 +536,12 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 			}
 			mu.Unlock()
 		}
+		if time.Since(backlogSampled) >= time.Second {
+			backlogSampled = time.Now()
+			if backlog, err := env.sagaMod.Store().ProjectionBacklog(ctx); err == nil && backlog > r.StoreServiceBacklogMax {
+				r.StoreServiceBacklogMax = backlog
+			}
+		}
 		if stats := projector.Stats(); stats.Committed > stats.Projected && stats.Committed-stats.Projected > r.ProjectionBacklogMax {
 			r.ProjectionBacklogMax = stats.Committed - stats.Projected
 		}
@@ -633,6 +650,39 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		r.Statuses[strconv.Itoa(int(status))]++
 	}
 	r.MongoCommands, r.HarnessMongoCommands = perfCommandDelta(commandsBefore, perfMongoCommands(ctx, mongoURI)), harnessMongo.Load()
+	r.StoreServiceMongoOps = metricCounter("store_service.mongo_ops_total") - storeOpsBefore
+	// 冷热核对：等投影积压归零（记下用时），再逐笔比较 Redis 与 Mongo 冷副本的版本。
+	store := env.sagaMod.Store()
+	drainStart := time.Now()
+	for {
+		backlog, err := store.ProjectionBacklog(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if backlog == 0 {
+			break
+		}
+		if time.Since(drainStart) > time.Minute {
+			t.Fatalf("projection backlog still %d a minute after the load stopped", backlog)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.StoreServiceDrainSecond = time.Since(drainStart).Seconds()
+	for i := range total {
+		id := fmt.Sprintf("d12p-%d", i)
+		hot, err := store.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("hot read %s: %v", id, err)
+		}
+		cold, err := store.Copy().Get(ctx, id)
+		if err != nil || cold.Version != hot.Version {
+			r.ColdHotMismatches++
+			continue
+		}
+		if cold.Status == terminal {
+			r.MongoTerminal++
+		}
+	}
 	// 终态复读在命令计数之后：逐笔读一次，不计入被测链路。
 	r.FinalStatuses = map[string]int{}
 	for i := range total {
@@ -655,7 +705,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("variant=%s mode=%s completed=%d/%d rate=%.2f/s p50=%.1fms p95=%.1fms p99=%.1fms max=%.1fms server_p99=%.1fms start_errors=%d business_verified=%v",
 		variantName, mode, r.Completed, total, r.CompletionTPS, r.P50MS, r.P95MS, r.P99MS, r.MaxMS, r.Server.P99MS, r.StartErrors, r.BusinessVerified)
-	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || !r.BusinessVerified {
+	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || r.ColdHotMismatches != 0 || r.MongoTerminal != total-r.FinalWrongTerminal || !r.BusinessVerified {
 		t.Fatal("native step load verification failed; result retained")
 	}
 }
@@ -772,4 +822,15 @@ func perfCommandDelta(before, after map[string]int64) map[string]int64 {
 		out[name] = value - before[name]
 	}
 	return out
+}
+
+// metricCounter 是进程内指标注册表里一个计数器各标签之和。
+func metricCounter(name string) int64 {
+	var total int64
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == name {
+			total += metric.Value
+		}
+	}
+	return total
 }

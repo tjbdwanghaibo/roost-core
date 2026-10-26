@@ -46,6 +46,7 @@ import (
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	"github.com/tjbdwanghaibo/roost-core/wiring/statslog"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/wiring/statslog"
+	"github.com/tjbdwanghaibo/roost-core/wiring/storeservice"
 	"github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 )
@@ -244,6 +245,7 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		remoteentity.NewRemoteEntityMod(0, remoteentity.WithMongoStorage(access)),
 		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),
+		storeservice.NewMod(),
 		statslog.NewStatsLogMod(),
 		// 承载玩家的 game 进程的合服启动自检与它依赖的 account 客户端（DataEngine 把自检列为可选依赖）。
 		account.NewClientMod(),
