@@ -6,6 +6,11 @@
 #   ROOST_SCAN_SCENARIOS="native-forward native-compensate mongo-forward"   ROOST_PERF_LABEL=<唯一名>
 #   ROOST_SCAN_MONGO_WORKERS=2（Mongo 步骤每订阅并发）  ROOST_SCAN_PAIRS=256（原生步骤账户对数）
 #   ROOST_SCAN_HOPS=1（逐笔 / 逐跳追踪）  ROOST_SCAN_MAX_LOAD=6（开跑前等 1 分钟 loadavg 低于它，最多 10 分钟）
+#   ROOST_SCAN_STORE=mongo|redis（协调器存储；redis 时用 scripts/it-redis-aof.sh 起私有权威 Redis，端口 ROOST_SCAN_REDIS_PORT，
+#   缺省 26391；每档前后取 INFO commandstats / memory / persistence，结束后核对残留键并停实例）
+#
+# 每档的 Mongo 往返由夹具在压测窗口前后读 serverStatus.metrics.commands（MongoCommands，减去夹具自己的读 HarnessMongoCommands），
+# 脚本另在进程前后各取一次 mongo-ceiling -snapshot（含 Commands / Opcounters）作对照。
 #
 # 云库连接串只从 ~/.roost-it/cloud-mongo.env 读（ROOST_SAGA_PERF_MONGO_URI / _ALT），在子 shell 里换成夹具读的
 # ROOST_DATAENGINE_IT_MONGO_URI 后立即 unset 原变量；脚本不打印、不落盘任何连接串。NATS 始终用本机隔离环境，
@@ -22,6 +27,8 @@ mongo_workers="${ROOST_SCAN_MONGO_WORKERS:-2}"
 pairs="${ROOST_SCAN_PAIRS:-256}"
 hops="${ROOST_SCAN_HOPS:-1}"
 max_load="${ROOST_SCAN_MAX_LOAD:-6}"
+store="${ROOST_SCAN_STORE:-mongo}"
+case "$store" in mongo|redis) ;; *) echo 'ROOST_SCAN_STORE must be mongo or redis' >&2; exit 2 ;; esac
 label="${ROOST_PERF_LABEL:-sagascan-$target-$(date +%Y%m%d-%H%M%S)}"
 [[ "$label" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'invalid label' >&2; exit 2; }
 case "$target" in
@@ -58,15 +65,28 @@ export ROOST_PERF_STREAM_PREFIX="SAGAPERF_1026_$(printf '%s' "$rand" | tr 'a-z' 
 export GOWORK=off GOMAXPROCS="${ROOST_PERF_CPU:-4}" ROOST_DATAENGINE_IT=1
 cd "$repo"
 { go version; git rev-parse HEAD; git status --short; echo "target=$target levels=$levels duration=$duration scenarios=$scenarios"
-  echo "mongo_workers=$mongo_workers pairs=$pairs hops=$hops gomaxprocs=$GOMAXPROCS db_prefix=$ROOST_PERF_DB_PREFIX stream_prefix=$ROOST_PERF_STREAM_PREFIX"
+  echo "mongo_workers=$mongo_workers pairs=$pairs hops=$hops gomaxprocs=$GOMAXPROCS db_prefix=$ROOST_PERF_DB_PREFIX stream_prefix=$ROOST_PERF_STREAM_PREFIX store=$store"
   sysctl -n hw.ncpu hw.memsize; sysctl vm.swapusage; pmset -g batt | head -1; } > "$output/env.txt" 2>&1
 go test -c -tags integration -o "$output/bin/saga.test" ./framework/saga
 go test -c -tags integration -o "$output/bin/wsaga.test" ./wiring/saga
 go build -o "$output/bin/mongo-ceiling" ./scripts/perf/mongo-ceiling
 lock="$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock"
 held=0
+redis_port="${ROOST_SCAN_REDIS_PORT:-26391}"
+redis_started=0
 release() { if [[ "$held" == 1 ]]; then rmdir "$lock" 2>/dev/null || true; held=0; fi; }
-trap release EXIT
+stop_redis() { if [[ "$redis_started" == 1 ]]; then ROOST_IT_REDIS_AOF_PORT="$redis_port" "$repo/scripts/it-redis-aof.sh" stop || true; redis_started=0; fi; }
+trap 'release; stop_redis' EXIT
+if [[ "$store" == redis ]]; then
+ eval "$(ROOST_IT_REDIS_AOF_PORT="$redis_port" "$repo/scripts/it-redis-aof.sh" start)"
+ redis_started=1
+ export ROOST_SAGA_PERF_REDIS_ADDR="$ROOST_SAGA_IT_REDIS_ADDR" ROOST_SAGA_PERF_REDIS_PREFIX="sagaperf1026${rand}"
+ { redis-server --version; redis-cli -p "$redis_port" CONFIG GET appendfsync; redis-cli -p "$redis_port" CONFIG GET maxmemory-policy; } >> "$output/env.txt" 2>&1
+fi
+redis_snapshot() {
+ [[ "$store" == redis ]] || return 0
+ { redis-cli -p "$redis_port" INFO commandstats; redis-cli -p "$redis_port" INFO memory; redis-cli -p "$redis_port" INFO persistence; redis-cli -p "$redis_port" DBSIZE | sed 's/^/dbsize:/'; } > "$1" 2>&1 || true
+}
 acquire() {
  local waited=0
  until mkdir "$lock" 2>/dev/null; do
@@ -104,6 +124,7 @@ for scenario in $scenarios; do
   load0="$(gate)"
   acquire
   snapshot "$output/$name.server-before.json"
+  redis_snapshot "$output/$name.redis-before.txt"
   start="$(date +%s)"
   case "$scenario" in
    native-forward|native-compensate)
@@ -128,6 +149,7 @@ for scenario in $scenarios; do
   end="$(date +%s)"
   scrub_files "$name"
   snapshot "$output/$name.server-after.json"
+  redis_snapshot "$output/$name.redis-after.txt"
   release
   load1="$(sysctl -n vm.loadavg | awk '{print $2}')"
   printf '%s\tload_before=%s\tload_after=%s\tseconds=%s\n' "$name" "$load0" "$load1" "$((end - start))" | tee -a "$output/runs.tsv"
@@ -136,6 +158,11 @@ for scenario in $scenarios; do
 done
 "$output/bin/mongo-ceiling" -leftover -db-prefix "$ROOST_PERF_DB_PREFIX" -drop 2>&1 | scrub > "$output/leftover-mongo.txt" || true
 curl -s "http://127.0.0.1:19222/jsz?accounts=true&streams=true" | python3 -c 'import json,sys,os; p=os.environ["ROOST_PERF_STREAM_PREFIX"]; d=json.load(sys.stdin); n=[s["name"] for a in d.get("account_details",[]) for s in a.get("stream_detail",[]) if s["name"].startswith(p)]; print("leftover_streams=%d" % len(n)); [print(x) for x in n]' > "$output/leftover-streams.txt" 2>&1 || true
+if [[ "$store" == redis ]]; then
+ { printf 'leftover_keys_with_prefix=%s\n' "$(redis-cli -p "$redis_port" --scan --pattern "${ROOST_SAGA_PERF_REDIS_PREFIX}*" | wc -l | tr -d ' ')"; printf 'dbsize=%s\n' "$(redis-cli -p "$redis_port" DBSIZE)"; } > "$output/leftover-redis.txt" 2>&1 || true
+ stop_redis
+ cat "$output/leftover-redis.txt"
+fi
 cat "$output/leftover-mongo.txt" "$output/leftover-streams.txt"
 printf 'Results: %s\n' "$output"
 exit "$status"

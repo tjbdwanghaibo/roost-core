@@ -27,6 +27,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	mongodriver "go.mongodb.org/mongo-driver/v2/mongo"
+	mongooptions "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // perfStep 是负载里的一个原生步骤：名字（durable 后缀）、主题与步骤体。步骤体拿到命令与 stepCompleter，经 Nest 请求
@@ -339,6 +341,14 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		SteadyWindowSeconds, SteadyTPS float64
 		SteadyCompleted                int
 		ProcessCPUCores                float64
+		// MongoCommands 是压测窗口（开始发起 → 排空并核对完）内 Mongo 数据面命令的次数差值；HarnessMongoCommands 是其中
+		// 夹具自己发的（终态轮询、余额核对），不属于被测链路。
+		MongoCommands        map[string]int64
+		HarnessMongoCommands int64
+		// FinalStatuses 是结束后按 ID 逐笔复读的最终状态（Statuses 只记轮询第一次读到的终态，重开的 saga 之后会变）；
+		// FinalWrongTerminal 是最终不是期望终态的笔数。
+		FinalStatuses      map[string]int
+		FinalWrongTerminal int
 	}
 	total := int(duration/time.Second) * rate
 	r := result{Pairs: pairs, Variant: variantName, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds()}
@@ -384,6 +394,9 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 			}
 		})
 	}
+	mongoURI := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	commandsBefore := perfMongoCommands(ctx, mongoURI)
+	var harnessMongo atomic.Int64
 	begin := time.Now()
 	cpuBegin := processCPU()
 	// waiters 是闭环发起者在等的 saga，轮询读到终态时关闭；轮询间隔闭环时缩到 10ms（发起者每笔多等至多一个间隔）。
@@ -477,6 +490,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 				CreatedAt time.Time       `bson:"created_at"`
 				UpdatedAt time.Time       `bson:"updated_at"`
 			}
+			harnessMongo.Add(1)
 			if err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}, "status": bson.M{"$in": []coresaga.Status{coresaga.StatusCompleted, coresaga.StatusCompensated, coresaga.StatusFailed, coresaga.StatusManualRequired}}}, &found); err != nil {
 				t.Fatal(err)
 			}
@@ -594,6 +608,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 			ID      int64 `bson:"_id"`
 			Balance int64 `bson:"balance"`
 		}
+		harnessMongo.Add(1)
 		if err := collection.Find(ctx, bson.M{}, &stored); err != nil || len(stored) != len(accounts) {
 			return false
 		}
@@ -617,6 +632,19 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	for _, status := range statuses {
 		r.Statuses[strconv.Itoa(int(status))]++
 	}
+	r.MongoCommands, r.HarnessMongoCommands = perfCommandDelta(commandsBefore, perfMongoCommands(ctx, mongoURI)), harnessMongo.Load()
+	// 终态复读在命令计数之后：逐笔读一次，不计入被测链路。
+	r.FinalStatuses = map[string]int{}
+	for i := range total {
+		final, err := env.sagaMod.Engine().Get(ctx, fmt.Sprintf("d12p-%d", i))
+		if err != nil {
+			t.Fatalf("re-read d12p-%d: %v", i, err)
+		}
+		r.FinalStatuses[strconv.Itoa(int(final.Status))]++
+		if final.Status != terminal {
+			r.FinalWrongTerminal++
+		}
+	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -627,7 +655,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("variant=%s mode=%s completed=%d/%d rate=%.2f/s p50=%.1fms p95=%.1fms p99=%.1fms max=%.1fms server_p99=%.1fms start_errors=%d business_verified=%v",
 		variantName, mode, r.Completed, total, r.CompletionTPS, r.P50MS, r.P95MS, r.P99MS, r.MaxMS, r.Server.P99MS, r.StartErrors, r.BusinessVerified)
-	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified {
+	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || !r.BusinessVerified {
 		t.Fatal("native step load verification failed; result retained")
 	}
 }
@@ -705,4 +733,43 @@ func processCPU() time.Duration {
 		return 0
 	}
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// perfMongoCommands 读一次 serverStatus.metrics.commands 里数据面命令的累计次数（一次往返一条命令）。压测窗口前后各读一次，
+// 差值减去夹具自己的读（HarnessMongoCommands）就是被测链路在 Mongo 上的往返数。连接用一条独立的驱动连接，serverStatus 本身
+// 不在统计的命令里。读不到（没有权限）时返回 nil。
+func perfMongoCommands(ctx context.Context, uri string) map[string]int64 {
+	client, err := mongodriver.Connect(mongooptions.Client().ApplyURI(uri))
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+	raw, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Raw()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]int64)
+	// getMore 不计：副本集的从节点经 getMore 拉主节点的 oplog，它随写入量增长，不是客户端往返。
+	for _, name := range []string{"insert", "update", "delete", "find", "findAndModify", "aggregate", "bulkWrite", "count", "commitTransaction", "abortTransaction"} {
+		value, err := raw.LookupErr("metrics", "commands", name, "total")
+		if err != nil {
+			continue
+		}
+		if n, ok := value.AsInt64OK(); ok {
+			out[name] = n
+		}
+	}
+	return out
+}
+
+// perfCommandDelta 是两次 perfMongoCommands 的差值。
+func perfCommandDelta(before, after map[string]int64) map[string]int64 {
+	if before == nil || after == nil {
+		return nil
+	}
+	out := make(map[string]int64, len(after))
+	for name, value := range after {
+		out[name] = value - before[name]
+	}
+	return out
 }

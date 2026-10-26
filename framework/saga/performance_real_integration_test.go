@@ -22,6 +22,8 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	mongodriver "go.mongodb.org/mongo-driver/v2/mongo"
+	mongooptions "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // TestRealSagaPerformance 只在显式入口运行。测正式协调器、真实 Mongo 步骤和 JetStream，
@@ -256,6 +258,14 @@ func TestRealSagaPerformance(t *testing.T) {
 		// terminal 是终态那次 Store.Apply 提交成功返回的时刻（terminalClock），评估框架延迟看 Server.Completion。
 		Harness sagaHarness
 		Server  sagaServer
+		// MongoCommands 是压测窗口（开始发起 → 排空并核对完）内 Mongo 数据面命令的次数差值；HarnessMongoCommands 是其中
+		// 夹具自己发的（终态轮询、排空计数、核对读），不属于被测链路。
+		MongoCommands        map[string]int64
+		HarnessMongoCommands int64
+		// FinalStatuses 是结束后按 ID 逐笔复读的最终状态（Statuses 只记轮询第一次读到的终态，重开的 saga 之后会变）；
+		// FinalWrongTerminal 是最终不是期望终态的笔数。
+		FinalStatuses      map[string]int
+		FinalWrongTerminal int
 	}
 	total := int(duration/time.Second) * rate
 	r := result{CoordinatorBatch: cfg.Engine.CoordinatorBatch, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
@@ -293,6 +303,9 @@ func TestRealSagaPerformance(t *testing.T) {
 			}
 		})
 	}
+	mongoURI := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	commandsBefore := perfMongoCommands(ctx, mongoURI)
+	var harnessMongo atomic.Int64
 	begin := time.Now()
 	cpuBegin := processCPU()
 	if concurrency > 0 {
@@ -378,6 +391,7 @@ func TestRealSagaPerformance(t *testing.T) {
 				ID     string `bson:"_id"`
 				Status Status `bson:"status"`
 			}
+			harnessMongo.Add(1)
 			if err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}, "status": bson.M{"$in": []Status{StatusCompleted, StatusCompensated, StatusFailed, StatusManualRequired}}}, &docs); err != nil {
 				t.Fatal(err)
 			}
@@ -491,6 +505,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	// 不在完成后补发/篡改业务数据；等待框架自然排空，再逐文档核对一次且仅一次生效。
 	for deadline := time.Now().Add(10 * time.Second); ; {
+		harnessMongo.Add(1)
 		r.OutboxPending, err = client.Database(database).Collection(defaultOutboxCollection).CountDocuments(ctx, bson.M{})
 		if err != nil {
 			t.Fatal(err)
@@ -500,6 +515,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	harnessMongo.Add(3) // 租约计数 + 两次核对读
 	r.Leases, err = sagas.CountDocuments(ctx, bson.M{"lease_owner": bson.M{"$exists": true, "$ne": ""}})
 	if err != nil {
 		t.Fatal(err)
@@ -533,6 +549,19 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 	}
 	r.FinalStats = asm.Engine.Stats()
+	r.MongoCommands, r.HarnessMongoCommands = perfCommandDelta(commandsBefore, perfMongoCommands(ctx, mongoURI)), harnessMongo.Load()
+	// 终态复读在命令计数之后：逐笔读一次，不计入被测链路。
+	r.FinalStatuses = map[string]int{}
+	for i := range total {
+		final, err := asm.Engine.Get(ctx, fmt.Sprintf("perf-%d", i))
+		if err != nil {
+			t.Fatalf("re-read perf-%d: %v", i, err)
+		}
+		r.FinalStatuses[strconv.Itoa(int(final.Status))]++
+		if final.Status != terminal {
+			r.FinalWrongTerminal++
+		}
+	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -542,7 +571,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms server_p99=%.1fms admit_p99=%.1fms observe_p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.Server.Completion.P99MS, r.Harness.AdmitLag.P99MS, r.Harness.ObserveLag.P99MS, r.StartErrors, r.BusinessVerified)
-	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
+	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || r.FinalWrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
 		t.Fatal("Saga load verification failed; result retained")
 	}
 }
@@ -745,4 +774,43 @@ func perfResourcePrefix(t *testing.T, variable, required, fallback string) strin
 
 func perfStreamPrefix(t *testing.T, fallback string) string {
 	return perfResourcePrefix(t, "ROOST_PERF_STREAM_PREFIX", "SAGAPERF_", fallback)
+}
+
+// perfMongoCommands 读一次 serverStatus.metrics.commands 里数据面命令的累计次数（一次往返一条命令）。压测窗口前后各读一次，
+// 差值减去夹具自己的读（HarnessMongoCommands）就是被测链路在 Mongo 上的往返数。连接用一条独立的驱动连接，serverStatus 本身
+// 不在统计的命令里。读不到（没有权限）时返回 nil。
+func perfMongoCommands(ctx context.Context, uri string) map[string]int64 {
+	client, err := mongodriver.Connect(mongooptions.Client().ApplyURI(uri))
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+	raw, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Raw()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]int64)
+	// getMore 不计：副本集的从节点经 getMore 拉主节点的 oplog，它随写入量增长，不是客户端往返。
+	for _, name := range []string{"insert", "update", "delete", "find", "findAndModify", "aggregate", "bulkWrite", "count", "commitTransaction", "abortTransaction"} {
+		value, err := raw.LookupErr("metrics", "commands", name, "total")
+		if err != nil {
+			continue
+		}
+		if n, ok := value.AsInt64OK(); ok {
+			out[name] = n
+		}
+	}
+	return out
+}
+
+// perfCommandDelta 是两次 perfMongoCommands 的差值。
+func perfCommandDelta(before, after map[string]int64) map[string]int64 {
+	if before == nil || after == nil {
+		return nil
+	}
+	out := make(map[string]int64, len(after))
+	for name, value := range after {
+		out[name] = value - before[name]
+	}
+	return out
 }

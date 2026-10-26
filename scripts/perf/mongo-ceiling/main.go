@@ -341,7 +341,15 @@ type counters struct {
 	WriteLatency, WriteOps, CommandLatency, CommandOps int64
 	TxnCommitted                                       int64
 	WTLogSyncs, WTLogSyncMicros                        int64
+	// Commands 是 serverStatus.metrics.commands.<名>.total：客户端发来的命令次数（一次往返一条；bulkWrite 经驱动发成
+	// 一条 update / insert / delete 命令）。只取数据面命令，saga 压测用前后差值算每笔 Mongo 往返。
+	Commands map[string]int64
+	// Opcounters 是 serverStatus.opcounters（文档 / 语句级计数），与 Commands 对照看一条命令带了多少文档。
+	Opcounters map[string]int64
 }
+
+// dataCommands 是数据面命令名。getMore 也记下，但不该计入客户端往返：副本集的从节点经 getMore 拉主节点的 oplog。
+var dataCommands = []string{"insert", "update", "delete", "find", "findAndModify", "aggregate", "bulkWrite", "count", "getMore", "commitTransaction", "abortTransaction"}
 
 func serverCounters(ctx context.Context, client *mongo.Client) (counters, error) {
 	status, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Raw()
@@ -361,11 +369,20 @@ func serverCounters(ctx context.Context, client *mongo.Client) (counters, error)
 		}
 		return 0
 	}
+	commands := make(map[string]int64, len(dataCommands))
+	for _, name := range dataCommands {
+		commands[name] = get("metrics", "commands", name, "total")
+	}
+	opcounters := make(map[string]int64)
+	for _, name := range []string{"insert", "query", "update", "delete", "getmore", "command"} {
+		opcounters[name] = get("opcounters", name)
+	}
 	return counters{
 		WriteLatency: get("opLatencies", "writes", "latency"), WriteOps: get("opLatencies", "writes", "ops"),
 		CommandLatency: get("opLatencies", "commands", "latency"), CommandOps: get("opLatencies", "commands", "ops"),
 		TxnCommitted: get("transactions", "totalCommitted"),
 		WTLogSyncs:   get("wiredTiger", "log", "log sync operations"), WTLogSyncMicros: get("wiredTiger", "log", "log sync time duration (usecs)"),
+		Commands: commands, Opcounters: opcounters,
 	}, nil
 }
 

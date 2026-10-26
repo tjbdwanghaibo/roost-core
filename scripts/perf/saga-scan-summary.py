@@ -47,6 +47,50 @@ def load(path):
         return json.load(f)
 
 
+def redis_info(path):
+    """读 INFO 文本（saga-scan.sh 的 redis-before / redis-after），返回 {字段: 值}；commandstats 拆成 {命令: calls}。"""
+    fields, calls = {}, {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("cmdstat_"):
+                name, rest = line[len("cmdstat_"):].split(":", 1)
+                stats = dict(kv.split("=", 1) for kv in rest.split(","))
+                calls[name] = int(stats.get("calls", 0))
+            elif ":" in line and not line.startswith("#"):
+                key, value = line.split(":", 1)
+                fields[key] = value
+    return fields, calls
+
+
+def per_saga_counts(r, path):
+    """每笔往返：Mongo 用夹具窗口内的 metrics.commands 差值减夹具自己的读；Redis 用 commandstats 的 EVALSHA + EVAL 调用差值。
+    分母是本档到达终态的笔数（计数窗口覆盖整档，含爬升与排空）。"""
+    out = {}
+    completed = r.get("Completed") or 0
+    commands = r.get("MongoCommands")
+    if commands is not None and completed:
+        total = sum(commands.values())
+        harness = r.get("HarnessMongoCommands") or 0
+        out["MongoCommandsPerSaga"] = round((total - harness) / completed, 2)
+        out["MongoCommandBreakdownPerSaga"] = {k: round(v / completed, 2) for k, v in sorted(commands.items()) if v}
+        out["HarnessMongoCommands"] = harness
+    before, after = path[:-5] + ".redis-before.txt", path[:-5] + ".redis-after.txt"
+    if os.path.exists(before) and os.path.exists(after) and completed:
+        fb, cb = redis_info(before)
+        fa, ca = redis_info(after)
+        scripts = sum(ca.get(k, 0) - cb.get(k, 0) for k in ("evalsha", "eval"))
+        out["RedisScriptsPerSaga"] = round(scripts / completed, 2)
+        out["RedisCommandsPerSaga"] = {k: round((ca[k] - cb.get(k, 0)) / completed, 2) for k in sorted(ca) if ca[k] - cb.get(k, 0) > 0}
+        out["RedisUsedMemoryPeak"] = fa.get("used_memory_peak_human")
+        try:
+            out["RedisAOFGrowthBytes"] = int(fa.get("aof_current_size", 0)) - int(fb.get("aof_current_size", 0))
+        except ValueError:
+            pass
+        out["RedisKeysAfter"] = fa.get("dbsize")
+    return out
+
+
 def summarize(directory):
     rows = []
     for path in sorted(glob.glob(os.path.join(directory, "*-c*.json"))):
@@ -67,7 +111,10 @@ def summarize(directory):
             "Statuses": statuses, "BusinessVerified": r.get("BusinessVerified"),
             "ServerP50MS": server.get("P50MS"), "ServerP99MS": server.get("P99MS"), "ServerMaxMS": server.get("MaxMS"),
             "ProcessCPUCores": r.get("ProcessCPUCores"),
+            "FinalStatuses": {STATUS.get(k, k): v for k, v in (r.get("FinalStatuses") or {}).items()},
+            "FinalWrongTerminal": r.get("FinalWrongTerminal"),
         }
+        row.update(per_saga_counts(r, path))
         groups = {}
         if kind == "native" and r.get("Hops"):
             hops = r["Hops"]
@@ -112,14 +159,15 @@ def summarize(directory):
 
 
 def markdown(rows):
-    out = ["| 场景 | 并发 | 稳态成功 TPS | 服务端 P50 / P99 / max ms | 终态 | 核对 | CPU 核 | Redis 可替换段占比 |",
-           "| --- | ---: | ---: | --- | --- | --- | ---: | ---: |"]
+    out = ["| 场景 | 并发 | 稳态成功 TPS | 服务端 P50 / P99 / max ms | 终态（复读） | 核对 | 每笔 Mongo 往返 | 每笔 Redis 脚本 | CPU 核 |",
+           "| --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: |"]
     for r in rows:
         fmt = lambda v: "—" if v is None else f"{v:.0f}"
-        share = r.get("RedisReplaceableShare")
+        num = lambda v: "—" if v is None else f"{v:.1f}"
+        final = r.get("FinalStatuses") or r["Statuses"]
         out.append(f"| {r['Scenario']} | {r['Concurrency']} | {r['SteadyTPS']:.2f} | {fmt(r['ServerP50MS'])} / {fmt(r['ServerP99MS'])} / {fmt(r['ServerMaxMS'])} | "
-                   f"{', '.join(f'{k} {v}' for k, v in sorted(r['Statuses'].items()))} | {'通过' if r['BusinessVerified'] else '未通过'} | "
-                   f"{r['ProcessCPUCores']:.2f} | {'—' if share is None else f'{share*100:.0f}%'} |")
+                   f"{', '.join(f'{k} {v}' for k, v in sorted(final.items()))} | {'通过' if r['BusinessVerified'] else '未通过'} | "
+                   f"{num(r.get('MongoCommandsPerSaga'))} | {num(r.get('RedisScriptsPerSaga'))} | {r['ProcessCPUCores']:.2f} |")
     return "\n".join(out)
 
 
