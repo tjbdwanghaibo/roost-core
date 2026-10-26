@@ -136,16 +136,18 @@ func serveRoom(parent context.Context, conn net.Conn, rooms *domain.Service, ref
 	closeDone := make(chan struct{})
 	go func() { defer close(closeDone); <-ctx.Done(); conn.Close() }()
 	defer func() { cancel(); conn.Close(); <-done; <-closeDone }()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
 	var ack uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
 		frame, err := rooms.Poll(ctx, member, ack)
+		// 从 Poll 完成时安排下一轮，避免 RPC 抖动把两次服务端采样挤到 50ms 内。
+		timer.Reset(50 * time.Millisecond)
 		if err != nil {
 			return
 		}

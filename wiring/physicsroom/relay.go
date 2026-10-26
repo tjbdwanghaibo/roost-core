@@ -17,8 +17,8 @@ func Relay(ctx context.Context, rooms domain.Rooms, game *gateway.GameIngress, b
 	if rooms == nil || game == nil || messageID == 0 || binding.Validate() != nil || member.PlayerID != binding.PlayerID {
 		return domain.ErrRequestInvalid
 	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
 	defer func() {
 		leaveCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -29,9 +29,11 @@ func Relay(ctx context.Context, rooms domain.Rooms, game *gateway.GameIngress, b
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
 		frame, err := rooms.Poll(ctx, member, ack)
+		// 从 Poll 完成时安排下一轮，避免 RPC 抖动把两次服务端采样挤到 50ms 内。
+		timer.Reset(50 * time.Millisecond)
 		if err != nil {
 			return err
 		}

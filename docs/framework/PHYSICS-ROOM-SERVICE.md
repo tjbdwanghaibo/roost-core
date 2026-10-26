@@ -201,3 +201,10 @@ Unity 还保留每个对象自己的采样 tick；普通对象按自身采样间
 新增回归覆盖频率、升档恢复、双向抓取关联、快速接近/大包围体、跨区/删除、ACK 才提交视图、重连全量、原生轨迹相位以及 Go/C# 轨迹金样和稀疏插值停顿。复跑 `go test -race -tags physx ./gameplay/physics ./service/physicsroom`，真实链路仍用 `scripts/physics/verify-service.sh`。统计见 [可观测性清单](OBSERVABILITY.md#物理房间同步)：真实 Room Poll 路径分别计新帧/重试字节、Full/Delta、字段次数、档位变化/暂缓和 ACK 等待；不把 Poll 返回字节当作 socket 写成功。
 
 本轮最终 RP2 代码通过全仓 build/vet、根目录门禁、受影响 race、三轮原生与真实 Gate/NATS/TCP 回归，以及 C# 量化/档位/轨迹/稀疏插值核心验证。全仓测试仍只有前述 main 基线已复现的 Lockstep 慢链路用例失败；未运行 Unity 编辑器与 WAN 验收。
+
+
+### 轮询间隔与 RPC 抖动
+
+Gate Relay 和 direct Room 从 **Poll 响应完成时** 安排下一次 50ms 轮询；等待与随后出站工作可重叠，但一次 Relay 不并发 Poll。服务端仍要求相邻新帧至少间隔 50ms，pending 重发与 ACK 规则不变。原固定 50ms ticker 在 RPC 准入交替延迟 15ms/0ms 时，会令相邻服务端请求只间隔约 35ms，导致一次空响应；读完三个有效帧的回归修前出现两次空轮询，修后为零。
+
+该修复避免抖动触发双重限流，不是 ACK 流水线。长 RPC、慢出站或高 RTT 仍会降低有效频率；Relay ACK 表示 Game 可靠出站准入，不是 Unity 已收包。真实 Gate/NATS/TCP 回归入口为 `TestRealGatePhysicsRoomRelay`，含延迟注入、连续解码及取消后旧成员拒绝。
