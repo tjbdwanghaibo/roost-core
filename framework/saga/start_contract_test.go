@@ -8,8 +8,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"testing"
 	"time"
 )
@@ -18,14 +17,7 @@ func TestStartIdentityCompatibilityAndForeignIntents(t *testing.T) {
 	for _, name := range []string{"canonical", "explicit_auto_id", "data", "deadline", "version", "id", "legacy_pristine", "legacy_progressed"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			client := mongotest.NewClient()
-			store, err := NewMongoStore(client, MongoStoreOptions{Database: "identity_compat"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.EnsureInfrastructure(ctx); err != nil {
-				t.Fatal(err)
-			}
+			store := newTestRedisStore(t)
 			e, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 			if err != nil {
 				t.Fatal(err)
@@ -50,21 +42,31 @@ func TestStartIdentityCompatibilityAndForeignIntents(t *testing.T) {
 			if len(r.StartDigest) != 64 {
 				t.Fatalf("no original digest: %q", r.StartDigest)
 			}
-			var raw bson.M
-			if err := store.sagas().FindOne(ctx, bson.M{"_id": r.ID}, &raw); err != nil {
+			key := store.keys.record(r.ID)
+			raw := store.redis.(*redisdriver.Client).Raw()
+			stored, err := raw.HGet(ctx, key, "doc").Result()
+			if err != nil {
 				t.Fatal(err)
 			}
-			if raw["start_digest"] != r.StartDigest {
-				t.Fatalf("digest not in BSON: %v", raw["start_digest"])
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(stored), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if doc["start_digest"] != r.StartDigest {
+				t.Fatalf("digest not in the stored record: %v", doc["start_digest"])
 			}
 			if name == "legacy_pristine" || name == "legacy_progressed" {
-				delete(raw, "start_digest")
+				delete(doc, "start_digest")
 				if name == "legacy_progressed" {
-					raw["version"] = int64(2)
-					raw["completed_steps"] = int32(1)
-					raw["step"] = int32(1)
+					doc["version"] = 2
+					doc["completed_steps"] = 1
+					doc["step"] = 1
 				}
-				if _, err := store.sagas().ReplaceOne(ctx, bson.M{"_id": r.ID}, raw); err != nil {
+				rewritten, err := json.Marshal(doc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := raw.HSet(ctx, key, "doc", string(rewritten), "v", doc["version"]).Err(); err != nil {
 					t.Fatal(err)
 				}
 				old, err := store.Get(ctx, r.ID)
@@ -117,31 +119,22 @@ func TestStartIdentityCompatibilityAndForeignIntents(t *testing.T) {
 }
 
 func TestStartIdentitySurvivesProgressAndResume(t *testing.T) {
-	for _, backend := range []string{"memory", "mongo"} {
+	for _, backend := range []string{"memory", "redis"} {
 		for _, stage := range []string{"progress", "completed", "resume_deadline", "resume_clear"} {
 			t.Run(backend+"/"+stage, func(t *testing.T) {
 				ctx := context.Background()
 				var store Store
-				client := mongotest.NewClient()
+				var env *redisTestEnv
 				if backend == "memory" {
 					store = newMemoryStore()
 				} else {
-					mongoStore, err := NewMongoStore(client, MongoStoreOptions{Database: "start_identity"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err := mongoStore.EnsureInfrastructure(ctx); err != nil {
-						t.Fatal(err)
-					}
-					store = mongoStore
+					env = newRedisTestEnv(t)
+					store = env.open(t)
 				}
 				newEngine := func() *Engine {
-					if backend == "mongo" {
-						var err error
-						store, err = NewMongoStore(client, MongoStoreOptions{Database: "start_identity"})
-						if err != nil {
-							t.Fatal(err)
-						}
+					if backend == "redis" {
+						// 新协调器 / 新 Store 从持久状态恢复。
+						store = env.open(t)
 					}
 					e, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 					if err != nil {
@@ -310,13 +303,7 @@ func TestEmitStartRefusesDataTheCoordinatorWouldRefuse(t *testing.T) {
 // 启动前、或换一个类型时是 ErrNotFound（新用户第七轮：修前 Engine 只有 Get(id) 与不含业务键的 List，查不到）。
 func TestEngineFindsTheSagaAnInitiatorStartedByBusinessKey(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "lookup_by_key"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := newTestRedisStore(t)
 	e, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)

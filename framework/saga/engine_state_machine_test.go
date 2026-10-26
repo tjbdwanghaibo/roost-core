@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 // idleEngine 的协调循环不运行，记录停在测试放置的位置。
@@ -167,17 +165,14 @@ func TestManualCompensateRefusesACompletedSaga(t *testing.T) {
 	}
 }
 
-// 一次状态迁移只把记录版本推进 1：MongoStore.Apply 只接受 After.Version == ExpectedVersion+1。
+// 一次状态迁移只把记录版本推进 1：RedisStore.Apply 只接受 After.Version == ExpectedVersion+1。
 // 不可重试的步骤失败进入补偿、超时用尽进入补偿、各类 completion 都必须满足；内存 store 只比对当前版本，
-// 所以补偿入口要在 MongoStore 上验证。历史：U-0225（版本加两次，拒绝卡在 waiting）。
-// waitingOnMongo 在 MongoStore（mongotest 副本集）上直接写一条 rally saga：第 0 步完成、第 1 步命令已发出、
+// 所以补偿入口要在协调器的正式存储上验证。历史：U-0225（版本加两次，拒绝卡在 waiting）。
+// waitingOnRedis 在 RedisStore（权威 Redis + mongotest 冷副本）上直接写一条 rally saga：第 0 步完成、第 1 步命令已发出、
 // 协调器在等结果。不经领取循环，被测的只有存储对 Apply 的版本规则。
-func waitingOnMongo(t *testing.T) (*Engine, *MongoStore, Record) {
+func waitingOnRedis(t *testing.T) (*Engine, *RedisStore, Record) {
 	t.Helper()
-	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "saga"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestRedisStore(t)
 	engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -201,8 +196,8 @@ func waitingOnMongo(t *testing.T) (*Engine, *MongoStore, Record) {
 	return engine, store, record
 }
 
-func TestStepRefusalMovesSagaIntoCompensationOnMongoStore(t *testing.T) {
-	engine, store, record := waitingOnMongo(t)
+func TestStepRefusalMovesSagaIntoCompensationOnRedisStore(t *testing.T) {
+	engine, store, record := waitingOnRedis(t)
 	after, err := engine.Complete(context.Background(), Completion{CommandID: record.CommandID, IdempotencyKey: record.OperationKey, SagaID: record.ID, Success: false, Retryable: false, Error: "recipient has never entered the game"})
 	if err != nil {
 		t.Fatalf("Complete rejected a valid step refusal: %v", err)

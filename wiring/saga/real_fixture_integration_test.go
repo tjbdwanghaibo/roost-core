@@ -22,11 +22,13 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -80,11 +82,18 @@ type realStepsEnv struct {
 	stopUpper func(context.Context) error
 }
 
-// realStepsNames 标识一套真实依赖资源：库名 / 流名后缀与 DataEngine WAL 目录。重启用例让前后两代进程共用一套。
-type realStepsNames struct{ suffix, walDir string }
+// realStepsNames 标识一套真实依赖资源：库名 / 流名后缀、DataEngine WAL 目录与权威 Redis 地址。重启用例让前后两代进程
+// 共用一套（同一个 Redis 实例与键前缀，否则下一代的启动守卫会把空 Redis 拒绝掉）。
+type realStepsNames struct{ suffix, walDir, redisAddr string }
 
 func newRealStepsNames(t *testing.T) realStepsNames {
-	return realStepsNames{suffix: fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000), walDir: t.TempDir()}
+	// 权威 Redis：压测用 saga-scan.sh 起的私有实例（ROOST_SAGA_PERF_REDIS_ADDR），否则 ROOST_SAGA_IT_REDIS_ADDR
+	// 或本用例的私有 redis-server。
+	redisAddr := os.Getenv("ROOST_SAGA_PERF_REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = redistest.AOFAddr(t)
+	}
+	return realStepsNames{suffix: fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano()%1_000_000_000), walDir: t.TempDir(), redisAddr: redisAddr}
 }
 
 func startRealStepsEnv(t *testing.T, definitions []coresaga.Definition, withNest bool, overrides map[string]any) *realStepsEnv {
@@ -124,6 +133,12 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 		sagaStream, effectStream = prefix+"_SAGA_"+suffix, prefix+"_EFFECTS_"+suffix
 	}
 	env.sagaStream = sagaStream
+	// 键前缀跟着 names 走：重启用例的下一代进程沿用同一套。
+	redisAddr, redisPrefix := names.redisAddr, "d12saga:"+suffix
+	if base := os.Getenv("ROOST_SAGA_PERF_REDIS_PREFIX"); base != "" {
+		redisPrefix = base + ":" + suffix
+	}
+	redistest.Cleanup(t, redisAddr, redisPrefix)
 	cfg := viper.New()
 	for key, value := range map[string]any{
 		"sid": int32(902), "server_type": "d12-it", "persistence.engine": "dataengine",
@@ -133,6 +148,7 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "d12effect" + env.token,
 		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
 		"dataengine.outbox.poll_interval": 50 * time.Millisecond, "dataengine.outbox.retry_min": 100 * time.Millisecond, "dataengine.outbox.retry_max": time.Second,
+		"redis_authority.addr": redisAddr, "saga.redis.key_prefix": redisPrefix,
 		"saga.database": env.sagaDatabase, "saga.stream": sagaStream, "saga.subject_prefix": env.sagaPrefix, "saga.replicas": 3,
 		"saga.stream_max_bytes": int64(64 << 20), "saga.poll_interval": 50 * time.Millisecond,
 		"saga.step_defaults.timeout": 5 * time.Second, "saga.step_defaults.max_attempts": 5,
@@ -156,7 +172,7 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 		Start() error
 		StopWithContext(context.Context) error
 	}
-	all := []lifecycle{mongoMod, natsMod, env.dataMod}
+	all := []lifecycle{mongoMod, natsMod, kitredis.NewAuthorityMod(), env.dataMod}
 	if withNest {
 		all = append(all, kitnest.NewMod(access))
 	}
@@ -169,7 +185,7 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 		t.Fatal(err)
 	}
 	started := []lifecycle{}
-	// started[0] / [1] 是 Mongo 与 NATS（见下面 all 的顺序）。
+	// started[0] / [1] 是 Mongo 与 NATS（见下面 all 的顺序）；权威 Redis Mod 随上层一起停。
 	env.stopUpper = func(ctx context.Context) error {
 		var joined error
 		for len(started) > 2 {

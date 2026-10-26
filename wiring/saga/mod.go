@@ -13,13 +13,18 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
-// Mod parses configuration, looks up the Mongo and JetStream capabilities,
-// hands them to core's saga.Assemble and forwards lifecycle calls. Consumer
-// subscription, engine loop and drain-then-stop live in core.
+// Mod parses configuration, looks up the Mongo, authority Redis and JetStream
+// capabilities, hands them to core's saga.Assemble and forwards lifecycle
+// calls. The coordinator's authoritative store is the authority Redis
+// (redis_authority.*, saga.redis.*); Mongo holds the cold copy the Store
+// Service projects into. Consumer subscription, engine loop and
+// drain-then-stop live in core.
 type Mod struct {
 	definitions []coresaga.Definition
 	config      coresaga.AssemblyConfig
@@ -45,38 +50,51 @@ func CombineDefinitions(groups ...[]coresaga.Definition) []coresaga.Definition {
 
 func (m *Mod) Name() app.ModName { return mods.ModSaga }
 
-// DependsOn names Mods: Mongo and NATS. JetStream is the NATS Mod's
-// capability and health is a registry built-in — neither is a Mod name, and
-// app resolves dependencies by Mod name.
+// DependsOn names Mods: Mongo, the authority Redis and NATS. JetStream is the
+// NATS Mod's capability and health is a registry built-in — neither is a Mod
+// name, and app resolves dependencies by Mod name.
 func (m *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModMongo, mods.ModNats}
+	return []app.ModName{mods.ModMongo, mods.ModRedisAuthority, mods.ModNats}
 }
 
 func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine}
 }
 
-// Locations 是 saga Mod 按配置使用的持久位置：Mongo 存储（库与集合，没写的集合名为空、由 core 取缺省）与
-// JetStream 流名、主题前缀。
+// Locations 是 saga Mod 按配置使用的持久位置：权威 Redis 上的键前缀与分区（Redis 连接见 redis_authority.*）、Mongo
+// 冷副本（库与集合，没写的集合名为空、由 core 取缺省）与 JetStream 流名、主题前缀。
 type Locations struct {
+	Redis         coresaga.RedisStoreOptions
 	Store         coresaga.MongoStoreOptions
 	Stream        string
 	SubjectPrefix string
 }
 
 // LoadLocations 按 saga Mod 的声明读 Locations（与 Init 同一个结构体）：运维工具（cmd/sidmerge 的“全部 saga
-// 终态”检查）用它找 saga 记录，不另抄缺省。
+// 终态”检查）与 Store Service 用它找 saga 记录，不另抄缺省。
 func LoadLocations(cfg *viper.Viper) (Locations, error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return Locations{}, fmt.Errorf("saga: %w", err)
 	}
+	return settings.locations(), nil
+}
+
+func (settings *config) locations() Locations {
 	c := settings.Saga
 	return Locations{
-		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
+		Redis: coresaga.RedisStoreOptions{KeyPrefix: c.Redis.KeyPrefix, Partitions: c.Redis.Partitions, WaitAOFTimeout: c.Redis.WaitAOFTimeout,
+			TerminalRetention: c.Redis.TerminalRetention, BusinessKeyGuard: c.Redis.BusinessKeyGuard, MaxProjectionBacklog: c.Redis.MaxProjectionBacklog},
+		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas,
 			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
 		Stream: c.Stream, SubjectPrefix: c.SubjectPrefix,
-	}, nil
+	}
+}
+
+// concurrency 是本 Mod 在权威 Redis 连接池上的并发上限：协调与发布循环各占一条连接，三类消费者的每个在途处理各占一条。
+func (settings *config) concurrency() int {
+	c := settings.Saga
+	return c.CoordinatorWorkers + c.PublisherWorkers + c.ResultWorkers + c.ResultEffectWorkers + c.StartEffectWorkers
 }
 
 // ConfigSchema 声明 saga.*。
@@ -98,9 +116,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("saga: %w", err)
 	}
 	startStream, startPrefix, resultStream, resultPrefix := effectStreams(&settings, effects)
+	locations := settings.locations()
 	m.config = coresaga.AssemblyConfig{
-		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
-			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
+		Store: locations.Store,
+		Redis: locations.Redis,
 		Engine: coresaga.Options{Owner: owner, CoordinatorWorkers: c.CoordinatorWorkers, PublisherWorkers: c.PublisherWorkers,
 			CoordinatorBatch: c.CoordinatorClaimBatch, PublisherBatch: c.PublisherClaimBatch, LeaseDuration: c.LeaseDuration,
 			StoreTimeout: c.StoreTimeout, PollInterval: c.PollInterval, PublishTimeout: c.PublishTimeout,
@@ -110,7 +129,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		Stream: fnats.JetStreamConfig{Name: c.Stream, Subjects: []string{c.SubjectPrefix + ".>"}, Storage: fnats.JetStreamStorageFile,
 			MaxAge: c.StreamMaxAge, Duplicates: c.DuplicateWindow, Replicas: c.Replicas, MaxBytes: c.StreamMaxBytes},
 		Completions: coresaga.CompletionConsumerConfig{
-			Stream: c.Stream, Durable: c.ResultDurable, SubjectPrefix: c.SubjectPrefix,
+			Workers: c.ResultWorkers, Stream: c.Stream, Durable: c.ResultDurable, SubjectPrefix: c.SubjectPrefix,
 			AckWait: c.Result.AckWait, ProcessTimeout: c.Result.ProcessTimeout, MaxDeliver: c.Result.MaxDeliver,
 			MaxAckPending: c.Result.MaxAckPending, NakBackoffMin: c.Result.NakBackoffMin, NakBackoffMax: c.Result.NakBackoffMax,
 		},
@@ -119,12 +138,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		// consumer shares the start consumer's stream and prefix and takes
 		// its own durable; core derives the rest when these are empty.
 		NestResults: coresaga.NestCompletionConsumerConfig{
-			Stream: resultStream, Durable: c.ResultEffectDurable, EffectPrefix: resultPrefix,
+			Workers: c.ResultEffectWorkers, Stream: resultStream, Durable: c.ResultEffectDurable, EffectPrefix: resultPrefix,
 			AckWait: c.ResultEffect.AckWait, ProcessTimeout: c.ResultEffect.ProcessTimeout, MaxDeliver: c.ResultEffect.MaxDeliver,
 			MaxAckPending: c.ResultEffect.MaxAckPending, NakBackoffMin: c.ResultEffect.NakBackoffMin, NakBackoffMax: c.ResultEffect.NakBackoffMax,
 		},
 		Starts: coresaga.NestStartConsumerConfig{
-			Stream: startStream, Durable: c.StartEffectDurable, EffectPrefix: startPrefix,
+			Workers: c.StartEffectWorkers, Stream: startStream, Durable: c.StartEffectDurable, EffectPrefix: startPrefix,
 			AckWait: c.StartEffect.AckWait, ProcessTimeout: c.StartEffect.ProcessTimeout, MaxDeliver: c.StartEffect.MaxDeliver,
 			MaxAckPending: c.StartEffect.MaxAckPending, NakBackoffMin: c.StartEffect.NakBackoffMin, NakBackoffMax: c.StartEffect.NakBackoffMax,
 		},
@@ -154,9 +173,11 @@ func effectStreams(settings *config, effects kitdataengine.EffectsConfig) (start
 	return startStream, startPrefix, resultStream, resultPrefix
 }
 
-// CheckConfigAcrossMods 是 saga 读 DataEngine 配置键的两条规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
+// CheckConfigAcrossMods 是 saga 读别的 Mod 配置键的规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
 // --check-config 与 doctor 的 config-check 同一处）：
 //
+//   - checkAuthorityPool：同一进程注册了权威 Redis Mod 时，redis_authority.pool_size 不小于本 Mod 的并发之和（不够时
+//     并发的消费者、循环排队等连接，存储超时被等连接吃掉）。
 //   - checkEffectRetention：完成回执要比效果流里的结果活得久。不看本进程是否注册了 DataEngine——只跑协调器的进程
 //     读的仍是按 dataengine.effects 解析的那条流，它的保留期由别的进程的 DataEngine 按同一份配置建。
 //   - 同一进程注册了 DataEngine 时，saga.start_effect_* 写了就必须与 dataengine.effects 相同：Nest 的 saga start 由
@@ -173,6 +194,9 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 		return err
 	}
 	errs := []error{checkEffectRetention(&settings, effects)}
+	if registered(mods.ModRedisAuthority) {
+		errs = append(errs, checkAuthorityPool(cfg, &settings))
+	}
 	if !registered(mods.ModDataEngine) {
 		return errors.Join(errs...)
 	}
@@ -183,6 +207,19 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 		errs = append(errs, effectKeyMismatch("saga.start_effect_prefix", settings.Saga.StartEffectPrefix, "dataengine.effects.subject_prefix", effects.Prefix()))
 	}
 	return errors.Join(errs...)
+}
+
+// checkAuthorityPool：权威 Redis 连接池要容得下本进程同时在用的连接（saga 的并发，见 concurrency）。
+func checkAuthorityPool(cfg *viper.Viper, settings *config) error {
+	authority, err := kitredis.LoadAuthorityConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if need := settings.concurrency(); authority.PoolSize < need {
+		return fmt.Errorf("redis_authority.pool_size (%d) is smaller than the saga concurrency on it (%d = coordinator_workers + publisher_workers + "+
+			"result_workers + result_effect_workers + start_effect_workers); raise the pool or lower the workers", authority.PoolSize, need)
+	}
+	return nil
 }
 
 func effectKeyMismatch(sagaKey, sagaValue, effectKey, effectValue string) error {
@@ -218,11 +255,18 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	if !ok || mongoClient == nil {
 		return fmt.Errorf("saga mod: capability %q not found", mods.ModMongo)
 	}
+	authority, ok := app.Lookup[fredis.IRedis](registry, mods.ModRedisAuthority)
+	if !ok || authority == nil {
+		return fmt.Errorf("saga mod: capability %q not found; add wiring/redis.NewAuthorityMod()", mods.ModRedisAuthority)
+	}
 	jetStream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
 	if !ok || jetStream == nil {
 		return fmt.Errorf("saga mod: capability %q not found", mods.ModNatsJetStream)
 	}
-	asm, err := coresaga.Assemble(mongoClient, jetStream, m.config, m.definitions...)
+	if failure, ok := app.Lookup[*app.RuntimeFailure](registry, mods.ModRuntimeFailure); ok {
+		m.config.Failure = failure
+	}
+	asm, err := coresaga.Assemble(mongoClient, authority, jetStream, m.config, m.definitions...)
 	if err != nil {
 		return err
 	}
@@ -261,7 +305,9 @@ func (m *Mod) Engine() *coresaga.Engine {
 	}
 	return m.asm.Engine
 }
-func (m *Mod) Store() *coresaga.MongoStore {
+
+// Store 返回协调器的权威存储（Redis）；Mongo 冷副本经 Store().Copy() 取。
+func (m *Mod) Store() *coresaga.RedisStore {
 	if m == nil || m.asm == nil {
 		return nil
 	}
@@ -285,7 +331,7 @@ func (m *Mod) checkHealth(ctx context.Context) health.Result {
 		return health.Result{Status: health.StatusFail, Message: "worker stopped", Err: err}
 	}
 	if err := m.asm.Store.Ping(ctx); err != nil {
-		return health.Result{Status: health.StatusFail, Message: "MongoDB unavailable", Err: err}
+		return health.Result{Status: health.StatusFail, Message: "authority Redis or MongoDB copy unavailable", Err: err}
 	}
 	stats := m.asm.Engine.Stats()
 	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d reopened=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened)}

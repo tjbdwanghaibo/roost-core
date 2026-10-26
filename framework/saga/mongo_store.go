@@ -19,23 +19,24 @@ import (
 
 const (
 	defaultSagaCollection       = "_sagas"
-	defaultOutboxCollection     = "_saga_outbox"
 	defaultCompletionCollection = "_saga_completions"
 	defaultOperationCollection  = "_saga_operations"
+	// sagaMetaCollection 存 saga 元数据（本库对应的权威 Redis 实例，见 RedisStore.EnsureInfrastructure）。
+	sagaMetaCollection = "_saga_meta"
 )
 
-// MongoStoreOptions 配置 MongoStore 的库、各集合名与 completion 回执 TTL。
+// MongoStoreOptions 配置 Mongo 冷副本的库、各集合名与 completion 回执 TTL。
 type MongoStoreOptions struct {
 	Database             string
 	SagaCollection       string
-	OutboxCollection     string
 	CompletionCollection string
 	OperationCollection  string
 	CompletionReceiptTTL time.Duration
 }
 
-// MongoStore 是基于 MongoDB 的 Store：记录、outbox、completion 回执与 operation tombstone 分集合保存，Apply 在一个
-// Mongo 事务里按版本与租约 fence 写入。
+// MongoStore 是协调器存储的 Mongo 冷副本：记录、completion 回执与 operation tombstone 分集合保存。权威在 RedisStore；
+// 这里的内容只由 Store Service 的 saga 投影写入（按版本单调、幂等），读它的场景是 Redis 里已驱逐的记录（冷读、装回、
+// 历史回查）与最终一致的运维查询（List）。它不实现 Store，没有领取、outbox 与转移写入。
 type MongoStore struct {
 	client fmongo.IMongo
 	opts   MongoStoreOptions
@@ -58,9 +59,6 @@ func NewMongoStore(client fmongo.IMongo, options MongoStoreOptions) (*MongoStore
 	if options.SagaCollection == "" {
 		options.SagaCollection = defaultSagaCollection
 	}
-	if options.OutboxCollection == "" {
-		options.OutboxCollection = defaultOutboxCollection
-	}
 	if options.CompletionCollection == "" {
 		options.CompletionCollection = defaultCompletionCollection
 	}
@@ -73,7 +71,7 @@ func NewMongoStore(client fmongo.IMongo, options MongoStoreOptions) (*MongoStore
 	return &MongoStore{client: client, opts: options}, nil
 }
 
-// EnsureInfrastructure 建各集合的索引。
+// EnsureInfrastructure 建冷副本各集合的索引（业务键唯一索引是业务键永久唯一的依据，见 RedisStore.Create）。
 func (s *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	ttl := int64(s.opts.CompletionReceiptTTL / time.Second)
 	if ttl <= 0 || ttl > int64(^uint32(0)>>1) {
@@ -81,19 +79,11 @@ func (s *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	}
 	if err := s.sagas().EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "type", Value: 1}, {Key: "business_key", Value: 1}}, Name: "uniq_type_business", Unique: true},
-		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "next_run_at", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_due"},
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "updated_at", Value: -1}}, Name: "operations"},
 		{Keys: bson.D{{Key: "type", Value: 1}, {Key: "updated_at", Value: -1}}, Name: "operations_by_type"},
 		{Keys: bson.D{{Key: "type", Value: 1}, {Key: "definition_version", Value: 1}, {Key: "status", Value: 1}, {Key: "updated_at", Value: -1}}, Name: "operations_by_definition"},
 	}); err != nil {
 		return fmt.Errorf("saga mongo: saga indexes: %w", err)
-	}
-	if err := s.outbox().EnsureIndexes(ctx, []fmongo.IndexModel{
-		{Keys: bson.D{{Key: "next_attempt_at", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_due"},
-		{Keys: bson.D{{Key: "saga_id", Value: 1}, {Key: "created_at", Value: 1}}, Name: "by_saga"},
-		{Keys: bson.D{{Key: "command.idempotency_key", Value: 1}}, Name: "by_operation"},
-	}); err != nil {
-		return fmt.Errorf("saga mongo: outbox indexes: %w", err)
 	}
 	if err := s.completions().EnsureIndexes(ctx, []fmongo.IndexModel{{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: int32(ttl)}}); err != nil {
 		return err
@@ -101,15 +91,16 @@ func (s *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	return s.operations().EnsureIndexes(ctx, []fmongo.IndexModel{{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: int32(ttl)}})
 }
 
-func (s *MongoStore) Create(ctx context.Context, record Record) error {
-	if err := record.Validate(); err != nil {
-		return err
+// recordExists 报告冷副本里是否已有同 id 或同 (type, business_key) 的记录（RedisStore.Create 的业务键守卫）。
+func (s *MongoStore) recordExists(ctx context.Context, id, sagaType, businessKey string) (bool, error) {
+	var doc struct {
+		ID string `bson:"_id"`
 	}
-	_, err := s.sagas().InsertOne(ctx, toRecordDoc(record))
-	if errors.Is(err, fmongo.ErrDuplicateKey) {
-		return ErrAlreadyExists
+	err := s.sagas().FindOne(ctx, bson.M{"$or": bson.A{bson.M{"_id": id}, bson.M{"type": sagaType, "business_key": businessKey}}}, &doc)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		return false, nil
 	}
-	return err
+	return err == nil, err
 }
 
 func (s *MongoStore) Get(ctx context.Context, id string) (Record, error) {
@@ -162,11 +153,6 @@ func (s *MongoStore) List(ctx context.Context, query Query) ([]Record, error) {
 	return out, nil
 }
 
-func (s *MongoStore) CompletionRecorded(ctx context.Context, completion Completion) (bool, error) {
-	history, err := s.CompletionHistory(ctx, completion)
-	return history.Recorded, err
-}
-
 // CompletionHistory 先查这个 CommandID 的 completion receipt，再查 operation tombstone 与它的关闭方式。
 func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completion) (CompletionHistory, error) {
 	if err := completion.Validate(); err != nil {
@@ -201,229 +187,32 @@ func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completio
 	return CompletionHistory{Recorded: true, Receipt: true}, nil
 }
 
-// MarkLateSuccessAlarm 在 tombstone 的 late_alarms 子文档里记 r<代际>。条件更新只匹配还没有这个
-// 键的 tombstone，单文档原子：并发送达的同一个迟到成功只有一次 MatchedCount == 1。
-func (s *MongoStore) MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
-	if err := completion.Validate(); err != nil {
-		return false, ErrInvalidRecord
+// tombstoneExists 报告冷副本里这笔 saga 的这个操作是否有 tombstone。
+func (s *MongoStore) tombstoneExists(ctx context.Context, operation, sagaID string) (bool, error) {
+	var doc operationDoc
+	err := s.operations().FindOne(ctx, bson.M{"_id": operation, "saga_id": sagaID}, &doc)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		return false, nil
 	}
-	field := lateAlarmField(incarnation)
-	filter := bson.M{"_id": completion.IdempotencyKey, "saga_id": completion.SagaID, field: bson.M{"$exists": false}}
-	result, err := s.operations().UpdateOne(ctx, filter, bson.M{"$set": bson.M{field: time.Now().UTC()}})
-	if err != nil {
-		return false, err
-	}
-	return result != nil && result.MatchedCount == 1, nil
+	return err == nil, err
 }
 
 func lateAlarmField(incarnation uint32) string {
 	return "late_alarms.r" + strconv.FormatUint(uint64(incarnation), 10)
 }
 
-func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Record, error) {
-	if err := validateClaim(request); err != nil {
-		return nil, err
-	}
-	filter := bson.M{"status": bson.M{"$in": []Status{StatusPending, StatusWaiting, StatusCompensating}}, "next_run_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
-	// 在一次原子操作里按到期顺序选择并领取，避免多个 worker 扫描同一候选后相互争抢。
-	update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
-	option := fmongo.FindOneAndUpdateOption{ReturnAfter: true, Sort: bson.D{{Key: "next_run_at", Value: 1}, {Key: "_id", Value: 1}}}
-	out := make([]Record, 0, request.Limit)
-	for range request.Limit {
-		var claimed recordDoc
-		err := s.sagas().FindOneAndUpdate(ctx, filter, update, &claimed, option)
-		if errors.Is(err, fmongo.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			return out, err
-		}
-		record, validateErr := validatedRecord(claimed)
-		if validateErr != nil {
-			// 只隔离这一条：若返回 (已领取的, err)，协调循环会整批丢弃，同批已领取的正常记录要等租约过期。
-			// 不把它改成 ManualRequired：记录已经读不出可信的状态，改写只会覆盖运维要看的现场；它保留刚领取的租约，
-			// 每个 LeaseDuration 被领取并告警一次，直到运维修好文档。
-			reportCorruptRecord("claim", claimed.ID, validateErr)
-			continue
-		}
-		out = append(out, record)
-	}
-	return out, nil
-}
-
 // reportCorruptRecord 告警一条校验不过的 saga 记录（手工改坏、不兼容的写者整体 Replace 丢了字段）：计
 // saga.store.corrupt_record_total{op}，记点名记录的 ERROR。标签只有操作名，记录 id 只进日志。
 func reportCorruptRecord(op, id string, err error) {
 	metrics.IncCounter("saga.store.corrupt_record_total", metrics.Labels{"op": op}, 1)
-	slog.Error("saga mongo: skipped a corrupt saga record; repair the document", "op", op, "id", id, "err", err)
-}
-
-func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutcome, error) {
-	if request.ExpectedVersion == 0 || request.After.Version != request.ExpectedVersion+1 {
-		return 0, ErrInvalidRecord
-	}
-	if err := request.After.Validate(); err != nil {
-		return 0, err
-	}
-	if request.Outbox == nil && request.Receipt == nil && request.CloseOperation == "" {
-		result, err := s.sagas().ReplaceOne(ctx, applyFilter(request), toRecordDoc(request.After))
-		if err != nil {
-			return 0, err
-		}
-		if result.MatchedCount != 1 {
-			return 0, ErrConflict
-		}
-		return ApplyApplied, nil
-	}
-	var receiptDigest []byte
-	if request.Receipt != nil {
-		digest, err := completionDigest(*request.Receipt)
-		if err != nil {
-			return 0, err
-		}
-		receiptDigest = digest
-	}
-	session, err := s.client.StartSession(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer session.EndSession(ctx)
-	outcome := ApplyApplied
-	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
-		// 遇到暂时性事务错误时驱动可能多次调用这个回调；不能让更早一次调用的结果泄漏出来。
-		outcome = ApplyApplied
-		if request.Receipt != nil {
-			digest := receiptDigest
-			var existing completionDoc
-			findErr := s.completions().FindOne(txCtx, bson.M{"_id": request.Receipt.CommandID}, &existing)
-			if findErr == nil {
-				if !bytes.Equal(existing.Digest, digest) {
-					return ErrIdentityConflict
-				}
-				outcome = ApplyDuplicate
-				return nil
-			}
-			if !errors.Is(findErr, fmongo.ErrNotFound) {
-				return findErr
-			}
-		}
-		// 要关闭的操作的 tombstone 只在这里读一次：身份核对与后面的“插入 / 升级为带结果关闭”都用它。两处之间本事务
-		// 只写 sagas / outbox / completions，不碰 operations，事务快照里再读一次必然是同一份文档。
-		var tombstone operationDoc
-		tombstoneFound := false
-		if request.CloseOperation != "" {
-			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &tombstone)
-			switch {
-			case findErr == nil:
-				if tombstone.SagaID != request.After.ID {
-					return ErrIdentityConflict
-				}
-				tombstoneFound = true
-			case !errors.Is(findErr, fmongo.ErrNotFound):
-				return findErr
-			}
-		}
-		result, replaceErr := s.sagas().ReplaceOne(txCtx, applyFilter(request), toRecordDoc(request.After))
-		if replaceErr != nil {
-			return replaceErr
-		}
-		if result.MatchedCount != 1 {
-			return ErrConflict
-		}
-		if request.Outbox != nil {
-			if _, deleteErr := s.outbox().DeleteMany(txCtx, bson.M{"command.idempotency_key": request.Outbox.Command.IdempotencyKey}); deleteErr != nil {
-				return deleteErr
-			}
-			if _, insertErr := s.outbox().InsertOne(txCtx, toOutboxDoc(*request.Outbox)); insertErr != nil {
-				return insertErr
-			}
-		}
-		if request.Receipt != nil {
-			if _, insertErr := s.completions().InsertOne(txCtx, completionDoc{ID: request.Receipt.CommandID, Digest: receiptDigest, CreatedAt: request.Receipt.CompletedAt}); insertErr != nil {
-				return insertErr
-			}
-		}
-		if request.CloseOperation != "" {
-			// 只有接收了成功才算“带结果关闭”：协调器只把成功计入 CompletedSteps、纳入补偿。以失败关闭
-			// （可重试失败用尽、拒绝）与超时用尽一样没有记下任何生效的结果，之后到达的成功仍要告警。
-			closure := operationClosureAbandoned
-			if request.Receipt != nil && request.Receipt.Success {
-				closure = operationClosureResult
-			}
-			switch {
-			case !tombstoneFound:
-				if _, insertErr := s.operations().InsertOne(txCtx, operationDoc{ID: request.CloseOperation, SagaID: request.After.ID, Closure: closure, CreatedAt: request.After.UpdatedAt}); insertErr != nil {
-					return insertErr
-				}
-			case closure == operationClosureResult && tombstone.Closure != operationClosureResult:
-				// 放弃过的 operation 在 Resume 后的新一生里带结果关闭：以结果为准，之后到达的旧尝试结果按重复处理。
-				if _, updateErr := s.operations().UpdateOne(txCtx, bson.M{"_id": request.CloseOperation}, bson.M{"$set": bson.M{"closure": closure}}); updateErr != nil {
-					return updateErr
-				}
-			}
-			if _, deleteErr := s.outbox().DeleteMany(txCtx, bson.M{"command.idempotency_key": request.CloseOperation}); deleteErr != nil {
-				return deleteErr
-			}
-		}
-		return nil
-	})
-	return outcome, err
-}
-
-func (s *MongoStore) ClaimOutbox(ctx context.Context, request ClaimRequest) ([]OutboxRecord, error) {
-	if err := validateClaim(request); err != nil {
-		return nil, err
-	}
-	filter := bson.M{"next_attempt_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
-	// 到期与租约条件和更新一起裁决；并发发布者直接领取下一条，不共享过期的候选快照。
-	update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
-	option := fmongo.FindOneAndUpdateOption{ReturnAfter: true, Sort: bson.D{{Key: "next_attempt_at", Value: 1}, {Key: "_id", Value: 1}}}
-	out := make([]OutboxRecord, 0, request.Limit)
-	for range request.Limit {
-		var claimed outboxDoc
-		err := s.outbox().FindOneAndUpdate(ctx, filter, update, &claimed, option)
-		if errors.Is(err, fmongo.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			return out, err
-		}
-		record := claimed.record()
-		if err := record.Command.Validate(); err != nil || record.NextAttemptAt.IsZero() || record.CreatedAt.IsZero() {
-			return out, ErrInvalidRecord
-		}
-		out = append(out, record)
-	}
-	return out, nil
-}
-
-func (s *MongoStore) AckOutbox(ctx context.Context, id string, lease Lease) error {
-	deleted, err := s.outbox().DeleteOne(ctx, bson.M{"_id": id, "lease_owner": lease.Owner, "lease_token": lease.Token})
-	if err != nil {
-		return err
-	}
-	if deleted != 1 {
-		return ErrConflict
-	}
-	return nil
-}
-func (s *MongoStore) NackOutbox(ctx context.Context, id string, lease Lease, next time.Time, lastError string) error {
-	update := bson.M{"$set": bson.M{"next_attempt_at": next, "last_error": lastError, "lease_until": time.Unix(0, 0).UTC()}, "$unset": bson.M{"lease_owner": ""}, "$inc": bson.M{"attempt": 1}}
-	result, err := s.outbox().UpdateOne(ctx, bson.M{"_id": id, "lease_owner": lease.Owner, "lease_token": lease.Token}, update)
-	if err != nil {
-		return err
-	}
-	if result.MatchedCount != 1 {
-		return ErrConflict
-	}
-	return nil
+	slog.Error("saga store: skipped a corrupt saga record; repair it", "op", op, "id", id, "err", err)
 }
 
 func (s *MongoStore) sagas() fmongo.ICollection {
 	return s.client.Database(s.opts.Database).Collection(s.opts.SagaCollection)
 }
-func (s *MongoStore) outbox() fmongo.ICollection {
-	return s.client.Database(s.opts.Database).Collection(s.opts.OutboxCollection)
+func (s *MongoStore) meta() fmongo.ICollection {
+	return s.client.Database(s.opts.Database).Collection(sagaMetaCollection)
 }
 func (s *MongoStore) completions() fmongo.ICollection {
 	return s.client.Database(s.opts.Database).Collection(s.opts.CompletionCollection)
@@ -494,52 +283,6 @@ func validatedRecord(doc recordDoc) (Record, error) {
 	return record, nil
 }
 
-type commandDoc struct {
-	ID                string    `bson:"id"`
-	IdempotencyKey    string    `bson:"idempotency_key"`
-	SagaID            string    `bson:"saga_id"`
-	SagaType          string    `bson:"saga_type"`
-	DefinitionVersion uint32    `bson:"definition_version"`
-	BusinessKey       string    `bson:"business_key"`
-	Step              int       `bson:"step"`
-	StepName          string    `bson:"step_name"`
-	Phase             Phase     `bson:"phase"`
-	Attempt           uint32    `bson:"attempt"`
-	Topic             string    `bson:"topic"`
-	Payload           []byte    `bson:"payload,omitempty"`
-	DeadlineAt        time.Time `bson:"deadline_at"`
-	CreatedAt         time.Time `bson:"created_at"`
-}
-type outboxDoc struct {
-	ID            string     `bson:"_id"`
-	SagaID        string     `bson:"saga_id"`
-	Command       commandDoc `bson:"command"`
-	Attempt       uint32     `bson:"attempt"`
-	NextAttemptAt time.Time  `bson:"next_attempt_at"`
-	CreatedAt     time.Time  `bson:"created_at"`
-	LastError     string     `bson:"last_error,omitempty"`
-	LeaseOwner    string     `bson:"lease_owner,omitempty"`
-	LeaseToken    uint64     `bson:"lease_token,omitempty"`
-	LeaseUntil    time.Time  `bson:"lease_until,omitempty"`
-}
-
-func toCommandDoc(c Command) commandDoc {
-	return commandDoc{ID: c.ID, IdempotencyKey: c.IdempotencyKey, SagaID: c.SagaID, SagaType: c.SagaType, DefinitionVersion: c.DefinitionVersion, BusinessKey: c.BusinessKey, Step: c.Step, StepName: c.StepName, Phase: c.Phase, Attempt: c.Attempt, Topic: c.Topic, Payload: append([]byte(nil), c.Payload...), DeadlineAt: c.DeadlineAt, CreatedAt: c.CreatedAt}
-}
-func (d commandDoc) command() Command {
-	return Command{ID: d.ID, IdempotencyKey: d.IdempotencyKey, SagaID: d.SagaID, SagaType: d.SagaType, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, Step: d.Step, StepName: d.StepName, Phase: d.Phase, Attempt: d.Attempt, Topic: d.Topic, Payload: append([]byte(nil), d.Payload...), DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt}
-}
-func toOutboxDoc(o OutboxRecord) outboxDoc {
-	leaseUntil := o.Lease.Until
-	if leaseUntil.IsZero() {
-		leaseUntil = time.Unix(0, 0).UTC()
-	}
-	return outboxDoc{ID: o.Command.ID, SagaID: o.Command.SagaID, Command: toCommandDoc(o.Command), Attempt: o.Attempt, NextAttemptAt: o.NextAttemptAt, CreatedAt: o.CreatedAt, LeaseOwner: o.Lease.Owner, LeaseToken: o.Lease.Token, LeaseUntil: leaseUntil}
-}
-func (d outboxDoc) record() OutboxRecord {
-	return OutboxRecord{Command: d.Command.command(), Attempt: d.Attempt, NextAttemptAt: d.NextAttemptAt, CreatedAt: d.CreatedAt, Lease: Lease{Owner: d.LeaseOwner, Token: d.LeaseToken, Until: d.LeaseUntil}}
-}
-
 type completionDoc struct {
 	ID        string    `bson:"_id"`
 	Digest    []byte    `bson:"digest"`
@@ -572,14 +315,6 @@ func (d operationDoc) closure() OperationClosure {
 	}
 }
 
-func applyFilter(r ApplyRequest) bson.M {
-	f := bson.M{"_id": r.After.ID, "version": r.ExpectedVersion}
-	if r.ExpectedLease.Owner != "" {
-		f["lease_owner"] = r.ExpectedLease.Owner
-		f["lease_token"] = r.ExpectedLease.Token
-	}
-	return f
-}
 func validateClaim(r ClaimRequest) error {
 	if strings.TrimSpace(r.Owner) == "" || r.Now.IsZero() || r.LeaseDuration <= 0 || r.Limit <= 0 {
 		return ErrInvalidRecord
@@ -609,7 +344,3 @@ func completionDigest(c Completion) ([]byte, error) {
 	sum := sha256.Sum256(raw)
 	return sum[:], nil
 }
-
-var _ Store = (*MongoStore)(nil)
-var _ CompletionHistoryStore = (*MongoStore)(nil)
-var _ LateSuccessAlarmStore = (*MongoStore)(nil)

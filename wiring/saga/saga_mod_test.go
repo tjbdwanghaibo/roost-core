@@ -12,8 +12,12 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
 // O-S5-2（维护者第十二轮决定）：原生 Nest 步骤的完成结果走 DataEngine 的效果流，那条流的保留期是
@@ -139,12 +143,13 @@ func (j *healthJetStream) Subscribe(_ context.Context, cfg fnats.JetStreamConsum
 func TestSagaModHealthDetectsEveryConsumerAndRecovers(t *testing.T) {
 	for _, subject := range []string{"roost.saga.result.>", "roost.effect.saga.start", "roost.effect.saga.result.>"} {
 		t.Run(subject, func(t *testing.T) {
-			cfg := viper.New()
+			cfg := sagaTestConfig()
 			registry := app.NewRegistry(cfg)
 			js := &healthJetStream{subs: make(map[string]*healthSubscription)}
 			if err := registry.Register(mods.ModMongo, mongotest.NewClient()); err != nil {
 				t.Fatal(err)
 			}
+			registerTestAuthority(t, registry, cfg)
 			if err := registry.Register(mods.ModNatsJetStream, js); err != nil {
 				t.Fatal(err)
 			}
@@ -191,5 +196,54 @@ func TestSagaModHealthDetectsEveryConsumerAndRecovers(t *testing.T) {
 				t.Fatalf("fresh subscriptions did not recover health: %+v", got)
 			}
 		})
+	}
+}
+
+// registerTestAuthority 登记一个测试用的权威 Redis（ROOST_SAGA_IT_REDIS_ADDR 或私有 redis-server），并给 cfg 一个本用例
+// 独有的 saga.redis.key_prefix（用后删除它的键）。
+func registerTestAuthority(t *testing.T, registry *app.Registry, cfg *viper.Viper) {
+	t.Helper()
+	addr := redistest.AOFAddr(t)
+	cfg.Set("saga.redis.key_prefix", redistest.Prefix(t, addr, "wsaga"))
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := registry.Register(mods.ModRedisAuthority, client); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 权威 Redis 的连接池要容得下本进程 saga 的并发（协调、发布与三类消费者）：同一进程注册了权威 Redis Mod 时，
+// 配置检查在任何 Mod Init 之前拒绝过小的池，并点名两边的键。
+func TestSagaModRejectsSmallAuthorityPool(t *testing.T) {
+	base := "sid: 1\nserver_type: game\nredis_authority:\n  addr: 127.0.0.1:6379\n"
+	if err := app.CheckConfig(yamlConfig(t, base), NewMod(), kitredis.NewAuthorityMod()); err != nil {
+		t.Fatalf("defaults (pool 64, concurrency 4+4+8+8+4=28) refused: %v", err)
+	}
+	err := app.CheckConfig(yamlConfig(t, base+"  pool_size: 27\n"), NewMod(), kitredis.NewAuthorityMod())
+	if err == nil || !strings.Contains(err.Error(), "redis_authority.pool_size") || !strings.Contains(err.Error(), "28") {
+		t.Fatalf("pool 27 under a concurrency of 28 = %v, want a refusal naming redis_authority.pool_size", err)
+	}
+	if err := app.CheckConfig(yamlConfig(t, base+"  pool_size: 20\nsaga:\n  result_workers: 2\n  result_effect_workers: 2\n  start_effect_workers: 1\n"), NewMod(), kitredis.NewAuthorityMod()); err != nil {
+		t.Fatalf("pool 20 over a concurrency of 13 refused: %v", err)
+	}
+}
+
+// 三类消费者的并发不能超过各自的 max_ack_pending；业务键守卫至少 10 个存储超时。
+func TestSagaRedisAndWorkerKeysAreValidated(t *testing.T) {
+	for _, tc := range []struct{ yaml, want string }{
+		{"saga:\n  result_workers: 300\n", "saga.result_workers"},
+		{"saga:\n  start_effect_workers: 9\n  start_effect_max_ack_pending: 8\n", "saga.start_effect_workers"},
+		{"saga:\n  redis:\n    business_key_guard: 20s\n", "saga.redis.business_key_guard"},
+		{"saga:\n  redis:\n    partitions: 2000\n", "saga.redis.partitions"},
+	} {
+		if err := NewMod().Init(yamlConfig(t, tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%q: Init = %v, want a refusal naming %s", tc.yaml, err, tc.want)
+		}
+	}
+	if err := NewMod().Init(viper.New()); err == nil || !strings.Contains(err.Error(), "saga.redis.key_prefix") {
+		t.Fatalf("Init without saga.redis.key_prefix = %v, want it required", err)
 	}
 }

@@ -776,12 +776,12 @@ func TestNativeStepConsumerHandlesOperationOutcomes(t *testing.T) {
 	})
 }
 
-// MongoStore 的 tombstone 记录关闭方式：放弃关闭后到达的成功告警，带结果关闭后的旧结果按重复处理，
+// RedisStore 的 tombstone 记录关闭方式：放弃关闭后到达的成功告警，带结果关闭后的旧结果按重复处理，
 // 没有 closure 字段的旧形状 tombstone 不告警；Resume 后的新一生带结果关闭时改记为“带结果”。
-func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
+func TestRedisStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 	ctx := context.Background()
 	t.Run("abandoned by timeout, then a late success", func(t *testing.T) {
-		engine, store, waiting := waitingOnMongo(t)
+		engine, store, waiting := waitingOnRedis(t)
 		// rally 的 march 步骤 MaxAttempts 2：库里的记录已是第 2 次尝试，超时即用尽 → 补偿 reserve。
 		// 领取走真实的 ClaimDue（带租约 fence），再交给 processClaimed。
 		record := waiting.Clone()
@@ -812,7 +812,7 @@ func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 		}
 	})
 	t.Run("closed with a result, then an older attempt's result", func(t *testing.T) {
-		engine, store, record := waitingOnMongo(t)
+		engine, store, record := waitingOnRedis(t)
 		if _, err := engine.Complete(ctx, Completion{CommandID: record.CommandID, IdempotencyKey: record.OperationKey, SagaID: record.ID, Success: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -830,10 +830,8 @@ func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 		}
 	})
 	t.Run("tombstone written before U-0280 has no closure", func(t *testing.T) {
-		engine, store, record := waitingOnMongo(t)
-		if err := store.client.(*mongotest.Client).Collection("saga", defaultOperationCollection).Seed(bson.M{"_id": "gift-1:1:0", "saga_id": record.ID, "created_at": record.CreatedAt}); err != nil {
-			t.Fatal(err)
-		}
+		engine, store, record := waitingOnRedis(t)
+		seedTombstone(t, store, record.ID, "gift-1:1:0", "", record.CreatedAt)
 		late := Completion{CommandID: "gift-1:1:0:1", IdempotencyKey: "gift-1:1:0", SagaID: record.ID, Success: true}
 		before := engine.Stats()
 		if _, err := engine.Complete(ctx, late); err != nil {
@@ -844,7 +842,7 @@ func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 		}
 	})
 	t.Run("a resumed life resolving an abandoned operation upgrades the tombstone", func(t *testing.T) {
-		_, store, record := waitingOnMongo(t)
+		_, store, record := waitingOnRedis(t)
 		after := record.Clone()
 		after.Version++
 		after.Status, after.NextRunAt, after.OperationKey, after.CommandID = StatusPending, record.NextRunAt, "", ""
@@ -864,15 +862,15 @@ func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 	})
 }
 
-// MongoStore：以失败 receipt 关闭的操作记为放弃关闭，只有成功 receipt 记为带结果关闭。
-func TestMongoStoreTombstoneOfAFailureCloseIsAbandoned(t *testing.T) {
+// RedisStore：以失败 receipt 关闭的操作记为放弃关闭，只有成功 receipt 记为带结果关闭。
+func TestRedisStoreTombstoneOfAFailureCloseIsAbandoned(t *testing.T) {
 	ctx := context.Background()
 	for name, receipt := range map[string]Completion{
 		"retryable failure exhausts the step": {Success: false, Retryable: true, Error: "busy"},
 		"refusal":                             {Success: false, Error: "refused"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, store, record := waitingOnMongo(t)
+			_, store, record := waitingOnRedis(t)
 			after := record.Clone()
 			after.Version++
 			after.Status, after.NextRunAt, after.OperationKey, after.CommandID = StatusCompensating, record.NextRunAt, "", ""

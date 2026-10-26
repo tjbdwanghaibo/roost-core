@@ -20,6 +20,7 @@ var testDeclared = []coredata.LogicalDatabase{{Name: "main"}, {Name: "zone", Ser
 
 func serverConfig(values map[string]any) *viper.Viper {
 	cfg := viper.New()
+	cfg.Set("saga.redis.key_prefix", "test:saga") // 必填键；本包的单测不连 Redis
 	for key, value := range values {
 		cfg.Set(key, value)
 	}

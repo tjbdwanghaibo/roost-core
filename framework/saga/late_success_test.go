@@ -276,9 +276,9 @@ func TestNativeStepLateCompensationSuccessIsOnlyAlarmed(t *testing.T) {
 	}
 }
 
-// ③ 在 MongoStore 上：同一生较早尝试的可重试失败不写记录、计 StaleAttempt；正在等的尝试的可重试失败照常接收。
-func TestMongoStoreIgnoresARetryableFailureOfAnEarlierAttempt(t *testing.T) {
-	engine, store, record := waitingOnMongo(t)
+// ③ 在 RedisStore 上：同一生较早尝试的可重试失败不写记录、计 StaleAttempt；正在等的尝试的可重试失败照常接收。
+func TestRedisStoreIgnoresARetryableFailureOfAnEarlierAttempt(t *testing.T) {
+	engine, store, record := waitingOnRedis(t)
 	ctx := context.Background()
 	current := record.Clone()
 	current.Version++
@@ -305,9 +305,9 @@ func TestMongoStoreIgnoresARetryableFailureOfAnEarlierAttempt(t *testing.T) {
 	}
 }
 
-// ④ 在 MongoStore 上：迟到的步骤与载荷随记录持久化（late_step / late_data），回执与带结果关闭在同一事务里，补偿命令带它的载荷。
-func TestMongoStoreLateStepCompensationRoundTrip(t *testing.T) {
-	engine, store, record := waitingOnMongo(t)
+// ④ 在 RedisStore 上：迟到的步骤与载荷随记录持久化（late_step / late_data），回执与带结果关闭在同一事务里，补偿命令带它的载荷。
+func TestRedisStoreLateStepCompensationRoundTrip(t *testing.T) {
+	engine, store, record := waitingOnRedis(t)
 	ctx := context.Background()
 	t0 := time.Now().UTC()
 	claimAndProcess := func(at time.Time) {

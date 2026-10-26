@@ -10,20 +10,13 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 func TestNestCompletionRejectsForeignSagaRouteBeforeMutation(t *testing.T) {
 	for _, topic := range []string{CompletionEffectTopicPrefix + "other", CompletionEffectTopicPrefix, CompletionEffectTopicPrefix + "target.extra"} {
 		t.Run(topic, func(t *testing.T) {
 			ctx := context.Background()
-			store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "completion_identity"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.EnsureInfrastructure(ctx); err != nil {
-				t.Fatal(err)
-			}
+			store := newTestRedisStore(t)
 			e, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 			if err != nil {
 				t.Fatal(err)
@@ -133,7 +126,7 @@ func (j *recordingJetStream) deliver(t *testing.T, subject string, data []byte) 
 
 // waitingSaga puts a rally saga into the state a native step answers: the
 // first step's command is out and the coordinator is waiting for its result.
-func waitingSaga(t *testing.T, store *MongoStore, id string) Record {
+func waitingSaga(t *testing.T, store *RedisStore, id string) Record {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	record := Record{
@@ -161,7 +154,7 @@ func TestAssemblyConsumesNativeNestCompletionEffects(t *testing.T) {
 		Completions: CompletionConsumerConfig{Stream: "ROOST_SAGA", Durable: "roost-saga-coordinator", SubjectPrefix: "roost.saga"},
 		Starts:      NestStartConsumerConfig{Stream: "ROOST_EFFECTS", Durable: "roost-saga-start", EffectPrefix: "roost.effect"},
 	}
-	assembly, err := Assemble(mongotest.NewClient(), jetStream, cfg, testDefinition())
+	assembly, err := assembleForTest(t, jetStream, cfg, testDefinition())
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -227,7 +220,7 @@ func TestAssemblyKeepsItsExistingConsumerSubjects(t *testing.T) {
 		Completions: CompletionConsumerConfig{Stream: "ROOST_SAGA", Durable: "roost-saga-coordinator", SubjectPrefix: "roost.saga"},
 		Starts:      NestStartConsumerConfig{Stream: "ROOST_EFFECTS", Durable: "roost-saga-start", EffectPrefix: "roost.effect"},
 	}
-	assembly, err := Assemble(mongotest.NewClient(), jetStream, cfg, testDefinition())
+	assembly, err := assembleForTest(t, jetStream, cfg, testDefinition())
 	if err != nil {
 		t.Fatal(err)
 	}

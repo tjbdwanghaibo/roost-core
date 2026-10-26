@@ -424,6 +424,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | configdata | 本地配置数据加载 | 无 |
 | etcd | 服务发现与分布式配置 | 无 |
 | redis | Redis 访问 | 无 |
+| redis_authority | 权威 Redis（saga 协调器的权威存储，redis_authority.*；单主、AOF always、noeviction，启动探针检查） | 无 |
 | mongo | MongoDB 访问 | 无 |
 | nats | NATS 消息传输 | 无 |
 | manager | 业务 Manager（内存单例逻辑）的生命周期：按 DependsOn 依赖序启动、逆序停止 | 无 |
@@ -432,7 +433,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | heartbeat | 实体心跳驱动（gameplay/heartbeat）：game/heartbeat.Driver 接到本服务的 Nest；roost add heartbeat / behavior 自动加上 | nest |
-| saga | 跨服务 Saga 编排 | dataengine、mongo、nats |
+| saga | 跨服务 Saga 编排 | dataengine、mongo、redis_authority、nats |
 | web | 业务 HTTP 路由（roost add webroute）的监听：Start 时 bind、服务 Init 里 kitweb.RegisterRoutes 登记、不做鉴权 | 无 |
 
 ## 7. features

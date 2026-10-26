@@ -5,14 +5,15 @@ package saga
 // N06 S5 review（2026-10-06）在真实依赖上的两组用例：
 //
 //  1. TestRealMongoCoordinatorLeaseTakeover：协调器 A 租约过期、B 接管、A 晚到 Apply 的三种顺序，跑完整的
-//     MongoStore.ClaimDue（单测在 mongotest 上跑同一组用例，RR-20261006-08 之后同样走完整的 ClaimDue）。
-//  2. TestRealSagaCrossProcessKillRecovers：真实 NATS JetStream + Mongo 副本集上起两个协调器 + Mongo 步骤
+//     RedisStore.ClaimDue，冷副本在真实 Mongo 上（单测在 mongotest 冷副本上跑同一组用例）。
+//  2. TestRealSagaCrossProcessKillRecovers：真实 NATS JetStream + Mongo 副本集 + 权威 Redis 上起两个协调器 + Mongo 步骤
 //     进程（同一组 durable），跑一批两步 saga，中途 SIGKILL 其中一个，只留另一个；核对恢复后所有 saga 完成、
 //     每个操作的业务写恰好一份、每个 CommandID 的业务事务至多提交一次、outbox 排空、没有残留租约。
 //     saga 方向 ②（2026-10-06）之后再断言：每个操作实例的业务事务恰好提交一次（相邻两次尝试不再都提交；
 //     N06 S5 的第 2、3 次实跑各有 1 个操作被两次尝试提交，当时靠业务按 IdempotencyKey 幂等兜住）。
 //
-// 资源：库 roost_revn06s5_<pid>_<ns>、流 REVN06S5_<pid>_<ns>、subject 前缀 revn06s5x<pid>x<ns>，用后删除。
+// 资源：库 roost_revn06s5_<pid>_<ns>、流 REVN06S5_<pid>_<ns>、subject 前缀 revn06s5x<pid>x<ns>、权威 Redis 键前缀
+// revn06s5:<ns>（ROOST_SAGA_IT_REDIS_ADDR 指的实例，没设时起私有 redis-server），用后删除。
 // 运行：source ~/.roost-it/roost-dataengine-it/env.sh 后
 //   GOWORK=off go test -tags integration -count=1 -run '^TestRealMongoCoordinatorLeaseTakeover$|^TestRealSagaCrossProcessKillRecovers$' ./framework/saga/
 
@@ -37,6 +38,9 @@ import (
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -65,8 +69,31 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 }
 
 func TestRealMongoCoordinatorLeaseTakeover(t *testing.T) {
-	client, database := realRevn06s5Mongo(t)
-	runCoordinatorTakeoverCases(t, func(*testing.T) fmongo.IMongo { return client }, database)
+	client, _ := realRevn06s5Mongo(t)
+	addr := redistest.AOFAddr(t)
+	runCoordinatorTakeoverCases(t, func(t *testing.T) *RedisStore {
+		env := newRedisTestEnvAt(t, addr, redistest.Prefix(t, addr, "revn06s5takeover"), client)
+		// 每个子用例一个库：元数据守卫把一个库绑到一个权威前缀上。
+		env.db = fmt.Sprintf("%s_%d", perfResourcePrefix(t, "ROOST_PERF_DB_PREFIX", "roost_sagaperf_", "roost_revn06s5"), time.Now().UnixNano())
+		t.Cleanup(func() { _ = client.Database(env.db).Drop(context.Background()) })
+		return env.open(t)
+	})
+}
+
+// realRedisAuthority 返回权威 Redis 地址与本用例的唯一键前缀（用后删除）。
+func realRedisAuthority(t *testing.T, name string) (string, string) {
+	t.Helper()
+	addr := redistest.AOFAddr(t)
+	return addr, redistest.Prefix(t, addr, name)
+}
+
+func crossProcessRedis(t *testing.T, addr string) *redisdriver.Client {
+	t.Helper()
+	cfg := fredis.DefaultConfig(addr)
+	cfg.PoolSize = 32
+	client := redisdriver.NewRedisClient(cfg)
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
 // crossProcessDefinition 是两步 saga，两步都是 Mongo 步骤。超时短，让被杀进程手里的尝试很快由协调器重发。
@@ -80,7 +107,7 @@ func crossProcessDefinition(prefix string) Definition {
 	return Definition{Type: "revn06s5", Version: 1, Steps: []Step{step("reserve"), step("ship")}}
 }
 
-func crossProcessAssembly(database, stream, prefix, owner string) AssemblyConfig {
+func crossProcessAssembly(database, redisPrefix, stream, prefix, owner string) AssemblyConfig {
 	options := DefaultOptions()
 	options.Owner = owner
 	options.LeaseDuration = 3 * time.Second
@@ -95,6 +122,7 @@ func crossProcessAssembly(database, stream, prefix, owner string) AssemblyConfig
 	resultDurable, ackWait, process, nakMin, nakMax := consumer("revn06s5-result")
 	return AssemblyConfig{
 		Store:       MongoStoreOptions{Database: database, CompletionReceiptTTL: time.Hour},
+		Redis:       RedisStoreOptions{KeyPrefix: redisPrefix},
 		Engine:      options,
 		Prefix:      prefix,
 		Stream:      fnats.JetStreamConfig{Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile, MaxAge: 30 * time.Minute, Duplicates: 2 * time.Minute, Replicas: 1, MaxBytes: 64 << 20},
@@ -111,6 +139,7 @@ func TestRealSagaCrossProcessChild(t *testing.T) {
 		t.Skip("child process of TestRealSagaCrossProcessKillRecovers")
 	}
 	database, stream, prefix, owner := os.Getenv("REVN06S5_DB"), os.Getenv("REVN06S5_STREAM"), os.Getenv("REVN06S5_PREFIX"), os.Getenv("REVN06S5_OWNER")
+	authority := crossProcessRedis(t, os.Getenv("REVN06S5_REDIS"))
 	mongoClient, err := driver.NewClient(fmongo.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")), driver.IndexMigrationPolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +153,7 @@ func TestRealSagaCrossProcessChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := crossProcessDefinition(prefix)
-	asm, err := Assemble(mongoClient, jetStream, crossProcessAssembly(database, stream, prefix, owner), definition)
+	asm, err := Assemble(mongoClient, authority, jetStream, crossProcessAssembly(database, os.Getenv("REVN06S5_REDIS_PREFIX"), stream, prefix, owner), definition)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,15 +288,23 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 	if logDir == "" {
 		logDir = t.TempDir()
 	}
-	env := []string{"REVN06S5_DB=" + database, "REVN06S5_STREAM=" + stream, "REVN06S5_PREFIX=" + prefix}
+	redisAddr, redisPrefix := realRedisAuthority(t, "revn06s5")
+	env := []string{"REVN06S5_DB=" + database, "REVN06S5_STREAM=" + stream, "REVN06S5_PREFIX=" + prefix, "REVN06S5_REDIS=" + redisAddr, "REVN06S5_REDIS_PREFIX=" + redisPrefix}
 
 	a := startCrossProcessChild(t, env, "coordinator-a", logDir)
 	b := startCrossProcessChild(t, env, "coordinator-b", logDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	store, err := NewMongoStore(client, MongoStoreOptions{Database: database, CompletionReceiptTTL: time.Hour})
+	copy, err := NewMongoStore(client, MongoStoreOptions{Database: database, CompletionReceiptTTL: time.Hour})
 	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewRedisStore(crossProcessRedis(t, redisAddr), copy, nil, RedisStoreOptions{KeyPrefix: redisPrefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
 	starter, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
@@ -283,23 +320,29 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sagasColl := client.Database(database).Collection(defaultSagaCollection)
-	count := func(filter bson.M) int64 {
-		n, err := sagasColl.CountDocuments(ctx, filter)
+	// 记录在权威 Redis 上：按状态列出（运维接口 List），计数与租约都从那里读。
+	list := func(statuses ...Status) []Record {
+		records, err := store.List(ctx, Query{Statuses: statuses, Limit: 1000})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return n
+		return records
 	}
+	completed := func() int { return len(list(StatusCompleted)) }
 	// 等一部分 saga 完成、其余在途时强杀 A：A 手里有协调器租约、outbox 租约、未 ack 的步骤 / 结果消息和在途的步骤事务。
-	for count(bson.M{"status": StatusCompleted}) < sagas/4 {
+	for completed() < sagas/4 {
 		if ctx.Err() != nil {
 			t.Fatalf("no progress before the kill; logs in %s", logDir)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	completedAtKill := count(bson.M{"status": StatusCompleted})
-	heldByA := count(bson.M{"lease_owner": a.owner, "lease_until": bson.M{"$gt": time.Now().UTC()}})
+	completedAtKill := completed()
+	heldByA := 0
+	for _, record := range list(StatusPending, StatusWaiting, StatusCompensating) {
+		if record.Lease.Owner == a.owner && record.Lease.Until.After(time.Now()) {
+			heldByA++
+		}
+	}
 	if err := a.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -307,20 +350,18 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 	killedAt := time.Now()
 	t.Logf("SIGKILL coordinator-a with %d/%d sagas completed, %d saga leases held by it", completedAtKill, sagas, heldByA)
 
-	for count(bson.M{"status": StatusCompleted}) < sagas {
+	for completed() < sagas {
 		if ctx.Err() != nil {
-			var stuck []recordDoc
-			_ = sagasColl.Find(context.Background(), bson.M{"status": bson.M{"$ne": StatusCompleted}}, &stuck)
-			t.Fatalf("only %d/%d sagas completed after the kill; first stuck: %+v; logs in %s", count(bson.M{"status": StatusCompleted}), sagas, firstOf(stuck), logDir)
+			t.Fatalf("only %d/%d sagas completed after the kill; first stuck: %+v; logs in %s", completed(), sagas, firstOf(list(StatusPending, StatusWaiting, StatusCompensating, StatusFailed, StatusManualRequired, StatusCompensated)), logDir)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	recovered := time.Since(killedAt)
 
-	// outbox：完成时 CloseOperation 删掉同一操作残留的命令；被杀进程领取后未 ack 的条目也在其中。
-	outbox := client.Database(database).Collection(defaultOutboxCollection)
+	// outbox：完成时关闭操作删掉同一操作残留的命令；被杀进程领取后未 ack 的条目也在其中。
+	raw := store.redis.(*redisdriver.Client).Raw()
 	for {
-		n, err := outbox.CountDocuments(ctx, bson.M{})
+		n, err := raw.ZCard(ctx, store.keys.outbox()).Result()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -332,11 +373,13 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if n := count(bson.M{"completed_steps": bson.M{"$ne": 2}}); n != 0 {
-		t.Errorf("%d completed sagas do not have both steps recorded", n)
-	}
-	if n := count(bson.M{"lease_owner": bson.M{"$exists": true, "$ne": ""}}); n != 0 {
-		t.Errorf("%d sagas still carry a coordinator lease after completing", n)
+	for _, record := range list(StatusCompleted) {
+		if record.CompletedSteps != 2 {
+			t.Errorf("completed saga %s has %d steps recorded, want 2", record.ID, record.CompletedSteps)
+		}
+		if record.Lease.Owner != "" {
+			t.Errorf("saga %s still carries a coordinator lease after completing", record.ID)
+		}
 	}
 	type counted struct {
 		ID      string `bson:"_id"`
@@ -377,12 +420,8 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 			byB++
 		}
 	}
-	receipts, err := client.Database(database).Collection(defaultCompletionCollection).CountDocuments(ctx, bson.M{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("recovered in %v: %d sagas completed, %d operations, %d committed step executions (%d by coordinator-b), %d operations committed by more than one attempt (want 0), %d coordinator receipts",
-		recovered.Round(time.Millisecond), sagas, len(effects), len(executions), byB, rerunOps, receipts)
+	t.Logf("recovered in %v: %d sagas completed, %d operations, %d committed step executions (%d by coordinator-b), %d operations committed by more than one attempt (want 0)",
+		recovered.Round(time.Millisecond), sagas, len(effects), len(executions), byB, rerunOps)
 	if err := b.cmd.Process.Signal(syscall.SIGTERM); err == nil {
 		done := make(chan struct{})
 		go func() { _ = b.cmd.Wait(); close(done) }()
@@ -394,7 +433,7 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 	}
 }
 
-func firstOf(records []recordDoc) any {
+func firstOf(records []Record) any {
 	if len(records) == 0 {
 		return nil
 	}

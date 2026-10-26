@@ -474,7 +474,6 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	warmup := min(10*time.Second, duration/6)
 	serverByMinute := make([][]time.Duration, len(byMinute))
 	statuses := make(map[string]coresaga.Status, total)
-	sagas := env.mongo.Database(env.sagaDatabase).Collection("_sagas")
 	projector := env.dataMod.Runtime().Projector
 	for {
 		mu.Lock()
@@ -484,15 +483,16 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		}
 		mu.Unlock()
 		if len(ids) > 0 {
-			var found []struct {
-				ID        string          `bson:"_id"`
-				Status    coresaga.Status `bson:"status"`
-				CreatedAt time.Time       `bson:"created_at"`
-				UpdatedAt time.Time       `bson:"updated_at"`
-			}
-			harnessMongo.Add(1)
-			if err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}, "status": bson.M{"$in": []coresaga.Status{coresaga.StatusCompleted, coresaga.StatusCompensated, coresaga.StatusFailed, coresaga.StatusManualRequired}}}, &found); err != nil {
-				t.Fatal(err)
+			// 终态在权威 Redis 上（Mongo 冷副本要等投影）：逐笔读驻留记录，只读，不经脚本。
+			var found []coresaga.Record
+			for _, id := range ids {
+				record, err := env.sagaMod.Engine().Get(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if record.Status.Terminal() {
+					found = append(found, record)
+				}
 			}
 			observed := time.Now()
 			mu.Lock()
@@ -505,7 +505,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 				serverDone := doc.UpdatedAt.Sub(doc.CreatedAt)
 				server = append(server, serverDone)
 				serverByMinute[minute] = append(serverByMinute[minute], serverDone)
-				// 稳态计数按协调器写终态的时刻（Mongo 毫秒精度，与本机墙钟同源时只差时钟偏移，云库上取 Mongo 服务端时钟）；
+				// 稳态计数按协调器写终态的时刻（记录的毫秒时间戳，协调器本机时钟）；
 				// 用 created_at 对齐到本次 begin，避免依赖两台机器的绝对时钟一致。
 				if doc.Status == terminal {
 					if offset := doc.UpdatedAt.Sub(doc.CreatedAt) + s.called.Sub(begin); offset >= warmup && offset < duration {

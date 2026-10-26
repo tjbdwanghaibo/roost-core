@@ -144,6 +144,12 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交，不含等待投影） |
 | `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
 | `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
+| `saga.redis.script_total{script,result}` | Counter | 权威 Redis 上每个脚本的调用与结果码（`APPLIED`、`CONFLICT`、`DUPLICATE`、`NEED_RELOAD` 等；`unknown` = 结果未知，`oom` = 内存满被拒）。压测按它与 `INFO commandstats` 算每笔脚本数 |
+| `saga.redis.script_seconds{script}` | Histogram | 脚本连同同连接 WAITAOF 的往返耗时 |
+| `saga.redis.waitaof_unconfirmed_total{script}` | Counter | 写已执行、WAITAOF 没确认落盘（local=0 或服务端拒绝）：**非零即部署违约**（AOF 被关、`appendfsync` 被改），进程随之 fail-stop |
+| `saga.redis.script_partial_total{script}` | Counter | 脚本在校验之后的写里出错（可能只写了一部分）：**非零要人核对**，进程 fail-stop |
+| `saga.redis.cold_read_total{op}` | Counter | Redis 里没有、回查 Mongo 冷副本的读（`get`、`business_key`、`history`、`alarm`） |
+| `saga.redis.backpressure_total` | Counter | 投影积压超过 `saga.redis.max_projection_backlog`，新 saga 被拒（可重试）；持续增长说明 Store Service 跟不上或停了 |
 
 ### 技能运行时（core/skill）
 
@@ -461,6 +467,12 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.completion.stale_attempt_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.completion.stale_incarnation_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
+| `saga.redis.backpressure_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.cold_read_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.script_partial_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.script_seconds` | Histogram | `saga/redis_store.go:ObserveHistogram` |
+| `saga.redis.script_total` | Counter | `saga/redis_store.go:IncCounter` |
+| `saga.redis.waitaof_unconfirmed_total` | Counter | `saga/redis_store.go:IncCounter` |
 | `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
@@ -559,6 +571,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（日志 `self view:` / `entitysync`）。`player_sync_session_lost_disconnect_total{reason}` 持续增长 —— 同步会话因编码失败被丢、玩家被断开后重连又被断开（反复重连），按 Warn 里的 `player_id` / `reason` 查视野上限（`MaxVisible`）与实体大小。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
+13. `saga.redis.waitaof_unconfirmed_total` 或 `saga.redis.script_partial_total` 非零 —— 立即告警：前者是权威 Redis 的部署违反持久契约（AOF 关闭、`appendfsync` 不是 always），后者是脚本校验之后写失败；两者都会让协调器 fail-stop，按 ERROR 日志点名的脚本与键核对。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

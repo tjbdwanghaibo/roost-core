@@ -11,19 +11,13 @@ import (
 	"time"
 )
 
-// RR-20261006-42 在真实 Mongo 副本集上：退避中送达的成功与协调器派发下一次尝试并发。不论谁先写，这一步都恰好计入一次
+// RR-20261006-42 在真实权威 Redis（冷副本在真实 Mongo 副本集）上：退避中送达的成功与协调器派发下一次尝试并发。不论谁先写，这一步都恰好计入一次
 // （成功先到：接收、带结果关闭操作、派发冲突；派发先到：在等下一次尝试时按规则 3 接收较早那次的成功），回执经服务端往返。
 func TestRealMongoSuccessDuringBackoffRacesTheNextDispatch(t *testing.T) {
 	client, database := realMongoU0280(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	store, err := NewMongoStore(client, MongoStoreOptions{Database: database})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := realRedisStore(t, client, database)
 	engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -78,43 +72,30 @@ func TestRealMongoSuccessDuringBackoffRacesTheNextDispatch(t *testing.T) {
 	}
 }
 
-// RR-20261006-45 在真实 Mongo 上：ClaimDue / List 跳过一条校验不过的记录，同批其他记录照常返回，坏记录不被改写。
-func TestRealMongoClaimDueAndListSkipACorruptRecord(t *testing.T) {
+// RR-20261006-45 在真实 Mongo 冷副本上：List 并上冷副本时跳过一条校验不过的文档，其他记录照常返回，坏文档不被改写。
+func TestRealMongoColdCopyListSkipsACorruptRecord(t *testing.T) {
 	client, database := realMongoU0280(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	store, err := NewMongoStore(client, MongoStoreOptions{Database: database})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := realRedisStore(t, client, database)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	record := func(id string, offset time.Duration) Record {
-		return Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "key-" + id, Status: StatusPending, Phase: PhaseForward, Version: 1,
-			NextRunAt: now.Add(offset), CreatedAt: now, UpdatedAt: now.Add(offset)}
+	record := func(id string) recordDoc {
+		return toRecordDoc(Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "key-" + id, Status: StatusCompleted, Phase: PhaseForward, Version: 3,
+			CompletedSteps: 2, CreatedAt: now, UpdatedAt: now})
 	}
-	for _, r := range []Record{record("good-a", -2*time.Second), record("good-c", -time.Second)} {
-		if err := store.Create(ctx, r); err != nil {
+	corrupt := record("corrupt-b")
+	corrupt.BusinessKey = ""
+	for _, doc := range []recordDoc{record("good-a"), corrupt, record("good-c")} {
+		if _, err := store.copy.sagas().InsertOne(ctx, doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	corrupt := toRecordDoc(record("corrupt-b", -3*time.Second))
-	corrupt.BusinessKey = ""
-	if _, err := store.sagas().InsertOne(ctx, corrupt); err != nil {
-		t.Fatal(err)
-	}
-	claimed, err := store.ClaimDue(ctx, ClaimRequest{Owner: "coordinator", Now: now, LeaseDuration: 15 * time.Second, Limit: 10})
-	if err != nil || len(claimed) != 2 {
-		t.Fatalf("ClaimDue = %d records, %v; want the two good records and no error", len(claimed), err)
-	}
-	listed, err := store.List(ctx, Query{Limit: 100})
+	listed, err := store.List(ctx, Query{Statuses: []Status{StatusCompleted}, Limit: 100})
 	if err != nil || len(listed) != 2 {
 		t.Fatalf("List = %d records, %v; want the two good records and no error", len(listed), err)
 	}
 	var raw recordDoc
-	if err := store.sagas().FindOne(ctx, map[string]any{"_id": "corrupt-b"}, &raw); err != nil || raw.BusinessKey != "" || raw.Status != StatusPending {
+	if err := store.copy.sagas().FindOne(ctx, map[string]any{"_id": "corrupt-b"}, &raw); err != nil || raw.BusinessKey != "" || raw.Status != StatusCompleted {
 		t.Fatalf("the corrupt record was changed: %+v err=%v", raw, err)
 	}
 }

@@ -18,6 +18,9 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -69,9 +72,13 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 		return dir
 	}
 	walA, walB := emptyWAL(), emptyWAL()
+	redisAddr := redistest.AOFAddr(t)
+	sagaPrefix := redistest.Prefix(t, redisAddr, "sidmergesaga")
 	config := func(main, zone, control string) *viper.Viper {
 		cfg := viper.New()
 		cfg.Set("mongo.uri", uri)
+		cfg.Set("redis_authority.addr", redisAddr)
+		cfg.Set("saga.redis.key_prefix", sagaPrefix)
 		cfg.Set("dataengine.databases", map[string]any{"main": main, "zone": zone})
 		cfg.Set("dataengine.database", control)
 		cfg.Set("saga.database", names.saga)
@@ -135,14 +142,26 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	if _, err := client.Database(names.controlA).Collection(engine.OutboxCollection).DeleteMany(ctx, bson.D{}); err != nil {
 		t.Fatal(err)
 	}
-	// 3. 非终态 saga：拒绝。
+	// 3. 非终态 saga：拒绝；全部终态但权威 Redis 上还有没投影进冷副本的日志：同样拒绝。
 	sagaClient, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = sagaClient.Close(context.Background()) }()
-	sagas, err := coresaga.NewMongoStore(sagaClient, coresaga.MongoStoreOptions{Database: names.saga})
+	copy, err := coresaga.NewMongoStore(sagaClient, coresaga.MongoStoreOptions{Database: names.saga})
 	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := redisdriver.NewClient(fredis.DefaultConfig(redisAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = authority.Close() }()
+	sagas, err := coresaga.NewRedisStore(authority, copy, nil, coresaga.RedisStoreOptions{KeyPrefix: sagaPrefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sagas.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -153,9 +172,21 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	}
 	report, err = DryRun(ctx, plan(names.main, names.controlB))
 	expectFail(report, err, "saga:"+names.saga)
-	if _, err := client.Database(names.saga).Collection("_sagas").DeleteMany(ctx, bson.D{}); err != nil {
+	clearSagas := func() {
+		t.Helper()
+		if _, err := redistest.DeleteKeys(ctx, redisAddr, sagaPrefix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clearSagas()
+	done := coresaga.Record{ID: "gift2", Type: "gift_item", DefinitionVersion: 1, BusinessKey: "gift-2", Status: coresaga.StatusCompleted,
+		Phase: coresaga.PhaseForward, CompletedSteps: 1, Version: 3, CreatedAt: now, UpdatedAt: now}
+	if err := sagas.Create(ctx, done); err != nil {
 		t.Fatal(err)
 	}
+	report, err = DryRun(ctx, plan(names.main, names.controlB))
+	expectFail(report, err, "saga:"+names.saga)
+	clearSagas()
 	// 4. 同一常量 ID、内容不同：整体停止，迁移什么也不写。
 	merge := plan(names.main, names.controlB)
 	_, _, err = Migrate(ctx, merge)

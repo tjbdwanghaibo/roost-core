@@ -7,14 +7,21 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：存储与引擎选项、线上前缀与流、两个持久消费者（步骤执行方的
-// 结果、Nest effect 的启动）。由 wiring 的 Mod 填写。
+// AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：权威 Redis 与 Mongo 冷副本的选项、引擎选项、线上前缀与流、
+// 持久消费者（步骤执行方的结果、Nest effect 的启动与原生步骤结果）。由 wiring 的 Mod 填写。
 type AssemblyConfig struct {
-	Store       MongoStoreOptions
+	// Store 是 Mongo 冷副本的库与集合。
+	Store MongoStoreOptions
+	// Redis 是权威 Redis 上的键前缀、分区与持久参数。
+	Redis RedisStoreOptions
+	// Failure 收 fail-stop：写已执行但 WAITAOF 没确认、脚本校验之后失败时报告给它（App 的 RuntimeFailure）。
+	Failure     *app.RuntimeFailure
 	Engine      Options
 	Prefix      string
 	Stream      fnats.JetStreamConfig
@@ -49,6 +56,9 @@ func (c AssemblyConfig) nestResultsConfig() NestCompletionConsumerConfig {
 	if config.MaxAckPending == 0 {
 		config.MaxAckPending = c.Starts.MaxAckPending
 	}
+	if config.Workers == 0 {
+		config.Workers = c.Starts.Workers
+	}
 	if config.NakBackoffMin == 0 {
 		config.NakBackoffMin = c.Starts.NakBackoffMin
 	}
@@ -71,7 +81,9 @@ func defaultNestResultDurable(startDurable string) string {
 // 普通完成、启动意图、原生 Nest 完成三个持久消费者，并启动协调循环。
 // Stop 先排空消费者再停止循环；Kit 仅解析配置、发布能力和转发生命周期。
 type Assembly struct {
-	Store     *MongoStore
+	// Store 是协调器的权威存储（Redis）；Copy 是它的 Mongo 冷副本。
+	Store     *RedisStore
+	Copy      *MongoStore
 	Transport *JetStreamPublisher
 	Engine    *Engine
 
@@ -89,15 +101,23 @@ type Assembly struct {
 	running     atomic.Bool
 }
 
-// Assemble 构建存储、传输与引擎并登记定义，此时还不访问 Mongo 与 JetStream。
-func Assemble(mongo fmongo.IMongo, jetStream fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
+// Assemble 构建存储、传输与引擎并登记定义，此时还不访问 Redis、Mongo 与 JetStream。authority 是权威 Redis（单主，
+// redis/driver.Client）。
+func Assemble(mongo fmongo.IMongo, authority fredis.IRedis, jetStream fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
 	if mongo == nil {
 		return nil, errors.New("saga: mongo client is required")
+	}
+	if authority == nil {
+		return nil, errors.New("saga: authority redis client is required")
 	}
 	if jetStream == nil {
 		return nil, errors.New("saga: jetstream client is required")
 	}
-	store, err := NewMongoStore(mongo, cfg.Store)
+	copy, err := NewMongoStore(mongo, cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	store, err := NewRedisStore(authority, copy, cfg.Failure, cfg.Redis)
 	if err != nil {
 		return nil, err
 	}
@@ -114,10 +134,10 @@ func Assemble(mongo fmongo.IMongo, jetStream fnats.IJetStream, cfg AssemblyConfi
 			return nil, fmt.Errorf("saga: register definition: %w", err)
 		}
 	}
-	return &Assembly{Store: store, Transport: transport, Engine: engine, cfg: cfg}, nil
+	return &Assembly{Store: store, Copy: copy, Transport: transport, Engine: engine, cfg: cfg}, nil
 }
 
-// Start 确保 Mongo 基础设施与流存在，订阅结果与 Nest 启动消费者，在后台运行引擎循环。ctx 只约束基础设施调用；循环
+// Start 先过权威 Redis 的启动关口（RedisStore.EnsureInfrastructure：拓扑、持久配置、探针写、元数据守卫）并确保冷副本索引与流存在，订阅结果与 Nest 启动消费者，在后台运行引擎循环。ctx 只约束基础设施调用；循环
 // 运行到 Stop。运行中再次 Start 无效果。
 func (a *Assembly) Start(ctx context.Context) error {
 	if a == nil || a.Engine == nil || a.Store == nil || a.Transport == nil {

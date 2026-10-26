@@ -9,8 +9,6 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // 协调器接收 completion 时核对代际（Resume 开启新一生）：成功在任何一生里都不重做，拒绝只在本生回放。
@@ -240,12 +238,12 @@ func (w *nativeWorld) deliverCommandErr(inbox *DataEngineStepInbox, command Comm
 	return client.handler(ctx, &fnats.JetStreamMsg{Data: raw})
 }
 
-// B1 在 MongoStore 上：放弃后迟到的成功按（操作，代际）只告警一次；标记写在 tombstone 的 late_alarms 上，
+// B1 在 RedisStore 上：放弃后迟到的成功按（操作，代际）只告警一次；标记写在 tombstone 的 late_alarms 上，
 // 旧 tombstone 没有这个字段时第一次照常告警；没有 tombstone 不标记。
-func TestMongoStoreMarksALateSuccessAlarmOncePerLife(t *testing.T) {
+func TestRedisStoreMarksALateSuccessAlarmOncePerLife(t *testing.T) {
 	ctx := context.Background()
 	t.Run("engine alarms the first delivery and counts the rest as duplicates", func(t *testing.T) {
-		engine, _, record := waitingOnMongo(t)
+		engine, _, record := waitingOnRedis(t)
 		due := record.Clone()
 		due.Attempt = 2 // march 的 MaxAttempts 2：超时即用尽，放弃关闭
 		if err := engine.processClaimed(ctx, due, record.NextRunAt.Add(time.Second)); err != nil {
@@ -262,16 +260,14 @@ func TestMongoStoreMarksALateSuccessAlarmOncePerLife(t *testing.T) {
 			t.Fatalf("three deliveries of one late success: stats %+v -> %+v, want one alarm and two duplicates", before, after)
 		}
 	})
-	t.Run("store marks each life once, legacy tombstones included", func(t *testing.T) {
-		_, store, record := waitingOnMongo(t)
+	t.Run("store marks each life once", func(t *testing.T) {
+		_, store, record := waitingOnRedis(t)
 		late := Completion{CommandID: record.CommandID, IdempotencyKey: record.OperationKey, SagaID: record.ID, Success: true}
 		if first, err := store.MarkLateSuccessAlarm(ctx, late, 0); err != nil || first {
 			t.Fatalf("mark without a tombstone = %t, %v; want false", first, err)
 		}
-		// 旧形状的 tombstone：没有 closure、没有 late_alarms。
-		if err := store.client.(*mongotest.Client).Collection("saga", defaultOperationCollection).Seed(bson.M{"_id": record.OperationKey, "saga_id": record.ID, "closure": operationClosureAbandoned, "created_at": record.CreatedAt}); err != nil {
-			t.Fatal(err)
-		}
+		// 已放弃关闭的操作，还没有任何告警标记。
+		seedTombstone(t, store, record.ID, record.OperationKey, operationClosureAbandoned, record.CreatedAt)
 		for _, step := range []struct {
 			incarnation uint32
 			want        bool
@@ -286,8 +282,8 @@ func TestMongoStoreMarksALateSuccessAlarmOncePerLife(t *testing.T) {
 			t.Fatalf("mark through another saga's id = %t, %v; want false", first, err)
 		}
 	})
-	t.Run("a stale result is ignored and counted on MongoStore", func(t *testing.T) {
-		engine, store, record := waitingOnMongo(t)
+	t.Run("a stale result is ignored and counted on RedisStore", func(t *testing.T) {
+		engine, store, record := waitingOnRedis(t)
 		resumed := record.Clone()
 		resumed.Version++
 		resumed.Incarnation = 1

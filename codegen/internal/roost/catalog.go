@@ -82,6 +82,12 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/redis", Alias: "kitredis", Constructor: "kitredis.NewRedisMod()",
 		DevService: "redis",
 	},
+	// redis_authority 是权威 Redis（saga 协调器的权威存储，配置 redis_authority.*）：单主、AOF always、noeviction，
+	// 启动探针强制。开发环境与 redis 共用 compose 里的同一个实例（renderCompose 把它起成 always + noeviction）。
+	"redis_authority": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/redis", Alias: "kitredis", Constructor: "kitredis.NewAuthorityMod()",
+		DevService: "redis",
+	},
 	"mongo": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
 		DevService: "mongo",
@@ -111,7 +117,7 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat", Alias: "kitheartbeat", Depends: []string{"nest"},
 	},
 	"saga": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "redis_authority", "nats"},
 	},
 	// web 监听 roost add webroute 生成的业务 HTTP 路由；服务在 Init 里 kitweb.RegisterRoutes(registry, &web.Service{})。
 	"web": {

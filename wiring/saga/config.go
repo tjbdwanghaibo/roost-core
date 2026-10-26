@@ -45,10 +45,18 @@ type config struct {
 		Owner       string                                 `config:"owner" help:"协调器租约的持有者名，不写取 saga-<sid>-<随机 id>"`
 		Collections struct {
 			Sagas       string `config:"sagas"`
-			Outbox      string `config:"outbox"`
 			Completions string `config:"completions"`
 			Operations  string `config:"operations"`
-		} `config:"collections" help:"Mongo 集合名，不写取 core 的缺省"`
+		} `config:"collections" help:"Mongo 冷副本的集合名，不写取 core 的缺省"`
+		// Redis 是协调器的权威存储（权威 Redis 由 redis_authority.* 连接）。key_prefix 与 Store Service 共用一份声明。
+		Redis struct {
+			KeyPrefix            string        `config:"key_prefix" shared:"saga.redis.key_prefix" required:"true" example:"roost:{project}:saga" help:"权威 Redis 上全部 saga 键的前缀；同一个 Redis 上的不同部署必须不同，不能含 hash tag"`
+			Partitions           int           `config:"partitions" default:"16" min:"1" max:"1024" example:"16" help:"投影分区数：Store Service 按分区并行投影；改值要等全部分区日志投影完"`
+			WaitAOFTimeout       time.Duration `config:"waitaof_timeout" default:"1s" min:"1ms" example:"1s"`
+			TerminalRetention    time.Duration `config:"terminal_retention" default:"15m" min:"0" example:"15m" help:"终态记录投影后在 Redis 里再驻留多久"`
+			BusinessKeyGuard     time.Duration `config:"business_key_guard" default:"10m" min:"1ns" example:"10m" help:"记录驱逐后业务键守卫的保留期，必须不小于 10 × saga.store_timeout"`
+			MaxProjectionBacklog int64         `config:"max_projection_backlog" default:"20000" min:"1" example:"20000" help:"每个分区未投影日志的上限，超过时新 saga 返回可重试的积压错误"`
+		} `config:"redis"`
 		SubjectPrefix         string         `config:"subject_prefix" shared:"saga.subject_prefix" default:"roost.saga" example:"{project}.saga"`
 		Stream                string         `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA"`
 		CoordinatorWorkers    int            `config:"coordinator_workers" default:"4" min:"1" example:"4"`
@@ -68,6 +76,7 @@ type config struct {
 		Replicas              int            `config:"replicas" default:"1" min:"1" example:"1"`
 		ResultDurable         string         `config:"result_durable" default:"roost-saga-coordinator"`
 		Result                consumerConfig `config:"result_"`
+		ResultWorkers         int            `config:"result_workers" default:"8" min:"1" example:"8" help:"saga 结果流消费者的并发处理数，不能超过 result_max_ack_pending"`
 		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，
 		// 效果流只在一处配置（生成配置不再写这两个键）。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects
 		// 相同（CheckConfigAcrossMods）；只跑协调器、没有 DataEngine 的进程可以用它们指向别的流。
@@ -75,20 +84,39 @@ type config struct {
 		StartEffectPrefix   string         `config:"start_effect_prefix" shared:"dataengine.effects.subject_prefix" follows:"dataengine.effects.subject_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
 		StartEffectDurable  string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
 		StartEffect         consumerConfig `config:"start_effect_"`
+		StartEffectWorkers  int            `config:"start_effect_workers" default:"4" min:"1" example:"4" help:"Nest 启动意图消费者的并发处理数，不能超过 start_effect_max_ack_pending"`
 		ResultEffectStream  string         `config:"result_effect_stream" help:"不写取 start_effect_stream"`
 		ResultEffectPrefix  string         `config:"result_effect_prefix" help:"不写取 start_effect_prefix"`
 		ResultEffectDurable string         `config:"result_effect_durable" example:"roost-saga-start-result" help:"不写由 core 推出"`
 		ResultEffect        consumerConfig `config:"result_effect_"`
+		ResultEffectWorkers int            `config:"result_effect_workers" default:"8" min:"1" example:"8" help:"原生步骤结果消费者的并发处理数，不能超过 result_effect_max_ack_pending"`
 	} `config:"saga"`
 }
 
-// ValidateConfig 是 saga.* 的跨键规则：配置里写的步骤超时必须短于步骤消费者的 AckWait。
+// ValidateConfig 是 saga.* 的跨键规则：业务键守卫至少 10 个存储超时；三类消费者的并发不超过各自的 max_ack_pending；
+// 配置里写的步骤超时必须短于步骤消费者的 AckWait。
 // 一次尝试的处理以命令截止（派发时刻 + 步骤 Timeout）为界，步骤消费者在 AckWait 之内 ack；Timeout 不短于 AckWait 时
 // JetStream 会在 handler 还在跑时把同一条命令重投给另一个消费者。步骤消费者的 AckWait 不是配置：生成的与 demo 的步骤消费者
 // 都取 coresaga.DefaultStepAckWait，这里与它比较（不另声明一个没人读的 ack_wait 键）。
 // 定义里写死的 Timeout 不在配置里，由 Init 在解析步骤预算之后用 checkStepTimeouts 查。
 func (c *config) ValidateConfig(bool) error {
 	var errs []error
+	// 业务键守卫要覆盖 Create 的“读 Mongo → 脚本”间隔（脚本要求不超过守卫的一半）与时钟偏差：至少 10 个存储超时。
+	if c.Saga.Redis.BusinessKeyGuard < 10*c.Saga.StoreTimeout {
+		errs = append(errs, fmt.Errorf("saga.redis.business_key_guard (%s) must be at least 10 × saga.store_timeout (%s)", c.Saga.Redis.BusinessKeyGuard, c.Saga.StoreTimeout))
+	}
+	for _, w := range []struct {
+		key             string
+		workers, maxAck int
+	}{
+		{"saga.result_workers", c.Saga.ResultWorkers, c.Saga.Result.MaxAckPending},
+		{"saga.result_effect_workers", c.Saga.ResultEffectWorkers, c.Saga.ResultEffect.MaxAckPending},
+		{"saga.start_effect_workers", c.Saga.StartEffectWorkers, c.Saga.StartEffect.MaxAckPending},
+	} {
+		if w.workers > w.maxAck {
+			errs = append(errs, fmt.Errorf("%s (%d) must not exceed the consumer's max_ack_pending (%d)", w.key, w.workers, w.maxAck))
+		}
+	}
 	if timeout := c.Saga.StepDefaults.Timeout; timeout >= coresaga.DefaultStepAckWait {
 		errs = append(errs, stepTimeoutError("saga.step_defaults.timeout", timeout))
 	}

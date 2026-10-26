@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -54,7 +56,7 @@ func (assemblyJetStream) Subscribe(context.Context, fnats.JetStreamConsumerConfi
 	return nil, context.Canceled
 }
 
-// Assemble 是 Mod 发布的 saga 能力：缺 Mongo / JetStream 客户端拒绝；装配出 store、transport、engine 并注册给定定义；
+// Assemble 是 Mod 发布的 saga 能力：缺 Mongo / 权威 Redis / JetStream 客户端或 Redis 键前缀时拒绝；装配出 store、transport、engine 并注册给定定义；
 // 未启动的装配报告未运行、消费者已关闭。
 func TestAssembleBuildsEngineAndRegistersDefinitions(t *testing.T) {
 	cfg := AssemblyConfig{
@@ -64,18 +66,33 @@ func TestAssembleBuildsEngineAndRegistersDefinitions(t *testing.T) {
 		Stream: fnats.JetStreamConfig{Name: "ROOST_SAGA", Subjects: []string{"roost.saga.>"}},
 	}
 	cfg.Engine.Owner = "assembly-test"
-	if _, err := Assemble(nil, assemblyJetStream{}, cfg); err == nil {
-		t.Fatal("nil mongo client was assembled")
-	}
-	if _, err := Assemble(mongotest.NewClient(), nil, cfg); err == nil {
-		t.Fatal("nil jetstream client was assembled")
-	}
-	definition := Definition{Type: "rally", Version: 1, Steps: []Step{{Name: "reserve", ForwardTopic: "reserve", Timeout: time.Second, MaxAttempts: 3, BackoffMin: time.Millisecond, BackoffMax: time.Second}}}
-	asm, err := Assemble(mongotest.NewClient(), assemblyJetStream{}, cfg, definition)
+	cfg.Redis.KeyPrefix = "assembly"
+	// Assemble 不访问 Redis：一个没有服务端的客户端足以装配。
+	authority, err := redisdriver.NewClient(fredis.DefaultConfig("127.0.0.1:1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asm.Store == nil || asm.Transport == nil || asm.Engine == nil {
+	t.Cleanup(func() { _ = authority.Close() })
+	if _, err := Assemble(nil, authority, assemblyJetStream{}, cfg); err == nil {
+		t.Fatal("nil mongo client was assembled")
+	}
+	if _, err := Assemble(mongotest.NewClient(), nil, assemblyJetStream{}, cfg); err == nil {
+		t.Fatal("nil authority redis client was assembled")
+	}
+	if _, err := Assemble(mongotest.NewClient(), authority, nil, cfg); err == nil {
+		t.Fatal("nil jetstream client was assembled")
+	}
+	noPrefix := cfg
+	noPrefix.Redis.KeyPrefix = ""
+	if _, err := Assemble(mongotest.NewClient(), authority, assemblyJetStream{}, noPrefix); err == nil {
+		t.Fatal("an assembly without a redis key prefix was accepted")
+	}
+	definition := Definition{Type: "rally", Version: 1, Steps: []Step{{Name: "reserve", ForwardTopic: "reserve", Timeout: time.Second, MaxAttempts: 3, BackoffMin: time.Millisecond, BackoffMax: time.Second}}}
+	asm, err := Assemble(mongotest.NewClient(), authority, assemblyJetStream{}, cfg, definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asm.Store == nil || asm.Copy == nil || asm.Transport == nil || asm.Engine == nil {
 		t.Fatalf("assembly incomplete: %+v", asm)
 	}
 	if err := asm.Engine.Register(definition); err == nil {
@@ -138,7 +155,7 @@ func TestAssemblyNativeConsumerClosureIsVisibleAfterFormalStart(t *testing.T) {
 		Completions: CompletionConsumerConfig{Stream: "ROOST_SAGA", Durable: "results", SubjectPrefix: "roost.saga"},
 		Starts:      NestStartConsumerConfig{Stream: "ROOST_EFFECTS", Durable: "starts", EffectPrefix: "roost.effect"},
 	}
-	a, err := Assemble(mongotest.NewClient(), newRecordingJetStream(), cfg, testDefinition())
+	a, err := assembleForTest(t, newRecordingJetStream(), cfg, testDefinition())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +217,7 @@ func (j *reviewSagaJetStream) Subscribe(_ context.Context, _ fnats.JetStreamCons
 func newReviewSagaAssembly(t *testing.T, j fnats.IJetStream) *Assembly {
 	t.Helper()
 	cfg := AssemblyConfig{Store: MongoStoreOptions{Database: "shutdown"}, Engine: DefaultOptions(), Prefix: "roost.saga", Stream: fnats.JetStreamConfig{Name: "ROOST_SAGA"}, Completions: CompletionConsumerConfig{Stream: "ROOST_SAGA", Durable: "results", SubjectPrefix: "roost.saga"}, Starts: NestStartConsumerConfig{Stream: "ROOST_EFFECTS", Durable: "starts", EffectPrefix: "roost.effect"}}
-	a, err := Assemble(mongotest.NewClient(), j, cfg)
+	a, err := assembleForTest(t, j, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,4 +313,13 @@ func TestSagaThirdConsumerDrainTimeoutCanFinishOnRetry(t *testing.T) {
 	if err := a.Stop(finish); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// assembleForTest 在一套测试用的权威 Redis 与 mongotest 冷副本上装配（Start 会过 Redis 的启动关口）。
+func assembleForTest(t *testing.T, jetStream fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
+	t.Helper()
+	env := newRedisTestEnv(t)
+	cfg.Store.Database = env.db
+	cfg.Redis.KeyPrefix = env.prefix
+	return Assemble(env.mongo, env.client, jetStream, cfg, definitions...)
 }

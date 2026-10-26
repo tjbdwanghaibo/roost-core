@@ -17,6 +17,7 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -359,23 +360,29 @@ func (r *run) outboxCheck(ctx context.Context) (Check, error) {
 var nonTerminal = []coresaga.Status{coresaga.StatusPending, coresaga.StatusWaiting, coresaga.StatusCompensating}
 
 // sagaChecks：saga 状态里可能记着发起方的 sid 并按它路由（game-demo 赠礼的 FromSID），A 退役后指向 A 的非终态
-// saga 无法推进，所以合服前全部 saga 必须是终态。saga 记录不带“属于哪个 sid”的字段，检查的是整个 saga 存储：
-// 两侧存储相同只查一次。
+// saga 无法推进，所以合服前全部 saga 必须是终态，并且权威 Redis 上的日志已全部投影进 Mongo 冷副本（积压为 0）。saga 记录
+// 不带“属于哪个 sid”的字段，检查的是整个 saga 存储：两侧是同一套权威 Redis 前缀与冷副本时只查一次。合服要求先停协调器与
+// Store Service。
 func (r *run) sagaChecks(ctx context.Context) ([]Check, error) {
 	stores := []side{r.from}
-	if r.into.mongo != r.from.mongo || r.into.saga.Store.Database != r.from.saga.Store.Database || r.into.saga.Store.SagaCollection != r.from.saga.Store.SagaCollection {
+	if r.into.authority.Addr != r.from.authority.Addr || r.into.authority.DB != r.from.authority.DB || r.into.saga.Redis.KeyPrefix != r.from.saga.Redis.KeyPrefix ||
+		r.into.mongo != r.from.mongo || r.into.saga.Store.Database != r.from.saga.Store.Database {
 		stores = append(stores, r.into)
 	}
 	var checks []Check
 	for _, s := range stores {
 		check := Check{Name: "saga:" + s.saga.Store.Database}
-		records, err := listNonTerminalSagas(ctx, s)
+		records, backlog, err := listNonTerminalSagas(ctx, s)
 		if err != nil {
 			return nil, fmt.Errorf("sidmerge: saga records of sid %d: %w", s.sid, err)
 		}
-		if len(records) == 0 {
-			check.Status, check.Detail = StatusOK, "every saga is terminal"
-		} else {
+		switch {
+		case len(records) == 0 && backlog == 0:
+			check.Status, check.Detail = StatusOK, "every saga is terminal and projected"
+		case len(records) == 0:
+			check.Status = StatusFail
+			check.Detail = fmt.Sprintf("every saga is terminal but %d log entries are not projected into the mongo copy yet; run the store service until the backlog is 0", backlog)
+		default:
 			var sample []string
 			for _, record := range records[:min(len(records), 10)] {
 				sample = append(sample, fmt.Sprintf("%s(%s,%s)", record.ID, record.Type, record.Status))
@@ -393,19 +400,34 @@ func (r *run) sagaChecks(ctx context.Context) ([]Check, error) {
 	return checks, nil
 }
 
-func listNonTerminalSagas(ctx context.Context, s side) ([]coresaga.Record, error) {
+// listNonTerminalSagas 读权威 Redis：非终态 saga 全部驻留在 Redis（领取索引里），积压是各投影分区未投影的日志条目数。
+func listNonTerminalSagas(ctx context.Context, s side) ([]coresaga.Record, int64, error) {
 	cfg := fmongo.DefaultConfig(s.mongoURI)
 	cfg.RequireReplicaSet = false // 只读查询，不需要事务
 	client, err := mongodriver.NewClient(cfg, mongodriver.IndexMigrationPolicy{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = client.Close(context.Background()) }()
-	store, err := coresaga.NewMongoStore(client, s.saga.Store)
+	copy, err := coresaga.NewMongoStore(client, s.saga.Store)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return store.List(ctx, coresaga.Query{Statuses: nonTerminal, Limit: 1000})
+	authority, err := kitredis.NewAuthorityClient(s.authority)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = authority.Close() }()
+	store, err := coresaga.NewRedisStore(authority, copy, nil, s.saga.Redis)
+	if err != nil {
+		return nil, 0, err
+	}
+	records, err := store.List(ctx, coresaga.Query{Statuses: nonTerminal, Limit: 1000})
+	if err != nil {
+		return nil, 0, err
+	}
+	backlog, err := store.ProjectionBacklog(ctx)
+	return records, backlog, err
 }
 
 // busCheck：发往 A 的持久消息无法由框架判断能否丢弃，清单里有要处理的项时记 confirm（runbook 第 2 步人工确认）。

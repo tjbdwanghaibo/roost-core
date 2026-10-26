@@ -5,24 +5,21 @@ package saga
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
-// saga 方向 ④ 在真实 Mongo 副本集上：同一个放弃后迟到的正向成功并发送达多次，只有一次把记录带回补偿（回执、tombstone 改带结果关闭、
-// late_step / late_data 在同一事务里），其余按回执去重；记录的新字段经服务端往返不变。
+// saga 方向 ④ 在真实权威 Redis（冷副本在真实 Mongo 副本集）上：同一个放弃后迟到的正向成功并发送达多次，只有一次把记录带回补偿（回执、tombstone 改带结果关闭、
+// late_step / late_data 在同一事务里），其余按回执去重；记录的新字段经服务端往返不变（apply.lua 的版本与回执校验在一个脚本里）。
 func TestRealMongoLateSuccessReopensACompensatedSagaOnce(t *testing.T) {
 	client, database := realMongoU0280(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	store, err := NewMongoStore(client, MongoStoreOptions{Database: database})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := realRedisStore(t, client, database)
 	engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -39,9 +36,7 @@ func TestRealMongoLateSuccessReopensACompensatedSagaOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		operation := operationKey(sagaID, PhaseForward, 1)
-		if _, err := store.operations().InsertOne(ctx, operationDoc{ID: operation, SagaID: sagaID, Closure: operationClosureAbandoned, CreatedAt: now}); err != nil {
-			t.Fatal(err)
-		}
+		seedTombstone(t, store, sagaID, operation, operationClosureAbandoned, now)
 		late := Completion{CommandID: commandID(operation, 0, 2), IdempotencyKey: operation, SagaID: sagaID, Success: true, Data: []byte("march-data")}
 		before := engine.Stats()
 		const deliveries = 8
@@ -77,9 +72,9 @@ func TestRealMongoLateSuccessReopensACompensatedSagaOnce(t *testing.T) {
 		if err != nil || !history.Receipt {
 			t.Fatalf("round %d: history = %+v, %v; want the receipt written with the transition", round, history, err)
 		}
-		var tombstone operationDoc
-		if err := store.operations().FindOne(ctx, map[string]any{"_id": operation}, &tombstone); err != nil || tombstone.Closure != operationClosureResult {
-			t.Fatalf("round %d: tombstone = %+v, %v; want closed with result", round, tombstone, err)
+		tombstone, err := store.redis.(*redisdriver.Client).Raw().HGet(ctx, store.keys.record(sagaID), "o:"+operation).Result()
+		if err != nil || !strings.HasPrefix(tombstone, operationClosureResult+"|") {
+			t.Fatalf("round %d: tombstone = %q, %v; want closed with result", round, tombstone, err)
 		}
 	}
 }

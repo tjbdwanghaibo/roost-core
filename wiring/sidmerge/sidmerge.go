@@ -7,7 +7,7 @@
 //
 // 每一侧的事实都从那一侧部署用的服务配置读（Server.Config），与 game 进程同一份声明、同一条规则：逻辑库 → 物理库
 // 经 kitdataengine.LoadDatabaseMap（D9 映射，一次只换算一个 sid，所以两侧各算各的），WAL 目录经
-// kitdataengine.WALDir，控制库经 kitdataengine.EffectSettings，saga 存储经 kitsaga.LoadLocations，总线经
+// kitdataengine.WALDir，控制库经 kitdataengine.EffectSettings，saga 存储经 kitsaga.LoadLocations 与 kitredis.LoadAuthorityConfig，总线经
 // kitnats.LoadBusPersistence。逻辑库清单是本进程链接的 DAO 包在 init 里登记的（dataengine.DeclaredDatabases），
 // 所以命令行要在工程里编译、导入工程的 db 包。
 //
@@ -28,6 +28,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
@@ -58,6 +59,7 @@ type side struct {
 	databases  *coredata.DatabaseMap
 	controlDB  string // dataengine.database：receipts / transactions / outbox
 	saga       kitsaga.Locations
+	authority  kitredis.AuthorityConfig // redis_authority.*：saga 协调器记录所在的权威 Redis
 	walDir     string
 	walChecked bool
 	bus        kitnats.BusPersistence
@@ -116,6 +118,9 @@ func resolveSide(server Server) (side, error) {
 		}
 	}
 	if result.saga, err = kitsaga.LoadLocations(cfg); err != nil {
+		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
+	}
+	if result.authority, err = kitredis.LoadAuthorityConfig(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
 	if result.bus, err = kitnats.LoadBusPersistence(cfg); err != nil {

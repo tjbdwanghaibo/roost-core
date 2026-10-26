@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -131,6 +132,72 @@ const (
 	// ReplicatedSkipDisabled：numReplicas 或 timeout 不为正，没有要等的。
 	ReplicatedSkipDisabled = "disabled"
 )
+
+// ScriptCall 是 DurableScriptBatch 里的一次脚本调用：SHA 是 SCRIPT LOAD 得到的摘要，Source 是脚本原文
+// （服务端回 NOSCRIPT 时用它在同一连接上以 EVAL 重发）。
+type ScriptCall struct {
+	SHA    string
+	Source string
+	Keys   []string
+	Args   []any
+}
+
+// ScriptResult 是一次脚本调用的结果：Value 是脚本回复（Lua 的 nil / false 为 nil），Err 是服务端对这一条的错误回复。
+// 某一条的 Err 不影响同批其他调用的结果。
+type ScriptResult struct {
+	Value any
+	Err   error
+}
+
+// DurableScriptBatcher 在同一条物理连接上流水线发出一批 EVALSHA 与一条 WAITAOF：一次往返、服务端一次 fsync 摊给整批。
+//
+// 结果分类（驱动契约见 redis/driver/README.md）：
+//   - 返回 err == nil：每条调用的结果在 results 里（按调用顺序）；local / replicas 是 WAITAOF 的确认数，覆盖本批全部写。
+//     某条回 NOSCRIPT（服务端重启后脚本缓存清空，属于“确定没执行”）时，驱动已在同一连接上用 EVAL 重发这些调用并补发 WAITAOF，
+//     调用方看到的是重发后的结果。
+//   - err 满足 errors.Is(err, ErrWaitAOFFailed)：全部脚本已执行、results 有效，但服务端拒绝了 WAITAOF（例如 appendonly 被关）；
+//     按“已执行、持久未确认”处理，与 local 不足相同。
+//   - 其余 err：整批结果未知（连接中断、超时），不重放；只有每条命令的错误都证明没执行时驱动才换连接整批重发。
+//
+// 写脚本的调用方必须能在结果未知后安全重试（请求摘要、版本 CAS）。Cluster 客户端一律拒绝。
+type DurableScriptBatcher interface {
+	DurableScriptBatch(ctx context.Context, calls []ScriptCall, numLocal, numReplicas int, timeout time.Duration) (results []ScriptResult, local, replicas int64, err error)
+}
+
+// ErrWaitAOFFailed：DurableScriptBatch 的脚本都已执行，WAITAOF 本身被服务端拒绝（appendonly 关闭等），持久未确认。
+var ErrWaitAOFFailed = errors.New("redis: WAITAOF rejected; scripts executed, durability unconfirmed")
+
+// StreamEntry 是流里的一条记录。
+type StreamEntry struct {
+	ID     string
+	Fields map[string]string
+}
+
+// StreamReader 读流（XRANGE / XREAD / XLEN），都是读命令，按驱动的读重试规则处理。
+type StreamReader interface {
+	// XRangeAfter 返回 ID 严格大于 afterID 的至多 count 条（XRANGE key (afterID + COUNT count）。
+	XRangeAfter(ctx context.Context, key, afterID string, count int64) ([]StreamEntry, error)
+	// XReadAfter 阻塞至多 block 等 afterID 之后的新条目（XREAD BLOCK）；超时返回空切片、nil 错误。
+	XReadAfter(ctx context.Context, key, afterID string, count int64, block time.Duration) ([]StreamEntry, error)
+	XLen(ctx context.Context, key string) (int64, error)
+}
+
+// HashFieldsReader 一次往返读一个哈希的多个字段（HMGET）。结果按 fields 的位置给出，nil 元素表示字段不存在；
+// 键不存在时全部为 nil。
+type HashFieldsReader interface {
+	HMGet(ctx context.Context, key string, fields ...string) ([][]byte, error)
+}
+
+// ScriptLoader 把脚本装进服务端缓存，返回 SHA1。
+type ScriptLoader interface {
+	ScriptLoad(ctx context.Context, source string) (string, error)
+}
+
+// ServerInspector 读服务端状态与配置，供启动探针核对部署契约。托管 Redis 可能禁用 CONFIG，调用方要能处理它的错误。
+type ServerInspector interface {
+	Info(ctx context.Context, section string) (string, error)
+	ConfigGet(ctx context.Context, parameter string) (map[string]string, error)
+}
 
 // ListTrimmer trims a list in place (LTRIM). Optional capability: callers
 // that would otherwise emulate a trim with DEL+RPUSH (a window in which a

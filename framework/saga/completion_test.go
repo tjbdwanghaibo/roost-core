@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 // 完成判定与代际变更按实际结果验证，不约束内部函数必须如何组织。
@@ -120,11 +120,7 @@ func TestStepTransitionAloneDecidesTheIncarnation(t *testing.T) {
 
 func TestCompletionConsumersTermTheSameTerminalErrors(t *testing.T) {
 	ctx := context.Background()
-	mongoClient := mongotest.NewClient()
-	store, err := NewMongoStore(mongoClient, MongoStoreOptions{Database: "o_s5_1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestRedisStore(t)
 	engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -140,11 +136,12 @@ func TestCompletionConsumersTermTheSameTerminalErrors(t *testing.T) {
 	conflicting := Completion{CommandID: commandID(operation, 0, 1), IdempotencyKey: operation, SagaID: record.ID, Success: true, CompletedAt: time.Now()}
 	other := conflicting
 	other.Data = []byte("another result under the same command id")
-	digest, err := completionDigest(other)
+	digest, err := receiptDigestHex(other)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mongoClient.Collection("o_s5_1", defaultCompletionCollection).Seed(completionDoc{ID: conflicting.CommandID, Digest: digest, CreatedAt: time.Now()}); err != nil {
+	// 这个 CommandID 已记下另一份结果的回执。
+	if err := store.redis.(*redisdriver.Client).Raw().HSet(ctx, store.keys.record(record.ID), "c:"+conflicting.CommandID, digest).Err(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,16 +276,10 @@ func TestADefinitionThatNeverArrivesEndsInTheCoordinatorFence(t *testing.T) {
 
 // waitingOnANewDefinition 建一条在等第 0 步结果的记录：upgraded 是有这个定义版本的新协调器（派发了它），
 // rollingIn 是同一存储上还没有注册这个定义的旧协调器。
-func waitingOnANewDefinition(t *testing.T) (*MongoStore, *Engine, *Engine, Record) {
+func waitingOnANewDefinition(t *testing.T) (*RedisStore, *Engine, *Engine, Record) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "rollout"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := newTestRedisStore(t)
 	publish := PublishFunc(func(context.Context, Command) error { return nil })
 	upgraded, err := NewEngine(store, publish, DefaultOptions())
 	if err != nil {
@@ -326,13 +317,7 @@ func TestDefinitionFenceDuringBackoffAbandonsTheOperation(t *testing.T) {
 	for _, phase := range []Phase{PhaseForward, PhaseCompensate} {
 		t.Run(phase.String(), func(t *testing.T) {
 			ctx := context.Background()
-			store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "nc250"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.EnsureInfrastructure(ctx); err != nil {
-				t.Fatal(err)
-			}
+			store := newTestRedisStore(t)
 			publish := PublishFunc(func(context.Context, Command) error { return nil })
 			// withDefinition 是正常协调器；withoutDefinition 是滚动升级中还没有这个定义版本的协调器。
 			withDefinition, err := NewEngine(store, publish, DefaultOptions())
@@ -497,16 +482,10 @@ func TestNativeStepSuccessDeliveredDuringBackoffIsNotLostWhenTheOperationIsClose
 	}
 }
 
-// MongoStore 上：退避中接收的成功以成功回执“带结果关闭”这个操作，之后的重投按回执去重。
-func TestMongoStoreSuccessDuringBackoffClosesTheOperationWithItsResult(t *testing.T) {
+// RedisStore 上：退避中接收的成功以成功回执“带结果关闭”这个操作，之后的重投按回执去重。
+func TestRedisStoreSuccessDuringBackoffClosesTheOperationWithItsResult(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewMongoStore(mongotest.NewClient(), MongoStoreOptions{Database: "backoff_success"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := newTestRedisStore(t)
 	engine, err := NewEngine(store, PublishFunc(func(context.Context, Command) error { return nil }), DefaultOptions())
 	if err != nil {
 		t.Fatal(err)

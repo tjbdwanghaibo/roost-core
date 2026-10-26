@@ -13,7 +13,7 @@ import (
 
 func TestSagaDeclaredDefaultsMatchCoreDefaults(t *testing.T) {
 	mod := NewMod()
-	if err := mod.Init(viper.New()); err != nil {
+	if err := mod.Init(sagaTestConfig()); err != nil {
 		t.Fatal(err)
 	}
 	got, want := mod.config.Engine, coresaga.DefaultOptions()
@@ -38,7 +38,7 @@ func TestSagaDeclaredDefaultsMatchCoreDefaults(t *testing.T) {
 // saga.max_payload_bytes 由协调器（本 Mod）与发起方（wiring/nest）共用一份声明：同一服务里两个 Mod 都在时声明必须完全相同
 // （A4 ① Merge），超过线上硬上限 4 MiB 在配置检查时就拒绝。
 func TestSagaPayloadLimitIsOneDeclarationSharedWithNest(t *testing.T) {
-	cfg := viper.New()
+	cfg := sagaTestConfig()
 	cfg.Set("sid", 1)
 	cfg.Set("server_type", "game")
 	if err := app.CheckConfig(cfg, NewMod(), kitnest.NewMod(nil)); err != nil {
@@ -83,6 +83,16 @@ func yamlConfig(t *testing.T, text string) *viper.Viper {
 	if err := cfg.ReadConfig(strings.NewReader(text)); err != nil {
 		t.Fatal(err)
 	}
+	if !cfg.IsSet("saga.redis.key_prefix") {
+		cfg.Set("saga.redis.key_prefix", "test:saga")
+	}
+	return cfg
+}
+
+// sagaTestConfig 是只写了必填键（saga.redis.key_prefix）的配置。
+func sagaTestConfig() *viper.Viper {
+	cfg := viper.New()
+	cfg.Set("saga.redis.key_prefix", "test:saga")
 	return cfg
 }
 
@@ -124,7 +134,7 @@ saga:
 
 	// 没有任何配置时是框架默认值。
 	empty := NewMod(giftDefinition())
-	if err := empty.Init(viper.New()); err != nil {
+	if err := empty.Init(sagaTestConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if got := empty.config.Engine.StepBudgets.Resolve(giftDefinition()).Steps[0]; got.MaxAttempts != 5 || got.Timeout != 5*time.Second {

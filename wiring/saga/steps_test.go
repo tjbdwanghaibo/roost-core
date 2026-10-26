@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
@@ -87,7 +86,7 @@ func (j *stepsJetStream) deliver(t *testing.T, durable string, command coresaga.
 
 func stepsRegistry(t *testing.T, js *stepsJetStream) *app.Registry {
 	t.Helper()
-	registry := app.NewRegistry(viper.New())
+	registry := app.NewRegistry(sagaTestConfig())
 	if err := registry.Register(mods.ModMongo, mongotest.NewClient()); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +213,7 @@ func TestStepsDrainWaitsForInFlightDeliveriesWithinTheContext(t *testing.T) {
 // 转交接收方的检查在取执行权之前：未登记的名字、不是原生步骤、命令主题与该步骤订阅的主题不一致（扣款信封包着
 // 退款命令）都拒绝，而且在归属复核之前（不为拒绝的转交把玩家接入本进程）；未 Start 时报 ErrStepsNotStarted。
 func TestStepsRunHandedOverChecksTheStepBeforeTheClaim(t *testing.T) {
-	steps, _ := NewSteps(app.NewRegistry(viper.New()), "game-gift")
+	steps, _ := NewSteps(app.NewRegistry(sagaTestConfig()), "game-gift")
 	steps.Native("debit", "gift.debit", nativeBody)
 	steps.Mongo("deliver", "gift.deliver", func(context.Context, coresaga.Command) (coresaga.Completion, error) {
 		return coresaga.Completion{}, nil

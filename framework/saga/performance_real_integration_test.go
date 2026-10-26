@@ -20,6 +20,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	mongodriver "go.mongodb.org/mongo-driver/v2/mongo"
@@ -125,7 +126,9 @@ func TestRealSagaPerformance(t *testing.T) {
 			t.Fatal("workers must be between 1 and 32")
 		}
 	}
-	cfg := crossProcessAssembly(database, stream, prefix, "perf")
+	redisAddr, redisPrefix := perfRedisAuthority(t)
+	authority := crossProcessRedis(t, redisAddr)
+	cfg := crossProcessAssembly(database, redisPrefix, stream, prefix, "perf")
 	cfg.Engine = DefaultOptions()
 	if value := os.Getenv("ROOST_SAGA_PERF_COORDINATOR_BATCH"); value != "" {
 		batch, parseErr := strconv.Atoi(value)
@@ -137,7 +140,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	cfg.Completions.Workers = consumerWorkers
 	cfg.Engine.Owner = "perf"
 	cfg.Stream.Replicas = 3 // 容量测量保留三副本发布确认，不借故障夹具的单副本降低持久成本。
-	asm, err := Assemble(client, js, cfg, def)
+	asm, err := Assemble(client, authority, js, cfg, def)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +381,6 @@ func TestRealSagaPerformance(t *testing.T) {
 	if mode == "compensate" {
 		terminal = StatusCompensated
 	}
-	sagas := client.Database(database).Collection(defaultSagaCollection)
 	for {
 		mu.Lock()
 		ids := make([]string, 0, len(pending))
@@ -387,13 +389,16 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 		mu.Unlock()
 		if len(ids) > 0 {
-			var docs []struct {
-				ID     string `bson:"_id"`
-				Status Status `bson:"status"`
-			}
-			harnessMongo.Add(1)
-			if err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}, "status": bson.M{"$in": []Status{StatusCompleted, StatusCompensated, StatusFailed, StatusManualRequired}}}, &docs); err != nil {
-				t.Fatal(err)
+			// 终态在权威 Redis 上（Mongo 冷副本要等投影）：逐笔读驻留记录，只读，不经脚本。
+			var docs []Record
+			for _, id := range ids {
+				record, err := asm.Store.Get(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if record.Status.Terminal() {
+					docs = append(docs, record)
+				}
 			}
 			observed := time.Now() // 完成计时等到可读取持久终态；包含最多约50ms的观察间隔。
 			mu.Lock()
@@ -505,8 +510,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	// 不在完成后补发/篡改业务数据；等待框架自然排空，再逐文档核对一次且仅一次生效。
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		harnessMongo.Add(1)
-		r.OutboxPending, err = client.Database(database).Collection(defaultOutboxCollection).CountDocuments(ctx, bson.M{})
+		r.OutboxPending, err = authority.Raw().ZCard(ctx, asm.Store.keys.outbox()).Result()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -515,11 +519,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	harnessMongo.Add(3) // 租约计数 + 两次核对读
-	r.Leases, err = sagas.CountDocuments(ctx, bson.M{"lease_owner": bson.M{"$exists": true, "$ne": ""}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	harnessMongo.Add(2) // 两次核对读
 	var values []struct {
 		Value int `bson:"value"`
 	}
@@ -561,6 +561,9 @@ func TestRealSagaPerformance(t *testing.T) {
 		if final.Status != terminal {
 			r.FinalWrongTerminal++
 		}
+		if final.Lease.Owner != "" {
+			r.Leases++
+		}
 	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -582,7 +585,7 @@ func retainSagaPerformanceEvidence(t *testing.T, client fmongo.IMongo, database,
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	for _, name := range []string{defaultSagaCollection, defaultOperationCollection, defaultCompletionCollection, defaultOutboxCollection, "perf_steps", "business", "effects"} {
+	for _, name := range []string{defaultSagaCollection, defaultOperationCollection, defaultCompletionCollection, "perf_steps", "business", "effects"} {
 		var docs []bson.M
 		if err := client.Database(database).Collection(name).Find(ctx, bson.M{}, &docs); err != nil {
 			t.Errorf("retain %s evidence: %v", name, err)
@@ -813,4 +816,21 @@ func perfCommandDelta(before, after map[string]int64) map[string]int64 {
 		out[name] = value - before[name]
 	}
 	return out
+}
+
+// perfRedisAuthority 返回压测用的权威 Redis 地址与本进程唯一的键前缀（结束后删除）：saga-scan.sh 起的私有实例
+// （ROOST_SAGA_PERF_REDIS_ADDR / _PREFIX），没有时退回 ROOST_SAGA_IT_REDIS_ADDR 或私有 redis-server。
+func perfRedisAuthority(t *testing.T) (string, string) {
+	t.Helper()
+	addr := os.Getenv("ROOST_SAGA_PERF_REDIS_ADDR")
+	if addr == "" {
+		addr = redistest.AOFAddr(t)
+	}
+	base := os.Getenv("ROOST_SAGA_PERF_REDIS_PREFIX")
+	if base == "" {
+		base = "sagaperf"
+	}
+	prefix := fmt.Sprintf("%s:%d:%d", base, os.Getpid(), time.Now().UnixNano())
+	redistest.Cleanup(t, addr, prefix)
+	return addr, prefix
 }

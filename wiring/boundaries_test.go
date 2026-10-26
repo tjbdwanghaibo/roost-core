@@ -240,6 +240,7 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		nest.NewMod(access),
 		ops.NewOpsMod(),
 		redis.NewRedisMod(),
+		redis.NewAuthorityMod(),
 		remoteentity.NewRemoteEntityMod(0, remoteentity.WithMongoStorage(access)),
 		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),

@@ -203,11 +203,16 @@ func (s *memoryStore) ClaimOutbox(_ context.Context, q ClaimRequest) ([]OutboxRe
 	}
 	return out, nil
 }
+
+// AckOutbox / NackOutbox 与正式存储同一口径：命令已被关闭操作或新尝试删掉时返回 nil，租约不符才是 ErrConflict。
 func (s *memoryStore) AckOutbox(_ context.Context, id string, l Lease) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.outbox[id]
-	if !ok || r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
+	if !ok {
+		return nil
+	}
+	if r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
 		return ErrConflict
 	}
 	delete(s.outbox, id)
@@ -217,7 +222,10 @@ func (s *memoryStore) NackOutbox(_ context.Context, id string, l Lease, next tim
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.outbox[id]
-	if !ok || r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
+	if !ok {
+		return nil
+	}
+	if r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
 		return ErrConflict
 	}
 	r.Attempt++

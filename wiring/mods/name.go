@@ -20,6 +20,9 @@ const (
 	// redis/driver、etcd/driver 装配。
 	ModRedis      app.ModName = "redis"
 	ModRedisVLock app.ModName = "redis.versioned_lock"
+	// ModRedisAuthority 是权威 Redis（wiring/redis.AuthorityMod，配置 redis_authority.*）：单主、AOF always、noeviction，
+	// Saga 协调器的权威存储在它上面。能力值是 fredis.IRedis（redis/driver.Client，带同连接 WAITAOF 与流读取）。
+	ModRedisAuthority app.ModName = "redis.authority"
 
 	ModNats          app.ModName = "nats"
 	ModNatsRaw       app.ModName = "nats.raw"

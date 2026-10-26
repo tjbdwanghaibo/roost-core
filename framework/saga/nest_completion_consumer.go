@@ -22,6 +22,9 @@ import (
 //
 // 同一逻辑服务的全部协调器副本共用 Durable，每个 saga 由其中一个完成。
 type NestCompletionConsumerConfig struct {
+	// Workers 是本订阅的并发处理上限：0 / 1 串行，不能超过 MaxAckPending；启用后不保证回调顺序。
+	// Engine 的写按版本 CAS（冲突重读重试），同一 saga 的并发结果不会互相覆盖。
+	Workers        int
 	Stream         string
 	Durable        string
 	EffectPrefix   string
@@ -67,7 +70,7 @@ func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, conf
 	if config.NakBackoffMax < config.NakBackoffMin {
 		config.NakBackoffMax = 30 * time.Second
 	}
-	if config.ProcessTimeout >= config.AckWait || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
+	if config.Workers < 0 || config.Workers > config.MaxAckPending || config.ProcessTimeout >= config.AckWait || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
 		return nil, fmt.Errorf("saga: unsafe Nest completion consumer limits")
 	}
 	// 每个 saga id 一个 subject，所以过滤是通配——不同于只有一个 subject 的启动主题。
@@ -82,7 +85,7 @@ func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, conf
 		MaxAckPending: config.MaxAckPending,
 		NakBackoffMin: config.NakBackoffMin,
 		NakBackoffMax: config.NakBackoffMax,
-	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+	}, withConsumerWorkers(config.Workers, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		processCtx, cancel := context.WithTimeout(messageCtx, config.ProcessTimeout)
 		err := handleNestCompletion(processCtx, message, completer)
 		cancel()
@@ -90,7 +93,7 @@ func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, conf
 			logConsumerError("Nest completion", message, err)
 		}
 		return err
-	})
+	}))
 }
 
 func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, completer Completer) error {
