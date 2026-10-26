@@ -49,25 +49,49 @@ type ViewPlan struct {
 // PlanView 基线必须来自已 ACK 的计划；调用方在 ACK 时才替换 Entries。
 // 暂缓更新保留旧对象而不是删除；新可见/跨区/升档立即刷新。退出视野不延迟。
 func PlanView(snapshot chunksync.Snapshot, states []physx.State, bodies []physx.Body, tracks []MotionTrack, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
+	return NewReplicationScene(bodies, tracks).Frame(states).Plan(snapshot, observer, grabs, previous, policy)
+}
+
+// ReplicationScene 拥有建房时固定的形状和轨迹索引；不保留调用方切片。
+type ReplicationScene struct {
+	radii   map[uint64]float64
+	motions map[uint64]bool
+}
+
+func NewReplicationScene(bodies []physx.Body, tracks []MotionTrack) *ReplicationScene {
+	scene := &ReplicationScene{radii: make(map[uint64]float64, len(bodies)), motions: make(map[uint64]bool, len(tracks))}
+	for _, b := range bodies {
+		scene.radii[b.ID] = bodyRadius(b)
+	}
+	for _, m := range tracks {
+		scene.motions[m.ID] = true
+	}
+	return scene
+}
+
+// ReplicationFrame 每个已提交帧只创建一次；所有接收者共享只读索引。
+type ReplicationFrame struct {
+	scene *ReplicationScene
+	poses map[uint64]physx.State
+}
+
+func (s *ReplicationScene) Frame(states []physx.State) *ReplicationFrame {
+	f := &ReplicationFrame{scene: s, poses: make(map[uint64]physx.State, len(states))}
+	for _, state := range states {
+		f.poses[state.ID] = state
+	}
+	return f
+}
+func (f *ReplicationFrame) State(id uint64) (physx.State, bool) { s, ok := f.poses[id]; return s, ok }
+func (f *ReplicationFrame) Plan(snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
 	out := ViewPlan{Snapshot: chunksync.Snapshot{Epoch: snapshot.Epoch, Tick: snapshot.Tick}, Entries: make(map[uint64]ViewEntry, len(snapshot.Objects)), Samples: make(map[string]int), Deferred: make(map[string]int)}
 	if err := policy.Validate(); err != nil {
 		return out, err
 	}
-	poses := make(map[uint64]physx.State, len(states))
-	for _, s := range states {
-		poses[s.ID] = s
-	}
+	poses, radii, motions := f.poses, f.scene.radii, f.scene.motions
 	self, ok := poses[observer]
 	if !ok {
 		return out, errors.New("physics: missing view observer")
-	}
-	radii := make(map[uint64]float64, len(bodies))
-	for _, b := range bodies {
-		radii[b.ID] = bodyRadius(b)
-	}
-	motions := make(map[uint64]bool, len(tracks))
-	for _, m := range tracks {
-		motions[m.ID] = true
 	}
 	critical := map[uint64]bool{observer: true}
 	for a, b := range grabs {

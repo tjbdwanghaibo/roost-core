@@ -97,3 +97,57 @@ func TestViewLargeFastBodiesAndMotionCalibration(t *testing.T) {
 		t.Fatal("large nearby surface throttled")
 	}
 }
+
+func TestSharedReplicationFrameOwnsItsInputs(t *testing.T) {
+	bodies := []physx.Body{{ID: 1, Shape: physx.Sphere, Dimensions: physx.Vec3{.5}}, {ID: 2, Shape: physx.Sphere, Dimensions: physx.Vec3{.5}}}
+	states := []physx.State{{ID: 1, Rotation: physx.Quat{0, 0, 0, 1}}, {ID: 2, Position: physx.Vec3{11, 0, 0}, Rotation: physx.Quat{0, 0, 0, 1}}}
+	snapshot, _ := QuantizedSnapshot(Frame{Epoch: 1, Tick: 1, States: states})
+	scene := NewReplicationScene(bodies, nil)
+	frame := scene.Frame(states)
+	bodies[1].Dimensions[0] = 100
+	states[1].Position[0] = 1
+	for i := 0; i < 2; i++ {
+		p, err := frame.Plan(snapshot, 1, nil, nil, DefaultReplicationPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Entries[2].Class != "far" {
+			t.Fatal("shared index aliased mutable inputs")
+		}
+	}
+	next := scene.Frame(states)
+	p, err := next.Plan(snapshot, 1, nil, nil, DefaultReplicationPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Entries[2].Class != "near" {
+		t.Fatal("next frame did not refresh index")
+	}
+}
+
+func BenchmarkRecipientViewIndex(b *testing.B) {
+	bodies := CrowdScene()
+	states := InitialFrame(1, bodies).States
+	snapshot, _ := QuantizedSnapshot(Frame{Epoch: 1, Tick: 1, States: states})
+	cached := NewReplicationScene(bodies, nil).Frame(states)
+	for _, shared := range []bool{false, true} {
+		name := "rebuild"
+		if shared {
+			name = "shared"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				var err error
+				if shared {
+					_, err = cached.Plan(snapshot, 51, nil, nil, DefaultReplicationPolicy())
+				} else {
+					_, err = PlanView(snapshot, states, bodies, nil, 51, nil, nil, DefaultReplicationPolicy())
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

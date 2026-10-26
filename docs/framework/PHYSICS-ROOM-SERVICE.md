@@ -208,3 +208,42 @@ Unity 还保留每个对象自己的采样 tick；普通对象按自身采样间
 Gate Relay 和 direct Room 从 **Poll 响应完成时** 安排下一次 50ms 轮询；等待与随后出站工作可重叠，但一次 Relay 不并发 Poll。服务端仍要求相邻新帧至少间隔 50ms，pending 重发与 ACK 规则不变。原固定 50ms ticker 在 RPC 准入交替延迟 15ms/0ms 时，会令相邻服务端请求只间隔约 35ms，导致一次空响应；读完三个有效帧的回归修前出现两次空轮询，修后为零。
 
 该修复避免抖动触发双重限流，不是 ACK 流水线。长 RPC、慢出站或高 RTT 仍会降低有效频率；Relay ACK 表示 Game 可靠出站准入，不是 Unity 已收包。真实 Gate/NATS/TCP 回归入口为 `TestRealGatePhysicsRoomRelay`，含延迟注入、连续解码及取消后旧成员拒绝。
+
+
+### 共享索引与多房间测量（2026-10-26）
+
+Room 建立一次 `ReplicationScene`，保存形状包围半径与轨迹 ID；每个已提交帧建立一次 `ReplicationFrame` 状态索引，与 AOI 帧在同一把锁内发布。所有接收成员共用只读索引，私有输入确认也直接按 body ID 查询。索引拥有输入副本，不引用可变调用方切片；ACK 后才提交的成员视图账本仍保持独立。独立调用 `PlanView` 的便捷接口保留，需要共享时使用 `NewReplicationScene(...).Frame(states).Plan(...)`。
+
+Linux amd64、Go 1.27.2、GOMAXPROCS=4，CPU 型号 Xeon Platinum 8573C。`BenchmarkRecipientViewIndex` 在同一份 71 对象完整快照上比较每接收者重建与共享索引，三次测量：
+
+| 规划方式 | ns/op 范围 | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| 每接收者重建索引 | 20,018～20,468 | 37,688 | 94 |
+| 共享索引 | 11,518～11,716 | 19,064 | 85 |
+
+单次规划分配量下降 **49.4%**，该微基准耗时中位数下降约 **43.4%**。共享路径的建房/每帧索引构建成本在规划循环外，不能据此声称整个服务器 CPU 或内存下降同样比例；完整链路仍有快照、视图、编码与载荷副本分配。
+
+`TestMultiRoomReplicationLoad` 实际运行 Room + PhysX + EntityHost/Nest：每房间 20 个独立逻辑客户端，输入后 Poll，再从响应完成起等待 50ms；1 秒预热、5 秒采集，各档一次。普通场景 71 个非静态刚体；机关场景额外加入 8 个运动学转杆与 4 个动态铰链马达，共 83 个非静态刚体。20 个玩家持续提交移动输入，50 个 NPC 胶囊只参与物理碰撞，没有调用 CrowdCommands 自主巡逻。每世界一个原生 worker，Nest short pool 4 个 worker。GOMAXPROCS=4 不表示获得四个独占物理核。
+
+| 场景 | 房间/逻辑客户端 | 平均物理 Hz/房间 | 交付 Hz/客户端 | 物理阶段 P99 ms | Poll P99 ms | Go 分配 MB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 普通 | 1 / 20 | 49.99 | 19.80 | 0.703 | 0.351 | 8.69 |
+| 普通 | 4 / 80 | 49.99 | 19.80 | 1.024 | 0.414 | 34.88 |
+| 普通 | 8 / 160 | 49.32 | 19.48 | 1.690 | 0.562 | 68.29 |
+| 机关 | 1 / 20 | 49.99 | 19.80 | 0.715 | 0.260 | 10.10 |
+| 机关 | 4 / 80 | 50.05 | 19.80 | 1.379 | 0.622 | 40.76 |
+| 机关 | 8 / 160 | 50.00 | 19.80 | 1.200 | 0.513 | 80.81 |
+
+最终六档采样窗口均无空 Poll，所有房间持续提交连续 tick。物理阶段耗时来自 Frame.StepTime，包含前置机制/输入与原生 Step/读回；不含 Nest 提交和网络。机关 8 房间的 Nest Commit P99 为 0.367ms，提交间隔 P99 为 21.312ms，载荷约 5.96kB/s/逻辑客户端。普通 8 房间样本的实际均频有下降，不能把这份短测写成“稳定满 50Hz”的承诺。
+
+**边界与下一步：**此负载直接调用 Service，不含 Gate/NATS/TCP、Unity 或 WAN；真实网络正确性另由专用回归验证。Go 分配/GC 覆盖测试进程与驱动，不包含 PhysX 原生堆，不是 RSS。机关 8 房间五秒中采集到 141 次 Go GC，累计 GC pause 约 28.3ms；整体分配仍值得进一步通过 heap/CPU profile 定位。当前证据不足以宣布生产容量上限，也不能归因所有尾延迟；长稳、真实链路和更密集接触需独立测量。
+
+复跑命令（已构建原生库，加载仓库 Go 环境后）：
+
+```sh
+go test -run '^$' -bench BenchmarkRecipientViewIndex -benchmem -count=3 ./gameplay/physics
+ROOST_PHYSICS_LOAD=1 go test -tags physx -run '^TestMultiRoomReplicationLoad$' -count=1 -timeout=2m -v ./cmd/physics-viewer
+ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoad/mechanisms/8$' -count=1 -timeout=1m ./cmd/physics-viewer
+```
+
+负载测试默认不启用，SKIP 不算通过；race 档用于并发正确性，性能数字取不带 race 的六档输出。测试输出 JSON 含原始统计、实际频率、空 Poll、分配和 GC，方便同口径复测。此轮不改变 RP2/RC2、完整对象大小或 native ABI。

@@ -37,17 +37,19 @@ type retiredRoom struct {
 }
 
 type room struct {
-	mu      sync.Mutex
-	ref     Ref
-	spec    Spec
-	world   *physx.World
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stopped bool
-	members map[int64]*memberState
-	latest  *gamephysics.SpatialFrame
-	states  []physx.State
-	grabs   map[uint64]uint64
+	mu          sync.Mutex
+	ref         Ref
+	spec        Spec
+	world       *physx.World
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopped     bool
+	members     map[int64]*memberState
+	latest      *gamephysics.SpatialFrame
+	replication *gamephysics.ReplicationScene
+	viewFrame   *gamephysics.ReplicationFrame
+	states      []physx.State
+	grabs       map[uint64]uint64
 }
 type memberState struct {
 	member                          Member
@@ -201,6 +203,8 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	spec.Motions = slices.Clone(spec.Motions)
 	spec.Joints = slices.Clone(spec.Joints)
 	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, states: gamephysics.InitialFrame(ref.Epoch, spec.Bodies).States, grabs: make(map[uint64]uint64)}
+	r.replication = gamephysics.NewReplicationScene(spec.Bodies, spec.Motions)
+	r.viewFrame = r.replication.Frame(r.states)
 	s.rooms[ref.ID] = r
 	s.metrics.Accepted("create")
 	s.metrics.Depth("rooms", int64(len(s.rooms)))
@@ -286,8 +290,10 @@ func (s *Service) run(ctx context.Context, r *room) {
 		if err != nil {
 			return err
 		}
+		viewFrame := r.replication.Frame(f.States)
 		r.mu.Lock()
 		r.latest = frame
+		r.viewFrame = viewFrame
 		r.states = slices.Clone(f.States)
 		r.mu.Unlock()
 		return nil
@@ -436,7 +442,7 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err != nil {
 			return Delivery{}, err
 		}
-		view, err := gamephysics.PlanView(snapshot, r.states, r.spec.Bodies, r.spec.Motions, v.body, r.grabs, v.view, s.cfg.Replication)
+		view, err := r.viewFrame.Plan(snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
 		if err != nil {
 			return Delivery{}, err
 		}
@@ -454,11 +460,8 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		}
 		recordFrame(p.Data)
 		var own gamephysics.InputAck
-		for _, state := range r.states {
-			if state.ID == v.body && state.InputGeneration == v.member.InputGeneration {
-				own = gamephysics.InputAck{Sequence: state.InputSequence, Generation: state.InputGeneration, Active: state.InputActive}
-				break
-			}
+		if state, ok := r.viewFrame.State(v.body); ok && state.InputGeneration == v.member.InputGeneration {
+			own = gamephysics.InputAck{Sequence: state.InputSequence, Generation: state.InputGeneration, Active: state.InputActive}
 		}
 		v.pendingPayload = gamephysics.RoomPayload(p.Data, own)
 		v.nextVisible = visible

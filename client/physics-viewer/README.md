@@ -141,3 +141,6 @@ Room 同步已使用 RP2 + RC2：每帧只包含自身输入确认，对象先�
 
 
 分频版本还需同步 `ReplicationPlayback.cs` 和 `LevelViewer.cs`。Room 使用 RP2，34 字节对象状态位标明展示档/轨迹档；展示档速度不是物理测量值。客户端按对象采样 tick 插值，远处规则平台/转轮读取 Level.Motions 并用服务器姿态校准，停收帧后停止外推。近处对象保留高频状态，动态马达或抓取物不使用固定轨迹。完整参数、关闭对照与统计见 [接收者分频](../../docs/framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。C# 核心测试包含 `tests/motion.json` 的 Go/C# 相位金样和稀疏插值；Unity 编辑器与移动网络仍须复验。
+
+
+多房间服务测量入口为 `ROOST_PHYSICS_LOAD=1 go test -tags physx -run '^TestMultiRoomReplicationLoad$' -count=1 -timeout=2m -v ./cmd/physics-viewer`。它运行真实 Room/PhysX/Nest 和独立逻辑客户端，不启动 Unity 或 Gate/TCP；不能当作真实玩家容量。场景、原始统计含义和共享索引基准见 [服务测量](../../docs/framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)。
