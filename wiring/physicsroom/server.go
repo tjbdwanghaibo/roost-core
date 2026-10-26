@@ -52,8 +52,10 @@ type ClientMod struct {
 func NewClientMod(ownerSID int32, timeout time.Duration) *ClientMod {
 	return &ClientMod{owner: ownerSID, timeout: timeout}
 }
-func (*ClientMod) Name() app.ModName        { return domain.CapabilityName }
-func (*ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModBus} }
+func (*ClientMod) Name() app.ModName { return domain.CapabilityName }
+
+// DependsOn 写 NATS Mod 的名字：bus 只是它提供的能力名，App 按 Mod 名排序，写成能力名会在启动时报 unknown mod dependency。
+func (*ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
 func (m *ClientMod) Init(*viper.Viper) error {
 	if m.owner <= 0 {
 		return domain.ErrRequestInvalid

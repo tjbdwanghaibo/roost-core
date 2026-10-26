@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Physics Stack" type="CompoundRunConfigurationType">
+    <toRun name="Physics Service" type="GoApplicationRunConfiguration" />
+    <toRun name="Physics Game" type="GoApplicationRunConfiguration" />
+    <toRun name="Physics Gate" type="GoApplicationRunConfiguration" />
+    <method v="2" />
+  </configuration>
+</component>

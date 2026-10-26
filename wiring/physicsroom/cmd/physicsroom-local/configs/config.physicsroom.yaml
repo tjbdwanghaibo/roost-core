@@ -1,0 +1,16 @@
+# 物理房间 owner（本机调试）。sid 与 main.go 的 ownerSID 一致；三个服务共用 nats.prefix 与 singleton.key_prefix。
+sid: 7801
+log:
+  level: debug
+  file: false
+singleton:
+  enabled: true
+  key_prefix: roost-physics-local
+redis:
+  addr: 127.0.0.1:6379
+nats:
+  url: nats://127.0.0.1:4222
+  prefix: roost-physics-local
+physicsroom:
+  entity_kind: 240
+  entity_category: 1

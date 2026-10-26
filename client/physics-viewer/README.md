@@ -2,7 +2,7 @@
 
 用 `scripts/physics/create-viewer.sh /绝对路径/新项目` 创建 Unity 6000.3.12f1 工程。源文件由 core 保存；创建器拒绝覆盖已有项目。项目只依赖 Unity 内置 Physics、IMGUI 和仓库 RS v2 PacketCodec，不要求 Unity Server。
 
-先在 core 运行 `scripts/physics/build-native.sh`，再运行 `scripts/physics/run-viewer-server.sh`。用本地 Unity 打开新项目的 `Assets/Scenes/PhysicsComparison.unity` 并 Play。
+先在 core 运行 `scripts/physics/build-native.sh`，再运行 `scripts/physics/run-viewer-server.sh`（构建并启动 `scripts/physics/comparison-host` 对照宿主）。用本地 Unity 打开新项目的 `Assets/Scenes/PhysicsComparison.unity` 并 Play。`Room.unity` 走正式物理房间服务，见下文“Gate + 物理房间服务”。
 
 左侧为服务器原生 PhysX 经 Nest/Chunk 的状态，右侧为独立 Unity PhysicsScene。21 个动态刚体、四块 25×25 米区域。初始订阅完成后服务器才开始推进。相同输入带与固定 20ms 步长；客户端按本地时间独立模拟，保存 512 拍历史，对比时从历史取相同 Tick，不拿当前屏幕位置相减。
 
@@ -33,25 +33,9 @@
 
 本场景的出生位置和施力是固定输入带，没有随机运动采样；连接 epoch 不参与物理。两端使用相同创建顺序和显式刚体参数。`TraceContacts` 可记录前 12 拍第一个胶囊的两端位置、速度，默认关闭。数值误差按同 tick 计算；修复禁转惯量后仍存在碰撞累积偏差，不能用固定随机种子承诺跨宿主确定性。诊断与服务器资源结果见 `docs/performance/benchmarks/chunk-physx-20261025/README.md`。
 
-## Crowd 场景（当前 20 人 / 20Hz）
+## Crowd 场景（宿主已删除）
 
-`Crowd.unity`：20 个彩色小球（各由独立 TCP 连接控制）、50 个橙色胶囊、一个黄色大球，以及平台/坡道/阶梯等立体地形。该场景只渲染服务器权威状态，原 `PhysicsComparison.unity` 双端对照保留。
-
-自动验证并截图：
-
-```sh
-scripts/physics/verify-crowd.sh /Users/whb/roost/roost-physics-viewer
-```
-
-手动持续查看：先构建宿主，再运行以下命令（包含启动服务器和 20 个控制客户端），然后在 Unity 打开 `Assets/Scenes/Crowd.unity` 并 Play：
-
-```sh
-GOWORK=off go build -tags physx -o artifacts/physics-viewer ./cmd/physics-viewer
-python3 scripts/physics/measure-crowd.py --seconds 3600 --port 19091 --hz 20 --output artifacts/crowd-live
-```
-
-上例一小时后退出，可以自行缩短 `--seconds`。CPU 性能数字应在 Unity 关闭时测；本地查看模式的 CPU 不用于独占基准对比。控制连接默认使用 12m 进入/14m 离开的 AOI，Unity 旁观仍显示全场；尚未接生产 Gate。增加 `--aoi-radius 0` 可复跑全场负载。20 个控制客户端共约 400 条输入/秒；网络输入会保持到下次更新，超过 250ms 停止施力，断开释放控制槽。
-
+`Crowd.unity` 原由 `cmd/physics-viewer -scenario crowd` 和 `measure-crowd.py` 的 20 条原始 TCP 控制连接驱动。2026-10-26 起这套验收宿主删除：多人控制、AOI 与 Chunk 由正式物理房间服务承担，用下文 `Room.unity` 经 Gate 连接；slot 0 全场旁观与胶囊 NPC 施力没有对应的服务能力，Crowd.unity 不再有服务端。场景文件与 C# 源码保持原样。
 
 ## 当前默认：20 人、20Hz、立体场景
 
@@ -59,23 +43,17 @@ python3 scripts/physics/measure-crowd.py --seconds 3600 --port 19091 --hz 20 --o
 
 静态几何的唯一配置为 `gameplay/physics/terrain.json`；创建工程时复制到 `Assets/Roost/Resources/PhysicsTerrain.json`。修改现有工程时，需同时同步该资源和 `client/physics-viewer/*.cs`，不能只修改 Unity 外观。服务器原生碰撞体已支持旋转；更新本轮代码后必须重建动态库和 Go 宿主。旧桥接 ABI 不保留。
 
-当前控制连接使用 XYZ 球形 AOI（12m 进入、14m 离开），Unity 旁观仍显示整个场地。`Crowd.unity` 场景名保持不变，原来的平地双端 `PhysicsComparison.unity` 不变。本页的运行命令启动当前 20 人立体场景。
+房间服务对每个成员使用 XYZ 球形 AOI（12m 进入、14m 离开）。原来的平地双端 `PhysicsComparison.unity` 不变。下文 Room 场景的启动方式运行当前 20 人立体场景。
 
 现有工程升级 3D 地形时，在 Packages/manifest.json 的 dependencies 中加入 `"com.unity.modules.jsonserialize": "1.0.0"`，并同步地形资源。新建脚本已包含。当前截图与验收见 [20 人 3D 报告](../../docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。
 
 ## Room 场景：按钮控制房间中的球
 
-先构建 native 库，然后在 core 中运行：
+先构建 native 库，按下文“Gate + 物理房间服务”启动三个进程，打开本地项目 `Assets/Scenes/Room.unity` 并 Play（Inspector 保持 UseGate=true；原直连 TCP 的 room 场景与 PR01 协议已删除）。方向按钮按住移动，JUMP 点击跳跃；也支持 WASD、方向键和空格。默认控制第 13 个小球，摄像机跟随；可在 Inspector 修改 PlayerSlot（1～20），不同客户端不能占用同一槽。场景仍为 50×50 米复杂地形、20 球、50 胶囊和一个大球；房间不运行自动 NPC 移动，后续由业务增加。松开方向键停止施加加速度，刚体仍按惯性和摩擦运动。
 
-```sh
-GOWORK=off go run -tags physx ./cmd/physics-viewer -scenario room -listen 127.0.0.1:19093 -send-hz 20 -duration 1h
-```
+链路为 Unity 输入 → Gate → GameIngress → PlayerIngress → Rooms RPC（physicsroom.Submit）→ 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；客户端只插值服务器位置，不运行本地预测。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
 
-当前默认使用下文 Gate + Physics Service 模式。若使用上面的直连命令，需要在 Inspector 关闭 UseGate。打开本地项目 `Assets/Scenes/Room.unity` 并 Play。方向按钮按住移动，JUMP 点击跳跃；也支持 WASD、方向键和空格。默认控制第 13 个小球，摄像机跟随；可在 Inspector 修改 PlayerSlot（1～20），不同客户端不能占用同一槽。场景仍为 50×50 米复杂地形、20 球、50 胶囊和一个大球；本入口不运行自动 NPC 移动，后续由业务增加。松开方向键停止施加加速度，刚体仍按惯性和摩擦运动。
-
-链路为 Unity 输入 → 本地 TCP 适配 → physicsroom.Submit → 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；客户端只插值服务器位置，不运行本地预测。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
-
-本地输入握手 `PR01 + slot:u32BE`；每次输入 `sequence:u64BE + ax:f32BE + az:f32BE + jump:u8` 共 17 字节。只开放 loopback，不替代生产 Gate 登录或开房鉴权。正式 service 的 Input 同样带 Jump 字段。
+输入经 Gate 握手（票据 `physics-slot-N`，只用于 loopback）后以 Protobuf `room_input.proto` 发送；不替代生产登录或开房鉴权。
 
 自动验证共用输入队列与发送路径，驱动水平移动和两次跳跃请求；它不是自动鼠标点击测试：
 
@@ -88,22 +66,22 @@ GOWORK=off go run -tags physx ./cmd/physics-viewer -scenario room -listen 127.0.
 
 ### GoLand 直接 Debug
 
-core 工程已提供 `.run/Physics Room.run.xml`。首次使用先构建 `infra/physics/physx/lib` 原生库（当前本机已就绪），然后在运行配置中选择 **Physics Room → Debug**。配置自动设置 `CGO_ENABLED=1`、`GOWORK=off` 和 `-tags=physx`，入口为 `cmd/physics-viewer` 的 room 场景，监听 `127.0.0.1:19093`，运行期限 1h。Unity 打开 `Room.unity` 后 Play 即可连接，无需另外启动 shell server。
+core 工程的 `.run/` 提供 Physics Service、Physics Game、Physics Gate 三个配置和一次起三个的 **Physics Stack**。首次使用先构建 `infra/physics/physx/lib` 原生库。配置自动设置 `CGO_ENABLED=1`、`GOWORK=off` 和 `-tags=physx`，入口是 `wiring/physicsroom/cmd/physicsroom-local` 的三个子命令。
 
-这是 Go 调试器，可在房间输入、Nest 提交、Chunk 编码等 Go 代码打断点；C++ PhysX 的内部单步需要原生调试器。断点暂停整个进程较久时，Unity 的网络读超时可能断开，恢复服务后重新 Play 即可。
+这是 Go 调试器，可在 PlayerIngress、房间输入、Nest 提交、Chunk 编码等 Go 代码打断点；C++ PhysX 的内部单步需要原生调试器。断点暂停整个进程较久时，Unity 的网络读超时可能断开，恢复服务后重新 Play 即可。
 
+### Gate + 物理房间服务（当前默认）
 
-### Gate + Physics Service（当前默认）
+本机需要 NATS `127.0.0.1:4222`、Redis `127.0.0.1:6379`（App 单实例锁）与 etcd `127.0.0.1:2379`（Gate 发现 Game）。GoLand Debug **Physics Stack**（或分别 Debug 三个配置，顺序不限），看到 `physics gate ready` 后 Unity Play。命令行等价写法与配置见 [物理房间 service §本机三进程](../../docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
 
-本机 NATS 位于 `127.0.0.1:4222`。GoLand 先 Debug **Physics Service**，看到 `physics service ready` 后 Debug **Physics Gate**，看到 `physics gate ready` 后 Unity Play。旧 **Physics Room** 是直连配置，不能同时占用 19093。
+- Physics Service：`physicsroom` 子命令，sid 7801；EntityHostMod 承载房间执行、PhysX、RoomEntity / Nest，经 NATS 提供 Rooms RPC。
+- Physics Game：`game` 子命令，sid 22；GameIngressMod + PlayerIngress，首个输入时建一个 CrowdScene 房间（寿命 1h，停服时销毁），slot N 控制刚体 50+N，内部 RPC 为 MessagePack。
+- Physics Gate：`gate` 子命令，sid 11；GateMod 监听 `127.0.0.1:19093`，经 etcd 找到 game，转发全部经过 NATS。
+- Unity：`Room.unity`，UseGate=true。RS v2 握手、`room_input.proto` 的 Protobuf 输入，返回 RC v1 Chunk。
+- `physics-slot-N`（N=1..20）仅用于 loopback 本地认证，不用于生产账号登录。退出时先停 Gate、Game，再停 Physics Service；重启 Physics Service 后需重开 Game（旧房间随旧 owner 作废）并重新 Play。
 
-- Physics Service：独立进程，SID 7801；房间执行、PhysX、RoomEntity / Nest。
-- Physics Gate：独立进程，同时承载 Gate 与最小 GameIngress；Gateway 内部转发和 PhysicsRoom RPC 都实际经过 NATS。它不是独立 Game 服务部署。
-- Unity：`Room.unity`，UseGate=true。RS v2 握手、`room_input.proto` 的 Protobuf 输入，内部 RPC 为 MessagePack，返回 RC v1 Chunk。
-- `physics-slot-N`（N=1..20）仅用于 loopback 本地认证，不用于生产账号登录；每次 Gate 启动创建唯一临时房间，生存期 1h。退出时先停 Gate 再停 Physics Service。重启服务后需重开 Gate 和 Unity Play。
-
-两个配置均设置 `-log-level debug`，日志打印到各自 GoLand Console。连接、加入、离开逐次记录；输入每 20 个序号记录一次，跳跃单独记录；提交每 50 拍记录，Chunk 每 20 帧记录（含首帧、字节数）。默认 info 时这些诊断日志关闭。
+三个配置均为 `log.level: debug`，日志打印到各自 GoLand Console。连接、加入、离开逐次记录；输入每 20 个序号记录一次，跳跃单独记录；Chunk 每 20 帧记录（含首帧、字节数）。
 
 Room 场景没有 Rigidbody，也不在客户端调用 Physics.Simulate；Unity 会初始化自己的 PhysX 模块，但这不等于客户端在模拟这些物体。只有旧 PhysicsComparison 对照场景运行独立 Unity 物理。
 
-2026-10-25 本机交互验证：两个 GoLand / Delve 进程实际运行，Unity 通过 Gate 连接；按 D 与空格后，Gate 日志记录 sequence=580 acceleration=[10 0 0]，sequence=600 jump=true，随后持续输出 Chunk。新协议解析测试与受影响包 race 通过。这是功能验证，不是 Debug 模式性能基准。批处理验收因本地项目已在 Unity 打开而拒绝启动，改用当前窗口交互验证，未关闭用户工程。
+2026-10-25 本机交互验证（当时为 cmd/physics-viewer 的双进程，2026-10-26 改为上面的三进程正式装配，Unity 实机尚未在新装配下重跑）：两个 GoLand / Delve 进程实际运行，Unity 通过 Gate 连接；按 D 与空格后，Gate 日志记录 sequence=580 acceleration=[10 0 0]，sequence=600 jump=true，随后持续输出 Chunk。新协议解析测试与受影响包 race 通过。这是功能验证，不是 Debug 模式性能基准。批处理验收因本地项目已在 Unity 打开而拒绝启动，改用当前窗口交互验证，未关闭用户工程。

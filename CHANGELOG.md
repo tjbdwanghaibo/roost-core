@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **物理验收宿主收敛为正式服务**（维护者 2026-10-26：viewer 应是一个 service，逻辑重合就不需要）：删除 `cmd/physics-viewer`，它的 room / physics-service / gate-room / crowd 场景与物理房间服务重合，且让根包 `TestCoreDependencyBoundary`、`TestCoreContractsDoNotLinkDrivers` 变红（core 层的 `cmd/` 引入 wiring 与 NATS driver，提交 ce49b3c3）。新增 `wiring/physicsroom.NewEntityHostMod`（按 `physicsroom.*` 配置建 EntityHost 与房间 Service 的 owner Mod）与 `PlayerIngress`（Game 侧首输入 Join、唯一 Relay、Submit、随连接释放，作为 Mod 接 `wiring/gate.NewGameIngressMod`）；`Relay` 的出站参数放宽为 `Pusher` 接口（`*gateway.GameIngress` 照常传入）。本机运行入口改为 `wiring/physicsroom/cmd/physicsroom-local` 的 physicsroom / game / gate 三个 App 服务，GoLand 用 Physics Service / Game / Gate / Stack；**本机调试除 NATS 外还需要 Redis（单实例锁）与 etcd（Gate 发现 Game）**，直连 TCP 的 room 场景（PR01 协议、`.run/Physics Room`）删除。原生与 Unity 数值对照保留为 `scripts/physics/comparison-host`，`run-viewer-server.sh` / `verify-viewer.sh` 改为构建 `artifacts/physics-comparison-host`；crowd 宿主及 `measure-crowd.py`、`verify-crowd.sh` 删除，Crowd.unity 不再有服务端。修复 `physicsroom.NewClientMod` 依赖写成能力名 `bus`、经 App 装配启动即报 unknown mod dependency（改为 NATS Mod）。见 [物理房间 service §本机三进程](docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
+
 - Physics 本地调试：GoLand 分离 Gate 与 Physics Service 进程，Unity 默认经过正式 Gate/NATS/RPC 链路；增加 Protobuf 控制输入与可配置 Debug 日志。
 
 - PhysicsRoom：接入可复用 RoomEntity / EntityHost，Nest Guard 提交和关闭回收；新增服务器落地跳跃与一次性输入语义。Unity Room 场景增加方向/跳跃按钮及键盘控制，保持 20Hz AOI Chunk 同步。需要重建 native 库。

@@ -1,4 +1,7 @@
-// physics-viewer 是原生物理与 Unity 对照验收宿主。仅监听 loopback，无帐号/经济业务。
+// comparison-host 是原生 PhysX 与 Unity PhysicsScene 的数值对照验收宿主（原 cmd/physics-viewer 的 comparison 场景）。
+// 仅监听 loopback，无帐号、房间或业务；房间、输入、Gate 接入等运行链路属于正式服务（service/physicsroom、
+// wiring/physicsroom），见 docs/framework/PHYSICS-ROOM-SERVICE.md。这里只保留正式服务不提供的对照能力：
+// 单个确定初态的世界、固定输入带、首个订阅建立后才开始推进、整场景广播给只做旁观对照的 Unity。
 package main
 
 import (
@@ -9,8 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"log/slog"
-	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -64,23 +65,10 @@ func main() {
 func run() error {
 	addr := flag.String("listen", "127.0.0.1:19091", "local Unity viewer address")
 	hz := flag.Int("send-hz", 20, "state send rate, 20 or 50")
-	aoiRadius := flag.Float64("aoi-radius", 12, "crowd AOI enter radius in meters; 0 sends full scene")
-	aoiMargin := flag.Float64("aoi-margin", 2, "crowd AOI exit hysteresis in meters")
-	scenario := flag.String("scenario", "comparison", "comparison, crowd, room (direct TCP), physics-service, gate-room")
 	duration := flag.Duration("duration", 0, "optional run duration")
-	natsURL := flag.String("nats", "nats://127.0.0.1:4222", "local NATS URL")
-	logLevel := flag.String("log-level", "info", "debug, info, warn, error")
 	flag.Parse()
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
-		return err
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 	if *hz != 20 && *hz != 50 {
 		return errors.New("send-hz must be 20 or 50")
-	}
-	if math.IsNaN(*aoiRadius+*aoiMargin) || math.IsInf(*aoiRadius+*aoiMargin, 0) || *aoiRadius < 0 || *aoiMargin < 0 || *aoiRadius+*aoiMargin > 100 {
-		return errors.New("AOI radius/margin must be finite, non-negative and sum <=100")
 	}
 	host, _, err := net.SplitHostPort(*addr)
 	if err != nil {
@@ -97,29 +85,7 @@ func run() error {
 		ctx, stop = context.WithTimeout(ctx, *duration)
 		defer stop()
 	}
-	if *scenario == "physics-service" {
-		return runPhysicsService(ctx, *natsURL)
-	}
-	if *scenario == "gate-room" {
-		return runPhysicsGate(ctx, *addr, *natsURL)
-	}
-	if *scenario == "room" {
-		if *hz != 20 {
-			return errors.New("room sync is fixed at 20Hz")
-		}
-		return runRoom(ctx, *addr)
-	}
 	bodies := gamephysics.ComparisonScene()
-	input := gamephysics.Commands
-	mailbox := new(controls)
-	switch *scenario {
-	case "comparison":
-	case "crowd":
-		bodies = gamephysics.CrowdScene()
-		input = mailbox.commands
-	default:
-		return errors.New("unknown scenario")
-	}
 	expectedBodies := 0
 	for _, body := range bodies {
 		if body.Shape != physx.Box {
@@ -203,16 +169,7 @@ func run() error {
 				go func() {
 					defer clients.Done()
 					defer func() { <-slots }()
-					start := func() {
-						if *scenario != "crowd" || mailbox.ready() {
-							readyOnce.Do(func() { close(ready) })
-						}
-					}
-					if *scenario == "crowd" {
-						serveControlled(ctx, conn, &latest, *hz, mailbox, *aoiRadius, *aoiMargin, start)
-					} else {
-						serve(ctx, conn, &latest, *hz, 0, 0, 0, start)
-					}
+					serve(ctx, conn, &latest, *hz, func() { readyOnce.Do(func() { close(ready) }) })
 				}()
 			default:
 				conn.Close()
@@ -233,7 +190,7 @@ func run() error {
 		}
 		return ctx.Err()
 	}
-	err = gamephysics.Run(ctx, world, gamephysics.RunConfig{Epoch: epoch, Step: 20 * time.Millisecond, Input: input}, func(ctx context.Context, f gamephysics.Frame) error {
+	err = gamephysics.Run(ctx, world, gamephysics.RunConfig{Epoch: epoch, Step: 20 * time.Millisecond, Input: gamephysics.Commands}, func(ctx context.Context, f gamephysics.Frame) error {
 		accepted, e := engine.Request(ctx, name, id, nest.NewParams(f))
 		if e != nil {
 			return e
@@ -255,9 +212,6 @@ func run() error {
 	listener.Close()
 	<-acceptDone
 	clients.Wait()
-	if *scenario == "crowd" {
-		fmt.Printf("control_accepted=%d control_rejected=%d\n", mailbox.accepted.Load(), mailbox.rejected.Load())
-	}
 	if count > 0 {
 		fmt.Printf("ticks=%d physics_mean_us=%.2f physics_max_us=%.2f\n", count, float64(total.Microseconds())/float64(count), float64(maxStep.Microseconds()))
 	}
@@ -266,12 +220,13 @@ func run() error {
 	}
 	return err
 }
-func serve(ctx context.Context, conn net.Conn, latest *atomic.Pointer[gamephysics.SpatialFrame], hz int, observer uint64, radius, margin float64, ready func()) {
+
+// serve 把最新已提交快照按 hz 整场景推给一个连接；首包写出后调用 ready，宿主才开始推进物理。
+func serve(ctx context.Context, conn net.Conn, latest *atomic.Pointer[gamephysics.SpatialFrame], hz int, ready func()) {
 	defer conn.Close()
 	ticker := time.NewTicker(time.Second / time.Duration(hz))
 	defer ticker.Stop()
 	var cursor chunksync.Cursor
-	var visible map[uint64]bool
 	lastTick := ^uint64(0)
 	for {
 		select {
@@ -283,16 +238,7 @@ func serve(ctx context.Context, conn net.Conn, latest *atomic.Pointer[gamephysic
 		if s == nil || s.Snapshot.Tick == lastTick {
 			continue
 		}
-		snapshot := s.Snapshot
-		var selected map[uint64]bool
-		if observer != 0 && radius > 0 {
-			var err error
-			snapshot, selected, err = s.Visible(observer, radius, margin, visible)
-			if err != nil {
-				return
-			}
-		}
-		p, err := cursor.Plan(snapshot)
+		p, err := cursor.Plan(s.Snapshot)
 		if err != nil {
 			return
 		}
@@ -313,7 +259,6 @@ func serve(ctx context.Context, conn net.Conn, latest *atomic.Pointer[gamephysic
 		if err = cursor.Commit(p); err != nil {
 			return
 		}
-		visible = selected
 		lastTick = s.Snapshot.Tick
 		ready()
 	}

@@ -1,6 +1,6 @@
 # Chunk 同步与原生 PhysX
 
-**当前 Crowd：20 客户端、20Hz 同步、71 个动态刚体、立体地形与 XYZ AOI。** 下方较早的 50 人与平地段落是演进记录，当前契约见文末“当前场景”。
+**当前：20 人 CrowdScene（71 个动态刚体、立体地形、XYZ AOI、20Hz 同步）只由正式物理房间服务承载，Unity 经 Gate 连接；验收宿主只保留原生 PhysX 与 Unity 的数值对照。** 下方较早的 50 人、平地与 crowd 宿主段落是演进记录，当前入口见文末“验证宿主收敛为正式服务”与 [物理房间 service](PHYSICS-ROOM-SERVICE.md)。
 
 状态：2026-10-24 本地可运行首版已实施，生产接线与扩展边界见下文。基线 ee3aa6d1。用户授权 core 直接接入原生 PhysX，本地 Unity 6000.3.12f1 新工程作左右对照；不运行 Unity Server。
 
@@ -34,7 +34,7 @@
 
 ## 当前实现（2026-10-24）
 
-已落地上述三个 core 包、`cmd/physics-viewer` 验证宿主与可复制创建的 Unity 工程源码。现有 Nest / EntitySync 行为未改，Chunk 是独立的新协议，不给旧 EntitySync 载荷套假格式。
+已落地上述三个 core 包、`cmd/physics-viewer` 验证宿主（2026-10-26 起只保留对照部分，位于 `scripts/physics/comparison-host`）与可复制创建的 Unity 工程源码。现有 Nest / EntitySync 行为未改，Chunk 是独立的新协议，不给旧 EntitySync 载荷套假格式。
 
 ### 原生构建
 
@@ -114,6 +114,8 @@ scripts/physics/verify-viewer.sh /绝对路径/Unity工程 50
 
 ### 50 客户端控制场景（2026-10-25）
 
+> 2026-10-26 起 crowd 宿主、`measure-crowd.py` 与 `verify-crowd.sh` 已删除：多人控制、输入 TTL、AOI 与 Chunk 由正式物理房间服务承担，见文末。本节与下一节是当时的实现记录。
+
 `physics-viewer -scenario crowd` 保留同一 50×50m 围场和 25m Chunk，创建 101 个动态刚体：ID 1..50 为自动施力的胶囊，51..100 是半径 .5m、质量 5 的小球，101 是半径 2m、质量 80 的自由大球。每个胶囊半径 .4m、总高度 2m、质量 10。小球从半径 18m 圆周出发，胶囊半径 10m；没有随机运动采样。
 
 50 条独立 TCP 连接分别绑定槽号 1..50，控制 ID=50+槽号的小球。控制端每秒 20 条加速度输入，50Hz 物理执行器取最新合法输入，仍通过原有 Nest/StateDAO 成功提交后发布 Chunk 状态。输入邮箱不是可回滚的业务世界，连接只能提交期望加速度，不能提交位置；正式物理状态始终由执行器独占。连接断开清除输入，超过 250ms 未更新不再施力（保留真实惯性），不把失联当作瞬移停球。
@@ -190,3 +192,11 @@ AOI 继续用 XZ Block 作为候选粗筛，精筛改为 XYZ 欧氏距离；楼�
 ### 物理房间服务已实施（2026-10-25）
 
 上述“后续 service”现已落地为 service/physicsroom 和 wiring/physicsroom，包含固定 owner RPC、进程/房间/成员代际、预算、Nest 提交适配与 Gate Relay。现行接口和验证边界以 [物理房间 service](PHYSICS-ROOM-SERVICE.md) 为准；此前单房间/多世界报告保留为各自阶段证据，不等同于多房间服务容量验证。Linux、Raycast、碰撞事件与运行期增删仍未实施。
+
+### 验证宿主收敛为正式服务（2026-10-26）
+
+维护者 2026-10-26：“viewer 我希望是加一个 service，是不是已经有 service 了，如果逻辑已经重合了就不需要这个了。” 逐项核对后，`cmd/physics-viewer` 的 room、physics-service、gate-room、crowd 四个场景与正式服务重合，已删除；它还把 wiring/gate、NATS driver 引进按目录属于 core 层的 `cmd/`，使根包 `TestCoreDependencyBoundary` / `TestCoreContractsDoNotLinkDrivers` 变红（引入提交 ce49b3c3）。
+
+- 只保留正式服务不提供的数值对照：`scripts/physics/comparison-host`（单个确定初态世界、固定输入带、首个订阅后才推进、整场景广播），只 import core 包。`scripts/physics/run-viewer-server.sh`、`verify-viewer.sh` 改为构建它，输出 `artifacts/physics-comparison-host`；`measure-server.py` 用 `--server` 指向这个二进制。
+- 20 人 CrowdScene 的运行、Unity `Room.unity` 的移动与跳跃改由正式物理房间服务承担：`wiring/physicsroom/cmd/physicsroom-local` 的 physicsroom / game / gate 三个 App 服务，全部用正式 Mod 装配。用法与验证见 [物理房间 service §本机三进程](PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
+- Crowd.unity 的 slot 0 全场旁观、胶囊 NPC 的固定施力带、50 / 20 条原始 TCP 控制连接的压测不再有宿主：前两者不是房间服务能力（NPC 行为由业务加）；多人负载需要时对正式服务另测，本轮没有补测；`CrowdCommands` 仍是 gameplay/physics 的确定性回归输入。

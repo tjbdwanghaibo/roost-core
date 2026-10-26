@@ -1,6 +1,7 @@
 package kit_test
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,9 +11,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	domain "github.com/tjbdwanghaibo/roost-core/service/physicsroom"
 	"github.com/tjbdwanghaibo/roost-core/wiring/account"
 	"github.com/tjbdwanghaibo/roost-core/wiring/configdata"
 	kitconfigdata "github.com/tjbdwanghaibo/roost-core/wiring/configdata"
@@ -20,6 +24,7 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/etcd"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
+	"github.com/tjbdwanghaibo/roost-core/wiring/gate"
 	"github.com/tjbdwanghaibo/roost-core/wiring/lock"
 	kitlock "github.com/tjbdwanghaibo/roost-core/wiring/lock"
 	"github.com/tjbdwanghaibo/roost-core/wiring/manager"
@@ -32,6 +37,7 @@ import (
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
 	"github.com/tjbdwanghaibo/roost-core/wiring/ops"
 	kitops "github.com/tjbdwanghaibo/roost-core/wiring/ops"
+	"github.com/tjbdwanghaibo/roost-core/wiring/physicsroom"
 	"github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	"github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
@@ -241,6 +247,12 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		// 承载玩家的 game 进程的合服启动自检与它依赖的 account 客户端（DataEngine 把自检列为可选依赖）。
 		account.NewClientMod(),
 		account.NewServingGuardMod(),
+		// 物理房间 owner 与 Game 侧接线（PHYSICS-ROOM-SERVICE「装配」）：ClientMod 依赖 NATS Mod，PlayerIngress 依赖
+		// GameIngressMod 与房间能力的提供者。
+		physicsroom.NewEntityHostMod(),
+		physicsroom.NewClientMod(7801, time.Second),
+		gate.NewGameIngressMod(nil, nil, gate.Options{RegisterDiscovery: true}),
+		physicsIngress(t),
 	}
 	names := map[app.ModName]bool{}
 	for _, mod := range all {
@@ -262,4 +274,15 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 			}
 		}
 	}
+}
+
+func physicsIngress(t *testing.T) *physicsroom.PlayerIngress {
+	t.Helper()
+	ingress, err := physicsroom.NewPlayerIngress(physicsroom.PlayerIngressConfig{InputMessageID: 2, FrameMessageID: 1, Seat: func(context.Context, gateway.Binding) (domain.Ref, uint64, error) {
+		return domain.Ref{}, 0, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ingress
 }

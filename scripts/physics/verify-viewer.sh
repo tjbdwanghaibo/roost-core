@@ -8,8 +8,8 @@ unity=${UNITY_EDITOR:-/Applications/Unity/Hub/Editor/6000.3.12f1/Unity.app/Conte
 output="$root/artifacts/physics-validation/$(date +%Y%m%d-%H%M%S)-$hz"
 mkdir -p "$output"
 cd "$root"
-GOWORK=off go build -tags physx -o artifacts/physics-viewer ./cmd/physics-viewer
-artifacts/physics-viewer -send-hz "$hz" -duration 90s > "$output/host.log" 2>&1 &
+GOWORK=off go build -tags physx -o artifacts/physics-comparison-host ./scripts/physics/comparison-host
+artifacts/physics-comparison-host -send-hz "$hz" -duration 90s > "$output/host.log" 2>&1 &
 server_pid=$!
 cleanup(){ if jobs -pr | grep -qx "$server_pid"; then kill "$server_pid"; fi; wait "$server_pid" 2>/dev/null || true; }
 trap cleanup EXIT

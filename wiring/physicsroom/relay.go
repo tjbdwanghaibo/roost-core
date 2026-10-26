@@ -10,10 +10,15 @@ import (
 	domain "github.com/tjbdwanghaibo/roost-core/service/physicsroom"
 )
 
+// Pusher 是 Relay 用到的 Game 出站能力；*gateway.GameIngress 实现它。
+type Pusher interface {
+	PushBound(ctx context.Context, binding gateway.Binding, messageID uint32, kind wire.PayloadKind, payload []byte) error
+}
+
 // Relay 在 Game 侧运行，Binding 必须来自已认证连接且与 Join 相同。
 // 每成员只能运行一个 Relay。PushBound 成功表示可靠出站准入，不是客户端收包确认。
 // 任何出站失败立即结束本轮订阅；重连必须 Leave/Join，不能沿用旧 Cursor。
-func Relay(ctx context.Context, rooms domain.Rooms, game *gateway.GameIngress, binding gateway.Binding, member domain.Member, messageID uint32) error {
+func Relay(ctx context.Context, rooms domain.Rooms, game Pusher, binding gateway.Binding, member domain.Member, messageID uint32) error {
 	if rooms == nil || game == nil || messageID == 0 || binding.Validate() != nil || member.PlayerID != binding.PlayerID {
 		return domain.ErrRequestInvalid
 	}

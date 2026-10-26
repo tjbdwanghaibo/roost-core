@@ -1,0 +1,16 @@
+# 独立 Gate（本机调试），TCP 监听 127.0.0.1:19093，经 etcd 找到 sid 22 的 game。
+sid: 11
+log:
+  level: debug
+  file: false
+singleton:
+  enabled: true
+  key_prefix: roost-physics-local
+redis:
+  addr: 127.0.0.1:6379
+nats:
+  url: nats://127.0.0.1:4222
+  prefix: roost-physics-local
+etcd:
+  endpoints: [127.0.0.1:2379]
+  service_prefix: /roost-physics-local/services/

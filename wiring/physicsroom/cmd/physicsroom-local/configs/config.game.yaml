@@ -1,0 +1,16 @@
+# Game 侧接入（本机调试）。sid 必须是 22：Gate 把 physics-slot-N 票据路由到这里。
+sid: 22
+log:
+  level: debug
+  file: false
+singleton:
+  enabled: true
+  key_prefix: roost-physics-local
+redis:
+  addr: 127.0.0.1:6379
+nats:
+  url: nats://127.0.0.1:4222
+  prefix: roost-physics-local
+etcd:
+  endpoints: [127.0.0.1:2379]
+  service_prefix: /roost-physics-local/services/

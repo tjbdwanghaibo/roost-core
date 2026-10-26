@@ -25,6 +25,7 @@ import (
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
 	kitops "github.com/tjbdwanghaibo/roost-core/wiring/ops"
+	"github.com/tjbdwanghaibo/roost-core/wiring/physicsroom"
 	"github.com/tjbdwanghaibo/roost-core/wiring/platform"
 	"github.com/tjbdwanghaibo/roost-core/wiring/rank"
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
@@ -58,6 +59,7 @@ func everyKitMod() []declaredMod {
 		new(match.Mod), new(platform.Mod), new(rank.Mod), new(session.Mod),
 		account.NewClientMod(), chat.NewClientMod(), global.NewClientMod(), activity.NewClientMod(), mail.NewClientMod(),
 		match.NewClientMod(), platform.NewClientMod(), rank.NewClientMod(), session.NewClientMod(),
+		physicsroom.NewEntityHostMod(),
 	}
 }
 
