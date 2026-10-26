@@ -151,7 +151,7 @@ func TestRoomInvalidBodyDoesNotPublishAckOrBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Tick++
-	snapshot.Objects[0].Data[33] = 2 // 合法字段补丁，但休眠值非法。
+	snapshot.Objects[0].Data[33] = 8 // 合法字段补丁，但休眠值非法。
 	bad, err := c.PlanFields(snapshot, QuantizedLayout())
 	if err != nil {
 		t.Fatal(err)
@@ -188,5 +188,35 @@ func TestQuantizedRejectsOutOfRangeInsteadOfClamping(t *testing.T) {
 		if _, err := QuantizedSnapshot(Frame{Epoch: 1, States: []physx.State{s}}); err == nil {
 			t.Fatalf("accepted invalid state: %+v", s)
 		}
+	}
+}
+
+func TestRoomProfileFlagsAndOldProtocolRejection(t *testing.T) {
+	snapshot, err := QuantizedSnapshot(Frame{Epoch: 1, Tick: 1, States: []physx.State{{ID: 1, Rotation: physx.Quat{0, 0, 0, 1}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Objects[0].Data[33] = ViewDisplayOnly | ViewTrajectory | 1
+	var c chunksync.Cursor
+	p, err := c.PlanFields(snapshot, QuantizedLayout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := RoomPayload(p.Data, InputAck{})
+	var r RoomReplica
+	old := bytes.Clone(packet)
+	old[2] = 1
+	if err = r.Apply(old); err == nil || r.Objects != nil {
+		t.Fatal("old protocol accepted or mutated baseline")
+	}
+	if err = r.Apply(packet); err != nil {
+		t.Fatal(err)
+	}
+	if r.Profiles[1] != ViewDisplayOnly|ViewTrajectory || !r.States[1].Sleeping {
+		t.Fatal("profile confused with sleeping")
+	}
+	snapshot.Objects[0].Data[33] = ViewTrajectory
+	if _, err = DecodeQuantized(snapshot.Objects[0]); err == nil {
+		t.Fatal("trajectory without display flag accepted")
 	}
 }

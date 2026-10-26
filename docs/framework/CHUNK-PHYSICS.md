@@ -1,6 +1,6 @@
 # Chunk 同步与原生 PhysX
 
-**当前 UGC 扩展**：运动学平台/转轮、弹簧抓取、铰链马达、关卡版本与 SHA-256 加载、Unity 有界预测/纠偏已接入，现行契约与验证边界见 [物理房间 service](PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。Room 当前使用 RP1 私有确认、RC2 字段增量与 34 字节完整量化对象；Comparison/Crowd 无损对照仍用 RC1、70 字节。native ABI 2，升级须同步服务和客户端。
+**当前 UGC 扩展**：运动学平台/转轮、弹簧抓取、铰链马达、关卡版本与 SHA-256 加载、Unity 有界预测/纠偏已接入，现行契约与验证边界见 [物理房间 service](PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。Room 当前使用 RP2 私有确认、RC2 字段增量与 34 字节完整量化对象；Comparison/Crowd 无损对照仍用 RC1、70 字节。native ABI 2，升级须同步服务和客户端。
 
 **保留的 Crowd 对照：20 客户端、20Hz 同步、71 个动态刚体、立体地形与 XYZ AOI。** 下方较早的 50 人与平地段落是演进记录，当前契约见文末“当前场景”。
 

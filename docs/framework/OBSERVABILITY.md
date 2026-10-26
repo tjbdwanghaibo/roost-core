@@ -20,6 +20,20 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 
 ## 指标清单（按面板分组）
 
+### 物理房间同步
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `physics.room.payload_bytes.total{kind}` | Counter | Poll 返回的载荷字节，kind=new/retry；不含 RPC/TCP/IP，不代表 socket 实际写成功 |
+| `physics.room.frames.total{mode}` | Counter | 编码的新帧数，mode=full/delta，重试不重复统计 |
+| `physics.room.fields.total{field}` | Counter | RC2 实际编码字段次数：position/rotation/velocity/angular_velocity/sleep；sleep 字段在 RP2 中同时携带展示档标记 |
+| `physics.room.view_changes.total{class}` | Counter | 新可见或内容变化的对象数，class=near/middle/far/motion |
+| `physics.room.view_deferred.total{class}` | Counter | 因分频保留旧样本的次数，不是对象删除或网络丢包 |
+| `physics.room.ack_wait` | Histogram | 从新 pending 帧建立到成功收到该帧 ACK 的耗时，包含客户端处理及轮询，不等于纯 RTT |
+| `physics.room.ack.total` | Counter | 成功推进游标的帧确认数 |
+
+标签固定有界，不按房间/玩家开序列。用采集窗口内增量计算每秒载荷、完整帧占比与字段变化率；同进程多个 Room 服务实例合计。配置、精度和验收边界见 [物理房间手册](PHYSICS-ROOM-SERVICE.md)。
+
 ### 调度与事务（core/nest）
 
 | 指标 | 类型 | 说明 |

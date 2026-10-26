@@ -17,6 +17,7 @@ import (
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
 )
@@ -60,10 +61,14 @@ type memberState struct {
 	pendingPayload                  []byte
 	sequence                        uint64
 	visible, nextVisible            map[uint64]bool
+	view, nextView                  map[uint64]gamephysics.ViewEntry
 }
 
 func New(cfg Config) (*Service, error) {
 	// 所有资源上限在启动时检查，0 不代表无限容量。
+	if err := cfg.Replication.Validate(); err != nil {
+		return nil, err
+	}
 	switch {
 	case cfg.MaxRooms < 1 || cfg.MaxRooms > 1024,
 		cfg.MaxPlayers < 1 || cfg.MaxPlayers > 1024,
@@ -410,6 +415,10 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err = v.cursor.Commit(v.pending); err != nil {
 			return Delivery{}, err
 		}
+		metrics.ObserveHistogram("physics.room.ack_wait", nil, time.Since(v.sentAt))
+		metrics.IncCounter("physics.room.ack.total", nil, 1)
+		v.view = v.nextView
+		v.nextView = nil
 		v.pending = nil
 		v.pendingPayload = nil
 		v.sequence = ack
@@ -418,6 +427,7 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		return Delivery{}, ErrSequence
 	}
 	v.seenAt = time.Now()
+	replay := v.pending != nil
 	if v.pending == nil {
 		if time.Since(v.sentAt) < 50*time.Millisecond {
 			return Delivery{Room: r.ref, Sequence: v.sequence}, nil
@@ -426,11 +436,23 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err != nil {
 			return Delivery{}, err
 		}
-		p, err := v.cursor.PlanFields(snapshot, gamephysics.QuantizedLayout())
+		view, err := gamephysics.PlanView(snapshot, r.states, r.spec.Bodies, r.spec.Motions, v.body, r.grabs, v.view, s.cfg.Replication)
+		if err != nil {
+			return Delivery{}, err
+		}
+		p, err := v.cursor.PlanFields(view.Snapshot, gamephysics.QuantizedLayout())
 		if err != nil {
 			return Delivery{}, err
 		}
 		v.pending = p
+		v.nextView = view.Entries
+		for class, count := range view.Samples {
+			metrics.IncCounter("physics.room.view_changes.total", metrics.Labels{"class": class}, int64(count))
+		}
+		for class, count := range view.Deferred {
+			metrics.IncCounter("physics.room.view_deferred.total", metrics.Labels{"class": class}, int64(count))
+		}
+		recordFrame(p.Data)
 		var own gamephysics.InputAck
 		for _, state := range r.states {
 			if state.ID == v.body && state.InputGeneration == v.member.InputGeneration {
@@ -442,6 +464,11 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		v.nextVisible = visible
 		v.sentAt = time.Now()
 	}
+	kind := "new"
+	if replay {
+		kind = "retry"
+	}
+	metrics.IncCounter("physics.room.payload_bytes.total", metrics.Labels{"kind": kind}, int64(len(v.pendingPayload)))
 	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pendingPayload)}, nil
 }
 func (s *Service) Leave(ctx context.Context, m Member) error {

@@ -505,3 +505,61 @@ func TestPrivateInputAckAndRetryStayWithTheirFrame(t *testing.T) {
 		t.Fatal("pending frame got a newer input acknowledgement", err)
 	}
 }
+
+func TestReplicationViewAdvancesOnlyWithAcknowledgement(t *testing.T) {
+	cfg := testConfig()
+	cfg.Replication = gamephysics.DefaultReplicationPolicy()
+	s := newTestService(t, cfg)
+	ctx := context.Background()
+	spec := testSpec("view-ack", s)
+	spec.Bodies = append(spec.Bodies, physx.Body{ID: 2, Shape: physx.Sphere, Position: physx.Vec3{11, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1})
+	ref, err := s.Create(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Poll(ctx, m, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.lookup(ref)
+	r.mu.Lock()
+	v := r.members[m.PlayerID]
+	pendingTick := v.nextView[2].Tick
+	uncommitted := len(v.view) == 0 && len(v.nextView) == 2
+	r.mu.Unlock()
+	if !uncommitted {
+		t.Fatal("view committed before ACK")
+	}
+	retry, err := s.Poll(ctx, m, 0)
+	if err != nil || !bytes.Equal(first.Payload, retry.Payload) {
+		t.Fatal("retry changed", err)
+	}
+	_, err = s.Poll(ctx, m, first.Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	committed := len(v.view) == 2 && v.view[2].Tick == pendingTick
+	r.mu.Unlock()
+	if !committed {
+		t.Fatal("ACK failed to commit exact view baseline")
+	}
+	if err = s.Leave(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	rejoined, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := s.Poll(ctx, rejoined, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reset.Payload) < 24 || reset.Payload[23] != 1 {
+		t.Fatal("rejoin lacks full frame")
+	}
+}

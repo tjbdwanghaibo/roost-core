@@ -52,7 +52,7 @@ Relay 在可靠出站准入成功后，于下一次 Poll 确认帧；此 ack 不
 | MaxLifetime | 1h |
 | AOI 进入 / 退出 | 12m / 14m |
 
-默认值是准入限制，不是容量承诺。建房按最坏每非静态对象 57 字节加 56 字节头检查整帧预算，保证分散到不同 Chunk 也不越界；总待确认帧内存上界约 MaxRooms×MaxPlayers×MaxFrameBytes，另计世界、快照和编码临时分配。NATS bus 自身 WorkerNum/QueueCap、Gate 出站预算需要部署方配置。
+默认值是准入限制，不是容量承诺。建房按最坏每非静态对象 57 字节加 56 字节头检查整帧预算，保证分散到不同 Chunk 也不越界；待确认载荷的预算基数为 MaxRooms×MaxPlayers×MaxFrameBytes；实际内存还包括编码计划与其载荷副本、已确认/待确认的视图账本、世界、快照和临时分配，不能把该乘积当进程内存上界。NATS bus 自身 WorkerNum/QueueCap、Gate 出站预算需要部署方配置。
 
 Shutdown 先封闭服务准入，取消所有房间，然后等待各自 done。若业务 Commit 不返回，Shutdown 超时必须保留依赖和 native 资源；Mod 提供 StopWithContext，供 app 执行这个契约。指标通过 servicemetrics 报 create/input/join、create 重放/容量拒绝、成员过期、房间失败与房间深度，不使用 RoomID/PlayerID 标签。
 
@@ -129,7 +129,7 @@ Level schema 1 要求非空 Name、非零 Revision、最多 256 个刚体、20 �
 
 - 成员每次重新 Join 都分配新的 `InputGeneration`。旧连接的快照可能短暂仍在视图中，但客户端不拿旧代际的序列确认新输入。
 - 每帧在输入采样后记下 Sequence，只有 PhysX Step 和 Nest 提交成功后才发布；`InputActive=false` 表示该帧没有继续施加该成员输入。输入邮箱仍只保留最新状态，不承诺逐条模拟每条收到的输入。
-- Room 使用 RP1 私有帧头与 RC2 字段增量；完整量化对象 34 字节，输入确认只给当前接收成员。Comparison/Crowd 对照仍使用 RC1、70 字节无损对象，不作为新 Room 带宽测量入口。
+- Room 使用 RP2 私有帧头与 RC2 字段增量；完整量化对象 34 字节，输入确认只给当前接收成员。Comparison/Crowd 对照仍使用 RC1、70 字节无损对象，不作为新 Room 带宽测量入口。
 
 - Native ABI 升到 2，`rp_add_pose` / command 布局变化；必须先停旧服务、重建 native 库和 Go 程序、同步更新 Unity 的全部 viewer 源码及采集脚本，再启动。未部署阶段不兼容混跑旧版本；本功能没有持久房间数据迁移。
 
@@ -147,9 +147,9 @@ Level schema 1 要求非空 Name、非零 Revision、最多 256 个刚体、20 �
 
 ### Room 同步压缩与复测（2026-10-26）
 
-服务器保持完整精度模拟；网络先量化，再比较量化后的字段。`Cursor.PlanFields` / `Replica.ApplyFields` 提供 RC2，旧 `Plan` / `Apply` 保持 RC1。Room 使用 `NewQuantizedSpatialFrame`，接收端使用 `RoomReplica`；不要把 RP1 直接传给通用 RC1 解码器。AOI 仍按真实位置判断。
+服务器保持完整精度模拟；网络先量化，再比较量化后的字段。`Cursor.PlanFields` / `Replica.ApplyFields` 提供 RC2，旧 `Plan` / `Apply` 保持 RC1。Room 使用 `NewQuantizedSpatialFrame`，接收端使用 `RoomReplica`；不要把 RP2 直接传给通用 RC1 解码器。AOI 仍按真实位置判断。
 
-RP1 头为 20 字节：`RP`、版本 1、InputActive 各占 1 字节，随后 little-endian Sequence / Generation 各 8 字节。确认来自成功提交的物理帧，只包含接收成员；同一 pending 帧重发时确认也被冻结。Generation 每帧保留一次，不放进每个广播对象。其后为 RC2，原有 Chunk 头 36 字节及对象 ID/长度保持不变。
+RP2 头为 20 字节：`RP` 占 2 字节，版本 2 与 InputActive 各占 1 字节，随后 little-endian Sequence / Generation 各 8 字节。确认来自成功提交的物理帧，只包含接收成员；同一 pending 帧重发时确认也被冻结。Generation 每帧保留一次，不放进每个广播对象。其后为 RC2，原有 Chunk 头 36 字节及对象 ID/长度保持不变。
 
 | 字段（完整对象偏移） | 字节 | 网络精度/表示 |
 | --- | ---: | --- |
@@ -157,7 +157,7 @@ RP1 头为 20 字节：`RP`、版本 1、InputActive 各占 1 字节，随后 li
 | 旋转（8） | 7 | 最大分量索引 1 字节，其余三分量 int16；q/-q 统一符号 |
 | 线速度（15） | 12 | 三个 int32，0.01m/s，避免高速下落被 int16 饱和 |
 | 角速度（27） | 6 | 三个 int16，0.01rad/s |
-| 休眠（33） | 1 | 0 或 1 |
+| 状态（33） | 1 | bit0 休眠，bit1 展示档（省略速度），bit2 轨迹档；bit2 必须同时设置 bit1 |
 
 每个变化对象先发 1 字节字段掩码，只附变化字段。首次可见、跨 Chunk、离开后重入和重新连接均发送完整字段；无可信基线的部分补丁、非法位、截断及多余字节被拒绝，整帧通过后才替换状态。量化越界拒绝发布，不静默夹紧；角速度编码范围约 ±327.67rad/s，原生角速度上限为 50。准入最坏预算为 `56 + 非静态对象数 × 57`，含对象各占一个 Chunk 的情况。
 
@@ -168,10 +168,36 @@ RP1 头为 20 字节：`RP`、版本 1、InputActive 各占 1 字节，随后 li
 | 原 70 字节对象 RC1 | 6,315,788 |
 | 输入确认私有化，公共对象 53 字节 | 5,229,076 |
 | 完整量化对象 34 字节 | 3,566,536 |
-| RP1 + RC2 字段增量 | 3,048,113 |
+| RP2 + RC2 字段增量 | 3,048,113 |
 
 该样本减少 **51.74%**，平均每客户端约 **15.79 → 7.62 kB/s**（十进制）；逐帧解码实测最大单轴位置误差约 **0.005m**。计入 Chunk 与私有头，不计外层 RS、TCP/IP、NATS；这是编码对照，不是网络吞吐、CPU 性能、WAN 或多房间容量报告。复跑：`go test -tags physx -run TestRoomBandwidthSamePhysicsFrames -count=1 -v ./gameplay/physics`。场景、可见人数、运动和频率变化都会影响结果。
 
 升级需先停旧再起新，更新 Room 服务及 Unity 的 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`（推荐同步全部 viewer 源码），重新连接建立全量基线。此轮 native ABI 仍为 2。Go 字段补丁/量化回归与 C# 共享金样覆盖补丁、截断、基线缺失及不可变历史；Unity 编辑器、碰撞手感和弱网仍须另验。
 
 本轮补丁实际通过：相关包 race、`verify-service.sh` 原生与真实网络各三轮、Go/C# 共享金样、全仓 build/vet 和根目录门禁。全仓 `go test ./...` 仍只有上述 Lockstep 慢链路用例失败；未将其标记为全仓通过。新增拒绝非法量化状态不推进基线/私人确认、两成员确认隔离与 pending 重发回归。
+
+
+### 按接收者分频、字段裁剪与轨迹显示
+
+`DefaultConfig` 默认启用 `Replication: gameplay/physics.DefaultReplicationPolicy()`。自定义配置零值禁用；显式设 `cfg.Replication.Enabled = false` 可退回所有可见对象全频字段增量，用于同场景对照。默认策略如下，频率受 Poll ACK 和最大 20Hz 新帧限制，并非硬实时发送保证。
+
+| 对象档位 | 更新间隔 | 内容 |
+| --- | --- | --- |
+| 自己、抓取关联对象、近处对象 | 每个新帧，最高 20Hz | 完整可用物理字段 |
+| 中距对象 | 至少 5 个物理 tick，约 10Hz | 位置、旋转和状态；速度清零并显式标记省略 |
+| 远距对象 | 至少 10 tick，约 5Hz | 同上 |
+| 远处有固定 MotionTrack 的运动学障碍 | 至少 50 tick，约 1Hz 校准 | 权威姿态与轨迹档标记；客户端使用固定关卡的轨迹 |
+
+近/中分界默认 5m/9m。判定使用两对象包围球的表面间距，并预留相对线速度 × 0.2s；降档多留 1m 滞回，升档立即补当前字段。长转杆按包围球保护，不因中心远就降频；抓取关系两端都保护。新可见、跨 Chunk、升档立即刷新，退出视野立即删除。规划使用已 ACK 的视图基线，pending 帧及分频计划一并冻结；重连从全量开始。该策略不改变服务器物理、Nest 提交或原有中心距离 AOI，超大障碍是否应扩大 AOI 仍由场景接入设计。
+
+RP2 保持 20 字节私有头、RC2 与 34 字节完整对象，但状态字节增加档位标记。`RoomReplica.Profiles` / Unity `BodyState.DisplayOnly` 明确指出速度被省略，**不能把此时的零速度当作物理事实**。升档清除标记并恢复最新速度。旧 RP1 解码器必须升级，不混跑；ABI 仍为 2。
+
+轨迹参数已经包含在摘要校验后的 Level.Motions：正弦 Translation/PeriodSeconds、世界旋转 Axis/AngularSpeed，时间原点为房间 tick 0，步长为 float32 0.02 秒。Unity `ReplicationPlayback.cs` 使用最近服务器姿态及该对象采样 tick 校准，再按已接收帧的显示时间求姿态；不积分累积误差，不跟随墙钟无限外推，收包停顿后停止推进。动态马达锤、抓取物与不带 MotionTrack 的刚体不套用轨迹模式。没有对应固定关卡元数据却收到轨迹档时客户端拒绝继续显示。
+
+Unity 还保留每个对象自己的采样 tick；普通对象按自身采样间隔（上限 200ms）插值，其他对象的新帧不重置它的插值。近身预测的支撑速度只使用完整档对象。显示延迟、物理接触与弱网手感须在 Unity 编辑器验收，纯 C# 测试不能代替该验收。
+
+同一 20 人 Crowd 样本中，上一节字段增量为 3,048,113 字节；分频与裁剪（含档位标记）为 **2,252,525 字节**，再降 **26.10%**，平均每客户端 **7.62 → 5.63 kB/s**。此 Crowd 样本无规则运动轨迹。独立 native 轨迹场景（10 秒、20Hz、一名观察者与一个远处运动学平台）为 **21,136 → 11,668 字节**，平台校准样本最大年龄 48 tick。二者都是同帧编码对照，非真实网络/CPU/容量结论。量化样本的约 5mm 单轴误差不包含降频后持有旧状态与插值延迟。
+
+新增回归覆盖频率、升档恢复、双向抓取关联、快速接近/大包围体、跨区/删除、ACK 才提交视图、重连全量、原生轨迹相位以及 Go/C# 轨迹金样和稀疏插值停顿。复跑 `go test -race -tags physx ./gameplay/physics ./service/physicsroom`，真实链路仍用 `scripts/physics/verify-service.sh`。统计见 [可观测性清单](OBSERVABILITY.md#物理房间同步)：真实 Room Poll 路径分别计新帧/重试字节、Full/Delta、字段次数、档位变化/暂缓和 ACK 等待；不把 Poll 返回字节当作 socket 写成功。
+
+本轮最终 RP2 代码通过全仓 build/vet、根目录门禁、受影响 race、三轮原生与真实 Gate/NATS/TCP 回归，以及 C# 量化/档位/轨迹/稀疏插值核心验证。全仓测试仍只有前述 main 基线已复现的 Lockstep 慢链路用例失败；未运行 Unity 编辑器与 WAN 验收。

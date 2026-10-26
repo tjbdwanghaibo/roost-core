@@ -64,6 +64,7 @@ type Config struct {
 	MaxFrameBytes                    int
 	InputTTL, MemberTTL, MaxLifetime time.Duration
 	Radius, Margin                   float64
+	Replication                      gamephysics.ReplicationPolicy
 	Commit                           Commit
 	Closed                           func(Ref) // Run 与 native 资源已结束后调用，用于释放房间 Entity。
 	Metrics                          servicemetrics.Reporter
@@ -87,5 +88,5 @@ type Rooms interface {
 
 // DefaultConfig 给出有界的初始配置；容量上限不是压测承诺。
 func DefaultConfig(commit Commit) Config {
-	return Config{MaxRooms: 64, MaxPlayers: 20, MaxBodies: 256, MaxFrameBytes: 64 << 10, InputTTL: 250 * time.Millisecond, MemberTTL: 5 * time.Second, MaxLifetime: time.Hour, Radius: 12, Margin: 2, Commit: commit}
+	return Config{MaxRooms: 64, MaxPlayers: 20, MaxBodies: 256, MaxFrameBytes: 64 << 10, InputTTL: 250 * time.Millisecond, MemberTTL: 5 * time.Second, MaxLifetime: time.Hour, Radius: 12, Margin: 2, Replication: gamephysics.DefaultReplicationPolicy(), Commit: commit}
 }

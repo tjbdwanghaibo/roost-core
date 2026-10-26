@@ -33,6 +33,7 @@ namespace Roost.PhysicsViewer
         readonly ConcurrentQueue<byte[]> packets = new ConcurrentQueue<byte[]>();
         readonly Dictionary<ulong, Transform> bodies = new Dictionary<ulong, Transform>();
         readonly Dictionary<ulong, BodyState> previous = new Dictionary<ulong, BodyState>();
+        readonly Dictionary<ulong, SparsePosePlayback> playback = new Dictionary<ulong, SparsePosePlayback>();
         TcpClient socket;
         Thread receiver;
         volatile bool stopping;
@@ -238,7 +239,14 @@ namespace Roost.PhysicsViewer
                     previous.Clear();
                     foreach (var pair in replica.Bodies) previous[pair.Key] = pair.Value;
                     ulong old = replica.Tick;
-                    replica.Apply(data);
+                    bool full = replica.Apply(data);
+                    if(full) playback.Clear();
+                    foreach(var id in new List<ulong>(playback.Keys)) if(!replica.Bodies.ContainsKey(id)) playback.Remove(id);
+                    foreach(var pair in replica.Bodies) {
+                        if(pair.Value.Trajectory&&!motionDescriptions.ContainsKey(pair.Key)) throw new InvalidDataException("Trajectory requires fixed level metadata");
+                        if(!playback.TryGetValue(pair.Key,out var display)) { display=new SparsePosePlayback();playback[pair.Key]=display; }
+                        display.Sample(Pose(pair.Value),pair.Value.SampleTick,Time.unscaledTime);
+                    }
                     if (!ControlRoom && replica.Bodies.Count != 71) throw new InvalidDataException("Expected 71 bodies");
                     foreach (var id in replica.Bodies.Keys)
                         if (!bodies.ContainsKey(id)) throw new InvalidDataException("Unknown crowd body");
@@ -258,12 +266,18 @@ namespace Roost.PhysicsViewer
                     var target = bodies[pair.Key];
                     target.gameObject.SetActive(true);
                     var state = pair.Value;
-                    if (previous.TryGetValue(pair.Key, out var old))
-                    {
-                        target.position = Vector3.Lerp(old.Position, state.Position, alpha);
-                        target.rotation = Quaternion.Slerp(old.Rotation, state.Rotation, alpha);
-                    }
-                    else { target.position = state.Position; target.rotation = state.Rotation; }
+                    if(ControlRoom) {
+                        DisplayPose pose;
+                        if(motionDescriptions.TryGetValue(pair.Key,out var motion)) {
+                            double renderTick=Math.Max(0,(double)replica.Tick-(1-alpha)*interval/.02);
+                            pose=MotionPlayback.Evaluate(motion,Pose(state),state.SampleTick,renderTick);
+                        } else pose=Interpolate?playback[pair.Key].Read(Time.unscaledTime):Pose(state);
+                        target.position=U(pose.Position);
+                        target.rotation=new Quaternion(pose.Rotation.X,pose.Rotation.Y,pose.Rotation.Z,pose.Rotation.W);
+                    } else if (previous.TryGetValue(pair.Key, out var old)) {
+                        target.position=Vector3.Lerp(old.Position,state.Position,alpha);
+                        target.rotation=Quaternion.Slerp(old.Rotation,state.Rotation,alpha);
+                    } else {target.position=state.Position;target.rotation=state.Rotation;}
                     if (ControlRoom && pair.Key == (UseGate?controlledBody:(ulong)(50 + PlayerSlot)))
                     {
                         if (!hasOrigin) { origin = state.Position; hasOrigin = true; startedAt = Time.unscaledTime; }
@@ -285,6 +299,7 @@ namespace Roost.PhysicsViewer
             }
             catch (Exception e) { failure = e.Message; stopping = true; socket?.Close(); }
         }
+        static DisplayPose Pose(BodyState state)=>new DisplayPose {Position=N(state.Position),Rotation=new System.Numerics.Quaternion(state.Rotation.x,state.Rotation.y,state.Rotation.z,state.Rotation.w)};
         void OnGUI()
         {
             if (ControlRoom)

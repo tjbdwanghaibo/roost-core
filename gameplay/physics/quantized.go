@@ -96,7 +96,7 @@ func DecodeQuantized(o chunksync.Object) (physx.State, error) {
 	var s physx.State
 	s.ID = o.ID
 	d := o.Data
-	if len(d) != QuantizedBodyBytes || d[8] > 3 || d[33] > 1 {
+	if len(d) != QuantizedBodyBytes || d[8] > 3 || d[33] > 7 || d[33]&ViewTrajectory != 0 && d[33]&ViewDisplayOnly == 0 {
 		return s, errors.New("physics: quantized body format")
 	}
 	i16 := func(at int) float32 { return float32(int16(binary.LittleEndian.Uint16(d[at:]))) / 100 }
@@ -107,7 +107,7 @@ func DecodeQuantized(o chunksync.Object) (physx.State, error) {
 	s.Position = physx.Vec3{float32(o.Chunk.X)*25 + i16(0), i32(4), float32(o.Chunk.Z)*25 + i16(2)}
 	s.Velocity = physx.Vec3{i32(15), i32(19), i32(23)}
 	s.AngularVelocity = physx.Vec3{i16(27), i16(29), i16(31)}
-	s.Sleeping = d[33] != 0
+	s.Sleeping = d[33]&1 != 0
 	sum := float64(0)
 	offset := 9
 	for i := range 4 {
@@ -129,7 +129,7 @@ func DecodeQuantized(o chunksync.Object) (physx.State, error) {
 // RoomPayload 只附带当前接收成员的采样确认，和 Chunk 一起冻结/重发。
 func RoomPayload(chunk []byte, ack InputAck) []byte {
 	out := make([]byte, RoomHeaderBytes+len(chunk))
-	copy(out, "RP\x01")
+	copy(out, "RP\x02")
 	if ack.Active {
 		out[3] = 1
 	}
@@ -144,10 +144,12 @@ type RoomReplica struct {
 	chunksync.Replica
 	Ack    InputAck
 	States map[uint64]physx.State
+	// Profiles 的标志位说明速度是否被省略；展示档的零值不得作为物理事实。
+	Profiles map[uint64]byte
 }
 
 func (r *RoomReplica) Apply(data []byte) error {
-	if len(data) < RoomHeaderBytes+36 || len(data) > chunksync.MaxPayload || string(data[:3]) != "RP\x01" || data[3] > 1 {
+	if len(data) < RoomHeaderBytes+36 || len(data) > chunksync.MaxPayload || string(data[:3]) != "RP\x02" || data[3] > 1 {
 		return errors.New("physics: room frame format")
 	}
 	ack := InputAck{Sequence: binary.LittleEndian.Uint64(data[4:]), Generation: binary.LittleEndian.Uint64(data[12:]), Active: data[3] == 1}
@@ -159,15 +161,18 @@ func (r *RoomReplica) Apply(data []byte) error {
 		return err
 	}
 	states := make(map[uint64]physx.State, len(next.Objects))
+	profiles := make(map[uint64]byte, len(next.Objects))
 	for id, o := range next.Objects {
 		s, err := DecodeQuantized(o)
 		if err != nil {
 			return err
 		}
 		states[id] = s
+		profiles[id] = o.Data[33] & (ViewDisplayOnly | ViewTrajectory)
 	}
 	r.Replica = next
 	r.Ack = ack
 	r.States = states
+	r.Profiles = profiles
 	return nil
 }

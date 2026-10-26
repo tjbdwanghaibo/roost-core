@@ -26,6 +26,7 @@ namespace Roost.PhysicsViewer
             public uint Revision;
             public LevelBody[] Bodies;
             public ulong[] Players;
+            public LevelMotion[] Motions;
         }
         [Serializable] sealed class LevelBody
         {
@@ -34,6 +35,13 @@ namespace Roost.PhysicsViewer
             public float[] Position, Rotation, Dimensions;
             public float Mass;
         }
+        [Serializable] sealed class LevelMotion
+        {
+            public ulong ID;
+            public float[] Translation, Axis;
+            public float PeriodSeconds, AngularSpeed;
+        }
+        readonly System.Collections.Generic.Dictionary<ulong,MotionDescription> motionDescriptions=new System.Collections.Generic.Dictionary<ulong,MotionDescription>();
         static ulong Varint(BinaryReader r)
         {
             ulong v=0;
@@ -87,6 +95,11 @@ namespace Roost.PhysicsViewer
                 if(controlled){ found=true;controlledRadius=radius;controlledHalfHeight=b.Shape==1?b.Dimensions[1]:0; }
             }
             if(!found)throw new InvalidDataException("Controlled body missing");
+            if(l.Motions!=null) foreach(var m in l.Motions) {
+                LevelBody body=Array.Find(l.Bodies,b=>b.ID==m.ID);
+                if(body==null||body.Motion!=3||motionDescriptions.ContainsKey(m.ID)||m.Translation==null||m.Translation.Length!=3||m.Axis==null||m.Axis.Length!=3||m.PeriodSeconds<.1f||m.PeriodSeconds>3600||float.IsNaN(m.PeriodSeconds)) throw new InvalidDataException("Level motion");
+                motionDescriptions[m.ID]=new MotionDescription {Translation=new NVector(m.Translation[0],m.Translation[1],m.Translation[2]),Axis=new NVector(m.Axis[0],m.Axis[1],m.Axis[2]),PeriodSeconds=m.PeriodSeconds,AngularSpeed=m.AngularSpeed};
+            }
             levelReady=true;
         }
         static NVector N(Vector3 v)=>new NVector(v.x,v.y,v.z);
@@ -99,7 +112,7 @@ namespace Roost.PhysicsViewer
             Vector3 supportVelocity=Vector3.zero;
             if(grounded) {
                 foreach(var pair in replica.Bodies) {
-                    if(bodies.TryGetValue(pair.Key,out var support)&&support==ground.collider.transform) {
+                    if(bodies.TryGetValue(pair.Key,out var support)&&support==ground.collider.transform&&!pair.Value.DisplayOnly) {
                         supportVelocity=pair.Value.Velocity+Vector3.Cross(pair.Value.AngularVelocity,ground.point-pair.Value.Position);
                         break;
                     }
