@@ -111,6 +111,7 @@
 - [FEATURE-2026-10-22-ai-idle-without-observers.md](FEATURE-2026-10-22-ai-idle-without-observers.md)：附近没有玩家观察时 AI 暂停的功能方案（DESIGN-TODO 优化项第 1 组方向二，待优化阶段实施、缺省不启用：Interest 观察者计数只读快照、扫描者 + Nest 广播暂停、实体心跳探测恢复、与 Freeze / Remote / 卸载 / 时间域 / 投递方式的关系、指标、测试与工作量、待拍板）
 - [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [PROPOSAL-2026-10-26-redis-authority-review.md](PROPOSAL-2026-10-26-redis-authority-review.md)：“Redis 做 Remote / Saga 权威”方案的代码审查与第 1 步协议草案（未实施、待维护者拍板：按严重度的问题清单、现状核对、不变量与三大块契约冲突、漏项场景、往返次数审计与“不换存储先减往返”的第 1.5 步、RPO / 拓扑 / 确认条件选项、分期门槛、第 2 步协调器 + Store Service 的 Redis 记录结构与崩溃恢复表）
+- [DESIGN-2026-10-26-redis-authority-v2.md](DESIGN-2026-10-26-redis-authority-v2.md)：“Redis 做 Saga / Remote 权威”设计 v2（维护者 2026-10-26 决定按它直接实施，未实施：单主 + AOF always + 同连接 WAITAOF、不考虑切主；每类事务的存储操作次数基线与目标；R1～R18 逐条处理；分期与门槛；第 2 步 Saga 协调器 + Store Service 的函数级设计、Lua 脚本、状态转换与崩溃恢复表、投影与回收、并发模型、指标、配置、红测试与验收命令；实施后的 Saga 压测方案）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
 - [DOCUMENTS.md](DOCUMENTS.md)：本清单
 
