@@ -21,6 +21,8 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -128,7 +130,12 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 	}
 	redisAddr, redisPrefix := perfRedisAuthority(t)
-	authority := crossProcessRedis(t, redisAddr)
+	// 连接池取生产缺省（redis_authority.pool_size 64）：协调 / 发布 / 消费并发、同进程 Store Service 的分区循环，
+	// 再加压测端直接调 StartSaga 的发起者，都要从这个池里拿连接。
+	authorityConfig := fredis.DefaultConfig(redisAddr)
+	authorityConfig.PoolSize, authorityConfig.MinIdleConns = 64, 8
+	authority := redisdriver.NewRedisClient(authorityConfig)
+	t.Cleanup(func() { _ = authority.Close() })
 	cfg := crossProcessAssembly(database, redisPrefix, stream, prefix, "perf")
 	cfg.Engine = DefaultOptions()
 	if value := os.Getenv("ROOST_SAGA_PERF_COORDINATOR_BATCH"); value != "" {
