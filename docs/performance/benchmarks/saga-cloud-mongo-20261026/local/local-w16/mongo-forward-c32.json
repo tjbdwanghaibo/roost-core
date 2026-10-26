@@ -1,0 +1,99 @@
+{
+  "Mode": "forward",
+  "Rate": 0,
+  "Concurrency": 32,
+  "Planned": 2558,
+  "Started": 2558,
+  "Completed": 2558,
+  "WrongTerminal": 0,
+  "ConsumerWorkers": 16,
+  "StepConsumers": 1,
+  "CoordinatorBatch": 3,
+  "DiagnosticHops": true,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 60.651371333,
+  "CompletionTPS": 42.17546848125773,
+  "ExpectedTerminalTPS": 42.17546848125773,
+  "P50MS": 779.0955,
+  "P95MS": 881.195458,
+  "P99MS": 952.933041,
+  "MaxMS": 1197.532541,
+  "FinalStats": {
+    "Started": 2558,
+    "Dispatched": 5116,
+    "Completed": 2558,
+    "Compensated": 0,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 0,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 2558,
+  "EffectDocuments": 5116,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 2558,
+      "P50MS": 779.0955,
+      "P99MS": 952.933041,
+      "MaxMS": 1197.532541,
+      "ServerP99MS": 929.027292
+    }
+  ],
+  "SteadyWindowSeconds": 50,
+  "SteadyTPS": 42.58,
+  "SteadyCompleted": 2129,
+  "ProcessCPUCores": 0.24784166737910548,
+  "Statuses": {
+    "4": 2558
+  },
+  "Harness": {
+    "AdmitLag": {
+      "Samples": 2558,
+      "NegativeDurations": 0,
+      "P50MS": 0,
+      "P95MS": 0,
+      "P99MS": 0,
+      "MaxMS": 0
+    },
+    "ObserveLag": {
+      "Samples": 2558,
+      "NegativeDurations": 0,
+      "P50MS": 26.012083,
+      "P95MS": 47.343166,
+      "P99MS": 50.357291,
+      "MaxMS": 64.233584
+    }
+  },
+  "Server": {
+    "Start": {
+      "Samples": 2558,
+      "NegativeDurations": 0,
+      "P50MS": 17.056541,
+      "P95MS": 24.510625,
+      "P99MS": 39.810291,
+      "MaxMS": 64.787916
+    },
+    "Completion": {
+      "Samples": 2558,
+      "NegativeDurations": 0,
+      "P50MS": 752.277,
+      "P95MS": 854.363041,
+      "P99MS": 929.027292,
+      "MaxMS": 1150.265625
+    },
+    "TerminalMissing": 0
+  }
+}

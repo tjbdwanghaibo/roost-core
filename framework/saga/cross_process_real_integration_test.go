@@ -50,7 +50,7 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database := fmt.Sprintf("roost_revn06s5_%d_%d", os.Getpid(), time.Now().UnixNano())
+	database := fmt.Sprintf("%s_%d_%d", perfResourcePrefix(t, "ROOST_PERF_DB_PREFIX", "roost_sagaperf_", "roost_revn06s5"), os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() {
 		// 被 SIGKILL 的进程留下的事务在服务端保持打开、持有锁，直到 transactionLifetimeLimitSeconds（默认 60s）
 		// 才被回收；dropDatabase 要等它们。

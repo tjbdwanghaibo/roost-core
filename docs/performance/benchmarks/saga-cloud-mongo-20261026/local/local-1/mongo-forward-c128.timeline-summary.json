@@ -1,0 +1,154 @@
+{
+  "NestedPublish": {
+    "command_puback": {
+      "Samples": 5224,
+      "MeanPerCommandMS": 11.109642918644742,
+      "P99PerCommandMS": 28.424834
+    },
+    "result_puback": {
+      "Samples": 5224,
+      "MeanPerCommandMS": 11.017524491385949,
+      "P99PerCommandMS": 29.497167
+    }
+  },
+  "Transactions": 2612,
+  "P50MS": 2979.016041,
+  "P99MS": 4526.4455,
+  "MaxMS": 5178.798083,
+  "Stages": {
+    "handoff_overlap": {
+      "MeanMS": -0.0001004176875957121,
+      "P99MS": 0.0,
+      "Slowest1PercentMeanMS": 0.0
+    },
+    "start_commit": {
+      "MeanMS": 21.634473287136302,
+      "P99MS": 142.135958,
+      "Slowest1PercentMeanMS": 147.34873221428575
+    },
+    "coordinator_wait_and_claim": {
+      "MeanMS": 139.67585202986214,
+      "P99MS": 1047.778875,
+      "Slowest1PercentMeanMS": 1069.2748869999998
+    },
+    "dispatch_commit": {
+      "MeanMS": 36.532288748851485,
+      "P99MS": 56.230334,
+      "Slowest1PercentMeanMS": 36.56208475
+    },
+    "outbox_wait": {
+      "MeanMS": 305.6871886286373,
+      "P99MS": 1004.8521660000001,
+      "Slowest1PercentMeanMS": 966.5583155357144
+    },
+    "command_transport": {
+      "MeanMS": 2285.152326430326,
+      "P99MS": 2648.301375,
+      "Slowest1PercentMeanMS": 2394.399617428571
+    },
+    "command_consumer_slot": {
+      "MeanMS": 46.744832478177564,
+      "P99MS": 108.890875,
+      "Slowest1PercentMeanMS": 49.908711285714276
+    },
+    "step_decode": {
+      "MeanMS": 0.026718882848392068,
+      "P99MS": 0.089001,
+      "Slowest1PercentMeanMS": 0.029183107142857153
+    },
+    "step_reserve": {
+      "MeanMS": 34.77665832006128,
+      "P99MS": 49.901541,
+      "Slowest1PercentMeanMS": 35.94422007142857
+    },
+    "step_prepare": {
+      "MeanMS": 0.003488409647779483,
+      "P99MS": 0.058792,
+      "Slowest1PercentMeanMS": 0.0013870357142857146
+    },
+    "transaction_prepare": {
+      "MeanMS": 0.018035361791730507,
+      "P99MS": 0.131,
+      "Slowest1PercentMeanMS": 0.011968821428571431
+    },
+    "business_writes": {
+      "MeanMS": 1.6256983418836135,
+      "P99MS": 5.2620830000000005,
+      "Slowest1PercentMeanMS": 2.1159895357142857
+    },
+    "receipt_and_commit": {
+      "MeanMS": 34.87115237136297,
+      "P99MS": 50.467791,
+      "Slowest1PercentMeanMS": 35.23732896428571
+    },
+    "result_prepare": {
+      "MeanMS": 0.005332415773353777,
+      "P99MS": 0.0875,
+      "Slowest1PercentMeanMS": 0.0034879642857142865
+    },
+    "result_transport": {
+      "MeanMS": 57.185695576569636,
+      "P99MS": 127.13033399999999,
+      "Slowest1PercentMeanMS": 63.52842717857142
+    },
+    "result_consumer_slot": {
+      "MeanMS": 8.411101128254217,
+      "P99MS": 37.581959,
+      "Slowest1PercentMeanMS": 8.554584785714287
+    },
+    "completion_apply": {
+      "MeanMS": 35.833322168070445,
+      "P99MS": 53.475459,
+      "Slowest1PercentMeanMS": 35.67025585714286
+    }
+  },
+  "P99Transaction": {
+    "SagaID": "perf-68",
+    "TotalMS": 4526.4455,
+    "Steps": 2,
+    "PartsMS": {
+      "handoff_overlap": 0.0,
+      "start_commit": 177.785167,
+      "coordinator_wait_and_claim": 934.247249,
+      "dispatch_commit": 31.710834,
+      "outbox_wait": 882.636334,
+      "command_transport": 2256.814249,
+      "command_consumer_slot": 56.92075,
+      "step_decode": 0.02575,
+      "step_reserve": 36.683917,
+      "step_prepare": 0.002417,
+      "transaction_prepare": 0.006125,
+      "business_writes": 1.244541,
+      "receipt_and_commit": 26.705167000000003,
+      "result_prepare": 0.002125,
+      "result_transport": 64.066542,
+      "result_consumer_slot": 21.58775,
+      "completion_apply": 36.006583
+    }
+  },
+  "SlowestTransaction": {
+    "SagaID": "perf-88",
+    "TotalMS": 5178.798083,
+    "Steps": 2,
+    "PartsMS": {
+      "handoff_overlap": 0.0,
+      "start_commit": 167.765708,
+      "coordinator_wait_and_claim": 1172.895833,
+      "dispatch_commit": 43.393249999999995,
+      "outbox_wait": 1001.038084,
+      "command_transport": 2520.701583,
+      "command_consumer_slot": 88.49754100000001,
+      "step_decode": 0.024251,
+      "step_reserve": 34.339332,
+      "step_prepare": 0.001251,
+      "transaction_prepare": 0.011749,
+      "business_writes": 1.202375,
+      "receipt_and_commit": 36.180583999999996,
+      "result_prepare": 0.0019169999999999999,
+      "result_transport": 77.202792,
+      "result_consumer_slot": 0.120083,
+      "completion_apply": 35.42175
+    }
+  },
+  "SlowCohortCount": 28
+}

@@ -1,0 +1,102 @@
+{
+  "Pairs": 256,
+  "Variant": "steps",
+  "Mode": "forward",
+  "Rate": 0,
+  "Concurrency": 32,
+  "Planned": 572,
+  "Started": 572,
+  "Completed": 572,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 62.536444625,
+  "CompletionTPS": 9.146666450739243,
+  "P50MS": 3501.329916,
+  "P95MS": 3815.238542,
+  "P99MS": 4036.88125,
+  "MaxMS": 4471.611125,
+  "Server": {
+    "Samples": 572,
+    "P50MS": 3480,
+    "P95MS": 3790,
+    "P99MS": 4019,
+    "MaxMS": 4441
+  },
+  "StartCall": {
+    "Samples": 572,
+    "P50MS": 17.956125,
+    "P95MS": 28.386458,
+    "P99MS": 49.047167,
+    "MaxMS": 53.409542
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 572,
+      "P50MS": 3501.329916,
+      "P99MS": 4036.88125,
+      "MaxMS": 4471.611125,
+      "ServerP99MS": 4019
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 572,
+      "P50MS": 25.7215,
+      "P95MS": 76.284084,
+      "P99MS": 103.488417,
+      "MaxMS": 113.5415
+    },
+    "debit": {
+      "Samples": 572,
+      "P50MS": 25.156291,
+      "P95MS": 80.756959,
+      "P99MS": 103.343416,
+      "MaxMS": 126.376166
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 571,
+      "P50MS": 99.104666,
+      "P95MS": 211.968875,
+      "P99MS": 266.530083,
+      "MaxMS": 292.178667
+    },
+    "debit": {
+      "Samples": 571,
+      "P50MS": 96.923542,
+      "P95MS": 197.646375,
+      "P99MS": 267.36175,
+      "MaxMS": 292.917583
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 31,
+  "FinalProjector": {
+    "Committed": 1144,
+    "Projected": 1144,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0,
+    "UnloadingEntities": 0,
+    "UnloadAdmissionRejected": 0
+  },
+  "Statuses": {
+    "4": 572
+  },
+  "Mismatches": null,
+  "SteadyWindowSeconds": 50,
+  "SteadyTPS": 9.04,
+  "SteadyCompleted": 452,
+  "ProcessCPUCores": 0.27795692742422196
+}

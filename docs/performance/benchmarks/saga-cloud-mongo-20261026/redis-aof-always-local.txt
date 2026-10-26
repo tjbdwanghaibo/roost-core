@@ -1,0 +1,16 @@
+== c=1
+  throughput summary: 242.28 requests per second
+  latency summary (msec):
+          avg       min       p50       p95       p99       max
+        4.106     2.848     3.991     4.943     7.751    19.199
+== c=16
+  throughput summary: 1916.08 requests per second
+  latency summary (msec):
+          avg       min       p50       p95       p99       max
+        8.264     3.600     8.055    10.015    12.959    20.127
+== c=64
+  throughput summary: 7423.90 requests per second
+  latency summary (msec):
+          avg       min       p50       p95       p99       max
+        8.483     3.584     8.791    10.967    13.631    19.775
+redis_version:8.10.1

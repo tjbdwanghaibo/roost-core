@@ -1,0 +1,102 @@
+{
+  "h00.start.create": {
+    "Count": 2689,
+    "TotalMS": 54962.438352999954,
+    "MaxMS": 140.096083
+  },
+  "h01.coord.claim": {
+    "Count": 3255,
+    "TotalMS": 133566.70003699986,
+    "MaxMS": 175.931958
+  },
+  "h01.coord.wake": {
+    "Count": 5378,
+    "TotalMS": 621565.7199999992,
+    "MaxMS": 1146.143
+  },
+  "h02.dispatch.apply": {
+    "Count": 5378,
+    "TotalMS": 96037.14757699966,
+    "MaxMS": 144.032458
+  },
+  "h03.outbox.ack": {
+    "Count": 5378,
+    "TotalMS": 88362.20289299998,
+    "MaxMS": 78.413417
+  },
+  "h03.outbox.publish": {
+    "Count": 5378,
+    "TotalMS": 62597.77302300006,
+    "MaxMS": 60.54375
+  },
+  "h03.outbox.wait": {
+    "Count": 5378,
+    "TotalMS": 6597956.740627003,
+    "MaxMS": 1467.080125
+  },
+  "h11.complete.apply": {
+    "Count": 5378,
+    "TotalMS": 91232.71525700016,
+    "MaxMS": 56.302
+  },
+  "h11.complete.get": {
+    "Count": 5378,
+    "TotalMS": 1735.159554999996,
+    "MaxMS": 74.957417
+  },
+  "mongo.aggregate": {
+    "Count": 2,
+    "TotalMS": 2.239,
+    "MaxMS": 1.44775
+  },
+  "mongo.commitTransaction": {
+    "Count": 21512,
+    "TotalMS": 343200.6365799982,
+    "MaxMS": 42.8795
+  },
+  "mongo.createIndexes": {
+    "Count": 18,
+    "TotalMS": 689.7697939999999,
+    "MaxMS": 90.035167
+  },
+  "mongo.delete": {
+    "Count": 16136,
+    "TotalMS": 90614.01695900064,
+    "MaxMS": 78.235375
+  },
+  "mongo.dropDatabase": {
+    "Count": 1,
+    "TotalMS": 90.01275,
+    "MaxMS": 90.01275
+  },
+  "mongo.endSessions": {
+    "Count": 1,
+    "TotalMS": 0.233625,
+    "MaxMS": 0.233625
+  },
+  "mongo.find": {
+    "Count": 28108,
+    "TotalMS": 6916.226197999958,
+    "MaxMS": 77.647542
+  },
+  "mongo.findAndModify": {
+    "Count": 25127,
+    "TotalMS": 240825.17268100037,
+    "MaxMS": 112.616125
+  },
+  "mongo.getMore": {
+    "Count": 8,
+    "TotalMS": 16.118374,
+    "MaxMS": 3.489208
+  },
+  "mongo.insert": {
+    "Count": 29581,
+    "TotalMS": 52544.90780999991,
+    "MaxMS": 52.98025
+  },
+  "mongo.update": {
+    "Count": 16134,
+    "TotalMS": 7985.531360000025,
+    "MaxMS": 128.252542
+  }
+}

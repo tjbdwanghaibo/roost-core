@@ -1,0 +1,99 @@
+{
+  "Mode": "forward",
+  "Rate": 0,
+  "Concurrency": 64,
+  "Planned": 408,
+  "Started": 408,
+  "Completed": 408,
+  "WrongTerminal": 0,
+  "ConsumerWorkers": 16,
+  "StepConsumers": 1,
+  "CoordinatorBatch": 3,
+  "DiagnosticHops": true,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 67.050041666,
+  "CompletionTPS": 6.085007404356174,
+  "ExpectedTerminalTPS": 6.085007404356174,
+  "P50MS": 10236.42125,
+  "P95MS": 10965.691625,
+  "P99MS": 11668.433959,
+  "MaxMS": 12000.697667,
+  "FinalStats": {
+    "Started": 408,
+    "Dispatched": 816,
+    "Completed": 408,
+    "Compensated": 0,
+    "Failed": 0,
+    "ManualRequired": 0,
+    "Conflicts": 0,
+    "Duplicates": 0,
+    "PublishFailures": 0,
+    "StoreFailures": 0,
+    "WorkerFailures": 0,
+    "LateAfterAbandon": 0,
+    "StaleIncarnation": 0,
+    "StaleAttempt": 0,
+    "Reopened": 0
+  },
+  "OutboxPending": 0,
+  "Leases": 0,
+  "BusinessDocuments": 408,
+  "EffectDocuments": 816,
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 408,
+      "P50MS": 10236.42125,
+      "P99MS": 11668.433959,
+      "MaxMS": 12000.697667,
+      "ServerP99MS": 11559.214542
+    }
+  ],
+  "SteadyWindowSeconds": 50,
+  "SteadyTPS": 6.08,
+  "SteadyCompleted": 304,
+  "ProcessCPUCores": 0.10814190147888939,
+  "Statuses": {
+    "4": 408
+  },
+  "Harness": {
+    "AdmitLag": {
+      "Samples": 408,
+      "NegativeDurations": 0,
+      "P50MS": 0,
+      "P95MS": 0,
+      "P99MS": 0,
+      "MaxMS": 0
+    },
+    "ObserveLag": {
+      "Samples": 408,
+      "NegativeDurations": 1,
+      "P50MS": 57.832833,
+      "P95MS": 113.967333,
+      "P99MS": 192.16825,
+      "MaxMS": 266.433417
+    }
+  },
+  "Server": {
+    "Start": {
+      "Samples": 408,
+      "NegativeDurations": 0,
+      "P50MS": 62.117542,
+      "P95MS": 301.491458,
+      "P99MS": 389.379958,
+      "MaxMS": 399.726209
+    },
+    "Completion": {
+      "Samples": 408,
+      "NegativeDurations": 0,
+      "P50MS": 10150.593417,
+      "P95MS": 10885.223833,
+      "P99MS": 11559.214542,
+      "MaxMS": 11992.566792
+    },
+    "TerminalMissing": 0
+  }
+}

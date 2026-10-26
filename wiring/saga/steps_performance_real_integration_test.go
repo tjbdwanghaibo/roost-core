@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,8 +149,18 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	mode := os.Getenv("ROOST_STEPS_PERF_MODE")
 	rate, _ := strconv.Atoi(os.Getenv("ROOST_STEPS_PERF_RATE"))
 	duration, _ := time.ParseDuration(os.Getenv("ROOST_STEPS_PERF_DURATION"))
-	if (mode != "forward" && mode != "compensate") || rate < 1 || rate > 500 || duration < time.Second || duration > 30*time.Minute || duration%time.Second != 0 {
-		t.Fatal("invalid parameters: ROOST_STEPS_PERF_MODE forward|compensate, ROOST_STEPS_PERF_RATE 1..500, ROOST_STEPS_PERF_DURATION whole seconds up to 30m")
+	// ROOST_STEPS_PERF_CONCURRENCY 选闭环：N 个发起者各自“启动一笔 → 轮询到持久终态 → 再启动下一笔”，到 duration
+	// 停止发起并排空在途，用来找饱和点；不设时保持原来的开环固定速率（ROOST_STEPS_PERF_RATE）。
+	concurrency := 0
+	if value := os.Getenv("ROOST_STEPS_PERF_CONCURRENCY"); value != "" {
+		var err error
+		if concurrency, err = strconv.Atoi(value); err != nil || concurrency < 1 || concurrency > 512 {
+			t.Fatal("ROOST_STEPS_PERF_CONCURRENCY must be 1..512")
+		}
+		rate = 0
+	}
+	if (mode != "forward" && mode != "compensate") || (concurrency == 0 && (rate < 1 || rate > 500)) || duration < time.Second || duration > 30*time.Minute || duration%time.Second != 0 {
+		t.Fatal("invalid parameters: ROOST_STEPS_PERF_MODE forward|compensate, ROOST_STEPS_PERF_RATE 1..500 (or ROOST_STEPS_PERF_CONCURRENCY), ROOST_STEPS_PERF_DURATION whole seconds up to 30m")
 	}
 	definition := coresaga.Definition{Type: "d12perf", Version: 1, Steps: []coresaga.Step{
 		{Name: "debit", ForwardTopic: "d12perf.debit", CompensateTopic: "d12perf.debit.compensate"},
@@ -175,8 +186,9 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	defer cancel()
 
 	// 账户对数，缺省 64；ROOST_STEPS_PERF_PAIRS=1 是热点实体档（每笔 saga 都扣同一个账户、加同一个账户）。
+	// 闭环高并发档可调大到 1024，让并发度之外不再叠加同账户的实体屏障争用。
 	pairs := 64
-	if value, err := strconv.Atoi(os.Getenv("ROOST_STEPS_PERF_PAIRS")); err == nil && value >= 1 && value <= 64 {
+	if value, err := strconv.Atoi(os.Getenv("ROOST_STEPS_PERF_PAIRS")); err == nil && value >= 1 && value <= 1024 {
 		pairs = value
 	}
 	const balance, limit = int64(1_000_000), int64(1_000_000)
@@ -296,17 +308,18 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		ServerP99MS         float64
 	}
 	type result struct {
-		Pairs                                            int
-		Variant, Mode                                    string
-		Rate, Planned, Started, Completed, WrongTerminal int
-		StartErrors                                      uint64
-		FirstError                                       string
-		DurationSeconds, ElapsedSeconds, CompletionTPS   float64
-		P50MS, P95MS, P99MS, MaxMS                       float64
-		Server                                           sagaLatencyMS
-		StartCall                                        sagaLatencyMS
-		BusinessVerified                                 bool
-		Minutes                                          []minuteSlice
+		Pairs                                          int
+		Variant, Mode                                  string
+		Rate, Concurrency, Planned, Started            int
+		Completed, WrongTerminal                       int
+		StartErrors                                    uint64
+		FirstError                                     string
+		DurationSeconds, ElapsedSeconds, CompletionTPS float64
+		P50MS, P95MS, P99MS, MaxMS                     float64
+		Server                                         sagaLatencyMS
+		StartCall                                      sagaLatencyMS
+		BusinessVerified                               bool
+		Minutes                                        []minuteSlice
 		// NestRequest：步骤体里 Nest 请求的耗时（事务 + strict WAL）；BodyGap：同一步骤相邻两次步骤体开始的间隔。
 		NestRequest, BodyGap map[string]sagaLatencyMS
 		// BodyErrors：Nest 请求失败按步骤与原因计数（fenced_entity_pending 是实体屏障）。
@@ -321,9 +334,14 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		// IdlePerSecond 是开测前 5 秒空载时各跳每秒次数（轮询带来的往返，按需从 PerSaga 中扣除）。
 		Hops          map[string]hopSummary `json:",omitempty"`
 		IdlePerSecond map[string]float64    `json:",omitempty"`
+		// Steady* 只统计稳态窗口 [warmup, duration) 内到达期望终态的笔数（按协调器 updated_at），排除爬升与末尾排空；
+		// 闭环档以 SteadyTPS 作为该并发度的成功吞吐。ProcessCPUCores 是同一进程整段运行的 CPU 用量（核数）。
+		SteadyWindowSeconds, SteadyTPS float64
+		SteadyCompleted                int
+		ProcessCPUCores                float64
 	}
 	total := int(duration/time.Second) * rate
-	r := result{Pairs: pairs, Variant: variantName, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds()}
+	r := result{Pairs: pairs, Variant: variantName, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds()}
 	if hops != nil {
 		// 空载 5 秒：只有轮询（协调器 / 发布器 / outbox 认领、积压采样），作为每秒往返的底数。
 		hops.reset()
@@ -367,30 +385,80 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 		})
 	}
 	begin := time.Now()
-	go func() {
-		defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
-		for i := range total {
-			planned := begin.Add(time.Duration(i) * time.Second / time.Duration(rate))
-			timer := time.NewTimer(max(time.Until(planned), 0))
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return
+	cpuBegin := processCPU()
+	// waiters 是闭环发起者在等的 saga，轮询读到终态时关闭；轮询间隔闭环时缩到 10ms（发起者每笔多等至多一个间隔）。
+	waiters := make(map[string]chan struct{})
+	pollInterval := 50 * time.Millisecond
+	if concurrency > 0 {
+		pollInterval = 10 * time.Millisecond
+		var next atomic.Int64
+		go func() {
+			defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
+			var initiators sync.WaitGroup
+			for range concurrency {
+				initiators.Go(func() {
+					for ctx.Err() == nil && time.Since(begin) < duration {
+						i := int(next.Add(1) - 1)
+						id := fmt.Sprintf("d12p-%d", i)
+						data, _ := json.Marshal(transfer{Scenario: "perf", From: fmt.Sprintf("f%d", i%pairs), To: fmt.Sprintf("t%d", i%pairs), Amount: 1})
+						done := make(chan struct{})
+						called := time.Now()
+						_, err := env.sagaMod.Engine().StartSaga(ctx, coresaga.StartRequest{ID: id, Type: definition.Type, DefinitionVersion: 1, BusinessKey: id, Data: data, DeadlineAt: called.Add(30 * time.Second)})
+						returned := time.Now()
+						mu.Lock()
+						if err != nil {
+							failures.Add(1)
+							if r.FirstError == "" {
+								r.FirstError = err.Error()
+							}
+						} else {
+							pending[id] = startedSaga{planned: called, called: called}
+							waiters[id] = done
+							startDurations = append(startDurations, returned.Sub(called))
+							started.Add(1)
+						}
+						mu.Unlock()
+						if err != nil {
+							continue
+						}
+						select {
+						case <-done:
+						case <-ctx.Done():
+							return
+						}
+					}
+				})
 			}
-			select {
-			case jobs <- job{i, planned}:
-			case <-ctx.Done():
-				return
+			initiators.Wait()
+			total = int(next.Load())
+		}()
+	} else {
+		go func() {
+			defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
+			for i := range total {
+				planned := begin.Add(time.Duration(i) * time.Second / time.Duration(rate))
+				timer := time.NewTimer(max(time.Until(planned), 0))
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+				select {
+				case jobs <- job{i, planned}:
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 	terminal := coresaga.StatusCompleted
 	if mode == "compensate" {
 		terminal = coresaga.StatusCompensated
 	}
 	var latencies, server []time.Duration
-	byMinute := make([][]time.Duration, (total+rate*60-1)/(rate*60))
+	byMinute := make([][]time.Duration, int((duration+time.Minute-1)/time.Minute))
+	warmup := min(10*time.Second, duration/6)
 	serverByMinute := make([][]time.Duration, len(byMinute))
 	statuses := make(map[string]coresaga.Status, total)
 	sagas := env.mongo.Database(env.sagaDatabase).Collection("_sagas")
@@ -423,7 +491,18 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 				serverDone := doc.UpdatedAt.Sub(doc.CreatedAt)
 				server = append(server, serverDone)
 				serverByMinute[minute] = append(serverByMinute[minute], serverDone)
+				// 稳态计数按协调器写终态的时刻（Mongo 毫秒精度，与本机墙钟同源时只差时钟偏移，云库上取 Mongo 服务端时钟）；
+				// 用 created_at 对齐到本次 begin，避免依赖两台机器的绝对时钟一致。
+				if doc.Status == terminal {
+					if offset := doc.UpdatedAt.Sub(doc.CreatedAt) + s.called.Sub(begin); offset >= warmup && offset < duration {
+						r.SteadyCompleted++
+					}
+				}
 				delete(pending, doc.ID)
+				if done, ok := waiters[doc.ID]; ok {
+					delete(waiters, doc.ID)
+					close(done)
+				}
 				statuses[doc.ID] = doc.Status
 				r.Completed++
 				if doc.Status != terminal {
@@ -442,12 +521,16 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 			break
 		}
 		select {
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(pollInterval):
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
 	}
 	r.ElapsedSeconds = time.Since(begin).Seconds()
+	r.ProcessCPUCores = (processCPU() - cpuBegin).Seconds() / r.ElapsedSeconds
+	r.Planned = total
+	r.SteadyWindowSeconds = (duration - warmup).Seconds()
+	r.SteadyTPS = float64(r.SteadyCompleted) / r.SteadyWindowSeconds
 	r.Started, r.StartErrors = int(started.Load()), failures.Load()
 	r.CompletionTPS = float64(r.Completed) / r.ElapsedSeconds
 	slices.Sort(latencies)
@@ -541,6 +624,7 @@ func TestRealNativeStepsPerformance(t *testing.T) {
 	if err := os.WriteFile(output, append(raw, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("variant=%s mode=%s completed=%d/%d rate=%.2f/s p50=%.1fms p95=%.1fms p99=%.1fms max=%.1fms server_p99=%.1fms start_errors=%d business_verified=%v",
 		variantName, mode, r.Completed, total, r.CompletionTPS, r.P50MS, r.P95MS, r.P99MS, r.MaxMS, r.Server.P99MS, r.StartErrors, r.BusinessVerified)
 	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified {
@@ -612,4 +696,13 @@ func (h *hopRecorder) reset() map[string][]time.Duration {
 	values := h.values
 	h.values = map[string][]time.Duration{}
 	return values
+}
+
+// processCPU 是本进程至今的用户态 + 内核态 CPU 时间，压测前后相减得到整段用量。
+func processCPU() time.Duration {
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		return 0
+	}
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 }

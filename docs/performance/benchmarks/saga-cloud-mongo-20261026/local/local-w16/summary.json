@@ -1,0 +1,113 @@
+[
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 32,
+    "SteadyTPS": 42.58,
+    "CompletionTPS": 42.17546848125773,
+    "Started": 2558,
+    "Completed": 2558,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2558
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 752.277,
+    "ServerP99MS": 929.027292,
+    "ServerMaxMS": 1150.265625,
+    "ProcessCPUCores": 0.24784166737910548,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 89.8,
+      "coord_wake_claim": 104.36,
+      "mongo_step_txn": 70.7,
+      "outbox_wait": 382.11,
+      "nats": 108.91,
+      "consumer_slot": 0.12,
+      "other": 0.04
+    },
+    "StageSumMS": 756.03,
+    "RedisReplaceableMS": 194.16,
+    "RedisReplaceableShare": 0.257,
+    "MongoServer": {
+      "WriteOps": 83103,
+      "TxnCommitted": 20464,
+      "WriteMeanMS": 4.455,
+      "WTLogSyncs": 5301,
+      "WTLogSyncMeanMS": 10.734
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 64,
+    "SteadyTPS": 39.7,
+    "CompletionTPS": 38.6463900682456,
+    "Started": 2369,
+    "Completed": 2369,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2369
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 1621.569875,
+    "ServerP99MS": 2054.710417,
+    "ServerMaxMS": 2187.720333,
+    "ProcessCPUCores": 0.2302630224475582,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 92.32,
+      "coord_wake_claim": 112.16,
+      "mongo_step_txn": 71.81,
+      "outbox_wait": 1218.65,
+      "nats": 148.04,
+      "consumer_slot": 0.14,
+      "other": 0.04
+    },
+    "StageSumMS": 1643.17,
+    "RedisReplaceableMS": 204.48,
+    "RedisReplaceableShare": 0.124,
+    "MongoServer": {
+      "WriteOps": 77669,
+      "TxnCommitted": 18952,
+      "WriteMeanMS": 4.591,
+      "WTLogSyncs": 5747,
+      "WTLogSyncMeanMS": 10.248
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 128,
+    "SteadyTPS": 43.54,
+    "CompletionTPS": 43.497473859973816,
+    "Started": 2689,
+    "Completed": 2689,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2689
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 2958.526125,
+    "ServerP99MS": 3127.8825,
+    "ServerMaxMS": 3210.908417,
+    "ProcessCPUCores": 0.2544672586747959,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 90.74,
+      "coord_wake_claim": 192.39,
+      "mongo_step_txn": 68.57,
+      "outbox_wait": 2453.69,
+      "nats": 98.01,
+      "consumer_slot": 0.12,
+      "other": 0.03
+    },
+    "StageSumMS": 2903.56,
+    "RedisReplaceableMS": 283.13,
+    "RedisReplaceableShare": 0.098,
+    "MongoServer": {
+      "WriteOps": 86978,
+      "TxnCommitted": 21512,
+      "WriteMeanMS": 4.297,
+      "WTLogSyncs": 5805,
+      "WTLogSyncMeanMS": 10.08
+    }
+  }
+]

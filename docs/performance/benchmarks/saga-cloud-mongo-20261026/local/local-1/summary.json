@@ -1,0 +1,807 @@
+[
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 1,
+    "SteadyTPS": 4.98,
+    "CompletionTPS": 5.003444120511013,
+    "Started": 301,
+    "Completed": 301,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 301
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 197.962583,
+    "ServerP99MS": 249.92225,
+    "ServerMaxMS": 266.858333,
+    "ProcessCPUCores": 0.12176225357938945,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 64.44,
+      "coord_wake_claim": 24.84,
+      "mongo_step_txn": 65.21,
+      "outbox_wait": 22.81,
+      "nats": 22.08,
+      "consumer_slot": 0.18,
+      "other": 0.08
+    },
+    "StageSumMS": 199.65,
+    "RedisReplaceableMS": 89.28,
+    "RedisReplaceableShare": 0.447,
+    "MongoServer": {
+      "WriteOps": 14563,
+      "TxnCommitted": 2408,
+      "WriteMeanMS": 3.73,
+      "WTLogSyncs": 4568,
+      "WTLogSyncMeanMS": 7.717
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 4,
+    "SteadyTPS": 12.02,
+    "CompletionTPS": 11.971360297032577,
+    "Started": 721,
+    "Completed": 721,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 721
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 326.478083,
+    "ServerP99MS": 492.581084,
+    "ServerMaxMS": 869.933958,
+    "ProcessCPUCores": 0.1387077683510113,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 93.45,
+      "coord_wake_claim": 45.71,
+      "mongo_step_txn": 73.54,
+      "outbox_wait": 28.12,
+      "nats": 89.63,
+      "consumer_slot": 3.08,
+      "other": 0.06
+    },
+    "StageSumMS": 333.58,
+    "RedisReplaceableMS": 139.16,
+    "RedisReplaceableShare": 0.417,
+    "MongoServer": {
+      "WriteOps": 28376,
+      "TxnCommitted": 5768,
+      "WriteMeanMS": 5.444,
+      "WTLogSyncs": 5378,
+      "WTLogSyncMeanMS": 10.11
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 16,
+    "SteadyTPS": 39.16,
+    "CompletionTPS": 38.90438376337996,
+    "Started": 2348,
+    "Completed": 2348,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2348
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 403.386875,
+    "ServerP99MS": 562.008917,
+    "ServerMaxMS": 738.934083,
+    "ProcessCPUCores": 0.30731759086430394,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 92.26,
+      "coord_wake_claim": 86.81,
+      "mongo_step_txn": 72.36,
+      "outbox_wait": 35.31,
+      "nats": 96.15,
+      "consumer_slot": 27.03,
+      "other": 0.06
+    },
+    "StageSumMS": 409.98,
+    "RedisReplaceableMS": 179.08,
+    "RedisReplaceableShare": 0.437,
+    "MongoServer": {
+      "WriteOps": 78339,
+      "TxnCommitted": 18784,
+      "WriteMeanMS": 4.843,
+      "WTLogSyncs": 5700,
+      "WTLogSyncMeanMS": 10.124
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 32,
+    "SteadyTPS": 29.96,
+    "CompletionTPS": 29.436693184376445,
+    "Started": 1799,
+    "Completed": 1799,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 1799
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 1059.812125,
+    "ServerP99MS": 1565.110208,
+    "ServerMaxMS": 2211.746375,
+    "ProcessCPUCores": 0.10527114545673336,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 129.79,
+      "coord_wake_claim": 155.86,
+      "mongo_step_txn": 100.37,
+      "outbox_wait": 129.27,
+      "nats": 484.58,
+      "consumer_slot": 78.49,
+      "other": 0.02
+    },
+    "StageSumMS": 1078.37,
+    "RedisReplaceableMS": 285.65,
+    "RedisReplaceableShare": 0.265,
+    "MongoServer": {
+      "WriteOps": 58636,
+      "TxnCommitted": 14392,
+      "WriteMeanMS": 6.362,
+      "WTLogSyncs": 4047,
+      "WTLogSyncMeanMS": 13.866
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 64,
+    "SteadyTPS": 39.78,
+    "CompletionTPS": 39.066519844649655,
+    "Started": 2398,
+    "Completed": 2398,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2398
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 1601.783791,
+    "ServerP99MS": 2046.777084,
+    "ServerMaxMS": 2635.931833,
+    "ProcessCPUCores": 0.23497444606886284,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 94.28,
+      "coord_wake_claim": 103.93,
+      "mongo_step_txn": 73.91,
+      "outbox_wait": 126.79,
+      "nats": 1162.01,
+      "consumer_slot": 59.57,
+      "other": 0.04
+    },
+    "StageSumMS": 1620.52,
+    "RedisReplaceableMS": 198.21,
+    "RedisReplaceableShare": 0.122,
+    "MongoServer": {
+      "WriteOps": 78704,
+      "TxnCommitted": 19184,
+      "WriteMeanMS": 4.687,
+      "WTLogSyncs": 5513,
+      "WTLogSyncMeanMS": 10.593
+    }
+  },
+  {
+    "Scenario": "mongo-forward",
+    "Concurrency": 128,
+    "SteadyTPS": 43.18,
+    "CompletionTPS": 41.655487413772356,
+    "Started": 2612,
+    "Completed": 2612,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 2612
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 2979.032208,
+    "ServerP99MS": 4549.756042,
+    "ServerMaxMS": 5178.798208,
+    "ProcessCPUCores": 0.3159458840431003,
+    "TimelineSource": "timeline",
+    "StagesMS": {
+      "mongo_coord_txn": 94.0,
+      "coord_wake_claim": 139.68,
+      "mongo_step_txn": 71.27,
+      "outbox_wait": 305.69,
+      "nats": 2342.34,
+      "consumer_slot": 55.16,
+      "other": 0.05
+    },
+    "StageSumMS": 3008.18,
+    "RedisReplaceableMS": 233.68,
+    "RedisReplaceableShare": 0.078,
+    "MongoServer": {
+      "WriteOps": 85009,
+      "TxnCommitted": 20896,
+      "WriteMeanMS": 4.467,
+      "WTLogSyncs": 5831,
+      "WTLogSyncMeanMS": 10.156
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 1,
+    "SteadyTPS": 2.22,
+    "CompletionTPS": 2.2179475038779524,
+    "Started": 134,
+    "Completed": 134,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Compensated": 134
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 425,
+    "ServerP99MS": 533,
+    "ServerMaxMS": 537,
+    "ProcessCPUCores": 0.1513403734348897,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.44,
+      "commitTransaction": 14,
+      "delete": 12,
+      "find": 83.69,
+      "findAndModify": 48.24,
+      "insert": 22,
+      "update": 12
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 96.22,
+      "coord_wake_claim": 83.06,
+      "mongo_step_reserve": 65.4,
+      "nest_wal": 48.87,
+      "projection_wait": 1.55,
+      "mongo_projection_txn": 42.41,
+      "outbox_wait": 72.84,
+      "nats_puback": 42.23,
+      "nats_deliver": 37.93
+    },
+    "StageSumMS": 490.52,
+    "RedisReplaceableMS": 288.65,
+    "RedisReplaceableShare": 0.588,
+    "MongoServer": {
+      "WriteOps": 14029,
+      "TxnCommitted": 1876,
+      "WriteMeanMS": 5.121,
+      "WTLogSyncs": 4972,
+      "WTLogSyncMeanMS": 8.837
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 4,
+    "SteadyTPS": 4.28,
+    "CompletionTPS": 4.242685767136166,
+    "Started": 258,
+    "Completed": 258,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Compensated": 258
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 900,
+    "ServerP99MS": 1250,
+    "ServerMaxMS": 1272,
+    "ProcessCPUCores": 0.16960179109874862,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.23,
+      "commitTransaction": 13.98,
+      "delete": 12,
+      "find": 69.26,
+      "findAndModify": 30.6,
+      "insert": 22,
+      "update": 12
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 131.76,
+      "coord_wake_claim": 130.43,
+      "mongo_step_reserve": 54.3,
+      "nest_wal": 147.56,
+      "projection_wait": 184.14,
+      "mongo_projection_txn": 56.94,
+      "outbox_wait": 102.08,
+      "nats_puback": 78.18,
+      "nats_deliver": 107.34
+    },
+    "StageSumMS": 992.73,
+    "RedisReplaceableMS": 557.57,
+    "RedisReplaceableShare": 0.562,
+    "MongoServer": {
+      "WriteOps": 21164,
+      "TxnCommitted": 3608,
+      "WriteMeanMS": 7.066,
+      "WTLogSyncs": 5531,
+      "WTLogSyncMeanMS": 10.94
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 16,
+    "SteadyTPS": 6.04,
+    "CompletionTPS": 6.062325888336199,
+    "Started": 372,
+    "Completed": 372,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Compensated": 372
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 2600,
+    "ServerP99MS": 3470,
+    "ServerMaxMS": 3680,
+    "ProcessCPUCores": 0.2317900643638903,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.16,
+      "commitTransaction": 13.38,
+      "delete": 12,
+      "find": 130.24,
+      "findAndModify": 25.66,
+      "insert": 22,
+      "update": 12
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 119.23,
+      "coord_wake_claim": 125.58,
+      "mongo_step_reserve": 48.5,
+      "nest_wal": 109.42,
+      "projection_wait": 1912.38,
+      "mongo_projection_txn": 51.27,
+      "outbox_wait": 94.79,
+      "nats_puback": 76.23,
+      "nats_deliver": 127.11
+    },
+    "StageSumMS": 2664.52,
+    "RedisReplaceableMS": 2256.97,
+    "RedisReplaceableShare": 0.847,
+    "MongoServer": {
+      "WriteOps": 28058,
+      "TxnCommitted": 4976,
+      "WriteMeanMS": 6.307,
+      "WTLogSyncs": 6637,
+      "WTLogSyncMeanMS": 9.398
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 32,
+    "SteadyTPS": 5.8,
+    "CompletionTPS": 5.767261744291204,
+    "Started": 364,
+    "Completed": 364,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Compensated": 364
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 5428,
+    "ServerP99MS": 7642,
+    "ServerMaxMS": 7944,
+    "ProcessCPUCores": 0.24842454612933285,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.17,
+      "commitTransaction": 13.41,
+      "delete": 12,
+      "find": 239.46,
+      "findAndModify": 26.07,
+      "insert": 22,
+      "update": 12
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 133.7,
+      "coord_wake_claim": 148.89,
+      "mongo_step_reserve": 53.59,
+      "nest_wal": 113.78,
+      "projection_wait": 4611.1,
+      "mongo_projection_txn": 55.98,
+      "outbox_wait": 105.24,
+      "nats_puback": 77.41,
+      "nats_deliver": 211.71
+    },
+    "StageSumMS": 5511.4,
+    "RedisReplaceableMS": 5003.26,
+    "RedisReplaceableShare": 0.908,
+    "MongoServer": {
+      "WriteOps": 27622,
+      "TxnCommitted": 4880,
+      "WriteMeanMS": 7.037,
+      "WTLogSyncs": 6051,
+      "WTLogSyncMeanMS": 10.541
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 64,
+    "SteadyTPS": 5.88,
+    "CompletionTPS": 5.899541348435192,
+    "Started": 394,
+    "Completed": 394,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Compensated": 394
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 10444,
+    "ServerP99MS": 18284,
+    "ServerMaxMS": 18789,
+    "ProcessCPUCores": 0.2702742503441623,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.16,
+      "commitTransaction": 13.5,
+      "delete": 12.09,
+      "find": 421.85,
+      "find.failed": 0.0,
+      "findAndModify": 25.83,
+      "insert": 22.09,
+      "update": 12.22,
+      "update.failed": 0.0
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 138.03,
+      "coord_wake_claim": 196.35,
+      "mongo_step_reserve": 54.94,
+      "nest_wal": 100.35,
+      "projection_wait": 9230.52,
+      "mongo_projection_txn": 57.09,
+      "outbox_wait": 120.29,
+      "nats_puback": 63.95,
+      "nats_deliver": 494.05
+    },
+    "StageSumMS": 10455.57,
+    "RedisReplaceableMS": 9676.93,
+    "RedisReplaceableShare": 0.926,
+    "MongoServer": {
+      "WriteOps": 29844,
+      "TxnCommitted": 5319,
+      "WriteMeanMS": 7.049,
+      "WTLogSyncs": 6318,
+      "WTLogSyncMeanMS": 10.568
+    }
+  },
+  {
+    "Scenario": "native-compensate",
+    "Concurrency": 128,
+    "SteadyTPS": 3.2,
+    "CompletionTPS": 5.684537581430221,
+    "Started": 463,
+    "Completed": 463,
+    "WrongTerminal": 184,
+    "Statuses": {
+      "Compensated": 279,
+      "Failed": 184
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 22821,
+    "ServerP99MS": 30189,
+    "ServerMaxMS": 30927,
+    "ProcessCPUCores": 0.2897570378720581,
+    "MongoCommandsPerSaga": {
+      "abortTransaction": 0.03,
+      "abortTransaction.failed": 0.3,
+      "aggregate": 0.17,
+      "commitTransaction": 16.19,
+      "commitTransaction.failed": 0.28,
+      "delete": 13.16,
+      "find": 208.7,
+      "find.failed": 0.06,
+      "findAndModify": 29.58,
+      "insert": 18.8,
+      "update": 16.07,
+      "update.failed": 0.01
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 155.08,
+      "coord_wake_claim": 620.17,
+      "mongo_step_reserve": 70.61,
+      "nest_wal": 133.57,
+      "projection_wait": 5740.92,
+      "mongo_projection_txn": 59.62,
+      "outbox_wait": 167.84,
+      "nats_puback": 64.23,
+      "nats_deliver": 14233.31
+    },
+    "StageSumMS": 21245.33,
+    "RedisReplaceableMS": 6646.39,
+    "RedisReplaceableShare": 0.313,
+    "MongoServer": {
+      "WriteOps": 37292,
+      "TxnCommitted": 7626,
+      "WriteMeanMS": 7.939,
+      "WTLogSyncs": 7830,
+      "WTLogSyncMeanMS": 10.064
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 1,
+    "SteadyTPS": 3.34,
+    "CompletionTPS": 3.328507902949383,
+    "Started": 200,
+    "Completed": 200,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 200
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 277,
+    "ServerP99MS": 328,
+    "ServerMaxMS": 341,
+    "ProcessCPUCores": 0.16099055751591484,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.29,
+      "commitTransaction": 10,
+      "delete": 8,
+      "find": 56.26,
+      "findAndModify": 32.99,
+      "insert": 15,
+      "update": 8
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 64.49,
+      "coord_wake_claim": 51.39,
+      "mongo_step_reserve": 41.46,
+      "nest_wal": 36.62,
+      "projection_wait": 1.04,
+      "mongo_projection_txn": 27.77,
+      "outbox_wait": 45.66,
+      "nats_puback": 29.4,
+      "nats_deliver": 24.11
+    },
+    "StageSumMS": 321.94,
+    "RedisReplaceableMS": 186.14,
+    "RedisReplaceableShare": 0.578,
+    "MongoServer": {
+      "WriteOps": 14183,
+      "TxnCommitted": 2000,
+      "WriteMeanMS": 4.729,
+      "WTLogSyncs": 5133,
+      "WTLogSyncMeanMS": 8.251
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 4,
+    "SteadyTPS": 6.78,
+    "CompletionTPS": 6.742268107366639,
+    "Started": 407,
+    "Completed": 407,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 407
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 564,
+    "ServerP99MS": 744,
+    "ServerMaxMS": 790,
+    "ProcessCPUCores": 0.19052796534298888,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.14,
+      "commitTransaction": 9.26,
+      "delete": 8,
+      "find": 44.34,
+      "findAndModify": 20.64,
+      "insert": 15,
+      "update": 8
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 91.04,
+      "coord_wake_claim": 85.22,
+      "mongo_step_reserve": 35.26,
+      "nest_wal": 85.68,
+      "projection_wait": 104.62,
+      "mongo_projection_txn": 37.5,
+      "outbox_wait": 65.05,
+      "nats_puback": 49.42,
+      "nats_deliver": 68.61
+    },
+    "StageSumMS": 622.42,
+    "RedisReplaceableMS": 353.64,
+    "RedisReplaceableShare": 0.568,
+    "MongoServer": {
+      "WriteOps": 22427,
+      "TxnCommitted": 3768,
+      "WriteMeanMS": 6.846,
+      "WTLogSyncs": 5698,
+      "WTLogSyncMeanMS": 10.518
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 16,
+    "SteadyTPS": 8.84,
+    "CompletionTPS": 8.675804064694438,
+    "Started": 529,
+    "Completed": 529,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 529
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 1780,
+    "ServerP99MS": 2593,
+    "ServerMaxMS": 2680,
+    "ProcessCPUCores": 0.2352324221318166,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.11,
+      "commitTransaction": 8.97,
+      "delete": 8,
+      "find": 89.39,
+      "findAndModify": 18.16,
+      "insert": 15,
+      "update": 8
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 93.77,
+      "coord_wake_claim": 90.98,
+      "mongo_step_reserve": 35.25,
+      "nest_wal": 71.67,
+      "projection_wait": 1320.72,
+      "mongo_projection_txn": 37.84,
+      "outbox_wait": 66.54,
+      "nats_puback": 48.68,
+      "nats_deliver": 96.92
+    },
+    "StageSumMS": 1862.38,
+    "RedisReplaceableMS": 1578.56,
+    "RedisReplaceableShare": 0.848,
+    "MongoServer": {
+      "WriteOps": 27344,
+      "TxnCommitted": 4744,
+      "WriteMeanMS": 6.922,
+      "WTLogSyncs": 5911,
+      "WTLogSyncMeanMS": 10.357
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 32,
+    "SteadyTPS": 9.96,
+    "CompletionTPS": 9.931237998746024,
+    "Started": 615,
+    "Completed": 615,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 615
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 3182,
+    "ServerP99MS": 4110,
+    "ServerMaxMS": 4697,
+    "ProcessCPUCores": 0.28003237742229026,
+    "MongoCommandsPerSaga": {
+      "aggregate": 0.1,
+      "commitTransaction": 8.83,
+      "delete": 8,
+      "find": 141.23,
+      "findAndModify": 17.31,
+      "insert": 15,
+      "update": 8
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 87.79,
+      "coord_wake_claim": 91.37,
+      "mongo_step_reserve": 33.65,
+      "nest_wal": 61.65,
+      "projection_wait": 2661.37,
+      "mongo_projection_txn": 34.89,
+      "outbox_wait": 66.19,
+      "nats_puback": 40.83,
+      "nats_deliver": 133.66
+    },
+    "StageSumMS": 3211.38,
+    "RedisReplaceableMS": 2909.06,
+    "RedisReplaceableShare": 0.906,
+    "MongoServer": {
+      "WriteOps": 31137,
+      "TxnCommitted": 5432,
+      "WriteMeanMS": 6.555,
+      "WTLogSyncs": 6335,
+      "WTLogSyncMeanMS": 9.934
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 64,
+    "SteadyTPS": 8.52,
+    "CompletionTPS": 8.566115637917907,
+    "Started": 553,
+    "Completed": 553,
+    "WrongTerminal": 0,
+    "Statuses": {
+      "Completed": 553
+    },
+    "BusinessVerified": true,
+    "ServerP50MS": 6830,
+    "ServerP99MS": 18639,
+    "ServerMaxMS": 19774,
+    "ProcessCPUCores": 0.3471154563081216,
+    "MongoCommandsPerSaga": {
+      "abortTransaction": 0.0,
+      "abortTransaction.failed": 0.0,
+      "aggregate": 0.11,
+      "commitTransaction": 9.19,
+      "delete": 8.13,
+      "find": 274.53,
+      "find.failed": 0.0,
+      "findAndModify": 18.43,
+      "insert": 15.13,
+      "update": 8.27,
+      "update.failed": 0.01
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 102.13,
+      "coord_wake_claim": 140.61,
+      "mongo_step_reserve": 38.35,
+      "nest_wal": 76.9,
+      "projection_wait": 5979.73,
+      "mongo_projection_txn": 38.94,
+      "outbox_wait": 84.9,
+      "nats_puback": 45.7,
+      "nats_deliver": 799.08
+    },
+    "StageSumMS": 7306.33,
+    "RedisReplaceableMS": 6299.76,
+    "RedisReplaceableShare": 0.862,
+    "MongoServer": {
+      "WriteOps": 28977,
+      "TxnCommitted": 5080,
+      "WriteMeanMS": 7.111,
+      "WTLogSyncs": 6074,
+      "WTLogSyncMeanMS": 10.587
+    }
+  },
+  {
+    "Scenario": "native-forward",
+    "Concurrency": 128,
+    "SteadyTPS": 4.36,
+    "CompletionTPS": 6.933994413052129,
+    "Started": 527,
+    "Completed": 527,
+    "WrongTerminal": 161,
+    "Statuses": {
+      "Completed": 366,
+      "Compensated": 6,
+      "Failed": 155
+    },
+    "BusinessVerified": false,
+    "ServerP50MS": 16132,
+    "ServerP99MS": 31664,
+    "ServerMaxMS": 35777,
+    "ProcessCPUCores": 0.29169881645631407,
+    "MongoCommandsPerSaga": {
+      "abortTransaction": 0.02,
+      "abortTransaction.failed": 0.2,
+      "aggregate": 0.14,
+      "commitTransaction": 12.38,
+      "commitTransaction.failed": 0.19,
+      "delete": 10.45,
+      "find": 168.27,
+      "find.failed": 0.04,
+      "findAndModify": 22.79,
+      "insert": 14.86,
+      "update": 12.4,
+      "update.failed": 0.01
+    },
+    "StagesMS": {
+      "mongo_coord_txn": 137.66,
+      "coord_wake_claim": 667.31,
+      "mongo_step_reserve": 54.16,
+      "nest_wal": 109.52,
+      "projection_wait": 4544.25,
+      "mongo_projection_txn": 45.67,
+      "outbox_wait": 166.65,
+      "nats_puback": 54.0,
+      "nats_deliver": 11816.33
+    },
+    "StageSumMS": 17595.56,
+    "RedisReplaceableMS": 5449.06,
+    "RedisReplaceableShare": 0.31,
+    "MongoServer": {
+      "WriteOps": 42695,
+      "TxnCommitted": 6625,
+      "WriteMeanMS": 6.78,
+      "WTLogSyncs": 6892,
+      "WTLogSyncMeanMS": 10.81
+    }
+  }
+]

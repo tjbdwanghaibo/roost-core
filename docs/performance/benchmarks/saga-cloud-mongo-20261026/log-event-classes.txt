@@ -1,0 +1,51 @@
+== scan-cloud-1/mongo-forward-c1.log
+== scan-cloud-1/mongo-forward-c128.log
+ 497 INFO saga: step attempt will not run; acknowledged without executing
+ 347 ERROR saga: consumer processing failed kind=step
+== scan-cloud-1/mongo-forward-c16.log
+== scan-cloud-1/mongo-forward-c32.log
+  17 INFO saga: step attempt will not run; acknowledged without executing
+  11 ERROR saga: consumer processing failed kind=step
+== scan-cloud-1/mongo-forward-c4.log
+== scan-cloud-1/mongo-forward-c64.log
+ 503 INFO saga: step attempt will not run; acknowledged without executing
+ 312 ERROR saga: consumer processing failed kind=step
+== scan-cloud-1/native-compensate-c1.log
+== scan-cloud-1/native-compensate-c128.log
+ 534 INFO saga: step command expired before it ran; acknowledged without executing
+   1 WARN saga: step succeeded after the coordinator abandoned it; compensating it
+   1 WARN saga: reopened to compensate a step that took effect after the coordinator abandoned it
+== scan-cloud-1/native-compensate-c16.log
+ 117 INFO saga: step command expired before it ran; acknowledged without executing
+   1 WARN saga: step succeeded after the coordinator abandoned it; compensating it
+   1 WARN saga: reopened to compensate a step that took effect after the coordinator abandoned it
+   1 ERROR saga: consumer processing failed kind="Nest completion"
+   1 ERROR nats jetstream: terminating failed delivery
+== scan-cloud-1/native-compensate-c32.log
+ 322 INFO saga: step command expired before it ran; acknowledged without executing
+   1 ERROR saga: consumer processing failed kind="Nest completion"
+   1 ERROR nats jetstream: terminating failed delivery
+== scan-cloud-1/native-compensate-c4.log
+== scan-cloud-1/native-compensate-c64.log
+ 522 INFO saga: step command expired before it ran; acknowledged without executing
+== scan-cloud-1/native-forward-c1.log
+== scan-cloud-1/native-forward-c128.log
+ 536 INFO saga: step command expired before it ran; acknowledged without executing
+== scan-cloud-1/native-forward-c16.log
+ 121 INFO saga: step command expired before it ran; acknowledged without executing
+== scan-cloud-1/native-forward-c32.log
+ 349 INFO saga: step command expired before it ran; acknowledged without executing
+   5 WARN saga: step succeeded after the coordinator abandoned it; compensating it
+   5 WARN saga: reopened to compensate a step that took effect after the coordinator abandoned it
+== scan-cloud-1/native-forward-c4.log
+== scan-cloud-1/native-forward-c64.log
+ 541 INFO saga: step command expired before it ran; acknowledged without executing
+   4 WARN saga: step succeeded after the coordinator abandoned it; compensating it
+   4 WARN saga: reopened to compensate a step that took effect after the coordinator abandoned it
+== scan-local-1/native-compensate-c128.log
+1280 INFO saga: step command expired before it ran; acknowledged without executing
+== scan-local-1/native-forward-c128.log
+1159 INFO saga: step command expired before it ran; acknowledged without executing
+   2 INFO saga: step attempt will not run; acknowledged without executing
+   1 WARN saga: step succeeded after the coordinator abandoned it; compensating it
+   1 WARN saga: reopened to compensate a step that took effect after the coordinator abandoned it

@@ -116,6 +116,13 @@ func startRealStepsEnvNamed(t *testing.T, definitions []coresaga.Definition, wit
 	env := &realStepsEnv{names: names, token: strings.ReplaceAll(suffix, "_", "x"), sagaDatabase: "roost_d12_saga_" + suffix, dataDatabase: "roost_d12_de_" + suffix}
 	env.sagaPrefix = "d12saga" + env.token
 	sagaStream, effectStream := "ROOST_D12_SAGA_"+suffix, "ROOST_D12_EFFECTS_"+suffix
+	// 云库或共享环境压测用自己的唯一前缀（见 perfResourceName），便于事后按前缀核对清理；不设时名字不变。
+	if prefix := perfResourceName(t, "ROOST_PERF_DB_PREFIX", "roost_sagaperf_"); prefix != "" {
+		env.sagaDatabase, env.dataDatabase = prefix+"_s_"+suffix, prefix+"_d_"+suffix
+	}
+	if prefix := perfResourceName(t, "ROOST_PERF_STREAM_PREFIX", "SAGAPERF_"); prefix != "" {
+		sagaStream, effectStream = prefix+"_SAGA_"+suffix, prefix+"_EFFECTS_"+suffix
+	}
 	env.sagaStream = sagaStream
 	cfg := viper.New()
 	for key, value := range map[string]any{
@@ -476,4 +483,19 @@ func waitFor(t *testing.T, ctx context.Context, what string, done func() bool) {
 			t.Fatalf("timed out: %s", what)
 		}
 	}
+}
+
+// perfResourceName 读压测资源名前缀（不设返回空）：必须以 required 开头，只含字母、数字、下划线，最长 40。
+func perfResourceName(t *testing.T, variable, required string) string {
+	t.Helper()
+	value := os.Getenv(variable)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, required) || len(value) > 40 || strings.ContainsFunc(value, func(r rune) bool {
+		return !(r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
+	}) {
+		t.Fatalf("%s must start with %s and contain only letters, digits and underscores (at most 40)", variable, required)
+	}
+	return value
 }

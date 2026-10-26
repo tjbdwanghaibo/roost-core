@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,7 +51,18 @@ func TestRealSagaPerformance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if rate < 1 || rate > 1000 || duration < time.Second || duration > 10*time.Minute || duration%time.Second != 0 || (mode != "forward" && mode != "compensate") {
+	// ROOST_SAGA_PERF_CONCURRENCY 选闭环：N 个发起者各自“启动一笔 → 等到持久终态 → 再启动下一笔”，到 duration 停止
+	// 发起并排空在途。测的是给定并发度下能完成多少笔，用来找饱和点；不设时保持原来的开环固定速率。
+	concurrency := 0
+	if v := os.Getenv("ROOST_SAGA_PERF_CONCURRENCY"); v != "" {
+		var err error
+		concurrency, err = strconv.Atoi(v)
+		if err != nil || concurrency < 1 || concurrency > 512 {
+			t.Fatal("concurrency must be between 1 and 512")
+		}
+		rate = 0
+	}
+	if (concurrency == 0 && (rate < 1 || rate > 1000)) || duration < time.Second || duration > 10*time.Minute || duration%time.Second != 0 || (mode != "forward" && mode != "compensate") {
 		t.Fatal("invalid Saga performance parameters")
 	}
 	natsURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
@@ -88,7 +100,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	// 即使主测试提前失败，也保留实际终态、步骤回执和效果，不能只留下聚合计数。
 	t.Cleanup(func() { retainSagaPerformanceEvidence(t, client, database, output) })
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
-	stream, prefix := "ROOST_PERF_SAGA_"+suffix, "perfsaga"+strings.ReplaceAll(suffix, "_", "x")
+	stream, prefix := perfStreamPrefix(t, "ROOST_PERF_SAGA")+"_"+suffix, "perfsaga"+strings.ReplaceAll(suffix, "_", "x")
 	t.Cleanup(func() { deleteRevn06s5Stream(t, natsURL, stream) })
 	nc, err := ndriver.NewClient(fnats.DefaultConfig(natsURL), ndriver.ClientOptions{})
 	if err != nil {
@@ -128,7 +140,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 只包一层观察，不换 Assemble 的正式 Store；必须在 Start 之前替换，此后引擎只经 e.store 写记录。
-	terminals := &terminalClock{Store: asm.Engine.store, at: make(map[string]time.Time)}
+	terminals := &terminalClock{Store: asm.Engine.store, at: make(map[string]time.Time), waiters: make(map[string]chan struct{})}
 	asm.Engine.store = terminals
 	ctx, cancel := context.WithTimeout(context.Background(), duration+2*time.Minute)
 	defer cancel()
@@ -215,7 +227,8 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	type result struct {
 		Mode                                                      string
-		Rate, Planned, Started, Completed, WrongTerminal          int
+		Rate, Concurrency, Planned, Started, Completed            int
+		WrongTerminal                                             int
 		ConsumerWorkers, StepConsumers                            int
 		CoordinatorBatch                                          int
 		DiagnosticHops                                            bool
@@ -228,6 +241,12 @@ func TestRealSagaPerformance(t *testing.T) {
 		OutboxPending, Leases, BusinessDocuments, EffectDocuments int64
 		BusinessVerified                                          bool
 		Minutes                                                   []minuteSlice
+		// Steady* 只统计稳态窗口 [warmup, duration) 内到达期望终态的笔数（按服务端终态时刻），排除爬升与末尾排空；
+		// 闭环档以 SteadyTPS 作为该并发度的成功吞吐。ProcessCPUCores 是同一进程整段运行的 CPU 用量（核数）。
+		SteadyWindowSeconds, SteadyTPS float64
+		SteadyCompleted                int
+		ProcessCPUCores                float64
+		Statuses                       map[string]int
 		// P50MS～MaxMS 从计划启动时刻算到轮询观察到持久终态，混有压测端等待，保留它们与历史样本同口径比较。
 		// Harness 与 Server 把同一段时间拆开（同一进程单调时钟）：
 		//
@@ -239,7 +258,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		Server  sagaServer
 	}
 	total := int(duration/time.Second) * rate
-	r := result{CoordinatorBatch: cfg.Engine.CoordinatorBatch, Mode: mode, Rate: rate, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
+	r := result{CoordinatorBatch: cfg.Engine.CoordinatorBatch, Mode: mode, Rate: rate, Concurrency: concurrency, Planned: total, DurationSeconds: duration.Seconds(), ConsumerWorkers: consumerWorkers, StepConsumers: stepConsumers, DiagnosticHops: os.Getenv("ROOST_SAGA_PERF_HOPS") == "1"}
 	var mu sync.Mutex
 	pending := make(map[string]startedSaga)
 	var observations []observation
@@ -275,26 +294,73 @@ func TestRealSagaPerformance(t *testing.T) {
 		})
 	}
 	begin := time.Now()
-	go func() {
-		defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
-		for i := range total {
-			planned := begin.Add(time.Duration(i) * time.Second / time.Duration(rate))
-			timer := time.NewTimer(max(time.Until(planned), 0))
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return
+	cpuBegin := processCPU()
+	if concurrency > 0 {
+		// 闭环：每个发起者拿下一个编号后自己调用 StartSaga，等 terminalClock（或轮询兜底）报终态再继续。
+		// 超过 duration 不再取编号，因此编号连续、全部已启动；8 个开环提交协程照常存在但收不到任务。
+		var next atomic.Int64
+		go func() {
+			defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
+			var initiators sync.WaitGroup
+			for range concurrency {
+				initiators.Go(func() {
+					for ctx.Err() == nil && time.Since(begin) < duration {
+						i := int(next.Add(1) - 1)
+						id := fmt.Sprintf("perf-%d", i)
+						done := terminals.wait(id)
+						called := time.Now()
+						_, err := asm.Engine.StartSaga(ctx, StartRequest{ID: id, Type: def.Type, DefinitionVersion: 1, BusinessKey: id, DeadlineAt: called.Add(30 * time.Second)})
+						returned := time.Now()
+						mu.Lock()
+						if err != nil {
+							failures.Add(1)
+							if r.FirstError == "" {
+								r.FirstError = err.Error()
+							}
+						} else {
+							pending[id] = startedSaga{planned: called, called: called}
+							startDurations = append(startDurations, returned.Sub(called))
+							started.Add(1)
+						}
+						mu.Unlock()
+						if err != nil {
+							terminals.release(id)
+							continue
+						}
+						select {
+						case <-done:
+						case <-ctx.Done():
+							return
+						}
+					}
+				})
 			}
-			select {
-			case jobs <- job{i, planned}:
-			case <-ctx.Done():
-				return
+			initiators.Wait()
+			total = int(next.Load())
+		}()
+	} else {
+		go func() {
+			defer func() { close(jobs); workers.Wait(); finished.Store(true); close(producerDone) }()
+			for i := range total {
+				planned := begin.Add(time.Duration(i) * time.Second / time.Duration(rate))
+				timer := time.NewTimer(max(time.Until(planned), 0))
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+				select {
+				case jobs <- job{i, planned}:
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 	var latencies []time.Duration
-	byMinute := make([][]time.Duration, (total+rate*60-1)/(rate*60))
+	byMinute := make([][]time.Duration, int((duration+time.Minute-1)/time.Minute))
+	statuses := make(map[Status]int)
 	terminal := StatusCompleted
 	if mode == "compensate" {
 		terminal = StatusCompensated
@@ -325,6 +391,8 @@ func TestRealSagaPerformance(t *testing.T) {
 				byMinute[minute] = append(byMinute[minute], latency)
 				observations = append(observations, observation{id: doc.ID, planned: s.planned, called: s.called, observed: observed})
 				delete(pending, doc.ID)
+				terminals.release(doc.ID) // 终态若没经过 terminalClock，轮询读到也放行闭环发起者。
+				statuses[doc.Status]++
 				r.Completed++
 				if doc.Status != terminal {
 					r.WrongTerminal++
@@ -345,6 +413,13 @@ func TestRealSagaPerformance(t *testing.T) {
 		}
 	}
 	r.ElapsedSeconds = time.Since(begin).Seconds()
+	r.ProcessCPUCores = (processCPU() - cpuBegin).Seconds() / r.ElapsedSeconds
+	// 闭环的 total 由发起协程在 finished 之前写好；finished 的原子读写保证这里读到最终值。
+	r.Planned = total
+	r.Statuses = make(map[string]int)
+	for status, n := range statuses {
+		r.Statuses[strconv.Itoa(int(status))] = n
+	}
 	r.Started = int(started.Load())
 	r.StartErrors = failures.Load()
 	r.CompletionTPS = float64(r.Completed) / r.ElapsedSeconds
@@ -385,8 +460,13 @@ func TestRealSagaPerformance(t *testing.T) {
 	}
 	var admitLag, observeLag, serverDone []time.Duration
 	serverByMinute := make([][]time.Duration, len(byMinute))
+	warmup := min(10*time.Second, duration/6)
+	r.SteadyWindowSeconds = (duration - warmup).Seconds()
 	terminals.mu.Lock()
 	for _, o := range observations {
+		if at, ok := terminals.at[o.id]; ok && terminals.status[o.id] == terminal && at.Sub(begin) >= warmup && at.Sub(begin) < duration {
+			r.SteadyCompleted++
+		}
 		admitLag = append(admitLag, o.called.Sub(o.planned))
 		at, ok := terminals.at[o.id]
 		if !ok {
@@ -399,6 +479,7 @@ func TestRealSagaPerformance(t *testing.T) {
 		serverByMinute[minute] = append(serverByMinute[minute], at.Sub(o.called))
 	}
 	terminals.mu.Unlock()
+	r.SteadyTPS = float64(r.SteadyCompleted) / r.SteadyWindowSeconds
 	r.Harness = sagaHarness{AdmitLag: summarize(admitLag), ObserveLag: summarize(observeLag)}
 	r.Server.Start, r.Server.Completion = summarize(startDurations), summarize(serverDone)
 	for minute, slice := range byMinute {
@@ -459,6 +540,7 @@ func TestRealSagaPerformance(t *testing.T) {
 	if err = os.WriteFile(output, append(raw, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("concurrency=%d steady_tps=%.2f cpu_cores=%.2f statuses=%v", r.Concurrency, r.SteadyTPS, r.ProcessCPUCores, r.Statuses)
 	t.Logf("mode=%s completed=%d/%d rate=%.2f/s p99=%.1fms server_p99=%.1fms admit_p99=%.1fms observe_p99=%.1fms start_errors=%d business_verified=%v", mode, r.Completed, total, r.CompletionTPS, r.P99MS, r.Server.Completion.P99MS, r.Harness.AdmitLag.P99MS, r.Harness.ObserveLag.P99MS, r.StartErrors, r.BusinessVerified)
 	if r.Started != total || r.Completed != total || r.StartErrors != 0 || r.WrongTerminal != 0 || !r.BusinessVerified || r.OutboxPending != 0 || r.Leases != 0 || r.FinalStats.StoreFailures != 0 || r.FinalStats.PublishFailures != 0 || r.FinalStats.WorkerFailures != 0 {
 		t.Fatal("Saga load verification failed; result retained")
@@ -515,8 +597,11 @@ type sagaServer struct {
 // Store.Apply 是协调器唯一的状态写出口（stepTransition），终态都经过这里；请求与结果原样透传，不改变持久语义。
 type terminalClock struct {
 	Store
-	mu sync.Mutex
-	at map[string]time.Time
+	mu     sync.Mutex
+	at     map[string]time.Time
+	status map[string]Status
+	// waiters 是闭环发起者在等的 saga：第一次终态（或轮询兜底）关闭并删除通道。
+	waiters map[string]chan struct{}
 }
 
 func (s *terminalClock) Apply(ctx context.Context, request ApplyRequest) (ApplyOutcome, error) {
@@ -526,10 +611,34 @@ func (s *terminalClock) Apply(ctx context.Context, request ApplyRequest) (ApplyO
 		s.mu.Lock()
 		if _, ok := s.at[request.After.ID]; !ok {
 			s.at[request.After.ID] = now
+			if s.status == nil {
+				s.status = make(map[string]Status)
+			}
+			s.status[request.After.ID] = request.After.Status
 		}
 		s.mu.Unlock()
+		s.release(request.After.ID)
 	}
 	return outcome, err
+}
+
+// wait 在 StartSaga 之前登记，避免终态先于登记到达而永远等不到。
+func (s *terminalClock) wait(id string) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := make(chan struct{})
+	s.waiters[id] = done
+	return done
+}
+
+func (s *terminalClock) release(id string) {
+	s.mu.Lock()
+	done, ok := s.waiters[id]
+	delete(s.waiters, id)
+	s.mu.Unlock()
+	if ok {
+		close(done)
+	}
 }
 
 // sagaCommandTimings 只用于显式诊断。单进程单调时钟关联交易与命令，事件与未取标记各有上限。
@@ -607,4 +716,33 @@ func TestSagaTimelineRecorder(t *testing.T) {
 	if _, ok := r.Take("published/cmd"); ok {
 		t.Fatal("mark was not consumed")
 	}
+}
+
+// processCPU 是本进程至今的用户态 + 内核态 CPU 时间，压测前后相减得到整段用量。
+func processCPU() time.Duration {
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		return 0
+	}
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// perfResourcePrefix 读压测资源名前缀：ROOST_PERF_DB_PREFIX（库名）与 ROOST_PERF_STREAM_PREFIX（流名）。
+// 在云库或共享环境上压测时用自己的唯一前缀，便于事后按前缀核对清理；不设时保持各夹具原来的名字。
+func perfResourcePrefix(t *testing.T, variable, required, fallback string) string {
+	t.Helper()
+	value := os.Getenv(variable)
+	if value == "" {
+		return fallback
+	}
+	if !strings.HasPrefix(value, required) || len(value) > 40 || strings.ContainsFunc(value, func(r rune) bool {
+		return !(r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
+	}) {
+		t.Fatalf("%s must start with %s and contain only letters, digits and underscores (at most 40)", variable, required)
+	}
+	return value
+}
+
+func perfStreamPrefix(t *testing.T, fallback string) string {
+	return perfResourcePrefix(t, "ROOST_PERF_STREAM_PREFIX", "SAGAPERF_", fallback)
 }
