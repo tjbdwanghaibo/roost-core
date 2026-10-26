@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
+
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
@@ -53,7 +53,7 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- roomwiring.Relay(ctx, s, h.game, binding, member, 902) }()
-	var replica chunksync.Replica
+	var replica gamephysics.RoomReplica
 	for range 3 {
 		packet, err := wire.Read(conn, 8192)
 		if err != nil {

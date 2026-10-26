@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Room 同步带宽
+
+- 输入采样确认改为接收成员私有 RP1 帧头；pending 重试保留同帧确认，其他玩家的序列/代际不再广播。
+- 网络对象先量化再比较，完整对象 34 字节；通用 chunksync 新增 RC2 字段增量，首次可见/迁移/重连用完整字段，坏补丁原子拒绝。RC1 对照接口保留。
+- Unity 配套量化解码与私有确认，Go/C# 共享金样；同一批 PhysX/AOI 帧的载荷降低约 51.7%，单轴位置误差约 5mm，非生产容量测量。
+- **升级需先停旧再起新**：Room 与 Unity viewer 同步更新并重连；native ABI 保持 2，无持久数据迁移。协议与验证范围见 [物理房间手册](docs/framework/PHYSICS-ROOM-SERVICE.md#room-同步压缩与复测2026-10-26)。
+
 ### UGC 物理闯关与 Unity 输入预测
 
 - PhysX 增加 Static/Dynamic/Kinematic、运动学目标、动态 Box、Distance 与 Hinge 关节、有限马达；Room 按固定 tick 驱动关卡轨迹并验证抓取/释放和过期。跳跃使用独立期限，修复移动输入为旧跳跃续期的问题。

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
@@ -83,7 +82,7 @@ func TestMembershipAndDelivery(t *testing.T) {
 	if err != nil || !bytes.Equal(frame.Payload, retry.Payload) || frame.Sequence != retry.Sequence {
 		t.Fatalf("lost reply changed baseline: %v", err)
 	}
-	var replica chunksync.Replica
+	var replica gamephysics.RoomReplica
 	if err = replica.Apply(frame.Payload); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +184,7 @@ func TestFrameBudgetAndStaleEpoch(t *testing.T) {
 	cfg.MaxFrameBytes = 256
 	s := newTestService(t, cfg)
 	spec := testSpec("large", s)
-	for _, id := range []uint64{2, 3} {
+	for _, id := range []uint64{2, 3, 4} {
 		spec.Bodies = append(spec.Bodies, physx.Body{ID: id, Shape: physx.Sphere, Position: physx.Vec3{float32(id) * 2, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1})
 	}
 	if _, err := s.Create(context.Background(), spec); !errors.Is(err, ErrCapacity) {
@@ -424,4 +423,85 @@ func TestExpiredJumpIsNotConsumedAfterSlowCommit(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("input not sampled")
+}
+
+func TestPrivateInputAckAndRetryStayWithTheirFrame(t *testing.T) {
+	s := newTestService(t, testConfig())
+	ctx := context.Background()
+	spec := testSpec("private-ack", s)
+	spec.Bodies = append(spec.Bodies, physx.Body{ID: 2, Shape: physx.Sphere, Position: physx.Vec3{2, 3, 0}, Dimensions: physx.Vec3{.5}, Mass: 1})
+	ref, err := s.Create(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := testBinding()
+	binding.PlayerID = 2
+	binding.SessionID = "session2"
+	b, err := s.Join(ctx, ref, binding, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Submit(ctx, a, Input{Sequence: 11}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Submit(ctx, b, Input{Sequence: 22}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.lookup(ref)
+	wait := func(seq uint64) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			r.mu.Lock()
+			ready, otherReady := false, false
+			for _, v := range r.states {
+				if v.ID == 2 && v.InputSequence == 22 {
+					otherReady = true
+				}
+				if v.ID == 1 && v.InputSequence == seq {
+					ready = true
+				}
+			}
+			r.mu.Unlock()
+			if ready && otherReady {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatal("input not sampled")
+	}
+	wait(11)
+	first, err := s.Poll(ctx, a, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.Poll(ctx, b, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ra, rb gamephysics.RoomReplica
+	if err = ra.Apply(first.Payload); err != nil {
+		t.Fatal(err)
+	}
+	if err = rb.Apply(other.Payload); err != nil {
+		t.Fatal(err)
+	}
+	if ra.Ack.Sequence != 11 || ra.Ack.Generation != a.InputGeneration || rb.Ack.Sequence != 22 || rb.Ack.Generation != b.InputGeneration {
+		t.Fatalf("ack crossed recipients: %+v %+v", ra.Ack, rb.Ack)
+	}
+	if len(ra.States) != 2 || ra.States[2].InputSequence != 0 || ra.States[2].InputGeneration != 0 {
+		t.Fatal("other player's confirmation leaked")
+	}
+	if err = s.Submit(ctx, a, Input{Sequence: 12}); err != nil {
+		t.Fatal(err)
+	}
+	wait(12)
+	retry, err := s.Poll(ctx, a, 0)
+	if err != nil || !bytes.Equal(first.Payload, retry.Payload) {
+		t.Fatal("pending frame got a newer input acknowledgement", err)
+	}
 }

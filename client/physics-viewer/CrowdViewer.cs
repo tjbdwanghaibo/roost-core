@@ -245,9 +245,9 @@ namespace Roost.PhysicsViewer
                     interval = Mathf.Max(.02f, (replica.Tick - old) * .02f);
                     receivedAt = Time.unscaledTime;
                     Frames++;
-                    if(ControlRoom&&UseGate&&replica.Bodies.TryGetValue(controlledBody,out var self)&&self.InputGeneration!=0&&self.InputGeneration==unchecked((ulong)Interlocked.Read(ref inputGeneration))) {
+                    if(ControlRoom&&UseGate&&replica.Bodies.TryGetValue(controlledBody,out var self)&&replica.InputGeneration!=0&&replica.InputGeneration==unchecked((ulong)Interlocked.Read(ref inputGeneration))) {
                         predictionReady=true;
-                        prediction.Reconcile(self.InputSequence,self.InputActive,new PredictedState{Position=N(self.Position),Velocity=N(self.Velocity)},clock.Elapsed.TotalSeconds);
+                        prediction.Reconcile(replica.InputSequence,replica.InputActive,new PredictedState{Position=N(self.Position),Velocity=N(self.Velocity)},clock.Elapsed.TotalSeconds);
                     }
                 }
                 if (ControlRoom)

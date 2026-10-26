@@ -5,11 +5,11 @@ package physicsroom
 import (
 	"context"
 	"fmt"
+	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
@@ -73,7 +73,7 @@ func TestRealNATSRoomLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var replica chunksync.Replica
+	var replica gamephysics.RoomReplica
 	if err = replica.Apply(d.Payload); err != nil {
 		t.Fatal(err)
 	}

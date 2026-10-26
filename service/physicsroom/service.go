@@ -57,6 +57,7 @@ type memberState struct {
 	inputAt, jumpAt, seenAt, sentAt time.Time
 	cursor                          chunksync.Cursor
 	pending                         *chunksync.Plan
+	pendingPayload                  []byte
 	sequence                        uint64
 	visible, nextVisible            map[uint64]bool
 }
@@ -180,12 +181,12 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 			dynamic++
 		}
 	}
-	if 36+dynamic*92 > s.cfg.MaxFrameBytes {
+	if gamephysics.RoomHeaderBytes+36+dynamic*(22+1+gamephysics.QuantizedBodyBytes) > s.cfg.MaxFrameBytes {
 		w.Close()
 		return Ref{}, ErrCapacity
 	}
 	ref := Ref{ID: spec.ID, Epoch: epoch()}
-	initial, err := gamephysics.NewSpatialFrame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies), 25, 10)
+	initial, err := gamephysics.NewQuantizedSpatialFrame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies), 10)
 	if err != nil {
 		w.Close()
 		return Ref{}, err
@@ -276,7 +277,7 @@ func (s *Service) run(ctx context.Context, r *room) {
 		if err := s.cfg.Commit(ctx, r.ref, f); err != nil {
 			return err
 		}
-		frame, err := gamephysics.NewSpatialFrame(f, 25, 10)
+		frame, err := gamephysics.NewQuantizedSpatialFrame(f, 10)
 		if err != nil {
 			return err
 		}
@@ -410,6 +411,7 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 			return Delivery{}, err
 		}
 		v.pending = nil
+		v.pendingPayload = nil
 		v.sequence = ack
 		v.visible = v.nextVisible
 	} else if ack != v.sequence {
@@ -424,15 +426,23 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err != nil {
 			return Delivery{}, err
 		}
-		p, err := v.cursor.Plan(snapshot)
+		p, err := v.cursor.PlanFields(snapshot, gamephysics.QuantizedLayout())
 		if err != nil {
 			return Delivery{}, err
 		}
 		v.pending = p
+		var own gamephysics.InputAck
+		for _, state := range r.states {
+			if state.ID == v.body && state.InputGeneration == v.member.InputGeneration {
+				own = gamephysics.InputAck{Sequence: state.InputSequence, Generation: state.InputGeneration, Active: state.InputActive}
+				break
+			}
+		}
+		v.pendingPayload = gamephysics.RoomPayload(p.Data, own)
 		v.nextVisible = visible
 		v.sentAt = time.Now()
 	}
-	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pending.Data)}, nil
+	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pendingPayload)}, nil
 }
 func (s *Service) Leave(ctx context.Context, m Member) error {
 	if err := ctx.Err(); err != nil {

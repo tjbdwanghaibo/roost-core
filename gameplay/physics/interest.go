@@ -24,6 +24,21 @@ func NewSpatialFrame(f Frame, chunkSize, blockSize float32) (*SpatialFrame, erro
 	if err != nil {
 		return nil, err
 	}
+	return spatialFrame(f, snapshot, blockSize)
+}
+
+// NewQuantizedSpatialFrame 为物理房间构建量化网络视图；AOI 仍以原始权威坐标筛选。
+func NewQuantizedSpatialFrame(f Frame, blockSize float32) (*SpatialFrame, error) {
+	if blockSize < 1 || math.IsNaN(float64(blockSize)) || math.IsInf(float64(blockSize), 0) {
+		return nil, errors.New("physics: invalid AOI block size")
+	}
+	snapshot, err := QuantizedSnapshot(f)
+	if err != nil {
+		return nil, err
+	}
+	return spatialFrame(f, snapshot, blockSize)
+}
+func spatialFrame(f Frame, snapshot chunksync.Snapshot, blockSize float32) (*SpatialFrame, error) {
 	s := &SpatialFrame{Snapshot: snapshot, positions: make(map[uint64][3]float64, len(f.States)), blocks: make(map[[2]int64][]int), blockSize: float64(blockSize)}
 	for i, state := range f.States {
 		p := [3]float64{float64(state.Position[0]), float64(state.Position[2]), float64(state.Position[1])}

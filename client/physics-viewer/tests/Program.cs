@@ -1,5 +1,7 @@
 using System;
 using System.Numerics;
+using System.IO;
+using System.Text.Json;
 using Roost.PhysicsViewer;
 
 static class Program
@@ -11,8 +13,27 @@ static class Program
   if(input.Jump){jumps++;s.Velocity.Y+=7;}
   s.Velocity+=input.Acceleration*dt;s.Position+=s.Velocity*dt;return s;
  }
+ static void Packed()
+ {
+  using var doc=JsonDocument.Parse(File.ReadAllText("client/physics-viewer/tests/packed.json"));
+  byte[] full=Convert.FromBase64String(doc.RootElement.GetProperty("Full").GetString());
+  byte[] delta=Convert.FromBase64String(doc.RootElement.GetProperty("Delta").GetString());
+  var baseline=PackedBodyCodec.Apply(null,full);var next=PackedBodyCodec.Apply(baseline,delta);
+  var state=PackedBodyCodec.Decode(next,0,-1);
+  Check(Math.Abs(state.Position.X-12.35f)<.00001f&&Math.Abs(state.Position.Z+.01f)<.00001f,"Go/C# position golden");
+  Check(state.Rotation.W==1&&state.Velocity.Y==-10.5f,"Go/C# rotation/velocity golden");
+  Check(PackedBodyCodec.Decode(baseline,0,-1).Position.X==12.34f,"patch must not mutate old baseline");
+  for(int i=0;i<full.Length;i++) {
+   bool rejected=false;try{PackedBodyCodec.Apply(null,full.AsSpan(0,i).ToArray());}catch(InvalidDataException){rejected=true;}
+   Check(rejected,"truncated full accepted");
+  }
+  bool missing=false;try{PackedBodyCodec.Apply(null,delta);}catch(InvalidDataException){missing=true;}Check(missing,"partial without baseline");
+  byte[] invalid=(byte[])full.Clone();invalid[0]=32;bool bad=false;try{PackedBodyCodec.Apply(baseline,invalid);}catch(InvalidDataException){bad=true;}Check(bad,"unknown mask");
+  Console.WriteLine("PASS packed body: Go/C# golden, delta, truncation, missing baseline and immutable history");
+ }
  static void Main()
  {
+  Packed();
   var p=new InputPrediction();
   p.Record(new PredictedInput{Sequence=1,At=0,Acceleration=Vector3.UnitX*10,Jump=true});
   p.Reconcile(0,false,new PredictedState(),.01);

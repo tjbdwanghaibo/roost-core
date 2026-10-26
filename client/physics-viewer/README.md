@@ -131,5 +131,10 @@ Unity 新工程沿用 `scripts/physics/create-viewer.sh`。已有工程把 `clie
 
 - WASD/方向键移动，Space 跳跃，按住 E 抓最近对象、松开 E 释放；最终是否可抓由服务器检查。此演示选目标没有射线遮挡，不是完整商业抓取规则。
 - `PredictLocalInput` 开关对比预测与纯插值。预测仅作用于自己，其他对象保留服务器快照插值；本地胶囊扫掠不向服务器回写坐标。断线不自动重连，重新启动连接会重新取内容并获取成员代际。
-- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 Chunk 身体载荷中，不能用 RPC 响应裁剪预测历史。
+- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 RP1 私有帧头中，不能用 RPC 响应裁剪预测历史。
 - 本轮 Linux native、房间和真实 Gate/NATS/TCP 功能回归已运行；C# 预测核心已编译执行。**Unity 编辑器编译、场景交互与移动网络延迟验收尚未执行**，请在目标 Unity 工程复验。它是近似预测和权威纠偏，不是把服务器完整 PhysX 世界搬到客户端做确定性重演。
+
+
+Room 同步已使用 RP1 + RC2：每帧只包含自身输入确认，对象先量化再按位置/旋转/速度/角速度/休眠分字段发送。完整对象 34 字节，位置精度 1cm；重新连接、跨 Chunk 或重新可见必须重建完整对象。同步复制 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`，服务与客户端先停旧再更新。Comparison/Crowd 保留 RC1 无损对照，不能用旧 crowd 测速脚本证明 Room 优化收益。
+
+`dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` 从仓库根运行，同时验证预测核心和 `tests/packed.json` 的 Go/C# 共享量化金样。协议、实测载荷和测量范围见 [Room 同步压缩](../../docs/framework/PHYSICS-ROOM-SERVICE.md#room-同步压缩与复测2026-10-26)。此核心测试不代替 Unity 编辑器验收。

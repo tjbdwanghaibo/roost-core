@@ -5,7 +5,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
+
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
+
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	domain "github.com/tjbdwanghaibo/roost-core/service/physicsroom"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -147,7 +147,7 @@ func TestRealGateUGCLevelAndInput(t *testing.T) {
 	payload := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), 1)
 	payload = protowire.AppendVarint(protowire.AppendTag(payload, 5, protowire.VarintType), 3)
 	send(inputMessageID, 3, payload)
-	var replica chunksync.Replica
+	var replica gamephysics.RoomReplica
 	var generation uint64
 	sampled := false
 	moving := false
@@ -166,11 +166,11 @@ func TestRealGateUGCLevelAndInput(t *testing.T) {
 				t.Fatal(err)
 			}
 			if object, ok := replica.Objects[1]; ok {
-				if len(object.Data) != 70 {
+				if len(object.Data) != gamephysics.QuantizedBodyBytes {
 					t.Fatal("body schema")
 				}
-				if binary.LittleEndian.Uint64(object.Data[53:]) == 1 {
-					if generation != 0 && binary.LittleEndian.Uint64(object.Data[62:]) != generation {
+				if replica.Ack.Sequence == 1 {
+					if generation != 0 && replica.Ack.Generation != generation {
 						t.Fatal("input generation mismatch")
 					}
 					sampled = true
