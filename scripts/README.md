@@ -54,7 +54,6 @@ DataEngine 正式持久化链路：配置隔离 `ROOST_DATAENGINE_IT_MONGO_URI` 
 
 DataEngine 真实 Mongo 压测：`bash scripts/perf/dataengine.sh` 复用正式生成工程，默认非 race、GOMAXPROCS=4、32 并发、128 实体、每样本 1000 笔，四种负载 × 三种策略 × 三轮。结果存入 `artifacts/perf/dataengine/<label>/`；每轮逐文档验证并排空 WAL。可通过 `ROOST_PERF_SHAPES="single dual pair hot"`、`ROOST_PERF_POLICIES="async strict pipelined"`、`ROOST_PERF_REQUESTS`、`ROOST_PERF_WRITERS`、`ROOST_PERF_ENTITIES`、`ROOST_PERF_COUNT`、`ROOST_PERF_CPU`、`ROOST_PERF_LABEL` 调整。`ROOST_PERF_RATE=20` 按每秒 20 笔目标节奏发送，未设置时为闭环突发压力；超载时同时观察排空时间和 WAL 积压，不能只看 Request 返回吞吐。
 
-
 DataEngine 多 DAO 批量优化后的验收与性能对比见
 [实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/DATAENGINE-BATCH-2026-09-24.md)。正式生成链路现覆盖三种策略下
 满额准入拒绝、四 DAO 回滚、排空后再准入。大积压专项增加
@@ -62,7 +61,6 @@ DataEngine 多 DAO 批量优化后的验收与性能对比见
 把 100k WAL 恢复扩展为 10k Entity × 双 DAO；默认仍保留原单 DAO 用例。
 
 Remote 的持久权限、最新故障矩阵和容量复跑见 [2026-09-25 实施报告](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-AUTHORITY-2026-09-25.md)。旧部署必须先停写、排空并迁移；脚本记录当前 Remote 源码摘要，不能拿旧协议长稳结果替代新协议验收。
-
 
 Remote 诊断可设置 `ROOST_REMOTE_CPU_PROFILE=/绝对路径/cpu.pprof` 和 `ROOST_REMOTE_TRACE=/绝对路径/trace.out`；`scripts/test-remote-generated.sh` 把它们传给 Go test。跟踪会覆盖初始化、预热和计时阶段，诊断结果应与不带 profile 的正式负载分开。长稳仍使用 `scripts/perf/remote.sh` 的 `ROOST_REMOTE_DURATION=30m` / `24h`；当时的实跑范围见 [Remote 统一实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-UNIFIED-2026-09-25.md)。
 
@@ -84,7 +82,6 @@ io 池并发/队列对比：加载隔离环境后运行 `ROOST_REMOTE_WORKER_LAB
 Remote 资源预算验证新增 `ROOST_REMOTE_WRITE_LIMIT`（正整数，未设使用正式默认 128）、`ROOST_REMOTE_WAL_LIMIT`（正整数，未设保持 WAL 不设记录数上限）。它们独立于 short / io worker 数；历史 4096 预算对照可显式设 `ROOST_REMOTE_WRITE_LIMIT=4096`，前提是 `AsyncFinalizeCapacity` 足够。最新[预算与集中恢复验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)披露拒绝和成功 TPS。
 
 `scripts/perf/remote.sh` 的一致性与负载错误分开报告（2026-10-04）：负载有错误时仍做区间核验并写 `result.json.verified`，之后测试再以错误失败；退出码 0 = 核验通过且无错误，3 = 核验通过但负载有错误（输出 `consistency verified; load errors=…`），1 = `.verified` 缺失。`ROOST_REMOTE_REQUEST_TIMEOUT`（缺省 30s）只用于区间核验负对照。口径见 [REMOTE-ACCEPTANCE §负载有错误时的区间核验](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md#负载有错误时的区间核验2026-10-04)。
-
 
 Sync 长尾诊断：AOI 压测增加 `-trace-capacity=262144`，输出固定内存环形记录的逐批
 `trace.jsonl`；随后运行 `python3 scripts/perf/sync-trace.py <sample-N目录>`，关联
@@ -114,16 +111,5 @@ MMORPG 业务纵切：`bash scripts/test-mmorpg-generated.sh`，公共 CLI 生�
 MMORPG 多地图网络接入：`bash scripts/test-mmorpg-scenes.sh`，生成 game-demo 后填业务接法，一个 Manager 配多个 Interest，在真实 TCP 和 Receiver 上校验切图删除 / 全量、held 重试、旧 epoch、重连与字段隐私。`scripts/test-mmorpg-cross-sid.sh` 对已启动的隔离双 sid game-demo 运行真实账号错服拒绝、双向赠礼、邮件重放与失败补偿；资源、端口和命名空间从显式环境变量取得，不启动 / 停止服务、不改 Player sid。[MMORPG 学习与使用手册](../docs/framework/MMORPG-INTEGRATION.md)列出全部参数、业务映射和边界；[SLG 学习与使用手册](../docs/framework/SLG-INTEGRATION.md)独立维护。
 
 MOBA 正式业务消费者：`bash scripts/test-moba-generated.sh`，CLI 生成 Player / MatchResult DAO 与多实体 Sender，结合正式 Match、FrameAssembler、真实 loopback KCP 跑匹配、会话输入、单路模拟、追帧 / 观战 / 分歧及结算 race 场景。`ROOST_MOBA_REAL=1` 与隔离 Mongo URI 追加两个独立进程的文件 WAL / Mongo 结算恢复；活动对局恢复另有边界。`ROOST_MOBA_KEEP=1` 保留成功消费者，失败保留目录和真实模式的唯一库名。[MOBA 学习手册](../docs/framework/MOBA-INTEGRATION.md)列出业务 / 框架映射与使用方式。
-
-SLG 联盟活动联合场景：`bash scripts/test-slg-alliance.sh`，需显式隔离 Redis / NATS。正式 Activity RPC 连独立协调器子进程，验证成员撤权与关系视野、贡献持久意图与重放、冻结阶段屏障、原服奖励义务回执和丢失 ACK 后重投；不含 Player 实际金币到账或 Remote 联盟权威。流程与边界见 [SLG 主线手册](../docs/framework/SLG-INTEGRATION.md#联盟活动主线从准入到原服接收奖励义务)。
-
-SLG 联盟活动 Player 到账扩展：`bash scripts/test-slg-alliance-player.sh`，显式提供隔离 Redis / NATS / Mongo 副本集。CLI 生成 Player／ScoutMap DAO/Sender，在同一活动流程 ACK 后读取原服义务，两个 sid 分别经 strict WAL 未投影 SIGKILL、恢复先核对资产及 X/Y/Coverage，再重建空间视野与重投；两次空间移动覆盖提交门、回滚、多块覆盖和 scout 来源交接，另以本服 MultiSync 联合读取 Player 权限及持久 ScoutMap 坐标，筛选四个动态目标，验证附近未授权目标不下发、侦察撤权、服务端期限边界／重复建档不续期、真实 ticker 刷新（超时／迟到成功／坏快照暂停发布、恢复清空及取消退出）与第三进程冷恢复；新增地图移动／直线行军回执、十一条未投影 WAL、app.Service / 正式 App game 启停及超时重试排空，另跑路线插值／时间与坐标边界 race 回归；到达待办随路线持久化，常驻 worker 验证超时／丢回复后的重新发现、停机保留待办、报告八路重投和未投影 SIGKILL／两次恢复（此前两组共六个顺序子进程，恢复经正式 App game 启动 worker；Nest 时间沿 main 改为 fctx 冻结注入）；报告投递另验 Player 私有 Inbox 永久回执、地图独立 ACK、收件未投影且未 ACK 时 SIGKILL／两次恢复，改正文／错收件人拒绝、ACK 回滚、八路重投与钱包不变（每原服总计九个顺序子进程、三个断点；该组仅本服）；再由独立固定地图进程经 NATS Bus 投递原服，真实 RPC 超时后分别 SIGKILL 两边未投影 WAL、恢复八路重投、第三次启动核对，验证来源／目的路由拒绝（每原服总计十五次子进程执行、五次 SIGKILL；不含 Remote 地图交接）；build / vet / ID / 生成检查。流程与边界见 [SLG Player 到账](../docs/framework/SLG-INTEGRATION.md#player-到账扩展义务已-ack金币仍能恢复补发)。
-
-Managed Remote 地图独立验收：`ROOST_SLG_REMOTE_MAP=1 bash scripts/test-slg-alliance-player.sh`（自动启用 Remote 装配）。同一地图 handler 经 CLI 生成托管 ScoutMap／global DAO，验证 owner 3000→3001→3002、代际递增、旧写者 fence、新 owner 重试未 ACK 报告、ACK 失败回滚、第三 Runtime 完整冷状态；原服通过真实 NATS 重读权威路由拒绝旧来源／旧代际，Player 回执与钱包不变。此模式先跑同进程交接，再跑独立 owner 3100→3101→3102 与原服的联合场景：旧进程存活／fence、新 owner 和原服分别 SIGKILL、开放 RPC 前冷事实核对、八路重投与再次交接。另加权威查询错误／迟到成功拒绝与“路由校验已通过、Player 未提交”时交接的屏障场景；接收端独立 Timeout 覆盖查询和收件。两组共十二次子进程执行、四次 SIGKILL；不跑本服 MultiSync／固定地图 SIGKILL，不证明自动选主或跨机 HA。见 [Managed Remote 地图](../docs/framework/SLG-INTEGRATION.md#managed-remote-地图报告未确认时交接-owner)。
-
-
-SLG 联盟 Remote 模式：`ROOST_SLG_REMOTE=1 bash scripts/test-slg-alliance-player.sh`，沿用 Redis/NATS/Mongo 参数。生成 Managed Remote 实体与 Sender，两个独立 Runtime 显式交接 owner、拒绝旧写者、冷加载后继续同一活动和两服 Player 恢复。所有联盟模式经真实回环 TCP 与 Receiver 检查撤权／held／重连，NATS 权限代际提示覆盖重复与乱序，固定视点先取空间／权限交集，真实 ticker 在漏通知／读取超时后重读撤权，常驻控制标记保证空场景 Full 到达；生成 DAO 保持逻辑 main、Runtime 映射唯一物理库，Player 模式增加原服待发义务有界扫描。范围见 [SLG 手册](../docs/framework/SLG-INTEGRATION.md)。
-
-SLG 报告客户端恢复：`test-slg-alliance-player.sh` 默认与 `ROOST_SLG_REMOTE=1` 模式在 Inbox 两次冷恢复中运行私有 DTO / TCP 重连验收；`scout/report_view.go` 校验永久收件归属，`player/report_view_test.go` 由周期读补漏通知，检查失败保持 held、非所属会话零报告、重复刷新不写回执、旧 epoch 拒绝。Managed 地图模式仍走独立交接链，不运行此客户端恢复子场景。
 
 通用 LevelComponent：`bash scripts/test-level-generated.sh` 在临时独立模块使用正式 entity／nest 生成器，验证组件工厂、DAO、Sender、事务回滚、计时终局和提交后动作回执。无外部依赖，能力执行使用替身；成功清理、失败保留工程。见 [Level 手册](../docs/framework/LEVEL-COMPONENT.md)。

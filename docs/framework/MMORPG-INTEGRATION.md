@@ -6,30 +6,6 @@
 
 ## 第一部分：学习
 
-跨服战报的客户端接法可参考 [SLG 永久 Inbox 与私有报告视图](SLG-INTEGRATION.md#报告客户端永久-inbox私有-dto-与断线重连)：服务端绑定玩家、生成 Sender 读取、白名单 DTO、周期重读补漏通知、TCP 重连 Full 与旧 epoch 拒绝。地图 ACK 不表示玩家已读。本证据来自 SLG 消费者，不替代 MMO 队伍／副本权限、Boss 奖励或附件事务验收。
-
-
-### 专题优先级：跨服、视野、活动
-
-MMORPG 后续优先围绕“跨服世界 Boss／限时副本”学习这三条线。先复用已有跨服赠礼和多地图消费者理解契约，再定义 Boss／副本权威和活动事实；不把本地切图等同于跨服，也不把基础交易通过等同于多人活动完成。
-
-| 专题与 MMO 场景 | 框架接法 | 重点学习问题 |
-| --- | --- | --- |
-| 跨服组队／副本／世界 Boss | Player 静态归属，业务服务定义副本／Boss 权威；原服资产经 Saga／effect 协作，适合 Remote 的共享实体走 owner／lease／fence | 匹配成员、实际参战与领奖身份如何绑定；超时后查询哪个事实；旧服务进程能否继续写；部分玩家到账后怎样恢复 |
-| 同屏／副本隔离／队伍与隐身 | 每张地图独立 Interest，同一连接由同一个 Sync Manager 管理；来源归并及 Profile 控制字段 | 同坐标不同副本不能互见；队伍退出或隐身变化如何撤权；切图失败如何按持久事实 Reconcile；重连 Full 是否清掉旧对象 |
-| 世界 Boss／限时副本／节日活动 | 业务时间与持久 timer、本服通知、activity 协调聚合、贡献事实、结算投递、原服邮件／领取 | 参与和有效贡献由谁裁决；死亡／离线／重复命中是否计分；截止时已准入操作如何归窗；Boss 胜负和活动阶段是否一致；发奖与领奖的防重身份在哪里 |
-
-**跨服**：先读 §6 与 §13，运行已有 `scripts/test-mmorpg-cross-sid.sh` 学错服拒绝、双向赠礼、失败补偿和重复邮件领取；它要求预先启动双 sid demo。Remote 与 Mirror 的测试另走 `scripts/test-remote-generated.sh`。跨服 Boss 的单写权威、成员快照、贡献记录和逐个原服兑奖是下一步业务接入，不能从赠礼结果推断已完成副本迁移或战场 HA。
-
-**视野**：先读 §5 的 `mmoScenes.Reconcile`，运行 `bash scripts/test-mmorpg-scenes.sh` 观察两个地图、真实 TCP、切图重试和重连。接着用 [Block AOI](INTEREST-BLOCK-AOI.md) 与 [policy 测试](../../framework/sync/entitysync/policy/interest_test.go) 学提交屏障、来源撤销与视图白名单。下一步专题应补同坐标不同副本、队伍解散、隐身／反隐、观战权限和密集 Boss 扇出。`SetTeam` 只提供关系来源，AOI 可见不等于攻击授权；战斗 handler 仍须核对同图、存活、距离与技能条件。
-
-**活动**：按 [SLG 活动学习顺序](SLG-INTEGRATION.md#专题优先级跨服视野活动) 追到 `OpenActivity → NotifyPhaseDue → Contribute → AttemptDispatch → settle → AckDispatch`。在 MMO 里把输入事实换成服务器确认的参战、伤害／治疗／任务贡献，先定义合格参与与奖励政策，再做持久账本；不能接受客户端伤害总数作为结算依据。确认活动实例与窗口、Boss／副本身份、参与者和原服 sid，重复消息用原身份；重启后恢复原窗口，不把旧贡献灌入新活动。
-
-当前证据是分开的：§13 验证双 sid 赠礼，§12 的地图脚本验证同进程多地图 TCP；通用 activity 与 demo 覆盖协调、贡献、活动榜和投递接法。**跨服世界 Boss＋副本权限视野＋活动结算的联合消费者尚未验收**，包括中途掉线、窗口关闭与战斗完成竞争、原服派奖中断／补发。后续以这条联合链路深化学习，并把真实客户端、跨机故障和目标密度容量单独验收。
-
-
-SLG 的 [联盟活动联合切片](SLG-INTEGRATION.md#联盟活动主线从准入到原服接收奖励义务)可作为跨服世界 Boss 的活动层学习前置：固定窗口、持久贡献意图、退组后的新命令拒绝、结算前冻结屏障、原服奖励义务回执与 ACK。其子进程协调器 / Redis / NATS，以及 Player 金币／永久回执的 WAL / Mongo SIGKILL 恢复、Remote 联盟显式 owner 交接与真实 TCP / Receiver 重连、NATS 权限代际重读与统一库名映射、持久位置与多块覆盖冷重建、固定视点权限交集及定期撤权重读、Player 持久视点、多目标权限、限时侦察冷恢复及真实 Player／ScoutMap 联合读取、动态目标／直线行军回执冷恢复、离线求终点、到达报告同事务消费、常驻 worker 失败／排空／第二次 SIGKILL 恢复、App game 视野生命周期证据，都只属于 SLG 示例；MMO 仍需把真实 Boss 伤害权威、队伍 / 副本视野与 Player 永久资产接到同一条链路，不能将退盟规则直接当作退队分奖规则，也不能把奖励义务视为金币到账。
-
 ### 1. 适合谁、先读什么
 
 基础阅读顺序：[入门](../GETTING-STARTED.md) → [Nest / Entity](guide/02-nest-entity.md) → [DataEngine](guide/03-dataengine.md) → [同步](guide/04-sync.md) → 本文对应场景。
@@ -320,13 +296,3 @@ bash scripts/test-mmorpg-cross-sid.sh
 ### 14. 验收范围小结
 
 已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复与 SIGKILL 崩溃恢复（定时器经驱动投递循环）、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不能用 DAO 人数守恒代替 AOI 客户端视图验收。队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现（不因此算框架缺陷）；夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则。不以本文清单的长度代替验收。
-
-SLG 报告投递新增的学习参照见 [地图义务与 Player 永久回执](SLG-INTEGRATION.md#报告投递地图持久义务与-player-永久收件回执)：先持久收件再独立确认，未确认时崩溃可重投原信封。可用于理解 Boss 战报／掉落通知的接入顺序，但本证据的地图与玩家仍在同一原服，不代表 MMO 跨服 Boss 或跨服报告 RPC 已验收。
-
-进一步参照 [SLG 跨服报告 RPC](SLG-INTEGRATION.md#跨服报告固定地图权威到静态原服的真实-rpc)：独立固定地图与原服进程通过 NATS Bus 协作，两边未投影 WAL 分别崩溃后恢复原义务。可复用投递协议和归属检查；不能把固定地图 sid 等同 Remote owner/fence，也不能据此宣称 MMO 世界 Boss 联合链已完成。
-
-Managed Remote 地图的补充接法见 [SLG owner 交接](SLG-INTEGRATION.md#managed-remote-地图报告未确认时交接-owner)：地图交接保留原报告身份，原服按权威路由与代际准入，重复收件使用永久回执。路由校验不与 Player 提交原子；交接前已准入的报告允许完成。该验收为同进程多个 Runtime，不能代替 MMO 多进程世界 Boss 交接与崩溃验收。
-
-补充实测：[多进程 Managed Remote 地图交接与恢复](SLG-INTEGRATION.md#多进程-managed-remote-地图交接与崩溃恢复) 已把独立 owner 交接、旧进程 fence、新 owner／原服 SIGKILL 与永久回执防重接成一条链。仍是同机显式交接，不能外推为 MMO 自动选主、世界 Boss 完整玩法或跨机 HA。
-
-交接并不自动取消已准入的战报／奖励请求。[SLG 准入屏障与接收端预算](SLG-INTEGRATION.md#交接在途请求接收端期限与准入屏障) 已用独立进程验证这一窗口：Player 提交允许完成，旧 owner 的地图 ACK 仍被 fence，新 owner 重投由永久回执去重。普通 NATS Bus 的调用方 deadline 不传播到接收端，需为接收业务显式设置自己的期限。
