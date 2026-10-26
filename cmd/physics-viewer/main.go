@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"math"
@@ -26,6 +27,8 @@ import (
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
 )
+
+var loadedLevel *gamephysics.Level
 
 const frameMessageID = 0x50485901
 
@@ -70,7 +73,36 @@ func run() error {
 	duration := flag.Duration("duration", 0, "optional run duration")
 	natsURL := flag.String("nats", "nats://127.0.0.1:4222", "local NATS URL")
 	logLevel := flag.String("log-level", "info", "debug, info, warn, error")
+	levelPath := flag.String("level", "", "validated UGC level JSON (gate-room only)")
+	exportLevel := flag.String("export-level", "", "write sample obstacle level JSON and exit")
 	flag.Parse()
+	if *exportLevel != "" {
+		data, _, err := gamephysics.ObstacleLevel().Content()
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(*exportLevel, data, 0644)
+	}
+	if *levelPath != "" {
+		if *scenario != "gate-room" {
+			return errors.New("level requires gate-room")
+		}
+		file, err := os.Open(*levelPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, gamephysics.MaxLevelBytes+1))
+		if err != nil {
+			return err
+		}
+		level, err := gamephysics.DecodeLevel(data)
+		if err != nil {
+			return err
+		}
+		loadedLevel = &level
+	}
+
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
 		return err

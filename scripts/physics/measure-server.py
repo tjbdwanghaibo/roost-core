@@ -89,7 +89,7 @@ def main():
                         for _ in range(count):
                             entity_id, length = struct.unpack_from('<QH', data, offset)
                             offset += 10
-                            if length != 53 or offset + length > len(data):
+                            if length != 70 or offset + length > len(data):
                                 raise RuntimeError('invalid body payload')
                             states[entity_id] = (x, z, data[offset:offset + length])
                             offset += length

@@ -10,7 +10,7 @@ using Roost.Client;
 namespace Roost.PhysicsViewer
 {
     // 显示服务器权威刚体；Room 模式只发送输入，不运行第二套本地物理。
-    public sealed class CrowdViewer : MonoBehaviour
+    public sealed partial class CrowdViewer : MonoBehaviour
     {
         public string Host = "127.0.0.1";
         public int Port = 19091;
@@ -69,6 +69,7 @@ namespace Roost.PhysicsViewer
         {
             Application.runInBackground = true;
             startedAt = Time.unscaledTime;
+            if (!(ControlRoom && UseGate)) {
             var resource = Resources.Load<TextAsset>("PhysicsTerrain");
             if (resource == null) throw new InvalidDataException("PhysicsTerrain resource missing");
             var terrain = JsonUtility.FromJson<Terrain>(resource.text);
@@ -91,6 +92,7 @@ namespace Roost.PhysicsViewer
                 bodies[id] = body;
                 body.gameObject.SetActive(false);
             }
+            }
             var camera = new GameObject("Crowd Camera").AddComponent<Camera>();
             roomCamera = camera;
             camera.transform.position = new Vector3(40, 43, -48);
@@ -102,11 +104,11 @@ namespace Roost.PhysicsViewer
             receiver = new Thread(ReadLoop) { IsBackground = true, Name = "Roost Crowd Observer" };
             receiver.Start();
         }
-        static Transform Primitive(PrimitiveType type, string name, Color color)
+        static Transform Primitive(PrimitiveType type, string name, Color color, bool keepCollider=false)
         {
             var obj = GameObject.CreatePrimitive(type);
             obj.name = name;
-            DestroyImmediate(obj.GetComponent<Collider>());
+            if(!keepCollider) DestroyImmediate(obj.GetComponent<Collider>());
             var material = new Material(Shader.Find("Standard")) { color = color };
             if (color.a < 1)
             {
@@ -143,7 +145,7 @@ namespace Roost.PhysicsViewer
             return PacketCodec.Decode(packet);
         }
         // 与 room_input.proto 一致；这里只编码四个标量，不引入第二套网络客户端。
-        static byte[] GateInput(ulong sequence, float x, float z, bool jump)
+        static byte[] GateInput(ulong sequence, float x, float z, bool jump, ulong grab)
         {
             using (var payload = new MemoryStream())
             {
@@ -160,7 +162,11 @@ namespace Roost.PhysicsViewer
                 }
                 payload.WriteByte(32);
                 payload.WriteByte((byte)(jump ? 1 : 0));
-                return PacketCodec.Encode(new Packet(0x50485902, checked((uint)sequence + 1), payload.ToArray()));
+                payload.WriteByte(40);
+                remaining=grab;
+                while(remaining>=128){payload.WriteByte((byte)(remaining|128));remaining>>=7;}
+                payload.WriteByte((byte)remaining);
+                return PacketCodec.Encode(new Packet(0x50485902, checked((uint)sequence + 2), payload.ToArray()));
             }
         }
         void ReadLoop()
@@ -183,6 +189,11 @@ namespace Roost.PhysicsViewer
                         var ack = ReadPacket(stream);
                         if (ack.MessageId != 0 || ack.Sequence != 1 || ack.IsPush || ack.Kind != PayloadKind.Protobuf)
                             throw new InvalidDataException("Gate authentication failed");
+                        var request=PacketCodec.Encode(new Packet(0x50485903,2,Array.Empty<byte>()));
+                        stream.Write(request,0,request.Length);
+                        var level=ReadPacket(stream);
+                        if(level.MessageId!=0x50485903||level.Sequence!=2||level.IsPush||level.Kind!=PayloadKind.Protobuf)throw new InvalidDataException("Level handshake");
+                        ReceiveLevel(level.Payload.ToArray());
                     }
                     else stream.Write(hello, 0, hello.Length);
                     sender = new Thread(() => SendInputs(stream)) { IsBackground = true, Name = "Roost Room Input" };
@@ -194,8 +205,14 @@ namespace Roost.PhysicsViewer
                     var decoded = ReadPacket(stream);
                     if (ControlRoom && UseGate && decoded.MessageId == 0x50485902)
                     {
-                        if (decoded.IsPush || decoded.Kind != PayloadKind.Protobuf || decoded.Payload.Length != 0)
+                        if (decoded.IsPush || decoded.Kind != PayloadKind.Protobuf)
                             throw new InvalidDataException("Gate input rejected");
+                        using(var receipt=new BinaryReader(new MemoryStream(decoded.Payload.ToArray()))) {
+                            if(receipt.ReadByte()!=8)throw new InvalidDataException("Input receipt generation");
+                            ulong generation=Varint(receipt);
+                            if(generation==0||receipt.BaseStream.Position!=receipt.BaseStream.Length)throw new InvalidDataException("Input receipt");
+                            Interlocked.Exchange(ref inputGeneration,unchecked((long)generation));
+                        }
                         continue;
                     }
                     byte[] payload = decoded.Payload.ToArray();
@@ -213,6 +230,7 @@ namespace Roost.PhysicsViewer
         {
             try
             {
+                if(ControlRoom&&UseGate&&!levelReady) {if(levelContent==null)return;BuildLevel();}
                 if (ControlRoom) ReadControls();
                 for (int i = 0; i < 8 && packets.TryDequeue(out var data); i++)
                 {
@@ -227,9 +245,13 @@ namespace Roost.PhysicsViewer
                     interval = Mathf.Max(.02f, (replica.Tick - old) * .02f);
                     receivedAt = Time.unscaledTime;
                     Frames++;
+                    if(ControlRoom&&UseGate&&replica.Bodies.TryGetValue(controlledBody,out var self)&&self.InputGeneration!=0&&self.InputGeneration==unchecked((ulong)Interlocked.Read(ref inputGeneration))) {
+                        predictionReady=true;
+                        prediction.Reconcile(self.InputSequence,self.InputActive,new PredictedState{Position=N(self.Position),Velocity=N(self.Velocity)},clock.Elapsed.TotalSeconds);
+                    }
                 }
                 if (ControlRoom)
-                    foreach (var pair in bodies) pair.Value.gameObject.SetActive(replica.Bodies.ContainsKey(pair.Key));
+                    foreach (var pair in bodies) pair.Value.gameObject.SetActive(staticBodies.Contains(pair.Key)||replica.Bodies.ContainsKey(pair.Key));
                 float alpha = Interpolate ? Mathf.Clamp01((Time.unscaledTime - receivedAt) / interval) : 1;
                 foreach (var pair in replica.Bodies)
                 {
@@ -242,7 +264,7 @@ namespace Roost.PhysicsViewer
                         target.rotation = Quaternion.Slerp(old.Rotation, state.Rotation, alpha);
                     }
                     else { target.position = state.Position; target.rotation = state.Rotation; }
-                    if (ControlRoom && pair.Key == (ulong)(50 + PlayerSlot))
+                    if (ControlRoom && pair.Key == (UseGate?controlledBody:(ulong)(50 + PlayerSlot)))
                     {
                         if (!hasOrigin) { origin = state.Position; hasOrigin = true; startedAt = Time.unscaledTime; }
                         HorizontalTravel = Mathf.Max(HorizontalTravel, new Vector2(state.Position.x-origin.x,state.Position.z-origin.z).magnitude);
@@ -250,6 +272,15 @@ namespace Roost.PhysicsViewer
                         roomCamera.transform.position = target.position + new Vector3(0, 12, -16);
                         roomCamera.transform.LookAt(target.position + Vector3.up);
                     }
+                }
+                // 先更新所有可见碰撞体，再预测自己，避免依赖字典对象遍历次序。
+                if(ControlRoom&&UseGate&&PredictLocalInput&&predictionReady&&bodies.TryGetValue(controlledBody,out var own)) {
+                    UnityEngine.Physics.SyncTransforms();
+                    var predicted=prediction.Predict(clock.Elapsed.TotalSeconds,PredictStep);
+                    PredictionOffsetMeters=Vector3.Distance(own.position,U(predicted.Position));
+                    own.position=U(predicted.Position);
+                    roomCamera.transform.position=own.position+new Vector3(0,12,-16);
+                    roomCamera.transform.LookAt(own.position+Vector3.up);
                 }
             }
             catch (Exception e) { failure = e.Message; stopping = true; socket?.Close(); }
@@ -260,7 +291,7 @@ namespace Roost.PhysicsViewer
             {
                 GUI.Box(new Rect(12, 12, Screen.width-24, 85), "Roost Room Entity / server-authoritative physics");
                 GUI.Label(new Rect(24, 38, Screen.width-48, 25), $"{Status} | player {PlayerSlot} | {Summary} | sync 20Hz");
-                GUI.Label(new Rect(24, 62, Screen.width-48, 25), $"WASD / arrows: move   Space: jump   travel={HorizontalTravel:F1}m rise={VerticalRise:F1}m");
+                GUI.Label(new Rect(24, 62, Screen.width-48, 25), $"WASD / arrows: move   Space: jump  E: hold grab   travel={HorizontalTravel:F1}m rise={VerticalRise:F1}m");
                 float y = Screen.height - 170;
                 bool up=GUI.RepeatButton(new Rect(92,y,70,60), "Forward");
                 bool left=GUI.RepeatButton(new Rect(16,y+66,70,60), "Left");
@@ -292,7 +323,7 @@ namespace Roost.PhysicsViewer
                 if (elapsed>7&&!secondJump) {secondJump=true;QueueJump();}
             }
             Vector2 direction=Vector2.ClampMagnitude(new Vector2(x,z),1)*10;
-            lock (inputLock) {inputX=direction.x;inputZ=direction.y;}
+            lock (inputLock) {inputX=direction.x;inputZ=direction.y;grabTarget=UseGate&&Input.GetKey(KeyCode.E)?NearestGrab():0;}
         }
         static void PutUInt(byte[] data, int offset, uint value)
         {
@@ -307,11 +338,13 @@ namespace Roost.PhysicsViewer
                 {
                     float x, z;
                     bool jump;
+                    ulong grab;
                     lock (inputLock)
                     {
                         x = inputX;
                         z = inputZ;
                         jump = jumpPending;
+                        grab=grabTarget;
                         jumpPending = false;
                     }
                     byte[] data = new byte[17];
@@ -319,7 +352,10 @@ namespace Roost.PhysicsViewer
                     PutUInt(data,0,(uint)(sequence>>32));PutUInt(data,4,(uint)sequence);
                     PutUInt(data,8,BitConverter.ToUInt32(BitConverter.GetBytes(x),0));
                     PutUInt(data,12,BitConverter.ToUInt32(BitConverter.GetBytes(z),0));data[16]=(byte)(jump?1:0);
-                    if (UseGate) data = GateInput(sequence, x, z, jump);
+                    if (UseGate) {
+                        prediction.Record(new PredictedInput{Sequence=sequence,Acceleration=new System.Numerics.Vector3(x,0,z),Jump=jump,At=clock.Elapsed.TotalSeconds});
+                        data = GateInput(sequence, x, z, jump,grab);
+                    }
                     stream.Write(data,0,data.Length);
                     Thread.Sleep(50);
                 }

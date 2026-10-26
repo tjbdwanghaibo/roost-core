@@ -237,6 +237,11 @@ const modulePath = "github.com/tjbdwanghaibo/roost-core"
 // may be a file path relative to the module root or an import path's tail.
 func moduleLayer(rel string) string {
 	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	// physics-viewer 是可执行验收宿主，装配 Gate/NATS/Room；不是 core 领域契约。
+	// 只分类这个消费者，不放宽其他 cmd 或 infra/framework/service 的单向依赖。
+	if rel == "cmd/physics-viewer" || strings.HasPrefix(rel, "cmd/physics-viewer/") {
+		return "wiring"
+	}
 	first := rel
 	if index := strings.Index(rel, "/"); index >= 0 {
 		first = rel[:index]
@@ -387,6 +392,8 @@ func TestModuleLayer(t *testing.T) {
 		"./framework/dataengine/engine/runtime.go": "core",
 		"wiring/mail/mail.go":                      "wiring",
 		"wiring":                                   "wiring",
+		"cmd/physics-viewer/services.go":           "wiring",
+		"cmd/physics-viewer-other/main.go":         "core",
 		"codegen/cmd/roost/main.go":                "codegen",
 		"demo/embed.go":                            "demo",
 		"dependency_boundary_test.go":              "core",

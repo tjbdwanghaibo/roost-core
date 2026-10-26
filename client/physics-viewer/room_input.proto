@@ -1,9 +1,15 @@
 syntax = "proto3";
 package roost.physicsviewer;
-// Gate 业务消息 0x50485902；响应为空消息。
+// Gate 业务消息 0x50485902；响应为 RoomInputAck（只确认成员代际，采样序列随已提交快照下发）。
 message RoomInput {
   uint64 sequence = 1;
   float acceleration_x = 2;
   float acceleration_z = 3;
   bool jump = 4;
+  uint64 grab_target = 5;
 }
+
+// Message 0x50485903: empty request, response fixes the room content before inputs.
+message RoomLevel { bytes content = 1; string sha256 = 2; uint64 controlled_body = 3; }
+
+message RoomInputAck { uint64 input_generation = 1; }

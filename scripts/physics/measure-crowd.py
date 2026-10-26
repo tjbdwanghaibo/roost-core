@@ -61,7 +61,7 @@ def receive(conn, stats, stop, radius, margin):
                 for _ in range(count):
                     entity_id, length = struct.unpack_from('<QH', data, offset)
                     offset += 10
-                    if length != 53 or offset + length > len(data):
+                    if length != 70 or offset + length > len(data):
                         raise RuntimeError('invalid body payload')
                     values = struct.unpack_from('<13fB', data, offset)
                     if not all(math.isfinite(v) for v in values[:13]) or values[-1] > 1:

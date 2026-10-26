@@ -28,6 +28,7 @@ import (
 
 const roomOwnerSID int32 = 7801
 const inputMessageID uint32 = 0x50485902
+const levelMessageID uint32 = 0x50485903
 
 // 两个独立进程共用固定本地命名空间；只接 loopback，业务部署应另行分配 SID 和认证入口。
 func roomBus(url string, sid int32) (*bus.Bus, func(), error) {
@@ -103,7 +104,18 @@ func runPhysicsGate(ctx context.Context, addr, url string) error {
 	if err != nil {
 		return fmt.Errorf("start Physics Service before Physics Gate: %w", err)
 	}
-	ref, err := rooms.Create(ctx, domain.Spec{Instance: instance, ID: "unity-" + roomToken(), Bodies: gamephysics.CrowdScene(), LifetimeSeconds: 3600})
+	level := gamephysics.Level{Version: 1, Name: "crowd", Revision: 1, Bodies: gamephysics.CrowdScene()}
+	for i := 1; i <= gamephysics.CrowdPlayers; i++ {
+		level.Players = append(level.Players, uint64(gamephysics.CrowdCapsules+i))
+	}
+	if loadedLevel != nil {
+		level = *loadedLevel
+	}
+	content, hash, err := level.Content()
+	if err != nil {
+		return err
+	}
+	ref, err := rooms.Create(ctx, domain.Spec{Instance: instance, ID: "unity-" + roomToken(), Bodies: level.Bodies, Motions: level.Motions, Joints: level.Joints, LifetimeSeconds: 3600})
 	if err != nil {
 		return err
 	}
@@ -137,7 +149,7 @@ func runPhysicsGate(ctx context.Context, addr, url string) error {
 	defer gameClient.Close()
 	auth := gateway.AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
 		slot, err := strconv.Atoi(strings.TrimPrefix(ticket, "physics-slot-"))
-		if err != nil || ticket != "physics-slot-"+strconv.Itoa(slot) || slot < 1 || slot > 20 {
+		if err != nil || ticket != "physics-slot-"+strconv.Itoa(slot) || slot < 1 || slot > len(level.Players) {
 			return gateway.Principal{}, gateway.ErrUnauthenticated
 		}
 		return gateway.Principal{PlayerID: int64(slot), ServerID: 22, SessionID: ticket}, nil
@@ -169,6 +181,17 @@ func runPhysicsGate(ctx context.Context, addr, url string) error {
 		slog.Debug("gate binding closed", "player", binding.PlayerID)
 	}
 	deps.Dispatch = func(callCtx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
+		if id == levelMessageID && kind == wire.PayloadProtobuf && len(payload) == 0 {
+			slot := session.Principal().PlayerID
+			if slot < 1 || slot > int64(len(level.Players)) {
+				return nil, domain.ErrRequestInvalid
+			}
+			// Protobuf Level: bytes content=1; string sha256=2; uint64 controlled_body=3.
+			data := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), content)
+			data = protowire.AppendString(protowire.AppendTag(data, 2, protowire.BytesType), hash)
+			data = protowire.AppendVarint(protowire.AppendTag(data, 3, protowire.VarintType), level.Players[slot-1])
+			return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: data}, nil
+		}
 		if id != inputMessageID || kind != wire.PayloadProtobuf {
 			return nil, domain.ErrRequestInvalid
 		}
@@ -192,7 +215,7 @@ func runPhysicsGate(ctx context.Context, addr, url string) error {
 			return nil, err
 		}
 		if !c.joined {
-			c.member, err = rooms.Join(callCtx, ref, binding, uint64(gamephysics.CrowdCapsules)+uint64(binding.PlayerID))
+			c.member, err = rooms.Join(callCtx, ref, binding, level.Players[binding.PlayerID-1])
 			if err != nil {
 				return nil, err
 			}
@@ -214,7 +237,8 @@ func runPhysicsGate(ctx context.Context, addr, url string) error {
 		if input.Jump || input.Sequence%20 == 0 {
 			slog.Debug("room input accepted via RPC", "player", binding.PlayerID, "sequence", input.Sequence, "acceleration", input.Acceleration, "jump", input.Jump)
 		}
-		return &gateway.TCPResponse{MessageID: id, Sequence: seq}, nil
+		data := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), c.member.InputGeneration)
+		return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: data}, nil
 	}
 	game, err = gateway.NewGameIngress(cfg, gameID, deps)
 	if err != nil {
@@ -273,7 +297,7 @@ func decodeRoomInput(data []byte) (domain.Input, error) {
 	seen := uint8(0)
 	for len(data) > 0 {
 		field, typ, n := protowire.ConsumeTag(data)
-		if n < 0 || field < 1 || field > 4 {
+		if n < 0 || field < 1 || field > 5 {
 			return in, domain.ErrRequestInvalid
 		}
 		data = data[n:]
@@ -307,6 +331,8 @@ func decodeRoomInput(data []byte) (domain.Input, error) {
 			data = data[n:]
 			if field == 1 {
 				in.Sequence = v
+			} else if field == 5 {
+				in.GrabTarget = v
 			} else {
 				if v > 1 {
 					return in, domain.ErrRequestInvalid

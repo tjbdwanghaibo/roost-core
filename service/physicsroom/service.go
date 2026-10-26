@@ -45,18 +45,20 @@ type room struct {
 	stopped bool
 	members map[int64]*memberState
 	latest  *gamephysics.SpatialFrame
+	states  []physx.State
+	grabs   map[uint64]uint64
 }
 type memberState struct {
-	member                  Member
-	binding                 gateway.Binding
-	body                    uint64
-	input                   Input
-	jumpPending             bool
-	inputAt, seenAt, sentAt time.Time
-	cursor                  chunksync.Cursor
-	pending                 *chunksync.Plan
-	sequence                uint64
-	visible, nextVisible    map[uint64]bool
+	member                          Member
+	binding                         gateway.Binding
+	body                            uint64
+	input                           Input
+	jumpPending                     bool
+	inputAt, jumpAt, seenAt, sentAt time.Time
+	cursor                          chunksync.Cursor
+	pending                         *chunksync.Plan
+	sequence                        uint64
+	visible, nextVisible            map[uint64]bool
 }
 
 func New(cfg Config) (*Service, error) {
@@ -116,6 +118,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	if spec.Instance != s.instance || spec.ID == "" || len(spec.ID) > 128 || len(spec.Bodies) == 0 || len(spec.Bodies) > s.cfg.MaxBodies || spec.LifetimeSeconds <= 0 || spec.LifetimeSeconds > int64(s.cfg.MaxLifetime/time.Second) {
 		return Ref{}, ErrRequestInvalid
 	}
+	if err := gamephysics.ValidateMechanisms(spec.Bodies, spec.Motions, spec.Joints); err != nil {
+		return Ref{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping {
@@ -154,18 +159,28 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 		return Ref{}, err
 	}
 	for _, b := range spec.Bodies {
+		if b.ID >= 1<<63 {
+			w.Close()
+			return Ref{}, ErrRequestInvalid
+		}
 		if err = w.Add(b); err != nil {
+			w.Close()
+			return Ref{}, err
+		}
+	}
+	for _, j := range spec.Joints {
+		if err = w.AddJoint(j); err != nil {
 			w.Close()
 			return Ref{}, err
 		}
 	}
 	dynamic := 0
 	for _, b := range spec.Bodies {
-		if b.Shape != physx.Box {
+		if b.MotionType() != physx.Static {
 			dynamic++
 		}
 	}
-	if 36+dynamic*75 > s.cfg.MaxFrameBytes {
+	if 36+dynamic*92 > s.cfg.MaxFrameBytes {
 		w.Close()
 		return Ref{}, ErrCapacity
 	}
@@ -177,7 +192,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(spec.LifetimeSeconds)*time.Second)
 	spec.Bodies = slices.Clone(spec.Bodies)
-	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial}
+	spec.Motions = slices.Clone(spec.Motions)
+	spec.Joints = slices.Clone(spec.Joints)
+	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, states: gamephysics.InitialFrame(ref.Epoch, spec.Bodies).States, grabs: make(map[uint64]uint64)}
 	s.rooms[ref.ID] = r
 	s.metrics.Accepted("create")
 	s.metrics.Depth("rooms", int64(len(s.rooms)))
@@ -216,11 +233,15 @@ func (s *Service) run(ctx context.Context, r *room) {
 		close(r.done)
 	}()
 	defer r.cancel()
-	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, Input: func(uint64) []physx.Command {
+	sampled := make(map[uint64]uint64)
+	generations := make(map[uint64]uint64)
+	active := make(map[uint64]bool)
+	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, BeforeStep: func(uint64) error { return s.updateGrabs(r) }, Input: func(tick uint64) []physx.Command {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		now := time.Now()
-		out := make([]physx.Command, 0, len(r.members))
+		clear(active)
+		out := gamephysics.MotionCommands(r.spec.Bodies, r.spec.Motions, tick)
 		for player, m := range r.members {
 			if now.Sub(m.seenAt) > s.cfg.MemberTTL {
 				delete(r.members, player)
@@ -228,8 +249,11 @@ func (s *Service) run(ctx context.Context, r *room) {
 				continue
 			}
 			if !m.inputAt.IsZero() && now.Sub(m.inputAt) <= s.cfg.InputTTL {
-				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration, Jump: m.jumpPending})
+				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration, Jump: m.jumpPending && now.Sub(m.jumpAt) <= s.cfg.InputTTL})
 				m.jumpPending = false
+				sampled[m.body] = m.input.Sequence
+				generations[m.body] = m.member.InputGeneration
+				active[m.body] = true
 			}
 		}
 		// 稳定输入次序，不能让 map 遍历顺序成为物理重复运行的随机源。
@@ -244,6 +268,11 @@ func (s *Service) run(ctx context.Context, r *room) {
 		})
 		return out
 	}}, func(ctx context.Context, f gamephysics.Frame) error {
+		for i := range f.States {
+			f.States[i].InputSequence = sampled[f.States[i].ID]
+			f.States[i].InputGeneration = generations[f.States[i].ID]
+			f.States[i].InputActive = active[f.States[i].ID]
+		}
 		if err := s.cfg.Commit(ctx, r.ref, f); err != nil {
 			return err
 		}
@@ -253,6 +282,7 @@ func (s *Service) run(ctx context.Context, r *room) {
 		}
 		r.mu.Lock()
 		r.latest = frame
+		r.states = slices.Clone(f.States)
 		r.mu.Unlock()
 		return nil
 	})
@@ -286,7 +316,7 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 	}
 	valid := false
 	for _, b := range r.spec.Bodies {
-		if b.ID == bodyID && b.Shape != physx.Box {
+		if b.ID == bodyID && b.MotionType() == physx.Dynamic {
 			valid = true
 		}
 	}
@@ -301,7 +331,7 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 	if len(r.members) >= s.cfg.MaxPlayers {
 		return Member{}, ErrCapacity
 	}
-	m := Member{Room: ref, PlayerID: binding.PlayerID, Token: token()}
+	m := Member{InputGeneration: epoch(), Room: ref, PlayerID: binding.PlayerID, Token: token()}
 	r.members[m.PlayerID] = &memberState{member: m, binding: binding, body: bodyID, seenAt: time.Now()}
 	s.metrics.Accepted("join")
 	return m, nil
@@ -346,11 +376,14 @@ func (s *Service) Submit(ctx context.Context, m Member, in Input) error {
 	if in.Sequence < v.input.Sequence {
 		return ErrSequence
 	}
-	if time.Since(v.inputAt) > s.cfg.InputTTL {
+	if time.Since(v.jumpAt) > s.cfg.InputTTL {
 		v.jumpPending = false
 	}
 	v.input = in
-	v.jumpPending = v.jumpPending || in.Jump
+	if in.Jump {
+		v.jumpPending = true
+		v.jumpAt = time.Now()
+	}
 	v.inputAt = time.Now()
 	v.seenAt = v.inputAt
 	s.metrics.Accepted("input")

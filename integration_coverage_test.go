@@ -766,7 +766,7 @@ func TestPhysicsServiceRunnerCoversNativeIntegration(t *testing.T) {
 	args := goTestPackageArgs(script)
 	testNames := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
 	count := 0
-	for _, root := range []string{"service", "wiring"} {
+	for _, root := range []string{"service", "wiring", "cmd/physics-viewer"} {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr

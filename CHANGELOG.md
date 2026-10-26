@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### UGC 物理闯关与 Unity 输入预测
+
+- PhysX 增加 Static/Dynamic/Kinematic、运动学目标、动态 Box、Distance 与 Hinge 关节、有限马达；Room 按固定 tick 驱动关卡轨迹并验证抓取/释放和过期。跳跃使用独立期限，修复移动输入为旧跳跃续期的问题。
+- Level JSON 以白名单、预算、版本和 SHA-256 固定房间内容；Gate 返回关卡及控制对象，Unity 按描述建场景，附可导出的升降台/转杆/马达锤/抓取示例。
+- Unity 增加有界本地预测和权威纠偏；快照携带实际采样输入序列、有效标记与成员代际，防止用 RPC 接收确认代替模拟确认及重连序列混淆。
+- **升级需先停旧再起新**：native ABI 2、物理身体载荷 53→70 字节；重建 native/Go 并同步 Unity 全部 viewer 源码，旧协议不混跑。无持久房间迁移。
+- Linux 原生行为、受影响 race、真实 Gate/NATS/TCP/Nest 联合链和 C# 预测核心已验；新增 Unity 编辑器交互、WAN 和多房间容量未验。玩法/协议/命令/边界见 [现行手册](docs/framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。
+- 维护门禁按职责将可执行 physics-viewer 归入装配消费者；同步固定分支后修正已合并性能报告的旧链接。
+
 - Physics 本地调试：GoLand 分离 Gate 与 Physics Service 进程，Unity 默认经过正式 Gate/NATS/RPC 链路；增加 Protobuf 控制输入与可配置 Debug 日志。
 
 ### SLG 深化：报告私有视图与客户端重连
@@ -240,7 +249,7 @@
 - **新增指标**：`nest.dispatch.try_batch.cost`、`executed.total`、`failed.total`、`converted.total`（冲突转单目标次数）、`handed_back.total`（[OBSERVABILITY](docs/framework/OBSERVABILITY.md)）。批内目标不逐条记 `nest.dispatch.total` / `cost`、慢派发 trace 与 `nest.handler.lock_hold` 直方图（只计慢的）。
 - **业务时间（与 D22-1 一致）**：新增 `fctx.Context.Refreeze`（同一请求上下文里开始新的一次执行：重新冻结 Now / NowMilli、清 `Frozen`）；批量作业每个目标调用一次，`Beat.Now` 与场景时间域的域时间按拍各冻结一次。
 - **测试**：Nest 11 个、心跳 6 个、wiring 1 个、fctx 1 个新用例；现有心跳用例（驱动、真实 Nest、Remote 迁移与共享模式）在 `dispatch` / `batch` 两种方式下各跑一遍；23 条变异核对 22 红 1 绿（[性能报告 §5](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#5-语义变异核对)）。
-- **性能**：2026-10-22 补测：不达标，建议暂不改缺省——同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核（另一时段 3.42 / 0.91 / 0.33），业务 p99 X 0.078 / C 0.235ms；跳拍 / 准入失败 / 快池拒绝 0；普通短 handler 不退化（−9.9%）（[NEST-BATCH-HEARTBEAT-20261021 §3～§3E](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#3-2026-10-22-补测正式对比3-轮中位数-最小最大)）。缺省仍是 `dispatch`。方案 D 的实验记录随仓保留在 [NEST-DISPATCH-BATCH-20261021](docs/performance/NEST-DISPATCH-BATCH-20261021.md)。
+- **性能**：2026-10-22 补测：不达标，建议暂不改缺省——同时段 100% 移动进程 CPU X 3.03 / C 1.76 / Y 0.93 核（另一时段 3.42 / 0.91 / 0.33），业务 p99 X 0.078 / C 0.235ms；跳拍 / 准入失败 / 快池拒绝 0；普通短 handler 不退化（−9.9%）（[NEST-BATCH-HEARTBEAT-20261021 §3～§3E](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#3-2026-10-22-补测正式对比3-轮中位数-最小最大)）。缺省仍是 `dispatch`。方案 D 的实验记录随仓保留在 [NEST-BATCH-HEARTBEAT-20261021 §7](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md#7-前置实验方案-d批量入队逐个执行不合入)。
 - **升级**：无存储 / 协议变化。按日志文本匹配的使用方注意：批内目标失败仍打 `async handler failed`，不再打逐条的慢派发 trace。
 - **限制**：见 [KNOWN-LIMITS“实体心跳”](docs/maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)。
 

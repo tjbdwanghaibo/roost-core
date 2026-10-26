@@ -7,7 +7,8 @@ namespace Roost.PhysicsViewer
 {
     public struct BodyState
     {
-        public ulong Id;
+        public ulong Id, InputSequence, InputGeneration;
+        public bool InputActive;
         public Vector3 Position, Velocity, AngularVelocity;
         public Quaternion Rotation;
         public bool Sleeping;
@@ -53,16 +54,20 @@ namespace Roost.PhysicsViewer
                 for (uint i = 0; i < count; i++)
                 {
                     ulong id = r.ReadUInt64();
-                    if (id == 0 || !seen.Add(id) || r.ReadUInt16() != 53)
+                    if (id == 0 || !seen.Add(id) || r.ReadUInt16() != 70)
                         throw new InvalidDataException("Body format");
                     var p = Vector(r) + new Vector3(x * 25f, 0, z * 25f);
                     var q = new Quaternion(Number(r), Number(r), Number(r), Number(r));
                     var v = Vector(r);
                     var w = Vector(r);
                     byte sleep = r.ReadByte();
+                    ulong inputSequence=r.ReadUInt64();
+                    byte active=r.ReadByte();
+                    ulong generation=r.ReadUInt64();
+                    if(active>1) throw new InvalidDataException("Input active flag");
                     if (sleep > 1 || Quaternion.Dot(q, q) < 0.5f || Quaternion.Dot(q, q) > 1.5f)
                         throw new InvalidDataException("Invalid body state");
-                    next[id] = new BodyState { Id = id,      Position = p,        Rotation = q,
+                    next[id] = new BodyState { Id = id, InputSequence=inputSequence, InputGeneration=generation, InputActive=active==1,      Position = p,        Rotation = q,
                                                Velocity = v, AngularVelocity = w, Sleeping = sleep == 1 };
                     if (next.Count > 16384)
                         throw new InvalidDataException("Object limit");

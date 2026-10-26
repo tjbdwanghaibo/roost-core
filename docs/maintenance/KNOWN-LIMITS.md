@@ -348,6 +348,12 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 | 生成工程完整链路持久写入（嵌入 TCP + strict） | 2026-10-20 单样本、非独占宿主（[报告](../performance/GENERATED-TCP-STRICT-20261020.md)）：CLI 生成工程、strict handler 金币 +1、不经 Saga、无 self_sync，50 连接各自一个玩家**压测端** 1253 TPS、P50 38ms、P99 75ms，WAL 每批约 9.9 条；同一实体 108 TPS。上限约为 short 池 worker 数（缺省 GOMAXPROCS）/ 每笔持锁时间（strict 在锁内等所在批 fsync，本机约 8ms）。async 不比 strict 快（同机 1083 对 1257），原因尚未确认 | 2026-10-22 发版候选复跑（[NIGHT-20261022 §13](../performance/NIGHT-20261022.md#13-第-14-项生成工程完整链路持久写入嵌入-tcp--strict)）：strict 1241～1314 TPS、同实体 113 TPS，pipelined / async 对照已做；self_sync 对照与独占宿主仍待补测 |
 | schema 升级 / Player 跨机演练 | 2026-10-20 夜间在 v1.30 候选生成的 game-demo 上真实进程演练通过（schema：拒绝旧 schema → plan / apply / verify → rollback 只恢复未被写过的一份；Player：正常迁移、kill -9 后原 WAL 重启、未排空被 `wal-drained` 拒绝，302 次确认逐键 +1），与 10-15 一致 | 真实跨机网络、卷迁移、客户端重连路径 |
 
+## UGC 物理闯关
+
+可选 PhysX 房间当前支持运动学转轮/平台、动态 Box、弹簧抓取和铰链马达、固定版本关卡加载、Unity 预测/纠偏接法；见 [物理房间契约与验证](../framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。Linux 原生功能、真实 TCP/Gate/NATS/Nest 联合链及 C# 预测核心已验证，新增 Unity 交互未在编辑器运行。历史单房间性能数据不覆盖新载荷/约束或多房间容量。
+
+UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、编辑器、发布审核、CDN、运行期刚体增删、公开碰撞事件、检查点/通关/奖励或物理跨机接管。抓取按中心距离，无视线检查。近似客户端预测不保证移动平台摩擦或跨版本 PhysX 一致；输入邮箱不是逐命令帧同步。对象载荷 70 字节、native ABI 2，先停旧再同步重建服务与客户端。
+
 ## 游戏接入验收
 
 九份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；真实模式入口登记在根包 `integration_coverage_test.go`。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。

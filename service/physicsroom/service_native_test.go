@@ -262,3 +262,166 @@ func TestJumpConsumedOnceAndReplayDoesNotRearm(t *testing.T) {
 		}
 	}
 }
+
+func TestMechanismsGrabExpiryAndSampledInput(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig(func(context.Context, Ref, gamephysics.Frame) error { return nil })
+	s := newTestService(t, cfg)
+	l := gamephysics.ObstacleLevel()
+	ref, err := s.Create(ctx, Spec{Instance: s.instance, ID: "ugc", Bodies: l.Bodies, Motions: l.Motions, Joints: l.Joints, LifetimeSeconds: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.lookup(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := func(check func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			r.mu.Lock()
+			ok := check()
+			r.mu.Unlock()
+			if ok {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("condition not reached")
+	}
+	if err = s.Submit(ctx, member, Input{Sequence: 1, GrabTarget: 3}); err != nil {
+		t.Fatal(err)
+	}
+	wait(func() bool { return r.grabs[1] == 3 })
+	wait(func() bool {
+		for _, v := range r.states {
+			if v.ID == 1 {
+				return v.InputSequence == 1 && v.InputGeneration == member.InputGeneration && v.InputActive
+			}
+		}
+		return false
+	})
+	wait(func() bool {
+		if len(r.grabs) != 0 {
+			return false
+		}
+		for _, v := range r.states {
+			if v.ID == 1 {
+				return v.InputSequence == 1 && !v.InputActive
+			}
+		}
+		return false
+	})
+	if err = s.Submit(ctx, member, Input{Sequence: 2, GrabTarget: 100}); err != nil {
+		t.Fatal(err)
+	} // 静态地面不可抓。
+	wait(func() bool {
+		for _, v := range r.states {
+			if v.ID == 1 {
+				return v.InputSequence == 2
+			}
+		}
+		return false
+	})
+	r.mu.Lock()
+	count := len(r.grabs)
+	r.mu.Unlock()
+	if count != 0 {
+		t.Fatal("static grab accepted")
+	}
+	if err = s.Leave(ctx, member); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Join(ctx, ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.InputGeneration == member.InputGeneration || next.InputGeneration == 0 {
+		t.Fatal("input generation reused")
+	}
+	if err = s.Submit(ctx, next, Input{Sequence: 1}); err != nil {
+		t.Fatal(err)
+	}
+	wait(func() bool {
+		for _, v := range r.states {
+			if v.ID == 1 {
+				return v.InputGeneration == next.InputGeneration && v.InputSequence == 1
+			}
+		}
+		return false
+	})
+}
+
+// 消费端也检查 jumpAt：慢提交后即使还有新移动，也不能执行已过期的跳跃。
+func TestExpiredJumpIsNotConsumedAfterSlowCommit(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	cfg := testConfig()
+	cfg.InputTTL = 50 * time.Millisecond
+	cfg.Commit = func(_ context.Context, _ Ref, f gamephysics.Frame) error {
+		if f.Tick == 1 {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+		return nil
+	}
+	s := newTestService(t, cfg)
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	spec := testSpec("slow-jump", s)
+	spec.Bodies[1].Position[1] = .51
+	ref, err := s.Create(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := s.Join(context.Background(), ref, testBinding(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("commit did not block")
+	}
+	if err = s.Submit(context.Background(), member, Input{Sequence: 1, Jump: true}); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(2); seq <= 6; seq++ {
+		time.Sleep(20 * time.Millisecond)
+		if err = s.Submit(context.Background(), member, Input{Sequence: seq}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(release)
+	r, _ := s.lookup(ref)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		var state physx.State
+		for _, v := range r.states {
+			if v.ID == 1 {
+				state = v
+			}
+		}
+		r.mu.Unlock()
+		if state.InputSequence == 6 {
+			if state.Velocity[1] > 1 {
+				t.Fatalf("late jump executed: %+v", state)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("input not sampled")
+}

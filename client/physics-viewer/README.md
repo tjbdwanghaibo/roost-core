@@ -73,7 +73,7 @@ GOWORK=off go run -tags physx ./cmd/physics-viewer -scenario room -listen 127.0.
 
 当前默认使用下文 Gate + Physics Service 模式。若使用上面的直连命令，需要在 Inspector 关闭 UseGate。打开本地项目 `Assets/Scenes/Room.unity` 并 Play。方向按钮按住移动，JUMP 点击跳跃；也支持 WASD、方向键和空格。默认控制第 13 个小球，摄像机跟随；可在 Inspector 修改 PlayerSlot（1～20），不同客户端不能占用同一槽。场景仍为 50×50 米复杂地形、20 球、50 胶囊和一个大球；本入口不运行自动 NPC 移动，后续由业务增加。松开方向键停止施加加速度，刚体仍按惯性和摩擦运动。
 
-链路为 Unity 输入 → 本地 TCP 适配 → physicsroom.Submit → 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；客户端只插值服务器位置，不运行本地预测。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
+链路为 Unity 输入 → 本地 TCP 适配 → physicsroom.Submit → 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；此 direct TCP 接法只插值服务器位置，Gate Room 接法现有可关闭的本地预测，见下文。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
 
 本地输入握手 `PR01 + slot:u32BE`；每次输入 `sequence:u64BE + ax:f32BE + az:f32BE + jump:u8` 共 17 字节。只开放 loopback，不替代生产 Gate 登录或开房鉴权。正式 service 的 Input 同样带 Jump 字段。
 
@@ -107,3 +107,29 @@ core 工程已提供 `.run/Physics Room.run.xml`。首次使用先构建 `infra/
 Room 场景没有 Rigidbody，也不在客户端调用 Physics.Simulate；Unity 会初始化自己的 PhysX 模块，但这不等于客户端在模拟这些物体。只有旧 PhysicsComparison 对照场景运行独立 Unity 物理。
 
 2026-10-25 本机交互验证：两个 GoLand / Delve 进程实际运行，Unity 通过 Gate 连接；按 D 与空格后，Gate 日志记录 sequence=580 acceleration=[10 0 0]，sequence=600 jump=true，随后持续输出 Chunk。新协议解析测试与受影响包 race 通过。这是功能验证，不是 Debug 模式性能基准。批处理验收因本地项目已在 Unity 打开而拒绝启动，改用当前窗口交互验证，未关闭用户工程。
+
+
+## UGC 关卡与本地预测
+
+Gate Room 现在先获取服务器固定的 Level JSON、SHA-256 和认证绑定的 Body ID，再按描述创建 Box/Capsule/Sphere；不再依赖本地 `PhysicsTerrain` 或硬编码对象 ID。`Crowd` / `Comparison` 仍保留原对照用途。UGC 输入与采样确认契约见 [物理房间 service](../../docs/framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。
+
+```sh
+# 先构建 native（需要 CMake、Ninja、C/C++ 编译器）、Go 宿主。
+bash scripts/physics/build-native.sh
+go build -tags physx -o artifacts/physics-viewer ./cmd/physics-viewer
+# 导出可编辑的示例：两玩家球、可抓球、升降台、转杆、马达锤。
+artifacts/physics-viewer -export-level artifacts/obstacles.json
+# 分别在两个终端运行；先启动私有 NATS。
+artifacts/physics-viewer -scenario physics-service -nats nats://127.0.0.1:4222
+artifacts/physics-viewer -scenario gate-room -listen 127.0.0.1:19093 \
+  -nats nats://127.0.0.1:4222 -level artifacts/obstacles.json
+```
+
+编辑 JSON 的 `Bodies` / `Motions` / `Joints`，修改 `Revision` 后重启 Gate 开新房；不要只改 Unity 资源而保留旧服务器碰撞世界。去掉 `-level` 使用原 Crowd 关卡，但也通过内容握手加载。SHA-256 用于确认精确内容，不是作者认证或内容审核。发布权限、存储、CDN 和编辑器由游戏工程接入。
+
+Unity 新工程沿用 `scripts/physics/create-viewer.sh`。已有工程把 `client/physics-viewer/*.cs`、Editor 文件和 `client/dotnet/Roost.Client/Packet.cs` 同步到原位置；本轮 native 与身体载荷不兼容旧版本，不能只更新一侧。在 Unity 中调用 `ViewerProject.OpenUGCInteractive`，或给新 GameObject 挂 `CrowdViewer`，设置 `ControlRoom=true`、`UseGate=true`、`Port=19093`、`PlayerSlot=1`。第二客户端用槽 2；示例只定义两个槽，原 Room 场景默认槽 13 不适用。
+
+- WASD/方向键移动，Space 跳跃，按住 E 抓最近对象、松开 E 释放；最终是否可抓由服务器检查。此演示选目标没有射线遮挡，不是完整商业抓取规则。
+- `PredictLocalInput` 开关对比预测与纯插值。预测仅作用于自己，其他对象保留服务器快照插值；本地胶囊扫掠不向服务器回写坐标。断线不自动重连，重新启动连接会重新取内容并获取成员代际。
+- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 Chunk 身体载荷中，不能用 RPC 响应裁剪预测历史。
+- 本轮 Linux native、房间和真实 Gate/NATS/TCP 功能回归已运行；C# 预测核心已编译执行。**Unity 编辑器编译、场景交互与移动网络延迟验收尚未执行**，请在目标 Unity 工程复验。它是近似预测和权威纠偏，不是把服务器完整 PhysX 世界搬到客户端做确定性重演。
