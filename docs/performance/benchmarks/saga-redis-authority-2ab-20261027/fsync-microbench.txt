@@ -1,0 +1,4 @@
+/Users/whb/.roost-it/fsyncbench-tmp              fsync        P50=3.998ms    P90=4.093ms    P99=6.062ms    max=7.984ms
+/Users/whb/.roost-it/fsyncbench-tmp              F_FULLFSYNC  P50=4.011ms    P90=7.894ms    P99=8.156ms    max=9.965ms
+/Volumes/redisram                                fsync        P50=151µs      P90=273µs      P99=367µs      max=675µs
+/Volumes/redisram                                F_FULLFSYNC  P50=109µs      P90=121µs      P99=137µs      max=155µs

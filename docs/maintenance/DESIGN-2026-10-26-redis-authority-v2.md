@@ -1,6 +1,6 @@
 # Redis 做 Saga / Remote 权威：设计 v2（2026-10-26）
 
-**状态：设计已定，未实施，不是现行契约。维护者 2026-10-26：“直接从 V2 开始吧，之后跑一次 saga 的压测”——按本文直接实施，不再单独评审一轮。** 本文中标“已采纳”的做法就是实施依据；真正还要维护者做产品选择的只有 §11 的三项。实施完成、验收通过后，契约迁入 `docs/framework/SAGA.md`、guide/impl 06 等现行文档，本文保留为设计记录。
+**状态：第 2 步 2a / 2b 已实施（分支 `feat/redis-authority-2ab`，未合入 main、未发版），2c 与第 3、4 步未实施。维护者 2026-10-26：“直接从 V2 开始吧，之后跑一次 saga 的压测”——按本文直接实施，不再单独评审一轮。** 本文中标“已采纳”的做法就是实施依据；真正还要维护者做产品选择的只有 §11 的三项（实施时按推荐先做，见 §13）。2a / 2b 的现行契约已迁入 `docs/framework/SAGA.md`「协调器存储：Redis 权威」与 `docs/framework/impl/06-saga.md`；实施结果、与本文的偏差、红绿证据与压测见 §13。本文保留为设计记录。
 
 本文自成一体，接手人不需要先读原草稿。依据：
 
@@ -818,3 +818,130 @@ scripts/it-redis-aof.sh stop
 - `appendfsync always` 下“回复晚于 fsync、读者看不到未落盘数据”与“AOF 中不完整的脚本事务加载时整段回退”是对 Redis 实现的理解，由 §7.14 第 10 条用例在本机 Redis 8.10.1 上验证；托管 Redis 若行为不同，以启动探针和该用例为准。
 - 只覆盖 macOS / Linux；本机只有 macOS，Linux 未测。
 - 云上数据只有报告中 60ms RTT 一个时段；v2 不做云上与同地域测试。
+
+## 13. 实施结果（第 2 步 2a / 2b）
+
+实施在分支 `feat/redis-authority-2ab`（基于 main `c74376c7`），代码提交按顺序：压测测量（`891d93c0`，可单独 cherry-pick 到 main 作基线）→ 2a（`6709eb90`）→ 2b（`a3edef04`）→ 压测夹具连接池取生产缺省（`2aad947c`）→ 协调器往返计数用例（`871a6c77`）。§11 的三项按推荐先做：权威 Redis 推荐独立实例，配置允许与 `redis.addr` 相同、启动探针强制部署契约；原生步骤吞吐不在第 4 步前处理；Mongo 领取查询的 SORT 索引不单独修（2a 之后 Mongo 不再承担领取）。
+
+### 13.1 2a：存储替换（引擎不动）
+
+| 设计项 | 落点 |
+| --- | --- |
+| 驱动可选接口（§7.2） | `infra/storage/redis/client.go`：`DurableScriptBatcher`、`StreamReader`、`HashFieldsReader`、`ScriptLoader`、`ServerInspector`、`ErrWaitAOFFailed`；实现 `infra/storage/redis/driver/durable_script.go`、`stream.go`；契约 `driver/README.md` §1 / §2 |
+| 启动探针（§7.6.6 第 1～3 条） | `infra/storage/redis/authority.go` 的 `CheckAuthority`（单主、四项持久配置、探针写 WAITAOF local=1），`wiring/redis.AuthorityMod.Start` 与 `RedisStore.EnsureInfrastructure` 共用 |
+| `RedisStore` 与 8 个脚本（§7.5） | `framework/saga/redis_store.go`、`redis_codec.go`、`redis_scripts.go`、`redis_startup.go`、`redis_lua/{create,claim_due,claim_outbox,apply,ack_outbox,nack_outbox,mark_alarm,meta}.lua` |
+| `MongoStore` 收缩为冷副本 | `framework/saga/mongo_store.go`：删 `Create`、`ClaimDue`、`Apply`、`ClaimOutbox`、`Ack/NackOutbox`、`MarkLateSuccessAlarm` 与 outbox 集合；只读 + `recordExists`（业务键守卫） |
+| 装配与消费者并发 | `Assemble(mongo, authority, jetStream, cfg, …)`；`NestCompletionConsumerConfig.Workers` / `NestStartConsumerConfig.Workers`（`withConsumerWorkers`）；`wiring/saga` 新键 `saga.redis.*`、`saga.result_workers` / `result_effect_workers` / `start_effect_workers`（8 / 8 / 4） |
+| 权威 Redis Mod | `wiring/redis/authority.go`（`redis_authority.*`，能力 `mods.ModRedisAuthority`）；saga Mod `DependsOn` 加它；连接池不小于并发之和由 `CheckConfigAcrossMods` 强制 |
+| 合服（§7.13.3） | `wiring/sidmerge`：非终态 saga 读权威 Redis（`RedisStore.List`），另要求投影积压为 0 |
+| 生成器 / 本地依赖 | catalog 加 `redis_authority`（saga 依赖）；开发 compose 的 Redis 在项目有它时按 `appendfsync always` + `noeviction` 起；`kitconfig_gen.go` 重新生成；`scripts/mirror-local.sh` 起权威 Redis 并导出 `ROOST_SAGA_IT_REDIS_ADDR`；`scripts/it-redis-aof.sh` |
+
+### 13.2 2b：Store Service
+
+| 设计项 | 落点 |
+| --- | --- |
+| 投影运行器（§7.9.1） | `framework/storeservice`（`projection.go`、`runner.go`、`lua/plock.lua`、`lua/advance.lua`） |
+| saga 投影与驱逐（§7.9.2、§7.5.7） | `framework/saga/redis_projection.go`、`redis_lua/evict.lua`：每批 ≤ 3 次 BulkWrite（`sagas` 用 `$replaceWith` + `$cond` 版本单调，`completions` `$setOnInsert`，`operations` closure 只升不降、告警只写第一次） |
+| 冷记录装回（§7.6.4、§7.5.6） | `RedisStore.reload` + `redis_lua/reload.lua`；`MongoStore.loadForReload`；`Apply` / `MarkLateSuccessAlarm` 遇到 `NEED_RELOAD` 装回后重跑一次 |
+| Store Service Mod | `wiring/storeservice`（`store_service.*`，依赖 `mongo`、`redis.authority`；暂停分区时健康 Fail）；生成器 catalog 加 `store_service`（saga 依赖它，与协调器同进程注册） |
+| 公共 Lua 前言 | 两个包都要，移到驱动：`infra/storage/redis/lua/prelude.lua` + `lua_script.go`（`NewLuaScript`、`PreloadScripts`、`ReplyCode`） |
+
+### 13.3 与本文设计的偏差
+
+1. **`apply.lua` 的回执检查放在请求摘要（`la`）之前**（§7.5.3 原写“`APPLIED_BEFORE` 放在回执检查之前”）。原顺序下，两次送达可能算出逐字节相同的请求（`Complete` 用 `time.Now()` 作 `CompletedAt`，macOS 上同一微秒），第二次也得到 `APPLIED_BEFORE`、按“已应用”报告，迟到成功被计两次、重开被报两次。实测 `TestRealMongoLateSuccessReopensACompensatedSagaOnce` 红：`round 1: 2 of 8 concurrent deliveries brought the saga back to compensation, want exactly 1`；确定性回归（契约用例）在旧顺序上红：`store_contract_test.go:212: the identical receipt-bearing request delivered again = 1, <nil>; want ApplyDuplicate`，新顺序绿。带回执的重试现在报“重复”（与 Mongo 实现一致，引擎按重复重读）；不带回执的请求在回复丢失后原样重试仍得到“已应用”（`TestRedisApplyRetryAfterLostReplyIsApplied`）。
+2. **启动探针的写**不再是 saga 自己的 `probe.lua`，而是驱动的 `CheckAuthority`（`HINCRBY <前缀>:meta probes 1`），权威 Redis Mod 与 `RedisStore` 共用。
+3. **2a 的冷记录告警**：2a 没有驱逐，`MarkLateSuccessAlarm` 遇到“记录不在 Redis”时只按冷副本有没有 tombstone 回答（有就告警，宁可重复）；2b 改为装回后原子记一次（§7.6.4）。
+4. **指标**：`store_service.batch_entries` 直方图改为两个计数器 `store_service.projected_entries_total` / `store_service.batches_total`（指标库的直方图只收时长）；`store_service.lag_seconds` 是整秒。`saga.redis.resident_records{state}` 由 saga 投影在每次 `AfterAdvance` 更新（只有跑 Store Service 的进程上报）。
+5. **身份检查更严**：`CompletionHistory` 遇到操作键不以 `<sagaID>:` 开头的 completion 返回 `ErrIdentityConflict`（Mongo 实现只在另一笔 saga 的 tombstone 存在时才冲突）；`MarkLateSuccessAlarm` 对这样的 completion 返回 false。
+6. **元数据守卫**多拒一种：Redis 有实例 ID、Mongo 没有 saga 元数据（冷副本被清空或换了库）。
+7. **`saga.redis.key_prefix` 必填**：凡读 saga 配置的进程（包括只跑步骤的进程，`StreamSettings`）都要写；生成器按示例 `roost:{project}:saga` 写进每个服务的配置。
+8. **压测夹具拆成两步提交**：§8.5 说“单独一个提交、便于基线 cherry-pick”，但“有 Redis 时装配 RedisStore 与 Store Service、冷热核对”只能在 2a / 2b 之后编译，所以测量提交（`891d93c0`）只带 main 能编译的部分（命令计数、终态复读、脚本），Redis 装配在 2a、Store Service 与冷热核对在 2b。Mongo 步骤夹具沿用基线的结果消费者并发（`ROOST_SAGA_PERF_WORKERS`），没有换成新缺省 8，两边同配置。
+9. **单元用例的 Redis**：`redistest.AOFAddr` 优先用 `ROOST_SAGA_IT_REDIS_ADDR`，没有时为每个用例起一个私有 `redis-server`（AOF always），本机没有 `redis-server` 时跳过。CI 的主测试 job 没有 `redis-server`，这些用例在那里跳过（登记 KNOWN-LIMITS）。
+10. **压测夹具的连接池**：Mongo 步骤压测夹具的权威 Redis 连接池原为 32（跨进程辅助函数的值），比生产缺省 64 小，改成 64 / 最小空闲 8（`2aad947c`）；原生步骤夹具走 wiring 装配，本来就是 64。32 下的一轮样本与 64 下没有可分辨差异，保留但不计入对照。
+
+### 13.4 先红后绿与变异核对
+
+**§7.14 中“当前代码上应先红”的用例，在 main（`c74376c7`）上实测**（当时的文件名 `round_trip_red_test.go`，提交时改名 `engine_round_trip_test.go`）：
+
+```text
+--- FAIL: TestCompleteDispatchesNextStepInSameApply (0.00s)
+    round_trip_red_test.go:60: after the first step's success: status=pending step=1 attempt=0 version=3 (before 2); want Waiting on step 1, attempt 1, version +1
+--- FAIL: TestDispatchPublishesWithoutClaim (0.00s)
+    round_trip_red_test.go:93: the dispatched command went through ClaimOutbox 1 time(s); want it handed to the publisher directly
+--- FAIL: TestAckAfterCloseIsNotAConflict (0.00s)
+    round_trip_red_test.go:108: ack after the completion closed the operation = saga: optimistic concurrency conflict (ErrConflict=true); want nil
+```
+
+第 16、18 条属于 2c，提交时带 `t.Skip`（`framework/saga/engine_round_trip_test.go`，2c 实施时去掉）；第 19 条随 2a 的 `ack_outbox.lua`（`GONE → nil`）在 `RedisStore` 上变绿（`TestAckAfterCloseIsNotAConflict` 改跑 RedisStore，`memoryStore` 同步改口径）。第 17 条（`TestCompleteDoesNotFoldRetryBackoff`）在当前代码上绿，2a / 2b 后保持绿。
+
+**第 1 条 `runStoreContract`** 先在 main 的 `MongoStore`（mongotest）上跑：除有意改变的“确认已删除的命令返回 nil”外全绿——
+
+```text
+--- FAIL: TestStoreContractOnMongoStore/ack_after_the_operation_closed_is_not_a_conflict (0.00s)
+    store_contract_test.go:328: ack of a command whose operation closed = saga: optimistic concurrency conflict, want nil
+```
+
+再接 `RedisStore` 全绿（`TestStoreContract`）。
+
+**Lua 校验项变异**（每次删掉一个 `-- check:<名> … -- end` 块，跑相关用例；脚本 `artifacts` 外，结果全文见 `docs/performance/benchmarks/saga-redis-authority-2ab-20261027/mutation.tsv`）：41 个校验项全部变红。
+
+| 脚本 | 校验项 → 变红的用例 |
+| --- | --- |
+| `create.lua` | types → `TestRedisScriptValidatesEverythingBeforeWriting/create`；exists_id、exists_bk → `TestStoreContract/create,_read_and_identity`；guard → `TestRedisCreateGuardRejectsStaleMongoRead`；backpressure → `TestRedisCreateBackpressureRefusesNewSagas` |
+| `claim_due.lua` / `claim_outbox.lua` | type → `…ValidatesEverythingBeforeWriting/claim_due`、`/claim_outbox` |
+| `apply.lua` | types、need_reload、close_owner、close_types、close_command_type、outbox_types、outbox_old_type → `…ValidatesEverythingBeforeWriting/apply:*`；receipt → `TestStoreContract/receipt_dedup_and_identity_conflict`；applied_before → `TestRedisApplyRetryAfterLostReplyIsApplied`；version、lease → `TestStoreContract/apply_fences_version_and_lease` |
+| `ack_outbox.lua` / `nack_outbox.lua` | types、index_type → `…ValidatesEverythingBeforeWriting/ack*`、`/nack*`；gone → `TestStoreContract/ack_after_the_operation_closed_is_not_a_conflict`；lease → `TestStoreContract/outbox_claim,_nack_backoff_and_ack_lease` |
+| `mark_alarm.lua` | types → `…/alarm:_wrong-type_log`；need_reload → `TestRedisLateAlarmReloadsAnEvictedRecord`（integration）；tombstone → `TestStoreContract/tombstone_*`、`TestRedisStoreMarksALateSuccessAlarmOncePerLife` |
+| `meta.lua` | type、instance、format、partitions → `TestRedisAuthorityGuardChecksInstanceFormatAndPartitions/*` |
+| `evict.lua` | types → `TestRedisReloadAndEvictValidateBeforeWriting`；projected → `TestRedisEvictsOnlyAfterProjection` |
+| `reload.lua` | types、exists → `TestRedisReloadAndEvictValidateBeforeWriting` |
+| `plock.lua` / `advance.lua` | type、held、types、lease、noop → `TestProjectionLostLeaseCannotAdvance` |
+
+两处 Go 侧守卫也做了变异：去掉 `Create` 的 Mongo 读 → `TestRedisCreateKeepsBusinessKeyUniqueAfterEviction` 红（`same intent after eviction = {… Status:pending …}; want the original record`）；去掉 `CompletionHistory` 的摘要比较 → `TestStoreContract` 红（`history of a forged receipt = <nil>, want ErrIdentityConflict`）。
+
+新组件的其余用例（§7.14 第 2～15、20 条）与实现同轮写成，没有单独在桩实现上跑红；它们断言落在承诺本身，由上面的变异逐项证明。
+
+### 13.5 验证
+
+（2a、2b 各一遍；命令的退出码直接读。）
+
+| 项 | 2a（`6709eb90`） | 2b（`a3edef04`） |
+| --- | --- | --- |
+| gofmt、`go vet ./...`、`vet -tags integration`（saga / storeservice / wiring / redis） | 通过 | 通过 |
+| `go run ./cmd/glsvet ./framework/saga/... ./framework/nest/...` | 通过（退出码 0） | 通过 |
+| `-race`：`framework/saga/...`、`framework/storeservice/...`、`wiring/saga/...`、`wiring/storeservice/...`、`wiring/redis/...`、`wiring/sidmerge/...`、`infra/storage/redis/...` | 通过 | 通过 |
+| integration（私有 Redis + 隔离环境 Mongo / NATS）：`-run 'Real\|Redis\|StoreContract\|Projection'` 的 framework/saga、framework/storeservice、wiring/saga、wiring/sidmerge | 通过（含 `kill -9`、跨进程 SIGKILL 恢复） | 通过（含投影、驱逐、装回） |
+| `TestRedisKill9KeepsAcknowledgedApplies`（私有 redis-server，SIGKILL 后重放 AOF） | 5/5 通过；每次约 270～370 个已确认 Apply、20～30 个结果未知，重启后无丢失、无半个脚本，NOSCRIPT 重发成功 | — |
+| `BenchmarkSagaProjection`（P=16、批 256、本机隔离 Mongo） | — | 20528 / 21850 / 27393 条/s（GOMAXPROCS 10），22724 / 22943 条/s（GOMAXPROCS 4）；门槛 ≥ 5000 |
+| `TestRedisRoundTripsPerTwoStepSaga`（`framework/saga/redis_store_test.go`，20 笔两步正向，按脚本计数） | — | 每笔正好 11 个脚本 + 2 次 HMGET（§3.2 的 11），空领取另计；`871a6c77` |
+| `BenchmarkRedisClaimDue`（积压 1000 / 1 万 / 10 万） | — | 每次领取 4.10 / 4.08 / 4.11ms，不随积压变化（单次即一次空闲盘 F_FULLFSYNC） |
+| 根包 `go test -count=1 .` | 通过 | 通过 |
+| `scripts/test-sync-modes-generated.sh` | 通过 | 通过 |
+| `scripts/test-demo-generated.sh`（持锁；含生成工程 saga 原生步骤真实依赖用例 `TestGeneratedSagaNativeStepsAndEffectConsumer`） | 通过 | 通过（生成工程带 Store Service） |
+| game-demo 生成工程 build / vet / test | 通过（26 个包 ok） | 通过 |
+| `go generate ./...` 后无改动 | 是 | 是 |
+| 全量 `GOWORK=off go test -count=1 ./...` | 通过（156 个包 ok，在 2a 提交的干净 worktree 上跑） | 通过（158 个包 ok） |
+
+### 13.6 压测与门槛判定（§8）
+
+报告：[SAGA-REDIS-AUTHORITY-2AB-20261027](../performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)（样本在 `docs/performance/benchmarks/saga-redis-authority-2ab-20261027/`）。基线 = `c74376c7` + 测量提交 `891d93c0`；新版本 = 2a + 2b + `2aad947c`。按 §8.1 的环境（权威 Redis 的 AOF 与 Mongo、NATS 同一块盘），A / B / A / B 各两轮；另把权威 Redis 的 AOF 放内存盘跑一轮作诊断（不是部署口径，不用于判定）。
+
+| 门槛 | 正式口径（共享盘） | 内存盘诊断 | 判定 |
+| --- | --- | --- | --- |
+| 2a：单元 + 集成全绿含 `-race`、`kill -9` | §13.5 | — | 达标 |
+| 2a：协调段 Mongo 操作 = 0 | Mongo 步骤前台每笔 50 → 19.0（步骤侧 + 启动守卫读 1），`commitTransaction` 8 → 4 | 同 | 达标 |
+| 2a：Redis 脚本数与 §3.2 一致 | 单元计数每笔 11 + 2 次 HMGET | — | 达标 |
+| 2a：Mongo 步骤 w16 饱和 ≥ 1.5 × 基线 | 约 22 vs 45 TPS（0.47～0.52 倍） | 143～148 TPS（3.1～3.3 倍） | **不达标** |
+| 2a：Mongo 步骤 c1 P50 ≤ 0.85 × 基线 | w2 195 / 192ms（1.02 倍）、w16 196 / 179ms（1.09 倍） | 0.61 / 0.64 倍 | **不达标** |
+| 2a：原生正向 / 补偿饱和 ≥ 0.95 × 基线 | 0.78～0.83 / 0.84～0.87 | 1.00～1.35 | **不达标** |
+| 2a：非过载档终态与账户核对 | c1～c64 全部通过 | 同 | 达标 |
+| 2b：投影 ≥ 5000 条/s | 2.05 万～2.74 万条/s | — | 达标 |
+| 2b：积压 ≤ 2 × 在途、停止后 30s 内归零 | 峰值 2～28 条，c16 起 ≤ 1.6 倍并发数；c1 / c4 的 Mongo 步骤档 3 / 1、10 / 4；归零 3～8ms | — | 归零达标；积压按字面口径 c1 / c4 略超，**口径尚未确认**（积压按日志条数、在途按 saga 笔数，一笔约 5 条日志） |
+| 2b：冷副本 0 差异 | 全部档位 0 | 同 | 达标 |
+| 2b：驱逐后迟到成功装回并补偿 | 集成用例通过 | — | 达标 |
+
+**不达标的原因**：Redis 在 macOS 上 `appendfsync always` 用 `fcntl(F_FULLFSYNC)`（Linux 用 `fdatasync`），且在主线程上同步落盘、期间不处理任何命令。本机这块盘空闲时一次约 4ms，压测中与 Mongo 三节点 journal、NATS 同盘，Redis 的 `aof-fsync-always` 典型 16～18ms、最大 103ms。每个脚本往返因此是 50～165ms（main 上同一位置的 Mongo 往返 17～35ms），worker 2 时结果消费者、worker 16 时发布器先饱和。AOF 放内存盘后同一套代码各跳降到 1.5～2.3ms、三项门槛都过，说明往返收益成立，差距落在落盘代价这一部署条件上。
+
+**未验证**：Linux（`fdatasync`）与权威 Redis 独占一块盘的条件都没有测；不能拿内存盘数字当 Linux 预期。
+
+**待维护者决定**（§6 规定 2a 门槛全部满足才进下一步）：A（推荐）2a / 2b 合入 main，2a 性能门槛改在 Linux、权威 Redis 独占盘的条件下复测判定，同时开始 2c（每步脚本 5 → 2，正对落盘次数）；B 不合入，在分支上继续 2c 后一起测；C 放宽持久性（违背 AOF always + WAITAOF 的决定，不推荐）。代价见报告 §6。

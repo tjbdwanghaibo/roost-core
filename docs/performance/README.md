@@ -4,6 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [Saga 协调器存储迁 Redis 权威：2a / 2b 同机对照（2026-10-27）](SAGA-REDIS-AUTHORITY-2AB-20261027.md) | 分支 `feat/redis-authority-2ab` 对 main 交替两轮：每笔 Mongo 操作达到设计（Mongo 步骤 50 → 19，协调器 0），2b 门槛达标、冷热 0 差异；但权威 Redis 与 Mongo 同盘时，macOS 上每次写 `F_FULLFSYNC`（典型 16～18ms）且主线程同步落盘，Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍，2a 三项性能门槛不达标；AOF 放内存盘诊断时 w16 达 3.1 倍；Linux 未测 |
 | [Saga 并发吞吐：云 Mongo 与本机 Mongo 对照（2026-10-26）](SAGA-CLOUD-MONGO-20261026.md) | 闭环 1～128 并发、原生步骤正向 / 全补偿与 Mongo 步骤：本机饱和约 10 / 6 / 40～45 TPS，云 Mongo（本轮 RTT 约 60ms）0.88 / 0.62 / 2.1 TPS（worker 16 时 6.7）；瓶颈是串行工作池 × 往返（原生步骤卡在投影器），Mongo 服务端未饱和；领取查询积压下全量内存排序（云上 1 万积压单次约 0.4～0.65s）及候选索引；Redis 方案收益按段占比推算 |
 | [JetStream独立与Mongo混合资源对照](benchmarks/jetstream-isolation-20261023/README.md) | 独立约1.4ms、已测6.5万消息/s；Mongo同机负载复现约43ms；CPU/内存/网络未耗尽；采样确认Mongo journal同步与NATS pwrite驻留，保留睡眠无效样本 |
 | [Saga batch 与 JetStream 交付验证](benchmarks/saga-batch-wire-20261023/README.md) | ABBA 共7200笔成功；batch=1减少约30ms协调等待；解析后回调排队约占平均交付4%，生产默认不变 |

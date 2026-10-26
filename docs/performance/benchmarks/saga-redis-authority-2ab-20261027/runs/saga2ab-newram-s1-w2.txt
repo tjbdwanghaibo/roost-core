@@ -1,0 +1,39 @@
+# env
+go version go1.27.3 darwin/arm64
+2aad947c8790060538aa18b7a8edd192477ca520
+ M CHANGELOG.md
+ M docs/maintenance/DESIGN-2026-10-26-redis-authority-v2.md
+ M docs/maintenance/DESIGN-TODO.md
+ M docs/maintenance/KNOWN-LIMITS.md
+?? docs/performance/benchmarks/saga-redis-authority-2ab-20261027/
+?? framework/saga/redis_round_trips_test.go
+target=local levels=1 4 16 32 64 128 duration=60s scenarios=native-forward native-compensate mongo-forward
+mongo_workers=2 pairs=256 hops=0 gomaxprocs=4 db_prefix=roost_sagaperf_1026_7152 stream_prefix=SAGAPERF_1026_7152 store=redis
+10
+34359738368
+vm.swapusage: total = 4096.00M  used = 2385.94M  free = 1710.06M  (encrypted)
+Now drawing from 'AC Power'
+Redis server v=8.10.1 sha=00000000:1 malloc=libc bits=64 build=81870544b30d700a
+appendfsync
+always
+maxmemory-policy
+noeviction
+# runs
+native-forward-c1	load_before=5.74	load_after=5.01	seconds=69
+native-forward-c4	load_before=5.01	load_after=6.24	seconds=69
+native-forward-c16	load_before=5.51	load_after=5.40	seconds=69
+native-forward-c32	load_before=5.40	load_after=4.28	seconds=71
+native-forward-c64	load_before=4.28	load_after=4.12	seconds=72
+native-forward-c128	load_before=4.12	load_after=4.15	seconds=92
+native-compensate-c1	load_before=4.15	load_after=4.87	seconds=68
+native-compensate-c4	load_before=4.87	load_after=8.09	seconds=69
+native-compensate-c16	load_before=5.67	load_after=4.71	seconds=70
+native-compensate-c32	load_before=4.71	load_after=5.11	seconds=71
+native-compensate-c64	load_before=5.11	load_after=5.12	seconds=74
+native-compensate-c128	load_before=5.12	load_after=6.79	seconds=85
+mongo-forward-c1	load_before=5.53	load_after=4.93	seconds=63
+mongo-forward-c4	load_before=4.93	load_after=5.77	seconds=62
+mongo-forward-c16	load_before=5.77	load_after=7.33	seconds=64
+mongo-forward-c32	load_before=5.54	load_after=5.97	seconds=63
+mongo-forward-c64	load_before=5.97	load_after=6.61	seconds=64
+mongo-forward-c128	load_before=5.82	load_after=7.29	seconds=65

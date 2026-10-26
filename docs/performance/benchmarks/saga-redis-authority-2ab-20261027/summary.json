@@ -1,0 +1,2090 @@
+[
+ {
+  "scenario": "native-forward",
+  "level": 1,
+  "base_tps": 3.22,
+  "base_p50": 286,
+  "base_p99": 376.5,
+  "base_mongo_per": 105.3729183187946,
+  "base_mongo_fg_per": 105.3729183187946,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 10.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   3.2,
+   3.24
+  ],
+  "base_finals": "Completed 195；Completed 194",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   195,
+   194
+  ],
+  "new_tps": 3.1100000000000003,
+  "new_p50": 302,
+  "new_p99": 427.5,
+  "new_mongo_per": 59.103770869314914,
+  "new_mongo_fg_per": 50.122466896948765,
+  "new_store_per": 8.981303972366149,
+  "new_scripts_per": 50.90123776626368,
+  "new_hmget_per": 39.548344847438116,
+  "new_commit_per": 6.0,
+  "new_backlog_max": 2,
+  "new_drain": 0.004351917,
+  "new_tps_samples": [
+   3.02,
+   3.2
+  ],
+  "new_finals": "Completed 180；Completed 193",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   180,
+   193
+  ],
+  "new_completed": [
+   180,
+   193
+  ],
+  "ram_tps": 4.6,
+  "ram_p50": 210,
+  "ram_p99": 295,
+  "ram_mongo_per": 56.53623188405797,
+  "ram_mongo_fg_per": 47.55434782608695,
+  "ram_store_per": 8.981884057971014,
+  "ram_scripts_per": 43.278985507246375,
+  "ram_hmget_per": 39.96376811594203,
+  "ram_commit_per": 5.855072463768116,
+  "ram_backlog_max": 3,
+  "ram_drain": 0.003488125,
+  "ram_tps_samples": [
+   4.6
+  ],
+  "ram_finals": "Completed 276",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   276
+  ],
+  "ram_completed": [
+   276
+  ]
+ },
+ {
+  "scenario": "native-forward",
+  "level": 4,
+  "base_tps": 7.3,
+  "base_p50": 529.5,
+  "base_p99": 717,
+  "base_mongo_per": 89.94651029748283,
+  "base_mongo_fg_per": 89.94651029748283,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 9.179760996694636,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   7.68,
+   6.92
+  ],
+  "base_finals": "Completed 456；Completed 414",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   456,
+   414
+  ],
+  "new_tps": 5.300000000000001,
+  "new_p50": 636,
+  "new_p99": 893,
+  "new_mongo_per": 58.09117647058824,
+  "new_mongo_fg_per": 49.28431372549019,
+  "new_store_per": 8.80686274509804,
+  "new_scripts_per": 35.1421568627451,
+  "new_hmget_per": 27.00509803921569,
+  "new_commit_per": 5.606274509803922,
+  "new_backlog_max": 5.5,
+  "new_drain": 0.0049355625,
+  "new_tps_samples": [
+   4.94,
+   5.66
+  ],
+  "new_finals": "Completed 300；Completed 340",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   300,
+   340
+  ],
+  "new_completed": [
+   300,
+   340
+  ],
+  "ram_tps": 8.96,
+  "ram_p50": 438,
+  "ram_p99": 697,
+  "ram_mongo_per": 59.0093984962406,
+  "ram_mongo_fg_per": 50.03007518796993,
+  "ram_store_per": 8.979323308270677,
+  "ram_scripts_per": 32.54323308270677,
+  "ram_hmget_per": 57.32330827067669,
+  "ram_commit_per": 4.962406015037594,
+  "ram_backlog_max": 6,
+  "ram_drain": 0.003215125,
+  "ram_tps_samples": [
+   8.96
+  ],
+  "ram_finals": "Completed 532",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   532
+  ],
+  "ram_completed": [
+   532
+  ]
+ },
+ {
+  "scenario": "native-forward",
+  "level": 16,
+  "base_tps": 9.99,
+  "base_p50": 1535,
+  "base_p99": 2166.5,
+  "base_mongo_per": 127.05063495263052,
+  "base_mongo_fg_per": 127.05063495263052,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.839400658469394,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   9.92,
+   10.06
+  ],
+  "base_finals": "Completed 605；Completed 615",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   605,
+   615
+  ],
+  "new_tps": 7.78,
+  "new_p50": 1711,
+  "new_p99": 2405,
+  "new_mongo_per": 92.24848208595907,
+  "new_mongo_fg_per": 83.84948311265312,
+  "new_store_per": 8.398998973305954,
+  "new_scripts_per": 28.61360015577427,
+  "new_hmget_per": 24.1741972314664,
+  "new_commit_per": 5.077391489060398,
+  "new_backlog_max": 9,
+  "new_drain": 0.0045501455,
+  "new_tps_samples": [
+   7.62,
+   7.94
+  ],
+  "new_finals": "Completed 464；Completed 487",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   464,
+   487
+  ],
+  "new_completed": [
+   464,
+   487
+  ],
+  "ram_tps": 10.02,
+  "ram_p50": 1589,
+  "ram_p99": 2257,
+  "ram_mongo_per": 105.28929765886288,
+  "ram_mongo_fg_per": 96.41471571906355,
+  "ram_store_per": 8.87458193979933,
+  "ram_scripts_per": 31.17056856187291,
+  "ram_hmget_per": 147.70735785953178,
+  "ram_commit_per": 4.8561872909699,
+  "ram_backlog_max": 5,
+  "ram_drain": 0.005345584,
+  "ram_tps_samples": [
+   10.02
+  ],
+  "ram_finals": "Completed 598",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   598
+  ],
+  "ram_completed": [
+   598
+  ]
+ },
+ {
+  "scenario": "native-forward",
+  "level": 32,
+  "base_tps": 9.75,
+  "base_p50": 3240.5,
+  "base_p99": 3819.5,
+  "base_mongo_per": 189.41794181940475,
+  "base_mongo_fg_per": 189.41794181940475,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.843580661434064,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   10.14,
+   9.36
+  ],
+  "base_finals": "Completed 626；Completed 589",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   626,
+   589
+  ],
+  "new_tps": 8.11,
+  "new_p50": 3352,
+  "new_p99": 5384,
+  "new_mongo_per": 154.05800227906792,
+  "new_mongo_fg_per": 145.7401410664466,
+  "new_store_per": 8.31786121262132,
+  "new_scripts_per": 27.787797162953357,
+  "new_hmget_per": 25.796750363472043,
+  "new_commit_per": 5.014986836417934,
+  "new_backlog_max": 10,
+  "new_drain": 0.0040892294999999995,
+  "new_tps_samples": [
+   7.98,
+   8.24
+  ],
+  "new_finals": "Completed 499；Completed 510",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   499,
+   510
+  ],
+  "new_completed": [
+   499,
+   510
+  ],
+  "ram_tps": 10.28,
+  "ram_p50": 3106,
+  "ram_p99": 3967,
+  "ram_mongo_per": 160.81259842519685,
+  "ram_mongo_fg_per": 152.10551181102363,
+  "ram_store_per": 8.707086614173228,
+  "ram_scripts_per": 30.384251968503936,
+  "ram_hmget_per": 243.44251968503937,
+  "ram_commit_per": 4.806299212598425,
+  "ram_backlog_max": 6,
+  "ram_drain": 0.003752417,
+  "ram_tps_samples": [
+   10.28
+  ],
+  "ram_finals": "Completed 635",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   635
+  ],
+  "ram_completed": [
+   635
+  ]
+ },
+ {
+  "scenario": "native-forward",
+  "level": 64,
+  "base_tps": 10.22,
+  "base_p50": 6163.5,
+  "base_p99": 7844,
+  "base_mongo_per": 295.23563250850134,
+  "base_mongo_fg_per": 295.23563250850134,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.80087072140445,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   10.48,
+   9.96
+  ],
+  "base_finals": "Completed 665；Completed 639",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   665,
+   639
+  ],
+  "new_tps": 8.190000000000001,
+  "new_p50": 7145.5,
+  "new_p99": 15434,
+  "new_mongo_per": 284.652055839842,
+  "new_mongo_fg_per": 276.39449232426614,
+  "new_store_per": 8.257563515575905,
+  "new_scripts_per": 27.88521186821079,
+  "new_hmget_per": 29.94231977735883,
+  "new_commit_per": 5.122351647365114,
+  "new_backlog_max": 13.5,
+  "new_drain": 0.004342625,
+  "new_tps_samples": [
+   7.4,
+   8.98
+  ],
+  "new_finals": "Completed 474；Completed 564",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   474,
+   564
+  ],
+  "new_completed": [
+   474,
+   564
+  ],
+  "ram_tps": 12.82,
+  "ram_p50": 4901,
+  "ram_p99": 5755,
+  "ram_mongo_per": 222.03422982885087,
+  "ram_mongo_fg_per": 213.31907090464549,
+  "ram_store_per": 8.71515892420538,
+  "ram_scripts_per": 28.646699266503667,
+  "ram_hmget_per": 348.90220048899755,
+  "ram_commit_per": 4.625916870415648,
+  "ram_backlog_max": 5,
+  "ram_drain": 0.004046792,
+  "ram_tps_samples": [
+   12.82
+  ],
+  "ram_finals": "Completed 818",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   818
+  ],
+  "ram_completed": [
+   818
+  ]
+ },
+ {
+  "scenario": "native-forward",
+  "level": 128,
+  "base_tps": 6.04,
+  "base_p50": 12650,
+  "base_p99": 36095,
+  "base_mongo_per": 272.7252604405061,
+  "base_mongo_fg_per": 272.7252604405061,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 13.291412634187127,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   6.08,
+   6
+  ],
+  "base_finals": "Completed 462, Compensated 10, Failed 93, Manual 1（核对未通过）；Completed 470, Compensated 8, Failed 101",
+  "base_verified": false,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   566,
+   579
+  ],
+  "new_tps": 2.63,
+  "new_p50": 25610.5,
+  "new_p99": 38884.5,
+  "new_mongo_per": 313.7865313627241,
+  "new_mongo_fg_per": 301.18000056142716,
+  "new_store_per": 12.606530801296897,
+  "new_scripts_per": 54.72977107808048,
+  "new_hmget_per": 112.17192302833803,
+  "new_commit_per": 11.784668126377252,
+  "new_backlog_max": 19.5,
+  "new_drain": 0.004834083499999999,
+  "new_tps_samples": [
+   2.92,
+   2.34
+  ],
+  "new_finals": "Completed 229, Compensated 56, Failed 87, Manual 2（核对未通过）；Completed 240, Compensated 41, Failed 100",
+  "new_verified": false,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   229,
+   240
+  ],
+  "new_completed": [
+   374,
+   381
+  ],
+  "ram_tps": 9.28,
+  "ram_p50": 6450,
+  "ram_p99": 26655,
+  "ram_mongo_per": 190.0212201591512,
+  "ram_mongo_fg_per": 180.11936339522546,
+  "ram_store_per": 9.90185676392573,
+  "ram_scripts_per": 38.36870026525199,
+  "ram_hmget_per": 613.2599469496021,
+  "ram_commit_per": 7.172413793103448,
+  "ram_backlog_max": 16,
+  "ram_drain": 0.004033458,
+  "ram_tps_samples": [
+   9.28
+  ],
+  "ram_finals": "Completed 674, Failed 80",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   674
+  ],
+  "ram_completed": [
+   754
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 1,
+  "base_tps": 2.25,
+  "base_p50": 415,
+  "base_p99": 581,
+  "base_mongo_per": 152.19983748645723,
+  "base_mongo_fg_per": 152.19983748645723,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 14.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   2.16,
+   2.34
+  ],
+  "base_finals": "Compensated 130；Compensated 142",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   130,
+   142
+  ],
+  "new_tps": 2.17,
+  "new_p50": 444,
+  "new_p99": 609,
+  "new_mongo_per": 84.2492046659597,
+  "new_mongo_fg_per": 71.26051608342169,
+  "new_store_per": 12.988688582538,
+  "new_scripts_per": 72.69635913750442,
+  "new_hmget_per": 56.606574761399784,
+  "new_commit_per": 8.0,
+  "new_backlog_max": 2,
+  "new_drain": 0.004413479,
+  "new_tps_samples": [
+   2.3,
+   2.04
+  ],
+  "new_finals": "Compensated 138；Compensated 123",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   138,
+   123
+  ],
+  "new_completed": [
+   138,
+   123
+  ],
+  "ram_tps": 2.84,
+  "ram_p50": 341,
+  "ram_p99": 459,
+  "ram_mongo_per": 81.84302325581395,
+  "ram_mongo_fg_per": 68.86046511627907,
+  "ram_store_per": 12.982558139534884,
+  "ram_scripts_per": 65.67441860465117,
+  "ram_hmget_per": 60.627906976744185,
+  "ram_commit_per": 8.0,
+  "ram_backlog_max": 2,
+  "ram_drain": 0.004601208,
+  "ram_tps_samples": [
+   2.84
+  ],
+  "ram_finals": "Compensated 172",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   172
+  ],
+  "ram_completed": [
+   172
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 4,
+  "base_tps": 4.95,
+  "base_p50": 776.5,
+  "base_p99": 1119,
+  "base_mongo_per": 132.88457281217572,
+  "base_mongo_fg_per": 132.88457281217572,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 13.73854490948922,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   4.96,
+   4.94
+  ],
+  "base_finals": "Compensated 295；Compensated 294",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   295,
+   294
+  ],
+  "new_tps": 3.5700000000000003,
+  "new_p50": 979,
+  "new_p99": 1311.5,
+  "new_mongo_per": 85.07153640441683,
+  "new_mongo_fg_per": 72.4518417874396,
+  "new_store_per": 12.619694616977226,
+  "new_scripts_per": 50.7254356452726,
+  "new_hmget_per": 38.23160369220152,
+  "new_commit_per": 8.0,
+  "new_backlog_max": 5.5,
+  "new_drain": 0.004174396,
+  "new_tps_samples": [
+   3.72,
+   3.42
+  ],
+  "new_finals": "Compensated 224；Compensated 207",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   224,
+   207
+  ],
+  "new_completed": [
+   224,
+   207
+  ],
+  "ram_tps": 5.82,
+  "ram_p50": 684,
+  "ram_p99": 939,
+  "ram_mongo_per": 87.29069767441861,
+  "ram_mongo_fg_per": 74.34302325581395,
+  "ram_store_per": 12.94767441860465,
+  "ram_scripts_per": 47.67151162790697,
+  "ram_hmget_per": 87.01744186046511,
+  "ram_commit_per": 7.488372093023256,
+  "ram_backlog_max": 5,
+  "ram_drain": 0.0047995,
+  "ram_tps_samples": [
+   5.82
+  ],
+  "ram_finals": "Compensated 344",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   344
+  ],
+  "ram_completed": [
+   344
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 16,
+  "base_tps": 5.949999999999999,
+  "base_p50": 2653.5,
+  "base_p99": 3504,
+  "base_mongo_per": 202.17482994744864,
+  "base_mongo_fg_per": 202.17482994744864,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 13.413259928263226,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   5.52,
+   6.38
+  ],
+  "base_finals": "Compensated 339；Compensated 389",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   339,
+   389
+  ],
+  "new_tps": 4.98,
+  "new_p50": 2725,
+  "new_p99": 3720.5,
+  "new_mongo_per": 145.49332271502084,
+  "new_mongo_fg_per": 133.209619782733,
+  "new_store_per": 12.283702932287838,
+  "new_scripts_per": 42.09538103406028,
+  "new_hmget_per": 34.54810912358082,
+  "new_commit_per": 7.636200277709712,
+  "new_backlog_max": 10.5,
+  "new_drain": 0.0057213335,
+  "new_tps_samples": [
+   5.08,
+   4.88
+  ],
+  "new_finals": "Compensated 318；Compensated 308",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   318,
+   308
+  ],
+  "new_completed": [
+   318,
+   308
+  ],
+  "ram_tps": 6.14,
+  "ram_p50": 2577,
+  "ram_p99": 3340,
+  "ram_mongo_per": 161.36968085106383,
+  "ram_mongo_fg_per": 148.50797872340425,
+  "ram_store_per": 12.861702127659575,
+  "ram_scripts_per": 46.16755319148936,
+  "ram_hmget_per": 232.00265957446808,
+  "ram_commit_per": 7.361702127659575,
+  "ram_backlog_max": 5,
+  "ram_drain": 0.002815625,
+  "ram_tps_samples": [
+   6.14
+  ],
+  "ram_finals": "Compensated 376",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   376
+  ],
+  "ram_completed": [
+   376
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 32,
+  "base_tps": 6.02,
+  "base_p50": 5298.5,
+  "base_p99": 7832,
+  "base_mongo_per": 302.3994538723489,
+  "base_mongo_fg_per": 302.3994538723489,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 13.3619137782425,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   5.76,
+   6.28
+  ],
+  "base_finals": "Compensated 362；Compensated 391",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   362,
+   391
+  ],
+  "new_tps": 5.26,
+  "new_p50": 5507,
+  "new_p99": 7321,
+  "new_mongo_per": 247.94724695021432,
+  "new_mongo_fg_per": 235.94718741986298,
+  "new_store_per": 12.000059530351322,
+  "new_scripts_per": 40.76295929955673,
+  "new_hmget_per": 36.42397974136352,
+  "new_commit_per": 7.54976737370407,
+  "new_backlog_max": 13,
+  "new_drain": 0.003398542,
+  "new_tps_samples": [
+   5.12,
+   5.4
+  ],
+  "new_finals": "Compensated 324；Compensated 337",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   324,
+   337
+  ],
+  "new_completed": [
+   324,
+   337
+  ],
+  "ram_tps": 6.76,
+  "ram_p50": 4727,
+  "ram_p99": 6154,
+  "ram_mongo_per": 244.96208530805688,
+  "ram_mongo_fg_per": 232.2440758293839,
+  "ram_store_per": 12.718009478672986,
+  "ram_scripts_per": 44.51184834123223,
+  "ram_hmget_per": 371.30331753554503,
+  "ram_commit_per": 7.213270142180095,
+  "ram_backlog_max": 8,
+  "ram_drain": 0.004954792,
+  "ram_tps_samples": [
+   6.76
+  ],
+  "ram_finals": "Compensated 422",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   422
+  ],
+  "ram_completed": [
+   422
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 64,
+  "base_tps": 6.4,
+  "base_p50": 9881.5,
+  "base_p99": 16685,
+  "base_mongo_per": 466.9891820804344,
+  "base_mongo_fg_per": 466.9891820804344,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 13.419274280219469,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   6.44,
+   6.36
+  ],
+  "base_finals": "Compensated 426；Compensated 415",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   426,
+   415
+  ],
+  "new_tps": 5.54,
+  "new_p50": 10426,
+  "new_p99": 22257,
+  "new_mongo_per": 432.7303539023352,
+  "new_mongo_fg_per": 420.8305764448461,
+  "new_store_per": 11.899777457489153,
+  "new_scripts_per": 40.240745442732646,
+  "new_hmget_per": 40.449797247343305,
+  "new_commit_per": 7.703768286945417,
+  "new_backlog_max": 13.5,
+  "new_drain": 0.0042920415,
+  "new_tps_samples": [
+   5.4,
+   5.68
+  ],
+  "new_finals": "Compensated 359；Compensated 373",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   359,
+   373
+  ],
+  "new_completed": [
+   359,
+   373
+  ],
+  "ram_tps": 8.62,
+  "ram_p50": 7310,
+  "ram_p99": 13214,
+  "ram_mongo_per": 341.0784671532847,
+  "ram_mongo_fg_per": 328.47080291970804,
+  "ram_store_per": 12.607664233576642,
+  "ram_scripts_per": 41.48905109489051,
+  "ram_hmget_per": 522.8102189781022,
+  "ram_commit_per": 6.9726277372262775,
+  "ram_backlog_max": 5,
+  "ram_drain": 0.003697083,
+  "ram_tps_samples": [
+   8.62
+  ],
+  "ram_finals": "Compensated 548",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   548
+  ],
+  "ram_completed": [
+   548
+  ]
+ },
+ {
+  "scenario": "native-compensate",
+  "level": 128,
+  "base_tps": 2.8899999999999997,
+  "base_p50": 24730,
+  "base_p99": 30738.5,
+  "base_mongo_per": 316.3941879244767,
+  "base_mongo_fg_per": 316.3941879244767,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 17.63896268550716,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   2.76,
+   3.02
+  ],
+  "base_finals": "Compensated 247, Failed 183, Manual 3（核对未通过）；Compensated 265, Failed 174",
+  "base_verified": false,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   433,
+   439
+  ],
+  "new_tps": 0.93,
+  "new_p50": 27494,
+  "new_p99": 51409,
+  "new_mongo_per": 482.6417281521561,
+  "new_mongo_fg_per": 469.3136579767175,
+  "new_store_per": 13.328070175438597,
+  "new_scripts_per": 61.635743564518776,
+  "new_hmget_per": 79.34433513690769,
+  "new_commit_per": 14.394884407279882,
+  "new_backlog_max": 19,
+  "new_drain": 0.003044875,
+  "new_tps_samples": [
+   0.34,
+   1.52
+  ],
+  "new_finals": "Compensated 92, Failed 155, Manual 38（核对未通过）；Compensated 170, Failed 151",
+  "new_verified": false,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   92,
+   170
+  ],
+  "new_completed": [
+   285,
+   321
+  ],
+  "ram_tps": 5.04,
+  "ram_p50": 18433,
+  "ram_p99": 30912,
+  "ram_mongo_per": 341.0180360721443,
+  "ram_mongo_fg_per": 326.7014028056112,
+  "ram_store_per": 14.316633266533065,
+  "ram_scripts_per": 58.33466933867736,
+  "ram_hmget_per": 995.559118236473,
+  "ram_commit_per": 11.53306613226453,
+  "ram_backlog_max": 6,
+  "ram_drain": 0.004172042,
+  "ram_tps_samples": [
+   5.04
+  ],
+  "ram_finals": "Compensated 421, Failed 78",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   421
+  ],
+  "ram_completed": [
+   499
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 1,
+  "base_tps": 5.17,
+  "base_p50": 191.820375,
+  "base_p99": 243.92768750000002,
+  "base_mongo_per": 65.76294123754153,
+  "base_mongo_fg_per": 65.76294123754153,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   4.98,
+   5.36
+  ],
+  "base_finals": "Completed 301；Completed 320",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   301,
+   320
+  ],
+  "new_tps": 5.07,
+  "new_p50": 194.80868800000002,
+  "new_p99": 264.5465415,
+  "new_mongo_per": 27.789428123140183,
+  "new_mongo_fg_per": 19.01805442839366,
+  "new_store_per": 8.771373694746522,
+  "new_scripts_per": 37.283027647027,
+  "new_hmget_per": 23.659627766055294,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 3,
+  "new_drain": 0.0048727284999999995,
+  "new_tps_samples": [
+   5.06,
+   5.08
+  ],
+  "new_finals": "Completed 305；Completed 303",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   305,
+   303
+  ],
+  "new_completed": [
+   305,
+   303
+  ],
+  "ram_tps": 8.38,
+  "ram_p50": 117.549375,
+  "ram_p99": 157.986083,
+  "ram_mongo_per": 27.9802371541502,
+  "ram_mongo_fg_per": 19.00395256916996,
+  "ram_store_per": 8.976284584980236,
+  "ram_scripts_per": 32.84782608695652,
+  "ram_hmget_per": 22.804347826086957,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 3,
+  "ram_drain": 0.004745667,
+  "ram_tps_samples": [
+   8.38
+  ],
+  "ram_finals": "Completed 506",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   506
+  ],
+  "ram_completed": [
+   506
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 4,
+  "base_tps": 12.27,
+  "base_p50": 323.1245,
+  "base_p99": 420.7562295,
+  "base_mongo_per": 57.1809592276882,
+  "base_mongo_fg_per": 57.1809592276882,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   12.18,
+   12.36
+  ],
+  "base_finals": "Completed 728；Completed 749",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   728,
+   749
+  ],
+  "new_tps": 9.07,
+  "new_p50": 441.023729,
+  "new_p99": 571.3143745,
+  "new_mongo_per": 27.121550520777408,
+  "new_mongo_fg_per": 19.012824814775044,
+  "new_store_per": 8.108725706002362,
+  "new_scripts_per": 26.982222431010417,
+  "new_hmget_per": 21.41389052936755,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 10,
+  "new_drain": 0.0036510625000000002,
+  "new_tps_samples": [
+   8.92,
+   9.22
+  ],
+  "new_finals": "Completed 536；Completed 556",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   536,
+   556
+  ],
+  "new_completed": [
+   536,
+   556
+  ],
+  "ram_tps": 21.98,
+  "ram_p50": 181.290167,
+  "ram_p99": 269.014041,
+  "ram_mongo_per": 27.87317448116833,
+  "ram_mongo_fg_per": 19.006917755572637,
+  "ram_store_per": 8.866256725595695,
+  "ram_scripts_per": 26.015372790161415,
+  "ram_hmget_per": 23.562644119907763,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 10,
+  "ram_drain": 0.002412042,
+  "ram_tps_samples": [
+   21.98
+  ],
+  "ram_finals": "Completed 1301",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   1301
+  ],
+  "ram_completed": [
+   1301
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 16,
+  "base_tps": 38.510000000000005,
+  "base_p50": 408.4151045,
+  "base_p99": 619.276167,
+  "base_mongo_per": 51.5367660252097,
+  "base_mongo_fg_per": 51.5367660252097,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   41.14,
+   35.88
+  ],
+  "base_finals": "Completed 2477；Completed 2160",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2477,
+   2160
+  ],
+  "new_tps": 17.200000000000003,
+  "new_p50": 930.40025,
+  "new_p99": 1105.4255210000001,
+  "new_mongo_per": 26.503045652194153,
+  "new_mongo_fg_per": 19.01503645285338,
+  "new_store_per": 7.488009199340776,
+  "new_scripts_per": 21.67245365413086,
+  "new_hmget_per": 19.34124619409864,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 20,
+  "new_drain": 0.004237271,
+  "new_tps_samples": [
+   17.46,
+   16.94
+  ],
+  "new_finals": "Completed 1055；Completed 1018",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1055,
+   1018
+  ],
+  "new_completed": [
+   1055,
+   1018
+  ],
+  "ram_tps": 42.9,
+  "ram_p50": 365.178125,
+  "ram_p99": 491.295542,
+  "ram_mongo_per": 27.1456571867794,
+  "ram_mongo_fg_per": 19.009223674096848,
+  "ram_store_per": 8.136433512682553,
+  "ram_scripts_per": 23.914296694850115,
+  "ram_hmget_per": 26.047271329746348,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 21,
+  "ram_drain": 0.002878625,
+  "ram_tps_samples": [
+   42.9
+  ],
+  "ram_finals": "Completed 2602",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   2602
+  ],
+  "ram_completed": [
+   2602
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 32,
+  "base_tps": 43.55,
+  "base_p50": 728.2956664999999,
+  "base_p99": 925.330958,
+  "base_mongo_per": 50.33627803337541,
+  "base_mongo_fg_per": 50.33627803337541,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   43.36,
+   43.74
+  ],
+  "base_finals": "Completed 2617；Completed 2638",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2617,
+   2638
+  ],
+  "new_tps": 17.43,
+  "new_p50": 1828.8444375,
+  "new_p99": 2115.4134585,
+  "new_mongo_per": 26.462456202285864,
+  "new_mongo_fg_per": 19.010799611667622,
+  "new_store_per": 7.451656590618243,
+  "new_scripts_per": 21.617080887869026,
+  "new_hmget_per": 19.60829177882706,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 22.5,
+  "new_drain": 0.0077313335,
+  "new_tps_samples": [
+   17.62,
+   17.24
+  ],
+  "new_finals": "Completed 1075；Completed 1054",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1075,
+   1054
+  ],
+  "new_completed": [
+   1075,
+   1054
+  ],
+  "ram_tps": 39.58,
+  "ram_p50": 800.134708,
+  "ram_p99": 1029.463625,
+  "ram_mongo_per": 27.140350877192983,
+  "ram_mongo_fg_per": 19.00793650793651,
+  "ram_store_per": 8.132414369256475,
+  "ram_scripts_per": 23.96282372598162,
+  "ram_hmget_per": 33.58061821219716,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 19,
+  "ram_drain": 0.002432417,
+  "ram_tps_samples": [
+   39.58
+  ],
+  "ram_finals": "Completed 2394",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   2394
+  ],
+  "ram_completed": [
+   2394
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 64,
+  "base_tps": 43.620000000000005,
+  "base_p50": 1455.6173964999998,
+  "base_p99": 1865.292875,
+  "base_mongo_per": 50.34296735048918,
+  "base_mongo_fg_per": 50.34296735048918,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   43.4,
+   43.84
+  ],
+  "base_finals": "Completed 2624；Completed 2655",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2624,
+   2655
+  ],
+  "new_tps": 16.84,
+  "new_p50": 3801.893771,
+  "new_p99": 4187.4672085,
+  "new_mongo_per": 26.536833004982356,
+  "new_mongo_fg_per": 19.011903100515273,
+  "new_store_per": 7.524929904467084,
+  "new_scripts_per": 21.588209360449625,
+  "new_hmget_per": 19.891535885106762,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 23,
+  "new_drain": 0.0033927295000000003,
+  "new_tps_samples": [
+   17.24,
+   16.44
+  ],
+  "new_finals": "Completed 1058；Completed 1043",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1058,
+   1043
+  ],
+  "new_completed": [
+   1058,
+   1043
+  ],
+  "ram_tps": 42.48,
+  "ram_p50": 1495.567042,
+  "ram_p99": 1937.800917,
+  "ram_mongo_per": 26.975019516003123,
+  "ram_mongo_fg_per": 19.006635441061672,
+  "ram_store_per": 7.968384074941452,
+  "ram_scripts_per": 23.62217017954723,
+  "ram_hmget_per": 44.94379391100703,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 21,
+  "ram_drain": 0.002273417,
+  "ram_tps_samples": [
+   42.48
+  ],
+  "ram_finals": "Completed 2562",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   2562
+  ],
+  "ram_completed": [
+   2562
+  ]
+ },
+ {
+  "scenario": "mongo-forward w2",
+  "level": 128,
+  "base_tps": 42.620000000000005,
+  "base_p50": 2968.404271,
+  "base_p99": 3969.1259375,
+  "base_mongo_per": 50.51355133294251,
+  "base_mongo_fg_per": 50.51355133294251,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   42.84,
+   42.4
+  ],
+  "base_finals": "Completed 2627；Completed 2622",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2627,
+   2622
+  ],
+  "new_tps": 17.82,
+  "new_p50": 7267.707208,
+  "new_p99": 8125.46975,
+  "new_mongo_per": 26.519772628372497,
+  "new_mongo_fg_per": 19.01129832100377,
+  "new_store_per": 7.508474307368726,
+  "new_scripts_per": 21.241262782854655,
+  "new_hmget_per": 20.057369859660575,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 20,
+  "new_drain": 0.0036145835,
+  "new_tps_samples": [
+   17.82,
+   17.82
+  ],
+  "new_finals": "Completed 1149；Completed 1152",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1149,
+   1152
+  ],
+  "new_completed": [
+   1149,
+   1152
+  ],
+  "ram_tps": 45.28,
+  "ram_p50": 2851.656667,
+  "ram_p99": 3149.234458,
+  "ram_mongo_per": 27.102710413694723,
+  "ram_mongo_fg_per": 19.006776034236804,
+  "ram_store_per": 8.095934379457917,
+  "ram_scripts_per": 23.786733238231097,
+  "ram_hmget_per": 64.95149786019971,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 22,
+  "ram_drain": 0.002261875,
+  "ram_tps_samples": [
+   45.28
+  ],
+  "ram_finals": "Completed 2804",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   2804
+  ],
+  "ram_completed": [
+   2804
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 1,
+  "base_tps": 5.48,
+  "base_p50": 179.3088125,
+  "base_p99": 240.7202705,
+  "base_mongo_per": 64.88933109390975,
+  "base_mongo_fg_per": 64.88933109390975,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   5.54,
+   5.42
+  ],
+  "base_finals": "Completed 334；Completed 328",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   334,
+   328
+  ],
+  "new_tps": 5.03,
+  "new_p50": 195.890875,
+  "new_p99": 271.6579995,
+  "new_mongo_per": 27.746614939905676,
+  "new_mongo_fg_per": 19.00659624872313,
+  "new_store_per": 8.740018691182543,
+  "new_scripts_per": 37.290109973701945,
+  "new_hmget_per": 23.64174871226446,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 2.5,
+  "new_drain": 0.0041042495000000005,
+  "new_tps_samples": [
+   4.82,
+   5.24
+  ],
+  "new_finals": "Completed 294；Completed 313",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   294,
+   313
+  ],
+  "new_completed": [
+   294,
+   313
+  ],
+  "ram_tps": 8.56,
+  "ram_p50": 115.379875,
+  "ram_p99": 155.997834,
+  "ram_mongo_per": 27.992248062015506,
+  "ram_mongo_fg_per": 19.017441860465116,
+  "ram_store_per": 8.974806201550388,
+  "ram_scripts_per": 32.695736434108525,
+  "ram_hmget_per": 22.742248062015506,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 3,
+  "ram_drain": 0.003158958,
+  "ram_tps_samples": [
+   8.56
+  ],
+  "ram_finals": "Completed 516",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   516
+  ],
+  "ram_completed": [
+   516
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 4,
+  "base_tps": 13.620000000000001,
+  "base_p50": 294.5517085,
+  "base_p99": 396.615104,
+  "base_mongo_per": 56.58706272801048,
+  "base_mongo_fg_per": 56.58706272801048,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   13.58,
+   13.66
+  ],
+  "base_finals": "Completed 819；Completed 823",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   819,
+   823
+  ],
+  "new_tps": 9.34,
+  "new_p50": 426.19097899999997,
+  "new_p99": 570.5172705,
+  "new_mongo_per": 27.197034417727487,
+  "new_mongo_fg_per": 19.012442244224424,
+  "new_store_per": 8.184592173503065,
+  "new_scripts_per": 26.97154172560113,
+  "new_hmget_per": 21.525921735030643,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 8.5,
+  "new_drain": 0.00470275,
+  "new_tps_samples": [
+   9.9,
+   8.78
+  ],
+  "new_finals": "Completed 606；Completed 525",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   606,
+   525
+  ],
+  "new_completed": [
+   606,
+   525
+  ],
+  "ram_tps": 24.32,
+  "ram_p50": 161.313417,
+  "ram_p99": 229.920959,
+  "ram_mongo_per": 27.850991114149007,
+  "ram_mongo_fg_per": 19.007518796992482,
+  "ram_store_per": 8.843472317156527,
+  "ram_scripts_per": 25.43267259056733,
+  "ram_hmget_per": 23.103212576896787,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 12,
+  "ram_drain": 0.003033542,
+  "ram_tps_samples": [
+   24.32
+  ],
+  "ram_finals": "Completed 1463",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   1463
+  ],
+  "ram_completed": [
+   1463
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 16,
+  "base_tps": 43.16,
+  "base_p50": 365.430812,
+  "base_p99": 512.4696455,
+  "base_mongo_per": 50.87438149177136,
+  "base_mongo_fg_per": 50.87438149177136,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   43.86,
+   42.46
+  ],
+  "base_finals": "Completed 2628；Completed 2559",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2628,
+   2559
+  ],
+  "new_tps": 22.450000000000003,
+  "new_p50": 702.7835205,
+  "new_p99": 1036.390625,
+  "new_mongo_per": 25.925239675516224,
+  "new_mongo_fg_per": 19.01289042165539,
+  "new_store_per": 6.912349253860836,
+  "new_scripts_per": 18.866345653305572,
+  "new_hmget_per": 18.722341879229567,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 24.5,
+  "new_drain": 0.007401458499999999,
+  "new_tps_samples": [
+   22.46,
+   22.44
+  ],
+  "new_finals": "Completed 1356；Completed 1360",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1356,
+   1360
+  ],
+  "new_completed": [
+   1356,
+   1360
+  ],
+  "ram_tps": 79.08,
+  "ram_p50": 192.585125,
+  "ram_p99": 311.699958,
+  "ram_mongo_per": 26.216188313029114,
+  "ram_mongo_fg_per": 19.006400991121208,
+  "ram_store_per": 7.209787321907909,
+  "ram_scripts_per": 21.090646293619656,
+  "ram_hmget_per": 22.031385504852363,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 38,
+  "ram_drain": 0.001997916,
+  "ram_tps_samples": [
+   79.08
+  ],
+  "ram_finals": "Completed 4843",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   4843
+  ],
+  "ram_completed": [
+   4843
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 32,
+  "base_tps": 46.37,
+  "base_p50": 682.0313544999999,
+  "base_p99": 836.6960835,
+  "base_mongo_per": 50.11977488485019,
+  "base_mongo_fg_per": 50.11977488485019,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   46.94,
+   45.8
+  ],
+  "base_finals": "Completed 2826；Completed 2782",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2826,
+   2782
+  ],
+  "new_tps": 21.72,
+  "new_p50": 1466.2738125,
+  "new_p99": 1860.860542,
+  "new_mongo_per": 26.02976772178365,
+  "new_mongo_fg_per": 19.011401362618777,
+  "new_store_per": 7.018366359164871,
+  "new_scripts_per": 18.923997846794336,
+  "new_hmget_per": 18.970549367784624,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 25,
+  "new_drain": 0.0029762495,
+  "new_tps_samples": [
+   22.26,
+   21.18
+  ],
+  "new_finals": "Completed 1338；Completed 1294",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1338,
+   1294
+  ],
+  "new_completed": [
+   1338,
+   1294
+  ],
+  "ram_tps": 143.18,
+  "ram_p50": 212.638584,
+  "ram_p99": 406.133792,
+  "ram_mongo_per": 24.57398316970547,
+  "ram_mongo_fg_per": 19.00549322113137,
+  "ram_store_per": 5.5684899485741,
+  "ram_scripts_per": 17.322931276297336,
+  "ram_hmget_per": 21.324567554932212,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 91,
+  "ram_drain": 0.001748833,
+  "ram_tps_samples": [
+   143.18
+  ],
+  "ram_finals": "Completed 8556",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   8556
+  ],
+  "ram_completed": [
+   8556
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 64,
+  "base_tps": 45.730000000000004,
+  "base_p50": 1386.1113955,
+  "base_p99": 1718.217792,
+  "base_mongo_per": 50.22287513104156,
+  "base_mongo_fg_per": 50.22287513104156,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   44.54,
+   46.92
+  ],
+  "base_finals": "Completed 2739；Completed 2799",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2739,
+   2799
+  ],
+  "new_tps": 21.450000000000003,
+  "new_p50": 2973.1421665,
+  "new_p99": 3334.985709,
+  "new_mongo_per": 26.065730793419355,
+  "new_mongo_fg_per": 19.015700923328936,
+  "new_store_per": 7.0500298700904205,
+  "new_scripts_per": 18.696909711323293,
+  "new_hmget_per": 19.13469132552323,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 23,
+  "new_drain": 0.0029645419999999997,
+  "new_tps_samples": [
+   20.44,
+   22.46
+  ],
+  "new_finals": "Completed 1278；Completed 1391",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1278,
+   1391
+  ],
+  "new_completed": [
+   1278,
+   1391
+  ],
+  "ram_tps": 129.92,
+  "ram_p50": 392.246333,
+  "ram_p99": 926.312334,
+  "ram_mongo_per": 24.471110570490207,
+  "ram_mongo_fg_per": 19.007906580707942,
+  "ram_store_per": 5.463203989782265,
+  "ram_scripts_per": 16.910473178445443,
+  "ram_hmget_per": 25.11932854883834,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 103,
+  "ram_drain": 0.001707459,
+  "ram_tps_samples": [
+   129.92
+  ],
+  "ram_finals": "Completed 8221",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   8221
+  ],
+  "ram_completed": [
+   8221
+  ]
+ },
+ {
+  "scenario": "mongo-forward w16",
+  "level": 128,
+  "base_tps": 45.17,
+  "base_p50": 2820.5552079999998,
+  "base_p99": 3288.9543955,
+  "base_mongo_per": 50.241188518170425,
+  "base_mongo_fg_per": 50.241188518170425,
+  "base_store_per": 0.0,
+  "base_scripts_per": null,
+  "base_hmget_per": null,
+  "base_commit_per": 8.0,
+  "base_backlog_max": null,
+  "base_drain": null,
+  "base_tps_samples": [
+   43.58,
+   46.76
+  ],
+  "base_finals": "Completed 2688；Completed 2850",
+  "base_verified": true,
+  "base_coldhot": [
+   null,
+   null
+  ],
+  "base_mongo_terminal": [
+   null,
+   null
+  ],
+  "base_completed": [
+   2688,
+   2850
+  ],
+  "new_tps": 22.92,
+  "new_p50": 5600.898562,
+  "new_p99": 6238.455791,
+  "new_mongo_per": 26.062411221590907,
+  "new_mongo_fg_per": 19.010890151515152,
+  "new_store_per": 7.051521070075758,
+  "new_scripts_per": 18.528053977272727,
+  "new_hmget_per": 19.278823390151516,
+  "new_commit_per": 4.0,
+  "new_backlog_max": 27.5,
+  "new_drain": 0.0055983125,
+  "new_tps_samples": [
+   22,
+   23.84
+  ],
+  "new_finals": "Completed 1408；Completed 1536",
+  "new_verified": true,
+  "new_coldhot": [
+   0,
+   0
+  ],
+  "new_mongo_terminal": [
+   1408,
+   1536
+  ],
+  "new_completed": [
+   1408,
+   1536
+  ],
+  "ram_tps": 147.88,
+  "ram_p50": 792.586792,
+  "ram_p99": 1355.221208,
+  "ram_mongo_per": 24.277298065362334,
+  "ram_mongo_fg_per": 19.00524647502459,
+  "ram_store_per": 5.272051590337742,
+  "ram_scripts_per": 16.62116078259919,
+  "ram_hmget_per": 29.705869493933765,
+  "ram_commit_per": 4.0,
+  "ram_backlog_max": 98,
+  "ram_drain": 0.001461542,
+  "ram_tps_samples": [
+   147.88
+  ],
+  "ram_finals": "Completed 9149",
+  "ram_verified": true,
+  "ram_coldhot": [
+   0
+  ],
+  "ram_mongo_terminal": [
+   9149
+  ],
+  "ram_completed": [
+   9149
+  ]
+ }
+]

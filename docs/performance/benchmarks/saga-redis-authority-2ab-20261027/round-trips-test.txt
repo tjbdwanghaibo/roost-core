@@ -1,0 +1,4 @@
+    redis_round_trips_test.go:113: per saga: scripts 11.00 map[ack_outbox:40 apply:80 claim_due:40 claim_outbox:40 create:20]; HMGET 2.00; empty claims map[claim_due:60 claim_outbox:41]
+--- PASS: TestRedisRoundTripsPerTwoStepSaga (3.29s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	3.916s

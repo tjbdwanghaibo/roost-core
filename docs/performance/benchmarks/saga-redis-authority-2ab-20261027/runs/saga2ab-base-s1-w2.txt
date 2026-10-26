@@ -1,0 +1,28 @@
+# env
+go version go1.27.3 darwin/arm64
+c91a3ad4b9267062b48ec8df608273f6fc6ddc15
+target=local levels=1 4 16 32 64 128 duration=60s scenarios=native-forward native-compensate mongo-forward
+mongo_workers=2 pairs=256 hops=0 gomaxprocs=4 db_prefix=roost_sagaperf_1026_1817 stream_prefix=SAGAPERF_1026_1817 store=mongo
+10
+34359738368
+vm.swapusage: total = 4096.00M  used = 2409.94M  free = 1686.06M  (encrypted)
+Now drawing from 'AC Power'
+# runs
+native-forward-c1	load_before=2.74	load_after=3.19	seconds=69
+native-forward-c4	load_before=3.19	load_after=4.90	seconds=69
+native-forward-c16	load_before=4.90	load_after=6.30	seconds=69
+native-forward-c32	load_before=5.49	load_after=4.53	seconds=70
+native-forward-c64	load_before=4.53	load_after=4.73	seconds=73
+native-forward-c128	load_before=4.73	load_after=3.93	seconds=202
+native-compensate-c1	load_before=3.93	load_after=5.46	seconds=69
+native-compensate-c4	load_before=5.46	load_after=7.34	seconds=69
+native-compensate-c16	load_before=5.97	load_after=6.24	seconds=71
+native-compensate-c32	load_before=5.48	load_after=5.39	seconds=72
+native-compensate-c64	load_before=5.39	load_after=7.75	seconds=74
+native-compensate-c128	load_before=5.75	load_after=3.93	seconds=206
+mongo-forward-c1	load_before=3.93	load_after=5.54	seconds=63
+mongo-forward-c4	load_before=5.54	load_after=4.64	seconds=62
+mongo-forward-c16	load_before=4.64	load_after=7.50	seconds=62
+mongo-forward-c32	load_before=5.85	load_after=7.64	seconds=63
+mongo-forward-c64	load_before=5.82	load_after=4.79	seconds=64
+mongo-forward-c128	load_before=4.79	load_after=5.72	seconds=65

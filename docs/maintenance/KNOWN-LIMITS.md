@@ -201,9 +201,18 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 ### Saga
 
+- **协调器存储是单主权威 Redis（v2 第 2 步 2a / 2b，分支 `feat/redis-authority-2ab`）**，契约见 [SAGA.md](../framework/SAGA.md)「协调器存储：Redis 权威」，实施记录见 [设计 v2 §13](DESIGN-2026-10-26-redis-authority-v2.md#13-实施结果第-2-步-2a--2b)。当前边界：
+  - **只支持单主**：不支持 Sentinel / Cluster 自动切主（切主可能让已确认的写回退，框架发现不了；启动探针拒绝 Cluster 与副本）。主机或磁盘损毁属于灾备，RPO 等于复制 / 备份滞后，按 SAGA.md 的灾备手册人工恢复；fence 代际（v2 §9.1）属于第 3 步，未实施。
+  - **每次写都 fsync**（`appendfsync always`）：同实例上的缓存类服务被拖慢，推荐独立实例（v2 §11 第 1 项，按推荐先做；配置允许与 `redis.addr` 相同，探针强制契约）。
+  - **本机（macOS、与 Mongo 同盘）吞吐低于 main，2a 性能门槛不达标**（2026-10-27 压测，[报告](../performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)）：Redis 在 macOS 上 `appendfsync always` 用 `F_FULLFSYNC`，在主线程上同步落盘、期间不处理任何命令，同盘时典型 16～18ms；每个脚本往返 50～165ms。Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍。AOF 放内存盘时同一套代码 Mongo 步骤 w16 是 main 的 3.1 倍。Linux（`fdatasync`）与独占盘**尚未测**；是否合入、是否进 2c 待维护者决定（v2 §13.6）。
+  - **第 2c 段（完成即派发、派发后直接发布、批量派发 / 确认）未实施**：协调器每步仍是“领取 → 派发 → outbox 领取 → Get → Apply”五个脚本；两个 2c 验收用例在 `framework/saga/engine_round_trip_test.go` 里带 `t.Skip`。
+  - **原生步骤吞吐不变**：上限仍在步骤侧 DataEngine 投影器，第 2 步不碰步骤侧（v2 §11 第 2 项，按推荐压测后再定；见下一条）。
+  - **冷副本最终一致**：`List` 的终态部分、按冷副本做的报表落后于投影积压；Store Service 停了，积压超过 `saga.redis.max_projection_backlog` 后新 saga 被拒（`ErrBackpressure`，可重试）。驻留记录数与积压按 `saga.redis.resident_records`、`store_service.backlog_entries` 观察，`maxmemory` 按 v2 §7.3.4 估算。
+  - **单元用例的 Redis**：协调器存储的单元用例要真实 Redis（Lua），经 `redistest.AOFAddr` 用 `ROOST_SAGA_IT_REDIS_ADDR` 或私有 `redis-server`；本机没有 `redis-server` 时跳过。CI 主测试 job 没有 `redis-server`，这些用例在 CI 上跳过（service-redis job 的 Redis 不是 AOF always，也不跑它们），以本地验证为准。
+  - **只在 macOS 上验证**：Linux 未运行（含 `kill -9` 用例与压测）。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **原生步骤单进程容量**：第一瓶颈是 DataEngine 投影器——带回执 / effect 的记录（`projector_replay.go` `isLocalBatchRecord`）逐条一次投影事务，checkpoint 已与普通记录按 `CheckpointRecords` / `CheckpointInterval` 合并；正向每笔 2 条、全补偿 3 条。等回执在后台（`StepConsumerConfig.ReceiptWaiters`），代价是同 durable 上同一实体的前后命令可能撞实体屏障（交还租约、退避 nak）。维护者 2026-10-18 决定 A（接受并文档化，量大按 sid 分片多进程、原生步骤加 `WithAdmit`）；第三档 B（合批带回执 / effect 的记录）与 C（分盘）不做；checkpoint 缺省间隔保持 20 ms（维护者 2026-10-19 方案 A），更高吞吐可调 `dataengine.projection.checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。容量数字见下方能力表（2026-10-20 夜间 15 分钟复测）与 [guide/06 §5](../framework/guide/06-saga.md#5-接入与运维)。
-- **协调器领取在积压下全量内存排序**（2026-10-26 实测，[SAGA-CLOUD-MONGO §5](../performance/SAGA-CLOUD-MONGO-20261026.md#5-领取查询的索引与排序)）：`ClaimDue` / `ClaimOutbox` 的排序带 `_id`，`_id` 不在 `claim_due` 索引里，每领一条都要对全部到期文档做阻塞 SORT。云 Mongo 上积压 1 万条时，单次领取约 0.42 / 0.65s，本机只多十几毫秒。加 `{status:1,next_run_at:1,_id:1}` / `{next_attempt_at:1,_id:1}` 或排序去掉 `_id` 后，只检查 1 个文档。正常负载（积压不超过并发数）下影响很小。改不改、怎么改待维护者决定。
+- **（main 上的旧实现）协调器领取在积压下全量内存排序**：本分支已不再由 Mongo 承担领取（Redis 的领取是一个 ZSet 范围脚本，O(log N + limit)，`BenchmarkRedisClaimDue`），按 v2 §11 第 3 项推荐不单独修 Mongo 索引；本条只对 main 上尚未合入 2a 的版本有效。原记录：**协调器领取在积压下全量内存排序**（2026-10-26 实测，[SAGA-CLOUD-MONGO §5](../performance/SAGA-CLOUD-MONGO-20261026.md#5-领取查询的索引与排序)）：`ClaimDue` / `ClaimOutbox` 的排序带 `_id`，`_id` 不在 `claim_due` 索引里，每领一条都要对全部到期文档做阻塞 SORT。云 Mongo 上积压 1 万条时，单次领取约 0.42 / 0.65s，本机只多十几毫秒。加 `{status:1,next_run_at:1,_id:1}` / `{next_attempt_at:1,_id:1}` 或排序去掉 `_id` 后，只检查 1 个文档。正常负载（积压不超过并发数）下影响很小。改不改、怎么改待维护者决定。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect（SAGA.md）。
 
 ## Sync、玩家接入与 Lockstep

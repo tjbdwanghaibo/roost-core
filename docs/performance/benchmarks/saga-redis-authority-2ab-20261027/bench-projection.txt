@@ -1,0 +1,9 @@
+BenchmarkSagaProjection-10    	   20000	     48714 ns/op	     20528 entries/s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	6.193s
+BenchmarkSagaProjection-10    	   50000	     45766 ns/op	     21850 entries/s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	9.335s
+BenchmarkSagaProjection-10    	   50000	     36505 ns/op	     27393 entries/s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	9.671s
+BenchmarkSagaProjection-4   	   50000	     44005 ns/op	     22724 entries/s
+BenchmarkSagaProjection-4   	   50000	     43586 ns/op	     22943 entries/s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	21.882s
