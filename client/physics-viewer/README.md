@@ -54,6 +54,7 @@
 链路为 Unity 输入 → Gate → GameIngress → PlayerIngress → Rooms RPC（physicsroom.Submit）→ 原生 PhysX 50Hz → RoomEntity 的 Nest Guard / StateDAO → AOI / Chunk → Unity。同步上限 20Hz；客户端只插值服务器位置，不运行本地预测。移动限制为水平加速度，跳跃请求由服务器落地射线判定；一个请求只消费一次，空中不追加冲量。这是刚体控制验证，不是完整角色控制器（例如贴边起跳、台阶辅助）。
 
 输入经 Gate 握手（票据 `physics-slot-N`，只用于 loopback）后以 Protobuf `room_input.proto` 发送；不替代生产登录或开房鉴权。
+内容握手 `0x50485903`（返回关卡与受控刚体，见下文“UGC 关卡与本地预测”）先于输入；输入 `grab_target` 字段与 `RoomInputAck` 应答见 `room_input.proto`。
 
 自动验证共用输入队列与发送路径，驱动水平移动和两次跳跃请求；它不是自动鼠标点击测试：
 
@@ -85,3 +86,41 @@ core 工程的 `.run/` 提供 Physics Service、Physics Game、Physics Gate 三�
 Room 场景没有 Rigidbody，也不在客户端调用 Physics.Simulate；Unity 会初始化自己的 PhysX 模块，但这不等于客户端在模拟这些物体。只有旧 PhysicsComparison 对照场景运行独立 Unity 物理。
 
 2026-10-25 本机交互验证（当时为 cmd/physics-viewer 的双进程，2026-10-26 改为上面的三进程正式装配，Unity 实机尚未在新装配下重跑）：两个 GoLand / Delve 进程实际运行，Unity 通过 Gate 连接；按 D 与空格后，Gate 日志记录 sequence=580 acceleration=[10 0 0]，sequence=600 jump=true，随后持续输出 Chunk。新协议解析测试与受影响包 race 通过。这是功能验证，不是 Debug 模式性能基准。批处理验收因本地项目已在 Unity 打开而拒绝启动，改用当前窗口交互验证，未关闭用户工程。
+
+
+## UGC 关卡与本地预测
+
+Gate Room 现在先获取服务器固定的 Level JSON、SHA-256 和认证绑定的 Body ID，再按描述创建 Box/Capsule/Sphere；不再依赖本地 `PhysicsTerrain` 或硬编码对象 ID。`Crowd` / `Comparison` 仍保留原对照用途。UGC 输入与采样确认契约见 [物理房间 service](../../docs/framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。
+
+```sh
+# 先构建 native（需要 CMake、Ninja、C/C++ 编译器）与本机三进程入口。
+bash scripts/physics/build-native.sh
+GOWORK=off go build -tags physx -o artifacts/physicsroom-local ./wiring/physicsroom/cmd/physicsroom-local
+# 导出可编辑的示例：两玩家球、可抓球、升降台、转杆、马达锤。
+artifacts/physicsroom-local export-level artifacts/obstacles.json
+# 三个终端（或 GoLand Physics Stack，给 Physics Game 加 --level）；依赖见上文 Gate + 物理房间服务。
+cfg=wiring/physicsroom/cmd/physicsroom-local/configs
+artifacts/physicsroom-local physicsroom --config $cfg/config.physicsroom.yaml
+artifacts/physicsroom-local game --level artifacts/obstacles.json --config $cfg/config.game.yaml
+artifacts/physicsroom-local gate --config $cfg/config.gate.yaml
+```
+
+编辑 JSON 的 `Bodies` / `Motions` / `Joints`，修改 `Revision` 后重启 game 开新房；不要只改 Unity 资源而保留旧服务器碰撞世界。去掉 `--level` 使用原 Crowd 关卡，但也通过内容握手加载。SHA-256 用于确认精确内容，不是作者认证或内容审核。发布权限、存储、CDN 和编辑器由游戏工程接入。
+
+Unity 新工程沿用 `scripts/physics/create-viewer.sh`。已有工程把 `client/physics-viewer/*.cs`、Editor 文件和 `client/dotnet/Roost.Client/Packet.cs` 同步到原位置；本轮 native 与身体载荷不兼容旧版本，不能只更新一侧。在 Unity 中调用 `ViewerProject.OpenUGCInteractive`，或给新 GameObject 挂 `CrowdViewer`，设置 `ControlRoom=true`、`UseGate=true`、`Port=19093`、`PlayerSlot=1`。第二客户端用槽 2；示例只定义两个槽，原 Room 场景默认槽 13 不适用。
+
+- WASD/方向键移动，Space 跳跃，按住 E 抓最近对象、松开 E 释放；最终是否可抓由服务器检查。此演示选目标没有射线遮挡，不是完整商业抓取规则。
+- `PredictLocalInput` 开关对比预测与纯插值。预测仅作用于自己，其他对象保留服务器快照插值；本地胶囊扫掠不向服务器回写坐标。断线不自动重连，重新启动连接会重新取内容并获取成员代际。
+- 协议 `0x50485903` 返回 `RoomLevel`；`0x50485902` 输入新增 `grab_target`，响应 `RoomInputAck` 返回成员代际。真正输入采样确认在 RP2 私有帧头中，不能用 RPC 响应裁剪预测历史。
+- 本轮 Linux native、房间和真实 Gate/NATS/TCP 功能回归已运行；C# 预测核心已编译执行。**Unity 编辑器编译、场景交互与移动网络延迟验收尚未执行**，请在目标 Unity 工程复验。它是近似预测和权威纠偏，不是把服务器完整 PhysX 世界搬到客户端做确定性重演。
+
+
+Room 同步已使用 RP2 + RC2：每帧只包含自身输入确认，对象先量化再按位置/旋转/速度/角速度/休眠分字段发送。完整对象 34 字节，位置精度 1cm；重新连接、跨 Chunk 或重新可见必须重建完整对象。同步复制 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`，服务与客户端先停旧再更新。Comparison 保留 RC1 无损对照，不能用旧 crowd 测速脚本证明 Room 优化收益。
+
+`dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj` 从仓库根运行，同时验证预测核心和 `tests/packed.json` 的 Go/C# 共享量化金样。协议、实测载荷和测量范围见 [Room 同步压缩](../../docs/framework/PHYSICS-ROOM-SERVICE.md#room-同步压缩与复测2026-10-26)。此核心测试不代替 Unity 编辑器验收。
+
+
+分频版本还需同步 `ReplicationPlayback.cs` 和 `LevelViewer.cs`。Room 使用 RP2，34 字节对象状态位标明展示档/轨迹档；展示档速度不是物理测量值。客户端按对象采样 tick 插值，远处规则平台/转轮读取 Level.Motions 并用服务器姿态校准，停收帧后停止外推。近处对象保留高频状态，动态马达或抓取物不使用固定轨迹。完整参数、关闭对照与统计见 [接收者分频](../../docs/framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。C# 核心测试包含 `tests/motion.json` 的 Go/C# 相位金样和稀疏插值；Unity 编辑器与移动网络仍须复验。
+
+
+多房间服务测量入口为 `ROOST_PHYSICS_LOAD=1 go test -tags physx -run '^TestMultiRoomReplicationLoad$' -count=1 -timeout=2m -v ./wiring/physicsroom`。它运行真实 Room/PhysX/Nest 和独立逻辑客户端，不启动 Unity 或 Gate/TCP；不能当作真实玩家容量。场景、原始统计含义和共享索引基准见 [服务测量](../../docs/framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)。

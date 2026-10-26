@@ -1,0 +1,269 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+func check(t *testing.T, e error) {
+	t.Helper()
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+
+// 固定发现列表仅用于隔离教学进程；不证明 etcd 发现、singleton 或自动 HA。
+type fixedDiscovery struct{ etcd.IDiscovery }
+
+func (fixedDiscovery) Discover(context.Context, string) ([]*etcd.ServiceInfo, error) {
+	return []*etcd.ServiceInfo{{ServiceType: activity.ServiceType, Sid: 9000}}, nil
+}
+func redisClient(t *testing.T) fredis.IRedis {
+	t.Helper()
+	r, e := redisdriver.NewClient(fredis.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")))
+	check(t, e)
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+func newBus(t *testing.T, prefix, kind string, sid int32) (*bus.Bus, *natsdriver.Client) {
+	t.Helper()
+	n, e := natsdriver.NewClient(fnats.DefaultConfig(os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")), natsdriver.ClientOptions{})
+	check(t, e)
+	t.Cleanup(n.Close)
+	rpc := natsdriver.NewRPCClient(n, fnats.DefaultRetryPolicy(), 1)
+	t.Cleanup(rpc.Stop)
+	b := bus.New(n, rpc, nil, bus.Config{Sid: sid, SvcType: kind, Prefix: prefix, WorkerNum: 2, QueueCap: 32})
+	t.Cleanup(b.Stop)
+	return b, n
+}
+func coordinatorProcess(t *testing.T, prefix string) {
+	r := redisClient(t)
+	s, e := activity.NewRedisStores(r, prefix, time.Hour)
+	check(t, e)
+	groups, e := activity.ParseGroups([]byte("groups:\n  - id: alliance\n    game_sids: [1000, 1001]\n"), "fixture")
+	check(t, e)
+	svc, e := activity.New(activity.Config{Activities: s.Activities, Participants: s.Participants, Ledger: s.Ledger, Audits: s.Audits, Dispatches: s.Dispatches, Windows: s.Windows, Groups: &groups, ReservationTTL: coordinatorReservationTTL, DispatchBackoff: time.Second})
+	check(t, e)
+	b, n := newBus(t, prefix, activity.ServiceType, 9000)
+	check(t, activity.RegisterHandlers(b, svc))
+	check(t, b.Start())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	check(t, n.FlushContext(ctx))
+	check(t, os.WriteFile(os.Getenv("SLG_ALLIANCE_READY"), []byte("ready"), 0600))
+	// 父进程关闭 stdin 后正常排空；测试超时的清理只终止本次创建的子进程。
+	_, e = io.Copy(io.Discard, os.Stdin)
+	check(t, e)
+}
+func startCoordinator(t *testing.T, prefix string) func() {
+	t.Helper()
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	log, e := os.Create(filepath.Join(dir, "process.log"))
+	check(t, e)
+	t.Cleanup(func() { _ = log.Close() })
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSLGAllianceActivity$", "-test.timeout=60s")
+	cmd.Env = append(os.Environ(), "SLG_ALLIANCE_CHILD="+prefix, "SLG_ALLIANCE_READY="+ready)
+	cmd.Stdout = log
+	cmd.Stderr = log
+	stdin, e := cmd.StdinPipe()
+	check(t, e)
+	check(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			_ = stdin.Close()
+			select {
+			case e := <-done:
+				if e != nil {
+					t.Errorf("coordinator stopped: %v", e)
+				}
+			case <-time.After(5 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				t.Error("coordinator failed to drain")
+			}
+		})
+	}
+	t.Cleanup(stop)
+	until := time.Now().Add(10 * time.Second)
+	for time.Now().Before(until) {
+		if _, e := os.Stat(ready); e == nil {
+			return stop
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	raw, _ := os.ReadFile(log.Name())
+	t.Fatalf("coordinator not ready: %s", raw)
+	return stop
+}
+func client(t *testing.T, prefix string, sid int32) *activity.BusClient {
+	b, n := newBus(t, prefix, "game", sid)
+	check(t, b.Start())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	check(t, n.FlushContext(ctx))
+	c, e := activity.NewBusClient(b, fixedDiscovery{}, "", 3*time.Second)
+	check(t, e)
+	return c
+}
+
+type fog struct {
+	positions  map[int64]spatial.Point
+	scout      map[int64]bool
+	generation uint64
+	required   uint64
+	members    map[string]member
+	manager    *entitysync.Manager
+	interest   *policy.Interest
+	sink       *viewSink
+}
+
+func newFog(t *testing.T) *fog {
+	sink := newViewSink(t)
+	m, e := entitysync.NewManager(entitysync.ManagerConfig{Transport: sink})
+	check(t, e)
+	t.Cleanup(func() { check(t, m.Close(context.Background())) })
+	in, e := policy.NewInterest(policy.InterestConfig{Manager: m, AOI: policy.AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120}})
+	check(t, e)
+	t.Cleanup(in.Close)
+	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 99, Namespace: "alliance-objective", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+		return entity.TakeFrozenSyncPayload(1, []byte(`{"objective":99}`)), nil
+	}}})))
+	// 常驻公开视图标记保证最后目标撤销后仍发送新 epoch Full，让接收端清空旧表。
+	check(t, m.Register(entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 98, Namespace: "view-control", Packer: entity.SubjectSyncPackFunc{Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+		return entity.TakeFrozenSyncPayload(1, []byte(`{"view":true}`)), nil
+	}}})))
+	for _, id := range []int64{1, 2} {
+		check(t, m.OpenHeldSession(entitysync.SessionID(id)))
+		check(t, m.Subscribe(entitysync.SessionID(id), 98, entity.SyncProfile{}))
+		for _, view := range []policy.ViewID{policy.ViewID(100 + id), policy.ViewID(200 + id)} {
+			check(t, in.DefineRelationView(view, entity.SyncProfile{}))
+			check(t, in.AttachView(id, view))
+		}
+	}
+	return &fog{manager: m, interest: in, sink: sink, positions: map[int64]spatial.Point{1: {X: 10, Y: 10}, 2: {X: 10, Y: 10}}, scout: map[int64]bool{}}
+}
+
+// 持久成员状态成功之后才重建关系。调用方串行协调本服视野并暂停会话发布；
+// 失败保持 held，不能把陈旧成员缓存当授权。跨服撤权传播延迟不在此切片保证内。
+func (f *fog) reconcile(s state) error {
+	return f.reconcileFrom(func() (state, error) { return s, nil })
+}
+func (f *fog) reconcileFrom(load func() (state, error)) error {
+	return f.reconcileAtLeast(0, load)
+}
+
+// 通知只提供读取下限，不能携带授权；过期或同代异值都保持 held。
+func (f *fog) reconcileAtLeast(min uint64, load func() (state, error)) error {
+	f.required = max(f.required, min)
+	for _, id := range []entitysync.SessionID{1, 2} {
+		if e := f.manager.HoldSession(id); e != nil {
+			return e
+		}
+	}
+	s, e := load()
+	if e != nil {
+		return e
+	}
+	if s.PermissionGeneration == 0 || s.PermissionGeneration < f.required || s.PermissionGeneration < f.generation || (s.PermissionGeneration == f.generation && !maps.Equal(s.Members, f.members)) {
+		return errRefused
+	}
+	for p, id := range map[string]int64{"alice": 1, "bob": 2} {
+		if f.inRange(id) && s.Members[p].Active {
+			if e := f.interest.SetViewMembers(policy.ViewID(100+id), []int64{99}); e != nil {
+				return e
+			}
+		} else {
+			if e := f.interest.SetViewMembers(policy.ViewID(100+id), nil); e != nil {
+				return e
+			}
+		}
+		if f.inRange(id) && f.scout[id] {
+			if e := f.interest.SetViewMembers(policy.ViewID(200+id), []int64{99}); e != nil {
+				return e
+			}
+		} else {
+			if e := f.interest.SetViewMembers(policy.ViewID(200+id), nil); e != nil {
+				return e
+			}
+		}
+
+	}
+	if refused := f.interest.Apply(); len(refused) > 0 {
+		return fmt.Errorf("view refused: %v", refused)
+	}
+	f.generation, f.members = s.PermissionGeneration, maps.Clone(s.Members)
+	for _, id := range []entitysync.SessionID{1, 2} {
+		if e := f.manager.ReadySession(id); e != nil {
+			return e
+		}
+	}
+	return f.manager.Flush(context.Background())
+}
+func (f *fog) visible(t *testing.T, id entitysync.SessionID) bool {
+	t.Helper()
+	if refused := f.interest.Apply(); len(refused) > 0 {
+		t.Fatal(refused)
+	}
+	check(t, f.manager.Flush(context.Background()))
+	for _, sid := range f.manager.Subscribers(99) {
+		if sid == id {
+			return true
+		}
+	}
+	return false
+}
+
+// lostProgress 模拟收到成功回复后进程未写本地确认；请求确实经真实 NATS 到达子进程。
+// 它不是 NATS 网络故障注入，更不是节点断电。
+type lostProgress struct{ activity.Coordinator }
+
+func (c lostProgress) ApplyProgress(ctx context.Context, k activity.Key, p, r string, d activity.ProgressDelta) (activity.Participant, error) {
+	v, e := c.Coordinator.ApplyProgress(ctx, k, p, r, d)
+	if e != nil {
+		return v, e
+	}
+	return v, errors.New("injected lost application reply")
+}
+func namespace() string { return fmt.Sprintf("slg_alliance_%d_%d", os.Getpid(), time.Now().UnixNano()) }
+func safeNamespace(s string) bool {
+	return strings.HasPrefix(s, "slg_alliance_") && !strings.ContainsAny(s, "*.> :/")
+}
+
+// 固定 1000×1000 教学地图、目标 (10,10)、半径 100；越界拒绝且乘法有界。
+// 视点来自服务器场景事实，不接受客户端自报；空间和权限先取交集，再发布派生关系。
+func (f *fog) inRange(id int64) bool {
+	p, ok := f.positions[id]
+	if !ok || p.X < 0 || p.Y < 0 || p.X >= 1000 || p.Y >= 1000 {
+		return false
+	}
+	x, y := p.X-10, p.Y-10
+	return x*x+y*y <= 100*100
+}
+
+const coordinatorReservationTTL = time.Hour

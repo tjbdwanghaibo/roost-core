@@ -55,7 +55,7 @@ func (d *StateDAO) Snapshot() Frame { f := d.frame; f.States = slices.Clone(f.St
 func InitialFrame(epoch uint64, bodies []physx.Body) Frame {
 	f := Frame{Epoch: epoch}
 	for _, b := range bodies {
-		if b.Shape != physx.Box {
+		if b.MotionType() != physx.Static {
 			q := b.Rotation
 			if q == (physx.Quat{}) {
 				q = physx.Quat{0, 0, 0, 1}

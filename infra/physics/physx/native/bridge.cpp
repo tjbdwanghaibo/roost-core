@@ -18,6 +18,8 @@ struct rp_world {
     PxMaterial *material = nullptr;
     std::map<uint64_t, PxRigidDynamic *> bodies;
     std::vector<PxRigidActor *> actors;
+    std::map<uint64_t, PxRigidActor *> all;
+    std::map<uint64_t, PxJoint *> joints;
 };
 // CCD 必须同时启用 scene、body 和接触对；默认 shader 只检测离散接触。
 static PxFilterFlags contactFilter(PxFilterObjectAttributes a, PxFilterData ad,
@@ -70,6 +72,7 @@ extern "C" rp_world *rp_create(float gravity, unsigned workers) {
 extern "C" void rp_destroy(rp_world *w) {
     if (!w)
         return;
+    for (auto &pair : w->joints) pair.second->release();
     // Actor 先于 Scene 释放，避免把移出场景误认为销毁。
     for (auto *actor : w->actors)
         actor->release();
@@ -90,8 +93,8 @@ extern "C" void rp_destroy(rp_world *w) {
         foundation = nullptr;
     }
 }
-extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float *p, const float *q, const float *d, float mass) {
-    if (!w || !w->scene || !w->material || w->bodies.count(id))
+extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, unsigned motion, const float *p, const float *q, const float *d, float mass) {
+    if (!w || !w->scene || !w->material || w->all.count(id))
         return 0;
     PxTransform pose(PxVec3(p[0], p[1], p[2]), PxQuat(q[0], q[1], q[2], q[3]));
     PxShape *shape = nullptr;
@@ -103,7 +106,10 @@ extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float 
         shape = w->physics->createShape(PxSphereGeometry(d[0]), *w->material, true);
     if (!shape)
         return 0;
-    if (kind == 0) {
+    // PhysX 胶囊沿 X 轴；shape 局部旋转到 Y 轴，actor 的姿态仍与 Unity 对齐。
+    if (kind == 1)
+        shape->setLocalPose(PxTransform(PxQuat(PxHalfPi, PxVec3(0, 0, 1))));
+    if (motion == 1) {
         auto *body = w->physics->createRigidStatic(pose);
         if (!body) {
             shape->release();
@@ -113,11 +119,9 @@ extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float 
         shape->release();
         w->scene->addActor(*body);
         w->actors.push_back(body);
+        w->all[id] = body;
         return 1;
     }
-    // PhysX 胶囊沿 X 轴；shape 局部旋转到 Y 轴，actor 的姿态仍与 Unity 对齐。
-    if (kind == 1)
-        shape->setLocalPose(PxTransform(PxQuat(PxHalfPi, PxVec3(0, 0, 1))));
     auto *body = w->physics->createRigidDynamic(pose);
     if (!body) {
         shape->release();
@@ -133,8 +137,8 @@ extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float 
     body->setMaxDepenetrationVelocity(10.0f);
     body->setSleepThreshold(0.005f);
     body->setSolverIterationCounts(6, 1);
-    body->setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
-    if (kind == 1) {
+    body->setRigidBodyFlag(motion == 3 ? PxRigidBodyFlag::eKINEMATIC : PxRigidBodyFlag::eENABLE_CCD, true);
+    if (kind == 1 && motion != 3) {
         // 禁转胶囊的接触求解也必须禁止转动响应；只锁姿态会低估切向冲量。
         body->setMassSpaceInertiaTensor(PxVec3(0));
         body->setRigidDynamicLockFlags(PxRigidDynamicLockFlag::eLOCK_ANGULAR_X |
@@ -143,6 +147,7 @@ extern "C" int rp_add_pose(rp_world *w, uint64_t id, unsigned kind, const float 
     }
     w->scene->addActor(*body);
     w->actors.push_back(body);
+        w->all[id] = body;
     w->bodies[id] = body;
     return 1;
 }
@@ -157,7 +162,6 @@ public:
     PxQueryHitType::Enum postFilter(const PxFilterData &, const PxQueryHit &) override { return PxQueryHitType::eBLOCK; }
 };
 static void tryJump(rp_world *world, PxRigidDynamic *body) {
-    if (PxAbs(body->getLinearVelocity().y) > 1.0f) return;
     PxShape *shape = nullptr;
     if (body->getShapes(&shape, 1) != 1) return;
     PxReal height = 0;
@@ -170,8 +174,14 @@ static void tryJump(rp_world *world, PxRigidDynamic *body) {
     PxRaycastBuffer hit;
     PxQueryFilterData data(PxQueryFlag::eSTATIC | PxQueryFlag::eDYNAMIC | PxQueryFlag::ePREFILTER);
     if (world->scene->raycast(body->getGlobalPose().p, PxVec3(0,-1,0), height + 0.1f, hit,
-                              PxHitFlag::eDEFAULT, data, &filter) && hit.hasBlock && hit.block.normal.y >= 0.5f)
-        body->addForce(PxVec3(0,7,0), PxForceMode::eVELOCITY_CHANGE);
+                              PxHitFlag::eDEFAULT, data, &filter) && hit.hasBlock && hit.block.normal.y >= 0.5f) {
+        // 起跳检查相对支撑点速度，升降台/转轮接触不能因世界竖直速度大而禁止跳跃。
+        PxVec3 supportVelocity(0);
+        auto *support = hit.block.actor->is<PxRigidBody>();
+        if (support) supportVelocity = PxRigidBodyExt::getVelocityAtPos(*support, hit.block.position);
+        if (PxAbs(body->getLinearVelocity().y-supportVelocity.y)<=1.0f)
+            body->addForce(PxVec3(0,7,0), PxForceMode::eVELOCITY_CHANGE);
+    }
 }
 extern "C" int rp_step_control(rp_world *w, float dt, const rp_command *commands, unsigned count) {
     if (!w || !w->scene)
@@ -181,6 +191,10 @@ extern "C" int rp_step_control(rp_world *w, float dt, const rp_command *commands
             return 0;
     for (unsigned i = 0; i < count; ++i) {
         const auto &c = commands[i];
+        if (c.target) {
+            w->bodies[c.id]->setKinematicTarget(PxTransform(PxVec3(c.p[0],c.p[1],c.p[2]), PxQuat(c.q[0],c.q[1],c.q[2],c.q[3])));
+            continue;
+        }
         if (c.jump) tryJump(w, w->bodies[c.id]);
         w->bodies[c.id]->addForce(PxVec3(c.acceleration[0], c.acceleration[1], c.acceleration[2]),
                                   PxForceMode::eACCELERATION);
@@ -217,3 +231,33 @@ extern "C" unsigned rp_read(rp_world *w, rp_state *out, unsigned capacity) {
     return n;
 }
 extern "C" const char *rp_version() { return "PhysX 4.1.2 / a2c0428acab643e60618c681b501e86f7fd558cc"; }
+
+extern "C" int rp_joint_add(rp_world *w, const rp_joint *j) {
+ if (!w || w->joints.count(j->id) || !w->all.count(j->a) || (j->b && !w->all.count(j->b))) return 0;
+ PxTransform a(PxVec3(j->pa[0],j->pa[1],j->pa[2]),PxQuat(j->qa[0],j->qa[1],j->qa[2],j->qa[3]));
+ PxTransform b(PxVec3(j->pb[0],j->pb[1],j->pb[2]),PxQuat(j->qb[0],j->qb[1],j->qb[2],j->qb[3]));
+ auto *ba=w->all[j->a]; auto *bb=j->b?w->all[j->b]:nullptr;
+ PxJoint *result=nullptr;
+ if (j->kind==0) {
+  auto *v=PxDistanceJointCreate(*w->physics,ba,a,bb,b);
+  if (!v) return 0;
+  v->setMaxDistance(j->distance); v->setStiffness(j->stiffness); v->setDamping(j->damping);
+  v->setDistanceJointFlags(PxDistanceJointFlag::eMAX_DISTANCE_ENABLED | PxDistanceJointFlag::eSPRING_ENABLED);
+  result=v;
+ } else {
+  auto *v=PxRevoluteJointCreate(*w->physics,ba,a,bb,b);
+  if (!v) return 0;
+  v->setDriveVelocity(j->speed); v->setDriveForceLimit(j->force);
+  v->setRevoluteJointFlag(PxRevoluteJointFlag::eDRIVE_ENABLED,j->force>0);
+  result=v;
+ }
+ result->setBreakForce(j->break_force,j->break_force);
+ w->joints[j->id]=result; return 1;
+}
+extern "C" void rp_joint_remove(rp_world *w, uint64_t id) {
+ if (!w) return;
+ auto it=w->joints.find(id); if(it==w->joints.end()) return;
+ it->second->release(); w->joints.erase(it);
+}
+
+extern "C" unsigned rp_abi_version(void) { return 2; }

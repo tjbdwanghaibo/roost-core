@@ -1,0 +1,525 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"math"
+	"slices"
+	"time"
+
+	db "example.com/slg-alliance-practice/db"
+	"example.com/slg-alliance-practice/game/scout"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/service/activity"
+)
+
+type IAllianceRewardPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+var errAllianceReward = errors.New("alliance reward: invalid identity, home, amount or full ledger")
+
+// 仅由受信任的原服建档入口调用。Player 始终归属首次持久写入的 sid，不迁移。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceHomeInit(p IAllianceRewardPlayerEntity, sid int32) (int64, error) {
+	if sid != 1000 && sid != 1001 {
+		return 0, errAllianceReward
+	}
+	if old := p.Dao().GetHomeSID(); old != 0 {
+		if old != sid {
+			return 0, errAllianceReward
+		}
+		return p.Dao().GetGold(), nil
+	}
+	p.Dao().SetVisionMask(13) // 501、503 长期授权，504 限时侦察；502 未授权。
+	// 首次建档赠送一次侦察；重试在上方返回，绝不重算期限。时间来自服务器业务钟。
+	p.Dao().SetScoutUntil(fctx.Now().Add(time.Hour).UnixMilli())
+	p.Dao().SetX(800)
+	p.Dao().SetY(800)
+	p.Dao().SetCoverage("[]")
+	p.Dao().SetHomeSID(sid)
+	p.Dao().SetReceipts("{}")
+	p.Dao().SetInbox("{}")
+	return p.Dao().GetGold(), nil
+}
+
+// 金币和永久回执同一 Player strict 事务。key 与 amount 来自原服持久义务，
+// sid 来自本进程可信配置；本方法不是公网 handler，不允许客户端自报奖励。
+// 同身份重试必须金额一致；账本满后拒新身份，不淘汰旧身份。RPC / Redis 读取在事务外。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceCredit(p IAllianceRewardPlayerEntity, sid int32, key activity.Key, amount int64) (int64, error) {
+	if p.Dao().GetHomeSID() != sid || (sid != 1000 && sid != 1001) || key.Validate() != nil || key.Phase != activity.PhaseSettle || amount <= 0 || amount > 100000 {
+		return 0, errAllianceReward
+	}
+	receipts := map[string]int64{}
+	if e := json.Unmarshal([]byte(p.Dao().GetReceipts()), &receipts); e != nil || receipts == nil {
+		return 0, errAllianceReward
+	}
+	if old, ok := receipts[key.String()]; ok {
+		if old != amount {
+			return 0, errAllianceReward
+		}
+		return p.Dao().GetGold(), nil
+	}
+	if len(receipts) >= 128 || p.Dao().GetGold() > math.MaxInt64-amount {
+		return 0, errAllianceReward
+	}
+	receipts[key.String()] = amount
+	raw, e := json.Marshal(receipts)
+	if e != nil {
+		return 0, e
+	}
+	p.Dao().SetGold(p.Dao().GetGold() + amount)
+	p.Dao().SetReceipts(string(raw))
+	return p.Dao().GetGold(), nil
+}
+
+// 仅内部恢复核对使用，不能把永久账本同步给客户端。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWallet(p IAllianceRewardPlayerEntity) (string, error) {
+	raw, e := json.Marshal(struct {
+		ScoutUntil int64
+		VisionMask int64
+		X, Y       int64
+		Coverage   string
+		Home       int32
+		Gold       int64
+		Receipts   string
+	}{p.Dao().GetScoutUntil(), p.Dao().GetVisionMask(), p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetCoverage(), p.Dao().GetHomeSID(), p.Dao().GetGold(), p.Dao().GetReceipts()})
+	return string(raw), e
+}
+
+// 内部教学移动入口；坐标和覆盖由服务器规则产生，不接客户端自报覆盖。
+// 同一 strict 事务保存位置和覆盖，空间索引只接已提交事实；reject 是回滚验收注入点。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMove(p IAllianceRewardPlayerEntity, interest *policy.Interest, syncer *entitysync.Manager, x, y int64, blocks []int64, reject bool) (int64, error) {
+	before := syncer.Subscribers(p.ID())
+	component, e := policy.NewSpatialComponent(p, interest, func(at spatial.Point) { p.Dao().SetX(at.X); p.Dao().SetY(at.Y) })
+	if e != nil {
+		return 0, e
+	}
+	if e = component.MoveWithObservedBlocks(spatial.Point{X: x, Y: y}, blocks); e != nil {
+		return 0, e
+	}
+	raw, e := json.Marshal(blocks)
+	if e != nil {
+		return 0, e
+	}
+	p.Dao().SetCoverage(string(raw))
+	// 特意在事务尚未提交时驱动一次政策/发布，验证索引不能抢先放出对象。
+	if e = syncer.Flush(context.Background()); e != nil {
+		return 0, e
+	}
+	if !slices.Equal(before, syncer.Subscribers(p.ID())) {
+		return 0, errors.New("uncommitted spatial subscription escaped")
+	}
+	if reject {
+		return 0, errors.New("injected movement rollback")
+	}
+	return x, nil
+}
+
+// 受信任原服撤销某个目标的侦察权；与位置同属 Player 持久事实，客户端不能自报授权。
+// reject 只用于验收 undo，实际接入由服务器权限规则调用。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRevokeVision(p IAllianceRewardPlayerEntity, sid int32, target int64, reject bool) (int64, error) {
+	if p.Dao().GetHomeSID() != sid || target < 501 || target > 504 {
+		return 0, errAllianceReward
+	}
+	next := p.Dao().GetVisionMask() &^ (int64(1) << uint(target-501))
+	p.Dao().SetVisionMask(next)
+	if reject {
+		return 0, errors.New("injected vision rollback")
+	}
+	return next, nil
+}
+
+// ScoutMap 属于本原服的教学地图权威，不把公共敌军位置塞入 Player。
+// 跨 sid 地图必须另接 Remote/Saga，不能把这里的 MultiSync 当作分布式快照。
+type IAllianceMapEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.ScoutMapDao
+}
+type scoutMove struct {
+	Target, X, Y       int64
+	Expected, Revision uint64
+}
+type scoutMarchReceipt struct {
+	Target             int64
+	Expected, Revision uint64
+	Route              scout.Route
+}
+type scoutArrivalEvent struct {
+	Target    int64
+	Route     scout.Route
+	Delivered bool
+}
+type scoutArrivalReport struct {
+	Target      int64
+	At          int64
+	Destination spatial.Point
+}
+type scoutMapState struct {
+	Recipient   int64
+	HomeSID     int32
+	ReportAck   map[string]bool
+	Arrivals    map[string]scoutArrivalEvent
+	Reports     map[string]scoutArrivalReport
+	ReportTotal uint64
+	Routes      map[int64]scout.Route
+	Marches     map[string]scoutMarchReceipt
+	Revision    uint64
+	Targets     map[int64]spatial.Point
+	Moves       map[string]scoutMove
+}
+
+func readScoutMap(m IAllianceMapEntity) (scoutMapState, error) {
+	var state scoutMapState
+	err := json.Unmarshal([]byte(m.Dao().GetState()), &state)
+	if err != nil || state.Revision == 0 || len(state.Targets) != 4 || state.Moves == nil || state.Routes == nil || state.Marches == nil || state.Arrivals == nil || state.Reports == nil || state.ReportAck == nil || state.Recipient <= 0 || (state.HomeSID != 1000 && state.HomeSID != 1001) {
+		return state, errAllianceReward
+	}
+	return state, nil
+}
+func saveScoutMap(m IAllianceMapEntity, state scoutMapState) error {
+	raw, err := json.Marshal(state)
+	if err == nil {
+		m.Dao().SetState(string(raw))
+	}
+	return err
+}
+
+// 每张教学地图固定一个报告收件人；只能由可信建档入口设置，重试不得改归属。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMapInit(m IAllianceMapEntity, recipient int64, sid int32) error {
+	if recipient <= 0 || (sid != 1000 && sid != 1001) {
+		return errAllianceReward
+	}
+	if m.Dao().GetState() != "" {
+		state, err := readScoutMap(m)
+		if err == nil && (state.Recipient != recipient || state.HomeSID != sid) {
+			return errAllianceReward
+		}
+		return err
+	}
+	return saveScoutMap(m, scoutMapState{Recipient: recipient, HomeSID: sid, ReportAck: map[string]bool{}, Revision: 1, Targets: map[int64]spatial.Point{
+		501: {X: 700, Y: 700}, 502: {X: 710, Y: 700}, 503: {X: 800, Y: 800}, 504: {X: 720, Y: 700},
+	}, Moves: map[string]scoutMove{}, Routes: map[int64]scout.Route{}, Marches: map[string]scoutMarchReceipt{}, Arrivals: map[string]scoutArrivalEvent{}, Reports: map[string]scoutArrivalReport{}})
+}
+
+// 坐标来自可信地图模拟。固定命令身份与原参数同持久写入，未知结果只重试原身份；
+// 不同命令按预期地图版本写，账本满拒新身份，不淘汰旧回执。reject 仅供回滚验收。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceTargetMove(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, reject bool) (uint64, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return 0, err
+	}
+	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 {
+		return 0, errAllianceReward
+	}
+	if old, ok := state.Moves[key]; ok {
+		if old.Target != target || old.X != x || old.Y != y || old.Expected != expected {
+			return 0, errAllianceReward
+		}
+		return old.Revision, nil
+	}
+	if _, ok := state.Routes[target]; ok {
+		return 0, errAllianceReward
+	}
+	if _, ok := state.Marches[key]; ok {
+		return 0, errAllianceReward
+	}
+	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves)+len(state.Marches) >= 128 {
+		return 0, errAllianceReward
+	}
+	state.Revision++
+	state.Targets[target] = spatial.Point{X: x, Y: y}
+	state.Moves[key] = scoutMove{target, x, y, expected, state.Revision}
+	if err = saveScoutMap(m, state); err != nil {
+		return 0, err
+	}
+	if reject {
+		return 0, errors.New("injected target movement rollback")
+	}
+	return state.Revision, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMapSnapshot(m IAllianceMapEntity) (string, error) { return m.Dao().GetState(), nil }
+
+// 同一 Nest 锁住本服 Player 与地图，读取权限和位置的联合已提交快照。
+// 返回仅供内部筛选，账本与期限不向客户端发送。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceVision(p IAllianceRewardPlayerEntity, m IAllianceMapEntity) (string, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(struct {
+		X, Y, VisionMask, ScoutUntil int64
+		Revision                     uint64
+		Targets                      map[int64]spatial.Point
+		Routes                       map[int64]scout.Route
+	}{p.Dao().GetX(), p.Dao().GetY(), p.Dao().GetVisionMask(), p.Dao().GetScoutUntil(), state.Revision, state.Targets, state.Routes})
+	return string(raw), err
+}
+
+// 行军命令只由可信服务器调用，nowUnixMilli 由生成包装从 fctx 注入，不在 Sender 参数中。重试不重算 Start/End。
+// 本教学规则为十秒直线行军，不允许中途改道；到达后可用新身份开启下一段。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceMarch(m IAllianceMapEntity, key string, expected uint64, target, x, y int64, nowUnixMilli int64, reject bool) (uint64, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return 0, err
+	}
+	if key == "" || len(key) > 64 || target < 501 || target > 504 || x < 0 || y < 0 || x >= 1000 || y >= 1000 {
+		return 0, errAllianceReward
+	}
+	if old, ok := state.Marches[key]; ok {
+		if old.Target != target || old.Expected != expected || old.Route.To != (spatial.Point{X: x, Y: y}) {
+			return 0, errAllianceReward
+		}
+		return old.Revision, nil
+	}
+	if _, ok := state.Moves[key]; ok {
+		return 0, errAllianceReward
+	}
+	if expected != state.Revision || state.Revision == math.MaxUint64 || len(state.Moves)+len(state.Marches) >= 128 {
+		return 0, errAllianceReward
+	}
+	now := nowUnixMilli
+	if now <= 0 || now > math.MaxInt64-scout.DurationMillis {
+		return 0, errAllianceReward
+	}
+	from := state.Targets[target]
+	if old, ok := state.Routes[target]; ok {
+		if old.Validate() != nil || now < old.End {
+			return 0, errAllianceReward
+		}
+		from = old.To
+	}
+	route := scout.Route{From: from, To: spatial.Point{X: x, Y: y}, Start: now, End: now + scout.DurationMillis}
+	if err = route.Validate(); err != nil {
+		return 0, err
+	}
+	state.Revision++
+	state.Targets[target] = from
+	state.Routes[target] = route
+	state.Marches[key] = scoutMarchReceipt{target, expected, state.Revision, route}
+	state.Arrivals[key] = scoutArrivalEvent{Target: target, Route: route}
+	if err = saveScoutMap(m, state); err != nil {
+		return 0, err
+	}
+	if reject {
+		return 0, errors.New("injected march rollback")
+	}
+	return state.Revision, nil
+}
+
+// 在所属地图内按持久事件发现待办，不依赖进程内定时器或当前 Routes（可能已换新路线）。
+// 本方法取本条消息冻结的业务时刻。一次最多枚举 128 个，返回身份后消费仍须重新验期限。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceDueArrivals(m IAllianceMapEntity, nowUnixMilli int64, limit int) ([]string, error) {
+	if limit < 1 || limit > 128 {
+		return nil, errAllianceReward
+	}
+	state, err := readScoutMap(m)
+	if err != nil {
+		return nil, err
+	}
+	now := nowUnixMilli
+	keys := []string{}
+	for key, event := range state.Arrivals {
+		if !event.Delivered && event.Route.End <= now {
+			keys = append(keys, key)
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if state.Arrivals[a].Route.End < state.Arrivals[b].Route.End {
+			return -1
+		}
+		if state.Arrivals[a].Route.End > state.Arrivals[b].Route.End {
+			return 1
+		}
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	})
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+// 完成到达的本地业务效果：报告与已处理标记同一地图 strict 事务。
+// 报告时间取原计划 End，不取晚到的处理时间；未知提交只重试原事件身份。
+// 不发外部 RPC、不增 Player 金币，不把本地原子性扩展为跨服恰好一次。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceCompleteArrival(m IAllianceMapEntity, key string, nowUnixMilli int64, reject bool) (bool, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return false, err
+	}
+	event, ok := state.Arrivals[key]
+	if !ok || event.Route.Validate() != nil {
+		return false, errAllianceReward
+	}
+	report := scoutArrivalReport{event.Target, event.Route.End, event.Route.To}
+	old, exists := state.Reports[key]
+	if event.Delivered {
+		if !exists || old != report {
+			return false, errAllianceReward
+		}
+		return false, nil
+	}
+	if exists || nowUnixMilli < event.Route.End || state.Revision == math.MaxUint64 || state.ReportTotal == math.MaxUint64 {
+		return false, errAllianceReward
+	}
+	event.Delivered = true
+	state.Arrivals[key] = event
+	state.Reports[key] = report
+	state.ReportTotal++
+	state.Revision++
+	if err = saveScoutMap(m, state); err != nil {
+		return false, err
+	}
+	if reject {
+		return false, errors.New("injected arrival rollback")
+	}
+	return true, nil
+}
+
+func reportEnvelope(m IAllianceMapEntity, state scoutMapState, key string) (scout.Report, error) {
+	r, ok := state.Reports[key]
+	if !ok {
+		return scout.Report{}, errAllianceReward
+	}
+	out := scout.Report{MapID: m.ID(), Recipient: state.Recipient, HomeSID: state.HomeSID, Key: key, Target: r.Target, At: r.At, Destination: r.Destination}
+	if !out.Valid() {
+		return scout.Report{}, errAllianceReward
+	}
+	return out, nil
+}
+
+// 报告本身就是持久投递义务，Ack 与到达消费 Delivered 分开；按身份排序、有界重读。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAlliancePendingReports(m IAllianceMapEntity, limit int) ([]string, error) {
+	if limit < 1 || limit > 128 {
+		return nil, errAllianceReward
+	}
+	state, err := readScoutMap(m)
+	if err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for key := range state.Reports {
+		if !state.ReportAck[key] {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerAllianceReport(m IAllianceMapEntity, key string) (scout.Report, error) {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return scout.Report{}, err
+	}
+	return reportEnvelope(m, state, key)
+}
+
+// 仅可信投递服务在 Player 成功后调用；不在地图锁内做 RPC。
+// Ack 比较完整原信封，避免错误/旧响应确认另一份义务。reject 仅用于回滚验收。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceAckReport(m IAllianceMapEntity, report scout.Report, reject bool) error {
+	state, err := readScoutMap(m)
+	if err != nil {
+		return err
+	}
+	expected, err := reportEnvelope(m, state, report.Key)
+	if err != nil || expected != report {
+		return errAllianceReward
+	}
+	if state.ReportAck[report.Key] {
+		return nil
+	}
+	if state.Revision == math.MaxUint64 {
+		return errAllianceReward
+	}
+	state.ReportAck[report.Key] = true
+	state.Revision++
+	if err = saveScoutMap(m, state); err != nil {
+		return err
+	}
+	if reject {
+		return errors.New("injected report ack rollback")
+	}
+	return nil
+}
+
+// 原服可信入口校验配置 sid 和 Player ID；信封来自地图权威，结构校验不是身份认证。
+// 报告正文即永久收件回执，同身份改内容拒绝；满账本拒新身份，不清除旧去重键。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceReceiveReport(p IAllianceRewardPlayerEntity, sid int32, report scout.Report, reject bool) (bool, error) {
+	if !report.Valid() || report.HomeSID != sid || p.Dao().GetHomeSID() != sid || report.Recipient != p.ID() {
+		return false, errAllianceReward
+	}
+	inbox := map[string]scout.Report{}
+	if err := json.Unmarshal([]byte(p.Dao().GetInbox()), &inbox); err != nil || inbox == nil {
+		return false, errAllianceReward
+	}
+	if old, ok := inbox[report.Identity()]; ok {
+		if old != report {
+			return false, errAllianceReward
+		}
+		return false, nil
+	}
+	if len(inbox) >= 128 {
+		return false, errAllianceReward
+	}
+	inbox[report.Identity()] = report
+	raw, err := json.Marshal(inbox)
+	if err != nil {
+		return false, err
+	}
+	p.Dao().SetInbox(string(raw))
+	if reject {
+		return false, errors.New("injected report receipt rollback")
+	}
+	return true, nil
+}
+
+// 内部冷恢复核对，私有收件箱不作为公共同步数据。
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceInbox(p IAllianceRewardPlayerEntity) string { return p.Dao().GetInbox() }

@@ -1,0 +1,219 @@
+{
+  "Version": 1,
+  "Name": "waves",
+  "Revision": 1,
+  "TimeDomain": "tick",
+  "CloseDelay": 3,
+  "Initial": [
+    "wave"
+  ],
+  "Variables": [
+    {
+      "Scope": "global",
+      "Name": "wave",
+      "Default": {
+        "Kind": "int",
+        "Int": 1
+      },
+      "Public": true
+    },
+    {
+      "Scope": "stage",
+      "Name": "kills",
+      "Default": {
+        "Kind": "int"
+      },
+      "Public": true
+    }
+  ],
+  "Stages": [
+    {
+      "ID": "wave",
+      "Triggers": [
+        {
+          "ID": "spawn",
+          "Event": "stage.start",
+          "Conditions": [],
+          "Actions": [
+            {
+              "Kind": "request",
+              "Name": "spawn_wave",
+              "Args": {
+                "wave": {
+                  "Variable": {
+                    "Scope": "global",
+                    "Name": "wave"
+                  }
+                }
+              }
+            },
+            {
+              "Kind": "timer",
+              "Name": "timeout",
+              "Delay": 20
+            }
+          ],
+          "MaxFires": 1
+        },
+        {
+          "ID": "count",
+          "Event": "enemy.dead",
+          "Conditions": [],
+          "Actions": [
+            {
+              "Kind": "add",
+              "Scope": "stage",
+              "Name": "kills",
+              "Value": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 1
+                }
+              }
+            }
+          ],
+          "MaxFires": 0
+        },
+        {
+          "ID": "victory",
+          "Event": "enemy.dead",
+          "Conditions": [
+            {
+              "Left": {
+                "Variable": {
+                  "Scope": "stage",
+                  "Name": "kills"
+                }
+              },
+              "Op": "ge",
+              "Right": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 2
+                }
+              }
+            },
+            {
+              "Left": {
+                "Variable": {
+                  "Scope": "global",
+                  "Name": "wave"
+                }
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 2
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "request",
+              "Name": "settle",
+              "LevelLifetime": true,
+              "Args": {
+                "winner": {
+                  "Literal": {
+                    "Kind": "int",
+                    "Int": 0
+                  }
+                }
+              }
+            },
+            {
+              "Kind": "finish",
+              "Result": "victory"
+            }
+          ],
+          "MaxFires": 1
+        },
+        {
+          "ID": "next",
+          "Event": "enemy.dead",
+          "Conditions": [
+            {
+              "Left": {
+                "Variable": {
+                  "Scope": "stage",
+                  "Name": "kills"
+                }
+              },
+              "Op": "ge",
+              "Right": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 2
+                }
+              }
+            },
+            {
+              "Left": {
+                "Variable": {
+                  "Scope": "global",
+                  "Name": "wave"
+                }
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 1
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "set",
+              "Scope": "global",
+              "Name": "wave",
+              "Value": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 2
+                }
+              }
+            },
+            {
+              "Kind": "end",
+              "Name": "wave"
+            },
+            {
+              "Kind": "start",
+              "Name": "wave"
+            }
+          ],
+          "MaxFires": 1
+        },
+        {
+          "ID": "timeout",
+          "Event": "timer",
+          "Conditions": [
+            {
+              "Left": {
+                "EventField": "name"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "string",
+                  "Text": "timeout"
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "finish",
+              "Result": "timeout"
+            }
+          ],
+          "MaxFires": 1
+        }
+      ]
+    }
+  ]
+}

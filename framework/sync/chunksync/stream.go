@@ -33,6 +33,7 @@ type Snapshot struct {
 type Cursor struct {
 	epoch, seq, tick uint64
 	objects          map[uint64]Object
+	layout           string
 }
 type Plan struct {
 	Data     []byte
@@ -40,15 +41,29 @@ type Plan struct {
 	next     Cursor
 }
 
-func (c *Cursor) Plan(s Snapshot) (*Plan, error) {
+func (c *Cursor) Plan(s Snapshot) (*Plan, error) { return c.plan(s, nil) }
+
+// PlanFields 使用 RC2 字段增量，Plan/Commit 的可靠发送边界与普通 Plan 相同。
+func (c *Cursor) PlanFields(s Snapshot, layout FieldLayout) (*Plan, error) {
+	if _, err := layout.size(); err != nil {
+		return nil, err
+	}
+	return c.plan(s, layout)
+}
+func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
+	signature := ""
+	if layout != nil {
+		signature = fmt.Sprint(layout)
+	}
+
 	if s.Epoch == 0 || len(s.Objects) > maxObjects {
 		return nil, errors.New("chunksync: invalid snapshot")
 	}
-	full := c.epoch != s.Epoch || c.objects == nil
+	full := c.epoch != s.Epoch || c.objects == nil || c.layout != signature
 	if !full && s.Tick < c.tick {
 		return nil, ErrSequence
 	}
-	next := Cursor{epoch: s.Epoch, seq: c.seq + 1, tick: s.Tick, objects: make(map[uint64]Object, len(s.Objects))}
+	next := Cursor{layout: signature, epoch: s.Epoch, seq: c.seq + 1, tick: s.Tick, objects: make(map[uint64]Object, len(s.Objects))}
 	if c.seq == math.MaxUint64 {
 		return nil, ErrSequence
 	}
@@ -56,6 +71,9 @@ func (c *Cursor) Plan(s Snapshot) (*Plan, error) {
 	snapshotBytes := 36
 	for _, o := range s.Objects {
 		snapshotBytes += 22 + len(o.Data)
+		if layout != nil {
+			snapshotBytes++
+		}
 		if snapshotBytes > MaxPayload {
 			return nil, errors.New("chunksync: snapshot exceeds limit")
 		}
@@ -69,7 +87,19 @@ func (c *Cursor) Plan(s Snapshot) (*Plan, error) {
 		next.objects[o.ID] = o
 		old, ok := c.objects[o.ID]
 		if full || !ok || old.Chunk != o.Chunk || !bytes.Equal(old.Data, o.Data) {
-			groups[o.Chunk] = append(groups[o.Chunk], o)
+			wireObject := o
+			if layout != nil {
+				var base []byte
+				if !full && ok && old.Chunk == o.Chunk {
+					base = old.Data
+				}
+				encoded, err := layout.encode(base, o.Data)
+				if err != nil {
+					return nil, err
+				}
+				wireObject.Data = encoded
+			}
+			groups[o.Chunk] = append(groups[o.Chunk], wireObject)
 		}
 	}
 	var removed []uint64
@@ -93,7 +123,11 @@ func (c *Cursor) Plan(s Snapshot) (*Plan, error) {
 	})
 	var b bytes.Buffer
 	b.WriteString("RC")
-	b.WriteByte(1)
+	if layout == nil {
+		b.WriteByte(1)
+	} else {
+		b.WriteByte(2)
+	}
 	if full {
 		b.WriteByte(1)
 	} else {
@@ -138,10 +172,27 @@ func (c *Cursor) Commit(p *Plan) error {
 type Replica struct {
 	Epoch, Sequence, Tick uint64
 	Objects               map[uint64]Object
+	layout                string
 }
 
-func (r *Replica) Apply(data []byte) error {
-	if len(data) > MaxPayload || len(data) < 36 || string(data[:3]) != "RC\x01" || data[3] > 1 {
+func (r *Replica) Apply(data []byte) error { return r.apply(data, nil) }
+
+// ApplyFields 原子验证字段补丁；缺基线或迁移时的非完整对象一律拒绝。
+func (r *Replica) ApplyFields(data []byte, layout FieldLayout) error {
+	if _, err := layout.size(); err != nil {
+		return err
+	}
+	return r.apply(data, layout)
+}
+func (r *Replica) apply(data []byte, layout FieldLayout) error {
+	version := byte(1)
+	signature := ""
+	if layout != nil {
+		version = 2
+		signature = fmt.Sprint(layout)
+	}
+
+	if len(data) > MaxPayload || len(data) < 36 || (string(data[:2]) != "RC" || data[2] != version) || data[3] > 1 {
 		return errors.New("chunksync: invalid frame")
 	}
 	b := bytes.NewReader(data[4:])
@@ -161,7 +212,7 @@ func (r *Replica) Apply(data []byte) error {
 		if deletes != 0 {
 			return errors.New("chunksync: baseline deletes")
 		}
-	} else if r.Objects == nil || epoch != r.Epoch || seq != r.Sequence+1 || tick < r.Tick {
+	} else if r.layout != signature || r.Objects == nil || epoch != r.Epoch || seq != r.Sequence+1 || tick < r.Tick {
 		return ErrSequence
 	}
 	objects := make(map[uint64]Object)
@@ -210,6 +261,17 @@ func (r *Replica) Apply(data []byte) error {
 			if _, err := io.ReadFull(b, payload); err != nil {
 				return err
 			}
+			if layout != nil {
+				var base []byte
+				if old, ok := objects[id]; !full && ok && old.Chunk == k {
+					base = old.Data
+				}
+				decoded, err := layout.decode(base, payload)
+				if err != nil {
+					return err
+				}
+				payload = decoded
+			}
 			objects[id] = Object{ID: id, Chunk: k, Data: payload}
 			if len(objects) > maxObjects {
 				return errors.New("chunksync: object limit")
@@ -220,5 +282,6 @@ func (r *Replica) Apply(data []byte) error {
 		return fmt.Errorf("chunksync: %d trailing bytes", b.Len())
 	}
 	r.Epoch, r.Sequence, r.Tick, r.Objects = epoch, seq, tick, objects
+	r.layout = signature
 	return nil
 }

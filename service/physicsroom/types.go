@@ -33,14 +33,18 @@ type Spec struct {
 	Instance        string // Describe 返回的 owner 进程代际；旧进程的 Create 重试必须失败。
 	ID              string // 可信调用方生成的唯一开房键；同键重试必须使用相同配置。
 	Bodies          []physx.Body
+	Motions         []gamephysics.MotionTrack
+	Joints          []physx.Joint
 	LifetimeSeconds int64
 }
 type Member struct {
-	Room     Ref
-	PlayerID int64
-	Token    string
+	InputGeneration uint64
+	Room            Ref
+	PlayerID        int64
+	Token           string
 }
 type Input struct {
+	GrabTarget   uint64 // 按住抓取的目标；0 松手，距离/类型由服务器校验。
 	Sequence     uint64
 	Acceleration physx.Vec3
 	Jump         bool // 单次跳跃意图，服务器校验落地，不接受持续向上的加速度。
@@ -60,6 +64,7 @@ type Config struct {
 	MaxFrameBytes                    int
 	InputTTL, MemberTTL, MaxLifetime time.Duration
 	Radius, Margin                   float64
+	Replication                      gamephysics.ReplicationPolicy
 	Commit                           Commit
 	Closed                           func(Ref) // Run 与 native 资源已结束后调用，用于释放房间 Entity。
 	Metrics                          servicemetrics.Reporter
@@ -83,5 +88,5 @@ type Rooms interface {
 
 // DefaultConfig 给出有界的初始配置；容量上限不是压测承诺。
 func DefaultConfig(commit Commit) Config {
-	return Config{MaxRooms: 64, MaxPlayers: 20, MaxBodies: 256, MaxFrameBytes: 64 << 10, InputTTL: 250 * time.Millisecond, MemberTTL: 5 * time.Second, MaxLifetime: time.Hour, Radius: 12, Margin: 2, Commit: commit}
+	return Config{MaxRooms: 64, MaxPlayers: 20, MaxBodies: 256, MaxFrameBytes: 64 << 10, InputTTL: 250 * time.Millisecond, MemberTTL: 5 * time.Second, MaxLifetime: time.Hour, Radius: 12, Margin: 2, Replication: gamephysics.DefaultReplicationPolicy(), Commit: commit}
 }

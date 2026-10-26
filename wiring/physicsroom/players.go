@@ -30,12 +30,29 @@ type Game interface {
 	SessionReceiver(sessionID string) (gateway.Binding, uint64, bool)
 }
 
-// PlayerIngressConfig 的两个消息号属于客户端协议，由业务分配（不能为 0，也不能相同）。
-// 输入载荷是 Protobuf RoomInput：uint64 sequence=1; float acceleration_x=2; float acceleration_z=3; bool jump=4。
+// Content 由业务返回某个已认证绑定所在房间的固定内容（UGC 关卡字节、SHA-256 与受控刚体）。
+// 必须与 Seat 对同一绑定选出的房间和刚体一致；内容发布、审核与存储属于业务。
+type Content func(ctx context.Context, binding gateway.Binding) (RoomContent, error)
+
+// RoomContent 是内容握手的应答：客户端按 SHA256 校验 Data 后再按描述建场景，Body 是服务器选定的受控刚体。
+type RoomContent struct {
+	Data   []byte
+	SHA256 string
+	Body   uint64
+}
+
+// PlayerIngressConfig 的消息号属于客户端协议，由业务分配（不能为 0，也不能相同）。
+// 输入载荷是 Protobuf RoomInput：uint64 sequence=1; float acceleration_x=2; float acceleration_z=3; bool jump=4;
+// uint64 grab_target=5（0 松手，可否抓取由房间服务校验）。输入应答是 RoomInputAck：uint64 input_generation=1
+// （成员代际；实际采样序列随已提交帧的 RP2 私有头下发，不能用应答裁剪客户端预测历史）。
+// ContentMessageID 与 Content 可选、同时设置：空载荷请求返回 RoomLevel：bytes content=1; string sha256=2;
+// uint64 controlled_body=3。
 type PlayerIngressConfig struct {
-	InputMessageID uint32
-	FrameMessageID uint32
-	Seat           Seat
+	InputMessageID   uint32
+	FrameMessageID   uint32
+	Seat             Seat
+	ContentMessageID uint32
+	Content          Content
 }
 
 // PlayerIngress 是 Game 进程里把已认证连接接到物理房间的正式接线（PHYSICS-ROOM-SERVICE「装配」第 6 步）：
@@ -70,6 +87,9 @@ type playerConn struct {
 
 func NewPlayerIngress(cfg PlayerIngressConfig) (*PlayerIngress, error) {
 	if cfg.InputMessageID == 0 || cfg.FrameMessageID == 0 || cfg.InputMessageID == cfg.FrameMessageID || cfg.Seat == nil {
+		return nil, domain.ErrRequestInvalid
+	}
+	if (cfg.ContentMessageID == 0) != (cfg.Content == nil) || cfg.ContentMessageID != 0 && (cfg.ContentMessageID == cfg.InputMessageID || cfg.ContentMessageID == cfg.FrameMessageID) {
 		return nil, domain.ErrRequestInvalid
 	}
 	return &PlayerIngress{cfg: cfg, conns: make(map[gateway.Binding]*playerConn)}, nil
@@ -123,12 +143,17 @@ func (p *PlayerIngress) OnClosed(binding gateway.Binding, _ uint64) {
 }
 
 func (p *PlayerIngress) Dispatch(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
-	if id != p.cfg.InputMessageID || kind != wire.PayloadProtobuf {
+	if kind != wire.PayloadProtobuf || id != p.cfg.InputMessageID && (p.cfg.ContentMessageID == 0 || id != p.cfg.ContentMessageID) {
 		return nil, domain.ErrRequestInvalid
 	}
-	input, err := decodeInput(payload)
-	if err != nil {
-		return nil, err
+	var input domain.Input
+	var err error
+	if id == p.cfg.InputMessageID {
+		if input, err = decodeInput(payload); err != nil {
+			return nil, err
+		}
+	} else if len(payload) != 0 {
+		return nil, domain.ErrRequestInvalid
 	}
 	p.mu.Lock()
 	rooms, game, closing := p.rooms, p.game, p.closing
@@ -139,6 +164,9 @@ func (p *PlayerIngress) Dispatch(ctx context.Context, session gateway.Session, i
 	binding, _, ok := game.SessionReceiver(session.Principal().SessionID)
 	if !ok {
 		return nil, gateway.ErrBindingStale
+	}
+	if id == p.cfg.ContentMessageID {
+		return p.content(ctx, binding, id, seq)
 	}
 	p.mu.Lock()
 	c := p.conns[binding]
@@ -162,7 +190,24 @@ func (p *PlayerIngress) Dispatch(ctx context.Context, session gateway.Session, i
 	if input.Jump || input.Sequence%20 == 0 {
 		slog.Debug("physicsroom input accepted", "player", binding.PlayerID, "sequence", input.Sequence, "acceleration", input.Acceleration, "jump", input.Jump)
 	}
-	return &gateway.TCPResponse{MessageID: id, Sequence: seq}, nil
+	// RoomInputAck 只回成员代际：客户端重连后据此区分新旧成员的采样确认。
+	ack := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), c.member.InputGeneration)
+	return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: ack}, nil
+}
+
+// content 应答内容握手；不建房、不 Join，只读业务给出的固定内容。
+func (p *PlayerIngress) content(ctx context.Context, binding gateway.Binding, id, seq uint32) (any, error) {
+	c, err := p.cfg.Content(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.Data) == 0 || c.SHA256 == "" || c.Body == 0 {
+		return nil, domain.ErrRequestInvalid
+	}
+	data := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), c.Data)
+	data = protowire.AppendString(protowire.AppendTag(data, 2, protowire.BytesType), c.SHA256)
+	data = protowire.AppendVarint(protowire.AppendTag(data, 3, protowire.VarintType), c.Body)
+	return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: data}, nil
 }
 
 // join 在持有 c.mu 时调用：选房、Join，并登记唯一的 Relay。Close 之后不再启动新的 Relay。
@@ -250,13 +295,14 @@ var _ app.ModStopperWithContext = (*PlayerIngress)(nil)
 var _ Game = (*gateway.GameIngress)(nil)
 
 // decodeInput 解码 RoomInput；字段重复、类型不符、未知字段、jump 非 0/1 或缺少 sequence 均拒绝。
+// grab_target 只解码，目标是否存在、是否动态、距离是否足够由房间服务在物理执行器上判断。
 // 加速度的有限性与模长由 Service.Submit 检查。
 func decodeInput(data []byte) (domain.Input, error) {
 	var in domain.Input
 	seen := uint8(0)
 	for len(data) > 0 {
 		field, typ, n := protowire.ConsumeTag(data)
-		if n < 0 || field < 1 || field > 4 {
+		if n < 0 || field < 1 || field > 5 {
 			return in, domain.ErrRequestInvalid
 		}
 		data = data[n:]
@@ -291,6 +337,8 @@ func decodeInput(data []byte) (domain.Input, error) {
 		data = data[n:]
 		if field == 1 {
 			in.Sequence = v
+		} else if field == 5 {
+			in.GrabTarget = v
 		} else if v > 1 {
 			return in, domain.ErrRequestInvalid
 		} else {

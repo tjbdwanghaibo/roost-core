@@ -277,3 +277,100 @@ func TestJumpRequiresGround(t *testing.T) {
 		t.Fatalf("air jump or no jump: peak=%f state=%+v", peak, states)
 	}
 }
+
+func TestKinematicPlatformCarriesAndRotorCollides(t *testing.T) {
+	w, err := New(-9.81, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, b := range []Body{
+		{ID: 1, Shape: Box, Motion: Kinematic, Position: Vec3{0, 0, 0}, Dimensions: Vec3{2, .25, 2}, Mass: 10},
+		{ID: 2, Shape: Sphere, Position: Vec3{0, .8, 0}, Dimensions: Vec3{.5}, Mass: 1},
+		{ID: 3, Shape: Box, Motion: Kinematic, Position: Vec3{10, 1, 0}, Dimensions: Vec3{3, .2, .2}, Mass: 10},
+		{ID: 4, Shape: Sphere, Position: Vec3{12, .7, -1}, Dimensions: Vec3{.5}, Mass: 1},
+		{ID: 100, Shape: Box, Position: Vec3{10, -.5, 0}, Dimensions: Vec3{6, .5, 6}},
+	} {
+		if err = w.Add(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var states []State
+	for i := 1; i <= 100; i++ {
+		a := float64(i) * .01
+		states, err = w.Step(.02, []Command{{ID: 1, Target: true, Position: Vec3{0, float32(i) * .04, 0}, Rotation: Quat{0, 0, 0, 1}}, {ID: 3, Target: true, Position: Vec3{10, 1, 0}, Rotation: Quat{0, float32(math.Sin(a)), 0, float32(math.Cos(a))}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := map[uint64]State{}
+	for _, v := range states {
+		m[v.ID] = v
+	}
+	if m[2].Position[1] < 4.65 {
+		t.Fatalf("platform failed to carry: %+v", m[2])
+	}
+	if math.Abs(float64(m[4].Position[0]-12))+math.Abs(float64(m[4].Position[2]+1)) < .5 {
+		t.Fatalf("rotor did not collide: %+v", m[4])
+	}
+	states, err = w.Step(.02, []Command{{ID: 1, Target: true, Position: Vec3{0, 4.04, 0}, Rotation: Quat{0, 0, 0, 1}}, {ID: 2, Jump: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states[1].Velocity[1] < 7 {
+		t.Fatalf("cannot jump off rising platform: %+v", states[1])
+	}
+	if _, err = w.Step(.02, []Command{{ID: 1, Acceleration: Vec3{1, 0, 0}}}); err == nil {
+		t.Fatal("force accepted on kinematic")
+	}
+}
+func TestDistanceGrabReleaseAndHingeMotor(t *testing.T) {
+	w, err := New(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, b := range []Body{
+		{ID: 1, Shape: Sphere, Position: Vec3{0, 0, 0}, Dimensions: Vec3{.2}, Mass: 1},
+		{ID: 2, Shape: Sphere, Position: Vec3{2, 0, 0}, Dimensions: Vec3{.2}, Mass: 1},
+		{ID: 3, Shape: Box, Motion: Dynamic, Position: Vec3{100, 0, 0}, Dimensions: Vec3{.2, 2, .2}, Mass: 10},
+	} {
+		if err = w.Add(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = w.AddJoint(Joint{ID: 1, A: 1, B: 2, MaxDistance: 1, Stiffness: 100, Damping: 10, BreakForce: 10000}); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.AddJoint(Joint{ID: 2, A: 3, Kind: Hinge, AnchorB: Vec3{100, 0, 0}, MotorSpeed: 2, MotorForce: 1000, BreakForce: 10000}); err != nil {
+		t.Fatal(err)
+	}
+	var states []State
+	for range 100 {
+		states, err = w.Step(.02, []Command{{ID: 2, Acceleration: Vec3{5, 0, 0}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if states[1].Position[0]-states[0].Position[0] > 1.2 {
+		t.Fatal("grab did not constrain", states)
+	}
+	if math.Abs(float64(states[2].AngularVelocity[0])) < 1 {
+		t.Fatal("motor did not rotate", states[2])
+	}
+	if err = w.RemoveJoint(1); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		states, err = w.Step(.02, []Command{{ID: 2, Acceleration: Vec3{5, 0, 0}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if states[1].Position[0]-states[0].Position[0] < 3 {
+		t.Fatal("release still constrained", states)
+	}
+	if err = w.AddJoint(Joint{ID: 3, A: 999, BreakForce: 1}); err == nil {
+		t.Fatal("unknown actor accepted")
+	}
+}

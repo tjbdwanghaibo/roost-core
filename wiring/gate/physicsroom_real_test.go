@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
+
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
@@ -52,8 +52,9 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- roomwiring.Relay(ctx, s, h.game, binding, member, 902) }()
-	var replica chunksync.Replica
+	poller := &jitteredRoomPoller{Rooms: s}
+	go func() { done <- roomwiring.Relay(ctx, poller, h.game, binding, member, 902) }()
+	var replica gamephysics.RoomReplica
 	for range 3 {
 		packet, err := wire.Read(conn, 8192)
 		if err != nil {
@@ -73,6 +74,9 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	if err = <-done; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+	if poller.empty != 0 {
+		t.Fatalf("fixed ticker polled before room send interval: %d empty responses", poller.empty)
+	}
 	// Relay 结束释放成员，原 token 不能再操作；不同连接不能借同 player ID 重用 token。
 	if err = s.Submit(context.Background(), member, domain.Input{Sequence: 1}); !errors.Is(err, domain.ErrMember) {
 		t.Fatal(err)
@@ -82,4 +86,27 @@ func TestRealGatePhysicsRoomRelay(t *testing.T) {
 	if err = h.game.PushBound(context.Background(), stale, 902, wire.PayloadSync, []byte{1}); !errors.Is(err, gateway.ErrBindingStale) {
 		t.Fatalf("stale binding: %v", err)
 	}
+}
+
+// 交替 RPC 准入延迟使固定 ticker 的两次服务端 Poll 间隔小于 50ms。
+// 接收响应后再安排下一次轮询，不应触发 Room 的过早请求限流。
+type jitteredRoomPoller struct {
+	domain.Rooms
+	calls, empty int
+}
+
+func (p *jitteredRoomPoller) Poll(ctx context.Context, m domain.Member, ack uint64) (domain.Delivery, error) {
+	p.calls++
+	if p.calls%2 == 1 {
+		select {
+		case <-ctx.Done():
+			return domain.Delivery{}, ctx.Err()
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+	d, err := p.Rooms.Poll(ctx, m, ack)
+	if err == nil && len(d.Payload) == 0 {
+		p.empty++
+	}
+	return d, err
 }

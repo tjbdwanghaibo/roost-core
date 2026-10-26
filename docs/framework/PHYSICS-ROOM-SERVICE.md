@@ -52,7 +52,7 @@ Relay 在可靠出站准入成功后，于下一次 Poll 确认帧；此 ack 不
 | MaxLifetime | 1h |
 | AOI 进入 / 退出 | 12m / 14m |
 
-默认值是准入限制，不是容量承诺。建房按最坏每动态对象 75 字节加 36 字节头检查整帧预算，保证分散到不同 Chunk 也不越界；总待确认帧内存上界约 MaxRooms×MaxPlayers×MaxFrameBytes，另计世界、快照和编码临时分配。NATS bus 自身 WorkerNum/QueueCap、Gate 出站预算需要部署方配置。
+默认值是准入限制，不是容量承诺。建房按最坏每非静态对象 57 字节加 56 字节头检查整帧预算，保证分散到不同 Chunk 也不越界；待确认载荷的预算基数为 MaxRooms×MaxPlayers×MaxFrameBytes；实际内存还包括编码计划与其载荷副本、已确认/待确认的视图账本、世界、快照和临时分配，不能把该乘积当进程内存上界。NATS bus 自身 WorkerNum/QueueCap、Gate 出站预算需要部署方配置。
 
 Shutdown 先封闭服务准入，取消所有房间，然后等待各自 done。若业务 Commit 不返回，Shutdown 超时必须保留依赖和 native 资源；Mod 提供 StopWithContext，供 app 执行这个契约。指标通过 servicemetrics 报 create/input/join、create 重放/容量拒绝、成员过期、房间失败与房间深度，不使用 RoomID/PlayerID 标签。
 
@@ -60,7 +60,7 @@ Shutdown 先封闭服务准入，取消所有房间，然后等待各自 done。
 
 定向测试覆盖容量竞争、相同 Create 重试、旧 Epoch/成员拒绝、pending 重发、非法 ack、重新加入令牌、帧预算、停机等待在途提交。Nest 实测覆盖 Guard 内 StateDAO；真实 NATS 测试覆盖生成的七个 RPC、MessagePack 和固定 SID；真实 Gate/NATS/TCP 测试覆盖认证 Binding、三帧连续解码与 Relay 取消清理。测试中的轻量 Commit 替身只用于隔离服务或网络契约，Nest 链路有单独的真实 Engine 验证。
 
-这些是组合部件验证，不是跨三个独立 OS 进程的完整生产部署。尚未测多房间容量上限或长稳，Linux 按维护者要求暂缓。客户端输入协议/PB 与开房权限属于业务入口，需要业务接线；当前未修改 Unity 展示端的登录/开房界面。Raycast、碰撞业务事件、运行期刚体增删不在本阶段接口内。
+这些是组合部件验证，不是跨三个独立 OS 进程的完整生产部署。尚未测多房间容量上限或长稳。此处为 10-25 阶段证据；10-26 Linux 功能验证见下文。客户端输入协议/PB 与开房权限属于业务入口，需要业务接线；当前未修改 Unity 展示端的登录/开房界面。Raycast、碰撞业务事件、运行期刚体增删不在本阶段接口内。
 
 复跑（私有 NATS 地址，不使用故障注入）：
 
@@ -95,7 +95,7 @@ rooms, err := physicsroom.New(cfg)
 
 `Closed` 在模拟与在途提交结束、native world 释放后调用，Host.Forget 移除对应 Entity；不要从其他业务路径提前 Forget。关闭顺序为 Service.Shutdown 成功后再 Host.Close；Shutdown 超时时保持 Host 存活。业务自行决定开房、玩家权限和结算，不在 Host 中实现这些规则。
 
-Input 新增 Jump，Acceleration 只允许 X/Z（Y 必须为零）。同序号重放不重新触发跳跃，也不延长旧输入 TTL；新移动输入不会覆盖尚未消费的跳跃，过期跳跃不被后续输入复活。服务器用排除自身的向下射线检查支撑面与竖直速度，确认落地后加 7m/s 速度增量；该判定不是通用 CharacterController API。native command 布局变化，必须重建 native 静态库及 Go 程序，旧库会因新桥接符号缺失而链接失败。
+Input 新增 Jump，Acceleration 只允许 X/Z（Y 必须为零）。同序号重放不重新触发跳跃，也不延长旧输入 TTL；新移动输入不会覆盖尚未消费的跳跃，过期跳跃不被后续输入复活。服务器用排除自身的向下射线检查支撑面与相对支撑点的竖直速度，确认落地后加 7m/s 速度增量；该判定不是通用 CharacterController API。native command 布局变化，必须重建 native 静态库及 Go 程序，旧库必须重建；当前 native ABI 由 rp_abi_version 校验。
 
 Unity `Room.unity` 经下文本机三进程的 Gate 连接这套 Host / Service，测试移动跳跃与 Chunk 显示；业务登录与开房 UI 留给使用方。具体操作与协议见 [客户端说明](../../client/physics-viewer/README.md)。
 
@@ -120,16 +120,19 @@ Unity `Room.unity` 经下文本机三进程的 Gate 连接这套 Host / Service�
 | 子命令 | Mod | 说明 |
 | --- | --- | --- |
 | `physicsroom`（sid 7801） | NATS Mod、`NewEntityHostMod` | 房间 owner；`NewServer` 在 bus 上登记生成的 Rooms handler |
-| `game`（sid 22） | NATS Mod、etcd Mod（只发现）、`NewClientMod(7801)`、`gate.NewGameIngressMod`、`PlayerIngress` | 首个输入时按需建一个 CrowdScene 房间（寿命 1h，停服时销毁），slot N 控制刚体 50+N |
+| `game`（sid 22） | NATS Mod、etcd Mod（只发现）、`NewClientMod(7801)`、`gate.NewGameIngressMod`、`PlayerIngress` | 启动时固定一个关卡：缺省 CrowdScene（slot N 控制刚体 50+N），`--level <json>` 时用校验过的 UGC 关卡（slot N 控制 `Players[N-1]`）；首个输入时按需建房（寿命 1h，停服时销毁）；`0x50485903` 内容握手返回关卡字节、SHA-256 与受控刚体 |
 | `gate`（sid 11） | NATS Mod、etcd Mod（只发现）、`gate.NewGateMod` | TCP `127.0.0.1:19093`，经 etcd 找到 sid 22 的 game |
 
-本机专用的只有 `physics-slot-N`（N=1..20）票据鉴权与 Seat，都在 main.go；正式部署由业务提供账号鉴权、开房与选座，其余照搬。依赖 NATS（4222）、Redis（6379，App 单实例锁，`wiring/gate` 要求启用）与 etcd（2379，Gate 发现 Game）。比原双进程多了 Redis 与 etcd：它们是 `wiring/gate` 正式装配的前提，不为本机另造一套。
+本机专用的只有 `physics-slot-N`（N=1..20）票据鉴权、Seat 与 Content（关卡），都在 main.go；正式部署由业务提供账号鉴权、开房、选座与内容发布，其余照搬。Gate 不读关卡，超出所选关卡槽数的票据由 game 的 Seat / Content 拒绝。依赖 NATS（4222）、Redis（6379，App 单实例锁，`wiring/gate` 要求启用）与 etcd（2379，Gate 发现 Game）。比原双进程多了 Redis 与 etcd：它们是 `wiring/gate` 正式装配的前提，不为本机另造一套。
 
 ```sh
 scripts/physics/build-native.sh   # 一次
 GOWORK=off go build -tags physx -o artifacts/physicsroom-local ./wiring/physicsroom/cmd/physicsroom-local
 artifacts/physicsroom-local physicsroom --config wiring/physicsroom/cmd/physicsroom-local/configs/config.physicsroom.yaml
 artifacts/physicsroom-local game        --config wiring/physicsroom/cmd/physicsroom-local/configs/config.game.yaml
+# UGC 关卡：先导出可编辑示例，再让 game 用它开房（改关卡要重启 game 开新房）
+artifacts/physicsroom-local export-level artifacts/obstacles.json
+artifacts/physicsroom-local game --level artifacts/obstacles.json --config wiring/physicsroom/cmd/physicsroom-local/configs/config.game.yaml
 artifacts/physicsroom-local gate        --config wiring/physicsroom/cmd/physicsroom-local/configs/config.gate.yaml
 ```
 
@@ -140,7 +143,149 @@ GoLand：`.run/` 下 Physics Service / Physics Game / Physics Gate 三个配置�
 验证（2026-10-26，macOS ARM64，PhysX 4.1.2，私有 NATS / Redis / etcd）：
 
 - `TestRealGateInputMovesRoomBodyAndStreamsChunks`（wiring/physicsroom，`integration && physx && cgo`）：EntityHostMod 经 Registry 提供、`NewServer` 登记 RPC，客户端经真实 Gate / GameIngress / PlayerIngress 发输入；断言受控刚体在已提交的 Entity 状态里沿 +X 移动超过 1m、客户端连续收到同 Epoch 的 Chunk 帧，断开后 PlayerIngress 在期限内排空。把输入加速度改成 0 时该用例在 8s 期限处失败（`moved=false`），断言落在输入生效上。`-race -count=3` 通过。没有 PhysX SDK 时这条用例因 tag 不满足而不编译：先 `scripts/physics/build-native.sh`，再按下文 `verify-service.sh` 运行。
+- `TestPlayerIngressContentHandshake`（无 tag，2026-10-27 合入 UGC 时补）：内容消息号与回调必须成对且不与输入/帧消息号相同；空载荷请求按已认证绑定返回 RoomLevel，不 Join。`TestRoomInputProtobuf` 覆盖 `grab_target=5`，输入应答带成员代际 `RoomInputAck`。
 - `TestPlayerIngressJoinsOnceAndReleasesWithTheConnection`、`TestPlayerIngressCloseRacesInput`（无 tag）：首输入只 Join 一次、断开后 Leave、Relay 出错关闭连接、Close 后拒绝输入且不再启动 Relay。
 - 三进程实跑：按上面的配置（端口换成私有）启动三个子命令，Python 客户端以 `physics-slot-13` 登录，3s 内收到 39 个 Chunk 帧、40 个输入回执；game 日志记录按需建房、Join 刚体 63、跳跃输入。SIGTERM 依次停 gate、game、physicsroom，均正常退出。Unity 实机本轮未重跑。
 
 边界：这是本机拓扑，SID、消息号与 Gate 地址是 main.go 常量（game 启动时核对自己的 sid）。不是多房间容量或长稳验证；没有多 owner 路由，Room Ref → owner SID 的映射仍由业务维护。
+
+## Unity UGC 多人闯关：运动、抓取、关卡与预测
+
+本节是当前扩展契约。业务入口仍负责认证、开房权限、关卡发布审核、检查点、终点、淘汰及永久奖励；物理只产生权威运动事实，不能把客户端宣称通关当成奖励依据。
+
+| 玩法 | 框架接口及接法 | 权威边界 |
+| --- | --- | --- |
+| 转杆、升降台、往复平台 | `physx.Body.Motion=Kinematic`，`Spec.Motions` 填 `physics.MotionTrack`；每 20ms 由服务器 tick 求姿态，`setKinematicTarget` 让碰撞求解器处理接触 | 客户端不能指定目标位置；网络 AOI 隐藏对象也不会从物理世界移除 |
+| 摆锤、转轴马达 | 动态 Box + `Spec.Joints` 中的 `physx.Hinge`；锚点局部 X 为旋转轴，B=0 表示世界锚点，`MotorSpeed` 为 rad/s，`MotorForce` 为驱动力上限 | 关节来自可信建房配置，不是玩家远程创建接口 |
+| 按住抓取／松手 | `Input.GrabTarget`，0 松手；每控制者最多一条 Distance 弹簧，当前实现中心距离 ≤2.5m、绳长 1.2m、刚度 100、阻尼 10、断裂力 300 | 服务器排除自身、静态和运动学目标；依据上一已提交帧检查。输入过期、距离越界、Leave、成员过期释放；无视线遮挡检查，规则可在业务入口继续收紧 |
+| 玩家自建关卡 | `physics.Level` → `DecodeLevel` / `Validate` → `Content` → SHA-256 → `Spec{Bodies,Motions,Joints}` | 关卡只允许已知字段与基础几何，不执行用户代码；房间创建后配置固定，修改版本需新开房 |
+| Unity 本地预测／纠偏 | `InputPrediction.Record` 保存输入，`Reconcile` 用已提交快照中的实际采样序列重置基线并重放未确认输入；Unity 适配器做胶囊扫掠与地面检测 | RPC 接收响应只返回成员 `InputGeneration`。只有快照里相同代际的 `InputSequence` 才确认模拟；服务器不接收预测后的坐标 |
+
+`MotionDefault` 保持原调用方语义：Box 静态，其余动态；新关卡可显式指定 Static/Dynamic/Kinematic。快照及预算均包含动态和运动学对象，控制成员只能绑定动态对象。通用 World 提供 `AddJoint` / `RemoveJoint`，与 Step 共用锁；Room 对它们的调用只发生在物理执行器上。最多 128 个配置运动轨迹和 128 个配置关节；抓取关节 ID 使用高位保留区，房间刚体及配置关节 ID 必须小于 2^63。
+
+Level schema 1 要求非空 Name、非零 Revision、最多 256 个刚体、20 个控制槽、256KiB 精确发布字节。槽到 Body 的映射由认证后的 Game 使用 `Players` 决定；Unity 不再固定要求 71 个对象。发布验证还限制坐标绝对值 ≤1000m、形状尺寸 ≤100m、有效半径/Box 半厚度 ≥0.05m、非静态质量 0.01～10000；这些是拒绝异常配置的预算，不能替代关卡试玩和性能测试。几何仅 Box/Capsule/Sphere，未含网格碰撞烘焙、脚本沙盒、资源商店、CDN、关卡在线编辑或运行期刚体增删。
+
+跳跃修复：基线 ce49b3c3 在慢 Commit 期间持续收到移动时，会用移动时间续期 `jumpPending`，使已过期跳跃迟到执行。现在 `jumpAt` 独立记录跳跃期限，Submit 和消费点都校验；相同序号重试不重新触发、不刷新期限。默认测试用虚拟时钟验证邮箱；native 测试实际阻塞提交后确认不发生迟到起跳。
+
+### 输入确认、协议与升级
+
+- 成员每次重新 Join 都分配新的 `InputGeneration`。旧连接的快照可能短暂仍在视图中，但客户端不拿旧代际的序列确认新输入。
+- 每帧在输入采样后记下 Sequence，只有 PhysX Step 和 Nest 提交成功后才发布；`InputActive=false` 表示该帧没有继续施加该成员输入。输入邮箱仍只保留最新状态，不承诺逐条模拟每条收到的输入。
+- Room 使用 RP2 私有帧头与 RC2 字段增量；完整量化对象 34 字节，输入确认只给当前接收成员。Comparison 对照（`scripts/physics/comparison-host`）仍使用 RC1、70 字节无损对象，不作为新 Room 带宽测量入口。
+
+- Native ABI 升到 2，`rp_add_pose` / command 布局变化；必须先停旧服务、重建 native 库和 Go 程序、同步更新 Unity 的全部 viewer 源码及采集脚本，再启动。未部署阶段不兼容混跑旧版本；本功能没有持久房间数据迁移。
+
+### 已验证与仍需验证
+
+2026-10-26 在 Linux amd64、Go 1.27.2、PhysX 4.1.2、私有 NATS 2.12.3 上实际构建原生库并运行：升降平台托举及随台上升时起跳、转杆碰撞、弹簧抓取／释放、铰链马达、非法输入、抓取超时／静态目标拒绝、慢提交后的跳跃过期、重连输入代际以及已提交快照编码。Gate 验收使用真实 TCP 和 NATS，服务与 Gate 宿主在测试进程内启动（当时在 `cmd/physics-viewer`；2026-10-27 合入 main 时随 a5cae602 的收敛移植为 `wiring/physicsroom` 的 `TestRealGateUGCLevelAndInput`，经 PlayerIngress 的内容握手，移植后的版本尚未在装有原生库的机器上重跑），房间结果经真实 EntityHost/Nest 提交；验证关卡内容摘要、槽绑定、运动学对象同步和已采样输入确认。不是跨机器或多个独立 OS 进程的容量验收。
+
+全仓 `go build ./...`、`go vet ./...` 与根目录门禁通过。全仓测试的 Lockstep 慢链路用例 `TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive` 在当前 Linux 环境失败（停读连接未溢出、快照未完成）；同一用例在未修改的 main ce49b3c3 归档中也复现，未将它记为本轮修复或全仓通过。
+
+预测核心由 .NET 10 SDK 的 C# 编译器编译并执行，覆盖确认后纠偏、未确认输入重放、一次跳跃、输入过期、快照停顿、32 条历史上限及恢复。当前云环境的 `dotnet run` 首次配置因 NuGet 命名互斥量失败，实际使用 SDK 内的 Roslyn 编译器及 dotnet runtime 直接执行，未把该 CLI 失败记成测试通过。**未运行 Unity 编辑器或 Unity 碰撞适配器**，本轮新增交互还须在 Unity 6000.3 中编译、双客户端试玩及网络延迟下验收。
+
+预测采用有界近似模型，最长重放/外推 250ms，历史溢出或快照停顿回到权威位置。它不复制服务器整个 PhysX Scene，不回滚其他玩家/抓取关节，也不保证不同 PhysX 版本数值一致；移动平台摩擦、角色贴边和复杂接触可能产生纠偏。此前 20 人 60 秒 direct TCP 基准不覆盖新增关节、载荷、Gate/NATS 或多房间成本，不能直接作为这些功能的容量报告。
+
+复跑原生及真实链路：`ROOST_PHYSICS_TEST_NATS_URL=<私有地址> scripts/physics/verify-service.sh`。预测核心：`dotnet run --project client/physics-viewer/tests/Prediction.Tests.csproj`。实际 Unity 操作入口和关卡导出见 [viewer 使用说明](../../client/physics-viewer/README.md#ugc-关卡与本地预测)。
+
+### Room 同步压缩与复测（2026-10-26）
+
+服务器保持完整精度模拟；网络先量化，再比较量化后的字段。`Cursor.PlanFields` / `Replica.ApplyFields` 提供 RC2，旧 `Plan` / `Apply` 保持 RC1。Room 使用 `NewQuantizedSpatialFrame`，接收端使用 `RoomReplica`；不要把 RP2 直接传给通用 RC1 解码器。AOI 仍按真实位置判断。
+
+RP2 头为 20 字节：`RP` 占 2 字节，版本 2 与 InputActive 各占 1 字节，随后 little-endian Sequence / Generation 各 8 字节。确认来自成功提交的物理帧，只包含接收成员；同一 pending 帧重发时确认也被冻结。Generation 每帧保留一次，不放进每个广播对象。其后为 RC2，原有 Chunk 头 36 字节及对象 ID/长度保持不变。
+
+| 字段（完整对象偏移） | 字节 | 网络精度/表示 |
+| --- | ---: | --- |
+| 位置（0） | 8 | Chunk 内 X/Z 为 int16 厘米，Y 为 int32 厘米 |
+| 旋转（8） | 7 | 最大分量索引 1 字节，其余三分量 int16；q/-q 统一符号 |
+| 线速度（15） | 12 | 三个 int32，0.01m/s，避免高速下落被 int16 饱和 |
+| 角速度（27） | 6 | 三个 int16，0.01rad/s |
+| 状态（33） | 1 | bit0 休眠，bit1 展示档（省略速度），bit2 轨迹档；bit2 必须同时设置 bit1 |
+
+每个变化对象先发 1 字节字段掩码，只附变化字段。首次可见、跨 Chunk、离开后重入和重新连接均发送完整字段；无可信基线的部分补丁、非法位、截断及多余字节被拒绝，整帧通过后才替换状态。量化越界拒绝发布，不静默夹紧；角速度编码范围约 ±327.67rad/s，原生角速度上限为 50。准入最坏预算为 `56 + 非静态对象数 × 57`，含对象各占一个 Chunk 的情况。
+
+同帧对照测试 `TestRoomBandwidthSamePhysicsFrames` 使用一份 PhysX 模拟结果：71 个动态对象，50Hz 求解、20Hz 采样、20 个观察者、20 秒模拟时间，共 400 帧，平均每观察者 9.68 个可见对象。每种编码使用完全相同的帧和 AOI。
+
+| 编码阶段 | 总载荷字节 |
+| --- | ---: |
+| 原 70 字节对象 RC1 | 6,315,788 |
+| 输入确认私有化，公共对象 53 字节 | 5,229,076 |
+| 完整量化对象 34 字节 | 3,566,536 |
+| RP2 + RC2 字段增量 | 3,048,113 |
+
+该样本减少 **51.74%**，平均每客户端约 **15.79 → 7.62 kB/s**（十进制）；逐帧解码实测最大单轴位置误差约 **0.005m**。计入 Chunk 与私有头，不计外层 RS、TCP/IP、NATS；这是编码对照，不是网络吞吐、CPU 性能、WAN 或多房间容量报告。复跑：`go test -tags physx -run TestRoomBandwidthSamePhysicsFrames -count=1 -v ./gameplay/physics`。场景、可见人数、运动和频率变化都会影响结果。
+
+升级需先停旧再起新，更新 Room 服务及 Unity 的 `PackedBodyCodec.cs`、`ChunkReplica.cs`、`CrowdViewer.cs`（推荐同步全部 viewer 源码），重新连接建立全量基线。此轮 native ABI 仍为 2。Go 字段补丁/量化回归与 C# 共享金样覆盖补丁、截断、基线缺失及不可变历史；Unity 编辑器、碰撞手感和弱网仍须另验。
+
+本轮补丁实际通过：相关包 race、`verify-service.sh` 原生与真实网络各三轮、Go/C# 共享金样、全仓 build/vet 和根目录门禁。全仓 `go test ./...` 仍只有上述 Lockstep 慢链路用例失败；未将其标记为全仓通过。新增拒绝非法量化状态不推进基线/私人确认、两成员确认隔离与 pending 重发回归。
+
+
+### 按接收者分频、字段裁剪与轨迹显示
+
+`DefaultConfig` 默认启用 `Replication: gameplay/physics.DefaultReplicationPolicy()`。自定义配置零值禁用；显式设 `cfg.Replication.Enabled = false` 可退回所有可见对象全频字段增量，用于同场景对照。默认策略如下，频率受 Poll ACK 和最大 20Hz 新帧限制，并非硬实时发送保证。
+
+| 对象档位 | 更新间隔 | 内容 |
+| --- | --- | --- |
+| 自己、抓取关联对象、近处对象 | 每个新帧，最高 20Hz | 完整可用物理字段 |
+| 中距对象 | 至少 5 个物理 tick，约 10Hz | 位置、旋转和状态；速度清零并显式标记省略 |
+| 远距对象 | 至少 10 tick，约 5Hz | 同上 |
+| 远处有固定 MotionTrack 的运动学障碍 | 至少 50 tick，约 1Hz 校准 | 权威姿态与轨迹档标记；客户端使用固定关卡的轨迹 |
+
+近/中分界默认 5m/9m。判定使用两对象包围球的表面间距，并预留相对线速度 × 0.2s；降档多留 1m 滞回，升档立即补当前字段。长转杆按包围球保护，不因中心远就降频；抓取关系两端都保护。新可见、跨 Chunk、升档立即刷新，退出视野立即删除。规划使用已 ACK 的视图基线，pending 帧及分频计划一并冻结；重连从全量开始。该策略不改变服务器物理、Nest 提交或原有中心距离 AOI，超大障碍是否应扩大 AOI 仍由场景接入设计。
+
+RP2 保持 20 字节私有头、RC2 与 34 字节完整对象，但状态字节增加档位标记。`RoomReplica.Profiles` / Unity `BodyState.DisplayOnly` 明确指出速度被省略，**不能把此时的零速度当作物理事实**。升档清除标记并恢复最新速度。旧 RP1 解码器必须升级，不混跑；ABI 仍为 2。
+
+轨迹参数已经包含在摘要校验后的 Level.Motions：正弦 Translation/PeriodSeconds、世界旋转 Axis/AngularSpeed，时间原点为房间 tick 0，步长为 float32 0.02 秒。Unity `ReplicationPlayback.cs` 使用最近服务器姿态及该对象采样 tick 校准，再按已接收帧的显示时间求姿态；不积分累积误差，不跟随墙钟无限外推，收包停顿后停止推进。动态马达锤、抓取物与不带 MotionTrack 的刚体不套用轨迹模式。没有对应固定关卡元数据却收到轨迹档时客户端拒绝继续显示。
+
+Unity 还保留每个对象自己的采样 tick；普通对象按自身采样间隔（上限 200ms）插值，其他对象的新帧不重置它的插值。近身预测的支撑速度只使用完整档对象。显示延迟、物理接触与弱网手感须在 Unity 编辑器验收，纯 C# 测试不能代替该验收。
+
+同一 20 人 Crowd 样本中，上一节字段增量为 3,048,113 字节；分频与裁剪（含档位标记）为 **2,252,525 字节**，再降 **26.10%**，平均每客户端 **7.62 → 5.63 kB/s**。此 Crowd 样本无规则运动轨迹。独立 native 轨迹场景（10 秒、20Hz、一名观察者与一个远处运动学平台）为 **21,136 → 11,668 字节**，平台校准样本最大年龄 48 tick。二者都是同帧编码对照，非真实网络/CPU/容量结论。量化样本的约 5mm 单轴误差不包含降频后持有旧状态与插值延迟。
+
+新增回归覆盖频率、升档恢复、双向抓取关联、快速接近/大包围体、跨区/删除、ACK 才提交视图、重连全量、原生轨迹相位以及 Go/C# 轨迹金样和稀疏插值停顿。复跑 `go test -race -tags physx ./gameplay/physics ./service/physicsroom`，真实链路仍用 `scripts/physics/verify-service.sh`。统计见 [可观测性清单](OBSERVABILITY.md#物理房间同步)：真实 Room Poll 路径分别计新帧/重试字节、Full/Delta、字段次数、档位变化/暂缓和 ACK 等待；不把 Poll 返回字节当作 socket 写成功。
+
+本轮最终 RP2 代码通过全仓 build/vet、根目录门禁、受影响 race、三轮原生与真实 Gate/NATS/TCP 回归，以及 C# 量化/档位/轨迹/稀疏插值核心验证。全仓测试仍只有前述 main 基线已复现的 Lockstep 慢链路用例失败；未运行 Unity 编辑器与 WAN 验收。
+
+
+### 轮询间隔与 RPC 抖动
+
+Gate Relay 从 **Poll 响应完成时** 安排下一次 50ms 轮询；等待与随后出站工作可重叠，但一次 Relay 不并发 Poll。服务端仍要求相邻新帧至少间隔 50ms，pending 重发与 ACK 规则不变。原固定 50ms ticker 在 RPC 准入交替延迟 15ms/0ms 时，会令相邻服务端请求只间隔约 35ms，导致一次空响应；读完三个有效帧的回归修前出现两次空轮询，修后为零。
+
+该修复避免抖动触发双重限流，不是 ACK 流水线。长 RPC、慢出站或高 RTT 仍会降低有效频率；Relay ACK 表示 Game 可靠出站准入，不是 Unity 已收包。真实 Gate/NATS/TCP 回归入口为 `TestRealGatePhysicsRoomRelay`，含延迟注入、连续解码及取消后旧成员拒绝。
+
+
+### 共享索引与多房间测量（2026-10-26）
+
+Room 建立一次 `ReplicationScene`，保存形状包围半径与轨迹 ID；每个已提交帧建立一次 `ReplicationFrame` 状态索引，与 AOI 帧在同一把锁内发布。所有接收成员共用只读索引，私有输入确认也直接按 body ID 查询。索引拥有输入副本，不引用可变调用方切片；ACK 后才提交的成员视图账本仍保持独立。独立调用 `PlanView` 的便捷接口保留，需要共享时使用 `NewReplicationScene(...).Frame(states).Plan(...)`。
+
+Linux amd64、Go 1.27.2、GOMAXPROCS=4，CPU 型号 Xeon Platinum 8573C。`BenchmarkRecipientViewIndex` 在同一份 71 对象完整快照上比较每接收者重建与共享索引，三次测量：
+
+| 规划方式 | ns/op 范围 | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| 每接收者重建索引 | 20,018～20,468 | 37,688 | 94 |
+| 共享索引 | 11,518～11,716 | 19,064 | 85 |
+
+单次规划分配量下降 **49.4%**，该微基准耗时中位数下降约 **43.4%**。共享路径的建房/每帧索引构建成本在规划循环外，不能据此声称整个服务器 CPU 或内存下降同样比例；完整链路仍有快照、视图、编码与载荷副本分配。
+
+`TestMultiRoomReplicationLoad` 实际运行 Room + PhysX + EntityHost/Nest：每房间 20 个独立逻辑客户端，输入后 Poll，再从响应完成起等待 50ms；1 秒预热、5 秒采集，各档一次。普通场景 71 个非静态刚体；机关场景额外加入 8 个运动学转杆与 4 个动态铰链马达，共 83 个非静态刚体。20 个玩家持续提交移动输入，50 个 NPC 胶囊只参与物理碰撞，没有调用 CrowdCommands 自主巡逻。每世界一个原生 worker，Nest short pool 4 个 worker。GOMAXPROCS=4 不表示获得四个独占物理核。
+
+| 场景 | 房间/逻辑客户端 | 平均物理 Hz/房间 | 交付 Hz/客户端 | 物理阶段 P99 ms | Poll P99 ms | Go 分配 MB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 普通 | 1 / 20 | 49.99 | 19.80 | 0.703 | 0.351 | 8.69 |
+| 普通 | 4 / 80 | 49.99 | 19.80 | 1.024 | 0.414 | 34.88 |
+| 普通 | 8 / 160 | 49.32 | 19.48 | 1.690 | 0.562 | 68.29 |
+| 机关 | 1 / 20 | 49.99 | 19.80 | 0.715 | 0.260 | 10.10 |
+| 机关 | 4 / 80 | 50.05 | 19.80 | 1.379 | 0.622 | 40.76 |
+| 机关 | 8 / 160 | 50.00 | 19.80 | 1.200 | 0.513 | 80.81 |
+
+最终六档采样窗口均无空 Poll，所有房间持续提交连续 tick。物理阶段耗时来自 Frame.StepTime，包含前置机制/输入与原生 Step/读回；不含 Nest 提交和网络。机关 8 房间的 Nest Commit P99 为 0.367ms，提交间隔 P99 为 21.312ms，载荷约 5.96kB/s/逻辑客户端。普通 8 房间样本的实际均频有下降，不能把这份短测写成“稳定满 50Hz”的承诺。
+
+**边界与下一步：**此负载直接调用 Service，不含 Gate/NATS/TCP、Unity 或 WAN；真实网络正确性另由专用回归验证。Go 分配/GC 覆盖测试进程与驱动，不包含 PhysX 原生堆，不是 RSS。机关 8 房间五秒中采集到 141 次 Go GC，累计 GC pause 约 28.3ms；整体分配仍值得进一步通过 heap/CPU profile 定位。当前证据不足以宣布生产容量上限，也不能归因所有尾延迟；长稳、真实链路和更密集接触需独立测量。
+
+复跑命令（已构建原生库，加载仓库 Go 环境后）：
+
+```sh
+go test -run '^$' -bench BenchmarkRecipientViewIndex -benchmem -count=3 ./gameplay/physics
+ROOST_PHYSICS_LOAD=1 go test -tags physx -run '^TestMultiRoomReplicationLoad$' -count=1 -timeout=2m -v ./wiring/physicsroom
+ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoad/mechanisms/8$' -count=1 -timeout=1m ./wiring/physicsroom
+```
+
+负载测试默认不启用，SKIP 不算通过；race 档用于并发正确性，性能数字取不带 race 的六档输出。测试输出 JSON 含原始统计、实际频率、空 Poll、分配和 GC，方便同口径复测。此轮不改变 RP2/RC2、完整对象大小或 native ABI。

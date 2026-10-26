@@ -41,6 +41,21 @@ TCP (player access)
 - **错误码归号段**：`roost add errcode X -id N` 的 N 必须落在清单 `ids.errcode`（100000–199999）里，
   `roost id check` 负责查重；`docs/generated/errcode.csv` 是给客户端的对照表。
 
+## 用于 SLG 等游戏时，哪些规则归业务
+
+demo 演示接法，玩法不要求进入公共框架；也不要把 demo 自己违反接入契约的问题都推给使用者。
+
+| 需求或疑点 | 处理层与现有接法 |
+| --- | --- |
+| 公会名字数、敏感词、全服重名 | 业务规则。按维护者决定，demo 只做基本名字校验，允许同名；要唯一可用 `service/directory` 预约与提交，不要求 Entity 内建唯一名称。 |
+| 资源产消、行军目标与速度、赛季分组、奖励额度、逾期补偿 | 业务决定状态和数值，用 DAO、Nest、业务钟、Timer、mail 等正式接口实现；不因缺少某种 SLG 玩法就认定框架有 bug。 |
+| 已领奖的局能否再次发奖、示例排行榜能否被正常重放多加分 | 规则与实现分开。窗口由业务定义，但既然 demo 声称窗口内只发一次，就必须正确持久记账；示例误用短期去重导致多计分是 demo 问题。 |
+| 玩家身份、Remote 所有权、锁、回滚、WAL 提交门与同步可见性 | 框架已经声明的保证，合法调用下违约要提框架问题；业务仍须选择正确的身份来源、事务边界和结果未知处理。 |
+| 活动累计分被较旧的 RPC 回复覆盖 | demo 并发接法问题；公共协调器的权威值可以正确而本地结算索引错误，需要在示例写索引的位置修复。 |
+| 每个玩家的建造 / 行军到期都能自动执行 | 通用 Scheduler 可用，持久字段、加载重建和 Tick 接入仍由业务负责；按实体接入骨架已由 [D11](../docs/maintenance/DESIGN-TODO.md#d11-按实体的持久定时器接入) 实施，离线准点唤醒等维护者明确留给业务的部分仍不归框架负责。 |
+
+本机 demo 跑通说明这些示例路径能组合运行，不证明所有部署模式、远端故障和整套 SLG 玩法都已验收。
+
 ## 事件链：升级 → 奖励邮件（事务性 outbox）
 
 经验发放在任何 DAO 写入之前先做只读校验（`handler.checkExpGrant`：`ProfileComponent.CheckAddExp` 查 int64 经验加法与 int32 等级范围，`StatsComponent.CheckRecordExp` 查 World 的 int64 累计），超出范围沿用 `exp_amount`（100004）拒绝，Player、属性、副本领奖账本、World 与升级效果都不写，也没有新的提交记录；`AddExp` / `RecordExp` 自己再查一次只是兜底，不靠写完再由 `rollback=undo` 撤回。`ClaimDungeon` 先判“已领取”（重放照旧返回 Claimed=false），再校验，最后才写账本。等级按平坦曲线用除余计算，不按奖励数量逐级循环（修前 `amount=MaxInt64` 会一直占住业务 worker）。GM `gm.player.add_exp`、`AddExp` 端点、副本结算 `FinishDungeon` 都经这两个 handler，同一道校验。生成工程回归在 `game/handler/add_exp_test.go`。

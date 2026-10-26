@@ -21,6 +21,8 @@
 
 ## docs/framework
 
+- [LEVEL-COMPONENT.md](../framework/LEVEL-COMPONENT.md)：通用关卡阶段、ECA、事务与外部动作、两种配置玩法及生成消费者
+
 - [README.md](../framework/README.md)：模块目录（学习文档、核心三块、次核心、其他包与专项契约）
 - [PACKAGES.md](../framework/PACKAGES.md)：全包源码索引
 - [PACKAGE-REORGANIZATION.md](../framework/PACKAGE-REORGANIZATION.md)：包目录分类、Wiring 与 Service 收敛方案（随 v1.25.0 交付）

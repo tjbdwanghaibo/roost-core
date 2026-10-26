@@ -25,9 +25,10 @@ type Commit func(context.Context, Frame) error
 
 // RunConfig 由业务选择输入与固定步长；输入回调在物理执行器上运行，不能直接修改 Entity。
 type RunConfig struct {
-	Epoch uint64
-	Step  time.Duration
-	Input func(uint64) []physx.Command
+	Epoch      uint64
+	Step       time.Duration
+	Input      func(uint64) []physx.Command
+	BeforeStep func(uint64) error // 物理执行器上的可信机制维护；失败停止房间。
 }
 
 // ComparisonScene 创建用户指定的对照场景。通用后端本身不限制胶囊数量或场景大小。
@@ -90,6 +91,11 @@ func Run(ctx context.Context, w *physx.World, config RunConfig, commit Commit) e
 		case <-ticker.C:
 		}
 		start := time.Now()
+		if config.BeforeStep != nil {
+			if err := config.BeforeStep(tick); err != nil {
+				return err
+			}
+		}
 		var commands []physx.Command
 		if config.Input != nil {
 			commands = config.Input(tick)
@@ -105,7 +111,7 @@ func Run(ctx context.Context, w *physx.World, config RunConfig, commit Commit) e
 }
 
 // Snapshot 使用块内 float32 坐标，先建立无量化误差的基准。
-// 53 字节对象载荷：位置3、旋转4、线速度3、角速度3个 float32，再加休眠标志。
+// 70 字节对象载荷：位置3、旋转4、线速度3、角速度3个 float32，再加休眠、实际采样输入序列与输入有效标志。
 func Snapshot(f Frame, chunkSize float32) (chunksync.Snapshot, error) {
 	if chunkSize <= 0 || math.IsNaN(float64(chunkSize)) || math.IsInf(float64(chunkSize), 0) {
 		return chunksync.Snapshot{}, errors.New("physics: invalid chunk size")
@@ -117,7 +123,7 @@ func Snapshot(f Frame, chunkSize float32) (chunksync.Snapshot, error) {
 			return chunksync.Snapshot{}, errors.New("physics: chunk coordinate out of range")
 		}
 		k := chunksync.Key{X: int32(x), Z: int32(z)}
-		data := make([]byte, 53)
+		data := make([]byte, 70)
 		offset := 0
 		put := func(v float32) { binary.LittleEndian.PutUint32(data[offset:], math.Float32bits(v)); offset += 4 }
 		put(b.Position[0] - float32(k.X)*chunkSize)
@@ -134,6 +140,11 @@ func Snapshot(f Frame, chunkSize float32) (chunksync.Snapshot, error) {
 		}
 		if b.Sleeping {
 			data[52] = 1
+		}
+		binary.LittleEndian.PutUint64(data[53:], b.InputSequence)
+		binary.LittleEndian.PutUint64(data[62:], b.InputGeneration)
+		if b.InputActive {
+			data[61] = 1
 		}
 		s.Objects[i] = chunksync.Object{ID: b.ID, Chunk: k, Data: data}
 	}

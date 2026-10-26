@@ -17,6 +17,7 @@ import (
 	gamephysics "github.com/tjbdwanghaibo/roost-core/gameplay/physics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/physics/physx"
 )
@@ -36,31 +37,40 @@ type retiredRoom struct {
 }
 
 type room struct {
-	mu      sync.Mutex
-	ref     Ref
-	spec    Spec
-	world   *physx.World
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stopped bool
-	members map[int64]*memberState
-	latest  *gamephysics.SpatialFrame
+	mu          sync.Mutex
+	ref         Ref
+	spec        Spec
+	world       *physx.World
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopped     bool
+	members     map[int64]*memberState
+	latest      *gamephysics.SpatialFrame
+	replication *gamephysics.ReplicationScene
+	viewFrame   *gamephysics.ReplicationFrame
+	states      []physx.State
+	grabs       map[uint64]uint64
 }
 type memberState struct {
-	member                  Member
-	binding                 gateway.Binding
-	body                    uint64
-	input                   Input
-	jumpPending             bool
-	inputAt, seenAt, sentAt time.Time
-	cursor                  chunksync.Cursor
-	pending                 *chunksync.Plan
-	sequence                uint64
-	visible, nextVisible    map[uint64]bool
+	member                          Member
+	binding                         gateway.Binding
+	body                            uint64
+	input                           Input
+	jumpPending                     bool
+	inputAt, jumpAt, seenAt, sentAt time.Time
+	cursor                          chunksync.Cursor
+	pending                         *chunksync.Plan
+	pendingPayload                  []byte
+	sequence                        uint64
+	visible, nextVisible            map[uint64]bool
+	view, nextView                  map[uint64]gamephysics.ViewEntry
 }
 
 func New(cfg Config) (*Service, error) {
 	// 所有资源上限在启动时检查，0 不代表无限容量。
+	if err := cfg.Replication.Validate(); err != nil {
+		return nil, err
+	}
 	switch {
 	case cfg.MaxRooms < 1 || cfg.MaxRooms > 1024,
 		cfg.MaxPlayers < 1 || cfg.MaxPlayers > 1024,
@@ -116,6 +126,9 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	if spec.Instance != s.instance || spec.ID == "" || len(spec.ID) > 128 || len(spec.Bodies) == 0 || len(spec.Bodies) > s.cfg.MaxBodies || spec.LifetimeSeconds <= 0 || spec.LifetimeSeconds > int64(s.cfg.MaxLifetime/time.Second) {
 		return Ref{}, ErrRequestInvalid
 	}
+	if err := gamephysics.ValidateMechanisms(spec.Bodies, spec.Motions, spec.Joints); err != nil {
+		return Ref{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping {
@@ -154,30 +167,44 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 		return Ref{}, err
 	}
 	for _, b := range spec.Bodies {
+		if b.ID >= 1<<63 {
+			w.Close()
+			return Ref{}, ErrRequestInvalid
+		}
 		if err = w.Add(b); err != nil {
+			w.Close()
+			return Ref{}, err
+		}
+	}
+	for _, j := range spec.Joints {
+		if err = w.AddJoint(j); err != nil {
 			w.Close()
 			return Ref{}, err
 		}
 	}
 	dynamic := 0
 	for _, b := range spec.Bodies {
-		if b.Shape != physx.Box {
+		if b.MotionType() != physx.Static {
 			dynamic++
 		}
 	}
-	if 36+dynamic*75 > s.cfg.MaxFrameBytes {
+	if gamephysics.RoomHeaderBytes+36+dynamic*(22+1+gamephysics.QuantizedBodyBytes) > s.cfg.MaxFrameBytes {
 		w.Close()
 		return Ref{}, ErrCapacity
 	}
 	ref := Ref{ID: spec.ID, Epoch: epoch()}
-	initial, err := gamephysics.NewSpatialFrame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies), 25, 10)
+	initial, err := gamephysics.NewQuantizedSpatialFrame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies), 10)
 	if err != nil {
 		w.Close()
 		return Ref{}, err
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(spec.LifetimeSeconds)*time.Second)
 	spec.Bodies = slices.Clone(spec.Bodies)
-	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial}
+	spec.Motions = slices.Clone(spec.Motions)
+	spec.Joints = slices.Clone(spec.Joints)
+	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, states: gamephysics.InitialFrame(ref.Epoch, spec.Bodies).States, grabs: make(map[uint64]uint64)}
+	r.replication = gamephysics.NewReplicationScene(spec.Bodies, spec.Motions)
+	r.viewFrame = r.replication.Frame(r.states)
 	s.rooms[ref.ID] = r
 	s.metrics.Accepted("create")
 	s.metrics.Depth("rooms", int64(len(s.rooms)))
@@ -216,11 +243,15 @@ func (s *Service) run(ctx context.Context, r *room) {
 		close(r.done)
 	}()
 	defer r.cancel()
-	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, Input: func(uint64) []physx.Command {
+	sampled := make(map[uint64]uint64)
+	generations := make(map[uint64]uint64)
+	active := make(map[uint64]bool)
+	err := gamephysics.Run(ctx, r.world, gamephysics.RunConfig{Epoch: r.ref.Epoch, Step: 20 * time.Millisecond, BeforeStep: func(uint64) error { return s.updateGrabs(r) }, Input: func(tick uint64) []physx.Command {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		now := time.Now()
-		out := make([]physx.Command, 0, len(r.members))
+		clear(active)
+		out := gamephysics.MotionCommands(r.spec.Bodies, r.spec.Motions, tick)
 		for player, m := range r.members {
 			if now.Sub(m.seenAt) > s.cfg.MemberTTL {
 				delete(r.members, player)
@@ -228,8 +259,11 @@ func (s *Service) run(ctx context.Context, r *room) {
 				continue
 			}
 			if !m.inputAt.IsZero() && now.Sub(m.inputAt) <= s.cfg.InputTTL {
-				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration, Jump: m.jumpPending})
+				out = append(out, physx.Command{ID: m.body, Acceleration: m.input.Acceleration, Jump: m.jumpPending && now.Sub(m.jumpAt) <= s.cfg.InputTTL})
 				m.jumpPending = false
+				sampled[m.body] = m.input.Sequence
+				generations[m.body] = m.member.InputGeneration
+				active[m.body] = true
 			}
 		}
 		// 稳定输入次序，不能让 map 遍历顺序成为物理重复运行的随机源。
@@ -244,15 +278,23 @@ func (s *Service) run(ctx context.Context, r *room) {
 		})
 		return out
 	}}, func(ctx context.Context, f gamephysics.Frame) error {
+		for i := range f.States {
+			f.States[i].InputSequence = sampled[f.States[i].ID]
+			f.States[i].InputGeneration = generations[f.States[i].ID]
+			f.States[i].InputActive = active[f.States[i].ID]
+		}
 		if err := s.cfg.Commit(ctx, r.ref, f); err != nil {
 			return err
 		}
-		frame, err := gamephysics.NewSpatialFrame(f, 25, 10)
+		frame, err := gamephysics.NewQuantizedSpatialFrame(f, 10)
 		if err != nil {
 			return err
 		}
+		viewFrame := r.replication.Frame(f.States)
 		r.mu.Lock()
 		r.latest = frame
+		r.viewFrame = viewFrame
+		r.states = slices.Clone(f.States)
 		r.mu.Unlock()
 		return nil
 	})
@@ -286,7 +328,7 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 	}
 	valid := false
 	for _, b := range r.spec.Bodies {
-		if b.ID == bodyID && b.Shape != physx.Box {
+		if b.ID == bodyID && b.MotionType() == physx.Dynamic {
 			valid = true
 		}
 	}
@@ -301,7 +343,7 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 	if len(r.members) >= s.cfg.MaxPlayers {
 		return Member{}, ErrCapacity
 	}
-	m := Member{Room: ref, PlayerID: binding.PlayerID, Token: token()}
+	m := Member{InputGeneration: epoch(), Room: ref, PlayerID: binding.PlayerID, Token: token()}
 	r.members[m.PlayerID] = &memberState{member: m, binding: binding, body: bodyID, seenAt: time.Now()}
 	s.metrics.Accepted("join")
 	return m, nil
@@ -346,11 +388,14 @@ func (s *Service) Submit(ctx context.Context, m Member, in Input) error {
 	if in.Sequence < v.input.Sequence {
 		return ErrSequence
 	}
-	if time.Since(v.inputAt) > s.cfg.InputTTL {
+	if time.Since(v.jumpAt) > s.cfg.InputTTL {
 		v.jumpPending = false
 	}
 	v.input = in
-	v.jumpPending = v.jumpPending || in.Jump
+	if in.Jump {
+		v.jumpPending = true
+		v.jumpAt = time.Now()
+	}
 	v.inputAt = time.Now()
 	v.seenAt = v.inputAt
 	s.metrics.Accepted("input")
@@ -376,13 +421,19 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err = v.cursor.Commit(v.pending); err != nil {
 			return Delivery{}, err
 		}
+		metrics.ObserveHistogram("physics.room.ack_wait", nil, time.Since(v.sentAt))
+		metrics.IncCounter("physics.room.ack.total", nil, 1)
+		v.view = v.nextView
+		v.nextView = nil
 		v.pending = nil
+		v.pendingPayload = nil
 		v.sequence = ack
 		v.visible = v.nextVisible
 	} else if ack != v.sequence {
 		return Delivery{}, ErrSequence
 	}
 	v.seenAt = time.Now()
+	replay := v.pending != nil
 	if v.pending == nil {
 		if time.Since(v.sentAt) < 50*time.Millisecond {
 			return Delivery{Room: r.ref, Sequence: v.sequence}, nil
@@ -391,15 +442,37 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if err != nil {
 			return Delivery{}, err
 		}
-		p, err := v.cursor.Plan(snapshot)
+		view, err := r.viewFrame.Plan(snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
+		if err != nil {
+			return Delivery{}, err
+		}
+		p, err := v.cursor.PlanFields(view.Snapshot, gamephysics.QuantizedLayout())
 		if err != nil {
 			return Delivery{}, err
 		}
 		v.pending = p
+		v.nextView = view.Entries
+		for class, count := range view.Samples {
+			metrics.IncCounter("physics.room.view_changes.total", metrics.Labels{"class": class}, int64(count))
+		}
+		for class, count := range view.Deferred {
+			metrics.IncCounter("physics.room.view_deferred.total", metrics.Labels{"class": class}, int64(count))
+		}
+		recordFrame(p.Data)
+		var own gamephysics.InputAck
+		if state, ok := r.viewFrame.State(v.body); ok && state.InputGeneration == v.member.InputGeneration {
+			own = gamephysics.InputAck{Sequence: state.InputSequence, Generation: state.InputGeneration, Active: state.InputActive}
+		}
+		v.pendingPayload = gamephysics.RoomPayload(p.Data, own)
 		v.nextVisible = visible
 		v.sentAt = time.Now()
 	}
-	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pending.Data)}, nil
+	kind := "new"
+	if replay {
+		kind = "retry"
+	}
+	metrics.IncCounter("physics.room.payload_bytes.total", metrics.Labels{"kind": kind}, int64(len(v.pendingPayload)))
+	return Delivery{Room: r.ref, Sequence: v.sequence + 1, Payload: slices.Clone(v.pendingPayload)}, nil
 }
 func (s *Service) Leave(ctx context.Context, m Member) error {
 	if err := ctx.Err(); err != nil {

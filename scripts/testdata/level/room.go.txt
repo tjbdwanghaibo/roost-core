@@ -1,0 +1,76 @@
+// Package levelpractice 展示 LevelComponent 的正式实体/DAO/组件装配。
+package levelpractice
+
+import (
+	"errors"
+	"example.com/level-practice/dto"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+)
+
+const RoomKind entity.EntityKind = 237
+const LevelDaoCollection = level.CollectionName
+const CompTypeLevel entity.ComponentType = 1
+
+// 生成器按 NewLevelDao() 构造并设置 StorageID；选择瞬态或持久 DAO 是宿主职责。
+type LevelDao struct{ *level.LevelDAO }
+
+func NewLevelDao() *LevelDao { return &LevelDao{level.NewTransientLevelDAO(0)} }
+
+func init() {
+	entity.MustRegisterEntityKindCategory(RoomKind, entity.EntityCategoryWorld)
+	entity.RegisterComponentFactory(CompTypeLevel, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		room := owner.(*Room)
+		p, err := level.Compile(level.Definition{Version: 1, Name: "timed_room", Revision: 1, TimeDomain: "tick", Initial: []string{"play"}, Stages: []level.StageDefinition{{ID: "play", Triggers: []level.TriggerDefinition{
+			{ID: "clock", Event: level.EventStageStart, Actions: []level.Action{{Kind: "timer", Name: "timeout", Delay: 10}}},
+			{ID: "finish", Event: level.EventTimer, Actions: []level.Action{{Kind: "request", Name: "settle", LevelLifetime: true}, {Kind: "finish", Result: "timeout"}}},
+		}}}}, level.Registry{Actions: map[string]level.ActionSpec{"settle": {Version: 1}}})
+		if err != nil {
+			return nil, err
+		}
+		return level.NewLevelComponent(room.state.LevelDAO, p)
+	})
+}
+
+//roost:entity entityKind=RoomKind noPersist=true
+type Room struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	state *LevelDao             `dao:"level_state"`
+	flow  *level.LevelComponent `comp:"CompTypeLevel"`
+}
+
+//roost:nest target=RoomKind rollback=undo durability=memory
+func Open(room *Room, instance string, epoch uint64) error {
+	if err := room.flow.Initialize(instance, epoch, 0); err != nil {
+		return err
+	}
+	return room.flow.Start(0)
+}
+
+// Advance 只能由服务器模拟循环投递，tick 不是客户端自由填写的协议字段。
+//
+//roost:nest target=RoomKind rollback=undo durability=memory
+func Advance(room *Room, tick uint64, fail bool) error {
+	if err := room.flow.AdvanceTick(tick); err != nil {
+		return err
+	}
+	if fail {
+		return errors.New("simulated handler failure")
+	}
+	return nil
+}
+
+//roost:nest target=RoomKind rollback=undo durability=memory
+func Read(room *Room) (dto.ReadResult, error) {
+	return dto.ReadResult{room.flow.Project(), room.flow.PendingActions()}, nil
+}
+
+//roost:nest target=RoomKind rollback=undo durability=memory
+func Complete(room *Room, receipt level.Receipt, tick int64) error {
+	return room.flow.Complete(receipt, tick)
+}
+
+//roost:nest target=RoomKind rollback=undo durability=memory
+func Close(room *Room, tick int64) error { return room.flow.Close(tick) }

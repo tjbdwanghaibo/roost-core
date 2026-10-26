@@ -22,11 +22,13 @@ func TestRoomInputProtobuf(t *testing.T) {
 	payload = protowire.AppendFixed32(payload, math.Float32bits(-10))
 	payload = protowire.AppendTag(payload, 4, protowire.VarintType)
 	payload = protowire.AppendVarint(payload, 1)
+	payload = protowire.AppendTag(payload, 5, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 3)
 	got, err := decodeInput(payload)
-	if err != nil || got.Sequence != 300 || got.Acceleration[0] != -10 || !got.Jump {
+	if err != nil || got.Sequence != 300 || got.Acceleration[0] != -10 || !got.Jump || got.GrabTarget != 3 {
 		t.Fatalf("input=%+v err=%v", got, err)
 	}
-	for _, bad := range [][]byte{nil, {8}, {8, 0}, {8, 1, 8, 2}, {8, 1, 32, 2}, {8, 1, 21, 0}, {8, 1, 18, 0}} {
+	for _, bad := range [][]byte{nil, {8}, {8, 0}, {8, 1, 8, 2}, {8, 1, 32, 2}, {8, 1, 21, 0}, {8, 1, 18, 0}, {8, 1, 40, 1, 40, 2}, {8, 1, 45, 0, 0, 0, 0}, {8, 1, 48, 0}} {
 		if _, err := decodeInput(bad); err == nil {
 			t.Fatalf("invalid protobuf accepted: %x", bad)
 		}
@@ -42,7 +44,7 @@ type fakeRooms struct {
 
 func (f *fakeRooms) Join(_ context.Context, room domain.Ref, binding gateway.Binding, _ uint64) (domain.Member, error) {
 	f.joins.Add(1)
-	return domain.Member{Room: room, PlayerID: binding.PlayerID, Token: "token"}, nil
+	return domain.Member{Room: room, PlayerID: binding.PlayerID, Token: "token", InputGeneration: 9}, nil
 }
 func (f *fakeRooms) Submit(context.Context, domain.Member, domain.Input) error {
 	f.submits.Add(1)
@@ -128,8 +130,15 @@ func TestPlayerIngressJoinsOnceAndReleasesWithTheConnection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r, ok := reply.(*gateway.TCPResponse); !ok || r.MessageID != 2 || r.Sequence != uint32(seq) {
+		r, ok := reply.(*gateway.TCPResponse)
+		if !ok || r.MessageID != 2 || r.Sequence != uint32(seq) {
 			t.Fatalf("reply=%+v", reply)
+		}
+		// RoomInputAck：input_generation=1 是成员代际。
+		if _, _, n := protowire.ConsumeTag(r.Payload); n < 0 {
+			t.Fatalf("input ack=%x", r.Payload)
+		} else if generation, m := protowire.ConsumeVarint(r.Payload[n:]); m < 0 || generation != 9 {
+			t.Fatalf("input ack generation=%d payload=%x", generation, r.Payload)
 		}
 	}
 	if seats.Load() != 1 || rooms.joins.Load() != 1 || rooms.submits.Load() != 3 {
@@ -175,6 +184,60 @@ func TestPlayerIngressJoinsOnceAndReleasesWithTheConnection(t *testing.T) {
 	}
 	if _, err = p.Dispatch(ctx, session, 2, 6, wire.PayloadProtobuf, inputPayload(6)); !errors.Is(err, domain.ErrStopping) {
 		t.Fatalf("dispatch after close: %v", err)
+	}
+}
+
+// 内容握手：消息号与回调必须成对配置；空载荷请求按已认证绑定返回 RoomLevel，不 Join、不建房。
+func TestPlayerIngressContentHandshake(t *testing.T) {
+	ctx := context.Background()
+	seat := func(context.Context, gateway.Binding) (domain.Ref, uint64, error) {
+		return domain.Ref{ID: "room", Epoch: 1}, 51, nil
+	}
+	content := func(_ context.Context, b gateway.Binding) (RoomContent, error) {
+		return RoomContent{Data: []byte(`{"Version":1}`), SHA256: "abc", Body: uint64(50 + b.PlayerID)}, nil
+	}
+	for _, bad := range []PlayerIngressConfig{
+		{InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 3},
+		{InputMessageID: 2, FrameMessageID: 1, Seat: seat, Content: content},
+		{InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 2, Content: content},
+		{InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 1, Content: content},
+	} {
+		if _, err := NewPlayerIngress(bad); err == nil {
+			t.Fatalf("invalid content config accepted: %+v", bad)
+		}
+	}
+	p, err := NewPlayerIngress(PlayerIngressConfig{InputMessageID: 2, FrameMessageID: 1, Seat: seat, ContentMessageID: 3, Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ingressBinding()
+	rooms := &fakeRooms{}
+	if err = p.Attach(rooms, fakeGame{binding: binding}); err != nil {
+		t.Fatal(err)
+	}
+	session := fakeSession{id: binding.SessionID, closed: make(chan error, 1)}
+	if _, err = p.Dispatch(ctx, session, 3, 1, wire.PayloadProtobuf, []byte{8, 1}); !errors.Is(err, domain.ErrRequestInvalid) {
+		t.Fatalf("non-empty content request: %v", err)
+	}
+	reply, err := p.Dispatch(ctx, session, 3, 2, wire.PayloadProtobuf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := reply.(*gateway.TCPResponse)
+	data := r.Payload
+	_, _, n := protowire.ConsumeTag(data)
+	level, m := protowire.ConsumeBytes(data[n:])
+	data = data[n+m:]
+	_, _, n = protowire.ConsumeTag(data)
+	hash, m := protowire.ConsumeString(data[n:])
+	data = data[n+m:]
+	_, _, n = protowire.ConsumeTag(data)
+	body, m := protowire.ConsumeVarint(data[n:])
+	if r.MessageID != 3 || r.Sequence != 2 || string(level) != `{"Version":1}` || hash != "abc" || body != 51 || m < 0 || len(data[n+m:]) != 0 {
+		t.Fatalf("content reply=%+v", r)
+	}
+	if rooms.joins.Load() != 0 {
+		t.Fatal("content handshake joined a room")
 	}
 }
 

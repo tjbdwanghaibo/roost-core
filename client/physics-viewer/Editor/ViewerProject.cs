@@ -73,6 +73,15 @@ public static class ViewerProject
         EditorSceneManager.SaveScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene(), "Assets/Scenes/Room.unity");
         AssetDatabase.SaveAssets();
     }
+    public static void OpenUGCInteractive()
+    {
+        EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+        var viewer=new GameObject("Roost UGC Controller").AddComponent<CrowdViewer>();
+        viewer.ControlRoom=true;viewer.UseGate=true;viewer.Port=19093;viewer.PlayerSlot=1;
+        Directory.CreateDirectory("Assets/Scenes");
+        EditorSceneManager.SaveScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene(), "Assets/Scenes/UGC.unity");
+        EditorApplication.isPlaying=true;
+    }
     public static void OpenRoomInteractive()
     {
         if (!File.Exists("Assets/Scenes/Room.unity")) CreateRoomScene();

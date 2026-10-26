@@ -1,0 +1,73 @@
+package levelpractice_test
+
+import (
+	"context"
+	flow "example.com/level-practice"
+	sender "example.com/level-practice/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/level"
+	"testing"
+	"time"
+)
+
+func TestGeneratedLevelComponent(t *testing.T) {
+	flow.RegisterEntity()
+	flow.RegisterRoomNestHandlers()
+	id, err := entity.BuildEntityID(101, flow.RoomKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := flow.NewRoom(&entity.EntityCreateParam{Id: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := entity.NewEntityManager()
+	if err = manager.TryAdd(room); err != nil {
+		t.Fatal(err)
+	}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(manager)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}))
+	if err = engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Shutdown(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := sender.NewRoomSender(engine)
+	if err = client.Sync_Open(ctx, id, "room", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Sync_Advance(ctx, id, 10, true); err == nil {
+		t.Fatal("expected rollback")
+	}
+	result, err := client.Sync_Read(ctx, id)
+	if err != nil || result.View.Phase != level.Running || len(result.Actions) != 0 {
+		t.Fatalf("failed handler leaked: %+v %v", result, err)
+	}
+	if err = client.Sync_Advance(ctx, id, 10, false); err != nil {
+		t.Fatal(err)
+	}
+	result, err = client.Sync_Read(ctx, id)
+	if err != nil || result.View.Phase != level.Finishing || len(result.Actions) != 1 {
+		t.Fatalf("timeout: %+v %v", result, err)
+	}
+	if err = client.Sync_Close(ctx, id, 10); err == nil {
+		t.Fatal("closed before receipt")
+	}
+	// 此替身模拟提交后动作执行。真实永久奖励还须用 Effect.ID 持久去重。
+	action := result.Actions[0]
+	receipt := level.Receipt{Instance: action.Instance, Epoch: action.Epoch, ID: action.ID, Success: true}
+	if err = client.Sync_Complete(ctx, id, receipt, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Sync_Complete(ctx, id, receipt, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Sync_Close(ctx, id, 10); err != nil {
+		t.Fatal(err)
+	}
+	result, err = client.Sync_Read(ctx, id)
+	if err != nil || result.View.Phase != level.Closed || len(result.Actions) != 0 {
+		t.Fatalf("close: %+v %v", result, err)
+	}
+}

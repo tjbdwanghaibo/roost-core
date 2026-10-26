@@ -4,6 +4,10 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## 通用 LevelComponent 首版边界
+
+`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。该组件尚未验证真实 Mongo/WAL 多进程崩溃恢复，不恢复原生物理世界。状态复制与整状态 mutation 有预算但没有容量承诺，动作账本满额拒绝，长期归档另设计。私有参与者状态、网络增量与 Unity UI 由宿主接入。
+
 ## 本轮审查待修复（2026-10-22）
 
 基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。三项均已修复：RV-20261022-01（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)）、RV-20261022-02（`47691000`，见 [v1.31.0 实现篇 R2](../release/v1.31.0-IMPLEMENTATION.md#r2)）、RV-20261022-03（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)）。本节没有仍未修复的项。
@@ -358,6 +362,12 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 | 生成工程完整链路持久写入（嵌入 TCP + strict） | 2026-10-20 单样本、非独占宿主（[报告](../performance/GENERATED-TCP-STRICT-20261020.md)）：CLI 生成工程、strict handler 金币 +1、不经 Saga、无 self_sync，50 连接各自一个玩家**压测端** 1253 TPS、P50 38ms、P99 75ms，WAL 每批约 9.9 条；同一实体 108 TPS。上限约为 short 池 worker 数（缺省 GOMAXPROCS）/ 每笔持锁时间（strict 在锁内等所在批 fsync，本机约 8ms）。async 不比 strict 快（同机 1083 对 1257），原因尚未确认 | 2026-10-22 发版候选复跑（[NIGHT-20261022 §13](../performance/NIGHT-20261022.md#13-第-14-项生成工程完整链路持久写入嵌入-tcp--strict)）：strict 1241～1314 TPS、同实体 113 TPS，pipelined / async 对照已做；self_sync 对照与独占宿主仍待补测 |
 | schema 升级 / Player 跨机演练 | 2026-10-20 夜间在 v1.30 候选生成的 game-demo 上真实进程演练通过（schema：拒绝旧 schema → plan / apply / verify → rollback 只恢复未被写过的一份；Player：正常迁移、kill -9 后原 WAL 重启、未排空被 `wal-drained` 拒绝，302 次确认逐键 +1），与 10-15 一致 | 真实跨机网络、卷迁移、客户端重连路径 |
 
+## UGC 物理闯关
+
+可选 PhysX 房间当前支持运动学转轮/平台、动态 Box、弹簧抓取和铰链马达、固定版本关卡加载、Unity 预测/纠偏接法；见 [物理房间契约与验证](../framework/PHYSICS-ROOM-SERVICE.md#unity-ugc-多人闯关运动抓取关卡与预测)。Linux 原生功能、真实 TCP/Gate/NATS/Nest 联合链及 C# 预测核心已验证，新增 Unity 交互未在编辑器运行。历史单房间性能数据不覆盖新载荷/约束或多房间容量。
+
+UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、编辑器、发布审核、CDN、运行期刚体增删、公开碰撞事件、检查点/通关/奖励或物理跨机接管。抓取按中心距离，无视线检查。近似客户端预测不保证移动平台摩擦或跨版本 PhysX 一致；输入邮箱不是逐命令帧同步。Room 为 RP2 私有确认 + RC2 字段增量（完整量化对象 34 字节）；Comparison/Crowd 对照仍为 RC1/70 字节。native ABI 2，先停旧再同步更新服务与客户端。同帧编码样本载荷降低约 51.7%，位置单轴量化误差约 5mm；不是 WAN 或容量验收。
+
 ## 游戏接入验收
 
 九份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；真实模式入口登记在根包 `integration_coverage_test.go`。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
@@ -386,3 +396,9 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 6. **匹配队列**：Cluster 下的容量、跨机 Redis、异步复制丢写没有测。夹具的 Sweep 参数 2026-10-22 已在一次性夹具里改为 200 并重跑（[NIGHT-20261022](../performance/NIGHT-20261022.md)）：Sweep 生效后饱和点不变（每分区状态约 2.6 MB，第 8 分钟）；Cluster 主节点切换窗口里有 8 次 `MOVED` 直接返回调用方（夜间没有），受控测试确认驱动跟随重定向；现已将一次 Cluster 预算耗尽后的 MOVED / ASK 纳入既有有界安全重试，历史八次具体路由仍未确认。
 7. **生成工程完整链路持久写入**（原第 14 项）：2026-10-22 已在发版候选上复跑（[NIGHT-20261022](../performance/NIGHT-20261022.md)）：strict 50 连接 1241～1314 TPS（4 次）、同一实体 113 TPS，与 1253 TPS 单样本一致；pipelined 持锁 0.07ms 但闭环吞吐不变；async 1378～1451 TPS、锁内仍约 6.8ms（旧指标漏记后台 fsync，已修正；不能再据此断言没有 fsync，等待占比需剖析）。**仍待补测**：self_sync 对照、pipelined 的开环 / 同实体并发写对照、独占宿主。
 8. **demo 按秒爬坡**（维护者 2026-10-22 晚决定 A，已做：[清单 §3](../performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：每秒起跑 2 个时 100 / 200 人全部通过；更高速率的失败来自 gift saga（原生步骤每进程约 8/s）、奖励邮件 effect 链与公会目录，登记在 DESIGN-TODO 优化项第 5 组。
+
+
+物理 Room 默认启用接收者分频/字段裁剪，远处规则障碍可按固定关卡轨迹显示；完整对象仍为 34 字节，RP2 明确标记省略速度，RP1 客户端须同步更新。近处/抓取关联与快速接近对象保留高频；包围球用于分频保护，AOI 仍为中心距离，不是几何遮挡或全形状相交查询。降频引入样本年龄和插值延迟，不能用量化的 5mm 误差宣称实时显示误差；Unity 编辑器、WAN 和多房间容量未验。指标与同帧对照见 [Room 手册](../framework/PHYSICS-ROOM-SERVICE.md#按接收者分频字段裁剪与轨迹显示)。
+
+
+物理房间已补 Linux 的 1/4/8 房间短测（每房 20 个逻辑客户端，普通/机关两类）。这是直接 Service + PhysX + Nest、预热 1 秒/采集 5 秒的证据，不含生产网络、原生内存与长稳，不能作为容量上限；普通 8 房间样本实际物理均频 49.32Hz。共享索引降低视图规划分配，但机关 8 房间测试进程仍约 80.81MB/s Go 分配，需继续 profile 定位，见 [测量口径和复跑](../framework/PHYSICS-ROOM-SERVICE.md#共享索引与多房间测量2026-10-26)。闯关流程本轮未实现：按用户约定后续先参考 ssr 的 level 机制，避免另建专用检查点/排名/结算状态机。
