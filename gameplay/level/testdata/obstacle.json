@@ -1,0 +1,161 @@
+{
+  "Version": 1,
+  "Name": "obstacle",
+  "Revision": 1,
+  "TimeDomain": "tick",
+  "CloseDelay": 3,
+  "Initial": [
+    "checkpoint"
+  ],
+  "Variables": [
+    {
+      "Scope": "global",
+      "Name": "progress",
+      "Default": {
+        "Kind": "int"
+      },
+      "Public": true
+    }
+  ],
+  "Stages": [
+    {
+      "ID": "checkpoint",
+      "Triggers": [
+        {
+          "ID": "enter",
+          "Event": "region.enter",
+          "Conditions": [
+            {
+              "Left": {
+                "EventField": "region"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "string",
+                  "Text": "checkpoint"
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "request",
+              "Name": "checkpoint",
+              "Args": {
+                "actor": {
+                  "EventField": "actor"
+                }
+              }
+            }
+          ],
+          "MaxFires": 1
+        },
+        {
+          "ID": "saved",
+          "Event": "action.done",
+          "Conditions": [
+            {
+              "Left": {
+                "EventField": "name"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "string",
+                  "Text": "checkpoint"
+                }
+              }
+            },
+            {
+              "Left": {
+                "EventField": "success"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "bool",
+                  "Bool": true
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "set",
+              "Scope": "global",
+              "Name": "progress",
+              "Value": {
+                "Literal": {
+                  "Kind": "int",
+                  "Int": 1
+                }
+              }
+            },
+            {
+              "Kind": "end",
+              "Name": "checkpoint"
+            },
+            {
+              "Kind": "start",
+              "Name": "finish"
+            }
+          ],
+          "MaxFires": 1
+        }
+      ]
+    },
+    {
+      "ID": "finish",
+      "Triggers": [
+        {
+          "ID": "arrive",
+          "Event": "region.enter",
+          "Conditions": [
+            {
+              "Left": {
+                "EventField": "region"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "string",
+                  "Text": "finish"
+                }
+              }
+            },
+            {
+              "Left": {
+                "EventField": "checkpoint_ready"
+              },
+              "Op": "eq",
+              "Right": {
+                "Literal": {
+                  "Kind": "bool",
+                  "Bool": true
+                }
+              }
+            }
+          ],
+          "Actions": [
+            {
+              "Kind": "request",
+              "Name": "settle",
+              "LevelLifetime": true,
+              "Args": {
+                "winner": {
+                  "EventField": "actor"
+                }
+              }
+            },
+            {
+              "Kind": "finish",
+              "Result": "completed"
+            }
+          ],
+          "MaxFires": 1
+        }
+      ]
+    }
+  ]
+}

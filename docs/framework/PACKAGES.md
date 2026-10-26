@@ -76,6 +76,7 @@
 | [gameplay/actionflow](../../gameplay/actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 8 | 6 |
 | [gameplay/ai](../../gameplay/ai) | [其他包与公共基础设施](impl/14-foundation.md) | 8 | 10 |
 | [gameplay/attribute](../../gameplay/attribute) | [游戏技能、战斗与空间](impl/08-skill.md) | 2 | 2 |
+| [gameplay/level](../../gameplay/level) | [通用关卡组件](LEVEL-COMPONENT.md) | 7 | 3 |
 | [gameplay/heartbeat](../../gameplay/heartbeat) | [时间与定时器](impl/10-time.md) | 3 | 6 |
 | [gameplay/movement](../../gameplay/movement) | [时间与定时器](impl/10-time.md) | 3 | 8 |
 | [gameplay/skill](../../gameplay/skill) | [游戏技能、战斗与空间](impl/08-skill.md) | 157 | 112 |

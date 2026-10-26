@@ -1,0 +1,9 @@
+package dto
+
+import "github.com/tjbdwanghaibo/roost-core/gameplay/level"
+
+// ReadResult 是业务内部查询，Actions 不向客户端发送。
+type ReadResult struct {
+	View    level.View
+	Actions []level.Effect
+}

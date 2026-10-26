@@ -228,3 +228,6 @@ UGC 带宽 review：将接收者私有输入确认与公开物理对象分离；
 
 
 UGC 闯关流程约定（用户明确要求）：后续先研究参考仓库 ssr 的 level 机制，再映射到 core 的现行生命周期与业务接入；当前不另写专用检查点、重生、排名或结算状态机。ssr 仍只作参考，不直接移植旧接口。性能工作可独立推进：静态索引按房间复用，动态索引按已提交帧复用并检查所有权和发布一致性；报告微基准与完整链路的不同成本。多房间测量须列实际物理/交付 Hz、空轮询、机关/接触负载、Go 分配与原生内存是否包含、预热/采样时间及网络范围。固定 ticker 与服务端最小间隔可能叠加限流，先用延迟注入复现，再调整调用端调度；不以放宽服务端上限掩盖问题。不把有界短测当成长稳或生产容量。
+
+
+通用关卡接入（用户已确认 gameplay LevelComponent）：先读 `docs/framework/LEVEL-COMPONENT.md`，使用 `gameplay/level` 的定义编译、Stage／ECA、DAO 事务和动作回执；参考 ssr 思路，不移植旧锁或另写 UGC 专用流程框架。用 `scripts/test-level-generated.sh` 验证正式 Entity／Sender 装配，再用 obstacle／waves 两套配置验证通用性。事件只能来自可信宿主；固定 instance／epoch／配置 hash，定向事件与回执隔离旧阶段 generation；按来源序列有序投递。外部能力必须真实实现后才声明到 Registry，RequestSettled 成功后才执行动作，结果未知查询或同 ID 重试；永久奖励仍需持久去重，取消不能撤销已执行外部动作。定时器接服务器 tick、heartbeat 或 entitytimer，不启动额外后台状态循环；迟到只消费已有单次期限。写 handler 显式声明 rollback=undo 或 rollback=state；检查恢复配置、事务回滚、隐藏变量投影、动作账本／步骤预算。不得把能力替身、编解码恢复、生成消费者通过扩大成 PhysX 重生、多人完整玩法、真实 WAL 崩溃恢复、Unity 或容量验收。继续在固定分支提交推送，不提 issue/PR。

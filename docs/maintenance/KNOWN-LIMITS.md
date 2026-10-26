@@ -4,6 +4,10 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## 通用 LevelComponent 首版边界
+
+`gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。该组件尚未验证真实 Mongo/WAL 多进程崩溃恢复，不恢复原生物理世界。状态复制与整状态 mutation 有预算但没有容量承诺，动作账本满额拒绝，长期归档另设计。私有参与者状态、网络增量与 Unity UI 由宿主接入。
+
 ## 本轮审查待修复（2026-10-22）
 
 基线 `13bc939e`，复现及验收要求见 [提交审查](COMMIT-REVIEW.md)。三项均已修复：RV-20261022-01（`6edebb13`，见 [v1.31.0 实现篇 H2](../release/v1.31.0-IMPLEMENTATION.md#h2)）、RV-20261022-02（`47691000`，见 [v1.31.0 实现篇 R2](../release/v1.31.0-IMPLEMENTATION.md#r2)）、RV-20261022-03（`b7b52486`，见 [v1.31.0 实现篇 S4](../release/v1.31.0-IMPLEMENTATION.md#s4)）。本节没有仍未修复的项。

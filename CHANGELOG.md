@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 通用 LevelComponent
+
+- 新增 `gameplay/level`：固定版本定义、多活动 Stage、强类型 ECA 与作用域变量、宿主逻辑定时器、提交后动作请求及代际回执；配置和运行预算有界，事务草稿整体发布，支持瞬态／持久 DAO。
+- UGC 闯关与 PvE 波次使用同一组件和两套 JSON；正式生成 Entity／Sender 消费者验证装配、回滚、到期和回执。使用与验证边界见 [Level 手册](docs/framework/LEVEL-COMPONENT.md)。不移植 ssr 旧接口，不将能力测试替身写成实际物理重生或永久发奖。
+
 ### Room 共享索引与多房间测量
 
 - 房间静态形状/轨迹索引在建房时固定，状态索引每个已提交帧构建一次供所有接收者共享，输入确认改为按 ID 查询；成员 ACK 基线仍独立。
