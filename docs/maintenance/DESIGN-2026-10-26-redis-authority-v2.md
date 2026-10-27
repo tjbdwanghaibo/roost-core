@@ -181,7 +181,7 @@ Redis 服务端的 `appendfsync always` 会把同一轮事件循环里所有连�
 | 1 协议 | 本文 | — | 本文提交即完成（维护者：按 v2 直接实施） |
 | 1.5 Mongo 链路减往返（可选，见 §6.1） | O3 / O4 / O5 / O6 | 每项先红后绿，同机前后对照 | 每项修前 / 修后对照；`framework/saga`、`framework/dataengine` 全绿 |
 | **2a 存储替换** | 权威 Redis Mod；`RedisStore`（实现 `Store`、`CompletionHistoryStore`、`LateSuccessAlarmStore`）；Lua 脚本；结果 / 启动消费者并发；启动探针；`MongoStore` 收缩为冷副本 | §7.14 的 2a 用例；现有 `framework/saga` 契约用例改跑 Redis 实现 | 单元 + 集成（真实 Redis AOF + Mongo）全绿含 `-race`；`kill -9` Redis 用例通过；§8 压测：协调段 Mongo 操作 = 0；Redis 脚本数与 §3.2 一致（±10%）；Mongo 步骤 w16 饱和吞吐 ≥ 1.5 × 基线；Mongo 步骤 c1 P50 ≤ 0.85 × 基线；原生正向 / 补偿饱和吞吐 ≥ 0.95 × 基线；非过载档终态与账户核对全部通过 |
-| **2b Store Service** | `framework/storeservice` 投影运行器；saga 投影（Mongo 冷副本）；驱逐与冷读 / 装回；`wiring/storeservice` Mod | §7.14 的 2b 用例；冷热一致性核对 | 投影吞吐本机 ≥ 5000 条/s（P=16、批 256）；压测期间积压不超过 2 × 在途，停止加压后 30s 内归零；冷副本核对 0 差异；迟到成功在驱逐后能装回并补偿 |
+| **2b Store Service** | `framework/storeservice` 投影运行器；saga 投影（Mongo 冷副本）；驱逐与冷读 / 装回；`wiring/storeservice` Mod | §7.14 的 2b 用例；冷热一致性核对 | 投影吞吐本机 ≥ 5000 条/s（P=16、批 256）；压测期间积压不超过 2 × 在途（按笔计：未投影日志涉及的 saga 笔数 ≤ 2 × 在途笔数；没有按笔指标时用“日志条数 ÷ 每笔日志条数”折算，维护者 2026-10-27 确认），停止加压后 30s 内归零；冷副本核对 0 差异；迟到成功在驱逐后能装回并补偿 |
 | **2c 引擎减往返** | O1 完成即派发；O2 派发后直接发布；批量派发；批量确认 | §7.14 的 2c 红测试 | 协调器关键路径 Redis 脚本 ≤ 2 / 步（首步除外）；Mongo 步骤 w16 饱和 ≥ 2 × 基线；c1 P50 ≤ 0.7 × 基线；Saga completion 统一规则用例全绿 |
 | 3 Remote | Remote 提交、ownership、共享模式迁 Redis；Store Service 加 Remote 投影 | 草稿 §10 的 Remote 行；`framework/remoteentity` 全部适配；`kill -9` Redis 下 fence 不复用 | Remote strict 写关键路径 Mongo 0、Redis 2；`scripts/perf/remote.sh` 吞吐 ≥ 基线、P99 不退化 |
 | 4 普通 Entity RedisActive | 状态机、路由、Entering / Closing、心跳、冷加载、重启顺序；步骤收件箱迁 Redis | 草稿 §10 全部 + R3 / R4 / R9 / R10 / R15 专项 | 原生步骤关键路径 Mongo 0、Redis 4～6；原生正向饱和 ≥ 3 × 基线（投影器移出关键路径）；Entering 等待分布单独报告 |
@@ -936,7 +936,7 @@ scripts/it-redis-aof.sh stop
 | 2a：原生正向 / 补偿饱和 ≥ 0.95 × 基线 | 0.78～0.83 / 0.84～0.87 | 1.00～1.35 | **不达标** |
 | 2a：非过载档终态与账户核对 | c1～c64 全部通过 | 同 | 达标 |
 | 2b：投影 ≥ 5000 条/s | 2.05 万～2.74 万条/s | — | 达标 |
-| 2b：积压 ≤ 2 × 在途、停止后 30s 内归零 | 峰值 2～28 条，c16 起 ≤ 1.6 倍并发数；c1 / c4 的 Mongo 步骤档 3 / 1、10 / 4；归零 3～8ms | — | 归零达标；积压按字面口径 c1 / c4 略超，**口径尚未确认**（积压按日志条数、在途按 saga 笔数，一笔约 5 条日志） |
+| 2b：积压 ≤ 2 × 在途、停止后 30s 内归零 | 峰值 2～28 条，c16 起 ≤ 1.6 倍并发数；c1 / c4 的 Mongo 步骤档 3 / 1、10 / 4；归零 3～8ms | — | **达标**（维护者 2026-10-27 确认按笔计：积压条数 ÷ 每笔约 5 条日志 ≤ 2 × 在途笔数；全部档位 ≤ 0.6 倍，c1 0.6、c4 0.5；原先按“条数 ≤ 2 × 笔数”的字面口径 c1 / c4 为 3 / 1、10 / 4） |
 | 2b：冷副本 0 差异 | 全部档位 0 | 同 | 达标 |
 | 2b：驱逐后迟到成功装回并补偿 | 集成用例通过 | — | 达标 |
 
