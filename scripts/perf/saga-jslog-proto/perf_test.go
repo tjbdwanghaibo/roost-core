@@ -149,9 +149,10 @@ func TestPerfClosedLoop(t *testing.T) {
 }
 
 func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolicy, parts, conc, seconds, warmup, snapEvery int, retention time.Duration, walRoot string) perfResult {
-	r := perfResult{Scenario: scenario, Partitions: parts, Streams: envInt("SAGAJS_PERF_STREAMS", 1), Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds, SnapshotEvery: snapEvery,
+	r := perfResult{Scenario: scenario, Partitions: parts, Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds, SnapshotEvery: snapEvery,
 		LoadBefore: loadavg(), StartedAt: time.Now().Format(time.RFC3339)}
-	e := newEnvGroups(t, parts, envInt("SAGAJS_PERF_STREAMS", 1))
+	e := newEnvGroups(t, parts, envInt("SAGAJS_PERF_STREAMS", 0))
+	r.Streams = len(e.l.Streams())
 	e.pairs = 256
 	walDir := filepath.Join(walRoot, e.l.Prefix)
 	defer os.RemoveAll(walDir)

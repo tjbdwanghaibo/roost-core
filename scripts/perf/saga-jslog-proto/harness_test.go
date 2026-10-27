@@ -14,6 +14,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 // 变异开关（先红后绿）：SAGAJS_MUTATE=nofence 让协调器发布不带期望序号；=noreceipt 让参与方不查回执。
@@ -29,6 +31,97 @@ type env struct {
 	l      Layout
 	client *Client
 	pairs  int
+	// Mongo 投影打开时非空：本轮唯一库 db，用完删掉。
+	mongo fmongo.IMongo
+	db    string
+	proj  *SagaProjector
+}
+
+// withMongo 打开投影：连 SAGAJS_MONGO_URI（runner 从隔离环境的 env.sh 转给它，不打印），库名 sagajs_<前缀>，用完删库。
+func (e *env) withMongo() {
+	e.t.Helper()
+	uri := os.Getenv("SAGAJS_MONGO_URI")
+	if uri == "" {
+		e.t.Skip("SAGAJS_MONGO_URI 未设置：投影用例需要本机隔离 Mongo")
+	}
+	client, err := newMongo(uri)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.mongo, e.db = client, "sagajs_"+e.l.Prefix
+	e.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = client.Database(e.db).Drop(ctx)
+		_ = client.Close(ctx)
+	})
+}
+
+// mongoAccounts 直接读本轮库里的账户投影（entity ID → 余额）。
+func (e *env) mongoAccounts() (map[int64]int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var docs []struct {
+		ID      int64 `bson:"_id"`
+		Balance int64 `bson:"bal"`
+	}
+	if err := e.mongo.Database(e.db).Collection("account").Find(ctx, map[string]any{}, &docs); err != nil {
+		return nil, err
+	}
+	out := map[int64]int64{}
+	for _, d := range docs {
+		out[d.ID] = d.Balance
+	}
+	return out, nil
+}
+
+// sagaProjector 起冷副本投影（测试进程内）。
+func (e *env) sagaProjector() *SagaProjector {
+	e.t.Helper()
+	sp := NewSagaProjector(e.js, e.l, e.mongo, e.db, quietLog())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := sp.Start(ctx); err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Cleanup(sp.Stop)
+	e.proj = sp
+	return sp
+}
+
+// waitColdCopy 等冷副本投影积压归零，再逐笔核对冷副本与观察到的终态（版本、状态）0 差异；返回追平耗时。
+func (e *env) waitColdCopy(sp *SagaProjector, ids []string, timeout time.Duration) time.Duration {
+	e.t.Helper()
+	begin := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		n, err := sp.Backlog(ctx)
+		if err == nil && n == 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			e.t.Fatalf("saga projection backlog did not drain within %v (last %d, %v)", timeout, n, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	caught := time.Since(begin)
+	cold, err := sp.ColdState(ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	final := e.client.Latest()
+	var diffs []string
+	for _, id := range ids {
+		f, c := final[id], cold[id]
+		if f == nil || c.ID == "" || uint64(c.Version) != f.Version || c.Status != string(f.Status) {
+			diffs = append(diffs, fmt.Sprintf("%s: final=%v cold=%+v", id, f, c))
+		}
+	}
+	if len(diffs) > 0 {
+		e.t.Fatalf("cold copy differs from the observed terminal states (%d):\n%s", len(diffs), strings.Join(diffs, "\n"))
+	}
+	return caught
 }
 
 func quietLog() *slog.Logger {
@@ -38,7 +131,7 @@ func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func newEnv(t *testing.T, partitions int) *env { return newEnvGroups(t, partitions, 1) }
+func newEnv(t *testing.T, partitions int) *env { return newEnvGroups(t, partitions, 0) }
 
 func newEnvGroups(t *testing.T, partitions, groups int) *env {
 	t.Helper()
@@ -63,7 +156,11 @@ func newEnvGroups(t *testing.T, partitions, groups int) *env {
 }
 
 func (e *env) coordinator(instance string, mod func(*CoordinatorOptions)) *Coordinator {
-	opts := CoordinatorOptions{Layout: e.l, Instance: instance, PurgeGuards: []string{"part_acct"}, Log: quietLog(),
+	guards := []string{"part_acct"}
+	if e.mongo != nil {
+		guards = append(guards, SagaProjectionDurable)
+	}
+	opts := CoordinatorOptions{Layout: e.l, Instance: instance, PurgeGuards: guards, Log: quietLog(),
 		DisableFence: mutation() == "nofence"}
 	if mod != nil {
 		mod(&opts)
@@ -87,7 +184,7 @@ func (e *env) takeAll(c *Coordinator, steal bool) {
 func (e *env) participant(mod func(*ParticipantOptions)) *Participant {
 	e.t.Helper()
 	opts := ParticipantOptions{Layout: e.l, WALDir: e.t.TempDir(), Accounts: e.pairs * 2, InitialBal: initialBalance, Workers: 16,
-		Log: quietLog(), DisableReceiptCheck: mutation() == "noreceipt"}
+		Log: quietLog(), DisableReceiptCheck: mutation() == "noreceipt", Mongo: e.mongo, Database: e.db}
 	if mod != nil {
 		mod(&opts)
 	}

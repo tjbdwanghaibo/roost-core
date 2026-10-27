@@ -21,14 +21,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 // 参与方：真实 Nest 实体 + nestwal。步骤在一个 Nest 事务里改余额并写操作回执（opKey → 结果），WAL 落盘后
 // 把结果直接发回协调器分区，PubAck 之后才 ack 命令。
 //
+// 两种持久方式：
+//   - ParticipantOptions.Mongo 非空（投影打开，现行口径）：DataEngine 的 MongoStore + Projector（缺省选项）异步把 WAL
+//     投影进 Mongo、ack 后 WAL 可裁剪；启动时先 Flush 把 WAL 尾巴投影完，再从 Mongo 加载实体（现行“先排空 WAL 再加载”）。
+//   - Mongo 为空（投影关闭，对照组）：Projector 用 ManualReplay、Applier 丢弃，WAL 从不 ack；重启时从整段 WAL 重建实体。
 // 替身（与生产的差别，报告逐项写明）：
-//   - 不投影 Mongo：Projector 用 ManualReplay、Applier 丢弃，WAL 从不 ack；重启时从整段 WAL 重建实体
-//     （生产是 Mongo 投影 + checkpoint，重建从 Mongo 加载 + 未投影的 WAL 尾）。
 //   - 实体与 DAO 手写（与 framework/nest 的外部测试同形），不经代码生成；补丁路径 bal / r.<opKey>。
 //   - 回执放在实体文档里（按 opKey），代替现行的 _dataengine_step_operations 状态文档 + 回执集合 + lease fence。
 
@@ -59,6 +62,7 @@ type Receipt struct {
 
 type accountDao struct {
 	id       int64
+	db       string
 	Tracker  dataengine.Tracker
 	Balance  int64
 	Receipts map[string]Receipt
@@ -66,13 +70,14 @@ type accountDao struct {
 
 func (d *accountDao) Id() int64                         { return d.id }
 func (d *accountDao) SetId(id int64)                    { d.id = id }
-func (d *accountDao) DbName() string                    { return "sagajs" }
+func (d *accountDao) DbName() string                    { return d.db }
 func (d *accountDao) CollName() string                  { return "account" }
 func (d *accountDao) Dirty() entity.IDirty              { return &d.Tracker }
 func (d *accountDao) CleanDirty()                       { d.Tracker.SelfClean() }
 func (d *accountDao) DirtyTracker() *dataengine.Tracker { return &d.Tracker }
 
 type accountDoc struct {
+	ID       int64              `bson:"_id"`
 	Balance  int64              `bson:"bal"`
 	Receipts map[string]Receipt `bson:"r"`
 }
@@ -99,7 +104,7 @@ func (d *accountDao) PrepareMutation(change nest.PersistChange) (dataengine.Muta
 	version := d.Tracker.Version()
 	m := dataengine.Mutation{Key: d.key(), ExpectedVersion: version, NextVersion: version + 1, Mask: change.Mask, Schema: 1, Codec: "bson"}
 	if version == 0 {
-		raw, err := bson.Marshal(accountDoc{Balance: d.Balance, Receipts: d.Receipts})
+		raw, err := bson.Marshal(accountDoc{ID: d.id, Balance: d.Balance, Receipts: d.Receipts})
 		if err != nil {
 			return m, err
 		}
@@ -143,6 +148,9 @@ type ParticipantOptions struct {
 	Workers    int
 	Durability nest.DurabilityPolicy // DurabilityStrict 或 DurabilityPipelined
 	Durable    string                // JetStream durable 名
+	// Mongo 非空时打开 DataEngine 投影（Database 是本轮唯一库名，账户文档在 <Database>.account）。
+	Mongo    fmongo.IMongo
+	Database string
 	// ReceiptRetention：回执在实体里保留多久（之后同一操作的迟到投递按过期处理）。
 	ReceiptRetention time.Duration
 	Log              *slog.Logger
@@ -167,6 +175,7 @@ type Participant struct {
 	mgr       *nest.NestMgr
 	wal       *nestwal.WAL
 	projector *engine.Projector
+	store     *engine.MongoStore
 	ccs       []jetstream.ConsumeContext
 	work      chan jetstream.Msg
 	wg        sync.WaitGroup
@@ -213,6 +222,9 @@ func NewParticipant(nc *nats.Conn, js jetstream.JetStream, opts ParticipantOptio
 	if opts.Durable == "" {
 		opts.Durable = "part_acct"
 	}
+	if opts.Database == "" {
+		opts.Database = "sagajs"
+	}
 	p := &Participant{nc: nc, js: js, opts: opts, manager: entity.NewEntityManager()}
 	wal, err := nestwal.Open(nestwal.DefaultOptions(opts.WALDir))
 	if err != nil {
@@ -220,24 +232,28 @@ func NewParticipant(nc *nats.Conn, js jetstream.JetStream, opts ParticipantOptio
 	}
 	p.wal = wal
 	begin := time.Now()
-	docs, err := rebuildFromWAL(wal)
+	var docs map[int64]*rebuiltDoc
+	var projector *engine.Projector
+	if opts.Mongo != nil {
+		projector, docs, err = p.openProjected(wal)
+	} else {
+		docs, err = rebuildFromWAL(wal)
+		if err == nil {
+			projector, err = engine.NewProjector(wal, discardStore{}, engine.ProjectorOptions{CloseWAL: true, ManualReplay: true})
+		}
+	}
 	if err != nil {
 		_ = wal.Close(context.Background())
-		return nil, fmt.Errorf("rebuild from WAL: %w", err)
+		return nil, fmt.Errorf("recover participant state: %w", err)
 	}
 	p.RebuildTime = time.Since(begin)
 	for _, d := range docs {
 		p.RebuiltRecords += int(d.version)
 	}
-	projector, err := engine.NewProjector(wal, discardStore{}, engine.ProjectorOptions{CloseWAL: true, ManualReplay: true})
-	if err != nil {
-		_ = wal.Close(context.Background())
-		return nil, err
-	}
 	p.projector = projector
 	for n := int64(0); n < int64(opts.Accounts); n++ {
 		id := accountEntityID(n)
-		dao := &accountDao{id: id, Receipts: map[string]Receipt{}}
+		dao := &accountDao{id: id, db: opts.Database, Receipts: map[string]Receipt{}}
 		if d, ok := docs[id]; ok {
 			dao.Balance, dao.Receipts = d.balance, d.receipts
 			dao.Tracker.SetVersion(d.version)
@@ -347,6 +363,78 @@ func (p *Participant) step(es []entity.IThreadSafeEntity, args []any, _ ...nest.
 		}
 	}
 	return stepResult{Receipt: receipt}, nil
+}
+
+// openProjected 按现行 DataEngine 路径打开投影：MongoStore（本轮唯一库、恒等库名表）+ 缺省 Projector，
+// 先 Flush 把 WAL 里未投影的尾巴写进 Mongo，再从 Mongo 加载全部账户（版本取 _version）。
+func (p *Participant) openProjected(wal *nestwal.WAL) (*engine.Projector, map[int64]*rebuiltDoc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	databases, _, err := dataengine.NewDatabaseMap(dataengine.DatabaseMapConfig{Declared: dataengine.DeclaredDatabases()})
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := engine.NewMongoStore(p.opts.Mongo, engine.MongoStoreConfig{DefaultDatabase: p.opts.Database, Databases: databases})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		return nil, nil, err
+	}
+	projector, err := engine.NewProjector(wal, store, engine.DefaultProjectorOptions())
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := projector.Flush(ctx); err != nil {
+		_ = projector.Close(ctx)
+		return nil, nil, fmt.Errorf("drain WAL into mongo: %w", err)
+	}
+	docs := map[int64]*rebuiltDoc{}
+	raws, err := store.Load(ctx, dataengine.LoadSpec{Database: p.opts.Database, Resource: "account"})
+	if err != nil {
+		_ = projector.Close(ctx)
+		return nil, nil, err
+	}
+	for _, raw := range raws {
+		var doc accountDoc
+		if err := bson.Unmarshal(raw.Data, &doc); err != nil {
+			_ = projector.Close(ctx)
+			return nil, nil, err
+		}
+		d := &rebuiltDoc{balance: doc.Balance, receipts: doc.Receipts, version: raw.Version}
+		if d.receipts == nil {
+			d.receipts = map[string]Receipt{}
+		}
+		docs[raw.Key.ID] = d
+	}
+	p.store = store
+	return projector, docs, nil
+}
+
+// ProjectionBacklog 是参与方 WAL 里已准入、尚未投影确认的记录数（投影关闭时恒为全部记录，无意义）。
+func (p *Participant) ProjectionBacklog() uint64 { return p.projector.Stats().WALUnacked }
+
+// FlushProjection 把已准入的记录全部投影进 Mongo。
+func (p *Participant) FlushProjection(ctx context.Context) error { return p.projector.Flush(ctx) }
+
+// MongoBalances 读 Mongo 里的账户投影（冷副本核对用）。
+func (p *Participant) MongoBalances(ctx context.Context) (map[int64]int64, error) {
+	if p.store == nil {
+		return nil, errors.New("projection is off")
+	}
+	raws, err := p.store.Load(ctx, dataengine.LoadSpec{Database: p.opts.Database, Resource: "account"})
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]int64{}
+	for _, raw := range raws {
+		var doc accountDoc
+		if err := bson.Unmarshal(raw.Data, &doc); err != nil {
+			return nil, err
+		}
+		out[raw.Key.ID] = doc.Balance
+	}
+	return out, nil
 }
 
 type rebuiltDoc struct {

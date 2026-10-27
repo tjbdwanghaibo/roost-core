@@ -154,15 +154,26 @@ type Event struct {
 type Layout struct {
 	Prefix     string
 	Partitions int
-	// StreamGroups > 1 时分区按 k % StreamGroups 分到几条流（各自的 Raft 组与 leader）；subject 不变。
+	// StreamGroups 是分区分到几条流（各自的 Raft 组与 leader，按 k % G）；subject 不变。
+	// 0 = 缺省 4 条（维护者 2026-10-27 决定 3A），分区不足 4 个时取分区数；1 = 单流（保留为可选）。
 	StreamGroups int
 }
 
+// DefaultStreamGroups 是缺省的流数。
+const DefaultStreamGroups = 4
+
 func (l Layout) groups() int {
-	if l.StreamGroups <= 1 {
-		return 1
+	g := l.StreamGroups
+	if g == 0 {
+		g = DefaultStreamGroups
 	}
-	return l.StreamGroups
+	if g > l.Partitions {
+		g = l.Partitions
+	}
+	if g < 1 {
+		g = 1
+	}
+	return g
 }
 
 // StreamOf 是分区 k 所在的流。

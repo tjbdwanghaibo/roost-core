@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,30 +18,6 @@ import (
 	"time"
 )
 
-var buildOnce sync.Once
-var builtBinary string
-var buildErr error
-
-func sagajsBinary(t *testing.T) string {
-	t.Helper()
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "sagajs-bin")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		builtBinary = filepath.Join(dir, "sagajs")
-		out, err := exec.Command("go", "build", "-o", builtBinary, "./cmd/sagajs").CombinedOutput()
-		if err != nil {
-			buildErr = fmt.Errorf("%v: %s", err, out)
-		}
-	})
-	if buildErr != nil {
-		t.Fatal(buildErr)
-	}
-	return builtBinary
-}
-
 type proc struct {
 	cmd   *exec.Cmd
 	ready string
@@ -50,7 +25,9 @@ type proc struct {
 
 func startProc(t *testing.T, args ...string) *proc {
 	t.Helper()
-	cmd := exec.Command(sagajsBinary(t), args...)
+	// 子进程就是本测试二进制（TestMain 见 SAGAJS_ROLE_ARGS 走进程入口）。
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), roleArgsEnv+"="+strings.Join(args, "\x1f"))
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -139,10 +116,22 @@ func (e *env) closedLoop(n, workers int, timeout time.Duration, onDone func(int)
 
 func (e *env) url() string { return clusterURL(e.t) }
 
-func TestCoordinatorKill9Takeover(t *testing.T) {
+func TestCoordinatorKill9Takeover(t *testing.T) { coordinatorKill9(t, false) }
+
+// 投影打开：冷副本投影在协调器进程里，随它一起被 kill -9；B 进程接着用同一个 durable 投影，冷副本最终与终态一致。
+func TestCoordinatorKill9TakeoverProjected(t *testing.T) { coordinatorKill9(t, true) }
+
+func coordinatorKill9(t *testing.T, projected bool) {
 	e := newEnv(t, 4)
+	if projected {
+		e.withMongo()
+	}
 	part := e.participant(nil)
-	common := []string{"-role", "coord", "-url", e.url(), "-prefix", e.l.Prefix, "-parts", "4", "-lease-ttl", "3s"}
+	common := []string{"-role", "coord", "-url", e.url(), "-prefix", e.l.Prefix, "-parts", fmt.Sprint(e.l.Partitions),
+		"-stream-groups", fmt.Sprint(e.l.StreamGroups), "-lease-ttl", "3s"}
+	if projected {
+		common = append(common, "-project", "-db", e.db)
+	}
 	a := startProc(t, append(common, "-instance", "A")...)
 	var killed atomic.Bool
 	var killedAt time.Time
@@ -178,14 +167,35 @@ func TestCoordinatorKill9Takeover(t *testing.T) {
 	if v := e.chainViolations(); len(v) > 0 {
 		t.Fatalf("event chain violations after coordinator kill -9:\n%s", strings.Join(v, "\n"))
 	}
+	if projected {
+		// 只读：Backlog / ColdState 不启动消费，投影由 B 进程做。
+		caught := e.waitColdCopy(NewSagaProjector(e.js, e.l, e.mongo, e.db, quietLog()), all, 60*time.Second)
+		e.checkMongoAccounts(part)
+		t.Logf("cold copy matched all %d terminal states %v after the last one", len(all), caught)
+	}
 }
 
-func TestParticipantKill9Recovery(t *testing.T) {
+func TestParticipantKill9Recovery(t *testing.T) { participantKill9(t, false) }
+
+// 投影打开：参与方进程 kill -9 后用同一 WAL 重启，先把 WAL 尾巴投影进 Mongo、再从 Mongo 加载（现行恢复顺序）；
+// 结束时 Mongo 账户与预期余额逐账户一致，冷副本与终态一致。
+func TestParticipantKill9RecoveryProjected(t *testing.T) { participantKill9(t, true) }
+
+func participantKill9(t *testing.T, projected bool) {
 	e := newEnv(t, 2)
+	var sp *SagaProjector
+	if projected {
+		e.withMongo()
+		sp = e.sagaProjector()
+	}
 	coord := e.coordinator("A", nil)
 	e.takeAll(coord, false)
 	wal := t.TempDir()
-	args := []string{"-role", "part", "-url", e.url(), "-prefix", e.l.Prefix, "-accounts", fmt.Sprint(e.pairs * 2), "-wal", wal}
+	args := []string{"-role", "part", "-url", e.url(), "-prefix", e.l.Prefix, "-parts", fmt.Sprint(e.l.Partitions),
+		"-stream-groups", fmt.Sprint(e.l.StreamGroups), "-accounts", fmt.Sprint(e.pairs * 2), "-wal", wal}
+	if projected {
+		args = append(args, "-project", "-db", e.db)
+	}
 	first := startProc(t, args...)
 	var killed atomic.Bool
 	var second *proc
@@ -221,6 +231,32 @@ func TestParticipantKill9Recovery(t *testing.T) {
 	if v := e.chainViolations(); len(v) > 0 {
 		t.Fatalf("event chain violations after participant kill -9:\n%s", strings.Join(v, "\n"))
 	}
-	t.Logf("coordinator: accepted=%d duplicate=%d stale=%d timer-driven retries visible as attempts>1", coord.Stats.Accepted.Load(), coord.Stats.Duplicate.Load(), coord.Stats.StaleAttempt.Load())
+	if projected {
+		caught := e.waitColdCopy(sp, all, 60*time.Second)
+		// 参与方进程里的投影是后台的：等 Mongo 账户追上预期余额（与上面核对过的内存一致）。
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			mongo, err := e.mongoAccounts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mismatch := 0
+			for n := int64(0); n < int64(e.pairs*2); n++ {
+				want, _ := balances(n)
+				if mongo[accountEntityID(n)] != want {
+					mismatch++
+				}
+			}
+			if mismatch == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Mongo accounts still differ from the participant after 30s: %d accounts", mismatch)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Logf("after participant kill -9: cold copy caught up %v, Mongo accounts equal the participant's entities", caught)
+	}
+	t.Logf("coordinator: accepted=%d duplicate=%d stale=%d", coord.Stats.Accepted.Load(), coord.Stats.Duplicate.Load(), coord.Stats.StaleAttempt.Load())
 	_ = context.Background
 }
