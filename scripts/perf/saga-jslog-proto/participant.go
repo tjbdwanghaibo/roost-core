@@ -39,6 +39,8 @@ const (
 	accountKind     entity.EntityKind     = 231
 	accountCategory entity.EntityCategory = entity.EntityCategoryPlayer
 	accountMask     uint64                = 1
+	// receiptUndoField 是回执逆操作的去重 field（与余额的 accountMask 分开，按 opKey 作 token）。
+	receiptUndoField uint64 = 2
 )
 
 var registerKindOnce sync.Once
@@ -151,6 +153,12 @@ type ParticipantOptions struct {
 	// Mongo 非空时打开 DataEngine 投影（Database 是本轮唯一库名，账户文档在 <Database>.account）。
 	Mongo    fmongo.IMongo
 	Database string
+	// HardLimit > 0 时作为 DataEngine ProjectorOptions.MaxUnackedRecords：积压到这里，步骤事务在 WAL 前被拒（最后一道硬上限）。
+	HardLimit uint64
+	// 投影打开时每 LoadTick 把积压写进 KV（准入信号）；Name 是参与方名（缺省 acct-0）。PauseLoad 只给测试模拟信号停更。
+	Name      string
+	LoadTick  time.Duration
+	PauseLoad func() bool
 	// ReceiptRetention：回执在实体里保留多久（之后同一操作的迟到投递按过期处理）。
 	ReceiptRetention time.Duration
 	Log              *slog.Logger
@@ -340,7 +348,9 @@ func (p *Participant) step(es []entity.IThreadSafeEntity, args []any, _ ...nest.
 	}
 	op := cmd.Op
 	prev, had := dao.Receipts[op]
-	nest.RecordUndo(dao, accountMask, func() error {
+	// 回执的逆操作按 opKey 单独登记：RecordUndo 按（owner, field）去重，与余额共用 field 时这条会被丢掉，
+	// 事务被拒（如 MaxUnackedRecords）回滚后余额复原、回执却留在内存，重投回放“成功”而余额没改（硬上限用例实测）。
+	nest.RecordUndoToken(dao, receiptUndoField, op, func() error {
 		if had {
 			dao.Receipts[op] = prev
 		} else {
@@ -357,7 +367,7 @@ func (p *Participant) step(es []entity.IThreadSafeEntity, args []any, _ ...nest.
 	for key, r := range dao.Receipts {
 		if r.At < cutoff {
 			r, key := r, key
-			nest.RecordUndo(dao, accountMask, func() error { dao.Receipts[key] = r; return nil })
+			nest.RecordUndoToken(dao, receiptUndoField, key, func() error { dao.Receipts[key] = r; return nil })
 			delete(dao.Receipts, key)
 			if err := nest.MarkPersistUnset(dao, accountMask, "r."+key); err != nil {
 				return nil, err
@@ -370,7 +380,7 @@ func (p *Participant) step(es []entity.IThreadSafeEntity, args []any, _ ...nest.
 // openProjected 按现行 DataEngine 路径打开投影：MongoStore（本轮唯一库、恒等库名表）+ 缺省 Projector，
 // 先 Flush 把 WAL 里未投影的尾巴写进 Mongo，再从 Mongo 加载全部账户（版本取 _version）。
 func (p *Participant) openProjected(wal *nestwal.WAL) (*engine.Projector, map[int64]*rebuiltDoc, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	databases, _, err := dataengine.NewDatabaseMap(dataengine.DatabaseMapConfig{Declared: dataengine.DeclaredDatabases()})
 	if err != nil {
@@ -383,13 +393,28 @@ func (p *Participant) openProjected(wal *nestwal.WAL) (*engine.Projector, map[in
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		return nil, nil, err
 	}
-	projector, err := engine.NewProjector(wal, store, engine.DefaultProjectorOptions())
+	popts := engine.DefaultProjectorOptions()
+	popts.MaxUnackedRecords = p.opts.HardLimit
+	projector, err := engine.NewProjector(wal, store, popts)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := projector.Flush(ctx); err != nil {
-		_ = projector.Close(ctx)
-		return nil, nil, fmt.Errorf("drain WAL into mongo: %w", err)
+	// 先恢复再服务：把 WAL 尾巴投影完才加载。被 kill -9 的上一个进程可能留下未结束的 Mongo 事务（批量投影走事务），
+	// 服务端到 transactionLifetimeLimitSeconds（缺省 60s）才回收、期间同文档写冲突，所以这里重试到成功（上限 3 分钟），不直接失败。
+	flushDeadline := time.Now().Add(3 * time.Minute)
+	for {
+		fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := projector.Flush(fctx)
+		fcancel()
+		if err == nil {
+			break
+		}
+		if time.Now().After(flushDeadline) {
+			_ = projector.Close(ctx)
+			return nil, nil, fmt.Errorf("drain WAL into mongo: %w", err)
+		}
+		p.opts.Log.Warn("jslogproto: draining the WAL into Mongo failed; retrying", "err", err)
+		time.Sleep(time.Second)
 	}
 	docs := map[int64]*rebuiltDoc{}
 	raws, err := store.Load(ctx, dataengine.LoadSpec{Database: p.opts.Database, Resource: "account"})
@@ -518,6 +543,21 @@ func (p *Participant) Start(ctx context.Context) error {
 				p.handle(runCtx, msg)
 			}
 		}()
+	}
+	if p.store != nil {
+		kv, err := ensureLoadBucket(ctx, p.js, p.opts.Layout, 3)
+		if err != nil {
+			return err
+		}
+		name, tick := p.opts.Name, p.opts.LoadTick
+		if name == "" {
+			name = "acct-0"
+		}
+		if tick == 0 {
+			tick = defaultLoadTick
+		}
+		lp := &loadPublisher{kv: kv, key: partLoadKey(name), tick: tick, read: p.ProjectionBacklog, now: p.opts.Now, paused: p.opts.PauseLoad}
+		go lp.run(runCtx)
 	}
 	// 每条流一个同名 durable 消费者（分区分到几条流时）。
 	for _, name := range p.opts.Layout.Streams() {

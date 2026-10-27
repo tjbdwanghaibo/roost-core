@@ -161,7 +161,7 @@ func (e *env) coordinator(instance string, mod func(*CoordinatorOptions)) *Coord
 		guards = append(guards, SagaProjectionDurable)
 	}
 	opts := CoordinatorOptions{Layout: e.l, Instance: instance, PurgeGuards: guards, Log: quietLog(),
-		DisableFence: mutation() == "nofence"}
+		DisableFence: mutation() == "nofence", DisableAdmission: mutation() == "noadmit"}
 	if mod != nil {
 		mod(&opts)
 	}
@@ -261,7 +261,7 @@ func (e *env) checkBalances(balance func(int64) (int64, error), final map[string
 		case StatusCompleted:
 			want[s.Data.From] -= s.Data.Amount
 			want[s.Data.To] += s.Data.Amount
-		case StatusCompensated, StatusFailed:
+		case StatusCompensated, StatusFailed, StatusRejected:
 		default:
 			e.t.Fatalf("saga %s ended %s; cannot predict balances", id, s)
 		}

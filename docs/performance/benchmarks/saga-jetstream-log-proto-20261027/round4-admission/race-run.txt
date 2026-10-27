@@ -1,0 +1,42 @@
+    admission_test.go:223: 8 slow sagas in flight when admission closed, all completed; load: 39 admitted+completed, 29 rejected
+    admission_test.go:225: backlog 89 records (44.5 sagas) with the projection gate closed; admission closed
+    admission_test.go:269: rejected starts=32; all 83 sagas accounted for
+--- PASS: TestAdmissionClosesOnProjectionBacklogAndReopens (5.81s)
+    admission_test.go:327: stale-signal rejections=2
+--- PASS: TestAdmissionClosesWhenTheBacklogSignalGoesStale (2.65s)
+    admission_test.go:384: steps refused by the hard limit and retried: 237
+--- PASS: TestHardLimitRejectsStepsUntilProjectionCatchesUp (2.70s)
+--- PASS: TestEndToEndForwardAndCompensate (1.62s)
+--- PASS: TestEndToEndDuplicateCommandsAndResults (2.15s)
+--- PASS: TestEndToEndLateSuccessReopensAndCompensates (1.49s)
+--- PASS: TestFenceRejectsStaleWriter (1.20s)
+--- PASS: TestSnapshotPurgeReplayMatches (1.55s)
+--- PASS: TestPublishOutcomeUnknownIsResolved (1.31s)
+--- PASS: TestEndToEndAcrossStreamGroups (0.97s)
+--- PASS: TestEndToEndPipelinedParticipant (1.56s)
+--- PASS: TestLeaderKillKeepsAckedWritesAndResolvesUnknowns (12.32s)
+    kill_test.go:153: A killed after 150 terminal sagas; B: "ready coord B replayed=1030 in 3.14277075s"; all 400 terminal 3.697263667s after the kill
+--- PASS: TestCoordinatorKill9Takeover (6.66s)
+    kill_test.go:153: A killed after 150 terminal sagas; B: "ready coord B replayed=1028 in 3.3860075s"; all 400 terminal 5.94864775s after the kill
+    kill_test.go:174: cold copy matched all 400 terminal states 2.975901292s after the last one
+--- PASS: TestCoordinatorKill9TakeoverProjected (13.33s)
+    kill_test.go:215: participant killed after 100 terminal sagas; restarted: "ready part recovered_versions=299 in 4.054333ms projection=false"
+    kill_test.go:260: coordinator: accepted=660 duplicate=0 stale=0
+--- PASS: TestParticipantKill9Recovery (8.10s)
+    kill_test.go:215: participant killed after 100 terminal sagas; restarted: "ready part recovered_versions=301 in 51.6045ms projection=true"
+    kill_test.go:258: after participant kill -9: cold copy caught up 995.083µs, Mongo accounts equal the participant's entities
+    kill_test.go:260: coordinator: accepted=660 duplicate=0 stale=0
+--- PASS: TestParticipantKill9RecoveryProjected (9.95s)
+--- PASS: TestMachineCompletionRules (0.00s)
+--- PASS: TestWheelDeliversDueEntriesOnce (0.00s)
+--- SKIP: TestPerfClosedLoop (0.00s)
+--- SKIP: TestPerfReplayVsLogSize (0.00s)
+--- PASS: TestProjectedEndToEnd (5.90s)
+--- PASS: TestParticipantProjectionWithoutColdCopy (2.14s)
+--- PASS: TestExpectedLastSubjectSequenceSingleSubject (0.11s)
+--- PASS: TestExpectedLastSubjectSequenceWildcard (0.10s)
+--- PASS: TestExpectedLastSequenceStream (0.11s)
+--- PASS: TestExpectedSequenceConcurrentWritersOnlyOneWins (0.15s)
+--- PASS: TestAtomicBatchPublish (0.63s)
+--- PASS: TestMsgIDDeduplication (0.12s)
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	84.200s

@@ -1,0 +1,5 @@
+    admission_test.go:382: balances do not match the terminal states (sum 15999987, want 16000000):
+--- FAIL: TestHardLimitRejectsStepsUntilProjectionCatchesUp (1.49s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	2.071s
+FAIL

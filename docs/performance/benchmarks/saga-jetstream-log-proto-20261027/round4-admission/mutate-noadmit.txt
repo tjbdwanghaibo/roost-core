@@ -1,0 +1,9 @@
+    admission_test.go:223: 8 slow sagas in flight when admission closed, all completed; load: 68 admitted+completed, 0 rejected
+    admission_test.go:225: backlog 144 records (72.0 sagas) with the projection gate closed; admission closed
+    admission_test.go:239: start of rej-0 while backlogged: rej-0 v3 completed f1 a1 w=false completed=[0 1] reason="", want rejected/backpressure
+--- FAIL: TestAdmissionClosesOnProjectionBacklogAndReopens (5.39s)
+    admission_test.go:310: start of stale-0 with a stale signal: stale-0 v3 completed f1 a1 w=false completed=[0 1] reason=""
+--- FAIL: TestAdmissionClosesWhenTheBacklogSignalGoesStale (2.48s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	8.227s
+FAIL

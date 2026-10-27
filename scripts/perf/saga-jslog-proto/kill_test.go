@@ -52,7 +52,7 @@ func startProc(t *testing.T, args ...string) *proc {
 	}()
 	select {
 	case p.ready = <-lines:
-	case <-time.After(60 * time.Second):
+	case <-time.After(4 * time.Minute): // 投影打开的参与方重启可能要等上一个进程遗留的 Mongo 事务被回收（最长约 60s）
 		t.Fatalf("process %v not ready", args)
 	}
 	return p
@@ -200,7 +200,7 @@ func participantKill9(t *testing.T, projected bool) {
 	var killed atomic.Bool
 	var second *proc
 	var mu sync.Mutex
-	all, _ := e.closedLoop(300, 16, 180*time.Second, func(done int) {
+	all, _ := e.closedLoop(300, 16, 6*time.Minute, func(done int) {
 		if done == 100 && killed.CompareAndSwap(false, true) {
 			first.kill9(t)
 			go func() {

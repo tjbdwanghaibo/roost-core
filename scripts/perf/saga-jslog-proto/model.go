@@ -27,7 +27,7 @@ const (
 )
 
 func (s Status) Terminal() bool {
-	return s == StatusCompleted || s == StatusCompensated || s == StatusFailed || s == StatusManual
+	return s == StatusCompleted || s == StatusCompensated || s == StatusFailed || s == StatusManual || s == StatusRejected
 }
 
 type Phase string
@@ -73,6 +73,7 @@ type Saga struct {
 	UpdatedAt int64             `json:"updated_at"`
 	Reopened  int               `json:"reopened,omitempty"`
 	LateAlarm int               `json:"late_alarm,omitempty"` // 补偿方向放弃后迟到的成功（只告警）
+	Reason    string            `json:"reason,omitempty"`     // Rejected 的原因（backpressure / backpressure_stale_signal）
 }
 
 func (s *Saga) clone() *Saga {

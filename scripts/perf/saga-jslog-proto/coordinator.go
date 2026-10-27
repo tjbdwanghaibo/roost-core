@@ -41,6 +41,9 @@ func Setup(ctx context.Context, js jetstream.JetStream, l Layout, replicas int, 
 	}); err != nil {
 		return fmt.Errorf("owner bucket: %w", err)
 	}
+	if _, err := ensureLoadBucket(ctx, js, l, replicas); err != nil {
+		return fmt.Errorf("load bucket: %w", err)
+	}
 	return nil
 }
 
@@ -51,6 +54,7 @@ func Teardown(ctx context.Context, js jetstream.JetStream, l Layout) {
 	}
 	_ = js.DeleteKeyValue(ctx, l.SnapshotBucket())
 	_ = js.DeleteKeyValue(ctx, l.OwnerBucket())
+	_ = js.DeleteKeyValue(ctx, l.LoadBucket())
 }
 
 type CoordinatorOptions struct {
@@ -69,9 +73,13 @@ type CoordinatorOptions struct {
 	TickMs      int64
 	Log         *slog.Logger
 
+	// Admission 非空时按参与方投影积压做新 saga 的准入（admission.go）。
+	Admission *AdmissionOptions
+
 	// 以下只给测试 / 变异用。
-	DisableFence  bool           // 变异：发布不带期望序号
-	BeforePublish func(part int) // 计算完一轮、发布之前调用（测试用它冻结旧实例）
+	DisableFence     bool           // 变异：发布不带期望序号
+	DisableAdmission bool           // 变异：不查准入
+	BeforePublish    func(part int) // 计算完一轮、发布之前调用（测试用它冻结旧实例）
 	// DropAck 返回真时，这次发送照常发出、但不等回复，按超时返回（结果未知、实际已落库）。测试结果未知分支用。
 	DropAck func(part int) bool
 	Now     func() int64 // 业务时钟（unix ms）
@@ -106,6 +114,7 @@ type CoordinatorStats struct {
 	EvMsgs, PubCalls, BatchCalls, Unknown, Fenced, Snapshots, Purges, SnapshotConflicts      atomic.Uint64
 	Accepted, Duplicate, Ignored, StaleAttempt, LateCompensate, LateAlarm, Starts, DupStarts atomic.Uint64
 	ReplayMsgs, ReplayNanos                                                                  atomic.Uint64
+	Rejected                                                                                 atomic.Uint64 // 准入拒绝的启动
 	// 结果未知之后的判定：单条重发得到 Duplicate；批重发得到 10201 或序号不符但最后一条是自己的。
 	DupAcks, ResolvedByLast atomic.Uint64
 	PubNanos                atomic.Uint64 // 诊断：协调器发布（到 PubAck）的累计耗时
@@ -121,6 +130,50 @@ type Coordinator struct {
 	mu    sync.Mutex
 	parts map[int]*partition
 	wg    sync.WaitGroup
+
+	adm       *admission
+	admOnce   sync.Once
+	admErr    error
+	admCancel context.CancelFunc
+}
+
+// startAdmission 在第一次接管分区时启动准入（watch 积压信号、发布 admit 状态）。
+func (c *Coordinator) startAdmission(ctx context.Context) error {
+	if c.opts.Admission == nil {
+		return nil
+	}
+	c.admOnce.Do(func() {
+		kv, err := c.js.KeyValue(ctx, c.opts.Layout.LoadBucket())
+		if err != nil {
+			c.admErr = err
+			return
+		}
+		actx, cancel := context.WithCancel(context.Background())
+		c.admCancel = cancel
+		c.adm = newAdmission(*c.opts.Admission, c.opts.Now)
+		c.admErr = c.adm.run(actx, kv)
+	})
+	return c.admErr
+}
+
+// admitStart 判定一个新 saga 能否启动；返回拒绝原因（空 = 准入）。
+func (c *Coordinator) admitStart() string {
+	if c.adm == nil || c.opts.DisableAdmission {
+		return ""
+	}
+	open, reason, _ := c.adm.evaluate()
+	if open {
+		return ""
+	}
+	return reason
+}
+
+// AdmissionState 是当前准入判定（测试用）。
+func (c *Coordinator) AdmissionState() (bool, string, float64) {
+	if c.adm == nil {
+		return true, "", 0
+	}
+	return c.adm.evaluate()
 }
 
 func NewCoordinator(nc *nats.Conn, js jetstream.JetStream, opts CoordinatorOptions) *Coordinator {
@@ -164,6 +217,9 @@ func (p *partition) stopErr() error {
 
 // Takeover 取得分区所有权（steal 时直接覆盖租约，用于测试 / 运维指定接管），重放，然后开始服务。返回时重放已完成。
 func (c *Coordinator) Takeover(ctx context.Context, k int, steal bool) error {
+	if err := c.startAdmission(ctx); err != nil {
+		return fmt.Errorf("admission: %w", err)
+	}
 	kv, err := c.js.KeyValue(ctx, c.opts.Layout.OwnerBucket())
 	if err != nil {
 		return err
@@ -488,11 +544,26 @@ func (p *partition) loop(ctx context.Context) {
 					c.Stats.Ignored.Add(1)
 					continue
 				}
-				if get(req.ID) != nil {
+				existing := get(req.ID)
+				if existing != nil && existing.Status != StatusRejected {
 					c.Stats.DupStarts.Add(1)
 					continue
 				}
+				// 准入只管新 saga 的启动；被拒的启动是终态 Rejected（可重试，同一 ID 可以再发起，版本接着往上走）。
+				if reason := c.admitStart(); reason != "" {
+					s := &Saga{ID: req.ID, Part: p.k, Status: StatusRejected, Reason: reason, Data: req.Data, Phase: PhaseForward, CreatedAt: now}
+					if existing != nil {
+						s.Version = existing.Version
+					}
+					overlay[s.ID] = s
+					c.Stats.Rejected.Add(1)
+					emit(s, "rejected", nil)
+					continue
+				}
 				s, cmd := c.m.start(req.ID, p.k, req.Data, now)
+				if existing != nil {
+					s.Version = existing.Version
+				}
 				overlay[s.ID] = s
 				c.Stats.Starts.Add(1)
 				emit(s, "start", cmd)
@@ -840,6 +911,9 @@ func (c *Coordinator) PartitionErr(k int) error {
 
 // Stop 停止全部分区循环（不释放租约：模拟进程退出时由 TTL 过期）。
 func (c *Coordinator) Stop() {
+	if c.admCancel != nil {
+		c.admCancel()
+	}
 	c.mu.Lock()
 	for _, p := range c.parts {
 		p.cancel()

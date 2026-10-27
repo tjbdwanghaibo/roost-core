@@ -27,7 +27,9 @@
    但积压按笔门槛有 6 档短时峰值超过 2 倍（追平只要 40～100ms）。云 Mongo（本轮 RTT 约 8ms）上关键路径回到不投影时的量级（c1 P50 11ms、c128 约 1960～2690 TPS），
    而参与方投影器持续上限约 500～590 条/s（≈ 250～290 笔/s），c16 起积压持续增长；同时段现行基线 main / 2c 原生正向约 5.2～5.3 TPS。云上第一次 c128 的余额核对与积压读数各有一处
    对不上，尚未确认（报告第三轮 T0 第 5 条）。
-7. **建议（第一轮）**：方向可行，值得进入实施评审；先补两项再决定是否替换 Redis 权威路线——异步 Mongo 投影在压测中同时运行（量持续吞吐与积压），以及 Linux 跨机三节点复测（§16）。
+7. **第四轮（按投影积压准入，§12a）**：参与方经 KV 发布投影积压，协调器带滞回判定、只拒新 saga 的启动（终态 Rejected / 发起方 ErrBackpressure，可重试），
+   信号过期也关闭准入，参与方 MaxUnackedRecords 作硬上限；准入、过期、硬上限三个用例与 noadmit 变异通过 / 变红。硬上限用例顺带找出原型 handler 回执逆操作被去重丢掉的缺陷，已修。只做功能与短测。
+8. **建议（第一轮）**：方向可行，值得进入实施评审；先补两项再决定是否替换 Redis 权威路线——异步 Mongo 投影在压测中同时运行（量持续吞吐与积压），以及 Linux 跨机三节点复测（§16）。
 
 ## 1. 前提（维护者 2026-10-27 确认，原文）
 
@@ -152,7 +154,7 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | 参与方的结果发布失败 | 重试到成功才 ack 命令；进程退出则命令重投、回放 | 代码路径；未单独注入 |
 | 快照写入冲突 / 清理 | 快照 CAS + 只向前；清理不越过快照水位、最后一条事件与参与方 ack floor | `TestSnapshotPurgeReplayMatches`：清理后 B 的重建逐笔等于 A 的内存，B 继续服务 |
 | 投影打开时协调器 kill -9 | 冷副本投影在协调器进程里一起被杀；B 进程用同一 durable 接着投影，旧实例在途未 ack 的事件 AckWait 后重投 | `TestCoordinatorKill9TakeoverProjected`：冷副本在最后一个终态后 5.6s 与 400 笔终态逐笔一致，Mongo 账户与内存一致（AckAll 版本红，见 §12） |
-| 投影打开时参与方 kill -9 | 重启先把 WAL 尾巴投影进 Mongo，再从 Mongo 加载；未 ack 的命令重投回放回执 | `TestParticipantKill9RecoveryProjected`：重启恢复 30ms，Mongo 账户与预期余额逐账户一致，冷副本 0 差异 |
+| 投影打开时参与方 kill -9 | 重启先把 WAL 尾巴投影进 Mongo，再从 Mongo 加载；未 ack 的命令重投回放回执。被杀进程正在做的批量投影事务留在服务端，到 `transactionLifetimeLimitSeconds`（缺省 60s）才回收，期间重启的排空会超时——第四轮 `-race` 全套里撞到一次：`drain WAL into mongo: dataengine projector: segment … records=21: context deadline exceeded`，进程起不来、用例 3 分钟超时。改为排空失败就重试（上限 3 分钟，先恢复再服务），之后 3 次连跑通过；这是 SAGA.md 已记的“强杀遗留 Mongo 事务”在原型里的同一现象 | `TestParticipantKill9RecoveryProjected`：重启恢复 30ms，Mongo 账户与预期余额逐账户一致，冷副本 0 差异 |
 | 整集群同时断电 | 可能丢最近的已确认消息（前提 1 承担） | 不处理 |
 
 ## 11. 与现行 saga 语义的对应
@@ -190,6 +192,39 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 - 积压按“笔”判定（维护者 2026-10-27 确认的口径）：参与方未确认记录 ÷ 每笔记录数（正向 2、补偿 3）、冷副本未投影事件 ÷ 每笔事件数（正向 3、补偿 4），
   取大者与在途笔数（闭环并发）比较，门槛 ≤ 2 倍；停止加压后 30s 内归零；冷副本与终态、Mongo 账户与内存逐笔 0 差异。结果见压测报告第二轮。
 
+## 12a. 按投影积压准入（第四轮已实现，`admission.go`）
+
+维护者 2026-10-27 选了第三轮的 A：参与方投影在关键路径之外，关键路径吞吐可以远高于投影器（云上实测约 500～590 条/s），所以要按投影积压对**新 saga**做准入。
+投影器按实体分片并行是生产 DataEngine 改动，另一分支在做；本节只是原型上的准入。
+
+- **信号来源**：参与方 DataEngine 投影器的 `ProjectorStats.WALUnacked`（已准入、尚未投影确认的记录数）。协调器按“记录数 ÷ 每笔记录数”（两步正向 2，可配置）折算笔数，
+  取全部参与方的最大值。没有用 Mongo 侧的任何读数：积压只有参与方自己知道。
+- **怎么让协调器知道**：参与方每 `LoadTick`（缺省 200ms）把 `{records, at}` 写进 KV 桶 `<STREAM>_LOAD` 的 `part.<参与方名>`（桶 MaxAge 30s，进程死掉后条目最终消失）。
+  协调器 watch 整个桶。**过期**按写入时刻判断（不等 MaxAge）：任何一个见过的参与方超过 `StaleAfter`（缺省 2s）没更新 → 准入关闭，原因 `backpressure_stale_signal`；
+  条目被删除 / 过期清除按“下线”处理，不再计入；从没见过任何参与方时打开（没有要保护的投影）。信号停更可能是参与方卡死，也可能只是发布失败，两种都按关闭处理：宁可少接新单，
+  不让积压在看不见的地方增长（这是一个产品取舍，推荐如此）。
+- **阈值与滞回**：笔数 ≥ `HighSagas` 关闭，关闭后降到 ≤ `LowSagas`（缺省 High 的一半）才重新打开。信号恢复新鲜但积压仍在滞回区间时按积压判定。
+- **只作用于新 saga 的启动**：关闭时协调器把启动意图写成终态 `Rejected`（`Reason` = `backpressure` / `backpressure_stale_signal`），不派发任何步骤；
+  在途 saga 的推进、重试、补偿一律不受影响——它们是消化积压的唯一途径。被拒的 ID 可以再次发起（版本接着往上走；发起方的启动 MsgID 带每次调用的序号，不会被流的去重窗口吞掉）。
+- **对业务返回什么**：协调器把准入状态写进同桶的 `admit` 键（变化时立即写、否则每秒刷新）；发起方 `Client.Start` 看到 3s 内的“关闭”直接返回
+  **`ErrBackpressure`（可重试，不写启动意图）**；它只是提示，协调器处理启动意图时再判一次才是权威（终态 `Rejected`、原因以 `backpressure` 开头，同样按可重试处理）。
+  对应现行 Redis 权威的 `ErrBackpressure`（`max_projection_backlog`）。
+- **最后一道硬上限**：参与方 `ProjectorOptions.MaxUnackedRecords`（`ParticipantOptions.HardLimit`）——积压到这里 DataEngine 在 WAL 准入前拒绝（`ErrProjectionBackpressure`），
+  Nest 整体回滚、命令 Nak 重投，协调器按步骤预算重试。它会拖慢在途 saga，所以：硬上限 ≫ `HighSagas × 每笔记录数 + 在途笔数 × 每笔记录数`；步骤预算（`Timeout × MaxAttempts`
+  加退避）要覆盖积压从硬上限回落的时间，否则在途 saga 用尽重试走补偿（补偿同样要写参与方，会一起被拒，最后停在 ManualRequired）。
+- **验证**（本机隔离 Mongo，参与方投影经“写入闸门”包装，闸门关上时投影阻塞、积压确定地上涨）：
+  - `TestAdmissionClosesOnProjectionBacklogAndReopens`：积压到约 46～48 笔（阈值 40）准入关闭；发起方 `Start` 返回 `ErrBackpressure`；绕过提示写的意图终态 `Rejected`/`backpressure`；
+    准入关闭时仍在途的 8 笔（每步结果晚 2s）全部 `Completed`；放开投影后积压回落、准入重新打开，被拒的 ID 再发起全部完成；余额、Mongo 账户、事件链核对通过。3 次连跑通过。
+  - `TestAdmissionClosesWhenTheBacklogSignalGoesStale`：参与方停更信号 → 关闭（`backpressure_stale_signal`）、启动被拒、在途照常完成；恢复后重新打开。
+  - `TestHardLimitRejectsStepsUntilProjectionCatchesUp`：不开准入、硬上限 20 条，闸门关 1s：约 235～251 次步骤被拒后重试成功，30 笔全部完成、余额与 Mongo 一致。
+  - **变异** `SAGAJS_MUTATE=noadmit`（协调器不查准入）：两个准入用例都失败——`start of rej-0 while backlogged: rej-0 v3 completed … want rejected/backpressure`、
+    `start of stale-0 with a stale signal: stale-0 v3 completed …`。
+  - **硬上限用例找出原型自己的缺陷（先红后绿）**：参与方 handler 用同一个 field 给余额和回执登记逆操作，`RecordUndo` 按（owner, field）去重，回执那条被丢掉；
+    事务被硬上限拒绝回滚后余额复原、回执留在内存，重投回放“成功”而余额没改：`balances do not match the terminal states (sum 15999979, want 16000000)`（修后把登记改回旧写法再跑一次复现：
+    `sum 15999987`）。回执改用 `RecordUndoToken`（单独 field、按 opKey 作 token）后 3 次连跑通过。前三轮没有触发回滚的路径，所以没暴露。
+- 原始输出：[round4-admission](../performance/benchmarks/saga-jetstream-log-proto-20261027/round4-admission/)（`-race` 全套、noadmit 变异、两处先红后绿）。
+- **没做**：准入状态的指标与告警、按参与方 / 按 saga 类型分别准入、在 Engine 层面的 API 形状；信号桶的跨进程发布节奏在正式压测里再定。
+
 ## 13. 对 Remote 的可推广性
 
 Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote 实体（或实体分片）一个 subject，写入带该 subject 的期望序号即是版本 CAS，
@@ -207,7 +242,7 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
 - **投影与关键路径同盘**：投影打开后吞吐明显下降（报告第二轮），定位到 Mongo 三节点 journal 与参与方 WAL、JetStream 在同一块盘上互相拖慢
   （参与方 Nest 调用、JetStream 发布的平均耗时都成倍上升），不是投影阻塞了关键路径。生产要把 Mongo 与 NATS / 参与方 WAL 分盘或分机，本机无法验证。
 - **参与方投影器的持续吞吐**：投影不在关键路径上，所以关键路径吞吐可以远高于投影器（云上约 500～590 条/s），积压会无限增长、追平前从 Mongo 读不到最新实体。
-  需要准入控制（按投影积压限流）或给投影器加并行通道（报告第三轮 T4），二者都没做。
+  原型已加按积压准入（§12a，功能验证，未压测）；投影器并行通道在另一分支做。
 - 没有：Resume / 代际、人工补偿、定义版本、业务键唯一（跨保留期）、查询接口、多参与方服务与按 sid 路由、App 级 fail-stop 接线、指标。
 
 ## 15. 位置与运行
@@ -253,6 +288,11 @@ saga 是已知反复出问题的模块，换掉整条协调路径会让现有的
 5. **A**：协调器侧 saga 冷副本投影改为缺省关闭、可选开启（开启时建议只写终态、批更大或单独进程，§12）；参与方侧 DataEngine Mongo 投影保持开启。
    缺省配置、压测脚本（`run-perf.sh matrix-part`，`SAGAJS_PERF_PROJECTION=part`）与本稿同步；冷副本用例保留，在“开启”配置下跑。
 6. **B / C**：本机正式口径补一轮“参与方投影开、冷副本关”；云 Mongo 压测一次（只把参与方投影的库换成云库），与 2026-10-26 的云结果及同时段现行基线对比。结果见压测报告第三轮。
+
+第四轮（同日夜）：
+
+7. **按投影积压准入**（选第三轮 §6 的 A 的原型部分）：投影器“按实体分片并行”是生产 DataEngine 改动，另一个分支做；原型分支只做“按投影积压准入”，
+   只做功能与短测、不做正式压测（正式的“并行投影器 + 准入”联合压测等那个分支好了再安排）。实现与验证见 §12a。
 
 以下是第一轮交回时列出的选项原文，保留备查。
 
