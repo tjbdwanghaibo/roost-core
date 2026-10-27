@@ -125,3 +125,86 @@ scripts/perf/saga-jslog-proto/nats-cluster.sh start
 scripts/perf/saga-jslog-proto/run-perf.sh matrix && scripts/perf/saga-jslog-proto/run-perf.sh replay
 scripts/perf/saga-jslog-proto/nats-cluster.sh clean
 ```
+
+---
+
+# 第二轮：投影打开（2026-10-27 晚，维护者决定 1A / 2A / 3A 之后）
+
+样本在 [benchmarks/saga-jetstream-log-proto-20261027/round2-projection](benchmarks/saga-jetstream-log-proto-20261027/round2-projection/)；
+完整原始结果在本机 `artifacts/perf/saga-jslog-proto-20261027/round2-projection/`（不随仓）。仍是**压缩矩阵**：每档 30s、稳态 [5s, 30s)，
+P=4、缺省 4 条流（G=4），正向投影打开两个样本、其余各一个样本。只给量级与趋势。
+
+## R0. 结论
+
+1. **投影门槛按新口径全部达标或只在一档贴线**：未投影的积压折算成 saga 笔数，峰值为在途笔数的 0.98～2.06 倍（只有 `proj-forward-s1` c64 是 2.06，
+   同档第二个样本 1.22；c1 两个样本恰好 2.00）；停止加压后两边 44～88ms 归零（门槛 30s）；冷副本与观察到的终态、Mongo 账户与参与方内存全部 0 差异；
+   余额逐账户核对、新实例重放复读全部通过。
+2. **投影打开后吞吐与延迟明显变差**：正向 c1 P50 约 11ms → 约 45ms、c128 约 2660 → 600～810 TPS；补偿 c128 约 1710 → 634 TPS。
+3. **退化不是投影进了关键路径，是同盘的 I/O 互相拖慢**（正式口径：Mongo 三节点、私有 NATS 三节点、参与方 WAL 在同一块盘上）。诊断列显示投影打开后：
+   参与方一次 Nest 调用（含 strict WAL F_FULLFSYNC）4.5～8ms → 10～21ms，参与方发结果到 PubAck 0.3～2.8ms → 3～17ms，协调器发布到 PubAck 0.2～4ms → 4～16ms。
+   这三段都不读写 Mongo；它们变慢只能来自 Mongo journal 刷盘与 NATS / WAL 争用同一块盘（与 [JetStream 独立与 Mongo 混合对照](benchmarks/jetstream-isolation-20261023/README.md)
+   当时“同机 Mongo 持久负载让 JetStream 交付从约 1.4ms 升到约 43ms”是同一现象）。定位短测里（c16、8s、单样本）只开冷副本投影比只开参与方投影拖得更多
+   （约 93～151 vs 219 TPS），冷副本投影消费者改 R1 内存、批等待 50ms 后有改善但仍是主要来源。
+4. **与 2c 同机对照（只看量级）**：2c 的原生步骤正向 c1 P50 272ms、c128 5.7 TPS（过载，10 笔非期望终态）；Mongo 步骤 w16 c1 P50 198ms、c128 131 TPS。
+   原型投影打开时正向 c1 P50 约 45ms、c128 600～810 TPS。口径差异见 R3，不算倍数。
+5. **方向**：设计在“投影打开、同盘”的正式口径下仍满足正确性与投影门槛，量级仍高于现状；但同盘时 Mongo 的写放大会直接拖慢协调与步骤关键路径。
+   生产部署应让 Mongo 与 NATS / 参与方 WAL 分盘或分机（与“Mongo 不在关键路径上”的前提一致），本机无法验证，需 Linux 跨机复测（维护者已定有机器再做）。
+
+## R1. 结果
+
+诊断列：参与方一次 Nest 调用 / 参与方发结果到 PubAck / 协调器一次发布到 PubAck 的平均毫秒。投影列：积压峰值折算笔数（÷ 在途）/ 停止加压后归零耗时 / 冷副本差异 / Mongo 账户差异。
+
+| 组 | 并发 | TPS | 端到端 P50 / P99 | 服务端 P50 / P99 | 诊断 ms | 每步 WAL fsync | 余额 | 复读 | 投影 |
+| --- | ---: | ---: | --- | --- | --- | ---: | --- | --- | --- |
+| proj-forward-s1 | 1 | 20.8 | 48.1 / 85.6 | 41 / 69 | 11.09 / 3.06 / 3.87 | 1.000 | ok | ok | 2.0 笔（2.00×）/ 45ms / 0 / 0 |
+| proj-forward-s1 | 16 | 160.0 | 93.8 / 204.3 | 75 / 169 | 14.90 / 6.87 / 7.89 | 0.250 | ok | ok | 25.5 笔（1.59×）/ 69ms / 0 / 0 |
+| proj-forward-s1 | 64 | 521.2 | 112.2 / 248.8 | 87 / 204 | 16.30 / 9.09 / 9.58 | 0.080 | ok | ok | 132.0 笔（**2.06×**）/ 88ms / 0 / 0 |
+| proj-forward-s1 | 128 | 807.8 | 149.3 / 308.2 | 118 / 245 | 18.23 / 13.32 / 12.48 | 0.049 | ok | ok | 198.5 笔（1.55×）/ 87ms / 0 / 0 |
+| proj-forward-s2 | 1 | 22.1 | 44.2 / 82.5 | 38 / 70 | 10.77 / 2.75 / 3.66 | 1.000 | ok | ok | 2.0 笔（2.00×）/ 45ms / 0 / 0 |
+| proj-forward-s2 | 16 | 128.8 | 122.3 / 221.8 | 96 / 180 | 16.85 / 9.62 / 9.84 | 0.276 | ok | ok | 27.0 笔（1.69×）/ 87ms / 0 / 0 |
+| proj-forward-s2 | 64 | 425.8 | 143.4 / 297.2 | 111 / 243 | 16.53 / 11.22 / 11.22 | 0.092 | ok | ok | 78.0 笔（1.22×）/ 86ms / 0 / 0 |
+| proj-forward-s2 | 128 | 603.6 | 203.0 / 407.4 | 156 / 324 | 20.80 / 17.41 / 16.28 | 0.055 | ok | ok | 149.5 笔（1.17×）/ 88ms / 0 / 0 |
+| proj-compensate | 1 | 15.4 | 62.3 / 138.2 | 56 / 120 | 9.70 / 3.05 / 3.89 | 1.000 | ok | ok | 1.5 笔（1.50×）/ 45ms / 0 / 0 |
+| proj-compensate | 16 | 85.2 | 177.4 / 349.3 | 150 / 311 | 19.51 / 10.01 / 11.46 | 0.261 | ok | ok | 15.7 笔（0.98×）/ 67ms / 0 / 0 |
+| proj-compensate | 64 | 340.0 | 171.8 / 390.2 | 145 / 334 | 17.39 / 9.31 / 10.14 | 0.079 | ok | ok | 71.0 笔（1.11×）/ 44ms / 0 / 0 |
+| proj-compensate | 128 | 633.8 | 184.8 / 389.4 | 155 / 338 | 16.43 / 10.26 / 10.32 | 0.045 | ok | ok | 174.7 笔（1.36×）/ 87ms / 0 / 0 |
+| off-forward | 1 | 88.8 | 11.0 / 17.8 | 11 / 17 | 4.49 / 0.34 / 0.24 | 1.000 | ok | ok | — |
+| off-forward | 16 | 581.4 | 26.7 / 47.1 | 22 / 40 | 6.63 / 0.69 / 1.78 | 0.188 | ok | ok | — |
+| off-forward | 64 | 1682.7 | 37.3 / 61.3 | 29 / 50 | 7.50 / 1.31 / 2.81 | 0.063 | ok | ok | — |
+| off-forward | 128 | 2658.8 | 46.8 / 82.0 | 37 / 67 | 7.97 / 2.26 / 3.66 | 0.039 | ok | ok | — |
+| off-compensate | 1 | 59.5 | 16.4 / 24.9 | 16 / 24 | 4.49 / 0.36 / 0.25 | 1.000 | ok | ok | — |
+| off-compensate | 16 | 395.8 | 39.3 / 63.2 | 34 / 56 | 6.45 / 0.78 / 2.09 | 0.183 | ok | ok | — |
+| off-compensate | 64 | 1029.0 | 61.0 / 95.4 | 52 / 84 | 7.96 / 2.16 / 3.54 | 0.065 | ok | ok | — |
+| off-compensate | 128 | 1709.3 | 72.7 / 122.4 | 62 / 107 | 8.33 / 2.80 / 4.12 | 0.039 | ok | ok | — |
+
+关闭投影的这一轮与第一轮（同口径、更早）同量级（正向 c128 2659 vs 2480～2620，c1 P50 11.0 vs 10.8～11.2ms），说明 4 条流缺省与诊断打点没有改变基线。
+
+## R2. 2c 同机对照（2c 分支 worktree，`saga-scan.sh`，每档 30s，Mongo 步骤 worker 16，权威 Redis AOF 在共享盘）
+
+| 场景 | 并发 | 稳态 TPS | 夹具 P50 / P99 ms | 终态与核对 |
+| --- | ---: | ---: | --- | --- |
+| native-forward | 1 | 3.64 | 272.3 / 329.1 | Completed 110，核对通过 |
+| native-forward | 128 | 5.68 | 17634 / 30438 | 过载：294 笔完成、10 笔非期望终态 |
+| mongo-forward w16 | 1 | 6.48 | 198.1 / 290.3 | Completed 195，核对通过 |
+| mongo-forward w16 | 128 | 131.08 | 14497 / 26624 | Completed 4016，核对通过 |
+
+结果目录写在 2c worktree 的 `artifacts/perf/saga/sagajs-cmp-2c-w16-20261027/`（不入库），已复制到本轮原始结果目录；仓库样本只收了四个 JSON 与日志摘要。
+
+## R3. 口径差异（本轮新增与变化）
+
+| 项 | 原型（投影打开） | 2c |
+| --- | --- | --- |
+| Mongo 写 | 参与方实体投影（DataEngine，单 mutation 快路、异步）+ saga 冷副本（批量、异步），都不在关键路径 | 步骤侧收件箱 / 回执 / DataEngine 投影在关键路径（原生步骤），协调器存储在权威 Redis，Store Service 异步投影 |
+| 盘 | Mongo 三节点、私有 NATS 三节点、参与方 WAL 同一 APFS 卷 | Mongo、`~/.roost-it` NATS、权威 Redis AOF 同一 APFS 卷 |
+| 观察 | JetStream 有序消费者推送 | 约 50ms 轮询 |
+| 时长 / 样本 | 30s，正向两样本、其余一样本 | 30s，一样本 |
+| 机器 | 本机 macOS，loadavg 开跑前 5.2～8.5，swap 已用约 8.4 GB（本轮比第一轮内存压力大） | 同机，紧接着本轮之后 |
+
+## R4. 本轮的正确性用例
+
+- `TestProjectedEndToEnd`：100 笔（25% 补偿），冷副本在最后一个终态后约 0.2s 追平，逐笔 0 差异，Mongo 账户与内存一致。
+- `TestCoordinatorKill9TakeoverProjected`：冷副本投影在协调器进程里一起被 kill -9，B 进程接着投影，400 笔冷副本最终 0 差异（5.6s 追平）。
+  **先红后绿**：冷副本投影第一版用 AckAll，同一用例报 `cold copy differs from the observed terminal states (22)`（例：`k-121 … cold={ID:k-121 Version:2 Status:running}`），
+  改逐条 ack 后通过（设计稿 §12）。
+- `TestParticipantKill9RecoveryProjected`：参与方进程 kill -9 后用同一 WAL 重启，先 Flush 再从 Mongo 加载（30ms），Mongo 账户逐账户等于预期余额，冷副本 0 差异。
+- 变异照旧：`nofence` / `noreceipt` 下对应用例失败（见下方第五节原始输出）。

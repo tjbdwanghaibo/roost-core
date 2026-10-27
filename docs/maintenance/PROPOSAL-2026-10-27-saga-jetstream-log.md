@@ -1,6 +1,6 @@
 # Saga 协调器以 JetStream 为权威日志：设计稿与原型（2026-10-27）
 
-**状态：原型。** 代码在 `scripts/perf/saga-jslog-proto/`（实验包，不进生产路径，不改 `framework/saga` 的 Store / 引擎 / wiring），
+**状态：原型（第二轮：维护者 2026-10-27 决定按推荐，补了投影打开的实现与压测，见 §12、§17）。** 代码在 `scripts/perf/saga-jslog-proto/`（实验包，不进生产路径，不改 `framework/saga` 的 Store / 引擎 / wiring），
 分支 `proto/saga-jetstream-log` 只在本地提交。压测报告见 [SAGA-JETSTREAM-LOG-PROTO-20261027](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)。
 本文先写前提与实测语义，再写设计；凡是实测改变了设计的地方都标“实测”。
 
@@ -19,7 +19,11 @@
 4. **量级**（压缩矩阵，口径与现状不同，不算倍数）：c1 端到端 P50 约 11ms，c128 约 2500～2900 TPS 仍未饱和；协调器关键路径 0 次本地 fsync，
    每步 3 条 JetStream 消息，c128 每次发布合 8～9 条事件；参与方每步约 0.04 次 fsync（组提交）。同机现状原生步骤 c1 P50 约 260～330ms、饱和约 7～9 TPS，
    差距主要来自去掉步骤侧 Mongo 投影 / 收件箱与不跑 Mongo（报告 §1、§4）。
-5. **建议**：方向可行，值得进入实施评审；先补两项再决定是否替换 Redis 权威路线——异步 Mongo 投影在压测中同时运行（量持续吞吐与积压），以及 Linux 跨机三节点复测（§16）。
+5. **第二轮（投影打开，维护者决定 1A / 2A / 3A 后）**：参与方接现行 DataEngine Mongo 投影、协调器事件写 saga 冷副本，缺省 4 条流。
+   积压按笔折算为在途的 0.98～2.06 倍（只有一档 2.06，同档另一样本 1.22）、停止加压后 44～88ms 归零、冷副本与 Mongo 账户 0 差异；
+   kill -9 后冷副本最终一致（冷副本投影第一版 AckAll 丢版本，已改逐条 ack，§12）。同盘口径下吞吐明显下降（正向 c128 约 2660 → 600～810 TPS，
+   c1 P50 约 11 → 45ms），诊断确认是 Mongo 刷盘与 NATS / WAL 同盘争用，不是投影进了关键路径（报告第二轮）。
+6. **建议（第一轮）**：方向可行，值得进入实施评审；先补两项再决定是否替换 Redis 权威路线——异步 Mongo 投影在压测中同时运行（量持续吞吐与积压），以及 Linux 跨机三节点复测（§16）。
 
 ## 1. 前提（维护者 2026-10-27 确认，原文）
 
@@ -65,7 +69,9 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 
 ## 3. 布局
 
-- saga ID → FNV-1a → 分区 `k ∈ [0, P)`。一条流 `SAGAJS_<PREFIX>`，subject `<prefix>.>`，R3、文件存储、`AllowAtomicPublish`、去重窗口 2 分钟。
+- saga ID → FNV-1a → 分区 `k ∈ [0, P)`。分区按 `k % G` 分到 G 条流 `SAGAJS_<PREFIX>_G<g>`（**缺省 G = 4**，维护者 2026-10-27 决定 3A；
+  分区不足 4 个时取分区数；`StreamGroups = 1` 是单流 `SAGAJS_<PREFIX>`，保留为可选），每条流的 subject 是它那几个分区的 `<prefix>.<k>.>`，
+  R3、文件存储、`AllowAtomicPublish`、去重窗口 2 分钟。单写者检查的过滤与 subject 不随流数变化；参与方、终态观察者、冷副本投影在每条流上各建一个消费者。
 - subject：
 
 | subject | 写者 | 读者 |
@@ -141,6 +147,8 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | JetStream leader 切换 | 已 PubAck 不丢；切换期间（实测 5～7s）发布超时，按“结果未知”重试 | `TestLeaderKillKeepsAckedWritesAndResolvesUnknowns` |
 | 参与方的结果发布失败 | 重试到成功才 ack 命令；进程退出则命令重投、回放 | 代码路径；未单独注入 |
 | 快照写入冲突 / 清理 | 快照 CAS + 只向前；清理不越过快照水位、最后一条事件与参与方 ack floor | `TestSnapshotPurgeReplayMatches`：清理后 B 的重建逐笔等于 A 的内存，B 继续服务 |
+| 投影打开时协调器 kill -9 | 冷副本投影在协调器进程里一起被杀；B 进程用同一 durable 接着投影，旧实例在途未 ack 的事件 AckWait 后重投 | `TestCoordinatorKill9TakeoverProjected`：冷副本在最后一个终态后 5.6s 与 400 笔终态逐笔一致，Mongo 账户与内存一致（AckAll 版本红，见 §12） |
+| 投影打开时参与方 kill -9 | 重启先把 WAL 尾巴投影进 Mongo，再从 Mongo 加载；未 ack 的命令重投回放回执 | `TestParticipantKill9RecoveryProjected`：重启恢复 30ms，Mongo 账户与预期余额逐账户一致，冷副本 0 差异 |
 | 整集群同时断电 | 可能丢最近的已确认消息（前提 1 承担） | 不处理 |
 
 ## 11. 与现行 saga 语义的对应
@@ -157,11 +165,23 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | 启动意图与 Nest 事务原子（`EmitStart`） | 原型由发起方直接写 `in.start`；生产应由 Nest effect 发出（或 Nest 事务后发布 + MsgID 去重） |
 | `Engine.Get` / `List` / `GetByBusinessKey` | 分区所有者内存可答；跨实例与终态历史要靠投影（§12） |
 
-## 12. Mongo 投影接法（未实现）
+## 12. Mongo 投影（第二轮已实现，`sagaproj.go`、`participant.go`）
 
-一个独立的投影消费者（durable，过滤 `<p>.*.ev.>`）按分区顺序把事件里的 saga 状态 upsert 进 `_sagas`（版本只升不降，与 v2 Store Service 相同的单调写），
-批量 BulkWrite、进度就是消费者 ack floor。它不在关键路径上；落后只影响查询新鲜度。清理守卫里加上这个消费者的 ack floor，就保证“先投影后清理”，
-终态 saga 从内存 / 快照里过保留期后由 Mongo 回答查询与业务键唯一。
+两边都不在关键路径上：
+
+- **协调器 → saga 冷副本**（`SagaProjector`）：每条流一个 durable 消费者（过滤 `<p>.*.ev.>`），一批至多 256 条、最多等 50ms，同一 saga 只留版本最大的一条，
+  一次无序 BulkWrite 写进 `<库>.sagas`；每条写是“版本更大才整文档替换”的管道更新（upsert），重投、乱序、多实例同时投影都幂等。写成功后**逐条 ack**。
+  清理守卫带上它的 durable 名，保证“先投影后清理”；终态 saga 过了内存保留期由冷副本回答查询与业务键唯一（查询接口原型没做）。
+  - **实测**：第一版用 AckAll（只 ack 本批最后一条）。协调器进程 kill -9 后，新实例 ack 本批最后一条把旧实例取走、没 ack、正在等 AckWait 重投的事件一并确认掉，
+    冷副本缺版本：`TestCoordinatorKill9TakeoverProjected` 报 `cold copy differs from the observed terminal states (22)`，例如 `k-121: final=k-121 v3 completed … cold={ID:k-121 Version:2 Status:running}`、
+    `k-131: … cold={ID: Version:0 Status:}`。改逐条 ack 后通过（冷副本在最后一个终态之后 5.6s 追平，主要是 AckWait 10s 内的重投等待）。
+  - **实测**：消费者状态改为 R1、内存存储（进度丢了只是从流里还在的事件重投一遍，幂等）：每条 ack 不再是一次 R3 共识写。代价：服务端重启后从头重投；
+    清理守卫找不到它时不清理。批等待 20ms 时 Mongo 提交太碎（参与方 WAL 与 JetStream 发布都更慢），100ms 时 c16 积压到在途的 2.6 倍，取 50ms。
+- **参与方 → 实体文档**：现行 DataEngine 路径（`engine.NewMongoStore` + `engine.DefaultProjectorOptions()` 的 Projector）异步投影，ack 后 WAL 可裁剪。
+  重启按现行顺序：先 `Flush` 把 WAL 里未投影的尾巴写进 Mongo，再从 Mongo 加载实体（版本取 `_version`）。差异：不经代码生成的 Repository / 加载器，
+  直接 `MongoStore.Load` 后按手写 DAO 解码；没有 DataEngine 的 Runtime / outbox（原型没有 effect）。
+- 积压按“笔”判定（维护者 2026-10-27 确认的口径）：参与方未确认记录 ÷ 每笔记录数（正向 2、补偿 3）、冷副本未投影事件 ÷ 每笔事件数（正向 3、补偿 4），
+  取大者与在途笔数（闭环并发）比较，门槛 ≤ 2 倍；停止加压后 30s 内归零；冷副本与终态、Mongo 账户与内存逐笔 0 差异。结果见压测报告第二轮。
 
 ## 13. 对 Remote 的可推广性
 
@@ -177,7 +197,9 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
 - **事件携带完整 saga 状态**：`Data` 大时日志膨胀；可改为增量，但重放要能从快照 + 增量还原。
 - **macOS 测量**：参与方 WAL 的 fsync 在 macOS 上是 F_FULLFSYNC；JetStream 在本机三节点同盘。Linux 未测。
 - 原型省掉的段与对数字的影响见报告 §1。
-- 没有：Resume / 代际、人工补偿、定义版本、业务键唯一（跨保留期）、Mongo 投影、多参与方服务与按 sid 路由、App 级 fail-stop 接线、指标。
+- **投影与关键路径同盘**：投影打开后吞吐明显下降（报告第二轮），定位到 Mongo 三节点 journal 与参与方 WAL、JetStream 在同一块盘上互相拖慢
+  （参与方 Nest 调用、JetStream 发布的平均耗时都成倍上升），不是投影阻塞了关键路径。生产要把 Mongo 与 NATS / 参与方 WAL 分盘或分机，本机无法验证。
+- 没有：Resume / 代际、人工补偿、定义版本、业务键唯一（跨保留期）、查询接口、多参与方服务与按 sid 路由、App 级 fail-stop 接线、指标。
 
 ## 15. 位置与运行
 
@@ -185,7 +207,9 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
 export SAGAJS_ROOT=<私有目录>  # 数据与日志
 scripts/perf/saga-jslog-proto/nats-cluster.sh start     # 私有三节点（缺省 25622-25624）
 export SAGAJS_URL=nats://127.0.0.1:25622,nats://127.0.0.1:25623,nats://127.0.0.1:25624
-GOWORK=off go test -race -count=1 -v ./scripts/perf/saga-jslog-proto/...      # 语义 + 正确性 + kill -9
+GOWORK=off go test -race -count=1 -v ./scripts/perf/saga-jslog-proto/...      # 语义 + 正确性 + kill -9（投影用例要 SAGAJS_MONGO_URI，否则跳过）
+# 投影用例 / 压测：持共享隔离环境的 remote-acceptance.lock，把 env.sh 里的 Mongo 地址转给 SAGAJS_MONGO_URI（不打印），只用 sagajs_<前缀> 库、用完删除。
+# kill -9 用例的子进程就是测试二进制本身（TestMain 见 SAGAJS_ROLE_ARGS 走进程入口，roles_test.go）。
 SAGAJS_MUTATE=nofence   GOWORK=off go test -count=1 -run TestFenceRejectsStaleWriter ./scripts/perf/saga-jslog-proto/        # 必须失败
 SAGAJS_MUTATE=noreceipt GOWORK=off go test -count=1 -run TestEndToEndDuplicateCommandsAndResults ./scripts/perf/saga-jslog-proto/  # 必须失败
 scripts/perf/saga-jslog-proto/nats-cluster.sh clean
@@ -206,7 +230,17 @@ scripts/perf/saga-jslog-proto/nats-cluster.sh clean
 事件携带完整状态导致日志膨胀；清理受最慢的参与方消费者牵制（卡住的消费者会让日志一直长，需要告警与上限策略）；截止检查代替 lease fence 后迟到成功的频率；
 saga 是已知反复出问题的模块，换掉整条协调路径会让现有的回归测试大面积失效，需要按规则逐条迁移。
 
-## 17. 需要维护者决定
+## 17. 维护者决定（2026-10-27）
+
+维护者对下面四项“全部按推荐”：
+
+1. **1A**：Redis 2c 现状不动；原型先补“异步 Mongo 投影同时运行”的压测（本轮完成，见 §12 与报告第二轮），Linux 跨机复测等有机器再做。
+2. **2A**：参与方回执放在实体内（实体锁串行化同一操作的尝试，一条 WAL 记录，不需要操作状态文档与 lease fence）。
+3. **3A**：按分区组分 4～8 条流；原型缺省改为 4 条流，单流保留为可选（§3）。
+4. **终态通知**：`ev.done` 作为可选能力，格式先不承诺稳定。
+
+以下是第一轮交回时列出的选项原文，保留备查。
+
 
 1. **是否进入实施评审**。A（推荐）：保留 Redis 2c 现状不动，先在原型上补“异步 Mongo 投影同时运行”与 Linux 跨机复测，数字仍成立再出函数级实施设计；
    B：直接按本稿实施并替换 Redis 权威路线（代价：2a / 2b / 2c 的工作作废、saga 回归测试大面积迁移）；C：不采用，原型只作参考。
