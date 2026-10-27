@@ -1,0 +1,60 @@
+2026-10-27 14:56:19 start forward-strict-p4-s1 c1 load={{ 5.18 6.78 6.94 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 14:56:50 end forward-strict-p4-s1 c1 nats_cpu=
+2026-10-27 14:56:50 start forward-strict-p4-s1 c16 load={{ 5.06 6.60 6.87 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 14:57:22 end forward-strict-p4-s1 c16 nats_cpu=
+2026-10-27 14:57:22 start forward-strict-p4-s1 c64 load={{ 6.61 6.81 6.93 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 14:57:54 end forward-strict-p4-s1 c64 nats_cpu=
+2026-10-27 14:57:54 start forward-strict-p4-s1 c128 load={{ 6.73 6.77 6.91 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 14:58:26 end forward-strict-p4-s1 c128 nats_cpu=
+2026-10-27 14:59:11 start compensate-strict-p4-s1 c1 load={{ 7.30 7.30 7.12 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 14:59:42 end compensate-strict-p4-s1 c1 nats_cpu=
+2026-10-27 14:59:42 start compensate-strict-p4-s1 c16 load={{ 5.86 6.95 7.00 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 15:00:13 end compensate-strict-p4-s1 c16 nats_cpu=
+2026-10-27 15:00:13 start compensate-strict-p4-s1 c64 load={{ 4.91 6.61 6.87 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 15:00:45 end compensate-strict-p4-s1 c64 nats_cpu=
+2026-10-27 15:01:00 start compensate-strict-p4-s1 c128 load={{ 7.55 7.17 7.07 }} swap=4771.31M power='AC Power' nats_cpu=
+2026-10-27 15:01:33 end compensate-strict-p4-s1 c128 nats_cpu=
+2026-10-27 15:01:48 start forward-strict-p4-s2 c1 load={{ 7.28 7.24 7.10 }} swap=4755.31M power='AC Power' nats_cpu=
+2026-10-27 15:02:19 end forward-strict-p4-s2 c1 nats_cpu=
+2026-10-27 15:02:19 start forward-strict-p4-s2 c16 load={{ 6.11 6.96 7.01 }} swap=4747.31M power='AC Power' nats_cpu=
+2026-10-27 15:02:51 end forward-strict-p4-s2 c16 nats_cpu=
+2026-10-27 15:02:51 start forward-strict-p4-s2 c64 load={{ 5.02 6.60 6.87 }} swap=4747.31M power='AC Power' nats_cpu=
+2026-10-27 15:03:23 end forward-strict-p4-s2 c64 nats_cpu=
+2026-10-27 15:03:23 start forward-strict-p4-s2 c128 load={{ 5.89 6.68 6.89 }} swap=5225.75M power='AC Power' nats_cpu=
+2026-10-27 15:03:56 end forward-strict-p4-s2 c128 nats_cpu=
+2026-10-27 15:04:26 start forward-strict-p1 c16 load={{ 7.75 7.30 7.12 }} swap=5676.38M power='AC Power' nats_cpu=
+2026-10-27 15:04:57 end forward-strict-p1 c16 nats_cpu=
+2026-10-27 15:04:57 start forward-strict-p1 c128 load={{ 7.07 7.19 7.09 }} swap=6422.31M power='AC Power' nats_cpu=
+2026-10-27 15:05:30 end forward-strict-p1 c128 nats_cpu=
+2026-10-27 15:05:30 start forward-strict-p16 c16 load={{ 5.75 6.84 6.96 }} swap=6422.31M power='AC Power' nats_cpu=
+2026-10-27 15:06:02 end forward-strict-p16 c16 nats_cpu=
+2026-10-27 15:06:02 start forward-strict-p16 c128 load={{ 6.96 7.04 7.03 }} swap=6422.31M power='AC Power' nats_cpu=
+2026-10-27 15:06:35 end forward-strict-p16 c128 nats_cpu=
+2026-10-27 15:06:50 start forward-strict-p16-g4 c16 load={{ 7.67 7.30 7.13 }} swap=6422.31M power='AC Power' nats_cpu=
+2026-10-27 15:07:22 end forward-strict-p16-g4 c16 nats_cpu=
+2026-10-27 15:07:22 start forward-strict-p16-g4 c128 load={{ 7.65 7.36 7.16 }} swap=6422.31M power='AC Power' nats_cpu=
+2026-10-27 15:07:55 end forward-strict-p16-g4 c128 nats_cpu=
+2026-10-27 15:07:55 start forward-pipelined-p4 c16 load={{ 6.04 6.98 7.03 }} swap=6406.31M power='AC Power' nats_cpu=
+2026-10-27 15:08:27 end forward-pipelined-p4 c16 nats_cpu=
+2026-10-27 15:08:27 start forward-pipelined-p4 c128 load={{ 5.56 6.76 6.94 }} swap=6406.31M power='AC Power' nats_cpu=
+2026-10-27 15:09:00 end forward-pipelined-p4 c128 nats_cpu=
+2026-10-27 15:09:00 start forward-strict-p4-snap c64 load={{ 6.46 6.85 6.97 }} swap=6406.31M power='AC Power' nats_cpu=
+2026-10-27 15:09:31 end forward-strict-p4-snap c64 nats_cpu=
+2026-10-27 15:09:31 all done
+2026-10-27 15:09:33 all done
+2026-10-27 15:09:59 start compensate-strict-p4-s1r c16 load={{ 6.92 6.91 6.98 }} swap=6406.31M power='AC Power' nats_cpu=
+2026-10-27 15:10:30 end compensate-strict-p4-s1r c16 nats_cpu=
+2026-10-27 15:10:30 start compensate-strict-p4-s1r c64 load={{ 7.57 7.09 7.04 }} swap=6398.31M power='AC Power' nats_cpu=
+2026-10-27 15:11:02 end compensate-strict-p4-s1r c64 nats_cpu=
+2026-10-27 15:11:32 start compensate-strict-p4-s1r c128 load={{ 7.63 7.33 7.14 }} swap=6390.31M power='AC Power' nats_cpu=
+2026-10-27 15:12:05 end compensate-strict-p4-s1r c128 nats_cpu=
+2026-10-27 15:12:05 all done
+2026-10-27 15:12:21 start forward-strict-p4-s2r c1 load={{ 7.79 7.43 7.19 }} swap=6390.31M power='AC Power' nats_cpu=
+2026-10-27 15:12:53 end forward-strict-p4-s2r c1 nats_cpu=
+2026-10-27 15:12:53 start forward-strict-p4-s2r c16 load={{ 7.11 7.29 7.15 }} swap=6382.31M power='AC Power' nats_cpu=
+2026-10-27 15:13:24 end forward-strict-p4-s2r c16 nats_cpu=
+2026-10-27 15:13:24 start forward-strict-p4-s2r c64 load={{ 6.74 7.17 7.11 }} swap=6382.31M power='AC Power' nats_cpu=
+2026-10-27 15:13:56 end forward-strict-p4-s2r c64 nats_cpu=
+2026-10-27 15:14:26 start forward-strict-p4-s2r c128 load={{ 7.50 7.48 7.23 }} swap=6382.31M power='AC Power' nats_cpu=
+2026-10-27 15:14:59 end forward-strict-p4-s2r c128 nats_cpu=
+2026-10-27 15:14:59 all done

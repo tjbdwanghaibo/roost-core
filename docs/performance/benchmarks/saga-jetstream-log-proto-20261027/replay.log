@@ -1,0 +1,5 @@
+=== RUN   TestPerfReplayVsLogSize
+    perf_test.go:367: replay 10000 msgs (5000 sagas) from an empty snapshot: 22.756666ms (439432 msgs/s)
+    perf_test.go:367: replay 50000 msgs (25000 sagas) from an empty snapshot: 115.727167ms (432051 msgs/s)
+--- PASS: TestPerfReplayVsLogSize (1.13s)
+PASS

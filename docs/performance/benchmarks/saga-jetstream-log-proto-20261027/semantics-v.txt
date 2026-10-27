@@ -1,0 +1,44 @@
+    failover_test.go:97: kill -9 stream leader sagajs-n3 after 200 acked writes
+    failover_test.go:140: writes=600 unknown(first attempt failed)=1 resolved as duplicate=0 resolved as new=1 retries=71 longest write=5.631581084s new leader=n1 since kill=5.694815916s
+    failover_test.go:143: first-attempt error: context deadline exceeded
+    failover_test.go:191: all 600 acked writes present exactly once at their PubAck sequence after the killed node rejoined
+    failover_test.go:217: ack-lost write landed at 601, leader n1 killed, retry after 4.964893042s: ack=&{Stream:SEMF4300630001 Sequence:601 Duplicate:true Domain: Value:}
+--- PASS: TestLeaderKillKeepsAckedWritesAndResolvesUnknowns (13.96s)
+    semantics_test.go:48: single subject stale: code=10071 err="nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 3"
+--- PASS: TestExpectedLastSubjectSequenceSingleSubject (3.08s)
+    semantics_test.go:81: wildcard stale: code=10071 err="nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 4"
+    semantics_test.go:88: -Subject header alone: err=nats: nats: API error: code=400 err_code=10193 description=missing sequence for expected last sequence per subject
+    semantics_test.go:91: publish outside the filter with the filter's current seq: err=<nil>
+    semantics_test.go:93: publish outside the filter with a stale seq: code=10071 err=nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 4
+--- PASS: TestExpectedLastSubjectSequenceWildcard (0.11s)
+    semantics_test.go:113: stream-level stale (a result landed in between): code=10071 err="nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 2"
+--- PASS: TestExpectedLastSequenceStream (0.12s)
+    semantics_test.go:143: first loser with code 10164: "nats: nats: API error: code=400 err_code=10164 description=wrong last sequence"
+    semantics_test.go:143: first loser with code 10071: "nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 18"
+    semantics_test.go:157: 40 rounds × 16 writers: exactly one winner each round; loser codes=map[10071:7 10164:593]
+--- PASS: TestExpectedSequenceConcurrentWritersOnlyOneWins (0.13s)
+    semantics_test.go:246: commit reply={"stream":"SEMB8258190006","seq":3,"batch":"b9317980007","count":3} err=<nil>
+    semantics_test.go:260: stale expected on the first message: reply={"error":{"code":400,"err_code":10071,"description":"wrong last sequence: 3"},"stream":"SEMB8258190006","seq":0} err=<nil>
+    semantics_test.go:276: expected header on message 2 (= pre-batch last 3): reply={"stream":"SEMB8258190006","seq":5,"batch":"b9339670009","count":2} err=<nil> stored=2
+    semantics_test.go:284: Nats-Expected-Last-Sequence on message 2: reply={"error":{"code":400,"err_code":10071,"description":"wrong last sequence: 6"},"stream":"SEMB8258190006","seq":0} err=<nil> stored=0
+    semantics_test.go:293: Nats-Msg-Id inside a batch: reply={"stream":"SEMB8258190006","seq":7,"batch":"b93572200012","count":2} err=<nil> stored=2
+    semantics_test.go:300: same batch again with the same Nats-Msg-Id: reply={"error":{"code":400,"err_code":10201,"description":"atomic publish batch contains duplicate message id"},"stream":"SEMB8258190006","seq":0} err=<nil> stored=0
+    semantics_test.go:305: first batch message as request: reply=""
+    semantics_test.go:306: first message as request: commit reply={"stream":"SEMB8258190006","seq":9,"batch":"b93681800014","count":2} err=<nil> stored=2
+    semantics_test.go:336: sequence gap (1, 3+commit): reply={"error":{"code":400,"err_code":10176,"description":"atomic publish batch is incomplete"},"stream":"SEMB8258190006","seq":0} err=<nil> stored=0
+--- PASS: TestAtomicBatchPublish (0.62s)
+    --- PASS: TestAtomicBatchPublish/commit_writes_all (0.00s)
+    --- PASS: TestAtomicBatchPublish/stale_expected_on_first_rejects_whole_batch (0.00s)
+    --- PASS: TestAtomicBatchPublish/expected_on_later_message (0.00s)
+    --- PASS: TestAtomicBatchPublish/stream_level_expected_on_later_message (0.00s)
+    --- PASS: TestAtomicBatchPublish/msg_id_in_batch (0.00s)
+    --- PASS: TestAtomicBatchPublish/first_as_request (0.00s)
+    --- PASS: TestAtomicBatchPublish/uncommitted_batch_is_discarded (0.50s)
+    --- PASS: TestAtomicBatchPublish/gap_in_sequence_rejected (0.00s)
+    semantics_test.go:354: retry with the same MsgID and the same (now stale) expected seq: ack=&{Stream:SEMD44515400017 Sequence:1 Duplicate:true Domain: Value:} err=<nil>
+    semantics_test.go:363: retry after another writer moved the filter: ack=&{Stream:SEMD44515400017 Sequence:1 Duplicate:true Domain: Value:} err=<nil>
+    semantics_test.go:366: new MsgID with a stale expected seq: code=10071 err=nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 2
+    semantics_test.go:388: ack-lost write (landed at 3) retried with the same MsgID+expected: ack=&{Stream:SEMD44515400017 Sequence:3 Duplicate:true Domain: Value:} err=<nil>
+--- PASS: TestMsgIDDeduplication (0.12s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	18.837s

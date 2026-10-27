@@ -1,0 +1,27 @@
+    e2e_test.go:56: coordinator: ev=340 pubs=253 batches=67 accepted=240; participant executed=200 refused=40 results=240 WAL syncs=60
+--- PASS: TestEndToEndForwardAndCompensate (0.76s)
+    e2e_test.go:85: redelivered=76 receipt replays=76 duplicate results judged=60
+--- PASS: TestEndToEndDuplicateCommandsAndResults (1.75s)
+--- PASS: TestEndToEndLateSuccessReopensAndCompensates (1.40s)
+    e2e_test.go:218: stale writer A stopped with: jslogproto: partition fenced by another writer: nats: nats: API error: code=400 err_code=10071 description=wrong last sequence: 24 (fenced=1)
+--- PASS: TestFenceRejectsStaleWriter (1.08s)
+    e2e_test.go:269: A: ev=384 snapshots=30 purges=30; stream msgs after purge=11 (first 758); B replayed 6 msgs in 14.066041ms
+--- PASS: TestSnapshotPurgeReplayMatches (1.13s)
+--- PASS: TestLeaderKillKeepsAckedWritesAndResolvesUnknowns (16.59s)
+    kill_test.go:164: A killed after 150 terminal sagas; B: "ready coord B replayed=1016 in 3.432018792s"; all 400 terminal 7.797594875s after the kill
+--- PASS: TestCoordinatorKill9Takeover (22.26s)
+    kill_test.go:205: participant killed after 100 terminal sagas; restarted: "ready part rebuilt_versions=299 in 919.417µs"
+    kill_test.go:224: coordinator: accepted=660 duplicate=0 stale=0 timer-driven retries visible as attempts>1
+--- PASS: TestParticipantKill9Recovery (11.75s)
+--- PASS: TestMachineCompletionRules (0.00s)
+--- PASS: TestWheelDeliversDueEntriesOnce (0.00s)
+--- SKIP: TestPerfClosedLoop (0.00s)
+--- SKIP: TestPerfReplayVsLogSize (0.00s)
+--- PASS: TestExpectedLastSubjectSequenceSingleSubject (0.64s)
+--- PASS: TestExpectedLastSubjectSequenceWildcard (0.54s)
+--- PASS: TestExpectedLastSequenceStream (0.55s)
+--- PASS: TestExpectedSequenceConcurrentWritersOnlyOneWins (1.21s)
+--- PASS: TestAtomicBatchPublish (1.48s)
+--- PASS: TestMsgIDDeduplication (0.98s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	63.710s

@@ -114,6 +114,7 @@
 - [CONTRACT-2026-10-18-projector-checkpoint-merge.md](CONTRACT-2026-10-18-projector-checkpoint-merge.md)：投影器对带回执 / effect 的特殊记录合并 checkpoint 的契约变更方案（为何原先逐条确认、13 条不变量论证、崩溃重放上界、验证与回退）
 - [PROPOSAL-2026-10-26-redis-authority-review.md](PROPOSAL-2026-10-26-redis-authority-review.md)：“Redis 做 Remote / Saga 权威”方案的代码审查与第 1 步协议草案（未实施、待维护者拍板：按严重度的问题清单、现状核对、不变量与三大块契约冲突、漏项场景、往返次数审计与“不换存储先减往返”的第 1.5 步、RPO / 拓扑 / 确认条件选项、分期门槛、第 2 步协调器 + Store Service 的 Redis 记录结构与崩溃恢复表）
 - [DESIGN-2026-10-26-redis-authority-v2.md](DESIGN-2026-10-26-redis-authority-v2.md)：“Redis 做 Saga / Remote 权威”设计 v2（维护者 2026-10-26 决定按它直接实施，未实施：单主 + AOF always + 同连接 WAITAOF、不考虑切主；每类事务的存储操作次数基线与目标；R1～R18 逐条处理；分期与门槛；第 2 步 Saga 协调器 + Store Service 的函数级设计、Lua 脚本、状态转换与崩溃恢复表、投影与回收、并发模型、指标、配置、红测试与验收命令；实施后的 Saga 压测方案）
+- [PROPOSAL-2026-10-27-saga-jetstream-log.md](PROPOSAL-2026-10-27-saga-jetstream-log.md)：Saga 协调器以 JetStream 为权威日志的设计稿与原型结论（原型在 `scripts/perf/saga-jslog-proto/`，未进生产路径、待维护者决定：前提原文、2.14.5 期望序号 / 原子批量 / MsgID 去重 / leader 切换实测、分区布局与事件格式、单写者隔离、参与方回执、重放快照清理、故障表、与现行 saga 语义对应、投影接法、工作量与待决定项）
 - [ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、Session 服务可选化与 Sync 命名后续事项
 - [DOCUMENTS.md](DOCUMENTS.md)：本清单
 
