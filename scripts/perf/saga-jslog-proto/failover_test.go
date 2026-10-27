@@ -22,16 +22,16 @@ import (
 )
 
 func clusterRoot(t *testing.T) string {
-	root := os.Getenv("SAGAJS_ROOT")
-	if root == "" {
+	clusterDir := os.Getenv("SAGAJS_ROOT")
+	if clusterDir == "" {
 		t.Skip("SAGAJS_ROOT 未设置（nats-cluster.sh 的数据目录）")
 	}
-	return root
+	return clusterDir
 }
 
-func killNode(t *testing.T, root string, node int) {
+func killNode(t *testing.T, clusterDir string, node int) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(root, fmt.Sprintf("n%d.pid", node)))
+	raw, err := os.ReadFile(filepath.Join(clusterDir, fmt.Sprintf("n%d.pid", node)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func leaderNode(t *testing.T, stream jetstream.Stream) int {
 }
 
 func TestLeaderKillKeepsAckedWritesAndResolvesUnknowns(t *testing.T) {
-	root := clusterRoot(t)
+	clusterDir := clusterRoot(t)
 	nc, js := connect(t)
 	name := uniqueName("SEMF")
 	stream := createStream(t, js, jetstream.StreamConfig{Name: name, Subjects: []string{name + ".>"}, Duplicates: 2 * time.Minute})
@@ -92,7 +92,7 @@ func TestLeaderKillKeepsAckedWritesAndResolvesUnknowns(t *testing.T) {
 	var stall time.Duration
 	for i := 0; i < total; i++ {
 		if i == killAt {
-			killNode(t, root, leader)
+			killNode(t, clusterDir, leader)
 			killedAt = time.Now()
 			t.Logf("kill -9 stream leader sagajs-n%d after %d acked writes", leader, i)
 		}
@@ -207,7 +207,7 @@ func TestLeaderKillKeepsAckedWritesAndResolvesUnknowns(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	landedAt := lastSeqOf(t, stream, filter)
-	killNode(t, root, second)
+	killNode(t, clusterDir, second)
 	begin := time.Now()
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

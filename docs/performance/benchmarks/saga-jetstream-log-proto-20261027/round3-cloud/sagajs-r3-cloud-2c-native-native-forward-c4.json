@@ -1,0 +1,124 @@
+{
+  "Pairs": 256,
+  "Variant": "steps",
+  "Mode": "forward",
+  "Rate": 0,
+  "Concurrency": 4,
+  "Planned": 323,
+  "Started": 323,
+  "Completed": 323,
+  "WrongTerminal": 0,
+  "StartErrors": 0,
+  "FirstError": "",
+  "DurationSeconds": 60,
+  "ElapsedSeconds": 60.644643667,
+  "CompletionTPS": 5.3261092896117,
+  "P50MS": 742.801,
+  "P95MS": 805.7915,
+  "P99MS": 929.248042,
+  "MaxMS": 952.975041,
+  "Server": {
+    "Samples": 323,
+    "P50MS": 734,
+    "P95MS": 799,
+    "P99MS": 921,
+    "MaxMS": 947
+  },
+  "StartCall": {
+    "Samples": 323,
+    "P50MS": 15.449292,
+    "P95MS": 20.013584,
+    "P99MS": 26.675208,
+    "MaxMS": 199.12925
+  },
+  "BusinessVerified": true,
+  "Minutes": [
+    {
+      "Minute": 0,
+      "Count": 323,
+      "P50MS": 742.801,
+      "P99MS": 929.248042,
+      "MaxMS": 952.975041,
+      "ServerP99MS": 921
+    }
+  ],
+  "NestRequest": {
+    "credit": {
+      "Samples": 323,
+      "P50MS": 23.867167,
+      "P95MS": 29.187917,
+      "P99MS": 30.851375,
+      "MaxMS": 43.054459
+    },
+    "debit": {
+      "Samples": 323,
+      "P50MS": 25.201708,
+      "P95MS": 33.794959,
+      "P99MS": 38.702875,
+      "MaxMS": 45.328792
+    }
+  },
+  "BodyGap": {
+    "credit": {
+      "Samples": 322,
+      "P50MS": 94.231,
+      "P95MS": 482.698459,
+      "P99MS": 529.43375,
+      "MaxMS": 637.414833
+    },
+    "debit": {
+      "Samples": 322,
+      "P50MS": 97.667458,
+      "P95MS": 478.851792,
+      "P99MS": 488.824833,
+      "MaxMS": 512.749209
+    }
+  },
+  "BodyErrors": {},
+  "ProjectionBacklogMax": 4,
+  "FinalProjector": {
+    "Committed": 646,
+    "Projected": 646,
+    "WALUnacked": 0,
+    "ProjectionFailures": 0,
+    "FatalProjectionConflicts": 0,
+    "LastError": "",
+    "AdmissionRejected": 0,
+    "BacklogWarning": false,
+    "FencedEntities": 0,
+    "FencedAdmissionRejected": 0,
+    "StaleEvictions": 0,
+    "UnloadingEntities": 0,
+    "UnloadAdmissionRejected": 0
+  },
+  "Statuses": {
+    "4": 323
+  },
+  "Mismatches": null,
+  "SteadyWindowSeconds": 50,
+  "SteadyTPS": 5.34,
+  "SteadyCompleted": 267,
+  "ProcessCPUCores": 0.24380794586226026,
+  "MongoCommands": {
+    "abortTransaction": 0,
+    "aggregate": 75,
+    "bulkWrite": 0,
+    "commitTransaction": 1804,
+    "count": 0,
+    "delete": 646,
+    "find": 13619,
+    "findAndModify": 1441,
+    "insert": 2584,
+    "update": 3876
+  },
+  "HarnessMongoCommands": 1,
+  "FinalStatuses": {
+    "4": 323
+  },
+  "FinalWrongTerminal": 0,
+  "StoreServiceMongoOps": 2584,
+  "StoreServiceBacklogMax": 2,
+  "StoreServiceDrainSecond": 0.00468925,
+  "ColdHotMismatches": 0,
+  "MongoTerminal": 323
+}

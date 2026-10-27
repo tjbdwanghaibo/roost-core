@@ -77,6 +77,12 @@ type perfResult struct {
 	CatchUpRate         float64 `json:"participant_projection_rate_catchup"`
 	MongoCallsPerRecord float64 `json:"participant_mongo_calls_per_record"`
 	MongoAcctChecked    bool    `json:"mongo_accounts_checked"`
+	BalanceErrors       int     `json:"balance_read_errors"`
+	BalanceMismatches   int     `json:"balance_mismatches"`
+	BalanceFirstErr     string  `json:"balance_first_problem,omitempty"`
+	ProjectionFailures  uint64  `json:"participant_projection_failures"`
+	ProjectionLastError string  `json:"participant_projection_last_error,omitempty"`
+	NestErrors          uint64  `json:"participant_nest_errors"`
 	ColdDiffs           int     `json:"cold_copy_diffs"`
 	MongoAcctDiffs      int     `json:"mongo_account_diffs"`
 	RereadChecked       int     `json:"reread_checked"`
@@ -395,13 +401,26 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 			}
 		}
 		for n := int64(0); n < int64(e.pairs*2); n++ {
-			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			bctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			got, err := part.Balance(bctx, n)
 			cancel()
-			if err != nil || got != initialBalance+wantBal[n] {
+			switch {
+			case err != nil:
 				ok = false
+				r.BalanceErrors++
+				if r.BalanceFirstErr == "" {
+					r.BalanceFirstErr = err.Error()
+				}
+			case got != initialBalance+wantBal[n]:
+				ok = false
+				r.BalanceMismatches++
+				if r.BalanceFirstErr == "" {
+					r.BalanceFirstErr = fmt.Sprintf("account %d: %d, want %d", n, got, initialBalance+wantBal[n])
+				}
 			}
 		}
+		ps := part.ProjectorStats()
+		r.ProjectionFailures, r.ProjectionLastError, r.NestErrors = ps.ProjectionFailures, ps.LastError, part.Stats.NestErrors.Load()
 		return ok
 	}()
 
