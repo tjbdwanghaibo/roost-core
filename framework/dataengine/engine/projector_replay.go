@@ -137,6 +137,15 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	return processed, replayErr
 }
 
+// replayReadRecords 是一轮回放最多读取的记录数：能并行投影时为 ReplayBatchRecords × ProjectionWorkers（每条通道仍能
+// 凑满一个批，而不是把一个批拆成几份），否则 ReplayBatchRecords。字节上限仍是 ReplayReadBytes，不随通道数放大。
+func (projector *Projector) replayReadRecords() int {
+	if store, ok := projector.store.(ParallelProjectionStore); ok && store.SupportsParallelProjection() && projector.opts.ProjectionWorkers > 1 {
+		return saturatingMul(projector.opts.ReplayBatchRecords, projector.opts.ProjectionWorkers)
+	}
+	return projector.opts.ReplayBatchRecords
+}
+
 // planReplayWindows 决定本轮是否并行：ProjectionWorkers > 1 且 Store 声明 ParallelProjectionStore 时按冲突键切窗口，
 // 否则整轮一个串行段（与改动前相同）。Remote 记录另需 Store 声明 Remote 适配器可并发调用，否则 Remote 记录之间串行。
 func (projector *Projector) planReplayWindows(records []coredata.CommitRecord) []replayWindow {
@@ -150,16 +159,18 @@ func (projector *Projector) planReplayWindows(records []coredata.CommitRecord) [
 }
 
 // readReplayBatch 按 WAL 物理顺序收集本轮可投影的连续记录：遇到仍持有实体锁的事务、
-// 达到条数或读取字节上限时停止。返回的错误已去掉“批次已满”哨兵，可能是
+// 达到条数（replayReadRecords：串行时 ReplayBatchRecords，并行时乘以 ProjectionWorkers，让每条通道仍能凑满一个批）
+// 或读取字节上限（ReplayReadBytes，不随通道数放大）时停止。返回的错误已去掉“批次已满”哨兵，可能是
 // errProjectorTransactionHeld 或 WAL 读取错误；记录为空时调用方不做投影。
 func (projector *Projector) readReplayBatch(ctx context.Context) ([]corenest.CommitRecord, []corenest.CommitFence, error) {
 	var records []corenest.CommitRecord
 	var fences []corenest.CommitFence
 	readBytes := 0
+	readRecords := projector.replayReadRecords()
 	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
 		// 上一条已被本轮接收，必须让它的 consume 返回 nil，WAL 才能如实计数。
 		// 读到下一条时停止；这条 lookahead 不保留、不确认。
-		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
+		if len(records) >= readRecords || readBytes >= projector.opts.ReplayReadBytes {
 			return errProjectorBatchComplete
 		}
 		if projector.isHeld(record.ID) {
@@ -173,8 +184,8 @@ func (projector *Projector) readReplayBatch(ctx context.Context) ([]corenest.Com
 		// 空闲或首条事务尚未解锁时不需要批次空间。等到确实有可投影
 		// 记录才分配，避免后台每次无进展轮询都申请整个批次的容量。
 		if records == nil {
-			records = make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
-			fences = make([]corenest.CommitFence, 0, projector.opts.ReplayBatchRecords)
+			records = make([]corenest.CommitRecord, 0, min(readRecords, 1024))
+			fences = make([]corenest.CommitFence, 0, min(readRecords, 1024))
 		}
 		records = append(records, record)
 		fences = append(fences, fence)
