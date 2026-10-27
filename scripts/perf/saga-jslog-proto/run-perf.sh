@@ -58,6 +58,16 @@ case "${1:-matrix}" in
     # 快照 + 清理开着（每 2000 条事件一次，终态保留 2s）：量快照对吞吐的影响
     SAGAJS_PERF_SNAPSHOT_EVERY=2000 one "forward-strict-p4-snap" forward 4 strict "64"
     ;;
+  matrix-proj)
+    # 投影打开 / 关闭的同机对照（维护者 2026-10-27 决定 1A）：P=4、缺省 4 条流，每档 30s。投影打开需要 SAGAJS_MONGO_URI
+    # 并持 remote-acceptance.lock（由调用方包一层）。
+    L="1 16 64 128"
+    SAGAJS_PERF_PROJECTION=1 one "proj-forward-p4g4-s1" forward 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=1 one "proj-compensate-p4g4-s1" compensate 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=0 one "off-forward-p4g4-s1" forward 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=1 one "proj-forward-p4g4-s2" forward 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=0 one "off-compensate-p4g4-s1" compensate 4 strict "$L"
+    ;;
   replay)
     gate
     SAGAJS_PERF=1 SAGAJS_PERF_REPLAY_SIZES="${SIZES:-10000 50000}" "$BIN" -test.run '^TestPerfReplayVsLogSize$' -test.v -test.count=1 -test.timeout 0 2>&1 | tee -a "$OUT/replay.log"

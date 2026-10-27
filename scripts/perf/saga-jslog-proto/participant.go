@@ -165,6 +165,8 @@ type ParticipantOptions struct {
 
 type ParticipantStats struct {
 	Executed, Replayed, Refused, Expired, ResultPubs, NestErrors, Redelivered atomic.Uint64
+	// 诊断：Nest 调用（含 WAL 落盘）与结果发布（到 PubAck）的累计耗时。
+	NestNanos, PubNanos atomic.Uint64
 }
 
 type Participant struct {
@@ -537,7 +539,9 @@ func (p *Participant) handle(ctx context.Context, msg jetstream.Msg) {
 	}
 	cmd := ev.Cmd
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	nestBegin := time.Now()
 	out, err := p.mgr.Request(reqCtx, stepHandler, accountEntityID(cmd.Account), nest.Params{cmd})
+	p.Stats.NestNanos.Add(uint64(time.Since(nestBegin)))
 	cancel()
 	if err != nil {
 		p.Stats.NestErrors.Add(1)
@@ -567,6 +571,8 @@ func (p *Participant) handle(ctx context.Context, msg jetstream.Msg) {
 		Success: res.Receipt.Success, Reason: res.Receipt.Reason}
 	data, _ := json.Marshal(completion)
 	subject := p.opts.Layout.ResultSubject(cmd.Part)
+	pubBegin := time.Now()
+	defer func() { p.Stats.PubNanos.Add(uint64(time.Since(pubBegin))) }()
 	for {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_, err = p.js.Publish(pctx, subject, data, jetstream.WithMsgID("res."+cmd.CmdID))

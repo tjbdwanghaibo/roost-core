@@ -108,6 +108,7 @@ type CoordinatorStats struct {
 	ReplayMsgs, ReplayNanos                                                                  atomic.Uint64
 	// 结果未知之后的判定：单条重发得到 Duplicate；批重发得到 10201 或序号不符但最后一条是自己的。
 	DupAcks, ResolvedByLast atomic.Uint64
+	PubNanos                atomic.Uint64 // 诊断：协调器发布（到 PubAck）的累计耗时
 }
 
 type Coordinator struct {
@@ -651,6 +652,8 @@ func (p *partition) publish(ctx context.Context, out []outMsg) (uint64, error) {
 func (p *partition) send(ctx context.Context, msgs []*nats.Msg, batchID string) (uint64, error) {
 	c := p.c
 	c.Stats.PubCalls.Add(1)
+	pubBegin := time.Now()
+	defer func() { c.Stats.PubNanos.Add(uint64(time.Since(pubBegin))) }()
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if c.opts.DropAck != nil && c.opts.DropAck(p.k) {

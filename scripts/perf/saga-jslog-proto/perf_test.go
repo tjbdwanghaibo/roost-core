@@ -34,38 +34,52 @@ func envInt(name string, def int) int {
 }
 
 type perfResult struct {
-	Label         string  `json:"label"`
-	Scenario      string  `json:"scenario"`
-	Durability    string  `json:"durability"`
-	Partitions    int     `json:"partitions"`
-	Streams       int     `json:"streams"`
-	Concurrency   int     `json:"concurrency"`
-	GOMAXPROCS    int     `json:"gomaxprocs"`
-	Seconds       int     `json:"seconds"`
-	SteadyTPS     float64 `json:"steady_tps"`
-	Terminal      int     `json:"terminal"`
-	Unexpected    int     `json:"unexpected"`
-	ClientP50     float64 `json:"client_p50_ms"`
-	ClientP99     float64 `json:"client_p99_ms"`
-	ServerP50     float64 `json:"server_p50_ms"`
-	ServerP99     float64 `json:"server_p99_ms"`
-	Steps         uint64  `json:"steps"`
-	JSMsgsStep    float64 `json:"js_msgs_per_step"`
-	JSCallsStep   float64 `json:"js_publish_calls_per_step"`
-	EvPerCall     float64 `json:"ev_per_publish_call"`
-	FsyncStep     float64 `json:"wal_fsync_per_step"`
-	BalancesOK    bool    `json:"balances_ok"`
-	RereadOK      bool    `json:"reread_ok"`
-	RereadChecked int     `json:"reread_checked"`
-	RereadPruned  int     `json:"reread_pruned_by_retention"`
-	SnapshotEvery int     `json:"snapshot_every"`
-	ReplayMsgs    uint64  `json:"replay_msgs"`
-	ReplayMs      float64 `json:"replay_ms"`
-	Snapshots     uint64  `json:"snapshots"`
-	Purges        uint64  `json:"purges"`
-	Unknown       uint64  `json:"publish_unknown"`
-	LoadBefore    string  `json:"loadavg_before"`
-	StartedAt     string  `json:"started_at"`
+	Label          string  `json:"label"`
+	Scenario       string  `json:"scenario"`
+	Durability     string  `json:"durability"`
+	Partitions     int     `json:"partitions"`
+	Streams        int     `json:"streams"`
+	Concurrency    int     `json:"concurrency"`
+	GOMAXPROCS     int     `json:"gomaxprocs"`
+	Seconds        int     `json:"seconds"`
+	SteadyTPS      float64 `json:"steady_tps"`
+	Terminal       int     `json:"terminal"`
+	Unexpected     int     `json:"unexpected"`
+	ClientP50      float64 `json:"client_p50_ms"`
+	ClientP99      float64 `json:"client_p99_ms"`
+	ServerP50      float64 `json:"server_p50_ms"`
+	ServerP99      float64 `json:"server_p99_ms"`
+	Steps          uint64  `json:"steps"`
+	JSMsgsStep     float64 `json:"js_msgs_per_step"`
+	JSCallsStep    float64 `json:"js_publish_calls_per_step"`
+	EvPerCall      float64 `json:"ev_per_publish_call"`
+	FsyncStep      float64 `json:"wal_fsync_per_step"`
+	BalancesOK     bool    `json:"balances_ok"`
+	RereadOK       bool    `json:"reread_ok"`
+	Projection     bool    `json:"projection"`
+	ProjectionMode string  `json:"projection_mode"`
+	NestAvgMs      float64 `json:"participant_nest_avg_ms"`
+	ResultPubAvgMs float64 `json:"participant_result_pub_avg_ms"`
+	CoordPubAvgMs  float64 `json:"coordinator_publish_avg_ms"`
+	// 投影积压（投影打开时）：参与方 WAL 未确认记录、冷副本未投影事件的峰值，折算成 saga 笔数（÷ 每笔条数），
+	// 与在途笔数（闭环并发）比较；停止加压后两者归零的耗时；冷副本与终态、Mongo 账户与内存的逐笔差异。
+	PartBacklogPeak  uint64  `json:"participant_backlog_peak_records"`
+	SagaBacklogPeak  uint64  `json:"saga_backlog_peak_events"`
+	BacklogPeakSagas float64 `json:"backlog_peak_sagas"`
+	BacklogRatio     float64 `json:"backlog_peak_over_inflight"`
+	CatchUpMs        float64 `json:"catch_up_ms"`
+	ColdDiffs        int     `json:"cold_copy_diffs"`
+	MongoAcctDiffs   int     `json:"mongo_account_diffs"`
+	RereadChecked    int     `json:"reread_checked"`
+	RereadPruned     int     `json:"reread_pruned_by_retention"`
+	SnapshotEvery    int     `json:"snapshot_every"`
+	ReplayMsgs       uint64  `json:"replay_msgs"`
+	ReplayMs         float64 `json:"replay_ms"`
+	Snapshots        uint64  `json:"snapshots"`
+	Purges           uint64  `json:"purges"`
+	Unknown          uint64  `json:"publish_unknown"`
+	LoadBefore       string  `json:"loadavg_before"`
+	StartedAt        string  `json:"started_at"`
 }
 
 func percentile(sorted []float64, p float64) float64 {
@@ -127,6 +141,7 @@ func TestPerfClosedLoop(t *testing.T) {
 		}
 		r := runPerfLevel(t, scenario, durability, parts, conc, seconds, warmup, snapEvery, retention, walRoot)
 		r.Label, r.Durability = label, durName
+		t.Logf("%s c%d diag: nest avg %.2f ms, result publish avg %.2f ms, coordinator publish avg %.2f ms", label, conc, r.NestAvgMs, r.ResultPubAvgMs, r.CoordPubAvgMs)
 		t.Logf("%s c%d: TPS %.2f (terminal %d, unexpected %d) client P50/P99 %.1f/%.1f ms server %.1f/%.1f ms; per step: js msgs %.2f, publish calls %.2f, wal fsync %.3f; ev/call %.2f; balances=%v reread=%v (checked %d, pruned %d) replay %d msgs %.1f ms; snapshots %d purges %d unknown %d",
 			label, conc, r.SteadyTPS, r.Terminal, r.Unexpected, r.ClientP50, r.ClientP99, r.ServerP50, r.ServerP99, r.JSMsgsStep, r.JSCallsStep, r.FsyncStep, r.EvPerCall,
 			r.BalancesOK, r.RereadOK, r.RereadChecked, r.RereadPruned, r.ReplayMsgs, r.ReplayMs, r.Snapshots, r.Purges, r.Unknown)
@@ -142,7 +157,11 @@ func TestPerfClosedLoop(t *testing.T) {
 			_, _ = f.Write(append(raw, '\n'))
 			_ = f.Close()
 		}
-		if !r.BalancesOK || !r.RereadOK || r.Unexpected > 0 {
+		if r.Projection {
+			t.Logf("%s c%d projection: backlog peak participant %d records / saga %d events = %.1f sagas (%.2f × in-flight %d); catch-up %.0f ms; cold diffs %d; mongo account diffs %d",
+				label, conc, r.PartBacklogPeak, r.SagaBacklogPeak, r.BacklogPeakSagas, r.BacklogRatio, conc, r.CatchUpMs, r.ColdDiffs, r.MongoAcctDiffs)
+		}
+		if !r.BalancesOK || !r.RereadOK || r.Unexpected > 0 || r.ColdDiffs > 0 || r.MongoAcctDiffs > 0 {
 			t.Errorf("%s c%d: verification failed (balances=%v reread=%v unexpected=%d)", label, conc, r.BalancesOK, r.RereadOK, r.Unexpected)
 		}
 	}
@@ -156,8 +175,24 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	e.pairs = 256
 	walDir := filepath.Join(walRoot, e.l.Prefix)
 	defer os.RemoveAll(walDir)
+	// SAGAJS_PERF_PROJECTION=1 两边都投影；part / saga 只开一边（定位用）。
+	mode := os.Getenv("SAGAJS_PERF_PROJECTION")
+	projection := mode == "1"
+	r.Projection = projection
+	r.ProjectionMode = mode
+	var sp *SagaProjector
+	if mode != "" && mode != "0" {
+		e.withMongo()
+	}
+	if projection || mode == "saga" {
+		sp = e.sagaProjector()
+	}
+	partMongo := e.mongo
+	if mode == "saga" {
+		partMongo = nil
+	}
 	part, err := NewParticipant(e.nc, e.js, ParticipantOptions{Layout: e.l, WALDir: walDir, Accounts: e.pairs * 2, InitialBal: initialBalance,
-		Workers: 64, Durability: durability, Log: quietLog()})
+		Workers: 64, Durability: durability, Log: quietLog(), Mongo: partMongo, Database: e.db})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +218,33 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	var wg sync.WaitGroup
 	runCtx, runCancel := context.WithTimeout(context.Background(), time.Duration(seconds+120)*time.Second)
 	defer runCancel()
+	// 投影积压采样（每 500ms）：参与方 WAL 未确认记录、冷副本未投影事件。
+	samplerDone := make(chan struct{})
+	samplerStop := make(chan struct{})
+	if projection {
+		go func() {
+			defer close(samplerDone)
+			tick := time.NewTicker(500 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-samplerStop:
+					return
+				case <-tick.C:
+				}
+				if n := part.ProjectionBacklog(); n > r.PartBacklogPeak {
+					r.PartBacklogPeak = n
+				}
+				bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				if n, err := sp.Backlog(bctx); err == nil && n > r.SagaBacklogPeak {
+					r.SagaBacklogPeak = n
+				}
+				cancel()
+			}
+		}()
+	} else {
+		close(samplerDone)
+	}
 	for w := 0; w < conc; w++ {
 		wg.Add(1)
 		go func(w int) {
@@ -212,6 +274,28 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		}(w)
 	}
 	wg.Wait()
+	if projection {
+		close(samplerStop)
+		<-samplerDone
+		// 停止加压后两边积压归零的耗时（上限 60s；门槛 30s）。
+		catchBegin := time.Now()
+		for time.Since(catchBegin) < 60*time.Second {
+			bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			n, err := sp.Backlog(bctx)
+			cancel()
+			if err == nil && n == 0 && part.ProjectionBacklog() == 0 {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		r.CatchUpMs = float64(time.Since(catchBegin).Microseconds()) / 1000
+		recordsPerSaga, eventsPerSaga := 2.0, 3.0
+		if scenario == "compensate" {
+			recordsPerSaga, eventsPerSaga = 3.0, 4.0
+		}
+		r.BacklogPeakSagas = max(float64(r.PartBacklogPeak)/recordsPerSaga, float64(r.SagaBacklogPeak)/eventsPerSaga)
+		r.BacklogRatio = r.BacklogPeakSagas / float64(conc)
+	}
 	time.Sleep(500 * time.Millisecond)
 	final := e.client.Latest()
 	want := StatusCompleted
@@ -250,7 +334,12 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		r.JSCallsStep = float64(calls) / float64(r.Steps)
 		r.FsyncStep = float64(part.WALSyncs()-syncs0) / float64(executed)
 	}
+	if n := part.Stats.ResultPubs.Load(); n > 0 {
+		r.NestAvgMs = float64(part.Stats.NestNanos.Load()) / float64(r.Steps) / 1e6
+		r.ResultPubAvgMs = float64(part.Stats.PubNanos.Load()) / float64(n) / 1e6
+	}
 	if c := coord.Stats.PubCalls.Load(); c > 0 {
+		r.CoordPubAvgMs = float64(coord.Stats.PubNanos.Load()) / float64(c) / 1e6
 		r.EvPerCall = float64(coord.Stats.EvMsgs.Load()) / float64(c)
 	}
 	r.Snapshots, r.Purges, r.Unknown = coord.Stats.Snapshots.Load(), coord.Stats.Purges.Load(), coord.Stats.Unknown.Load()
@@ -277,6 +366,31 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		return ok
 	}()
 
+	if projection {
+		// 冷副本与观察到的终态逐笔核对；Mongo 账户与参与方内存逐账户核对。
+		cctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		cold, err := sp.ColdState(cctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range all {
+			f, c := final[id], cold[id]
+			if f != nil && (c.ID == "" || uint64(c.Version) != f.Version || c.Status != string(f.Status)) {
+				r.ColdDiffs++
+			}
+		}
+		mongoBal, err := part.MongoBalances(cctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for n := int64(0); n < int64(e.pairs*2); n++ {
+			mem, err := part.Balance(cctx, n)
+			if err != nil || mongoBal[accountEntityID(n)] != mem {
+				r.MongoAcctDiffs++
+			}
+		}
+		cancel()
+	}
 	// 终态复读：停 A，新实例 B 强占全部分区从“快照 + 尾巴”重放，逐笔与发起方观察到的终态比较。
 	coord.Stop()
 	b := e.coordinator("B", nil)

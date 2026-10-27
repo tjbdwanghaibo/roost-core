@@ -21,19 +21,21 @@ import (
 // 版本只升不降：每条写是“版本更大才整文档替换”的管道更新（upsert），重投、乱序、多实例同时投影都幂等。不在关键路径上。
 // 清理守卫加上它的 durable 名，就保证“先投影后清理”。
 type SagaProjector struct {
-	js        jetstream.JetStream
-	l         Layout
-	coll      fmongo.ICollection
-	durable   string
-	batchSize int
-	log       *slog.Logger
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	Events    atomic.Uint64 // 投影过的事件条数（含重投）
-	Writes    atomic.Uint64 // BulkWrite 里的写模型数（按 saga 去重之后）
-	Batches   atomic.Uint64
-	Failures  atomic.Uint64
-	LastErr   atomic.Value
+	js               jetstream.JetStream
+	l                Layout
+	coll             fmongo.ICollection
+	durable          string
+	batchSize        int
+	consumerReplicas int // 投影消费者状态副本数（缺省 1 + 内存）
+	maxWait          time.Duration
+	log              *slog.Logger
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	Events           atomic.Uint64 // 投影过的事件条数（含重投）
+	Writes           atomic.Uint64 // BulkWrite 里的写模型数（按 saga 去重之后）
+	Batches          atomic.Uint64
+	Failures         atomic.Uint64
+	LastErr          atomic.Value
 }
 
 // SagaProjectionDurable 是冷副本投影消费者的 durable 名（协调器清理守卫要带上它）。
@@ -43,7 +45,7 @@ func NewSagaProjector(js jetstream.JetStream, l Layout, mongo fmongo.IMongo, dat
 	if log == nil {
 		log = slog.Default()
 	}
-	return &SagaProjector{js: js, l: l, coll: mongo.Database(database).Collection("sagas"), durable: SagaProjectionDurable, batchSize: 256, log: log}
+	return &SagaProjector{js: js, l: l, coll: mongo.Database(database).Collection("sagas"), durable: SagaProjectionDurable, batchSize: 256, log: log, consumerReplicas: 1, maxWait: 50 * time.Millisecond}
 }
 
 func (sp *SagaProjector) Start(ctx context.Context) error {
@@ -53,6 +55,9 @@ func (sp *SagaProjector) Start(ctx context.Context) error {
 		cons, err := sp.js.CreateOrUpdateConsumer(ctx, name, jetstream.ConsumerConfig{
 			Durable: sp.durable, FilterSubject: sp.l.Prefix + ".*.ev.>", AckPolicy: jetstream.AckExplicitPolicy,
 			AckWait: 10 * time.Second, MaxAckPending: 1 << 16, DeliverPolicy: jetstream.DeliverAllPolicy, MaxDeliver: -1,
+			// 投影进度丢了只是从流里还在的事件重投一遍（版本只升不降，幂等），所以消费者状态用 R1 内存：
+			// 每条 ack 不再是一次 R3 共识写。代价：服务端重启后从头重投；清理守卫找不到它时不清理。
+			Replicas: sp.consumerReplicas, MemoryStorage: sp.consumerReplicas == 1,
 		})
 		if err != nil {
 			cancel()
@@ -69,7 +74,8 @@ func (sp *SagaProjector) Start(ctx context.Context) error {
 
 func (sp *SagaProjector) run(ctx context.Context, cons jetstream.Consumer) {
 	for ctx.Err() == nil {
-		batch, err := cons.Fetch(sp.batchSize, jetstream.FetchMaxWait(200*time.Millisecond))
+		// 一批最多等 maxWait（缺省 50ms；20ms 时 Mongo 提交太碎，100ms 时 c16 积压超过 2 倍在途）：Fetch(n, MaxWait) 等到 n 条或超时；等太久积压按等待时长堆起来，不等（FetchNoWait 空转）又多出大量 API 请求。
+		batch, err := cons.Fetch(sp.batchSize, jetstream.FetchMaxWait(sp.maxWait))
 		if err != nil {
 			time.Sleep(50 * time.Millisecond)
 			continue
