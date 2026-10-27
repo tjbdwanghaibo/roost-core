@@ -155,6 +155,8 @@ type ParticipantOptions struct {
 	Database string
 	// HardLimit > 0 时作为 DataEngine ProjectorOptions.MaxUnackedRecords：积压到这里，步骤事务在 WAL 前被拒（最后一道硬上限）。
 	HardLimit uint64
+	// ProjectionWorkers 透传 DataEngine ProjectorOptions.ProjectionWorkers（0 = 缺省 8，1 = 串行）。
+	ProjectionWorkers int
 	// 投影打开时每 LoadTick 把积压写进 KV（准入信号）；Name 是参与方名（缺省 acct-0）。PauseLoad 只给测试模拟信号停更。
 	Name      string
 	LoadTick  time.Duration
@@ -395,6 +397,9 @@ func (p *Participant) openProjected(wal *nestwal.WAL) (*engine.Projector, map[in
 	}
 	popts := engine.DefaultProjectorOptions()
 	popts.MaxUnackedRecords = p.opts.HardLimit
+	if p.opts.ProjectionWorkers > 0 {
+		popts.ProjectionWorkers = p.opts.ProjectionWorkers
+	}
 	projector, err := engine.NewProjector(wal, store, popts)
 	if err != nil {
 		return nil, nil, err

@@ -80,6 +80,20 @@ case "${1:-matrix}" in
     L="${LEVELS:-1 16 64 128}"
     SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_ALLOW_UNDRAINED=1 one "cloud-part-forward-p4g4" forward 4 strict "$L"
     ;;
+  round5-local)
+    # 第五轮（维护者 2026-10-28）：并行投影器（缺省 8 通道）+ 积压准入；本机隔离 Mongo。调用方给出准入参数（ADMIT_HIGH 等）。
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_PROJ_WORKERS=8 SAGAJS_PERF_ADMIT_HIGH="$ADMIT_HIGH" SAGAJS_PERF_HARD_LIMIT="${HARD_LIMIT:-0}" \
+      one "r5-local-fwd-w8-admit" forward 4 strict "16 64 128"
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_PROJ_WORKERS=8 one "r5-local-fwd-w8-noadmit" forward 4 strict "16 64 128"
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_PROJ_WORKERS=8 SAGAJS_PERF_ADMIT_HIGH="$ADMIT_HIGH" SAGAJS_PERF_HARD_LIMIT="${HARD_LIMIT:-0}" \
+      one "r5-local-comp-w8-admit" compensate 4 strict "64"
+    ;;
+  round5-cloud)
+    # 第五轮云 Mongo（调用方已把 SAGAJS_MONGO_URI 设成云库并负责脱敏）。
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_PROJ_WORKERS=8 SAGAJS_PERF_ADMIT_HIGH="$ADMIT_HIGH" SAGAJS_PERF_HARD_LIMIT="${HARD_LIMIT:-0}" SAGAJS_PERF_ALLOW_UNDRAINED=1 \
+      one "r5-cloud-fwd-w8-admit" forward 4 strict "16 64 128"
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_PROJ_WORKERS=8 SAGAJS_PERF_ALLOW_UNDRAINED=1 one "r5-cloud-fwd-w8-noadmit" forward 4 strict "16 64 128"
+    ;;
   replay)
     gate
     SAGAJS_PERF=1 SAGAJS_PERF_REPLAY_SIZES="${SIZES:-10000 50000}" "$BIN" -test.run '^TestPerfReplayVsLogSize$' -test.v -test.count=1 -test.timeout 0 2>&1 | tee -a "$OUT/replay.log"

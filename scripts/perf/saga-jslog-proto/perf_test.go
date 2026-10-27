@@ -8,6 +8,7 @@ package jslogproto
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,33 +36,43 @@ func envInt(name string, def int) int {
 }
 
 type perfResult struct {
-	Label          string  `json:"label"`
-	Scenario       string  `json:"scenario"`
-	Durability     string  `json:"durability"`
-	Partitions     int     `json:"partitions"`
-	Streams        int     `json:"streams"`
-	Concurrency    int     `json:"concurrency"`
-	GOMAXPROCS     int     `json:"gomaxprocs"`
-	Seconds        int     `json:"seconds"`
-	SteadyTPS      float64 `json:"steady_tps"`
-	Terminal       int     `json:"terminal"`
-	Unexpected     int     `json:"unexpected"`
-	ClientP50      float64 `json:"client_p50_ms"`
-	ClientP99      float64 `json:"client_p99_ms"`
-	ServerP50      float64 `json:"server_p50_ms"`
-	ServerP99      float64 `json:"server_p99_ms"`
-	Steps          uint64  `json:"steps"`
-	JSMsgsStep     float64 `json:"js_msgs_per_step"`
-	JSCallsStep    float64 `json:"js_publish_calls_per_step"`
-	EvPerCall      float64 `json:"ev_per_publish_call"`
-	FsyncStep      float64 `json:"wal_fsync_per_step"`
-	BalancesOK     bool    `json:"balances_ok"`
-	RereadOK       bool    `json:"reread_ok"`
-	Projection     bool    `json:"projection"`
-	ProjectionMode string  `json:"projection_mode"`
-	NestAvgMs      float64 `json:"participant_nest_avg_ms"`
-	ResultPubAvgMs float64 `json:"participant_result_pub_avg_ms"`
-	CoordPubAvgMs  float64 `json:"coordinator_publish_avg_ms"`
+	Label           string  `json:"label"`
+	Scenario        string  `json:"scenario"`
+	Durability      string  `json:"durability"`
+	Partitions      int     `json:"partitions"`
+	Streams         int     `json:"streams"`
+	Concurrency     int     `json:"concurrency"`
+	GOMAXPROCS      int     `json:"gomaxprocs"`
+	Seconds         int     `json:"seconds"`
+	SteadyTPS       float64 `json:"steady_tps"`
+	Terminal        int     `json:"terminal"`
+	Unexpected      int     `json:"unexpected"`
+	ClientP50       float64 `json:"client_p50_ms"`
+	ClientP99       float64 `json:"client_p99_ms"`
+	ServerP50       float64 `json:"server_p50_ms"`
+	ServerP99       float64 `json:"server_p99_ms"`
+	Steps           uint64  `json:"steps"`
+	JSMsgsStep      float64 `json:"js_msgs_per_step"`
+	JSCallsStep     float64 `json:"js_publish_calls_per_step"`
+	EvPerCall       float64 `json:"ev_per_publish_call"`
+	FsyncStep       float64 `json:"wal_fsync_per_step"`
+	BalancesOK      bool    `json:"balances_ok"`
+	RereadOK        bool    `json:"reread_ok"`
+	Projection      bool    `json:"projection"`
+	ProjWorkers     int     `json:"projection_workers"`
+	HardLimit       int     `json:"hard_limit_records"`
+	LoadTickMs      int     `json:"load_tick_ms"`
+	AdmitHigh       int     `json:"admit_high_sagas"`
+	AdmitLow        int     `json:"admit_low_sagas"`
+	AdmitStaleMs    int     `json:"admit_stale_ms"`
+	RejectedFast    int     `json:"rejected_fast"`
+	RejectedCoord   int     `json:"rejected_coordinator"`
+	RejectRatio     float64 `json:"reject_ratio"`
+	AdmitClosedFrac float64 `json:"admission_closed_fraction"`
+	ProjectionMode  string  `json:"projection_mode"`
+	NestAvgMs       float64 `json:"participant_nest_avg_ms"`
+	ResultPubAvgMs  float64 `json:"participant_result_pub_avg_ms"`
+	CoordPubAvgMs   float64 `json:"coordinator_publish_avg_ms"`
 	// 投影积压（投影打开时）：参与方 WAL 未确认记录、冷副本未投影事件的峰值，折算成 saga 笔数（÷ 每笔条数），
 	// 与在途笔数（闭环并发）比较；停止加压后两者归零的耗时；冷副本与终态、Mongo 账户与内存的逐笔差异。
 	PartBacklogPeak     uint64  `json:"participant_backlog_peak_records"`
@@ -172,6 +183,10 @@ func TestPerfClosedLoop(t *testing.T) {
 			_, _ = f.Write(append(raw, '\n'))
 			_ = f.Close()
 		}
+		if r.AdmitHigh > 0 || r.ProjWorkers > 0 {
+			t.Logf("%s c%d admission(high %d / low %d sagas, stale %dms, tick %dms, hard %d, workers %d): effective TPS %.1f; rejected fast %d + coordinator %d (ratio %.3f); admission closed %.0f%% of the time",
+				label, conc, r.AdmitHigh, r.AdmitLow, r.AdmitStaleMs, r.LoadTickMs, r.HardLimit, r.ProjWorkers, r.SteadyTPS, r.RejectedFast, r.RejectedCoord, r.RejectRatio, 100*r.AdmitClosedFrac)
+		}
 		if r.Projection {
 			t.Logf("%s c%d projection(%s): backlog peak participant %d records / saga %d events = %.1f sagas (%.2f × in-flight %d); drained=%v catch-up %.0f ms (left %d); projection rate load %.1f/s catch-up %.1f/s; mongo calls/record %.2f; cold diffs %d; mongo account diffs %d (checked=%v)",
 				label, conc, r.ProjectionMode, r.PartBacklogPeak, r.SagaBacklogPeak, r.BacklogPeakSagas, r.BacklogRatio, conc, r.Drained, r.CatchUpMs, r.PartBacklogLeft,
@@ -212,7 +227,10 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		partMongo = countingMongo{IMongo: e.mongo, calls: &mongoCalls}
 	}
 	part, err := NewParticipant(e.nc, e.js, ParticipantOptions{Layout: e.l, WALDir: walDir, Accounts: e.pairs * 2, InitialBal: initialBalance,
-		Workers: 64, Durability: durability, Log: quietLog(), Mongo: partMongo, Database: e.db})
+		Workers: 64, Durability: durability, Log: quietLog(), Mongo: partMongo, Database: e.db,
+		ProjectionWorkers: envInt("SAGAJS_PERF_PROJ_WORKERS", 0), HardLimit: uint64(envInt("SAGAJS_PERF_HARD_LIMIT", 0)),
+		LoadTick: time.Duration(envInt("SAGAJS_PERF_LOAD_TICK_MS", 200)) * time.Millisecond})
+	r.ProjWorkers, r.HardLimit, r.LoadTickMs = envInt("SAGAJS_PERF_PROJ_WORKERS", 0), envInt("SAGAJS_PERF_HARD_LIMIT", 0), envInt("SAGAJS_PERF_LOAD_TICK_MS", 200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +239,22 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		t.Fatal(err)
 	}
 	cancel()
-	coord := e.coordinator("A", func(o *CoordinatorOptions) { o.SnapshotEvery, o.Retention = snapEvery, retention })
+	// 积压准入（SAGAJS_PERF_ADMIT_HIGH > 0 时开）：阈值按笔，低水位缺省高水位一半。
+	if high := envInt("SAGAJS_PERF_ADMIT_HIGH", 0); high > 0 {
+		r.AdmitHigh, r.AdmitLow = high, envInt("SAGAJS_PERF_ADMIT_LOW", high/2)
+		r.AdmitStaleMs = envInt("SAGAJS_PERF_ADMIT_STALE_MS", 2000)
+	}
+	coord := e.coordinator("A", func(o *CoordinatorOptions) {
+		o.SnapshotEvery, o.Retention = snapEvery, retention
+		if r.AdmitHigh > 0 {
+			rps := 2.0
+			if scenario == "compensate" {
+				rps = 3
+			}
+			o.Admission = &AdmissionOptions{HighSagas: float64(r.AdmitHigh), LowSagas: float64(r.AdmitLow), RecordsPerSaga: rps,
+				StaleAfter: time.Duration(r.AdmitStaleMs) * time.Millisecond}
+		}
+	})
 	e.takeAll(coord, false)
 	syncs0 := part.WALSyncs()
 	projected0, calls0 := part.ProjectedRecords(), mongoCalls.Load()
@@ -236,6 +269,25 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	begin := time.Now()
 	stopAt := begin.Add(time.Duration(seconds) * time.Second)
 	var seq atomic.Int64
+	var rejectedFast atomic.Int64
+	// 准入关闭时间占比：每 100ms 采样一次协调器判定。
+	var closedTicks, allTicks atomic.Int64
+	admSampleStop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-admSampleStop:
+				return
+			case <-tick.C:
+			}
+			allTicks.Add(1)
+			if open, _, _ := coord.AdmissionState(); !open {
+				closedTicks.Add(1)
+			}
+		}
+	}()
 	var wg sync.WaitGroup
 	runCtx, runCancel := context.WithTimeout(context.Background(), time.Duration(seconds+120)*time.Second)
 	defer runCancel()
@@ -280,6 +332,12 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 				data.Store(id, d)
 				started := time.Now()
 				ch, err := e.client.Start(runCtx, id, d)
+				if errors.Is(err, ErrBackpressure) {
+					// 准入关闭：发起方快速失败（没写意图），稍等换一个新 ID 再发起（闭环的这一路空转 10ms）。
+					rejectedFast.Add(1)
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
 				if err != nil {
 					t.Error(err)
 					return
@@ -297,6 +355,7 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		}(w)
 	}
 	wg.Wait()
+	close(admSampleStop)
 	loadElapsed := time.Since(begin)
 	if projection {
 		close(samplerStop)
@@ -354,6 +413,10 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	for _, s := range samples {
 		all = append(all, s.id)
 		f := final[s.id]
+		if f != nil && f.Status == StatusRejected {
+			r.RejectedCoord++ // 意图写进去之后才被协调器拒绝（终态 Rejected，无副作用）
+			continue
+		}
 		if f == nil || f.Status != want {
 			r.Unexpected++
 			continue
@@ -368,6 +431,13 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	sort.Float64s(client)
 	sort.Float64s(server)
 	r.SteadyTPS = float64(steady) / float64(seconds-warmup)
+	r.RejectedFast = int(rejectedFast.Load())
+	if n := r.RejectedFast + r.RejectedCoord + r.Terminal; n > 0 {
+		r.RejectRatio = float64(r.RejectedFast+r.RejectedCoord) / float64(n)
+	}
+	if n := allTicks.Load(); n > 0 {
+		r.AdmitClosedFrac = float64(closedTicks.Load()) / float64(n)
+	}
 	r.ClientP50, r.ClientP99 = percentile(client, 0.5), percentile(client, 0.99)
 	r.ServerP50, r.ServerP99 = percentile(server, 0.5), percentile(server, 0.99)
 	executed := part.Stats.Executed.Load() + part.Stats.Refused.Load()

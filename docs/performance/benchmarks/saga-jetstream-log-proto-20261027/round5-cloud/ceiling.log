@@ -1,0 +1,6 @@
+ping   c=1    ops/s=     15.5 p50=  64.26ms p99=  67.57ms max=   67.83ms failed=0 verified=true
+update c=1    ops/s=     14.7 p50=  68.17ms p99=  70.36ms max=   70.39ms failed=0 verified=true server_write_mean=4.21ms server_cmd_mean=0.45ms wt_log_sync_mean=0.21ms syncs=74
+update c=16   ops/s=    221.3 p50=  68.11ms p99= 139.30ms max=  152.98ms failed=0 verified=true server_write_mean=4.64ms server_cmd_mean=0.46ms wt_log_sync_mean=0.16ms syncs=812
+txn1   c=1    ops/s=      7.4 p50= 134.70ms p99= 142.68ms max=  142.68ms failed=0 verified=true server_write_mean=1.51ms server_cmd_mean=0.87ms wt_log_sync_mean=0.22ms syncs=38
+txn1   c=16   ops/s=    115.5 p50= 135.22ms p99= 154.17ms max=  369.40ms failed=0 verified=true server_write_mean=1.72ms server_cmd_mean=1.50ms wt_log_sync_mean=0.26ms syncs=330
+leftover=0
