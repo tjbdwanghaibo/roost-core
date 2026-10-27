@@ -19,6 +19,15 @@ type parallelRemoteStore struct {
 }
 
 func (*parallelRemoteStore) SupportsRemoteParallelProjection() bool { return true }
+func (*parallelRemoteStore) SupportsParallelProjection() bool       { return true }
+func (s *parallelRemoteStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
+	for i := range records {
+		if err := s.project(ctx, records[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (s *parallelRemoteStore) Project(ctx context.Context, r coredata.CommitRecord) error {
 	return s.project(ctx, r)
 }
@@ -96,7 +105,7 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 		return nil
 	}}
 	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
-	p.opts.RemoteProjectionWorkers = 3
+	p.opts.ProjectionWorkers = 3
 	n, err := p.ReplayPass(context.Background())
 	if n != 1 || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("n=%d err=%v", n, err)
@@ -124,60 +133,13 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 	assertWALReplayCount(t, w, 0)
 }
 
-func TestRemoteProjectionWindowBoundaries(t *testing.T) {
-	for _, name := range []string{"independent", "overlap", "transaction", "effect", "receipt", "ordinary", "mixed", "invalid", "records", "bytes"} {
-		t.Run(name, func(t *testing.T) {
-			records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
-			maxRecords, bytes, want := 8, 4<<20, 3
-			switch name {
-			case "overlap":
-				records[1].Mutations = coredata.CloneCommitRecord(records[0]).Mutations
-				records[1].Mutations[0].Remote.TransactionID = entity.RemoteTransactionID(records[1].ID)
-				want = 1
-			case "transaction":
-				records[1].ID = records[0].ID
-				records[1].Mutations[0].Remote.TransactionID = entity.RemoteTransactionID(records[0].ID)
-				want = 1
-			case "effect":
-				records[1].Effects = []coredata.Effect{{ID: "e", Topic: "t"}}
-				want = 1
-			case "receipt":
-				records[1].Receipts = []coredata.Receipt{{Namespace: "n", ID: "r"}}
-				want = 1
-			case "ordinary":
-				records[1] = projectorRecord(2, false)
-				want = 1
-			case "mixed":
-				records[1].Mutations = append(records[1].Mutations, projectorRecord(2, false).Mutations[0])
-				want = 1
-			case "invalid":
-				records[1].Mutations[0].Remote.Mutations[0].ID = 999
-				want = 1
-			case "records":
-				maxRecords = 2
-				want = 2
-			case "bytes":
-				bytes = projectionRecordLogicalBytes(records[0])
-				want = 1
-			}
-			segments := make([]projectionSegment, len(records))
-			for i := range records {
-				segments[i].records = records[i : i+1]
-			}
-			if n := remoteProjectionWindow(segments, maxRecords, bytes); n != want {
-				t.Fatalf("window=%d want=%d", n, want)
-			}
-		})
-	}
-}
-
 func TestRemoteProjectionCheckpointFailureKeepsWindow(t *testing.T) {
 	records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
 	var mu sync.Mutex
 	calls := 0
 	s := &parallelRemoteStore{project: func(context.Context, coredata.CommitRecord) error { mu.Lock(); calls++; mu.Unlock(); return nil }}
 	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
-	p.opts.RemoteProjectionWorkers = 2
+	p.opts.ProjectionWorkers = 2
 	failure := errors.New("checkpoint failed")
 	p.ack = func(context.Context, corenest.CommitFence) error { return failure }
 	if n, err := p.ReplayPass(context.Background()); n != 3 || !errors.Is(err, failure) {
@@ -187,42 +149,6 @@ func TestRemoteProjectionCheckpointFailureKeepsWindow(t *testing.T) {
 		t.Fatalf("calls=%d", calls)
 	}
 	assertWALReplayCount(t, w, 3)
-}
-
-func TestRemoteProjectionRefillsWhileFirstRecordIsBlocked(t *testing.T) {
-	records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
-	entered, third, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	defer once.Do(func() { close(release) })
-	s := &parallelRemoteStore{project: func(ctx context.Context, r coredata.CommitRecord) error {
-		switch r.ID {
-		case records[0].ID:
-			close(entered)
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		case records[2].ID:
-			close(third)
-		}
-		return nil
-	}}
-	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
-	p.opts.RemoteProjectionWorkers = 2
-	done := make(chan struct{})
-	var n int
-	var err error
-	go func() { defer close(done); n, err = p.ReplayPass(context.Background()) }()
-	awaitChan(t, entered, "blocked first record")
-	awaitChan(t, third, "free worker refilled before first completes")
-	assertWALReplayCount(t, w, 3)
-	once.Do(func() { close(release) })
-	awaitChan(t, done, "all projections joined")
-	if n != 3 || err != nil {
-		t.Fatalf("n=%d err=%v", n, err)
-	}
-	assertWALReplayCount(t, w, 0)
 }
 
 func TestRemoteProjectionCancellationJoinsWorkers(t *testing.T) {
@@ -280,7 +206,7 @@ func TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure(t *test
 		return nil
 	}}
 	p, w := stoppedProjectorWithRecords(t, s, records, 4<<20)
-	p.opts.RemoteProjectionWorkers = 3
+	p.opts.ProjectionWorkers = 3
 	ticket := &projectionTicket{done: make(chan struct{})}
 	p.tickets[records[3].ID] = ticket
 	n, err := p.ReplayPass(context.Background())

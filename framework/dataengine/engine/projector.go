@@ -42,31 +42,41 @@ type BatchProjectionStore interface {
 	ProjectBatch(context.Context, []coredata.CommitRecord) error
 }
 
-// RemoteParallelProjectionStore 承诺互不重叠的纯 Remote 事务可以并发执行，
-// 且已成功的事务可在后续 WAL 重放中通过持久身份识别。未知 Store 保持串行。
+// ParallelProjectionStore 承诺（SupportsParallelProjection 为真时）：冲突键互不相交的记录可以并发调用 Project /
+// ProjectBatch / ProjectFenced；ProjectBatch 与非快路记录的单条投影写持久事务标记，后续版本写入后重放仍识别为已应用。
+// Projector 据此在 ProjectionWorkers > 1 时按实体分片并行投影（projector_parallel.go）；未声明的 Store 保持串行。
+type ParallelProjectionStore interface {
+	BatchProjectionStore
+	SupportsParallelProjection() bool
+}
+
+// RemoteParallelProjectionStore 承诺 Remote 适配器（存储与提交应用器）可被并发调用：并行投影时含 Remote 写、
+// 互不共享 Entity 的记录才能分进不同通道；未声明时 Remote 记录之间保持串行（仍可与普通记录并行）。
 type RemoteParallelProjectionStore interface {
 	ProjectionStore
 	SupportsRemoteParallelProjection() bool
 }
 
 type ProjectorOptions struct {
-	RetryMin                time.Duration
-	RetryMax                time.Duration
-	IdlePoll                time.Duration
-	ReplayBatchRecords      int
-	ReplayBatchBytes        int
-	ReplayReadBytes         int           // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
-	RemoteProjectionWorkers int           // 0 使用默认值 8；1 关闭 Remote 并行投影。
-	CheckpointRecords       int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
-	CheckpointInterval      time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
-	MaxUnackedRecords       uint64        // 0 不限制；拒绝发生于 WAL 准入前。
-	WarnUnackedRecords      uint64        // 0 不设独立预警；达到准入上限也会报告预警。
-	CloseWAL                bool
+	RetryMin           time.Duration
+	RetryMax           time.Duration
+	IdlePoll           time.Duration
+	ReplayBatchRecords int
+	ReplayBatchBytes   int
+	ReplayReadBytes    int // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
+	// ProjectionWorkers 是按实体分片并行投影的通道数上限（同时在途的投影调用数），0 取缺省 8，1 = 串行（含 Remote）。
+	// 只在 Store 实现 ParallelProjectionStore 时生效。
+	ProjectionWorkers  int
+	CheckpointRecords  int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
+	CheckpointInterval time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
+	MaxUnackedRecords  uint64        // 0 不限制；拒绝发生于 WAL 准入前。
+	WarnUnackedRecords uint64        // 0 不设独立预警；达到准入上限也会报告预警。
+	CloseWAL           bool
 	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
 	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
 	OnFatal func(error)
 	// OnEffectsStaged 在一个投影单元把 effect 暂存进 outbox（Mongo 事务已提交、记录没有被 fence 跳过）之后同步调用，
-	// 必须不阻塞；装配接到 OutboxWorker.Kick，让 effect 不必等 outbox 的下一次轮询。只是提示：不调用、晚调用都不影响
+	// 必须不阻塞、并发安全（并行窗口的多个通道可能同时调用）；装配接到 OutboxWorker.Kick，让 effect 不必等 outbox 的下一次轮询。只是提示：不调用、晚调用都不影响
 	// 投影与持久语义（outbox 仍按轮询兜底）。nil 不通知。
 	OnEffectsStaged func()
 	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
@@ -80,7 +90,7 @@ func DefaultProjectorOptions() ProjectorOptions {
 		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
 		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, ReplayReadBytes: 4 << 20, CloseWAL: true,
 		CheckpointRecords: 256, CheckpointInterval: 20 * time.Millisecond,
-		RemoteProjectionWorkers: 8,
+		ProjectionWorkers: 8,
 	}
 }
 
@@ -102,6 +112,9 @@ type ProjectorStats struct {
 	// coredata.ErrEntityUnloading 拒绝的准入次数。
 	UnloadingEntities       uint64
 	UnloadAdmissionRejected uint64
+	// ParallelWindows 是以并行通道投影的窗口数，ParallelLanes 是这些窗口的通道数合计（÷ ParallelWindows 为平均通道数）。
+	ParallelWindows uint64
+	ParallelLanes   uint64
 }
 
 // Projector 负责持久准入（WAL 前的额度与屏障检查、WAL 追加）和 WAL → Mongo 投影。
@@ -162,6 +175,10 @@ type Projector struct {
 	fencedRejected    atomic.Uint64
 	staleEvictions    atomic.Uint64
 	unloadRejected    atomic.Uint64
+	parallelWindows   atomic.Uint64
+	parallelLanes     atomic.Uint64
+	// laneFailed 是测试缝：并行窗口某通道失败、停止补位标志已置位之后调用。生产为 nil。
+	laneFailed func()
 }
 
 // NewProjector 校验并补齐选项后启动 WAL terminal 监视；ManualReplay 为假时同时启动后台回放循环。
@@ -176,11 +193,11 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 	if options.ReplayReadBytes == 0 {
 		options.ReplayReadBytes = defaults.ReplayReadBytes
 	}
-	if options.RemoteProjectionWorkers < 0 || options.RemoteProjectionWorkers > 64 {
-		return nil, errors.New("dataengine projector: remote projection workers must be between 0 and 64")
+	if options.ProjectionWorkers < 0 || options.ProjectionWorkers > 64 {
+		return nil, errors.New("dataengine projector: projection workers must be between 0 and 64")
 	}
-	if options.RemoteProjectionWorkers == 0 {
-		options.RemoteProjectionWorkers = defaults.RemoteProjectionWorkers
+	if options.ProjectionWorkers == 0 {
+		options.ProjectionWorkers = defaults.ProjectionWorkers
 	}
 	if options.CheckpointRecords < 0 || options.CheckpointInterval < 0 ||
 		(options.MaxUnackedRecords > 0 && options.WarnUnackedRecords > options.MaxUnackedRecords) {
@@ -499,6 +516,7 @@ func (projector *Projector) Stats() ProjectorStats {
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
 		FencedAdmissionRejected: projector.fencedRejected.Load(), StaleEvictions: projector.staleEvictions.Load(),
 		UnloadAdmissionRejected: projector.unloadRejected.Load(),
+		ParallelWindows:         projector.parallelWindows.Load(), ParallelLanes: projector.parallelLanes.Load(),
 	}
 	projector.heldMu.RLock()
 	stats.FencedEntities = uint64(len(projector.fencedEntities))

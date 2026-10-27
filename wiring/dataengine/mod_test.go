@@ -222,18 +222,18 @@ func TestDataEngineProjectionCheckpointAndBacklogConfig(t *testing.T) {
 	}
 }
 
-func TestDataEngineRemoteProjectionWorkerConfig(t *testing.T) {
+func TestDataEngineProjectionWorkerConfig(t *testing.T) {
 	for _, value := range []int{-1, 0, 1, 8, 64, 65} {
 		cfg := viper.New()
-		cfg.Set("dataengine.projection.remote_workers", value)
+		cfg.Set("dataengine.projection.workers", value)
 		mod := NewMod()
 		err := mod.Init(cfg)
 		valid := value >= 1 && value <= 64
 		if (err == nil) != valid {
 			t.Fatalf("workers=%d err=%v", value, err)
 		}
-		if valid && mod.cfg.projector.RemoteProjectionWorkers != value {
-			t.Fatalf("workers=%d configured=%d", value, mod.cfg.projector.RemoteProjectionWorkers)
+		if valid && mod.cfg.projector.ProjectionWorkers != value {
+			t.Fatalf("workers=%d configured=%d", value, mod.cfg.projector.ProjectionWorkers)
 		}
 	}
 }

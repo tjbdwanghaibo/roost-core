@@ -138,7 +138,7 @@ type config struct {
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
 	} `config:"dataengine.wal" help:"dir 不写取 data/wal/dataengine/<sid>（相对进程工作目录），每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
-		RemoteWorkers      int           `config:"remote_workers" min:"1" max:"64"`
+		Workers            int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 8；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect 顺序类）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
 		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
 		BatchBytes         int           `config:"batch_bytes" min:"0"`
 		ReadBytes          int           `config:"read_bytes" min:"0"`
@@ -220,8 +220,8 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	wal.OnFatal = mod.onFatal
 	projection := settings.Projection
 	projector := engine.DefaultProjectorOptions()
-	if projection.RemoteWorkers > 0 {
-		projector.RemoteProjectionWorkers = projection.RemoteWorkers
+	if projection.Workers > 0 {
+		projector.ProjectionWorkers = projection.Workers
 	}
 	if projection.RetryMin > 0 {
 		projector.RetryMin = projection.RetryMin

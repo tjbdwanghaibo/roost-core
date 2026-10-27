@@ -286,7 +286,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 				projectorOptions.MaxUnackedRecords = uint64(remoteInt("ROOST_REMOTE_WAL_LIMIT", 512))
 			}
 			if os.Getenv("ROOST_REMOTE_PROJECTION_WORKERS") != "" {
-				projectorOptions.RemoteProjectionWorkers = remoteInt("ROOST_REMOTE_PROJECTION_WORKERS", 8)
+				projectorOptions.ProjectionWorkers = remoteInt("ROOST_REMOTE_PROJECTION_WORKERS", 8)
 			}
 			projector, err := engine.NewProjector(wal, store, projectorOptions)
 			if err != nil {

@@ -157,6 +157,12 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	return false, nil
 }
 
+// SupportsParallelProjection：冲突键不相交的记录可以并发投影。各调用使用独立会话与事务；ProjectBatch 与非快路的
+// ProjectFenced 先查、再写事务标记（与业务写同一事务），重放与文档当前版本无关；快路由 Projector 只在窗口内同键最后一条时使用。
+func (store *MongoStore) SupportsParallelProjection() bool {
+	return store != nil && store.client != nil
+}
+
 // SupportsRemoteParallelProjection 报告能否并行投影独立的 Remote 事务：只有 Remote 存储与
 // 提交应用器都声明并发安全时才开放；自定义适配器未声明时保持串行调用契约。
 func (store *MongoStore) SupportsRemoteParallelProjection() bool {

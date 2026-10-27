@@ -31,10 +31,6 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	if len(records) == 0 {
 		return 0, replayErr
 	}
-	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
-	if err != nil {
-		return 0, err
-	}
 	_, batchCapable := projector.store.(BatchProjectionStore)
 	// processed 是已成功投影的连续前缀；acked 只在 checkpoint 成功后前移。
 	acked := 0
@@ -68,88 +64,89 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			}
 		}
 	}()
-	parallelStore, parallel := projector.store.(RemoteParallelProjectionStore)
-	parallel = parallel && parallelStore.SupportsRemoteParallelProjection() && projector.opts.RemoteProjectionWorkers > 1
-	for segmentIndex := 0; segmentIndex < len(segments); {
-		if parallel {
-			count := remoteProjectionWindow(segments[segmentIndex:], projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
-			if count > 1 {
-				if err := checkpoint(); err != nil {
-					ackFailed = true
-					return processed, err
-				}
-				prefix, err := projector.projectRemoteWindow(ctx, segments[segmentIndex:segmentIndex+count])
-				processed += prefix
-				if err != nil {
-					// fatal 由 isFatalProjection 统一唤醒全部待投影等待方。
-					projector.isFatalProjection(err)
-					return processed, err
-				}
-				if err := checkpoint(); err != nil {
-					ackFailed = true
-					return processed, err
-				}
-				segmentIndex += count
-				continue
+	for _, window := range projector.planReplayWindows(records) {
+		if window.lanes != nil {
+			// 并行窗口：先确认之前的成功前缀，窗口结束后只确认窗口内的连续成功前缀（设计 §6）。
+			if err := checkpoint(); err != nil {
+				ackFailed = true
+				return processed, err
 			}
-		}
-		segment := segments[segmentIndex]
-		segmentIndex++
-		// 批量写报告无法自行判定结果（ErrProjectionBatchNeedsPerRecord）时锁定 perRecord：
-		// 本段剩余记录改走单条路径，由它比较已存版本与 _last_tx，区分已应用的重放和
-		// 真实冲突。锁定而不是只重试失败单元，避免反复发出注定再次退回的批量写。
-		perRecord := false
-		for start := 0; start < len(segment.records); {
-			end := len(segment.records)
-			if segment.batch && (!batchCapable || perRecord) {
-				end = start + 1
-			}
-			unit := projectionSegment{
-				records: segment.records[start:end],
-				fences:  segment.fences[start:end],
-				batch:   segment.batch,
-			}
-			projectStart := hoptrace.Now()
-			outcome, err := projector.projectSegment(ctx, unit)
-			if !projectStart.IsZero() && err == nil {
-				traceProjectedUnit(unit.records, outcome, projectStart)
-			}
-			if err == nil && outcome != projectionSkipped && projector.opts.OnEffectsStaged != nil && hasEffects(unit.records) {
-				// effect 已随投影事务暂存：唤醒 outbox，不等它的轮询（不改投影 / checkpoint 的顺序与结果）。
-				projector.opts.OnEffectsStaged()
-			}
+			prefix, err := projector.projectParallelWindow(ctx, records[window.start:window.end], fences[window.start:window.end], window)
+			processed += prefix
 			if err != nil {
-				if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
-					perRecord = true
-					continue
-				}
-				projector.isFatalProjection(err)
-				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
+				// fatal 已由 projectParallelWindow 逐通道判定（isFatalProjection 统一唤醒全部待投影等待方）。
+				return processed, err
 			}
-			for i := range unit.records {
-				// 被跳过的原生步骤先驱逐内存实体，屏障与等待方到驱逐完成才解除。
-				if !projector.startStaleEviction(unit.records[i].ID, outcome) {
-					projector.completeProjection(unit.records[i].ID, nil)
-				}
+			if err := checkpoint(); err != nil {
+				ackFailed = true
+				return processed, err
 			}
-			projector.projected.Add(uint64(len(unit.records)))
-			processed += len(unit.records)
-			// checkpoint 只决定崩溃后从哪里重放，进程外没有读者；已投影未确认的记录靠持久事务标记幂等重放
-			// （批次、多 mutation、effect / 回执 / Remote 记录都先查标记，标记与业务写同一 Mongo 事务提交，
-			// 重放时不重新判定 lease fence、不重复暂存回执与 effect）。所以这些单元按条数 / 间隔合并确认。
-			// 例外：单 mutation 快路只保存文档末次事务 ID，后续版本覆盖它后旧记录无法判定幂等，必须立即确认；
-			// 非批量 Store 没有承诺这种重放安全，也逐单元确认。
-			replaySafe := batchCapable && (len(unit.records) > 1 || !projectsOnFastPath(unit.records[0]))
-			if !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
-				if err := checkpoint(); err != nil {
-					ackFailed = true
-					return processed, err
-				}
+			if window.start+prefix < window.end {
+				// 某通道提前停下（见 projectLane）：前缀之后的记录本轮不再投影，下一轮从确认前缀重读。
+				return processed, nil
 			}
-			start = end
+			continue
+		}
+		segments, err := planProjectionSegments(records[window.start:window.end], fences[window.start:window.end], projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
+		if err != nil {
+			return processed, err
+		}
+		for _, segment := range segments {
+			// 批量写报告无法自行判定结果（ErrProjectionBatchNeedsPerRecord）时锁定 perRecord：
+			// 本段剩余记录改走单条路径，由它比较已存版本与 _last_tx，区分已应用的重放和
+			// 真实冲突。锁定而不是只重试失败单元，避免反复发出注定再次退回的批量写。
+			perRecord := false
+			for start := 0; start < len(segment.records); {
+				end := len(segment.records)
+				if segment.batch && (!batchCapable || perRecord) {
+					end = start + 1
+				}
+				unit := projectionSegment{
+					records: segment.records[start:end],
+					fences:  segment.fences[start:end],
+					batch:   segment.batch,
+				}
+				projectStart := hoptrace.Now()
+				outcome, err := projector.projectSegment(ctx, unit)
+				if err != nil {
+					if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
+						perRecord = true
+						continue
+					}
+					projector.isFatalProjection(err)
+					return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
+				}
+				projector.finishProjectedUnit(unit.records, nil, outcome, projectStart, nil)
+				processed += len(unit.records)
+				// checkpoint 只决定崩溃后从哪里重放，进程外没有读者；已投影未确认的记录靠持久事务标记幂等重放
+				// （批次、多 mutation、effect / 回执 / Remote 记录都先查标记，标记与业务写同一 Mongo 事务提交，
+				// 重放时不重新判定 lease fence、不重复暂存回执与 effect）。所以这些单元按条数 / 间隔合并确认。
+				// 例外：单 mutation 快路只保存文档末次事务 ID，后续版本覆盖它后旧记录无法判定幂等，必须立即确认；
+				// 非批量 Store 没有承诺这种重放安全，也逐单元确认。
+				replaySafe := batchCapable && (len(unit.records) > 1 || !projectsOnFastPath(unit.records[0]))
+				if !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
+					if err := checkpoint(); err != nil {
+						ackFailed = true
+						return processed, err
+					}
+				}
+				start = end
+			}
 		}
 	}
 	return processed, replayErr
+}
+
+// planReplayWindows 决定本轮是否并行：ProjectionWorkers > 1 且 Store 声明 ParallelProjectionStore 时按冲突键切窗口，
+// 否则整轮一个串行段（与改动前相同）。Remote 记录另需 Store 声明 Remote 适配器可并发调用，否则 Remote 记录之间串行。
+func (projector *Projector) planReplayWindows(records []coredata.CommitRecord) []replayWindow {
+	store, ok := projector.store.(ParallelProjectionStore)
+	if !ok || !store.SupportsParallelProjection() {
+		return []replayWindow{{start: 0, end: len(records)}}
+	}
+	remote, ok := projector.store.(RemoteParallelProjectionStore)
+	remoteParallel := ok && remote.SupportsRemoteParallelProjection()
+	return planReplayWindows(records, projector.opts.ProjectionWorkers, remoteParallel)
 }
 
 // readReplayBatch 按 WAL 物理顺序收集本轮可投影的连续记录：遇到仍持有实体锁的事务、

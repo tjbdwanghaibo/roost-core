@@ -472,7 +472,7 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	}
 }
 
-// 并行投影窗口的成功后缀重放：真实 nestwal WAL + engine.Projector（RemoteProjectionWorkers=8）+ engine.MongoStore + mongotest，
+// 并行投影窗口的成功后缀重放：真实 nestwal WAL + engine.Projector（ProjectionWorkers=8）+ engine.MongoStore + mongotest，
 // Remote 走正式 Backend + MongoCommitter 权威。同一窗口里两笔独立实体的 Remote 事务：前缀 tx1（实体 X）发布一次瞬时失败，
 // 后缀 tx2（实体 Y）已成功持久并发布；窗口只确认连续成功前缀（0 条），后缀在重试时按持久身份重放，重放之前 Y 已被下一写者
 // 拿到更大的 fence。验证：重试后 WAL 全部 ack、无 fatal、失败计数恰为 1；后缀重放不被新 fence 拒绝、不回退 Y 的 fence 与版本，
@@ -528,7 +528,7 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	}
 	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{
 		CloseWAL: true, IdlePoll: 20 * time.Millisecond, RetryMin: 5 * time.Millisecond, RetryMax: 50 * time.Millisecond,
-		RemoteProjectionWorkers: 8,
+		ProjectionWorkers: 8,
 	})
 	if err != nil {
 		t.Fatal(err)

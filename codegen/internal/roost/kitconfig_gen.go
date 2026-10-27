@@ -112,7 +112,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.wal.max_unacked_age", Kind: "duration", Min: "0", Starter: true, Example: "24h"},
 		{Name: "dataengine.wal.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "8192"},
 		{Name: "dataengine.wal.group_commit_interval", Kind: "duration", Min: "0", Starter: true, Example: "2ms"},
-		{Name: "dataengine.projection.remote_workers", Kind: "int", Min: "1", Max: "64"},
+		{Name: "dataengine.projection.workers", Kind: "int", Min: "1", Max: "64", Help: "投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 8；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect 顺序类）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"},
 		{Name: "dataengine.projection.batch_records", Kind: "int", Min: "0", Starter: true, Example: "256"},
 		{Name: "dataengine.projection.batch_bytes", Kind: "int", Min: "0"},
 		{Name: "dataengine.projection.read_bytes", Kind: "int", Min: "0"},
