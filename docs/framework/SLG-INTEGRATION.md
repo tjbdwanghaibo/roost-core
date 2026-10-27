@@ -173,7 +173,8 @@ SLG 后续学习以“跨服联盟活动 / 国战”为主线，串起三件事�
 1. `game/alliance/alliance.go`（源 [alliance.go](../../scripts/testdata/slg/alliance/alliance.go)）：联盟成员与贡献意图（`contribute` / `revoke` / `freeze`）、补报（`drain`）、阶段屏障（`phase`）、原服奖励义务（`home.receive`）与有界补发（`home.deliverPending`）。
 2. `game/handler/alliance_rewards.go`（源 [alliance_rewards.go.txt](../../scripts/testdata/slg/alliance_rewards.go.txt)）：Player 建档 `AllianceHomeInit` 与到账 `AllianceCredit`，金币与永久到账回执同一 strict 事务。
 3. `game/handler/alliance_authority.go`（源 [alliance_authority.go.txt](../../scripts/testdata/slg/alliance_authority.go.txt)）：Remote 托管的联盟权威，读与条件写 `AllianceRemoteRead` / `AllianceRemoteCAS`。
-4. 测试（源 [alliance/](../../scripts/testdata/slg/alliance/)）：`runtime_test.go` 是协调器子进程、NATS 总线与视野接线；`alliance_test.go` 是连续流程与断言；`fog_test.go` 用 Receiver 解码视野帧；`player_*_test.go` 是 Player 的 WAL / Mongo 接线与 SIGKILL 恢复；`remote_*_test.go` 是 Remote 装配、业务 CAS 适配器与 owner 交接。
+4. `game/alliance/rpc_budget.go`（源 [rpc_budget.go](../../scripts/testdata/slg/alliance/rpc_budget.go)）：业务自己注册普通 Bus RPC 时的接收端预算 `receiverBudget`（§7.7）。
+5. 测试（源 [alliance/](../../scripts/testdata/slg/alliance/)）：`runtime_test.go` 是协调器子进程、NATS 总线与视野接线；`alliance_test.go` 是连续流程与断言；`fog_test.go` 用 Receiver 解码视野帧；`player_*_test.go` 是 Player 的 WAL / Mongo 接线与 SIGKILL 恢复；`remote_*_test.go` 是 Remote 装配、业务 CAS 适配器与 owner 交接；`rpc_budget_test.go` 是接收端预算（纯内存一条、真实 NATS 一条）。
 
 **教学规则**：Alice 静态归属 sid 1000，Bob 静态归属 sid 1001；一个联盟、一个固定赛季窗口、一个公开据点。可信战斗权威每确认一个唯一战果贡献 10 分（本例不实现战斗判胜负）。退盟拒绝新贡献，已获准的贡献保留。每个窗口最多 128 个战果，原服最多 128 个窗口回执，Player 最多 128 个到账身份；满后拒绝，不删除旧身份。客户端不能提供 sid、得分、战果成功或奖励金额。这些数值都是样例。
 
@@ -264,7 +265,7 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 
 #### 7.7 进阶：深化联合链路的接法要点
 
-前面六节是 main 上可运行的基础链路。学习分支 `fix/core-game-server-review` 在同一条活动流程上做过更深的实践（真实 TCP 视野、权限代际与定期重读、持久位置与多块覆盖、持久视点、行军路线、到达事件、常驻 worker、报告投递与跨服 / Remote 地图交接）。那套夹具（`scripts/testdata/slg-alliance`、`scripts/test-slg-alliance-player.sh`）**没有合入 main**，main 上没有对应入口，实测结论以该分支为准、main 未复跑；下面只保留可以直接照做的接法与边界。
+前面六节是 main 上可运行的基础链路。学习分支 `fix/core-game-server-review` 在同一条活动流程上做过更深的实践（真实 TCP 视野、权限代际与定期重读、持久位置与多块覆盖、持久视点、行军路线、到达事件、常驻 worker、报告投递与跨服 / Remote 地图交接）。维护者 2026-10-27 决定选择性收录：只收 main 没有覆盖、且验证框架真实契约的部分，并入本节的 [alliance/](../../scripts/testdata/slg/alliance/) 夹具，不另建第二套夹具。结果是收录一项——普通 Bus RPC 的接收端期限（下表“跨实体 / 跨服投递”一行，`rpc_budget.go`，源自分支 `b6f9b524`）；其余深化内容或与 main 现有夹具 / 框架测试重复，或只是业务接法，只保留下表的接法要点，去向见表后“深化内容的去向”。
 
 | 主题 | 接法 | 边界与容易错的地方 |
 | --- | --- | --- |
@@ -274,8 +275,27 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 | 行军路线 | 路线存起点、终点与绝对的 Start / End，与命令回执、地图 Revision 同一 strict 事务；`At(now)` 在两端钳制、中间有界整数插值；handler 的 `nowUnixMilli` 由生成包装从 fctx 填，Sender 不收时间参数 | 不按离线秒数补 tick、不逐帧写库；“读到终点”不等于一次到达事件，到达要有自己的持久事件 |
 | 到达事件 | 发起行军的事务同时写到达待办；`DueArrivals(limit 1～128)` 从持久事件按 End / key 发现，`CompleteArrival` 再确认原事件与服务器期限，效果（报告）与“已处理”同一事务 | 枚举与处理之间不是事务；重复或晚到处理返回“已存在”，不改原到达时间；不依赖进程内计时列表 |
 | 常驻 worker | 实现 `app.Service`：Init 装配、Serve 独占循环、Shutdown 取消并等待在途调用；每轮一个期限覆盖发现与消费，失败即结束本轮，下一轮从持久状态重新发现 | 不存游标、不换身份；停机期限不足如实返回 context 错误，不能把未结束的调用当已排空；返回错误可能是结果未知，靠原身份幂等接口收口 |
-| 跨实体 / 跨服投递 | 两步：接收方在自己的 strict 事务里存完整正文作永久回执（同身份同内容返回已有、改内容拒绝）；发送方收到明确的“已接收”后，再用独立事务记 ACK | 两笔写之间没有分布式事务，锁内不做外部 RPC；查询失败、取消后的迟到成功都不 ACK。`FromSid` 是受信任总线的路由声明，不是认证，生产要服务凭据与 subject ACL |
+| 跨实体 / 跨服投递 | 两步：接收方在自己的 strict 事务里存完整正文作永久回执（同身份同内容返回已有、改内容拒绝）；发送方收到明确的“已接收”后，再用独立事务记 ACK | 两笔写之间没有分布式事务，锁内不做外部 RPC；查询失败、取消后的迟到成功都不 ACK。`FromSid` 是受信任总线的路由声明，不是认证，生产要服务凭据与 subject ACL。**普通 Bus RPC 不把调用方的 deadline 传到接收端**（[dispatchRpc](../../infra/network/bus/bus.go) 用接收端 Bus 的基础 context，只在 Bus 停止时取消；JetStream RPC 才按调用方截止建立处理期限）：接收业务用 `receiverBudget` 给整次处理自己的预算，预算到期或成功返回时已过期都不回复成功，调用方按结果未知重试原身份（`TestAllianceReceiverBudgetRejectsLateSuccess`、真实 NATS 的 `TestSLGAllianceRPCReceiverBudget`） |
 | Remote 地图交接 | 地图换成 Remote 托管实体后，旧 owner 的 ACK 返回 `entity.ErrRemoteFenced`；接收方每次用 `GetRemoteOwnership` 重读所有权核对来源 | 路由代际不进永久身份；交接前已通过校验的请求可能在交接后完成——协议允许这份报告收件并靠永久回执防重，不提供“交接瞬间撤销所有已准入请求” |
+
+**深化内容的去向**（逐项对照分支 `b75cc81f` 的 `scripts/testdata/slg-alliance` 与本夹具）：
+
+| 分支能力点 | main 的覆盖 | 处理 |
+| --- | --- | --- |
+| 普通 Bus RPC 的接收端期限（`b6f9b524`） | 无：框架文档与测试都没写调用方 deadline 不传到普通 RPC 接收端 | **收录**为 `rpc_budget.go` 与两条用例（上表） |
+| 补报截止与协调器 `ReservationTTL` 对齐（`d0ea8dac`） | 已有（`771ea259`，`TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`） | 不再收 |
+| 真实 TCP 视野、断线重连、旧 epoch 拒绝 | Sync 经真实 gateway TCP 已由 `wiring/selfsync`、生成工程 `nestgame` 的 TCP 客户端测试覆盖；本夹具的 Receiver 解码、Hold / Ready、重连 Full 用内存捕获 | 不收（传输层重复，夹具要多起 TCP 服务） |
+| 权限代际、失效通知只作重读下限、周期重读 | Hold / Ready 与读失败不发布本夹具已有；代际与唤醒队列是业务协议 | 不收，接法见上表“权限刷新循环” |
+| 持久位置与多块覆盖、提交前不放出、回滚、冷重建 | `policy` 包 `TestCoverageCommitRollbackRejectAndLifetime` 等与生成工程 `TestSpatialComponentNestCommitAndRollback`（`scripts/perf/nest-game.sh --check-spatial`） | 不收 |
+| 持久视点、多目标授权交集、限时侦察期限 | 授权交集与期限是业务规则；`fctx.Now` 冻结与 `nowUnixMilli` 由分发包装注入已有 codegen 契约测试 | 不收，接法见上表“授权交集”“期限与业务时间” |
+| 行军路线持久化与按时间推导位置、到达事件持久消费 | 本夹具行军用实体定时器到达（[guide/10-time §4B](guide/10-time.md) 推荐的做法）；分支用轮询到达待办，和推荐做法不同；路线插值是业务计算 | 不收，接法见上表“行军路线”“到达事件” |
+| 常驻到达 / 视野 worker 的 `app.Service` 启停与排空 | 验证的是夹具自写的 Service；停止契约由框架 `app` 与 `internal/stopcontract` 测试负责 | 不收 |
+| 报告 Inbox 投递、未 ACK 时崩溃恢复 | 与本夹具“原服义务 → Player 永久到账、SIGKILL 后冷加载重投”是同一个两步投递与 strict WAL 恢复契约 | 不收 |
+| 跨 sid 报告路由与两边 WAL 同时崩溃恢复 | Bus RPC 与单进程 WAL 恢复本夹具已有；`FromSid` 不是认证已写入上表 | 不收（只收其中的接收端期限） |
+| Managed Remote 地图交接、owner 准入、多进程 owner SIGKILL | 本夹具 `TestSLGAllianceRemoteDelivery` 同进程交接与旧 owner fence；进程级强杀与接管由 `framework/remoteentity` 的 `TestRealRemoteProcessKillRecoversLease` 与 `remoteflow` 生成工程覆盖 | 不收；“交接前已准入的请求可在交接后完成”见上表“Remote 地图交接” |
+| 私有报告视图从持久 Inbox 重建 | 私有 subject 只订阅给所属会话与 Hold / Ready 同本夹具视野；撤空后补空 Full 由 `entitysync` 测试覆盖 | 不收 |
+
+分支内容仍在 `b75cc81f` 的历史里（`git show b75cc81f:scripts/testdata/slg-alliance/...`），它依赖的另一套生成工程（ScoutMap 实体、Player 九个字段）与 main 夹具不同，不能直接复制运行。
 
 可靠贡献意图、退盟政策、冻结屏障和永久奖励回执都是业务设计；这条链路没有据此发现框架缺陷（学习分支撞到的“最后一个对象撤销后客户端不清空”是框架缺口，已在 Sync 里修掉，见 §7.5）。MMORPG 的跨服世界 Boss 可以复用“窗口 / 意图 / 回执”的思路，但队伍、副本权限和退队分奖规则要自己定义（[MMORPG §6](MMORPG-INTEGRATION.md#6-保持-player-归属的跨服协作)）。
 
@@ -326,7 +346,7 @@ bash scripts/test-slg-generated.sh
 
 脚本按 §3.1 的步骤生成工程（含联盟活动的 Remote 实体与业务文件），replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后对整个工程 build / vet，执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 DAO / 组件 / Sender / Nest / 实体定时器 / Remote 实体生成时手动跑。
 
-- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet；联盟的补报截止跟随协调器的 `ReservationTTL`（纯内存用例 `TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`，缺省模式就跑；其余联盟用例缺省模式只编译与 vet）。
+- **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet；联盟的补报截止跟随协调器的 `ReservationTTL`（纯内存用例 `TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`）、普通 Bus RPC 接收端预算拒绝迟到成功（纯内存用例 `TestAllianceReceiverBudgetRejectsLateSuccess`，以不带期限的基础 context 模拟 dispatchRpc），这两条缺省模式就跑；其余联盟用例缺省模式只编译与 vet。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；离线恢复用真实 DAO 的序列化 / 水合接口重建实体，再由用例手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递；单进程，无 Redis / NATS。[业务文件与测试](../../scripts/testdata/slg/)中的数值是样例。
 
 ### 12. 真实依赖与恢复验收
@@ -339,13 +359,14 @@ bash scripts/test-slg-generated.sh
 ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh
 ```
 
-共享隔离环境上运行时先持有 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`。缺省模式通过后，脚本把 [alliance/](../../scripts/testdata/slg/alliance/) 的测试复制进 `game/alliance/`，vet 后依次运行三条用例，每条都必须实际 PASS、无 skip。写 Mongo 的两条各用一个本次唯一的物理库（`roost_slg_it_<ppid>_<pid>_player` / `_remote`，DAO 的逻辑库 `main` 经 `NewDatabaseMap` 映射过去，与进程的 `dataengine.databases` 同一条规则）和一份 WAL 根；Redis 键前缀与 NATS subject 也按本次运行唯一。成功后删除库和 Redis 键；失败时保留工程、WAL、子进程日志并打印库名。
+共享隔离环境上运行时先持有 `$ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock`。缺省模式通过后，脚本把 [alliance/](../../scripts/testdata/slg/alliance/) 的测试复制进 `game/alliance/`，vet 后依次运行四条用例，每条都必须实际 PASS、无 skip。写 Mongo 的两条各用一个本次唯一的物理库（`roost_slg_it_<ppid>_<pid>_player` / `_remote`，DAO 的逻辑库 `main` 经 `NewDatabaseMap` 映射过去，与进程的 `dataengine.databases` 同一条规则）和一份 WAL 根；Redis 键前缀与 NATS subject 也按本次运行唯一。成功后删除库和 Redis 键；失败时保留工程、WAL、子进程日志并打印库名。
 
 | 用例 | 实际走过的流程 | 关键断言 |
 | --- | --- | --- |
 | `TestSLGAllianceActivity` | 业务 Redis CAS 联盟；正式 Activity RPC 经真实 NATS 调用协调器子进程（两个静态 sid 客户端各一条 NATS 连接，同在父进程）；协调器正常排空重启两次 | 八路并发同一战果只留一个意图；错服、换玩家复用身份、退盟后新贡献、冻结后新贡献被拒；退盟撤 `alliance` 来源而 `scout` 保留，最后来源撤销才消失；Receiver 解码的视野帧与权限一致，权限读取失败时不发布，重连收到新 Full、旧 epoch 帧被拒；注入“协调器已应用、本地未确认”后，冻结但有未报意图时阶段被拒；重启协调器后超过协调器保留期（`coordinatorReservationTTL`，1 小时）的意图拒绝自动补报，正常补报每人 Score 10、Applies 1；一个服通知后仍 collecting；原服写义务后不 ACK、再重启协调器，`OwedDispatches` 找回原窗口，投递 token 不变、Attempts 为 2，重投不改义务记录版本，错 token 拒绝，重复 ACK 幂等 |
 | `TestSLGAlliancePlayerDelivery` | 上一行的同一条流程，ACK 之后继续：每个原服依次起 write / recover / verify 三个子进程，各用自己的 strict 文件 WAL 与真实 Mongo | write：注入 Player 不可用时义务不标完成、版本不变；建档与到账两条 strict 记录已确认、投影数 0、未投影 2、原服未标完成时被父进程 SIGKILL。recover：冷加载后完整钱包与崩溃前一致（HomeSID、10 金币、一个到账身份），再从义务账本发现 1 条待发并重投（余额不变）；八路并发重放、错服、改归属、同窗口改金额都不改钱包。verify：第三个进程发现 0 条待发，钱包不变 |
 | `TestSLGAllianceRemoteDelivery` | 联盟权威换成生成的 Remote 托管实体（sid 2000 首次拥有并进入共享）；冻结后、补报之前在同一父进程内 `TransferRemoteOwnership` 到 sid 2001，再继续补报、阶段、原服义务与两个原服的 Player 到账（同上一行） | 初始 lease 为 sid 2000 且共享；交接后 marker 与 route epoch 都上升；旧 Runtime 仍在运行时写入被拒；sid 2001 冷加载的联盟事实（成员、冻结状态、待报意图）与交接前序列化后一致；八路并发同一战果经业务版本冲突重试后全部成功、只计一次 |
+| `TestSLGAllianceRPCReceiverBudget` | 只用 NATS：两个真实 Bus（sid 2000 调用 sid 1000）的普通 RPC | 调用方 300ms 超时返回时接收端回调仍在运行，且它的 context 没有调用方期限（框架现行契约；哪天普通 RPC 开始传播期限，这条会变红，提醒改 `receiverBudget` 与 §7.7）；接收端 `receiverBudget` 200ms 到期后迟到的成功不回复成功，调用方在 3 秒内拿到错误；期限内完成照常回复 |
 
 **不证明**：两个联盟 owner 与两个 sid 客户端都在同一父进程，协调器与原服 Player 是本机子进程；服务发现是固定列表，不含 etcd、singleton 或自动 HA；协调器只做正常排空重启，没有注入网络分区、SIGKILL 或 Redis 故障；Redis 跨进程读到数据不证明节点断电持久；Remote 用普通 NATS SyncBus（默认可丢），不经 Mirror 读，未验证 JetStream 与 Mirror 订阅、lease 中途过期或在途提交时的交接；视野传输是内存捕获，不是 TCP 客户端，也没有空间迷雾或跨服撤权；原服子进程按 sid 依次运行，不证明两服并发、进程自动拉起或 strict 结果未知；这条链路不含实体定时器，离线定时器的真实重载与驱动投递看下面的通用脚本。128 条 / 128 KiB 是教学上限，不是容量结论。
 

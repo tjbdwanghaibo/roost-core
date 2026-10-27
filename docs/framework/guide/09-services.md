@@ -61,6 +61,8 @@ owner Mod 持有存储并发布公开接口与 .local；Server 注册总线 hand
 
 RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient，wiring 持有接线 Server/ClientMod/OwnerCapabilities。运维 Admin、Sweep、ForceRelease 等本地能力不应自动暴露成任意总线调用。affinity 需要 discovery 支撑，缺失时不能装成“看似有效”的路由。
 
+接收端期限：普通 Bus RPC（`Bus.HandleRpc` / `CallTo`）的 handler 拿到的 `RpcContext.Context()` 是接收端 Bus 的基础 context（[dispatchRpc](../../../infra/network/bus/bus.go)），只在 Bus 停止时取消；调用方的 deadline 不随请求传过来，调用方超时只是停止等待。JetStream RPC 按调用方截止建立处理期限。业务自注册的普通 RPC 要给整次处理自己的预算，预算过后的成功不回复成功、交给调用方按原身份重试；接法与真实 NATS 上的核对见 [SLG §7.7](../SLG-INTEGRATION.md#77-进阶深化联合链路的接法要点)（`receiverBudget`）。
+
 ## 3. 存储与幂等
 
 这些服务多数以 Redis/versionstore 存储自己的记录，不是玩家 DAO WAL 的旁路。key_prefix 必填且按环境隔离；rank 的 Lua 与 mail 信封等有独立原语。写操作用请求 ID/令牌/状态条件保证业务重试，传输超时和业务拒绝通过不同错误表达。

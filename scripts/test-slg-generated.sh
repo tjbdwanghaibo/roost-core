@@ -2,11 +2,13 @@
 # SLG 业务接入纵切：正式生成器、Player / Tile / AllianceAuthority（Remote 托管）DAO、组件、Sender、Nest 与按实体定时器。
 # 业务规则（建造 / 研究 / 行军、抢地、联盟成员与贡献意图、活动阶段屏障、原服奖励义务与 Player 到账）只在
 # scripts/testdata/slg，不是框架默认玩法，生成器也不生成这些文件。
-# 缺省不连接外部存储：提交器是替身，离线恢复用 DAO 序列化；联盟活动的业务文件与 Remote Sender 只参与编译与 vet。
+# 缺省不连接外部存储：提交器是替身，离线恢复用 DAO 序列化；联盟活动的业务文件与 Remote Sender 参与编译与 vet，
+# 另跑两条纯内存用例（补报截止跟随协调器保留期、普通 Bus RPC 接收端预算）。
 # ROOST_SLG_REAL=1（并提供隔离 Mongo 副本集、Redis、NATS：ROOST_DATAENGINE_IT_MONGO_URI / _REDIS_ADDR / _NATS_URL）
-# 时追加联盟活动的三条真实依赖用例：正式 Activity RPC 经真实 NATS 调用独立协调器子进程（重启两次）；两个原服各自的
+# 时追加联盟活动的四条真实依赖用例：正式 Activity RPC 经真实 NATS 调用独立协调器子进程（重启两次）；两个原服各自的
 # Player 在 strict 文件 WAL 上到账、在“Player 已到账、原服未标记完成”处被 SIGKILL 后冷加载补完；联盟权威换成生成的
-# Remote 托管实体并在同进程内交接 owner。每条用例用本次唯一库、唯一 Redis 前缀与 NATS subject，成功后删除。
+# Remote 托管实体并在同进程内交接 owner；普通 Bus RPC 在真实 NATS 上核对调用方 deadline 不传到接收端、接收端自己
+# 限时后迟到成功不回复。每条用例用本次唯一库、唯一 Redis 前缀与 NATS subject，成功后删除。
 # 真实模式写共享隔离环境，运行前持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -78,6 +80,7 @@ cp "$repo_root/scripts/testdata/slg/alliance_rewards.go.txt" game/handler/allian
 cp "$repo_root/scripts/testdata/slg/alliance_authority.go.txt" game/handler/alliance_authority.go
 mkdir -p game/alliance
 cp "$repo_root/scripts/testdata/slg/alliance/alliance.go" game/alliance/alliance.go
+cp "$repo_root/scripts/testdata/slg/alliance/rpc_budget.go" game/alliance/rpc_budget.go
 gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
@@ -91,13 +94,18 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
-# 联盟测试缺省模式也复制并 vet；补报截止跟随协调器保留期的用例是纯内存的，缺省模式就跑。
+# 联盟测试缺省模式也复制并 vet；补报截止跟随协调器保留期、普通 Bus RPC 接收端预算两条用例是纯内存的，缺省模式就跑。
 cp "$repo_root"/scripts/testdata/slg/alliance/*_test.go game/alliance/
 gofmt -w game/alliance/*_test.go
 go vet -mod=mod -p 2 ./game/alliance
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$' ./game/alliance | tee "$review_root/alliance-unit.log"
 if [[ "$(grep -c '^--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL ' "$review_root/alliance-unit.log" || true)" != 1 ]]; then
   echo "alliance report-window test did not pass" >&2
+  exit 1
+fi
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAllianceReceiverBudgetRejectsLateSuccess$' ./game/alliance | tee "$review_root/alliance-budget.log"
+if [[ "$(grep -c '^--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess ' "$review_root/alliance-budget.log" || true)" != 1 ]]; then
+  echo "alliance receiver-budget test did not pass" >&2
   exit 1
 fi
 if [[ "${ROOST_SLG_REAL:-0}" == 1 ]]; then
@@ -117,5 +125,8 @@ if [[ "${ROOST_SLG_REAL:-0}" == 1 ]]; then
   ROOST_SLG_DB="${slg_db}_remote" ROOST_SLG_WAL="$review_root/persistence/remote" \
     go test -mod=mod -race -count=1 -timeout 4m -v -run '^TestSLGAllianceRemoteDelivery$' ./game/alliance | tee "$review_root/remote.log"
   if [[ "$(grep -c '^--- PASS: TestSLGAllianceRemoteDelivery ' "$review_root/remote.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/remote.log"; then exit 1; fi
+  # 普通 Bus RPC 的调用方 deadline 不传到接收端（框架现行契约）；接收端用自己的预算拒绝迟到成功。只用 NATS。
+  go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLGAllianceRPCReceiverBudget$' ./game/alliance | tee "$review_root/rpc-budget.log"
+  if [[ "$(grep -c '^--- PASS: TestSLGAllianceRPCReceiverBudget ' "$review_root/rpc-budget.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/rpc-budget.log"; then exit 1; fi
 fi
 succeeded=1

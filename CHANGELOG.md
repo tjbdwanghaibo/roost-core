@@ -15,6 +15,10 @@
 
 - **物理验收宿主收敛为正式服务**（维护者 2026-10-26：viewer 应是一个 service，逻辑重合就不需要）：删除 `cmd/physics-viewer`，它的 room / physics-service / gate-room / crowd 场景与物理房间服务重合，且让根包 `TestCoreDependencyBoundary`、`TestCoreContractsDoNotLinkDrivers` 变红（core 层的 `cmd/` 引入 wiring 与 NATS driver，提交 ce49b3c3）。新增 `wiring/physicsroom.NewEntityHostMod`（按 `physicsroom.*` 配置建 EntityHost 与房间 Service 的 owner Mod）与 `PlayerIngress`（Game 侧首输入 Join、唯一 Relay、Submit、随连接释放，作为 Mod 接 `wiring/gate.NewGameIngressMod`）；`Relay` 的出站参数放宽为 `Pusher` 接口（`*gateway.GameIngress` 照常传入）。本机运行入口改为 `wiring/physicsroom/cmd/physicsroom-local` 的 physicsroom / game / gate 三个 App 服务，GoLand 用 Physics Service / Game / Gate / Stack；**本机调试除 NATS 外还需要 Redis（单实例锁）与 etcd（Gate 发现 Game）**，直连 TCP 的 room 场景（PR01 协议、`.run/Physics Room`）删除。原生与 Unity 数值对照保留为 `scripts/physics/comparison-host`，`run-viewer-server.sh` / `verify-viewer.sh` 改为构建 `artifacts/physics-comparison-host`；crowd 宿主及 `measure-crowd.py`、`verify-crowd.sh` 删除，Crowd.unity 不再有服务端。修复 `physicsroom.NewClientMod` 依赖写成能力名 `bus`、经 App 装配启动即报 unknown mod dependency（改为 NATS Mod）。见 [物理房间 service §本机三进程](docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
 
+### SLG 深化夹具选择性收录
+
+- 维护者 2026-10-27 决定选择性收录学习分支 `fix/core-game-server-review` 的 SLG 深化夹具：只收 main 没有覆盖、且验证框架真实契约的部分，并入 `scripts/testdata/slg/alliance` 与 `scripts/test-slg-generated.sh`，不建第二套夹具。收录一项：普通 Bus RPC 的接收端期限——框架现行契约是 `dispatchRpc` 用接收端 Bus 的基础 context，调用方 `CallTo` 的 deadline 不传到接收端；业务自注册的 RPC 用 `receiverBudget`（`rpc_budget.go`，源自分支 `b6f9b524`）给整次处理自己的预算，预算到期或成功返回时已过期都不回复成功。新用例 `TestAllianceReceiverBudgetRejectsLateSuccess`（缺省模式）与 `TestSLGAllianceRPCReceiverBudget`（`ROOST_SLG_REAL=1`，真实 NATS 上核对调用方超时返回时接收端仍在运行），已登记根包门禁。其余深化内容与 main 夹具或框架测试重复、或只是业务接法，不收；逐项去向见 [SLG-INTEGRATION §7.7](docs/framework/SLG-INTEGRATION.md#77-进阶深化联合链路的接法要点)。
+
 ### 通用 LevelComponent
 
 - 新增 `gameplay/level`：固定版本定义、多活动 Stage、强类型 ECA 与作用域变量、宿主逻辑定时器、提交后动作请求及代际回执；配置和运行预算有界，事务草稿整体发布，支持瞬态／持久 DAO。
@@ -182,7 +186,7 @@ v1.31.0 候选（v1.30.0 没有单独发版，并入本版），**未发版：�
 
 - 新增合作塔防、合作生存撤离、合成休闲、放置模拟、自走棋五份学习手册（第一部分学习、第二部分验收）与生成业务消费者（`scripts/test-{tower-defense,survival-extraction,merge-casual,idle-sim,auto-chess}-generated.sh`），各有 `ROOST_*_REAL=1` 的 SIGKILL 崩溃恢复（定时器经投递循环补触发）。
 - MMORPG 真实依赖改由 entitytimer 投递循环投递，新增 `TestMMORPGRealCrashRecovery`。
-- SLG 跨服联盟活动联合链路（`ROOST_SLG_REAL=1`：`TestSLGAllianceActivity`、`TestSLGAlliancePlayerDelivery`、`TestSLGAllianceRemoteDelivery`），手册新增 §7；联盟补报截止取协调器的 `ReservationTTL`（`TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`）；学习分支 `fix/core-game-server-review` 的深化内容整理进 §7.1 / §7.7，深化夹具未合入。
+- SLG 跨服联盟活动联合链路（`ROOST_SLG_REAL=1`：`TestSLGAllianceActivity`、`TestSLGAlliancePlayerDelivery`、`TestSLGAllianceRemoteDelivery`），手册新增 §7；联盟补报截止取协调器的 `ReservationTTL`（`TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`）；学习分支 `fix/core-game-server-review` 的深化内容整理进 §7.1 / §7.7，深化夹具按能力选择性收录（见上“SLG 深化夹具选择性收录”）。
 - MOBA 夹具接快照恢复（`Arena` 检查点、`RecoverRoomWithSnapshots`、十客户端 KCP 长断线恢复与 SIGKILL 后经已提交检查点恢复），场景 28 条。
 
 ### 修复
