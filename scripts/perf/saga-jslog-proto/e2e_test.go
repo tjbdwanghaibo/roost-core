@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 func ids(prefix string, n int) []string {
@@ -330,5 +332,24 @@ func TestEndToEndAcrossStreamGroups(t *testing.T) {
 	}
 	if got := e.l.Streams(); len(got) != 2 {
 		t.Fatalf("streams %v", got)
+	}
+}
+
+// 参与方用 pipelined：锁内只入队，回复（结果发布）在 WAL 落盘之后（外化闸门），语义与 strict 相同。
+func TestEndToEndPipelinedParticipant(t *testing.T) {
+	e := newEnv(t, 2)
+	part := e.participant(func(o *ParticipantOptions) { o.Durability = nest.DurabilityPipelined; o.RedeliverRate = 0.2 })
+	coord := e.coordinator("A", nil)
+	e.takeAll(coord, false)
+	all := ids("pl", 60)
+	data := map[string]TransferData{}
+	for i, id := range all {
+		data[id] = e.transfer(i, i%4 == 0)
+	}
+	e.startAll(all, data, 60*time.Second)
+	time.Sleep(500 * time.Millisecond)
+	e.checkBalances(balanceOf(part), e.client.Latest(), all)
+	if v := e.chainViolations(); len(v) > 0 {
+		t.Fatalf("event chain violations:\n%s", strings.Join(v, "\n"))
 	}
 }
