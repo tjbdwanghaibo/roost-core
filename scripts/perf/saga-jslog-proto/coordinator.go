@@ -68,7 +68,9 @@ type CoordinatorOptions struct {
 	// 以下只给测试 / 变异用。
 	DisableFence  bool           // 变异：发布不带期望序号
 	BeforePublish func(part int) // 计算完一轮、发布之前调用（测试用它冻结旧实例）
-	Now           func() int64   // 业务时钟（unix ms）
+	// DropAck 返回真时，这次发送照常发出、但不等回复，按超时返回（结果未知、实际已落库）。测试结果未知分支用。
+	DropAck func(part int) bool
+	Now     func() int64 // 业务时钟（unix ms）
 }
 
 func (o *CoordinatorOptions) defaults() {
@@ -100,6 +102,8 @@ type CoordinatorStats struct {
 	EvMsgs, PubCalls, BatchCalls, Unknown, Fenced, Snapshots, Purges, SnapshotConflicts      atomic.Uint64
 	Accepted, Duplicate, Ignored, StaleAttempt, LateCompensate, LateAlarm, Starts, DupStarts atomic.Uint64
 	ReplayMsgs, ReplayNanos                                                                  atomic.Uint64
+	// 结果未知之后的判定：单条重发得到 Duplicate；批重发得到 10201 或序号不符但最后一条是自己的。
+	DupAcks, ResolvedByLast atomic.Uint64
 }
 
 type Coordinator struct {
@@ -624,6 +628,7 @@ func (p *partition) publish(ctx context.Context, out []outMsg) (uint64, error) {
 				return 0, lerr
 			}
 			if mine {
+				c.Stats.ResolvedByLast.Add(1)
 				return seq, nil
 			}
 			if dupBatch {
@@ -644,10 +649,16 @@ func (p *partition) send(ctx context.Context, msgs []*nats.Msg, batchID string) 
 	c.Stats.PubCalls.Add(1)
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if c.opts.DropAck != nil && c.opts.DropAck(p.k) {
+		return 0, p.sendDroppingAck(msgs, batchID)
+	}
 	if len(msgs) == 1 {
 		ack, err := c.js.PublishMsg(pctx, msgs[0], jetstream.WithRetryAttempts(0))
 		if err != nil {
 			return 0, err
+		}
+		if ack.Duplicate {
+			c.Stats.DupAcks.Add(1)
 		}
 		return ack.Sequence, nil
 	}
@@ -684,6 +695,25 @@ func (p *partition) send(ctx context.Context, msgs []*nats.Msg, batchID string) 
 		return ack.Seq, nil
 	}
 	return 0, errors.New("empty batch")
+}
+
+// sendDroppingAck 把消息原样发出（批照常带批号与提交头）但不收回复，模拟 PubAck 丢失。
+func (p *partition) sendDroppingAck(msgs []*nats.Msg, batchID string) error {
+	for i, m := range msgs {
+		if len(msgs) > 1 {
+			m.Header.Set("Nats-Batch-Id", batchID)
+			m.Header.Set("Nats-Batch-Sequence", fmt.Sprint(i+1))
+			if i == len(msgs)-1 {
+				m.Header.Set("Nats-Batch-Commit", "1")
+			}
+		}
+		if err := p.c.nc.PublishMsg(m); err != nil {
+			return err
+		}
+	}
+	_ = p.c.nc.Flush()
+	time.Sleep(20 * time.Millisecond)
+	return context.DeadlineExceeded
 }
 
 func apiErrorCodeOf(err error) jetstream.ErrorCode {

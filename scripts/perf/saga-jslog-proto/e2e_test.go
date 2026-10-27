@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -269,4 +270,44 @@ func TestSnapshotPurgeReplayMatches(t *testing.T) {
 	t.Logf("A: ev=%d snapshots=%d purges=%d; stream msgs after purge=%d (first %d); B replayed %d msgs in %v",
 		a.Stats.EvMsgs.Load(), a.Stats.Snapshots.Load(), a.Stats.Purges.Load(), info.State.Msgs, info.State.FirstSeq,
 		b.Stats.ReplayMsgs.Load(), time.Duration(b.Stats.ReplayNanos.Load()))
+}
+
+// 发布结果未知：30% 的发布照常发出但不等 PubAck、按超时返回。协调器用同一 MsgID、同一期望序号重发：
+// 单条判 Duplicate、批判 10201 或读回最后一条是自己的 → 已提交，内存与日志一致、不重复派发。
+func TestPublishOutcomeUnknownIsResolved(t *testing.T) {
+	e := newEnv(t, 2)
+	part := e.participant(nil)
+	var n atomic.Int64
+	coord := e.coordinator("A", func(o *CoordinatorOptions) {
+		o.DropAck = func(int) bool { return n.Add(1)%3 == 0 }
+	})
+	e.takeAll(coord, false)
+	all := ids("unk", 80)
+	data := map[string]TransferData{}
+	for i, id := range all {
+		data[id] = e.transfer(i, i%4 == 0)
+	}
+	e.startAll(all, data, 60*time.Second)
+	final := e.client.Latest()
+	for i, id := range all {
+		want := StatusCompleted
+		if i%4 == 0 {
+			want = StatusCompensated
+		}
+		if final[id].Status != want {
+			t.Fatalf("%s: %s, want %s", id, final[id], want)
+		}
+	}
+	e.checkBalances(balanceOf(part), final, all)
+	if v := e.chainViolations(); len(v) > 0 {
+		t.Fatalf("event chain violations:\n%s", strings.Join(v, "\n"))
+	}
+	if coord.Stats.Unknown.Load() == 0 || coord.PartitionErr(0) != nil || coord.PartitionErr(1) != nil {
+		t.Fatalf("premise: unknown=%d errs=%v/%v", coord.Stats.Unknown.Load(), coord.PartitionErr(0), coord.PartitionErr(1))
+	}
+	if coord.Stats.DupAcks.Load() == 0 || coord.Stats.ResolvedByLast.Load() == 0 {
+		t.Fatalf("premise: both branches should be hit: single Duplicate=%d, batch resolved by last event=%d", coord.Stats.DupAcks.Load(), coord.Stats.ResolvedByLast.Load())
+	}
+	t.Logf("unknown outcomes=%d: single resolved as Duplicate=%d, batch resolved by duplicate-id / last event=%d (publish calls %d, batches %d)",
+		coord.Stats.Unknown.Load(), coord.Stats.DupAcks.Load(), coord.Stats.ResolvedByLast.Load(), coord.Stats.PubCalls.Load(), coord.Stats.BatchCalls.Load())
 }

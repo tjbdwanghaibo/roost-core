@@ -34,34 +34,37 @@ func envInt(name string, def int) int {
 }
 
 type perfResult struct {
-	Label       string  `json:"label"`
-	Scenario    string  `json:"scenario"`
-	Durability  string  `json:"durability"`
-	Partitions  int     `json:"partitions"`
-	Concurrency int     `json:"concurrency"`
-	GOMAXPROCS  int     `json:"gomaxprocs"`
-	Seconds     int     `json:"seconds"`
-	SteadyTPS   float64 `json:"steady_tps"`
-	Terminal    int     `json:"terminal"`
-	Unexpected  int     `json:"unexpected"`
-	ClientP50   float64 `json:"client_p50_ms"`
-	ClientP99   float64 `json:"client_p99_ms"`
-	ServerP50   float64 `json:"server_p50_ms"`
-	ServerP99   float64 `json:"server_p99_ms"`
-	Steps       uint64  `json:"steps"`
-	JSMsgsStep  float64 `json:"js_msgs_per_step"`
-	JSCallsStep float64 `json:"js_publish_calls_per_step"`
-	EvPerCall   float64 `json:"ev_per_publish_call"`
-	FsyncStep   float64 `json:"wal_fsync_per_step"`
-	BalancesOK  bool    `json:"balances_ok"`
-	RereadOK    bool    `json:"reread_ok"`
-	ReplayMsgs  uint64  `json:"replay_msgs"`
-	ReplayMs    float64 `json:"replay_ms"`
-	Snapshots   uint64  `json:"snapshots"`
-	Purges      uint64  `json:"purges"`
-	Unknown     uint64  `json:"publish_unknown"`
-	LoadBefore  string  `json:"loadavg_before"`
-	StartedAt   string  `json:"started_at"`
+	Label         string  `json:"label"`
+	Scenario      string  `json:"scenario"`
+	Durability    string  `json:"durability"`
+	Partitions    int     `json:"partitions"`
+	Concurrency   int     `json:"concurrency"`
+	GOMAXPROCS    int     `json:"gomaxprocs"`
+	Seconds       int     `json:"seconds"`
+	SteadyTPS     float64 `json:"steady_tps"`
+	Terminal      int     `json:"terminal"`
+	Unexpected    int     `json:"unexpected"`
+	ClientP50     float64 `json:"client_p50_ms"`
+	ClientP99     float64 `json:"client_p99_ms"`
+	ServerP50     float64 `json:"server_p50_ms"`
+	ServerP99     float64 `json:"server_p99_ms"`
+	Steps         uint64  `json:"steps"`
+	JSMsgsStep    float64 `json:"js_msgs_per_step"`
+	JSCallsStep   float64 `json:"js_publish_calls_per_step"`
+	EvPerCall     float64 `json:"ev_per_publish_call"`
+	FsyncStep     float64 `json:"wal_fsync_per_step"`
+	BalancesOK    bool    `json:"balances_ok"`
+	RereadOK      bool    `json:"reread_ok"`
+	RereadChecked int     `json:"reread_checked"`
+	RereadPruned  int     `json:"reread_pruned_by_retention"`
+	SnapshotEvery int     `json:"snapshot_every"`
+	ReplayMsgs    uint64  `json:"replay_msgs"`
+	ReplayMs      float64 `json:"replay_ms"`
+	Snapshots     uint64  `json:"snapshots"`
+	Purges        uint64  `json:"purges"`
+	Unknown       uint64  `json:"publish_unknown"`
+	LoadBefore    string  `json:"loadavg_before"`
+	StartedAt     string  `json:"started_at"`
 }
 
 func percentile(sorted []float64, p float64) float64 {
@@ -104,7 +107,9 @@ func TestPerfClosedLoop(t *testing.T) {
 	parts := envInt("SAGAJS_PERF_PARTS", 4)
 	seconds := envInt("SAGAJS_PERF_SECONDS", 60)
 	warmup := envInt("SAGAJS_PERF_WARMUP", 10)
-	snapEvery := envInt("SAGAJS_PERF_SNAPSHOT_EVERY", 2000)
+	// 缺省不快照：快照保留期内的终态才在快照里（之后归投影），全量复读要求日志完整。快照的代价另跑一组量。
+	snapEvery := envInt("SAGAJS_PERF_SNAPSHOT_EVERY", 0)
+	retention := time.Duration(envInt("SAGAJS_PERF_RETENTION_MS", 2000)) * time.Millisecond
 	label := os.Getenv("SAGAJS_PERF_LABEL")
 	if label == "" {
 		label = fmt.Sprintf("%s-%s-p%d", scenario, durName, parts)
@@ -119,11 +124,11 @@ func TestPerfClosedLoop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := runPerfLevel(t, scenario, durability, parts, conc, seconds, warmup, snapEvery, walRoot)
+		r := runPerfLevel(t, scenario, durability, parts, conc, seconds, warmup, snapEvery, retention, walRoot)
 		r.Label, r.Durability = label, durName
-		t.Logf("%s c%d: TPS %.2f (terminal %d, unexpected %d) client P50/P99 %.1f/%.1f ms server %.1f/%.1f ms; per step: js msgs %.2f, publish calls %.2f, wal fsync %.3f; ev/call %.2f; balances=%v reread=%v replay %d msgs %.1f ms; snapshots %d purges %d unknown %d",
+		t.Logf("%s c%d: TPS %.2f (terminal %d, unexpected %d) client P50/P99 %.1f/%.1f ms server %.1f/%.1f ms; per step: js msgs %.2f, publish calls %.2f, wal fsync %.3f; ev/call %.2f; balances=%v reread=%v (checked %d, pruned %d) replay %d msgs %.1f ms; snapshots %d purges %d unknown %d",
 			label, conc, r.SteadyTPS, r.Terminal, r.Unexpected, r.ClientP50, r.ClientP99, r.ServerP50, r.ServerP99, r.JSMsgsStep, r.JSCallsStep, r.FsyncStep, r.EvPerCall,
-			r.BalancesOK, r.RereadOK, r.ReplayMsgs, r.ReplayMs, r.Snapshots, r.Purges, r.Unknown)
+			r.BalancesOK, r.RereadOK, r.RereadChecked, r.RereadPruned, r.ReplayMsgs, r.ReplayMs, r.Snapshots, r.Purges, r.Unknown)
 		if outDir != "" {
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				t.Fatal(err)
@@ -142,8 +147,8 @@ func TestPerfClosedLoop(t *testing.T) {
 	}
 }
 
-func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolicy, parts, conc, seconds, warmup, snapEvery int, walRoot string) perfResult {
-	r := perfResult{Scenario: scenario, Partitions: parts, Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds,
+func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolicy, parts, conc, seconds, warmup, snapEvery int, retention time.Duration, walRoot string) perfResult {
+	r := perfResult{Scenario: scenario, Partitions: parts, Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds, SnapshotEvery: snapEvery,
 		LoadBefore: loadavg(), StartedAt: time.Now().Format(time.RFC3339)}
 	e := newEnv(t, parts)
 	e.pairs = 256
@@ -159,7 +164,7 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		t.Fatal(err)
 	}
 	cancel()
-	coord := e.coordinator("A", func(o *CoordinatorOptions) { o.SnapshotEvery, o.Retention = snapEvery, 5*time.Minute })
+	coord := e.coordinator("A", func(o *CoordinatorOptions) { o.SnapshotEvery, o.Retention = snapEvery, retention })
 	e.takeAll(coord, false)
 	syncs0 := part.WALSyncs()
 
@@ -278,20 +283,28 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	r.ReplayMs = float64(time.Since(replayBegin).Microseconds()) / 1000
 	r.ReplayMsgs = b.Stats.ReplayMsgs.Load()
 	b.Stop()
+	// 复读：B 重建出的每一笔与发起方观察到的终态（版本、状态）一致；快照开着时，过了保留期的终态已从快照里剪掉
+	// （生产由投影回答），只计数不判错；不快照时必须一笔不少。
 	r.RereadOK = true
+	rebuilt := map[string]*Saga{}
 	for k := 0; k < parts; k++ {
 		for id, s := range b.SnapshotState(k) {
-			if f := final[id]; f != nil && (f.Version != s.Version || f.Status != s.Status) {
-				r.RereadOK = false
-			}
+			rebuilt[id] = s
 		}
 	}
 	for _, id := range all {
-		if f := final[id]; f != nil {
-			k := e.l.PartitionOf(id)
-			if s := b.SnapshotState(k)[id]; s == nil || s.Version != f.Version {
-				r.RereadOK = false
-			}
+		f := final[id]
+		if f == nil {
+			continue
+		}
+		s := rebuilt[id]
+		switch {
+		case s == nil && snapEvery > 0:
+			r.RereadPruned++
+		case s == nil || s.Version != f.Version || s.Status != f.Status:
+			r.RereadOK = false
+		default:
+			r.RereadChecked++
 		}
 	}
 	part.Stop()

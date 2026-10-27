@@ -42,7 +42,9 @@ start_one() {
     return 0
   fi
   conf "$i"
-  nohup "$BIN" -c "$ROOT/n$i.conf" -l "$ROOT/n$i.log" -P "$ROOT/n$i.pid" >/dev/null 2>&1 &
+  # pid 文件由脚本立即写（$!），不用服务端的 -P：紧接着的第二次 restart 才看得到第一次已经起了。
+  nohup "$BIN" -c "$ROOT/n$i.conf" -l "$ROOT/n$i.log" >/dev/null 2>&1 &
+  echo $! > "$ROOT/n$i.pid"
 }
 
 case "${1:-}" in
