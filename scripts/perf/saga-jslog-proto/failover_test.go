@@ -226,4 +226,27 @@ func TestLeaderKillKeepsAckedWritesAndResolvesUnknowns(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	restartNode(t, second)
+	waitClusterReady(t, js)
+}
+
+// waitClusterReady 等三个节点都能承载 R3 流（被杀节点重新入群之前，建 R3 流会报 no suitable peers），后面的用例才不受影响。
+func waitClusterReady(t *testing.T, js jetstream.JetStream) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		name := uniqueName("PROBE")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{Name: name, Subjects: []string{name + ".>"}, Replicas: 3, Storage: jetstream.FileStorage})
+		if err == nil {
+			_ = js.DeleteStream(ctx, name)
+		}
+		cancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cluster did not recover three peers: %v", err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

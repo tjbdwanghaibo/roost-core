@@ -131,7 +131,7 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 
 | 故障 | 行为 | 验证 |
 | --- | --- | --- |
-| 协调器进程 kill -9 | 已 PubAck 的事件在流里；内存丢失。新实例等租约过期（≤ TTL）后接管、重放；崩溃前已处理但没提交的输入在 `InHi` 之后，重新处理 | `TestCoordinatorKill9Takeover`：400 笔、第 150 笔后杀，B 接管（含 3s 租约等待）后 7.4s 内全部到终态，状态 / 余额 / 事件链核对通过 |
+| 协调器进程 kill -9 | 已 PubAck 的事件在流里；内存丢失。新实例等租约过期（≤ TTL）后接管、重放；崩溃前已处理但没提交的输入在 `InHi` 之后，重新处理 | `TestCoordinatorKill9Takeover`：400 笔、第 150 笔后杀，B 接管（含 ≤3s 租约等待）后 7.4s / 3.4s（两次运行）内全部到终态，状态 / 余额 / 事件链核对通过 |
 | 旧协调器还活着（停顿、分区） | 它的下一次发布被期望序号拒绝（10071），分区 fail-stop | `TestFenceRejectsStaleWriter`；变异去掉期望序号后事件链分叉（见下） |
 | 参与方 kill -9 | strict 已确认的提交在 WAL；重启从 WAL 重建；未 ack 的命令重投 → 回放回执；协调器超时后的新尝试同样回放 | `TestParticipantKill9Recovery`：300 笔、第 100 笔后杀，重启后全部到终态，余额逐账户一致 |
 | 重复命令（重投） | 回执回放，不重复执行 | `TestEndToEndDuplicateCommandsAndResults`（30% Nak）；变异去掉回执检查后余额不符 |
