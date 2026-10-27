@@ -53,6 +53,8 @@ case "${1:-matrix}" in
     one "forward-strict-p1" forward 1 strict "$L"
     one "forward-strict-p16" forward 16 strict "$L"
     one "forward-pipelined-p4" forward 4 pipelined "$L"
+    # 16 个分区分到 4 条流（4 个 Raft 组 / leader）
+    SAGAJS_PERF_STREAMS=4 one "forward-strict-p16-g4" forward 16 strict "$L"
     # 快照 + 清理开着（每 2000 条事件一次，终态保留 2s）：量快照对吞吐的影响
     SAGAJS_PERF_SNAPSHOT_EVERY=2000 one "forward-strict-p4-snap" forward 4 strict "16 64 128"
     ;;

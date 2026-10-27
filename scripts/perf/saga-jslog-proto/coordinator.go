@@ -23,11 +23,13 @@ var ErrLeaseLost = errors.New("jslogproto: partition lease lost")
 
 // Setup 建流与两个 KV 桶（快照、所有权）。流 R=replicas、文件存储、允许原子批量、去重窗口 2 分钟。
 func Setup(ctx context.Context, js jetstream.JetStream, l Layout, replicas int, leaseTTL time.Duration) error {
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name: l.Stream(), Subjects: []string{l.Prefix + ".>"}, Storage: jetstream.FileStorage, Replicas: replicas,
-		AllowAtomicPublish: true, Duplicates: 2 * time.Minute, AllowDirect: true,
-	}); err != nil {
-		return fmt.Errorf("stream: %w", err)
+	for g := 0; g < l.groups(); g++ {
+		if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+			Name: l.StreamOf(g), Subjects: l.streamSubjects(g), Storage: jetstream.FileStorage, Replicas: replicas,
+			AllowAtomicPublish: true, Duplicates: 2 * time.Minute, AllowDirect: true,
+		}); err != nil {
+			return fmt.Errorf("stream: %w", err)
+		}
 	}
 	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket: l.SnapshotBucket(), Storage: jetstream.FileStorage, Replicas: replicas, History: 1, MaxValueSize: 8 << 20,
@@ -44,7 +46,9 @@ func Setup(ctx context.Context, js jetstream.JetStream, l Layout, replicas int, 
 
 // Teardown 删流与桶（压测每档用完清理）。
 func Teardown(ctx context.Context, js jetstream.JetStream, l Layout) {
-	_ = js.DeleteStream(ctx, l.Stream())
+	for _, name := range l.Streams() {
+		_ = js.DeleteStream(ctx, name)
+	}
 	_ = js.DeleteKeyValue(ctx, l.SnapshotBucket())
 	_ = js.DeleteKeyValue(ctx, l.OwnerBucket())
 }
@@ -185,7 +189,7 @@ func (c *Coordinator) Takeover(ctx context.Context, k int, steal bool) error {
 	}
 	c.Stats.ReplayMsgs.Add(uint64(replayed))
 	c.Stats.ReplayNanos.Add(uint64(time.Since(begin)))
-	cons, err := c.js.OrderedConsumer(ctx, c.opts.Layout.Stream(), jetstream.OrderedConsumerConfig{
+	cons, err := c.js.OrderedConsumer(ctx, c.opts.Layout.StreamOf(k), jetstream.OrderedConsumerConfig{
 		FilterSubjects: []string{c.opts.Layout.InFilter(k)}, DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
 		OptStartSeq: p.resumeSeq(),
 	})
@@ -292,7 +296,7 @@ func (p *partition) replay(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	stream, err := p.c.js.Stream(ctx, l.Stream())
+	stream, err := p.c.js.Stream(ctx, l.StreamOf(p.k))
 	if err != nil {
 		return 0, err
 	}
@@ -325,7 +329,7 @@ func (p *partition) replay(ctx context.Context) (int, error) {
 		}
 		n := 0
 		if end >= from {
-			cons, err := p.c.js.OrderedConsumer(ctx, l.Stream(), jetstream.OrderedConsumerConfig{
+			cons, err := p.c.js.OrderedConsumer(ctx, l.StreamOf(p.k), jetstream.OrderedConsumerConfig{
 				FilterSubjects: []string{l.PartFilter(p.k)}, DeliverPolicy: jetstream.DeliverByStartSequencePolicy, OptStartSeq: from,
 			})
 			if err != nil {
@@ -725,7 +729,7 @@ func apiErrorCodeOf(err error) jetstream.ErrorCode {
 }
 
 func (p *partition) lastIsMine(ctx context.Context, lastID string) (uint64, bool, error) {
-	stream, err := p.c.js.Stream(ctx, p.c.opts.Layout.Stream())
+	stream, err := p.c.js.Stream(ctx, p.c.opts.Layout.StreamOf(p.k))
 	if err != nil {
 		return 0, false, err
 	}
@@ -794,7 +798,7 @@ func (p *partition) snapshot(ctx context.Context) error {
 		bound = p.lastEv
 	}
 	for _, name := range c.opts.PurgeGuards {
-		cons, err := c.js.Consumer(ctx, l.Stream(), name)
+		cons, err := c.js.Consumer(ctx, l.StreamOf(p.k), name)
 		if err != nil {
 			return nil // 参与方消费者还不在：不清理
 		}
@@ -809,7 +813,7 @@ func (p *partition) snapshot(ctx context.Context) error {
 	if bound <= 1 {
 		return nil
 	}
-	stream, err := c.js.Stream(ctx, l.Stream())
+	stream, err := c.js.Stream(ctx, l.StreamOf(p.k))
 	if err != nil {
 		return err
 	}

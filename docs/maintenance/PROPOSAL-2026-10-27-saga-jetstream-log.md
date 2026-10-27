@@ -158,7 +158,8 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
 
 ## 14. 已知风险与没做的
 
-- **单流的上限**：所有分区共用一条流 = 一个 Raft 组、一个 leader；吞吐与选主停顿都按流计。分区多时按“分区组”分几条流（布局不变，单写者检查照旧）。原型只测了单流。
+- **单流的上限**：所有分区共用一条流 = 一个 Raft 组、一个 leader；吞吐与选主停顿都按流计。原型支持把分区按 `k % G` 分到 G 条流
+  （`Layout.StreamGroups`，subject 与单写者检查不变；参与方与终态观察者在每条流上各建一个消费者），`TestEndToEndAcrossStreamGroups` 验证功能，压测对照见报告。
 - **快照大小**受 KV 值上限约束（§8）；分块快照没做。
 - **事件携带完整 saga 状态**：`Data` 大时日志膨胀；可改为增量，但重放要能从快照 + 增量还原。
 - **macOS 测量**：参与方 WAL 的 fsync 在 macOS 上是 F_FULLFSYNC；JetStream 在本机三节点同盘。Linux 未测。

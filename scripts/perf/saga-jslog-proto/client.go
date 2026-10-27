@@ -20,17 +20,27 @@ type Client struct {
 	latest map[string]*Saga
 	seenAt map[string]time.Time
 	wait   map[string]chan struct{}
-	cc     jetstream.ConsumeContext
+	ccs    []jetstream.ConsumeContext
 	Pubs   atomic.Uint64
 }
 
 func NewClient(ctx context.Context, js jetstream.JetStream, l Layout) (*Client, error) {
 	c := &Client{js: js, l: l, latest: map[string]*Saga{}, seenAt: map[string]time.Time{}, wait: map[string]chan struct{}{}}
-	cons, err := js.OrderedConsumer(ctx, l.Stream(), jetstream.OrderedConsumerConfig{FilterSubjects: []string{l.DestFilter("done")}})
-	if err != nil {
-		return nil, err
+	for _, name := range l.Streams() {
+		if err := c.watch(ctx, name); err != nil {
+			c.Close()
+			return nil, err
+		}
 	}
-	c.cc, err = cons.Consume(func(msg jetstream.Msg) {
+	return c, nil
+}
+
+func (c *Client) watch(ctx context.Context, stream string) error {
+	cons, err := c.js.OrderedConsumer(ctx, stream, jetstream.OrderedConsumerConfig{FilterSubjects: []string{c.l.DestFilter("done")}})
+	if err != nil {
+		return err
+	}
+	cc, err := cons.Consume(func(msg jetstream.Msg) {
 		var ev Event
 		if json.Unmarshal(msg.Data(), &ev) != nil || ev.Saga == nil {
 			return
@@ -50,12 +60,16 @@ func NewClient(ctx context.Context, js jetstream.JetStream, l Layout) (*Client, 
 			delete(c.wait, ev.Saga.ID)
 		}
 	}, jetstream.PullMaxMessages(1024))
-	return c, err
+	if err != nil {
+		return err
+	}
+	c.ccs = append(c.ccs, cc)
+	return nil
 }
 
 func (c *Client) Close() {
-	if c.cc != nil {
-		c.cc.Stop()
+	for _, cc := range c.ccs {
+		cc.Stop()
 	}
 }
 

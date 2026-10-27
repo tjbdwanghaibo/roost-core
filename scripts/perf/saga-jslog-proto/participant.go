@@ -167,7 +167,7 @@ type Participant struct {
 	mgr       *nest.NestMgr
 	wal       *nestwal.WAL
 	projector *engine.Projector
-	cc        jetstream.ConsumeContext
+	ccs       []jetstream.ConsumeContext
 	work      chan jetstream.Msg
 	wg        sync.WaitGroup
 	cancel    context.CancelFunc
@@ -411,13 +411,6 @@ func rebuildFromWAL(wal *nestwal.WAL) (map[int64]*rebuiltDoc, error) {
 
 // Start 建（或复用）durable 消费者并开始处理命令。
 func (p *Participant) Start(ctx context.Context) error {
-	cons, err := p.js.CreateOrUpdateConsumer(ctx, p.opts.Layout.Stream(), jetstream.ConsumerConfig{
-		Durable: p.opts.Durable, FilterSubject: p.opts.Layout.DestFilter("acct"), AckPolicy: jetstream.AckExplicitPolicy,
-		AckWait: 30 * time.Second, MaxAckPending: 8192, DeliverPolicy: jetstream.DeliverAllPolicy, MaxDeliver: -1,
-	})
-	if err != nil {
-		return err
-	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.work = make(chan jetstream.Msg, p.opts.Workers*4)
@@ -430,8 +423,22 @@ func (p *Participant) Start(ctx context.Context) error {
 			}
 		}()
 	}
-	p.cc, err = cons.Consume(func(msg jetstream.Msg) { p.work <- msg }, jetstream.PullMaxMessages(p.opts.Workers*4))
-	return err
+	// 每条流一个同名 durable 消费者（分区分到几条流时）。
+	for _, name := range p.opts.Layout.Streams() {
+		cons, err := p.js.CreateOrUpdateConsumer(ctx, name, jetstream.ConsumerConfig{
+			Durable: p.opts.Durable, FilterSubject: p.opts.Layout.DestFilter("acct"), AckPolicy: jetstream.AckExplicitPolicy,
+			AckWait: 30 * time.Second, MaxAckPending: 8192, DeliverPolicy: jetstream.DeliverAllPolicy, MaxDeliver: -1,
+		})
+		if err != nil {
+			return err
+		}
+		cc, err := cons.Consume(func(msg jetstream.Msg) { p.work <- msg }, jetstream.PullMaxMessages(p.opts.Workers*4))
+		if err != nil {
+			return err
+		}
+		p.ccs = append(p.ccs, cc)
+	}
+	return nil
 }
 
 func (p *Participant) handle(ctx context.Context, msg jetstream.Msg) {
@@ -514,9 +521,9 @@ func (p *Participant) WALSyncs() uint64 { return p.wal.Stats().Syncs }
 
 // Stop 停止消费并关闭 Nest 与 WAL（不 ack WAL：重启时从整段 WAL 重建）。
 func (p *Participant) Stop() {
-	if p.cc != nil {
-		p.cc.Stop()
-		<-p.cc.Closed()
+	for _, cc := range p.ccs {
+		cc.Stop()
+		<-cc.Closed()
 	}
 	if p.work != nil {
 		close(p.work)

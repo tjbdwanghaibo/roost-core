@@ -38,6 +38,7 @@ type perfResult struct {
 	Scenario      string  `json:"scenario"`
 	Durability    string  `json:"durability"`
 	Partitions    int     `json:"partitions"`
+	Streams       int     `json:"streams"`
 	Concurrency   int     `json:"concurrency"`
 	GOMAXPROCS    int     `json:"gomaxprocs"`
 	Seconds       int     `json:"seconds"`
@@ -148,9 +149,9 @@ func TestPerfClosedLoop(t *testing.T) {
 }
 
 func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolicy, parts, conc, seconds, warmup, snapEvery int, retention time.Duration, walRoot string) perfResult {
-	r := perfResult{Scenario: scenario, Partitions: parts, Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds, SnapshotEvery: snapEvery,
+	r := perfResult{Scenario: scenario, Partitions: parts, Streams: envInt("SAGAJS_PERF_STREAMS", 1), Concurrency: conc, GOMAXPROCS: runtime.GOMAXPROCS(0), Seconds: seconds, SnapshotEvery: snapEvery,
 		LoadBefore: loadavg(), StartedAt: time.Now().Format(time.RFC3339)}
-	e := newEnv(t, parts)
+	e := newEnvGroups(t, parts, envInt("SAGAJS_PERF_STREAMS", 1))
 	e.pairs = 256
 	walDir := filepath.Join(walRoot, e.l.Prefix)
 	defer os.RemoveAll(walDir)

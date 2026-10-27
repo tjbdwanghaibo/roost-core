@@ -154,6 +154,43 @@ type Event struct {
 type Layout struct {
 	Prefix     string
 	Partitions int
+	// StreamGroups > 1 时分区按 k % StreamGroups 分到几条流（各自的 Raft 组与 leader）；subject 不变。
+	StreamGroups int
+}
+
+func (l Layout) groups() int {
+	if l.StreamGroups <= 1 {
+		return 1
+	}
+	return l.StreamGroups
+}
+
+// StreamOf 是分区 k 所在的流。
+func (l Layout) StreamOf(k int) string {
+	if l.groups() == 1 {
+		return l.Stream()
+	}
+	return fmt.Sprintf("%s_G%d", l.Stream(), k%l.groups())
+}
+
+// Streams 列出全部流。
+func (l Layout) Streams() []string {
+	var out []string
+	for g := 0; g < l.groups(); g++ {
+		out = append(out, l.StreamOf(g))
+	}
+	return out
+}
+
+func (l Layout) streamSubjects(g int) []string {
+	if l.groups() == 1 {
+		return []string{l.Prefix + ".>"}
+	}
+	var out []string
+	for k := g; k < l.Partitions; k += l.groups() {
+		out = append(out, l.PartFilter(k))
+	}
+	return out
 }
 
 func (l Layout) Stream() string         { return "SAGAJS_" + strings.ToUpper(l.Prefix) }

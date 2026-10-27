@@ -38,10 +38,12 @@ func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func newEnv(t *testing.T, partitions int) *env {
+func newEnv(t *testing.T, partitions int) *env { return newEnvGroups(t, partitions, 1) }
+
+func newEnvGroups(t *testing.T, partitions, groups int) *env {
 	t.Helper()
 	nc, js := connect(t)
-	l := Layout{Prefix: strings.ToLower(uniqueName("t")), Partitions: partitions}
+	l := Layout{Prefix: strings.ToLower(uniqueName("t")), Partitions: partitions, StreamGroups: groups}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := Setup(ctx, js, l, 3, 3*time.Second); err != nil {
@@ -189,51 +191,12 @@ func (e *env) checkBalances(balance func(int64) (int64, error), final map[string
 // 每个 CmdID 只派发一次。流被清理过时只核对剩下的部分。
 func (e *env) chainViolations() []string {
 	e.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	stream, err := e.js.Stream(ctx, e.l.Stream())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	info, err := stream.Info(ctx)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	var violations []string
 	versions := map[string][]uint64{}
 	dispatched := map[string]int{}
-	if info.State.Msgs > 0 {
-		cons, err := e.js.OrderedConsumer(ctx, e.l.Stream(), jetstream.OrderedConsumerConfig{FilterSubjects: []string{e.l.Prefix + ".*.ev.>"}})
-		if err != nil {
-			e.t.Fatal(err)
-		}
-		last, err := stream.GetLastMsgForSubject(ctx, e.l.Prefix+".*.ev.>")
-		if err == nil {
-			it, err := cons.Messages()
-			if err != nil {
-				e.t.Fatal(err)
-			}
-			for {
-				msg, err := it.Next()
-				if err != nil {
-					e.t.Fatal(err)
-				}
-				var ev Event
-				if err := json.Unmarshal(msg.Data(), &ev); err != nil {
-					e.t.Fatal(err)
-				}
-				versions[ev.Saga.ID] = append(versions[ev.Saga.ID], ev.Saga.Version)
-				if ev.Cmd != nil {
-					dispatched[ev.Cmd.CmdID]++
-				}
-				meta, _ := msg.Metadata()
-				if meta.Sequence.Stream >= last.Sequence {
-					break
-				}
-			}
-			it.Stop()
-		}
+	for _, name := range e.l.Streams() {
+		e.collectEvents(name, versions, dispatched)
 	}
+	var violations []string
 	for id, vs := range versions {
 		for i := 1; i < len(vs); i++ {
 			if vs[i] != vs[i-1]+1 {
@@ -249,4 +212,45 @@ func (e *env) chainViolations() []string {
 	}
 	sort.Strings(violations)
 	return violations
+}
+
+func (e *env) collectEvents(name string, versions map[string][]uint64, dispatched map[string]int) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	stream, err := e.js.Stream(ctx, name)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	last, err := stream.GetLastMsgForSubject(ctx, e.l.Prefix+".*.ev.>")
+	if err != nil {
+		return // 这条流没有事件
+	}
+	cons, err := e.js.OrderedConsumer(ctx, name, jetstream.OrderedConsumerConfig{FilterSubjects: []string{e.l.Prefix + ".*.ev.>"}})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	it, err := cons.Messages()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer it.Stop()
+	for {
+		msg, err := it.Next()
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		var ev Event
+		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
+			e.t.Fatal(err)
+		}
+		versions[ev.Saga.ID] = append(versions[ev.Saga.ID], ev.Saga.Version)
+		if ev.Cmd != nil {
+			dispatched[ev.Cmd.CmdID]++
+		}
+		meta, _ := msg.Metadata()
+		if meta.Sequence.Stream >= last.Sequence {
+			return
+		}
+	}
 }

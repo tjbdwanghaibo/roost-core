@@ -26,6 +26,7 @@ func main() {
 	url := flag.String("url", "", "NATS URLs")
 	prefix := flag.String("prefix", "", "subject prefix")
 	parts := flag.Int("parts", 1, "partitions")
+	groups := flag.Int("stream-groups", 1, "streams the partitions are spread over")
 	instance := flag.String("instance", "", "coordinator instance name")
 	steal := flag.Bool("steal", false, "take partitions without waiting for the lease to expire")
 	leaseTTL := flag.Duration("lease-ttl", 3*time.Second, "owner lease TTL (must match the bucket)")
@@ -45,7 +46,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	l := jslogproto.Layout{Prefix: *prefix, Partitions: *parts}
+	l := jslogproto.Layout{Prefix: *prefix, Partitions: *parts, StreamGroups: *groups}
 	ctx := context.Background()
 	switch *role {
 	case "coord":

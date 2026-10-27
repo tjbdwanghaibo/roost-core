@@ -244,7 +244,7 @@ func TestSnapshotPurgeReplayMatches(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stream, _ := e.js.Stream(ctx, e.l.Stream())
+	stream, _ := e.js.Stream(ctx, e.l.StreamOf(0))
 	info, _ := stream.Info(ctx)
 	b := e.coordinator("B", snapOpts)
 	e.takeAll(b, true)
@@ -310,4 +310,25 @@ func TestPublishOutcomeUnknownIsResolved(t *testing.T) {
 	}
 	t.Logf("unknown outcomes=%d: single resolved as Duplicate=%d, batch resolved by duplicate-id / last event=%d (publish calls %d, batches %d)",
 		coord.Stats.Unknown.Load(), coord.Stats.DupAcks.Load(), coord.Stats.ResolvedByLast.Load(), coord.Stats.PubCalls.Load(), coord.Stats.BatchCalls.Load())
+}
+
+// 分区分到两条流（各自的 leader）：布局与单写者检查不变，参与方 / 发起方在每条流上各有一个消费者。
+func TestEndToEndAcrossStreamGroups(t *testing.T) {
+	e := newEnvGroups(t, 4, 2)
+	part := e.participant(nil)
+	coord := e.coordinator("A", nil)
+	e.takeAll(coord, false)
+	all := ids("grp", 40)
+	data := map[string]TransferData{}
+	for i, id := range all {
+		data[id] = e.transfer(i, i%3 == 0)
+	}
+	e.startAll(all, data, 60*time.Second)
+	e.checkBalances(balanceOf(part), e.client.Latest(), all)
+	if v := e.chainViolations(); len(v) > 0 {
+		t.Fatalf("event chain violations:\n%s", strings.Join(v, "\n"))
+	}
+	if got := e.l.Streams(); len(got) != 2 {
+		t.Fatalf("streams %v", got)
+	}
 }
