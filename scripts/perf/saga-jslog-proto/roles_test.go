@@ -2,7 +2,7 @@ package jslogproto
 
 // kill -9 用例的进程入口：测试二进制带 SAGAJS_ROLE_ARGS 启动时不跑测试，按参数起协调器或参与方。
 // 放在测试文件里（而不是 cmd/ 下的 main）：要连 Mongo 驱动，而根包门禁只许测试代码与 wiring 链接驱动。
-//   -role coord：等租约过期后接管全部分区；-project 时同进程跑 saga 冷副本投影。
+//   -role coord：等租约过期后接管全部分区；-cold-copy 时同进程跑 saga 冷副本投影（缺省关闭，维护者 2026-10-27 第三轮）。
 //   -role part：从 WAL（投影关闭）或 Mongo + WAL 尾巴（投影打开）恢复后开始消费，并在 sagajs_admin.<prefix>.balances
 //   （流外的 subject）上回答余额查询。
 // 就绪后在标准输出打一行 "ready ..."。Mongo 地址只经环境变量 SAGAJS_MONGO_URI 传入，不打印。
@@ -55,7 +55,8 @@ func roleMain(args []string) int {
 	accounts := fs.Int("accounts", 64, "participant accounts")
 	workers := fs.Int("workers", 16, "participant workers")
 	durability := fs.String("durability", "strict", "strict | pipelined")
-	project := fs.Bool("project", false, "Mongo projection on (SAGAJS_MONGO_URI)")
+	project := fs.Bool("project", false, "participant: DataEngine Mongo projection on (SAGAJS_MONGO_URI)")
+	coldCopy := fs.Bool("cold-copy", false, "coordinator: saga cold-copy projection on (SAGAJS_MONGO_URI)")
 	database := fs.String("db", "", "unique Mongo database")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -71,7 +72,7 @@ func roleMain(args []string) int {
 		return fail(err)
 	}
 	var mongo fmongo.IMongo
-	if *project {
+	if *project || *coldCopy {
 		if mongo, err = newMongo(os.Getenv("SAGAJS_MONGO_URI")); err != nil {
 			return fail(err)
 		}
@@ -81,7 +82,7 @@ func roleMain(args []string) int {
 	switch *role {
 	case "coord":
 		guards := []string{"part_acct"}
-		if mongo != nil {
+		if *coldCopy {
 			sp := NewSagaProjector(js, l, mongo, *database, log)
 			if err := sp.Start(ctx); err != nil {
 				return fail(err)

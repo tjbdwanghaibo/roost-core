@@ -38,11 +38,45 @@ func (e *env) checkMongoAccounts(p *Participant) {
 	}
 }
 
+// 冷副本开启（可选配置）：全部事件与只投影终态两种。
 func TestProjectedEndToEnd(t *testing.T) {
+	t.Run("all_events", func(t *testing.T) { projectedEndToEnd(t, false) })
+	t.Run("terminal_only", func(t *testing.T) { projectedEndToEnd(t, true) })
+}
+
+// 缺省配置：参与方投影开、冷副本关；清理守卫不等冷副本。
+func TestParticipantProjectionWithoutColdCopy(t *testing.T) {
 	e := newEnv(t, 4)
 	e.withMongo()
 	part := e.participant(nil)
-	sp := e.sagaProjector()
+	coord := e.coordinator("A", func(o *CoordinatorOptions) { o.SnapshotEvery = 10 })
+	e.takeAll(coord, false)
+	all := ids("pp", 80)
+	data := map[string]TransferData{}
+	for i, id := range all {
+		data[id] = e.transfer(i, i%4 == 0)
+	}
+	e.startAll(all, data, 60*time.Second)
+	e.checkBalances(balanceOf(part), e.client.Latest(), all)
+	e.checkMongoAccounts(part)
+	if coord.Stats.Purges.Load() == 0 {
+		t.Fatalf("with the cold copy off the purge guard must not wait for it: purges=%d", coord.Stats.Purges.Load())
+	}
+}
+
+func projectedEndToEnd(t *testing.T, terminalOnly bool) {
+	e := newEnv(t, 4)
+	e.withMongo()
+	part := e.participant(nil)
+	sp := NewSagaProjector(e.js, e.l, e.mongo, e.db, quietLog())
+	sp.TerminalOnly = terminalOnly
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := sp.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sp.Stop)
+	e.proj = sp
 	coord := e.coordinator("A", nil)
 	e.takeAll(coord, false)
 	all := ids("prj", 100)

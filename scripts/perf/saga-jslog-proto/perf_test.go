@@ -24,6 +24,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 func envInt(name string, def int) int {
@@ -63,23 +64,31 @@ type perfResult struct {
 	CoordPubAvgMs  float64 `json:"coordinator_publish_avg_ms"`
 	// 投影积压（投影打开时）：参与方 WAL 未确认记录、冷副本未投影事件的峰值，折算成 saga 笔数（÷ 每笔条数），
 	// 与在途笔数（闭环并发）比较；停止加压后两者归零的耗时；冷副本与终态、Mongo 账户与内存的逐笔差异。
-	PartBacklogPeak  uint64  `json:"participant_backlog_peak_records"`
-	SagaBacklogPeak  uint64  `json:"saga_backlog_peak_events"`
-	BacklogPeakSagas float64 `json:"backlog_peak_sagas"`
-	BacklogRatio     float64 `json:"backlog_peak_over_inflight"`
-	CatchUpMs        float64 `json:"catch_up_ms"`
-	ColdDiffs        int     `json:"cold_copy_diffs"`
-	MongoAcctDiffs   int     `json:"mongo_account_diffs"`
-	RereadChecked    int     `json:"reread_checked"`
-	RereadPruned     int     `json:"reread_pruned_by_retention"`
-	SnapshotEvery    int     `json:"snapshot_every"`
-	ReplayMsgs       uint64  `json:"replay_msgs"`
-	ReplayMs         float64 `json:"replay_ms"`
-	Snapshots        uint64  `json:"snapshots"`
-	Purges           uint64  `json:"purges"`
-	Unknown          uint64  `json:"publish_unknown"`
-	LoadBefore       string  `json:"loadavg_before"`
-	StartedAt        string  `json:"started_at"`
+	PartBacklogPeak     uint64  `json:"participant_backlog_peak_records"`
+	SagaBacklogPeak     uint64  `json:"saga_backlog_peak_events"`
+	BacklogPeakSagas    float64 `json:"backlog_peak_sagas"`
+	BacklogRatio        float64 `json:"backlog_peak_over_inflight"`
+	CatchUpMs           float64 `json:"catch_up_ms"`
+	Drained             bool    `json:"drained"`
+	ProjectedDuringLoad uint64  `json:"participant_projected_during_load"`
+	ProjRateDuringLoad  float64 `json:"participant_projection_rate_during_load"`
+	PartBacklogAtStop   uint64  `json:"participant_backlog_at_stop"`
+	PartBacklogLeft     uint64  `json:"participant_backlog_left_after_catchup"`
+	CatchUpRate         float64 `json:"participant_projection_rate_catchup"`
+	MongoCallsPerRecord float64 `json:"participant_mongo_calls_per_record"`
+	MongoAcctChecked    bool    `json:"mongo_accounts_checked"`
+	ColdDiffs           int     `json:"cold_copy_diffs"`
+	MongoAcctDiffs      int     `json:"mongo_account_diffs"`
+	RereadChecked       int     `json:"reread_checked"`
+	RereadPruned        int     `json:"reread_pruned_by_retention"`
+	SnapshotEvery       int     `json:"snapshot_every"`
+	ReplayMsgs          uint64  `json:"replay_msgs"`
+	ReplayMs            float64 `json:"replay_ms"`
+	Snapshots           uint64  `json:"snapshots"`
+	Purges              uint64  `json:"purges"`
+	Unknown             uint64  `json:"publish_unknown"`
+	LoadBefore          string  `json:"loadavg_before"`
+	StartedAt           string  `json:"started_at"`
 }
 
 func percentile(sorted []float64, p float64) float64 {
@@ -158,10 +167,11 @@ func TestPerfClosedLoop(t *testing.T) {
 			_ = f.Close()
 		}
 		if r.Projection {
-			t.Logf("%s c%d projection: backlog peak participant %d records / saga %d events = %.1f sagas (%.2f × in-flight %d); catch-up %.0f ms; cold diffs %d; mongo account diffs %d",
-				label, conc, r.PartBacklogPeak, r.SagaBacklogPeak, r.BacklogPeakSagas, r.BacklogRatio, conc, r.CatchUpMs, r.ColdDiffs, r.MongoAcctDiffs)
+			t.Logf("%s c%d projection(%s): backlog peak participant %d records / saga %d events = %.1f sagas (%.2f × in-flight %d); drained=%v catch-up %.0f ms (left %d); projection rate load %.1f/s catch-up %.1f/s; mongo calls/record %.2f; cold diffs %d; mongo account diffs %d (checked=%v)",
+				label, conc, r.ProjectionMode, r.PartBacklogPeak, r.SagaBacklogPeak, r.BacklogPeakSagas, r.BacklogRatio, conc, r.Drained, r.CatchUpMs, r.PartBacklogLeft,
+				r.ProjRateDuringLoad, r.CatchUpRate, r.MongoCallsPerRecord, r.ColdDiffs, r.MongoAcctDiffs, r.MongoAcctChecked)
 		}
-		if !r.BalancesOK || !r.RereadOK || r.Unexpected > 0 || r.ColdDiffs > 0 || r.MongoAcctDiffs > 0 {
+		if !r.BalancesOK || !r.RereadOK || r.Unexpected > 0 || r.ColdDiffs > 0 || r.MongoAcctDiffs > 0 || (r.Projection && !r.Drained && os.Getenv("SAGAJS_PERF_ALLOW_UNDRAINED") != "1") {
 			t.Errorf("%s c%d: verification failed (balances=%v reread=%v unexpected=%d)", label, conc, r.BalancesOK, r.RereadOK, r.Unexpected)
 		}
 	}
@@ -175,21 +185,25 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	e.pairs = 256
 	walDir := filepath.Join(walRoot, e.l.Prefix)
 	defer os.RemoveAll(walDir)
-	// SAGAJS_PERF_PROJECTION=1 两边都投影；part / saga 只开一边（定位用）。
+	// SAGAJS_PERF_PROJECTION：part = 只开参与方投影（维护者 2026-10-27 第三轮定的缺省口径）；all（或 1）= 参与方 + saga 冷副本；
+	// saga = 只开冷副本（定位用）；off / 0 / 空 = 都不开。
 	mode := os.Getenv("SAGAJS_PERF_PROJECTION")
-	projection := mode == "1"
+	partProj := mode == "part" || mode == "all" || mode == "1"
+	coldProj := mode == "saga" || mode == "all" || mode == "1"
+	projection := partProj || coldProj
 	r.Projection = projection
 	r.ProjectionMode = mode
 	var sp *SagaProjector
-	if mode != "" && mode != "0" {
+	if projection {
 		e.withMongo()
 	}
-	if projection || mode == "saga" {
+	if coldProj {
 		sp = e.sagaProjector()
 	}
-	partMongo := e.mongo
-	if mode == "saga" {
-		partMongo = nil
+	var mongoCalls atomic.Uint64
+	var partMongo fmongo.IMongo
+	if partProj {
+		partMongo = countingMongo{IMongo: e.mongo, calls: &mongoCalls}
 	}
 	part, err := NewParticipant(e.nc, e.js, ParticipantOptions{Layout: e.l, WALDir: walDir, Accounts: e.pairs * 2, InitialBal: initialBalance,
 		Workers: 64, Durability: durability, Log: quietLog(), Mongo: partMongo, Database: e.db})
@@ -204,6 +218,7 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 	coord := e.coordinator("A", func(o *CoordinatorOptions) { o.SnapshotEvery, o.Retention = snapEvery, retention })
 	e.takeAll(coord, false)
 	syncs0 := part.WALSyncs()
+	projected0, calls0 := part.ProjectedRecords(), mongoCalls.Load()
 
 	type sample struct {
 		id         string
@@ -232,14 +247,16 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 					return
 				case <-tick.C:
 				}
-				if n := part.ProjectionBacklog(); n > r.PartBacklogPeak {
+				if n := part.ProjectionBacklog(); partProj && n > r.PartBacklogPeak {
 					r.PartBacklogPeak = n
 				}
-				bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				if n, err := sp.Backlog(bctx); err == nil && n > r.SagaBacklogPeak {
-					r.SagaBacklogPeak = n
+				if coldProj {
+					bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					if n, err := sp.Backlog(bctx); err == nil && n > r.SagaBacklogPeak {
+						r.SagaBacklogPeak = n
+					}
+					cancel()
 				}
-				cancel()
 			}
 		}()
 	} else {
@@ -274,21 +291,43 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		}(w)
 	}
 	wg.Wait()
+	loadElapsed := time.Since(begin)
 	if projection {
 		close(samplerStop)
 		<-samplerDone
-		// 停止加压后两边积压归零的耗时（上限 60s；门槛 30s）。
+		r.ProjectedDuringLoad = part.ProjectedRecords() - projected0
+		r.ProjRateDuringLoad = float64(r.ProjectedDuringLoad) / loadElapsed.Seconds()
+		r.PartBacklogAtStop = part.ProjectionBacklog()
+		// 停止加压后两边积压归零的耗时（上限 SAGAJS_PERF_CATCHUP_MAX_S，缺省 60s；门槛 30s）。追不平时记剩余积压与这段时间的投影速率。
+		catchMax := time.Duration(envInt("SAGAJS_PERF_CATCHUP_MAX_S", 60)) * time.Second
 		catchBegin := time.Now()
-		for time.Since(catchBegin) < 60*time.Second {
-			bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			n, err := sp.Backlog(bctx)
-			cancel()
-			if err == nil && n == 0 && part.ProjectionBacklog() == 0 {
+		projectedAtStop := part.ProjectedRecords()
+		for {
+			drained := true
+			if coldProj {
+				bctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				n, err := sp.Backlog(bctx)
+				cancel()
+				drained = err == nil && n == 0
+			}
+			if partProj && part.ProjectionBacklog() != 0 {
+				drained = false
+			}
+			if drained {
+				r.Drained = true
+				break
+			}
+			if time.Since(catchBegin) >= catchMax {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
 		r.CatchUpMs = float64(time.Since(catchBegin).Microseconds()) / 1000
+		r.CatchUpRate = float64(part.ProjectedRecords()-projectedAtStop) / time.Since(catchBegin).Seconds()
+		r.PartBacklogLeft = part.ProjectionBacklog()
+		if projected := part.ProjectedRecords() - projected0; projected > 0 {
+			r.MongoCallsPerRecord = float64(mongoCalls.Load()-calls0) / float64(projected)
+		}
 		recordsPerSaga, eventsPerSaga := 2.0, 3.0
 		if scenario == "compensate" {
 			recordsPerSaga, eventsPerSaga = 3.0, 4.0
@@ -366,28 +405,33 @@ func runPerfLevel(t *testing.T, scenario string, durability nest.DurabilityPolic
 		return ok
 	}()
 
-	if projection {
-		// 冷副本与观察到的终态逐笔核对；Mongo 账户与参与方内存逐账户核对。
-		cctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		cold, err := sp.ColdState(cctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, id := range all {
-			f, c := final[id], cold[id]
-			if f != nil && (c.ID == "" || uint64(c.Version) != f.Version || c.Status != string(f.Status)) {
-				r.ColdDiffs++
+	if projection && r.Drained {
+		// 冷副本与观察到的终态逐笔核对；Mongo 账户与参与方内存逐账户核对。只在追平之后做（追不平如实记 drained=false）。
+		cctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		if coldProj {
+			cold, err := sp.ColdState(cctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range all {
+				f, c := final[id], cold[id]
+				if f != nil && (c.ID == "" || uint64(c.Version) != f.Version || c.Status != string(f.Status)) {
+					r.ColdDiffs++
+				}
 			}
 		}
-		mongoBal, err := part.MongoBalances(cctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for n := int64(0); n < int64(e.pairs*2); n++ {
-			mem, err := part.Balance(cctx, n)
-			if err != nil || mongoBal[accountEntityID(n)] != mem {
-				r.MongoAcctDiffs++
+		if partProj {
+			mongoBal, err := part.MongoBalances(cctx)
+			if err != nil {
+				t.Fatal(err)
 			}
+			for n := int64(0); n < int64(e.pairs*2); n++ {
+				mem, err := part.Balance(cctx, n)
+				if err != nil || mongoBal[accountEntityID(n)] != mem {
+					r.MongoAcctDiffs++
+				}
+			}
+			r.MongoAcctChecked = true
 		}
 		cancel()
 	}

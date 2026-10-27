@@ -416,6 +416,9 @@ func (p *Participant) openProjected(wal *nestwal.WAL) (*engine.Projector, map[in
 // ProjectionBacklog 是参与方 WAL 里已准入、尚未投影确认的记录数（投影关闭时恒为全部记录，无意义）。
 func (p *Participant) ProjectionBacklog() uint64 { return p.projector.Stats().WALUnacked }
 
+// ProjectedRecords 是投影器累计成功投影的记录数（含幂等重放）。
+func (p *Participant) ProjectedRecords() uint64 { return p.projector.Stats().Projected }
+
 // FlushProjection 把已准入的记录全部投影进 Mongo。
 func (p *Participant) FlushProjection(ctx context.Context) error { return p.projector.Flush(ctx) }
 

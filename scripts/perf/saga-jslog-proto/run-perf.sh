@@ -68,6 +68,18 @@ case "${1:-matrix}" in
     SAGAJS_PERF_PROJECTION=1 one "proj-forward-p4g4-s2" forward 4 strict "$L"
     SAGAJS_PERF_PROJECTION=0 one "off-compensate-p4g4-s1" compensate 4 strict "$L"
     ;;
+  matrix-part)
+    # 第三轮正式口径（维护者 2026-10-27）：参与方投影开、冷副本关；P=4、缺省 4 条流，每档 30s。
+    L="1 16 64 128"
+    SAGAJS_PERF_PROJECTION=part one "part-forward-p4g4-s1" forward 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=part one "part-compensate-p4g4-s1" compensate 4 strict "$L"
+    SAGAJS_PERF_PROJECTION=part one "part-forward-p4g4-s2" forward 4 strict "$L"
+    ;;
+  cloud-part)
+    # 云 Mongo（只换参与方投影的库；调用方已把 SAGAJS_MONGO_URI 设成云库并负责脱敏）：单样本，追平最多等 SAGAJS_PERF_CATCHUP_MAX_S。
+    L="${LEVELS:-1 16 64 128}"
+    SAGAJS_PERF_PROJECTION=part SAGAJS_PERF_ALLOW_UNDRAINED=1 one "cloud-part-forward-p4g4" forward 4 strict "$L"
+    ;;
   replay)
     gate
     SAGAJS_PERF=1 SAGAJS_PERF_REPLAY_SIZES="${SIZES:-10000 50000}" "$BIN" -test.run '^TestPerfReplayVsLogSize$' -test.v -test.count=1 -test.timeout 0 2>&1 | tee -a "$OUT/replay.log"

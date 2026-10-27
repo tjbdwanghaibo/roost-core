@@ -130,7 +130,7 @@ func coordinatorKill9(t *testing.T, projected bool) {
 	common := []string{"-role", "coord", "-url", e.url(), "-prefix", e.l.Prefix, "-parts", fmt.Sprint(e.l.Partitions),
 		"-stream-groups", fmt.Sprint(e.l.StreamGroups), "-lease-ttl", "3s"}
 	if projected {
-		common = append(common, "-project", "-db", e.db)
+		common = append(common, "-cold-copy", "-db", e.db)
 	}
 	a := startProc(t, append(common, "-instance", "A")...)
 	var killed atomic.Bool

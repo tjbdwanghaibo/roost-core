@@ -157,7 +157,7 @@ func newEnvGroups(t *testing.T, partitions, groups int) *env {
 
 func (e *env) coordinator(instance string, mod func(*CoordinatorOptions)) *Coordinator {
 	guards := []string{"part_acct"}
-	if e.mongo != nil {
+	if e.proj != nil { // 冷副本开着才等它（缺省关闭）
 		guards = append(guards, SagaProjectionDurable)
 	}
 	opts := CoordinatorOptions{Layout: e.l, Instance: instance, PurgeGuards: guards, Log: quietLog(),
