@@ -1,0 +1,16 @@
+--- FAIL: TestEntityParallelSameEntityRecordsKeepWALOrder (0.20s)
+    projector_parallel_test.go:195: WAL record 0 (00000000000000000000000000000001) applied after later conflicting record 2 (00000000000000000000000000000003); applied order=[00000000000000000000000000000005 00000000000000000000000000000002 00000000000000000000000000000007 00000000000000000000000000000003 00000000000000000000000000000001 00000000000000000000000000000006 00000000000000000000000000000008 00000000000000000000000000000004]
+--- FAIL: TestEntityParallelMultiEntityRecordOrdersOverlappingRecords (0.21s)
+    projector_parallel_test.go:216: WAL record 0 (00000000000000000000000000000001) applied after later conflicting record 2 (00000000000000000000000000000003); applied order=[00000000000000000000000000000003 00000000000000000000000000000006 00000000000000000000000000000008 00000000000000000000000000000001 00000000000000000000000000000009 00000000000000000000000000000004 00000000000000000000000000000007 00000000000000000000000000000005 00000000000000000000000000000002]
+--- FAIL: TestEntityParallelFailedPrefixStopsAckAndRestartReplaysSuffixIdempotently (3.02s)
+    projector_parallel_test.go:340: the failing record did not observe the later records projected first (projection is not parallel)
+--- FAIL: TestEntityParallelFatalConflictFailStopsEveryLane (0.04s)
+    projector_parallel_test.go:423: a lane started a new unit after the conflict: [00000000000000000000000000000004 00000000000000000000000000000003 00000000000000000000000000000001]
+--- FAIL: TestPlanReplayWindowsGroupsRecordsByConflictKeys (0.00s)
+--- FAIL: TestPlanReplayWindowsAllowsFastPathOnlyForTheLastRecordOfItsKeys (0.00s)
+    projector_parallel_test.go:532: fast path=[true true true false true] want=[false false true false true]
+--- FAIL: TestEntityParallelPerRecordFastPathStopsItsLaneUntilNextPass (0.03s)
+    projector_parallel_test.go:556: first pass n=3 err=<nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	4.334s
+FAIL

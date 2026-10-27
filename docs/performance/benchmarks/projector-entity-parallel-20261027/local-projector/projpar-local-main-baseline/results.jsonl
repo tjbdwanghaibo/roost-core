@@ -1,0 +1,4 @@
+{"shape":"plain","workers":1,"records":20000,"entities":4096,"seconds":2.9189005,"records_per_sec":6851.895088578731,"projected":20000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:00:47Z"}
+{"shape":"hot","workers":1,"records":20000,"entities":4096,"seconds":2.888023208,"records_per_sec":6925.152105633633,"projected":20000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:01:13Z"}
+{"shape":"plain","workers":1,"records":20000,"entities":4096,"seconds":3.005313416,"records_per_sec":6654.879951462607,"projected":20000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:01:39Z"}
+{"shape":"hot","workers":1,"records":20000,"entities":4096,"seconds":2.992175041,"records_per_sec":6684.100938598799,"projected":20000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:02:05Z"}

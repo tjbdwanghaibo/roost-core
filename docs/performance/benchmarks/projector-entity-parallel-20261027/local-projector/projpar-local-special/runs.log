@@ -1,0 +1,8 @@
+2026-10-27 21:45:55 start round=1 shape=receipt load={{ 4.75 4.11 4.41 }} swap=5177.12M
+2026-10-27 21:47:44 end round=1 shape=receipt load={{ 4.80 4.41 4.49 }}
+2026-10-27 21:47:44 start round=1 shape=special load={{ 4.80 4.41 4.49 }} swap=5177.12M
+2026-10-27 21:52:06 end round=1 shape=special load={{ 3.80 4.02 4.29 }}
+2026-10-27 21:52:06 start round=2 shape=receipt load={{ 3.80 4.02 4.29 }} swap=5177.12M
+2026-10-27 21:53:55 end round=2 shape=receipt load={{ 4.50 4.06 4.26 }}
+2026-10-27 21:53:55 start round=2 shape=special load={{ 4.50 4.06 4.26 }} swap=5177.12M
+2026-10-27 21:58:17 end round=2 shape=special load={{ 4.50 4.02 4.15 }}

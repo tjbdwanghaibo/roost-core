@@ -1,0 +1,2 @@
+native-forward-c16	load_before=7.13	load_after=3.97	seconds=72
+native-forward-c64	load_before=3.97	load_after=4.79	seconds=74

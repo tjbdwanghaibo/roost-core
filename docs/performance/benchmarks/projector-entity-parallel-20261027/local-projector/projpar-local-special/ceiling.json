@@ -1,0 +1,123 @@
+{
+  "Version": "8.0.32",
+  "ReplicaSet": true,
+  "Members": 3,
+  "Rows": [
+    {
+      "Operation": "ping",
+      "Concurrency": 1,
+      "Failed": 0,
+      "ElapsedSeconds": 0.00898325,
+      "OpsPerSecond": 11131.828681156598,
+      "Latency": {
+        "Samples": 100,
+        "MeanMS": 0.08857999,
+        "P50MS": 0.065542,
+        "P95MS": 0.240333,
+        "P99MS": 0.340084,
+        "MaxMS": 0.429042
+      },
+      "Verified": true
+    },
+    {
+      "Operation": "update",
+      "Concurrency": 1,
+      "Failed": 0,
+      "ElapsedSeconds": 5.007084167,
+      "OpsPerSecond": 101.65597042579132,
+      "Latency": {
+        "Samples": 509,
+        "MeanMS": 9.827946685658153,
+        "P50MS": 9.063792,
+        "P95MS": 13.234334,
+        "P99MS": 13.713584,
+        "MaxMS": 19.628709
+      },
+      "Server": {
+        "WriteOps": 509,
+        "CommandOps": 3050,
+        "TxnCommitted": 0,
+        "WriteMeanMicros": 9447.980353634577,
+        "CommandMeanMicros": 34.03901639344262,
+        "WTLogSyncs": 509,
+        "WTLogSyncMeanMicros": 7034.390962671906
+      },
+      "Verified": true
+    },
+    {
+      "Operation": "update",
+      "Concurrency": 16,
+      "Failed": 0,
+      "ElapsedSeconds": 5.011198833,
+      "OpsPerSecond": 1174.968345144488,
+      "Latency": {
+        "Samples": 5888,
+        "MeanMS": 13.604679344769021,
+        "P50MS": 13.115708,
+        "P95MS": 17.876958,
+        "P99MS": 24.153459,
+        "MaxMS": 58.911875
+      },
+      "Server": {
+        "WriteOps": 5888,
+        "CommandOps": 6995,
+        "TxnCommitted": 0,
+        "WriteMeanMicros": 12962.51460597826,
+        "CommandMeanMicros": 48.08205861329521,
+        "WTLogSyncs": 568,
+        "WTLogSyncMeanMicros": 8466.987676056338
+      },
+      "Verified": true
+    },
+    {
+      "Operation": "txn1",
+      "Concurrency": 1,
+      "Failed": 0,
+      "ElapsedSeconds": 5.002932,
+      "OpsPerSecond": 95.94373859168982,
+      "Latency": {
+        "Samples": 480,
+        "MeanMS": 10.413963975,
+        "P50MS": 9.80125,
+        "P95MS": 13.743541,
+        "P99MS": 14.59025,
+        "MaxMS": 21.723917
+      },
+      "Server": {
+        "WriteOps": 480,
+        "CommandOps": 3358,
+        "TxnCommitted": 480,
+        "WriteMeanMicros": 197.32291666666666,
+        "CommandMeanMicros": 1400.3362120309707,
+        "WTLogSyncs": 480,
+        "WTLogSyncMeanMicros": 7016.120833333333
+      },
+      "Verified": true
+    },
+    {
+      "Operation": "txn1",
+      "Concurrency": 16,
+      "Failed": 0,
+      "ElapsedSeconds": 5.01253775,
+      "OpsPerSecond": 1042.7851640618567,
+      "Latency": {
+        "Samples": 5227,
+        "MeanMS": 15.3203040640903,
+        "P50MS": 14.980709,
+        "P95MS": 21.34625,
+        "P99MS": 24.866167,
+        "MaxMS": 40.818417
+      },
+      "Server": {
+        "WriteOps": 5227,
+        "CommandOps": 11524,
+        "TxnCommitted": 5227,
+        "WriteMeanMicros": 100.63554620241057,
+        "CommandMeanMicros": 6531.359597362027,
+        "WTLogSyncs": 528,
+        "WTLogSyncMeanMicros": 9151.967803030304
+      },
+      "Verified": true
+    }
+  ]
+}

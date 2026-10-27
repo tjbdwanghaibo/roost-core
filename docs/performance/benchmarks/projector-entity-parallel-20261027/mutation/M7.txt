@@ -1,0 +1,5 @@
+--- FAIL: TestEntityParallelFatalConflictFailStopsEveryLane (0.04s)
+    projector_parallel_test.go:423: a lane started a new unit after the conflict: [00000000000000000000000000000001 00000000000000000000000000000003]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.579s
+FAIL

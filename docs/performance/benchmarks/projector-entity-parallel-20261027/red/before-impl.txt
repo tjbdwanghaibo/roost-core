@@ -1,0 +1,9 @@
+--- FAIL: TestEntityParallelIndependentEntityCompletesWhileFirstIsBlocked (5.07s)
+    projector_parallel_test.go:164: timed out waiting for independent entity projected while the first is blocked
+--- FAIL: TestEntityParallelFailedPrefixStopsAckAndRestartReplaysSuffixIdempotently (3.02s)
+    projector_parallel_test.go:340: the failing record did not observe the later records projected first (projection is not parallel)
+--- FAIL: TestEntityParallelFatalConflictFailStopsEveryLane (0.03s)
+    projector_parallel_test.go:412: n=0 err=dataengine projector: segment first_transaction=00000000000000000000000000000001 records=2: stored version is newer: dataengine mongo: fatal projection version conflict
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	10.062s
+FAIL

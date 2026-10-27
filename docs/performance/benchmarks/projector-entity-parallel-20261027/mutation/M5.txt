@@ -1,0 +1,6 @@
+--- FAIL: TestEntityParallelEffectRecordsKeepWALOrderAcrossEntities (0.19s)
+    projector_parallel_test.go:240: WAL record 0 (00000000000000000000000000000001) applied after later conflicting record 2 (00000000000000000000000000000003); applied order=[00000000000000000000000000000003 00000000000000000000000000000005 00000000000000000000000000000001 00000000000000000000000000000004 00000000000000000000000000000002]
+--- FAIL: TestPlanReplayWindowsGroupsRecordsByConflictKeys (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.357s
+FAIL

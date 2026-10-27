@@ -1,0 +1,5 @@
+--- FAIL: TestRealMongoParallelProjectionReplaysSuccessfulSuffixAfterRestart (0.57s)
+    projector_parallel_integration_test.go:85: replay after restart err=dataengine projector: parallel window stopped after 1/4 records: transaction 00000000000000000000000000000002: transaction 00000000000000000000000000000002: dataengine mongo: fatal projection version conflict: <db>/heroes/8 (physical database <db>) expected=1 next=2 stored=4 fatal=transaction 00000000000000000000000000000002: transaction 00000000000000000000000000000002: dataengine mongo: fatal projection version conflict: <db>/heroes/8 (physical database <db>) expected=1 next=2 stored=4
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.178s
+FAIL

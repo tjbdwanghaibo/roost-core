@@ -1,0 +1,5 @@
+--- FAIL: TestEntityParallelFailedPrefixStopsAckAndRestartReplaysSuffixIdempotently (0.03s)
+    projector_parallel_test.go:362: replay after restart: dataengine projector: parallel window stopped after 1/4 records: transaction 00000000000000000000000000000002: transaction 00000000000000000000000000000002: dataengine mongo: fatal projection version conflict: game/heroes/8 (physical database game) expected=1 next=2 stored=4
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.619s
+FAIL

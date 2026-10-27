@@ -1,0 +1,2 @@
+{"shape":"receipt","workers":1,"records":3000,"entities":4096,"seconds":48.923077209,"records_per_sec":61.32075435860182,"projected":3000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:02:36Z"}
+{"shape":"special","workers":1,"records":3000,"entities":4096,"seconds":50.472816333,"records_per_sec":59.43793546623528,"projected":3000,"parallel_windows":0,"avg_lanes":0,"verified":true,"started":"2026-10-27T14:03:29Z"}

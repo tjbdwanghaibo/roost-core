@@ -1,0 +1,9 @@
+--- FAIL: TestEntityParallelFailedPrefixStopsAckAndRestartReplaysSuffixIdempotently (0.03s)
+    projector_parallel_test.go:337: first pass n=4 err=dataengine projector: parallel window stopped after 4/4 records: transaction 00000000000000000000000000000001: injected transient projection failure
+--- FAIL: TestEntityParallelFatalConflictFailStopsEveryLane (0.04s)
+    projector_parallel_test.go:420: processed=4, want the successful prefix of 1
+--- FAIL: TestEntityParallelPerRecordFastPathStopsItsLaneUntilNextPass (0.03s)
+    projector_parallel_test.go:556: first pass n=3 err=<nil>
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	1.552s
+FAIL

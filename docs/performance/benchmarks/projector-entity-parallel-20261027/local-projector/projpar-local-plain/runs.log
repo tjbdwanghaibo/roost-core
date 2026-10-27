@@ -1,0 +1,8 @@
+2026-10-27 21:37:05 start round=1 shape=plain load={{ 3.86 4.50 4.75 }} swap=5185.12M
+2026-10-27 21:39:11 end round=1 shape=plain load={{ 5.83 4.64 4.74 }}
+2026-10-27 21:39:11 start round=1 shape=hot load={{ 5.83 4.64 4.74 }} swap=5177.12M
+2026-10-27 21:41:17 end round=1 shape=hot load={{ 4.39 4.55 4.70 }}
+2026-10-27 21:41:17 start round=2 shape=plain load={{ 4.39 4.55 4.70 }} swap=5177.12M
+2026-10-27 21:43:24 end round=2 shape=plain load={{ 3.02 3.95 4.43 }}
+2026-10-27 21:43:24 start round=2 shape=hot load={{ 3.02 3.95 4.43 }} swap=5177.12M
+2026-10-27 21:45:31 end round=2 shape=hot load={{ 3.62 3.90 4.34 }}
