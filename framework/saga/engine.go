@@ -3,12 +3,8 @@ package saga
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -228,11 +224,9 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
 		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
 	}
-	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
-	request.ID = strings.TrimSpace(request.ID)
-	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
-	if request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > e.opts.MaxPayloadBytes {
-		return Record{}, ErrInvalidRecord
+	request, err := prepareStart(request, e.opts.MaxPayloadBytes)
+	if err != nil {
+		return Record{}, err
 	}
 	now := request.Now.UTC()
 	if now.IsZero() {
@@ -242,16 +236,11 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	if id == "" {
 		id = NewID()
 	}
-	record := Record{ID: id, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
-	// Data / DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
-	intentDigest, err := startIntentDigest(request)
+	record, err := newStartRecord(request, id, now)
 	if err != nil {
 		return Record{}, err
 	}
-	record.StartDigest = intentDigest
-	if err := record.Validate(); err != nil {
-		return Record{}, err
-	}
+	intentDigest := record.StartDigest
 	hoptrace.Mark("timeline/start.begin/", record.ID)
 	createStart := hoptrace.Now()
 	err = e.store.Create(ctx, record)
@@ -280,25 +269,6 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	return record.Clone(), nil
 }
 
-// startIntentDigest 使用规范化后的启动请求；ID 单独校验，Now 只用于首次调度。
-// JSON 的 omitempty 保持既有 nil/空 Data 等价；UTC 毫秒截止时间与 Mongo 精度一致。
-func startIntentDigest(request StartRequest) (string, error) {
-	// 固定摘要格式，不因以后 StartRequest 增加选项而改变既存记录的身份。
-	intent := struct {
-		Type              string    `json:"type"`
-		BusinessKey       string    `json:"business_key"`
-		DefinitionVersion uint32    `json:"definition_version"`
-		Data              []byte    `json:"data,omitempty"`
-		DeadlineAt        time.Time `json:"deadline_at,omitempty"`
-	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt}
-	raw, err := json.Marshal(intent)
-	if err != nil {
-		return "", fmt.Errorf("%w: start intent digest: %v", ErrInvalidRecord, err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
-}
-
 // Get 读取一条 saga 记录。
 func (e *Engine) Get(ctx context.Context, id string) (Record, error) { return e.store.Get(ctx, id) }
 
@@ -322,53 +292,19 @@ func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
 
 // Resume 在运维或自动修复消除原因之后重试一个失败终态。Completed 与 Compensated 的 saga 不能 Resume。
 func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, error) {
-	request.ID = strings.TrimSpace(request.ID)
-	if !validSubjectToken(request.ID, 128) || (request.ClearDeadline && !request.DeadlineAt.IsZero()) {
-		return Record{}, ErrInvalidRecord
-	}
-	now := request.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	deadline := canonicalDeadline(request.DeadlineAt)
-	if !deadline.IsZero() && !deadline.After(now) {
-		return Record{}, ErrDeadlineExpired
+	request, deadline, err := prepareResume(request, time.Now())
+	if err != nil {
+		return Record{}, err
 	}
 	for attempts := 0; attempts < 8; attempts++ {
 		record, err := e.store.Get(ctx, request.ID)
 		if err != nil {
 			return Record{}, err
 		}
-		if record.Status != StatusFailed && record.Status != StatusManualRequired {
-			return Record{}, fmt.Errorf("saga: status %d cannot resume", record.Status)
-		}
-		if _, ok := e.definition(record.Type, record.DefinitionVersion); !ok {
-			return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, record.Type, record.DefinitionVersion)
-		}
-		after := record.Clone()
-		after.Version++
-		after.UpdatedAt = now
-		after.Attempt = 0
-		after.LastError = ""
-		after.CommandID = ""
-		after.OperationKey = ""
-		after.NextRunAt = now
-		if request.ClearDeadline {
-			after.DeadlineAt = time.Time{}
-		} else if !deadline.IsZero() {
-			after.DeadlineAt = deadline
-		} else if after.Phase == PhaseForward && !after.DeadlineAt.IsZero() && !now.Before(after.DeadlineAt) {
-			return Record{}, ErrDeadlineExpired
-		}
-		clearLease(&after)
-		if record.Phase == PhaseCompensate || record.CompletedSteps > 0 || record.LateStep > 0 {
-			// 补偿：先补放弃后才生效的那一步（saga 方向 ④），再按倒序补已完成的前缀。
-			after = nextCompensation(after, now)
-		} else {
-			after.Phase = PhaseForward
-			after.Status = StatusPending
+		_, defined := e.definition(record.Type, record.DefinitionVersion)
+		after, err := planResume(record, defined, request, deadline)
+		if err != nil {
+			return Record{}, err
 		}
 		// 新一生（Incarnation+1）由 stepTransition 开：之后的 CommandID 与 Resume 之前的所有回执不相交。
 		written, _, err := e.stepTransition(ctx, record, after, transition{cause: causeResume})
@@ -401,22 +337,14 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 		if err != nil {
 			return Record{}, err
 		}
-		if record.Status == StatusCompensated || record.Status == StatusCompensating {
-			return record, nil
+		// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程，
+		// 不能带回 Compensating 逐步撤销（维护者 2026-10-07 选 A）。规则全在 planCompensate。
+		after, write, err := planCompensate(record, reason, now)
+		if !write {
+			return after, err
 		}
-		if record.Status == StatusWaiting {
-			return Record{}, fmt.Errorf("saga: cannot force compensation while a step result is in flight")
-		}
-		if record.Status == StatusCompleted {
-			// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程，
-			// 不能带回 Compensating 逐步撤销（维护者 2026-10-07 选 A）。
-			return record, ErrSagaCompleted
-		}
-		if record.CompletedSteps == 0 && record.LateStep == 0 {
-			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
-		}
-		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 stepTransition 决定。
-		written, _, err := e.stepTransition(ctx, record, e.beginCompensation(record, reason, now), transition{cause: causeManualCompensate})
+		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 planTransition 决定。
+		written, _, err := e.stepTransition(ctx, record, after, transition{cause: causeManualCompensate})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -502,68 +430,6 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	return Record{}, ErrConflict
 }
 
-// completionVerdict 是 judgeCompletion 的结论，Complete 按它走四个去向之一。
-type completionVerdict int
-
-const (
-	// verdictAccept：接收为记录所停操作的结果（applyCompletion + stepTransition，成功时带结果关闭这个操作）。
-	verdictAccept completionVerdict = iota
-	// verdictHistory：记录不在这个操作上（或没在等这个结论），按回执与 tombstone 判断（completeNotWaiting）：
-	// 已带结果关闭 → 重复；放弃关闭后迟到的成功 → 补偿这一步（方向 ④）或告警；从没开过 → ErrNotWaiting。
-	verdictHistory
-	// verdictStaleIncarnation：上一生的拒绝 / 失败（B1），或协调器不可能产生的更新代际；只计数。
-	verdictStaleIncarnation
-	// verdictStaleAttempt：较早一次尝试的可重试失败（方向 ③）；只计数。
-	verdictStaleAttempt
-)
-
-// judgeCompletion 是 saga 完成判定的唯一规则（不再按记录状态逐条列举分支）：
-//
-//   - 成功是操作的结论，不分代际、不分尝试：只要这个操作开过、还没有带结果关闭就接收。记录停在这个操作上（positionedAt：
-//     在等它、它在重试退避、或下一步就派发它）且 completion 所属的那一生开过它（本生：记录开着它；旧一生：CommandID 的代际
-//     更旧）时，操作必定没带结果关闭（离开后回到同一操作键只有开新一生的 Resume / 人工 Compensate，且都不会回到已带结果
-//     关闭的步骤），直接接收为结果；其余由回执与 tombstone 区分放弃关闭（仍接收，落点是方向 ④ 补偿这一步）、带结果关闭
-//     （重复）与从没开过（ErrNotWaiting）。
-//   - 拒绝是本生这个操作的结论：本生、记录在等这个操作时接收，从哪次尝试来都一样（收件箱让之后的尝试只回放它）。
-//   - 可重试失败是一次尝试的结论：只接收正在等的那次尝试的（方向 ③）。
-//   - 比记录还新的代际协调器不可能产生，一律不接收。
-//
-// 收件箱的每操作状态文档保证同一操作至多一次生效，所以“未带结果关闭的成功”就是还没计过的那一次。
-func judgeCompletion(record Record, completion Completion, incarnation uint32) completionVerdict {
-	operation := completion.IdempotencyKey
-	switch {
-	case incarnation > record.Incarnation:
-		return verdictStaleIncarnation
-	case completion.Success:
-		// 协调器开过这个操作（本生开着它，或 completion 所属的旧一生派发过它）且记录还停在它上面：接收为结果。
-		opened := openOperation(record) == operation || incarnation < record.Incarnation
-		if opened && positionedAt(record, operation) {
-			return verdictAccept
-		}
-		return verdictHistory
-	case incarnation != record.Incarnation:
-		return verdictStaleIncarnation
-	case record.Status != StatusWaiting || record.OperationKey != operation:
-		return verdictHistory
-	case completion.Retryable && completion.CommandID != record.CommandID:
-		return verdictStaleAttempt
-	default:
-		return verdictAccept
-	}
-}
-
-// positionedAt 判断记录是否正停在这个操作上：在等它的某次尝试，或者下一步就要派发它（重试退避中、Resume 之后还没派发）。
-func positionedAt(record Record, operation string) bool {
-	switch record.Status {
-	case StatusWaiting:
-		return record.OperationKey == operation
-	case StatusPending, StatusCompensating:
-		return operationKey(record.ID, record.Phase, record.Step) == operation
-	default:
-		return false
-	}
-}
-
 // completeNotWaiting 处理协调器不接收的 completion：已记录的按重复确认；放弃关闭之后才到的正向成功交给
 // compensateLateStep 补偿那一步（saga 方向 ④），补偿方向的只告警，按（操作，completion 的代际）只告警一次（B1）；
 // 协调器既不在等、也没有记录的返回 ErrNotWaiting。写记录冲突时返回 ErrConflict，由 Complete 重读重试。
@@ -572,13 +438,13 @@ func (e *Engine) completeNotWaiting(ctx context.Context, record Record, completi
 	if err != nil {
 		return Record{}, err
 	}
-	if !history.Recorded {
+	verdict, step := judgeHistory(record, completion, history)
+	switch verdict {
+	case historyNotWaiting:
 		return Record{}, ErrNotWaiting
-	}
-	if completion.Success && !history.Receipt && history.Closure == OperationAbandoned {
-		if step, ok := lateForwardStep(record, completion.IdempotencyKey); ok {
-			return e.compensateLateStep(ctx, record, completion, step)
-		}
+	case historyLateStep:
+		return e.compensateLateStep(ctx, record, completion, step)
+	case historyLateAlarm:
 		first, err := e.markLateSuccessAlarm(ctx, completion, incarnation)
 		if err != nil {
 			return Record{}, err
@@ -602,35 +468,11 @@ func (e *Engine) markLateSuccessAlarm(ctx context.Context, completion Completion
 	return true, nil
 }
 
-// lateForwardStep 判断一份放弃后迟到的成功能否由协调器补偿（saga 方向 ④），返回那一步的步骤号。只处理正向操作，
-// 且记录已离开正向（补偿方向、Failed，或等运维的 ManualRequired）。下面几种按 4.3 的论证不会发生，出现时退回只告警：
-// 记录还在正向非终态、已记着另一个迟到步骤、或这一步在已完成前缀之内。
-func lateForwardStep(record Record, operation string) (int, bool) {
-	phase, step, ok := parseOperationKey(record.ID, operation)
-	if !ok || phase != PhaseForward || step < record.CompletedSteps || (record.LateStep != 0 && record.LateStep != step+1) {
-		return 0, false
-	}
-	return step, record.Phase == PhaseCompensate || record.Status == StatusFailed || record.Status == StatusManualRequired
-}
-
 // compensateLateStep 是 saga 方向 ④：第 step 步在协调器放弃之后生效了，把它补偿掉。一个 Store 事务里记下这份 completion 的回执、
-// 把 tombstone 改为带结果关闭（stepTransition 收到成功回执时的既有行为；之后的送达按回执去重），并在记录上写 LateStep / LateData：
-//
-//   - 记录在两个补偿之间（Compensating 且还没派发）或已经终态（Failed / Compensated）：立即转去补偿这一步，终态被重开；
-//   - 某个补偿在等结果或在重试退避：不打断它（它可能生效），它接收结果后 nextCompensation 先补这一步；
-//   - ManualRequired：只记下，运维 Resume / Compensate 时先补这一步（等运维的记录不自动跑）。
+// 把 tombstone 改为带结果关闭（planTransition 收到成功回执时的既有行为；之后的送达按回执去重），并在记录上写 LateStep / LateData
+// （目标状态见 lateStepState）。
 func (e *Engine) compensateLateStep(ctx context.Context, record Record, completion Completion, step int) (Record, error) {
-	now := completion.CompletedAt
-	after := record.Clone()
-	after.Version++
-	after.UpdatedAt = now
-	after.LateStep = step + 1
-	after.LateData = append([]byte(nil), completion.Data...)
-	clearLease(&after)
-	if openOperation(record) == "" && record.Status != StatusManualRequired {
-		after.LastError = fmt.Sprintf("step %d took effect after the coordinator abandoned it", step)
-		after = nextCompensation(after, now)
-	}
+	after := lateStepState(record, completion, step)
 	written, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeLateSuccess, receipt: &completion})
 	if err != nil {
 		return Record{}, err
@@ -667,35 +509,6 @@ func (e *Engine) reportReopen(before, after Record, reason string) {
 	slog.Warn("saga: reopened to compensate a step that took effect after the coordinator abandoned it",
 		"saga_id", before.ID, "saga_type", before.Type, "from_status", from, "reason", reason,
 		"late_step", after.LateStep-1, "status", after.Status.String(), "version", after.Version)
-}
-
-// nextCompensation 选下一个要补偿的步骤：先补放弃后才生效的那一步（LateStep，saga 方向 ④），再按 CompletedSteps 倒序；
-// 都补完是 Compensated。开始补偿（compensationState）、补偿成功（applyCompletion）、Resume、迟到成功到达都经这里，
-// 选择规则只有这一处。after 的版本、时间、错误由调用方设置。
-func nextCompensation(after Record, now time.Time) Record {
-	after.Phase = PhaseCompensate
-	after.Attempt = 0
-	after.CommandID = ""
-	after.OperationKey = ""
-	switch {
-	case after.LateStep > 0:
-		after.Status = StatusCompensating
-		after.Step = after.LateStep - 1
-		after.NextRunAt = now
-	case after.CompletedSteps > 0:
-		after.Status = StatusCompensating
-		after.Step = after.CompletedSteps - 1
-		after.NextRunAt = now
-	default:
-		after.Status = StatusCompensated
-		after.NextRunAt = time.Time{}
-	}
-	return after
-}
-
-// compensatingLateStep 表示记录当前的补偿操作是迟到的那一步（不是已完成前缀里的一步）。
-func compensatingLateStep(record Record) bool {
-	return record.Phase == PhaseCompensate && record.LateStep > 0 && record.Step == record.LateStep-1
 }
 
 // reportLateCompensation 记一次由协调器自动补偿的迟到成功（saga 方向 ④）：仍计 late_after_abandon（phase=forward），
@@ -925,81 +738,32 @@ func (e *Engine) publisherLoop(ctx context.Context) {
 	}
 }
 
+// processClaimed 处理一条已领取（持有租约）的到期记录：判定全在 planDue（与 JetStream 协调器共用），这里只负责写入
+// （带租约 fence）、计数与唤醒。
 func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Time) error {
-	definition, ok := e.definition(record.Type, record.DefinitionVersion)
-	if !ok {
-		after := record.Clone()
-		after.Status = StatusManualRequired
-		after.LastError = fmt.Sprintf("definition not registered: %s/%d", record.Type, record.DefinitionVersion)
-		after.Version++
-		after.UpdatedAt = now
-		after.NextRunAt = time.Time{}
-		after.CommandID = ""
-		after.OperationKey = ""
-		clearLease(&after)
-		// 在等结果或正在重试退避的操作都被放弃（stepTransition 关闭它）。
-		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDefinitionMissing, fenced: true})
-		if err == nil {
-			e.countTerminal(after.Status)
+	definition, defined := e.definition(record.Type, record.DefinitionVersion)
+	plan := planDue(record, definition, defined, now)
+	t := transition{cause: plan.cause, fenced: true}
+	if plan.cause != causeDispatch {
+		// 定义缺失时在等结果或正在重试退避的操作都被放弃（planTransition 关闭它）。
+		_, _, err := e.stepTransition(ctx, record, plan.after, t)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) && record.Phase == PhaseForward {
-		after := e.beginCompensation(record, "saga deadline exceeded", now)
-		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDeadline, fenced: true})
-		if err == nil {
-			e.countTerminal(after.Status)
+		switch plan.cause {
+		case causeDeadline, causeTimeout:
+			e.countTerminal(plan.after.Status)
 			e.signal(e.dueKick)
-		}
-		return err
-	}
-	if record.Status == StatusWaiting {
-		after := e.retryOrCompensate(record, definition, "step result timeout", now)
-		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeTimeout, fenced: true})
-		if err == nil {
-			e.countTerminal(after.Status)
-			e.signal(e.dueKick)
-		}
-		return err
-	}
-	step, ok := stepFor(record, definition)
-	if !ok {
-		after := record.Clone()
-		after.Status = StatusManualRequired
-		after.LastError = "invalid saga step"
-		after.Version++
-		after.UpdatedAt = now
-		clearLease(&after)
-		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeInvalidStep, fenced: true})
-		if err == nil {
+		case causeInvalidStep:
 			e.failed.Add(1)
 			e.manualRequired.Add(1)
+		default:
+			e.countTerminal(plan.after.Status)
 		}
-		return err
+		return nil
 	}
-	after := record.Clone()
-	after.Status = StatusWaiting
-	after.Attempt++
-	after.Version++
-	after.UpdatedAt = now
-	after.NextRunAt = now.Add(step.Timeout)
-	after.OperationKey = operationKey(record.ID, record.Phase, record.Step)
-	after.CommandID = commandID(after.OperationKey, after.Incarnation, after.Attempt)
-	clearLease(&after)
-	topic := step.ForwardTopic
-	if record.Phase == PhaseCompensate {
-		topic = step.CompensateTopic
-		if topic == "" {
-			topic = step.ForwardTopic + ".compensate"
-		}
-	}
-	payload := record.Data
-	if compensatingLateStep(record) {
-		// 补偿迟到生效的那一步，载荷是它自己的正向成功 Data（saga 方向 ④）。
-		payload = record.LateData
-	}
-	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), payload...), DeadlineAt: after.NextRunAt, CreatedAt: now}
-	outbox := &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
+	command := *plan.command
+	t.outbox = &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
 	if !record.NextRunAt.IsZero() && hoptrace.Enabled() {
 		// 逐跳计时：记录到期（启动、上一步结果接收、重试退避结束）→ 协调器领取并开始派发。
 		hoptrace.Observe("h01.coord.wake", time.Since(record.NextRunAt))
@@ -1010,7 +774,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	hoptrace.Mark("timeline/dispatch.begin/", command.ID)
 	dispatchStart := hoptrace.Now()
-	_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox})
+	_, _, err := e.stepTransition(ctx, record, plan.after, t)
 	hoptrace.Since("h02.dispatch.apply", dispatchStart)
 	if err == nil {
 		hoptrace.Mark("timeline/dispatch.end/", command.ID)
@@ -1021,186 +785,26 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	return err
 }
 
+// applyCompletion / retryOrCompensate 转到 transition.go 的同名纯函数；方法形式留给现有测试调用。
 func (e *Engine) applyCompletion(record Record, definition Definition, result Completion) Record {
-	now := result.CompletedAt
-	after := record.Clone()
-	after.Version++
-	after.UpdatedAt = now
-	after.CommandID = ""
-	after.OperationKey = ""
-	clearLease(&after)
-	if result.Success {
-		late := compensatingLateStep(record)
-		if result.Data != nil && !late {
-			after.Data = append(after.Data[:0], result.Data...)
-		}
-		after.Attempt = 0
-		after.LastError = ""
-		if record.Phase == PhaseForward {
-			after.CompletedSteps = record.Step + 1
-			after.Step++
-			if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) {
-				return compensationState(after, "saga deadline exceeded after step completion", now)
-			}
-			if after.Step >= len(definition.Steps) {
-				after.Status = StatusCompleted
-				after.NextRunAt = time.Time{}
-			} else {
-				after.Status = StatusPending
-				after.NextRunAt = now
-			}
-		} else {
-			if late {
-				// 迟到的那一步补偿完了（saga 方向 ④）：它不在已完成前缀里，CompletedSteps 不变；它的结果不进入 Data 链。
-				after.LateStep, after.LateData = 0, nil
-			} else {
-				after.CompletedSteps--
-			}
-			after = nextCompensation(after, now)
-		}
-		return after
-	}
-	if !result.Retryable {
-		if after.Phase == PhaseCompensate {
-			after.Status = StatusManualRequired
-			after.NextRunAt = time.Time{}
-			return after
-		}
-		return compensationState(after, result.Error, now)
-	}
-	return e.retryState(after, definition, result.Error, now)
+	return applyCompletion(record, definition, result)
 }
 
-// retryOrCompensate 是从已存记录出发的转移（领取循环的超时路径）：推进一次版本，再决定重试还是补偿。applyCompletion
-// 已经推进过版本，直接调用 retryState（见 beginCompensation）。
 func (e *Engine) retryOrCompensate(record Record, definition Definition, reason string, now time.Time) Record {
-	after := record.Clone()
-	after.Version = record.Version + 1
-	return e.retryState(after, definition, reason, now)
+	return retryOrCompensate(record, definition, reason, now)
 }
 
-// retryState 在尝试次数未用尽时安排当前步骤的下一次尝试，否则转入补偿（失败的步骤本身是补偿时转 ManualRequired）。
-// after 的版本已由调用方推进。
-func (e *Engine) retryState(after Record, definition Definition, reason string, now time.Time) Record {
-	record := after
-	after.UpdatedAt = now
-	after.LastError = reason
-	after.CommandID = ""
-	after.OperationKey = ""
-	clearLease(&after)
-	step, ok := stepFor(record, definition)
-	if !ok {
-		after.Status = StatusManualRequired
-		after.NextRunAt = time.Time{}
-		return after
+// stepTransition 把 before → after 写成一次记录转移，是 Redis 引擎写记录（Store.Apply）的唯一入口：代际与关闭由
+// planTransition 决定，ApplyRequest 只在这里构造、只在这里交给 Store，调用方拿到的是写入的记录，拿不到可改写的请求
+// （例如把 CloseOperation 清空后再写入）。fenced 时带 before 的租约。
+func (e *Engine) stepTransition(ctx context.Context, before, after Record, t transition) (Record, ApplyOutcome, error) {
+	after, closeOperation := planTransition(before, after, t)
+	request := ApplyRequest{ExpectedVersion: before.Version, After: after, Outbox: t.outbox, Receipt: t.receipt, CloseOperation: closeOperation}
+	if t.fenced {
+		request.ExpectedLease = before.Lease
 	}
-	if after.Attempt < step.MaxAttempts {
-		if after.Phase == PhaseForward {
-			after.Status = StatusPending
-		} else {
-			after.Status = StatusCompensating
-		}
-		after.NextRunAt = now.Add(backoff(record.ID, after.Attempt, step.BackoffMin, step.BackoffMax))
-		return after
-	}
-	if after.Phase == PhaseCompensate {
-		after.Status = StatusManualRequired
-		after.NextRunAt = time.Time{}
-		return after
-	}
-	return compensationState(after, reason, now)
-}
-
-// beginCompensation 是从已存记录出发的转移：推进一次版本，再把记录转成补偿状态。已经推进过版本的调用方
-// （applyCompletion、retryOrCompensate）直接用 compensationState——对已推进的副本再调用本函数会得到 expected+2，
-// MongoStore.Apply 只接受 expected+1，会把它当非法记录拒绝。
-func (e *Engine) beginCompensation(record Record, reason string, now time.Time) Record {
-	after := record.Clone()
-	after.Version = record.Version + 1
-	return compensationState(after, reason, now)
-}
-
-// compensationState 在调用方已推进版本的记录上填入补偿（或失败终态）状态。
-func compensationState(after Record, reason string, now time.Time) Record {
-	after.UpdatedAt = now
-	after.LastError = reason
-	after.Attempt = 0
-	after.CommandID = ""
-	after.OperationKey = ""
-	clearLease(&after)
-	if after.CompletedSteps == 0 && after.LateStep == 0 {
-		after.Status = StatusFailed
-		after.NextRunAt = time.Time{}
-		return after
-	}
-	return nextCompensation(after, now)
-}
-
-func stepFor(record Record, definition Definition) (Step, bool) {
-	if record.Step < 0 || record.Step >= len(definition.Steps) {
-		return Step{}, false
-	}
-	return definition.Steps[record.Step], true
-}
-func operationKey(id string, phase Phase, step int) string {
-	return fmt.Sprintf("%s:%d:%d", id, phase, step)
-}
-
-// parseOperationKey 是 operationKey 的逆：取出这个 saga 的操作的方向与步骤号；不是这个 saga 的操作返回 false。
-func parseOperationKey(id, operation string) (Phase, int, bool) {
-	rest, ok := strings.CutPrefix(operation, id+":")
-	if !ok {
-		return 0, 0, false
-	}
-	phaseText, stepText, ok := strings.Cut(rest, ":")
-	if !ok {
-		return 0, 0, false
-	}
-	phase, err := strconv.Atoi(phaseText)
-	if err != nil || (Phase(phase) != PhaseForward && Phase(phase) != PhaseCompensate) {
-		return 0, 0, false
-	}
-	step, err := strconv.Atoi(stepText)
-	if err != nil || step < 0 {
-		return 0, 0, false
-	}
-	return Phase(phase), step, true
-}
-
-// commandID 命名一次派发尝试。第 0 代使用 "operationKey:attempt" 格式；Resume 过的记录代际非零，铸出的标识与之前每一生
-// 都不相交。
-func commandID(operationKey string, incarnation, attempt uint32) string {
-	if incarnation == 0 {
-		return fmt.Sprintf("%s:%d", operationKey, attempt)
-	}
-	return fmt.Sprintf("%s:r%d:%d", operationKey, incarnation, attempt)
-}
-
-// commandIDIncarnation 是 commandID 的逆：从 operationKey:attempt / operationKey:rN:attempt 取出代际 N。
-// 不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。协调器核对 completion 的代际（B1）与原生收件箱
-// 判断拒绝是否同一生都用它，两边对同一个 ID 必须得出同一个代际。
-func commandIDIncarnation(operationKey, commandID string) uint32 {
-	rest, ok := strings.CutPrefix(commandID, operationKey+":r")
-	if !ok {
-		return 0
-	}
-	digits, _, ok := strings.Cut(rest, ":")
-	if !ok {
-		return 0
-	}
-	value, err := strconv.ParseUint(digits, 10, 32)
-	if err != nil {
-		return 0
-	}
-	return uint32(value)
-}
-func clearLease(record *Record) { record.Lease = Lease{} }
-func canonicalDeadline(value time.Time) time.Time {
-	if value.IsZero() {
-		return time.Time{}
-	}
-	// BSON datetime 与许多 SQL 后端只保存到毫秒；在身份比较之前规范化，精确重投的启动意图才保持幂等。
-	return value.UTC().Truncate(time.Millisecond)
+	outcome, err := e.store.Apply(ctx, request)
+	return request.After, outcome, err
 }
 
 func (e *Engine) definition(name string, version uint32) (Definition, bool) {
@@ -1236,40 +840,4 @@ func (e *Engine) countTerminal(status Status) {
 		e.failed.Add(1)
 		e.manualRequired.Add(1)
 	}
-}
-
-func backoff(key string, attempt uint32, minimum, maximum time.Duration) time.Duration {
-	if minimum <= 0 {
-		minimum = time.Millisecond
-	}
-	if maximum < minimum {
-		maximum = minimum
-	}
-	d := minimum
-	for i := uint32(1); i < attempt && d < maximum; i++ {
-		if d > maximum/2 {
-			d = maximum
-			break
-		}
-		d *= 2
-	}
-	if d > maximum {
-		d = maximum
-	}
-	if d <= 1 {
-		return d
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(key))
-	var raw [4]byte
-	binaryPutUint32(raw[:], attempt)
-	_, _ = h.Write(raw[:])
-	half := d / 2
-	return half + time.Duration(uint64(h.Sum32())%uint64(d-half+1))
-}
-func binaryPutUint32(dst []byte, value uint32) {
-	dst[0] = byte(value >> 24)
-	dst[1] = byte(value >> 16)
-	dst[2] = byte(value >> 8)
-	dst[3] = byte(value)
 }

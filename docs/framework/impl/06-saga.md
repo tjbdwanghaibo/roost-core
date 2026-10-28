@@ -60,7 +60,7 @@
 | [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter` |
 | [record.go](../../../framework/saga/record.go) | `Status`、`Phase`、`Step`、`StepBudget`、`StepKey`、`StepBudgets`、`Definition`、`Lease`、`Record`、`Command`、`Completion`、`OutboxRecord` |
 | [step_operation_inbox.go](../../../framework/saga/step_operation_inbox.go) | `Reservation` |
-| [step_transition.go](../../../framework/saga/step_transition.go) | 函数/方法或内部实现；见源码 |
+| [transition.go](../../../framework/saga/transition.go) | 纯状态机（两种协调器共用的判定）；函数/方法见源码 |
 | [store.go](../../../framework/saga/store.go) | `ClaimRequest`、`Query`、`ApplyRequest`、`ApplyOutcome`、`Store`、`OperationClosure`、`CompletionHistory`、`CompletionHistoryStore`、`LateSuccessAlarmStore`、`Publisher`、`PublishFunc` |
 
 ### storeservice
