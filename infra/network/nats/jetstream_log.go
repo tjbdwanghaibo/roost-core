@@ -140,8 +140,8 @@ type LogMsg struct {
 	Seq uint64
 }
 
-// LogFence 是 PublishFenced 的期望序号：Filter 为空表示不带期望序号（只给测试的变异用）。LastSeq 为 0 表示
-// “Filter 上还没有任何消息”。
+// LogFence 是 PublishFenced 的期望序号：Filter 为空表示不带期望序号——只用于多写者追加、去重只靠 MsgID 的消息（saga 分区的
+// 输入：启动 / 结果 / 运维意图）与测试变异；单写者的权威事件必须带。LastSeq 为 0 表示“Filter 上还没有任何消息”。
 type LogFence struct {
 	Filter  string
 	LastSeq uint64

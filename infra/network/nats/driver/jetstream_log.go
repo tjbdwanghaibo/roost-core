@@ -52,6 +52,9 @@ const (
 	jsErrBatchTooLarge             = 10199
 	jsErrBatchDuplicateMsgID       = 10201
 	jsErrMessageNotFound           = 10037
+	// jsErrDuplicateInProcess：同一 MsgID 的另一次提交还在服务端处理（R>1 的提案在途）。日志的调用方 MsgID 唯一时，只可能是
+	// “结果未知后同 MsgID 重发”撞上了前一次还没落定的发送，前一次可能提交，所以按结果未知归类，而不是确定没写入（第 2 批加）。
+	jsErrDuplicateInProcess = 10158
 )
 
 const (
@@ -218,10 +221,13 @@ func parseBatchAck(data []byte, want int) (fnats.LogPublishAck, error) {
 	return fnats.LogPublishAck{Stream: ack.Stream, Seq: ack.Seq, Count: ack.Count}, nil
 }
 
-// logAPIError 把服务端明确的拒绝映射成哨兵错误；文本保留错误码与描述。
+// logAPIError 把服务端明确的拒绝映射成哨兵错误；文本保留错误码与描述。唯一的例外是 10158（同一 MsgID 的前一次提交还在处理），
+// 归为结果未知。
 func logAPIError(code int, description string) error {
 	sentinel := fnats.ErrLogRejected
 	switch code {
+	case jsErrDuplicateInProcess:
+		return fmt.Errorf("%w (err_code=%d: %s)", fnats.ErrLogOutcomeUnknown, code, description)
 	case jsErrWrongLastSequence, jsErrWrongLastSequenceConstant:
 		sentinel = fnats.ErrLogWrongLastSequence
 	case jsErrBatchDuplicateMsgID:

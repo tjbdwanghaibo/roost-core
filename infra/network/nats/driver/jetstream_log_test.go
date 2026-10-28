@@ -133,6 +133,11 @@ func TestLogAPIErrorClassification(t *testing.T) {
 		10054: fnats.ErrLogRejected, // 消息超过流的 max_msg_size
 		10077: fnats.ErrLogRejected, // 流满（Discard=New）
 	}
+	// 10158：同一 MsgID 的前一次提交还在服务端处理——前一次可能提交，归为结果未知。第 2 批在真实三节点上实际撞到的是 saga 自己的
+	// MsgID 重复（两个分区共用流、首轮 MsgID 相同，已修）；“结果未知后的重发撞上还没落定的原发送”按语义推断，未单独复现。
+	if err := logAPIError(10158, "duplicate message id is in process"); !errors.Is(err, fnats.ErrLogOutcomeUnknown) || errors.Is(err, fnats.ErrLogRejected) {
+		t.Fatalf("10158: %v", err)
+	}
 	for code, want := range cases {
 		err := logAPIError(code, "description")
 		if !errors.Is(err, want) || errors.Is(err, fnats.ErrLogOutcomeUnknown) {

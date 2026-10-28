@@ -504,6 +504,11 @@ const (
 // 标签只有 saga 类型、原状态与原因，saga id 与步骤号只进日志。
 func (e *Engine) reportReopen(before, after Record, reason string) {
 	e.reopened.Add(1)
+	reportReopen(before, after, reason)
+}
+
+// reportReopen 是重开的指标与日志（两种协调器共用；计数由调用方加）。
+func reportReopen(before, after Record, reason string) {
 	from := before.Status.String()
 	metrics.IncCounter("saga.reopened_total", metrics.Labels{"saga_type": before.Type, "from_status": from, "reason": reason}, 1)
 	slog.Warn("saga: reopened to compensate a step that took effect after the coordinator abandoned it",
@@ -515,6 +520,10 @@ func (e *Engine) reportReopen(before, after Record, reason string) {
 // 但已经有了归宿，只记 WARN。
 func (e *Engine) reportLateCompensation(record Record, completion Completion) {
 	e.lateAfterAbandon.Add(1)
+	reportLateCompensation(record, completion)
+}
+
+func reportLateCompensation(record Record, completion Completion) {
 	phase, step := operationPosition(completion.IdempotencyKey)
 	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
 	slog.Warn("saga: step succeeded after the coordinator abandoned it; compensating it",
@@ -525,6 +534,10 @@ func (e *Engine) reportLateCompensation(record Record, completion Completion) {
 // reportStaleAttempt 记一份被拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的那次尝试。
 func (e *Engine) reportStaleAttempt(record Record, completion Completion) {
 	e.staleAttempt.Add(1)
+	reportStaleAttempt(record, completion)
+}
+
+func reportStaleAttempt(record Record, completion Completion) {
 	phase, step := operationPosition(completion.IdempotencyKey)
 	metrics.IncCounter("saga.completion.stale_attempt_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
 	slog.Warn("saga: ignored a retryable failure from an earlier attempt; waiting for the current attempt",
@@ -535,6 +548,10 @@ func (e *Engine) reportStaleAttempt(record Record, completion Completion) {
 // reportStaleIncarnation 记一份被拒收的旧一生结果（B1）。这是 Resume 之后的正常现象，不是故障：只计数、记 WARN。
 func (e *Engine) reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
 	e.staleIncarnation.Add(1)
+	reportStaleIncarnation(record, completion, incarnation)
+}
+
+func reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
 	phase, step := operationPosition(completion.IdempotencyKey)
 	metrics.IncCounter("saga.completion.stale_incarnation_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
 	slog.Warn("saga: ignored a step result from an earlier incarnation of the saga",
@@ -557,6 +574,10 @@ func (e *Engine) completionHistory(ctx context.Context, completion Completion) (
 // 补偿方向停在 ManualRequired 时 Resume，新一生的同一补偿会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
 func (e *Engine) reportLateAfterAbandon(record Record, completion Completion) {
 	e.lateAfterAbandon.Add(1)
+	reportLateAfterAbandon(record, completion)
+}
+
+func reportLateAfterAbandon(record Record, completion Completion) {
 	phase, step := operationPosition(completion.IdempotencyKey)
 	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
 	slog.Error("saga: step succeeded after the coordinator abandoned it; the coordinator cannot account for it",

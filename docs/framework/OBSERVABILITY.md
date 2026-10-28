@@ -166,6 +166,15 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.redis.backpressure_total` | Counter | 投影积压超过 `saga.redis.max_projection_backlog`，新 saga 被拒（可重试）；持续增长说明 Store Service 跟不上或停了 |
 | `saga.redis.reload_total{result}` | Counter | 已驱逐的记录要写时从 Mongo 冷副本装回：`reloaded`、`exists`（别人先装回了）、`missing`（冷副本里也没有） |
 | `saga.redis.resident_records{state}` | Gauge | 权威 Redis 上驻留的记录：`active` = 非终态（领取索引里）、`terminal` = 已终态、等保留期过后驱逐。容量按它与投影积压估算（每条约 1～2KB） |
+| `saga.partition.rejected_input_total{kind,reason}` | Counter | JetStream 协调器（第 2 批，未接线）分区跳过的坏输入：`kind` = start / result / op / unknown，`reason` = decode / content / identity / not_waiting / definition_missing / subject。日志里的输入不能 Term，跳过后输入水位照常前进 |
+| `saga.partition.fail_stop_total{reason}` | Counter | JetStream 协调器分区 fail-stop：`fenced`（期望序号被别的写者推进）、`publish_unknown`（发布结果未知超过预算）、`rejected`（流满等服务端明确拒绝）、`error`；**非零即查**，进程经 RuntimeFailure 停下 |
+| `saga.partition.snapshot_failures_total` | Counter | 分区快照写失败（下一次到点重试）；持续增长说明 KV / 对象桶不可写，日志清理随之停止 |
+| `saga.completion.unknown_saga_total` | Counter | 结果对应的 saga 不在分区里（过了终态保留期被剪掉）：迟到成功找不到归宿，ERROR 日志点名 saga 与命令，**非零要人核对** |
+| `saga.log.purge_blocked_seconds{stream,consumer}` | Gauge | 某个 durable 的 ack floor 卡在分区清理目标之下的时长；超过 `PurgeStallAlarm` 记 WARN 点名，下线的步骤要由运维删掉它的 durable |
+| `saga.admission.hint_failures_total` | Counter | 协调器写准入提示（LoadBucket 的 `admit` 键）失败；提示不是权威，持续增长时发起方只能等所有者的判定 |
+| `saga.query.dropped_total` | Counter | JetStream 协调器分区查询队列满、丢弃的查询（发起方超时） |
+| `saga.query.reply_failures_total` | Counter | 判定与查询回复经核心 NATS 发送失败（发起方按超时与 Get 补查兜底） |
+| `saga.query.subscription_errors_total` | Counter | 查询 / 回复订阅的慢消费者或订阅错误 |
 | `store_service.backlog_entries{projection,partition}` | Gauge | 一个分区还没投影进 Mongo 的日志条目数（XLEN），每秒采样 |
 | `store_service.lag_seconds{projection}` | Gauge | 最老未投影条目的年龄（各分区取最大）；持续增长说明投影跟不上或 Mongo 不可用 |
 | `store_service.projected_entries_total{projection}` / `store_service.batches_total{projection}` | Counter | 投影过的条目与批数，相除是平均批大小 |
@@ -494,6 +503,15 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.completion.late_after_abandon_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.completion.stale_attempt_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.completion.stale_incarnation_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.admission.hint_failures_total` | Counter | `saga/admission.go:IncCounter` |
+| `saga.completion.unknown_saga_total` | Counter | `saga/partition.go:IncCounter` |
+| `saga.log.purge_blocked_seconds` | Gauge | `saga/partition_replay.go:SetGauge` |
+| `saga.partition.fail_stop_total` | Counter | `saga/partition.go:IncCounter` |
+| `saga.partition.rejected_input_total` | Counter | `saga/partition.go:IncCounter` |
+| `saga.partition.snapshot_failures_total` | Counter | `saga/partition_replay.go:IncCounter` |
+| `saga.query.dropped_total` | Counter | `saga/query.go:IncCounter` |
+| `saga.query.reply_failures_total` | Counter | `saga/query.go:IncCounter` |
+| `saga.query.subscription_errors_total` | Counter | `saga/query.go:IncCounter` |
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.redis.backpressure_total` | Counter | `saga/redis_store.go:IncCounter` |
 | `saga.redis.cold_read_total` | Counter | `saga/redis_store.go:IncCounter` |
