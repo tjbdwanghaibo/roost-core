@@ -1,5 +1,10 @@
 # Redis 做 Saga / Remote 权威：设计 v2（2026-10-26）
 
+> **路线已放弃（维护者 2026-10-28）**：放弃 Redis 权威路线，只保留 JetStream 版本（[原型稿 §17 第 12 条](PROPOSAL-2026-10-27-saga-jetstream-log.md)）。
+> 本文第 2 步的 2a（`6709eb90`）、2b（`a3edef04`）在 main 上，待 JetStream 协调器实施时与 Store Service、`saga.redis.*` 配置同一批删除，删除前继续可用；
+> 2c 没有合入，分支已删除，提交在本地 tag `archive/redis-authority-2c` 归档。第 3、4 步不再做。替换设计见
+> [DESIGN-2026-10-28-saga-jetstream-authority](DESIGN-2026-10-28-saga-jetstream-authority.md)。本文保留为设计记录。
+
 **状态：第 2 步 2a / 2b 已实施（分支 `feat/redis-authority-2ab`，未合入 main、未发版），2c 与第 3、4 步未实施。维护者 2026-10-26：“直接从 V2 开始吧，之后跑一次 saga 的压测”——按本文直接实施，不再单独评审一轮。** 本文中标“已采纳”的做法就是实施依据；真正还要维护者做产品选择的只有 §11 的三项（实施时按推荐先做，见 §13）。2a / 2b 的现行契约已迁入 `docs/framework/SAGA.md`「协调器存储：Redis 权威」与 `docs/framework/impl/06-saga.md`；实施结果、与本文的偏差、红绿证据与压测见 §13。本文保留为设计记录。
 
 本文自成一体，接手人不需要先读原草稿。依据：

@@ -1,6 +1,6 @@
 # Saga 协调器以 JetStream 为权威日志：设计稿与原型（2026-10-27）
 
-**状态：原型（第二轮：维护者 2026-10-27 决定按推荐，补了投影打开的实现与压测，见 §12、§17）。** 代码在 `scripts/perf/saga-jslog-proto/`（实验包，不进生产路径，不改 `framework/saga` 的 Store / 引擎 / wiring），
+**状态：原型；维护者 2026-10-28 决定正式实施、放弃 Redis 权威路线（§17 第 12 条），函数级设计见 [DESIGN-2026-10-28-saga-jetstream-authority](DESIGN-2026-10-28-saga-jetstream-authority.md)。（第二轮：维护者 2026-10-27 决定按推荐，补了投影打开的实现与压测，见 §12、§17）。** 代码在 `scripts/perf/saga-jslog-proto/`（实验包，不进生产路径，不改 `framework/saga` 的 Store / 引擎 / wiring），
 分支 `proto/saga-jetstream-log` 只在本地提交。压测报告见 [SAGA-JETSTREAM-LOG-PROTO-20261027](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)。
 本文先写前提与实测语义，再写设计；凡是实测改变了设计的地方都标“实测”。
 
@@ -374,6 +374,14 @@ saga 是已知反复出问题的模块，换掉整条协调路径会让现有的
 11. 02 修后剩下的“新 Client 回放追平前，旧 `Rejected` 提前唤醒同 ID 的新调用”，维护者选定**终态带启动尝试标识**：`Rejected` 记触发它的尝试，只唤醒同一尝试的等待者，
     非 `Rejected` 终态照旧唤醒全部。不选“回放追平后才接受发起”：有序消费者没有可靠的追平信号、拖慢启动，而且挡不住其他客户端的尝试在本次调用登记之后被拒的回执。
     已在原型实施（§12b），作为正式实施的设计约束。
+12. **正式实施**（2026-10-28，原话要点）：
+    1. 业务目标 TPS：原型现有指标已经足够（云 Mongo 约 64ms 往返下准入开、并行投影器 8 通道，长期约 700 笔/秒；本机约 1200 笔/秒）。
+    2. Redis 权威路线不需要了，只保留 JetStream 版本。
+    3. 现在开始正式实施，不再等 Linux 跨机复测（第 1 条 1A 的门槛取消）。先出函数级设计给维护者过目，再实施；实施时用 JetStream 协调器替换 Redis 协调器存储，
+       同一批删掉 Redis 权威代码、Store Service 的 saga 投影和 `saga.redis.*` 配置。实施期间 main 上 Redis 版继续可用。
+    4. Redis 2c 分支未合入，已在本地打 tag `archive/redis-authority-2c` 归档后删除。
+
+    函数级设计见 [DESIGN-2026-10-28-saga-jetstream-authority](DESIGN-2026-10-28-saga-jetstream-authority.md)。
 
 以下是第一轮交回时列出的选项原文，保留备查。
 

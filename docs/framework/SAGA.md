@@ -30,6 +30,8 @@ Nest 启动消费者对 `StartSaga` 的确定性拒绝（`Data` 超过 `saga.max
 
 ## 协调器存储：Redis 权威
 
+> **过渡说明（维护者 2026-10-28）**：Redis 权威将由 JetStream 协调器替换（[设计稿](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)），替换时与 Store Service、`saga.redis.*` 配置同一批删除；本节契约在替换前仍有效。
+
 协调器的全部状态——记录、领取租约、命令 outbox、completion 回执、操作 tombstone、迟到告警标记——在单主权威 Redis 上
 （`framework/saga.RedisStore`，配置 `redis_authority.*` 与 `saga.redis.*`）；Mongo 是冷副本（`MongoStore`，只读），由 Store Service
 （`framework/storeservice` + `wiring/storeservice`）按分区把日志投影进去。设计与取舍见
