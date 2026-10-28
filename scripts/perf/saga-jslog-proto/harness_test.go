@@ -179,6 +179,11 @@ func (e *env) takeAll(c *Coordinator, steal bool) {
 			e.t.Fatal(err)
 		}
 	}
+	// 准入初始化是 fail-closed：初始积压快照读完之前新启动一律被拒（ReasonNotReady）。用例要从“已就绪”开始，
+	// 等它读完；故意拖住初始快照的用例（AdmissionReadyGate）自己判断。
+	if c.opts.Admission != nil && c.opts.AdmissionReadyGate == nil {
+		waitUntil(e.t, 10*time.Second, "admission initial snapshot", c.AdmissionReady)
+	}
 }
 
 func (e *env) participant(mod func(*ParticipantOptions)) *Participant {

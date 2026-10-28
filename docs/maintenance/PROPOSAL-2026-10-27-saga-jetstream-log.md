@@ -87,7 +87,7 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | `<prefix>.<k>.ev.acct` | 分区协调器（事件 + 发给 acct 参与方的命令） | 参与方 durable 消费者（过滤 `<prefix>.*.ev.acct`）；重放 |
 | `<prefix>.<k>.ev.done` | 分区协调器（终态事件） | 发起方 / 业务的有序消费者（过滤 `<prefix>.*.ev.done`）——终态通知天然存在；重放 |
 | `<prefix>.<k>.ev.none` | 分区协调器（无命令的状态变化，如进入退避） | 重放 |
-| `<prefix>.<k>.in.start` | 发起方（MsgID = `start.<id>`） | 分区协调器（过滤 `<prefix>.<k>.in.>`） |
+| `<prefix>.<k>.in.start` | 发起方（MsgID = `start.<id>.<Client 实例随机标识>.<实例内序号>`，全局唯一，§12b） | 分区协调器（过滤 `<prefix>.<k>.in.>`） |
 | `<prefix>.<k>.in.res` | 参与方（MsgID = `res.<CmdID>`） | 分区协调器 |
 
 - KV：`<STREAM>_SNAP`（键 `p<k>`，分区快照）、`<STREAM>_OWN`（键 `p<k>`，所有权租约，桶 TTL）。
@@ -203,11 +203,14 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
   取全部参与方的最大值。没有用 Mongo 侧的任何读数：积压只有参与方自己知道。
 - **怎么让协调器知道**：参与方每 `LoadTick`（缺省 200ms）把 `{records, at}` 写进 KV 桶 `<STREAM>_LOAD` 的 `part.<参与方名>`（桶 MaxAge 30s，进程死掉后条目最终消失）。
   协调器 watch 整个桶。**过期**按写入时刻判断（不等 MaxAge）：任何一个见过的参与方超过 `StaleAfter`（缺省 2s）没更新 → 准入关闭，原因 `backpressure_stale_signal`；
-  条目被删除 / 过期清除按“下线”处理，不再计入；从没见过任何参与方时打开（没有要保护的投影）。信号停更可能是参与方卡死，也可能只是发布失败，两种都按关闭处理：宁可少接新单，
+  条目被删除 / 过期清除按“下线”处理，不再计入。**初始化 fail-closed**（RV-20261028-03，2026-10-28 修）：协调器 watch 的初始快照（桶里已有的全部信号）读完之前准入关闭，
+  原因 `backpressure_not_ready`——这时空的信号表只说明“还没读到”，不说明“没有积压”；初始快照读完且确实没有任何参与方信号时才打开（没有要保护的投影），
+  读完时已有超过高水位的积压则直接按积压关闭。单独一个原因而不沿用 stale：stale 是某个参与方停更、要排查的故障，not_ready 是启动 / 接管期的正常短暂状态；
+  两者都以 `backpressure` 开头、同样可重试。接管（`Takeover`）不等初始快照，在途 saga 的重放与推进照常进行，只有新 saga 的启动在这段时间被拒。信号停更可能是参与方卡死，也可能只是发布失败，两种都按关闭处理：宁可少接新单，
   不让积压在看不见的地方增长（这是一个产品取舍，推荐如此）。
 - **阈值与滞回**：笔数 ≥ `HighSagas` 关闭，关闭后降到 ≤ `LowSagas`（缺省 High 的一半）才重新打开。信号恢复新鲜但积压仍在滞回区间时按积压判定。
-- **只作用于新 saga 的启动**：关闭时协调器把启动意图写成终态 `Rejected`（`Reason` = `backpressure` / `backpressure_stale_signal`），不派发任何步骤；
-  在途 saga 的推进、重试、补偿一律不受影响——它们是消化积压的唯一途径。被拒的 ID 可以再次发起（版本接着往上走；发起方的启动 MsgID 带每次调用的序号，不会被流的去重窗口吞掉）。
+- **只作用于新 saga 的启动**：关闭时协调器把启动意图写成终态 `Rejected`（`Reason` = `backpressure` / `backpressure_stale_signal` / `backpressure_not_ready`），不派发任何步骤；
+  在途 saga 的推进、重试、补偿一律不受影响——它们是消化积压的唯一途径。被拒的 ID 可以再次发起（版本接着往上走；启动尝试身份全局唯一，换了 Client 也不会被流的去重窗口吞掉，§12b）。
 - **对业务返回什么**：协调器把准入状态写进同桶的 `admit` 键（变化时立即写、否则每秒刷新）；发起方 `Client.Start` 看到 3s 内的“关闭”直接返回
   **`ErrBackpressure`（可重试，不写启动意图）**；它只是提示，协调器处理启动意图时再判一次才是权威（终态 `Rejected`、原因以 `backpressure` 开头，同样按可重试处理）。
   对应现行 Redis 权威的 `ErrBackpressure`（`max_projection_backlog`）。
@@ -219,6 +222,9 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
     准入关闭时仍在途的 8 笔（每步结果晚 2s）全部 `Completed`；放开投影后积压回落、准入重新打开，被拒的 ID 再发起全部完成；余额、Mongo 账户、事件链核对通过。3 次连跑通过。
   - `TestAdmissionClosesWhenTheBacklogSignalGoesStale`：参与方停更信号 → 关闭（`backpressure_stale_signal`）、启动被拒、在途照常完成；恢复后重新打开。
   - `TestHardLimitRejectsStepsUntilProjectionCatchesUp`：不开准入、硬上限 20 条，闸门关 1s：约 235～251 次步骤被拒后重试成功，30 笔全部完成、余额与 Mongo 一致。
+  - `TestAdmissionStaysClosedUntilTheInitialSnapshotIsRead`（单元）与 `TestCoordinatorRejectsStartsUntilAdmissionIsReady`（协调器经 `AdmissionReadyGate` 受控地拖住初始快照）：
+    快照读完之前启动被拒（`backpressure_not_ready`、不派发步骤），放开后快照为空、同一 ID 再发起被放行。修前在 `4170bcad` 上的红：
+    `before the initial snapshot: open=true reason="", want closed/backpressure_not_ready`、`a new saga was admitted (1 starts) before the initial backlog snapshot was read`。
   - **变异** `SAGAJS_MUTATE=noadmit`（协调器不查准入）：两个准入用例都失败——`start of rej-0 while backlogged: rej-0 v3 completed … want rejected/backpressure`、
     `start of stale-0 with a stale signal: stale-0 v3 completed …`。
   - **硬上限用例找出原型自己的缺陷（先红后绿）**：参与方 handler 用同一个 field 给余额和回执登记逆操作，`RecordUndo` 按（owner, field）去重，回执那条被丢掉；
@@ -238,6 +244,34 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 - 原始输出：[round4-admission](../performance/benchmarks/saga-jetstream-log-proto-20261027/round4-admission/)（`-race` 全套、noadmit 变异、两处先红后绿）。
 - **没做**：准入状态的指标与告警、按参与方 / 按 saga 类型分别准入、在 Engine 层面的 API 形状；信号桶的跨进程发布节奏在正式压测里再定。
 
+## 12b. 发起方：启动尝试身份与等待者（2026-10-28 修，`client.go`）
+
+分支 `fix/core-game-server-review` 上的审查登记了三项（RV-20261028-01/02/03），维护者 2026-10-28 让在 main 上修；03 是准入初始化，见 §12a。
+
+- **启动尝试身份必须全局唯一（RV-20261028-01；正式实施沿用这条设计约束）**。启动意图的 MsgID = `start.<saga ID>.<Client 实例随机标识>.<实例内序号>`，
+  实例标识是 `NewClient` 时生成的 128 位随机串（`crypto/rand.Text`）。原来只有 `start.<id>.<实例内序号>`：流按 MsgID 在 2 分钟去重窗口内去重，
+  Client 重建（发起方进程重启）或另一个 Client 的序号都从 1 开始，被拒（`Rejected`）之后用同一个 saga ID 重试时 MsgID 和旧尝试相同，意图被流吞掉、
+  PubAck 照样成功（`Duplicate` 没检查），等待者永远等不到。
+  - 同一次 `StartIntent` 里结果未知的网络重发沿用同一个身份，流去重保证只追加一条（重发拿到 `Duplicate` 是正常结果）。
+  - **第一次发布就拿到 `Duplicate`** 说明身份撞了、意图没入流：返回 `ErrStartIdentityReused`，撤掉等待者，不当成功返回。之前有过结果未知的发送时不做这个判断。
+    正常运行中不会出现；它是身份生成坏掉时的显式失败，代替“等待者永远挂起”。
+  - 同一 saga ID 是否已经在跑由协调器判定（`DupStarts`），不靠 MsgID；MsgID 只负责“一次尝试只进流一次”。
+- **等待者（RV-20261028-02）**：原来 `wait[id] = ch` 覆盖同 ID 在途调用的通道，终态只关闭最后一个，前面的调用者永远等不到。现在同一个 ID 的每次 `StartIntent`
+  都登记自己的通道，下一个被观察到的终态唤醒该 ID 的全部等待者。观察表只接受版本更大的终态（`old.Version >= ev.Version` 丢弃），被拒之后**不再删掉**观察表里的旧
+  `Rejected`，所以旧一轮的拒绝回执（版本不大于已观察到的）不会结束新一轮。`ctx` 只管发布：发布失败（返回错误）时撤掉本次登记的等待者；返回通道之后调用方不等了
+  不撤，终态到达时统一关闭并清理。已经到过非 `Rejected` 终态的 ID 直接返回已关闭的通道（原样）。
+- **剩余局限（尚未确认，没有用例复现）**：新 Client 回放完历史终态之前对同一个 ID 发起，回放中的旧终态可能提前唤醒它（调用方看到旧的 `Rejected`，再发起一次即可；
+  不丢意图、不多建 saga）。原型的 `NewClient` 不等回放追平；正式实施的发起方要在“回放追平”之后才接受发起，或者让终态带上触发它的启动尝试身份。
+- **验证**（私有三节点集群，`-race`）：`TestRejectedStartRetriedByAnotherClientIsAppended`（重建 / 另一个 Client 同 ID 重试入流、得到新终态 v2 / v3）、
+  `TestStartResendAfterUnknownOutcomeIsNotAppendedTwice`（两次回复丢失后重发，只追加 1 条）、`TestStartIdentityCollisionIsAnError`、
+  `TestStartIntentWaiters`（先后两次、16 路同时、终态与发起竞争 20 轮、被拒后新一轮且旧回执重放一次）。修前在 `4170bcad` 上的红：
+  - `start of same acknowledged but no terminal state within 10s; last start-intent seq 1 before the call, 1 after (unchanged = the intent was deduplicated, never appended)`（重建与另一个 Client 两种）；
+  - `first publish acknowledged as a duplicate: err=<nil>, want ErrStartIdentityReused`；
+  - `first caller stranded: the second StartIntent replaced its waiter`、`caller 0 of 16 stranded`、`round 0: caller 0 stranded`、
+    `new round ended by the previous round's rejection receipt (v1)`。
+  - 结果未知重发只追加一条的用例修前修后都通过（它守的是修法不能把同一次调用的重发也换身份）。
+- **对已有压测数据**：没有影响，依据见压测报告第五轮之后的“2026-10-28 修复对压测数据的影响”。
+
 ## 13. 对 Remote 的可推广性
 
 Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote 实体（或实体分片）一个 subject，写入带该 subject 的期望序号即是版本 CAS，
@@ -256,6 +290,7 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
   （参与方 Nest 调用、JetStream 发布的平均耗时都成倍上升），不是投影阻塞了关键路径。生产要把 Mongo 与 NATS / 参与方 WAL 分盘或分机，本机无法验证。
 - **参与方投影器的持续吞吐**：投影不在关键路径上，所以关键路径吞吐可以远高于投影器（云上约 500～590 条/s），积压会无限增长、追平前从 Mongo 读不到最新实体。
   原型已加按积压准入（§12a，功能验证，未压测）；投影器并行通道在另一分支做。
+- **发起方回放追平前的提前唤醒**（§12b，尚未确认）：新 Client 回放完历史终态之前发起，旧终态可能提前唤醒等待者；只影响等待语义，不丢不重。
 - 没有：Resume / 代际、人工补偿、定义版本、业务键唯一（跨保留期）、查询接口、多参与方服务与按 sid 路由、App 级 fail-stop 接线、指标。
 
 ## 15. 位置与运行
@@ -313,6 +348,11 @@ saga 是已知反复出问题的模块，换掉整条协调路径会让现有的
    维护者同意准入“信号过期即关闭”的缺省。用联合压测定准入参数（§12a）。
 9. 第五轮交回后维护者决定原型分支并入 main（“目前的数据已经足够支持了”）：设计稿、五轮报告与样本、`scripts/perf/saga-jslog-proto/` 实验代码一起进 main，不碰生产路径；
    正式实施仍按 1A 等 Linux 跨机复测成立后再出函数级设计。
+
+2026-10-28：
+
+10. 分支 `fix/core-game-server-review` 上的审查对原型登记了三项（RV-20261028-01 启动 MsgID 跨 Client 重复、02 同 ID 等待者被覆盖、03 准入初始快照前放行），
+    维护者核对后让在 main 上修（原型实验包，先红后绿）。修法与证据见 §12a、§12b；“启动尝试身份必须全局唯一”作为正式实施的设计约束沿用。
 
 以下是第一轮交回时列出的选项原文，保留备查。
 

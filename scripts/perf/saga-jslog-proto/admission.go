@@ -6,7 +6,8 @@ package jslogproto
 //     的 part.<参与方名>，带写入时刻。桶有 MaxAge，进程死掉后条目最终消失；判过期靠写入时刻，不靠 MaxAge。
 //   - 协调器 watch 这个桶，按“记录数 ÷ 每笔记录数”折算笔数，取全部参与方的最大值，带滞回判定：
 //     笔数 ≥ HighSagas 关闭，≤ LowSagas 才重新打开；任何一个见过的参与方信号超过 StaleAfter 没更新 → 关闭（原因 stale）。
-//     从没见过任何参与方时打开（没有要保护的投影）。
+//     初始化 fail-closed（RV-20261028-03）：watch 的初始快照（桶里现有的全部信号）读完之前关闭（原因 not_ready）——
+//     此时空的信号表只说明“还没读到”，不说明“没有积压”；读完且确实没有任何参与方信号时才打开（没有要保护的投影）。
 //   - 准入只作用于**新 saga 的启动**：关闭时协调器把启动意图写成终态 Rejected（原因 backpressure，可重试），不派发任何步骤；
 //     在途 saga 的推进、补偿、重试一律不受影响，否则积压永远消不掉。
 //   - 协调器把当前准入状态写进同一个桶的 admit 键（状态变化时立即写，否则每秒刷新），发起方据此快速失败（ErrBackpressure，
@@ -34,10 +35,13 @@ var ErrBackpressure = errors.New("jslogproto: saga admission closed (projection 
 const StatusRejected Status = "rejected"
 
 const (
-	admitKey        = "admit"
-	partLoadPrefix  = "part."
-	ReasonBacklog   = "backpressure"
-	ReasonStale     = "backpressure_stale_signal"
+	admitKey       = "admit"
+	partLoadPrefix = "part."
+	ReasonBacklog  = "backpressure"
+	ReasonStale    = "backpressure_stale_signal"
+	// ReasonNotReady：协调器还没读完积压信号的初始快照（刚启动 / 刚接管）。单独一个原因而不沿用 stale：
+	// stale 表示某个参与方的信号停更，是要排查的故障；not_ready 是启动期的正常短暂状态。两者都以 backpressure 开头、同样可重试。
+	ReasonNotReady  = "backpressure_not_ready"
 	defaultLoadTTL  = 30 * time.Second
 	defaultLoadTick = 200 * time.Millisecond
 )
@@ -92,12 +96,14 @@ type admission struct {
 	open   bool
 	reason string
 	sagas  float64
-	ready  bool // watch 的初始值已读完
+	ready  bool // watch 的初始快照已读完；之前一律关闭（ReasonNotReady）
+	// readyGate 非空时，初始快照读完后等它关闭才置就绪（测试用：受控地拖住初始快照）。
+	readyGate <-chan struct{}
 }
 
 func newAdmission(opts AdmissionOptions, now func() int64) *admission {
 	opts.defaults()
-	return &admission{opts: opts, now: now, loads: map[string]PartLoad{}, open: true}
+	return &admission{opts: opts, now: now, loads: map[string]PartLoad{}, open: false, reason: ReasonNotReady}
 }
 
 // evaluate 按当前信号与滞回重算准入，返回（是否打开，原因，折算笔数）。
@@ -116,6 +122,14 @@ func (a *admission) evaluate() (bool, string, float64) {
 		}
 	}
 	a.sagas = worst
+	if !a.ready {
+		a.open, a.reason = false, ReasonNotReady
+		return a.open, a.reason, a.sagas
+	}
+	if a.reason == ReasonNotReady {
+		// 初始快照刚读完：从“打开”起按信号判定（与从没关过一样，不经过低水位滞回）。
+		a.open, a.reason = true, ""
+	}
 	switch {
 	case stale:
 		a.open, a.reason = false, ReasonStale
@@ -137,6 +151,12 @@ func (a *admission) evaluate() (bool, string, float64) {
 func (a *admission) set(key string, l PartLoad) {
 	a.mu.Lock()
 	a.loads[key] = l
+	a.mu.Unlock()
+}
+
+func (a *admission) markReady() {
+	a.mu.Lock()
+	a.ready = true
 	a.mu.Unlock()
 }
 
@@ -163,16 +183,24 @@ func (a *admission) run(ctx context.Context, kv jetstream.KeyValue) error {
 					return
 				}
 				if e == nil {
-					a.mu.Lock()
-					a.ready = true
-					a.mu.Unlock()
+					if a.readyGate != nil {
+						go func() {
+							select {
+							case <-a.readyGate:
+								a.markReady()
+							case <-ctx.Done():
+							}
+						}()
+						continue
+					}
+					a.markReady()
 					continue
 				}
 				if !strings.HasPrefix(e.Key(), partLoadPrefix) {
 					continue
 				}
 				if e.Operation() != jetstream.KeyValuePut {
-					// 删除 / 过期清除：按“从没见过”处理，不再计入（进程正常下线）。信号停更但条目还在时按 StaleAfter 判过期。
+					// 删除 / 过期清除：不再计入（进程正常下线）。信号停更但条目还在时按 StaleAfter 判过期。
 					a.drop(e.Key())
 					continue
 				}

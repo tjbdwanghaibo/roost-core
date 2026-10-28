@@ -125,7 +125,7 @@ type Completion struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// StartRequest 是发起方写到分区 in.start 的启动意图（MsgID = saga ID，流内去重）。
+// StartRequest 是发起方写到分区 in.start 的启动意图（MsgID 是全局唯一的启动尝试身份，见 Client；同一 saga ID 的重复启动由协调器判定）。
 type StartRequest struct {
 	V    int          `json:"v"`
 	ID   string       `json:"id"`

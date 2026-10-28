@@ -83,6 +83,8 @@ type CoordinatorOptions struct {
 	// DropAck 返回真时，这次发送照常发出、但不等回复，按超时返回（结果未知、实际已落库）。测试结果未知分支用。
 	DropAck func(part int) bool
 	Now     func() int64 // 业务时钟（unix ms）
+	// AdmissionReadyGate 非空时，准入的初始快照读完后等它关闭才算就绪（测试用：受控地拖住初始快照）。
+	AdmissionReadyGate <-chan struct{}
 }
 
 func (o *CoordinatorOptions) defaults() {
@@ -151,6 +153,7 @@ func (c *Coordinator) startAdmission(ctx context.Context) error {
 		actx, cancel := context.WithCancel(context.Background())
 		c.admCancel = cancel
 		c.adm = newAdmission(*c.opts.Admission, c.opts.Now)
+		c.adm.readyGate = c.opts.AdmissionReadyGate
 		c.admErr = c.adm.run(actx, kv)
 	})
 	return c.admErr
@@ -166,6 +169,16 @@ func (c *Coordinator) admitStart() string {
 		return ""
 	}
 	return reason
+}
+
+// AdmissionReady 报告准入的初始积压快照是否已读完（没开准入时恒为真）。
+func (c *Coordinator) AdmissionReady() bool {
+	if c.adm == nil {
+		return c.opts.Admission == nil
+	}
+	c.adm.mu.Lock()
+	defer c.adm.mu.Unlock()
+	return c.adm.ready
 }
 
 // AdmissionState 是当前准入判定（测试用）。

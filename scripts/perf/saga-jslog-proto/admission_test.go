@@ -383,3 +383,61 @@ func TestHardLimitRejectsStepsUntilProjectionCatchesUp(t *testing.T) {
 	e.checkMongoAccounts(part)
 	t.Logf("steps refused by the hard limit and retried: %d", part.Stats.NestErrors.Load())
 }
+
+// 初始积压快照读完之前准入关闭（fail-closed）：此时空的信号表不代表“没有积压”。读完且确实为空时打开。
+func TestAdmissionStaysClosedUntilTheInitialSnapshotIsRead(t *testing.T) {
+	a := newAdmission(AdmissionOptions{HighSagas: 10}, func() int64 { return 1000 })
+	if open, reason, _ := a.evaluate(); open || reason != ReasonNotReady {
+		t.Fatalf("before the initial snapshot: open=%v reason=%q, want closed/%s", open, reason, ReasonNotReady)
+	}
+	a.markReady()
+	if open, reason, _ := a.evaluate(); !open || reason != "" {
+		t.Fatalf("initial snapshot read and empty: open=%v reason=%q, want open", open, reason)
+	}
+
+	// 初始快照里就有超过高水位的积压：就绪后直接按积压关闭（不经过一次“打开”）。
+	b := newAdmission(AdmissionOptions{HighSagas: 10}, func() int64 { return 1000 })
+	b.set(partLoadKey("p"), PartLoad{Records: 100, At: 1000})
+	b.markReady()
+	if open, reason, _ := b.evaluate(); open || reason != ReasonBacklog {
+		t.Fatalf("initial snapshot with backlog: open=%v reason=%q, want closed/%s", open, reason, ReasonBacklog)
+	}
+}
+
+// 受控地拖住协调器准入的初始快照：期间新启动被权威拒绝（不派发步骤）；放开后快照为空，同一个 ID 再发起被放行。
+func TestCoordinatorRejectsStartsUntilAdmissionIsReady(t *testing.T) {
+	e := newEnv(t, 1)
+	hold := make(chan struct{})
+	coord := e.coordinator("A", func(o *CoordinatorOptions) {
+		o.Admission = &AdmissionOptions{HighSagas: 10, StaleAfter: time.Minute}
+		o.AdmissionReadyGate = hold
+	})
+	e.takeAll(coord, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := e.client.StartIntent(ctx, "early", e.transfer(0, false)); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, "the start intent was handled", func() bool {
+		return coord.Stats.Starts.Load()+coord.Stats.Rejected.Load() > 0
+	})
+	if n := coord.Stats.Starts.Load(); n != 0 {
+		t.Fatalf("a new saga was admitted (%d starts) before the initial backlog snapshot was read", n)
+	}
+	waitUntil(t, 5*time.Second, "rejection observed", func() bool { return e.client.Latest()["early"] != nil })
+	if s := e.client.Latest()["early"]; s.Status != StatusRejected || s.Reason != ReasonNotReady || len(s.Completed) != 0 {
+		t.Fatalf("start before admission is ready: %s reason=%q, want rejected/%s", s.Status, s.Reason, ReasonNotReady)
+	}
+	close(hold)
+	waitUntil(t, 5*time.Second, "admission ready and open", func() bool {
+		open, _, _ := coord.AdmissionState()
+		return coord.AdmissionReady() && open
+	})
+	if _, err := e.client.StartIntent(ctx, "early", e.transfer(0, false)); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, "the retry was admitted", func() bool { return coord.Stats.Starts.Load() == 1 })
+	if n := coord.Stats.Rejected.Load(); n != 1 {
+		t.Fatalf("rejections: %d, want 1", n)
+	}
+}
