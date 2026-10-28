@@ -7,7 +7,7 @@
 - 维护者 2026-10-28 决定（原话要点，记入[原型设计稿 §17](PROPOSAL-2026-10-27-saga-jetstream-log.md) 第 12 条）：原型指标已够（云 Mongo 约 64ms 往返、准入开、8 通道投影长期约 700 笔/秒，本机约 1200 笔/秒）；Redis 权威路线不要了，只保留 JetStream；不再等 Linux 跨机复测，先出函数级设计、过目后实施；实施时用 JetStream 协调器替换 Redis 协调器存储，同一批删掉 Redis 权威代码、Store Service 的 saga 投影与 `saga.redis.*` 配置，实施期间 main 上的 Redis 版继续可用；Redis 2c 未合入，已在本地 tag `archive/redis-authority-2c` 归档后删除。
 - 原型：[PROPOSAL-2026-10-27-saga-jetstream-log](PROPOSAL-2026-10-27-saga-jetstream-log.md)（下文“原型稿 §N”）与 `scripts/perf/saga-jslog-proto/`；压测：[SAGA-JETSTREAM-LOG-PROTO-20261027](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)（下文“报告”）。
 - 现行实现：main `e1957c88` 的 `framework/saga`、`framework/storeservice`、`wiring/saga`、`wiring/storeservice`、`wiring/redis/authority.go`、[SAGA.md](../framework/SAGA.md)、[guide/06](../framework/guide/06-saga.md)、[Redis 权威设计 v2](DESIGN-2026-10-26-redis-authority-v2.md)（2a `6709eb90`、2b `a3edef04` 在 main 上）、[KNOWN-LIMITS](KNOWN-LIMITS.md) 的 Saga 节。
-- 前提（维护者确认，原型稿 §1）：JetStream R3 文件存储、收到 PubAck 即不丢（整集群同时断电不在范围）；生产 NATS ≥ 2.12、同子网；etcd 只做发现与小锁；Mongo 不在关键路径，只做异步投影。本文不提议额外的存储或框架级兜底。
+- 前提（维护者确认，原型稿 §1）：JetStream R3 文件存储、收到 PubAck 即不丢（整集群同时断电不在范围）；生产 NATS ≥ 2.12（第 1 批核实：最低 2.12.1，见 §3.2 第 2 条）、同子网；etcd 只做发现与小锁；Mongo 不在关键路径，只做异步投影。本文不提议额外的存储或框架级兜底。
 - 代码阅读：codebase-memory 项目 `Users-whb-roost-roost-core` 的根是主检出（与本 worktree 同为 `e1957c88`）；`scripts/` 与 `docs/` 不在索引范围，原型代码与文档按源码直接读。函数名、行为以当前源码为准。
 
 ## 0. 要点
