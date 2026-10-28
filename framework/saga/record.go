@@ -245,6 +245,8 @@ type Record struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	Lease        Lease
+	// StartAttempt 是开启这一轮的启动尝试标识（JetStream 协调器，设计 §7.3）：之后的版本原样带着。Redis 协调器不写它。
+	StartAttempt string
 }
 
 func (r Record) Clone() Record {
@@ -291,6 +293,8 @@ type Command struct {
 	Payload           []byte    `json:"payload,omitempty"`
 	DeadlineAt        time.Time `json:"deadline_at"`
 	CreatedAt         time.Time `json:"created_at"`
+	// Partition 是派发它的 JetStream 协调器分区：参与方把结果发回 <prefix>.<Partition>.in.res。Redis 协调器不写（零值不进线格式）。
+	Partition uint16 `json:"partition,omitempty"`
 }
 
 func (c Command) Clone() Command {
