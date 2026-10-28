@@ -50,8 +50,9 @@ type JetStreamLog interface {
 	// Purge 删除流里匹配 filter（空表示整条流）且序号小于 below 的消息；below ≤ 1 什么也不做。
 	Purge(ctx context.Context, stream, filter string, below uint64) error
 
-	// DurableAckFloors 列出流上每个持久消费者（有 Durable 名）的 ack floor（流序号：它之前的消息都已确认）。
-	// 有序 / 临时消费者不列出。
+	// DurableAckFloors 列出流上每个持久消费者（有 Durable 名）的有效 ack floor：流序号，不超过它的、匹配该消费者过滤的
+	// 消息都已确认。没有待投递也没有待确认消息的消费者取“列出之前读到的流末序号”（与服务端 AckFloor 取大）：服务端的
+	// AckFloor 只随匹配过滤的消息前进，空闲的过滤消费者会停在 0。有序 / 临时消费者不列出。
 	DurableAckFloors(ctx context.Context, stream string) (map[string]uint64, error)
 
 	// KeyValue 建或更新一个 KV 桶并返回它的句柄。

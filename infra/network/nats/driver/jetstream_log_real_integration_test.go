@@ -585,6 +585,60 @@ func TestRealLogReadFollowPurgeAndAckFloors(t *testing.T) {
 	}
 }
 
+// 空闲的过滤 durable 不挡清理（设计 §16 第 1 条，2026-10-28 实测）：服务端的 AckFloor 只随匹配过滤的消息前进，一个只过滤
+// 自己主题、流上没有它的消息的 durable 停在 0，saga 分区按 floor 清理时会永远清不掉。DurableAckFloors 对“没有待投递、
+// 没有待确认”的 durable 报流末序号；还有没确认的消息的 durable 仍报服务端的 floor（不越过它没取的消息）。
+func TestRealLogAckFloorsOfIdleAndLaggingFilteredDurables(t *testing.T) {
+	log := logCluster(t)
+	name, _ := logStream(t, log)
+	ctx := testCtx(t, 60*time.Second)
+	var last uint64
+	for i := 0; i < 6; i++ {
+		ack, err := log.PublishFenced(ctx, []fnats.LogMsg{ev(fmt.Sprintf("%s.0.ev.cmd.busy", name), "b"+strconv.Itoa(i))}, fnats.LogFence{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = ack.Seq
+	}
+	// idle：过滤的主题上没有消息；lagging：取了 busy 的前 2 条并确认，剩 4 条没取。
+	if _, err := log.js.CreateOrUpdateConsumer(ctx, name, gojs.ConsumerConfig{Durable: "idle", FilterSubject: name + ".*.ev.cmd.quiet", AckPolicy: gojs.AckExplicitPolicy}); err != nil {
+		t.Fatal(err)
+	}
+	lagging, err := log.js.CreateOrUpdateConsumer(ctx, name, gojs.ConsumerConfig{Durable: "lagging", FilterSubject: name + ".*.ev.cmd.busy", AckPolicy: gojs.AckExplicitPolicy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := lagging.Fetch(2, gojs.FetchMaxWait(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ackedUpTo uint64
+	for m := range batch.Messages() {
+		meta, _ := m.Metadata()
+		if err := m.DoubleAck(ctx); err != nil {
+			t.Fatal(err)
+		}
+		ackedUpTo = meta.Sequence.Stream
+	}
+	floors, err := log.DurableAckFloors(ctx, name)
+	if err != nil || floors["idle"] != last || floors["lagging"] != ackedUpTo || ackedUpTo == 0 || ackedUpTo >= last {
+		t.Fatalf("ack floors = %v %v, want idle=%d (stream last) and lagging=%d (its own floor)", floors, err, last, ackedUpTo)
+	}
+	// lagging 把剩下的也取完并确认：没有待投递 / 待确认，floor 到流末。
+	batch, err = lagging.Fetch(10, gojs.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range batch.Messages() {
+		if err := m.DoubleAck(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if floors, err = log.DurableAckFloors(ctx, name); err != nil || floors["lagging"] != last || floors["idle"] != last {
+		t.Fatalf("ack floors after catching up = %v %v, want both %d", floors, err, last)
+	}
+}
+
 func TestRealLogKeyValueAndObjects(t *testing.T) {
 	log := logCluster(t)
 	ctx := testCtx(t, 60*time.Second)

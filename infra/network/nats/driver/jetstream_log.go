@@ -618,12 +618,26 @@ func (c *JetStreamLogClient) DurableAckFloors(ctx context.Context, stream string
 	if err != nil {
 		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
 	}
+	// 先读流的末序号，再列消费者：一个消费者在列出时没有待投递（NumPending）也没有待确认（NumAckPending）的消息，说明
+	// 过滤匹配、序号不超过这个末序号的消息它都已确认，它的有效 floor 至少是这个末序号。服务端的 AckFloor.Stream 只在
+	// 匹配过滤的消息被确认时前进：过滤只匹配自己主题的消费者空闲时停在 0（或它最后一条匹配消息），会让按 floor 清理的
+	// 调用方（saga 分区）永远清不掉别的主题的消息（2026-10-28 私有三节点实测，设计 §16 第 1 条）。
+	streamInfo, err := handle.Info(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
+	}
+	lastSeq := streamInfo.State.LastSeq
 	lister := handle.ListConsumers(ctx)
 	floors := map[string]uint64{}
 	for info := range lister.Info() {
-		if info != nil && info.Config.Durable != "" {
-			floors[info.Config.Durable] = info.AckFloor.Stream
+		if info == nil || info.Config.Durable == "" {
+			continue
 		}
+		floor := info.AckFloor.Stream
+		if info.NumPending == 0 && info.NumAckPending == 0 {
+			floor = max(floor, lastSeq)
+		}
+		floors[info.Config.Durable] = floor
 	}
 	if err := lister.Err(); err != nil {
 		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
