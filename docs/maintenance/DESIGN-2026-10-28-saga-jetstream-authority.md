@@ -125,32 +125,51 @@ func (l Layout) PartitionOf(id string) int
 
 ### 3.2 `infra/network/nats`（接口）与 `driver`（实现）
 
-新增 `infra/network/nats/jetstream_log.go`（接口）与 `driver/jetstream_log.go`（实现），只放分区日志需要的原语，不把 nats.go 的类型泄漏出去：
+**第 1 批已实现**（提交见 git log）。`infra/network/nats/jetstream_log.go`（接口）与 `driver/jetstream_log.go`（实现，driver 仍是唯一 import nats.go 的生产代码），只放分区日志需要的原语，不泄漏 nats.go 的类型。最终形态（完整注释以源码为准）：
 
 ```go
-// JetStreamLog 是以 JetStream 流为权威日志所需的原语（saga 协调器用）。
 type JetStreamLog interface {
-	EnsureLogStream(ctx context.Context, config LogStreamConfig) (LogStreamInfo, error) // 建或校验：AllowAtomicPublish、AllowDirect、DiscardNew、MaxAge=0、副本数
-	PublishFenced(ctx context.Context, msgs []LogMsg, fence LogFence) (LogPublishAck, error) // 1 条普通发布、多条原子批量；首条带通配期望序号
-	LastMsg(ctx context.Context, stream, filter string) (LogMsg, error)                    // GetLastMsgForSubject，可带通配
-	ReadRange(ctx context.Context, stream string, filters []string, from, to uint64, fn func(LogMsg) error) error
-	Follow(ctx context.Context, stream string, filters []string, from uint64, fn func(LogMsg)) (LogFollow, error) // 有序消费者
+	EnsureLogStream(ctx context.Context, config LogStreamConfig) (LogStreamInfo, error) // 建或更新后按生效配置核对：文件存储、AllowAtomicPublish、AllowDirect、Discard=New、MaxAge=0、副本数、去重窗口；服务端 < 2.12.1 拒绝
+	PublishFenced(ctx context.Context, msgs []LogMsg, fence LogFence) (LogPublishAck, error) // 1 条普通发布、多条原子批量；首条带通配期望序号；每条 MsgID 必填；只发一次，重发由调用方做
+	LastMsg(ctx context.Context, stream, filter string) (LogMsg, error)                    // 流 leader 回答（STREAM.MSG.GET，不走 direct get）；没有 → ErrLogNotFound
+	ReadRange(ctx context.Context, stream string, filters []string, from, to uint64, fn func(LogMsg) error) error // to = 0 读到追上为止
+	Follow(ctx context.Context, stream string, filters []string, from uint64, fn func(LogMsg)) (LogFollow, error)  // from = 0 只要新消息（WaitTerminal 用）
 	Purge(ctx context.Context, stream, filter string, below uint64) error
 	DurableAckFloors(ctx context.Context, stream string) (map[string]uint64, error)
-	KeyValue(ctx context.Context, config LogKVConfig) (LogKV, error)
-	Objects(ctx context.Context, config LogObjectConfig) (LogObjects, error)
-	RequestMany(ctx context.Context, subject string, data []byte, more func([]byte) bool) error // 列表查询的散播收集
+	KeyValue(ctx context.Context, config LogKVConfig) (LogKV, error)       // Get / Create / Update / Put / Delete / Watch(onEntry, onReady)
+	Objects(ctx context.Context, config LogObjectConfig) (LogObjects, error) // Put / Get（校验 SHA-256）/ Delete
+	RequestMany(ctx context.Context, subject string, data []byte, more func([]byte) bool) error
 	ServerVersion() string
 }
+type LogMsg struct{ Subject string; Data []byte; MsgID string; Headers map[string]string; Seq uint64 }
 type LogFence struct{ Filter string; LastSeq uint64 } // Filter 为空表示不带期望序号（仅测试变异）
+type LogFollow interface{ Stop(ctx context.Context) error; Done() <-chan struct{} }
+const MinLogServerVersion = "2.12.1"
+const LogBatchMaxMessages = 1000
 var (
-	ErrLogWrongLastSequence = errors.New("nats: wrong last sequence")       // 10071 / 10164
-	ErrLogDuplicateBatch    = errors.New("nats: duplicate atomic batch")   // 10201
-	ErrLogBatchIncomplete   = errors.New("nats: atomic batch incomplete")  // 10176
+	ErrLogWrongLastSequence // 10071 / 10164
+	ErrLogDuplicateBatch    // 10201
+	ErrLogBatchIncomplete   // 10176（缺号、批超时、同时打开的批数超限）
+	ErrLogBatchTooLarge     // > LogBatchMaxMessages（发送前）或 10199
+	ErrLogRejected          // 其余服务端明确拒绝
+	ErrLogOutcomeUnknown    // 没收到答复，可能已落库
+	ErrLogNotFound          // LastMsg / KV / 对象不存在
+	ErrLogKVConflict        // KV Create 已存在 / Update 修订号不符（R1 10071、R3 10164 都归这里）
+	ErrLogUnsupportedServer // 版本或生效配置不满足
 )
 ```
 
-`JetStreamPublishOptions` 增 `Headers map[string]string`（启动意图带回复 subject）。`wiring/nats` 的 Mod 多发布一个能力 `mods.ModNatsLog`。驱动按原型 `coordinator.go` 的 `send` / `lastIsMine` / `snapshot` 实现，错误码映射到上面的哨兵错误。原子批量的单批条数与字节上限在实现时按 2.12 服务端核实，超出时由 saga 分两次 fenced 发布（各自带期望序号）。
+**结果分类**（调用方据此写 §4.3 的重发判定）：返回 nil = 已持久（单条可能 `Duplicate`）；`errors.Is(err, ErrLogOutcomeUnknown)` = 可能已落库，同消息同 fence 重发；其余错误 = 这次调用确定没写入。驱动里没有重试循环，“结果未知预算”与 fail-stop 留在 saga 分区（第 2 批）。
+
+**相对本节初稿的调整与理由**：
+
+1. **哨兵错误多了 6 个**（`ErrLogBatchTooLarge`、`ErrLogRejected`、`ErrLogOutcomeUnknown`、`ErrLogNotFound`、`ErrLogKVConflict`、`ErrLogUnsupportedServer`）：初稿只列了三个服务端错误码，调用方无法区分“没收到答复、可能已写”与“服务端拒绝、确定没写”，leader kill 下的判定（§4.3）正依赖这个区分；KV 的冲突在 R1 / R3 上错误码不同（10071 / 10164），nats.go 的 `ErrKeyExists` 只认 10071，统一成一个哨兵。
+2. **最低版本是 2.12.1，不是 2.12**：按 v2.12.0 源码，原子批拒绝批内 `Nats-Msg-Id`（10177 unsupported header），批重复的 10201 从 2.12.1 起才有（来源见 §16；2.12.0 未实测，本机只有 2.14.5）。`EnsureLogStream` 强制。开头“前提”里的“生产 NATS ≥ 2.12”应读作 ≥ 2.12.1。
+3. **`LastMsg` 走 leader 读**：日志流开 AllowDirect 时 nats.go 的 `GetLastMsgForSubject` 走 direct get，可能由落后的副本回答旧消息；重放终点或结果未知判定读到旧值会导致误判为被隔离（多一次 fail-stop）。驱动改用 `$JS.API.STREAM.MSG.GET`。
+4. **`Follow` 的 ctx 只约束建立**，句柄 `LogFollow{Stop(ctx), Done()}` 按三步停机（`Stop` 在 ctx 内等回调返回，超时可再调用），初稿没写句柄形状。`ReadRange`/`Follow` 用有序消费者的 `Messages().Next()` 在一个 goroutine 里顺序回调，避免 `Consume` 回调在消费者重建时与旧回调并发、乱序。
+5. **`LogKVConfig.LimitMarkerTTL`**：KV 的 MaxAge 过期是静默的（Watch 看不到），§6 准入“键过期清除 → 该参与方下线”需要它（服务端在过期时写删除标记，实测 Watch 能收到）。
+6. **`JetStreamPublishOptions.Headers`** 按初稿实现；以 `Nats-` 开头的键（保留给驱动与服务端）发布时拒绝，`LogMsg.Headers` 同样规则、读回时不含保留头。
+7. **`wiring/nats` 发布能力 `mods.ModNatsLog`（`nats.log`）**，值是 `Assembly.Log`，与 `nats.jetstream` 同一连接。
 
 ### 3.3 删除
 
@@ -471,7 +490,7 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | 批 | 范围 | 提交粒度 | 门禁 | main 状态 |
 | --- | --- | --- | --- | --- |
 | 0 | 本设计稿与决定记录 | 2 笔（本次） | 根包 | 不变 |
-| 1 | `infra/network/nats` 的 `JetStreamLog` 接口与 driver 实现；`JetStreamPublishOptions.Headers`；`wiring/nats` 发布 `ModNatsLog`；语义与 leader kill 用例；私有集群脚本 | 2～3 笔（接口+实现、语义用例、脚本） | driver 包 `-race`；真实三节点语义用例全过 | Redis 版照跑，新能力无人用 |
+| 1 | `infra/network/nats` 的 `JetStreamLog` 接口与 driver 实现；`JetStreamPublishOptions.Headers`；`wiring/nats` 发布 `ModNatsLog`；语义与 leader kill 用例；私有集群脚本 | 2～3 笔（接口+实现、语义用例、脚本） | driver 包 `-race`；真实三节点语义用例全过 | Redis 版照跑，新能力无人用。**已完成**（2026-10-28，提交见 git log；接口调整见 §3.2，脚本 `scripts/nats-cluster.sh`） |
 | 2 | `framework/saga` 新协调器：`log_layout` / `log_wire` / `transition`（从 engine 抽纯函数，Redis 引擎改为调用它们，行为不变）/ `partition` / `partition_replay` / `wheel` / `admission` / `query` / `terminal_watch`；新 Engine 以 `NewJetStreamEngine` 暂名并存，不接线 | 4～6 笔（先抽纯函数并跑全部现有 saga 测试证明无行为变化，再逐文件加新代码与单元） | `framework/saga` `-race` 全过（现有测试不改）；新单元；真实 JetStream 端到端、结果未知、隔离、快照清理、kill -9（协调器） | Redis 版照跑 |
 | 3 | 参与方新路径并存：`StepReceipt*`、`NativeStep.Begin` 与新 `Complete` 分支（`run != nil` 时走新路径）、`SubscribeNativeStep`、`MongoStepInbox`、`publishCompletion`、`LoadPublisher`；codegen：`add saga -native` 生成回执字段与组件、`codegen/internal/nest` 的 Begin 包装（先在 testdata 生成工程里验证，不改 demo） | 3～5 笔 | 受影响包 `-race`；codegen golden（有意改动 `-update` 逐个看 diff）；参与方 kill -9；真实 Mongo 的 Mongo 步骤写冲突 | Redis 版照跑；生成器新输出只在 testdata |
 | 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在 |
@@ -520,4 +539,8 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 - **单流 Raft 组吞吐与选主停顿**：多流缓解，跨机未测（维护者已接受）。
 - **清理被最慢的 durable 牵制**：告警 + `MaxBytes` 拒新写兜底，没有自动跳过。
 - **事件携带完整状态**：Data 大时日志膨胀；保持 `max_payload_bytes` 缺省 64 KiB 的约束。
-- 未核实、实施时确认：原子批量的服务端条数 / 字节上限（2.12）；`nest.AfterCommit` 在 pipelined 下相对外化闸门的时机；Nest 是否暴露“本事务有 Remote 批次”；DAO 生成器对 `map[string][]byte` 字段的支持与存量文档的 schema 处理；`wiring/dataengine` 启动排空是否已对写冲突重试；`transactionLifetimeLimitSeconds` 探测在托管库上的权限。
+- **原子批量的服务端上限（第 1 批已核实）**：
+  - 来源：nats-server 源码 tag v2.12.0、v2.12.1、v2.14.5 的 `server/stream.go`（`streamDefaultMaxBatchSize = 1000`，2.14 改名 `streamDefaultMaxAtomicBatchSize`；`streamDefaultMaxBatchInflightPerStream = 50`、`...InflightTotal = 1000`、`streamDefaultMaxBatchTimeout = 10s`，均可由 `jetstream { limits { max_batch_size / max_batch_inflight_per_stream / max_batch_inflight_total / max_batch_timeout } }` 调整）、`server/jetstream_batching.go`（批内每条按 `max_payload` 与流的 `max_msg_size` 检查，没有批总字节检查）、`server/jetstream_errors_generated.go`（10199 “atomic publish batch is too large: {size}”、10176、10201 自 2.12.1 起）；实测（本机 macOS、nats-server v2.14.5、私有三节点 R3，`TestRealLogAtomicBatchLimits`）：1000 条一批成功，第 1001 条服务端回 `{"err_code":10199,"description":"atomic publish batch is too large: 1000"}`；256 × 256 KiB = 64 MiB 一批照常提交（约 145ms）；一条流同时打开 50 个未提交批时新批收到 10176，等被丢弃的批 10s 超时后恢复。
+  - 结论：**单批 ≤ 1000 条（驱动发送前就按 `LogBatchMaxMessages` 拒绝，返回 `ErrLogBatchTooLarge`，saga 按此切成几次顺序 fenced 发布）；没有批总字节上限，单条 ≤ max_payload（缺省 1 MiB）**。2.12.0 不可用（批内 MsgID 被拒），最低 2.12.1。
+  - **对第 2 批的影响**：① 一条流同时在途的批数上限 50：每个分区同时最多一次发布在途，所以每条流的分区数 `ceil(partitions / stream_groups)` 必须 ≤ 50，否则高负载下批会被服务端丢弃（10176，确定没写入，重发可恢复但会空转）；建议在 `wiring/saga` 的配置检查里加这条（缺省 16 / 4 = 4，远低于上限），并把 10176 按“确定没写入、立即重发”处理而不是结果未知。服务端总上限 1000 是整台服务端所有流共用的，同一 NATS 上有别的原子批用户时要一起算。② 批从首条到提交最长 10s：saga 发布不会接近，但 `publish_timeout` 应远小于它。③ 流满（`MaxBytes` + Discard=New）时发布返回 `ErrLogRejected`（确定没写），saga 应直接 fail-stop 告警，不当结果未知重试。
+- 未核实、实施时确认：`nest.AfterCommit` 在 pipelined 下相对外化闸门的时机；Nest 是否暴露“本事务有 Remote 批次”；DAO 生成器对 `map[string][]byte` 字段的支持与存量文档的 schema 处理；`wiring/dataengine` 启动排空是否已对写冲突重试；`transactionLifetimeLimitSeconds` 探测在托管库上的权限。

@@ -128,27 +128,29 @@
 
 ### nats
 
-8 个实现文件、1 个测试文件。
+9 个实现文件、1 个测试文件。`jetstream_log.go` 是把 JetStream 流当权威事件日志的原语接口 `JetStreamLog`（fenced 发布：单条或原子批量、首条带通配期望序号；leader 读最后一条、有序读取与跟随、清理、持久消费者 ack floor、KV、对象存储、散播请求），结果分“已持久 / 结果未知 / 确定没写入”三类，最低 nats-server 2.12.1（Saga 协调器权威改为 JetStream 事件日志，设计见 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §3.2）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [client.go](../../../infra/network/nats/client.go) | `IClient`、`MsgHandler`、`Msg`、`ISubscription` |
 | [config.go](../../../infra/network/nats/config.go) | `Config` |
 | [errors.go](../../../infra/network/nats/errors.go) | 函数/方法或内部实现；见源码 |
-| [jetstream.go](../../../infra/network/nats/jetstream.go) | `JetStreamStorage`、`JetStreamDeliverPolicy`、`IJetStream`、`JetStreamConfig`、`JetStreamPublishOptions`、`JetStreamPublishAck`、`JetStreamConsumerConfig`、`JetStreamHandler`、`JetStreamMsg`、`IJetStreamSubscription` |
+| [jetstream.go](../../../infra/network/nats/jetstream.go) | `JetStreamStorage`、`JetStreamDeliverPolicy`、`IJetStream`、`JetStreamConfig`、`JetStreamPublishOptions`（含业务头 `Headers`）、`JetStreamPublishAck`、`JetStreamConsumerConfig`、`JetStreamHandler`、`JetStreamMsg`、`IJetStreamSubscription` |
+| [jetstream_log.go](../../../infra/network/nats/jetstream_log.go) | `JetStreamLog`、`LogStreamConfig`、`LogStreamInfo`、`LogMsg`、`LogFence`、`LogPublishAck`、`LogFollow`、`LogKV`、`LogKVConfig`、`LogKVEntry`、`LogObjects`、`LogObjectConfig`、`LogObjectInfo`；哨兵错误 `ErrLog*`、`MinLogServerVersion`、`LogBatchMaxMessages` |
 | [message.go](../../../infra/network/nats/message.go) | `NatsMsg`、`BroadcastType` |
 | [rpc.go](../../../infra/network/nats/rpc.go) | `IRpc`、`RpcCallback`、`RetryPolicy` |
 | [subject.go](../../../infra/network/nats/subject.go) | `SubjectBuilder` |
 
 ### nats/driver
 
-8 个实现文件、7 个测试文件。
+9 个实现文件、9 个测试文件。`jetstream_log.go` 的 `JetStreamLogClient` 与 `JetStreamClient` 共用连接，由 `Assemble` 装进 `Assembly.Log`，Wiring 的 NatsMod 发布为能力 `nats.log`（`mods.ModNatsLog`）；原子批量手写 ADR-50 批头（nats.go v1.53.1 没有高层 API），`LastMsg` 走 leader 的 `STREAM.MSG.GET`（不走可能落后的 direct get）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [assembly.go](../../../infra/network/nats/driver/assembly.go) | `Assembly` |
 | [client.go](../../../infra/network/nats/driver/client.go) | `Client` |
 | [jetstream.go](../../../infra/network/nats/driver/jetstream.go) | `JetStreamClient` |
+| [jetstream_log.go](../../../infra/network/nats/driver/jetstream_log.go) | `JetStreamLogClient` |
 | [options.go](../../../infra/network/nats/driver/options.go) | `ClientOptions` |
 | [rpc.go](../../../infra/network/nats/driver/rpc.go) | `RPCClient` |
 | [subscription.go](../../../infra/network/nats/driver/subscription.go) | 函数/方法或内部实现；见源码 |
@@ -233,6 +235,8 @@
 - [client_test.go](../../../infra/network/nats/driver/client_test.go)：`TestNatsClientNilBoundaryFailsClosed`、`TestInvokeNatsHandlerContainsAndReportsPanic`、`TestSubscriptionValidationRejectsANilHandler`、`TestClientTranslatesEachTransportErrorToItsSentinel`、`TestClientRefusesInvalidSubjectsQueuesAndHandlers`；其余 4 项见文件
 - [closed_state_test.go](../../../infra/network/nats/driver/closed_state_test.go)：`TestEveryExportedDriverMethodHasAClosedStateCheck`、`TestEveryExportedDriverMethodReportsErrClosedAfterClose`、`TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed`、`TestInFlightCallAsyncExpiresAsErrClosedAfterClientClose`、`TestCallsRacingCloseEitherCompleteOrReportErrClosed`；其余 3 项见文件
 - [jetstream_test.go](../../../infra/network/nats/driver/jetstream_test.go)：`TestJetStreamTerminalClassification`、`TestInvokeJetStreamHandlerContainsPanic`、`TestJetStreamStreamConfigMapping`、`TestJetStreamConsumerConfigMappingDefaults`、`TestJetStreamNakBackoffIsBounded`；其余 7 项见文件（含推迟结算的三项：推迟后 ack、Drain 等推迟结算、handler 错误 / panic 优先、订阅结束后拒绝推迟、Stop 取消后台但 Closed 仍等结算）
+- [jetstream_log_test.go](../../../infra/network/nats/driver/jetstream_log_test.go)：`TestBuildLogMessagesRejectsBeforeSending`、`TestBuildLogMessagesPutsTheFenceOnTheFirstAndCommitOnTheLast`、`TestLogAPIErrorClassification`、`TestParseBatchAck`、`TestLogFollowStopWaitsForTheCallbackWithinItsContext`；其余 5 项见文件
+- [jetstream_log_real_integration_test.go](../../../infra/network/nats/driver/jetstream_log_real_integration_test.go)（`-tags integration`，私有三节点，入口 `scripts/nats-cluster.sh test`）：`TestRealLogWildcardFenceSerializesOneWriter`、`TestRealLogConcurrentWritersExactlyOneWins`、`TestRealLogAtomicBatchSemantics`、`TestRealLogAtomicBatchLimits`、`TestRealLogLeaderKillKeepsAckedWritesAndResolvesUnknowns`；其余 5 项见文件
 - [options_test.go](../../../infra/network/nats/driver/options_test.go)：`TestHandleNatsDisconnectLogsExpectedCloseAsInfo`、`TestHandleNatsDisconnectLogsUnexpectedErrorAsError`、`TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection`
 - [real_nats_integration_test.go](../../../infra/network/nats/driver/real_nats_integration_test.go)：`TestRealRawRequestAndSubscriptionDrain`、`TestRealRawSlowConsumerAndCloseWaitForActualCallback`、`TestRealRawCancellationDoesNotReplayAnAdmittedRequest`、`TestRealScopedInboxReusesSubscriptionAndCancelsOnlyItsWaiter`、`TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose`；其余 3 项见文件（含 `TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain`：推迟结算时同 durable 后续消息照常进回调、Drain 之后的 settle 仍 ack、不重投；`TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace`：已存在 durable 的可变字段原地更新、不可变字段冲突点名流 / durable 与处置命令）
 - [rpc_contract_test.go](../../../infra/network/nats/driver/rpc_contract_test.go)：`TestRPCBudgetAssemblyCloseBoundsCallbackDrain`、`TestRPCBudgetPendingTerminalRacesCompleteOnce`、`TestRPCBudgetAssemblyClosesCompletedPool`、`TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry`、`TestRPCBudgetCallbackCanCancelItsOwnStopWait`；其余 4 项见文件

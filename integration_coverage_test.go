@@ -445,6 +445,8 @@ var optInEntries = []struct {
 }{
 	{"ROOST_DATAENGINE_IT_BACKLOG", filepath.Join("scripts", "mirror-local.sh"), true},
 	{"ROOST_MIRROR_LOCAL", filepath.Join("scripts", "mirror-local.sh"), false},
+	// JetStream 日志原语的真实语义与 leader kill：私有三节点集群，地址与数据目录由脚本 test 子命令导出。
+	{"ROOST_NATS_CLUSTER", filepath.Join("scripts", "nats-cluster.sh"), false},
 }
 
 func TestOptInRealDependencySuitesHaveAnEntry(t *testing.T) {
