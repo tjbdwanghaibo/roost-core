@@ -1,5 +1,62 @@
 # 新增提交审查
 
+## 2026-10-28：main JetStream Saga 原型审查（待修复）
+
+审查基线：[main `4170bcad`](https://github.com/tjbdwanghaibo/roost-core/commit/4170bcad)。以下三项属于 `scripts/perf/saga-jslog-proto` 实验包，不代表生产 `framework/saga` 的同名缺陷。用户安排另一位 agent 修复，本次只提交问题与复现输入，没有修改运行时代码。固定审查分支未为本次文档提交合入最新 main；复现必须在该 main 基线或其后继版本运行。
+
+### RV-20261028-01 / P1：客户端重建后，拒绝重试被 JetStream 去重吞掉
+
+**状态：已复现，待修复。** 位置：[client.go:142](https://github.com/tjbdwanghaibo/roost-core/blob/4170bcad/scripts/perf/saga-jslog-proto/client.go#L142)。`MsgID` 只由 Saga ID 和 Client 内存计数组成，新的 Client 从 1 重新计数。
+
+触发：同 ID 首次启动因积压被拒绝；在流的两分钟去重窗口内重建客户端，读取旧 Rejected 终态；准入恢复后用同 ID 重试。期望写入新的启动意图，协调器重新判定；实际 Publish 返回成功，但流中最后一条启动意图序号仍为 1，新请求没有入流。客户端已经删除旧终态并登记新等待者，可能一直等不到结果。影响是失败重试不执行，并非已证实重复扣款。
+
+原始失败：`retry acknowledged but not appended: start seq remains 1; restarted client reused MsgID`。
+
+建议：启动尝试身份加入客户端实例唯一标识或独立的全局唯一请求 ID；一次发布内部重试保持同一 MsgID，不能每次网络重发都换身份。修复验收覆盖客户端重建、不同客户端同 ID 拒绝重试、同一次发布结果未知重试不重复追加。
+
+### RV-20261028-02 / P2：同 ID 在途重试覆盖第一次调用的等待通道
+
+**状态：已复现，待修复。** 位置：[client.go:130](https://github.com/tjbdwanghaibo/roost-core/blob/4170bcad/scripts/perf/saga-jslog-proto/client.go#L130)，尤其 `c.wait[id] = ch`。
+
+触发：同一 Client 连续两次 StartIntent 同一 ID，两次均发生在终态到达前。期望两位等待者都能观察终态；实际第二次调用覆盖第一条通道，终态消费者仅关闭第二条，第一条永不关闭。复现直接发布合法终态事件以隔离客户端等待逻辑，不依赖转账状态机或执行时延。
+
+原始失败：`first caller stranded after second StartIntent overwrote its waiter`。
+
+建议：复用同 ID 的在途通道或保存全部等待者，同时明确取消／发布失败的清理方式。修复验收包含同时和先后重试、终态到达竞争、Rejected 后发起新一轮等待，避免旧拒绝回执误结束新一轮。
+
+### RV-20261028-03 / P2：准入初始 KV 快照未就绪时默认放行
+
+**状态：初始化判定已复现，待修复。** 位置：[admission.go:98](https://github.com/tjbdwanghaibo/roost-core/blob/4170bcad/scripts/perf/saga-jslog-proto/admission.go#L98)、[coordinator.go:141](https://github.com/tjbdwanghaibo/roost-core/blob/4170bcad/scripts/perf/saga-jslog-proto/coordinator.go#L141)。`newAdmission` 初始 open=true；WatchAll 异步读取积压，收到初始结束标记才设置 ready，但 evaluate/admitStart 没有检查 ready。
+
+触发：协调器启动／接管期间，已有参与方积压超过阈值，KV 初始读取尚未完成。空的本地 loads 被当作“没有需要保护的投影”，新 Saga 可能被放入。期望初始快照读取前关闭准入或等待初始化；实际 ready=false 时 evaluate 直接返回 open。复现是无网络的状态单测，尚未测量真实重启时窗口长度或超额准入数量。
+
+原始失败：`admission opens before initial KV load snapshot is read`。
+
+建议：初始状态 fail-closed；watch 初始结束后才允许按实际空表放行，避免把“未知”混成“已确认无参与方”。验收用受控 watcher 延迟初始快照，确认高积压期间不派发新步骤；初始快照为空时可恢复放行，已在途 Saga 的补偿／重试不受影响。
+
+### 复现与修复验收入口
+
+复现代码：[review_regression_test.go.txt](../../scripts/testdata/saga-review/review_regression_test.go.txt)。保存为文本以免把预期失败的审查探针直接纳入主分支测试，也避免当前固定分支缺少实验包导致无法编译。修复 agent 应在 main 检出中将其复制到实验包，并把最终回归合入对应现有测试文件。
+
+```bash
+# 在 main 4170bcad 或后继版本的独立检出中；复制本提交的探针文件到以下位置：
+# scripts/perf/saga-jslog-proto/review_regression_test.go
+# 选择专用数据目录及未占用端口，勿使用共享环境。
+export SAGAJS_ROOT=/tmp/saga-review-private
+export SAGAJS_PORT_BASE=29622
+bash scripts/perf/saga-jslog-proto/nats-cluster.sh start
+export SAGAJS_URL=nats://127.0.0.1:29622,nats://127.0.0.1:29623,nats://127.0.0.1:29624
+go test -count=1 -run '^TestReview' -v ./scripts/perf/saga-jslog-proto
+# 基线预期：三个 FAIL；修复后应全部 PASS。
+bash scripts/perf/saga-jslog-proto/nats-cluster.sh stop
+```
+
+本轮环境 Linux、Go 1.27.2、NATS Server 2.12.3 私有三节点，nats.go 1.53.1；原型历史报告使用的 Server 2.14.5 不应混为本轮环境。前两项通过真实 JetStream 复现，第三项为直接初始化状态断言。三项探针共 0.582s，均按期望行为断言失败。
+
+对照验证：原有 `TestEndToEndForwardAndCompensate`、`TestEndToEndDuplicateCommandsAndResults`、`TestEndToEndLateSuccessReopensAndCompensates`、`TestFenceRejectsStaleWriter`、`TestSnapshotPurgeReplayMatches`、`TestPublishOutcomeUnknownIsResolved` 在同一私有集群 `-race -count=1` 全部通过（包耗时 8.627s）。此外 `go test -race ./framework/saga ./wiring/saga ./scripts/perf/saga-jslog-proto` 默认环境通过，依赖外部服务的跳过项不算验收。真实 Mongo 投影、生产 Redis 全链路、跨机及容量不在本轮已验证范围。集群已停止，主工作区运行时代码未改。
+
+## 2026-10-22：历史审查
+
 审查日期：2026-10-22。同步时 main 与 origin/main 均为 `13bc939e`；范围为上一轮审查提交 `a73c75cf..13bc939e`，413 个提交、无合并提交，净变化 1335 个文件，其中 Go / Go 模板 651 个路径。在独立 worktree 审查最终代码状态，没有逐个运行历史中间版本。上一轮报告见 [固定提交](https://github.com/tjbdwanghaibo/roost-core/blob/a73c75cf/docs/maintenance/COMMIT-REVIEW.md)。
 
 ## 确认缺陷

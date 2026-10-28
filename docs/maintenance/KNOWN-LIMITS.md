@@ -4,6 +4,10 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## main Saga 原型待修复（2026-10-28）
+
+基线 main `4170bcad` 的 JetStream 实验包确认三项：RV-20261028-01 客户端重建后的拒绝重试 MsgID 碰撞（P1）、RV-20261028-02 同 ID 在途重试覆盖等待通道（P2）、RV-20261028-03 初始 KV 积压快照未就绪时准入放行（P2）。均待另一位 agent 修复；[提交审查](COMMIT-REVIEW.md#2026-10-28main-jetstream-saga-原型审查待修复)包含证据、复现输入、建议与验收范围。问题限定实验包，不表示生产 Saga 路径具有相同缺陷；固定审查分支本次仅记录 main 问题，没有合入原型运行时代码。
+
 ## 通用 LevelComponent 首版边界
 
 `gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。该组件尚未验证真实 Mongo/WAL 多进程崩溃恢复，不恢复原生物理世界。状态复制与整状态 mutation 有预算但没有容量承诺，动作账本满额拒绝，长期归档另设计。私有参与者状态、网络增量与 Unity UI 由宿主接入。

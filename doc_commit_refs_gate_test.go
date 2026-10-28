@@ -33,7 +33,9 @@ var commitTokenRE = regexp.MustCompile("`([0-9a-f]{7,40})`")
 // documentedCommitExemptions 是有意引用、不在 HEAD 历史里的提交（例如说明某个分支上的原始提交与最终合入
 // 版本不同）。键是文档里写的短 SHA，值写明它在哪个分支、为什么必须保留。保持很小：能改成 main 上的提交号
 // 就改；条目不再被任何文档引用、或已能在 HEAD 历史里找到时，本测试要求删掉它。
-var documentedCommitExemptions = map[string]string{}
+var documentedCommitExemptions = map[string]string{
+	"4170bcad": "2026-10-28 用户要求在 fix/core-game-server-review 提交最新 main Saga 原型审查问题，未合入 main 运行时代码；此 SHA 是真实 origin/main 审查基线。固定分支合入该 main 或文档合入 main 时删除本例外。",
+}
 
 // docCommitIncident 是本门禁要抓的那一次：该提交的 KNOWN-LIMITS 写着 rebase 前的 `b717fd14`。
 const (
