@@ -86,6 +86,25 @@
 
 回归：`transition_test.go`（两种协调器差分）、`jetstream_coordinator_test.go`、`log_wire_test.go`、`wheel_test.go`、`admission_test.go`；真实三节点 `jetstream_coordinator_real_integration_test.go`（`scripts/nats-cluster.sh test`）。
 
+#### 参与方新路径（第 3 批，未接线）
+
+回执放在被改的实体里（[设计](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §5、§13.2）：与旧收件箱（租约 + DataEngine 回执 + lease fence）并存，`wiring/saga` 不用它。`NativeStep` 有两条路径：`run` 非空（`RunNativeStep` 构造）走新路径，否则走旧路径（`Begin` 是空操作）。
+
+- 原生步骤：生成的 Nest 分发包装在业务函数之前调用 `step.Begin(第一个锁目标)`（锁目标的具体实体实现 `StepReceiptHost`，`roost add saga -native` 生成 DAO 字段 `SagaReceipts map[string][]byte` 与 `saga_receipts.go` 适配）。有成功回执（任何代际）或本代际拒绝 → 回放（并把同一份回执重写一次，让回放事务是一条 WAL 记录：pipelined 下它的提交后回调晚于写回执那笔的落盘）；否则过了截止 → 过期未执行；否则执行，`Complete` 在同一事务写回执、剪至多 16 条过期回执。结论经 `nest.AfterCommit` 交给消费者（事务持久之后）。`Complete` 在带 Remote 批次的派发里返回 `ErrNativeStepRemoteWrite`（`nest.CurrentDispatchHasRemoteWriteBatch`）。
+- 消费者 `SubscribeNativeStep` / `SubscribeJetStreamMongoStep`（暂名）：每条流一个同名 durable，过滤 `<prefix>.*.ev.cmd.<topic>`；执行或回放 → `publishCompletion` 发到命令所属分区 `in.res`（MsgID `res.<生效的 CommandID>`），PubAck 后 ack；过期未执行直接 ack；出错 nak。在途处理数 `NativeWorkers`（缺省 32）/ `MongoWorkers`（缺省 1）。
+- Mongo 步骤 `MongoStepInbox`（M-A）：一个 Mongo 事务里读回执（`_id` = IdempotencyKey）→ 过期判定 → handler → 写前再判截止 → 插入或按旧值条件替换；同一操作并发的两次尝试由写冲突串行，后者重跑并回放。可重试失败的回执只对写它的那次尝试回放。
+- 准入信号 `LoadPublisher`：每 interval 把读数写进 LoadBucket 的 `part.<名字>`，`Remove` 优雅下线。
+- 清理守卫：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报流末序号（服务端 AckFloor 只随匹配过滤的消息前进，空闲步骤 durable 会停在 0）。
+
+| 源码 | 职责 |
+| --- | --- |
+| [step_receipt.go](../../../framework/saga/step_receipt.go) | `StepReceipt`、`StepReceipts`、`StepReceiptHost`、`StepOutcome`、`RunNativeStep`；回执编码、`Begin` / `Complete` 的新路径 |
+| [step_consumer.go](../../../framework/saga/step_consumer.go) | `SubscribeNativeStep`、`SubscribeJetStreamMongoStep`、`publishCompletion`、`decodeCommandEvent` |
+| [mongo_step_inbox.go](../../../framework/saga/mongo_step_inbox.go) | `MongoStepInbox` |
+| [admission.go](../../../framework/saga/admission.go) | `LoadPublisher`（参与方信号） |
+
+回归：`step_receipt_test.go`、`step_consumer_test.go`；真实依赖 `step_participant_real_integration_test.go`（`-tags integration`：端到端与空闲 durable 清理、参与方 kill -9 + DataEngine 投影（`ROOST_SAGA_JS_RESTART_DELAY` 模拟长停机）、Mongo 步骤写冲突、`LoadPublisher` 驱动准入；`scripts/nats-cluster.sh test` 一并跑，要 Mongo 的在没有共享隔离环境时跳过）；生成器 `TestAddSagaNativeKeepsStepReceiptsOnTheEntity`、`TestNativeStepHandlerDispatchBeginsBeforeTheBusinessCall`。
+
 ### storeservice
 
 | 源码 | 导出类型（定位用） |
