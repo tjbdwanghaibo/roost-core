@@ -326,6 +326,11 @@ func nestService(m Manifest, requested, command, why string) (string, error) {
 
 // timerHostDao 选存放节点的 DAO：实体唯一的 DAO，或几个里面与实体同名的那个（字段 dao）。
 func timerHostDao(entityName string, host entity.TimerHost) (string, error) {
+	return entityMainDao(entityName, host, "timer nodes")
+}
+
+// entityMainDao 选实体的主 DAO：唯一的那个，或几个里面字段名为 dao 的那个。what 是要放进去的东西（报错用）。
+func entityMainDao(entityName string, host entity.TimerHost, what string) (string, error) {
 	var local []entity.DaoField
 	for _, dao := range host.Daos {
 		local = append(local, dao)
@@ -333,7 +338,7 @@ func timerHostDao(entityName string, host entity.TimerHost) (string, error) {
 	pick := func(dao entity.DaoField) string { return lastSegment(strings.TrimPrefix(dao.TypeName, "*")) }
 	switch len(local) {
 	case 0:
-		return "", fmt.Errorf("entity %s has no DAO; timer nodes are stored in it. Run: roost add dao %s --entity %s", toPascal(entityName), toPascal(entityName), toPascal(entityName))
+		return "", fmt.Errorf("entity %s has no DAO; %s are stored in it. Run: roost add dao %s --entity %s", toPascal(entityName), what, toPascal(entityName), toPascal(entityName))
 	case 1:
 		return pick(local[0]), nil
 	}
@@ -346,7 +351,7 @@ func timerHostDao(entityName string, host entity.TimerHost) (string, error) {
 	for _, dao := range local {
 		names = append(names, dao.FieldName+" "+pick(dao))
 	}
-	return "", fmt.Errorf("entity %s has %d DAOs (%s) and none is its main DAO (field dao); timer nodes need one DAO", toPascal(entityName), len(local), strings.Join(names, ", "))
+	return "", fmt.Errorf("entity %s has %d DAOs (%s) and none is its main DAO (field dao); %s need one DAO", toPascal(entityName), len(local), strings.Join(names, ", "), what)
 }
 
 // entityHasTimerField：实体上 CompType<C> 的字段就是 *<C>Component。

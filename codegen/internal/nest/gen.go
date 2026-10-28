@@ -712,6 +712,15 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 {{- end}}
 {{- end}}
 
+{{- if .NativeStep}}
+	// 原生步骤：先在实体锁内查回执（saga.NativeStep.Begin）。这个操作已有结论（回放）或命令已过截止时不执行业务，
+	// 以零值成功返回，结论在事务提交后交给步骤消费者。
+	if replayed, beginErr := {{.NativeStep}}.Begin({{.ReceiptTarget}}); replayed || beginErr != nil {
+		err = beginErr
+		return
+	}
+{{- end}}
+
 {{- if gt (len .Returns) 1}}
 	{{range $i, $_ := .Returns}}{{if $i}}, {{end}}r{{$i}}{{end}}{{if .Err.Have}}, callErr{{end}} := {{.InvokeName}}({{range $i, $p := .Entities}}{{if $i}}, {{end}}e{{$p.Index}}{{end}}{{if .Entities}}{{if .Params}}, {{end}}{{end}}{{range $i, $p := .Params}}{{if $i}}, {{end}}p{{$p.Index}}{{end}})
 	{{- if .Err.Have}}

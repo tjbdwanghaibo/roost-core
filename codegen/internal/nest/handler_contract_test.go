@@ -213,3 +213,55 @@ func handlerClaim(target player.IBagEntity, nowUnix int64, mailID string, nowUni
 		t.Fatalf("the sender must not take the business time:\n%s", syncSender)
 	}
 }
+
+// 原生步骤 handler（参数里有 saga.NativeStep，设计 2026-10-28 §5.1 选项 N-A）：分发包装在调用业务函数之前调用
+// step.Begin(第一个锁目标)，回放 / 过期时以零值成功返回、不执行业务；durability 必须 strict / pipelined，第一个锁目标不能是组。
+func TestNativeStepHandlerDispatchBeginsBeforeTheBusinessCall(t *testing.T) {
+	const head = "package handler\nimport sg \"github.com/tjbdwanghaibo/roost-core/framework/saga\"\ntype IWalletEntity interface{ ID() int64 }\n"
+	path := writeTempGoFile(t, head+`//roost:nest rollback=undo durability=strict
+func handlerGiftDebit(target IWalletEntity, amount int64, step sg.NativeStep) (int64, error) { return amount, step.Complete(true, "") }
+`)
+	funcs, pkg, err := parseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "handler_nest_gen.go")
+	if _, err := generate(funcs, pkg, out, true, false, "RegisterHandlers"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	begin := strings.Index(body, "if replayed, beginErr := p1.Begin(e0); replayed || beginErr != nil {")
+	call := strings.Index(body, "handlerGiftDebit(e0, p0, p1)")
+	if begin < 0 || call < 0 || begin > call {
+		t.Fatalf("the dispatch must call p1.Begin(e0) before the business function:\n%s", body)
+	}
+
+	for label, src := range map[string]string{
+		"async durability": `//roost:nest rollback=undo
+func handlerGiftDebit(target IWalletEntity, step sg.NativeStep) error { return nil }
+`,
+		"memory durability": `//roost:nest rollback=undo durability=memory
+func handlerGiftDebit(target IWalletEntity, step sg.NativeStep) error { return nil }
+`,
+		"group target": `//roost:nest rollback=undo durability=strict
+func handlerGiftDebit(targets []IWalletEntity, step sg.NativeStep) error { return nil }
+`,
+		"two steps": `//roost:nest rollback=undo durability=strict
+func handlerGiftDebit(target IWalletEntity, a sg.NativeStep, b sg.NativeStep) error { return nil }
+`,
+	} {
+		if _, _, err := parseFile(writeTempGoFile(t, head+src)); err == nil || !strings.Contains(err.Error(), "native step handler") {
+			t.Errorf("%s: parseFile = %v, want a native step handler error", label, err)
+		}
+	}
+	// 没有 saga.NativeStep 参数的 handler 不受影响（同名类型来自别的包也不算）。
+	plain := writeTempGoFile(t, "package handler\ntype NativeStep struct{}\ntype IWalletEntity interface{ ID() int64 }\n//roost:nest rollback=undo\nfunc handlerPlain(target IWalletEntity, step NativeStep) error { return nil }\n")
+	funcs, _, err = parseFile(plain)
+	if err != nil || len(funcs) != 1 || funcs[0].NativeStep != "" {
+		t.Fatalf("a handler without saga.NativeStep = %+v %v", funcs, err)
+	}
+}

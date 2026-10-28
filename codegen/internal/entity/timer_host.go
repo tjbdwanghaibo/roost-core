@@ -36,6 +36,35 @@ func InspectComponentHost(dir, name string) (TimerHost, error) {
 	return TimerHost{}, fmt.Errorf("%s: no //roost:entity struct named %s", filepath.ToSlash(dir), name)
 }
 
+// InspectReceiptHost 读 dir 包里名为 name 的实体，拒绝不能放 saga 原生步骤回执的实体（roost add saga -native 用）：
+//   - remote=managed：原生步骤只能改本进程 Nest 管的实体（结果在本地 WAL 落盘后外发，带 Remote 批次的事务被拒绝）；
+//   - noPersist=true：回执随实体 DAO 持久，不落库的实体重启后没有回执，重投会让操作再执行一次。
+func InspectReceiptHost(dir, name string) (TimerHost, error) {
+	defs, _, err := parsePackage(dir)
+	if err != nil {
+		return TimerHost{}, err
+	}
+	for _, ent := range defs.Entities {
+		if ent.Name != name {
+			continue
+		}
+		source := filepath.ToSlash(ent.SourceFile)
+		if ent.RemotePolicy == "entity.RemotePolicyManaged" {
+			return TimerHost{}, fmt.Errorf("%s: %s is remote=managed; a saga native step runs as a local Nest transaction and cannot change a Remote-managed entity: use a Mongo step, or lock a local entity", source, ent.Name)
+		}
+		if ent.NoPersist {
+			return TimerHost{}, fmt.Errorf("%s: %s is noPersist=true; a native step keeps its receipts in the entity's DAO, and an entity that is never stored loses them on a restart, so a redelivered command would run again", source, ent.Name)
+		}
+		host := TimerHost{Daos: append([]DaoField(nil), ent.Daos...)}
+		for _, comp := range ent.Components {
+			host.Components = append(host.Components, comp.CompType)
+		}
+		host.ComponentFields = append([]ComponentField(nil), ent.Components...)
+		return host, nil
+	}
+	return TimerHost{}, fmt.Errorf("%s: no //roost:entity struct named %s", filepath.ToSlash(dir), name)
+}
+
 // InspectTimerHost 读 dir 包里名为 name 的实体，拒绝不能装持久定时器的实体：
 //   - remote=managed：实例的所有权在进程间迁移，驱动的期限索引只覆盖本进程加载的实例，迁移中的到期语义没有定义；
 //   - noPersist=true：节点随实体 DAO 持久，不落库的实体重启后没有期限可以补触发。

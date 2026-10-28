@@ -24,9 +24,11 @@ type sagaStep struct {
 	native        bool
 }
 
-// sagaHandlerTarget 是原生步骤 handler 锁的实体与组件（与 add handler 同一套解析）。
+// sagaHandlerTarget 是原生步骤 handler 锁的实体与组件（与 add handler 同一套解析），以及放回执的实体主 DAO 与它在实体上的
+// getter 名（add_saga_receipts.go）。
 type sagaHandlerTarget struct {
 	entity, entityPascal, component string
+	dao, daoGetter                  string
 }
 
 // parseSagaSteps 按书写顺序解析 -steps 与 -native：-steps 的顺序就是 Definition.Steps 的下标顺序（Saga 按下标推进、
@@ -139,6 +141,13 @@ func planSaga(root string, m Manifest, o AddOptions, service string) ([]syncChan
 		}
 		changes = append(changes, syncChange{rel: rel, path: abs, body: formatted})
 	}
+	if anyNative {
+		receipts, err := planSagaReceipts(root, m.Project.Module, target)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, receipts...)
+	}
 	return changes, nil
 }
 
@@ -156,7 +165,11 @@ func resolveSagaHandlerTarget(root string, m Manifest, o AddOptions, service str
 	if !contains(resolved, "nest") {
 		return sagaHandlerTarget{}, fmt.Errorf("saga %s -native: service %s runs the step consumers and needs the nest Mod for the native steps' transactions; run: roost add mod nest -service %s", toSnake(o.Name), service, service)
 	}
-	return sagaHandlerTarget{entity: entityName, entityPascal: toPascal(entityName), component: toPascal(componentName)}, nil
+	target := sagaHandlerTarget{entity: entityName, entityPascal: toPascal(entityName), component: toPascal(componentName)}
+	if err := resolveSagaReceiptHost(root, toSnake(o.Name), &target); err != nil {
+		return sagaHandlerTarget{}, err
+	}
+	return target, nil
 }
 
 // rejectExistingHandlers 拒绝与已有 Nest handler 同名的原生步骤 handler（nest 生成器按函数名登记，同名会让
@@ -587,7 +600,9 @@ import (
 // same transaction. The change, the command's receipt and the completion the
 // coordinator waits for are one WAL record: a redelivery replays the stored
 // completion instead of running again, and a crash before the commit leaves
-// none of the three (roost-core SAGA.md, 原生步骤执行契约).
+// none of the three (roost-core SAGA.md, 原生步骤执行契约). The generated
+// dispatch checks the receipt (step.Begin on target, kept in the %[6]s's DAO by
+// saga_receipts.go) before this function runs.
 //
 // A business refusal also commits: return step.Complete(false, reason) without
 // changing the %[6]s; %[8]s. Return an error only for an

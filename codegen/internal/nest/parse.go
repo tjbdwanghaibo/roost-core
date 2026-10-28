@@ -32,6 +32,10 @@ type FuncInfo struct {
 	SourceImports []ImportInfo // imports needed for type references
 	ReceiverType  string       // injected pointer receiver for method handlers
 	InvokeName    string       // package function or receiver method expression
+	// NativeStep / ReceiptTarget 非空表示原生步骤 handler：分发包装里 saga.NativeStep 参数与第一个锁目标的变量名
+	// （p<i> / e<i>），包装在调用业务函数之前调用 NativeStep.Begin(ReceiptTarget)。
+	NativeStep    string
+	ReceiptTarget string
 }
 
 type RemoteAccessInfo struct {
@@ -169,6 +173,9 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 			return nil, pkg, fmt.Errorf("nest: handler %s: %w", fnDecl.Name.Name, err)
 		}
 		fi.Sync = markerOptionEnabled(marker.NestOptions, "sync")
+		if err := bindNativeStep(fi, file.Imports); err != nil {
+			return nil, pkg, fmt.Errorf("nest: handler %s: %w", fnDecl.Name.Name, err)
+		}
 		attachRemoteStructFieldAccess(fi, remoteStructFields)
 		funcs = append(funcs, fi)
 	}
@@ -183,6 +190,48 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 	}
 
 	return funcs, pkg, nil
+}
+
+// sagaImportPath 是 saga 包的导入路径：参数类型是它的 NativeStep 的 handler 是原生步骤。
+const sagaImportPath = "github.com/tjbdwanghaibo/roost-core/framework/saga"
+
+// bindNativeStep 认出原生步骤 handler（参数里有 saga.NativeStep，设计 2026-10-28 §5.1 选项 N-A）：生成的分发包装在调用业务函数
+// 之前调用 step.Begin(第一个锁目标)，已有结论或命令已过期就不执行业务、以零值成功返回。规则在这里一次核对：只能有一个
+// NativeStep 参数，第一个锁目标不能是实体组（回执放在一个实体里），durability 必须是 strict 或 pipelined（结果在 Nest 返回后
+// 直接外发，必须已经落盘；async 不满足）。
+func bindNativeStep(fi *FuncInfo, imports []*ast.ImportSpec) error {
+	alias := ""
+	for _, imp := range imports {
+		if info := importInfoFromSpec(imp); info.Path == sagaImportPath {
+			alias = info.Alias
+			if alias == "" {
+				alias = "saga"
+			}
+		}
+	}
+	if alias == "" || alias == "_" || alias == "." {
+		return nil
+	}
+	for _, param := range fi.Params {
+		if param.Type != alias+".NativeStep" {
+			continue
+		}
+		if fi.NativeStep != "" {
+			return errors.New("a native step handler takes exactly one saga.NativeStep")
+		}
+		fi.NativeStep = "p" + strconv.Itoa(param.Index)
+	}
+	if fi.NativeStep == "" {
+		return nil
+	}
+	if fi.Durability != "strict" && fi.Durability != "pipelined" {
+		return fmt.Errorf("a native step handler (saga.NativeStep parameter) needs durability=strict or durability=pipelined: its result leaves the process right after Nest returns, so the commit must be durable by then (got %q)", fi.Durability)
+	}
+	if len(fi.Entities) == 0 || fi.Entities[0].IsGroup {
+		return errors.New("a native step handler's first lock target keeps the step receipts and must be a single entity, not a group")
+	}
+	fi.ReceiptTarget = "e" + strconv.Itoa(fi.Entities[0].Index)
+	return nil
 }
 
 func validateTransactionOptions(rollback string, durability string) error {

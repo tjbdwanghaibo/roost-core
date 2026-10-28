@@ -169,6 +169,44 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 	}
 }
 
+// add saga -native 把回执放进实体（设计 2026-10-28 §5.1，决定 2A）：实体主 DAO 加 SagaReceipts、实体加 SagaStepReceipts 适配，
+// 生成的 Nest 分发包装在业务函数之前调用 step.Begin(target)。同一实体上的第二个原生 saga 不再改 DAO 定义与适配文件。
+func TestAddSagaNativeKeepsStepReceiptsOnTheEntity(t *testing.T) {
+	t.Parallel()
+	root := copyOfSagaNativeProject(t)
+	var out bytes.Buffer
+	if err := Run([]string{"add", "saga", "Gift", "-steps", "debit,credit", "-native", "debit,credit", "-component", "Wallet", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("add saga -native: %v\n%s", err, out.String())
+	}
+	dao := readProjectFile(t, root, "db/def/player.go")
+	if !strings.Contains(dao, "SagaReceipts map[string][]byte `bson:\"saga_receipts\" dao:\"persist\"`") {
+		t.Fatalf("the Player DAO has no receipts field:\n%s", dao)
+	}
+	receipts := readProjectFile(t, root, "game/entities/player/saga_receipts.go")
+	for _, want := range []string{
+		"func (e *Player) SagaStepReceipts() saga.StepReceipts",
+		"r.owner.Dao().GetSagaReceipts(operation)", "r.owner.Dao().SetSagaReceipts(operation, encoded)",
+		"r.owner.Dao().DelSagaReceipts(operation)", "r.owner.Dao().RangeSagaReceipts(f)",
+	} {
+		if !strings.Contains(receipts, want) {
+			t.Errorf("saga_receipts.go lacks %q:\n%s", want, receipts)
+		}
+	}
+	dispatch := readProjectFile(t, root, "game/handler/gift_debit_nest_gen.go")
+	if !strings.Contains(dispatch, "if replayed, beginErr := p0.Begin(e0); replayed || beginErr != nil {") {
+		t.Errorf("the native step dispatch does not call Begin before the business function:\n%s", dispatch)
+	}
+	if err := Run([]string{"add", "saga", "Refund", "-steps", "pay", "-native", "pay", "-component", "Wallet", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("second native saga on the same entity: %v\n%s", err, out.String())
+	}
+	if again := readProjectFile(t, root, "db/def/player.go"); again != dao {
+		t.Errorf("a second native saga changed the DAO definition again:\n%s", again)
+	}
+	if again := readProjectFile(t, root, "game/entities/player/saga_receipts.go"); again != receipts {
+		t.Errorf("a second native saga rewrote saga_receipts.go")
+	}
+}
+
 // 没有 -native 时全部是 Mongo 步骤，与之前等价（少了 Subscribe* 辅助），也不需要 Entity。
 func TestAddSagaWithoutNativeRegistersMongoSteps(t *testing.T) {
 	t.Parallel()
