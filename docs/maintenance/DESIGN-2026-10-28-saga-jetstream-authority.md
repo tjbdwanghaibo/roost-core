@@ -215,6 +215,8 @@ var (
 - 被拒且过滤上最后一条不是自己的 → `ErrPartitionFenced`。**差异**：原型只停这个分区；正式实现交给 `RuntimeFailure.Fail`，整个进程 fail-stop（App 级统一保证：出现第二个写者只可能是崩溃重启的短暂重叠或部署错误，旧进程应该整体停下）。
 - MsgID：`<writer>.<lastEv>.<轮号>.<i>`，`writer` = `<sid>-<SingletonIncarnation.Token 或进程随机串>`；结果未知时同 MsgID、同期望序号重发，判定规则同原型 §2：单条成功或 `Duplicate` = 已提交；批成功 = 已提交，10201 或“最后一条是自己的” = 之前已提交；序号不符且最后一条不是自己的 = 被隔离。重试总时长 `saga.publish_unknown_budget`（缺省 30s，必须 > 选主停顿上界 7s 的 3 倍），超过 → `ErrPublishUnknown` → fail-stop。去重窗口必须 ≥ 2 × 这个预算（配置检查）。
 
+**第 2 批落地（§13.1 第 3、4、5 条）**：MsgID 实际是 `<writer>.<分区>.<轮首 lastEv>.<轮号>.<i>`（分区号必须在里面）；10176 立即重发、不算结果未知；`ErrLogRejected`（流满等）不重试，`ErrPartitionRejected` fail-stop；驱动把 10158 归为结果未知。
+
 ### 4.4 批（同原型 §6）
 
 一轮取至多 `saga.max_batch`（缺省 256）条输入加到期定时器与待答查询，在内存副本（overlay，写时复制）上算完，事件一次发布：1 条普通发布、多条原子批量，单批超过服务端上限时按上限切成几次顺序 fenced 发布。一个分区同时只有一次发布在途；分区之间并行（每分区一个 goroutine）。判定回复（§7.2）在 `commit` 之后发出；不写事件的判定（已存在、身份冲突、拒绝、缺定义）在本轮结束时发出。
@@ -227,6 +229,8 @@ var (
 - **保留**：快照与内存剪掉“终态（Completed / Compensated / Failed）且 `UpdatedAt` 早于 `now - terminal_retention`”的记录；**`ManualRequired` 与非终态常驻**（等运维 Resume；它们也是迟到成功补偿的对象）。剪枝在循环里按每轮至多 1024 条做，避免一次停顿。
 - **清理**：`purge(filter=<prefix>.<k>.>, below = min(InHi+1, LastEv, 每个守卫 durable 的 ack floor + 1))`，保留最后一条事件（期望序号依赖它）。守卫 = 本流上全部 durable 消费者（步骤消费者、开启时的冷副本消费者），由 `DurableAckFloors` 列出；有序 / 临时消费者不算。某个 durable 的 ack floor 卡住超过 `saga.purge_stall_alarm`（缺省 10m）计 `saga.log.purge_blocked_seconds{stream,consumer}` 并 WARN 点名；不跳过它（跳过会删掉它还没取的命令）。下线的步骤要由运维删掉它的 durable（写进 SAGA.md）。
 - **加载时校验（原型缺）**：`decodeManifest` 校验 `V == snapshotWireVersion`、`Part == k`、`Layout` 与本进程一致、对象长度与 SHA-256 一致，任何一项不符返回 `ErrSnapshotIncompatible`，分区不启动（Mod Start 失败）；**不退回从序号 1 重放**——日志已按快照清理过，从头重放会得到缺一段的状态。
+
+**第 2 批落地（§13.1 第 6 条）**：重放不按版本“只前进”，而是从 `min(InHi, LastEv)+1` 读到 `LastMsg(分区过滤).Seq`（确定终点，第 1 批问题 4），事件只取 `LastEv` 之后的、输入只取 `InHi` 之后的；清单比初稿少 `Seq` 字段（由 `LastEv` / `InHi` 推出）。
 
 ### 4.6 分区归属（选项 P-A，推荐）
 
@@ -316,6 +320,8 @@ type StepReceipts interface {
 - **硬上限**：`dataengine.projection.max_unacked_records`（现有键）。saga Mod 的跨 Mod 规则：本进程有 DataEngine 且准入开启时，它必须 > 0 且 ≥ 4 × `high_records`（原型推荐 20000 = 4 × 5000）。到上限时 DataEngine 在 WAL 准入前拒绝，Nest 回滚、命令 nak，协调器按步骤预算重试。
 - **缺省值**（原型第五轮推荐值换算成记录数）：`saga.admission.enabled` true、`high_records` 5000、`low_records` 2500、`signal_interval` 200ms、`stale_after` 2s。阈值随部署变（高水位 = 投影器持续速率 × 允许的追平时间），写进 SAGA.md 的调参说明。
 
+**第 2 批落地（§13.1 第 7、8 条）**：LoadBucket 的 `MaxAge` 与 `LimitMarkerTTL` 都取 `AdmissionOptions.SignalTTL`（缺省 30s，第 1 批问题 2）；过期按协调器本机时钟上“最后一次收到更新”判定（问题 5）。`LoadPublisher` 留到第 3 批（参与方一侧），本批用例直接写 KV。
+
 ## 7. 发起方
 
 ### 7.1 启动尝试身份（RV-20261028-01，设计约束沿用）
@@ -335,6 +341,8 @@ type StepReceipts interface {
 - **拒绝只给触发它的尝试**：R-A 下拒绝是逐尝试的判定回复，天然只到达这次尝试，不会唤醒同 ID 的别的调用；其他尝试的意图仍在流里，所有者接着处理并给它们各自的判定。这满足 §12b 的约束（拒绝不跨尝试唤醒）且不需要观察表的版本守卫处理旧拒绝回执。
 - `WaitTerminal`：同一 ID 的每次调用都登记自己的通道（不覆盖），下一个被观察到的、版本大于登记时已知版本的非 Rejected 终态唤醒该 ID 的全部等待者（RV-02）；登记后先 `Get` 一次，已是终态直接返回。观察者是每条流一个 `DeliverNew` 有序消费者（不从流头回放历史，原型 Client 的 `latest` 表无界增长问题因此不存在）。
 - 选项 R-B（原型同形：拒绝落日志为 `Rejected` 终态记录，版本接着往上走）见 §14。
+
+**第 2 批发现（§13.1 第 9 条，待维护者确认）**：R-A 下拒绝不写日志，所以“拒绝”不是持久承诺：所有者在下一次写事件之前崩溃时，被拒的意图（输入水位还没随事件持久）在重放时按当时的准入重新判定，可能被接受。
 
 ### 7.4 `EmitStart` 的启动中继
 
@@ -491,7 +499,7 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | --- | --- | --- | --- | --- |
 | 0 | 本设计稿与决定记录 | 2 笔（本次） | 根包 | 不变 |
 | 1 | `infra/network/nats` 的 `JetStreamLog` 接口与 driver 实现；`JetStreamPublishOptions.Headers`；`wiring/nats` 发布 `ModNatsLog`；语义与 leader kill 用例；私有集群脚本 | 2～3 笔（接口+实现、语义用例、脚本） | driver 包 `-race`；真实三节点语义用例全过 | Redis 版照跑，新能力无人用。**已完成**（2026-10-28，提交见 git log；接口调整见 §3.2，脚本 `scripts/nats-cluster.sh`） |
-| 2 | `framework/saga` 新协调器：`log_layout` / `log_wire` / `transition`（从 engine 抽纯函数，Redis 引擎改为调用它们，行为不变）/ `partition` / `partition_replay` / `wheel` / `admission` / `query` / `terminal_watch`；新 Engine 以 `NewJetStreamEngine` 暂名并存，不接线 | 4～6 笔（先抽纯函数并跑全部现有 saga 测试证明无行为变化，再逐文件加新代码与单元） | `framework/saga` `-race` 全过（现有测试不改）；新单元；真实 JetStream 端到端、结果未知、隔离、快照清理、kill -9（协调器） | Redis 版照跑 |
+| 2 | `framework/saga` 新协调器：`log_layout` / `log_wire` / `transition`（从 engine 抽纯函数，Redis 引擎改为调用它们，行为不变）/ `partition` / `partition_replay` / `wheel` / `admission` / `query` / `terminal_watch`；新 Engine 以 `NewJetStreamEngine` 暂名并存，不接线 | 4～6 笔（先抽纯函数并跑全部现有 saga 测试证明无行为变化，再逐文件加新代码与单元） | `framework/saga` `-race` 全过（现有测试不改）；新单元；真实 JetStream 端到端、结果未知、隔离、快照清理、kill -9（协调器） | Redis 版照跑。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.1） |
 | 3 | 参与方新路径并存：`StepReceipt*`、`NativeStep.Begin` 与新 `Complete` 分支（`run != nil` 时走新路径）、`SubscribeNativeStep`、`MongoStepInbox`、`publishCompletion`、`LoadPublisher`；codegen：`add saga -native` 生成回执字段与组件、`codegen/internal/nest` 的 Begin 包装（先在 testdata 生成工程里验证，不改 demo） | 3～5 笔 | 受影响包 `-race`；codegen golden（有意改动 `-update` 逐个看 diff）；参与方 kill -9；真实 Mongo 的 Mongo 步骤写冲突 | Redis 版照跑；生成器新输出只在 testdata |
 | 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在 |
 | 5 | 删 DataEngine lease fence 机制（§3.3 第 5 批）与相关指标、文档 | 1～2 笔 | `framework/dataengine` 与 `framework/nest` `-race`；投影器真实 Mongo 用例；全量 `go test ./...` | 可用 |
@@ -499,6 +507,21 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | 7 | 性能验收（§12）、删除原型目录与旧压测脚本、报告与样本 | 1～2 笔 | 压测 ≤ 30 分钟；报告数字与样本一致 | 可用 |
 
 Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同一批删掉”，且切换后 Redis 代码再无调用方。第 2、3 批的并存代码（暂名 Engine、`NativeStep` 的双分支）在第 4 批删除，不留到 main 的稳定状态。
+
+### 13.1 第 2 批实施记录（2026-10-28）
+
+范围：`transition.go`（纯函数抽取）、`log_layout.go`、`log_wire.go`、`partition.go`、`partition_replay.go`、`wheel.go`、`admission.go`、`query.go`、`terminal_watch.go`、`jetstream_engine.go`（`NewJetStreamEngine` 暂名并存，未接线），单元 `transition_test.go`、`jetstream_coordinator_test.go`、`log_wire_test.go`、`wheel_test.go`、`admission_test.go`，真实三节点 `jetstream_coordinator_real_integration_test.go`（`-tags integration`，`scripts/nats-cluster.sh test` 一并跑）。与上文的差异与理由：
+
+1. **抽取范围**：§3.1 列的判定函数之外，又从 `processClaimed` / `Resume` / `Compensate` / `completeNotWaiting` / `compensateLateStep` / `StartSaga` 抽出 `planDue`、`planResume` / `prepareResume`、`planCompensate`、`judgeHistory` / `lateStepState`、`prepareStart` / `newStartRecord`，`stepTransition` 的规则部分成为 `planTransition`。初稿的 `machine` 结构体没有做：两种协调器都直接调这些函数，多一层包装没有收益。Redis 引擎改为调用它们后，现有 `framework/saga`、`wiring/saga` 测试零改动全过（含 `-race` 与真实 Mongo / Redis / NATS 用例），另有差分用例 `TestTransitionRulesAreSharedByBothCoordinators` 把同一串事件交给两种协调器逐步比对记录与 tombstone。
+2. **命名**：`WireVersion` 已是 Redis 引擎与 Nest effect 的公开常量（1），新格式叫 `LogWireVersion = 2`；结果输入的信封叫 `resultInput`（`completionEnvelope` 已被旧消费者占用）；`NewJetStreamEngine(log, raw, options)` 多一个 `fnats.RawClient`（查询与判定回复走核心 NATS，`JetStreamLog` 只有 `RequestMany`）。生命周期是 `Start` / `Stop`（三步停机）/ `Run`。第 4 批切换时合并命名。
+3. **`sagaState` 多了 `Receipts`**（CommandID → 回执摘要）：存储按 CommandID 记回执，才能给出“同一尝试重复送达”与“同一 CommandID 不同结论 = 身份冲突”的判定（`judgeHistory` 的 Receipt 位、Apply 的回执检查）；分区要给同样的结论就得记同样的东西，随 saga 在保留期后剪掉。放弃后迟到成功的告警（late_alarm）与 Redis 一样不加版本，只改 tombstone。
+4. **事件合并**：同一 saga 在一轮里的几次转移合并成最后一条事件（启动 + 立即派发、结果 + 下一步派发各一条），中间是终态的保留（要进 done subject）。一轮切成几次发布时只有最后一块带这一轮的输入水位（中途崩溃时这一轮的输入重新判定，都幂等）。
+5. **MsgID 带分区号**（真实三节点上发现）：初稿的 `<writer>.<lastEv>.<轮号>.<i>` 让共用一条流的两个分区首轮 MsgID 相同，服务端报 10158（duplicate message id is in process）。同时把驱动对 10158 的归类从“确定没写入”改为“结果未知”（同 MsgID 的前一次提交还在处理，可能提交；这条是按语义推断，未单独复现）。
+6. **重放终点与起点**：见 §4.5 后的注。快照清单加载校验版本 / 分区 / 布局 / 对象长度与 SHA-256，不符 `ErrSnapshotIncompatible`（真实用例各篡改一项）。
+7. **第 1 批提出的 5 个问题**：① `ceil(P/G) ≤ 50` 在 `Layout.Validate`（`NewJetStreamEngine` 调用，第 4 批 `wiring/saga` 配置检查调同一函数），10176 计 `BatchIncomplete`、立即重发；② LoadBucket 开 `LimitMarkerTTL`，真实用例 `TestRealJetStreamCoordinatorAdmissionForgetsAnExpiredParticipant` 证明参与方键过期后准入重开（去掉它变异变红）；③ `ErrLogRejected` → `ErrPartitionRejected` fail-stop（流满真实用例）；④ 重放终点用 `LastMsg` 序号；⑤ 准入信号过期按本机时钟。
+8. **时间轮**补了墙钟回拨：时钟往回调时新登记的条目被夹在 cursor 槽里，原实现要等时钟追回才扫到；现在 target < cursor 时扫 cursor 槽、按到期时刻判定（单元 `TestWheelHandlesAClockStepBack`）。
+9. **待维护者确认：R-A 拒绝的持久性**。拒绝（与其他不写事件的判定）只推进内存里的输入水位，水位随下一条事件持久。所有者在那之前崩溃，重放会重新处理这条启动意图；准入此时已打开就会接受它——发起方先收到 `ErrBackpressure`，saga 之后却被建立。同一请求重试会得到“已存在”，经 `EmitStart` 的路径本来就 nak 重试，所以影响只在“收到拒绝后放弃、之后用同一业务键发不同意图”的调用方（得到身份冲突）。A（推荐）：接受并写进 SAGA.md（`ErrBackpressure` = “现在没建立，用同一请求重试”）；B：本轮有拒绝而没有事件时写一条只带水位的事件（每个拒绝轮多一次 R3 写，背压时恰好加负载）。本批按 A 实现，未改 SAGA.md 对外描述（新 Engine 未接线）。
+10. **未做、留给后续批**：`LoadPublisher`、步骤消费者与 `publishCompletion`（第 3 批）；`inspect.go`、冷副本（第 4 / 6 批）；`saga.coordinators` → `Owned` 的分配与生产配置规则（≥ 3 × 7s 的结果未知预算、R=3）在第 4 批配置层；准入提示只在 3s 内可信（发起方据它快速失败，所有者的判定才是权威，真实用例里提示比所有者晚一个发布周期）。
 
 ## 14. 需要维护者选择的点
 
@@ -543,4 +566,5 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
   - 来源：nats-server 源码 tag v2.12.0、v2.12.1、v2.14.5 的 `server/stream.go`（`streamDefaultMaxBatchSize = 1000`，2.14 改名 `streamDefaultMaxAtomicBatchSize`；`streamDefaultMaxBatchInflightPerStream = 50`、`...InflightTotal = 1000`、`streamDefaultMaxBatchTimeout = 10s`，均可由 `jetstream { limits { max_batch_size / max_batch_inflight_per_stream / max_batch_inflight_total / max_batch_timeout } }` 调整）、`server/jetstream_batching.go`（批内每条按 `max_payload` 与流的 `max_msg_size` 检查，没有批总字节检查）、`server/jetstream_errors_generated.go`（10199 “atomic publish batch is too large: {size}”、10176、10201 自 2.12.1 起）；实测（本机 macOS、nats-server v2.14.5、私有三节点 R3，`TestRealLogAtomicBatchLimits`）：1000 条一批成功，第 1001 条服务端回 `{"err_code":10199,"description":"atomic publish batch is too large: 1000"}`；256 × 256 KiB = 64 MiB 一批照常提交（约 145ms）；一条流同时打开 50 个未提交批时新批收到 10176，等被丢弃的批 10s 超时后恢复。
   - 结论：**单批 ≤ 1000 条（驱动发送前就按 `LogBatchMaxMessages` 拒绝，返回 `ErrLogBatchTooLarge`，saga 按此切成几次顺序 fenced 发布）；没有批总字节上限，单条 ≤ max_payload（缺省 1 MiB）**。2.12.0 不可用（批内 MsgID 被拒），最低 2.12.1。
   - **对第 2 批的影响**：① 一条流同时在途的批数上限 50：每个分区同时最多一次发布在途，所以每条流的分区数 `ceil(partitions / stream_groups)` 必须 ≤ 50，否则高负载下批会被服务端丢弃（10176，确定没写入，重发可恢复但会空转）；建议在 `wiring/saga` 的配置检查里加这条（缺省 16 / 4 = 4，远低于上限），并把 10176 按“确定没写入、立即重发”处理而不是结果未知。服务端总上限 1000 是整台服务端所有流共用的，同一 NATS 上有别的原子批用户时要一起算。② 批从首条到提交最长 10s：saga 发布不会接近，但 `publish_timeout` 应远小于它。③ 流满（`MaxBytes` + Discard=New）时发布返回 `ErrLogRejected`（确定没写），saga 应直接 fail-stop 告警，不当结果未知重试。
+- **第 2 批发现、对第 3、4 批有影响**：（1）清理守卫是流上全部 durable 的 ack floor：参与方的 durable 只过滤自己主题的命令，空闲时 ack floor 是否随流前进**尚未确认**（若不前进，空闲步骤会一直挡住清理，只能靠告警 + 运维），第 3 批接上步骤 durable 后在真实集群上核实；（2）拒绝的持久性（§13.1 第 9 条）；（3）MsgID 必须带分区号、写者身份每次进程启动不同（`<sid>-<SingletonIncarnation>`），第 4 批接线时由 wiring 填 `Writer`。
 - 未核实、实施时确认：`nest.AfterCommit` 在 pipelined 下相对外化闸门的时机；Nest 是否暴露“本事务有 Remote 批次”；DAO 生成器对 `map[string][]byte` 字段的支持与存量文档的 schema 处理；`wiring/dataengine` 启动排空是否已对写冲突重试；`transactionLifetimeLimitSeconds` 探测在托管库上的权限。

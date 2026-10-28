@@ -63,6 +63,29 @@
 | [transition.go](../../../framework/saga/transition.go) | 纯状态机（两种协调器共用的判定）；函数/方法见源码 |
 | [store.go](../../../framework/saga/store.go) | `ClaimRequest`、`Query`、`ApplyRequest`、`ApplyOutcome`、`Store`、`OperationClosure`、`CompletionHistory`、`CompletionHistoryStore`、`LateSuccessAlarmStore`、`Publisher`、`PublishFunc` |
 
+#### JetStream 协调器（第 2 批，未接线）
+
+协调器权威改为 JetStream 分区事件日志的第 2 批（[设计](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §13.1）：与上表的 Redis 引擎并存，`NewJetStreamEngine` 暂名，`wiring/saga` 不用它，对外契约（[SAGA.md](../SAGA.md)）仍是 Redis 版。结构：
+
+- 每个拥有的分区一个单写者循环（`partition.run`）：取一批输入（`in.start` / `in.res` / `in.op`）与时间轮到期 → 在写时复制的内存副本上用 [transition.go](../../../framework/saga/transition.go) 的纯函数判定（与 Redis 引擎同一套规则）→ 一轮事件一次 fenced 发布（首条带分区事件过滤的期望序号）→ PubAck 后才提交内存、回复判定、回答查询。被隔离、结果未知超预算、流满都 fail-stop（`RuntimeFailure`）。
+- 重放（`replayPartition`）：快照清单（KV）+ 正文（对象桶）校验版本 / 分区 / 布局 / 摘要，再从 `min(InHi, LastEv)+1` 读到 `LastMsg` 的序号；快照在循环外的 goroutine 写，之后按 `min(InHi+1, LastEv, durable ack floor+1)` 清理。
+- 发起方：启动 / 运维意图带全局唯一的尝试标识与回复头，所有者只回这一次尝试；超时按 `Get` 补查，仍无结论返回 `ErrStartUnconfirmed`。`WaitTerminal` 读各流的 `ev.done`（只要新消息），同 ID 多等待者、只接受比已知版本新的终态。
+- 准入：参与方信号在 LoadBucket（开 `LimitMarkerTTL`），所有者 Watch、滞回、本机时钟判过期、初始化 fail-closed，只拦新启动。
+
+| 源码 | 职责 |
+| --- | --- |
+| [log_layout.go](../../../framework/saga/log_layout.go) | `Layout`（分区 / 流 / subject / 桶名，`Validate` 含每流 ≤ 50 分区）、`IDOf` |
+| [log_wire.go](../../../framework/saga/log_wire.go) | `LogWireVersion` 2 的事件、输入、判定、查询、快照清单与正文的编解码与校验 |
+| [partition.go](../../../framework/saga/partition.go) | 分区循环：判定（`decide`）、发布与结果未知判定（`publishChunk`）、提交（`install`）、查询应答、剪枝 |
+| [partition_replay.go](../../../framework/saga/partition_replay.go) | 重放、快照、清理与清理卡住告警 |
+| [wheel.go](../../../framework/saga/wheel.go) | 分区时间轮 |
+| [admission.go](../../../framework/saga/admission.go) | `AdmissionOptions`、`AdmissionState`，所有者侧闸门与发起方提示 |
+| [query.go](../../../framework/saga/query.go) | 判定回复路由、意图追加与等判定、`Get` / `List` 的请求与所有者订阅 |
+| [terminal_watch.go](../../../framework/saga/terminal_watch.go) | `WaitTerminal` 与终态观察者 |
+| [jetstream_engine.go](../../../framework/saga/jetstream_engine.go) | `JetStreamOptions`、`JetStreamEngine`（生命周期、发起方 API、统计） |
+
+回归：`transition_test.go`（两种协调器差分）、`jetstream_coordinator_test.go`、`log_wire_test.go`、`wheel_test.go`、`admission_test.go`；真实三节点 `jetstream_coordinator_real_integration_test.go`（`scripts/nats-cluster.sh test`）。
+
 ### storeservice
 
 | 源码 | 导出类型（定位用） |
