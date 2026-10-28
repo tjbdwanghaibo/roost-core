@@ -158,7 +158,7 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | 参与方的结果发布失败 | 重试到成功才 ack 命令；进程退出则命令重投、回放 | 代码路径；未单独注入 |
 | 快照写入冲突 / 清理 | 快照 CAS + 只向前；清理不越过快照水位、最后一条事件与参与方 ack floor | `TestSnapshotPurgeReplayMatches`：清理后 B 的重建逐笔等于 A 的内存，B 继续服务 |
 | 投影打开时协调器 kill -9 | 冷副本投影在协调器进程里一起被杀；B 进程用同一 durable 接着投影，旧实例在途未 ack 的事件 AckWait 后重投 | `TestCoordinatorKill9TakeoverProjected`：冷副本在最后一个终态后 5.6s 与 400 笔终态逐笔一致，Mongo 账户与内存一致（AckAll 版本红，见 §12） |
-| 投影打开时参与方 kill -9 | 重启先把 WAL 尾巴投影进 Mongo，再从 Mongo 加载；未 ack 的命令重投回放回执。被杀进程正在做的批量投影事务留在服务端，到 `transactionLifetimeLimitSeconds`（缺省 60s）才回收，期间重启的排空会超时——第四轮 `-race` 全套里撞到一次：`drain WAL into mongo: dataengine projector: segment … records=21: context deadline exceeded`，进程起不来、用例 3 分钟超时。改为排空失败就重试（上限 3 分钟，先恢复再服务），之后 3 次连跑通过；这是 SAGA.md 已记的“强杀遗留 Mongo 事务”在原型里的同一现象 | `TestParticipantKill9RecoveryProjected`：重启恢复 30ms，Mongo 账户与预期余额逐账户一致，冷副本 0 差异 |
+| 投影打开时参与方 kill -9 | 重启先把 WAL 尾巴投影进 Mongo，再从 Mongo 加载；未 ack 的命令重投回放回执。被杀进程正在做的批量投影事务留在服务端，到 `transactionLifetimeLimitSeconds`（缺省 60s）才回收，期间重启的排空会超时——第四轮 `-race` 全套里撞到一次：`drain WAL into mongo: dataengine projector: segment … records=21: context deadline exceeded`，进程起不来、用例 3 分钟超时。改为排空失败就重试（上限 3 分钟，先恢复再服务），之后 3 次连跑通过；这是 SAGA.md 已记的“强杀遗留 Mongo 事务”在原型里的同一现象。2026-10-28 复核 `-race` 全套（隔离 Mongo）又撞到一次：排空重试分支第一次真正生效，重启遇 `WriteConflict` 直到遗留事务被回收，用 77s 才恢复；在途的 k-100 在此期间用完步骤重试预算，终态 `manual_required`，用例因此失败；随后单独 4 次连跑全过（恢复 66～79ms）。原型的步骤预算（Timeout × MaxAttempts）没覆盖 60s 遗留事务窗口——正式实施要让参与方步骤预算覆盖 `transactionLifetimeLimitSeconds`，或重启时主动终止被杀进程遗留的事务 | `TestParticipantKill9RecoveryProjected`：重启恢复 30ms，Mongo 账户与预期余额逐账户一致，冷副本 0 差异 |
 | 整集群同时断电 | 可能丢最近的已确认消息（前提 1 承担） | 不处理 |
 
 ## 11. 与现行 saga 语义的对应
