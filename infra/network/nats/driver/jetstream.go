@@ -12,6 +12,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 
+	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
 
@@ -60,7 +61,12 @@ func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []by
 	if opts.MsgID != "" {
 		publishOpts = append(publishOpts, gojs.WithMsgID(opts.MsgID))
 	}
-	ack, err := c.js.Publish(ctx, subject, data, publishOpts...)
+	msg := gonats.NewMsg(subject)
+	msg.Data = data
+	if err := setBusinessHeaders(msg.Header, opts.Headers); err != nil {
+		return fnats.JetStreamPublishAck{}, err
+	}
+	ack, err := c.js.PublishMsg(ctx, msg, publishOpts...)
 	if err != nil {
 		return fnats.JetStreamPublishAck{}, c.client.wrapError(err)
 	}

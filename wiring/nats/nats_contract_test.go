@@ -11,9 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+
+	"github.com/spf13/viper"
 )
 
 type stubNatsServer struct {
@@ -357,5 +361,38 @@ func TestNatsModConcurrentStopIsSafe(t *testing.T) {
 				t.Fatalf("round %d: concurrent Stop #%d = %v, want nil (all = %v)", round, i, err, errs)
 			}
 		}
+	}
+}
+
+// Provide 经正式装配发布全部 NATS 能力，其中 nats.log 是与 nats.jetstream 同一连接上的日志原语：Saga 协调器按
+// mods.ModNatsLog 取它，取不到就无法以 JetStream 流为权威日志。只需要能握手的替身服务端（建 JetStream 上下文不做网络往返）。
+func TestNatsModPublishesTheJetStreamLogCapability(t *testing.T) {
+	srv := startStubNatsServer(t)
+	cfg := viper.New()
+	cfg.Set("nats.url", srv.url())
+	cfg.Set("sid", 1)
+	cfg.Set("server_type", "game")
+	m := NewNatsMod(nil)
+	if err := m.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(cfg)
+	if err := m.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = m.StopWithContext(ctx)
+	})
+	log, ok := app.Lookup[fnats.JetStreamLog](registry, mods.ModNatsLog)
+	if !ok || log == nil {
+		t.Fatalf("capability %q not published", mods.ModNatsLog)
+	}
+	if log != fnats.JetStreamLog(m.asm.Log) {
+		t.Fatal("nats.log is not the assembly's log client on the shared connection")
+	}
+	if js, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream); !ok || js == nil {
+		t.Fatalf("capability %q not published", mods.ModNatsJetStream)
 	}
 }

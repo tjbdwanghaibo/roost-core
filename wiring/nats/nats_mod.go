@@ -202,6 +202,7 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		mods.Capability{Name: mods.ModNats, Value: fnats.IClient(m.asm.Client)},
 		mods.Capability{Name: mods.ModNatsRaw, Value: fnats.RawClient(m.asm.Client)},
 		mods.Capability{Name: mods.ModNatsJetStream, Value: fnats.IJetStream(m.asm.JetStream)},
+		mods.Capability{Name: mods.ModNatsLog, Value: fnats.JetStreamLog(m.asm.Log)},
 		mods.Capability{Name: mods.ModNatsRpc, Value: fnats.IRpc(m.asm.RPC)},
 		mods.Capability{Name: mods.ModBus, Value: bus.IBus(m.bus)},
 	)

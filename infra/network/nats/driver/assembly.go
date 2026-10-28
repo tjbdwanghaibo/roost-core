@@ -22,12 +22,15 @@ var ErrClosedUndrained = errors.New("nats: connection closed before drain finish
 const rpcCallbackWorkers = 4
 
 // Assembly is the complete NATS capability set a process publishes: the core
-// connection, JetStream on that connection and the request/reply RPC client.
+// connection, JetStream on that connection, the JetStream log primitives
+// (fnats.JetStreamLog, on the same JetStream context) and the request/reply
+// RPC client.
 // The bus is assembled by the wiring Mod from registry configuration on top of
 // Client and RPC; everything that needs driver internals lives here.
 type Assembly struct {
 	Client    *Client
 	JetStream *JetStreamClient
+	Log       *JetStreamLogClient
 	RPC       *RPCClient
 
 	// closeSerial 串行化 Close。Assembly 没有自己的“已关闭”标记：连接是否已关闭只看 Client 的判据
@@ -48,9 +51,15 @@ func Assemble(cfg *fnats.Config, extra ClientOptions) (*Assembly, error) {
 		client.Close()
 		return nil, err
 	}
+	log, err := NewJetStreamLog(jetStream)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
 	return &Assembly{
 		Client:    client,
 		JetStream: jetStream,
+		Log:       log,
 		RPC:       NewRPCClient(client, fnats.DefaultRetryPolicy(), rpcCallbackWorkers),
 	}, nil
 }

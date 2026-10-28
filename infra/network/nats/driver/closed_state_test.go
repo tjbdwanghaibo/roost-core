@@ -14,6 +14,7 @@ import (
 	"time"
 
 	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
@@ -47,7 +48,49 @@ type closedStateEnv struct {
 	cancel context.CancelFunc
 	asm    *Assembly
 	js     *JetStreamClient
+	log    *JetStreamLogClient
 	sub    *subscription
+}
+
+// 日志原语的 KV / 对象存储句柄要服务端才能建：已关闭的 env 里用替身包住 nats.go 的接口，只实现被调用的方法，
+// 一律返回 nats.go 的“连接已关闭”。驱动先看自己的已关闭状态，替身返回什么都不影响结论。
+type closedKeyValue struct{ gojs.KeyValue }
+
+func (closedKeyValue) Get(context.Context, string) (gojs.KeyValueEntry, error) {
+	return nil, gonats.ErrConnectionClosed
+}
+func (closedKeyValue) Create(context.Context, string, []byte, ...gojs.KVCreateOpt) (uint64, error) {
+	return 0, gonats.ErrConnectionClosed
+}
+func (closedKeyValue) Update(context.Context, string, []byte, uint64) (uint64, error) {
+	return 0, gonats.ErrConnectionClosed
+}
+func (closedKeyValue) Put(context.Context, string, []byte) (uint64, error) {
+	return 0, gonats.ErrConnectionClosed
+}
+func (closedKeyValue) Delete(context.Context, string, ...gojs.KVDeleteOpt) error {
+	return gonats.ErrConnectionClosed
+}
+func (closedKeyValue) Watch(context.Context, string, ...gojs.WatchOpt) (gojs.KeyWatcher, error) {
+	return nil, gonats.ErrConnectionClosed
+}
+func (closedKeyValue) WatchAll(context.Context, ...gojs.WatchOpt) (gojs.KeyWatcher, error) {
+	return nil, gonats.ErrConnectionClosed
+}
+
+type closedObjectStore struct{ gojs.ObjectStore }
+
+func (closedObjectStore) PutBytes(context.Context, string, []byte) (*gojs.ObjectInfo, error) {
+	return nil, gonats.ErrConnectionClosed
+}
+func (closedObjectStore) GetBytes(context.Context, string, ...gojs.GetObjectOpt) ([]byte, error) {
+	return nil, gonats.ErrConnectionClosed
+}
+func (closedObjectStore) Delete(context.Context, string) error { return gonats.ErrConnectionClosed }
+
+func (e *closedStateEnv) kv() *logKV { return &logKV{kv: closedKeyValue{}, client: e.asm.Client} }
+func (e *closedStateEnv) objects() *logObjects {
+	return &logObjects{store: closedObjectStore{}, client: e.asm.Client}
 }
 
 type closedStateCheck struct {
@@ -160,6 +203,77 @@ var closedStateChecks = map[string]closedStateCheck{
 		reason: "同 Stop：消费句柄结束的通知通道"},
 	"rpcTask.OnRelease": {want: notConnectionCall,
 		reason: "worker 池的所有权释放协议（回调恰好一次），不是连接上的调用"},
+
+	"JetStreamLogClient.EnsureLogStream": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.EnsureLogStream(e.ctx, fnats.LogStreamConfig{Name: "ROOST_CLOSED_LOG", Subjects: []string{"roost.closed.log.>"}, Replicas: 1})
+		return err
+	}},
+	"JetStreamLogClient.PublishFenced": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.PublishFenced(e.ctx, []fnats.LogMsg{{Subject: "roost.closed.log.0", MsgID: "m1"}}, fnats.LogFence{Filter: "roost.closed.log.>"})
+		return err
+	}},
+	"JetStreamLogClient.LastMsg": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.LastMsg(e.ctx, "ROOST_CLOSED_LOG", "roost.closed.log.>")
+		return err
+	}},
+	"JetStreamLogClient.ReadRange": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		return e.log.ReadRange(e.ctx, "ROOST_CLOSED_LOG", []string{"roost.closed.log.>"}, 1, 0, func(fnats.LogMsg) error { return nil })
+	}},
+	"JetStreamLogClient.Follow": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.Follow(e.ctx, "ROOST_CLOSED_LOG", []string{"roost.closed.log.>"}, 1, func(fnats.LogMsg) {})
+		return err
+	}},
+	"JetStreamLogClient.Purge": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		return e.log.Purge(e.ctx, "ROOST_CLOSED_LOG", "roost.closed.log.>", 10)
+	}},
+	"JetStreamLogClient.DurableAckFloors": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.DurableAckFloors(e.ctx, "ROOST_CLOSED_LOG")
+		return err
+	}},
+	"JetStreamLogClient.KeyValue": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.KeyValue(e.ctx, fnats.LogKVConfig{Bucket: "ROOST_CLOSED_KV", Replicas: 1})
+		return err
+	}},
+	"JetStreamLogClient.Objects": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.log.Objects(e.ctx, fnats.LogObjectConfig{Bucket: "ROOST_CLOSED_OBJ", Replicas: 1})
+		return err
+	}},
+	"JetStreamLogClient.RequestMany": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		return e.log.RequestMany(e.ctx, "roost.closed.q", nil, func([]byte) bool { return false })
+	}},
+	"JetStreamLogClient.ServerVersion": {want: wantNil, call: func(e *closedStateEnv) error {
+		if v := e.log.ServerVersion(); v != "" {
+			return errors.New("ServerVersion() = " + v + " after Close")
+		}
+		return nil
+	}},
+	"logKV.Get": {want: wantErrClosed, call: func(e *closedStateEnv) error { _, err := e.kv().Get(e.ctx, "k"); return err }},
+	"logKV.Create": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.kv().Create(e.ctx, "k", nil)
+		return err
+	}},
+	"logKV.Update": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.kv().Update(e.ctx, "k", nil, 1)
+		return err
+	}},
+	"logKV.Put":    {want: wantErrClosed, call: func(e *closedStateEnv) error { _, err := e.kv().Put(e.ctx, "k", nil); return err }},
+	"logKV.Delete": {want: wantErrClosed, call: func(e *closedStateEnv) error { return e.kv().Delete(e.ctx, "k") }},
+	"logKV.Watch": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.kv().Watch(e.ctx, "", func(fnats.LogKVEntry) {}, func() {})
+		return err
+	}},
+	"logObjects.Put": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.objects().Put(e.ctx, "o", nil)
+		return err
+	}},
+	"logObjects.Get": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.objects().Get(e.ctx, "o")
+		return err
+	}},
+	"logObjects.Delete": {want: wantErrClosed, call: func(e *closedStateEnv) error { return e.objects().Delete(e.ctx, "o") }},
+	"logFollow.Stop": {want: notConnectionCall,
+		reason: "Follow / Watch 读取循环的停止与排空（在 ctx 内等回调返回），不是连接上的调用；契约见 jetstream_log_test.go"},
+	"logFollow.Done": {want: notConnectionCall, reason: "同 Stop：读取循环结束的通知通道"},
 }
 
 func reportedTrue(v bool, name string) error {
@@ -246,6 +360,10 @@ func newClosedStateEnv(t *testing.T, closeWith func(*Assembly)) *closedStateEnv 
 	if err != nil {
 		t.Fatal(err)
 	}
+	log, err := NewJetStreamLog(js)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sub, err := a.Client.Subscribe("roost.closed.sub", closedStateHandler)
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +371,7 @@ func newClosedStateEnv(t *testing.T, closeWith func(*Assembly)) *closedStateEnv 
 	closeWith(a)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	return &closedStateEnv{ctx: ctx, cancel: cancel, asm: a, js: js, sub: sub.(*subscription)}
+	return &closedStateEnv{ctx: ctx, cancel: cancel, asm: a, js: js, log: log, sub: sub.(*subscription)}
 }
 
 func TestEveryExportedDriverMethodReportsErrClosedAfterClose(t *testing.T) {

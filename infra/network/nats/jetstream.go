@@ -37,6 +37,9 @@ type JetStreamConfig struct {
 
 type JetStreamPublishOptions struct {
 	MsgID string
+	// Headers 是随消息写入的业务头（单值），例如启动意图带回复 subject。以 "Nats-" 开头的键由驱动与服务端保留，
+	// 发布时拒绝（MsgID 用上面的字段）。
+	Headers map[string]string
 }
 
 type JetStreamPublishAck struct {

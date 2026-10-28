@@ -30,7 +30,10 @@ const (
 	ModNatsRaw       app.ModName = "nats.raw"
 	ModNatsRpc       app.ModName = "nats.rpc"
 	ModNatsJetStream app.ModName = "nats.jetstream"
-	ModBus           app.ModName = "bus"
+	// ModNatsLog 是同一连接上的 JetStream 日志原语（fnats.JetStreamLog：fenced 发布、原子批量、有序读取、KV、对象存储），
+	// Saga 协调器以 JetStream 流为权威日志时用。
+	ModNatsLog app.ModName = "nats.log"
+	ModBus     app.ModName = "bus"
 
 	ModEtcd       app.ModName = "etcd"
 	ModEtcdDiscov app.ModName = "etcd.discovery"
