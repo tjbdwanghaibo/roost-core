@@ -1027,3 +1027,51 @@ func TestRealJetStreamCoordinatorKill9Replays(t *testing.T) {
 	}
 	t.Logf("%d sagas across a coordinator kill -9, %d of them in flight at the kill", len(ids), crossed)
 }
+
+// 参与方停掉一段时间（每笔都要按步骤超时重试好几次），回来后全部 saga 都要到终态：协调器的重试定时器一次都不能丢。
+// 2026-10-28 第 3 批参与方 kill -9 用例里发现：时间轮按墙钟（UnixNano）落槽、到期，分区判定“是否已到期”却用带单调读数的
+// time.Time 比较；步骤超时是 tick 的整数倍，判定那一轮的时刻正好落在截止附近，墙钟比单调钟快的那几微秒里条目被当作“没到期的
+// 陈旧条目”丢掉，记录停在 waiting、再也不重试（修前 150 笔、1s 超时、停 10s：三次各卡住 8 / 10 / 17 笔，另一组三次 1 次红；
+// 现在的参数让到期判定多三倍多）。
+func TestRealJetStreamCoordinatorRetriesThroughAParticipantOutage(t *testing.T) {
+	url := realJSURL(t)
+	layout := realLayout(t, url, 1, 1)
+	conn := dialRealJS(t, url)
+	owner := startRealEngine(t, conn, nil, realEngineOptions(layout, []int{0}))
+	if err := owner.Register(Definition{Type: "outage", Version: 1, Steps: []Step{
+		{Name: "only", ForwardTopic: "outage.only", Timeout: 500 * time.Millisecond, MaxAttempts: 80, BackoffMin: 20 * time.Millisecond, BackoffMax: 50 * time.Millisecond},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	const sagas = 300
+	for i := range sagas {
+		if _, err := owner.StartSaga(ctx, StartRequest{Type: "outage", BusinessKey: "o" + strconv.Itoa(i), DefinitionVersion: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(10 * time.Second) // 参与方不在：每笔按 500ms 超时重试约 18 次，一共约 5000 次到期判定
+	startParticipant(t, conn.log, owner, layout, func(Command) Completion { return Completion{Success: true} })
+	var stuck []Record
+	for deadline := time.Now().Add(40 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		stuck = stuck[:0]
+		for i := range sagas {
+			record, err := owner.Get(ctx, IDOf("outage", "o"+strconv.Itoa(i)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != StatusCompleted {
+				stuck = append(stuck, record)
+			}
+		}
+		if len(stuck) == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(stuck) > 0 {
+		r := stuck[0]
+		t.Fatalf("%d of %d sagas did not complete after the participant came back, e.g. %s %s attempt %d next run %s (%s ago); stats %+v",
+			len(stuck), sagas, r.BusinessKey, r.Status, r.Attempt, r.NextRunAt.Format("15:04:05.000"), time.Since(r.NextRunAt).Round(time.Millisecond), owner.Stats())
+	}
+}

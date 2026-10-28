@@ -240,7 +240,11 @@ func (p *partition) decide(batch []fnats.LogMsg, now time.Time) *round {
 		}
 		seen[id] = struct{}{}
 		st := r.get(id)
-		if st == nil || st.Record.Status.Terminal() || st.Record.NextRunAt.After(now) {
+		// “到期没有”必须与时间轮同一把尺子：轮按墙钟（UnixNano）落槽、取出，这里也按墙钟比。用 time.Time 的 After 比较时，
+		// 两边都带单调读数就按单调钟比；墙钟比单调钟快几微秒（本机实测约 3.5ppm），而步骤超时是 tick 的整数倍、判定那一轮的
+		// 时刻常常正好落在截止上，轮已经取出的条目会被当成“没到期的陈旧条目”丢掉，记录停在 waiting / pending、再也不重试
+		// （2026-10-28 参与方停 10s 的真实用例：150 笔卡住 8～17 笔）。
+		if st == nil || st.Record.Status.Terminal() || st.Record.NextRunAt.UnixNano() > now.UnixNano() {
 			continue // 陈旧的定时条目：状态机按记录当前的 NextRunAt 判定
 		}
 		r.due(st)
