@@ -172,6 +172,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.completion.unknown_saga_total` | Counter | 结果对应的 saga 不在分区里（过了终态保留期被剪掉）：迟到成功找不到归宿，ERROR 日志点名 saga 与命令，**非零要人核对** |
 | `saga.log.purge_blocked_seconds{stream,consumer}` | Gauge | 某个 durable 的 ack floor 卡在分区清理目标之下的时长；超过 `PurgeStallAlarm` 记 WARN 点名，下线的步骤要由运维删掉它的 durable |
 | `saga.admission.hint_failures_total` | Counter | 协调器写准入提示（LoadBucket 的 `admit` 键）失败；提示不是权威，持续增长时发起方只能等所有者的判定 |
+| `saga.admission.signal_failures_total` | Counter | 参与方 `LoadPublisher`（第 3 批，未接线）写准入信号（LoadBucket 的 `part.<名字>` 键）失败；持续增长时协调器会按信号停更关闭准入（`backpressure_stale_signal`） |
 | `saga.query.dropped_total` | Counter | JetStream 协调器分区查询队列满、丢弃的查询（发起方超时） |
 | `saga.query.reply_failures_total` | Counter | 判定与查询回复经核心 NATS 发送失败（发起方按超时与 Get 补查兜底） |
 | `saga.query.subscription_errors_total` | Counter | 查询 / 回复订阅的慢消费者或订阅错误 |
@@ -504,6 +505,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.completion.stale_attempt_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.completion.stale_incarnation_total` | Counter | `saga/engine.go:IncCounter` |
 | `saga.admission.hint_failures_total` | Counter | `saga/admission.go:IncCounter` |
+| `saga.admission.signal_failures_total` | Counter | `saga/admission.go:IncCounter` |
 | `saga.completion.unknown_saga_total` | Counter | `saga/partition.go:IncCounter` |
 | `saga.log.purge_blocked_seconds` | Gauge | `saga/partition_replay.go:SetGauge` |
 | `saga.partition.fail_stop_total` | Counter | `saga/partition.go:IncCounter` |

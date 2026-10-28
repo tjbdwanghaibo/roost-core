@@ -724,3 +724,20 @@ func TestEntityKindRemoteCapability(t *testing.T) {
 		t.Fatal("unregistered kind should not be remote-capable")
 	}
 }
+
+// CurrentDispatchHasRemoteWriteBatch 只在当前派发带 Remote 批次时为真（saga 原生步骤据它拒绝在这种事务里提交回执）。
+func TestCurrentDispatchHasRemoteWriteBatch(t *testing.T) {
+	if CurrentDispatchHasRemoteWriteBatch() {
+		t.Fatal("true outside any dispatch")
+	}
+	release := pushCurrentNestDispatchMsg(&Msg{})
+	if CurrentDispatchHasRemoteWriteBatch() {
+		t.Fatal("true for a dispatch without a Remote batch")
+	}
+	release()
+	release = pushCurrentNestDispatchMsg(&Msg{RemoteWriteBatch: &stagedRemoteBatch{}})
+	defer release()
+	if !CurrentDispatchHasRemoteWriteBatch() {
+		t.Fatal("false for a dispatch with a Remote batch")
+	}
+}

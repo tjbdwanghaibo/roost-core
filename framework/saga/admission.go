@@ -287,3 +287,68 @@ func errAdmissionClosed(reason string) error {
 	}
 	return fmt.Errorf("%w (%s)", ErrBackpressure, reason)
 }
+
+// LoadPublisher 是参与方一侧的准入信号（设计 §6，第 3 批）：装了原生步骤的进程每 interval 把本进程 DataEngine 投影器的积压
+// （ProjectorStats.WALUnacked，记录数）写进 LoadBucket 的 part.<name>。协调器按“最后一次收到更新”的本机时刻判过期，
+// 所以发布要比 AdmissionOptions.StaleAfter 勤（缺省 200ms 对 2s）；写失败只计数，下一拍重写。
+//
+// 生命周期：Run 阻塞到 ctx 结束；优雅下线时 Run 返回后调用 Remove 删掉自己的键（不算过期，协调器立即不再计入）；
+// 崩溃进程的键由桶的 MaxAge / LimitMarkerTTL 清除。没有原生步骤的进程不发布（Mongo 步骤没有投影积压）。
+type LoadPublisher struct {
+	kv       fnats.LogKV
+	key      string
+	interval time.Duration
+	read     func() uint64
+}
+
+// NewLoadPublisher 构造信号发布者。name 是参与方在桶里的名字（一般 <service>.<sid>），只能含字母、数字、'_'、'-' 与 '.'；
+// interval ≤ 0 取 200ms。kv 是 LoadBucket（与协调器同一配置：loadBucketConfig）。
+func NewLoadPublisher(kv fnats.LogKV, name string, interval time.Duration, read func() uint64) (*LoadPublisher, error) {
+	if kv == nil || read == nil || !validLoadName(name) {
+		return nil, fmt.Errorf("%w: load publisher name %q", ErrInvalidDefinition, name)
+	}
+	if interval <= 0 {
+		interval = 200 * time.Millisecond
+	}
+	return &LoadPublisher{kv: kv, key: participantKeyPrefix + name, interval: interval, read: read}, nil
+}
+
+func validLoadName(name string) bool {
+	if name == "" || len(name) > 200 || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// Run 立即发布一次，之后每 interval 一次，直到 ctx 结束。
+func (p *LoadPublisher) Run(ctx context.Context) {
+	tick := time.NewTicker(p.interval)
+	defer tick.Stop()
+	for {
+		p.publish(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+func (p *LoadPublisher) publish(ctx context.Context) {
+	raw, _ := json.Marshal(participantLoad{V: LogWireVersion, Records: p.read()})
+	putCtx, cancel := context.WithTimeout(ctx, max(p.interval, time.Second))
+	defer cancel()
+	if _, err := p.kv.Put(putCtx, p.key, raw); err != nil && ctx.Err() == nil {
+		metrics.IncCounter("saga.admission.signal_failures_total", nil, 1)
+	}
+}
+
+// Remove 删掉本参与方的信号键（优雅下线）。
+func (p *LoadPublisher) Remove(ctx context.Context) error {
+	return p.kv.Delete(ctx, p.key)
+}

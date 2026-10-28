@@ -8,7 +8,8 @@
 #   kill <n>     kill -9 第 n 个节点（1～3）；restart <n> 重新拉起它（数据目录保留）
 #   env          打印用例需要的环境变量（eval "$(scripts/nats-cluster.sh env)"）
 #   clean        stop 之后删掉数据目录（只删带本脚本标记的目录）
-#   test         start → 跑日志原语与 saga JetStream 协调器的真实用例（-race；ROOST_NATS_CLUSTER_COUNT 设 -count，缺省 1）→ clean；
+#   test         start → 跑日志原语与 saga JetStream 协调器 / 参与方新路径的真实用例（-race；ROOST_NATS_CLUSTER_COUNT 设 -count，缺省 1；
+#                要 Mongo 的参与方 kill -9 用例在没有 ROOST_DATAENGINE_IT_MONGO_URI 时跳过）→ clean；
 #                失败时保留现场
 #
 # 环境：
@@ -149,7 +150,7 @@ case "${1:-}" in
     cd "$REPO"
     status=0
     GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestRealLog' ./infra/network/nats/driver || status=$?
-    [ "$status" = 0 ] && { GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestRealJetStreamCoordinator' ./framework/saga || status=$?; }
+    [ "$status" = 0 ] && { GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestRealJetStream' ./framework/saga || status=$?; }
     if [ "$status" = 0 ]; then
       "$SELF" clean
     else

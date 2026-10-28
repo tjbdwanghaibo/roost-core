@@ -51,4 +51,18 @@ var (
 	// ErrPartitionRejected：服务端明确拒绝了分区事件（流满 MaxBytes + Discard=New、消息超限等），确定没写入；不当结果未知重试，
 	// 经 RuntimeFailure fail-stop 并告警。
 	ErrPartitionRejected = errors.New("saga: partition publish rejected by the server")
+
+	// 以下是参与方新路径（回执在实体里，第 3 批并存、未接线）的错误，设计见同一文档 §5。
+
+	// ErrNoStepReceipts：原生步骤 handler 的第一个锁目标没有实现 StepReceiptHost（实体 DAO 没有回执字段与适配，
+	// roost add saga -native 生成它们）。错误文本点名目标类型。
+	ErrNoStepReceipts = errors.New("saga: the native step's first lock target keeps no step receipts")
+	// ErrNativeStepNotBegun：Complete 不在 Begin 判定“执行”的同一个事务里调用（生成的 Nest 包装先调 Begin；手写 handler 漏了它，
+	// 或在另一个事务里调用 Complete）。
+	ErrNativeStepNotBegun = errors.New("saga: native step completed outside the transaction its Begin admitted")
+	// ErrNativeStepRemoteWrite：原生步骤的事务带 Remote 写批次。原生步骤只能改本进程 Nest 管的实体（结果在本地 WAL 落盘后外发）。
+	ErrNativeStepRemoteWrite = errors.New("saga: a native step cannot run in a transaction with a Remote write batch")
+	// ErrNativeStepNoOutcome：步骤体返回 nil，但这次运行既没有提交回执也没有回放 / 过期结论（步骤体没调 Nest handler，或 handler
+	// 没调 Complete 就成功返回）。消费者按结果未知处理（nak）。
+	ErrNativeStepNoOutcome = errors.New("saga: native step body returned without a committed outcome")
 )

@@ -258,6 +258,15 @@ type StepConsumerConfig struct {
 	// 下一条命令；后台满了回调就等一个空位，与逐条等待同样回压。不写取 min(32, MaxAckPending)，不能超过 MaxAckPending。
 	// 传输不支持推迟结算（JetStreamMsg.DeferSettle 为 nil，例如测试替身）时退回在回调里等。
 	ReceiptWaiters int
+
+	// 以下两项只用于新路径（SubscribeNativeStep / SubscribeJetStreamMongoStep，第 3 批并存）。
+
+	// NativeWorkers 是原生步骤消费者同时在途的处理数（每个订阅一份）：一次处理含一次 Nest 请求（WAL 落盘），逐条串行会把
+	// 整条流的吞吐压到一次落盘一条。不写取 min(32, MaxAckPending)，不能超过 MaxAckPending。
+	NativeWorkers int
+	// ReceiptRetention 是回执保留期（saga.receipt_retention）：原生步骤 Complete 顺手剪掉更早的回执，Mongo 步骤回执的 TTL
+	// 由 MongoStepInbox 自己的保留期决定。不写取 DefaultStepReceiptRetention。
+	ReceiptRetention time.Duration
 }
 
 // defaultReceiptWaiters 是 StepConsumerConfig.ReceiptWaiters 的缺省上限：正常负载下同时在等回执的投递只有几条

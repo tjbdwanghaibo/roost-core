@@ -7,6 +7,7 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // 原生步骤的业务侧形状（SAGA.md「原生步骤执行契约」）。业务只写步骤体：拿到 NativeStep，把它作为参数交给自己的
@@ -46,10 +47,41 @@ import (
 // 只由框架构造（DataEngineStepInbox.StepHandler、RunHandedOver），按值作为参数交给 Nest handler；零值的 Complete
 // 返回错误。它只对这一次投递有效：不要保存，不要复制进脱离的 goroutine——两次投递共用一份执行权会让其中一次的
 // fence 名不副实。
+//
+// 第 3 批起有两条路径并存（设计 §13，第 4 批删掉旧的）：run 非空是新路径（RunNativeStep 构造：回执在实体里，Begin 查、
+// Complete 写，见 step_receipt.go）；run 为空是旧路径（收件箱租约 + DataEngine 回执 + lease fence）。
 type NativeStep struct {
 	inbox       *DataEngineStepInbox
 	command     Command
 	reservation Reservation
+	run         *nativeRun
+}
+
+// Begin 是生成的 Nest 包装在业务函数之前调用的回执检查（选项 N-A），target 是 handler 的第一个锁目标，必须实现
+// StepReceiptHost（roost add saga -native 给实体生成回执字段与 SagaStepReceipts）。返回 replayed=true 时包装不调用业务函数、
+// 以零值成功返回：这个操作已有结论（回放），或命令已过截止（过期未执行）；结论在事务提交后交给这次运行。
+//
+// 参数是 any 而不是 StepReceiptHost：handler 的锁目标常是组件视图接口（I<Comp>Entity），接口里没有这个方法，具体实体类型才有；
+// 所以在运行时检查，缺了返回 ErrNoStepReceipts（点名类型），事务回滚，消费者 nak 并告警。
+//
+// 旧路径（run 为空）什么也不做、返回 false：至多一次由收件箱租约与投影 fence 保证，业务照常执行。
+func (step NativeStep) Begin(target any) (bool, error) {
+	if step.run == nil {
+		return false, nil
+	}
+	tx := nest.CurrentRollbackTx()
+	if tx == nil {
+		return false, nest.ErrTransactionClosed
+	}
+	host, ok := target.(StepReceiptHost)
+	if !ok {
+		return false, fmt.Errorf("%w: %T", ErrNoStepReceipts, target)
+	}
+	receipts := host.SagaStepReceipts()
+	if receipts == nil {
+		return false, fmt.Errorf("%w: %T returned nil", ErrNoStepReceipts, target)
+	}
+	return step.run.begin(tx, receipts)
 }
 
 // NativeStepBody 是业务写的原生步骤体：在 Nest handler 里执行步骤并调用 step.Complete。返回 nil 表示 Nest 调用已
@@ -67,7 +99,13 @@ func (step NativeStep) Command() Command { return step.command }
 // 两样都要在事务里：回执让重投成为回放而不是第二次执行，completion 是协调器等的结果。业务拒绝同样调用它
 // （success=false，不改实体，只提交回执与失败的 completion）：协调器听不到的拒绝只会等到步骤超时。拒绝不可重试，
 // 协调器随即补偿已完成的步骤；reason 写进 completion 的 Error，空串时填一条通用说明。
+//
+// 新路径（RunNativeStep 构造的 NativeStep）：必须在 Begin 判定执行的同一事务里调用；写实体里的回执（覆盖旧一生的拒绝），
+// 顺手剪掉至多 16 条过了保留期的旧回执，结论在事务持久之后交给消费者，由它直接发回协调器分区。不经 DataEngine effect。
 func (step NativeStep) Complete(success bool, reason string) error {
+	if step.run != nil {
+		return step.run.complete(success, reason)
+	}
 	if step.inbox == nil {
 		return ErrNoNativeStep
 	}

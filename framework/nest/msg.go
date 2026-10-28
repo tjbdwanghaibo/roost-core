@@ -36,6 +36,14 @@ func CurrentRemoteWriteBatchContains(entityID int64) bool {
 	return false
 }
 
+// CurrentDispatchHasRemoteWriteBatch 报告当前 Nest 派发是否带 Remote 写批次（消息声明了 Remote 目标、取锁前已准备）。
+// 只读，不在派发里时为 false。saga 原生步骤据它拒绝在带 Remote 批次的事务里提交回执：带批次的消息走 Remote 两阶段收尾，
+// 提交后回调排在批次最终确认之后，原生步骤“WAL 落盘后才外发结果”的边界不在这条路径上成立。
+func CurrentDispatchHasRemoteWriteBatch() bool {
+	msg := currentNestDispatchMsg()
+	return msg != nil && msg.RemoteWriteBatch != nil
+}
+
 // finalizeRemoteWriteBatch 在业务锁内让 Remote 批次按事务结果生成提交内容（FinalizeLocked），并把每条 Remote
 // 提交作为 mutation 加入本事务，随事务一起写入 WAL。批次只 finalize 一次。
 func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
