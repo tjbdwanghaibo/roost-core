@@ -553,7 +553,7 @@ func (p *partition) loop(ctx context.Context) {
 			switch in.kind {
 			case 's':
 				var req StartRequest
-				if err := json.Unmarshal(in.data, &req); err != nil || req.V != WireVersion || req.ID == "" {
+				if err := json.Unmarshal(in.data, &req); err != nil || req.V != WireVersion || req.ID == "" || req.Attempt == "" {
 					c.Stats.Ignored.Add(1)
 					continue
 				}
@@ -563,8 +563,10 @@ func (p *partition) loop(ctx context.Context) {
 					continue
 				}
 				// 准入只管新 saga 的启动；被拒的启动是终态 Rejected（可重试，同一 ID 可以再发起，版本接着往上走）。
+				// Rejected 记下触发它的启动尝试：发起方只把它交给这次尝试的等待者，同一 ID 的其他尝试继续等自己的终态
+				// （它们的意图仍在流里，后面照常处理）。
 				if reason := c.admitStart(); reason != "" {
-					s := &Saga{ID: req.ID, Part: p.k, Status: StatusRejected, Reason: reason, Data: req.Data, Phase: PhaseForward, CreatedAt: now}
+					s := &Saga{ID: req.ID, Part: p.k, Status: StatusRejected, Reason: reason, Data: req.Data, Phase: PhaseForward, CreatedAt: now, StartAttempt: req.Attempt}
 					if existing != nil {
 						s.Version = existing.Version
 					}
@@ -574,6 +576,7 @@ func (p *partition) loop(ctx context.Context) {
 					continue
 				}
 				s, cmd := c.m.start(req.ID, p.k, req.Data, now)
+				s.StartAttempt = req.Attempt // 只作记录：非 Rejected 终态唤醒这个 ID 的全部等待者
 				if existing != nil {
 					s.Version = existing.Version
 				}

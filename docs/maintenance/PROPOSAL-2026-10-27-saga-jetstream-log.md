@@ -85,19 +85,21 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
 | subject | 写者 | 读者 |
 | --- | --- | --- |
 | `<prefix>.<k>.ev.acct` | 分区协调器（事件 + 发给 acct 参与方的命令） | 参与方 durable 消费者（过滤 `<prefix>.*.ev.acct`）；重放 |
-| `<prefix>.<k>.ev.done` | 分区协调器（终态事件） | 发起方 / 业务的有序消费者（过滤 `<prefix>.*.ev.done`）——终态通知天然存在；重放 |
+| `<prefix>.<k>.ev.done` | 分区协调器（终态事件；`saga.start_attempt` 是开启这一轮的启动尝试，`Rejected` 按它只交给触发拒绝的那次尝试，§12b） | 发起方 / 业务的有序消费者（过滤 `<prefix>.*.ev.done`）——终态通知天然存在；重放 |
 | `<prefix>.<k>.ev.none` | 分区协调器（无命令的状态变化，如进入退避） | 重放 |
-| `<prefix>.<k>.in.start` | 发起方（MsgID = `start.<id>.<Client 实例随机标识>.<实例内序号>`，全局唯一，§12b） | 分区协调器（过滤 `<prefix>.<k>.in.>`） |
+| `<prefix>.<k>.in.start` | 发起方（`StartRequest{v, id, attempt, data}`；启动尝试标识 `attempt` = `<Client 实例随机标识>.<实例内序号>`，必填，MsgID = `start.<id>.<attempt>`，全局唯一，§12b） | 分区协调器（过滤 `<prefix>.<k>.in.>`） |
 | `<prefix>.<k>.in.res` | 参与方（MsgID = `res.<CmdID>`） | 分区协调器 |
 
 - KV：`<STREAM>_SNAP`（键 `p<k>`，分区快照）、`<STREAM>_OWN`（键 `p<k>`，所有权租约，桶 TTL）。
 - 生产里命令目标要细到持有实体的进程：`ev.<service>.<sid>`，每个 sid 一个 durable 消费者；原型只有一个参与方进程。
 
-## 4. 事件格式（`model.go`，`WireVersion=1`）
+## 4. 事件格式（`model.go`，`WireVersion=2`）
 
 `Event{v, part, writer, in, at, kind, saga, cmd?}`：`saga` 是这笔 saga 的**完整新状态**（状态、当前操作与尝试、截止 / 退避时刻、
-已生效步骤、操作 tombstone、版本），`cmd` 是要派发的一次尝试（`op` = 现行 IdempotencyKey，`cmd_id` = `op:attempt`，截止时刻）。
+已生效步骤、操作 tombstone、版本、开启这一轮的启动尝试 `start_attempt`），`cmd` 是要派发的一次尝试（`op` = 现行 IdempotencyKey，`cmd_id` = `op:attempt`，截止时刻）。
 状态和命令在同一条消息里，没有 outbox。`in` 是写这批事件时已处理的最大输入序号。结果 `Completion{saga_id, op, cmd_id, phase, step, success, retryable, reason}`。
+启动意图 `StartRequest{v, id, attempt, data}`，`attempt` 必填（缺了按坏输入忽略）。`WireVersion` 2026-10-28 由 1 升到 2（启动尝试标识进协议，§12b）；
+原型未上线，不兼容 1，升级先停旧协调器与发起方、清空流与 KV 再起新。
 
 ## 5. 单写者与隔离
 
@@ -257,19 +259,35 @@ PubAck 表示多数派已写入。所以协调器关键路径上**没有本地 f
     正常运行中不会出现；它是身份生成坏掉时的显式失败，代替“等待者永远挂起”。
   - 同一 saga ID 是否已经在跑由协调器判定（`DupStarts`），不靠 MsgID；MsgID 只负责“一次尝试只进流一次”。
 - **等待者（RV-20261028-02）**：原来 `wait[id] = ch` 覆盖同 ID 在途调用的通道，终态只关闭最后一个，前面的调用者永远等不到。现在同一个 ID 的每次 `StartIntent`
-  都登记自己的通道，下一个被观察到的终态唤醒该 ID 的全部等待者。观察表只接受版本更大的终态（`old.Version >= ev.Version` 丢弃），被拒之后**不再删掉**观察表里的旧
+  都登记自己的通道，下一个被观察到的终态唤醒该 ID 的全部等待者（`Rejected` 的唤醒已按下一条收窄到同一尝试）。观察表只接受版本更大的终态（`old.Version >= ev.Version` 丢弃），被拒之后**不再删掉**观察表里的旧
   `Rejected`，所以旧一轮的拒绝回执（版本不大于已观察到的）不会结束新一轮。`ctx` 只管发布：发布失败（返回错误）时撤掉本次登记的等待者；返回通道之后调用方不等了
   不撤，终态到达时统一关闭并清理。已经到过非 `Rejected` 终态的 ID 直接返回已关闭的通道（原样）。
-- **剩余局限（尚未确认，没有用例复现）**：新 Client 回放完历史终态之前对同一个 ID 发起，回放中的旧终态可能提前唤醒它（调用方看到旧的 `Rejected`，再发起一次即可；
-  不丢意图、不多建 saga）。原型的 `NewClient` 不等回放追平；正式实施的发起方要在“回放追平”之后才接受发起，或者让终态带上触发它的启动尝试身份。
+- **终态带启动尝试标识，`Rejected` 只唤醒同一尝试（2026-10-28 维护者选定，§17 第 11 条；正式实施沿用这条设计约束）**。02 的修法之后剩一个边界：
+  新 Client 回放完历史终态之前就对同一个 ID 发起，回放中别的尝试留下的旧 `Rejected` 版本比观察表里的大（观察表还是空的），会提前唤醒这次调用。
+  按版本守卫挡不住它——对发起方来说，“回放里晚到的旧拒绝”和“刚被处理的新拒绝”只有触发者不同。约束：
+  - 启动尝试标识（`<Client 实例随机标识>.<实例内序号>`，即 01 的全局唯一身份）作为字段 `StartRequest.Attempt` 进启动意图，必填；
+  - 协调器因准入拒绝写 `Rejected` 时，把触发它的尝试写进 `Saga.StartAttempt`；被接受的启动也记开启它的尝试（之后的版本原样带着，只作记录）；
+  - 发起方唤醒规则：**非 `Rejected` 终态**照旧唤醒这个 ID 的全部等待者，不论哪次尝试推动的（saga ID 唯一，结果对所有尝试成立）；
+    **`Rejected`** 只唤醒尝试标识相同的等待者，其他等待者继续等——被别人的尝试拒绝时自己的意图仍在流里，协调器接着处理并产生它自己的终态
+    （`Rejected` 或开始运行后的终态）；
+  - 等待者按 `{尝试标识, 通道}` 登记；观察表的版本守卫不变（只接受更大版本）：一条不属于我、版本更大的 `Rejected` 照样记进观察表，只是不唤醒我；
+    `StartIntent` 开头“观察表里已有非 `Rejected` 终态就直接返回已关闭的通道”的快路径不变。
+  - 前提：每次启动尝试都会被协调器处理并产生“自己的 `Rejected`”或“这个 ID 的非 `Rejected` 终态”（`DupStarts` 时 saga 已在跑或已结束，终态对它成立）。
+    协调器忽略的坏输入（版本不对、缺 `attempt`）不产生终态，对应的调用一直等到调用方放弃——协议不一致时显式挂起，不错唤醒。
 - **验证**（私有三节点集群，`-race`）：`TestRejectedStartRetriedByAnotherClientIsAppended`（重建 / 另一个 Client 同 ID 重试入流、得到新终态 v2 / v3）、
   `TestStartResendAfterUnknownOutcomeIsNotAppendedTwice`（两次回复丢失后重发，只追加 1 条）、`TestStartIdentityCollisionIsAnError`、
-  `TestStartIntentWaiters`（先后两次、16 路同时、终态与发起竞争 20 轮、被拒后新一轮且旧回执重放一次）。修前在 `4170bcad` 上的红：
+  `TestStartIntentWaiters`（先后两次、16 路同时、终态与发起竞争 20 轮、被拒后新一轮且旧回执重放一次；2026-10-28 加“别的尝试的拒绝”：
+  登记之后到达的别人的 `Rejected` 不唤醒、自己尝试的 `Rejected` 只唤醒自己、之后别的尝试推动的完成唤醒其余等待者）、
+  `TestStartBeforeReplayCatchesUpWaitsForOwnTerminal`（经真实协调器：新 Client 不等回放就对有旧拒绝的 ID 发起，拿到的是自己的 v2；回放与发起的先后不固定，
+  本机通常回放先到，确定性覆盖在前一个子用例，本用例另守协调器把触发拒绝的尝试写进终态）。修前在 `4170bcad` 上的红：
   - `start of same acknowledged but no terminal state within 10s; last start-intent seq 1 before the call, 1 after (unchanged = the intent was deduplicated, never appended)`（重建与另一个 Client 两种）；
   - `first publish acknowledged as a duplicate: err=<nil>, want ErrStartIdentityReused`；
   - `first caller stranded: the second StartIntent replaced its waiter`、`caller 0 of 16 stranded`、`round 0: caller 0 stranded`、
     `new round ended by the previous round's rejection receipt (v1)`。
   - 结果未知重发只追加一条的用例修前修后都通过（它守的是修法不能把同一次调用的重发也换身份）。
+  - 按尝试唤醒修前在 `e3d66eb0` 上的红（同一场景的原始 JSON 版，旧代码还没有尝试字段）：`waiter woken by another attempt's rejection (v1) that arrived after the call registered`；
+    把修后的唤醒条件改回“全部唤醒”，`rejection of another attempt` 子用例 3/3 同文本变红；`TestStartBeforeReplayCatchesUpWaitsForOwnTerminal` 在这一变异下 3/3 通过
+    （没碰到回放晚于登记的窗口），去掉协调器写 `StartAttempt` 时它与 `TestRejectedStartRetriedByAnotherClientIsAppended` 都超时变红。
 - **对已有压测数据**：没有影响，依据见压测报告第五轮之后的“2026-10-28 修复对压测数据的影响”。
 
 ## 13. 对 Remote 的可推广性
@@ -290,7 +308,7 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
   （参与方 Nest 调用、JetStream 发布的平均耗时都成倍上升），不是投影阻塞了关键路径。生产要把 Mongo 与 NATS / 参与方 WAL 分盘或分机，本机无法验证。
 - **参与方投影器的持续吞吐**：投影不在关键路径上，所以关键路径吞吐可以远高于投影器（云上约 500～590 条/s），积压会无限增长、追平前从 Mongo 读不到最新实体。
   原型已加按积压准入（§12a，功能验证，未压测）；投影器并行通道在另一分支做。
-- **发起方回放追平前的提前唤醒**（§12b，尚未确认）：新 Client 回放完历史终态之前发起，旧终态可能提前唤醒等待者；只影响等待语义，不丢不重。
+- ~~发起方回放追平前的提前唤醒~~：2026-10-28 已解决（终态带启动尝试标识，`Rejected` 只唤醒同一尝试，§12b、§17 第 11 条）。
 - 没有：Resume / 代际、人工补偿、定义版本、业务键唯一（跨保留期）、查询接口、多参与方服务与按 sid 路由、App 级 fail-stop 接线、指标。
 
 ## 15. 位置与运行
@@ -353,6 +371,9 @@ saga 是已知反复出问题的模块，换掉整条协调路径会让现有的
 
 10. 分支 `fix/core-game-server-review` 上的审查对原型登记了三项（RV-20261028-01 启动 MsgID 跨 Client 重复、02 同 ID 等待者被覆盖、03 准入初始快照前放行），
     维护者核对后让在 main 上修（原型实验包，先红后绿）。修法与证据见 §12a、§12b；“启动尝试身份必须全局唯一”作为正式实施的设计约束沿用。
+11. 02 修后剩下的“新 Client 回放追平前，旧 `Rejected` 提前唤醒同 ID 的新调用”，维护者选定**终态带启动尝试标识**：`Rejected` 记触发它的尝试，只唤醒同一尝试的等待者，
+    非 `Rejected` 终态照旧唤醒全部。不选“回放追平后才接受发起”：有序消费者没有可靠的追平信号、拖慢启动，而且挡不住其他客户端的尝试在本次调用登记之后被拒的回执。
+    已在原型实施（§12b），作为正式实施的设计约束。
 
 以下是第一轮交回时列出的选项原文，保留备查。
 

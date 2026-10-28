@@ -12,8 +12,10 @@ import (
 	"strings"
 )
 
-// WireVersion 是事件 / 命令 / 结果的线上格式版本；不认识的版本是确定性错误。
-const WireVersion = 1
+// WireVersion 是事件 / 命令 / 结果 / 启动意图 / 快照的线上格式版本；不认识的版本是确定性错误。
+// 2（2026-10-28）：启动意图带启动尝试标识（StartRequest.Attempt，必填），终态带开启这一轮的尝试（Saga.StartAttempt）。
+// 原型未上线，不兼容 1：升级先停旧协调器与发起方、清空流与 KV 再起新。
+const WireVersion = 2
 
 type Status string
 
@@ -74,6 +76,10 @@ type Saga struct {
 	Reopened  int               `json:"reopened,omitempty"`
 	LateAlarm int               `json:"late_alarm,omitempty"` // 补偿方向放弃后迟到的成功（只告警）
 	Reason    string            `json:"reason,omitempty"`     // Rejected 的原因（backpressure / backpressure_stale_signal）
+	// StartAttempt 是开启这一轮的启动尝试标识（StartRequest.Attempt）：Rejected 记触发拒绝的那次尝试，
+	// 被接受的启动记开启它的那次尝试（之后的版本原样带着）。发起方只用它决定 Rejected 唤醒谁：
+	// Rejected 只唤醒同一尝试的等待者，其他终态对这个 ID 的全部等待者成立（见 Client）。
+	StartAttempt string `json:"start_attempt,omitempty"`
 }
 
 func (s *Saga) clone() *Saga {
@@ -125,11 +131,14 @@ type Completion struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// StartRequest 是发起方写到分区 in.start 的启动意图（MsgID 是全局唯一的启动尝试身份，见 Client；同一 saga ID 的重复启动由协调器判定）。
+// StartRequest 是发起方写到分区 in.start 的启动意图。Attempt 是全局唯一的启动尝试标识（实例随机标识 + 实例内序号，
+// 见 Client；MsgID = start.<ID>.<Attempt>），必填：协调器把它写进由这次尝试产生的终态，发起方按它把 Rejected 只交给这次尝试。
+// 同一 saga ID 的重复启动由协调器判定，不靠尝试标识。
 type StartRequest struct {
-	V    int          `json:"v"`
-	ID   string       `json:"id"`
-	Data TransferData `json:"data"`
+	V       int          `json:"v"`
+	ID      string       `json:"id"`
+	Attempt string       `json:"attempt"`
+	Data    TransferData `json:"data"`
 }
 
 // Event 是分区日志里协调器写的一条事件：一笔 saga 的新状态 + 可选命令。In 是写这批事件时已处理到的最大输入序号

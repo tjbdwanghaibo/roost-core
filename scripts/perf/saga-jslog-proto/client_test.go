@@ -15,7 +15,8 @@ import (
 // 发起方（client.go）的两条承诺：
 //   - 启动尝试身份（MsgID）全局唯一：被拒之后换一个 Client（重建、另一个进程）用同一个 saga ID 再发起，意图必须真正入流；
 //     同一次 StartIntent 里结果未知的重发仍用同一个身份，不重复追加。
-//   - 同一个 ID 的每一位等待者都会被下一个终态唤醒；旧一轮的拒绝回执不会结束新一轮。
+//   - 同一个 ID 的每一位等待者都会被之后的非 Rejected 终态唤醒；Rejected 只唤醒触发它的那次尝试（Saga.StartAttempt），
+//     别的尝试的拒绝（旧一轮的回执、新 Client 回放中的历史拒绝、另一个发起方被拒）不结束这次调用。
 
 func (e *env) newClient() *Client {
 	e.t.Helper()
@@ -166,12 +167,12 @@ func TestStartIdentityCollisionIsAnError(t *testing.T) {
 	}
 }
 
-// publishTerminal 直接往分区事件流写一条终态事件（没有协调器，只测发起方的等待者）。
-func (e *env) publishTerminal(id string, version uint64, status Status) {
+// publishTerminal 直接往分区事件流写一条终态事件（没有协调器，只测发起方的等待者）；attempt 是开启这一轮的启动尝试标识。
+func (e *env) publishTerminal(id string, version uint64, status Status, attempt string) {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	raw, _ := json.Marshal(Event{V: WireVersion, Saga: &Saga{ID: id, Version: version, Status: status}})
+	raw, _ := json.Marshal(Event{V: WireVersion, Saga: &Saga{ID: id, Version: version, Status: status, StartAttempt: attempt}})
 	if _, err := e.js.Publish(ctx, e.l.EvSubject(e.l.PartitionOf(id), "done"), raw); err != nil {
 		e.t.Fatal(err)
 	}
@@ -200,13 +201,15 @@ func TestStartIntentWaiters(t *testing.T) {
 		}
 		return ch
 	}
+	// lastAttempt 是 e.client 最近一次 StartIntent 的启动尝试标识（调用方串行发起时有效）。
+	lastAttempt := func(e *env) string { return e.client.attemptID(e.client.nonce.Load()) }
 
 	// 先后两次发起（第二次时第一次还没到终态）：两位都被同一个终态唤醒。
 	t.Run("sequential calls", func(t *testing.T) {
 		e := newEnv(t, 1)
 		first := start(t, e, "same")
 		second := start(t, e, "same")
-		e.publishTerminal("same", 1, StatusCompleted)
+		e.publishTerminal("same", 1, StatusCompleted, "")
 		if !closedWithin(second, 5*time.Second) {
 			t.Fatal("second caller not woken by the terminal state")
 		}
@@ -237,7 +240,7 @@ func TestStartIntentWaiters(t *testing.T) {
 		if t.Failed() {
 			return
 		}
-		e.publishTerminal("same", 1, StatusCompleted)
+		e.publishTerminal("same", 1, StatusCompleted, "")
 		for i, ch := range chans {
 			if !closedWithin(ch, 5*time.Second) {
 				t.Fatalf("caller %d of %d stranded", i, n)
@@ -287,7 +290,8 @@ func TestStartIntentWaiters(t *testing.T) {
 	t.Run("new round after rejection", func(t *testing.T) {
 		e := newEnv(t, 1)
 		first := start(t, e, "same")
-		e.publishTerminal("same", 1, StatusRejected)
+		firstAttempt := lastAttempt(e)
+		e.publishTerminal("same", 1, StatusRejected, firstAttempt)
 		if !closedWithin(first, 5*time.Second) {
 			t.Fatal("first round not woken by its rejection")
 		}
@@ -295,11 +299,11 @@ func TestStartIntentWaiters(t *testing.T) {
 		if closedWithin(second, 200*time.Millisecond) {
 			t.Fatal("new round ended at once by the already-seen rejection")
 		}
-		e.publishTerminal("same", 1, StatusRejected) // 旧回执再出现一次
+		e.publishTerminal("same", 1, StatusRejected, firstAttempt) // 旧回执再出现一次
 		if closedWithin(second, 500*time.Millisecond) {
 			t.Fatal("new round ended by the previous round's rejection receipt (v1)")
 		}
-		e.publishTerminal("same", 2, StatusCompleted)
+		e.publishTerminal("same", 2, StatusCompleted, "")
 		if !closedWithin(second, 5*time.Second) {
 			t.Fatal("new round not woken by its own terminal state (v2)")
 		}
@@ -307,4 +311,63 @@ func TestStartIntentWaiters(t *testing.T) {
 			t.Fatalf("latest: %s v%d, want completed v2", s.Status, s.Version)
 		}
 	})
+
+	// 别的尝试的 Rejected 在本次调用登记之后才到（新 Client 回放历史终态时就是这个顺序：回放里的旧拒绝晚于发起到达）：
+	// 不唤醒本次调用，版本照样记进 latest；本次尝试自己的 Rejected 唤醒它；之后的非 Rejected 终态唤醒其余全部等待者，不论哪次尝试推动的。
+	t.Run("rejection of another attempt", func(t *testing.T) {
+		e := newEnv(t, 1)
+		a := start(t, e, "same")
+		attemptA := lastAttempt(e)
+		b := start(t, e, "same")
+		pending := func(ch <-chan struct{}) bool {
+			select {
+			case <-ch:
+				return false
+			default:
+				return true
+			}
+		}
+		observed := func(v uint64) func() bool {
+			return func() bool { s := e.client.Latest()["same"]; return s != nil && s.Version >= v }
+		}
+
+		e.publishTerminal("same", 1, StatusRejected, "another-client.1")
+		waitUntil(t, 5*time.Second, "client observed the foreign rejection v1", observed(1)) // 唤醒与记 latest 在同一把锁里
+		if !pending(a) || !pending(b) {
+			t.Fatal("waiter woken by another attempt's rejection (v1) that arrived after the call registered")
+		}
+
+		e.publishTerminal("same", 2, StatusRejected, attemptA)
+		if !closedWithin(a, 5*time.Second) {
+			t.Fatal("caller A not woken by its own attempt's rejection (v2)")
+		}
+		if !pending(b) {
+			t.Fatal("caller B woken by caller A's rejection (v2)")
+		}
+
+		e.publishTerminal("same", 3, StatusCompleted, "another-client.2")
+		if !closedWithin(b, 5*time.Second) {
+			t.Fatal("caller B not woken by the completion started by another attempt (v3)")
+		}
+		e.client.mu.Lock()
+		defer e.client.mu.Unlock()
+		if n := len(e.client.wait["same"]); n != 0 {
+			t.Fatalf("%d waiters left behind after the completion", n)
+		}
+	})
+}
+
+// 新 Client 不等回放追平就对同一个 ID 发起（历史里有别的尝试的 Rejected），经真实协调器：这次调用拿到的必须是它自己的终态
+// （新一轮的拒绝 v2），不能是回放里的旧拒绝 v1。回放与发起谁先到不固定，两种顺序结果都必须是 v2；本机上回放通常先到，
+// 所以“旧拒绝晚于登记”的确定性覆盖在 TestStartIntentWaiters/rejection_of_another_attempt。本用例同时守住协调器把触发拒绝的尝试写进终态。
+func TestStartBeforeReplayCatchesUpWaitsForOwnTerminal(t *testing.T) {
+	e := newEnv(t, 1)
+	e.rejectingCoordinator()
+	if first := e.startAndWait(e.client, "same"); first.Status != StatusRejected || first.Version != 1 {
+		t.Fatalf("first start: %s v%d, want rejected v1", first.Status, first.Version)
+	}
+	other := e.newClient()
+	if got := e.startAndWait(other, "same"); got.Status != StatusRejected || got.Version != 2 {
+		t.Fatalf("start before the new client caught up: woken with %s v%d, want its own rejection v2", got.Status, got.Version)
+	}
 }
