@@ -595,15 +595,36 @@ func TestCASConflictHasRetryableDirectoryCode(t *testing.T) {
 		t.Fatalf("CAS conflict classified as %d, want 530107", code)
 	}
 }
+
+// 过期预留上的 Release 不冲突，也不动记录：不删除、不改值、不改版本（过期记录由下一次 Reserve 接管）。
 func TestReleaseExpiredReservationIsNoOp(t *testing.T) {
-	dir, clock := newDirectory(t)
+	now := &clock{now: time.Unix(1_700_000_000, 0)}
+	state := versionstore.NewMemoryStore[string, Entry]()
+	dir, err := New(state, Config{Normalize: NormalizeLower, DefaultTTL: time.Minute, Now: now.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	if _, err := dir.Reserve(ctx, "name", "old", time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	clock.advance(2 * time.Minute)
+	before, found, err := state.Get(ctx, "name")
+	if err != nil || !found {
+		t.Fatalf("reserved record: found=%v err=%v", found, err)
+	}
+	now.advance(2 * time.Minute)
 	if err := dir.Release(ctx, "name", "new"); err != nil {
 		t.Fatalf("expired reservation conflicts: %v", err)
+	}
+	after, found, err := state.Get(ctx, "name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("Release of an expired reservation deleted the record")
+	}
+	if after != before {
+		t.Fatalf("Release of an expired reservation modified the record: %+v, was %+v", after, before)
 	}
 }
 
