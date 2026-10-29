@@ -40,6 +40,14 @@ type Cursor struct {
 	// 换下后只有本游标持有它：旧 Plan 的 next 只在 Commit 通过序号校验时才被读取，
 	// 而持有这张 map 的那个 Plan 已经提交过，序号不会再匹配。
 	spare map[uint64]Object
+	// changes 是 plan 内部的临时变化表，只在一次 plan 调用期间使用，返回前清零留给下次。
+	changes []change
+}
+
+// change 是一次 plan 中要上线的对象；mask 是 RC2 变化字段位图，组帧时只写这些字段。
+type change struct {
+	object Object
+	mask   byte
 }
 type Plan struct {
 	Data     []byte
@@ -82,11 +90,7 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 	next := Cursor{layout: signature, epoch: s.Epoch, seq: c.seq + 1, tick: s.Tick, objects: objects}
 	// changes 记录本帧要上线的对象；按 Chunk、ID 排序后连续同 Chunk 即一组，
 	// 线格式与逐 Chunk 分组后组内按 ID 排序完全相同。
-	type change struct {
-		object Object
-		mask   byte // RC2 变化字段位图，组帧时只写这些字段
-	}
-	changes := make([]change, 0, len(s.Objects))
+	changes := c.changes[:0]
 	snapshotBytes := 36
 	frameBytes := 36
 	for _, o := range s.Objects {
@@ -203,6 +207,8 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 		}
 		i = end
 	}
+	clear(changes) // 释放对基线字节的引用，容量留给下一次 plan。
+	c.changes = changes[:0]
 	return &Plan{Data: b, previous: c.seq, next: next}, nil
 }
 func (c *Cursor) Commit(p *Plan) error {
