@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
+	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // ErrRuntimeStopped 表示 Runtime 或其组件已开始关闭，不再接受新操作。
@@ -82,7 +85,7 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	if runtime.Ready() {
 		return nil
 	}
-	if err := runtime.Projector.Flush(ctx); err != nil {
+	if err := runtime.drainAtStartup(ctx); err != nil {
 		return fmt.Errorf("dataengine runtime: startup projection recovery: %w", err)
 	}
 	unregister, err := runtime.access.ConfigureLoader(runtime.Repository)
@@ -103,6 +106,48 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	// 只有加载器、没有持久删除门的半装配 Runtime。
 	runtime.ready.Store(true)
 	return nil
+}
+
+// startupDrainLimit 是调用方没给期限时启动排空重试的上限（设计 T-A 第 3 条：120s）。
+const startupDrainLimit = 2 * time.Minute
+
+// drainAtStartup 把 WAL 里没投影的记录全部投影进 Mongo，在 ctx（wiring 的 dataengine.startup_timeout）内有界重试。
+//
+// 为什么要重试（saga 设计 T-A，DESIGN-2026-10-28 §10）：被 kill -9 的进程留下的投影事务在服务端保持打开、持锁，直到
+// transactionLifetimeLimitSeconds（部署要求 20s，服务端缺省 60s）才回收；这期间对同一文档的写一直 WriteConflict。驱动在
+// 一次 WithTransaction 里重跑暂时性错误，但只到 mongo.transaction_timeout 为止；之后 Flush 返回错误。这里在启动期限内退避
+// 再 Flush，所以排空能等的上限是 startup_timeout，而不是两者中较小的那个。
+//
+// 不重试的：投影器已经 fence（致命冲突，重试只会重复同一结论）、ctx 结束、关闭开始。其余错误（含权限、网络这类重试也
+// 不会好的）同样重试到期限，再带最后一次错误失败：启动期限内多等一会儿，换来遗留事务回收后能起来，不用区分驱动错误的种类。
+func (runtime *Runtime) drainAtStartup(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		// 调用方没给期限（直接装配、测试）：用设计 T-A 的上限，永久错误不会让启动一直重试。
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, startupDrainLimit)
+		defer cancel()
+	}
+	backoff := 100 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		err := runtime.Projector.Flush(ctx)
+		if err == nil {
+			return nil
+		}
+		if runtime.Projector.fatal() != nil || ctx.Err() != nil || errors.Is(err, ErrRuntimeStopped) {
+			return err
+		}
+		slog.Warn("dataengine runtime: startup drain failed; retrying within the startup timeout (a killed process's leftover Mongo transaction holds its locks until transactionLifetimeLimitSeconds)",
+			"attempt", attempt, "retry_in", backoff, "err", err)
+		metrics.IncCounter("dataengine.startup_drain_retry_total", nil, 1)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+		backoff = min(2*backoff, 2*time.Second)
+	}
 }
 
 func (runtime *Runtime) Ready() bool {

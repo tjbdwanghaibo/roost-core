@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -579,4 +580,69 @@ func TestAssembleValidatesReceiptRetentionBeforeInfrastructure(t *testing.T) {
 	if _, err := Assemble(deps, cfg); err != nil {
 		t.Fatalf("default retention = %v", err)
 	}
+}
+
+// conflictingSessionsMongo 让前 n 次 StartSession 失败，模拟重启时被杀进程遗留的投影事务仍持锁：每次排空都撞上写冲突，
+// 直到服务端回收它（transactionLifetimeLimitSeconds）。
+type conflictingSessionsMongo struct {
+	*mongotest.Client
+	remaining atomic.Int32
+}
+
+var errLeftoverTransaction = errors.New("WriteConflict: a leftover transaction still holds the document (injected)")
+
+// 记录要带 effect：单条修改走快路、不开事务（projectsOnFastPath）。
+func (m *conflictingSessionsMongo) StartSession(ctx context.Context) (fmongo.ISession, error) {
+	if m.remaining.Add(-1) >= 0 {
+		return nil, errLeftoverTransaction
+	}
+	return m.Client.StartSession(ctx)
+}
+
+// 设计 T-A 第 3 条：启动排空撞上遗留事务的写冲突时，在启动期限内退避重试；遗留事务回收之后启动成功、记录恰好投影一次。
+// 期限到了仍失败才报错（带最后一次错误）。
+func TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline(t *testing.T) {
+	mongo := &conflictingSessionsMongo{Client: mongotest.NewClient()}
+	a := lifecycleAssembly(t, mongo, &recordingJetStream{})
+	wal, err := nestwal.Open(a.cfg.WAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wal.Append(context.Background(), projectorRecord(31, true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mongo.remaining.Store(3)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start while a leftover transaction blocks the first drains = %v; want a retry within the startup deadline", err)
+	}
+	defer func() { _ = a.Shutdown(context.Background()) }()
+	if got := a.Runtime().Projector.Stats().Projected; got != 1 {
+		t.Fatalf("projected %d records after the retried drain, want 1", got)
+	}
+
+	// 遗留事务一直不回收：期限到了带最后一次错误失败。
+	stuck := &conflictingSessionsMongo{Client: mongotest.NewClient()}
+	b := lifecycleAssembly(t, stuck, &recordingJetStream{})
+	wal, err = nestwal.Open(b.cfg.WAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wal.Append(context.Background(), projectorRecord(32, true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stuck.remaining.Store(1 << 30)
+	short, cancelShort := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelShort()
+	if err := b.Start(short); !errors.Is(err, errLeftoverTransaction) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start against a transaction that never goes away = %v; want the last drain error and the deadline", err)
+	}
+	_ = b.Shutdown(context.Background())
 }

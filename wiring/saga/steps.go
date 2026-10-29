@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sync"
 	"time"
@@ -190,6 +191,9 @@ func (s *Steps) Start(ctx context.Context) error {
 			}
 		}
 	}
+	if mongoClient, ok := app.Lookup[fmongo.IMongo](s.registry, mods.ModMongo); ok && mongoClient != nil {
+		probeTransactionLifetime(ctx, mongoClient, s.group, participant.StepWindow)
+	}
 	var load *loadSignal
 	if hasNative && participant.Admission.Enabled {
 		if load, err = s.startLoadSignal(ctx, participant); err != nil {
@@ -216,6 +220,48 @@ func (s *Steps) Start(ctx context.Context) error {
 	}
 	s.participant, s.subs, s.load, s.started = participant, subs, load, true
 	return nil
+}
+
+// transactionLifetimeParameter 是 Mongo 服务端回收打开事务的时限参数（秒）。
+const transactionLifetimeParameter = "transactionLifetimeLimitSeconds"
+
+// probeTransactionLifetime 是参与方启动时的只读探针（设计 T-A 第 2 条）：被 kill -9 的进程留下的事务（DataEngine 投影、
+// Mongo 步骤）持锁到服务端的 transactionLifetimeLimitSeconds 才回收，重启后的排空与同一操作的下一次尝试这段时间一直
+// 写冲突；它长于缺省步骤预算窗口时，在途步骤可能在这段时间里用完全部尝试、进入 manual_required。部署要求是 20s
+// （SAGA.md「进程被强杀时遗留的 Mongo 事务」）。超过窗口时 WARN 一次并计 saga.step.mongo_txn_lifetime_exceeds_budget；
+// 读不到（托管 Mongo 拒绝 getParameter、账号无权限）只记一条“未探测”。参数归部署，探针从不拒绝启动。返回读到的时限
+// （读不到为 0）与是否超过窗口，测试用。
+func probeTransactionLifetime(ctx context.Context, client fmongo.IMongo, group string, window time.Duration) (time.Duration, bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	value, err := client.GetParameter(probeCtx, transactionLifetimeParameter)
+	var seconds float64
+	if err == nil {
+		switch v := value.(type) {
+		case int32:
+			seconds = float64(v)
+		case int64:
+			seconds = float64(v)
+		case float64:
+			seconds = v
+		case int:
+			seconds = float64(v)
+		default:
+			err = fmt.Errorf("unexpected type %T", value)
+		}
+	}
+	if err != nil {
+		slog.Info("saga steps: Mongo transactionLifetimeLimitSeconds not probed; the deployment requirement is 20s (SAGA.md)", "group", group, "err", err)
+		return 0, false
+	}
+	lifetime := time.Duration(seconds * float64(time.Second))
+	if lifetime <= window {
+		return lifetime, false
+	}
+	slog.Warn("saga steps: Mongo transactionLifetimeLimitSeconds exceeds the default step budget window; a killed participant's leftover transactions can outlast every attempt of an in-flight step (deployment requirement: 20s, SAGA.md)",
+		"group", group, "transaction_lifetime", lifetime, "step_window", window)
+	metrics.IncCounter("saga.step.mongo_txn_lifetime_exceeds_budget", map[string]string{"group": group}, 1)
+	return lifetime, true
 }
 
 // startLoadSignal 启动本进程的准入信号：读同进程 DataEngine 投影器的 WAL 未投影记录数。原生步骤一定在有 DataEngine 的进程里

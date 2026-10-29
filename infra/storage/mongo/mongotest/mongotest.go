@@ -50,6 +50,10 @@ type Client struct {
 	// StartSessionErr, when set, fails StartSession.
 	StartSessionErr error
 
+	// Parameters 是 GetParameter 返回的服务端参数；不在表里的参数返回 ErrUnsupported（与真实服务端
+	// 拒绝 / 没有权限同样是“读不到”）。
+	Parameters map[string]any
+
 	sessions int
 	attempts int
 }
@@ -84,6 +88,17 @@ func (c *Client) StartSession(context.Context) (fmongo.ISession, error) {
 	}
 	c.sessions++
 	return &session{client: c}, nil
+}
+
+// GetParameter 返回 Parameters 里的值；没有时返回 ErrUnsupported。
+func (c *Client) GetParameter(_ context.Context, name string) (any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, ok := c.Parameters[name]
+	if !ok {
+		return nil, fmt.Errorf("%w: getParameter %s", ErrUnsupported, name)
+	}
+	return value, nil
 }
 
 func (c *Client) Ping(context.Context) error  { return nil }

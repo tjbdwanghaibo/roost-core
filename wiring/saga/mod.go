@@ -257,6 +257,9 @@ type Participant struct {
 	SignalInterval time.Duration
 	// Sid 是本进程的 sid（准入信号的键名用）。
 	Sid int32
+	// StepWindow 是缺省步骤预算窗口：saga.step_defaults（缺省取 coresaga.DefaultStepBudget）的
+	// MaxAttempts × Timeout 加尝试之间的退避。参与方启动探针拿它比 transactionLifetimeLimitSeconds（设计 T-A）。
+	StepWindow time.Duration
 }
 
 // ParticipantSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回 Participant。
@@ -269,5 +272,31 @@ func ParticipantSettings(cfg *viper.Viper) (Participant, error) {
 		Layout: settings.layout(), Replicas: settings.Saga.Replicas, Database: settings.Saga.Database,
 		ReceiptRetention: settings.Saga.ReceiptRetention, Admission: settings.admission(),
 		SignalInterval: settings.Saga.Admission.SignalInterval, Sid: settings.Sid,
+		StepWindow: stepWindow(settings.Saga.StepDefaults),
 	}, nil
+}
+
+// stepWindow 是按 saga.step_defaults 补齐框架缺省后的一个步骤从第一次派发到最后一次尝试超时的时长：
+// MaxAttempts × Timeout + 第 i 次重试前的退避 min(BackoffMin × 2^(i-1), BackoffMax) 之和。
+func stepWindow(defaults stepBudgetConfig) time.Duration {
+	budget := coresaga.DefaultStepBudget()
+	if defaults.Timeout > 0 {
+		budget.Timeout = defaults.Timeout
+	}
+	if defaults.MaxAttempts > 0 {
+		budget.MaxAttempts = uint32(defaults.MaxAttempts)
+	}
+	if defaults.BackoffMin > 0 {
+		budget.BackoffMin = defaults.BackoffMin
+	}
+	if defaults.BackoffMax > 0 {
+		budget.BackoffMax = defaults.BackoffMax
+	}
+	window := time.Duration(budget.MaxAttempts) * budget.Timeout
+	backoff := budget.BackoffMin
+	for range int(budget.MaxAttempts) - 1 {
+		window += min(backoff, budget.BackoffMax)
+		backoff *= 2
+	}
+	return window
 }

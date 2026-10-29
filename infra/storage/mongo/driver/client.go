@@ -118,6 +118,25 @@ func (c *Client) ValidateDeployment(ctx context.Context) error {
 	return nil
 }
 
+// GetParameter 发只读命令 {getParameter: 1, <name>: 1}（admin 库）并返回该参数的值。
+func (c *Client) GetParameter(ctx context.Context, name string) (any, error) {
+	if c == nil || c.cli == nil {
+		return nil, fmt.Errorf("mongo: client is not initialized")
+	}
+	if name == "" {
+		return nil, fmt.Errorf("mongo: getParameter: empty parameter name")
+	}
+	var reply bson.M
+	if err := c.cli.Database("admin").RunCommand(ctx, bson.D{{Key: "getParameter", Value: 1}, {Key: name, Value: 1}}).Decode(&reply); err != nil {
+		return nil, fmt.Errorf("mongo: getParameter %s: %w", name, err)
+	}
+	value, ok := reply[name]
+	if !ok {
+		return nil, fmt.Errorf("mongo: getParameter %s: not in the reply", name)
+	}
+	return value, nil
+}
+
 func (c *Client) Ping(ctx context.Context) error {
 	return c.cli.Ping(ctx, nil)
 }

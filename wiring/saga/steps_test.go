@@ -341,3 +341,49 @@ func TestStepsNeedDataEngineForTheAdmissionSignal(t *testing.T) {
 		t.Fatalf("subscribed %d consumers before the admission signal was assembled", len(js.configs))
 	}
 }
+
+// 设计 T-A 第 2 条：参与方启动只读探测 transactionLifetimeLimitSeconds。长于缺省步骤预算窗口（框架缺省 5 × 5s 加四次退避
+// = 26.5s）时 WARN 并计 saga.step.mongo_txn_lifetime_exceeds_budget；部署要求的 20s 不告警；读不到只记“未探测”。探针从不
+// 拒绝启动。
+func TestStepsProbeTheMongoTransactionLifetimeAgainstTheStepWindow(t *testing.T) {
+	if got := stepWindow(stepBudgetConfig{}); got != 26500*time.Millisecond {
+		t.Fatalf("default step window = %v, want 26.5s", got)
+	}
+	if got := stepWindow(stepBudgetConfig{Timeout: 10 * time.Second, MaxAttempts: 2, BackoffMin: time.Second, BackoffMax: time.Second}); got != 21*time.Second {
+		t.Fatalf("configured step window = %v, want 21s", got)
+	}
+	exceeded := func() int64 {
+		var total int64
+		for _, metric := range metrics.Snapshot() {
+			if metric.Name == "saga.step.mongo_txn_lifetime_exceeds_budget" && metric.Labels["group"] == "probe" {
+				total += metric.Value
+			}
+		}
+		return total
+	}
+	window := stepWindow(stepBudgetConfig{})
+	before := exceeded()
+	for _, tc := range []struct {
+		name     string
+		value    any
+		lifetime time.Duration
+		exceeds  bool
+	}{
+		{"server default", int32(60), time.Minute, true},
+		{"deployment requirement", int32(20), 20 * time.Second, false},
+		{"int64", int64(27), 27 * time.Second, true},
+		{"not readable", nil, 0, false},
+	} {
+		client := mongotest.NewClient()
+		if tc.value != nil {
+			client.Parameters = map[string]any{transactionLifetimeParameter: tc.value}
+		}
+		lifetime, exceeds := probeTransactionLifetime(context.Background(), client, "probe", window)
+		if lifetime != tc.lifetime || exceeds != tc.exceeds {
+			t.Errorf("%s: probe = %v, %v; want %v, %v", tc.name, lifetime, exceeds, tc.lifetime, tc.exceeds)
+		}
+	}
+	if got := exceeded() - before; got != 2 {
+		t.Fatalf("saga.step.mongo_txn_lifetime_exceeds_budget += %d, want 2 (60s and 27s)", got)
+	}
+}

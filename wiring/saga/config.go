@@ -37,9 +37,6 @@ type consumerConfig struct {
 	NakBackoffMax  time.Duration `config:"nak_backoff_max" default:"30s" min:"1ns" example:"30s"`
 }
 
-// minPublishUnknownBudget 是 saga.publish_unknown_budget 的下限：一条流选主停顿实测 5～7s，结果未知的重发判定要撑过 3 次。
-const minPublishUnknownBudget = 3 * 7 * time.Second
-
 // productionReplicas 是生产要求的流与桶副本数（前提：JetStream R3 文件存储，收到 PubAck 即不丢）。
 const productionReplicas = 3
 
@@ -61,15 +58,16 @@ type config struct {
 		Coordinators  []string                               `config:"coordinators" required:"true" example:"1000" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方"`
 		Replicas      int                                    `config:"replicas" default:"1" min:"1" max:"5" example:"1" help:"流与桶的副本数；生产必须为 3"`
 		// 去重窗口要盖住一次发布结果未知的整个重发判定（publish_unknown_budget）两遍。
-		DuplicateWindow      time.Duration `config:"duplicate_window" default:"2m" min:"1s" example:"2m" help:"MsgID 去重窗口，≥ 2 × publish_unknown_budget"`
-		StreamMaxBytes       int64         `config:"stream_max_bytes" default:"8589934592" min:"1" example:"8589934592" help:"每条流的容量上限；满了拒新写（协调器 fail-stop 告警），只由快照后的清理删旧消息"`
-		MaxBatch             int           `config:"max_batch" default:"256" min:"1" max:"1000" example:"256" help:"分区一轮最多取的输入条数"`
-		Tick                 time.Duration `config:"tick" default:"5ms" min:"1ms" max:"100ms" example:"5ms" help:"分区时间轮的槽宽"`
-		SnapshotEveryEvents  int           `config:"snapshot_every_events" default:"2000" min:"1" example:"2000"`
-		SnapshotInterval     time.Duration `config:"snapshot_interval" default:"30s" min:"1s" example:"30s"`
-		TerminalRetention    time.Duration `config:"terminal_retention" default:"1h" min:"1m" example:"1h" help:"终态在内存与快照里留多久：期间 Get / Lookup 可读、同业务键去重、迟到成功可补偿；≤ receipt_retention"`
-		ReceiptRetention     time.Duration `config:"receipt_retention" default:"168h" min:"1m" example:"168h" help:"参与方回执保留期：必须长于步骤命令可能重投的最长时间；更早更新的记录拒绝 Resume"`
-		PublishTimeout       time.Duration `config:"publish_timeout" default:"3s" min:"1ns" max:"9s" example:"3s" help:"一次分区事件发布等 PubAck 的时长，< publish_unknown_budget"`
+		DuplicateWindow     time.Duration `config:"duplicate_window" default:"2m" min:"1s" example:"2m" help:"MsgID 去重窗口，≥ 2 × publish_unknown_budget"`
+		StreamMaxBytes      int64         `config:"stream_max_bytes" default:"8589934592" min:"1" example:"8589934592" help:"每条流的容量上限；满了拒新写（协调器 fail-stop 告警），只由快照后的清理删旧消息"`
+		MaxBatch            int           `config:"max_batch" default:"256" min:"1" max:"1000" example:"256" help:"分区一轮最多取的输入条数"`
+		Tick                time.Duration `config:"tick" default:"5ms" min:"1ms" max:"100ms" example:"5ms" help:"分区时间轮的槽宽"`
+		SnapshotEveryEvents int           `config:"snapshot_every_events" default:"2000" min:"1" example:"2000"`
+		SnapshotInterval    time.Duration `config:"snapshot_interval" default:"30s" min:"1s" example:"30s"`
+		TerminalRetention   time.Duration `config:"terminal_retention" default:"1h" min:"1m" example:"1h" help:"终态在内存与快照里留多久：期间 Get / Lookup 可读、同业务键去重、迟到成功可补偿；≤ receipt_retention"`
+		ReceiptRetention    time.Duration `config:"receipt_retention" default:"168h" min:"1m" example:"168h" help:"参与方回执保留期：必须长于步骤命令可能重投的最长时间；更早更新的记录拒绝 Resume"`
+		PublishTimeout      time.Duration `config:"publish_timeout" default:"3s" min:"1ns" max:"9s" example:"3s" help:"一次分区事件发布等 PubAck 的时长，< publish_unknown_budget"`
+		// 下限 21s：一条流选主停顿实测 5～7s，结果未知的重发判定要撑过 3 次（声明的 min 是唯一的强制点）。
 		PublishUnknownBudget time.Duration `config:"publish_unknown_budget" default:"30s" min:"21s" example:"30s" help:"分区事件发布结果未知时重发判定的总时长（≥ 3 × 7s 选主停顿），超过 fail-stop"`
 		QueryTimeout         time.Duration `config:"query_timeout" default:"2s" min:"1ns" example:"2s"`
 		StartVerdictTimeout  time.Duration `config:"start_verdict_timeout" default:"2s" min:"1ns" example:"2s" help:"StartSaga / Resume / Compensate 等所有者判定回复多久后改为按 Get 补查"`
