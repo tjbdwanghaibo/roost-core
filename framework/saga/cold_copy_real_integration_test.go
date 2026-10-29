@@ -74,7 +74,8 @@ func TestRealMongoColdCopyVersionGate(t *testing.T) {
 	t0 := time.Date(2026, 10, 29, 9, 0, 0, 123456789, time.UTC)
 	full := coldRecord("full", 5, t0, StatusCompensating)
 	full.Phase, full.Step, full.CompletedSteps, full.Attempt, full.Incarnation = PhaseCompensate, 1, 1, 0, 2
-	full.LateStep, full.LateData, full.Data, full.LastError = 2, []byte("late"), []byte("data"), "credit refused"
+	// 错误文本以 "$" 开头：整文档替换包着 $literal，业务字符串不会被当成字段路径求值（去掉 $literal 时这一字段会消失）。
+	full.LateStep, full.LateData, full.Data, full.LastError = 2, []byte("late"), []byte("data"), "$credit refused"
 	full.StartDigest, full.StartAttempt, full.DeadlineAt = "digest", "inst.7", t0.Add(time.Hour)
 	if err := full.Validate(); err != nil {
 		t.Fatal(err)

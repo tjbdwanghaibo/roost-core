@@ -28,6 +28,8 @@ strict 是 WAL fsync，非 Mongo 提交。async 允许先投影，但 Ack 前仍
 
 **运行期不得直接改权威集合**：加载着的实体以内存为权威，投影按 `_id` + `_version == expected` 条件写（`MongoStore`，`framework/dataengine/engine/mongo_store.go`）。在进程运行时直接改 Mongo 文档：只改字段、不动 `_version` 时版本仍匹配，下一次投影按内存状态覆盖改动（静默丢失）；改了 `_version`（如恢复旧备份）时投影 `ErrProjectionConflict` fatal、进程 fence，重启时启动投影恢复仍冲突、起不来。在线改档写成业务的 GM handler（一条普通 Nest 消息，走正式提交链路）；整档恢复先停该 sid 的进程并确认 WAL 已排空（game-demo `cmd/sidmove wal-drained`），再写回文档，启动后冷加载以库里的版本继续。冲突后的识别与处置见[维护手册 §4](../../maintenance/README.md#4-故障处理)。框架只提供与业务字段无关的两条运维命令 `entity.kick` / `entity.unload`（[§6 单实体运维命令](#单实体运维命令d16)），改档与恢复不进框架（[DESIGN-TODO D16](../../maintenance/DESIGN-TODO.md#d16-单个实体--玩家的运维入口)，维护者 2026-10-20 决定 C）。
 
+**投影的写法**：Put（新建实体的首个提交、整文档写回）是整文档替换，Patch 只 `$set` / `$unset` 自己的键，删档写墓碑。Put 的单条路径用管道更新 `$replaceWith`，文档包在 `$literal` 里按原样写入；批量路径用 `ReplaceOne`。两条路径存下的文档必须相同，等于 WAL 里的那份；业务字符串以 `$` 开头（玩家名、宠物名）也照原样保存，不被当成字段路径或变量。v1.12.2～v1.31.1 的单条路径没有包 `$literal`，这类值会被改写或让投影卡住（检测方法见 CHANGELOG）。实现、不变量与回归见[实现篇 §2 第 10 条](../impl/03-dataengine.md#2-必须保持的契约)。
+
 **投影并行**（2026-10-27 起）：投影器按冲突键把一轮回放的记录分成互不相干的组，分给至多 `dataengine.projection.workers`（缺省 8；1 = 串行）条通道同时写 Mongo，通道内照常合批。写同一实体（同一文档 `_id`）、同一回执 / 协调文档、同一 effect 的记录，以及全部带 effect 的记录之间，仍按 WAL 顺序投影；checkpoint 只确认连续成功的前缀，前缀之后已写入的记录在下一轮或重启后靠事务标记幂等重放。它提高的是“同一时刻在途的 Mongo 调用数”，对 RTT 大的远端 Mongo 收益最大；全部记录都带 effect 的负载（saga 原生步骤）因 effect 暂存顺序不放宽而仍是串行。一轮最多读 `batch_records × workers` 条，每条通道仍是满批。设计、取舍与实测见 [FEATURE-2026-10-27-projector-entity-parallel](../../maintenance/FEATURE-2026-10-27-projector-entity-parallel.md) 与 [性能报告](../../performance/PROJECTOR-ENTITY-PARALLEL-20261027.md)。
 
 投影器可重放同一已提交记录，外部副作用必须通过稳定身份去重。WAL checkpoint 只决定崩溃后从哪里重放：投影器按条数 / 间隔（`dataengine.projection.checkpoint_records` / `checkpoint_interval`，缺省 256 条 / 20 ms）合并确认，带回执 / effect 的记录（saga 原生步骤）与普通记录一样合并（2026-10-18 起）。这类记录逐条投影约 16 ms，缺省 20 ms 间隔下积压时合并系数约 2；维护者 2026-10-19 决定缺省保持 20 ms，需要更高吞吐的部署可调大 `checkpoint_interval`，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。崩溃后会多重放这段已投影的记录，由事务标记判定为已应用，lease fence、回执与 effect 都保持首投的结果。只有单 mutation 快路记录仍逐条确认。effect 暂存进 outbox 后投影器立即唤醒 outbox 发布（2026-10-18 起），`dataengine.outbox.poll_interval`（缺省 100ms）只是兜底轮询，不再决定 effect 的发布延迟。WAL backlog、磁盘/年龄健康阈值、outbox 硬容量分别处理，不能统称任一超限都直接 fail-stop。启用前核对容量与保留期，receipt/事务标记不能在仍有重放可能时提前过期。
@@ -60,6 +62,14 @@ Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未�
 要等 Mongo 落库，用明确 Flush/投影等待契约，不能只等 strict handler 成功。静态 Player 跨机迁移只以已落库数据为准，WAL 负责本机恢复与落库，不提供跨机本地 WAL 热迁移；按 sid 搬机的步骤与检查点见[参考流程](../PLAYER-MIGRATION.md)。旧版本升级先停写、排空、用旧程序完成需保留数据落库，保留备份；新程序用新 WAL 目录。框架不自动清库或迁移 schema。
 
 只读故障分析使用 cmd/walinspect 与 nestwal 的检查/完整副本入口；不要用正在运行的权威 WAL 目录做破坏性实验。
+
+### DataEngine 对 MongoDB 的最低要求
+
+框架不在启动时检查服务端版本与参数；下面三条是部署要求，每条写明代码里依赖它的地方。
+
+- **MongoDB 5.0 及以上**。代码用到的特性最晚到 4.4：Go 驱动 v2.6.0 本身要求 4.2（驱动 `topology.MinSupportedMongoDBVersion`）；Put 单条投影是带 `$replaceWith` 的管道更新（4.2 起）；新建实体的首个提交通常同时 Put 多个 DAO 集合，走事务，在事务里第一次写某个集合时隐式建集合（4.4 起允许）；启动检查发 `hello` 命令（[driver/client.go](../../../infra/storage/mongo/driver/client.go) `ValidateDeployment`，5.0 引入，4.4.2 等补丁版回补）。在此之上部署下限定为 5.0（4.4 已于 2024-02 结束官方支持），仓库的真实依赖验收用 mongod 8.0。只在 MongoDB 上验证过，兼容 MongoDB API 的托管服务（如 AWS DocumentDB）不在验证范围内。
+- **副本集**，单节点副本集即可。多 mutation 记录、批量投影、带回执 / effect / Remote 写的记录都在 Mongo 事务里写（`MongoStore.Project` / `ProjectBatch` → `StartSession` + `WithTransaction`，事务读关注 snapshot、写关注 majority + journal，[driver/client.go](../../../infra/storage/mongo/driver/client.go) `StartSession`），事务只在副本集或分片集群上可用。`mongo.require_replica_set`（缺省 `true`，[wiring/mongo/mongo_mod.go](../../../wiring/mongo/mongo_mod.go)）为 `true` 时 Mongo Mod 启动经 `ValidateDeployment` 拒绝单机（`hello` 没有 `setName` 且不是 mongos）；无论取值都要求服务端支持会话（`logicalSessionTimeoutMinutes`）。装配 DataEngine 的进程保持 `true`：DataEngine 不另外检查这个配置，写成 `false` 又连上单机时，事务投影在运行期失败并一直重试。
+- **`transactionLifetimeLimitSeconds=20`**，写进 mongod.conf（`setParameter:` 下 `transactionLifetimeLimitSeconds: 20`）或启动参数 `--setParameter transactionLifetimeLimitSeconds=20`。被 kill -9 的进程留下的投影事务持锁到这个时限（服务端缺省 60s），服务端最晚在 1.5 倍时回收，其间重启排空写同一文档一直写冲突；`dataengine.startup_timeout` 缺省 60s 就是按 20s（最晚 30s 回收）加 30s 余量算的（[runtime.go](../../../framework/dataengine/engine/runtime.go) `drainAtStartup`）。DataEngine 不探测这个参数；saga 参与方启动时只读探测，超过步骤预算窗口时告警（[wiring/saga/steps.go](../../../wiring/saga/steps.go) `probeTransactionLifetime`），也不拒绝启动。完整说明见 [SAGA.md](../SAGA.md)“进程被强杀时遗留的 Mongo 事务”。
 
 ### 单实体运维命令（D16）
 

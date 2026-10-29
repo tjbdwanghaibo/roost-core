@@ -99,6 +99,50 @@ func TestUpsertSeedsFromEqualityFieldsOnly(t *testing.T) {
 	}
 }
 
+// $replaceWith 的参数与真实 Mongo 一样按聚合表达式求值（mongod 8.0 上逐条核对过）：以 "$" 开头的字符串是字段路径或变量，
+// {$literal: v} 原样保留。替身若把参数当字面量存，会比服务器“更正确”，藏住业务字符串被误读的缺陷。
+func TestReplaceWithEvaluatesExpressionsLikeTheServer(t *testing.T) {
+	ctx := context.Background()
+	coll := newColl(t)
+	if err := coll.Seed(bson.M{"_id": int64(1), "nickname": "old-nick", "y": "old-y", "level": int32(1)}); err != nil {
+		t.Fatal(err)
+	}
+	replace := func(id int64, replacement any) (bson.M, error) {
+		var after bson.M
+		err := coll.FindOneAndUpdate(ctx, bson.M{"_id": id}, bson.A{bson.M{"$replaceWith": replacement}}, &after,
+			fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
+		return after, err
+	}
+	after, err := replace(1, bson.M{"_id": int64(1), "name": "$nickname", "gone": "$missing", "nested": bson.M{"k": "$y"}, "arr": bson.A{"$y", "$missing", "z"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := bson.M{"_id": int64(1), "name": "old-nick", "nested": bson.D{{Key: "k", Value: "old-y"}}, "arr": bson.A{"old-y", nil, "z"}}
+	if !reflect.DeepEqual(after, want) {
+		t.Fatalf("evaluated replacement=%v, want %v", after, want)
+	}
+	// 新建（upsert）时 $$ROOT 是由过滤条件等值字段种出的文档。
+	if after, err = replace(2, bson.M{"_id": int64(2), "root": "$$ROOT"}); err != nil || !reflect.DeepEqual(after["root"], bson.D{{Key: "_id", Value: int64(2)}}) {
+		t.Fatalf("$$ROOT on upsert=%v err=%v", after, err)
+	}
+	for _, bad := range []string{"$", "$$", "$$foo"} {
+		if _, err := replace(3, bson.M{"_id": int64(3), "v": bad}); err == nil {
+			t.Fatalf("%q evaluated without the server's error", bad)
+		}
+	}
+	if _, err := replace(3, bson.M{"$cond": bson.A{true, bson.M{"_id": int64(3)}, "$$ROOT"}}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unmodelled expression operator = %v, want ErrUnsupported", err)
+	}
+	literal := bson.M{"_id": int64(4), "name": "$nickname", "root": "$$ROOT", "dollar": "$", "nested": bson.M{"k": "$y"}, "arr": bson.A{"$y"}}
+	if after, err = replace(4, bson.M{"$literal": literal}); err != nil {
+		t.Fatal(err)
+	}
+	want = bson.M{"_id": int64(4), "name": "$nickname", "root": "$$ROOT", "dollar": "$", "nested": bson.D{{Key: "k", Value: "$y"}}, "arr": bson.A{"$y"}}
+	if !reflect.DeepEqual(after, want) {
+		t.Fatalf("$literal replacement=%v, want %v", after, want)
+	}
+}
+
 func TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry(t *testing.T) {
 	coll := newColl(t)
 	ctx := context.Background()

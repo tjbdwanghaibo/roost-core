@@ -189,7 +189,10 @@ func (store *MongoStore) applyPut(ctx context.Context, coll fmongo.ICollection, 
 	delete(doc, "_deleted")
 	delete(doc, "_deleted_at")
 	// 聚合管道更新是真正的整文档替换且支持 upsert；与 $set 不同，不会残留已删除的字段。
-	pipeline := bson.A{bson.M{"$replaceWith": doc}}
+	// $replaceWith 的参数是聚合表达式：不包 $literal 时，以 "$" 开头的业务字符串（玩家名、宠物名）会被当成字段路径
+	// 或变量求值——字段丢失、取到旧文档的值、"$$ROOT" 变成整份旧文档，单独的 "$" 则让投影报错卡住。$literal 让文档
+	// 按原样写入，与批量路径的 ReplaceOne 存下同一份内容；upsert、返回新文档与版本条件不受影响。
+	pipeline := bson.A{bson.M{"$replaceWith": bson.M{"$literal": doc}}}
 	var after bson.M
 	err := coll.FindOneAndUpdate(ctx, mutationFilter(mutation), pipeline, &after, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
 	if err == nil {

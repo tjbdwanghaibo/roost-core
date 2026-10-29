@@ -28,6 +28,8 @@
 
 9. 运维卸载单个实体（`entity.unload`，D16，[entity_unload.go](../../../framework/dataengine/engine/entity_unload.go)）的顺序不能调换：①在业务池经 `ManagerAccess.WithLocked` 取实体锁并确认仍是当前托管实例（等持有它的事务结束，受 ctx 约束；它的准入在锁内，结束时要么已登记在途投影、要么已回滚；DataEngine 不直接 import `infra/base/lock`，三大块依赖方向见根包 `TestCorePillarDependencyDirection`），在 `heldMu` 下登记屏障（`Projector.beginEntityUnload`，锁序与锁内准入相同：实体锁 → heldMu）；②命令 goroutine 上 `WaitEntityProjection`；③业务池 `ManagerAccess.Unload`；④defer 撤销屏障。屏障在 `reserve` 的同一临界区检查（`checkUnloadingEntitiesLocked`），所以登记之后写到该实体的记录一定在 WAL 之前以 `coredata.ErrEntityUnloading` 拒绝、Nest 回滚——这是“②之后内存 == 库”一直成立的唯一原因；不能改成先登记屏障再等锁（持有实体的在途事务会被拒绝），也不能省掉①的锁或②的等待（回归分别在 `TestEntityUnloadWaitsForOrRefusesATransactionHoldingTheEntity` 与 `TestEntityUnloadDrainsProjectionsRefusesWritesThenColdLoadsTheSameState` 里变红，变异记录见 DESIGN-TODO D16 实施结果）。失败（取锁超时 / 另一次卸载 / Remote 所有权不稳定 → `ErrEntityUnloadBusy`；投影超时 → `ErrEntityUnloadTimeout`；`AutoPersist=false` → `ErrEntityUnloadNotPersistent`）都不卸载、撤销屏障，错误不包裹 ctx 错误（admin 审计会把它记成 unknown，而结论是确定的）。`UnloadEntity` 在业务 worker 上直接返回 `fctx.ErrBlockingInBusinessWorker`。admin 命令在 [admin.go](../../../framework/dataengine/engine/admin.go)（`RegisterAdminCommands`，wiring/dataengine Mod 在 Provide 时注册）；`entity.kick` 在 [gateway/admin.go](../../../infra/network/gateway/admin.go)（`PlayerRuntime.CloseSessions`，wiring/gate `RegisterPlayerAdminCommands`：GameIngressMod 与生成的嵌入 TCP Mod 在 Provide 时调用）。
 
+10. 投影写法（[mongo_store.go](../../../framework/dataengine/engine/mongo_store.go) `applyPut`、[mongo_projection.go](../../../framework/dataengine/engine/mongo_projection.go) `batchMutationModel`）：Put 是整文档替换。单条路径（快路与事务内）是 `FindOneAndUpdate(版本条件, [{$replaceWith: {$literal: doc}}], upsert, 返回新文档)`，批量路径是 `ReplaceOne` upsert 模型；同一条 mutation 经两条路径存下的文档必须相同，都等于 WAL 里的 `Data` 加上 `_version` / `_schema` / `_last_tx`。`$replaceWith` 的参数是聚合表达式，**必须**包 `$literal`：不包时以 `$` 开头的业务字符串被当成字段路径或变量求值——`"$name"` 让字段消失或取到旧文档的值，`"$$ROOT"` 变成整份旧文档，单独的 `"$"`、未定义变量 `"$$foo"` 让投影报错并一直重试（v1.12.2～v1.31.1 曾如此，见 CHANGELOG）。Patch 与删档墓碑是普通 `$set` / `$unset` 更新文档，值按字面量写入，不受影响；saga 冷副本的门控替换同样包 `$literal`（[cold_copy.go](../../../framework/saga/cold_copy.go) `coldCopyUpsert`）。今后在管道更新或聚合表达式里放业务数据，同样要包 `$literal`。没有改用 `FindOneAndReplace`：版本过滤、upsert、返回新文档与 `classifyNoMatch` 都能保持，但 `ICollection.FindOneAndReplace` 没有 upsert 选项，要扩接口，收益只是不依赖管道更新（4.2 起支持，下限见设计篇“DataEngine 对 MongoDB 的最低要求”）。替身 [mongotest.go](../../../infra/storage/mongo/mongotest/mongotest.go) `applyPipeline` 按服务器规则对 `$replaceWith` 的参数求值（字段路径、`$$ROOT` / `$$CURRENT`、`$literal`，其余运算符报 `ErrUnsupported`），不得退回“参数当字面量存”，否则单元测试看不见这类缺陷。回归：`TestMongoStorePutStoresDollarStringsVerbatim`（替身）、`TestRealMongoPutStoresDollarStringsVerbatim`（[mongo_store_integration_test.go](../../../framework/dataengine/engine/mongo_store_integration_test.go)，真实副本集，`-tags integration`）、`TestReplaceWithEvaluatesExpressionsLikeTheServer`（替身自身）、saga `TestRealMongoColdCopyVersionGate`（`last_error` 以 `$` 开头）。
+
 ## 2A. 聚合恢复与投影实现走读
 
 [EntityRepository](../../../framework/dataengine/engine/entity_repository.go)的Load合并同ID并发flight，等待该实体必要投影后进入loadAggregate。loadAggregate读取builder与完整一致性视图，先遍历全部DAO的Descriptor/SchemaVersion，再进行RestorePersisted与身份校验；只有所有DAO成功后，才RunLocal创建并发布实体及loaded hooks。前一DAO已解码、后一DAO失败时不能提前发布半实体。
@@ -91,7 +93,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### dataengine/engine
 
-20 个实现文件、18 个测试文件。
+20 个实现文件、19 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -255,8 +257,9 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - [entity_unload_test.go](../../../framework/dataengine/engine/entity_unload_test.go)：`TestEntityUnloadDrainsProjectionsRefusesWritesThenColdLoadsTheSameState`、`TestEntityUnloadTimesOutWithoutTouchingTheEntity`、`TestEntityUnloadWaitsForOrRefusesATransactionHoldingTheEntity`、`TestEntityUnloadRefusals`、`TestEntityUnloadRemoteManagedEntity`（正式 Nest + 文件 WAL + Mongo 替身）；真实 Mongo 的同一流程是生成工程 `TestGeneratedDataEngineAdminUnload`（`scripts/test-dataengine-generated.sh`），命令注册见 wiring 的 `TestModRegistersEntityUnloadAdminCommand`
 - [failure_integration_test.go](../../../framework/dataengine/engine/failure_integration_test.go)：`TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID`
 - [projector_replay_integration_test.go](../../../framework/dataengine/engine/projector_replay_integration_test.go)：`TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint`（`-tags integration`，真实副本集）
+- [mongo_store_integration_test.go](../../../framework/dataengine/engine/mongo_store_integration_test.go)：`TestRealMongoPutStoresDollarStringsVerbatim`（`-tags integration`，真实副本集）
 - [mongo_benchmark_test.go](../../../framework/dataengine/engine/mongo_benchmark_test.go)
-- [mongo_store_test.go](../../../framework/dataengine/engine/mongo_store_test.go)：`TestMongoStoreUsesAbsoluteExpiryForReceipts`、`TestMongoStorePatchExactVersionAndReplay`、`TestMongoStorePatchRejectsWrongOrMissingBase`、`TestMongoStorePutUpsertsWhenNoBaseVersionExpected`、`TestMongoStoreProjectBatchUsesOneTransactionAndDurableMarkers`；其余 23 项见文件
+- [mongo_store_test.go](../../../framework/dataengine/engine/mongo_store_test.go)：`TestMongoStoreUsesAbsoluteExpiryForReceipts`、`TestMongoStorePatchExactVersionAndReplay`、`TestMongoStorePatchRejectsWrongOrMissingBase`、`TestMongoStorePutUpsertsWhenNoBaseVersionExpected`、`TestMongoStoreProjectBatchUsesOneTransactionAndDurableMarkers`、`TestMongoStorePutStoresDollarStringsVerbatim`；其余 23 项见文件
 - [outbox_test.go](../../../framework/dataengine/engine/outbox_test.go)：`TestOutboxCloseBeforeStartIsTerminal`、`TestOutboxConcurrentStartClose`、`TestOutboxRetryDelayStartsAfterFailedPublish`、`TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreSkipsEffectsNotYetAvailable`；其余 14 项见文件（含投影后唤醒的两项）
 - [projection_test.go](../../../framework/dataengine/engine/projection_test.go)：`TestPlanProjectionSegmentsPreservesMixedOrder`、`TestBatchProjectionEligibilityMatchesMongoContract`、`TestPlanProjectionSegmentsBoundsOrdinaryBatches`、`TestPlanProjectionSegmentsHonorsMaxRecords`、`TestPlanProjectionSegmentsPreservesEveryRecordAndFence`；其余 17 项见文件
 - [projector_benchmark_test.go](../../../framework/dataengine/engine/projector_benchmark_test.go)
@@ -276,7 +279,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 - [identity_test.go](../../../infra/storage/mongo/mongotest/identity_test.go)：`TestMongoIdentityPromises`、`TestMongoIdentityBoundaries`
 - [index_test.go](../../../infra/storage/mongo/mongotest/index_test.go)：`TestMongoBoundaryPromises`、`TestIndexAndBulkBoundaryPromises`、`TestUniqueIndexOverAnArrayIsRefusedNotGuessed`、`TestUniqueIndexMissingFieldPromises`
-- [mongotest_test.go](../../../infra/storage/mongo/mongotest/mongotest_test.go)：`TestInsertRejectsDuplicateIDAndUniqueIndex`、`TestVersionCASSemantics`、`TestUpsertSeedsFromEqualityFieldsOnly`、`TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry`、`TestClaimStealUsesTokenCAS`；其余 15 项见文件
+- [mongotest_test.go](../../../infra/storage/mongo/mongotest/mongotest_test.go)：`TestInsertRejectsDuplicateIDAndUniqueIndex`、`TestVersionCASSemantics`、`TestUpsertSeedsFromEqualityFieldsOnly`、`TestReplaceWithEvaluatesExpressionsLikeTheServer`、`TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry`、`TestClaimStealUsesTokenCAS`；其余 16 项见文件
 - [transaction_test.go](../../../infra/storage/mongo/mongotest/transaction_test.go)：`TestTransactionWriteErrorAbortsLikeTheServer`、`TestTransactionCommitAfterSwallowedWriteErrorIsRetried`、`TestTransactionNotFoundDoesNotAbortAndPlainErrorsAreNotRetried`、`TestTransactionSnapshotPromises`
 
 ### nestwal

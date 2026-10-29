@@ -1869,7 +1869,16 @@ func applyPipeline(doc bson.M, pipeline bson.A) (bson.M, error) {
 		if !ok || len(normalized) != 1 {
 			return nil, fmt.Errorf("%w: aggregation stage %v", ErrUnsupported, normalized)
 		}
-		next, err := normalizeDoc(replacement)
+		// $replaceWith 的参数是聚合表达式，与真实 Mongo 一样求值后才是新文档；直接当字面量存会比服务器“更正确”，
+		// 把以 "$" 开头的业务字符串被误读这类缺陷藏起来。
+		value, missing, err := evalExpression(current, normalizeScalar(replacement))
+		if err != nil {
+			return nil, err
+		}
+		if _, isDoc := pathMap(value); missing || !isDoc {
+			return nil, fmt.Errorf("mongofake: $replaceWith must evaluate to a document, got %T", value)
+		}
+		next, err := normalizeDoc(value)
 		if err != nil {
 			return nil, err
 		}
@@ -1879,6 +1888,100 @@ func applyPipeline(doc bson.M, pipeline bson.A) (bson.M, error) {
 		current = next
 	}
 	return current, nil
+}
+
+// evalExpression 按 MongoDB 聚合表达式规则对 root 求值（只覆盖 $replaceWith 用得到的子集）：
+//   - "$$ROOT" / "$$CURRENT"（可带 .路径）是当前文档；其他 "$$" 变量与空变量名是错误，与服务器一致；
+//   - 其余以 "$" 开头的字符串是字段路径，单独的 "$" 是错误，路径不存在时 missing=true（文档里省略该字段，数组里为 null）；
+//   - 文档逐字段求值；只有一个 "$" 开头键的文档是运算符，替身只实现 {$literal: v}（原样返回 v），其他运算符报 ErrUnsupported；
+//   - 数组逐元素求值；其他值是常量。
+//
+// expr 须先经 normalizeScalar，文档是 bson.D、数组是 bson.A。
+func evalExpression(root bson.M, expr any) (any, bool, error) {
+	switch typed := expr.(type) {
+	case string:
+		return evalStringExpression(root, typed)
+	case bson.D:
+		for _, entry := range typed {
+			if !strings.HasPrefix(entry.Key, "$") {
+				continue
+			}
+			if len(typed) != 1 {
+				return nil, false, fmt.Errorf("mongofake: an expression object with operator %s must have exactly one field", entry.Key)
+			}
+			if entry.Key == "$literal" {
+				return entry.Value, false, nil
+			}
+			return nil, false, fmt.Errorf("%w: expression operator %s", ErrUnsupported, entry.Key)
+		}
+		out := make(bson.D, 0, len(typed))
+		for _, entry := range typed {
+			value, missing, err := evalExpression(root, entry.Value)
+			if err != nil {
+				return nil, false, err
+			}
+			if !missing {
+				out = append(out, bson.E{Key: entry.Key, Value: value})
+			}
+		}
+		return out, false, nil
+	case bson.A:
+		out := make(bson.A, len(typed))
+		for i, element := range typed {
+			value, _, err := evalExpression(root, element)
+			if err != nil {
+				return nil, false, err
+			}
+			out[i] = value // 缺失的字段路径在数组里是 null
+		}
+		return out, false, nil
+	default:
+		return expr, false, nil
+	}
+}
+
+func evalStringExpression(root bson.M, expr string) (any, bool, error) {
+	if !strings.HasPrefix(expr, "$") {
+		return expr, false, nil
+	}
+	if variable, ok := strings.CutPrefix(expr, "$$"); ok {
+		name, path, _ := strings.Cut(variable, ".")
+		switch name {
+		case "":
+			return nil, false, errors.New("mongofake: empty variable names are not allowed")
+		case "ROOT", "CURRENT":
+			if path == "" {
+				return cloneDoc(root), false, nil
+			}
+			return lookupFieldPath(root, path)
+		default:
+			return nil, false, fmt.Errorf("mongofake: use of undefined variable: %s", name)
+		}
+	}
+	if expr == "$" {
+		return nil, false, errors.New("mongofake: '$' by itself is not a valid FieldPath")
+	}
+	return lookupFieldPath(root, expr[1:])
+}
+
+// lookupFieldPath 解析表达式里的字段路径；经过数组的路径（服务器会展开成数组）替身不支持。
+func lookupFieldPath(root bson.M, path string) (any, bool, error) {
+	var current any = root
+	for _, part := range strings.Split(path, ".") {
+		if _, isArray := current.(bson.A); isArray {
+			return nil, false, fmt.Errorf("%w: field path %q through an array", ErrUnsupported, path)
+		}
+		container, ok := pathMap(current)
+		if !ok {
+			return nil, true, nil
+		}
+		value, exists := container[part]
+		if !exists {
+			return nil, true, nil
+		}
+		current = value
+	}
+	return cloneBSONValue(current), false, nil
 }
 
 // normalizeScalar stores a value the way the BSON codec would, by actually

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **DataEngine：单条 Put 投影把以 `$` 开头的业务字符串当成聚合表达式（v1.12.2～v1.31.1，自 2026-08-31 `c0251a04` 起）**：
+  - **原因**：`MongoStore.applyPut`（单 mutation 快路，以及多 mutation 记录在事务内的 Put：新建实体的首个提交、整文档写回）写的是 `FindOneAndUpdate(…, [{$replaceWith: doc}], upsert)`，`doc` 没包 `$literal`，MongoDB 把它当表达式求值：`name: "$nickname"` 是字段路径（新建时字段消失，覆盖时取到旧文档的 `nickname`），`"$$ROOT"` 变成旧文档（新建时是 `{_id}`），嵌套 `{k: "$name"}` 变成 `{}` 或旧值，数组里的 `"$y"` 变成 `null` 或旧值；单独的 `"$"`、未定义变量 `"$$foo"` 让这条投影报错并一直重试。批量路径（`ProjectBatch`，`ReplaceOne`）存得正确，所以同一份数据存成什么取决于投影走了哪条路径。玩家名、宠物名等用户输入可能被静默改写。mongod 8.0 私有单节点副本集上复现。
+  - **现在**：改为 `[{$replaceWith: {$literal: doc}}]`，文档按原样写入；upsert、返回新文档、版本条件与 `classifyNoMatch` 不变。内存替身 `mongotest` 的 `$replaceWith` 改为按服务器规则求值（原来把参数当字面量存，比服务器“更正确”，单元测试因此看不见这个缺陷）：字段路径、`$$ROOT` / `$$CURRENT`、`$literal`，其他表达式运算符报 `ErrUnsupported`。其余管道更新与聚合表达式已逐个核对：saga 冷副本的门控替换本来就包 `$literal`（补了以 `$` 开头的 `last_error` 往返断言），Patch、删档墓碑、outbox、Remote 提交与权限元数据都是普通更新文档，值按字面量写入。
+  - **已有数据**：用上述版本、经单条路径写过以 `$` 开头的字符串值的文档可能已被改写（字段缺失、值被换成同文档其他字段的旧值或整份旧文档）。检测：WAL 里还保留着的记录（checkpoint 之后的段），先用 `cmd/walinspect -snapshot` 做隔离副本，再在副本上用 `nestwal.WAL.Replay` 逐条解出 Put 的 `Data`，与 Mongo 当前文档逐字段比较（框架没有现成的比较工具；已确认并清理的段不在 WAL 里）；或扫描业务集合，找应有字段缺失、字段值是嵌套文档（`$$ROOT` 的结果）或与另一字段相同的文档；投影器日志里反复出现 `'$' by itself is not a valid FieldPath` / `Use of undefined variable` 说明有记录卡在投影上，升级后会自动投影成功。线上尚未部署，不做迁移。
+  - **测试**：`TestMongoStorePutStoresDollarStringsVerbatim`（替身）与 `TestRealMongoPutStoresDollarStringsVerbatim`（`-tags integration`，真实副本集）对字段路径、`$$ROOT`、单独的 `$`、未定义变量、嵌套文档、数组元素六种值，分别走单条新建 / 覆盖、事务内 Put、批量新建 / 覆盖，断言存储文档等于输入且单条与批量相同；`TestReplaceWithEvaluatesExpressionsLikeTheServer`（替身自身）。见 [DataEngine 实现篇 §2 第 10 条](docs/framework/impl/03-dataengine.md#2-必须保持的契约)。
+  - **文档**：DataEngine 设计篇新增“DataEngine 对 MongoDB 的最低要求”（5.0 及以上、副本集、`transactionLifetimeLimitSeconds=20`、`mongo.require_replica_set` 保持 `true`，逐条写明依据）。
+
 ## [v1.31.1] - 2026-10-29
 
 补丁版：JetStream 日志 `DurableAckFloors` 不再信消费者副本报的待投递数（saga 分区清理可能删掉还没被步骤消费者看到的命令、冷副本永远缺一条终态；本版的主要原因），物理房间 Go 分配两轮削减（机关 8 房间分别同机测量 81.57→31.15、30.90→23.46 MB/s，载荷字节不变）与 macOS ARM64 20 分钟长稳；v1.31.0 发布后的 Remote 故障矩阵、生成工程验收与 80TPS 负载回归。配置、wire / 存储格式、生成器与模板不变，**无数据迁移，生成物最低 core 仍为 v1.31.0**。**升级注意**：消费者不回答时 saga 分区清理停住并告警（冷副本 durable 所在节点回不来由运维删除，维护者 2026-10-29 选 A）；`service/physicsroom.Commit` 返回后不得修改 `Frame.States`。另含只改文档 / 重构的两项：effect 暂存顺序选项 B 关闭（`c8825078`，维护者“按推荐”）、`infra/base/index` 的 NaN 守卫抽成 `containsNaN`（`bb42ef9e`，行为不变）。发版时修正 Nest 提交序两个用例的竞争（经调用方 goroutine 转发回复再做非阻塞检查会误报，改为直接读 RetChan；只改测试，引擎不变）。发布说明、实现与验收见 docs/release/v1.31.1-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。

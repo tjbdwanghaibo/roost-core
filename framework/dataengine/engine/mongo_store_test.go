@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -467,6 +468,123 @@ func TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion(t *testing.T) {
 	doc, _ := collection.Lookup(int64(7))
 	if doc["_version"] != int64(5) || doc["_deleted"] != nil || doc["_deleted_at"] != nil {
 		t.Fatalf("resurrected document=%v", doc)
+	}
+}
+
+// TestMongoStorePutStoresDollarStringsVerbatim：Put 存进 Mongo 的必须是 WAL 里那份文档本身。业务字符串（玩家名、宠物名）
+// 以 "$" 开头时，单条路径曾把整文档当聚合表达式求值：字段路径被取值或丢掉、"$$ROOT" 变成旧文档、单独的 "$" 让投影报错卡住。
+// 替身与真实 Mongo 同样把 $replaceWith 的参数当表达式求值，所以这条在替身上也能变红；真实 Mongo 上的同一组断言见
+// TestRealMongoPutStoresDollarStringsVerbatim（-tags integration）。
+func TestMongoStorePutStoresDollarStringsVerbatim(t *testing.T) {
+	client := mongotest.NewClient()
+	store, err := NewMongoStore(client, MongoStoreConfig{Databases: identityDatabases(t), DefaultDatabase: testDatabase, TransactionReceiptTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPutStoresDollarStringsVerbatim(t, context.Background(), store, client, testDatabase)
+}
+
+// dollarStringCases 是会被聚合表达式误读的业务值：字段路径、系统变量、单独的 "$"、未定义变量、嵌套文档与数组里的同类值。
+var dollarStringCases = []struct {
+	name  string
+	field string
+	value any
+}{
+	{"field path", "name", "$nickname"},
+	{"root variable", "root", "$$ROOT"},
+	{"lone dollar", "dollar", "$"},
+	{"undefined variable", "variable", "$$foo"},
+	{"nested field path", "nested", bson.D{{Key: "k", Value: "$name"}}},
+	{"array element", "arr", bson.A{"$y", "z"}},
+}
+
+// checkPutStoresDollarStringsVerbatim 让每个值走遍 Put 的全部写法——单条快路新建（0→1）与覆盖（1→2）、多 mutation 事务内的
+// Put、批量投影的新建与覆盖——断言解码后的存储文档与输入逐字段相等（除投影自己写的 _version/_schema/_last_tx），
+// 且单条与批量两条路径存下的是同一份文档。覆盖前的旧文档带着 nickname / name / y 等字段，误读时能看到被取来的旧值。
+func checkPutStoresDollarStringsVerbatim(t *testing.T, ctx context.Context, store *MongoStore, client fmongo.IMongo, database string) {
+	t.Helper()
+	coll := client.Database(database).Collection("heroes")
+	seedV1 := func(t *testing.T, id int64) {
+		t.Helper()
+		old := bson.M{"_id": id, "_version": uint64(1), "_last_tx": "seed", "level": int32(1),
+			"nickname": "old-nick", "name": "old-name", "y": "old-y"}
+		if _, err := coll.InsertOne(ctx, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put := func(id int64, expected uint64, body bson.D) coredata.Mutation {
+		data, err := bson.Marshal(append(bson.D{{Key: "_id", Value: id}}, body...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return coredata.Mutation{
+			Key:  coredata.DocumentKey{Database: database, Resource: "heroes", ID: id},
+			Kind: coredata.MutationPut, ExpectedVersion: expected, NextVersion: expected + 1, Mask: 1, Schema: 2, Codec: "bson-v2", Data: data,
+		}
+	}
+	record := func(caseIndex, stage int, mutations ...coredata.Mutation) coredata.CommitRecord {
+		var id coredata.TransactionID
+		copy(id[:], "dollar-put")
+		id[14], id[15] = byte(caseIndex), byte(stage)
+		return coredata.CommitRecord{ID: id, Mutations: mutations}
+	}
+	// stored 读回文档并去掉投影元数据；_id 一并去掉，便于比较不同路径写下的同一内容。
+	stored := func(t *testing.T, id int64) bson.M {
+		t.Helper()
+		var doc bson.M
+		if err := coll.FindOne(ctx, bson.M{"_id": id}, &doc); err != nil {
+			t.Fatalf("read back %d: %v", id, err)
+		}
+		for _, meta := range []string{"_id", "_version", "_schema", "_last_tx"} {
+			delete(doc, meta)
+		}
+		return doc
+	}
+	for i, tc := range dollarStringCases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := bson.D{{Key: "level", Value: int32(5)}, {Key: tc.field, Value: tc.value}}
+			var want bson.M
+			if raw, err := bson.Marshal(body); err != nil || bson.Unmarshal(raw, &want) != nil {
+				t.Fatalf("encode input: %v", err)
+			}
+			base := int64(100 * (i + 1))
+			newID, updateID, txID, txPeerID, batchNewID, batchUpdateID := base+1, base+2, base+3, base+4, base+5, base+6
+			seedV1(t, updateID)
+			seedV1(t, batchUpdateID)
+
+			if err := store.Project(ctx, record(i, 1, put(newID, 0, body))); err != nil {
+				t.Errorf("single-record Put of a new document: %v", err)
+			}
+			if err := store.Project(ctx, record(i, 2, put(updateID, 1, body))); err != nil {
+				t.Errorf("single-record Put over version 1: %v", err)
+			}
+			if err := store.Project(ctx, record(i, 3, put(txID, 0, body), put(txPeerID, 0, bson.D{{Key: "level", Value: int32(1)}}))); err != nil {
+				t.Errorf("Put inside a multi-mutation transaction: %v", err)
+			}
+			if err := store.ProjectBatch(ctx, []coredata.CommitRecord{
+				record(i, 4, put(batchNewID, 0, body)), record(i, 5, put(batchUpdateID, 1, body)),
+			}); err != nil {
+				t.Errorf("batch Put: %v", err)
+			}
+			if t.Failed() {
+				return
+			}
+			paths := []struct {
+				name string
+				id   int64
+			}{{"single new", newID}, {"single update", updateID}, {"transaction", txID}, {"batch new", batchNewID}, {"batch update", batchUpdateID}}
+			for _, path := range paths {
+				if got := stored(t, path.id); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s stored %v, want the input %v", path.name, got, want)
+				}
+			}
+			if single, batch := stored(t, newID), stored(t, batchNewID); !reflect.DeepEqual(single, batch) {
+				t.Errorf("single-record path stored %v, batch path stored %v", single, batch)
+			}
+			if single, batch := stored(t, updateID), stored(t, batchUpdateID); !reflect.DeepEqual(single, batch) {
+				t.Errorf("single-record update stored %v, batch update stored %v", single, batch)
+			}
+		})
 	}
 }
 
