@@ -466,7 +466,7 @@ func (mod *Mod) TransactionReleased(id corenest.TransactionID) {
 }
 
 // BindLocalExecutor 实现 corenest.LocalExecutorBinder：Nest 在构造时交来业务池执行入口，
-// DataEngine 用它在业务池持锁驱逐被跳过的原生步骤留下的实体。
+// DataEngine 用它在业务池持锁执行运维卸载（entity.unload）。
 func (mod *Mod) BindLocalExecutor(run func(func()) error) {
 	if mod != nil && run != nil {
 		mod.localExecutor.Store(&run)

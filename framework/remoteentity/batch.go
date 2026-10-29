@@ -598,8 +598,8 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 // waitedCommitError 给等待结论的 Commit 错误归类：一律带 entity.ErrRemotePersistenceIndeterminate（已带的不重复加）。
 //
 // strict 与随 strict 路径提交的 pipelined：本地记录已经进 WAL，Remote 部分由投影器按 WAL 写权威。WAL 级 Remote 没有明确
-// 拒绝——投影器写权威遇到 fence / 版本冲突是 fatal（ErrProjectionConflict，进程级 fail-stop），不把事务记为 Rejected；
-// “Remote 写 + lease fence”记录在 WAL 准入处已被拒绝（维护者 2026-10-13 / 2026-10-14）。所以这里的错误——等待截止、
+// 拒绝——投影器写权威遇到 fence / 版本冲突是 fatal（ErrProjectionConflict，进程级 fail-stop），不把事务记为 Rejected
+// （维护者 2026-10-14）。所以这里的错误——等待截止、
 // tracker 被容量淘汰后重新登记报 ErrRemoteOverloaded、状态查询失败、未定终态——都只说明本批次没有等到结论。
 // Durability 0 在 ApplyRemoteCommits 已持久（Applied）之后才等待发布，同样不会再被拒绝。
 // 错误若不带哨兵，nest 会按“不带哨兵 = 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。

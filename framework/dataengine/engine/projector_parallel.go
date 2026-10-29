@@ -25,7 +25,7 @@ type conflictKeyKind uint8
 
 const (
 	conflictEntity      conflictKeyKind = iota + 1 // 文档 _id（DAO 共用完整 Entity ID）
-	conflictReceipt                                // 回执身份 Namespace/ID；lease fence 回执的 ID 就是协调文档身份
+	conflictReceipt                                // 回执身份 Namespace/ID
 	conflictEffect                                 // effect ID（outbox 身份）
 	conflictTransaction                            // 事务 ID
 	conflictClass                                  // 整类记录之间保持顺序（effect 暂存顺序、不支持并发的 Remote 适配器）
@@ -45,11 +45,8 @@ var (
 )
 
 // projectionConflictKeys 返回记录的冲突键；ok 为假表示记录不能参与并行调度（屏障），交给串行路径按现有规则处理
-// （任一 mutation 的 Key.ID 为 0、Remote 写与 lease fence 同在的退役记录）。
+// （任一 mutation 的 Key.ID 为 0）。
 func projectionConflictKeys(record coredata.CommitRecord, remoteParallel bool) (keys []conflictKey, ok bool) {
-	if mixesRemoteWithLeaseFence(record) {
-		return nil, false
-	}
 	keys = make([]conflictKey, 0, len(record.Mutations)+len(record.Receipts)+len(record.Effects)+2)
 	keys = append(keys, conflictKey{kind: conflictTransaction, name: string(record.ID[:])})
 	for _, mutation := range record.Mutations {
@@ -247,8 +244,8 @@ func (projector *Projector) projectParallelWindow(ctx context.Context, records [
 	return prefix, fmt.Errorf("dataengine projector: parallel window stopped after %d/%d records: %w", prefix, len(records), cause)
 }
 
-// projectLane 按 WAL 顺序投影一条通道的记录：连续普通本地记录合成 ProjectBatch（写事务标记），特殊记录单条 ProjectFenced；
-// 只有 fastPath 允许的独占单条记录走快路。成功单元的收尾（驱逐 / 完成通知 / effect 唤醒 / 计数）与串行路径相同。
+// projectLane 按 WAL 顺序投影一条通道的记录：连续普通本地记录合成 ProjectBatch（写事务标记），特殊记录单条 Project；
+// 只有 fastPath 允许的独占单条记录走快路。成功单元的收尾（完成通知 / effect 唤醒 / 计数）与串行路径相同。
 func (projector *Projector) projectLane(ctx context.Context, records []coredata.CommitRecord, fences []corenest.CommitFence, indexes []int, fastPath, done []bool, stop *atomic.Bool) error {
 	laneRecords := make([]coredata.CommitRecord, len(indexes))
 	laneFences := make([]corenest.CommitFence, len(indexes))
@@ -270,11 +267,10 @@ func (projector *Projector) projectLane(ctx context.Context, records []coredata.
 			return nil
 		}
 		projectStart := hoptrace.Now()
-		outcome := projectionApplied
 		if segment.batch && !(len(segment.records) == 1 && fastPath[unitIndexes[0]]) {
 			err = batchStore.ProjectBatch(ctx, segment.records)
 		} else {
-			outcome, err = projector.projectSegment(ctx, segment)
+			err = projector.projectSegment(ctx, segment)
 		}
 		if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
 			// 批量写无法自行判定（多半是重放已应用的记录）：本单元逐条走单条路径，由它比较已存版本与 _last_tx。
@@ -284,11 +280,10 @@ func (projector *Projector) projectLane(ctx context.Context, records []coredata.
 				}
 				single := projectionSegment{records: segment.records[i : i+1], fences: segment.fences[i : i+1]}
 				singleStart := hoptrace.Now()
-				outcome, err := projector.projectSegment(ctx, single)
-				if err != nil {
+				if err := projector.projectSegment(ctx, single); err != nil {
 					return err
 				}
-				projector.finishProjectedUnit(single.records, unitIndexes[i:i+1], outcome, singleStart, done)
+				projector.finishProjectedUnit(single.records, unitIndexes[i:i+1], singleStart, done)
 				if projectsOnFastPath(single.records[0]) && !fastPath[unitIndexes[i]] {
 					// 快路成功但本窗口后面还有同键记录：再往下投影，崩溃后重放这条会看到更高版本而误报冲突。本通道到此为止。
 					return nil
@@ -305,25 +300,23 @@ func (projector *Projector) projectLane(ctx context.Context, records []coredata.
 			}
 			return err
 		}
-		projector.finishProjectedUnit(segment.records, unitIndexes, outcome, projectStart, done)
+		projector.finishProjectedUnit(segment.records, unitIndexes, projectStart, done)
 	}
 	return nil
 }
 
-// finishProjectedUnit 是一个投影单元成功后的收尾，串行与并行路径共用：逐跳计时、effect 唤醒 outbox、被跳过的原生步骤
-// 交给驱逐（屏障与等待方到驱逐完成才解除）、否则完成投影通知，最后计数。done 非空时按 indexes 标记已完成（并行窗口算前缀用）。
-func (projector *Projector) finishProjectedUnit(records []coredata.CommitRecord, indexes []int, outcome projectionOutcome, start time.Time, done []bool) {
+// finishProjectedUnit 是一个投影单元成功后的收尾，串行与并行路径共用：逐跳计时、effect 唤醒 outbox、完成投影通知
+// （唤醒冷加载与系统票据的等待方），最后计数。done 非空时按 indexes 标记已完成（并行窗口算前缀用）。
+func (projector *Projector) finishProjectedUnit(records []coredata.CommitRecord, indexes []int, start time.Time, done []bool) {
 	if !start.IsZero() {
-		traceProjectedUnit(records, outcome, start)
+		traceProjectedUnit(records, start)
 	}
-	if outcome != projectionSkipped && projector.opts.OnEffectsStaged != nil && hasEffects(records) {
+	if projector.opts.OnEffectsStaged != nil && hasEffects(records) {
 		// effect 已随投影事务暂存：唤醒 outbox，不等它的轮询（不改投影 / checkpoint 的顺序与结果）。并行窗口里可能被多个通道同时调用。
 		projector.opts.OnEffectsStaged()
 	}
 	for i := range records {
-		if !projector.startStaleEviction(records[i].ID, outcome) {
-			projector.completeProjection(records[i].ID, nil)
-		}
+		projector.completeProjection(records[i].ID, nil)
 	}
 	projector.projected.Add(uint64(len(records)))
 	for _, index := range indexes {

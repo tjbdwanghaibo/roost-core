@@ -74,7 +74,7 @@ Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未�
 
 1. 在业务池取得实体锁——正在执行、持有该实体的事务先照常结束（不被拒绝）——然后在 WAL 准入处登记卸载屏障。之后写到该实体的事务在准入处以可重试的 `dataengine.ErrEntityUnloading` 拒绝（同时满足 `nest.ErrCommitRejected`），Nest 在 Guard 内回滚；其他实体照常。
 2. 等屏障之前已准入、写到该实体的记录投影完成（冷加载用的同一个屏障）。
-3. 在业务池卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，与驱逐同一入口）。
+3. 在业务池卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，与 Remote 持久拒绝后的卸载同一入口）。
 4. 撤销屏障（任何结果都撤销）。
 
 失败不强行卸载、实体不受影响：持有它的事务在 `timeout` 内没结束、已有另一次卸载在进行、Remote 托管实体的所有权处于 fenced / recovering / quarantined 或迁移中（由 Remote 运行时负责收尾）时返回“忙”（`ErrEntityUnloadBusy`）；投影在 `timeout` 内没完成（Mongo 慢或中断）返回 `ErrEntityUnloadTimeout`，记录留在 WAL 里照常投影；不是自动持久化的实体（库里没有它）拒绝。这些都是确定的“没有卸载”，ops 回 500 与原因，而不是 504 的“结果未知”。所有权稳定（local_owned / shared）的 Remote 托管实体与本地实体同一流程。

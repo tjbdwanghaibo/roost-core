@@ -59,14 +59,6 @@ func (s *pressureStore) Project(ctx context.Context, r coredata.CommitRecord) er
 	return err
 }
 
-// ProjectFenced 必须一并包住：Projector 对单条段优先走 FenceOutcomeProjectionStore，只包 Project 时
-// 这条路径会经嵌入的 MongoStore 绕过计时（ROOST_PERF_RATE>0 时请求分散，单条段必然出现，样本数少于请求数）。
-func (s *pressureStore) ProjectFenced(ctx context.Context, r coredata.CommitRecord) (bool, error) {
-	started := time.Now()
-	skipped, err := s.MongoStore.ProjectFenced(ctx, r)
-	s.observe([]coredata.CommitRecord{r}, started, err, false)
-	return skipped, err
-}
 func (s *pressureStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	started := time.Now()
 	err := s.MongoStore.ProjectBatch(ctx, records)

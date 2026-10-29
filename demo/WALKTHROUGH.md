@@ -326,7 +326,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   在 `transitions` 锁内复查“代际仍是当前且确实没有活跃连接”才离场，否则丢弃。嵌入 TCP 推送给玩家所有连接，重连窗口里**旧**连接写失败而新连接收下时
   接入层只关旧连接、推送算成功，玩家留在场景、会话不动；复制会话被丢之后（推送拒收由 lane、其他原因由 `sessionLost` 断开当时的全部连接）scene 不在原连接上重开，还连着的只会是之后的新登录，由它的 Join 重新打开。
   Join 打开会话时上一次的会话还在关闭（`SessionOpenRetryable`）会有界退避重试；用尽或被拒绝时玩家留在场景、自己的视图等下次登录，除 Warn 外计 `scene_session_open_failed_total{reason=exhausted|refused}`。
-- **仅内存卸载后重载**：礼物扣除等原生步骤投影时被 lease fence 跳过，DataEngine 会把含其效果的 Player 从内存卸载
+- **仅内存卸载后重载**：运维 `entity.unload`（DataEngine 排空投影后卸载）或 Remote 事务被持久拒绝时，Player 会被仅内存卸载
   （`ManagerAccess.Unload`）。scene 的 Manager 是自建的，wiring 的 Nest Mod 不替它接线，所以 `Scene.Start` 自己调
   `ConfigureUnloadResync`：仍有人看着这个玩家时框架在 Nest 业务池（short / long）之外从 Mongo 重载并 `Rebind`，观察者收到权威全量、之后照常收增量；重载不了收到 remove。
   `Scene.Close` 先停重载再关 Manager（服务先于 Nest Mod 停止）。一个实体运行时只能接一处，工程若另用 `NewModWithEntitySync`，scene 启动会明确失败。

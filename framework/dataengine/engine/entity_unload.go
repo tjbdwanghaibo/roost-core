@@ -5,19 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // 运维卸载单个实体（admin 命令 entity.unload，D16，维护者 2026-10-20 决定 C）。
 //
-// 把一个常驻实体从本进程内存卸载、不删持久数据，下一次访问按正常冷加载从 Mongo 读回。卸载本身与 DataEngine 驱逐
-// 被跳过的原生步骤、Remote 持久拒绝后的卸载是同一入口（ManagerAccess.Unload，DestroyReasonMemoryUnload，同一条
-// Sync 规则）；不同的是那两条路径卸载的是“内存已不可信”的实例，这里卸载的是正常实例，所以先保证内存里的每笔修改
-// 都已落库，否则卸载会丢掉已提交、未投影的修改：
+// 把一个常驻实体从本进程内存卸载、不删持久数据，下一次访问按正常冷加载从 Mongo 读回。卸载本身与 Remote 持久拒绝后
+// 的卸载是同一入口（ManagerAccess.Unload，DestroyReasonMemoryUnload，同一条 Sync 规则）；不同的是那条路径卸载的是
+// “内存已不可信”的实例，这里卸载的是正常实例，所以先保证内存里的每笔修改都已落库，否则卸载会丢掉已提交、未投影的修改：
 //
 //  1. 屏障（业务池，持实体锁）：取得实体锁，即等正在执行、持有该实体的事务结束——它的 WAL 准入在锁内，结束时
 //     要么已登记为在途投影，要么已回滚；然后在 Projector 的准入临界区（heldMu）登记卸载屏障。之后写到该实体的
@@ -84,7 +85,7 @@ func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result Enti
 		return result, nil
 	}
 	result.Resident = true
-	// 第 1、3 步需要实体锁，交给 Nest 的业务池（Projector 绑定的 RunLocal，与驱逐同一入口）；未装配 Nest 时就地执行。
+	// 第 1、3 步需要实体锁，交给 Nest 的业务池（Projector 绑定的 RunLocal）；未装配 Nest 时就地执行。
 	local := entity.WithLocalExecutor(ctx, runtime.Projector.localRun())
 
 	// 1. 屏障。
@@ -101,7 +102,7 @@ func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result Enti
 		return result, barrierErr
 	}
 	if release == nil {
-		// 取锁期间已被别的路径卸载（驱逐、Remote 收尾、业务 Destroy）。
+		// 取锁期间已被别的路径卸载（Remote 收尾、业务 Destroy）。
 		result.Unloaded = true
 		return result, nil
 	}
@@ -117,7 +118,7 @@ func (runtime *Runtime) UnloadEntity(ctx context.Context, id int64) (result Enti
 		return result, fmt.Errorf("dataengine unload: entity %d: wait for its projections: %w", id, err)
 	}
 
-	// 3. 卸载：卸载此刻常驻的实例。排空期间被驱逐后重新加载的实例同样来自库（屏障下没有新记录），一并卸载。
+	// 3. 卸载：卸载此刻常驻的实例。排空期间被卸载后重新加载的实例同样来自库（屏障下没有新记录），一并卸载。
 	// Unloaded 在业务池里、卸载之后立刻判断：返回之后实体可能已被订阅者的重载读回（新实例），不能再按 Get(id) 判断。
 	var unloadErr error
 	runErr := entity.RunLocal(local, func() {
@@ -254,3 +255,33 @@ func (p *Projector) pendingEntityProjections(id int64) int {
 	defer p.heldMu.RUnlock()
 	return len(p.pendingEntities[id])
 }
+
+// recordEntityIDs 是记录写到的完整 Entity ID；DAO 共用 Entity ID，trackEntitiesLocked 用同一规则。
+func recordEntityIDs(record coredata.CommitRecord) []int64 {
+	ids := make([]int64, 0, len(record.Mutations))
+	for _, mutation := range record.Mutations {
+		id := mutation.Key.ID
+		if id != 0 && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// BindLocalExecutor 由 Nest 构造时调用（corenest.LocalExecutorBinder），让运维卸载在业务池持实体锁执行。
+// 未绑定时（独立使用 DataEngine、没有 Nest）按 entity.RunLocal 的约定就地执行。
+func (p *Projector) BindLocalExecutor(run func(func()) error) {
+	if p == nil || run == nil {
+		return
+	}
+	p.localExecutor.Store(&run)
+}
+
+func (p *Projector) localRun() func(func()) error {
+	if run := p.localExecutor.Load(); run != nil {
+		return *run
+	}
+	return nil
+}
+
+var _ corenest.LocalExecutorBinder = (*Projector)(nil)

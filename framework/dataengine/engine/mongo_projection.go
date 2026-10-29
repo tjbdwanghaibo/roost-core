@@ -18,38 +18,26 @@ import (
 // Project 先检查幂等身份，再选择单文档 CAS 或 Mongo 原子事务。
 // Remote、receipt 和 outbox 必须与普通 DAO 一起提交，不能拆成独立写入。
 func (store *MongoStore) Project(ctx context.Context, record coredata.CommitRecord) error {
-	_, err := store.ProjectFenced(ctx, record)
-	return err
-}
-
-// ProjectFenced 与 Project 相同，另外报告记录是否因 lease fence 失效被整笔跳过（含重放时读到的
-// 持久 skipped 标记）。Projector 据此驱逐被跳过的原生步骤留下的内存实体。
-func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	if store == nil || store.client == nil {
-		return false, errors.New("dataengine mongo: store is not configured")
+		return errors.New("dataengine mongo: store is not configured")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := coredata.ValidateCommitRecord(record); err != nil {
-		return false, err
-	}
-	// Remote 写与 lease fence 同在的记录只可能来自旧版本的 WAL，不再投影：在任何 Mongo 写之前拒绝。
-	if mixesRemoteWithLeaseFence(record) {
-		return false, ErrRetiredRemoteLeaseFenceRecord
+		return err
 	}
 	// 快路不写事务标记，Projector 对它立即 checkpoint；其余记录都在下面的事务里先查标记，重放幂等。
 	if projectsOnFastPath(record) {
-		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
-		return false, err
+		return store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
 	}
 	digest, err := digestRecord(record)
 	if err != nil {
-		return false, err
+		return err
 	}
 	session, err := store.client.StartSession(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer session.EndSession(ctx)
 	mutations := append([]coredata.Mutation(nil), record.Mutations...)
@@ -70,38 +58,18 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 			continue
 		}
 		if mutations[i].Remote.TransactionID != entity.RemoteTransactionID(record.ID) {
-			return false, fmt.Errorf("dataengine mongo: remote transaction identity mismatch at mutation %d", i)
+			return fmt.Errorf("dataengine mongo: remote transaction identity mismatch at mutation %d", i)
 		}
 		remote = append(remote, mutations[i].Remote.Clone())
 	}
 	if len(remote) > 0 && (store.remoteStore == nil || store.remoteApplier == nil) {
-		return false, ErrRemoteProjection
+		return ErrRemoteProjection
 	}
-	transactionSkipped := false
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
-		// 驱动可能重调本回调：每次都从持久标记重新计算结果，不沿用上一次回调的临时值。
-		transactionSkipped = false
-		alreadyApplied, skipped, err := store.checkTransaction(txCtx, record.ID.String(), digest)
-		if err != nil {
+		// 驱动可能重调本回调：每次都从持久标记重新判定，不沿用上一次回调的临时值。
+		alreadyApplied, err := store.checkTransaction(txCtx, record.ID.String(), digest)
+		if err != nil || alreadyApplied {
 			return err
-		}
-		if alreadyApplied {
-			transactionSkipped = skipped
-			return nil
-		}
-		fencesMatch, err := store.leaseFencesMatch(txCtx, record.Receipts)
-		if err != nil {
-			return err
-		}
-		if !fencesMatch {
-			// 只有不含 Remote 写的原生步骤会走到这里（混合记录已在入口拒绝）。
-			transactionSkipped = true
-			return store.insertTransactionMarker(txCtx, transactionDocument{
-				ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(), Skipped: true,
-			})
-		}
-		if store.afterLeaseFence != nil && len(record.Receipts) > 0 {
-			store.afterLeaseFence(txCtx)
 		}
 		for i := range ordinary {
 			if err := store.applyMutation(txCtx, record.ID.String(), ordinary[i], true); err != nil {
@@ -117,9 +85,6 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 			}
 		}
 		for i := range record.Receipts {
-			if record.Receipts[i].Namespace == coredata.LeaseFenceReceiptNamespace {
-				continue
-			}
 			if err := store.stageReceipt(txCtx, record.ID.String(), record.Receipts[i]); err != nil {
 				return fmt.Errorf("dataengine mongo: receipt %d: %w", i, err)
 			}
@@ -135,10 +100,7 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 		return err
 	})
 	if err != nil {
-		return false, err
-	}
-	if transactionSkipped {
-		return true, nil
+		return err
 	}
 	if len(remote) > 0 {
 		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
@@ -149,16 +111,16 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 				metrics.IncCounter("dataengine.projector.remote_publication_deferred.total", nil, 1)
 				slog.Warn("dataengine mongo: remote commit persisted but publication failed; projection continues and the commit outbox republishes it",
 					"transaction", record.ID.String(), "err", err)
-				return false, nil
+				return nil
 			}
-			return false, fmt.Errorf("dataengine mongo: remote publication: %w", err)
+			return fmt.Errorf("dataengine mongo: remote publication: %w", err)
 		}
 	}
-	return false, nil
+	return nil
 }
 
 // SupportsParallelProjection：冲突键不相交的记录可以并发投影。各调用使用独立会话与事务；ProjectBatch 与非快路的
-// ProjectFenced 先查、再写事务标记（与业务写同一事务），重放与文档当前版本无关；快路由 Projector 只在窗口内同键最后一条时使用。
+// Project 先查、再写事务标记（与业务写同一事务），重放与文档当前版本无关；快路由 Projector 只在窗口内同键最后一条时使用。
 func (store *MongoStore) SupportsParallelProjection() bool {
 	return store != nil && store.client != nil
 }

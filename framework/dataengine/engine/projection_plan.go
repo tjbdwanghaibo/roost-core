@@ -18,7 +18,7 @@ type projectionSegment struct {
 }
 
 // isLocalBatchRecord 报告记录能否进入本地批量段：本地批量不跨越有外部效果、
-// 回执（含租约回执）或 Remote 写的事务。
+// 回执或 Remote 写的事务。
 func isLocalBatchRecord(record coredata.CommitRecord) bool {
 	if len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
 		return false
@@ -33,7 +33,7 @@ func isLocalBatchRecord(record coredata.CommitRecord) bool {
 
 // projectsOnFastPath 报告记录是否走 Store 的单文档快路：只有一个本地 mutation、没有 effect / 回执 / Remote 写。
 // 快路不写事务标记，幂等只靠文档上的末次事务 ID；投影器据此决定必须立即 checkpoint（见 ReplayPass），
-// MongoStore.ProjectFenced 用同一判定选择快路，两处不能各写一份条件。
+// MongoStore.Project 用同一判定选择快路，两处不能各写一份条件。
 func projectsOnFastPath(record coredata.CommitRecord) bool {
 	return len(record.Mutations) == 1 && isLocalBatchRecord(record)
 }

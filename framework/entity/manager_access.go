@@ -661,8 +661,8 @@ func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntit
 	return access.manager.Destroy(ctx, value, reason, deleteFromDB)
 }
 
-// Unload 把实例从本进程内存卸载、不删持久数据：内存状态已不可信、须从权威重建时使用（DataEngine 驱逐
-// 被 lease fence 跳过的原生步骤留下的实体；Remote 事务被持久拒绝后的实例）。
+// Unload 把实例从本进程内存卸载、不删持久数据：内存状态已不可信、须从权威重建时（Remote 事务被持久拒绝后的
+// 实例），或运维卸载（DataEngine entity.unload，先排空投影）时使用。
 // 内部是 EntityManager.Destroy(deleteFromDB=false, DestroyReasonMemoryUnload)：自己取实体锁、先从索引删除，
 // 在途引用由 Touch 计数保护（归零才清理），Guard 对已移除实体拒绝加锁。之后 Get 未命中、经已配置的 loader
 // 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。

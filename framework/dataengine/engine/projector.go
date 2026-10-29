@@ -17,16 +17,10 @@ import (
 )
 
 var (
-	errProjectorTransactionHeld    = errors.New("dataengine projector: transaction is still under entity lock")
-	errProjectorBatchComplete      = errors.New("dataengine projector: replay batch complete")
-	ErrRemoteLeaseFenceUnsupported = errors.New("dataengine: remote writes and lease-fence receipts cannot share an admission")
-	ErrProjectionBackpressure      = errors.New("dataengine projector: unacknowledged transaction limit reached")
+	errProjectorTransactionHeld = errors.New("dataengine projector: transaction is still under entity lock")
+	errProjectorBatchComplete   = errors.New("dataengine projector: replay batch complete")
+	ErrProjectionBackpressure   = errors.New("dataengine projector: unacknowledged transaction limit reached")
 )
-
-// ErrRetiredRemoteLeaseFenceRecord：WAL 里出现 Remote 写与 lease fence 同在的记录。准入早已拒绝这种组合，
-// 它只可能是旧版本写下的历史记录；投影不再处理它，按退役 WAL 格式对待：投影器 fatal、不写库、不 ack，
-// 原始 WAL 原样保留，须用旧版本排空后再升级。
-var ErrRetiredRemoteLeaseFenceRecord = fmt.Errorf("%w: retired WAL record is no longer projected", ErrRemoteLeaseFenceUnsupported)
 
 // ProjectionStore 把一笔已准入的事务记录投影到持久存储；必须对同一持久身份幂等。
 type ProjectionStore interface {
@@ -35,7 +29,7 @@ type ProjectionStore interface {
 
 // BatchProjectionStore 支持本地多 DAO 事务批量投影；必须保留每笔事务的持久身份，
 // 保证后续版本写入后仍能重放已成功的批次、多 mutation 事务与带 effect / 回执 / Remote 写的记录
-// （重放返回首次投影的结论，不重新判定 lease fence、不重复暂存）。Projector 据此对这些记录合并 checkpoint；
+// （重放返回首次投影的结论，不重复暂存）。Projector 据此对这些记录合并 checkpoint；
 // 只有单 mutation 快路记录（projectsOnFastPath）不在此列，仍逐条确认。
 type BatchProjectionStore interface {
 	ProjectionStore
@@ -43,7 +37,7 @@ type BatchProjectionStore interface {
 }
 
 // ParallelProjectionStore 承诺（SupportsParallelProjection 为真时）：冲突键互不相交的记录可以并发调用 Project /
-// ProjectBatch / ProjectFenced；ProjectBatch 与非快路记录的单条投影写持久事务标记，后续版本写入后重放仍识别为已应用。
+// ProjectBatch；ProjectBatch 与非快路记录的单条投影写持久事务标记，后续版本写入后重放仍识别为已应用。
 // Projector 据此在 ProjectionWorkers > 1 时按实体分片并行投影（projector_parallel.go）；未声明的 Store 保持串行。
 type ParallelProjectionStore interface {
 	BatchProjectionStore
@@ -75,7 +69,7 @@ type ProjectorOptions struct {
 	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
 	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
 	OnFatal func(error)
-	// OnEffectsStaged 在一个投影单元把 effect 暂存进 outbox（Mongo 事务已提交、记录没有被 fence 跳过）之后同步调用，
+	// OnEffectsStaged 在一个投影单元把 effect 暂存进 outbox（Mongo 事务已提交）之后同步调用，
 	// 必须不阻塞、并发安全（并行窗口的多个通道可能同时调用）；装配接到 OutboxWorker.Kick，让 effect 不必等 outbox 的下一次轮询。只是提示：不调用、晚调用都不影响
 	// 投影与持久语义（outbox 仍按轮询兜底）。nil 不通知。
 	OnEffectsStaged func()
@@ -103,11 +97,6 @@ type ProjectorStats struct {
 	LastError                string
 	AdmissionRejected        uint64
 	BacklogWarning           bool
-	// FencedEntities 是当前被原生步骤屏障挡住写入的实体数；FencedAdmissionRejected 是因此
-	// 以 ErrFencedEntityPending 拒绝的准入次数；StaleEvictions 是跳过后完成的驱逐次数。
-	FencedEntities          uint64
-	FencedAdmissionRejected uint64
-	StaleEvictions          uint64
 	// UnloadingEntities 是当前处于运维卸载屏障（entity.unload）的实体数；UnloadAdmissionRejected 是因此以
 	// coredata.ErrEntityUnloading 拒绝的准入次数。
 	UnloadingEntities       uint64
@@ -151,19 +140,11 @@ type Projector struct {
 	walTerminalOnce sync.Once
 	ticketMu        sync.Mutex
 	tickets         map[coredata.TransactionID]*projectionTicket
-	// fencedEntities：实体 → 持有屏障的原生步骤记录（fenced_step.go）。heldMu 保护，
-	// 与 pendingTransactions 中该记录的 entityProjection 同时登记、同时解除。
-	fencedEntities map[int64]coredata.TransactionID
 	// unloadingEntities：实体 → 运维卸载屏障的令牌（entity_unload.go）。heldMu 保护，与准入同一临界区检查。
 	unloadingEntities map[int64]uint64
 	unloadToken       uint64
 
-	// 被跳过的原生步骤的驱逐队列；evictEntities 由 Runtime 注入，localExecutor 由 Nest 绑定。
-	evictMu       sync.Mutex
-	evictQueue    []staleEviction
-	evictRunning  bool
-	evictWG       sync.WaitGroup
-	evictEntities func(context.Context, []int64) error
+	// localExecutor 是 Nest 绑定的业务池入口（BindLocalExecutor），运维卸载经它在业务池取实体锁。
 	localExecutor atomic.Pointer[func(func()) error]
 
 	committed         atomic.Uint64
@@ -172,8 +153,6 @@ type Projector struct {
 	failures          atomic.Uint64
 	fatalConflicts    atomic.Uint64
 	admissionRejected atomic.Uint64
-	fencedRejected    atomic.Uint64
-	staleEvictions    atomic.Uint64
 	unloadRejected    atomic.Uint64
 	parallelWindows   atomic.Uint64
 	parallelLanes     atomic.Uint64
@@ -439,8 +418,7 @@ func (projector *Projector) isFatalProjection(err error) bool {
 	if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
 		return false
 	}
-	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) &&
-		!errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
+	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) {
 		return false
 	}
 	projector.fatalOnce.Do(func() {
@@ -514,12 +492,10 @@ func (projector *Projector) Stats() ProjectorStats {
 		WALUnacked:         projector.walUnacked.Load(),
 		AdmissionRejected:  projector.admissionRejected.Load(),
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
-		FencedAdmissionRejected: projector.fencedRejected.Load(), StaleEvictions: projector.staleEvictions.Load(),
 		UnloadAdmissionRejected: projector.unloadRejected.Load(),
 		ParallelWindows:         projector.parallelWindows.Load(), ParallelLanes: projector.parallelLanes.Load(),
 	}
 	projector.heldMu.RLock()
-	stats.FencedEntities = uint64(len(projector.fencedEntities))
 	stats.UnloadingEntities = uint64(len(projector.unloadingEntities))
 	projector.heldMu.RUnlock()
 	warning := projector.opts.WarnUnackedRecords
@@ -545,7 +521,7 @@ func (projector *Projector) Healthy() error {
 	return errors.Join(projector.wal.Healthy(), err)
 }
 
-// Close 停止准入并等待在途操作、后台回放与驱逐退出，再以 context.Canceled 结束剩余等待方；
+// Close 停止准入并等待在途操作与后台回放退出，再以 context.Canceled 结束剩余等待方；
 // CloseWAL 为真时最后关闭 WAL。不做最终 Flush，需要排空时用 Shutdown。
 func (projector *Projector) Close(ctx context.Context) error {
 	if projector == nil {
@@ -563,10 +539,6 @@ func (projector *Projector) Close(ctx context.Context) error {
 	}
 	select {
 	case <-projector.done:
-		// 驱逐 worker 在 ctx 取消后不再重试；等它退出，之后才统一解除剩余屏障与等待方。
-		if err := projector.waitEvictions(ctx); err != nil {
-			return err
-		}
 		projector.completeAllTickets(context.Canceled)
 		if projector.opts.CloseWAL {
 			return projector.wal.Close(ctx)
@@ -587,12 +559,6 @@ func (projector *Projector) Shutdown(ctx context.Context) error {
 
 // reserve 在同一锁内检查与预留额度，不能让并发 Commit 越过上限。
 func (projector *Projector) reserve(record coredata.CommitRecord, held bool) error {
-	// 租约在投影时失效会跳过整笔记录；生成 Entity 无法在准入后撤销多实体内存修改。
-	// 在 WAL 前明确拒绝，让 Nest 仍在 Guard 内执行完整回滚。WAL 里已有的这种记录见
-	// ErrRetiredRemoteLeaseFenceRecord。
-	if mixesRemoteWithLeaseFence(record) {
-		return ErrRemoteLeaseFenceUnsupported
-	}
 	id := record.ID
 	projector.heldMu.Lock()
 	defer projector.heldMu.Unlock()
@@ -605,10 +571,6 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 		return terminal
 	}
 	if _, exists := projector.admitted[id]; !exists {
-		// 原生步骤的实体屏障：与下面的登记同一临界区，不用瞬时统计判断。
-		if err := projector.checkFencedEntitiesLocked(record); err != nil {
-			return err
-		}
 		// 运维卸载屏障（entity.unload）：同一临界区，登记之后不会再有写到该实体的记录准入。
 		if err := projector.checkUnloadingEntitiesLocked(record); err != nil {
 			return err

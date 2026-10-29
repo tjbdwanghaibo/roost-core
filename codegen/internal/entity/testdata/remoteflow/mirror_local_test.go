@@ -935,20 +935,15 @@ type holdingStore struct {
 }
 
 func (h *holdingStore) Project(ctx context.Context, record coredata.CommitRecord) error {
-	_, err := h.ProjectFenced(ctx, record)
-	return err
-}
-
-func (h *holdingStore) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	if h.hold.Load() {
 		select {
 		case h.held <- struct{}{}:
 		default:
 		}
 		<-ctx.Done() // 进程会被强杀；放行只能来自重启后的重放
-		return false, ctx.Err()
+		return ctx.Err()
 	}
-	return h.MongoStore.ProjectFenced(ctx, record)
+	return h.MongoStore.Project(ctx, record)
 }
 
 func runLocalOwner(t *testing.T) {

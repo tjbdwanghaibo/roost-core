@@ -14,19 +14,13 @@ type entityProjection struct {
 	ids  []int64
 	done chan struct{}
 	err  error
-	// fenced：原生步骤（本地 mutation + lease fence），ids 上持有准入屏障，随本项一起解除。
-	fenced bool
-	// evicting：该原生步骤已被跳过、已交给驱逐 worker（heldMu 保护）。按事务身份只登记一次：
-	// ack 失败后的重投会再次读到同一条被跳过的记录，不能再排队、再计数。
-	evicting bool
 }
 
-// trackEntitiesLocked 在 heldMu 下登记事务涉及的实体；带 lease fence 的记录同时在这些实体上立屏障。
+// trackEntitiesLocked 在 heldMu 下登记事务涉及的实体。
 func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 	if p.pendingTransactions == nil {
 		p.pendingTransactions = make(map[coredata.TransactionID]*entityProjection)
 		p.pendingEntities = make(map[int64]map[coredata.TransactionID]*entityProjection)
-		p.fencedEntities = make(map[int64]coredata.TransactionID)
 	}
 	pending := &entityProjection{done: make(chan struct{})}
 	for _, mutation := range record.Mutations {
@@ -45,16 +39,10 @@ func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 		group[record.ID] = pending
 		pending.ids = append(pending.ids, id)
 	}
-	if len(pending.ids) > 0 && hasLeaseFence(record) {
-		pending.fenced = true
-		for _, id := range pending.ids {
-			p.fencedEntities[id] = record.ID
-		}
-	}
 	p.pendingTransactions[record.ID] = pending
 }
 
-// finishEntities 解除事务在实体维度上的登记（含原生步骤屏障）并以 err 唤醒等待方。
+// finishEntities 解除事务在实体维度上的登记并以 err 唤醒等待方。
 func (p *Projector) finishEntities(id coredata.TransactionID, err error) {
 	p.heldMu.Lock()
 	defer p.heldMu.Unlock()
@@ -71,9 +59,6 @@ func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 		delete(group, id)
 		if len(group) == 0 {
 			delete(p.pendingEntities, entityID)
-		}
-		if pending.fenced && p.fencedEntities[entityID] == id {
-			delete(p.fencedEntities, entityID)
 		}
 	}
 	delete(p.pendingTransactions, id)

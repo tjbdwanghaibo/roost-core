@@ -10,6 +10,8 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -129,7 +131,6 @@ func newUnloadFixture(t *testing.T, uniqueID int64) *unloadFixture {
 		t.Fatal(err)
 	}
 	f.runtime = &Runtime{Store: store, Projector: f.projector, Repository: repository, access: f.access}
-	f.projector.evictEntities = f.runtime.evictStaleEntities
 	f.runtime.ready.Store(true)
 	f.scheduler = corenest.NewEngine(corenest.NestOptionWithTransactionCommitter(f.projector), corenest.NestOptionWithGetter(f.access),
 		corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 4, QueueCap: 64}, corenest.WorkerPoolConfig{}, corenest.WorkerPoolConfig{}))
@@ -478,5 +479,262 @@ func TestEntityUnloadRemoteManagedEntity(t *testing.T) {
 
 	if got, err := f.runtime.UnloadEntity(f.ctx, remoteID); err != nil || !got.Unloaded || f.manager.Get(remoteID) != nil {
 		t.Fatalf("unload of a local-owned remote entity = %+v, %v", got, err)
+	}
+}
+
+// 运维卸载（entity.unload）后仍有订阅者：框架在业务池之外经正式 EntityRepository（等待该实体投影、发布回到业务池、
+// OnEntityLoaded）从 Mongo 重载并 Rebind，订阅者收到权威全量；Mongo 里没有该实体时退回 remove。
+// 原用例由“原生步骤被 lease fence 跳过后驱逐”触发卸载（RR-20260926-59 / RR-30）；lease fence 删除后（saga 设计第 5 批）
+// 由运维卸载触发同一条 ManagerAccess.Unload → unload_resync 链路。订阅者先拿到一个与库不同的值（库在卸载前被另一写者改过），
+// 卸载后必须收到库里的值，而不是停在旧内容上。
+
+// unloadResyncKind 与同包其他用例的 kind 互不相同（RR-20260926-82）：kind 注册表是进程级的。
+const unloadResyncKind entity.EntityKind = 248
+const unloadResyncCollection = "resync_heroes"
+
+type unloadResyncDAO struct {
+	id    int64
+	level int32
+}
+
+func (dao *unloadResyncDAO) Id() int64         { return dao.id }
+func (dao *unloadResyncDAO) SetId(id int64)    { dao.id = id }
+func (*unloadResyncDAO) DbName() string        { return testDatabase }
+func (*unloadResyncDAO) CollName() string      { return unloadResyncCollection }
+func (*unloadResyncDAO) Dirty() entity.IDirty  { return nil }
+func (*unloadResyncDAO) CleanDirty()           {}
+func (*unloadResyncDAO) SchemaVersion() uint32 { return 1 }
+func (dao *unloadResyncDAO) RestorePersisted(raw []byte, _ uint32, _ uint64) error {
+	var doc struct {
+		Level int32 `bson:"level"`
+	}
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	dao.level = doc.Level
+	return nil
+}
+
+type unloadResyncEntity struct {
+	*entity.EntityBase
+	mu    sync.Mutex
+	level int32
+}
+
+func (value *unloadResyncEntity) Base() *entity.EntityBase { return value.EntityBase }
+func (*unloadResyncEntity) AutoPersist() bool              { return true }
+
+func (value *unloadResyncEntity) setLevel(level int32) {
+	value.mu.Lock()
+	value.level = level
+	value.mu.Unlock()
+}
+
+var registerUnloadResyncEntity sync.Once
+
+func ensureUnloadResyncEntity() {
+	registerUnloadResyncEntity.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: unloadResyncKind,
+			DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return &unloadResyncDAO{} }},
+			Sync: entity.EntitySyncBuilderParam{Enabled: true, Namespace: "hero", PackerFactory: func(e entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+				value := e.(*unloadResyncEntity)
+				pack := func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+					value.mu.Lock()
+					defer value.mu.Unlock()
+					return entity.CopyFrozenSyncPayload(1, []byte{byte(value.level)}), nil
+				}
+				return entity.SubjectSyncPackFunc{Snapshot: pack, Delta: func(p entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) { return pack(p) }}
+			}},
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				value := &unloadResyncEntity{EntityBase: entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)}
+				if dao, ok := param.Dao[unloadResyncCollection].(*unloadResyncDAO); ok {
+					value.level = dao.level
+				}
+				return value, nil
+			},
+		})
+	})
+}
+
+// projectionGate 是 Runtime 作 RecoveryGate 时的最小等价物：已就绪，冷加载等该实体的在途投影。
+type projectionGate struct{ projector *Projector }
+
+func (projectionGate) Ready() bool { return true }
+func (gate projectionGate) WaitEntityProjection(ctx context.Context, id int64) error {
+	return gate.projector.WaitEntityProjection(ctx, id)
+}
+
+type unloadResyncFixture struct {
+	t        *testing.T
+	id       int64
+	store    *MongoStore
+	docs     *mongotest.Collection
+	project  *Projector
+	manager  *entity.EntityManager
+	access   *entity.ManagerAccess
+	sync     *entitysync.Manager
+	frames   chan []byte
+	ref      frame.ObjectRef
+	resident *unloadResyncEntity
+	runtime  *Runtime
+}
+
+func newUnloadResyncFixture(t *testing.T, uniqueID int64) *unloadResyncFixture {
+	t.Helper()
+	ensureUnloadResyncEntity()
+	id, err := entity.BuildEntityID(uniqueID, unloadResyncKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, client, _ := newMongoStoreTest(t)
+	docs := client.Collection(testDatabase, unloadResyncCollection)
+	if err = docs.Seed(bson.M{"_id": id, "_version": uint64(4), "_schema": uint32(1), "level": int32(1)}); err != nil {
+		t.Fatal(err)
+	}
+	projector, _ := manualProjector(t, store)
+	f := &unloadResyncFixture{t: t, id: id, store: store, docs: docs, project: projector, manager: entity.NewEntityManager(), frames: make(chan []byte, 16)}
+	f.access = entity.NewManagerAccess(f.manager)
+	repository, err := NewEntityRepository(f.manager, store, projectionGate{projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.access.ConfigureLoader(repository); err != nil {
+		t.Fatal(err)
+	}
+	f.runtime = &Runtime{Store: store, Projector: projector, Repository: repository, access: f.access}
+	f.runtime.ready.Store(true)
+	f.sync, err = entitysync.NewManager(entitysync.ManagerConfig{Mode: entitysync.ModePeriodic, Interval: time.Hour, Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, p []byte) error {
+		f.frames <- append([]byte(nil), p...)
+		return nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.sync.Close(context.Background()) })
+	// 与 kit Nest Mod 相同的接线：重载发布时 Rebind（OnEntityLoaded）；NewEngine 把 NestMgr.RunLocal 绑定给作为
+	// Getter 的 ManagerAccess（BindLocalExecutor），卸载后重载与业务冷加载同一条共享加载，经它回业务池发布。
+	unhook := repository.OnEntityLoaded(func(loaded entity.IThreadSafeEntity) { _ = f.sync.Rebind(loaded.Base().Sync()) })
+	t.Cleanup(unhook)
+	scheduler := corenest.NewEngine(corenest.NestOptionWithTransactionCommitter(projector), corenest.NestOptionWithGetter(f.access))
+	if err = scheduler.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scheduler.Shutdown(context.Background()) })
+	stop, err := f.access.ConfigureUnloadResync(f.sync, entity.UnloadResyncConfig{Attempts: 3, RetryMin: time.Millisecond, RetryMax: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+
+	loaded, err := f.access.Get(entity.WithLocalExecutor(context.Background(), func(fn func()) error { return scheduler.RunLocal(context.Background(), fn) }), id, entity.EntityCategoryNone)
+	if err != nil || loaded == nil {
+		t.Fatalf("initial load: %v", err)
+	}
+	f.resident = loaded.(*unloadResyncEntity)
+	if err = f.sync.Register(f.resident.Sync()); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.sync.OpenSession(1); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.sync.Subscribe(1, id, entity.SyncProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	created := f.next("the initial create")
+	if len(created.Objects) != 1 || created.Objects[0].Operation != frame.ObjectCreate || f.level(created.Objects[0]) != 1 {
+		t.Fatalf("initial frame=%+v", created.Objects)
+	}
+	f.ref = created.Objects[0].Ref
+	return f
+}
+
+func (f *unloadResyncFixture) next(what string) frame.Frame {
+	f.t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case raw := <-f.frames:
+			decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+			if err != nil {
+				f.t.Fatal(err)
+			}
+			return decoded
+		default:
+		}
+		if time.Now().After(deadline) {
+			f.t.Fatalf("no frame within 3s: %s", what)
+		}
+		if err := f.sync.Flush(context.Background()); err != nil {
+			f.t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func (f *unloadResyncFixture) level(object frame.ObjectDelta) int32 {
+	f.t.Helper()
+	update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	payload := update.Payload.BytesCopy()
+	if len(payload) != 1 {
+		f.t.Fatalf("payload=%v", payload)
+	}
+	return int32(payload[0])
+}
+
+// unloadWithSubscriber 让库先被另一写者改到 level 3（本进程内存与订阅者仍是 1），再运维卸载该实体。
+func (f *unloadResyncFixture) unloadWithSubscriber(authorityLevel int32) {
+	f.t.Helper()
+	if authorityLevel != 0 {
+		if _, err := f.docs.UpdateOne(context.Background(), bson.M{"_id": f.id}, bson.M{"$set": bson.M{"level": authorityLevel, "_version": uint64(5)}}); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	result, err := f.runtime.UnloadEntity(context.Background(), f.id)
+	if err != nil || !result.Resident || !result.Unloaded {
+		f.t.Fatalf("UnloadEntity=%+v err=%v", result, err)
+	}
+	if f.manager.Get(f.id) == entity.IThreadSafeEntity(f.resident) {
+		f.t.Fatal("premise: the unloaded instance is still resident")
+	}
+}
+
+func TestEntityUnloadResyncsSubscribersFromMongo(t *testing.T) {
+	f := newUnloadResyncFixture(t, 2431)
+	f.unloadWithSubscriber(3)
+	correction := f.next("the entity was unloaded, but the subscriber still holds level 1 (no authoritative full, no remove)")
+	if len(correction.Objects) != 1 || correction.Objects[0].Operation != frame.ObjectUpdate || correction.Objects[0].Ref != f.ref {
+		t.Fatalf("correction frame=%+v, want one ObjectUpdate of the held object %+v", correction.Objects, f.ref)
+	}
+	if got := f.level(correction.Objects[0]); got != 3 {
+		t.Fatalf("subscriber got level %d after the unload, want the Mongo level 3", got)
+	}
+	reloaded, ok := f.manager.Get(f.id).(*unloadResyncEntity)
+	if !ok || reloaded == f.resident {
+		t.Fatal("the Mongo instance is not resident after the resync")
+	}
+	if doc, _ := f.docs.Lookup(f.id); doc["_version"] != int64(5) {
+		t.Fatalf("resync persisted something: %v", doc)
+	}
+}
+
+func TestEntityUnloadWithoutAuthorityRetractsSubscribers(t *testing.T) {
+	f := newUnloadResyncFixture(t, 2432)
+	if _, err := f.docs.DeleteOne(context.Background(), bson.M{"_id": f.id}); err != nil { // 权威中已不存在（例如另一写者删除了它）
+		t.Fatal(err)
+	}
+	f.unloadWithSubscriber(0)
+	correction := f.next("the entity was unloaded and Mongo has no such entity, but the subscriber got no remove")
+	if len(correction.Objects) != 1 || correction.Objects[0].Operation != frame.ObjectRemove {
+		t.Fatalf("correction frame=%+v, want ObjectRemove", correction.Objects)
+	}
+	if f.manager.Get(f.id) != nil {
+		t.Fatal("an entity missing from Mongo became resident")
+	}
+	if stats := f.access.UnloadResyncStats(); stats.Retracted != 1 || stats.Failures != 0 {
+		t.Fatalf("missing authority was retried instead of retracted at once: %+v", stats)
 	}
 }

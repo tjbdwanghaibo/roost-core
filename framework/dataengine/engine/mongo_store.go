@@ -12,7 +12,6 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -62,10 +61,6 @@ type MongoStore struct {
 	now           func() time.Time
 	remoteStore   RemoteProjectionStore
 	remoteApplier entity.RemoteCommitApplier
-
-	// afterLeaseFence 是测试缝：租约校验通过、业务写入之前在同一 Mongo 事务里调用，
-	// 用来在确定的位置插入并发的租约接管（写偏斜回归）。生产为 nil。
-	afterLeaseFence func(context.Context)
 }
 
 // RemoteProjectionStore 在调用方的 Mongo 事务内应用 Remote 提交并返回回执。
@@ -337,7 +332,6 @@ type transactionDocument struct {
 	ID        string    `bson:"_id"`
 	Digest    []byte    `bson:"digest"`
 	CreatedAt time.Time `bson:"created_at"`
-	Skipped   bool      `bson:"skipped,omitempty"`
 }
 
 // insertTransactionMarker 只在 Project 回调里、checkTransaction 已在同一事务快照中确认
@@ -356,57 +350,21 @@ func (store *MongoStore) insertTransactionMarker(ctx context.Context, document t
 	return err
 }
 
-// leaseFencesMatch 在投影事务内逐个确认 lease fence；任一 fence 失效返回 false，
-// 调用方把整笔记录作为跳过处理。
-func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coredata.Receipt) (bool, error) {
-	now := store.now().UTC()
-	for i := range receipts {
-		fence, control, err := coredata.DecodeLeaseFenceReceipt(receipts[i])
-		if err != nil {
-			return false, err
-		}
-		if !control {
-			continue
-		}
-		// 条件来自 fence 自身（Predicate），不在这里另拼：协调文档由另一个包写入，
-		// 两处各写一份 schema 时，任一侧改名都会让所有 fenced 事务静默变成空操作。
-		//
-		// 校验必须是条件写而不是读：只读 claim 时，租约到期附近
-		// 另一事务的接管（lease_token+1）与本投影事务互不写冲突，两边都会提交，同一步骤
-		// 执行两次。写同一文档让 Mongo 只允许其中一个提交，输家由驱动重试后看到对方结果。
-		result, err := store.client.Database(fence.Database).Collection(fence.Resource).
-			UpdateOne(ctx, fence.Predicate(now), fence.Confirmation(now))
-		if err == nil && (result == nil || result.MatchedCount == 0) {
-			err = fmongo.ErrNotFound
-		}
-		if errors.Is(err, fmongo.ErrNotFound) {
-			// 租约过期是预期结果，但 schema 漂移导致条件永远不满足看起来也一样。
-			// 计数后，漂移会表现为所有 fenced 事务同时跳过，而不是悄无声息。
-			metrics.IncCounter("dataengine.fence.skipped.total", metrics.Labels{"resource": fence.Resource}, 1)
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-// checkTransaction 在投影事务快照内查事务标记，返回（已应用, 曾被跳过, 错误）；
+// checkTransaction 在投影事务快照内查事务标记，返回是否已应用；
 // 标记存在但摘要不同是 fatal 的 ErrTransactionIdentity。
-func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, bool, error) {
+func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, error) {
 	var stored transactionDocument
 	err := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection).FindOne(ctx, bson.M{"_id": txID}, &stored)
 	if errors.Is(err, fmongo.ErrNotFound) {
-		return false, false, nil
+		return false, nil
 	}
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 	if !bytes.Equal(stored.Digest, digest) {
-		return false, false, ErrTransactionIdentity
+		return false, ErrTransactionIdentity
 	}
-	return true, stored.Skipped, nil
+	return true, nil
 }
 
 type receiptDocument struct {

@@ -4,7 +4,6 @@ package dataengine
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -125,9 +124,6 @@ func TestValidateCommitRecordRefusesEachMalformedPart(t *testing.T) {
 		{"effect without topic", func(r *CommitRecord) { r.Effects[0].Topic = "" }, "invalid effect 0"},
 		{"receipt without namespace", func(r *CommitRecord) { r.Receipts[0].Namespace = "" }, "invalid receipt 0"},
 		{"receipt without id", func(r *CommitRecord) { r.Receipts[0].ID = "" }, "invalid receipt 0"},
-		{"lease fence receipt with a forged payload", func(r *CommitRecord) {
-			r.Receipts[0] = Receipt{Namespace: LeaseFenceReceiptNamespace, ID: "game/hero/7", Payload: []byte(`{"database":"game"}`)}
-		}, "invalid lease fence receipt 0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,57 +139,10 @@ func TestValidateCommitRecordRefusesEachMalformedPart(t *testing.T) {
 	}
 }
 
-// A lease fence with any blank identity, a zero token, or a digest of the
-// wrong length must not become a receipt: the projector's predicate would
-// match documents it was never meant to fence.
-func TestLeaseFenceValidateRefusesEachIncompleteFence(t *testing.T) {
-	digest := sha256.Sum256([]byte("cmd"))
-	valid := LeaseFence{Database: "game", Resource: "mail", DocumentID: "m1", Owner: "sid-1", Token: 9, Digest: digest[:]}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid fence rejected: %v", err)
-	}
-	cases := []struct {
-		name   string
-		mutate func(*LeaseFence)
-	}{
-		{"blank database", func(f *LeaseFence) { f.Database = " " }},
-		{"blank resource", func(f *LeaseFence) { f.Resource = "" }},
-		{"blank document", func(f *LeaseFence) { f.DocumentID = "" }},
-		{"blank owner", func(f *LeaseFence) { f.Owner = "" }},
-		{"zero token", func(f *LeaseFence) { f.Token = 0 }},
-		{"short digest", func(f *LeaseFence) { f.Digest = f.Digest[:8] }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := valid
-			tc.mutate(&f)
-			if err := f.Validate(); !errors.Is(err, ErrInvalidLeaseFence) {
-				t.Fatalf("Validate = %v, want ErrInvalidLeaseFence", err)
-			}
-			if _, err := NewLeaseFenceReceipt(f); !errors.Is(err, ErrInvalidLeaseFence) {
-				t.Fatalf("NewLeaseFenceReceipt = %v, want ErrInvalidLeaseFence", err)
-			}
-		})
-	}
-}
-
-// 租约围栏回执缺 id / 空载荷 / 非 JSON 报 ErrInvalidLeaseFence（且识别为围栏命名空间）；Loader 无存储报 ErrStoreRequired；模板空资源名 /
-// 重名 / 依赖未知资源报 ErrLoadDependency；WaitProjection 无票报错；版本 0 不能推进。
-func TestLeaseFenceLoaderAndTrackerGuards(t *testing.T) {
+// Loader 无存储报 ErrStoreRequired；模板空资源名 / 重名 / 依赖未知资源报 ErrLoadDependency；WaitProjection 无票报错；
+// 版本 0 不能推进。
+func TestLoaderAndTrackerGuards(t *testing.T) {
 	ctx := context.Background()
-	for name, receipt := range map[string]Receipt{
-		"no id":      {Namespace: LeaseFenceReceiptNamespace, Payload: []byte(`{}`)},
-		"empty body": {Namespace: LeaseFenceReceiptNamespace, ID: "db/res/1"},
-		"not json":   {Namespace: LeaseFenceReceiptNamespace, ID: "db/res/1", Payload: []byte("{")},
-	} {
-		if _, isFence, err := DecodeLeaseFenceReceipt(receipt); !isFence || !errors.Is(err, ErrInvalidLeaseFence) {
-			t.Fatalf("%s: DecodeLeaseFenceReceipt = (fence=%v, %v)", name, isFence, err)
-		}
-	}
-	if _, isFence, err := DecodeLeaseFenceReceipt(Receipt{Namespace: "other"}); isFence || err != nil {
-		t.Fatalf("a receipt from another namespace = (fence=%v, %v)", isFence, err)
-	}
-
 	var none *Loader
 	if err := none.LoadAll(ctx, nil); !errors.Is(err, ErrStoreRequired) {
 		t.Fatalf("LoadAll on a nil loader = %v", err)

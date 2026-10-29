@@ -3,7 +3,6 @@
 package remoteentity
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -339,114 +338,6 @@ func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
 	altered.Mutations[0].Data = []byte("changed")
 	if _, err = f.store.RejectUnresolvedRemoteCommits(ctx, []entity.RemoteCommit{altered}, "unresolved"); !errors.Is(err, entity.ErrRemoteRejected) {
 		t.Fatalf("digest collision err=%v", err)
-	}
-}
-
-// 历史 WAL 里“Remote + lease fence”的混合记录按退役格式处理：新写入在准入处已被
-// engine.ErrRemoteLeaseFenceUnsupported 拒绝（用例先证明这一点），WAL 里已有的这种记录由真实 nestwal WAL +
-// engine.Projector + engine.MongoStore 投影时，投影器以 ErrRetiredRemoteLeaseFenceRecord fatal：不写 Remote
-// 事务记录、不写 DataEngine 事务标记、不写实体数据，记录不被 ack（checkpoint 停在它之前）。
-// 历史：RR-20260926-19 曾把它投影为 Remote Rejected 并卸载重载；维护者 2026-10-13 决定移除旧格式兼容。
-func TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting(t *testing.T) {
-	f, live := newReloadFixture(t, 1957)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	store, err := engine.NewMongoStore(f.store.mongo, engine.MongoStoreConfig{Databases: f.store.databases.Load(), DefaultDatabase: "game", ServerID: 1000, TransactionReceiptTTL: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = store.SetRemoteProjection(f.store, f.mgr); err != nil {
-		t.Fatal(err)
-	}
-	walOptions := nestwal.DefaultOptions(t.TempDir())
-	walOptions.GroupCommitInterval = time.Millisecond
-	wal, err := nestwal.Open(walOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	walOwned := true
-	t.Cleanup(func() {
-		if walOwned {
-			_ = wal.Close(context.Background())
-		}
-	})
-
-	tx := remoteTestTxID(0xD1)
-	batch := f.prepareRejected(t, live, tx, uint8(nest.DurabilityAsync.Record()))
-	record := remoteCommitRecord(nest.DurabilityAsync.Record(), batch.Commits())
-	// 指向不存在的 saga 步骤 claim：条件写 matched=0，即租约已失效。
-	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/historical",
-		Owner: "worker-old", Token: 3, Digest: bytes.Repeat([]byte{7}, 32),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Receipts = []coredata.Receipt{fence}
-	if err = coredata.ValidateCommitRecord(record); err != nil {
-		t.Fatalf("premise: historical record must be a valid WAL record: %v", err)
-	}
-	if _, err = wal.Append(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-
-	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{
-		CloseWAL: true, IdlePoll: 20 * time.Millisecond, RetryMin: 5 * time.Millisecond, RetryMax: 50 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	walOwned = false
-	t.Cleanup(func() {
-		closing, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = projector.Close(closing)
-	})
-	// 前提：同样的组合现在走正式准入会在写 WAL 前被拒绝。
-	probe := record
-	probe.ID = coredata.TransactionID(remoteTestTxID(0xD2))
-	if err = projector.Commit(ctx, probe); !errors.Is(err, engine.ErrRemoteLeaseFenceUnsupported) {
-		t.Fatalf("premise: admission of Remote + lease fence = %v, want ErrRemoteLeaseFenceUnsupported", err)
-	}
-
-	// 只需要提交内容；本进程的这笔写入不参与投影。
-	_ = batch.Abort(ctx, errors.New("only the commit content is needed"))
-	_ = batch.Close(ctx)
-
-	if err = projector.Flush(ctx); !errors.Is(err, engine.ErrRetiredRemoteLeaseFenceRecord) {
-		t.Fatalf("projector flush = %v, want ErrRetiredRemoteLeaseFenceRecord", err)
-	}
-	if stats := projector.Stats(); stats.Projected != 0 || stats.FatalProjectionConflicts != 1 {
-		t.Fatalf("projector stats=%+v, want the retired record fatal and not projected", stats)
-	}
-	if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitUnknown {
-		t.Fatalf("durable status=%+v err=%v, want no Remote transaction record", status, err)
-	}
-	if markers := f.store.mongo.(*mongotest.Client).Collection("game", engine.TransactionCollection).Len(); markers != 0 {
-		t.Fatalf("retired record left %d DataEngine transaction markers", markers)
-	}
-	if doc := f.storedDocument(t); doc != "" {
-		t.Fatalf("retired record reached Mongo: %q", doc)
-	}
-	// checkpoint 没有越过它：关闭投影器（连同 WAL）后重开，重放仍从这条记录开始。
-	if err = projector.Close(ctx); err != nil && !errors.Is(err, engine.ErrRetiredRemoteLeaseFenceRecord) {
-		t.Fatalf("projector close: %v", err)
-	}
-	reopened, err := nestwal.Open(walOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close(context.Background())
-	var replayed []nest.TransactionID
-	if err = reopened.Replay(ctx, func(_ nest.CommitFence, r nest.CommitRecord) error {
-		replayed = append(replayed, r.ID)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(replayed) != 1 || replayed[0] != nest.TransactionID(tx) {
-		t.Fatalf("WAL replay after the fatal = %v, want the retired record still unacknowledged", replayed)
 	}
 }
 

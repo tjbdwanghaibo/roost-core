@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -21,7 +20,7 @@ import (
 // evaluates filters, updates and unique indexes. That matters here more than
 // anywhere else in the repo: every correctness property of projection is
 // carried by a query predicate (the exact-version CAS, the transaction marker,
-// the lease fence, the effect/receipt identity). A fake that returned canned
+// the effect/receipt identity). A fake that returned canned
 // results could not tell a correct predicate from a wrong one, so these tests
 // seed real documents and assert stored state instead.
 
@@ -103,165 +102,6 @@ func TestMongoStoreUsesAbsoluteExpiryForReceipts(t *testing.T) {
 	outbox := client.Collection(testDatabase, OutboxCollection)
 	if !outbox.HasIndex("available_at", "lease_until") || !outbox.HasIndex("effect_id") {
 		t.Fatalf("outbox indexes=%+v", outbox.Indexes)
-	}
-}
-
-func leaseFenceReceipt(t *testing.T, documentID, owner string, token uint64, digest []byte) coredata.Receipt {
-	t.Helper()
-	receipt, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: testDatabase, Resource: "_dataengine_inbox_claims", DocumentID: documentID,
-		Owner: owner, Token: token, Digest: digest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return receipt
-}
-
-// seedClaim installs a live saga-step claim in the shape saga's former
-// DataEngineStepInbox wrote it (deleted in saga batch 4; the fence itself goes
-// in batch 5). The field names and the "pending" literal are the contract the
-// projector's fence filter depends on.
-func seedClaim(t *testing.T, client *mongotest.Client, documentID, owner string, token uint64, digest []byte, leaseUntil time.Time) {
-	t.Helper()
-	claims := client.Collection(testDatabase, "_dataengine_inbox_claims")
-	if err := claims.Seed(bson.M{
-		"_id": documentID, "owner": owner, "lease_token": token, "digest": digest,
-		"status": "pending", "lease_until": leaseUntil,
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestMongoStoreLeaseFenceSkipsStaleSagaTransaction(t *testing.T) {
-	store, client, collection := newMongoStoreTest(t)
-	seedHero(t, collection, 4)
-	record := testMutationRecord(coredata.MutationPatch)
-	// No claim document exists at all: the lease is gone.
-	record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-1", "worker-1", 7, bytes.Repeat([]byte{1}, 32)))
-
-	if err := store.Project(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) || doc["level"] != int32(1) {
-		t.Fatalf("stale fenced transaction mutated business state: %v", doc)
-	}
-	markers := markerCollection(client).Documents()
-	if len(markers) != 1 || markers[0]["skipped"] != true {
-		t.Fatalf("transaction marker=%v, want skipped", markers)
-	}
-}
-
-func TestMongoStoreLeaseFenceRejectsExpiredLease(t *testing.T) {
-	store, client, collection := newMongoStoreTest(t)
-	seedHero(t, collection, 4)
-	digest := bytes.Repeat([]byte{5}, 32)
-	// The claim exists and matches on identity, but its lease already expired.
-	seedClaim(t, client, "saga-step/cmd-expired", "worker-1", 7, digest, time.Now().UTC().Add(-time.Minute))
-	record := testMutationRecord(coredata.MutationPatch)
-	record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-expired", "worker-1", 7, digest))
-
-	if err := store.Project(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) {
-		t.Fatalf("expired lease applied the mutation: %v", doc)
-	}
-	if markers := markerCollection(client).Documents(); len(markers) != 1 || markers[0]["skipped"] != true {
-		t.Fatalf("marker=%v, want skipped", markers)
-	}
-}
-
-// WAL 里 Remote 写与 lease fence 同在的历史记录不再投影：MongoStore 在任何写之前以
-// ErrRetiredRemoteLeaseFenceRecord 拒绝，旧进程留下的 skipped 标记也不改变这一点。
-// 历史：RR-20260926-19 曾把它投影为 Remote Rejected；维护者 2026-10-13 决定移除旧格式兼容。
-func TestMongoStoreRefusesARetiredRemoteLeaseFenceRecordWithoutWriting(t *testing.T) {
-	// 只需要一个托管且没有 builder 的 kind。原用 242，与 entity_repository_promises_test.go 的本地 builder
-	// dataEngineNilBuilderKind 撞号：两个用例先后运行时 kind 被升级成 managed 而 builder 仍是本地生命周期，
-	// RR-20260926-71 起注册表拒绝这种升级。
-	const kind entity.EntityKind = 236
-	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	entityID, err := entity.BuildEntityID(78, kind)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, client, _ := newMongoStoreTest(t)
-	remoteProjection := &mongoRemoteProjectionFake{}
-	if err := store.SetRemoteProjection(remoteProjection, remoteProjection); err != nil {
-		t.Fatal(err)
-	}
-	var txID coredata.TransactionID
-	txID[15] = 45
-	remote := entity.RemoteCommit{
-		TransactionID: entity.RemoteTransactionID(txID), EntityID: entityID, Kind: kind,
-		BaseVersion: 1, NextVersion: 2, MarkerEpoch: 1, LockFence: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
-		Mutations: []entity.RemoteDataMutation{{Collection: "heroes", ID: entityID, Version: 2, Mask: 1, Data: []byte("remote")}},
-	}
-	record := coredata.CommitRecord{
-		ID:       txID,
-		Receipts: []coredata.Receipt{leaseFenceReceipt(t, "saga-step/cmd-remote", "worker-1", 8, bytes.Repeat([]byte{2}, 32))},
-		Mutations: []coredata.Mutation{{
-			Key: coredata.DocumentKey{Resource: "heroes", ID: entityID}, Kind: coredata.MutationPut,
-			ExpectedVersion: 1, NextVersion: 2, Remote: &remote,
-		}},
-	}
-	// 准入早已拒绝 Remote + lease fence；这种记录只可能来自旧版本 WAL，投影在任何写之前拒绝。
-	if err := store.Project(context.Background(), record); !errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
-		t.Fatalf("Project(remote + lease fence) = %v, want ErrRetiredRemoteLeaseFenceRecord", err)
-	}
-	if remoteProjection.stored != 0 || remoteProjection.applied != 0 || markerCollection(client).Len() != 0 {
-		t.Fatalf("retired record wrote: remote stored=%d published=%d markers=%d", remoteProjection.stored, remoteProjection.applied, markerCollection(client).Len())
-	}
-	// 旧版本可能已为它写下 skipped 标记（WAL 尚未 ack）：照样拒绝，不读标记、不再写。
-	digest, err := digestRecord(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.insertTransactionMarker(context.Background(), transactionDocument{ID: txID.String(), Digest: digest, CreatedAt: time.Now().UTC(), Skipped: true}); err != nil {
-		t.Fatal(err)
-	}
-	if skipped, err := store.ProjectFenced(context.Background(), record); skipped || !errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
-		t.Fatalf("ProjectFenced over an old skipped marker = skipped=%v err=%v, want the retired-record refusal", skipped, err)
-	}
-	if remoteProjection.stored != 0 || remoteProjection.applied != 0 || markerCollection(client).Len() != 1 {
-		t.Fatalf("retired record wrote on replay: remote stored=%d published=%d markers=%d", remoteProjection.stored, remoteProjection.applied, markerCollection(client).Len())
-	}
-}
-
-func TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken(t *testing.T) {
-	claimDigest := bytes.Repeat([]byte{3}, 32)
-	// Each case keeps a live, identity-matching claim in storage and varies the
-	// fence the transaction carries. Only the exact match may apply.
-	for name, tc := range map[string]struct {
-		owner  string
-		token  uint64
-		digest []byte
-		apply  bool
-	}{
-		"exact match":  {"worker-1", 7, claimDigest, true},
-		"other owner":  {"worker-2", 7, claimDigest, false},
-		"other token":  {"worker-1", 8, claimDigest, false},
-		"other digest": {"worker-1", 7, bytes.Repeat([]byte{4}, 32), false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			store, client, collection := newMongoStoreTest(t)
-			seedHero(t, collection, 4)
-			seedClaim(t, client, "saga-step/cmd-1", "worker-1", 7, claimDigest, time.Now().UTC().Add(time.Minute))
-			record := testMutationRecord(coredata.MutationPatch)
-			record.Receipts = append(record.Receipts, leaseFenceReceipt(t, "saga-step/cmd-1", tc.owner, tc.token, tc.digest))
-			if err := store.Project(context.Background(), record); err != nil {
-				t.Fatal(err)
-			}
-			doc, _ := collection.Lookup(int64(7))
-			applied := doc["_version"] == int64(5)
-			if applied != tc.apply {
-				t.Fatalf("applied=%v want=%v (document=%v)", applied, tc.apply, doc)
-			}
-			// A lease fence is a precondition, never a business receipt.
-			if receipts := client.Collection(testDatabase, ReceiptCollection).Len(); receipts != 0 {
-				t.Fatalf("lease fence leaked into receipt collection (%d docs)", receipts)
-			}
-		})
 	}
 }
 

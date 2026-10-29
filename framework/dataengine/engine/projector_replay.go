@@ -107,7 +107,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 					batch:   segment.batch,
 				}
 				projectStart := hoptrace.Now()
-				outcome, err := projector.projectSegment(ctx, unit)
+				err := projector.projectSegment(ctx, unit)
 				if err != nil {
 					if errors.Is(err, ErrProjectionBatchNeedsPerRecord) && len(unit.records) > 1 {
 						perRecord = true
@@ -116,11 +116,11 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 					projector.isFatalProjection(err)
 					return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
 				}
-				projector.finishProjectedUnit(unit.records, nil, outcome, projectStart, nil)
+				projector.finishProjectedUnit(unit.records, nil, projectStart, nil)
 				processed += len(unit.records)
 				// checkpoint 只决定崩溃后从哪里重放，进程外没有读者；已投影未确认的记录靠持久事务标记幂等重放
 				// （批次、多 mutation、effect / 回执 / Remote 记录都先查标记，标记与业务写同一 Mongo 事务提交，
-				// 重放时不重新判定 lease fence、不重复暂存回执与 effect）。所以这些单元按条数 / 间隔合并确认。
+				// 重放时不重复暂存回执与 effect）。所以这些单元按条数 / 间隔合并确认。
 				// 例外：单 mutation 快路只保存文档末次事务 ID，后续版本覆盖它后旧记录无法判定幂等，必须立即确认；
 				// 非批量 Store 没有承诺这种重放安全，也逐单元确认。
 				replaySafe := batchCapable && (len(unit.records) > 1 || !projectsOnFastPath(unit.records[0]))
@@ -198,42 +198,25 @@ func (projector *Projector) readReplayBatch(ctx context.Context) ([]corenest.Com
 	return records, fences, replayErr
 }
 
-// projectSegment 返回的 outcome 只对单笔段有意义：带 lease fence 的记录总是单独成段
-// （isLocalBatchRecord 排除 receipt）。批量段只含普通本地记录，结果总是 applied。
-func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) (projectionOutcome, error) {
+// projectSegment 投影一个单元：单笔段交给 Store.Project（特殊记录总是单独成段，isLocalBatchRecord 排除
+// effect / 回执 / Remote 写），多笔段是连续的普通本地记录，Store 支持时一次 ProjectBatch。
+func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) error {
 	if len(segment.records) == 1 {
 		record := segment.records[0]
-		// 退役的历史记录：不交给 Store，投影器 fatal，checkpoint 停在它之前。
-		if mixesRemoteWithLeaseFence(record) {
-			return projectionApplied, fmt.Errorf("transaction %s: %w", record.ID.String(), ErrRetiredRemoteLeaseFenceRecord)
+		if err := projector.store.Project(ctx, record); err != nil {
+			return fmt.Errorf("transaction %s: %w", record.ID.String(), err)
 		}
-		outcome := projectionApplied
-		var err error
-		if store, ok := projector.store.(FenceOutcomeProjectionStore); ok {
-			var skipped bool
-			if skipped, err = store.ProjectFenced(ctx, record); skipped {
-				outcome = projectionSkipped
-			}
-		} else {
-			err = projector.store.Project(ctx, record)
-			if hasLeaseFence(record) {
-				outcome = projectionOutcomeUnknown
-			}
-		}
-		if err != nil {
-			return projectionApplied, fmt.Errorf("transaction %s: %w", record.ID.String(), err)
-		}
-		return outcome, nil
+		return nil
 	}
 	if store, ok := projector.store.(BatchProjectionStore); ok {
-		return projectionApplied, store.ProjectBatch(ctx, segment.records)
+		return store.ProjectBatch(ctx, segment.records)
 	}
 	for i := range segment.records {
 		if err := projector.store.Project(ctx, segment.records[i]); err != nil {
-			return projectionApplied, fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
+			return fmt.Errorf("transaction %s: %w", segment.records[i].ID.String(), err)
 		}
 	}
-	return projectionApplied, nil
+	return nil
 }
 
 func (projector *Projector) run() {
@@ -311,7 +294,7 @@ func jitterDuration(duration time.Duration) time.Duration {
 // traceProjectedUnit 是投影的逐跳计时（只在性能夹具安装了 hoptrace 时调用）：WAL 准入 → 本单元开始投影的等待
 // （含等事务释放实体锁与投影器唤醒）、单条带回执 / effect 的投影事务耗时，并给已暂存的 effect 打上时刻，供 outbox
 // 发布时计算排队时间。
-func traceProjectedUnit(records []coredata.CommitRecord, outcome projectionOutcome, start time.Time) {
+func traceProjectedUnit(records []coredata.CommitRecord, start time.Time) {
 	elapsed := time.Since(start)
 	for i := range records {
 		hoptrace.SinceMarkAt("h09.de.project_wait", "tx-committed/", records[i].ID.String(), start)
@@ -320,9 +303,6 @@ func traceProjectedUnit(records []coredata.CommitRecord, outcome projectionOutco
 		hoptrace.Observe("h09.de.project_txn", elapsed)
 	} else {
 		hoptrace.Observe("h09.de.project_batch", elapsed)
-	}
-	if outcome == projectionSkipped {
-		return
 	}
 	for i := range records {
 		for j := range records[i].Effects {

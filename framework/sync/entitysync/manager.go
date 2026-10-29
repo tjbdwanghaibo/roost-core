@@ -367,8 +367,7 @@ func (m *Manager) installDirtyNotifier(id int64, state *entity.SubjectSyncState)
 }
 
 // Rebind 把已登记的 subject 接到同一实体重新加载出来的新内容状态上。前提是旧状态已关闭——
-// 实体被卸载或驱逐（例如原生 saga 步骤投影时被 lease fence 跳过，DataEngine 驱逐了含其效果的
-// 内存实体）。订阅关系保持；每个仍持有或等待该对象的订阅者下一帧收到全量
+// 实体被仅内存卸载（例如 Remote 事务被持久拒绝、运维 entity.unload）。订阅关系保持；每个仍持有或等待该对象的订阅者下一帧收到全量
 // （已持有的是整份替换的 ObjectUpdate），不在两份状态之间续发增量。待 remove 的订阅照旧发 remove。
 //
 // 未登记返回 ErrSubjectNotRegistered，退役中返回 ErrSubjectRetiring；已登记的状态仍在使用时返回

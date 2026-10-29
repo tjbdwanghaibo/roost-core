@@ -115,7 +115,7 @@ type TransactionReleaseNotifier interface {
 }
 
 // LocalExecutorBinder 是 committer 的可选能力。NewEngine 把引擎的 RunLocal 交给它，让持久化基础设施在业务池上执行
-// 需要实体本地锁的步骤（例如驱逐投影时被跳过的 lease-fenced 事务留下的实体），而不是在自己的 goroutine 上取锁。
+// 需要实体本地锁的步骤（例如 DataEngine 的运维卸载 entity.unload），而不是在自己的 goroutine 上取锁。
 // Remote Entity Manager 与 Getter（entity.ManagerAccess：发布领头请求已离开的共享冷加载）以同样方式绑定。
 type LocalExecutorBinder interface {
 	BindLocalExecutor(run func(func()) error)

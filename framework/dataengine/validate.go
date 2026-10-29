@@ -59,7 +59,7 @@ func ValidateMutation(m Mutation) error {
 	return validatePatchPaths(m.Patch)
 }
 
-// ValidateCommitRecord 检查事务 ID、每条变更、effect 与回执；lease fence 回执还要能解码。
+// ValidateCommitRecord 检查事务 ID、每条变更、effect 与回执。
 func ValidateCommitRecord(record CommitRecord) error {
 	if record.ID.IsZero() {
 		return errors.New("dataengine: zero transaction id")
@@ -77,9 +77,6 @@ func ValidateCommitRecord(record CommitRecord) error {
 	for i, receipt := range record.Receipts {
 		if receipt.Namespace == "" || receipt.ID == "" {
 			return fmt.Errorf("dataengine: invalid receipt %d", i)
-		}
-		if _, control, err := DecodeLeaseFenceReceipt(receipt); control && err != nil {
-			return fmt.Errorf("dataengine: invalid lease fence receipt %d: %w", i, err)
 		}
 	}
 	return nil

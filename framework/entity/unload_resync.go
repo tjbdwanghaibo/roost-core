@@ -14,9 +14,9 @@ import (
 
 // 卸载后重载。
 //
-// ManagerAccess.Unload 只卸载内存（驱逐被 lease fence 跳过的原生步骤留下的实体、Remote 事务被持久拒绝后的实例
-// 共用它）。卸载关闭实例的同步状态，Sync 订阅保持登记、不发 remove；可订阅者手里
-// 可能是从未成为权威的内容（Durability 1 推测性确认、原生步骤准入时已外发）。所以卸载时若该 subject 仍有订阅者，
+// ManagerAccess.Unload 只卸载内存（Remote 事务被持久拒绝后的实例、DataEngine 运维卸载共用它）。卸载关闭实例的
+// 同步状态，Sync 订阅保持登记、不发 remove；可订阅者手里可能是从未成为权威的内容（Durability 1 推测性确认），
+// 或已落后于权威。所以卸载时若该 subject 仍有订阅者，
 // 框架主动从权威重载实体并 Rebind 全量；重载失败退回 remove：
 //
 //	Unload（业务池持锁，或未装配 Nest 时就地）

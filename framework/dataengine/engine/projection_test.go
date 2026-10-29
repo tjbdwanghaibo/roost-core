@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"math"
 	"sync"
@@ -426,44 +425,45 @@ func TestEntityProjectionWaiterSeesFailedPipelinedDurability(t *testing.T) {
 	}
 }
 
-// 同一事务里的 Remote 写与 lease-fence receipt 在写 WAL 前被拒绝，三个准入入口都要拒；用 WAL 会接受的合法 Remote 写与合法 receipt
-// （先用 ValidateCommitRecord 证明），每个入口用独立事务，逐个报告。
-// 历史：RR-20260926-19。
-func TestRemoteLeaseFenceRejectedBeforeWALAdmission(t *testing.T) {
-	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, nil, 4<<20)
-	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
-		Database: "saga", Resource: "saga_steps", DocumentID: "step-1", Owner: "sid-1", Token: 7, Digest: make([]byte, sha256.Size),
+// checkpoint 报告 WAL terminal（nestwal.Ack 只在 WAL 已 terminal 或本次 fsync 失败时返回 ErrCommitIndeterminate）之后，
+// 本进程不会再确认任何记录：已在 WaitEntityProjection 里等待、还没投影到的其他记录的等待方立即拿到可判别的 WAL 错误
+// （errors.Is ErrCommitIndeterminate），不等到自己的截止时间或关闭；之后的等待与准入同样如此。
+// 原用例在被跳过的原生步骤上测（RR-20260926-50）；lease fence 删除后（saga 设计第 5 批）改在普通在途记录上测同一承诺。
+func TestCheckpointTerminalWakesWaitersOfOtherPendingRecords(t *testing.T) {
+	p, _ := manualProjector(t, &recordingSegmentStore{})
+	a, b := projectorRecord(1, false), projectorRecord(2, false)
+	for _, r := range []coredata.CommitRecord{a, b} {
+		if err := p.Commit(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+		p.TransactionReleased(r.ID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waiter := waitEntityInSelect(t, p, ctx, 2)
+	p.OverrideAck(func(context.Context, corenest.CommitFence) error {
+		return errors.Join(corenest.ErrCommitIndeterminate, errors.New("injected terminal WAL"))
 	})
-	if err != nil {
-		t.Fatal(err)
+	// ReplayBatchRecords=1：这一轮只投影 a，b 仍在途；a 的 checkpoint 报告 WAL terminal。
+	if _, err := p.ReplayPass(context.Background()); !errors.Is(err, corenest.ErrCommitIndeterminate) {
+		t.Fatalf("pass on a terminal WAL=%v, want ErrCommitIndeterminate", err)
 	}
-	admissions := []struct {
-		name  string
-		admit func(coredata.CommitRecord) error
-	}{
-		{"Commit", func(record coredata.CommitRecord) error { return p.Commit(context.Background(), record) }},
-		{"Enqueue", func(record coredata.CommitRecord) error {
-			_, err := p.Enqueue(context.Background(), record)
-			return err
-		}},
-		{"CommitSystem", func(record coredata.CommitRecord) error {
-			_, err := p.CommitSystem(context.Background(), record)
-			return err
-		}},
-	}
-	for i, admission := range admissions {
-		record := remoteProjectionRecord(t, byte(i+1))
-		record.Receipts = []coredata.Receipt{fence}
-		if err := coredata.ValidateCommitRecord(record); err != nil {
-			t.Fatalf("fixture is not a record the WAL would accept, so it proves nothing: %v", err)
+	select {
+	case err := <-waiter:
+		if !errors.Is(err, corenest.ErrCommitIndeterminate) {
+			t.Fatalf("waiter woken by WAL terminal err=%v, want errors.Is ErrCommitIndeterminate", err)
 		}
-		if err := admission.admit(record); !errors.Is(err, ErrRemoteLeaseFenceUnsupported) {
-			t.Errorf("%s admitted a remote write that carries a lease fence: %v", admission.name, err)
-		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a waiter that entered WaitEntityProjection before the checkpoint reported WAL terminal is still blocked; it gets no WAL error until its own deadline or Close")
 	}
-	assertWALReplayCount(t, w, 0)
-	if p.Stats().WALUnacked != 0 || len(p.tickets) != 0 {
-		t.Fatal("rejected admission leaked state")
+	if err := p.WaitEntityProjection(context.Background(), 2); !errors.Is(err, corenest.ErrCommitIndeterminate) {
+		t.Fatalf("wait after WAL terminal=%v, want ErrCommitIndeterminate", err)
+	}
+	if err := p.Commit(context.Background(), projectorRecord(3, false)); !errors.Is(err, corenest.ErrCommitIndeterminate) {
+		t.Fatalf("admission after WAL terminal=%v, want the terminal error before the WAL", err)
+	}
+	if len(p.pendingEntities) != 0 || len(p.pendingTransactions) != 0 {
+		t.Fatalf("pending after WAL terminal entities=%d transactions=%d", len(p.pendingEntities), len(p.pendingTransactions))
 	}
 }
 

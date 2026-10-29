@@ -66,13 +66,6 @@ func (gate *tradeProjectionGate) Project(ctx context.Context, record coredata.Co
 	return gate.store.Project(ctx, record)
 }
 
-// ProjectFenced 转发 MongoStore 的跳过结果，让 Projector 走正式的“被跳过才驱逐”路径（RR-20260926-30）。
-func (gate *tradeProjectionGate) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
-	if err := gate.wait(ctx, record); err != nil {
-		return false, err
-	}
-	return gate.store.ProjectFenced(ctx, record)
-}
 func (gate *tradeProjectionGate) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	if err := gate.wait(ctx, records[0]); err != nil {
 		return err
@@ -172,7 +165,7 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 	}
 	h.access = entity.NewManagerAccess(entity.NewEntityManager())
 	names := []string{"trade_seed", "trade_buy", "trade_transfer", "trade_reject", "trade_panic"}
-	allow := append(slices.Clone(names), "trade_fenced")
+	allow := slices.Clone(names)
 	allow = append(allow, b27HandlerNames...)
 	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: allow, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
 	if err != nil {
@@ -197,12 +190,6 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		e.wallet.SetCoins(e.wallet.GetCoins() - 5)
 		e.inventory.SetItems(e.inventory.GetItems() + 1)
 		return nil, nil
-	}, meta)
-	// 原生 saga 步骤的旧形状：本地 DAO 修改与 lease fence 在同一 CommitRecord（RR-20260926-30；fencedStep.bind）。
-	h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_fenced"), func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-		e := es[0].(*Trader)
-		e.wallet.SetCoins(e.wallet.GetCoins() - 100)
-		return nil, params[0].(fencedStep).bind()
 	}, meta)
 	for _, name := range names[2:] {
 		h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName(name), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -335,4 +322,44 @@ func waitTradeRecord(t *testing.T, ctx context.Context, pause *tradeProjectionPa
 		}
 	}
 	return record
+}
+
+func (h *tradeFixture) mongoState(t *testing.T, id int64) tradeState {
+	t.Helper()
+	var wallet struct {
+		Coins     int64  `bson:"coins"`
+		Transfers int64  `bson:"transfers"`
+		Version   uint64 `bson:"_version"`
+	}
+	var inventory struct {
+		Items int64 `bson:"items"`
+	}
+	if err := h.client.Database(h.database).Collection("trade_wallets").FindOne(h.ctx, bson.M{"_id": id}, &wallet); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Database(h.database).Collection("trade_inventories").FindOne(h.ctx, bson.M{"_id": id}, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	return tradeState{Coins: wallet.Coins, Items: inventory.Items, Transfers: wallet.Transfers, Version: wallet.Version}
+}
+
+func (h *tradeFixture) memoryState(t *testing.T, id int64) tradeState {
+	t.Helper()
+	e, ok := h.access.Manager().Get(id).(*Trader)
+	if !ok {
+		t.Fatalf("trader %d is not resident", id)
+	}
+	return tradeState{Coins: e.wallet.GetCoins(), Items: e.inventory.GetItems(), Transfers: e.wallet.GetTransfers(), Version: e.wallet.DirtyTracker().Version()}
+}
+
+func (h *tradeFixture) noFatal(t *testing.T, flushErr error, what string) {
+	t.Helper()
+	select {
+	case fatal := <-h.fatal:
+		t.Fatalf("%s: projector fenced: %v (flush=%v)", what, fatal, flushErr)
+	default:
+	}
+	if flushErr != nil {
+		t.Fatalf("%s: flush=%v", what, flushErr)
+	}
 }

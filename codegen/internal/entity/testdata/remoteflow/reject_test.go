@@ -11,7 +11,7 @@ package remoteflow
 // Durability 0 的提交“没到达 Mongo”（直接返回 context.DeadlineExceeded，不发任何写），与 RR-28 单测的 switchableStorage
 // 同一形状。之后 finalizer 回源真实 Mongo 得 Unknown，写真实 Rejected 记录（RejectUnresolvedRemoteCommits），这是正式链路上
 // 新写入唯一能到达的持久拒绝（RR-59 更正节）。async / strict / pipelined（Durability 1/2/3）在正式投影器上得不到持久拒绝：
-// 写权威冲突是 ErrProjectionConflict fatal，“Remote + lease fence”混合记录在准入处被拒。原先用投影存储替身经
+// 写权威冲突是 ErrProjectionConflict fatal。原先用投影存储替身经
 // Backend.RejectRemoteCommitsInTransaction / Manager.RejectRemoteTransaction 注入的 WAL 级拒绝用例已随这两个注入点删除
 // （维护者 2026-10-14 精简 WAL 级 Rejected 处理）；投影存储替身 holdingProjection 只保留“拖住一条记录”。
 //
@@ -165,11 +165,6 @@ type holdingProjection struct {
 }
 
 func (p *holdingProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
-	_, err := p.ProjectFenced(ctx, record)
-	return err
-}
-
-func (p *holdingProjection) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	var remote []entity.RemoteCommit
 	for _, mutation := range record.Mutations {
 		if mutation.Remote != nil {
@@ -181,10 +176,10 @@ func (p *holdingProjection) ProjectFenced(ctx context.Context, record coredata.C
 		select {
 		case <-release:
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return ctx.Err()
 		}
 	}
-	return p.MongoStore.ProjectFenced(ctx, record)
+	return p.MongoStore.Project(ctx, record)
 }
 
 // vaultFrames 记录 entitysync 推给会话 1 的帧。

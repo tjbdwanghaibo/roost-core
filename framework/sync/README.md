@@ -48,7 +48,7 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 `Register`；退役中时排到最后一个 remove 交付（或最后一个订阅者会话关闭）的同一步登记，done 恰好报告一次（nil，或 `ErrRegistrationCancelled` /
 `ErrManagerClosed`）。每个 subject 至多一个排队，后到的替换先到的，再次 `Unregister` 取消；退役期间的订阅仍被拒绝，remove-before-create 不变。
 done 在 Manager 的调用路径上执行、不持锁，不得阻塞或调用 Flush（RR-20260926-55）。
-实体被仅内存卸载（`entity.ManagerAccess.Unload`：DataEngine 驱逐被 lease fence 跳过的原生步骤、Remote 持久拒绝后的实例）时状态立即关闭，subject 保持登记。
+实体被仅内存卸载（`entity.ManagerAccess.Unload`：Remote 持久拒绝后的实例、DataEngine 运维卸载 `entity.unload`）时状态立即关闭，subject 保持登记。
 `Manager` 实现 `entity.UnloadedSubjectSync`：`SubjectAwaitsReload` 报告“状态已关闭且仍有非 leaving 订阅者”，`ManagerAccess.ConfigureUnloadResync`（`wiring/nest`
 `NewModWithEntitySync` 自动接线）据此在 Nest 业务池之外从权威重载实体并 `Rebind`，订阅者收到同一对象的权威全量；权威里没有它、有界重试用尽或重载队列已满时
 `RetractUnloadedSubject` 退回 remove（只在 subject 仍停在关闭状态时，语义同 `Unregister`）；退役完成前实体又被加载时，`Rebind` / `Register` 按上面

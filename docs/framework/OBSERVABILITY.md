@@ -268,7 +268,6 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.entity_unload.total{result}` | Counter | 运维命令 `entity.unload`（D16）每次执行的结论：`unloaded`、`not_resident`（没有常驻，什么也没做）、`busy`（持有实体的事务在 timeout 内没结束、另一次卸载进行中、Remote 所有权不稳定）、`timeout`（在途投影没在 timeout 内完成）、`failed`（其他错误，例如非持久实体、Runtime 不可用）。只有运维手动触发，基线是零星几次 |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | 卸载屏障在 WAL 准入处拒绝的写事务数（调用方拿到可重试的 `ErrEntityUnloading`）。卸载期间写到该实体的请求才会计入，正常只在 `entity.unload` 前后零星出现；持续增长说明卸载卡在投影上 |
 | `dataengine.startup_drain_retry_total` | Counter | 启动排空（WAL 未投影记录写进 Mongo）失败后在启动期限（`dataengine.startup_timeout`）内的退避重试次数，同时 WARN。被 kill -9 的进程留下的投影事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍参数），重启时偶发是正常的；期限到了仍失败则启动失败，按 WARN 里的错误查（设计 T-A，[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」） |
-| `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。saga 第 4 批之后没有生产路径再写 fence（原生步骤回执改进实体），机制在第 5 批删除，**基线应为零**；以下是机制仍在时的判读：**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
 ### 全部源码指标索引
 
@@ -303,10 +302,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
 | `dataengine.entity_unload.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
-| `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
-| `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.startup_drain_retry_total` | Counter | `dataengine/engine/runtime.go:IncCounter` |
-| `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
 | `dataengine.load.skipped.total` | Counter | `dataengine/load.go:IncCounter` |
 | `dataengine.outbox.oldest_age_ms` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
 | `dataengine.outbox.pending` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
@@ -590,7 +586,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 5. `nest.handler.lock_hold.slow.total` 新增 handler label —— 该 handler 是下一个 pipelined 灰度对象（见 NEST_PIPELINED_COMMIT.md §9）。
 6. `remote_entity.release_failure_total` / `quarantine_error_total` 非零 —— 所有权收尾异常。
 7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
-8. `dataengine_fence_skipped_total` 速率阶跃到与被 fence 事务量同阶 —— 立即告警（claim schema 漂移：事务正在静默变成 no-op，既无错误也无失败测试）。
+8. ~~`dataengine_fence_skipped_total`~~ —— saga 设计第 5 批（2026-10-29）起该指标已移除：DataEngine lease fence 机制删除，投影不再有“整笔跳过”的结果（原生步骤回执在实体里，见 [SAGA.md](SAGA.md)）。
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
 10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（日志 `self view:` / `entitysync`）。`player_sync_session_lost_disconnect_total{reason}` 持续增长 —— 同步会话因编码失败被丢、玩家被断开后重连又被断开（反复重连），按 Warn 里的 `player_id` / `reason` 查视野上限（`MaxVisible`）与实体大小。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。

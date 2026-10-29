@@ -248,7 +248,7 @@ func (m *Mod) Start() error {
 			return err
 		}
 		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval(), "on_change_batch_window", m.entitySync.OnChangeBatchWindow())
-		// DataEngine 驱逐实体（例如原生步骤被 lease fence 跳过）会关闭它的同步状态；
+		// 仅内存卸载实体（Remote 持久拒绝、运维 entity.unload）会关闭它的同步状态；
 		// 重新加载后把仍登记着的 subject 接到新对象上，原订阅者收到全量而不是续发增量。
 		if loads, ok := m.dataEngine.(entityLoadNotifier); ok && m.unhookLoaded == nil {
 			unhook, err := loads.OnEntityLoaded(m.rebindEntitySync)
@@ -258,7 +258,7 @@ func (m *Mod) Start() error {
 			}
 			m.unhookLoaded = unhook
 		}
-		// 实体被仅内存卸载（lease fence 跳过后的驱逐、Remote 持久拒绝）后仍有订阅者时，框架在业务池之外从权威重载并 Rebind，
+		// 实体被仅内存卸载（Remote 持久拒绝、运维 entity.unload）后仍有订阅者时，框架在业务池之外从权威重载并 Rebind，
 		// 重载不了退回 remove。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
 		// 的 NestMgr.RunLocal（BindLocalExecutor）回业务池。
 		if resync, ok := m.getter.(unloadResyncConfigurer); ok && m.stopResync == nil {

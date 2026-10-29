@@ -283,17 +283,12 @@ func (s *failingOnceStore) ProjectBatch(ctx context.Context, records []coredata.
 	return err
 }
 
-func (s *failingOnceStore) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
-	if err := s.intercept(ctx, []coredata.CommitRecord{record}); err != nil {
-		return false, err
-	}
-	skipped, err := s.MongoStore.ProjectFenced(ctx, record)
-	s.observe([]coredata.CommitRecord{record}, err)
-	return skipped, err
-}
-
 func (s *failingOnceStore) Project(ctx context.Context, record coredata.CommitRecord) error {
-	_, err := s.ProjectFenced(ctx, record)
+	if err := s.intercept(ctx, []coredata.CommitRecord{record}); err != nil {
+		return err
+	}
+	err := s.MongoStore.Project(ctx, record)
+	s.observe([]coredata.CommitRecord{record}, err)
 	return err
 }
 
