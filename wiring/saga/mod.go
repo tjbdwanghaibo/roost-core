@@ -78,7 +78,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	layout := settings.layout()
 	m.sid = settings.Sid
 	m.config = coresaga.AssemblyConfig{
-		Engine: coresaga.JetStreamOptions{
+		Engine: coresaga.Options{
 			Layout: layout, Owned: ownedPartitions(coordinators, settings.Sid, layout.Partitions),
 			Replicas: c.Replicas, StreamMaxBytes: c.StreamMaxBytes, DuplicateWindow: c.DuplicateWindow, MaxBatch: c.MaxBatch, Tick: c.Tick,
 			SnapshotEveryEvents: c.SnapshotEveryEvents, SnapshotInterval: c.SnapshotInterval,
@@ -212,7 +212,7 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 }
 
 // Engine 返回协调器（发起方 API：StartSaga、Get、GetByBusinessKey、List、Resume、Compensate、Complete、WaitTerminal）。
-func (m *Mod) Engine() *coresaga.JetStreamEngine {
+func (m *Mod) Engine() *coresaga.Engine {
 	if m == nil || m.asm == nil {
 		return nil
 	}

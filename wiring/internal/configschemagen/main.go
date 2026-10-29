@@ -52,20 +52,18 @@ import (
 // （“<服务>.client”，业务服务调用框架服务时注册）。同一单元里的几份声明先合并，冲突即失败。
 func groups() map[string][]app.ConfigSchema {
 	return map[string][]app.ConfigSchema{
-		"app":        {app.AppConfigSchema()},
-		"ops":        {kitops.NewOpsMod().ConfigSchema()},
-		"statslog":   {kitstatslog.NewStatsLogMod().ConfigSchema()},
-		"configdata": {kitconfigdata.NewConfigDataMod().ConfigSchema()},
-		"etcd":       {kitetcd.NewEtcdMod().ConfigSchema()},
-		"redis":      {kitredis.NewRedisMod().ConfigSchema()},
-		// redis_authority：权威 Redis（saga 协调器的权威存储），saga Mod 依赖它。
-		"redis_authority": {kitredis.NewAuthorityMod().ConfigSchema()},
-		"mongo":           {kitmongo.NewMongoMod().ConfigSchema()},
-		"nats":            {kitnats.NewNatsMod(nil).ConfigSchema()},
-		"syncbus":         {kitsyncbus.NewSyncBusMod(0).ConfigSchema()},
-		"remote_entity":   {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
-		"dataengine":      {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
-		"saga":            {kitsaga.NewMod().ConfigSchema()},
+		"app":           {app.AppConfigSchema()},
+		"ops":           {kitops.NewOpsMod().ConfigSchema()},
+		"statslog":      {kitstatslog.NewStatsLogMod().ConfigSchema()},
+		"configdata":    {kitconfigdata.NewConfigDataMod().ConfigSchema()},
+		"etcd":          {kitetcd.NewEtcdMod().ConfigSchema()},
+		"redis":         {kitredis.NewRedisMod().ConfigSchema()},
+		"mongo":         {kitmongo.NewMongoMod().ConfigSchema()},
+		"nats":          {kitnats.NewNatsMod(nil).ConfigSchema()},
+		"syncbus":       {kitsyncbus.NewSyncBusMod(0).ConfigSchema()},
+		"remote_entity": {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
+		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
+		"saga":          {kitsaga.NewMod().ConfigSchema()},
 		// heartbeat：roost add heartbeat / behavior 装在实体所在服务（catalog Mod，依赖 nest）；NewMod 的参数只在 Init 用。
 		"heartbeat": {kitheartbeat.NewMod(nil, nil).ConfigSchema()},
 		"web":       {kitweb.NewMod().ConfigSchema()},

@@ -2,12 +2,8 @@
 package saga
 
 import (
-	"crypto/rand"
-	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -204,13 +200,6 @@ func (d Definition) Validate() error {
 	return nil
 }
 
-// Lease 是协调器或发布者对一条记录的领取租约：持有者、令牌与到期时间。
-type Lease struct {
-	Owner string
-	Token uint64
-	Until time.Time
-}
-
 // Record 是一个 saga 实例的持久状态。
 type Record struct {
 	ID                string
@@ -218,7 +207,6 @@ type Record struct {
 	DefinitionVersion uint32
 	BusinessKey       string
 	// StartDigest 是规范化原始启动意图的 SHA-256，不随步骤 Data、Resume 或截止时间变更。
-	// 旧记录可为空；自定义 Store 必须在 Create/Get/Apply/Clone 链完整保留。
 	StartDigest    string
 	Status         Status
 	Phase          Phase
@@ -244,8 +232,7 @@ type Record struct {
 	DeadlineAt   time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
-	Lease        Lease
-	// StartAttempt 是开启这一轮的启动尝试标识（JetStream 协调器，设计 §7.3）：之后的版本原样带着。Redis 协调器不写它。
+	// StartAttempt 是开启这一轮的启动尝试标识（设计 §7.3）：之后的版本原样带着。
 	StartAttempt string
 }
 
@@ -259,8 +246,7 @@ func (r Record) Clone() Record {
 
 func (r Record) Validate() error {
 	waitingFields := r.OperationKey != "" && len(r.OperationKey) <= 192 && r.CommandID != "" && len(r.CommandID) <= 192 && r.Attempt > 0
-	leaseValid := (r.Lease.Owner == "" && r.Lease.Token == 0 && r.Lease.Until.IsZero()) || (strings.TrimSpace(r.Lease.Owner) != "" && len(r.Lease.Owner) <= 256 && r.Lease.Token > 0 && !r.Lease.Until.IsZero())
-	if !validSubjectToken(r.ID, 128) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !leaseValid || !r.lateStepValid() {
+	if !validSubjectToken(r.ID, 128) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() {
 		return ErrInvalidRecord
 	}
 	return nil
@@ -293,7 +279,7 @@ type Command struct {
 	Payload           []byte    `json:"payload,omitempty"`
 	DeadlineAt        time.Time `json:"deadline_at"`
 	CreatedAt         time.Time `json:"created_at"`
-	// Partition 是派发它的 JetStream 协调器分区：参与方把结果发回 <prefix>.<Partition>.in.res。Redis 协调器不写（零值不进线格式）。
+	// Partition 是派发它的协调器分区：参与方把结果发回 <prefix>.<Partition>.in.res。
 	Partition uint16 `json:"partition,omitempty"`
 }
 
@@ -349,37 +335,50 @@ func validSubjectToken(token string, maxLength int) bool {
 	return true
 }
 
-// OutboxRecord 是待发布的命令及其发布重试状态。
-type OutboxRecord struct {
-	Command       Command
-	Attempt       uint32
-	NextAttemptAt time.Time
-	Lease         Lease
-	CreatedAt     time.Time
+// StartRequest 是启动一个 saga 的意图。saga ID 由 (Type, BusinessKey) 派生（IDOf，选项 ID-A），不由业务指定；同一业务键
+// 在终态保留期内只能有一笔，重复启动按启动摘要（类型、业务键、定义版本、Data、截止）判定“已存在”或身份冲突。
+type StartRequest struct {
+	Type              string    `json:"type"`
+	BusinessKey       string    `json:"business_key"`
+	DefinitionVersion uint32    `json:"definition_version"`
+	Data              []byte    `json:"data,omitempty"`
+	DeadlineAt        time.Time `json:"deadline_at,omitempty"`
+	// Now 只作测试钩子：所有者以自己的时钟为准，不上线。
+	Now time.Time `json:"-"`
 }
 
-func (o OutboxRecord) Clone() OutboxRecord {
-	o.Command = o.Command.Clone()
-	return o
+// ResumeRequest 是 Resume 的参数：可设置新的截止时间，或显式清除截止时间。
+type ResumeRequest struct {
+	ID            string
+	Now           time.Time
+	DeadlineAt    time.Time
+	ClearDeadline bool
 }
 
-var idState struct {
-	prefix [8]byte
-	seq    atomic.Uint64
+// Query 是按类型、定义版本、状态与更新时间筛选记录的查询（List）。
+type Query struct {
+	Type              string
+	DefinitionVersion uint32
+	Statuses          []Status
+	UpdatedBefore     time.Time
+	Limit             int
 }
 
-func init() {
-	if _, err := rand.Read(idState.prefix[:]); err != nil {
-		binary.BigEndian.PutUint64(idState.prefix[:], uint64(time.Now().UnixNano()))
-	}
-}
+// OperationClosure 是一个已关闭 operation 的关闭方式（记在分区状态的操作 tombstone 里）。
+type OperationClosure uint8
 
-// NewID 生成进程内唯一、可排序的 32 位十六进制 ID（随机前缀 + 单调序号）。
-func NewID() string {
-	var raw [16]byte
-	var encoded [32]byte
-	copy(raw[:8], idState.prefix[:])
-	binary.BigEndian.PutUint64(raw[8:], idState.seq.Add(1))
-	hex.Encode(encoded[:], raw[:])
-	return string(encoded[:])
+const (
+	// OperationClosureUnknown：没有 tombstone，或 tombstone 没有记录关闭方式。
+	OperationClosureUnknown OperationClosure = iota
+	// OperationClosedWithResult：协调器接收了这个 operation 的某次成功 completion 后关闭它。
+	OperationClosedWithResult
+	// OperationAbandoned：协调器没有接收成功就关闭了它（超时或可重试失败用尽、拒绝、saga 截止、
+	// 人工 Compensate、定义缺失）；之后到达的成功说明那一步已生效却未被计入。
+	OperationAbandoned
+)
+
+// definitionKey 是已登记定义的键（类型 + 版本）。
+type definitionKey struct {
+	typeName string
+	version  uint32
 }

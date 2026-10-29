@@ -12,14 +12,14 @@ import (
 // AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：协调器选项（布局、本进程拥有的分区、写者身份、快照与准入参数）与
 // 启动中继（Nest effect 里的启动意图 → 分区 in.start）的持久消费者。由 wiring 的 Mod 填写。
 type AssemblyConfig struct {
-	Engine JetStreamOptions
+	Engine Options
 	Starts NestStartConsumerConfig
 }
 
 // Assembly 在构造时建立协调器并登记定义；Start 先恢复再服务（建流与桶、重放拥有的分区、开始处理输入），再订阅启动中继；
 // Stop 先排空中继，再按三步停机停协调器。Kit 只解析配置、发布能力和转发生命周期。
 type Assembly struct {
-	Engine *JetStreamEngine
+	Engine *Engine
 
 	js  fnats.IJetStream
 	cfg AssemblyConfig
@@ -36,7 +36,7 @@ func Assemble(log fnats.JetStreamLog, raw fnats.RawClient, js fnats.IJetStream, 
 	if log == nil || raw == nil || js == nil {
 		return nil, errors.New("saga: JetStream log, raw NATS client and JetStream client are required")
 	}
-	engine, err := NewJetStreamEngine(log, raw, cfg.Engine)
+	engine, err := NewEngine(log, raw, cfg.Engine)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (a *Assembly) Start(ctx context.Context) error {
 }
 
 // Stop 先排空启动中继（在 ctx 内等它关闭；超时强制停止并返回 ctx 错误，可以用新 ctx 再调用），再停协调器（三步停机，
-// 见 JetStreamEngine.Stop）。重复调用返回 nil。
+// 见 Engine.Stop）。重复调用返回 nil。
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil

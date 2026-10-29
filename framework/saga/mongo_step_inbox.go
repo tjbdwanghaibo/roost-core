@@ -11,7 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// mongo_step_inbox.go 是参与方新路径的 Mongo 步骤收件箱（设计 §5.2，选项 M-A，第 3 批并存、未接线）：按操作实例
+// mongo_step_inbox.go 是 Mongo 步骤收件箱（设计 §5.2，选项 M-A）：按操作实例
 // （Command.IdempotencyKey）一份回执文档，查回执、执行 handler、写回执在同一个 Mongo 事务里。
 //
 // 同一操作的两次尝试并发时，两笔事务写同一个回执文档：Mongo 的写冲突让后者整体重跑（驱动按 TransientTransactionError 重试
@@ -44,7 +44,7 @@ type mongoStepReceiptDoc struct {
 	At          time.Time `bson:"at"`
 }
 
-// NewMongoStepInbox 构造收件箱。collection 必填（第 3 批与旧收件箱并存，不给缺省名，免得两种文档形状落进同一个集合）；
+// NewMongoStepInbox 构造收件箱。collection 必填（wiring/saga 的 Steps 用 `_<group>_step_inbox`）；
 // retention ≤ 0 取 DefaultStepReceiptRetention，回执文档按 at + retention 由 TTL 索引删除。
 func NewMongoStepInbox(client fmongo.IMongo, database, collection string, retention time.Duration) (*MongoStepInbox, error) {
 	database, collection = strings.TrimSpace(database), strings.TrimSpace(collection)

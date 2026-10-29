@@ -203,7 +203,7 @@ func (s *Steps) Start(ctx context.Context) error {
 		if step.native != nil {
 			stepSubs, err = coresaga.SubscribeNativeStep(ctx, jetstream, participant.Layout, config, step.countedNative())
 		} else {
-			stepSubs, err = coresaga.SubscribeJetStreamMongoStep(ctx, jetstream, participant.Layout, mongoInbox, config, step.countedMongo())
+			stepSubs, err = coresaga.SubscribeMongoStep(ctx, jetstream, participant.Layout, mongoInbox, config, step.countedMongo())
 		}
 		if err != nil {
 			for _, started := range subs {

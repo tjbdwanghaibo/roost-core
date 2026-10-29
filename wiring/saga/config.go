@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// saga.* 的声明（维护者决定）。缺省值与 coresaga.DefaultJetStreamOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
+// saga.* 的声明（维护者决定）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
 // 写 0 或负数拒绝；要缺省就不写这个键。协调器的权威是 JetStream 分区事件日志（设计
 // docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §9）。
 

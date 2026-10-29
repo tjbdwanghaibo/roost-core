@@ -6,8 +6,6 @@
 #   - NATS JetStream 3 节点、Mongo 3 节点副本集、Redis 单机、toxiproxy（与隔离环境脚本同一套 lib 函数，但根目录是私有的）；
 #   - Redis 单机的 1 个副本（单机切主：副本提升后把 toxiproxy 的 redis 代理改指新主，客户端地址不变）；
 #   - Redis 3 主 3 从 Cluster（node-timeout 1s）；
-#   - 权威 Redis 单主（appendonly yes、appendfsync always、noeviction）：saga 协调器的权威存储，环境文件导出
-#     ROOST_SAGA_IT_REDIS_ADDR。
 # 不碰共享隔离环境：根目录是 $ROOST_MIRROR_LOCAL_HOME/roost-dataengine-it（缺省在 $TMPDIR 下），端口偏移
 # 缺省 20000；拒绝 ~/.roost-it 与偏移 0 / 1000（共享环境与历史默认环境）。不读共享环境的 env.sh。
 # 私有根目录只有本脚本与它调起的用例在用，不取 A5 的 remote-acceptance.lock（那把锁保护的是共享隔离环境）。
@@ -81,14 +79,6 @@ replica_up() {
 	start_redis_node "$(replica_dir)" "$(replica_port)" --appendonly no --replicaof 127.0.0.1 "$(redis_port)"
 }
 
-# ---- 权威 Redis：单主，满足权威存储的部署契约（启动探针检查） ----
-authority_port() { roost_it_port 16391; }
-authority_dir() { printf '%s/redis-authority\n' "$ROOST_IT_ROOT"; }
-authority_up() {
-	start_redis_node "$(authority_dir)" "$(authority_port)" --appendonly yes --appendfsync always --no-appendfsync-on-rewrite no \
-		--maxmemory 1gb --maxmemory-policy noeviction
-}
-
 # ---- Redis Cluster：3 主 3 从 ----
 cluster_port() { roost_it_port "$((17399 + $1))"; }
 cluster_dir() { printf '%s/redis-cluster-%d\n' "$ROOST_IT_ROOT" "$1"; }
@@ -140,7 +130,6 @@ all_pid_files() {
 	for i in 1 2 3; do nats_node_pid_file "$i"; mongo_node_pid_file "$i"; done
 	redis_pid_file
 	replica_pid_file
-	printf '%s/redis.pid\n' "$(authority_dir)"
 	for i in 1 2 3 4 5 6; do printf '%s/redis.pid\n' "$(cluster_dir "$i")"; done
 }
 
@@ -167,7 +156,6 @@ environment_up() {
 	nats_up
 	redis_up
 	replica_up
-	authority_up
 	toxiproxy_up
 	cluster_up
 	write_environment_file
@@ -177,7 +165,6 @@ environment_up() {
 		printf 'export ROOST_MIRROR_LOCAL_OFFSET=%q\n' "$offset"
 		printf 'export ROOST_MIRROR_LOCAL_REDIS_CLUSTER=%q\n' "$(cluster_addrs)"
 		printf 'export ROOST_MIRROR_LOCAL_REDIS_REPLICA=%q\n' "127.0.0.1:$(replica_port)"
-		printf 'export ROOST_SAGA_IT_REDIS_ADDR=%q\n' "127.0.0.1:$(authority_port)"
 		printf 'export ROOST_MIRROR_LOCAL_NATS_MONITOR=%q\n' "http://127.0.0.1:$(nats_monitor_port 1)"
 	} >>"$ROOST_IT_ROOT/env.sh"
 }
@@ -193,7 +180,6 @@ environment_down() {
 	local i
 	for i in 6 5 4 3 2 1; do stop_owned_pid "$(cluster_dir "$i")/redis.pid" "redis-cluster-$i" || true; done
 	stop_owned_pid "$(replica_pid_file)" "redis-replica" || true
-	stop_owned_pid "$(authority_dir)/redis.pid" "redis-authority" || true
 	redis_down || true
 	nats_down || true
 	mongo_down || true

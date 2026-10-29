@@ -4,29 +4,23 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
+// nest.go 是 saga 在 Nest 一侧的入口：启动意图作为 Nest 事务性 effect，与业务的实体修改同一条 WAL 记录；协调器进程的启动中继
+// （SubscribeNestStarts）把它转发到分区。原生步骤的结果不经 effect（参与方在 WAL 落盘后直接发回分区，step_consumer.go）。
+
+// StartEffectTopic 是启动意图 effect 的主题（DataEngine 发布到 <dataengine.effects 前缀>.saga.start）。
 const StartEffectTopic = "saga.start"
-const CompletionEffectTopicPrefix = "saga.result."
-const StepReceiptNamespace = "saga-step"
-const WireVersion uint16 = 1
 
 type startEffectPayload struct {
 	Version uint16       `json:"version"`
 	Start   StartRequest `json:"start"`
-}
-
-type completionEffectPayload struct {
-	Version    uint16     `json:"version"`
-	Completion Completion `json:"completion"`
 }
 
 // maxStartWireDataBytes 是启动意图 Data 在线上的硬上限（与 Options.MaxPayloadBytes 的上界相同）。
@@ -88,8 +82,7 @@ func startDataLimit(sagaType string) int {
 func NewStartEffect(request StartRequest) (nest.Effect, error) {
 	request.Type = strings.TrimSpace(request.Type)
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
-	request.ID = strings.TrimSpace(request.ID)
-	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > startDataLimit(request.Type) || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
+	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > startDataLimit(request.Type) {
 		return nest.Effect{}, ErrInvalidRecord
 	}
 	// Now 是进程内的测试 / 恢复钩子，不属于持久的业务意图；初始调度时间由投递时间决定。
@@ -99,8 +92,8 @@ func NewStartEffect(request StartRequest) (nest.Effect, error) {
 	if err != nil {
 		return nest.Effect{}, err
 	}
-	// 带上完整的规范化意图：精确的 WAL 重放保持同一 ID，而用同一业务键配不同载荷的编程错误不会被 JetStream 的
-	// MsgID 去重掩盖。
+	// effect ID 由完整的规范化意图派生：精确的 WAL 重放保持同一 ID，而用同一业务键配不同载荷的编程错误不会被 JetStream 的
+	// MsgID 去重掩盖（分区所有者按启动摘要判定为身份冲突）。
 	digest := sha256.Sum256(payload)
 	return nest.Effect{ID: "saga-start:" + hex.EncodeToString(digest[:16]), Topic: StartEffectTopic, Key: request.BusinessKey, Payload: payload, Headers: map[string]string{"saga-type": request.Type}}, nil
 }
@@ -112,68 +105,6 @@ func EmitStart(request StartRequest) error {
 		return err
 	}
 	return nest.Emit(effect)
-}
-
-// BindCommand 把命令身份纳入当前 Nest 事务。调用方给出已校验的保留截止时间；TTL 的选择归 saga 策略，不归本函数。
-func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.LeaseFence) error {
-	tx := nest.CurrentRollbackTx()
-	if tx == nil {
-		return nest.ErrTransactionClosed
-	}
-	if expiresAt.IsZero() || command.Validate() != nil {
-		return ErrInvalidRecord
-	}
-	// 与收件箱同一份身份（commandDigest：时间按时刻、统一 UTC），重投读回执时才认得出这是同一条命令。
-	digest, err := commandDigest(command)
-	if err != nil {
-		return err
-	}
-	for _, fence := range fences {
-		receipt, err := dataengine.NewLeaseFenceReceipt(fence)
-		if err != nil {
-			return err
-		}
-		if err := tx.AddReceipt(receipt); err != nil {
-			return err
-		}
-	}
-	return tx.AddReceipt(dataengine.Receipt{
-		Namespace: StepReceiptNamespace, ID: command.ID, Digest: digest, ExpiresAt: expiresAt.UnixNano(),
-	})
-}
-
-// NewCompletionEffect 把 completion 编成发往所属 saga 结果主题的 Nest effect，effect ID 由 CommandID 派生。
-func NewCompletionEffect(completion Completion) (nest.Effect, error) {
-	if completion.CompletedAt.IsZero() {
-		completion.CompletedAt = time.Now().UTC()
-	}
-	if err := completion.Validate(); err != nil {
-		return nest.Effect{}, err
-	}
-	payload, err := json.Marshal(completionEffectPayload{Version: WireVersion, Completion: completion})
-	if err != nil {
-		return nest.Effect{}, err
-	}
-	return nest.Effect{
-		ID: "saga-completion:" + completion.CommandID, Topic: CompletionEffectTopicPrefix + completion.SagaID,
-		Key: completion.IdempotencyKey, Payload: payload, Headers: map[string]string{"saga-id": completion.SagaID},
-	}, nil
-}
-
-// EmitCompletion 把可回放的 completion 附到已绑定的回执上，并把它的消息投递意图追加到同一条 Nest CommitRecord。
-func EmitCompletion(completion Completion) error {
-	tx := nest.CurrentRollbackTx()
-	if tx == nil {
-		return nest.ErrTransactionClosed
-	}
-	effect, err := NewCompletionEffect(completion)
-	if err != nil {
-		return err
-	}
-	if err := tx.SetReceiptPayload(StepReceiptNamespace, completion.CommandID, effect.Payload); err != nil {
-		return fmt.Errorf("saga: bind completion receipt: %w", err)
-	}
-	return tx.Emit(effect)
 }
 
 // DecodeStartEffect 解码并校验启动 effect 的载荷；版本或内容不合法返回 ErrInvalidRecord。
@@ -191,23 +122,10 @@ func DecodeStartEffect(payload []byte) (StartRequest, error) {
 	request := envelope.Start
 	request.Type = strings.TrimSpace(request.Type)
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
-	request.ID = strings.TrimSpace(request.ID)
 	request.Now = time.Time{}
 	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
-	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > maxStartWireDataBytes || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
+	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > maxStartWireDataBytes {
 		return StartRequest{}, ErrInvalidRecord
 	}
 	return request, nil
-}
-
-// DecodeCompletionEffect 解码并校验 completion effect 的载荷；版本或内容不合法返回 ErrInvalidRecord。
-func DecodeCompletionEffect(payload []byte) (Completion, error) {
-	var envelope completionEffectPayload
-	if len(payload) == 0 || json.Unmarshal(payload, &envelope) != nil || envelope.Version != WireVersion {
-		return Completion{}, ErrInvalidRecord
-	}
-	if err := envelope.Completion.Validate(); err != nil {
-		return Completion{}, err
-	}
-	return envelope.Completion, nil
 }

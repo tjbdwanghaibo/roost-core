@@ -31,7 +31,7 @@ import (
 
 // partition 是一个分区的协调状态。字段除注明者外只在循环 goroutine 里读写（重放在循环启动前完成）。
 type partition struct {
-	e      *JetStreamEngine
+	e      *Engine
 	k      int
 	stream string
 	writer string
@@ -305,7 +305,7 @@ func (r *round) start(msg fnats.LogMsg) {
 	r.verdict(reply, in.Attempt, verdictAccepted, func(v *pendingVerdict) { v.id = id })
 }
 
-// result 处理一份结果：判定只由 judgeCompletion / judgeHistory 决定（与 Redis 引擎的 Complete 同一套规则），回执与 tombstone
+// result 处理一份结果：判定只由 judgeCompletion / judgeHistory 决定，回执与 tombstone
 // 在分区内存里。结果的时间以协调器为准（CompletedAt = 本轮时刻）。
 func (r *round) result(msg fnats.LogMsg) {
 	e := r.p.e
@@ -379,22 +379,22 @@ func receiptSeen(st *sagaState, c Completion) (duplicate, conflict bool) {
 	return prior == receiptDigest(c), prior != receiptDigest(c)
 }
 
-// stateHistory 是分区内存版的 CompletionHistory（与 MongoStore / RedisStore 同一口径）：这个 CommandID 有回执 → 已记录且是回执
+// stateHistory 是分区内存版的 completionHistory：这个 CommandID 有回执 → 已记录且是回执
 // （摘要不同是身份冲突）；否则操作有 tombstone → 已记录，带关闭方式；都没有 → 没有记录。
-func stateHistory(st *sagaState, c Completion) (CompletionHistory, error) {
+func stateHistory(st *sagaState, c Completion) (completionHistory, error) {
 	if prior, ok := st.Receipts[c.CommandID]; ok {
 		if prior != receiptDigest(c) {
-			return CompletionHistory{}, ErrIdentityConflict
+			return completionHistory{}, ErrIdentityConflict
 		}
-		return CompletionHistory{Recorded: true, Receipt: true}, nil
+		return completionHistory{Recorded: true, Receipt: true}, nil
 	}
 	if tomb, ok := st.Ops[c.IdempotencyKey]; ok {
-		return CompletionHistory{Recorded: true, Closure: tomb.Closure}, nil
+		return completionHistory{Recorded: true, Closure: tomb.Closure}, nil
 	}
-	return CompletionHistory{}, nil
+	return completionHistory{}, nil
 }
 
-// history 处理 judgeCompletion 判为 verdictHistory 的结果（Redis 引擎的 completeNotWaiting）。
+// history 处理 judgeCompletion 判为 verdictHistory 的结果（不在等这个结论：重复、迟到成功、旧尝试 / 旧一生）。
 func (r *round) history(st *sagaState, c Completion, incarnation uint32) {
 	record := st.Record
 	history, err := stateHistory(st, c)
@@ -447,7 +447,7 @@ func containsIncarnation(list []uint32, incarnation uint32) bool {
 	return false
 }
 
-// operation 处理一条运维意图（Resume / Compensate），规则与 Redis 引擎相同（planResume / planCompensate），另加回执保留期守卫
+// operation 处理一条运维意图（Resume / Compensate），规则见 planResume / planCompensate，另加回执保留期守卫
 // （选项 RR-A）：Resume 与补偿方向的 Compensate 会重新执行操作，记录上次更新早于“现在 − 回执保留期 + 最长步骤窗口”时拒绝。
 func (r *round) operation(msg fnats.LogMsg) {
 	reply := msg.Headers[replyHeader]
@@ -790,7 +790,7 @@ func (p *partition) fail(err error) {
 
 // sendVerdict 把判定发给这次尝试的回复 subject（核心 NATS，至多一次；丢了由发起方的 Get 补查兜底）。
 func (p *partition) sendVerdict(v pendingVerdict) {
-	reply := verdictReply{V: LogWireVersion, Attempt: v.attempt, Outcome: v.outcome, Reason: v.reason, Error: v.errText, Record: v.record}
+	reply := verdictReply{V: WireVersion, Attempt: v.attempt, Outcome: v.outcome, Reason: v.reason, Error: v.errText, Record: v.record}
 	if v.id != "" && reply.Record == nil {
 		if st := p.sagas[v.id]; st != nil {
 			record := st.Record.Clone()
@@ -816,7 +816,7 @@ func (p *partition) answerQueued() {
 
 // answer 从已提交状态回答一次查询（Get / List）。
 func (p *partition) answer(q pendingQuery) {
-	reply := queryReply{V: LogWireVersion, Part: p.k}
+	reply := queryReply{V: WireVersion, Part: p.k}
 	switch q.request.Kind {
 	case "get":
 		if st := p.sagas[q.request.ID]; st != nil {

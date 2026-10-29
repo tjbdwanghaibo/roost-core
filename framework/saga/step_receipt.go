@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// step_receipt.go 是参与方新路径的原生步骤（设计 §5.1，决定 2A，第 3 批并存、未接线）：一个操作实例
+// step_receipt.go 是原生步骤的回执（设计 §5.1，决定 2A）：一个操作实例
 // （Command.IdempotencyKey）的结论作为回执放在被改的实体里，读写都在实体的 Nest 锁内、随业务修改同一笔事务提交 / 回滚。
 //
 // 一次运行的顺序（RunNativeStep → 步骤体 → 生成的 Nest 包装 → 业务 handler）：
@@ -125,7 +125,7 @@ func newNativeRun(command Command, retention time.Duration) *nativeRun {
 	return &nativeRun{command: command, retention: retention, now: time.Now, incarnation: commandIDIncarnation(command.IdempotencyKey, command.ID)}
 }
 
-// begin 是 NativeStep.Begin 的新路径，在事务里、实体锁内调用。
+// begin 是 NativeStep.Begin 的判定，在事务里、实体锁内调用。
 func (run *nativeRun) begin(tx *nest.RollbackTx, receipts StepReceipts) (bool, error) {
 	command := run.command
 	if raw, found := receipts.StepReceipt(command.IdempotencyKey); found {
@@ -159,7 +159,7 @@ func (run *nativeRun) begin(tx *nest.RollbackTx, receipts StepReceipts) (bool, e
 	return false, nil
 }
 
-// complete 是 NativeStep.Complete 的新路径：在 Begin 判定执行的同一事务里写回执、剪旧回执，结论在提交后交给这次运行。
+// complete 是 NativeStep.Complete：在 Begin 判定执行的同一事务里写回执、剪旧回执，结论在提交后交给这次运行。
 func (run *nativeRun) complete(success bool, reason string) error {
 	tx := nest.CurrentRollbackTx()
 	run.mu.Lock()
@@ -221,7 +221,7 @@ func (run *nativeRun) result() StepOutcome {
 	return run.outcome
 }
 
-// RunNativeStep 运行一次原生步骤（新路径）：构造这次运行，调用步骤体，返回 Nest 事务提交后的结论。
+// RunNativeStep 运行一次原生步骤：构造这次运行，调用步骤体，返回 Nest 事务提交后的结论。
 //
 //   - 步骤体返回错误 = 结果未知（Nest 提交可能已经发生）：调用方 nak / 稍后重试，重投时 Begin 读到回执就回放。
 //   - 步骤体返回 nil 但没有结论（没调 Nest handler，或 handler 没调 Complete 就成功返回）→ ErrNativeStepNoOutcome。

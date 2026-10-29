@@ -147,7 +147,7 @@ func (l Layout) StartSubject(k int) string  { return l.partitionPrefix(k) + ".in
 func (l Layout) ResultSubject(k int) string { return l.partitionPrefix(k) + ".in.res" }
 func (l Layout) OpSubject(k int) string     { return l.partitionPrefix(k) + ".in.op" }
 
-// CommandFilter 是全部分区派发主题 topic 的命令事件（参与方的 durable 用；第 3 批）。
+// CommandFilter 是全部分区派发主题 topic 的命令事件（参与方的 durable 用）。
 func (l Layout) CommandFilter(topic string) string {
 	return l.Prefix + ".*.ev." + eventDestCommand + "." + topic
 }

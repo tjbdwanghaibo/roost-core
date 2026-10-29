@@ -9,24 +9,18 @@ var (
 	ErrDefinitionMissing = errors.New("saga: definition not registered")
 	ErrAlreadyExists     = errors.New("saga: business operation already exists")
 	ErrNotFound          = errors.New("saga: not found")
-	ErrConflict          = errors.New("saga: optimistic concurrency conflict")
 	ErrIdentityConflict  = errors.New("saga: idempotency identity conflict")
 	ErrNotWaiting        = errors.New("saga: step is not waiting for a result")
 	ErrDeadlineExpired   = errors.New("saga: resume requires a future or explicitly cleared deadline")
 	ErrClosed            = errors.New("saga: engine is closed")
 	// ErrSagaCompleted：Completed 的 saga 不能再人工 Compensate（维护者 2026-10-07 选 A）。
 	ErrSagaCompleted = errors.New("saga: completed saga cannot be compensated")
-	// ErrDurabilityUnconfirmed：写已在权威 Redis 上执行，但同连接的 WAITAOF 没有确认它落盘（部署违反 appendonly yes /
-	// appendfsync always）。结果按“已执行、持久未确认”处理：不回滚、不报成功，进程经 RuntimeFailure fail-stop。
-	ErrDurabilityUnconfirmed = errors.New("saga: write executed but durability unconfirmed")
-	// ErrBackpressure：投影积压超过上限（或权威 Redis 内存满），新 saga 暂不接受；可重试，已存在的 saga 照常推进。
+	// ErrBackpressure：参与方投影积压让准入关闭，这次启动现在没有建立；用同一请求重试（维护者 2026-10-28 定 R-A 的持久性
+	// 选项 A：拒绝只回复这次尝试、不写日志，所有者在下一次写事件之前崩溃时，重放会按当时的准入重新判定这条意图，可能接受它——
+	// 所以它的含义是“现在没建立”，不是“永远不会建立”；同一请求重试得到“已存在”）。已存在的 saga 照常推进。
 	ErrBackpressure = errors.New("saga: backpressure, retry later")
-	// ErrRedisAuthorityMismatch：启动守卫发现权威 Redis 与 Mongo 冷副本不是同一套（Redis 被清空、换了库、格式或分区不符），
-	// 拒绝启动；按灾备手册处理，不自动把空 Redis 当权威。
-	ErrRedisAuthorityMismatch = errors.New("saga: authority redis does not match the mongo copy")
 
-	// 以下是 JetStream 协调器（NewJetStreamEngine，第 2 批并存、未接线）的错误，设计见
-	// docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §2.1。
+	// 以下是协调器（分区事件日志）的错误，设计见 docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §2.1。
 
 	// ErrStartUnconfirmed：启动（或 Resume / Compensate）意图已经持久进入分区输入，但在调用方 ctx 内没等到所有者的判定。
 	// 结果未知，不是失败：意图仍在流里，所有者会处理它；用同一请求重试是安全的（同一意图按启动摘要判“已存在”）。
@@ -52,7 +46,7 @@ var (
 	// 经 RuntimeFailure fail-stop 并告警。
 	ErrPartitionRejected = errors.New("saga: partition publish rejected by the server")
 
-	// 以下是参与方新路径（回执在实体里，第 3 批并存、未接线）的错误，设计见同一文档 §5。
+	// 以下是参与方（回执在实体里）的错误，设计见同一文档 §5。
 
 	// ErrNoStepReceipts：原生步骤 handler 的第一个锁目标没有实现 StepReceiptHost（实体 DAO 没有回执字段与适配，
 	// roost add saga -native 生成它们）。错误文本点名目标类型。

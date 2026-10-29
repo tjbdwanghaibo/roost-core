@@ -139,7 +139,7 @@ func startRefusalReason(err error) string {
 func reportStartRefused(request StartRequest, reason string, err error) {
 	metrics.IncCounter("saga.start.rejected_total", metrics.Labels{"saga_type": request.Type, "reason": reason}, 1)
 	slog.Error("saga: start intent permanently refused; the saga was not created",
-		"saga_type", request.Type, "saga_id", request.ID, "business_key", request.BusinessKey, "definition_version", request.DefinitionVersion,
+		"saga_type", request.Type, "saga_id", IDOf(request.Type, request.BusinessKey), "business_key", request.BusinessKey, "definition_version", request.DefinitionVersion,
 		"data_bytes", len(request.Data), "reason", reason, "err", err)
 }
 

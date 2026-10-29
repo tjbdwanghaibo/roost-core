@@ -28,7 +28,7 @@ import (
 // 时告警点名，不跳过它。
 
 // replayPartition 重建分区 k 的内存状态。返回的分区还没开始消费输入（由 startPartition 接上 Follow 再起循环）。
-func (e *JetStreamEngine) replayPartition(ctx context.Context, k int) (*partition, error) {
+func (e *Engine) replayPartition(ctx context.Context, k int) (*partition, error) {
 	p := &partition{
 		e: e, k: k, stream: e.layout.StreamOf(k), writer: e.writer,
 		inputs: make(chan fnats.LogMsg, 4096), queries: make(chan pendingQuery, 1024),
@@ -151,7 +151,7 @@ func (p *partition) replayOnce(ctx context.Context) (bool, error) {
 }
 
 // lastSeq 是流里匹配 filter 的最后一条消息的序号（leader 读），没有为 0。
-func (e *JetStreamEngine) lastSeq(ctx context.Context, stream, filter string) (uint64, error) {
+func (e *Engine) lastSeq(ctx context.Context, stream, filter string) (uint64, error) {
 	msg, err := e.log.LastMsg(ctx, stream, filter)
 	switch {
 	case err == nil:

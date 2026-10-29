@@ -1,205 +1,300 @@
 package saga
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"github.com/tjbdwanghaibo/roost-core/internal/hoptrace"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
-// Options 配置协调器：租约身份、协调 / 发布 worker 数与批量、租约与存储超时、轮询间隔、发布退避、载荷上限与步骤预算。
-// 零值字段取 DefaultOptions 的值；跨参数的租约约束在 NewEngine 校验。
+// engine.go 是协调器的外观（设计 docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md）：协调器的权威是
+// JetStream 分区事件日志，状态在分区所有者的内存里，快照是 KV 清单 + 对象存储正文。参与方（原生 / Mongo 步骤）把结果直接发回
+// 命令所属分区（step_consumer.go）。
+//
+// 角色：Options.Owned 列出本进程拥有的分区（由 saga.coordinators 静态分配，选项 P-A；进程级唯一由 App 单实例锁保证，崩溃重启的
+// 短暂重叠由期望序号隔离、旧进程 fail-stop）。拥有分区的进程跑分区循环、回答查询、做准入；不拥有任何分区的进程只有发起方一侧
+// （StartSaga、查询、WaitTerminal）。
+
+// Options 配置协调器。零值字段取缺省（见 withDefaults）；跨字段规则在 NewEngine 校验。
 type Options struct {
-	Owner              string
-	CoordinatorWorkers int
-	PublisherWorkers   int
-	CoordinatorBatch   int
-	PublisherBatch     int
-	LeaseDuration      time.Duration
-	StoreTimeout       time.Duration
-	PollInterval       time.Duration
-	PublishTimeout     time.Duration
-	PublishBackoffMin  time.Duration
-	PublishBackoffMax  time.Duration
-	MaxPayloadBytes    int
-	// StepBudgets 在 Register 时补齐步骤的超时与重试预算（配置默认值 + 按步骤覆盖，见 StepBudgets）。
+	Layout Layout
+	// Owned 是本进程拥有的分区（0 ≤ k < Partitions，不重复）；空表示只做发起方。
+	Owned []int
+	// Writer 是本进程作为写者的身份（<sid>-<SingletonIncarnation 或随机串>），进事件的 MsgID 与 Writer 字段；空时随机生成。
+	Writer string
+	// Replicas 是流与桶的副本数（生产 3，由配置层强制）。缺省 1。
+	Replicas int
+	// StreamMaxBytes 是每条流的容量上限（满了拒新写，协调器 fail-stop 告警）。缺省 8 GiB。
+	StreamMaxBytes int64
+	// DuplicateWindow 是流的 MsgID 去重窗口，必须 ≥ 2 × PublishUnknownBudget。缺省 2m。
+	DuplicateWindow time.Duration
+	// MaxBatch 是一轮最多取的输入条数（1～1000）。缺省 256。
+	MaxBatch int
+	// Tick / WheelSlots 是分区时间轮的槽宽（1ms～100ms）与槽数。缺省 5ms / 1024。
+	Tick       time.Duration
+	WheelSlots int
+	// SnapshotEveryEvents / SnapshotInterval：每这么多条事件，或到时间且有新事件，做一次快照 + 清理。缺省 2000 / 30s。
+	SnapshotEveryEvents int
+	SnapshotInterval    time.Duration
+	// TerminalRetention：终态（Completed / Compensated / Failed）在内存与快照里留多久（业务键唯一性窗口，选项 W-A）。缺省 1h。
+	TerminalRetention time.Duration
+	// ReceiptRetention：参与方回执保留期（RR-A 守卫用），必须 ≥ TerminalRetention。缺省 168h。
+	ReceiptRetention time.Duration
+	// PublishTimeout：一次发布等 PubAck 的时长，必须 < PublishUnknownBudget 且 < 10s（服务端原子批超时）。缺省 3s。
+	PublishTimeout time.Duration
+	// PublishUnknownBudget：分区事件发布结果未知时重发判定的总时长，超过 fail-stop。缺省 30s（配置层另要求 ≥ 3 × 7s 选主停顿）。
+	PublishUnknownBudget time.Duration
+	// QueryTimeout / StartVerdictTimeout：查询所有者的超时；等判定多久后改为按 Get 补查。缺省 2s / 2s。
+	QueryTimeout        time.Duration
+	StartVerdictTimeout time.Duration
+	// PurgeStallAlarm：某个 durable 卡住清理多久告警。缺省 10m。
+	PurgeStallAlarm time.Duration
+	// MaxPayloadBytes 是启动 Data 与结果 Data 的上限。缺省 64 KiB，最大 4 MiB。
+	MaxPayloadBytes int
+	// StepBudgets 在 Register 时补齐步骤预算（定义里没写的字段取配置，按步骤的覆盖优先）。
 	StepBudgets StepBudgets
+	// Admission 是按参与方投影积压的新启动准入（设计 §6）。
+	Admission AdmissionOptions
+	// Failure 收分区 fail-stop（被隔离、发布结果未知超预算、流满等），一般是 App 的 RuntimeFailure；nil 时只停这个分区。
+	Failure *app.RuntimeFailure
+	// Clock 是协调器时钟（测试注入）；nil 用 time.Now。准入的过期判定也用它（time.Now 带单调读数）。
+	Clock func() time.Time
 }
 
-// DefaultOptions 返回默认配置（Owner 每次生成新的随机身份）。
+// DefaultOptions 返回缺省选项（Layout 只填前缀与流名，分区 16、流 4）。
 func DefaultOptions() Options {
 	return Options{
-		Owner: "saga-" + NewID(), CoordinatorWorkers: 4, PublisherWorkers: 4,
-		CoordinatorBatch: 3, PublisherBatch: 1, LeaseDuration: 15 * time.Second, StoreTimeout: 3 * time.Second, PollInterval: 100 * time.Millisecond,
-		PublishTimeout: 3 * time.Second, PublishBackoffMin: 50 * time.Millisecond, PublishBackoffMax: 5 * time.Second,
-		MaxPayloadBytes: 64 << 10, StepBudgets: StepBudgets{Defaults: DefaultStepBudget()},
+		Layout:   Layout{Prefix: "roost.saga", Stream: "ROOST_SAGA", Partitions: 16, Groups: 4},
+		Replicas: 1, StreamMaxBytes: 8 << 30, DuplicateWindow: 2 * time.Minute, MaxBatch: 256, Tick: 5 * time.Millisecond, WheelSlots: 1024,
+		SnapshotEveryEvents: 2000, SnapshotInterval: 30 * time.Second, TerminalRetention: time.Hour, ReceiptRetention: 168 * time.Hour,
+		PublishTimeout: 3 * time.Second, PublishUnknownBudget: 30 * time.Second, QueryTimeout: 2 * time.Second, StartVerdictTimeout: 2 * time.Second,
+		PurgeStallAlarm: 10 * time.Minute, MaxPayloadBytes: 64 << 10, StepBudgets: StepBudgets{Defaults: DefaultStepBudget()},
+		Admission: AdmissionOptions{Enabled: true},
 	}
 }
 
-// StartRequest 是启动一个 saga 的意图；同一 (Type, BusinessKey) 只能有一份，重复启动按启动摘要判定幂等或冲突。
-type StartRequest struct {
-	ID                string    `json:"id,omitempty"`
-	Type              string    `json:"type"`
-	BusinessKey       string    `json:"business_key"`
-	DefinitionVersion uint32    `json:"definition_version"`
-	Data              []byte    `json:"data,omitempty"`
-	DeadlineAt        time.Time `json:"deadline_at,omitempty"`
-	Now               time.Time `json:"-"`
+func (o Options) withDefaults() Options {
+	d := DefaultOptions()
+	if o.Replicas <= 0 {
+		o.Replicas = d.Replicas
+	}
+	if o.StreamMaxBytes <= 0 {
+		o.StreamMaxBytes = d.StreamMaxBytes
+	}
+	if o.DuplicateWindow <= 0 {
+		o.DuplicateWindow = d.DuplicateWindow
+	}
+	if o.MaxBatch <= 0 {
+		o.MaxBatch = d.MaxBatch
+	}
+	if o.Tick <= 0 {
+		o.Tick = d.Tick
+	}
+	if o.WheelSlots <= 0 {
+		o.WheelSlots = d.WheelSlots
+	}
+	if o.SnapshotEveryEvents <= 0 {
+		o.SnapshotEveryEvents = d.SnapshotEveryEvents
+	}
+	if o.SnapshotInterval <= 0 {
+		o.SnapshotInterval = d.SnapshotInterval
+	}
+	if o.TerminalRetention <= 0 {
+		o.TerminalRetention = d.TerminalRetention
+	}
+	if o.ReceiptRetention <= 0 {
+		o.ReceiptRetention = d.ReceiptRetention
+	}
+	if o.PublishTimeout <= 0 {
+		o.PublishTimeout = d.PublishTimeout
+	}
+	if o.PublishUnknownBudget <= 0 {
+		o.PublishUnknownBudget = d.PublishUnknownBudget
+	}
+	if o.QueryTimeout <= 0 {
+		o.QueryTimeout = d.QueryTimeout
+	}
+	if o.StartVerdictTimeout <= 0 {
+		o.StartVerdictTimeout = d.StartVerdictTimeout
+	}
+	if o.PurgeStallAlarm <= 0 {
+		o.PurgeStallAlarm = d.PurgeStallAlarm
+	}
+	if o.MaxPayloadBytes <= 0 {
+		o.MaxPayloadBytes = d.MaxPayloadBytes
+	}
+	o.Admission = o.Admission.withDefaults()
+	return o
 }
 
-// ResumeRequest 是 Resume 的参数：可设置新的截止时间，或显式清除截止时间。
-type ResumeRequest struct {
-	ID            string
-	Now           time.Time
-	DeadlineAt    time.Time
-	ClearDeadline bool
+// validate 是选项的跨字段规则（每条都点名字段与违反的约束）。分区数 / 流数的“每条流 ≤ 50 个分区”在 Layout.Validate 里
+// （wiring/saga 的配置检查调用同一个函数）。
+func (o Options) validate() error {
+	if err := o.Layout.Validate(); err != nil {
+		return err
+	}
+	seen := map[int]bool{}
+	for _, k := range o.Owned {
+		if k < 0 || k >= o.Layout.Partitions || seen[k] {
+			return fmt.Errorf("%w: owned partition %d (partitions %d, listed twice: %v)", ErrInvalidDefinition, k, o.Layout.Partitions, seen[k])
+		}
+		seen[k] = true
+	}
+	if strings.ContainsAny(o.Writer, ".*> \t\r\n") || len(o.Writer) > 128 {
+		return fmt.Errorf("%w: writer %q must be a subject token of at most 128 bytes", ErrInvalidDefinition, o.Writer)
+	}
+	switch {
+	case o.MaxBatch > 1000:
+		return fmt.Errorf("%w: max batch %d must be <= 1000", ErrInvalidDefinition, o.MaxBatch)
+	case o.Tick < time.Millisecond || o.Tick > 100*time.Millisecond:
+		return fmt.Errorf("%w: tick %v must be in [1ms, 100ms]", ErrInvalidDefinition, o.Tick)
+	case o.PublishTimeout >= o.PublishUnknownBudget:
+		return fmt.Errorf("%w: publish timeout %v must be < publish unknown budget %v", ErrInvalidDefinition, o.PublishTimeout, o.PublishUnknownBudget)
+	case o.PublishTimeout >= 10*time.Second:
+		return fmt.Errorf("%w: publish timeout %v must be < 10s (the server drops an atomic batch not committed within 10s)", ErrInvalidDefinition, o.PublishTimeout)
+	case o.DuplicateWindow < 2*o.PublishUnknownBudget:
+		return fmt.Errorf("%w: duplicate window %v must be >= 2 x publish unknown budget %v", ErrInvalidDefinition, o.DuplicateWindow, o.PublishUnknownBudget)
+	case o.TerminalRetention > o.ReceiptRetention:
+		return fmt.Errorf("%w: terminal retention %v must be <= receipt retention %v", ErrInvalidDefinition, o.TerminalRetention, o.ReceiptRetention)
+	case o.MaxPayloadBytes > 4<<20:
+		return fmt.Errorf("%w: max payload %d exceeds %d", ErrInvalidDefinition, o.MaxPayloadBytes, 4<<20)
+	}
+	if err := o.StepBudgets.Validate(); err != nil {
+		return fmt.Errorf("saga: StepBudgets: %w", err)
+	}
+	return o.Admission.validate()
 }
 
-// Stats 是协调器的累计计数。
+// Stats 是 JetStream 协调器的累计计数。
 type Stats struct {
-	Started, Dispatched, Completed, Compensated, Failed, ManualRequired   uint64
-	Conflicts, Duplicates, PublishFailures, StoreFailures, WorkerFailures uint64
-	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion：那一步已经生效，
-	// 却不在 CompletedSteps 里。按（操作，代际）计一次（正向由回执去重，补偿方向由 LateSuccessAlarmStore）。
-	// 正向的由协调器自动补偿（saga 方向 ④，记 WARN）；补偿方向的只告警（ERROR），需要运维核对（TROUBLESHOOTING T-226）。
-	LateAfterAbandon uint64
-	// StaleIncarnation 计被协调器拒收的旧一生结果：Resume 或补偿方向的人工 Compensate 进入新一生之后，
-	// 上一生某次尝试的拒绝 / 失败才到达。收件箱也不回放旧一生的拒绝，新一生照常执行，这些结果只计数。
-	StaleIncarnation uint64
-	// StaleAttempt 计被协调器拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的一次尝试，较早那次的
-	// 可重试失败只说明那一次没有生效，之后的尝试照常执行，它不能推进记录。只计数、记 WARN。
-	StaleAttempt uint64
-	// Reopened 计 saga 被重开的次数（saga 方向 ④ 的可观测性）：已结束的 Failed / Compensated 因为迟到的
-	// 正向成功被带回补偿（reason=late_success），或 ManualRequired 期间记下的迟到步骤在运维 Resume / Compensate 时被补偿
-	// （reason=resume / compensate）。指标 saga.reopened_total{saga_type,from_status,reason}，每次记 WARN。
-	// 重开的 saga 补偿完会再次到达终态，Completed / Compensated / Failed 按到达终态的次数计，同一 saga 会再计一次。
-	Reopened uint64
+	Started, Dispatched, Completed, Compensated, Failed, ManualRequired    uint64
+	Duplicates, LateAfterAbandon, StaleIncarnation, StaleAttempt, Reopened uint64
+	// RejectedInputs：解码 / 校验不过而跳过的输入（saga.partition.rejected_input_total）。
+	RejectedInputs uint64
+	// AdmissionRejected：准入关闭时被拒的启动（只回复那次尝试，不写事件）。
+	AdmissionRejected uint64
+	// UnknownSaga：结果对应的 saga 不在分区里（过了终态保留期被剪掉）。
+	UnknownSaga uint64
+	// Events：已提交的事件数；PublishUnknown / PublishResolved：结果未知的发布次数与按 Duplicate / 最后一条判定为已提交的次数；
+	// BatchIncomplete：10176 立即重发次数；PublishRetried：确定没写入的其他错误重发次数。
+	Events, PublishUnknown, PublishResolved, BatchIncomplete, PublishRetried uint64
+	Snapshots, SnapshotConflicts, Purges, Pruned, Replayed, FailStops        uint64
 }
 
-// Engine 是 saga 协调器：按定义推进记录（派发步骤、接收结果、超时重试、补偿），经 Store 持久化，经 Publisher 发出命令。
-// 多个进程可以同时运行，记录由租约与版本 fence 保证同一时刻只有一个协调者推进。
+type engineCounters struct {
+	started, dispatched, completed, compensated, failed, manualRequired      atomic.Uint64
+	duplicates, lateAfterAbandon, staleIncarnation, staleAttempt, reopened   atomic.Uint64
+	rejectedInputs, admissionRejected, unknownSaga                           atomic.Uint64
+	events, publishUnknown, publishResolved, batchIncomplete, publishRetried atomic.Uint64
+	snapshots, snapshotConflicts, purges, pruned, replayed, failStops        atomic.Uint64
+}
+
+func (c *engineCounters) add(d partitionCounts) {
+	c.started.Add(d.started)
+	c.dispatched.Add(d.dispatched)
+	c.completed.Add(d.completed)
+	c.compensated.Add(d.compensated)
+	c.failed.Add(d.failed)
+	c.manualRequired.Add(d.manualRequired)
+	c.duplicates.Add(d.duplicates)
+	c.lateAfterAbandon.Add(d.lateAfterAbandon)
+	c.staleIncarnation.Add(d.staleIncarnation)
+	c.staleAttempt.Add(d.staleAttempt)
+	c.reopened.Add(d.reopened)
+	c.rejectedInputs.Add(d.rejectedInputs)
+	c.admissionRejected.Add(d.admissionRejected)
+	c.unknownSaga.Add(d.unknownSaga)
+}
+
+// Engine 是 saga 协调器：拥有分区的进程跑分区循环；全部进程都有发起方 API。
 type Engine struct {
-	store     Store
-	publisher Publisher
-	opts      Options
+	log    fnats.JetStreamLog
+	raw    fnats.RawClient
+	opts   Options
+	layout Layout
+	now    func() time.Time
+	writer string
+	// instance 是本实例的随机标识（crypto/rand.Text，128 位），启动 / 运维尝试标识的前缀；replyPrefix 是判定回复的 subject 前缀。
+	instance    string
+	replyPrefix string
+	attemptSeq  atomic.Uint64
 
 	mu          sync.RWMutex
 	definitions map[definitionKey]Definition
-	runMu       sync.Mutex
-	running     bool
-	cancel      context.CancelFunc
-	done        chan struct{}
-	dueKick     chan struct{}
-	outboxKick  chan struct{}
 
-	started, dispatched, completed, compensated, failed, manualRequired atomic.Uint64
-	conflicts, duplicates, publishFailures                              atomic.Uint64
-	storeFailures, workerFailures, lateAfterAbandon                     atomic.Uint64
-	staleIncarnation, staleAttempt, reopened                            atomic.Uint64
+	stats   engineCounters
+	watch   *terminalWatch
+	replies replyRouter
+	hints   admissionHints
+	gate    *admission
+	hooks   engineHooks
+
+	snapshots fnats.LogKV
+	objects   fnats.LogObjects
+
+	// ready 在 Start 成功后为真、Stop 开始时为假：发起方 API（要收判定回复）只在这期间可用。
+	ready         atomic.Bool
+	lifeMu        sync.Mutex
+	started       bool
+	stopped       bool
+	partitions    []*partition
+	follows       []fnats.LogFollow
+	subscriptions []fnats.DrainSubscription
+	stopAdmission func(context.Context) error
+	failed        chan struct{}
+	failOnce      sync.Once
+	failCause     error
 }
 
-// NewEngine 校验配置并构造协调器；Register 定义后调用 Run 开始推进。
-func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
-	if store == nil || publisher == nil {
-		return nil, fmt.Errorf("saga: store and publisher are required")
-	}
-	defaults := DefaultOptions()
-	if strings.TrimSpace(options.Owner) == "" {
-		options.Owner = defaults.Owner
-	}
-	if options.CoordinatorWorkers <= 0 {
-		options.CoordinatorWorkers = defaults.CoordinatorWorkers
-	}
-	if options.PublisherWorkers <= 0 {
-		options.PublisherWorkers = defaults.PublisherWorkers
-	}
-	if options.CoordinatorBatch <= 0 {
-		options.CoordinatorBatch = defaults.CoordinatorBatch
-	}
-	if options.PublisherBatch <= 0 {
-		options.PublisherBatch = defaults.PublisherBatch
-	}
-	if options.LeaseDuration <= 0 {
-		options.LeaseDuration = defaults.LeaseDuration
-	}
-	if options.StoreTimeout <= 0 {
-		options.StoreTimeout = defaults.StoreTimeout
-	}
-	if options.PollInterval <= 0 {
-		options.PollInterval = defaults.PollInterval
-	}
-	if options.PublishTimeout <= 0 {
-		options.PublishTimeout = defaults.PublishTimeout
-	}
-	if options.PublishBackoffMin <= 0 {
-		options.PublishBackoffMin = defaults.PublishBackoffMin
-	}
-	if options.PublishBackoffMax < options.PublishBackoffMin {
-		options.PublishBackoffMax = defaults.PublishBackoffMax
-	}
-	if options.MaxPayloadBytes <= 0 {
-		options.MaxPayloadBytes = defaults.MaxPayloadBytes
-	}
-	// 每个被拒的配置都点名出错的字段与违反的预算：这些跨参数的租约约束运维无法一眼看出，笼统的“限制不安全”会让每次
-	// 配置错误都要翻源码。
-	if options.StoreTimeout >= options.LeaseDuration {
-		return nil, fmt.Errorf("saga: StoreTimeout (%v) must be < LeaseDuration (%v)", options.StoreTimeout, options.LeaseDuration)
-	}
-	if len(options.Owner) > 256 {
-		return nil, fmt.Errorf("saga: Owner length %d exceeds 256", len(options.Owner))
-	}
-	if options.CoordinatorWorkers > 1024 {
-		return nil, fmt.Errorf("saga: CoordinatorWorkers %d exceeds 1024", options.CoordinatorWorkers)
-	}
-	if options.PublisherWorkers > 1024 {
-		return nil, fmt.Errorf("saga: PublisherWorkers %d exceeds 1024", options.PublisherWorkers)
-	}
-	if options.CoordinatorBatch > 4096 {
-		return nil, fmt.Errorf("saga: CoordinatorBatch %d exceeds 4096", options.CoordinatorBatch)
-	}
-	if options.PublisherBatch > 4096 {
-		return nil, fmt.Errorf("saga: PublisherBatch %d exceeds 4096", options.PublisherBatch)
-	}
-	if err := options.StepBudgets.Validate(); err != nil {
-		return nil, fmt.Errorf("saga: StepBudgets: %w", err)
-	}
-	if options.MaxPayloadBytes > 4<<20 {
-		return nil, fmt.Errorf("saga: MaxPayloadBytes %d exceeds %d", options.MaxPayloadBytes, 4<<20)
-	}
-	if options.LeaseDuration <= options.PublishTimeout {
-		return nil, fmt.Errorf("saga: LeaseDuration (%v) must be > PublishTimeout (%v)", options.LeaseDuration, options.PublishTimeout)
-	}
-	leaseAfterClaim := options.LeaseDuration - options.StoreTimeout
-	coordinatorBudget := leaseAfterClaim / time.Duration(options.CoordinatorBatch)
-	publisherBudget := leaseAfterClaim / time.Duration(options.PublisherBatch)
-	if options.StoreTimeout >= coordinatorBudget {
-		return nil, fmt.Errorf("saga: coordinator budget exhausted: (LeaseDuration-StoreTimeout)/CoordinatorBatch = %v must be > StoreTimeout (%v)", coordinatorBudget, options.StoreTimeout)
-	}
-	if options.PublishTimeout >= publisherBudget {
-		return nil, fmt.Errorf("saga: publisher budget exhausted: (LeaseDuration-StoreTimeout)/PublisherBatch = %v must be > PublishTimeout (%v)", publisherBudget, options.PublishTimeout)
-	}
-	if options.StoreTimeout >= publisherBudget-options.PublishTimeout {
-		return nil, fmt.Errorf("saga: publisher budget exhausted: (LeaseDuration-StoreTimeout)/PublisherBatch - PublishTimeout = %v must be > StoreTimeout (%v)", publisherBudget-options.PublishTimeout, options.StoreTimeout)
-	}
-	return &Engine{store: store, publisher: publisher, opts: options, definitions: make(map[definitionKey]Definition), dueKick: make(chan struct{}, 1), outboxKick: make(chan struct{}, 1)}, nil
+// engineHooks 只给本包测试用：发布之前回调（冻结旧写者、注入故障）。生产代码不设置。
+type engineHooks struct {
+	beforePublish func(k int)
 }
 
-type definitionKey struct {
-	typeName string
-	version  uint32
+// NewEngine 校验选项并构造协调器；Register 定义后调用 Start。log 与 raw 来自同一条 NATS 连接
+// （driver.Assembly 的 Log 与 Client）。
+func NewEngine(log fnats.JetStreamLog, raw fnats.RawClient, options Options) (*Engine, error) {
+	if log == nil || raw == nil {
+		return nil, fmt.Errorf("saga: JetStream log and raw NATS client are required")
+	}
+	options = options.withDefaults()
+	if err := options.validate(); err != nil {
+		return nil, err
+	}
+	instance := rand.Text()
+	writer := options.Writer
+	if writer == "" {
+		writer = "saga-" + instance
+	}
+	now := options.Clock
+	if now == nil {
+		now = time.Now
+	}
+	e := &Engine{
+		log: log, raw: raw, opts: options, layout: options.Layout, now: now, writer: writer,
+		instance: instance, replyPrefix: "_INBOX.saga." + instance,
+		definitions: map[definitionKey]Definition{}, watch: newTerminalWatch(),
+		replies: replyRouter{waiting: map[string]chan verdictReply{}}, hints: admissionHints{freshness: options.Admission.HintFreshness},
+		failed: make(chan struct{}),
+	}
+	if options.Admission.Enabled && len(options.Owned) > 0 {
+		e.gate = newAdmission(options.Admission, now)
+	}
+	return e, nil
 }
 
-// Register 先按 Options.StepBudgets 补齐步骤预算（定义里没写的字段取配置默认值，配置的按步骤覆盖优先），
-// 再校验。补齐后的定义是协调器实际使用的定义。
+// Register 与 Engine.Register 相同：按 StepBudgets 补齐步骤预算再校验，同一类型同一版本只能登记一次。所有者处理启动意图与
+// 到期时用这里的定义；发起方本地先查一次（没有定义直接 ErrDefinitionMissing，不写意图）。
 func (e *Engine) Register(definition Definition) error {
 	definition = e.opts.StepBudgets.Resolve(definition)
 	if err := definition.Validate(); err != nil {
@@ -211,621 +306,10 @@ func (e *Engine) Register(definition Definition) error {
 	if _, exists := e.definitions[key]; exists {
 		return fmt.Errorf("%w: %s/%d", ErrAlreadyExists, definition.Type, definition.Version)
 	}
-	definition.Steps = append([]Step(nil), definition.Steps...)
+	definition.Steps = slices.Clone(definition.Steps)
 	e.definitions[key] = definition
-	// EmitStart 在 Nest 事务里就按这个上限拒绝。
 	registerStartDataLimit(definition.Type, e.opts.MaxPayloadBytes)
 	return nil
-}
-
-// StartSaga 持久创建业务意图；相同身份重投返回当前进度，不重置已执行的步骤。
-// 启动摘要与可变运行数据分离，旧记录不能证明原始身份时返回 ErrIdentityConflict。
-func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, error) {
-	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
-		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
-	}
-	request, err := prepareStart(request, e.opts.MaxPayloadBytes)
-	if err != nil {
-		return Record{}, err
-	}
-	now := request.Now.UTC()
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	id := request.ID
-	if id == "" {
-		id = NewID()
-	}
-	record, err := newStartRecord(request, id, now)
-	if err != nil {
-		return Record{}, err
-	}
-	intentDigest := record.StartDigest
-	hoptrace.Mark("timeline/start.begin/", record.ID)
-	createStart := hoptrace.Now()
-	err = e.store.Create(ctx, record)
-	hoptrace.Since("h00.start.create", createStart)
-	if err != nil {
-		if errors.Is(err, ErrAlreadyExists) {
-			existing, getErr := e.store.GetByBusinessKey(ctx, request.Type, request.BusinessKey)
-			// 只有尚未推进的旧记录能用初始状态判断；已推进记录无法恢复原始意图，明确拒绝。
-			// 不用当前业务数据伪造回填摘要，否则仍会把另一个请求误认成历史重投。
-			sameIntent := existing.StartDigest == intentDigest
-			if existing.StartDigest == "" {
-				sameIntent = existing.Version == 1 && existing.Status == StatusPending && existing.Phase == PhaseForward && existing.Step == 0 && existing.CompletedSteps == 0 && existing.Attempt == 0 && existing.Incarnation == 0 && bytes.Equal(request.Data, existing.Data) && request.DeadlineAt.Equal(canonicalDeadline(existing.DeadlineAt))
-			}
-			if getErr == nil && request.DefinitionVersion == existing.DefinitionVersion && (request.ID == "" || request.ID == existing.ID) && sameIntent {
-				return existing, nil
-			}
-			if getErr == nil {
-				return Record{}, ErrIdentityConflict
-			}
-		}
-		return Record{}, err
-	}
-	hoptrace.Mark("timeline/start.end/", record.ID)
-	e.started.Add(1)
-	e.signal(e.dueKick)
-	return record.Clone(), nil
-}
-
-// Get 读取一条 saga 记录。
-func (e *Engine) Get(ctx context.Context, id string) (Record, error) { return e.store.Get(ctx, id) }
-
-// GetByBusinessKey 按 (类型, 业务键) 读取记录：同一对只能有一份 saga（StartSaga 的唯一性），所以发起方用自己给的
-// 业务键就能查到结果，不需要知道 saga ID（经 EmitStart 的事务性 outbox 启动时 ID 由启动消费者分配）。还没启动
-// （启动意图仍在 outbox / 流里）时返回 ErrNotFound，调用方按“尚未开始”处理而不是失败。
-func (e *Engine) GetByBusinessKey(ctx context.Context, sagaType, businessKey string) (Record, error) {
-	return e.store.GetByBusinessKey(ctx, strings.TrimSpace(sagaType), strings.TrimSpace(businessKey))
-}
-
-// List 按查询列出记录，Limit 缺省 100、上限 1000。
-func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
-	if query.Limit <= 0 {
-		query.Limit = 100
-	}
-	if query.Limit > 1000 {
-		return nil, ErrInvalidRecord
-	}
-	return e.store.List(ctx, query)
-}
-
-// Resume 在运维或自动修复消除原因之后重试一个失败终态。Completed 与 Compensated 的 saga 不能 Resume。
-func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, error) {
-	request, deadline, err := prepareResume(request, time.Now())
-	if err != nil {
-		return Record{}, err
-	}
-	for attempts := 0; attempts < 8; attempts++ {
-		record, err := e.store.Get(ctx, request.ID)
-		if err != nil {
-			return Record{}, err
-		}
-		_, defined := e.definition(record.Type, record.DefinitionVersion)
-		after, err := planResume(record, defined, request, deadline)
-		if err != nil {
-			return Record{}, err
-		}
-		// 新一生（Incarnation+1）由 stepTransition 开：之后的 CommandID 与 Resume 之前的所有回执不相交。
-		written, _, err := e.stepTransition(ctx, record, after, transition{cause: causeResume})
-		if errors.Is(err, ErrConflict) {
-			e.conflicts.Add(1)
-			continue
-		}
-		if err != nil {
-			return Record{}, err
-		}
-		if record.LateStep > 0 {
-			e.reportReopen(record, written, reopenResume)
-		}
-		e.signal(e.dueKick)
-		return written, nil
-	}
-	return Record{}, ErrConflict
-}
-
-// Compensate 请求对每个已完成步骤做语义回滚。可重复调用；已在补偿或已补偿的记录原样返回。Completed 的 saga 返回
-// ErrSagaCompleted。
-func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Time) (Record, error) {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	for attempts := 0; attempts < 8; attempts++ {
-		record, err := e.store.Get(ctx, id)
-		if err != nil {
-			return Record{}, err
-		}
-		// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程，
-		// 不能带回 Compensating 逐步撤销（维护者 2026-10-07 选 A）。规则全在 planCompensate。
-		after, write, err := planCompensate(record, reason, now)
-		if !write {
-			return after, err
-		}
-		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 planTransition 决定。
-		written, _, err := e.stepTransition(ctx, record, after, transition{cause: causeManualCompensate})
-		if errors.Is(err, ErrConflict) {
-			e.conflicts.Add(1)
-			continue
-		}
-		if err != nil {
-			return Record{}, err
-		}
-		if record.LateStep > 0 {
-			e.reportReopen(record, written, reopenCompensate)
-		}
-		e.signal(e.dueKick)
-		return written, nil
-	}
-	return Record{}, ErrConflict
-}
-
-// Complete 接收一次尝试的结果。接收与否只由 judgeCompletion 判定（统一规则，见 docs/framework/SAGA.md）：成功是操作的结论，只要这个操作还没有带结果关闭就接收；
-// 拒绝是本生这个操作的结论、可重试失败是一次尝试的结论，二者只在协调器正等着它们时接收。
-func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
-	if completion.Validate() != nil {
-		return Record{}, ErrInvalidRecord
-	}
-	if len(completion.Data) > e.opts.MaxPayloadBytes {
-		return Record{}, ErrInvalidRecord
-	}
-	// 排序、截止与回执 TTL 都以协调器时间为准；远端步骤的时钟不能让 saga 状态倒退，也不能让去重记录过期。
-	completion.CompletedAt = time.Now().UTC()
-	incarnation := commandIDIncarnation(completion.IdempotencyKey, completion.CommandID)
-	for attempts := 0; attempts < 8; attempts++ {
-		// 这次读不是可省的预读：判定（judgeCompletion）与目标状态（applyCompletion）都从它算出，写入按它的版本做条件
-		// 替换（乐观并发，冲突即重读重试）。Store.Apply 的事务不再读记录，只核对版本，所以它是唯一的那次读。
-		hoptrace.Mark("timeline/complete.begin/", completion.CommandID)
-		getStart := hoptrace.Now()
-		record, err := e.store.Get(ctx, completion.SagaID)
-		hoptrace.Since("h11.complete.get", getStart)
-		if err != nil {
-			return Record{}, err
-		}
-		switch judgeCompletion(record, completion, incarnation) {
-		case verdictStaleIncarnation:
-			e.reportStaleIncarnation(record, completion, incarnation)
-			return record, nil
-		case verdictStaleAttempt:
-			e.reportStaleAttempt(record, completion)
-			return record, nil
-		case verdictHistory:
-			written, err := e.completeNotWaiting(ctx, record, completion, incarnation)
-			if errors.Is(err, ErrConflict) {
-				e.conflicts.Add(1)
-				continue
-			}
-			return written, err
-		}
-		definition, ok := e.definition(record.Type, record.DefinitionVersion)
-		if !ok {
-			return Record{}, fmt.Errorf("%w: %s", ErrDefinitionMissing, record.Type)
-		}
-		after := e.applyCompletion(record, definition, completion)
-		applyStart := hoptrace.Now()
-		_, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeResult, receipt: &completion})
-		hoptrace.Since("h11.complete.apply", applyStart)
-		if errors.Is(err, ErrConflict) {
-			e.conflicts.Add(1)
-			continue
-		}
-		if err != nil {
-			return Record{}, err
-		}
-		if outcome == ApplyDuplicate {
-			e.duplicates.Add(1)
-			return e.store.Get(ctx, record.ID)
-		}
-		if completion.Success && compensatingLateStep(record) {
-			// 重开（reportReopen）的另一端：迟到的那一步补偿完，运维按 saga_id 把两条日志对上。
-			slog.Info("saga: compensated the step that took effect after the coordinator abandoned it",
-				"saga_id", record.ID, "saga_type", record.Type, "late_step", record.Step, "status", after.Status.String(), "version", after.Version)
-		}
-		hoptrace.Mark("timeline/complete.end/", completion.CommandID)
-		e.countTerminal(after.Status)
-		e.signal(e.dueKick)
-		return after.Clone(), nil
-	}
-	return Record{}, ErrConflict
-}
-
-// completeNotWaiting 处理协调器不接收的 completion：已记录的按重复确认；放弃关闭之后才到的正向成功交给
-// compensateLateStep 补偿那一步（saga 方向 ④），补偿方向的只告警，按（操作，completion 的代际）只告警一次（B1）；
-// 协调器既不在等、也没有记录的返回 ErrNotWaiting。写记录冲突时返回 ErrConflict，由 Complete 重读重试。
-func (e *Engine) completeNotWaiting(ctx context.Context, record Record, completion Completion, incarnation uint32) (Record, error) {
-	history, err := e.completionHistory(ctx, completion)
-	if err != nil {
-		return Record{}, err
-	}
-	verdict, step := judgeHistory(record, completion, history)
-	switch verdict {
-	case historyNotWaiting:
-		return Record{}, ErrNotWaiting
-	case historyLateStep:
-		return e.compensateLateStep(ctx, record, completion, step)
-	case historyLateAlarm:
-		first, err := e.markLateSuccessAlarm(ctx, completion, incarnation)
-		if err != nil {
-			return Record{}, err
-		}
-		if first {
-			e.reportLateAfterAbandon(record, completion)
-			return record, nil
-		}
-	}
-	e.duplicates.Add(1)
-	return record, nil
-}
-
-// markLateSuccessAlarm 在 tombstone 上记下“这个操作在这一代际放弃后迟到的成功已告警”，first=true 表示第一次。
-// 同一个已生效的成功会经 effect 重投、过期投递的回放、JetStream 重投多次送达，告警按步骤计，不按送达计。
-// Store 没实现 LateSuccessAlarmStore 时每次都告警（宁可重复，不丢告警）。
-func (e *Engine) markLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
-	if marker, ok := e.store.(LateSuccessAlarmStore); ok {
-		return marker.MarkLateSuccessAlarm(ctx, completion, incarnation)
-	}
-	return true, nil
-}
-
-// compensateLateStep 是 saga 方向 ④：第 step 步在协调器放弃之后生效了，把它补偿掉。一个 Store 事务里记下这份 completion 的回执、
-// 把 tombstone 改为带结果关闭（planTransition 收到成功回执时的既有行为；之后的送达按回执去重），并在记录上写 LateStep / LateData
-// （目标状态见 lateStepState）。
-func (e *Engine) compensateLateStep(ctx context.Context, record Record, completion Completion, step int) (Record, error) {
-	after := lateStepState(record, completion, step)
-	written, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeLateSuccess, receipt: &completion})
-	if err != nil {
-		return Record{}, err
-	}
-	if outcome == ApplyDuplicate {
-		e.duplicates.Add(1)
-		return e.store.Get(ctx, record.ID)
-	}
-	e.reportLateCompensation(record, completion)
-	if record.Status == StatusFailed || record.Status == StatusCompensated {
-		e.reportReopen(record, written, reopenLateSuccess)
-	}
-	e.signal(e.dueKick)
-	return written.Clone(), nil
-}
-
-// saga.reopened_total 的 reason 标签：重开从哪里来。取值固定三个，保持低基数。
-const (
-	// reopenLateSuccess：已结束的 Failed / Compensated 收到放弃后迟到的正向成功，协调器立即把它带回补偿（compensateLateStep）。
-	reopenLateSuccess = "late_success"
-	// reopenResume / reopenCompensate：ManualRequired 期间记下的迟到步骤（只记 LateStep、不自动跑），运维 Resume / Compensate 时先补它。
-	reopenResume     = "resume"
-	reopenCompensate = "compensate"
-)
-
-// reportReopen 记一次 saga 重开（saga 方向 ④ 的可观测性，维护者第十三轮）：before 是重开前的记录（它的状态就是原终态），
-// after 是已写入的记录（正在补偿迟到那一步）。saga 自己没有向业务推送终态的机制，按终态做业务的一方靠 Get / List 读记录，
-// 识别方法见 SAGA.md「运维观察」：记下读到终态时的 Version，之后 Version 变大就是记录被改过（重开或 Resume）。
-// 标签只有 saga 类型、原状态与原因，saga id 与步骤号只进日志。
-func (e *Engine) reportReopen(before, after Record, reason string) {
-	e.reopened.Add(1)
-	reportReopen(before, after, reason)
-}
-
-// reportReopen 是重开的指标与日志（两种协调器共用；计数由调用方加）。
-func reportReopen(before, after Record, reason string) {
-	from := before.Status.String()
-	metrics.IncCounter("saga.reopened_total", metrics.Labels{"saga_type": before.Type, "from_status": from, "reason": reason}, 1)
-	slog.Warn("saga: reopened to compensate a step that took effect after the coordinator abandoned it",
-		"saga_id", before.ID, "saga_type", before.Type, "from_status", from, "reason", reason,
-		"late_step", after.LateStep-1, "status", after.Status.String(), "version", after.Version)
-}
-
-// reportLateCompensation 记一次由协调器自动补偿的迟到成功（saga 方向 ④）：仍计 late_after_abandon（phase=forward），
-// 但已经有了归宿，只记 WARN。
-func (e *Engine) reportLateCompensation(record Record, completion Completion) {
-	e.lateAfterAbandon.Add(1)
-	reportLateCompensation(record, completion)
-}
-
-func reportLateCompensation(record Record, completion Completion) {
-	phase, step := operationPosition(completion.IdempotencyKey)
-	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
-	slog.Warn("saga: step succeeded after the coordinator abandoned it; compensating it",
-		"saga_id", completion.SagaID, "saga_type", record.Type, "status", record.Status.String(), "step", step,
-		"command_id", completion.CommandID, "operation", completion.IdempotencyKey)
-}
-
-// reportStaleAttempt 记一份被拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的那次尝试。
-func (e *Engine) reportStaleAttempt(record Record, completion Completion) {
-	e.staleAttempt.Add(1)
-	reportStaleAttempt(record, completion)
-}
-
-func reportStaleAttempt(record Record, completion Completion) {
-	phase, step := operationPosition(completion.IdempotencyKey)
-	metrics.IncCounter("saga.completion.stale_attempt_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
-	slog.Warn("saga: ignored a retryable failure from an earlier attempt; waiting for the current attempt",
-		"saga_id", completion.SagaID, "saga_type", record.Type, "phase", phase, "step", step,
-		"command_id", completion.CommandID, "waiting_for", record.CommandID, "error", completion.Error)
-}
-
-// reportStaleIncarnation 记一份被拒收的旧一生结果（B1）。这是 Resume 之后的正常现象，不是故障：只计数、记 WARN。
-func (e *Engine) reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
-	e.staleIncarnation.Add(1)
-	reportStaleIncarnation(record, completion, incarnation)
-}
-
-func reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
-	phase, step := operationPosition(completion.IdempotencyKey)
-	metrics.IncCounter("saga.completion.stale_incarnation_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
-	slog.Warn("saga: ignored a step result from an earlier incarnation of the saga",
-		"saga_id", completion.SagaID, "saga_type", record.Type, "phase", phase, "step", step, "command_id", completion.CommandID,
-		"result_incarnation", incarnation, "incarnation", record.Incarnation, "success", completion.Success, "error", completion.Error)
-}
-
-// completionHistory 用 Store 的可选扩展区分重复结果与放弃后到达的成功；没有扩展时退回
-// CompletionRecorded，一律按重复处理。
-func (e *Engine) completionHistory(ctx context.Context, completion Completion) (CompletionHistory, error) {
-	if history, ok := e.store.(CompletionHistoryStore); ok {
-		return history.CompletionHistory(ctx, completion)
-	}
-	recorded, err := e.store.CompletionRecorded(ctx, completion)
-	return CompletionHistory{Recorded: recorded}, err
-}
-
-// reportLateAfterAbandon 告警一份协调器不能自己处理的“放弃之后才到的成功”：补偿方向的操作（正向的由
-// compensateLateStep 补偿，saga 方向 ④），以及 lateForwardStep 判为不应发生的情形。运维按 TROUBLESHOOTING T-226 核对；
-// 补偿方向停在 ManualRequired 时 Resume，新一生的同一补偿会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
-func (e *Engine) reportLateAfterAbandon(record Record, completion Completion) {
-	e.lateAfterAbandon.Add(1)
-	reportLateAfterAbandon(record, completion)
-}
-
-func reportLateAfterAbandon(record Record, completion Completion) {
-	phase, step := operationPosition(completion.IdempotencyKey)
-	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
-	slog.Error("saga: step succeeded after the coordinator abandoned it; the coordinator cannot account for it",
-		"saga_id", completion.SagaID, "saga_type", record.Type, "status", record.Status.String(), "phase", phase, "step", step,
-		"command_id", completion.CommandID, "operation", completion.IdempotencyKey)
-}
-
-// operationPosition 从 operationKey（sagaID:phase:step，见 operationKey）取出方向与步骤号，用于告警标签与日志。
-func operationPosition(operation string) (phase, step string) {
-	cut := strings.LastIndexByte(operation, ':')
-	if cut <= 0 {
-		return "unknown", ""
-	}
-	rest, step := operation[:cut], operation[cut+1:]
-	switch rest[strings.LastIndexByte(rest, ':')+1:] {
-	case strconv.Itoa(int(PhaseForward)):
-		return PhaseForward.String(), step
-	case strconv.Itoa(int(PhaseCompensate)):
-		return PhaseCompensate.String(), step
-	default:
-		return "unknown", step
-	}
-}
-
-// Run 启动协调与发布 worker，阻塞到 ctx 取消或 Stop，并等 worker 全部退出。同一时刻只能运行一次。
-func (e *Engine) Run(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	e.runMu.Lock()
-	if e.running {
-		e.runMu.Unlock()
-		return fmt.Errorf("saga: engine already running")
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	e.running, e.cancel, e.done = true, cancel, make(chan struct{})
-	done := e.done
-	e.runMu.Unlock()
-	defer func() { e.runMu.Lock(); e.running = false; close(done); e.runMu.Unlock() }()
-
-	var wg sync.WaitGroup
-	for range e.opts.CoordinatorWorkers {
-		wg.Add(1)
-		go func() { defer wg.Done(); e.coordinatorLoop(ctx) }()
-	}
-	for range e.opts.PublisherWorkers {
-		wg.Add(1)
-		go func() { defer wg.Done(); e.publisherLoop(ctx) }()
-	}
-	<-ctx.Done()
-	wg.Wait()
-	return nil
-}
-
-// Stop 取消 Run 并在 ctx 内等它退出；超时返回 ctx 错误，用新 ctx 重试会再次等待。未运行时返回 nil。
-func (e *Engine) Stop(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	e.runMu.Lock()
-	cancel, done := e.cancel, e.done
-	e.runMu.Unlock()
-	if cancel == nil || done == nil {
-		return nil
-	}
-	cancel()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// Stats 返回累计计数。
-func (e *Engine) Stats() Stats {
-	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load(), StaleAttempt: e.staleAttempt.Load(), Reopened: e.reopened.Load()}
-}
-
-func (e *Engine) coordinatorLoop(ctx context.Context) {
-	for ctx.Err() == nil {
-		now := time.Now().UTC()
-		storeCtx, cancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
-		claimStart := hoptrace.Now()
-		records, err := e.store.ClaimDue(storeCtx, ClaimRequest{Owner: e.opts.Owner, Now: now, LeaseDuration: e.opts.LeaseDuration, Limit: e.opts.CoordinatorBatch})
-		cancel()
-		if len(records) > 0 {
-			hoptrace.Since("h01.coord.claim", claimStart)
-		}
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				e.storeFailures.Add(1)
-				slog.Error("saga: claim due", "err", err)
-			}
-			e.wait(ctx, e.dueKick)
-			continue
-		}
-		if len(records) == 0 {
-			e.wait(ctx, e.dueKick)
-			continue
-		}
-		for i := range records {
-			storeCtx, cancel = context.WithTimeout(ctx, e.opts.StoreTimeout)
-			err = e.processClaimed(storeCtx, records[i], time.Now().UTC())
-			cancel()
-			if err != nil {
-				if errors.Is(err, ErrConflict) {
-					e.conflicts.Add(1)
-					continue
-				}
-				if errors.Is(err, context.Canceled) {
-					continue
-				}
-				e.workerFailures.Add(1)
-				slog.Error("saga: process", "id", records[i].ID, "err", err)
-			}
-		}
-	}
-}
-
-func (e *Engine) publisherLoop(ctx context.Context) {
-	for ctx.Err() == nil {
-		now := time.Now().UTC()
-		storeCtx, cancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
-		items, err := e.store.ClaimOutbox(storeCtx, ClaimRequest{Owner: e.opts.Owner, Now: now, LeaseDuration: e.opts.LeaseDuration, Limit: e.opts.PublisherBatch})
-		cancel()
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				e.storeFailures.Add(1)
-				slog.Error("saga: claim outbox", "err", err)
-			}
-			e.wait(ctx, e.outboxKick)
-			continue
-		}
-		if len(items) == 0 {
-			e.wait(ctx, e.outboxKick)
-			continue
-		}
-		for i := range items {
-			// 逐跳计时：派发事务提交 → 发布器开始发布（outbox 排队与领取），发布本身（同步等 PubAck）。
-			hoptrace.SinceMark("h03.outbox.wait", "dispatched/", items[i].Command.ID)
-			hoptrace.Mark("timeline/publish.begin/", items[i].Command.ID)
-			publishStart := hoptrace.Now()
-			publishCtx, cancel := context.WithTimeout(ctx, e.opts.PublishTimeout)
-			err := e.publisher.PublishSagaCommand(publishCtx, items[i].Command.Clone())
-			cancel()
-			hoptrace.Since("h03.outbox.publish", publishStart)
-			hoptrace.Mark("timeline/publish.end/", items[i].Command.ID)
-			if err != nil {
-				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
-					continue
-				}
-				e.publishFailures.Add(1)
-				next := now.Add(backoff(items[i].Command.ID, items[i].Attempt+1, e.opts.PublishBackoffMin, e.opts.PublishBackoffMax))
-				storeCtx, storeCancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
-				nackErr := e.store.NackOutbox(storeCtx, items[i].Command.ID, items[i].Lease, next, err.Error())
-				storeCancel()
-				if errors.Is(nackErr, ErrConflict) {
-					e.conflicts.Add(1)
-				} else if nackErr != nil && !errors.Is(nackErr, context.Canceled) {
-					e.storeFailures.Add(1)
-					slog.Error("saga: nack outbox", "id", items[i].Command.ID, "err", nackErr)
-				}
-				continue
-			}
-			hoptrace.Mark("published/", items[i].Command.ID)
-			ackStart := hoptrace.Now()
-			storeCtx, storeCancel := context.WithTimeout(ctx, e.opts.StoreTimeout)
-			ackErr := e.store.AckOutbox(storeCtx, items[i].Command.ID, items[i].Lease)
-			storeCancel()
-			hoptrace.Since("h03.outbox.ack", ackStart)
-			if errors.Is(ackErr, ErrConflict) {
-				e.conflicts.Add(1)
-			} else if ackErr != nil && !errors.Is(ackErr, context.Canceled) {
-				e.storeFailures.Add(1)
-				slog.Error("saga: ack outbox", "id", items[i].Command.ID, "err", ackErr)
-			}
-		}
-	}
-}
-
-// processClaimed 处理一条已领取（持有租约）的到期记录：判定全在 planDue（与 JetStream 协调器共用），这里只负责写入
-// （带租约 fence）、计数与唤醒。
-func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Time) error {
-	definition, defined := e.definition(record.Type, record.DefinitionVersion)
-	plan := planDue(record, definition, defined, now)
-	t := transition{cause: plan.cause, fenced: true}
-	if plan.cause != causeDispatch {
-		// 定义缺失时在等结果或正在重试退避的操作都被放弃（planTransition 关闭它）。
-		_, _, err := e.stepTransition(ctx, record, plan.after, t)
-		if err != nil {
-			return err
-		}
-		switch plan.cause {
-		case causeDeadline, causeTimeout:
-			e.countTerminal(plan.after.Status)
-			e.signal(e.dueKick)
-		case causeInvalidStep:
-			e.failed.Add(1)
-			e.manualRequired.Add(1)
-		default:
-			e.countTerminal(plan.after.Status)
-		}
-		return nil
-	}
-	command := *plan.command
-	t.outbox = &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
-	if !record.NextRunAt.IsZero() && hoptrace.Enabled() {
-		// 逐跳计时：记录到期（启动、上一步结果接收、重试退避结束）→ 协调器领取并开始派发。
-		hoptrace.Observe("h01.coord.wake", time.Since(record.NextRunAt))
-	}
-	// 只在诊断时关联交易与命令；不把高基数身份写入生产指标。
-	if hoptrace.Enabled() {
-		hoptrace.Mark("timeline/link/"+record.ID+"/", command.ID)
-	}
-	hoptrace.Mark("timeline/dispatch.begin/", command.ID)
-	dispatchStart := hoptrace.Now()
-	_, _, err := e.stepTransition(ctx, record, plan.after, t)
-	hoptrace.Since("h02.dispatch.apply", dispatchStart)
-	if err == nil {
-		hoptrace.Mark("timeline/dispatch.end/", command.ID)
-		hoptrace.Mark("dispatched/", command.ID)
-		e.dispatched.Add(1)
-		e.signal(e.outboxKick)
-	}
-	return err
-}
-
-// applyCompletion / retryOrCompensate 转到 transition.go 的同名纯函数；方法形式留给现有测试调用。
-func (e *Engine) applyCompletion(record Record, definition Definition, result Completion) Record {
-	return applyCompletion(record, definition, result)
-}
-
-func (e *Engine) retryOrCompensate(record Record, definition Definition, reason string, now time.Time) Record {
-	return retryOrCompensate(record, definition, reason, now)
-}
-
-// stepTransition 把 before → after 写成一次记录转移，是 Redis 引擎写记录（Store.Apply）的唯一入口：代际与关闭由
-// planTransition 决定，ApplyRequest 只在这里构造、只在这里交给 Store，调用方拿到的是写入的记录，拿不到可改写的请求
-// （例如把 CloseOperation 清空后再写入）。fenced 时带 before 的租约。
-func (e *Engine) stepTransition(ctx context.Context, before, after Record, t transition) (Record, ApplyOutcome, error) {
-	after, closeOperation := planTransition(before, after, t)
-	request := ApplyRequest{ExpectedVersion: before.Version, After: after, Outbox: t.outbox, Receipt: t.receipt, CloseOperation: closeOperation}
-	if t.fenced {
-		request.ExpectedLease = before.Lease
-	}
-	outcome, err := e.store.Apply(ctx, request)
-	return request.After, outcome, err
 }
 
 func (e *Engine) definition(name string, version uint32) (Definition, bool) {
@@ -834,31 +318,413 @@ func (e *Engine) definition(name string, version uint32) (Definition, bool) {
 	e.mu.RUnlock()
 	return d, ok
 }
-func (e *Engine) signal(ch chan struct{}) {
-	select {
-	case ch <- struct{}{}:
-	default:
+
+// admit 是所有者处理启动意图时的权威准入判定；gated=false 表示没开准入。
+func (e *Engine) admit() (AdmissionState, bool) {
+	if e.gate == nil {
+		return AdmissionState{Open: true}, false
+	}
+	return e.gate.evaluate(), true
+}
+
+// AdmissionState 是本进程看到的准入状态：拥有分区的进程给出自己的判定；只做发起方的进程给出最近收到的提示（没有新鲜提示时
+// 视为打开）。健康检查与测试用。
+func (e *Engine) AdmissionState() AdmissionState {
+	if e.gate != nil {
+		return e.gate.evaluate()
+	}
+	if closed, reason := e.hints.closed(); closed {
+		return AdmissionState{Open: false, Reason: reason, At: e.now()}
+	}
+	return AdmissionState{Open: true, At: e.now()}
+}
+
+// receiptsExpired 是选项 RR-A 的守卫：记录上次更新早于 now − ReceiptRetention + 最长步骤窗口时，重新执行的操作可能已经没有
+// 参与方回执。
+func (e *Engine) receiptsExpired(record Record, definition Definition, now time.Time) bool {
+	var window time.Duration
+	for _, step := range definition.Steps {
+		attempts := time.Duration(max(step.MaxAttempts, 1))
+		window = max(window, step.Timeout*attempts+step.BackoffMax*(attempts-1))
+	}
+	return record.UpdatedAt.Before(now.Add(-e.opts.ReceiptRetention + window))
+}
+
+func (e *Engine) reportFailure(err error) {
+	e.failOnce.Do(func() {
+		e.failCause = err
+		close(e.failed)
+	})
+	if e.opts.Failure != nil {
+		e.opts.Failure.Fail(err)
 	}
 }
-func (e *Engine) wait(ctx context.Context, kick <-chan struct{}) {
-	timer := time.NewTimer(e.opts.PollInterval)
-	defer timer.Stop()
+
+// Failed 在任一分区 fail-stop 后关闭。
+func (e *Engine) Failed() <-chan struct{} { return e.failed }
+
+// FailureCause 返回第一个 fail-stop 的原因；还没有 fail-stop 时返回 nil。
+func (e *Engine) FailureCause() error {
+	select {
+	case <-e.failed:
+		return e.failCause // 写在 close(e.failed) 之前，读在它之后
+	default:
+		return nil
+	}
+}
+
+// ---- 生命周期 ----
+
+// ensureInfrastructure 建流与桶、登记 / 核对布局。全部进程都做（发起方也要往流里追加输入、watch 准入提示）。
+func (e *Engine) ensureInfrastructure(ctx context.Context) error {
+	for g, name := range e.layout.Streams() {
+		if _, err := e.log.EnsureLogStream(ctx, fnats.LogStreamConfig{
+			Name: name, Subjects: e.layout.StreamSubjects(g), Replicas: e.opts.Replicas,
+			MaxBytes: e.opts.StreamMaxBytes, Duplicates: e.opts.DuplicateWindow,
+		}); err != nil {
+			return fmt.Errorf("saga: ensure stream %s: %w", name, err)
+		}
+	}
+	snapshots, err := e.log.KeyValue(ctx, fnats.LogKVConfig{Bucket: e.layout.SnapshotBucket(), Replicas: e.opts.Replicas, History: 1})
+	if err != nil {
+		return err
+	}
+	objects, err := e.log.Objects(ctx, fnats.LogObjectConfig{Bucket: e.layout.ObjectBucket(), Replicas: e.opts.Replicas})
+	if err != nil {
+		return err
+	}
+	e.snapshots, e.objects = snapshots, objects
+	want, _ := json.Marshal(layoutRecord{V: WireVersion, Layout: layoutOf(e.layout)})
+	if _, err := snapshots.Create(ctx, layoutKey, want); err != nil {
+		if !errors.Is(err, fnats.ErrLogKVConflict) {
+			return fmt.Errorf("saga: register layout: %w", err)
+		}
+		entry, err := snapshots.Get(ctx, layoutKey)
+		if err != nil {
+			return fmt.Errorf("saga: read registered layout: %w", err)
+		}
+		var got layoutRecord
+		if json.Unmarshal(entry.Value, &got) != nil || got.V != WireVersion || got.Layout != layoutOf(e.layout) {
+			return fmt.Errorf("%w: registered %s, this process %+v", ErrLayoutMismatch, entry.Value, layoutOf(e.layout))
+		}
+	}
+	return nil
+}
+
+// Start 建基础设施，重放并启动拥有的分区（先恢复再服务：返回 nil 时全部拥有的分区都已重放完、开始处理输入），订阅查询与
+// 判定回复，启动准入与终态观察。失败时已启动的部分全部停掉。只能调用一次。
+func (e *Engine) Start(ctx context.Context) (err error) {
+	e.lifeMu.Lock()
+	defer e.lifeMu.Unlock()
+	if e.started {
+		return fmt.Errorf("saga: JetStream engine already started")
+	}
+	e.started = true
+	defer func() {
+		if err != nil {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = e.stopLocked(stopCtx)
+		}
+	}()
+	if err := e.ensureInfrastructure(ctx); err != nil {
+		return err
+	}
+	loads, err := e.log.KeyValue(ctx, loadBucketConfig(e.layout, e.opts.Replicas, e.opts.Admission))
+	if err != nil {
+		return fmt.Errorf("saga: admission bucket: %w", err)
+	}
+	hintFollow, err := loads.Watch(ctx, admitHintKey, e.hints.observe, func() {})
+	if err != nil {
+		return fmt.Errorf("saga: watch admission hints: %w", err)
+	}
+	e.follows = append(e.follows, hintFollow)
+	if e.gate != nil {
+		stop, err := e.gate.run(loads)
+		if err != nil {
+			return err
+		}
+		e.stopAdmission = stop
+	}
+	reply, err := e.raw.SubscribeBounded(e.replyPrefix+".>", fnats.PendingLimits{Messages: 8192, Bytes: 64 << 20, OnError: func(err error) {
+		slog.Error("saga: verdict reply subscription error", "err", err)
+	}}, func(msg *fnats.Msg) { e.replies.deliver(msg.Data) })
+	if err != nil {
+		return fmt.Errorf("saga: subscribe verdict replies: %w", err)
+	}
+	e.subscriptions = append(e.subscriptions, reply)
+	terminals, err := e.followTerminals(ctx)
+	if err != nil {
+		return fmt.Errorf("saga: follow terminal events: %w", err)
+	}
+	e.follows = append(e.follows, terminals...)
+	for _, k := range e.opts.Owned {
+		p, err := e.replayPartition(ctx, k)
+		if err != nil {
+			return err
+		}
+		e.partitions = append(e.partitions, p)
+	}
+	if err := e.serveQueries(); err != nil {
+		return err
+	}
+	for _, p := range e.partitions {
+		if err := e.startPartition(ctx, p); err != nil {
+			return err
+		}
+	}
+	e.ready.Store(true)
+	return nil
+}
+
+// startPartition 接上输入的 Follow（从重放读到的最后一条之后），起分区循环。
+func (e *Engine) startPartition(ctx context.Context, p *partition) error {
+	follow, err := e.log.Follow(ctx, p.stream, []string{e.layout.InputFilter(p.k)}, p.followFrom, func(msg fnats.LogMsg) {
+		select {
+		case p.inputs <- msg:
+		case <-p.stopCh:
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("saga: follow inputs of partition %d: %w", p.k, err)
+	}
+	p.follow = follow
+	loopCtx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	go p.run(loopCtx)
+	return nil
+}
+
+// Stop 按三步停机：停分区循环与快照 goroutine、停输入 / 终态 / 准入的消费、退订查询与回复，在 ctx 内等它们退出；超时返回
+// ctx 错误并保留未停完的部分，可以用新 ctx 再调用。重复调用返回 nil。
+func (e *Engine) Stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.lifeMu.Lock()
+	defer e.lifeMu.Unlock()
+	return e.stopLocked(ctx)
+}
+
+func (e *Engine) stopLocked(ctx context.Context) error {
+	if e.stopped {
+		return nil
+	}
+	e.ready.Store(false)
+	for _, p := range e.partitions {
+		select {
+		case <-p.stopCh:
+		default:
+			close(p.stopCh)
+		}
+		if p.cancel != nil {
+			p.cancel()
+		}
+	}
+	for _, p := range e.partitions {
+		if p.follow != nil {
+			if err := p.follow.Stop(ctx); err != nil {
+				return err
+			}
+		}
+		if p.cancel != nil {
+			select {
+			case <-p.done:
+			case <-ctx.Done():
+				return fmt.Errorf("saga: partition %d loop still running: %w", p.k, ctx.Err())
+			}
+		}
+		if err := waitGroup(ctx, &p.workers); err != nil {
+			return fmt.Errorf("saga: partition %d snapshot still running: %w", p.k, err)
+		}
+	}
+	for len(e.follows) > 0 {
+		if err := e.follows[0].Stop(ctx); err != nil {
+			return err
+		}
+		e.follows = e.follows[1:]
+	}
+	if e.stopAdmission != nil {
+		if err := e.stopAdmission(ctx); err != nil {
+			return err
+		}
+		e.stopAdmission = nil
+	}
+	for len(e.subscriptions) > 0 {
+		if err := e.subscriptions[0].DrainContext(ctx); err != nil {
+			return err
+		}
+		e.subscriptions = e.subscriptions[1:]
+	}
+	e.stopped = true
+	return nil
+}
+
+func waitGroup(ctx context.Context, wg *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Run 启动协调器并阻塞到 ctx 结束或某个分区 fail-stop，然后停机（停机预算 30s）。分区 fail-stop 时返回它的原因。
+func (e *Engine) Run(ctx context.Context) error {
+	if err := e.Start(ctx); err != nil {
+		return err
+	}
+	var cause error
 	select {
 	case <-ctx.Done():
-	case <-kick:
-	case <-timer.C:
+	case <-e.failed:
+		for _, p := range e.partitions {
+			select {
+			case <-p.done:
+				if p.failErr != nil && cause == nil {
+					cause = p.failErr
+				}
+			default:
+			}
+		}
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := e.Stop(stopCtx); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
+// Stats 返回累计计数。
+func (e *Engine) Stats() Stats {
+	c := &e.stats
+	return Stats{
+		Started: c.started.Load(), Dispatched: c.dispatched.Load(), Completed: c.completed.Load(), Compensated: c.compensated.Load(),
+		Failed: c.failed.Load(), ManualRequired: c.manualRequired.Load(), Duplicates: c.duplicates.Load(),
+		LateAfterAbandon: c.lateAfterAbandon.Load(), StaleIncarnation: c.staleIncarnation.Load(), StaleAttempt: c.staleAttempt.Load(),
+		Reopened: c.reopened.Load(), RejectedInputs: c.rejectedInputs.Load(), AdmissionRejected: c.admissionRejected.Load(),
+		UnknownSaga: c.unknownSaga.Load(), Events: c.events.Load(), PublishUnknown: c.publishUnknown.Load(),
+		PublishResolved: c.publishResolved.Load(), BatchIncomplete: c.batchIncomplete.Load(), PublishRetried: c.publishRetried.Load(),
+		Snapshots: c.snapshots.Load(), SnapshotConflicts: c.snapshotConflicts.Load(), Purges: c.purges.Load(), Pruned: c.pruned.Load(),
+		Replayed: c.replayed.Load(), FailStops: c.failStops.Load(),
 	}
 }
-func (e *Engine) countTerminal(status Status) {
-	switch status {
-	case StatusCompleted:
-		e.completed.Add(1)
-	case StatusCompensated:
-		e.compensated.Add(1)
-	case StatusFailed:
-		e.failed.Add(1)
-	case StatusManualRequired:
-		e.failed.Add(1)
-		e.manualRequired.Add(1)
+
+// ---- 发起方 API ----
+
+// StartSaga 追加一条启动意图并等分区所有者的判定（设计 §7）：接受或同一意图已存在 → 返回记录；同业务键不同意图 →
+// ErrIdentityConflict；准入关闭 → ErrBackpressure（提示关闭时不写意图，写入后被拒同样返回它）；所有者缺定义 →
+// ErrDefinitionMissing；ctx 到期仍无判定 → ErrStartUnconfirmed（意图已持久、结果未知，用同一请求重试安全）。
+// saga ID 恒为 IDOf(Type, BusinessKey)（选项 ID-A）；request.Now 不用（时间以所有者为准）。
+func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, error) {
+	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
+		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
 	}
+	request, err := prepareStart(request, e.opts.MaxPayloadBytes)
+	if err != nil {
+		return Record{}, err
+	}
+	digest, err := startIntentDigest(request)
+	if err != nil {
+		return Record{}, err
+	}
+	if closed, reason := e.hints.closed(); closed {
+		return Record{}, errAdmissionClosed(reason)
+	}
+	id := IDOf(request.Type, request.BusinessKey)
+	k := e.layout.PartitionOf(id)
+	attempt := e.nextAttempt()
+	request.Now = time.Time{}
+	data, _ := json.Marshal(startInput{V: WireVersion, Request: request, Attempt: attempt, Digest: digest})
+	return e.submitIntent(ctx, e.layout.StartSubject(k), "start."+id+"."+attempt, attempt, data, id, digest)
+}
+
+// Get 从分区所有者的内存读一条记录。终态过了保留期返回 ErrNotFound；所有者不在返回 ErrPartitionUnavailable。
+func (e *Engine) Get(ctx context.Context, id string) (Record, error) {
+	id = strings.TrimSpace(id)
+	if !validSubjectToken(id, 128) {
+		return Record{}, ErrInvalidRecord
+	}
+	reply, err := e.ask(ctx, e.layout.PartitionOf(id), queryRequest{Kind: "get", ID: id})
+	if err != nil {
+		return Record{}, err
+	}
+	if !reply.Found || reply.Record == nil {
+		return Record{}, ErrNotFound
+	}
+	return *reply.Record, nil
+}
+
+// GetByBusinessKey = Get(IDOf(type, businessKey))。还没启动（或终态过了保留期）返回 ErrNotFound。
+func (e *Engine) GetByBusinessKey(ctx context.Context, sagaType, businessKey string) (Record, error) {
+	return e.Get(ctx, IDOf(strings.TrimSpace(sagaType), strings.TrimSpace(businessKey)))
+}
+
+// List 向全部分区所有者散播查询并合并（按更新时间、ID 排序，截取 Limit）。覆盖非终态、保留期内的终态与全部 ManualRequired；
+// 有分区没回答返回 ErrPartitionUnavailable（点名），不返回残缺结果。Limit 缺省 100、上限 1000。
+func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
+	if query.Limit <= 0 {
+		query.Limit = 100
+	}
+	if query.Limit > 1000 {
+		return nil, ErrInvalidRecord
+	}
+	replies, err := e.askAll(ctx, queryRequest{Kind: "list", Query: &query})
+	if err != nil {
+		return nil, err
+	}
+	var out []Record
+	for _, reply := range replies {
+		out = append(out, reply.Records...)
+	}
+	sortRecords(out)
+	if len(out) > query.Limit {
+		out = out[:query.Limit]
+	}
+	return out, nil
+}
+
+// Resume 向分区追加一条 Resume 意图并等判定。规则见 planResume，另有回执保留期守卫（ErrReceiptsExpired）。
+// ctx 到期仍无判定 → ErrStartUnconfirmed（再发同一请求是安全的：已生效的 Resume 之后记录不再是可 Resume 的状态）。
+func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, error) {
+	request, _, err := prepareResume(request, e.now())
+	if err != nil {
+		return Record{}, err
+	}
+	return e.submitOperation(ctx, opInput{Kind: opResume, ID: request.ID, Resume: &request, Now: request.Now})
+}
+
+// Compensate 向分区追加一条人工补偿意图并等判定（planCompensate：已在补偿或已补偿原样返回，Completed 返回 ErrSagaCompleted）。
+func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Time) (Record, error) {
+	id = strings.TrimSpace(id)
+	if !validSubjectToken(id, 128) || len(reason) > 4096 {
+		return Record{}, ErrInvalidRecord
+	}
+	if now.IsZero() {
+		now = e.now()
+	}
+	return e.submitOperation(ctx, opInput{Kind: opCompensate, ID: id, Reason: reason, Now: now.UTC()})
+}
+
+func (e *Engine) submitOperation(ctx context.Context, in opInput) (Record, error) {
+	in.V = WireVersion
+	in.Attempt = e.nextAttempt()
+	data, _ := json.Marshal(in)
+	k := e.layout.PartitionOf(in.ID)
+	return e.submitIntent(ctx, e.layout.OpSubject(k), "op."+in.ID+"."+in.Attempt, in.Attempt, data, in.ID, "")
+}
+
+// Complete 把一份结果追加到所属分区的 in.res（MsgID res.<CommandID>），只承诺“已持久进入输入”；接收与否由分区循环判定。
+// 框架自带的步骤消费者直接发布（publishCompletion），它留给自定义参与方。
+func (e *Engine) Complete(ctx context.Context, completion Completion) error {
+	if completion.Validate() != nil || len(completion.Data) > e.opts.MaxPayloadBytes {
+		return ErrInvalidRecord
+	}
+	completion.CompletedAt = time.Time{}
+	data, _ := json.Marshal(resultInput{V: WireVersion, Completion: completion})
+	k := e.layout.PartitionOf(completion.SagaID)
+	return e.publishInput(ctx, fnats.LogMsg{Subject: e.layout.ResultSubject(k), Data: data, MsgID: "res." + completion.CommandID}, false)
 }

@@ -16,7 +16,7 @@ import (
 // admission.go 是 JetStream 协调器按参与方投影积压做的准入（设计 §6，原型稿 §12a 迁移）：
 //
 //   - 信号：装了原生步骤的进程定期把 DataEngine 投影器的 WALUnacked（记录数）写进 LoadBucket 的 part.<service>.<sid>
-//     （发布者 LoadPublisher 在第 3 批）。桶有 MaxAge，并开 LimitMarkerTTL：崩溃进程的键过期时服务端写删除标记，Watch 看得到，
+//     （发布者 LoadPublisher，wiring/saga 的 Steps 在有原生步骤时启动）。桶有 MaxAge，并开 LimitMarkerTTL：崩溃进程的键过期时服务端写删除标记，Watch 看得到，
 //     该参与方不再计入（不开的话过期是静默的，那个参与方会一直被判为信号停更、准入一直关）。
 //   - 判定：每个协调器进程一份 admission，全部分区共用。积压 = 全部参与方 WALUnacked 的最大值；≥ HighRecords 关闭，
 //     关闭后 ≤ LowRecords 才重开（滞回）。
@@ -38,7 +38,7 @@ const (
 	participantKeyPrefix = "part."
 )
 
-// AdmissionOptions 是准入参数。零值字段在 NewJetStreamEngine 里取缺省（原型第五轮推荐值换算成记录数）。
+// AdmissionOptions 是准入参数。零值字段在 NewEngine 里取缺省（原型第五轮推荐值换算成记录数）。
 type AdmissionOptions struct {
 	// Enabled 关闭时新启动一律准入（不建 watch、不发布提示）。
 	Enabled bool
@@ -133,7 +133,7 @@ func (a *admission) observe(entry fnats.LogKVEntry) {
 		return
 	}
 	var load participantLoad
-	if json.Unmarshal(entry.Value, &load) != nil || load.V != LogWireVersion {
+	if json.Unmarshal(entry.Value, &load) != nil || load.V != WireVersion {
 		slog.Warn("saga: ignored an undecodable admission signal", "key", entry.Key)
 		return
 	}
@@ -228,7 +228,7 @@ func (a *admission) publishHints(kv fnats.LogKV, stop <-chan struct{}) {
 		case <-tick.C:
 		}
 		state := a.evaluate()
-		hint := admissionHint{V: LogWireVersion, Open: state.Open, Reason: state.Reason, BacklogRecords: state.BacklogRecords}
+		hint := admissionHint{V: WireVersion, Open: state.Open, Reason: state.Reason, BacklogRecords: state.BacklogRecords}
 		if hint.Open == last.Open && hint.Reason == last.Reason && time.Since(lastAt) < a.opts.HintEvery {
 			continue
 		}
@@ -257,7 +257,7 @@ func (h *admissionHints) observe(entry fnats.LogKVEntry) {
 		return
 	}
 	var hint admissionHint
-	if json.Unmarshal(entry.Value, &hint) != nil || hint.V != LogWireVersion {
+	if json.Unmarshal(entry.Value, &hint) != nil || hint.V != WireVersion {
 		return
 	}
 	h.mu.Lock()
@@ -300,7 +300,7 @@ func errAdmissionClosed(reason string) error {
 	return fmt.Errorf("%w (%s)", ErrBackpressure, reason)
 }
 
-// LoadPublisher 是参与方一侧的准入信号（设计 §6，第 3 批）：装了原生步骤的进程每 interval 把本进程 DataEngine 投影器的积压
+// LoadPublisher 是参与方一侧的准入信号（设计 §6）：装了原生步骤的进程每 interval 把本进程 DataEngine 投影器的积压
 // （ProjectorStats.WALUnacked，记录数）写进 LoadBucket 的 part.<name>。协调器按“最后一次收到更新”的本机时刻判过期，
 // 所以发布要比 AdmissionOptions.StaleAfter 勤（缺省 200ms 对 2s）；写失败只计数，下一拍重写。
 //
@@ -352,7 +352,7 @@ func (p *LoadPublisher) Run(ctx context.Context) {
 }
 
 func (p *LoadPublisher) publish(ctx context.Context) {
-	raw, _ := json.Marshal(participantLoad{V: LogWireVersion, Records: p.read()})
+	raw, _ := json.Marshal(participantLoad{V: WireVersion, Records: p.read()})
 	putCtx, cancel := context.WithTimeout(ctx, max(p.interval, time.Second))
 	defer cancel()
 	if _, err := p.kv.Put(putCtx, p.key, raw); err != nil && ctx.Err() == nil {

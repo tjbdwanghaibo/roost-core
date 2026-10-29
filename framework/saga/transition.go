@@ -12,9 +12,9 @@ import (
 )
 
 // transition.go 是 saga 的纯状态机：输入一份记录（与需要时的定义、结果、时刻），算出目标记录与这次转移的原因、
-// 要关闭的操作、要派发的命令。这里不读写存储、不发布、不计数、不记日志——那些留给调用方（Redis 引擎的 Engine，
-// 与 JetStream 协调器的分区循环），两种协调器共用同一套判定，所以“完成判定”“代际”“迟到成功补偿”等规则只有一份
-// （设计见 docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §0 第 2 条）。
+// 要关闭的操作、要派发的命令。这里不读写日志、不发布、不计数、不记日志——那些留给调用方（分区循环，partition.go）。
+// “完成判定”“代际”“迟到成功补偿”等规则只有这一份（从原 Redis 协调器原样抽出，设计见
+// docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §0 第 2 条）。
 //
 // 协调器写记录的唯一转移（saga 方向 ①，见 docs/framework/SAGA.md）：截止、人工 Compensate、定义缺失、超时、接收结果等
 // 出口都只算出目标状态 after，交给 planTransition 统一决定关闭哪个操作、是否开新一生。“离开当前步骤时关闭哪个操作”若在
@@ -25,7 +25,7 @@ import (
 type transitionCause uint8
 
 const (
-	// causeDispatch：派发当前步骤的下一次尝试（不离开步骤，带新命令的 outbox）。
+	// causeDispatch：派发当前步骤的下一次尝试（不离开步骤，事件带新命令）。
 	causeDispatch transitionCause = iota + 1
 	// causeResult：接收了一次尝试的结果（成功、拒绝或可重试失败）。
 	causeResult
@@ -48,14 +48,9 @@ const (
 // transition 是一次写记录除目标状态以外的输入。
 type transition struct {
 	cause transitionCause
-	// fenced：协调循环持有记录租约，写入同时核对它（ClaimDue 之后的出口）。Complete / Compensate / Resume
-	// 不持租约，只按版本 fence。只对 Redis 引擎有意义；JetStream 协调器由分区单写者与期望序号隔离。
-	fenced bool
-	// receipt：接收的结果，与状态推进在同一事务里记回执。存储按 receipt.Success 决定关闭方式：
-	// 只有接收成功才是“带结果关闭”，其余关闭都是“放弃关闭”（见 ApplyRequest）。
+	// receipt：接收的结果，与状态推进在同一条事件里记回执。分区按 receipt.Success 决定关闭方式：
+	// 只有接收成功才是“带结果关闭”，其余关闭都是“放弃关闭”（OperationAbandoned）。
 	receipt *Completion
-	// outbox：派发的新命令；它替换同一操作仍排队的旧命令。
-	outbox *OutboxRecord
 }
 
 // planTransition 把 before → after 定成一次记录转移，返回实际写入的 after 与要关闭的操作（空串表示不关闭）：
@@ -67,7 +62,7 @@ type transition struct {
 //     人工 Compensate 只在补偿方向停下的记录上开（B1：要重新执行的补偿步骤在这一生里已经派发过，不换代会复用
 //     上一轮的 CommandID，收件箱只会回放旧的拒绝或报身份冲突）。
 //
-// 两种协调器写记录都先经过它：Redis 引擎在 stepTransition 里把结果交给 Store.Apply，JetStream 分区把它写进事件。
+// 分区写记录都先经过它，再把结果写进事件。
 func planTransition(before, after Record, t transition) (Record, string) {
 	after.Incarnation = before.Incarnation
 	if t.cause == causeResume || (t.cause == causeManualCompensate && before.Phase == PhaseCompensate) {
@@ -104,7 +99,6 @@ func openOperation(record Record) string {
 // 定义是否注册由调用方先查（两种协调器查的地方不同）。
 func prepareStart(request StartRequest, maxPayload int) (StartRequest, error) {
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
-	request.ID = strings.TrimSpace(request.ID)
 	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
 	if request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > maxPayload {
 		return StartRequest{}, ErrInvalidRecord
@@ -169,7 +163,6 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 		after.NextRunAt = time.Time{}
 		after.CommandID = ""
 		after.OperationKey = ""
-		clearLease(&after)
 		// 在等结果或正在重试退避的操作都被放弃（planTransition 关闭它）。
 		return duePlan{cause: causeDefinitionMissing, after: after}
 	}
@@ -186,7 +179,6 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 		after.LastError = "invalid saga step"
 		after.Version++
 		after.UpdatedAt = now
-		clearLease(&after)
 		return duePlan{cause: causeInvalidStep, after: after}
 	}
 	after := record.Clone()
@@ -197,7 +189,6 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 	after.NextRunAt = now.Add(step.Timeout)
 	after.OperationKey = operationKey(record.ID, record.Phase, record.Step)
 	after.CommandID = commandID(after.OperationKey, after.Incarnation, after.Attempt)
-	clearLease(&after)
 	topic := step.ForwardTopic
 	if record.Phase == PhaseCompensate {
 		topic = step.CompensateTopic
@@ -261,7 +252,6 @@ func planResume(record Record, defined bool, request ResumeRequest, deadline tim
 	} else if after.Phase == PhaseForward && !after.DeadlineAt.IsZero() && !now.Before(after.DeadlineAt) {
 		return Record{}, ErrDeadlineExpired
 	}
-	clearLease(&after)
 	if record.Phase == PhaseCompensate || record.CompletedSteps > 0 || record.LateStep > 0 {
 		// 补偿：先补放弃后才生效的那一步（saga 方向 ④），再按倒序补已完成的前缀。
 		after = nextCompensation(after, now)
@@ -356,6 +346,17 @@ func positionedAt(record Record, operation string) bool {
 	}
 }
 
+// completionHistory 是协调器对一份“不在等待中”的 completion 的了解（分区状态里的回执与操作 tombstone，stateHistory 给出）：
+// 用来区分“重复的结果”和“放弃之后才到的成功”——后者说明那一步已经生效、却没有被纳入补偿。
+type completionHistory struct {
+	// Recorded：这份 completion 已被接收，或它的 operation 已关闭。
+	Recorded bool
+	// Receipt：这个 CommandID 的 completion 本身已被接收（不只是 operation 已关闭）。
+	Receipt bool
+	// Closure 是 operation tombstone 记录的关闭方式。
+	Closure OperationClosure
+}
+
 // historyVerdict 是 judgeHistory 的结论：协调器不接收为当前结果的 completion 按回执与 tombstone 走哪个去向。
 type historyVerdict uint8
 
@@ -373,7 +374,7 @@ const (
 
 // judgeHistory 判定 judgeCompletion 给出 verdictHistory 的 completion。history 是存储对它的了解（回执、tombstone 与
 // 关闭方式）；historyLateStep 时第二个返回值是要补偿的正向步骤号。
-func judgeHistory(record Record, completion Completion, history CompletionHistory) (historyVerdict, int) {
+func judgeHistory(record Record, completion Completion, history completionHistory) (historyVerdict, int) {
 	if !history.Recorded {
 		return historyNotWaiting, 0
 	}
@@ -411,7 +412,6 @@ func lateStepState(record Record, completion Completion, step int) Record {
 	after.UpdatedAt = now
 	after.LateStep = step + 1
 	after.LateData = append([]byte(nil), completion.Data...)
-	clearLease(&after)
 	if openOperation(record) == "" && record.Status != StatusManualRequired {
 		after.LastError = fmt.Sprintf("step %d took effect after the coordinator abandoned it", step)
 		after = nextCompensation(after, now)
@@ -457,7 +457,6 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 	after.UpdatedAt = now
 	after.CommandID = ""
 	after.OperationKey = ""
-	clearLease(&after)
 	if result.Success {
 		late := compensatingLateStep(record)
 		if result.Data != nil && !late {
@@ -516,7 +515,6 @@ func retryState(after Record, definition Definition, reason string, now time.Tim
 	after.LastError = reason
 	after.CommandID = ""
 	after.OperationKey = ""
-	clearLease(&after)
 	step, ok := stepFor(record, definition)
 	if !ok {
 		after.Status = StatusManualRequired
@@ -541,8 +539,7 @@ func retryState(after Record, definition Definition, reason string, now time.Tim
 }
 
 // beginCompensation 是从已存记录出发的转移：推进一次版本，再把记录转成补偿状态。已经推进过版本的调用方
-// （applyCompletion、retryOrCompensate）直接用 compensationState——对已推进的副本再调用本函数会得到 expected+2，
-// MongoStore.Apply 只接受 expected+1，会把它当非法记录拒绝。
+// （applyCompletion、retryOrCompensate）直接用 compensationState——对已推进的副本再调用本函数会把版本推进两次。
 func beginCompensation(record Record, reason string, now time.Time) Record {
 	after := record.Clone()
 	after.Version = record.Version + 1
@@ -556,7 +553,6 @@ func compensationState(after Record, reason string, now time.Time) Record {
 	after.Attempt = 0
 	after.CommandID = ""
 	after.OperationKey = ""
-	clearLease(&after)
 	if after.CompletedSteps == 0 && after.LateStep == 0 {
 		after.Status = StatusFailed
 		after.NextRunAt = time.Time{}
@@ -626,8 +622,6 @@ func commandIDIncarnation(operationKey, commandID string) uint32 {
 	}
 	return uint32(value)
 }
-
-func clearLease(record *Record) { record.Lease = Lease{} }
 
 func canonicalDeadline(value time.Time) time.Time {
 	if value.IsZero() {

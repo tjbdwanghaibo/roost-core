@@ -39,14 +39,14 @@ func InspectPartitions(ctx context.Context, log fnats.JetStreamLog, layout Layou
 		return nil, 0, fmt.Errorf("saga: read registered layout: %w", err)
 	}
 	var registered layoutRecord
-	if json.Unmarshal(entry.Value, &registered) != nil || registered.V != LogWireVersion || registered.Layout != layoutOf(layout) {
+	if json.Unmarshal(entry.Value, &registered) != nil || registered.V != WireVersion || registered.Layout != layoutOf(layout) {
 		return nil, 0, fmt.Errorf("%w: registered %s, inspected %+v", ErrLayoutMismatch, entry.Value, layoutOf(layout))
 	}
 	objects, err := log.Objects(ctx, fnats.LogObjectConfig{Bucket: layout.ObjectBucket(), Replicas: replicas})
 	if err != nil {
 		return nil, 0, fmt.Errorf("saga: open snapshot objects: %w", err)
 	}
-	e := &JetStreamEngine{log: log, layout: layout, now: time.Now, snapshots: snapshots, objects: objects}
+	e := &Engine{log: log, layout: layout, now: time.Now, snapshots: snapshots, objects: objects}
 	var records []Record
 	pending := 0
 	for k := range layout.Partitions {

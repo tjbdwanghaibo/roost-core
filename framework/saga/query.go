@@ -48,7 +48,7 @@ func (r *replyRouter) await(attempt string) (<-chan verdictReply, func()) {
 
 func (r *replyRouter) deliver(data []byte) {
 	var reply verdictReply
-	if json.Unmarshal(data, &reply) != nil || reply.V != LogWireVersion {
+	if json.Unmarshal(data, &reply) != nil || reply.V != WireVersion {
 		return
 	}
 	r.mu.Lock()
@@ -63,14 +63,14 @@ func (r *replyRouter) deliver(data []byte) {
 }
 
 // nextAttempt 是本实例下一次启动 / 运维尝试的标识。
-func (e *JetStreamEngine) nextAttempt() string {
+func (e *Engine) nextAttempt() string {
 	return e.instance + "." + strconv.FormatUint(e.attemptSeq.Add(1), 10)
 }
 
 // publishInput 把一条输入追加到分区（不带期望序号：输入有多个写者，去重靠 MsgID）。结果未知时同 MsgID 重发；
 // intent=true 时第一次发布就得到 Duplicate 说明尝试标识被复用（ErrStartIdentityReused）。ctx 结束时，若之前某次可能已落库，
 // 返回 ErrStartUnconfirmed（同时满足 ctx 错误）。
-func (e *JetStreamEngine) publishInput(ctx context.Context, msg fnats.LogMsg, intent bool) error {
+func (e *Engine) publishInput(ctx context.Context, msg fnats.LogMsg, intent bool) error {
 	maybeStored := false
 	for {
 		publishCtx, cancel := context.WithTimeout(ctx, e.opts.PublishTimeout)
@@ -101,7 +101,7 @@ func (e *JetStreamEngine) publishInput(ctx context.Context, msg fnats.LogMsg, in
 }
 
 // submitIntent 追加一条带回复头的意图并等所有者的判定。startDigest 非空（启动）时，超时后按 Get 补查。
-func (e *JetStreamEngine) submitIntent(ctx context.Context, subject, msgID, attempt string, data []byte, id, startDigest string) (Record, error) {
+func (e *Engine) submitIntent(ctx context.Context, subject, msgID, attempt string, data []byte, id, startDigest string) (Record, error) {
 	if !e.ready.Load() {
 		return Record{}, ErrClosed
 	}
@@ -175,8 +175,8 @@ func verdictResult(reply verdictReply) (Record, error) {
 }
 
 // ask 向分区 k 的所有者问一次（Get）。所有者不在或超时返回 ErrPartitionUnavailable。
-func (e *JetStreamEngine) ask(ctx context.Context, k int, request queryRequest) (queryReply, error) {
-	request.V = LogWireVersion
+func (e *Engine) ask(ctx context.Context, k int, request queryRequest) (queryReply, error) {
+	request.V = WireVersion
 	data, _ := json.Marshal(request)
 	askCtx, cancel := context.WithTimeout(ctx, e.opts.QueryTimeout)
 	defer cancel()
@@ -188,7 +188,7 @@ func (e *JetStreamEngine) ask(ctx context.Context, k int, request queryRequest) 
 		return queryReply{}, fmt.Errorf("%w: partition %d: %v", ErrPartitionUnavailable, k, err)
 	}
 	var reply queryReply
-	if err := json.Unmarshal(raw, &reply); err != nil || reply.V != LogWireVersion || reply.Part != k {
+	if err := json.Unmarshal(raw, &reply); err != nil || reply.V != WireVersion || reply.Part != k {
 		return queryReply{}, fmt.Errorf("%w: partition %d answered an undecodable reply", ErrPartitionUnavailable, k)
 	}
 	if reply.Error != "" {
@@ -199,15 +199,15 @@ func (e *JetStreamEngine) ask(ctx context.Context, k int, request queryRequest) 
 
 // askAll 向全部分区所有者散播一次查询，每个分区收一条回复；超时还有分区没回答时返回 ErrPartitionUnavailable 并点名，
 // 不返回残缺结果。
-func (e *JetStreamEngine) askAll(ctx context.Context, request queryRequest) ([]queryReply, error) {
-	request.V = LogWireVersion
+func (e *Engine) askAll(ctx context.Context, request queryRequest) ([]queryReply, error) {
+	request.V = WireVersion
 	data, _ := json.Marshal(request)
 	askCtx, cancel := context.WithTimeout(ctx, e.opts.QueryTimeout)
 	defer cancel()
 	got := make(map[int]queryReply, e.layout.Partitions)
 	err := e.log.RequestMany(askCtx, e.layout.ListSubject(), data, func(raw []byte) bool {
 		var reply queryReply
-		if json.Unmarshal(raw, &reply) == nil && reply.V == LogWireVersion && reply.Part >= 0 && reply.Part < e.layout.Partitions {
+		if json.Unmarshal(raw, &reply) == nil && reply.V == WireVersion && reply.Part >= 0 && reply.Part < e.layout.Partitions {
 			got[reply.Part] = reply
 		}
 		return len(got) < e.layout.Partitions
@@ -248,7 +248,7 @@ func sortRecords(records []Record) {
 
 // serveQueries 订阅拥有分区的 Get subject 与列表散播 subject，把查询交给分区循环。订阅回调只做解码与非阻塞投递：
 // 分区的查询队列满时丢弃这次查询（发起方超时），不拖住 NATS 回调。
-func (e *JetStreamEngine) serveQueries() error {
+func (e *Engine) serveQueries() error {
 	limits := fnats.PendingLimits{Messages: 8192, Bytes: 64 << 20, OnError: func(err error) {
 		metrics.IncCounter("saga.query.subscription_errors_total", nil, 1)
 		slog.Error("saga: query subscription error", "err", err)
@@ -264,7 +264,7 @@ func (e *JetStreamEngine) serveQueries() error {
 		p := p
 		sub, err := e.raw.SubscribeBounded(e.layout.QuerySubject(p.k), limits, func(msg *fnats.Msg) {
 			var request queryRequest
-			if msg.Reply == "" || json.Unmarshal(msg.Data, &request) != nil || request.V != LogWireVersion || request.Kind != "get" {
+			if msg.Reply == "" || json.Unmarshal(msg.Data, &request) != nil || request.V != WireVersion || request.Kind != "get" {
 				return
 			}
 			route(p, request, msg.Reply)
@@ -279,7 +279,7 @@ func (e *JetStreamEngine) serveQueries() error {
 	}
 	sub, err := e.raw.SubscribeBounded(e.layout.ListSubject(), limits, func(msg *fnats.Msg) {
 		var request queryRequest
-		if msg.Reply == "" || json.Unmarshal(msg.Data, &request) != nil || request.V != LogWireVersion || request.Kind != "list" || request.Query == nil {
+		if msg.Reply == "" || json.Unmarshal(msg.Data, &request) != nil || request.V != WireVersion || request.Kind != "list" || request.Query == nil {
 			return
 		}
 		for _, p := range e.partitions {
@@ -294,7 +294,7 @@ func (e *JetStreamEngine) serveQueries() error {
 }
 
 // publishReply 经核心 NATS 发一条回复（判定或查询结果），至多一次；失败只计数（发起方按超时与补查处理）。
-func (e *JetStreamEngine) publishReply(subject string, reply any) {
+func (e *Engine) publishReply(subject string, reply any) {
 	if subject == "" {
 		return
 	}

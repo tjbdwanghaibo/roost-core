@@ -10,12 +10,13 @@ import (
 	"time"
 )
 
-// log_wire.go 是 JetStream 协调器的线格式（LogWireVersion 2，设计 §4.2）：分区事件、三类输入、判定回复与查询、快照清单与正文。
-// 一律 JSON；解码按版本精确匹配，不兼容 LogWireVersion 1（线上未部署，升级需清空，见 CHANGELOG）。坏输入（解码失败、版本不对、
+// log_wire.go 是 JetStream 协调器的线格式（WireVersion 2，设计 §4.2）：分区事件、三类输入、判定回复与查询、快照清单与正文。
+// 一律 JSON；解码按版本精确匹配，不兼容 WireVersion 1（线上未部署，升级需清空，见 CHANGELOG）。坏输入（解码失败、版本不对、
 // 内容校验不过）由分区计数并跳过，输入水位照常前进（日志里的输入不能 Term）；坏事件与坏快照说明权威日志本身不可信，分区不启动。
 
-// LogWireVersion 是 JetStream 协调器全部消息与快照的格式版本（设计稿的 WireVersion 2；现行 WireVersion 1 是 Redis 引擎与 Nest effect 的信封，第 4 批切换时合并）。
-const LogWireVersion uint16 = 2
+// WireVersion 是 saga 全部线上消息的格式版本：分区事件、输入、快照清单、准入信号与 Nest 启动 effect。不兼容旧版本（1 是已删除
+// 的 Redis 协调器与它的信封），解码按版本精确匹配。
+const WireVersion uint16 = 2
 
 // replyHeader 是启动 / 运维意图上的业务头：所有者把判定经核心 NATS 发到这个 subject（只给这一次尝试，选项 R-A）。
 const replyHeader = "Roost-Saga-Reply"
@@ -23,7 +24,7 @@ const replyHeader = "Roost-Saga-Reply"
 // sagaState 是一笔 saga 在分区里的完整状态：记录、操作 tombstone 与已接收结果的回执摘要。每条事件携带它的新值，重放 = 按序覆盖。
 // 提交之后不再修改（写时复制），快照可以直接引用已提交的值。
 //
-// 相对设计初稿多了 Receipts：Redis / Mongo 存储按 CommandID 记回执摘要，用于“同一次尝试的重复送达”（重复）与“同一 CommandID
+// 相对设计初稿多了 Receipts：按 CommandID 记回执摘要，用于“同一次尝试的重复送达”（重复）与“同一 CommandID
 // 不同结论”（身份冲突）的判定（judgeHistory 的 Receipt 位、Apply 的重复检查）；分区要给出同样的结论，就得记同样的东西。
 // 它随 saga 一起在终态保留期后剪掉，单笔条目数 = 这笔 saga 接收过的结果数。
 type sagaState struct {
@@ -73,7 +74,7 @@ func (s *sagaState) validate() error {
 	return nil
 }
 
-// receiptDigest 是一份结果的稳定摘要（与 MongoStore / RedisStore 的回执摘要同一形式）：同一 CommandID 再次送达时，
+// receiptDigest 是一份结果的稳定摘要：同一 CommandID 再次送达时，
 // 摘要相同是重复，不同是身份冲突。
 func receiptDigest(c Completion) string {
 	stable := struct {
@@ -135,7 +136,7 @@ type logEvent struct {
 }
 
 func encodeEvent(ev logEvent) ([]byte, error) {
-	ev.V = LogWireVersion
+	ev.V = WireVersion
 	return json.Marshal(ev)
 }
 
@@ -145,8 +146,8 @@ func decodeEvent(raw []byte, layout Layout, k int) (logEvent, error) {
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return logEvent{}, fmt.Errorf("%w: event: %v", ErrInvalidRecord, err)
 	}
-	if ev.V != LogWireVersion {
-		return logEvent{}, fmt.Errorf("%w: event wire version %d, want %d", ErrInvalidRecord, ev.V, LogWireVersion)
+	if ev.V != WireVersion {
+		return logEvent{}, fmt.Errorf("%w: event wire version %d, want %d", ErrInvalidRecord, ev.V, WireVersion)
 	}
 	if ev.Part != k || !eventKinds[ev.Kind] || ev.Writer == "" {
 		return logEvent{}, fmt.Errorf("%w: event part %d kind %q writer %q on partition %d", ErrInvalidRecord, ev.Part, ev.Kind, ev.Writer, k)
@@ -180,7 +181,7 @@ func decodeStartInput(raw []byte) (startInput, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return startInput{}, fmt.Errorf("%w: start input: %v", ErrInvalidRecord, err)
 	}
-	if in.V != LogWireVersion || in.Attempt == "" || len(in.Attempt) > 256 || in.Request.ID != "" || len(in.Digest) != 64 {
+	if in.V != WireVersion || in.Attempt == "" || len(in.Attempt) > 256 || len(in.Digest) != 64 {
 		return startInput{}, fmt.Errorf("%w: start input version %d attempt %q", ErrInvalidRecord, in.V, in.Attempt)
 	}
 	return in, nil
@@ -197,7 +198,7 @@ func decodeResultInput(raw []byte, maxPayload int) (Completion, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return Completion{}, fmt.Errorf("%w: result input: %v", ErrInvalidRecord, err)
 	}
-	if in.V != LogWireVersion {
+	if in.V != WireVersion {
 		return Completion{}, fmt.Errorf("%w: result input version %d", ErrInvalidRecord, in.V)
 	}
 	if err := in.Completion.Validate(); err != nil || len(in.Completion.Data) > maxPayload {
@@ -228,7 +229,7 @@ func decodeOpInput(raw []byte) (opInput, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return opInput{}, fmt.Errorf("%w: op input: %v", ErrInvalidRecord, err)
 	}
-	valid := in.V == LogWireVersion && in.Attempt != "" && len(in.Attempt) <= 256 && validSubjectToken(in.ID, 128) && !in.Now.IsZero() &&
+	valid := in.V == WireVersion && in.Attempt != "" && len(in.Attempt) <= 256 && validSubjectToken(in.ID, 128) && !in.Now.IsZero() &&
 		((in.Kind == opResume && in.Resume != nil && in.Resume.ID == in.ID) || (in.Kind == opCompensate && in.Resume == nil && len(in.Reason) <= 4096))
 	if !valid {
 		return opInput{}, fmt.Errorf("%w: op input version %d kind %q", ErrInvalidRecord, in.V, in.Kind)
@@ -279,8 +280,8 @@ type queryReply struct {
 	Error   string   `json:"error,omitempty"`
 }
 
-// snapshotWireVersion 是快照清单与正文的版本（与 LogWireVersion 同步）。
-const snapshotWireVersion = LogWireVersion
+// snapshotWireVersion 是快照清单与正文的版本（与 WireVersion 同步）。
+const snapshotWireVersion = WireVersion
 
 // snapshotLayout 是快照清单里记的布局（加载时与本进程比对）。
 type snapshotLayout struct {

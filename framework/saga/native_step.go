@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
-	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // 原生步骤的业务侧形状（SAGA.md「原生步骤执行契约」）。业务只写步骤体：拿到 NativeStep，把它作为参数交给自己的
-// Nest handler，在 handler 的事务里改实体并调用 step.Complete。收件箱预留、回执、completion 与等待投影都由框架做。
+// Nest handler，在 handler 的事务里改实体并调用 step.Complete。回执的读写、结果发布都由框架做。
 //
 //	body := func(ctx context.Context, step saga.NativeStep) error {
 //		state, err := decode(step.Command().Payload)
@@ -26,36 +24,36 @@ import (
 //	func handlerDebit(target player.IBagEntity, amount int32, step saga.NativeStep) (int32, error) {
 //		left, err := target.BagComp().Remove(amount)
 //		if err != nil {
-//			return 0, step.Complete(false, "insufficient")  // 业务拒绝也提交：只有回执与失败的 completion
+//			return 0, step.Complete(false, "insufficient")  // 业务拒绝也提交：只有回执
 //		}
 //		return left, step.Complete(true, "")
 //	}
 //
-// 契约：
-//   - 幂等键是 Command.IdempotencyKey（一个操作实例：saga + 步骤 + 方向 + 代际）。同一操作实例的全部尝试里至多一次
-//     生效，由收件箱的租约与投影事务里的 lease fence 保证，步骤体不需要自己的幂等。
-//   - 生效点是 Nest 事务的投影：业务修改、命令回执与 completion 是同一条 WAL 记录，要么一起生效，要么都不生效。
-//     重投读到回执就回放那份 completion，不再执行步骤体。
-//   - 步骤体返回错误 = 结果未知（Nest 提交可能已经发生）：消费者保留这次尝试的租约并 nak，重投时等它的回执到命令
-//     截止，之后由协调器按步骤超时发下一次尝试。只有 dataengine.ErrFencedEntityPending 交还租约、立刻重投。
+// 生成的 handler 包装在调用 handlerDebit 之前先 step.Begin(target)（选项 N-A，业务 handler 不写）。
+//
+// 契约（设计 §5.1）：
+//   - 幂等键是 Command.IdempotencyKey（一个操作实例：saga + 步骤 + 方向）。同一操作实例的全部尝试里至多一次生效：回执放在
+//     被改的实体里（roost add saga -native 生成回执字段），同一实体的事务由实体锁串行，回执与业务修改在同一条 WAL 记录里。
+//     重投（结果未知、ack 丢失）在 Begin 读到回执就回放，不再执行业务。
+//   - 生效点是 Nest 事务的 WAL 落盘（strict：锁内 fsync；pipelined：本事务的 WAL 票据落盘）；结论在落盘之后才交给消费者，
+//     由它直接发回协调器分区，PubAck 之后 ack 命令。
+//   - 步骤体返回错误 = 结果未知（Nest 提交可能已经发生）：消费者 nak 退避重投，重投时 Begin 读到回执就回放。
 //   - 补偿就是补偿方向的命令（Command.Phase = PhaseCompensate），同样走这里，同样至多生效一次；补偿被拒
 //     （Complete(false, …)）时协调器把 saga 标为 manual_required。
-//   - 步骤体只能用于业务本身就是一笔 Nest 事务的步骤；调用另一个服务的步骤用 Mongo 步骤并按 IdempotencyKey 幂等。
+//   - 步骤体只能用于业务本身就是一笔 Nest 事务的步骤，且不能修改 Remote 实体（ErrNativeStepRemoteWrite）；调用另一个服务的
+//     步骤用 Mongo 步骤并按 IdempotencyKey 幂等。
 
-// NativeStep 是原生步骤体在 Nest 事务里提交结果所需的全部：命令、本次投递取得的执行权（租约 fence）与收件箱。
+// NativeStep 是原生步骤体在 Nest 事务里提交结果所需的全部：命令与这一次运行（回执检查与结论）。
 //
-// 只由框架构造（DataEngineStepInbox.StepHandler、RunHandedOver），按值作为参数交给 Nest handler；零值的 Complete
-// 返回错误。它只对这一次投递有效：不要保存，不要复制进脱离的 goroutine——两次投递共用一份执行权会让其中一次的
-// fence 名不副实。
-//
-// 第 3 批起有两条路径并存（设计 §13，第 4 批删掉旧的）：run 非空是新路径（RunNativeStep 构造：回执在实体里，Begin 查、
-// Complete 写，见 step_receipt.go）；run 为空是旧路径（收件箱租约 + DataEngine 回执 + lease fence）。
+// 只由框架构造（RunNativeStep：步骤消费者与转交路径），按值作为参数交给 Nest handler；零值的 Begin / Complete 返回
+// ErrNoNativeStep。它只对这一次运行有效：不要保存，不要复制进脱离的 goroutine。
 type NativeStep struct {
-	inbox       *DataEngineStepInbox
-	command     Command
-	reservation Reservation
-	run         *nativeRun
+	command Command
+	run     *nativeRun
 }
+
+// ErrNoNativeStep 表示 NativeStep 不是框架为这一次运行构造的（零值，或步骤体不在 RunNativeStep 里运行）。
+var ErrNoNativeStep = errors.New("saga: no native step run; run the body under the step consumer or Steps.RunHandedOver")
 
 // Begin 是生成的 Nest 包装在业务函数之前调用的回执检查（选项 N-A），target 是 handler 的第一个锁目标，必须实现
 // StepReceiptHost（roost add saga -native 给实体生成回执字段与 SagaStepReceipts）。返回 replayed=true 时包装不调用业务函数、
@@ -63,11 +61,9 @@ type NativeStep struct {
 //
 // 参数是 any 而不是 StepReceiptHost：handler 的锁目标常是组件视图接口（I<Comp>Entity），接口里没有这个方法，具体实体类型才有；
 // 所以在运行时检查，缺了返回 ErrNoStepReceipts（点名类型），事务回滚，消费者 nak 并告警。
-//
-// 旧路径（run 为空）什么也不做、返回 false：至多一次由收件箱租约与投影 fence 保证，业务照常执行。
 func (step NativeStep) Begin(target any) (bool, error) {
 	if step.run == nil {
-		return false, nil
+		return false, ErrNoNativeStep
 	}
 	tx := nest.CurrentRollbackTx()
 	if tx == nil {
@@ -85,106 +81,20 @@ func (step NativeStep) Begin(target any) (bool, error) {
 }
 
 // NativeStepBody 是业务写的原生步骤体：在 Nest handler 里执行步骤并调用 step.Complete。返回 nil 表示 Nest 调用已
-// 返回成功（结果随投影送达协调器）；返回错误见 NativeStep 的契约（结果未知）。
+// 返回成功（结论在事务持久之后交给消费者）；返回错误见 NativeStep 的契约（结果未知）。
 type NativeStepBody func(ctx context.Context, step NativeStep) error
-
-// ErrNoNativeStep 表示原生步骤体不在原生步骤消费者里运行（ctx 上没有本次投递的执行权）。
-var ErrNoNativeStep = errors.New("saga: no native step reservation on the context; run the body under SubscribeDataEngineStep or RunHandedOver")
 
 // Command 是这一步的命令：载荷、IdempotencyKey、方向（Phase）与截止时间。
 func (step NativeStep) Command() Command { return step.command }
 
-// Complete 在当前 Nest 事务里绑定命令回执（带 lease fence）并发出 completion，必须在 Nest handler 内调用。
+// Complete 在当前 Nest 事务里写这个操作的回执，必须在 Begin 判定执行的同一事务里调用（生成的包装保证顺序）。
 //
-// 两样都要在事务里：回执让重投成为回放而不是第二次执行，completion 是协调器等的结果。业务拒绝同样调用它
-// （success=false，不改实体，只提交回执与失败的 completion）：协调器听不到的拒绝只会等到步骤超时。拒绝不可重试，
-// 协调器随即补偿已完成的步骤；reason 写进 completion 的 Error，空串时填一条通用说明。
-//
-// 新路径（RunNativeStep 构造的 NativeStep）：必须在 Begin 判定执行的同一事务里调用；写实体里的回执（覆盖旧一生的拒绝），
-// 顺手剪掉至多 16 条过了保留期的旧回执，结论在事务持久之后交给消费者，由它直接发回协调器分区。不经 DataEngine effect。
+// 业务拒绝同样调用它（success=false，不改实体，只提交回执）：协调器听不到的拒绝只会等到步骤超时。拒绝不可重试，
+// 协调器随即补偿已完成的步骤；reason 写进结果的 Error，空串时填一条通用说明。回执覆盖旧一生的拒绝，同一事务里顺手
+// 剪掉至多 16 条过了保留期的旧回执；结论在事务持久之后交给消费者，由它直接发回协调器分区。
 func (step NativeStep) Complete(success bool, reason string) error {
-	if step.run != nil {
-		return step.run.complete(success, reason)
-	}
-	if step.inbox == nil {
+	if step.run == nil {
 		return ErrNoNativeStep
 	}
-	if err := step.inbox.Bind(step.command, step.reservation); err != nil {
-		return err
-	}
-	completion := Completion{
-		CommandID:      step.command.ID,
-		IdempotencyKey: step.command.IdempotencyKey,
-		SagaID:         step.command.SagaID,
-		Success:        success,
-	}
-	if !success {
-		completion.Error = reason
-		if completion.Error == "" {
-			completion.Error = "saga: native step " + step.command.StepName + " refused"
-		}
-	}
-	return EmitCompletion(completion)
-}
-
-// StepHandler 把原生步骤体接到 SubscribeDataEngineStep：从 ctx 取本次投递的执行权构造 NativeStep 再调用 body。
-// 返回的 Completion 恒为零值，消费者不使用它（原生步骤的结果是事务里 emit 的那一份）。
-func (inbox *DataEngineStepInbox) StepHandler(body NativeStepBody) StepHandler {
-	return func(ctx context.Context, command Command) (Completion, error) {
-		if inbox == nil || body == nil {
-			return Completion{}, ErrInvalidRecord
-		}
-		reservation, ok := ReservationFromContext(ctx)
-		if !ok {
-			return Completion{}, ErrNoNativeStep
-		}
-		return Completion{}, body(ctx, NativeStep{inbox: inbox, command: command, reservation: reservation})
-	}
-}
-
-// RunHandedOver 在没有 JetStream 投递的路径上执行一条原生步骤命令：另一个进程判定命令“不归它”（StepConsumerConfig.Admit
-// 拒绝）后把命令转交过来，本进程自己取执行权再运行 body。按 sid / 分片决定谁执行、怎么转交是业务的拓扑，框架只提供这一半。
-//
-// 与消费者取的是同一份执行权（同一操作实例的状态文档），所以两条路径互斥：谁先预留谁执行，另一条读到回执或在途租约。
-// 返回 nil 的情形：命令已过截止（协调器按超时处理）、已有结果或另一次投递持有有效租约（Duplicate）、body 成功。
-// 这里不等投影、不发布任何东西：原消息仍在转交方手里，它的重投在回执可见后 ack；转交丢失只多耗时间，不丢步骤。
-// body 返回 dataengine.ErrFencedEntityPending 时交还租约（与消费者相同），其余错误保留租约到期，见 NativeStep 的契约。
-func (inbox *DataEngineStepInbox) RunHandedOver(ctx context.Context, command Command, body NativeStepBody) error {
-	if body == nil {
-		return ErrInvalidRecord
-	}
-	if err := command.Validate(); err != nil {
-		return err
-	}
-	// 截止判定在取执行权之前，与消费者同一口径（系统时钟，截止由协调器按它写）。
-	if !time.Now().Before(command.DeadlineAt) {
-		return nil
-	}
-	if inbox == nil || inbox.client == nil {
-		return ErrInvalidRecord
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	processCtx, cancel := context.WithDeadline(ctx, command.DeadlineAt)
-	defer cancel()
-	reservation, err := inbox.Reserve(processCtx, command)
-	switch {
-	case errors.Is(err, ErrCommandExpired), errors.Is(err, errAttemptSuperseded), errors.Is(err, errOperationAttemptInFlight):
-		// 不会在这里执行：截止已过、被较新尝试接替，或别人正持有执行权。转交方的重投负责收尾。
-		return nil
-	case err != nil:
-		return fmt.Errorf("saga: reserve handed-over step: %w", err)
-	case reservation.Duplicate:
-		return nil
-	}
-	if err := body(processCtx, NativeStep{inbox: inbox, command: command, reservation: reservation}); err != nil {
-		if errors.Is(err, coredata.ErrFencedEntityPending) {
-			if releaseErr := inbox.releaseLease(context.WithoutCancel(ctx), reservation); releaseErr != nil {
-				err = errors.Join(err, fmt.Errorf("saga: release unused step lease: %w", releaseErr))
-			}
-		}
-		return err
-	}
-	return nil
+	return step.run.complete(success, reason)
 }

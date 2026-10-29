@@ -107,7 +107,7 @@ func (waiter *terminalWaiter) newerThan(known uint64) *Record {
 
 // WaitTerminal 等 id 的下一个终态（Completed / Compensated / Failed / ManualRequired）：已是终态立即返回当前记录；否则返回之后
 // 被观察到的、版本大于调用时已知版本的终态。同一 ID 的多个等待者都会被唤醒。ctx 结束返回 ctx 错误；不改变 saga 本身。
-func (e *JetStreamEngine) WaitTerminal(ctx context.Context, id string) (Record, error) {
+func (e *Engine) WaitTerminal(ctx context.Context, id string) (Record, error) {
 	if !validSubjectToken(id, 128) {
 		return Record{}, ErrInvalidRecord
 	}
@@ -152,7 +152,7 @@ func (e *JetStreamEngine) WaitTerminal(ctx context.Context, id string) (Record, 
 }
 
 // followTerminals 为每条流建一个只要新消息的有序消费者，读本流各分区的终态事件交给观察者。
-func (e *JetStreamEngine) followTerminals(ctx context.Context) ([]fnats.LogFollow, error) {
+func (e *Engine) followTerminals(ctx context.Context) ([]fnats.LogFollow, error) {
 	var follows []fnats.LogFollow
 	for g, stream := range e.layout.Streams() {
 		parts := e.layout.PartitionsOfGroup(g)
@@ -183,7 +183,7 @@ func (e *JetStreamEngine) followTerminals(ctx context.Context) ([]fnats.LogFollo
 }
 
 // partitionOfSubject 从 <prefix>.<k>.… 取出分区号。
-func (e *JetStreamEngine) partitionOfSubject(subject string) (int, bool) {
+func (e *Engine) partitionOfSubject(subject string) (int, bool) {
 	rest, ok := strings.CutPrefix(subject, e.layout.Prefix+".")
 	if !ok {
 		return 0, false
