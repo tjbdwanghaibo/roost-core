@@ -389,8 +389,10 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 // 其他旋钮：ROOST_SAGA_SCAN_NEST_WORKERS（参与方 Nest short 池，缺省 64 同原型；strict 提交锁内等 fsync，group commit 一批至多
 // 这么多条，见 ptParticipantOptions）、ROOST_SAGA_SCAN_PARTITIONS（P，缺省 16，G 固定 4）。结果另记定位计数：WAL 记录 / fsync、
 // 分区事件 / 发布次数、参与方 Nest short 通道的忙 / 等待统计（见 scanResult）；准入档另记关闭 / 重开次数、关闭占比、关闭期间的有效吞吐，并加判据：关过又重开过、积压峰值 ≤ 1.3 × 高水位、
-// 关闭期间有效吞吐不为 0（设计 §12）。ROOST_SAGA_SCAN_PIPELINED_ASYNC=1 只配 native-pipelined：参与方再开 Nest pipelined
-// 异步完成（ptPipelinedAsyncEnv），派发 worker 不再等票据。
+// 关闭期间有效吞吐不为 0（设计 §12）。ROOST_SAGA_SCAN_PIPELINED_ASYNC=1 配任一原生参与方的场景（native-*、admission、
+// snapshot）：步骤 handler 改为 DurabilityPipelined 并开 Nest pipelined 异步完成（ptPipelinedAsyncEnv），派发 worker 不再等票据——
+// 这是原生步骤的生产推荐（维护者 2026-10-29），scripts/perf/saga-js-scan.sh 的缺省原生档就这样跑；mongo-forward / replay 没有
+// Nest 参与方，设了拒绝。
 //
 // 正确性（硬门槛，写进结果、不达标用例失败）：每笔终态符合预期（正向 Completed、拒绝的 Compensated）；原生档 Nest 内存与
 // Mongo 里每个账户的余额 = 按终态算出的预期；Mongo 档每个账户余额同样核对；发布结果未知 0；停止加压后 30s 内投影积压归零。
@@ -427,8 +429,8 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	}
 	projectDelay := time.Duration(integer("ROOST_SAGA_SCAN_PROJECT_DELAY_US", projectDelayDefault, 0, 1_000_000)) * time.Microsecond
 	pipelinedAsync := ptPipelinedAsyncFromEnv()
-	if pipelinedAsync && scenario != "native-pipelined" {
-		t.Fatalf("%s=1 only applies to the native-pipelined scenario, got %q", ptPipelinedAsyncEnv, scenario)
+	if pipelinedAsync && (scenario == "mongo-forward" || scenario == "replay") {
+		t.Fatalf("%s=1 only applies to scenarios with a native participant, got %q", ptPipelinedAsyncEnv, scenario)
 	}
 	url := realJSURL(t)
 	mongo := ptMongoClient(t)
@@ -477,7 +479,10 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 			durability = nest.DurabilityPipelined
 		}
 		var err error
-		result.NestWorkers, result.ProjectDelayUs, result.PipelinedAsync = nestWorkers, projectDelay.Microseconds(), pipelinedAsync
+		if pipelinedAsync {
+			durability = nest.DurabilityPipelined // openPtParticipantWith 按同一个环境变量改，这里只为结果记录
+		}
+		result.NestWorkers, result.ProjectDelayUs, result.PipelinedAsync, result.Durability = nestWorkers, projectDelay.Microseconds(), pipelinedAsync, durability.String()
 		participant, err = openPtParticipantWith(t.TempDir(), mongo, database, accounts,
 			ptParticipantOptions{Durability: durability, NestWorkers: nestWorkers, ProjectDelayPerRecord: projectDelay, PipelinedAsync: pipelinedAsync})
 		if err != nil {
@@ -763,6 +768,7 @@ type scanResult struct {
 	// 定位用计数（加压期间的增量）：参与方 Nest short 池 worker 数、WAL 追加记录与 fsync 次数（记录 / fsync 即组提交批量）、
 	// 协调器提交的事件数。
 	NestWorkers       int    `json:"nest_workers,omitempty"`
+	Durability        string `json:"durability,omitempty"` // 原生参与方步骤 handler 的 durability
 	PipelinedAsync    bool   `json:"pipelined_async,omitempty"`
 	ProjectDelayUs    int64  `json:"project_delay_us,omitempty"`
 	WALAppended       uint64 `json:"wal_appended,omitempty"`
