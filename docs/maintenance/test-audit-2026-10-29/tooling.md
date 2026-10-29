@@ -16,7 +16,7 @@
 | --- | --- | --- | --- |
 | `codegen/internal/entity/testdata/player_gen_wire.go`（孤儿 testdata，不是用例） | 这是 `testdata/player.go` 的生成物，但没有任何东西读取或编译它，具体有四点。(1) 所有用例（`parse_test.go`、`marker_test.go`、`category_contract_test.go`、`retirement_test.go`、`mirror_test.go`）都把生成结果写进 `t.TempDir()` 再比对。(2) `parsePackage` 用 `isGeneratedWireFile` 跳过 `*_gen_wire.go`（`codegen/internal/entity/parse.go`）。(3) `go build ./...` 不编译 testdata。(4) 没有脚本复制它（`rg "entity/testdata/player_gen_wire"` 无命中）。另外文件内容已过期：用当前生成器重新生成后，与提交的文件相比缺少 `TakeEntitySyncChanges` 方法 | 不承担任何承诺。生成器对 `player.go` 的输出由上面五个文件里的用例在临时目录检查 | `codegen/internal/entity`：83.7% → 83.7% |
 
-提交：`af86cd8d`。
+提交：`2711c323`。
 
 ## 待维护者决定
 
