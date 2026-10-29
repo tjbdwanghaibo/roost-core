@@ -36,6 +36,7 @@
 | C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
 | C19 | TCP 手册补充核对 | 仓库手册写 RS v1，生成手册把 Lockstep 写成预留；消息号 0 仅用于鉴权 | 当前为 RS v2；PB/Sync/Lockstep 分类型；消息号 0 还用于鉴权后心跳。本次在 main 修正文档，不移动旧标签 | [公共包头](../../client/wire/packet.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[说明与纠正清单](../framework/GATEWAY.md) |
 | C20 | Gate 能力边界 | gateway 包与独立网关服务容易混称 | 已有嵌入式 TCP 接入；独立 Gate 路由、回推和集群会话方案仍待实施 | [现状与待实施设计](../framework/GATEWAY.md)、[服务目录](../../codegen/internal/roost/framework_services.go) |
+| C21 | Saga 协调器权威 | 文档写协调器存储是单主权威 Redis + Store Service 投影 + Mongo 冷副本，原生步骤经租约 + DataEngine 回执 + lease fence | saga 第 4 批：权威是 JetStream 分区事件日志（单写者、期望序号 fail-stop、快照 + 日志重放），参与方回执在实体里（原生）/ Mongo 收件箱（Mongo 步骤）；Redis 权威、Store Service、`saga.redis.*` 已删除，冷副本在第 6 批 | [framework/saga/partition.go](../../framework/saga/partition.go)、[step_receipt.go](../../framework/saga/step_receipt.go)、[SAGA.md](../framework/SAGA.md) |
 
 ## 3. 各模块结论
 
@@ -47,7 +48,7 @@
 | [核心：DataEngine 持久化](../framework/guide/03-dataengine.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [核心：Sync、Lockstep 与客户端](../framework/guide/04-sync.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [Remote Entity 与 Mirror](../framework/guide/05-remote-mirror.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
-| [Saga 长事务](../framework/guide/06-saga.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
+| [Saga 长事务](../framework/guide/06-saga.md) | 第 4 批（JetStream 协调器）后重写：职责、正式入口、现行契约及源码/测试定位已整理，迁移映射在设计 §13.3 | 未对所有函数、故障组合和外部部署重新逐项验收；性能未按正式实现测（第 7 批），Linux 未运行 |
 | [配置、数据表与热更](../framework/guide/07-config.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [游戏技能、战斗与空间](../framework/guide/08-skill.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [次核心：Service 领域能力](../framework/guide/09-services.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |

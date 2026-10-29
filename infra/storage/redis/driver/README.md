@@ -12,8 +12,6 @@
 | 写命令：SET、SETNX、DEL、EXPIRE、INCR、INCRBY、HSET、HDEL、LPUSH、RPUSH、LPOP、RPOP、LTRIM、LREM、ZADD、ZREM、SADD、SREM、PUBLISH | 每条都加了 `NoRetry` 标记再交给 go-redis，驱动在任何错误上都不重发。只有当错误满足 `IsDefinitelyNotExecuted`（见 §2）时，才由本包重发（`replay.go`） |
 | 脚本：EVAL、EVALSHA（`Client.Eval` / `EvalSha`） | 与写命令相同。脚本只要回复丢了就不重发（RR-20261005-NC-100）；确定没执行时照常重发，NC-100 之后丢掉的这部分可用性由此补回 |
 | `EvalDurable` / `EvalBatchDurable`（脚本加 WAITAOF，走同一条物理连接） | 整批不重放。只有每条命令的错误都证明没执行时，才换一条新连接整批重发 |
-| `DurableScriptBatch`（一批 EVALSHA 加一条 WAITAOF，同一条物理连接；一批里可以混合不同脚本，Saga 权威存储用） | 整批不经驱动重放；连接错误、超时、调用方 ctx 到期都是结果未知，原样返回。每条命令的错误都证明没执行（取连接失败、LOADING 等）时换一条新连接整批重发。某条回 NOSCRIPT（服务端重启后脚本缓存清空）时，只把这些调用用原文 EVAL 在**同一连接**上重发并补一条 WAITAOF（它统计这条连接上的全部写）。每条脚本的服务端错误回复放在它自己的结果里，不让整批失败；WAITAOF 被服务端拒绝时返回 `ErrWaitAOFFailed`，结果仍有效（脚本已执行、持久未确认）。Cluster 客户端一律拒绝 |
-| 流与哈希读：XRANGE（`XRangeAfter`）、XREAD BLOCK（`XReadAfter`）、XLEN、HMGET；服务端检查 INFO、CONFIG GET；SCRIPT LOAD | 读命令，由 go-redis 自动重试。SCRIPT LOAD 对同一原文幂等，只返回摘要，重放无害 |
 | `EvalReplicated`（脚本加 ROLE，必要时同连接 WAIT；O-M6-3，L2 墓碑用） | 脚本与 ROLE 一条流水线，不经驱动重放；每条命令的错误都证明没执行时才换一条新连接整条重发。**WAIT 从不重放**：换了连接的 WAIT 只统计新连接上的写（没有），会立即给出假的确认。Cluster 下 WAIT 只发往脚本第一个键所在槽位的主节点（`MasterForKey` 取节点、在它的独占连接上发）；脚本回 MOVED / ASK 时改经集群客户端普通发送一次、不 WAIT。主节点没有连着的副本时不发 WAIT |
 | 含任一写命令的 pipeline（`IPipeline` 的 Set、Del、HSet、Incr、Expire、ZAdd、RPush、LPop） | 整条不重放，因为回复丢失时前面的写可能已经执行。只有每条命令的错误都证明没执行时，才整条重发 |
 | `DistLock` 的 SETNX、释放脚本、续期脚本 | 与写命令相同。被重放的 SETNX 会把自己刚拿到的锁报成“已被占用”，锁一直挂到 TTL；被重放的释放脚本会把成功释放报成 `ErrLockNotHeld` |
@@ -29,7 +27,7 @@
 | 类别 | 错误 | 调用方怎么做 |
 | --- | --- | --- |
 | **确定没执行** | 取连接阶段失败，请求还没写出：拨号失败（`*net.OpError` 且 `Op=="dial"`，包括拨号超时）、`ErrPoolTimeout`、`ErrPoolExhausted`、`ErrClosed` | 可以安全重试。`ErrClosed` 表示客户端已关闭，重试没有意义，驱动也不重发 |
-| **确定没执行** | 脚本的 NOSCRIPT（服务端缓存里没有这个摘要，脚本一行都没跑）。`DurableScriptBatch` 自己在同一连接上用原文重发，调用方看不到它；单独的 `EvalSha` 把它原样返回 | 用原文 EVAL 重发 |
+| **确定没执行** | 脚本的 NOSCRIPT（服务端缓存里没有这个摘要，脚本一行都没跑）。`EvalSha` 把它原样返回 | 用原文 EVAL 重发 |
 | **确定没执行** | 服务端在执行前拒绝：LOADING、MASTERDOWN、TRYAGAIN、CLUSTERDOWN、`ERR max number of clients reached`、READONLY、NOREPLICAS。判定沿用 go-redis 的 `IsXxxError`：认类型化错误，也认以该前缀开头的错误文本 | 可以安全重试。脚本里遇到 READONLY 或 NOREPLICAS 时，被拒的是脚本里第一条写，之前没有写入。框架自己的脚本不会返回带这些前缀的错误回复，新写的脚本也不要这样返回 |
 | **结果未知** | EOF、`io.ErrUnexpectedEOF`、连接重置、读写超时（i/o timeout）、调用方 ctx 取消或到期（可能落在写出之后）、建连握手阶段的失败（从错误值上无法和写出之后的失败区分，保守归为未知），以及不属于上下两类的其他错误 | 不能当成“没写”。要重试，就必须先让写可以安全重复执行，比如带请求 ID、按版本做 CAS、带值守卫令牌；或者先回读再裁决 |
 | **已执行并报错** | 服务端回了针对命令本身的错误，例如 WRONGTYPE、脚本里的 `ERR ... user_script` | 命令已经被处理。脚本中途报错时，报错之前的写不会回滚 |

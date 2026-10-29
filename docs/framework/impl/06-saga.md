@@ -1,6 +1,6 @@
 # Saga 长事务：实现与维护
 
-适用版本：v1.29.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录最初按 v1.24.0 提取、之后随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md)
+适用版本：当前主线（JetStream 协调器，saga 第 4 批起；之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md) · 对外契约 [SAGA.md](../SAGA.md) · 实施设计 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
 
 ## 如何阅读
 
@@ -10,26 +10,26 @@
 
 ## 1. 实现边界
 
-`framework/saga`（协调器、权威 Redis 存储 `RedisStore`、Mongo 冷副本 `MongoStore`、saga 投影 `RedisProjection`）与 `framework/storeservice`（Store Service 投影运行器）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/saga`：协调器（JetStream 分区事件日志、单写者、快照与清理、准入、发起方 API）、参与方（原生步骤的实体内回执、Mongo 步骤收件箱、步骤消费者、准入信号）、纯状态机 `transition.go`。装配在 `wiring/saga`（saga Mod、`Steps` 步骤运行时、配置规则）。没有 Redis、Store Service、Mongo 冷副本（冷副本在第 6 批另做）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
-1. 步骤转换集中且持久终态由完整步骤集合决定。
-2. native inbox 与 Mongo step inbox 各自和业务提交原子绑定。
-3. 旧 incarnation 回执不能推进新执行；重试不重置总预算。
-4. 业务侧的原生步骤只经 `NativeStep`（[native_step.go](../../../framework/saga/native_step.go)，D12 方向 A）：它只由框架构造（`DataEngineStepInbox.StepHandler` 从 ctx 取本次投递的执行权、`RunHandedOver` 自己 Reserve），零值 `Complete` 返回 `ErrNoNativeStep`；`Complete` = `Bind`（回执 + lease fence）+ `EmitCompletion`，两者都在调用方的 Nest 事务里。`RunHandedOver` 与消费者取同一份操作状态文档：截止已过 / 被接替 / 他人持有租约 / 已有结果都返回 nil 不执行，`ErrFencedEntityPending` 交还租约（与 `SubscribeDataEngineStep` 同一规则），不等投影、不发布。
-5. 组装在 `wiring/saga` 的 `Steps`（[steps.go](../../../wiring/saga/steps.go)）：流 / 前缀 / saga 库取 `StreamSettings`，原生收件箱库取 `kitdataengine.EffectSettings`（`dataengine.database`），原生租约 `NativeLeaseDuration`（2 分钟，长于 `DefaultStepAckWait`，`SubscribeDataEngineStep` 拒绝不满足的配置），租约持有者 `<group>-<主机名>-<pid>`；`Drain` 按停止入口三步（发起幂等、ctx 内等 `Closed()`、超时保留消费者）。持久与恢复语义（收件箱判定、三副本发布确认、outbox、lease）不在这里改动，Steps 只调用已有的 `SubscribeDataEngineStep` / `SubscribeMongoStep`。
-6. 原生步骤消费者（`SubscribeDataEngineStep`）的最后一段“等回执可见 → `Replay` 结算状态文档 → ack”经 `awaitReceiptAndSettle`（[command_consumer.go](../../../framework/saga/command_consumer.go)）推迟到后台：回调在 Reserve + 步骤体之后调用 `JetStreamMsg.DeferSettle`、取一个 `ReceiptWaiters` 空位（满了在回调里等，截止前没等到返回截止错误 nak），后台以 handler ctx 为父、命令截止为期限等回执，`settle(err)` 与修前回调返回同一结算（回执可见 ack；截止 / Stop nak）。不变量：ack 时机不参与恰好一次（租约、lease fence 与回执决定）；过期分支、毒消息、Admit、`ErrFencedEntityPending` 交还租约都仍在回调里同步完成；订阅 `Closed` 等推迟的结算全部完成（driver 记数），`Steps.Drain` 因此等到后台 ack；`DeferSettle` 为 nil（替身）或返回 nil（订阅结束中）时退回在回调里等。回归：`TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback`（真实 JetStream，投影停顿时同 durable 后续命令照常处理、Drain 等后台 ack）、`TestNativeStepReceiptWaitersAreBounded`。
-7. 协调器存储是单主权威 Redis（`RedisStore`，契约见 [SAGA.md](../SAGA.md)「协调器存储：Redis 权威」）：每次状态变化一个 Lua 脚本（`redis_lua/*.lua`）+ 同连接 `WAITAOF`（`fredis.DurableScriptBatcher`）；脚本**先做完全部校验再写**（键类型、需要装回、回执、请求摘要 `la`、版本、租约、关闭操作的归属与命令键类型），业务结论用返回码表达。`apply.lua` 的回执检查在请求摘要之前：带回执的请求一律按回执去重（两次送达可能算出逐字节相同的请求），不带回执的请求在回复丢失后原样重试得到“已应用”。WAITAOF 没确认是“已执行、持久未确认”：`ErrDurabilityUnconfirmed` + `RuntimeFailure` fail-stop；校验之后的脚本错误按部分写入 fail-stop。`Engine.Complete` 的 `store.Get` 是乐观并发的唯一读（判定与目标状态由它算出，Apply 只按版本条件写），不是可省的预读。回归：`TestStoreContract`（契约，`runStoreContract`）、`TestRedisScriptValidatesEverythingBeforeWriting`（每个脚本拒绝时前缀下的键不变）、`TestRedisApplyRetryAfterLostReplyIsApplied`、`TestRedisKill9KeepsAcknowledgedApplies`（integration，SIGKILL 后已确认的写都在、没有半个脚本）、`TestRedisWaitAOFUnconfirmedFailsStop`。
-8. 冷热交接：驻留 ↔ 驱逐是带版本的原子交接。`evict.lua` 只驱逐“终态 + 过了保留期 + `ls` 不晚于分区进度”的记录；之后的写先 `reload.lua` 装回（不存在才写，并发装回后到者得 `EXISTS`）。`Create` 先读 Mongo 冷副本保持业务键永久唯一，脚本要求读到执行不超过 `business_key_guard` 的一半。回归：`TestRedisEvictsOnlyAfterProjection`、`TestRedisLateSuccessAfterEvictionReloadsAndCompensates`、`TestRedisReloadAndEvictValidateBeforeWriting`（integration）、`TestRedisCreateKeepsBusinessKeyUniqueAfterEviction`、`TestRedisCreateGuardRejectsStaleMongoRead`。
-9. Store Service（`framework/storeservice`）：每个（投影，分区）一个循环，进度只在 Mongo 写全部确认后由持有分区租约者推进（`advance.lua` 核对 owner + token），日志只裁剪到进度；非暂时错误暂停分区、不跳过；正确性不依赖租约排他（saga 投影的 Mongo 写按版本单调、closure 只升不降）。回归：`TestRunnerProjectsEachPartitionInOrderAndTrimsAfterAdvance`、`TestRunnerPausesOnPermanentErrorAndResumesWhenTheKeyIsDeleted`、`TestProjectionLostLeaseCannotAdvance`、`TestTwoRunnersShareThePartitions`、`TestProjectionReplayIsMonotonic` / `TestProjectionPausesOnPermanentError`（integration）、`BenchmarkSagaProjection`（integration，本机 ≥ 5000 条/s）。
-10. 跨 Mod 配置规则（效果流键一致、完成回执 TTL 长于 `dataengine.effects.max_age`、`redis_authority.pool_size` 不小于并发之和——同进程有 Store Service 时由 `wiring/storeservice` 把两者加在一起检查）都在 `CheckConfigAcrossMods`（`app.ModConfigCrossChecker`），启动前、`--check-config` 与 doctor 的 `config-check` 同一处；Init 不再重复检查回执保留期，两处共用 `effectStreams` 解析效果流。
+1. **步骤转换集中**：状态怎样变只在 [transition.go](../../../framework/saga/transition.go) 的纯函数里判定，终态由完整步骤集合决定（`judgeCompletion` 一处）。协调器分区只负责“取输入 → 判定 → 发布 → 提交”，不另写规则。回归：`TestTransitionRulesMatchTheRecordedRedisCoordinator`（删除 Redis 协调器前录下的 75 步金样，逐步比对）、`TestJudgeCompletionIsTheUnifiedRule`。
+2. **单写者 + 期望序号**：每个分区只有一个写者（`saga.coordinators` 按 sid 静态分配，App 单实例锁保证一个 sid 一个进程）。一轮事件一次 fenced 发布（首条带分区事件过滤上的期望序号），PubAck 之后才改内存、才回复、才答查询；被拒且最后一条不是自己的 → `ErrPartitionFenced`，结果未知超过 `saga.publish_unknown_budget`、流满 → 都经 `RuntimeFailure` 让整个进程 fail-stop（App 级统一保证，模块不自己恢复）。回归：`TestRealJetStreamCoordinatorFencesAStaleWriter`、`TestRealJetStreamCoordinatorResolvesUnknownOutcomesAndRepublishesIncompleteBatches`、`TestRealJetStreamCoordinatorFailsStopWhenTheStreamIsFull`。
+3. **重放 = 运行**：重启从快照（KV 清单 + 对象正文，校验版本、分区、布局、摘要）加日志尾巴重放，判定与在线运行同一套；快照只在循环外写，清理目标 `min(InHi+1, LastEv, durable ack floor+1)`。回归：`TestRealJetStreamCoordinatorSnapshotPurgeAndReplayAgree`、`TestRealJetStreamCoordinatorKill9Replays`、`TestPurgeBoundKeepsTheLastEventTheReplayStartAndUnackedCommands`。
+4. **定时不变量**：每条非终态 saga 在时间轮里都有一个落在它当前 `NextRunAt` 的条目（安装时排、重放时排）；缺了它这条 saga 再也不会被看一眼。只在测试里查（`unitPartition.round` 每轮之后调用 `partition.checkTimers`），不加热路径开销；变异“Waiting 不排轮”时 5 个以上用例变红。到期比较必须与轮同一把尺子（墙钟纳秒，见 `partition.decide` 的注释）。
+5. **参与方至多一次**：原生步骤的回执在被改的实体里（`StepReceipts`），业务修改与回执是同一笔 Nest 事务、同一条 WAL 记录；`Begin` 先查回执（成功：任何代际回放；拒绝：只在本代际回放）再判截止，`Complete` 写回执。Mongo 步骤在一个 Mongo 事务里读回执 → handler → 写回执，并发的两次尝试由写冲突串行。两者都是“回执是权威”：结果未知时 nak，重投回放。回归：`step_receipt_test.go`、`TestNativeSagaStepCommitsMutationAndReceiptAtomically`、`TestMongoStepInboxReceiptRules`、`TestRealMongoStepInboxSerializesConcurrentAttempts`。
+6. **原生成功的结果数据 = 这一步的命令载荷**（维护者 2026-10-29 决定 A）：`StepReceipt` 不存 Data，`successData` 在 `Complete` 与回放时取命令载荷；同一操作的各次尝试载荷相同，补偿命令带上它。受 `saga.max_payload_bytes` 约束（命令发出前已检查），回执不变大。回归：`TestNativeStepSuccessCarriesItsCommandPayload` 与 `late_success_test.go` 的三处补偿载荷断言（修前三处为红）。
+7. **消费者结算**：执行或回放后把结果发到命令所属分区的 `in.res`（MsgID `res.<生效的 CommandID>`），PubAck 之后才 ack；过期未执行直接 ack；步骤体出错或发布失败 nak。在途处理数原生 `min(32, MaxAckPending)`、Mongo 1。回归：`TestNativeStepConsumerPublishesToThePartitionThenAcks`、`TestConsumerWorkersBoundExecutionAndDeferSettlement`。
+8. **准入只拦新启动**：参与方 `LoadPublisher` 把本进程 DataEngine 投影积压写进 LoadBucket，所有者 Watch、滞回、本机时钟判停更、初始化 fail-closed；被拒的启动返回 `ErrBackpressure`（这次没有建立，同一请求重试），已运行的 saga 不受影响。回归：`admission_test.go`、`TestRealJetStreamLoadPublisherDrivesAdmission`。
+9. **配置规则写一次**：`wiring/saga` 的配置声明（结构体 + tag）在 Init、`app.CheckConfig`、`--check-config` 与 doctor 共用；跨字段规则（每流 ≤ 50 分区、`stream_groups ≤ partitions`、结果未知预算 ≥ 21s 且大于发布超时、去重窗口 ≥ 2 × 预算、终态保留 ≤ 回执保留、准入滞回与停更、步骤超时 < `DefaultStepAckWait`）在 `ValidateConfig`，生产额外要求 `saga.replicas=3` 与协调器进程 `singleton.enabled`；跨 Mod 规则（效果流键一致、准入开启时 `dataengine.projection.max_unacked_records ≥ 4 × saga.admission.high_records`）在 `CheckConfigAcrossMods`。回归：`TestSagaConfigRulesNameTheirKeys`、`TestSagaProductionRules`、`TestConfigCheckRequiresAProjectionCapAboveTheAdmissionWatermark`。
+10. **遗留 Mongo 事务（设计 T-A）**：被杀进程的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍）。部署要求 20s；参与方 `Steps.Start` 只读探测并在超过缺省步骤预算窗口时告警（`probeTransactionLifetime`，不拒绝启动）；DataEngine 启动排空在 `dataengine.startup_timeout` 内退避重试（`Runtime.drainAtStartup`；调用方没给期限时上限 2 分钟）。回归：`TestStepsProbeTheMongoTransactionLifetimeAgainstTheStepWindow`、`TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline`、真实 `TestRealMongoStartupDrainOutlastsALeftoverTransaction`。
 
 ## 3. 并发、失败与恢复的修改检查
 
-修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
+修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认分别给出错误与收尾责任。分区状态只在分区循环 goroutine 里读写；查询与判定回复经队列进循环，不加锁读状态。改变公开类型、配置或线格式（`WireVersion`）时，同时更新生成器、调用方与使用篇；线上尚未部署期间不做旧格式兼容，版本号加一、旧版本拒绝。
 
-若修复并发问题，用可控 barrier/时钟构造修前失败，不能用 sleep 概率通过代替因果证据。停机测试要检查在途回调和依赖释放；持久测试要检查恢复后数据与重复输入。外部系统的真实故障证据单列。
+若修复并发问题，用可控 barrier/时钟构造修前失败，不能用 sleep 概率通过代替因果证据。分区判定的单元用例用 `unitPartition` / `simEngine`（同步 decide + install，不发布），真实发布、隔离、重放走三节点私有集群（`scripts/nats-cluster.sh test`）。
 
 ## 4. 文件、类型与职责定位
 
@@ -38,131 +38,73 @@
 
 ### saga
 
-23 个实现文件（含 `redis_lua/*.lua` 的嵌入）；`framework/storeservice` 2 个实现文件。
-
-| 源码 | 导出类型（定位用） |
+| 源码 | 职责（导出类型） |
 | --- | --- |
-| [assembly.go](../../../framework/saga/assembly.go) | `AssemblyConfig`、`Assembly` |
-| [command_consumer.go](../../../framework/saga/command_consumer.go) | `StepHandler`、`MongoCommandInbox`、`CommandInboxOptions`、`StepConsumerConfig` |
-| [dataengine_step_inbox.go](../../../framework/saga/dataengine_step_inbox.go) | `DataEngineStepInboxOptions`、`DataEngineStepInbox` |
-| [engine.go](../../../framework/saga/engine.go) | `Options`、`StartRequest`、`ResumeRequest`、`Stats`、`Engine` |
-| [errors.go](../../../framework/saga/errors.go) | 函数/方法或内部实现；见源码 |
-| [jetstream.go](../../../framework/saga/jetstream.go) | `JetStreamPublisher`、`CompletionConsumerConfig` |
-| [mongo_store.go](../../../framework/saga/mongo_store.go) | `MongoStoreOptions`、`MongoStore`（Mongo 冷副本，只读 + 装回读取） |
-| [redis_store.go](../../../framework/saga/redis_store.go) | `RedisStoreOptions`、`RedisStore`（协调器的权威存储） |
-| [redis_startup.go](../../../framework/saga/redis_startup.go) | `RedisStore.EnsureInfrastructure`：启动探针、脚本装载、元数据守卫 |
-| [redis_codec.go](../../../framework/saga/redis_codec.go) | 键名、记录主体编码、分区、请求摘要 |
-| [redis_scripts.go](../../../framework/saga/redis_scripts.go) | 嵌入 `redis_lua/*.lua` |
-| [redis_projection.go](../../../framework/saga/redis_projection.go) | `RedisProjection`（Store Service 的 saga 投影与驱逐） |
-| [native_step.go](../../../framework/saga/native_step.go) | `NativeStep`、`NativeStepBody` |
-| [nest.go](../../../framework/saga/nest.go) | 函数/方法或内部实现；见源码 |
-| [nest_completion_consumer.go](../../../framework/saga/nest_completion_consumer.go) | `NestCompletionConsumerConfig`、`Completer` |
-| [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter` |
-| [record.go](../../../framework/saga/record.go) | `Status`、`Phase`、`Step`、`StepBudget`、`StepKey`、`StepBudgets`、`Definition`、`Lease`、`Record`、`Command`、`Completion`、`OutboxRecord` |
-| [step_operation_inbox.go](../../../framework/saga/step_operation_inbox.go) | `Reservation` |
-| [transition.go](../../../framework/saga/transition.go) | 纯状态机（两种协调器共用的判定）；函数/方法见源码 |
-| [store.go](../../../framework/saga/store.go) | `ClaimRequest`、`Query`、`ApplyRequest`、`ApplyOutcome`、`Store`、`OperationClosure`、`CompletionHistory`、`CompletionHistoryStore`、`LateSuccessAlarmStore`、`Publisher`、`PublishFunc` |
-
-#### JetStream 协调器（第 2 批，未接线）
-
-协调器权威改为 JetStream 分区事件日志的第 2 批（[设计](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §13.1）：与上表的 Redis 引擎并存，`NewJetStreamEngine` 暂名，`wiring/saga` 不用它，对外契约（[SAGA.md](../SAGA.md)）仍是 Redis 版。结构：
-
-- 每个拥有的分区一个单写者循环（`partition.run`）：取一批输入（`in.start` / `in.res` / `in.op`）与时间轮到期 → 在写时复制的内存副本上用 [transition.go](../../../framework/saga/transition.go) 的纯函数判定（与 Redis 引擎同一套规则）→ 一轮事件一次 fenced 发布（首条带分区事件过滤的期望序号）→ PubAck 后才提交内存、回复判定、回答查询。被隔离、结果未知超预算、流满都 fail-stop（`RuntimeFailure`）。
-- 重放（`replayPartition`）：快照清单（KV）+ 正文（对象桶）校验版本 / 分区 / 布局 / 摘要，再从 `min(InHi, LastEv)+1` 读到 `LastMsg` 的序号；快照在循环外的 goroutine 写，之后按 `min(InHi+1, LastEv, durable ack floor+1)` 清理。
-- 发起方：启动 / 运维意图带全局唯一的尝试标识与回复头，所有者只回这一次尝试；超时按 `Get` 补查，仍无结论返回 `ErrStartUnconfirmed`。`WaitTerminal` 读各流的 `ev.done`（只要新消息），同 ID 多等待者、只接受比已知版本新的终态。
-- 准入：参与方信号在 LoadBucket（开 `LimitMarkerTTL`），所有者 Watch、滞回、本机时钟判过期、初始化 fail-closed，只拦新启动。
-
-| 源码 | 职责 |
-| --- | --- |
-| [log_layout.go](../../../framework/saga/log_layout.go) | `Layout`（分区 / 流 / subject / 桶名，`Validate` 含每流 ≤ 50 分区）、`IDOf` |
-| [log_wire.go](../../../framework/saga/log_wire.go) | `LogWireVersion` 2 的事件、输入、判定、查询、快照清单与正文的编解码与校验 |
+| [engine.go](../../../framework/saga/engine.go) | `Options`、`DefaultOptions`、`Engine`（生命周期、发起方 API `StartSaga` / `Complete` / `Resume` / `Compensate` / `Get` / `GetByBusinessKey` / `List`、`Stats`、`FailureCause`） |
+| [assembly.go](../../../framework/saga/assembly.go) | `AssemblyConfig`、`Assembly`（协调器 + 启动中继，停机先排空中继再停协调器） |
+| [inspect.go](../../../framework/saga/inspect.go) | `InspectPartitions`：离线重放全部分区（合服检查用） |
 | [partition.go](../../../framework/saga/partition.go) | 分区循环：判定（`decide`）、发布与结果未知判定（`publishChunk`）、提交（`install`）、查询应答、剪枝 |
 | [partition_replay.go](../../../framework/saga/partition_replay.go) | 重放、快照、清理与清理卡住告警 |
+| [transition.go](../../../framework/saga/transition.go) | 纯状态机（`judgeCompletion`、步骤转换、`completionHistory`） |
 | [wheel.go](../../../framework/saga/wheel.go) | 分区时间轮 |
-| [admission.go](../../../framework/saga/admission.go) | `AdmissionOptions`、`AdmissionState`，所有者侧闸门与发起方提示 |
+| [log_layout.go](../../../framework/saga/log_layout.go) | `Layout`（分区 / 流 / subject / 桶名，`Validate` 含每流 ≤ 50 分区）、`IDOf` |
+| [log_wire.go](../../../framework/saga/log_wire.go) | `WireVersion` 2 的事件、输入、判定、查询、快照清单与正文的编解码与校验 |
 | [query.go](../../../framework/saga/query.go) | 判定回复路由、意图追加与等判定、`Get` / `List` 的请求与所有者订阅 |
 | [terminal_watch.go](../../../framework/saga/terminal_watch.go) | `WaitTerminal` 与终态观察者 |
-| [jetstream_engine.go](../../../framework/saga/jetstream_engine.go) | `JetStreamOptions`、`JetStreamEngine`（生命周期、发起方 API、统计） |
+| [admission.go](../../../framework/saga/admission.go) | `AdmissionOptions`、`AdmissionState`、`OpenLoadBucket`、`LoadPublisher` |
+| [record.go](../../../framework/saga/record.go) | `Status`、`Phase`、`Step`、`StepBudget`、`StepBudgets`、`Definition`、`Record`、`Command`、`Completion`、`StartRequest`、`ResumeRequest`、`Query`、`OperationClosure` |
+| [observe.go](../../../framework/saga/observe.go) | 重开、迟到补偿、旧尝试 / 旧代际 / 放弃后到达的日志与计数 |
+| [step_receipt.go](../../../framework/saga/step_receipt.go) | `StepReceipt`、`StepReceipts`、`StepReceiptHost`、`StepOutcome`、`RunNativeStep`；回执编码、`Begin` / `Complete`、`successData` |
+| [native_step.go](../../../framework/saga/native_step.go) | `NativeStep`、`NativeStepBody` |
+| [step_consumer.go](../../../framework/saga/step_consumer.go) | `StepConsumerConfig`、`StepHandler`、`SubscribeNativeStep`、`SubscribeMongoStep`、`publishCompletion`、`decodeCommandEvent` |
+| [mongo_step_inbox.go](../../../framework/saga/mongo_step_inbox.go) | `MongoStepInbox`（M-A：按操作一个回执文档） |
+| [nest.go](../../../framework/saga/nest.go) | `EmitStart`、启动 effect 编解码 |
+| [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter`（启动中继：效果流 → 分区 `in.start`） |
+| [errors.go](../../../framework/saga/errors.go) | 对外错误（`ErrBackpressure`、`ErrStartUnconfirmed`、`ErrPartitionFenced` 等） |
 
-回归：`transition_test.go`（两种协调器差分）、`jetstream_coordinator_test.go`、`log_wire_test.go`、`wheel_test.go`、`admission_test.go`；真实三节点 `jetstream_coordinator_real_integration_test.go`（`scripts/nats-cluster.sh test`）。
-
-#### 参与方新路径（第 3 批，未接线）
-
-回执放在被改的实体里（[设计](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §5、§13.2）：与旧收件箱（租约 + DataEngine 回执 + lease fence）并存，`wiring/saga` 不用它。`NativeStep` 有两条路径：`run` 非空（`RunNativeStep` 构造）走新路径，否则走旧路径（`Begin` 是空操作）。
-
-- 原生步骤：生成的 Nest 分发包装在业务函数之前调用 `step.Begin(第一个锁目标)`（锁目标的具体实体实现 `StepReceiptHost`，`roost add saga -native` 生成 DAO 字段 `SagaReceipts map[string][]byte` 与 `saga_receipts.go` 适配）。有成功回执（任何代际）或本代际拒绝 → 回放（并把同一份回执重写一次，让回放事务是一条 WAL 记录：pipelined 下它的提交后回调晚于写回执那笔的落盘）；否则过了截止 → 过期未执行；否则执行，`Complete` 在同一事务写回执、剪至多 16 条过期回执。结论经 `nest.AfterCommit` 交给消费者（事务持久之后）。`Complete` 在带 Remote 批次的派发里返回 `ErrNativeStepRemoteWrite`（`nest.CurrentDispatchHasRemoteWriteBatch`）。
-- 消费者 `SubscribeNativeStep` / `SubscribeJetStreamMongoStep`（暂名）：每条流一个同名 durable，过滤 `<prefix>.*.ev.cmd.<topic>`；执行或回放 → `publishCompletion` 发到命令所属分区 `in.res`（MsgID `res.<生效的 CommandID>`），PubAck 后 ack；过期未执行直接 ack；出错 nak。在途处理数 `NativeWorkers`（缺省 32）/ `MongoWorkers`（缺省 1）。
-- Mongo 步骤 `MongoStepInbox`（M-A）：一个 Mongo 事务里读回执（`_id` = IdempotencyKey）→ 过期判定 → handler → 写前再判截止 → 插入或按旧值条件替换；同一操作并发的两次尝试由写冲突串行，后者重跑并回放。可重试失败的回执只对写它的那次尝试回放。
-- 准入信号 `LoadPublisher`：每 interval 把读数写进 LoadBucket 的 `part.<名字>`，`Remove` 优雅下线。
-- 清理守卫：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报流末序号（服务端 AckFloor 只随匹配过滤的消息前进，空闲步骤 durable 会停在 0）。
+### wiring/saga
 
 | 源码 | 职责 |
 | --- | --- |
-| [step_receipt.go](../../../framework/saga/step_receipt.go) | `StepReceipt`、`StepReceipts`、`StepReceiptHost`、`StepOutcome`、`RunNativeStep`；回执编码、`Begin` / `Complete` 的新路径 |
-| [step_consumer.go](../../../framework/saga/step_consumer.go) | `SubscribeNativeStep`、`SubscribeJetStreamMongoStep`、`publishCompletion`、`decodeCommandEvent` |
-| [mongo_step_inbox.go](../../../framework/saga/mongo_step_inbox.go) | `MongoStepInbox` |
-| [admission.go](../../../framework/saga/admission.go) | `LoadPublisher`（参与方信号） |
-
-回归：`step_receipt_test.go`、`step_consumer_test.go`；真实依赖 `step_participant_real_integration_test.go`（`-tags integration`：端到端与空闲 durable 清理、参与方 kill -9 + DataEngine 投影（`ROOST_SAGA_JS_RESTART_DELAY` 模拟长停机）、Mongo 步骤写冲突、`LoadPublisher` 驱动准入；`scripts/nats-cluster.sh test` 一并跑，要 Mongo 的在没有共享隔离环境时跳过）；生成器 `TestAddSagaNativeKeepsStepReceiptsOnTheEntity`、`TestNativeStepHandlerDispatchBeginsBeforeTheBusinessCall`。
-
-### storeservice
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [projection.go](../../../framework/storeservice/projection.go) | `Entry`、`Projection`、`Permanent`、`IsPermanent` |
-| [runner.go](../../../framework/storeservice/runner.go) | `Options`、`Runner` |
+| [config.go](../../../wiring/saga/config.go) | 配置声明与 `ValidateConfig`、`ownedPartitions`（P-A） |
+| [mod.go](../../../wiring/saga/mod.go) | saga Mod（Writer = `<sid>-<单实例锁 incarnation>`）、`CheckConfigAcrossMods`、`ParticipantSettings`（含 `StepWindow`） |
+| [steps.go](../../../wiring/saga/steps.go) | `Steps`：登记、订阅、准入信号、`RunHandedOver`、`probeTransactionLifetime`、Drain / Stop 与指标 |
+| [step_budgets.go](../../../wiring/saga/step_budgets.go) | `saga.step_defaults` / `saga.steps` → `coresaga.StepBudgets` |
 
 </details>
 
 ## 5. 回归入口
 
-下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。常用筛选方向：`Test.*Transition`、`Test.*Inbox`、`Test.*Incarnation`、`Test.*Budget`。
+下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。第 4 批的迁移映射（每个删除的用例由哪个保留用例覆盖）见 [设计 §13.3](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)。
 
 <details>
 <summary>准备验证改动时，展开测试目录</summary>
 
-### saga
+### saga（单元）
 
-- [assembly_test.go](../../../framework/saga/assembly_test.go)：`TestDrainSubscriptionsWaitsForConsumerClosure`、`TestAssembleBuildsEngineAndRegistersDefinitions`、`TestAssemblyHealthIncludesEveryRequiredConsumer`、`TestAssemblyNativeConsumerClosureIsVisibleAfterFormalStart`、`TestSagaPartialSubscriptionsCleanUpAndRetry`；其余 1 项见文件
-- [command_inbox_test.go](../../../framework/saga/command_inbox_test.go)：`TestMongoCommandInboxExecutesStepOnceForMessageRedelivery`、`TestMongoCommandInboxAllowsNewSagaAttempt`、`TestMongoCommandInboxRejectsCommandIDReuse`、`TestStorageDigestsUseStableOperationIdentity`、`TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives`；其余 2 项见文件
-- [completion_test.go](../../../framework/saga/completion_test.go)：`TestJudgeCompletionIsTheUnifiedRule`、`TestStepTransitionAloneDecidesTheIncarnation`、`TestCompletionConsumersTermTheSameTerminalErrors`、`TestACompletionBeforeItsDefinitionIsRegisteredIsRetriedNotTerminated`、`TestADefinitionThatNeverArrivesEndsInTheCoordinatorFence`；其余 3 项见文件
-- [consumer_nak_maxdeliver_real_integration_test.go](../../../framework/saga/consumer_nak_maxdeliver_real_integration_test.go)：`TestRealNatsCompletionNakBackoffAndMaxDeliver`、`TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback`
-- [consumer_test.go](../../../framework/saga/consumer_test.go)：`TestSubscribeNestStartsUsesSharedDurableAndDecodesIntent`、`TestJetStreamPublisherUsesVersionedEnvelope`、`TestSubscribeNestStartsRefusesEachUnsafeConfig`、`TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes`、`TestHandleNestStartRefusesEachMalformedEnvelopePermanently`；其余 7 项见文件
-- [cross_process_real_integration_test.go](../../../framework/saga/cross_process_real_integration_test.go)：`TestRealMongoCoordinatorLeaseTakeover`、`TestRealSagaCrossProcessChild`、`TestRealSagaCrossProcessKillRecovers`
-- [dataengine_step_benchmark_test.go](../../../framework/saga/dataengine_step_benchmark_test.go)
-- [dataengine_step_inbox_real_mongo_integration_test.go](../../../framework/saga/dataengine_step_inbox_real_mongo_integration_test.go)：`TestRealMongoReserveDeterministicMarkCompletedFailureIsReportedNotSilent`
-- [dataengine_step_inbox_test.go](../../../framework/saga/dataengine_step_inbox_test.go)：`TestDataEngineStepBindCarriesExplicitReservationFence`、`TestDataEngineStepBindRejectsReservationFromAnotherCommand`、`TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`、`TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim`、`TestDataEngineStepInboxUsesAbsoluteOperationExpiry`；其余 4 项见文件
-- [engine_state_machine_test.go](../../../framework/saga/engine_state_machine_test.go)：`TestEngineRegisterAndStartRefuseUnknownOrDuplicateDefinitions`、`TestEngineResumeRefusesEachIllegalRequest`、`TestEngineCompensateRefusesInFlightAndNothingToUndo`、`TestManualCompensateRefusesACompletedSaga`、`TestStepRefusalMovesSagaIntoCompensationOnRedisStore`；其余 2 项见文件
-- [engine_round_trip_test.go](../../../framework/saga/engine_round_trip_test.go)：`TestAckAfterCloseIsNotAConflict`、`TestCompleteDoesNotFoldRetryBackoff`；`TestCompleteDispatchesNextStepInSameApply`、`TestDispatchPublishesWithoutClaim` 是 v2 第 2c 段的验收用例（当前 `t.Skip`，实施 2c 时去掉）
-- [engine_test.go](../../../framework/saga/engine_test.go)：`TestEngineCompletesForwardSteps`、`TestEngineCompensatesInReverseOrder`、`TestStartSagaIsIdempotentByBusinessKey`、`TestStartSagaRejectsBusinessKeyWithDifferentIntent`、`TestDefinitionVersionsRunSideBySideAndArePartOfIdentity`；其余 16 项见文件
-- [late_alarm_real_mongo_integration_test.go](../../../framework/saga/late_alarm_real_mongo_integration_test.go)：`TestRealMongoLateSuccessAlarmIsMarkedOnce`
-- [late_step_real_mongo_integration_test.go](../../../framework/saga/late_step_real_mongo_integration_test.go)：`TestRealMongoLateSuccessReopensACompensatedSagaOnce`
-- [late_success_test.go](../../../framework/saga/late_success_test.go)：`TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt`、`TestNativeStepReplayedRefusalOfAnEarlierAttemptIsAccepted`、`TestNativeStepLateSuccessReopensAFailedSagaToCompensateTheStep`、`TestNativeStepLateSuccessAfterCompensatedCompensatesOnlyThatStep`、`TestNativeStepLateSuccessDuringAnInFlightCompensationIsCompensatedNext`；其余 10 项见文件
-- [mongo_step_benchmark_real_mongo_integration_test.go](../../../framework/saga/mongo_step_benchmark_real_mongo_integration_test.go)
-- [mongo_step_benchmark_test.go](../../../framework/saga/mongo_step_benchmark_test.go)
-- [mongo_step_latency_real_mongo_integration_test.go](../../../framework/saga/mongo_step_latency_real_mongo_integration_test.go)
-- [mongo_step_multiprocess_real_mongo_integration_test.go](../../../framework/saga/mongo_step_multiprocess_real_mongo_integration_test.go)：`TestStepProcessRole`、`TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce`
-- [mongo_step_operation_real_mongo_integration_test.go](../../../framework/saga/mongo_step_operation_real_mongo_integration_test.go)：`TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
-- [mongo_store_test.go](../../../framework/saga/mongo_store_test.go)：`TestMongoStepConsumerFollowsTheOperationInbox`、`TestMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically`（Mongo 步骤收件箱）
-- [native_step_incarnation_test.go](../../../framework/saga/native_step_incarnation_test.go)：`TestCoordinatorChecksTheIncarnationOfACompletion`、`TestRedisStoreMarksALateSuccessAlarmOncePerLife`、`TestCommandIDIncarnationInvertsCommandID`
-- [native_step_test.go](../../../framework/saga/native_step_test.go)：`TestNativeStepRunsOnceAndAcknowledgesARedelivery`、`TestNativeStepRefusalCommitsAFailedCompletion`、`TestNativeStepUnknownOutcomeIsNotRunAgainByARedelivery`、`TestNativeStepFencedEntityPendingHandsTheLeaseBack`、`TestNativeStepCannotCompleteWithoutAReservation`；其余 2 项见文件（含 `TestNativeStepReceiptWaitersAreBounded`）
-- [native_step_operation_test.go](../../../framework/saga/native_step_operation_test.go)：`TestNativeStepTakesEffectAtMostOncePerOperation`、`TestNativeStepOperationInterleavingsWithCoordinatorDecisions`、`TestNativeStepLeaseNeverOutlivesTheCommandDeadline`、`TestNativeStepConsumerHandlesOperationOutcomes`、`TestRedisStoreTombstoneTellsAbandonedFromResolved`；其余 2 项见文件
-- [nest_atomic_test.go](../../../framework/saga/nest_atomic_test.go)：`TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically`
-- [nest_effects_test.go](../../../framework/saga/nest_effects_test.go)：`TestNestCompletionRejectsForeignSagaRouteBeforeMutation`、`TestAssemblyConsumesNativeNestCompletionEffects`、`TestAssemblyKeepsItsExistingConsumerSubjects`
-- [performance_real_integration_test.go](../../../framework/saga/performance_real_integration_test.go)：`TestRealSagaPerformance`（同进程 Store Service、窗口内 Mongo 命令计数、终态复读与冷热核对）
-- [redis_projection_real_integration_test.go](../../../framework/saga/redis_projection_real_integration_test.go)：`TestProjectionReplayIsMonotonic`、`TestProjectionPausesOnPermanentError`、`TestRedisEvictsOnlyAfterProjection`、`TestRedisLateSuccessAfterEvictionReloadsAndCompensates`、`TestRedisLateAlarmReloadsAnEvictedRecord`、`TestRedisReloadAndEvictValidateBeforeWriting`、`BenchmarkSagaProjection`
-- [redis_store_real_integration_test.go](../../../framework/saga/redis_store_real_integration_test.go)：`TestRedisKill9KeepsAcknowledgedApplies`
-- [redis_store_test.go](../../../framework/saga/redis_store_test.go)：`TestStoreContract`、`TestRedisApplyRetryAfterLostReplyIsApplied`、`TestRedisScriptValidatesEverythingBeforeWriting`、`TestRedisCreateGuardRejectsStaleMongoRead`、`TestRedisCreateBackpressureRefusesNewSagas`、`TestRedisCreateKeepsBusinessKeyUniqueAfterEviction`、`TestRedisWaitAOFUnconfirmedFailsStop`、`TestRedisAuthorityGuardRefusesEmptyRedis`、`TestRedisAuthorityGuardChecksInstanceFormatAndPartitions`、`BenchmarkRedisClaimDue`；协调器存储的引擎用例 `TestResumePersistsGenerationAndAcceptsFreshCompletion`、`TestIncarnationSurvivesEveryRecordReadAndReplace`、`TestRedisStoreSkipsACorruptRecordWithoutFailingTheBatch`、`TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAck`、`TestConcurrentClaimsFillAvailableSlots`
-- [store_contract_test.go](../../../framework/saga/store_contract_test.go)：`runStoreContract`（协调器存储契约，测试辅助）
-- [sagafix_real_mongo_integration_test.go](../../../framework/saga/sagafix_real_mongo_integration_test.go)：`TestRealMongoSuccessDuringBackoffRacesTheNextDispatch`、`TestRealMongoColdCopyListSkipsACorruptRecord`
-- [start_contract_test.go](../../../framework/saga/start_contract_test.go)：`TestStartIdentityCompatibilityAndForeignIntents`、`TestStartIdentitySurvivesProgressAndResume`、`TestHandleNestStartTermsDeterministicStartRefusalsAndAlarms`、`TestEmitStartRefusesDataTheCoordinatorWouldRefuse`
-- [step_operation_benchmark_real_mongo_integration_test.go](../../../framework/saga/step_operation_benchmark_real_mongo_integration_test.go)
-- [step_operation_real_mongo_integration_test.go](../../../framework/saga/step_operation_real_mongo_integration_test.go)：`TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection`
-- [storeservice/runner_test.go](../../../framework/storeservice/runner_test.go)：`TestRunnerProjectsEachPartitionInOrderAndTrimsAfterAdvance`、`TestRunnerPausesOnPermanentErrorAndResumesWhenTheKeyIsDeleted`、`TestProjectionLostLeaseCannotAdvance`、`TestTwoRunnersShareThePartitions`
-- [wire_validation_test.go](../../../framework/saga/wire_validation_test.go)：`TestNewEngineRefusesEachUnsafeOption`、`TestCommandValidateRefusesEachBrokenField`、`TestCompletionValidateRefusesEachBrokenField`、`TestNestEffectCodecsRefuseEachMalformedPayload`、`TestCommandDigestReportsUnmarshalableCommands`；其余 1 项见文件
+- [transition_test.go](../../../framework/saga/transition_test.go)：`TestTransitionRulesMatchTheRecordedRedisCoordinator`（金样 `testdata/transition_golden.json`）
+- [jetstream_coordinator_test.go](../../../framework/saga/jetstream_coordinator_test.go)：分区判定、身份、准入回复、坏输入、剪枝、Resume 拒绝、选项校验、终态等待、回复路由、清理界；`unitPartition` / `simEngine` 测试驱动与 `checkTimers`
+- [engine_test.go](../../../framework/saga/engine_test.go)、[engine_state_machine_test.go](../../../framework/saga/engine_state_machine_test.go)：正向、补偿、幂等启动、定义版本、截止、重试、Resume 代际、运维拒绝
+- [completion_test.go](../../../framework/saga/completion_test.go)、[late_success_test.go](../../../framework/saga/late_success_test.go)、[native_step_incarnation_test.go](../../../framework/saga/native_step_incarnation_test.go)、[native_step_operation_test.go](../../../framework/saga/native_step_operation_test.go)：结果判定、迟到成功、重开、代际、tombstone、原生步骤与协调器交错
+- [step_receipt_test.go](../../../framework/saga/step_receipt_test.go)、[nest_atomic_test.go](../../../framework/saga/nest_atomic_test.go)：实体内回执
+- [step_consumer_test.go](../../../framework/saga/step_consumer_test.go)、[consumer_test.go](../../../framework/saga/consumer_test.go)：消费者结算、配置拒绝、坏信封、准入、过期、在途上限；Mongo 收件箱规则
+- [start_contract_test.go](../../../framework/saga/start_contract_test.go)、[wire_validation_test.go](../../../framework/saga/wire_validation_test.go)、[log_wire_test.go](../../../framework/saga/log_wire_test.go)：启动身份、线格式
+- [assembly_test.go](../../../framework/saga/assembly_test.go)、[admission_test.go](../../../framework/saga/admission_test.go)、[wheel_test.go](../../../framework/saga/wheel_test.go)
+
+### saga（真实依赖，`-tags integration`）
+
+- [jetstream_coordinator_real_integration_test.go](../../../framework/saga/jetstream_coordinator_real_integration_test.go)：正向与补偿、结果未知、隔离旧写者、快照清理重放、流满 fail-stop、准入停更、协调器 kill -9、参与方停机重试、迟到成功补偿、装配启停顺序（`ROOST_NATS_CLUSTER_URL`，`scripts/nats-cluster.sh test`）
+- [step_participant_real_integration_test.go](../../../framework/saga/step_participant_real_integration_test.go)：端到端、参与方 kill -9（`ROOST_SAGA_JS_RESTART_DELAY` 模拟长停机，协调器 kill -9 用例同一个开关）、Mongo 步骤写冲突、准入信号（需要 Mongo 的在没有 `ROOST_DATAENGINE_IT_MONGO_URI` 时跳过）
+- 基准：[mongo_step_benchmark_test.go](../../../framework/saga/mongo_step_benchmark_test.go)、[mongo_step_benchmark_real_mongo_integration_test.go](../../../framework/saga/mongo_step_benchmark_real_mongo_integration_test.go)、[mongo_step_latency_real_mongo_integration_test.go](../../../framework/saga/mongo_step_latency_real_mongo_integration_test.go)、[jetstream_performance_integration_test.go](../../../framework/saga/jetstream_performance_integration_test.go)
+
+### wiring 与生成器
+
+- [wiring/saga](../../../wiring/saga)：`config_test.go`、`saga_mod_test.go`、`steps_test.go`
+- DataEngine 启动排空：[assembly_test.go](../../../framework/dataengine/engine/assembly_test.go) `TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline`、[failure_integration_test.go](../../../framework/dataengine/engine/failure_integration_test.go) `TestRealMongoStartupDrainOutlastsALeftoverTransaction`
+- 生成工程真实依赖：`codegen/internal/roost` 的 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`scripts/test-demo-generated.sh`）
 
 </details>
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。没有新测量不能改容量承诺，性能结论以 [性能报告](../../performance/README.md) 为准。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。真实协调器用例在私有三节点集群上跑（`ROOST_NATS_CLUSTER_ROOT=<私有目录> bash scripts/nats-cluster.sh start|test|stop|clean`），不要用共享的 nats-server。命令与发布记录见 [维护手册](../../maintenance/README.md)。没有新测量不能改容量承诺，性能结论以 [性能报告](../../performance/README.md) 为准（正式实现的性能验收在第 7 批）。

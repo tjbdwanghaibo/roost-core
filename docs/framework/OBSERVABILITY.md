@@ -145,45 +145,27 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `saga.start.rejected_total{saga_type,reason}` | Counter | 永久拒绝的启动意图：发起方的 Nest 事务已经提交，saga 不会创建（**非零要人核对**，ERROR 日志点名业务键） |
-| `saga.consumer.rejected_total{consumer}` | Counter | 五个 saga 消费者拒收、直接 Term 的坏信封（空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过；RR-20261006-44） |
+| `saga.consumer.rejected_total{consumer}` | Counter | saga 消费者（启动中继、原生步骤、Mongo 步骤）拒收、直接 Term 的坏信封（空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过；RR-20261006-44） |
 | `saga.reopened_total{saga_type,from_status,reason}` | Counter | saga 重开：`late_success` = 已结束的 Failed / Compensated 收到迟到的正向成功、带回补偿；`resume` / `compensate` = ManualRequired 期间记下的迟到步骤在运维操作时补上。按终态做业务的一方见 [SAGA.md](SAGA.md)「运维观察」 |
 | `saga.completion.stale_incarnation_total{saga_type,phase}` | Counter | 拒收的旧一生结果；Resume 之后的正常现象，只计数、记 WARN |
 | `saga.completion.stale_attempt_total{saga_type,phase}` | Counter | 拒收的同一生较早尝试的可重试失败，协调器在等之后那次尝试 |
 | `saga.completion.late_after_abandon_total{saga_type,phase}` | Counter | 放弃之后才到的结果（含补偿方向）；Resume 后新一生会回放这次成功而不是再执行 |
-| `saga.step.expired_unexecuted_total` | Counter | 过期或被较新尝试接替、没有执行就 ack 的步骤命令 |
-| `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有结果，这次尝试不执行、重发那次的 completion（U-0280） |
-| `saga.step_inbox.superseded_total` | Counter | 步骤收件箱里被较新尝试接管的预留 |
-| `saga.step_inbox.mark_completed_error_total` | Counter | 回执已写、状态文档结算失败（回执是权威，结论不变）；持续增长说明有确定性失败在重跑（RR-20260927-16） |
-| `saga.step.run_total{consumer,result}` | Counter | 业务步骤运行时（`wiring/saga` 的 `Steps`，D12）执行步骤体的次数，consumer 是 durable 名（`<group>-<step>`）。原生步骤 `ok` = Nest 调用成功（业务拒绝也算 ok，结论在 completion 里）、`error` = 结果未知；Mongo 步骤 `ok` / `refused`（completion 失败）/ `error`，Mongo 事务重试会重复调用、按调用计。回放与重复投递不计 |
-| `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交，不含等待投影） |
-| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
-| `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
-| `saga.redis.script_total{script,result}` | Counter | 权威 Redis 上每个脚本的调用与结果码（`APPLIED`、`CONFLICT`、`DUPLICATE`、`NEED_RELOAD` 等；`unknown` = 结果未知，`oom` = 内存满被拒）。压测按它与 `INFO commandstats` 算每笔脚本数 |
-| `saga.redis.script_seconds{script}` | Histogram | 脚本连同同连接 WAITAOF 的往返耗时 |
-| `saga.redis.waitaof_unconfirmed_total{script}` | Counter | 写已执行、WAITAOF 没确认落盘（local=0 或服务端拒绝）：**非零即部署违约**（AOF 被关、`appendfsync` 被改），进程随之 fail-stop |
-| `saga.redis.script_partial_total{script}` | Counter | 脚本在校验之后的写里出错（可能只写了一部分）：**非零要人核对**，进程 fail-stop |
-| `saga.redis.cold_read_total{op}` | Counter | Redis 里没有、回查 Mongo 冷副本的读（`get`、`business_key`、`history`、`alarm`） |
-| `saga.redis.backpressure_total` | Counter | 投影积压超过 `saga.redis.max_projection_backlog`，新 saga 被拒（可重试）；持续增长说明 Store Service 跟不上或停了 |
-| `saga.redis.reload_total{result}` | Counter | 已驱逐的记录要写时从 Mongo 冷副本装回：`reloaded`、`exists`（别人先装回了）、`missing`（冷副本里也没有） |
-| `saga.redis.resident_records{state}` | Gauge | 权威 Redis 上驻留的记录：`active` = 非终态（领取索引里）、`terminal` = 已终态、等保留期过后驱逐。容量按它与投影积压估算（每条约 1～2KB） |
-| `saga.partition.rejected_input_total{kind,reason}` | Counter | JetStream 协调器（第 2 批，未接线）分区跳过的坏输入：`kind` = start / result / op / unknown，`reason` = decode / content / identity / not_waiting / definition_missing / subject。日志里的输入不能 Term，跳过后输入水位照常前进 |
-| `saga.partition.fail_stop_total{reason}` | Counter | JetStream 协调器分区 fail-stop：`fenced`（期望序号被别的写者推进）、`publish_unknown`（发布结果未知超过预算）、`rejected`（流满等服务端明确拒绝）、`error`；**非零即查**，进程经 RuntimeFailure 停下 |
-| `saga.partition.snapshot_failures_total` | Counter | 分区快照写失败（下一次到点重试）；持续增长说明 KV / 对象桶不可写，日志清理随之停止 |
 | `saga.completion.unknown_saga_total` | Counter | 结果对应的 saga 不在分区里（过了终态保留期被剪掉）：迟到成功找不到归宿，ERROR 日志点名 saga 与命令，**非零要人核对** |
-| `saga.log.purge_blocked_seconds{stream,consumer}` | Gauge | 某个 durable 的 ack floor 卡在分区清理目标之下的时长；超过 `PurgeStallAlarm` 记 WARN 点名，下线的步骤要由运维删掉它的 durable |
+| `saga.step.expired_unexecuted_total` | Counter | 过了截止、没有回执，没有执行就 ack 的步骤命令 |
+| `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有回执（成功或本代际拒绝），这次尝试不执行、把那次的结果再发一次（U-0280） |
+| `saga.step.run_total{consumer,result}` | Counter | 业务步骤运行时（`wiring/saga` 的 `Steps`，D12）执行步骤体的次数，consumer 是 durable 名（`<group>-<step>`）。原生步骤 `ok` = Nest 调用成功（业务拒绝也算 ok，结论在回执里）、`error` = 结果未知；Mongo 步骤 `ok` / `refused`（completion 失败）/ `error`，Mongo 事务重试会重复调用、按调用计。回放与重复投递不计 |
+| `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交与 strict 落盘） |
+| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
+| `saga.step.mongo_txn_lifetime_exceeds_budget{group}` | Counter | 参与方启动探针（设计 T-A）读到 Mongo `transactionLifetimeLimitSeconds` 长于缺省步骤预算窗口（`saga.step_defaults` 补齐缺省后 MaxAttempts × Timeout 加退避，框架缺省 26.5s），每组步骤启动时至多一次，同时 WARN。**非零即部署违约**：被杀参与方的遗留事务可能拖过在途步骤的全部尝试，部署要求 20s（[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」）。托管库拒绝 `getParameter` 时只记一条 INFO“未探测” |
+| `saga.partition.rejected_input_total{kind,reason}` | Counter | 协调器分区跳过的坏输入：`kind` = start / result / op / unknown，`reason` = decode / content / identity / not_waiting / definition_missing / subject。日志里的输入不能 Term，跳过后输入水位照常前进 |
+| `saga.partition.fail_stop_total{reason}` | Counter | 协调器分区 fail-stop：`fenced`（期望序号被别的写者推进）、`publish_unknown`（发布结果未知超过 `saga.publish_unknown_budget`）、`rejected`（流满等服务端明确拒绝）、`error`；**非零即查**，进程经 RuntimeFailure 停下 |
+| `saga.partition.snapshot_failures_total` | Counter | 分区快照写失败（下一次到点重试）；持续增长说明 KV / 对象桶不可写，日志清理随之停止 |
+| `saga.log.purge_blocked_seconds{stream,consumer}` | Gauge | 某个 durable 的 ack floor 卡在分区清理目标之下的时长；超过 `saga.purge_stall_alarm` 记 WARN 点名，下线的步骤要由运维删掉它的 durable |
 | `saga.admission.hint_failures_total` | Counter | 协调器写准入提示（LoadBucket 的 `admit` 键）失败；提示不是权威，持续增长时发起方只能等所有者的判定 |
-| `saga.admission.signal_failures_total` | Counter | 参与方 `LoadPublisher`（第 3 批，未接线）写准入信号（LoadBucket 的 `part.<名字>` 键）失败；持续增长时协调器会按信号停更关闭准入（`backpressure_stale_signal`） |
-| `saga.query.dropped_total` | Counter | JetStream 协调器分区查询队列满、丢弃的查询（发起方超时） |
+| `saga.admission.signal_failures_total` | Counter | 参与方 `LoadPublisher` 写准入信号（LoadBucket 的 `part.<group>.<sid>` 键）失败；持续增长时协调器会按信号停更关闭准入（`backpressure_stale_signal`） |
+| `saga.query.dropped_total` | Counter | 协调器分区查询队列满、丢弃的查询（发起方超时） |
 | `saga.query.reply_failures_total` | Counter | 判定与查询回复经核心 NATS 发送失败（发起方按超时与 Get 补查兜底） |
 | `saga.query.subscription_errors_total` | Counter | 查询 / 回复订阅的慢消费者或订阅错误 |
-| `store_service.backlog_entries{projection,partition}` | Gauge | 一个分区还没投影进 Mongo 的日志条目数（XLEN），每秒采样 |
-| `store_service.lag_seconds{projection}` | Gauge | 最老未投影条目的年龄（各分区取最大）；持续增长说明投影跟不上或 Mongo 不可用 |
-| `store_service.projected_entries_total{projection}` / `store_service.batches_total{projection}` | Counter | 投影过的条目与批数，相除是平均批大小 |
-| `store_service.batch_seconds{projection}` | Histogram | 每批交给领域投影（写 Mongo）的耗时 |
-| `store_service.mongo_ops_total{projection,collection}` | Counter | 投影发出的 BulkWrite 次数（saga：`sagas`、`completions`、`operations` 各至多一次 / 批） |
-| `store_service.paused_partitions{projection}` | Gauge | 因非暂时错误（唯一业务键冲突、文档校验失败）暂停的分区数；**非零健康 Fail**，按 ERROR 日志修好冲突后删除暂停键 `<前缀>:paused:<分区>` |
-| `store_service.evicted_total{projection}` | Counter | 驱逐的终态记录（已投影、过了 `saga.redis.terminal_retention`） |
-| `store_service.lease_lost_total{projection}` | Counter | 放手的分区租约（续约失败或推进时发现租约已换人）；多实例时偶发是正常的 |
 
 ### 技能运行时（core/skill）
 
@@ -285,7 +267,8 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.entity_unload.total{result}` | Counter | 运维命令 `entity.unload`（D16）每次执行的结论：`unloaded`、`not_resident`（没有常驻，什么也没做）、`busy`（持有实体的事务在 timeout 内没结束、另一次卸载进行中、Remote 所有权不稳定）、`timeout`（在途投影没在 timeout 内完成）、`failed`（其他错误，例如非持久实体、Runtime 不可用）。只有运维手动触发，基线是零星几次 |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | 卸载屏障在 WAL 准入处拒绝的写事务数（调用方拿到可重试的 `ErrEntityUnloading`）。卸载期间写到该实体的请求才会计入，正常只在 `entity.unload` 前后零星出现；持续增长说明卸载卡在投影上 |
-| `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
+| `dataengine.startup_drain_retry_total` | Counter | 启动排空（WAL 未投影记录写进 Mongo）失败后在启动期限（`dataengine.startup_timeout`）内的退避重试次数，同时 WARN。被 kill -9 的进程留下的投影事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍参数），重启时偶发是正常的；期限到了仍失败则启动失败，按 WARN 里的错误查（设计 T-A，[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」） |
+| `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。saga 第 4 批之后没有生产路径再写 fence（原生步骤回执改进实体），机制在第 5 批删除，**基线应为零**；以下是机制仍在时的判读：**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
 ### 全部源码指标索引
 
@@ -322,6 +305,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.entity_unload.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
 | `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
 | `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
+| `dataengine.startup_drain_retry_total` | Counter | `dataengine/engine/runtime.go:IncCounter` |
 | `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
 | `dataengine.load.skipped.total` | Counter | `dataengine/load.go:IncCounter` |
 | `dataengine.outbox.oldest_age_ms` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
@@ -501,9 +485,9 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `runtime.heap_sys_bytes` | Gauge | `framework/statslog/statslog.go:SetGauge` |
 | `runtime.num_gc` | Gauge | `framework/statslog/statslog.go:SetGauge` |
 | `runtime.sys_bytes` | Gauge | `framework/statslog/statslog.go:SetGauge` |
-| `saga.completion.late_after_abandon_total` | Counter | `saga/engine.go:IncCounter` |
-| `saga.completion.stale_attempt_total` | Counter | `saga/engine.go:IncCounter` |
-| `saga.completion.stale_incarnation_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.completion.late_after_abandon_total` | Counter | `saga/observe.go:IncCounter` |
+| `saga.completion.stale_attempt_total` | Counter | `saga/observe.go:IncCounter` |
+| `saga.completion.stale_incarnation_total` | Counter | `saga/observe.go:IncCounter` |
 | `saga.admission.hint_failures_total` | Counter | `saga/admission.go:IncCounter` |
 | `saga.admission.signal_failures_total` | Counter | `saga/admission.go:IncCounter` |
 | `saga.completion.unknown_saga_total` | Counter | `saga/partition.go:IncCounter` |
@@ -515,33 +499,14 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.query.reply_failures_total` | Counter | `saga/query.go:IncCounter` |
 | `saga.query.subscription_errors_total` | Counter | `saga/query.go:IncCounter` |
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
-| `saga.redis.backpressure_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.cold_read_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.script_partial_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.script_seconds` | Histogram | `saga/redis_store.go:ObserveHistogram` |
-| `saga.redis.script_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.waitaof_unconfirmed_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.reload_total` | Counter | `saga/redis_store.go:IncCounter` |
-| `saga.redis.resident_records` | Gauge | `saga/redis_projection.go:SetGauge` |
-| `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.reopened_total` | Counter | `saga/observe.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
-| `saga.step.attempt_replayed_total` | Counter | `saga/command_consumer.go:IncCounter` |
-| `saga.step.expired_unexecuted_total` | Counter | `saga/command_consumer.go:IncCounter` |
+| `saga.step.attempt_replayed_total` | Counter | `saga/step_consumer.go:IncCounter` |
+| `saga.step.expired_unexecuted_total` | Counter | `saga/step_consumer.go:IncCounter` |
+| `saga.step.mongo_txn_lifetime_exceeds_budget` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step.run_duration` | Histogram | `wiring/saga/steps.go:ObserveHistogram` |
 | `saga.step.run_total` | Counter | `wiring/saga/steps.go:IncCounter` |
-| `store_service.backlog_entries` | Gauge | `framework/storeservice/runner.go:SetGauge` |
-| `store_service.batch_seconds` | Histogram | `framework/storeservice/runner.go:ObserveHistogram` |
-| `store_service.batches_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
-| `store_service.evicted_total` | Counter | `saga/redis_projection.go:IncCounter` |
-| `store_service.lag_seconds` | Gauge | `framework/storeservice/runner.go:SetGauge` |
-| `store_service.lease_lost_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
-| `store_service.mongo_ops_total` | Counter | `saga/redis_projection.go:IncCounter` |
-| `store_service.paused_partitions` | Gauge | `framework/storeservice/runner.go:SetGauge` |
-| `store_service.projected_entries_total` | Counter | `framework/storeservice/runner.go:IncCounter` |
-| `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
-| `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
-| `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |
 | `scene_session_open_failed_total` | Counter | `demo/internal/service/game/scene.go.tmpl (template)` |
 | `service.accepted.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
 | `service.conflict.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
@@ -630,8 +595,8 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 10. `entitysync_self_view_stranded_players > 0` 持续数分钟 —— 有玩家连着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（日志 `self view:` / `entitysync`）。`player_sync_session_lost_disconnect_total{reason}` 持续增长 —— 同步会话因编码失败被丢、玩家被断开后重连又被断开（反复重连），按 Warn 里的 `player_id` / `reason` 查视野上限（`MaxVisible`）与实体大小。`player_sync_push_refused_total{outcome="retried"}` 持续增长 —— Game 进程出站驻留预算长期耗尽，Sync 整轮重试、延迟上升，查发送能力与 `outbound.resident_bytes`（嵌入 TCP 是 `player_access.tcp.outbound.resident_bytes`，同时看 `player_tcp_outbound_budget_exhausted_total`）。
 11. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
-13. `saga.redis.waitaof_unconfirmed_total` 或 `saga.redis.script_partial_total` 非零 —— 立即告警：前者是权威 Redis 的部署违反持久契约（AOF 关闭、`appendfsync` 不是 always），后者是脚本校验之后写失败；两者都会让协调器 fail-stop，按 ERROR 日志点名的脚本与键核对。
-14. `store_service.paused_partitions` 非零或 `store_service.lag_seconds` 持续增长 —— 告警：投影停了（非暂时错误暂停）或跟不上；积压超过 `saga.redis.max_projection_backlog` 后新 saga 会被拒（`saga.redis.backpressure_total`）。
+13. `saga.partition.fail_stop_total` 非零 —— 立即告警：协调器进程 fail-stop（`fenced` = 出现第二个写者，崩溃重启的短暂重叠或部署错误；`publish_unknown` = 一条流的发布结果未知超过预算；`rejected` = 流满等明确拒绝），按 ERROR 日志点名的分区与流核对；同 sid 进程重启后从快照 + 日志重放恢复。
+14. `saga.log.purge_blocked_seconds` 超过 `saga.purge_stall_alarm` 或 `saga.partition.snapshot_failures_total` 持续增长 —— 告警：日志清理停了（下线步骤的 durable 没删、或快照桶不可写），流会一直涨到 `saga.stream_max_bytes` 后 fail-stop。`saga.step.mongo_txn_lifetime_exceeds_budget` 非零 —— 部署违约（Mongo `transactionLifetimeLimitSeconds` 应为 20s）。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

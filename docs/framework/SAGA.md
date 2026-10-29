@@ -3,86 +3,101 @@
 Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、同一 MongoDB
 事务或 `RemoteWriteBatch` 能覆盖的操作不应使用 Saga。
 
+设计与取舍：[DESIGN-2026-10-28-saga-jetstream-authority](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
+（维护者 2026-10-28 决定：协调器权威只保留 JetStream，Redis 权威、Store Service 与 `saga.redis.*` 在第 4 批删除）。
+实现入口见 [impl/06](impl/06-saga.md)，使用见 [guide/06](guide/06-saga.md)。
+
 ## 一致性模型
 
 每个步骤由本地事务提交，跨步骤提供最终一致性。失败时按相反顺序执行业务补偿，
 补偿不是内存状态回滚。推荐把资源状态设计为 `available -> reserved -> consumed`
 或 `reserved -> released`，并以 `Command.IdempotencyKey` 作为业务唯一键。
 
-协调器持久化以下边界（存储是单主权威 Redis，见下文「协调器存储：Redis 权威」；一次“存储事务”是一个 Lua 脚本加同连接 WAITAOF）：
+协调器的边界：
 
-- Saga 状态与待发布 command 在一个存储事务中提交；
-- command 通过 durable outbox 至少一次发布；
+- 每个分区一个单写者（分区所有者进程里的一个循环）；saga 的每次推进 = 往分区事件 subject 追加一条“新状态 + 要派发的命令”的事件，
+  **PubAck 之后才改内存、才回复**。命令就是事件本身，没有 outbox；
 - 同一 attempt 的消息重投共享 `CommandID`，跨 attempt 共享稳定 `IdempotencyKey`（操作实例，见「原生步骤执行契约」）；
-- `version + lease token` 阻止过期 worker 推进状态；
-- 按 `CommandID` 保存的 completion receipt 与状态推进在一个存储事务中提交；
-- operation 关闭时写入有 TTL 的 tombstone，并在同一事务清理尚未发布的旧 attempt；
-- 新 attempt 会在同一事务替换该 operation 仍排队的旧 outbox，避免重试扇出；
+- 旧写者靠**期望序号**隔离：每次发布的首条带“分区事件过滤的期望序号 = 内存记的最后一条事件序号”，被别的写者推进过就被服务端拒绝，
+  本进程经 `RuntimeFailure` 整体 fail-stop（App 级统一保证）；
+- 按 `CommandID` 的回执摘要与状态推进在同一条事件里（同一 CommandID 不同结论 = 身份冲突）；
+- operation 关闭时在 saga 状态里记 tombstone（关闭方式：带结果 / 放弃），随 saga 的保留期一起剪；
 - 重复、迟到的 command/result 不会重复推进状态；协调器放弃一个**正向**步骤之后才到达的成功说明它已生效，协调器把 saga 带回补偿、
-  只补偿这一步（`Failed` / `Compensated` 会被重开，saga 方向 ④）；补偿方向的只告警（计数 `saga.completion.late_after_abandon_total`、ERROR 日志，U-0280）。
+  只补偿这一步（`Failed` / `Compensated` 会被重开，saga 方向 ④）；补偿方向的只告警（计数 `saga.completion.late_after_abandon_total`、ERROR 日志）。
 
-Nest start、command 和 completion 使用严格的 `WireVersion=1` envelope，不通过猜测字段做隐式兼容。协议变更必须显式升级版本。
-坏信封（空消息、超长帧、JSON 损坏、未知版本、内容校验不过）是确定性错误，五个消费者（Mongo 步骤、原生步骤、普通结果流、原生结果流、
-Nest 启动）一律 Term，计 `saga.consumer.rejected_total{consumer}` 并记 ERROR（RR-20261006-44）；之前原生步骤消费者把它们 nak 到 `MaxDeliver`。
-Nest 启动消费者对 `StartSaga` 的确定性拒绝（`Data` 超过 `saga.max_payload_bytes` 等 `ErrInvalidRecord`、同一业务键另一份意图的
-`ErrIdentityConflict`）同样 Term，计 `saga.start.rejected_total{saga_type,reason}` 并记点名 saga 的 ERROR（RR-20261006-43）；
-`ErrDefinitionMissing` 仍按可重试错误 nak（滚动发布中定义会随新进程上线）。
+全部线上消息（分区事件、输入、快照清单、准入信号、Nest 启动 effect）使用严格的 `WireVersion=2`，不兼容 1（已删除的 Redis 协调器），
+不通过猜测字段做隐式兼容。坏输入（解码失败、版本不对、内容校验不过）在分区里计 `saga.partition.rejected_input_total{kind,reason}` 并跳过
+（日志里的输入不能 Term，输入水位照常前进）；步骤消费者与启动中继对坏信封 Term，计 `saga.consumer.rejected_total{consumer}` 并记 ERROR。
+启动中继对 `StartSaga` 的确定性拒绝（`ErrInvalidRecord`、`ErrIdentityConflict`）同样 Term，计 `saga.start.rejected_total{saga_type,reason}`；
+`ErrDefinitionMissing`、`ErrBackpressure`、`ErrStartUnconfirmed` 按可重试错误 nak。
 
-## 协调器存储：Redis 权威
+## 协调器：JetStream 分区事件日志
 
-> **过渡说明（维护者 2026-10-28）**：Redis 权威将由 JetStream 协调器替换（[设计稿](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)），替换时与 Store Service、`saga.redis.*` 配置同一批删除；本节契约在替换前仍有效。
+**前提**（维护者确认）：JetStream R3 文件存储，收到 PubAck 即不丢（整集群同时断电不在范围）；NATS 服务端 ≥ **2.12.1**
+（原子批量带 MsgID；`EnsureLogStream` 强制，低于它拒绝启动）；协调器与 NATS 同子网。Mongo、etcd 都不在协调器的关键路径上。
 
-协调器的全部状态——记录、领取租约、命令 outbox、completion 回执、操作 tombstone、迟到告警标记——在单主权威 Redis 上
-（`framework/saga.RedisStore`，配置 `redis_authority.*` 与 `saga.redis.*`）；Mongo 是冷副本（`MongoStore`，只读），由 Store Service
-（`framework/storeservice` + `wiring/storeservice`）按分区把日志投影进去。设计与取舍见
-[DESIGN-2026-10-26-redis-authority-v2](../maintenance/DESIGN-2026-10-26-redis-authority-v2.md)（实施结果 §13）。
+**布局**（`saga.subject_prefix` / `saga.stream` / `saga.partitions` / `saga.stream_groups`，全部进程相同）：saga ID 恒为
+`IDOf(Type, BusinessKey)`（`sha256` 的前 128 位十六进制），分区 = FNV-1a(ID) mod P；分区 k 在第 k mod G 条流 `<stream>_G<g>` 上。
+每条流的分区数 `ceil(P/G)` 必须 ≤ 50（服务端一条流同时在途的原子批上限，`Layout.Validate`，配置检查与协调器启动同一个函数）。
+第一个启动的所有者把布局登记在快照桶的 `layout` 键，之后不一致的进程以 `ErrLayoutMismatch` 拒绝启动。**改 P / G 只能在全部 saga
+终态、停全部协调器、删流与桶之后**，不支持在线改。
 
-**部署契约**（启动探针 `fredis.CheckAuthority` 强制，不满足拒绝启动）：Redis ≥ 7.2、非 Cluster、`role:master`；`appendonly yes`、
-`appendfsync always`、`no-appendfsync-on-rewrite no`、`maxmemory-policy noeviction`。只支持单主，**不支持 Sentinel / Cluster 自动切主**
-（切主可能让已确认的写回退，框架发现不了）。副本只做灾备。推荐独立实例；`redis_authority.addr` 可以与 `redis.addr` 相同，只要该实例满足契约。
-托管 Redis 禁用 `CONFIG` 时跳过配置核对，靠探针写的 WAITAOF 兜底。
-
-**一笔事务一个脚本**：每次状态变化（Create、领取、Apply、outbox 领取 / 确认 / 退避、迟到告警标记）是一个 Lua 脚本，与同连接的
-`WAITAOF 1 0` 一起在一次往返里提交（`DurableScriptBatch`）。脚本**先做完全部校验再写**（键类型、版本、租约、回执摘要、tombstone、
-积压），业务结论用返回码表达，记录不改。`appendfsync always` 下脚本回复时已 fsync，任何读者都看不到未落盘的状态。
-
-| 结果 | 含义与处理 |
+| subject | 内容 |
 | --- | --- |
-| 业务结论（`CONFLICT`、`DUPLICATE`、`IDENTITY_CONFLICT`、`NEED_RELOAD`、`BACKPRESSURE`） | 映射为 `ErrConflict`、`ApplyDuplicate`、`ErrIdentityConflict`、装回后重跑、`ErrBackpressure`；没有写入 |
-| 连接中断、超时、ctx 到期 | 结果未知，原样返回、不在存储里重试：`Complete` 由 JetStream 重投后重算（回执去重），派发靠租约过期后重新领取，发布靠 outbox 租约过期重发 |
-| `WAITAOF` local=0 或被服务端拒绝 | 已执行、持久未确认：返回 `ErrDurabilityUnconfirmed`（不回滚、不报成功），计 `saga.redis.waitaof_unconfirmed_total`，经 `RuntimeFailure` fail-stop |
-| 脚本错误回复（校验之后的写出错） | 可能部分写入：计 `saga.redis.script_partial_total`、ERROR、fail-stop |
-| Redis 内存满（`OOM`，脚本不声明 `allow-oom`） | 执行前被拒、确定没执行：返回 `ErrBackpressure` |
+| `<prefix>.<k>.ev.cmd.<topic>` / `.ev.done` / `.ev.none` | 分区事件：带命令 / 终态 / 无命令的变化（事件携带这笔 saga 的完整新状态） |
+| `<prefix>.<k>.in.start` / `.in.res` / `.in.op` | 输入：启动意图、步骤结果、运维意图（Resume / Compensate） |
+| `<prefix>.q.<k>` / `<prefix>.q.list`（核心 NATS，不进流） | 所有者查询：Get / 判定补查；List 散播 |
 
-**回执与重试**：`apply.lua` 先查回执（同一 CommandID 摘要相同 → 重复，不同 → 身份冲突），再查请求摘要（`la`：不带回执的请求在回复丢失后
-原样重试 → 已应用），再查版本与租约。带回执的请求一律按回执去重：两次送达算出逐字节相同的请求时，只有第一个算“已应用”。
+流配置：文件存储、R = `saga.replicas`（**生产必须 3**）、`AllowAtomicPublish`、`AllowDirect`、去重窗口 `saga.duplicate_window`、
+**`MaxAge=0`、`Discard=New`**、`MaxBytes=saga.stream_max_bytes`：权威日志不按时间或容量静默删旧，满了拒新写（协调器 fail-stop 告警），
+只由快照后的清理删除。
 
-**热与冷**：非终态与刚结束的 saga 驻留 Redis；终态记录在投影之后、过了 `saga.redis.terminal_retention`（15m）由 Store Service 驱逐，
-之后 Mongo 冷副本就是它的权威。读（`Get`、`GetByBusinessKey`、完成历史）Redis 没有时读冷副本；**冷记录要写，先装回**（`reload.lua`，
-带 tombstone 与告警标记，回执留在 Mongo）。驱逐只在“最新版本已投影”（记录的 `ls` 不晚于分区进度）之后发生，所以冷副本就是驱逐时的最新版本。
-`List` 的终态部分是最终一致的（落后于投影积压）。
+**分区归属**（选项 P-A）：`saga.coordinators` 是跑协调器的 sid 列表；排序后本进程 sid 的下标 i，拥有 `{k : k mod len == i}`。不在列表里的
+进程只做发起方（`StartSaga`、查询、`WaitTerminal`）。进程级唯一由 App 单实例锁保证——**协调器进程在生产必须 `singleton.enabled=true`**
+（配置检查强制）；崩溃重启的短暂重叠由期望序号隔离、旧进程 fail-stop。写者身份（进事件的 MsgID）是 `<sid>-<单实例锁本次启动的 token>`。
+没有分区租约、没有自动接管：一个协调器进程挂掉，它的分区停到它重启，在途 saga 的超时在重放后按截止时刻继续。改 `coordinators` 列表 =
+改归属：按运维手册停全部协调器再起（不停也安全，但会有一轮 fail-stop）。**同一个 sid 只能有一种服务类型装 saga Mod**：列表只写 sid，
+两种服务类型的同号进程会认为自己拥有同一组分区，被期望序号隔离并 fail-stop。
 
-**业务键永久唯一**：Mongo 的 `uniq_type_business` 是永久的，Redis 的业务键守卫在驱逐后只保留 `saga.redis.business_key_guard`（10m）。
-`Create` 先读一次 Mongo 冷副本（同 id 或同业务键已有记录 → `ErrAlreadyExists`），再执行脚本；脚本要求从 Mongo 读开始到执行不超过守卫的
-一半，超过就重做（三次后 `ErrConflict`）。`business_key_guard` 必须不小于 10 × `saga.store_timeout`。
+**发布结果**：`nil` = 已持久；结果未知（没收到答复）→ 同 MsgID、同期望序号重发，按“Duplicate / 批重复 10201 / 分区过滤上最后一条是自己的
+= 已提交”判定，超过 `saga.publish_unknown_budget`（缺省 30s，**≥ 3 × 7s 选主停顿**）→ `ErrPublishUnknown` fail-stop；批不完整（10176）立即重发；
+服务端明确拒绝（流满等）→ `ErrPartitionRejected` fail-stop；期望序号不符且最后一条不是自己的 → `ErrPartitionFenced` fail-stop。去重窗口必须
+≥ 2 × 预算。选主期间（实测 5～7s）这条流上的分区不推进；步骤缺省 `Timeout` 5s 短于停顿，停顿后可能多一次重试（新尝试读到回执回放），不影响正确性。
 
-**积压背压**：每个投影分区未投影的日志超过 `saga.redis.max_projection_backlog`（20000）时，`Create` 返回可重试的 `ErrBackpressure`
-（启动消费者 nak 退避）；已存在的 saga 照常推进，否则积压永远消不掉。
+**快照、保留与清理**：每 `saga.snapshot_every_events`（2000）条事件或 `saga.snapshot_interval`（30s，期间有事件）做一次快照：循环里只浅拷贝已提交
+状态，交给分区自己的快照 goroutine 编码、写对象存储（`<STREAM>_SNAPOBJ`）、按修订号 CAS 清单（`<STREAM>_SNAP` 的 `p<k>`）；CAS 冲突读回、
+更新的不是自己 → fail-stop。加载时校验版本、分区、布局、对象长度与 SHA-256，不符 `ErrSnapshotIncompatible`，分区不启动、**不退回从头重放**
+（日志已按快照清理）。终态（Completed / Compensated / Failed）在内存与快照里留 `saga.terminal_retention`（缺省 1h）后剪掉；**`ManualRequired`
+与非终态常驻**。清理 `purge(below = min(输入水位+1, 最后一条事件, 每个 durable 的 ack floor + 1))`，保留最后一条事件；某个 durable 卡住超过
+`saga.purge_stall_alarm`（10m）计 `saga.log.purge_blocked_seconds` 并 WARN，不跳过它——**下线的步骤要由运维删掉它的 durable**，否则清理一直被挡、
+流最终满了拒新写。
 
-**Store Service**：每个（投影，分区）一个循环——取分区租约、从进度之后读一批（≤ `store_service.batch_size`，256）、写 Mongo（saga：每批最多
-三次 BulkWrite，记录版本只升不降、回执首次写入、tombstone 的 closure 只升不降）、用脚本推进进度并裁剪已投影的日志、驱逐。正确性不依赖租约
-排他（Mongo 写单调、进度只能由持有租约者推进），多个实例靠租约分摊。唯一业务键冲突、文档校验失败是非暂时错误：**该分区暂停、不跳过**
-（写暂停键 `<前缀>:paused:<分区>`、健康 Fail、`store_service.paused_partitions`），运维修好冲突后删除暂停键继续。生成工程与协调器同进程注册。
+**内存**：保留期内终态笔数 × 单笔记录大小，分散在全部协调器进程上。按 700 笔/秒、记录 1 KiB、1h 约 2.5 GB；业务 Data 小、速率低时按比例缩小。
+配置检查不替部署算内存。
 
-**启动守卫**（先恢复再服务）：Mongo 的 saga 元数据（`_saga_meta` 集合 `_id: "redis"`）与 Redis `<前缀>:meta` 的实例 ID 必须一致。两边都没有是
-首次初始化（Mongo 里不能有旧版本留下的非终态 saga）；Mongo 有、Redis 没有是“权威 Redis 被清空或换了库”，拒绝——**空 Redis 不自动当权威**；
-键格式版本或分区数不符同样拒绝（分区数只在全部分区日志已投影为空时可改）。
+**重放（先恢复再服务）**：所有者启动时读快照，从 `min(输入水位, 最后一条事件)+1` 读到分区过滤上的最后一条（`LastMsg` 的序号，确定终点）：事件只取快照之后的、
+按序覆盖；输入只留水位之后的、交给循环重新处理（都幂等）；时间轮按记录的 `NextRunAt` 重建。Mod Start 在全部拥有的分区重放完才返回（上限 2 分钟）。
 
-**连接池**：`redis_authority.pool_size`（64）必须不小于本进程同时在用的连接：协调与发布循环、三类消费者（`saga.result_workers` 8、
-`saga.result_effect_workers` 8、`saga.start_effect_workers` 4）的在途处理，同进程 Store Service 的分区循环。配置检查在任何 Mod Init 之前强制。
+## API
 
-**灾备**：主机或磁盘损毁不在框架承诺内（RPO = 复制 / 备份滞后）。手册：停所有协调器与 Store Service → 恢复 Redis → 逐分区比较冷副本与 Redis
-的版本（冷副本更高的以它为准装回，其后的 Redis 未投影尾部人工核对）→ 核对 JetStream 上未完成的命令 / completion → 再启动。
+| API | 语义 |
+| --- | --- |
+| `StartSaga(ctx, StartRequest)` | 追加启动意图到分区 `in.start` 后等所有者的判定：接受或同一意图已存在 → 返回记录；同业务键不同意图 → `ErrIdentityConflict`；准入关闭 → `ErrBackpressure`；所有者缺定义 → `ErrDefinitionMissing`；ctx 到期仍无判定 → `ErrStartUnconfirmed`（意图已持久、结果未知，**用同一请求重试安全**） |
+| `Get` / `GetByBusinessKey` | 由分区所有者从内存回答；还没启动、或终态过了保留期 → `ErrNotFound`；所有者不在 → `ErrPartitionUnavailable` |
+| `List(Query)` | 向全部分区所有者散播并合并；覆盖非终态、保留期内的终态与全部 `ManualRequired`；有分区没回答 → `ErrPartitionUnavailable`（点名），不返回残缺结果 |
+| `Resume` / `Compensate` | 追加运维意图到 `in.op` 并等判定（规则见「失败语义」）；记录最后一次更新早于“回执保留期 − 最长步骤窗口” → `ErrReceiptsExpired`（选项 RR-A） |
+| `Complete(ctx, Completion) error` | 把结果追加到所属分区 `in.res`（MsgID `res.<CommandID>`），只承诺“已持久进入输入”；框架自带的步骤消费者直接发布，它留给自定义参与方 |
+| `WaitTerminal(ctx, id)` | 等这个 ID 下一个终态；同一 ID 的多个等待者全部唤醒 |
+| `AdmissionState()` | 本进程看到的准入状态（健康检查与测试用） |
+
+**`ErrBackpressure` 的含义是“这次启动现在没有建立，用同一请求重试”**（维护者 2026-10-28 决定 R-A 的持久性选项 A）：准入拒绝只回复触发它的那次尝试、
+不写日志、不建记录（`Status` 没有 Rejected）。拒绝不是持久承诺：所有者在下一次写事件之前崩溃时，被拒的意图（输入水位还没随事件持久）在重放时
+按当时的准入重新判定，可能被接受——发起方先收到 `ErrBackpressure`，saga 之后却被建立。同一请求重试得到“已存在”；经 `EmitStart` 的路径本来就
+nak 重试。只有“收到拒绝后放弃、之后用同一业务键发**不同**意图”的调用方会得到身份冲突，业务不要这样用。
+
+**判定送达**：所有者处理后经核心 NATS 回复这一次尝试（写事件的判定在 PubAck 之后回复）；`saga.start_verdict_timeout`（2s）内没收到回复时每 200ms
+向所有者 `Get(id)`：有记录且启动摘要相同 → 视为已接受；摘要不同 → `ErrIdentityConflict`；没有 → 继续等。启动尝试标识 =
+`<Engine 实例随机 128 位>.<实例内序号>`，全局唯一；第一次发布就被判重复 → `ErrStartIdentityReused`（标识生成坏了的显式失败）。
 
 ## 定义
 
@@ -106,43 +121,30 @@ definition := saga.Definition{
 `BackoffMin..BackoffMax` 退避。`Engine.Register` 按 `Options.StepBudgets` 补齐每个字段：按步骤覆盖 > 定义里写的值 >
 配置默认值 > 框架默认（5s / 5 次 / 100ms..5s）。`wiring/saga` 的 saga Mod 从 `saga.step_defaults.{timeout,max_attempts,backoff_min,backoff_max}`
 与 `saga.steps.<saga type>.<step name>.<字段>` 读取；`saga.steps` 下写了不存在的类型、步骤或字段时 `Init` 失败，不会静默失效。
-**步骤 `Timeout` 必须短于步骤消费者的 `AckWait`**（`saga.DefaultStepAckWait` = 30s，生成的与 demo 的步骤消费者都用它）：一次尝试
-处理到命令截止（派发时刻 + `Timeout`），更长时 JetStream 会在 handler 还在跑时把命令重投给另一个消费者。saga Mod 在 App 启动前按
-A4 ① 的跨键规则（`ValidateConfig`）拒绝 `saga.step_defaults.timeout` / `saga.steps.*.*.timeout` 不短于它的配置，`Init` 再查定义里写死的
-`Timeout`，错误点名键或 `saga "<type>" step "<name>"`（RR-20261006-46）。自己给步骤消费者写更短的 `StepConsumerConfig.AckWait` 时要相应缩短步骤 `Timeout`。
-`roost add saga` 生成的定义不再写预算。生成工程的测试可以用 `kitsaga.StepBudgetsFromConfig(cfg, definitions...)` 与
-`StepBudgets.Resolve(definition)` 得到和运行时相同的预算（game-demo 的 `gift_saga_budget_test.go`）。
+**步骤 `Timeout` 必须短于步骤消费者的 `AckWait`**（`saga.DefaultStepAckWait` = 30s）：配置检查与 `Init` 拒绝不短于它的配置（点名键或
+`saga "<type>" step "<name>"`）。生成工程的测试可以用 `kitsaga.StepBudgetsFromConfig(cfg, definitions...)` 得到和运行时相同的预算。
 
-步骤顺序或补偿语义变化时递增 `Definition.Version`，并在滚动升级期间同时注册仍有
-存量流程的旧版本；Record/Command 固化该版本，不会让旧 Saga 误跑新步骤。只有确认
-该版本已无非终态记录后才能删除旧定义。
-可用 `Engine.List(Query{Type: ..., DefinitionVersion: ..., Statuses: ...})` 检查存量版本。
-运行时缺少指定版本时，协调器会把记录 fence 到 `ManualRequired`，不会猜测使用最新版；
-恢复定义后再执行 `Resume`。
+步骤顺序或补偿语义变化时递增 `Definition.Version`，并在滚动升级期间同时注册仍有存量流程的旧版本；记录固化该版本，不会让旧 saga 误跑新步骤。
+只有确认该版本已无非终态记录后才能删除旧定义（`Engine.List(Query{Type, DefinitionVersion, Statuses})`）。运行时缺少指定版本时，协调器把记录
+fence 到 `ManualRequired`，恢复定义后 `Resume`。
 
-需要与当前 Nest handler 的 Entity 修改可靠绑定时，不要直接调用 `StartSaga`，而应
-在 handler 内调用 `saga.EmitStart`。启动意图会与 Entity mutation 写入同一个 Nest
-WAL record，再由 Wiring 装配的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按 `saga.max_payload_bytes`（缺省 64 KiB）
-校验 `Data`，超过时返回 `ErrInvalidRecord`、事务回滚（RR-20261006-43）。这个键是**发起方与协调器共用的配置**（RR-20261006-66，v1.23.1 起）：
-`wiring/nest`（发起方）与 `wiring/saga`（协调器）共用一份声明，协调器在别的进程时发起方也按它拒绝；两类进程的配置要写同一个值
-（生成的配置段不写它，即都取缺省）。本进程同时有该类型的协调器时与它的 `MaxPayloadBytes` 取小；未经 Wiring 装配的进程只按线上硬上限
-4 MiB。值不一致导致协调器拒绝时，由启动消费者 Term 并计 `saga.start.rejected_total`。
-直接 `StartSaga` 只用于
-本身已经处于可靠消息消费者、运维任务或不需要与另一笔提交原子绑定的入口。
-相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
-否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
+需要与当前 Nest handler 的实体修改可靠绑定时，在 handler 内调用 `saga.EmitStart`：启动意图与实体修改写入同一条 Nest WAL 记录，DataEngine
+发布到效果流后，协调器进程的**启动中继**（`SubscribeNestStarts`，每个装了 saga Mod 的进程都跑）转发到分区。准入关闭或判定未达时中继 nak 退避，
+意图是延迟而不是丢失。`EmitStart` 在事务里就按 `saga.max_payload_bytes`（缺省 64 KiB，发起方与协调器共用一份声明）校验 `Data`，超过时
+返回 `ErrInvalidRecord`、事务回滚。直接 `StartSaga` 只用于已经在可靠消息消费者、运维任务或不需要与另一笔提交原子绑定的入口。
 
-**发起方查结果**：经 `EmitStart` 启动时 saga ID 由启动消费者分配（`StartRequest.ID` 留空），发起方手里只有业务键。
-`(Type, BusinessKey)` 唯一，`Engine.GetByBusinessKey(ctx, sagaType, businessKey)` 按它读记录；还没启动（意图仍在 outbox / 效果流里）时返回
-`ErrNotFound`，按“尚未开始”处理。生成的 `saga/<name>/definition.go` 带 `Lookup(ctx, engine, businessKey)`。所以业务键应取发起方能交还给客户端
-的值（例如请求号）。查询要在装了 saga Mod 的进程（`app.Lookup[*saga.Engine](registry, mods.ModSaga)`）；终态通知（完成 / 补偿完毕时主动告诉发起方）
-没有默认实现，需要时由最后一步或补偿步骤自己发 effect / 推送。
+**业务键与查询**（选项 ID-A、W-A）：saga ID 由 `(Type, BusinessKey)` 派生，业务键查询就是按 ID 查，唯一性与推进由同一个单写者判定。
+**唯一性窗口 = 运行期间 + 终态保留期**：同一业务键在 saga 运行时与结束后 `saga.terminal_retention` 内只能有一笔（同一意图返回已有记录，不同意图
+`ErrIdentityConflict`），之后同一业务键可以再开一笔。`GetByBusinessKey` 还没启动或过了保留期返回 `ErrNotFound`。生成的
+`saga/<name>/definition.go` 带 `Lookup(ctx, engine, businessKey)`。业务键应取发起方能交还给客户端的值（例如请求号）。终态通知没有默认实现。
 
-Native Entity step 使用 Data Engine inbox。consumer 在同步调用步骤体前分配 `Reservation`；业务侧的正式形状是
-`saga.NativeStep`（D12 方向 A，`native_step.go`）：步骤运行时（`wiring/saga` 的 `Steps.Native`，或底层
-`inbox.StepHandler(body)`）从当前调用 context 取出本次投递的执行权构造它，步骤体把它作为**显式业务参数**传进 Nest
-handler，handler 在事务里调用 `step.Complete(success, reason)`（= `inbox.Bind(command, reservation)` +
-`saga.EmitCompletion(completion)`）。不能把 handler context 或 `NativeStep` 交给异步 goroutine：
+`Completion.Data` 会成为下一步的 `Command.Payload`，用于传递流程状态。不要放入大对象（事件携带完整状态，Data 大时日志膨胀）；业务实体仍应存放在其权威服务中。
+
+### 原生步骤执行契约（U-0280，维护者 2026-10-05 决定；2026-10-28 决定 2A 改为回执在实体里）
+
+原生步骤 = 业务就是一笔 Nest 事务。业务侧形状是 `saga.NativeStep`：步骤运行时（`wiring/saga` 的 `Steps.Native`）为每次投递构造它，步骤体把它作为
+**显式业务参数**传进 Nest handler；生成的 Nest 包装在业务函数之前调用 `step.Begin(第一个锁目标)`（选项 N-A），业务在事务里调用
+`step.Complete(success, reason)`。不能把 handler context 或 `NativeStep` 交给异步 goroutine。
 
 ```go
 // 步骤体（Steps.Native 登记）：
@@ -150,238 +152,143 @@ func debit(ctx context.Context, step saga.NativeStep) error {
     _, err := syncsender.NewGiftDebitSender(nest).Sync_GiftDebit(ctx, entityID, itemID, count, step)
     return err
 }
-// Nest handler 内：业务修改产生 Put/Patch，最后
+// Nest handler（生成的包装已先调 step.Begin(target)）：
 return left, step.Complete(true, "")
 ```
 
-原生步骤的结果是它在事务里 `Complete` / `EmitCompletion` 的那一份，步骤体的返回值只表示 Nest 调用是否成功；
-返回错误按“结果未知”处理（见下）。转交路径（另一个进程判定命令不归它后送来）用 `RunHandedOver` 自己取执行权，
-与 consumer 取同一份操作状态文档，二者互斥。
+1. **最多生效一次的单位是操作实例**：saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<phase>:<step>`）。一次操作可以有多次尝试
+   （`MaxAttempts`），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**让业务写与回执落盘。
+2. **回执在被改的实体里**：`roost add saga -native -entity X` 给 X 的 DAO 加 `SagaReceipts map[string][]byte`（持久、不同步）与
+   `game/entities/<x>/saga_receipts.go`（实现 `saga.StepReceiptHost`）。回执的读写经 DAO 生成的 mutator，随事务提交 / 回滚；同一实体的事务由实体锁
+   串行，回执与业务修改是同一条 WAL 记录。`Begin`（在事务里、实体锁内）：有**成功**回执（任何代际）或**本代际的拒绝** → 回放，不执行业务；
+   否则命令已过截止 → 过期未执行；否则执行。回执编码归框架（带版本），坏回执报 `ErrInvalidRecord`（事务回滚、nak），不当作“没有回执”。
+   回放时把同一份回执再写一次，让回放事务本身是一条 WAL 记录：pipelined 下回执可能是另一笔还没落盘的事务写的，这样结论一定晚于它的落盘外发。
+3. **生效点是 Nest 事务的 WAL 落盘**（strict：锁内 fsync；pipelined：本事务的 WAL 票据落盘）。结论经 `nest.AfterCommit` 交给这次运行，Nest 请求
+   返回之后消费者把结果发到命令所属分区的 `in.res`（MsgID `res.<回执里的 CommandID>`），**PubAck 之后才 ack 命令**；过期未执行直接 ack
+   （`saga.step.expired_unexecuted_total`）；回放时命令过期也照样发回执里的成功（过期投递重发成功）。生成器要求这类 handler 的 `durability` 是
+   `strict` 或 `pipelined`（async 不满足“落盘后才发”）。截止检查在事务开始时，WAL 落盘可能晚于截止——只能由迟到成功补偿处理（第 5 条）。
+4. **步骤体返回错误 = 结果未知**（Nest 提交可能已经发生）：消费者 nak 退避重投，重投时 `Begin` 读到回执就回放。没有租约、操作状态文档或
+   投影里的 fence。业务拒绝同样 `Complete(false, reason)`：只提交拒绝回执，协调器随即补偿（补偿被拒则 `ManualRequired`）。回执保留
+   `saga.receipt_retention`（缺省 168h），`Complete` 在同一事务里顺手剪掉至多 16 条过期回执。
+5. **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A）：**成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——
+   记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）就补偿这一步（下一条），已带结果关闭是重复；**拒绝是本代际这个操作的结论、
+   可重试失败是一次尝试的结论**，只在协调器正等着时接收。判定只在 `judgeCompletion` 一处（行为回归见 `framework/saga/completion_test.go`）：
+   - completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，第 N 代 `<key>:rN:<attempt>`），与 `Record.Incarnation` 比较。旧一生的
+     拒绝 / 失败**不接收**，计 `saga.completion.stale_incarnation_total`；旧一生的成功在记录正停在这个操作上时**接收为该操作的结果**。
+   - 同一生里较早一次尝试晚到的可重试失败不接收，计 `saga.completion.stale_attempt_total`（saga 方向 ③）。
+   - 退避中送达的成功同样接收（RR-20261006-42）：操作已派发过、在重试退避时送达的成功接收为该操作的结果。
+6. **放弃之后迟到的成功**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；只有接收了**成功**
+   才关闭的记为“带结果关闭”。放弃关闭之后才到的成功说明那一步已生效、却不在 `CompletedSteps` 里：
+   - **正向步骤 s：协调器补偿它**（saga 方向 ④）。同一条事件里记下这份成功的回执、tombstone 改为带结果关闭、记录写 `LateStep = s+1` 与
+     `LateData = 这份成功的 Data`；记录在两个补偿之间或已终态（`Failed` / `Compensated`）时立即进入 `Compensating` 补偿第 s 步（**终态会被重开**）；
+     某个补偿正在等结果或重试退避时不打断它，它接收结果后先补第 s 步；`ManualRequired` 只记下，运维 `Resume` / `Compensate` 时先补第 s 步。
+     补偿第 s 步的命令载荷是 `LateData`，它的结果不进入 `Data` 链。计 `late_after_abandon_total{phase="forward"}`、WARN；终态被重开另计
+     `saga.reopened_total`，见「运维观察」。
+   - **补偿方向：只告警**：记 ERROR、计 `late_after_abandon_total{phase="compensate"}`，不改记录。补偿方向的放弃都停在 `ManualRequired`，运维核对该步
+     业务数据后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
+   - 迟到成功受终态保留期约束：终态被剪掉之后才到的成功，协调器找不到记录，只计 `saga.completion.unknown_saga_total` 并记 ERROR（点名 `saga_id`、
+     `command_id`），**不能自动补偿**，要人核对。成功送达的延迟 ≈ 参与方重启 + AckWait，远小于缺省 1h。
+   同一个成功会多次送达，**按（操作，代际）只计一次**：正向由回执去重，补偿方向由 tombstone 上已告警的代际；之后的送达计 `Duplicates`。
+7. **原生步骤不能修改 Remote 实体**：`Complete` 发现当前事务带 Remote 写批次时返回 `ErrNativeStepRemoteWrite`（事务回滚）；生成器另在生成期拒绝
+   `remote=managed` 与 `noPersist=true` 的回执宿主实体。Remote 实体的修改应放在 saga 之外、以 `IdempotencyKey` 幂等的 Remote 事务里。
+8. **分工**：步骤模板不需要自己按 `IdempotencyKey` 做业务幂等——前提是业务写在生效点的同一事务里（原生：Nest 事务；Mongo 步骤：handler 拿到的
+   Mongo 事务 ctx）。不在事务里的副作用（调用另一个服务，如 gift deliver 发邮件）不受这个保证，仍要按 `IdempotencyKey` 幂等（mail 的 `RequestID`）。
 
-Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，以及 ID 为
-`saga-completion:{CommandID}` 的 completion effect 会形成同一个 CommitRecord。Mongo
-投影在同一事务里对这个操作的状态文档（`_dataengine_step_operations`，`_id = IdempotencyKey`，见下文「操作状态文档」）
-做一次条件写（当前尝试的 owner、lease token、digest、`pending`、`lease_until > now` 都匹配才写 `updated_at`）；
-不匹配就只写入幂等的 skipped transaction marker，不应用业务 mutation/effect，并让 WAL 安全 ACK。条件写让投影与另一
-worker 的过期接管（换当前尝试、lease token 加一）写同一文档，二者只能有一个提交：租约到期附近不会出现
-“投影落库、接管也成功”的双执行（RR-20260926-30 §6）。控制 receipt 不进入业务 receipt
-collection。
+转交路径（另一个进程的 `WithAdmit` 判定命令不归它后经业务自己的通道送来）用 `Steps.RunHandedOver`：核对步骤名与主题、截止与归属后经同一个
+`RunNativeStep` 运行步骤体，**不发布、不 ack**（原消息持有者的重投读到回执后发结果）；与消费者的互斥由实体锁与回执保证。
 
-被跳过的记录已经改过 Nest 内存（扣减、状态推进都在准入前完成），所以框架还保证内存与后续
-WAL 不以它为基础（RR-20260926-30）：
+#### Mongo 步骤（选项 M-A）
 
-- **实体屏障**：原生步骤记录准入 WAL 后、投影结果确定前，写到同一实体的其他事务在 WAL
-  准入处被拒绝，错误可 `errors.Is(err, dataengine.ErrFencedEntityPending)`（同时满足
-  `nest.ErrCommitRejected`），Nest 在 Guard 内整体回滚，没有写 WAL。这是**可重试**错误：
-  正常只持续一次投影（毫秒级），Mongo 变慢或中断时与投影积压同量级。业务入口应按可重试
-  失败回复客户端或稍后重投，不要当成业务拒绝。同一命令的重投（新 token）同样被挡到屏障
-  解除；`SubscribeDataEngineStep` 在 handler 以该错误失败时交还本次刚拿到的租约，屏障解除
-  后的重投能立刻重新 Reserve，而不是等租约自然过期。
-- **跳过后驱逐**：记录被跳过时，受影响的常驻实体在 Nest 业务池（short / long）内持锁驱逐（不持久化），屏障
-  保持到驱逐完成。之后的访问从 Mongo 重载；已登记的 Sync subject 在重载后被重新绑定，
-  订阅者收到整份全量，而不是在旧版本链上续发增量（驱逐到重载之间该对象不再同步）。
-  `Projector.Stats()` 的 `FencedEntities`、`FencedAdmissionRejected`、`StaleEvictions`
-  以及 `dataengine.fence.*` 指标可观测这两步。
-- **重启**：屏障保证被跳过记录之后没有同实体依赖记录；启动恢复在实体可加载前排空 WAL，
-  跳过后实体从 Mongo 读取，不会 fence。
+`MongoStepInbox.Handle` 一个 Mongo 事务（`WithTransaction`，驱动重试）：读这个操作的回执文档（`_id = IdempotencyKey`）——成功（任何代际）或本代际
+拒绝 → 回放，不执行；本次尝试自己的可重试失败 → 回放；过了截止 → 过期未执行；否则执行 handler（事务 ctx），再写回执（条件 upsert：文档不存在，
+或存在的是更旧代际的拒绝 / 别的尝试的可重试失败），写前再查一次截止；条件不满足或已过截止 → 中止事务（业务写回滚），重跑时回放或过期。
+同一操作的两次尝试并发写同一个回执文档，Mongo 写冲突让后者整体重跑、读到前者的回执回放。
 
-副作用仍然只发生一次：被跳过的记录不落库、不发 completion；步骤由同一操作实例的下一次尝试执行（见下面的契约）。
-客户端可能短暂看到被跳过的扣减（它在准入时已经同步出去），重载后的全量会纠正。
+- 集合是 saga 库（`saga.database`）的 `_<group>_step_inbox`（`wiring/saga` 的 `Steps`），TTL 索引 `expires_at = at + saga.receipt_retention`。
+- 可重试失败也写回执（只对写它的那次尝试回放，不挡同一操作的下一次尝试）：协调器对同一 CommandID 只接受一种结论，不留回执时同一尝试的重投
+  可能交出另一个结论。
+- 业务写必须经 handler 拿到的事务 ctx 写进这笔事务，才在契约内；事务外副作用（发邮件）要按 `IdempotencyKey` 幂等：被回滚的尝试可能已经发出调用。
+- `StepConsumerConfig.MongoWorkers` 控制并发（缺省 1 串行）；启用后业务 handler 必须允许不同命令并发。
 
-**原生步骤不能修改 Remote 实体。** 原生步骤的 CommitRecord 必然带 lease fence control
-receipt；同一 Nest 事务里若还有 Remote 实体的修改，DataEngine 在写 WAL 前返回
-`engine.ErrRemoteLeaseFenceUnsupported`，Nest 在 Guard 内整体回滚（RR-20260926-19）。原因：
-lease fence 在投影时失效会跳过整笔记录，而 Remote 写在准入时已经改了内存、占住写权限与
-分布式锁；生成 Entity 的 `RollbackRemoteCommit` 不保存跨实体前像，投影阶段无法撤销，旧实现
-下这笔 Remote 事务会一直得不到结论。这个拒绝不是业务 Completion：handler 返回错误后消息
-重投，同一 CommandID 仍是当前尝试、租约有效，重投得到 `Duplicate` 并等待 completion 直到步骤
-deadline，之后按 `Timeout` / `MaxAttempts` 重试、最终补偿，而不是立即得到业务拒绝。框架目前
-没有让原生步骤与 Remote 写原子提交的入口：Remote 实体的修改应放在 Saga 之外、以
-`IdempotencyKey` 幂等的 Remote 事务里，原生步骤只修改本地 Entity。
+## 准入
 
-旧版本 WAL 里可能留有“Remote 写 + lease fence”同在的历史记录。它们不再被投影（维护者 2026-10-13 移除旧格式
-兼容）：投影器遇到这种记录以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写 Remote 事务记录、不写
-DataEngine 事务标记、不写实体数据、不推进 checkpoint，原始 WAL 原样保留，与其他退役 WAL 格式同一口径。
-升级前须用旧版本把 WAL 排空。
-
-handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt 和
-outbox，独立 publisher 再投递 effect。重复 CommandID 由操作状态文档上的短租约协调，最终以
-receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`。不同 CommandID、相同 IdempotencyKey 是同一操作实例的
-不同尝试，由下面的契约保证最多一次生效，业务 step 不需要再按 IdempotencyKey 自己做幂等。
-Reserve 读到 receipt 时顺手把状态文档里这次尝试结算为 settled；这一步失败不改变 Reserve 的结论（receipt 仍是权威，
-写错误会让 Mongo 中止事务并由驱动重跑），但每次失败记 Warn（带 `command_id` 与原因）并累加
-`saga.step_inbox.mark_completed_error_total`。该计数持续增长、同一步骤反复 Duplicate 直到 deadline 时，
-检查操作状态文档集合的写入（权限、索引、文档校验）（RR-20260927-16）。
-
-raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo transaction 中；
-不要在这类 handler 中混用 Nest Entity 修改。它与原生步骤共用同一套操作实例契约（下文「Mongo 步骤」，saga 方向 ②）。两种 inbox 分开是为了保持各自的原子边界，
-不是让 Saga coordinator 改走 Entity WAL。Coordinator 的 state/outbox/completion receipt
-仍由 Saga Store 的 Mongo transaction 负责。
-
-`Completion.Data` 会成为下一步的 `Command.Payload`，用于传递流程状态。不要放入
-大对象；业务实体仍应存放在其权威服务中。
-
-### 原生步骤执行契约（U-0280，维护者 2026-10-05 决定）
-
-本节的契约自 2026-10-06 起同样适用于 Mongo 步骤（`MongoCommandInbox`，维护者第六轮决定 saga 方向 ②），差别只在生效点，见本节末「Mongo 步骤」。
-
-1. **最多生效一次的单位是操作实例**：saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<phase>:<step>`）。
-   一次操作可以有多次尝试（`MaxAttempts`，配置），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**
-   让业务写、回执与 completion 落库。跨 Resume 的代际也算同一操作实例：新一生遇到旧一生已生效的成功会回放它。
-2. **每次尝试的生效窗口包含在协调器等它的窗口内**：租约 `lease_until = min(now + LeaseDuration, Command.DeadlineAt)`。
-   协调器只在 `DeadlineAt` 之后才判这次尝试超时、放弃或发出下一次尝试；之后才投影的记录（kill -9 重启后的 WAL 重放、投影积压）
-   lease fence 不再匹配，被跳过（受影响实体按 RR-20260926-30 驱逐重载），不留回执、不发 completion。
-3. **新尝试先看同一操作实例的其他尝试**（`DataEngineStepInbox.Reserve`，在一个 Mongo 事务里只读这个操作的状态文档，
-   同一操作实例的并发 Reserve 在这份文档上写冲突串行化，见「操作状态文档」）：
-   - 已有**成功**回执（任何一生）或**本生的拒绝**（`Success=false, Retryable=false`）→ 不执行，把那次的 completion 经 saga 结果流
-     重发给协调器（它的 completion effect 可能还没送达，或已经丢失）；
-   - 只有**可重试失败** → 那次尝试已有结论且没有生效，新尝试照常执行；
-   - 仍 pending 且租约有效 → 不执行，返回可重试错误（nak 后重投），等它有结论；
-   - pending 且租约已过期 → **接替**（新尝试成为当前尝试、`lease_token+1`，被接替的记进 `superseded`），它在 WAL 里未投影的记录随后被 fence 跳过；
-     被接替尝试的迟到投递直接 ack、不执行。
-   - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
-     **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又没有送达，不重发就没人再送达（审查 2026-10-05）。
-   - **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：
-     **成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）
-     就补偿这一步（第 4 条），已带结果关闭是重复；**拒绝是本生这个操作的结论、可重试失败是一次尝试的结论**，只在协调器正等着时接收。
-     判定只在 `judgeCompletion` 一处（行为回归见 `framework/saga/completion_test.go`）；下面三段是这条规则在代际、尝试、退避上的展开（B1、方向 ③、RR-20261006-42）。
-   - **协调器用同一张表接收结果**（B1，维护者决定 2026-10-05）：completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，
-     第 N 代 `<key>:rN:<attempt>`，与铸造 ID 的 `commandID` 同一处），与记录当前代际（`Record.Incarnation`）比较。
-     旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`
-     （新一生照常执行，收件箱也不回放它）；旧一生的成功在记录正停在这个操作上（在等它，或 Resume 之后还没派发、新一生的尝试在退避）时
-     **接收为该操作的结果**，不再派发这一步；同一生的结果按原规则接收。不在这个操作上的旧一生成功按第 4 条处理。
-   - **可重试失败只接收正在等的那次尝试的**（saga 方向 ③，2026-10-07）：同一生里较早一次尝试晚到的可重试失败只说明那一次没生效，
-     正在等的尝试照常执行；协调器不接收它，计 `Stats().StaleAttempt` 与 `saga.completion.stale_attempt_total{saga_type,phase}`（WARN）。
-     成功与本生的拒绝是操作的结论，从哪次尝试来都接收——下一次尝试回放的正是较早那次的 completion（`CommandID` 是那次的）。
-   - **退避中送达的成功同样接收**（RR-20261006-42，2026-10-07）：同一生、操作还开着（已派发过、在重试退避，`Attempt≥1`）时送达的成功
-     接收为该操作的结果，与旧一生成功的规则同一理由。之前只在 `Waiting` 时接收，退避中的成功按 `ErrNotWaiting` Term，指望下一次尝试回放；
-     但截止、人工 `Compensate`、定义缺失可以在下一次派发之前关闭这个操作，之后再没有尝试回放它，这一步已生效却不在 `CompletedSteps` 里、
-     不补偿也不告警。退避中送达的拒绝与可重试失败仍不接收：拒绝由下一次尝试回放（操作若先被放弃，拒绝本来没有要补的东西），可重试失败只认
-     正在等的那次尝试。
-4. **放弃之后迟到的成功**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
-   只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭。放弃关闭之后才到的成功说明那一步已生效、
-   却不在 `CompletedSteps` 里（saga 方向 ③ 之后来源只剩“截止前已生效、completion 在放弃后才送达”与时钟偏差）：
-   - **正向步骤 s：协调器补偿它**（saga 方向 ④，即 U-0280 的方向 C，2026-10-07）。同一个 Store 事务里记下这份成功的回执、tombstone 改为带结果关闭、
-     记录写 `LateStep = s+1` 与 `LateData = Data`；记录在两个补偿之间或已终态（`Failed` / `Compensated`）时立即进入 `Compensating` 补偿第 s 步
-     （**终态会被重开**，结束后回到 `Compensated`）；某个补偿正在等结果或重试退避时不打断它，它接收结果后先补第 s 步；`ManualRequired` 只记下，
-     运维 `Resume` / `Compensate` 时先补第 s 步。补偿第 s 步的载荷是 `LateData`，它的结果不进入 `Data` 链；之后回到 `CompletedSteps` 的倒序。
-     第 s 步在“下一个边界”补偿，可能排在一个已在途的补偿之后（在途的补偿不能放弃，它可能生效）。计 `late_after_abandon_total{phase="forward"}`、WARN；
-     终态被重开（以及 `ManualRequired` 上 `Resume` / `Compensate` 先补第 s 步）另计 `saga.reopened_total{saga_type,from_status,reason}`，见「运维观察」。
-   - **补偿方向：只告警**：记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{phase="compensate"}`，不改记录。
-     补偿方向的放弃都停在 `ManualRequired`，运维核对该步业务数据（核对项见[历史故障表 T-226](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)）后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
-   同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），**按（操作，代际）只计一次**：正向由回执去重，补偿方向由 tombstone 上的
-   `late_alarms.r<代际>`（`LateSuccessAlarmStore`，B1）；之后的送达计 `Duplicates`。成功若在 Resume 之后、新一生派发之前才到达，协调器直接把它接收为
-   这一步的结果（第 3 条），不是迟到。
-5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等——
-   前提是业务写在生效点的同一事务里（原生：Nest 事务；Mongo 步骤：handler 拿到的 Mongo 事务 ctx）。不在事务里的副作用
-   （调用另一个服务，如 gift deliver 发邮件）不受这个保证，仍要按 `IdempotencyKey` 幂等（mail 的 `RequestID`）。
-   2026-10-06 之前 Mongo 步骤不在本契约内（只保证同一命令最多一次），见下。
-
-#### Mongo 步骤（2026-10-06 纳入）
-
-`MongoCommandInbox` 与 `DataEngineStepInbox` 共用操作状态文档与判定代码（`saga/step_operation_inbox.go`），第 1～4 条逐条相同：
-新尝试先看同一操作实例的其他尝试（成功或本生的拒绝 → 回放，不执行；在途且租约有效 → nak 等待；租约过期 → 接替），租约封顶到命令截止。
-差别只在**生效点**：
-
-- **提交点是 handler 的 Mongo 事务**。`Handle` 先在一个 Reserve 事务里拿租约，再开执行事务：handler 的业务写 →
-  对状态文档的条件写（当前尝试是自己、owner、token、`pending`、`lease_until > now`，结算为 settled 并存 completion）→ 插入回执（`_id = CommandID`，格式不变）。
-  条件写不匹配（截止已过、已被接替）时整笔事务中止，业务写随之回滚；接替写的是同一份状态文档，两者只能有一个提交。
-  条件在事务最后一次写时检查，剩下的窗口是提交本身的延迟（与原生投影相同）。
-- **业务写必须经 handler 拿到的事务 ctx 写进这笔事务**，才在契约内；这时业务按 `IdempotencyKey` 幂等从“必需”降为可选的纵深防御。
-  调用另一个服务的步骤不在事务里：被中止的尝试可能已经发出调用，仍要业务幂等。
-- 执行事务失败（handler 错误、取消、fence）后交还租约，重投立即重试，与改动前“失败后重投立即重跑”一致；提交结果未知时回执已在，重投回放。
-- 消费者：回放的 completion 原样发布（`CommandID` 是生效那次的）；截止已过、被 fence、被接替的投递不执行，ack 前把同一操作实例已生效的成功
-  经 saga 结果流重发；在途等待按可重试错误 nak。
-- `CommandInboxOptions` 增 `Owner`（缺省每个实例随机）与 `LeaseDuration`（缺省 1 分钟，再封顶到命令截止）。
-- 状态文档集合是 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`），回执集合不变。已生成工程不迁移（维护者决定），仓库模板与
-  `roost add saga` 生成物已同步注释。
-- 代价：每次执行多一个 Reserve 事务（读回执、读状态文档、写状态文档），执行事务多一次条件更新（测量见
-  [方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）。
-
-**两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
-`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达的成功被接收（上面第 3 条，RR-20261006-42）；没有送达的由下一次尝试回放或由过期投递重发。
-`ErrDefinitionMissing` 不是终态（发版前审查更正）：Complete 只在记录正等着这个操作时才查定义，这时缺定义是滚动发布中“派发它的进程已升级、
-处理结果的协调器还没升级”的暂时状态，两条流都按可重试错误 nak 退避；新定义上线后重投被接收。定义一直不来时，步骤超时后没有定义的协调器把记录
-fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟到成功 ack 并告警，`MaxDeliver` 兜底。
-
-**代价与运维要点**：
-- **投影积压超过步骤 `Timeout` 时步骤停住而不是重复执行**：每次尝试都在截止后才投影、被跳过，步骤要等积压消退后的那次尝试才能成功；
-  积压持续到重试用尽则补偿或 Failed。现象是 `dataengine.fence.skipped.total{resource="_dataengine_step_operations"}` 与
-  `saga.step_inbox.superseded_total` 增长、步骤超时。调大 `Timeout` 或解决 Mongo 变慢，不要调大 `LeaseDuration`（它已被截止时间封顶）。
-- `LeaseDuration` 现在只是上限，实际租约不超过命令截止；`LeaseDuration > AckWait` 的校验保留。
-- 依赖协调器、步骤进程与投影进程的时钟偏差远小于 `Timeout`。
-- 每次授予租约（新建、接管、接替）只读写这个操作的一份状态文档，不按操作查询、没有上限：尝试次数、Resume 次数与历史都不进入判定
-  （取代了 RR-20261006-15 / -16 的 claim 扫描、`outcome` 字段与 4096 / 8192 上限）。
-- **持久格式**：tombstone（`_saga_operations`）有 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）；没有 `closure` 的 tombstone
-  不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。saga 记录（`_sagas`）在有待补偿的迟到步骤时多 `late_step` / `late_data`
-  （saga 方向 ④，正常记录没有）；自定义 Store 要在 `Create` / `Get` / `Apply` 中原样保存 `Record.LateStep` / `LateData`。收件箱的持久格式见下面「操作状态文档」。
-- **混跑**：B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
-  记录本身仍按版本号 fence，新旧协调器不会互相覆盖。步骤进程不支持新旧混跑（见「操作状态文档」的升级步骤）。
-  已生成工程不提供迁移（维护者决定）；仓库内模板与生成物已同步。
-
-#### 操作状态文档（2026-10-06，维护者决定“直接改成一份状态文档”）
-
-两种收件箱对每个操作实例（`Command.IdempotencyKey`）只写一份状态文档，判定只读它（[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）：
-
-- **集合**：原生 `_dataengine_step_operations`；Mongo 步骤 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`）。`_id = IdempotencyKey`，
-  索引只有 `ttl_expires_at`（`expires_at` 每次写入刷新为 `now + receiptTTL`，缺省 30 天）。`EnsureInfrastructure` / 订阅时自动建立。
-- **内容**：当前尝试（`command_id`、`incarnation`、`digest`、`owner`、`lease_token`、`lease_until`、`deadline_at`、`status` = `pending` / `settled`、
-  结算后的 `result` 与 `completion`）——原生投影的 lease fence 直接匹配这几个顶层字段；`refusals.r<代际>`（只留代际最大的两生，剪掉的记
-  `refusals_dropped_through`，那一生迟到的投递不执行）；`superseded`（最近 16 个被接替的尝试，它们迟到的投递不执行）；`version`（Reserve 的 CAS）。
-- **Reserve 一个事务三条命令**：读本命令回执、读状态文档、需要时以 `version` 做条件写；同一操作的并发 Reserve 在这份文档上写冲突串行化。
-  `lease_token` 每次授予租约加一，旧尝试的 fence 与结算条件从此不再匹配。
-- **升级（不兼容 v1.22.0 及以前）**：存储形状改变，新代码不读也不写旧的 claims 集合（`_dataengine_inbox_claims`、`<收件箱集合>_claims`），
-  不支持与旧步骤进程混跑（维护者 2026-10-06 决定，线上未部署）。步骤服务先停旧再起新：停掉全部旧步骤进程（原生步骤进程要排空 WAL：
-  旧记录的 fence 指向旧 claim 文档），清空或丢弃旧 claims 集合（`db.<name>.drop()`），再起新进程。回执集合、协调器记录、tombstone、wire 不变，
-  协调器的升级顺序不受影响。
-- **运维观察**：`saga.step_inbox.superseded_total`（接替）、`saga.step_inbox.mark_completed_error_total`（读到回执后结算失败）、
-  `dataengine.fence.skipped.total{resource="_dataengine_step_operations"}`（原生记录因租约失效被跳过）。看某个操作卡在哪里，直接
-  `db._dataengine_step_operations.findOne({_id: "<saga>:<phase>:<step>"})`：`status=pending` 且 `lease_until` 在未来就是有尝试在途。
+- **信号**：有原生步骤的进程（`Steps.Start`）每 `saga.admission.signal_interval`（200ms）把本进程 DataEngine 投影器的 WAL 未投影记录数写进
+  `<STREAM>_LOAD` 的 `part.<group>.<sid>`；`Steps.Drain` 时删除自己的键（优雅下线不算停更）。桶的 MaxAge 与 LimitMarkerTTL 都是 30s：崩溃进程的
+  键过期时协调器看得到删除，不再计入。Mongo 步骤没有投影积压，不发布。
+- **判定**：每个协调器进程一份，全部分区共用；积压 = 全部参与方未投影记录数的最大值；`≥ high_records`（5000）关闭，关闭后 `≤ low_records`（2500）
+  才重开。某个参与方的信号按本机时钟超过 `stale_after`（2s）没更新 → 关闭（`backpressure_stale_signal`）。**初始化 fail-closed**：watch 的初始快照
+  读完之前关闭（`backpressure_not_ready`）。
+- **只作用于新启动**：所有者处理 `in.start` 时判一次（权威），关闭 → 判定 rejected（见 API 一节 `ErrBackpressure`）。在途推进、重试、补偿、Resume 不受影响。
+  所有者把状态写进同桶 `admit` 键，`StartSaga` 与启动中继先看 3s 内的提示，关闭时不写意图直接返回 `ErrBackpressure`。
+- **硬上限**：`dataengine.projection.max_unacked_records`。本进程有 DataEngine 且准入开启时，它必须 > 0 且 ≥ 4 × `high_records`（生成配置写 20000），
+  配置检查强制。到上限时 DataEngine 在 WAL 准入前拒绝，Nest 回滚、命令 nak，协调器按步骤预算重试。
+- **调参**：高水位 = 投影器持续速率 × 允许的追平时间；阈值随部署变。
 
 ## 失败语义
 
 - `Success=true`：进入下一步；
 - `Success=false, Retryable=true`：指数退避后重试；
 - `Success=false, Retryable=false`：立即开始补偿；
-- 补偿持续失败：进入 `ManualRequired`；
-- `Resume(ResumeRequest)`：故障修复后继续失败或补偿流程；原 deadline 已过期时必须
-  显式提供新的未来 deadline，或设置 `ClearDeadline`；
-- 放弃之后才到的正向成功：自动补偿那一步，`Failed` / `Compensated` 会被重开回 `Compensating`（上文契约第 4 条，saga 方向 ④）；
-  重开计 `saga.reopened_total`、记 WARN，业务识别重开的方法见下面「运维观察」；
-- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。**`Completed` 的 saga 不能再 `Compensate`**，
-  返回 `ErrSagaCompleted`、记录不动（RR-20261006-47，维护者 2026-10-07 选 A）：`Completed` 是业务结论，按终态做业务的一方
-  （发通知、写对账）已经据此行动；撤销已完成的业务走业务自己的冲正流程（例如另起一个反向 saga）。`Compensated` 幂等返回原记录。
-  在补偿方向停下的 `ManualRequired`
-  上调用时与 `Resume` 一样进入新一生（`Incarnation+1`）：要重新执行的补偿步骤在这一生里已经派发过，不换代就会复用上一轮
-  的 `CommandID`，收件箱只会回放旧的拒绝或报身份冲突（B1）。**补偿方向 `ManualRequired` 修复原因后的正确做法是 `Resume`**
-  （它同时处理截止时间）；`Compensate` 在这种状态下与之等价。
+- 补偿持续失败：进入 `ManualRequired`（常驻内存，不受终态保留期剪枝）；
+- `Resume(ResumeRequest)`：故障修复后继续失败或补偿流程，总是开新一生（`Incarnation+1`）；原 deadline 已过期时必须显式提供新的未来 deadline，
+  或设置 `ClearDeadline`；
+- 放弃之后才到的正向成功：自动补偿那一步，`Failed` / `Compensated` 会被重开回 `Compensating`（契约第 6 条）；
+- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿。**`Completed` 的 saga 不能再 `Compensate`**，返回 `ErrSagaCompleted`、记录不动
+  （维护者 2026-10-07 选 A）。`Compensated` 幂等返回原记录。在补偿方向停下的 `ManualRequired` 上调用时与 `Resume` 一样进入新一生；**补偿方向
+  `ManualRequired` 修复原因后的正确做法是 `Resume`**；
+- 回执保留期守卫（选项 RR-A）：记录最后一次更新早于 `now − saga.receipt_retention + 最长步骤窗口` 时 `Resume` 与补偿方向的 `Compensate` 返回
+  `ErrReceiptsExpired`：重新执行的操作可能已经没有参与方回执、会再生效一次。超过一周的人工 Resume 需要运维先核对业务数据再走业务冲正。
 
-运维面通过 `Engine.List` 按 `ManualRequired`/`Failed` 和更新时间分页查询，再使用
-`Get` 查看错误与步骤，修复外部原因后调用 `Resume`。单次查询最多返回 1000 条，
-避免管理请求退化成无界全表扫描。
-Mongo 里一条校验不过的 saga 记录（手工改坏、不兼容的写者整体 Replace 丢了字段）不让 `List` 与协调器的领取整批失败：
-那一条被跳过，计 `saga.store.corrupt_record_total{op}`（`op` 为 `list` / `claim`）并记点名 `id` 的 ERROR，其余记录照常返回
-（RR-20261006-45）。坏记录不会被自动改写，运维修好文档前它每个 `lease_duration` 被领取、告警一次。
+运维面通过 `Engine.List` 按 `ManualRequired`/`Failed` 查询（单次最多 1000 条），再 `Get` 查看错误与步骤，修复外部原因后 `Resume`。
 
-等待不占用 goroutine，也不依赖持久化进程 timer。`NextRunAt` 由带索引的批量
-worker 扫描；进程内 signal 只用于降低新任务延迟。
+等待不占用 goroutine：每个分区一个哈希时间轮（`saga.tick` 5ms、1024 槽），条目只是“到时看一眼”，状态机按记录当前的 `NextRunAt` / `DeadlineAt`
+判定，陈旧条目不改状态；墙钟回拨时扫当前槽。同一轮先处理输入、后处理到期，已在输入里的结果先于同轮的超时被接收。
+
+**故障与恢复**：
+
+| 故障 | 行为 |
+| --- | --- |
+| 协调器 kill -9 | 已 PubAck 的事件在流里，内存丢失；同 sid 进程重启（单实例锁等旧锁过期）→ 快照 + 尾巴重放 → 服务。分区在重启前停顿 |
+| 旧协调器还活着（SIGSTOP 恢复、重叠） | 下一次发布被期望序号拒绝 → `ErrPartitionFenced` → fail-stop |
+| 参与方 kill -9 | strict 已确认的提交在 WAL；重启先排空 WAL 进 Mongo 再加载（回执随实体）；未 ack 的命令重投 → `Begin` 回放 |
+| 参与方长时间停机 | 协调器每个步骤超时派一次新尝试；回来后每条积压命令经 Nest 跑一次 Begin（回放或过期 ack），实测 300 笔停 60s 约 1～3s 排空 |
+| 发布结果未知 | 同 MsgID 重发判定；超过预算 fail-stop |
+| 快照写冲突 / 快照不兼容 | fail-stop / 分区不启动 |
+| 清理守卫卡住 | 不清理、告警；流满了拒新写 → fail-stop |
+
+**进程被强杀时遗留的 Mongo 事务**：被 kill -9 的参与方留下的 DataEngine 投影事务（与 Mongo 步骤事务）在服务端保持打开、持锁，直到
+`transactionLifetimeLimitSeconds`（服务端参数，缺省 60s）才回收；期间重启后的排空 WAL 对同一文档的写一直 `WriteConflict`，这段时间该参与方
+不服务，在途步骤消耗重试预算。**部署要求：服务端 `transactionLifetimeLimitSeconds=20`**（`db.adminCommand({setParameter: 1,
+transactionLifetimeLimitSeconds: 20})` 或启动参数 `--setParameter transactionLifetimeLimitSeconds=20`）。框架自己的事务由 `mongo.transaction_timeout`
+约束，单次远短于 20s；业务里若有单次超过 20s 的 Mongo 事务，按它调大，同时调大受影响步骤的预算。服务端每半个参数扫一次过期事务，所以遗留
+事务最晚在 1.5 倍参数时回收（20s → 最晚 30s；2026-10-29 私有 mongod 实测 27～29s）。
+
+- 参与方启动时只读探测这个参数（`Steps.Start`，`getParameter`）：长于缺省步骤预算窗口（`saga.step_defaults` 补齐框架缺省后
+  MaxAttempts × Timeout 加退避，框架缺省 26.5s）时 WARN 一次并计 `saga.step.mongo_txn_lifetime_exceeds_budget`；托管库不让读时只记 INFO
+  “未探测”。探针从不拒绝启动（参数归部署）。
+- DataEngine 启动排空撞上写冲突时在 `dataengine.startup_timeout`（缺省 30s）内重试：驱动在一次事务里重跑到 `mongo.transaction_timeout`，之后
+  Runtime 退避再排空（`dataengine.startup_drain_retry_total`），期限到了才启动失败（进程退出，由部署重启；那时遗留事务多半已回收）。
+  参数 20s 时最坏回收时刻与 30s 期限相同，被杀到重启之间的时间是余量；要更稳就调大 `dataengine.startup_timeout`（同时调大部署侧的启动等待）。
 
 ## 运维观察
 
-协调器的计数都在 `Engine.Stats()`（saga Mod 的健康检查消息里同样列出），指标标签只有 saga 类型与方向 / 原状态 / 原因，保持低基数：
+协调器的计数都在 `Engine.Stats()`（saga Mod 的健康检查消息里列出部分），指标标签只有 saga 类型与方向 / 原状态 / 原因，保持低基数；完整清单见
+[OBSERVABILITY](OBSERVABILITY.md#sagacoresaga)。
 
 | 指标 | `Stats()` | 含义 | 是否故障 |
 | --- | --- | --- | --- |
-| `saga.reopened_total{saga_type,from_status,reason}` | `Reopened` | saga 被**重开**（下面一节） | 不是故障，是记录被改过的信号；持续增长说明 completion 送达经常晚于步骤截止 |
-| `saga.completion.late_after_abandon_total{saga_type,phase}` | `LateAfterAbandon` | 放弃之后才到的成功（契约第 4 条），按（操作，代际）计一次 | `phase="forward"` 已自动补偿（WARN）；`phase="compensate"` 要运维核对（ERROR，核对项见[历史故障表 T-226](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)） |
-| `saga.completion.stale_attempt_total{saga_type,phase}` | `StaleAttempt` | 同一生较早尝试晚到的可重试失败被忽略（saga 方向 ③） | 正常现象 |
-| `saga.completion.stale_incarnation_total{saga_type,phase}` | `StaleIncarnation` | Resume 之后旧一生的拒绝 / 失败被忽略（B1） | 正常现象 |
+| `saga.reopened_total{saga_type,from_status,reason}` | `Reopened` | saga 被**重开**（下面一节） | 不是故障，是记录被改过的信号 |
+| `saga.completion.late_after_abandon_total{saga_type,phase}` | `LateAfterAbandon` | 放弃之后才到的成功，按（操作，代际）计一次 | `phase="forward"` 已自动补偿（WARN）；`phase="compensate"` 要运维核对（ERROR） |
+| `saga.completion.unknown_saga_total` | `UnknownSaga` | 结果对应的 saga 已过终态保留期被剪掉 | **非零要人核对** |
+| `saga.completion.stale_attempt_total{saga_type,phase}` | `StaleAttempt` | 同一生较早尝试晚到的可重试失败被忽略 | 正常现象 |
+| `saga.completion.stale_incarnation_total{saga_type,phase}` | `StaleIncarnation` | Resume 之后旧一生的拒绝 / 失败被忽略 | 正常现象 |
+| `saga.partition.fail_stop_total{reason}` | `FailStops` | 分区 fail-stop（`fenced` / `publish_unknown` / `rejected` / `error`） | **非零即查**，进程随之停下 |
 
-`Completed` / `Compensated` / `Failed` / `ManualRequired` 按**到达终态的次数**计：重开的 saga 补偿完再次到达终态时会再计一次，不能当作 saga 个数。
+`Completed` / `Compensated` / `Failed` / `ManualRequired` 按**到达终态的次数**计：重开的 saga 补偿完再次到达终态时会再计一次。
 
-### saga 重开（维护者第十三轮，saga 方向 ④ 的可观测性）
+### saga 重开（saga 方向 ④ 的可观测性）
 
-**什么时候发生**：正向步骤 s 在协调器放弃它之后才送达成功（契约第 4 条）。协调器把 saga 带回补偿、只补偿这一步，结束后回到 `Compensated`
+**什么时候发生**：正向步骤 s 在协调器放弃它之后才送达成功（契约第 6 条）。协调器把 saga 带回补偿、只补偿这一步，结束后回到 `Compensated`
 （补偿失败停在 `ManualRequired`）。每次重开计一次 `saga.reopened_total`、写一条 WARN：
 
 | `reason` | `from_status` | 场景 |
@@ -390,133 +297,42 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 | `resume` / `compensate` | `manual_required` | `ManualRequired` 期间收到的迟到成功只记下（`LateStep`，不自动跑）；运维 `Resume` / `Compensate` 时先补第 s 步 |
 
 迟到成功到达时 saga 还在补偿中（非终态）不算重开，只计 `late_after_abandon_total{phase="forward"}`；没有迟到步骤的普通 `Resume` 也不算。
+日志：重开 WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`（`saga_id`、`saga_type`、`from_status`、
+`reason`、`late_step`、`status`、`version`），同时还有 WARN `saga: step succeeded after the coordinator abandoned it; compensating it`（`command_id`、`operation`）。
 
-日志（按 `saga_id` 串起来）：
-
-- 重开：WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`，字段 `saga_id`、`saga_type`、`from_status`（原终态）、
-  `reason`、`late_step`（迟到的步骤号）、`status`（重开后的状态）、`version`；同一时刻还有 WARN `saga: step succeeded after the coordinator abandoned it; compensating it`
-  （`command_id`、`operation` 指出是哪次尝试）；
-- 迟到的那一步补偿完：INFO `saga: compensated the step that took effect after the coordinator abandoned it`，`status` 是之后的状态
-  （回到 `compensated`，或前缀还要补时是 `compensating`）。补偿失败照常进 `ManualRequired`，`LateStep` 保留，`Resume` 再补它。
-
-**业务怎样识别重开**：saga 没有向业务推送终态的机制——没有 completion 回调、终态事件流或 hook（`Publisher` 只发步骤命令，结果流是步骤发给协调器的），
-业务只能用 `Get` / `List` 读记录。所以 `Failed` / `Compensated` 不是永远不变的，按终态做业务（给玩家发失败通知、释放预留、写对账）的一方要：
+**业务怎样识别重开**：saga 没有向业务推送终态的回调（`WaitTerminal` 只在进程内等一次），按终态做业务的一方用 `Get` / `List` 读记录，所以
+`Failed` / `Compensated` 不是永远不变的：
 
 1. 读到终态时记下 `Record.Version`。之后 `Get` 返回更大的 `Version` 就是记录被改过（重开或运维 `Resume`），按新状态重新处理；
-2. 重开期间记录是 `Status=Compensating`、`LateStep>0`（正在补的是 `Step == LateStep-1`），`LastError` 为 `step <s> took effect after the coordinator abandoned it`；
-   `List(Query{Statuses: []Status{StatusCompensating}})` 能列出正在补偿的记录；`ManualRequired` 且 `LateStep>0` 表示有一步等运维 `Resume` 时补偿；
-3. 重开不改变业务结论：`Failed` 被重开后最终是 `Compensated`（第 s 步确实生效过、又被撤销），`Compensated` 被重开后仍回到 `Compensated`。
-   按终态做的业务动作只要按 saga id 幂等，第二次到达终态时重做一次即可；不要假设 `Failed` 的 saga 一定没有任何一步生效过——迟到生效的那一步由协调器补偿掉。
+2. 重开期间记录是 `Status=Compensating`、`LateStep>0`（正在补的是 `Step == LateStep-1`）；`ManualRequired` 且 `LateStep>0` 表示有一步等运维 `Resume` 时补偿；
+3. 重开不改变业务结论：`Failed` 被重开后最终是 `Compensated`，`Compensated` 被重开后仍回到 `Compensated`。按终态做的业务动作按 saga id 幂等即可。
 
-## Mongo 步骤消费并发
+## 跨服交易：使用约束
 
-`StepConsumerConfig.MongoWorkers` 控制每个 Mongo 步骤订阅的并发处理数，`CompletionConsumerConfig.Workers` 控制普通结果订阅的并发数；0 / 1 保持串行，负数或超过 `MaxAckPending` 拒绝启动。直接装配可设置：
+维护者确认 Saga 的目标用途是跨服交易。它适合跨多个独立事务域的扣款、资源预留、交付和失败补偿；一次请求的接纳与整笔交易完成是两个时刻。客户端
+收到已接纳的交易号后显示“处理中”，通过业务状态查询 / 结果通知确认结果；不能把启动成功、请求超时或客户端断线直接解释为交易成功或失败。
+Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 
-```go
-assemblyConfig.Completions.Workers = 2
-stepConfig.MongoWorkers = 2
-```
+容量：协调器原型（本机三节点 R3、参与方投影 8 通道、准入开）实测长期约 1200 笔/秒（云 Mongo 约 700 笔/秒），见
+[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)。正式实现（生成 DAO、实体内回执、`Steps` 运行时）的数字在性能验收批次另测，
+**原型数字不是正式实现的容量结论**。Redis 权威与旧原生路径的历史测量（`SAGA-CHECKPOINT-20261018`、`NIGHT-20261020` 等）不再适用。
 
-这两个字段是 Go 装配 API，不是现成的 YAML 键。启用后，业务 handler 必须允许不同命令并发，不能依赖订阅回调顺序。正式 JetStream 延迟结算保证处理完才 ack / nak；在途任务数有界，满了回压，不建立额外无界等待队列。Stop 的 context 取消传入业务，Drain 等所有延迟结算；panic 转成失败结算。传输不支持 `DeferSettle` 时退回同步处理。
+- **持久的交易身份**：同一笔交易使用稳定 BusinessKey 与一致的启动意图；`ErrBackpressure` / `ErrStartUnconfirmed` / 超时后重查或用同一请求重试，
+  不换新键再扣一次款。
+- **预留与可补偿性**：先预留余额 / 物品，再确认消耗或释放。框架不提供跨服瞬时原子可见，也不自动推导退款公式；补偿要符合业务账本与并发变更规则。
+- **正确访问权威数据**：本服已加载玩家 Entity 走原生 Nest 步骤；独立 Mongo 事务域才使用 Mongo 步骤，事务内写入必须使用传入 ctx。
+- **独立交易的资源冲突**：框架去重同一操作，不自动隔离不同交易对同一余额的业务竞争；预留和余额校验必须在权威事务内完成。热点玩家 / 公共库存必须单独验收。
+- **有限恢复预算**：步骤 Timeout、MaxAttempts、JetStream MaxDeliver 都有上限。`ManualRequired` 必须告警、可查询并进入人工核对。
+- **准入与观察**：分别监控接纳率（`AdmissionState`、`saga.start.rejected_total`）、正向成功率、补偿 / 失败 / 人工状态、端到端 P99、最老未完成交易、
+  分区 fail-stop 与清理阻塞。
+- **上线验收**：在目标跨机拓扑、真实交易步骤、热点分布下验证正常与补偿负载、长尾、积压恢复和故障切换（协调器 / 参与方 kill -9、NATS leader 切换）。
 
-同一操作的至多一次效果仍由 Mongo 事务、收件箱租约与回执保证。原生步骤走 Nest 调度，`MongoWorkers` 不作用于原生步骤；原生回执等待仍使用 `ReceiptWaiters`。不要靠延长命令截止或取消尝试上限来补消费能力。
+## 部署与升级
 
-默认串行下的历史容量不能外推到并发设置，反之亦然。本机 30/s 的定位与配置对照见 [候选诊断](../performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
-
-## 跨服交易：性能口径与使用约束
-
-维护者确认 Saga 的目标用途是跨服交易。它适合跨多个独立事务域的扣款、资源预留、交付和失败补偿；一次请求的接纳与整笔交易完成是两个时刻。客户端收到已接纳的交易号后显示“处理中”，通过业务状态查询 / 结果通知确认结果；不能把启动成功、请求超时或客户端断线直接解释为交易成功或失败。Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
-
-### 当前测量能说明什么
-
-| 场景 | 正向成功 | 整笔 Saga 延迟 | 适用边界 |
-|---|---:|---|---|
-| 本轮修前，20/s × 1 分钟 | 1200/1200 | P99 772.5ms | 同机短测，原串行消费 |
-| 修前，30/s × 10 分钟 | 814/18000 | 全终态 P99 115.48s | 严重积压、错误终态占多数；不是成功交易延迟基线 |
-| 原子认领 + 两消费 worker，30/s × 10 分钟 | 18000/18000 | P50 408.65ms、P99 576.28ms、最大775.49ms；服务端 P99 548.00ms | 两个 Mongo 步骤、本机隔离三副本依赖；不是跨机或原生 Entity 步骤验收 |
-
-本次 30/s 是输入速率，成功完成率为 **29.987/s**；ManualRequired、补偿、失败、发布失败、存储失败均为0，18,000份业务文档 / 36,000份效果文档核验通过，结束时 outbox 与租约排空。参数：CoordinatorWorkers=4、PublisherWorkers=4、CoordinatorBatch=3、PublisherBatch=1、步骤 MongoWorkers=2、普通结果 Workers=2、PollInterval=100ms；GOMAXPROCS=4 沿用该 Saga 对照夹具。消费默认仍串行，两个 worker 需显式通过 Go 装配 API 配置；不能把它当作现有 YAML 默认能力。
-
-**576ms 包含启动到两个步骤完成的整条链路**，不是每步骤耗时、不是 Nest handler 耗时，也不是 Sync 提交到客户端的50ms指标。压测端轮询观察结果会增加观察延迟，所以另外给出服务端口径。跨服交易如果采用原生 Nest 步骤，还包含 WAL、投影、实体屏障与 completion effect，应单独验证。步骤数、热点玩家、Mongo / NATS RTT、故障恢复和业务逻辑都会改变结果；不按两个步骤的数据线性推算任意步骤数的 P99。
-
-此数据是本机能力证据，不是上线 SLA 或吞吐上限。维护者提示宿主电池模式可能影响性能，前序各次供电状态未完整采样；不得与接电机器直接作容量对比。完整成功、失败样本和复跑参数见 [认领与消费验证](../performance/benchmarks/saga-claims-20261023/README.md)，原生步骤历史范围见 [已知限制](../maintenance/KNOWN-LIMITS.md#saga)。
-
-### 交易业务必须承担的约束
-
-- **持久的交易身份**：同一笔交易使用稳定 BusinessKey 与一致的启动意图；超时重查原交易，不换新键再扣一次款。每步骤的幂等使用框架 OperationKey / Command.IdempotencyKey，不用易变的 attempt ID 代替业务操作身份。
-- **预留与可补偿性**：先预留余额 / 物品，再确认消耗或释放。框架不提供跨服瞬时原子可见，也不自动推导退款公式；补偿要符合业务账本与并发变更规则，不能把整份旧余额覆盖回去。不可逆外部动作需要业务幂等与对账方案。
-- **正确访问权威数据**：本服已加载玩家 Entity 走正式原生 Nest 步骤、Guard 与 DataEngine；不要为了复用较快的 Mongo 夹具绕过 Entity 权威路径直接改玩家 DAO。独立 Mongo 事务域才使用 Mongo 步骤，事务内写入必须使用传入 ctx；网络副作用不能靠 Mongo 回滚撤销。
-- **独立交易的资源冲突**：框架去重同一操作，不自动隔离不同交易对同一余额的业务竞争。预留和余额校验必须在权威事务内完成；启用 MongoWorkers 并发后 handler 不得依赖订阅回调顺序。热点玩家 / 公共库存必须单独验收。
-- **有限恢复预算**：步骤 Timeout、MaxAttempts、JetStream MaxDeliver 都有上限并保留。调用超时可能结果未知，不能擅自补发新交易或释放已预留资源；按持久记录 / 回执恢复。ManualRequired 必须告警、可查询并进入人工核对，不能伪装为普通交易失败。迟到成功可能重新触发补偿，详见上文一致性模型。
-- **准入与观察**：在业务接纳新交易前按资源容量控制流量；已持久接纳的交易继续恢复，不能因过载丢掉。分别监控接纳率、正向成功率、补偿 / 失败 / 人工状态、端到端 P99、最老未完成交易、outbox 积压和重投。不要只看终态 TPS，也不要只看最终队列为0。
-- **上线验收**：在目标跨机拓扑、真实交易步骤、热点分布下同时验证正常与补偿负载、长尾、积压恢复和故障切换；receipt / tombstone 保留期覆盖消息重投和业务对账窗口。当前本机30/s成功不代替这些验收。
-
-本轮已补充 [单笔逐跳诊断](../performance/benchmarks/saga-timeline-20261023/README.md)：完整覆盖1800笔，主要耗时是持久处理、命令/结果交付及协调认领；业务写入平均约1.65ms。随后完成 [batch与交付拆分验证](../performance/benchmarks/saga-batch-wire-20261023/README.md)：batch=1 在30/s对照中减少约30ms协调等待；解析后回调排队不是平均交付延迟的主要来源。生产默认尚未修改。 [独立JetStream与Mongo混合对照](../performance/benchmarks/jetstream-isolation-20261023/README.md)进一步确认：同机Mongo持久负载足以使独立进程/连接/流的交付从约1.4ms升至约43ms，停止后恢复；未见CPU、网络、内存饱和；进一步采样观察到Mongo journal线程持续同步、NATS线程驻留pwrite，定位重点为同机持久化I/O相互影响，具体文件系统/设备等待仍待细分。
-
-### 仍可优化的环节（第1项已补单进程诊断，其余未实施）
-
-当前主流程是：持久启动 → 协调器原子认领 → 状态与 command outbox 同事务提交 → 发布器认领并等待 JetStream PubAck → 步骤预留 / 执行 / 回执 → completion 发布 → 协调器持久推进，重复到终态。以 Mongo 步骤为例，可靠性成本分散在多次数据库事务和消息确认中，不是一次业务函数调用。
-
-优先级按风险与证据排列：
-
-| 优先级 | 优化空间 | 当前依据与实施边界 |
-|---|---|---|
-| 1 | 完整逐跳延迟分布 | 已补单进程Mark关联、每笔完整分段与重复/丢事件拒绝。后续跨进程和异常重试路径仍需补启动、到期认领、outbox等待、发布、步骤预留/执行/提交、结果消费与推进的关联采样；生产标签保持低基数，不把交易ID放指标标签。 |
-| 2 | worker 唤醒与跨实例提示 | Engine 已有 dueKick / outboxKick，空领或错误才进入100ms兜底等待；正常有工作会继续领取。因此不是“每步固定睡100ms”。可评估合并唤醒是否足以带起所需worker，以及跨实例提交后的轻量提示；提示只加速，丢提示仍靠Mongo到期查询恢复，不能替代持久队列或绕过租约。 |
-| 3 | 领取与发布流水 | publisher 当前每worker逐条领取、同步等待PubAck、再AckOutbox。先测 ClaimOutbox、PubAck 和 AckOutbox 各自的等待，再评估有界并发发布 / 批量确认；必须保留逐命令确认、lease fence、失败独立恢复及关闭排空，不能先删outbox再发布。Batch增大也受租约预算约束。 |
-| 4 | 索引与存储往返 | 带排序原子领取已解决共同候选竞争；进一步用真实数据量的 explain / 慢查询验证到期与租约条件的索引效率、扫描量、尾部与积压时的成本，再决定索引。步骤预留与业务提交的事务有不同恢复职责，不为省一次commit直接合并或删除。 |
-| 5 | 正式装配与业务准入 | 当前Mongo步骤与结果并发是显式Go API。若业务通过Steps / YAML接入，应统一暴露、验证与观测这些预算，避免接入方误以为默认已有30/s容量；按Mongo池和JetStream在途预算选择并发，不能盲目增加worker。 |
-| 6 | 交易步骤粒度 | 将同一个本地事务域内可原子完成的检查与修改放在同一步，减少不必要跨域跳转。独立事务域的步骤、回执、补偿和持久确认不能为了延迟数字删掉；涉及业务语义的合并先评审。 |
-
-诊断单样本中协调唤醒阶段平均约42.8ms、派发状态提交18.45ms、command发布12.47ms、outbox确认17.06ms、完成状态提交17.39ms，Mongo成功commit平均约16.53ms。这些来自同一1分钟诊断样本的聚合均值，可能包含嵌套 / 并行阶段，**不能相加当作整笔交易P99**，也不能直接解释10分钟样本的576ms。建议先做第1项，再用相同负载逐项对照；不承诺未经验证的优化后延迟。
-
-## 性能原则
-
-- `ClaimDue` / `ClaimOutbox` 在一次带排序的 `FindOneAndUpdate` 中选择并领取：按到期时间、ID 排序，原子检查到期与租约、递增 lease token；每轮最多 batch 次。并发 worker 领取不同记录，不先扫描同一批候选再争抢；
-- 不允许全表扫描或全局 Saga 锁；
-- 网络发布不能发生在数据库事务中；
-- payload 应保持紧凑，建议小于 64 KiB；
-- 领取批量按协调器/发布器分开配置；Engine 会拒绝 batch、store/publish timeout
-  可能超过 lease 的组合，避免尚未处理的批内任务提前失租；
-- worker 数量、batch、Mongo pool 和 JetStream ack 参数必须通过压测确定；
-- 监控 `StoreFailures`、`WorkerFailures`、冲突、发布失败、手工处理量以及各步骤延迟。
-
-原生步骤的有效租约是 `min(LeaseDuration, 命令截止)`，应覆盖投影的高分位延迟：租约只在 Reserve 时设置、不随投影续期，
-投影积压超过它时记录会被跳过（上面的屏障与驱逐保证不会 fence，该步骤由下一次尝试执行，
-期间同一实体的写入会被可重试地拒绝）。监控 `StaleEvictions` 的增长可以发现步骤 `Timeout` 相对投影延迟偏短。
-
-**屏障期间的重投会消耗 JetStream `MaxDeliver`（RR-20260926-63）。** 实体屏障（`ErrFencedEntityPending`）让 step 消费者
-返回可重试错误（租约内的 `Duplicate` 则等待 completion，等不到时同样返回错误），消息被 Nak 并按 `NakBackoffMin` 起倍增、
-封顶 `NakBackoffMax` 的退避重投，每次都计入该 consumer 的 `MaxDeliver`。屏障时长与投影积压同量级：Mongo 中断或变慢时它可能远长于一次投影。投递次数达到
-`MaxDeliver` 后适配层对消息 `Term`（计数 `nats.jetstream.terminal.total{reason="max_deliver"}`），JetStream 不再投递，
-这条命令不会因屏障解除而自动执行——只能等 coordinator 的步骤 `Timeout` / `MaxAttempts` 发起新 attempt（新 CommandID，同一操作实例）重试，
-或进入补偿，恢复时间受步骤 deadline 约束。运维要点：
-
-- 按预期最长的 Mongo 故障 / 投影积压时长核算 `MaxDeliver` 与 `NakBackoffMax`：默认 25 000 次、250ms～30s，约 8 天才会耗尽；
-  调小 `MaxDeliver` 或退避上限时，要确认 `MaxDeliver × NakBackoffMax` 仍覆盖这段时间；
-- 步骤 `Timeout` / `MaxAttempts` 必须能在投递耗尽后兜底，不要把 `MaxDeliver` 当作业务重试上限；
-- 监控 `nats.jetstream.terminal.total{reason="max_deliver"}`、consumer 的重投计数与 `Projector.Stats().FencedAdmissionRejected`：
-  屏障拒绝持续增长同时出现 `max_deliver` 终止，说明投影积压已超过投递预算。
-
-**过期命令直接确认（U-0281）。** 命令过了 `DeadlineAt`，协调器已按超时自行重试或补偿；两种步骤消费者都不再开始业务。
-有回执时让结果送达（Mongo 路径重发 completion，原生路径的 completion 随投影 effect 送达），没有回执时直接 ack 并累加
-`saga.step.expired_unexecuted_total`，不 nak、不占 `MaxAckPending`。原生步骤的结果经 WAL → 投影 → completion effect 送达，
-不依赖这条消息，所以 ack 不会丢掉已提交、还没投影的尝试。读回执出错时仍按退避重投。
-
-**进程被强杀时遗留的 Mongo 事务。** Mongo 步骤的 handler、协调器的状态推进都在 Mongo 事务里；进程被 kill -9 时服务端不会立刻知道，
-这笔事务保持打开、持锁，直到 `transactionLifetimeLimitSeconds`（服务端参数，默认 60s）才被回收。期间其他进程对同一文档的事务写一直得到
-`WriteConflict`，同一操作的尝试反复失败（真实 NATS + Mongo 两进程强杀实测恢复约 1～1.5 分钟，N06 S5 review）。默认步骤预算（5s × 5 次加退避，约 30s）
-短于它，受影响的操作可能用尽重试进入补偿。要让强杀后的步骤自己恢复，二选一（O-S5-3，saga 方向 ②方案）：
-
-- **推荐：把服务端 `transactionLifetimeLimitSeconds` 调到 20**（`db.adminCommand({setParameter: 1, transactionLifetimeLimitSeconds: 20})`，或启动参数
-  `--setParameter transactionLifetimeLimitSeconds=20`）。框架自己的事务由 `mongo.transaction_timeout`（默认 30s）约束整个重试过程，单次事务远短于 20s；
-  被服务端按寿命中止的事务以 TransientTransactionError 重跑。业务里若有单次超过 20s 的 Mongo 事务，按它调大，同时调大受影响步骤的预算。
-- 或按步骤调大 Mongo 步骤的预算（`saga.steps.<type>.<step>.max_attempts`），让 `Timeout × MaxAttempts` 加退避长于该参数。默认步骤预算不改：它约束所有 saga 的失败检测时间。
-
-saga 方向 ②之后被杀进程手里的尝试**不会在锁释放后补提交**（它的事务已随进程消失，服务端回收时中止），接替它的尝试照常执行一次；锁只影响恢复时间。
-
-生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
-通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
-必须长于 stream 最大保留时间。上线门禁需要在目标 Mongo/NATS 拓扑上验证持续吞吐、
-P99、积压恢复以及 coordinator/step worker/Mongo primary/NATS leader 故障切换；本地
-内存 benchmark 不能代替该容量结论。
+- NATS ≥ 2.12.1、JetStream 文件存储、saga 流 R3（`saga.replicas: 3`）；Mongo 副本集（Mongo 步骤与 DataEngine 投影的事务）且
+  `transactionLifetimeLimitSeconds=20`；协调器进程 `singleton.enabled=true`。
+- 步骤消费者是每条 saga 流上的同名 durable（`<group>-<step>`），参与方必须与协调器用同一份 `saga.subject_prefix` / `stream` / `partitions` /
+  `stream_groups`（`kitsaga.ParticipantSettings`）。下线一个步骤时删掉它在每条流上的 durable，否则清理被它挡住。
+- **升级需清空**（格式与存储不兼容，线上未部署）：旧版本 saga 数据（Redis 权威、Mongo 冷副本 `_sagas` / `_saga_completions` / `_saga_operations`、
+  `_dataengine_step_operations`、Mongo 步骤的 `_operations` 与按 CommandID 的回执）不迁移。先在旧版本让全部 saga 到终态（`List` 非终态为 0），
+  停旧协调器与步骤进程、排空参与方 WAL，删除旧 saga 流 / Redis 键前缀 / 上述集合，再起新版本（新流、新桶）。WireVersion 1 的信封一律拒绝。

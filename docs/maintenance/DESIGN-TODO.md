@@ -319,6 +319,6 @@ D21-1 `86c6dc1c`、D21-2 `849031fa`、D21-3 `575f216a`、D21-4 `79138636`、D21-
 
 - **问题**：Saga 每笔交易的 Mongo 往返太多（原生两步约 65 次、Mongo 步骤两步约 49 次），吞吐上限卡在“串行池 × 往返”，不只是云库延迟。
 - **决定**：维护者 2026-10-26“直接从 V2 开始吧，之后跑一次 saga 的压测”：按 [设计 v2](DESIGN-2026-10-26-redis-authority-v2.md) 实施；单主、AOF always + 同连接 WAITAOF，不考虑切主；审查推荐都按已采纳实施；项目未上线、不做兼容。
-- **状态**：**实施中（第 2 步 2a / 2b 已实施，分支 `feat/redis-authority-2ab`，未合入 main）**；2c（引擎减往返）与第 3 步（Remote）、第 4 步（普通 Entity RedisActive）未实施。实施结果、偏差、红绿与压测见 v2 §13 与 [压测报告](../performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)。
+- **状态**：**Saga 部分已撤销**（维护者 2026-10-28 改为 JetStream 分区事件日志，[设计](DESIGN-2026-10-28-saga-jetstream-authority.md)；saga 第 4 批删除 Redis 权威与 Store Service，下面的 Saga 待决项随之作废，Remote 部分另行设计）。原状态：实施中（第 2 步 2a / 2b 已实施，分支 `feat/redis-authority-2ab`，未合入 main）；2c（引擎减往返）与第 3 步（Remote）、第 4 步（普通 Entity RedisActive）未实施。实施结果、偏差、红绿与压测见 v2 §13 与 [压测报告](../performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)。
 - **压测（2026-10-27）**：协调器往返与 Mongo 操作数达到设计（Mongo 步骤每笔前台 Mongo 50 → 19，协调器 11 个脚本 / 笔），2b 门槛达标；但按 v2 §8.1 的本机同盘口径，2a 的三项性能门槛都不达标（Mongo 步骤 w16 饱和约 0.5 倍、c1 P50 约 1.0 倍、原生约 0.8 倍）。原因是 Redis 在 macOS 上每次写都 `F_FULLFSYNC` 且主线程同步落盘（与 Mongo 同盘时典型 16～18ms）；AOF 放内存盘诊断时三项都过（w16 3.1 倍）。**待决定**：A（推荐）合入并在 Linux、独占盘上复测判定，同时开始 2c；B 不合入、在分支上继续 2c；C 放宽持久性（不推荐）。见[压测报告 §6](../performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md#6-方向判断与待决定)。
 - **仍待维护者拍板（按推荐先做）**：① 权威 Redis 生产上独立部署（推荐独立；配置允许与 `redis.addr` 相同，启动探针强制 AOF always + noeviction）；② 原生步骤吞吐是否在第 4 步前抬高（推荐看 2a / 2b 压测后再定，先做 O4 投影事务合并写）；③ Mongo 领取查询的 SORT 索引（2a 合入后 Mongo 不再承担领取，推荐不单独修）。

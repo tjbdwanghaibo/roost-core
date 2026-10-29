@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开177个包目录的职责映射</summary>
+<summary>展开178个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -63,7 +63,6 @@
 | [framework/nestwal](../../framework/nestwal) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 11 | 22 |
 | [framework/remoteentity](../../framework/remoteentity) | [Remote Entity 与 Mirror](impl/05-remote-mirror.md) | 26 | 108 |
 | [framework/saga](../../framework/saga) | [Saga 长事务](impl/06-saga.md) | 20 | 37 |
-| [framework/storeservice](../../framework/storeservice) | [Saga 长事务](impl/06-saga.md) | 2 | 1 |
 | [framework/statslog](../../framework/statslog) | [观测、安全与运维](impl/11-observability.md) | 1 | 6 |
 | [framework/sync/entitysync](../../framework/sync/entitysync) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 16 | 36 |
 | [framework/sync/entitysync/policy](../../framework/sync/entitysync/policy) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 12 | 7 |
@@ -183,7 +182,6 @@
 | [wiring/redis](../../wiring/redis) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 7 |
 | [wiring/remoteentity](../../wiring/remoteentity) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 11 |
 | [wiring/saga](../../wiring/saga) | [次核心：Wiring 装配](impl/13-wiring.md) | 3 | 7 |
-| [wiring/storeservice](../../wiring/storeservice) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |
 | [wiring/selfsync](../../wiring/selfsync) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 2 |
 | [wiring/session](../../wiring/session) | [次核心：Service 领域能力](impl/09-services.md) | 4 | 4 |
 | [wiring/statslog](../../wiring/statslog) | [次核心：Wiring 装配](impl/13-wiring.md) | 1 | 1 |

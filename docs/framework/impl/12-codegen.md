@@ -56,7 +56,7 @@ DESIGN-TODO D11（维护者 2026-10-17 决定方案 B）。[add_timer.go](../../
 
 ## 2D. roost add saga -native 与 roost add effect
 
-DESIGN-TODO D12 方向 B（维护者 2026-10-18 批准）。运行期是方向 A 的 `wiring/saga.Steps`、`framework/saga.NativeStep` 与 `wiring/dataengine.SubscribeEffects`（[guide/06 §2.1](../guide/06-saga.md#21-业务怎样写步骤步骤运行时design-todo-d12-方向-a)），生成器只写业务文件、不加清单字段。
+DESIGN-TODO D12 方向 B（维护者 2026-10-18 批准）。运行期是方向 A 的 `wiring/saga.Steps`、`framework/saga.NativeStep` 与 `wiring/dataengine.SubscribeEffects`（[guide/06 §2.1](../guide/06-saga.md#21-业务怎样写步骤步骤运行时)），生成器只写业务文件、不加清单字段。
 
 - **[add_saga.go](../../../codegen/internal/roost/add_saga.go)**：`parseSagaSteps` 保序解析 `-steps` 与 `-native`（重复、`-native` 不在 `-steps` 里都报错）；`planSaga` 在写盘之前算出全部文件内容并校验（原生步骤的锁目标走 `resolveNestHandlerTarget`——与 `add handler` 同一函数；跑步骤的服务按 `resolveMods(effectiveServiceMods)` 要有 nest；`rejectExistingHandlers` 按 `func handler<Name>(` 扫描 `game/handler`；任何目标文件已存在都拒绝），`addSaga` 再 `commitSyncChanges` 写入、把 saga Mod 接到服务并 `commitManifestSync`（同步里的 generate 为新 handler 生成 Sender），同步失败用 `restoreFilesIfCurrent` 撤回。生成物：`definition.go`（不再有 `Subscribe*`）、`steps.go`（`renderSagaSteps`：`StepsGroup`、`StepDeps`、`State` 编解码、步骤体、`RegisterSteps`、`StartSteps`，容量说明写在文件注释）、每个原生步骤两个 handler（`renderSagaNativeHandler`）。骨架默认拒绝。
 - **[add_effect.go](../../../codegen/internal/roost/add_effect.go)**：`parseEffectTopic`（点分、`saga.*` 保留）、消费服务按 `resolveMods` 要有 dataengine；effect 文件已存在且声明了 `Topic<Topic>` 与载荷类型时只建消费者。

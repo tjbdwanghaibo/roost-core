@@ -501,7 +501,7 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | 1 | `infra/network/nats` 的 `JetStreamLog` 接口与 driver 实现；`JetStreamPublishOptions.Headers`；`wiring/nats` 发布 `ModNatsLog`；语义与 leader kill 用例；私有集群脚本 | 2～3 笔（接口+实现、语义用例、脚本） | driver 包 `-race`；真实三节点语义用例全过 | Redis 版照跑，新能力无人用。**已完成**（2026-10-28，提交见 git log；接口调整见 §3.2，脚本 `scripts/nats-cluster.sh`） |
 | 2 | `framework/saga` 新协调器：`log_layout` / `log_wire` / `transition`（从 engine 抽纯函数，Redis 引擎改为调用它们，行为不变）/ `partition` / `partition_replay` / `wheel` / `admission` / `query` / `terminal_watch`；新 Engine 以 `NewJetStreamEngine` 暂名并存，不接线 | 4～6 笔（先抽纯函数并跑全部现有 saga 测试证明无行为变化，再逐文件加新代码与单元） | `framework/saga` `-race` 全过（现有测试不改）；新单元；真实 JetStream 端到端、结果未知、隔离、快照清理、kill -9（协调器） | Redis 版照跑。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.1） |
 | 3 | 参与方新路径并存：`StepReceipt*`、`NativeStep.Begin` 与新 `Complete` 分支（`run != nil` 时走新路径）、`SubscribeNativeStep`、`MongoStepInbox`、`publishCompletion`、`LoadPublisher`；codegen：`add saga -native` 生成回执字段与组件、`codegen/internal/nest` 的 Begin 包装（先在 testdata 生成工程里验证，不改 demo） | 3～5 笔 | 受影响包 `-race`；codegen golden（有意改动 `-update` 逐个看 diff）；参与方 kill -9；真实 Mongo 的 Mongo 步骤写冲突 | Redis 版照跑；生成器新输出只在 testdata（Begin 包装对 demo 生成物是空操作，见 §13.2 第 5 条）。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.2） |
-| 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在 |
+| 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在。**已完成**（2026-10-29，实施记录 §13.3） |
 | 5 | 删 DataEngine lease fence 机制（§3.3 第 5 批）与相关指标、文档 | 1～2 笔 | `framework/dataengine` 与 `framework/nest` `-race`；投影器真实 Mongo 用例；全量 `go test ./...` | 可用 |
 | 6 | 冷副本（可选能力）：`ColdCopyProjector`、`Get` / `List` 回落、配置、kill -9 后最终一致用例 | 1～2 笔 | 真实 Mongo + JetStream；`-race` | 可用（缺省关） |
 | 7 | 性能验收（§12）、删除原型目录与旧压测脚本、报告与样本 | 1～2 笔 | 压测 ≤ 30 分钟；报告数字与样本一致 | 可用 |
@@ -539,6 +539,40 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 10. **第 2 批协调器的定时器会丢（本批的参与方停机用例发现、已修）**：时间轮按墙钟（`UnixNano`）落槽、取出，分区判定“到期没有”却用 `NextRunAt.After(now)`，两边都带单调读数时按单调钟比。墙钟比单调钟快约 3.5ppm，步骤超时又是 tick 的整数倍、判定那一轮的时刻常常正好落在截止上，轮已经取出的条目被当成“没到期的陈旧条目”丢掉，记录停在 waiting / pending 再也不重试。红：参与方停 10s、150 笔里 8～17 笔卡住（插桩确认每一笔都是“墙钟已到、单调钟差 3.3µs”）；改为按墙钟比较后绿（`TestRealJetStreamCoordinatorRetriesThroughAParticipantOutage`）。
 11. **验证（本机 macOS，nats-server 2.14.5 私有三节点，共享隔离 Mongo 唯一库）**：端到端 60 笔（注入“已提交但报错”28 次，业务执行次数 = 操作数 132）；参与方 kill -9（300 笔，10% 注入结果未知）快速重启与停 60s 两种都过，Mongo 余额逐账户一致、660 条回执；Mongo 步骤并发尝试三轮业务写各恰好一份；`LoadPublisher` 关闭 / 滞回 / 重开 / `Remove`。变异：`noreceipt` 端到端与 kill -9 都红（余额不符）；回退清理守卫修复、回退时间轮修复（三次两红，随机性见第 10 条）、去掉回放重写、拒绝跨代际回放、去掉截止检查、Mongo 不查回执、发布失败仍 ack、去掉生成的 Begin 都红。
 12. **未做、留给第 4 批**：`Steps` 接线（`LoadPublisher` 由 `Steps.Start` 启动、`Drain` 时 `Remove`）、新版 `RunHandedOver`、删旧路径（`NativeStep` 的双分支、`DataEngineStepInbox`、旧消费者）、demo 的 PlayerDao 回执字段与适配。
+
+### 13.3 第 4 批实施记录
+
+范围：`wiring/saga` Mod / Steps / config 换新装配，`framework/saga` 定名（`Engine`、`Options`、`NewEngine`、`SubscribeMongoStep`、`WireVersion` = 2），删除 §3.3 第 4 批全部（Redis 存储与 Lua、Mongo 协调器存储、`DataEngineStepInbox` 与操作状态文档、completion effect 与消费者、`framework/storeservice`、`wiring/storeservice`、`wiring/redis` 的 `AuthorityMod`、`infra/storage/redis` 的权威探针 / `DurableScriptBatch` / 流读取、Redis 版脚本），生成器与 game-demo，合服检查，文档，测试按 §11 迁移。提交按“接线 → 删除 → 生成器与 demo → 文档 → 测试迁移 → 决定 A 修复 → T-A 与定时不变量”（见 git log；中间提交只保证 `go build`，测试在测试迁移那一笔一起恢复）。
+
+**维护者决定的落实**
+
+1. **拒绝的持久性 A**：`ErrBackpressure` 的文档（`errors.go`、SAGA.md、guide/06）改为“这次没有建立，用同一请求重试”；代码不改（§13.1 第 9 条）。
+2. **原生步骤迟到成功的补偿载荷 A**：`StepReceipt` 不存 Data，`successData(command, success)` 在 `Complete` 与回放时取命令载荷（`step_receipt.go`）。同一操作各次尝试的载荷相同，回执不变大，`max_payload_bytes` 仍在命令发出前强制。先红后绿：迁移后的 `late_success_test.go` 三处“补偿载荷 = 正向命令载荷”断言在修前为红（补偿载荷 `""`，期望 `"x"`），修后绿；另加 `TestNativeStepSuccessCarriesItsCommandPayload`（成功、回放、拒绝三种）。真实 `TestRealJetStreamCoordinatorCompensatesALateSuccessOnce` 断言补偿命令带原载荷。
+3. **T-A**：① 部署要求 `transactionLifetimeLimitSeconds=20`（SAGA.md）；② `fmongo.IMongo` 加只读 `GetParameter`（driver：admin `getParameter`；mongotest：`Parameters` 表），`Steps.Start` 探测，长于缺省步骤预算窗口（`ParticipantSettings.StepWindow`，框架缺省 26.5s）WARN 并计 `saga.step.mongo_txn_lifetime_exceeds_budget`，读不到记 INFO“未探测”，不拒绝启动；③ `engine.Runtime.Start` 的排空改为 `drainAtStartup`：Flush 失败（非 fence、非关闭、ctx 未到）时退避再排空，期限是调用方 ctx（`dataengine.startup_timeout`），没给期限时上限 2 分钟；④ 红绿见下。
+4. **生产配置规则**：`Layout.Validate`（每流 ≤ 50 分区、G ≤ P）由 `wiring/saga` 的 `ValidateConfig` 调用；`publish_unknown_budget` 下限 21s（3 × 7s）、`publish_timeout` 上限 9s 且小于预算；生产 `saga.replicas` 必须 3、跑协调器的进程必须 `singleton.enabled`；Writer = `<sid>-<单实例锁 incarnation>`（没有锁时 `<sid>-<随机>`）；`saga.coordinators` → `Owned`（P-A：排序后第 i 个 sid 拥有 k mod len == i 的分区，`ownedPartitions`）。
+5. **第 3 批评审建议**：kill -9 的协调器与参与方真实用例（含 `ROOST_SAGA_JS_RESTART_DELAY` 长停机）列入切换门禁；分区定时不变量 `partition.checkTimers`（每条非终态 saga 在轮里有一个落在当前 `NextRunAt` 的条目）只在测试里查——`unitPartition.round` 每轮之后调用，所有用 `unitPartition` / `simEngine` 的单元都过一遍；热路径不加。
+
+**与设计的差异**
+
+1. `StartRequest.Now` 保留（调用方可传判定时刻，测试与重放用）；`StartRequest` 去掉 `ID`。
+2. `InspectPartitions(ctx, log, layout, replicas)` 返回 `(records, pendingInputs, err)`：合服检查要同时拒绝“还有没处理的输入”。
+3. `saga.partitions` / `stream_groups` / `coordinators` 没有加 `shared` 标记（配置声明的 `shared` 只支持字符串）；全部服务相同由部署约定与协调器启动的 `ErrLayoutMismatch` 保证。
+4. 生成器给所有带 dataengine 的服务写 `dataengine.projection.max_unacked_records: 20000`（准入开启时跨 Mod 规则要求 > 0 且 ≥ 4 × high）。
+5. `wiring/storeservice` 在接线那一笔就删了（它依赖 saga 的旧类型）；`mongo_store.go`（冷副本）直接删除，第 6 批重写。装配不依赖 Mongo。
+6. 原生回执不存 Data，回放的 Data 取命令载荷（决定 A 的实现方式，不扩回执）。
+7. 测试驱动加了 `engineHooks.rejectedInput`（分区跳过输入时通知测试，`simEngine` 据它还原旧 `Complete` 的错误返回）；只在测试里设置。
+8. T-A 第 3 条的上限：Mod 的启动期限仍是 `dataengine.startup_timeout`（30s），没有改成 120s（改缺省会连带生成器的部署启动等待）；120s 只用于调用方没给期限的情形。实测服务端每半个参数扫一次过期事务（最晚 1.5 倍参数回收），参数 20s 时最坏回收时刻等于 30s，余量是被杀到重启之间的时间——是否把缺省调到 60s 列为待决定（KNOWN-LIMITS）。
+9. DataEngine lease fence 的两个真实 Mongo 用例与生成工程的 `fenced_step_test.go` 原来靠 `DataEngineStepInbox` 产生 fenced 记录；fence 机制第 5 批才删，这里按旧收件箱写进 Mongo 的同一形状在测试里重建替身（操作状态文档、fence 回执、步骤回执、effect），断言不变。
+
+**测试迁移（维护手册 §7：删除的用例写明覆盖它的保留用例）**
+
+- `engine_test.go` 等协调器单元：驱动从内存 Store + Redis 引擎换成 `simEngine`（同步 decide + install），断言不变；分区同一轮派发到期步骤，返回记录从 Pending 变 Waiting 的几处按“派发后的记录”断言（`compensatingStep` 辅助：补偿中或补偿方向的 Waiting）。
+- `TestTransitionRulesAreSharedByBothCoordinators`（差分）→ `TestTransitionRulesMatchTheRecordedRedisCoordinator`：删除 Redis 协调器之前在基线 `1fbd5d0e` 上把差分用例里 Redis 一侧逐步的 view、tombstone 与运维判定错误录成 `testdata/transition_golden.json`（8 个场景 75 步），分区逐步比对。
+- 原生步骤（`native_step_operation_test.go`、`late_success_test.go`、`native_step_incarnation_test.go`）：`nativeWorld` 换成 `simEngine` + 实体回执 + 真实 Nest 事务；承诺改变一处——旧“已提交进 WAL、截止后才投影 → 被 fence 跳过”在回执进实体后变成“strict 提交即生效，迟到成功补偿”（决定 2A）。原生没有可重试结论，涉及可重试失败的交错改由自定义参与方经 `Complete` 送达。
+- 删除（对象删除）与覆盖：Redis 存储契约 / 脚本 / AOF / 投影 / 冷热交接用例（对象删除；分区的隔离、结果未知、重放、快照清理由 `jetstream_coordinator_real_integration_test.go` 覆盖）；`command_inbox_test` / `mongo_store_test` / `mongo_step_*` 的操作收件箱用例 → `TestMongoStepInboxReceiptRules`、`TestRealMongoStepInboxSerializesConcurrentAttempts`；`native_step_test` → `step_receipt_test.go` 与 `TestNativeStepConsumerPublishesToThePartitionThenAcks`；`nest_effects_test` / `consumer_nak_maxdeliver` → 消费者单元与 `TestRealJetStreamNativeStepsEndToEnd`；`cross_process` → `TestRealJetStreamCoordinatorKill9Replays` + `TestRealJetStreamCoordinatorFencesAStaleWriter`；`late_alarm` / `late_step` 真实 Mongo → `TestRealJetStreamCoordinatorCompensatesALateSuccessOnce`；`sagafix` → `TestCoordinatorSuccessDuringBackoffClosesTheOperationWithItsResult`（冷副本部分在第 6 批）；`performance_real_integration_test` 与 `wiring/saga` 的旧压测 → 第 7 批重写；`wiring/saga` 的 `steps_real_integration_test` → 生成工程 `TestGeneratedSagaNativeStepsAndEffectConsumer` + `TestRealJetStreamParticipantKill9`。
+- 其他包：`wiring/config_schema_test.go` 的 saga 用例换成现有键（越界 `max_batch`、无单位 `tick`）；`wiring/sidmerge` 的真实用例第 3 步换成私有 NATS 分区日志（`ROOST_NATS_CLUSTER_URL`）；生成工程 saga_native 的真实依赖用例去掉权威 Redis / Store Service。
+
+**验证**（本机 macOS；结果与命令见提交说明与交接报告）：受影响包 `-race`、全量 `go test ./...`、`go generate` 无漂移、重新生成 game-demo 的 build / vet / test；私有三节点 NATS 上的协调器与参与方真实用例（含两种 kill -9 与长停机）；T-A 红绿在私有 mongod（单节点副本集）上：参数 60s、期限 30s 时启动排空失败（WriteConflict 到期），参数 20s 时排空在遗留事务开始后 27～29s 完成；单元 `TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline` 在去掉重试时为红。变异：`successData` 去掉（三处补偿载荷红）、`checkTimers`（Waiting 不排轮，5 个以上用例红）、探针阈值（`TestStepsProbe…` 红）、排空重试（上面的单元红）、生产配置规则（R=3、协调器要单实例锁各自去掉时 `TestSagaProductionRules` 红）、每流 ≤ 50 分区与结果未知预算下限（`TestSagaConfigRulesNameTheirKeys` 红；预算下限原有一个没人用的常量，删掉，声明的 `min:"21s"` 是唯一强制点）。
 
 ## 14. 需要维护者选择的点
 
@@ -588,11 +622,15 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
   - `nest.AfterCommit` 在 pipelined 下的时机：**在本事务的 WAL 票据落盘之后、回复之前**（`execution.go` `commitPipelined`：`<-ticket.Done()` 后 `tx.commit(true)`；完成泵路径 `pipelined_completion.go` 同样先 `commit(true)` 再回复）。strict 在 Guard 释放回调里执行，也在回复之前（`runNestLogic` 的 defer 先释放 Guard 作用域，`replyDispatch` 在它返回之后）；带 Remote 批次时排到批次最终确认之后。**例外**：记录为空的事务没有票据（`pipelinedEnqueue` 对空记录返回 nil），AfterCommit 立即执行——所以原生步骤回放时重写回执（§13.2 第 3 条）。
   - Nest 是否暴露“本事务有 Remote 批次”：**原来没有**（只有按实体问的 `CurrentRemoteWriteBatchContains(id)`），本批加只读的 `nest.CurrentDispatchHasRemoteWriteBatch()`，`Complete` 据它返回 `ErrNativeStepRemoteWrite`；`entity.InspectReceiptHost` 另在生成期拒绝 `remote=managed` 实体。
   - DAO 生成器对 `map[string][]byte`：**直接支持**（`KindMap`，值类型 `[]byte`，生成 `fmap.SmallSafeMap[string, []byte]` 与 `Get/Set/Del/Range<字段>`、按键的补丁路径 `saga_receipts.<操作>`；生成物 `go vet` 通过）。操作键 `<id>:<方向>:<步骤>` 不含 `.` / `$`，走按键补丁。存的切片不复制，调用方不得修改（框架只整份替换）。存量文档没有这个字段时加载为空 map，项目未上线，不做迁移。
-  - `transactionLifetimeLimitSeconds` 探测：`fmongo.IMongo` / `IDatabase` **没有执行任意命令的接口**，探测要在第 4 批给驱动加一个只读入口。共享隔离环境（自建副本集）上 `getParameter` 可执行、值为 60（解释了本批 kill -9 实测一次 64s 的重启：被杀进程的投影事务持锁到期才回收）；托管库是否允许 `getParameter` **尚未确认**（手头没有托管实例）。
+  - `transactionLifetimeLimitSeconds` 探测：`fmongo.IMongo` / `IDatabase` **没有执行任意命令的接口**，探测要在第 4 批给驱动加一个只读入口（**第 4 批已加 `IMongo.GetParameter`**）。共享隔离环境（自建副本集）上 `getParameter` 可执行、值为 60（解释了本批 kill -9 实测一次 64s 的重启：被杀进程的投影事务持锁到期才回收）；托管库是否允许 `getParameter` **尚未确认**（手头没有托管实例）。
   - `wiring/dataengine` 启动排空：`engine.Runtime.Start` 只调一次 `Projector.Flush(ctx)`，投影器在 ctx 内按退避重试写冲突（实测日志里同一段在截止前反复重试）；够不够取决于 Mod Start 的 ctx 上限，**第 4 批按 T-A 第 3 条核对并补有界重试**。本批的 kill -9 夹具自己重试到 3 分钟。
 - **第 3 批发现、对第 4 批有影响**：
-  - （1）**原生步骤迟到成功的补偿载荷为空**（新旧两条路径都有，KNOWN-LIMITS 已登记，待维护者决定）：原生步骤的结果不带 `Data`，`lateStepState` 记 `LateData = completion.Data`（空），补偿迟到那一步的命令载荷就是空的；demo 的 `gift.Decode` 解不开，补偿被拒 → `ManualRequired`，方向 ④ 对原生步骤实际不自动生效。A（推荐）：原生步骤成功时 `Completion.Data = Command.Payload`（正向那一步的载荷就是 `record.Data`，Data 链的值不变，`LateData` 就是那一步自己的载荷；代价是结果输入多带一份载荷，受 `max_payload_bytes` 约束）；B：`planDue` 在 `LateData` 为空时退回 `record.Data`（改两种协调器共用的纯函数，第 2 批的差分用例要补）。
+  - （1）**原生步骤迟到成功的补偿载荷为空**（第 4 批已按维护者选的 A 修复，§13.3）（新旧两条路径都有，原登记于 KNOWN-LIMITS）：原生步骤的结果不带 `Data`，`lateStepState` 记 `LateData = completion.Data`（空），补偿迟到那一步的命令载荷就是空的；demo 的 `gift.Decode` 解不开，补偿被拒 → `ManualRequired`，方向 ④ 对原生步骤实际不自动生效。A（推荐）：原生步骤成功时 `Completion.Data = Command.Payload`（正向那一步的载荷就是 `record.Data`，Data 链的值不变，`LateData` 就是那一步自己的载荷；代价是结果输入多带一份载荷，受 `max_payload_bytes` 约束）；B：`planDue` 在 `LateData` 为空时退回 `record.Data`（改两种协调器共用的纯函数，第 2 批的差分用例要补）。
   - （2）清理守卫的 floor 取“列出消费者之前读到的流末序号”：消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉——只影响活性（协调器按步骤超时重发），**尚未确认**会不会发生（取决于副本应用与清理在 Raft 日志里的先后），KNOWN-LIMITS 已登记。
   - （3）参与方长时间停机后的重试积压：协调器每个步骤超时都派一次新尝试，停机 60s、300 笔在途就是约 5000 条过期命令；回来后每条都要经 Nest 跑一次 Begin（查回执、过期 ack），实测约 1～3s 排空，之后正常。量大时可以考虑按 `Attempt` 合并，暂不做。
-  - （4）拒绝的持久性（§13.1 第 9 条）：维护者 2026-10-28 确认 A，代码不改，SAGA.md 措辞在第 4 批。
-  - （5）第 4 批接线时 demo 的 PlayerDao 要加 `SagaReceipts` 与 `saga_receipts.go`（生成工程由 `add saga -native` 自动带上，demo 是参考实现、手写）。
+  - （4）拒绝的持久性（§13.1 第 9 条）：维护者 2026-10-28 确认 A，代码不改，SAGA.md 措辞在第 4 批（已改）。
+  - （5）（第 4 批已做）第 4 批接线时 demo 的 PlayerDao 要加 `SagaReceipts` 与 `saga_receipts.go`（生成工程由 `add saga -native` 自动带上，demo 是参考实现、手写）。
+- **第 4 批发现**：
+  - Mongo 服务端每半个 `transactionLifetimeLimitSeconds` 扫一次过期事务，遗留事务最晚 1.5 倍参数才回收（私有 mongod 实测，参数 20s 时 27～29s）；`dataengine.startup_timeout` 缺省 30s 的余量只有被杀到重启的时间，是否调到 60s 待维护者决定（KNOWN-LIMITS）。
+  - 驱动的 `WithTransaction` 在一次调用里重跑写冲突到 `mongo.transaction_timeout`（缺省 30s）；`Runtime.Start` 原来只调一次 Flush，`startup_timeout` 大于事务期限时多出来的时间用不上——已改为 `drainAtStartup` 重试。
+  - `saga.coordinators` 只写 sid：两种服务类型用同一个 sid 且都装 saga Mod 时认领同样的分区，单实例锁按“类型 + sid”挡不住，期望序号隔离会让其中一个 fail-stop；SAGA.md 写了部署约定，是否改成 `<server_type>:<sid>` 待维护者决定。
