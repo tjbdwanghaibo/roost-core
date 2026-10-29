@@ -71,11 +71,13 @@ Saga背景负载1800/1800成功，业务核验通过，服务端P99约550.3ms。
 加载私有 `env.sh` 后，运行：
 
 ```sh
+# 独立、闭环吞吐与 Mongo 事务混合对照（一次跑完）
 ROOST_PERF_LABEL=<唯一名称> bash scripts/perf/jetstream-probe.sh
-ROOST_JS_PROBE_BACKGROUND=mongo ROOST_PERF_LABEL=<另一个唯一名称> bash scripts/perf/jetstream-probe.sh
 # macOS资源采样：110秒连续探针，中间60秒Mongo背景负载
 ROOST_PERF_LABEL=<另一个唯一名称> bash scripts/perf/jetstream-resources.sh
 ```
+
+**2026-10-29 起脚本只剩 Mongo 背景**：上表“同机Saga 30笔/s”一行（`saga-mixed.json`、`mixed.json`）用的 Saga 混合背景负载跑的是旧协调器的压测夹具 `TestRealSagaPerformance`，它随 saga JetStream 切换第 4 批（`298e4396`）删除；之后该分支匹配不到用例、静默空跑，已从脚本删除。这一行与对应 JSON 只作历史样本，不能用当前代码复跑。现在脚本依次跑独立（`alone-before`）、闭环三档（`closed-*`）、Mongo 混合（`mongo-mixed` + `mongo.json`）与停止后（`alone-after`），并核对每段用例确实运行。saga 正式实现的压测入口是 `scripts/perf/saga-js-scan.sh`（见 [性能报告目录](../../README.md)）。
 
 入口独占 `remote-acceptance.lock`、编译后再采样，测试只创建并清理唯一流/数据库，不改原服务配置。第一轮/第二轮及资源采样分别在两份worktree的 `artifacts/perf/saga/jetstream-20261023`、`jetstream-mongo-20261023`、`jetstream-resources-20261023`。原始日志、每秒计数、源码摘要均保留，同目录JSON为可携带结果。CBM仍为10-14旧代际，依覆盖提示读当前源码。
 
