@@ -32,7 +32,6 @@ type StepReceipt struct {
 	Incarnation uint32 `json:"incarnation"`
 	Success     bool   `json:"success"`
 	Error       string `json:"error,omitempty"`
-	Data        []byte `json:"data,omitempty"`
 	// At 是写回执的时刻（unix 毫秒），保留期按它剪。
 	At int64 `json:"at"`
 }
@@ -141,7 +140,7 @@ func (run *nativeRun) begin(tx *nest.RollbackTx, receipts StepReceipts) (bool, e
 			receipts.PutStepReceipt(command.IdempotencyKey, raw)
 			completion := Completion{
 				CommandID: receipt.CommandID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID,
-				Success: receipt.Success, Error: receipt.Error, Data: receipt.Data,
+				Success: receipt.Success, Error: receipt.Error, Data: successData(command, receipt.Success),
 			}
 			tx.AfterCommit(func() { run.settle(StepOutcome{Kind: StepReplayed, Completion: completion}) })
 			return true, nil
@@ -186,9 +185,27 @@ func (run *nativeRun) complete(success bool, reason string) error {
 	}
 	receipts.PutStepReceipt(command.IdempotencyKey, encodeStepReceipt(receipt))
 	pruneStepReceipts(receipts, command.IdempotencyKey, now.Add(-run.retention).UnixMilli())
-	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: success, Error: receipt.Error}
+	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: success, Error: receipt.Error,
+		Data: successData(command, success)}
 	tx.AfterCommit(func() { run.settle(StepOutcome{Kind: StepExecuted, Completion: completion}) })
 	return nil
+}
+
+// successData 是原生步骤成功结果的 Data：这一步自己的命令载荷（维护者 2026-10-29 选 A）。
+//
+// 原生步骤的业务在 Nest 事务里，没有要交给协调器的新数据；成功带回命令载荷，协调器的 Data 链不变（正向那一步的载荷就是
+// record.Data，补偿成功也不改它），而放弃后迟到的成功记下的 LateData 就是那一步自己的载荷——补偿迟到那一步的命令因此带着
+// 参与方解得开的载荷（之前是空的，demo 的 gift.Decode 解不开，补偿被拒进 ManualRequired，saga 方向 ④ 对原生步骤实际不生效）。
+// 代价是结果输入多带一份载荷，受 saga.max_payload_bytes 约束（载荷本身就在这个上限之内，分区解码结果时照样检查）。
+//
+// 回放用当前命令的载荷而不是另存进回执：同一操作实例的各次尝试（含 Resume 之后的新一生）载荷相同——派发时取 record.Data（或补偿
+// 迟到那一步时取 LateData），而 Data 只在接收这个操作的成功、操作关闭时才变——所以回放交出的结果与生效那次逐字节相同，协调器按
+// CommandID 的回执摘要去重；回执不必多存一份载荷，实体文档不随之变大。拒绝不带 Data。
+func successData(command Command, success bool) []byte {
+	if !success || len(command.Payload) == 0 {
+		return nil
+	}
+	return append([]byte(nil), command.Payload...)
 }
 
 // pruneStepReceipts 在同一事务里删掉至多 maxReceiptPrunePerCommit 条 At 早于 cutoff 的回执（不删刚写的那条）。解不开的旧回执
