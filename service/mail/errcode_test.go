@@ -61,33 +61,15 @@ func TestEverySentinelCarriesItsOwnCode(t *testing.T) {
 	}
 }
 
-// No two sentinels share a code. errcode.Define keys a global registry on the
-// code and OVERWRITES a duplicate silently, so a collision is invisible
-// without this check — and two services sharing a code means a client that
-// switches on it takes the wrong branch.
-func TestNoTwoSentinelsShareACode(t *testing.T) {
-	seen := map[int32]error{}
-	for code, sentinel := range codeBySentinel {
-		if previous, ok := seen[code]; ok {
-			t.Fatalf("code %d is used by both %v and %v", code, previous, sentinel)
-		}
-		seen[code] = sentinel
-	}
-	// And every code is inside this package's allocated segment, so a typo
-	// cannot silently land in another service's range.
-	for code := range codeBySentinel {
-		if code < segmentFirst || code > segmentLast {
-			t.Fatalf("code %d is outside mail's segment %d-%d", code, segmentFirst, segmentLast)
-		}
-	}
-}
-
 // The segment is allocated contiguously from its first code, with no holes.
 //
 // This is what catches an entry disappearing from the pairing table, which the
 // table-driven test above structurally cannot: a table-driven test that loses a
 // row simply checks less. Contiguity is an independent property — remove
 // 590109 and there is a hole at 590109 — so the table cannot shrink unnoticed.
+// Start plus count also pins every code inside mail's segment, so a typo cannot
+// land in another service's range; two sentinels cannot share a code because
+// the pairing table is a map literal keyed by constants (a duplicate does not compile).
 func TestTheCodeSegmentIsContiguousFromItsFirstCode(t *testing.T) {
 	codes := make([]int, 0, len(codeBySentinel))
 	for code := range codeBySentinel {
