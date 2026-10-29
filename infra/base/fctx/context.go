@@ -2,9 +2,11 @@ package fctx
 
 import (
 	stdctx "context"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"maps"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 // Context is the per-goroutine request context.
@@ -47,7 +49,7 @@ type ContextSnapshot struct {
 
 func (s ContextSnapshot) Clone() ContextSnapshot {
 	s.Trace = s.Trace.Clone()
-	s.KeyValue = cloneKeyValue(s.KeyValue)
+	s.KeyValue = cloneMap(s.KeyValue)
 	return s
 }
 
@@ -64,7 +66,7 @@ func (t TraceMeta) Active() bool {
 }
 
 func (t TraceMeta) Clone() TraceMeta {
-	t.Tags = cloneTraceTags(t.Tags)
+	t.Tags = cloneMap(t.Tags)
 	return t
 }
 
@@ -275,7 +277,7 @@ func (c *Context) Snapshot() ContextSnapshot {
 		Meta:     c.Meta,
 		Trace:    c.Trace.Clone(),
 		SyncWait: c.SyncWait,
-		KeyValue: cloneKeyValue(c.keyValue),
+		KeyValue: cloneMap(c.keyValue),
 	}
 }
 
@@ -295,7 +297,7 @@ func (c *Context) ApplySnapshot(snapshot ContextSnapshot) {
 	c.Meta = snapshot.Meta
 	c.Trace = snapshot.Trace.Clone()
 	c.SyncWait = snapshot.SyncWait
-	c.keyValue = cloneKeyValue(snapshot.KeyValue)
+	c.keyValue = cloneMap(snapshot.KeyValue)
 }
 
 func WithConfig(config any) Option {
@@ -409,24 +411,10 @@ func (c *Context) Get(key any) (any, bool) {
 	return v, ok
 }
 
-func cloneKeyValue(src map[any]any) map[any]any {
+// cloneMap 返回 src 的浅拷贝；空 map 与 nil 一样返回 nil，快照里不留空 map。
+func cloneMap[K comparable, V any](src map[K]V) map[K]V {
 	if len(src) == 0 {
 		return nil
 	}
-	dst := make(map[any]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
-
-func cloneTraceTags(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
+	return maps.Clone(src)
 }
