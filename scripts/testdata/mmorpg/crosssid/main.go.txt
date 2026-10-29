@@ -3,7 +3,7 @@
 //
 //	giftdrill setup  -state s.json                      # four players: p1,p4 on sid 1000; p2,p3 on sid 1001; items for senders
 //	giftdrill send   -state s.json -from p1 -to p2 -n 10 -out g.json [-to-id 1]
-//	giftdrill wait   -state s.json -gifts g.json[,g2.json] -timeout 5m
+//	giftdrill wait   -state s.json -gifts g.json[,g2.json] -timeout 5m  # GiftStatus over each sender's own session
 //	giftdrill claim  -state s.json -who p2 -out m.json  # claim every claimable gift mail, record the claimed mail ids
 //	giftdrill claim  -state s.json -who p2 -replay m.json # claim the recorded mails again; none may add items
 //	giftdrill bags   -state s.json
@@ -65,7 +65,6 @@ var (
 	endpoints   = flag.String("endpoints", "1000=127.0.0.1:7000,1001=127.0.0.1:7001", "sid=addr list")
 	mongoURI    = flag.String("mongo", "", "Mongo URI")
 	database    = flag.String("db", "mmo_world", "Player DAO database")
-	sagaDB      = flag.String("saga-db", "mmo_world_saga", "saga database")
 	statePath   = flag.String("state", "state.json", "drill state file")
 	from        = flag.String("from", "", "sender name")
 	to          = flag.String("to", "", "recipient name")
@@ -328,7 +327,13 @@ func mongoClient(ctx context.Context) (*mongo.Client, error) {
 	return mongo.Connect(options.Client().ApplyURI(*mongoURI))
 }
 
+// wait 经发送方自己的 TCP 会话轮询 GiftStatus（saga 记录由分区所有者从内存回答；终态保留 saga.terminal_retention），
+// 直到每笔赠礼到终态。不读 saga 库：协调器的权威是 JetStream 分区日志，Mongo 里没有 saga 记录。
 func wait(ctx context.Context) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
 	var records []giftRecord
 	for _, path := range strings.Split(*gifts, ",") {
 		raw, err := os.ReadFile(path)
@@ -341,46 +346,60 @@ func wait(ctx context.Context) error {
 		}
 		records = append(records, part...)
 	}
-	client, err := mongoClient(ctx)
+	client, stop, err := accounts()
 	if err != nil {
 		return err
 	}
-	defer client.Disconnect(context.Background())
-	sagas := client.Database(*sagaDB).Collection("_sagas")
-	ids := make([]string, 0, len(records))
+	defer stop()
+	sessions := map[string]*conn{}
+	defer func() {
+		for _, c := range sessions {
+			c.raw.Close()
+		}
+	}()
 	for _, record := range records {
-		ids = append(ids, record.SagaID)
-	}
-	deadline := time.Now().Add(*timeout)
-	type doc struct {
-		ID        string    `bson:"_id"`
-		Status    int       `bson:"status"`
-		Attempt   uint32    `bson:"attempt"`
-		LastError string    `bson:"last_error"`
-		CreatedAt time.Time `bson:"created_at"`
-		UpdatedAt time.Time `bson:"updated_at"`
-	}
-	for {
-		cursor, err := sagas.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+		if sessions[record.From] != nil {
+			continue
+		}
+		sender := s.Players[record.From]
+		if sender == nil {
+			return fmt.Errorf("gift %s: unknown sender %q", record.SagaID, record.From)
+		}
+		c, err := connect(ctx, client, sender)
 		if err != nil {
 			return err
 		}
-		var docs []doc
-		if err := cursor.All(ctx, &docs); err != nil {
-			return err
-		}
+		sessions[record.From] = c
+	}
+	terminalNames := map[string]bool{"completed": true, "compensated": true, "failed": true, "manual_required": true}
+	deadline := time.Now().Add(*timeout)
+	for {
 		statuses := map[string]int{}
 		terminal := 0
 		var durations []time.Duration
-		for _, d := range docs {
-			name := statusName(d.Status)
-			statuses[name]++
-			if name == "completed" || name == "compensated" || name == "failed" || name == "manual_required" {
+		var open []string
+		for _, record := range records {
+			resp, err := sessions[record.From].call(msgid.MsgGiftStatus, mustMarshal(pb.MarshalGiftStatusRequest(&pb.GiftStatusRequest{SagaID: record.SagaID})))
+			if err != nil {
+				return err
+			}
+			status, err := pb.UnmarshalGiftStatusResponse(resp)
+			if err != nil {
+				return err
+			}
+			if status.Code != 0 {
+				return fmt.Errorf("gift status %s: code %d %s", record.SagaID, status.Code, status.Reason)
+			}
+			statuses[status.Status]++
+			if terminalNames[status.Status] {
 				terminal++
-				durations = append(durations, d.UpdatedAt.Sub(d.CreatedAt))
+				durations = append(durations, time.Since(record.SentAt))
+			}
+			if status.Status != "completed" && status.Status != "compensated" {
+				open = append(open, fmt.Sprintf("  %s %s step=%d last_error=%q", record.SagaID, status.Status, status.Step, status.LastError))
 			}
 		}
-		if terminal == len(ids) || time.Now().After(deadline) {
+		if terminal == len(records) || time.Now().After(deadline) {
 			sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 			q := func(p float64) time.Duration {
 				if len(durations) == 0 {
@@ -388,28 +407,18 @@ func wait(ctx context.Context) error {
 				}
 				return durations[int(float64(len(durations)-1)*p)]
 			}
-			fmt.Printf("gifts=%d found=%d terminal=%d statuses=%v duration p50=%s p95=%s max=%s\n", len(ids), len(docs), terminal, statuses, q(.5), q(.95), q(1))
-			for _, d := range docs {
-				if name := statusName(d.Status); name != "completed" && name != "compensated" {
-					fmt.Printf("  %s %s attempt=%d last_error=%q\n", d.ID, name, d.Attempt, d.LastError)
-				}
+			// 时长是“发出到本次轮询看到终态”，上界含轮询间隔。
+			fmt.Printf("gifts=%d terminal=%d statuses=%v observed p50=%s p95=%s max=%s\n", len(records), terminal, statuses, q(.5), q(.95), q(1))
+			for _, line := range open {
+				fmt.Println(line)
 			}
-			if terminal != len(ids) {
+			if terminal != len(records) {
 				return errors.New("not every gift reached a terminal status")
 			}
 			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-}
-
-// statusName follows framework/saga Status (record.go).
-func statusName(status int) string {
-	names := map[int]string{1: "pending", 2: "waiting", 3: "compensating", 4: "completed", 5: "compensated", 6: "failed", 7: "manual_required"}
-	if name, ok := names[status]; ok {
-		return name
-	}
-	return "status-" + strconv.Itoa(status)
 }
 
 func claim(ctx context.Context) error {

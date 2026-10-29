@@ -27,11 +27,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// The gift saga's steps. The coordinator (the saga Mod in this process)
-// publishes one command per step on the saga stream; the four consumers
-// below each take one topic — debit, its compensation, deliver, its
-// compensation — run the business, and publish the completion the
-// coordinator waits for.
+// The gift saga's steps. The coordinator (the saga Mod; its partitions live
+// on the JetStream saga streams) writes one command per step attempt into its
+// partition log; the four consumers below each take one topic — debit, its
+// compensation, deliver, its compensation — run the business, and publish the
+// result straight back to the command's partition, acknowledging the command
+// only after that publish.
 //
 // What a step is allowed to be: idempotent per command. The framework offers
 // two shapes and this saga uses both, because its steps are two kinds of work:
@@ -39,30 +40,29 @@ import (
 //   - **debit and its compensation are Nest transactions**, so they take the
 //     native path: registered with `Steps.Native`, they pass the framework's
 //     `saga.NativeStep` into their Nest handler, which calls `step.Complete`
-//     INSIDE its transaction (game/handler/gift_debit.go). The Bag change,
-//     the command's receipt and the completion the coordinator waits for are
-//     one WAL record: a redelivery finds the receipt and replays the stored
-//     completion instead of debiting again, and a crash before the commit
-//     leaves none of the three. A later attempt of the same step (the
-//     coordinator timed the first one out, e.g. across a kill -9 and restart)
-//     finds that receipt too and replays it, and an attempt that was never
-//     projected before its deadline is skipped: the framework lets at most
-//     one attempt of one operation take effect (roost-core SAGA.md, 原生步骤
-//     执行契约), so the step needs no idempotency of its own. The consumer
-//     publishes nothing of its own — it waits for the receipt to be
-//     projected, then acknowledges.
+//     INSIDE its transaction (game/handler/gift_debit.go). The Bag change and
+//     the operation's receipt (kept in the sender's Player,
+//     PlayerDao.SagaReceipts) are one WAL record: the generated dispatch calls
+//     step.Begin before the handler, and a redelivery — or a later attempt of
+//     the same step after the coordinator timed the first one out, e.g. across
+//     a kill -9 and restart — finds the receipt and replays it instead of
+//     debiting again; an attempt that finds no receipt after its deadline is
+//     skipped. The framework lets at most one attempt of one operation take
+//     effect (roost-core SAGA.md, 原生步骤执行契约), so the step needs no
+//     idempotency of its own. The result is published once the transaction is
+//     durable (strict: the WAL fsync).
 //   - **deliver is a mail call**, not a Nest transaction, so there is nothing
-//     to bind it to. It is registered with `Steps.Mongo`, whose Mongo inbox runs
-//     the same per-operation contract as the native one (an attempt finds an
-//     earlier attempt's result and replays it, waits while another attempt
-//     holds a live lease, takes over an expired one; roost-core SAGA.md,
-//     「Mongo 步骤」). That contract covers what the handler writes through
-//     its Mongo transaction, and the mail is not such a write: an attempt
-//     fenced at commit may already have sent it. So the mail service's own
-//     idempotency is still REQUIRED here, not optional: Send deduplicates by
-//     RequestID and the RequestID is the command's IdempotencyKey. A Mongo
-//     step whose business is a write through the handler's transaction needs
-//     no idempotency of its own.
+//     to bind it to. It is registered with `Steps.Mongo`, whose inbox keeps one
+//     receipt per operation in the saga database and writes it in the step's
+//     Mongo transaction: an attempt that finds an earlier attempt's result
+//     replays it, and two attempts running at once conflict on that receipt
+//     so one of them rolls back (roost-core SAGA.md, 「Mongo 步骤」). That
+//     contract covers what the handler writes through its Mongo transaction,
+//     and the mail is not such a write: a rolled-back attempt may already have
+//     sent it. So the mail service's own idempotency is still REQUIRED here,
+//     not optional: Send deduplicates by RequestID and the RequestID is the
+//     command's IdempotencyKey. A Mongo step whose business is a write through
+//     the handler's transaction needs no idempotency of its own.
 //
 // That split is the rule, not a demo convenience: the native path is for a
 // step whose business already commits through Nest. Using it for a step that
@@ -74,13 +74,11 @@ import (
 // Success=false and Retryable=false — the coordinator then compensates the
 // steps that completed. Anything else (Mongo, bus, Nest unavailable) is
 // returned as an error. For the Mongo steps (deliver and its undo) that rolls
-// the transaction back, hands the lease back and the redelivery retries with
-// backoff. For the native steps (debit and refund) the consumer keeps the
-// attempt's lease — the Nest commit's outcome may be unknown — so a
-// redelivery finds the attempt in flight, waits for its receipt until the
-// command deadline and is then acknowledged; the next attempt comes from the
-// coordinator after the step timeout. Only dataengine.ErrFencedEntityPending
-// hands a native lease back for an immediate redelivery.
+// the transaction back and the redelivery retries with backoff. For the native
+// steps (debit and refund) the outcome is unknown — the Nest commit may have
+// happened — so the command is redelivered and the generated dispatch replays
+// the receipt if the commit did happen; the next attempt comes from the
+// coordinator after the step timeout.
 const (
 	// giftSagaSteps names this service's gift step consumers: every durable
 	// is `<name>-<step>` (shared by all replicas of the service), the Mongo
@@ -94,10 +92,10 @@ const (
 )
 
 // startGiftSaga registers the four steps and starts their consumers. It runs
-// in Init, after the saga Mod has started (the stream exists); the returned
-// Steps is drained in Shutdown. Which stream, prefix and databases the
-// consumers use, their inboxes, leases and metrics are the framework's
-// (roost-core wiring/saga Steps); what is left here is the business.
+// in Init, after the saga Mod has started (the streams exist); the returned
+// Steps is drained in Shutdown. Which streams, prefix and databases the
+// consumers use, their inboxes, the admission signal and metrics are the
+// framework's (roost-core wiring/saga Steps); what is left here is the business.
 func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps, error) {
 	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
 	if !ok || nestClient == nil {
@@ -221,7 +219,7 @@ type giftSteps struct {
 	// where deliver looks the recipient up.
 	players fmongo.ICollection
 	// runtime is the framework's step consumers; a handed-over step runs
-	// through it under its own claim (runHandoff).
+	// through it too (runHandoff).
 	runtime *kitsaga.Steps
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
@@ -266,17 +264,17 @@ func giftHandoffRouter(localSID int32, transport ownerroute.Transport[giftStepHa
 
 // runHandoff executes a step this process was handed by another one.
 //
-// The difference from the consumer path is where the claim comes from: there
-// is no JetStream delivery here, so the framework takes its own reservation
-// from the native inbox (kitsaga.Steps.RunHandedOver). That is the same claim
-// the consumer would have taken, on the same command id, so the two paths
-// exclude each other — whichever gets there first runs the business and the
-// other finds a receipt.
+// The difference from the consumer path is that there is no JetStream
+// delivery here: kitsaga.Steps.RunHandedOver runs the step body directly. The
+// two paths still exclude each other — both go through the Player's Nest lock
+// and the receipt in it, so whichever commits first runs the business and the
+// other replays its receipt.
 //
-// Nothing is acknowledged here. The process that forwarded the step still
-// holds the message and still naks it; it is released only when the receipt
-// this transaction writes becomes visible. A lost handoff therefore costs
-// latency, never the step: the ordinary redelivery is the safety net.
+// Nothing is published or acknowledged here. The process that forwarded the
+// step still holds the message and naks it until a redelivery lands on a
+// process that may run it; that redelivery finds the receipt this transaction
+// wrote and publishes the result. A lost handoff therefore costs latency,
+// never the step: the ordinary redelivery is the safety net.
 func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) error {
 	if cmd == nil {
 		return fmt.Errorf("gift saga: empty handoff")
@@ -294,8 +292,8 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	// The phase is envelope too, and it picks the transaction: a debit
 	// envelope around the refund's command would take the items a second
 	// time under the refund's receipt. The framework refuses, before anything
-	// is recorded or claimed, a phase that is not a registered native step and
-	// a command not published on that step's topic. The accept callback then
+	// runs, a phase that is not a registered native step and a command not
+	// published on that step's topic. The accept callback then
 	// checks ownership again rather than trusting the address: running a step
 	// for a player bound to another sid is the corruption all of this exists
 	// to prevent. Not served here, or its copy is being unloaded: do nothing,
@@ -311,8 +309,8 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	if err != nil {
 		return fmt.Errorf("gift saga: handoff %s: %w", cmd.Phase, err)
 	}
-	// nil also covers a handoff that was dropped (not ours, expired, already
-	// done, held by another delivery); saga.step.run_total counts the runs.
+	// nil also covers a handoff that was dropped (not ours, expired) or that
+	// replayed an existing receipt; saga.step.run_total counts the runs.
 	slog.Debug("gift saga: handled a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", cmd.Command.ID)
 	return nil
 }
@@ -328,20 +326,18 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 // (GAME_DEMO_TEMPLATE §9.11).
 //
 // It is wired as saga.StepConsumerConfig.Admit rather than as the first line
-// of the handler, and that placement is the whole point. The consumer reserves
-// the command in the Data Engine inbox BEFORE it calls the handler, so a
-// handler-level refusal leaves a two-minute lease under the wrong process's
-// name: the rightful owner then cannot run the command either, and the message
-// bounces. Measured on the two-process run before the seam existed: 248
-// deliveries for 16 gifts, 24 of them still stuck at the end. With the
-// predicate ahead of the reserve, a refused delivery leaves nothing behind and
-// the next delivery can go to the owner.
+// of the handler, and that placement is the whole point: a handler-level
+// refusal would already have loaded the sender's Player into this process
+// (Nest loads a declared cold target before the handler runs), which is the
+// second runtime this check exists to prevent. With the predicate ahead of
+// the Nest call, a refused delivery leaves nothing behind and the next
+// delivery can go to the owner.
 //
 // The refusal alone is back-pressure, not routing: the message is offered
 // again to any consumer of the durable, so the sender's process gets it after
 // a bounce or two rather than directly. The handoff (handOver) is what makes
-// the work start there now; the message itself cannot be moved, because its
-// reservation cannot be shipped to another process.
+// the work start there now; the message itself cannot be moved to another
+// process's consumer.
 func (steps giftSteps) admitOwned(phase string) func(context.Context, saga.Command) error {
 	return func(ctx context.Context, command saga.Command) error {
 		return steps.admitPhase(ctx, phase, command)
@@ -377,10 +373,11 @@ func (steps giftSteps) admitPhase(ctx context.Context, phase string, command sag
 	if !local {
 		// Hand it over, then refuse. The two halves do different jobs: the
 		// handoff gets the work started on the sender's sid NOW, and the
-		// refusal keeps this message — unacknowledged — until a receipt
-		// exists. If the handoff never arrives, the redelivery still
-		// converges on the sender's process the slow way, which is why this
-		// is safe to be fire and forget.
+		// refusal keeps this message — unacknowledged — until a redelivery
+		// lands on the sender's process, which replays the receipt and
+		// publishes the result. If the handoff never arrives, the redelivery
+		// still converges there the slow way, which is why this is safe to be
+		// fire and forget.
 		steps.handOver(ctx, phase, state, command)
 		// Logged, because otherwise this is invisible: the refusal travels
 		// back as a nak and nothing in the process says the work moved.
@@ -417,8 +414,9 @@ func (steps giftSteps) handOver(ctx context.Context, phase string, state gift.St
 // error makes this delivery fail and retry, and the saga's deadline is what
 // ends it. A payload this broken is a bug, not a business outcome.
 //
-// The completion is emitted inside the transaction (step.Complete), so the
-// consumer waits for its receipt. The sender may be offline and cold
+// The receipt is written inside the transaction (step.Complete), and the
+// consumer publishes the result once the transaction is durable. The sender
+// may be offline and cold
 // (restart, idle hand-back): Nest sees the declared target is not loaded at
 // admission and prepares it on the io pool before the handler runs, so no
 // SendOptionIO is needed here.

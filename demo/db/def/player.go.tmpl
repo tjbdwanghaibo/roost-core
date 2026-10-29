@@ -107,6 +107,16 @@ type PlayerDao struct {
 	// transaction (game/handler/join_guild.go), which is possible precisely
 	// because Nest can lock a remote entity and a local one together.
 	GuildID int64 `bson:"guild_id" dao:"persist,sync"`
+	// SagaReceipts is where the gift saga's native steps (debit and its
+	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
+	// the framework's encoding of saga.StepReceipt. The step writes it in the
+	// same transaction as the Bag change, so the change and "this operation is
+	// done" are one WAL record; a redelivered command finds the receipt and
+	// replays it instead of debiting twice (game/entities/player/saga_receipts.go,
+	// roost-core SAGA.md 原生步骤执行契约). Persisted, never synced: the client
+	// has no use for it. Old receipts are pruned by the step itself after
+	// saga.receipt_retention.
+	SagaReceipts map[string][]byte `bson:"saga_receipts" dao:"persist"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

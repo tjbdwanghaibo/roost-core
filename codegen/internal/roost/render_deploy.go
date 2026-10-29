@@ -1241,7 +1241,7 @@ func renderImplementationGuide(m Manifest) string {
 - Data Engine Tracker 收集字段级 patch，Nest transaction 统一写入 WAL；Projector 以 CAS 落 Mongo 并推进 ack。
 - effect 和 Saga start 与业务 mutation 一起 staging 到 outbox；结果不确定时 fence，不猜测回滚。
 - Remote Entity 使用 ownership marker、route epoch、lock fence、state version 四维拒绝旧写；读路径返回不可变 L1/L2 snapshot。
-- Saga 用 lease fencing、持久状态机、outbox、幂等 receipt 和补偿处理跨事务域流程。
+- Saga 的协调器权威是 JetStream 分区事件日志（每分区一个单写者、期望序号隔离旧写者），参与方把操作回执放在实体里（原生步骤）或 Mongo 事务里（Mongo 步骤），用补偿处理跨事务域流程。
 
 ## 实时路径
 

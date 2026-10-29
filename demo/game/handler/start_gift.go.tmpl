@@ -21,9 +21,10 @@ import (
 // fails with nothing to compensate. Committing a real reservation here would
 // be the stronger design; the demo keeps the Bag simple.
 //
-// The saga id comes from the endpoint (sender, session, frame sequence): a
-// retried frame reaches the coordinator as the same start and is folded
-// into the existing saga.
+// The business key comes from the endpoint (sender, session, frame
+// sequence) and the saga id is derived from it (saga.IDOf): a retried frame
+// reaches the coordinator as the same start and is folded into the existing
+// saga. The client gets the key back and asks GiftStatus with it.
 //
 // fromSID is the sid of the process running this transaction — the sender's
 // bound sid, because a player is only served on the sid their role is bound
@@ -44,7 +45,7 @@ func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int3
 		return "", err
 	}
 	if err := saga.EmitStart(saga.StartRequest{
-		ID: sagaID, Type: giftitem.Type, DefinitionVersion: giftitem.Version, BusinessKey: sagaID,
+		Type: giftitem.Type, DefinitionVersion: giftitem.Version, BusinessKey: sagaID,
 		Data: state, DeadlineAt: time.Now().Add(gift.Deadline), //glsvet:system-clock a saga deadline is the coordinator's system time
 	}); err != nil {
 		return "", err

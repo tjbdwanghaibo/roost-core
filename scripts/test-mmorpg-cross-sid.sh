@@ -23,7 +23,7 @@ common=(-state "$review_root/state.json" -account-nats "$ROOST_DATAENGINE_IT_NAT
 echo "MMORPG: a real account session was refused by the wrong sid"
 "$review_root/giftdrill" send "${common[@]}" -from p1 -to p2 -n 2 -out "$review_root/forward.json" > "$review_root/forward.log" 2>&1
 "$review_root/giftdrill" send "${common[@]}" -from p3 -to p4 -n 2 -out "$review_root/back.json" > "$review_root/back.log" 2>&1
-"$review_root/giftdrill" wait -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -saga-db "${ROOST_MMORPG_DATABASE}_saga" -gifts "$review_root/forward.json,$review_root/back.json" -timeout 1m | tee "$review_root/wait.log"
+"$review_root/giftdrill" wait "${common[@]}" -gifts "$review_root/forward.json,$review_root/back.json" -timeout 1m | tee "$review_root/wait.log"
 grep -q 'statuses=map\[completed:4\]' "$review_root/wait.log"
 for who in p2 p4; do
   "$review_root/giftdrill" claim "${common[@]}" -who "$who" -out "$review_root/claimed-$who.json" > "$review_root/claim-$who.log" 2>&1
@@ -33,7 +33,7 @@ for who in p2 p4; do
   grep -q "^$who replayed=2 " "$review_root/replay-$who.log"
 done
 "$review_root/giftdrill" send "${common[@]}" -from p1 -to p2 -to-id 1 -n 1 -out "$review_root/refund.json" > "$review_root/refund.log" 2>&1
-"$review_root/giftdrill" wait -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -saga-db "${ROOST_MMORPG_DATABASE}_saga" -gifts "$review_root/refund.json" -timeout 1m | tee "$review_root/wait-refund.log"
+"$review_root/giftdrill" wait "${common[@]}" -gifts "$review_root/refund.json" -timeout 1m | tee "$review_root/wait-refund.log"
 grep -q 'statuses=map\[compensated:1\]' "$review_root/wait-refund.log"
 "$review_root/giftdrill" bags -state "$review_root/state.json" -mongo "$ROOST_DATAENGINE_IT_MONGO_URI" -db "$ROOST_MMORPG_DATABASE" -expect-bags p1=8,p2=2,p3=8,p4=2 -timeout 10s | tee "$review_root/bags.log"
 echo 'MMORPG cross-sid: four deliveries, replay-safe claims, one compensation and conserved bags passed'

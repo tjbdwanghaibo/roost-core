@@ -13,9 +13,8 @@ import (
 // Saga 步骤运行时与性能报告的链接：生成的骨架注释与 roost help 引用同一份。
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
-	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-CHECKPOINT-20261018.md"
-	sagaNightDocURL     = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/NIGHT-20261020.md"
-	sagaCapacitySummary = "in one process, two-step native sagas keep P50 under a second up to about 8/s forward and 5/s fully compensated, but P99 is unsteady (0.9-3.9 s over 15 minutes, measured 2026-10-20), and the WAL fsync is the main cost, so keep the WAL on a fast disk; at 10/s forward every saga still ends correctly but the DataEngine projector (about 20 records/s, one record with a receipt or effect at a time) falls behind and latency grows to seconds, and from 12/s forward or 7/s fully compensated step timeouts retry and amplify the load"
+	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md"
+	sagaCapacitySummary = "a native step's result goes back to the coordinator as soon as its Nest transaction is durable (strict: the WAL fsync, so keep the WAL on a fast disk); new sagas are refused with saga.ErrBackpressure (a start effect is retried) while a participant's projection backlog is above saga.admission.high_records; the coordinator prototype carried about 1200 sagas/s on one machine (three-node JetStream R3), and the formal implementation is measured in its own performance round"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -239,9 +238,10 @@ const (
 // The step topics. steps.go (generated next to this file) registers a
 // consumer for each of them with roost-core wiring/saga Steps: Steps.Native
 // for a step whose business is a Nest transaction (its Nest handler takes a
-// saga.NativeStep and calls step.Complete inside the transaction), Steps.Mongo
-// for any other step. Both inboxes let at most one attempt of an operation
-// take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤). For a Mongo
+// saga.NativeStep and calls step.Complete inside the transaction; the receipt
+// lives in the entity), Steps.Mongo for any other step (the receipt is a Mongo
+// document written in the step's transaction). Both let at most one attempt of
+// an operation take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤). For a Mongo
 // step that covers what its handler writes through the Mongo transaction it
 // is given; a call into another service is outside that transaction and still
 // has to be idempotent by Command.IdempotencyKey.
@@ -253,7 +253,7 @@ const (
 // backoff, and saga.steps.%s.<step>.<field> overrides one step (see the
 // roost-core docs/framework/SAGA.md, step budgets). One operation of a step may take up
 // to MaxAttempts attempts; the framework makes sure at most one of them takes
-// effect (roost-core SAGA.md, 原生步骤执行契约; Mongo steps since 2026-10-06).
+// effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤).
 func Definition() saga.Definition {
 	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
 %s	}}
@@ -275,25 +275,31 @@ func Register(engine *saga.Engine) error {
 
 // EmitStart is the production entry point from a Nest handler: the Saga start
 // intent and current Entity mutations are committed in the same Nest WAL record.
-// A saga is identified by (Type, businessKey) — one saga per key — and its id is
-// assigned when the coordinator picks the intent up, so make businessKey
-// something the initiator can hand back to the client (a request id, say): the
-// client later asks with it and Lookup finds the outcome.
+// A saga is identified by (Type, businessKey) — one saga per key while it runs
+// and for saga.terminal_retention (1h by default) after it ends — and its id is
+// derived from them (saga.IDOf), so make businessKey something the initiator can
+// hand back to the client (a request id, say): the client later asks with it
+// and Lookup finds the outcome.
 func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 	return saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
 }
 
 // Lookup finds the saga EmitStart / Start started for businessKey on the
 // process hosting the coordinator (app.Lookup[*saga.Engine](registry, mods.ModSaga)).
-// saga.ErrNotFound means it has not started yet: the intent is still on its way
-// through the outbox, so treat it as pending, not as a failure. A terminal
-// record.Status (Completed / Compensated / Failed) is the outcome.
+// saga.ErrNotFound means it has not started yet (the intent is still on its
+// way through the outbox, so treat it as pending, not as a failure) or that it
+// ended longer ago than saga.terminal_retention. A terminal record.Status
+// (Completed / Compensated / Failed) is the outcome; ManualRequired waits for an
+// operator and is always kept.
 func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error) {
 	return engine.GetByBusinessKey(ctx, Type, businessKey)
 }
 
 // Start is for durable consumers, administration and recovery paths which are
-// already outside a Nest transaction. Calls are idempotent for one intent.
+// already outside a Nest transaction. Calls are idempotent for one intent;
+// saga.ErrBackpressure means the saga was not created now (retry the same
+// request), saga.ErrStartUnconfirmed that the intent is stored but the owner's
+// verdict did not arrive in time (retrying the same request is safe).
 func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {
 	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
 }
@@ -406,32 +412,19 @@ import (
 //
 // roost project doctor warns (saga-steps:%[1]s) while nothing calls StartSteps.
 //
-// Capacity (default 20 ms projection checkpoint interval): a step's durable is
-// shared by every replica of the service; a replica's callback runs one
-// command's reservation and Nest call at a time and waits for the projected
-// receipt in the background. The DataEngine projector handles each record
-// carrying a receipt or effect on its own, about 20 records/s (2 per forward
-// saga, 3 per fully compensated one). In one process, two-step native sagas
-// keep P50 under a second up to about 8/s forward and 5/s fully compensated,
-// but P99 is unsteady: 15-minute runs on 2026-10-20 (two at 8/s forward, 7200
-// sagas each, and one at 5/s fully compensated, 4500 sagas; none ended in a
-// wrong state) gave a server P50 of 549-713 ms and a P99 of 0.9-3.9 s, the two
-// 8/s forward runs 0.92 s and 3.89 s, four times apart (minute-long spikes:
-// Mongo stalls on top of a projector backlog). With the WAL on a RAM disk the
-// server P50 fell from 555 to 334 ms and a projection checkpoint from 57 to
-// 1 ms: the disk sync is the main cost, so keep the WAL on a fast disk. At
-// 10/s forward every saga still ends correctly but the projector falls behind
-// and latency grows to seconds (P50 2.2 s, 2026-10-18); from 12/s forward or
-// 7/s fully compensated step timeouts retry and amplify the load (each
-// operation still takes effect exactly once, but many sagas end failed /
-// compensated). The top rates are single samples. Mongo steps top out in one
-// process between 20 and 30/s forward and between 10 and 15/s fully
-// compensated. More load needs more processes: shard by sid (each process owns
-// its sids' entities) and add an admission check on the native steps
-// (kitsaga.WithAdmit, below) so a command runs on the process that owns its
-// entity. Measurements:
+// Capacity: a step's durable is shared by every replica of the service and a
+// replica runs up to 32 commands at a time. A native step's result goes back to
+// the coordinator's partition as soon as its Nest transaction is durable
+// (strict: the WAL fsync, so keep the WAL on a fast disk), and the command is
+// acknowledged after that publish. While a participant's projection backlog is
+// above saga.admission.high_records new sagas are refused
+// (saga.ErrBackpressure; a start effect is retried) and running ones carry on.
+// More load needs more processes: shard by sid (each process owns its sids'
+// entities) and add an admission check on the native steps (kitsaga.WithAdmit,
+// below) so a command runs on the process that owns its entity. The coordinator
+// prototype's measurements (the formal implementation is measured in its own
+// performance round):
 // %[5]s
-// %[14]s
 // Guide: %[6]s §2.1
 
 // StepsGroup names the step consumers: each step's JetStream durable is
@@ -493,7 +486,7 @@ func RegisterSteps(steps *kitsaga.Steps, deps StepDeps) {
 %[11]s}
 
 %[13]stype stepBodies struct{ deps StepDeps }
-%[12]s`, snake, imports.String(), kinds.String(), sagaCapacitySummary, sagaCapacityDocURL, sagaGuideURL, service+"-"+snake, deps.String(), state.String(), lookup.String(), register.String(), bodies.String(), stepContract(anyNative, anyMongo), sagaNightDocURL)
+%[12]s`, snake, imports.String(), kinds.String(), sagaCapacitySummary, sagaCapacityDocURL, sagaGuideURL, service+"-"+snake, deps.String(), state.String(), lookup.String(), register.String(), bodies.String(), stepContract(anyNative, anyMongo))
 }
 
 // stepContract 是 stepBodies 上方的契约说明，只写本 saga 用到的步骤种类。
@@ -506,10 +499,10 @@ func stepContract(anyNative, anyMongo bool) string {
 // changes the entity and calls step.Complete in the same transaction; the
 // framework lets at most one attempt of the operation take effect, so neither
 // needs idempotency of its own. A body returning an error means the outcome is
-// unknown (the Nest commit may have happened): the attempt waits for its
-// receipt until the command deadline and the coordinator retries after the step
-// timeout. A payload that does not decode is such an error too; refusing needs
-// the transaction (step.Complete(false, reason) in the handler).
+// unknown (the Nest commit may have happened): the command is redelivered and
+// the generated dispatch replays the receipt the entity keeps instead of
+// running again. A payload that does not decode is such an error too; refusing
+// needs the transaction (step.Complete(false, reason) in the handler).
 `)
 	}
 	if anyMongo {
@@ -517,7 +510,7 @@ func stepContract(anyNative, anyMongo bool) string {
 // A Mongo step body runs inside a Mongo transaction (its ctx): what it writes
 // through ctx commits together with the command's receipt, so that part takes
 // effect at most once. A call into another service is outside the transaction
-// and an attempt fenced at commit may already have made it: make it idempotent
+// and an attempt rolled back at commit may already have made it: make it idempotent
 // by command.IdempotencyKey (pass it as the call's request id). A coded business
 // refusal is saga.Completion{Success: false, Error: reason}, not retried; an
 // error rolls the transaction back and is retried with backoff.
@@ -597,10 +590,11 @@ import (
 // handler%[3]s is %[4]s of saga %[5]s,
 // a native step (roost add saga -native; a business file). It is one Nest transaction:
 // change the %[6]s through target.%[7]sComp(), then call step.Complete in the
-// same transaction. The change, the command's receipt and the completion the
-// coordinator waits for are one WAL record: a redelivery replays the stored
-// completion instead of running again, and a crash before the commit leaves
-// none of the three (roost-core SAGA.md, 原生步骤执行契约). The generated
+// same transaction. The change and the operation's receipt (kept in the
+// entity) are one WAL record: a redelivery replays the receipt instead of
+// running again, and a crash before the commit leaves neither (roost-core
+// SAGA.md, 原生步骤执行契约). The result goes to the coordinator once the
+// record is durable. The generated
 // dispatch checks the receipt (step.Begin on target, kept in the %[6]s's DAO by
 // saga_receipts.go) before this function runs.
 //
@@ -688,7 +682,7 @@ func printSagaNext(stdout io.Writer, name string, native bool) {
 	fmt.Fprintf(stdout, "  Init:     steps, err := %s.StartSteps(context.Background(), registry, %s.StepDeps{})   // import <module>/saga/%s\n", snake, snake, snake)
 	fmt.Fprintf(stdout, "  Shutdown: if err := steps.Drain(ctx); err != nil { steps.Stop() }\n")
 	fmt.Fprintf(stdout, "next: start a saga from a Nest handler: state, _ := %s.EncodeState(%s.State{...}); %s.EmitStart(businessKey, state, deadline)\n", snake, snake, snake)
-	fmt.Fprintf(stdout, "      the outcome: %s.Lookup(ctx, engine, businessKey) on the coordinator's process (saga.ErrNotFound = not started yet)\n", snake)
+	fmt.Fprintf(stdout, "      the outcome: %s.Lookup(ctx, engine, businessKey) on a process with the saga Mod (saga.ErrNotFound = not started yet, or ended longer ago than saga.terminal_retention)\n", snake)
 	fmt.Fprintf(stdout, "capacity: %s; more load needs more processes sharded by sid (see roost help saga)\n", sagaCapacitySummary)
 	fmt.Fprintln(stdout, "guide: "+sagaGuideURL)
 }

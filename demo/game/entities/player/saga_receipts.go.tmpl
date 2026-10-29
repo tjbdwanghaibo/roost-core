@@ -1,0 +1,38 @@
+package player
+
+import "github.com/tjbdwanghaibo/roost-core/framework/saga"
+
+// SagaStepReceipts gives the gift saga's native steps (debit and refund, which
+// lock the sender's Player) the receipts kept in PlayerDao.SagaReceipts. The
+// generated Nest dispatch of a handler that takes a saga.NativeStep calls
+// step.Begin with the handler's first lock target before the business code: it
+// looks the operation's receipt up here, inside the Player's Nest lock, and
+// replays it instead of running the business again. step.Complete writes the
+// receipt through the same accessors, so it commits and rolls back with the
+// step's transaction (roost-core SAGA.md, 原生步骤执行契约).
+//
+// roost add saga -native generates this file for the entity it is given; the
+// demo adds its gift saga without -native and writes the native steps by hand
+// (internal/service/game/gift_saga.go), so this copy is hand-written too.
+func (e *Player) SagaStepReceipts() saga.StepReceipts { return playerSagaReceipts{owner: e} }
+
+// playerSagaReceipts adapts the DAO's generated map accessors to
+// saga.StepReceipts. The values are the framework's encoding of
+// saga.StepReceipt; do not change them.
+type playerSagaReceipts struct{ owner *Player }
+
+func (r playerSagaReceipts) StepReceipt(operation string) ([]byte, bool) {
+	return r.owner.Dao().GetSagaReceipts(operation)
+}
+
+func (r playerSagaReceipts) PutStepReceipt(operation string, encoded []byte) {
+	r.owner.Dao().SetSagaReceipts(operation, encoded)
+}
+
+func (r playerSagaReceipts) DeleteStepReceipt(operation string) {
+	r.owner.Dao().DelSagaReceipts(operation)
+}
+
+func (r playerSagaReceipts) RangeStepReceipts(f func(operation string, encoded []byte) bool) {
+	r.owner.Dao().RangeSagaReceipts(f)
+}

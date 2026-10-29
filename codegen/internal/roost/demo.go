@@ -498,6 +498,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},
 		{write: "game/battle/battle.go", why: "the lockstep contract: tick rate, frame budget, input encoding, seats and the deterministic simulation both clients run"},
 		{add: &AddOptions{Kind: "saga", Name: "GiftItem", Service: gameService, Steps: []string{"debit", "deliver"}}, why: "the gift saga's definition and step topics; the saga mod joins the game service"},
+		{write: "game/entities/player/saga_receipts.go", why: "where debit and refund keep their receipts: PlayerDao.SagaReceipts behind saga.StepReceipts, so the generated Begin replays a redelivered step instead of debiting twice"},
 		{write: "saga/gift_item/steps.go", why: "the generated single-process step registration replaced by a pointer to gift_saga.go: the demo's debit and refund need sid admission and a handoff to the owning process"},
 		{run: demoGiftRefundBudget, why: "debit's retry budget (saga.steps.gift_item.debit in the game configs) covers a crash restart of the sender's sid, so a refund waits it out instead of going to manual_required"},
 		{write: "game/gift/gift.go", why: "the game's side of the gift: state, id, mail text"},

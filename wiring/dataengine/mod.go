@@ -146,7 +146,7 @@ type config struct {
 		RetryMax           time.Duration `config:"retry_max" min:"0" example:"5s"`
 		CheckpointRecords  int           `config:"checkpoint_records" min:"0"`
 		CheckpointInterval time.Duration `config:"checkpoint_interval" min:"0"`
-		MaxUnackedRecords  int64         `config:"max_unacked_records" min:"0"`
+		MaxUnackedRecords  int64         `config:"max_unacked_records" min:"0" example:"20000" help:"未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records"`
 		WarnUnackedRecords int64         `config:"warn_unacked_records" min:"0"`
 	} `config:"dataengine.projection"`
 	Outbox struct {

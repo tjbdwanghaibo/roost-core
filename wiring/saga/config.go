@@ -56,9 +56,9 @@ type config struct {
 		Steps         map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
 		SubjectPrefix string                                 `config:"subject_prefix" shared:"saga.subject_prefix" default:"roost.saga" example:"{project}.saga" help:"分区事件、输入与查询的 subject 前缀"`
 		Stream        string                                 `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA" help:"流名前缀：第 g 条流是 <stream>_G<g>，快照与准入桶由它派生"`
-		Partitions    int                                    `config:"partitions" shared:"saga.partitions" default:"16" min:"1" max:"1024" example:"16" help:"分区数（全部进程相同）。改值要先让全部 saga 终态、停全部协调器、删流与桶"`
-		StreamGroups  int                                    `config:"stream_groups" shared:"saga.stream_groups" default:"4" min:"1" max:"8" example:"4" help:"流数（≤ partitions，每条流的分区数 ceil(partitions/stream_groups) ≤ 50）；一条流选主时只停它上面的分区"`
-		Coordinators  []string                               `config:"coordinators" shared:"saga.coordinators" required:"true" example:"1" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方"`
+		Partitions    int                                    `config:"partitions" default:"16" min:"1" max:"1024" example:"16" help:"分区数（全部进程相同，不同时协调器启动报 ErrLayoutMismatch）。改值要先让全部 saga 终态、停全部协调器、删流与桶"`
+		StreamGroups  int                                    `config:"stream_groups" default:"4" min:"1" max:"8" example:"4" help:"流数（≤ partitions，每条流的分区数 ceil(partitions/stream_groups) ≤ 50）；一条流选主时只停它上面的分区"`
+		Coordinators  []string                               `config:"coordinators" required:"true" example:"1000" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方"`
 		Replicas      int                                    `config:"replicas" default:"1" min:"1" max:"5" example:"1" help:"流与桶的副本数；生产必须为 3"`
 		// 去重窗口要盖住一次发布结果未知的整个重发判定（publish_unknown_budget）两遍。
 		DuplicateWindow      time.Duration `config:"duplicate_window" default:"2m" min:"1s" example:"2m" help:"MsgID 去重窗口，≥ 2 × publish_unknown_budget"`
