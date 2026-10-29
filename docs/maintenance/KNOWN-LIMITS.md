@@ -1,6 +1,6 @@
 # 当前已知限制与验证边界
 
-适用版本：v1.29.0 与 main 上未发版的改动（v1.31.0 候选，CHANGELOG `[Unreleased]`，[v1.31.0 说明](../release/v1.31.0-NOTES.md)）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22 审查的三项均已修复，没有未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
+适用版本：v1.31.0（[发布说明](../release/v1.31.0-NOTES.md)、[发布验收](../release/v1.31.0-VALIDATION.md)）与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22 审查的三项均已修复，没有未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
@@ -214,7 +214,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
   - 冷副本文档不过期（框架不设 TTL），历史量由运维按 `updated_at` 清理；开启之前已经被清理掉的终态不进冷副本。
   - 版本门先比 `created_at`（一生）再比版本：同业务键两生之间至少隔一个 `terminal_retention`（≥ 1m），协调器时钟回拨超过它时旧一生可能盖住新一生（不在威胁模型内，没有单独防护）。
   - `List` 回落冷副本时一页被内存持有的 ID 占掉会再翻页，最多 4 页，之后结果是精确前缀但可能少于 `Limit` 条（按 `UpdatedBefore` 缩小范围再查）。
-- **性能未按正式实现测**：协调器原型的数字（约 1200 saga/s，三节点 R3，[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)）不代表正式实现；旧 Redis / 旧原生路径的容量结论不再适用。正式验收入口 `scripts/perf/saga-js-scan.sh`（设计 §12，≤ 30 分钟一轮）已就绪、只做过冒烟（一档 3s），**正式一轮尚未跑**（维护者空闲时跑，第 7 批剩余部分）。参与方用的是框架层正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，不是 `roost add` 生成物，`wiring/saga` 的 `Steps` 胶水不在压测路径上。
+- **正式实现的性能只在本机 macOS 单机测过**（2026-10-29，[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)，设计 §12 判据全部达标）：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 c128 约 1050 saga/s、c1 P50 23.6ms，正确性门槛全 0；单样本为主，同配置跨时段差约 25%。**Linux、跨机、云 Mongo 的正式实现压测都没有跑**（原型的云 Mongo 数字不代表正式实现）。参与方是框架层正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，不是 `roost add` 生成物，`wiring/saga` 的 `Steps` 胶水不在压测路径上。旧 Redis / 旧原生路径的容量结论不再适用。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
 - **清理守卫的 floor**：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报“列出之前读到的流末序号”。消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉；后果只是活性（协调器按步骤超时重发），会不会发生**尚未确认**（取决于副本应用与清理在 Raft 日志里的先后）。

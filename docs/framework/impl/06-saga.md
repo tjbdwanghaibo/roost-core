@@ -1,6 +1,6 @@
 # Saga 长事务：实现与维护
 
-适用版本：当前主线（JetStream 协调器，saga 第 4 批起；之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md) · 对外契约 [SAGA.md](../SAGA.md) · 实施设计 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
+适用版本：v1.31.0 及当前主线（JetStream 协调器，saga 第 4 批起；之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md) · 对外契约 [SAGA.md](../SAGA.md) · 实施设计 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
 
 ## 如何阅读
 

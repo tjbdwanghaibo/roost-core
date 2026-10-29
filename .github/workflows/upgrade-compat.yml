@@ -26,11 +26,12 @@ jobs:
         # Generators that ship inside roost-core with the current package
         # layout (framework/ infra/ wiring/ …). Older releases need the
         # retired import rewrite and cannot be upgraded any more.
-        # v1.27.0 was added with the v1.28.0 release, v1.28.0 (the release
-        # before v1.29.0) with the v1.29.0 release: the hand edits below find
+        # v1.27.0 was added with the v1.28.0 release, v1.28.0 with the v1.29.0
+        # release, v1.29.0 (the release before v1.31.0; v1.30.0 was never
+        # released) with the v1.31.0 release: the hand edits below find
         # nothing to change in them, and upgrade assigns the port_block that
         # v1.29.0 made a required roost.yaml field.
-        core: [v1.25.0, v1.27.0, v1.28.0]
+        core: [v1.25.0, v1.27.0, v1.28.0, v1.29.0]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

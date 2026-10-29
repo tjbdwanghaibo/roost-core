@@ -7,7 +7,7 @@ KV / 对象存储；没有 Redis、没有 Store Service、Mongo 不在协调器�
 时带上 `nats`、`mongo`、`dataengine`，配置里写 `saga.coordinators`（跑协调器的 sid）。契约与运维见
 [SAGA.md「协调器：JetStream 分区事件日志」](../SAGA.md#协调器jetstream-分区事件日志)。
 
-适用版本：当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/06-saga.md) · [模块总目录](../README.md)
+适用版本：v1.31.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/06-saga.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
