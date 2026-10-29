@@ -220,7 +220,10 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
   - 原型第三轮云 c128 的余额 false 是否与“卡住的笔不进预期”同源，**尚未确认**（逐账户证据缺失，原型代码已删除）。积压一处已解释。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
-- **清理守卫的 floor**：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报“列出之前读到的流末序号”。消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉；后果只是活性（协调器按步骤超时重发），会不会发生**尚未确认**（取决于副本应用与清理在 Raft 日志里的先后）。
+- **清理守卫的 floor**：原登记的疑点**已确认并修复**（2026-10-29，[设计 §16](DESIGN-2026-10-28-saga-jetstream-authority.md#16-风险与未核实项) 第 3 批发现（2））：消费者信息由消费者 leader 按本机流副本回答，旧实现在副本追赶时把 floor 抬到流末（私有三节点 SIGSTOP 实测：修复前恢复后第一次回答就越过了未取的命令；修复后的用例里追赶期间消费者信息连续 17～83 次报“没有待投递”）；没回答的 durable 在 nats.go 的列表里会消失。现在 `DurableAckFloors` 只用消费者 Raft 的 AckFloor 与流 leader 的 `MSG.GET`，没回答的消费者记 0。剩下的边界：
+  - **依赖“回答的是当前流 leader”**：网络分区里被罢免、还没察觉的旧流 leader 可能短暂按旧状态回答（nats-server 的读没有 read-index / 租约），floor 可能越过它没见到的命令。不在威胁模型内（崩溃重启的短暂重叠），**没有防护**；后果同原疑点（步骤命令靠协调器超时重发；冷副本缺这条终态）。
+  - **承载 R1 冷副本 durable 的节点停机或长时间不回答时，这条流的分区清理一直停住**（floor 0，超过 `saga.purge_stall_alarm` 点名告警）。服务端还登记着这个 durable，投影器不会重建；节点不回来就要由运维删掉它（投影器 5s 内在活着的节点上重建、从流里还在的事件重投）。修复前节点被服务端判为离线后，它以零状态出现在列表里、被当成追上了，清理会按流末进行、丢掉还没投影的终态。是否让投影器自己删掉长时间不回答的冷副本 durable（冷副本进度本来允许丢）**待维护者决定**；步骤 durable 跟随流 R3，只在选主的几秒内不回答。
+  - 每次清理对每个 durable 的每个过滤多一次流 leader 的 `MSG.GET`（带消息正文，受 `max_payload_bytes` 约束）。
 - **遗留 Mongo 事务（设计 T-A，已按推荐实施）**：被 kill -9 的参与方留下的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收，服务端每半个参数扫一次，**最晚 1.5 倍参数**。部署要求 20s（最晚 30s 回收）；参与方启动探针超过缺省步骤预算窗口时告警（`saga.step.mongo_txn_lifetime_exceeds_budget`），DataEngine 启动排空在 `dataengine.startup_timeout` 内重试。`startup_timeout` 缺省已按维护者 2026-10-29 决定调到 60s（比最坏回收时刻多 30s，第 5 批）；参数配得比 20s 大、或期限被调小时，超过期限的那次启动失败、由部署重启。托管 Mongo 是否允许 `getParameter` **尚未确认**（手头没有托管实例，拒绝时探针只记“未探测”）。
 - **原生步骤迟到成功的补偿载荷**：已修复（第 4 批，维护者 2026-10-29 选 A：原生成功的 `Completion.Data = Command.Payload`），见 CHANGELOG。
 - **只在 macOS 上验证**：Linux 未运行（含 `kill -9` 用例）。

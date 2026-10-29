@@ -76,7 +76,8 @@ App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号�
 （日志已按快照清理）。终态（Completed / Compensated / Failed）在内存与快照里留 `saga.terminal_retention`（缺省 1h）后剪掉；**`ManualRequired`
 与非终态常驻**。清理 `purge(below = min(输入水位+1, 最后一条事件, 每个 durable 的 ack floor + 1))`，保留最后一条事件；某个 durable 卡住超过
 `saga.purge_stall_alarm`（10m）计 `saga.log.purge_blocked_seconds` 并 WARN，不跳过它——**下线的步骤要由运维删掉它的 durable**，否则清理一直被挡、
-流最终满了拒新写。
+流最终满了拒新写。durable 的 floor 只用消费者 Raft 的 AckFloor 与流 leader 的回答（不信消费者 leader 按本机副本报的待投递数，那个副本可能落后）；
+**没回答的 durable 按 floor 0 算**，这一轮不清理（依据与边界见 `DurableAckFloors` 注释、KNOWN-LIMITS“清理守卫的 floor”）。
 
 **内存**：保留期内终态笔数 × 单笔记录大小，分散在全部协调器进程上。按 700 笔/秒、记录 1 KiB、1h 约 2.5 GB；业务 Data 小、速率低时按比例缩小。
 配置检查不替部署算内存。

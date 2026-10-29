@@ -10,6 +10,14 @@
   - 新增 `ROOST_SAGA_SCAN_DRAIN_SECONDS`（缺省 30）。只改测试与脚本，不改框架行为。
   - 原型第三轮云 c128 的积压异常已解释，余额 false 仍尚未确认。正式实现在云 Mongo 上 c128 追平 40～46s，超过 30s 门槛，已记入 KNOWN-LIMITS。
 
+### 修复
+
+- **JetStream 日志：`DurableAckFloors` 不再信消费者副本报的待投递数（saga 分区清理守卫，KNOWN-LIMITS“清理守卫的 floor”由“尚未确认”转为已确认并修复，[设计 §16](docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#16-风险与未核实项)）**：
+  - **原因**（nats-server 2.12.1 / 2.14.5 源码）：ConsumerInfo 由消费者 leader 回答，消费者 leader 在流的任一副本上（与流 leader 无关，R1 消费者在随机一个副本上），`NumPending` 按那台本机的流副本计数。副本追赶时它对流 leader 已有的命令报“没有待投递”，旧实现据此把 floor 抬到流末，分区清理可能删掉这条命令：步骤命令只能等协调器超时重发；**冷副本 durable 丢的是还没投影的终态，冷副本永远缺这条**。另外，没在 4s 内回答的消费者只进服务端列表的 `missing`，nats.go v1.53.1 的列表不看它、翻页错位：这个 durable 可能根本不在 floor 里（不守卫），或一直翻页到超时；R1 冷副本所在节点离线时它以零状态出现、被当成追上了。私有三节点 SIGSTOP 实测复现两种情况。
+  - **现在**：先读流末，再自己翻 `$JS.API.CONSUMER.LIST`（带 `missing`），每个 durable 用 `AckFloor.Stream = a` 向流 leader 要过滤匹配、序号 > a 的第一条（`MSG.GET next_by_subj`）：有（序号 n）floor = max(a, n−1)，没有 floor = max(a, 流末)。没回答的消费者 floor 记 0（这一轮不清理）。空闲过滤 durable 照旧不挡清理；还没追上的 durable 的 floor 从 a 提到 n−1。代价：每次清理对每个 durable 的每个过滤多一次流 leader 的 `MSG.GET`。
+  - **行为变化**：承载 R1 冷副本 durable 的节点停机或长时间不回答时，这条流的分区清理停住并点名告警（原来会按流末清理、丢掉还没投影的终态），节点不回来要由运维删掉这个 durable。接口与配置不变，无数据迁移。
+  - **测试**：`infra/network/nats/driver` 单测 `TestDurableAckFloorsDoNotTrustTheConsumerReplicaView`、`TestDurableAckFloorsHoldUnansweredConsumersAtZero`、`TestDurableAckFloorsReadTheStreamEndFirst`；真实三节点 `TestRealLogAckFloorsDoNotTrustALaggingConsumerReplica`（`scripts/nats-cluster.sh test` 会跑，需要 `ROOST_NATS_CLUSTER_ROOT`）。
+
 ## [v1.31.0] - 2026-10-29
 
 次版本（v1.30.0 没有单独发版，并入本版）：实体心跳、移动与行为控制，业务时间取自 ctx 与场景时间域，视野模型与 Interest 单写者，Lockstep 快照恢复，DAO 逻辑库名映射、单实体运维、别名合服与全服邮件；**Saga 协调器权威改为 JetStream 分区事件日志**（参与方回执在实体里，删除 Redis 权威、Store Service 与 DataEngine lease fence，可选 Mongo 冷副本，原生步骤推荐 pipelined + Nest 异步完成）；DataEngine 投影器按实体并行；Nest 异步完成按 handler 生效、同实体每笔事务按提交序对外可见；物理房间服务与通用 LevelComponent。**含大量不兼容变化**（线上尚未部署，不做旧进程 / 旧数据 / 旧工程兼容）；生成物最低 core 由 v1.29.0 升到 **v1.31.0**（钉 v1.29.0 时生成的 game-demo 引用的 `gameplay/heartbeat` / `movement` / `state` / `timedomain`、`wiring/sidmerge` 不存在）。发布说明、实现与验收见 docs/release/v1.31.0-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。

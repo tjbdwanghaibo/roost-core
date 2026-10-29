@@ -6,9 +6,9 @@ package driver
 // MsgID / 缺号 / 条数上限 / 同时打开的批数上限、去重先于期望序号、ack 丢失后的判定、有序读取、清理、ack floor、
 // KV 与对象存储、散播请求，以及 leader kill -9 下“已确认的写不丢、结果未知能分辨”。
 //
-// 环境：scripts/nats-cluster.sh 起的私有集群。ROOST_NATS_CLUSTER_URL（逗号分隔的三个地址）没设置就跳过；leader kill
-// 用例另需 ROOST_NATS_CLUSTER_ROOT（脚本的数据目录，读 pid 文件、调脚本拉起节点）。一键入口：scripts/nats-cluster.sh test。
-// 2026-10-28 在 macOS、nats-server v2.14.5、nats.go v1.53.1 上通过。不读共享隔离环境的变量。
+// 环境：scripts/nats-cluster.sh 起的私有集群。ROOST_NATS_CLUSTER_URL（逗号分隔的三个地址，按节点 1～3 的顺序）没设置就跳过；
+// leader kill 与节点暂停（SIGSTOP）用例另需 ROOST_NATS_CLUSTER_ROOT（脚本的数据目录，读 pid 文件、调脚本拉起节点）。
+// 一键入口：scripts/nats-cluster.sh test。2026-10-28 在 macOS、nats-server v2.14.5、nats.go v1.53.1 上通过。不读共享隔离环境的变量。
 
 import (
 	"context"
@@ -562,9 +562,10 @@ func TestRealLogReadFollowPurgeAndAckFloors(t *testing.T) {
 		}
 		ackedUpTo = meta.Sequence.Stream
 	}
+	// floor 是“它的下一条匹配消息的前一个序号”：p0、p1 交替写，guard 的下一条 p1 是 ackedUpTo+2，中间那条 p0 不归它管。
 	floors, err := log.DurableAckFloors(ctx, name)
-	if err != nil || len(floors) != 1 || floors["guard"] != ackedUpTo {
-		t.Fatalf("ack floors = %v %v, want guard=%d only", floors, err, ackedUpTo)
+	if err != nil || len(floors) != 1 || floors["guard"] != ackedUpTo+1 {
+		t.Fatalf("ack floors = %v %v, want guard=%d only (acked up to %d)", floors, err, ackedUpTo+1, ackedUpTo)
 	}
 
 	// 清理：只删 p0 里低于界限的；p1 与界限之上的 p0 都还在。
@@ -637,6 +638,225 @@ func TestRealLogAckFloorsOfIdleAndLaggingFilteredDurables(t *testing.T) {
 	if floors, err = log.DurableAckFloors(ctx, name); err != nil || floors["lagging"] != last || floors["idle"] != last {
 		t.Fatalf("ack floors after catching up = %v %v, want both %d", floors, err, last)
 	}
+}
+
+// 消费者 leader 在落后的流副本上（KNOWN-LIMITS“清理守卫的 floor”，设计 §16）：ConsumerInfo 由消费者 leader 回答，它的
+// NumPending 按那台服务端本机的流副本算（nats-server consumer.go checkNumPending / processStreamSignal）。R1 durable 放在流的
+// follower 上，SIGSTOP 这个节点，经另外两个节点写一段积压和一条匹配它过滤的命令 S，再写几条让 S 不是流末：暂停时它不回答
+// （服务端把它放进列表的 missing），恢复后它的流副本追赶期间可能报“没有待投递”。两段的 floor 都不能越过 S（durable 没有取过
+// S），按 floor 清理之后 S 还在、durable 取得到。
+func TestRealLogAckFloorsDoNotTrustALaggingConsumerReplica(t *testing.T) {
+	root := clusterRoot(t)
+	log := logCluster(t)
+	name, _ := logStream(t, log)
+	ctx := testCtx(t, 3*time.Minute)
+	if _, err := log.js.CreateOrUpdateConsumer(ctx, name, gojs.ConsumerConfig{
+		Durable: "step", FilterSubject: name + ".*.ev.cmd.step", AckPolicy: gojs.AckExplicitPolicy, Replicas: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 另一个 R3 durable，名字排在 step 之后：服务端列表按名字排序，nats.go 的翻页按收到的条数前进，没回答的 step 会让它
+	// 被列两次而 step 一次都不出现。
+	if _, err := log.js.CreateOrUpdateConsumer(ctx, name, gojs.ConsumerConfig{
+		Durable: "zz-idle", FilterSubject: name + ".*.ev.cmd.quiet", AckPolicy: gojs.AckExplicitPolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	host := consumerLeaderNode(t, log, name, "step")
+	moveStreamLeaderOff(t, log, name, host)
+	outside := logClusterAt(t, clusterURLsExcept(t, host))
+	consumer, err := outside.js.Consumer(ctx, name, "step")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pid := clusterPid(t, root, host)
+	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+		t.Fatalf("SIGSTOP node %d: %v", host, err)
+	}
+	paused := true
+	resume := func() {
+		if paused {
+			paused = false
+			if err := syscall.Kill(pid, syscall.SIGCONT); err != nil {
+				t.Errorf("SIGCONT node %d: %v", host, err)
+			}
+		}
+	}
+	// 先于删流执行（Cleanup 后进先出）：恢复节点并等集群重新能承载 R3 流，后面的用例才不受影响。
+	t.Cleanup(func() {
+		resume()
+		waitClusterReady(t, log)
+	})
+
+	// 积压：节点恢复后要先应用它们才轮到 S。
+	payload := make([]byte, 1024)
+	for i := 0; i < lagBacklog; i++ {
+		if _, err := outside.js.PublishAsync(name+".0.ev.none", payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-outside.js.PublishAsyncComplete():
+	case <-ctx.Done():
+		t.Fatal("backlog not acknowledged")
+	}
+	ack, err := outside.PublishFenced(ctx, []fnats.LogMsg{ev(name+".0.ev.cmd.step", "S")}, fnats.LogFence{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ack.Seq
+	for i := 0; i < 3; i++ {
+		if _, err := outside.PublishFenced(ctx, []fnats.LogMsg{ev(name+".0.ev.none", "after"+strconv.Itoa(i))}, fnats.LogFence{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 暂停中：消费者 leader 不回答。meta leader 恰好是这个节点时要等重新选主，所以重试到列出为止。
+	var floors map[string]uint64
+	for deadline := time.Now().Add(60 * time.Second); ; {
+		floors, err = outside.DurableAckFloors(testCtx(t, 15*time.Second), name)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+	}
+	if floor, ok := floors["step"]; err != nil || !ok || floor >= s {
+		t.Errorf("node %d paused: floors = %v (%v), want step listed and below S=%d", host, floors, err, s)
+	}
+
+	// 恢复：追赶期间反复读 floor，同时看消费者 leader 自己报的待投递数（只作记录）。
+	resume()
+	answered, lagging := 0, 0
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		floors, err := outside.DurableAckFloors(testCtx(t, 15*time.Second), name)
+		if err != nil {
+			continue
+		}
+		answered++
+		if floor, ok := floors["step"]; !ok || floor >= s {
+			t.Errorf("node %d catching up (answer %d): floors = %v, want step listed and below S=%d", host, answered, floors, s)
+			break
+		}
+		info, err := consumer.Info(testCtx(t, 5*time.Second))
+		if err != nil {
+			continue
+		}
+		if info.NumPending == 0 && info.NumAckPending == 0 {
+			lagging++
+			continue
+		}
+		break
+	}
+	t.Logf("consumer on node %d: %d floor answers after resume, %d consumer infos still without S (S=%d, backlog %d)", host, answered, lagging, s, lagBacklog)
+	if lagging == 0 {
+		// 没看到落后窗口，这一段就没有检验到承诺：加大积压。
+		t.Fatalf("the consumer replica on node %d caught up before the first answer; raise lagBacklog (%d)", host, lagBacklog)
+	}
+
+	// 按 floor 清理之后 S 必须还在。暂停的节点可能是 meta leader：恢复后的选主期间列表与清理会报 10008，重试。
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		floors, err = outside.DurableAckFloors(ctx, name)
+		if err == nil {
+			err = outside.Purge(ctx, name, name+".0.>", floors["step"]+1)
+		}
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
+	batch, err := consumer.Fetch(1, gojs.FetchMaxWait(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got uint64
+	for m := range batch.Messages() {
+		meta, _ := m.Metadata()
+		got = meta.Sequence.Stream
+	}
+	if got != s {
+		t.Fatalf("after purging below %d the durable fetched seq %d, want S=%d", floors["step"]+1, got, s)
+	}
+}
+
+// lagBacklog 是暂停期间写入的积压条数（每条 1 KiB）：越大，恢复后的追赶窗口越长。
+const lagBacklog = 30000
+
+// logClusterAt 只连给定的地址（不连被暂停的节点）。
+func logClusterAt(t *testing.T, urls []string) *JetStreamLogClient {
+	t.Helper()
+	cfg := fnats.DefaultConfig(strings.Join(urls, ","))
+	cfg.ReconnectWait = 100 * time.Millisecond
+	client, err := NewClient(cfg, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	js, err := NewJetStreamClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := NewJetStreamLog(js)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+// clusterURLsExcept 是 ROOST_NATS_CLUSTER_URL（按节点 1～3 的顺序）去掉第 node 个节点。
+func clusterURLsExcept(t *testing.T, node int) []string {
+	t.Helper()
+	all := strings.Split(os.Getenv("ROOST_NATS_CLUSTER_URL"), ",")
+	if len(all) != 3 {
+		t.Fatalf("ROOST_NATS_CLUSTER_URL must list the three nodes in order: %q", all)
+	}
+	return append(append([]string(nil), all[:node-1]...), all[node:]...)
+}
+
+func nodeOf(t *testing.T, server string) int {
+	t.Helper()
+	node, err := strconv.Atoi(strings.TrimPrefix(server, "roostjs-n"))
+	if err != nil || !strings.HasPrefix(server, "roostjs-n") {
+		t.Fatalf("unknown server name %q", server)
+	}
+	return node
+}
+
+func consumerLeaderNode(t *testing.T, log *JetStreamLogClient, stream, consumer string) int {
+	t.Helper()
+	handle, err := log.js.Consumer(testCtx(t, 10*time.Second), stream, consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := handle.CachedInfo()
+	if info.Cluster == nil {
+		t.Fatalf("consumer %s has no cluster info", consumer)
+	}
+	return nodeOf(t, info.Cluster.Leader)
+}
+
+// moveStreamLeaderOff 让流 leader 离开节点 node（leader stepdown 直到换到别的节点）。
+func moveStreamLeaderOff(t *testing.T, log *JetStreamLogClient, stream string, node int) {
+	t.Helper()
+	for attempt := 0; attempt < 10; attempt++ {
+		if streamLeaderNode(t, log, stream) != node {
+			return
+		}
+		if _, err := log.client.conn.Request("$JS.API.STREAM.LEADER.STEPDOWN."+stream, nil, 5*time.Second); err != nil {
+			t.Fatalf("stream leader stepdown: %v", err)
+		}
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			handle, err := log.js.Stream(testCtx(t, 5*time.Second), stream)
+			if err != nil {
+				continue
+			}
+			if info := handle.CachedInfo(); info.Cluster != nil && strings.HasPrefix(info.Cluster.Leader, "roostjs-n") && nodeOf(t, info.Cluster.Leader) != node {
+				return
+			}
+		}
+	}
+	t.Fatalf("stream %s leader stays on node %d", stream, node)
 }
 
 func TestRealLogKeyValueAndObjects(t *testing.T) {
@@ -797,7 +1017,7 @@ func clusterRoot(t *testing.T) string {
 	return root
 }
 
-func clusterKill(t *testing.T, root string, node int) {
+func clusterPid(t *testing.T, root string, node int) int {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(root, fmt.Sprintf("n%d.pid", node)))
 	if err != nil {
@@ -807,7 +1027,12 @@ func clusterKill(t *testing.T, root string, node int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	return pid
+}
+
+func clusterKill(t *testing.T, root string, node int) {
+	t.Helper()
+	if err := syscall.Kill(clusterPid(t, root, node), syscall.SIGKILL); err != nil {
 		t.Fatalf("kill -9 node %d: %v", node, err)
 	}
 }

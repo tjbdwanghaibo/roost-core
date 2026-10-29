@@ -66,6 +66,8 @@ const (
 	headerBatchCommit       = "Nats-Batch-Commit"
 	reservedHeaderPrefix    = "nats-"
 	jsAPIMessageGetTemplate = "$JS.API.STREAM.MSG.GET.%s"
+	// jsAPIConsumerListTemplate 是消费者列表（带 missing / offline，见 DurableAckFloors）。
+	jsAPIConsumerListTemplate = "$JS.API.CONSUMER.LIST.%s"
 )
 
 func (c *JetStreamLogClient) EnsureLogStream(ctx context.Context, config fnats.LogStreamConfig) (fnats.LogStreamInfo, error) {
@@ -368,15 +370,24 @@ func (c *JetStreamLogClient) LastMsg(ctx context.Context, stream, filter string)
 	if ctx == nil || strings.TrimSpace(stream) == "" || !validSubject(filter, true) {
 		return fnats.LogMsg{}, fmt.Errorf("nats log: last message: invalid stream %q or filter %q", stream, filter)
 	}
-	request, err := json.Marshal(struct {
+	msg, err := c.getMsg(ctx, stream, struct {
 		LastFor string `json:"last_by_subj"`
 	}{LastFor: filter})
+	if err != nil {
+		return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: %w", filter, stream, err)
+	}
+	return msg, nil
+}
+
+// getMsg 发一次 $JS.API.STREAM.MSG.GET（流 leader 回答）；没有匹配的消息返回 fnats.ErrLogNotFound。
+func (c *JetStreamLogClient) getMsg(ctx context.Context, stream string, req any) (fnats.LogMsg, error) {
+	request, err := json.Marshal(req)
 	if err != nil {
 		return fnats.LogMsg{}, err
 	}
 	reply, err := c.client.conn.RequestWithContext(ctx, fmt.Sprintf(jsAPIMessageGetTemplate, stream), request)
 	if err != nil {
-		return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: %w", filter, stream, c.client.wrapError(err))
+		return fnats.LogMsg{}, c.client.wrapError(err)
 	}
 	var response struct {
 		Error   *gojs.APIError `json:"error,omitempty"`
@@ -388,20 +399,20 @@ func (c *JetStreamLogClient) LastMsg(ctx context.Context, stream, filter string)
 		} `json:"message,omitempty"`
 	}
 	if err := json.Unmarshal(reply.Data, &response); err != nil {
-		return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: undecodable reply: %w", filter, stream, err)
+		return fnats.LogMsg{}, fmt.Errorf("undecodable reply: %w", err)
 	}
 	switch {
 	case response.Error != nil && response.Error.ErrorCode == jsErrMessageNotFound:
-		return fnats.LogMsg{}, fmt.Errorf("%w: no message matches %q on %s", fnats.ErrLogNotFound, filter, stream)
+		return fnats.LogMsg{}, fmt.Errorf("%w: %v", fnats.ErrLogNotFound, response.Error)
 	case response.Error != nil:
-		return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: %w", filter, stream, response.Error)
+		return fnats.LogMsg{}, response.Error
 	case response.Message == nil:
-		return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: empty reply", filter, stream)
+		return fnats.LogMsg{}, errors.New("empty reply")
 	}
 	var header gonats.Header
 	if len(response.Message.Header) > 0 {
 		if header, err = gonats.DecodeHeadersMsg(response.Message.Header); err != nil {
-			return fnats.LogMsg{}, fmt.Errorf("nats log: last message of %q on %s: headers: %w", filter, stream, err)
+			return fnats.LogMsg{}, fmt.Errorf("headers: %w", err)
 		}
 	}
 	return toLogMsg(response.Message.Subject, header, response.Message.Data, response.Message.Seq), nil
@@ -610,39 +621,200 @@ func (c *JetStreamLogClient) Purge(ctx context.Context, stream, filter string, b
 	return nil
 }
 
+// DurableAckFloors 的依据（nats-server v2.12.1 / v2.14.5 源码，KNOWN-LIMITS“清理守卫的 floor”，设计 §16）：
+//   - ConsumerInfo 由消费者 leader 回答（consumer.go setLeader 只在 leader 上订阅 $JSC.CI），消费者 leader 由消费者自己的
+//     Raft 组选出，与流 leader 无关（jetstream_cluster.go setPreferred 在流的副本里随机挑），R1 durable 只在一个随机副本上；
+//   - NumPending 是消费者 leader 按本机流副本维护的计数（consumer.go streamNumPending / processStreamSignal：本机副本存下
+//     消息后经异步信号队列才加一），本机副本落后流 leader、或信号还没处理时，它会对流 leader 已有的消息报 0；
+//   - AckFloor 是消费者 Raft 状态（consumer.go infoWithSnapAndReply 取 o.store 的 AckFloor），不依赖流副本；
+//   - $JS.API.STREAM.MSG.GET 只由流 leader 回答（jetstream_api.go jsMsgGetRequest，没有 leader 时回 10008，不由副本代答），
+//     Raft leader 处理完当选前已提交的条目才对上层报 leader（raft.go Processed / leaderState）；
+//   - 消费者列表里没在 4s 内回答的、或承载它的副本全部离线的消费者进 missing（jetstream_cluster.go
+//     jsClusteredConsumerListRequest；全部离线的那种同时以零状态出现在 consumers 里）。nats.go v1.53.1 的 ListConsumers
+//     不看 missing，翻页按收到的条数前进：没回答的 durable 可能一次都不出现（2026-10-29 私有三节点实测），排在最后时一直
+//     翻页到 ctx 结束。
+//
+// 所以 floor 不用 NumPending / NumAckPending，也不用 nats.go 的列表：
+//  1. 先读流末序号 last（StreamInfo）；
+//  2. 自己翻 $JS.API.CONSUMER.LIST，每个 durable 取 AckFloor.Stream = a（消费者 Raft 状态）；没回答的记下名字；
+//  3. 对每个 durable 向流 leader 要“过滤匹配、序号 ≥ a+1 的第一条”（MSG.GET next_by_subj，多个过滤取最小）：
+//     有，序号 n：(a, n) 之间没有它的消息，floor = max(a, n-1)；没有：它的消息都 ≤ a，floor = max(a, last)。
+//
+// 第 3 步读在第 1 步之后：回答它的流 leader 已有 ≤ last 的全部消息，“没有”才能推出 ≤ last 的匹配消息都已确认。n 只要求回答
+// 者存的是日志前缀（副本按日志顺序应用），不要求最新。没回答的消费者状态未知，floor 记 0（这一轮不清理；它若是有序 / 临时
+// 消费者也一样，只在它不回答的这几轮）；全部副本离线、带配置出现的按配置判断是不是 durable。
+//
+// 剩下的前提：读到的是当前流 leader。网络分区里被罢免、还没察觉的旧 leader 可能短暂回答旧状态（nats-server 的读没有
+// read-index / 租约），不在威胁模型内（崩溃重启的短暂重叠）。
 func (c *JetStreamLogClient) DurableAckFloors(ctx context.Context, stream string) (map[string]uint64, error) {
 	if err := c.admit(); err != nil {
 		return nil, err
 	}
-	handle, err := c.js.Stream(ctx, stream)
+	floors, err := durableAckFloors(ctx, logFloorReader{c: c}, stream)
 	if err != nil {
-		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
+		return nil, fmt.Errorf("nats log: ack floors of %s: %w", stream, c.client.wrapError(err))
 	}
-	// 先读流的末序号，再列消费者：一个消费者在列出时没有待投递（NumPending）也没有待确认（NumAckPending）的消息，说明
-	// 过滤匹配、序号不超过这个末序号的消息它都已确认，它的有效 floor 至少是这个末序号。服务端的 AckFloor.Stream 只在
-	// 匹配过滤的消息被确认时前进：过滤只匹配自己主题的消费者空闲时停在 0（或它最后一条匹配消息），会让按 floor 清理的
-	// 调用方（saga 分区）永远清不掉别的主题的消息（2026-10-28 私有三节点实测，设计 §16 第 1 条）。
-	streamInfo, err := handle.Info(ctx)
+	return floors, nil
+}
+
+// floorReader 是 durableAckFloors 向服务端要的三样事实；单测用假实现模拟落后的消费者副本。
+type floorReader interface {
+	// streamLastSeq 是流 leader 报的流末序号。
+	streamLastSeq(ctx context.Context, stream string) (uint64, error)
+	// consumers 列出流上的全部消费者：infos 是回答了的（含全部副本离线、只带配置的），unanswered 是没回答的名字。
+	consumers(ctx context.Context, stream string) (infos []*gojs.ConsumerInfo, unanswered map[string]bool, err error)
+	// nextSeq 是流 leader 上匹配 filter、序号 ≥ from 的第一条消息的序号；没有返回 found=false。
+	nextSeq(ctx context.Context, stream, filter string, from uint64) (seq uint64, found bool, err error)
+}
+
+func durableAckFloors(ctx context.Context, r floorReader, stream string) (map[string]uint64, error) {
+	last, err := r.streamLastSeq(ctx, stream)
 	if err != nil {
-		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
+		return nil, err
 	}
-	lastSeq := streamInfo.State.LastSeq
-	lister := handle.ListConsumers(ctx)
+	infos, unanswered, err := r.consumers(ctx, stream)
+	if err != nil {
+		return nil, err
+	}
 	floors := map[string]uint64{}
-	for info := range lister.Info() {
-		if info == nil || info.Config.Durable == "" {
+	for _, info := range infos {
+		// 没回答的在下面记 0；有序 / 临时消费者不是守卫。
+		if info == nil || unanswered[info.Name] || info.Config.Durable == "" {
 			continue
 		}
 		floor := info.AckFloor.Stream
-		if info.NumPending == 0 && info.NumAckPending == 0 {
-			floor = max(floor, lastSeq)
+		filters := info.Config.FilterSubjects
+		if len(filters) == 0 {
+			filters = []string{info.Config.FilterSubject}
+		}
+		var next uint64
+		for _, filter := range filters {
+			if filter == "" {
+				filter = ">"
+			}
+			seq, found, err := r.nextSeq(ctx, stream, filter, floor+1)
+			if err != nil {
+				return nil, fmt.Errorf("next message of durable %q: %w", info.Config.Durable, err)
+			}
+			if found && (next == 0 || seq < next) {
+				next = seq
+			}
+		}
+		if next == 0 {
+			floor = max(floor, last)
+		} else {
+			floor = max(floor, next-1)
 		}
 		floors[info.Config.Durable] = floor
 	}
-	if err := lister.Err(); err != nil {
-		return nil, fmt.Errorf("nats log: consumers of %s: %w", stream, c.client.wrapError(err))
+	for name := range unanswered {
+		if info := findConsumer(infos, name); info != nil && info.Config.Durable == "" {
+			continue // 全部副本离线的临时 / 有序消费者
+		}
+		floors[name] = 0
 	}
 	return floors, nil
+}
+
+func findConsumer(infos []*gojs.ConsumerInfo, name string) *gojs.ConsumerInfo {
+	for _, info := range infos {
+		if info != nil && info.Name == name {
+			return info
+		}
+	}
+	return nil
+}
+
+// logFloorReader 是 floorReader 的服务端实现。
+type logFloorReader struct{ c *JetStreamLogClient }
+
+func (r logFloorReader) streamLastSeq(ctx context.Context, stream string) (uint64, error) {
+	handle, err := r.c.js.Stream(ctx, stream)
+	if err != nil {
+		return 0, err
+	}
+	info, err := handle.Info(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return info.State.LastSeq, nil
+}
+
+// consumers 自己翻 $JS.API.CONSUMER.LIST（nats.go 的 ListConsumers 丢掉 missing、翻页会错位）：按出现过的不同名字前进，
+// 每页的 total 必须一致、最后见到的名字数必须等于 total，否则列表在翻页期间变了，返回错误（调用方这一轮不清理）。
+func (r logFloorReader) consumers(ctx context.Context, stream string) ([]*gojs.ConsumerInfo, map[string]bool, error) {
+	var (
+		infos      []*gojs.ConsumerInfo
+		unanswered = map[string]bool{}
+		seen       = map[string]bool{}
+		total      = -1
+	)
+	for {
+		request, err := json.Marshal(struct {
+			Offset int `json:"offset"`
+		}{Offset: len(seen)})
+		if err != nil {
+			return nil, nil, err
+		}
+		reply, err := r.c.client.conn.RequestWithContext(ctx, fmt.Sprintf(jsAPIConsumerListTemplate, stream), request)
+		if err != nil {
+			return nil, nil, err
+		}
+		var page struct {
+			Error     *gojs.APIError       `json:"error,omitempty"`
+			Total     int                  `json:"total"`
+			Consumers []*gojs.ConsumerInfo `json:"consumers"`
+			Missing   []string             `json:"missing,omitempty"`
+			Offline   map[string]string    `json:"offline,omitempty"`
+		}
+		if err := json.Unmarshal(reply.Data, &page); err != nil {
+			return nil, nil, fmt.Errorf("consumer list: undecodable reply: %w", err)
+		}
+		if page.Error != nil {
+			return nil, nil, fmt.Errorf("consumer list: %w", page.Error)
+		}
+		if total >= 0 && page.Total != total {
+			return nil, nil, fmt.Errorf("consumer list changed while paging (total %d, then %d)", total, page.Total)
+		}
+		total = page.Total
+		before := len(seen)
+		for _, info := range page.Consumers {
+			if info != nil && !seen[info.Name] {
+				seen[info.Name] = true
+				infos = append(infos, info)
+			}
+		}
+		for _, name := range page.Missing {
+			unanswered[name], seen[name] = true, true
+		}
+		for name := range page.Offline {
+			unanswered[name], seen[name] = true, true
+		}
+		if len(seen) >= total {
+			break
+		}
+		if len(seen) == before {
+			return nil, nil, fmt.Errorf("consumer list changed while paging (%d of %d listed)", len(seen), total)
+		}
+	}
+	if len(seen) != total {
+		return nil, nil, fmt.Errorf("consumer list changed while paging (%d listed, total %d)", len(seen), total)
+	}
+	return infos, unanswered, nil
+}
+
+func (r logFloorReader) nextSeq(ctx context.Context, stream, filter string, from uint64) (uint64, bool, error) {
+	msg, err := r.c.getMsg(ctx, stream, struct {
+		Seq     uint64 `json:"seq"`
+		NextFor string `json:"next_by_subj"`
+	}{Seq: from, NextFor: filter})
+	if errors.Is(err, fnats.ErrLogNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return msg.Seq, true, nil
 }
 
 func (c *JetStreamLogClient) KeyValue(ctx context.Context, config fnats.LogKVConfig) (fnats.LogKV, error) {
