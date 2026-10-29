@@ -291,7 +291,7 @@ bash scripts/test-mmorpg-cross-sid.sh
 脚本只创建本次的测试账号（[驱动](../../scripts/testdata/mmorpg/crosssid/main.go.txt)），经真实 account 登录 / 建角 / 选角和玩家 TCP 检查：
 
 - **证明**：真实会话连到错误的 sid 在 EnterGame 被拒；sid 1000 → 1001 与 1001 → 1000 各 2 笔赠礼的 Saga 全部 completed；收件人领取邮件后，对已领的每封邮件再发一次 ClaimMail 不增加背包；发给不存在的收件人的 1 笔 Saga compensated；最后 Mongo 中四人背包为 `8 / 2 / 8 / 2`。Saga 库按 `<ROOST_MMORPG_DATABASE>_saga` 读取；工程改过命名时先改脚本参数，不对生产库运行。
-- **不证明**：跨机网络与故障注入（同机两进程）；Remote fencing——Remote / Mirror 的真实入口是 `scripts/test-remote-generated.sh`，与本脚本分别执行，不能互相替代。原生步骤在真实 Nest 调度下的正向、补偿、重复投递等由 `wiring/saga` 的 integration 测试 `TestRealStepsRunNativeStepsUnderTheRealNestScheduler` 覆盖。
+- **不证明**：跨机网络与故障注入（同机两进程）；Remote fencing——Remote / Mirror 的真实入口是 `scripts/test-remote-generated.sh`，与本脚本分别执行，不能互相替代。原生步骤在真实 Nest 调度下的正向、补偿、重复投递等由 `framework/saga` 的 integration 测试 `TestRealJetStreamNativeStepsEndToEnd`（参与方 kill -9 见 `TestRealJetStreamParticipantKill9`）与生成工程的 `TestGeneratedSagaNativeStepsAndEffectConsumer`（`scripts/test-demo-generated.sh`）覆盖。
 
 ### 14. 验收范围小结
 
