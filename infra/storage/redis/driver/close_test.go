@@ -109,28 +109,3 @@ func TestAssemblyRepeatedCloseReturnsNil(t *testing.T) {
 		}
 	})
 }
-
-// 客户端关闭后，锁操作返回 ErrClosed，而且每次都是 ErrClosed：命令确定没发出去，锁状态没有变成未知。
-func TestDistLockAfterClientCloseKeepsReportingErrClosed(t *testing.T) {
-	forEachDeployment(t, func(t *testing.T, cluster bool) {
-		asm, err := Assemble(closeContractConfig(cluster))
-		if err != nil {
-			t.Fatal(err)
-		}
-		lock := asm.Locks.NewLock("close-contract-lock", time.Second)
-		if err := asm.Close(); err != nil {
-			t.Fatalf("Assembly.Close = %v", err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		for attempt := 1; attempt <= 2; attempt++ {
-			ok, err := lock.Acquire(ctx)
-			if ok || !errors.Is(err, goredis.ErrClosed) {
-				t.Fatalf("Acquire #%d after Close = (%v, %v), want (false, goredis.ErrClosed): the SetNX was never sent", attempt, ok, err)
-			}
-		}
-		if err := lock.Release(ctx); !errors.Is(err, fredis.ErrLockNotHeld) {
-			t.Fatalf("Release of a lock never acquired = %v, want ErrLockNotHeld", err)
-		}
-	})
-}

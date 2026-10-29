@@ -2,10 +2,8 @@ package driver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	"strconv"
 	"sync"
 	"time"
 
@@ -25,9 +23,8 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-// Raw exposes the underlying go-redis client for assembly code (lock
-// factories, health probes) that needs the driver handle; business code
-// should stay on fredis.IRedis.
+// Raw exposes the underlying go-redis client for assembly and test code that
+// needs the driver handle; business code should stay on fredis.IRedis.
 func (c *Client) Raw() goredis.UniversalClient {
 	if c == nil {
 		return nil
@@ -364,100 +361,6 @@ func (c *Client) EvalSha(ctx context.Context, sha string, keys []string, args ..
 	return runScript(ctx, c.rdb, c.resends, "evalsha", sha, keys, args...).Result()
 }
 
-// EvalDurable pins a physical connection so WAITAOF observes the replication
-// offset produced by the immediately preceding script. Redis Cluster cannot
-// safely provide this through go-redis's keyless-command routing, so it is
-// rejected instead of silently weakening the durability contract.
-func (c *Client) EvalDurable(ctx context.Context, script string, keys []string, numLocal, numReplicas int, timeout time.Duration, args ...any) (any, int64, int64, error) {
-	results, local, replicas, err := c.EvalBatchDurable(ctx, script, []fredis.EvalCall{{Keys: keys, Args: args}}, numLocal, numReplicas, timeout)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	if len(results) != 1 {
-		return nil, 0, 0, fmt.Errorf("redis: durable eval returned %d results, want 1", len(results))
-	}
-	return results[0], local, replicas, nil
-}
-
-// EvalBatchDurable 把全部脚本与一条 WAITAOF 放在同一条物理连接上流水线发出。整条不经驱动重放；
-// 每条命令的错误都证明没执行（例如取连接时拨号失败）时换一条新连接整条重发。
-func (c *Client) EvalBatchDurable(ctx context.Context, script string, calls []fredis.EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]any, int64, int64, error) {
-	if len(calls) == 0 {
-		return nil, 0, 0, nil
-	}
-	client, ok := c.rdb.(*goredis.Client)
-	if !ok {
-		return nil, 0, 0, fmt.Errorf("redis: same-connection WAITAOF is unsupported for %T; use a single-primary or Sentinel endpoint", c.rdb)
-	}
-	for attempt := 0; ; attempt++ {
-		commands, waitCommand, execErr := evalBatchOnConn(ctx, client, script, calls, numLocal, numReplicas, timeout)
-		if execErr == nil {
-			return durableBatchResults(commands, waitCommand)
-		}
-		sent := append(append([]goredis.Cmder(nil), commandsAsCmders(commands)...), waitCommand)
-		if attempt >= c.resends || !allNotExecuted(sent) {
-			return nil, 0, 0, execErr
-		}
-		if waitErr := waitBeforeResend(ctx, attempt); waitErr != nil {
-			return nil, 0, 0, errors.Join(execErr, waitErr)
-		}
-	}
-}
-
-// evalBatchOnConn 在一条新的独占连接上发一次脚本批次与 WAITAOF。
-func evalBatchOnConn(ctx context.Context, client *goredis.Client, script string, calls []fredis.EvalCall, numLocal, numReplicas int, timeout time.Duration) ([]*goredis.Cmd, *goredis.Cmd, error) {
-	conn := client.Conn()
-	defer func() { _ = conn.Close() }()
-	pipe := conn.Pipeline()
-	commands := make([]*goredis.Cmd, 0, len(calls))
-	for _, call := range calls {
-		// 与 Eval 相同，脚本不经驱动重放：含 NoRetry 命令的流水线整体不重发。
-		command := newScriptCmd(ctx, "eval", script, call.Keys, call.Args...)
-		_ = pipe.Process(ctx, noReplay{command})
-		commands = append(commands, command)
-	}
-	waitCommand := goredis.NewCmd(ctx, "WAITAOF", numLocal, numReplicas, timeout.Milliseconds())
-	_ = pipe.Process(ctx, noReplay{waitCommand})
-	_, err := pipe.Exec(ctx)
-	return commands, waitCommand, err
-}
-
-func commandsAsCmders(commands []*goredis.Cmd) []goredis.Cmder {
-	out := make([]goredis.Cmder, len(commands))
-	for i, command := range commands {
-		out[i] = command
-	}
-	return out
-}
-
-// durableBatchResults 解析 WAITAOF 回复与每条脚本的结果。
-func durableBatchResults(commands []*goredis.Cmd, waitCommand *goredis.Cmd) ([]any, int64, int64, error) {
-	reply, err := waitCommand.Slice()
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	if len(reply) != 2 {
-		return nil, 0, 0, fmt.Errorf("redis: invalid WAITAOF reply length %d", len(reply))
-	}
-	local, err := redisInteger(reply[0])
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("redis: invalid WAITAOF local reply: %w", err)
-	}
-	replicas, err := redisInteger(reply[1])
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("redis: invalid WAITAOF replica reply: %w", err)
-	}
-	results := make([]any, 0, len(commands))
-	for _, command := range commands {
-		result, err := command.Result()
-		if err != nil {
-			return nil, 0, 0, err
-		}
-		results = append(results, result)
-	}
-	return results, local, replicas, nil
-}
-
 // --- PubSub ---
 
 func (c *Client) Publish(ctx context.Context, channel string, message any) error {
@@ -500,28 +403,6 @@ func convertZSlice(zs []goredis.Z) []fredis.Z {
 	return result
 }
 
-func redisInteger(value any) (int64, error) {
-	switch typed := value.(type) {
-	case int64:
-		return typed, nil
-	case int:
-		return int64(typed), nil
-	case uint64:
-		if typed > uint64(^uint64(0)>>1) {
-			return 0, fmt.Errorf("integer overflow: %d", typed)
-		}
-		return int64(typed), nil
-	case string:
-		return strconv.ParseInt(typed, 10, 64)
-	case []byte:
-		return strconv.ParseInt(string(typed), 10, 64)
-	default:
-		return 0, fmt.Errorf("unexpected integer type %T", value)
-	}
-}
-
 var _ fredis.IRedis = (*Client)(nil)
-var _ fredis.DurableEvaler = (*Client)(nil)
-var _ fredis.DurableBatchEvaler = (*Client)(nil)
 var _ fredis.ListTrimmer = (*Client)(nil)
 var _ fredis.ListRemover = (*Client)(nil)

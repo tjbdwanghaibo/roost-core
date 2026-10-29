@@ -278,13 +278,6 @@ var writeCalls = []writeCall{
 		pipe.RPush(ctx, "k", "a")
 		return pipe.Exec(ctx)
 	}},
-	{"distlock", func(ctx context.Context, c *Client) error {
-		ok, err := NewDistLockFactory(c.rdb).NewLock("lock", time.Second).Acquire(ctx)
-		if err == nil && !ok {
-			return errors.New("Acquire reported the lock as taken by someone else")
-		}
-		return err
-	}},
 }
 
 // serverName 是 writeCall 在服务端的命令名（pipeline 以 RPUSH 为丢回复点、INCR 为计数点）。
@@ -292,8 +285,6 @@ func (w writeCall) serverName() (dropAt, countAt string) {
 	switch w.name {
 	case "pipeline":
 		return "rpush", "incr"
-	case "distlock":
-		return "set", "set"
 	}
 	return w.name, w.name
 }
@@ -403,20 +394,6 @@ func TestReadsKeepTheDriverRetry(t *testing.T) {
 	}
 	if got := server.executions("get"); got != 2 {
 		t.Fatalf("get executed %d times, want 2 (driver retry)", got)
-	}
-}
-
-// EvalBatchDurable 的整批（脚本 + WAITAOF）都被拒绝时换新连接整批重发。
-func TestDurableBatchIsResentWhenNothingExecuted(t *testing.T) {
-	loading := standInAction{reject: "LOADING Redis is loading the dataset in memory"}
-	server := newRESPStandIn(t, map[string][]standInAction{"eval": {loading}, "waitaof": {loading}})
-	client := standInClient(t, server)
-	results, local, _, err := client.EvalBatchDurable(context.Background(), "return 1", []fredis.EvalCall{{Keys: []string{"k"}}}, 1, 0, time.Second)
-	if err != nil || len(results) != 1 || local != 1 {
-		t.Fatalf("EvalBatchDurable = %v, local=%d, %v; want one result after one resend", results, local, err)
-	}
-	if got := server.executions("eval"); got != 1 {
-		t.Fatalf("eval executed %d times, want 1", got)
 	}
 }
 
@@ -621,7 +598,7 @@ func TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry(t *testi
 //   - 脚本自己的错误照 Eval 的分类返回，不发 WAIT；
 //   - numReplicas / timeout 不为正时普通发送脚本。
 
-// recordingRESPServer 与 cannedRESPServer 相同，另按连接记录收到的命令名。
+// recordingRESPServer 是按命令名回放固定回复的假 RESP 服务端，另按连接记录收到的命令名。
 func recordingRESPServer(t *testing.T, replies map[string]string) (*goredis.Client, func() [][]string) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

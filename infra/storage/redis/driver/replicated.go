@@ -15,7 +15,7 @@ import (
 //
 //  1. 选连接：单机 / Sentinel 用客户端本身；Cluster 按第一个键取该槽位的主节点（MasterForKey），WAIT 只发往它。
 //  2. 在一条独占的物理连接上流水线发 EVAL 与 ROLE（一次往返）。脚本与 Eval 一样不经驱动重放；流水线里每条
-//     命令都证明没执行时才换连接整条重发（同 EvalBatchDurable）。
+//     命令都证明没执行时才换连接整条重发。
 //  3. ROLE 报告主节点连着的副本数：为 0 时不发 WAIT（单机开发环境不被 WAIT 卡到超时）；否则同一连接上发
 //     WAIT numReplicas timeout。WAIT 从不重放：换了连接的 WAIT 只会立即返回，给出假的确认。
 //

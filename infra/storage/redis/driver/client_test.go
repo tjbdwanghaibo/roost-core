@@ -1,4 +1,4 @@
-// Redis 客户端：WAITAOF 与整数解析、缺失键的错误身份、上下文截止、集群恢复不重放、装配、pipeline 错误。
+// Redis 客户端：缺失键的错误身份、上下文截止、集群恢复不重放、装配、pipeline 错误。
 
 package driver
 
@@ -19,52 +19,6 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-func TestRedisIntegerParsesWAITAOFReplyValues(t *testing.T) {
-	tests := []struct {
-		name  string
-		value any
-		want  int64
-	}{
-		{name: "int64", value: int64(1), want: 1},
-		{name: "int", value: 2, want: 2},
-		{name: "string", value: "3", want: 3},
-		{name: "bytes", value: []byte("4"), want: 4},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := redisInteger(test.value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.want {
-				t.Fatalf("redisInteger(%v) = %d, want %d", test.value, got, test.want)
-			}
-		})
-	}
-}
-
-func TestRedisIntegerRejectsInvalidWAITAOFReplyValue(t *testing.T) {
-	if _, err := redisInteger([]any{1}); err == nil {
-		t.Fatal("redisInteger accepted an invalid reply type")
-	}
-}
-
-func TestEvalDurableRejectsClusterTopologyBeforeIO(t *testing.T) {
-	cluster := goredis.NewClusterClient(&goredis.ClusterOptions{Addrs: []string{"127.0.0.1:1"}})
-	defer func() { _ = cluster.Close() }()
-	client := &Client{rdb: cluster}
-
-	_, _, _, err := client.EvalDurable(context.Background(), "return 1", []string{"{probe}:key"}, 1, 0, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("EvalDurable cluster error = %v", err)
-	}
-}
-
-// 错误身份：go-redis 的 redis.Nil 变成 fredis.ErrNil（七个读接口各有一处映射）；回复形状：WAITAOF 的回复、整数解析越界报错而不是越界
-// 访问或静默截断。
-
-// nilReplyRedis 对七个读命令一律回答 redis.Nil；其余方法保持 nil 接口指针，
-// 未预期的调用直接 panic。
 type nilReplyRedis struct {
 	builderOnly
 	wireErr error // 非 nil 时改为返回这个错误，验证非 Nil 错误不得被映射
@@ -137,49 +91,7 @@ func TestMissingKeysSurfaceAsContractErrNil(t *testing.T) {
 	}
 }
 
-// cannedRESPServer 是一个只会照本宣科的 RESP 服务端：按命令名回放固定回复。
-// EvalBatchDurable 需要 *goredis.Client 的独占连接，接口替身走不到 WAITAOF
-// 回复解析，所以这里用真实的 go-redis 连接对着假服务端。
-func cannedRESPServer(t *testing.T, replies map[string]string) *goredis.Client {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go func(conn net.Conn) {
-				defer func() { _ = conn.Close() }()
-				reader := bufio.NewReader(conn)
-				for {
-					args, err := readRESPCommand(reader)
-					if err != nil {
-						return
-					}
-					reply, ok := replies[strings.ToUpper(args[0])]
-					if !ok {
-						reply = "-ERR unknown command '" + args[0] + "'\r\n"
-					}
-					if _, err := io.WriteString(conn, reply); err != nil {
-						return
-					}
-				}
-			}(conn)
-		}
-	}()
-	client := goredis.NewClient(&goredis.Options{
-		Addr: listener.Addr().String(), Protocol: 2, DisableIdentity: true,
-		MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second,
-	})
-	t.Cleanup(func() { _ = client.Close() })
-	return client
-}
-
+// readRESPCommand 从连接读一条 RESP 命令（数组），供 no_replay_test.go 的假服务端使用。
 func readRESPCommand(reader *bufio.Reader) ([]string, error) {
 	header, err := reader.ReadString('\n')
 	if err != nil {
@@ -211,38 +123,6 @@ func readRESPCommand(reader *bufio.Reader) ([]string, error) {
 	return args, nil
 }
 
-func TestEvalDurableRejectsMalformedWAITAOFReply(t *testing.T) {
-	ctx := context.Background()
-	// 对照：形状正确的回复正常解析，证明假服务端与连接握手都工作。
-	healthy := &Client{rdb: cannedRESPServer(t, map[string]string{
-		"EVAL": ":7\r\n", "WAITAOF": "*2\r\n:1\r\n:0\r\n",
-	})}
-	result, local, replicas, err := healthy.EvalDurable(ctx, "return 7", []string{"k"}, 1, 0, time.Second)
-	if err != nil || result != int64(7) || local != 1 || replicas != 0 {
-		t.Fatalf("healthy EvalDurable = (%v, %d, %d, %v)", result, local, replicas, err)
-	}
-
-	short := &Client{rdb: cannedRESPServer(t, map[string]string{
-		"EVAL": ":7\r\n", "WAITAOF": "*1\r\n:1\r\n",
-	})}
-	_, _, _, err = short.EvalDurable(ctx, "return 7", []string{"k"}, 1, 0, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "WAITAOF reply length") {
-		t.Fatalf("one-element WAITAOF reply: err=%v, want a reply-length error", err)
-	}
-}
-
-func TestRedisIntegerRejectsUnsignedOverflow(t *testing.T) {
-	if got, err := redisInteger(uint64(1<<63 - 1)); err != nil || got != 1<<63-1 {
-		t.Fatalf("max int64 as uint64: (%d, %v)", got, err)
-	}
-	got, err := redisInteger(uint64(1 << 63))
-	if err == nil {
-		t.Fatalf("uint64 above MaxInt64 was accepted as %d", got)
-	}
-}
-
-// pipelineStub 只实现 pipeline 包装器会调用的 LPop 与 Exec。
-// pipelineStub 收下入队的命令；Exec 像 go-redis 一样把错误写到每条命令上并返回它。
 type pipelineStub struct {
 	goredis.Pipeliner
 	execErr error
@@ -367,11 +247,9 @@ func TestClusterRecoveryPreservesErrorsWithoutReplayingCommands(t *testing.T) {
 }
 
 // P3b: the Mod publishes exactly what Assemble returns, so Assemble must
-// refuse what the Mod used to refuse (no address) and must put the client and
-// the lock factory on one connection pool — a lock factory on a second pool
-// would double the connection count and make the Mod's Ping meaningless for
-// locks.
-func TestAssembleBuildsClientAndLocksOnOnePool(t *testing.T) {
+// refuse what the Mod used to refuse (no address) and hand back a usable
+// client.
+func TestAssembleBuildsTheClientAndRefusesNoAddress(t *testing.T) {
 	if _, err := Assemble(nil); err == nil {
 		t.Fatal("nil configuration was assembled")
 	}
@@ -382,14 +260,10 @@ func TestAssembleBuildsClientAndLocksOnOnePool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asm.Client == nil || asm.Locks == nil {
+	if asm.Client == nil || asm.Client.rdb == nil {
 		t.Fatalf("assembly incomplete: %+v", asm)
 	}
-	if asm.Locks.rdb != asm.Client.rdb {
-		t.Fatal("lock factory does not share the client's connection pool")
-	}
 	var _ fredis.IRedis = asm.Client
-	var _ fredis.IDistLockFactory = asm.Locks
 	if err := asm.Close(); err != nil {
 		t.Fatalf("Close = %v", err)
 	}

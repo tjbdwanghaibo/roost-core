@@ -170,30 +170,27 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### redis
 
-9 个实现文件、1 个测试文件。
+7 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [cas.go](../../../infra/storage/redis/cas.go) | `ScriptRunner`、`CompareAndSetCommand`、`CompareAndSetIndex`、`CompareAndSetResult` |
-| [client.go](../../../infra/storage/redis/client.go) | `IRedis`、`EvalCall`、`DurableEvaler`、`DurableBatchEvaler`、`ReplicatedEvaler`、`ReplicatedEvalResult`、`ListTrimmer`、`ListRemover`、`Z` |
+| [client.go](../../../infra/storage/redis/client.go) | `IRedis`、`ReplicatedEvaler`、`ReplicatedEvalResult`、`ListTrimmer`、`ListRemover`、`Z` |
 | [config.go](../../../infra/storage/redis/config.go) | `Config` |
 | [errors.go](../../../infra/storage/redis/errors.go) | 函数/方法或内部实现；见源码 |
-| [lock.go](../../../infra/storage/redis/lock.go) | `IDistLock`、`IDistLockFactory` |
 | [pipeline.go](../../../infra/storage/redis/pipeline.go) | `IPipeline`、`FutureBytes`、`FutureStringMap`、`FutureInt64` |
 | [pubsub.go](../../../infra/storage/redis/pubsub.go) | `IPubSub`、`PubSubMessage` |
-| [script.go](../../../infra/storage/redis/script.go) | `IScript` |
 | [versioned_lock.go](../../../infra/storage/redis/versioned_lock.go) | `IVersionedLock`、`IFencedVersionedLock`、`VersionedLockOptions`、`IVersionedLockFactory` |
 
 ### redis/driver
 
-8 个实现文件、9 个测试文件。
+7 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [assembly.go](../../../infra/storage/redis/driver/assembly.go) | `Assembly` |
 | [client.go](../../../infra/storage/redis/driver/client.go) | `Client` |
 | [cluster_recovery.go](../../../infra/storage/redis/driver/cluster_recovery.go) | 函数/方法或内部实现；见源码 |
-| [lock.go](../../../infra/storage/redis/driver/lock.go) | `DistLockFactory`、`AutoExtendLock` |
 | [pipeline.go](../../../infra/storage/redis/driver/pipeline.go) | 函数/方法或内部实现；见源码 |
 | [pubsub.go](../../../infra/storage/redis/driver/pubsub.go) | 函数/方法或内部实现；见源码 |
 | [replay.go](../../../infra/storage/redis/driver/replay.go) | 函数/方法或内部实现；见源码 |
@@ -303,13 +300,10 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 ### redis/driver
 
-- [client_test.go](../../../infra/storage/redis/driver/client_test.go)：`TestRedisIntegerParsesWAITAOFReplyValues`、`TestRedisIntegerRejectsInvalidWAITAOFReplyValue`、`TestEvalDurableRejectsClusterTopologyBeforeIO`、`TestMissingKeysSurfaceAsContractErrNil`、`TestEvalDurableRejectsMalformedWAITAOFReply`；其余 8 项见文件
-- [close_test.go](../../../infra/storage/redis/driver/close_test.go)：`TestClientRepeatedCloseReturnsNilOnEveryDeployment`、`TestClientCloseErrorIsReportedOnce`、`TestClientConcurrentCloseAllReturnNil`、`TestAssemblyRepeatedCloseReturnsNil`、`TestDistLockAfterClientCloseKeepsReportingErrClosed`
-- [lock_integration_test.go](../../../infra/storage/redis/driver/lock_integration_test.go)：`TestDistLockExpiryAndReacquireIntegration`
-- [lock_test.go](../../../infra/storage/redis/driver/lock_test.go)：`TestAutoExtendLockKeepsLeaseAliveUntilRelease`、`TestAutoExtendLockSurvivesTransientExtendErrors`、`TestAutoExtendLockSurfacesLostLease`、`TestAutoExtendLockRejectsInvalidConfiguration`、`TestAutoExtendLockRejectsConcurrentAcquire`；其余 8 项见文件
-- [lock_toxic_integration_test.go](../../../infra/storage/redis/driver/lock_toxic_integration_test.go)：`TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled`、`TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried`、`TestToxicRedisLatencyKeepsAcquireWithinItsDeadline`
+- [client_test.go](../../../infra/storage/redis/driver/client_test.go)：`TestMissingKeysSurfaceAsContractErrNil`、`TestNewClientRequiresAnAddress`、`TestRedisClientsHonourContextDeadlinesOnTheWire`、`TestClusterRecoveryPreservesErrorsWithoutReplayingCommands`、`TestAssembleBuildsTheClientAndRefusesNoAddress`；其余 3 项见文件
+- [close_test.go](../../../infra/storage/redis/driver/close_test.go)：`TestClientRepeatedCloseReturnsNilOnEveryDeployment`、`TestClientCloseErrorIsReportedOnce`、`TestClientConcurrentCloseAllReturnNil`、`TestAssemblyRepeatedCloseReturnsNil`
 - [mget_integration_test.go](../../../infra/storage/redis/driver/mget_integration_test.go)：`TestMGetReturnsOneElementPerKeyIncludingMisses`、`TestMGetWithNoKeysMakesNoRoundTrip`、`TestMGetPreservesBinaryValues`
-- [no_replay_test.go](../../../infra/storage/redis/driver/no_replay_test.go)：`TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestResendsStopAtTheConfiguredBudget`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`；其余 6 项见文件
+- [no_replay_test.go](../../../infra/storage/redis/driver/no_replay_test.go)：`TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestResendsStopAtTheConfiguredBudget`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`；其余 8 项见文件
 - [pipeline_errors_integration_test.go](../../../infra/storage/redis/driver/pipeline_errors_integration_test.go)：`TestIntegrationPipelineDoesNotHideWriteErrors`、`TestIntegrationPipelineFuturesAndLifecycle`、`TestIntegrationPipelinePreservesPostWriteUnknownError`
 - [write_lost_reply_integration_test.go](../../../infra/storage/redis/driver/write_lost_reply_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostRunsOnce`
 

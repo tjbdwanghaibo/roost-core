@@ -126,8 +126,8 @@
 | [infra/storage/mongo](../../infra/storage/mongo) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 8 | 0 |
 | [infra/storage/mongo/driver](../../infra/storage/mongo/driver) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 4 | 9 |
 | [infra/storage/mongo/mongotest](../../infra/storage/mongo/mongotest) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 2 | 14 |
-| [infra/storage/redis](../../infra/storage/redis) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 9 | 4 |
-| [infra/storage/redis/driver](../../infra/storage/redis/driver) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 8 | 19 |
+| [infra/storage/redis](../../infra/storage/redis) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 7 | 1 |
+| [infra/storage/redis/driver](../../infra/storage/redis/driver) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 7 | 6 |
 | [infra/storage/redis/redistest](../../infra/storage/redis/redistest) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 1 | 1 |
 | [infra/storage/versionstore](../../infra/storage/versionstore) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 5 | 14 |
 | [internal/configschema](../../internal/configschema) | [配置、数据表与热更](impl/07-config.md) | 5 | 2 |

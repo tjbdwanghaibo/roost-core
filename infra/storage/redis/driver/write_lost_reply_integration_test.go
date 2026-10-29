@@ -7,12 +7,13 @@ package driver
 //
 // 修前（go-redis MaxRetries 缺省 3）：回复只回来 1 个字节就断开，驱动换连接把同一条写再发一遍——
 // INCR 之后计数器是 2、RPUSH 之后列表里两份、pipeline（INCR + RPUSH）整条重放、SETNX 第二次看到
-// 自己的键回答“没设上”，分布式锁的 Acquire 于是返回 (false, nil)，自己的值留在 Redis 里直到 TTL。
+// 自己的键回答“没设上”，自己的值留在 Redis 里直到 TTL。
 //
 // 代理只给本用例的连接加毒，新连接拨号前摘掉毒（重放若发生会落在干净连接上，才能观测到第二次执行）；
 // 不动环境共享的 redis 代理，也不 /reset。键带唯一前缀，结束时删除。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,11 +30,41 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// errMisreported marks a SETNX / Acquire that answered "someone else holds it" for its own write.
+// errMisreported marks a SETNX that answered "someone else holds it" for its own write.
 var errMisreported = errors.New("reported as taken by someone else")
 
-// newA2Proxy 在环境的 toxiproxy 上建一个本用例独占、端口随机的代理（沿用 lock_toxic 用例的
-// toxiproxyClient），返回代理、监听地址与上游地址。
+// toxiproxyClient 驱动本用例在环境 toxiproxy 上自建的代理。RR-20261005-NC-208：不用环境共享的
+// "redis" 代理、不 POST /reset（它会摘掉同一 toxiproxy 上所有代理的毒，别的会话的故障也在内）；
+// 每个用例建一个唯一命名、端口随机的代理，只给它加毒，结束时删掉它。
+type toxiproxyClient struct{ base, name string }
+
+func (c toxiproxyClient) call(t *testing.T, method, path string, body any) []byte {
+	t.Helper()
+	var payload bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&payload).Encode(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req, err := http.NewRequest(method, strings.TrimRight(c.base, "/")+path, &payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("toxiproxy %s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(resp.Body)
+	if resp.StatusCode >= 300 && !(method == http.MethodDelete && resp.StatusCode == http.StatusNotFound) {
+		t.Fatalf("toxiproxy %s %s: status %d %s", method, path, resp.StatusCode, out.String())
+	}
+	return out.Bytes()
+}
+
+// newA2Proxy 在环境的 toxiproxy 上建一个本用例独占、端口随机的代理，返回代理、监听地址与上游地址。
 func newA2Proxy(t *testing.T) (toxiproxyClient, string, string) {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
@@ -112,23 +144,6 @@ func TestRealRedisAWriteWhoseReplyIsLostRunsOnce(t *testing.T) {
 		}, func(ctx context.Context, d *goredis.Client, key string) outcome {
 			v, _ := d.Get(ctx, key).Result()
 			return outcome{1, "value=" + v}
-		}},
-		{"distlock", func(ctx context.Context, c *Client, key string) error {
-			lock := NewDistLockFactory(c.rdb).NewLock(key, time.Minute)
-			ok, err := lock.Acquire(ctx)
-			if err == nil && !ok {
-				return errMisreported
-			}
-			if err != nil {
-				// 结果未知：值守卫的 Release 必须能收回自己可能拿到的锁。
-				if releaseErr := lock.Release(ctx); releaseErr != nil {
-					return fmt.Errorf("acquire err=%v; reconciling Release failed: %w", err, releaseErr)
-				}
-			}
-			return err
-		}, func(ctx context.Context, d *goredis.Client, key string) outcome {
-			n, _ := d.Exists(ctx, key).Result()
-			return outcome{1, fmt.Sprintf("held-after-reconcile=%d", n)}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

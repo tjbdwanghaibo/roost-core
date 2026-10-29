@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **Redis：删除只被测试使用的 API（2026-10-29 测试审计跟进，维护者“按推荐”，不兼容）**：
+  - **删除**：`infra/storage/redis` 的 `IScript`（没有实现也没有使用者）、`IDistLock` / `IDistLockFactory` / `ErrLockNotHeld`、`EvalCall` / `DurableEvaler` / `DurableBatchEvaler`；`redis/driver` 的 `DistLockFactory` / `NewDistLockFactory` / `AutoExtendLock` / `ErrDistLock*`、`Client.EvalDurable` / `EvalBatchDurable`（脚本 + 同连接 WAITAOF）与 `Assembly.Locks`。Redis 权威删除后它们没有生产调用方，`redis.lock` capability 早已不发布；只测它们的用例随之删除（`lock_test.go`、`lock_integration_test.go`、`lock_toxic_integration_test.go` 整个文件，`close_test.go` / `client_test.go` / `no_replay_test.go` / `write_lost_reply_integration_test.go` 里的锁与 WAITAOF 用例）。`EvalReplicated`（WAIT，L2 墓碑用）与 `IVersionedLock` 不变。
+  - **升级**：项目未上线，不做兼容。进程 / sid 级单例用 App 单实例锁（`singleton.enabled`），需要隔离旧持有者的键级锁用 `IVersionedLock`；需要 WAITAOF 的从 Git 历史取回（`git show 1a439973:infra/storage/redis/driver/client.go`）。
+
 - **Saga：可选的 Mongo 冷副本；删除原型目录，正式压测入口就绪（[设计 §13 第 6 批与第 7 批的清理部分](docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#135-第-6-批与第-7-批清理部分实施记录)）**
   - **冷副本（缺省关闭）**：新配置 `saga.cold_copy.{enabled,terminal_only,collection,batch_size,max_wait}`（缺省 false / true / `sagas` / 256 / 50ms，库是 `saga.database`）。开启后协调器进程（sid 在 `saga.coordinators` 里）在每条 saga 流上建 durable `<stream>_G<g>-cold-copy`（R1 内存），把终态事件（`terminal_only=false` 时全部事件）批量投影进 Mongo；每条写按“同一生版本更大 / 更晚的一生”门控，写成功后逐条 ack。`Get` / `GetByBusinessKey` 在所有者内存里没有这条记录时回落读它，`List` 补上内存里没有的 ID；冷副本**不参与唯一性与任何判定**（启动判定补查、`WaitTerminal` 只看内存），所有者不可用仍返回 `ErrPartitionUnavailable`。冷副本 durable 是分区清理守卫（找不到就不清理，投影器 5s 内重建）。开启冷副本的进程必须有 Mongo Mod（配置检查拒绝）。新指标 `saga.cold_copy.*`（OBSERVABILITY）。
   - **接口**：`fnats.JetStreamConsumerConfig` 加 `Replicas` / `MemoryStorage`（消费者状态的副本数与内存存储，0 / false 跟随流，原有消费者不变）；`saga.AssemblyConfig.ColdCopy`、`saga.Options.ColdCopy`、`saga.ColdCopy` / `ColdCopyProjector` / `ColdCopySettings` / `ColdCopyDurable`；分区列表查询加可选字段 `known` / `held`（WireVersion 不变；未上线，不考虑新旧协调器混跑，混跑时开了冷副本的 `List` 可能把旧进程持有的 ID 也从冷副本补一份）。

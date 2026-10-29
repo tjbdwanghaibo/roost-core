@@ -11,10 +11,8 @@
 | 读命令：GET、MGET、EXISTS、TTL、HGET、HGETALL、HEXISTS、LLEN、LRANGE、ZSCORE、ZRANK、ZREVRANK、ZRANGE/ZREVRANGE WITHSCORES、ZCARD、SMEMBERS、SISMEMBER、PING；只含读命令的 pipeline | 由 go-redis 自动重试，最多 `MaxRetries` 次。会重试的错误：EOF、连接重置、读写超时（命令没有显式读超时时）、等池超时、拨号失败，以及 LOADING、READONLY、MASTERDOWN、CLUSTERDOWN、TRYAGAIN、NOREPLICAS、max clients。Cluster 模式下还会按 `MaxRedirects` 换节点重试 |
 | 写命令：SET、SETNX、DEL、EXPIRE、INCR、INCRBY、HSET、HDEL、LPUSH、RPUSH、LPOP、RPOP、LTRIM、LREM、ZADD、ZREM、SADD、SREM、PUBLISH | 每条都加了 `NoRetry` 标记再交给 go-redis，驱动在任何错误上都不重发。只有当错误满足 `IsDefinitelyNotExecuted`（见 §2）时，才由本包重发（`replay.go`） |
 | 脚本：EVAL、EVALSHA（`Client.Eval` / `EvalSha`） | 与写命令相同。脚本只要回复丢了就不重发（RR-20261005-NC-100）；确定没执行时照常重发，NC-100 之后丢掉的这部分可用性由此补回 |
-| `EvalDurable` / `EvalBatchDurable`（脚本加 WAITAOF，走同一条物理连接） | 整批不重放。只有每条命令的错误都证明没执行时，才换一条新连接整批重发 |
 | `EvalReplicated`（脚本加 ROLE，必要时同连接 WAIT；O-M6-3，L2 墓碑用） | 脚本与 ROLE 一条流水线，不经驱动重放；每条命令的错误都证明没执行时才换一条新连接整条重发。**WAIT 从不重放**：换了连接的 WAIT 只统计新连接上的写（没有），会立即给出假的确认。Cluster 下 WAIT 只发往脚本第一个键所在槽位的主节点（`MasterForKey` 取节点、在它的独占连接上发）；脚本回 MOVED / ASK 时改经集群客户端普通发送一次、不 WAIT。主节点没有连着的副本时不发 WAIT |
 | 含任一写命令的 pipeline（`IPipeline` 的 Set、Del、HSet、Incr、Expire、ZAdd、RPush、LPop） | 整条不重放，因为回复丢失时前面的写可能已经执行。只有每条命令的错误都证明没执行时，才整条重发 |
-| `DistLock` 的 SETNX、释放脚本、续期脚本 | 与写命令相同。被重放的 SETNX 会把自己刚拿到的锁报成“已被占用”，锁一直挂到 TTL；被重放的释放脚本会把成功释放报成 `ErrLockNotHeld` |
 | Subscribe | go-redis PubSub 断线后自动重连并重新订阅，推送不保证送达 |
 | 经 `Client.Raw()` 直接发出的命令 | 不受本表约束，按 go-redis 缺省规则重放。业务代码不要用 Raw 发写命令 |
 
@@ -69,11 +67,12 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 | --- | --- | --- | --- | --- |
 | `Client.Close` / `Assembly.Close`（单机与 Cluster 相同） | nil（`sync.Once`，只关一次） | 第一次不论成败都已关完全部连接池（go-redis 遇错继续关），错误只报给那一次，再调返回 nil | 一律 `goredis.ErrClosed`（可 `errors.Is`；`IsDefinitelyNotExecuted` 为真）；写命令不重发 | 后到者等第一个做完，返回 nil；第一次的错误只报给第一个 |
 | `IPubSub.Close` | nil（`sync.Once`） | 只在第一次释放，错误只报给那一次；之后 nil | 消息 channel 已关闭 | 后到者等第一个做完，返回 nil |
-| `DistLock` / `AutoExtendLock` | 没有 Close，只有 Release：第二次 Release 返回 `ErrLockNotHeld` | — | 客户端关闭后 Acquire / Release / Extend 每次都返回 `goredis.ErrClosed`，锁状态不变（命令确定没发出去，不记成结果未知） | — |
 | Wiring `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 串行：后到者等第一个关完，返回 nil |
 | Wiring 单实例锁 `singletonStore.Close` | nil | 两个客户端都已关；错误只报给第一次，再调返回 nil | `goredis.ErrClosed` | 后到者等第一个做完，返回 nil |
 
-调用方据此：重复 Close 不需要特判；判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`。**行为变化（RR-20261006-10，v1.23.0 起）**：单机部署重复 Close 不再返回 `ErrClosed`；客户端关闭后的锁操作不再把锁记成未知（之前第二次 Acquire 起返回 `ErrDistLockStateUncertain`）。
+调用方据此：重复 Close 不需要特判；判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`。**行为变化（RR-20261006-10，v1.23.0 起）**：单机部署重复 Close 不再返回 `ErrClosed`。
+
+2026-10-29 删除了没有生产调用方的 `EvalDurable` / `EvalBatchDurable`（脚本加同连接 WAITAOF）与 `DistLockFactory` / `AutoExtendLock`（`IDistLock`）；它们的契约行见 Git 历史（`1a439973` 之前的本文件）。进程 / sid 级单例用 App 单实例锁，需要隔离旧持有者的用 `IVersionedLock`。
 
 ## 6. 新增调用点核对清单
 

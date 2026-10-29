@@ -9,16 +9,15 @@ import (
 )
 
 // Assembly is the complete Redis capability set a process publishes: the
-// contract client and the distributed-lock factory that shares its connection
-// pool. It is what the wiring RedisMod hands out; the Mod itself only parses
-// configuration, registers capabilities and forwards lifecycle calls.
+// contract client. It is what the wiring RedisMod hands out; the Mod itself
+// only parses configuration, registers capabilities and forwards lifecycle
+// calls.
 type Assembly struct {
 	Client *Client
-	Locks  *DistLockFactory
 }
 
-// Assemble builds the client and the lock factory on one connection pool.
-// It refuses a configuration that cannot connect anywhere, like NewClient.
+// Assemble builds the client. It refuses a configuration that cannot connect
+// anywhere, like NewClient.
 func Assemble(cfg *fredis.Config) (*Assembly, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("redis: configuration is required")
@@ -27,7 +26,7 @@ func Assemble(cfg *fredis.Config) (*Assembly, error) {
 		return nil, fmt.Errorf("redis: addr or cluster addrs are required")
 	}
 	client := NewRedisClient(cfg)
-	return &Assembly{Client: client, Locks: &DistLockFactory{rdb: client.rdb, resends: client.resends}}, nil
+	return &Assembly{Client: client}, nil
 }
 
 // Ping verifies connectivity; the Mod calls it at Start and from its health
@@ -39,8 +38,7 @@ func (a *Assembly) Ping(ctx context.Context) error {
 	return a.Client.Ping(ctx)
 }
 
-// Close releases the shared connection pool. Locks handed out by the factory
-// stop working; callers must have released them.
+// Close releases the connection pool.
 func (a *Assembly) Close() error {
 	if a == nil || a.Client == nil {
 		return nil
