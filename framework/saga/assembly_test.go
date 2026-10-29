@@ -156,29 +156,6 @@ func TestAssemblyRelayDrainTimeoutCanFinishOnRetry(t *testing.T) {
 	}
 }
 
-// recordingJetStream 记下每个消费者的配置与回调，按 subject 投递（启动中继与步骤消费者的单元用）。
-type recordingJetStream struct {
-	mu       sync.Mutex
-	handlers map[string]fnats.JetStreamHandler
-	configs  []fnats.JetStreamConsumerConfig
-}
-
-func newRecordingJetStream() *recordingJetStream {
-	return &recordingJetStream{handlers: map[string]fnats.JetStreamHandler{}}
-}
-
-func (j *recordingJetStream) EnsureStream(context.Context, fnats.JetStreamConfig) error { return nil }
-func (j *recordingJetStream) Publish(context.Context, string, []byte, fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
-	return fnats.JetStreamPublishAck{}, nil
-}
-func (j *recordingJetStream) Subscribe(_ context.Context, config fnats.JetStreamConsumerConfig, handler fnats.JetStreamHandler) (fnats.IJetStreamSubscription, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.handlers[config.FilterSubject] = handler
-	j.configs = append(j.configs, config)
-	return &recordedSubscription{closed: make(chan struct{})}, nil
-}
-
 // recordedSubscription closes on Drain, the way a real consumer does once it
 // has finished delivering. A stub whose Closed() never fires makes
 // Assembly.Stop wait forever.
@@ -190,27 +167,6 @@ type recordedSubscription struct {
 func (s *recordedSubscription) Stop()                   { s.once.Do(func() { close(s.closed) }) }
 func (s *recordedSubscription) Drain()                  { s.once.Do(func() { close(s.closed) }) }
 func (s *recordedSubscription) Closed() <-chan struct{} { return s.closed }
-
-func (j *recordingJetStream) subjects() []string {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	out := make([]string, 0, len(j.handlers))
-	for subject := range j.handlers {
-		out = append(out, subject)
-	}
-	return out
-}
-
-func (j *recordingJetStream) deliver(t *testing.T, subject string, data []byte) error {
-	t.Helper()
-	j.mu.Lock()
-	handler, ok := j.handlers[subject]
-	j.mu.Unlock()
-	if !ok {
-		t.Fatalf("no consumer claimed %q; subscribed subjects: %v", subject, j.subjects())
-	}
-	return handler(context.Background(), &fnats.JetStreamMsg{Subject: subject, Data: data})
-}
 
 // 冷副本的装配：每个进程都有回落读（Options.ColdCopy），只有拥有分区的进程跑投影；参数越界、缺 Mongo 时 Assemble 拒绝。
 func TestAssembleWiresTheColdCopyReaderEverywhereAndTheProjectorOnlyOnOwners(t *testing.T) {

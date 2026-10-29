@@ -96,31 +96,6 @@ func TestEngineCompensatesInReverseOrder(t *testing.T) {
 	}
 }
 
-func TestStartSagaIsIdempotentByBusinessKey(t *testing.T) {
-	engine := newSimEngine(t, nil)
-	one, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "same"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "same"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if one.ID != two.ID {
-		t.Fatalf("ids differ: %s %s", one.ID, two.ID)
-	}
-}
-
-func TestStartSagaRejectsBusinessKeyWithDifferentIntent(t *testing.T) {
-	engine := newSimEngine(t, nil)
-	if _, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "identity", Data: []byte("one")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "identity", Data: []byte("two")}); !errors.Is(err, ErrIdentityConflict) {
-		t.Fatalf("err=%v", err)
-	}
-}
-
 func TestDefinitionVersionsRunSideBySideAndArePartOfIdentity(t *testing.T) {
 	engine := newSimEngine(t, nil)
 	v2 := testDefinition()

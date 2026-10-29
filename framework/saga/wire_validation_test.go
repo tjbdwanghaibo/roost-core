@@ -8,13 +8,6 @@ import (
 	"time"
 )
 
-func expectErr(t *testing.T, err error, want string) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("error = %v, want it to contain %q", err, want)
-	}
-}
-
 func validCommand() Command {
 	now := time.Now()
 	return Command{

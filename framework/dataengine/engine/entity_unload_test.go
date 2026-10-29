@@ -524,12 +524,6 @@ type unloadResyncEntity struct {
 func (value *unloadResyncEntity) Base() *entity.EntityBase { return value.EntityBase }
 func (*unloadResyncEntity) AutoPersist() bool              { return true }
 
-func (value *unloadResyncEntity) setLevel(level int32) {
-	value.mu.Lock()
-	value.level = level
-	value.mu.Unlock()
-}
-
 var registerUnloadResyncEntity sync.Once
 
 func ensureUnloadResyncEntity() {
